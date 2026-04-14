@@ -1,0 +1,18 @@
+数据源层
+    ├── 东财行情 → dataLayer.updateStocks()
+    ├── 八平台数据 → dataLayer.updatePlatforms()
+    └── KPL题材数据 → dataLayer.updateThemes()
+
+数据处理层
+    ├── dataLoader.mergeData() → dataLayer.setMergedStocks()
+    └── sectorAnalyzer.syncThemesToStocks() → dataLayer.bumpLeadersVersion()
+
+分析层
+    ├── sectorAnalyzer 从 dataLayer.getRawThemes() 获取题材
+    ├── sectorAnalyzer 从 dataLayer.getStocks() 同步题材
+    ├── dragonAnalyzer 从 dataLayer.getStocks() 获取股票
+    └── dragonAnalyzer 计算后调用 dataLayer.bumpLeadersVersion()
+
+UI层
+    ├── 各组件通过 dataLayer.subscribe() 订阅数据变化
+    └── 或通过 dataLayer.getStocks() 直接获取数据

@@ -1,0 +1,26 @@
+[数据源层]
+window.KPL_THEME_DATA
+    ↓
+sectorAnalyzer.loadThemeList()  // 查重合并
+    ↓
+[DataLayer]  ←────────── 存入完整题材数据
+    ├── themeList (完整题材对象)
+    ├── stockThemeMap (股票-题材映射)
+    └── themeStockMap (题材-股票映射)
+    ↓
+[缓存层] LRUCache.sector  // 缓存题材列表和映射
+    ↓
+sectorAnalyzer.calculateHeatScores()  // 基于 DataLayer 数据计算
+    ↓
+sectorAnalyzer.syncThemesToStocks() 
+    ↓
+stock.themes = [完整题材对象]  // ✅ 不是字符串数组
+    ↓
+AlgorithmManager.calculateScore(stock)
+    └── 从 stock.themes 直接读取，不实时计算
+    ↓
+DragonAnalyzer.determineLevel()
+    ↓
+DragonAnalyzer.leaders Map
+    ↓
+UI展示

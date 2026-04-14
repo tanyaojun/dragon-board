@@ -1,0 +1,59 @@
+/* src/styles/dragon-themes.css - 实用版 */
+
+/* 1. 龙鳞背景 - 极淡装饰，不影响可读性 */
+.dragon-theme .navbar::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-image: repeating-linear-gradient(
+    45deg,
+    transparent 0px,
+    transparent 8px,
+    rgba(255, 215, 0, 0.02) 8px,
+    rgba(255, 215, 0, 0.02) 16px
+  );
+  pointer-events: none;
+  z-index: -1;
+}
+
+/* 2. 龙珠效果 - 只在按钮上，不影响表格 */
+.dragon-theme .btn-icon.active {
+  position: relative;
+}
+
+.dragon-theme .btn-icon.active::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 6px;
+  height: 6px;
+  background: gold;
+  border-radius: 50%;
+  box-shadow: 0 0 5px gold;
+}
+
+/* 3. 龙子颜色标识 - 仅用于主题切换器 */
+.element-木 { color: #27ae60; }
+.element-火 { color: #e67e22; }
+.element-土 { color: #7f8c8d; }
+.element-金 { color: #f39c12; }
+.element-水 { color: #2980b9; }
+
+/* 4. 主题切换时的过渡 - 仅颜色变化，无动画 */
+.dragon-theme {
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+/* 5. 状态栏提示 - 极简 */
+.dragon-theme .status-bar {
+  border-bottom: 1px solid var(--color-accent);
+}
+
+/* 6. 按钮悬停效果 - 轻微 */
+.dragon-theme .btn-icon:hover {
+  border-color: var(--color-accent);
+}

@@ -1,0 +1,50 @@
+{
+    // ========== 全局自动化触发规则 ==========
+    "editor.formatOnSave": true, // 保存文件时自动格式化（全局开关）
+    "editor.formatOnPaste": true, // 粘贴代码时自动格式化（可选，推荐开启）
+    "editor.formatOnType": false, // 输入时实时格式化（易卡顿，不推荐）
+    "editor.formatOnSaveMode": "file", // 保存时格式化整个文件（可选：modified 仅格式化修改部分）
+  
+    // ========== 指定各语言的默认格式化器 ==========
+    "[javascript]": {
+      "editor.defaultFormatter": "esbenp.prettier-vscode" // JS 用 Prettier
+    },
+    "[typescript]": {
+      "editor.defaultFormatter": "esbenp.prettier-vscode" // TS 用 Prettier
+    },
+    "[json]": {
+      "editor.defaultFormatter": "esbenp.prettier-vscode" // JSON 用 Prettier
+    },
+    "[html]": {
+      "editor.defaultFormatter": "vscode.html-language-features" // HTML 用 Prettier
+    },
+    "[css]": {
+      "editor.defaultFormatter": "esbenp.prettier-vscode" // CSS 用 Prettier
+    },
+    "[xml]": {
+      // XML 优先用 Prettier（需启用），备选 Red Hat
+      "editor.defaultFormatter": "redhat.vscode-xml",
+      "editor.formatOnSave": true 
+    },
+  
+    // ========== Prettier 全局规则（覆盖默认） ==========
+    "prettier.indentSize": 2, // 缩进2个空格（通用）
+    "prettier.singleQuote": true, // 使用单引号（前端主流）
+    "prettier.semi": true, // 语句末尾加分号
+    "prettier.trailingComma": "es5", // 尾逗号（ES5 规范）
+    "prettier.printWidth": 120, // 一行最大字符数
+    "prettier.useTabs": false, // 禁用制表符，用空格
+    // 启用 Prettier 支持 XML（关键：默认不支持 XML）
+    "prettier.documentSelectors": ["**/*.xml"],
+  
+    // ========== ESLint 配合（前端必配） ==========
+    "editor.codeActionsOnSave": {
+      "source.fixAll.eslint": "explicit"
+    },
+    "eslint.validate": ["javascript", "typescript", "vue"], // ESLint 校验的语言
+  
+    // ========== 兼容 Red Hat XML 插件（XML 场景） ==========
+    "xml.format.indentSize": 2, // XML 缩进对齐 Prettier 规则
+    "xml.format.preserveEmptyLines": true, // 保留 XML 空行
+    "xml.format.splitAttributes": true // XML 属性换行（美观）
+  }

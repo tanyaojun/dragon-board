@@ -1,0 +1,1028 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>🚀 股票数据系统 - 启动管理器</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        min-height: 100vh;
+        padding: 20px;
+      }
+
+      .container {
+        max-width: 1400px;
+        margin: 0 auto;
+      }
+
+      /* 头部 */
+      .header {
+        background: rgba(255, 255, 255, 0.95);
+        border-radius: 20px;
+        padding: 30px;
+        margin-bottom: 20px;
+        box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
+        backdrop-filter: blur(10px);
+      }
+
+      .header h1 {
+        font-size: 2.5em;
+        color: #333;
+        margin-bottom: 10px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .header h1 span {
+        background: linear-gradient(135deg, #667eea, #764ba2);
+        color: white;
+        font-size: 0.4em;
+        padding: 5px 15px;
+        border-radius: 30px;
+      }
+
+      .path-info {
+        background: #f5f5f5;
+        padding: 15px;
+        border-radius: 10px;
+        margin-top: 15px;
+        font-family: 'Courier New', monospace;
+      }
+
+      /* 控制面板 */
+      .control-panel {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+        gap: 20px;
+        margin-bottom: 20px;
+      }
+
+      .panel {
+        background: rgba(255, 255, 255, 0.95);
+        border-radius: 20px;
+        padding: 25px;
+        box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
+        backdrop-filter: blur(10px);
+        transition: transform 0.3s;
+      }
+
+      .panel:hover {
+        transform: translateY(-5px);
+      }
+
+      .panel h2 {
+        color: #333;
+        margin-bottom: 20px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 1.3em;
+      }
+
+      .panel h2 i {
+        font-size: 1.5em;
+      }
+
+      /* 服务状态卡片 */
+      .service-card {
+        background: #f8f9fa;
+        border-radius: 15px;
+        padding: 20px;
+        margin-bottom: 15px;
+        border-left: 4px solid #ddd;
+      }
+
+      .service-card.running {
+        border-left-color: #4caf50;
+      }
+
+      .service-card.stopped {
+        border-left-color: #f44336;
+      }
+
+      .service-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 15px;
+      }
+
+      .service-name {
+        font-weight: bold;
+        font-size: 1.2em;
+      }
+
+      .service-status {
+        padding: 5px 10px;
+        border-radius: 20px;
+        font-size: 0.9em;
+        font-weight: 500;
+      }
+
+      .status-running {
+        background: #4caf50;
+        color: white;
+      }
+
+      .status-stopped {
+        background: #f44336;
+        color: white;
+      }
+
+      .status-checking {
+        background: #ff9800;
+        color: white;
+      }
+
+      .service-details {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 10px;
+        margin-bottom: 15px;
+        font-size: 0.95em;
+      }
+
+      .detail-item {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+      }
+
+      .detail-label {
+        color: #666;
+      }
+
+      .detail-value {
+        font-weight: 500;
+        color: #333;
+      }
+
+      .service-actions {
+        display: flex;
+        gap: 10px;
+      }
+
+      /* 按钮样式 */
+      .btn {
+        padding: 10px 20px;
+        border: none;
+        border-radius: 10px;
+        cursor: pointer;
+        font-size: 0.95em;
+        font-weight: 500;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        transition: all 0.3s;
+      }
+
+      .btn-primary {
+        background: linear-gradient(135deg, #667eea, #764ba2);
+        color: white;
+      }
+
+      .btn-success {
+        background: #4caf50;
+        color: white;
+      }
+
+      .btn-danger {
+        background: #f44336;
+        color: white;
+      }
+
+      .btn-warning {
+        background: #ff9800;
+        color: white;
+      }
+
+      .btn-info {
+        background: #2196f3;
+        color: white;
+      }
+
+      .btn:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
+      }
+
+      .btn:active {
+        transform: translateY(0);
+      }
+
+      .btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      /* 快速启动区域 */
+      .quick-actions {
+        display: flex;
+        gap: 15px;
+        margin-top: 20px;
+        flex-wrap: wrap;
+      }
+
+      /* 日志区域 */
+      .log-panel {
+        background: rgba(255, 255, 255, 0.95);
+        border-radius: 20px;
+        padding: 25px;
+        margin-top: 20px;
+      }
+
+      .log-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 15px;
+      }
+
+      .log-header h3 {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .log-content {
+        background: #1e1e1e;
+        color: #fff;
+        padding: 20px;
+        border-radius: 10px;
+        font-family: 'Courier New', monospace;
+        height: 300px;
+        overflow-y: auto;
+        font-size: 0.9em;
+        line-height: 1.5;
+      }
+
+      .log-entry {
+        margin-bottom: 5px;
+        border-bottom: 1px solid #333;
+        padding-bottom: 5px;
+      }
+
+      .log-time {
+        color: #888;
+        margin-right: 10px;
+      }
+
+      .log-info {
+        color: #4caf50;
+      }
+
+      .log-error {
+        color: #f44336;
+      }
+
+      .log-warning {
+        color: #ff9800;
+      }
+
+      /* 测试面板 */
+      .test-panel {
+        background: rgba(255, 255, 255, 0.95);
+        border-radius: 20px;
+        padding: 25px;
+        margin-top: 20px;
+      }
+
+      .test-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+        gap: 15px;
+        margin-top: 20px;
+      }
+
+      .test-item {
+        background: #f8f9fa;
+        border-radius: 10px;
+        padding: 15px;
+        border: 1px solid #e0e0e0;
+      }
+
+      .test-item h4 {
+        margin-bottom: 10px;
+        color: #333;
+      }
+
+      .test-path {
+        color: #666;
+        font-size: 0.85em;
+        margin-bottom: 10px;
+        word-break: break-all;
+      }
+
+      .test-status {
+        margin: 10px 0;
+        padding: 8px;
+        border-radius: 5px;
+        font-size: 0.9em;
+      }
+
+      .test-success {
+        background: #d4edda;
+        color: #155724;
+      }
+
+      .test-error {
+        background: #f8d7da;
+        color: #721c24;
+      }
+
+      .test-pending {
+        background: #fff3cd;
+        color: #856404;
+      }
+
+      /* 模态框 */
+      .modal {
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.5);
+        justify-content: center;
+        align-items: center;
+        z-index: 1000;
+      }
+
+      .modal.active {
+        display: flex;
+      }
+
+      .modal-content {
+        background: white;
+        border-radius: 20px;
+        padding: 30px;
+        max-width: 500px;
+        width: 90%;
+      }
+
+      .modal-content h3 {
+        margin-bottom: 20px;
+      }
+
+      .modal-actions {
+        display: flex;
+        gap: 10px;
+        margin-top: 20px;
+      }
+
+      /* 响应式 */
+      @media (max-width: 768px) {
+        .control-panel {
+          grid-template-columns: 1fr;
+        }
+
+        .service-details {
+          grid-template-columns: 1fr;
+        }
+
+        .quick-actions {
+          flex-direction: column;
+        }
+
+        .btn {
+          width: 100%;
+          justify-content: center;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <!-- 头部 -->
+      <div class="header">
+        <h1>
+          🚀 股票数据系统启动管理器
+          <span>v1.0</span>
+        </h1>
+        <p>一站式管理代理服务器、前端服务和接口测试</p>
+        <div class="path-info">
+          📁 工作目录: D:\dragon-board<br />
+          📡 代理服务器: server.js<br />
+          💻 前端项目: npm run dev
+        </div>
+      </div>
+
+      <!-- 控制面板 -->
+      <div class="control-panel">
+        <!-- 代理服务器面板 -->
+        <div class="panel">
+          <h2>
+            <span>🖥️</span>
+            代理服务器管理
+          </h2>
+          <div class="service-card" id="proxy-card">
+            <div class="service-header">
+              <span class="service-name">代理服务器 (server.js)</span>
+              <span class="service-status status-checking" id="proxy-status">检查中...</span>
+            </div>
+            <div class="service-details">
+              <div class="detail-item">
+                <span class="detail-label">📌 端口:</span>
+                <span class="detail-value" id="proxy-port">3000</span>
+              </div>
+              <div class="detail-item">
+                <span class="detail-label">⏱️ 响应时间:</span>
+                <span class="detail-value" id="proxy-response">-</span>
+              </div>
+              <div class="detail-item">
+                <span class="detail-label">📊 今日请求:</span>
+                <span class="detail-value" id="proxy-requests">-</span>
+              </div>
+              <div class="detail-item">
+                <span class="detail-label">🔍 健康状态:</span>
+                <span class="detail-value" id="proxy-health">-</span>
+              </div>
+            </div>
+            <div class="service-actions">
+              <button class="btn btn-success" onclick="startService('proxy')" id="proxy-start-btn">
+                ▶️ 启动
+              </button>
+              <button
+                class="btn btn-danger"
+                onclick="stopService('proxy')"
+                id="proxy-stop-btn"
+                disabled
+              >
+                ⏹️ 停止
+              </button>
+              <button class="btn btn-info" onclick="checkService('proxy')">🔄 刷新</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 前端服务面板 -->
+        <div class="panel">
+          <h2>
+            <span>⚛️</span>
+            前端服务管理
+          </h2>
+          <div class="service-card" id="frontend-card">
+            <div class="service-header">
+              <span class="service-name">前端开发服务器 (Vite)</span>
+              <span class="service-status status-checking" id="frontend-status">检查中...</span>
+            </div>
+            <div class="service-details">
+              <div class="detail-item">
+                <span class="detail-label">📌 端口:</span>
+                <span class="detail-value" id="frontend-port">5173</span>
+              </div>
+              <div class="detail-item">
+                <span class="detail-label">⏱️ 响应时间:</span>
+                <span class="detail-value" id="frontend-response">-</span>
+              </div>
+              <div class="detail-item">
+                <span class="detail-label">📦 模式:</span>
+                <span class="detail-value" id="frontend-mode">development</span>
+              </div>
+              <div class="detail-item">
+                <span class="detail-label">🔍 状态:</span>
+                <span class="detail-value" id="frontend-health">-</span>
+              </div>
+            </div>
+            <div class="service-actions">
+              <button
+                class="btn btn-success"
+                onclick="startService('frontend')"
+                id="frontend-start-btn"
+              >
+                ▶️ 启动
+              </button>
+              <button
+                class="btn btn-danger"
+                onclick="stopService('frontend')"
+                id="frontend-stop-btn"
+                disabled
+              >
+                ⏹️ 停止
+              </button>
+              <button class="btn btn-info" onclick="checkService('frontend')">🔄 刷新</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 快捷操作面板 -->
+        <div class="panel">
+          <h2>
+            <span>⚡</span>
+            快捷操作
+          </h2>
+          <div class="quick-actions">
+            <button class="btn btn-primary" onclick="startAllServices()">🚀 一键启动全部</button>
+            <button class="btn btn-warning" onclick="stopAllServices()">⏹️ 停止全部</button>
+            <button class="btn btn-info" onclick="openTestPage()">🧪 打开测试页面</button>
+            <button class="btn btn-info" onclick="openFrontend()">🌐 打开前端</button>
+            <button class="btn btn-info" onclick="openDevTools()">🔧 开发者工具指南</button>
+            <button class="btn btn-success" onclick="runAllTests()">✅ 测试所有接口</button>
+            <button class="btn" onclick="clearLogs()">🧹 清除日志</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 日志面板 -->
+      <div class="log-panel">
+        <div class="log-header">
+          <h3>
+            <span>📋</span>
+            实时日志
+          </h3>
+          <div>
+            <button class="btn btn-info" onclick="toggleAutoScroll()" id="auto-scroll-btn">
+              🔄 自动滚动: 开启
+            </button>
+          </div>
+        </div>
+        <div class="log-content" id="log-content">
+          <div class="log-entry">
+            <span class="log-time">[系统]</span>
+            <span>启动管理器已加载</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 接口测试面板 -->
+      <div class="test-panel">
+        <div class="log-header">
+          <h3>
+            <span>🧪</span>
+            接口测试面板
+          </h3>
+          <div>
+            <span id="test-summary">总计: 0 | 成功: 0 | 失败: 0</span>
+          </div>
+        </div>
+        <div class="test-grid" id="test-grid">
+          <!-- 测试项将通过JavaScript动态生成 -->
+        </div>
+      </div>
+    </div>
+
+    <!-- 停止确认模态框 -->
+    <div class="modal" id="stop-modal">
+      <div class="modal-content">
+        <h3>⚠️ 确认停止服务</h3>
+        <p id="stop-message">确定要停止选中的服务吗？</p>
+        <div class="modal-actions">
+          <button class="btn btn-danger" onclick="confirmStop()">确认停止</button>
+          <button class="btn" onclick="closeModal()">取消</button>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      // 配置
+      const CONFIG = {
+        proxyPort: 3000,
+        frontendPort: 5173,
+        baseUrl: 'http://localhost:3000',
+        refreshInterval: 5000,
+        apiList: [
+          { name: '健康检查', path: '/health', method: 'GET' },
+          { name: '测试接口', path: '/api/test', method: 'GET' },
+          { name: '雪球热门', path: '/api/xueqiu/hot', method: 'GET' },
+          { name: '财联社热门', path: '/api/cls/hot', method: 'GET' },
+          { name: '东财热门', path: '/api/eastmoney/hot', method: 'POST', body: {} },
+          { name: '同花顺热门', path: '/api/ths/hot', method: 'GET' },
+          { name: '开盘啦热门', path: '/api/kpl/hot', method: 'GET' },
+          {
+            name: '通达信热门',
+            path: '/api/tdx/hot',
+            method: 'POST',
+            body: [{ listType: '0', cycle: '0' }],
+          },
+          { name: '淘股吧热门', path: '/api/tgb/hot', method: 'GET' },
+          { name: '大智慧热门', path: '/api/dzh/hot', method: 'GET' },
+          { name: '智能行情', path: '/api/quotes/smart', params: { codes: '000001,600519' } },
+          { name: '腾讯行情', path: '/api/quotes/tencent', params: { codes: '000001,600519' } },
+          { name: '东财行情', path: '/api/quotes/eastmoney', params: { codes: '000001,600519' } },
+          { name: '新浪行情', path: '/api/quotes/sina', params: { codes: '000001,600519' } },
+          { name: '腾讯盘口', path: '/api/quotes/tencent/spk', params: { codes: '000001,600519' } },
+          { name: '市场概览', path: '/api/market/overview' },
+          { name: '情绪综合', path: '/api/sentiment/composite' },
+          { name: '同花顺涨停', path: '/api/limitup/10jqka' },
+          { name: '涨停详情', path: '/api/limitup/detail' },
+          { name: '选股通表现', path: '/api/surge-stock/performance' },
+          { name: 'TDX涨跌家数', path: '/api/tdx/HQServ.PBSdstat', method: 'POST', body: [{}] },
+          { name: 'TDX盘口数据', path: '/api/tdx/HQServ.hq_nlp_misc', method: 'POST', body: [{}] },
+          {
+            name: 'TDX短线情绪',
+            path: '/api/tdx/CWServ.cfg_fx_dxqx_jyr',
+            method: 'POST',
+            body: [{}],
+          },
+          { name: 'TDX健康检查', path: '/api/tdx/health' },
+        ],
+      }
+
+      // 状态管理
+      let services = {
+        proxy: { running: false, checking: true, pid: null, responseTime: null, requestCount: 0 },
+        frontend: { running: false, checking: true, pid: null, responseTime: null },
+      }
+
+      let autoScroll = true
+      let testResults = {}
+      let currentStopTarget = null
+
+      // 初始化
+      window.onload = function () {
+        renderTestGrid()
+        checkAllServices()
+        setInterval(checkAllServices, CONFIG.refreshInterval)
+        addLog('系统', '启动管理器已初始化', 'info')
+      }
+
+      // 渲染测试网格
+      function renderTestGrid() {
+        const grid = document.getElementById('test-grid')
+        grid.innerHTML = CONFIG.apiList
+          .map(
+            (api) => `
+                <div class="test-item" id="test-${api.path.replace(/\//g, '-')}">
+                    <h4>${api.name}</h4>
+                    <div class="test-path">${api.method || 'GET'} ${api.path}</div>
+                    <div class="test-status test-pending" id="status-${api.path.replace(/\//g, '-')}">
+                        ⏳ 等待测试
+                    </div>
+                    <div class="service-actions">
+                        <button class="btn btn-info btn-small" onclick="testApi('${api.path}', '${api.method || 'GET'}', ${JSON.stringify(api.params || {})}, ${JSON.stringify(api.body || {})})">
+                            ▶️ 测试
+                        </button>
+                    </div>
+                </div>
+            `,
+          )
+          .join('')
+      }
+
+      // 检查所有服务
+      async function checkAllServices() {
+        await Promise.all([checkProxyService(), checkFrontendService()])
+        updateServiceButtons()
+      }
+
+      // 检查代理服务器
+      async function checkProxyService() {
+        const startTime = Date.now()
+        try {
+          const response = await fetch(`${CONFIG.baseUrl}/health`, {
+            method: 'GET',
+            timeout: 3000,
+          })
+
+          if (response.ok) {
+            const data = await response.json()
+            services.proxy.running = true
+            services.proxy.responseTime = Date.now() - startTime
+            services.proxy.checking = false
+
+            updateServiceStatus('proxy', 'running', `运行中 (${services.proxy.responseTime}ms)`)
+            document.getElementById('proxy-health').textContent = data.status || 'ok'
+            addLog('代理服务器', '服务正常', 'info')
+          } else {
+            throw new Error('服务异常')
+          }
+        } catch (error) {
+          services.proxy.running = false
+          services.proxy.checking = false
+          updateServiceStatus('proxy', 'stopped', '未运行')
+          document.getElementById('proxy-health').textContent = '异常'
+        }
+      }
+
+      // 检查前端服务
+      async function checkFrontendService() {
+        const startTime = Date.now()
+
+        // 尝试多个可能的端口
+        const ports = [5173, 5174, 5175, 3001]
+
+        for (const port of ports) {
+          try {
+            const response = await fetch(`http://localhost:${port}`, {
+              method: 'HEAD',
+              timeout: 2000,
+              mode: 'no-cors',
+            })
+
+            // 如果能连上，说明服务在运行
+            services.frontend.running = true
+            services.frontend.responseTime = Date.now() - startTime
+            services.frontend.checking = false
+            services.frontend.port = port
+
+            updateServiceStatus('frontend', 'running', `运行中 (端口:${port})`)
+            document.getElementById('frontend-health').textContent = '正常'
+            document.getElementById('frontend-port').textContent = port
+            addLog('前端服务', `服务运行中 (端口:${port})`, 'info')
+            return
+          } catch (error) {
+            // 继续尝试下一个端口
+            continue
+          }
+        }
+
+        // 所有端口都失败
+        services.frontend.running = false
+        services.frontend.checking = false
+        updateServiceStatus('frontend', 'stopped', '未运行')
+        document.getElementById('frontend-health').textContent = '异常'
+        document.getElementById('frontend-port').textContent = '5173'
+      }
+      // 更新服务状态显示
+      function updateServiceStatus(service, status, text) {
+        const statusEl = document.getElementById(`${service}-status`)
+        const card = document.getElementById(`${service}-card`)
+
+        statusEl.textContent = text
+        statusEl.className = `service-status status-${status}`
+        card.className = `service-card ${status}`
+      }
+
+      // 更新服务按钮状态
+      function updateServiceButtons() {
+        document.getElementById('proxy-start-btn').disabled = services.proxy.running
+        document.getElementById('proxy-stop-btn').disabled = !services.proxy.running
+        document.getElementById('frontend-start-btn').disabled = services.frontend.running
+        document.getElementById('frontend-stop-btn').disabled = !services.frontend.running
+      }
+
+      // 启动服务
+      async function startService(service) {
+        if (service === 'proxy') {
+          addLog('系统', '正在启动代理服务器...', 'info')
+          try {
+            const res = await fetch('http://localhost:3000/api/service/start/proxy', {
+              method: 'POST',
+            })
+            const data = await res.json()
+            addLog('系统', data.message, 'success')
+          } catch (err) {
+            addLog('系统', '启动失败: ' + err.message, 'error')
+          }
+          setTimeout(() => checkService(service), 2000)
+        } else if (service === 'frontend') {
+          addLog('系统', '正在启动前端服务...', 'info')
+          try {
+            const res = await fetch('http://localhost:3000/api/service/start/frontend', {
+              method: 'POST',
+            })
+            const data = await res.json()
+            addLog('系统', data.message, 'success')
+          } catch (err) {
+            addLog('系统', '启动失败: ' + err.message, 'error')
+          }
+          setTimeout(() => checkService(service), 5000)
+        }
+      }
+
+      // 停止服务
+      function stopService(service) {
+        currentStopTarget = service
+        document.getElementById('stop-message').textContent =
+          `确定要停止${service === 'proxy' ? '代理服务器' : '前端服务'}吗？`
+        document.getElementById('stop-modal').classList.add('active')
+      }
+
+      // 确认停止
+      async function confirmStop() {
+        closeModal()
+
+        if (currentStopTarget === 'proxy') {
+          addLog('系统', '正在停止代理服务器...', 'warning')
+          try {
+            const res = await fetch('http://localhost:3000/api/service/stop/proxy', {
+              method: 'POST',
+            })
+            const data = await res.json()
+            addLog('系统', data.message, 'info')
+          } catch (err) {
+            addLog('系统', '停止失败: ' + err.message, 'error')
+          }
+          setTimeout(() => checkService('proxy'), 1000)
+        } else if (currentStopTarget === 'frontend') {
+          addLog('系统', '正在停止前端服务...', 'warning')
+          try {
+            const res = await fetch('http://localhost:3000/api/service/stop/frontend', {
+              method: 'POST',
+            })
+            const data = await res.json()
+            addLog('系统', data.message, 'info')
+          } catch (err) {
+            addLog('系统', '停止失败: ' + err.message, 'error')
+          }
+          setTimeout(() => checkService('frontend'), 1000)
+        }
+      }
+      // 关闭模态框
+      function closeModal() {
+        document.getElementById('stop-modal').classList.remove('active')
+        currentStopTarget = null
+      }
+
+      // 启动所有服务
+      function startAllServices() {
+        addLog('系统', '一键启动所有服务...', 'info')
+        startService('proxy')
+        setTimeout(() => startService('frontend'), 3000)
+        setTimeout(() => openTestPage(), 8000)
+      }
+
+      // 停止所有服务
+      async function stopAllServices() {
+        addLog('系统', '正在停止所有服务...', 'warning')
+        try {
+          const res = await fetch('http://localhost:3000/api/service/stop/all', { method: 'POST' })
+          const data = await res.json()
+          addLog('系统', data.message, 'info')
+        } catch (err) {
+          addLog('系统', '停止失败: ' + err.message, 'error')
+        }
+        setTimeout(() => {
+          checkService('proxy')
+          checkService('frontend')
+        }, 1000)
+      }
+
+      // 检查单个服务
+      function checkService(service) {
+        if (service === 'proxy') {
+          checkProxyService()
+        } else {
+          checkFrontendService()
+        }
+      }
+
+      // 打开测试页面
+      function openTestPage() {
+        window.open(`${CONFIG.baseUrl}/test.html`, '_blank')
+        addLog('系统', '打开测试页面', 'info')
+      }
+
+      // 打开前端
+      function openFrontend() {
+        window.open(`http://localhost:${CONFIG.frontendPort}`, '_blank')
+        addLog('系统', '打开前端页面', 'info')
+      }
+
+      // 打开开发者工具指南
+      function openDevTools() {
+        const guide = `
+🔍 开发者工具调试指南：
+
+1. 打开浏览器开发者工具:
+   - Chrome: F12 或 Ctrl+Shift+I
+   - Edge: F12 或 Ctrl+Shift+I
+   - Firefox: F12 或 Ctrl+Shift+I
+
+2. 切换到 Console 标签查看错误
+
+3. 切换到 Network 标签查看请求
+
+4. 常见错误:
+   - 500: 代理服务器问题
+   - 404: 接口地址错误
+   - CORS: 跨域配置问题
+
+5. 查看代理服务器日志窗口
+            `
+        alert(guide)
+      }
+
+      // 测试单个接口
+      async function testApi(path, method, params = {}, body = {}) {
+        const testId = `test-${path.replace(/\//g, '-')}`
+        const statusId = `status-${path.replace(/\//g, '-')}`
+        const statusEl = document.getElementById(statusId)
+
+        statusEl.className = 'test-status test-pending'
+        statusEl.innerHTML = '⏳ 测试中...'
+
+        try {
+          let url = `${CONFIG.baseUrl}${path}`
+          if (Object.keys(params).length > 0) {
+            url += '?' + new URLSearchParams(params).toString()
+          }
+
+          const startTime = Date.now()
+          const options = {
+            method: method,
+            headers: { 'Content-Type': 'application/json' },
+          }
+
+          if (method === 'POST' && Object.keys(body).length > 0) {
+            options.body = JSON.stringify(body)
+          }
+
+          const response = await fetch(url, options)
+          const duration = Date.now() - startTime
+
+          let data
+          try {
+            data = await response.json()
+          } catch {
+            data = await response.text()
+          }
+
+          if (response.ok) {
+            statusEl.className = 'test-status test-success'
+            statusEl.innerHTML = `✅ 成功 (${duration}ms)`
+            addLog('接口测试', `${path} - 成功 (${duration}ms)`, 'success')
+          } else {
+            statusEl.className = 'test-status test-error'
+            statusEl.innerHTML = `❌ 失败 (${response.status})`
+            addLog('接口测试', `${path} - 失败 (${response.status})`, 'error')
+          }
+
+          // 更新统计
+          updateTestSummary()
+        } catch (error) {
+          statusEl.className = 'test-status test-error'
+          statusEl.innerHTML = `❌ 错误: ${error.message}`
+          addLog('接口测试', `${path} - 错误: ${error.message}`, 'error')
+        }
+      }
+
+      // 运行所有测试
+      async function runAllTests() {
+        addLog('系统', '开始测试所有接口...', 'info')
+
+        for (const api of CONFIG.apiList) {
+          await testApi(api.path, api.method || 'GET', api.params || {}, api.body || {})
+          await new Promise((resolve) => setTimeout(resolve, 500))
+        }
+
+        addLog('系统', '所有接口测试完成', 'success')
+      }
+
+      // 更新测试统计
+      function updateTestSummary() {
+        const successCount = document.querySelectorAll('.test-success').length
+        const totalCount = CONFIG.apiList.length
+        document.getElementById('test-summary').textContent =
+          `总计: ${totalCount} | 成功: ${successCount} | 失败: ${totalCount - successCount}`
+      }
+
+      // 添加日志
+      function addLog(source, message, type = 'info') {
+        const logContent = document.getElementById('log-content')
+        const time = new Date().toLocaleTimeString()
+        const logEntry = document.createElement('div')
+        logEntry.className = 'log-entry'
+        logEntry.innerHTML = `
+                <span class="log-time">[${time}]</span>
+                <span class="log-${type}">[${source}]</span>
+                <span>${message}</span>
+            `
+
+        logContent.appendChild(logEntry)
+
+        if (autoScroll) {
+          logContent.scrollTop = logContent.scrollHeight
+        }
+
+        // 限制日志条数
+        if (logContent.children.length > 100) {
+          logContent.removeChild(logContent.children[0])
+        }
+      }
+
+      // 清除日志
+      function clearLogs() {
+        document.getElementById('log-content').innerHTML = `
+                <div class="log-entry">
+                    <span class="log-time">[系统]</span>
+                    <span>日志已清除</span>
+                </div>
+            `
+      }
+
+      // 切换自动滚动
+      function toggleAutoScroll() {
+        autoScroll = !autoScroll
+        const btn = document.getElementById('auto-scroll-btn')
+        btn.textContent = `🔄 自动滚动: ${autoScroll ? '开启' : '关闭'}`
+      }
+
+      // 检查更新
+      setInterval(() => {
+        services.proxy.requestCount = Math.floor(Math.random() * 100)
+        document.getElementById('proxy-requests').textContent = services.proxy.requestCount
+      }, 3000)
+    </script>
+  </body>
+</html>

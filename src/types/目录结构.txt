@@ -1,0 +1,5 @@
+src/types/
+├── index.ts          # 主入口，导出所有类型
+├── core.ts           # 核心业务类型（股票、题材、龙头、情绪）
+├── config.ts         # 配置常量（因子ID、阶段定义、事件等）
+└── algorithm.ts      # 算法相关类型
