@@ -4,13 +4,15 @@
  * 因子基础接口
  */
 export interface Factor {
+  id?: string
   name: string
-  type: 'rank' | 'fundamental' | 'technical' | 'sentiment' | 'theme' | 'custom'
+  type: string
   category: string
   description: string
   example?: string
   range?: [number, number]
   unit?: string
+  invert?: boolean
   calculate: (stock: any) => number
 }
 
@@ -97,10 +99,11 @@ export interface LeaderThresholds {
  * 算法定义
  */
 export interface Algorithm {
+  id?: string
   name: string
   icon: string
   description: string
-  category: 'balanced' | 'aggressive' | 'conservative' | 'ml'
+  category: string
   color: string
   factors: Record<string, FactorConfig>
   leaderThresholds?: LeaderThresholds

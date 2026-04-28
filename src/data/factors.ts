@@ -28,7 +28,7 @@ export const FACTORS: Record<string, Factor> = {
     category: 'market',
     description: '多平台加权平均榜位',
     calculate: (stock: Stock) => {
-      const rank = stock.avgRank || 100
+      const rank = Number(stock.avgRank) || 100
       return Math.max(0, 100 - rank)
     },
     range: [0, 100],

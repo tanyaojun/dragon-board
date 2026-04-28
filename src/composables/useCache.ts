@@ -16,7 +16,7 @@ export function useCache(panelName: string) {
     tags: string[] = []
   ): Promise<T> {
     const cacheKey = getCacheKey(key)
-    return sectorCache.getOrComputeAsync(cacheKey, compute, ttl, tags)
+    return sectorCache.getOrComputeAsync(cacheKey, compute, 'default', tags)
   }
 
   function invalidate(tags: string | string[]) {

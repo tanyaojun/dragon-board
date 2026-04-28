@@ -301,7 +301,7 @@ export interface MarketPhase {
   desc: string // 描述
   suggestion: string // 操作建议
   features: string[] // 阶段特征
-  thresholdMultiplier: {
+  thresholdMultiplier?: {
     // 动态阈值系数
     totalLeader: number
     continuousLeader: number
@@ -619,7 +619,7 @@ export interface MarketPhase {
   desc: string
   suggestion: string
   features: string[]
-  thresholdMultiplier: ThresholdMultiplier // 改为可配置
+  thresholdMultiplier?: ThresholdMultiplier // 改为可配置
 }
 
 // ========== 龙头级别常量 ==========

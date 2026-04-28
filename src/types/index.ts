@@ -4,6 +4,17 @@
 export * from './core'
 export * from './config'
 export * from './sector'
+export type {
+  Factor,
+  FactorConfig,
+  LeaderThresholds,
+  Algorithm,
+  ThemeFactors,
+  ThemeFactorId,
+  BreathFactorId,
+  LeaderLevelType,
+  LeaderChangeType,
+} from './factors'
 
 export type {
   AppConfig,

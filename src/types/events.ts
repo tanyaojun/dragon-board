@@ -117,16 +117,6 @@ export interface ToastEvent {
   type: 'info' | 'success' | 'warning' | 'error'
 }
 
-// ===== 关键修复：导出所有接口 =====
-export type {
-  SectorUpdatedEvent,
-  SectorBatchEvent,
-  SectorReadyEvent,
-  SectorAlertEvent,
-  StockSelectedEvent,
-  ToastEvent,
-}
-
 // ===== 新增：龙息事件接口 =====
 
 /**
@@ -178,19 +168,4 @@ export interface BreathFactorsUpdatedEvent {
   factors: Record<string, number>
   weights: Record<string, number>
   timestamp: number
-}
-
-// ===== 在导出中添加 =====
-export type {
-  SectorUpdatedEvent,
-  SectorBatchEvent,
-  SectorReadyEvent,
-  SectorAlertEvent,
-  StockSelectedEvent,
-  ToastEvent,
-  // 新增导出
-  BreathUpdatedEvent,
-  BreathPhaseChangedEvent,
-  BreathAlertEvent,
-  BreathFactorsUpdatedEvent,
 }

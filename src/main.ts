@@ -39,8 +39,8 @@ import { dataLoader } from './services/dataLoader'
 import { sectorAnalyzer } from './services/sectorAnalyzer'
 import { dragonAnalyzer } from './services/DragonAnalyzer'
 import { dragonBreathAnalyzer } from './services/DragonBreathAnalyzer'
-import { algorithmManager } from './services/Algorithm'
-import { algorithmConfigManager } from './services/Algorithm/AlgorithmConfigManager'
+import { algorithmManager } from './services/algorithm'
+import { algorithmConfigManager } from './services/algorithm/AlgorithmConfigManager'
 
 // ========== 股票代码管理器 ==========
 import { stockCodeManager } from './services/StockCodeManager'

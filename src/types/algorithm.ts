@@ -2,6 +2,8 @@
 // 算法相关类型定义（完整版）
 
 import type { Stock, ScoreResult } from './core'
+export type { Algorithm } from './factors'
+export type { EmotionRecord, AdjustmentRecord, PerformanceStats } from './config'
 
 // ========== 性能监控类型 ==========
 export interface PerformanceMetrics {
@@ -125,6 +127,14 @@ export interface EmotionAdjustment {
   factorId: string
   delta: number
   reason: string
+  timestamp: number
+}
+
+export interface EmotionFeedback {
+  stockCode: string
+  phase: string
+  score: number
+  adjustments: EmotionAdjustment[]
   timestamp: number
 }
 

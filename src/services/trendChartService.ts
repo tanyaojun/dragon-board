@@ -2,7 +2,7 @@
 
 import { ref } from 'vue'
 import { useStockStore } from '@/stores/stock'
-import { dragonAnalyzer } from './dragonAnalyzer'
+import { dragonAnalyzer } from './DragonAnalyzer'
 import { sectorAnalyzer } from './sectorAnalyzer'
 import { dragonBreathAnalyzer } from './DragonBreathAnalyzer'
 

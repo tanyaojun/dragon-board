@@ -84,7 +84,7 @@
 import { ref, watch, onMounted } from 'vue'
 import { EventManager } from '@/utils/eventManager'
 import { AppEvents } from '@/types/events'
-import { algorithmManager } from '@/services/AlgorithmManager'
+import { algorithmManager } from '@/services/algorithm'
 
 const props = defineProps<{
   algorithm: string

@@ -1,6 +1,6 @@
 // src/composables/usePagination.ts
 
-import { ref, computed } from 'vue'  // 👈 添加必要的 API
+import { ref, computed, type Ref } from 'vue'
 
 export interface PaginationOptions<T> {
   fetchData: (page: number, limit: number) => Promise<{ items: T[]; total: number }>
@@ -9,7 +9,7 @@ export interface PaginationOptions<T> {
 }
 
 export function usePagination<T>(options: PaginationOptions<T>) {
-  const items = ref<T[]>([])
+  const items = ref<T[]>([]) as Ref<T[]>
   const page = ref(1)
   const limit = ref(options.limit || 20)
   const total = ref(0)

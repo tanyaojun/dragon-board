@@ -196,6 +196,35 @@ class LRUCache<T = any> {
     return result
   }
 
+  async getOrComputeManyAsync(
+    keys: string[],
+    compute: (missingKeys: string[]) => Promise<Map<string, T>>,
+    type?: string,
+    tags?: string[],
+  ): Promise<Map<string, T>> {
+    const result = new Map<string, T>()
+    const missingKeys: string[] = []
+
+    keys.forEach((key) => {
+      const value = this.get(key)
+      if (value !== null) {
+        result.set(key, value)
+      } else {
+        missingKeys.push(key)
+      }
+    })
+
+    if (missingKeys.length > 0) {
+      const computed = await compute(missingKeys)
+      computed.forEach((value, key) => {
+        this.setWithType(key, value, type, tags)
+        result.set(key, value)
+      })
+    }
+
+    return result
+  }
+
   /**
    * 按类型设置缓存
    */

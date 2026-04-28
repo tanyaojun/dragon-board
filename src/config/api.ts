@@ -116,6 +116,8 @@ export interface RequestOptions {
   cacheTTL?: number
   signal?: AbortSignal
   headers?: Record<string, string>
+  method?: string
+  body?: any
 }
 
 /**
@@ -190,67 +192,3 @@ export const EASTMONEY_FIELDS = {
   SUPER_RATIO: 'f69', // 超大单占比
   MAIN_RATIO: 'f184', // 主力占比
 } as const
-
-// ========== 类型定义 ==========
-
-/**
- * 请求优先级
- */
-export type RequestPriority = 'high' | 'medium' | 'low'
-
-/**
- * 请求选项
- */
-export interface RequestOptions {
-  priority?: RequestPriority
-  timeout?: number
-  retries?: number
-  cache?: boolean
-  cacheTTL?: number
-  signal?: AbortSignal
-  headers?: Record<string, string>
-  method?: string
-  body?: any
-}
-
-/**
- * 批量获取行情的参数
- */
-export interface QuotesParams {
-  codes: string[] | string
-  source?: 'smart' | 'tencent' | 'eastmoney' | 'sina'
-}
-
-/**
- * 通达信请求参数
- */
-export interface TdxParams {
-  entry: string
-  data: any[]
-}
-
-/**
- * 题材请求参数
- */
-export interface SectorParams {
-  id: string
-}
-
-/**
- * 响应格式
- */
-export interface ApiResponse<T = any> {
-  rc?: number
-  data?: {
-    diff?: T[]
-    [key: string]: any
-  }
-  List?: any[]
-  list?: any[]
-  error?: string
-  message?: string
-  [key: string]: any
-}
-
-// ========== 导出所有类型 ==========
-export type { RequestPriority, RequestOptions, QuotesParams, TdxParams, SectorParams, ApiResponse }

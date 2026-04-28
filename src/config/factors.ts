@@ -103,7 +103,7 @@ export const FACTORS: Record<string, Factor> = {
     description: '所属题材的热度分数',
     calculate: (stock: Stock) => {
       try {
-        const factors = sectorAnalyzer?.getThemeFactors?.(stock.code) || {}
+        const factors = (sectorAnalyzer as any)?.getThemeFactors?.(stock.code) || {}
         return Math.min(100, (factors.themeHeat || 0) / 100)
       } catch {
         return 50
@@ -118,7 +118,7 @@ export const FACTORS: Record<string, Factor> = {
     description: '所属题材内的龙头数量',
     calculate: (stock: Stock) => {
       try {
-        const factors = sectorAnalyzer?.getThemeFactors?.(stock.code) || {}
+        const factors = (sectorAnalyzer as any)?.getThemeFactors?.(stock.code) || {}
         return Math.min(100, (factors.themeLeaderCount || 0) * 20)
       } catch {
         return 30
@@ -133,7 +133,7 @@ export const FACTORS: Record<string, Factor> = {
     description: '题材热度变化趋势',
     calculate: (stock: Stock) => {
       try {
-        const factors = sectorAnalyzer?.getThemeFactors?.(stock.code) || {}
+        const factors = (sectorAnalyzer as any)?.getThemeFactors?.(stock.code) || {}
         return ((factors.themeMomentum || 0) + 100) / 2
       } catch {
         return 50

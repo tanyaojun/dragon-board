@@ -50,8 +50,8 @@ export interface WeightAdjustmentEvent {
 // 主协调器接口
 export interface IAlgorithmManager {
   getCurrentAlgorithm(): any
-  calculateScore(stock: Stock): ScoreResult
-  calculateScoresBulk(stocks: Stock[]): Map<string, ScoreResult>
+  calculateScore(stock: Stock): Promise<ScoreResult>
+  calculateScoresBulk(stocks: Stock[]): Promise<Map<string, ScoreResult>>
   invalidateCache(): void
   getVersion(): number
   getFactorWeights(algorithmId?: string): any[]
