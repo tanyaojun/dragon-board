@@ -6,6 +6,7 @@ import { useStockStore } from '@/stores/stock'
 import { dragonAnalyzer } from './DragonAnalyzer'
 import { sectorAnalyzer } from './sectorAnalyzer'
 import { dragonBreathAnalyzer } from './DragonBreathAnalyzer'
+import { dataLayer } from './DataLayer'
 import { EventManager } from '@/utils/eventManager'
 import type { Stock } from '@/types'
 
@@ -56,9 +57,8 @@ class ExportService {
 
   async exportStocks(options: ExportOptionsInput = {}): Promise<ExportResult> {
     return this.debouncedExport('stocks', options, async () => {
-      const stockStore = useStockStore()
       const data: ExportData = {
-        stocks: stockStore.stocks,
+        stocks: this.getCurrentStocks(),
         timestamp: Date.now(),
       }
 
@@ -72,9 +72,8 @@ class ExportService {
 
   async exportLeaders(options: ExportOptionsInput = {}): Promise<ExportResult> {
     return this.debouncedExport('leaders', options, async () => {
-      const stockStore = useStockStore()
       const data: ExportData = {
-        leaders: stockStore.leaders,
+        leaders: this.getCurrentLeaders(),
         timestamp: Date.now(),
       }
 
@@ -122,10 +121,9 @@ class ExportService {
 
   async exportAll(options: ExportOptionsInput = {}): Promise<ExportResult> {
     return this.debouncedExport('all', options, async () => {
-      const stockStore = useStockStore()
       const data: ExportData = {
-        stocks: stockStore.stocks,
-        leaders: stockStore.leaders,
+        stocks: this.getCurrentStocks(),
+        leaders: this.getCurrentLeaders(),
         sectors: sectorAnalyzer.getHotThemes(50),
         market: {
           sentiment: dragonBreathAnalyzer.getMarketSentiment(),
@@ -254,7 +252,7 @@ class ExportService {
           throw new Error(`不支持的导出格式: ${options.format}`)
       }
 
-      const filename = `${options.filename}.${options.format}`
+      const filename = `${options.filename}.${this.getFileExtension(options.format)}`
       this.download(blob, filename)
 
       const result: ExportResult = {
@@ -298,9 +296,36 @@ class ExportService {
   }
 
   private exportToExcel(data: ExportData, options: ExportOptions): Blob {
-    // 简单实现：导出为 CSV 但改后缀
-    console.warn('[ExportService] Excel 导出使用 CSV 格式，建议安装 xlsx 库')
-    return this.exportToCSV(data, options)
+    const csvBlob = this.exportToCSV(data, options)
+    return new Blob([csvBlob], { type: 'application/vnd.ms-excel;charset=utf-8' })
+  }
+
+  private getCurrentStocks(): Stock[] {
+    const stocks = dataLayer.getStocks?.() || []
+    if (stocks.length > 0) return stocks as Stock[]
+
+    const stockStore = useStockStore()
+    return stockStore.stocks || []
+  }
+
+  private getCurrentLeaders(): Stock[] {
+    const stocks = this.getCurrentStocks()
+    const leaders = stocks.filter((stock) => this.isLeaderStock(stock))
+    if (leaders.length > 0) return leaders
+
+    const stockStore = useStockStore()
+    return stockStore.leaders || []
+  }
+
+  private isLeaderStock(stock: Stock): boolean {
+    if (stock.isSectorLeader) return true
+
+    const leaders = dragonAnalyzer.getAllLeaders?.() || []
+    return leaders.some((leader: any) => leader.code === stock.code)
+  }
+
+  private getFileExtension(format: ExportOptions['format']): string {
+    return format === 'excel' ? 'xls' : format
   }
 
   // ========== 数据转换方法保持不变 ==========
@@ -496,7 +521,10 @@ class ExportService {
     const a = document.createElement('a')
     a.href = url
     a.download = filename
+    a.style.display = 'none'
+    document.body.appendChild(a)
     a.click()
+    a.remove()
 
     // 延迟释放 URL 对象，确保下载完成
     setTimeout(() => {

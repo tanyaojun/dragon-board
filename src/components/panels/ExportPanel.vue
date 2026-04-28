@@ -137,9 +137,10 @@ const panelStyle = computed(() => {
   if (!props.triggerRect) {
     return { top: '100px', right: '20px' }
   }
+  const top = Math.min(props.triggerRect.bottom + 8, window.innerHeight - 520)
   return {
-    top: props.triggerRect.bottom + 5 + 'px',
-    right: '10px',
+    top: Math.max(64, top) + 'px',
+    right: '20px',
   }
 })
 
@@ -373,7 +374,203 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-/* 样式保持不变，添加状态样式 */
+.export-panel {
+  position: fixed;
+  z-index: 1300;
+  width: min(420px, calc(100vw - 32px));
+  max-height: calc(100vh - 96px);
+  color: var(--text-primary);
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  box-shadow: 0 18px 42px rgb(0 0 0 / 42%);
+  overflow: hidden;
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.panel-header h3,
+.export-section h4,
+.preview-section h4,
+.export-history h4 {
+  margin: 0;
+}
+
+.panel-header h3 {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-icon {
+  width: 28px;
+  height: 28px;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.btn-icon:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+  border-color: var(--border-color);
+}
+
+.panel-content {
+  max-height: calc(100vh - 152px);
+  padding: 16px;
+  overflow-y: auto;
+}
+
+.export-section {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.export-section h4,
+.preview-section h4,
+.export-history h4 {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.form-group label {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.form-select,
+.form-input {
+  width: 100%;
+  height: 34px;
+  padding: 0 10px;
+  color: var(--text-primary);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  outline: none;
+}
+
+.form-select:focus,
+.form-input:focus {
+  border-color: var(--color-highlight);
+  box-shadow: 0 0 0 2px rgb(255 139 58 / 18%);
+}
+
+.format-options {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.radio-label {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 10px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.radio-label:has(input:checked) {
+  color: var(--color-highlight);
+  border-color: var(--color-highlight);
+  background: rgb(255 139 58 / 10%);
+}
+
+.preview-section {
+  margin-top: 2px;
+  padding: 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+}
+
+.preview-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.stat-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.stat-label {
+  color: var(--text-secondary);
+}
+
+.stat-value {
+  font-weight: 700;
+  color: var(--color-highlight);
+}
+
+.export-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.btn {
+  min-width: 76px;
+  height: 34px;
+  padding: 0 12px;
+  color: var(--text-primary);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  color: #fff;
+  background: var(--color-highlight);
+  border-color: var(--color-highlight);
+}
+
+.spinner {
+  display: inline-block;
+}
+
 .export-status {
   margin-top: 16px;
   padding: 12px;
@@ -402,5 +599,47 @@ onUnmounted(() => {
   color: var(--text-secondary);
 }
 
-/* 其他样式保持不变 */
+.export-history {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-color);
+}
+
+.history-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 0;
+  font-size: 12px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.history-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-time,
+.history-size {
+  color: var(--text-secondary);
+}
+
+@media (max-width: 520px) {
+  .export-panel {
+    left: 16px;
+    right: 16px !important;
+    width: auto;
+  }
+
+  .format-options,
+  .preview-stats {
+    grid-template-columns: 1fr;
+  }
+
+  .export-actions {
+    flex-wrap: wrap;
+  }
+}
 </style>

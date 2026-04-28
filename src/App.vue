@@ -351,6 +351,7 @@ const openExportPanel = (event?: MouseEvent) => {
   if (event?.currentTarget) {
     panelRects.value.export = (event.currentTarget as HTMLElement).getBoundingClientRect()
   }
+  showDropdown.value = false
   panels.value.export = true
 }
 
