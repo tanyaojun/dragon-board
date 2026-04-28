@@ -1,0 +1,15 @@
+D:\dragon-board\tools\DragonBoardLauncher\bin\Release\net8.0-windows\DragonBoardLauncher.exe
+D:\dragon-board\tools\DragonBoardLauncher\bin\Release\net8.0-windows\DragonBoardLauncher.deps.json
+D:\dragon-board\tools\DragonBoardLauncher\bin\Release\net8.0-windows\DragonBoardLauncher.runtimeconfig.json
+D:\dragon-board\tools\DragonBoardLauncher\bin\Release\net8.0-windows\DragonBoardLauncher.dll
+D:\dragon-board\tools\DragonBoardLauncher\bin\Release\net8.0-windows\DragonBoardLauncher.pdb
+D:\dragon-board\tools\DragonBoardLauncher\obj\Release\net8.0-windows\DragonBoardLauncher.GeneratedMSBuildEditorConfig.editorconfig
+D:\dragon-board\tools\DragonBoardLauncher\obj\Release\net8.0-windows\DragonBoardLauncher.AssemblyInfoInputs.cache
+D:\dragon-board\tools\DragonBoardLauncher\obj\Release\net8.0-windows\DragonBoardLauncher.AssemblyInfo.cs
+D:\dragon-board\tools\DragonBoardLauncher\obj\Release\net8.0-windows\DragonBoardLauncher.csproj.CoreCompileInputs.cache
+D:\dragon-board\tools\DragonBoardLauncher\obj\Release\net8.0-windows\DragonBoardLauncher.sourcelink.json
+D:\dragon-board\tools\DragonBoardLauncher\obj\Release\net8.0-windows\DragonBoardLauncher.dll
+D:\dragon-board\tools\DragonBoardLauncher\obj\Release\net8.0-windows\refint\DragonBoardLauncher.dll
+D:\dragon-board\tools\DragonBoardLauncher\obj\Release\net8.0-windows\DragonBoardLauncher.pdb
+D:\dragon-board\tools\DragonBoardLauncher\obj\Release\net8.0-windows\DragonBoardLauncher.genruntimeconfig.cache
+D:\dragon-board\tools\DragonBoardLauncher\obj\Release\net8.0-windows\ref\DragonBoardLauncher.dll

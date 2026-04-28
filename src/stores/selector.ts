@@ -67,7 +67,7 @@ export const useSelectorStore = defineStore('selector', () => {
     if (!selectedCode.value) return
 
     // 直接查找 data-code 属性匹配的行
-    const targetRow = document.querySelector(`tr[data-code="${selectedCode.value}"]`) as HTMLElement
+    const targetRow = findRowByCode(selectedCode.value)
 
     if (!targetRow) {
       // 没找到就重试一次
@@ -76,7 +76,7 @@ export const useSelectorStore = defineStore('selector', () => {
     }
 
     // 移除其他高亮
-    document.querySelectorAll('tr.selected').forEach((row) => {
+    document.querySelectorAll('[data-code].selected').forEach((row) => {
       row.classList.remove('selected')
     })
 
@@ -86,7 +86,7 @@ export const useSelectorStore = defineStore('selector', () => {
   }
 
   function findRowByCode(code: string): HTMLElement | null {
-    return document.querySelector(`tr[data-code="${code}"]`)
+    return document.querySelector(`[data-code="${code}"]`)
   }
 
   // ========== 清除选中 ==========
@@ -95,7 +95,7 @@ export const useSelectorStore = defineStore('selector', () => {
       selectedRow.value.classList.remove('selected')
     }
 
-    document.querySelectorAll('tr.selected').forEach((row) => {
+    document.querySelectorAll('[data-code].selected').forEach((row) => {
       row.classList.remove('selected')
     })
 
@@ -195,7 +195,7 @@ export const useSelectorStore = defineStore('selector', () => {
       return
     }
 
-    const rows = document.querySelectorAll('tr[data-code]')
+    const rows = document.querySelectorAll('[data-code]')
     if (rows.length === 0) return
 
     // 如果搜索提示框可见，优先处理提示框导航

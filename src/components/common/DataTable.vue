@@ -59,8 +59,9 @@
         <div v-for="(stock, index) in sortedStocks" :key="stock.code" :data-code="stock.code" class="data-row" :class="[
           index % 2 === 0 ? 'row-even' : 'row-odd',
           { selected: uiStore.selectedCode === stock.code },
-        ]" :title="getRowTitle(stock)" :style="gridTemplateStyle" @click="onRowClick($event, stock.code)"
-          @contextmenu.prevent="showContextMenu($event, stock)">
+        ]" :style="gridTemplateStyle" @click="onRowClick($event, stock.code)"
+          @contextmenu.prevent="showContextMenu($event, stock)" @mouseenter="showRowTooltip($event, stock)"
+          @mousemove="moveRowTooltip($event)" @mouseleave="hideRowTooltip">
 
           <!-- 动态渲染所有列，保持和表头一致 -->
           <div v-for="col in visibleColumns" :key="col.key" class="cell" :class="getCellClass(col.key, stock)"
@@ -90,9 +91,8 @@
             <!-- 变化列 - 显示百分位变化 -->
             <template v-else-if="col.key === 'rankChange'">
               <div class="rank-change-cell">
-                <span v-if="stock.rankChange !== undefined && stock.rankChange !== 0"
-                  :class="stock.rankChange > 0 ? 'rank-up' : 'rank-down'">
-                  {{ stock.rankChange > 0 ? '↑' : '↓' }}{{ Math.abs(Math.round(stock.rankChange)) }}%
+                <span v-if="getRankChange(stock) !== 0" :class="getRankChange(stock) > 0 ? 'rank-up' : 'rank-down'">
+                  {{ getRankChange(stock) > 0 ? '↑' : '↓' }}{{ Math.abs(getRankChange(stock)) }}%
                 </span>
                 <span v-else class="trend-steady">-</span>
               </div>
@@ -100,32 +100,33 @@
 
             <!-- 置信度列 - 增强显示 -->
             <template v-else-if="col.key === 'confidence'">
-              <div class="confidence-cell" :title="getConfidenceTitle(stock)">
+              <div class="confidence-cell" @mouseenter="showConfidenceTooltip($event, stock)"
+                @mousemove="moveConfidenceTooltip($event)" @mouseleave="hideConfidenceTooltip">
                 <!-- 买入信号 -->
-                <div v-if="stock.finalSignal === 'buy'" class="signal-badge buy-badge">
-                  <span class="signal-percent">{{ Math.round(stock.finalConfidence || 0) }}%</span>
+                <div v-if="getFinalSignal(stock) === 'buy'" class="signal-badge buy-badge">
+                  <span class="signal-percent">{{ Math.round(getFinalConfidence(stock) || 0) }}%</span>
                   <!-- ✅ 只在收盘前显示金叉死叉标记 -->
-                  <span v-if="shouldShowMacdSignal(stock) && stock.macdCross === 'golden'" class="macd-badge golden"
+                  <span v-if="shouldShowMacdSignal(stock) && getMacdCross(stock) === 'golden'" class="macd-badge golden"
                     title="MACD金叉">🔱</span>
-                  <span v-if="shouldShowMacdSignal(stock) && stock.macdCross === 'death'" class="macd-badge death"
+                  <span v-if="shouldShowMacdSignal(stock) && getMacdCross(stock) === 'death'" class="macd-badge death"
                     title="MACD死叉">💀</span>
                 </div>
                 <!-- 卖出信号 -->
-                <div v-else-if="stock.finalSignal === 'sell'" class="signal-badge sell-badge">
-                  <span class="signal-percent">{{ Math.round(stock.finalConfidence || 0) }}%</span>
+                <div v-else-if="getFinalSignal(stock) === 'sell'" class="signal-badge sell-badge">
+                  <span class="signal-percent">{{ Math.round(getFinalConfidence(stock) || 0) }}%</span>
                   <!-- ✅ 只在收盘前显示金叉死叉标记 -->
-                  <span v-if="shouldShowMacdSignal(stock) && stock.macdCross === 'golden'" class="macd-badge golden"
+                  <span v-if="shouldShowMacdSignal(stock) && getMacdCross(stock) === 'golden'" class="macd-badge golden"
                     title="MACD金叉">🔱</span>
-                  <span v-if="shouldShowMacdSignal(stock) && stock.macdCross === 'death'" class="macd-badge death"
+                  <span v-if="shouldShowMacdSignal(stock) && getMacdCross(stock) === 'death'" class="macd-badge death"
                     title="MACD死叉">💀</span>
                 </div>
                 <!-- 持有信号 -->
-                <div v-else-if="stock.finalSignal === 'hold'" class="signal-badge hold-badge">
-                  <span class="signal-percent">{{ Math.round(stock.finalConfidence || 0) }}%</span>
+                <div v-else-if="getFinalSignal(stock) === 'hold'" class="signal-badge hold-badge">
+                  <span class="signal-percent">{{ Math.round(getFinalConfidence(stock) || 0) }}%</span>
                   <!-- ✅ 只在收盘前显示金叉死叉标记 -->
-                  <span v-if="shouldShowMacdSignal(stock) && stock.macdCross === 'golden'" class="macd-badge golden"
+                  <span v-if="shouldShowMacdSignal(stock) && getMacdCross(stock) === 'golden'" class="macd-badge golden"
                     title="MACD金叉">🔱</span>
-                  <span v-if="shouldShowMacdSignal(stock) && stock.macdCross === 'death'" class="macd-badge death"
+                  <span v-if="shouldShowMacdSignal(stock) && getMacdCross(stock) === 'death'" class="macd-badge death"
                     title="MACD死叉">💀</span>
                 </div>
                 <span v-else class="trend-steady">-</span>
@@ -174,12 +175,20 @@
       <div class="menu-item" @click="viewTheme"><span class="menu-icon">📊</span> 查看题材</div>
       <div class="menu-item" @click="viewDetails"><span class="menu-icon">🔍</span> 查看详情</div>
       <div class="menu-item" @click="openRankTrendForStock">
-        <span class="menu-icon">📊</span> 六维信号分析
+        <span class="menu-icon">📊</span> 排名趋势
       </div>
     </div>
-    <!-- 六维信号分析面板 -->
+    <!-- 排名趋势面板 -->
     <RankTrendPanel :visible="rankTrendPanelVisible" :triggerRect="rankTrendPanelTriggerRect"
-      @update:visible="rankTrendPanelVisible = $event" @close="rankTrendPanelVisible = false" />
+      :stock-code="rankTrendPanelStockCode" @update:visible="rankTrendPanelVisible = $event"
+      @close="rankTrendPanelVisible = false" />
+    <div v-if="confidenceTooltip.visible" class="confidence-tooltip"
+      :style="{ left: `${confidenceTooltip.x}px`, top: `${confidenceTooltip.y}px` }">
+      {{ confidenceTooltip.content }}
+    </div>
+    <div v-if="rowTooltip.visible" class="row-tooltip" :style="{ left: `${rowTooltip.x}px`, top: `${rowTooltip.y}px` }">
+      {{ rowTooltip.content }}
+    </div>
   </div>
 
 </template>
@@ -196,9 +205,12 @@ import { dataLayer } from '../../services/DataLayer'
 import { dataLoader } from '../../services/dataLoader'
 import RankTrendPanel from '../../components/panels/RankTrendPanel.vue'
 import { rankTrendAnalyzer } from '../../services/RankTrendAnalyzer'
-import { isTradingTime } from '../../utils/time'
 const props = defineProps<{
   loading?: boolean
+}>()
+
+const emit = defineEmits<{
+  (e: 'select', code: string): void
 }>()
 
 // ========== Stores ==========
@@ -219,6 +231,27 @@ const loadingMessage = computed(() => {
   return dataLoader.isLoading?.value?.message || '加载数据中...'
 })
 
+const localSignalLabels: Record<string, string> = {
+  buy: '买入',
+  sell: '卖出',
+  hold: '观望',
+  none: '无',
+}
+
+const localMacdLabels: Record<string, string> = {
+  golden: '金叉',
+  death: '死叉',
+  none: '无',
+}
+
+const localAttentionStageLabels: Record<string, string> = {
+  ignition: '启动',
+  expansion: '扩散',
+  crowded: '拥挤',
+  reversal: '反转',
+  cooling: '降温',
+}
+
 // ========== 状态 ==========
 const headerRef = ref<HTMLElement | null>(null)
 const bodyRef = ref<HTMLElement | null>(null)
@@ -231,6 +264,18 @@ const contextMenu = ref({
   stock: null as Stock | null,
 })
 const contextMenuRef = ref<HTMLElement | null>(null)
+const confidenceTooltip = ref({
+  visible: false,
+  x: 0,
+  y: 0,
+  content: '',
+})
+const rowTooltip = ref({
+  visible: false,
+  x: 0,
+  y: 0,
+  content: '',
+})
 
 // 板块列表状态
 const boardList = ref<Board[]>([])
@@ -243,6 +288,7 @@ const columns = [
   { key: 'themes', label: '题材', group: 'basic', always: true },
   { key: 'price', label: '最新价', group: 'basic', always: true },
   { key: 'change', label: '涨幅%', group: 'basic', always: true },
+  { key: 'speed', label: '涨速%', group: 'basic', always: true },
   { key: 'emRank', label: '东财', group: 'platform', always: true },
   { key: 'thsRank', label: '同花顺', group: 'platform', always: true },
   { key: 'kplRank', label: '开盘啦', group: 'platform', always: true },
@@ -251,10 +297,13 @@ const columns = [
   { key: 'clsRank', label: '财联社', group: 'platform', always: true },
   { key: 'tgbRank', label: '淘股吧', group: 'platform', always: true },
   { key: 'dzhRank', label: '大智慧', group: 'platform', always: true },
-  { key: 'avgRank', label: '热度', group: 'comprehensive', always: true },
+  { key: 'avgRank', label: '均榜', group: 'comprehensive', always: true },
   { key: 'compRank', label: '综合', group: 'comprehensive', always: true },
   { key: 'rankChange', label: '变化', group: 'comprehensive', always: true },
   { key: 'confidence', label: '置信度', group: 'comprehensive', always: true },
+  { key: 'candidateTier', label: '分层', group: 'comprehensive', always: true },
+  { key: 'cycleStage', label: '阶段', group: 'comprehensive', always: true },
+  { key: 'strategyAction', label: '动作', group: 'comprehensive', always: true },
   { key: 'zlje', label: '主力净额', group: 'money', always: true },
   { key: 'zljzb', label: '主力%', group: 'money', always: true },
   { key: 'cddje', label: '超大单', group: 'money', always: true },
@@ -264,18 +313,19 @@ const columns = [
   { key: 'turnover', label: '成交额', group: 'quote', always: true },
   { key: 'turnoverRate', label: '换手%', group: 'quote', always: true },
   { key: 'cirMV', label: '流通值', group: 'quote', always: true },
-  { key: 'pe', label: '市盈率', group: 'quote', always: true },
   { key: 'totalMV', label: '总市值', group: 'quote', always: true },
   { key: 'pb', label: '市净率', group: 'quote', always: true },
+  { key: 'pe', label: '市盈率', group: 'quote', always: true },
 ]
 
 // ========== 列宽映射==========
 const COLUMN_WIDTHS: Record<string, string> = {
-  code: '70px',
-  name: '90px',
-  themes: '140px',
-  price: '70px',
+  code: '60px',
+  name: '80px',
+  themes: '120px',
+  price: '60px',
   change: '70px',
+  speed: '70px',
   emRank: '50px',
   thsRank: '50px',
   kplRank: '50px',
@@ -288,12 +338,15 @@ const COLUMN_WIDTHS: Record<string, string> = {
   compRank: '50px',
   rankChange: '50px',
   confidence: '70px',
+  candidateTier: '50px',
+  cycleStage: '50px',
+  strategyAction: '56px',
   zlje: '90px',
   zljzb: '90px',
   cddje: '90px',
   cddjzb: '90px',
   volume: '80px',
-  volumeRatio: '70px',        // ✅ 新增量比列宽
+  volumeRatio: '70px',
   turnover: '80px',
   turnoverRate: '80px',
   cirMV: '80px',
@@ -506,10 +559,8 @@ const removeDuplicateThemes = (themes: any[]): any[] => {
 // 行悬浮提示
 const getRowTitle = (stock: Stock) => {
   let title = ''
-  let hasContent = false
 
   title += `${stock.name} (${stock.code})`
-  hasContent = true
 
   // ✅ 直接从 limitUpData 读取标签、原因、连板信息
   const limitUpData = dataLayer.getLimitUpData(stock.code)
@@ -550,65 +601,250 @@ const getRowTitle = (stock: Stock) => {
   }
 
   // 排名变化
-  if (stock.rankChange !== undefined && stock.rankChange !== 0) {
-    const change = Math.abs(Math.round(stock.rankChange))
-    title += `\n📊 排名变化: ${stock.rankChange > 0 ? '↑' : '↓'}${change}%\n`
+  const rankChange = getRankChange(stock)
+  if (rankChange !== 0) {
+    const change = Math.abs(rankChange)
+    title += `\n📊 排名变化: ${rankChange > 0 ? '↑' : '↓'}${change}%\n`
   }
 
   return title
 }
 
+
+const getSignalDisplayText = (signal?: string | null, fallback = '--') => {
+  if (!signal) return fallback
+  if (signal === 'none') return '无'
+  return localSignalLabels[signal] ?? signal
+}
+
+const getMacdDisplayText = (value?: string | null) => {
+  if (!value) return '--'
+  return localMacdLabels[value] ?? value
+}
+
+const getAttentionStageDisplayText = (value?: string | null) => {
+  if (!value) return '未知'
+  return localAttentionStageLabels[value] ?? value
+}
+
+const formatTooltipNumber = (value?: number | null, digits = 1) => {
+  if (!Number.isFinite(Number(value))) return '--'
+  return Number(value).toFixed(digits)
+}
 
 // 置信度悬浮提示
 const getConfidenceTitle = (stock: any) => {
   let title = ''
+  const rankTrend = getRankTrendAnalysis(stock)
 
-  if (!stock.finalSignal || stock.finalSignal === 'none') return '暂无信号'
+  const finalSignal = getFinalSignal(stock)
+  const hasFinalSignal = Boolean(finalSignal && finalSignal !== 'none')
+  if (!rankTrend && !hasFinalSignal) return '暂无信号'
 
-  const confidence = Math.round(stock.finalConfidence || 0)
-  const signalText = stock.finalSignal === 'buy' ? '买入' : stock.finalSignal === 'sell' ? '卖出' : '持有'
-  title = `🎯 综合判断: ${signalText} (置信度: ${confidence}%)\n`
+  const confidence = Math.round(getFinalConfidence(stock) || 0)
+  const signalText = getSignalDisplayText(finalSignal, '无')
+  const directionText = getSignalDisplayText(getDirectionSignal(stock), '无')
+  const accelerationText = getSignalDisplayText(getAccelerationSignal(stock), '无')
+  const crossText = getSignalDisplayText(getZeroCrossSignal(stock), '无')
+
+  title = `📌 ${stock.name || '-'} (${stock.code || '-'})\n`
+  title += hasFinalSignal
+    ? `🎯 综合判断: ${signalText} (置信度: ${confidence}%)\n`
+    : '🎯 综合判断: 暂无信号\n'
   title += '─'.repeat(30) + '\n'
 
-  // 排名变化
-  if (stock.rankChange !== undefined && stock.rankChange !== 0) {
-    const change = Math.abs(Math.round(stock.rankChange))
-    title += `📊 排名变化: ${stock.rankChange > 0 ? '↑' : '↓'}${change}%\n`
-  }
+  if (rankTrend) {
+    // 排名变化
+    const rankChange = getRankChange(stock)
+    if (rankChange !== 0) {
+      const change = Math.abs(rankChange)
+      title += `📊 排名变化: ${rankChange > 0 ? '↑' : '↓'}${change}%\n`
+    }
 
-  // MACD
-  title += `📈 MACD: ${stock.macdCross === 'golden' ? '金叉 ✅' : stock.macdCross === 'death' ? '死叉' : '无交叉'}\n\n`
+    // MACD信号
+    const macdCross = getMacdCross(stock)
+    title += `📈 MACD信号: ${getMacdDisplayText(macdCross)}${macdCross === 'golden' ? ' ✅' : ''}\n`
 
-  // 3个排名趋势信号
-  title += `📊 排名趋势信号:\n`
+    // MACD值
+    const macdDif = getMacdDif(stock)
+    if (macdDif !== undefined) {
+      title += `📉 MACD值: DIF=${macdDif.toFixed(2)}  DEA=${getMacdDea(stock)?.toFixed(2)}  柱=${getMacdHistogram(stock)?.toFixed(2)}\n`
+    }
 
-  const directionText = stock.directionSignal === 'buy' ? '买入' : stock.directionSignal === 'sell' ? '卖出' : '持有'
-  title += `   📈 方向一致性: ${directionText} (${stock.directionConfidence || 0}%)\n`
+    // 3个排名趋势信号
+    title += `\n📊 排名趋势信号:\n`
+    title += `   📈 方向一致性: ${directionText} (${formatTooltipNumber(getDirectionConfidence(stock), 2)}%)\n`
+    title += `   ⚡ 动量加速度: ${accelerationText} (${formatTooltipNumber(getAccelerationConfidence(stock), 2)}%)\n`
+    title += `   🔄 零线交叉: ${crossText} (${formatTooltipNumber(getZeroCrossConfidence(stock), 2)}%)\n`
 
-  const accelerationText = stock.accelerationSignal === 'buy' ? '买入' : stock.accelerationSignal === 'sell' ? '卖出' : '持有'
-  title += `   ⚡ 动量加速度: ${accelerationText} (${stock.accelerationConfidence || 0}%)\n`
-
-  const crossText = stock.crossSignal === 'buy' ? '买入' : stock.crossSignal === 'sell' ? '卖出' : '持有'
-  title += `   🔄 零线交叉: ${crossText} (${stock.crossConfidence || 0}%)\n`
-
-  // MACD详细
-  if (stock.macd !== undefined) {
-    title += `\n📈 MACD详细: DIF=${stock.macd.toFixed(2)}  DEA=${stock.macdSignal?.toFixed(2)}  柱=${stock.macdHistogram?.toFixed(2)}`
+    const attentionStage = getAttentionStage(stock)
+    if (attentionStage) {
+      title += `\n🧠 注意力阶段: ${getAttentionStageDisplayText(attentionStage)}\n`
+    }
+    const overheatRiskSignal = getOverheatRiskSignal(stock)
+    if (overheatRiskSignal && overheatRiskSignal !== 'none') {
+      const overheatSignalText = getSignalDisplayText(overheatRiskSignal, '无')
+      title += `   🔥 过热反转风险: ${overheatSignalText} (${Math.round(getOverheatRiskScore(stock) || 0)}分)\n`
+    }
+    const divergenceSignal = getDivergenceSignal(stock)
+    if (divergenceSignal && divergenceSignal !== 'none') {
+      const divergenceSignalText = getSignalDisplayText(divergenceSignal, '无')
+      title += `   💰 热度资金背离: ${divergenceSignalText} (${Math.round(getDivergenceScore(stock) || 0)}分)\n`
+    }
   }
 
   return title
 }
 
+const showConfidenceTooltip = (event: MouseEvent, stock: any) => {
+  hideRowTooltip()
+  confidenceTooltip.value = {
+    visible: true,
+    x: event.clientX + 16,
+    y: event.clientY + 16,
+    content: getConfidenceTitle(stock),
+  }
+}
+
+const moveConfidenceTooltip = (event: MouseEvent) => {
+  if (!confidenceTooltip.value.visible) return
+  confidenceTooltip.value.x = event.clientX + 16
+  confidenceTooltip.value.y = event.clientY + 16
+}
+
+const hideConfidenceTooltip = () => {
+  confidenceTooltip.value.visible = false
+}
+
+const showRowTooltip = (event: MouseEvent, stock: Stock) => {
+  const content = getRowTitle(stock)
+  if (!content) return
+  rowTooltip.value = {
+    visible: true,
+    x: event.clientX + 16,
+    y: event.clientY + 16,
+    content,
+  }
+}
+
+const moveRowTooltip = (event: MouseEvent) => {
+  if (!rowTooltip.value.visible) return
+  rowTooltip.value.x = event.clientX + 16
+  rowTooltip.value.y = event.clientY + 16
+}
+
+const hideRowTooltip = () => {
+  rowTooltip.value.visible = false
+}
+
+const getRankTrendAnalysis = (stock: any) => stock?.rankTrend
+
+const getRankChange = (stock: any) =>
+  Math.round(getRankTrendAnalysis(stock)?.meta?.change ?? stock?.rankChange ?? 0)
+
+const getFinalSignal = (stock: any) =>
+  getRankTrendAnalysis(stock)?.decision?.final?.signal ?? stock?.finalSignal ?? 'none'
+
+const getFinalConfidence = (stock: any) =>
+  getRankTrendAnalysis(stock)?.decision?.final?.confidence ?? stock?.finalConfidence ?? 0
+
+const getMacdCross = (stock: any) =>
+  getRankTrendAnalysis(stock)?.technical?.macd?.cross ?? stock?.macdCross ?? 'none'
+
+const getMacdDif = (stock: any) =>
+  getRankTrendAnalysis(stock)?.technical?.macd?.dif ?? stock?.macd
+
+const getMacdDea = (stock: any) =>
+  getRankTrendAnalysis(stock)?.technical?.macd?.dea ?? stock?.macdSignal
+
+const getMacdHistogram = (stock: any) =>
+  getRankTrendAnalysis(stock)?.technical?.macd?.histogram ?? stock?.macdHistogram
+
+const getDirectionSignal = (stock: any) =>
+  getRankTrendAnalysis(stock)?.technical?.signals?.direction?.signal ?? stock?.directionSignal ?? 'none'
+
+const getDirectionConfidence = (stock: any) =>
+  getRankTrendAnalysis(stock)?.technical?.signals?.direction?.confidence ?? stock?.directionConfidence ?? 0
+
+const getAccelerationSignal = (stock: any) =>
+  getRankTrendAnalysis(stock)?.technical?.signals?.acceleration?.signal ?? stock?.accelerationSignal ?? 'none'
+
+const getAccelerationConfidence = (stock: any) =>
+  getRankTrendAnalysis(stock)?.technical?.signals?.acceleration?.confidence ?? stock?.accelerationConfidence ?? 0
+
+const getZeroCrossSignal = (stock: any) =>
+  getRankTrendAnalysis(stock)?.technical?.signals?.zeroCross?.signal ?? stock?.crossSignal ?? 'none'
+
+const getZeroCrossConfidence = (stock: any) =>
+  getRankTrendAnalysis(stock)?.technical?.signals?.zeroCross?.confidence ?? stock?.crossConfidence ?? 0
+
+const getAttentionStage = (stock: any) =>
+  getRankTrendAnalysis(stock)?.cycle?.stage
+
+const RANK_TREND_TIER_LABELS: Record<string, string> = {
+  A_MAIN: '主升',
+  B_IGNITION: '点火',
+  C_CROWDED: '拥挤',
+  D_EXIT_RISK: '退潮',
+  N_NEUTRAL: '震荡',
+}
+
+const RANK_TREND_ACTION_LABELS: Record<string, string> = {
+  focus: '重点',
+  watch: '观察',
+  hold: '持有',
+  avoid: '规避',
+  exit_watch: '离场',
+}
+
+const RANK_TREND_STAGE_LABELS: Record<string, string> = {
+  ignition: '点火',
+  expansion: '扩散',
+  crowded: '拥挤',
+  reversal: '反转',
+  cooling: '冷却',
+}
+
+const getStrategyCandidateTier = (stock: any) =>
+  getRankTrendAnalysis(stock)?.strategy?.candidateTier
+
+const getStrategyAction = (stock: any) =>
+  getRankTrendAnalysis(stock)?.strategy?.action
+
+const getCycleStage = (stock: any) =>
+  getRankTrendAnalysis(stock)?.cycle?.stage
+
+const formatRankTrendTier = (tier?: string | null) => {
+  if (!tier) return '-'
+  return RANK_TREND_TIER_LABELS[tier] ?? tier
+}
+
+const formatRankTrendAction = (action?: string | null) => {
+  if (!action) return '-'
+  return RANK_TREND_ACTION_LABELS[action] ?? action
+}
+
+const formatRankTrendStage = (stage?: string | null) => {
+  if (!stage) return '-'
+  return RANK_TREND_STAGE_LABELS[stage] ?? stage
+}
+
+const getOverheatRiskSignal = (stock: any) =>
+  getRankTrendAnalysis(stock)?.risk?.overheat?.signal ?? 'none'
+
+const getOverheatRiskScore = (stock: any) =>
+  getRankTrendAnalysis(stock)?.risk?.overheat?.score ?? 0
+
+const getDivergenceSignal = (stock: any) =>
+  getRankTrendAnalysis(stock)?.risk?.divergence?.signal ?? 'none'
+
+const getDivergenceScore = (stock: any) =>
+  getRankTrendAnalysis(stock)?.risk?.divergence?.score ?? 0
+
 // 判断是否显示金叉死叉标记（非交易时间）
 const shouldShowMacdSignal = (stock: any) => {
-
-  //交易时间不显示
-  if (isTradingTime()) {
-    return
-  }
-
-  // 显示金叉死叉标记
-  return stock.macdCross === 'golden' || stock.macdCross === 'death'
+  const macdCross = getMacdCross(stock)
+  return macdCross === 'golden' || macdCross === 'death'
 }
 
 // ========== 格式化函数（保持不变）==========
@@ -629,15 +865,30 @@ const formatVolume = (volume: number): string => {
 }
 
 const formatCell = (key: string, stock: any) => {
-  const value = stock[key]
+  if (key === 'candidateTier') return formatRankTrendTier(getStrategyCandidateTier(stock))
+  if (key === 'cycleStage') return formatRankTrendStage(getCycleStage(stock))
+  if (key === 'strategyAction') return formatRankTrendAction(getStrategyAction(stock))
+
+  const value = key === 'rankChange' ? getRankChange(stock) : stock[key]
   if (value === undefined || value === null) return '-'
 
   if (key.includes('Rank') || key === 'compRank') {
     return value === 999 ? '-' : value
   }
 
+  if (key === 'speed') {
+    const speed = Number(value)
+    if (!Number.isFinite(speed)) return '-'
+    return `${speed > 0 ? '+' : ''}${speed.toFixed(2)}%`
+  }
+
   if (key.includes('Rate') || key === 'change' || key.includes('zb')) {
     return value ? (value > 0 ? '+' : '') + Number(value).toFixed(2) + '%' : '-'
+  }
+
+  if (key === 'price') {
+    const price = Number(value)
+    return Number.isFinite(price) ? price.toFixed(2) : '-'
   }
 
   // ✅ 量比格式化：保留两位小数
@@ -663,12 +914,13 @@ const getCellClass = (key: string, stock: any) => {
   if (key === 'code') classes.push('code-cell')
   else if (key === 'name') classes.push('name-cell')
   else if (key === 'themes') classes.push('sector-cell')
+  else if (['candidateTier', 'cycleStage', 'strategyAction'].includes(key)) classes.push('strategy-cell')
   else classes.push('number-cell')
 
-  if (key === 'change') {
-    const change = stock.change
-    if (change > 0) classes.push('color-up')
-    else if (change < 0) classes.push('color-down')
+  if (key === 'change' || key === 'speed') {
+    const value = Number(stock[key])
+    if (value > 0) classes.push('color-up')
+    else if (value < 0) classes.push('color-down')
   }
 
   // ✅ 量比颜色样式：大于1.2显示暖色，小于0.8显示冷色
@@ -687,9 +939,21 @@ const getCellClass = (key: string, stock: any) => {
   if (key === 'compRank' || key === 'avgRank') classes.push('color-highlight')
 
   if (key === 'rankChange') {
-    const change = stock[key]
+    const change = getRankChange(stock)
     if (change > 0) classes.push('rank-up')
     else if (change < 0) classes.push('rank-down')
+  }
+
+  if (key === 'candidateTier') {
+    classes.push(`strategy-tier-${getStrategyCandidateTier(stock) || 'empty'}`)
+  }
+
+  if (key === 'cycleStage') {
+    classes.push(`strategy-tier-${getCycleStage(stock) || 'empty'}`)
+  }
+
+  if (key === 'strategyAction') {
+    classes.push(`strategy-action-${getStrategyAction(stock) || 'empty'}`)
   }
 
   return classes.join(' ')
@@ -730,38 +994,19 @@ const isPlatformRankKey = (key: string): boolean => {
 // 信号面板状态
 const rankTrendPanelVisible = ref(false)
 const rankTrendPanelTriggerRect = ref<DOMRect>()
+const rankTrendPanelStockCode = ref('')
 
 const openRankTrendForStock = () => {
-  // ✅ 添加类型守卫，确保 stock 存在
   if (!contextMenu.value.stock) {
-    console.warn('[DataTable] 没有选中的股票，无法打开六维信号分析')
+    console.warn('[DataTable] 没有选中的股票，无法打开')
     hideContextMenu()
     return
   }
 
   const stock = contextMenu.value.stock
 
+  rankTrendPanelStockCode.value = stock.code
   rankTrendPanelVisible.value = true
-
-  setTimeout(() => {
-    const panel = document.querySelector('.rank-trend-panel')
-    if (!panel) {
-      console.warn('[DataTable] 未找到六维信号分析面板')
-      return
-    }
-
-    const searchInput = panel.querySelector('.search-input') as HTMLInputElement
-    if (searchInput) {
-      searchInput.value = stock.code
-      const inputEvent = new Event('input', { bubbles: true })
-      searchInput.dispatchEvent(inputEvent)
-
-      const searchBtn = panel.querySelector('.search-btn') as HTMLButtonElement
-      if (searchBtn) {
-        searchBtn.click()
-      }
-    }
-  }, 100)
 
   hideContextMenu()
 }
@@ -777,6 +1022,7 @@ const onRowClick = (event: MouseEvent, code: string) => {
     return
   }
   uiStore.selectStock(code)
+  emit('select', code)
 }
 
 const showContextMenu = (e: MouseEvent, stock: Stock) => {
@@ -845,9 +1091,16 @@ const copyCode = () => {
 
 const viewDetails = () => {
   if (contextMenu.value.stock) {
-    // ✅ 保留事件发射
+    const stock = contextMenu.value.stock
+    uiStore.selectStock(stock.code)
+    EventManager.emit('stock:show-detail', {
+      code: stock.code,
+      name: stock.name,
+      triggerRect: new DOMRect(contextMenu.value.x, contextMenu.value.y, 1, 1),
+      source: 'datatable-context-menu',
+    })
     EventManager.emit(AppEvents.UI.TOAST, {
-      message: `🔍 查看 ${contextMenu.value.stock.name} 详情`,
+      message: `🔍 查看 ${stock.name} 详情`,
       duration: 1500,
       type: 'info',
     })
@@ -861,12 +1114,16 @@ const handleBodyScroll = (e: Event) => {
     headerRef.value.scrollLeft = (e.target as HTMLElement).scrollLeft
   }
   uiStore.saveScrollPosition((e.target as HTMLElement).scrollTop)
+  hideConfidenceTooltip()
+  hideRowTooltip()
 }
 
 const handleClickOutside = (e: MouseEvent) => {
   if (contextMenuRef.value && !contextMenuRef.value.contains(e.target as Node)) {
     hideContextMenu()
   }
+  hideConfidenceTooltip()
+  hideRowTooltip()
 }
 
 // ========== 生命周期 ==========
@@ -1327,6 +1584,40 @@ defineExpose({
   color: var(--text-secondary);
 }
 
+.strategy-cell {
+  text-align: center;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.strategy-tier-A_MAIN,
+.strategy-action-focus {
+  color: #ff6b6b !important;
+  font-weight: 600;
+}
+
+.strategy-tier-B_IGNITION,
+.strategy-action-watch {
+  color: #ffa502 !important;
+}
+
+.strategy-tier-C_CROWDED,
+.strategy-action-hold {
+  color: #fbbf24 !important;
+}
+
+.strategy-tier-D_EXIT_RISK,
+.strategy-action-exit_watch {
+  color: #2ed573 !important;
+}
+
+.strategy-action-avoid,
+.strategy-tier-N_NEUTRAL,
+.strategy-tier-empty,
+.strategy-action-empty {
+  color: var(--text-tertiary);
+}
+
 /* 趋势强度标记 */
 .trend-strength {
   font-size: 10px;
@@ -1679,6 +1970,38 @@ defineExpose({
 .confidence-cell {
   text-align: center;
   padding: 4px 8px;
+}
+
+.confidence-tooltip {
+  position: fixed;
+  z-index: 12000;
+  max-width: 420px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(24, 24, 28, 0.96);
+  color: #f3f0eb;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.38);
+  white-space: pre-line;
+  line-height: 1.6;
+  font-size: 12px;
+  pointer-events: none;
+}
+
+.row-tooltip {
+  position: fixed;
+  z-index: 11990;
+  max-width: 360px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(24, 24, 28, 0.95);
+  color: #ebe6df;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.32);
+  white-space: pre-line;
+  line-height: 1.55;
+  font-size: 12px;
+  pointer-events: none;
 }
 
 .signal-badge {

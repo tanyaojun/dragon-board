@@ -1,6 +1,4 @@
 // src/services/apiService.ts
-
-import { performanceMonitor } from './performanceMonitor'
 import { API_CONFIG } from '../config/constants'
 // ========== 类型定义 ==========
 
@@ -682,7 +680,6 @@ export class ApiService {
       return null
     }
 
-    performanceMonitor.recordCacheAccess(true, 0)
     return cached.data as T
   }
 
@@ -709,19 +706,6 @@ export class ApiService {
       this.metrics.shift()
     }
 
-    // 记录到性能监控
-    performanceMonitor.recordMetric(
-      metrics.url.split('?')[0],
-      metrics.duration || 0,
-      metrics.success,
-      {
-        context: metrics.context,
-        status: metrics.status,
-        retryCount: metrics.retryCount,
-        size: metrics.responseSize,
-      },
-      'api',
-    )
   }
 
   private delay(ms: number): Promise<void> {

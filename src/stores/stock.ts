@@ -6,7 +6,6 @@ import { EventManager } from '@/utils/eventManager'
 import { AppEvents } from '@/types'
 import { dataLayer } from '@/services/DataLayer'
 import { dragonAnalyzer } from '@/services/DragonAnalyzer'
-import { performanceMonitor } from '@/services/performanceMonitor'
 
 // 批量更新配置
 const BATCH_UPDATE_DELAY = 100 // 100ms
@@ -171,15 +170,6 @@ export const useStockStore = defineStore('stock', () => {
     // 触发版本更新
     version.value++
 
-    // 记录性能
-    if (performanceMonitor) {
-      performanceMonitor.recordMetric('stock-store:batch-update',
-        performance.now() - startTime,
-        true,
-        { count: updatedCount }
-      )
-    }
-
     if (updatedCount > 0) {
       console.log(`[StockStore] 📦 批量更新完成: ${updatedCount}只股票`)
     }
@@ -233,14 +223,6 @@ export const useStockStore = defineStore('stock', () => {
         // 重置重试计数
         retryCount = 0
 
-        // 记录性能
-        if (performanceMonitor) {
-          performanceMonitor.recordMetric('stock-store:load',
-            performance.now() - startTime,
-            true,
-            { count: stocks.value.length }
-          )
-        }
 
         // 触发就绪事件
         EventManager.emit('stock:ready', {
@@ -260,14 +242,6 @@ export const useStockStore = defineStore('stock', () => {
       error.value = err instanceof Error ? err.message : '加载失败'
       stocks.value = []
       stockMap.clear()
-
-      if (performanceMonitor) {
-        performanceMonitor.recordMetric('stock-store:load',
-          performance.now() - startTime,
-          false,
-          { error: error.value }
-        )
-      }
 
       scheduleRetry()
     } finally {

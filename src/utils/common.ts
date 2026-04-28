@@ -509,5 +509,5 @@ export class StockUtils {
   }
 }
 
-// 为了方便使用，也可以导出单例
+
 export const stockUtils = StockUtils

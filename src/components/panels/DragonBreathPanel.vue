@@ -57,7 +57,7 @@
           <div class="stat-row">
             <span class="stat-label">跌停</span>
             <span class="stat-value down-text">{{ marketData.dtCount }}</span>
-            <span class="stat-sub">封板 {{ marketData.zhaban?.fengbanRate?.toFixed(1) || 0 }}%</span>
+            <span class="stat-sub">封板 {{ marketData.zhaban?.fengbanRate?.toFixed(0) || 0 }}%</span>
           </div>
           <div class="stat-row">
             <span class="stat-label">连板</span>
@@ -167,10 +167,10 @@
           <div class="indices-section">
             <div class="section-title">📈 主要指数</div>
             <div class="indices-grid">
-              <div v-for="(value, name) in marketData.indices" :key="name" class="index-item">
-                <span class="index-name">{{ getIndexName(name) }}</span>
-                <span class="index-value" :class="getChangeClass(value?.change)">
-                  {{ formatPercent(value?.change) }}
+              <div v-for="item in indexItems" :key="item.key" class="index-item">
+                <span class="index-name">{{ item.name }}</span>
+                <span class="index-value" :class="getChangeClass(item.value)">
+                  {{ formatPercent(item.value) }}
                 </span>
               </div>
             </div>
@@ -220,7 +220,7 @@
           <div class="zhaban-section">
             <div class="zhaban-header">
               <span class="zhaban-title">💥 炸板分析</span>
-              <span class="zhaban-rate">{{ (marketData.zhaban?.rate || 0).toFixed(1) }}%</span>
+              <span class="zhaban-rate">{{ (marketData.zhaban?.rate || 0).toFixed(2) }}%</span>
             </div>
             <div class="zhaban-bar">
               <div class="zhaban-bar-fill" :style="{ width: (marketData.zhaban?.rate || 0) + '%' }"></div>
@@ -228,7 +228,7 @@
             <div class="zhaban-stats">
               <span>炸板: {{ marketData.zhaban?.count || 0 }} 家</span>
               <span>封板: {{ marketData.zhaban?.ztCount || 0 }} 家</span>
-              <span>封板率: {{ marketData.zhaban?.fengbanRate?.toFixed(1) || 0 }}%</span>
+              <span>封板率: {{ marketData.zhaban?.fengbanRate?.toFixed(2) || 0 }}%</span>
             </div>
           </div>
 
@@ -335,11 +335,11 @@
               </div>
               <div class="plate-desc">{{ plate.desc }}</div>
               <div class="plate-stocks" v-if="selectedPlate === plate.id">
-                <div v-for="stock in plate.stocks" :key="stock.code" class="plate-stock">
+                <div v-for="stock in (plate.stocks as any[])" :key="stock.code" class="plate-stock">
                   <span class="stock-code">{{ stock.code }}</span>
                   <span class="stock-name">{{ stock.name }}</span>
-                  <span class="stock-change" :class="stock.change >= 0 ? 'up-text' : 'down-text'">
-                    {{ stock.change > 0 ? '+' : '' }}{{ stock.change.toFixed(2) }}%
+                  <span class="stock-change" :class="(stock.change || 0) >= 0 ? 'up-text' : 'down-text'">
+                    {{ (stock.change || 0) > 0 ? '+' : '' }}{{ (stock.change || 0).toFixed(2) }}%
                   </span>
                 </div>
               </div>
@@ -366,7 +366,7 @@
             </div>
             <div class="total-breakdown">
               <span>自研因子: {{ selfTotalScore }}/86分</span>
-              <span>通达信情绪: {{ tdxScoreWeighted.toFixed(1) }}/14分</span>
+              <span>通达信情绪: {{ tdxScoreWeighted.toFixed(2) }}/14分</span>
             </div>
             <div class="total-bar">
               <div class="total-bar-fill" :style="{ width: sentiment.overall + '%' }"></div>
@@ -396,7 +396,7 @@
               </div>
               <!-- 加权贡献 -->
               <div class="factor-contribution">
-                贡献: {{ ((factor.score / factor.maxScore) * factor.weight).toFixed(1) }}/{{ factor.weight }}分
+                贡献: {{ ((factor.score / factor.maxScore) * factor.weight).toFixed(2) }}/{{ factor.weight }}分
               </div>
             </div>
           </div>
@@ -415,7 +415,7 @@
                     }"></div>
                   </div>
                 </div>
-                <span class="weight-value">{{ factor.weight.toFixed(1) }}%</span>
+                <span class="weight-value">{{ factor.weight.toFixed(2) }}%</span>
               </div>
               <div class="weight-item total">
                 <span class="weight-name">总计</span>
@@ -427,7 +427,7 @@
                     }"></div>
                   </div>
                 </div>
-                <span class="weight-value">{{ totalWeightForBar.toFixed(1) }}%</span>
+                <span class="weight-value">{{ totalWeightForBar.toFixed(2) }}%</span>
               </div>
             </div>
           </div>
@@ -511,6 +511,8 @@ const selectedPlate = ref<number | null>(null)
 const contentRef = ref<HTMLElement | null>(null)
 const unsubscribeFns: (() => void)[] = []
 
+
+
 // ========== 从 dataLayer 获取数据 ==========
 
 // 市场数据
@@ -523,6 +525,9 @@ const marketData = computed(() => {
     downCount: marketData.downCount ?? 0,
     ztCount: marketData.ztCount ?? 0,
     dtCount: marketData.dtCount ?? 0,
+    largeCapChange: marketData.largeCapChange ?? 0,
+    microCapChange: marketData.microCapChange ?? 0,
+    passRate: marketData.passRate ?? { to2: 0, to3: 0, to4: 0 },
     limitData: marketData.limitData ?? { yiban: 0, erban: 0, sanban: 0, sibanPlus: 0 },
     yesterdayLimit: marketData.yesterdayLimit ?? {},
     zhaban: marketData.zhaban ?? {},
@@ -614,7 +619,7 @@ const breathFactors = computed(() => {
 
 // 通达信情绪得分（按权重计算）
 const tdxScoreWeighted = computed(() => {
-  const factor = breathFactors.value.find(f => f.id === 'tdxEmotion')
+  const factor = breathFactors.value.find((f: any) => f.id === 'tdxEmotion')
   if (!factor) return 0
   if (factor.maxScore === 0) return 0
   return (factor.score / factor.maxScore) * factor.weight
@@ -663,25 +668,25 @@ const phaseIcon = computed(() => currentPhase.value?.icon || '🌬️')
 // ========== 计算属性 ==========
 const totalStocks = computed(() => marketData.value.upCount + marketData.value.downCount)
 const upRatio = computed(() =>
-  totalStocks.value ? ((marketData.value.upCount / totalStocks.value) * 100).toFixed(1) : '0',
+  totalStocks.value ? ((marketData.value.upCount / totalStocks.value) * 100).toFixed(2) : '0',
 )
 const downRatio = computed(() =>
-  totalStocks.value ? ((marketData.value.downCount / totalStocks.value) * 100).toFixed(1) : '0',
+  totalStocks.value ? ((marketData.value.downCount / totalStocks.value) * 100).toFixed(2) : '0',
 )
 
 const erbanRate = computed(() => {
-  if (!marketData.value.yesterdayLimit?.yiban) return '0.0'
-  return ((marketData.value.limitData.erban / marketData.value.yesterdayLimit.yiban) * 100).toFixed(1)
+  if (!marketData.value.yesterdayLimit?.yiban) return '0.00'
+  return ((marketData.value.limitData.erban / marketData.value.yesterdayLimit.yiban) * 100).toFixed(2)
 })
 
 const sanbanRate = computed(() => {
-  if (!marketData.value.yesterdayLimit?.erban) return '0.0'
-  return ((marketData.value.limitData.sanban / marketData.value.yesterdayLimit.erban) * 100).toFixed(1)
+  if (!marketData.value.yesterdayLimit?.erban) return '0.00'
+  return ((marketData.value.limitData.sanban / marketData.value.yesterdayLimit.erban) * 100).toFixed(2)
 })
 
 const sibanPlusRate = computed(() => {
-  if (!marketData.value.yesterdayLimit?.sanban) return '0.0'
-  return ((marketData.value.limitData.sibanPlus / marketData.value.yesterdayLimit.sanban) * 100).toFixed(1)
+  if (!marketData.value.yesterdayLimit?.sanban) return '0.00'
+  return ((marketData.value.limitData.sibanPlus / marketData.value.yesterdayLimit.sanban) * 100).toFixed(2)
 })
 
 // 连板柱状图数据
@@ -725,7 +730,7 @@ const suggestions = computed(() => {
     list.push(`${currentPhase.value.icon} ${currentPhase.value.suggestion}`)
   }
 
-  const promotionRate = breathFactors.value.find(f => f.id === 'promotionRate')?.score || 0
+  const promotionRate = breathFactors.value.find((f: FactorItem) => f.id === 'promotionRate')?.score || 0
   const ztCount = marketData.value.ztCount
   const dtCount = marketData.value.dtCount
   const zhabanRate = marketData.value.zhaban?.rate || 0
@@ -860,11 +865,11 @@ function getTotalScoreColor(score: number): string {
 
 function formatRawValue(value: number, unit: string): string {
   if (value === undefined || value === null) return '--'
-  if (unit === '%') return value.toFixed(1) + '%'
+  if (unit === '%') return value.toFixed(2) + '%'
   if (unit === '家') return Math.round(value) + '家'
   if (unit === '天') return Math.round(value) + '天'
-  if (unit === '倍') return value.toFixed(2) + '倍'
-  return value.toFixed(1)
+  if (unit === '倍') return value.toFixed(0) + '倍'
+  return value.toFixed(2)
 }
 
 function selectPlate(plateId: number) {
@@ -899,7 +904,7 @@ function exportData() {
 }
 
 function formatNumber(num: number): string {
-  if (num >= 10000) return (num / 10000).toFixed(1) + '万'
+  if (num >= 10000) return (num / 10000).toFixed(2) + '万'
   return num.toString()
 }
 
@@ -932,14 +937,65 @@ function formatTime(timestamp: number): string {
   return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}:${String(date.getSeconds()).padStart(2, '0')}`
 }
 
+// 计算属性：所有指数数据（包含名称和值）
+const indexItems = computed(() => {
+  const items: Array<{ name: string; value: number; key: string }> = []
+
+  // 从 marketData.indices 中获取
+  const indices = marketData.value.indices
+  if (indices && typeof indices === 'object') {
+    Object.entries(indices).forEach(([key, value]) => {
+
+      // 检查 value 的结构
+      if (value && typeof value === 'object' && 'change' in value) {
+        const change = (value as any).change
+        if (change !== undefined && change !== null) {
+          items.push({
+            key,
+            name: getIndexName(key),
+            value: change
+          })
+        }
+      }
+    })
+  }
+
+  // 添加大票
+  const largeCapChange = marketData.value.largeCapChange
+  if (largeCapChange !== undefined && largeCapChange !== null) {
+    console.log('添加大票:', largeCapChange)
+    items.push({
+      key: 'largeCapChange',
+      name: '大票',
+      value: largeCapChange
+    })
+  }
+
+  // 添加微盘
+  const microCapChange = marketData.value.microCapChange
+  if (microCapChange !== undefined && microCapChange !== null) {
+    console.log('添加微盘:', microCapChange)
+    items.push({
+      key: 'microCapChange',
+      name: '微盘',
+      value: microCapChange
+    })
+  }
+
+  console.log('[DragonBreathPanel] indexItems 结果:', items)
+  return items
+})
+
+// 指数名称映射
 function getIndexName(key: string): string {
   const names: Record<string, string> = {
     sh: '上证指数',
-    sz: '深证成指',
-    cy: '创业板指',
     hs300: '沪深300',
     zz500: '中证500',
     zz1000: '中证1000',
+    largeCapChange: '大票',
+    microCapChange: '微盘',
+    bjs: '北证',
   }
   return names[key] || key
 }

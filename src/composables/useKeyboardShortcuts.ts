@@ -9,8 +9,10 @@ export function useKeyboardShortcuts(actions: {
   onConfig?: () => void
   onBreath?: () => void
   onTrend?: () => void
+  onFavorite?: () => void
   onRefresh?: () => void
   onHelp?: () => void
+  onSearch?: () => void
   onAlgorithm?: () => void
   onExport?: () => void
 }) {

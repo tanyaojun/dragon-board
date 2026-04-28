@@ -1,6 +1,5 @@
 // src/services/Algorithm/AlgorithmManager.ts
 // 优化版 - 改为服务模式，供协调者调用
-// 注意：已移除增量刷新相关代码，只支持全量刷新
 
 import type { Stock, ScoreResult, PerformanceRecord, PerformanceStat } from '@/types'
 import { FACTORS } from '@/config/factors'
@@ -292,6 +291,18 @@ export class AlgorithmManager implements IAlgorithmManager {
   }
 
   /**
+   * 增量更新 - 供协调者调用
+   */
+  async runIncrementalUpdate(codes?: string[]): Promise<void> {
+    if (this.destroyed) return
+    console.log('[AlgorithmManager] 执行增量更新')
+
+    if (codes?.length) {
+      this.warmupManager.warmupStocks?.(codes)
+    }
+  }
+
+  /**
    * 同步数据 - 供协调者调用
    */
   async syncData(): Promise<void> {
@@ -507,7 +518,7 @@ export class AlgorithmManager implements IAlgorithmManager {
 
         this.loadHistory()
         this.tryConnectServices()
-        this.setupEssentialListeners()
+        this.setupEssentialListeners() // 只保留必要的监听器
 
         // 启动子模块
         this.perfMonitor.start()
@@ -540,7 +551,7 @@ export class AlgorithmManager implements IAlgorithmManager {
   }
 
   /**
-   * 设置必要的监听器
+   * 设置必要的监听器 - 只保留最基本的
    */
   private setupEssentialListeners(): void {
     const listeners = [
@@ -568,7 +579,7 @@ export class AlgorithmManager implements IAlgorithmManager {
         this.invalidateCache()
       }),
 
-      // 监听算法分数更新事件，批量更新到 DataLayer
+      // ✅ 新增：监听算法分数更新事件，批量更新到 DataLayer
       EventManager.on('algorithm:score-updated', (data: any) => {
         if (this.destroyed) return
         this.batchUpdateScores(data)
@@ -578,7 +589,7 @@ export class AlgorithmManager implements IAlgorithmManager {
     this.unsubscribeFns.push(...listeners)
   }
 
-  // 批量更新分数到 DataLayer
+  // ✅ 批量更新分数到 DataLayer
   private batchUpdateScores(data: { code: string; score: number; algorithmId: string }) {
     // 收集待更新的股票
     this.pendingUpdates.set(data.code, data.score)
@@ -680,6 +691,7 @@ export class AlgorithmManager implements IAlgorithmManager {
 
       // 将计算结果存入 DataLayer
       try {
+        // 通过事件机制更新，避免直接操作 DataLayer 导致的循环
         EventManager.emit('algorithm:score-updated', {
           code: stock.code,
           score: result.score,
@@ -687,6 +699,7 @@ export class AlgorithmManager implements IAlgorithmManager {
           timestamp: Date.now(),
         })
 
+        // 同时将结果存入 analysis 缓存
         if (typeof (dataLayer as any).updateAlgorithmResult === 'function') {
           ;(dataLayer as any).updateAlgorithmResult(stock.code, {
             score: result.score,

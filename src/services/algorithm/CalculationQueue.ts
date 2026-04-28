@@ -1,8 +1,6 @@
 // src/services/Algorithm/CalculationQueue.ts
 // 通用计算队列 - 可被任何模块使用
 
-import { EventManager } from '@/utils/eventManager'
-
 type Priority = 'high' | 'medium' | 'low'
 
 interface QueueTask<T = any> {
@@ -44,11 +42,19 @@ export class CalculationQueue {
 
   private options: Required<QueueOptions>
 
+  // ✅ 新增：统一管理销毁状态
   private destroyed = false
+
+  // ✅ 新增：统一定时器管理
+  private timers = {
+    statsFlush: null as ReturnType<typeof setInterval> | null,
+    queueMonitor: null as ReturnType<typeof setInterval> | null,
+  }
 
   constructor(options: QueueOptions = {}) {
     this.options = { ...this.DEFAULT_OPTIONS, ...options }
 
+    // 初始化队列
     this.queues.set('high', [])
     this.queues.set('medium', [])
     this.queues.set('low', [])
@@ -58,21 +64,22 @@ export class CalculationQueue {
     this.processing.set('low', false)
   }
 
-  // ========== 供协调者调用的方法 ==========
-
   /**
-   * 后台维护 - 供协调者调用
+   * ✅ 新增：供 RefreshManager 调用的维护方法
    */
   async runMaintenance(): Promise<void> {
     if (this.destroyed) return
     console.log('[CalculationQueue] 执行后台维护')
 
+    // 刷新统计信息
     this.flushStats()
+
+    // 监控队列健康状况
     this.monitorQueue()
   }
 
   /**
-   * 初始化
+   * ✅ 新增：初始化方法，返回清理函数
    */
   init(): () => void {
     if (this.destroyed) {
@@ -81,17 +88,43 @@ export class CalculationQueue {
     }
 
     console.log('[CalculationQueue] 📊 初始化...')
-    console.log('[CalculationQueue] ✅ 初始化完成')
 
+    // 启动定时器
+    this.startTimers()
+
+    console.log('[CalculationQueue] ✅ 初始化完成')
     return () => this.destroy()
   }
 
   /**
-   * 刷新统计信息
+   * ✅ 新增：启动所有定时器
+   */
+  private startTimers(): void {
+    return
+  }
+
+  /**
+   * ✅ 新增：停止所有定时器
+   */
+  private stopTimers(): void {
+    Object.values(this.timers).forEach((timer) => {
+      if (timer) {
+        clearInterval(timer)
+      }
+    })
+    this.timers = {
+      statsFlush: null,
+      queueMonitor: null,
+    }
+  }
+
+  /**
+   * ✅ 修改：刷新统计信息（由 runMaintenance 调用）
    */
   private flushStats(): void {
     if (this.destroyed) return
 
+    // 发送统计信息到监控系统
     EventManager.emit('queue:stats', {
       ...this.getStatus(),
       timestamp: Date.now(),
@@ -101,18 +134,20 @@ export class CalculationQueue {
   }
 
   /**
-   * 监控队列健康状况
+   * ✅ 修改：监控队列健康状况（由 runMaintenance 调用）
    */
   private monitorQueue(): void {
     if (this.destroyed) return
 
     const status = this.getStatus()
-    let longWaitTasks = 0
 
+    // 检查是否有长时间等待的任务
+    let longWaitTasks = 0
     this.queues.forEach((queue) => {
       queue.forEach((task) => {
         const waitTime = Date.now() - task.timestamp
         if (waitTime > 60000) {
+          // 等待超过1分钟
           longWaitTasks++
         }
       })
@@ -122,13 +157,15 @@ export class CalculationQueue {
       console.warn(`[CalculationQueue] ⚠️ 有 ${longWaitTasks} 个任务等待超过1分钟`)
     }
 
+    // 检查是否有过多失败
     if (this.stats.totalFailed > this.stats.totalCompleted * 0.1) {
+      // 失败率超过10%
       console.warn('[CalculationQueue] ⚠️ 任务失败率过高')
     }
   }
 
   /**
-   * 获取状态
+   * ✅ 新增：获取状态
    */
   getStatus() {
     if (this.destroyed) return null
@@ -147,12 +184,16 @@ export class CalculationQueue {
         medium: this.processing.get('medium'),
         low: this.processing.get('low'),
       },
+      timers: {
+        statsFlush: !!this.timers.statsFlush,
+        queueMonitor: !!this.timers.queueMonitor,
+      },
       destroyed: this.destroyed,
     }
   }
 
   /**
-   * 添加任务到队列
+   * 添加任务到队列（添加销毁检查）
    */
   add<T>(
     id: string,
@@ -194,6 +235,7 @@ export class CalculationQueue {
       this.queues.get(priority)!.push(queueTask)
       this.stats.totalAdded++
 
+      // 更新模块统计
       this.updateModuleStats(module, 'add')
 
       console.log(`[Queue] 📥 [${module}] 任务已添加: ${id} (优先级: ${priority})`)
@@ -203,7 +245,7 @@ export class CalculationQueue {
   }
 
   /**
-   * 批量添加任务
+   * 批量添加任务（添加销毁检查）
    */
   addBatch<T>(
     tasks: Array<{
@@ -320,7 +362,7 @@ export class CalculationQueue {
   }
 
   /**
-   * 获取指定模块的任务详情
+   * 获取指定模块的任务详情（添加销毁检查）
    */
   getModuleTasks(module: string) {
     if (this.destroyed) return []
@@ -344,11 +386,12 @@ export class CalculationQueue {
   }
 
   /**
-   * 清空队列
+   * 清空队列（添加销毁检查）
    */
   clear(): void {
     if (this.destroyed) return
 
+    // 拒绝所有等待中的任务
     this.queues.forEach((queue) => {
       queue.forEach((task) => {
         task.reject(new Error('Queue cleared'))
@@ -372,7 +415,7 @@ export class CalculationQueue {
   }
 
   /**
-   * 销毁方法
+   * ✅ 新增：销毁方法
    */
   destroy(): void {
     if (this.destroyed) return
@@ -380,13 +423,17 @@ export class CalculationQueue {
     console.log('[CalculationQueue] 💥 开始销毁...')
     this.destroyed = true
 
+    // 1. 停止所有定时器
+    this.stopTimers()
+
+    // 2. 清空队列（拒绝所有等待中的任务）
     this.clear()
 
     console.log('[CalculationQueue] ✅ 已销毁')
   }
 }
 
-// 导出单例
+// 导出单例（可被多个模块共享）
 export const calculationQueue = new CalculationQueue({
   concurrency: 5,
   retryDelay: 1000,

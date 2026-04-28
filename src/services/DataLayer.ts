@@ -1,19 +1,223 @@
 // src/services/DataLayer.ts
 
 import { ref, reactive } from 'vue'
-import type { BreathData } from '../types'
+import type { BreathData, Depth10Book, L2Summary, TickTrade } from '../types'
 import { ALERT_CONFIG } from '../config/constants'
-import { isTradingTime } from '../utils/time'
 import type { ThemeCorrelationDetail } from './ThemeCorrelationAnalyzer'
+import {
+  applyRankTrendAnalysis,
+} from './rankTrend/compat'
+import type { RankTrendAnalysisResult } from './rankTrend/types'
 import type { RotationAnalysis } from '../types'
 import type { StockAlert, AlertStats } from '../types'
-import { StockUtils } from '../utils/common'
 import type { AlertType } from '../types/core'
+import { SnapshotRuntime } from './snapshot/runtime'
+import type {
+  SnapshotBackupSyncState,
+  SnapshotBackupAlignmentResult,
+  SnapshotFrameBundle,
+  SnapshotFrameQueryOptions,
+  SnapshotFrameRow,
+  SnapshotHealthOverview,
+  SnapshotProjectionRewriteResult,
+  SnapshotProjectionMeta,
+  SnapshotQueryOptions,
+  SnapshotRawCompactionResult,
+  SnapshotRecord,
+  SnapshotSectorRow,
+  SnapshotSectorRowQueryOptions,
+  SnapshotStorageMaintenanceResult,
+  SnapshotStockRow,
+  SnapshotStockRowQueryOptions,
+  SnapshotType,
+} from './snapshot/types'
+import type {
+  AuthorityClass,
+  BattlefieldRecord,
+  ChaseRisk,
+  LeaderRecord,
+  LeaderRole,
+  DragonReviewResult,
+  LeaderTransition,
+  PseudoLeaderRecord,
+  Tradeability,
+} from './dragon/types'
+
+const REVIEW_ROLE_LABELS: Record<LeaderRole, string> = {
+  MARKET_CORE: '市场总龙头',
+  THEME_CORE: '题材真龙',
+  SPACE_CORE: '空间龙头',
+  TREND_CORE: '趋势中军',
+  EMOTION_CORE: '情绪核心',
+}
+
+const REVIEW_AUTHORITY_SCORES: Record<AuthorityClass, number> = {
+  TRUE_LEADER: 95,
+  THEME_COMMANDER: 82,
+  CARRY_PROXY: 68,
+  HEIGHT_ONLY: 56,
+  HEAT_ONLY: 52,
+  PSEUDO_LEADER: 35,
+}
+
+const LEGACY_LEVEL_ROLE_MAP: Record<string, LeaderRole> = {
+  TOTAL: 'MARKET_CORE',
+  MARKET_CORE: 'MARKET_CORE',
+  市场总龙头: 'MARKET_CORE',
+  SECTOR: 'THEME_CORE',
+  THEME_CORE: 'THEME_CORE',
+  题材真龙: 'THEME_CORE',
+  CONTINUOUS: 'SPACE_CORE',
+  SPACE_CORE: 'SPACE_CORE',
+  空间龙头: 'SPACE_CORE',
+  MIDDLE: 'TREND_CORE',
+  TREND_CORE: 'TREND_CORE',
+  趋势中军: 'TREND_CORE',
+  EMOTION: 'EMOTION_CORE',
+  EMOTION_CORE: 'EMOTION_CORE',
+  情绪核心: 'EMOTION_CORE',
+}
+
+interface LeaderLookupRecord {
+  code: string
+  name: string
+  level: LeaderRole
+  levelName: string
+  score: number
+  continuousDays: number
+  authority: AuthorityClass
+  primaryRole: LeaderRole
+  roles: LeaderRole[]
+  tradeability: Tradeability
+  chaseRisk: ChaseRisk
+  status?: LeaderRecord['status']
+  themeName?: string
+  lastUpdate: number
+}
+
+function normalizeLeaderRole(value?: string | null): LeaderRole | null {
+  if (!value) return null
+  return LEGACY_LEVEL_ROLE_MAP[value] || null
+}
+
+function getLeaderLevelName(role: LeaderRole): string {
+  return REVIEW_ROLE_LABELS[role] || role
+}
+
+function getLeaderScore(authority?: AuthorityClass | null): number {
+  if (!authority) return 50
+  return REVIEW_AUTHORITY_SCORES[authority] || 50
+}
+
+function toLeaderLookupRecord(record: LeaderRecord, timestamp: number): LeaderLookupRecord {
+  const level = record.primaryRole
+  return {
+    code: record.code,
+    name: record.name,
+    level,
+    levelName: getLeaderLevelName(level),
+    score: getLeaderScore(record.authority),
+    continuousDays: record.continuousDays || 0,
+    authority: record.authority,
+    primaryRole: record.primaryRole,
+    roles: [...record.roles],
+    tradeability: record.tradeability,
+    chaseRisk: record.chaseRisk,
+    status: record.status,
+    themeName: record.themeName,
+    lastUpdate: timestamp,
+  }
+}
+
+function toLegacyLeaderLookupRecord(record: Record<string, any>, timestamp: number): LeaderLookupRecord | null {
+  const level = normalizeLeaderRole(record.primaryRole || record.level || record.levelName)
+  if (!record.code || !level) return null
+
+  const roles = Array.isArray(record.roles) && record.roles.length
+    ? (record.roles.filter(Boolean) as LeaderRole[])
+    : [level]
+  const authority = (record.authority as AuthorityClass | undefined) || 'TRUE_LEADER'
+  const tradeability = (record.tradeability as Tradeability | undefined) || 'WATCH_ONLY'
+  const chaseRisk = (record.chaseRisk as ChaseRisk | undefined) || 'HIGH'
+
+  return {
+    code: record.code,
+    name: record.name || '',
+    level,
+    levelName: record.levelName || getLeaderLevelName(level),
+    score: typeof record.score === 'number' ? record.score : getLeaderScore(authority),
+    continuousDays: Number(record.continuousDays) || 0,
+    authority,
+    primaryRole: level,
+    roles: [...new Set(roles)],
+    tradeability,
+    chaseRisk,
+    status: record.status,
+    themeName: record.themeName,
+    lastUpdate: timestamp,
+  }
+}
+
+function getReviewRecordPool(result: DragonReviewResult): LeaderRecord[] {
+  const deduped = new Map<string, LeaderRecord>()
+
+  const addRecord = (record: LeaderRecord | null | undefined) => {
+    if (!record || deduped.has(record.code)) return
+    deduped.set(record.code, record)
+  }
+
+  addRecord(result.marketCore)
+  ;[
+    ...(result.trueLeaders || []),
+    ...(result.heightBoard || []),
+    ...(result.attentionBoard || []),
+  ].forEach(addRecord)
+
+  return Array.from(deduped.values())
+}
+
+const LEGACY_LEADER_FIELDS = ['isSectorLeader', 'leaderLevel', 'leaderScore'] as const
+
+function stripLegacyLeaderFields<T extends object>(stock: T): T {
+  const sanitized = { ...(stock as Record<string, unknown>) }
+
+  LEGACY_LEADER_FIELDS.forEach((field) => {
+    delete sanitized[field]
+  })
+
+  return sanitized as T
+}
+
+function applyReviewProjectionToStock(
+  stock: MergedStock,
+  leaderRecord: LeaderLookupRecord | null | undefined,
+): MergedStock {
+  const projected = { ...stock }
+
+  if (!leaderRecord) {
+    delete projected.reviewAuthority
+    delete projected.reviewRole
+    delete projected.tradeability
+    delete projected.chaseRisk
+    return projected
+  }
+
+  projected.reviewAuthority = leaderRecord.authority
+  projected.reviewRole = leaderRecord.primaryRole
+  projected.tradeability = leaderRecord.tradeability
+  projected.chaseRisk = leaderRecord.chaseRisk
+  if (!projected.continuousDays && leaderRecord.continuousDays) {
+    projected.continuousDays = leaderRecord.continuousDays
+  }
+
+  return projected
+}
 
 interface DataVersion {
   stocks: number
   themes: number
   leaders: number
+  review?: number
   quotes: number
   platforms: number
   breath: number
@@ -81,6 +285,22 @@ interface StockExtData {
   mainSell?: number // 主力卖出（万元）
   fengdan?: number // 封单额（万元）
   maxFengdan?: number // 最大封单（万元）
+
+  // L2 摘要
+  bid1Price?: number
+  bid1Volume?: number
+  ask1Price?: number
+  ask1Volume?: number
+  spread?: number
+  bid10Total?: number
+  ask10Total?: number
+  depthImbalance?: number
+  tickBuyVolume?: number
+  tickSellVolume?: number
+  tickBuyCount?: number
+  tickSellCount?: number
+  lastTradePrice?: number
+  lastTradeVolume?: number
 }
 
 // ========== jxbk 数据类型 ==========
@@ -156,7 +376,6 @@ export interface MergedStock {
   // ========== 综合排名 ==========
   compRank?: number
   compScore?: number
-  rankChange?: number
 
   // ========== 时间戳 ==========
   updatedAt?: number
@@ -166,10 +385,11 @@ export interface MergedStock {
   // ========== 平台名称 ==========
   platformName?: string
 
-  // ========== 龙头标记 ==========
-  isSectorLeader?: boolean
-  leaderLevel?: string
-  leaderScore?: number
+  // ========== 真龙复盘字段 ==========
+  reviewAuthority?: AuthorityClass
+  reviewRole?: LeaderRole
+  tradeability?: Tradeability
+  chaseRisk?: ChaseRisk
   continuousDays?: number
 
   // ========== 题材数据 ==========
@@ -189,6 +409,20 @@ export interface MergedStock {
   mainSell?: number
   fengdan?: number
   maxFengdan?: number
+  bid1Price?: number
+  bid1Volume?: number
+  ask1Price?: number
+  ask1Volume?: number
+  spread?: number
+  bid10Total?: number
+  ask10Total?: number
+  depthImbalance?: number
+  tickBuyVolume?: number
+  tickSellVolume?: number
+  tickBuyCount?: number
+  tickSellCount?: number
+  lastTradePrice?: number
+  lastTradeVolume?: number
 
   hotness?: number
   tags?: any[]
@@ -203,27 +437,28 @@ export interface MergedStock {
   themeHeat?: number
   themeLevel?: string
 
-  // ========== 3个排名趋势信号 ==========
-  directionSignal?: 'buy' | 'sell' | 'hold' | 'none'
-  directionConfidence?: number
-  accelerationSignal?: 'buy' | 'sell' | 'hold' | 'none'
-  accelerationConfidence?: number
-  crossSignal?: 'buy' | 'sell' | 'hold' | 'none'
-  crossConfidence?: number
+  // ========== 算法元数据 ==========
+  algorithmScore?: number
+  algorithmVersion?: number
+  algorithmId?: string
+  lastCalculated?: number
 
-  // ========== MACD 技术指标 ==========
-  macd?: number
-  macdSignal?: number
-  macdHistogram?: number
-  ma5?: number
-  ma10?: number
-  maTrend?: 'up' | 'down' | 'steady'
-  macdCross?: 'golden' | 'death' | 'none'
-
-  // ========== 综合信号 ==========
-  finalSignal?: 'buy' | 'sell' | 'hold' | 'none'
-  finalConfidence?: number
+  // ========== 嵌套 RankTrend 分析结果 ========== 
+  rankTrend?: RankTrendAnalysisResult
+  rankTrendCoverageWarning?: string
 }
+export type {
+  SnapshotFrameQueryOptions,
+  SnapshotFrameRow,
+  SnapshotProjectionMeta,
+  SnapshotQueryOptions,
+  SnapshotRecord,
+  SnapshotSectorRow,
+  SnapshotSectorRowQueryOptions,
+  SnapshotStockRow,
+  SnapshotStockRowQueryOptions,
+  SnapshotType,
+} from './snapshot/types'
 
 interface DataState {
   // 原始数据
@@ -237,6 +472,9 @@ interface DataState {
   // 实时数据
   realtime: {
     quotes: Map<string, any>
+    depth10: Map<string, Depth10Book>
+    recentTicks: Map<string, TickTrade[]>
+    l2Summary: Map<string, L2Summary>
     lastUpdate: number | null
   }
 
@@ -248,17 +486,21 @@ interface DataState {
 
   // 龙头数据
   leader: {
-    byCode: Map<
-      string,
-      {
-        level: string
-        levelName: string
-        score: number
-        continuousDays: number
-        lastUpdate: number
-      }
-    >
-    byLevel: Record<string, any[]>
+    byCode: Map<string, LeaderLookupRecord>
+    byLevel: Record<string, LeaderLookupRecord[]>
+    lastUpdate: number | null
+  }
+
+  review: {
+    result: DragonReviewResult | null
+    marketCore: LeaderRecord | null
+    trueLeaders: LeaderRecord[]
+    heightBoard: LeaderRecord[]
+    attentionBoard: LeaderRecord[]
+    pseudoLeaderGraveyard: PseudoLeaderRecord[]
+    battlefields: BattlefieldRecord[]
+    transitions: LeaderTransition[]
+    summaryLines: string[]
     lastUpdate: number | null
   }
 
@@ -347,7 +589,12 @@ interface DataState {
           maxChange?: number
           minChange?: number
         }
-        indices?: Record<string, { change: number }>
+        indices: {
+          sh: { change: number }
+          hs300: { change: number }
+          zz500: { change: number }
+          zz1000: { change: number }
+        }
         moneyFlow?: {
           main: number
           retail: number
@@ -358,6 +605,13 @@ interface DataState {
         emotionValue?: number
         emotionStatus?: string
         timestamp?: number
+        largeCapChange?: number
+        microCapChange?: number
+        passRate?: {               // 晋级率
+          to2: number
+          to3: number
+          to4: number
+        }
       }
       factors?: Array<{
         id: string // 因子ID，如 'breathPhase'
@@ -412,13 +666,49 @@ interface DataState {
  * 职责单一：存储数据、提供访问接口、版本管理
  */
 class DataLayer {
-  private timer: ReturnType<typeof setInterval> | null = null
-  private lastSnapshotKey = {
-    half: '',
-    quarter: '',
-    hour: '',
-    daily: '',
-  }
+  private readonly PRIMARY_DB_NAME = 'DragonBoardData'
+  private readonly PRIMARY_DB_VERSION = 9
+  private readonly PRIMARY_STORE_NAME = 'snapshots'
+  private readonly LEGACY_BACKUP_DB_NAME = 'DragonBoardDataBackup'
+  private readonly BUCKET_BACKUP_DB_NAME = 'DragonBoardBucketBackup'
+  private readonly BACKUP_DB_VERSION = 5
+  private readonly BACKUP_STORE_NAME = 'snapshots_backup'
+  private readonly BACKUP_BUCKET_NAME = 'dragon-snapshot-backup'
+  private readonly SNAPSHOT_GUARD_MIN_BACKUP = 20
+  private readonly SNAPSHOT_GUARD_RATIO = 0.4
+  private readonly SNAPSHOT_SYNC_INTERVAL_MS = 5 * 60 * 1000
+  private readonly snapshotRuntime = new SnapshotRuntime({
+    logger: console,
+    primaryDbName: this.PRIMARY_DB_NAME,
+    primaryDbVersion: this.PRIMARY_DB_VERSION,
+    primaryStoreName: this.PRIMARY_STORE_NAME,
+    legacyBackupDbName: this.LEGACY_BACKUP_DB_NAME,
+    bucketBackupDbName: this.BUCKET_BACKUP_DB_NAME,
+    backupDbVersion: this.BACKUP_DB_VERSION,
+    backupStoreName: this.BACKUP_STORE_NAME,
+    backupBucketName: this.BACKUP_BUCKET_NAME,
+    minBackupCount: this.SNAPSHOT_GUARD_MIN_BACKUP,
+    abnormalRatio: this.SNAPSHOT_GUARD_RATIO,
+    syncIntervalMs: this.SNAPSHOT_SYNC_INTERVAL_MS,
+    getStorageBucketManager: () =>
+      typeof navigator === 'undefined' ? null : (navigator as any).storageBuckets || null,
+    getBuildContext: () => ({
+      stocks: this.getStocks() || [],
+      depth10ByCode: this.state.realtime.depth10,
+      recentTicksByCode: this.state.realtime.recentTicks,
+      l2SummaryByCode: this.state.realtime.l2Summary,
+      breathData: this.getBreathData(),
+      marketData: this.state.analysis.breath?.marketData,
+      jxbkBlocks: this.getJxbkBlocksSorted(100),
+      jxbkStocks: this.state.theme.jxbk.stockMap || {},
+      hotThemes: this.getHotThemes() || [],
+      rotationAnalysis: this.state.analysis.rotation?.current || null,
+      breathHistory: this.getBreathHistory(),
+      breathFactors: this.getBreathFactors(),
+      marketMode: this.state.meta.marketMode,
+      stocksVersion: this.state.version.stocks,
+    }),
+  })
 
   constructor() {
     this.startTimer()
@@ -426,13 +716,32 @@ class DataLayer {
 
   private state: DataState = reactive({
     raw: { stocks: [], platforms: {}, themes: [], fullMarket: [] },
-    realtime: { quotes: new Map(), lastUpdate: null },
+    realtime: {
+      quotes: new Map(),
+      depth10: new Map(),
+      recentTicks: new Map(),
+      l2Summary: new Map(),
+      lastUpdate: null,
+    },
     merged: { stocks: [], themes: [] },
 
     // 龙头数据单独存储
     leader: {
       byCode: new Map(),
       byLevel: {},
+      lastUpdate: null,
+    },
+
+    review: {
+      result: null,
+      marketCore: null,
+      trueLeaders: [],
+      heightBoard: [],
+      attentionBoard: [],
+      pseudoLeaderGraveyard: [],
+      battlefields: [],
+      transitions: [],
+      summaryLines: [],
       lastUpdate: null,
     },
 
@@ -508,6 +817,7 @@ class DataLayer {
       stocks: 0,
       themes: 0,
       leaders: 0,
+      review: 0,
       quotes: 0,
       platforms: 0,
       breath: 0,
@@ -526,51 +836,21 @@ class DataLayer {
   private notifyTimer: ReturnType<typeof setTimeout> | null = null
   private pendingNotify: { path: string; data: any } | null = null
 
-  // ========== 龙头数据管理（唯一入口） ==========
-
-  /**
-   * 更新龙头数据 - 供 DragonAnalyzer 调用
-   */
-  updateLeaderData(leaders: any[]) {
-    const byCode = new Map()
-    const byLevel: Record<string, any[]> = {}
-
-    leaders.forEach((leader) => {
-      // 存储精简的龙头信息
-      byCode.set(leader.code, {
-        level: leader.level,
-        levelName: leader.levelName,
-        score: leader.score,
-        continuousDays: leader.continuousDays,
-        lastUpdate: Date.now(),
-      })
-
-      const level = leader.level || 'unknown'
-      if (!byLevel[level]) byLevel[level] = []
-      byLevel[level].push(leader)
-    })
-
-    this.state.leader = {
-      byCode,
-      byLevel,
-      lastUpdate: Date.now(),
-    }
-
-    this.state.version.leaders++
-  }
+  // ========== 复盘兼容查询（只服务旧入口读取，不再产出龙头结论） ==========
 
   /**
    * 获取单个龙头信息
    */
   getLeaderByCode(code: string) {
-    return this.state.leader.byCode.get(code)
+    return this.state.leader.byCode.get(code) || null
   }
 
   /**
    * 按级别获取龙头
    */
   getLeadersByLevel(level: string) {
-    return this.state.leader.byLevel[level] || []
+    const normalizedLevel = normalizeLeaderRole(level) || level
+    return this.state.leader.byLevel[normalizedLevel] || []
   }
 
   /**
@@ -578,6 +858,85 @@ class DataLayer {
    */
   getAllLeaders() {
     return Array.from(this.state.leader.byCode.values())
+  }
+
+  updateReviewData(result: DragonReviewResult) {
+    const timestamp = Date.now()
+    this.state.review = {
+      result,
+      marketCore: result.marketCore,
+      trueLeaders: result.trueLeaders || [],
+      heightBoard: result.heightBoard || [],
+      attentionBoard: result.attentionBoard || [],
+      pseudoLeaderGraveyard: result.pseudoLeaderGraveyard || [],
+      battlefields: result.battlefields || [],
+      transitions: result.transitions || [],
+      summaryLines: result.summaryLines || [],
+      lastUpdate: timestamp,
+    }
+
+    const compatibilityLeaders = new Map<string, LeaderLookupRecord>()
+    const byLevel: Record<string, LeaderLookupRecord[]> = {}
+
+    getReviewRecordPool(result).forEach((leader) => {
+      if (compatibilityLeaders.has(leader.code)) return
+
+      const record = toLeaderLookupRecord(leader, timestamp)
+      compatibilityLeaders.set(leader.code, record)
+      if (!byLevel[record.level]) byLevel[record.level] = []
+      byLevel[record.level].push(record)
+    })
+
+    this.state.leader = {
+      byCode: compatibilityLeaders,
+      byLevel,
+      lastUpdate: timestamp,
+    }
+
+    if (this.state.merged.stocks.length) {
+      this.state.merged.stocks = this.state.merged.stocks.map((stock) =>
+        applyReviewProjectionToStock(stock, compatibilityLeaders.get(stock.code) || null),
+      )
+      this.throttledNotify('merged.stocks', this.state.merged.stocks)
+    }
+
+    this.state.version.review = (this.state.version.review || 0) + 1
+    this.state.version.leaders++
+    this.throttledNotify('review.result', result)
+    this.throttledNotify('version.review', this.state.version.review)
+    this.throttledNotify('version.leaders', this.state.version.leaders)
+  }
+
+  getDragonReview(): DragonReviewResult | null {
+    return this.state.review.result
+  }
+
+  getMarketCore() {
+    return this.state.review.marketCore
+  }
+
+  getTrueLeaders() {
+    return this.state.review.trueLeaders
+  }
+
+  getHeightBoard() {
+    return this.state.review.heightBoard
+  }
+
+  getAttentionBoard() {
+    return this.state.review.attentionBoard
+  }
+
+  getPseudoLeaderGraveyard() {
+    return this.state.review.pseudoLeaderGraveyard
+  }
+
+  getReviewBattlefields() {
+    return this.state.review.battlefields
+  }
+
+  getReviewTransitions() {
+    return this.state.review.transitions
   }
 
   // ========== 题材数据管理 ==========
@@ -599,10 +958,36 @@ class DataLayer {
    * 更新股票对应的题材数据
    * @param updates  { code: string, themes: any[] }[]
    */
-  updateStockThemes(updates: Array<{ code: string; themes: any[] }>) {
-    updates.forEach(({ code, themes }) => {
+  updateStockThemes(
+    updates: Array<{
+      code: string
+      themes: any[]
+      mainTheme?: string
+      themeHeat?: number
+      themeLevel?: string
+    }>,
+  ) {
+    const stockMap = new Map(this.state.merged.stocks.map((stock) => [stock.code, stock]))
+    let touchedMergedStocks = false
+
+    updates.forEach(({ code, themes, mainTheme, themeHeat, themeLevel }) => {
       this.state.theme.base.byCode.set(code, themes)
+
+      const stock = stockMap.get(code)
+      if (stock) {
+        stock.themes = themes
+        stock.mainTheme = mainTheme || undefined
+        stock.themeHeat = themeHeat ?? 0
+        stock.themeLevel = themeLevel || '冷'
+        stockMap.set(code, stock)
+        touchedMergedStocks = true
+      }
     })
+
+    if (touchedMergedStocks) {
+      this.state.merged.stocks = Array.from(stockMap.values())
+      this.state.version.stocks++
+    }
 
     this.state.version.themes++
   }
@@ -776,7 +1161,7 @@ class DataLayer {
   updateStocks(data: any[]) {
     // 保存原始数据
     this.state.raw.stocks = data.map((s) => ({
-      ...s,
+      ...stripLegacyLeaderFields(s),
       timestamp: Date.now(),
     }))
 
@@ -788,6 +1173,10 @@ class DataLayer {
    */
   getStocks(): MergedStock[] {
     return this.state.merged.stocks
+  }
+
+  getMergedStocks(): MergedStock[] {
+    return this.getStocks()
   }
 
   /**
@@ -833,13 +1222,6 @@ class DataLayer {
 
     this.state.merged.stocks = Array.from(stockMap.values())
     this.state.version.stocks++
-  }
-
-  /**
-   * 更新单个股票的扩展数据
-   */
-  updateSingleStockExtData(code: string, data: Partial<StockExtData>) {
-    this.updateStockExtData([{ code, ...data }])
   }
 
   // ========== 获取股票扩展字段方法 ==========
@@ -916,6 +1298,47 @@ class DataLayer {
     this.throttledNotify('quotes:batch', { count: changes.length })
   }
 
+  applyRealtimeQuoteBatch(changes: any[]) {
+    if (!changes?.length) return
+
+    this.updateQuotesBatch(changes)
+
+    const stockMap = new Map(this.state.merged.stocks.map((stock) => [stock.code, stock]))
+    let touched = false
+
+    changes.forEach((change) => {
+      const code = String(change?.code || '')
+      if (!code) return
+
+      const stock = stockMap.get(code)
+      if (!stock) return
+
+      stock.price = Number(change.price ?? change.lastPrice ?? stock.price) || 0
+      stock.change = Number(change.change ?? change.changePct ?? stock.change) || 0
+      const nextSpeed = Number(change.speed)
+      if (Number.isFinite(nextSpeed)) {
+        stock.speed = nextSpeed
+      }
+      stock.volume = Number(change.volume ?? stock.volume) || 0
+      stock.turnover = Number(change.turnover ?? change.amount ?? stock.turnover) || 0
+      stock.turnoverRate = Number(change.turnoverRate ?? stock.turnoverRate) || 0
+      stock.updatedAt = Date.now()
+      if (typeof change.name === 'string' && change.name.trim()) {
+        stock.name = change.name.trim()
+      }
+
+      stockMap.set(code, stock)
+      touched = true
+    })
+
+    if (!touched) return
+
+    this.state.merged.stocks = Array.from(stockMap.values())
+    this.state.version.stocks++
+    this.throttledNotify('merged.stocks', this.state.merged.stocks)
+    this.throttledNotify('version.stocks', this.state.version.stocks)
+  }
+
   updateQuote(code: string, data: any) {
     this.updateQuotesBatch([{ code, ...data }])
   }
@@ -945,8 +1368,105 @@ class DataLayer {
     return this.state.realtime.lastUpdate
   }
 
-  getMergedStocks(): MergedStock[] {
-    return this.state.merged.stocks
+  updateDepth10Batch(changes: Depth10Book[]) {
+    if (!changes?.length) return
+
+    changes.forEach((change) => {
+      if (!change?.code) return
+      this.state.realtime.depth10.set(change.code, {
+        ...change,
+        bids: [...(change.bids || [])].slice(0, 10),
+        asks: [...(change.asks || [])].slice(0, 10),
+        timestamp: Date.now(),
+      })
+    })
+
+    this.state.realtime.lastUpdate = Date.now()
+    this.throttledNotify('realtime.depth10', { count: changes.length })
+  }
+
+  getDepth10(code: string): Depth10Book | null {
+    return this.state.realtime.depth10.get(code) || null
+  }
+
+  updateRecentTicksBatch(changes: Array<{ code: string; items: TickTrade[] }>) {
+    if (!changes?.length) return
+
+    const now = Date.now()
+    changes.forEach((change) => {
+      const code = String(change?.code || '')
+      if (!code) return
+
+      const existing = this.state.realtime.recentTicks.get(code) || []
+      const next = existing
+        .filter((item) => now - Number(item?.timestamp || 0) <= 60_000)
+        .concat(Array.isArray(change.items) ? change.items : [])
+        .slice(-300)
+
+      this.state.realtime.recentTicks.set(code, next)
+    })
+
+    this.state.realtime.lastUpdate = Date.now()
+    this.throttledNotify('realtime.ticks', { count: changes.length })
+  }
+
+  getRecentTicks(code: string): TickTrade[] {
+    return [...(this.state.realtime.recentTicks.get(code) || [])]
+  }
+
+  updateL2SummaryBatch(changes: Array<Partial<L2Summary> & { code: string }>) {
+    if (!changes?.length) return
+
+    const stockMap = new Map(this.state.merged.stocks.map((stock) => [stock.code, stock]))
+    let touched = false
+
+    changes.forEach((change) => {
+      if (!change?.code) return
+
+      const existing = this.state.realtime.l2Summary.get(change.code)
+      const nextSummary: L2Summary = {
+        code: change.code,
+        bid1Price: Number(change.bid1Price ?? existing?.bid1Price) || 0,
+        bid1Volume: Number(change.bid1Volume ?? existing?.bid1Volume) || 0,
+        ask1Price: Number(change.ask1Price ?? existing?.ask1Price) || 0,
+        ask1Volume: Number(change.ask1Volume ?? existing?.ask1Volume) || 0,
+        spread: Number(change.spread ?? existing?.spread) || 0,
+        bid10Total: Number(change.bid10Total ?? existing?.bid10Total) || 0,
+        ask10Total: Number(change.ask10Total ?? existing?.ask10Total) || 0,
+        depthImbalance: Number(change.depthImbalance ?? existing?.depthImbalance) || 0,
+        tickBuyVolume: Number(change.tickBuyVolume ?? existing?.tickBuyVolume) || 0,
+        tickSellVolume: Number(change.tickSellVolume ?? existing?.tickSellVolume) || 0,
+        tickBuyCount: Number(change.tickBuyCount ?? existing?.tickBuyCount) || 0,
+        tickSellCount: Number(change.tickSellCount ?? existing?.tickSellCount) || 0,
+        lastTradePrice: Number(change.lastTradePrice ?? existing?.lastTradePrice) || 0,
+        lastTradeVolume: Number(change.lastTradeVolume ?? existing?.lastTradeVolume) || 0,
+        timestamp: Number(change.timestamp ?? existing?.timestamp) || Date.now(),
+      }
+
+      this.state.realtime.l2Summary.set(change.code, nextSummary)
+
+      const stock = stockMap.get(change.code)
+      if (!stock) return
+
+      Object.assign(stock, nextSummary)
+      stock.updatedAt = Date.now()
+      stockMap.set(change.code, stock)
+      touched = true
+    })
+
+    this.state.realtime.lastUpdate = Date.now()
+    this.throttledNotify('realtime.l2Summary', { count: changes.length })
+
+    if (!touched) return
+
+    this.state.merged.stocks = Array.from(stockMap.values())
+    this.state.version.stocks++
+    this.throttledNotify('merged.stocks', this.state.merged.stocks)
+    this.throttledNotify('version.stocks', this.state.version.stocks)
+  }
+
+  getL2Summary(code: string): L2Summary | null {
+    return this.state.realtime.l2Summary.get(code) || null
   }
 
   //=======龙息分析服务=========
@@ -963,6 +1483,7 @@ class DataLayer {
       }
     }
 
+    // 更新情绪数据
     this.state.analysis.breath.sentiment = {
       overall: data.sentiment.overall,
       phase: data.sentiment.phase,
@@ -972,8 +1493,33 @@ class DataLayer {
       phaseInfo: data.sentiment.phaseInfo,
       factorScores: data.sentiment.factorScores,
     }
-    this.state.analysis.breath.marketData = data.marketData
 
+    // 更新市场数据 - 确保包含所有字段
+    this.state.analysis.breath.marketData = {
+      upCount: data.marketData.upCount || 0,
+      downCount: data.marketData.downCount || 0,
+      ztCount: data.marketData.ztCount || 0,
+      dtCount: data.marketData.dtCount || 0,
+      zhaban: data.marketData.zhaban || {},
+      totalAmo: data.marketData.totalAmo || 0,
+      amoDiff: data.marketData.amoDiff || 0,
+      volumeRatio: data.marketData.volumeRatio || 0,
+      limitData: data.marketData.limitData || { yiban: 0, erban: 0, sanban: 0, sibanPlus: 0 },
+      yesterdayLimit: data.marketData.yesterdayLimit || {},
+      indices: data.marketData.indices || {},
+      moneyFlow: data.marketData.moneyFlow || { main: 0, retail: 0 },
+      cddje: data.marketData.cddje || 0,
+      cddjzb: data.marketData.cddjzb || 0,
+      yesterdayZtPerformance: data.marketData.yesterdayZtPerformance || 0,
+      emotionValue: data.marketData.emotionValue || 0,
+      emotionStatus: data.marketData.emotionStatus || '震荡',
+      timestamp: data.marketData.timestamp || Date.now(),
+      largeCapChange: data.marketData.largeCapChange || 0,  // 大票
+      microCapChange: data.marketData.microCapChange || 0,   // 微盘
+      passRate: data.marketData.passRate || { to2: 0, to3: 0, to4: 0 }, // 晋级率
+    }
+
+    // 更新因子数据
     if (data.factors) {
       this.state.analysis.breath.factors = data.factors
     }
@@ -1120,7 +1666,9 @@ class DataLayer {
   }
 
   getStockHotness(code: string): number | undefined {
-    return this.state.tck2?.stockHotness.get(code)
+    const stored = this.state.tck2?.stockHotness.get(code)
+    if (stored !== undefined) return stored
+    return this.state.merged.stocks.find((stock) => stock.code === code)?.hotness
   }
 
   getStockTags(code: string): Array<{ Name: string }> | undefined {
@@ -1144,31 +1692,28 @@ class DataLayer {
    * 供 dataLoader 调用，更新 merged.stocks
    */
   setMergedStocks(stocks: any[]) {
-    this.state.merged.stocks = stocks as MergedStock[]
+    const normalizedStocks = (stocks as MergedStock[]).map((stock) => {
+      const normalized = stripLegacyLeaderFields(stock)
+      if ('rankTrend' in normalized) {
+        applyRankTrendAnalysis(normalized, normalized.rankTrend ?? null)
+      }
+      return applyReviewProjectionToStock(
+        normalized,
+        this.state.leader.byCode.get(normalized.code) || null,
+      )
+    })
+
+    this.state.merged.stocks = normalizedStocks
     this.state.version.stocks++
     this.state.meta.lastMergeTime = Date.now()
+    this.throttledNotify('merged.stocks', this.state.merged.stocks)
+    this.throttledNotify('version.stocks', this.state.version.stocks)
   }
 
   // ========== 工具方法 ==========
 
-  getAllStocks(): MergedStock[] {
-    return this.state.merged.stocks
-  }
-
-  getAllCodes() {
-    return this.state.merged.stocks.map((s) => s.code)
-  }
-
   hasStock(code: string) {
     return this.state.merged.stocks.some((s) => s.code === code)
-  }
-
-  getTotalCount() {
-    return this.state.merged.stocks.length
-  }
-
-  getRawStocks() {
-    return this.state.raw.stocks
   }
 
   getVersion() {
@@ -1335,6 +1880,12 @@ class DataLayer {
           : 'N/A',
         lastUpdate: this.state.realtime.lastUpdate,
       },
+      depth10: {
+        count: this.state.realtime.depth10.size,
+      },
+      recentTicks: {
+        codes: this.state.realtime.recentTicks.size,
+      },
       versions: { ...this.state.version },
     }
   }
@@ -1343,11 +1894,29 @@ class DataLayer {
 
   reset() {
     this.state.raw = { stocks: [], platforms: {}, themes: [], fullMarket: [] }
-    this.state.realtime = { quotes: new Map(), lastUpdate: null }
+    this.state.realtime = {
+      quotes: new Map(),
+      depth10: new Map(),
+      recentTicks: new Map(),
+      l2Summary: new Map(),
+      lastUpdate: null,
+    }
     this.state.merged = { stocks: [], themes: [] }
     this.state.leader = {
       byCode: new Map(),
       byLevel: {},
+      lastUpdate: null,
+    }
+    this.state.review = {
+      result: null,
+      marketCore: null,
+      trueLeaders: [],
+      heightBoard: [],
+      attentionBoard: [],
+      pseudoLeaderGraveyard: [],
+      battlefields: [],
+      transitions: [],
+      summaryLines: [],
       lastUpdate: null,
     }
     this.state.theme = {
@@ -1427,6 +1996,7 @@ class DataLayer {
       stocks: 0,
       themes: 0,
       leaders: 0,
+      review: 0,
       quotes: 0,
       platforms: 0,
       breath: 0,
@@ -1441,1382 +2011,222 @@ class DataLayer {
     this.state.tck2 = undefined
   }
 
-  clear() {
-    this.reset()
-  }
-
-  private formatSnapshotKey(type: string, date: Date, dateOnly: boolean = false): string {
-    const year = date.getFullYear()
-    const month = String(date.getMonth() + 1).padStart(2, '0')
-    const day = String(date.getDate()).padStart(2, '0')
-    const dateStr = `${year}-${month}-${day}`
-
-    if (dateOnly) {
-      return `[${type}] ${dateStr}`
-    }
-
-    const hour = String(date.getHours()).padStart(2, '0')
-    const minute = String(date.getMinutes()).padStart(2, '0')
-    return `[${type}] ${dateStr} ${hour}:${minute}`
-  }
-
-  /**
-   * 保存15分钟快照（一刻钟）
-   */
   async saveQuarterHourSnapshot(snapshotTime?: Date): Promise<boolean> {
-    try {
-      const now = snapshotTime || new Date()
-      const key = this.formatSnapshotKey('一刻快照', now)
-
-      const stocks = this.getStocks()
-      const breathData = this.getBreathData()
-      const jxbkBlocks = this.getJxbkBlocksSorted(50)
-      const marketData = this.state.analysis.breath?.marketData
-
-      const snapshot = {
-        date: key,
-        timestamp: now.getTime(),
-        type: 'quarter_hour',
-
-        // ========== 元数据（用于回测） ==========
-        metadata: {
-          version: '2.0', // 数据版本号，便于后续数据迁移
-          totalStocks: stocks.length, // 总股票数量，用于计算百分位
-          marketMode: this.state.meta.marketMode,
-          dataVersion: this.state.version.stocks,
-          timestamp: now.getTime(),
-        },
-
-        hotlist: stocks.map((stock, index) => ({
-          code: stock.code,
-          name: stock.name,
-          avgRank: stock.avgRank,
-          rank: index + 1,
-
-          // ========== 价格和成交量数据 ==========
-          price: stock.price,
-          change: stock.change,
-          volume: stock.volume,
-          turnover: stock.turnover,
-          turnoverRate: stock.turnoverRate,
-          totalMV: stock.totalMV,
-          cirMV: stock.cirMV,
-          zlje: stock.zlje,
-          zljzb: stock.zljzb,
-          cddje: stock.cddje,
-          cddjzb: stock.cddjzb,
-          pe: stock.pe,
-          pb: stock.pb,
-
-          // ========== 技术指标（用于回测验证） ==========
-          technicalIndicators: {
-            // 移动平均
-            ma5: stock.ma5 || 0,
-            ma10: stock.ma10 || 0,
-            maTrend: stock.maTrend || 'steady',
-
-            // MACD完整数据
-            macd: stock.macd || 0,
-            macdSignal: stock.macdSignal || 0,
-            macdHistogram: stock.macdHistogram || 0,
-            macdCross: stock.macdCross || 'none',
-
-            // 排名百分位（实时计算）
-            percentile: ((stocks.length - (index + 1) + 1) / stocks.length) * 100,
-
-            // 资金相关
-            fundPenetration: stock.fundPenetration || 0,
-          },
-
-          // JXBK数据
-          volumeRatio: stock.volumeRatio,
-          speed: stock.speed,
-          leadStatus: stock.leadStatus,
-          lianbanStr: stock.lianbanStr,
-          fengdan: stock.fengdan,
-          popularity: stock.popularity,
-          popularityChange: stock.popularityChange,
-
-          // 涨停数据
-          isNew: stock.isNew,
-          firstZtTime: stock.firstZtTime,
-          lastZtTime: stock.lastZtTime,
-          boardHeight: stock.boardHeight,
-          highDays: stock.highDays,
-
-          // 热度数据
-          hotness: stock.hotness,
-          tags: stock.tags,
-          reason: stock.reason,
-
-          // 排名变化
-          rankChange: stock.rankChange,
-
-          // 题材
-          mainTheme: stock.mainTheme,
-          themeHeat: stock.themeHeat,
-          themeLevel: stock.themeLevel,
-
-          // ========== 排名趋势信号 ==========
-          signals: {
-            direction: {
-              signal: stock.directionSignal || 'none',
-              confidence: stock.directionConfidence || 0,
-            },
-            acceleration: {
-              signal: stock.accelerationSignal || 'none',
-              confidence: stock.accelerationConfidence || 0,
-            },
-            cross: {
-              signal: stock.crossSignal || 'none',
-              confidence: stock.crossConfidence || 0,
-            },
-            final: {
-              signal: stock.finalSignal || 'none',
-              confidence: stock.finalConfidence || 0,
-            },
-          },
-        })),
-
-        sectors: jxbkBlocks.map((block: any) => ({
-          code: block.code,
-          name: block.name,
-          strength: block.strength,
-          change: block.change,
-          mainNetInflow: block.mainNetInflow,
-          bigMoney300: block.bigMoney300,
-          institutionBuy: block.institutionBuy,
-          volumeRatio: block.volumeRatio,
-          ztCount: block.ztCount,
-        })),
-
-        sentiment: {
-          overall: breathData?.overall || 50,
-          phase: breathData?.phase || '震荡期',
-          phaseName: breathData?.phaseName || '平稳期',
-          emotionValue: marketData?.emotionValue || 50,
-        },
-
-        moneyFlow: {
-          main: marketData?.moneyFlow?.main || 0,
-          retail: marketData?.moneyFlow?.retail || 0,
-        },
-
-        marketStats: {
-          upCount: marketData?.upCount || 0,
-          downCount: marketData?.downCount || 0,
-          ztCount: marketData?.ztCount || 0,
-          dtCount: marketData?.dtCount || 0,
-          totalAmo: marketData?.totalAmo || 0,
-        },
-      }
-
-      const cleanSnapshot = JSON.parse(JSON.stringify(snapshot))
-      await this.saveToIndexedDB(cleanSnapshot)
-      console.log(`[DataLayer] ✅ 一刻快照已保存 (v2.0): ${key}, 股票数: ${stocks.length}`)
-      return true
-    } catch (error) {
-      console.error('[DataLayer] ❌ 保存一刻快照失败:', error)
-      return false
-    }
+    return this.snapshotRuntime.saveQuarterHourSnapshot(snapshotTime)
   }
 
-  /**
-   * 保存30分钟快照
-   */
   async saveHalfHourSnapshot(snapshotTime?: Date): Promise<boolean> {
-    try {
-      const now = snapshotTime || new Date()
-      const key = this.formatSnapshotKey('半点快照', now)
-
-      const stocks = this.getStocks()
-      const breathData = this.getBreathData()
-      const marketData = this.state.analysis.breath?.marketData
-      const jxbkBlocks = this.getJxbkBlocksSorted(50)
-
-      const snapshot = {
-        date: key,
-        timestamp: now.getTime(),
-        type: 'half_hour',
-
-        // ========== 元数据（用于回测） ==========
-        metadata: {
-          version: '2.0', // 数据版本号，便于后续数据迁移
-          totalStocks: stocks.length, // 总股票数量，用于计算百分位
-          marketMode: this.state.meta.marketMode,
-          dataVersion: this.state.version.stocks,
-          timestamp: now.getTime(),
-        },
-
-        hotlist: stocks.map((stock, index) => ({
-          code: stock.code,
-          name: stock.name,
-          avgRank: stock.avgRank,
-          rank: index + 1,
-
-          // ========== 价格和成交量数据 ==========
-          price: stock.price,
-          change: stock.change,
-          volume: stock.volume,
-          turnover: stock.turnover,
-          turnoverRate: stock.turnoverRate,
-          totalMV: stock.totalMV,
-          cirMV: stock.cirMV,
-          zlje: stock.zlje,
-          zljzb: stock.zljzb,
-          cddje: stock.cddje,
-          cddjzb: stock.cddjzb,
-          pe: stock.pe,
-          pb: stock.pb,
-
-          // ========== 技术指标（用于回测验证） ==========
-          technicalIndicators: {
-            // 移动平均
-            ma5: stock.ma5 || 0,
-            ma10: stock.ma10 || 0,
-            maTrend: stock.maTrend || 'steady',
-
-            // MACD完整数据
-            macd: stock.macd || 0,
-            macdSignal: stock.macdSignal || 0,
-            macdHistogram: stock.macdHistogram || 0,
-            macdCross: stock.macdCross || 'none',
-
-            // 排名百分位（实时计算）
-            percentile: ((stocks.length - (index + 1) + 1) / stocks.length) * 100,
-
-            // 资金相关
-            fundPenetration: stock.fundPenetration || 0,
-          },
-
-          // JXBK数据
-          volumeRatio: stock.volumeRatio,
-          speed: stock.speed,
-          leadStatus: stock.leadStatus,
-          lianbanStr: stock.lianbanStr,
-          fengdan: stock.fengdan,
-          popularity: stock.popularity,
-          popularityChange: stock.popularityChange,
-          institutionBuy: stock.institutionBuy,
-          bigMoney300: stock.bigMoney300,
-          themes: stock.themes?.slice(0, 10).map((t: any) => ({
-            id: t.id,
-            name: t.name,
-            heatScore: t.heatScore,
-          })),
-
-          // 涨停数据
-          isNew: stock.isNew,
-          firstZtTime: stock.firstZtTime,
-          lastZtTime: stock.lastZtTime,
-          boardHeight: stock.boardHeight,
-          highDays: stock.highDays,
-
-          // 热度数据
-          hotness: stock.hotness,
-          tags: stock.tags,
-          reason: stock.reason,
-
-          // 排名变化
-          rankChange: stock.rankChange,
-
-          // 题材
-          mainTheme: stock.mainTheme,
-          themeHeat: stock.themeHeat,
-          themeLevel: stock.themeLevel,
-
-          // ========== 排名趋势信号 ==========
-          signals: {
-            direction: {
-              signal: stock.directionSignal || 'none',
-              confidence: stock.directionConfidence || 0,
-            },
-            acceleration: {
-              signal: stock.accelerationSignal || 'none',
-              confidence: stock.accelerationConfidence || 0,
-            },
-            cross: {
-              signal: stock.crossSignal || 'none',
-              confidence: stock.crossConfidence || 0,
-            },
-            final: {
-              signal: stock.finalSignal || 'none',
-              confidence: stock.finalConfidence || 0,
-            },
-          },
-        })),
-
-        sectors: jxbkBlocks.map((block: any) => ({
-          code: block.code,
-          name: block.name,
-          strength: block.strength,
-          change: block.change,
-          mainNetInflow: block.mainNetInflow,
-          bigMoney300: block.bigMoney300,
-          institutionBuy: block.institutionBuy,
-          volumeRatio: block.volumeRatio,
-          ztCount: block.ztCount,
-        })),
-
-        sentiment: {
-          overall: breathData?.overall || 50,
-          phase: breathData?.phase || '震荡期',
-          phaseName: breathData?.phaseName || '平稳期',
-          emotionValue: marketData?.emotionValue || 50,
-        },
-
-        moneyFlow: {
-          main: marketData?.moneyFlow?.main || 0,
-          retail: marketData?.moneyFlow?.retail || 0,
-        },
-
-        marketStats: {
-          upCount: marketData?.upCount || 0,
-          downCount: marketData?.downCount || 0,
-          ztCount: marketData?.ztCount || 0,
-          dtCount: marketData?.dtCount || 0,
-          totalAmo: marketData?.totalAmo || 0,
-        },
-      }
-
-      const cleanSnapshot = JSON.parse(JSON.stringify(snapshot))
-      await this.saveToIndexedDB(cleanSnapshot)
-      console.log(`[DataLayer] ✅ 半点快照已保存 (v2.0): ${key}, 股票数: ${stocks.length}`)
-      return true
-    } catch (error) {
-      console.error('[DataLayer] ❌ 保存半点快照失败:', error)
-      return false
-    }
+    return this.snapshotRuntime.saveHalfHourSnapshot(snapshotTime)
   }
 
-  /**
-   * 保存60分钟快照（整点快照）
-   */
   async saveHourlySnapshot(snapshotTime?: Date): Promise<boolean> {
-    try {
-      const now = snapshotTime || new Date()
-
-      const key = this.formatSnapshotKey('整点快照', now)
-
-      const stocks = this.getStocks()
-      const breathData = this.getBreathData()
-      const marketData = this.state.analysis.breath?.marketData
-      const jxbkBlocks = this.getJxbkBlocksSorted(100)
-      const jxbkStocks = this.state.theme.jxbk.stockMap || {}
-
-      const limitUpStocks = Object.values(jxbkStocks)
-        .filter((s: any) => {
-          const change = s.change || 0
-          const code = s.code || ''
-          const name = s.name || ''
-          return StockUtils.isLimitUp(change, code, name)
-        })
-        .slice(0, 50)
-        .map((s: any) => ({
-          code: s.code,
-          name: s.name,
-          change: s.change,
-          lianbanStr: s.lianban,
-          leadStatus: s.leadStatus,
-          fengdan: s.fengdan,
-        }))
-
-      const snapshot = {
-        date: key,
-        timestamp: now.getTime(),
-        type: 'hourly',
-
-        // ========== 元数据（用于回测） ==========
-        metadata: {
-          version: '2.0', // 数据版本号，便于后续数据迁移
-          totalStocks: stocks.length, // 总股票数量，用于计算百分位
-          marketMode: this.state.meta.marketMode,
-          dataVersion: this.state.version.stocks,
-          timestamp: now.getTime(),
-        },
-
-        hotlist: stocks.slice(0, 100).map((stock, index) => ({
-          code: stock.code,
-          name: stock.name,
-          rank: index + 1,
-          avgRank: stock.avgRank,
-
-          // ========== 价格和成交量数据 ==========
-          price: stock.price,
-          change: stock.change,
-          volume: stock.volume,
-          turnover: stock.turnover,
-          turnoverRate: stock.turnoverRate,
-          totalMV: stock.totalMV,
-          cirMV: stock.cirMV,
-          zlje: stock.zlje,
-          zljzb: stock.zljzb,
-          cddje: stock.cddje,
-          cddjzb: stock.cddjzb,
-          pe: stock.pe,
-          pb: stock.pb,
-
-          // ========== 技术指标（用于回测验证） ==========
-          technicalIndicators: {
-            // 移动平均
-            ma5: stock.ma5 || 0,
-            ma10: stock.ma10 || 0,
-            maTrend: stock.maTrend || 'steady',
-
-            // MACD完整数据
-            macd: stock.macd || 0,
-            macdSignal: stock.macdSignal || 0,
-            macdHistogram: stock.macdHistogram || 0,
-            macdCross: stock.macdCross || 'none',
-
-            // 排名百分位（实时计算）
-            percentile: ((stocks.length - (index + 1) + 1) / stocks.length) * 100,
-
-            // 资金相关
-            fundPenetration: stock.fundPenetration || 0,
-          },
-
-          // 核心JXBK数据
-          volumeRatio: stock.volumeRatio,
-          leadStatus: stock.leadStatus,
-          lianbanStr: stock.lianbanStr,
-          fengdan: stock.fengdan,
-
-          // 涨停数据
-          isNew: stock.isNew,
-          firstZtTime: stock.firstZtTime,
-          lastZtTime: stock.lastZtTime,
-          boardHeight: stock.boardHeight,
-          highDays: stock.highDays,
-
-          // 排名变化
-          rankChange: stock.rankChange,
-
-          // 题材
-          mainTheme: stock.mainTheme,
-          themeHeat: stock.themeHeat,
-
-          // ========== 排名趋势信号（整点快照也保存完整信号） ==========
-          signals: {
-            direction: {
-              signal: stock.directionSignal || 'none',
-              confidence: stock.directionConfidence || 0,
-            },
-            acceleration: {
-              signal: stock.accelerationSignal || 'none',
-              confidence: stock.accelerationConfidence || 0,
-            },
-            cross: {
-              signal: stock.crossSignal || 'none',
-              confidence: stock.crossConfidence || 0,
-            },
-            final: {
-              signal: stock.finalSignal || 'none',
-              confidence: stock.finalConfidence || 0,
-            },
-          },
-        })),
-
-        sectors: jxbkBlocks.map((block: any) => ({
-          code: block.code,
-          name: block.name,
-          strength: block.strength,
-          change: block.change,
-          mainNetInflow: block.mainNetInflow,
-          bigMoney300: block.bigMoney300,
-          institutionBuy: block.institutionBuy,
-          volumeRatio: block.volumeRatio,
-          ztCount: block.ztCount,
-        })),
-
-        limitUpStocks,
-
-        sentiment: {
-          overall: breathData?.overall || 50,
-          phase: breathData?.phase || '震荡期',
-          phaseName: breathData?.phaseName || '平稳期',
-          emotionValue: marketData?.emotionValue || 50,
-        },
-
-        marketStats: {
-          upCount: marketData?.upCount || 0,
-          downCount: marketData?.downCount || 0,
-          ztCount: marketData?.ztCount || 0,
-          dtCount: marketData?.dtCount || 0,
-          totalAmo: marketData?.totalAmo || 0,
-          zhabanRate: marketData?.zhaban?.rate || 0,
-        },
-
-        zhaban: {
-          count: marketData?.zhaban?.count || 0,
-          rate: marketData?.zhaban?.rate || 0,
-          fengbanRate: marketData?.zhaban?.fengbanRate || 0,
-        },
-
-        moneyFlow: {
-          main: marketData?.moneyFlow?.main || 0,
-          retail: marketData?.moneyFlow?.retail || 0,
-          cddje: marketData?.cddje || 0,
-        },
-
-        continuousBoards: {
-          board1: marketData?.limitData?.yiban || 0,
-          board2: marketData?.limitData?.erban || 0,
-          board3: marketData?.limitData?.sanban || 0,
-          board4plus: marketData?.limitData?.sibanPlus || 0,
-        },
-      }
-
-      const cleanSnapshot = JSON.parse(JSON.stringify(snapshot))
-      await this.saveToIndexedDB(cleanSnapshot)
-      console.log(
-        `[DataLayer] ✅ 整点快照已保存 (v2.0): ${key}, 股票数: ${Math.min(stocks.length, 100)}`,
-      )
-      return true
-    } catch (error) {
-      console.error('[DataLayer] ❌ 保存小时快照失败:', error)
-      return false
-    }
+    return this.snapshotRuntime.saveHourlySnapshot(snapshotTime)
   }
 
-  /**
-   * 生成每日快照 - 按功能模块分类
-   */
-  generateDailySnapshot(): any {
-    const now = new Date()
-    const dateStr = now.toISOString().slice(0, 10)
-
-    // ========== 1. 获取基础数据 ==========
-    const breathData = this.getBreathData()
-    const marketData = this.state.analysis.breath?.marketData
-    const jxbkStocks = this.state.theme.jxbk.stockMap || {}
-    const jxbkBlocks = this.state.theme.jxbk.blocks || []
-    const allStocks = this.getStocks() || []
-    const hotThemes = this.getHotThemes() || []
-    const rotationAnalysis = this.state.analysis.rotation?.current || null
-    const themeCorrelations = this.state.theme.correlation?.byTheme || new Map()
-
-    // 辅助：股价映射
-    const priceMap = new Map(allStocks.map((s) => [s.code, s.price]))
-
-    // ========== 2. 市场情绪数据 ==========
-    const sentiment = {
-      overall: breathData?.overall || 0,
-      phase: breathData?.phase || '',
-      phaseName: breathData?.phaseName || '',
-      riskLevel: breathData?.riskLevel || '',
-      suggestion: breathData?.suggestion || '',
-      factorScores: breathData?.factorScores || {},
-      history: this.getBreathHistory(),
-      factors: this.getBreathFactors(),
-    }
-
-    // ========== 3. 市场统计 ==========
-    const marketStats = {
-      upCount: marketData?.upCount || 0,
-      downCount: marketData?.downCount || 0,
-      ztCount: marketData?.ztCount || 0,
-      dtCount: marketData?.dtCount || 0,
-      totalAmo: marketData?.totalAmo || 0,
-      volumeRatio: marketData?.volumeRatio || 0,
-      emotionValue: marketData?.emotionValue || 0,
-      emotionStatus: marketData?.emotionStatus || '震荡',
-    }
-
-    // ========== 4. 涨停相关数据 ==========
-    const limitData = {
-      // 连板梯队
-      continuousBoards: {
-        board1: marketData?.limitData?.yiban ?? 0,
-        board2: marketData?.limitData?.erban ?? 0,
-        board3: marketData?.limitData?.sanban ?? 0,
-        board4plus: marketData?.limitData?.sibanPlus ?? 0,
-      },
-      // 炸板数据
-      zhaban: {
-        count: marketData?.zhaban?.count || 0,
-        rate: marketData?.zhaban?.rate || 0,
-        fengbanRate: marketData?.zhaban?.fengbanRate || 0,
-      },
-      // 昨日涨停表现
-      yesterdayZt: {
-        total: marketData?.yesterdayLimit?.total || 0,
-        dtCount: marketData?.yesterdayLimit?.dtCount || 0,
-        bigLossCount: marketData?.yesterdayLimit?.bigLossCount || 0,
-        redCount: marketData?.yesterdayLimit?.redCount || 0,
-        greenCount: marketData?.yesterdayLimit?.greenCount || 0,
-        avgChange: marketData?.yesterdayLimit?.avgChange || 0,
-        maxChange: marketData?.yesterdayLimit?.maxChange || 0,
-        minChange: marketData?.yesterdayLimit?.minChange || 0,
-      },
-    }
-
-    // ========== 5. 资金流向 ==========
-    const moneyFlow = {
-      main: marketData?.moneyFlow?.main || 0,
-      retail: marketData?.moneyFlow?.retail || 0,
-      cddje: marketData?.cddje || 0,
-      cddjzb: marketData?.cddjzb || 0,
-    }
-
-    // ========== 6. 指数表现 ==========
-    const indices = {
-      sh: marketData?.indices?.sh?.change || 0,
-      sz: marketData?.indices?.sz?.change || 0,
-      cy: marketData?.indices?.cy?.change || 0,
-      hs300: marketData?.indices?.hs300?.change || 0,
-      zz500: marketData?.indices?.zz500?.change || 0,
-      zz1000: marketData?.indices?.zz1000?.change || 0,
-    }
-
-    // ========== 7. 龙头股数据（来自 JXBK 领涨股） ==========
-    const leaders = Object.values(jxbkStocks)
-      .filter((s: any) => s.leadStatus?.includes('龙'))
-      .sort((a: any, b: any) => {
-        const rankMap: Record<string, number> = { 龙一: 1, 龙二: 2, 龙三: 3 }
-        const aRank = rankMap[a.leadStatus] || 4
-        const bRank = rankMap[b.leadStatus] || 4
-        return aRank - bRank
-      })
-      .map((stock: any) => {
-        const block = jxbkBlocks.find((b: any) => stock.blocks?.includes(b.name))
-        return {
-          code: stock.code,
-          name: stock.name,
-          level: stock.leadStatus,
-          change: stock.change,
-          price: priceMap.get(stock.code) || 0,
-          lianbanStr: stock.lianban,
-          block: block?.name || '',
-          blockStrength: block?.strength || 0,
-          mainNetInflow: stock.mainNetInflow,
-          fengdan: stock.fengdan,
-        }
-      })
-
-    // ========== 8. 板块数据（按强度排序） ==========
-    const sectors = [...jxbkBlocks]
-      .sort((a, b) => b.strength - a.strength)
-      .map((block) => ({
-        code: block.code,
-        name: block.name,
-        strength: block.strength,
-        change: block.change,
-        mainNetInflow: block.mainNetInflow,
-        ztCount: block.ztCount,
-      }))
-
-    // ========== 9. 涨停股列表 ==========
-    const limitUpStocks = allStocks
-      .filter((s) => StockUtils.isLimitUp(s.change || 0, s.code, s.name))
-      .map((stock) => ({
-        code: stock.code,
-        name: stock.name,
-        change: stock.change,
-        price: stock.price,
-        lianbanStr: stock.lianbanStr,
-        leadStatus: stock.leadStatus,
-        fengdan: stock.fengdan,
-        firstZtTime: stock.firstZtTime,
-      }))
-
-    // ========== 10. 热门题材（前20） ==========
-    const topThemes = hotThemes.slice(0, 20).map((t: any, i: number) => ({
-      rank: i + 1,
-      name: t.name,
-      heatScore: t.heatScore,
-      heatLevel: t.heatLevel,
-      ztCount: t.ztCount,
-      leaderCount: t.leaderCount,
-    }))
-
-    // ========== 11. 热榜股票 ==========
-    const hotlist = [...allStocks]
-      .sort((a, b) => (a.compRank || 999) - (b.compRank || 999))
-      .map((s) => ({
-        code: s.code,
-        name: s.name,
-        rank: s.compRank,
-        avgRank: s.avgRank,
-        price: s.price,
-        change: s.change,
-        turnover: s.turnover,
-        turnoverRate: s.turnoverRate,
-        zlje: s.zlje,
-        volume: s.volume,
-        volumeRatio: s.volumeRatio,
-        leadStatus: s.leadStatus,
-        lianbanStr: s.lianbanStr,
-        fengdan: s.fengdan,
-        finalSignal: s.finalSignal,
-        finalConfidence: s.finalConfidence,
-        macdCross: s.macdCross,
-        themes:
-          s.themes
-            ?.slice(0, 10)
-            .map((t: any) => t.name)
-            .filter(Boolean) || [],
-      }))
-
-    // ========== 12. 轮动分析 ==========
-    const rotation = rotationAnalysis
-      ? {
-          marketPhase: rotationAnalysis.marketPhase,
-          rotationSpeed: rotationAnalysis.rotationSpeed,
-          mainLines: rotationAnalysis.mainLines?.map((m: any) => ({
-            themeName: m.themeName,
-            persistentDays: m.persistentDays,
-            netInflow: m.netInflow,
-            ztCount: m.ztCount,
-          })),
-          suggestion: rotationAnalysis.summary?.suggestion || '',
-        }
-      : null
-
-    // ========== 13. 返回完整快照 ==========
-    return {
-      // 元数据
-      date: `[日级快照] ${dateStr}`,
-      timestamp: Date.now(),
-      type: 'daily',
-
-      // 情绪数据
-      sentiment,
-
-      // 市场数据
-      market: marketStats,
-      indices,
-      moneyFlow,
-
-      // 涨停数据
-      limit: limitData.continuousBoards,
-      zhaban: limitData.zhaban,
-      yesterdayZt: limitData.yesterdayZt,
-      limitUpStocks,
-
-      // 板块和题材
-      sectors,
-      hotThemes: topThemes,
-
-      // 龙头和热榜
-      leaders,
-      hotlist,
-
-      // 轮动分析
-      rotation,
-
-      // 统计
-      stats: {
-        totalStocks: allStocks.length,
-        totalLeaders: leaders.length,
-        totalSectors: sectors.length,
-        totalLimitUpStocks: limitUpStocks.length,
-        timestamp: Date.now(),
-      },
-    }
+  generateDailySnapshot(snapshotTime: Date = new Date()): any {
+    return this.snapshotRuntime.generateDailySnapshot(snapshotTime)
   }
 
-  /**
-   * 导出每日快照（JSON格式）
-   */
   exportDailySnapshot(): string {
-    const snapshot = this.generateDailySnapshot()
-    return JSON.stringify(snapshot, null, 2)
+    return this.snapshotRuntime.exportDailySnapshot()
   }
 
-  /**
-   * 导出指定股票的一刻快照数据
-   * @param stockCode 股票代码
-   * @param stockName 股票名称（可选，用于文件名）
-   * @returns 是否成功
-   */
   async exportStockQuarterSnapshots(stockCode: string, stockName: string = ''): Promise<boolean> {
-    try {
-      // 1. 获取所有快照的 key 列表
-      const allKeys = await this.getSnapshotDates()
-      const quarterSnapshots = allKeys.filter((key) => key.includes('一刻快照'))
-
-      if (quarterSnapshots.length === 0) {
-        console.warn('[DataLayer] 没有一刻快照数据')
-        return false
-      }
-
-      const stockData: any[] = []
-
-      // 2. 遍历所有一刻快照，提取该股票的数据
-      for (const snapKey of quarterSnapshots) {
-        const snapshot = await this.getSnapshotFromDB(snapKey)
-        if (snapshot && snapshot.hotlist) {
-          const stock = snapshot.hotlist.find((s: any) => s.code === stockCode)
-          if (stock) {
-            stockData.push({
-              快照时间: snapKey.replace('[一刻快照] ', ''),
-              代码: stock.code,
-              名称: stock.name || stockName,
-              价格: stock.price,
-              '涨幅%': stock.change,
-              热度: stock.avgRank,
-              排名: stock.rank,
-              变化: stock.rankChange,
-              成交量: stock.volume,
-              成交额: stock.turnover,
-              '换手率%': stock.turnoverRate,
-              主力净额: stock.zlje,
-              量比: stock.volumeRatio,
-              领涨状态: stock.leadStatus,
-              连板: stock.lianbanStr,
-              封单额: stock.fengdan,
-              方向一致性: stock.signals?.direction?.signal || '',
-              动量加速度: stock.signals?.acceleration?.signal || '',
-              零线交叉: stock.signals?.cross?.signal || '',
-              最终信号: stock.signals?.final?.signal,
-              最终置信度: stock.signals?.final?.confidence,
-              MACD金叉: stock.macdCross,
-            })
-          }
-        }
-      }
-
-      if (stockData.length === 0) {
-        console.warn(`[DataLayer] 未找到股票 ${stockCode} 的一刻快照数据`)
-        return false
-      }
-
-      // 3. 导出为 CSV 文件
-      const headers = Object.keys(stockData[0])
-      const csvRows: string[] = [headers.join(',')]
-
-      for (const row of stockData) {
-        const escapedRow = headers
-          .map((header) => {
-            let val = row[header]
-            if (val === undefined || val === null) return ''
-            const str = String(val)
-            if (str.includes(',') || str.includes('"') || str.includes('\n')) {
-              return `"${str.replace(/"/g, '""')}"`
-            }
-            return str
-          })
-          .join(',')
-        csvRows.push(escapedRow)
-      }
-
-      const csv = csvRows.join('\n')
-      const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' })
-      const url = URL.createObjectURL(blob)
-      const link = document.createElement('a')
-      link.href = url
-      link.download = `${stockCode}_${stockName || 'stock'}_quarter_snapshots.csv`
-      link.click()
-      URL.revokeObjectURL(url)
-
-      console.log(`[DataLayer] ✅ 已导出 ${stockData.length} 条记录`)
-      return true
-    } catch (error) {
-      console.error('[DataLayer] ❌ 导出股票一刻快照失败:', error)
-      return false
-    }
+    return this.snapshotRuntime.exportStockQuarterSnapshots(stockCode, stockName)
   }
 
-  /**
-   * 导出快照数据为 Excel（CSV格式，Excel可打开）
-   * @param snapshotKey 快照的key（如 '[日级快照] 2026-03-22' 或 '[一刻快照] 2026-03-22 14:30'）
-   * @param options 导出选项
-   */
   async exportSnapshotToExcel(
-    snapshotKey: string,
+    snapshotId: string,
     options?: {
       sheets?: ('hotlist' | 'sectors' | 'sentiment' | 'market')[]
       filename?: string
     },
   ): Promise<boolean> {
-    try {
-      // 1. 获取快照数据
-      const snapshot = await this.getSnapshotFromDB(snapshotKey)
-      if (!snapshot) {
-        console.error(`[DataLayer] ❌ 未找到快照: ${snapshotKey}`)
-        console.log(
-          '提示：快照key格式应为 "[日级快照] 2026-03-22" 或 "[一刻快照] 2026-03-22 14:30"',
-        )
-        return false
-      }
-
-      // 2. 默认导出所有工作表
-      const sheets = options?.sheets || ['hotlist', 'sectors', 'sentiment', 'market']
-      const filename = options?.filename || `${snapshotKey.replace(/[\[\] :]/g, '_')}_export`
-
-      // 3. 构建 CSV 内容
-      const csvParts: string[] = []
-      const sheetTitles: string[] = []
-
-      // 3.1 热榜数据工作表
-      if (sheets.includes('hotlist') && snapshot.hotlist?.length) {
-        sheetTitles.push('热榜')
-        const headers = [
-          '排名',
-          '代码',
-          '名称',
-          '价格',
-          '涨幅%',
-          '成交额',
-          '换手率%',
-          '总市值',
-          '流通市值',
-          '主力净额',
-          '主力占比',
-          '超大单净额',
-          '超大单占比',
-          '市盈率',
-          '市净率',
-          '量比',
-          '涨速',
-          '领涨状态',
-          '连板',
-          '封单额',
-          '人气排名',
-          '人气变化',
-          '首次涨停',
-          '最后涨停',
-          '连板天数',
-          '热度值',
-          '标签',
-          '涨停原因',
-          '排名变化',
-          '资金穿透',
-          '主要题材',
-          '题材热度',
-          '题材等级',
-          '方向信号',
-          '方向置信度',
-          '加速信号',
-          '加速置信度',
-          '交叉信号',
-          '交叉置信度',
-          '最终信号',
-          '最终置信度',
-          'MACD信号',
-        ]
-
-        const rows = snapshot.hotlist.map((stock: any, idx: number) => [
-          stock.rank || idx + 1,
-          stock.code || '',
-          stock.name || '',
-          stock.price || 0,
-          stock.change || 0,
-          stock.turnover || 0,
-          stock.turnoverRate || 0,
-          stock.totalMV || 0,
-          stock.cirMV || 0,
-          stock.zlje || 0,
-          stock.zljzb || 0,
-          stock.cddje || 0,
-          stock.cddjzb || 0,
-          stock.pe || 0,
-          stock.pb || 0,
-          stock.volumeRatio || 0,
-          stock.speed || 0,
-          stock.leadStatus || '',
-          stock.lianbanStr || '',
-          stock.fengdan || 0,
-          stock.popularity || 0,
-          stock.popularityChange || 0,
-          stock.firstZtTime || '',
-          stock.lastZtTime || '',
-          stock.highDays || 0,
-          stock.hotness || 0,
-          Array.isArray(stock.tags)
-            ? stock.tags.map((t: any) => t.Name || t).join(';')
-            : stock.tags || '',
-          stock.reason || '',
-          stock.rankChange || 0,
-          stock.fundPenetration || 0,
-          stock.mainTheme || '',
-          stock.themeHeat || 0,
-          stock.themeLevel || '',
-          stock.signals?.direction?.signal || '',
-          stock.signals?.direction?.confidence || 0,
-          stock.signals?.acceleration?.signal || '',
-          stock.signals?.acceleration?.confidence || 0,
-          stock.signals?.cross?.signal || '',
-          stock.signals?.cross?.confidence || 0,
-          stock.signals?.final?.signal || '',
-          stock.signals?.final?.confidence || 0,
-          stock.macdCross,
-        ])
-
-        csvParts.push(this.arrayToCSV([headers, ...rows]))
-      }
-
-      // 3.2 板块数据工作表
-      if (sheets.includes('sectors') && snapshot.sectors?.length) {
-        sheetTitles.push('板块')
-        const headers = [
-          '代码',
-          '名称',
-          '强度',
-          '涨幅%',
-          '主力净额',
-          '300W大单',
-          '机构增仓',
-          '量比',
-          '涨停数',
-        ]
-        const rows = snapshot.sectors.map((sector: any) => [
-          sector.code || '',
-          sector.name || '',
-          sector.strength || 0,
-          sector.change || 0,
-          sector.mainNetInflow || 0,
-          sector.bigMoney300 || 0,
-          sector.institutionBuy || 0,
-          sector.volumeRatio || 0,
-          sector.ztCount || 0,
-        ])
-        csvParts.push(this.arrayToCSV([headers, ...rows]))
-      }
-
-      // 3.3 情绪数据工作表
-      if (sheets.includes('sentiment') && snapshot.sentiment) {
-        sheetTitles.push('情绪')
-        const headers = ['字段', '值']
-        const rows = [
-          ['情绪得分', snapshot.sentiment.overall || 50],
-          ['情绪阶段', snapshot.sentiment.phaseName || '平稳期'],
-          ['情绪代码', snapshot.sentiment.phase || 'stable'],
-          ['情绪值', snapshot.sentiment.emotionValue || 50],
-        ]
-        csvParts.push(this.arrayToCSV([headers, ...rows]))
-      }
-
-      // 3.4 市场数据工作表
-      if (sheets.includes('market') && snapshot.marketStats) {
-        sheetTitles.push('市场')
-        const headers = ['字段', '值']
-        const rows = [
-          ['上涨家数', snapshot.marketStats.upCount || 0],
-          ['下跌家数', snapshot.marketStats.downCount || 0],
-          ['涨停家数', snapshot.marketStats.ztCount || 0],
-          ['跌停家数', snapshot.marketStats.dtCount || 0],
-          ['成交额(亿)', ((snapshot.marketStats.totalAmo || 0) / 1e8).toFixed(0)],
-          ['主力净额', snapshot.moneyFlow?.main || 0],
-          ['散户净额', snapshot.moneyFlow?.retail || 0],
-        ]
-        csvParts.push(this.arrayToCSV([headers, ...rows]))
-      }
-
-      // 4. 合并多个工作表（用分隔符区分）
-      let finalCSV = ''
-      for (let i = 0; i < csvParts.length; i++) {
-        if (i > 0) {
-          finalCSV += `\n\n========== ${sheetTitles[i]} ==========\n\n`
-        }
-        finalCSV += csvParts[i]
-      }
-
-      // 5. 下载文件
-      const blob = new Blob(['\uFEFF' + finalCSV], { type: 'text/csv;charset=utf-8;' })
-      const url = URL.createObjectURL(blob)
-      const link = document.createElement('a')
-      link.href = url
-      link.download = `${filename}.csv`
-      link.click()
-      URL.revokeObjectURL(url)
-
-      console.log(`[DataLayer] ✅ 已导出 Excel: ${filename}.csv`)
-      return true
-    } catch (error) {
-      console.error('[DataLayer] ❌ 导出失败:', error)
-      return false
-    }
+    return this.snapshotRuntime.exportSnapshotToExcel(snapshotId, options)
   }
 
-  /**
-   * 导出指定日期范围的所有快照为 Excel
-   * @param startDate 开始日期 (YYYY-MM-DD)
-   * @param endDate 结束日期 (YYYY-MM-DD)
-   */
   async exportSnapshotsRangeToExcel(startDate: string, endDate: string): Promise<boolean> {
-    try {
-      const allDates = await this.getSnapshotDates()
-      // 过滤日期范围内的快照（快照key格式为 "[日级快照] 2026-03-22"）
-      const filteredDates = allDates.filter((date) => {
-        const match = date.match(/\[\w+\]\s+(\d{4}-\d{2}-\d{2})/)
-        if (!match) return false
-        const dateStr = match[1]
-        return dateStr >= startDate && dateStr <= endDate
-      })
-
-      if (filteredDates.length === 0) {
-        console.warn('[DataLayer] 指定范围内没有快照')
-        return false
-      }
-
-      const allData: any[] = []
-
-      for (const dateKey of filteredDates) {
-        const snapshot = await this.getSnapshotFromDB(dateKey)
-        if (snapshot?.hotlist) {
-          snapshot.hotlist.forEach((stock: any) => {
-            allData.push({
-              快照时间: dateKey,
-              排名: stock.rank,
-              代码: stock.code,
-              名称: stock.name,
-              价格: stock.price,
-              '涨幅%': stock.change,
-              成交额: stock.turnover,
-              '换手率%': stock.turnoverRate,
-              主力净额: stock.zlje,
-              量比: stock.volumeRatio,
-              领涨状态: stock.leadStatus,
-              连板: stock.lianbanStr,
-              最终信号: stock.signals?.final?.signal,
-              最终置信度: stock.signals?.final?.confidence,
-            })
-          })
-        }
-      }
-
-      if (allData.length === 0) {
-        console.warn('[DataLayer] 没有数据可导出')
-        return false
-      }
-
-      // 转换为 CSV
-      const headers = Object.keys(allData[0])
-      const rows = allData.map((row) => headers.map((h) => row[h]))
-      const csv = this.arrayToCSV([headers, ...rows])
-
-      const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' })
-      const url = URL.createObjectURL(blob)
-      const link = document.createElement('a')
-      link.href = url
-      link.download = `snapshots_${startDate}_to_${endDate}.csv`
-      link.click()
-      URL.revokeObjectURL(url)
-
-      console.log(`[DataLayer] ✅ 已导出 ${allData.length} 条记录`)
-      return true
-    } catch (error) {
-      console.error('[DataLayer] ❌ 导出失败:', error)
-      return false
-    }
+    return this.snapshotRuntime.exportSnapshotsRangeToExcel(startDate, endDate)
   }
 
-  /**
-   * 数组转 CSV
-   */
-  private arrayToCSV(data: any[][]): string {
-    return data
-      .map((row) =>
-        row
-          .map((cell) => {
-            if (cell === undefined || cell === null) return ''
-            const str = String(cell)
-            if (str.includes(',') || str.includes('"') || str.includes('\n')) {
-              return `"${str.replace(/"/g, '""')}"`
-            }
-            return str
-          })
-          .join(','),
-      )
-      .join('\n')
-  }
-
-  /**
-   * 保存每日快照到 IndexedDB
-   */
   async saveDailySnapshot(snapshotTime?: Date): Promise<boolean> {
-    try {
-      const now = snapshotTime || new Date()
-      const key = this.formatSnapshotKey('日级快照', now, true)
-
-      const snapshot = this.generateDailySnapshot()
-      snapshot.date = key
-      snapshot.type = 'daily'
-
-      const cleanSnapshot = JSON.parse(JSON.stringify(snapshot))
-      await this.saveToIndexedDB(cleanSnapshot)
-      return true
-    } catch (error) {
-      console.error('[DataLayer] ❌ 保存失败:', error)
-      return false
-    }
+    return this.snapshotRuntime.saveDailySnapshot(snapshotTime)
   }
 
-  // ========== IndexedDB 操作 ==========
-  private async openSnapshotDB(): Promise<IDBDatabase> {
-    const DB_NAME = 'DragonBoardData'
-    const DB_VERSION = 2
-    const STORE_NAME = 'daily_snapshots'
+  async listSnapshots(options: SnapshotQueryOptions = {}): Promise<SnapshotRecord[]> {
+    return this.snapshotRuntime.listSnapshots(options)
+  }
 
-    return new Promise((resolve, reject) => {
-      const request = indexedDB.open(DB_NAME, DB_VERSION)
+  async getSnapshotById(id: string): Promise<SnapshotRecord | null> {
+    return this.snapshotRuntime.getSnapshotById(id)
+  }
 
-      request.onerror = () => {
-        console.error('[DataLayer] 打开数据库失败:', request.error)
-        reject(request.error)
-      }
+  async getTradingDateSnapshot(type: SnapshotType, tradingDate: string): Promise<SnapshotRecord | null> {
+    return this.snapshotRuntime.getTradingDateSnapshot(type, tradingDate)
+  }
 
-      request.onsuccess = () => {
-        resolve(request.result)
-      }
+  async listSnapshotFrames(
+    options: SnapshotFrameQueryOptions | SnapshotQueryOptions = {},
+  ): Promise<SnapshotFrameRow[]> {
+    return this.snapshotRuntime.listSnapshotFrames(options as SnapshotFrameQueryOptions)
+  }
 
-      request.onupgradeneeded = (event) => {
-        const db = (event.target as IDBOpenDBRequest).result
-        if (!db.objectStoreNames.contains(STORE_NAME)) {
-          const store = db.createObjectStore(STORE_NAME, { keyPath: 'date' })
-          store.createIndex('date', 'date', { unique: true })
-          store.createIndex('timestamp', 'timestamp')
-        } else {
-          // ✅ 版本升级但表已存在，不需要操作
-          console.log('[DataLayer] IndexedDB 表已存在，版本升级')
-        }
+  async listSnapshotStockRows(
+    options: SnapshotStockRowQueryOptions | SnapshotQueryOptions = {},
+  ): Promise<SnapshotStockRow[]> {
+    return this.snapshotRuntime.listSnapshotStockRows(options as SnapshotStockRowQueryOptions)
+  }
+
+  async listSnapshotSectorRows(
+    options: SnapshotSectorRowQueryOptions | SnapshotQueryOptions = {},
+  ): Promise<SnapshotSectorRow[]> {
+    return this.snapshotRuntime.listSnapshotSectorRows(options as SnapshotSectorRowQueryOptions)
+  }
+
+  async getSnapshotProjectionMeta(): Promise<SnapshotProjectionMeta | null> {
+    return this.snapshotRuntime.getSnapshotProjectionMeta()
+  }
+
+  async rebuildSnapshotProjectionStores(
+    options: SnapshotQueryOptions = {},
+  ): Promise<SnapshotProjectionRewriteResult> {
+    return this.snapshotRuntime.rebuildSnapshotProjectionStores(options)
+  }
+
+  async alignSnapshotBackups(
+    options?: SnapshotQueryOptions & { includeCloud?: boolean },
+  ): Promise<SnapshotBackupAlignmentResult> {
+    return this.snapshotRuntime.alignSnapshotBackups(options)
+  }
+
+  async compactSnapshotRawRecords(
+    options: SnapshotQueryOptions = {},
+  ): Promise<SnapshotRawCompactionResult> {
+    return this.snapshotRuntime.compactSnapshotRawRecords(options)
+  }
+
+  async runSnapshotStorageMaintenance(
+    options?: SnapshotQueryOptions & { includeCloud?: boolean },
+  ): Promise<SnapshotStorageMaintenanceResult> {
+    return this.snapshotRuntime.runSnapshotStorageMaintenance(options)
+  }
+
+  async getStockVolumeHistory(
+    codes: string[],
+    options?: { anchorTradingDate?: string; lookbackDays?: number },
+  ): Promise<Map<string, number[]>> {
+    return this.snapshotRuntime.getStockVolumeHistory(codes, options)
+  }
+
+  // 正式聚合读口：把 frame/stock/sector 三张读模型表拼成消费方可直接使用的 bundle。
+  async listSnapshotFrameBundles(
+    options: SnapshotFrameQueryOptions | SnapshotQueryOptions = {},
+  ): Promise<SnapshotFrameBundle[]> {
+    const frames = await this.listSnapshotFrames(options)
+    if (frames.length === 0) return []
+
+    const stockRowsBySnapshotId = new Map<string, SnapshotStockRow[]>()
+    const sectorRowsBySnapshotId = new Map<string, SnapshotSectorRow[]>()
+
+    await Promise.all(
+      frames.map(async (frame) => {
+        const [rows, entities] = await Promise.all([
+          this.listSnapshotStockRows({ snapshotId: frame.snapshotId, sort: 'asc' }),
+          this.listSnapshotSectorRows({ snapshotId: frame.snapshotId, sort: 'asc' }),
+        ])
+        stockRowsBySnapshotId.set(frame.snapshotId, rows)
+        sectorRowsBySnapshotId.set(frame.snapshotId, entities)
+      }),
+    )
+
+    return frames.map((frame) => {
+      const rows = stockRowsBySnapshotId.get(frame.snapshotId) || []
+      const entities = sectorRowsBySnapshotId.get(frame.snapshotId) || []
+      const sectors = entities
+        .filter((row) => row.entityType === 'sector')
+        .map((row) => ({
+          code: row.entityCode || row.entityKey,
+          name: row.entityName,
+          themeName: row.entityName,
+          strength: row.strength || 0,
+          heatScore: row.heatScore || 0,
+          heatLevel: row.heatLevel,
+          change: row.change || 0,
+          mainNetInflow: row.mainNetInflow || 0,
+          netInflow: row.netInflow || 0,
+          bigMoney300: row.bigMoney300 || 0,
+          institutionBuy: row.institutionBuy || 0,
+          volumeRatio: row.volumeRatio || 0,
+          ztCount: row.ztCount || 0,
+          leaderCount: row.leaderCount || 0,
+        }))
+      const hotThemes = entities
+        .filter((row) => row.entityType === 'hot_theme')
+        .map((row) => ({
+          id: row.entityKey,
+          name: row.entityName,
+          themeName: row.entityName,
+          heatScore: row.heatScore || 0,
+          heatLevel: row.heatLevel,
+          strength: row.strength || 0,
+          change: row.change || 0,
+          mainNetInflow: row.mainNetInflow || 0,
+          netInflow: row.netInflow || 0,
+          ztCount: row.ztCount || 0,
+          leaderCount: row.leaderCount || 0,
+        }))
+      const mainLines = entities
+        .filter((row) => row.entityType === 'rotation_main_line')
+        .map((row) => ({
+          name: row.entityName,
+          themeName: row.entityName,
+          strength: row.strength || 0,
+          heatScore: row.heatScore || 0,
+          change: row.change || 0,
+          mainNetInflow: row.mainNetInflow || 0,
+          netInflow: row.netInflow || 0,
+          leaderCount: row.leaderCount || 0,
+          ztCount: row.ztCount || 0,
+          persistentDays: row.persistentDays || 0,
+        }))
+
+      return {
+        ...frame,
+        rows,
+        hotlist: rows,
+        sectors,
+        hotThemes,
+        rotationSummary: frame.rotationSummary
+          ? {
+              ...frame.rotationSummary,
+              mainLines,
+            }
+          : mainLines.length > 0
+            ? { mainLines }
+            : null,
       }
     })
   }
 
-  private async saveToIndexedDB(snapshot: any): Promise<void> {
-    const db = await this.openSnapshotDB()
-    const STORE_NAME = 'daily_snapshots'
-
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction([STORE_NAME], 'readwrite')
-      const store = transaction.objectStore(STORE_NAME)
-      const request = store.put(snapshot)
-
-      request.onerror = () => {
-        console.error('[DataLayer] 保存失败:', request.error)
-        reject(request.error)
-      }
-
-      request.onsuccess = () => {
-        resolve()
-      }
-
-      transaction.oncomplete = () => {
-        db.close()
-      }
-
-      transaction.onerror = () => {
-        console.error('[DataLayer] 事务失败:', transaction.error)
-        reject(transaction.error)
-      }
-    })
+  async getLatestSnapshotRecord(options?: {
+    type?: SnapshotType
+    beforeTradingDate?: string
+    allowedCaptureModes?: ('real_time' | 'delayed' | 'restored')[]
+    excludeRestored?: boolean
+  }): Promise<SnapshotRecord | null> {
+    return this.snapshotRuntime.getLatestSnapshotRecord(options)
   }
 
-  async getSnapshotFromDB(date: string): Promise<any | null> {
-    try {
-      const db = await this.openSnapshotDB()
-      const STORE_NAME = 'daily_snapshots'
-
-      return new Promise((resolve, reject) => {
-        const transaction = db.transaction([STORE_NAME], 'readonly')
-        const store = transaction.objectStore(STORE_NAME)
-        const request = store.get(date)
-
-        request.onerror = () => {
-          console.error('[DataLayer] 读取失败:', request.error)
-          reject(request.error)
-        }
-
-        request.onsuccess = () => {
-          db.close()
-          resolve(request.result || null)
-        }
-      })
-    } catch (error) {
-      console.error('[DataLayer] 打开数据库失败:', error)
-      return null
-    }
-  }
-
-  async getSnapshotDates(): Promise<string[]> {
-    try {
-      const db = await this.openSnapshotDB()
-      const STORE_NAME = 'daily_snapshots'
-
-      return new Promise((resolve, reject) => {
-        const transaction = db.transaction([STORE_NAME], 'readonly')
-        const store = transaction.objectStore(STORE_NAME)
-        const request = store.getAllKeys()
-
-        request.onerror = () => {
-          console.error('[DataLayer] 获取日期列表失败:', request.error)
-          reject(request.error)
-        }
-
-        request.onsuccess = () => {
-          db.close()
-          const dates = request.result as string[]
-          resolve(dates.sort().reverse())
-        }
-      })
-    } catch (error) {
-      console.error('[DataLayer] 打开数据库失败:', error)
-      return []
-    }
-  }
-
-  async getLatestSnapshot(): Promise<any | null> {
-    const dates = await this.getSnapshotDates()
-    if (dates.length === 0) return null
-    return this.getSnapshotFromDB(dates[0])
-  }
-
-  async exportSnapshotAsFile(date: string): Promise<void> {
-    const snapshot = await this.getSnapshotFromDB(date)
-    if (!snapshot) {
-      console.warn(`[DataLayer] 未找到 ${date} 的快照`)
-      return
-    }
-
-    const jsonData = JSON.stringify(snapshot, null, 2)
-    const blob = new Blob([jsonData], { type: 'application/json' })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = `daily_${date}.json`
-    link.click()
-    URL.revokeObjectURL(url)
+  async exportSnapshotAsFile(id: string): Promise<void> {
+    return this.snapshotRuntime.exportSnapshotAsFile(id)
   }
 
   async exportAllSnapshots(): Promise<void> {
-    const dates = await this.getSnapshotDates()
-    if (dates.length === 0) {
-      console.warn('[DataLayer] 没有快照可导出')
-      return
-    }
-    for (const date of dates) {
-      await this.exportSnapshotAsFile(date)
-      await new Promise((resolve) => setTimeout(resolve, 500))
-    }
+    return this.snapshotRuntime.exportAllSnapshots()
   }
 
-  async deleteSnapshot(date: string): Promise<boolean> {
-    try {
-      const db = await this.openSnapshotDB()
-      const STORE_NAME = 'daily_snapshots'
-
-      return new Promise((resolve, reject) => {
-        const transaction = db.transaction([STORE_NAME], 'readwrite')
-        const store = transaction.objectStore(STORE_NAME)
-        const request = store.delete(date)
-
-        request.onerror = () => {
-          console.error('[DataLayer] 删除失败:', request.error)
-          reject(request.error)
-        }
-
-        request.onsuccess = () => {
-          db.close()
-          resolve(true)
-        }
-      })
-    } catch (error) {
-      console.error('[DataLayer] 删除失败:', error)
-      return false
-    }
+  async deleteSnapshot(id: string): Promise<boolean> {
+    return this.snapshotRuntime.deleteSnapshot(id)
   }
 
   async getSnapshotStorageStats(): Promise<{
@@ -2824,105 +2234,154 @@ class DataLayer {
     dates: string[]
     estimatedSize: number
   }> {
-    const dates = await this.getSnapshotDates()
-    let estimatedSize = 0
-
-    for (const date of dates) {
-      const snapshot = await this.getSnapshotFromDB(date)
-      if (snapshot) {
-        estimatedSize += JSON.stringify(snapshot).length
-      }
-    }
-
-    return {
-      totalSnapshots: dates.length,
-      dates,
-      estimatedSize,
-    }
+    return this.snapshotRuntime.getSnapshotStorageStats()
   }
 
-  // 5分钟快照
-  async saveFiveMinuteSnapshot(snapshotTime?: Date): Promise<boolean> {
-    try {
-      const now = snapshotTime || new Date()
-      const key = this.formatSnapshotKey('5分钟快照', now)
+  async getBackupSnapshotStorageStats(): Promise<{
+    totalSnapshots: number
+    estimatedSize: number
+    mode: 'all'
+    bucketSnapshots: number
+    remoteCloudSnapshots: number
+  }> {
+    return this.snapshotRuntime.getBackupSnapshotStorageStats()
+  }
 
-      const existing = await this.getSnapshotFromDB(key)
-      if (existing) return false
+  async getBackupBucketHealth(): Promise<{
+    supported: boolean
+    bucketName: string
+    bucketOpened: boolean
+    persisted?: boolean
+    durability?: string
+    usage?: number
+    quota?: number
+    keys?: string[]
+    error?: string
+  }> {
+    return this.snapshotRuntime.getBackupBucketHealth()
+  }
 
-      const stocks = this.getStocks()
-      const snapshot = {
-        date: key,
-        timestamp: now.getTime(),
-        type: 'five_minute',
-        hotlist: stocks.slice(0, 100).map((stock, index) => ({
-          code: stock.code,
-          name: stock.name,
-          rank: index + 1,
-          price: stock.price,
-          change: stock.change,
-        })),
-      }
+  async getCloudBackupHealth() {
+    return this.snapshotRuntime.getCloudBackupHealth()
+  }
 
-      await this.saveToIndexedDB(snapshot)
-      return true
-    } catch (error) {
-      console.error('[DataLayer] 保存5分钟快照失败:', error)
-      return false
-    }
+  async getSnapshotBackupSyncState(tradingDate?: string): Promise<SnapshotBackupSyncState | null> {
+    return this.snapshotRuntime.getSnapshotBackupSyncState(tradingDate)
+  }
+
+  async listSnapshotBackupSyncStates(limit?: number): Promise<SnapshotBackupSyncState[]> {
+    return this.snapshotRuntime.listSnapshotBackupSyncStates(limit)
+  }
+
+  async getSnapshotHealthOverview(tradingDate?: string): Promise<SnapshotHealthOverview> {
+    return this.snapshotRuntime.getSnapshotHealthOverview(tradingDate)
+  }
+
+  async restoreSnapshotsFromBackup(options?: {
+    overwrite?: boolean
+    limit?: number
+  }): Promise<{
+    restored: number
+    skipped: number
+    totalFromBackup: number
+    mode: 'all'
+    remoteRestored: number
+  }> {
+    return this.snapshotRuntime.restoreSnapshotsFromBackup(options)
+  }
+
+  async syncPrimarySnapshotsToBackup(options?: {
+    overwrite?: boolean
+    limit?: number
+  }): Promise<{
+    synced: number
+    skipped: number
+    totalPrimary: number
+    bucketSynced: number
+    remoteCloudSynced: number
+    mode: 'all'
+  }> {
+    return this.snapshotRuntime.syncPrimarySnapshotsToBackup(options)
+  }
+
+  async syncPrimarySnapshotsToCloud(options?: {
+    overwrite?: boolean
+    limit?: number
+    tradingDate?: string
+    startDate?: string
+    endDate?: string
+  }): Promise<{
+    queued: number
+    totalPrimary: number
+  }> {
+    return this.snapshotRuntime.syncPrimarySnapshotsToCloud(options)
+  }
+
+  async syncAllSnapshotStores(options?: {
+    overwrite?: boolean
+    limit?: number
+  }): Promise<{
+    primaryCount: number
+    bucketBackupCount: number
+    remoteCloudCount: number
+    insertedToPrimary: number
+    insertedToBucketBackup: number
+    insertedToRemoteCloud: number
+    mode: 'all'
+  }> {
+    return this.snapshotRuntime.syncAllSnapshotStores(options)
+  }
+
+  async runSnapshotAutoRecoveryCheck(options?: {
+    minBackupCount?: number
+    abnormalRatio?: number
+    force?: boolean
+  }): Promise<{
+    checked: boolean
+    recovered: boolean
+    reason: string
+    primaryCount: number
+    backupCount: number
+    restored: number
+    skipped: number
+    remoteRestored: number
+    mode: 'all'
+  }> {
+    return this.snapshotRuntime.runSnapshotAutoRecoveryCheck(options)
+  }
+
+  async inspectTradingDateSnapshotCoverage(tradingDate: string) {
+    return this.snapshotRuntime.inspectTradingDateSnapshotCoverage(tradingDate)
+  }
+
+  async buildSnapshotCoverageWindow(options?: {
+    startDate?: string
+    endDate?: string
+    limit?: number
+  }) {
+    return this.snapshotRuntime.buildSnapshotCoverageWindow(options)
+  }
+
+  async repairTradingDateSnapshotCoverage(
+    tradingDate: string,
+    options?: {
+      toleranceMinutes?: number
+      deriveHalfHourFromQuarter?: boolean
+    },
+  ) {
+    return this.snapshotRuntime.repairTradingDateSnapshotCoverage(tradingDate, options)
+  }
+
+  async saveFiveMinuteSnapshot(snapshotTime: Date = new Date()): Promise<boolean> {
+    return this.snapshotRuntime.saveFiveMinuteSnapshot(snapshotTime)
   }
 
   startTimer() {
-    this.timer = setInterval(() => {
-      const now = new Date()
-      const m = now.getMinutes()
-      const s = now.getSeconds()
-      const h = now.getHours()
-      const key = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}-${h}:${m}`
-
-      // ✅ 放宽时间窗口到30秒，避免错过整点
-      if (s > 30) return
-
-      // 检查是否在交易时间内（除了日级快照）
-      const isTrading = isTradingTime(now)
-
-      // 日级快照（15:00，无论是否在交易时间）
-      if (h === 15 && m === 0 && this.lastSnapshotKey.daily !== key) {
-        this.lastSnapshotKey.daily = key
-        this.saveDailySnapshot()
-        return // 日级快照优先级最高
-      }
-
-      // 如果不是交易时间，只保存日级快照
-      if (!isTrading) return
-
-      // 整点快照（所有交易时间的整点，不只是特定小时）
-      if (m === 0 && this.lastSnapshotKey.hour !== key) {
-        this.lastSnapshotKey.hour = key
-        this.saveHourlySnapshot()
-        return // 整点优先级高于半点
-      }
-
-      // 半点快照
-      if (m === 30 && this.lastSnapshotKey.half !== key) {
-        this.lastSnapshotKey.half = key
-        this.saveHalfHourSnapshot()
-        return // 半点优先级高于一刻
-      }
-
-      // 一刻快照
-      if ((m === 15 || m === 45) && this.lastSnapshotKey.quarter !== key) {
-        this.lastSnapshotKey.quarter = key
-        this.saveQuarterHourSnapshot()
-      }
-    }, 1000)
+    this.snapshotRuntime.start()
   }
 
   stopTimer() {
-    if (this.timer) {
-      clearInterval(this.timer)
-      this.timer = null
-    }
+    this.snapshotRuntime.stop()
   }
 }
 
@@ -2932,3 +2391,5 @@ export const dataLayer = new DataLayer()
 if (typeof window !== 'undefined') {
   ;(window as any).dataLayer = dataLayer
 }
+
+

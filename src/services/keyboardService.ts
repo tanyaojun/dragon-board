@@ -26,7 +26,7 @@ class KeyboardService {
       { key: 'Space', description: '快速查看', category: 'navigation', action: () => {} },
       
       // 搜索
-      { key: 'Ctrl+F', description: '聚焦搜索框', category: 'search', action: () => {} },
+      { key: '/', description: '聚焦搜索框', category: 'search', action: () => {} },
       { key: 'ESC', description: '清除搜索/关闭面板', category: 'search', action: () => {} },
       { key: '↓/↑', description: '导航搜索提示', category: 'search', action: () => {} },
       
@@ -36,14 +36,15 @@ class KeyboardService {
       { key: 'F11', description: '全屏模式', category: 'view', action: () => {} },
       
       // 面板
-      { key: 'D', description: '显示龙头面板', category: 'panels', action: () => {} },
-      { key: 'S', description: '显示板块分析', category: 'panels', action: () => {} },
-      { key: 'C', description: '显示配置面板', category: 'panels', action: () => {} },
-      { key: 'B', description: '显示龙息分析', category: 'panels', action: () => {} },
-      { key: 'T', description: '显示趋势图表', category: 'panels', action: () => {} },
+      { key: 'Ctrl+D', description: '显示龙头面板', category: 'panels', action: () => {} },
+      { key: 'Ctrl+S', description: '显示题材分析', category: 'panels', action: () => {} },
+      { key: 'Ctrl+B', description: '显示龙息分析', category: 'panels', action: () => {} },
+      { key: 'Ctrl+T', description: '显示参数回测', category: 'panels', action: () => {} },
+      { key: 'Ctrl+F', description: '显示自选股', category: 'panels', action: () => {} },
       
       // 其他
       { key: '?', description: '显示帮助', category: 'other', action: () => {} },
+      { key: 'Shift+?', description: '显示帮助', category: 'other', action: () => {} },
       { key: 'Ctrl+Shift+A', description: '算法配置', category: 'other', action: () => {} },
       { key: 'Ctrl+E', description: '导出数据', category: 'other', action: () => {} }
     ]
@@ -168,12 +169,14 @@ class KeyboardService {
     onConfig?: () => void
     onBreath?: () => void
     onTrend?: () => void
+    onFavorite?: () => void
     onRefresh?: () => void
     onHelp?: () => void
+    onSearch?: () => void
   }) {
     if (actions.onDragon) {
       this.registerShortcut({
-        key: 'D',
+        key: 'Ctrl+D',
         description: '显示龙头面板',
         category: 'panels',
         action: actions.onDragon
@@ -182,8 +185,8 @@ class KeyboardService {
     
     if (actions.onSector) {
       this.registerShortcut({
-        key: 'S',
-        description: '显示板块分析',
+        key: 'Ctrl+S',
+        description: '显示题材分析',
         category: 'panels',
         action: actions.onSector
       })
@@ -200,7 +203,7 @@ class KeyboardService {
     
     if (actions.onBreath) {
       this.registerShortcut({
-        key: 'B',
+        key: 'Ctrl+B',
         description: '显示龙息分析',
         category: 'panels',
         action: actions.onBreath
@@ -209,10 +212,19 @@ class KeyboardService {
     
     if (actions.onTrend) {
       this.registerShortcut({
-        key: 'T',
-        description: '显示趋势图表',
+        key: 'Ctrl+T',
+        description: '显示参数回测',
         category: 'panels',
         action: actions.onTrend
+      })
+    }
+
+    if (actions.onFavorite) {
+      this.registerShortcut({
+        key: 'Ctrl+F',
+        description: '显示自选股',
+        category: 'panels',
+        action: actions.onFavorite
       })
     }
     
@@ -237,6 +249,21 @@ class KeyboardService {
         description: '显示帮助',
         category: 'other',
         action: actions.onHelp
+      })
+      this.registerShortcut({
+        key: 'Shift+?',
+        description: '显示帮助',
+        category: 'other',
+        action: actions.onHelp
+      })
+    }
+
+    if (actions.onSearch) {
+      this.registerShortcut({
+        key: '/',
+        description: '聚焦搜索框',
+        category: 'search',
+        action: actions.onSearch
       })
     }
   }

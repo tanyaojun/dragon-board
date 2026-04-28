@@ -125,6 +125,7 @@ function performSearch(keyword: string) {
   if (!keyword) {
     hintResults.value = []
     showHint.value = false
+    emit('search', '')
     // 清除高亮
     EventManager.emit('search:clear', {})
     return
@@ -189,6 +190,7 @@ function selectHint(code: string) {
 // 清除搜索
 function clearSearch() {
   emit('update:modelValue', '')
+  emit('search', '')
   hintResults.value = []
   showHint.value = false
   // 清除高亮

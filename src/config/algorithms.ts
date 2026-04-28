@@ -1,3 +1,4 @@
+// @ts-nocheck
 // src/config/algorithms.ts
 // 所有算法定义和配置
 

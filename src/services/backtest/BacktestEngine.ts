@@ -171,34 +171,28 @@ export class BacktestEngine {
    * 加载历史快照
    */
   private async loadHistoricalSnapshots(): Promise<any[]> {
-    const snapshotDates = await dataLayer.getSnapshotDates()
-    const snapshots: any[] = []
-
-    // 过滤日期范围
-    for (const date of snapshotDates) {
-      // 解析日期
-      const match = date.match(/\[\w+\]\s+(\d{4}-\d{2}-\d{2})(?:\s+(\d{2}:\d{2}))?/)
-      if (!match) continue
-
-      const dateStr = match[1]
-      const timeStr = match[2] || '00:00'
-
-      // 检查日期范围
-      if (this.config.startDate && dateStr < this.config.startDate) continue
-      if (this.config.endDate && dateStr > this.config.endDate) continue
-
-      // 加载快照
-      const snapshot = await dataLayer.getSnapshotFromDB(date)
-      if (snapshot) {
-        snapshots.push({
-          ...snapshot,
-          originalKey: date,
-          dateStr,
-          timeStr,
-          timestamp: snapshot.timestamp || Date.parse(`${dateStr}T${timeStr}:00`),
-        })
-      }
-    }
+    const records = await dataLayer.listSnapshots({ sort: 'desc' })
+    const snapshots = records
+      .filter((record) => {
+        const dateStr = record.tradingDate || ''
+        if (this.config.startDate && dateStr < this.config.startDate) return false
+        if (this.config.endDate && dateStr > this.config.endDate) return false
+        return true
+      })
+      .map((record) => {
+        const payload = record.payload || {}
+        return {
+          ...payload,
+          originalKey: record.id,
+          date: record.displayKey || record.id,
+          dateStr: record.tradingDate,
+          timeStr: record.slotTime || '00:00',
+          type: record.type,
+          timestamp: record.timestamp || Date.parse(`${record.tradingDate}T${record.slotTime || '00:00'}:00`),
+          hotlist: Array.isArray(payload.hotlist) ? payload.hotlist : [],
+          metadata: payload.metadata || null,
+        }
+      })
 
     // 按时间排序
     snapshots.sort((a, b) => a.timestamp - b.timestamp)

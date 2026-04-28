@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PlatformTarget>x86</PlatformTarget>
+    <UseAppHost>true</UseAppHost>
+    <RuntimeIdentifiers>win-x86</RuntimeIdentifiers>
+    <AssemblyName>TdxL2Helper</AssemblyName>
+    <RootNamespace>TdxL2Helper</RootNamespace>
+  </PropertyGroup>
+</Project>

@@ -2,41 +2,59 @@
 // 通用数据一致性管理器 - 可被任何模块使用
 
 import type { RepairTask, RepairResult, RepairHandler } from '@/types/algorithm'
-import { stockCache, sectorCache, leaderCache } from '@/services/LRUCache'
-import { EventManager } from '@/utils/eventManager'
+import { stockCache, sectorCache, leaderCache } from '@/services/LRUCache' // ✅ 导入缓存
 
 export class ConsistencyManager {
   private repairHistory: RepairTask[] = []
   private readonly MAX_HISTORY = 100
   private repairHandlers: Map<string, RepairHandler> = new Map()
 
+  // ✅ 新增：统一管理销毁状态
   private destroyed = false
 
+  // ✅ 新增：统一管理取消函数
   private unsubscribeFns: (() => void)[] = []
 
+  // ✅ 新增：统一定时器管理
+  private timers = {
+    autoRepair: null as ReturnType<typeof setInterval> | null,
+    historyCleanup: null as ReturnType<typeof setTimeout> | null,
+  }
+
+  // ✅ 新增：缓存键
   private readonly CACHE_KEY = 'consistency:history'
 
   constructor() {
+    // 注册默认修复处理器
     this.registerDefaultHandlers()
+
+    // ✅ 从缓存恢复历史
     this.loadFromCache()
   }
 
-  // ========== 供协调者调用的方法 ==========
+  // ✅ 新增：从缓存加载
+  private loadFromCache(): void {
+    try {
+      const cached = stockCache.get(this.CACHE_KEY)
+      if (cached && Array.isArray(cached)) {
+        this.repairHistory = cached.slice(-this.MAX_HISTORY)
+      }
+    } catch (e) {
+      // 忽略缓存错误
+    }
+  }
 
-  /**
-   * 后台维护 - 供协调者调用
-   */
-  async runMaintenance(): Promise<void> {
-    if (this.destroyed) return
-    console.log('[ConsistencyManager] 执行后台维护')
-
-    await this.autoRepairAll()
-    this.cleanupHistory()
-    this.saveToCache()
+  // ✅ 新增：保存到缓存
+  private saveToCache(): void {
+    try {
+      stockCache.set(this.CACHE_KEY, this.repairHistory.slice(-50), 60 * 60 * 1000) // 1小时
+    } catch (e) {
+      // 忽略缓存错误
+    }
   }
 
   /**
-   * 初始化
+   * ✅ 新增：初始化方法，返回清理函数
    */
   init(): () => void {
     if (this.destroyed) {
@@ -45,52 +63,67 @@ export class ConsistencyManager {
     }
 
     console.log('[ConsistencyManager] 📊 初始化...')
-    console.log('[ConsistencyManager] ✅ 初始化完成')
 
+    // 启动定时器
+    this.startTimers()
+
+    console.log('[ConsistencyManager] ✅ 初始化完成')
     return () => this.destroy()
   }
 
   /**
-   * 获取状态
+   * ✅ 新增：启动所有定时器
    */
-  getStatus(): any {
-    if (this.destroyed) return null
-
-    return {
-      destroyed: this.destroyed,
-      handlerCount: this.repairHandlers.size,
-      historyCount: this.repairHistory.length,
-      moduleStats: this.getModuleStats(),
-    }
-  }
-
-  // ========== 私有方法 ==========
-
-  private loadFromCache(): void {
-    try {
-      const cached = stockCache.get(this.CACHE_KEY)
-      if (cached && Array.isArray(cached)) {
-        this.repairHistory = cached.slice(-this.MAX_HISTORY)
-      }
-    } catch (e) {}
-  }
-
-  private saveToCache(): void {
-    try {
-      stockCache.set(this.CACHE_KEY, this.repairHistory.slice(-50), 60 * 60 * 1000)
-    } catch (e) {}
+  private startTimers(): void {
+    // ❌ 不再启动独立定时器
+    return
   }
 
   /**
-   * 自动修复所有模块
+   * ✅ 新增：供 RefreshManager 调用的维护方法
+   */
+  async runMaintenance(): Promise<void> {
+    if (this.destroyed) return
+    console.log('[ConsistencyManager] 执行后台维护')
+
+    // 执行自动修复
+    await this.autoRepairAll()
+
+    // 清理历史记录
+    this.cleanupHistory()
+
+    // 保存到缓存
+    this.saveToCache()
+  }
+
+  /**
+   * ✅ 新增：停止所有定时器
+   */
+  private stopTimers(): void {
+    Object.values(this.timers).forEach((timer) => {
+      if (timer) {
+        clearInterval(timer)
+        clearTimeout(timer)
+      }
+    })
+    this.timers = {
+      autoRepair: null,
+      historyCleanup: null,
+    }
+  }
+
+  /**
+   * ✅ 修改：自动修复所有模块（由 runMaintenance 调用）
    */
   private async autoRepairAll(): Promise<void> {
     if (this.destroyed) return
 
     console.log('[ConsistencyManager] 🔧 开始自动修复所有模块...')
 
+    // 遍历所有注册的模块，检查并修复
     for (const [module, handler] of this.repairHandlers) {
       try {
+        // 获取模块的问题列表（需要模块提供检测接口）
         const issues = await this.detectModuleIssues(module)
         if (issues.length > 0) {
           await handler(issues)
@@ -102,15 +135,16 @@ export class ConsistencyManager {
   }
 
   /**
-   * 检测模块问题
+   * ✅ 新增：检测模块问题（需要各模块实现）
    */
   private async detectModuleIssues(module: string): Promise<string[]> {
-    // 可以扩展为调用各模块的检测方法
+    // 这里可以根据不同模块调用对应的检测方法
+    // 目前返回空数组，后续可以扩展
     return []
   }
 
   /**
-   * 清理过期历史
+   * ✅ 新增：清理过期历史
    */
   private cleanupHistory(): void {
     if (this.destroyed) return
@@ -121,7 +155,26 @@ export class ConsistencyManager {
     this.repairHistory = this.repairHistory.filter((task) => task.timestamp > oneWeekAgo)
     console.log(`[ConsistencyManager] 🧹 已清理历史记录，剩余 ${this.repairHistory.length} 条`)
 
+    // ✅ 保存到缓存
     this.saveToCache()
+  }
+
+  /**
+   * ✅ 新增：获取状态
+   */
+  getStatus(): any {
+    if (this.destroyed) return null
+
+    return {
+      destroyed: this.destroyed,
+      handlerCount: this.repairHandlers.size,
+      historyCount: this.repairHistory.length,
+      timers: {
+        autoRepair: !!this.timers.autoRepair,
+        historyCleanup: !!this.timers.historyCleanup,
+      },
+      moduleStats: this.getModuleStats(),
+    }
   }
 
   /**
@@ -137,6 +190,7 @@ export class ConsistencyManager {
    * 注册默认处理器
    */
   private registerDefaultHandlers(): void {
+    // 算法模块处理器
     this.registerHandler('algorithm', async (issues) => {
       let fixedCount = 0
       const details: any = {}
@@ -171,6 +225,7 @@ export class ConsistencyManager {
       }
     })
 
+    // 题材分析模块处理器
     this.registerHandler('sector', async (issues) => {
       let fixedCount = 0
       const details: any = {}
@@ -203,6 +258,7 @@ export class ConsistencyManager {
       }
     })
 
+    // 龙头分析模块处理器
     this.registerHandler('dragon', async (issues) => {
       let fixedCount = 0
       const details: any = {}
@@ -235,6 +291,7 @@ export class ConsistencyManager {
       }
     })
 
+    // 缓存模块处理器
     this.registerHandler('cache', async (issues) => {
       let fixedCount = 0
       const details: any = {}
@@ -265,7 +322,7 @@ export class ConsistencyManager {
   }
 
   /**
-   * 修复问题
+   * 修复问题（添加销毁检查）
    */
   async repair(options: { module: string; type: string; issues: string[] }): Promise<RepairResult> {
     if (this.destroyed) {
@@ -291,8 +348,10 @@ export class ConsistencyManager {
       this.repairHistory.shift()
     }
 
+    // ✅ 保存到缓存
     this.saveToCache()
 
+    // 获取对应的修复处理器
     const handler = this.repairHandlers.get(options.module)
     if (!handler) {
       return {
@@ -323,7 +382,7 @@ export class ConsistencyManager {
   }
 
   /**
-   * 批量修复多个模块的问题
+   * 批量修复多个模块的问题（添加销毁检查）
    */
   async repairBatch(
     repairs: Array<{
@@ -345,7 +404,7 @@ export class ConsistencyManager {
   }
 
   /**
-   * 获取修复历史
+   * 获取修复历史（添加销毁检查）
    */
   getRepairHistory(module?: string): RepairTask[] {
     if (this.destroyed) return []
@@ -357,7 +416,7 @@ export class ConsistencyManager {
   }
 
   /**
-   * 获取最后一次修复
+   * 获取最后一次修复（添加销毁检查）
    */
   getLastRepair(module?: string): RepairTask | null {
     if (this.destroyed) return null
@@ -370,7 +429,7 @@ export class ConsistencyManager {
   }
 
   /**
-   * 获取模块统计
+   * 获取模块统计（添加销毁检查）
    */
   getModuleStats(): Record<string, { total: number; lastRepair: number }> {
     if (this.destroyed) return {}
@@ -389,7 +448,7 @@ export class ConsistencyManager {
   }
 
   /**
-   * 清除修复历史
+   * 清除修复历史（添加销毁检查）
    */
   clearHistory(module?: string): void {
     if (this.destroyed) return
@@ -400,6 +459,7 @@ export class ConsistencyManager {
       this.repairHistory = []
     }
 
+    // ✅ 保存到缓存
     this.saveToCache()
   }
 
@@ -412,6 +472,10 @@ export class ConsistencyManager {
     console.log('[ConsistencyManager] 💥 开始销毁...')
     this.destroyed = true
 
+    // 1. 停止所有定时器
+    this.stopTimers()
+
+    // 2. 清理所有事件监听
     this.unsubscribeFns.forEach((fn) => {
       try {
         fn()
@@ -419,9 +483,11 @@ export class ConsistencyManager {
     })
     this.unsubscribeFns = []
 
+    // 3. 清空历史
     this.repairHistory = []
     this.repairHandlers.clear()
 
+    // 4. 清除缓存
     try {
       stockCache.delete(this.CACHE_KEY)
     } catch (e) {}

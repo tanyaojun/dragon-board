@@ -3,14 +3,11 @@
 import { onMounted, onUnmounted } from 'vue'
 import { useSelectorStore } from '@/stores/selector'
 import { useFavoriteStore } from '@/stores/favorite'
-import { useUIStore } from '@/stores/ui'
 import { EventManager } from '@/utils/eventManager'
-import { AppEvents } from '@/types/config'
 
 export function useStockSelector() {
   const selectorStore = useSelectorStore()
   const favoriteStore = useFavoriteStore()
-  const uiStore = useUIStore()
 
   // 处理表格点击
   function handleTableClick(e: MouseEvent) {
@@ -19,7 +16,6 @@ export function useStockSelector() {
       const code = row.getAttribute('data-code')
       if (code) {
         selectorStore.selectStock(code, { source: 'click' })
-        uiStore.selectStock(code)
       }
     }
   }
@@ -39,12 +35,14 @@ export function useStockSelector() {
         name = nameCell.textContent?.replace(/[👑📈🏆⚔️🔥🐲]/g, '').trim() || code
       }
 
+      // 存储当前股票信息
       const stock = {
         code,
         name,
         isFavorite: code ? favoriteStore.isFavorite(code) : false,
       }
 
+      // 触发自定义事件，让ContextMenu组件处理
       EventManager.emit('contextmenu:show', {
         stock,
         x: e.pageX,
@@ -55,27 +53,30 @@ export function useStockSelector() {
 
   // 处理键盘导航
   function handleKeyDown(e: KeyboardEvent) {
+    // 如果正在输入，不处理导航
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
       return
     }
+
     selectorStore.handleKeyNavigation(e)
   }
 
-  // 处理数据更新 - 重建索引（使用 uiStore 获取数据）
-  async function handleDataUpdate() {
-    const { SearchIndex } = await import('@/services/SearchIndex')
-    const stocks = uiStore.rawStocks
-    if (stocks && stocks.length > 0) {
-      SearchIndex.build(stocks)
-    }
+  // 处理数据更新
+  function handleDataUpdate() {
+    // 重建索引
+    import('@/services/SearchIndex').then(({ SearchIndex }) => {
+      SearchIndex.rebuild()
+    })
   }
 
+  // 设置事件监听
   onMounted(() => {
     document.addEventListener('click', handleTableClick)
     document.addEventListener('contextmenu', handleContextMenu)
     document.addEventListener('keydown', handleKeyDown)
-    EventManager.on(AppEvents.DATA.MERGED, handleDataUpdate)
+    document.addEventListener('data-merged', handleDataUpdate)
 
+    // 初始化
     selectorStore.init()
   })
 
@@ -83,14 +84,11 @@ export function useStockSelector() {
     document.removeEventListener('click', handleTableClick)
     document.removeEventListener('contextmenu', handleContextMenu)
     document.removeEventListener('keydown', handleKeyDown)
-    EventManager.off(AppEvents.DATA.MERGED, handleDataUpdate)
+    document.removeEventListener('data-merged', handleDataUpdate)
   })
 
   return {
-    selectStock: (code: string, options?: { source?: string }) => {
-      selectorStore.selectStock(code, options)
-      uiStore.selectStock(code)
-    },
+    selectStock: selectorStore.selectStock,
     selectedCode: selectorStore.selectedCode,
     selectedStock: selectorStore.selectedStock,
     clearSelection: selectorStore.clearSelection,

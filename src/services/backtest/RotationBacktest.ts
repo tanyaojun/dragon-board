@@ -79,8 +79,20 @@ export class RotationBacktest {
    * 加载数据
    */
   async loadData() {
-    const dates = await dataLayer.getSnapshotDates()
-    this.snapshots = await Promise.all(dates.map(d => dataLayer.getSnapshotFromDB(d)))
+    const records = await dataLayer.listSnapshots({ sort: 'asc' })
+    this.snapshots = records.map((record) => {
+      const payload = record.payload || {}
+      return {
+        ...payload,
+        id: record.id,
+        date: record.displayKey || record.id,
+        tradingDate: record.tradingDate,
+        slotTime: record.slotTime,
+        timestamp: record.timestamp,
+        type: record.type,
+        hotlist: Array.isArray(payload.hotlist) ? payload.hotlist : [],
+      }
+    })
     this.rotationHistory = await dataLayer.getRotationHistory() || []
     
     this.buildPriceCache()

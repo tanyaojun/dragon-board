@@ -2,6 +2,7 @@
 // 最小化测试脚本 - 验证RankTrendAnalyzer功能是否受DataLayer修改影响
 
 import { rankTrendAnalyzer } from '../services/RankTrendAnalyzer'
+import { DEFAULT_RANK_TREND_SNAPSHOT_TYPE } from '../type/rankTrendDefaults'
 
 /**
  * 测试1：验证getSnapshotsByType方法
@@ -11,7 +12,7 @@ async function testGetSnapshotsByType(): Promise<boolean> {
 
   try {
     const analyzer = rankTrendAnalyzer
-    const snapshots = await analyzer.getSnapshotsByType('quarter_hour', { limit: 3 })
+    const snapshots = await analyzer.getSnapshotsByType(DEFAULT_RANK_TREND_SNAPSHOT_TYPE, { limit: 3 })
 
     // 确定性验证
     console.log('  验证1: snapshots应该是数组')
@@ -54,7 +55,7 @@ async function testGetSnapshotsByType(): Promise<boolean> {
       console.log(`  ✅ 通过: 快照${i + 1}有snapshot字段`)
 
       console.log(`  验证6.${i + 1}: 快照类型必须正确`)
-      if (snapshot.snapshot.type !== 'quarter_hour') {
+      if (snapshot.snapshot.type !== DEFAULT_RANK_TREND_SNAPSHOT_TYPE) {
         console.error(`  ❌ 失败: 快照类型不正确`)
         return false
       }
@@ -89,7 +90,7 @@ function testBuildPercentilesHistory(): boolean {
         date: '2026-04-12 10:15',
         timestamp: Date.now() - 3600000,
         snapshot: {
-          type: 'quarter_hour',
+          type: DEFAULT_RANK_TREND_SNAPSHOT_TYPE,
           hotlist: [
             { code: '000001', rank: 1, name: '股票A' },
             { code: '000002', rank: 2, name: '股票B' },
@@ -101,7 +102,7 @@ function testBuildPercentilesHistory(): boolean {
         date: '2026-04-12 10:30',
         timestamp: Date.now() - 1800000,
         snapshot: {
-          type: 'quarter_hour',
+          type: DEFAULT_RANK_TREND_SNAPSHOT_TYPE,
           hotlist: [
             { code: '000002', rank: 1, name: '股票B' },
             { code: '000001', rank: 2, name: '股票A' },

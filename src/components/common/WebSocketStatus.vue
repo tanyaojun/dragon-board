@@ -8,51 +8,54 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { AppEvents } from '@/types'
 import { webSocketService } from '@/services/websocket'
 import { EventManager } from '@/utils/eventManager'
 
 const status = ref(webSocketService.getStatus())
-let interval: ReturnType<typeof setInterval> | null = null
-
-onMounted(() => {
-  updateStatus()
-  interval = setInterval(updateStatus, 1000)
-
-  // 监听 WebSocket 事件
-  EventManager.on('ws:connected', updateStatus)
-})
-
-onUnmounted(() => {
-  if (interval) clearInterval(interval)
-})
+let unsubscribe: (() => void) | null = null
 
 function updateStatus() {
   status.value = webSocketService.getStatus()
 }
 
+onMounted(() => {
+  updateStatus()
+  unsubscribe = EventManager.on(AppEvents.WEBSOCKET.STATUS_CHANGED, updateStatus)
+})
+
+onUnmounted(() => {
+  if (unsubscribe) unsubscribe()
+})
+
+const wsPrimaryActive = computed(() => {
+  void status.value
+  return webSocketService.isPrimaryActive()
+})
+
+const tdxRealtimeHealthy = computed(() => {
+  void status.value
+  return webSocketService.isTdxRealtimeHealthy()
+})
+
 const statusIcon = computed(() => {
-  switch (status.value.status) {
-    case 'connected': return '✅'
-    case 'connecting': return '⏳'
-    case 'mock': return '🎮'
-    default: return '❌'
-  }
+  if (tdxRealtimeHealthy.value) return '✅'
+  if (wsPrimaryActive.value) return '🟡'
+  return '🟠'
 })
 
 const statusText = computed(() => {
-  switch (status.value.status) {
-    case 'connected': return '实时'
-    case 'connecting': return '连接中'
-    case 'mock': return '模拟'
-    default: return '已断开'
-  }
+  if (tdxRealtimeHealthy.value) return 'TDX实时'
+  if (wsPrimaryActive.value) return 'TDX恢复中'
+  return 'HTTP备用'
 })
 
 const statusClass = computed(() => {
-  return `ws-${status.value.status}`
+  if (tdxRealtimeHealthy.value) return 'ws-connected'
+  if (wsPrimaryActive.value) return 'ws-recovering'
+  return 'ws-fallback'
 })
-
 const subscribedCount = computed(() => status.value.subscribedCount)
 </script>
 
@@ -75,12 +78,14 @@ const subscribedCount = computed(() => status.value.subscribedCount)
   color: #ffa502;
 }
 
-.ws-disconnected {
-  color: #ff4757;
+.ws-recovering,
+.ws-stale,
+.ws-fallback {
+  color: #e67e22;
 }
 
-.ws-mock {
-  color: #9b59b6;
+.ws-disconnected {
+  color: #ff4757;
 }
 
 .ws-icon {

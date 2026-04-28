@@ -1,338 +1,408 @@
 <!-- src/components/panels/RankTrendPanel.vue -->
 <template>
   <Teleport to="body">
-    <div v-if="visible" class="rank-trend-panel" :style="panelStyle" ref="panelRef">
-      <!-- 头部 -->
-      <div class="panel-header">
-        <div class="header-left">
-          <button class="back-btn" @click="close">← 返回</button>
-          <h3>
-            🎯 六维信号分析
-            <span class="version-badge">v2.0</span>
-          </h3>
+    <div v-if="visible" ref="panelRef" class="rank-trend-panel" :style="panelStyle">
+      <header class="panel-header">
+        <div class="header-title">
+          <button class="ghost-btn" type="button" @click="close">返回</button>
+          <div>
+            <h3>排名趋势策略</h3>
+            <span>候选池 · 生命周期 · 多周期动量</span>
+          </div>
         </div>
         <div class="panel-actions">
-          <button class="btn-icon" @click="refresh" :class="{ loading }" title="刷新">
-            <span :class="{ 'rotate-animation': loading }">🔄</span>
-          </button>
-          <button class="btn-icon" @click="close" title="关闭">✕</button>
+          <button class="icon-btn" type="button" title="刷新" :class="{ loading }" @click="refresh">↻</button>
+          <button class="icon-btn" type="button" title="关闭" @click="close">×</button>
         </div>
-      </div>
+      </header>
 
-      <!-- 搜索栏 -->
       <div class="search-bar">
-        <input type="text" v-model="searchCode" placeholder="输入股票代码，如 600310" class="search-input"
-          @keyup.enter="loadStock" />
-        <button class="search-btn" @click="loadStock">分析</button>
+        <input
+          v-model.trim="searchCode"
+          class="search-input"
+          type="text"
+          placeholder="输入股票代码"
+          @keyup.enter="loadStock"
+        />
+        <label class="snapshot-select">
+          <span>快照</span>
+          <select v-model="selectedSnapshotType" class="snapshot-input">
+            <option v-for="type in RANK_TREND_SNAPSHOT_TYPES" :key="type" :value="type">
+              {{ snapshotTypeText(type) }}
+            </option>
+          </select>
+        </label>
+        <button class="primary-btn" type="button" @click="loadStock">应用并分析</button>
       </div>
 
-      <!-- 内容区域 -->
-      <div class="panel-content">
-        <!-- 加载状态 -->
-        <div v-if="loading" class="loading-state">
-          <div class="loading-spinner"></div>
-          <span>加载中...</span>
+      <section class="config-card">
+        <div class="config-head">
+          <div>
+            <strong>分析参数</strong>
+            <span>直接作用于当前排名趋势分析器，默认值来自 `rankTrendDefaults.ts`</span>
+          </div>
+          <div class="config-actions">
+            <button class="ghost-btn" type="button" @click="showConfigEditor = !showConfigEditor">
+              {{ showConfigEditor ? '收起参数' : '展开参数' }}
+            </button>
+            <button class="ghost-btn" type="button" @click="resetRuntimeConfig">恢复默认</button>
+          </div>
         </div>
 
-        <!-- 股票信息 -->
+        <div class="config-summary">
+          <span>MACD {{ runtimeConfigForm.macdFast }}/{{ runtimeConfigForm.macdSlow }}/{{ runtimeConfigForm.macdSignal }}</span>
+          <span>综合阈值 {{ runtimeConfigForm.buyScoreThreshold.toFixed(2) }}/{{ runtimeConfigForm.sellScoreThreshold.toFixed(2) }}</span>
+          <span>快照偏好 {{ snapshotTypeText(selectedSnapshotType) }}</span>
+        </div>
+
+        <div v-if="showConfigEditor" class="config-grid">
+          <label class="config-field wide">
+            <span>动量周期</span>
+            <input v-model.trim="runtimeConfigForm.momentumPeriods" type="text" placeholder="3, 5, 8, 13, 21" />
+            <small>固定 5 个值，逗号分隔</small>
+          </label>
+          <label class="config-field wide">
+            <span>动量权重</span>
+            <input v-model.trim="runtimeConfigForm.momentumWeights" type="text" placeholder="0.15, 0.2, 0.25, 0.25, 0.15" />
+            <small>固定 5 个值，会自动归一化</small>
+          </label>
+          <label class="config-field wide">
+            <span>买入阈值组</span>
+            <input v-model.trim="runtimeConfigForm.buyThresholds" type="text" placeholder="5, 8, 12, 15, 20" />
+          </label>
+          <label class="config-field wide">
+            <span>卖出阈值组</span>
+            <input v-model.trim="runtimeConfigForm.sellThresholds" type="text" placeholder="-5, -8, -12, -15, -20" />
+          </label>
+
+          <label class="config-field">
+            <span>MACD Fast</span>
+            <input v-model.number="runtimeConfigForm.macdFast" type="number" min="2" max="60" />
+          </label>
+          <label class="config-field">
+            <span>MACD Slow</span>
+            <input v-model.number="runtimeConfigForm.macdSlow" type="number" min="3" max="120" />
+          </label>
+          <label class="config-field">
+            <span>MACD Signal</span>
+            <input v-model.number="runtimeConfigForm.macdSignal" type="number" min="2" max="60" />
+          </label>
+
+          <label class="config-field">
+            <span>方向权重</span>
+            <input v-model.number="runtimeConfigForm.directionWeight" type="number" min="0.01" max="1" step="0.01" />
+          </label>
+          <label class="config-field">
+            <span>加速度权重</span>
+            <input v-model.number="runtimeConfigForm.accelerationWeight" type="number" min="0.01" max="1" step="0.01" />
+          </label>
+          <label class="config-field">
+            <span>零线权重</span>
+            <input v-model.number="runtimeConfigForm.crossWeight" type="number" min="0.01" max="1" step="0.01" />
+          </label>
+          <label class="config-field">
+            <span>MACD 权重</span>
+            <input v-model.number="runtimeConfigForm.macdWeight" type="number" min="0.01" max="1" step="0.01" />
+          </label>
+          <label class="config-field">
+            <span>买入综合阈值</span>
+            <input v-model.number="runtimeConfigForm.buyScoreThreshold" type="number" min="0.01" max="1" step="0.01" />
+          </label>
+          <label class="config-field">
+            <span>卖出综合阈值</span>
+            <input v-model.number="runtimeConfigForm.sellScoreThreshold" type="number" min="-1" max="-0.01" step="0.01" />
+          </label>
+        </div>
+      </section>
+
+      <main class="panel-content">
+        <div v-if="loading" class="state-view">
+          <div class="loading-spinner"></div>
+          <span>{{ loadingText }}</span>
+        </div>
+
+        <div v-else-if="errorMessage" class="state-view error-view">
+          <strong>{{ errorMessage }}</strong>
+          <span>{{ dataStatus }}</span>
+        </div>
+
         <template v-else-if="currentStock">
-          <!-- 股票头部卡片 -->
-          <div class="stock-header-card">
-            <div class="stock-info">
-              <div class="stock-code">{{ currentStock.code }}</div>
-              <div class="stock-name">{{ currentStock.name }}</div>
-            </div>
-            <div class="stock-change" :class="getChangeClass(currentStock.change)">
-              {{ formatChange(currentStock.change) }}
-            </div>
-          </div>
+          <section class="hero-card" :class="[signalClass(currentStock.finalSignal), tierClass(currentStock.tier)]">
+            <div class="hero-left">
+              <div class="stock-row">
+                <div>
+                  <div class="stock-code">{{ currentStock.code }}</div>
+                  <div class="stock-name">{{ currentStock.name || '-' }}</div>
+                </div>
+                <div class="price-block">
+                  <strong>{{ formatPrice(currentStock.price) }}</strong>
+                  <span :class="changeClass(currentStock.change)">{{ formatPercent(currentStock.change) }}</span>
+                </div>
+              </div>
 
-          <!-- 综合信号大卡片 -->
-          <div class="final-signal-card" :class="getSignalClass(currentStock.finalSignal)">
-            <div class="final-signal-left">
-              <div class="final-signal-label">综合判断</div>
-              <div class="final-signal-value">{{ getSignalText(currentStock.finalSignal) }}</div>
+              <div class="decision-row">
+                <div>
+                  <span class="eyebrow">候选池分层</span>
+                  <h2>{{ tierText(currentStock.tier) }}</h2>
+                </div>
+                <span class="action-badge">{{ actionText(currentStock.action) }}</span>
+              </div>
+
+              <div class="tag-row">
+                <span>{{ signalText(currentStock.finalSignal) }}</span>
+                <span>{{ stageText(currentStock.stage) }}</span>
+                <span>{{ regimeText(currentStock.regimeState) }}</span>
+              </div>
             </div>
-            <div class="final-signal-right">
+
+            <div class="hero-right">
               <div class="confidence-ring">
-                <svg width="50" height="50" viewBox="0 0 60 60">
-                  <circle cx="30" cy="30" r="26" fill="none" stroke="rgba(255,255,255,0.2)" stroke-width="4" />
-                  <circle cx="30" cy="30" r="26" fill="none" stroke="currentColor" stroke-width="4"
-                    :stroke-dasharray="163.36"
-                    :stroke-dashoffset="163.36 * (1 - (currentStock.finalConfidence || 0) / 100)" stroke-linecap="round"
-                    transform="rotate(-90 30 30)" />
-                  <text x="30" y="36" text-anchor="middle" fill="currentColor" font-size="14" font-weight="bold">
-                    {{ Math.round(currentStock.finalConfidence || 0) }}%
-                  </text>
+                <svg viewBox="0 0 76 76" aria-hidden="true">
+                  <circle cx="38" cy="38" r="31" class="ring-bg" />
+                  <circle
+                    cx="38"
+                    cy="38"
+                    r="31"
+                    class="ring-value"
+                    :stroke-dasharray="ringDash"
+                    :stroke-dashoffset="ringOffset(currentStock.finalConfidence)"
+                  />
+                  <text x="38" y="43">{{ Math.round(currentStock.finalConfidence || 0) }}%</text>
                 </svg>
+                <span>策略置信度</span>
               </div>
-              <div class="final-signal-metrics">
-                <div class="metric-item">
-                  <span class="metric-label">排名变化</span>
-                  <span class="metric-value" :class="(currentStock.rankChange || 0) > 0 ? 'up' : 'down'">
-                    {{ formatChange(currentStock.rankChange) }}
-                  </span>
-                </div>
-                <div class="metric-item">
-                  <span class="metric-label">MACD</span>
-                  <span class="metric-value" :class="getCrossClass(currentStock.macdCross)">
-                    {{ getCrossText(currentStock.macdCross) }}
-                  </span>
-                </div>
-              </div>
-            </div>
-          </div>
 
-          <!-- 计算详情卡片 -->
-          <div v-if="signalDetails" class="calculation-detail-card">
-            <div class="detail-header">
-              <span class="detail-title">📐 六维信号计算详情</span>
-              <span class="detail-tip">权重配置: 排名趋势35% | 资金25% | 技术15% | 板块10% | 情绪15%</span>
-            </div>
-            <div class="detail-items">
-              <div v-for="item in signalDetails.items" :key="item.key" class="detail-item"
-                :class="item.signal === 'buy' ? 'detail-buy' : item.signal === 'sell' ? 'detail-sell' : 'detail-hold'">
-                <span class="detail-emoji">{{ item.emoji }}</span>
-                <span class="detail-name">{{ item.name }}</span>
-                <span class="detail-signal">{{ getSignalText(item.signal) }}</span>
-                <span class="detail-conf">({{ item.confidence }}%)</span>
-                <span class="detail-weight">权重{{ item.weight * 100 }}%</span>
-                <span class="detail-contribution">→ {{ item.contributionText }}</span>
-              </div>
-            </div>
-            <div class="detail-result">
-              <span>加权总分 = {{ signalDetails.weightedScore.toFixed(4) }}</span>
-              <span>总权重 = {{ signalDetails.totalWeight }}</span>
-              <span>归一化分数 = {{ signalDetails.weightedScore.toFixed(4) }} / {{ signalDetails.totalWeight }} = {{
-                signalDetails.normalizedScore.toFixed(4) }}</span>
-              <span class="result-badge"
-                :class="signalDetails.finalSignal === 'buy' ? 'result-buy' : signalDetails.finalSignal === 'sell' ? 'result-sell' : 'result-hold'">
-                {{ signalDetails.finalSignal === 'buy' ? '✅ 买入信号' : signalDetails.finalSignal === 'sell' ? '❌ 卖出信号' :
-                  '⏸️ 持有观望' }}
-              </span>
-            </div>
-          </div>
-
-          <!-- 六维信号网格 (2x3) -->
-          <div class="signals-grid">
-            <!-- 1. 排名趋势 -->
-            <div class="signal-card" :class="getSignalClass(currentStock.rankTrendSignal)">
-              <div class="signal-card-header">
-                <span class="signal-icon">📊</span>
-                <span class="signal-name">排名趋势</span>
-                <span class="signal-badge" :class="getSignalClass(currentStock.rankTrendSignal)">
-                  {{ getSignalText(currentStock.rankTrendSignal) }}
-                </span>
-              </div>
-              <div class="signal-confidence">
-                置信度 {{ currentStock.rankTrendConfidence || 0 }}%
-              </div>
-              <div class="signal-metrics">
-                <div class="metric-row">
+              <div class="metric-stack">
+                <div>
+                  <span>当前排名</span>
+                  <strong>{{ currentStock.currentRank || '-' }}</strong>
+                </div>
+                <div>
                   <span>排名变化</span>
-                  <strong :class="(currentStock.rankChange || 0) > 0 ? 'up' : 'down'">
-                    {{ formatChange(currentStock.rankChange) }}
+                  <strong :class="rankChangeClass(currentStock.rankChange)">
+                    {{ formatRankChange(currentStock.rankChange) }}
                   </strong>
                 </div>
-                <div class="metric-row">
-                  <span>综合排名</span>
-                  <strong>{{ currentStock.compRank || '-' }}</strong>
+                <div>
+                  <span>百分位</span>
+                  <strong>{{ formatNumber(currentStock.currentPercentile, 1) }}</strong>
                 </div>
-                <div class="metric-row">
-                  <span>上榜平台</span>
-                  <strong>{{ currentStock.platforms || 0 }}/8</strong>
+              </div>
+            </div>
+          </section>
+
+          <section v-if="!currentStock.rankTrend" class="notice-card">
+            当前股票没有生成排名趋势结果。面板已经按当前 DataLayer 股票列表调用
+            RankTrendAnalyzer，若仍为空，通常是快照样本不足或当前股票未出现在快照热榜中。
+          </section>
+
+          <section v-else class="strategy-card">
+            <div class="section-head">
+              <div>
+                <h4>策略解释</h4>
+                <span>{{ dataStatus }}</span>
+              </div>
+              <strong>{{ sampleQualityText(currentStock.rankTrend) }}</strong>
+            </div>
+
+            <div class="context-grid">
+              <article>
+                <span>市场环境</span>
+                <strong>{{ regimeText(currentStock.regimeState) }}</strong>
+                <small>分数 {{ formatNumber(currentStock.regimeScore, 2) }}</small>
+              </article>
+              <article>
+                <span>生命周期</span>
+                <strong>{{ stageText(currentStock.stage) }}</strong>
+                <small>{{ currentStock.entryReason }}</small>
+              </article>
+              <article>
+                <span>风险压力</span>
+                <strong>{{ formatNumber(currentStock.riskPressure, 2) }}</strong>
+                <small>协同 {{ formatNumber(currentStock.riskSynergy, 2) }}</small>
+              </article>
+            </div>
+
+            <div class="momentum-card">
+              <div class="section-head compact">
+                <div>
+                  <h4>多周期动量</h4>
+                  <span>短冲击 · 中确认 · 长拥挤 · 加速度 · 异动</span>
+                </div>
+                <strong>综合 {{ formatNumber(currentStock.momentum?.composite, 2) }}</strong>
+              </div>
+              <div class="momentum-list">
+                <div v-for="item in momentumRows" :key="item.key" class="momentum-row">
+                  <span>{{ item.label }}</span>
+                  <div class="momentum-track">
+                    <i :class="item.className" :style="{ width: item.width }"></i>
+                  </div>
+                  <strong :class="item.className">{{ item.text }}</strong>
                 </div>
               </div>
             </div>
 
-            <!-- 2. 资金信号 -->
-            <div class="signal-card" :class="getSignalClass(currentStock.moneyFlowSignal)">
-              <div class="signal-card-header">
-                <span class="signal-icon">💰</span>
-                <span class="signal-name">资金信号</span>
-                <span class="signal-badge" :class="getSignalClass(currentStock.moneyFlowSignal)">
-                  {{ getSignalText(currentStock.moneyFlowSignal) }}
-                </span>
-              </div>
-              <div class="signal-confidence">
-                置信度 {{ currentStock.moneyFlowConfidence || 0 }}%
-              </div>
-              <div class="signal-metrics">
-                <div class="metric-row">
-                  <span>主力净额</span>
-                  <strong :class="(currentStock.zlje || 0) > 0 ? 'positive' : 'negative'">
-                    {{ formatMoney(currentStock.zlje) }}
-                  </strong>
-                </div>
-                <div class="metric-row">
-                  <span>主力占比</span>
-                  <strong>{{ (currentStock.zljzb || 0).toFixed(2) }}%</strong>
-                </div>
-                <div class="metric-row">
-                  <span>机构增仓</span>
-                  <strong>{{ formatMoney(currentStock.institutionBuy) }}</strong>
-                </div>
+            <div v-if="strategyReasons.length" class="reason-list">
+              <div v-for="reason in strategyReasons" :key="reason" class="reason-item">
+                {{ reason }}
               </div>
             </div>
+          </section>
 
-            <!-- 3. 技术信号 -->
-            <div class="signal-card" :class="getSignalClass(currentStock.technicalSignal)">
-              <div class="signal-card-header">
-                <span class="signal-icon">⚙️</span>
-                <span class="signal-name">技术信号</span>
-                <span class="signal-badge" :class="getSignalClass(currentStock.technicalSignal)">
-                  {{ getSignalText(currentStock.technicalSignal) }}
-                </span>
+          <section class="signal-card">
+            <div class="section-head compact">
+              <div>
+                <h4>信号拆解</h4>
+                <span>旧信号保留为解释层，不直接等同交易指令</span>
               </div>
-              <div class="signal-confidence">
-                置信度 {{ currentStock.technicalConfidence || 0 }}%
-              </div>
-              <div class="signal-metrics">
-                <div class="metric-row">
-                  <span>量比</span>
-                  <strong>{{ (currentStock.volumeRatio || 0).toFixed(2) }}</strong>
-                </div>
-                <div class="metric-row">
-                  <span>换手率</span>
-                  <strong>{{ (currentStock.turnoverRate || 0).toFixed(2) }}%</strong>
-                </div>
-                <div class="metric-row">
-                  <span>涨跌幅</span>
-                  <strong :class="(currentStock.change || 0) > 0 ? 'up' : 'down'">
-                    {{ formatChange(currentStock.change) }}
-                  </strong>
-                </div>
-              </div>
+              <strong :class="signalClass(currentStock.finalSignal)">
+                {{ signalText(currentStock.finalSignal) }}
+              </strong>
             </div>
+            <div class="signal-grid">
+              <article v-for="item in signalRows" :key="item.key" :class="signalClass(item.signal)">
+                <span>{{ item.label }}</span>
+                <strong>{{ signalText(item.signal) }}</strong>
+                <small>{{ Math.round(item.confidence || 0) }}%</small>
+              </article>
+            </div>
+          </section>
 
-            <!-- 4. 情绪信号 -->
-            <div class="signal-card" :class="getSignalClass(currentStock.marketSentimentSignal)">
-              <div class="signal-card-header">
-                <span class="signal-icon">🌊</span>
-                <span class="signal-name">情绪信号</span>
-                <span class="signal-badge" :class="getSignalClass(currentStock.marketSentimentSignal)">
-                  {{ getSignalText(currentStock.marketSentimentSignal) }}
-                </span>
-              </div>
-              <div class="signal-confidence">
-                置信度 {{ currentStock.marketSentimentConfidence || 0 }}%
-              </div>
-              <div class="signal-metrics">
-                <div class="metric-row">
-                  <span>情绪得分</span>
-                  <strong>{{ breathData?.overall || 0 }}</strong>
-                </div>
-                <div class="metric-row">
-                  <span>情绪阶段</span>
-                  <strong :class="['phase-color', breathData?.phaseName]">
-                    {{ breathData?.phaseName || '-' }}
-                  </strong>
-                </div>
-              </div>
+          <section class="market-card">
+            <div class="market-grid">
+              <article>
+                <span>主力净额</span>
+                <strong :class="numberClass(currentStock.zlje)">{{ formatMoney(currentStock.zlje) }}</strong>
+              </article>
+              <article>
+                <span>主力占比</span>
+                <strong>{{ formatPercent(currentStock.zljzb) }}</strong>
+              </article>
+              <article>
+                <span>量比</span>
+                <strong>{{ formatNumber(currentStock.volumeRatio, 2) }}</strong>
+              </article>
+              <article>
+                <span>换手率</span>
+                <strong>{{ formatPercent(currentStock.turnoverRate) }}</strong>
+              </article>
+              <article>
+                <span>MACD</span>
+                <strong :class="crossClass(currentStock.macdCross)">{{ crossText(currentStock.macdCross) }}</strong>
+              </article>
+              <article>
+                <span>情绪</span>
+                <strong>{{ breathData?.phaseName || '-' }}</strong>
+              </article>
             </div>
+          </section>
 
-            <!-- 5. 板块信号 -->
-            <div class="signal-card" :class="getSignalClass(currentStock.sectorSignal)">
-              <div class="signal-card-header">
-                <span class="signal-icon">📁</span>
-                <span class="signal-name">板块信号</span>
-                <span class="signal-badge" :class="getSignalClass(currentStock.sectorSignal)">
-                  {{ getSignalText(currentStock.sectorSignal) }}
-                </span>
+          <section v-if="rankHistory.length" class="history-card">
+            <div class="section-head compact">
+              <div>
+                <h4>快照排名</h4>
+                <span>{{ historySource }} · 最近 {{ rankHistory.length }} 个样本</span>
               </div>
-              <div class="signal-confidence">
-                置信度 {{ currentStock.sectorConfidence || 0 }}%
-              </div>
-              <div class="signal-metrics">
-                <div class="metric-row">
-                  <span>主要题材</span>
-                  <strong class="themes-text">
-                    {{currentStock.themes?.slice(0, 2).map((t: any) => t.name).join(' · ') || '-'}}
-                  </strong>
-                </div>
-              </div>
+              <strong :class="trendClass">{{ trendText }}</strong>
             </div>
-
-            <!-- 6. MACD 指标卡片 -->
-            <div class="signal-card macd-card">
-              <div class="signal-card-header">
-                <span class="signal-icon">📈</span>
-                <span class="signal-name">MACD 指标</span>
-                <span class="signal-badge" :class="getCrossClass(macdData?.cross)">
-                  {{ getCrossText(macdData?.cross) }}
-                </span>
-              </div>
-              <div class="macd-values">
-                <div class="macd-item">
-                  <span class="macd-label">MACD</span>
-                  <span class="macd-number">{{ macdData?.macd?.toFixed(2) || 0 }}</span>
-                </div>
-                <div class="macd-item">
-                  <span class="macd-label">信号线</span>
-                  <span class="macd-number">{{ macdData?.signal?.toFixed(2) || 0 }}</span>
-                </div>
-                <div class="macd-item">
-                  <span class="macd-label">柱状图</span>
-                  <span class="macd-number" :class="(macdData?.histogram || 0) >= 0 ? 'positive' : 'negative'">
-                    {{ macdData?.histogram?.toFixed(2) || 0 }}
-                  </span>
-                </div>
-              </div>
-              <div class="macd-trend">
-                <span>MA5: {{ macdData?.ma5?.toFixed(2) || 0 }}</span>
-                <span>MA10: {{ macdData?.ma10?.toFixed(2) || 0 }}</span>
-                <span :class="macdData?.maTrend === 'up' ? 'up' : macdData?.maTrend === 'down' ? 'down' : ''">
-                  趋势: {{ macdData?.maTrend === 'up' ? '向上' : macdData?.maTrend === 'down' ? '向下' : '平稳' }}
-                </span>
-              </div>
-            </div>
-          </div>
-
-          <!-- 历史排名趋势 -->
-          <div v-if="rankHistory.length" class="history-section">
-            <div class="section-header">
-              <span class="section-title">📈 历史排名趋势</span>
-              <span class="section-count">最近{{ rankHistory.length }}个快照</span>
-            </div>
-            <!-- 趋势分析 -->
-            <div class="trend-analysis" v-if="rankHistory.length >= 2">
-              <div class="trend-stats">
-                <span>当前排名: {{ rankHistory[rankHistory.length - 1] }}</span>
-                <span>最高排名: {{ Math.min(...rankHistory) }}</span>
-                <span>最低排名: {{ Math.max(...rankHistory) }}</span>
-                <span :class="getTrendClass()">{{ getTrendText() }}</span>
-              </div>
-            </div>
-            <div class="history-chart" ref="chartRef"></div>
-          </div>
+            <div ref="chartRef" class="history-chart"></div>
+          </section>
         </template>
 
-        <!-- 空状态 -->
-        <div v-else class="empty-state">
-          <div class="empty-icon">🔍</div>
-          <div class="empty-text">输入股票代码，查看六维信号</div>
-          <div class="empty-hint">示例: 600396、000601、300750</div>
+        <div v-else class="state-view">
+          <strong>输入股票代码开始分析</strong>
+          <span>面板将从 DataLayer 读取当前榜单，并调用 RankTrendAnalyzer 生成策略结果。</span>
         </div>
-      </div>
+      </main>
 
-      <!-- 底部 -->
-      <div class="panel-footer">
-        <span>🎯 六维信号系统</span>
-        <span>🕒 {{ formatTime(lastUpdate) }}</span>
-      </div>
+      <footer class="panel-footer">
+        <span>{{ dataStatus || '等待分析' }}</span>
+        <span>{{ formatTime(lastUpdate) }}</span>
+      </footer>
     </div>
   </Teleport>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, nextTick, watch } from 'vue'
-import { dataLayer } from '@/services/DataLayer'
-import { usePanel } from '@/composables/usePanel'
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import * as echarts from 'echarts'
+import { usePanel } from '@/composables/usePanel'
+import { dataLayer } from '@/services/DataLayer'
+import { rankTrendAnalyzer, type RankTrendResult } from '@/services/RankTrendAnalyzer'
+import {
+  buildRankTrendSnapshotPriority,
+  cloneDefaultRankTrendRuntimeConfig,
+  DEFAULT_RANK_TREND_SNAPSHOT_TYPE,
+  getRankTrendSnapshotHistoryLimit,
+  getRankTrendSnapshotLabel,
+  RANK_TREND_SNAPSHOT_TYPES,
+  normalizeRankTrendRuntimeConfig,
+  type RankTrendRuntimeDefaults,
+  type RankTrendSnapshotType,
+} from '@/type/rankTrendDefaults'
+
+type Signal = 'buy' | 'sell' | 'hold' | 'none'
+type PreferredSnapshotType = RankTrendSnapshotType
+
+interface RuntimeConfigForm {
+  momentumPeriods: string
+  momentumWeights: string
+  buyThresholds: string
+  sellThresholds: string
+  macdFast: number
+  macdSlow: number
+  macdSignal: number
+  directionWeight: number
+  accelerationWeight: number
+  crossWeight: number
+  macdWeight: number
+  buyScoreThreshold: number
+  sellScoreThreshold: number
+}
+
+interface PanelStockView {
+  code: string
+  name: string
+  price: number
+  change: number
+  zlje: number
+  zljzb: number
+  volumeRatio: number
+  turnoverRate: number
+  currentRank: number
+  currentPercentile: number
+  rankChange: number
+  finalSignal: Signal
+  finalConfidence: number
+  rankTrendSignal: Signal
+  rankTrendConfidence: number
+  accelerationSignal: Signal
+  accelerationConfidence: number
+  crossSignal: Signal
+  crossConfidence: number
+  moneyFlowSignal: Signal
+  moneyFlowConfidence: number
+  sectorSignal: Signal
+  sectorConfidence: number
+  sentimentSignal: Signal
+  sentimentConfidence: number
+  macdCross: string
+  tier: string
+  action: string
+  stage: string
+  regimeState: string
+  regimeScore: number
+  riskPressure: number
+  riskSynergy: number
+  entryReason: string
+  momentum: NonNullable<RankTrendResult['strategy']>['momentum'] | null
+  rankTrend: RankTrendResult | null
+}
 
 const props = defineProps<{
   visible: boolean
   triggerRect?: DOMRect
+  stockCode?: string
 }>()
 
 const emit = defineEmits<{
@@ -352,744 +422,624 @@ const { panelRef, panelStyle } = usePanel({
   onClose: close,
 })
 
+const ringDash = 194.78
 const searchCode = ref('')
+const selectedSnapshotType = ref<PreferredSnapshotType>(DEFAULT_RANK_TREND_SNAPSHOT_TYPE)
+const showConfigEditor = ref(false)
 const loading = ref(false)
-const currentStock = ref<any>(null)
+const loadingText = ref('正在计算策略结构')
+const currentStock = ref<PanelStockView | null>(null)
 const breathData = ref<any>(null)
-const macdData = ref<any>(null)
 const rankHistory = ref<number[]>([])
-const signalDetails = ref<any>(null)
+const historySource = ref('')
+const dataStatus = ref('')
+const errorMessage = ref('')
 const lastUpdate = ref(Date.now())
-
-let chart: echarts.ECharts | null = null
 const chartRef = ref<HTMLElement | null>(null)
+let chart: echarts.ECharts | null = null
+let resizeHandler: (() => void) | null = null
+const runtimeConfigForm = reactive<RuntimeConfigForm>(createRuntimeConfigForm())
 
-// 权重配置
-const weights = {
-  rankTrend: 0.35,      // 排名趋势 35%
-  moneyFlow: 0.25,      // 资金流 25%
-  technical: 0.15,      // 技术 15%
-  sector: 0.10,         // 板块 10%
-  sentiment: 0.15,      // 情绪 15%
+const tierLabels: Record<string, string> = {
+  A_MAIN: '主升确认',
+  B_IGNITION: '新点火',
+  C_CROWDED: '高位拥挤',
+  D_EXIT_RISK: '退潮预警',
+  N_NEUTRAL: '震荡观察',
 }
 
-// 计算六维信号详情
-const calculateSignalDetails = (stock: any) => {
+const actionLabels: Record<string, string> = {
+  focus: '重点跟踪',
+  watch: '观察确认',
+  hold: '持有观察',
+  avoid: '规避追高',
+  exit_watch: '离场观察',
+}
+
+const stageLabels: Record<string, string> = {
+  ignition: '点火',
+  expansion: '扩散',
+  crowded: '拥挤',
+  reversal: '反转',
+  cooling: '冷却',
+}
+
+const regimeLabels: Record<string, string> = {
+  strong: '强势',
+  normal: '常态',
+  weak: '弱势',
+  retreat: '退潮',
+}
+
+const strategyReasons = computed(() => {
+  const reasons = currentStock.value?.rankTrend?.strategy?.reasons
+  return Array.isArray(reasons) ? reasons.filter(Boolean).map(String) : []
+})
+
+const signalRows = computed(() => {
+  const stock = currentStock.value
+  if (!stock) return []
+  return [
+    { key: 'rank', label: '排名趋势', signal: stock.rankTrendSignal, confidence: stock.rankTrendConfidence },
+    { key: 'acceleration', label: '动量加速', signal: stock.accelerationSignal, confidence: stock.accelerationConfidence },
+    { key: 'cross', label: '零线交叉', signal: stock.crossSignal, confidence: stock.crossConfidence },
+    { key: 'money', label: '资金流向', signal: stock.moneyFlowSignal, confidence: stock.moneyFlowConfidence },
+    { key: 'sector', label: '题材板块', signal: stock.sectorSignal, confidence: stock.sectorConfidence },
+    { key: 'sentiment', label: '市场情绪', signal: stock.sentimentSignal, confidence: stock.sentimentConfidence },
+  ]
+})
+
+const momentumRows = computed(() => {
+  const momentum = currentStock.value?.momentum
   const items = [
-    { key: 'rankTrendSignal', confKey: 'rankTrendConfidence', name: '排名趋势', weight: weights.rankTrend, emoji: '📊' },
-    { key: 'moneyFlowSignal', confKey: 'moneyFlowConfidence', name: '资金流向', weight: weights.moneyFlow, emoji: '💰' },
-    { key: 'technicalSignal', confKey: 'technicalConfidence', name: '技术指标', weight: weights.technical, emoji: '⚡' },
-    { key: 'sectorSignal', confKey: 'sectorConfidence', name: '板块题材', weight: weights.sector, emoji: '📁' },
-    { key: 'marketSentimentSignal', confKey: 'marketSentimentConfidence', name: '市场情绪', weight: weights.sentiment, emoji: '🌊' },
+    { key: 'short', label: '短周期', value: momentum?.short },
+    { key: 'mid', label: '中周期', value: momentum?.mid },
+    { key: 'long', label: '长周期', value: momentum?.long },
+    { key: 'acceleration', label: '加速度', value: momentum?.acceleration },
+    { key: 'shock', label: '冲击', value: momentum?.shock },
   ]
 
-  const details = []
-  let weightedScore = 0
-  let totalWeight = 0
-
-  for (const item of items) {
-    const signal = stock[item.key]
-    const conf = stock[item.confKey] || 0
-    let contribution = 0
-    let contributionText = ''
-
-    if (signal === 'buy') {
-      contribution = item.weight * (conf / 100)
-      weightedScore += contribution
-      totalWeight += item.weight
-      contributionText = `+${contribution.toFixed(4)}`
-    } else if (signal === 'sell') {
-      contribution = -item.weight * (conf / 100)
-      weightedScore += contribution
-      totalWeight += item.weight
-      contributionText = `${contribution.toFixed(4)}`
-    } else {
-      contributionText = '不参与'
-    }
-
-    details.push({
+  return items.map((item) => {
+    const value = Number(item.value ?? 0)
+    const abs = Math.min(100, Math.abs(value) * 8)
+    return {
       ...item,
-      signal: signal || 'none',
-      confidence: conf,
-      contribution,
-      contributionText,
-    })
-  }
+      width: `${Math.max(4, abs)}%`,
+      text: signedNumber(value),
+      className: value > 0 ? 'positive' : value < 0 ? 'negative' : 'neutral',
+    }
+  })
+})
 
-  const normalizedScore = totalWeight > 0 ? weightedScore / totalWeight : 0
-  const finalSignal = normalizedScore > 0.25 ? 'buy' : normalizedScore < -0.25 ? 'sell' : 'hold'
+const trendClass = computed(() => {
+  if (rankHistory.value.length < 2) return 'neutral'
+  const first = rankHistory.value[0]
+  const last = rankHistory.value[rankHistory.value.length - 1]
+  if (last < first) return 'positive'
+  if (last > first) return 'negative'
+  return 'neutral'
+})
 
+const trendText = computed(() => {
+  if (rankHistory.value.length < 2) return '样本不足'
+  const first = rankHistory.value[0]
+  const last = rankHistory.value[rankHistory.value.length - 1]
+  const change = first - last
+  if (change > 0) return `上升 ${change} 位`
+  if (change < 0) return `下降 ${Math.abs(change)} 位`
+  return '排名平稳'
+})
+
+function formatRuntimeConfigArray(values: number[]): string {
+  return values.join(', ')
+}
+
+function createRuntimeConfigForm(
+  config: RankTrendRuntimeDefaults = cloneDefaultRankTrendRuntimeConfig(),
+): RuntimeConfigForm {
   return {
-    items: details,
-    weightedScore,
-    totalWeight,
-    normalizedScore,
-    finalSignal,
+    momentumPeriods: formatRuntimeConfigArray(config.momentumPeriods),
+    momentumWeights: formatRuntimeConfigArray(config.momentumWeights),
+    buyThresholds: formatRuntimeConfigArray(config.buyThresholds),
+    sellThresholds: formatRuntimeConfigArray(config.sellThresholds),
+    macdFast: config.macdFast,
+    macdSlow: config.macdSlow,
+    macdSignal: config.macdSignal,
+    directionWeight: config.directionWeight,
+    accelerationWeight: config.accelerationWeight,
+    crossWeight: config.crossWeight,
+    macdWeight: config.macdWeight,
+    buyScoreThreshold: config.buyScoreThreshold,
+    sellScoreThreshold: config.sellScoreThreshold,
   }
 }
 
-const loadStock = async () => {
-  if (!searchCode.value) return
+function applyRuntimeConfigForm(next: RuntimeConfigForm) {
+  runtimeConfigForm.momentumPeriods = next.momentumPeriods
+  runtimeConfigForm.momentumWeights = next.momentumWeights
+  runtimeConfigForm.buyThresholds = next.buyThresholds
+  runtimeConfigForm.sellThresholds = next.sellThresholds
+  runtimeConfigForm.macdFast = next.macdFast
+  runtimeConfigForm.macdSlow = next.macdSlow
+  runtimeConfigForm.macdSignal = next.macdSignal
+  runtimeConfigForm.directionWeight = next.directionWeight
+  runtimeConfigForm.accelerationWeight = next.accelerationWeight
+  runtimeConfigForm.crossWeight = next.crossWeight
+  runtimeConfigForm.macdWeight = next.macdWeight
+  runtimeConfigForm.buyScoreThreshold = next.buyScoreThreshold
+  runtimeConfigForm.sellScoreThreshold = next.sellScoreThreshold
+}
+
+function parseRuntimeConfigSeries(value: string, expectedLength: number, label: string): number[] {
+  const parts = String(value || '')
+    .split(',')
+    .map((item) => Number(item.trim()))
+    .filter((item) => Number.isFinite(item))
+
+  if (parts.length !== expectedLength) {
+    throw new Error(`${label} 需要 ${expectedLength} 个数值，当前为 ${parts.length} 个`)
+  }
+  return parts
+}
+
+function buildRuntimeConfigFromForm(): RankTrendRuntimeDefaults {
+  const defaults = cloneDefaultRankTrendRuntimeConfig()
+  return normalizeRankTrendRuntimeConfig(defaults, {
+    momentumPeriods: parseRuntimeConfigSeries(
+      runtimeConfigForm.momentumPeriods,
+      defaults.momentumPeriods.length,
+      '动量周期',
+    ),
+    momentumWeights: parseRuntimeConfigSeries(
+      runtimeConfigForm.momentumWeights,
+      defaults.momentumWeights.length,
+      '动量权重',
+    ),
+    buyThresholds: parseRuntimeConfigSeries(
+      runtimeConfigForm.buyThresholds,
+      defaults.buyThresholds.length,
+      '买入阈值组',
+    ),
+    sellThresholds: parseRuntimeConfigSeries(
+      runtimeConfigForm.sellThresholds,
+      defaults.sellThresholds.length,
+      '卖出阈值组',
+    ),
+    macdFast: runtimeConfigForm.macdFast,
+    macdSlow: runtimeConfigForm.macdSlow,
+    macdSignal: runtimeConfigForm.macdSignal,
+    directionWeight: runtimeConfigForm.directionWeight,
+    accelerationWeight: runtimeConfigForm.accelerationWeight,
+    crossWeight: runtimeConfigForm.crossWeight,
+    macdWeight: runtimeConfigForm.macdWeight,
+    buyScoreThreshold: runtimeConfigForm.buyScoreThreshold,
+    sellScoreThreshold: runtimeConfigForm.sellScoreThreshold,
+  })
+}
+
+function resetRuntimeConfig() {
+  applyRuntimeConfigForm(createRuntimeConfigForm())
+  rankTrendAnalyzer.updateRuntimeConfig(cloneDefaultRankTrendRuntimeConfig())
+  dataStatus.value = '已恢复排名趋势默认参数'
+}
+
+function applyPanelRuntimeConfig(): RankTrendRuntimeDefaults {
+  const normalized = buildRuntimeConfigFromForm()
+  rankTrendAnalyzer.updateRuntimeConfig(normalized)
+  applyRuntimeConfigForm(createRuntimeConfigForm(normalized))
+  return normalized
+}
+
+function snapshotTypeText(type: PreferredSnapshotType): string {
+  return getRankTrendSnapshotLabel(type)
+}
+
+function normalizeCode(code: string): string {
+  return String(code || '').trim().toUpperCase()
+}
+
+function buildRankMap(stocks: any[]): Map<string, number> {
+  const rankMap = new Map<string, number>()
+  stocks.forEach((stock, index) => {
+    const code = normalizeCode(stock?.code)
+    if (!code) return
+    const rank = Number(stock?.rank ?? stock?.compRank ?? index + 1)
+    rankMap.set(code, Number.isFinite(rank) && rank > 0 ? rank : index + 1)
+  })
+  return rankMap
+}
+
+function getPrice(stock: any): number {
+  return Number(stock?.price ?? stock?.latestPrice ?? stock?.lastPrice ?? stock?.close ?? 0)
+}
+
+function buildPanelStockView(stock: any, analysis: RankTrendResult | null, rank: number): PanelStockView {
+  const strategy = analysis?.strategy
+  const technical = analysis?.technical
+  const cycle = analysis?.cycle
+  const risk = analysis?.risk
+  const finalSignal = (analysis?.decision?.final?.signal ?? stock?.finalSignal ?? 'hold') as Signal
+
+  return {
+    code: normalizeCode(stock?.code),
+    name: String(stock?.name ?? ''),
+    price: getPrice(stock),
+    change: Number(stock?.change ?? 0),
+    zlje: Number(stock?.zlje ?? 0),
+    zljzb: Number(stock?.zljzb ?? 0),
+    volumeRatio: Number(stock?.volumeRatio ?? 0),
+    turnoverRate: Number(stock?.turnoverRate ?? stock?.turnover ?? 0),
+    currentRank: Number(analysis?.meta?.currentRank ?? rank ?? 0),
+    currentPercentile: Number(analysis?.meta?.currentPercentile ?? 0),
+    rankChange: Number(analysis?.meta?.change ?? stock?.rankChange ?? 0),
+    finalSignal,
+    finalConfidence: Number(analysis?.decision?.final?.confidence ?? stock?.finalConfidence ?? 0),
+    rankTrendSignal: (technical?.signals?.direction?.signal ?? stock?.rankTrendSignal ?? 'hold') as Signal,
+    rankTrendConfidence: Number(technical?.signals?.direction?.confidence ?? stock?.rankTrendConfidence ?? 0),
+    accelerationSignal: (technical?.signals?.acceleration?.signal ?? 'hold') as Signal,
+    accelerationConfidence: Number(technical?.signals?.acceleration?.confidence ?? 0),
+    crossSignal: (technical?.signals?.zeroCross?.signal ?? 'hold') as Signal,
+    crossConfidence: Number(technical?.signals?.zeroCross?.confidence ?? 0),
+    moneyFlowSignal: (stock?.moneyFlowSignal ?? 'hold') as Signal,
+    moneyFlowConfidence: Number(stock?.moneyFlowConfidence ?? 0),
+    sectorSignal: (stock?.sectorSignal ?? 'hold') as Signal,
+    sectorConfidence: Number(stock?.sectorConfidence ?? 0),
+    sentimentSignal: finalSignal,
+    sentimentConfidence: Number(analysis?.decision?.final?.confidence ?? 0),
+    macdCross: String(technical?.macd?.cross ?? stock?.macdCross ?? 'none'),
+    tier: String(strategy?.candidateTier ?? 'N_NEUTRAL'),
+    action: String(strategy?.action ?? 'hold'),
+    stage: String(cycle?.stage ?? ''),
+    regimeState: String(strategy?.regime?.state ?? ''),
+    regimeScore: Number(strategy?.regime?.score ?? 0),
+    riskPressure: Number(risk?.pressure ?? 0),
+    riskSynergy: Number(risk?.synergy ?? 0),
+    entryReason: String(cycle?.entryAdvice?.reason ?? '-'),
+    momentum: strategy?.momentum ?? null,
+    rankTrend: analysis,
+  }
+}
+
+async function loadStock() {
+  const code = normalizeCode(searchCode.value)
+  if (!code) return
 
   loading.value = true
-  try {
-    const stocks = dataLayer.getStocks()
-    const stock = stocks.find(s => s.code === searchCode.value)
+  loadingText.value = '读取 DataLayer 当前榜单'
+  errorMessage.value = ''
+  currentStock.value = null
+  rankHistory.value = []
+  disposeChart()
 
-    if (!stock) {
-      loading.value = false
+  try {
+    const runtimeConfig = applyPanelRuntimeConfig()
+    const stocks = dataLayer.getStocks()
+    const rankMap = buildRankMap(stocks)
+    const sourceStock = stocks.find((stock: any) => normalizeCode(stock?.code) === code)
+
+    if (!sourceStock) {
+      errorMessage.value = `未在当前榜单找到 ${code}`
+      dataStatus.value = 'DataLayer 当前股票列表无该代码'
       return
     }
 
-    currentStock.value = stock
+    loadingText.value = `调用 RankTrendAnalyzer 计算（${snapshotTypeText(selectedSnapshotType.value)}）`
+    const results = await rankTrendAnalyzer.getRankTrends(rankMap, {
+      updateSignalStore: false,
+      preferredSnapshotType: selectedSnapshotType.value,
+    })
+    const analysis = results.get(code) ?? (sourceStock.rankTrend as RankTrendResult | undefined) ?? null
+    const rank = rankMap.get(code) ?? Number(sourceStock.compRank ?? 0)
+
+    currentStock.value = buildPanelStockView(sourceStock, analysis, rank)
     breathData.value = dataLayer.getBreathData()
-
-    // 计算 MACD 数据（原有）
-    macdData.value = {
-      macd: stock.macd || 0,
-      signal: stock.macdSignal || 0,
-      histogram: stock.macdHistogram || 0,
-      cross: stock.macdCross || 'none',
-      ma5: stock.ma5 || 0,
-      ma10: stock.ma10 || 0,
-      maTrend: stock.maTrend || 'steady'
-    }
-
-    // ✅ 新增：计算六维信号详情
-    signalDetails.value = calculateSignalDetails(stock)
-
+    const sampleQuality = analysis?.meta?.sampleQuality
+    const runtimeSummary = `${runtimeConfig.macdFast}/${runtimeConfig.macdSlow}/${runtimeConfig.macdSignal}`
+    dataStatus.value = analysis
+      ? `已基于 ${sampleQuality?.snapshotType || selectedSnapshotType.value} 生成，样本 ${sampleQuality?.sampleCount || 0}/${sampleQuality?.requiredSampleCount || 0}，MACD ${runtimeSummary}`
+      : `已应用参数并调用分析器，但当前股票没有有效 rankTrend 结果`
     lastUpdate.value = Date.now()
-    await loadRankHistory(searchCode.value)
+
+    loadingText.value = '加载快照排名曲线'
+    await loadRankHistory(code, selectedSnapshotType.value)
     await nextTick()
     renderChart()
   } catch (error) {
-    console.error('加载失败:', error)
+    console.error('[RankTrendPanel] 加载失败:', error)
+    errorMessage.value = '排名趋势面板加载失败'
+    dataStatus.value = error instanceof Error ? error.message : String(error)
   } finally {
     loading.value = false
   }
 }
 
-const loadRankHistory = async (code: string) => {
-  try {
-    const dates = await dataLayer.getSnapshotDates()
-    const snapshots: { rank: number; timestamp: number; date: string }[] = []
+async function loadRankHistory(code: string, preferredType: PreferredSnapshotType) {
+  const sourcePriority = buildRankTrendSnapshotPriority(preferredType)
 
-    for (const date of dates) {
-      const snapshot = await dataLayer.getSnapshotFromDB(date)
-      if (snapshot?.type === 'daily' && snapshot?.hotlist) {
-        const item = snapshot.hotlist.find((s: any) => s.code === code)
-        if (item && item.rank) {
-          snapshots.push({
-            rank: item.rank,
-            timestamp: snapshot.timestamp || Date.parse(date),
-            date: date
-          })
-        }
-      }
+  for (const sourceType of sourcePriority) {
+    const records = await rankTrendAnalyzer.getSnapshotsByType(sourceType, {
+      limit: getRankTrendSnapshotHistoryLimit(sourceType),
+    })
+    const ranks = records
+      .map((record) => {
+        const hotlist = Array.isArray(record?.snapshot?.hotlist) ? record.snapshot.hotlist : []
+        const index = hotlist.findIndex((item: any) => normalizeCode(item?.code) === code)
+        const item = index >= 0 ? hotlist[index] : null
+        const rank = Number(item?.rank ?? (index >= 0 ? index + 1 : 0))
+        return rank > 0 ? { rank, timestamp: Number(record.timestamp ?? 0) } : null
+      })
+      .filter((item): item is { rank: number; timestamp: number } => Boolean(item))
+      .sort((a, b) => a.timestamp - b.timestamp)
+
+    if (ranks.length >= 2) {
+      rankHistory.value = ranks.map((item) => item.rank)
+      historySource.value = snapshotTypeText(sourceType)
+      return
     }
-
-    snapshots.sort((a, b) => a.timestamp - b.timestamp)
-    rankHistory.value = snapshots.slice(-30).map(s => s.rank)
-
-    console.log(`[RankTrendPanel] 加载 ${code} 历史排名: ${rankHistory.value.length} 个数据点`)
-  } catch (error) {
-    console.error('加载历史排名失败:', error)
-    rankHistory.value = []
   }
+
+  rankHistory.value = []
+  historySource.value = '无有效快照'
 }
 
-const getTrendClass = () => {
-  if (rankHistory.value.length < 2) return ''
-  const first = rankHistory.value[0]
-  const last = rankHistory.value[rankHistory.value.length - 1]
-  if (last < first) return 'trend-up'
-  if (last > first) return 'trend-down'
-  return 'trend-steady'
+function renderChart() {
+  if (!chartRef.value || rankHistory.value.length < 2) return
+  disposeChart()
+
+  chart = echarts.init(chartRef.value)
+  const maxRank = Math.max(...rankHistory.value)
+  const minRank = Math.min(...rankHistory.value)
+
+  chart.setOption({
+    grid: { left: 34, right: 12, top: 18, bottom: 24 },
+    tooltip: {
+      trigger: 'axis',
+      formatter: (params: any) => {
+        const item = Array.isArray(params) ? params[0] : null
+        if (!item) return ''
+        return `排名: ${item.value}<br/>样本: ${item.dataIndex + 1}/${rankHistory.value.length}`
+      },
+    },
+    xAxis: {
+      type: 'category',
+      data: rankHistory.value.map((_, index) => index + 1),
+      axisLine: { lineStyle: { color: '#3a3f4b' } },
+      axisTick: { show: false },
+      axisLabel: { color: '#8c94a3', fontSize: 10 },
+    },
+    yAxis: {
+      type: 'value',
+      inverse: true,
+      min: Math.max(1, minRank - 5),
+      max: maxRank + 5,
+      splitLine: { lineStyle: { color: 'rgba(140,148,163,0.16)', type: 'dashed' } },
+      axisLabel: { color: '#8c94a3', fontSize: 10 },
+    },
+    series: [
+      {
+        type: 'line',
+        data: rankHistory.value,
+        smooth: true,
+        symbol: 'circle',
+        symbolSize: 5,
+        lineStyle: { color: '#4db6ac', width: 2 },
+        itemStyle: { color: '#4db6ac' },
+        areaStyle: { color: 'rgba(77,182,172,0.12)' },
+      },
+    ],
+  })
+
+  setTimeout(() => chart?.resize(), 60)
 }
 
-const getTrendText = () => {
-  if (rankHistory.value.length < 2) return ''
-  const first = rankHistory.value[0]
-  const last = rankHistory.value[rankHistory.value.length - 1]
-  const change = first - last
-  if (change > 0) return `排名上升 ${change} 位`
-  if (change < 0) return `排名下降 ${Math.abs(change)} 位`
-  return '排名平稳'
-}
-
-const renderChart = () => {
-  if (!chartRef.value || rankHistory.value.length === 0) return
-
-  // 销毁旧实例
+function disposeChart() {
   if (chart) {
     chart.dispose()
     chart = null
   }
-
-  // 创建新实例
-  chart = echarts.init(chartRef.value)
-
-  // 计算最大最小值用于 Y 轴范围
-  const maxRank = Math.max(...rankHistory.value)
-  const minRank = Math.min(...rankHistory.value)
-  const yAxisMin = Math.max(1, minRank - 5)
-  const yAxisMax = maxRank + 5
-
-  chart.setOption({
-    grid: {
-      left: '10%',
-      right: '5%',
-      top: 20,
-      bottom: 10,
-      containLabel: true
-    },
-    tooltip: {
-      trigger: 'axis',
-      axisPointer: { type: 'shadow' },
-      formatter: (params: any) => {
-        if (!params || params.length === 0) return ''
-        const data = params[0]
-        const rank = data.value
-        const index = data.dataIndex
-        const total = rankHistory.value.length
-        return `排名: ${rank}<br/>时间点: ${index + 1}/${total}`
-      }
-    },
-    xAxis: {
-      type: 'category',
-      data: rankHistory.value.map((_, i) => i + 1),
-      axisLabel: {
-        show: true,
-        fontSize: 9,
-        color: '#9ca3af',
-        interval: Math.floor(rankHistory.value.length / 10)
-      },
-      axisLine: { show: false },
-      axisTick: { show: false }
-    },
-    yAxis: {
-      type: 'value',
-      name: '排名',
-      nameTextStyle: { fontSize: 10, color: '#9ca3af' },
-      inverse: true,  // 排名越小越好，所以倒置
-      min: yAxisMin,
-      max: yAxisMax,
-      splitLine: { lineStyle: { color: '#2a2a3e', type: 'dashed' } },
-      axisLabel: { fontSize: 10, color: '#9ca3af' }
-    },
-    series: [{
-      type: 'line',
-      data: rankHistory.value,
-      smooth: true,
-      lineStyle: {
-        color: '#ff7f50',
-        width: 2
-      },
-      areaStyle: {
-        color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-          { offset: 0, color: 'rgba(255, 127, 80, 0.3)' },
-          { offset: 1, color: 'rgba(255, 127, 80, 0)' }
-        ])
-      },
-      symbol: 'circle',
-      symbolSize: 4,
-      symbolFill: '#ff7f50',
-      itemStyle: {
-        color: '#ff7f50',
-        borderColor: '#fff',
-        borderWidth: 1
-      },
-      emphasis: {
-        scale: 1.5
-      }
-    }]
-  })
-
-  // 自适应大小
-  setTimeout(() => {
-    chart?.resize()
-  }, 100)
 }
 
-// 工具函数
-const getSignalClass = (signal?: string) => {
-  if (signal === 'buy') return 'signal-buy'
-  if (signal === 'sell') return 'signal-sell'
-  return 'signal-hold'
+function refresh() {
+  if (searchCode.value) loadStock()
 }
 
-const getSignalText = (signal?: string) => {
+function ringOffset(confidence?: number): number {
+  const value = Math.max(0, Math.min(100, Number(confidence ?? 0)))
+  return ringDash * (1 - value / 100)
+}
+
+function signedNumber(value: number): string {
+  if (!Number.isFinite(value)) return '-'
+  return `${value > 0 ? '+' : ''}${value.toFixed(2)}`
+}
+
+function formatNumber(value?: number | null, digits = 2): string {
+  const number = Number(value)
+  if (!Number.isFinite(number)) return '-'
+  return number.toFixed(digits)
+}
+
+function formatPrice(value?: number): string {
+  const number = Number(value)
+  if (!Number.isFinite(number) || number <= 0) return '-'
+  return number.toFixed(2)
+}
+
+function formatPercent(value?: number): string {
+  const number = Number(value)
+  if (!Number.isFinite(number)) return '-'
+  return `${number > 0 ? '+' : ''}${number.toFixed(2)}%`
+}
+
+function formatRankChange(value?: number): string {
+  const number = Number(value)
+  if (!Number.isFinite(number) || number === 0) return '0.00%'
+  return `${number > 0 ? '+' : ''}${number.toFixed(2)}%`
+}
+
+function formatMoney(value?: number): string {
+  const number = Number(value)
+  if (!Number.isFinite(number)) return '-'
+  const abs = Math.abs(number)
+  if (abs >= 1e8) return `${(number / 1e8).toFixed(2)}亿`
+  if (abs >= 1e4) return `${(number / 1e4).toFixed(2)}万`
+  return number.toFixed(0)
+}
+
+function formatTime(timestamp: number): string {
+  const date = new Date(timestamp)
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}:${String(date.getSeconds()).padStart(2, '0')}`
+}
+
+function signalText(signal?: string): string {
   if (signal === 'buy') return '买入'
   if (signal === 'sell') return '卖出'
+  if (signal === 'none') return '无信号'
   return '持有'
 }
 
-const getChangeClass = (change: number) => {
-  if (change > 0) return 'up'
-  if (change < 0) return 'down'
-  return ''
+function tierText(tier?: string): string {
+  return tier ? tierLabels[tier] ?? tier : '-'
 }
 
-const getCrossClass = (cross?: string) => {
-  if (cross === 'golden') return 'golden'
-  if (cross === 'death') return 'death'
-  return ''
+function actionText(action?: string): string {
+  return action ? actionLabels[action] ?? action : '-'
 }
 
-const getCrossText = (cross?: string) => {
+function stageText(stage?: string): string {
+  return stage ? stageLabels[stage] ?? stage : '-'
+}
+
+function regimeText(regime?: string): string {
+  return regime ? regimeLabels[regime] ?? regime : '-'
+}
+
+function crossText(cross?: string): string {
   if (cross === 'golden') return '金叉'
   if (cross === 'death') return '死叉'
   return '无'
 }
 
-const getPhaseColor = (phase?: string) => {
-  // 返回 CSS 变量名，让浏览器解析
-  const colorVars: Record<string, string> = {
-    冰点期: 'var(--phase-ice)',
-    低迷期: 'var(--phase-depressed)',
-    启动期: 'var(--phase-start)',
-    震荡期: 'var(--phase-oscillation)',
-    平稳期: 'var(--phase-stable)',
-    发酵期: 'var(--phase-ferment)',
-    活跃期: 'var(--phase-active)',
-    高潮期: 'var(--phase-climax)',
-    退潮期: 'var(--phase-recession)'
-  }
-  return colorVars[phase || ''] || 'var(--text-secondary)'
+function sampleQualityText(rankTrend: RankTrendResult | null): string {
+  const quality = rankTrend?.meta?.sampleQuality
+  if (!quality) return '实时计算'
+  return `${quality.snapshotType} · ${quality.sampleCount}/${quality.requiredSampleCount} · ${quality.status}`
 }
 
-const formatChange = (value?: number) => {
-  if (value === undefined || value === null) return '-'
-  return (value > 0 ? '+' : '') + value.toFixed(2) + '%'
+function signalClass(signal?: string): string {
+  if (signal === 'buy') return 'is-buy'
+  if (signal === 'sell') return 'is-sell'
+  return 'is-hold'
 }
 
-const formatMoney = (value?: number) => {
-  if (!value && value !== 0) return '-'
-  const abs = Math.abs(value)
-  if (abs >= 1e8) return (value / 1e8).toFixed(2) + '亿'
-  if (abs >= 1e4) return (value / 1e4).toFixed(2) + '万'
-  return value.toString()
+function tierClass(tier?: string): string {
+  return tier ? `tier-${tier}` : 'tier-empty'
 }
 
-const formatTime = (timestamp: number) => {
-  const date = new Date(timestamp)
-  return `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}:${date.getSeconds().toString().padStart(2, '0')}`
+function changeClass(value?: number): string {
+  const number = Number(value)
+  if (number > 0) return 'positive'
+  if (number < 0) return 'negative'
+  return 'neutral'
 }
 
-const refresh = () => {
-  if (searchCode.value) loadStock()
+function rankChangeClass(value?: number): string {
+  const number = Number(value)
+  if (number > 0) return 'positive'
+  if (number < 0) return 'negative'
+  return 'neutral'
 }
 
-// 自动填充股票代码
-watch(() => props.visible, (visible) => {
-  if (visible && props.triggerRect) {
-    const rect = props.triggerRect
-    const target = document.elementFromPoint(rect.left + 10, rect.top + 10) as HTMLElement
-    const row = target?.closest('[data-code]')
-    if (row) {
-      const code = row.getAttribute('data-code')
-      if (code) {
-        searchCode.value = code
-        loadStock()
-      }
+function numberClass(value?: number): string {
+  const number = Number(value)
+  if (number > 0) return 'positive'
+  if (number < 0) return 'negative'
+  return 'neutral'
+}
+
+function crossClass(cross?: string): string {
+  if (cross === 'golden') return 'positive'
+  if (cross === 'death') return 'negative'
+  return 'neutral'
+}
+
+watch(
+  () => [props.visible, props.stockCode],
+  ([visible, stockCode]) => {
+    if (!visible) return
+    const code = normalizeCode(String(stockCode || ''))
+    if (code) {
+      searchCode.value = code
+      loadStock()
     }
-  }
-})
+  },
+  { immediate: true },
+)
 
 onMounted(() => {
-  window.addEventListener('resize', () => chart?.resize())
+  resizeHandler = () => chart?.resize()
+  window.addEventListener('resize', resizeHandler)
 })
 
 onUnmounted(() => {
-  if (chart) {
-    chart.dispose()
-    chart = null
-  }
+  if (resizeHandler) window.removeEventListener('resize', resizeHandler)
+  disposeChart()
 })
 </script>
 
 <style scoped>
-:root {
-  --phase-ice: #7f8c8d;
-  --phase-depressed: #95a5a6;
-  --phase-start: #3498db;
-  --phase-oscillation: #f39c12;
-  --phase-stable: #2ecc71;
-  --phase-ferment: #e67e22;
-  --phase-active: #ff7f50;
-  --phase-climax: #e74c3c;
-  --phase-recession: #9b59b6;
-}
-
 .rank-trend-panel {
   position: fixed;
-  width: 600px;
-  max-width: calc(100vw - 40px);
-  max-height: 85vh;
-  background: var(--bg-primary);
-  border: 1px solid var(--border-color);
-  border-radius: 16px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
-  z-index: 10006;
+  width: 620px;
+  max-width: calc(100vw - 32px);
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  backdrop-filter: blur(10px);
-}
-
-/* 计算详情卡片 */
-.calculation-detail-card {
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  border-radius: 12px;
-  padding: 16px;
-  margin-bottom: 20px;
-}
-
-.detail-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 12px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid var(--border-color);
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.detail-title {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--color-highlight);
-}
-
-.detail-tip {
-  font-size: 10px;
-  color: var(--text-secondary);
-}
-
-/* 详情列表容器 */
-.detail-items {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-bottom: 12px;
-}
-
-/* 单个详情项 */
-.detail-item {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 12px;
-  background: var(--bg-primary);
-  border-radius: 8px;
-  font-size: 12px;
-  flex-wrap: wrap;
-}
-
-/* 买入信号项 */
-.detail-item.detail-buy {
-  border-left: 3px solid #f3091cad;
-  background: rgba(187, 122, 127, 0.842);
-}
-
-/* 卖出信号项 */
-.detail-item.detail-sell {
-  border-left: 3px solid #2ed573;
-  background: rgba(92, 148, 115, 0.897);
-}
-
-/* 持有信号项 */
-.detail-item.detail-hold {
-  border-left: 3px solid #aa8954a8;
-  background: rgba(141, 100, 33, 0.534);
-}
-
-/* 表情符号 */
-.detail-emoji {
-  font-size: 18px;
-  min-width: 28px;
-  text-align: center;
-}
-
-/* 信号名称 */
-.detail-name {
-  width: 70px;
-  font-weight: 500;
   color: var(--text-primary);
-  font-size: 12px;
-}
-
-/* 信号方向文字 */
-.detail-signal {
-  width: 45px;
-  font-weight: 600;
-  font-size: 12px;
-}
-
-.detail-conf,
-.detail-weight {
-  color: #c0c0e0 !important;
-}
-
-
-/* 置信度 */
-.detail-conf {
-  min-width: 70px;
-  color: #c0c0e0;
-  font-family: monospace;
-  font-size: 11px;
-}
-
-/* 权重 */
-.detail-weight {
-  min-width: 80px;
-  color: #c0c0e0;
-  font-family: monospace;
-  font-size: 11px;
-}
-
-/* 贡献值 */
-.detail-contribution {
-  flex: 1;
-  text-align: right;
-  font-family: monospace;
-  font-weight: 600;
-  color: #e0e0e0 !important;
-  font-size: 12px;
-}
-
-/* 结果区域 */
-.detail-result {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding-top: 12px;
-  border-top: 1px solid var(--border-color);
-  font-size: 11px;
-  font-family: monospace;
-  flex-wrap: wrap;
-  gap: 12px;
-  background: var(--bg-primary);
-  padding: 12px;
-  border-radius: 8px;
-  margin-top: 8px;
-}
-
-/* 结果徽章 */
-.result-badge {
-  padding: 5px 14px;
-  border-radius: 20px;
-  font-weight: 700;
-  font-size: 12px;
-}
-
-.result-buy {
-  background: rgba(255, 71, 87, 0.15);
-  color: #960814;
-}
-
-.result-sell {
-  background: rgba(46, 213, 115, 0.15);
-  color: #2ed573;
-}
-
-.result-hold {
-  background: rgba(243, 156, 18, 0.15);
-  color: #f39c12;
-}
-
-
-.detail-result span {
-  color: var(--text-primary);
-  font-size: 11px;
-}
-
-/* ========== 历史排名趋势样式 ========== */
-
-.history-section {
-  margin-top: 16px;
-}
-
-.section-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 12px;
-}
-
-.section-title {
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--text-title);
-}
-
-.section-count {
-  font-size: 10px;
-  padding: 2px 8px;
-  background: var(--bg-primary);
-  border: 1px solid var(--border-color);
+  background: #17191d;
+  border: 1px solid rgba(150, 160, 180, 0.22);
   border-radius: 12px;
-  color: var(--text-secondary);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.42);
+  z-index: 10006;
 }
 
-/* 趋势分析区域 */
-.trend-analysis {
-  margin-bottom: 12px;
-  padding: 10px 14px;
-  background: var(--bg-primary);
-  border-radius: 8px;
-  border: 1px solid var(--border-color);
+.panel-header,
+.panel-footer,
+.search-bar,
+.config-card {
+  flex: 0 0 auto;
 }
 
-.trend-stats {
-  display: flex;
-  gap: 20px;
-  font-size: 11px;
-  flex-wrap: wrap;
-}
-
-.trend-stats span {
-  color: var(--text-secondary);
-}
-
-.trend-stats .trend-up {
-  color: #ff4757;
-  font-weight: 600;
-}
-
-.trend-stats .trend-down {
-  color: #2ed573;
-  font-weight: 600;
-}
-
-.trend-stats .trend-steady {
-  color: #f39c12;
-  font-weight: 600;
-}
-
-/* 图表容器 */
-.history-chart {
-  height: 140px;
-  width: 100%;
-  background: var(--bg-primary);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  padding: 8px;
-}
-
-/* 加载状态 */
-.loading-state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 60px 20px;
-  gap: 16px;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-/* 旋转动画 */
-.rotate-animation {
-  animation: rotate 1s infinite linear;
-  display: inline-block;
-}
-
-@keyframes rotate {
-  from {
-    transform: rotate(0deg);
-  }
-
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-.phase-color.冰点期 {
-  color: #7f8c8d;
-}
-
-.phase-color.低迷期 {
-  color: #95a5a6;
-}
-
-.phase-color.启动期 {
-  color: #3498db;
-}
-
-.phase-color.震荡期 {
-  color: #f39c12;
-}
-
-.phase-color.平稳期 {
-  color: #2ecc71;
-}
-
-.phase-color.发酵期 {
-  color: #e67e22;
-}
-
-.phase-color.活跃期 {
-  color: #ff7f50;
-}
-
-.phase-color.高潮期 {
-  color: #e74c3c;
-}
-
-.phase-color.退潮期 {
-  color: #9b59b6;
-}
-
-/* 头部 */
 .panel-header {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  padding: 16px 20px;
-  border-bottom: 1px solid var(--border-color);
-  background: var(--bg-header);
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  background: #1d2025;
+  border-bottom: 1px solid rgba(150, 160, 180, 0.16);
 }
 
-.header-left {
+.header-title {
   display: flex;
   align-items: center;
   gap: 12px;
+  min-width: 0;
 }
 
-.back-btn {
-  padding: 4px 10px;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  border-radius: 16px;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.back-btn:hover {
-  background: var(--bg-hover);
-  border-color: var(--color-highlight);
-}
-
-.panel-header h3 {
+.header-title h3 {
   margin: 0;
-  font-size: 16px;
-  color: var(--color-highlight);
+  font-size: 15px;
+  line-height: 1.3;
+  color: #f3f5f8;
 }
 
-.version-badge {
-  font-size: 10px;
-  background: var(--color-highlight);
-  color: #000;
-  padding: 2px 6px;
-  border-radius: 12px;
-  margin-left: 8px;
+.header-title span {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  color: #8f98a8;
 }
 
 .panel-actions {
@@ -1097,473 +1047,669 @@ onUnmounted(() => {
   gap: 8px;
 }
 
-.btn-icon {
-  width: 32px;
-  height: 32px;
-  border: 1px solid var(--border-color);
-  background: transparent;
-  border-radius: 8px;
+.ghost-btn,
+.icon-btn,
+.primary-btn {
+  height: 30px;
+  border: 1px solid rgba(150, 160, 180, 0.24);
+  color: #dce2ea;
+  background: #242830;
   cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
 }
 
-.btn-icon:hover {
-  background: var(--bg-hover);
-  border-color: var(--color-highlight);
+.ghost-btn {
+  padding: 0 12px;
+  border-radius: 8px;
 }
 
-/* 搜索栏 */
+.icon-btn {
+  width: 30px;
+  border-radius: 8px;
+  font-size: 16px;
+}
+
+.primary-btn {
+  min-width: 64px;
+  padding: 0 16px;
+  border-color: #4db6ac;
+  border-radius: 8px;
+  background: #4db6ac;
+  color: #071313;
+  font-weight: 700;
+}
+
+.ghost-btn:hover,
+.icon-btn:hover {
+  border-color: #4db6ac;
+}
+
+.icon-btn.loading {
+  color: #4db6ac;
+}
+
+.rotate-animation,
+.icon-btn.loading {
+  animation: rotate 1s linear infinite;
+}
+
 .search-bar {
   display: flex;
-  gap: 12px;
-  padding: 16px 20px;
-  border-bottom: 1px solid var(--border-color);
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  background: #17191d;
+  border-bottom: 1px solid rgba(150, 160, 180, 0.12);
+}
+
+.snapshot-select {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 112px;
+  color: #8f98a8;
+  font-size: 11px;
 }
 
 .search-input {
   flex: 1;
-  padding: 8px 12px;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  border-radius: 20px;
-  font-size: 12px;
+  min-width: 0;
+  height: 32px;
+  padding: 0 12px;
+  color: #f3f5f8;
+  background: #22262d;
+  border: 1px solid rgba(150, 160, 180, 0.22);
+  border-radius: 8px;
+  outline: none;
 }
 
 .search-input:focus {
+  border-color: #4db6ac;
+}
+
+.snapshot-input {
+  height: 32px;
+  padding: 0 10px;
+  color: #f3f5f8;
+  background: #22262d;
+  border: 1px solid rgba(150, 160, 180, 0.22);
+  border-radius: 8px;
   outline: none;
-  border-color: var(--color-highlight);
 }
 
-.search-btn {
-  padding: 8px 20px;
-  background: var(--color-highlight);
-  border: none;
-  border-radius: 20px;
-  font-weight: 500;
-  cursor: pointer;
+.snapshot-input:focus {
+  border-color: #4db6ac;
 }
 
-/* 内容区域 */
+.config-card {
+  padding: 12px 16px 14px;
+  background: #17191d;
+  border-bottom: 1px solid rgba(150, 160, 180, 0.12);
+}
+
+.config-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.config-head strong {
+  display: block;
+  color: #f3f5f8;
+  font-size: 13px;
+}
+
+.config-head span {
+  display: block;
+  margin-top: 3px;
+  color: #8f98a8;
+  font-size: 11px;
+}
+
+.config-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.config-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.config-summary span {
+  padding: 4px 8px;
+  color: #c7ced8;
+  font-size: 11px;
+  border: 1px solid rgba(150, 160, 180, 0.14);
+  border-radius: 999px;
+  background: #202329;
+}
+
+.config-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.config-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.config-field.wide {
+  grid-column: span 3;
+}
+
+.config-field span {
+  color: #a8b0bd;
+  font-size: 11px;
+}
+
+.config-field small {
+  color: #717b8d;
+  font-size: 10px;
+}
+
+.config-field input {
+  height: 32px;
+  padding: 0 10px;
+  color: #f3f5f8;
+  background: #22262d;
+  border: 1px solid rgba(150, 160, 180, 0.22);
+  border-radius: 8px;
+  outline: none;
+}
+
+.config-field input:focus {
+  border-color: #4db6ac;
+}
+
 .panel-content {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
-  padding: 20px;
+  padding: 14px;
 }
 
-/* 股票头部卡片 */
-.stock-header-card {
+.hero-card,
+.strategy-card,
+.signal-card,
+.market-card,
+.history-card,
+.notice-card {
+  margin-bottom: 12px;
+  border: 1px solid rgba(150, 160, 180, 0.16);
+  border-radius: 10px;
+  background: #202329;
+}
+
+.hero-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 176px;
+  gap: 16px;
+  padding: 16px;
+  border-left: 4px solid #8f98a8;
+}
+
+.hero-card.tier-A_MAIN,
+.hero-card.tier-B_IGNITION {
+  border-left-color: #ff6b6b;
+}
+
+.hero-card.tier-C_CROWDED {
+  border-left-color: #f5b84b;
+}
+
+.hero-card.tier-D_EXIT_RISK {
+  border-left-color: #4db6ac;
+}
+
+.stock-row,
+.decision-row,
+.section-head,
+.metric-stack div,
+.market-grid article,
+.signal-grid article,
+.context-grid article {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  padding: 12px 16px;
-  background: var(--bg-secondary);
-  border-radius: 12px;
-  margin-bottom: 16px;
-  border: 1px solid var(--border-color);
+  justify-content: space-between;
+  gap: 12px;
 }
 
 .stock-code {
-  font-size: 20px;
-  font-weight: 700;
-  font-family: monospace;
-  color: var(--text-title);
-}
-
-.stock-name {
-  font-size: 12px;
-  color: var(--text-secondary);
-  margin-top: 2px;
-}
-
-.stock-change {
-  font-size: 24px;
-  font-weight: 700;
-}
-
-.stock-change.up {
-  color: #ff4757;
-}
-
-.stock-change.down {
-  color: #2ed573;
-}
-
-/* 综合信号卡片 */
-.final-signal-card {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 16px;
-  border-radius: 12px;
-  margin-bottom: 20px;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-}
-
-.final-signal-card.signal-buy {
-  border-left: 4px solid #ff4757;
-}
-
-.final-signal-card.signal-sell {
-  border-left: 4px solid #2ed573;
-}
-
-.final-signal-card.signal-hold {
-  border-left: 4px solid #f39c12;
-}
-
-.final-signal-label {
-  font-size: 11px;
-  color: var(--text-secondary);
-  letter-spacing: 1px;
-}
-
-.final-signal-value {
-  font-size: 28px;
+  font-size: 22px;
   font-weight: 800;
+  letter-spacing: 0;
+  color: #f6f8fb;
 }
 
-.final-signal-card.signal-buy .final-signal-value {
-  color: #ff4757;
+.stock-name,
+.eyebrow,
+.price-block span,
+.metric-stack span,
+.section-head span,
+.context-grid span,
+.context-grid small,
+.market-grid span,
+.signal-grid small,
+.notice-card,
+.panel-footer {
+  color: #8f98a8;
 }
 
-.final-signal-card.signal-sell .final-signal-value {
-  color: #2ed573;
+.price-block {
+  text-align: right;
 }
 
-.final-signal-card.signal-hold .final-signal-value {
-  color: #f39c12;
+.price-block strong {
+  display: block;
+  color: #f6f8fb;
+  font-size: 18px;
 }
 
-.final-signal-right {
+.decision-row {
+  margin-top: 18px;
+}
+
+.decision-row h2 {
+  margin: 4px 0 0;
+  font-size: 30px;
+  line-height: 1.1;
+  color: #f6f8fb;
+}
+
+.action-badge,
+.tag-row span,
+.tier-badge {
+  border: 1px solid rgba(150, 160, 180, 0.18);
+  border-radius: 999px;
+  background: #17191d;
+}
+
+.action-badge {
+  padding: 7px 12px;
+  color: #4db6ac;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.tag-row {
   display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.tag-row span {
+  padding: 4px 9px;
+  color: #c7ced8;
+  font-size: 12px;
+}
+
+.hero-right {
+  display: grid;
+  grid-template-columns: 78px minmax(0, 1fr);
+  gap: 14px;
   align-items: center;
-  gap: 16px;
 }
 
 .confidence-ring {
-  color: var(--color-highlight);
+  color: #4db6ac;
+  text-align: center;
 }
 
-.final-signal-metrics {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+.confidence-ring svg {
+  width: 76px;
+  height: 76px;
 }
 
-.metric-item {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
+.ring-bg,
+.ring-value {
+  fill: none;
+  stroke-width: 6;
+}
+
+.ring-bg {
+  stroke: rgba(150, 160, 180, 0.18);
+}
+
+.ring-value {
+  stroke: currentColor;
+  stroke-linecap: round;
+  transform: rotate(-90deg);
+  transform-origin: 38px 38px;
+}
+
+.confidence-ring text {
+  fill: currentColor;
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.confidence-ring span {
+  display: block;
+  margin-top: 2px;
+  color: #8f98a8;
   font-size: 11px;
 }
 
-.metric-label {
-  color: var(--text-secondary);
-}
-
-.metric-value.up {
-  color: #ff4757;
-}
-
-.metric-value.down {
-  color: #2ed573;
-}
-
-.metric-value.golden {
-  color: #ffd700;
-}
-
-.up,
-.positive {
-  color: #ff4757 !important;
-}
-
-.down,
-.negative {
-  color: #2ed573 !important;
-}
-
-.trend-analysis {
-  margin-bottom: 12px;
-  padding: 8px 12px;
-  background: var(--bg-secondary);
-  border-radius: 8px;
-}
-
-.trend-stats {
-  display: flex;
-  gap: 16px;
-  font-size: 11px;
-  flex-wrap: wrap;
-}
-
-.trend-stats span {
-  color: var(--text-secondary);
-}
-
-.trend-stats .trend-up {
-  color: #ff4757;
-}
-
-.trend-stats .trend-down {
-  color: #2ed573;
-}
-
-.trend-stats .trend-steady {
-  color: #f39c12;
-}
-
-/* 六维信号网格 */
-.signals-grid {
+.metric-stack {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 12px;
-  margin-bottom: 16px;
-}
-
-.signal-card {
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  border-radius: 12px;
-  padding: 12px;
-}
-
-.signal-card.signal-buy {
-  border-left: 3px solid #ff4757;
-}
-
-.signal-card.signal-sell {
-  border-left: 3px solid #2ed573;
-}
-
-.signal-card.signal-hold {
-  border-left: 3px solid #f39c12;
-}
-
-.signal-card-header {
-  display: flex;
-  align-items: center;
   gap: 8px;
-  margin-bottom: 8px;
 }
 
-.signal-icon {
-  font-size: 16px;
+.metric-stack strong {
+  color: #f6f8fb;
 }
 
-.signal-name {
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--text-secondary);
+.strategy-card,
+.signal-card,
+.market-card,
+.history-card,
+.notice-card {
+  padding: 14px;
 }
 
-.signal-badge {
-  margin-left: auto;
-  font-size: 10px;
-  padding: 2px 8px;
-  border-radius: 12px;
-  font-weight: 600;
+.section-head {
+  margin-bottom: 12px;
 }
 
-.signal-badge.signal-buy {
-  background: rgba(255, 71, 87, 0.15);
-  color: #ff4757;
-}
-
-.signal-badge.signal-sell {
-  background: rgba(46, 213, 115, 0.15);
-  color: #2ed573;
-}
-
-.signal-badge.signal-hold {
-  background: rgba(243, 156, 18, 0.15);
-  color: #f39c12;
-}
-
-.signal-confidence {
-  font-size: 10px;
-  color: var(--text-secondary);
+.section-head.compact {
   margin-bottom: 10px;
 }
 
-.signal-metrics {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+.section-head h4 {
+  margin: 0;
+  font-size: 13px;
+  color: #f6f8fb;
 }
 
-.metric-row {
-  display: flex;
-  justify-content: space-between;
+.section-head span,
+.section-head small {
+  display: block;
+  margin-top: 3px;
   font-size: 11px;
+  color: #8f98a8;
 }
 
-.metric-row span:first-child {
-  color: var(--text-secondary);
+.tier-badge {
+  padding: 5px 10px;
+  color: #f6f8fb;
+  font-size: 12px;
+  font-weight: 700;
 }
 
-.metric-row strong {
-  font-weight: 600;
+.tier-badge.tier-A_MAIN,
+.tier-badge.tier-B_IGNITION {
+  color: #ff8f8f;
 }
 
-.metric-row strong.up {
-  color: #ff4757;
+.tier-badge.tier-C_CROWDED {
+  color: #f5b84b;
 }
 
-.metric-row strong.down {
-  color: #2ed573;
+.tier-badge.tier-D_EXIT_RISK {
+  color: #73d6cb;
 }
 
-.metric-row strong.positive {
-  color: #ff4757;
+.context-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
 }
 
-.metric-row strong.negative {
-  color: #2ed573;
+.context-grid article,
+.market-grid article,
+.signal-grid article {
+  min-width: 0;
+  padding: 10px;
+  background: #17191d;
+  border: 1px solid rgba(150, 160, 180, 0.12);
+  border-radius: 8px;
 }
 
-.themes-text {
-  max-width: 140px;
+.context-grid article {
+  display: block;
+}
+
+.context-grid strong {
+  display: block;
+  margin: 7px 0 4px;
+  color: #f6f8fb;
+  font-size: 18px;
+}
+
+.context-grid small {
+  display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-/* MACD 卡片 */
-.macd-card {
-  background: var(--bg-secondary);
+.momentum-card {
+  margin-top: 12px;
+  padding: 12px;
+  background: #17191d;
+  border: 1px solid rgba(150, 160, 180, 0.12);
+  border-radius: 8px;
 }
 
-.macd-values {
-  display: flex;
-  justify-content: space-around;
-  margin-bottom: 10px;
-  padding: 8px 0;
+.momentum-list {
+  display: grid;
+  gap: 8px;
 }
 
-.macd-item {
-  text-align: center;
-}
-
-.macd-label {
-  display: block;
-  font-size: 9px;
-  color: var(--text-secondary);
-  margin-bottom: 2px;
-}
-
-.macd-number {
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.macd-number.positive {
-  color: #ff4757;
-}
-
-.macd-number.negative {
-  color: #2ed573;
-}
-
-.macd-trend {
-  display: flex;
-  justify-content: space-between;
-  padding-top: 8px;
-  border-top: 1px solid var(--border-color);
-  font-size: 10px;
-  color: var(--text-secondary);
-}
-
-.macd-trend .up {
-  color: #ff4757;
-}
-
-.macd-trend .down {
-  color: #2ed573;
-}
-
-/* 历史趋势 */
-.history-section {
-  margin-top: 8px;
-}
-
-.section-header {
-  display: flex;
-  justify-content: space-between;
+.momentum-row {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr) 54px;
+  gap: 10px;
   align-items: center;
-  margin-bottom: 12px;
-}
-
-.section-title {
   font-size: 12px;
-  font-weight: 500;
-  color: var(--text-title);
 }
 
-.section-count {
-  font-size: 10px;
-  padding: 2px 6px;
-  background: var(--bg-primary);
-  border: 1px solid var(--border-color);
-  border-radius: 10px;
-  color: var(--text-secondary);
+.momentum-row span {
+  color: #a8b0bd;
+}
+
+.momentum-row strong {
+  text-align: right;
+  font-family: Consolas, monospace;
+}
+
+.momentum-track {
+  height: 7px;
+  overflow: hidden;
+  background: #2b3038;
+  border-radius: 999px;
+}
+
+.momentum-track i {
+  display: block;
+  height: 100%;
+  min-width: 4px;
+  border-radius: inherit;
+}
+
+.momentum-track i.positive {
+  background: #ff6b6b;
+}
+
+.momentum-track i.negative {
+  background: #4db6ac;
+}
+
+.momentum-track i.neutral {
+  background: #8f98a8;
+}
+
+.reason-list {
+  display: grid;
+  gap: 7px;
+  margin-top: 12px;
+}
+
+.reason-item {
+  padding: 8px 10px;
+  color: #cbd2dd;
+  background: #17191d;
+  border: 1px solid rgba(150, 160, 180, 0.12);
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.signal-grid,
+.market-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.signal-grid article,
+.market-grid article {
+  min-height: 58px;
+}
+
+.signal-grid article {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-rows: auto auto;
+}
+
+.signal-grid span {
+  color: #a8b0bd;
+}
+
+.signal-grid strong,
+.market-grid strong {
+  color: #f6f8fb;
+}
+
+.signal-grid small {
+  grid-column: 1 / -1;
+}
+
+.market-grid article {
+  display: block;
+}
+
+.market-grid strong {
+  display: block;
+  margin-top: 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .history-chart {
-  height: 120px;
   width: 100%;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
+  height: 150px;
+  background: #17191d;
+  border: 1px solid rgba(150, 160, 180, 0.12);
   border-radius: 8px;
-  padding: 8px;
 }
 
-/* 加载和空状态 */
-.loading-state,
-.empty-state {
+.state-view {
+  min-height: 260px;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 60px 20px;
-  gap: 16px;
+  gap: 10px;
+  padding: 24px;
+  text-align: center;
+  color: #8f98a8;
+}
+
+.state-view strong {
+  color: #f6f8fb;
+}
+
+.error-view strong {
+  color: #ff8f8f;
 }
 
 .loading-spinner {
-  width: 40px;
-  height: 40px;
-  border: 3px solid var(--border-color);
-  border-top-color: var(--color-highlight);
+  width: 34px;
+  height: 34px;
+  border: 3px solid rgba(150, 160, 180, 0.18);
+  border-top-color: #4db6ac;
   border-radius: 50%;
-  animation: spin 1s linear infinite;
+  animation: rotate 1s linear infinite;
 }
 
-.empty-icon {
-  font-size: 48px;
-  opacity: 0.5;
-}
-
-.empty-text {
-  font-size: 13px;
-  color: var(--text-secondary);
-}
-
-.empty-hint {
-  font-size: 11px;
-  color: var(--text-tertiary);
-}
-
-/* 页脚 */
 .panel-footer {
-  padding: 10px 20px;
-  border-top: 1px solid var(--border-color);
-  background: var(--bg-header);
-  font-size: 10px;
-  color: var(--text-secondary);
   display: flex;
   justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px;
+  background: #1d2025;
+  border-top: 1px solid rgba(150, 160, 180, 0.14);
+  font-size: 11px;
+}
+
+.positive,
+.is-buy {
+  color: #ff6b6b !important;
+}
+
+.negative,
+.is-sell {
+  color: #4db6ac !important;
+}
+
+.neutral,
+.is-hold {
+  color: #f5b84b !important;
+}
+
+@keyframes rotate {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 640px) {
+  .rank-trend-panel {
+    width: calc(100vw - 18px);
+    max-width: calc(100vw - 18px);
+  }
+
+  .search-bar,
+  .config-head,
+  .config-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .config-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .config-field.wide {
+    grid-column: span 1;
+  }
+
+  .hero-card {
+    grid-template-columns: 1fr;
+  }
+
+  .hero-right {
+    grid-template-columns: 86px minmax(0, 1fr);
+  }
+
+  .context-grid,
+  .signal-grid,
+  .market-grid {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

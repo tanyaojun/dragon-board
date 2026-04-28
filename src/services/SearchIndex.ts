@@ -1,7 +1,7 @@
 // src/services/SearchIndex.ts
 
 import { PinyinUtils } from '../utils/pinyin'
-import { useUIStore } from '../stores/ui'
+import { dataLayer } from './DataLayer'
 
 interface IndexEntry {
   scores: Map<string, number> // code -> score
@@ -33,13 +33,7 @@ export class SearchIndex {
     let stockData = stocks
 
     if (!stockData) {
-      try {
-        const uiStore = useUIStore()
-        stockData = uiStore.rawStocks
-      } catch (e) {
-        console.warn('[SearchIndex] 无法获取股票数据:', e)
-        return false
-      }
+      stockData = dataLayer.getStocks()
     }
 
     if (!stockData || stockData.length === 0) {
@@ -51,10 +45,14 @@ export class SearchIndex {
       this.stockMap.clear()
 
       stockData.forEach((stock, idx) => {
+        const code = String(stock?.code || '').trim()
+        const name = String(stock?.name || '').trim()
+        if (!code) return
+
         // 只存储必要字段，减少内存
-        this.stockMap.set(stock.code, {
-          code: stock.code,
-          name: stock.name,
+        this.stockMap.set(code, {
+          code,
+          name,
           price: stock.price,
           change: stock.change,
           themes: stock.themes?.slice(0, 3),
@@ -62,26 +60,26 @@ export class SearchIndex {
         })
 
         // 1. 代码索引（最高优先级）
-        this.addToIndex(stock.code.toUpperCase(), stock.code, 100)
+        this.addToIndex(code.toUpperCase(), code, 100)
 
-        if (stock.name) {
-          const upperName = stock.name.toUpperCase()
+        if (name) {
+          const upperName = name.toUpperCase()
 
           // 2. 名称全拼（第二优先级）
-          this.addToIndex(upperName, stock.code, 95)
+          this.addToIndex(upperName, code, 95)
 
           // 3. 拼音首字母（第三优先级）
-          const pinyin = PinyinUtils.getPinyinInitials(stock.name)
+          const pinyin = PinyinUtils.getPinyinInitials(name)
           if (pinyin) {
-            this.addToIndex(pinyin.toUpperCase(), stock.code, 90)
+            this.addToIndex(pinyin.toUpperCase(), code, 90)
           }
 
           // 4. 名称前缀匹配（只存储长度为2和3的前缀，减少索引数量）
           if (upperName.length >= 2) {
-            this.addToIndex(upperName.slice(0, 2), stock.code, 85)
+            this.addToIndex(upperName.slice(0, 2), code, 85)
           }
           if (upperName.length >= 3) {
-            this.addToIndex(upperName.slice(0, 3), stock.code, 80)
+            this.addToIndex(upperName.slice(0, 3), code, 80)
           }
         }
       })
@@ -112,7 +110,11 @@ export class SearchIndex {
   }
 
   static search(keyword: string, limit: number = 50): SearchResult[] {
-    if (!keyword || !this.built) return []
+    if (!keyword) return []
+    const currentStocks = dataLayer.getStocks()
+    if ((!this.built || this.stockMap.size !== currentStocks.length) && !this.build(currentStocks)) {
+      return []
+    }
 
     try {
       const results: SearchResult[] = []

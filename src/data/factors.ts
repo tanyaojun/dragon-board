@@ -23,10 +23,10 @@ export const FACTORS: Record<string, Factor> = {
   },
   avgRank: {
     id: 'avgRank',
-    name: '热度排名',
+    name: '均榜排名',
     type: 'rank',
     category: 'market',
-    description: '加权平均热度排名',
+    description: '多平台加权平均榜位',
     calculate: (stock: Stock) => {
       const rank = stock.avgRank || 100
       return Math.max(0, 100 - rank)
@@ -34,7 +34,7 @@ export const FACTORS: Record<string, Factor> = {
     range: [0, 100],
     unit: '名',
     invert: true,
-    example: '热度排名第1得99分，排名第100得0分',
+    example: '均榜排名第1得99分，排名第100得0分',
   },
   marketCap: {
     id: 'marketCap',

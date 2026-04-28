@@ -1,6 +1,5 @@
 // src/services/LRUCache.ts
 // 优化版：添加分级TTL、批量操作、增强统计、修复所有方法
-import { performanceMonitor } from './performanceMonitor'
 interface CacheItem<T> {
   value: T
   timestamp: number
@@ -291,14 +290,6 @@ class LRUCache<T = any> {
       return null
     }
 
-    // 记录缓存访问
-    if (typeof performanceMonitor !== 'undefined' && performanceMonitor) {
-      try {
-        performanceMonitor.recordCacheAccess(!!item, accessTime, this.cacheType)
-      } catch (e) {
-        // 忽略错误
-      }
-    }
 
     // 检查是否过期
     const ttl = item.type ? this.getTTLForType(item.type) : this.defaultTTL
@@ -1064,16 +1055,11 @@ class CacheManager {
     type?: string,
     tags?: string[],
   ): Promise<T> {
-    const cached = this.get(key)
-    if (cached !== undefined) {
-      this.stats.hits++
-      return cached as T
+    const cache = this.getCache('default') // 获取默认缓存实例
+    if (!cache) {
+      throw new Error('默认缓存实例不存在')
     }
-
-    this.stats.misses++
-    const value = await computeFn()
-    this.set(key, value, type, tags)
-    return value
+    return cache.getOrComputeAsync(key, computeFn, type, tags)
   }
 
   async getOrComputeManyAsync<T>(
@@ -1082,17 +1068,20 @@ class CacheManager {
     type?: string,
     tags?: string[],
   ): Promise<Map<string, T>> {
+    const cache = this.getCache('default')
+    if (!cache) {
+      throw new Error('默认缓存实例不存在')
+    }
+    // 由于 LRUCache 类中没有 getOrComputeManyAsync 方法，这里需要实现一个
     const result = new Map<string, T>()
     const missingKeys: string[] = []
 
     // 检查缓存
     keys.forEach((key) => {
-      const cached = this.get(key)
-      if (cached !== undefined) {
-        this.stats.hits++
+      const cached = cache.get(key)
+      if (cached !== null) {
         result.set(key, cached as T)
       } else {
-        this.stats.misses++
         missingKeys.push(key)
       }
     })
@@ -1101,13 +1090,13 @@ class CacheManager {
     if (missingKeys.length > 0) {
       const computed = await computeFn(missingKeys)
       computed.forEach((value, key) => {
-        this.set(key, value, type, tags)
+        cache.setWithType(key, value, type, tags)
         result.set(key, value)
       })
     }
-
     return result
   }
+
 }
 
 // 导出单例

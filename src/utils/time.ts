@@ -11,11 +11,11 @@ export const isTradingTime = (date: Date = new Date()): boolean => {
   // 法定节假日
   if (isHoliday(date)) return false
 
-  // 上午盘 9:00 - 11:30
-  if (time >= 900 && time < 1200) return true
+  // 上午盘 9:30 - 11:30
+  if (time >= 930 && time < 1200) return true
 
-  // 下午盘 13:00 - 15:30
-  if (time >= 1300 && time <= 1530) return true
+  // 下午盘 13:00 - 15:00
+  if (time >= 1300 && time <= 1500) return true
 
   return false
 }

@@ -1,388 +1,328 @@
-<!-- src/components/panels/DragonHeadPanel.vue -->
-<!-- 优化版：使用组合式函数，统一情绪阶段定义 -->
-
 <template>
   <Teleport to="body">
-    <div v-if="visible" class="dragon-panel" :style="panelStyle" ref="panelRef">
-      <!-- 加载状态 -->
-      <div v-if="loading" class="loading-overlay">
-        <div class="loading-spinner"></div>
-        <span>加载龙头数据...</span>
-      </div>
-
-      <!-- 错误状态 -->
-      <div v-else-if="error" class="error-overlay">
-        <span class="error-icon">⚠️</span>
-        <span>{{ error }}</span>
-        <button class="retry-btn" @click="loadData">重试</button>
-      </div>
-
-      <template v-else>
-        <!-- 头部渐变区域 -->
-        <div class="panel-header" :style="{ background: phaseGradient }">
-          <div class="header-top">
-            <div class="header-left">
-              <span class="panel-icon">🐲</span>
-              <h2>龙头监测</h2>
-            </div>
-            <div class="header-actions">
-              <button class="btn-icon" @click.stop="openThresholdMultiplierPanel" title="阈值乘数配置"
-                :class="{ active: showThresholdPanel }">
-                <span class="icon">⚡</span>
-              </button>
-              <button class="btn-icon" @click="refresh" :class="{ rotating: loading }" title="刷新">
-                <span class="icon">↻</span>
-              </button>
-              <button class="btn-icon close" @click="close" title="关闭">
-                <span class="icon">✕</span>
-              </button>
+    <div v-if="props.visible" ref="panelRef" class="dragon-panel" :style="panelStyle" @click.stop>
+      <div class="panel-header" :style="{ background: phaseGradient }">
+        <div class="header-top">
+          <div class="header-left">
+            <span class="panel-icon">🐲</span>
+            <div class="header-title">
+              <h2>龙头复盘</h2>
+              <div class="header-subtitle">旧版轻面板结构，直接吃当前真龙复盘兼容数据</div>
             </div>
           </div>
 
-          <!-- 情绪卡片 -->
-          <div class="sentiment-card">
-            <div class="sentiment-left">
-              <span class="phase-icon">{{ phaseIcon }}</span>
-              <div class="sentiment-info">
-                <div class="sentiment-phase">{{ sentiment.phase }}</div>
-                <div class="sentiment-score">情绪指数 {{ sentiment.overall.toFixed(1) }}</div>
-              </div>
-            </div>
-            <div class="sentiment-suggestion">{{ sentiment.suggestion }}</div>
-          </div>
-
-          <!-- 统计卡片 -->
-          <div class="stats-grid">
-            <div v-for="stat in leaderStats" :key="stat.label" class="stat-item">
-              <span class="stat-label">{{ stat.label }}</span>
-              <span class="stat-value" :style="{ color: stat.color }">{{ stat.value }}</span>
-            </div>
+          <div class="header-actions">
+            <button class="btn-icon" type="button" title="刷新复盘" :disabled="loading" @click="refresh">
+              <span class="icon">{{ loading ? '⟳' : '↻' }}</span>
+            </button>
+            <button class="btn-icon" type="button" title="导出复盘" :disabled="!leaders.length" @click="exportData">
+              <span class="icon">⤓</span>
+            </button>
+            <button class="btn-icon close" type="button" title="关闭" @click="close">
+              <span class="icon">✕</span>
+            </button>
           </div>
         </div>
 
-        <!-- 变化区域 -->
-        <div class="changes-section" v-if="showChanges">
-          <div class="section-header">
-            <span class="section-title">
-              <span class="title-icon">🔔</span>
-              最近变化
-            </span>
-            <span class="changes-count">{{ changes.length }}</span>
-          </div>
-          <div class="changes-list">
-            <div v-if="changes.length === 0" class="empty-changes">
-              <span class="empty-icon">🕒</span>
-              <span class="empty-text">暂无变化</span>
-            </div>
-            <div v-for="(change, index) in changes.slice(0, 5)" :key="change.time + index" class="change-item"
-              :class="`type-${change.type}`" @click="selectStock(change.code)">
-              <div class="change-left">
-                <span class="change-icon">{{ getChangeIcon(change.type) }}</span>
-                <div class="change-info">
-                  <span class="change-name">{{ change.name || '未知' }}</span>
-                  <span class="change-detail" v-if="change.fromLevel && change.toLevel">
-                    {{ formatLevel(change.fromLevel) }} → {{ formatLevel(change.toLevel) }}
-                  </span>
-                  <span class="change-level" v-else>
-                    {{ change.level || formatLevel(change.toLevel) || change.type }}
-                  </span>
-                </div>
+        <div class="sentiment-card">
+          <div class="sentiment-left">
+            <span class="phase-icon">{{ phaseIcon }}</span>
+            <div class="sentiment-info">
+              <div class="sentiment-phase">{{ sentiment.phaseName }}</div>
+              <div class="sentiment-score">
+                情绪指数 {{ sentiment.overall.toFixed(1) }} · {{ reviewCompleteness }}
               </div>
-              <span class="change-time">{{ formatTimeShort(change.time) }}</span>
             </div>
           </div>
+          <div class="sentiment-suggestion">{{ sentiment.suggestion }}</div>
         </div>
 
-        <!-- 标签栏 -->
-        <div class="tab-bar">
-          <button v-for="tab in tabs" :key="tab.value" class="tab-btn" :class="{ active: view === tab.value }"
-            @click="view = tab.value">
-            <span class="tab-icon">{{ tab.icon }}</span>
-            <span class="tab-label">{{ tab.label }}</span>
-            <span class="tab-count" v-if="tab.count">{{ tab.count }}</span>
+        <div v-if="marketCoreSummary" class="core-banner">
+          <span class="core-label">市场总龙头</span>
+          <button class="core-stock" type="button" @click="openStockDetail(marketCoreSummary.code)">
+            {{ marketCoreSummary.name }}
+          </button>
+          <span class="core-meta">{{ marketCoreSummary.theme }}</span>
+          <span class="core-meta">{{ marketCoreSummary.tradeability }}</span>
+        </div>
+
+        <div class="stats-grid">
+          <div v-for="stat in leaderStats" :key="stat.label" class="stat-item">
+            <span class="stat-label">{{ stat.label }}</span>
+            <span class="stat-value" :style="{ color: stat.color }">{{ stat.value }}</span>
+          </div>
+        </div>
+      </div>
+
+      <div v-if="error" class="inline-alert">{{ error }}</div>
+
+      <div class="changes-section" v-if="recentChanges.length">
+        <div class="section-header">
+          <span class="section-title">
+            <span class="title-icon">🔔</span>
+            最近变化
+          </span>
+          <span class="changes-count">{{ recentChanges.length }}</span>
+        </div>
+
+        <div class="changes-list">
+          <button
+            v-for="change in recentChanges"
+            :key="`${change.code}-${change.timestamp}-${change.type}`"
+            class="change-item"
+            :class="change.className"
+            type="button"
+            @click="openStockDetail(change.code)"
+          >
+            <div class="change-left">
+              <span class="change-icon">{{ change.icon }}</span>
+              <div class="change-info">
+                <span class="change-name">{{ change.name }}</span>
+                <span class="change-detail">{{ change.detail }}</span>
+              </div>
+            </div>
+            <span class="change-time">{{ formatTime(change.timestamp) }}</span>
           </button>
         </div>
+      </div>
 
-        <!-- 内容区域 -->
-        <div class="panel-content" @click.stop>
-          <!-- 列表视图 -->
-          <div v-if="view === 'list'" class="list-view">
-            <!-- 筛选栏 -->
-            <div class="filter-bar">
-              <select class="filter-select" v-model="filterLevel">
-                <option value="all">全部龙头 ({{ leaders.length }})</option>
-                <option v-for="level in levelOptions" :key="level.value" :value="level.value">
-                  {{ level.label }}
-                </option>
-              </select>
-              <select class="filter-select" v-model="sortBy">
-                <option value="score">综合评分</option>
-                <option value="change">涨幅</option>
-                <option value="turnover">成交额</option>
-                <option value="zlje">主力资金</option>
-                <option value="continuousDays">连板天数</option>
-              </select>
-              <button class="btn-sort" @click="toggleSortOrder">
-                <span class="sort-icon">{{ sortOrder === 'desc' ? '↓' : '↑' }}</span>
-              </button>
-            </div>
+      <div class="tab-bar">
+        <button
+          v-for="tab in tabs"
+          :key="tab.value"
+          class="tab-btn"
+          :class="{ active: view === tab.value }"
+          type="button"
+          @click="view = tab.value"
+        >
+          <span class="tab-icon">{{ tab.icon }}</span>
+          <span class="tab-label">{{ tab.label }}</span>
+          <span class="tab-count" v-if="tab.count">{{ tab.count }}</span>
+        </button>
+      </div>
 
-            <!-- 龙头列表 -->
-            <div class="leaders-list">
-              <div v-if="filteredLeaders.length === 0" class="empty-state">
-                <span class="empty-icon">🔍</span>
-                <span class="empty-text">暂无符合条件的龙头</span>
-              </div>
-              <div v-for="leader in filteredLeaders" :key="leader.code" class="leader-card"
-                :class="{ selected: selectedCode === leader.code }" @click="selectLeader(leader.code)">
-                <div class="card-header" :style="{ borderLeftColor: getLevelColor(leader.level) }">
-                  <div class="header-left">
-                    <span class="stock-code">{{ leader.code }}</span>
-                    <span class="stock-name">{{ leader.name }}</span>
-                  </div>
-                  <div class="header-right">
-                    <span class="leader-badge" :style="{
-                      background: getLevelColor(leader.level) + '20',
-                      color: getLevelColor(leader.level),
-                    }">
-                      {{ leader.levelName }}
-                    </span>
-                    <span class="leader-score">{{ Math.round(leader.score) }}</span>
-                  </div>
-                </div>
+      <div class="panel-content">
+        <div v-if="loading && !leaders.length" class="loading-state">
+          <span class="loading-icon">🧭</span>
+          <span class="loading-text">正在重建龙头复盘...</span>
+        </div>
 
-                <div class="card-metrics">
-                  <div class="metric-item">
-                    <span class="metric-label">涨幅</span>
-                    <span class="metric-value" :class="getChangeClass(leader.change)">
-                      {{ formatChange(leader.change) }}
-                    </span>
-                  </div>
-                  <div class="metric-item">
-                    <span class="metric-label">成交额</span>
-                    <span class="metric-value">{{ formatVolume(leader.turnover) }}</span>
-                  </div>
-                  <div class="metric-item">
-                    <span class="metric-label">主力</span>
-                    <span class="metric-value" :class="getMoneyClass(leader.zlje)">
-                      {{ formatVolume(leader.zlje) }}
-                    </span>
-                  </div>
-                  <div class="metric-item" v-if="leader.continuousDays > 1">
-                    <span class="metric-label">连板</span>
-                    <span class="metric-value highlight">{{ leader.continuousDays }}</span>
-                  </div>
-                </div>
+        <div v-else-if="!leaders.length" class="empty-state">
+          <span class="empty-icon">📭</span>
+          <span class="empty-text">当前没有可展示的龙头复盘结果</span>
+          <button class="retry-btn" type="button" @click="refresh">重新加载</button>
+        </div>
 
-                <div class="card-themes" v-if="leader.themes?.length">
-                  <span v-for="theme in leader.themes.slice(0, 2)"
-                    :key="typeof theme === 'string' ? theme : theme?.name || theme" class="theme-tag">
-                    {{ typeof theme === 'string' ? theme : theme?.name || '未知' }}
-                  </span>
-                  <span v-if="leader.themes.length > 2" class="theme-more">
-                    +{{ leader.themes.length - 2 }}
-                  </span>
-                </div>
+        <template v-else-if="view === 'list'">
+          <div class="filter-bar">
+            <select v-model="filterLevel" class="filter-select">
+              <option value="all">全部角色 ({{ leaders.length }})</option>
+              <option v-for="level in levelOptions" :key="level.value" :value="level.value">
+                {{ level.label }} ({{ level.count }})
+              </option>
+            </select>
 
-                <div class="card-reasons" v-if="leader.reasons?.length">
-                  <span v-for="reason in leader.reasons.slice(0, 2)" :key="reason" class="reason-tag">
-                    {{ reason }}
-                  </span>
-                </div>
-              </div>
-            </div>
+            <select v-model="sortBy" class="filter-select">
+              <option value="score">复盘口径分</option>
+              <option value="change">涨幅</option>
+              <option value="turnover">成交额</option>
+              <option value="zlje">主力净额</option>
+              <option value="continuousDays">连板</option>
+              <option value="hotness">热度</option>
+            </select>
+
+            <button class="btn-sort" type="button" @click="toggleSortOrder">
+              <span class="sort-icon">{{ sortOrder === 'desc' ? '↓' : '↑' }}</span>
+            </button>
           </div>
 
-          <!-- 按级别视图 -->
-          <div v-if="view === 'byLevel'" class="bylevel-view">
-            <div class="level-tabs">
-              <button v-for="level in levelTypes" :key="level.value" class="level-tab"
-                :class="{ active: selectedLevel === level.value }" :style="{ color: level.color }"
-                @click="selectedLevel = level.value">
-                <span class="level-icon">{{ level.icon }}</span>
-                <span class="level-name">{{ level.name }}</span>
-              </button>
-            </div>
-            <div class="leaders-list">
-              <div v-if="leadersByLevel.length === 0" class="empty-state">
-                <span class="empty-icon">👑</span>
-                <span class="empty-text">暂无该级别龙头</span>
-              </div>
-              <div v-for="leader in leadersByLevel" :key="leader.code" class="leader-card mini"
-                @click="selectLeader(leader.code)">
-                <div class="card-header">
+          <div class="leaders-list">
+            <div v-for="leader in filteredLeaders" :key="leader.code" class="leader-card" :class="{ selected: selectedCode === leader.code }" @click="selectLeader(leader.code)">
+              <div class="card-header" :style="{ borderLeftColor: leader.levelColor }">
+                <div class="header-left">
                   <span class="stock-code">{{ leader.code }}</span>
-                  <span class="stock-name">{{ leader.name }}</span>
-                  <span class="leader-score">{{ Math.round(leader.score) }}</span>
+                  <button class="stock-name-btn" type="button" @click.stop="openStockDetail(leader.code)">
+                    {{ leader.name }}
+                  </button>
                 </div>
-                <div class="card-change" :class="getChangeClass(leader.change)">
-                  {{ formatChange(leader.change) }}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- 分布视图 -->
-          <div v-if="view === 'distribution'" class="distribution-view">
-            <div class="dist-section">
-              <h4>📊 按级别分布</h4>
-              <div class="dist-chart">
-                <div v-for="(count, level) in distribution.byLevel" :key="level" class="dist-row">
-                  <span class="dist-label" :style="{ color: getLevelColor(level) }">
-                    {{ getLevelName(level) }}
+                <div class="header-right">
+                  <span class="leader-badge" :style="{ background: `${leader.levelColor}20`, color: leader.levelColor }">
+                    {{ leader.levelName }}
                   </span>
-                  <div class="dist-bar-container">
-                    <div class="dist-bar-fill" :style="{
-                      width: (count / (distribution.total || 1)) * 100 + '%',
-                      background: getLevelColor(level),
-                    }"></div>
-                  </div>
-                  <span class="dist-count">{{ count }}</span>
-                </div>
-                <div v-if="Object.keys(distribution.byLevel).length === 0" class="empty-state">
-                  暂无级别数据
+                  <span class="source-badge" :class="leader.source">{{ leader.sourceLabel }}</span>
+                  <span class="authority-badge">{{ leader.authority }}</span>
+                  <span class="leader-score">{{ leader.score }}</span>
                 </div>
               </div>
-            </div>
 
-            <div class="dist-section">
-              <h4>🔥 热门题材分布</h4>
-              <div class="dist-chart">
-                <div v-for="[theme, count] in Object.entries(distribution.byTheme)
-                  .filter(([t]) => t && t !== 'undefined' && t !== 'null' && t.trim() !== '')
-                  .sort((a, b) => b[1] - a[1])
-                  .slice(0, 8)" :key="theme" class="dist-row">
-                  <span class="dist-label" :title="theme">{{ truncateText(theme, 12) }}</span>
-                  <div class="dist-bar-container">
-                    <div class="dist-bar-fill" :style="{
-                      width: (count / (distribution.total || 1)) * 100 + '%',
-                      background: 'linear-gradient(90deg, #ff7f50, #ff4757)',
-                    }"></div>
-                  </div>
-                  <span class="dist-count">{{ count }}</span>
+              <div class="card-metrics">
+                <div class="metric-item">
+                  <span class="metric-label">涨幅</span>
+                  <span class="metric-value" :class="getChangeClass(leader.change)">
+                    {{ formatChange(leader.change) }}
+                  </span>
                 </div>
-                <div v-if="
-                  Object.keys(distribution.byTheme).filter((t) => t && t !== 'undefined')
-                    .length === 0
-                " class="empty-state">
-                  暂无题材数据
+                <div class="metric-item">
+                  <span class="metric-label">热度</span>
+                  <span class="metric-value highlight">{{ formatInteger(leader.hotness) }}</span>
                 </div>
+                <div class="metric-item">
+                  <span class="metric-label">成交额</span>
+                  <span class="metric-value">{{ formatVolume(leader.turnover) }}</span>
+                </div>
+                <div class="metric-item">
+                  <span class="metric-label">主力</span>
+                  <span class="metric-value" :class="getMoneyClass(leader.zlje)">
+                    {{ formatVolume(leader.zlje) }}
+                  </span>
+                </div>
+                <div class="metric-item">
+                  <span class="metric-label">连板</span>
+                  <span class="metric-value highlight">{{ leader.continuousDays }}</span>
+                </div>
+                <div class="metric-item">
+                  <span class="metric-label">操作</span>
+                  <span class="metric-value">{{ leader.tradeability }}</span>
+                </div>
+              </div>
+
+              <div class="card-themes" v-if="leader.themes.length || leader.themeName">
+                <span v-for="theme in leader.themes.slice(0, 2)" :key="theme.key" class="theme-tag">
+                  {{ theme.label }}
+                </span>
+                <span v-if="!leader.themes.length && leader.themeName" class="theme-tag">
+                  {{ leader.themeName }}
+                </span>
+                <span v-if="leader.themes.length > 2" class="theme-more">+{{ leader.themes.length - 2 }}</span>
+              </div>
+
+              <div class="card-reasons" v-if="leader.reasons.length">
+                <span v-for="reason in leader.reasons.slice(0, 3)" :key="reason" class="reason-tag">
+                  {{ reason }}
+                </span>
               </div>
             </div>
           </div>
+        </template>
 
-          <!-- 情绪视图 -->
-          <div v-if="view === 'emotion'" class="emotion-view">
-            <div class="phase-grid">
-              <div v-for="phase in phaseList" :key="phase.value" class="phase-card"
-                :class="{ active: sentiment.phase === phase.name }">
-                <div class="phase-header">
-                  <span class="phase-icon">{{ phase.icon }}</span>
-                  <span class="phase-name">{{ phase.name }}</span>
-                </div>
-                <div class="phase-features">
-                  <div v-for="feature in phase.features" :key="feature" class="feature-item">
-                    <span class="feature-bullet">•</span>
-                    <span class="feature-text">{{ feature }}</span>
-                  </div>
-                </div>
-              </div>
+        <template v-else>
+          <div class="level-tabs">
+            <button
+              v-for="level in levelTypes"
+              :key="level.value"
+              class="level-tab"
+              :class="{ active: selectedLevel === level.value }"
+              :style="{ color: level.color }"
+              type="button"
+              @click="selectedLevel = level.value"
+            >
+              <span class="level-icon">{{ level.icon }}</span>
+              <span class="level-name">{{ level.label }}</span>
+              <span class="tab-count">{{ level.count }}</span>
+            </button>
+          </div>
+
+          <div class="leaders-list">
+            <div v-if="!leadersByLevel.length" class="empty-state">
+              <span class="empty-icon">👑</span>
+              <span class="empty-text">当前角色下没有确认真龙</span>
             </div>
 
-            <!-- 因子权重 -->
-            <div class="factor-section" v-if="emotionFactors.length">
-              <h4>📊 情绪因子权重</h4>
-              <div class="factor-list">
-                <div v-for="factor in emotionFactors" :key="factor.id" class="factor-row">
-                  <span class="factor-name" :title="factor.description">{{ factor.name }}</span>
-                  <div class="factor-bar-container">
-                    <div class="factor-bar-fill" :style="{
-                      width: factor.weight * 100 + '%',
-                      background: getFactorColor(factor.id),
-                    }"></div>
-                  </div>
-                  <span class="factor-value">{{ (factor.weight * 100).toFixed(0) }}%</span>
-                </div>
+            <div v-for="leader in leadersByLevel" :key="leader.code" class="leader-card mini" @click="selectLeader(leader.code)">
+              <div class="mini-main">
+                <button class="stock-name-btn" type="button" @click.stop="openStockDetail(leader.code)">
+                  {{ leader.name }}
+                </button>
+                <span class="mini-code">{{ leader.code }}</span>
+                <span class="source-badge" :class="leader.source">{{ leader.sourceLabel }}</span>
+                <span class="mini-authority">{{ leader.authority }}</span>
+              </div>
+              <div class="mini-side">
+                <span class="mini-score">{{ leader.score }}</span>
+                <span class="card-change" :class="getChangeClass(leader.change)">
+                  {{ formatChange(leader.change) }}
+                </span>
               </div>
             </div>
           </div>
+        </template>
+      </div>
+
+      <div class="panel-footer">
+        <div class="footer-left">
+          <span class="total-count">共 {{ leaders.length }} 条复盘记录</span>
+          <span>确认真龙 {{ trueLeaderRecords.length }} 只</span>
+          <span class="update-time">更新 {{ lastUpdateLabel }}</span>
         </div>
-
-        <!-- 底部 -->
-        <div class="panel-footer">
-          <div class="footer-left">
-            <span class="total-count">共 {{ leaders.length }} 个龙头</span>
-            <span class="update-time">{{ formatTime(lastUpdate) }} 更新</span>
-
-            <!-- 调试区域 -->
-            <div class="debug-actions" v-if="debugMode">
-              <button class="debug-btn" @click="forceRepair" :class="{
-                loading: repairing,
-                success: lastRepairSuccess === true,
-                error: lastRepairSuccess === false,
-              }" :disabled="repairing">
-                <span class="icon">🔧</span>
-                {{ repairing ? '修复中...' : '强制修复一致性' }}
-              </button>
-
-              <div v-if="showDebugPanel" class="debug-panel">
-                <div class="debug-panel-item">
-                  <span class="debug-panel-label">上次修复</span>
-                  <span class="debug-panel-value">{{ lastRepairTime || '从未' }}</span>
-                </div>
-                <div class="debug-panel-item">
-                  <span class="debug-panel-label">修复次数</span>
-                  <span class="debug-panel-value">{{ repairCount || 0 }}</span>
-                </div>
-                <div class="debug-panel-divider"></div>
-                <div class="repair-history">
-                  <div v-for="(item, index) in repairHistory.slice(0, 3)" :key="index" class="repair-history-item">
-                    <span class="repair-time">{{ formatTimeShort(item.time) }}</span>
-                    <span class="repair-count" :class="item.success ? 'success' : 'failed'">
-                      {{ item.success ? '✓' : '✗' }}
-                    </span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-          <div class="footer-right">
-            <button class="btn-text" @click="exportData"><span class="icon">📥</span> 导出</button>
-          </div>
+        <div class="footer-right">
+          <span v-if="reviewData?.summaryLines?.length">{{ reviewData.summaryLines[0] }}</span>
+          <span v-else>高标不等于龙头，热度不等于领导权。</span>
         </div>
-      </template>
+      </div>
     </div>
-
-    <ThresholdMultiplierPanel v-if="showThresholdPanel" :visible="showThresholdPanel" :trigger-rect="thresholdBtnRect"
-      @update:visible="showThresholdPanel = $event" @close="showThresholdPanel = false" />
   </Teleport>
 </template>
 
-
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
-import { dragonAnalyzer } from '@/services/DragonAnalyzer'
-import { dragonBreathAnalyzer } from '@/services/DragonBreathAnalyzer'
-import { algorithmManager } from '@/services/Algorithm'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { AppEvents } from '@/types'
+import { EMOTION_PHASE_BY_NAME, EMOTION_PHASE_LIST } from '@/types/emotion'
 import { dataLayer } from '@/services/DataLayer'
+import { dragonReviewService } from '@/services/dragon/DragonReviewService'
+import {
+  authorityLabel,
+  roleLabel,
+  tradeabilityLabel,
+} from '@/services/dragon/labels'
+import type {
+  AuthorityClass,
+  DragonReviewResult,
+  LeaderRecord,
+  LeaderRole,
+  LeaderTransition,
+} from '@/services/dragon/types'
 import { EventManager } from '@/utils/eventManager'
-import { LEADER_LEVELS, AppEvents, BREATH_FACTORS_META, MARKET_PHASES } from '@/types'
-import type { LeaderInfo, LeaderStats, LeaderChange, LeaderDistribution } from '@/types'
-import ThresholdMultiplierPanel from './ThresholdMultiplierPanel.vue'
 
-// ========== 使用组合式函数 ==========
-import { usePanel } from '@/composables/usePanel'
-import { usePanelData } from '@/composables/usePanelData'
+type ViewMode = 'list' | 'byLevel'
+type SortKey = 'score' | 'change' | 'turnover' | 'zlje' | 'continuousDays' | 'hotness'
 
-// 阈值乘数面板状态
-const showThresholdPanel = ref(false)
-const thresholdBtnRef = ref<HTMLElement | null>(null)
-const thresholdBtnRect = ref<DOMRect | undefined>()
+interface PanelLeader {
+  code: string
+  name: string
+  score: number
+  level: LeaderRole
+  roles: LeaderRole[]
+  levelName: string
+  levelColor: string
+  authority: string
+  tradeability: string
+  themeName: string
+  change: number
+  turnover: number
+  zlje: number
+  continuousDays: number
+  hotness: number
+  themes: Array<{ key: string; label: string }>
+  reasons: string[]
+  source: 'true' | 'height' | 'attention'
+  sourceLabel: string
+}
 
-// 打开阈值乘数配置面板
-const openThresholdMultiplierPanel = (event: MouseEvent) => {
-  thresholdBtnRect.value = (event.currentTarget as HTMLElement).getBoundingClientRect()
-  showThresholdPanel.value = true
+const ROLE_META: Record<LeaderRole, { label: string; icon: string; color: string }> = {
+  MARKET_CORE: { label: '市场总龙头', icon: '👑', color: '#f6c453' },
+  THEME_CORE: { label: '题材真龙', icon: '🎯', color: '#4da3ff' },
+  SPACE_CORE: { label: '空间龙头', icon: '📈', color: '#ff6b6b' },
+  TREND_CORE: { label: '趋势中军', icon: '⚔️', color: '#69db7c' },
+  EMOTION_CORE: { label: '情绪核心', icon: '🔥', color: '#ffa94d' },
+}
+
+const AUTHORITY_SCORE_MAP: Record<AuthorityClass, number> = {
+  TRUE_LEADER: 95,
+  THEME_COMMANDER: 82,
+  CARRY_PROXY: 68,
+  HEIGHT_ONLY: 56,
+  HEAT_ONLY: 52,
+  PSEUDO_LEADER: 35,
 }
 
 const props = defineProps<{
@@ -395,480 +335,505 @@ const emit = defineEmits<{
   (e: 'close'): void
 }>()
 
-// ========== 使用 usePanel 处理面板位置和关闭 ==========
-const { panelRef, panelStyle } = usePanel({
-  name: 'DragonHeadPanel',
-  visible: props.visible,
-  triggerRect: props.triggerRect,
-  triggerSelectors: [
-    '[title*="龙头监测"]',
-    '[title*="潜龙在渊"]',
-    '.nav-center button:nth-child(2)',
-  ],
-  onClose: close,
-})
-
-// ========== 加载状态控制 ==========
-const isLoading = ref(false)
-const isPanelVisible = ref(false)
-const lastLoadTime = ref(0)
-const LOAD_COOLDOWN = 1000 // 1秒冷却
-
-// ========== 使用 usePanelData 处理数据加载 ==========
-const {
-  data,
-  loading,
-  error,
-  loadData: loadPanelData,
-  showToast,
-} = usePanelData({
-  name: 'DragonHeadPanel',
-  fetchData: async () => {
-    // 防止重复加载
-    if (isLoading.value) {
-
-      return data.value
-    }
-
-    isLoading.value = true
-
-
-    try {
-      const stocks = dataLayer.getStocks?.() || []
-
-      if (stocks.length === 0) {
-
-        return {
-          leaders: [],
-          changes: [],
-          stats: null,
-          distribution: { byLevel: {}, byTheme: {}, total: 0 },
-          sentiment: { phase: '未知', overall: 0, riskLevel: '低', suggestion: '暂无数据' },
-          emotionFactors: [],
-        }
-      }
-
-      // 重新计算龙头
-
-      if (dragonAnalyzer.recalculateAll) {
-        await dragonAnalyzer.recalculateAll()
-      }
-
-      // 获取龙头数据
-      const leaders = (dragonAnalyzer.getAllLeaders?.({ limit: 50 }) || []).map((leader) => ({
-        ...leader,
-        name: leader.name || leader.code || '未知',
-      }))
-
-
-      // 获取变化数据
-      const changes = (dragonAnalyzer.getLeaderChanges?.(10) || []).map((change) => {
-        // 处理变化数据...
-        return change
-      })
-
-      // 获取统计和分布
-      const stats = dragonAnalyzer.getStats?.() || null
-      const distribution = dragonAnalyzer.getLeaderDistribution?.() || {
-        byLevel: {},
-        byTheme: {},
-        total: 0,
-      }
-
-      // 获取情绪数据
-      const sentiment = dragonBreathAnalyzer.getMarketSentiment?.() || {
-        phase: '未知',
-        overall: 0,
-        riskLevel: '低',
-        suggestion: '暂无数据',
-      }
-
-      const emotionFactors = loadEmotionFactors()
-
-      return {
-        leaders,
-        changes,
-        stats,
-        distribution,
-        sentiment,
-        emotionFactors,
-      }
-    } catch (err) {
-      console.error('[DragonHeadPanel] 加载数据失败:', err)
-      throw err
-    } finally {
-      isLoading.value = false
-      lastLoadTime.value = Date.now()
-    }
-  },
-})
-
-// ========== 从 data 中提取响应式数据 ==========
-const leaders = computed(() => data.value?.leaders || [])
-const changes = computed(() => data.value?.changes || [])
-const stats = computed(() => data.value?.stats || null)
-const distribution = computed(
-  () => data.value?.distribution || { byLevel: {}, byTheme: {}, total: 0 },
-)
-const sentiment = computed(
-  () =>
-    data.value?.sentiment || {
-      phase: '未知',
-      overall: 0,
-      riskLevel: '低',
-      suggestion: '暂无数据',
-    },
-)
-const emotionFactors = computed(() => data.value?.emotionFactors || [])
-
-// ========== 从 MARKET_PHASES 常量获取阶段信息 ==========
-const currentPhase = computed(() => {
-  return Object.values(MARKET_PHASES).find((p) => p.name === sentiment.value.phase)
-})
-
-const phaseGradient = computed(() => {
-  return currentPhase.value?.gradient || 'linear-gradient(135deg, #2c3e50, #34495e)'
-})
-
-const phaseIcon = computed(() => {
-  return currentPhase.value?.icon || '🌬️'
-})
-
-const phaseList = computed(() => Object.values(MARKET_PHASES))
-
-// ========== 状态 ==========
-const view = ref<'list' | 'byLevel' | 'distribution' | 'emotion'>('list')
-const showChanges = ref(true)
-const selectedLevel = ref<keyof typeof LEADER_LEVELS>('TOTAL')
-const filterLevel = ref('all')
-const sortBy = ref('score')
+const panelRef = ref<HTMLElement | null>(null)
+const reviewData = ref<DragonReviewResult | null>(dragonReviewService.getLatestReview?.() || dataLayer.getDragonReview())
+const loading = ref(false)
+const error = ref('')
+const view = ref<ViewMode>('list')
+const filterLevel = ref<'all' | LeaderRole>('all')
+const selectedLevel = ref<LeaderRole>('MARKET_CORE')
+const sortBy = ref<SortKey>('score')
 const sortOrder = ref<'desc' | 'asc'>('desc')
 const selectedCode = ref<string | null>(null)
-const debugMode = ref(false)
-const lastUpdate = ref(Date.now())
-const unsubscribeEvents: (() => void)[] = []
+const lastUpdate = ref<number | null>(null)
 
-// 调试状态
-const repairing = ref(false)
-const lastRepairSuccess = ref<boolean | null>(null)
-const lastRepairTime = ref<string>('')
-const repairCount = ref(0)
-const repairHistory = ref<Array<{ time: number; success: boolean }>>([])
-const showDebugPanel = ref(false)
+let outsideListenerTimer: ReturnType<typeof setTimeout> | null = null
+let globalListenersBound = false
+const unsubscribeFns: Array<() => void> = []
 
-// ========== 计算属性 ==========
-const levelOptions = computed(() => {
-  return Object.entries(LEADER_LEVELS).map(([key, value]) => ({
-    value: value.name,
-    label: value.name,
-  }))
-})
-
-const levelTypes = computed(() => {
-  return Object.entries(LEADER_LEVELS).map(([key, value]) => ({
-    value: key,
-    name: value.name,
-    icon: value.icon,
-    color: value.color,
-  }))
-})
-
-const leaderStats = computed(() => {
-  const s = stats.value || {
-    totalLeadersCount: 0,
-    continuousLeaders: 0,
-    sectorLeaders: 0,
-    middleLeaders: 0,
-    emotionLeaders: 0,
+const sentiment = computed(() => {
+  const breath = (dataLayer as any).state?.analysis?.breath
+  return {
+    phase: breath?.sentiment?.phase || '震荡期',
+    phaseName: breath?.sentiment?.phaseName || breath?.sentiment?.phase || '震荡期',
+    overall: Number(breath?.sentiment?.overall || 50),
+    suggestion: breath?.sentiment?.suggestion || '等待真龙确认，不追无效热度',
   }
-  return [
-    { label: '总龙头', value: s.totalLeadersCount, color: LEADER_LEVELS.TOTAL.color },
-    { label: '连板', value: s.continuousLeaders, color: LEADER_LEVELS.CONTINUOUS.color },
-    { label: '板块', value: s.sectorLeaders, color: LEADER_LEVELS.SECTOR.color },
-    { label: '中军', value: s.middleLeaders, color: LEADER_LEVELS.MIDDLE.color },
-    { label: '情绪', value: s.emotionLeaders, color: LEADER_LEVELS.EMOTION.color },
-  ]
+})
+
+const currentPhase = computed(() => {
+  return (
+    EMOTION_PHASE_BY_NAME[sentiment.value.phaseName] ||
+    EMOTION_PHASE_BY_NAME[sentiment.value.phase] ||
+    EMOTION_PHASE_LIST.find((item) => item.name === '震荡期') ||
+    {
+      icon: '🌬️',
+      gradient: 'linear-gradient(135deg, #2c3e50, #34495e)',
+    }
+  )
+})
+
+const phaseGradient = computed(() => currentPhase.value?.gradient || 'linear-gradient(135deg, #2c3e50, #34495e)')
+const phaseIcon = computed(() => currentPhase.value?.icon || '🌬️')
+const reviewCompleteness = computed(() => (reviewData.value?.reviewCompleteness === 'complete' ? '完整复盘' : '部分复盘'))
+const lastUpdateLabel = computed(() => formatTime(lastUpdate.value || Date.now()))
+
+const SOURCE_PRIORITY: Record<PanelLeader['source'], number> = {
+  true: 1,
+  height: 2,
+  attention: 3,
+}
+
+const SOURCE_LABELS: Record<PanelLeader['source'], string> = {
+  true: '真龙榜',
+  height: '高标榜',
+  attention: '热度榜',
+}
+
+const panelStyle = computed(() => {
+  const margin = 16
+  const width = Math.min(540, Math.max(360, window.innerWidth - margin * 2))
+  const estimatedHeight = 720
+  const rect = props.triggerRect
+
+  let top = 88
+  let left = window.innerWidth - width - margin
+
+  if (rect) {
+    top = rect.bottom + 8
+    left = Math.min(window.innerWidth - width - margin, Math.max(margin, rect.right - width))
+
+    if (top + estimatedHeight > window.innerHeight - margin) {
+      top = Math.max(margin, rect.top - estimatedHeight - 8)
+    }
+  }
+
+  return {
+    top: `${top}px`,
+    left: `${left}px`,
+    width: `${width}px`,
+  }
+})
+
+const trueLeaderRecords = computed<LeaderRecord[]>(() => {
+  const result = reviewData.value || dragonReviewService.getLatestReview?.() || dataLayer.getDragonReview()
+  if (!result) return []
+
+  const deduped = new Map<string, LeaderRecord>()
+  const addRecord = (record?: LeaderRecord | null) => {
+    if (!record || deduped.has(record.code)) return
+    deduped.set(record.code, record)
+  }
+
+  ;(result.trueLeaders || []).forEach(addRecord)
+  if (result.marketCore && !deduped.has(result.marketCore.code)) {
+    addRecord(result.marketCore)
+  }
+
+  return Array.from(deduped.values())
+})
+
+const leaderRecords = computed<Array<{ record: LeaderRecord; source: PanelLeader['source'] }>>(() => {
+  const result = reviewData.value || dragonReviewService.getLatestReview?.() || dataLayer.getDragonReview()
+  if (!result) return []
+
+  const deduped = new Map<string, { record: LeaderRecord; source: PanelLeader['source'] }>()
+  const addRecord = (record: LeaderRecord | null | undefined, source: PanelLeader['source']) => {
+    if (!record) return
+    const existing = deduped.get(record.code)
+    if (!existing || SOURCE_PRIORITY[source] < SOURCE_PRIORITY[existing.source]) {
+      deduped.set(record.code, { record, source })
+    }
+  }
+
+  ;(result.trueLeaders || []).forEach((record) => addRecord(record, 'true'))
+  ;(result.heightBoard || []).forEach((record) => addRecord(record, 'height'))
+  ;(result.attentionBoard || []).forEach((record) => addRecord(record, 'attention'))
+  if (result.marketCore) addRecord(result.marketCore, 'true')
+
+  return Array.from(deduped.values())
+})
+
+const leaders = computed<PanelLeader[]>(() => {
+  return leaderRecords.value
+    .map(({ record, source }) => {
+      const stock = dataLayer.getStock(record.code)
+      const levelMeta = ROLE_META[record.primaryRole]
+      const themeEntries = (stock?.themes || record.themes || []).map((theme: any, index: number) => ({
+        key: `${record.code}-theme-${index}-${typeof theme === 'string' ? theme : theme?.name || 'unknown'}`,
+        label: typeof theme === 'string' ? theme : theme?.name || '未知题材',
+      }))
+
+      return {
+        code: record.code,
+        name: record.name || stock?.name || record.code,
+        score: AUTHORITY_SCORE_MAP[record.authority] || 50,
+        level: record.primaryRole,
+        roles: [...record.roles],
+        levelName: levelMeta?.label || roleLabel(record.primaryRole),
+        levelColor: levelMeta?.color || '#7f8c8d',
+        authority: authorityLabel(record.authority),
+        tradeability: tradeabilityLabel(record.tradeability),
+        themeName: record.themeName || stock?.mainTheme || '',
+        change: Number(stock?.change ?? record.change ?? 0),
+        turnover: Number(stock?.turnover ?? record.turnover ?? 0),
+        zlje: Number(stock?.zlje ?? record.zlje ?? 0),
+        continuousDays: Number(stock?.continuousDays ?? record.continuousDays ?? 0),
+        hotness: Number(stock?.hotness ?? record.hotness ?? 0),
+        themes: themeEntries,
+        reasons: collectReasons(record),
+        source,
+        sourceLabel: SOURCE_LABELS[source],
+      }
+    })
+    .sort((a, b) => b.score - a.score)
+})
+
+const marketCoreSummary = computed(() => {
+  const record = reviewData.value?.marketCore
+  if (!record) return null
+
+  return {
+    code: record.code,
+    name: record.name,
+    theme: record.themeName || ROLE_META[record.primaryRole]?.label || roleLabel(record.primaryRole),
+    tradeability: tradeabilityLabel(record.tradeability),
+  }
+})
+
+const statsByLevel = computed(() => {
+  const base: Record<LeaderRole, number> = {
+    MARKET_CORE: 0,
+    THEME_CORE: 0,
+    SPACE_CORE: 0,
+    TREND_CORE: 0,
+    EMOTION_CORE: 0,
+  }
+
+  trueLeaderRecords.value.forEach((record) => {
+    record.roles.forEach((role) => {
+      base[role] += 1
+    })
+  })
+
+  return base
+})
+
+const leaderStats = computed(() =>
+  (Object.keys(ROLE_META) as LeaderRole[]).map((role) => ({
+    label: ROLE_META[role].label,
+    value: statsByLevel.value[role],
+    color: ROLE_META[role].color,
+  })),
+)
+
+const recentChanges = computed(() => {
+  return (reviewData.value?.transitions || []).slice(0, 8).map((transition) => ({
+    code: transition.code,
+    name: transition.name || transition.code,
+    type: transition.type,
+    icon: getChangeIcon(transition.type),
+    className: `type-${transition.type}`,
+    detail: `${getTransitionLabel(transition)} · ${transition.reason}`,
+    timestamp: transition.timestamp,
+  }))
 })
 
 const filteredLeaders = computed(() => {
   let result = leaders.value
   if (filterLevel.value !== 'all') {
-    result = result.filter((l) => l.levelName === filterLevel.value)
+    result = result.filter((leader) => leader.roles.includes(filterLevel.value))
   }
+
   return [...result].sort((a, b) => {
-    const va = a[sortBy.value as keyof LeaderInfo] || 0
-    const vb = b[sortBy.value as keyof LeaderInfo] || 0
-    return sortOrder.value === 'desc'
-      ? (vb as number) - (va as number)
-      : (va as number) - (vb as number)
+    const aValue = Number(a[sortBy.value] || 0)
+    const bValue = Number(b[sortBy.value] || 0)
+    return sortOrder.value === 'desc' ? bValue - aValue : aValue - bValue
   })
 })
 
 const leadersByLevel = computed(() => {
-  return dragonAnalyzer.getLeadersByLevel?.(selectedLevel.value, 20) || []
+  return leaders.value
+    .filter((leader) => leader.source === 'true' && leader.roles.includes(selectedLevel.value))
+    .sort((a, b) => b.score - a.score)
 })
 
 const tabs = computed(() => [
-  { value: 'list', icon: '📋', label: '列表', count: leaders.value.length },
-  { value: 'byLevel', icon: '👑', label: '级别' },
-  { value: 'distribution', icon: '📊', label: '分布' },
-  { value: 'emotion', icon: '🌬️', label: '情绪' },
+  { value: 'list' as ViewMode, icon: '📋', label: '列表', count: leaders.value.length },
+  { value: 'byLevel' as ViewMode, icon: '👑', label: '分角色', count: trueLeaderRecords.value.length },
 ])
 
-// ========== 工具函数（保持不变）==========
-function formatLevel(level: any): string {
-  if (!level) return ''
-  if (typeof level === 'string') return level
-  if (typeof level === 'object') {
-    return level.name || level.id || JSON.stringify(level)
-  }
-  return String(level)
-}
+const levelOptions = computed(() =>
+  (Object.keys(ROLE_META) as LeaderRole[]).map((role) => ({
+    value: role,
+    label: ROLE_META[role].label,
+    count: statsByLevel.value[role],
+  })),
+)
 
-function getLevelName(levelKey: string): string {
-  const levelMap: Record<string, string> = {
-    TOTAL: '总龙头',
-    CONTINUOUS: '连板龙头',
-    SECTOR: '板块龙头',
-    MIDDLE: '中军龙头',
-    EMOTION: '情绪龙头',
-  }
-  return levelMap[levelKey] || levelKey
-}
-
-function getLevelColor(level: string): string {
-  if (!level) return '#7f8c8d'
-  const entry = Object.values(LEADER_LEVELS).find((v) => v.name === level || v.name.includes(level))
-  return entry?.color || '#7f8c8d'
-}
-
-function getFactorColor(factorId: string): string {
-  const colors: Record<string, string> = {
-    breathPhase: '#9b59b6',
-    breathZtCount: '#2ecc71',
-    breathDtCount: '#e74c3c',
-    breathZhabanRate: '#f39c12',
-    breathFengbanRate: '#3498db',
-    breathPassRate: '#1abc9c',
-    breathMaxDays: '#e67e22',
-    breathUpDownRatio: '#95a5a6',
-    breathEmotionValue: '#d35400',
-    breathMarketScore: '#16a085',
-  }
-  return colors[factorId] || '#ffa502'
-}
-
-function truncateText(text: string, maxLength: number): string {
-  if (text.length <= maxLength) return text
-  return text.slice(0, maxLength) + '...'
-}
-
-function getChangeIcon(type: string): string {
-  const icons: Record<string, string> = { 新增: '➕', 消失: '➖', 晋级: '⬆️', 降级: '⬇️' }
-  return icons[type] || '🔔'
-}
-
-function getChangeClass(change: number): string {
-  return change > 0 ? 'up' : change < 0 ? 'down' : ''
-}
-
-function getMoneyClass(value: number): string {
-  return value > 0 ? 'up' : value < 0 ? 'down' : ''
-}
-
-function formatChange(change: number): string {
-  if (!change && change !== 0) return '-'
-  return (change > 0 ? '+' : '') + change.toFixed(2) + '%'
-}
-
-function formatVolume(volume: number): string {
-  if (!volume && volume !== 0) return '-'
-  const abs = Math.abs(volume)
-  if (abs >= 1e8) return (volume / 1e8).toFixed(2) + '亿'
-  if (abs >= 1e4) return (volume / 1e4).toFixed(2) + '万'
-  return volume.toString()
-}
-
-function formatTime(timestamp: number): string {
-  const date = new Date(timestamp)
-  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
-}
-
-function formatTimeShort(timestamp: number): string {
-  const diff = Math.floor((Date.now() - timestamp) / 60000)
-  if (diff < 1) return '刚刚'
-  if (diff < 60) return diff + '分钟前'
-  return Math.floor(diff / 60) + '小时前'
-}
-
-// ========== 加载情绪因子 ==========
-function loadEmotionFactors() {
-  try {
-    if (!algorithmManager || typeof algorithmManager.getFactorWeights !== 'function') {
-      return []
-    }
-
-    const weights = algorithmManager.getFactorWeights() || []
-    const weightMap = new Map(weights.map((w) => [w.id, w.weight]))
-
-    const factors = Object.entries(BREATH_FACTORS_META || {})
-      .map(([id, meta]) => {
-        const weight = weightMap.get(id)
-        return {
-          id,
-          name: meta?.name || id,
-          description: meta?.description || '',
-          weight: typeof weight === 'number' ? weight : 0.1,
-        }
-      })
-      .filter((f) => f.weight > 0)
-      .sort((a, b) => b.weight - a.weight)
-      .slice(0, 6)
-
-    return factors
-  } catch (error) {
-    return []
-  }
-}
-
-// ========== 操作函数 ==========
-function loadData(force = false) {
-  const now = Date.now()
-
-  // 如果不是强制加载，检查冷却时间
-  if (!force && now - lastLoadTime.value < LOAD_COOLDOWN) {
-
-    return
-  }
-
-  // 如果正在加载，跳过
-  if (isLoading.value) {
-
-    return
-  }
-  loadPanelData()
-  lastUpdate.value = Date.now()
-}
-
-function refresh() {
-  loadData(true) // 强制加载
-  showToast('数据已刷新', 'success')
-}
+const levelTypes = computed(() =>
+  (Object.keys(ROLE_META) as LeaderRole[]).map((role) => ({
+    value: role,
+    label: ROLE_META[role].label,
+    icon: ROLE_META[role].icon,
+    color: ROLE_META[role].color,
+    count: statsByLevel.value[role],
+  })),
+)
 
 function close() {
   emit('update:visible', false)
   emit('close')
 }
 
+async function loadReview(force = false) {
+  if (loading.value) return
+  loading.value = true
+  error.value = ''
+
+  try {
+    let result = dragonReviewService.getLatestReview?.() || dataLayer.getDragonReview()
+    if (!result || force) {
+      await dragonReviewService.runFullUpdate?.()
+      result = dragonReviewService.getLatestReview?.() || dataLayer.getDragonReview()
+    }
+
+    reviewData.value = result || null
+    lastUpdate.value = Date.now()
+
+    if (!reviewData.value) {
+      error.value = '当前没有可用的龙头复盘结果'
+    }
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : '龙头复盘加载失败'
+  } finally {
+    loading.value = false
+  }
+}
+
+function refresh() {
+  void loadReview(true)
+}
+
 function toggleSortOrder() {
   sortOrder.value = sortOrder.value === 'desc' ? 'asc' : 'desc'
 }
 
-function selectLeader(code: string) {
-  selectedCode.value = selectedCode.value === code ? null : code
-  EventManager.emit(AppEvents.STOCK.SELECTED, { code })
+function syncSelectedStock(code: string) {
+  EventManager.emit(AppEvents.STOCK.SELECTED, {
+    code,
+    timestamp: Date.now(),
+    source: 'dragon-head-panel',
+  })
 }
 
-function selectStock(code: string) {
-  EventManager.emit(AppEvents.STOCK.SELECTED, { code })
+function selectLeader(code: string) {
+  selectedCode.value = selectedCode.value === code ? null : code
+  if (selectedCode.value) {
+    syncSelectedStock(code)
+  }
+}
+
+function openStockDetail(code: string) {
+  const stock = dataLayer.getStock(code)
+  syncSelectedStock(code)
+  EventManager.emit('stock:show-detail', {
+    code,
+    name: stock?.name || code,
+    source: 'dragon-head-panel',
+  })
   close()
 }
 
 function exportData() {
-  const exportData = {
+  const payload = {
     exportTime: new Date().toISOString(),
+    review: reviewData.value,
     leaders: leaders.value,
-    stats: stats.value,
-    distribution: distribution.value,
     sentiment: sentiment.value,
   }
-  const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' })
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
   const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `龙头数据_${new Date().toISOString().slice(0, 10)}.json`
-  a.click()
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = `龙头复盘_${new Date().toISOString().slice(0, 10)}.json`
+  anchor.click()
   URL.revokeObjectURL(url)
-
-  showToast(`已导出 ${leaders.value.length} 条记录`, 'success')
 }
 
-async function forceRepair() {
-  repairing.value = true
-  try {
-    const result = await dragonAnalyzer.repairConsistency?.()
+function collectReasons(record: LeaderRecord): string[] {
+  const support = record.evidence
+    .filter((item) => item.verdict === 'support')
+    .map((item) => item.note || item.label)
+  const playbook = (record.playbook || []).filter(Boolean)
+  const reasons = [...support, ...playbook]
+  return [...new Set(reasons)].slice(0, 4)
+}
 
-    lastRepairSuccess.value = result
-    lastRepairTime.value = formatTime(Date.now())
-    repairCount.value++
-
-    repairHistory.value.unshift({
-      time: Date.now(),
-      success: result,
-    })
-
-    if (repairHistory.value.length > 10) {
-      repairHistory.value.pop()
-    }
-
-    showToast(result ? '✅ 修复成功' : '❌ 修复失败', result ? 'success' : 'error')
-  } catch (error) {
-    lastRepairSuccess.value = false
-    showToast('❌ 修复异常', 'error')
-  } finally {
-    repairing.value = false
+function getTransitionLabel(transition: LeaderTransition): string {
+  switch (transition.type) {
+    case 'candidate':
+      return '进入候选'
+    case 'confirm':
+      return '真龙确认'
+    case 'command':
+      return '取得主导'
+    case 'weaken':
+      return '领导权走弱'
+    case 'replace':
+      return '主角切换'
+    case 'depose':
+      return '退出主位'
+    default:
+      return transition.type
   }
 }
 
-// ========== 生命周期 ==========
-onMounted(() => {
-
-
-  // 监听面板可见性变化
-  const updateVisibility = () => {
-    isPanelVisible.value = props.visible
+function getChangeIcon(type: LeaderTransition['type']): string {
+  switch (type) {
+    case 'candidate':
+      return '➕'
+    case 'confirm':
+      return '✅'
+    case 'command':
+      return '👑'
+    case 'weaken':
+      return '⚠️'
+    case 'replace':
+      return '🔁'
+    case 'depose':
+      return '➖'
+    default:
+      return '🔔'
   }
-  updateVisibility()
+}
 
-  // 首次加载 - 只在可见时加载
-  if (props.visible) {
+function getChangeClass(change: number): string {
+  if (change > 0) return 'up'
+  if (change < 0) return 'down'
+  return ''
+}
 
-    loadData(true)
+function getMoneyClass(value: number): string {
+  if (value > 0) return 'up'
+  if (value < 0) return 'down'
+  return ''
+}
+
+function formatChange(change: number): string {
+  if (!Number.isFinite(change)) return '-'
+  return `${change > 0 ? '+' : ''}${change.toFixed(2)}%`
+}
+
+function formatVolume(value: number): string {
+  if (!Number.isFinite(value)) return '-'
+  const abs = Math.abs(value)
+  if (abs >= 1e8) return `${(value / 1e8).toFixed(2)}亿`
+  if (abs >= 1e4) return `${(value / 1e4).toFixed(2)}万`
+  return value.toFixed(0)
+}
+
+function formatInteger(value: number): string {
+  if (!Number.isFinite(value)) return '0'
+  return String(Math.round(value))
+}
+
+function formatTime(timestamp: number): string {
+  if (!timestamp) return '--'
+  const date = new Date(timestamp)
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+}
+
+function handleDocumentClick(event: MouseEvent) {
+  const target = event.target as Node | null
+  if (!props.visible || !target) return
+  if (panelRef.value?.contains(target)) return
+  close()
+}
+
+function handleDocumentKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape' && props.visible) {
+    close()
   }
+}
 
-})
+function bindGlobalListeners() {
+  if (globalListenersBound) return
+  document.addEventListener('mousedown', handleDocumentClick)
+  document.addEventListener('keydown', handleDocumentKeydown)
+  globalListenersBound = true
+}
 
-// 使用 watch 监听 visible 变化
+function unbindGlobalListeners() {
+  if (!globalListenersBound) return
+  document.removeEventListener('mousedown', handleDocumentClick)
+  document.removeEventListener('keydown', handleDocumentKeydown)
+  globalListenersBound = false
+}
+
 watch(
   () => props.visible,
-  (newVal, oldVal) => {
-    isPanelVisible.value = newVal
-    if (newVal && !oldVal) {
-      // 从关闭到打开时强制加载
-      loadData(true)
+  (visible) => {
+    if (outsideListenerTimer) {
+      clearTimeout(outsideListenerTimer)
+      outsideListenerTimer = null
     }
-  }
+
+    if (visible) {
+      outsideListenerTimer = setTimeout(() => {
+        bindGlobalListeners()
+        outsideListenerTimer = null
+      }, 0)
+      void loadReview(false)
+    } else {
+      unbindGlobalListeners()
+    }
+  },
+  { immediate: true },
 )
 
-onUnmounted(() => {
+onMounted(() => {
+  unsubscribeFns.push(
+    EventManager.on(AppEvents.DRAGON.UPDATED, (payload: any) => {
+      reviewData.value = payload?.result || dragonReviewService.getLatestReview?.() || dataLayer.getDragonReview()
+      lastUpdate.value = payload?.timestamp || Date.now()
+    }),
+  )
 
-  unsubscribeEvents.forEach((unsub) => {
-    try {
-      unsub()
-    } catch (e) {
-      console.warn('[DragonHeadPanel] 清理事件订阅失败:', e)
-    }
-  })
-  unsubscribeEvents.length = 0
+  unsubscribeFns.push(
+    dataLayer.subscribe('review.result', (result: DragonReviewResult) => {
+      reviewData.value = result
+      lastUpdate.value = Date.now()
+    }),
+  )
+
+  unsubscribeFns.push(
+    dataLayer.subscribe('merged.stocks', () => {
+      lastUpdate.value = Date.now()
+    }),
+  )
+
+  if (props.visible) {
+    void loadReview(false)
+  }
+})
+
+onUnmounted(() => {
+  if (outsideListenerTimer) {
+    clearTimeout(outsideListenerTimer)
+    outsideListenerTimer = null
+  }
+  unbindGlobalListeners()
+  unsubscribeFns.forEach((unsubscribe) => unsubscribe())
 })
 </script>
+
 <style scoped>
 .dragon-panel {
   position: fixed;
-  width: 480px;
   max-width: calc(100vw - 32px);
-  max-height: 85vh;
-  overflow-y: auto;
+  max-height: calc(100vh - 32px);
+  overflow: hidden;
   background: var(--bg-primary);
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 24px;
@@ -876,13 +841,13 @@ onUnmounted(() => {
   z-index: 10005;
   font-size: 13px;
   backdrop-filter: blur(20px);
-  animation: slideIn 0.2s ease;
+  animation: slide-in 0.18s ease;
 }
 
-@keyframes slideIn {
+@keyframes slide-in {
   from {
     opacity: 0;
-    transform: translateY(-10px);
+    transform: translateY(-8px);
   }
 
   to {
@@ -891,65 +856,39 @@ onUnmounted(() => {
   }
 }
 
-/* 头部样式 */
 .panel-header {
   padding: 20px 20px 16px;
-  border-radius: 24px 24px 0 0;
-  color: white;
+  color: #fff;
 }
 
 .header-top {
   display: flex;
   justify-content: space-between;
-  align-items: center;
-  margin-bottom: 16px;
+  align-items: flex-start;
+  gap: 16px;
 }
 
 .header-left {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  align-items: flex-start;
+  gap: 10px;
 }
 
 .panel-icon {
   font-size: 24px;
+  line-height: 1;
 }
 
-.panel-header h2 {
+.header-title h2 {
   margin: 0;
   font-size: 18px;
   font-weight: 600;
 }
 
-.live-badge {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 8px;
-  background: rgba(255, 255, 255, 0.2);
-  border-radius: 20px;
-  font-size: 11px;
-  backdrop-filter: blur(4px);
-}
-
-.live-dot {
-  width: 6px;
-  height: 6px;
-  background: #2ed573;
-  border-radius: 50%;
-  animation: pulse 1.5s infinite;
-}
-
-@keyframes pulse {
-
-  0%,
-  100% {
-    opacity: 1;
-  }
-
-  50% {
-    opacity: 0.4;
-  }
+.header-subtitle {
+  margin-top: 4px;
+  font-size: 12px;
+  opacity: 0.86;
 }
 
 .header-actions {
@@ -961,54 +900,39 @@ onUnmounted(() => {
   width: 32px;
   height: 32px;
   border: none;
-  background: rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.14);
   border-radius: 10px;
-  color: white;
+  color: #fff;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
   transition: all 0.2s;
-  backdrop-filter: blur(4px);
 }
 
-.btn-icon:hover {
-  background: rgba(255, 255, 255, 0.3);
-  transform: scale(1.05);
+.btn-icon:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.26);
+  transform: scale(1.04);
 }
 
-.btn-icon.active {
-  background: rgba(46, 213, 115, 0.3);
+.btn-icon:disabled {
+  opacity: 0.55;
+  cursor: default;
 }
 
 .btn-icon.close:hover {
-  background: rgba(255, 71, 87, 0.3);
+  background: rgba(255, 71, 87, 0.32);
 }
 
-.rotating {
-  animation: rotate 1s infinite linear;
-}
-
-@keyframes rotate {
-  from {
-    transform: rotate(0deg);
-  }
-
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-/* 情绪卡片样式 */
 .sentiment-card {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin: 16px;
+  gap: 14px;
+  margin-top: 16px;
   padding: 16px;
-  background: rgba(0, 0, 0, 0.3);
+  background: rgba(0, 0, 0, 0.26);
   border-radius: 16px;
-  backdrop-filter: blur(8px);
 }
 
 .sentiment-left {
@@ -1018,7 +942,7 @@ onUnmounted(() => {
 }
 
 .phase-icon {
-  font-size: 32px;
+  font-size: 30px;
 }
 
 .sentiment-info {
@@ -1034,24 +958,55 @@ onUnmounted(() => {
 
 .sentiment-score {
   font-size: 12px;
-  opacity: 0.9;
+  opacity: 0.92;
 }
 
 .sentiment-suggestion {
-  max-width: 180px;
-  padding: 6px 12px;
-  background: rgba(255, 255, 255, 0.2);
+  max-width: 200px;
+  padding: 7px 12px;
+  background: rgba(255, 255, 255, 0.18);
   border-radius: 20px;
   font-size: 12px;
   text-align: center;
 }
 
-/* 统计卡片网格 */
+.core-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: rgba(0, 0, 0, 0.22);
+  border-radius: 14px;
+}
+
+.core-label {
+  font-size: 11px;
+  opacity: 0.72;
+}
+
+.core-stock {
+  border: none;
+  background: none;
+  color: #fff8d6;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.core-stock:hover {
+  text-decoration: underline;
+}
+
+.core-meta {
+  font-size: 12px;
+  opacity: 0.88;
+}
+
 .stats-grid {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 8px;
-  margin: 16px;
+  margin-top: 16px;
 }
 
 .stat-item {
@@ -1061,12 +1016,11 @@ onUnmounted(() => {
   padding: 8px 4px;
   background: rgba(0, 0, 0, 0.2);
   border-radius: 12px;
-  backdrop-filter: blur(4px);
 }
 
 .stat-label {
   font-size: 10px;
-  opacity: 0.7;
+  opacity: 0.76;
   margin-bottom: 4px;
 }
 
@@ -1075,7 +1029,13 @@ onUnmounted(() => {
   font-weight: 600;
 }
 
-/* 变化区域 */
+.inline-alert {
+  padding: 10px 20px;
+  background: rgba(255, 87, 87, 0.12);
+  color: #ffb5b5;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
 .changes-section {
   padding: 16px 20px;
   border-bottom: 1px solid var(--border-color);
@@ -1115,11 +1075,15 @@ onUnmounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  width: 100%;
   padding: 10px 12px;
   background: var(--bg-secondary);
+  border: none;
   border-radius: 12px;
+  color: var(--text-primary);
   cursor: pointer;
   transition: all 0.2s;
+  text-align: left;
 }
 
 .change-item:hover {
@@ -1137,13 +1101,17 @@ onUnmounted(() => {
   font-size: 16px;
 }
 
-.change-name {
-  font-weight: 500;
-  color: var(--text-primary);
+.change-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
-.change-detail,
-.change-level {
+.change-name {
+  font-weight: 500;
+}
+
+.change-detail {
   font-size: 11px;
   color: var(--text-secondary);
 }
@@ -1153,23 +1121,24 @@ onUnmounted(() => {
   color: var(--text-secondary);
 }
 
-.type-新增 .change-icon {
-  color: #2ed573;
-}
-
-.type-晋级 .change-icon {
+.type-confirm .change-icon,
+.type-command .change-icon {
   color: #ffd700;
 }
 
-.type-消失 .change-icon {
-  color: #ff4757;
+.type-candidate .change-icon {
+  color: #2ed573;
 }
 
-.type-降级 .change-icon {
+.type-weaken .change-icon {
   color: #ffa502;
 }
 
-/* 标签栏 */
+.type-replace .change-icon,
+.type-depose .change-icon {
+  color: #ff6b6b;
+}
+
 .tab-bar {
   display: flex;
   gap: 4px;
@@ -1212,15 +1181,42 @@ onUnmounted(() => {
   font-size: 11px;
 }
 
-/* 内容区域 */
 .panel-content {
-  max-height: 400px;
+  max-height: min(58vh, 540px);
   overflow-y: auto;
   padding: 0 20px;
 }
 
-/* 筛选栏 */
-.filter-bar {
+.loading-state,
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin: 20px 0;
+  padding: 28px 20px;
+  background: var(--bg-secondary);
+  border-radius: 16px;
+  color: var(--text-secondary);
+}
+
+.loading-icon,
+.empty-icon {
+  font-size: 24px;
+}
+
+.retry-btn {
+  padding: 8px 14px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-header);
+  border-radius: 12px;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.filter-bar,
+.level-tabs {
   display: flex;
   gap: 8px;
   padding: 16px 0;
@@ -1242,10 +1238,6 @@ onUnmounted(() => {
   cursor: pointer;
 }
 
-.filter-select:hover {
-  border-color: var(--color-highlight);
-}
-
 .btn-sort {
   width: 36px;
   height: 36px;
@@ -1256,12 +1248,6 @@ onUnmounted(() => {
   cursor: pointer;
 }
 
-.btn-sort:hover {
-  border-color: var(--color-highlight);
-  background: var(--bg-hover);
-}
-
-/* 龙头卡片 */
 .leaders-list {
   display: flex;
   flex-direction: column;
@@ -1281,7 +1267,7 @@ onUnmounted(() => {
 .leader-card:hover {
   transform: translateY(-2px);
   border-color: var(--color-highlight);
-  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.18);
 }
 
 .leader-card.selected {
@@ -1293,45 +1279,82 @@ onUnmounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 12px;
   margin-bottom: 12px;
-  padding-left: 4px;
+  padding-left: 6px;
   border-left: 3px solid transparent;
 }
 
-.header-left {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.stock-code {
-  font-family: monospace;
+.stock-code,
+.mini-code {
+  font-family: Consolas, monospace;
   font-weight: 600;
   color: var(--color-highlight);
-  background: rgba(255, 165, 2, 0.1);
+  background: rgba(255, 165, 2, 0.12);
   padding: 4px 8px;
   border-radius: 8px;
 }
 
-.stock-name {
-  font-weight: 500;
+.stock-name-btn {
+  border: none;
+  background: none;
   color: var(--text-primary);
+  cursor: pointer;
+  font-weight: 500;
+  padding: 0;
+}
+
+.stock-name-btn:hover {
+  color: var(--color-highlight);
 }
 
 .header-right {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
-.leader-badge {
-  padding: 4px 12px;
-  border-radius: 20px;
+.leader-badge,
+.source-badge,
+.authority-badge,
+.mini-authority {
+  padding: 4px 10px;
+  border-radius: 18px;
   font-size: 11px;
-  font-weight: 500;
+  background: var(--bg-secondary);
 }
 
-.leader-score {
+.source-badge {
+  border: 1px solid transparent;
+}
+
+.source-badge.true {
+  color: #f6c453;
+  border-color: rgba(246, 196, 83, 0.28);
+  background: rgba(246, 196, 83, 0.12);
+}
+
+.source-badge.height {
+  color: #ff8a5b;
+  border-color: rgba(255, 138, 91, 0.28);
+  background: rgba(255, 138, 91, 0.1);
+}
+
+.source-badge.attention {
+  color: #ffa94d;
+  border-color: rgba(255, 169, 77, 0.28);
+  background: rgba(255, 169, 77, 0.1);
+}
+
+.authority-badge,
+.mini-authority {
+  color: var(--text-secondary);
+}
+
+.leader-score,
+.mini-score {
   padding: 4px 8px;
   background: var(--bg-primary);
   border-radius: 8px;
@@ -1339,10 +1362,9 @@ onUnmounted(() => {
   font-weight: 600;
 }
 
-/* 指标区域 */
 .card-metrics {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
   margin-bottom: 12px;
 }
@@ -1367,68 +1389,54 @@ onUnmounted(() => {
   font-weight: 500;
 }
 
-.metric-value.up {
-  color: #ff4757;
+.metric-value.up,
+.card-change.up {
+  color: #ff6b6b;
 }
 
-.metric-value.down {
-  color: #2ed573;
+.metric-value.down,
+.card-change.down {
+  color: #69db7c;
 }
 
 .metric-value.highlight {
   color: var(--color-highlight);
 }
 
-/* 题材标签 */
-.card-themes {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-bottom: 8px;
-}
-
-.theme-tag {
-  padding: 4px 10px;
-  background: rgba(52, 152, 219, 0.1);
-  border: 1px solid rgba(52, 152, 219, 0.2);
-  border-radius: 20px;
-  font-size: 11px;
-  color: #3498db;
-}
-
-.theme-more {
-  padding: 4px 10px;
-  background: var(--bg-primary);
-  border-radius: 20px;
-  font-size: 11px;
-  color: var(--text-secondary);
-}
-
-/* 理由标签 */
+.card-themes,
 .card-reasons {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: 6px;
+}
+
+.card-themes {
+  margin-bottom: 8px;
+}
+
+.theme-tag,
+.reason-tag,
+.theme-more {
+  padding: 4px 10px;
+  border-radius: 16px;
+  font-size: 11px;
+}
+
+.theme-tag {
+  background: rgba(52, 152, 219, 0.1);
+  border: 1px solid rgba(52, 152, 219, 0.22);
+  color: #4da3ff;
+}
+
+.theme-more {
+  background: var(--bg-primary);
+  color: var(--text-secondary);
 }
 
 .reason-tag {
-  padding: 2px 8px;
   background: rgba(46, 213, 115, 0.1);
-  border: 1px solid rgba(46, 213, 115, 0.2);
-  border-radius: 16px;
-  font-size: 10px;
-  color: #2ed573;
-}
-
-/* 级别视图 */
-.level-tabs {
-  display: flex;
-  gap: 4px;
-  padding: 16px 0;
-  position: sticky;
-  top: 0;
-  background: var(--bg-primary);
-  z-index: 1;
+  border: 1px solid rgba(46, 213, 115, 0.22);
+  color: #69db7c;
 }
 
 .level-tab {
@@ -1445,241 +1453,37 @@ onUnmounted(() => {
   font-size: 12px;
 }
 
-.level-tab:hover {
-  background: var(--bg-hover);
-}
-
 .level-tab.active {
-  background: var(--bg-primary);
-  border-bottom: 2px solid currentColor;
+  background: var(--bg-secondary);
+  box-shadow: inset 0 -2px currentColor;
 }
 
 .leader-card.mini {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 12px 16px;
+  gap: 12px;
 }
 
-.leader-card.mini .card-header {
-  margin-bottom: 0;
-  border-left: none;
-}
-
-.card-change {
-  font-weight: 500;
-  font-size: 14px;
-}
-
-.card-change.up {
-  color: #ff4757;
-}
-
-.card-change.down {
-  color: #2ed573;
-}
-
-/* 分布视图 */
-.distribution-view {
-  padding: 16px 0;
-}
-
-.dist-section {
-  margin-bottom: 24px;
-}
-
-.dist-section h4 {
-  margin: 0 0 12px 0;
-  color: var(--text-secondary);
-  font-size: 12px;
-}
-
-.dist-chart {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.dist-row {
+.mini-main,
+.mini-side {
   display: flex;
   align-items: center;
   gap: 10px;
 }
 
-.dist-label {
-  width: 80px;
-  font-size: 12px;
-  font-weight: 500;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.dist-bar-container {
-  flex: 1;
-  height: 8px;
-  background: var(--bg-primary);
-  border-radius: 4px;
-  overflow: hidden;
-}
-
-.dist-bar-fill {
-  height: 100%;
-  border-radius: 4px;
-  transition: width 0.3s;
-}
-
-.dist-count {
-  min-width: 30px;
-  font-size: 12px;
-  color: var(--text-secondary);
-  text-align: right;
-  font-weight: 500;
-}
-
-/* 情绪视图 */
-.emotion-view {
-  padding: 16px 0;
-}
-
-.phase-grid {
-  display: grid;
-  grid-template-columns: repeat(5, 1fr);
-  gap: 8px;
-  margin-bottom: 24px;
-}
-
-.phase-card {
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  border-radius: 16px;
-  padding: 12px 8px;
-  opacity: 0.5;
-  transition: all 0.2s;
-}
-
-.phase-card.active {
-  opacity: 1;
-  border-color: var(--color-highlight);
-  background: var(--bg-hover);
-  transform: scale(1.02);
-  box-shadow: 0 4px 12px rgba(255, 165, 2, 0.2);
-}
-
-.phase-header {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  margin-bottom: 8px;
-}
-
-.phase-icon {
-  font-size: 20px;
-}
-
-.phase-name {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.phase-features {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.feature-item {
-  display: flex;
-  align-items: flex-start;
-  gap: 4px;
-  font-size: 10px;
-  line-height: 1.4;
-}
-
-.feature-bullet {
-  color: var(--color-highlight);
-  font-weight: bold;
-}
-
-.feature-text {
-  color: var(--text-primary);
-  font-weight: 500;
-}
-
-/* 因子权重 */
-.factor-section {
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  border-radius: 20px;
-  padding: 16px;
-}
-
-.factor-section h4 {
-  margin: 0 0 12px 0;
-  color: var(--text-secondary);
-  font-size: 12px;
-}
-
-.factor-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.factor-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.factor-name {
-  width: 70px;
-  font-size: 11px;
-  color: var(--text-primary);
-  font-weight: 500;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.factor-bar-container {
-  flex: 1;
-  height: 6px;
-  background: var(--bg-primary);
-  border-radius: 3px;
-  overflow: hidden;
-}
-
-.factor-bar-fill {
-  height: 100%;
-  border-radius: 3px;
-  transition: width 0.3s;
-}
-
-.factor-value {
-  min-width: 40px;
-  font-size: 11px;
-  color: var(--color-highlight);
-  font-weight: 600;
-  text-align: right;
-}
-
-/* 底部 */
 .panel-footer {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 12px;
   padding: 16px 20px;
   border-top: 1px solid var(--border-color);
   background: var(--bg-header);
-  position: sticky;
-  bottom: 0;
-  z-index: 2;
 }
 
-.footer-left {
+.footer-left,
+.footer-right {
   display: flex;
   align-items: center;
   gap: 12px;
@@ -1687,282 +1491,53 @@ onUnmounted(() => {
   color: var(--text-secondary);
 }
 
+.footer-right {
+  justify-content: flex-end;
+}
+
 .total-count {
   color: var(--color-highlight);
   font-weight: 500;
 }
 
-.btn-text {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 14px;
-  background: transparent;
-  border: 1px solid var(--border-color);
-  border-radius: 20px;
-  color: var(--text-primary);
-  cursor: pointer;
-  transition: all 0.2s;
-  font-size: 12px;
-}
-
-.btn-text:hover {
-  background: var(--color-highlight);
-  color: #000;
-  border-color: var(--color-highlight);
-}
-
-/* 空状态 */
-.empty-state,
-.empty-changes {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-  background: var(--bg-secondary);
-  border-radius: 12px;
-  color: var(--text-secondary);
-  gap: 8px;
-}
-
-.empty-icon {
-  font-size: 24px;
-  opacity: 0.5;
-}
-
-.empty-text {
-  font-size: 12px;
-}
-
-/* 加载状态 */
-.loading-overlay,
-.error-overlay {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  background: var(--bg-primary);
-  border-radius: 24px;
-  z-index: 10;
-  gap: 16px;
-}
-
-.loading-spinner {
-  width: 40px;
-  height: 40px;
-  border: 3px solid var(--border-color);
-  border-top-color: var(--color-highlight);
-  border-radius: 50%;
-  animation: spin 1s linear infinite;
-}
-
-.error-icon {
-  font-size: 32px;
-}
-
-.retry-btn {
-  padding: 8px 16px;
-  background: var(--color-highlight);
-  border: none;
-  border-radius: 20px;
-  color: #000;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-/* 滚动条 */
 .panel-content::-webkit-scrollbar {
-  width: 4px;
-}
-
-.panel-content::-webkit-scrollbar-track {
-  background: transparent;
+  width: 5px;
 }
 
 .panel-content::-webkit-scrollbar-thumb {
-  background: var(--border-color);
-  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
 }
 
-.panel-content::-webkit-scrollbar-thumb:hover {
-  background: var(--color-highlight);
-}
-
-/* 调试按钮容器 */
-.debug-actions {
-  margin-left: 8px;
-  display: inline-flex;
-  align-items: center;
-}
-
-.debug-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  padding: 4px 10px;
-  background: rgba(255, 71, 87, 0.1);
-  border: 1px solid rgba(255, 71, 87, 0.3);
-  border-radius: 16px;
-  color: #ff4757;
-  font-size: 11px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  white-space: nowrap;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-  backdrop-filter: blur(4px);
-}
-
-.debug-btn:hover {
-  background: rgba(255, 71, 87, 0.2);
-  border-color: #ff4757;
-  transform: translateY(-1px);
-  box-shadow: 0 4px 8px rgba(255, 71, 87, 0.2);
-}
-
-.debug-btn:active {
-  transform: translateY(0);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
-}
-
-.debug-btn .icon {
-  font-size: 12px;
-  margin-right: 2px;
-}
-
-.debug-btn.success {
-  background: rgba(46, 213, 115, 0.1);
-  border-color: rgba(46, 213, 115, 0.3);
-  color: #2ed573;
-}
-
-.debug-btn.success:hover {
-  background: rgba(46, 213, 115, 0.2);
-  border-color: #2ed573;
-  box-shadow: 0 4px 8px rgba(46, 213, 115, 0.2);
-}
-
-.debug-btn.error {
-  background: rgba(255, 71, 87, 0.15);
-  border-color: rgba(255, 71, 87, 0.5);
-  color: #ff4757;
-  animation: shake 0.3s ease;
-}
-
-.debug-btn.loading {
-  opacity: 0.7;
-  cursor: not-allowed;
-  pointer-events: none;
-}
-
-.debug-btn.loading .icon {
-  animation: rotate 1s infinite linear;
-}
-
-@keyframes shake {
-
-  0%,
-  100% {
-    transform: translateX(0);
+@media (max-width: 768px) {
+  .dragon-panel {
+    left: 16px !important;
+    right: 16px;
+    width: auto !important;
+    max-height: calc(100vh - 24px);
   }
 
-  20% {
-    transform: translateX(-5px);
+  .sentiment-card,
+  .core-banner,
+  .panel-footer {
+    flex-direction: column;
+    align-items: flex-start;
   }
 
-  40% {
-    transform: translateX(5px);
+  .stats-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  60% {
-    transform: translateX(-3px);
+  .card-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  80% {
-    transform: translateX(3px);
+  .level-tabs {
+    overflow-x: auto;
   }
-}
 
-.debug-panel {
-  position: absolute;
-  top: 100%;
-  right: 0;
-  margin-top: 4px;
-  padding: 8px 12px;
-  background: var(--bg-panel);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
-  font-size: 11px;
-  color: var(--text-secondary);
-  z-index: 100;
-  min-width: 180px;
-}
-
-.debug-panel-item {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 4px 0;
-}
-
-.debug-panel-label {
-  color: var(--text-tertiary);
-}
-
-.debug-panel-value {
-  font-weight: 500;
-  color: var(--color-highlight);
-}
-
-.debug-panel-divider {
-  height: 1px;
-  background: var(--border-color);
-  margin: 6px 0;
-}
-
-.repair-history {
-  margin-top: 8px;
-  font-size: 10px;
-  color: var(--text-secondary);
-}
-
-.repair-history-item {
-  display: flex;
-  justify-content: space-between;
-  padding: 2px 0;
-}
-
-.repair-time {
-  color: var(--text-tertiary);
-}
-
-.repair-count {
-  font-weight: 600;
-}
-
-.repair-count.success {
-  color: #2ed573;
-}
-
-.repair-count.failed {
-  color: #ff4757;
-}
-
-.btn-icon .icon.⚡ {
-  font-size: 16px;
+  .level-tab {
+    min-width: 120px;
+  }
 }
 </style>

@@ -6,6 +6,7 @@ import { useConfigStore } from './config'
 import { THEMES } from '@/constants/themes'
 import type { ThemeType } from '@/types/theme'
 import { dragonThemes } from '@/themes/dragon-themes'
+import { EventManager } from '@/utils/eventManager'
 
 // 定义龙族主题类型
 export interface DragonThemeData {
@@ -75,13 +76,18 @@ export const useThemeStore = defineStore('theme', () => {
     if (!THEMES[theme]) return
 
     const themeColors = THEMES[theme].colors
+    const root = document.documentElement
 
     // 应用 CSS 变量
     Object.entries(themeColors).forEach(([key, value]) => {
-      document.documentElement.style.setProperty(key, value)
+      root.style.setProperty(key, value)
     })
 
     currentTheme.value = theme
+    dragonThemeEnabled.value = false
+    localStorage.setItem('dragon-theme-enabled', 'false')
+    root.dataset.theme = theme
+    root.classList.remove('dragon-theme', 'light-mode', 'dark-mode')
 
     // 保存到 configStore
     if (!followSystem.value) {
@@ -216,6 +222,7 @@ export const useThemeStore = defineStore('theme', () => {
     localStorage.setItem('dragon-theme-enabled', String(enable))
 
     if (enable) {
+      document.documentElement.classList.add('dragon-theme')
       // 切换到龙族主题
       applyDragonThemeVariables(currentDragonTheme.value)
 
@@ -224,6 +231,7 @@ export const useThemeStore = defineStore('theme', () => {
 
       console.log('[ThemeStore] 🐉 龙族主题已启用')
     } else {
+      document.documentElement.classList.remove('dragon-theme')
       // 切换回原有主题
       setTheme(currentTheme.value)
       console.log('[ThemeStore] 🎨 已切回普通主题')
@@ -290,6 +298,8 @@ export const useThemeStore = defineStore('theme', () => {
     applyThemeMode(themeMode.value)
 
     if (dragonThemeEnabled.value) {
+      document.documentElement.dataset.theme = currentTheme.value
+      document.documentElement.classList.add('dragon-theme')
       // 应用龙族主题
       applyDragonThemeVariables(currentDragonTheme.value)
       console.log(`[ThemeStore] 🐉 龙族主题初始化: ${dragonThemeData.value.name}`)

@@ -100,6 +100,100 @@ export interface Stock {
 
   // 时间戳
   updatedAt: number
+  algorithmScore?: number
+  algorithmVersion?: number
+  algorithmId?: string
+  lastCalculated?: number
+
+  // L2 摘要字段（十档盘口 / 逐笔聚合）
+  bid1Price?: number
+  bid1Volume?: number
+  ask1Price?: number
+  ask1Volume?: number
+  spread?: number
+  bid10Total?: number
+  ask10Total?: number
+  depthImbalance?: number
+  tickBuyVolume?: number
+  tickSellVolume?: number
+  tickBuyCount?: number
+  tickSellCount?: number
+  lastTradePrice?: number
+  lastTradeVolume?: number
+}
+
+export interface DepthLevel {
+  price: number
+  volume: number
+}
+
+export interface Depth10Book {
+  code: string
+  bids: DepthLevel[]
+  asks: DepthLevel[]
+  sourceTs?: number
+  seq?: number
+  timestamp: number
+}
+
+export interface TickTrade {
+  code: string
+  price: number
+  volume: number
+  amount: number
+  side: 'buy' | 'sell' | 'neutral'
+  tradeTime: string
+  sourceTs?: number
+  timestamp: number
+}
+
+export interface QuotePatch {
+  code: string
+  name?: string
+  lastPrice: number
+  changePct: number
+  changeAmount?: number
+  speed?: number
+  volume: number
+  amount: number
+  turnoverRate?: number
+  open?: number
+  high?: number
+  low?: number
+  preClose?: number
+  sourceTs?: number
+  seq?: number
+}
+
+export interface L2Summary {
+  code: string
+  bid1Price: number
+  bid1Volume: number
+  ask1Price: number
+  ask1Volume: number
+  spread: number
+  bid10Total: number
+  ask10Total: number
+  depthImbalance: number
+  tickBuyVolume: number
+  tickSellVolume: number
+  tickBuyCount: number
+  tickSellCount: number
+  lastTradePrice: number
+  lastTradeVolume: number
+  timestamp: number
+}
+
+export interface RealtimeStreamStatus {
+  status: 'connecting' | 'connected' | 'stale' | 'fallback' | 'disconnected'
+  subscribedCount: number
+  lastMessageTime: number | null
+  lastHeartbeatTime: number | null
+  fallbackActive: boolean
+  tdxConnected: boolean
+  reconnectAttempts: number
+  transport: 'ws' | 'http' | 'idle'
+  url: string
 }
 
 export interface PlatformData {
@@ -185,8 +279,6 @@ export interface MarketData {
   zhaban: ZhabanData
   indices: {
     sh: { change: number }
-    sz: { change: number }
-    cy: { change: number }
     hs300: { change: number }
     zz500: { change: number }
     zz1000: { change: number }
@@ -203,7 +295,6 @@ export interface MarketData {
   bigLossCount: number
   volumeRatio: number
   largeCapChange: number
-  smallCapChange: number
   microCapChange: number
   fengbanAmount: number
   fengbanRate: number

@@ -28,6 +28,11 @@
 
         <DragonThemeToggle />
 
+        <!-- 回测面板按钮（新增） -->
+        <button ref="backtestBtnRef" class="btn-icon" title="参数回测 (Ctrl+T)" @click="openPanel('backtest', $event)">
+          <span class="icon">📈</span>
+        </button>
+
         <!-- 题材分析 -->
         <button ref="sectorBtnRef" class="btn-icon" title="题材分析 (Ctrl+S)" @click="openPanel('sector', $event)">
           <span class="icon">📊</span>
@@ -75,6 +80,9 @@
             </div>
             <div class="dropdown-item" @click="openSettings('algorithm')">
               <span class="item-icon">🧠</span>算法中心
+            </div>
+            <div class="dropdown-item" @click="openBacktestPanel">
+              <span class="item-icon">📈</span>参数回测
             </div>
             <div class="dropdown-divider"></div>
             <div class="dropdown-item" @click="panels.help = true">
@@ -150,6 +158,13 @@
     <ExportPanel v-model:visible="panels.export" :trigger-rect="panelRects.export" @close="panels.export = false" />
     <FavoritePanel v-model:visible="panels.favorite" @close="panels.favorite = false" />
     <ContextMenu />
+    <StockL2DetailPanel :visible="panels.stockDetail" :stock-code="selectedStockCode"
+      :stock-name="selectedStockName" :trigger-rect="panelRects.stockDetail"
+      @close="panels.stockDetail = false" />
+
+    <!-- 回测面板 -->
+    <BacktestPanel v-model:visible="panels.backtest" :trigger-rect="panelRects.backtest"
+      @close="panels.backtest = false" />
 
     <!-- 题材相关面板 -->
     <SectorDetail v-model:visible="panels.sectorDetail" :sector-name="sectorDetailName"
@@ -188,12 +203,14 @@ import DragonBreathPanel from './components/panels/DragonBreathPanel.vue'
 import KeyboardHelpPanel from './components/panels/KeyboardHelpPanel.vue'
 import ExportPanel from './components/panels/ExportPanel.vue'
 import FavoritePanel from './components/panels/FavoritePanel.vue'
+import StockL2DetailPanel from './components/panels/StockL2DetailPanel.vue'
 import SectorDetail from './components/panels/SectorDetail.vue'
 import SectorAlert from './components/panels/SectorAlert.vue'
 import SectorRotation from './components/panels/SectorRotation.vue'
 import SectorStocksTree from './components/panels/SectorStocksTree.vue'
 import ThemeRiskDashboard from './components/panels/ThemeRiskDashboard.vue'
 import ThemeCorrelationPanel from './components/panels/ThemeCorrelationPanel.vue'
+import BacktestPanel from './components/panels/BacktestPanel.vue'
 
 // Stores
 import { useThemeStore } from './stores/theme'
@@ -201,6 +218,7 @@ import { useUIStore } from './stores/ui'
 import { useSelectorStore } from './stores/selector'
 import { useFavoriteStore } from './stores/favorite'
 import { useConfigStore } from './stores/config'
+import { useKeyboardShortcuts } from './composables/useKeyboardShortcuts'
 
 // 核心服务
 // ========== 1. 核心基础设施（最底层）==========
@@ -217,6 +235,7 @@ import { dataLoader } from './services/dataLoader'            // 八平台数据
 import { sectorAnalyzer } from './services/sectorAnalyzer'    // 题材分析
 import { dragonAnalyzer } from './services/DragonAnalyzer'    // 龙头分析
 import { dragonBreathAnalyzer } from './services/DragonBreathAnalyzer' // 情绪分析
+import { dragonReviewService } from './services/dragon/DragonReviewService'
 import { rotationService } from './services/rotationService'  // 轮动分析
 import { ThemeCorrelationAnalyzer } from './services/ThemeCorrelationAnalyzer' // 联动分析
 import { RankTrendAnalyzer } from './services/RankTrendAnalyzer' // 排名趋势分析
@@ -263,6 +282,7 @@ const algorithmBtnRef = ref<HTMLElement>()
 const favoriteBtnRef = ref<HTMLElement>()
 const dropdownRef = ref<HTMLElement | null>(null)
 const themeRiskBtnRef = ref<HTMLElement>()
+const backtestBtnRef = ref<HTMLElement>()
 
 // 导航标签
 const navTabs = [
@@ -288,6 +308,8 @@ const panels = ref({
   sectorAlert: false,
   sectorRotation: false,
   themeRisk: false,
+  backtest: false,
+  stockDetail: false,
 })
 
 const panelRects = ref<Record<string, DOMRect | undefined>>({})
@@ -314,6 +336,18 @@ const openPanel = (panelName: keyof typeof panels.value, event: MouseEvent) => {
   panels.value[panelName] = true
 }
 
+const openPanelFromShortcut = (panelName: keyof typeof panels.value, triggerRef?: HTMLElement) => {
+  if (triggerRef) {
+    panelRects.value[panelName] = triggerRef.getBoundingClientRect()
+  }
+  panels.value[panelName] = true
+}
+
+const openBacktestPanel = () => {
+  showDropdown.value = false
+  panels.value.backtest = true
+}
+
 const openExportPanel = (event?: MouseEvent) => {
   if (event?.currentTarget) {
     panelRects.value.export = (event.currentTarget as HTMLElement).getBoundingClientRect()
@@ -327,12 +361,44 @@ const openSectorDetail = (sectorName: string, event: MouseEvent) => {
   panels.value.sectorDetail = true
 }
 
+const openStockDetail = (data: { code?: string; name?: string; triggerRect?: DOMRect }) => {
+  const code = String(data?.code || '').trim()
+  if (!code) return
+
+  const stock = dataLayer.getStock(code)
+  selectedStockCode.value = code
+  selectedStockName.value = data?.name || stock?.name || code
+  panelRects.value.stockDetail = data?.triggerRect
+  panels.value.stockDetail = true
+}
+
 const openSettings = (type: string) => {
   showDropdown.value = false
   if (type === 'refresh') panels.value.settings = true
   else if (type === 'config') panels.value.config = true
   else if (type === 'algorithm') panels.value.algorithm = true
 }
+
+const focusSearchInput = () => {
+  const input = document.querySelector('.status-center .search-input') as HTMLInputElement | null
+  input?.focus()
+  input?.select()
+}
+
+useKeyboardShortcuts({
+  onDragon: () => openPanelFromShortcut('dragon', dragonBtnRef.value),
+  onSector: () => openPanelFromShortcut('sector', sectorBtnRef.value),
+  onBreath: () => openPanelFromShortcut('breath', breathBtnRef.value),
+  onTrend: () => openPanelFromShortcut('backtest', backtestBtnRef.value),
+  onFavorite: () => openPanelFromShortcut('favorite', favoriteBtnRef.value),
+  onAlgorithm: () => openPanelFromShortcut('algorithm', algorithmBtnRef.value),
+  onExport: () => openPanelFromShortcut('export'),
+  onRefresh: () => handleRefresh(),
+  onHelp: () => {
+    panels.value.help = !panels.value.help
+  },
+  onSearch: focusSearchInput,
+})
 
 // ========== 下拉菜单 ==========
 const toggleDropdown = () => (showDropdown.value = !showDropdown.value)
@@ -347,6 +413,7 @@ const handleClickOutside = (e: MouseEvent) => {
 const handleTabChange = (tabId: string) => {
   const panelMap: Record<string, keyof typeof panels.value> = {
     dragon: 'dragon',
+    emotion: 'breath',
     sector: 'sector',
     algorithm: 'algorithm',
   }
@@ -357,8 +424,16 @@ const handleTabChange = (tabId: string) => {
 
 // ========== 搜索处理 ==========
 const handleSearch = (keyword: string) => {
-  // 可以触发全局搜索事件
-  EventManager.emit('search:keyword', keyword)
+  const normalizedKeyword = keyword.trim()
+  if (uiStore.filters.searchKeyword) {
+    uiStore.updateFilters({ searchKeyword: '' })
+  }
+
+  const results = selectorStore.search(normalizedKeyword)
+  if (results.length > 0) {
+    selectorStore.selectStock(results[0].stock.code, { source: 'search', scroll: true })
+  }
+  EventManager.emit('search:keyword', normalizedKeyword)
 }
 
 // ========== 搜索处理 ==========
@@ -475,16 +550,17 @@ const lazyLoadServices = () => {
         })
       }
 
-      // 龙头分析 - 这是核心功能
-      safeExecute(dragonAnalyzer, 'recalculateAll', '龙头计算').then((count) => {
-
-      })
+      // 旧龙头分析保留兼容；真龙复盘结果才是新主结论
+      safeExecute(dragonAnalyzer, 'recalculateAll', '旧龙头兼容计算').then(() => {})
     }, 500)
 
     // 第2批：辅助分析服务（延迟1.5秒）
     setTimeout(() => {
       // 龙息分析
       safeExecute(dragonBreathAnalyzer, 'init', '龙息分析器')
+
+      // 真龙复盘
+      safeExecute(dragonReviewService, 'runFullUpdate', '真龙复盘')
 
       // 算法中心
       safeExecute(algorithmManager, 'init', '算法中心')
@@ -503,9 +579,9 @@ const lazyLoadServices = () => {
       if (refreshCoordinator?.registerService) {
         const services = [
           { name: 'dataLoader', instance: dataLoader },
-          { name: 'dragonAnalyzer', instance: dragonAnalyzer },
           { name: 'sectorAnalyzer', instance: sectorAnalyzer },
           { name: 'dragonBreathAnalyzer', instance: dragonBreathAnalyzer },
+          { name: 'dragonReviewService', instance: dragonReviewService },
         ]
         services.forEach(({ name, instance }) => {
           if (instance) {
@@ -566,6 +642,8 @@ async function safeExecute(obj: any, methodName: string, context: string, defaul
 
 // ========== 生命周期 ==========
 onMounted(async () => {
+  themeStore.init()
+
   // 执行主初始化
   await initializeAll()
 
@@ -580,6 +658,12 @@ onMounted(async () => {
     [AppEvents.DATA.MERGED, updateLastTime],
     [AppEvents.REFRESH.COMPLETE, updateLastTime],
     [AppEvents.DRAGON.UPDATED, updateLastTime],
+    [
+      'stock:show-detail',
+      (data: any) => {
+        openStockDetail(data)
+      },
+    ],
     [
       'sector:show-detail',
       (data: any) => {

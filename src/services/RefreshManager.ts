@@ -1,13 +1,13 @@
 // src/services/RefreshManager.ts
 
 import { reactive } from 'vue'
-import type { RefreshStatus } from '@/types'
-import { EventManager } from '@/utils/eventManager'
-import { AppEvents } from '@/types'
+import type { RefreshStatus } from '../types'
+import { EventManager } from '../utils/eventManager'
+import { AppEvents } from '../types'
 import { dataLayer } from './DataLayer'
-import { isTradingTime } from '@/utils/time'
-import type { RefreshStrategy, RefreshConfig } from '@/types/config'
-import { REFRESH_STRATEGY_CONFIGS, REFRESH_STORAGE_KEY } from '@/types/config'
+import { isTradingTime } from '../utils/time'
+import type { RefreshStrategy, RefreshConfig } from '../types/config'
+import { REFRESH_STRATEGY_CONFIGS, REFRESH_STORAGE_KEY } from '../types/config'
 import { refreshCoordinator } from './RefreshCoordinator'
 
 // 注意：已移除 incrementalUpdater 依赖
@@ -41,6 +41,7 @@ class RefreshManagerService {
     full: null as ReturnType<typeof setInterval> | null,
     trading: null as ReturnType<typeof setInterval> | null,
     maintenance: null as ReturnType<typeof setInterval> | null,
+    rotation: null as ReturnType<typeof setInterval> | null,
   }
 
   private currentConfig: RefreshConfig
@@ -367,6 +368,10 @@ class RefreshManagerService {
       clearInterval(this.timers.maintenance)
       this.timers.maintenance = null
     }
+    if (this.timers.rotation) {
+      clearInterval(this.timers.rotation)
+      this.timers.rotation = null
+    }
   }
 
   // ========== 配置管理 ==========
@@ -487,8 +492,9 @@ class RefreshManagerService {
       this.unsubscribeFns.push(() => window.removeEventListener('storage', storageHandler))
     }
 
-    // AllTick 轮换定时器
-    setInterval(() => {
+    // AllTick 轮换定时器（纳入统一清理，避免泄漏）
+    if (this.timers.rotation) clearInterval(this.timers.rotation)
+    this.timers.rotation = setInterval(() => {
       if (this.state.isRunning && !this.destroyed) {
         ;(window as any).webSocketService?.runRotation?.()
       }

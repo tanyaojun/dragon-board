@@ -844,9 +844,14 @@ export const AppEvents = {
 
   // ===== WebSocket相关事件 =====
   WEBSOCKET: {
-    STATUS_CHANGED: 'alltick:status-changed',
-    SUBSCRIPTION_UPDATED: 'alltick:subscription-updated',
-    TICK: 'alltick:tick',
+    STATUS_CHANGED: 'tdxl2:status-changed',
+    SUBSCRIPTION_UPDATED: 'tdxl2:subscription-updated',
+    FULL_STATE: 'tdxl2:full-state',
+    QUOTE_PATCH: 'tdxl2:quote-patch',
+    DEPTH_PATCH: 'tdxl2:depth-patch',
+    TICKS_BATCH: 'tdxl2:ticks-batch',
+    HEARTBEAT: 'tdxl2:heartbeat',
+    TICK: 'tdxl2:tick',
   },
 
   // ===== 行情服务相关事件 =====

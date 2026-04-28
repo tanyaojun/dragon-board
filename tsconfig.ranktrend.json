@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.app.json",
+  "include": [
+    "env.d.ts",
+    "src/type/**/*.ts",
+    "src/utils/eventManager.ts",
+    "src/services/RankTrendAnalyzer.ts",
+    "src/services/rankTrend/**/*.ts"
+  ],
+  "exclude": [
+    "src/**/__tests__/*",
+    "src/流程图/**/*",
+    "src/utils/dataQualityChecker.ts"
+  ]
+}

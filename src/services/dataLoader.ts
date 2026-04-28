@@ -6,6 +6,8 @@ import { dataLayer } from './DataLayer'
 import type { MergedStock } from './DataLayer'
 import { apiService } from './apiService'
 import { rankTrendAnalyzer } from './RankTrendAnalyzer'
+import { applyRankTrendAnalysis } from './rankTrend/compat'
+import type { RankTrendAnalysisResult } from './rankTrend/types'
 import sectorAnalyzer from './sectorAnalyzer'
 import { isTradingTime } from '../utils/time'
 import {
@@ -18,6 +20,12 @@ import {
 import { filterValidStockCodes } from '../utils/common'
 import { useUIStore } from '../stores/ui'
 import { stockCodeManager } from './StockCodeManager'
+import { calculateStockHotnessUpdates, stockHotnessConfigService } from './hotness'
+import { resolvePrimaryStockTheme } from './theme/stockThemeMeta'
+import { toLocalTradingDate } from './snapshot/identity'
+import { EventManager } from '../utils/eventManager'
+import { webSocketService } from './websocket'
+import { AppEvents, type Depth10Book, type QuotePatch, type TickTrade } from '../types'
 import { now } from 'lodash-es'
 
 // ========== 类型定义 ==========
@@ -48,9 +56,28 @@ interface LoadingStatus {
   startTime: number | null
 }
 
+interface StockSignalUpdate {
+  code: string
+  rankTrend?: RankTrendAnalysisResult | null
+  coverageWarning?: string | null
+}
+
+function isRankTrendAnalysisResult(value: unknown): value is RankTrendAnalysisResult {
+  return !!(
+    value &&
+    typeof value === 'object' &&
+    'meta' in value &&
+    'technical' in value &&
+    'cycle' in value &&
+    'risk' in value &&
+    'decision' in value
+  )
+}
+
 export interface MergedQuoteData {
   price: number
   change: number
+  speed?: number
   volume: number
   turnover: number
   turnoverRate: number
@@ -111,12 +138,326 @@ class DataLoaderService {
   private pendingCodes: Set<string> = new Set()
   private batchTimer: ReturnType<typeof setTimeout> | null = null
   private readonly BATCH_DELAY = 50
+  private readonly REALTIME_FLUSH_DELAY = 50
+  private realtimeFlushTimer: ReturnType<typeof setTimeout> | null = null
+  private pendingRealtimeQuotes = new Map<string, QuotePatch>()
+  private pendingDepthBooks = new Map<string, Depth10Book>()
+  private pendingTicks = new Map<string, TickTrade[]>()
+  private realtimeUnsubscribers: Array<() => void> = []
 
   private readonly PLATFORM_REFRESH_INTERVAL = 1800000 // 10分钟
 
   constructor() {
     console.log('[DataLoader] 初始化完成')
+    this.setupRealtimeFeed()
     this.startQuoteAutoRefresh() // 自动启动行情刷新
+  }
+
+  private setupRealtimeFeed() {
+    this.realtimeUnsubscribers.push(
+      EventManager.on(AppEvents.WEBSOCKET.FULL_STATE, (payload: any) => {
+        const quotes = Array.isArray(payload?.quotes) ? payload.quotes : []
+        const depth = Array.isArray(payload?.depth) ? payload.depth : []
+        this.queueRealtimeQuotes(quotes)
+        this.queueDepthBooks(depth)
+      }),
+    )
+
+    this.realtimeUnsubscribers.push(
+      EventManager.on(AppEvents.WEBSOCKET.QUOTE_PATCH, (payload: any) => {
+        this.queueRealtimeQuotes(Array.isArray(payload?.items) ? payload.items : [])
+      }),
+    )
+
+    this.realtimeUnsubscribers.push(
+      EventManager.on(AppEvents.WEBSOCKET.DEPTH_PATCH, (payload: any) => {
+        this.queueDepthBooks(Array.isArray(payload?.items) ? payload.items : [])
+      }),
+    )
+
+    this.realtimeUnsubscribers.push(
+      EventManager.on(AppEvents.WEBSOCKET.TICKS_BATCH, (payload: any) => {
+        const groups = Array.isArray(payload?.items) ? payload.items : []
+        groups.forEach((group: { code?: string; items?: TickTrade[] }) => {
+          const code = String(group?.code || '')
+          if (!code) return
+          const items = Array.isArray(group?.items) ? group.items : []
+          if (!items.length) return
+
+          const existing = this.pendingTicks.get(code) || []
+          this.pendingTicks.set(code, existing.concat(items))
+        })
+        this.scheduleRealtimeFlush()
+      }),
+    )
+  }
+
+  private queueRealtimeQuotes(items: QuotePatch[]) {
+    items.forEach((item) => {
+      if (!item?.code) return
+      this.pendingRealtimeQuotes.set(item.code, item)
+    })
+    this.scheduleRealtimeFlush()
+  }
+
+  private queueDepthBooks(items: Depth10Book[]) {
+    items.forEach((item) => {
+      if (!item?.code) return
+      this.pendingDepthBooks.set(item.code, item)
+    })
+    this.scheduleRealtimeFlush()
+  }
+
+  private scheduleRealtimeFlush() {
+    if (this.realtimeFlushTimer) return
+
+    this.realtimeFlushTimer = setTimeout(() => {
+      this.realtimeFlushTimer = null
+      this.flushRealtimeUpdates()
+    }, this.REALTIME_FLUSH_DELAY)
+  }
+
+  private flushRealtimeUpdates() {
+    const quoteItems = Array.from(this.pendingRealtimeQuotes.values())
+    const depthItems = Array.from(this.pendingDepthBooks.values())
+    const tickGroups = Array.from(this.pendingTicks.entries()).map(([code, items]) => ({ code, items }))
+
+    this.pendingRealtimeQuotes.clear()
+    this.pendingDepthBooks.clear()
+    this.pendingTicks.clear()
+
+    if (quoteItems.length) {
+      dataLayer.applyRealtimeQuoteBatch(
+        quoteItems.map((item) => ({
+          code: item.code,
+          name: item.name,
+          price: item.lastPrice,
+          change: item.changePct,
+          speed: item.speed,
+          volume: item.volume,
+          turnover: item.amount,
+          turnoverRate: item.turnoverRate,
+          sourceTs: item.sourceTs,
+          seq: item.seq,
+          timestamp: Date.now(),
+        })),
+      )
+    }
+
+    if (depthItems.length) {
+      dataLayer.updateDepth10Batch(depthItems)
+      dataLayer.updateL2SummaryBatch(depthItems.map((item) => this.buildDepthSummary(item)))
+    }
+
+    if (tickGroups.length) {
+      dataLayer.updateRecentTicksBatch(tickGroups)
+      dataLayer.updateL2SummaryBatch(
+        tickGroups.map((group) => this.buildTickSummary(group.code, dataLayer.getRecentTicks(group.code))),
+      )
+    }
+
+    if (quoteItems.length || depthItems.length || tickGroups.length) {
+      EventManager.emit(AppEvents.DATA.UPDATED, {
+        quotes: quoteItems.length,
+        depth: depthItems.length,
+        ticks: tickGroups.length,
+        source: 'tdx_l2',
+      })
+    }
+  }
+
+  private buildDepthSummary(book: Depth10Book) {
+    const bid1 = book.bids[0] || { price: 0, volume: 0 }
+    const ask1 = book.asks[0] || { price: 0, volume: 0 }
+    const bid10Total = book.bids.reduce((sum, level) => sum + (Number(level.volume) || 0), 0)
+    const ask10Total = book.asks.reduce((sum, level) => sum + (Number(level.volume) || 0), 0)
+    const total = bid10Total + ask10Total
+
+    return {
+      code: book.code,
+      bid1Price: Number(bid1.price) || 0,
+      bid1Volume: Number(bid1.volume) || 0,
+      ask1Price: Number(ask1.price) || 0,
+      ask1Volume: Number(ask1.volume) || 0,
+      spread: Number(ask1.price) > 0 && Number(bid1.price) > 0 ? Number(ask1.price) - Number(bid1.price) : 0,
+      bid10Total,
+      ask10Total,
+      depthImbalance: total > 0 ? Number(((bid10Total - ask10Total) / total).toFixed(4)) : 0,
+      timestamp: Date.now(),
+    }
+  }
+
+  private buildTickSummary(code: string, items: TickTrade[]) {
+    const buyTrades = items.filter((item) => item.side === 'buy')
+    const sellTrades = items.filter((item) => item.side === 'sell')
+    const lastTrade = items[items.length - 1]
+
+    return {
+      code,
+      tickBuyVolume: buyTrades.reduce((sum, item) => sum + (Number(item.volume) || 0), 0),
+      tickSellVolume: sellTrades.reduce((sum, item) => sum + (Number(item.volume) || 0), 0),
+      tickBuyCount: buyTrades.length,
+      tickSellCount: sellTrades.length,
+      lastTradePrice: Number(lastTrade?.price) || 0,
+      lastTradeVolume: Number(lastTrade?.volume) || 0,
+      timestamp: Date.now(),
+    }
+  }
+
+  private syncRealtimeSubscription() {
+    const codes = this.buildRealtimeSubscriptionCodes()
+    webSocketService.setHotPool(codes)
+  }
+
+  private buildRealtimeSubscriptionCodes(): string[] {
+    const hotCodes = Array.from(this.getAllHotCodes())
+    if (!hotCodes.length) return []
+
+    const hotCodeSet = new Set(hotCodes)
+    const stocks = dataLayer
+      .getStocks()
+      .filter((stock) => hotCodeSet.has(stock.code))
+
+    const getCompRank = (stock: any) => {
+      const compRank = Number(stock?.compRank)
+      if (Number.isFinite(compRank) && compRank > 0) return compRank
+      const fallbackRank = Number(stock?.rank)
+      if (Number.isFinite(fallbackRank) && fallbackRank > 0) return fallbackRank
+      return 9999
+    }
+
+    const getFinalSignal = (stock: any) => stock?.rankTrend?.decision?.final?.signal ?? 'none'
+    const getFinalConfidence = (stock: any) =>
+      Number(stock?.rankTrend?.decision?.final?.confidence) || 0
+    const getMacdCross = (stock: any) => stock?.rankTrend?.technical?.macd?.cross ?? 'none'
+
+    const priorityOf = (stock: any) => {
+      const withinTop50 = getCompRank(stock) <= 50
+      const finalSignal = getFinalSignal(stock)
+      const macdCross = getMacdCross(stock)
+
+      if (withinTop50 && finalSignal === 'buy' && macdCross === 'golden') return 3
+      if (withinTop50 && finalSignal === 'buy') return 2
+      if (withinTop50) return 1
+      return 0
+    }
+
+    const prioritizedCodes = stocks
+      .slice()
+      .sort((left: any, right: any) => {
+        const rightPriority = priorityOf(right)
+        const leftPriority = priorityOf(left)
+        if (rightPriority !== leftPriority) return rightPriority - leftPriority
+
+        const leftCompRank = getCompRank(left)
+        const rightCompRank = getCompRank(right)
+        if (leftCompRank !== rightCompRank) return leftCompRank - rightCompRank
+
+        const rightConfidence = getFinalConfidence(right)
+        const leftConfidence = getFinalConfidence(left)
+        if (rightConfidence !== leftConfidence) return rightConfidence - leftConfidence
+
+        const rightTurnover = Number(right?.turnover) || 0
+        const leftTurnover = Number(left?.turnover) || 0
+        if (rightTurnover !== leftTurnover) return rightTurnover - leftTurnover
+
+        return String(left?.code || '').localeCompare(String(right?.code || ''))
+      })
+      .map((stock) => stock.code)
+
+    const missingCodes = hotCodes.filter((code) => !prioritizedCodes.includes(code))
+    return [...prioritizedCodes, ...missingCodes]
+  }
+
+  private isRealtimePrimaryHealthy(): boolean {
+    const status = webSocketService.getStatus()
+    return status.subscribedCount > 0 && webSocketService.isTdxRealtimeHealthy()
+  }
+
+  private buildRealtimeMergedQuoteData(code: string, quote: QuotePatch): MergedQuoteData {
+    const existingQuote = dataLayer.getQuote(code) || {}
+    const stock = dataLayer.getStock(code)
+    const speedCandidate = quote.speed ?? existingQuote?.speed
+    const speed = typeof speedCandidate === 'number' && Number.isFinite(speedCandidate) ? speedCandidate : undefined
+
+    return {
+      price: Number(quote.lastPrice) || 0,
+      change: Number(quote.changePct) || 0,
+      speed,
+      volume: Number(quote.volume ?? stock?.volume ?? existingQuote?.volume) || 0,
+      turnover: Number(quote.amount ?? stock?.turnover ?? existingQuote?.turnover) || 0,
+      turnoverRate: Number(quote.turnoverRate ?? stock?.turnoverRate ?? existingQuote?.turnoverRate) || 0,
+      pe: Number(stock?.pe ?? existingQuote?.pe) || 0,
+      totalMV: Number(stock?.totalMV ?? existingQuote?.totalMV) || 0,
+      cirMV: Number(stock?.cirMV ?? existingQuote?.cirMV) || 0,
+      pb: Number(stock?.pb ?? existingQuote?.pb) || 0,
+      zlje: Number(stock?.zlje ?? existingQuote?.zlje) || 0,
+      zljzb: Number(stock?.zljzb ?? existingQuote?.zljzb) || 0,
+      cddje: Number(stock?.cddje ?? existingQuote?.cddje) || 0,
+      cddjzb: Number(stock?.cddjzb ?? existingQuote?.cddjzb) || 0,
+      name: quote.name || stock?.name || existingQuote?.name,
+      sources: ['tdx_l2'],
+      confidence: 99,
+      timestamp: Date.now(),
+    }
+  }
+
+  private mergeHttpIntoRealtimeQuote(
+    realtimeQuote: MergedQuoteData,
+    httpQuote: MergedQuoteData,
+  ): MergedQuoteData {
+    const pickFinite = (primary: unknown, fallback: unknown, preferPositive = false) => {
+      const primaryNumber = Number(primary)
+      if (Number.isFinite(primaryNumber) && (!preferPositive || primaryNumber > 0)) {
+        return primaryNumber
+      }
+
+      const fallbackNumber = Number(fallback)
+      if (Number.isFinite(fallbackNumber) && (!preferPositive || fallbackNumber > 0)) {
+        return fallbackNumber
+      }
+
+      return 0
+    }
+
+    return {
+      ...httpQuote,
+      ...realtimeQuote,
+      price: pickFinite(realtimeQuote.price, httpQuote.price, true),
+      change: pickFinite(realtimeQuote.change, httpQuote.change),
+      volume: pickFinite(realtimeQuote.volume, httpQuote.volume, true),
+      turnover: pickFinite(realtimeQuote.turnover, httpQuote.turnover, true),
+      turnoverRate: pickFinite(realtimeQuote.turnoverRate, httpQuote.turnoverRate, true),
+      pe: pickFinite(realtimeQuote.pe, httpQuote.pe),
+      totalMV: pickFinite(realtimeQuote.totalMV, httpQuote.totalMV, true),
+      cirMV: pickFinite(realtimeQuote.cirMV, httpQuote.cirMV, true),
+      pb: pickFinite(realtimeQuote.pb, httpQuote.pb),
+      zlje: pickFinite(realtimeQuote.zlje, httpQuote.zlje),
+      zljzb: pickFinite(realtimeQuote.zljzb, httpQuote.zljzb),
+      cddje: pickFinite(realtimeQuote.cddje, httpQuote.cddje),
+      cddjzb: pickFinite(realtimeQuote.cddjzb, httpQuote.cddjzb),
+      name: realtimeQuote.name || httpQuote.name,
+      sources: Array.from(new Set([...(realtimeQuote.sources || []), ...(httpQuote.sources || [])])),
+      confidence: Math.max(Number(realtimeQuote.confidence) || 0, Number(httpQuote.confidence) || 0),
+      timestamp: Date.now(),
+    }
+  }
+
+  private async maybeRefreshPlatformCache() {
+    const currentTs = Date.now()
+    if (currentTs - this.lastPlatformRefresh < this.PLATFORM_REFRESH_INTERVAL) {
+      return
+    }
+
+    const cacheKey = 'platforms'
+    const cached = this.platformCache.get(cacheKey)
+    if (!cached || currentTs - cached.timestamp >= this.PLATFORM_CACHE_TTL) {
+      await this.loadAllPlatforms(true)
+      await this.loadLimitUpData(true)
+      sectorAnalyzer.syncThemesToStocks()
+    }
+
+    this.lastPlatformRefresh = currentTs
   }
 
   // ========== 加载状态管理 ==========
@@ -159,22 +500,26 @@ class DataLoaderService {
     interval: number = this.QUOTE_REFRESH_INTERVAL,
     batchSize: number = this.QUOTE_BATCH_SIZE,
   ): void {
-    const now = new Date()
-    if (!isTradingTime(now)) return
-
     if (this.quoteRefreshTimer) return
 
     this.quoteRefreshTimer = setInterval(async () => {
       try {
+        if (!isTradingTime(new Date())) return
+
         const stocks = dataLayer.getStocks()
         if (!stocks.length) return
 
-        //获取所有有效股票代码，过滤无效
         const allStockCodes = stocks
           .map((s: any) => s.code)
           .filter((code: string) => code && code.length === 6 && code !== '000000')
 
         if (allStockCodes.length === 0) return
+
+        if (this.isRealtimePrimaryHealthy()) {
+          await this.updateVolumeRatios(allStockCodes)
+          await this.maybeRefreshPlatformCache()
+          return
+        }
 
         // 缩短批次延迟
         for (let i = 0; i < allStockCodes.length; i += batchSize) {
@@ -182,9 +527,12 @@ class DataLoaderService {
           const quotes = await this.fetchMergedQuotes(batchCodes, { force: true })
 
           if (quotes.size > 0) {
-            quotes.forEach((quote, code) => {
-              dataLayer.updateQuote(code, quote)
-            })
+            dataLayer.applyRealtimeQuoteBatch(
+              Array.from(quotes.entries()).map(([code, quote]) => ({
+                code,
+                ...quote,
+              })),
+            )
           }
 
           if (i + batchSize < allStockCodes.length) {
@@ -197,25 +545,7 @@ class DataLoaderService {
           await this.updateVolumeRatios(allStockCodes)
         }
 
-        // 每10分钟检查平台缓存，过期则刷新
-        const now = Date.now()
-        if (now - this.lastPlatformRefresh >= this.PLATFORM_REFRESH_INTERVAL) {
-          const cacheKey = 'platforms'
-          const cached = this.platformCache.get(cacheKey)
-          // 缓存不存在或超过30分钟，则刷新
-          if (!cached || now - cached.timestamp >= this.PLATFORM_CACHE_TTL) {
-            await this.loadAllPlatforms(true) // 强制刷新平台
-            await this.loadLimitUpData(true) // 刷新涨停数据
-            await this.mergeData() // 重新合并
-            sectorAnalyzer.syncThemesToStocks() // 同步题材
-            // 重新分析排名趋势
-            const rankMap = new Map()
-            const newStocks = dataLayer.getStocks()
-            newStocks.forEach((s, i) => rankMap.set(s.code, i + 1))
-            await rankTrendAnalyzer.getRankTrends(rankMap)
-          }
-          this.lastPlatformRefresh = now
-        }
+        await this.maybeRefreshPlatformCache()
 
         console.log('[DataLoader] 行情刷新完成')
       } catch (error) {
@@ -230,15 +560,15 @@ class DataLoaderService {
   private async updateVolumeRatios(codes: string[]): Promise<void> {
     try {
       const stocks = dataLayer.getStocks()
-      const volumeHistoryMap = await this.buildVolumeHistoryMap()
+      const volumeHistoryMap = await this.buildVolumeHistoryMap(codes)
 
-      const updates: Array<{ code: string; volumeRatio: number }> = []
+      const updates: Array<{ code: string; volumeRatio?: number }> = []
 
       for (const code of codes) {
         const stock = stocks.find((s) => s.code === code)
         if (stock && stock.volume && stock.volume > 0) {
           const volumeRatio = this.calculateVolumeRatioValue(stock, code, volumeHistoryMap)
-          if (volumeRatio !== undefined && volumeRatio !== stock.volumeRatio) {
+          if (volumeRatio !== stock.volumeRatio) {
             updates.push({ code, volumeRatio })
           }
         }
@@ -247,6 +577,8 @@ class DataLoaderService {
       if (updates.length) {
         console.log(`[DataLoader] 更新量比: ${updates.length} 只股票`)
         dataLayer.updateStockExtData(updates)
+        EventManager.emit(AppEvents.DATA.MERGED, { count: dataLayer.getStocks().length, timestamp: Date.now() })
+        useUIStore().updateDataVersion()
       }
     } catch (error) {
       console.warn('[DataLoader] 更新量比失败:', error)
@@ -261,10 +593,11 @@ class DataLoaderService {
     code: string,
     volumeHistoryMap: Map<string, number[]>,
   ): number | undefined {
-    if (!stock.volume || stock.volume <= 0) return 1.0
+    const currentVolume = Number(stock.volume)
+    if (!Number.isFinite(currentVolume) || currentVolume <= 0) return undefined
 
-    const volumes = volumeHistoryMap.get(code)
-    if (!volumes || volumes.length === 0) return 1.0
+    const volumes = this.resolveVolumeRatioHistory(currentVolume, volumeHistoryMap.get(code))
+    if (volumes.length === 0) return undefined
 
     const WEIGHTS = [5, 3, 2]
     const daysToUse = Math.min(volumes.length, WEIGHTS.length)
@@ -282,9 +615,30 @@ class DataLoaderService {
     const avgVolume = weightedSum / totalWeight
     if (avgVolume <= 0) return undefined
 
-    let ratio = stock.volume / avgVolume
+    let ratio = currentVolume / avgVolume
     ratio = Math.min(10, Math.max(0.1, Number(ratio.toFixed(2))))
     return ratio
+  }
+
+  private resolveVolumeRatioHistory(currentVolume: number, volumes?: number[]): number[] {
+    if (!volumes?.length) return []
+
+    const normalized = volumes
+      .map((volume) => Number(volume))
+      .filter((volume) => Number.isFinite(volume) && volume > 0)
+
+    if (!normalized.length) return []
+
+    const latestVolume = normalized[0]
+    const relativeDiff = Math.abs(latestVolume - currentVolume) / currentVolume
+
+    // 收盘后或凌晨刷新时，当前行情仍可能属于上一交易日。
+    // 如果最新日级快照成交量等于当前成交量，先剔除它，再用前三个历史交易日计算。
+    if (normalized.length > 1 && relativeDiff <= 0.001) {
+      return normalized.slice(1, 4)
+    }
+
+    return normalized.slice(0, 3)
   }
 
   /**
@@ -308,17 +662,41 @@ class DataLoaderService {
     if (validCodes.length === 0) return new Map()
 
     const result = new Map<string, MergedQuoteData>()
+    const realtimePrimary = this.isRealtimePrimaryHealthy()
+    const enrichmentCodes = new Set<string>()
+
+    if (realtimePrimary) {
+      const realtimeQuotes = webSocketService.getQuotesBatch(validCodes)
+      realtimeQuotes.forEach((quote, code) => {
+        const mergedRealtimeQuote = this.buildRealtimeMergedQuoteData(code, quote)
+        result.set(code, mergedRealtimeQuote)
+        if (
+          (quote.turnoverRate === undefined || quote.turnoverRate === null) &&
+          !(Number(mergedRealtimeQuote.turnoverRate) > 0)
+        ) {
+          enrichmentCodes.add(code)
+        }
+      })
+    }
+
+    const missingCodes = validCodes.filter((code) => !result.has(code))
+    const httpCodes = [...new Set([...missingCodes, ...Array.from(enrichmentCodes)])]
+    if (httpCodes.length === 0) {
+      return result
+    }
+
+    const httpResult = new Map<string, MergedQuoteData>()
 
     // 并行请求基础数据和完整数据
     const [basicResult, fullResult] = await Promise.allSettled([
-      this.fetchBasicData(validCodes),
-      this.fetchFullData(validCodes, options.force),
+      this.fetchBasicData(httpCodes),
+      this.fetchFullData(httpCodes, options.force),
     ])
 
     // 处理基础数据
     if (basicResult.status === 'fulfilled' && basicResult.value.size > 0) {
       basicResult.value.forEach((quote, code) => {
-        result.set(code, {
+        httpResult.set(code, {
           ...quote,
           timestamp: Date.now(),
           sources: [quote.source],
@@ -330,9 +708,9 @@ class DataLoaderService {
     // 处理完整数据（东财数据覆盖基础数据）
     if (fullResult.status === 'fulfilled' && fullResult.value.size > 0) {
       fullResult.value.forEach((fullQuote, code) => {
-        const existing = result.get(code)
+        const existing = httpResult.get(code)
         if (existing) {
-          result.set(code, {
+          httpResult.set(code, {
             ...existing,
             ...fullQuote,
             sources: [...existing.sources, fullQuote.source],
@@ -340,7 +718,7 @@ class DataLoaderService {
             timestamp: Date.now(),
           })
         } else {
-          result.set(code, {
+          httpResult.set(code, {
             ...fullQuote,
             timestamp: Date.now(),
             sources: [fullQuote.source],
@@ -349,6 +727,16 @@ class DataLoaderService {
         }
       })
     }
+
+    httpResult.forEach((quote, code) => {
+      const realtimeQuote = result.get(code)
+      if (realtimeQuote) {
+        result.set(code, this.mergeHttpIntoRealtimeQuote(realtimeQuote, quote))
+        return
+      }
+
+      result.set(code, quote)
+    })
 
     return result
   }
@@ -594,12 +982,6 @@ class DataLoaderService {
       const updatedCount = sectorAnalyzer.syncThemesToStocks()
       if (updatedCount > 0) console.log(`[DataLoader] 刷新后同步题材: ${updatedCount}只股票`)
 
-      // ✅ 触发排名趋势分析
-      const stocks = dataLayer.getStocks()
-      const rankMap = new Map()
-      stocks.forEach((s, i) => rankMap.set(s.code, i + 1))
-      await rankTrendAnalyzer.getRankTrends(rankMap)
-
       this.updateProgress(100, '完成')
       this.setLoading(false)
 
@@ -824,13 +1206,13 @@ class DataLoaderService {
    */
   async mergeData(): Promise<any[]> {
     // 1. 获取历史成交量索引
-    const volumeHistoryMap = await this.buildVolumeHistoryMap()
+    const allCodes = this.getAllHotCodes()
+    const codesArray = Array.from(allCodes)
+    const volumeHistoryMap = await this.buildVolumeHistoryMap(codesArray)
 
     // 2. ✅ 先加载行情数据
-    const allCodes = this.getAllHotCodes()
     let quotesMap = new Map<string, any>()
     if (allCodes.size > 0) {
-      const codesArray = Array.from(allCodes)
       quotesMap = await this.getQuoteBatch(codesArray, true)
     }
 
@@ -850,13 +1232,52 @@ class DataLoaderService {
     // 7. 合并额外数据
     merged = this.mergeExtraData(merged)
 
-    // 8. 计算信号
+    // 8. 计算个股热度
+    this.updateStockHotness(merged)
+
+    // 9. 计算信号
     merged = await this.calculateSignals(merged)
 
-    // 9. 存储到 DataLayer
+    // 10. 存储到 DataLayer
     dataLayer.setMergedStocks(merged)
+    EventManager.emit(AppEvents.DATA.MERGED, { count: merged.length, timestamp: Date.now() })
+    useUIStore().updateDataVersion()
+    this.syncRealtimeSubscription()
 
     return merged
+  }
+
+  /**
+   * 8. 计算个股热度
+   * 热度不是 avgRank 的简单拷贝，而是“跨平台排名 + 覆盖度 + 人气 + 人气变化 + 领涨信号 + 身位 + 换手活跃度”的综合结果。
+   */
+  private updateStockHotness(stocks: MergedStock[]): void {
+    const updates = calculateStockHotnessUpdates(
+      stocks,
+      this.state.value.platforms?.length || 8,
+      stockHotnessConfigService.getConfig(),
+    )
+
+    const hotnessMap = new Map(updates.map((item) => [item.code, item.hotness]))
+    stocks.forEach((stock) => {
+      stock.hotness = hotnessMap.get(stock.code) ?? 0
+    })
+
+    dataLayer.updateStockHotness(updates)
+  }
+
+  /**
+   * 对外暴露热度重算入口，方便后续接参数优化器或开发期手工微调。
+   */
+  recalculateStockHotness(): MergedStock[] {
+    const stocks = dataLayer.getStocks().map((stock) => ({ ...stock }))
+    if (!stocks.length) return []
+
+    this.updateStockHotness(stocks)
+    dataLayer.setMergedStocks(stocks)
+    EventManager.emit(AppEvents.DATA.MERGED, { count: stocks.length, timestamp: Date.now() })
+    useUIStore().updateDataVersion()
+    return stocks
   }
 
   /**
@@ -865,16 +1286,35 @@ class DataLoaderService {
    */
   private mergeExtraData(stocks: any[]): any[] {
     return stocks.map((stock) => {
-      const merged = { ...stock }
+      const {
+        reviewAuthority: _reviewAuthority,
+        reviewRole: _reviewRole,
+        tradeability: _tradeability,
+        chaseRisk: _chaseRisk,
+        ...merged
+      } = stock
 
       // 合并题材数据
       const themes = dataLayer.getStockThemes(stock.code) || []
       merged.themes = themes
+      const primaryTheme = resolvePrimaryStockTheme(themes)
+      merged.mainTheme = primaryTheme.mainTheme
+      merged.themeHeat = primaryTheme.themeHeat
+      merged.themeLevel = primaryTheme.themeLevel
+
+      const realtimeQuote = dataLayer.getQuote(stock.code)
+      const realtimeSpeed = Number(realtimeQuote?.speed)
+      const hasRealtimeSpeed = Number.isFinite(realtimeSpeed)
+      if (hasRealtimeSpeed) {
+        merged.speed = realtimeSpeed
+      }
 
       // 合并 JXBK 数据
       const jxbkStock = dataLayer.getJxbkStock(stock.code)
       if (jxbkStock) {
-        merged.speed = jxbkStock.speed
+        if (!hasRealtimeSpeed) {
+          merged.speed = jxbkStock.speed
+        }
         merged.leadTimes = jxbkStock.leadTimes
         merged.leadStatus = jxbkStock.leadStatus
         merged.lianbanStr = jxbkStock.lianban
@@ -889,13 +1329,12 @@ class DataLoaderService {
         merged.cirMV = jxbkStock.cirMV
       }
 
-      // 合并龙头数据
-      const leaderInfo = dataLayer.getLeaderByCode(stock.code)
-      if (leaderInfo) {
-        merged.isSectorLeader = true
-        merged.leaderLevel = leaderInfo.levelName
-        merged.leaderScore = leaderInfo.score
-        merged.continuousDays = leaderInfo.continuousDays
+      const leaderRecord = dataLayer.getLeaderByCode(stock.code)
+      if (leaderRecord) {
+        merged.reviewAuthority = leaderRecord.authority
+        merged.reviewRole = leaderRecord.primaryRole
+        merged.tradeability = leaderRecord.tradeability
+        merged.chaseRisk = leaderRecord.chaseRisk
       }
 
       // 合并涨停扩展数据
@@ -913,57 +1352,61 @@ class DataLoaderService {
         merged.isNew = limitUpData.isNew ?? merged.isNew
       }
 
+      merged.continuousDays = this.resolveContinuousDays(merged, jxbkStock, limitUpData, leaderRecord)
+
       return merged
     })
   }
 
+  private parseContinuousDays(value?: string | number | null): number | null {
+    if (typeof value === 'number' && Number.isFinite(value) && value > 0) return value
+    if (!value) return null
+
+    const text = String(value)
+    if (text.includes('首板')) return 1
+
+    const match = text.match(/(\d+)/)
+    if (!match) return null
+
+    const parsed = Number(match[1])
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null
+  }
+
+  private resolveContinuousDays(
+    stock: any,
+    jxbkStock: any,
+    limitUpData: any,
+    leaderRecord: ReturnType<typeof dataLayer.getLeaderByCode>,
+  ): number {
+    const candidates = [
+      leaderRecord?.continuousDays,
+      limitUpData?.highDays,
+      this.parseContinuousDays(limitUpData?.lianbanStr),
+      this.parseContinuousDays(stock.lianbanStr),
+      this.parseContinuousDays(jxbkStock?.lianban),
+      this.parseContinuousDays(stock.highDays),
+      this.parseContinuousDays(stock.continuousDays),
+    ]
+
+    const resolved = candidates.find(
+      (value) => typeof value === 'number' && Number.isFinite(value) && value > 0,
+    )
+
+    return resolved ?? 1
+  }
+
   /**
-   * 1. 构建历史成交量索引（从整点快照中获取）
-   * 返回 Map<股票代码, 最近3日成交量数组（按时间倒序，最新在前）>
+   * 1. 构建历史成交量索引
+   * 正式主链只按 code + daily + tradingDate 读取日级快照投影行，
+   * 返回最近 4 个交易日成交量，供后续剔除“当前成交量与最新日级快照重复”的场景。
    */
-  public async buildVolumeHistoryMap(): Promise<Map<string, number[]>> {
-    const volumeHistoryMap = new Map<string, Array<{ volume: number; timestamp: number }>>()
-    const snapshotDates = await dataLayer.getSnapshotDates()
-    const allSnapshots: any[] = []
-
-    // 收集所有半点快照（15:00分快照）
-    for (const date of snapshotDates) {
-      const snapshot = await dataLayer.getSnapshotFromDB(date)
-      if (snapshot?.type === 'half_hour' && date.includes('15:00')) {
-        if (snapshot?.hotlist?.length) {
-          allSnapshots.push(snapshot)
-        }
-      }
-    }
-
-    // 按时间倒序（最新的在前）
-    allSnapshots.sort((a, b) => b.timestamp - a.timestamp)
-
-    // 收集每个股票的所有历史成交量
-    for (const snapshot of allSnapshots) {
-      for (const item of snapshot.hotlist || []) {
-        if (!item.code || !item.volume) continue
-
-        const volumes = volumeHistoryMap.get(item.code) || []
-        volumes.push({
-          volume: item.volume,
-          timestamp: snapshot.timestamp,
-        })
-        volumeHistoryMap.set(item.code, volumes)
-      }
-    }
-
-    // 转换为只保留最近3日的成交量
-    const result = new Map<string, number[]>()
-    for (const [code, volumesWithTime] of volumeHistoryMap.entries()) {
-      volumesWithTime.sort((a, b) => b.timestamp - a.timestamp)
-      const recentVolumes = volumesWithTime.slice(0, 3).map((v) => v.volume)
-      if (recentVolumes.length > 0) {
-        result.set(code, recentVolumes)
-      }
-    }
-
-    return result
+  public async buildVolumeHistoryMap(codes: string[] = []): Promise<Map<string, number[]>> {
+    const targetCodes = filterValidStockCodes([...new Set(codes)])
+    if (targetCodes.length === 0) return new Map()
+    return dataLayer.getStockVolumeHistory(targetCodes, {
+      anchorTradingDate: toLocalTradingDate(new Date()),
+      lookbackDays: 4,
+    })
   }
 
   /**
@@ -976,6 +1419,8 @@ class DataLoaderService {
   ): Promise<Map<string, any>> {
     const quoteMap = useLatestQuotes ?? new Map()
     const stockMap = new Map<string, any>()
+    const quoteProcessedCodes = new Set<string>()
+    const volumeRatioCalculatedCodes = new Set<string>()
 
     for (const [platform, items] of Object.entries(this.state.value.data || {})) {
       for (const item of items) {
@@ -1001,11 +1446,16 @@ class DataLoaderService {
           stock.platformName = item.name
         }
 
-        // 行情数据（只处理一次）
-        if (quoteMap.has(code) && !stock._quoteProcessed) {
+        // 行情数据（本轮合并只处理一次，避免把临时标记写进股票对象）
+        if (quoteMap.has(code) && !quoteProcessedCodes.has(code)) {
           this.mergeQuoteData(stock, code, quoteMap)
+          quoteProcessedCodes.add(code)
+        }
+
+        // 量比不依赖行情请求是否命中；只要当前 stock 有成交量，就按日级投影表历史量重算。
+        if (!volumeRatioCalculatedCodes.has(code)) {
           this.calculateVolumeRatio(stock, code, volumeHistoryMap)
-          stock._quoteProcessed = true
+          volumeRatioCalculatedCodes.add(code)
         }
       }
     }
@@ -1013,7 +1463,16 @@ class DataLoaderService {
     // 添加没有平台排名的股票（保留原有数据）
     for (const [code, existing] of existingMap.entries()) {
       if (!stockMap.has(code)) {
-        stockMap.set(code, { ...existing })
+        const stock = { ...existing }
+        if (quoteMap.has(code) && !quoteProcessedCodes.has(code)) {
+          this.mergeQuoteData(stock, code, quoteMap)
+          quoteProcessedCodes.add(code)
+        }
+        if (!volumeRatioCalculatedCodes.has(code)) {
+          this.calculateVolumeRatio(stock, code, volumeHistoryMap)
+          volumeRatioCalculatedCodes.add(code)
+        }
+        stockMap.set(code, stock)
       }
     }
 
@@ -1075,67 +1534,14 @@ class DataLoaderService {
     code: string,
     volumeHistoryMap: Map<string, number[]>,
   ): void {
-    // 没有成交量，给默认值1
-    if (!stock.volume || stock.volume <= 0) {
-      stock.volumeRatio = 1.0
-      return
-    }
-
-    const volumes = volumeHistoryMap.get(code)
-    // 没有历史数据，给默认值1
-    if (!volumes || volumes.length === 0) {
-      stock.volumeRatio = 1.0
-      return
-    }
-
-    // 权重配置（昨日5、前日3、大前日2）
-    const WEIGHTS = [5, 3, 2]
-
-    // 根据实际数据天数动态调整
-    const daysToUse = Math.min(volumes.length, WEIGHTS.length)
-
-    let weightedSum = 0
-    let totalWeight = 0
-
-    for (let i = 0; i < daysToUse; i++) {
-      weightedSum += volumes[i] * WEIGHTS[i]
-      totalWeight += WEIGHTS[i]
-    }
-
-    if (totalWeight === 0) return
-
-    const avgVolume = weightedSum / totalWeight
-    if (avgVolume <= 0) return
-
-    // 计算量比
-    let ratio = stock.volume / avgVolume
-    ratio = Math.min(10, Math.max(0.1, Number(ratio.toFixed(2))))
-    stock.volumeRatio = ratio
+    stock.volumeRatio = this.calculateVolumeRatioValue(stock, code, volumeHistoryMap)
   }
 
   /**
    * 批量更新股票信号（从 RankTrendAnalyzer 调用）
    */
   updateStockSignals(
-    updates: Array<{
-      code: string
-      rankChange?: number
-      macd?: number
-      macdSignal?: number
-      macdHistogram?: number
-      ma5?: number
-      ma10?: number
-      maTrend?: 'up' | 'down' | 'steady'
-      macdCross?: 'golden' | 'death' | 'none'
-      directionSignal?: 'buy' | 'sell' | 'hold'
-      directionConfidence?: number
-      accelerationSignal?: 'buy' | 'sell' | 'hold'
-      accelerationConfidence?: number
-      crossSignal?: 'buy' | 'sell' | 'hold'
-      crossConfidence?: number
-      finalSignal?: 'buy' | 'sell' | 'hold'
-      finalConfidence?: number
-    }>,
+    updates: StockSignalUpdate[],
   ) {
     // 获取当前 merged.stocks
     const stocks = dataLayer.getStocks()
@@ -1145,30 +1551,45 @@ class DataLoaderService {
     for (const update of updates) {
       const stock = stockMap.get(update.code)
       if (stock) {
-        if (update.rankChange !== undefined) stock.rankChange = update.rankChange
-        if (update.macd !== undefined) stock.macd = update.macd
-        if (update.macdSignal !== undefined) stock.macdSignal = update.macdSignal
-        if (update.macdHistogram !== undefined) stock.macdHistogram = update.macdHistogram
-        if (update.ma5 !== undefined) stock.ma5 = update.ma5
-        if (update.ma10 !== undefined) stock.ma10 = update.ma10
-        if (update.maTrend !== undefined) stock.maTrend = update.maTrend
-        if (update.macdCross !== undefined) stock.macdCross = update.macdCross
-        if (update.directionSignal !== undefined) stock.directionSignal = update.directionSignal
-        if (update.directionConfidence !== undefined)
-          stock.directionConfidence = update.directionConfidence
-        if (update.accelerationSignal !== undefined)
-          stock.accelerationSignal = update.accelerationSignal
-        if (update.accelerationConfidence !== undefined)
-          stock.accelerationConfidence = update.accelerationConfidence
-        if (update.crossSignal !== undefined) stock.crossSignal = update.crossSignal
-        if (update.crossConfidence !== undefined) stock.crossConfidence = update.crossConfidence
-        if (update.finalSignal !== undefined) stock.finalSignal = update.finalSignal
-        if (update.finalConfidence !== undefined) stock.finalConfidence = update.finalConfidence
+        applyRankTrendAnalysis(
+          stock,
+          isRankTrendAnalysisResult(update.rankTrend) ? update.rankTrend : null,
+        )
+        stock.rankTrendCoverageWarning = update.coverageWarning || undefined
       }
     }
 
     // 存回 DataLayer
-    dataLayer.setMergedStocks(Array.from(stockMap.values()))
+    const mergedStocks = Array.from(stockMap.values())
+    dataLayer.setMergedStocks(mergedStocks)
+    EventManager.emit(AppEvents.DATA.MERGED, { count: mergedStocks.length, timestamp: Date.now() })
+    useUIStore().updateDataVersion()
+  }
+
+  async refreshRankTrendSignals(): Promise<void> {
+    const stocks = dataLayer.getStocks()
+    if (!stocks.length) return
+
+    const rankMap = new Map<string, number>()
+    stocks.forEach((stock, index) => {
+      rankMap.set(stock.code, index + 1)
+    })
+
+    const results = await rankTrendAnalyzer.getRankTrends(rankMap, {
+      updateSignalStore: false,
+    })
+    const coverageWarning = this.extractRankTrendCoverageWarning(results)
+
+    const updates: StockSignalUpdate[] = []
+    for (const [code, rankTrend] of results.entries()) {
+      updates.push({ code, rankTrend, coverageWarning })
+    }
+
+    if (coverageWarning) {
+      console.warn('[DataLoader] 排名趋势信号使用了不完整快照样本:', coverageWarning)
+    }
+
+    this.updateStockSignals(updates)
   }
 
   /**
@@ -1228,6 +1649,7 @@ class DataLoaderService {
   private async calculateSignals(merged: any[]): Promise<any[]> {
     const newRankMap = new Map(merged.map((s, i) => [s.code, i + 1]))
     const rankTrends = await rankTrendAnalyzer.getRankTrends(newRankMap)
+    const coverageWarning = this.extractRankTrendCoverageWarning(rankTrends)
 
     for (const stock of merged) {
       stock.rank = newRankMap.get(stock.code)
@@ -1235,6 +1657,10 @@ class DataLoaderService {
       // 题材数据
       const themes = dataLayer.getStockThemes(stock.code)
       stock.themes = themes
+      const primaryTheme = resolvePrimaryStockTheme(themes || [])
+      stock.mainTheme = primaryTheme.mainTheme
+      stock.themeHeat = primaryTheme.themeHeat
+      stock.themeLevel = primaryTheme.themeLevel
 
       // 扩展数据
       const hotness = dataLayer.getStockHotness?.(stock.code)
@@ -1259,44 +1685,24 @@ class DataLoaderService {
 
       // 应用信号
       const trend = rankTrends.get(stock.code)
-      if (trend) {
-        // 3个排名趋势信号
-        stock.directionSignal = trend.directionSignal
-        stock.directionConfidence = trend.directionConfidence
-        stock.accelerationSignal = trend.accelerationSignal
-        stock.accelerationConfidence = trend.accelerationConfidence
-        stock.crossSignal = trend.crossSignal
-        stock.crossConfidence = trend.crossConfidence
+      applyRankTrendAnalysis(stock, isRankTrendAnalysisResult(trend) ? trend : null)
+      stock.rankTrendCoverageWarning = coverageWarning || undefined
+    }
 
-        // MACD确认信号
-        stock.macdCross = trend.macdCross
-
-        // MACD 详细数值
-        stock.macd = trend.macd
-        stock.macdSignal = trend.macdSignal
-        stock.macdHistogram = trend.macdHistogram
-
-        // 综合信号
-        stock.finalSignal = trend.finalSignal
-        stock.finalConfidence = trend.finalConfidence
-
-        // UI显示
-        stock.rankChange = Math.round(trend.change)
-      } else {
-        // 默认值
-        stock.directionSignal = 'none'
-        stock.directionConfidence = 0
-        stock.accelerationSignal = 'none'
-        stock.accelerationConfidence = 0
-        stock.crossSignal = 'none'
-        stock.crossConfidence = 0
-        stock.macdCross = 'none'
-        stock.finalSignal = 'none'
-        stock.finalConfidence = 0
-        stock.rankChange = 0
-      }
+    if (coverageWarning) {
+      console.warn('[DataLoader] 综合榜单信号基于不完整快照样本:', coverageWarning)
     }
     return merged
+  }
+
+  private extractRankTrendCoverageWarning(
+    results: Map<string, RankTrendAnalysisResult>,
+  ): string | null {
+    for (const result of results.values()) {
+      const warning = result?.meta?.sampleQuality?.coverageWarning
+      if (warning) return warning
+    }
+    return null
   }
   /**
    * 创建空股票对象（修改版）
@@ -1336,12 +1742,9 @@ class DataLoaderService {
       platforms: 0,
       avgRankNum: DEFAULT_RANK,
       avgRank: DEFAULT_RANK.toString(),
-      compRank: undefined, // ✅ null 改为 undefined
+      compRank: undefined,
       compScore: 0,
       updatedAt: Date.now(),
-      isSectorLeader: false,
-      leaderLevel: '非龙头',
-      leaderScore: 0,
       continuousDays: 1,
       themes: [],
       hotness: 0,
@@ -1353,31 +1756,12 @@ class DataLoaderService {
       boardHeight: 0,
       highDays: 0,
       platformName: '',
-      rankChange: 0,
       fundPenetration: 0,
       firstSeen: undefined,
       lastSeen: undefined,
       mainTheme: undefined,
       themeHeat: 0,
       themeLevel: '冷',
-      // ✅ 3个排名趋势信号
-      directionSignal: 'none',
-      directionConfidence: 0,
-      accelerationSignal: 'none',
-      accelerationConfidence: 0,
-      crossSignal: 'none',
-      crossConfidence: 0,
-      // ✅ MACD确认信号
-      finalSignal: 'none',
-      finalConfidence: 0,
-      // ✅ MACD技术指标
-      ma5: 0,
-      ma10: 0,
-      maTrend: 'steady',
-      macd: 0,
-      macdSignal: 0,
-      macdHistogram: 0,
-      macdCross: 'none',
     }
   }
 
@@ -1578,6 +1962,15 @@ class DataLoaderService {
       clearTimeout(this.batchTimer)
       this.batchTimer = null
     }
+    if (this.realtimeFlushTimer) {
+      clearTimeout(this.realtimeFlushTimer)
+      this.realtimeFlushTimer = null
+    }
+    this.realtimeUnsubscribers.forEach((unsubscribe) => unsubscribe())
+    this.realtimeUnsubscribers = []
+    this.pendingRealtimeQuotes.clear()
+    this.pendingDepthBooks.clear()
+    this.pendingTicks.clear()
     this.pendingCodes.clear()
     this.pendingQuoteRequests.clear()
   }

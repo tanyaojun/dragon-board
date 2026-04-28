@@ -30,6 +30,27 @@ export class DataQualityChecker {
 
   private readonly REQUIRED_SIGNALS = ['direction', 'acceleration', 'cross', 'final']
 
+  private async listSnapshotKeys(): Promise<string[]> {
+    const records = await dataLayer.listSnapshots({ sort: 'desc' })
+    return records.map((record) => record.id)
+  }
+
+  private async loadSnapshot(snapshotKey: string): Promise<any | null> {
+    const record = await dataLayer.getSnapshotById(snapshotKey)
+    if (!record) return null
+
+    return {
+      ...record.payload,
+      id: record.id,
+      date: record.displayKey || record.id,
+      type: record.type,
+      timestamp: record.timestamp,
+      tradingDate: record.tradingDate,
+      slotTime: record.slotTime,
+      hotlist: Array.isArray(record.payload?.hotlist) ? record.payload.hotlist : [],
+    }
+  }
+
   /**
    * 检查单个快照的数据质量
    */
@@ -46,7 +67,7 @@ export class DataQualityChecker {
     }
   }> {
     const issues: string[] = []
-    const snapshot = await dataLayer.getSnapshotFromDB(snapshotKey)
+    const snapshot = await this.loadSnapshot(snapshotKey)
 
     if (!snapshot) {
       return {
@@ -180,7 +201,7 @@ export class DataQualityChecker {
       hasSignals: number
     }
   }> {
-    const snapshotDates = await dataLayer.getSnapshotDates()
+    const snapshotDates = await this.listSnapshotKeys()
     const totalSnapshots = snapshotDates.length
 
     console.log(`[DataQuality] 开始检查 ${totalSnapshots} 个快照`)
@@ -196,7 +217,7 @@ export class DataQualityChecker {
 
     for (const snapshotKey of snapshotDates) {
       const result = await this.checkSnapshotQuality(snapshotKey)
-      const snapshot = await dataLayer.getSnapshotFromDB(snapshotKey)
+      const snapshot = await this.loadSnapshot(snapshotKey)
       const type = snapshot?.type || 'unknown'
 
       // 统计快照类型
@@ -316,7 +337,7 @@ export class DataQualityChecker {
     failed: number
     details: string[]
   }> {
-    const snapshotDates = await dataLayer.getSnapshotDates()
+    const snapshotDates = await this.listSnapshotKeys()
     const details: string[] = []
     let fixed = 0
     let failed = 0
@@ -325,7 +346,7 @@ export class DataQualityChecker {
 
     for (const snapshotKey of snapshotDates) {
       try {
-        const snapshot = await dataLayer.getSnapshotFromDB(snapshotKey)
+        const snapshot = await this.loadSnapshot(snapshotKey)
         if (!snapshot) continue
 
         const type = snapshot.type

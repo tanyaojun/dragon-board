@@ -1,0 +1,14 @@
+[
+  { "code": "600000", "name": "浦发银行", "market": "SH", "type": "stock" },
+  { "code": "600004", "name": "白云机场", "market": "SH", "type": "stock" },
+  { "code": "600006", "name": "东风汽车", "market": "SH", "type": "stock" },
+  { "code": "600007", "name": "中国国贸", "market": "SH", "type": "stock" },
+  { "code": "600008", "name": "首创环保", "market": "SH", "type": "stock" },
+  { "code": "600009", "name": "上海机场", "market": "SH", "type": "stock" },
+  { "code": "300317", "name": "珈伟新能", "market": "SZ", "type": "stock" },
+  { "code": "300318", "name": "博晖创新", "market": "SZ", "type": "stock" },
+  { "code": "300319", "name": "麦捷科技", "market": "SZ", "type": "stock" },
+  { "code": "300320", "name": "海达股份", "market": "SZ", "type": "stock" },
+  { "code": "300321", "name": "同大股份", "market": "SZ", "type": "stock" },
+  { "code": "300322", "name": "硕贝德", "market": "SZ", "type": "stock" }
+]

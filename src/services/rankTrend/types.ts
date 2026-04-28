@@ -1,0 +1,162 @@
+import type { RankTrendSnapshotType } from '../../type/rankTrendDefaults'
+
+export type RankSignalDirection = 'buy' | 'sell' | 'hold'
+export type RankSignalDirectionWithNone = RankSignalDirection | 'none'
+export type MacdCross = 'golden' | 'death' | 'none'
+
+export type AttentionStage =
+  | 'ignition'
+  | 'expansion'
+  | 'crowded'
+  | 'reversal'
+  | 'cooling'
+
+export type CycleEntryBias = 'preferred' | 'watch' | 'avoid' | 'blocked'
+export type MarketRegimeState = 'strong' | 'normal' | 'weak' | 'retreat'
+export type CandidateTier = 'A_MAIN' | 'B_IGNITION' | 'C_CROWDED' | 'D_EXIT_RISK' | 'N_NEUTRAL'
+export type StrategyAction = 'focus' | 'watch' | 'hold' | 'avoid' | 'exit_watch'
+
+export interface RankTrendMomentumProfile {
+  short: number
+  mid: number
+  long: number
+  acceleration: number
+  shock: number
+  composite: number
+}
+
+export interface MarketRegimeAnalysis {
+  state: MarketRegimeState
+  score: number
+  reasons: string[]
+}
+
+export interface RankTrendStrategyResult {
+  regime: MarketRegimeAnalysis
+  momentum: RankTrendMomentumProfile
+  candidateTier: CandidateTier
+  action: StrategyAction
+  reasons: string[]
+}
+
+export interface RankTrendRuntimeConfig {
+  momentumPeriods: number[]
+  momentumWeights: number[]
+  buyThresholds: number[]
+  sellThresholds: number[]
+  macdFast: number
+  macdSlow: number
+  macdSignal: number
+  directionWeight: number
+  accelerationWeight: number
+  crossWeight: number
+  macdWeight: number
+  buyScoreThreshold: number
+  sellScoreThreshold: number
+}
+
+export interface RankTrendSignalScore {
+  signal: RankSignalDirection
+  confidence: number
+  score: number
+}
+
+export interface RankTrendAnalysisResult {
+  meta: {
+    code: string
+    currentRank: number
+    currentPercentile: number
+    change: number
+    rawChange: number
+    updateTime: number
+    sampleQuality?: {
+      snapshotType: RankTrendSnapshotType
+      sampleCount: number
+      requiredSampleCount: number
+      status: 'ok' | 'degraded' | 'insufficient'
+      coverageWarning?: string
+      latestTradingDate?: string
+      latestSlotTime?: string
+      delayedCount: number
+      restoredCount: number
+    }
+  }
+  technical: {
+    movingAverage: {
+      ma5: number
+      ma10: number
+      trend: 'up' | 'down' | 'steady'
+    }
+    macd: {
+      dif: number
+      dea: number
+      histogram: number
+      cross: MacdCross
+      rawScore: number
+      confirmed: boolean
+    }
+    signals: {
+      direction: RankTrendSignalScore
+      acceleration: RankTrendSignalScore
+      zeroCross: RankTrendSignalScore
+    }
+    momentumScore: number
+    momentumProfile: RankTrendMomentumProfile
+  }
+  cycle: {
+    rawStage: AttentionStage
+    stage: AttentionStage
+    previousStage: AttentionStage | null
+    transition: string
+    confidence: number
+    metrics: {
+      rankVelocity: number
+      rankAcceleration: number
+      rankShock: number
+      hotZoneStreak: number
+      bestRecentRank: number
+      drawdownFromPeak: number
+    }
+    entryAdvice: {
+      bias: CycleEntryBias
+      allowed: boolean
+      reason: string
+    }
+  }
+  risk: {
+    overheat: {
+      score: number
+      signal: RankSignalDirection
+      severity: number
+    }
+    divergence: {
+      score: number
+      signal: RankSignalDirection
+      severity: number
+    }
+    pressure: number
+    synergy: number
+  }
+  decision: {
+    base: {
+      signal: RankSignalDirection
+      confidence: number
+      combinedScore: number
+      scoreMargin: number
+    }
+    final: {
+      signal: RankSignalDirection
+      confidence: number
+    }
+  }
+  // 策略层结果是消费侧扩展，不属于 rankTrend 核心分析合同。
+  strategy?: RankTrendStrategyResult
+}
+
+export const ATTENTION_STAGE_SEQUENCE: AttentionStage[] = [
+  'ignition',
+  'expansion',
+  'crowded',
+  'reversal',
+  'cooling',
+]

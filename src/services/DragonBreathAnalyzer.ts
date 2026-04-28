@@ -21,6 +21,7 @@ import { apiService } from './apiService'
 import { EventManager } from '../utils/eventManager'
 import { API_CONFIG } from '../config/constants'
 import { dataLayer } from './DataLayer'
+import { FORMAL_SNAPSHOT_READ_POLICY } from './snapshot/readPolicy'
 import { isTradingTime } from '../utils/time'
 import { StockUtils } from '../utils/common'
 
@@ -186,8 +187,6 @@ export class DragonBreathAnalyzer {
       zhaban: { count: 0, rate: 0, fengbanRate: 0 },
       indices: {
         sh: { change: 0 },
-        sz: { change: 0 },
-        cy: { change: 0 },
         hs300: { change: 0 },
         zz500: { change: 0 },
         zz1000: { change: 0 },
@@ -202,7 +201,6 @@ export class DragonBreathAnalyzer {
       limitStocks: [],
       bigLossCount: 0,
       largeCapChange: 0,
-      smallCapChange: 0,
       microCapChange: 0,
       fengbanAmount: 0,
       fengbanRate: 0,
@@ -333,6 +331,22 @@ export class DragonBreathAnalyzer {
     },
   }
 
+  private formatLocalTradingDate(date: Date): string {
+    const year = date.getFullYear()
+    const month = String(date.getMonth() + 1).padStart(2, '0')
+    const day = String(date.getDate()).padStart(2, '0')
+    return `${year}-${month}-${day}`
+  }
+
+  private isSnapshotLimitUpStock(stock: any): boolean {
+    if (!stock || !stock.code) return false
+    if ((Number(stock.boardHeight) || 0) > 0) return true
+    if ((Number(stock.highDays) || 0) > 0) return true
+    if (String(stock.firstZtTime || '').trim()) return true
+    if (String(stock.lastZtTime || '').trim()) return true
+    return false
+  }
+
   /**
    * 发送请求（使用增强版 apiService）
    */
@@ -381,12 +395,14 @@ export class DragonBreathAnalyzer {
 
           indices: {
             sh: { change: this.utils.safeGet(m.a999999zaf) },
-            sz: { change: this.utils.safeGet(m.a399001zaf) },
-            cy: { change: this.utils.safeGet(m.a399006zaf) },
             hs300: { change: this.utils.safeGet(m.a300zaf) },
             zz500: { change: this.utils.safeGet(m.a500zaf) },
             zz1000: { change: this.utils.safeGet(m.a1000zaf) },
           },
+
+          // 风格指数
+          largeCapChange: this.utils.safeGet(m.bigzaf),    // 大票
+          microCapChange: this.utils.safeGet(m.microzaf),  // 微盘
 
           moneyFlow: {
             main: this.utils.safeGet(m.zjlxmain),
@@ -408,55 +424,41 @@ export class DragonBreathAnalyzer {
    */
   private async fetchLimitData(date: string = ''): Promise<LimitData | null> {
     try {
-      const params = JSON.parse(JSON.stringify(API_CONFIG.TDX_PARAMS.LIMIT_DATA))
-      params[0].Tdate = date
-      const result = await this.request(API_CONFIG.ENDPOINTS.TDX.LIMIT_DATA, params)
+      console.log(`[fetchLimitData] 获取涨停数据，日期: ${date || '今日'}`)
 
-      const data = this.utils.parseNewFormat(result)
-      const limitStats: LimitData = { yiban: 0, erban: 0, sanban: 0, sibanPlus: 0 }
-      let found = false
+      const params = [{
+        ReqId: "201054",
+        Tdate: date,
+        Market: "0",
+        blockstyle: "3",
+        modname: "module_misc.dll"
+      }]
 
-      if (data && data.ResultSets && data.ResultSets.length >= 2) {
-        const rows = data.ResultSets[1].Content || []
-        const cols = data.ResultSets[1].ColDes || []
+      const result = await this.request('HQServ.hq_nlp_misc', params)
 
-        let n002Idx = 1,
-          n003Idx = 2
-        cols.forEach((col: any, idx: number) => {
-          if (col.Name === 'N002') n002Idx = idx
-          if (col.Name === 'N003') n003Idx = idx
-        })
+      // 直接解析 ResultSets
+      if (result?.ResultSets && result.ResultSets.length >= 2) {
+        const rows = result.ResultSets[1].Content || []
+        const limitStats: LimitData = { yiban: 0, erban: 0, sanban: 0, sibanPlus: 0 }
 
         rows.forEach((row: any[]) => {
-          const ban = parseInt(row[n002Idx]) || 0
-          const count = parseInt(row[n003Idx]) || 0
+          const n002 = parseInt(row[1]) || 0  // N002 是第2个字段（索引1）
+          const n003 = parseInt(row[2]) || 0  // N003 是第3个字段（索引2）
 
-          if (ban === 1) limitStats.yiban = count
-          else if (ban === 2) limitStats.erban = count
-          else if (ban === 3) limitStats.sanban = count
-          else if (ban >= 4) limitStats.sibanPlus += count
-
-          if (count > 0) found = true
+          if (n002 === 1) limitStats.yiban = n003
+          else if (n002 === 2) limitStats.erban = n003
+          else if (n002 === 3) limitStats.sanban = n003
+          else if (n002 >= 4) limitStats.sibanPlus += n003
         })
-      } else if (data && data.tables && data.tables.length >= 2) {
-        data.tables[1].forEach((row: any) => {
-          const ban = parseInt(row.N002) || 0
-          const count = parseInt(row.N003) || 0
 
-          if (ban === 1) limitStats.yiban = count
-          else if (ban === 2) limitStats.erban = count
-          else if (ban === 3) limitStats.sanban = count
-          else if (ban >= 4) limitStats.sibanPlus += count
-
-          if (count > 0) found = true
-        })
+        return limitStats
       }
-
-      return found ? limitStats : null
     } catch (error) {
-      return null
+      console.error('[fetchLimitData] 失败:', error)
     }
+    return null
   }
+
 
   /**
    * 获取昨日信息
@@ -466,10 +468,9 @@ export class DragonBreathAnalyzer {
     yesterdayFengban: number | null
   }> {
     try {
-      const result = await this.request(
-        API_CONFIG.ENDPOINTS.TDX.YESTERDAY_INFO,
-        API_CONFIG.TDX_PARAMS.YESTERDAY_INFO,
-      )
+      console.log('[fetchYesterdayInfo] 获取昨日信息...')
+
+      const result = await this.request('CWServ.cfg_fx_dxqx_jyr', { Params: [] })
 
       if (result?.ResultSets && result.ResultSets.length >= 2) {
         const rs0 = result.ResultSets[0]
@@ -480,48 +481,64 @@ export class DragonBreathAnalyzer {
 
         if (rs0.Content && rs0.Content[0]) {
           let dateStr = rs0.Content[0][0]
+          console.log('[fetchYesterdayInfo] 原始日期:', dateStr)
+
           if (dateStr && dateStr.includes('-')) {
             dateStr = dateStr.split(' ')[0].replace(/-/g, '')
           }
           yesterdayDate = dateStr
+          console.log('[fetchYesterdayInfo] 格式化日期:', yesterdayDate)
         }
 
         if (rs1.Content && rs1.Content[0]) {
-          yesterdayFengban = rs1.Content[0][2]
+          yesterdayFengban = parseFloat(rs1.Content[0][2]) || null
+          console.log('[fetchYesterdayInfo] 昨日封板率:', yesterdayFengban)
         }
 
         return { yesterdayDate, yesterdayFengban }
       }
-    } catch (error) {}
+    } catch (error) {
+      console.error('[fetchYesterdayInfo] 失败:', error)
+    }
     return { yesterdayDate: null, yesterdayFengban: null }
   }
+
 
   /**
    * 获取炸板数据
    */
   private async fetchZhaban(): Promise<ZhabanData | null> {
     try {
-      const result = await this.request(
-        API_CONFIG.ENDPOINTS.TDX.ZHABAN_DATA,
-        API_CONFIG.TDX_PARAMS.ZHABAN_DATA,
-      )
+      const params = [{
+        ReqId: "1000",
+        Market: "0",
+        BkCode: "880201",
+        blockstyle: "string",
+        modname: "module_misc.dll"
+      }]
 
-      const data = this.utils.parseNewFormat(result)
+      const result = await this.request('HQServ.hq_nlp_misc', params)
+      if (result?.ResultSets && result.ResultSets.length >= 2) {
+        const row = result.ResultSets[1].Content[0] || []
 
-      if (data && data.ErrorCode === 0 && data.tables && data.tables.length >= 2) {
-        const info = data.tables[1][0] || {}
-        const zhabanNum = parseFloat(info.N007) || 0
-        const ztNum = parseFloat(info.N018) || 0
+        // 注意：数组索引从0开始
+        // row[6] 对应 N007（炸板数）
+        // row[17] 对应 N018（涨停数）
+        const zhabanNum = parseFloat(row[6]) || 0
+        const ztNum = parseFloat(row[17]) || 0
         const total = zhabanNum + ztNum
+
 
         return {
           count: zhabanNum,
-          rate: total > 0 ? (zhabanNum / total) * 100 : 0,
-          fengbanRate: total > 0 ? (ztNum / total) * 100 : 0,
-          ztCount: ztNum,
+          rate: total > 0 ? (zhabanNum / total * 100) : 0,
+          fengbanRate: total > 0 ? ((1 - zhabanNum / total) * 100) : 0,
+          ztCount: ztNum
         }
       }
-    } catch (error) {}
+    } catch (error) {
+      console.error('[fetchZhaban] 失败:', error)
+    }
     return null
   }
 
@@ -530,42 +547,77 @@ export class DragonBreathAnalyzer {
    */
   private async fetchEmotionData(): Promise<{ value: number; status: string }> {
     try {
-      const today = this.utils.getTodayDate()
-      const params = JSON.parse(JSON.stringify(API_CONFIG.TDX_PARAMS.EMOTION_DATA))
-      params[0].EndDate = today
-      const result = await this.request(API_CONFIG.ENDPOINTS.TDX.EMOTION_DATA, params)
+      console.log('[fetchEmotionData] 获取情绪数据...')
 
-      if (result?.ResultSets && result.ResultSets.length >= 2) {
-        const dataPoints = result.ResultSets[1]?.Content || []
+      const today = new Date()
+      const dateStr = today.getFullYear() +
+        String(today.getMonth() + 1).padStart(2, '0') +
+        String(today.getDate()).padStart(2, '0')
 
-        if (dataPoints.length > 0) {
-          const latest = dataPoints[dataPoints.length - 1]
-          // 假设情绪值在索引 3，并且是 0-100 的值
-          let rawValue = parseFloat(latest[3])
+      console.log('[fetchEmotionData] 请求日期:', dateStr)
 
-          if (!isNaN(rawValue)) {
-            // 如果值大于 1，说明是百分比，除以 100 得到 0-1 范围
-            let emotionValue = rawValue > 1 ? rawValue / 100 : rawValue
+      const params = [{
+        ReqId: "200200",
+        Code: "DXQX_AG",
+        IndexCode: "999999",
+        BeginDate: "",
+        EndDate: dateStr,
+        TradeDays: "1",
+        Page: "0",
+        PageSize: "5",
+        modname: "mod_dxqx.dll"
+      }]
 
-            // 如果还是大于 1，说明是 0-100 的原始值，再除一次
-            if (emotionValue > 1) {
-              emotionValue = emotionValue / 100
-            }
+      const result = await this.request('HQServ.hq_nlp_dxqx', params)
 
-            let status = '震荡'
-            if (emotionValue >= 0.7) status = '活跃'
-            else if (emotionValue >= 0.5) status = '正常'
-            else if (emotionValue >= 0.3) status = '低迷'
-            else status = '冰点'
+      // 直接解析 ResultSets（和HTML页面一样）
+      if (result?.ResultSets && result.ResultSets.length > 1) {
+        const rows = result.ResultSets[1].Content || []
+        console.log(`[fetchEmotionData] 获取到 ${rows.length} 行数据`)
 
-            return { value: emotionValue, status }
+        if (rows.length > 0) {
+          const latest = rows[rows.length - 1]
+          console.log('[fetchEmotionData] 最新数据行:', latest)
+
+          // 解析字段（数组索引）
+          const date = latest[0]  // 日期
+          const preclsoe = parseFloat(latest[1]) || 1  // 前收盘
+          const min = latest[2]  // min字段
+
+
+          // 解析min字段
+          const minArr = min ? min.split(',') : []
+          const lastVal = minArr.length > 0 ? parseFloat(minArr[minArr.length - 1]) : null
+
+
+          let qxVal = 0
+          if (lastVal !== null) {
+            qxVal = 100 * lastVal / preclsoe
           }
+
+          // 判断情绪状态（和HTML页面完全一样）
+          let status = '震荡'
+          if (qxVal >= 1) {
+            status = '活跃'
+          } else if (qxVal >= -2) {
+            status = '震荡'
+          } else if (qxVal >= -4) {
+            status = '低迷'
+          } else {
+            status = '冰点'
+          }
+          return { value: qxVal, status }
         }
+      } else {
+        console.log('[fetchEmotionData] 数据结构错误:', result)
       }
     } catch (error) {
-      console.warn('[DragonBreathAnalyzer] 获取情绪数据失败:', error)
+      console.error('[fetchEmotionData] 请求失败:', error)
     }
-    return { value: 0.5, status: '震荡' }
+
+    // 降级方案
+    console.log('[fetchEmotionData] 使用降级数据')
+    return { value: 0, status: '震荡' }
   }
 
   /**
@@ -573,18 +625,27 @@ export class DragonBreathAnalyzer {
    */
   private async getLastTradeDate(): Promise<string | null> {
     try {
-      const snapshotDates = await dataLayer.getSnapshotDates()
+      const bundles = await dataLayer.listSnapshotFrameBundles({
+        type: 'daily',
+        allowedCaptureModes: FORMAL_SNAPSHOT_READ_POLICY.allowedCaptureModes,
+        excludeRestored: FORMAL_SNAPSHOT_READ_POLICY.excludeRestored,
+        sort: 'desc',
+        limit: 2,
+      })
 
-      // 过滤出日级快照
-      const tradeDates = snapshotDates
-        .filter((date) => date.includes('日级快照'))
-        .map((date) => date.replace('[日级快照] ', ''))
+      const tradeDates = Array.from(
+        new Set(
+          (bundles || [])
+            .map((bundle) => String(bundle.tradingDate || '').trim())
+            .filter(Boolean),
+        ),
+      )
         .sort()
         .reverse() // 最新的在前
 
       if (tradeDates.length === 0) return null
 
-      const todayStr = new Date().toISOString().slice(0, 10)
+      const todayStr = this.formatLocalTradingDate(new Date())
 
       // 如果最新的快照是今天，返回前一个
       if (tradeDates[0] === todayStr && tradeDates.length > 1) {
@@ -613,15 +674,24 @@ export class DragonBreathAnalyzer {
         return
       }
 
-      const yesterdaySnapshot = await dataLayer.getSnapshotFromDB(`[日级快照] ${lastTradeDate}`)
+      const [yesterdayBundle] = await dataLayer.listSnapshotFrameBundles({
+        type: 'daily',
+        tradingDate: lastTradeDate,
+        allowedCaptureModes: FORMAL_SNAPSHOT_READ_POLICY.allowedCaptureModes,
+        excludeRestored: FORMAL_SNAPSHOT_READ_POLICY.excludeRestored,
+        sort: 'desc',
+        limit: 1,
+      })
 
-      if (!yesterdaySnapshot?.limitUpStocks?.length) {
+      const yesterdayStocks = (yesterdayBundle?.hotlist || []).filter((stock: any) =>
+        this.isSnapshotLimitUpStock(stock),
+      )
+
+      if (!yesterdayStocks.length) {
         console.log(`[DragonBreathAnalyzer] ${lastTradeDate} 无涨停数据，跳过`)
         this.setDefaultStats()
         return
       }
-
-      const yesterdayStocks = yesterdaySnapshot.limitUpStocks
       const codes = yesterdayStocks.map((s: any) => s.code).filter(Boolean)
 
       if (codes.length === 0) {
@@ -726,93 +796,80 @@ export class DragonBreathAnalyzer {
 
   private async fetchAllData(): Promise<void> {
     if (this.state._fetching) return
-
     this.state._fetching = true
 
     try {
-      // 第一批：基础数据获取
-      const [marketResult, limitResult, yesterdayResult, tdxZhabanResult, emotionResult] =
+
+      // 1. 先获取昨日信息（需要日期）
+      const yesterdayInfo = await this.fetchYesterdayInfo()
+      console.log('[fetchAllData] 昨日信息:', yesterdayInfo)
+
+      // 2. 并行获取其他不依赖的数据
+      const [marketResult, todayLimitResult, zhabanResult, emotionResult] =
         await Promise.allSettled([
           this.fetchMarketStats(),
-          this.fetchLimitData(),
-          this.fetchYesterdayInfo(),
+          this.fetchLimitData(), // 今日涨停
           this.fetchZhaban(),
           this.fetchEmotionData(),
-          // this.fetchYesterdayLimitUpStats(),
+
         ])
 
-      await this.fetchYesterdayLimitUpStats()
+      // 3. 获取昨日涨停数据（需要昨日日期）
+      let yesterdayLimit = null
+      if (yesterdayInfo.yesterdayDate) {
+        yesterdayLimit = await this.fetchLimitData(yesterdayInfo.yesterdayDate)
 
-      // 第二批：辅助数据获取（移除 fetchMarketLossStats 和 fetchYesterdayZtPerformance）
-      const [zhabanDetailResult, overviewResult] = await Promise.allSettled([
-        this.fetchZhabanDetail(),
-        this.fetchMarketOverview(),
-      ])
+      }
 
       // 处理市场统计数据
       if (marketResult.status === 'fulfilled' && marketResult.value) {
-        Object.assign(this.state.marketData, marketResult.value)
+        const marketData = marketResult.value
+        Object.assign(this.state.marketData, marketData)
       }
 
-      // 处理炸板数据（优先使用详细接口）
-      if (zhabanDetailResult.status === 'fulfilled' && zhabanDetailResult.value) {
-        const data = zhabanDetailResult.value
-        this.state.marketData.zhaban = {
-          count: data.totalZhaban || 0,
-          rate: parseFloat(data.zhabanRate || 0),
-          fengbanRate: parseFloat(data.fengbanRate || 0),
-        }
-      } else if (tdxZhabanResult.status === 'fulfilled' && tdxZhabanResult.value) {
-        this.state.marketData.zhaban = tdxZhabanResult.value
+
+      // 处理炸板数据
+      if (zhabanResult.status === 'fulfilled' && zhabanResult.value) {
+        this.state.marketData.zhaban = zhabanResult.value
       }
 
-      // 处理市场概览数据
-      if (overviewResult.status === 'fulfilled' && overviewResult.value) {
-        const data = overviewResult.value
-
-        if (data.moneyFlow) {
-          this.state.marketData.moneyFlow = data.moneyFlow
-        }
-
-        if (data.cddje !== undefined) {
-          this.state.marketData.cddje = data.cddje
-        }
-        if (data.cddjzb !== undefined) {
-          this.state.marketData.cddjzb = data.cddjzb
-        }
-
-        // 补全涨跌家数（如果 marketStats 没有返回）
-        if (data.upCount && !this.state.marketData.upCount) {
-          this.state.marketData.upCount = data.upCount
-        }
-        if (data.downCount && !this.state.marketData.downCount) {
-          this.state.marketData.downCount = data.downCount
-        }
-
-        // 获取量比数据（如果 marketStats 没有返回）
-        if (data.volumeRatio && !this.state.marketData.volumeRatio) {
-          this.state.marketData.volumeRatio = data.volumeRatio
-        }
+      // 处理今日涨停数据
+      if (todayLimitResult.status === 'fulfilled' && todayLimitResult.value) {
+        const todayLimit = todayLimitResult.value
+        this.state.marketData.limitData = todayLimit
       }
 
-      // 处理涨停数据
-      if (limitResult.status === 'fulfilled' && limitResult.value) {
-        this.state.marketData.limitData = limitResult.value
-        this.state.marketData.ztCount =
-          limitResult.value.yiban +
-          limitResult.value.erban +
-          limitResult.value.sanban +
-          limitResult.value.sibanPlus
-      }
+      // 处理昨日涨停数据
+      if (yesterdayLimit) {
+        this.state.marketData.yesterdayLimit = yesterdayLimit
+        console.log('[fetchAllData] 昨日涨停数据已设置:', yesterdayLimit)
 
-      // 处理昨日信息
-      if (yesterdayResult.status === 'fulfilled' && yesterdayResult.value) {
-        const yesterdayValue = yesterdayResult.value
-        if (yesterdayValue.yesterdayDate) {
-          const yesterdayLimit = await this.fetchLimitData(yesterdayValue.yesterdayDate)
-          if (yesterdayLimit) {
-            this.state.marketData.yesterdayLimit = yesterdayLimit
+        // 计算晋级率（如果今日和昨日数据都有）
+        if (todayLimitResult.status === 'fulfilled' && todayLimitResult.value) {
+          const todayLimit = todayLimitResult.value
+
+          // 初始化晋级率对象
+          this.state.marketData.passRate = {
+            to2: 0,
+            to3: 0,
+            to4: 0,
           }
+
+          // 计算一进二晋级率
+          if (yesterdayLimit.yiban > 0) {
+            this.state.marketData.passRate.to2 = (todayLimit.erban / yesterdayLimit.yiban) * 100
+          }
+
+          // 计算二进三晋级率
+          if (yesterdayLimit.erban > 0) {
+            this.state.marketData.passRate.to3 = (todayLimit.sanban / yesterdayLimit.erban) * 100
+          }
+
+          // 计算三进四晋级率
+          if (yesterdayLimit.sanban > 0) {
+            this.state.marketData.passRate.to4 = (todayLimit.sibanPlus / yesterdayLimit.sanban) * 100
+          }
+
         }
       }
 
@@ -822,74 +879,149 @@ export class DragonBreathAnalyzer {
         this.state.marketData.emotionStatus = emotionResult.value.status
       }
 
-      // 计算连板高度
-      if (this.state.marketData.limitData) {
-        const { sibanPlus, sanban, erban } = this.state.marketData.limitData
-        if (sibanPlus > 0) this.state.marketData.maxContinuousDays = 4
-        else if (sanban > 0) this.state.marketData.maxContinuousDays = 3
-        else if (erban > 0) this.state.marketData.maxContinuousDays = 2
-        else this.state.marketData.maxContinuousDays = 1
-      }
+      // 4. 获取昨日涨停详细统计（使用真实个股行情数据）
+      await this.fetchYesterdayLimitUpStats()
 
-      // 计算晋级率（用于 passRate）
-      if (
-        this.state.marketData.yesterdayLimit?.erban > 0 &&
-        this.state.marketData.limitData?.sanban > 0
-      ) {
-        this.state.marketData.passRate = {
-          to2:
-            (this.state.marketData.limitData.erban / this.state.marketData.yesterdayLimit.yiban) *
-            100,
-          to3:
-            (this.state.marketData.limitData.sanban / this.state.marketData.yesterdayLimit.erban) *
-            100,
-          to4:
-            (this.state.marketData.limitData.sibanPlus /
-              this.state.marketData.yesterdayLimit.sanban) *
-            100,
-        }
-      }
 
       this.state.marketData.timestamp = Date.now()
+
+      // ========== 存入 dataLayer ==========
+      await this.saveToDataLayer()
+
+
+    } catch (error) {
+      console.error('[fetchAllData] 失败:', error)
     } finally {
       this.state._fetching = false
     }
   }
 
   /**
-   * 获取炸板数据（同花顺接口）
+   * 将数据存入 dataLayer
    */
-  private async fetchZhabanDetail(): Promise<any> {
+  private async saveToDataLayer(): Promise<void> {
     try {
-      const response = await apiService.get(API_CONFIG.ENDPOINTS.LIMITUP.DETAIL, {
-        context: 'breath',
-        ...API_CONFIG.CONTEXTS.BREATH,
-      })
-      return response
+      console.log('[saveToDataLayer] 开始保存数据到 dataLayer...')
+
+      // 构建因子数据
+      const factors = this.buildFactorData()
+
+      // 构建 breath 数据 - 确保包含所有字段
+      const breathData = {
+        timestamp: Date.now(),
+        sentiment: {
+          overall: this.state.sentiment.overall,
+          phase: this.state.sentiment.phase,
+          phaseName: this.state.sentiment.phaseName,
+          riskLevel: this.state.sentiment.riskLevel,
+          suggestion: this.state.sentiment.suggestion,
+          phaseInfo: this.state.sentiment.phaseInfo,
+          factorScores: this.state.sentiment.factorScores || {},
+          reference: { tdxEmotion: this.state.marketData.emotionValue },
+        },
+        marketData: {
+          // 基础数据
+          upCount: this.state.marketData.upCount,
+          downCount: this.state.marketData.downCount,
+          ztCount: this.state.marketData.ztCount,
+          dtCount: this.state.marketData.dtCount,
+          totalAmo: this.state.marketData.totalAmo,
+          amoDiff: this.state.marketData.amoDiff,
+          volumeRatio: this.state.marketData.volumeRatio,
+
+          // 炸板数据
+          zhaban: this.state.marketData.zhaban,
+          zhabanRate: this.state.marketData.zhaban?.rate,
+
+          // 涨停数据
+          limitData: this.state.marketData.limitData,
+          yesterdayLimit: this.state.marketData.yesterdayLimit,
+
+          // 晋级率 - 确保传递
+          passRate: this.state.marketData.passRate || { to2: 0, to3: 0, to4: 0 },
+
+          // 指数数据
+          indices: this.state.marketData.indices,
+
+          // 风格指数 - 确保传递
+          largeCapChange: this.state.marketData.largeCapChange,    // 大票
+          microCapChange: this.state.marketData.microCapChange,    // 微盘
+
+          // 资金流向
+          moneyFlow: this.state.marketData.moneyFlow,
+          cddje: this.state.marketData.cddje,
+          cddjzb: this.state.marketData.cddjzb,
+
+          // 情绪数据
+          emotionValue: this.state.marketData.emotionValue,
+          emotionStatus: this.state.marketData.emotionStatus,
+
+          // 昨日涨停表现
+          yesterdayZtPerformance: this.state.marketData.yesterdayZtPerformance,
+
+          // 其他
+          maxContinuousDays: this.state.marketData.maxContinuousDays,
+          yesterdayLimitUpStats: this.state.marketData.yesterdayLimitStats,
+
+          // 时间戳
+          timestamp: this.state.marketData.timestamp,
+        },
+        factors,
+      }
+
+      console.log('[saveToDataLayer] 准备保存的数据:')
+      console.log('  大票:', breathData.marketData.largeCapChange)
+      console.log('  微盘:', breathData.marketData.microCapChange)
+      console.log('  晋级率:', breathData.marketData.passRate)
+      console.log('  上证:', breathData.marketData.indices?.sh?.change)
+
+      // 存入 dataLayer
+      if (typeof dataLayer !== 'undefined') {
+        dataLayer.updateBreathData(breathData)
+        console.log('[saveToDataLayer] ✅ 数据已保存到 dataLayer')
+      } else {
+        console.warn('[saveToDataLayer] dataLayer 未定义')
+      }
+
     } catch (error) {
-      return null
+      console.error('[saveToDataLayer] 保存失败:', error)
     }
   }
 
   /**
-   * 获取市场整体数据
-   */
-  private async fetchMarketOverview(): Promise<any> {
-    try {
-      const response = await apiService.get('/api/market/overview', {
-        context: 'breath',
-        priority: 'high',
-        timeout: 5000,
-        retries: 2,
-        cache: true,
-        cacheTTL: 10000,
-      })
+ * 构建因子数据
+ */
+private buildFactorData(): any[] {
+  try {
+    const marketData = this.state.marketData
+    const factorScores = this.state.sentiment.factorScores || {}
 
-      return response
-    } catch (error) {
-      return null
-    }
+    const factors = Object.entries(EMOTION_SCORE_CONFIG.factors).map(
+      ([key, factor]: [string, EmotionFactor]) => {
+        const rawValue = factor.getValue(marketData)
+        const score = factorScores?.[key] ?? 0
+
+        return {
+          id: factor.id,
+          name: factor.name,
+          rawValue: rawValue,
+          score: score,
+          weight: factor.weight,
+          maxScore: factor.maxScore,
+          description: factor.description,
+          unit: factor.unit || '',
+        }
+      },
+    )
+
+    console.log(`[buildFactorData] 构建了 ${factors.length} 个因子`)
+    return factors
+
+  } catch (error) {
+    console.error('[buildFactorData] 构建因子数据失败:', error)
+    return []
   }
+}
 
   /**
    * 获取风险等级
@@ -1102,6 +1234,7 @@ export class DragonBreathAnalyzer {
     this.state._analyzing = true
 
     try {
+      // 获取数据（会自动存入 dataLayer）
       await this.fetchAllData()
 
       // 使用新的情绪分数计算
@@ -1110,75 +1243,8 @@ export class DragonBreathAnalyzer {
       // 更新情绪阶段
       this.updateSentimentWithPhase(calculatedScore, factorScores)
 
-      // 保存因子得分和参考指标
+      // 保存因子得分
       this.state.sentiment.factorScores = factorScores
-
-      // 构建因子数据（用于 dataLayer）
-      let factors: any[] = []
-      try {
-        const marketData = this.state.marketData
-        const factorScores = this.state.sentiment.factorScores
-
-        factors = Object.entries(EMOTION_SCORE_CONFIG.factors).map(
-          ([key, factor]: [string, EmotionFactor]) => {
-            const rawValue = factor.getValue(marketData)
-            const score = factorScores?.[key] ?? 0
-
-            return {
-              id: factor.id,
-              name: factor.name,
-              rawValue: rawValue,
-              score: score,
-              weight: factor.weight,
-              maxScore: factor.maxScore,
-              description: factor.description,
-              unit: factor.unit || '',
-            }
-          },
-        )
-      } catch (e) {
-        console.warn('[DragonBreathAnalyzer] 构建因子数据失败:', e)
-      }
-
-      // 存入 DataLayer
-      if (typeof dataLayer !== 'undefined') {
-        const breathData = {
-          timestamp: Date.now(),
-          sentiment: {
-            overall: calculatedScore,
-            phase: this.state.sentiment.phase,
-            phaseName: this.state.sentiment.phaseName,
-            riskLevel: this.state.sentiment.riskLevel,
-            suggestion: this.state.sentiment.suggestion,
-            phaseInfo: this.state.sentiment.phaseInfo,
-            factorScores: factorScores,
-            reference: { tdxEmotion: this.state.marketData.emotionValue },
-          },
-          marketData: {
-            upCount: this.state.marketData.upCount,
-            downCount: this.state.marketData.downCount,
-            ztCount: this.state.marketData.ztCount,
-            dtCount: this.state.marketData.dtCount,
-            zhaban: this.state.marketData.zhaban,
-            zhabanRate: this.state.marketData.zhaban?.rate,
-            totalAmo: this.state.marketData.totalAmo,
-            emotionValue: this.state.marketData.emotionValue,
-            limitData: this.state.marketData.limitData,
-            indices: this.state.marketData.indices,
-            yesterdayLimit: this.state.marketData.yesterdayLimit,
-            moneyFlow: this.state.marketData.moneyFlow,
-            amoDiff: this.state.marketData.amoDiff,
-            volumeRatio: this.state.marketData.volumeRatio,
-            cddje: this.state.marketData.cddje,
-            cddjzb: this.state.marketData.cddjzb,
-            yesterdayZtPerformance: this.state.marketData.yesterdayZtPerformance,
-            maxContinuousDays: this.state.marketData.maxContinuousDays,
-            yesterdayLimitUpStats: this.state.marketData.yesterdayLimitStats,
-          },
-          factors,
-        }
-        dataLayer.updateBreathData(breathData)
-      }
 
       // 触发事件
       EventManager.emit(AppEvents.BREATH.UPDATED, {
@@ -1191,9 +1257,11 @@ export class DragonBreathAnalyzer {
       this.recordHistory()
       this.lastAnalysisTime = Date.now()
 
+      console.log('[analyzeMarketBreath] ✅ 分析完成，情绪分数:', calculatedScore)
       return true
+
     } catch (error) {
-      console.error('[DragonBreath] 分析失败:', error)
+      console.error('[analyzeMarketBreath] 分析失败:', error)
       return false
     } finally {
       this.state._analyzing = false

@@ -1,5 +1,5 @@
 // src/config/constants.ts
-import { EMOTION_PHASES, EMOTION_IMPACT } from '@/types/emotion'
+import { EMOTION_PHASES, EMOTION_IMPACT } from '../types/emotion'
 
 /**
  * 题材分析器配置常量

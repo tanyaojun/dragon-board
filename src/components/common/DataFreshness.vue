@@ -1,37 +1,26 @@
 <!-- src/components/common/DataFreshness.vue -->
 <template>
-  <div class="data-freshness" :class="[connectionClass, dataStatusClass]" @click="showDetails = !showDetails">
-    <!-- 状态图标 - 组合显示 -->
+  <div class="data-freshness" :class="badgeToneClass" @click="showDetails = !showDetails">
     <span class="status-icon">{{ combinedIcon }}</span>
-
-    <!-- 简要信息 -->
     <span class="status-text">
-      <template v-if="alltickConnected">
-        AllTick实时
-        <span class="subscribed-count">({{ alltickSubscribedStocks.length }}/{{ httpSubscribedCount }})</span>
-      </template>
-      <template v-else>
-        HTTP轮询
-        <span class="subscribed-count">({{ httpSubscribedCount }})</span>
-      </template>
+      {{ streamLabel }}
+      <span class="subscribed-count">({{ subscribedCount }})</span>
     </span>
 
-    <!-- 详细面板（点击展开） -->
     <div v-if="showDetails" class="freshness-details" @click.stop>
-      <!-- AllTick 订阅股票列表 -->
-      <div class="subscription-section" v-if="alltickConnected">
+      <div v-if="realtimeSubscribedStocks.length" class="subscription-section">
         <div class="section-header">
-          <span class="section-title">📡 AllTick实时订阅 ({{ alltickSubscribedStocks.length }}/5)</span>
-          <span class="section-badge" :class="{ full: alltickSubscribedStocks.length === 5 }">
-            {{ alltickSubscribedStocks.length === 5 ? '满额' : '等待' }}
-          </span>
+          <span class="section-title">TDX 热榜订阅 ({{ realtimeSubscribedStocks.length }})</span>
+          <span class="section-badge" :class="statusClassName">{{ statusText }}</span>
         </div>
 
-        <!-- 股票列表 -->
         <div class="stock-list">
-          <div v-for="stock in alltickSubscribedStocks" :key="stock.code" class="stock-item">
+          <div v-for="stock in realtimeSubscribedStocks" :key="stock.code" class="stock-item">
             <div class="stock-info">
-              <span class="stock-name">{{ stock.name }}</span>
+              <div class="stock-name-line">
+                <span class="stock-name">{{ stock.name }}</span>
+                <span v-if="stock.isPriority" class="signal-pill">买+🔱</span>
+              </div>
               <span class="stock-code">{{ stock.code }}</span>
             </div>
             <div class="stock-price">
@@ -40,53 +29,42 @@
                 {{ stock.change > 0 ? '+' : '' }}{{ stock.change.toFixed(2) }}%
               </span>
             </div>
-            <!-- 实时成交标记 -->
-            <span class="tick-badge" v-if="stock.lastTick">⚡</span>
-          </div>
-
-          <!-- 等待中的占位 -->
-          <div v-for="i in 5 - alltickSubscribedStocks.length" :key="'placeholder-' + i" class="stock-item placeholder">
-            <div class="stock-info">
-              <span class="stock-name">等待订阅...</span>
-              <span class="stock-code">------</span>
-            </div>
-            <div class="stock-price">
-              <span class="price">--.--</span>
-              <span class="change">--.--%</span>
-            </div>
           </div>
         </div>
 
-        <!-- 轮询信息 -->
-        <div class="rotation-info" v-if="rotationBatch">
-          <span class="rotation-label">当前批次:</span>
-          <span class="rotation-value">第 {{ rotationBatch }}/10 批</span>
-          <span class="rotation-timer">⏱️ 45秒轮换</span>
-        </div>
-
-        <!-- 最近成交 -->
-        <div class="recent-tick" v-if="lastTick">
-          <span class="tick-label">最新成交:</span>
-          <span class="tick-stock">{{ lastTick.name }} ({{ lastTick.code }})</span>
+        <div v-if="lastTick" class="recent-tick">
+          <span class="tick-label">最新逐笔:</span>
+          <span class="tick-stock">{{ lastTick.code }}</span>
           <span class="tick-price">{{ lastTick.price }}</span>
           <span class="tick-volume">{{ lastTick.volume }}手</span>
         </div>
       </div>
 
-      <!-- 状态信息 -->
       <div class="detail-item">
-        <span class="detail-label">AllTick WebSocket:</span>
-        <span class="detail-value" :class="alltickConnected ? 'good' : 'warn'">
-          {{ alltickConnected ? '✅ 已连接' : '❌ 已断开' }}
+        <span class="detail-label">实时链路:</span>
+        <span class="detail-value" :class="statusClassName">{{ statusText }}</span>
+      </div>
+      <div class="detail-item">
+        <span class="detail-label">TDX 连接:</span>
+        <span class="detail-value" :class="streamStatus.tdxConnected ? 'good' : 'warn'">
+          {{ streamStatus.tdxConnected ? '✅ 已连接' : '⚠️ 未确认' }}
         </span>
       </div>
       <div class="detail-item">
-        <span class="detail-label">HTTP轮询:</span>
-        <span class="detail-value good">✅ 运行中</span>
+        <span class="detail-label">HTTP 备用:</span>
+        <span class="detail-value" :class="streamStatus.fallbackActive ? 'warn' : 'good'">
+          {{ streamStatus.fallbackActive ? '启用中' : '待命' }}
+        </span>
       </div>
       <div class="detail-item">
-        <span class="detail-label">总订阅:</span>
-        <span class="detail-value">{{ httpSubscribedCount }}只</span>
+        <span class="detail-label">订阅总数:</span>
+        <span class="detail-value">{{ subscribedCount }}只</span>
+      </div>
+      <div class="detail-item">
+        <span class="detail-label">当前时段:</span>
+        <span class="detail-value" :class="isTradingSession ? 'good' : 'info'">
+          {{ isTradingSession ? '交易时段' : '非交易时段' }}
+        </span>
       </div>
       <div class="detail-item">
         <span class="detail-label">股票总数:</span>
@@ -100,90 +78,184 @@
         <span class="detail-label">数据状态:</span>
         <span class="detail-value" :class="dataStatusClass">{{ dataStatusText }}</span>
       </div>
-      <button class="refresh-btn" @click="manualRefresh">🔄 手动刷新</button>
+      <button class="refresh-btn" @click="manualRefresh">手动刷新</button>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { dataLayer } from '@/services/DataLayer'
-import { EventManager } from '@/utils/eventManager'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { AppEvents } from '@/types'
+import { dataLayer } from '@/services/DataLayer'
 import { webSocketService } from '@/services/websocket'
-
-const props = defineProps<{
-  stockCode?: string
-}>()
+import { EventManager } from '@/utils/eventManager'
+import { isTradingTime } from '@/utils/time'
 
 const showDetails = ref(false)
-let clickOutsideHandler: ((e: MouseEvent) => void) | null = null
+const streamStatus = ref(webSocketService.getStatus())
+const subscribedCodes = ref<string[]>(webSocketService.getSubscribedStocks())
+const lastTick = ref<{ code: string; price: number; volume: number } | null>(null)
+const clockTick = ref(Date.now())
+
+let clickOutsideHandler: ((event: MouseEvent) => void) | null = null
 let updateTimer: ReturnType<typeof setInterval> | null = null
+const unsubscribeFns: Array<() => void> = []
 
-const unsubscribeFns: (() => void)[] = []
-
-// ========== AllTick 相关状态 ==========
-const alltickConnected = ref(false)
-const alltickSubscribedCodes = ref<string[]>([])
-const rotationBatch = ref<number | null>(null)
-const lastTick = ref<any>(null)
-
-// ========== 计算属性 ==========
-const alltickSubscribedStocks = computed(() => {
+const realtimeSubscribedStocks = computed(() => {
   const stocks = dataLayer.getStocks()
-  return alltickSubscribedCodes.value
-    .map((code) => {
-      const stock = stocks.find((s) => s.code === code)
-      return stock
-        ? {
-          code: stock.code,
-          name: stock.name || code,
-          price: stock.price || 0,
-          change: stock.change || 0,
-          lastTick: (stock as any).lastTick,
-        }
-        : null
-    })
-    .filter(Boolean)
-})
+  const stockMap = new Map(stocks.map((item) => [item.code, item]))
 
-const httpSubscribedCount = computed(() => {
-  try {
-    return webSocketService.getStatus().subscribedCount || 0
-  } catch {
+  const getCandidateTier = (stock: any) => stock?.rankTrend?.strategy?.candidateTier ?? null
+  const getStrategyAction = (stock: any) => stock?.rankTrend?.strategy?.action ?? null
+  const getFinalSignal = (stock: any) => stock?.rankTrend?.decision?.final?.signal ?? 'none'
+  const getFinalConfidence = (stock: any) => Number(stock?.rankTrend?.decision?.final?.confidence) || 0
+  const getMacdCross = (stock: any) => stock?.rankTrend?.technical?.macd?.cross ?? 'none'
+  const getRankChange = (stock: any) => Number(stock?.rankTrend?.meta?.change) || 0
+  const getCompRank = (stock: any) => {
+    const compRank = Number(stock?.compRank)
+    if (Number.isFinite(compRank) && compRank > 0) return compRank
+    const fallbackRank = Number(stock?.rank)
+    if (Number.isFinite(fallbackRank) && fallbackRank > 0) return fallbackRank
+    return 9999
+  }
+
+  const isMainFocusStock = (stock: any) =>
+    getCandidateTier(stock) === 'A_MAIN' && getStrategyAction(stock) === 'focus'
+
+  const priorityOf = (stock: any) => {
+    const finalSignal = getFinalSignal(stock)
+    const macdCross = getMacdCross(stock)
+    if (finalSignal === 'buy' && macdCross === 'golden') return 3
+    if (finalSignal === 'buy') return 2
+    if (macdCross === 'golden') return 1
     return 0
   }
+
+  return subscribedCodes.value
+    .map((code) => stockMap.get(code) || null)
+    .filter((stock) => stock && isMainFocusStock(stock))
+    .map((stock) => ({
+      code: stock.code,
+      name: stock.name || stock.code,
+      price: Number(stock.price) || 0,
+      change: Number(stock.change) || 0,
+      turnover: Number(stock.turnover) || 0,
+      compRank: getCompRank(stock),
+      finalConfidence: getFinalConfidence(stock),
+      rankChange: getRankChange(stock),
+      priority: priorityOf(stock),
+      isPriority: priorityOf(stock) === 3,
+    }))
+    .filter(Boolean)
+    .sort((left: any, right: any) => {
+      if (left.compRank !== right.compRank) return left.compRank - right.compRank
+      if (right.priority !== left.priority) return right.priority - left.priority
+      if (right.finalConfidence !== left.finalConfidence) return right.finalConfidence - left.finalConfidence
+      if (right.rankChange !== left.rankChange) return right.rankChange - left.rankChange
+      if (right.change !== left.change) return right.change - left.change
+      return right.turnover - left.turnover
+    })
+    .slice(0, 10) as Array<{
+      code: string
+      name: string
+      price: number
+      change: number
+      turnover: number
+      compRank: number
+      finalConfidence: number
+      rankChange: number
+      priority: number
+      isPriority: boolean
+    }>
 })
 
-const stockCount = computed(() => {
-  return dataLayer.getStocks().length || 0
+const subscribedCount = computed(() => streamStatus.value.subscribedCount || subscribedCodes.value.length || 0)
+
+const stockCount = computed(() => dataLayer.getStocks().length || 0)
+const isTradingSession = computed(() => isTradingTime(new Date(clockTick.value)))
+
+const isWsPrimaryActive = computed(() => {
+  void streamStatus.value
+  return webSocketService.isPrimaryActive()
+})
+
+const isTdxRealtimeHealthy = computed(() => {
+  void streamStatus.value
+  return webSocketService.isTdxRealtimeHealthy()
+})
+
+const latestWsActivityTime = computed(() => {
+  const lastMessageTime = Number(streamStatus.value.lastMessageTime) || 0
+  const lastHeartbeatTime = Number(streamStatus.value.lastHeartbeatTime) || 0
+  return Math.max(lastMessageTime, lastHeartbeatTime, 0)
+})
+
+const latestStockUpdateTime = computed(() => {
+  return dataLayer
+    .getStocks()
+    .reduce((latest, stock) => Math.max(latest, Number(stock.updatedAt) || 0), 0)
 })
 
 const lastUpdateTime = computed(() => {
-  const stocks = dataLayer.getStocks()
-  const latestUpdate = stocks.reduce((latest, s) => {
-    return Math.max(latest, s.updatedAt || 0)
-  }, 0)
+  const latestUpdate = isTdxRealtimeHealthy.value && latestWsActivityTime.value > 0
+    ? latestWsActivityTime.value
+    : latestStockUpdateTime.value
   return latestUpdate ? new Date(latestUpdate).toLocaleTimeString() : '未知'
 })
 
+const wsActivityAgeSeconds = computed(() => {
+  if (!latestWsActivityTime.value) return Infinity
+  return (clockTick.value - latestWsActivityTime.value) / 1000
+})
+
+const httpActivityAgeSeconds = computed(() => {
+  if (!latestStockUpdateTime.value) return Infinity
+  return (clockTick.value - latestStockUpdateTime.value) / 1000
+})
+
+const wsFreshnessHealthy = computed(() => {
+  return (
+    isTdxRealtimeHealthy.value &&
+    latestWsActivityTime.value > 0 &&
+    webSocketService.hasFreshData()
+  )
+})
+
 const dataStatus = computed(() => {
+  if (!isTradingSession.value) {
+    if (isTdxRealtimeHealthy.value) {
+      if (latestWsActivityTime.value > 0 && wsActivityAgeSeconds.value < 30) return 'normal'
+      if (!latestStockUpdateTime.value) return 'unknown'
+      return 'normal'
+    }
+
+    if (latestStockUpdateTime.value > 0) return 'normal'
+    return 'unknown'
+  }
+
+  if (isTdxRealtimeHealthy.value) {
+    if (wsFreshnessHealthy.value) {
+      return 'fresh'
+    }
+
+    if (!latestWsActivityTime.value) return 'unknown'
+    if (wsActivityAgeSeconds.value < 15) return 'normal'
+    if (wsActivityAgeSeconds.value < 30) return 'stale'
+    return 'expired'
+  }
+
   const stocks = dataLayer.getStocks()
-  if (stocks.length === 0) return 'empty'
+  if (!stocks.length) return 'empty'
 
-  const latestStock = stocks[0]
-  if (!latestStock.updatedAt) return 'unknown'
-
-  const ageMinutes = (Date.now() - latestStock.updatedAt) / 60000
-
-  if (ageMinutes < 1) return 'fresh'
-  if (ageMinutes < 5) return 'normal'
-  if (ageMinutes < 15) return 'stale'
+  if (!latestStockUpdateTime.value) return 'unknown'
+  if (httpActivityAgeSeconds.value < 3) return 'fresh'
+  if (httpActivityAgeSeconds.value < 10) return 'normal'
+  if (httpActivityAgeSeconds.value < 30) return 'stale'
   return 'expired'
 })
 
 const dataStatusText = computed(() => {
-  const texts = {
+  const texts: Record<string, string> = {
     fresh: '数据新鲜',
     normal: '数据正常',
     stale: '数据较旧',
@@ -195,7 +267,7 @@ const dataStatusText = computed(() => {
 })
 
 const dataStatusClass = computed(() => {
-  const classes = {
+  const classes: Record<string, string> = {
     fresh: 'data-fresh',
     normal: 'data-normal',
     stale: 'data-stale',
@@ -206,96 +278,112 @@ const dataStatusClass = computed(() => {
   return classes[dataStatus.value] || ''
 })
 
-const connectionClass = computed(() => {
-  return alltickConnected.value ? 'status-connected' : 'status-http'
+const badgeLevel = computed<'fresh' | 'normal' | 'expired' | 'unknown'>(() => {
+  if (dataStatus.value === 'fresh') return 'fresh'
+  if (dataStatus.value === 'expired' || dataStatus.value === 'empty') return 'expired'
+  if (dataStatus.value === 'unknown') return 'unknown'
+  return 'normal'
+})
+
+const effectiveMode = computed<'ws' | 'recovering' | 'http'>(() => {
+  if (isTdxRealtimeHealthy.value) return 'ws'
+  if (isWsPrimaryActive.value) return 'recovering'
+  return 'http'
+})
+
+const streamLabel = computed(() => {
+  if (effectiveMode.value === 'ws') return 'TDX实时'
+  if (effectiveMode.value === 'recovering') return 'TDX恢复中'
+  return 'HTTP备用'
+})
+
+const statusText = computed(() => {
+  if (effectiveMode.value === 'ws') return 'TDX实时'
+  if (effectiveMode.value === 'recovering') return 'TDX恢复中'
+  return 'HTTP备用'
+})
+
+const statusClassName = computed(() => {
+  if (effectiveMode.value === 'ws') return 'good'
+  if (effectiveMode.value === 'recovering') return 'info'
+  return 'warn'
+})
+
+const badgeToneClass = computed(() => {
+  const toneMap: Record<string, string> = {
+    fresh: 'status-fresh',
+    normal: 'status-normal',
+    expired: 'status-expired',
+    unknown: 'status-unknown',
+  }
+  return toneMap[badgeLevel.value] || 'status-unknown'
 })
 
 const combinedIcon = computed(() => {
-  const baseIcon = alltickConnected.value ? '🟢' : '🟡'
-  if (dataStatus.value === 'stale') return '🟠'
-  if (dataStatus.value === 'expired') return '🔴'
-  return baseIcon
+  const iconMap: Record<string, string> = {
+    fresh: '🟢',
+    normal: '🔵',
+    expired: '🔴',
+    unknown: '⚪',
+  }
+  return iconMap[badgeLevel.value] || '⚪'
 })
 
-// ========== 事件处理 ==========
-const updateAllTickStatus = () => {
-  try {
-    alltickConnected.value = (webSocketService as any).isAllTickConnected?.() || false
-  } catch (error) {
-    console.error('更新AllTick状态失败:', error)
+const updateStatus = () => {
+  streamStatus.value = webSocketService.getStatus()
+}
+
+const updateSubscriptionList = (payload?: any) => {
+  if (Array.isArray(payload)) {
+    subscribedCodes.value = payload
+    return
   }
+  subscribedCodes.value = webSocketService.getSubscribedStocks()
 }
 
-const updateSubscriptionList = (codes: string[]) => {
-  alltickSubscribedCodes.value = codes
-  // 获取当前轮询批次
-  rotationBatch.value = (((webSocketService as any).currentBatchIndex ?? 0) % 10) + 1
-}
-
-const handleTick = (data: any) => {
+const handleTick = (payload: any) => {
   lastTick.value = {
-    code: data.code,
-    name: data.name,
-    price: data.price,
-    volume: data.volume,
-    time: new Date().toLocaleTimeString(),
+    code: String(payload?.code || ''),
+    price: Number(payload?.price) || 0,
+    volume: Number(payload?.volume) || 0,
   }
-  // 刷新订阅列表（更新成交标记）
-  updateSubscriptionList(alltickSubscribedCodes.value)
-}
-
-// ✅ 修复：提取为具名函数
-const handleDataUpdated = () => {
-  updateSubscriptionList((webSocketService as any).getAllTickSubscribedStocks?.() || [])
 }
 
 const manualRefresh = async () => {
-  try {
-    EventManager.emit('refresh:manual')
-    EventManager.emit(AppEvents.UI.TOAST, {
-      message: '🔄 正在刷新数据...',
-      duration: 1000,
-      type: 'info',
-    })
-    showDetails.value = false
-  } catch (error) {
-    console.error('手动刷新失败:', error)
-  }
+  EventManager.emit(AppEvents.REFRESH.MANUAL_REQUESTED, { source: 'data-freshness', force: true })
+  EventManager.emit(AppEvents.UI.TOAST, {
+    message: '正在刷新数据...',
+    duration: 1000,
+    type: 'info',
+  })
+  showDetails.value = false
 }
 
-// ========== 生命周期 ==========
 onMounted(() => {
-  clickOutsideHandler = (e: MouseEvent) => {
-    const target = e.target as HTMLElement
+  clickOutsideHandler = (event: MouseEvent) => {
+    const target = event.target as HTMLElement
     if (!target.closest('.data-freshness')) {
       showDetails.value = false
     }
   }
   document.addEventListener('click', clickOutsideHandler)
 
-  // 初始更新
-  updateAllTickStatus()
-  updateSubscriptionList((webSocketService as any).getAllTickSubscribedStocks?.() || [])
+  updateStatus()
+  updateSubscriptionList()
 
-  // 定时更新UI
   updateTimer = setInterval(() => {
-    updateAllTickStatus()
-    updateSubscriptionList((webSocketService as any).getAllTickSubscribedStocks?.() || [])
-  }, 2000)
+    clockTick.value = Date.now()
+  }, 1000)
 
-  // ✅ 只保存一次监听，并统一处理
-  const unsub1 = EventManager.on(AppEvents.WEBSOCKET.STATUS_CHANGED, updateAllTickStatus)
-  unsubscribeFns.push(unsub1)
-
-  const unsub2 = EventManager.on(AppEvents.WEBSOCKET.SUBSCRIPTION_UPDATED, updateSubscriptionList)
-  unsubscribeFns.push(unsub2)
-
-  const unsub3 = EventManager.on(AppEvents.WEBSOCKET.TICK, handleTick)
-  unsubscribeFns.push(unsub3)
-
-  const unsub4 = EventManager.on(AppEvents.DATA.UPDATED, handleDataUpdated)
-  unsubscribeFns.push(unsub4)
+  unsubscribeFns.push(EventManager.on(AppEvents.WEBSOCKET.STATUS_CHANGED, updateStatus))
+  unsubscribeFns.push(EventManager.on(AppEvents.WEBSOCKET.SUBSCRIPTION_UPDATED, updateSubscriptionList))
+  unsubscribeFns.push(EventManager.on(AppEvents.WEBSOCKET.FULL_STATE, updateStatus))
+  unsubscribeFns.push(EventManager.on(AppEvents.WEBSOCKET.QUOTE_PATCH, updateStatus))
+  unsubscribeFns.push(EventManager.on(AppEvents.WEBSOCKET.DEPTH_PATCH, updateStatus))
+  unsubscribeFns.push(EventManager.on(AppEvents.WEBSOCKET.HEARTBEAT, updateStatus))
+  unsubscribeFns.push(EventManager.on(AppEvents.WEBSOCKET.TICK, handleTick))
 })
+
 onUnmounted(() => {
   if (clickOutsideHandler) {
     document.removeEventListener('click', clickOutsideHandler)
@@ -306,12 +394,11 @@ onUnmounted(() => {
     updateTimer = null
   }
 
-  // ✅ 统一清理所有事件监听
-  unsubscribeFns.forEach((fn) => {
+  unsubscribeFns.forEach((unsubscribe) => {
     try {
-      fn()
-    } catch (e) {
-      console.warn('[DataFreshness] 清理订阅失败:', e)
+      unsubscribe()
+    } catch (error) {
+      console.warn('[DataFreshness] 清理订阅失败:', error)
     }
   })
   unsubscribeFns.length = 0
@@ -319,7 +406,6 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-/* 原有样式保持不变 */
 .data-freshness {
   display: inline-flex;
   align-items: center;
@@ -355,20 +441,30 @@ onUnmounted(() => {
   opacity: 0.8;
 }
 
-/* 连接状态样式 */
-.status-connected {
+.status-fresh {
   color: #2ecc71;
   border-color: #2ecc71;
   background: rgba(46, 204, 113, 0.1);
 }
 
-.status-http {
-  color: #f1c40f;
-  border-color: #f1c40f;
-  background: rgba(241, 196, 15, 0.1);
+.status-normal {
+  color: #3498db;
+  border-color: #3498db;
+  background: rgba(52, 152, 219, 0.1);
 }
 
-/* 数据新鲜度样式 */
+.status-expired {
+  color: #e74c3c;
+  border-color: #e74c3c;
+  background: rgba(231, 76, 60, 0.1);
+}
+
+.status-unknown {
+  color: #95a5a6;
+  border-color: #95a5a6;
+  background: rgba(149, 165, 166, 0.1);
+}
+
 .data-fresh {
   color: #2ecc71;
   border-color: #2ecc71;
@@ -389,17 +485,12 @@ onUnmounted(() => {
   border-color: #e74c3c;
 }
 
-.data-empty {
-  color: #95a5a6;
-  border-color: #95a5a6;
-}
-
+.data-empty,
 .data-unknown {
   color: #95a5a6;
   border-color: #95a5a6;
 }
 
-/* 详细面板 */
 .freshness-details {
   position: absolute;
   top: 100%;
@@ -409,7 +500,11 @@ onUnmounted(() => {
   border: 1px solid var(--border-color);
   border-radius: 12px;
   padding: 16px;
-  min-width: 280px;
+  width: min(276px, calc(100vw - 24px));
+  max-width: calc(100vw - 24px);
+  max-height: min(70vh, 560px);
+  overflow-y: auto;
+  overflow-x: hidden;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
   z-index: 10000;
   backdrop-filter: blur(10px);
@@ -440,6 +535,10 @@ onUnmounted(() => {
   color: #e67e22;
 }
 
+.detail-value.info {
+  color: #3498db;
+}
+
 .detail-value.error {
   color: #e74c3c;
 }
@@ -461,10 +560,8 @@ onUnmounted(() => {
 .refresh-btn:hover {
   opacity: 0.9;
   transform: translateY(-1px);
-  box-shadow: 0 4px 8px rgba(255, 165, 2, 0.3);
 }
 
-/* 订阅股票列表样式 */
 .subscription-section {
   margin-bottom: 16px;
   padding: 12px;
@@ -488,14 +585,20 @@ onUnmounted(() => {
 .section-badge {
   font-size: 10px;
   padding: 2px 8px;
-  background: rgba(46, 204, 113, 0.2);
   border-radius: 12px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.section-badge.good {
   color: #2ecc71;
 }
 
-.section-badge.full {
-  background: rgba(46, 204, 113, 0.3);
-  font-weight: 600;
+.section-badge.info {
+  color: #3498db;
+}
+
+.section-badge.warn {
+  color: #e67e22;
 }
 
 .stock-list {
@@ -509,27 +612,34 @@ onUnmounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 8px 10px;
+  gap: 8px;
+  padding: 8px 9px;
   background: var(--bg-secondary);
   border-radius: 6px;
   font-size: 12px;
-  position: relative;
-}
-
-.stock-item.placeholder {
-  opacity: 0.5;
-  background: var(--bg-primary);
 }
 
 .stock-info {
   display: flex;
   flex-direction: column;
-  min-width: 100px;
+  min-width: 0;
+  flex: 1;
+}
+
+.stock-name-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
 }
 
 .stock-name {
   font-weight: 600;
   color: var(--text-primary);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .stock-code {
@@ -538,11 +648,21 @@ onUnmounted(() => {
   font-family: monospace;
 }
 
+.signal-pill {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(255, 107, 107, 0.14);
+  color: #ff6b6b;
+  font-size: 10px;
+  font-weight: 700;
+}
+
 .stock-price {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
-  min-width: 80px;
+  min-width: 70px;
 }
 
 .price {
@@ -561,39 +681,6 @@ onUnmounted(() => {
 
 .change.down {
   color: #2ed573;
-}
-
-.tick-badge {
-  position: absolute;
-  right: 4px;
-  top: 4px;
-  font-size: 10px;
-  animation: pulse 1s infinite;
-}
-
-.rotation-info {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 6px 8px;
-  background: var(--bg-secondary);
-  border-radius: 4px;
-  font-size: 11px;
-  margin-top: 8px;
-}
-
-.rotation-label {
-  color: var(--text-secondary);
-}
-
-.rotation-value {
-  font-weight: 600;
-  color: var(--color-highlight);
-}
-
-.rotation-timer {
-  color: #3498db;
-  font-size: 10px;
 }
 
 .recent-tick {
@@ -626,17 +713,5 @@ onUnmounted(() => {
 .tick-volume {
   color: var(--text-secondary);
   font-size: 10px;
-}
-
-@keyframes pulse {
-
-  0%,
-  100% {
-    opacity: 1;
-  }
-
-  50% {
-    opacity: 0.5;
-  }
 }
 </style>

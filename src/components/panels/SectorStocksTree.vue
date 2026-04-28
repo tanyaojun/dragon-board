@@ -141,7 +141,7 @@
                 <td>
                   <div class="blocks-preview">
                     <span v-for="block in (stock.blocks || []).slice(0, 2)" :key="block" class="block-tag">{{ block
-                      }}</span>
+                    }}</span>
                     <span v-if="(stock.blocks?.length || 0) > 2" class="block-tag more">
                       +{{ stock.blocks.length - 2 }}
                     </span>
@@ -172,6 +172,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { dataLayer } from '@/services/DataLayer'
+import { sectorAnalyzer } from '@/services/sectorAnalyzer'
 import { useUIStore } from '@/stores/ui'
 
 // Props

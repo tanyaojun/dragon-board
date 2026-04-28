@@ -36,6 +36,11 @@ import { dataLayer } from './DataLayer'
 import { themeMapping } from './ThemeDataService'
 import { apiService } from './apiService'
 import { alertService } from './alertService'
+import {
+  buildStockThemeSignature,
+  resolvePrimaryStockTheme,
+  sortStockThemes,
+} from './theme/stockThemeMeta'
 import { StockUtils } from '../utils/common'
 
 // ========== 配置常量 ==========
@@ -1039,7 +1044,13 @@ export function syncThemesToStocks(): number {
   const stocks = dataLayer.getStocks()
   if (!stocks.length) return 0
 
-  const updates: Array<{ code: string; themes: any[] }> = []
+  const updates: Array<{
+    code: string
+    themes: any[]
+    mainTheme?: string
+    themeHeat: number
+    themeLevel: string
+  }> = []
   let updatedCount = 0
 
   stocks.forEach((stock) => {
@@ -1101,19 +1112,29 @@ export function syncThemesToStocks(): number {
       }
     })
 
-    // 转换为数组并限制数量
-    const newThemes = Array.from(mergedThemeMap.values()).slice(0, CONFIG.MAX_THEMES_PER_STOCK)
+    // 题材列表必须先按热度和联动性排主次，再决定主题材字段。
+    const newThemes = sortStockThemes(Array.from(mergedThemeMap.values())).slice(
+      0,
+      CONFIG.MAX_THEMES_PER_STOCK,
+    )
+    const nextThemeSnapshot = resolvePrimaryStockTheme(newThemes)
 
     const currentThemes = stock.themes || []
+    const currentSignature = buildStockThemeSignature(currentThemes)
+    const nextSignature = buildStockThemeSignature(newThemes)
 
-    // 比较是否有变化
     if (
-      JSON.stringify(currentThemes.map((t) => t.id).sort()) !==
-      JSON.stringify(newThemes.map((t) => t.id).sort())
+      currentSignature !== nextSignature ||
+      (stock.mainTheme || '') !== (nextThemeSnapshot.mainTheme || '') ||
+      (stock.themeHeat || 0) !== nextThemeSnapshot.themeHeat ||
+      (stock.themeLevel || '冷') !== nextThemeSnapshot.themeLevel
     ) {
       updates.push({
         code: stock.code,
         themes: newThemes,
+        mainTheme: nextThemeSnapshot.mainTheme,
+        themeHeat: nextThemeSnapshot.themeHeat,
+        themeLevel: nextThemeSnapshot.themeLevel,
       })
       updatedCount++
     }

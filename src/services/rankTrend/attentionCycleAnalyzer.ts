@@ -1,0 +1,340 @@
+import type { AttentionStage, CycleEntryBias, RankTrendAnalysisResult } from './types'
+import { ATTENTION_STAGE_SEQUENCE } from './types'
+import { clamp } from './utils'
+
+function calculateRankVelocity(percentiles: number[]): number {
+  if (percentiles.length < 2) return 0
+  return percentiles[percentiles.length - 1] - percentiles[percentiles.length - 2]
+}
+
+function calculatePreviousRankVelocity(percentiles: number[]): number {
+  if (percentiles.length < 3) return 0
+  return percentiles[percentiles.length - 2] - percentiles[percentiles.length - 3]
+}
+
+function calculateRankShock(percentiles: number[]): number {
+  if (percentiles.length < 6) return 0
+  const velocities: number[] = []
+  for (let i = 1; i < percentiles.length; i++) {
+    velocities.push(percentiles[i] - percentiles[i - 1])
+  }
+  const recent = velocities.slice(-5)
+  const current = recent[recent.length - 1] ?? 0
+  const mean = recent.reduce((sum, value) => sum + value, 0) / recent.length
+  const variance =
+    recent.reduce((sum, value) => sum + (value - mean) ** 2, 0) / recent.length
+  const std = Math.sqrt(variance)
+  if (!Number.isFinite(std) || std < 1e-6) return 0
+  return (current - mean) / std
+}
+
+function buildAttentionTrajectoryMetrics(
+  ranks: number[],
+  percentiles: number[],
+  currentRank: number,
+  currentPercentile: number,
+): RankTrendAnalysisResult['cycle']['metrics'] {
+  const recentRanks =
+    ranks.length > 0 && ranks[ranks.length - 1] === currentRank ? [...ranks] : [...ranks, currentRank]
+  const recentPercentiles =
+    percentiles.length > 0 && Math.abs(percentiles[percentiles.length - 1] - currentPercentile) < 0.01
+      ? [...percentiles]
+      : [...percentiles, currentPercentile]
+
+  const windowSize = Math.min(8, Math.max(recentRanks.length, 1))
+  const rankWindow = recentRanks.slice(-windowSize)
+  const percentileWindow = recentPercentiles.slice(-windowSize)
+
+  let hotZoneStreak = 0
+  for (let i = rankWindow.length - 1; i >= 0; i--) {
+    const rank = rankWindow[i] ?? 999
+    const percentile = percentileWindow[i] ?? 0
+    if (rank <= 10 || percentile >= 88) {
+      hotZoneStreak += 1
+    } else {
+      break
+    }
+  }
+
+  const bestRecentRank =
+    rankWindow.length > 0
+      ? rankWindow.reduce((best, rank) => Math.min(best, rank), rankWindow[0] ?? currentRank)
+      : currentRank
+
+  return {
+    rankVelocity: calculateRankVelocity(percentiles),
+    rankAcceleration: calculateRankVelocity(percentiles) - calculatePreviousRankVelocity(percentiles),
+    rankShock: calculateRankShock(percentiles),
+    hotZoneStreak,
+    bestRecentRank,
+    drawdownFromPeak: Math.max(0, currentRank - bestRecentRank),
+  }
+}
+
+function determineRawAttentionStage(input: {
+  historyLength: number
+  currentPercentile: number
+  metrics: RankTrendAnalysisResult['cycle']['metrics']
+}): AttentionStage {
+  const { historyLength, currentPercentile, metrics } = input
+  const {
+    rankVelocity,
+    rankAcceleration,
+    hotZoneStreak,
+    bestRecentRank,
+    drawdownFromPeak,
+  } = metrics
+
+  if (historyLength < 2) return 'cooling'
+
+  const inWarmZone = currentPercentile >= 65 || bestRecentRank <= 25
+  const inHotZone = currentPercentile >= 85 || bestRecentRank <= 10
+  const recoveryReady =
+    rankVelocity > 0 &&
+    rankAcceleration >= -1.2 &&
+    (currentPercentile >= 50 || bestRecentRank <= 30 || hotZoneStreak >= 1)
+  const expansionReady =
+    rankVelocity > 0 &&
+    currentPercentile >= 70 &&
+    (rankAcceleration >= -1 || hotZoneStreak >= 1 || bestRecentRank <= 20)
+  const crowdedReady =
+    inHotZone &&
+    (hotZoneStreak >= 3 || bestRecentRank <= 5) &&
+    drawdownFromPeak <= 1 &&
+    (rankVelocity <= 1 || rankAcceleration < 0)
+  const reversalReady =
+    inWarmZone &&
+    drawdownFromPeak >= 2 &&
+    (rankVelocity < 0 || rankAcceleration < -1) &&
+    (hotZoneStreak >= 2 || bestRecentRank <= 10)
+
+  if (reversalReady) return 'reversal'
+  if (crowdedReady) return 'crowded'
+  if (expansionReady && inWarmZone) return 'expansion'
+  if (recoveryReady) return 'ignition'
+  return 'cooling'
+}
+
+function normalizeAttentionStage(input: {
+  previousStage: AttentionStage | null
+  rawStage: AttentionStage
+  currentPercentile: number
+  metrics: RankTrendAnalysisResult['cycle']['metrics']
+}): AttentionStage {
+  const { previousStage, rawStage, currentPercentile, metrics } = input
+  const { rankVelocity, rankAcceleration, hotZoneStreak, bestRecentRank, drawdownFromPeak } = metrics
+
+  if (!previousStage) return rawStage
+
+  const recoveryReady =
+    rankVelocity > 0 &&
+    rankAcceleration >= -1.2 &&
+    (currentPercentile >= 50 || bestRecentRank <= 30 || hotZoneStreak >= 1)
+  const weakening = rankVelocity < 0 || rankAcceleration < -1 || drawdownFromPeak >= 2
+  const severeWeakening = rankVelocity < -1 || rankAcceleration < -2.5 || drawdownFromPeak >= 3
+  const coolingReady = currentPercentile < 72 || hotZoneStreak <= 1
+  const crowdedCarryover = currentPercentile >= 82 || bestRecentRank <= 12 || hotZoneStreak >= 2
+
+  switch (previousStage) {
+    case 'ignition':
+      if (rawStage === 'expansion') return 'expansion'
+      if (rawStage === 'crowded') return 'expansion'
+      if (rawStage === 'reversal' || rawStage === 'cooling') {
+        return weakening ? 'cooling' : 'ignition'
+      }
+      return 'ignition'
+    case 'expansion':
+      if (rawStage === 'crowded') return 'crowded'
+      if (rawStage === 'reversal') {
+        if (crowdedCarryover && !severeWeakening) return 'crowded'
+        return severeWeakening || weakening ? 'reversal' : 'crowded'
+      }
+      if (rawStage === 'cooling') {
+        return severeWeakening || weakening ? 'reversal' : 'expansion'
+      }
+      if (rawStage === 'ignition') return 'expansion'
+      return 'expansion'
+    case 'crowded':
+      if (rawStage === 'reversal') return 'reversal'
+      if (rawStage === 'cooling') return coolingReady ? 'cooling' : 'reversal'
+      if (rawStage === 'expansion' || rawStage === 'ignition') {
+        return weakening ? 'reversal' : 'crowded'
+      }
+      return 'crowded'
+    case 'reversal':
+      if (rawStage === 'cooling') return 'cooling'
+      if (rawStage === 'reversal') return 'reversal'
+      return recoveryReady ? 'cooling' : 'reversal'
+    case 'cooling':
+      if (rawStage === 'cooling' || rawStage === 'reversal') return 'cooling'
+      if (!recoveryReady) return 'cooling'
+      if (rawStage === 'expansion' && currentPercentile < 72 && hotZoneStreak === 0) return 'ignition'
+      if (rawStage === 'crowded') return 'expansion'
+      return rawStage
+    default:
+      return rawStage
+  }
+}
+
+function buildTransition(previousStage: AttentionStage | null, currentStage: AttentionStage): string {
+  if (!previousStage || previousStage === currentStage) return currentStage
+  return `${previousStage}->${currentStage}`
+}
+
+function calculateCycleConfidence(
+  stage: AttentionStage,
+  currentPercentile: number,
+  metrics: RankTrendAnalysisResult['cycle']['metrics'],
+): number {
+  const { rankVelocity, rankAcceleration, hotZoneStreak, bestRecentRank, drawdownFromPeak } = metrics
+
+  const regionEvidence =
+    stage === 'cooling'
+      ? currentPercentile < 60
+      : stage === 'ignition'
+        ? currentPercentile >= 50 && currentPercentile < 80
+        : stage === 'expansion'
+          ? currentPercentile >= 60
+          : stage === 'crowded'
+            ? currentPercentile >= 82 || bestRecentRank <= 10
+            : currentPercentile >= 70 || bestRecentRank <= 20
+
+  const momentumEvidence =
+    stage === 'cooling'
+      ? rankVelocity <= 0 || currentPercentile < 60
+      : stage === 'ignition'
+        ? rankVelocity > 0 && rankAcceleration >= -0.8
+        : stage === 'expansion'
+          ? rankVelocity > 0 && rankAcceleration >= -0.2
+          : stage === 'crowded'
+            ? currentPercentile >= 80 && (rankVelocity <= 0 || hotZoneStreak >= 2)
+            : rankVelocity <= 0 || rankAcceleration < -1
+
+  const persistenceEvidence =
+    stage === 'cooling'
+      ? hotZoneStreak <= 1
+      : stage === 'ignition'
+        ? hotZoneStreak <= 1
+        : stage === 'expansion'
+          ? hotZoneStreak <= 2
+          : stage === 'crowded'
+            ? hotZoneStreak >= 2
+            : hotZoneStreak >= 2 || bestRecentRank <= 10
+
+  const drawdownEvidence =
+    stage === 'cooling'
+      ? drawdownFromPeak <= 1 || currentPercentile < 60
+      : stage === 'ignition'
+        ? drawdownFromPeak === 0
+        : stage === 'expansion'
+          ? drawdownFromPeak <= 1
+          : stage === 'crowded'
+            ? drawdownFromPeak <= 1
+            : drawdownFromPeak >= 1
+
+  return clamp(
+    50 +
+      Number(regionEvidence) * 10 +
+      Number(momentumEvidence) * 10 +
+      Number(persistenceEvidence) * 10 +
+      Number(drawdownEvidence) * 10,
+    50,
+    90,
+  )
+}
+
+function buildEntryAdvice(
+  stage: AttentionStage,
+  transition: string,
+): RankTrendAnalysisResult['cycle']['entryAdvice'] {
+  let bias: CycleEntryBias = 'watch'
+  if (transition === 'cooling->ignition' || transition === 'ignition->expansion') {
+    bias = 'preferred'
+  } else if (stage === 'reversal') {
+    bias = 'blocked'
+  } else if (stage === 'cooling' || stage === 'crowded') {
+    bias = 'avoid'
+  } else if (stage === 'ignition' || stage === 'expansion') {
+    bias = 'watch'
+  }
+
+  const reasonMap: Record<CycleEntryBias, string> = {
+    preferred: '处于优选阶段路径，可作为情绪周期主观察对象。',
+    watch: '处于可跟踪阶段，但还不是优选出手路径。',
+    avoid: '处于冷却或拥挤阶段，宜观察不宜积极出手。',
+    blocked: '处于反转阶段，应优先回避。',
+  }
+
+  return {
+    bias,
+    allowed: bias === 'preferred',
+    reason: reasonMap[bias],
+  }
+}
+
+export function analyzeAttentionCycle(input: {
+  ranks: number[]
+  percentiles: number[]
+}): RankTrendAnalysisResult['cycle'] {
+  const { ranks, percentiles } = input
+  let previousRawStage: AttentionStage | null = null
+  let previousStage: AttentionStage | null = null
+  let currentRawStage: AttentionStage | null = null
+  let currentStage: AttentionStage | null = null
+  let currentMetrics: RankTrendAnalysisResult['cycle']['metrics'] | null = null
+
+  for (let index = 0; index < percentiles.length; index++) {
+    const prefixRanks = ranks.slice(0, index + 1)
+    const prefixPercentiles = percentiles.slice(0, index + 1)
+    const currentRank = prefixRanks[prefixRanks.length - 1] ?? 999
+    const currentPercentile = prefixPercentiles[prefixPercentiles.length - 1] ?? 0
+    const metrics = buildAttentionTrajectoryMetrics(
+      prefixRanks,
+      prefixPercentiles,
+      currentRank,
+      currentPercentile,
+    )
+    const rawStage = determineRawAttentionStage({
+      historyLength: prefixPercentiles.length,
+      currentPercentile,
+      metrics,
+    })
+    const normalizedStage = normalizeAttentionStage({
+      previousStage: currentStage,
+      rawStage,
+      currentPercentile,
+      metrics,
+    })
+
+    previousRawStage = currentRawStage
+    previousStage = currentStage
+    currentRawStage = rawStage
+    currentStage = normalizedStage
+    currentMetrics = metrics
+  }
+
+  const fallbackStage = ATTENTION_STAGE_SEQUENCE[ATTENTION_STAGE_SEQUENCE.length - 1]
+  const stage = currentStage ?? fallbackStage
+  const rawStage = currentRawStage ?? fallbackStage
+  const metrics =
+    currentMetrics ?? {
+      rankVelocity: 0,
+      rankAcceleration: 0,
+      rankShock: 0,
+      hotZoneStreak: 0,
+      bestRecentRank: ranks[ranks.length - 1] ?? 999,
+      drawdownFromPeak: 0,
+    }
+  const currentPercentile = percentiles[percentiles.length - 1] ?? 0
+  const transition = buildTransition(previousStage, stage)
+
+  return {
+    rawStage,
+    stage,
+    previousStage,
+    transition,
+    confidence: calculateCycleConfidence(stage, currentPercentile, metrics),
+    metrics,
+    entryAdvice: buildEntryAdvice(stage, transition),
+  }
+}
