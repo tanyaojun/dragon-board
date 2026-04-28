@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -80,7 +81,7 @@ internal static partial class Program
                 report.SetL2Result = session.TrySetL2UserInfo(options);
             }
 
-            report.DeepInit = session.TryInitializeDeep(options.UnsafeDeepStart);
+            report.DeepInit = session.TryInitializeDeep(options.UnsafeDeepStart, options.UnsafeDeepFuncProbe, options.UnsafeDeepFuncCodes);
 
             if (session.CanGetL2Info)
             {
@@ -109,8 +110,8 @@ internal static partial class Program
             report.Notes.Add("host-runtime always syncs the helper-side runtime layout before loading official DLLs.");
             report.Notes.Add("This is the standalone x86 host baseline: tc.dll is initialized in-process and queried over stdio-safe JSON.");
             report.Notes.Add("Sequence: TC_Init_Environ -> optional login-state probe -> optional TC_Login/TC_Login2 -> optional TC_SetL2UserInfo -> TDXDeep register -> optional TDXDeep start -> TC_GetL2Info -> heartbeats.");
-            report.Notes.Add("TDXDeep signatures are provisional: RegisterCallBackFunc uses 3 IntPtr args, StartInit uses 7 IntPtr args, callback uses IntPtr/uint/IntPtr/IntPtr.");
-            report.Notes.Add("TdxDeep_StartInit is gated behind --unsafe-deep-start because the current signature/argument guess can still crash the x86 host process.");
+            report.Notes.Add("TDXDeep signatures are provisional: RegisterCallBackFunc uses 3 IntPtr args, StartInit uses 7 IntPtr args, Func uses 10 IntPtr args, callback uses IntPtr/uint/IntPtr/IntPtr.");
+            report.Notes.Add("TdxDeep_StartInit is gated behind --unsafe-deep-start. TdxDeep_Func is separately gated behind --unsafe-deep-func-probe because empty-context calls can block.");
             report.Notes.Add("Use --event-stream to switch stdout into compact NDJSON heartbeat mode for an outer bridge.");
             return FinalizeSelfHostReport(report);
         }
@@ -279,7 +280,7 @@ internal static partial class Program
                     });
             }
 
-            var deepInit = session.TryInitializeDeep(options.UnsafeDeepStart);
+            var deepInit = session.TryInitializeDeep(options.UnsafeDeepStart, options.UnsafeDeepFuncProbe, options.UnsafeDeepFuncCodes);
             WriteHostEvent(
                 "deep_register",
                 new
@@ -416,6 +417,7 @@ internal static partial class Program
     private sealed class SelfHostSession : IDisposable
     {
         private const int DeepCallbackBufferLimit = 16;
+        private const int DeepCallbackPreviewBytes = 128;
         private readonly string previousDirectory;
         private readonly string tdxRoot;
         private readonly object deepSync = new();
@@ -427,10 +429,14 @@ internal static partial class Program
         private bool deepRegisterSucceeded;
         private bool deepStartAttempted;
         private bool deepStartSucceeded;
+        private bool deepSetMainWndAttempted;
+        private bool deepSetMainWndSucceeded;
+        private bool deepUnsafeFuncProbeAttempted;
         private bool deepUninitAttempted;
         private DeepCallbackSample? lastDeepCallback;
         private DeepCallReport? lastDeepRegister;
         private DeepCallReport? lastDeepStart;
+        private DeepCallReport? lastDeepSetMainWnd;
         private bool tcInitialized;
         private bool disposed;
 
@@ -498,6 +504,16 @@ internal static partial class Program
                 deepStart = Marshal.GetDelegateForFunctionPointer<TdxDeepStartInitFn>(deepStartPtr);
             }
 
+            if (deepModule.Exports.TryGetValue("TdxDeep_SetMainWnd", out var deepSetMainWndPtr) && deepSetMainWndPtr != IntPtr.Zero)
+            {
+                deepSetMainWnd = Marshal.GetDelegateForFunctionPointer<TdxDeepSetMainWndFn>(deepSetMainWndPtr);
+            }
+
+            if (deepModule.Exports.TryGetValue("TdxDeep_Func", out var deepFuncPtr) && deepFuncPtr != IntPtr.Zero)
+            {
+                deepFunc = Marshal.GetDelegateForFunctionPointer<TdxDeepFuncFn>(deepFuncPtr);
+            }
+
             if (deepModule.Exports.TryGetValue("TdxDeep_Uninit", out var deepUninitPtr) && deepUninitPtr != IntPtr.Zero)
             {
                 deepUninit = Marshal.GetDelegateForFunctionPointer<TdxDeepUninitFn>(deepUninitPtr);
@@ -514,6 +530,8 @@ internal static partial class Program
         private readonly TcUninitFn? uninit;
         private readonly TdxDeepRegisterCallBackFuncFn? deepRegister;
         private readonly TdxDeepStartInitFn? deepStart;
+        private readonly TdxDeepSetMainWndFn? deepSetMainWnd;
+        private readonly TdxDeepFuncFn? deepFunc;
         private readonly TdxDeepUninitFn? deepUninit;
 
         public LoadedModule TcModule { get; }
@@ -627,14 +645,18 @@ internal static partial class Program
             return InvokeTcSetL2UserInfo(setL2UserInfo, options);
         }
 
-        public SelfHostDeepInitReport TryInitializeDeep(bool allowUnsafeStart)
+        public SelfHostDeepInitReport TryInitializeDeep(bool allowUnsafeStart, bool allowUnsafeFuncProbe, IReadOnlyList<int> unsafeFuncCodes)
         {
             var registerResult = TryRegisterDeepCallback();
             var startResult = TryStartDeep(allowUnsafeStart);
+            var funcProbeResults = allowUnsafeFuncProbe && allowUnsafeStart && string.IsNullOrWhiteSpace(startResult.Error)
+                ? TryProbeDeepFunc(unsafeFuncCodes)
+                : new List<DeepCallReport>();
             return new SelfHostDeepInitReport
             {
                 RegisterResult = registerResult,
                 StartResult = startResult,
+                FuncProbeResults = funcProbeResults,
                 State = CaptureDeepState(),
             };
         }
@@ -722,16 +744,17 @@ internal static partial class Program
             var started = DateTime.UtcNow;
             try
             {
-                using var arg1 = OptionalAnsiString.From(tdxRoot);
-                using var arg2 = OptionalAnsiString.From(Path.Combine(tdxRoot, "T0002"));
+                using var arg1 = OptionalAnsiString.From(EnsureTrailingSlash(tdxRoot));
+                using var arg2 = OptionalAnsiString.From(EnsureTrailingSlash(Path.Combine(tdxRoot, "T0002")));
                 using var arg3 = OptionalAnsiString.From(Path.Combine(tdxRoot, "connect.cfg"));
+                using var arg6 = BuildDeepMarketDescriptorBuffer();
                 report.ReturnValue = deepStart(
                     arg1.Pointer,
                     arg2.Pointer,
                     arg3.Pointer,
                     IntPtr.Zero,
                     IntPtr.Zero,
-                    IntPtr.Zero,
+                    arg6.Pointer,
                     IntPtr.Zero);
                 report.Win32LastError = Marshal.GetLastWin32Error();
             }
@@ -750,6 +773,218 @@ internal static partial class Program
             return report;
         }
 
+        private static string EnsureTrailingSlash(string path)
+        {
+            return path.EndsWith(Path.DirectorySeparatorChar)
+                ? path
+                : path + Path.DirectorySeparatorChar;
+        }
+
+        private static HGlobalBuffer BuildDeepMarketDescriptorBuffer()
+        {
+            var buffer = new HGlobalBuffer(128);
+            var textBytes = Encoding.GetEncoding("GB18030").GetBytes("扩展市场行情");
+            Marshal.Copy(textBytes, 0, buffer.Pointer, textBytes.Length);
+            Marshal.Copy(textBytes, 0, IntPtr.Add(buffer.Pointer, 50), textBytes.Length);
+
+            WriteInt32(buffer.Pointer, 100, 0x00020002);
+            WriteInt32(buffer.Pointer, 108, 1);
+            WriteInt32(buffer.Pointer, 112, 1);
+            WriteInt32(buffer.Pointer, 116, 1);
+            return buffer;
+        }
+
+        private static void WriteInt32(IntPtr pointer, int offset, int value)
+        {
+            var bytes = BitConverter.GetBytes(value);
+            Marshal.Copy(bytes, 0, IntPtr.Add(pointer, offset), bytes.Length);
+        }
+
+        private List<DeepCallReport> TryProbeDeepFunc(IReadOnlyList<int> unsafeFuncCodes)
+        {
+            var reports = new List<DeepCallReport>();
+            deepUnsafeFuncProbeAttempted = true;
+            TraceUnsafeDeepFuncProbe("creating hidden message window");
+            using var messageWindow = HiddenMessageWindow.Start();
+            var hwnd = messageWindow.Handle != IntPtr.Zero
+                ? messageWindow.Handle
+                : NativeMethods.GetConsoleWindow();
+            TraceUnsafeDeepFuncProbe($"calling TdxDeep_SetMainWnd hwnd={FormatPointer(hwnd)} hiddenWindow={FormatPointer(messageWindow.Handle)}");
+            var setMainWndResult = TrySetDeepMainWnd(hwnd, messageWindow);
+            reports.Add(setMainWndResult);
+            TraceUnsafeDeepFuncProbe($"TdxDeep_SetMainWnd returned error={setMainWndResult.Error} returnValue={setMainWndResult.ReturnValue}");
+            if (hwnd == IntPtr.Zero || !string.IsNullOrWhiteSpace(setMainWndResult.Error))
+            {
+                return reports;
+            }
+
+            if (deepFunc is null)
+            {
+                reports.Add(
+                    new DeepCallReport
+                    {
+                        Invoked = false,
+                        Function = "TdxDeep_Func",
+                        SignatureAssumption = "cdecl int fn(10 pointer-sized args)",
+                        Error = "missing export for TdxDeep_Func",
+                    });
+                return reports;
+            }
+
+            foreach (var code in unsafeFuncCodes)
+            {
+                TraceUnsafeDeepFuncProbe($"calling TdxDeep_Func code={code} hwnd={FormatPointer(hwnd)}");
+                reports.Add(TryCallDeepFuncCode(code, hwnd));
+                TraceUnsafeDeepFuncProbe($"TdxDeep_Func code={code} returned error={reports[^1].Error} returnValue={reports[^1].ReturnValue} elapsedMs={reports[^1].ElapsedMs}");
+            }
+
+            return reports;
+        }
+
+        private static void TraceUnsafeDeepFuncProbe(string message)
+        {
+            Console.Error.WriteLine($"[unsafe-deep-func-probe] {DateTimeOffset.Now:O} {message}");
+            Console.Error.Flush();
+        }
+
+        private DeepCallReport TrySetDeepMainWnd(IntPtr hwnd, HiddenMessageWindow messageWindow)
+        {
+            var report = new DeepCallReport
+            {
+                Invoked = deepSetMainWnd is not null,
+                Function = "TdxDeep_SetMainWnd",
+                SignatureAssumption = "cdecl int fn(hwnd, 0x13d7, 0, 0)",
+                Details = $"hwnd={FormatPointer(hwnd)}; hiddenWindowHandle={FormatPointer(messageWindow.Handle)}; hiddenWindowError={messageWindow.Error}",
+            };
+
+            if (deepSetMainWnd is null)
+            {
+                report.Error = "missing export for TdxDeep_SetMainWnd";
+                return report;
+            }
+
+            if (hwnd == IntPtr.Zero)
+            {
+                report.Invoked = false;
+                report.Error = "no valid HWND for TdxDeep_SetMainWnd";
+                return report;
+            }
+
+            deepSetMainWndAttempted = true;
+            var started = DateTime.UtcNow;
+            try
+            {
+                report.ReturnValue = deepSetMainWnd(hwnd, new IntPtr(0x13d7), IntPtr.Zero, IntPtr.Zero);
+                report.Win32LastError = Marshal.GetLastWin32Error();
+            }
+            catch (Exception error)
+            {
+                report.ErrorType = error.GetType().Name;
+                report.Error = error.Message;
+            }
+            finally
+            {
+                report.ElapsedMs = (int)(DateTime.UtcNow - started).TotalMilliseconds;
+                deepSetMainWndSucceeded = string.IsNullOrWhiteSpace(report.Error);
+                lastDeepSetMainWnd = report;
+            }
+
+            return report;
+        }
+
+        private DeepCallReport TryCallDeepFuncCode(int code, IntPtr hwnd)
+        {
+            if (code == 4)
+            {
+                return TryCallDeepFuncCode4(hwnd);
+            }
+
+            var report = new DeepCallReport
+            {
+                Invoked = true,
+                Function = $"TdxDeep_Func:{code}",
+                SignatureAssumption = "cdecl int fn(0, empty, empty, code, 0, 0, 0, result*, 0, hwnd)",
+                Details = $"hwnd={FormatPointer(hwnd)}",
+            };
+
+            var started = DateTime.UtcNow;
+            try
+            {
+                using var empty = new HGlobalBuffer(1);
+                using var result = new HGlobalBuffer(16);
+                report.ReturnValue = deepFunc!(
+                    IntPtr.Zero,
+                    empty.Pointer,
+                    empty.Pointer,
+                    new IntPtr(code),
+                    IntPtr.Zero,
+                    IntPtr.Zero,
+                    IntPtr.Zero,
+                    result.Pointer,
+                    IntPtr.Zero,
+                    hwnd);
+                report.Win32LastError = Marshal.GetLastWin32Error();
+                report.ResultHex = Convert.ToHexString(result.ToArray().Take(16).ToArray());
+            }
+            catch (Exception error)
+            {
+                report.ErrorType = error.GetType().Name;
+                report.Error = error.Message;
+            }
+            finally
+            {
+                report.ElapsedMs = (int)(DateTime.UtcNow - started).TotalMilliseconds;
+            }
+
+            return report;
+        }
+
+        private DeepCallReport TryCallDeepFuncCode4(IntPtr hwnd)
+        {
+            var report = new DeepCallReport
+            {
+                Invoked = true,
+                Function = "TdxDeep_Func:4",
+                SignatureAssumption = "cdecl int fn(0, empty, empty, 4, 0, 0, buffer*, len*, 0, hwnd)",
+                Details = $"hwnd={FormatPointer(hwnd)}; bufferSize=0x96",
+            };
+
+            var started = DateTime.UtcNow;
+            try
+            {
+                using var empty = new HGlobalBuffer(1);
+                using var buffer = new HGlobalBuffer(0x96);
+                using var lengthBuffer = new HGlobalBuffer(16);
+                WriteInt32(lengthBuffer.Pointer, 0, 0x96);
+
+                report.ReturnValue = deepFunc!(
+                    IntPtr.Zero,
+                    empty.Pointer,
+                    empty.Pointer,
+                    new IntPtr(4),
+                    IntPtr.Zero,
+                    IntPtr.Zero,
+                    buffer.Pointer,
+                    lengthBuffer.Pointer,
+                    IntPtr.Zero,
+                    hwnd);
+                report.Win32LastError = Marshal.GetLastWin32Error();
+                report.ResultHex = Convert.ToHexString(lengthBuffer.ToArray().Take(16).ToArray());
+                report.OutputPreview = NativePointerPreview.FromBytes(buffer.ToArray());
+            }
+            catch (Exception error)
+            {
+                report.ErrorType = error.GetType().Name;
+                report.Error = error.Message;
+            }
+            finally
+            {
+                report.ElapsedMs = (int)(DateTime.UtcNow - started).TotalMilliseconds;
+            }
+
+            return report;
+        }
+
         private void HandleDeepCallback(IntPtr arg1, uint arg2, IntPtr arg3, IntPtr arg4)
         {
             var sample = new DeepCallbackSample
@@ -761,6 +996,8 @@ internal static partial class Program
                 Arg2 = arg2,
                 Arg3 = FormatPointer(arg3),
                 Arg4 = FormatPointer(arg4),
+                Arg1Preview = TryReadPointerPreview(arg1, DeepCallbackPreviewBytes),
+                Arg4Preview = TryReadPointerPreview(arg4, DeepCallbackPreviewBytes),
             };
 
             lock (deepSync)
@@ -790,16 +1027,20 @@ internal static partial class Program
             {
                 RegisterSupported = deepRegister is not null,
                 StartSupported = deepStart is not null,
+                SetMainWndSupported = deepSetMainWnd is not null,
                 UninitSupported = deepUninit is not null,
                 RegisterAttempted = deepRegisterAttempted,
                 RegisterSucceeded = deepRegisterSucceeded,
                 StartAttempted = deepStartAttempted,
                 StartSucceeded = deepStartSucceeded,
+                SetMainWndAttempted = deepSetMainWndAttempted,
+                SetMainWndSucceeded = deepSetMainWndSucceeded,
                 UninitAttempted = deepUninitAttempted,
                 CallbackCount = deepCallbackCount,
                 BufferedCallbackCount = deepCallbacks.Count,
                 LastRegister = lastDeepRegister,
                 LastStart = lastDeepStart,
+                LastSetMainWnd = lastDeepSetMainWnd,
                 LastCallback = lastDeepCallback,
             };
         }
@@ -807,6 +1048,37 @@ internal static partial class Program
         private static string FormatPointer(IntPtr value)
         {
             return $"0x{value.ToInt64():X}";
+        }
+
+        private static NativePointerPreview TryReadPointerPreview(IntPtr pointer, int size)
+        {
+            if (pointer == IntPtr.Zero)
+            {
+                return NativePointerPreview.Empty("null");
+            }
+
+            var pid = Environment.ProcessId;
+            var processHandle = NativeMethods.OpenProcess(ProcessVmRead | ProcessQueryInformation | ProcessQueryLimitedInformation, false, pid);
+            if (processHandle == IntPtr.Zero)
+            {
+                return NativePointerPreview.Empty(new Win32Exception(Marshal.GetLastWin32Error()).Message);
+            }
+
+            try
+            {
+                var buffer = new byte[size];
+                if (!NativeMethods.ReadProcessMemory(processHandle, pointer, buffer, size, out var bytesRead) || bytesRead <= 0)
+                {
+                    return NativePointerPreview.Empty(new Win32Exception(Marshal.GetLastWin32Error()).Message);
+                }
+
+                var data = buffer.Take(bytesRead).ToArray();
+                return NativePointerPreview.FromBytes(data);
+            }
+            finally
+            {
+                NativeMethods.CloseHandle(processHandle);
+            }
         }
 
         public void Dispose()
@@ -821,14 +1093,17 @@ internal static partial class Program
             {
                 if ((deepRegisterAttempted || deepStartAttempted) && deepUninit is not null)
                 {
-                    deepUninitAttempted = true;
-                    try
+                    if (!deepUnsafeFuncProbeAttempted)
                     {
-                        deepUninit();
-                    }
-                    catch
-                    {
-                        // Best-effort cleanup only.
+                        deepUninitAttempted = true;
+                        try
+                        {
+                            deepUninit();
+                        }
+                        catch
+                        {
+                            // Best-effort cleanup only.
+                        }
                     }
                 }
 
@@ -846,9 +1121,113 @@ internal static partial class Program
             }
             finally
             {
-                DeepModule.Dispose();
-                TcModule.Dispose();
+                if (!deepUnsafeFuncProbeAttempted)
+                {
+                    DeepModule.Dispose();
+                    TcModule.Dispose();
+                }
+
                 Directory.SetCurrentDirectory(previousDirectory);
+            }
+        }
+    }
+
+    private sealed class HiddenMessageWindow : IDisposable
+    {
+        private readonly ManualResetEventSlim ready = new(false);
+        private readonly Thread thread;
+        private uint threadId;
+        private IntPtr handle;
+        private string error = string.Empty;
+        private bool disposed;
+
+        private HiddenMessageWindow()
+        {
+            thread = new Thread(Run)
+            {
+                IsBackground = true,
+                Name = "TdxDeepMessageWindow",
+            };
+            thread.SetApartmentState(ApartmentState.STA);
+        }
+
+        public IntPtr Handle => handle;
+
+        public string Error => error;
+
+        public static HiddenMessageWindow Start()
+        {
+            var window = new HiddenMessageWindow();
+            window.thread.Start();
+            if (!window.ready.Wait(TimeSpan.FromSeconds(3)) && string.IsNullOrWhiteSpace(window.error))
+            {
+                window.error = "timed out while creating hidden message window";
+            }
+
+            return window;
+        }
+
+        private void Run()
+        {
+            threadId = NativeMethods.GetCurrentThreadId();
+            try
+            {
+                handle = NativeMethods.CreateWindowExW(
+                    0,
+                    "STATIC",
+                    "TdxL2HelperDeepWindow",
+                    0,
+                    0,
+                    0,
+                    1,
+                    1,
+                    IntPtr.Zero,
+                    IntPtr.Zero,
+                    IntPtr.Zero,
+                    IntPtr.Zero);
+                if (handle == IntPtr.Zero)
+                {
+                    error = new Win32Exception(Marshal.GetLastWin32Error()).Message;
+                }
+            }
+            catch (Exception createError)
+            {
+                error = $"{createError.GetType().Name}: {createError.Message}";
+            }
+            finally
+            {
+                ready.Set();
+            }
+
+            while (NativeMethods.GetMessageW(out var message, IntPtr.Zero, 0, 0) > 0)
+            {
+                NativeMethods.TranslateMessage(ref message);
+                NativeMethods.DispatchMessageW(ref message);
+            }
+
+            if (handle != IntPtr.Zero)
+            {
+                NativeMethods.DestroyWindow(handle);
+                handle = IntPtr.Zero;
+            }
+        }
+
+        public void Dispose()
+        {
+            if (disposed)
+            {
+                return;
+            }
+
+            disposed = true;
+            if (threadId != 0)
+            {
+                NativeMethods.PostThreadMessageW(threadId, NativeMethods.WM_QUIT, IntPtr.Zero, IntPtr.Zero);
+            }
+
+            if (thread.IsAlive)
+            {
+                thread.Join(1000);
             }
         }
     }
@@ -1054,6 +1433,9 @@ internal sealed class SelfHostDeepInitReport
     [JsonPropertyName("startResult")]
     public DeepCallReport? StartResult { get; init; }
 
+    [JsonPropertyName("funcProbeResults")]
+    public List<DeepCallReport> FuncProbeResults { get; init; } = new();
+
     [JsonPropertyName("state")]
     public DeepStateSnapshot State { get; init; } = new();
 }
@@ -1093,6 +1475,15 @@ internal sealed class DeepCallReport
     [JsonPropertyName("win32LastError")]
     public int Win32LastError { get; set; }
 
+    [JsonPropertyName("details")]
+    public string Details { get; set; } = string.Empty;
+
+    [JsonPropertyName("resultHex")]
+    public string ResultHex { get; set; } = string.Empty;
+
+    [JsonPropertyName("outputPreview")]
+    public NativePointerPreview? OutputPreview { get; set; }
+
     [JsonPropertyName("errorType")]
     public string ErrorType { get; set; } = string.Empty;
 
@@ -1107,6 +1498,9 @@ internal sealed class DeepStateSnapshot
 
     [JsonPropertyName("startSupported")]
     public bool StartSupported { get; init; }
+
+    [JsonPropertyName("setMainWndSupported")]
+    public bool SetMainWndSupported { get; init; }
 
     [JsonPropertyName("uninitSupported")]
     public bool UninitSupported { get; init; }
@@ -1123,6 +1517,12 @@ internal sealed class DeepStateSnapshot
     [JsonPropertyName("startSucceeded")]
     public bool StartSucceeded { get; init; }
 
+    [JsonPropertyName("setMainWndAttempted")]
+    public bool SetMainWndAttempted { get; init; }
+
+    [JsonPropertyName("setMainWndSucceeded")]
+    public bool SetMainWndSucceeded { get; init; }
+
     [JsonPropertyName("uninitAttempted")]
     public bool UninitAttempted { get; init; }
 
@@ -1137,6 +1537,9 @@ internal sealed class DeepStateSnapshot
 
     [JsonPropertyName("lastStart")]
     public DeepCallReport? LastStart { get; init; }
+
+    [JsonPropertyName("lastSetMainWnd")]
+    public DeepCallReport? LastSetMainWnd { get; init; }
 
     [JsonPropertyName("lastCallback")]
     public DeepCallbackSample? LastCallback { get; init; }
@@ -1164,4 +1567,79 @@ internal sealed class DeepCallbackSample
 
     [JsonPropertyName("arg4")]
     public string Arg4 { get; init; } = string.Empty;
+
+    [JsonPropertyName("arg1Preview")]
+    public NativePointerPreview Arg1Preview { get; init; } = new();
+
+    [JsonPropertyName("arg4Preview")]
+    public NativePointerPreview Arg4Preview { get; init; } = new();
+}
+
+internal sealed class NativePointerPreview
+{
+    [JsonPropertyName("size")]
+    public int Size { get; init; }
+
+    [JsonPropertyName("nonZeroBytes")]
+    public int NonZeroBytes { get; init; }
+
+    [JsonPropertyName("hexPrefix")]
+    public string HexPrefix { get; init; } = string.Empty;
+
+    [JsonPropertyName("ansiPreview")]
+    public string AnsiPreview { get; init; } = string.Empty;
+
+    [JsonPropertyName("gb18030Preview")]
+    public string Gb18030Preview { get; init; } = string.Empty;
+
+    [JsonPropertyName("uint32")]
+    public List<uint> UInt32 { get; init; } = new();
+
+    [JsonPropertyName("error")]
+    public string Error { get; init; } = string.Empty;
+
+    public static NativePointerPreview Empty(string error)
+    {
+        return new NativePointerPreview
+        {
+            Error = error,
+        };
+    }
+
+    public static NativePointerPreview FromBytes(byte[] data)
+    {
+        var scalarCount = Math.Min(data.Length / 4, 8);
+        var values = new List<uint>(scalarCount);
+        for (var index = 0; index < scalarCount; index++)
+        {
+            values.Add(BitConverter.ToUInt32(data, index * 4));
+        }
+
+        return new NativePointerPreview
+        {
+            Size = data.Length,
+            NonZeroBytes = data.Count(value => value != 0),
+            HexPrefix = FormatHexPrefix(data, 64),
+            AnsiPreview = PreviewText(data, Encoding.ASCII),
+            Gb18030Preview = PreviewText(data, Encoding.GetEncoding("GB18030")),
+            UInt32 = values,
+        };
+    }
+
+    private static string FormatHexPrefix(byte[] data, int limit)
+    {
+        return string.Join(" ", data.Take(limit).Select(value => value.ToString("X2")));
+    }
+
+    private static string PreviewText(byte[] data, Encoding encoding)
+    {
+        var slice = data.SkipWhile(value => value == 0).TakeWhile(value => value != 0).Take(64).ToArray();
+        if (slice.Length == 0)
+        {
+            return string.Empty;
+        }
+
+        var text = encoding.GetString(slice);
+        return new string(text.Select(character => char.IsControl(character) ? ' ' : character).ToArray()).Trim();
+    }
 }

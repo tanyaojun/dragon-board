@@ -309,3 +309,36 @@ python python-bridge/research/tdx_live_auth_state_probe.py --sample-count 20 --i
 
 - 这条探针比继续堆 `TC_Login / TC_Login2` profile 更有价值，因为它能直接回答“手工触发登录/刷新时，到底哪些 live 状态在动”。
 - 如果这些 gate/mirror 在手工登录时依然完全不动，下一步就该继续追 `tpbus.dll sub_100F0C20` 的上游业务入口，而不是继续在 helper 里堆四参数组合。
+
+## 2026-04-28 TdxWL2 / TDXDeep 新结论
+
+新增 live 进程字符串扫描：
+
+```bash
+python python-bridge/research/tdx_live_memory_string_probe.py --max-mb 512 --limit-per-keyword 8 --output .tmp/tdx_live_memory_string_probe_2026-04-28.json
+```
+
+新增 TDXDeep 槽位使用反汇编：
+
+```bash
+python python-bridge/research/tdx_deep_call_uses_probe.py --slots TdxDeep_Func,TdxDeep_Data,TdxDeep_SetMainWnd --before 112 --after 112 --output .tmp/tdx_deep_call_uses_probe_2026-04-28.json
+```
+
+本轮关键事实：
+
+- live `tdxw.exe` 堆里已发现真实 `TdxWL2` applysso 返回 JSON。
+- 返回 JSON 包含 `RightInfo=C / L2ZH / Code=0 / DataName=TdxWL2`。
+- 同一内存区还能看到 `SSOMode=13 / SysSource=tdxlevel / Reserve.L2ZH / Reserve.L2Right` 请求 JSON。
+- helper 用这些 live JSON 派生出 `tdxwl2-*` setl2 profile 后，`TC_SetL2UserInfo` 仍然只是返回 `1`，没有让 `RightInfo / L2Info` 非空。
+
+因此：
+
+- `TC_SetL2UserInfo` 直接喂 live JSON 的路线已判为无效。
+- `TdxDeep_StartInit` 的旧崩溃原因已经收敛到实参形态，尤其是第 6 参数不能传空。
+- 复刻官方第 6 参数的 `扩展市场行情` 静态描述缓冲后，helper 内 `TdxDeep_StartInit` 已能稳定返回 `1`。
+
+新的剩余 blocker：
+
+- `TdxDeep_StartInit` 成功后还没有 callback。
+- `TdxDeep_Func` 静态上是 10 参数，官方调用后清栈 `0x28`。
+- 空上下文调用 `TdxDeep_Func` 会阻塞，因此 helper 侧已把它单独放到 `--unsafe-deep-func-probe`，不随 `--unsafe-deep-start` 自动执行。

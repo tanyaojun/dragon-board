@@ -164,6 +164,57 @@ OBJECT_SPECS: tuple[dict[str, Any], ...] = (
         "size": 16,
         "sensitive": False,
     },
+    {
+        "name": "deep_start_arg4_dword",
+        "kind": "u32",
+        "address": 0x010FCF54,
+        "sensitive": False,
+        "notes": [
+            "Loaded into edx immediately before the official TdxDeep_StartInit call.",
+            "This value is passed as the fourth TdxDeep_StartInit argument in the tdxw.exe callsite.",
+        ],
+    },
+    {
+        "name": "deep_start_arg4_pointer_blob",
+        "kind": "pointer_blob",
+        "address": 0x010FCF54,
+        "sensitive": False,
+        "notes": [
+            "Dereferences deep_start_arg4_dword as a process pointer to inspect the object/header shape.",
+            "This is still read-only and only emits printable fragments plus a short hash.",
+        ],
+    },
+    {
+        "name": "deep_start_arg5_flag",
+        "kind": "u32",
+        "address": 0x00E7F11B,
+        "sensitive": False,
+        "notes": [
+            "Byte-loaded with movzx ecx before the official TdxDeep_StartInit call.",
+            "This value is passed as the fifth TdxDeep_StartInit argument in the tdxw.exe callsite.",
+        ],
+    },
+    {
+        "name": "deep_start_arg6_blob",
+        "kind": "bytes",
+        "address": 0x00E75858,
+        "size": 128,
+        "sensitive": False,
+        "notes": [
+            "Static pointer pushed as the sixth TdxDeep_StartInit argument in the tdxw.exe callsite.",
+            "If this points into tdxw.exe-owned static data, the external helper cannot reuse the raw address directly.",
+        ],
+    },
+    {
+        "name": "deep_start_arg6_inline_text",
+        "kind": "inline_ascii",
+        "address": 0x00E75858,
+        "size": 128,
+        "sensitive": False,
+        "notes": [
+            "Text view of the static buffer passed as the sixth TdxDeep_StartInit argument.",
+        ],
+    },
 )
 
 

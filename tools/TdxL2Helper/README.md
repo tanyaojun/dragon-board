@@ -63,13 +63,21 @@ tools\TdxL2Helper\bin\Release\net8.0-windows\win-x86\publish\TdxL2Helper.exe pro
 tools\TdxL2Helper\bin\Release\net8.0-windows\win-x86\publish\TdxL2Helper.exe host-runtime --tdx-root D:\APP_SOFT\TDX --event-stream --probe-login-state --login-profile auto
 ```
 
-如需显式尝试当前仍属危险探针的 `TdxDeep_StartInit` 猜测签名，再额外加：
+如需显式尝试 `TdxDeep_StartInit` 探针，再额外加：
 
 ```powershell
 --unsafe-deep-start
 ```
 
-默认不会调用 `TdxDeep_StartInit`，因为当前 7 参数实参猜测仍可能直接打崩 x86 宿主进程。
+当前 `TdxDeep_StartInit` 已按官方调用点复刻 `root / T0002 / connect.cfg / 扩展市场行情` 参数形态，实机可稳定返回 `1`。默认仍不自动调用它，原因是启动后还没有完成 `TdxDeep_Func / TdxDeep_Data` 的订阅和回流闭环。
+
+`TdxDeep_Func` 探针被单独放在更危险的开关后面：
+
+```powershell
+--unsafe-deep-start --unsafe-deep-func-probe
+```
+
+当前空上下文 `TdxDeep_Func` 会阻塞，不建议在生产 bridge 路径启用。
 
 输出 JSON 重点看：
 
@@ -165,4 +173,6 @@ tools\TdxL2Helper\bin\Release\net8.0-windows\win-x86\publish\TdxL2Helper.exe hos
   - `tdxid-token-connectqsid-wtprename`
 - 2026-04-28 实机复核结果：以上新 profile 仍未打出 `RightInfo / L2Info` 非空变化；当前观测仍以 `0xC0000005` 和 `SEHException` 为主。
 - `probe-tc-login-matrix` 报告新增 `signalSummaries`，会把重复出现的 `loginRet / RightInfo / L2Info` 信号聚合出来，便于快速识别像 `服务器分组未配置。` 这类高价值返回。
-- `host-runtime` 现在会默认输出 `deep_register / deep_start / heartbeat.deepState`；其中 `deep_start` 默认是 `skipped=true`，只有显式加 `--unsafe-deep-start` 才会触发当前的危险探针。
+- 2026-04-28 新增 live `TdxWL2` applysso JSON profile 后，`TC_SetL2UserInfo` 仍然只返回 `1`，没有带来 `RightInfo / L2Info` 非空变化；这条直接注入路线已基本判为无效。
+- 2026-04-28 `TdxDeep_StartInit` 已从“会崩”推进到“返回 `1`”，但 `TdxDeep_Func / TdxDeep_Data` 的真实调用上下文仍未闭环。
+- `host-runtime` 现在会默认输出 `deep_register / deep_start / heartbeat.deepState`；其中 `deep_start` 默认是 `skipped=true`，只有显式加 `--unsafe-deep-start` 才会触发当前的探针。

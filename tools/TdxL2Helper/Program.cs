@@ -1503,6 +1503,7 @@ internal static partial class Program
         AddMaterial(report, "SpecIPLogin", TryGetValue(connectCfg, "SpecIPLogin"), @"connect.cfg");
 
         TryLoadLiveRuntimeMaterials(report, tdxRoot);
+        AddTdxWl2RuntimeMaterials(report);
 
         if (report.ValueMap.ContainsKey("TDXID"))
         {
@@ -1536,7 +1537,79 @@ internal static partial class Program
             report.Notes.Add("connect.cfg:WTPreNAME is present; treat it as a low-confidence trading/broker display name axis, not a confirmed YYBID.");
         }
 
+        if (report.ValueMap.ContainsKey("TdxWl2ApplySsoResult"))
+        {
+            report.Notes.Add("Built TdxWL2 applysso request/result JSON from live runtime materials; these match the live heap shape observed in tdxw.exe.");
+        }
+
         return report;
+    }
+
+    private static void AddTdxWl2RuntimeMaterials(CachedLoginMaterialsReport report)
+    {
+        if (!report.ValueMap.TryGetValue("TDXID", out var tdxId)
+            || !report.ValueMap.TryGetValue("L2ZH", out var l2Zh)
+            || !report.ValueMap.TryGetValue("L2Right", out var l2Right))
+        {
+            return;
+        }
+
+        var sysSource = report.ValueMap.TryGetValue("SysSource", out var resolvedSysSource)
+            ? resolvedSysSource
+            : report.ValueMap.TryGetValue("ConnectQSID", out var connectQsid)
+                ? connectQsid
+                : string.Empty;
+        var phoneName = report.ValueMap.TryGetValue("RegPhone", out var regPhone)
+            ? MaskPhoneName(regPhone)
+            : string.Empty;
+
+        AddMaterial(report, "DataName", "TdxWL2", "derived:tdxwl2");
+        AddMaterial(report, "RightInfo", l2Right, "derived:L2Right");
+
+        var applySsoRequest = JsonSerializer.Serialize(
+            new[]
+            {
+                new
+                {
+                    TDXID = tdxId,
+                    ZHLB = "99",
+                    SSOMode = 13,
+                    SysSource = sysSource,
+                    Reserve = new
+                    {
+                        L2ZH = l2Zh,
+                        L2Right = l2Right,
+                    },
+                },
+            },
+            JsonOptions.Compact);
+        AddMaterial(report, "TdxWl2ApplySsoRequest", applySsoRequest, "derived:tdxwl2-applysso-request");
+
+        var applySsoResult = JsonSerializer.Serialize(
+            new
+            {
+                TDXID = tdxId,
+                PhoneName = phoneName,
+                NickName = string.Empty,
+                RightInfo = l2Right,
+                L2ZH = l2Zh,
+                QSHQToken = string.Empty,
+                Code = 0,
+                DataName = "TdxWL2",
+            },
+            JsonOptions.Compact);
+        AddMaterial(report, "TdxWl2ApplySsoResult", applySsoResult, "derived:tdxwl2-applysso-result");
+    }
+
+    private static string MaskPhoneName(string value)
+    {
+        var digits = new string(value.Where(char.IsDigit).ToArray());
+        if (digits.Length >= 7)
+        {
+            return digits[..3] + "****" + digits[^4..];
+        }
+
+        return value;
     }
 
     private static void TryLoadLiveRuntimeMaterials(CachedLoginMaterialsReport report, string tdxRoot)
@@ -1856,6 +1929,19 @@ internal static partial class Program
                     secondSource: "literal:CITICS#CFV");
             }
         }
+
+        AddSetL2Profile(profiles, seen, "tdxwl2-l2zh-rightinfo", "TdxWL2", "literal:TdxWL2", "L2ZH", "RightInfo", materials.ValueMap);
+        AddSetL2Profile(profiles, seen, "tdxwl2-rightinfo-l2zh", "TdxWL2", "literal:TdxWL2", "RightInfo", "L2ZH", materials.ValueMap);
+        AddSetL2Profile(profiles, seen, "tdxwl2-l2zh-syssource", "TdxWL2", "literal:TdxWL2", "L2ZH", "SysSource", materials.ValueMap);
+        AddSetL2Profile(profiles, seen, "tdxid-l2zh-rightinfo", "TDXID", "TDXID", "L2ZH", "RightInfo", materials.ValueMap);
+        AddSetL2Profile(profiles, seen, "l2zh-rightinfo-syssource", "L2ZH", "L2ZH", "RightInfo", "SysSource", materials.ValueMap);
+        AddSetL2Profile(profiles, seen, "citicscfv-l2zh-tdxwl2-result", "CITICS#CFV", "literal:CITICS#CFV", "L2ZH", "TdxWl2ApplySsoResult", materials.ValueMap);
+        AddSetL2Profile(profiles, seen, "tdxwl2-l2zh-tdxwl2-result", "TdxWL2", "literal:TdxWL2", "L2ZH", "TdxWl2ApplySsoResult", materials.ValueMap);
+        AddSetL2Profile(profiles, seen, "tdxwl2-tdxid-tdxwl2-result", "TdxWL2", "literal:TdxWL2", "TDXID", "TdxWl2ApplySsoResult", materials.ValueMap);
+        AddSetL2Profile(profiles, seen, "tdxwl2-request-result", "TdxWL2", "literal:TdxWL2", "TdxWl2ApplySsoRequest", "TdxWl2ApplySsoResult", materials.ValueMap);
+        AddSetL2Profile(profiles, seen, "tdxwl2-result-request", "TdxWL2", "literal:TdxWL2", "TdxWl2ApplySsoResult", "TdxWl2ApplySsoRequest", materials.ValueMap);
+        AddSetL2Profile(profiles, seen, "result-tdxwl2-request", "TdxWl2ApplySsoResult", "TdxWl2ApplySsoResult", "DataName", "TdxWl2ApplySsoRequest", materials.ValueMap);
+        AddSetL2Profile(profiles, seen, "request-tdxwl2-result", "TdxWl2ApplySsoRequest", "TdxWl2ApplySsoRequest", "DataName", "TdxWl2ApplySsoResult", materials.ValueMap);
 
         return profiles;
     }
@@ -3111,6 +3197,8 @@ internal sealed class CliOptions
     public string? SetL2Arg3 { get; private set; }
     public bool EventStream { get; private set; }
     public bool UnsafeDeepStart { get; private set; }
+    public bool UnsafeDeepFuncProbe { get; private set; }
+    private readonly List<int> unsafeDeepFuncCodes = new() { 2, 3, 11, 12, 13, 14 };
     public int HeartbeatIntervalMs { get; private set; } = 1000;
     public int SampleCount { get; private set; } = 1;
     public int DurationMs { get; private set; }
@@ -3132,6 +3220,8 @@ internal sealed class CliOptions
     public string? LoginArg2 { get; private set; }
     public string? LoginArg3 { get; private set; }
     public string? LoginArg4 { get; private set; }
+
+    public IReadOnlyList<int> UnsafeDeepFuncCodes => unsafeDeepFuncCodes;
 
     public bool HasSetL2Args =>
         !string.IsNullOrEmpty(SetL2Arg1)
@@ -3194,7 +3284,8 @@ internal sealed class CliOptions
                                  [--login-function <login|login2>]
                                  [--login-profile <name|auto>]
                                  [--stable-loginret-surface]
-                                 [--unsafe-deep-start]
+                                 [--unsafe-deep-start] [--unsafe-deep-func-probe]
+                                 [--unsafe-deep-func-codes <csv>]
                                  [--disable-process-error-mode]
                                  [--skip-loginret-probe] [--skip-rightinfo-probe]
                                  [--skip-l2info-probe] [--skip-tc-uninit]
@@ -3243,7 +3334,9 @@ internal sealed class CliOptions
                     Run the standalone x86 host baseline:
                     sync runtime layout -> load tc.dll / TDXDeep.dll -> TC_Init_Environ
                     -> optional TC_GetL2Info snapshots -> steady-state heartbeat output
-                    Use --unsafe-deep-start to attempt the current provisional TdxDeep_StartInit guess.
+                    Use --unsafe-deep-start to attempt the current TdxDeep_StartInit probe.
+                    Use --unsafe-deep-func-probe only in an isolated process; empty-context TdxDeep_Func calls can block.
+                    Use --unsafe-deep-func-codes to isolate function codes, for example 2 or 11,12,13.
                     Use --event-stream for NDJSON stdout events that an outer bridge can consume.
         """;
 
@@ -3320,6 +3413,17 @@ internal sealed class CliOptions
                     break;
                 case "--unsafe-deep-start":
                     options.UnsafeDeepStart = true;
+                    break;
+                case "--unsafe-deep-func-probe":
+                    options.UnsafeDeepFuncProbe = true;
+                    break;
+                case "--unsafe-deep-func-codes":
+                    options.unsafeDeepFuncCodes.Clear();
+                    foreach (var code in RequireValue(args, ref index, arg).Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                    {
+                        options.unsafeDeepFuncCodes.Add(ParseIntOrHex(code));
+                    }
+
                     break;
                 case "--probe-login-state":
                     options.ProbeLoginState = true;
@@ -3406,6 +3510,13 @@ internal sealed class CliOptions
         }
 
         return options;
+    }
+
+    private static int ParseIntOrHex(string value)
+    {
+        return value.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
+            ? Convert.ToInt32(value[2..], 16)
+            : int.Parse(value);
     }
 
     internal void ApplyResolvedLoginProfile(CachedLoginProfile profile)
@@ -4549,6 +4660,22 @@ internal delegate int TdxDeepStartInitFn(
 internal delegate int TdxDeepRegisterCallBackFuncFn(IntPtr arg1, IntPtr arg2, IntPtr arg3);
 
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+internal delegate int TdxDeepSetMainWndFn(IntPtr arg1, IntPtr arg2, IntPtr arg3, IntPtr arg4);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+internal delegate int TdxDeepFuncFn(
+    IntPtr arg1,
+    IntPtr arg2,
+    IntPtr arg3,
+    IntPtr arg4,
+    IntPtr arg5,
+    IntPtr arg6,
+    IntPtr arg7,
+    IntPtr arg8,
+    IntPtr arg9,
+    IntPtr arg10);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
 internal delegate void TdxDeepCallbackFn(IntPtr arg1, uint arg2, IntPtr arg3, IntPtr arg4);
 
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
@@ -4612,6 +4739,7 @@ internal sealed class HGlobalBuffer : IDisposable
 internal static partial class NativeMethods
 {
     internal const uint WM_CLOSE = 0x0010;
+    internal const uint WM_QUIT = 0x0012;
 
     internal delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
 
@@ -4627,6 +4755,12 @@ internal static partial class NativeMethods
 
     [DllImport("kernel32.dll", SetLastError = true)]
     internal static extern uint SetErrorMode(uint uMode);
+
+    [DllImport("kernel32.dll")]
+    internal static extern uint GetCurrentThreadId();
+
+    [DllImport("kernel32.dll")]
+    internal static extern IntPtr GetConsoleWindow();
 
     [DllImport("kernel32.dll", SetLastError = true)]
     internal static extern IntPtr OpenProcess(uint dwDesiredAccess, [MarshalAs(UnmanagedType.Bool)] bool bInheritHandle, int dwProcessId);
@@ -4658,4 +4792,49 @@ internal static partial class NativeMethods
     [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool PostMessageW(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    internal static extern IntPtr CreateWindowExW(
+        uint dwExStyle,
+        string lpClassName,
+        string lpWindowName,
+        uint dwStyle,
+        int x,
+        int y,
+        int nWidth,
+        int nHeight,
+        IntPtr hWndParent,
+        IntPtr hMenu,
+        IntPtr hInstance,
+        IntPtr lpParam);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool DestroyWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    internal static extern int GetMessageW(out Message lpMsg, IntPtr hWnd, uint wMsgFilterMin, uint wMsgFilterMax);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool TranslateMessage([In] ref Message lpMsg);
+
+    [DllImport("user32.dll")]
+    internal static extern IntPtr DispatchMessageW([In] ref Message lpMsg);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool PostThreadMessageW(uint idThread, uint msg, IntPtr wParam, IntPtr lParam);
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct Message
+    {
+        public IntPtr HWnd;
+        public uint Msg;
+        public IntPtr WParam;
+        public IntPtr LParam;
+        public uint Time;
+        public int PointX;
+        public int PointY;
+    }
 }
