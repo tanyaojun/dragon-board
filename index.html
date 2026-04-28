@@ -10,14 +10,13 @@
   <body>
     <div id="app"></div>
 
-    <!-- 1. 先加载 KPL 题材数据 -->
-    <script src="/src/data/kpl_theme_data.js"></script>
+    <!-- 1. 先加载 KPL 题材数据，并桥接到 window -->
+    <script type="module">
+      import { KPL_THEME_DATA } from '/src/data/kpl_theme_data.js'
 
-    <!-- 2. 桥接脚本：将 const 转为 window 属性，并触发事件 -->
-    <script>
-      ;(function () {
+      ;(() => {
         // 题材数据
-        if (typeof KPL_THEME_DATA !== 'undefined') {
+        if (Array.isArray(KPL_THEME_DATA)) {
           window.KPL_THEME_DATA = KPL_THEME_DATA
           console.log('[bridge] ✅ KPL题材数据已挂载, 数量:', KPL_THEME_DATA.length)
 

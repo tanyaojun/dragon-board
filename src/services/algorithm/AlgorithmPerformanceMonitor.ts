@@ -151,6 +151,11 @@ export class AlgorithmPerformanceMonitor {
    * 停止性能监控
    */
   stop(): void {
+    if (this.timers.flushTimer) {
+      clearInterval(this.timers.flushTimer)
+      this.timers.flushTimer = null
+    }
+
     this.saveToCache()
   }
 
@@ -463,13 +468,4 @@ export class AlgorithmPerformanceMonitor {
     }
   }
 
-  stop() {
-    if (this.timers.flushTimer) {
-      clearInterval(this.timers.flushTimer)
-      this.timers.flushTimer = null
-    }
-
-    // ✅ 停止时保存数据
-    this.saveToCache()
-  }
 }

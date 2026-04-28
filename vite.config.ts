@@ -19,4 +19,18 @@ export default defineConfig({
       },
     },
   },
+  build: {
+    chunkSizeWarningLimit: 900,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return
+          if (id.includes('echarts')) return 'charts'
+          if (id.includes('@visactor')) return 'visactor'
+          if (id.includes('vue') || id.includes('pinia') || id.includes('@vueuse')) return 'vue-vendor'
+          return 'vendor'
+        },
+      },
+    },
+  },
 })

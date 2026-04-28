@@ -16,6 +16,7 @@ export class AlgorithmHealthChecker {
   private readonly CHECK_INTERVAL = 5 * 60 * 1000 // 5分钟
   private autoRepair = true
   private lastCheckResult: HealthCheckResult | null = null
+  private checkTimer: ReturnType<typeof setInterval> | null = null
 
   constructor(algorithmManager: IAlgorithmManager) {
     this.algorithmManager = algorithmManager
@@ -25,19 +26,29 @@ export class AlgorithmHealthChecker {
    * 启动健康检查
    */
   start(autoRepair: boolean = true): void {
-    if (this.timer) return
+    if (this.checkTimer) return
 
     this.autoRepair = autoRepair
     console.log('[AlgorithmHealth] 🏥 启动健康检查...')
 
     // 立即执行一次
     this.check()
+    this.checkTimer = setInterval(() => {
+      this.check().catch((error) => {
+        console.error('[AlgorithmHealth] 定时健康检查失败:', error)
+      })
+    }, this.CHECK_INTERVAL)
   }
 
   /**
    * 停止健康检查
    */
-  stop(): void {}
+  stop(): void {
+    if (this.checkTimer) {
+      clearInterval(this.checkTimer)
+      this.checkTimer = null
+    }
+  }
 
   /**
    * ✅ 新增：供 AlgorithmManager 调用的维护方法
@@ -259,10 +270,4 @@ export class AlgorithmHealthChecker {
     console.log(`[AlgorithmHealth] 🔧 自动修复已${enabled ? '开启' : '关闭'}`)
   }
 
-  stop() {
-    if (this.timers.checkTimer) {
-      clearInterval(this.timers.checkTimer)
-      this.timers.checkTimer = null
-    }
-  }
 }

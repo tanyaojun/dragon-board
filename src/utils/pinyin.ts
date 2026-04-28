@@ -132,8 +132,8 @@ export class PinyinUtils {
   private static simplePinyinInitials(name: string): string {
     // 简单的映射表（只包含常用字）
     const simpleMap: Record<string, string> = {
-      '阿': 'A', '巴': 'B', '财': 'C', '达': 'D', '恩': 'E', '发': 'F', 
-      '高': 'G', '哈': 'H', '基': 'J', '卡': 'K', '拉': 'L', '马': 'M',
+      '阿': 'A', '巴': 'B', '财': 'C', '达': 'D', '恩': 'E', '发': 'F',
+      '哈': 'H', '基': 'J', '卡': 'K', '拉': 'L',
       '那': 'N', '欧': 'O', '帕': 'P', '奇': 'Q', '然': 'R', '萨': 'S',
       '塔': 'T', '瓦': 'W', '西': 'X', '亚': 'Y', '在': 'Z',
       

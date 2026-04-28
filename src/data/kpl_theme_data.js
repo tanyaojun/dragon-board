@@ -1,7 +1,7 @@
 // kpl_theme_data.js - 自动生成，请勿手动修改
 // 生成时间: 2026-02-11 09:12:08
 // 题材数量: 2607
-const KPL_THEME_DATA = [
+export const KPL_THEME_DATA = [
   {
     ID: '341',
     Name: '短剧产业',

@@ -179,7 +179,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { ref, computed, defineAsyncComponent, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { storeToRefs } from 'pinia'
 
 // 通用组件
@@ -193,24 +193,22 @@ import SearchBox from './components/common/SearchBox.vue'
 import DataTable from './components/common/DataTable.vue'
 import DataFreshness from './components/common/DataFreshness.vue'
 
-// 面板组件
-import SettingsPanel from './components/panels/SettingsPanel.vue'
-import ConfigPanel from './components/panels/ConfigPanel.vue'
-import AlgorithmPanel from './components/panels/AlgorithmPanel.vue'
-import SectorPanel from './components/panels/SectorPanel.vue'
-import DragonHeadPanel from './components/panels/DragonHeadPanel.vue'
-import DragonBreathPanel from './components/panels/DragonBreathPanel.vue'
-import KeyboardHelpPanel from './components/panels/KeyboardHelpPanel.vue'
-import ExportPanel from './components/panels/ExportPanel.vue'
-import FavoritePanel from './components/panels/FavoritePanel.vue'
-import StockL2DetailPanel from './components/panels/StockL2DetailPanel.vue'
-import SectorDetail from './components/panels/SectorDetail.vue'
-import SectorAlert from './components/panels/SectorAlert.vue'
-import SectorRotation from './components/panels/SectorRotation.vue'
-import SectorStocksTree from './components/panels/SectorStocksTree.vue'
-import ThemeRiskDashboard from './components/panels/ThemeRiskDashboard.vue'
-import ThemeCorrelationPanel from './components/panels/ThemeCorrelationPanel.vue'
-import BacktestPanel from './components/panels/BacktestPanel.vue'
+// 面板组件体积较大，按需异步加载，降低首屏 chunk 体积。
+const SettingsPanel = defineAsyncComponent(() => import('./components/panels/SettingsPanel.vue'))
+const ConfigPanel = defineAsyncComponent(() => import('./components/panels/ConfigPanel.vue'))
+const AlgorithmPanel = defineAsyncComponent(() => import('./components/panels/AlgorithmPanel.vue'))
+const SectorPanel = defineAsyncComponent(() => import('./components/panels/SectorPanel.vue'))
+const DragonHeadPanel = defineAsyncComponent(() => import('./components/panels/DragonHeadPanel.vue'))
+const DragonBreathPanel = defineAsyncComponent(() => import('./components/panels/DragonBreathPanel.vue'))
+const KeyboardHelpPanel = defineAsyncComponent(() => import('./components/panels/KeyboardHelpPanel.vue'))
+const ExportPanel = defineAsyncComponent(() => import('./components/panels/ExportPanel.vue'))
+const FavoritePanel = defineAsyncComponent(() => import('./components/panels/FavoritePanel.vue'))
+const StockL2DetailPanel = defineAsyncComponent(() => import('./components/panels/StockL2DetailPanel.vue'))
+const BacktestPanel = defineAsyncComponent(() => import('./components/panels/BacktestPanel.vue'))
+const SectorDetail = defineAsyncComponent(() => import('./components/panels/SectorDetail.vue'))
+const SectorAlert = defineAsyncComponent(() => import('./components/panels/SectorAlert.vue'))
+const SectorRotation = defineAsyncComponent(() => import('./components/panels/SectorRotation.vue'))
+const ThemeRiskDashboard = defineAsyncComponent(() => import('./components/panels/ThemeRiskDashboard.vue'))
 
 // Stores
 import { useThemeStore } from './stores/theme'
