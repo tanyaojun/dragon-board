@@ -7,19 +7,25 @@ import type { FactorHealth, HealthCheckResult, FactorPerformance } from '@/types
 import { FACTORS } from '@/config/factors'
 import { ALGORITHMS } from '@/config/algorithms'
 import { EventManager } from '@/utils/eventManager'
-import { consistencyManager } from './ConsistencyManager'
 import { stockCache } from '@/services/LRUCache'
 import { PHASE_MULTIPLIERS } from '@/config/algorithms'
+import type { RepairResult } from '@/types/algorithm'
+
+export interface AlgorithmRepairService {
+  repair(options: { module: string; type: string; issues: string[] }): Promise<RepairResult>
+}
 
 export class AlgorithmHealthChecker {
   private algorithmManager: IAlgorithmManager
+  private repairService: AlgorithmRepairService
   private readonly CHECK_INTERVAL = 5 * 60 * 1000 // 5分钟
   private autoRepair = true
   private lastCheckResult: HealthCheckResult | null = null
   private checkTimer: ReturnType<typeof setInterval> | null = null
 
-  constructor(algorithmManager: IAlgorithmManager) {
+  constructor(algorithmManager: IAlgorithmManager, repairService: AlgorithmRepairService) {
     this.algorithmManager = algorithmManager
+    this.repairService = repairService
   }
 
   /**
@@ -200,7 +206,8 @@ export class AlgorithmHealthChecker {
     console.log('[AlgorithmHealth] 🔧 尝试自动修复...')
 
     // 使用一致性管理器修复
-    const repairResult = await consistencyManager.repair({
+    const repairResult = await this.repairService.repair({
+      module: 'algorithm',
       type: 'algorithm',
       issues: result.issues,
     })

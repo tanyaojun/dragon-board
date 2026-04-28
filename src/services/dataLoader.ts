@@ -26,7 +26,6 @@ import { toLocalTradingDate } from './snapshot/identity'
 import { EventManager } from '../utils/eventManager'
 import { webSocketService } from './websocket'
 import { AppEvents, type Depth10Book, type QuotePatch, type TickTrade } from '../types'
-import { now } from 'lodash-es'
 
 // ========== 类型定义 ==========
 interface LoaderState {

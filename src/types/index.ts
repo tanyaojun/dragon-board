@@ -51,15 +51,3 @@ export {
   // 事件相关
   AppEvents,
 } from './config'
-
-// 挂载到 window
-if (typeof window !== 'undefined') {
-  import('./config').then((module) => {
-    ;(window as any).AppEvents = module.AppEvents
-    ;(window as any).LEADER_LEVELS = module.LEADER_LEVELS
-    ;(window as any).THEME_FACTOR_IDS = module.THEME_FACTOR_IDS
-    ;(window as any).BREATH_FACTOR_IDS = module.BREATH_FACTOR_IDS
-    ;(window as any).BREATH_FACTORS_META = module.BREATH_FACTORS_META
-    ;(window as any).MARKET_PHASES = module.MARKET_PHASES
-  })
-}

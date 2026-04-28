@@ -5,14 +5,18 @@
 import type { IAlgorithmManager } from './AlgorithmManager'
 import type { WarmupStrategy, WarmupTarget } from '@/types/algorithm'
 
-import { dataLayer } from '@/services/DataLayer'
-import { sectorAnalyzer } from '@/services/sectorAnalyzer'
-import { dragonAnalyzer } from '@/services/DragonAnalyzer'
 import { EventManager } from '@/utils/eventManager'
 import { getWarmupTargets, chunkArray, safeExecute, throttle } from '@/utils/algorithmHelpers'
 
+export interface AlgorithmWarmupDependencies {
+  dataLayer?: any
+  sectorAnalyzer?: any
+  dragonAnalyzer?: any
+}
+
 export class AlgorithmWarmupManager {
   private algorithmManager: IAlgorithmManager
+  private getDependencies: () => AlgorithmWarmupDependencies
   private strategies: Map<string, WarmupStrategy> = new Map()
   private isWarmingUp: Map<string, boolean> = new Map()
   private progress: Map<string, { loaded: number; total: number }> = new Map()
@@ -54,8 +58,12 @@ export class AlgorithmWarmupManager {
     },
   }
 
-  constructor(algorithmManager: IAlgorithmManager) {
+  constructor(
+    algorithmManager: IAlgorithmManager,
+    getDependencies: () => AlgorithmWarmupDependencies = () => ({}),
+  ) {
     this.algorithmManager = algorithmManager
+    this.getDependencies = getDependencies
     this.initStrategies()
   }
 
@@ -154,7 +162,13 @@ export class AlgorithmWarmupManager {
       })
 
       // 获取预热目标
-      const stocks = await getWarmupTargets(name, sectorAnalyzer, dragonAnalyzer, dataLayer)
+      const deps = this.getDependencies()
+      const stocks = await getWarmupTargets(
+        name,
+        deps.sectorAnalyzer,
+        deps.dragonAnalyzer,
+        deps.dataLayer,
+      )
 
       const targets = stocks.slice(0, strategy.maxItems)
       const batches = chunkArray(targets, strategy.batchSize)

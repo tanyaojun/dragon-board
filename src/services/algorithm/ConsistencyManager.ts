@@ -4,10 +4,16 @@
 import type { RepairTask, RepairResult, RepairHandler } from '@/types/algorithm'
 import { stockCache, sectorCache, leaderCache } from '@/services/LRUCache' // ✅ 导入缓存
 
+export interface ConsistencyRepairServices {
+  syncThemesToStocks?: () => unknown | Promise<unknown>
+  recalculateDragons?: () => unknown | Promise<unknown>
+}
+
 export class ConsistencyManager {
   private repairHistory: RepairTask[] = []
   private readonly MAX_HISTORY = 100
   private repairHandlers: Map<string, RepairHandler> = new Map()
+  private repairServices: ConsistencyRepairServices = {}
 
   // ✅ 新增：统一管理销毁状态
   private destroyed = false
@@ -186,6 +192,14 @@ export class ConsistencyManager {
     console.log(`[ConsistencyManager] 📝 已注册修复处理器: ${module}`)
   }
 
+  registerRepairServices(services: ConsistencyRepairServices): void {
+    if (this.destroyed) return
+    this.repairServices = {
+      ...this.repairServices,
+      ...services,
+    }
+  }
+
   /**
    * 注册默认处理器
    */
@@ -232,13 +246,12 @@ export class ConsistencyManager {
 
       for (const issue of issues) {
         if (issue.includes('题材映射不一致')) {
-          try {
-            const { sectorAnalyzer } = await import('@/services/sectorAnalyzer')
-            sectorAnalyzer.syncThemesToStocks?.()
+          if (this.repairServices.syncThemesToStocks) {
+            await this.repairServices.syncThemesToStocks()
             fixedCount++
             details[issue] = '已触发题材重新同步'
-          } catch (error) {
-            console.error('[ConsistencyManager] 导入 sectorAnalyzer 失败:', error)
+          } else {
+            details[issue] = '题材同步服务未注册'
           }
         } else if (issue.includes('股票计数不一致')) {
           const match = issue.match(/题材 (.*?) 的股票计数不一致/)
@@ -265,13 +278,12 @@ export class ConsistencyManager {
 
       for (const issue of issues) {
         if (issue.includes('龙头级别不匹配')) {
-          try {
-            const { dragonAnalyzer } = await import('@/services/DragonAnalyzer')
-            dragonAnalyzer.recalculateAll?.()
+          if (this.repairServices.recalculateDragons) {
+            await this.repairServices.recalculateDragons()
             fixedCount++
             details[issue] = '已触发龙头重新计算'
-          } catch (error) {
-            console.error('[ConsistencyManager] 导入 dragonAnalyzer 失败:', error)
+          } else {
+            details[issue] = '龙头重算服务未注册'
           }
         } else if (issue.includes('题材热度偏低')) {
           const match = issue.match(/板块龙头 (.*?) 的题材热度/)

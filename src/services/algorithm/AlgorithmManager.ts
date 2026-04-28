@@ -22,6 +22,7 @@ import { AlgorithmPerformanceMonitor } from './AlgorithmPerformanceMonitor'
 import { AlgorithmWarmupManager } from './AlgorithmWarmupManager'
 import { AlgorithmHealthChecker } from './AlgorithmHealthChecker'
 import { AlgorithmABTestManager } from './AlgorithmABTestManager'
+import { consistencyManager } from './ConsistencyManager'
 
 import { createCacheKey, safeExecute, throttle, debounce } from '@/utils/algorithmHelpers'
 
@@ -197,8 +198,12 @@ export class AlgorithmManager implements IAlgorithmManager {
 
   private constructor() {
     this.perfMonitor = new AlgorithmPerformanceMonitor(this)
-    this.warmupManager = new AlgorithmWarmupManager(this)
-    this.healthChecker = new AlgorithmHealthChecker(this)
+    this.warmupManager = new AlgorithmWarmupManager(this, () => ({
+      dataLayer,
+      sectorAnalyzer: (window as any).sectorAnalyzer,
+      dragonAnalyzer: (window as any).dragonAnalyzer,
+    }))
+    this.healthChecker = new AlgorithmHealthChecker(this, consistencyManager)
     this.abTestManager = new AlgorithmABTestManager(this)
 
     this.eventManager = new AlgorithmEventManager()
@@ -933,6 +938,11 @@ export class AlgorithmManager implements IAlgorithmManager {
     if ((window as any).sectorAnalyzer) {
       this.sectorAnalyzer = (window as any).sectorAnalyzer
     }
+
+    consistencyManager.registerRepairServices({
+      syncThemesToStocks: () => (window as any).sectorAnalyzer?.syncThemesToStocks?.(),
+      recalculateDragons: () => (window as any).dragonAnalyzer?.recalculateAll?.(),
+    })
 
     EventManager.on('sector:ready', () => {
       if ((window as any).sectorAnalyzer) {

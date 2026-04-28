@@ -47,6 +47,23 @@ export interface HealthCheckResult {
   timestamp: number
 }
 
+export interface RepairTask {
+  module: string
+  type: string
+  issues: string[]
+  timestamp: number
+}
+
+export interface RepairResult {
+  success: boolean
+  fixedCount: number
+  module: string
+  details?: Record<string, any>
+  error?: string
+}
+
+export type RepairHandler = (issues: string[]) => Promise<RepairResult> | RepairResult
+
 // ========== 预热策略类型 ==========
 export type WarmupSchedule = 'onStart' | 'onIdle' | 'periodic'
 export type Priority = 'high' | 'medium' | 'low'

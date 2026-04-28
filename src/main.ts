@@ -5,8 +5,16 @@ import { createPinia } from 'pinia'
 import App from './App.vue'
 import { FACTORS } from './config/factors'
 
-// ===== 导入因子常量 =====
-import { BREATH_FACTOR_IDS, BREATH_FACTORS_META } from './types'
+// ===== 导入运行时常量 =====
+import {
+  AppEvents,
+  BREATH_FACTOR_IDS,
+  BREATH_FACTORS_META,
+  LEADER_LEVELS,
+  MARKET_PHASES,
+  THEME_FACTOR_IDS,
+  THEME_FACTORS_META,
+} from './types/config'
 
 //========== 统一数据层 ==========
 import './services/DataLayer'
@@ -69,9 +77,14 @@ if (typeof window !== 'undefined') {
   //题材个股映射服务
   ;(window as any).themeMapping = themeMapping
 
-  // 事件和常量(window as any).AppEvents = AppEvents(window as any).THEME_FACTOR_IDS = THEME_FACTOR_IDS(window as any).THEME_FACTORS_META = THEME_FACTORS_META
+  // 事件和常量
+  ;(window as any).AppEvents = AppEvents
+  ;(window as any).LEADER_LEVELS = LEADER_LEVELS
+  ;(window as any).THEME_FACTOR_IDS = THEME_FACTOR_IDS
+  ;(window as any).THEME_FACTORS_META = THEME_FACTORS_META
   ;(window as any).BREATH_FACTOR_IDS = BREATH_FACTOR_IDS
   ;(window as any).BREATH_FACTORS_META = BREATH_FACTORS_META
+  ;(window as any).MARKET_PHASES = MARKET_PHASES
   ;(window as any).stockCodeManager = stockCodeManager
   ;(window as any).themeCorrelationAnalyzer = themeCorrelationAnalyzer
   ;(window as any).strategyBacktest = strategyBacktest
