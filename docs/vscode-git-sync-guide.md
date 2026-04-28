@@ -207,6 +207,24 @@ exceeds GitHub's file size limit of 100.00 MB
 
 直接把 VS Code 弹窗截图或终端输出贴出来即可。
 
+## 自动防线
+
+项目内置了同步前自检：
+
+```text
+npm run git:preflight
+```
+
+它会检查：
+
+- 当前索引是否误跟踪 `.tmp`、`node_modules`、`dist`
+- 暂存区是否包含 `.exe`、`.pdb` 等本地产物
+- 待推送历史是否包含超过 50MB 的文件
+- 待推送历史是否包含 `.tmp`、`node_modules`、`dist`
+- `.vscode` 下是否只提交了允许的 `extensions.json`
+
+本机已经配置 Git `pre-push` 钩子后，VS Code 点击“同步更改”时也会自动运行这套检查。检查失败时，不要绕过钩子，不要强制推送，把错误信息发给 Codex。
+
 ## 当前项目基线
 
 当前项目使用以下本地基线引用：

@@ -8,6 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run",
+    "git:preflight": "node scripts/gitPreflight.mjs",
     "test:ranktrend": "vitest run src/services/rankTrend/__tests__ src/services/__tests__/RankTrendAnalyzer.test.ts",
     "typecheck:ranktrend": "tsc --noEmit -p tsconfig.ranktrend.json",
     "update-themes": "node scripts/updateThemeMapping.js",
