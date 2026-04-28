@@ -1,2 +1,0 @@
-D:\dragon-board\.tmp\DragonBoardLauncher-publish\DragonBoardLauncher.pdb
-D:\dragon-board\.tmp\DragonBoardLauncher-publish\DragonBoardLauncher.exe

@@ -9,10 +9,17 @@ lerna-debug.log*
 
 node_modules
 .DS_Store
+.tmp/
 dist
 dist-ssr
 coverage
 *.local
+
+# Local binaries and build outputs
+*.exe
+*.pdb
+**/bin/
+**/obj/
 
 # Editor directories and files
 .vscode/*
