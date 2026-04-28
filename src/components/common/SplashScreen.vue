@@ -110,7 +110,7 @@ const dragonWhispers = [
 const currentWhisper = ref(dragonWhispers[0])
 
 // 轮播龙语
-let whisperInterval: number
+let whisperInterval: ReturnType<typeof setInterval>
 
 onMounted(() => {
   // 每3秒更换一句龙语

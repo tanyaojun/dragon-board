@@ -150,7 +150,7 @@ const previewStats = computed(() => {
 
   if (previewData.value.stocks) {
     const stocks = previewData.value.stocks
-    const leaders = stocks.filter((s: any) => dragonAnalyzer.isLeader(s.code))
+    const leaders = stocks.filter((s: any) => isLeaderStock(s.code))
     stats.push(
       { label: '股票总数', value: stocks.length },
       { label: '龙头数量', value: leaders.length },
@@ -183,6 +183,11 @@ const previewStats = computed(() => {
   return stats
 })
 
+function isLeaderStock(code: string): boolean {
+  const leaders = dragonAnalyzer.getAllLeaders?.() || []
+  return leaders.some((leader: any) => leader.code === code)
+}
+
 // ========== 方法 ==========
 async function preview() {
   if (previewing.value) return
@@ -200,7 +205,7 @@ async function preview() {
           break
         case 'leaders':
           previewData.value = {
-            leaders: dataLayer.getStocks().filter(s => dragonAnalyzer.isLeader(s.code))
+            leaders: dataLayer.getStocks().filter(s => isLeaderStock(s.code))
           }
           break
         case 'sectors':
@@ -218,7 +223,7 @@ async function preview() {
         case 'all':
           previewData.value = {
             stocks: dataLayer.getStocks(),
-            leaders: dataLayer.getStocks().filter(s => dragonAnalyzer.isLeader(s.code)),
+            leaders: dataLayer.getStocks().filter(s => isLeaderStock(s.code)),
             sectors: sectorAnalyzer.getHotThemes?.(50) || [],
             market: {
               sentiment: dragonBreathAnalyzer.getMarketSentiment(),
@@ -289,6 +294,10 @@ async function handleExport() {
         case 'all':
           result = await exportService.exportAll(options)
           break
+      }
+
+      if (!result) {
+        throw new Error('导出未返回结果')
       }
 
       const sizeStr = result.size ? `${(result.size / 1024).toFixed(1)}KB` : '--'

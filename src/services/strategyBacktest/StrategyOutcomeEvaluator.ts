@@ -51,7 +51,8 @@ function percentile(rank: number, total: number): number {
 }
 
 function momentumBucket(signal: ReplaySignal): string {
-  const momentum = signal.rankTrend.strategy.momentum
+  const momentum = signal.rankTrend.strategy?.momentum
+  if (!momentum) return 'momentum缺失'
   const short = momentum.short >= 3 ? 'short强' : momentum.short <= -3 ? 'short弱' : 'short中'
   const mid = momentum.mid >= 4 ? 'mid强' : momentum.mid <= -3 ? 'mid弱' : 'mid中'
   const long = momentum.long >= 4 ? 'long高位' : 'long非高位'

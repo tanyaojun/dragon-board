@@ -22,6 +22,7 @@ class AlgorithmStorage {
         algorithmId,
         weights,
         thresholds,
+        enabledFactors: Object.keys(weights).filter((factorId) => weights[factorId] > 0),
         lastUpdate: new Date().toLocaleTimeString(),
         version: this.VERSION,
       }

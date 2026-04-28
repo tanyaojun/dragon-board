@@ -42,6 +42,12 @@ import type {
   PseudoLeaderRecord,
   Tradeability,
 } from './dragon/types'
+import type {
+  BigOrderItem,
+  BigOrderStatistics,
+  DenseOrderAlert,
+  PeriodStatistics,
+} from '../types/big-order'
 
 const REVIEW_ROLE_LABELS: Record<LeaderRole, string> = {
   MARKET_CORE: '市场总龙头',
@@ -677,6 +683,16 @@ class DataLayer {
   private readonly SNAPSHOT_GUARD_MIN_BACKUP = 20
   private readonly SNAPSHOT_GUARD_RATIO = 0.4
   private readonly SNAPSHOT_SYNC_INTERVAL_MS = 5 * 60 * 1000
+  private readonly bigOrderData = new Map<
+    string,
+    {
+      orders: BigOrderItem[]
+      statistics: BigOrderStatistics | null
+      periods: PeriodStatistics[]
+      lastUpdate: number
+    }
+  >()
+  private readonly denseOrderAlerts: DenseOrderAlert[] = []
   private readonly snapshotRuntime = new SnapshotRuntime({
     logger: console,
     primaryDbName: this.PRIMARY_DB_NAME,
@@ -1823,6 +1839,53 @@ class DataLayer {
   getRotationHistory(limit?: number): RotationAnalysis[] {
     const history = this.state.analysis.rotation.history
     return limit ? history.slice(-limit) : [...history]
+  }
+
+  // ========== 大单数据管理 ==========
+  updateBigOrderData(
+    stockCode: string,
+    orders: BigOrderItem[],
+    statistics: BigOrderStatistics,
+    periods: PeriodStatistics[] = [],
+  ) {
+    this.bigOrderData.set(stockCode, {
+      orders: [...orders],
+      statistics,
+      periods: [...periods],
+      lastUpdate: Date.now(),
+    })
+    this.throttledNotify(`bigOrder.${stockCode}`, this.bigOrderData.get(stockCode))
+  }
+
+  getBigOrderData(stockCode: string) {
+    return this.bigOrderData.get(stockCode) || null
+  }
+
+  getBigOrders(stockCode?: string): BigOrderItem[] {
+    if (stockCode) {
+      return [...(this.bigOrderData.get(stockCode)?.orders || [])]
+    }
+    return Array.from(this.bigOrderData.values()).flatMap((entry) => entry.orders)
+  }
+
+  getBigOrderStatistics(stockCode: string): BigOrderStatistics | null {
+    return this.bigOrderData.get(stockCode)?.statistics || null
+  }
+
+  getBigOrderPeriods(stockCode: string): PeriodStatistics[] {
+    return [...(this.bigOrderData.get(stockCode)?.periods || [])]
+  }
+
+  addDenseOrderAlert(alert: DenseOrderAlert) {
+    this.denseOrderAlerts.unshift(alert)
+    if (this.denseOrderAlerts.length > 200) {
+      this.denseOrderAlerts.pop()
+    }
+    this.throttledNotify('bigOrder.denseAlerts', this.denseOrderAlerts)
+  }
+
+  getDenseOrderAlerts(limit?: number): DenseOrderAlert[] {
+    return limit ? this.denseOrderAlerts.slice(0, limit) : [...this.denseOrderAlerts]
   }
 
   // ========== 预警数据管理 ==========

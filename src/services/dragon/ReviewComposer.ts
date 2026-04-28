@@ -198,7 +198,10 @@ function shouldAppearInTimeline(record: LeaderRecord, battlefields: BattlefieldR
   if (record.authority === 'TRUE_LEADER' || record.authority === 'THEME_COMMANDER') return true
   if (record.authority === 'HEIGHT_ONLY' && record.boardHeight >= 3) return true
   if (record.authority === 'HEAT_ONLY' && record.fatalNegatives.includes('INTRADAY_FADE')) return true
-  return battlefield.dominance !== 'WEAK' && (record.timeline.candidateAt || record.timeline.weakeningAt)
+  return Boolean(
+    battlefield.dominance !== 'WEAK' &&
+      (record.timeline.candidateAt || record.timeline.weakeningAt),
+  )
 }
 
 function buildIntradayTransitions(

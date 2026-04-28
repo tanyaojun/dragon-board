@@ -5,6 +5,7 @@ import { useStockStore } from '@/stores/stock'
 import { dragonAnalyzer } from './DragonAnalyzer'
 import { sectorAnalyzer } from './sectorAnalyzer'
 import { dragonBreathAnalyzer } from './DragonBreathAnalyzer'
+import type { Stock } from '@/types'
 
 interface ChartData {
   labels: string[]
@@ -124,7 +125,7 @@ class TrendChartService {
     let inflowCount = 0,
       outflowCount = 0
 
-    stocks.forEach((stock) => {
+    stocks.forEach((stock: Stock) => {
       const zlje = stock.zlje || 0
       if (zlje > 0) {
         inflow += zlje
@@ -188,6 +189,11 @@ class TrendChartService {
     const stockStore = useStockStore()
     const dragonStats = dragonAnalyzer.getStats()
     const sectorStats = sectorAnalyzer.getStats()
+    const hotThemes = sectorAnalyzer.getHotThemes(50)
+    const avgHeatScore =
+      hotThemes.length > 0
+        ? hotThemes.reduce((sum, theme) => sum + (theme.heatScore || 0), 0) / hotThemes.length
+        : 0
     const marketData = dragonBreathAnalyzer.getMarketData()
 
     return {
@@ -195,7 +201,7 @@ class TrendChartService {
       totalLeadersCount: dragonStats.totalLeadersCount,
       sectorLeaders: dragonStats.sectorLeaders,
       continuousLeaders: dragonStats.continuousLeaders,
-      avgHeatScore: Math.round(sectorStats.avgHeatScore),
+      avgHeatScore: Math.round(avgHeatScore),
       hotSectors: sectorStats.hotThemes,
       ztCount: marketData.ztCount,
       emotionValue: Math.round(marketData.emotionValue),

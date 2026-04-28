@@ -2,14 +2,47 @@ import { debugLog } from '@/utils/logger'
 // src/services/RefreshManager.ts
 
 import { reactive } from 'vue'
-import type { RefreshStatus } from '../types'
 import { EventManager } from '../utils/eventManager'
 import { AppEvents } from '../types'
 import { dataLayer } from './DataLayer'
 import { isTradingTime } from '../utils/time'
-import type { RefreshStrategy, RefreshConfig } from '../types/config'
+import type { RefreshStrategy as ConfigRefreshStrategy, RefreshConfig } from '../types/config'
 import { REFRESH_STRATEGY_CONFIGS, REFRESH_STORAGE_KEY } from '../types/config'
 import { refreshCoordinator } from './RefreshCoordinator'
+
+export type RefreshStrategy = 'conservative' | 'balanced' | 'aggressive'
+
+interface RefreshStatus {
+  initialized: boolean
+  enabled: boolean
+  strategy: RefreshStrategy
+  tradingTimeOnly: boolean
+  allowManualRefresh: boolean
+  fullRefreshInterval: number
+  incrementalRefreshInterval: number
+  hotStocksLimit?: number
+  retryOnFailure: boolean
+  maxRetries?: number
+  isRunning: boolean
+  isRefreshing: boolean
+  stats: {
+    fullRefreshes: number
+    incrementalRefreshes: number
+    manualRefreshes: number
+    failedRefreshes: number
+    lastRefreshTime: number | null
+    lastFullRefreshTime: number | null
+    lastIncrementalRefreshTime: number | null
+    totalStocksLoaded: number
+    totalLeadersFound: number
+  }
+}
+
+function normalizeRefreshStrategy(strategy: ConfigRefreshStrategy | undefined): RefreshStrategy {
+  return strategy === 'conservative' || strategy === 'balanced' || strategy === 'aggressive'
+    ? strategy
+    : 'balanced'
+}
 
 // 注意：已移除 incrementalUpdater 依赖
 
@@ -111,7 +144,7 @@ class RefreshManagerService {
       this.currentConfig = { ...savedConfig }
 
       this.state.enabled = this.currentConfig.enabled
-      this.state.strategy = this.currentConfig.strategy
+      this.state.strategy = normalizeRefreshStrategy(this.currentConfig.strategy)
       this.state.tradingTimeOnly = this.currentConfig.tradingTimeOnly
       this.state.allowManualRefresh = this.currentConfig.allowManualRefresh
       this.state.fullRefreshInterval = this.currentConfig.fullRefreshInterval
@@ -384,7 +417,7 @@ class RefreshManagerService {
     this.saveToStorage(this.currentConfig)
 
     this.state.enabled = this.currentConfig.enabled
-    this.state.strategy = this.currentConfig.strategy
+    this.state.strategy = normalizeRefreshStrategy(this.currentConfig.strategy)
     this.state.tradingTimeOnly = this.currentConfig.tradingTimeOnly
     this.state.allowManualRefresh = this.currentConfig.allowManualRefresh
     this.state.fullRefreshInterval = this.currentConfig.fullRefreshInterval
@@ -409,12 +442,13 @@ class RefreshManagerService {
   /**
    * 设置策略
    */
-  setStrategy(strategy: RefreshStrategy, applyPreset: boolean = true): void {
+  setStrategy(strategy: ConfigRefreshStrategy, applyPreset: boolean = true): void {
+    const normalizedStrategy = normalizeRefreshStrategy(strategy)
     if (applyPreset) {
-      const preset = REFRESH_STRATEGY_CONFIGS[strategy]
+      const preset = REFRESH_STRATEGY_CONFIGS[normalizedStrategy]
       this.updateConfig({ ...preset })
     } else {
-      this.updateConfig({ strategy })
+      this.updateConfig({ strategy: normalizedStrategy })
     }
   }
 
@@ -479,7 +513,7 @@ class RefreshManagerService {
           const newConfig = this.loadFromStorage()
           this.currentConfig = { ...newConfig }
           this.state.enabled = this.currentConfig.enabled
-          this.state.strategy = this.currentConfig.strategy
+          this.state.strategy = normalizeRefreshStrategy(this.currentConfig.strategy)
           this.state.tradingTimeOnly = this.currentConfig.tradingTimeOnly
           this.state.allowManualRefresh = this.currentConfig.allowManualRefresh
           this.state.fullRefreshInterval = this.currentConfig.fullRefreshInterval
@@ -539,7 +573,7 @@ class RefreshManagerService {
     this.saveToStorage(this.currentConfig)
 
     this.state.enabled = this.currentConfig.enabled
-    this.state.strategy = this.currentConfig.strategy
+    this.state.strategy = normalizeRefreshStrategy(this.currentConfig.strategy)
     this.state.tradingTimeOnly = this.currentConfig.tradingTimeOnly
     this.state.allowManualRefresh = this.currentConfig.allowManualRefresh
     this.state.fullRefreshInterval = this.currentConfig.fullRefreshInterval

@@ -6,6 +6,7 @@ import type { Stock, MarketMode } from '@/types'
 import { EventManager } from '@/utils/eventManager'
 import { AppEvents } from '@/types'
 import { dataLayer } from '@/services/DataLayer'
+import type { MergedStock } from '@/services/DataLayer'
 import { dragonAnalyzer } from '@/services/DragonAnalyzer'
 
 // 批量更新配置
@@ -28,6 +29,33 @@ export const useStockStore = defineStore('stock', () => {
 
   // 缓存 Map
   const stockMap = new Map<string, Stock>()
+
+  function normalizeStock(stock: MergedStock): Stock {
+    return {
+      ...stock,
+      name: stock.name || stock.code || '-',
+      emRank: stock.emRank ?? 9999,
+      thsRank: stock.thsRank ?? 9999,
+      kplRank: stock.kplRank ?? 9999,
+      tdxRank: stock.tdxRank ?? 9999,
+      xqRank: stock.xqRank ?? 9999,
+      clsRank: stock.clsRank ?? 9999,
+      tgbRank: stock.tgbRank ?? 9999,
+      dzhRank: stock.dzhRank ?? 9999,
+      platforms: stock.platforms ?? 0,
+      avgRankNum: stock.avgRankNum ?? 9999,
+      avgRank: stock.avgRank ?? '-',
+      compRank: stock.compRank ?? 9999,
+      compScore: stock.compScore ?? 0,
+      isSectorLeader: (stock as Stock).isSectorLeader ?? false,
+      leaderLevel: (stock as Stock).leaderLevel ?? '非龙头',
+      leaderScore: (stock as Stock).leaderScore ?? 0,
+      continuousDays: stock.continuousDays ?? 1,
+      themes: stock.themes ?? [],
+      updatedAt: stock.updatedAt ?? Date.now(),
+      hotScore: 0,
+    }
+  }
 
   // 缓存计算值 - 移除 private
   const leadersCache = computed(() => stocks.value.filter((s) => s.isSectorLeader))
@@ -209,11 +237,11 @@ export const useStockStore = defineStore('stock', () => {
 
       if (data && data.length > 0) {
         // 批量计算热度分
-        const processedData = data.map(stock => ({
-          ...stock,
-          name: stock.name || stock.code || '-',
-          hotScore: calculateHotScore(stock),
-        }))
+        const processedData = data.map((stock) => {
+          const normalized = normalizeStock(stock)
+          normalized.hotScore = calculateHotScore(normalized)
+          return normalized
+        })
 
         stocks.value = processedData
         updateStockCache()

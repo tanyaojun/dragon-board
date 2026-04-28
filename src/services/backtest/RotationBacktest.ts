@@ -122,9 +122,9 @@ export class RotationBacktest {
     )
     
     // 按龙一 > 龙二 > 龙三排序
-    const order = { '龙一': 1, '龙二': 2, '龙三': 3 }
+    const order: Record<string, number> = { '龙一': 1, '龙二': 2, '龙三': 3 }
     leaders.sort((a: any, b: any) => 
-      (order[a.leadStatus] || 99) - (order[b.leadStatus] || 99)
+      (order[String(a.leadStatus)] || 99) - (order[String(b.leadStatus)] || 99)
     )
     
     return leaders[0] || null
@@ -243,7 +243,8 @@ export class RotationBacktest {
         
         if (sellPrice) {
           const returnRate = ((sellPrice - position.price) / position.price) * 100
-          const stillMainline = rotation.mainLines.some(m => m.themeName === position.sector)
+          const positionSector = position.sector
+          const stillMainline = rotation.mainLines.some(m => m.themeName === positionSector)
           
           if (!stillMainline || returnRate <= params.stopLoss || returnRate >= params.takeProfit || holdDays >= params.holdDays) {
             equity = equity * (1 + returnRate / 100)

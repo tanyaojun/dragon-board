@@ -142,9 +142,10 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { algorithmManager } from '@/services/Algorithm'
+import { algorithmManager } from '@/services/algorithm'
 import { EventManager } from '@/utils/eventManager'
 import { AppEvents } from '@/types'
+import { FACTORS } from '@/config/factors'
 
 const props = defineProps<{
   algorithm: string
@@ -218,7 +219,7 @@ const fetchStats = () => {
     }
 
     // 获取历史数据（如果有）
-    const fullStatus = algorithmManager.getFullStatus?.()
+    const fullStatus = algorithmManager.getFullStatus?.() as any
     if (fullStatus?.performance?.history) {
       performanceHistory.value = fullStatus.performance.history.slice(-10)
     } else {
@@ -230,7 +231,7 @@ const fetchStats = () => {
 }
 
 // 获取最近一次计算的因子贡献
-const fetchTopFactors = () => {
+const fetchTopFactors = async () => {
   try {
     // 尝试获取最近的计算结果
     const lastScore = (window as any).__LAST_SCORE__
@@ -255,7 +256,7 @@ const fetchTopFactors = () => {
         compRank: 15,
       }
 
-      const result = algorithmManager.calculateScore(testStock)
+      const result = await algorithmManager.calculateScore(testStock as any)
       // 保存到window供后续使用
       ;(window as any).__LAST_SCORE__ = result
 

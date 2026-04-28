@@ -26,8 +26,22 @@ interface JxbkBlockData {
   ztCount: number
 }
 
+type RotationStrongTheme = {
+  themeId: string
+  themeName: string
+  strengthScore: number
+  jxbkStrength: number
+  ztCount: number
+  volumeRatio: number
+  netInflow: number
+}
+
+type RotationAnalysisCompat = Omit<RotationAnalysis, 'strongThemes'> & {
+  strongThemes: RotationStrongTheme[]
+}
+
 class RotationService {
-  private lastAnalysis: RotationAnalysis | null = null
+  private lastAnalysis: RotationAnalysisCompat | null = null
   private analysisTimer: ReturnType<typeof setInterval> | null = null
   private previousRanks: Record<string, number> = {}
   private previousInflows: Record<string, number> = {}
@@ -330,7 +344,7 @@ class RotationService {
   /**
    * 分析所有板块
    */
-  analyzeAll(): RotationAnalysis {
+  analyzeAll(): RotationAnalysisCompat {
     // 1. 获取当前情绪
     const emotion = this.getCurrentEmotion()
 
@@ -419,7 +433,7 @@ class RotationService {
     const suggestion = this.generateMarketSuggestion(marketPhase, mainLines, strongThemes, emotion)
 
     // 10. 构建分析结果
-    const analysis: RotationAnalysis = {
+    const analysis: RotationAnalysisCompat = {
       timestamp: Date.now(),
       inflowThemes: inflowThemes.slice(0, 10),
       outflowThemes: outflowThemes.slice(0, 10),
@@ -428,6 +442,10 @@ class RotationService {
         themeId: t.themeId,
         themeName: t.themeName,
         strengthScore: t.strengthScore || 0,
+        jxbkStrength: t.strengthScore || 0,
+        ztCount: t.ztCount || 0,
+        volumeRatio: t.volumeRatio || 0,
+        netInflow: t.netInflow || 0,
       })),
       quickRotation: quickRotation.slice(0, 5),
       rotationSpeed,
@@ -578,7 +596,7 @@ class RotationService {
     return suggestion
   }
 
-  private getEmptyAnalysis(): RotationAnalysis {
+  private getEmptyAnalysis(): RotationAnalysisCompat {
     return {
       timestamp: Date.now(),
       inflowThemes: [],
@@ -604,14 +622,14 @@ class RotationService {
   /**
    * 强制分析（用于手动刷新）
    */
-  forceAnalyze(): RotationAnalysis {
+  forceAnalyze(): RotationAnalysisCompat {
     return this.analyzeAll()
   }
 
   /**
    * 获取最新分析
    */
-  getLastAnalysis(): RotationAnalysis | null {
+  getLastAnalysis(): RotationAnalysisCompat | null {
     return this.lastAnalysis
   }
 

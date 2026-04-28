@@ -124,7 +124,7 @@
               <div class="summary-card" @click="showSectorDetail(rotationData.summary.topStrength)">
                 <span class="summary-label">⚡ 最强板块</span>
                 <span class="summary-value">{{ rotationData.summary.topStrength }}</span>
-                <span class="summary-score">{{ rotationData.strongThemes[0]?.strengthScore }}分</span>
+                <span class="summary-score">{{ rotationData.strongThemes?.[0]?.strengthScore || 0 }}分</span>
               </div>
             </div>
 
@@ -189,20 +189,20 @@
               <div class="item-stats-grid">
                 <div class="stat">
                   <span class="stat-label">强度</span>
-                  <span class="stat-value">{{ item.jxbkStrength }}</span>
+                  <span class="stat-value">{{ item.strengthScore }}</span>
                 </div>
                 <div class="stat">
                   <span class="stat-label">涨停</span>
-                  <span class="stat-value">{{ item.ztCount }}</span>
+                  <span class="stat-value">{{ getThemeMetric(item, 'ztCount') }}</span>
                 </div>
                 <div class="stat">
                   <span class="stat-label">量比</span>
-                  <span class="stat-value">{{ item.volumeRatio?.toFixed(2) }}</span>
+                  <span class="stat-value">{{ getThemeMetric(item, 'volumeRatio').toFixed(2) }}</span>
                 </div>
               </div>
               <div class="item-flow">
-                <span class="flow-value" :class="item.netInflow > 0 ? 'inflow' : 'outflow'">
-                  {{ formatMoney(item.netInflow) }}
+                <span class="flow-value" :class="getThemeMetric(item, 'netInflow') > 0 ? 'inflow' : 'outflow'">
+                  {{ formatMoney(getThemeMetric(item, 'netInflow')) }}
                 </span>
               </div>
             </div>
@@ -225,7 +225,7 @@
                 <span class="flow-value inflow">+{{ formatMoney(item.netInflow) }}</span>
               </div>
               <div class="item-stats">
-                <span>💪 强度 {{ item.jxbkStrength }}</span>
+                <span>💪 强度 {{ item.strength }}</span>
                 <span>📈 涨停 {{ item.ztCount }}</span>
                 <span>📊 涨幅 {{ (item.avgChange || 0).toFixed(2) }}%</span>
               </div>
@@ -254,7 +254,7 @@
                 <span class="flow-value outflow">{{ formatMoney(item.netInflow) }}</span>
               </div>
               <div class="item-stats">
-                <span>💪 强度 {{ item.jxbkStrength }}</span>
+                <span>💪 强度 {{ item.strength }}</span>
                 <span>📈 涨停 {{ item.ztCount }}</span>
                 <span>📊 涨幅 {{ (item.avgChange || 0).toFixed(2) }}%</span>
               </div>
@@ -414,6 +414,11 @@ function formatRankChange(change: number): string {
   if (change > 0) return `↑${change}`
   if (change < 0) return `↓${Math.abs(change)}`
   return '='
+}
+
+function getThemeMetric(item: unknown, key: string): number {
+  const value = (item as Record<string, unknown>)?.[key]
+  return Number(value) || 0
 }
 
 // ========== 生命周期 ==========

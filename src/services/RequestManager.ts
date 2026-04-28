@@ -202,7 +202,7 @@ class RequestManager {
       url,
       fetchOptionsFromOptions,
       retryCount,
-      fetchOptions?.signal, // 传递外部 signal
+      fetchOptions?.signal ?? undefined, // 传递外部 signal
       requestId,
     )
     this.pendingRequests.set(requestKey, request)

@@ -542,7 +542,7 @@ const recentChanges = computed(() => {
 const filteredLeaders = computed(() => {
   let result = leaders.value
   if (filterLevel.value !== 'all') {
-    result = result.filter((leader) => leader.roles.includes(filterLevel.value))
+    result = result.filter((leader) => leader.roles.includes(filterLevel.value as LeaderRole))
   }
 
   return [...result].sort((a, b) => {

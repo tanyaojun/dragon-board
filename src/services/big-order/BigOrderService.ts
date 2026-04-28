@@ -17,6 +17,12 @@ import type {
 } from '@/types/big-order'
 import { MARKER_THRESHOLDS, PERIODS } from '@/config/constants'
 
+const BIG_ORDER_CONTEXT = 'big-order' as any
+
+function toTime(value: string | Date): number {
+  return new Date(value).getTime()
+}
+
 export class BigOrderService {
   private static instance: BigOrderService
   private marker = BigOrderMarker.getInstance()
@@ -83,7 +89,7 @@ export class BigOrderService {
     const promise = (async () => {
       try {
         const url = `/api/big-order/all-day?stockCode=${stockCode}&money=${money}`
-        const response = await apiService.get(url, { context: 'big-order' })
+        const response = await apiService.get(url, { context: BIG_ORDER_CONTEXT })
 
         if (!response || response.error) {
           return { allOrders: [], total: 0 }
@@ -140,10 +146,12 @@ export class BigOrderService {
     const promise = (async () => {
       try {
         // 1. 获取最新数据
-        const response = await apiService.get('/api/big-order/main-monitor', {
-          params: { stockCode, limit },
-          context: 'big-order',
-        })
+        const response = await apiService.get(
+          `/api/big-order/main-monitor?stockCode=${encodeURIComponent(stockCode)}&limit=${limit}`,
+          {
+          context: BIG_ORDER_CONTEXT,
+          },
+        )
 
         const list = response.List || []
         const newOrders = this.parseOrders(list)
@@ -160,13 +168,13 @@ export class BigOrderService {
           // 计算新增数量（去重后）
           const existingKeys = new Set(
             existingOrders.map(
-              (o) => `${Math.floor(o.time.getTime() / 60000)}_${o.amount}_${o.type}`,
+              (o: BigOrderItem) => `${Math.floor(toTime(o.time) / 60000)}_${o.amount}_${o.type}`,
             ),
           )
 
           newCount = newOrders.filter(
             (o) =>
-              !existingKeys.has(`${Math.floor(o.time.getTime() / 60000)}_${o.amount}_${o.type}`),
+              !existingKeys.has(`${Math.floor(toTime(o.time) / 60000)}_${o.amount}_${o.type}`),
           ).length
 
           // 如果有真正的新数据，才进行合并处理
@@ -224,11 +232,11 @@ export class BigOrderService {
     const allOrders = [...newOrders, ...existingOrders]
 
     // 按时间倒序排序（最新的在前）
-    const sorted = allOrders.sort((a, b) => b.time.getTime() - a.time.getTime())
+    const sorted = allOrders.sort((a, b) => toTime(b.time) - toTime(a.time))
 
     // 去重：使用分钟级时间戳+金额+类型作为唯一标识
     return sorted.filter((order) => {
-      const timeKey = Math.floor(order.time.getTime() / 60000) // 分钟级
+      const timeKey = Math.floor(toTime(order.time) / 60000) // 分钟级
       const key = `${timeKey}_${order.amount}_${order.type}`
 
       if (seen.has(key)) {

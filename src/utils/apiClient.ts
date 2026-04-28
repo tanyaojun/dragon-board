@@ -33,7 +33,9 @@ class ApiCache {
     // 限制缓存大小
     if (this.cache.size >= API_CACHE.MAX_SIZE) {
       const oldestKey = this.cache.keys().next().value
-      this.cache.delete(oldestKey)
+      if (oldestKey !== undefined) {
+        this.cache.delete(oldestKey)
+      }
     }
 
     this.cache.set(key, {
@@ -126,7 +128,7 @@ async function requestWithRetry<T>(
       lastError = error as Error
 
       // 如果是取消请求，不重试
-      if (error.name === 'AbortError') {
+      if (error instanceof Error && error.name === 'AbortError') {
         throw error
       }
 
@@ -235,7 +237,7 @@ export const apiClient = {
           const data = await this.getHotStocks(platform)
           return { platform, data }
         } catch (error) {
-          return { platform, error: error.message }
+          return { platform, error: error instanceof Error ? error.message : String(error) }
         }
       }),
     )
@@ -276,13 +278,6 @@ export const apiClient = {
         cacheTTL: API_CACHE.TTL.TDX,
       })
     }
-  },
-
-  /**
-   * 获取市场统计数据
-   */
-  async getYesterdayInfo() {
-    return this.callTdx(API_ENDPOINTS.TDX.ENTRIES.YESTERDAY_INFO, { Params: [] })
   },
 
   /**

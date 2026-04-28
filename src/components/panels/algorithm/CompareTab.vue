@@ -154,7 +154,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { EventManager } from '@/utils/eventManager'
 import { AppEvents } from '@/types'
-import { algorithmManager } from '@/services/Algorithm'
+import { algorithmManager } from '@/services/algorithm'
 import { ALGORITHMS } from '@/config/algorithms'
 import { FACTORS } from '@/config/factors'
 

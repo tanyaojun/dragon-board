@@ -260,7 +260,7 @@ export class BigOrderMarker {
     let left = 0
     for (let right = 0; right < sorted.length; right++) {
       const currentTime = new Date(sorted[right].time).getTime()
-      const startTime = new Date(sorted[left].time).getTime()
+      let startTime = new Date(sorted[left].time).getTime()
 
       // 如果窗口超出时间范围，移动左指针
       while (currentTime - startTime > windowMs && left < right) {

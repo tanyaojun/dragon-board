@@ -19,7 +19,7 @@
           <div v-if="!isConfigConsistent" class="config-warning">
             <span class="warning-icon">⚠️</span>
             <span class="warning-text">
-              当前为自定义配置，与所选"{{ STRATEGIES[config.strategy].name }}"策略不一致
+              当前为自定义配置，与所选"{{ STRATEGIES[config.strategy]?.name || config.strategy }}"策略不一致
               <a href="#" @click.prevent="resetToCurrentStrategy">点击恢复策略默认值</a>
             </span>
           </div>
@@ -65,7 +65,7 @@
                     <div class="strategy-name">{{ strategy.name }}</div>
                     <div class="strategy-desc">{{ strategy.desc }}</div>
                     <div class="strategy-preset" v-if="config.strategy === key">
-                      推荐: 全量{{ formatPresetInterval(key, 'full') }}
+                      推荐: 全量{{ formatPresetInterval(key as RefreshStrategy, 'full') }}
                     </div>
                   </div>
                 </div>
@@ -88,7 +88,7 @@
               <select class="interval-select" :value="config.fullRefreshInterval" @change="setFullInterval">
                 <option v-for="option in FULL_REFRESH_OPTIONS" :key="option.value" :value="option.value">
                   {{ option.label }}
-                  <span v-if="option.strategy" class="option-hint">({{ STRATEGIES[option.strategy]?.name }})</span>
+                  <span v-if="'strategy' in option" class="option-hint">({{ STRATEGIES[option.strategy]?.name }})</span>
                 </option>
               </select>
             </div>
@@ -183,19 +183,20 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { EventManager } from '@/utils/eventManager'
 import { AppEvents } from '@/types'
-import { RefreshManager, type RefreshStrategy } from '@/services/RefreshManager'
+import { RefreshManager } from '@/services/RefreshManager'
 import { isTradingTime } from '@/utils/time'
 import {
   REFRESH_STRATEGY_CONFIGS,
   FULL_REFRESH_OPTIONS,
   type RefreshConfig,
+  type RefreshStrategy,
 } from '@/types/config'
 
 import { usePanel } from '@/composables/usePanel'
 
 const unsubscribeFns: (() => void)[] = []
 
-const STRATEGIES = {
+const STRATEGIES: Record<RefreshStrategy, { name: string; icon: string; desc: string; color: string }> = {
   conservative: {
     name: '保守模式',
     icon: '🐢',
@@ -214,6 +215,17 @@ const STRATEGIES = {
     desc: '极致刷新，数据实时',
     color: '#ff4757',
   },
+  recovery: {
+    name: '恢复模式',
+    icon: '🔄',
+    desc: '失败后快速恢复',
+    color: '#f39c12',
+  },
+}
+
+type SettingsRefreshConfig = RefreshConfig & {
+  isRunning?: boolean
+  isRefreshing?: boolean
 }
 
 const props = defineProps<{
@@ -242,7 +254,7 @@ const { panelRef, panelStyle } = usePanel({
 
 // ========== 状态 ==========
 const loading = ref(true)
-const config = ref<RefreshConfig>({} as RefreshConfig)
+const config = ref<SettingsRefreshConfig>({} as SettingsRefreshConfig)
 const stats = ref(RefreshManager.getStats())
 const lastError = ref<string | null>(null)
 const refreshHistory = ref<Array<{ type: string, timestamp: number, duration: number, error?: string }>>([])
@@ -346,7 +358,7 @@ function toggleManualRefresh(e: Event) {
 }
 
 function setStrategy(strategy: RefreshStrategy) {
-  RefreshManager.setStrategy(strategy, true)
+  RefreshManager.setStrategy(strategy as any, true)
 
   const status = RefreshManager.getStatus()
   config.value = {
@@ -367,7 +379,7 @@ function setStrategy(strategy: RefreshStrategy) {
 }
 
 function setStrategyNameOnly(strategy: RefreshStrategy) {
-  RefreshManager.setStrategy(strategy, false)
+  RefreshManager.setStrategy(strategy as any, false)
   const status = RefreshManager.getStatus()
   config.value.strategy = status.strategy
   showToast(`策略已切换为 ${STRATEGIES[strategy].name}，保留自定义配置`, 'info')
@@ -375,7 +387,7 @@ function setStrategyNameOnly(strategy: RefreshStrategy) {
 
 function resetToCurrentStrategy() {
   const strategy = config.value.strategy
-  RefreshManager.setStrategy(strategy, true)
+  RefreshManager.setStrategy(strategy as any, true)
   showToast(`已恢复 ${STRATEGIES[strategy].name} 默认值`, 'success')
 }
 

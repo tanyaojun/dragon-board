@@ -159,7 +159,7 @@ export const useThemeStore = defineStore('theme', () => {
   }
 
   function updateDropdownMenu(theme: ThemeType) {
-    const dropdown = document.querySelector('.dropdown-content')
+    const dropdown = document.querySelector<HTMLElement>('.dropdown-content')
     if (!dropdown) return
 
     dropdown.classList.remove('dark-theme', 'matrix-theme', 'cream-theme')

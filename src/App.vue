@@ -221,6 +221,7 @@ import { useKeyboardShortcuts } from './composables/useKeyboardShortcuts'
 // 核心服务
 // ========== 1. 核心基础设施（最底层）==========
 import { EventManager } from './utils/eventManager'           // 事件总线
+import { AppEvents } from './types'
 import { cacheManager } from '@/services/LRUCache'            // 缓存管理
 import { dataLayer } from './services/DataLayer'              // 数据存储层（最基础）
 
@@ -239,7 +240,7 @@ import { ThemeCorrelationAnalyzer } from './services/ThemeCorrelationAnalyzer' /
 import { RankTrendAnalyzer } from './services/RankTrendAnalyzer' // 排名趋势分析
 
 // ========== 4. 算法服务 ==========
-import { algorithmManager } from './services/Algorithm'       // 算法管理
+import { algorithmManager } from './services/algorithm'       // 算法管理
 
 // ========== 5. 刷新和更新服务 ==========
 import { refreshCoordinator } from './services/RefreshCoordinator'
@@ -353,8 +354,10 @@ const openExportPanel = (event?: MouseEvent) => {
   panels.value.export = true
 }
 
-const openSectorDetail = (sectorName: string, event: MouseEvent) => {
-  panelRects.value.sectorDetail = (event.currentTarget as HTMLElement).getBoundingClientRect()
+const openSectorDetail = (sectorName: string, event?: MouseEvent) => {
+  panelRects.value.sectorDetail = event?.currentTarget
+    ? (event.currentTarget as HTMLElement).getBoundingClientRect()
+    : sectorBtnRef.value?.getBoundingClientRect()
   sectorDetailName.value = sectorName
   panels.value.sectorDetail = true
 }

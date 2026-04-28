@@ -11,6 +11,8 @@ export interface Factor {
   description: string
   example?: string
   range?: [number, number]
+  min?: number
+  max?: number
   unit?: string
   invert?: boolean
   calculate: (stock: any) => number

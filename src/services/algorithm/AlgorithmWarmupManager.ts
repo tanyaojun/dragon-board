@@ -123,6 +123,42 @@ export class AlgorithmWarmupManager {
   }
 
   /**
+   * 按股票代码预热分数缓存，供 AlgorithmManager 增量更新调用。
+   */
+  async warmupStocks(codes: string[]): Promise<void> {
+    if (!codes.length) return
+
+    const deps = this.getDependencies()
+    const stocks = deps.dataLayer?.getStocks?.() || []
+    const codeSet = new Set(codes)
+    const targets = stocks.filter((stock: any) => codeSet.has(stock.code))
+
+    if (targets.length === 0) return
+
+    this.progress.set('incremental', { loaded: 0, total: targets.length })
+    await this.warmupBatch(targets, {
+      enabled: true,
+      schedule: 'onIdle',
+      priority: 'medium',
+      batchSize: targets.length,
+      maxItems: targets.length,
+      concurrency: 3,
+      retryCount: 1,
+    })
+    this.progress.delete('incremental')
+  }
+
+  /**
+   * 发布当前预热进度，供后台维护调用。
+   */
+  checkProgress(): void {
+    EventManager.emit('algorithm:warmup-status', {
+      progress: this.getAllProgress(),
+      timestamp: Date.now(),
+    })
+  }
+
+  /**
    * 停止预热管理
    */
   stop(): void {

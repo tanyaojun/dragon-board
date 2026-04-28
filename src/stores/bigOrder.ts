@@ -13,6 +13,15 @@ import type {
   DenseOrderAlert,
 } from '@/types/big-order'
 
+interface BigOrderDataLayer {
+  getBigOrders(stockCode: string): BigOrderItem[]
+  getBigOrderStatistics(stockCode: string): BigOrderStatistics | null
+  getBigOrderPeriods(stockCode: string): PeriodStatistics[]
+  getDenseOrderAlerts(limit?: number): DenseOrderAlert[]
+}
+
+const bigOrderDataLayer = dataLayer as unknown as BigOrderDataLayer
+
 export const useBigOrderStore = defineStore('bigOrder', () => {
   // ==================== 基础状态 ====================
   const currentStockCode = ref('')
@@ -35,7 +44,7 @@ export const useBigOrderStore = defineStore('bigOrder', () => {
   // ==================== 数据状态 ====================
   // 全量数据（直接从 DataLayer 获取）
   const fullOrders = computed(() =>
-    currentStockCode.value ? dataLayer.getBigOrders(currentStockCode.value) : [],
+    currentStockCode.value ? bigOrderDataLayer.getBigOrders(currentStockCode.value) : [],
   )
 
   // 分页状态（无限滚动用）
@@ -60,14 +69,14 @@ export const useBigOrderStore = defineStore('bigOrder', () => {
 
   // ==================== 从 DataLayer 获取的计算属性 ====================
   const statistics = computed(() =>
-    currentStockCode.value ? dataLayer.getBigOrderStatistics(currentStockCode.value) : null,
+    currentStockCode.value ? bigOrderDataLayer.getBigOrderStatistics(currentStockCode.value) : null,
   )
 
   const periods = computed(() =>
-    currentStockCode.value ? dataLayer.getBigOrderPeriods(currentStockCode.value) : [],
+    currentStockCode.value ? bigOrderDataLayer.getBigOrderPeriods(currentStockCode.value) : [],
   )
 
-  const denseAlerts = computed(() => dataLayer.getDenseOrderAlerts(10))
+  const denseAlerts = computed(() => bigOrderDataLayer.getDenseOrderAlerts(10))
 
   // ==================== 加载状态 ====================
   const loading = computed(() => bigOrderService.loading.value)
@@ -203,7 +212,7 @@ export const useBigOrderStore = defineStore('bigOrder', () => {
       }
 
       // 尝试从 DataLayer 读取
-      const layerData = dataLayer.getBigOrders(stockCode)
+      const layerData = bigOrderDataLayer.getBigOrders(stockCode)
       if (layerData.length > 0) {
         debugLog(`[BigOrderStore] 使用 DataLayer 数据: ${stockCode}, ${layerData.length}条`)
         quoteCache.setWithType(cacheKey, layerData, CACHE_KEYS.ORDERS, [stockCode])
@@ -242,7 +251,7 @@ export const useBigOrderStore = defineStore('bigOrder', () => {
     if (!currentStockCode.value || !hasMore.value || loading.value) return
 
     try {
-      const allData = dataLayer.getBigOrders(currentStockCode.value)
+      const allData = bigOrderDataLayer.getBigOrders(currentStockCode.value)
       if (!allData?.length) return
 
       const BATCH_SIZE = 200
@@ -273,7 +282,7 @@ export const useBigOrderStore = defineStore('bigOrder', () => {
 
       if (result.orders.length) {
         // ✅ 直接从 dataLayer 获取已处理的数据
-        const processedOrders = dataLayer.getBigOrders(currentStockCode.value)
+        const processedOrders = bigOrderDataLayer.getBigOrders(currentStockCode.value)
 
         // 更新无限滚动数据
         rawOrders.value = processedOrders.slice(0, 500)

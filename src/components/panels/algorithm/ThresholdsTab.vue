@@ -55,7 +55,7 @@
       <div class="impact-grid">
         <div class="impact-item">
           <span class="impact-label">算法类型</span>
-          <span class="impact-value">{{ algorithmNames[currentAlgorithm] }}</span>
+          <span class="impact-value">{{ algorithmNames[algorithm] || algorithm }}</span>
         </div>
         <div class="impact-item">
           <span class="impact-label">总龙头数量</span>
@@ -108,7 +108,13 @@ const thresholdsConfig = [
 
 // 本地状态
 const localThresholds = ref({ ...props.thresholds })
-const thresholdRanges = ref(algorithmManager.getThresholdRanges())
+const thresholdRanges = ref<Record<string, { min: number; max: number }>>({
+  totalLeader: { min: 60, max: 95 },
+  sectorLeader: { min: 45, max: 85 },
+  continuousLeader: { min: 50, max: 90 },
+  middleLeader: { min: 40, max: 80 },
+  emotionLeader: { min: 35, max: 75 },
+})
 const leaderStats = ref({
   totalLeadersCount: 0,
   sectorLeaders: 0,
@@ -150,7 +156,9 @@ const onThresholdChange = () => {
 
 // 保存阈值
 const saveThresholds = () => {
-  algorithmManager.setThresholds(localThresholds.value)
+  Object.entries(localThresholds.value).forEach(([key, value]) => {
+    algorithmManager.updateThreshold(key, Number(value))
+  })
 
   EventManager.emit(AppEvents.UI.TOAST, {
     message: '✅ 阈值已保存',

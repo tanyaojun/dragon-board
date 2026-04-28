@@ -135,7 +135,7 @@
 import { debugLog } from '@/utils/logger'
 import { ref, computed, onMounted } from 'vue'
 import { FACTORS } from '@/config/factors'
-import { algorithmManager } from '@/services/Algorithm'
+import { algorithmManager } from '@/services/algorithm'
 
 const props = defineProps<{
   algorithmId: string

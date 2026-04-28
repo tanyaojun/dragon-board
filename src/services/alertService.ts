@@ -249,15 +249,18 @@ class AlertService {
       const phase = this.getCurrentPhase()
 
       // 先检查是否有针对该预警类型的独立乘数
-      if (alertType && ALERT_EMOTION_MULTIPLIERS.BY_ALERT_TYPE[alertType]) {
-        const typeMultiplier = ALERT_EMOTION_MULTIPLIERS.BY_ALERT_TYPE[alertType][phase]
+      const byAlertType = ALERT_EMOTION_MULTIPLIERS.BY_ALERT_TYPE as Partial<
+        Record<AlertType, Record<string, number>>
+      >
+      if (alertType && byAlertType[alertType]) {
+        const typeMultiplier = byAlertType[alertType]?.[phase]
         if (typeMultiplier !== undefined) {
           return typeMultiplier
         }
       }
 
       // 否则使用通用乘数
-      return ALERT_EMOTION_MULTIPLIERS.BY_PHASE[phase] || 1.0
+      return (ALERT_EMOTION_MULTIPLIERS.BY_PHASE as Record<string, number>)[phase] || 1.0
     } catch {
       return 1.0
     }
@@ -354,7 +357,7 @@ class AlertService {
 
           if (strengthChange >= surgeThreshold) {
             await this.createAlert({
-              type: ALERT_TYPES.HEAT_SURGE,
+              type: 'strength_surge',
               level: ALERT_LEVELS.INFO,
               title: `📈 ${block.name} 强度飙升`,
               message: `板块强度上升 ${strengthChange.toFixed(1)}%`,
@@ -364,7 +367,7 @@ class AlertService {
             })
           } else if (strengthChange <= -plungeThreshold) {
             await this.createAlert({
-              type: ALERT_TYPES.HEAT_PLUNGE,
+              type: 'strength_plunge',
               level: ALERT_LEVELS.WARNING,
               title: `📉 ${block.name} 强度骤降`,
               message: `板块强度下降 ${Math.abs(strengthChange).toFixed(1)}%`,
@@ -507,7 +510,7 @@ class AlertService {
               'leader_fall',
             )
 
-            let level = ALERT_LEVELS.WARNING
+            let level: AlertLevel = ALERT_LEVELS.WARNING
             if (stock.change <= -fallCritical) {
               level = ALERT_LEVELS.CRITICAL
             } else if (stock.change <= -fallWarning) {
@@ -587,7 +590,7 @@ class AlertService {
     const { type, level, title, message, code, name, themeId, themeName, snapshot } = params
 
     // 生成冷却key
-    const keyParts = [type]
+    const keyParts: string[] = [type]
     if (code) keyParts.push(code)
     if (themeId) keyParts.push(themeId)
     const cooldownKey = keyParts.join('_')

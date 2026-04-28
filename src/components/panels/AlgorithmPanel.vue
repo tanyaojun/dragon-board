@@ -180,8 +180,8 @@ import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { EventManager } from '@/utils/eventManager'
 import { AppEvents } from '@/types'
 
-import { algorithmManager } from '@/services/Algorithm'
-import { algorithmConfigManager } from '@/services/Algorithm/AlgorithmConfigManager'
+import { algorithmManager } from '@/services/algorithm'
+import { algorithmConfigManager } from '@/services/algorithm/AlgorithmConfigManager'
 
 import WeightsTab from './algorithm/WeightsTab.vue'
 import ThresholdsTab from './algorithm/ThresholdsTab.vue'
@@ -345,6 +345,13 @@ const algorithmList = ref<any[]>([])
 const currentAlgorithm = ref('balanced')
 const localWeights = ref<Record<string, number>>({})
 const localThresholds = ref<Record<string, number>>({})
+const defaultThresholds: Record<string, number> = {
+  totalLeader: 80,
+  sectorLeader: 65,
+  continuousLeader: 70,
+  middleLeader: 60,
+  emotionLeader: 55,
+}
 const availableFactors = ref<any[]>([])
 const currentFactorConfigs = ref<Record<string, FactorConfig>>({})
 const stats = ref<{ factorCount: number; totalWeight: number; lastUpdate: string }>({
@@ -454,7 +461,7 @@ function getDefaultWeights(algorithmId: string): Record<string, number> {
 // ========== 权重管理 ==========
 const updateWeights = (weights: Record<string, number>) => {
   if (updateTimeout.value) {
-    clearTimeout(updateTimeout)
+    clearTimeout(updateTimeout.value)
   }
 
   Object.entries(weights).forEach(([factorId, weight]) => {
@@ -508,7 +515,7 @@ const handleNormalize = async () => {
       showToast('✅ 权重已归一化到100%', 'success')
       // 不需要调用 loadData，因为已经更新了本地状态
     } else {
-      showToast('⚠️ 归一化失败', 'warning')
+      showToast('⚠️ 归一化失败', 'info')
     }
   } catch (error) {
     console.error('[AlgorithmPanel] 归一化失败:', error)
@@ -526,7 +533,10 @@ const resetWeights = () => {
 
 const resetThresholds = () => {
   if (confirm('确定要重置所有阈值吗？')) {
-    algorithmManager.resetThresholds?.()
+    Object.entries(defaultThresholds).forEach(([key, value]) => {
+      algorithmManager.updateThreshold?.(key, Number(value))
+    })
+    localThresholds.value = { ...defaultThresholds }
     showToast('🔄 阈值已重置', 'info')
   }
 }
@@ -659,13 +669,13 @@ onUnmounted(() => {
 
   // 清理定时器
   if (refreshTimer.value) {
-    clearInterval(refreshTimer)
+    clearInterval(refreshTimer.value)
     refreshTimer.value = null
   }
 
   // 清理防抖定时器
   if (batchUpdateTimer.value) {
-    clearTimeout(batchUpdateTimer)
+    clearTimeout(batchUpdateTimer.value)
     batchUpdateTimer.value = null
   }
 })

@@ -18,13 +18,13 @@
   <div class="config-section">
     <h4>🎯 阈值配置</h4>
     <div v-for="(value, key) in local.algorithm.thresholds" :key="key" class="config-item">
-      <span class="config-label">{{ getThresholdName(key) }}</span>
+      <span class="config-label">{{ getThresholdName(String(key)) }}</span>
       <input 
         type="range" 
         class="config-slider" 
         v-model.number="local.algorithm.thresholds[key]"
-        :min="getThresholdRange(key).min"
-        :max="getThresholdRange(key).max"
+        :min="getThresholdRange(String(key)).min"
+        :max="getThresholdRange(String(key)).max"
         @input="emitChange"
       >
       <span class="config-value">{{ local.algorithm.thresholds[key] }}</span>

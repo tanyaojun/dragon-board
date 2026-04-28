@@ -81,10 +81,10 @@
             <!-- 平台排名列的特殊渲染-->
             <template v-else-if="isPlatformRankKey(col.key)">
               <span :class="[
-                stock[col.key] >= 4 && stock[col.key] <= 10 ? 'rank-4-10' : '',
-                getPlatformRankClass(stock[col.key])
+                Number(getStockValue(stock, col.key)) >= 4 && Number(getStockValue(stock, col.key)) <= 10 ? 'rank-4-10' : '',
+                getPlatformRankClass(Number(getStockValue(stock, col.key)))
               ]">
-                {{ formatPlatformRank(stock[col.key]) }}
+                {{ formatPlatformRank(Number(getStockValue(stock, col.key))) }}
               </span>
             </template>
 
@@ -739,6 +739,8 @@ const hideRowTooltip = () => {
 }
 
 const getRankTrendAnalysis = (stock: any) => stock?.rankTrend
+
+const getStockValue = (stock: Stock, key: string) => (stock as unknown as Record<string, unknown>)[key]
 
 const getRankChange = (stock: any) =>
   Math.round(getRankTrendAnalysis(stock)?.meta?.change ?? stock?.rankChange ?? 0)

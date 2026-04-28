@@ -46,10 +46,12 @@ export interface Stock {
   isSectorLeader: boolean
   leaderLevel: string
   leaderScore: number
+  leaderReasons?: string[]
   continuousDays: number
 
   // 题材数据
   themes: any[]
+  hotScore?: number
 
   // ========== 扩展字段 ==========
   speed?: number
@@ -100,6 +102,7 @@ export interface Stock {
 
   // 时间戳
   updatedAt: number
+  updateTime?: number
   algorithmScore?: number
   algorithmVersion?: number
   algorithmId?: string
@@ -429,8 +432,38 @@ export interface Board {
   color?: string // 板块颜色
   count: number // 板块内股票数量
   createTime: number
-  updateTime: number
+  updateTime?: number
 }
+
+export interface FavoriteStock {
+  code: string
+  name: string
+  group: string
+  notes?: string
+  addTime: number
+  lastPrice: number
+  lastChange: number
+  lastUpdate: number
+}
+
+export interface FavoriteGroup {
+  name: string
+  color: string
+  count: number
+  createTime: number
+}
+
+export interface FavoriteStats {
+  total: number
+  groups: number
+  byGroup: Array<{
+    name: string
+    count: number
+    color: string
+  }>
+}
+
+export type MarketMode = 'hybrid' | 'local' | 'realtime' | 'mock'
 
 // 板块分组
 export interface BoardGroup {

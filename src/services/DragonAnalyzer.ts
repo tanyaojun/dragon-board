@@ -2,7 +2,7 @@ import { debugLog } from '@/utils/logger'
 // src/services/DragonAnalyzer.ts
 
 // @ts-nocheck
-import type { Stock, LeaderInfo, LeaderChange, FactorDetail, LeaderLevelType } from '@/types'
+import type { Stock, LeaderInfo, FactorDetail, LeaderLevelType } from '@/types'
 import { LEADER_LEVELS } from '@/types'
 import { ALERT_THRESHOLDS, ALERT_TYPES, ALERT_LEVELS } from '@/config/constants'
 import { EventManager } from '@/utils/eventManager'
@@ -12,6 +12,26 @@ import { dataLayer } from './DataLayer'
 import { alertService } from './alertService'
 import { getThresholdMultiplier } from '@/types/emotion'
 
+type LeaderChange = {
+  type: string
+  code: string
+  name: string
+  level?: string
+  fromLevel?: string
+  toLevel?: string
+  time: number
+}
+
+type LeaderStats = {
+  totalLeaders: number
+  totalLeadersCount: number
+  sectorLeaders: number
+  continuousLeaders: number
+  middleLeaders: number
+  emotionLeaders: number
+  themeLeaders: number
+  lastUpdate: number | null
+}
 
 // ========== 工具函数 ==========
 const ThemeUtils = {
@@ -111,7 +131,7 @@ class LeaderInfoImpl implements LeaderInfo {
     }
   }
 
-  toJSON(): LeaderInfo {
+  toJSON(): LeaderInfo & Record<string, unknown> {
     return {
       code: this.code,
       name: this.name,
@@ -494,7 +514,7 @@ export class DragonAnalyzer {
     return reasons
   }
 
-  private async calculateLeader(stock: Stock): Promise<LeaderInfo | null> {
+  private async calculateLeader(stock: Stock): Promise<LeaderInfoImpl | null> {
     if (!stock) return null
     const scoreResult = await this.calculateScore(stock)
     if (!scoreResult || typeof scoreResult.score !== 'number') return null
@@ -521,7 +541,7 @@ export class DragonAnalyzer {
     for (let i = 0; i < stocks.length; i += batchSize) {
       const batch = stocks.slice(i, i + batchSize)
       const promises = batch.map(async (stock) => {
-          const leader = await this.calculateLeader(stock)
+          const leader = await this.calculateLeader(stock as Stock)
           if (leader) newLeaders.set(stock.code, leader)
       })
       await Promise.all(promises)
@@ -670,6 +690,14 @@ export class DragonAnalyzer {
     }
 
     return leaders.map((l) => l.toJSON())
+  }
+
+  getLeaders(options?: {
+    level?: LeaderLevelType
+    theme?: string
+    limit?: number
+  }): LeaderInfo[] {
+    return this.getAllLeaders(options)
   }
 
   getLeadersByLevel(level: LeaderLevelType, limit: number = 10): LeaderInfo[] {

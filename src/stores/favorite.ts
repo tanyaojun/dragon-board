@@ -8,6 +8,7 @@ import { useStockStore } from './stock'
 import { EventManager } from '@/utils/eventManager'
 import { AppEvents } from '@/types'
 import { stockCodeManager } from '@/services/StockCodeManager'
+import { dataLayer } from '@/services/DataLayer'
 
 // 默认分组颜色
 const GROUP_COLORS = [
@@ -371,6 +372,7 @@ export const useFavoriteStore = defineStore('favorite', () => {
       color: color || BOARD_COLORS[boards.value.size % BOARD_COLORS.length],
       count: 0,
       createTime: Date.now(),
+      updateTime: Date.now(),
     }
 
     boards.value.set(id, board)
@@ -601,10 +603,10 @@ export const useFavoriteStore = defineStore('favorite', () => {
     let board = Array.from(boards.value.values()).find((b) => b.name === boardName)
 
     if (!board) {
-      board = addBoard(boardName)
+      const createdBoard = addBoard(boardName)
+      if (!createdBoard) return false
+      board = createdBoard
     }
-
-    if (!board) return false
 
     return addStockToBoard(stockCode, board.id, notes)
   }

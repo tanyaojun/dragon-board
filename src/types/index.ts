@@ -4,6 +4,7 @@
 export * from './core'
 export * from './config'
 export * from './sector'
+export * from './board'
 export type {
   Factor,
   FactorConfig,

@@ -14,6 +14,8 @@ export interface SearchResult {
     price: number
     change: number
     themes?: any[]
+    isSectorLeader?: boolean
+    leaderLevel?: string
     _index?: number
   }
   score: number
@@ -56,6 +58,8 @@ export class SearchIndex {
           price: stock.price,
           change: stock.change,
           themes: stock.themes?.slice(0, 3),
+          isSectorLeader: stock.isSectorLeader,
+          leaderLevel: stock.leaderLevel,
           _index: idx,
         })
 

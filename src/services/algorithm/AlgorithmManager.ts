@@ -44,8 +44,16 @@ export interface EmotionAdjustment {
 
 export interface WeightAdjustmentEvent {
   phase: string
-  adjustments: Array<{ factorId: string; oldWeight: number; newWeight: number }>
+  adjustments: Array<{ factorId: string; delta?: number; oldWeight: number; newWeight: number }>
   timestamp: number
+}
+
+const THRESHOLD_RANGES: Record<string, { min: number; max: number }> = {
+  totalLeader: { min: 60, max: 95 },
+  sectorLeader: { min: 50, max: 90 },
+  continuousLeader: { min: 50, max: 90 },
+  middleLeader: { min: 40, max: 85 },
+  emotionLeader: { min: 40, max: 85 },
 }
 
 // 主协调器接口
@@ -250,8 +258,8 @@ export class AlgorithmManager implements IAlgorithmManager {
     return results
   }
 
-  getAlgorithmFactors?(algorithmId: string): any[] {
-    throw new Error('Method not implemented.')
+  getAlgorithmFactors(algorithmId: string): any[] {
+    return this.getFactorWeights(algorithmId)
   }
 
   static getInstance(): AlgorithmManager {
@@ -363,7 +371,7 @@ export class AlgorithmManager implements IAlgorithmManager {
 
   // ========== 根据情绪阶段调整权重 ==========
   adjustWeightsByPhase(phase: string): boolean {
-    const adjustments = PHASE_ADJUSTMENTS[phase]
+    const adjustments = (PHASE_ADJUSTMENTS as Record<string, Record<string, number>>)[phase]
     if (!adjustments || Object.keys(adjustments).length === 0) {
       return false
     }
@@ -371,7 +379,12 @@ export class AlgorithmManager implements IAlgorithmManager {
     const algo = ALGORITHMS[this.currentAlgorithm]
     if (!algo) return false
 
-    const adjustedFactors: Array<{ factorId: string; oldWeight: number; newWeight: number }> = []
+    const adjustedFactors: Array<{
+      factorId: string
+      delta: number
+      oldWeight: number
+      newWeight: number
+    }> = []
     let hasChanges = false
 
     Object.entries(adjustments).forEach(([factorId, delta]) => {
@@ -614,7 +627,8 @@ export class AlgorithmManager implements IAlgorithmManager {
       stocks.forEach((stock) => {
         const newScore = this.pendingUpdates.get(stock.code)
         if (newScore !== undefined) {
-          const oldScore = stock.leaderScore || 0
+          const stockAny = stock as any
+          const oldScore = stockAny.leaderScore || 0
           // 只有当分数变化超过阈值时才更新
           if (Math.abs(oldScore - newScore) > 0.1) {
             updatedStocks.push({
@@ -732,7 +746,9 @@ export class AlgorithmManager implements IAlgorithmManager {
     algorithmId: string,
   ): Promise<ScoreResult> {
     const phase = this.getCurrentMarketPhase()
-    const multipliers = phase ? PHASE_MULTIPLIERS[phase] || {} : {}
+    const multipliers = phase
+      ? ((PHASE_MULTIPLIERS as Record<string, Record<string, number>>)[phase] || {})
+      : {}
 
     let totalScore = 0
     let totalWeight = 0
@@ -1148,6 +1164,43 @@ export class AlgorithmManager implements IAlgorithmManager {
     return { ...this.thresholds }
   }
 
+  getThresholdRanges(): Record<string, { min: number; max: number }> {
+    return { ...THRESHOLD_RANGES }
+  }
+
+  setThresholds(thresholds: Record<string, number>): boolean {
+    if (this.destroyed) return false
+
+    let changed = false
+    Object.entries(thresholds).forEach(([key, value]) => {
+      if (typeof value !== 'number' || Number.isNaN(value)) return
+      if (!(key in this.thresholds)) return
+
+      const range = THRESHOLD_RANGES[key]
+      const nextValue = range ? Math.min(range.max, Math.max(range.min, value)) : value
+      if (this.thresholds[key] !== nextValue) {
+        this.thresholds[key] = nextValue
+        changed = true
+      }
+    })
+
+    if (!changed) return false
+
+    this.saveToStorage()
+    this.invalidateCache()
+    EventManager.emit('algorithm:config-changed', this.getStatus())
+    return true
+  }
+
+  resetThresholds(): boolean {
+    if (this.destroyed) return false
+    this.thresholds = { ...DEFAULT_THRESHOLDS }
+    this.saveToStorage()
+    this.invalidateCache()
+    EventManager.emit('algorithm:config-changed', this.getStatus())
+    return true
+  }
+
   updateThreshold(key: string, value: number): boolean {
     if (this.destroyed) return false
     if (!(key in this.thresholds)) return false
@@ -1206,6 +1259,29 @@ export class AlgorithmManager implements IAlgorithmManager {
       middleLeader: this.thresholds.middleLeader || 60,
       emotionLeader: this.thresholds.emotionLeader || 55,
     }
+  }
+
+  getEmotionStats(): Record<string, { count: number; avgScore: number }> {
+    const stats: Record<string, { count: number; avgScore: number }> = {}
+
+    this.emotionFeedbackHistory.forEach((feedback) => {
+      if (!stats[feedback.phase]) {
+        stats[feedback.phase] = { count: 0, avgScore: 0 }
+      }
+      const phaseStats = stats[feedback.phase]
+      phaseStats.count++
+      phaseStats.avgScore =
+        (phaseStats.avgScore * (phaseStats.count - 1) + feedback.score) / phaseStats.count
+    })
+
+    const monitorStats = this.perfMonitor?.getEmotionStats?.() || {}
+    Object.entries(monitorStats).forEach(([phase, value]) => {
+      if (!stats[phase]) {
+        stats[phase] = { ...value }
+      }
+    })
+
+    return stats
   }
 
   // 子模块获取方法

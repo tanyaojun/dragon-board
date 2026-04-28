@@ -69,7 +69,7 @@ const badgeStyle = computed(() => {
 
 const badgeTitle = computed(() => {
   if (!props.stock.isSectorLeader) return ''
-  const reasons = props.stock.leaderReasons || []
+  const reasons = (props.stock as any).leaderReasons || []
   return reasons.length > 0
     ? reasons.join('\n')
     : `${props.stock.leaderLevel} · 评分${Math.round(props.stock.leaderScore || 0)}`

@@ -114,11 +114,12 @@ const handleAction = (action: string) => {
       break
 
     case 'copyCode':
+      const codeToCopy = stock.value.code
       navigator.clipboard
-        ?.writeText(stock.value.code)
+        ?.writeText(codeToCopy)
         .then(() => {
           EventManager.emit(AppEvents.UI.TOAST, {
-            message: `📋 已复制 ${stock.value.code}`,
+            message: `📋 已复制 ${codeToCopy}`,
             duration: 1500,
             type: 'success',
           })
@@ -141,11 +142,12 @@ const handleAction = (action: string) => {
       break
 
     case 'copyName':
+      const nameToCopy = stock.value.name
       navigator.clipboard
-        ?.writeText(stock.value.name)
+        ?.writeText(nameToCopy)
         .then(() => {
           EventManager.emit(AppEvents.UI.TOAST, {
-            message: `📝 已复制 ${stock.value.name}`,
+            message: `📝 已复制 ${nameToCopy}`,
             duration: 1500,
             type: 'success',
           })

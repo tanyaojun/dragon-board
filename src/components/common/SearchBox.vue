@@ -48,9 +48,9 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { SearchIndex } from '@/services/SearchIndex'
+import type { SearchResult } from '@/services/SearchIndex'
 import { PinyinUtils } from '@/utils/pinyin'
 import { EventManager } from '@/utils/eventManager'
-import type { SearchResult } from '@/types'
 
 const props = defineProps<{
   modelValue: string

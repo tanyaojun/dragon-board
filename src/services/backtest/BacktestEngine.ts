@@ -444,7 +444,7 @@ export class BacktestEngine {
     // 确定时间范围
     const timestamps = trades.map((t) => t.entryTime)
     const startTimestamp = Math.min(...timestamps)
-    const endTimestamp = Math.max(...timestamps.map((t) => t.exitTime || t.entryTime))
+    const endTimestamp = Math.max(...trades.map((t) => t.exitTime || t.entryTime))
     const duration = (endTimestamp - startTimestamp) / (1000 * 60 * 60 * 24) // 天
 
     return {

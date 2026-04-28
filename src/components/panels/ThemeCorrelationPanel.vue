@@ -114,7 +114,7 @@
                   <span class="stat-label">整体联动</span>
                   <span class="stat-value"
                     :style="{ color: getCorrelationColor(themeCorrelation?.overallCorrelation) }">
-                    {{ (themeCorrelation?.overallCorrelation * 100).toFixed(1) }}%
+                    {{ (((themeCorrelation?.overallCorrelation ?? 0) * 100).toFixed(1)) }}%
                   </span>
                 </span>
                 <span class="stat-item">
@@ -582,7 +582,7 @@ async function selectStock(stock: any) {
   const fullStock = {
     ...stock,
     // 从 jxbk 补充数据
-    price: jxbkStock?.price || 0,
+    price: (jxbkStock as any)?.price || 0,
     volumeRatio: jxbkStock?.volumeRatio || 0,
     popularity: jxbkStock?.popularity || 0,
     popularityChange: jxbkStock?.popularityChange || 0,
@@ -960,8 +960,8 @@ const filteredStocks = computed(() => {
   }
 
   result.sort((a, b) => {
-    let aVal = a[sortBy.value as keyof typeof a] || 0
-    let bVal = b[sortBy.value as keyof typeof b] || 0
+    const aVal = Number(a[sortBy.value as keyof typeof a]) || 0
+    const bVal = Number(b[sortBy.value as keyof typeof b]) || 0
     return sortDesc.value ? bVal - aVal : aVal - bVal
   })
 

@@ -133,7 +133,7 @@ const realtimeSubscribedStocks = computed(() => {
 
   return subscribedCodes.value
     .map((code) => stockMap.get(code) || null)
-    .filter((stock) => stock && isMainFocusStock(stock))
+    .filter((stock): stock is NonNullable<typeof stock> => Boolean(stock) && isMainFocusStock(stock))
     .map((stock) => ({
       code: stock.code,
       name: stock.name || stock.code,

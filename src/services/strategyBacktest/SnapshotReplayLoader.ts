@@ -44,7 +44,7 @@ function normalizeStock(row: SnapshotStockRow | any, index: number): ReplayStock
 
 function getPayloadHotlist(record: SnapshotRecord): ReplayStock[] {
   const payload = record.payload || {}
-  const hotlist = Array.isArray(payload.hotlist)
+  const hotlist: any[] = Array.isArray(payload.hotlist)
     ? payload.hotlist
     : Array.isArray((record as any).hotlist)
       ? (record as any).hotlist
@@ -52,7 +52,7 @@ function getPayloadHotlist(record: SnapshotRecord): ReplayStock[] {
   return hotlist
     .map((row: any, index: number) => normalizeStock(row, index))
     .filter((row: ReplayStock | null): row is ReplayStock => row !== null)
-    .sort((a, b) => a.rank - b.rank)
+    .sort((a: ReplayStock, b: ReplayStock) => a.rank - b.rank)
 }
 
 function buildMarketContext(record: SnapshotRecord): ReplayMarketContext {
@@ -195,7 +195,9 @@ export class SnapshotReplayLoader {
     inheritedWarnings: string[]
   }): BacktestMeta {
     const { frames, type, requestedTypes, usedProjectionRows, inheritedWarnings } = input
-    const tradingDates = Array.from(new Set(frames.map((frame) => frame.tradingDate).filter(Boolean))).sort()
+    const tradingDates = Array.from(
+      new Set(frames.map((frame) => frame.tradingDate).filter((date): date is string => Boolean(date))),
+    ).sort((a: string, b: string) => a.localeCompare(b))
     const delayedCount = frames.filter((frame) => frame.captureMode === 'delayed').length
     const restoredCount = frames.filter((frame) => frame.captureMode === 'restored').length
     const emptyHotlistCount = frames.filter((frame) => frame.stocks.length === 0).length

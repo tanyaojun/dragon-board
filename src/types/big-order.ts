@@ -64,8 +64,15 @@ export interface PeriodStatistics {
 // ========== 筛选条件 ==========
 export interface BigOrderFilter {
   minAmount?: number // 最小金额（万元）
+  maxAmount?: number // 最大金额（万元）
+  minVolume?: number // 最小成交量（手）
+  maxVolume?: number // 最大成交量（手）
   fundMarker?: string // 资金标记筛选
   buyMarker?: string // 买盘标记筛选
+  types?: Array<1 | 2 | 3 | 4> // 大单类型
+  timeRange?: string
+  startTime?: number
+  endTime?: number
   stockCode?: string // 股票代码
 }
 

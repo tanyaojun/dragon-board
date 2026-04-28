@@ -249,6 +249,7 @@ export const useConfigStore = defineStore('config', () => {
     setAlgorithm,
     setThreshold,
     resetToDefaults,
+    loadConfig,
     saveConfig,
   }
 })

@@ -294,4 +294,14 @@ export class AlgorithmABTestManager {
       exportTime: Date.now(),
     }
   }
+
+  /**
+   * 停止所有运行中的测试，供 AlgorithmManager 销毁时调用。
+   */
+  stop(): void {
+    this.getRunningTests().forEach((test) => {
+      this.stopTest(test.id)
+    })
+    this.assignmentCache.clear()
+  }
 }

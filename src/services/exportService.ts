@@ -16,6 +16,12 @@ interface ExportOptions {
   delimiter?: string
 }
 
+type ExportOptionsInput = Partial<ExportOptions>
+type ExportStock = Stock & {
+  updateTime?: number | string | Date
+  leaderReasons?: string[]
+}
+
 interface ExportData {
   stocks?: Stock[]
   leaders?: Stock[]
@@ -48,7 +54,7 @@ class ExportService {
 
   // ========== 导出股票数据 ==========
 
-  async exportStocks(options: ExportOptions = {}): Promise<ExportResult> {
+  async exportStocks(options: ExportOptionsInput = {}): Promise<ExportResult> {
     return this.debouncedExport('stocks', options, async () => {
       const stockStore = useStockStore()
       const data: ExportData = {
@@ -64,7 +70,7 @@ class ExportService {
     })
   }
 
-  async exportLeaders(options: ExportOptions = {}): Promise<ExportResult> {
+  async exportLeaders(options: ExportOptionsInput = {}): Promise<ExportResult> {
     return this.debouncedExport('leaders', options, async () => {
       const stockStore = useStockStore()
       const data: ExportData = {
@@ -80,7 +86,7 @@ class ExportService {
     })
   }
 
-  async exportSectors(options: ExportOptions = {}): Promise<ExportResult> {
+  async exportSectors(options: ExportOptionsInput = {}): Promise<ExportResult> {
     return this.debouncedExport('sectors', options, async () => {
       const data: ExportData = {
         sectors: sectorAnalyzer.getHotThemes(50),
@@ -95,7 +101,7 @@ class ExportService {
     })
   }
 
-  async exportMarket(options: ExportOptions = {}): Promise<ExportResult> {
+  async exportMarket(options: ExportOptionsInput = {}): Promise<ExportResult> {
     return this.debouncedExport('market', options, async () => {
       const data: ExportData = {
         market: {
@@ -114,7 +120,7 @@ class ExportService {
     })
   }
 
-  async exportAll(options: ExportOptions = {}): Promise<ExportResult> {
+  async exportAll(options: ExportOptionsInput = {}): Promise<ExportResult> {
     return this.debouncedExport('all', options, async () => {
       const stockStore = useStockStore()
       const data: ExportData = {
@@ -141,7 +147,7 @@ class ExportService {
 
   private async debouncedExport(
     type: string,
-    options: ExportOptions,
+    options: ExportOptionsInput,
     exportFn: () => Promise<ExportResult>,
   ): Promise<ExportResult> {
     const key = `${type}_${options.format}_${options.filename || 'default'}`
@@ -329,7 +335,9 @@ class ExportService {
       '更新时间',
     ]
 
-    const rows = stocks.map((stock) => [
+    const rows = stocks.map((stock) => {
+      const exportStock = stock as ExportStock
+      return [
       stock.code,
       stock.name,
       stock.price?.toFixed(2) || '',
@@ -356,8 +364,9 @@ class ExportService {
       stock.leaderScore?.toFixed(0) || '',
       stock.continuousDays || '',
       (stock.themes || []).join(';'),
-      new Date(stock.updateTime).toLocaleString(),
-    ])
+      exportStock.updateTime ? new Date(exportStock.updateTime).toLocaleString() : '',
+    ]
+    })
 
     return this.arrayToCSV(headers, rows, options)
   }
@@ -388,7 +397,7 @@ class ExportService {
       this.formatNumber(leader.zlje),
       leader.continuousDays || '',
       (leader.themes || []).join(';'),
-      (leader.leaderReasons || []).join(';'),
+      ((leader as ExportStock).leaderReasons || []).join(';'),
     ])
 
     return this.arrayToCSV(headers, rows, options)

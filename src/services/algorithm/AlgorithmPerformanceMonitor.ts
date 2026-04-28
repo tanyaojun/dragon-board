@@ -168,10 +168,17 @@ export class AlgorithmPerformanceMonitor {
     debugLog('[AlgorithmPerformanceMonitor] 执行后台维护')
 
     // 更新性能指标
-    this.updateMetrics()
+    this.flushStats()
 
     // 保存到缓存
     this.saveToCache()
+  }
+
+  /**
+   * 供 AlgorithmManager/RefreshManager 主动刷新统计。
+   */
+  flushStats(): void {
+    this.updateMetrics()
   }
 
   /**

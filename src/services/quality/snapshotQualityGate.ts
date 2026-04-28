@@ -9,8 +9,9 @@ export {
 } from '../snapshot/snapshotQualityGate'
 
 export type {
-  SnapshotFeatureCoverage,
   SnapshotQualityGateOptions,
   SnapshotQualityGateResult,
   SnapshotSeriesItem,
 } from '../snapshot/snapshotQualityGate'
+
+export type SnapshotFeatureCoverage = 'full' | 'partial'

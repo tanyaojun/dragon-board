@@ -80,7 +80,7 @@ export class TradeSimulator {
         const shouldExit =
           signal.candidateTier === 'D_EXIT_RISK' ||
           (signal.candidateTier === 'C_CROWDED' &&
-            signal.rankTrend.strategy.momentum.acceleration <= 0) ||
+            (signal.rankTrend.strategy?.momentum?.acceleration ?? 0) <= 0) ||
           signal.rank > 50 ||
           position.holdingBars >= config.maxHoldingBars ||
           grossReturn <= config.stopLoss ||

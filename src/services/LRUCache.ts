@@ -11,7 +11,7 @@ interface CacheItem<T> {
   type?: string // 缓存类型，用于分级TTL
 }
 
-interface CacheStats {
+export interface CacheStats {
   hits: number
   misses: number
   evictions: number

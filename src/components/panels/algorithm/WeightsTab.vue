@@ -85,7 +85,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { FACTORS } from '@/config/factors'
-import { algorithmManager } from '@/services/Algorithm'
+import { algorithmManager } from '@/services/algorithm'
 
 const props = defineProps<{
   algorithm: string

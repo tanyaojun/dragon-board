@@ -1321,6 +1321,10 @@ export function getThemeStocks(
     const reason = dataLayer.getStockReason?.(code) || ''
     const isNew = dataLayer.getStockIsNew?.(code) || false
     const limitUpData = dataLayer.getLimitUpData?.(code)
+    const legacyLeaderStock = stock as Stock & {
+      isSectorLeader?: boolean
+      leaderLevel?: string
+    }
 
     acc.push({
       code: stock.code,
@@ -1336,8 +1340,8 @@ export function getThemeStocks(
       lastZtTime: limitUpData?.lastZtTime || stock.lastZtTime || '',
       fengdan: limitUpData?.fengdan || stock.fengdan || jxbkStock?.fengdan || 0,
       maxFengdan: limitUpData?.maxFengdan || stock.maxFengdan || jxbkStock?.maxFengdan || 0,
-      isSectorLeader: stock.isSectorLeader || false,
-      leaderLevel: stock.leaderLevel,
+      isSectorLeader: legacyLeaderStock.isSectorLeader || false,
+      leaderLevel: legacyLeaderStock.leaderLevel,
       tags: tags,
       reason: reason || stock.reason || '',
       speed: jxbkStock?.speed || stock.speed || 0,

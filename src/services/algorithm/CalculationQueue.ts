@@ -2,6 +2,8 @@ import { debugLog } from '@/utils/logger'
 // src/services/Algorithm/CalculationQueue.ts
 // 通用计算队列 - 可被任何模块使用
 
+import { EventManager } from '@/utils/eventManager'
+
 type Priority = 'high' | 'medium' | 'low'
 
 interface QueueTask<T = any> {
@@ -321,7 +323,7 @@ export class CalculationQueue {
 
       debugLog(`[Queue] ✅ [${task.module}] 任务完成: ${task.id} (${Date.now() - startTime}ms)`)
     } catch (error) {
-      if (error.message === 'Task timeout') {
+      if (error instanceof Error && error.message === 'Task timeout') {
         this.stats.totalTimeout++
         console.warn(`[Queue] ⏰ [${task.module}] 任务超时: ${task.id}`)
       }

@@ -349,7 +349,7 @@ function gateDResult(candidate: CandidateRecord, challengers: CandidateRecord[])
   if (closeLoser) {
     return {
       pass: false,
-      note: `${closeLoser.name} 在收盘维度上反超，领导权未守住`,
+      note: `${closeLoser.stock.name} 在收盘维度上反超，领导权未守住`,
     }
   }
 

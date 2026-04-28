@@ -4,7 +4,60 @@ import { debugLog } from '@/utils/logger'
 
 import { ALGORITHMS } from '@/config/algorithms'
 import { FACTORS } from '@/config/factors'
-import type { Algorithm } from '@/types/algorithm'
+import type { Algorithm, LeaderThresholds } from '@/types'
+
+const DEFAULT_LEADER_THRESHOLDS: Required<LeaderThresholds> = {
+  total: {
+    maxRank: 10,
+    minDays: 3,
+    eliteRank: 3,
+    minScore: 70,
+    minTurnover: 100000000,
+    extremeChange: 9,
+  },
+  sector: {
+    maxRank: 20,
+    minChange: 3,
+    minScore: 60,
+    minThemeHeat: 60,
+    minTurnover: 80000000,
+    highTurnover: 150000000,
+  },
+  continuous: {
+    minChange: 9,
+    minDays: 2,
+    maxRank: 30,
+    minScore: 65,
+  },
+  middle: {
+    minMV: 3000000000,
+    maxChange: 7,
+    minTurnoverRate: 3,
+    maxTurnoverRate: 25,
+    maxRank: 50,
+  },
+  emotion: {
+    minTurnoverRate: 5,
+    minAbsChange: 3,
+    minScore: 50,
+  },
+}
+
+function createLeaderThresholds(scores: {
+  total: number
+  sector: number
+  continuous: number
+  middle: number
+  emotion: number
+}): LeaderThresholds {
+  return {
+    total: { ...DEFAULT_LEADER_THRESHOLDS.total, minScore: scores.total },
+    sector: { ...DEFAULT_LEADER_THRESHOLDS.sector, minScore: scores.sector },
+    continuous: { ...DEFAULT_LEADER_THRESHOLDS.continuous, minScore: scores.continuous },
+    middle: { ...DEFAULT_LEADER_THRESHOLDS.middle },
+    emotion: { ...DEFAULT_LEADER_THRESHOLDS.emotion, minScore: scores.emotion },
+  }
+}
 
 /**
  * 算法配置管理器
@@ -155,14 +208,13 @@ export class AlgorithmConfigManager {
       category: 'custom',
       color: '#95a5a6',
       factors,
-      phaseMultipliers: {}, // 自定义算法默认没有阶段乘数
-      leaderThresholds: {   // 使用默认阈值
-        total: { minScore: 70 },
-        sector: { minScore: 60 },
-        continuous: { minScore: 65 },
-        middle: { minScore: 55 },
-        emotion: { minScore: 50 },
-      }
+      leaderThresholds: createLeaderThresholds({
+        total: 70,
+        sector: 60,
+        continuous: 65,
+        middle: 55,
+        emotion: 50,
+      })
     }
 
     this.customAlgorithms.set(id, algorithm)
@@ -343,7 +395,8 @@ export class AlgorithmConfigManager {
           this.customAlgorithms.set(id, algo as Algorithm)
           importedCount++
         } catch (error) {
-          errors.push(`算法 ${id} 导入失败: ${error.message}`)
+          const message = error instanceof Error ? error.message : String(error)
+          errors.push(`算法 ${id} 导入失败: ${message}`)
         }
       })
     }
