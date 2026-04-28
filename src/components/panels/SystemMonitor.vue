@@ -212,6 +212,7 @@
 </template>
 
 <script setup lang="ts">
+import { debugLog } from '@/utils/logger'
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { dataLayer } from '@/services/DataLayer'
 import { sectorAnalyzer } from '@/services/sectorAnalyzer'
@@ -501,11 +502,11 @@ function close() {
 
 // ========== 生命周期 ==========
 onMounted(() => {
-  console.log('[SystemMonitor] 挂载')
+  debugLog('[SystemMonitor] 挂载')
 })
 
 onUnmounted(() => {
-  console.log('[SystemMonitor] 卸载')
+  debugLog('[SystemMonitor] 卸载')
 })
 </script>
 

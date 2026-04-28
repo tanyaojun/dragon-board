@@ -1,3 +1,4 @@
+import { debugLog } from '@/utils/logger'
 // src/services/RankTrendAnalyzer.ts
 import { EventManager } from '../utils/eventManager'
 import {
@@ -175,12 +176,12 @@ export class RankTrendAnalyzer {
     }
 
     EventManager.on('data:stocks-updated', () => {
-      console.log('[RankTrendAnalyzer] 数据版本变化，清除缓存')
+      debugLog('[RankTrendAnalyzer] 数据版本变化，清除缓存')
       this.invalidateCache()
     })
 
     EventManager.on('snapshots:updated', () => {
-      console.log('[RankTrendAnalyzer] 快照更新，清除缓存')
+      debugLog('[RankTrendAnalyzer] 快照更新，清除缓存')
       this.invalidateCache()
     })
 
@@ -198,7 +199,7 @@ export class RankTrendAnalyzer {
   private logRuntimeConfigApplied(): void {
     this.runtimeConfigApplyCount += 1
     if (this.runtimeConfigApplyCount <= 3 || this.runtimeConfigApplyCount % 20 === 0) {
-      console.log(`[RankTrendAnalyzer] 已应用运行时参数更新 (${this.runtimeConfigApplyCount})`)
+      debugLog(`[RankTrendAnalyzer] 已应用运行时参数更新 (${this.runtimeConfigApplyCount})`)
     }
   }
 
@@ -227,7 +228,7 @@ export class RankTrendAnalyzer {
 
     this.invalidateCache()
     this.logRuntimeConfigApplied()
-    console.log('[RankTrendAnalyzer] 已应用运行时参数更新')
+    debugLog('[RankTrendAnalyzer] 已应用运行时参数更新')
   }
 
   public updateRuntimeConfig(config: RankTrendConfigUpdate): RankTrendRuntimeConfig {
@@ -317,7 +318,7 @@ export class RankTrendAnalyzer {
       : await this.loadRequiredSnapshots(options)
 
     if (recentSnapshots.length === 0) {
-      console.log('[RankTrendAnalyzer] 快照不足，跳过计算')
+      debugLog('[RankTrendAnalyzer] 快照不足，跳过计算')
       return results
     }
 
@@ -382,7 +383,7 @@ export class RankTrendAnalyzer {
       })
       if (strictSnapshots.length > 0) {
         if (type !== preferredType) {
-          console.log(`[RankTrendAnalyzer] 首选快照不足，回退 ${type}: ${strictSnapshots.length} 条`)
+          debugLog(`[RankTrendAnalyzer] 首选快照不足，回退 ${type}: ${strictSnapshots.length} 条`)
         }
         return strictSnapshots
       }
@@ -403,7 +404,7 @@ export class RankTrendAnalyzer {
     }
 
     if (fallbackPicked.length > 0) {
-      console.log(
+      debugLog(
         `[RankTrendAnalyzer] 快照不足最小阈值(${requiredSnapshots})，使用可用最多类型: ${fallbackType || 'unknown'} ${fallbackPicked.length} 条`,
       )
     }

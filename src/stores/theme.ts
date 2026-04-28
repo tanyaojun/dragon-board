@@ -1,3 +1,4 @@
+import { debugLog } from '@/utils/logger'
 // src/stores/theme.ts
 
 import { defineStore } from 'pinia'
@@ -100,7 +101,7 @@ export const useThemeStore = defineStore('theme', () => {
     // 更新下拉菜单
     updateDropdownMenu(theme)
 
-    console.log(`[ThemeStore] 已切换到 ${THEMES[theme].name} 主题`)
+    debugLog(`[ThemeStore] 已切换到 ${THEMES[theme].name} 主题`)
 
     // 触发事件
     window.dispatchEvent(
@@ -192,7 +193,7 @@ export const useThemeStore = defineStore('theme', () => {
       themeData: theme,
     })
 
-    console.log(`[ThemeStore] 已切换到龙族主题: ${dragonThemeData.value.name}`)
+    debugLog(`[ThemeStore] 已切换到龙族主题: ${dragonThemeData.value.name}`)
   }
 
   function applyDragonThemeVariables(themeId: string) {
@@ -229,12 +230,12 @@ export const useThemeStore = defineStore('theme', () => {
       // 保存当前原有主题，以便切回
       localStorage.setItem('previous-theme', currentTheme.value)
 
-      console.log('[ThemeStore] 🐉 龙族主题已启用')
+      debugLog('[ThemeStore] 🐉 龙族主题已启用')
     } else {
       document.documentElement.classList.remove('dragon-theme')
       // 切换回原有主题
       setTheme(currentTheme.value)
-      console.log('[ThemeStore] 🎨 已切回普通主题')
+      debugLog('[ThemeStore] 🎨 已切回普通主题')
     }
 
     EventManager.emit('theme-mode-changed', { dragonEnabled: enable })
@@ -302,7 +303,7 @@ export const useThemeStore = defineStore('theme', () => {
       document.documentElement.classList.add('dragon-theme')
       // 应用龙族主题
       applyDragonThemeVariables(currentDragonTheme.value)
-      console.log(`[ThemeStore] 🐉 龙族主题初始化: ${dragonThemeData.value.name}`)
+      debugLog(`[ThemeStore] 🐉 龙族主题初始化: ${dragonThemeData.value.name}`)
     } else {
       // 应用原有主题
       setTheme(currentTheme.value)
@@ -344,7 +345,7 @@ export const useThemeStore = defineStore('theme', () => {
       },
     )
 
-    console.log('[ThemeStore] 🎨 主题系统初始化完成')
+    debugLog('[ThemeStore] 🎨 主题系统初始化完成')
   }
 
   return {

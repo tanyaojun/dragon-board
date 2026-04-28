@@ -1,3 +1,4 @@
+import { debugLog } from '@/utils/logger'
 // src/utils/pinyin.ts
 
 /**
@@ -73,7 +74,7 @@ export class PinyinUtils {
         if (this.isAvailable()) {
           clearInterval(checkInterval)
           this.isReady = true
-          console.log('[PinyinUtils] ✅ 拼音库加载成功')
+          debugLog('[PinyinUtils] ✅ 拼音库加载成功')
           resolve(true)
         } else if (Date.now() - startTime > timeout) {
           clearInterval(checkInterval)
@@ -203,8 +204,8 @@ export class PinyinUtils {
 // 自动等待拼音库加载
 PinyinUtils.waitForLibrary().then(loaded => {
   if (loaded) {
-    console.log(`[PinyinUtils] 📚 拼音库已就绪，版本: ${PinyinUtils.getVersion()}`)
+    debugLog(`[PinyinUtils] 📚 拼音库已就绪，版本: ${PinyinUtils.getVersion()}`)
   } else {
-    console.log('[PinyinUtils] 📚 使用降级拼音方案')
+    debugLog('[PinyinUtils] 📚 使用降级拼音方案')
   }
 })

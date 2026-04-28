@@ -1,3 +1,4 @@
+import { debugLog } from '@/utils/logger'
 // src/services/Algorithm/AlgorithmWarmupManager.ts
 // 预热管理模块
 // 注意：已移除增量刷新相关代码
@@ -80,7 +81,7 @@ export class AlgorithmWarmupManager {
    * 启动预热管理
    */
   start(): void {
-    console.log('[AlgorithmWarmup] 🔥 启动预热管理...')
+    debugLog('[AlgorithmWarmup] 🔥 启动预热管理...')
 
     // 执行启动预热
     this.strategies.forEach((strategy, name) => {
@@ -108,7 +109,7 @@ export class AlgorithmWarmupManager {
    * 供 RefreshManager 调用的更新方法 - 全量预热
    */
   async runUpdate(): Promise<void> {
-    console.log('[AlgorithmWarmup] 收到刷新指令，执行全量预热')
+    debugLog('[AlgorithmWarmup] 收到刷新指令，执行全量预热')
 
     // 执行所有策略的预热
     const promises: Promise<void>[] = []
@@ -148,14 +149,14 @@ export class AlgorithmWarmupManager {
     if (!strategy || !strategy.enabled) return
 
     if (this.isWarmingUp.get(name)) {
-      console.log(`[AlgorithmWarmup] ⏳ 预热 ${name} 正在进行中，跳过`)
+      debugLog(`[AlgorithmWarmup] ⏳ 预热 ${name} 正在进行中，跳过`)
       return
     }
 
     this.isWarmingUp.set(name, true)
 
     try {
-      console.log(`[AlgorithmWarmup] 🔥 开始预热: ${name}`)
+      debugLog(`[AlgorithmWarmup] 🔥 开始预热: ${name}`)
       EventManager.emit('algorithm:warmup-started', {
         strategy: name,
         total: strategy.maxItems || 0,
@@ -199,7 +200,7 @@ export class AlgorithmWarmupManager {
       }
 
       const duration = this.getWarmupDuration(name)
-      console.log(
+      debugLog(
         `[AlgorithmWarmup] ✅ 预热完成: ${name}, ${targets.length}只股票, 耗时${duration}ms`,
       )
 

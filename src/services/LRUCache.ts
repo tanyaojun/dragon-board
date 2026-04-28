@@ -1,3 +1,4 @@
+import { debugLog } from '@/utils/logger'
 // src/services/LRUCache.ts
 // 优化版：添加分级TTL、批量操作、增强统计、修复所有方法
 interface CacheItem<T> {
@@ -106,7 +107,7 @@ class LRUCache<T = any> {
    */
   setTTLForType(type: string, ttl: number) {
     this.ttlConfig[type] = ttl
-    console.log(`[LRUCache] 设置类型TTL: ${type}=${ttl}ms`)
+    debugLog(`[LRUCache] 设置类型TTL: ${type}=${ttl}ms`)
   }
 
   /**
@@ -114,7 +115,7 @@ class LRUCache<T = any> {
    */
   setTTLConfig(config: TTLConfig) {
     this.ttlConfig = { ...this.ttlConfig, ...config }
-    console.log(`[LRUCache] 已更新TTL配置，共${Object.keys(this.ttlConfig).length}种类型`)
+    debugLog(`[LRUCache] 已更新TTL配置，共${Object.keys(this.ttlConfig).length}种类型`)
   }
 
   /**
@@ -648,7 +649,7 @@ class LRUCache<T = any> {
     const total = this.preloadQueue.length
     let loaded = 0
 
-    console.log(`[LRUCache] 🚀 开始预热 ${total} 个条目`)
+    debugLog(`[LRUCache] 🚀 开始预热 ${total} 个条目`)
 
     // 分批加载
     const batches = []
@@ -675,7 +676,7 @@ class LRUCache<T = any> {
 
     this.preloadQueue = []
     this.isPreloading = false
-    console.log(`[LRUCache] ✅ 预热完成: ${loaded}/${total}`)
+    debugLog(`[LRUCache] ✅ 预热完成: ${loaded}/${total}`)
   }
 
   /**
@@ -962,7 +963,7 @@ class CacheManager {
    * 执行所有预热任务
    */
   async preloadAll(concurrency: number = 2): Promise<void> {
-    console.log('[CacheManager] 🚀 开始缓存预热...')
+    debugLog('[CacheManager] 🚀 开始缓存预热...')
 
     const tasks = Array.from(this.preloadTasks.entries())
     const batches = []
@@ -975,7 +976,7 @@ class CacheManager {
       await Promise.all(
         batch.map(async ([name, task]) => {
           try {
-            console.log(`[CacheManager] 预热: ${name}`)
+            debugLog(`[CacheManager] 预热: ${name}`)
             await task()
           } catch (error) {
             console.error(`[CacheManager] 预热失败: ${name}`, error)
@@ -984,7 +985,7 @@ class CacheManager {
       )
     }
 
-    console.log('[CacheManager] ✅ 缓存预热完成')
+    debugLog('[CacheManager] ✅ 缓存预热完成')
   }
 
   /**
@@ -1006,7 +1007,7 @@ class CacheManager {
    */
   clearAll(): void {
     this.caches.forEach((cache) => cache.clear())
-    console.log('[CacheManager] 🧹 所有缓存已清空')
+    debugLog('[CacheManager] 🧹 所有缓存已清空')
   }
 
   /**
@@ -1146,5 +1147,5 @@ if (typeof window !== 'undefined') {
     quote: quoteCache,
     manager: cacheManager,
   }
-  console.log('[LRUCache] ✅ 缓存管理器已初始化')
+  debugLog('[LRUCache] ✅ 缓存管理器已初始化')
 }

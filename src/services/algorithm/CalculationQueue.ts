@@ -1,3 +1,4 @@
+import { debugLog } from '@/utils/logger'
 // src/services/Algorithm/CalculationQueue.ts
 // 通用计算队列 - 可被任何模块使用
 
@@ -69,7 +70,7 @@ export class CalculationQueue {
    */
   async runMaintenance(): Promise<void> {
     if (this.destroyed) return
-    console.log('[CalculationQueue] 执行后台维护')
+    debugLog('[CalculationQueue] 执行后台维护')
 
     // 刷新统计信息
     this.flushStats()
@@ -87,12 +88,12 @@ export class CalculationQueue {
       return () => {}
     }
 
-    console.log('[CalculationQueue] 📊 初始化...')
+    debugLog('[CalculationQueue] 📊 初始化...')
 
     // 启动定时器
     this.startTimers()
 
-    console.log('[CalculationQueue] ✅ 初始化完成')
+    debugLog('[CalculationQueue] ✅ 初始化完成')
     return () => this.destroy()
   }
 
@@ -130,7 +131,7 @@ export class CalculationQueue {
       timestamp: Date.now(),
     })
 
-    console.log('[CalculationQueue] 📊 队列统计:', this.getStatus())
+    debugLog('[CalculationQueue] 📊 队列统计:', this.getStatus())
   }
 
   /**
@@ -210,7 +211,7 @@ export class CalculationQueue {
     }
 
     if (this.inProgress.has(id)) {
-      console.log(`[Queue] 任务 ${id} 已在进行中，跳过`)
+      debugLog(`[Queue] 任务 ${id} 已在进行中，跳过`)
       return Promise.reject(new Error('Task already in progress'))
     }
 
@@ -238,7 +239,7 @@ export class CalculationQueue {
       // 更新模块统计
       this.updateModuleStats(module, 'add')
 
-      console.log(`[Queue] 📥 [${module}] 任务已添加: ${id} (优先级: ${priority})`)
+      debugLog(`[Queue] 📥 [${module}] 任务已添加: ${id} (优先级: ${priority})`)
 
       this.processQueue(priority)
     })
@@ -318,7 +319,7 @@ export class CalculationQueue {
       this.stats.totalCompleted++
       this.updateModuleStats(task.module!, 'complete')
 
-      console.log(`[Queue] ✅ [${task.module}] 任务完成: ${task.id} (${Date.now() - startTime}ms)`)
+      debugLog(`[Queue] ✅ [${task.module}] 任务完成: ${task.id} (${Date.now() - startTime}ms)`)
     } catch (error) {
       if (error.message === 'Task timeout') {
         this.stats.totalTimeout++
@@ -327,7 +328,7 @@ export class CalculationQueue {
 
       if (task.retryCount! < task.maxRetries!) {
         task.retryCount!++
-        console.log(
+        debugLog(
           `[Queue] 🔄 [${task.module}] 任务重试: ${task.id} (${task.retryCount}/${task.maxRetries})`,
         )
 
@@ -407,7 +408,7 @@ export class CalculationQueue {
       totalFailed: 0,
       totalTimeout: 0,
     }
-    console.log('[Queue] 🧹 队列已清空')
+    debugLog('[Queue] 🧹 队列已清空')
   }
 
   private delay(ms: number): Promise<void> {
@@ -420,7 +421,7 @@ export class CalculationQueue {
   destroy(): void {
     if (this.destroyed) return
 
-    console.log('[CalculationQueue] 💥 开始销毁...')
+    debugLog('[CalculationQueue] 💥 开始销毁...')
     this.destroyed = true
 
     // 1. 停止所有定时器
@@ -429,7 +430,7 @@ export class CalculationQueue {
     // 2. 清空队列（拒绝所有等待中的任务）
     this.clear()
 
-    console.log('[CalculationQueue] ✅ 已销毁')
+    debugLog('[CalculationQueue] ✅ 已销毁')
   }
 }
 

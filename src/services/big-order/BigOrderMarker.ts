@@ -1,3 +1,4 @@
+import { debugLog } from '@/utils/logger'
 // src/services/big-order/BigOrderMarker.ts
 import type { BigOrderItem } from '@/types/big-order'
 import { MARKER_THRESHOLDS, TIME_WINDOWS } from '@/config/constants'
@@ -286,7 +287,7 @@ export class BigOrderMarker {
     }
 
     if (result.length > 0) {
-      console.log(`[BigOrderMarker] 检测到 ${result.length} 个密集大单窗口`)
+      debugLog(`[BigOrderMarker] 检测到 ${result.length} 个密集大单窗口`)
     }
 
     return result

@@ -253,6 +253,7 @@
 </template>
 
 <script setup lang="ts">
+import { debugLog } from '@/utils/logger'
 import { ref, computed, onMounted } from 'vue'
 import { dataLayer } from '../../services/DataLayer'
 import { usePanel } from '../../composables/usePanel'
@@ -409,7 +410,7 @@ function close() {
 }
 
 function showSectorDetail(sectorName: string, event?: MouseEvent) {
-  console.log('[SectorPanel] showSectorDetail:', sectorName, 'viewMode:', viewMode.value)
+  debugLog('[SectorPanel] showSectorDetail:', sectorName, 'viewMode:', viewMode.value)
 
   if (viewMode.value === 'tree') {
     selectedSectorName.value = sectorName
@@ -521,7 +522,7 @@ onMounted(() => {
     setTimeout(() => {
       // 修复：移除未定义的 sectorAnalyzer
       // 如果有预加载功能，应该通过 dataLayer 实现
-      console.log('[SectorPanel] 可以在这里实现预加载逻辑')
+      debugLog('[SectorPanel] 可以在这里实现预加载逻辑')
     }, 2000)
   }
 })

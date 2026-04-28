@@ -1,3 +1,4 @@
+import { debugLog } from '@/utils/logger'
 // src/services/Algorithm/AlgorithmHealthChecker.ts
 // 健康检查模块
 
@@ -35,7 +36,7 @@ export class AlgorithmHealthChecker {
     if (this.checkTimer) return
 
     this.autoRepair = autoRepair
-    console.log('[AlgorithmHealth] 🏥 启动健康检查...')
+    debugLog('[AlgorithmHealth] 🏥 启动健康检查...')
 
     // 立即执行一次
     this.check()
@@ -60,7 +61,7 @@ export class AlgorithmHealthChecker {
    * ✅ 新增：供 AlgorithmManager 调用的维护方法
    */
   async runMaintenance(): Promise<void> {
-    console.log('[AlgorithmHealth] 执行后台维护')
+    debugLog('[AlgorithmHealth] 执行后台维护')
     await this.check()
   }
 
@@ -203,7 +204,7 @@ export class AlgorithmHealthChecker {
    * 尝试修复问题
    */
   private async repair(result: HealthCheckResult): Promise<void> {
-    console.log('[AlgorithmHealth] 🔧 尝试自动修复...')
+    debugLog('[AlgorithmHealth] 🔧 尝试自动修复...')
 
     // 使用一致性管理器修复
     const repairResult = await this.repairService.repair({
@@ -213,7 +214,7 @@ export class AlgorithmHealthChecker {
     })
 
     if (repairResult.success) {
-      console.log(`[AlgorithmHealth] ✅ 修复成功: ${repairResult.fixedCount}个问题`)
+      debugLog(`[AlgorithmHealth] ✅ 修复成功: ${repairResult.fixedCount}个问题`)
 
       // 使缓存失效
       this.algorithmManager.invalidateCache()
@@ -227,7 +228,7 @@ export class AlgorithmHealthChecker {
    */
   private logHealthCheck(result: HealthCheckResult): void {
     if (result.valid) {
-      console.log('[AlgorithmHealth] ✅ 健康检查通过')
+      debugLog('[AlgorithmHealth] ✅ 健康检查通过')
       return
     }
 
@@ -248,9 +249,9 @@ export class AlgorithmHealthChecker {
     }
 
     if (result.suggestions.length > 0) {
-      console.log('   └─ 建议:')
+      debugLog('   └─ 建议:')
       result.suggestions.slice(0, 3).forEach((suggestion) => {
-        console.log(`      └─ ${suggestion}`)
+        debugLog(`      └─ ${suggestion}`)
       })
     }
   }
@@ -274,7 +275,7 @@ export class AlgorithmHealthChecker {
    */
   setAutoRepair(enabled: boolean): void {
     this.autoRepair = enabled
-    console.log(`[AlgorithmHealth] 🔧 自动修复已${enabled ? '开启' : '关闭'}`)
+    debugLog(`[AlgorithmHealth] 🔧 自动修复已${enabled ? '开启' : '关闭'}`)
   }
 
 }

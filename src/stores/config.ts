@@ -1,3 +1,4 @@
+import { debugLog } from '@/utils/logger'
 // src/stores/config.ts
 
 import { defineStore } from 'pinia'
@@ -120,7 +121,7 @@ export const useConfigStore = defineStore('config', () => {
       migrateOldConfig()
 
       loaded.value = true
-      console.log('[ConfigStore] 📋 配置加载完成', config.value)
+      debugLog('[ConfigStore] 📋 配置加载完成', config.value)
     } catch (error) {
       ErrorHandler.handle(error, 'ConfigStore.loadConfig')
     }
@@ -161,7 +162,7 @@ export const useConfigStore = defineStore('config', () => {
       localStorage.setItem('refresh_strategy', config.value.user.refreshStrategy)
       localStorage.setItem('algorithm', config.value.algorithm.current)
 
-      console.log('[ConfigStore] 💾 配置已保存')
+      debugLog('[ConfigStore] 💾 配置已保存')
     } catch (error) {
       ErrorHandler.handle(error, 'ConfigStore.saveConfig')
     }

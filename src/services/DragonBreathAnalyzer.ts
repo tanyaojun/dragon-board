@@ -1,3 +1,4 @@
+import { debugLog } from '@/utils/logger'
 // src/services/DragonBreathAnalyzer.ts
 // 优化版 - 从 emotion.ts 读取情绪阶段配置
 
@@ -112,7 +113,7 @@ export class DragonBreathAnalyzer {
     }
     if (this.state.initialized) return true
 
-    console.log('[DragonBreathAnalyzer] 📊 初始化龙息分析器...')
+    debugLog('[DragonBreathAnalyzer] 📊 初始化龙息分析器...')
 
     // 设置必要的监听器
     this.setupEssentialListeners()
@@ -125,7 +126,7 @@ export class DragonBreathAnalyzer {
 
     this.state.initialized = true
 
-    console.log('[DragonBreathAnalyzer] ✅ 初始化完成')
+    debugLog('[DragonBreathAnalyzer] ✅ 初始化完成')
 
     return true
   }
@@ -424,7 +425,7 @@ export class DragonBreathAnalyzer {
    */
   private async fetchLimitData(date: string = ''): Promise<LimitData | null> {
     try {
-      console.log(`[fetchLimitData] 获取涨停数据，日期: ${date || '今日'}`)
+      debugLog(`[fetchLimitData] 获取涨停数据，日期: ${date || '今日'}`)
 
       const params = [{
         ReqId: "201054",
@@ -468,7 +469,7 @@ export class DragonBreathAnalyzer {
     yesterdayFengban: number | null
   }> {
     try {
-      console.log('[fetchYesterdayInfo] 获取昨日信息...')
+      debugLog('[fetchYesterdayInfo] 获取昨日信息...')
 
       const result = await this.request('CWServ.cfg_fx_dxqx_jyr', { Params: [] })
 
@@ -481,18 +482,18 @@ export class DragonBreathAnalyzer {
 
         if (rs0.Content && rs0.Content[0]) {
           let dateStr = rs0.Content[0][0]
-          console.log('[fetchYesterdayInfo] 原始日期:', dateStr)
+          debugLog('[fetchYesterdayInfo] 原始日期:', dateStr)
 
           if (dateStr && dateStr.includes('-')) {
             dateStr = dateStr.split(' ')[0].replace(/-/g, '')
           }
           yesterdayDate = dateStr
-          console.log('[fetchYesterdayInfo] 格式化日期:', yesterdayDate)
+          debugLog('[fetchYesterdayInfo] 格式化日期:', yesterdayDate)
         }
 
         if (rs1.Content && rs1.Content[0]) {
           yesterdayFengban = parseFloat(rs1.Content[0][2]) || null
-          console.log('[fetchYesterdayInfo] 昨日封板率:', yesterdayFengban)
+          debugLog('[fetchYesterdayInfo] 昨日封板率:', yesterdayFengban)
         }
 
         return { yesterdayDate, yesterdayFengban }
@@ -547,14 +548,14 @@ export class DragonBreathAnalyzer {
    */
   private async fetchEmotionData(): Promise<{ value: number; status: string }> {
     try {
-      console.log('[fetchEmotionData] 获取情绪数据...')
+      debugLog('[fetchEmotionData] 获取情绪数据...')
 
       const today = new Date()
       const dateStr = today.getFullYear() +
         String(today.getMonth() + 1).padStart(2, '0') +
         String(today.getDate()).padStart(2, '0')
 
-      console.log('[fetchEmotionData] 请求日期:', dateStr)
+      debugLog('[fetchEmotionData] 请求日期:', dateStr)
 
       const params = [{
         ReqId: "200200",
@@ -573,11 +574,11 @@ export class DragonBreathAnalyzer {
       // 直接解析 ResultSets（和HTML页面一样）
       if (result?.ResultSets && result.ResultSets.length > 1) {
         const rows = result.ResultSets[1].Content || []
-        console.log(`[fetchEmotionData] 获取到 ${rows.length} 行数据`)
+        debugLog(`[fetchEmotionData] 获取到 ${rows.length} 行数据`)
 
         if (rows.length > 0) {
           const latest = rows[rows.length - 1]
-          console.log('[fetchEmotionData] 最新数据行:', latest)
+          debugLog('[fetchEmotionData] 最新数据行:', latest)
 
           // 解析字段（数组索引）
           const date = latest[0]  // 日期
@@ -609,14 +610,14 @@ export class DragonBreathAnalyzer {
           return { value: qxVal, status }
         }
       } else {
-        console.log('[fetchEmotionData] 数据结构错误:', result)
+        debugLog('[fetchEmotionData] 数据结构错误:', result)
       }
     } catch (error) {
       console.error('[fetchEmotionData] 请求失败:', error)
     }
 
     // 降级方案
-    console.log('[fetchEmotionData] 使用降级数据')
+    debugLog('[fetchEmotionData] 使用降级数据')
     return { value: 0, status: '震荡' }
   }
 
@@ -669,7 +670,7 @@ export class DragonBreathAnalyzer {
       const lastTradeDate = await this.getLastTradeDate()
 
       if (!lastTradeDate) {
-        console.log('[DragonBreathAnalyzer] 无历史交易日数据，跳过')
+        debugLog('[DragonBreathAnalyzer] 无历史交易日数据，跳过')
         this.setDefaultStats()
         return
       }
@@ -688,7 +689,7 @@ export class DragonBreathAnalyzer {
       )
 
       if (!yesterdayStocks.length) {
-        console.log(`[DragonBreathAnalyzer] ${lastTradeDate} 无涨停数据，跳过`)
+        debugLog(`[DragonBreathAnalyzer] ${lastTradeDate} 无涨停数据，跳过`)
         this.setDefaultStats()
         return
       }
@@ -722,7 +723,7 @@ export class DragonBreathAnalyzer {
       const stats = this.calculateStatsOnly(yesterdayStocks, quoteMap)
       this.state.marketData.yesterdayLimitStats = stats
 
-      console.log('[DragonBreathAnalyzer] 昨日涨停表现:', {
+      debugLog('[DragonBreathAnalyzer] 昨日涨停表现:', {
         日期: lastTradeDate,
         总数: stats.total,
         平均涨幅: stats.avgChange + '%',
@@ -802,7 +803,7 @@ export class DragonBreathAnalyzer {
 
       // 1. 先获取昨日信息（需要日期）
       const yesterdayInfo = await this.fetchYesterdayInfo()
-      console.log('[fetchAllData] 昨日信息:', yesterdayInfo)
+      debugLog('[fetchAllData] 昨日信息:', yesterdayInfo)
 
       // 2. 并行获取其他不依赖的数据
       const [marketResult, todayLimitResult, zhabanResult, emotionResult] =
@@ -842,7 +843,7 @@ export class DragonBreathAnalyzer {
       // 处理昨日涨停数据
       if (yesterdayLimit) {
         this.state.marketData.yesterdayLimit = yesterdayLimit
-        console.log('[fetchAllData] 昨日涨停数据已设置:', yesterdayLimit)
+        debugLog('[fetchAllData] 昨日涨停数据已设置:', yesterdayLimit)
 
         // 计算晋级率（如果今日和昨日数据都有）
         if (todayLimitResult.status === 'fulfilled' && todayLimitResult.value) {
@@ -901,7 +902,7 @@ export class DragonBreathAnalyzer {
    */
   private async saveToDataLayer(): Promise<void> {
     try {
-      console.log('[saveToDataLayer] 开始保存数据到 dataLayer...')
+      debugLog('[saveToDataLayer] 开始保存数据到 dataLayer...')
 
       // 构建因子数据
       const factors = this.buildFactorData()
@@ -969,16 +970,16 @@ export class DragonBreathAnalyzer {
         factors,
       }
 
-      console.log('[saveToDataLayer] 准备保存的数据:')
-      console.log('  大票:', breathData.marketData.largeCapChange)
-      console.log('  微盘:', breathData.marketData.microCapChange)
-      console.log('  晋级率:', breathData.marketData.passRate)
-      console.log('  上证:', breathData.marketData.indices?.sh?.change)
+      debugLog('[saveToDataLayer] 准备保存的数据:')
+      debugLog('  大票:', breathData.marketData.largeCapChange)
+      debugLog('  微盘:', breathData.marketData.microCapChange)
+      debugLog('  晋级率:', breathData.marketData.passRate)
+      debugLog('  上证:', breathData.marketData.indices?.sh?.change)
 
       // 存入 dataLayer
       if (typeof dataLayer !== 'undefined') {
         dataLayer.updateBreathData(breathData)
-        console.log('[saveToDataLayer] ✅ 数据已保存到 dataLayer')
+        debugLog('[saveToDataLayer] ✅ 数据已保存到 dataLayer')
       } else {
         console.warn('[saveToDataLayer] dataLayer 未定义')
       }
@@ -1014,7 +1015,7 @@ private buildFactorData(): any[] {
       },
     )
 
-    console.log(`[buildFactorData] 构建了 ${factors.length} 个因子`)
+    debugLog(`[buildFactorData] 构建了 ${factors.length} 个因子`)
     return factors
 
   } catch (error) {
@@ -1257,7 +1258,7 @@ private buildFactorData(): any[] {
       this.recordHistory()
       this.lastAnalysisTime = Date.now()
 
-      console.log('[analyzeMarketBreath] ✅ 分析完成，情绪分数:', calculatedScore)
+      debugLog('[analyzeMarketBreath] ✅ 分析完成，情绪分数:', calculatedScore)
       return true
 
     } catch (error) {

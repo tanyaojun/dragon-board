@@ -193,6 +193,7 @@
 </template>
 
 <script setup lang="ts">
+import { debugLog } from '@/utils/logger'
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useBigOrderStore } from '@/stores/bigOrder'
 import { BigOrderColorService } from '@/services/big-order/BigOrderColorService'
@@ -345,7 +346,7 @@ const handleRefresh = async () => {
     updateRenderedChunks()
 
     // 可以显示一个短暂的提示（通过console或者添加一个toast）
-    console.log('[BigOrderTable] 刷新完成，数据已更新')
+    debugLog('[BigOrderTable] 刷新完成，数据已更新')
 
   } catch (error) {
     console.error('[BigOrderTable] 刷新失败:', error)

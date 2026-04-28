@@ -370,6 +370,7 @@
 </template>
 
 <script setup lang="ts">
+import { debugLog } from '@/utils/logger'
 import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { dragonLifecycle, LIFECYCLE_STAGES } from '@/services/DragonLifecycle'
 import { EventManager } from '@/utils/eventManager'
@@ -418,7 +419,7 @@ const waveCanvas = ref<HTMLCanvasElement>()
 const refresh = async () => {
   loading.value = true
   try {
-    console.log('[DragonThronePanel] 刷新数据...')
+    debugLog('[DragonThronePanel] 刷新数据...')
 
     // 1. 获取龙头数据
     activeLeaders.value = dragonLifecycle.getActiveLeaders?.() || []
@@ -453,7 +454,7 @@ const refresh = async () => {
 
     lastUpdate.value = Date.now()
 
-    console.log('[DragonThronePanel] 数据刷新完成', {
+    debugLog('[DragonThronePanel] 数据刷新完成', {
       活跃龙头: activeLeaders.value.length,
       族谱: dragonClans.value.length,
       龙脉: dragonVeins.value.length,
@@ -662,7 +663,7 @@ const refresh = async () => {
   error.value = null
 
   try {
-    console.log('[DragonThronePanel] 刷新数据...')
+    debugLog('[DragonThronePanel] 刷新数据...')
 
     // 1. 获取龙头数据
     activeLeaders.value = dragonLifecycle.getActiveLeaders?.() || []
@@ -697,7 +698,7 @@ const refresh = async () => {
 
     lastUpdate.value = Date.now()
 
-    console.log('[DragonThronePanel] 数据刷新完成', {
+    debugLog('[DragonThronePanel] 数据刷新完成', {
       活跃龙头: activeLeaders.value.length,
       族谱: dragonClans.value.length,
       龙脉: dragonVeins.value.length,

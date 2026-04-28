@@ -1,3 +1,4 @@
+import { debugLog } from '@/utils/logger'
 // src/services/Algorithm/AlgorithmABTestManager.ts
 // AB测试管理模块
 
@@ -65,7 +66,7 @@ export class AlgorithmABTestManager {
     this.results.set(testId, [])
     this.saveTests()
 
-    console.log(`[AlgorithmABTest] 📝 创建测试: ${test.name} (${testId})`)
+    debugLog(`[AlgorithmABTest] 📝 创建测试: ${test.name} (${testId})`)
     return testId
   }
 
@@ -80,10 +81,10 @@ export class AlgorithmABTestManager {
     this.assignmentCache.clear()
     this.saveTests()
 
-    console.log(`[AlgorithmABTest] ▶️ 启动测试: ${test.name}`)
-    console.log(`   ├─ 对照组: ${test.controlAlgorithm}`)
-    console.log(`   ├─ 实验组: ${test.testAlgorithm}`)
-    console.log(`   └─ 流量占比: ${test.traffic}%`)
+    debugLog(`[AlgorithmABTest] ▶️ 启动测试: ${test.name}`)
+    debugLog(`   ├─ 对照组: ${test.controlAlgorithm}`)
+    debugLog(`   ├─ 实验组: ${test.testAlgorithm}`)
+    debugLog(`   └─ 流量占比: ${test.traffic}%`)
 
     EventManager.emit('algorithm:ab-test-started', { ...test })
     return true
@@ -101,7 +102,7 @@ export class AlgorithmABTestManager {
     this.assignmentCache.clear()
     this.saveTests()
 
-    console.log(`[AlgorithmABTest] ⏹️ 停止测试: ${test.name}`)
+    debugLog(`[AlgorithmABTest] ⏹️ 停止测试: ${test.name}`)
     EventManager.emit('algorithm:ab-test-stopped', { ...test })
     return true
   }
@@ -120,7 +121,7 @@ export class AlgorithmABTestManager {
     this.saveTests()
 
     const report = this.getTestReport(testId)
-    console.log(`[AlgorithmABTest] 📊 测试完成: ${test.name}`, report)
+    debugLog(`[AlgorithmABTest] 📊 测试完成: ${test.name}`, report)
 
     EventManager.emit('algorithm:ab-test-completed', { ...test, report })
     return test

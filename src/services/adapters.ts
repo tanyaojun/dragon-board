@@ -1,10 +1,11 @@
+import { debugLog } from '@/utils/logger'
 // src/services/adapters.ts - 优化版
 
 import { apiService } from './apiService'
 import type { PlatformData } from '../types/core'
 
 const logData = (platform: string, data: any) => {
-  console.log(`[${platform}] 原始数据:`, {
+  debugLog(`[${platform}] 原始数据:`, {
     type: typeof data,
     isArray: Array.isArray(data),
     length: data?.length,
@@ -125,7 +126,7 @@ export const Adapters = {
           retries: 2,
           timeout: 8000,
         })
-        console.log('[TDX] 原始数据:', data)
+        debugLog('[TDX] 原始数据:', data)
         return data || []
       } catch (error) {
         console.warn('[TDX] API失败:', error)

@@ -194,6 +194,7 @@
 </template>
 
 <script setup lang="ts">
+import { debugLog } from '@/utils/logger'
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import type { Stock, Board } from '../../types'
@@ -1155,7 +1156,7 @@ onMounted(() => {
     // 14:45 时触发信号刷新
     if (hour === 14 && minute === 45 && !hasTriggeredSignalUpdate) {
       hasTriggeredSignalUpdate = true
-      console.log('[DataTable] 14:45 触发信号刷新')
+      debugLog('[DataTable] 14:45 触发信号刷新')
 
       const stocks = dataLayer.getStocks()
       const rankMap = new Map()

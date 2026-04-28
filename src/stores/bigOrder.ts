@@ -1,3 +1,4 @@
+import { debugLog } from '@/utils/logger'
 // src/stores/bigOrder.ts - 无限滚动版
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
@@ -196,7 +197,7 @@ export const useBigOrderStore = defineStore('bigOrder', () => {
       const cacheKey = `${CACHE_KEYS.ORDERS}:${stockCode}`
       const cached = quoteCache.get(cacheKey) as BigOrderItem[] | null
       if (cached) {
-        console.log(`[BigOrderStore] 使用缓存数据: ${stockCode}, ${cached.length}条`)
+        debugLog(`[BigOrderStore] 使用缓存数据: ${stockCode}, ${cached.length}条`)
         initPagination(cached)
         return rawOrders.value
       }
@@ -204,14 +205,14 @@ export const useBigOrderStore = defineStore('bigOrder', () => {
       // 尝试从 DataLayer 读取
       const layerData = dataLayer.getBigOrders(stockCode)
       if (layerData.length > 0) {
-        console.log(`[BigOrderStore] 使用 DataLayer 数据: ${stockCode}, ${layerData.length}条`)
+        debugLog(`[BigOrderStore] 使用 DataLayer 数据: ${stockCode}, ${layerData.length}条`)
         quoteCache.setWithType(cacheKey, layerData, CACHE_KEYS.ORDERS, [stockCode])
         initPagination(layerData)
         return rawOrders.value
       }
 
       // 从 API 获取
-      console.log(`[BigOrderStore] 从API获取: ${stockCode}`)
+      debugLog(`[BigOrderStore] 从API获取: ${stockCode}`)
       const result = await bigOrderService.fetchAllDay(stockCode)
 
       if (result.allOrders.length) {
@@ -283,7 +284,7 @@ export const useBigOrderStore = defineStore('bigOrder', () => {
         // 清除筛选缓存
         filterCache.clear()
 
-        console.log(`[BigOrderStore] 刷新完成:`, {
+        debugLog(`[BigOrderStore] 刷新完成:`, {
           新增: result.newCount,
           总计: processedOrders.length,
           已加载: loadedCount.value,

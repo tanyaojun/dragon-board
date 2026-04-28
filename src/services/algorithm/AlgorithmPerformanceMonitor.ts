@@ -1,3 +1,4 @@
+import { debugLog } from '@/utils/logger'
 // src/services/Algorithm/AlgorithmPerformanceMonitor.ts
 // 性能监控模块 - 增强版：记录情绪和权重调整
 
@@ -143,7 +144,7 @@ export class AlgorithmPerformanceMonitor {
    */
   start(): void {
     // 不再启动独立定时器
-    console.log('[AlgorithmPerformanceMonitor] 已启动（由RefreshManager调度）')
+    debugLog('[AlgorithmPerformanceMonitor] 已启动（由RefreshManager调度）')
     return
   }
 
@@ -164,7 +165,7 @@ export class AlgorithmPerformanceMonitor {
    */
   async runMaintenance(): Promise<void> {
     if (!this.algorithmManager) return
-    console.log('[AlgorithmPerformanceMonitor] 执行后台维护')
+    debugLog('[AlgorithmPerformanceMonitor] 执行后台维护')
 
     // 更新性能指标
     this.updateMetrics()
@@ -367,7 +368,7 @@ export class AlgorithmPerformanceMonitor {
 
     // 开发环境下输出日志
     if (process.env.NODE_ENV === 'development') {
-      console.log('[AlgorithmPerf] 📊 性能指标:', {
+      debugLog('[AlgorithmPerf] 📊 性能指标:', {
         avgCalcTime: this.metrics.avgCalcTime.toFixed(2) + 'ms',
         p95CalcTime: this.metrics.p95CalcTime.toFixed(2) + 'ms',
         cacheHitRate: this.metrics.cacheHitRate.toFixed(2) + '%',

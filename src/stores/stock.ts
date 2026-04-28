@@ -1,3 +1,4 @@
+import { debugLog } from '@/utils/logger'
 // src/stores/stock.ts
 import { defineStore } from 'pinia'
 import { ref, computed, shallowRef } from 'vue'
@@ -78,7 +79,7 @@ export const useStockStore = defineStore('stock', () => {
     }
 
     const delay = Math.min(3000 * Math.pow(2, retryCount), 30000)
-    console.log(`[StockStore] 计划重试 (${retryCount + 1}/${maxRetries})，${delay}ms后`)
+    debugLog(`[StockStore] 计划重试 (${retryCount + 1}/${maxRetries})，${delay}ms后`)
 
     if (retryTimer) {
       clearTimeout(retryTimer)
@@ -171,7 +172,7 @@ export const useStockStore = defineStore('stock', () => {
     version.value++
 
     if (updatedCount > 0) {
-      console.log(`[StockStore] 📦 批量更新完成: ${updatedCount}只股票`)
+      debugLog(`[StockStore] 📦 批量更新完成: ${updatedCount}只股票`)
     }
   }
 
@@ -230,7 +231,7 @@ export const useStockStore = defineStore('stock', () => {
           version: version.value,
         })
 
-        console.log(`[StockStore] ✅ 加载完成: ${stocks.value.length}只股票`)
+        debugLog(`[StockStore] ✅ 加载完成: ${stocks.value.length}只股票`)
       } else {
         stocks.value = []
         stockMap.clear()
@@ -290,7 +291,7 @@ export const useStockStore = defineStore('stock', () => {
     version.value++
 
     if (updatedCount > 0) {
-      console.log(`[StockStore] 🔄 刷新龙头: ${updatedCount}只`)
+      debugLog(`[StockStore] 🔄 刷新龙头: ${updatedCount}只`)
     }
 
     return updatedCount
@@ -414,14 +415,14 @@ export const useStockStore = defineStore('stock', () => {
 
     // 监听增量刷新请求
     const unsubIncremental = EventManager.on(AppEvents.REFRESH.INCREMENTAL_REQUESTED, () => {
-      console.log('[StockStore] 📥 收到增量刷新请求')
+      debugLog('[StockStore] 📥 收到增量刷新请求')
     })
     listeners.push(unsubIncremental)
 
     // 监听全量刷新完成
     const unsubFullComplete = EventManager.on(AppEvents.REFRESH.COMPLETE, (data: any) => {
       if (data?.type === 'full') {
-        console.log('[StockStore] 📥 全量刷新完成，重新加载数据')
+        debugLog('[StockStore] 📥 全量刷新完成，重新加载数据')
         loadStocks()
       }
     })
@@ -438,7 +439,7 @@ export const useStockStore = defineStore('stock', () => {
 
   // ===== 初始化 =====
   function init() {
-    console.log('[StockStore] 📊 初始化...')
+    debugLog('[StockStore] 📊 初始化...')
 
     // 保存所有取消函数
     const unsubscribeFns: (() => void)[] = []
@@ -449,7 +450,7 @@ export const useStockStore = defineStore('stock', () => {
 
     // 保留 DataLayer 订阅作为后备
     const unsubStocks = dataLayer.subscribe('merged.stocks', () => {
-      console.log('[StockStore] 📥 收到 DataLayer 更新')
+      debugLog('[StockStore] 📥 收到 DataLayer 更新')
       if (retryTimer) {
         clearTimeout(retryTimer)
         retryTimer = null
@@ -461,7 +462,7 @@ export const useStockStore = defineStore('stock', () => {
 
     // 监听数据合并事件
     const unsubMerged = EventManager.on(AppEvents.DATA.MERGED, () => {
-      console.log('[StockStore] 📥 收到数据合并事件')
+      debugLog('[StockStore] 📥 收到数据合并事件')
       loadStocks()
     })
     unsubscribeFns.push(unsubMerged)
@@ -469,11 +470,11 @@ export const useStockStore = defineStore('stock', () => {
     // 立即加载一次
     loadStocks()
 
-    console.log('[StockStore] ✅ 初始化完成')
+    debugLog('[StockStore] ✅ 初始化完成')
 
     // 返回清理函数
     return () => {
-      console.log('[StockStore] 🧹 清理监听器')
+      debugLog('[StockStore] 🧹 清理监听器')
       unsubscribeFns.forEach(fn => fn())
       if (retryTimer) {
         clearTimeout(retryTimer)

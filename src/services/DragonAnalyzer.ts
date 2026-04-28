@@ -1,3 +1,4 @@
+import { debugLog } from '@/utils/logger'
 // src/services/DragonAnalyzer.ts
 
 // @ts-nocheck
@@ -182,23 +183,23 @@ export class DragonAnalyzer {
   // ========== 初始化 ==========
   async init(): Promise<boolean> {
     if (this.destroyed || this.state.initialized) return false
-    console.log('[DragonAnalyzer] 📊 初始化龙头分析器...')
+    debugLog('[DragonAnalyzer] 📊 初始化龙头分析器...')
     this.updateAlgorithm()
     this.state.initialized = true
-    console.log('[DragonAnalyzer] ✅ 初始化完成')
+    debugLog('[DragonAnalyzer] ✅ 初始化完成')
     return true
   }
 
   // ========== 供协调者调用的方法 ==========
   async runFullUpdate(): Promise<void> {
     if (this.destroyed || this.state._recalculating) return
-    console.log('[DragonAnalyzer] 执行全量更新')
+    debugLog('[DragonAnalyzer] 执行全量更新')
     await this.recalculateAll()
   }
 
   async syncData(): Promise<void> {
     if (this.destroyed) return
-    console.log('[DragonAnalyzer] 同步龙头数据到 DataLayer')
+    debugLog('[DragonAnalyzer] 同步龙头数据到 DataLayer')
     const leaders = Array.from(this.state.leaders.values()).map((l) => l.toJSON())
     if (typeof (dataLayer as any).updateLeaderData === 'function') {
       ;(dataLayer as any).updateLeaderData(leaders)
@@ -535,7 +536,7 @@ export class DragonAnalyzer {
     this.detectChanges(oldLeaders, this.state.leaders)
     this.updateStats()
 
-    console.log(`[DragonAnalyzer] 全量更新完成: ${this.state.leaders.size} 个龙头`)
+    debugLog(`[DragonAnalyzer] 全量更新完成: ${this.state.leaders.size} 个龙头`)
     this.state._recalculating = false
     return this.state.leaders.size
   }

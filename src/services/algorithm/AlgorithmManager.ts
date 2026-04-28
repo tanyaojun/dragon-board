@@ -1,3 +1,4 @@
+import { debugLog } from '@/utils/logger'
 // src/services/Algorithm/AlgorithmManager.ts
 // 优化版 - 改为服务模式，供协调者调用
 
@@ -129,7 +130,7 @@ class AlgorithmEventManager {
   flush(): void {
     this.pendingEvents.forEach((data, eventName) => {
       if (process.env.NODE_ENV === 'development') {
-        console.log(`[AlgorithmEvent] 📢 ${eventName} (合并${data.count || 1}次)`)
+        debugLog(`[AlgorithmEvent] 📢 ${eventName} (合并${data.count || 1}次)`)
       }
 
       const eventData = {
@@ -287,7 +288,7 @@ export class AlgorithmManager implements IAlgorithmManager {
    */
   async runFullUpdate(): Promise<void> {
     if (this.destroyed) return
-    console.log('[AlgorithmManager] 执行全量更新')
+    debugLog('[AlgorithmManager] 执行全量更新')
 
     this.invalidateCache()
     this.perfMonitor.flushStats?.()
@@ -300,7 +301,7 @@ export class AlgorithmManager implements IAlgorithmManager {
    */
   async runIncrementalUpdate(codes?: string[]): Promise<void> {
     if (this.destroyed) return
-    console.log('[AlgorithmManager] 执行增量更新')
+    debugLog('[AlgorithmManager] 执行增量更新')
 
     if (codes?.length) {
       this.warmupManager.warmupStocks?.(codes)
@@ -312,7 +313,7 @@ export class AlgorithmManager implements IAlgorithmManager {
    */
   async syncData(): Promise<void> {
     if (this.destroyed) return
-    console.log('[AlgorithmManager] 同步数据')
+    debugLog('[AlgorithmManager] 同步数据')
     // 算法管理器主要是计算，不需要同步数据到 DataLayer
   }
 
@@ -321,7 +322,7 @@ export class AlgorithmManager implements IAlgorithmManager {
    */
   async runMaintenance(): Promise<void> {
     if (this.destroyed) return
-    console.log('[AlgorithmManager] 执行后台维护')
+    debugLog('[AlgorithmManager] 执行后台维护')
 
     this.eventManager.flush()
     stockCache.cleanup?.()
@@ -449,7 +450,7 @@ export class AlgorithmManager implements IAlgorithmManager {
       const saved = localStorage.getItem(this.STORAGE_KEY)
       if (saved) {
         const config = JSON.parse(saved)
-        console.log('[AlgorithmManager] 从 localStorage 加载配置:', config)
+        debugLog('[AlgorithmManager] 从 localStorage 加载配置:', config)
 
         if (config.currentAlgorithm && ALGORITHMS[config.currentAlgorithm]) {
           this.currentAlgorithm = config.currentAlgorithm
@@ -489,7 +490,7 @@ export class AlgorithmManager implements IAlgorithmManager {
         )
       }
 
-      console.log('[AlgorithmManager] 配置已保存:', config)
+      debugLog('[AlgorithmManager] 配置已保存:', config)
     } catch (e) {
       console.error('[AlgorithmManager] 保存配置失败:', e)
     }
@@ -512,7 +513,7 @@ export class AlgorithmManager implements IAlgorithmManager {
     }
 
     this.initPromise = new Promise(async (resolve) => {
-      console.log('[AlgorithmManager] 🧠 算法管理器初始化中...')
+      debugLog('[AlgorithmManager] 🧠 算法管理器初始化中...')
 
       try {
         this.loadFromStorage()
@@ -538,7 +539,7 @@ export class AlgorithmManager implements IAlgorithmManager {
         this.initialized = true
         this.version++
 
-        console.log('[AlgorithmManager] ✅ 初始化完成，当前配置:', this.getStatus())
+        debugLog('[AlgorithmManager] ✅ 初始化完成，当前配置:', this.getStatus())
 
         EventManager.emit('algorithm:initialized', this.getStatus())
         EventManager.emit('algorithm-changed', this.getCurrentAlgorithm())
@@ -630,7 +631,7 @@ export class AlgorithmManager implements IAlgorithmManager {
       if (updatedStocks.length > 0) {
         // 批量更新到 DataLayer
         dataLayer.updateStocks(updatedStocks)
-        console.log(`[AlgorithmManager] 批量更新 ${updatedStocks.length} 只股票的分数到 DataLayer`)
+        debugLog(`[AlgorithmManager] 批量更新 ${updatedStocks.length} 只股票的分数到 DataLayer`)
       }
 
       this.pendingUpdates.clear()
@@ -1003,7 +1004,7 @@ export class AlgorithmManager implements IAlgorithmManager {
       if (saved) {
         const config = JSON.parse(saved)
         this.customWeights = config.customWeights || null
-        console.log(`[AlgorithmManager] 加载算法 ${algorithmId} 的自定义权重:`, this.customWeights)
+        debugLog(`[AlgorithmManager] 加载算法 ${algorithmId} 的自定义权重:`, this.customWeights)
       } else {
         this.customWeights = null
       }
@@ -1131,7 +1132,7 @@ export class AlgorithmManager implements IAlgorithmManager {
       this.updateFactorWeight(factorId, finalWeight)
     })
 
-    console.log('[AlgorithmManager] ✅ 权重归一化完成')
+    debugLog('[AlgorithmManager] ✅ 权重归一化完成')
 
     EventManager.emit('algorithm:weights-normalized', {
       timestamp: Date.now(),
@@ -1234,7 +1235,7 @@ export class AlgorithmManager implements IAlgorithmManager {
   destroy(): void {
     if (this.destroyed) return
 
-    console.log('[AlgorithmManager] 💥 开始销毁...')
+    debugLog('[AlgorithmManager] 💥 开始销毁...')
     this.destroyed = true
     this.initialized = false
 
@@ -1264,7 +1265,7 @@ export class AlgorithmManager implements IAlgorithmManager {
 
     this.initPromise = null
 
-    console.log('[AlgorithmManager] ✅ 已销毁')
+    debugLog('[AlgorithmManager] ✅ 已销毁')
   }
 }
 

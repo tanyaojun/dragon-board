@@ -1,3 +1,4 @@
+import { debugLog } from '@/utils/logger'
 // src/services/AlgorithmConfigManager.ts
 // 重构版：直接使用 FACTORS 和 ALGORITHMS，移除 FactorRegistry 依赖
 
@@ -16,7 +17,7 @@ export class AlgorithmConfigManager {
 
   private constructor() {
     this.loadDefaultAlgorithms()
-    console.log('[AlgorithmConfigManager] 📋 初始化完成')
+    debugLog('[AlgorithmConfigManager] 📋 初始化完成')
   }
 
   static getInstance(): AlgorithmConfigManager {
@@ -33,7 +34,7 @@ export class AlgorithmConfigManager {
     Object.entries(ALGORITHMS).forEach(([id, algo]) => {
       this.algorithms.set(id, algo)
     })
-    console.log(`[AlgorithmConfigManager] 📦 加载默认算法: ${this.algorithms.size}个`)
+    debugLog(`[AlgorithmConfigManager] 📦 加载默认算法: ${this.algorithms.size}个`)
   }
 
   /**
@@ -165,7 +166,7 @@ export class AlgorithmConfigManager {
     }
 
     this.customAlgorithms.set(id, algorithm)
-    console.log(`[AlgorithmConfigManager] ✅ 创建自定义算法: ${name} (${id})`)
+    debugLog(`[AlgorithmConfigManager] ✅ 创建自定义算法: ${name} (${id})`)
     
     return { id, algorithm }
   }
@@ -260,7 +261,7 @@ export class AlgorithmConfigManager {
     
     const deleted = this.customAlgorithms.delete(id)
     if (deleted) {
-      console.log(`[AlgorithmConfigManager] 🗑️ 删除自定义算法: ${id}`)
+      debugLog(`[AlgorithmConfigManager] 🗑️ 删除自定义算法: ${id}`)
     }
     return deleted
   }
@@ -301,7 +302,7 @@ export class AlgorithmConfigManager {
       algorithm.factors = updates.factors
     }
 
-    console.log(`[AlgorithmConfigManager] 📝 更新自定义算法: ${id}`)
+    debugLog(`[AlgorithmConfigManager] 📝 更新自定义算法: ${id}`)
     return true
   }
 
@@ -347,7 +348,7 @@ export class AlgorithmConfigManager {
       })
     }
 
-    console.log(`[AlgorithmConfigManager] 📥 导入完成: ${importedCount}个算法, ${errors.length}个错误`)
+    debugLog(`[AlgorithmConfigManager] 📥 导入完成: ${importedCount}个算法, ${errors.length}个错误`)
     
     return {
       success: errors.length === 0,
@@ -381,7 +382,7 @@ export class AlgorithmConfigManager {
   resetCustomAlgorithms() {
     const count = this.customAlgorithms.size
     this.customAlgorithms.clear()
-    console.log(`[AlgorithmConfigManager] 🔄 重置所有自定义算法: 共 ${count} 个`)
+    debugLog(`[AlgorithmConfigManager] 🔄 重置所有自定义算法: 共 ${count} 个`)
     return count
   }
 }

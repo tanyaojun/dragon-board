@@ -1,3 +1,4 @@
+import { debugLog } from '@/utils/logger'
 // src/services/StockCodeManager.ts
 /**
  * 股票代码管理器 - 龙王号航海图 🗺️
@@ -178,7 +179,7 @@ export class StockCodeManagerService {
 
       // 检查是否过期
       if (Date.now() - data.timestamp > this.CACHE_TTL) {
-        console.log('[StockCodeManager] 缓存已过期')
+        debugLog('[StockCodeManager] 缓存已过期')
         return false
       }
 
@@ -186,7 +187,7 @@ export class StockCodeManagerService {
       this.codeStrings = this.stockCodes.map((s) => s.code)
       this.stockMap = new Map(this.stockCodes.map((s) => [s.code, s]))
 
-      console.log(`[StockCodeManager] ✅ 从缓存加载: ${this.codeStrings.length}只`)
+      debugLog(`[StockCodeManager] ✅ 从缓存加载: ${this.codeStrings.length}只`)
       return true
     } catch (error) {
       console.warn('[StockCodeManager] 缓存加载失败:', error)
@@ -195,7 +196,7 @@ export class StockCodeManagerService {
   }
 
   private async loadFromFile(): Promise<boolean> {
-    console.log('[StockCodeManager] 📥 从文件加载股票代码...')
+    debugLog('[StockCodeManager] 📥 从文件加载股票代码...')
 
     try {
       // 设置一个内部超时
@@ -231,7 +232,7 @@ export class StockCodeManagerService {
       this.lastUpdate = Date.now()
       this.loadingState = 'success'
 
-      console.log(`[StockCodeManager] ✅ 加载成功: ${this.codeStrings.length}只`)
+      debugLog(`[StockCodeManager] ✅ 加载成功: ${this.codeStrings.length}只`)
       return true
     } catch (error) {
       console.error('[StockCodeManager] 加载失败:', error)
@@ -259,7 +260,7 @@ export class StockCodeManagerService {
     this.stockMap = new Map(this.stockCodes.map((s) => [s.code, s]))
     this.lastUpdate = Date.now()
     this.loadingState = 'success'
-    console.log(`[StockCodeManager] 📦 手动设置数据: ${this.codeStrings.length}只`)
+    debugLog(`[StockCodeManager] 📦 手动设置数据: ${this.codeStrings.length}只`)
   }
 
   /**

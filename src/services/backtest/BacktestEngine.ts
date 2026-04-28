@@ -1,3 +1,4 @@
+import { debugLog } from '@/utils/logger'
 // src/services/backtest/BacktestEngine.ts
 // 回测引擎核心类 - 用于验证RankTrendAnalyzer信号胜率
 
@@ -142,7 +143,7 @@ export class BacktestEngine {
    * 运行回测
    */
   async runBacktest(): Promise<BacktestResult> {
-    console.log('[BacktestEngine] 开始回测...')
+    debugLog('[BacktestEngine] 开始回测...')
 
     // 1. 加载历史快照
     const snapshots = await this.loadHistoricalSnapshots()
@@ -150,20 +151,20 @@ export class BacktestEngine {
       throw new Error('没有找到历史快照数据')
     }
 
-    console.log(`[BacktestEngine] 加载了 ${snapshots.length} 个快照`)
+    debugLog(`[BacktestEngine] 加载了 ${snapshots.length} 个快照`)
 
     // 2. 提取交易信号
     const signals = this.extractSignals(snapshots)
-    console.log(`[BacktestEngine] 提取了 ${signals.length} 个交易信号`)
+    debugLog(`[BacktestEngine] 提取了 ${signals.length} 个交易信号`)
 
     // 3. 模拟交易
     const trades = this.simulateTrading(signals, snapshots)
-    console.log(`[BacktestEngine] 模拟了 ${trades.length} 笔交易`)
+    debugLog(`[BacktestEngine] 模拟了 ${trades.length} 笔交易`)
 
     // 4. 计算绩效
     const result = this.calculatePerformance(trades, signals)
 
-    console.log('[BacktestEngine] 回测完成')
+    debugLog('[BacktestEngine] 回测完成')
     return result
   }
 

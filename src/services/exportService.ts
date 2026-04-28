@@ -1,3 +1,4 @@
+import { debugLog } from '@/utils/logger'
 // src/services/exportService.ts
 // 优化版：添加防抖、错误处理和事件清理
 
@@ -147,7 +148,7 @@ class ExportService {
 
     // 检查是否有相同导出进行中
     if (this.exportQueue.has(key)) {
-      console.log(`[ExportService] 相同导出进行中，等待结果...`)
+      debugLog(`[ExportService] 相同导出进行中，等待结果...`)
       return this.exportQueue.get(key)!
     }
 
@@ -160,7 +161,7 @@ class ExportService {
     // 检查导出频率
     const now = Date.now()
     if (now - this.lastExportTime < this.EXPORT_DEBOUNCE) {
-      console.log(`[ExportService] 导出过于频繁，延迟执行`)
+      debugLog(`[ExportService] 导出过于频繁，延迟执行`)
 
       return new Promise((resolve, reject) => {
         this.exportTimer = setTimeout(async () => {
@@ -206,7 +207,7 @@ class ExportService {
       this.exportQueue.delete(key)
 
       if (retryCount < this.EXPORT_MAX_RETRIES) {
-        console.log(`[ExportService] 导出失败，重试 ${retryCount + 1}/${this.EXPORT_MAX_RETRIES}`)
+        debugLog(`[ExportService] 导出失败，重试 ${retryCount + 1}/${this.EXPORT_MAX_RETRIES}`)
         await this.delay(1000 * (retryCount + 1))
         return this.executeWithRetry(exportFn, retryCount + 1)
       }
@@ -258,7 +259,7 @@ class ExportService {
       }
 
       const duration = Date.now() - startTime
-      console.log(
+      debugLog(
         `[ExportService] ✅ 导出成功: ${filename} (${(blob.size / 1024).toFixed(1)}KB, ${duration}ms)`,
       )
 
@@ -505,7 +506,7 @@ class ExportService {
       this.exportTimer = null
     }
     this.exportQueue.clear()
-    console.log('[ExportService] 已取消所有导出任务')
+    debugLog('[ExportService] 已取消所有导出任务')
   }
 
   /**

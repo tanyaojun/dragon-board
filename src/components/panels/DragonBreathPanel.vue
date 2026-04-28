@@ -458,6 +458,7 @@
 </template>
 
 <script setup lang="ts">
+import { debugLog } from '@/utils/logger'
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { dataLayer } from '@/services/DataLayer'
 import { dragonBreathAnalyzer } from '@/services/DragonBreathAnalyzer'
@@ -963,7 +964,7 @@ const indexItems = computed(() => {
   // 添加大票
   const largeCapChange = marketData.value.largeCapChange
   if (largeCapChange !== undefined && largeCapChange !== null) {
-    console.log('添加大票:', largeCapChange)
+    debugLog('添加大票:', largeCapChange)
     items.push({
       key: 'largeCapChange',
       name: '大票',
@@ -974,7 +975,7 @@ const indexItems = computed(() => {
   // 添加微盘
   const microCapChange = marketData.value.microCapChange
   if (microCapChange !== undefined && microCapChange !== null) {
-    console.log('添加微盘:', microCapChange)
+    debugLog('添加微盘:', microCapChange)
     items.push({
       key: 'microCapChange',
       name: '微盘',
@@ -982,7 +983,7 @@ const indexItems = computed(() => {
     })
   }
 
-  console.log('[DragonBreathPanel] indexItems 结果:', items)
+  debugLog('[DragonBreathPanel] indexItems 结果:', items)
   return items
 })
 
@@ -1002,7 +1003,7 @@ function getIndexName(key: string): string {
 
 // ========== 生命周期 ==========
 onMounted(() => {
-  console.log('[DragonBreathPanel] 挂载')
+  debugLog('[DragonBreathPanel] 挂载')
 
   const unsubBreath = dataLayer.subscribe('analysis.breath', () => { })
   unsubscribeFns.push(unsubBreath)
@@ -1012,7 +1013,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
-  console.log('[DragonBreathPanel] 卸载')
+  debugLog('[DragonBreathPanel] 卸载')
   unsubscribeFns.forEach(fn => fn())
 })
 </script>

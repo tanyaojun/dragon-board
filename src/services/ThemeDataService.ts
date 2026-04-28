@@ -1,3 +1,4 @@
+import { debugLog } from '@/utils/logger'
 // src/services/ThemeDataService.ts
 /**
  * 题材数据服务 - 提供静态基础数据 + API更新能力 + IndexedDB持久化
@@ -85,7 +86,7 @@ class ThemeDataService {
 
       request.onsuccess = () => {
         this.db = request.result
-        console.log('[ThemeDataService] IndexedDB 连接成功')
+        debugLog('[ThemeDataService] IndexedDB 连接成功')
         resolve(this.db)
       }
 
@@ -96,7 +97,7 @@ class ThemeDataService {
           store.createIndex('lastUpdate', 'lastUpdate', { unique: false })
           store.createIndex('savedAt', 'savedAt', { unique: false })
           store.createIndex('version', 'version', { unique: false })
-          console.log('[ThemeDataService] IndexedDB 表创建成功')
+          debugLog('[ThemeDataService] IndexedDB 表创建成功')
         }
       }
     })
@@ -138,7 +139,7 @@ class ThemeDataService {
 
       return new Promise((resolve, reject) => {
         transaction.oncomplete = () => {
-          console.log('[ThemeDataService] ✅ 数据已保存到 IndexedDB:', {
+          debugLog('[ThemeDataService] ✅ 数据已保存到 IndexedDB:', {
             themes: storedData.totalThemes,
             stocks: storedData.totalStocks,
             version: storedData.version,
@@ -169,7 +170,7 @@ class ThemeDataService {
         request.onsuccess = () => {
           const result = request.result as StoredThemeData | undefined
           if (result?.data) {
-            console.log(`[ThemeDataService] 📀 从 IndexedDB 读取数据:`, {
+            debugLog(`[ThemeDataService] 📀 从 IndexedDB 读取数据:`, {
               version: result.data.version,
               lastUpdate: result.data.lastUpdate,
               savedAt: result.savedAt,
@@ -178,7 +179,7 @@ class ThemeDataService {
             })
             resolve(result.data)
           } else {
-            console.log('[ThemeDataService] IndexedDB 无缓存数据')
+            debugLog('[ThemeDataService] IndexedDB 无缓存数据')
             resolve(null)
           }
         }
@@ -198,7 +199,7 @@ class ThemeDataService {
    */
   private async fetchFromAPI(): Promise<ThemeMappingData | null> {
     try {
-      console.log('[ThemeDataService] 🌐 从 API 获取题材数据...')
+      debugLog('[ThemeDataService] 🌐 从 API 获取题材数据...')
 
       let allThemeIds: string[] = []
 
@@ -292,7 +293,7 @@ class ThemeDataService {
       }
 
       const allThemes = Array.from(themesMap.values())
-      console.log(
+      debugLog(
         `[ThemeDataService] ✅ API 获取完成: 有效题材=${validCount}, 最终=${allThemes.length}`,
       )
 
@@ -331,7 +332,7 @@ class ThemeDataService {
       const response = await fetch('/data/theme_base_mapping.json')
       if (!response.ok) return null
       const data = await response.json()
-      console.log(`[ThemeDataService] 📁 从本地文件加载: ${data.themes?.length || 0}个题材`)
+      debugLog(`[ThemeDataService] 📁 从本地文件加载: ${data.themes?.length || 0}个题材`)
       return data
     } catch (error) {
       console.warn('[ThemeDataService] 本地文件加载失败:', error)
@@ -349,7 +350,7 @@ class ThemeDataService {
         name: item.Name,
         zsCode: item.ZSCode || '',
       }))
-      console.log(`[ThemeDataService] 📋 从 KPL_THEME_DATA 加载: ${this.kplThemes.length}个题材`)
+      debugLog(`[ThemeDataService] 📋 从 KPL_THEME_DATA 加载: ${this.kplThemes.length}个题材`)
     }
   }
 
@@ -414,7 +415,7 @@ class ThemeDataService {
     })
 
     this.lastUpdateTime = mappingData.lastUpdate
-    console.log(`[ThemeDataService] 构建映射完成: ${uniqueThemes.size} 个唯一题材`)
+    debugLog(`[ThemeDataService] 构建映射完成: ${uniqueThemes.size} 个唯一题材`)
   }
 
   /**
@@ -465,7 +466,7 @@ class ThemeDataService {
 
   private async _load(): Promise<boolean> {
     try {
-      console.log('[ThemeDataService] 开始加载题材映射...')
+      debugLog('[ThemeDataService] 开始加载题材映射...')
 
       // 加载 KPL 题材列表
       this.loadKPLThemes()
@@ -474,26 +475,26 @@ class ThemeDataService {
       let mappingData = await this.loadFromIndexedDB()
 
       if (mappingData) {
-        console.log(`[ThemeDataService] 📀 从 IndexedDB 加载: ${mappingData.themes.length}个题材`)
+        debugLog(`[ThemeDataService] 📀 从 IndexedDB 加载: ${mappingData.themes.length}个题材`)
         this.buildMapping(mappingData)
         this.syncToDataLayer()
         this.loaded = true
 
-        console.log('[ThemeDataService] 数据加载完成，定时任务将每2小时检查一次更新')
+        debugLog('[ThemeDataService] 数据加载完成，定时任务将每2小时检查一次更新')
       } else {
         // 2. IndexedDB 没有数据，从本地文件加载（首次加载）
         const localData = await this.fetchFromLocal()
         if (localData) {
-          console.log(`[ThemeDataService] 📁 从本地文件加载: ${localData.themes.length}个题材`)
+          debugLog(`[ThemeDataService] 📁 从本地文件加载: ${localData.themes.length}个题材`)
           this.buildMapping(localData)
           this.syncToDataLayer()
           this.loaded = true
 
           // 首次加载后，从 API 获取最新数据（异步，不阻塞）
-          console.log('[ThemeDataService] 首次加载完成，正在后台同步最新数据...')
+          debugLog('[ThemeDataService] 首次加载完成，正在后台同步最新数据...')
           this.checkAndUpdateFromAPI().then((updated) => {
             if (updated) {
-              console.log('[ThemeDataService] 首次同步完成')
+              debugLog('[ThemeDataService] 首次同步完成')
             }
           })
         } else {
@@ -522,12 +523,12 @@ class ThemeDataService {
         const hoursSinceUpdate = (now - lastUpdateTime) / (60 * 60 * 1000)
 
         if (now - lastUpdateTime < twoHours) {
-          console.log(
+          debugLog(
             `[ThemeDataService] 数据新鲜 (${hoursSinceUpdate.toFixed(1)}小时前)，跳过更新`,
           )
           return false
         } else {
-          console.log(
+          debugLog(
             `[ThemeDataService] 数据已过时 (${hoursSinceUpdate.toFixed(1)}小时前)，开始更新...`,
           )
         }
@@ -542,18 +543,18 @@ class ThemeDataService {
         apiData.lastUpdate > this.lastUpdateTime
 
       if (needUpdate) {
-        console.log('[ThemeDataService] 🔄 检测到新数据，更新中...')
-        console.log(`  旧数据: ${this.themes.size}个题材, 更新于 ${this.lastUpdateTime || '无'}`)
-        console.log(`  新数据: ${apiData.themes.length}个题材, 更新于 ${apiData.lastUpdate}`)
+        debugLog('[ThemeDataService] 🔄 检测到新数据，更新中...')
+        debugLog(`  旧数据: ${this.themes.size}个题材, 更新于 ${this.lastUpdateTime || '无'}`)
+        debugLog(`  新数据: ${apiData.themes.length}个题材, 更新于 ${apiData.lastUpdate}`)
 
         this.buildMapping(apiData)
         await this.saveToIndexedDB(apiData)
         this.syncToDataLayer()
-        console.log(`[ThemeDataService] ✅ 更新完成`)
+        debugLog(`[ThemeDataService] ✅ 更新完成`)
         return true
       }
 
-      console.log('[ThemeDataService] 数据无变化，跳过更新')
+      debugLog('[ThemeDataService] 数据无变化，跳过更新')
       return false
     } catch (error) {
       console.warn('[ThemeDataService] 后台更新失败:', error)
@@ -567,9 +568,9 @@ class ThemeDataService {
   startAutoUpdate(): void {
     if (this.updateTimer) return
 
-    console.log('[ThemeDataService] 🚀 启动定时更新 (间隔: 2小时)')
+    debugLog('[ThemeDataService] 🚀 启动定时更新 (间隔: 2小时)')
     this.updateTimer = setInterval(() => {
-      console.log('[ThemeDataService] 定时任务触发，检查更新...')
+      debugLog('[ThemeDataService] 定时任务触发，检查更新...')
       this.checkAndUpdateFromAPI()
     }, this.UPDATE_INTERVAL)
   }
@@ -581,7 +582,7 @@ class ThemeDataService {
     if (this.updateTimer) {
       clearInterval(this.updateTimer)
       this.updateTimer = null
-      console.log('[ThemeDataService] 🛑 停止定时更新')
+      debugLog('[ThemeDataService] 🛑 停止定时更新')
     }
   }
 
@@ -589,7 +590,7 @@ class ThemeDataService {
    * 强制刷新（从 API 获取并保存）
    */
   async forceRefresh(): Promise<boolean> {
-    console.log('[ThemeDataService] 🔄 强制刷新题材映射...')
+    debugLog('[ThemeDataService] 🔄 强制刷新题材映射...')
     const apiData = await this.fetchFromAPI()
     if (apiData) {
       this.buildMapping(apiData)
@@ -729,7 +730,7 @@ class ThemeDataService {
     this.loadingPromise = null
     this.lastUpdateTime = null
     this.kplThemes = []
-    console.log('[ThemeDataService] 🧹 缓存已清除')
+    debugLog('[ThemeDataService] 🧹 缓存已清除')
   }
 
   setData(data: ThemeMappingData): void {

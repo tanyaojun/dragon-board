@@ -1,3 +1,4 @@
+import { debugLog } from '@/utils/logger'
 // src/stores/board.ts
 
 import { defineStore } from 'pinia'
@@ -75,7 +76,7 @@ export const useBoardStore = defineStore('board', () => {
   function init() {
     if (initialized.value) return
 
-    console.log('[BoardStore] 📊 初始化板块...')
+    debugLog('[BoardStore] 📊 初始化板块...')
 
     // 加载数据
     loadFromStorage()
@@ -88,7 +89,7 @@ export const useBoardStore = defineStore('board', () => {
     }
 
     initialized.value = true
-    console.log('[BoardStore] ✅ 初始化完成', {
+    debugLog('[BoardStore] ✅ 初始化完成', {
       boards: boards.value.size,
       groups: groups.value.size,
       stockBoards: stockBoards.value.size,

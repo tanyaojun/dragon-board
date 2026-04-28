@@ -1,3 +1,4 @@
+import { debugLog } from '@/utils/logger'
 // src/services/apiService.ts
 import { API_CONFIG } from '../config/constants'
 // ========== 类型定义 ==========
@@ -350,7 +351,7 @@ export class ApiService {
 
         // 如果是取消请求，不重试
         if (error instanceof Error && error.name === 'AbortError') {
-          console.log(`[ApiService] 请求被取消: ${url}`)
+          debugLog(`[ApiService] 请求被取消: ${url}`)
           break
         }
 
@@ -359,7 +360,7 @@ export class ApiService {
         // 如果还有重试次数，等待后继续
         if (retryCount <= (config.retries ?? 2)) {
           const delay = (config.retryDelay ?? 1000) * Math.pow(2, retryCount - 1)
-          console.log(
+          debugLog(
             `[ApiService] 请求失败，${delay}ms后重试 (${retryCount}/${config.retries ?? 2}): ${url}`,
           )
           await this.delay(delay)

@@ -1,3 +1,4 @@
+import { debugLog } from '@/utils/logger'
 // src/services/Algorithm/ConsistencyManager.ts
 // 通用数据一致性管理器 - 可被任何模块使用
 
@@ -68,12 +69,12 @@ export class ConsistencyManager {
       return () => {}
     }
 
-    console.log('[ConsistencyManager] 📊 初始化...')
+    debugLog('[ConsistencyManager] 📊 初始化...')
 
     // 启动定时器
     this.startTimers()
 
-    console.log('[ConsistencyManager] ✅ 初始化完成')
+    debugLog('[ConsistencyManager] ✅ 初始化完成')
     return () => this.destroy()
   }
 
@@ -90,7 +91,7 @@ export class ConsistencyManager {
    */
   async runMaintenance(): Promise<void> {
     if (this.destroyed) return
-    console.log('[ConsistencyManager] 执行后台维护')
+    debugLog('[ConsistencyManager] 执行后台维护')
 
     // 执行自动修复
     await this.autoRepairAll()
@@ -124,7 +125,7 @@ export class ConsistencyManager {
   private async autoRepairAll(): Promise<void> {
     if (this.destroyed) return
 
-    console.log('[ConsistencyManager] 🔧 开始自动修复所有模块...')
+    debugLog('[ConsistencyManager] 🔧 开始自动修复所有模块...')
 
     // 遍历所有注册的模块，检查并修复
     for (const [module, handler] of this.repairHandlers) {
@@ -159,7 +160,7 @@ export class ConsistencyManager {
     const oneWeekAgo = now - 7 * 24 * 60 * 60 * 1000
 
     this.repairHistory = this.repairHistory.filter((task) => task.timestamp > oneWeekAgo)
-    console.log(`[ConsistencyManager] 🧹 已清理历史记录，剩余 ${this.repairHistory.length} 条`)
+    debugLog(`[ConsistencyManager] 🧹 已清理历史记录，剩余 ${this.repairHistory.length} 条`)
 
     // ✅ 保存到缓存
     this.saveToCache()
@@ -189,7 +190,7 @@ export class ConsistencyManager {
   registerHandler(module: string, handler: RepairHandler): void {
     if (this.destroyed) return
     this.repairHandlers.set(module, handler)
-    console.log(`[ConsistencyManager] 📝 已注册修复处理器: ${module}`)
+    debugLog(`[ConsistencyManager] 📝 已注册修复处理器: ${module}`)
   }
 
   registerRepairServices(services: ConsistencyRepairServices): void {
@@ -216,14 +217,14 @@ export class ConsistencyManager {
           const match = issue.match(/算法 (.*?) 的动态因子 (.*?) 缺少 baseWeight/)
           if (match) {
             const [_, algoId, factorId] = match
-            console.log(`[ConsistencyManager] 需要为 ${algoId}.${factorId} 设置 baseWeight`)
+            debugLog(`[ConsistencyManager] 需要为 ${algoId}.${factorId} 设置 baseWeight`)
             fixedCount++
           }
         } else if (issue.includes('缺少 min/max 范围')) {
           const match = issue.match(/算法 (.*?) 的动态因子 (.*?) 缺少 min\/max 范围/)
           if (match) {
             const [_, algoId, factorId] = match
-            console.log(
+            debugLog(
               `[ConsistencyManager] 需要为 ${algoId}.${factorId} 设置范围 min=0.03, max=0.3`,
             )
             fixedCount++
@@ -257,7 +258,7 @@ export class ConsistencyManager {
           const match = issue.match(/题材 (.*?) 的股票计数不一致/)
           if (match) {
             const themeName = match[1]
-            console.log(`[ConsistencyManager] 题材 ${themeName} 计数不一致，等待下次计算修复`)
+            debugLog(`[ConsistencyManager] 题材 ${themeName} 计数不一致，等待下次计算修复`)
             fixedCount++
           }
         }
@@ -289,7 +290,7 @@ export class ConsistencyManager {
           const match = issue.match(/板块龙头 (.*?) 的题材热度/)
           if (match) {
             const code = match[1]
-            console.log(`[ConsistencyManager] 龙头 ${code} 题材热度偏低，等待下次计算修复`)
+            debugLog(`[ConsistencyManager] 龙头 ${code} 题材热度偏低，等待下次计算修复`)
             fixedCount++
           }
         }
@@ -346,7 +347,7 @@ export class ConsistencyManager {
       }
     }
 
-    console.log(`[ConsistencyManager] 🔧 开始修复 [${options.module}]: ${options.type}`)
+    debugLog(`[ConsistencyManager] 🔧 开始修复 [${options.module}]: ${options.type}`)
 
     const task: RepairTask = {
       module: options.module,
@@ -377,7 +378,7 @@ export class ConsistencyManager {
     try {
       const result = await handler(options.issues)
 
-      console.log(
+      debugLog(
         `[ConsistencyManager] ✅ 修复完成 [${options.module}]: 修复了 ${result.fixedCount} 个问题`,
       )
 
@@ -481,7 +482,7 @@ export class ConsistencyManager {
   destroy(): void {
     if (this.destroyed) return
 
-    console.log('[ConsistencyManager] 💥 开始销毁...')
+    debugLog('[ConsistencyManager] 💥 开始销毁...')
     this.destroyed = true
 
     // 1. 停止所有定时器
@@ -504,7 +505,7 @@ export class ConsistencyManager {
       stockCache.delete(this.CACHE_KEY)
     } catch (e) {}
 
-    console.log('[ConsistencyManager] ✅ 已销毁')
+    debugLog('[ConsistencyManager] ✅ 已销毁')
   }
 }
 

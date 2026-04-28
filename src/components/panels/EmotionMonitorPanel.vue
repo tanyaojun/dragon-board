@@ -734,6 +734,7 @@
 </template>
 
 <script setup lang="ts">
+import { debugLog } from '@/utils/logger'
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { dragonBreathAnalyzer } from '@/services/DragonBreathAnalyzer'
 import { algorithmManager } from '@/services/Algorithm'
@@ -1183,7 +1184,7 @@ const loadPerformanceData = () => {
 
     loadDataChain()
 
-    console.log('[EmotionMonitorPanel] 性能数据加载完成')
+    debugLog('[EmotionMonitorPanel] 性能数据加载完成')
   } catch (e) {
     console.warn('[EmotionMonitorPanel] 加载性能数据失败', e)
   }

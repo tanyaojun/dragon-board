@@ -1,3 +1,4 @@
+import { debugLog } from '@/utils/logger'
 // src/services/dataLoader.ts
 
 import { ref, readonly } from 'vue'
@@ -147,7 +148,7 @@ class DataLoaderService {
   private readonly PLATFORM_REFRESH_INTERVAL = 1800000 // 10分钟
 
   constructor() {
-    console.log('[DataLoader] 初始化完成')
+    debugLog('[DataLoader] 初始化完成')
     this.setupRealtimeFeed()
     this.startQuoteAutoRefresh() // 自动启动行情刷新
   }
@@ -546,7 +547,7 @@ class DataLoaderService {
 
         await this.maybeRefreshPlatformCache()
 
-        console.log('[DataLoader] 行情刷新完成')
+        debugLog('[DataLoader] 行情刷新完成')
       } catch (error) {
         console.error('[DataLoader] 行情刷新失败:', error)
       }
@@ -574,7 +575,7 @@ class DataLoaderService {
       }
 
       if (updates.length) {
-        console.log(`[DataLoader] 更新量比: ${updates.length} 只股票`)
+        debugLog(`[DataLoader] 更新量比: ${updates.length} 只股票`)
         dataLayer.updateStockExtData(updates)
         EventManager.emit(AppEvents.DATA.MERGED, { count: dataLayer.getStocks().length, timestamp: Date.now() })
         useUIStore().updateDataVersion()
@@ -979,7 +980,7 @@ class DataLoaderService {
       await this.mergeData()
 
       const updatedCount = sectorAnalyzer.syncThemesToStocks()
-      if (updatedCount > 0) console.log(`[DataLoader] 刷新后同步题材: ${updatedCount}只股票`)
+      if (updatedCount > 0) debugLog(`[DataLoader] 刷新后同步题材: ${updatedCount}只股票`)
 
       this.updateProgress(100, '完成')
       this.setLoading(false)
@@ -1514,7 +1515,7 @@ class DataLoaderService {
       const codeInfo = stockCodeManager.getStockInfo(code)
       if (codeInfo && codeInfo.name && codeInfo.name !== '未知') {
         stockName = codeInfo.name
-        console.log(`[DataLoader] 从 StockCodeManager 获取名称: ${code} -> ${stockName}`)
+        debugLog(`[DataLoader] 从 StockCodeManager 获取名称: ${code} -> ${stockName}`)
       }
     }
 
@@ -1856,7 +1857,7 @@ class DataLoaderService {
     })
 
     // ✅ 调试：输出统计范围
-    console.log('[DEBUG] 统计范围:', {
+    debugLog('[DEBUG] 统计范围:', {
       zljzb: { min: stats.zljzb.min, max: stats.zljzb.max },
       fundPenetration: { min: stats.fundPenetration.min, max: stats.fundPenetration.max },
       turnover: { min: stats.turnover.min, max: stats.turnover.max },

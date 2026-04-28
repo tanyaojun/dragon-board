@@ -1,3 +1,4 @@
+import { debugLog } from '@/utils/logger'
 // src/services/RefreshManager.ts
 
 import { reactive } from 'vue'
@@ -83,7 +84,7 @@ class RefreshManagerService {
       console.warn('[RefreshManager] 加载配置失败:', e)
     }
 
-    console.log('[RefreshManager] 使用默认配置:', REFRESH_STRATEGY_CONFIGS.balanced)
+    debugLog('[RefreshManager] 使用默认配置:', REFRESH_STRATEGY_CONFIGS.balanced)
     return { ...REFRESH_STRATEGY_CONFIGS.balanced }
   }
 
@@ -93,7 +94,7 @@ class RefreshManagerService {
   private saveToStorage(config: RefreshConfig): void {
     try {
       localStorage.setItem(REFRESH_STORAGE_KEY, JSON.stringify(config))
-      console.log('[RefreshManager] 配置已保存到 localStorage:', config)
+      debugLog('[RefreshManager] 配置已保存到 localStorage:', config)
     } catch (e) {
       console.error('[RefreshManager] 保存配置失败:', e)
     }
@@ -127,7 +128,7 @@ class RefreshManagerService {
       //   this.start()
       // }
 
-      console.log('[RefreshManager] ✅ 初始化完成，当前配置:', this.getStatus())
+      debugLog('[RefreshManager] ✅ 初始化完成，当前配置:', this.getStatus())
       EventManager.emit('refresh:initialized', { config: this.getStatus() })
 
       return true
@@ -149,7 +150,7 @@ class RefreshManagerService {
 
     this.state.isRunning = true
     EventManager.emit('refresh:started', { timestamp: Date.now() })
-    console.log('[RefreshManager] ▶️ 已启动')
+    debugLog('[RefreshManager] ▶️ 已启动')
 
     return true
   }
@@ -161,7 +162,7 @@ class RefreshManagerService {
     this.clearAllTimers()
     this.state.isRunning = false
     EventManager.emit('refresh:stopped', { timestamp: Date.now() })
-    console.log('[RefreshManager] ⏸️ 已停止')
+    debugLog('[RefreshManager] ⏸️ 已停止')
     return true
   }
 
@@ -485,7 +486,7 @@ class RefreshManagerService {
           this.state.incrementalRefreshInterval = this.currentConfig.incrementalRefreshInterval
           this.state.retryOnFailure = this.currentConfig.retryOnFailure
 
-          console.log('[RefreshManager] 检测到 localStorage 变化，配置已同步')
+          debugLog('[RefreshManager] 检测到 localStorage 变化，配置已同步')
         }
       }
       window.addEventListener('storage', storageHandler)
@@ -582,7 +583,7 @@ class RefreshManagerService {
 
     this.clearAllTimers()
 
-    console.log('[RefreshManager] 💥 已销毁')
+    debugLog('[RefreshManager] 💥 已销毁')
   }
 }
 

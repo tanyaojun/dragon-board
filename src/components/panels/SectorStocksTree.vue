@@ -170,6 +170,7 @@
 </template>
 
 <script setup lang="ts">
+import { debugLog } from '@/utils/logger'
 import { ref, computed, onMounted, watch } from 'vue'
 import { dataLayer } from '@/services/DataLayer'
 import { sectorAnalyzer } from '@/services/sectorAnalyzer'
@@ -310,7 +311,7 @@ async function selectSector(sector: any) {
     // 更新到本地数据
     if (stocks && stocks.length > 0) {
       // 可以加个提示
-      console.log(`[SectorStocksTree] ${sector.name} 加载 ${stocks.length} 只股票`)
+      debugLog(`[SectorStocksTree] ${sector.name} 加载 ${stocks.length} 只股票`)
     }
   } catch (error) {
     console.error('加载板块个股失败:', error)
@@ -372,7 +373,7 @@ function openTdx(code: string) {
 }
 
 function openStockDetail(code: string) {
-  console.log('[SectorStocksTree] 双击股票:', code)
+  debugLog('[SectorStocksTree] 双击股票:', code)
   emit('select-stock', code)
 }
 

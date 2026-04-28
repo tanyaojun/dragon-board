@@ -1,3 +1,4 @@
+import { debugLog } from '@/utils/logger'
 // src/services/backtest/RotationBacktest.ts
 
 import { dataLayer } from '@/services/DataLayer'
@@ -96,7 +97,7 @@ export class RotationBacktest {
     this.rotationHistory = await dataLayer.getRotationHistory() || []
     
     this.buildPriceCache()
-    console.log(`[Backtest] 加载完成: ${this.snapshots.length} 个快照, ${this.rotationHistory.length} 个轮动数据`)
+    debugLog(`[Backtest] 加载完成: ${this.snapshots.length} 个快照, ${this.rotationHistory.length} 个轮动数据`)
   }
 
   private buildPriceCache() {

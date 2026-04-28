@@ -172,6 +172,7 @@
 
 
 <script setup lang="ts">
+import { debugLog } from '@/utils/logger'
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useThemeStore } from '@/stores/theme'
 import { useBigOrderStore } from '@/stores/bigOrder'
@@ -257,7 +258,7 @@ const buyMarkerFilter = computed({
 const timeRangeFilter = ref('')
 
 watch(timeRangeFilter, (newVal) => {
-  console.log('[BigOrderPanel] 时段筛选变化:', newVal)
+  debugLog('[BigOrderPanel] 时段筛选变化:', newVal)
 
   if (!newVal) {
     store.setTimeRange(undefined, undefined)
@@ -282,7 +283,7 @@ watch(timeRangeFilter, (newVal) => {
 
 // 切换快速筛选
 const toggleFilter = (type: 'fundMarker' | 'buyMarker', value: string) => {
-  console.log(`[BigOrderPanel] 切换筛选: ${type}=${value}`)
+  debugLog(`[BigOrderPanel] 切换筛选: ${type}=${value}`)
 
   const currentValue = type === 'fundMarker'
     ? fundMarkerFilter.value
@@ -328,7 +329,7 @@ const loadData = async (code: string, name?: string) => {
   if (!code) return
 
   if (dataLoaded.value && store.currentStockCode.value === code) {
-    console.log(`[BigOrderPanel] 股票 ${code} 数据已加载，跳过`)
+    debugLog(`[BigOrderPanel] 股票 ${code} 数据已加载，跳过`)
     return
   }
 
@@ -352,7 +353,7 @@ const handleStockChange = async () => {
 
 // 表格刷新处理
 const handleTableRefresh = () => {
-  console.log('[BigOrderPanel] 表格刷新完成')
+  debugLog('[BigOrderPanel] 表格刷新完成')
 
   // 使用 EventManager 显示 Toast 提示
   EventManager.emit(AppEvents.UI.TOAST, {

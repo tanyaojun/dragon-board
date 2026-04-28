@@ -1,3 +1,4 @@
+import { debugLog } from '@/utils/logger'
 // src/services/sectorAnalyzer.ts
 // 版本: 6.0.0
 
@@ -69,7 +70,7 @@ const Utils = {
   },
 
   log(...args: any[]) {
-    if (CONFIG.DEBUG) console.log('[SectorAnalyzer]', ...args)
+    if (CONFIG.DEBUG) debugLog('[SectorAnalyzer]', ...args)
   },
 
   warn(...args: any[]) {
@@ -444,7 +445,7 @@ function waitForStocksReady(timeout = 10000): Promise<void> {
 // ========== jxbk 数据获取 ==========
 async function fetchJxbkData() {
   try {
-    console.log('[SectorAnalyzer] 开始获取 JXBK 数据...')
+    debugLog('[SectorAnalyzer] 开始获取 JXBK 数据...')
 
     const data = await apiService.getHotBlockList({ st: 20 }, { force: true })
 
@@ -495,8 +496,8 @@ async function fetchJxbkData() {
 
     dataLayer.updateJxbkBlocks(blocks)
 
-    console.log(`[SectorAnalyzer] JXBK 数据加载成功: ${blocks.length} 个板块`)
-    console.log(`[SectorAnalyzer] 名称映射已建立: ${Object.keys(nameToCodeMap).length} 个条目`)
+    debugLog(`[SectorAnalyzer] JXBK 数据加载成功: ${blocks.length} 个板块`)
+    debugLog(`[SectorAnalyzer] 名称映射已建立: ${Object.keys(nameToCodeMap).length} 个条目`)
   } catch (error) {
     console.error('[SectorAnalyzer] 获取 JXBK 数据失败:', error)
     state.jxbkBlocks = []
@@ -853,7 +854,7 @@ function startJxbkTimer() {
       // ✅ jxbk 数据更新后，同步题材到股票
       const updatedCount = syncThemesToStocks()
       if (CONFIG.DEBUG && updatedCount > 0) {
-        console.log(`[SectorAnalyzer] jxbk定时同步题材: ${updatedCount}只股票更新`)
+        debugLog(`[SectorAnalyzer] jxbk定时同步题材: ${updatedCount}只股票更新`)
       }
     },
     10 * 60 * 1000,
@@ -1028,7 +1029,7 @@ export async function updateFullThemeMapping(): Promise<{ success: boolean; mess
 
     const updatedCount = syncThemesToStocks()
     if (updatedCount > 0) {
-      console.log(`[SectorAnalyzer] 全量更新后同步题材: ${updatedCount}只股票更新`)
+      debugLog(`[SectorAnalyzer] 全量更新后同步题材: ${updatedCount}只股票更新`)
     }
 
     return { success: true, message: `${byId.size}个题材, ${byCode.size}只股票` }
@@ -1143,7 +1144,7 @@ export function syncThemesToStocks(): number {
   if (updates.length > 0) {
     if (typeof (dataLayer as any).updateStockThemes === 'function') {
       ;(dataLayer as any).updateStockThemes(updates)
-      console.log(`[SectorAnalyzer] 同步题材: ${updates.length}只股票更新 (静态+实时)`)
+      debugLog(`[SectorAnalyzer] 同步题材: ${updates.length}只股票更新 (静态+实时)`)
     } else {
       console.warn('[sectorAnalyzer] dataLayer.updateStockThemes 方法不存在')
     }

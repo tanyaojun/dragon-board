@@ -1,3 +1,4 @@
+import { debugLog } from '@/utils/logger'
 // src/stores/favorite.ts
 
 import { defineStore } from 'pinia'
@@ -86,7 +87,7 @@ export const useFavoriteStore = defineStore('favorite', () => {
   function init() {
     if (initialized.value) return
 
-    console.log('[FavoriteStore] ⭐ 初始化自选股...')
+    debugLog('[FavoriteStore] ⭐ 初始化自选股...')
 
     // 加载数据
     loadFromStorage()
@@ -98,10 +99,10 @@ export const useFavoriteStore = defineStore('favorite', () => {
 
     initialized.value = true
 
-    console.log('[FavoriteStore] ✅ 初始化完成')
-    console.log(`   ├─ 自选股: ${favorites.value.size}只`)
-    console.log(`   ├─ 板块: ${boards.value.size}个`)
-    console.log(`   └─ 分组: ${groups.value.size}个`)
+    debugLog('[FavoriteStore] ✅ 初始化完成')
+    debugLog(`   ├─ 自选股: ${favorites.value.size}只`)
+    debugLog(`   ├─ 板块: ${boards.value.size}个`)
+    debugLog(`   └─ 分组: ${groups.value.size}个`)
   }
 
   // ========== 存储（修改） ==========

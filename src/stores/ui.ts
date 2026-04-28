@@ -1,3 +1,4 @@
+import { debugLog } from '@/utils/logger'
 // src/stores/ui.ts
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
@@ -231,7 +232,7 @@ export const useUIStore = defineStore('ui', () => {
   }
 
   function init() {
-    console.log('[UIStore] init')
+    debugLog('[UIStore] init')
 
     const unsubMerged = EventManager.on(AppEvents.DATA.MERGED, updateDataVersion)
     const unsubUpdated = EventManager.on(AppEvents.DATA.UPDATED, updateDataVersion)

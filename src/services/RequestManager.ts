@@ -1,3 +1,4 @@
+import { debugLog } from '@/utils/logger'
 // src/services/requestManager.ts
 // 修复版：修正 fetchWithRetry 方法签名
 
@@ -349,7 +350,7 @@ class RequestManager {
       controller.abort()
       this.abortControllers.delete(requestId)
       this.requestKeys.delete(requestId)
-      console.log(`[RequestManager] 已取消请求: ${requestId}`)
+      debugLog(`[RequestManager] 已取消请求: ${requestId}`)
       return true
     }
     return false
@@ -370,7 +371,7 @@ class RequestManager {
     this.abortControllers.forEach((controller) => controller.abort())
     this.abortControllers.clear()
     this.requestKeys.clear()
-    console.log('[RequestManager] 已取消所有请求')
+    debugLog('[RequestManager] 已取消所有请求')
   }
 
   // ===== 按上下文取消 =====
@@ -388,7 +389,7 @@ class RequestManager {
     }
 
     if (count > 0) {
-      console.log(`[RequestManager] 已取消 ${count} 个 ${context} 请求`)
+      debugLog(`[RequestManager] 已取消 ${count} 个 ${context} 请求`)
     }
     return count
   }
@@ -414,7 +415,7 @@ class RequestManager {
 
   clearCache() {
     this.cache.clear()
-    console.log('[RequestManager] 🧹 缓存已清除')
+    debugLog('[RequestManager] 🧹 缓存已清除')
   }
 
   abortAll() {

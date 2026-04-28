@@ -1,3 +1,4 @@
+import { debugLog } from '@/utils/logger'
 import type {
   Depth10Book,
   DepthLevel,
@@ -604,7 +605,7 @@ class RealTimeWebSocketService {
 
     if (WS_STATUS_DEBUG && signature !== this.lastStatusDebugSignature) {
       this.lastStatusDebugSignature = signature
-      console.info('[WebSocket] 状态切换:', {
+      debugLog('[WebSocket] 状态切换:', {
         from: previous,
         to: this.state,
         heartbeatIntervalHintMs: this.heartbeatIntervalHintMs,

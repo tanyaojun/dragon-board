@@ -1,3 +1,4 @@
+import { debugLog } from '@/utils/logger'
 // src/services/Algorithm/AlgorithmStorage.ts
 // 算法配置本地存储服务
 
@@ -25,7 +26,7 @@ class AlgorithmStorage {
         version: this.VERSION,
       }
       localStorage.setItem(this.STORAGE_KEY, JSON.stringify(data))
-      console.log('[AlgorithmStorage] ✅ 配置已保存', data)
+      debugLog('[AlgorithmStorage] ✅ 配置已保存', data)
     } catch (error) {
       console.error('[AlgorithmStorage] ❌ 保存失败:', error)
     }
@@ -40,7 +41,7 @@ class AlgorithmStorage {
       if (!data) return null
 
       const config = JSON.parse(data) as StoredAlgorithmConfig
-      console.log('[AlgorithmStorage] 📦 从本地加载配置', config)
+      debugLog('[AlgorithmStorage] 📦 从本地加载配置', config)
       return config
     } catch (error) {
       console.error('[AlgorithmStorage] ❌ 加载失败:', error)
@@ -83,7 +84,7 @@ class AlgorithmStorage {
    */
   resetToDefault(algorithmId: string): void {
     localStorage.removeItem(this.STORAGE_KEY)
-    console.log('[AlgorithmStorage] 🧹 已重置为默认配置')
+    debugLog('[AlgorithmStorage] 🧹 已重置为默认配置')
   }
 
   /**

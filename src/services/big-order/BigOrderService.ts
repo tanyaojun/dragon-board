@@ -1,3 +1,4 @@
+import { debugLog } from '@/utils/logger'
 // src/services/big-order/BigOrderService.ts
 // 注意：已移除增量刷新相关代码，只保留全量刷新
 
@@ -33,7 +34,7 @@ export class BigOrderService {
   public progress = ref(0)
 
   private constructor() {
-    console.log('[BigOrderService] 初始化完成')
+    debugLog('[BigOrderService] 初始化完成')
 
     // 延迟启动预加载，给 dataLayer 一点时间初始化
     setTimeout(() => {

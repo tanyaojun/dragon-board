@@ -1,3 +1,4 @@
+import { debugLog } from '@/utils/logger'
 // src/utils/eventManager.ts
 // 优化版：支持事件溯源、性能监控、安全初始化
 
@@ -25,7 +26,7 @@ class EventManagerClass {
       // 使用微任务确保其他导入完成
       queueMicrotask(() => {
         this.initialized = true
-        console.log('[EventManager] ✅ 已初始化')
+        debugLog('[EventManager] ✅ 已初始化')
       })
     }
   }

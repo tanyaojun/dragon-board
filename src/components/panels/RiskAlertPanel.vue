@@ -67,6 +67,7 @@
 </template>
 
 <script setup>
+import { debugLog } from '@/utils/logger'
 import { ref, computed, onMounted } from 'vue'
 import { dataLayer } from '@/services/DataLayer'
 
@@ -205,12 +206,12 @@ const adviceText = computed(() => {
 // ========== 快速减仓 ==========
 const quickSell = (code) => {
   // 这里可以接入您的交易系统
-  console.log('快速减仓:', code)
+  debugLog('快速减仓:', code)
   alert(`已为您生成减仓指令：${code}`)
 }
 
 onMounted(() => {
-  console.log('[RiskPanel] 已启动，今晚能睡好觉了')
+  debugLog('[RiskPanel] 已启动，今晚能睡好觉了')
 })
 </script>
 

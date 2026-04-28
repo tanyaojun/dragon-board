@@ -428,6 +428,7 @@
 </template>
 
 <script setup lang="ts">
+import { debugLog } from '@/utils/logger'
 import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import { dataLayer } from '@/services/DataLayer'
 import { themeCorrelationAnalyzer } from '@/services/ThemeCorrelationAnalyzer'
@@ -521,7 +522,7 @@ async function selectTheme(theme: any, forceRefresh = false) {
     lastUpdate.value = Date.now()
 
     if (forceRefresh) {
-      console.log(`[ThemeCorrelationPanel] 强制刷新完成: ${theme.name}`)
+      debugLog(`[ThemeCorrelationPanel] 强制刷新完成: ${theme.name}`)
       showToast(`刷新成功: ${theme.name}`, 'success')
     }
   } catch (error) {
@@ -854,16 +855,16 @@ async function preloadHotThemes() {
   const themes = allThemes.value
   const hotThemes = themes.slice(0, PRELOAD_COUNT)
 
-  console.log(`[ThemeCorrelationPanel] 开始预加载 ${hotThemes.length} 个热门题材...`)
+  debugLog(`[ThemeCorrelationPanel] 开始预加载 ${hotThemes.length} 个热门题材...`)
 
   for (const theme of hotThemes) {
     try {
       const cached = dataLayer.getThemeCorrelation(theme.id)
       if (cached && Date.now() - cached.lastUpdate < 5 * 60 * 1000) {
-        console.log(`[ThemeCorrelationPanel] ${theme.name} 已有缓存，跳过`)
+        debugLog(`[ThemeCorrelationPanel] ${theme.name} 已有缓存，跳过`)
       } else {
         await themeCorrelationAnalyzer.analyzeThemeCorrelation(theme.id, theme.name)
-        console.log(`[ThemeCorrelationPanel] ✅ 预加载完成: ${theme.name}`)
+        debugLog(`[ThemeCorrelationPanel] ✅ 预加载完成: ${theme.name}`)
       }
       preloadedCount.value++
     } catch (error) {
@@ -871,7 +872,7 @@ async function preloadHotThemes() {
     }
   }
 
-  console.log(`[ThemeCorrelationPanel] 🎉 预加载完成，共 ${preloadedCount.value} 个题材`)
+  debugLog(`[ThemeCorrelationPanel] 🎉 预加载完成，共 ${preloadedCount.value} 个题材`)
   preloading.value = false
 }
 

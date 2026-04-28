@@ -1,3 +1,4 @@
+import { debugLog } from '@/utils/logger'
 // src/composables/usePanelData.ts
 import { ref } from 'vue'  // ✅ 必须添加这行
 import { EventManager } from '@/utils/eventManager'
@@ -19,13 +20,13 @@ export function usePanelData(options: {
     error.value = null
 
     try {
-      console.log(`[${options.name}] 加载数据...`)
+      debugLog(`[${options.name}] 加载数据...`)
       const result = await options.fetchData()
 
       data.value = result
       lastUpdate.value = Date.now()
 
-      console.log(`[${options.name}] 加载完成`, result)
+      debugLog(`[${options.name}] 加载完成`, result)
     } catch (err) {
       error.value = err instanceof Error ? err.message : '加载失败'
       console.error(`[${options.name}] 加载失败:`, err)

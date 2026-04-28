@@ -132,6 +132,7 @@
 </template>
 
 <script setup lang="ts">
+import { debugLog } from '@/utils/logger'
 import { ref, computed, onMounted } from 'vue'
 import { FACTORS } from '@/config/factors'
 import { algorithmManager } from '@/services/Algorithm'
@@ -213,7 +214,7 @@ const loadCurrentFactors = () => {
       })
       factorWeights.value = weights
 
-      console.log('[FactorSelector] 加载因子配置成功:', {
+      debugLog('[FactorSelector] 加载因子配置成功:', {
         selected: selectedFactors.value.length,
         weights: Object.keys(weights).length,
       })
