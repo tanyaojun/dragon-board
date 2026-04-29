@@ -18,7 +18,7 @@ export type RankTrendSnapshotType = 'quarter_hour' | 'half_hour' | 'hourly' | 'd
 export type RankTrendIntradaySnapshotType = Extract<RankTrendSnapshotType, 'quarter_hour' | 'half_hour'>
 export type RTConfigPatch = Partial<RankTrendRuntimeDefaults>
 
-export const DEFAULT_RANK_TREND_SNAPSHOT_TYPE: RankTrendSnapshotType = 'quarter_hour'
+export const DEFAULT_RANK_TREND_SNAPSHOT_TYPE: RankTrendSnapshotType = 'half_hour'
 export const RANK_TREND_SNAPSHOT_TYPES: RankTrendSnapshotType[] = [
   'quarter_hour',
   'half_hour',

@@ -111,6 +111,244 @@ refactor: 优化回测引擎结构
 
 正常情况：同步完成后，左下角不会再显示待同步数字。
 
+## VS Code 提交卡住时的命令行救场
+
+这一节只处理“提交没有成功、VS Code GUI 卡住、提交按钮没反应”这类问题。它不处理拉取、合并、冲突、变基、覆盖本地文件。遇到那些问题，先停手找 Codex。
+
+### 第一原则：不要反复点提交或同步
+
+看到 VS Code 一直显示“正在提交更改...”，先不要连续点击。
+
+正确动作：
+
+1. 停止点击提交、同步、拉取。
+2. 打开 VS Code 终端。
+3. 确认终端目录是项目根目录，例如 `D:\dragon-board`。
+4. 先执行只读检查命令。
+
+PowerShell 里可以用：
+
+```powershell
+git status
+```
+
+如果终端不是项目根目录，先进入项目目录：
+
+```powershell
+cd D:\dragon-board
+```
+
+### 先确认是不是提交信息卡住
+
+如果 VS Code 打开了 `.git/COMMIT_EDITMSG`，通常表示 Git 正在等提交信息。
+
+处理方式：
+
+1. 看文件第一行是否有真正的提交标题。
+2. 以 `#` 开头的行都是注释，不算提交信息。
+3. 在第一行写一条提交信息，例如：
+
+```text
+docs: 补充 VS Code Git 提交中断处理
+```
+
+4. 保存 `.git/COMMIT_EDITMSG`。
+5. 关闭这个编辑器标签页。
+6. 等几秒，再看源代码管理面板是否完成提交。
+
+如果文件里只有 `#` 注释，没有提交标题，Git 会把这次提交当成空消息并中断。
+
+### 查看当前 Git 状态
+
+提交卡住后，先用下面命令看真实状态：
+
+```powershell
+git status
+```
+
+常见输出含义：
+
+- `Changes to be committed`：文件已经暂存，下一步可以提交。
+- `Changes not staged for commit`：文件改了，但还没有暂存。
+- `Untracked files`：新增文件还没有纳入本次提交。
+- `nothing to commit, working tree clean`：当前没有可提交内容，可能刚才已经提交成功。
+- `You are in the middle of a merge`：正在合并中，不要自己继续处理，找 Codex。
+- `rebase in progress`：正在变基中，不要自己继续处理，找 Codex。
+
+更短的状态命令：
+
+```powershell
+git status --short
+```
+
+常见标记含义：
+
+- `M`：文件被修改。
+- `A`：新增文件。
+- `D`：删除文件。
+- `??`：Git 还没跟踪的新文件。
+
+如果突然看到大量 `D` 删除，或者出现 `.tmp`、`node_modules`、`dist`，先不要提交。
+
+### 看清楚哪些文件会被提交
+
+提交前先看文件列表，不要盲目 `git add -A`。
+
+查看所有改动的摘要：
+
+```powershell
+git diff --stat
+```
+
+查看已经暂存、将会进入提交的摘要：
+
+```powershell
+git diff --cached --stat
+```
+
+查看已经暂存文件的增删状态：
+
+```powershell
+git diff --cached --name-status
+```
+
+如果 `git diff --cached --stat` 没有输出，说明暂存区为空，还没有文件进入本次提交。
+
+### 用命令行完成提交
+
+只提交单个文件时，优先使用明确路径：
+
+```powershell
+git add docs/vscode-git-sync-guide.md
+git commit -m "docs: 补充 VS Code Git 提交中断处理"
+```
+
+提交多个明确文件时，逐个写路径：
+
+```powershell
+git add src/services/dataLoader.ts
+git add docs/attention-manual.md
+git commit -m "fix: 优化实时行情字段计算"
+```
+
+确认当前所有改动都应该提交时，才使用：
+
+```powershell
+git add -A
+git diff --cached --stat
+git commit -m "fix: 修复实时行情数据合并"
+```
+
+`git add -A` 会把修改、新增、删除全部放进提交。它很方便，但也最容易把垃圾文件或误删文件带进去，所以必须先看 `git status --short` 和 `git diff --stat`。
+
+### 提交后确认是否成功
+
+提交后执行：
+
+```powershell
+git status
+```
+
+如果看到：
+
+```text
+nothing to commit, working tree clean
+```
+
+说明本地工作区已经干净。
+
+再看最近提交：
+
+```powershell
+git log --oneline -5
+```
+
+确认最新一条就是刚才的提交，再去 VS Code 点“同步更改”。
+
+### 如果提示 index.lock
+
+如果命令行提示类似：
+
+```text
+fatal: Unable to create '.git/index.lock': File exists.
+```
+
+通常表示上一次 Git 操作异常中断，留下了锁文件。不要立刻删除它，先确认没有 Git 进程还在运行。
+
+检查 Git 进程：
+
+```powershell
+Get-Process git -ErrorAction SilentlyContinue
+```
+
+如果有输出，先等一会儿，或者关闭 VS Code 的 Git 操作窗口后再检查。
+
+确认没有 Git 进程后，再检查锁文件是否存在：
+
+```powershell
+Test-Path .git/index.lock
+```
+
+只有在确认没有 Git 进程、并且锁文件仍然存在时，才删除锁文件：
+
+```powershell
+Remove-Item .git/index.lock
+```
+
+删除后立刻重新检查：
+
+```powershell
+git status
+```
+
+如果仍然报错，停止操作，把完整输出发给 Codex。
+
+### 提交中断时不要执行这些命令
+
+下面这些命令不能拿来解决“提交卡住”。它们可能覆盖或丢失本地成果：
+
+```powershell
+git pull
+git pull --rebase
+git reset --hard
+git checkout .
+git clean -fd
+git merge --abort
+git rebase --abort
+```
+
+说明：
+
+- `git pull` 是从 GitHub 拉代码，不是修复本地提交卡住。
+- `git reset --hard` 会丢弃本地未提交改动。
+- `git checkout .` 会把文件改动直接还原掉。
+- `git clean -fd` 会删除未跟踪文件。
+- `git merge --abort` 和 `git rebase --abort` 只适合特定状态，不要凭感觉使用。
+
+如果不确定，宁愿只执行 `git status`，不要执行会改变工作区的命令。
+
+### 最安全的救场模板
+
+当 VS Code 提交按钮没反应，但你确认只是要把当前修改提交，可以按这个顺序检查：
+
+```powershell
+cd D:\dragon-board
+git status --short
+git diff --stat
+git diff --cached --stat
+```
+
+如果文件列表正常，再提交：
+
+```powershell
+git add -A
+git diff --cached --stat
+git commit -m "docs: 补充 VS Code Git 提交中断处理"
+git status
+```
+
+如果任何一步出现冲突、覆盖、合并、变基、大量删除、大文件提示，立刻停止。
+
 ## 看到这些提示时不要继续点
 
 ### “无法推送 refs 到远端”

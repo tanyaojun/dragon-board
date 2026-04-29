@@ -127,7 +127,7 @@
         </div>
 
         <template v-else-if="currentStock">
-          <section class="hero-card" :class="[signalClass(currentStock.finalSignal), tierClass(currentStock.tier)]">
+          <section class="hero-card" :class="[signalClass(currentStock.finalSignal), tierClass(currentStock.statusClass)]">
             <div class="hero-left">
               <div class="stock-row">
                 <div>
@@ -142,15 +142,13 @@
 
               <div class="decision-row">
                 <div>
-                  <span class="eyebrow">候选池分层</span>
-                  <h2>{{ tierText(currentStock.tier) }}</h2>
+                  <span class="eyebrow">状态</span>
+                  <h2>{{ currentStock.statusLabel }}</h2>
                 </div>
-                <span class="action-badge">{{ actionText(currentStock.action) }}</span>
               </div>
 
               <div class="tag-row">
                 <span>{{ signalText(currentStock.finalSignal) }}</span>
-                <span>{{ stageText(currentStock.stage) }}</span>
                 <span>{{ regimeText(currentStock.regimeState) }}</span>
               </div>
             </div>
@@ -329,6 +327,7 @@ import * as echarts from 'echarts'
 import { usePanel } from '@/composables/usePanel'
 import { dataLayer } from '@/services/DataLayer'
 import { rankTrendAnalyzer, type RankTrendResult } from '@/services/RankTrendAnalyzer'
+import { getRankTrendDisplayStatus } from '@/services/rankTrend/compat'
 import {
   buildRankTrendSnapshotPriority,
   cloneDefaultRankTrendRuntimeConfig,
@@ -387,6 +386,8 @@ interface PanelStockView {
   sentimentSignal: Signal
   sentimentConfidence: number
   macdCross: string
+  statusLabel: string
+  statusClass: string
   tier: string
   action: string
   stage: string
@@ -439,22 +440,6 @@ const chartRef = ref<HTMLElement | null>(null)
 let chart: echarts.ECharts | null = null
 let resizeHandler: (() => void) | null = null
 const runtimeConfigForm = reactive<RuntimeConfigForm>(createRuntimeConfigForm())
-
-const tierLabels: Record<string, string> = {
-  A_MAIN: '主升确认',
-  B_IGNITION: '新点火',
-  C_CROWDED: '高位拥挤',
-  D_EXIT_RISK: '退潮预警',
-  N_NEUTRAL: '震荡观察',
-}
-
-const actionLabels: Record<string, string> = {
-  focus: '重点跟踪',
-  watch: '观察确认',
-  hold: '持有观察',
-  avoid: '规避追高',
-  exit_watch: '离场观察',
-}
 
 const stageLabels: Record<string, string> = {
   ignition: '点火',
@@ -659,6 +644,7 @@ function buildPanelStockView(stock: any, analysis: RankTrendResult | null, rank:
   const cycle = analysis?.cycle
   const risk = analysis?.risk
   const finalSignal = (analysis?.decision?.final?.signal ?? stock?.finalSignal ?? 'hold') as Signal
+  const status = getRankTrendDisplayStatus(analysis, stock)
 
   return {
     code: normalizeCode(stock?.code),
@@ -687,6 +673,8 @@ function buildPanelStockView(stock: any, analysis: RankTrendResult | null, rank:
     sentimentSignal: finalSignal,
     sentimentConfidence: Number(analysis?.decision?.final?.confidence ?? 0),
     macdCross: String(technical?.macd?.cross ?? stock?.macdCross ?? 'none'),
+    statusLabel: status.label,
+    statusClass: status.classKey,
     tier: String(strategy?.candidateTier ?? 'N_NEUTRAL'),
     action: String(strategy?.action ?? 'hold'),
     stage: String(cycle?.stage ?? ''),
@@ -896,14 +884,6 @@ function signalText(signal?: string): string {
   if (signal === 'sell') return '卖出'
   if (signal === 'none') return '无信号'
   return '持有'
-}
-
-function tierText(tier?: string): string {
-  return tier ? tierLabels[tier] ?? tier : '-'
-}
-
-function actionText(action?: string): string {
-  return action ? actionLabels[action] ?? action : '-'
 }
 
 function stageText(stage?: string): string {
@@ -1255,17 +1235,36 @@ onUnmounted(() => {
   border-left: 4px solid #8f98a8;
 }
 
-.hero-card.tier-A_MAIN,
-.hero-card.tier-B_IGNITION {
+.hero-card.tier-main_confirmed {
   border-left-color: #ff6b6b;
 }
 
-.hero-card.tier-C_CROWDED {
-  border-left-color: #f5b84b;
+.hero-card.tier-ignition_watch {
+  border-left-color: #facc15;
 }
 
-.hero-card.tier-D_EXIT_RISK {
+.hero-card.tier-strong_money {
+  border-left-color: #38bdf8;
+}
+
+.hero-card.tier-new_watch {
+  border-left-color: #2dd4bf;
+}
+
+.hero-card.tier-crowded {
+  border-left-color: #f8fafc;
+}
+
+.hero-card.tier-money_divergence {
+  border-left-color: #c084fc;
+}
+
+.hero-card.tier-weakening {
   border-left-color: #4db6ac;
+}
+
+.hero-card.tier-insufficient {
+  border-left-color: #9ca3af;
 }
 
 .stock-row,

@@ -133,6 +133,13 @@
               </div>
             </template>
 
+            <template v-else-if="col.key === 'strategyStatus'">
+              <div class="strategy-status-cell" @mouseenter="showStatusTooltip($event, stock)"
+                @mousemove="moveStatusTooltip($event)" @mouseleave="hideStatusTooltip">
+                {{ formatRankTrendStatus(stock) }}
+              </div>
+            </template>
+
             <template v-else>
               {{ formatCell(col.key, stock) }}
             </template>
@@ -186,6 +193,10 @@
       :style="{ left: `${confidenceTooltip.x}px`, top: `${confidenceTooltip.y}px` }">
       {{ confidenceTooltip.content }}
     </div>
+    <div v-if="statusTooltip.visible" class="status-tooltip"
+      :style="{ left: `${statusTooltip.x}px`, top: `${statusTooltip.y}px` }">
+      {{ statusTooltip.content }}
+    </div>
     <div v-if="rowTooltip.visible" class="row-tooltip" :style="{ left: `${rowTooltip.x}px`, top: `${rowTooltip.y}px` }">
       {{ rowTooltip.content }}
     </div>
@@ -206,6 +217,7 @@ import { dataLayer } from '../../services/DataLayer'
 import { dataLoader } from '../../services/dataLoader'
 import RankTrendPanel from '../../components/panels/RankTrendPanel.vue'
 import { rankTrendAnalyzer } from '../../services/RankTrendAnalyzer'
+import { getRankTrendDisplayStatus } from '../../services/rankTrend/compat'
 const props = defineProps<{
   loading?: boolean
 }>()
@@ -277,6 +289,12 @@ const rowTooltip = ref({
   y: 0,
   content: '',
 })
+const statusTooltip = ref({
+  visible: false,
+  x: 0,
+  y: 0,
+  content: '',
+})
 
 // 板块列表状态
 const boardList = ref<Board[]>([])
@@ -302,9 +320,7 @@ const columns = [
   { key: 'compRank', label: '综合', group: 'comprehensive', always: true },
   { key: 'rankChange', label: '变化', group: 'comprehensive', always: true },
   { key: 'confidence', label: '置信度', group: 'comprehensive', always: true },
-  { key: 'candidateTier', label: '分层', group: 'comprehensive', always: true },
-  { key: 'cycleStage', label: '阶段', group: 'comprehensive', always: true },
-  { key: 'strategyAction', label: '动作', group: 'comprehensive', always: true },
+  { key: 'strategyStatus', label: '状态', group: 'comprehensive', always: true },
   { key: 'zlje', label: '主力净额', group: 'money', always: true },
   { key: 'zljzb', label: '主力%', group: 'money', always: true },
   { key: 'cddje', label: '超大单', group: 'money', always: true },
@@ -315,8 +331,6 @@ const columns = [
   { key: 'turnoverRate', label: '换手%', group: 'quote', always: true },
   { key: 'cirMV', label: '流通值', group: 'quote', always: true },
   { key: 'totalMV', label: '总市值', group: 'quote', always: true },
-  { key: 'pb', label: '市净率', group: 'quote', always: true },
-  { key: 'pe', label: '市盈率', group: 'quote', always: true },
 ]
 
 // ========== 列宽映射==========
@@ -339,9 +353,7 @@ const COLUMN_WIDTHS: Record<string, string> = {
   compRank: '50px',
   rankChange: '50px',
   confidence: '70px',
-  candidateTier: '50px',
-  cycleStage: '50px',
-  strategyAction: '56px',
+  strategyStatus: '78px',
   zlje: '90px',
   zljzb: '90px',
   cddje: '90px',
@@ -784,52 +796,33 @@ const getZeroCrossConfidence = (stock: any) =>
 const getAttentionStage = (stock: any) =>
   getRankTrendAnalysis(stock)?.cycle?.stage
 
-const RANK_TREND_TIER_LABELS: Record<string, string> = {
-  A_MAIN: '主升',
-  B_IGNITION: '点火',
-  C_CROWDED: '拥挤',
-  D_EXIT_RISK: '退潮',
-  N_NEUTRAL: '震荡',
+const getRankTrendStatus = (stock: any) => getRankTrendDisplayStatus(getRankTrendAnalysis(stock), stock)
+
+const formatRankTrendStatus = (stock: any) => getRankTrendStatus(stock).label
+
+const getRankTrendStatusTooltip = (stock: any) => getRankTrendStatus(stock).tooltip
+
+const showStatusTooltip = (event: MouseEvent, stock: any) => {
+  hideRowTooltip()
+  hideConfidenceTooltip()
+  const content = getRankTrendStatusTooltip(stock)
+  if (!content) return
+  statusTooltip.value = {
+    visible: true,
+    x: event.clientX + 16,
+    y: event.clientY + 16,
+    content,
+  }
 }
 
-const RANK_TREND_ACTION_LABELS: Record<string, string> = {
-  focus: '重点',
-  watch: '观察',
-  hold: '持有',
-  avoid: '规避',
-  exit_watch: '离场',
+const moveStatusTooltip = (event: MouseEvent) => {
+  if (!statusTooltip.value.visible) return
+  statusTooltip.value.x = event.clientX + 16
+  statusTooltip.value.y = event.clientY + 16
 }
 
-const RANK_TREND_STAGE_LABELS: Record<string, string> = {
-  ignition: '点火',
-  expansion: '扩散',
-  crowded: '拥挤',
-  reversal: '反转',
-  cooling: '冷却',
-}
-
-const getStrategyCandidateTier = (stock: any) =>
-  getRankTrendAnalysis(stock)?.strategy?.candidateTier
-
-const getStrategyAction = (stock: any) =>
-  getRankTrendAnalysis(stock)?.strategy?.action
-
-const getCycleStage = (stock: any) =>
-  getRankTrendAnalysis(stock)?.cycle?.stage
-
-const formatRankTrendTier = (tier?: string | null) => {
-  if (!tier) return '-'
-  return RANK_TREND_TIER_LABELS[tier] ?? tier
-}
-
-const formatRankTrendAction = (action?: string | null) => {
-  if (!action) return '-'
-  return RANK_TREND_ACTION_LABELS[action] ?? action
-}
-
-const formatRankTrendStage = (stage?: string | null) => {
-  if (!stage) return '-'
-  return RANK_TREND_STAGE_LABELS[stage] ?? stage
+const hideStatusTooltip = () => {
+  statusTooltip.value.visible = false
 }
 
 const getOverheatRiskSignal = (stock: any) =>
@@ -868,9 +861,7 @@ const formatVolume = (volume: number): string => {
 }
 
 const formatCell = (key: string, stock: any) => {
-  if (key === 'candidateTier') return formatRankTrendTier(getStrategyCandidateTier(stock))
-  if (key === 'cycleStage') return formatRankTrendStage(getCycleStage(stock))
-  if (key === 'strategyAction') return formatRankTrendAction(getStrategyAction(stock))
+  if (key === 'strategyStatus') return formatRankTrendStatus(stock)
 
   const value = key === 'rankChange' ? getRankChange(stock) : stock[key]
   if (value === undefined || value === null) return '-'
@@ -917,7 +908,7 @@ const getCellClass = (key: string, stock: any) => {
   if (key === 'code') classes.push('code-cell')
   else if (key === 'name') classes.push('name-cell')
   else if (key === 'themes') classes.push('sector-cell')
-  else if (['candidateTier', 'cycleStage', 'strategyAction'].includes(key)) classes.push('strategy-cell')
+  else if (key === 'strategyStatus') classes.push('strategy-cell')
   else classes.push('number-cell')
 
   if (key === 'change' || key === 'speed') {
@@ -947,16 +938,8 @@ const getCellClass = (key: string, stock: any) => {
     else if (change < 0) classes.push('rank-down')
   }
 
-  if (key === 'candidateTier') {
-    classes.push(`strategy-tier-${getStrategyCandidateTier(stock) || 'empty'}`)
-  }
-
-  if (key === 'cycleStage') {
-    classes.push(`strategy-tier-${getCycleStage(stock) || 'empty'}`)
-  }
-
-  if (key === 'strategyAction') {
-    classes.push(`strategy-action-${getStrategyAction(stock) || 'empty'}`)
+  if (key === 'strategyStatus') {
+    classes.push(`strategy-tier-${getRankTrendStatus(stock).classKey}`)
   }
 
   return classes.join(' ')
@@ -1593,32 +1576,83 @@ defineExpose({
   color: var(--text-secondary);
 }
 
-.strategy-tier-A_MAIN,
-.strategy-action-focus {
-  color: #ff6b6b !important;
+.strategy-status-cell {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 64px;
+  height: 22px;
+  padding: 0 7px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.04);
+  line-height: 1;
+}
+
+.strategy-tier-main_confirmed {
+  color: #ff4d4f !important;
+  background: rgba(255, 77, 79, 0.12);
+  border-color: rgba(255, 77, 79, 0.45);
   font-weight: 600;
 }
 
-.strategy-tier-B_IGNITION,
-.strategy-action-watch {
-  color: #ffa502 !important;
+.strategy-tier-ignition_watch {
+  color: #facc15 !important;
+  background: rgba(250, 204, 21, 0.12);
+  border-color: rgba(250, 204, 21, 0.45);
 }
 
-.strategy-tier-C_CROWDED,
-.strategy-action-hold {
-  color: #fbbf24 !important;
+.strategy-tier-strong_money {
+  color: #38bdf8 !important;
+  background: rgba(56, 189, 248, 0.12);
+  border-color: rgba(56, 189, 248, 0.45);
 }
 
-.strategy-tier-D_EXIT_RISK,
-.strategy-action-exit_watch {
-  color: #2ed573 !important;
+.strategy-tier-new_watch {
+  color: #2dd4bf !important;
+  background: rgba(45, 212, 191, 0.12);
+  border-color: rgba(45, 212, 191, 0.45);
 }
 
-.strategy-action-avoid,
-.strategy-tier-N_NEUTRAL,
-.strategy-tier-empty,
-.strategy-action-empty {
-  color: var(--text-tertiary);
+.strategy-tier-crowded {
+  color: #f8fafc !important;
+  background: rgba(248, 250, 252, 0.08);
+  border-color: rgba(248, 250, 252, 0.35);
+}
+
+.strategy-tier-money_divergence {
+  color: #c084fc !important;
+  background: rgba(192, 132, 252, 0.12);
+  border-color: rgba(192, 132, 252, 0.45);
+}
+
+.strategy-tier-weakening {
+  color: #22c55e !important;
+  background: rgba(34, 197, 94, 0.12);
+  border-color: rgba(34, 197, 94, 0.45);
+}
+
+.strategy-tier-insufficient,
+.strategy-tier-empty {
+  color: #9ca3af !important;
+  background: rgba(156, 163, 175, 0.08);
+  border-color: rgba(156, 163, 175, 0.28);
+}
+
+.status-tooltip {
+  position: fixed;
+  z-index: 10000;
+  max-width: 280px;
+  padding: 8px 10px;
+  color: #f3f5f8;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-line;
+  pointer-events: none;
+  background: rgba(25, 28, 34, 0.96);
+  border: 1px solid rgba(150, 160, 180, 0.28);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
 }
 
 /* 趋势强度标记 */
