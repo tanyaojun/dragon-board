@@ -217,7 +217,7 @@ import { dataLayer } from '../../services/DataLayer'
 import { dataLoader } from '../../services/dataLoader'
 import RankTrendPanel from '../../components/panels/RankTrendPanel.vue'
 import { rankTrendAnalyzer } from '../../services/RankTrendAnalyzer'
-import { getRankTrendDisplayStatus } from '../../services/rankTrend/compat'
+import { buildRankTrendStatusContext, getRankTrendDisplayStatus } from '../../services/rankTrend/compat'
 const props = defineProps<{
   loading?: boolean
 }>()
@@ -230,6 +230,7 @@ const emit = defineEmits<{
 const uiStore = useUIStore()
 const favoriteStore = useFavoriteStore()
 const { sortedStocks } = storeToRefs(uiStore)
+const rankTrendStatusContext = computed(() => buildRankTrendStatusContext(sortedStocks.value))
 
 // ========== 加载状态 ==========
 const isLoading = computed(() => {
@@ -796,7 +797,8 @@ const getZeroCrossConfidence = (stock: any) =>
 const getAttentionStage = (stock: any) =>
   getRankTrendAnalysis(stock)?.cycle?.stage
 
-const getRankTrendStatus = (stock: any) => getRankTrendDisplayStatus(getRankTrendAnalysis(stock), stock)
+const getRankTrendStatus = (stock: any) =>
+  getRankTrendDisplayStatus(getRankTrendAnalysis(stock), stock, rankTrendStatusContext.value)
 
 const formatRankTrendStatus = (stock: any) => getRankTrendStatus(stock).label
 

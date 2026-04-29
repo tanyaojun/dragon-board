@@ -1,8 +1,10 @@
 # VS Code Git 同步操作手册
 
-适用对象：只使用 VS Code 左下角“同步更改”按钮，不熟悉 Git 命令的日常开发流程。
+适用对象：不熟悉 Git 命令，但需要在 VS Code GUI 失灵时，用控制台完成安全提交和推送的日常开发流程。
 
 本手册目标只有一个：避免本地工作区再次被远端旧版本覆盖，避免把 `.tmp`、`node_modules`、`dist` 等本地产物误提交到 GitHub。
+
+原则：只执行本文明确写出来的 Git 命令。没写的 Git 命令不要自己尝试。
 
 ## 核心原则
 
@@ -10,6 +12,212 @@
 2. 每次同步前，必须先有本地提交。不要把大量未检查文件直接混进一次提交。
 3. 只提交代码、配置、文档、必要的项目资源。不要提交运行产物、临时文件、依赖目录。
 4. 出现冲突、覆盖、拒绝、超大文件、无法推送等提示时，停止操作，先找 Codex 检查。
+5. 不用 `git pull` 解决提交卡住。提交卡住是本地问题，拉远端代码可能把问题扩大。
+
+## 控制台固定提交流程
+
+以后 VS Code GUI 提交按钮没反应，直接按本节走。不要点“丢弃更改”，不要点“拉取”，不要点“同步”。
+
+### 第一步：打开终端并进入项目目录
+
+在 VS Code 底部打开终端，确认提示符在项目根目录。
+
+如果不确定，执行：
+
+```powershell
+cd D:\dragon-board
+```
+
+### 第二步：查看当前改动
+
+先看短状态：
+
+```powershell
+git status --short
+```
+
+再看改动摘要：
+
+```powershell
+git diff --stat
+```
+
+判断标准：
+
+- 只看到本次任务相关文件，继续。
+- 看到 `.tmp`、`node_modules`、`dist`、`*.exe`、`*.pdb`，停止。
+- 看到大量 `D` 删除文件，停止。
+- 看到完全不认识的文件，停止。
+
+### 第三步：暂存文件
+
+只提交一个文件，使用明确路径：
+
+```powershell
+git add docs/vscode-git-sync-guide.md
+```
+
+提交多个明确文件，就逐个执行 `git add`：
+
+```powershell
+git add src/services/dataLoader.ts
+git add docs/attention-manual.md
+```
+
+确认当前所有改动都属于本次提交时，才使用：
+
+```powershell
+git add -A
+```
+
+`git add -A` 会把修改、新增、删除全部暂存。执行前必须确认第二步的文件列表没有异常。
+
+### 第四步：确认暂存区
+
+提交前必须看暂存区：
+
+```powershell
+git diff --cached --stat
+```
+
+再看暂存文件状态：
+
+```powershell
+git diff --cached --name-status
+```
+
+判断标准：
+
+- 输出里的文件都应该进入本次提交，继续。
+- 出现不该提交的文件，停止。
+- 没有任何输出，说明没有暂存文件，回到第三步。
+
+### 第五步：执行提交
+
+使用一行命令提交，不打开编辑器：
+
+```powershell
+git commit -m "docs: 补充 VS Code Git 提交流程"
+```
+
+提交信息格式：
+
+```text
+fix: 修复某个问题
+feat: 增加某个功能
+docs: 更新项目文档
+chore: 调整工程配置
+refactor: 重构某段代码
+test: 补充测试
+```
+
+提交信息不能为空，也不要只写 `update`、`fix` 这种看不出内容的词。
+
+### 第六步：确认提交结果
+
+提交后执行：
+
+```powershell
+git status
+```
+
+如果看到类似：
+
+```text
+Your branch is ahead of 'origin/main' by 1 commit.
+nothing to commit, working tree clean
+```
+
+说明本地提交成功，还没有推送到 GitHub。
+
+再看最近提交：
+
+```powershell
+git log --oneline -5
+```
+
+确认第一行是刚才的提交。
+
+### 第七步：推送到 GitHub
+
+确认本地工作区干净后，再推送：
+
+```powershell
+git push
+```
+
+推送成功后再执行：
+
+```powershell
+git status
+```
+
+如果看到：
+
+```text
+nothing to commit, working tree clean
+```
+
+并且不再提示 `ahead of 'origin/main'`，说明本地和 GitHub 已同步。
+
+如果 `git push` 报错，不要执行其它 Git 命令，把完整错误信息发给 Codex。
+
+### 固定模板
+
+最常用流程如下：
+
+```powershell
+cd D:\dragon-board
+git status --short
+git diff --stat
+git add -A
+git diff --cached --stat
+git diff --cached --name-status
+git commit -m "docs: 补充 VS Code Git 提交流程"
+git status
+git log --oneline -5
+git push
+git status
+```
+
+这个模板里的 `git add -A` 只适用于确认所有改动都应该提交的情况。如果只想提交某个文件，把 `git add -A` 换成 `git add 具体文件路径`。
+
+## 当前截图这种 COMMIT_EDITMSG 怎么处理
+
+如果 VS Code 打开了 `.git/COMMIT_EDITMSG`，并且内容类似：
+
+```text
+# Please enter the commit message for your changes.
+# Lines starting with '#' will be ignored...
+```
+
+这表示 Git 正在等提交信息。以 `#` 开头的行都是注释，不算提交信息。
+
+有两种处理方式，选一种即可。
+
+方式一：在文件第一行写提交信息。
+
+```text
+docs: 补充 VS Code Git 提交流程
+```
+
+然后保存文件，关闭 `.git/COMMIT_EDITMSG` 标签页。
+
+方式二：取消这次编辑器提交，改用控制台一行命令。
+
+1. 关闭 `.git/COMMIT_EDITMSG` 标签页。
+2. 如果 VS Code 问是否保存，选择不保存。
+3. 在终端执行：
+
+```powershell
+git status
+git diff --cached --stat
+git commit -m "docs: 补充 VS Code Git 提交流程"
+```
+
+如果 `git diff --cached --stat` 有输出，说明文件已经暂存，可以直接提交。
+
+如果提示没有暂存文件，再按固定流程从 `git status --short` 开始。
 
 ## 可以提交的内容
 

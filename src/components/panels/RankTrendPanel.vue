@@ -327,7 +327,11 @@ import * as echarts from 'echarts'
 import { usePanel } from '@/composables/usePanel'
 import { dataLayer } from '@/services/DataLayer'
 import { rankTrendAnalyzer, type RankTrendResult } from '@/services/RankTrendAnalyzer'
-import { getRankTrendDisplayStatus } from '@/services/rankTrend/compat'
+import {
+  buildRankTrendStatusContext,
+  getRankTrendDisplayStatus,
+  type RankTrendStatusContext,
+} from '@/services/rankTrend/compat'
 import {
   buildRankTrendSnapshotPriority,
   cloneDefaultRankTrendRuntimeConfig,
@@ -638,13 +642,18 @@ function getPrice(stock: any): number {
   return Number(stock?.price ?? stock?.latestPrice ?? stock?.lastPrice ?? stock?.close ?? 0)
 }
 
-function buildPanelStockView(stock: any, analysis: RankTrendResult | null, rank: number): PanelStockView {
+function buildPanelStockView(
+  stock: any,
+  analysis: RankTrendResult | null,
+  rank: number,
+  statusContext?: RankTrendStatusContext,
+): PanelStockView {
   const strategy = analysis?.strategy
   const technical = analysis?.technical
   const cycle = analysis?.cycle
   const risk = analysis?.risk
   const finalSignal = (analysis?.decision?.final?.signal ?? stock?.finalSignal ?? 'hold') as Signal
-  const status = getRankTrendDisplayStatus(analysis, stock)
+  const status = getRankTrendDisplayStatus(analysis, stock, statusContext)
 
   return {
     code: normalizeCode(stock?.code),
@@ -719,7 +728,8 @@ async function loadStock() {
     const analysis = results.get(code) ?? (sourceStock.rankTrend as RankTrendResult | undefined) ?? null
     const rank = rankMap.get(code) ?? Number(sourceStock.compRank ?? 0)
 
-    currentStock.value = buildPanelStockView(sourceStock, analysis, rank)
+    const statusContext = buildRankTrendStatusContext(stocks)
+    currentStock.value = buildPanelStockView(sourceStock, analysis, rank, statusContext)
     breathData.value = dataLayer.getBreathData()
     const sampleQuality = analysis?.meta?.sampleQuality
     const runtimeSummary = `${runtimeConfig.macdFast}/${runtimeConfig.macdSlow}/${runtimeConfig.macdSignal}`

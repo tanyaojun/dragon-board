@@ -358,6 +358,8 @@ v2 最重要的变化是：盘中优先看 `candidateTier`，不要只看 `final
 
 - 资金、量比、换手只参与【状态】展示层翻译。
 - 不改变 `rankTrend.cycle.stage` 的原始注意力轨迹算法。
+- 不改变 `rankTrend.strategy.candidateTier` 的原始注意力分层。
+- 不参与半小时快照轨迹样本计算。
 - 不写回 `rankTrend.strategy`，不新增持久化字段。
 
 ---
@@ -426,12 +428,14 @@ tooltip：
 - 主力净额为正
 - 主力占比明显为正
 - 超大单净额或超大单占比支持
+- 成交额和量比在当前热榜横截面中具备承接
 
 行为理解：
 
 - 资金确认成立，但趋势持续性还没有确认。
 - 这是强资金新入榜，不等同于主升确认。
 - 适合重点观察后续是否留榜、资金是否持续。
+- 如果涨幅高且量能过热，仍然只能看作强资金观察，不能直接视为主升确认。
 
 典型场景：
 
@@ -468,12 +472,13 @@ tooltip：
 来源：
 
 - 通常来自 `C_CROWDED`
-- 或涨幅高、百分位高、量比/换手放大
+- 或涨幅高、百分位高、量比/换手在当前热榜横截面中明显放大
 
 行为理解：
 
 - 热度很强，但追击赔率下降。
 - 不代表马上下跌，代表继续追高的交易质量变差。
+- 主力不弱但高换手、高量比同时出现时，优先按拥挤风险处理。
 
 tooltip：
 
@@ -487,6 +492,7 @@ tooltip：
 
 - 热度仍强，综合排名或百分位较高
 - 但主力净额、主力占比、超大单明显不支持
+- 或主升确认过程中出现高换手、高量比，同时主力资金转弱
 
 行为理解：
 
@@ -552,6 +558,7 @@ tooltip：
 
 - 风险状态优先于机会状态。
 - 强资金只能提升观察优先级，不能直接触发主升确认。
+- 成交额、量比、换手率只修正【状态】质量和风险，不替代注意力持续性。
 - 新入榜股票必须经过后续半小时快照确认，才可能进入趋势主升状态。
 
 ---
@@ -573,8 +580,13 @@ tooltip：
 
 实现入口：
 
-- `src/services/rankTrend/compat.ts`
-- `getRankTrendDisplayStatus(rankTrend, stock)`
+- `src/services/rankTrend/statusClassifier.ts`
+- `buildRankTrendStatusContext(stocks)`
+- `getRankTrendDisplayStatus(rankTrend, stock, context?)`
+
+兼容出口：
+
+- `src/services/rankTrend/compat.ts` 继续 re-export `buildRankTrendStatusContext()` 和 `getRankTrendDisplayStatus()`，用于减少 UI import 改动。
 
 返回：
 
@@ -594,6 +606,48 @@ tooltip：
 - 写入 `rankTrend.strategy`
 - 新增持久化字段
 - 改变生命周期阶段计算输入
+
+---
+
+**七-D、量能确认模型**
+
+量能确认只存在于【状态】服务内部，不作为主表独立字段展示。
+
+模型入口：
+
+```ts
+buildRankTrendStatusContext(stocks)
+```
+
+它基于当前热榜池的横截面分布计算动态基准：
+
+- `turnoverP50 / turnoverP70 / turnoverP85`
+- `volumeRatioP50 / volumeRatioP70 / volumeRatioP85`
+- `turnoverRateP50 / turnoverRateP70 / turnoverRateP85`
+
+内部量能状态：
+
+| 量能状态 | 含义 | 影响 |
+|---|---|---|
+| `healthy` | 成交额、量比有承接，换手不过热，主力不弱 | 提高点火观察和强资确认的质量 |
+| `weak` | 成交额或量比低于热榜中位数，且没有强资金确认 | 样本不足时不升级 |
+| `overheated` | 高涨幅或接近涨停，同时量比/换手处于热榜高分位 | 修正为高位拥挤，或强资确认但提示风险 |
+| `divergent` | 热度强、量能放大，但主力或超大单转弱 | 修正为资金背离 |
+
+关键规则：
+
+- `样本不足 + 强资金 + 成交额支持 + 量比合理` -> `强资确认`
+- `点火观察 + 量比放大 + 换手不过热` -> 仍为 `点火观察`，tooltip 提示量能配合较好
+- `主升确认 + 高换手 + 高量比 + 主力转弱` -> 降为 `资金背离`
+- `主升确认 + 高换手 + 高量比 + 主力不弱` -> 降为 `高位拥挤`
+- `样本不足 + 涨停/高涨幅 + 高换手/爆量 + 强资金` -> 仍为 `强资确认`，但 tooltip 必须提示量能偏热
+
+边界：
+
+- 成交额大不是一定好，必须结合主力净额和超大单。
+- 量比高不是一定好，低位点火是确认，高位爆量是风险。
+- 换手率高不是一定好，启动分歧可接受，高位大换手要防兑现。
+- 量能只能确认质量或修正风险，不能替代半小时快照持续性。
 
 ---
 
@@ -619,6 +673,7 @@ tooltip：
 ```ts
 const stocks = dataLayer.getStocks()
 const rankMap = buildRankMap(stocks)
+const statusContext = buildRankTrendStatusContext(stocks)
 const results = await rankTrendAnalyzer.getRankTrends(rankMap, {
   updateSignalStore: false,
 })
@@ -634,7 +689,7 @@ const rankTrend = results.get(code) ?? stock.rankTrend ?? null
 
 面板主展示必须来自：
 
-- `getRankTrendDisplayStatus(rankTrend, stock)` 生成的【状态】
+- `getRankTrendDisplayStatus(rankTrend, stock, statusContext)` 生成的【状态】
 - `rankTrend.strategy.regime`
 - `rankTrend.strategy.momentum`
 - `rankTrend.cycle.stage`
