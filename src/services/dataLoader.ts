@@ -10,15 +10,15 @@ import { rankTrendAnalyzer } from './RankTrendAnalyzer'
 import { applyRankTrendAnalysis } from './rankTrend/compat'
 import type { RankTrendAnalysisResult } from './rankTrend/types'
 import sectorAnalyzer from './sectorAnalyzer'
-import { isTradingTime } from '../utils/time'
+import { isTradingTime } from '@/utils/time'
 import {
   COMPREHENSIVE_WEIGHTS,
   PENALTY_SCORE,
   DEFAULT_RANK,
   OPTIMAL_TURNOVER,
   TURNOVER_SIGMA,
-} from '../types/config'
-import { filterValidStockCodes } from '../utils/common'
+} from '@/types/config'
+import { filterValidStockCodes } from '@/utils/common'
 import { useUIStore } from '../stores/ui'
 import { stockCodeManager } from './StockCodeManager'
 import { calculateStockHotnessUpdates, stockHotnessConfigService } from './hotness'
