@@ -7,7 +7,10 @@ import { CookieJar } from 'tough-cookie'
 import iconv from 'iconv-lite'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
-import fs from 'fs'
+import {
+  registerSnapshotRemoteRoutes,
+  SNAPSHOT_DAY_BUNDLE_JSON_LIMIT,
+} from './snapshotRemoteRoutes.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -19,234 +22,7 @@ const jar = new CookieJar()
 const client = wrapper(axios.create({ jar, withCredentials: true, maxRedirects: 5 }))
 
 app.use(cors({ origin: '*', methods: ['GET', 'POST'] }))
-app.use(express.json())
-
-function loadEnvFile(filePath) {
-  if (!fs.existsSync(filePath)) return {}
-  const content = fs.readFileSync(filePath, 'utf8')
-  const result = {}
-  for (const rawLine of content.split(/\r?\n/)) {
-    const line = rawLine.trim()
-    if (!line || line.startsWith('#')) continue
-    const equalIndex = line.indexOf('=')
-    if (equalIndex <= 0) continue
-    const key = line.slice(0, equalIndex).trim()
-    const value = line.slice(equalIndex + 1).trim()
-    result[key] = value
-  }
-  return result
-}
-
-const localEnv = {
-  ...loadEnvFile(join(__dirname, '.env.local')),
-}
-
-const snapshotWebdavConfig = {
-  baseUrl:
-    process.env.SNAPSHOT_WEBDAV_BASE_URL || localEnv.SNAPSHOT_WEBDAV_BASE_URL || '',
-  username:
-    process.env.SNAPSHOT_WEBDAV_USERNAME || localEnv.SNAPSHOT_WEBDAV_USERNAME || '',
-  password:
-    process.env.SNAPSHOT_WEBDAV_PASSWORD || localEnv.SNAPSHOT_WEBDAV_PASSWORD || '',
-  root:
-    process.env.SNAPSHOT_WEBDAV_ROOT || localEnv.SNAPSHOT_WEBDAV_ROOT || '/dragon-board',
-  timeout: Number(process.env.SNAPSHOT_WEBDAV_TIMEOUT || localEnv.SNAPSHOT_WEBDAV_TIMEOUT || 15000),
-}
-
-function isSnapshotWebdavConfigured() {
-  return Boolean(
-    snapshotWebdavConfig.baseUrl &&
-      snapshotWebdavConfig.username &&
-      snapshotWebdavConfig.password &&
-      snapshotWebdavConfig.root,
-  )
-}
-
-function buildSnapshotRemoteEnvelope(data, extras = {}) {
-  return {
-    ok: true,
-    data,
-    ...extras,
-  }
-}
-
-function normalizeDavPath(path) {
-  const cleaned = String(path || '')
-    .replace(/\\/g, '/')
-    .replace(/\/+/g, '/')
-    .replace(/\/$/, '')
-  return cleaned.startsWith('/') ? cleaned : `/${cleaned}`
-}
-
-function resolveSnapshotRemotePath(relativePath = '') {
-  const root = normalizeDavPath(snapshotWebdavConfig.root || '/dragon-board')
-  const child = String(relativePath || '').replace(/^\/+/, '')
-  return child ? `${root}/${child}` : root
-}
-
-function buildSnapshotRemoteUrl(relativePath = '') {
-  const base = String(snapshotWebdavConfig.baseUrl || '').replace(/\/+$/, '')
-  return `${base}${resolveSnapshotRemotePath(relativePath)}`
-}
-
-function createSnapshotDavClient() {
-  return axios.create({
-    timeout: snapshotWebdavConfig.timeout,
-    auth: {
-      username: snapshotWebdavConfig.username,
-      password: snapshotWebdavConfig.password,
-    },
-    validateStatus: () => true,
-  })
-}
-
-function parseSnapshotManifest(xml) {
-  const text = String(xml || '')
-  const items = []
-  const responseBlocks = text.match(/<d:response>[\s\S]*?<\/d:response>/gi) || []
-  for (const block of responseBlocks) {
-    const hrefMatch = block.match(/<d:href>([\s\S]*?)<\/d:href>/i)
-    if (!hrefMatch) continue
-    const href = decodeURIComponent(hrefMatch[1])
-    if (!href.endsWith('.json')) continue
-    const fileName = href.split('/').filter(Boolean).pop()
-    if (!fileName) continue
-    const snapshotMatch = fileName.match(
-      /^(quarter_hour|half_hour|hourly|daily)__([0-9]{4}-[0-9]{2}-[0-9]{2})__([0-9]{2}-[0-9]{2})__(.+)\.json$/,
-    )
-    if (!snapshotMatch) continue
-    const [, type, tradingDate, slotTime, encodedId] = snapshotMatch
-    const id = decodeURIComponent(encodedId)
-    const timestampMatch = block.match(/<d:getlastmodified>([\s\S]*?)<\/d:getlastmodified>/i)
-    const contentLengthMatch = block.match(/<d:getcontentlength>([\s\S]*?)<\/d:getcontentlength>/i)
-    const uploadedAt = timestampMatch ? Date.parse(timestampMatch[1]) : Date.now()
-    items.push({
-      id,
-      type,
-      tradingDate,
-      slotTime: slotTime.replace(/-/g, ':'),
-      timestamp: Number.isFinite(uploadedAt) ? uploadedAt : Date.now(),
-      displayKey: `[${type}] ${tradingDate} ${slotTime.replace(/-/g, ':')}`,
-      size: Number(contentLengthMatch?.[1] || 0),
-      contentHash: '',
-      uploadedAt: Number.isFinite(uploadedAt) ? uploadedAt : Date.now(),
-      storageKey: href,
-    })
-  }
-  return items
-}
-
-async function ensureSnapshotRemoteCollection(relativePath) {
-  const client = createSnapshotDavClient()
-  const segments = String(relativePath || '')
-    .split('/')
-    .map((item) => item.trim())
-    .filter(Boolean)
-  let current = ''
-  for (const segment of segments) {
-    current = current ? `${current}/${segment}` : segment
-    const url = buildSnapshotRemoteUrl(current)
-    const response = await client.request({
-      method: 'MKCOL',
-      url,
-    })
-    if (![201, 301, 405].includes(response.status)) {
-      throw new Error(`remote_mkcol_failed:${current}:${response.status}`)
-    }
-  }
-}
-
-async function fetchSnapshotRemoteJson(relativePath) {
-  const client = createSnapshotDavClient()
-  const response = await client.get(buildSnapshotRemoteUrl(relativePath), {
-    responseType: 'text',
-  })
-  if (response.status === 404) return null
-  if (response.status < 200 || response.status >= 300) {
-    throw new Error(`remote_fetch_failed:${relativePath}:${response.status}`)
-  }
-  return typeof response.data === 'string' ? JSON.parse(response.data) : response.data
-}
-
-async function putSnapshotRemoteJson(relativePath, payload) {
-  const client = createSnapshotDavClient()
-  const dir = relativePath.split('/').slice(0, -1).join('/')
-  if (dir) {
-    await ensureSnapshotRemoteCollection(dir)
-  }
-  const response = await client.put(buildSnapshotRemoteUrl(relativePath), JSON.stringify(payload), {
-    headers: {
-      'Content-Type': 'application/json; charset=utf-8',
-    },
-  })
-  if (response.status < 200 || response.status >= 300) {
-    throw new Error(`remote_put_failed:${relativePath}:${response.status}`)
-  }
-}
-
-function buildSnapshotRecordFileName(record) {
-  const slot = String(record.slotTime || '').replace(/:/g, '-')
-  return `${record.type}__${record.tradingDate}__${slot}__${encodeURIComponent(record.id)}.json`
-}
-
-async function listSnapshotRemoteManifestFiles() {
-  const client = createSnapshotDavClient()
-  await ensureSnapshotRemoteCollection('snapshots')
-  const response = await client.request({
-    method: 'PROPFIND',
-    url: buildSnapshotRemoteUrl('snapshots'),
-    headers: {
-      Depth: '1',
-    },
-    data:
-      '<?xml version="1.0" encoding="utf-8"?><d:propfind xmlns:d="DAV:"><d:prop><d:getlastmodified/><d:getcontentlength/></d:prop></d:propfind>',
-    responseType: 'text',
-  })
-  if (![200, 207].includes(response.status)) {
-    throw new Error(`remote_propfind_failed:${response.status}`)
-  }
-  return parseSnapshotManifest(response.data)
-}
-
-async function getSnapshotRemoteHealth() {
-  if (!isSnapshotWebdavConfigured()) {
-    return {
-      ok: false,
-      enabled: false,
-      message: 'snapshot_webdav_not_configured',
-    }
-  }
-
-  const client = createSnapshotDavClient()
-  const response = await client.request({
-    method: 'PROPFIND',
-    url: buildSnapshotRemoteUrl(),
-    headers: {
-      Depth: '0',
-    },
-    data:
-      '<?xml version="1.0" encoding="utf-8"?><d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype/></d:prop></d:propfind>',
-    responseType: 'text',
-  })
-
-  if (![200, 207].includes(response.status)) {
-    return {
-      ok: false,
-      enabled: false,
-      message: `snapshot_webdav_health_failed:${response.status}`,
-      baseUrl: snapshotWebdavConfig.baseUrl,
-      rootPath: snapshotWebdavConfig.root,
-    }
-  }
-
-  return {
-    ok: true,
-    enabled: true,
-    writable: true,
-    baseUrl: snapshotWebdavConfig.baseUrl,
-    rootPath: snapshotWebdavConfig.root,
-  }
-}
+app.use(express.json({ limit: SNAPSHOT_DAY_BUNDLE_JSON_LIMIT }))
 
 // 日志中间件
 app.use((req, res, next) => {
@@ -1148,192 +924,26 @@ app.get('/api/sentiment/composite', async (req, res) => {
   }
 })
 
-// ========== 快照远端云备份（坚果云 WebDAV） ==========
-app.get('/api/snapshots/remote/health', async (req, res) => {
-  try {
-    const health = await getSnapshotRemoteHealth()
-    res.json(buildSnapshotRemoteEnvelope(health))
-  } catch (error) {
-    res.status(500).json({
-      ok: false,
-      errorCode: 'remote_health_failed',
-      message: error.message,
-      data: {
-        ok: false,
-        enabled: false,
-        message: error.message,
-      },
-    })
-  }
-})
+registerSnapshotRemoteRoutes(app)
 
-app.get('/api/snapshots/remote/manifest', async (req, res) => {
-  try {
-    const limit = Number(req.query.limit || 5000)
-    const cursor = Number(req.query.cursor || 0)
-    const items = await listSnapshotRemoteManifestFiles()
-    const sorted = items.sort((left, right) => right.timestamp - left.timestamp)
-    const windowItems = sorted.slice(cursor, cursor + limit)
-    const nextCursor = cursor + limit < sorted.length ? String(cursor + limit) : null
-    res.json(
-      buildSnapshotRemoteEnvelope({
-        items: windowItems,
-        nextCursor,
-      }),
-    )
-  } catch (error) {
-    res.status(500).json({
-      ok: false,
-      errorCode: 'remote_manifest_failed',
-      message: error.message,
-      data: {
-        items: [],
-        nextCursor: null,
-      },
-    })
+app.use((error, req, res, next) => {
+  if (!error) {
+    next()
+    return
   }
-})
-
-app.post('/api/snapshots/remote/upload', async (req, res) => {
-  try {
-    const record = req.body
-    if (!record?.id || !record?.type || !record?.tradingDate || !record?.slotTime) {
-      return res.status(400).json({
-        ok: false,
-        errorCode: 'remote_upload_invalid_payload',
-        message: 'snapshot record missing required identity fields',
-      })
-    }
-    const relativePath = `snapshots/${buildSnapshotRecordFileName(record)}`
-    await putSnapshotRemoteJson(relativePath, record)
-    res.json(
-      buildSnapshotRemoteEnvelope({
-        ok: true,
-        id: record.id,
-        uploadedAt: Date.now(),
-        contentHash: '',
-        storageKey: resolveSnapshotRemotePath(relativePath),
-      }),
-    )
-  } catch (error) {
-    res.status(500).json({
+  if (error.type === 'entity.too.large') {
+    res.status(413).json({
       ok: false,
-      errorCode: 'remote_upload_failed',
-      message: error.message,
+      errorCode: 'remote_day_bundle_payload_too_large',
+      message: `snapshot payload exceeds proxy json limit (${SNAPSHOT_DAY_BUNDLE_JSON_LIMIT})`,
     })
+    return
   }
-})
-
-app.post('/api/snapshots/remote/upload-batch', async (req, res) => {
-  try {
-    const items = Array.isArray(req.body?.items) ? req.body.items : []
-    const results = []
-    const errors = []
-    for (const record of items) {
-      try {
-        const relativePath = `snapshots/${buildSnapshotRecordFileName(record)}`
-        await putSnapshotRemoteJson(relativePath, record)
-        results.push({
-          ok: true,
-          id: record.id,
-          uploadedAt: Date.now(),
-          contentHash: '',
-          storageKey: resolveSnapshotRemotePath(relativePath),
-        })
-      } catch (error) {
-        errors.push({
-          id: record?.id || '',
-          message: error.message,
-        })
-      }
-    }
-    res.json(
-      buildSnapshotRemoteEnvelope({
-        ok: errors.length === 0,
-        total: items.length,
-        success: results.length,
-        failed: errors.length,
-        results,
-        errors,
-      }),
-    )
-  } catch (error) {
-    res.status(500).json({
-      ok: false,
-      errorCode: 'remote_batch_upload_failed',
-      message: error.message,
-    })
-  }
-})
-
-app.post('/api/snapshots/remote/upload-day-bundle', async (req, res) => {
-  try {
-    const bundle = req.body
-    if (!bundle?.tradingDate) {
-      return res.status(400).json({
-        ok: false,
-        errorCode: 'remote_day_bundle_invalid_payload',
-        message: 'snapshot day bundle missing tradingDate',
-      })
-    }
-    const relativePath = `day-bundles/${bundle.tradingDate}.json`
-    await putSnapshotRemoteJson(relativePath, bundle)
-    if (Array.isArray(bundle.items)) {
-      for (const record of bundle.items) {
-        if (!record?.id || !record?.type || !record?.tradingDate || !record?.slotTime) continue
-        const snapshotPath = `snapshots/${buildSnapshotRecordFileName(record)}`
-        await putSnapshotRemoteJson(snapshotPath, record)
-      }
-    }
-    res.json(
-      buildSnapshotRemoteEnvelope({
-        ok: true,
-        tradingDate: bundle.tradingDate,
-        uploadedAt: Date.now(),
-        contentHash: '',
-        storageKey: resolveSnapshotRemotePath(relativePath),
-        snapshotCount: Array.isArray(bundle.items) ? bundle.items.length : 0,
-      }),
-    )
-  } catch (error) {
-    res.status(500).json({
-      ok: false,
-      errorCode: 'remote_day_bundle_upload_failed',
-      message: error.message,
-    })
-  }
-})
-
-app.get('/api/snapshots/remote/download/:id', async (req, res) => {
-  try {
-    const manifest = await listSnapshotRemoteManifestFiles()
-    const hit = manifest.find((item) => item.id === req.params.id)
-    if (!hit) {
-      return res.json(buildSnapshotRemoteEnvelope(null))
-    }
-    const fileName = buildSnapshotRecordFileName(hit)
-    const record = await fetchSnapshotRemoteJson(`snapshots/${fileName}`)
-    res.json(buildSnapshotRemoteEnvelope(record))
-  } catch (error) {
-    res.status(500).json({
-      ok: false,
-      errorCode: 'remote_download_failed',
-      message: error.message,
-    })
-  }
-})
-
-app.get('/api/snapshots/remote/download-day-bundle/:tradingDate', async (req, res) => {
-  try {
-    const bundle = await fetchSnapshotRemoteJson(`day-bundles/${req.params.tradingDate}.json`)
-    res.json(buildSnapshotRemoteEnvelope(bundle))
-  } catch (error) {
-    res.status(500).json({
-      ok: false,
-      errorCode: 'remote_day_bundle_download_failed',
-      message: error.message,
-    })
-  }
+  res.status(error.status || 500).json({
+    ok: false,
+    errorCode: 'proxy_unhandled_error',
+    message: error.message || String(error),
+  })
 })
 
 app.use('/static', express.static(join(__dirname, 'public')))

@@ -289,6 +289,11 @@ interface StockExtData {
   institutionBuy?: number // 机构增仓（万元）
   mainBuy?: number // 主力买入（万元）
   mainSell?: number // 主力卖出（万元）
+  moneyFlowSource?: string
+  moneyFlowEstimated?: boolean
+  tdxBuyVolume?: number
+  tdxSellVolume?: number
+  tdxCurrentVolume?: number
   fengdan?: number // 封单额（万元）
   maxFengdan?: number // 最大封单（万元）
 
@@ -413,6 +418,11 @@ export interface MergedStock {
   institutionBuy?: number
   mainBuy?: number
   mainSell?: number
+  moneyFlowSource?: string
+  moneyFlowEstimated?: boolean
+  tdxBuyVolume?: number
+  tdxSellVolume?: number
+  tdxCurrentVolume?: number
   fengdan?: number
   maxFengdan?: number
   bid1Price?: number
@@ -1338,6 +1348,19 @@ class DataLayer {
       stock.volume = Number(change.volume ?? stock.volume) || 0
       stock.turnover = Number(change.turnover ?? change.amount ?? stock.turnover) || 0
       stock.turnoverRate = Number(change.turnoverRate ?? stock.turnoverRate) || 0
+      stock.zlje = this.pickQuoteNumber(change.zlje, stock.zlje)
+      stock.zljzb = this.pickQuoteNumber(change.zljzb, stock.zljzb)
+      stock.cddje = this.pickQuoteNumber(change.cddje, stock.cddje)
+      stock.cddjzb = this.pickQuoteNumber(change.cddjzb, stock.cddjzb)
+      stock.tdxBuyVolume = this.pickQuoteNumber(change.tdxBuyVolume, stock.tdxBuyVolume)
+      stock.tdxSellVolume = this.pickQuoteNumber(change.tdxSellVolume, stock.tdxSellVolume)
+      stock.tdxCurrentVolume = this.pickQuoteNumber(change.tdxCurrentVolume, stock.tdxCurrentVolume)
+      if (typeof change.moneyFlowSource === 'string' && change.moneyFlowSource.trim()) {
+        stock.moneyFlowSource = change.moneyFlowSource
+      }
+      if (typeof change.moneyFlowEstimated === 'boolean') {
+        stock.moneyFlowEstimated = change.moneyFlowEstimated
+      }
       stock.updatedAt = Date.now()
       if (typeof change.name === 'string' && change.name.trim()) {
         stock.name = change.name.trim()
@@ -1353,6 +1376,16 @@ class DataLayer {
     this.state.version.stocks++
     this.throttledNotify('merged.stocks', this.state.merged.stocks)
     this.throttledNotify('version.stocks', this.state.version.stocks)
+  }
+
+  private pickQuoteNumber(nextValue: unknown, currentValue: unknown): number {
+    const nextNumber = Number(nextValue)
+    const currentNumber = Number(currentValue)
+
+    if (Number.isFinite(nextNumber) && nextNumber !== 0) return nextNumber
+    if (Number.isFinite(currentNumber)) return currentNumber
+    if (Number.isFinite(nextNumber)) return nextNumber
+    return 0
   }
 
   updateQuote(code: string, data: any) {
@@ -2454,5 +2487,3 @@ export const dataLayer = new DataLayer()
 if (typeof window !== 'undefined') {
   ;(window as any).dataLayer = dataLayer
 }
-
-

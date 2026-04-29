@@ -24,6 +24,8 @@ import { stockCodeManager } from './StockCodeManager'
 import { calculateStockHotnessUpdates, stockHotnessConfigService } from './hotness'
 import { resolvePrimaryStockTheme } from './theme/stockThemeMeta'
 import { toLocalTradingDate } from './snapshot/identity'
+import { slotTimeToMinutes } from './snapshot/schedule'
+import type { SnapshotRecord, SnapshotStockRow } from './snapshot/types'
 import { EventManager } from '../utils/eventManager'
 import { webSocketService } from './websocket'
 import { AppEvents, type Depth10Book, type QuotePatch, type TickTrade } from '../types'
@@ -62,6 +64,15 @@ interface StockSignalUpdate {
   coverageWarning?: string | null
 }
 
+type IntradayVolumeSnapshotType = 'quarter_hour' | 'half_hour' | 'hourly'
+
+interface IntradayMoneyFlowStats {
+  tradingDate: string
+  activeAmount: number
+  mainNet: number
+  superNet: number
+}
+
 function isRankTrendAnalysisResult(value: unknown): value is RankTrendAnalysisResult {
   return !!(
     value &&
@@ -89,6 +100,11 @@ export interface MergedQuoteData {
   zljzb: number
   cddje: number
   cddjzb: number
+  moneyFlowSource?: string
+  moneyFlowEstimated?: boolean
+  tdxBuyVolume?: number
+  tdxSellVolume?: number
+  tdxCurrentVolume?: number
   name?: string
   sources: string[]
   confidence: number
@@ -139,10 +155,24 @@ class DataLoaderService {
   private batchTimer: ReturnType<typeof setTimeout> | null = null
   private readonly BATCH_DELAY = 50
   private readonly REALTIME_FLUSH_DELAY = 50
+  private readonly EASTMONEY_QUOTE_ENRICHMENT_ENABLED = false
+  private readonly SUPER_ORDER_AMOUNT_THRESHOLD = 1_000_000
+  private readonly SUPER_ORDER_VOLUME_THRESHOLD = 500_000
+  private readonly LARGE_ORDER_AMOUNT_THRESHOLD = 200_000
+  private readonly LARGE_ORDER_VOLUME_THRESHOLD = 100_000
+  private readonly MIN_MONEY_FLOW_SAMPLE_AMOUNT = 2_000_000
+  private readonly A_SHARE_TRADING_MINUTES = 240
+  private readonly VOLUME_RATIO_HISTORY_WEIGHTS = [5, 3, 2]
+  private readonly INTRADAY_VOLUME_SNAPSHOT_TYPES: IntradayVolumeSnapshotType[] = [
+    'quarter_hour',
+    'half_hour',
+    'hourly',
+  ]
   private realtimeFlushTimer: ReturnType<typeof setTimeout> | null = null
   private pendingRealtimeQuotes = new Map<string, QuotePatch>()
   private pendingDepthBooks = new Map<string, Depth10Book>()
   private pendingTicks = new Map<string, TickTrade[]>()
+  private intradayMoneyFlowStats = new Map<string, IntradayMoneyFlowStats>()
   private realtimeUnsubscribers: Array<() => void> = []
 
   private readonly PLATFORM_REFRESH_INTERVAL = 1800000 // 10分钟
@@ -226,21 +256,37 @@ class DataLoaderService {
     this.pendingDepthBooks.clear()
     this.pendingTicks.clear()
 
+    if (tickGroups.length) {
+      this.updateIntradayMoneyFlowStats(tickGroups)
+    }
+
     if (quoteItems.length) {
       dataLayer.applyRealtimeQuoteBatch(
-        quoteItems.map((item) => ({
-          code: item.code,
-          name: item.name,
-          price: item.lastPrice,
-          change: item.changePct,
-          speed: item.speed,
-          volume: item.volume,
-          turnover: item.amount,
-          turnoverRate: item.turnoverRate,
-          sourceTs: item.sourceTs,
-          seq: item.seq,
-          timestamp: Date.now(),
-        })),
+        quoteItems.map((item) => {
+          const estimatedMoneyFlow = this.estimateTdxMoneyFlow(item.code, item)
+          return {
+            code: item.code,
+            name: item.name,
+            price: item.lastPrice,
+            change: item.changePct,
+            speed: item.speed,
+            volume: item.volume,
+            turnover: item.amount,
+            turnoverRate: item.turnoverRate,
+            zlje: estimatedMoneyFlow?.zlje,
+            zljzb: estimatedMoneyFlow?.zljzb,
+            cddje: estimatedMoneyFlow?.cddje,
+            cddjzb: estimatedMoneyFlow?.cddjzb,
+            moneyFlowSource: estimatedMoneyFlow?.moneyFlowSource,
+            moneyFlowEstimated: estimatedMoneyFlow?.moneyFlowEstimated,
+            tdxBuyVolume: item.tdxBuyVolume,
+            tdxSellVolume: item.tdxSellVolume,
+            tdxCurrentVolume: item.tdxCurrentVolume,
+            sourceTs: item.sourceTs,
+            seq: item.seq,
+            timestamp: Date.now(),
+          }
+        }),
       )
     }
 
@@ -374,11 +420,171 @@ class DataLoaderService {
     return status.subscribedCount > 0 && webSocketService.isTdxRealtimeHealthy()
   }
 
+  private clamp(value: number, min: number, max: number): number {
+    return Math.max(min, Math.min(max, value))
+  }
+
+  private roundMoney(value: number): number {
+    return Number.isFinite(value) ? Math.round(value) : 0
+  }
+
+  private sameSign(left: number, right: number): boolean {
+    return left !== 0 && right !== 0 && Math.sign(left) === Math.sign(right)
+  }
+
+  private classifyMoneyFlowOrder(amount: number, volume: number): 'super' | 'large' | 'other' {
+    if (amount >= this.SUPER_ORDER_AMOUNT_THRESHOLD || volume >= this.SUPER_ORDER_VOLUME_THRESHOLD) {
+      return 'super'
+    }
+    if (amount >= this.LARGE_ORDER_AMOUNT_THRESHOLD || volume >= this.LARGE_ORDER_VOLUME_THRESHOLD) {
+      return 'large'
+    }
+    return 'other'
+  }
+
+  private updateIntradayMoneyFlowStats(groups: Array<{ code: string; items: TickTrade[] }>) {
+    const tradingDate = toLocalTradingDate(new Date())
+
+    groups.forEach((group) => {
+      const code = String(group.code || '')
+      if (!code || !Array.isArray(group.items) || !group.items.length) return
+
+      const current = this.intradayMoneyFlowStats.get(code)
+      const next: IntradayMoneyFlowStats =
+        current?.tradingDate === tradingDate
+          ? { ...current }
+          : { tradingDate, activeAmount: 0, mainNet: 0, superNet: 0 }
+
+      const delta = this.summarizeMoneyFlowTicks(group.items)
+      next.activeAmount += delta.activeAmount
+      next.mainNet += delta.mainNet
+      next.superNet += delta.superNet
+      this.intradayMoneyFlowStats.set(code, next)
+    })
+  }
+
+  private getIntradayMoneyFlowStats(code: string): IntradayMoneyFlowStats | null {
+    const stats = this.intradayMoneyFlowStats.get(code)
+    if (!stats || stats.tradingDate !== toLocalTradingDate(new Date())) return null
+    return stats
+  }
+
+  private summarizeMoneyFlowTicks(ticks: TickTrade[]) {
+    const summary = {
+      activeAmount: 0,
+      mainNet: 0,
+      superNet: 0,
+    }
+
+    ticks.forEach((tick) => {
+      if (tick.side !== 'buy' && tick.side !== 'sell') return
+      const amount = Number(tick.amount) || 0
+      const volume = Number(tick.volume) || 0
+      if (amount <= 0 || volume <= 0) return
+
+      summary.activeAmount += amount
+      const direction = tick.side === 'buy' ? 1 : -1
+      const bucket = this.classifyMoneyFlowOrder(amount, volume * 100)
+      if (bucket === 'super') {
+        summary.superNet += amount * direction
+        summary.mainNet += amount * direction
+      } else if (bucket === 'large') {
+        summary.mainNet += amount * direction
+      }
+    })
+
+    return summary
+  }
+
+  private pickNonZeroNumber(...values: unknown[]): number {
+    for (const value of values) {
+      const number = Number(value)
+      if (Number.isFinite(number) && number !== 0) return number
+    }
+
+    for (const value of values) {
+      const number = Number(value)
+      if (Number.isFinite(number)) return number
+    }
+
+    return 0
+  }
+
+  private pickPositiveNumber(...values: unknown[]): number {
+    for (const value of values) {
+      const number = Number(value)
+      if (Number.isFinite(number) && number > 0) return number
+    }
+
+    return 0
+  }
+
+  private estimateTdxMoneyFlow(code: string, quote: QuotePatch): Partial<MergedQuoteData> | null {
+    const price = Number(quote.lastPrice) || 0
+    const buyVolume = Number(quote.tdxBuyVolume) || 0
+    const sellVolume = Number(quote.tdxSellVolume) || 0
+    const activeVolume = buyVolume + sellVolume
+
+    if (price <= 0 || activeVolume <= 0) return null
+
+    const activeAmount = activeVolume * price * 100
+    const turnover = Number(quote.amount) > 0 ? Number(quote.amount) : activeAmount
+    if (turnover <= 0) return null
+
+    const activeNet = (buyVolume - sellVolume) * price * 100
+    const depthImbalance = Number(dataLayer.getL2Summary(code)?.depthImbalance) || 0
+    const recentTicks = dataLayer.getRecentTicks(code)
+    const tickSummary = this.summarizeMoneyFlowTicks(recentTicks)
+    const intradayStats = this.getIntradayMoneyFlowStats(code)
+    const sampleAmount = intradayStats?.activeAmount || tickSummary.activeAmount
+    const sampleMainNet = intradayStats?.mainNet || tickSummary.mainNet
+    const sampleSuperNet = intradayStats?.superNet || tickSummary.superNet
+    const hasUsableTickSample = sampleAmount >= this.MIN_MONEY_FLOW_SAMPLE_AMOUNT
+    const mainShare = hasUsableTickSample ? this.clamp(sampleMainNet / sampleAmount, -1, 1) : 0
+    const superShare = hasUsableTickSample ? this.clamp(sampleSuperNet / sampleAmount, -1, 1) : 0
+
+    let mainNet = hasUsableTickSample ? activeAmount * mainShare : 0
+    let estimatedSuperNet = hasUsableTickSample ? activeAmount * superShare : 0
+
+    if (activeNet !== 0) {
+      if (!hasUsableTickSample) {
+        const fallbackRatio = this.clamp(Math.abs(activeNet) / Math.max(activeAmount, 1), 0, 0.3)
+        mainNet = Math.sign(activeNet) * activeAmount * fallbackRatio
+        estimatedSuperNet = mainNet * 0.35
+      } else if (!this.sameSign(mainNet, activeNet)) {
+        mainNet *= 0.5
+        estimatedSuperNet *= this.sameSign(estimatedSuperNet, activeNet) ? 1 : 0.5
+      }
+    }
+
+    if (depthImbalance !== 0 && activeNet !== 0 && !this.sameSign(depthImbalance, activeNet)) {
+      mainNet *= 0.9
+      estimatedSuperNet *= 0.9
+    }
+
+    if (Math.abs(estimatedSuperNet) > Math.abs(mainNet)) {
+      estimatedSuperNet = Math.sign(estimatedSuperNet) * Math.abs(mainNet)
+    }
+
+    return {
+      zlje: this.roundMoney(mainNet),
+      zljzb: Number(this.clamp((mainNet / turnover) * 100, -100, 100).toFixed(2)),
+      cddje: this.roundMoney(estimatedSuperNet),
+      cddjzb: Number(this.clamp((estimatedSuperNet / turnover) * 100, -100, 100).toFixed(2)),
+      tdxBuyVolume: buyVolume,
+      tdxSellVolume: sellVolume,
+      tdxCurrentVolume: Number(quote.tdxCurrentVolume) || 0,
+      moneyFlowSource: 'tdx_estimate',
+      moneyFlowEstimated: true,
+    }
+  }
+
   private buildRealtimeMergedQuoteData(code: string, quote: QuotePatch): MergedQuoteData {
     const existingQuote = dataLayer.getQuote(code) || {}
     const stock = dataLayer.getStock(code)
     const speedCandidate = quote.speed ?? existingQuote?.speed
     const speed = typeof speedCandidate === 'number' && Number.isFinite(speedCandidate) ? speedCandidate : undefined
+    const estimatedMoneyFlow = this.estimateTdxMoneyFlow(code, quote)
 
     return {
       price: Number(quote.lastPrice) || 0,
@@ -386,26 +592,44 @@ class DataLoaderService {
       speed,
       volume: Number(quote.volume ?? stock?.volume ?? existingQuote?.volume) || 0,
       turnover: Number(quote.amount ?? stock?.turnover ?? existingQuote?.turnover) || 0,
-      turnoverRate: Number(quote.turnoverRate ?? stock?.turnoverRate ?? existingQuote?.turnoverRate) || 0,
+      turnoverRate: this.pickPositiveNumber(quote.turnoverRate, stock?.turnoverRate, existingQuote?.turnoverRate),
       pe: Number(stock?.pe ?? existingQuote?.pe) || 0,
       totalMV: Number(stock?.totalMV ?? existingQuote?.totalMV) || 0,
       cirMV: Number(stock?.cirMV ?? existingQuote?.cirMV) || 0,
       pb: Number(stock?.pb ?? existingQuote?.pb) || 0,
-      zlje: Number(stock?.zlje ?? existingQuote?.zlje) || 0,
-      zljzb: Number(stock?.zljzb ?? existingQuote?.zljzb) || 0,
-      cddje: Number(stock?.cddje ?? existingQuote?.cddje) || 0,
-      cddjzb: Number(stock?.cddjzb ?? existingQuote?.cddjzb) || 0,
+      zlje: this.pickNonZeroNumber(estimatedMoneyFlow?.zlje, stock?.zlje, existingQuote?.zlje),
+      zljzb: this.pickNonZeroNumber(estimatedMoneyFlow?.zljzb, stock?.zljzb, existingQuote?.zljzb),
+      cddje: this.pickNonZeroNumber(estimatedMoneyFlow?.cddje, stock?.cddje, existingQuote?.cddje),
+      cddjzb: this.pickNonZeroNumber(estimatedMoneyFlow?.cddjzb, stock?.cddjzb, existingQuote?.cddjzb),
+      moneyFlowSource: estimatedMoneyFlow?.moneyFlowSource ?? stock?.moneyFlowSource ?? existingQuote?.moneyFlowSource,
+      moneyFlowEstimated: estimatedMoneyFlow?.moneyFlowEstimated ?? stock?.moneyFlowEstimated ?? existingQuote?.moneyFlowEstimated,
+      tdxBuyVolume: Number(quote.tdxBuyVolume ?? stock?.tdxBuyVolume ?? existingQuote?.tdxBuyVolume) || 0,
+      tdxSellVolume: Number(quote.tdxSellVolume ?? stock?.tdxSellVolume ?? existingQuote?.tdxSellVolume) || 0,
+      tdxCurrentVolume: Number(quote.tdxCurrentVolume ?? stock?.tdxCurrentVolume ?? existingQuote?.tdxCurrentVolume) || 0,
       name: quote.name || stock?.name || existingQuote?.name,
-      sources: ['tdx_l2'],
+      sources: estimatedMoneyFlow ? ['tdx_l2', 'tdx_money_estimate'] : ['tdx_l2'],
       confidence: 99,
       timestamp: Date.now(),
     }
+  }
+
+  private hasFundFlowData(quote: Partial<MergedQuoteData> | null | undefined): boolean {
+    if (!quote) return false
+    return ['zlje', 'zljzb', 'cddje', 'cddjzb'].some((key) => {
+      const value = Number((quote as Record<string, unknown>)[key])
+      return Number.isFinite(value) && value !== 0
+    })
   }
 
   private mergeHttpIntoRealtimeQuote(
     realtimeQuote: MergedQuoteData,
     httpQuote: MergedQuoteData,
   ): MergedQuoteData {
+    const preferHttpFundFlow =
+      realtimeQuote.moneyFlowEstimated === true &&
+      httpQuote.moneyFlowEstimated !== true &&
+      httpQuote.moneyFlowSource === 'eastmoney' &&
+      this.hasFundFlowData(httpQuote)
     const pickFinite = (primary: unknown, fallback: unknown, preferPositive = false) => {
       const primaryNumber = Number(primary)
       if (Number.isFinite(primaryNumber) && (!preferPositive || primaryNumber > 0)) {
@@ -417,6 +641,16 @@ class DataLoaderService {
         return fallbackNumber
       }
 
+      return 0
+    }
+    const pickFundFlow = (primary: unknown, fallback: unknown) => {
+      const primaryNumber = Number(primary)
+      const fallbackNumber = Number(fallback)
+
+      if (Number.isFinite(primaryNumber) && primaryNumber !== 0) return primaryNumber
+      if (Number.isFinite(fallbackNumber) && fallbackNumber !== 0) return fallbackNumber
+      if (Number.isFinite(primaryNumber)) return primaryNumber
+      if (Number.isFinite(fallbackNumber)) return fallbackNumber
       return 0
     }
 
@@ -432,10 +666,15 @@ class DataLoaderService {
       totalMV: pickFinite(realtimeQuote.totalMV, httpQuote.totalMV, true),
       cirMV: pickFinite(realtimeQuote.cirMV, httpQuote.cirMV, true),
       pb: pickFinite(realtimeQuote.pb, httpQuote.pb),
-      zlje: pickFinite(realtimeQuote.zlje, httpQuote.zlje),
-      zljzb: pickFinite(realtimeQuote.zljzb, httpQuote.zljzb),
-      cddje: pickFinite(realtimeQuote.cddje, httpQuote.cddje),
-      cddjzb: pickFinite(realtimeQuote.cddjzb, httpQuote.cddjzb),
+      zlje: preferHttpFundFlow ? pickFundFlow(httpQuote.zlje, realtimeQuote.zlje) : pickFundFlow(realtimeQuote.zlje, httpQuote.zlje),
+      zljzb: preferHttpFundFlow ? pickFundFlow(httpQuote.zljzb, realtimeQuote.zljzb) : pickFundFlow(realtimeQuote.zljzb, httpQuote.zljzb),
+      cddje: preferHttpFundFlow ? pickFundFlow(httpQuote.cddje, realtimeQuote.cddje) : pickFundFlow(realtimeQuote.cddje, httpQuote.cddje),
+      cddjzb: preferHttpFundFlow ? pickFundFlow(httpQuote.cddjzb, realtimeQuote.cddjzb) : pickFundFlow(realtimeQuote.cddjzb, httpQuote.cddjzb),
+      moneyFlowSource: preferHttpFundFlow ? httpQuote.moneyFlowSource : realtimeQuote.moneyFlowSource || httpQuote.moneyFlowSource,
+      moneyFlowEstimated: preferHttpFundFlow ? httpQuote.moneyFlowEstimated : realtimeQuote.moneyFlowEstimated ?? httpQuote.moneyFlowEstimated,
+      tdxBuyVolume: pickFinite(realtimeQuote.tdxBuyVolume, httpQuote.tdxBuyVolume),
+      tdxSellVolume: pickFinite(realtimeQuote.tdxSellVolume, httpQuote.tdxSellVolume),
+      tdxCurrentVolume: pickFinite(realtimeQuote.tdxCurrentVolume, httpQuote.tdxCurrentVolume),
       name: realtimeQuote.name || httpQuote.name,
       sources: Array.from(new Set([...(realtimeQuote.sources || []), ...(httpQuote.sources || [])])),
       confidence: Math.max(Number(realtimeQuote.confidence) || 0, Number(httpQuote.confidence) || 0),
@@ -560,14 +799,22 @@ class DataLoaderService {
   private async updateVolumeRatios(codes: string[]): Promise<void> {
     try {
       const stocks = dataLayer.getStocks()
-      const volumeHistoryMap = await this.buildVolumeHistoryMap(codes)
+      const [volumeHistoryMap, intradayVolumeHistoryMap] = await Promise.all([
+        this.buildVolumeHistoryMap(codes),
+        this.buildIntradayVolumeHistoryMap(codes),
+      ])
 
       const updates: Array<{ code: string; volumeRatio?: number }> = []
 
       for (const code of codes) {
         const stock = stocks.find((s) => s.code === code)
         if (stock && stock.volume && stock.volume > 0) {
-          const volumeRatio = this.calculateVolumeRatioValue(stock, code, volumeHistoryMap)
+          const volumeRatio = this.calculateVolumeRatioValue(
+            stock,
+            code,
+            volumeHistoryMap,
+            intradayVolumeHistoryMap,
+          )
           if (volumeRatio !== stock.volumeRatio) {
             updates.push({ code, volumeRatio })
           }
@@ -592,40 +839,120 @@ class DataLoaderService {
     stock: any,
     code: string,
     volumeHistoryMap: Map<string, number[]>,
+    intradayVolumeHistoryMap: Map<string, number[]> = new Map(),
   ): number | undefined {
     const currentVolume = Number(stock.volume)
     if (!Number.isFinite(currentVolume) || currentVolume <= 0) return undefined
 
-    const volumes = this.resolveVolumeRatioHistory(currentVolume, volumeHistoryMap.get(code))
-    if (volumes.length === 0) return undefined
+    const intradayVolumes = this.normalizeVolumeHistory(intradayVolumeHistoryMap.get(code))
+    if (intradayVolumes.length >= 2) {
+      return this.calculateWeightedVolumeRatio(currentVolume, intradayVolumes)
+    }
 
-    const WEIGHTS = [5, 3, 2]
-    const daysToUse = Math.min(volumes.length, WEIGHTS.length)
+    const volumes = this.resolveVolumeRatioHistory(currentVolume, volumeHistoryMap.get(code))
+    if (volumes.length < 2) return undefined
+
+    const expectedVolumeProgress = this.getAshareExpectedVolumeProgress()
+    if (!expectedVolumeProgress) return undefined
+    const avgDailyVolume = this.calculateWeightedAverageVolume(volumes)
+    if (!avgDailyVolume) return undefined
+
+    const expectedVolume = avgDailyVolume * expectedVolumeProgress
+    return this.calculateRawVolumeRatio(currentVolume, expectedVolume)
+  }
+
+  private calculateWeightedVolumeRatio(currentVolume: number, volumes: number[]): number | undefined {
+    const avgVolume = this.calculateWeightedAverageVolume(volumes)
+    if (!avgVolume) return undefined
+    return this.calculateRawVolumeRatio(currentVolume, avgVolume)
+  }
+
+  private calculateWeightedAverageVolume(volumes: number[]): number | undefined {
+    const daysToUse = Math.min(volumes.length, this.VOLUME_RATIO_HISTORY_WEIGHTS.length)
+    if (daysToUse === 0) return undefined
 
     let weightedSum = 0
     let totalWeight = 0
 
     for (let i = 0; i < daysToUse; i++) {
-      weightedSum += volumes[i] * WEIGHTS[i]
-      totalWeight += WEIGHTS[i]
+      const weight = this.VOLUME_RATIO_HISTORY_WEIGHTS[i]
+      weightedSum += volumes[i] * weight
+      totalWeight += weight
     }
 
     if (totalWeight === 0) return undefined
 
     const avgVolume = weightedSum / totalWeight
-    if (avgVolume <= 0) return undefined
+    return avgVolume > 0 ? avgVolume : undefined
+  }
 
-    let ratio = currentVolume / avgVolume
-    ratio = Math.min(10, Math.max(0.1, Number(ratio.toFixed(2))))
+  private calculateRawVolumeRatio(currentVolume: number, expectedVolume: number): number | undefined {
+    if (expectedVolume <= 0) return undefined
+    let ratio = currentVolume / expectedVolume
+    if (!Number.isFinite(ratio) || ratio <= 0) return undefined
+
+    ratio = Math.min(99.99, Math.max(0.01, Number(ratio.toFixed(2))))
     return ratio
+  }
+
+  private getAshareElapsedTradingMinutes(date: Date = new Date()): number | undefined {
+    const secondsOfDay = date.getHours() * 3600 + date.getMinutes() * 60 + date.getSeconds()
+    const morningStart = 9 * 3600 + 30 * 60
+    const morningEnd = 11 * 3600 + 30 * 60
+    const afternoonStart = 13 * 3600
+    const afternoonEnd = 15 * 3600
+
+    if (secondsOfDay < morningStart) return undefined
+    if (secondsOfDay <= morningEnd) {
+      return Math.min(120, Math.max(1, Math.ceil((secondsOfDay - morningStart) / 60)))
+    }
+    if (secondsOfDay < afternoonStart) return 120
+    if (secondsOfDay <= afternoonEnd) {
+      return Math.min(
+        this.A_SHARE_TRADING_MINUTES,
+        120 + Math.max(1, Math.ceil((secondsOfDay - afternoonStart) / 60)),
+      )
+    }
+
+    return this.A_SHARE_TRADING_MINUTES
+  }
+
+  private getAshareExpectedVolumeProgress(date: Date = new Date()): number | undefined {
+    const elapsedMinutes = this.getAshareElapsedTradingMinutes(date)
+    if (!elapsedMinutes) return undefined
+
+    // A 股成交量不是线性分布，开盘半小时天然放量；用经验曲线压住早盘虚高量比。
+    if (elapsedMinutes <= 30) {
+      return this.clamp(0.06 + (elapsedMinutes / 30) * 0.18, 0.06, 0.24)
+    }
+    if (elapsedMinutes <= 120) {
+      return 0.24 + ((elapsedMinutes - 30) / 90) * 0.26
+    }
+    if (elapsedMinutes <= 180) {
+      return 0.5 + ((elapsedMinutes - 120) / 60) * 0.25
+    }
+
+    return this.clamp(
+      0.75 + ((elapsedMinutes - 180) / 60) * 0.25,
+      0.75,
+      1,
+    )
+  }
+
+  private normalizeVolumeHistory(
+    volumes?: number[],
+    limit: number = this.VOLUME_RATIO_HISTORY_WEIGHTS.length,
+  ): number[] {
+    return (volumes || [])
+      .map((volume) => Number(volume))
+      .filter((volume) => Number.isFinite(volume) && volume > 0)
+      .slice(0, limit)
   }
 
   private resolveVolumeRatioHistory(currentVolume: number, volumes?: number[]): number[] {
     if (!volumes?.length) return []
 
-    const normalized = volumes
-      .map((volume) => Number(volume))
-      .filter((volume) => Number.isFinite(volume) && volume > 0)
+    const normalized = this.normalizeVolumeHistory(volumes, this.VOLUME_RATIO_HISTORY_WEIGHTS.length + 1)
 
     if (!normalized.length) return []
 
@@ -670,10 +997,14 @@ class DataLoaderService {
       realtimeQuotes.forEach((quote, code) => {
         const mergedRealtimeQuote = this.buildRealtimeMergedQuoteData(code, quote)
         result.set(code, mergedRealtimeQuote)
+        const quoteTurnoverRate = Number(quote.turnoverRate)
         if (
-          (quote.turnoverRate === undefined || quote.turnoverRate === null) &&
+          (!Number.isFinite(quoteTurnoverRate) || quoteTurnoverRate <= 0) &&
           !(Number(mergedRealtimeQuote.turnoverRate) > 0)
         ) {
+          enrichmentCodes.add(code)
+        }
+        if (!this.hasFundFlowData(mergedRealtimeQuote)) {
           enrichmentCodes.add(code)
         }
       })
@@ -821,6 +1152,10 @@ class DataLoaderService {
    * 获取完整数据（东财）
    */
   private async fetchFullData(codes: string[], force?: boolean): Promise<Map<string, any>> {
+    if (!this.EASTMONEY_QUOTE_ENRICHMENT_ENABLED) {
+      return new Map()
+    }
+
     return await this.fetchFromEastMoney(codes, force)
   }
 
@@ -1208,7 +1543,10 @@ class DataLoaderService {
     // 1. 获取历史成交量索引
     const allCodes = this.getAllHotCodes()
     const codesArray = Array.from(allCodes)
-    const volumeHistoryMap = await this.buildVolumeHistoryMap(codesArray)
+    const [volumeHistoryMap, intradayVolumeHistoryMap] = await Promise.all([
+      this.buildVolumeHistoryMap(codesArray),
+      this.buildIntradayVolumeHistoryMap(codesArray),
+    ])
 
     // 2. ✅ 先加载行情数据
     let quotesMap = new Map<string, any>()
@@ -1221,7 +1559,12 @@ class DataLoaderService {
     const existingMap = new Map(existingStocks.map((s) => [s.code, s]))
 
     // 4. 构建股票数据（传入行情数据）
-    const stockMap = await this.buildStockMap(quotesMap, volumeHistoryMap, existingMap)
+    const stockMap = await this.buildStockMap(
+      quotesMap,
+      volumeHistoryMap,
+      existingMap,
+      intradayVolumeHistoryMap,
+    )
 
     // 5. 名称兜底
     this.StockNames(stockMap)
@@ -1395,6 +1738,168 @@ class DataLoaderService {
     return resolved ?? 1
   }
 
+  public async buildIntradayVolumeHistoryMap(
+    codes: string[] = [],
+    date: Date = new Date(),
+  ): Promise<Map<string, number[]>> {
+    const targetCodes = filterValidStockCodes([...new Set(codes)])
+    const targetClockMinute = this.getAshareVolumeClockMinute(date)
+    if (targetCodes.length === 0 || targetClockMinute === undefined) return new Map()
+
+    const anchorTradingDate = toLocalTradingDate(date)
+    const allowedCaptureModes: Array<'real_time' | 'delayed'> = ['real_time', 'delayed']
+    const snapshotGroups = await Promise.all(
+      this.INTRADAY_VOLUME_SNAPSHOT_TYPES.map((type) =>
+        dataLayer.listSnapshots({
+          type,
+          beforeTradingDate: anchorTradingDate,
+          allowedCaptureModes,
+          excludeRestored: true,
+          sort: 'desc',
+          limit: 120,
+        }),
+      ),
+    )
+
+    const recordsByDate = new Map<string, SnapshotRecord[]>()
+    snapshotGroups.flat().forEach((record) => {
+      const slotMinute = slotTimeToMinutes(record.slotTime)
+      if (!record.tradingDate || slotMinute < 0) return
+      const records = recordsByDate.get(record.tradingDate) || []
+      records.push(record)
+      recordsByDate.set(record.tradingDate, records)
+    })
+
+    const tradingDates = Array.from(recordsByDate.keys()).sort((left, right) => right.localeCompare(left)).slice(0, 3)
+    if (!tradingDates.length) return new Map()
+
+    const result = new Map<string, number[]>()
+
+    for (const tradingDate of tradingDates) {
+      const selected = this.selectIntradayVolumeSnapshots(
+        recordsByDate.get(tradingDate) || [],
+        targetClockMinute,
+      )
+      if (!selected) continue
+
+      const rowsBySnapshotId = await this.loadSnapshotRowsById(
+        [selected.previous.id, selected.next?.id].filter((id): id is string => Boolean(id)),
+        targetCodes,
+      )
+
+      targetCodes.forEach((code) => {
+        const volume = this.interpolateSnapshotVolume(
+          code,
+          selected,
+          rowsBySnapshotId,
+          targetClockMinute,
+        )
+        const volumeValue = Number(volume)
+        if (!Number.isFinite(volumeValue) || volumeValue <= 0) return
+        const volumes = result.get(code) || []
+        volumes.push(volumeValue)
+        result.set(code, volumes)
+      })
+    }
+
+    return result
+  }
+
+  private getAshareVolumeClockMinute(date: Date): number | undefined {
+    const secondsOfDay = date.getHours() * 3600 + date.getMinutes() * 60 + date.getSeconds()
+    const morningStart = 9 * 3600 + 30 * 60
+    const morningEnd = 11 * 3600 + 30 * 60
+    const afternoonStart = 13 * 3600
+    const afternoonEnd = 15 * 3600
+
+    if (secondsOfDay < morningStart) return undefined
+    if (secondsOfDay <= morningEnd) return secondsOfDay / 60
+    if (secondsOfDay < afternoonStart) return morningEnd / 60
+    if (secondsOfDay <= afternoonEnd) return secondsOfDay / 60
+    return afternoonEnd / 60
+  }
+
+  private selectIntradayVolumeSnapshots(
+    records: SnapshotRecord[],
+    targetClockMinute: number,
+  ): { previous: SnapshotRecord; next?: SnapshotRecord } | null {
+    for (const type of this.INTRADAY_VOLUME_SNAPSHOT_TYPES) {
+      const typeRecords = records
+        .filter((record) => record.type === type && slotTimeToMinutes(record.slotTime) >= 0)
+        .sort((left, right) => slotTimeToMinutes(left.slotTime) - slotTimeToMinutes(right.slotTime))
+
+      let previous: SnapshotRecord | null = null
+      let next: SnapshotRecord | undefined
+
+      for (const record of typeRecords) {
+        const slotMinute = slotTimeToMinutes(record.slotTime)
+        if (slotMinute <= targetClockMinute) previous = record
+        if (slotMinute >= targetClockMinute) {
+          next = record
+          break
+        }
+      }
+
+      if (previous) {
+        return {
+          previous,
+          next: next && next.id !== previous.id ? next : undefined,
+        }
+      }
+    }
+
+    return null
+  }
+
+  private async loadSnapshotRowsById(
+    snapshotIds: string[],
+    codes: string[],
+  ): Promise<Map<string, Map<string, SnapshotStockRow>>> {
+    const rowsBySnapshotId = new Map<string, Map<string, SnapshotStockRow>>()
+    const uniqueSnapshotIds = [...new Set(snapshotIds)]
+
+    await Promise.all(
+      uniqueSnapshotIds.map(async (snapshotId) => {
+        const rows = await dataLayer.listSnapshotStockRows({ snapshotId, codes })
+        const rowsByCode = new Map<string, SnapshotStockRow>()
+        rows.forEach((row) => {
+          if (row.code) rowsByCode.set(row.code, row)
+        })
+        rowsBySnapshotId.set(snapshotId, rowsByCode)
+      }),
+    )
+
+    return rowsBySnapshotId
+  }
+
+  private interpolateSnapshotVolume(
+    code: string,
+    selected: { previous: SnapshotRecord; next?: SnapshotRecord },
+    rowsBySnapshotId: Map<string, Map<string, SnapshotStockRow>>,
+    targetClockMinute: number,
+  ): number | undefined {
+    const previousRow = rowsBySnapshotId.get(selected.previous.id)?.get(code)
+    const previousVolume = Number(previousRow?.volume)
+    if (!Number.isFinite(previousVolume) || previousVolume <= 0) return undefined
+
+    if (!selected.next) return previousVolume
+
+    const previousMinute = slotTimeToMinutes(selected.previous.slotTime)
+    const nextMinute = slotTimeToMinutes(selected.next.slotTime)
+    if (previousMinute < 0 || nextMinute <= previousMinute) return previousVolume
+
+    const nextRow = rowsBySnapshotId.get(selected.next.id)?.get(code)
+    const nextVolume = Number(nextRow?.volume)
+    if (!Number.isFinite(nextVolume) || nextVolume < previousVolume) return previousVolume
+
+    const progress = this.clamp(
+      (targetClockMinute - previousMinute) / (nextMinute - previousMinute),
+      0,
+      1,
+    )
+    return previousVolume + (nextVolume - previousVolume) * progress
+  }
+
   /**
    * 1. 构建历史成交量索引
    * 正式主链只按 code + daily + tradingDate 读取日级快照投影行，
@@ -1416,6 +1921,7 @@ class DataLoaderService {
     useLatestQuotes: Map<string, any> | undefined,
     volumeHistoryMap: Map<string, number[]>,
     existingMap: Map<string, any>,
+    intradayVolumeHistoryMap: Map<string, number[]> = new Map(),
   ): Promise<Map<string, any>> {
     const quoteMap = useLatestQuotes ?? new Map()
     const stockMap = new Map<string, any>()
@@ -1452,9 +1958,9 @@ class DataLoaderService {
           quoteProcessedCodes.add(code)
         }
 
-        // 量比不依赖行情请求是否命中；只要当前 stock 有成交量，就按日级投影表历史量重算。
+        // 量比不依赖行情请求是否命中；优先按同时间盘中快照重算，缺失时降级到日级成交量进度。
         if (!volumeRatioCalculatedCodes.has(code)) {
-          this.calculateVolumeRatio(stock, code, volumeHistoryMap)
+          this.calculateVolumeRatio(stock, code, volumeHistoryMap, intradayVolumeHistoryMap)
           volumeRatioCalculatedCodes.add(code)
         }
       }
@@ -1469,7 +1975,7 @@ class DataLoaderService {
           quoteProcessedCodes.add(code)
         }
         if (!volumeRatioCalculatedCodes.has(code)) {
-          this.calculateVolumeRatio(stock, code, volumeHistoryMap)
+          this.calculateVolumeRatio(stock, code, volumeHistoryMap, intradayVolumeHistoryMap)
           volumeRatioCalculatedCodes.add(code)
         }
         stockMap.set(code, stock)
@@ -1486,20 +1992,44 @@ class DataLoaderService {
     const quote = quoteMap.get(code)
     if (!quote) return
 
+    const pickFundFlowValue = (nextValue: unknown, currentValue: unknown) => {
+      const nextNumber = Number(nextValue)
+      const currentNumber = Number(currentValue)
+
+      if (Number.isFinite(nextNumber) && nextNumber !== 0) return nextNumber
+      if (Number.isFinite(currentNumber)) return currentNumber
+      if (Number.isFinite(nextNumber)) return nextNumber
+      return 0
+    }
+    const pickPositiveValue = (nextValue: unknown, currentValue: unknown) => {
+      const nextNumber = Number(nextValue)
+      const currentNumber = Number(currentValue)
+
+      if (Number.isFinite(nextNumber) && nextNumber > 0) return nextNumber
+      if (Number.isFinite(currentNumber) && currentNumber > 0) return currentNumber
+      if (Number.isFinite(nextNumber)) return nextNumber
+      return 0
+    }
+
     Object.assign(stock, {
-      price: quote.price ?? stock.price,
+      price: pickPositiveValue(quote.price, stock.price),
       change: quote.change ?? stock.change,
-      volume: quote.volume ?? stock.volume,
-      turnover: quote.turnover ?? stock.turnover,
-      turnoverRate: quote.turnoverRate ?? stock.turnoverRate,
-      pe: quote.pe ?? stock.pe,
-      pb: quote.pb ?? stock.pb,
-      totalMV: quote.totalMV ?? stock.totalMV,
-      cirMV: quote.cirMV ?? stock.cirMV,
-      zlje: quote.zlje ?? stock.zlje,
-      zljzb: quote.zljzb ?? stock.zljzb,
-      cddje: quote.cddje ?? stock.cddje,
-      cddjzb: quote.cddjzb ?? stock.cddjzb,
+      volume: pickPositiveValue(quote.volume, stock.volume),
+      turnover: pickPositiveValue(quote.turnover, stock.turnover),
+      turnoverRate: pickPositiveValue(quote.turnoverRate, stock.turnoverRate),
+      pe: pickPositiveValue(quote.pe, stock.pe),
+      pb: pickPositiveValue(quote.pb, stock.pb),
+      totalMV: pickPositiveValue(quote.totalMV, stock.totalMV),
+      cirMV: pickPositiveValue(quote.cirMV, stock.cirMV),
+      zlje: pickFundFlowValue(quote.zlje, stock.zlje),
+      zljzb: pickFundFlowValue(quote.zljzb, stock.zljzb),
+      cddje: pickFundFlowValue(quote.cddje, stock.cddje),
+      cddjzb: pickFundFlowValue(quote.cddjzb, stock.cddjzb),
+      moneyFlowSource: quote.moneyFlowSource ?? stock.moneyFlowSource,
+      moneyFlowEstimated: quote.moneyFlowEstimated ?? stock.moneyFlowEstimated,
+      tdxBuyVolume: quote.tdxBuyVolume ?? stock.tdxBuyVolume,
+      tdxSellVolume: quote.tdxSellVolume ?? stock.tdxSellVolume,
+      tdxCurrentVolume: quote.tdxCurrentVolume ?? stock.tdxCurrentVolume,
     })
 
     let stockName = ''
@@ -1533,8 +2063,14 @@ class DataLoaderService {
     stock: any,
     code: string,
     volumeHistoryMap: Map<string, number[]>,
+    intradayVolumeHistoryMap: Map<string, number[]> = new Map(),
   ): void {
-    stock.volumeRatio = this.calculateVolumeRatioValue(stock, code, volumeHistoryMap)
+    stock.volumeRatio = this.calculateVolumeRatioValue(
+      stock,
+      code,
+      volumeHistoryMap,
+      intradayVolumeHistoryMap,
+    )
   }
 
   /**

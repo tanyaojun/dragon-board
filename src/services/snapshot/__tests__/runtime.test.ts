@@ -111,6 +111,7 @@ describe('SnapshotRuntime', () => {
   })
 
   afterEach(() => {
+    vi.useRealTimers()
     vi.unstubAllGlobals()
   })
 
@@ -199,6 +200,68 @@ describe('SnapshotRuntime', () => {
     await expect(runtime.getSnapshotBackupSyncState('2026-04-21')).resolves.toMatchObject({
       tradingDate: '2026-04-21',
       cloudBundleUploadedAt: uploadedAt,
+    })
+  })
+
+  it('backfills pending cloud trading dates after 15:30 in ascending order', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-04-28T15:35:00'))
+
+    const runtime = createRuntime()
+    const syncPrimarySnapshotsToCloud = vi
+      .spyOn(runtime, 'syncPrimarySnapshotsToCloud')
+      .mockImplementation(async (options?: { tradingDate?: string }) => {
+        const tradingDate = options?.tradingDate || ''
+        ;(runtime as any).recordCloudBundleUploaded(tradingDate, Date.now())
+        return { queued: 1, totalPrimary: 8 }
+      })
+
+    ;(runtime as any).recordBucketSyncSuccess('2026-04-27', Date.now() - 60_000)
+    ;(runtime as any).recordBucketSyncSuccess('2026-04-28', Date.now())
+    ;(runtime as any).snapshotStore = {
+      list: vi.fn().mockResolvedValue([
+        createRecord('daily', '2026-04-28', '15:00'),
+        createRecord('daily', '2026-04-27', '15:00'),
+      ]),
+    }
+
+    await (runtime as any).runDailyCloudSyncIfDue()
+
+    expect(syncPrimarySnapshotsToCloud).toHaveBeenNthCalledWith(1, {
+      overwrite: false,
+      tradingDate: '2026-04-27',
+    })
+    expect(syncPrimarySnapshotsToCloud).toHaveBeenNthCalledWith(2, {
+      overwrite: false,
+      tradingDate: '2026-04-28',
+    })
+  })
+
+  it('uses recent primary trading dates as cloud backfill candidates when sync state is missing', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-04-28T15:35:00'))
+
+    const runtime = createRuntime()
+    const syncPrimarySnapshotsToCloud = vi
+      .spyOn(runtime, 'syncPrimarySnapshotsToCloud')
+      .mockResolvedValue({ queued: 1, totalPrimary: 8 })
+
+    ;(runtime as any).snapshotStore = {
+      list: vi.fn().mockResolvedValue([
+        createRecord('daily', '2026-04-28', '15:00'),
+        createRecord('daily', '2026-04-27', '15:00'),
+      ]),
+    }
+
+    await (runtime as any).runDailyCloudSyncIfDue()
+
+    expect(syncPrimarySnapshotsToCloud).toHaveBeenNthCalledWith(1, {
+      overwrite: false,
+      tradingDate: '2026-04-27',
+    })
+    expect(syncPrimarySnapshotsToCloud).toHaveBeenNthCalledWith(2, {
+      overwrite: false,
+      tradingDate: '2026-04-28',
     })
   })
 

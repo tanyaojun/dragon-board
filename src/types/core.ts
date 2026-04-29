@@ -65,6 +65,11 @@ export interface Stock {
   institutionBuy?: number
   mainBuy?: number
   mainSell?: number
+  moneyFlowSource?: string
+  moneyFlowEstimated?: boolean
+  tdxBuyVolume?: number
+  tdxSellVolume?: number
+  tdxCurrentVolume?: number
   fengdan?: number
   maxFengdan?: number
   hotness?: number
@@ -160,6 +165,9 @@ export interface QuotePatch {
   volume: number
   amount: number
   turnoverRate?: number
+  tdxBuyVolume?: number
+  tdxSellVolume?: number
+  tdxCurrentVolume?: number
   open?: number
   high?: number
   low?: number

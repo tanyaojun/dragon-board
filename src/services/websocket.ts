@@ -124,8 +124,11 @@ function normalizeQuotePatch(item: any): QuotePatch | null {
   const amount = toNumber(item?.amount ?? item?.turnover ?? item?.f6)
   const volume = toNumber(item?.volume ?? item?.f5)
   const turnoverRate = toOptionalNumber(item?.turnoverRate ?? item?.f8)
+  const tdxBuyVolume = toOptionalNumber(item?.tdxBuyVolume ?? item?.buyVolume ?? item?.bVol ?? item?.b_vol)
+  const tdxSellVolume = toOptionalNumber(item?.tdxSellVolume ?? item?.sellVolume ?? item?.sVol ?? item?.s_vol)
+  const tdxCurrentVolume = toOptionalNumber(item?.tdxCurrentVolume ?? item?.currentVolume ?? item?.curVol ?? item?.cur_vol)
 
-  return {
+  const patch: QuotePatch = {
     code,
     name: typeof item?.name === 'string' && item.name.trim() ? item.name.trim() : undefined,
     lastPrice,
@@ -142,6 +145,12 @@ function normalizeQuotePatch(item: any): QuotePatch | null {
     sourceTs: toNumber(item?.sourceTs ?? item?.timestamp),
     seq: toNumber(item?.seq),
   }
+
+  if (tdxBuyVolume !== undefined) patch.tdxBuyVolume = tdxBuyVolume
+  if (tdxSellVolume !== undefined) patch.tdxSellVolume = tdxSellVolume
+  if (tdxCurrentVolume !== undefined) patch.tdxCurrentVolume = tdxCurrentVolume
+
+  return patch
 }
 
 function normalizeDepth10Book(item: any): Depth10Book | null {
@@ -167,12 +176,19 @@ function normalizeTickTrade(code: string, item: any): TickTrade | null {
   if (!code) return null
   const normalizedCode = normalizeCode(code)
   if (!normalizedCode) return null
+  const price = toNumber(item?.price)
+  const volume = toNumber(item?.volume)
+  const inferredAmount = price > 0 && volume > 0 ? price * volume * 100 : 0
+  let amount = toNumber(item?.amount)
+  if (inferredAmount > 0 && (amount <= 0 || amount < inferredAmount * 0.2)) {
+    amount = inferredAmount
+  }
 
   return {
     code: normalizedCode,
-    price: toNumber(item?.price),
-    volume: toNumber(item?.volume),
-    amount: toNumber(item?.amount),
+    price,
+    volume,
+    amount,
     side: item?.side === 'buy' || item?.side === 'sell' ? item.side : 'neutral',
     tradeTime: typeof item?.tradeTime === 'string' ? item.tradeTime : String(item?.ts || ''),
     sourceTs: toNumber(item?.sourceTs ?? item?.timestamp),

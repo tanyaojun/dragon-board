@@ -1,6 +1,12 @@
 import { debugLog } from '@/utils/logger'
 // src/services/apiService.ts
 import { API_CONFIG } from '../config/constants'
+import type {
+  CloudBackupHealth,
+  CloudDayBundleUploadResult,
+  CloudManifestWindow,
+  SnapshotDayBundle,
+} from './snapshot/types'
 // ========== 类型定义 ==========
 
 /** HTTP 方法 */
@@ -71,6 +77,15 @@ interface CacheItem<T> {
   timestamp: number
   ttl: number
   etag?: string
+}
+
+export interface ApiEnvelope<T> {
+  ok: boolean
+  requestId?: string
+  message?: string
+  errorCode?: string
+  data: T
+  details?: unknown
 }
 
 // ========== 请求队列（优先级控制） ==========
@@ -633,6 +648,81 @@ export class ApiService {
       cacheTTL: 30000,
       ...options,
     })
+  }
+
+  /** 快照远端健康检查 */
+  async getSnapshotRemoteHealth(options?: RequestConfig) {
+    return this.get<ApiEnvelope<CloudBackupHealth>>('/api/snapshots/remote/health', {
+      context: 'unknown',
+      priority: 'low',
+      retries: 0,
+      timeout: 8000,
+      cache: false,
+      silent: true,
+      ...options,
+    })
+  }
+
+  /** 快照远端 manifest */
+  async listSnapshotRemoteManifest(
+    params?: {
+      startDate?: string
+      endDate?: string
+      type?: string
+      limit?: number
+      cursor?: string
+    },
+    options?: RequestConfig,
+  ) {
+    const query = new URLSearchParams()
+    if (params?.startDate) query.set('startDate', params.startDate)
+    if (params?.endDate) query.set('endDate', params.endDate)
+    if (params?.type) query.set('type', params.type)
+    if (params?.limit) query.set('limit', String(params.limit))
+    if (params?.cursor) query.set('cursor', params.cursor)
+
+    return this.get<ApiEnvelope<CloudManifestWindow>>(
+      `/api/snapshots/remote/manifest${query.size > 0 ? `?${query.toString()}` : ''}`,
+      {
+        context: 'unknown',
+        priority: 'low',
+        retries: 1,
+        timeout: 15000,
+        cache: false,
+        ...options,
+      },
+    )
+  }
+
+  /** 上传按交易日聚合的远端 bundle */
+  async uploadSnapshotRemoteDayBundle(bundle: SnapshotDayBundle, options?: RequestConfig) {
+    return this.post<ApiEnvelope<CloudDayBundleUploadResult>>(
+      '/api/snapshots/remote/upload-day-bundle',
+      bundle,
+      {
+        context: 'unknown',
+        priority: 'low',
+        retries: 1,
+        timeout: 60000,
+        cache: false,
+        ...options,
+      },
+    )
+  }
+
+  /** 下载远端交易日 bundle */
+  async downloadSnapshotRemoteDayBundle(tradingDate: string, options?: RequestConfig) {
+    return this.get<ApiEnvelope<SnapshotDayBundle | null>>(
+      `/api/snapshots/remote/download-day-bundle/${encodeURIComponent(tradingDate)}`,
+      {
+        context: 'unknown',
+        priority: 'low',
+        retries: 1,
+        timeout: 15000,
+        cache: false,
+        ...options,
+      },
+    )
   }
 
   /** 调用TDX接口 */

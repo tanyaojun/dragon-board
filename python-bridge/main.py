@@ -240,6 +240,9 @@ def normalize_quote_row(row: dict[str, Any]) -> dict[str, Any] | None:
     turnover_rate = to_optional_number(pick(row, "turnover_rate", "turnoverRate"))
     volume = to_number(pick(row, "volume", "vol", "trade"))
     amount = to_number(pick(row, "amount", "turnover"))
+    tdx_buy_volume = to_number(pick(row, "b_vol", "buy_volume", "buyVolume"))
+    tdx_sell_volume = to_number(pick(row, "s_vol", "sell_volume", "sellVolume"))
+    tdx_current_volume = to_number(pick(row, "cur_vol", "current_volume", "currentVolume"))
 
     payload = {
         "code": code,
@@ -253,6 +256,9 @@ def normalize_quote_row(row: dict[str, Any]) -> dict[str, Any] | None:
         "high": to_number(pick(row, "high")),
         "low": to_number(pick(row, "low")),
         "preClose": pre_close,
+        "tdxBuyVolume": tdx_buy_volume,
+        "tdxSellVolume": tdx_sell_volume,
+        "tdxCurrentVolume": tdx_current_volume,
         "sourceTs": now_ms(),
     }
 
@@ -365,8 +371,9 @@ def normalize_tick_row(code: str, row: dict[str, Any]) -> dict[str, Any] | None:
         return None
 
     amount = to_number(pick(row, "amount"))
-    if amount <= 0 and price > 0 and volume > 0:
-        amount = price * volume
+    inferred_amount = price * volume * 100 if price > 0 and volume > 0 else 0.0
+    if inferred_amount > 0 and (amount <= 0 or amount < inferred_amount * 0.2):
+        amount = inferred_amount
 
     return {
         "code": normalized_code,

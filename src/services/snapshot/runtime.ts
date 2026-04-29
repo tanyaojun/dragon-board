@@ -1516,7 +1516,7 @@ export class SnapshotRuntime {
   }
 
   private async runDailyCloudSyncIfDue(): Promise<void> {
-    // 云端正式归档按交易日做一次即可，因此只在 15:30 后、且当天尚未成功时触发。
+    // 云端正式归档只在 15:30 后触发，但一旦前几天漏传，也要顺手补齐，而不是永远只盯当天。
     const now = new Date()
     const tradingDate = toLocalTradingDate(now)
     const hour = now.getHours()
@@ -1524,21 +1524,74 @@ export class SnapshotRuntime {
     const due = hour > 15 || (hour === 15 && minute >= 30)
 
     if (!due) return
-    if (this.lastCloudSyncTradingDate === tradingDate) return
-
-    this.lastCloudSyncTradingDate = tradingDate
-    try {
-      await this.syncPrimarySnapshotsToCloud({
-        overwrite: false,
-        tradingDate,
-      })
+    const pendingTradingDates = await this.collectPendingCloudSyncTradingDates(tradingDate)
+    if (pendingTradingDates.length === 0) {
+      this.lastCloudSyncTradingDate =
+        this.backupSyncStateStore.getLatestCloudSyncedTradingDate() || this.lastCloudSyncTradingDate
       this.clearLegacyCloudSyncTradingDatePersistence()
-      this.logger.log?.(`[DataLayer] Daily cloud sync completed for ${tradingDate}`)
-    } catch (error) {
-      this.lastCloudSyncTradingDate = ''
-      this.clearLegacyCloudSyncTradingDatePersistence()
-      this.logger.warn?.(`[DataLayer] Daily cloud sync failed for ${tradingDate}:`, error)
+      return
     }
+
+    let syncingTradingDate = ''
+    try {
+      for (const pendingTradingDate of pendingTradingDates) {
+        syncingTradingDate = pendingTradingDate
+        const result = await this.syncPrimarySnapshotsToCloud({
+          overwrite: false,
+          tradingDate: pendingTradingDate,
+        })
+        const state = this.backupSyncStateStore.get(pendingTradingDate)
+        if (!state?.cloudBundleUploadedAt && result.totalPrimary > 0 && result.queued === 0) {
+          this.recordCloudBundleUploaded(pendingTradingDate, Date.now())
+        }
+      }
+      this.lastCloudSyncTradingDate =
+        this.backupSyncStateStore.getLatestCloudSyncedTradingDate() ||
+        pendingTradingDates[pendingTradingDates.length - 1] ||
+        tradingDate
+      this.clearLegacyCloudSyncTradingDatePersistence()
+      this.logger.log?.(
+        `[DataLayer] Daily cloud sync completed for ${pendingTradingDates.join(', ')}`,
+      )
+    } catch (error) {
+      this.lastCloudSyncTradingDate = this.backupSyncStateStore.getLatestCloudSyncedTradingDate()
+      this.clearLegacyCloudSyncTradingDatePersistence()
+      this.logger.warn?.(
+        `[DataLayer] Daily cloud sync failed for ${syncingTradingDate || tradingDate}:`,
+        error,
+      )
+    }
+  }
+
+  private async collectPendingCloudSyncTradingDates(currentTradingDate: string): Promise<string[]> {
+    if (!currentTradingDate) return []
+    const pendingByState = this.backupSyncStateStore
+      .list(40)
+      .filter((item) => item.tradingDate && item.tradingDate <= currentTradingDate)
+      .filter((item) => Number(item.bucketSyncedAt) > 0 && !Number(item.cloudBundleUploadedAt))
+      .map((item) => item.tradingDate)
+
+    // 状态轻量存储可能因浏览器清理、历史迁移或失败中断缺项；这里从主库最近快照日期再兜一层。
+    const recentSnapshots = await this.snapshotStore.list({
+      endDate: currentTradingDate,
+      allowedCaptureModes: ['real_time', 'delayed', 'restored'],
+      sort: 'desc',
+      limit: 40 * RANK_TREND_SNAPSHOT_TYPES.length * 20,
+    })
+    const recentTradingDates = Array.from(
+      new Set(recentSnapshots.map((record) => record.tradingDate).filter(Boolean)),
+    ).slice(0, 10)
+    const cloudSyncedDates = new Set(
+      this.backupSyncStateStore
+        .list(40)
+        .filter((item) => Number(item.cloudBundleUploadedAt) > 0)
+        .map((item) => item.tradingDate),
+    )
+    const pendingByPrimary = recentTradingDates.filter((date) => !cloudSyncedDates.has(date))
+
+    return Array.from(new Set([...pendingByState, ...pendingByPrimary])).sort((left, right) =>
+      left.localeCompare(right),
+    )
   }
 
   private createManagedSnapshotRecord(type: SnapshotType, snapshotTime: Date, payload: any): SnapshotRecord {
