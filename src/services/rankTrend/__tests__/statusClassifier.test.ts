@@ -161,6 +161,33 @@ describe('getRankTrendDisplayStatus', () => {
     expect(status.tooltip).toContain('不能直接视为主升确认')
   })
 
+  it('强资金且成交额有承接时不因量比缺失落到新入观察', () => {
+    const target = {
+      turnover: 180,
+      turnoverRate: 4,
+      zlje: 2.4e8,
+      zljzb: 18,
+      cddje: 1.1e8,
+      cddjzb: 8,
+    }
+    const context = buildRankTrendStatusContext([
+      { turnover: 20, volumeRatio: 0.8, turnoverRate: 2 },
+      { turnover: 60, volumeRatio: 1, turnoverRate: 3 },
+      target,
+      { turnover: 260, volumeRatio: 1.6, turnoverRate: 6 },
+      { turnover: 420, volumeRatio: 2.2, turnoverRate: 9 },
+    ])
+
+    const status = getRankTrendDisplayStatus(
+      createRankTrend({ sampleStatus: 'insufficient', percentile: 40, change: 0 }),
+      target,
+      context,
+    )
+
+    expect(status.label).toBe('强资确认')
+    expect(status.tooltip).toContain('趋势持续性仍需后续快照确认')
+  })
+
   it('点火观察且量能健康时保持点火观察并提示量能配合', () => {
     const target = {
       turnover: 100,
@@ -202,6 +229,84 @@ describe('getRankTrendDisplayStatus', () => {
     ])
 
     expect(getRankTrendDisplayStatus(createRankTrend({ tier: 'A_MAIN' }), target, context).label).toBe('资金背离')
+  })
+
+  it('注意力转弱但强资金仍在且量能不过热时修正为强资确认', () => {
+    const target = {
+      change: 2,
+      turnover: 180,
+      volumeRatio: 1.2,
+      turnoverRate: 4,
+      zlje: 2.4e8,
+      zljzb: 18,
+      cddje: 1.1e8,
+      cddjzb: 8,
+    }
+    const context = buildRankTrendStatusContext([
+      { turnover: 20, volumeRatio: 0.8, turnoverRate: 2 },
+      { turnover: 60, volumeRatio: 1, turnoverRate: 3 },
+      target,
+      { turnover: 260, volumeRatio: 1.6, turnoverRate: 6 },
+      { turnover: 420, volumeRatio: 2.2, turnoverRate: 9 },
+    ])
+
+    const status = getRankTrendDisplayStatus(createRankTrend({ tier: 'D_EXIT_RISK', percentile: 70 }), target, context)
+
+    expect(status.label).toBe('强资确认')
+    expect(status.tooltip).toContain('注意力轨迹回落')
+    expect(status.tooltip).toContain('资金确认仍在')
+  })
+
+  it('注意力转弱且强资金高位过热时修正为高位拥挤', () => {
+    const target = {
+      change: 10,
+      turnover: 400,
+      volumeRatio: 3.5,
+      turnoverRate: 15,
+      zlje: 2.4e8,
+      zljzb: 18,
+      cddje: 1.1e8,
+      cddjzb: 8,
+    }
+    const context = buildRankTrendStatusContext([
+      { turnover: 20, volumeRatio: 0.8, turnoverRate: 2 },
+      { turnover: 60, volumeRatio: 1, turnoverRate: 3 },
+      { turnover: 120, volumeRatio: 1.3, turnoverRate: 5 },
+      { turnover: 220, volumeRatio: 1.8, turnoverRate: 8 },
+      target,
+    ])
+
+    expect(getRankTrendDisplayStatus(createRankTrend({ tier: 'D_EXIT_RISK' }), target, context).label).toBe('高位拥挤')
+  })
+
+  it('注意力转弱且资金同步走弱时保持转弱预警', () => {
+    const status = getRankTrendDisplayStatus(createRankTrend({ tier: 'D_EXIT_RISK' }), {
+      compRank: 20,
+      turnover: 120,
+      volumeRatio: 1.3,
+      turnoverRate: 5,
+      zlje: -1e8,
+      zljzb: -12,
+      cddje: -3e7,
+      cddjzb: -5,
+    })
+
+    expect(status.label).toBe('转弱预警')
+  })
+
+  it('注意力转弱但没有强资金确认时保持转弱预警', () => {
+    const status = getRankTrendDisplayStatus(createRankTrend({ tier: 'D_EXIT_RISK' }), {
+      compRank: 20,
+      turnover: 120,
+      volumeRatio: 1.3,
+      turnoverRate: 5,
+      zlje: 0,
+      zljzb: 0,
+      cddje: 0,
+      cddjzb: 0,
+    })
+
+    expect(status.label).toBe('转弱预警')
   })
 
   it('TDX估算资金小幅转弱时不直接降为资金背离', () => {

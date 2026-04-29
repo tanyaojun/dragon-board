@@ -625,6 +625,24 @@ class DataLoaderService {
     }
     darkRatio = this.capEstimatedMoneyFlowRatio(darkRatio, 0.035)
 
+    const strongCloseScore = this.clamp((closePosition - 0.9) / 0.1, 0, 1)
+    const limitCloseScore = this.clamp((changePct - 9) / 1, 0, 1)
+    const boardScore = strongCloseScore * limitCloseScore
+    if (boardScore > 0) {
+      // 涨停或接近涨停且收在日内高位时，总主动买卖量差会被封板撮合口径扭曲。
+      // 这类样本按通达信 L2_AMO 公式通常会给出正向暗盘资金，因此用板上强度重估明暗资金。
+      const boardVisibleRatio = this.capEstimatedMoneyFlowRatio(
+        0.085 + amplitude * 0.22 + turnoverScale * 0.025 + Math.max(activeRatio, 0) * 0.3 - Math.max(-activeRatio, 0) * 0.2,
+        0.2,
+      )
+      const boardDarkRatio = this.capEstimatedMoneyFlowRatio(
+        0.03 + Math.max(x16, 0) * 0.1 + amplitude * 0.06 + turnoverScale * 0.017,
+        0.1,
+      )
+      visibleMainRatio = visibleMainRatio * (1 - boardScore) + boardVisibleRatio * boardScore
+      darkRatio = darkRatio * (1 - boardScore) + boardDarkRatio * boardScore
+    }
+
     let mainRatio = visibleMainRatio + darkRatio
     mainRatio = this.capEstimatedMoneyFlowRatio(mainRatio, this.MAX_ESTIMATED_MAIN_RATIO)
 

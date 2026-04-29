@@ -197,6 +197,19 @@ function isVolumeRatioSupported(stock: any, context: RankTrendStatusContext): bo
   return volumeRatio > 0 && volumeRatio >= context.volumeRatioP50
 }
 
+function isTurnoverRateSupported(stock: any, context: RankTrendStatusContext): boolean {
+  const turnoverRate = toNumber(stock?.turnoverRate)
+  return turnoverRate > 0 && turnoverRate >= context.turnoverRateP50
+}
+
+function isMoneyAcceptanceSupported(stock: any, context: RankTrendStatusContext): boolean {
+  return (
+    isTurnoverSupported(stock, context) ||
+    isVolumeRatioSupported(stock, context) ||
+    isTurnoverRateSupported(stock, context)
+  )
+}
+
 function isVolumeReasonable(stock: any, context: RankTrendStatusContext): boolean {
   const volumeRatio = toNumber(stock?.volumeRatio)
   const turnoverRate = toNumber(stock?.turnoverRate)
@@ -249,11 +262,13 @@ export function classifyVolumeConfirmation(
   return weak ? 'weak' : 'healthy'
 }
 
-function createStrongMoneyStatus(volumeConfirmation: VolumeConfirmation): RankTrendDisplayStatus {
+function createStrongMoneyStatus(volumeConfirmation: VolumeConfirmation, reason?: 'attentionWeak'): RankTrendDisplayStatus {
   const overheatedSuffix =
     volumeConfirmation === 'overheated'
       ? '量能偏热，不能直接视为主升确认。'
-      : '资金确认成立，趋势持续性仍需后续快照确认。'
+      : reason === 'attentionWeak'
+        ? '注意力轨迹回落，但资金确认仍在，继续看后续留榜与承接。'
+        : '资金确认成立，趋势持续性仍需后续快照确认。'
 
   return {
     label: '强资确认',
@@ -274,13 +289,22 @@ export function getRankTrendDisplayStatus(
   const strongMoney = isStrongMoney(stock)
   const moneyWeak = isMoneyWeak(stock)
   const volumeConfirmation = classifyVolumeConfirmation(rankTrend, stock, statusContext)
-  const turnoverSupported = isTurnoverSupported(stock, statusContext)
   const volumeRatioSupported = isVolumeRatioSupported(stock, statusContext)
+  const moneyAcceptanceSupported = isMoneyAcceptanceSupported(stock, statusContext)
   const volumeReasonable = isVolumeReasonable(stock, statusContext)
 
   if (isInvalidQuoteData(stock)) return INVALID_QUOTE_STATUS
 
-  if (tier === 'D_EXIT_RISK') return CANDIDATE_TIER_STATUS.D_EXIT_RISK
+  if (tier === 'D_EXIT_RISK') {
+    if (moneyWeak) return CANDIDATE_TIER_STATUS.D_EXIT_RISK
+    if (strongMoney && (volumeConfirmation === 'overheated' || isHighCrowded(rankTrend, stock))) {
+      return CANDIDATE_TIER_STATUS.C_CROWDED
+    }
+    if (strongMoney && moneyAcceptanceSupported) {
+      return createStrongMoneyStatus(volumeConfirmation, 'attentionWeak')
+    }
+    return CANDIDATE_TIER_STATUS.D_EXIT_RISK
+  }
 
   if (volumeConfirmation === 'divergent' || (hotAttention && moneyWeak)) {
     return {
@@ -316,7 +340,7 @@ export function getRankTrendDisplayStatus(
     return CANDIDATE_TIER_STATUS.B_IGNITION
   }
 
-  if (strongMoney && turnoverSupported && volumeRatioSupported) {
+  if (strongMoney && moneyAcceptanceSupported) {
     return createStrongMoneyStatus(volumeConfirmation)
   }
 
