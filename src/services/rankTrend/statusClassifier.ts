@@ -60,9 +60,25 @@ const FALLBACK_STATUS_CONTEXT: RankTrendStatusContext = {
   turnoverRateP85: 10,
 }
 
+const INSUFFICIENT_STATUS: RankTrendDisplayStatus = {
+  label: '样本不足',
+  classKey: 'insufficient',
+  tooltip: '快照样本不足，且资金确认不明显，暂不作为重点状态。',
+}
+
+const INVALID_QUOTE_STATUS: RankTrendDisplayStatus = {
+  label: '样本不足',
+  classKey: 'insufficient',
+  tooltip: '行情价格或成交额无效，暂不参与状态分层。',
+}
+
 function toNumber(value: unknown): number {
   const number = Number(value)
   return Number.isFinite(number) ? number : 0
+}
+
+function hasValue(value: unknown): boolean {
+  return value !== undefined && value !== null && value !== ''
 }
 
 function percentile(values: number[], ratio: number): number {
@@ -103,13 +119,38 @@ function isSampleInsufficient(rankTrend?: RankTrendAnalysisResult | null): boole
   return !rankTrend || rankTrend.meta?.sampleQuality?.status === 'insufficient'
 }
 
+function isInvalidQuoteData(stock: any): boolean {
+  if (!stock) return false
+
+  const priceCandidate = stock.price ?? stock.latestPrice ?? stock.lastPrice ?? stock.close
+  if (hasValue(priceCandidate)) {
+    const price = Number(priceCandidate)
+    if (!Number.isFinite(price) || price <= 0) return true
+  }
+
+  if (hasValue(stock.turnover)) {
+    const turnover = Number(stock.turnover)
+    if (!Number.isFinite(turnover) || turnover <= 0) return true
+  }
+
+  return false
+}
+
 function isStrongMoney(stock: any): boolean {
   const zlje = toNumber(stock?.zlje)
   const zljzb = toNumber(stock?.zljzb)
   const cddje = toNumber(stock?.cddje)
   const cddjzb = toNumber(stock?.cddjzb)
 
+  if (isEstimatedMoneyFlow(stock)) {
+    return zlje > 0 && zljzb >= 10 && cddje > 0 && cddjzb >= 3
+  }
+
   return zlje > 0 && zljzb >= 8 && (cddje > 0 || cddjzb >= 3)
+}
+
+function isEstimatedMoneyFlow(stock: any): boolean {
+  return stock?.moneyFlowEstimated === true || stock?.moneyFlowSource === 'tdx_estimate'
 }
 
 function isMoneyWeak(stock: any): boolean {
@@ -117,6 +158,10 @@ function isMoneyWeak(stock: any): boolean {
   const zljzb = toNumber(stock?.zljzb)
   const cddje = toNumber(stock?.cddje)
   const cddjzb = toNumber(stock?.cddjzb)
+
+  if (isEstimatedMoneyFlow(stock)) {
+    return zljzb <= -8 && cddje < 0 && cddjzb <= -3
+  }
 
   return zlje < 0 || zljzb <= -3 || (cddje < 0 && cddjzb <= 0)
 }
@@ -233,6 +278,8 @@ export function getRankTrendDisplayStatus(
   const volumeRatioSupported = isVolumeRatioSupported(stock, statusContext)
   const volumeReasonable = isVolumeReasonable(stock, statusContext)
 
+  if (isInvalidQuoteData(stock)) return INVALID_QUOTE_STATUS
+
   if (tier === 'D_EXIT_RISK') return CANDIDATE_TIER_STATUS.D_EXIT_RISK
 
   if (volumeConfirmation === 'divergent' || (hotAttention && moneyWeak)) {
@@ -277,9 +324,5 @@ export function getRankTrendDisplayStatus(
     return CANDIDATE_TIER_STATUS.N_NEUTRAL
   }
 
-  return {
-    label: '样本不足',
-    classKey: 'insufficient',
-    tooltip: '快照样本不足，且资金确认不明显，暂不作为重点状态。',
-  }
+  return INSUFFICIENT_STATUS
 }

@@ -204,6 +204,75 @@ describe('getRankTrendDisplayStatus', () => {
     expect(getRankTrendDisplayStatus(createRankTrend({ tier: 'A_MAIN' }), target, context).label).toBe('资金背离')
   })
 
+  it('TDX估算资金小幅转弱时不直接降为资金背离', () => {
+    const target = {
+      compRank: 10,
+      turnover: 100,
+      volumeRatio: 1.6,
+      turnoverRate: 5,
+      zlje: -1e7,
+      zljzb: -5,
+      cddje: 2e6,
+      cddjzb: 1,
+      moneyFlowEstimated: true,
+      moneyFlowSource: 'tdx_estimate',
+    }
+
+    expect(getRankTrendDisplayStatus(createRankTrend({ tier: 'A_MAIN' }), target).label).toBe('主升确认')
+  })
+
+  it('TDX估算资金需要主力占比和超大单同时恶化才触发资金背离', () => {
+    const target = {
+      compRank: 10,
+      turnover: 400,
+      volumeRatio: 3.5,
+      turnoverRate: 15,
+      zlje: -1e8,
+      zljzb: -12,
+      cddje: -3e7,
+      cddjzb: -5,
+      moneyFlowEstimated: true,
+      moneyFlowSource: 'tdx_estimate',
+    }
+    const context = buildRankTrendStatusContext([
+      { turnover: 10, volumeRatio: 0.6, turnoverRate: 2 },
+      { turnover: 50, volumeRatio: 1, turnoverRate: 4 },
+      { turnover: 100, volumeRatio: 1.4, turnoverRate: 6 },
+      { turnover: 200, volumeRatio: 2, turnoverRate: 8 },
+      target,
+    ])
+
+    expect(getRankTrendDisplayStatus(createRankTrend({ tier: 'A_MAIN' }), target, context).label).toBe('资金背离')
+  })
+
+  it('显式无效行情优先显示样本不足，不误判为转弱预警', () => {
+    const status = getRankTrendDisplayStatus(createRankTrend({ tier: 'D_EXIT_RISK' }), {
+      price: 0,
+      turnover: 0,
+      compRank: 20,
+      zlje: -1e8,
+      zljzb: -20,
+      cddje: -3e7,
+      cddjzb: -8,
+    })
+
+    expect(status.label).toBe('样本不足')
+    expect(status.tooltip).toContain('行情价格或成交额无效')
+  })
+
+  it('有效价格但成交额缺失时不参与状态分层', () => {
+    expect(
+      getRankTrendDisplayStatus(createRankTrend({ tier: 'A_MAIN' }), {
+        price: 12.3,
+        turnover: 0,
+        zlje: 1e8,
+        zljzb: 12,
+        cddje: 3e7,
+        cddjzb: 4,
+      }).label,
+    ).toBe('样本不足')
+  })
+
   it('主升确认但量能过热且主力不弱时降为高位拥挤', () => {
     const target = {
       change: 10,

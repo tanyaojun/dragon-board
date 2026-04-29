@@ -692,7 +692,10 @@ python python-bridge\main.py
 
 ## 假设与默认值
 
-- 已确认拥有可用的通达信 L2 账号权限，并且 `mootdx` 能取到十档和逐笔所需原始数据；若字段名或返回结构不一致，由 Python bridge 统一标准化后再发给前端。
+- 不能再假设 `mootdx` 已经能取到真十档、真逐笔或 `L2_AMO` 分档资金。当前 `mootdx + 7709` 只作为标准行情过渡链路。
+- 当前资金字段如果标记为 `moneyFlowSource = tdx_estimate`，属于基于总主动买卖量、OHLC、成交额等字段的估算，不是通达信 `L2_AMO` 正式口径。
+- 通达信主力资金完全对齐需要真实 L2 数据面：至少要拿到 `L2_AMO(0..3, 0..3)` 等价分档成交金额，或可还原该分档的完整逐笔/逐单明细。十档盘口深度本身不等于 `L2_AMO`。
+- 真正验收仍然取决于 `TC_GetL2Info / TDXDeep_StartInit / TdxDeep_Data / TdxDeep_Func / callback` 能否返回可验证的 `7719 / QSTP / TDXDeep` 业务数据。
 - 八合一热榜池规模按 `200~300` 只设计。
 - 本轮重点依然是 `websocket.ts` 主链路重建；`dataLoader / DataLayer / DataTable / snapshot` 的改动仅用于承接十档与逐笔数据，不改变它们的根本职责边界。
 - 正式快照持久化的是“当时最新状态”和“逐笔摘要”，不是全量逐笔历史回放数据。

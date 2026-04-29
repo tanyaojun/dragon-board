@@ -770,6 +770,13 @@ python-bridge/research/out/APP_SOFT_TDX/tdx_x86_helper_inspect.json
 - 未跑通 `TC_Login / TC_Login2 / TC_GetLoginRet / TC_GetRightInfo -> L2Right / L2ZH / QSID / Token` 的权限来源链路。
 - 未确认 `TDXDeep_StartInit / TdxDeep_Data / TdxDeep_Func` 如何消费 L2 权限态。
 - 未拿到 `7719` 真十档或真分笔业务包。
+- 未拿到通达信资金公式所需的 `L2_AMO(0..3, 0..3)` 或等价分档成交金额。
+
+补充结论：
+
+- `L2_AMO` 不是十档盘口本身。十档盘口提供档位价格和挂单量，不能直接等价为超大/大单/中单/小单成交金额。
+- 当前 `mootdx + 7709` 标准行情字段只能支持资金估算，不能保证逐票对齐通达信主力资金。
+- 如果最终目标包含主力资金完全对齐，验收数据面必须同时覆盖真十档、真逐笔/逐单，或直接返回 `L2_AMO` 等价字段。
 
 ### 9.6 隔离探针
 

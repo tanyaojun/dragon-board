@@ -160,7 +160,9 @@ class DataLoaderService {
   private readonly SUPER_ORDER_VOLUME_THRESHOLD = 500_000
   private readonly LARGE_ORDER_AMOUNT_THRESHOLD = 200_000
   private readonly LARGE_ORDER_VOLUME_THRESHOLD = 100_000
-  private readonly MIN_MONEY_FLOW_SAMPLE_AMOUNT = 2_000_000
+  private readonly MAX_ESTIMATED_MAIN_RATIO = 0.28
+  private readonly MAX_ESTIMATED_SUPER_RATIO = 0.16
+  private readonly MAX_ACTIVE_MONEY_FLOW_RATIO = 0.32
   private readonly A_SHARE_TRADING_MINUTES = 240
   private readonly VOLUME_RATIO_HISTORY_WEIGHTS = [5, 3, 2]
   private readonly INTRADAY_VOLUME_SNAPSHOT_TYPES: IntradayVolumeSnapshotType[] = [
@@ -173,6 +175,8 @@ class DataLoaderService {
   private pendingDepthBooks = new Map<string, Depth10Book>()
   private pendingTicks = new Map<string, TickTrade[]>()
   private intradayMoneyFlowStats = new Map<string, IntradayMoneyFlowStats>()
+  private intradayMoneyFlowTickKeys = new Map<string, Set<string>>()
+  private intradayMoneyFlowTickQueues = new Map<string, string[]>()
   private realtimeUnsubscribers: Array<() => void> = []
 
   private readonly PLATFORM_REFRESH_INTERVAL = 1800000 // 10分钟
@@ -428,8 +432,41 @@ class DataLoaderService {
     return Number.isFinite(value) ? Math.round(value) : 0
   }
 
-  private sameSign(left: number, right: number): boolean {
-    return left !== 0 && right !== 0 && Math.sign(left) === Math.sign(right)
+  private capEstimatedMoneyFlowRatio(ratio: number, maxAbsRatio: number): number {
+    if (!Number.isFinite(ratio)) return 0
+    return this.clamp(ratio, -maxAbsRatio, maxAbsRatio)
+  }
+
+  private safeRatio(numerator: number, denominator: number): number {
+    return denominator !== 0 && Number.isFinite(numerator) && Number.isFinite(denominator)
+      ? numerator / denominator
+      : 0
+  }
+
+  private calculateTdxDarkMoneyFactor(quote: QuotePatch) {
+    const close = Number(quote.lastPrice) || 0
+    const open = Number(quote.open) || close
+    const high = Number(quote.high) || Math.max(open, close)
+    const low = Number(quote.low) || Math.min(open, close)
+    const preClose = Number(quote.preClose) || open || close
+
+    // 对齐通达信公式里的 X_9 到 X_16，用当日 OHLC 结构估算暗盘方向。
+    const x9 = this.safeRatio(open - preClose, preClose)
+    const x10 = this.safeRatio(close - open, open)
+    const x11 = this.safeRatio(high - open, open)
+    const x12 = this.safeRatio(close - high, high)
+    const x13 = this.safeRatio(low - open, open)
+    const x14 = this.safeRatio(close - low, low)
+    const x15 = x9 + x10 + x11 + x12 + x13 + x14
+    const x16 = x15 >= 1 ? 0.8 : x15
+    const amplitude = this.safeRatio(high - low, preClose)
+    const closePosition = high > low ? this.clamp((close - low) / (high - low), 0, 1) : 0.5
+
+    return {
+      x16,
+      amplitude,
+      closePosition,
+    }
   }
 
   private classifyMoneyFlowOrder(amount: number, volume: number): 'super' | 'large' | 'other' {
@@ -448,6 +485,8 @@ class DataLoaderService {
     groups.forEach((group) => {
       const code = String(group.code || '')
       if (!code || !Array.isArray(group.items) || !group.items.length) return
+      const freshItems = this.filterFreshMoneyFlowTicks(code, tradingDate, group.items)
+      if (!freshItems.length) return
 
       const current = this.intradayMoneyFlowStats.get(code)
       const next: IntradayMoneyFlowStats =
@@ -455,7 +494,7 @@ class DataLoaderService {
           ? { ...current }
           : { tradingDate, activeAmount: 0, mainNet: 0, superNet: 0 }
 
-      const delta = this.summarizeMoneyFlowTicks(group.items)
+      const delta = this.summarizeMoneyFlowTicks(freshItems)
       next.activeAmount += delta.activeAmount
       next.mainNet += delta.mainNet
       next.superNet += delta.superNet
@@ -463,10 +502,41 @@ class DataLoaderService {
     })
   }
 
-  private getIntradayMoneyFlowStats(code: string): IntradayMoneyFlowStats | null {
-    const stats = this.intradayMoneyFlowStats.get(code)
-    if (!stats || stats.tradingDate !== toLocalTradingDate(new Date())) return null
-    return stats
+  private filterFreshMoneyFlowTicks(code: string, tradingDate: string, items: TickTrade[]): TickTrade[] {
+    let seen = this.intradayMoneyFlowTickKeys.get(code)
+    let queue = this.intradayMoneyFlowTickQueues.get(code)
+
+    if (!seen) {
+      seen = new Set<string>()
+      this.intradayMoneyFlowTickKeys.set(code, seen)
+    }
+    if (!queue) {
+      queue = []
+      this.intradayMoneyFlowTickQueues.set(code, queue)
+    }
+
+    const fresh: TickTrade[] = []
+    items.forEach((item) => {
+      const key = [
+        tradingDate,
+        item.tradeTime || '',
+        Number(item.price) || 0,
+        Number(item.volume) || 0,
+        item.side || 'neutral',
+      ].join('|')
+      if (seen.has(key)) return
+
+      seen.add(key)
+      queue.push(key)
+      fresh.push(item)
+    })
+
+    while (queue.length > 800) {
+      const expired = queue.shift()
+      if (expired) seen.delete(expired)
+    }
+
+    return fresh
   }
 
   private summarizeMoneyFlowTicks(ticks: TickTrade[]) {
@@ -521,6 +591,7 @@ class DataLoaderService {
 
   private estimateTdxMoneyFlow(code: string, quote: QuotePatch): Partial<MergedQuoteData> | null {
     const price = Number(quote.lastPrice) || 0
+    const changePct = Number(quote.changePct) || 0
     const buyVolume = Number(quote.tdxBuyVolume) || 0
     const sellVolume = Number(quote.tdxSellVolume) || 0
     const activeVolume = buyVolume + sellVolume
@@ -532,45 +603,48 @@ class DataLoaderService {
     if (turnover <= 0) return null
 
     const activeNet = (buyVolume - sellVolume) * price * 100
-    const depthImbalance = Number(dataLayer.getL2Summary(code)?.depthImbalance) || 0
-    const recentTicks = dataLayer.getRecentTicks(code)
-    const tickSummary = this.summarizeMoneyFlowTicks(recentTicks)
-    const intradayStats = this.getIntradayMoneyFlowStats(code)
-    const sampleAmount = intradayStats?.activeAmount || tickSummary.activeAmount
-    const sampleMainNet = intradayStats?.mainNet || tickSummary.mainNet
-    const sampleSuperNet = intradayStats?.superNet || tickSummary.superNet
-    const hasUsableTickSample = sampleAmount >= this.MIN_MONEY_FLOW_SAMPLE_AMOUNT
-    const mainShare = hasUsableTickSample ? this.clamp(sampleMainNet / sampleAmount, -1, 1) : 0
-    const superShare = hasUsableTickSample ? this.clamp(sampleSuperNet / sampleAmount, -1, 1) : 0
+    const activeRatio = this.capEstimatedMoneyFlowRatio(
+      activeNet / Math.max(activeAmount, 1),
+      this.MAX_ACTIVE_MONEY_FLOW_RATIO,
+    )
+    const { x16, amplitude, closePosition } = this.calculateTdxDarkMoneyFactor(quote)
+    // mooTDX 只有总主动买卖量，没有 L2_AMO 的超大/大单分层；这里用高成交额、
+    // 高振幅、收盘位置偏弱时的小主动差放大，近似明盘主力资金。
+    const turnoverScale = this.clamp(Math.log10(Math.max(turnover, 1) / 500_000_000), 0, 1)
+    const smallActiveImbalance = this.clamp((0.035 - Math.abs(activeRatio)) / 0.035, 0, 1)
+    const churnScore = this.clamp((amplitude - 0.06) / 0.1, 0, 1)
+    const weakCloseScore = this.clamp((0.68 - closePosition) / 0.25, 0, 1)
+    const hiddenMainMultiplier = 1 + smallActiveImbalance * churnScore * weakCloseScore * turnoverScale * 12
+    let visibleMainRatio = activeRatio * hiddenMainMultiplier
+    visibleMainRatio = this.capEstimatedMoneyFlowRatio(visibleMainRatio, 0.18)
 
-    let mainNet = hasUsableTickSample ? activeAmount * mainShare : 0
-    let estimatedSuperNet = hasUsableTickSample ? activeAmount * superShare : 0
+    const neutralBaseRatio = this.clamp(0.12 + amplitude * 0.8, 0.12, 0.26)
+    let darkRatio = neutralBaseRatio * x16
+    if (Math.abs(activeRatio) >= 0.1) {
+      darkRatio *= 0.65
+    }
+    darkRatio = this.capEstimatedMoneyFlowRatio(darkRatio, 0.035)
 
-    if (activeNet !== 0) {
-      if (!hasUsableTickSample) {
-        const fallbackRatio = this.clamp(Math.abs(activeNet) / Math.max(activeAmount, 1), 0, 0.3)
-        mainNet = Math.sign(activeNet) * activeAmount * fallbackRatio
-        estimatedSuperNet = mainNet * 0.35
-      } else if (!this.sameSign(mainNet, activeNet)) {
-        mainNet *= 0.5
-        estimatedSuperNet *= this.sameSign(estimatedSuperNet, activeNet) ? 1 : 0.5
-      }
+    let mainRatio = visibleMainRatio + darkRatio
+    mainRatio = this.capEstimatedMoneyFlowRatio(mainRatio, this.MAX_ESTIMATED_MAIN_RATIO)
+
+    const currentVolume = Number(quote.tdxCurrentVolume) || 0
+    const currentPulse = turnover > 0 ? this.clamp((currentVolume * price * 100) / turnover, 0, 0.03) : 0
+    const superShare = this.clamp(0.35 + currentPulse * 6 + Math.abs(visibleMainRatio) * 0.8, 0.35, 0.75)
+    let superRatio = visibleMainRatio * superShare + darkRatio * 0.35
+    superRatio = this.capEstimatedMoneyFlowRatio(superRatio, this.MAX_ESTIMATED_SUPER_RATIO)
+    if (Math.abs(superRatio) > Math.abs(mainRatio)) {
+      superRatio = Math.sign(superRatio) * Math.abs(mainRatio)
     }
 
-    if (depthImbalance !== 0 && activeNet !== 0 && !this.sameSign(depthImbalance, activeNet)) {
-      mainNet *= 0.9
-      estimatedSuperNet *= 0.9
-    }
-
-    if (Math.abs(estimatedSuperNet) > Math.abs(mainNet)) {
-      estimatedSuperNet = Math.sign(estimatedSuperNet) * Math.abs(mainNet)
-    }
+    const mainNet = turnover * mainRatio
+    const estimatedSuperNet = turnover * superRatio
 
     return {
       zlje: this.roundMoney(mainNet),
-      zljzb: Number(this.clamp((mainNet / turnover) * 100, -100, 100).toFixed(2)),
+      zljzb: Number((mainRatio * 100).toFixed(2)),
       cddje: this.roundMoney(estimatedSuperNet),
-      cddjzb: Number(this.clamp((estimatedSuperNet / turnover) * 100, -100, 100).toFixed(2)),
+      cddjzb: Number((superRatio * 100).toFixed(2)),
       tdxBuyVolume: buyVolume,
       tdxSellVolume: sellVolume,
       tdxCurrentVolume: Number(quote.tdxCurrentVolume) || 0,
