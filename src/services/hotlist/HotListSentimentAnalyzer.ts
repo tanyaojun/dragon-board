@@ -89,8 +89,11 @@ export interface HotListSentimentMetrics {
   comparison: HotListThreeDayComparison
 }
 
+export type HotListSentimentRiskLevel = '低' | '中' | '高'
+
 export interface HotListSentimentResult {
   stage: EmotionCycleStage
+  riskLevel: HotListSentimentRiskLevel
   confidence: number
   summary: string
   metrics: HotListSentimentMetrics
@@ -623,8 +626,22 @@ function isRiskElevated(risk: RiskPressureLevel): boolean {
   return risk === 'high' || risk === 'severe'
 }
 
+function resolveRiskLevel(
+  riskPressure: StageEvidence<RiskPressureLevel>,
+  continuity: StageEvidence<ContinuityLevel>,
+): HotListSentimentRiskLevel {
+  if (riskPressure.level === 'severe' || (riskPressure.level === 'high' && continuity.level === 'weak')) {
+    return '高'
+  }
+  if (riskPressure.level === 'high' || riskPressure.level === 'crowded' || continuity.level === 'weak') {
+    return '中'
+  }
+  return '低'
+}
+
 function resolveStage(comparison: HotListThreeDayComparison, layers?: HotListLayerSet): {
   stage: EmotionCycleStage
+  riskLevel: HotListSentimentRiskLevel
   signals: string[]
   warnings: string[]
 } {
@@ -652,81 +669,90 @@ function resolveStage(comparison: HotListThreeDayComparison, layers?: HotListLay
   const totalExpanded = comparison.totalChange1d !== null ? comparison.totalChange1d > 0 : false
   const totalShrank = comparison.totalChange1d !== null ? comparison.totalChange1d < 0 : false
   const riskElevated = isRiskElevated(riskPressure.level)
+  const riskLevel = resolveRiskLevel(riskPressure, continuity)
   const tapeWeak = tapeStrength.level === 'weak'
   const tapeStrong = tapeStrength.level === 'strong'
   const tapeAtLeastFirm = tapeStrength.level === 'strong' || tapeStrength.level === 'firm'
   const moneyWeak = moneyAcceptance.level === 'weak'
   const moneyNotWeak = moneyAcceptance.level !== 'weak'
-  const highHeat = today.nearLimitUpCount >= 8 || (today.highGainCount >= 18 && today.highTurnoverCount >= 18)
-  const severeRiskWithWeakContinuity =
-    riskPressure.level === 'severe' && continuity.level === 'weak'
+  const effectiveSpread =
+    today.activeOpportunityShare >= 0.12 &&
+    today.statusShares['强资确认'] >= 0.08
+  const broadSpread = opportunityExpansion.level === 'broad'
+  const highHeat =
+    today.nearLimitUpCount >= 10 ||
+    (today.highGainCount >= 25 && today.highTurnoverCount >= 20)
   const severeRiskWithShrinkingBreadth =
     riskPressure.level === 'severe' &&
     totalShrank &&
-    opportunityExpansion.level !== 'broad'
+    opportunityExpansion.level !== 'broad' &&
+    moneyAcceptance.level !== 'strong'
 
   pushIf(signals, totalExpanded, `热榜池较上一日扩张 ${comparison.totalChange1d} 只`)
   pushIf(warnings, totalShrank, `热榜池较上一日收缩 ${Math.abs(comparison.totalChange1d || 0)} 只`)
   pushIf(
     warnings,
-    riskElevated && !tapeWeak && !moneyWeak && continuity.level !== 'weak',
-    `风险压力 ${(today.riskShare * 100).toFixed(0)}%，但上涨和成交承接尚未破坏`,
+    riskLevel === '高' && !tapeWeak && !moneyWeak,
+    `风险等级高，但上涨和成交承接尚未破坏，按阶段主方向处理`,
   )
 
   const retreat =
-    severeRiskWithWeakContinuity ||
     severeRiskWithShrinkingBreadth ||
     (riskElevated && (tapeWeak || moneyWeak)) ||
-    (riskElevated && continuity.level === 'weak' && today.upRatio < 0.55)
+    (riskPressure.level === 'severe' && continuity.level === 'weak' && today.upRatio < 0.52) ||
+    (totalShrank && opportunityExpansion.level === 'scarce' && today.upRatio < 0.5)
 
   if (retreat) {
     return {
       stage: '退潮',
+      riskLevel,
       signals,
       warnings: warnings.length ? warnings : ['风险状态占比偏高，先按防守阶段处理'],
     }
   }
 
   const climax =
-    !severeRiskWithWeakContinuity &&
+    tapeStrong &&
+    moneyNotWeak &&
     (
-      (tapeStrong && riskPressure.level !== 'low') ||
-      (tapeStrong && moneyAcceptance.level === 'strong' && highHeat) ||
-      (today.nearLimitUpCount >= 8 && today.crowdedShare >= 0.12)
+      (moneyAcceptance.level === 'strong' && highHeat && broadSpread) ||
+      (today.nearLimitUpCount >= 8 && today.crowdedShare >= 0.18 && broadSpread) ||
+      (today.crowdedShare >= 0.28 && today.activeOpportunityShare >= 0.22)
     )
 
   if (climax) {
     return {
       stage: '高潮',
+      riskLevel,
       signals: signals.length ? signals : ['前排高涨幅与高位拥挤同时增加'],
       warnings: warnings.length ? warnings : ['热度强但追击赔率下降，注意高位兑现风险'],
     }
   }
 
   const ferment =
-    opportunityExpansion.level === 'broad' &&
+    (opportunityExpansion.level === 'broad' || effectiveSpread) &&
     tapeAtLeastFirm &&
-    !riskElevated &&
-    moneyNotWeak &&
-    continuity.level !== 'weak'
+    moneyNotWeak
 
   if (ferment) {
     return {
       stage: '发酵',
+      riskLevel,
       signals: signals.length ? signals : ['强资确认与点火观察形成有效扩散'],
       warnings,
     }
   }
 
   const start =
-    (totalExpanded || opportunityExpansion.level === 'improving') &&
+    (totalExpanded || opportunityExpansion.level === 'improving' || comparison.newTop100Count >= 25) &&
     today.upRatio >= 0.42 &&
-    !riskElevated &&
-    moneyNotWeak
+    moneyNotWeak &&
+    !tapeWeak
 
   if (start) {
     return {
       stage: '启动',
+      riskLevel,
       signals: signals.length ? signals : ['热榜新增和机会状态开始改善'],
       warnings,
     }
@@ -734,6 +760,7 @@ function resolveStage(comparison: HotListThreeDayComparison, layers?: HotListLay
 
   return {
     stage: '冰点',
+    riskLevel,
     signals: signals.length ? signals : ['热榜机会状态尚未形成有效扩散'],
     warnings: warnings.length ? warnings : ['强资确认与点火观察偏少，等待下一轮扩散确认'],
   }
@@ -755,6 +782,7 @@ export class HotListSentimentAnalyzer {
 
     return {
       stage: stageEvidence.stage,
+      riskLevel: stageEvidence.riskLevel,
       confidence,
       summary: getEmotionCycleStageSummary(stageEvidence.stage),
       metrics: {

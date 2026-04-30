@@ -794,7 +794,7 @@ const displaySentiment = computed<DisplaySentiment>(() => {
       stage: hotListStage.value.name,
       stageName: hotListStage.value.name,
       stageClass: hotListStage.value.classKey,
-      riskLevel: getStageRiskLevel(hotListStage.value.name),
+      riskLevel: hotListSentiment.value.riskLevel || getStageRiskLevel(hotListStage.value.name),
       suggestion: hotListSentiment.value.summary || hotListStage.value.suggestion,
     }
   }
