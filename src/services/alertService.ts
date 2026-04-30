@@ -235,9 +235,9 @@ class AlertService {
   private getCurrentPhase(): string {
     try {
       const breath = this.getState()?.analysis?.breath
-      return breath?.sentiment?.phaseName || '震荡期'
+      return breath?.sentiment?.phaseName || '启动'
     } catch {
-      return '震荡期'
+      return '启动'
     }
   }
 

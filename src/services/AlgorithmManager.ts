@@ -443,22 +443,21 @@ export class AlgorithmManager {
 
     const safeGetSentiment = () => {
       try {
-        return breath.getMarketSentiment() || { phase: '震荡期', overall: 50 }
+        return breath.getMarketSentiment() || { phase: '启动', overall: 50 }
       } catch {
-        return { phase: '震荡期', overall: 50 }
+        return { phase: '启动', overall: 50 }
       }
     }
 
     const phaseToScore = (phase: string): number => {
       const map: Record<string, number> = {
-        冰点期: 20,
-        启动期: 40,
-        发酵期: 60,
-        高潮期: 80,
-        退潮期: 30,
-        震荡期: 50,
+        冰点: 20,
+        启动: 45,
+        发酵: 66,
+        高潮: 88,
+        退潮: 35,
       }
-      return map[phase] || 50
+      return map[phase] || map.启动
     }
 
     // 注册因子
@@ -547,7 +546,7 @@ export class AlgorithmManager {
             const sentiment = breath.getMarketSentiment()
             if (!sentiment) return 50
 
-            if (sentiment.phase === '冰点期') {
+            if (sentiment.phase === '冰点' || sentiment.phaseName === '冰点') {
               if (stock.change > 0) {
                 return Math.min(100, 50 + stock.change * 5)
               }
@@ -557,7 +556,7 @@ export class AlgorithmManager {
               return 20
             }
 
-            if (sentiment.phase === '退潮期' && stock.change > 0) {
+            if ((sentiment.phase === '退潮' || sentiment.phaseName === '退潮') && stock.change > 0) {
               return 40
             }
 
@@ -729,11 +728,11 @@ export class AlgorithmManager {
     console.log(`[AlgorithmManager] 🌬️ 根据龙息阶段调整权重: ${phase}`)
 
     const phaseMultipliers: Record<string, Record<string, number>> = {
-      冰点期: { contrarian: 2.5, breathZtCount: 2.0, breathDtCount: 2.0 },
-      启动期: { themeHeat: 1.8, themeMomentum: 1.3, breathPassRate: 1.8 },
-      发酵期: { themeMomentum: 1.8, zlje: 1.5, breathMaxDays: 1.5 },
-      高潮期: { continuousDays: 1.8, zlje: 1.6, breathMaxDays: 1.6 },
-      退潮期: { continuousDays: 0.4, zlje: 0.3, themeHeat: 0.4 },
+      冰点: { contrarian: 2.5, breathZtCount: 2.0, breathDtCount: 2.0 },
+      启动: { themeHeat: 1.8, themeMomentum: 1.3, breathPassRate: 1.8 },
+      发酵: { themeMomentum: 1.8, zlje: 1.5, breathMaxDays: 1.5 },
+      高潮: { continuousDays: 1.8, zlje: 1.6, breathMaxDays: 1.6 },
+      退潮: { continuousDays: 0.4, zlje: 0.3, themeHeat: 0.4 },
     }
 
     const multipliers = phaseMultipliers[phase] || {}

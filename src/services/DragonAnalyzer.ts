@@ -460,7 +460,7 @@ export class DragonAnalyzer {
 
     // ✅ 获取当前情绪阶段和阈值乘数
     const sentiment = dragonBreathAnalyzer?.getMarketSentiment?.()
-    let phaseName = sentiment?.phaseName || '震荡期'
+    let phaseName = sentiment?.phaseName || '启动'
     let multiplier = getThresholdMultiplier(phaseName)
 
     // 应用阈值乘数

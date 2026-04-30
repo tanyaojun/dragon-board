@@ -243,7 +243,7 @@ export interface MarketPhase {
   color: string
   gradient: string
   icon: string
-  score: number
+  score?: number
   desc: string
   suggestion: string
   features: readonly string[]
@@ -371,7 +371,6 @@ export interface Sentiment {
     zhabanRate?: number
     upDownRatio?: number
   }
-  factorScores?: Record<string, number>
 }
 
 export interface BreathReport {
@@ -509,7 +508,6 @@ export interface BreathData {
     phaseName?: string
     riskLevel: string
     suggestion: string
-    factorScores?: Record<string, number>
     phaseInfo?: MarketPhase
   }
   market: {

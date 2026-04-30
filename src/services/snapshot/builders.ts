@@ -286,8 +286,8 @@ export function buildIntradaySnapshotBase(
     })),
     sentiment: {
       overall: context.breathData?.overall || 50,
-      phase: context.breathData?.phase || '震荡期',
-      phaseName: context.breathData?.phaseName || '平稳期',
+      phase: context.breathData?.phase || 'start',
+      phaseName: context.breathData?.phaseName || '启动',
       emotionValue: context.marketData?.emotionValue || 50,
     },
     moneyFlow: {
@@ -341,8 +341,8 @@ export function buildHourlySnapshot(context: SnapshotBuildContext, snapshotTime:
     })),
     sentiment: {
       overall: context.breathData?.overall || 50,
-      phase: context.breathData?.phase || '震荡期',
-      phaseName: context.breathData?.phaseName || '平稳期',
+      phase: context.breathData?.phase || 'start',
+      phaseName: context.breathData?.phaseName || '启动',
       emotionValue: context.marketData?.emotionValue || 50,
     },
     marketStats: {
@@ -383,7 +383,6 @@ export function buildDailySnapshot(context: SnapshotBuildContext, snapshotTime: 
     phaseName: context.breathData?.phaseName || '',
     riskLevel: context.breathData?.riskLevel || '',
     suggestion: context.breathData?.suggestion || '',
-    factorScores: context.breathData?.factorScores || {},
     history: context.breathHistory,
     factors: context.breathFactors,
   }

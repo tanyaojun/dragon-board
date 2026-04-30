@@ -3,9 +3,20 @@
 /**
  * 构建市场上下文
  */
+function phaseToBand(phase?: string): number {
+  const normalized = typeof phase === 'string' && phase.endsWith('期') ? phase.slice(0, -1) : phase
+  if (normalized === '高潮') return 88
+  if (normalized === '发酵') return 66
+  if (normalized === '启动') return 45
+  if (normalized === '退潮') return 35
+  if (normalized === '冰点') return 20
+  return 50
+}
+
 export function buildMarketContext(): MarketContext {
   const stocks = window.allData?.merged || []
   const breath = dragonBreathAnalyzer.getMarketData?.()
+  const sentiment = dragonBreathAnalyzer.getMarketSentiment?.()
   
   // 计算连板分布
   const limitDist = {
@@ -27,8 +38,8 @@ export function buildMarketContext(): MarketContext {
     : 0
   
   return {
-    marketPhase: breath?.phase || '震荡期',
-    marketSentiment: breath?.overall || 50,
+    marketPhase: sentiment?.phaseName || sentiment?.phase || '启动',
+    marketSentiment: phaseToBand(sentiment?.phaseName || sentiment?.phase),
     upCount: stocks.filter(s => s.change > 0).length,
     downCount: stocks.filter(s => s.change < 0).length,
     totalZtCount: stocks.filter(s => s.change > 9.5).length,

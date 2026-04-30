@@ -102,8 +102,10 @@ class ThemeHeatCalculator {
     const stockCodes = themeMapping.getThemeStocks(themeId)
     const stocks = stockCodes.map((code) => dataLayer.getStock(code)).filter(Boolean) as Stock[]
     const theme = themeMapping.getTheme(themeId)
+    const jxbkBlock = findJxbkBlockByThemeName(theme?.name || themeName)
+    const jxbkScore = this.calculateJxbkScore(jxbkBlock)
 
-    if (stocks.length === 0) {
+    if (stocks.length === 0 && jxbkScore === 0) {
       return this.getEmptyResult(themeId, themeName)
     }
 
@@ -120,11 +122,10 @@ class ThemeHeatCalculator {
     const correlation = this.calculateCorrelation(stocks)
     const correlationBonus = 1 + correlation * 0.3
 
-    // 原始总分
-    let rawScore = (baseScore + ztScore + moneyScore) * correlationBonus
+    const stockScore = this.normalizeScore((baseScore + ztScore + moneyScore) * correlationBonus)
 
-    // 归一化处理（映射到 0-100 范围）
-    const normalizedScore = this.normalizeScore(rawScore)
+    // JXBK 是全市场板块强度，热榜成分是本地确认信号；优先用全市场强度，避免未入热榜股票导致热度全为 0。
+    const normalizedScore = Math.max(jxbkScore, stockScore)
 
     // 确定热度等级
     const heatLevel = Utils.getHeatLevel(normalizedScore)
@@ -150,7 +151,7 @@ class ThemeHeatCalculator {
       components: {
         baseScore,
         ztScore,
-        moneyScore,
+        moneyScore: Math.max(moneyScore, jxbkScore),
         correlationBonus,
       },
     }
@@ -198,6 +199,38 @@ class ThemeHeatCalculator {
 
     const inflowInHundredMillion = Math.abs(block.mainNetInflow) / 100000000
     return Math.round(inflowInHundredMillion * 200)
+  }
+
+  private calculateJxbkScore(block?: JxbkBlockData | null): number {
+    if (!block) return 0
+
+    let score = 0
+    const strength = Number(block.strength) || 0
+    const ztCount = Number(block.ztCount) || 0
+    const volumeRatio = Number(block.volumeRatio) || 0
+    const netInflow = Number(block.mainNetInflow) || 0
+
+    if (strength >= 4000) score += 40
+    else if (strength >= 3000) score += 30
+    else if (strength >= 2000) score += 20
+    else if (strength >= 1000) score += 10
+    else if (strength > 0) score += 5
+
+    if (ztCount >= 10) score += 30
+    else if (ztCount >= 5) score += 25
+    else if (ztCount >= 3) score += 20
+    else if (ztCount >= 1) score += 15
+
+    if (volumeRatio >= 2.5) score += 15
+    else if (volumeRatio >= 1.5) score += 10
+    else if (volumeRatio >= 0.8) score += 5
+
+    if (netInflow > 100000000) score += 15
+    else if (netInflow > 50000000) score += 12
+    else if (netInflow > 10000000) score += 8
+    else if (netInflow > 0) score += 5
+
+    return Math.min(100, Math.round(score))
   }
 
   private calculateCorrelation(stocks: Stock[]): number {
@@ -357,6 +390,34 @@ const state = {
 }
 
 const heatCalculator = new ThemeHeatCalculator()
+
+function findJxbkBlockByThemeName(themeName?: string): JxbkBlockData | null {
+  if (!themeName || state.jxbkBlocks.length === 0) return null
+
+  const nameToCodeMap = (state as any).jxbkNameToCodeMap || {}
+  const normalizedName = themeName.trim()
+  const candidateNames = [
+    normalizedName,
+    normalizedName.replace(/概念$/, ''),
+    normalizedName.replace(/板块$/, ''),
+  ].filter(Boolean)
+
+  for (const name of candidateNames) {
+    const blockCode = nameToCodeMap[name]
+    if (blockCode && state.jxbkBlockMap[blockCode]) {
+      return state.jxbkBlockMap[blockCode]
+    }
+  }
+
+  return (
+    state.jxbkBlocks.find(
+      (block) =>
+        block.name === normalizedName ||
+        block.name.replace(/概念$/, '') === normalizedName ||
+        normalizedName.replace(/概念$/, '') === block.name,
+    ) || null
+  )
+}
 
 // ========== 初始化 ==========
 export async function init(): Promise<() => void> {
@@ -646,6 +707,7 @@ export async function triggerHeatCalculation() {
   if (state.destroyed) return
   await fetchJxbkData()
   updateThemeHeat()
+  syncThemesToStocks()
 }
 
 // ========== 预加载前N个板块 ==========
@@ -896,26 +958,7 @@ function calculateThemeMetrics(themeId: string) {
   const theme = themeMapping.getTheme(themeId)
   const result = heatCalculator.calculateThemeHeat(themeId, theme?.name)
 
-  let jxbkBlock = null
-
-  // ✅ 使用名称映射匹配
-  if (theme?.name && state.jxbkBlocks.length > 0) {
-    const nameToCodeMap = (state as any).jxbkNameToCodeMap || {}
-    const blockCode = nameToCodeMap[theme.name]
-
-    if (blockCode) {
-      jxbkBlock = state.jxbkBlockMap[blockCode]
-    }
-
-    // 如果没找到，尝试去掉"概念"后缀再匹配
-    if (!jxbkBlock) {
-      const shortName = theme.name.replace(/概念$/, '')
-      const shortCode = nameToCodeMap[shortName]
-      if (shortCode) {
-        jxbkBlock = state.jxbkBlockMap[shortCode]
-      }
-    }
-  }
+  const jxbkBlock = findJxbkBlockByThemeName(theme?.name)
 
   return {
     themeId,

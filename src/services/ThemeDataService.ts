@@ -50,6 +50,7 @@ class ThemeDataService {
   private loadingPromise: Promise<boolean> | null = null
   private lastUpdateTime: string | null = null
   private kplThemes: ThemeBase[] = []
+  private currentMappingData: ThemeMappingData | null = null
 
   // IndexedDB 配置
   private readonly DB_NAME = 'ThemeDataDB'
@@ -60,6 +61,8 @@ class ThemeDataService {
   private updateTimer: ReturnType<typeof setInterval> | null = null
 
   private readonly UPDATE_INTERVAL = 2 * 60 * 60 * 1000 // 2小时
+  private readonly MIN_SAFE_THEME_COUNT = 100
+  private readonly MIN_SAFE_STOCK_COUNT = 1000
 
   private constructor() {}
 
@@ -155,6 +158,149 @@ class ThemeDataService {
     }
   }
 
+  private getUniqueStockCount(data: ThemeMappingData | null): number {
+    if (!data?.themes?.length) return 0
+
+    const stockCodes = new Set<string>()
+    data.themes.forEach((theme) => {
+      ;(theme.stocks || []).forEach((code) => {
+        const normalizedCode = this.normalizeCode(code)
+        if (normalizedCode && normalizedCode !== '000000') {
+          stockCodes.add(normalizedCode)
+        }
+      })
+    })
+    return stockCodes.size
+  }
+
+  private isSafeFullMapping(data: ThemeMappingData | null): boolean {
+    if (!data?.themes?.length) return false
+    return (
+      data.themes.length >= this.MIN_SAFE_THEME_COUNT &&
+      this.getUniqueStockCount(data) >= this.MIN_SAFE_STOCK_COUNT
+    )
+  }
+
+  private normalizeTags(tags: Array<{ Name?: string; Reason?: string }> = []) {
+    return tags
+      .map((tag) => ({
+        Name: String(tag?.Name || '').trim(),
+        Reason: tag?.Reason ? String(tag.Reason).trim() : undefined,
+      }))
+      .filter((tag) => tag.Name)
+  }
+
+  private mergeTagAndReasonData(data: ThemeMappingData | null): number {
+    if (!data?.themes?.length) return 0
+
+    const currentThemesById = new Map<string, ThemeMapping>()
+    this.currentMappingData?.themes?.forEach((theme) => {
+      currentThemesById.set(theme.id, theme)
+    })
+
+    let mergedCount = 0
+
+    data.themes.forEach((sourceTheme) => {
+      const targetTheme = currentThemesById.get(sourceTheme.id)
+      const targetStockTags = targetTheme
+        ? ((targetTheme.stockTags ||= {}) as Record<string, Array<{ Name: string; Reason?: string }>>)
+        : undefined
+      const targetStockReasons = targetTheme
+        ? ((targetTheme.stockReasons ||= {}) as Record<string, string>)
+        : undefined
+
+      Object.entries(sourceTheme.stockTags || {}).forEach(([rawCode, rawTags]) => {
+        const code = this.normalizeCode(rawCode)
+        const incomingTags = this.normalizeTags(rawTags)
+        if (!code || incomingTags.length === 0) return
+
+        const existingTags = this.stockTagsMap.get(code) || []
+        const nextTags = [...existingTags]
+
+        incomingTags.forEach((tag) => {
+          const existing = nextTags.find((item) => item.Name === tag.Name)
+          if (!existing) {
+            nextTags.push(tag)
+            mergedCount++
+          } else if (!existing.Reason && tag.Reason) {
+            existing.Reason = tag.Reason
+            mergedCount++
+          }
+        })
+
+        this.stockTagsMap.set(code, nextTags)
+        if (targetStockTags) {
+          targetStockTags[code] = nextTags
+        }
+      })
+
+      Object.entries(sourceTheme.stockReasons || {}).forEach(([rawCode, reason]) => {
+        const code = this.normalizeCode(rawCode)
+        const incomingReason = String(reason || '').trim()
+        if (!code || !incomingReason) return
+
+        const existingReason = this.stockReasonsMap.get(code) || ''
+        const reasonParts = new Set(
+          existingReason
+            .split('；')
+            .map((item) => item.trim())
+            .filter(Boolean),
+        )
+        const beforeSize = reasonParts.size
+        incomingReason
+          .split('；')
+          .map((item) => item.trim())
+          .filter(Boolean)
+          .forEach((item) => reasonParts.add(item))
+
+        const nextReason = Array.from(reasonParts).join('；')
+        if (nextReason && nextReason !== existingReason) {
+          this.stockReasonsMap.set(code, nextReason)
+          if (targetStockReasons) {
+            targetStockReasons[code] = nextReason
+          }
+          mergedCount += Math.max(1, reasonParts.size - beforeSize)
+        }
+      })
+    })
+
+    return mergedCount
+  }
+
+  private syncTagsAndReasonsToDataLayer(): void {
+    const stockTagsUpdates = Array.from(this.stockTagsMap.entries()).map(([code, tags]) => ({
+      code,
+      tags: tags.map((tag) => ({ Name: tag.Name })),
+    }))
+
+    const limitUpUpdates = Array.from(
+      new Set([...this.stockTagsMap.keys(), ...this.stockReasonsMap.keys()]),
+    ).map((code) => ({
+      code,
+      reason: this.stockReasonsMap.get(code),
+      tags: this.stockTagsMap.get(code)?.map((tag) => ({ Name: tag.Name })),
+    }))
+
+    if (stockTagsUpdates.length > 0) {
+      dataLayer.updateStockTags(stockTagsUpdates)
+    }
+
+    if (limitUpUpdates.length > 0) {
+      dataLayer.updateLimitUpData(limitUpUpdates)
+    }
+
+    const stocks = dataLayer.getStocks()
+    if (stocks.length > 0 && (stockTagsUpdates.length > 0 || limitUpUpdates.length > 0)) {
+      dataLayer.setMergedStocks(
+        stocks.map((stock) => ({
+          ...stock,
+          tags: this.stockTagsMap.get(stock.code) || stock.tags || [],
+          reason: this.stockReasonsMap.get(stock.code) || stock.reason || '',
+        })),
+      )
+    }
+  }
+
   /**
    * 从 IndexedDB 加载数据（增强版）
    */
@@ -203,10 +349,10 @@ class ThemeDataService {
 
       let allThemeIds: string[] = []
 
-      if (this.kplThemes.length > 0) {
+      allThemeIds = Array.from(this.themes.keys())
+
+      if (allThemeIds.length === 0 && this.kplThemes.length > 0) {
         allThemeIds = this.kplThemes.map((t) => t.id)
-      } else {
-        allThemeIds = Array.from(this.themes.keys())
       }
 
       if (allThemeIds.length === 0) {
@@ -368,11 +514,22 @@ class ThemeDataService {
 
     mappingData.themes.forEach((theme) => {
       if (!uniqueThemes.has(theme.id)) {
-        uniqueThemes.set(theme.id, theme)
+        uniqueThemes.set(theme.id, {
+          ...theme,
+          stocks: [...(theme.stocks || [])],
+          stockTags: theme.stockTags ? { ...theme.stockTags } : undefined,
+          stockReasons: theme.stockReasons ? { ...theme.stockReasons } : undefined,
+        })
       }
     })
 
-    uniqueThemes.forEach((theme) => {
+    this.currentMappingData = {
+      ...mappingData,
+      totalThemes: uniqueThemes.size,
+      themes: Array.from(uniqueThemes.values()),
+    }
+
+    this.currentMappingData.themes.forEach((theme) => {
       this.themes.set(theme.id, {
         id: theme.id,
         name: theme.name,
@@ -475,6 +632,23 @@ class ThemeDataService {
       let mappingData = await this.loadFromIndexedDB()
 
       if (mappingData) {
+        if (!this.isSafeFullMapping(mappingData)) {
+          console.warn('[ThemeDataService] IndexedDB 题材缓存异常，尝试使用本地完整映射修复:', {
+            themes: mappingData.themes.length,
+            stocks: this.getUniqueStockCount(mappingData),
+          })
+
+          const localData = await this.fetchFromLocal()
+          if (localData && this.isSafeFullMapping(localData)) {
+            mappingData = localData
+            await this.saveToIndexedDB(localData)
+            console.warn('[ThemeDataService] 已用本地完整映射修复题材缓存:', {
+              themes: localData.themes.length,
+              stocks: this.getUniqueStockCount(localData),
+            })
+          }
+        }
+
         debugLog(`[ThemeDataService] 📀 从 IndexedDB 加载: ${mappingData.themes.length}个题材`)
         this.buildMapping(mappingData)
         this.syncToDataLayer()
@@ -489,6 +663,9 @@ class ThemeDataService {
           this.buildMapping(localData)
           this.syncToDataLayer()
           this.loaded = true
+          if (this.isSafeFullMapping(localData)) {
+            await this.saveToIndexedDB(localData)
+          }
 
           // 首次加载后，从 API 获取最新数据（异步，不阻塞）
           debugLog('[ThemeDataService] 首次加载完成，正在后台同步最新数据...')
@@ -536,6 +713,39 @@ class ThemeDataService {
 
       const apiData = await this.fetchFromAPI()
       if (!apiData) return false
+      if (!this.isSafeFullMapping(apiData)) {
+        const mergedTagReasonCount = this.mergeTagAndReasonData(apiData)
+        if (mergedTagReasonCount > 0) {
+          if (this.currentMappingData) {
+            await this.saveToIndexedDB(this.currentMappingData)
+          }
+          this.syncTagsAndReasonsToDataLayer()
+        }
+        console.warn('[ThemeDataService] API 返回的题材映射规模异常，跳过覆盖缓存:', {
+          apiThemes: apiData.themes.length,
+          apiStocks: this.getUniqueStockCount(apiData),
+          currentThemes: this.themes.size,
+          currentStocks: this.stockThemes.size,
+          mergedTagReasons: mergedTagReasonCount,
+        })
+        return false
+      }
+
+      if (this.themes.size > 0 && apiData.themes.length < this.themes.size * 0.8) {
+        const mergedTagReasonCount = this.mergeTagAndReasonData(apiData)
+        if (mergedTagReasonCount > 0) {
+          if (this.currentMappingData) {
+            await this.saveToIndexedDB(this.currentMappingData)
+          }
+          this.syncTagsAndReasonsToDataLayer()
+        }
+        console.warn('[ThemeDataService] API 返回题材数量明显少于当前映射，跳过覆盖缓存:', {
+          apiThemes: apiData.themes.length,
+          currentThemes: this.themes.size,
+          mergedTagReasons: mergedTagReasonCount,
+        })
+        return false
+      }
 
       const needUpdate =
         !this.lastUpdateTime ||
@@ -550,6 +760,7 @@ class ThemeDataService {
         this.buildMapping(apiData)
         await this.saveToIndexedDB(apiData)
         this.syncToDataLayer()
+        this.syncTagsAndReasonsToDataLayer()
         debugLog(`[ThemeDataService] ✅ 更新完成`)
         return true
       }
@@ -593,9 +804,25 @@ class ThemeDataService {
     debugLog('[ThemeDataService] 🔄 强制刷新题材映射...')
     const apiData = await this.fetchFromAPI()
     if (apiData) {
+      if (!this.isSafeFullMapping(apiData)) {
+        const mergedTagReasonCount = this.mergeTagAndReasonData(apiData)
+        if (mergedTagReasonCount > 0) {
+          if (this.currentMappingData) {
+            await this.saveToIndexedDB(this.currentMappingData)
+          }
+          this.syncTagsAndReasonsToDataLayer()
+        }
+        console.warn('[ThemeDataService] 强制刷新返回的题材映射规模异常，已拒绝覆盖:', {
+          apiThemes: apiData.themes.length,
+          apiStocks: this.getUniqueStockCount(apiData),
+          mergedTagReasons: mergedTagReasonCount,
+        })
+        return false
+      }
       this.buildMapping(apiData)
       await this.saveToIndexedDB(apiData)
       this.syncToDataLayer()
+      this.syncTagsAndReasonsToDataLayer()
       return true
     }
     return false
@@ -730,6 +957,7 @@ class ThemeDataService {
     this.loadingPromise = null
     this.lastUpdateTime = null
     this.kplThemes = []
+    this.currentMappingData = null
     debugLog('[ThemeDataService] 🧹 缓存已清除')
   }
 

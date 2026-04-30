@@ -30,7 +30,7 @@
             <div class="sentiment-info">
               <div class="sentiment-phase">{{ sentiment.phaseName }}</div>
               <div class="sentiment-score">
-                情绪指数 {{ sentiment.overall.toFixed(1) }} · {{ reviewCompleteness }}
+                情绪阶段 · {{ reviewCompleteness }}
               </div>
             </div>
           </div>
@@ -354,8 +354,8 @@ const unsubscribeFns: Array<() => void> = []
 const sentiment = computed(() => {
   const breath = (dataLayer as any).state?.analysis?.breath
   return {
-    phase: breath?.sentiment?.phase || '震荡期',
-    phaseName: breath?.sentiment?.phaseName || breath?.sentiment?.phase || '震荡期',
+    phase: breath?.sentiment?.phase || 'start',
+    phaseName: breath?.sentiment?.phaseName || breath?.sentiment?.phase || '启动',
     overall: Number(breath?.sentiment?.overall || 50),
     suggestion: breath?.sentiment?.suggestion || '等待真龙确认，不追无效热度',
   }
@@ -365,7 +365,7 @@ const currentPhase = computed(() => {
   return (
     EMOTION_PHASE_BY_NAME[sentiment.value.phaseName] ||
     EMOTION_PHASE_BY_NAME[sentiment.value.phase] ||
-    EMOTION_PHASE_LIST.find((item) => item.name === '震荡期') ||
+    EMOTION_PHASE_LIST.find((item) => item.name === '启动') ||
     {
       icon: '🌬️',
       gradient: 'linear-gradient(135deg, #2c3e50, #34495e)',

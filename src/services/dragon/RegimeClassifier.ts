@@ -17,8 +17,9 @@ export class RegimeClassifier {
     const rotationSpeed = rotation?.rotationSpeed || 0
     const persistentMainLines =
       rotation?.mainLines?.filter((line) => (line.persistentDays || 0) >= 2).length || 0
+    const sentimentPhase = latest?.sentiment.phaseName || latest?.sentiment.phase
 
-    if (zhabanRate >= 32 || (latest?.sentiment.overall || 0) < 35) {
+    if (zhabanRate >= 32 || sentimentPhase === '退潮' || sentimentPhase === 'retreat') {
       return 'DISTRIBUTION_DECAY'
     }
 
@@ -34,7 +35,7 @@ export class RegimeClassifier {
       return 'ROTATION_NO_CORE'
     }
 
-    if ((latest?.sentiment.overall || 0) <= 45 && ztCount <= 25) {
+    if ((sentimentPhase === '冰点' || sentimentPhase === 'ice' || sentimentPhase === '启动' || sentimentPhase === 'start') && ztCount <= 25) {
       return 'REPAIR_ATTEMPT'
     }
 

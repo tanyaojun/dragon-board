@@ -292,7 +292,7 @@ export const DragonBreathMap: Record<string, {
     description: '龙吟九天，威震四方，情绪高潮',
     suggestion: '飞龙在天，持股为主'
   },
-  [MARKET_PHASES.RECESSION.name]: {
+  [MARKET_PHASES.RETREAT.name]: {
     phase: 'dragon-hide',
     name: '龙隐期',
     icon: '🌫️🐲',

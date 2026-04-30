@@ -1,5 +1,5 @@
 <!-- src/components/panels/DragonBreathPanel.vue -->
-<!-- 纯响应式版本：只依赖 dataLayer，从 emotion.ts 读取情绪阶段配置 -->
+<!-- 纯响应式版本：只依赖 dataLayer，面板统一显示五阶段情绪周期 -->
 
 <template>
   <div v-show="visible" class="breath-panel" :style="panelStyle" ref="panelRef">
@@ -24,28 +24,22 @@
       </div>
     </div>
 
-    <!-- 情绪卡片 - 从 emotion.ts 读取阶段信息 -->
-    <div class="sentiment-card" :style="{ background: phaseGradient }">
+    <!-- 情绪卡片 - 五阶段情绪周期 -->
+    <div class="sentiment-card" :class="`stage-${displaySentiment.stageClass}`">
       <div class="sentiment-main">
         <div class="sentiment-left">
-          <div class="sentiment-score-circle">
-            <div class="score-circle" :style="{
-              background: `conic-gradient(#fff ${sentiment.overall || 0}%, rgba(255,255,255,0.2) 0)`,
-              boxShadow: `0 0 20px ${phaseColor}80`,
-            }">
-              <span class="score-value">{{ Math.round(sentiment.overall || 0) }}</span>
-            </div>
-            <span class="score-label">情绪指数</span>
+          <div class="sentiment-stage-badge" :style="{ boxShadow: `0 0 20px ${stageColor}80` }">
+            <span class="stage-badge-icon">{{ stageIcon }}</span>
           </div>
           <div class="sentiment-info">
-            <div class="sentiment-phase" :style="{ color: phaseColor }">
-              {{ phaseIcon }} {{ sentiment.phaseName || sentiment.phase || '未知' }}
+            <div class="sentiment-phase">
+              {{ stageIcon }} {{ displaySentiment.stageName }}
             </div>
-            <div class="sentiment-risk" :class="`risk-${sentiment.riskLevel}`">
+            <div class="sentiment-risk" :class="`risk-${displaySentiment.riskLevel}`">
               <span class="risk-dot"></span>
-              {{ sentiment.riskLevel }}风险
+              {{ displaySentiment.riskLevel }}风险
             </div>
-            <div class="sentiment-suggestion">{{ sentiment.suggestion || '暂无建议' }}</div>
+            <div class="sentiment-suggestion">{{ displaySentiment.suggestion || '暂无建议' }}</div>
           </div>
         </div>
         <div class="sentiment-stats">
@@ -76,6 +70,9 @@
     <div class="panel-tabs">
       <button class="tab-btn" :class="{ active: view === 'overview' }" @click="view = 'overview'">
         📊 市场概览
+      </button>
+      <button class="tab-btn" :class="{ active: view === 'hotlist' }" @click="view = 'hotlist'">
+        🔥 热榜情绪
       </button>
       <button class="tab-btn" :class="{ active: view === 'limit' }" @click="view = 'limit'">
         📈 连板分析
@@ -175,6 +172,115 @@
               </div>
             </div>
           </div>
+        </div>
+
+        <!-- 热榜情绪视图 -->
+        <div v-if="view === 'hotlist'" class="hotlist-view">
+          <div v-if="hotListSentimentLoading" class="mini-loading">正在分析热榜情绪...</div>
+          <div v-else-if="hotListSentimentError" class="error-state compact">
+            <span class="error-icon">⚠️</span>
+            <span>{{ hotListSentimentError }}</span>
+            <button class="retry-btn" @click="loadHotListSentiment">重试</button>
+          </div>
+          <template v-else-if="hotListSentiment">
+            <div class="hotlist-stage-card" :class="`stage-${hotListStage.classKey}`">
+              <div class="hotlist-stage-main">
+                <span class="hotlist-stage-label">热榜情绪</span>
+                <span class="hotlist-stage-value">{{ hotListStage.name }}</span>
+                <span class="hotlist-confidence">置信 {{ hotListSentiment.confidence }}%</span>
+              </div>
+              <div class="hotlist-summary">{{ hotListSentiment.summary }}</div>
+            </div>
+
+            <div class="metrics-grid hotlist-metrics">
+              <div class="metric-item">
+                <span class="metric-label">热榜池</span>
+                <span class="metric-value">{{ hotListToday?.total || 0 }}</span>
+                <span class="metric-percent" :class="getDeltaClass(hotListComparison?.totalChange1d)">
+                  昨比 {{ formatSignedInt(hotListComparison?.totalChange1d) }}
+                </span>
+              </div>
+              <div class="metric-item">
+                <span class="metric-label">前100上涨</span>
+                <span class="metric-value up-text">{{ formatShare(hotListToday?.upRatio) }}</span>
+                <span class="metric-percent">{{ hotListToday?.upCount || 0 }}涨 / {{ hotListToday?.downCount || 0 }}跌</span>
+              </div>
+              <div class="metric-item">
+                <span class="metric-label">热榜TRIN</span>
+                <span class="metric-value" :class="getTrinClass(hotListToday?.hotTrin)">
+                  {{ formatTrin(hotListToday?.hotTrin) }}
+                </span>
+                <span class="metric-percent">{{ getTrinText(hotListToday?.hotTrin) }}</span>
+              </div>
+              <div class="metric-item">
+                <span class="metric-label">留榜率</span>
+                <span class="metric-value">{{ formatShare(hotListComparison?.top100RetainRateFromYesterday) }}</span>
+                <span class="metric-percent">昨日前100</span>
+              </div>
+              <div class="metric-item">
+                <span class="metric-label">强资+点火</span>
+                <span class="metric-value up-text">
+                  {{ hotListActiveOpportunityCount }}
+                </span>
+                <span class="metric-percent">{{ formatShare(hotListActiveOpportunityShare) }}</span>
+              </div>
+              <div class="metric-item">
+                <span class="metric-label">风险压力</span>
+                <span class="metric-value down-text">{{ hotListToday?.riskCount || 0 }}</span>
+                <span class="metric-percent">{{ formatShare(hotListToday?.riskShare) }}</span>
+              </div>
+            </div>
+
+            <div class="hotlist-section">
+              <div class="section-title">📊 前100状态结构</div>
+              <div class="status-distribution">
+                <div v-for="item in hotListStatusItems" :key="item.label" class="status-item">
+                  <div class="status-row">
+                    <span class="status-label">{{ item.label }}</span>
+                    <span class="status-count">{{ item.count }}</span>
+                  </div>
+                  <div class="status-bar">
+                    <div class="status-bar-fill" :class="`status-${item.classKey}`" :style="{ width: item.shareText }"></div>
+                  </div>
+                  <span class="status-share">{{ item.shareText }}</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="hotlist-section">
+              <div class="section-title">🗓️ 三日对比</div>
+              <div class="history-grid">
+                <div v-for="item in hotListHistoryItems" :key="item.label" class="history-item">
+                  <span class="history-label">{{ item.label }}</span>
+                  <span class="history-main">{{ item.total }}</span>
+                  <span class="history-sub">
+                    强资 {{ item.strongMoney }} · 拥挤 {{ item.crowded }} · 风险 {{ item.risk }}
+                  </span>
+                </div>
+              </div>
+              <div class="history-extra">
+                <span>今日新入前100 {{ hotListComparison?.newTop100Count || 0 }} 只</span>
+                <span>新入强资 {{ hotListComparison?.newTop100StrongMoneyCount || 0 }} 只</span>
+                <span>昨日强资留榜 {{ formatShare(hotListComparison?.yesterdayStrongRetainRate) }}</span>
+              </div>
+            </div>
+
+            <div class="hotlist-evidence-grid">
+              <div class="hotlist-section">
+                <div class="section-title">✅ 强证据</div>
+                <ul class="evidence-list">
+                  <li v-for="signal in hotListSentiment.signals" :key="signal">{{ signal }}</li>
+                </ul>
+              </div>
+              <div class="hotlist-section">
+                <div class="section-title">⚠️ 风险提示</div>
+                <ul class="evidence-list">
+                  <li v-for="warning in hotListSentiment.warnings" :key="warning">{{ warning }}</li>
+                </ul>
+              </div>
+            </div>
+          </template>
+          <div v-else class="empty-state">暂无热榜情绪数据</div>
         </div>
 
         <!-- 连板分析视图 -->
@@ -352,25 +458,7 @@
         <div v-if="view === 'factors'" class="factors-view">
           <div class="factors-header">
             <h4>🔥 龙息因子 ({{ breathFactors.length }})</h4>
-            <span class="factor-tip">得分越高表示情绪越好</span>
-          </div>
-
-          <!-- 总分显示卡片 -->
-          <div class="total-score-card">
-            <div class="total-header">
-              <span class="total-icon">📊</span>
-              <span class="total-title">市场情绪总分</span>
-            </div>
-            <div class="total-value" :style="{ color: getTotalScoreColor(sentiment.overall) }">
-              {{ Math.round(sentiment.overall) }}/100分
-            </div>
-            <div class="total-breakdown">
-              <span>自研因子: {{ selfTotalScore }}/86分</span>
-              <span>通达信情绪: {{ tdxScoreWeighted.toFixed(2) }}/14分</span>
-            </div>
-            <div class="total-bar">
-              <div class="total-bar-fill" :style="{ width: sentiment.overall + '%' }"></div>
-            </div>
+            <span class="factor-tip">原始结构证据，仅用于解释阶段</span>
           </div>
 
           <!-- 因子卡片网格 -->
@@ -378,57 +466,14 @@
             <div v-for="factor in breathFactors" :key="factor.id" class="factor-card">
               <div class="factor-header">
                 <span class="factor-name">{{ factor.name }}</span>
-                <span class="factor-max">权重{{ factor.weight }}%</span>
-              </div>
-              <!-- 原始得分 -->
-              <div class="factor-score" :style="{ color: getFactorScoreColor(factor.score, factor.maxScore) }">
-                {{ factor.score }}/{{ factor.maxScore }}分
+                <span class="factor-state" :class="getFactorStateClass(factor)">
+                  {{ getFactorStateText(factor) }}
+                </span>
               </div>
               <div class="factor-raw" :style="{ color: getFactorValueColor(factor.rawValue, factor.id) }">
                 {{ formatRawValue(factor.rawValue, factor.unit) }}
               </div>
               <div class="factor-desc">{{ factor.description }}</div>
-              <div class="factor-bar">
-                <div class="factor-bar-fill" :style="{
-                  width: (factor.score / factor.maxScore * 100) + '%',
-                  background: getFactorScoreGradient(factor.score, factor.maxScore)
-                }"></div>
-              </div>
-              <!-- 加权贡献 -->
-              <div class="factor-contribution">
-                贡献: {{ ((factor.score / factor.maxScore) * factor.weight).toFixed(2) }}/{{ factor.weight }}分
-              </div>
-            </div>
-          </div>
-
-          <!-- 权重分布 -->
-          <div class="weights-section" v-if="breathFactors.length > 0">
-            <div class="section-title">⚖️ 权重分布</div>
-            <div class="weights-grid">
-              <div v-for="factor in breathFactors" :key="factor.id" class="weight-item">
-                <span class="weight-name">{{ factor.name }}</span>
-                <div class="weight-bar-container">
-                  <div class="weight-bar">
-                    <div class="weight-bar-fill" :style="{
-                      width: factor.weight + '%',
-                      background: 'linear-gradient(90deg, #ffa502, #ffd700)'
-                    }"></div>
-                  </div>
-                </div>
-                <span class="weight-value">{{ factor.weight.toFixed(2) }}%</span>
-              </div>
-              <div class="weight-item total">
-                <span class="weight-name">总计</span>
-                <div class="weight-bar-container">
-                  <div class="weight-bar">
-                    <div class="weight-bar-fill" :style="{
-                      width: totalWeightForBar + '%',
-                      background: 'linear-gradient(90deg, #ffa502, #ffd700)'
-                    }"></div>
-                  </div>
-                </div>
-                <span class="weight-value">{{ totalWeightForBar.toFixed(2) }}%</span>
-              </div>
             </div>
           </div>
 
@@ -459,26 +504,66 @@
 
 <script setup lang="ts">
 import { debugLog } from '@/utils/logger'
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { dataLayer } from '@/services/DataLayer'
 import { dragonBreathAnalyzer } from '@/services/DragonBreathAnalyzer'
 import {
-  EMOTION_PHASES,
-  EMOTION_PHASE_BY_NAME,
-  EMOTION_SCORE_CONFIG,
+  hotListSentimentAnalyzer,
+  type HotListDayMetrics,
+  type HotListSentimentResult,
+  type HotListStatusLabel,
+} from '@/services/hotlist/HotListSentimentAnalyzer'
+import type { SnapshotFrameBundle } from '@/services/snapshot/types'
+import { FORMAL_SNAPSHOT_READ_POLICY } from '@/services/snapshot/readPolicy'
+import {
+  EMOTION_PHASE_BY_VALUE,
+  EMOTION_PHASE_LIST,
+  type UnifiedEmotionStage,
 } from '@/types/emotion'
 import { usePanel } from '@/composables/usePanel'
+
+type EmotionStageClassKey = 'ice' | 'start' | 'ferment' | 'climax' | 'retreat'
 
 interface FactorItem {
   id: string
   name: string
   rawValue: number
-  score: number
-  weight: number
-  maxScore: number
   unit: string
   description: string
 }
+
+interface DisplayEmotionStage {
+  name: UnifiedEmotionStage
+  classKey: EmotionStageClassKey
+  color: string
+  gradient: string
+  icon: string
+  suggestion: string
+}
+
+interface DisplaySentiment {
+  stage: UnifiedEmotionStage
+  stageName: UnifiedEmotionStage
+  stageClass: EmotionStageClassKey
+  riskLevel: string
+  suggestion: string
+}
+
+const EMOTION_STAGE_NAMES: UnifiedEmotionStage[] = ['冰点', '启动', '发酵', '高潮', '退潮']
+const EMOTION_STAGE_CONFIG = EMOTION_PHASE_LIST.reduce(
+  (record, phase) => {
+    record[phase.name as UnifiedEmotionStage] = {
+      name: phase.name as UnifiedEmotionStage,
+      classKey: phase.value as EmotionStageClassKey,
+      color: phase.color,
+      gradient: phase.gradient,
+      icon: phase.icon,
+      suggestion: phase.suggestion,
+    }
+    return record
+  },
+  {} as Record<UnifiedEmotionStage, DisplayEmotionStage>,
+)
 
 const props = defineProps<{
   visible: boolean
@@ -507,10 +592,15 @@ const { panelRef, panelStyle } = usePanel({
 // ========== 状态 ==========
 const loading = ref(false)
 const error = ref<string | null>(null)
-const view = ref<'overview' | 'limit' | 'money' | 'plates' | 'factors'>('factors')
+const view = ref<'overview' | 'hotlist' | 'limit' | 'money' | 'plates' | 'factors'>('factors')
 const selectedPlate = ref<number | null>(null)
 const contentRef = ref<HTMLElement | null>(null)
 const unsubscribeFns: (() => void)[] = []
+const hotListSentiment = ref<HotListSentimentResult | null>(null)
+const hotListSentimentLoading = ref(false)
+const hotListSentimentError = ref<string | null>(null)
+let hotListSentimentTimer: ReturnType<typeof setTimeout> | null = null
+let hotListSentimentRetryCount = 0
 
 
 
@@ -548,23 +638,61 @@ const marketData = computed(() => {
 const sentiment = computed(() => {
   const breath = (dataLayer as any).state?.analysis?.breath
   const sent = breath?.sentiment || {}
+  const stage = resolveDisplayEmotionStage(sent)
 
   return {
-    phase: sent.phase || 'oscillation',
-    phaseName: sent.phaseName || '震荡期',
-    overall: sent.overall ?? 50,
+    stage: stage.name,
+    stageName: stage.name,
+    stageClass: stage.classKey,
     riskLevel: sent.riskLevel || '中',
-    suggestion: sent.suggestion || '观望为主',
+    suggestion: sent.suggestion || stage.suggestion,
   }
 })
+
+function resolveDisplayEmotionStage(source: any): DisplayEmotionStage {
+  const candidates = [
+    source?.stage,
+    source?.stageName,
+    source?.cycleStage,
+    source?.emotionStage,
+    source?.phaseName,
+    source?.phase,
+  ]
+
+  for (const candidate of candidates) {
+    const stage = normalizeEmotionStage(candidate)
+    if (stage) return EMOTION_STAGE_CONFIG[stage]
+  }
+
+  return EMOTION_STAGE_CONFIG.启动
+}
+
+function getDisplayEmotionStage(value?: unknown): DisplayEmotionStage {
+  const stage = normalizeEmotionStage(value)
+  return stage ? EMOTION_STAGE_CONFIG[stage] : EMOTION_STAGE_CONFIG.启动
+}
+
+function normalizeEmotionStage(value?: unknown): UnifiedEmotionStage | null {
+  if (typeof value !== 'string') return null
+  const raw = value.trim()
+  const name = raw.endsWith('期') ? raw.slice(0, -1) : raw
+  if ((EMOTION_STAGE_NAMES as string[]).includes(name)) return name as UnifiedEmotionStage
+
+  const valueNameMap: Record<string, UnifiedEmotionStage> = {
+    ice: '冰点',
+    start: '启动',
+    ferment: '发酵',
+    climax: '高潮',
+    retreat: '退潮',
+  }
+  const byValue = EMOTION_PHASE_BY_VALUE[raw.toLowerCase()]
+  return valueNameMap[raw.toLowerCase()] || (byValue?.name as UnifiedEmotionStage | undefined) || null
+}
 
 // 龙息因子数据（9个因子统一显示）
 const breathFactors = computed(() => {
   const breath = (dataLayer as any).state?.analysis?.breath
   const factors = breath?.factors || []
-
-  // ✅ 直接从配置文件读取，不再重复定义
-  const factorConfig = EMOTION_SCORE_CONFIG.factors
 
   const factorNameMap: Record<string, string> = {
     promotionRate: '晋级率',
@@ -603,44 +731,14 @@ const breathFactors = computed(() => {
   }
 
   return factors.map((factor: any) => {
-    const config = factorConfig[factor.id]
-
     return {
       id: factor.id,
       name: factorNameMap[factor.id] || factor.name || '未知因子',
       rawValue: factor.rawValue ?? 0,
-      score: factor.score ?? 0,
-      maxScore: config?.maxScore ?? 10,  // 从配置文件读取
-      weight: config?.weight ?? 10,       // 从配置文件读取
       unit: factorUnitMap[factor.id] || '',
       description: factorDescMap[factor.id] || factor.description || '暂无描述',
     }
   })
-})
-
-// 通达信情绪得分（按权重计算）
-const tdxScoreWeighted = computed(() => {
-  const factor = breathFactors.value.find((f: any) => f.id === 'tdxEmotion')
-  if (!factor) return 0
-  if (factor.maxScore === 0) return 0
-  return (factor.score / factor.maxScore) * factor.weight
-})
-
-// 自研因子总分（按权重计算）
-const selfTotalScore = computed(() => {
-  let total = 0
-  for (const factor of breathFactors.value) {
-    if (factor.id !== 'tdxEmotion') {
-      if (factor.maxScore > 0) {
-        total += (factor.score / factor.maxScore) * factor.weight
-      }
-    }
-  }
-  return Math.round(total)
-})
-
-const totalWeightForBar = computed(() => {
-  return breathFactors.value.reduce((sum: number, f: FactorItem) => sum + (f.weight || 0), 0)
 })
 
 // 热点板块
@@ -656,15 +754,85 @@ const hotPlates = computed(() => {
   }))
 })
 
-// ========== 从 emotion.ts 获取阶段信息 ==========
-const currentPhase = computed(() => {
-  const phaseName = sentiment.value.phaseName
-  return EMOTION_PHASE_BY_NAME[phaseName] || EMOTION_PHASES.OSCILLATION
+const hotListComparison = computed(() => hotListSentiment.value?.metrics.comparison ?? null)
+const hotListToday = computed<HotListDayMetrics | null>(() => hotListComparison.value?.today ?? null)
+const hotListActiveOpportunityCount = computed(() => {
+  const counts = hotListToday.value?.statusCounts
+  if (!counts) return 0
+  return counts['强资确认'] + counts['点火观察']
+})
+const hotListActiveOpportunityShare = computed(() => {
+  const topN = hotListToday.value?.topN || 0
+  return topN ? hotListActiveOpportunityCount.value / topN : 0
 })
 
-const phaseColor = computed(() => currentPhase.value?.color || '#95a5a6')
-const phaseGradient = computed(() => currentPhase.value?.gradient || 'linear-gradient(135deg, #2c3e50, #34495e)')
-const phaseIcon = computed(() => currentPhase.value?.icon || '🌬️')
+const hotListStage = computed(() => getDisplayEmotionStage(hotListSentiment.value?.stage))
+
+const displaySentiment = computed<DisplaySentiment>(() => {
+  if (view.value === 'hotlist' && hotListSentiment.value) {
+    return {
+      stage: hotListStage.value.name,
+      stageName: hotListStage.value.name,
+      stageClass: hotListStage.value.classKey,
+      riskLevel: getStageRiskLevel(hotListStage.value.name),
+      suggestion: hotListSentiment.value.summary || hotListStage.value.suggestion,
+    }
+  }
+
+  return sentiment.value
+})
+
+const hotListStatusOrder: Array<{ label: HotListStatusLabel; classKey: string }> = [
+  { label: '主升确认', classKey: 'main' },
+  { label: '点火观察', classKey: 'ignition' },
+  { label: '强资确认', classKey: 'strong' },
+  { label: '新入观察', classKey: 'new' },
+  { label: '高位拥挤', classKey: 'crowded' },
+  { label: '资金背离', classKey: 'divergence' },
+  { label: '转弱预警', classKey: 'weakening' },
+  { label: '样本不足', classKey: 'insufficient' },
+]
+
+const hotListStatusItems = computed(() => {
+  const today = hotListToday.value
+  if (!today) return []
+  return hotListStatusOrder.map((item) => ({
+    ...item,
+    count: today.statusCounts[item.label] || 0,
+    shareText: formatShare(today.statusShares[item.label] || 0),
+  }))
+})
+
+const hotListHistoryItems = computed(() => {
+  const comparison = hotListComparison.value
+  if (!comparison) return []
+
+  const toItem = (label: string, metrics?: HotListDayMetrics | null) => ({
+    label,
+    total: metrics ? `${metrics.total}只` : '--',
+    strongMoney: metrics?.statusCounts['强资确认'] ?? 0,
+    crowded: metrics?.statusCounts['高位拥挤'] ?? 0,
+    risk: metrics ? metrics.statusCounts['资金背离'] + metrics.statusCounts['转弱预警'] : 0,
+  })
+
+  return [
+    toItem('T 今日', comparison.today),
+    toItem('T-1 昨日', comparison.yesterday),
+    toItem('T-2 前日', comparison.dayBefore),
+  ]
+})
+
+// ========== 五阶段情绪显示 ==========
+const currentStage = computed(() => getDisplayEmotionStage(displaySentiment.value.stage))
+const stageColor = computed(() => currentStage.value.color)
+const stageIcon = computed(() => currentStage.value.icon)
+
+function getStageRiskLevel(stage: UnifiedEmotionStage): string {
+  if (stage === '退潮') return '高'
+  if (stage === '高潮') return '中'
+  if (stage === '冰点') return '中'
+  return '中'
+}
 
 // ========== 计算属性 ==========
 const totalStocks = computed(() => marketData.value.upCount + marketData.value.downCount)
@@ -727,8 +895,8 @@ const limitBarData = computed(() => {
 const suggestions = computed(() => {
   const list: string[] = []
 
-  if (currentPhase.value) {
-    list.push(`${currentPhase.value.icon} ${currentPhase.value.suggestion}`)
+  if (currentStage.value) {
+    list.push(`${currentStage.value.icon} ${currentStage.value.suggestion}`)
   }
 
   const promotionRate = breathFactors.value.find((f: FactorItem) => f.id === 'promotionRate')?.score || 0
@@ -745,11 +913,11 @@ const suggestions = computed(() => {
   }
 
   if (ztCount > 80) {
-    list.push('📈 涨停家数超过80家，市场极度活跃')
+    list.push('📈 涨停家数超过80家，市场接近高潮')
   } else if (ztCount > 50) {
     list.push('📊 涨停家数超过50家，市场情绪较好')
   } else if (ztCount < 20) {
-    list.push('📉 涨停家数不足20家，市场情绪低迷')
+    list.push('📉 涨停家数不足20家，市场接近冰点')
   }
 
   if (dtCount > 30) {
@@ -772,26 +940,10 @@ const suggestions = computed(() => {
 // ========== 工具函数 ==========
 function getThemeDescription(theme: any): string {
   if (theme.heatScore > 3000) return '🔥 热门题材，多股涨停'
-  if (theme.heatScore > 1500) return '🌟 题材活跃，资金关注'
+  if (theme.heatScore > 1500) return '🌟 题材发酵，资金关注'
   if (theme.momentum > 20) return '📈 题材升温，趋势向上'
   if (theme.momentum < -20) return '📉 题材降温，注意风险'
-  return '⚖️ 题材平稳，震荡为主'
-}
-
-function getFactorScoreColor(score: number, maxScore: number = 10): string {
-  const percent = (score / maxScore) * 100
-  if (percent >= 80) return '#ff4757'
-  if (percent >= 60) return '#ffa502'
-  if (percent >= 40) return '#3498db'
-  return '#7f8c8d'
-}
-
-function getFactorScoreGradient(score: number, maxScore: number = 10): string {
-  const percent = (score / maxScore) * 100
-  if (percent >= 80) return 'linear-gradient(90deg, #ff4757, #ff6b81)'
-  if (percent >= 60) return 'linear-gradient(90deg, #ffa502, #ffb347)'
-  if (percent >= 40) return 'linear-gradient(90deg, #3498db, #5dade2)'
-  return 'linear-gradient(90deg, #7f8c8d, #95a5a6)'
+  return '⚖️ 题材等待启动信号'
 }
 
 function getFactorValueColor(value: number, factorId?: string): string {
@@ -857,11 +1009,57 @@ function getFactorValueColor(value: number, factorId?: string): string {
   return '#7f8c8d'
 }
 
-function getTotalScoreColor(score: number): string {
-  if (score >= 80) return '#ff4757'
-  if (score >= 60) return '#ffa502'
-  if (score >= 40) return '#3498db'
-  return '#7f8c8d'
+function getFactorStateText(factor: FactorItem): string {
+  const value = Number(factor.rawValue)
+  if (!Number.isFinite(value)) return '缺失'
+
+  switch (factor.id) {
+    case 'promotionRate':
+      if (value >= 28) return '接力强'
+      if (value >= 12) return '接力修复'
+      return '接力弱'
+    case 'yesterdayZtAvgChange':
+      if (value >= 3) return '承接强'
+      if (value >= 0) return '承接一般'
+      return '承接弱'
+    case 'ztCount':
+      if (value >= 80) return '进攻强'
+      if (value >= 40) return '进攻修复'
+      return '进攻弱'
+    case 'dtCount':
+      if (value <= 5) return '风险低'
+      if (value <= 15) return '风险中'
+      return '风险高'
+    case 'zhabanRate':
+      if (value <= 20) return '封板强'
+      if (value <= 35) return '分歧中'
+      return '分歧高'
+    case 'maxContinuousDays':
+      if (value >= 5) return '高度强'
+      if (value >= 3) return '高度修复'
+      return '高度弱'
+    case 'upDownRatio':
+      if (value >= 1.8) return '宽度强'
+      if (value >= 0.8) return '宽度中'
+      return '宽度弱'
+    case 'volumeRatio':
+      if (value >= 1.2) return '放量'
+      if (value >= 0.9) return '平量'
+      return '缩量'
+    case 'tdxEmotion':
+      if (value >= 70) return '偏热'
+      if (value >= 40) return '中性'
+      return '偏冷'
+    default:
+      return '观察'
+  }
+}
+
+function getFactorStateClass(factor: FactorItem): string {
+  const text = getFactorStateText(factor)
+  if (text.includes('强') || text === '放量' || text === '风险低') return 'positive'
+  if (text.includes('弱') || text.includes('高') || text === '缩量' || text === '偏冷') return 'negative'
+  return 'neutral'
 }
 
 function formatRawValue(value: number, unit: string): string {
@@ -883,6 +1081,64 @@ function loadData() {
 
 function refresh() {
   dragonBreathAnalyzer.refresh()
+  loadHotListSentiment()
+}
+
+function scheduleHotListSentimentLoad() {
+  if (hotListSentimentTimer) clearTimeout(hotListSentimentTimer)
+  hotListSentimentTimer = setTimeout(() => {
+    loadHotListSentiment()
+  }, 300)
+}
+
+function scheduleHotListSentimentRetry() {
+  if (hotListSentimentRetryCount >= 6) return
+  hotListSentimentRetryCount += 1
+  if (hotListSentimentTimer) clearTimeout(hotListSentimentTimer)
+  hotListSentimentTimer = setTimeout(() => {
+    loadHotListSentiment()
+  }, 800)
+}
+
+async function loadHotListSentiment() {
+  hotListSentimentLoading.value = true
+  hotListSentimentError.value = null
+
+  try {
+    const stocks = dataLayer.getStocks()
+    if (!Array.isArray(stocks) || stocks.length === 0) {
+      hotListSentiment.value = null
+      hotListSentimentError.value = '等待当前热榜池数据...'
+      scheduleHotListSentimentRetry()
+      return
+    }
+
+    hotListSentimentRetryCount = 0
+    const historicalBundles = await dataLayer.listSnapshotFrameBundles({
+      type: 'daily',
+      allowedCaptureModes: FORMAL_SNAPSHOT_READ_POLICY.allowedCaptureModes,
+      excludeRestored: FORMAL_SNAPSHOT_READ_POLICY.excludeRestored,
+      sort: 'desc',
+      limit: 3,
+    })
+
+    const today = formatLocalDate(new Date())
+    const historical = historicalBundles
+      .filter((bundle: SnapshotFrameBundle) => bundle.tradingDate !== today)
+      .slice(0, 2)
+
+    hotListSentiment.value = hotListSentimentAnalyzer.analyze({
+      stocks,
+      yesterday: historical[0] || null,
+      dayBefore: historical[1] || null,
+      topN: 100,
+    })
+  } catch (err: any) {
+    console.warn('[DragonBreathPanel] 热榜情绪分析失败:', err)
+    hotListSentimentError.value = err?.message || '热榜情绪分析失败'
+  } finally {
+    hotListSentimentLoading.value = false
+  }
 }
 
 function exportData() {
@@ -890,6 +1146,7 @@ function exportData() {
     exportTime: new Date().toISOString(),
     sentiment: sentiment.value,
     marketData: marketData.value,
+    hotListSentiment: hotListSentiment.value,
     factors: breathFactors.value,
     hotPlates: hotPlates.value,
     suggestions: suggestions.value,
@@ -920,6 +1177,48 @@ function formatAmount(amount?: number): string {
 function formatPercent(value?: number): string {
   if (value === undefined || value === null) return '--'
   return (value > 0 ? '+' : '') + value.toFixed(2) + '%'
+}
+
+function formatShare(value?: number | null): string {
+  if (value === undefined || value === null || !Number.isFinite(Number(value))) return '--'
+  return `${(Number(value) * 100).toFixed(0)}%`
+}
+
+function formatTrin(value?: number | null): string {
+  if (value === undefined || value === null || !Number.isFinite(Number(value))) return '--'
+  return Number(value).toFixed(2)
+}
+
+function getTrinClass(value?: number | null): string {
+  if (value === undefined || value === null || !Number.isFinite(Number(value))) return ''
+  if (value < 1) return 'up-text'
+  if (value > 1.15) return 'down-text'
+  return ''
+}
+
+function getTrinText(value?: number | null): string {
+  if (value === undefined || value === null || !Number.isFinite(Number(value))) return '样本不足'
+  if (value < 1) return '承接偏强'
+  if (value > 1.15) return '承接偏弱'
+  return '承接均衡'
+}
+
+function formatSignedInt(value?: number | null): string {
+  if (value === undefined || value === null || !Number.isFinite(Number(value))) return '--'
+  const rounded = Math.round(Number(value))
+  return `${rounded >= 0 ? '+' : ''}${rounded}`
+}
+
+function getDeltaClass(value?: number | null): string {
+  if (value === undefined || value === null || !Number.isFinite(Number(value))) return ''
+  return value > 0 ? 'up-text' : value < 0 ? 'down-text' : ''
+}
+
+function formatLocalDate(date: Date): string {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
 }
 
 function getChangeClass(value?: number): string {
@@ -1010,10 +1309,29 @@ onMounted(() => {
 
   const unsubHotThemes = dataLayer.subscribe('theme.hotThemes', () => { })
   unsubscribeFns.push(unsubHotThemes)
+
+  const unsubStocks = dataLayer.subscribe('merged.stocks', () => {
+    scheduleHotListSentimentLoad()
+  })
+  unsubscribeFns.push(unsubStocks)
+
+  loadHotListSentiment()
+})
+
+watch(
+  () => props.visible,
+  (visible) => {
+    if (visible) scheduleHotListSentimentLoad()
+  },
+)
+
+watch(view, (nextView) => {
+  if (nextView === 'hotlist') scheduleHotListSentimentLoad()
 })
 
 onUnmounted(() => {
   debugLog('[DragonBreathPanel] 卸载')
+  if (hotListSentimentTimer) clearTimeout(hotListSentimentTimer)
   unsubscribeFns.forEach(fn => fn())
 })
 </script>
@@ -1069,13 +1387,6 @@ onUnmounted(() => {
   font-size: 40px;
   opacity: 0.5;
   filter: grayscale(0.5);
-}
-
-/* 百分比颜色已经在JS中动态设置，这里只需要基础样式 */
-.weight-value,
-.factor-weight,
-.score-value {
-  font-feature-settings: 'tnum';
 }
 
 .breath-panel {
@@ -1214,6 +1525,27 @@ onUnmounted(() => {
   border-radius: 12px;
   color: white;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+  background: linear-gradient(135deg, #1e3c5a, #2980b9);
+}
+
+.sentiment-card.stage-ice {
+  background: linear-gradient(135deg, #1e2b3a, #2c3e50);
+}
+
+.sentiment-card.stage-start {
+  background: linear-gradient(135deg, #1e3c5a, #2980b9);
+}
+
+.sentiment-card.stage-ferment {
+  background: linear-gradient(135deg, #b45f06, #f39c12);
+}
+
+.sentiment-card.stage-climax {
+  background: linear-gradient(135deg, #a52613, #e74c3c);
+}
+
+.sentiment-card.stage-retreat {
+  background: linear-gradient(135deg, #4a235a, #8e44ad);
 }
 
 .sentiment-main {
@@ -1230,41 +1562,22 @@ onUnmounted(() => {
   flex: 1;
 }
 
-.sentiment-score-circle {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  flex-shrink: 0;
-}
-
-.score-circle {
+.sentiment-stage-badge {
   width: 60px;
   height: 60px;
   border-radius: 30px;
   display: flex;
   align-items: center;
   justify-content: center;
-  margin-bottom: 4px;
   background: rgba(255, 255, 255, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.35);
   transition: box-shadow 0.3s;
+  flex-shrink: 0;
 }
 
-.score-value {
-  width: 50px;
-  height: 50px;
-  background: rgba(255, 255, 255, 0.3);
-  border-radius: 25px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 18px;
-  font-weight: bold;
-  color: white;
-}
-
-.score-label {
-  font-size: 10px;
-  opacity: 0.8;
+.stage-badge-icon {
+  font-size: 30px;
+  line-height: 1;
 }
 
 .sentiment-info {
@@ -1476,6 +1789,233 @@ onUnmounted(() => {
 .index-value {
   font-size: 11px;
   font-weight: bold;
+}
+
+/* 热榜情绪 */
+.hotlist-view {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.mini-loading {
+  padding: 24px;
+  text-align: center;
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+}
+
+.error-state.compact {
+  padding: 24px 12px;
+}
+
+.hotlist-stage-card {
+  border-radius: 10px;
+  padding: 14px;
+  border: 1px solid var(--border-color);
+  background: linear-gradient(135deg, rgba(52, 152, 219, 0.18), rgba(52, 152, 219, 0.06));
+}
+
+.hotlist-stage-card.stage-ice {
+  background: linear-gradient(135deg, rgba(127, 140, 141, 0.24), rgba(127, 140, 141, 0.08));
+}
+
+.hotlist-stage-card.stage-start {
+  background: linear-gradient(135deg, rgba(52, 152, 219, 0.24), rgba(52, 152, 219, 0.08));
+}
+
+.hotlist-stage-card.stage-ferment {
+  background: linear-gradient(135deg, rgba(243, 156, 18, 0.24), rgba(243, 156, 18, 0.08));
+}
+
+.hotlist-stage-card.stage-climax {
+  background: linear-gradient(135deg, rgba(255, 71, 87, 0.24), rgba(255, 165, 2, 0.1));
+}
+
+.hotlist-stage-card.stage-retreat {
+  background: linear-gradient(135deg, rgba(155, 89, 182, 0.24), rgba(155, 89, 182, 0.08));
+}
+
+.hotlist-stage-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.hotlist-stage-label,
+.hotlist-confidence {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.hotlist-stage-value {
+  font-size: 20px;
+  font-weight: bold;
+  color: var(--text-primary);
+}
+
+.hotlist-summary {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.hotlist-metrics {
+  margin-bottom: 0;
+}
+
+.hotlist-section {
+  background: var(--bg-secondary);
+  border-radius: 8px;
+  padding: 12px;
+  border: 1px solid var(--border-color);
+}
+
+.status-distribution {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px 12px;
+}
+
+.status-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 42px;
+  gap: 4px 8px;
+  align-items: center;
+}
+
+.status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
+.status-label {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.status-count {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.status-bar {
+  height: 5px;
+  background: var(--bg-primary);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.status-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+}
+
+.status-share {
+  font-size: 10px;
+  color: var(--text-secondary);
+  text-align: right;
+}
+
+.status-main {
+  background: #ff4757;
+}
+
+.status-ignition {
+  background: #ffa502;
+}
+
+.status-strong {
+  background: #3498db;
+}
+
+.status-new {
+  background: #2dd4bf;
+}
+
+.status-crowded {
+  background: rgba(255, 255, 255, 0.85);
+}
+
+.status-divergence {
+  background: #9b59b6;
+}
+
+.status-weakening {
+  background: #2ed573;
+}
+
+.status-insufficient {
+  background: #7f8c8d;
+}
+
+.history-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.history-item {
+  background: var(--bg-primary);
+  border-radius: 6px;
+  padding: 8px;
+  text-align: center;
+}
+
+.history-label {
+  display: block;
+  color: var(--text-secondary);
+  font-size: 10px;
+  margin-bottom: 4px;
+}
+
+.history-main {
+  display: block;
+  font-weight: bold;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+
+.history-sub {
+  display: block;
+  color: var(--text-secondary);
+  font-size: 9px;
+  line-height: 1.4;
+}
+
+.history-extra {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+
+.history-extra span {
+  background: var(--bg-primary);
+  border-radius: 999px;
+  padding: 3px 8px;
+}
+
+.hotlist-evidence-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+}
+
+.evidence-list {
+  margin: 0;
+  padding-left: 16px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  font-size: 11px;
 }
 
 /* 连板统计卡片 */
@@ -2016,16 +2556,6 @@ onUnmounted(() => {
   letter-spacing: 0.3px;
 }
 
-.factor-weight {
-  font-size: 11px;
-  padding: 3px 8px;
-  background: var(--bg-primary);
-  border-radius: 20px;
-  color: var(--color-highlight);
-  font-weight: 600;
-  border: 1px solid rgba(255, 165, 2, 0.2);
-}
-
 .factor-value {
   font-size: 28px;
   font-weight: 700;
@@ -2113,152 +2643,24 @@ onUnmounted(() => {
   color: var(--color-highlight);
 }
 
-/* 权重分布 */
-.weights-section {
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  border-radius: 10px;
-  padding: 16px;
-  margin-top: 16px;
-}
-
-.weights-grid {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.weight-item {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  width: 100%;
-}
-
-.weight-name {
-  width: 45px;
-  /* 固定宽度，确保对齐 */
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--text-primary);
-  text-align: left;
-}
-
-.weight-bar-container {
-  flex: 1;
-  /* 占据剩余空间 */
-  min-width: 0;
-  /* 防止flex溢出 */
-}
-
-.weight-bar {
-  height: 8px;
-  background: var(--bg-primary);
-  border-radius: 4px;
-  overflow: hidden;
-  width: 100%;
-}
-
-.weight-bar-fill {
-  height: 100%;
-  border-radius: 4px;
-  transition: width 0.3s ease;
-}
-
-.weight-value {
-  width: 48px;
-  /* 固定宽度，确保对齐 */
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--color-highlight);
-  text-align: right;
-  font-family: monospace;
-}
-
-/* 总计行特殊样式 */
-.weight-item.total {
-  margin-top: 4px;
-  padding-top: 8px;
-  border-top: 1px dashed var(--border-color);
-}
-
-.weight-item.total .weight-name {
-  color: var(--color-highlight);
-  font-weight: 600;
-}
-
-.weight-item.total .weight-bar-fill {
-  background: linear-gradient(90deg, var(--color-highlight), #ffd700);
-  box-shadow: 0 0 8px rgba(255, 165, 2, 0.5);
-}
-
-.weight-item.total .weight-value {
-  color: var(--color-highlight);
-  font-weight: 700;
-}
-
-/* 总分显示卡片 */
-.total-score-card {
-  background: linear-gradient(135deg, #1a1a2e, #16213e);
-  border: 1px solid var(--border-color);
-  border-radius: 12px;
-  padding: 16px;
-  margin: 20px 0;
-}
-
-.total-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 12px;
-}
-
-.total-icon {
-  font-size: 20px;
-}
-
-.total-title {
-  font-size: 14px;
-  font-weight: bold;
-  color: var(--text-primary);
-}
-
-.total-value {
-  font-size: 36px;
-  font-weight: bold;
-  font-family: monospace;
-  margin-bottom: 8px;
-}
-
-.total-breakdown {
-  display: flex;
-  gap: 16px;
-  font-size: 11px;
-  color: var(--text-secondary);
-  margin-bottom: 12px;
-}
-
-.total-bar {
-  height: 8px;
-  background: var(--bg-primary);
-  border-radius: 4px;
-  overflow: hidden;
-}
-
-.total-bar-fill {
-  height: 100%;
-  background: linear-gradient(90deg, #ffa502, #ff4757);
-  border-radius: 4px;
-  transition: width 0.4s ease;
-}
-
-/* 因子卡片中的最高分标签 */
-.factor-max {
+.factor-state {
   font-size: 10px;
   padding: 2px 6px;
   background: var(--bg-primary);
   border-radius: 12px;
   color: var(--text-secondary);
+}
+
+.factor-state.positive {
+  color: #2ed573;
+}
+
+.factor-state.neutral {
+  color: #ffa502;
+}
+
+.factor-state.negative {
+  color: #ff4757;
 }
 
 /* 因子提示标签 */
@@ -2272,10 +2674,11 @@ onUnmounted(() => {
 
 
 .factor-raw {
-  font-size: 11px;
-  font-weight: 500;
+  font-size: 26px;
+  font-weight: 700;
+  line-height: 1.2;
+  font-family: monospace;
   margin-bottom: 8px;
-  opacity: 0.8;
 }
 
 /* 响应式调整 */
@@ -2285,97 +2688,11 @@ onUnmounted(() => {
   }
 }
 
-/* 情绪因子得分区域 */
-.factor-scores {
-  background: linear-gradient(135deg, var(--bg-secondary), var(--bg-hover));
-  border: 1px solid var(--border-color);
-  border-radius: 12px;
-  padding: 16px;
-  margin-bottom: 20px;
-}
-
-.factor-scores h4 {
-  margin: 0 0 12px 0;
-  font-size: 13px;
-  color: var(--text-primary);
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.factor-score-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
-}
-
-.factor-score-item:last-child {
-  margin-bottom: 0;
-}
-
-.factor-score-item .factor-name {
-  width: 70px;
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-
-.factor-score {
-  font-size: 28px;
-  font-weight: 700;
-  line-height: 1.2;
-  font-family: monospace;
-  margin-bottom: 4px;
-}
-
-.factor-raw {
-  font-size: 11px;
-  font-weight: 500;
-  margin-bottom: 8px;
-  opacity: 0.8;
-}
-
 .factor-desc {
   font-size: 10px;
   color: var(--text-secondary);
   margin-bottom: 10px;
   line-height: 1.4;
   min-height: 32px;
-}
-
-.score-bar {
-  flex: 1;
-  height: 6px;
-  background: var(--bg-primary);
-  border-radius: 3px;
-  overflow: hidden;
-}
-
-.score-fill {
-  height: 100%;
-  background: linear-gradient(90deg, var(--color-highlight), #ffd700);
-  border-radius: 3px;
-  transition: width 0.3s ease;
-  box-shadow: 0 0 8px rgba(255, 165, 2, 0.3);
-}
-
-.score-value {
-  width: 35px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--color-highlight);
-  text-align: right;
-  font-family: monospace;
-}
-
-/* 添加贡献说明样式 */
-.factor-contribution {
-  font-size: 10px;
-  color: var(--text-secondary);
-  margin-top: 8px;
-  padding-top: 6px;
-  border-top: 1px dashed var(--border-color);
-  text-align: right;
-  font-family: monospace;
 }
 </style>

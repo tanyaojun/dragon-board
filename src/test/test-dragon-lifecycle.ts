@@ -11,7 +11,7 @@ const mockLeaders = [
     continuousDays: 3,
     score: 88,
     level: 'SECTOR',
-    sentimentInfo: { phase: '活跃期', overall: 75 },
+    sentimentInfo: { phase: '发酵', overall: 75 },
     genetics: { rating: 'S' },
   },
   {
@@ -20,7 +20,7 @@ const mockLeaders = [
     continuousDays: 2,
     score: 85,
     level: 'SECTOR',
-    sentimentInfo: { phase: '活跃期', overall: 75 },
+    sentimentInfo: { phase: '发酵', overall: 75 },
     genetics: { rating: 'SS' },
   },
   {
@@ -29,7 +29,7 @@ const mockLeaders = [
     continuousDays: 1,
     score: 68,
     level: 'POTENTIAL',
-    sentimentInfo: { phase: '震荡期', overall: 50 },
+    sentimentInfo: { phase: '启动', overall: 50 },
     genetics: { rating: 'B' },
   },
 ]

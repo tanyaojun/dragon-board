@@ -271,7 +271,7 @@ export const BREATH_FACTOR_IDS = {
   MAX_DAYS: 'breathMaxDays', // 龙息最高连板
   UP_DOWN_RATIO: 'breathUpDownRatio', // 龙息涨跌比
   EMOTION_VALUE: 'breathEmotionValue', // 龙息情绪值
-  MARKET_SCORE: 'breathMarketScore', // 龙息市场总分
+  MARKET_SCORE: 'breathMarketScore', // 龙息市场阶段档位
 } as const
 
 export type BreathFactorId = (typeof BREATH_FACTOR_IDS)[keyof typeof BREATH_FACTOR_IDS]
@@ -362,13 +362,13 @@ export const BREATH_FACTORS_META: Record<BreathFactorId, Omit<Factor, 'calculate
     unit: '',
   },
   [BREATH_FACTOR_IDS.MARKET_SCORE]: {
-    name: '龙息市场总分',
+    name: '龙息市场阶段档位',
     type: 'breath',
     category: 'market',
-    description: '综合市场情绪分数',
-    example: '0-100分',
+    description: '当前市场情绪阶段对应的结构档位',
+    example: '高潮=88档，冰点=20档',
     range: [0, 100],
-    unit: '分',
+    unit: '档',
   },
 }
 

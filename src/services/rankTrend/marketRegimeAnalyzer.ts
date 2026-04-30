@@ -6,13 +6,28 @@ function toNumber(value: unknown): number {
   return Number.isFinite(n) ? n : 0
 }
 
-function resolveBreathScore(breathData: any): number {
-  return toNumber(
-    breathData?.sentiment?.overall ??
-      breathData?.overall ??
-      breathData?.marketData?.emotionValue ??
-      breathData?.emotionValue,
+function normalizeBreathPhase(value?: unknown): string {
+  if (typeof value !== 'string') return ''
+  const phase = value.trim()
+  return phase.endsWith('期') ? phase.slice(0, -1) : phase
+}
+
+function resolveBreathPhase(breathData: any): string {
+  return normalizeBreathPhase(
+    breathData?.sentiment?.phaseName ??
+      breathData?.sentiment?.phase ??
+      breathData?.phaseName ??
+      breathData?.phase,
   )
+}
+
+function resolveBreathPhaseAdjustment(phase: string): number {
+  if (phase === '高潮') return 14
+  if (phase === '发酵') return 8
+  if (phase === '启动') return 0
+  if (phase === '退潮') return -12
+  if (phase === '冰点') return -16
+  return 0
 }
 
 function resolveMarketData(breathData: any): Record<string, any> {
@@ -27,7 +42,7 @@ export function analyzeMarketRegime(input: {
 }): MarketRegimeAnalysis {
   const marketData = resolveMarketData(input.breathData)
   const stocks = Array.isArray(input.stocks) ? input.stocks : []
-  const breathScore = resolveBreathScore(input.breathData)
+  const breathPhase = resolveBreathPhase(input.breathData)
   const ztCount = toNumber(marketData.ztCount)
   const dtCount = toNumber(marketData.dtCount)
   const upCount = toNumber(marketData.upCount)
@@ -45,9 +60,9 @@ export function analyzeMarketRegime(input: {
   let score = 50
   const reasons: string[] = []
 
-  if (breathScore > 0) {
-    score += clamp((breathScore - 50) * 0.45, -18, 18)
-    reasons.push(`情绪${breathScore.toFixed(0)}`)
+  if (breathPhase) {
+    score += resolveBreathPhaseAdjustment(breathPhase)
+    reasons.push(`情绪阶段${breathPhase}`)
   }
   if (ztCount > 0) {
     score += clamp((ztCount - 35) * 0.35, -10, 16)

@@ -2,137 +2,142 @@
 // ========== 统一情绪中心配置 ==========
 
 /**
- * 情绪阶段定义 - 基于震荡市特征优化
- * 保持原有阶段数量不变，调整分数区间和thresholdMultiplier
+ * 统一情绪阶段。
+ *
+ * 当前系统只保留五阶段标准：
+ * 冰点 / 启动 / 发酵 / 高潮 / 退潮
+ *
+ * DragonBreathAnalyzer 与 HotListSentimentAnalyzer 都应输出这套阶段。
+ * 阶段必须由规则证据判定；旧 overall 字段只作为历史数据兼容，不参与阶段判断和展示。
  */
+export type UnifiedEmotionStage = '冰点' | '启动' | '发酵' | '高潮' | '退潮'
+export type UnifiedEmotionStageValue = 'ice' | 'start' | 'ferment' | 'climax' | 'retreat'
+export type EmotionCycleStage = UnifiedEmotionStage
+
+export interface EmotionRuleDescriptor {
+  priority: number
+  intent: string
+  evidence: readonly string[]
+}
+
+export const EMOTION_STAGE_RULES: Record<UnifiedEmotionStage, EmotionRuleDescriptor> = {
+  退潮: {
+    priority: 1,
+    intent: '风险优先，先判断是否需要降仓或暂停进攻。',
+    evidence: ['资金背离/转弱增加', '炸板率抬升', '晋级率走弱', '昨日强票承接失败'],
+  },
+  高潮: {
+    priority: 2,
+    intent: '强势识别但不鼓励追高，重点管理高位兑现风险。',
+    evidence: ['涨停或高涨幅集中', '高位拥挤增加', '成交额和换手显著放大', '风险尚未失控'],
+  },
+  发酵: {
+    priority: 3,
+    intent: '主线扩散和资金承接形成合力，适合围绕主线做精选跟踪。',
+    evidence: ['强资金扩散', '点火和主升状态增加', '昨日强票留榜较好', '上涨承接优于下跌承接'],
+  },
+  启动: {
+    priority: 4,
+    intent: '情绪开始修复，轻仓试错，等待持续性确认。',
+    evidence: ['上涨比例改善', '跌停/风险减少', '新入和点火线索增加', '热榜池开始扩张'],
+  },
+  冰点: {
+    priority: 5,
+    intent: '机会稀少，等待修复信号，不主动提高交易频率。',
+    evidence: ['上涨比例低', '机会状态少', '热榜池收缩', '亏钱效应或风险状态占优'],
+  },
+}
+
+export const EMOTION_CYCLE_STAGE_CONFIG: Record<
+  EmotionCycleStage,
+  { summary: string; confidenceBase: number }
+> = {
+  冰点: {
+    summary: '机会稀少，风险或弱承接占优，优先控制仓位和交易频率。',
+    confidenceBase: 56,
+  },
+  启动: {
+    summary: '情绪开始修复，新增线索和点火机会增多，但持续性仍待确认。',
+    confidenceBase: 58,
+  },
+  发酵: {
+    summary: '强资金、点火和主线扩散形成合力，交易情绪处于扩散阶段。',
+    confidenceBase: 62,
+  },
+  高潮: {
+    summary: '前排强度和资金承接较强，但拥挤明显，适合强势识别，不宜盲目追高。',
+    confidenceBase: 64,
+  },
+  退潮: {
+    summary: '风险状态升温或强票承接走弱，交易情绪进入防守优先阶段。',
+    confidenceBase: 64,
+  },
+}
+
+export type ThresholdMultiplier = {
+  readonly totalLeader: number
+  readonly continuousLeader: number
+  readonly sectorLeader: number
+  readonly middleLeader: number
+  readonly emotionLeader: number
+  readonly themeHeat: number
+  readonly themeMomentum: number
+  readonly rotationSpeed: number
+}
+
 export const EMOTION_PHASES = {
   ICE: {
     id: 'ice',
-    name: '冰点期',
+    name: '冰点',
     value: 'ice',
-    scoreRange: { min: 0, max: 25 },
-    score: 20,
     color: '#7f8c8d',
     gradient: 'linear-gradient(135deg, #1e2b3a, #2c3e50)',
     icon: '❄️',
-    desc: '市场极度悲观，涨停稀少，跌停泛滥',
-    suggestion: '空仓观望，等待情绪反转',
-    features: ['涨停<25家', '跌停>15家', '连板高度≤2板', '炸板率>40%'],
+    desc: '市场承接弱，机会稀少，短线交易以等待修复为主。',
+    suggestion: '控制仓位，等待风险释放后的启动信号',
+    features: ['机会状态少', '上涨比例低', '跌停或风险状态占优', '主线不清晰'],
     thresholdMultiplier: {
       totalLeader: 0.85,
       continuousLeader: 0.8,
       sectorLeader: 0.75,
       middleLeader: 0.7,
       emotionLeader: 0.7,
-      themeHeat: 0.5,
+      themeHeat: 0.55,
       themeMomentum: 0.6,
       rotationSpeed: 0.7,
     },
   },
-  DEPRESSED: {
-    id: 'depressed',
-    name: '低迷期',
-    value: 'depressed',
-    scoreRange: { min: 25, max: 40 },
-    score: 32,
-    color: '#7f8c8d',
-    gradient: 'linear-gradient(135deg, #7f8c8d, #95a5a6)',
-    icon: '🌧️',
-    desc: '人气低迷，量能萎缩，涨停25-40家',
-    suggestion: '多看少动，等待机会',
-    features: ['涨停25-40家', '跌停8-15家', '连板高度2-3板', '炸板率35-45%'],
-    thresholdMultiplier: {
-      totalLeader: 0.9,
-      continuousLeader: 0.85,
-      sectorLeader: 0.8,
-      middleLeader: 0.75,
-      emotionLeader: 0.75,
-      themeHeat: 0.6,
-      themeMomentum: 0.7,
-      rotationSpeed: 0.8,
-    },
-  },
   START: {
     id: 'start',
-    name: '启动期',
+    name: '启动',
     value: 'start',
-    scoreRange: { min: 40, max: 52 },
-    score: 46,
     color: '#3498db',
     gradient: 'linear-gradient(135deg, #1e3c5a, #2980b9)',
     icon: '🌱',
-    desc: '情绪开始回暖，涨停35-50家，跌停减少',
-    suggestion: '轻仓试错，关注率先反弹的板块',
-    features: ['首板增多', '板块龙头萌芽', '跌停<8家', '题材开始发酵'],
+    desc: '情绪开始修复，新增线索和点火标的增加，但持续性仍需确认。',
+    suggestion: '轻仓试错，关注率先修复并能留强的方向',
+    features: ['跌停减少', '新入和点火增多', '上涨比例改善', '主线开始试探'],
     thresholdMultiplier: {
       totalLeader: 1.0,
       continuousLeader: 1.0,
       sectorLeader: 1.0,
       middleLeader: 1.0,
       emotionLeader: 1.0,
-      themeHeat: 0.9,
+      themeHeat: 0.95,
       themeMomentum: 1.0,
       rotationSpeed: 1.0,
-    },
-  },
-  OSCILLATION: {
-    id: 'oscillation',
-    name: '震荡期',
-    value: 'oscillation',
-    scoreRange: { min: 52, max: 64 },
-    score: 58,
-    color: '#95a5a6',
-    gradient: 'linear-gradient(135deg, #2c3e50, #34495e)',
-    icon: '⚖️',
-    desc: '多空平衡，板块轮动，涨停40-60家',
-    suggestion: '控制仓位，低吸为主，不追高',
-    features: ['板块轮动', '情绪震荡', '涨停40-60家', '炸板率28-38%'],
-    thresholdMultiplier: {
-      totalLeader: 1.0,
-      continuousLeader: 1.0,
-      sectorLeader: 1.0,
-      middleLeader: 1.0,
-      emotionLeader: 1.0,
-      themeHeat: 1.0,
-      themeMomentum: 1.0,
-      rotationSpeed: 1.0,
-    },
-  },
-  STABLE: {
-    id: 'stable',
-    name: '平稳期',
-    value: 'stable',
-    scoreRange: { min: 64, max: 74 },
-    score: 69,
-    color: '#3498db',
-    gradient: 'linear-gradient(135deg, #3498db, #5dade2)',
-    icon: '🌊',
-    desc: '情绪稳定，涨停50-70家，赚钱效应温和',
-    suggestion: '低吸为主，波段操作',
-    features: ['情绪稳定', '涨停50-70家', '跌停<5家', '主线清晰'],
-    thresholdMultiplier: {
-      totalLeader: 1.03,
-      continuousLeader: 1.03,
-      sectorLeader: 1.02,
-      middleLeader: 1.0,
-      emotionLeader: 1.0,
-      themeHeat: 1.05,
-      themeMomentum: 1.05,
-      rotationSpeed: 1.05,
     },
   },
   FERMENT: {
     id: 'ferment',
-    name: '发酵期',
+    name: '发酵',
     value: 'ferment',
-    scoreRange: { min: 74, max: 82 },
-    score: 78,
     color: '#f39c12',
     gradient: 'linear-gradient(135deg, #b45f06, #f39c12)',
     icon: '🔥',
-    desc: '题材扩散，连板增加，涨停60-85家，赚钱效应显现',
-    suggestion: '适度加仓，紧跟主线题材',
-    features: ['连板梯队成型', '资金涌入', '涨停60-85家', '晋级率>20%'],
+    desc: '主线扩散，资金承接改善，赚钱效应开始向更多标的传导。',
+    suggestion: '围绕主线精选参与，重点看资金承接和持续性',
+    features: ['强资金扩散', '点火和主升增加', '连板梯队成型', '昨日强票留榜较好'],
     thresholdMultiplier: {
       totalLeader: 1.08,
       continuousLeader: 1.08,
@@ -144,64 +149,37 @@ export const EMOTION_PHASES = {
       rotationSpeed: 1.15,
     },
   },
-  ACTIVE: {
-    id: 'active',
-    name: '活跃期',
-    value: 'active',
-    scoreRange: { min: 82, max: 89 },
-    score: 85.5,
-    color: '#ff7f50',
-    gradient: 'linear-gradient(135deg, #ff7f50, #ffa07a)',
-    icon: '⚡',
-    desc: '题材活跃，涨停70-100家，情绪升温，连板高度4-6板',
-    suggestion: '积极参与，紧跟热点',
-    features: ['涨停70-100家', '连板高度4-6板', '晋级率25-35%', '炸板率<28%'],
+  CLIMAX: {
+    id: 'climax',
+    name: '高潮',
+    value: 'climax',
+    color: '#e74c3c',
+    gradient: 'linear-gradient(135deg, #a52613, #e74c3c)',
+    icon: '🌋',
+    desc: '前排强度很高，但拥挤和分化风险同步上升。',
+    suggestion: '持有强势核心为主，谨慎追高，重点防分歧兑现',
+    features: ['批量高涨幅', '高位拥挤增加', '成交和换手放大', '风险尚未失控'],
     thresholdMultiplier: {
-      totalLeader: 1.12,
-      continuousLeader: 1.12,
-      sectorLeader: 1.08,
+      totalLeader: 1.15,
+      continuousLeader: 1.15,
+      sectorLeader: 1.1,
       middleLeader: 1.05,
       emotionLeader: 1.05,
-      themeHeat: 1.25,
+      themeHeat: 1.28,
       themeMomentum: 1.25,
       rotationSpeed: 1.25,
     },
   },
-  CLIMAX: {
-    id: 'climax',
-    name: '高潮期',
-    value: 'climax',
-    scoreRange: { min: 89, max: 100 },
-    score: 94,
-    color: '#e74c3c',
-    gradient: 'linear-gradient(135deg, #a52613, #e74c3c)',
-    icon: '🌋',
-    desc: '情绪亢奋，涨停>90家，连板高度≥6板，批量涨停',
-    suggestion: '持股为主，注意分化风险，不轻易开新仓',
-    features: ['涨停>90家', '连板高度≥6板', '晋级率>35%', '炸板率<25%', '注意风险'],
-    thresholdMultiplier: {
-      totalLeader: 1.18,
-      continuousLeader: 1.18,
-      sectorLeader: 1.12,
-      middleLeader: 1.08,
-      emotionLeader: 1.08,
-      themeHeat: 1.35,
-      themeMomentum: 1.35,
-      rotationSpeed: 1.35,
-    },
-  },
-  RECESSION: {
-    id: 'recession',
-    name: '退潮期',
-    value: 'recession',
-    scoreRange: { min: 0, max: 0 }, // 不通过分数判断
-    score: 70,
+  RETREAT: {
+    id: 'retreat',
+    name: '退潮',
+    value: 'retreat',
     color: '#9b59b6',
     gradient: 'linear-gradient(135deg, #4a235a, #8e44ad)',
-    icon: '🌊',
-    desc: '高位分歧，亏钱效应，炸板率升高，高位股补跌',
-    suggestion: '减仓防守，规避高位股，等待企稳',
-    features: ['高位分歧', '炸板率>30%', '晋级率下降', '亏钱效应', '减仓防守'],
+    icon: '⚖️',
+    desc: '风险状态升温或前排承接失败，交易优先级转向防守。',
+    suggestion: '降低进攻仓位，规避高位弱承接和资金背离标的',
+    features: ['资金背离增加', '转弱预警增加', '炸板率抬升', '昨日强票承接失败'],
     thresholdMultiplier: {
       totalLeader: 0.92,
       continuousLeader: 0.88,
@@ -215,26 +193,11 @@ export const EMOTION_PHASES = {
   },
 } as const
 
-// ========== 导出类型 ==========
 export type EmotionPhaseId = keyof typeof EMOTION_PHASES
 export type EmotionPhase = (typeof EMOTION_PHASES)[EmotionPhaseId]
 
-// 修复：将 ThresholdMultiplier 定义为通用类型而非具体字面量类型
-export type ThresholdMultiplier = {
-  readonly totalLeader: number
-  readonly continuousLeader: number
-  readonly sectorLeader: number
-  readonly middleLeader: number
-  readonly emotionLeader: number
-  readonly themeHeat: number
-  readonly themeMomentum: number
-  readonly rotationSpeed: number
-}
-
-// ========== 导出数组 ==========
 export const EMOTION_PHASE_LIST = Object.values(EMOTION_PHASES)
 
-// ========== 导出映射 ==========
 export const EMOTION_PHASE_BY_NAME = EMOTION_PHASE_LIST.reduce(
   (acc, phase) => {
     acc[phase.name] = phase
@@ -251,108 +214,68 @@ export const EMOTION_PHASE_BY_VALUE = EMOTION_PHASE_LIST.reduce(
   {} as Record<string, EmotionPhase>,
 )
 
+export function getEmotionPhaseByStage(stage: UnifiedEmotionStage | UnifiedEmotionStageValue): EmotionPhase {
+  return EMOTION_PHASE_BY_NAME[stage] || EMOTION_PHASE_BY_VALUE[stage] || EMOTION_PHASES.START
+}
+
+export function getThresholdMultiplier(phaseName: string): ThresholdMultiplier {
+  const phase = EMOTION_PHASE_BY_NAME[phaseName] || EMOTION_PHASE_BY_VALUE[phaseName]
+  return phase?.thresholdMultiplier || EMOTION_PHASES.START.thresholdMultiplier
+}
+
+export function getPhaseSuggestion(phaseName: string): string {
+  const phase = EMOTION_PHASE_BY_NAME[phaseName] || EMOTION_PHASE_BY_VALUE[phaseName]
+  return phase?.suggestion || EMOTION_PHASES.START.suggestion
+}
+
+export function getPhaseIcon(phaseName: string): string {
+  const phase = EMOTION_PHASE_BY_NAME[phaseName] || EMOTION_PHASE_BY_VALUE[phaseName]
+  return phase?.icon || EMOTION_PHASES.START.icon
+}
+
+export function getPhaseColor(phaseName: string): string {
+  const phase = EMOTION_PHASE_BY_NAME[phaseName] || EMOTION_PHASE_BY_VALUE[phaseName]
+  return phase?.color || EMOTION_PHASES.START.color
+}
+
+export function getPhaseGradient(phaseName: string): string {
+  const phase = EMOTION_PHASE_BY_NAME[phaseName] || EMOTION_PHASE_BY_VALUE[phaseName]
+  return phase?.gradient || EMOTION_PHASES.START.gradient
+}
+
+export function getPhaseFeatures(phaseName: string): readonly string[] {
+  const phase = EMOTION_PHASE_BY_NAME[phaseName] || EMOTION_PHASE_BY_VALUE[phaseName]
+  return phase?.features || EMOTION_PHASES.START.features
+}
+
+export function getEmotionStageRule(stage: UnifiedEmotionStage): EmotionRuleDescriptor {
+  return EMOTION_STAGE_RULES[stage]
+}
+
+export function getEmotionCycleStageSummary(stage: EmotionCycleStage): string {
+  return EMOTION_CYCLE_STAGE_CONFIG[stage]?.summary || EMOTION_CYCLE_STAGE_CONFIG.启动.summary
+}
+
 // ========== 情绪因子类型定义 ==========
 
-/**
- * 情绪因子接口
- */
 export interface EmotionFactor {
   id: string
   name: string
-  weight: number
-  maxScore: number
   description: string
   unit?: string
   getValue: (marketData: any) => number | null
-  getScore: (value: number) => number
 }
 
-/**
- * 情绪分数配置接口
- */
-export interface EmotionScoreConfig {
+export interface EmotionFactorConfig {
   factors: Record<string, EmotionFactor>
   reference?: Record<string, any>
 }
 
-// ========== 工具函数 ==========
-/**
- * 根据分数获取情绪阶段
- * 退潮期需要单独判断，不通过分数
- */
-export function getEmotionPhaseByScore(score: number): EmotionPhase {
-  if (score < 0) return EMOTION_PHASES.ICE
-  if (score >= 100) return EMOTION_PHASES.CLIMAX
-
-  for (const phase of EMOTION_PHASE_LIST) {
-    if (phase.id === 'recession') continue
-    if (score >= phase.scoreRange.min && score < phase.scoreRange.max) {
-      return phase
-    }
-  }
-
-  return EMOTION_PHASES.OSCILLATION
+export interface EmotionFactorConfigType {
+  factors: Record<string, EmotionFactor>
 }
 
-/**
- * 获取指定阶段的阈值乘数
- */
-export function getThresholdMultiplier(phaseName: string): ThresholdMultiplier {
-  const phase = EMOTION_PHASE_BY_NAME[phaseName]
-  return phase?.thresholdMultiplier || EMOTION_PHASES.OSCILLATION.thresholdMultiplier
-}
-
-/**
- * 根据当前分数获取阈值乘数
- */
-export function getThresholdMultiplierByScore(score: number): ThresholdMultiplier {
-  const phase = getEmotionPhaseByScore(score)
-  return phase.thresholdMultiplier
-}
-
-/**
- * 获取阶段建议
- */
-export function getPhaseSuggestion(phaseName: string): string {
-  const phase = EMOTION_PHASE_BY_NAME[phaseName]
-  return phase?.suggestion || '观望为主'
-}
-
-/**
- * 获取阶段图标
- */
-export function getPhaseIcon(phaseName: string): string {
-  const phase = EMOTION_PHASE_BY_NAME[phaseName]
-  return phase?.icon || '🌬️'
-}
-
-/**
- * 获取阶段颜色
- */
-export function getPhaseColor(phaseName: string): string {
-  const phase = EMOTION_PHASE_BY_NAME[phaseName]
-  return phase?.color || '#95a5a6'
-}
-
-/**
- * 获取阶段渐变
- */
-export function getPhaseGradient(phaseName: string): string {
-  const phase = EMOTION_PHASE_BY_NAME[phaseName]
-  return phase?.gradient || 'linear-gradient(135deg, #2c3e50, #34495e)'
-}
-
-/**
- * 获取阶段特征
- */
-export function getPhaseFeatures(phaseName: string): readonly string[] {
-  const phase = EMOTION_PHASE_BY_NAME[phaseName]
-  return phase?.features || []
-}
-
-// ========== 统一情绪影响配置（兼容旧代码） ==========
 export const EMOTION_IMPACT = {
-  // ===== 龙头分析相关 =====
   DRAGON: {
     THRESHOLD_MULTIPLIERS: EMOTION_PHASE_LIST.reduce(
       (acc, phase) => {
@@ -369,7 +292,6 @@ export const EMOTION_IMPACT = {
     ),
   },
 
-  // ===== 题材分析相关 =====
   THEME: {
     HEAT_MULTIPLIERS: EMOTION_PHASE_LIST.reduce(
       (acc, phase) => {
@@ -402,10 +324,9 @@ export const EMOTION_IMPACT = {
     },
   },
 
-  // ===== 算法中心相关 =====
   ALGORITHM: {
     FACTOR_ADJUSTMENTS: {
-      冰点期: {
+      冰点: {
         contrarian: 0.05,
         compRank: 0.02,
         breathDtCount: 0.03,
@@ -414,15 +335,7 @@ export const EMOTION_IMPACT = {
         breathPassRate: -0.02,
         zlje: -0.02,
       },
-      低迷期: {
-        contrarian: 0.03,
-        breathDtCount: 0.02,
-        compRank: 0.01,
-        themeHeat: -0.02,
-        breathZtCount: -0.01,
-        breathPassRate: -0.01,
-      },
-      启动期: {
+      启动: {
         themeHeat: 0.02,
         compRank: 0.02,
         breathPassRate: 0.03,
@@ -431,20 +344,7 @@ export const EMOTION_IMPACT = {
         zlje: 0.01,
         contrarian: -0.02,
       },
-      震荡期: {
-        compRank: 0.01,
-        themeHeat: 0.01,
-        breathPassRate: 0.01,
-        breathZtCount: 0.01,
-      },
-      平稳期: {
-        compRank: 0.02,
-        themeHeat: 0.01,
-        turnover: 0.02,
-        zlje: 0.01,
-        continuousDays: 0.01,
-      },
-      发酵期: {
+      发酵: {
         themeHeat: 0.03,
         themeMomentum: 0.03,
         continuousDays: 0.02,
@@ -453,17 +353,7 @@ export const EMOTION_IMPACT = {
         breathZtCount: 0.01,
         compRank: -0.01,
       },
-      活跃期: {
-        themeHeat: 0.02,
-        themeMomentum: 0.02,
-        continuousDays: 0.03,
-        breathZtCount: 0.02,
-        breathPassRate: 0.02,
-        zlje: 0.01,
-        turnover: 0.01,
-        compRank: -0.02,
-      },
-      高潮期: {
+      高潮: {
         continuousDays: 0.04,
         breathZtCount: 0.02,
         breathPhase: 0.02,
@@ -472,7 +362,7 @@ export const EMOTION_IMPACT = {
         zlje: -0.02,
         contrarian: -0.03,
       },
-      退潮期: {
+      退潮: {
         breathDtCount: 0.04,
         breathZhabanRate: 0.03,
         contrarian: 0.02,
@@ -486,16 +376,15 @@ export const EMOTION_IMPACT = {
   },
 } as const
 
-// 导出一个统一的情绪配置对象（完全兼容旧代码）
 export const UNIFIED_EMOTION = {
   PHASES: EMOTION_PHASES,
   PHASE_LIST: EMOTION_PHASE_LIST,
   PHASE_BY_NAME: EMOTION_PHASE_BY_NAME,
   PHASE_BY_VALUE: EMOTION_PHASE_BY_VALUE,
+  STAGE_RULES: EMOTION_STAGE_RULES,
   IMPACT: EMOTION_IMPACT,
-  getPhaseByScore: getEmotionPhaseByScore,
+  getPhaseByStage: getEmotionPhaseByStage,
   getThresholdMultiplier,
-  getThresholdMultiplierByScore,
   getPhaseSuggestion,
   getPhaseIcon,
   getPhaseColor,
@@ -503,23 +392,16 @@ export const UNIFIED_EMOTION = {
   getPhaseFeatures,
 }
 
-// ========== 情绪分数配置 ==========
+// ========== 情绪观察因子配置 ==========
+// 这些因子只用于展示原始市场结构证据，不参与阶段打分。
 
-/**
- * 情绪分数配置接口
- */
-export interface EmotionScoreConfigType {
-  factors: Record<string, EmotionFactor>
-}
-
-export const EMOTION_SCORE_CONFIG: EmotionScoreConfigType = {
+export const EMOTION_FACTOR_CONFIG: EmotionFactorConfigType = {
   factors: {
     promotionRate: {
       id: 'promotionRate',
       name: '晋级率',
-      weight: 11, // 原12 → 11
-      maxScore: 10,
       description: '昨日涨停今日继续涨停的比例（加权平均）',
+      unit: '%',
       getValue: (marketData: any) => {
         const passRate = marketData?.passRate
         if (!passRate) return null
@@ -542,168 +424,79 @@ export const EMOTION_SCORE_CONFIG: EmotionScoreConfigType = {
 
         return totalWeight > 0 ? totalRate / totalWeight : null
       },
-      getScore: (value: number) => {
-        if (value >= 28) return 10
-        if (value >= 20) return 8
-        if (value >= 12) return 6
-        if (value >= 6) return 4
-        return 2
-      },
     },
 
     yesterdayZtAvgChange: {
       id: 'yesterdayZtAvgChange',
       name: '昨日涨停表现',
-      weight: 12,
-      maxScore: 10,
       description: '昨日涨停股今日平均涨幅',
+      unit: '%',
       getValue: (marketData: any) => {
         const stats = marketData?.yesterdayLimitUpStats
         return stats?.avgChange ?? null
-      },
-      getScore: (value: number) => {
-        if (value >= 5) return 10
-        if (value >= 3) return 8
-        if (value >= 1.5) return 6
-        if (value >= 0) return 4
-        return 2
       },
     },
 
     ztCount: {
       id: 'ztCount',
       name: '涨停数',
-      weight: 9,
-      maxScore: 10,
       description: '当日涨停家数，反映市场进攻意愿',
+      unit: '家',
       getValue: (marketData: any) => marketData?.ztCount ?? null,
-      getScore: (value: number) => {
-        if (value >= 80) return 10
-        if (value >= 55) return 8
-        if (value >= 40) return 6
-        if (value >= 25) return 4
-        return 2
-      },
     },
 
     dtCount: {
       id: 'dtCount',
       name: '跌停数',
-      weight: 13,
-      maxScore: 10,
       description: '当日跌停家数，反映市场风险',
+      unit: '家',
       getValue: (marketData: any) => marketData?.dtCount ?? null,
-      getScore: (value: number) => {
-        if (value === 0) return 10
-        if (value <= 3) return 8
-        if (value <= 8) return 6
-        if (value <= 15) return 4
-        return 0
-      },
     },
 
     zhabanRate: {
       id: 'zhabanRate',
       name: '炸板率',
-      weight: 12, // 原12 → 12（保持不变）
-      maxScore: 10,
       description: '炸板率越低，涨停质量越高',
+      unit: '%',
       getValue: (marketData: any) => marketData?.zhaban?.rate ?? null,
-      getScore: (value: number) => {
-        if (value <= 18) return 10
-        if (value <= 25) return 8
-        if (value <= 32) return 6
-        if (value <= 40) return 4
-        return 2
-      },
     },
 
     maxContinuousDays: {
       id: 'maxContinuousDays',
       name: '连板高度',
-      weight: 9, // 原10 → 9
-      maxScore: 10,
       description: '市场最高连板天数',
+      unit: '天',
       getValue: (marketData: any) => marketData?.maxContinuousDays ?? null,
-      getScore: (value: number) => {
-        if (value >= 7) return 10
-        if (value >= 5) return 8
-        if (value >= 3) return 6
-        if (value >= 2) return 4
-        return 2
-      },
     },
 
     upDownRatio: {
       id: 'upDownRatio',
       name: '涨跌比',
-      weight: 12,
-      maxScore: 10,
       description: '上涨家数与下跌家数的比值',
+      unit: '倍',
       getValue: (marketData: any) => {
         const up = marketData?.upCount ?? 0
         const down = marketData?.downCount ?? 1
         return up / down
-      },
-      getScore: (value: number) => {
-        if (value >= 2.5) return 10
-        if (value >= 1.8) return 8
-        if (value >= 1.2) return 6
-        if (value >= 0.8) return 4
-        return 2
       },
     },
 
     volumeRatio: {
       id: 'volumeRatio',
       name: '量比',
-      weight: 8,
-      maxScore: 10,
       description: '今日成交量/昨日成交量',
       getValue: (marketData: any) => marketData?.volumeRatio ?? null,
-      getScore: (value: number) => {
-        if (value >= 1.3) return 10
-        if (value >= 1.1) return 8
-        if (value >= 0.95) return 6
-        if (value >= 0.8) return 4
-        return 2
-      },
     },
 
     tdxEmotion: {
       id: 'tdxEmotion',
       name: '通达信情绪',
-      weight: 14,
-      maxScore: 10,
       description: '通达信专业情绪指标',
       getValue: (marketData: any) => {
         const value = marketData?.emotionValue
         if (value === undefined || value === null) return null
         return value
       },
-      getScore: (value: number) => {
-        // 改为10分满分
-        return Math.round(value * 10)
-      },
     },
   },
-}
-
-// 验证权重总和
-const totalWeight = Object.values(EMOTION_SCORE_CONFIG.factors).reduce(
-  (sum, f) => sum + f.weight,
-  0,
-)
-if (Math.abs(totalWeight - 100) > 0.01) {
-  console.warn('[emotion] 情绪因子权重总和不为100:', totalWeight)
-}
-
-// 验证分数区间连续性
-const phases = EMOTION_PHASE_LIST.filter((p) => p.id !== 'recession')
-for (let i = 0; i < phases.length - 1; i++) {
-  if (phases[i].scoreRange.max !== phases[i + 1].scoreRange.min) {
-    console.warn(
-      `[emotion] 分数区间不连续: ${phases[i].name}.max=${phases[i].scoreRange.max}, ${phases[i + 1].name}.min=${phases[i + 1].scoreRange.min}`,
-    )
-  }
 }

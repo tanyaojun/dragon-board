@@ -15,7 +15,6 @@ import { AppEvents } from '../types'
 import {
   EMOTION_PHASES,
   EMOTION_PHASE_BY_NAME,
-  getEmotionPhaseByScore,
   type EmotionPhase, // ← 确保这行存在
 } from '../types/emotion'
 import { apiService } from './apiService'
@@ -26,7 +25,7 @@ import { FORMAL_SNAPSHOT_READ_POLICY } from './snapshot/readPolicy'
 import { isTradingTime } from '../utils/time'
 import { StockUtils } from '../utils/common'
 
-import { EMOTION_SCORE_CONFIG, type EmotionFactor } from '../types/emotion'
+import { EMOTION_FACTOR_CONFIG, type EmotionFactor } from '../types/emotion'
 
 /**
  * 龙息分析器状态
@@ -220,7 +219,7 @@ export class DragonBreathAnalyzer {
    * 获取默认情绪
    */
   private getDefaultSentiment(): Sentiment {
-    const defaultPhase = EMOTION_PHASES.OSCILLATION
+    const defaultPhase = EMOTION_PHASES.START
     return {
       overall: 50,
       phase: defaultPhase.value,
@@ -234,7 +233,6 @@ export class DragonBreathAnalyzer {
       phaseColor: defaultPhase.color,
       phaseGradient: defaultPhase.gradient,
       phaseFeatures: defaultPhase.features,
-      factorScores: {},
       metrics: {
         yesterdayZtPerformance: 0,
         maxContinuousDays: 0,
@@ -264,7 +262,7 @@ export class DragonBreathAnalyzer {
 
       const feedback: EmotionFeedback = {
         phase: sentiment.phase,
-        score: sentiment.overall,
+        score: 0,
         ztCount: marketData.ztCount,
         dtCount: marketData.dtCount,
         hotThemesCount: this.state.hotThemesCount,
@@ -917,7 +915,6 @@ export class DragonBreathAnalyzer {
           riskLevel: this.state.sentiment.riskLevel,
           suggestion: this.state.sentiment.suggestion,
           phaseInfo: this.state.sentiment.phaseInfo,
-          factorScores: this.state.sentiment.factorScores || {},
           reference: { tdxEmotion: this.state.marketData.emotionValue },
         },
         marketData: {
@@ -995,20 +992,15 @@ export class DragonBreathAnalyzer {
 private buildFactorData(): any[] {
   try {
     const marketData = this.state.marketData
-    const factorScores = this.state.sentiment.factorScores || {}
 
-    const factors = Object.entries(EMOTION_SCORE_CONFIG.factors).map(
+    const factors = Object.entries(EMOTION_FACTOR_CONFIG.factors).map(
       ([key, factor]: [string, EmotionFactor]) => {
         const rawValue = factor.getValue(marketData)
-        const score = factorScores?.[key] ?? 0
 
         return {
           id: factor.id,
           name: factor.name,
           rawValue: rawValue,
-          score: score,
-          weight: factor.weight,
-          maxScore: factor.maxScore,
           description: factor.description,
           unit: factor.unit || '',
         }
@@ -1027,28 +1019,18 @@ private buildFactorData(): any[] {
   /**
    * 获取风险等级
    */
-  private getRiskLevel(score: number, zhabanRate: number, phase?: string): string {
+  private getRiskLevel(zhabanRate: number, phase?: string): string {
     if (phase) {
       switch (phase) {
-        case '冰点期':
-          return score < 20 ? '低' : '中'
-        case '退潮期':
+        case '退潮':
           return '高'
-        case '高潮期':
+        case '高潮':
           return zhabanRate > 30 ? '高' : '中'
+        case '冰点':
+          return '中'
       }
     }
 
-    if (score < 30) return '低'
-    if (score < 60) {
-      if (zhabanRate > 50) return '高'
-      if (zhabanRate > 30) return '中'
-      return '中'
-    }
-    if (score >= 80) {
-      if (zhabanRate > 40) return '高'
-      return '中'
-    }
     if (zhabanRate > 40) return '高'
 
     return '中'
@@ -1065,44 +1047,8 @@ private buildFactorData(): any[] {
    * 获取当前阶段的所有信息
    */
   public getCurrentPhaseInfo(): EmotionPhase {
-    const currentPhaseName = this.state.sentiment.phaseName || '震荡期'
-    return this.getPhaseInfo(currentPhaseName) || EMOTION_PHASES.OSCILLATION
-  }
-
-  /**
-   * 计算情绪分数
-   */
-  private calculateSentimentScore(): { score: number; factorScores: Record<string, number> } {
-    const m = this.state.marketData
-    const factorScores: Record<string, number> = {}
-    let totalScore = 0
-
-    for (const [key, factor] of Object.entries(EMOTION_SCORE_CONFIG.factors) as [
-      string,
-      EmotionFactor,
-    ][]) {
-      const value = factor.getValue(m)
-      let score: number
-
-      if (value !== null && value !== undefined) {
-        score = factor.getScore(value)
-      } else {
-        // 无数据时给默认分（最高分的一半）
-        score = Math.floor(factor.maxScore / 2)
-      }
-
-      factorScores[key] = score
-
-      // ✅ 每个因子的贡献 = (得分 / 该因子满分) × 该因子权重
-      // 权重已经是在100分总分中的占比，所以直接累加即可
-      const contribution = (score / factor.maxScore) * factor.weight
-      totalScore += contribution
-    }
-
-    // 边界处理
-    const clampedScore = Math.max(0, Math.min(100, Math.round(totalScore)))
-
-    return { score: clampedScore, factorScores }
+    const currentPhaseName = this.state.sentiment.phaseName || '启动'
+    return this.getPhaseInfo(currentPhaseName) || EMOTION_PHASES.START
   }
 
   /**
@@ -1121,81 +1067,120 @@ private buildFactorData(): any[] {
     const prevDtCount = prevData?.dtCount || dtCount
     const prevMaxContinuousDays = prevData?.maxContinuousDays || 0
 
-    // 计算当前分数（用于参考）
-    const currentScore = this.state.sentiment.overall
-
-    // ========== 退潮核心信号（权重高） ==========
-    let highWeightSignals = 0
+    // ========== 退潮核心风险信号 ==========
+    let coreRiskSignals = 0
 
     // 1. 炸板率极高 >45%
-    if (zhabanRate > 45) highWeightSignals++
+    if (zhabanRate > 45) coreRiskSignals++
 
     // 2. 跌停潮 >20家
-    if (dtCount > 20) highWeightSignals++
+    if (dtCount > 20) coreRiskSignals++
 
     // 3. 晋级率崩盘 <10%
-    if (promotionRate < 10) highWeightSignals++
+    if (promotionRate < 10) coreRiskSignals++
 
     // 4. 亏钱效应显著 昨日涨停表现 < -2%
-    if (yesterdayZtAvgChange < -2) highWeightSignals++
+    if (yesterdayZtAvgChange < -2) coreRiskSignals++
 
-    // ========== 退潮辅助信号（权重低） ==========
-    let lowWeightSignals = 0
+    // ========== 退潮辅助风险信号 ==========
+    let supportRiskSignals = 0
 
     // 5. 炸板率高 35-45%
-    if (zhabanRate > 35 && zhabanRate <= 45) lowWeightSignals++
+    if (zhabanRate > 35 && zhabanRate <= 45) supportRiskSignals++
 
     // 6. 跌停增加 比前一天翻倍且>10家
-    if (dtCount > prevDtCount * 2 && dtCount > 10) lowWeightSignals++
+    if (dtCount > prevDtCount * 2 && dtCount > 10) supportRiskSignals++
 
     // 7. 涨停数大幅回落 比前一天下降50%以上
-    if (ztCount < prevZtCount * 0.5 && prevZtCount > 60) lowWeightSignals++
+    if (ztCount < prevZtCount * 0.5 && prevZtCount > 60) supportRiskSignals++
 
     // 8. 连板高度断崖 前一天≥6板，今天≤2板
-    if (prevMaxContinuousDays >= 6 && (marketData.maxContinuousDays || 0) <= 2) lowWeightSignals++
+    if (prevMaxContinuousDays >= 6 && (marketData.maxContinuousDays || 0) <= 2) supportRiskSignals++
 
     // ========== 退潮期判断 ==========
-    // 条件A：至少2个高权重信号
-    if (highWeightSignals >= 2) {
+    // 条件A：至少2个核心风险信号
+    if (coreRiskSignals >= 2) {
       return true
     }
 
-    // 条件B：1个高权重信号 + 2个低权重信号
-    if (highWeightSignals >= 1 && lowWeightSignals >= 2) {
+    // 条件B：1个核心风险信号 + 2个辅助风险信号
+    if (coreRiskSignals >= 1 && supportRiskSignals >= 2) {
       return true
     }
 
-    // 条件C：分数较高但结构恶化（85分以上但出现退潮信号）
-    if (currentScore > 85 && (highWeightSignals >= 1 || lowWeightSignals >= 3)) {
+    // 条件C：多个辅助结构信号同时恶化
+    if (supportRiskSignals >= 3) {
       return true
     }
 
     return false
   }
 
+  private resolveMarketEmotionPhase(marketData: MarketData): EmotionPhase {
+    const zhabanRate = marketData.zhaban?.rate || 0
+    const dtCount = marketData.dtCount || 0
+    const ztCount = marketData.ztCount || 0
+    const upCount = marketData.upCount || 0
+    const downCount = marketData.downCount || 0
+    const maxContinuousDays = marketData.maxContinuousDays || 0
+    const promotionRate = marketData.passRate?.to2 || 0
+    const yesterdayZtAvgChange =
+      marketData.yesterdayLimitStats?.avgChange ?? marketData.yesterdayZtPerformance ?? 0
+    const upRatio = upCount + downCount > 0 ? upCount / (upCount + downCount) : 0
+
+    // 风险优先：退潮是结构恶化，不用分数硬判。
+    if (
+      this.isRecession(marketData) ||
+      (zhabanRate >= 38 && promotionRate < 18) ||
+      (dtCount >= 15 && upRatio < 0.52) ||
+      (yesterdayZtAvgChange < -1.5 && zhabanRate >= 30)
+    ) {
+      return EMOTION_PHASES.RETREAT
+    }
+
+    // 高潮：强度高且风险尚未失控，重点识别“强但拥挤”。
+    if (
+      (ztCount >= 90 && maxContinuousDays >= 5 && zhabanRate < 35) ||
+      (ztCount >= 75 && upRatio >= 0.68 && dtCount <= 8 && promotionRate >= 18)
+    ) {
+      return EMOTION_PHASES.CLIMAX
+    }
+
+    // 发酵：赚钱效应扩散，强度和承接同时改善。
+    if (
+      (ztCount >= 55 && upRatio >= 0.58 && promotionRate >= 18 && dtCount <= 10) ||
+      (ztCount >= 45 && maxContinuousDays >= 3 && yesterdayZtAvgChange >= 1 && zhabanRate < 38)
+    ) {
+      return EMOTION_PHASES.FERMENT
+    }
+
+    // 启动：风险收缩、上涨比例改善，但扩散还不充分。
+    if (
+      (upRatio >= 0.48 && dtCount <= 12) ||
+      (ztCount >= 30 && zhabanRate < 40) ||
+      (promotionRate >= 12 && dtCount <= 15)
+    ) {
+      return EMOTION_PHASES.START
+    }
+
+    return EMOTION_PHASES.ICE
+  }
+
   /**
    * 更新情绪阶段信息
-   * @param score 情绪总分
-   * @param factorScores 各因子得分
    */
-  private updateSentimentWithPhase(score: number, factorScores: Record<string, number>): void {
+  private updateSentimentWithPhase(): void {
     try {
       const marketData = this.state.marketData
       let phaseInfo: EmotionPhase
 
-      // 优先判断退潮期
-      if (this.isRecession(marketData)) {
-        phaseInfo = EMOTION_PHASES.RECESSION
-      } else {
-        // 其他阶段按分数判断
-        phaseInfo = getEmotionPhaseByScore(score)
-      }
+      phaseInfo = this.resolveMarketEmotionPhase(marketData)
 
-      const riskLevel = this.getRiskLevel(score, marketData.zhaban?.rate || 0, phaseInfo.name)
+      const riskLevel = this.getRiskLevel(marketData.zhaban?.rate || 0, phaseInfo.name)
 
       this.state.sentiment = {
         ...this.state.sentiment,
-        overall: score,
+        overall: 0,
         phase: phaseInfo.value,
         phaseName: phaseInfo.name, // ✅ 添加 phaseName
         phaseInfo: phaseInfo,
@@ -1205,14 +1190,13 @@ private buildFactorData(): any[] {
         phaseColor: phaseInfo.color,
         phaseGradient: phaseInfo.gradient,
         phaseFeatures: phaseInfo.features,
-        factorScores: factorScores,
       }
     } catch (error) {
       console.error('[DragonBreathAnalyzer] 更新情绪阶段失败:', error)
-      const defaultPhase = EMOTION_PHASES.OSCILLATION
+      const defaultPhase = EMOTION_PHASES.START
       this.state.sentiment = {
         ...this.state.sentiment,
-        overall: score,
+        overall: 0,
         phase: defaultPhase.value,
         phaseName: defaultPhase.name,
         phaseInfo: defaultPhase,
@@ -1238,14 +1222,8 @@ private buildFactorData(): any[] {
       // 获取数据（会自动存入 dataLayer）
       await this.fetchAllData()
 
-      // 使用新的情绪分数计算
-      const { score: calculatedScore, factorScores } = this.calculateSentimentScore()
-
       // 更新情绪阶段
-      this.updateSentimentWithPhase(calculatedScore, factorScores)
-
-      // 保存因子得分
-      this.state.sentiment.factorScores = factorScores
+      this.updateSentimentWithPhase()
 
       // 触发事件
       EventManager.emit(AppEvents.BREATH.UPDATED, {
@@ -1258,7 +1236,7 @@ private buildFactorData(): any[] {
       this.recordHistory()
       this.lastAnalysisTime = Date.now()
 
-      debugLog('[analyzeMarketBreath] ✅ 分析完成，情绪分数:', calculatedScore)
+      debugLog('[analyzeMarketBreath] ✅ 分析完成，情绪阶段:', this.state.sentiment.phaseName)
       return true
 
     } catch (error) {

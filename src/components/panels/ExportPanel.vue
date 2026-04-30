@@ -175,9 +175,10 @@ const previewStats = computed(() => {
   }
 
   if (previewData.value.market) {
+    const sentiment = previewData.value.market.sentiment || {}
     stats.push(
-      { label: '情绪指数', value: previewData.value.market.sentiment.overall + '分' },
-      { label: '市场阶段', value: previewData.value.market.sentiment.phase },
+      { label: '情绪阶段', value: sentiment.phaseName || sentiment.phase || '-' },
+      { label: '风险等级', value: sentiment.riskLevel || '-' },
     )
   }
 

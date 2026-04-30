@@ -137,7 +137,7 @@
     console.log('\n%c6. 检查情绪阶段影响', 'color: #3498db; font-weight: bold')
     const sentiment = window.dragonBreathAnalyzer?.getMarketSentiment?.()
     if (sentiment) {
-      console.log(`   当前情绪阶段: ${sentiment.phase} (得分:${sentiment.overall})`)
+      console.log(`   当前情绪阶段: ${sentiment.phaseName || sentiment.phase}`)
 
       // 获取当前阈值乘数
       const thresholdMultiplier = window.dragonBreathAnalyzer?.getCurrentThresholdMultiplier?.()

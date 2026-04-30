@@ -448,8 +448,7 @@ class ExportService {
     const lines: string[] = []
 
     lines.push('=== 市场情绪 ===')
-    lines.push(`情绪指数,${market.sentiment.overall}`)
-    lines.push(`市场阶段,${market.sentiment.phase}`)
+    lines.push(`情绪阶段,${market.sentiment.phaseName || market.sentiment.phase || ''}`)
     lines.push(`风险等级,${market.sentiment.riskLevel}`)
     lines.push(`操作建议,${market.sentiment.suggestion}`)
     lines.push('')

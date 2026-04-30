@@ -406,7 +406,7 @@ export class SnapshotRuntime {
 
       if (sheets.includes('sentiment') && snapshot.sentiment) {
         sheetTitles.push('情绪')
-        csvParts.push(arrayToCSV([['字段', '值'], ['情绪得分', snapshot.sentiment.overall || 50], ['情绪阶段', snapshot.sentiment.phaseName || '平稳期'], ['情绪代码', snapshot.sentiment.phase || 'stable'], ['情绪值', snapshot.sentiment.emotionValue || 50]]))
+        csvParts.push(arrayToCSV([['字段', '值'], ['情绪阶段', snapshot.sentiment.phaseName || '启动'], ['情绪代码', snapshot.sentiment.phase || 'start'], ['情绪值', snapshot.sentiment.emotionValue || 50]]))
       }
 
       if (sheets.includes('market') && snapshot.marketStats) {

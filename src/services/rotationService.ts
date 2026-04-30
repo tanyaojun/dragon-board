@@ -14,6 +14,22 @@ import type {
 } from '../types/core'
 import { ROTATION_CONFIG } from '../config/constants'
 
+function normalizeEmotionPhase(value?: unknown): string {
+  if (typeof value !== 'string') return '启动'
+  const phase = value.trim()
+  return phase.endsWith('期') ? phase.slice(0, -1) : phase
+}
+
+function getPhaseBand(phase: string): number {
+  const normalized = normalizeEmotionPhase(phase)
+  if (normalized === '高潮') return 88
+  if (normalized === '发酵') return 66
+  if (normalized === '启动') return 45
+  if (normalized === '退潮') return 35
+  if (normalized === '冰点') return 20
+  return 50
+}
+
 interface JxbkBlockData {
   code: string
   name: string
@@ -77,15 +93,15 @@ class RotationService {
   private getCurrentEmotion() {
     try {
       const sentiment = dragonBreathAnalyzer.getMarketSentiment()
-      const phase = sentiment?.phase || '震荡期'
-      const score = sentiment?.overall || 50
+      const phase = normalizeEmotionPhase(sentiment?.phaseName || sentiment?.phase || '启动')
+      const phaseBand = getPhaseBand(phase)
 
       // 从统一配置中获取情绪乘数
       const multipliers = UNIFIED_EMOTION.IMPACT.THEME
 
       return {
         phase,
-        score,
+        phaseBand,
         heatMultiplier:
           multipliers.HEAT_MULTIPLIERS[phase as keyof typeof multipliers.HEAT_MULTIPLIERS] || 1.0,
         momentumMultiplier:
@@ -97,8 +113,8 @@ class RotationService {
       }
     } catch (e) {
       return {
-        phase: '震荡期',
-        score: 50,
+        phase: '启动',
+        phaseBand: 45,
         heatMultiplier: 1.0,
         momentumMultiplier: 1.0,
         rotationSpeedMultiplier: 1.0,
@@ -237,7 +253,10 @@ class RotationService {
     const baseCondition = persistentDays >= 3 && block.mainNetInflow > 0 && strengthScore >= 60
 
     // 情绪加成条件
-    const emotionBonus = emotion.score >= 70 && block.ztCount >= 3 && block.mainNetInflow > 0
+    const emotionBonus =
+      ['发酵', '高潮'].includes(normalizeEmotionPhase(emotion.phase)) &&
+      block.ztCount >= 3 &&
+      block.mainNetInflow > 0
 
     // 爆发力条件（不受持续天数限制）
     const explosiveCondition =
@@ -292,17 +311,16 @@ class RotationService {
     const strongCount = strongThemes.length
     const inflowCount = inflowThemes.length
     const outflowCount = outflowThemes.length
-    const emotionScore = emotion.score
-    const emotionPhase = emotion.phase
+    const emotionPhase = normalizeEmotionPhase(emotion.phase)
 
-    // 冰点期：情绪分数低 + 流入少
-    if (emotionScore < 30 || (inflowCount < 3 && strongCount < 2 && emotionPhase === '冰点期')) {
+    // 冰点期：阶段低迷 + 流入少
+    if (emotionPhase === '冰点' || (inflowCount < 3 && strongCount < 2 && emotionPhase === '冰点')) {
       return 'ice'
     }
 
     // 筑底期：情绪开始回暖，但轮动慢
     if (
-      (emotionScore >= 30 && emotionScore < 45) ||
+      emotionPhase === '启动' ||
       (inflowCount > 0 && rotationSpeed < 30 && mainLines.length < 2)
     ) {
       return 'accumulation'
@@ -310,7 +328,7 @@ class RotationService {
 
     // 上升期：情绪活跃 + 主线明确 + 轮动适中
     if (
-      (emotionScore >= 45 && emotionScore < 70) ||
+      emotionPhase === '发酵' ||
       (mainLines.length >= 2 && strongCount >= 3 && rotationSpeed < 50)
     ) {
       return 'rising'
@@ -318,23 +336,23 @@ class RotationService {
 
     // 高潮期：情绪亢奋 + 轮动快
     if (
-      emotionScore >= 70 ||
+      emotionPhase === '高潮' ||
       (mainLines.length >= 4 && rotationSpeed > 60) ||
-      (emotionPhase === '高潮期' && rotationSpeed > 50)
+      (emotionPhase === '高潮' && rotationSpeed > 50)
     ) {
       return 'climax'
     }
 
     // 出货期：情绪高位 + 轮动极快
     if (
-      (emotionScore >= 60 && rotationSpeed > 60) ||
+      (emotionPhase === '发酵' && rotationSpeed > 60) ||
       (inflowCount > 0 && outflowCount > 0 && Math.abs(inflowCount - outflowCount) < 3)
     ) {
       return 'distribution'
     }
 
     // 退潮期：情绪下降 + 流出多
-    if (emotionScore < 45 || outflowCount > inflowCount * 1.5 || emotionPhase === '退潮期') {
+    if (emotionPhase === '退潮' || outflowCount > inflowCount * 1.5) {
       return 'falling'
     }
 
@@ -450,9 +468,8 @@ class RotationService {
       quickRotation: quickRotation.slice(0, 5),
       rotationSpeed,
       marketPhase,
-      // ✅ 修改 emotion 结构
       emotion: {
-        value: emotion.score,
+        value: emotion.phaseBand,
         status: emotion.phase,
         phase: emotion.phase,
       },
@@ -574,9 +591,10 @@ class RotationService {
     let suggestion = suggestions[phase] || suggestions.accumulation
 
     // 添加情绪提示
-    if (emotion.score < 30) {
+    const emotionPhase = normalizeEmotionPhase(emotion.phase)
+    if (emotionPhase === '冰点') {
       suggestion += ' ⚠️ 情绪冰点，谨慎操作'
-    } else if (emotion.score > 80) {
+    } else if (emotionPhase === '高潮') {
       suggestion += ' 🔥 情绪亢奋，注意风险'
     }
 

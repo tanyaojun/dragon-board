@@ -151,12 +151,11 @@ export const FACTORS: Record<string, Factor> = {
       try {
         const sentiment = dragonBreathAnalyzer?.getMarketSentiment?.()
         const phase = sentiment?.phase
-        if (phase === '高潮期') return 80
-        if (phase === '发酵期') return 60
-        if (phase === '启动期') return 40
-        if (phase === '震荡期') return 50
-        if (phase === '退潮期') return 30
-        if (phase === '冰点期') return 20
+        if (phase === '高潮') return 88
+        if (phase === '发酵') return 66
+        if (phase === '启动') return 45
+        if (phase === '退潮') return 35
+        if (phase === '冰点') return 20
         return 50
       } catch {
         return 50
@@ -311,14 +310,20 @@ export const FACTORS: Record<string, Factor> = {
   },
 
   breathMarketScore: {
-    name: '市场总分',
+    name: '市场阶段档位',
     type: 'breath',
     category: 'market',
-    description: '综合市场情绪分数',
+    description: '当前市场情绪阶段对应的结构档位',
     calculate: () => {
       try {
         const sentiment = dragonBreathAnalyzer?.getMarketSentiment?.()
-        return sentiment?.overall || 50
+        const phase = sentiment?.phaseName || sentiment?.phase
+        if (phase === '高潮') return 88
+        if (phase === '发酵') return 66
+        if (phase === '启动') return 45
+        if (phase === '退潮') return 35
+        if (phase === '冰点') return 20
+        return 50
       } catch {
         return 50
       }

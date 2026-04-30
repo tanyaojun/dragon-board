@@ -571,7 +571,6 @@ interface DataState {
         riskLevel: string
         suggestion: string
         phaseInfo?: any // 阶段完整信息
-        factorScores?: Record<string, number>
       } | null
       marketData?: {
         // 添加 marketData 字段定义
@@ -630,13 +629,12 @@ interface DataState {
         }
       }
       factors?: Array<{
-        id: string // 因子ID，如 'breathPhase'
-        name: string // 因子名称，如 '龙息阶段'
-        value: number // 因子值 (0-100)
-        weight: number // 权重 (0-1)
-        description?: string // 描述
-        unit?: string // 单位，如 '分', '%'
-        category?: string // 分类，如 'market', 'emotion'
+        id: string
+        name: string
+        rawValue: number | null
+        description?: string
+        unit?: string
+        category?: string
       }>
       history: any[]
       lastUpdate: number | null
@@ -1540,7 +1538,6 @@ class DataLayer {
       riskLevel: data.sentiment.riskLevel,
       suggestion: data.sentiment.suggestion,
       phaseInfo: data.sentiment.phaseInfo,
-      factorScores: data.sentiment.factorScores,
     }
 
     // 更新市场数据 - 确保包含所有字段
@@ -1581,9 +1578,9 @@ class DataLayer {
     }
     this.state.analysis.breath.history.push({
       timestamp: data.timestamp,
-      sentiment: data.sentiment.overall,
       phase: data.sentiment.phase,
       phaseName: data.sentiment.phaseName,
+      riskLevel: data.sentiment.riskLevel,
     })
     if (this.state.analysis.breath.history.length > 100) {
       this.state.analysis.breath.history.shift()

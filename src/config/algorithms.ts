@@ -7,7 +7,7 @@ import { BREATH_FACTOR_IDS } from '@/types'
 
 // ========== 阶段权重乘数配置 ==========
 export const PHASE_MULTIPLIERS = {
-  冰点期: {
+  冰点: {
     contrarian: 2.5,
     breathZtCount: 2.0,
     breathDtCount: 2.0,
@@ -16,7 +16,7 @@ export const PHASE_MULTIPLIERS = {
     themeHeat: 0.5,
     themeMomentum: 0.5,
   },
-  启动期: {
+  启动: {
     themeHeat: 1.8,
     themeMomentum: 1.3,
     breathPassRate: 1.8,
@@ -25,7 +25,7 @@ export const PHASE_MULTIPLIERS = {
     zlje: 1.2,
     continuousDays: 1.2,
   },
-  发酵期: {
+  发酵: {
     themeMomentum: 1.8,
     themeHeat: 1.4,
     zlje: 1.5,
@@ -34,7 +34,7 @@ export const PHASE_MULTIPLIERS = {
     continuousDays: 1.3,
     breathZtCount: 1.2,
   },
-  高潮期: {
+  高潮: {
     continuousDays: 1.8,
     zlje: 1.6,
     breathMaxDays: 1.6,
@@ -46,7 +46,7 @@ export const PHASE_MULTIPLIERS = {
     turnoverRate: 1.2,
     breathPassRate: 1.2,
   },
-  退潮期: {
+  退潮: {
     continuousDays: 0.4,
     zlje: 0.3,
     themeHeat: 0.4,
@@ -57,15 +57,6 @@ export const PHASE_MULTIPLIERS = {
     breathZtCount: 0.6,
     breathPassRate: 0.5,
     breathMaxDays: 0.5,
-  },
-  震荡期: {
-    themeHeat: 1.0,
-    themeMomentum: 1.0,
-    breathZtCount: 1.0,
-    breathDtCount: 1.0,
-    continuousDays: 1.0,
-    zlje: 1.0,
-    compRank: 1.0,
   },
 } as const
 

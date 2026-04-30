@@ -47,13 +47,13 @@
             <div class="card-desc">{{ marketStatus.riskDesc }}</div>
           </div>
 
-          <!-- 情绪指数 -->
+          <!-- 情绪阶段 -->
           <div class="info-card">
             <div class="card-header">
               <span class="card-icon">🌡️</span>
-              <span class="card-title">情绪指数</span>
+              <span class="card-title">情绪阶段</span>
             </div>
-            <div class="card-value">{{ sentimentScore }}</div>
+            <div class="card-value">{{ sentimentStage }}</div>
             <div class="card-desc">{{ sentimentSuggestion }}</div>
           </div>
         </div>
@@ -315,12 +315,12 @@ const currentSentiment = computed(() => {
 })
 
 const currentPhase = computed(() => {
-  const phaseName = currentSentiment.value.phaseName || '震荡期'
+  const phaseName = currentSentiment.value.phaseName || '启动'
   return EMOTION_PHASE_BY_NAME[phaseName] || null
 })
 
-const sentimentScore = computed(() => {
-  return currentSentiment.value.overall || 50
+const sentimentStage = computed(() => {
+  return currentSentiment.value.phaseName || currentSentiment.value.phase || '启动'
 })
 
 const sentimentSuggestion = computed(() => {
@@ -330,29 +330,28 @@ const sentimentSuggestion = computed(() => {
 // ========== 市场状态 ==========
 const marketStatus = computed(() => {
   const phase = currentPhase.value
-  const score = sentimentScore.value
 
-  let phaseClass = 'oscillation'
+  let phaseClass = 'start'
   let riskClass = 'warning'
   let riskLevel = '中风险'
   let riskDesc = '正常操作'
 
   if (phase) {
-    phaseClass = phase.value || 'oscillation'
+    phaseClass = phase.value || 'start'
   }
 
-  if (score >= 80) {
+  if (phase?.name === '高潮' || phase?.name === '退潮') {
     riskLevel = '高风险'
     riskDesc = '注意风险控制'
     riskClass = 'critical'
-  } else if (score <= 30) {
+  } else if (phase?.name === '冰点' || phase?.name === '启动') {
     riskLevel = '低风险'
-    riskDesc = '可适当建仓'
+    riskDesc = '轻仓试错'
     riskClass = 'low'
   }
 
   return {
-    phase: currentSentiment.value.phaseName || '震荡期',
+    phase: currentSentiment.value.phaseName || '启动',
     phaseDesc: currentSentiment.value.suggestion || '观望为主',
     phaseClass,
     riskLevel,
@@ -629,9 +628,9 @@ onMounted(() => {
 }
 
 /* 市场阶段卡片 - 不同阶段不同颜色 */
-.info-card.oscillation {
-  border-left: 3px solid #95a5a6;
-  background: linear-gradient(to right, rgba(149, 165, 166, 0.05), var(--bg-secondary));
+.info-card.start {
+  border-left: 3px solid #3498db;
+  background: linear-gradient(to right, rgba(52, 152, 219, 0.05), var(--bg-secondary));
 }
 
 .info-card.climax {
@@ -639,14 +638,14 @@ onMounted(() => {
   background: linear-gradient(to right, rgba(255, 215, 0, 0.05), var(--bg-secondary));
 }
 
-.info-card.recession {
-  border-left: 3px solid #7f8c8d;
-  background: linear-gradient(to right, rgba(127, 140, 141, 0.05), var(--bg-secondary));
+.info-card.retreat {
+  border-left: 3px solid #9b59b6;
+  background: linear-gradient(to right, rgba(155, 89, 182, 0.05), var(--bg-secondary));
 }
 
 .info-card.ice {
-  border-left: 3px solid #3498db;
-  background: linear-gradient(to right, rgba(52, 152, 219, 0.05), var(--bg-secondary));
+  border-left: 3px solid #7f8c8d;
+  background: linear-gradient(to right, rgba(127, 140, 141, 0.05), var(--bg-secondary));
 }
 
 .info-card.ferment {
@@ -686,20 +685,20 @@ onMounted(() => {
 }
 
 /* 卡片值的颜色 - 与左侧边框呼应 */
-.info-card.oscillation .card-value {
-  color: #95a5a6;
+.info-card.start .card-value {
+  color: #3498db;
 }
 
 .info-card.climax .card-value {
   color: #ffd700;
 }
 
-.info-card.recession .card-value {
-  color: #7f8c8d;
+.info-card.retreat .card-value {
+  color: #9b59b6;
 }
 
 .info-card.ice .card-value {
-  color: #3498db;
+  color: #7f8c8d;
 }
 
 .info-card.ferment .card-value {

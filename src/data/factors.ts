@@ -205,20 +205,22 @@ export const FACTORS: Record<string, Factor> = {
     name: '市场情绪',
     type: 'sentiment',
     category: 'macro',
-    description: '整体市场情绪分数（0-100）',
+    description: '当前市场情绪阶段的结构档位',
     calculate: (stock: Stock) => {
       if (typeof window !== 'undefined' && (window as any).DragonBreathAnalyzer) {
-        // 修复这里的拼写错误
         const sentiment = (window as any).DragonBreathAnalyzer.getMarketSentiment?.()
-        if (sentiment && sentiment.overall !== undefined) {
-          return sentiment.overall
-        }
+        const phase = sentiment?.phaseName || sentiment?.phase
+        if (phase === '高潮') return 88
+        if (phase === '发酵') return 66
+        if (phase === '启动') return 45
+        if (phase === '退潮') return 35
+        if (phase === '冰点') return 20
       }
       return 50
     },
     range: [0, 100],
-    unit: '分',
-    example: '情绪高涨80分，冰点期20分',
+    unit: '档',
+    example: '高潮=88档，冰点=20档',
   },
   upDownRatio: {
     id: 'upDownRatio',
@@ -403,12 +405,11 @@ export const FACTORS: Record<string, Factor> = {
         const sentiment = (window as any).DragonBreathAnalyzer.getMarketSentiment?.()
         if (sentiment && sentiment.phase) {
           const phase = sentiment.phase
-          if (phase === '高潮期') return 90
-          if (phase === '发酵期') return 75
-          if (phase === '启动期') return 60
-          if (phase === '震荡期') return 45
-          if (phase === '退潮期') return 25
-          if (phase === '冰点期') return 10
+          if (phase === '高潮') return 90
+          if (phase === '发酵') return 75
+          if (phase === '启动') return 60
+          if (phase === '退潮') return 25
+          if (phase === '冰点') return 10
         }
       }
       return 50

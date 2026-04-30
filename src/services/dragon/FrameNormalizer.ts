@@ -103,8 +103,8 @@ function buildFrameFromBundle(bundle: SnapshotFrameBundle, fallbackDate: string)
     },
     sentiment: {
       overall: sentiment.overall || 50,
-      phase: sentiment.phase || sentiment.phaseName || '震荡期',
-      phaseName: sentiment.phaseName || sentiment.phase || '震荡期',
+      phase: sentiment.phase || sentiment.phaseName || 'start',
+      phaseName: sentiment.phaseName || sentiment.phase || '启动',
       emotionValue: sentiment.emotionValue || marketStats.emotionValue || 0,
     },
     rawCoverage: {
@@ -120,8 +120,8 @@ function buildCloseFrame(stocks: MergedStock[], date: string, timestamp: number)
   // 盘中快照不全时，后续“收盘门”仍需要一个统一来源来判断谁守住了领导权。
   const sentiment = dragonBreathAnalyzer.getMarketSentiment?.() || {
     overall: 50,
-    phase: '震荡期',
-    phaseName: '震荡期',
+    phase: 'start',
+    phaseName: '启动',
   }
   const marketData = dragonBreathAnalyzer.getMarketData?.() || {}
   const hotlist = [...stocks]
@@ -147,8 +147,8 @@ function buildCloseFrame(stocks: MergedStock[], date: string, timestamp: number)
     },
     sentiment: {
       overall: sentiment.overall || 50,
-      phase: sentiment.phase || sentiment.phaseName || '震荡期',
-      phaseName: sentiment.phaseName || sentiment.phase || '震荡期',
+      phase: sentiment.phase || sentiment.phaseName || 'start',
+      phaseName: sentiment.phaseName || sentiment.phase || '启动',
       emotionValue: marketData.emotionValue || 0,
     },
     rawCoverage: {

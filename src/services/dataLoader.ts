@@ -608,40 +608,51 @@ class DataLoaderService {
       this.MAX_ACTIVE_MONEY_FLOW_RATIO,
     )
     const { x16, amplitude, closePosition } = this.calculateTdxDarkMoneyFactor(quote)
-    // mooTDX 只有总主动买卖量，没有 L2_AMO 的超大/大单分层；这里用高成交额、
-    // 高振幅、收盘位置偏弱时的小主动差放大，近似明盘主力资金。
+    // mooTDX 只有总主动买卖量，没有 L2_AMO 的超大/大单分层。
+    // 这里按通达信公式的 X_16 思路做连续估算：价格路径决定暗盘方向，
+    // 总主动买卖量只作为明盘基础。主动买卖方向和价格路径冲突时，
+    // 这部分成交更接近承接/派发，不能直接推成同向主力资金。
     const turnoverScale = this.clamp(Math.log10(Math.max(turnover, 1) / 500_000_000), 0, 1)
     const smallActiveImbalance = this.clamp((0.035 - Math.abs(activeRatio)) / 0.035, 0, 1)
     const churnScore = this.clamp((amplitude - 0.06) / 0.1, 0, 1)
     const weakCloseScore = this.clamp((0.68 - closePosition) / 0.25, 0, 1)
-    const hiddenMainMultiplier = 1 + smallActiveImbalance * churnScore * weakCloseScore * turnoverScale * 12
-    let visibleMainRatio = activeRatio * hiddenMainMultiplier
-    visibleMainRatio = this.capEstimatedMoneyFlowRatio(visibleMainRatio, 0.18)
+    const hiddenMainMultiplier = 1 + smallActiveImbalance * churnScore * weakCloseScore * turnoverScale * 14
+    const closeBias = this.clamp((closePosition - 0.5) * 2, -1, 1)
+    const pathDirection = Math.abs(x16) >= 0.025 ? Math.sign(x16) : Math.sign(closeBias)
+    const pathStrength = pathDirection >= 0
+      ? this.clamp((closePosition - 0.55) / 0.45, 0, 1)
+      : this.clamp((0.55 - closePosition) / 0.55, 0, 1)
+    const x16Strength = this.clamp(Math.abs(x16) / 0.16, 0, 1)
+    const priceMoveStrength = this.clamp(Math.abs(changePct) / 7, 0, 1)
+    const amplitudeStrength = this.clamp(amplitude / 0.08, 0, 1)
+    const pathConflictStrength =
+      pathDirection !== 0 && activeRatio !== 0 && Math.sign(activeRatio) !== pathDirection
+        ? this.clamp(Math.max(x16Strength * priceMoveStrength, pathStrength * amplitudeStrength), 0, 1)
+        : 0
+    const activeDamping = 1 - pathConflictStrength * 0.97
+    const activeVisibleRatio = activeRatio * hiddenMainMultiplier * activeDamping
+    const pathVisibleBase = pathDirection >= 0
+      ? this.clamp(0.12 + amplitude * 0.55 + turnoverScale * 0.018, 0.12, 0.28)
+      : this.clamp(0.16 + amplitude * 0.8 + turnoverScale * 0.025, 0.16, 0.42)
+    const pathVisibleRatio = x16 * pathStrength * pathVisibleBase
+    const closePressureBase = pathDirection >= 0
+      ? this.clamp(0.018 + turnoverScale * 0.025 + amplitude * 0.06, 0.018, 0.075)
+      : this.clamp(0.035 + turnoverScale * 0.035 + amplitude * 0.12, 0.035, 0.12)
+    const closePressureRatio = Math.sign(closeBias) * Math.pow(Math.abs(closeBias), 1.25) * amplitudeStrength * closePressureBase
+    const conflictPressureBase = pathDirection >= 0
+      ? this.clamp(0.006 + amplitude * 0.04 + turnoverScale * 0.006, 0.006, 0.035)
+      : this.clamp(0.023 + amplitude * 0.12 + turnoverScale * 0.012, 0.023, 0.063)
+    const conflictPressureRatio = pathDirection * pathConflictStrength * conflictPressureBase
+    let visibleMainRatio = this.capEstimatedMoneyFlowRatio(
+      activeVisibleRatio + pathVisibleRatio + closePressureRatio + conflictPressureRatio,
+      0.2,
+    )
 
-    const neutralBaseRatio = this.clamp(0.12 + amplitude * 0.8, 0.12, 0.26)
+    const neutralBaseRatio = x16 >= 0
+      ? this.clamp(0.13 + amplitude * 0.72 + turnoverScale * 0.018, 0.13, 0.28)
+      : this.clamp(0.18 + amplitude * 0.75 + turnoverScale * 0.03, 0.18, 0.32)
     let darkRatio = neutralBaseRatio * x16
-    if (Math.abs(activeRatio) >= 0.1) {
-      darkRatio *= 0.65
-    }
-    darkRatio = this.capEstimatedMoneyFlowRatio(darkRatio, 0.035)
-
-    const strongCloseScore = this.clamp((closePosition - 0.9) / 0.1, 0, 1)
-    const limitCloseScore = this.clamp((changePct - 9) / 1, 0, 1)
-    const boardScore = strongCloseScore * limitCloseScore
-    if (boardScore > 0) {
-      // 涨停或接近涨停且收在日内高位时，总主动买卖量差会被封板撮合口径扭曲。
-      // 这类样本按通达信 L2_AMO 公式通常会给出正向暗盘资金，因此用板上强度重估明暗资金。
-      const boardVisibleRatio = this.capEstimatedMoneyFlowRatio(
-        0.085 + amplitude * 0.22 + turnoverScale * 0.025 + Math.max(activeRatio, 0) * 0.3 - Math.max(-activeRatio, 0) * 0.2,
-        0.2,
-      )
-      const boardDarkRatio = this.capEstimatedMoneyFlowRatio(
-        0.03 + Math.max(x16, 0) * 0.1 + amplitude * 0.06 + turnoverScale * 0.017,
-        0.1,
-      )
-      visibleMainRatio = visibleMainRatio * (1 - boardScore) + boardVisibleRatio * boardScore
-      darkRatio = darkRatio * (1 - boardScore) + boardDarkRatio * boardScore
-    }
+    darkRatio = this.capEstimatedMoneyFlowRatio(darkRatio, 0.12)
 
     let mainRatio = visibleMainRatio + darkRatio
     mainRatio = this.capEstimatedMoneyFlowRatio(mainRatio, this.MAX_ESTIMATED_MAIN_RATIO)
@@ -785,6 +796,7 @@ class DataLoaderService {
     if (!cached || currentTs - cached.timestamp >= this.PLATFORM_CACHE_TTL) {
       await this.loadAllPlatforms(true)
       await this.loadLimitUpData(true)
+      await sectorAnalyzer.triggerHeatCalculation()
       sectorAnalyzer.syncThemesToStocks()
     }
 
@@ -810,6 +822,7 @@ class DataLoaderService {
   async runUpdate(): Promise<void> {
     if (this.destroyed) return
     await this.handleFullRefresh(true)
+    await sectorAnalyzer.triggerHeatCalculation()
     sectorAnalyzer.syncThemesToStocks()
   }
 
@@ -1406,6 +1419,7 @@ class DataLoaderService {
 
       await this.mergeData()
 
+      await sectorAnalyzer.triggerHeatCalculation()
       const updatedCount = sectorAnalyzer.syncThemesToStocks()
       if (updatedCount > 0) debugLog(`[DataLoader] 刷新后同步题材: ${updatedCount}只股票`)
 

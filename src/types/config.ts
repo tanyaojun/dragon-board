@@ -138,13 +138,13 @@ export const BREATH_FACTORS_META = {
     unit: '点',
   },
   [BREATH_FACTOR_IDS.MARKET_SCORE]: {
-    name: '市场总分',
+    name: '市场阶段档位',
     type: 'breath',
     category: 'market',
-    description: '综合市场情绪分数',
-    example: '80分以上为高潮期',
+    description: '当前市场情绪阶段对应的结构档位',
+    example: '高潮=88档，冰点=20档',
     range: [0, 100],
-    unit: '分',
+    unit: '档',
   },
 } as const
 
@@ -313,103 +313,59 @@ export interface MarketPhase {
 
 export const MARKET_PHASES: Record<string, MarketPhase> = {
   ICE: {
-    name: '冰点期',
+    name: '冰点',
     value: 'ice',
     color: '#7f8c8d',
     gradient: 'linear-gradient(135deg, #1e2b3a, #2c3e50)',
     icon: '❄️',
     score: 20,
-    desc: '市场极度悲观，涨停稀少，跌停泛滥',
-    suggestion: '空仓观望，等待情绪反转',
-    features: ['逆势抗跌', '连板高度2-3板', '关注逆势股'],
-  },
-  DEPRESSED: {
-    name: '低迷期',
-    value: 'depressed',
-    color: '#7f8c8d',
-    gradient: 'linear-gradient(135deg, #7f8c8d, #95a5a6)',
-    icon: '🌧️',
-    score: 30,
-    desc: '人气低迷，量能萎缩',
-    suggestion: '多看少动，等待机会',
-    features: ['人气低迷', '量能萎缩', '多看少动'],
+    desc: '市场承接弱，机会稀少，短线交易以等待修复为主',
+    suggestion: '控制仓位，等待风险释放后的启动信号',
+    features: ['机会状态少', '上涨比例低', '风险状态占优'],
   },
   START: {
-    name: '启动期',
+    name: '启动',
     value: 'start',
     color: '#3498db',
     gradient: 'linear-gradient(135deg, #1e3c5a, #2980b9)',
     icon: '🌱',
-    score: 40,
-    desc: '情绪开始回暖，出现首板，跌停减少',
-    suggestion: '轻仓试错，关注率先反弹的板块',
-    features: ['首板增多', '板块龙头萌芽', '题材发酵'],
-  },
-  OSCILLATION: {
-    name: '震荡期',
-    value: 'oscillation',
-    color: '#95a5a6',
-    gradient: 'linear-gradient(135deg, #2c3e50, #34495e)',
-    icon: '⚖️',
-    score: 50,
-    desc: '多空平衡，板块轮动，情绪震荡',
-    suggestion: '控制仓位，低吸为主，不追高',
-    features: ['板块轮动', '情绪震荡', '控制仓位'],
-  },
-  STABLE: {
-    name: '平稳期',
-    value: 'stable',
-    color: '#3498db',
-    gradient: 'linear-gradient(135deg, #3498db, #5dade2)',
-    icon: '🌊',
-    score: 55,
-    desc: '情绪稳定，窄幅震荡',
-    suggestion: '低吸为主，波段操作',
-    features: ['情绪稳定', '窄幅震荡', '低吸为主'],
+    score: 45,
+    desc: '情绪开始修复，新增线索和点火标的增加',
+    suggestion: '轻仓试错，关注率先修复并能留强的方向',
+    features: ['跌停减少', '新入和点火增多', '上涨比例改善'],
   },
   FERMENT: {
-    name: '发酵期',
+    name: '发酵',
     value: 'ferment',
     color: '#f39c12',
     gradient: 'linear-gradient(135deg, #b45f06, #f39c12)',
     icon: '🔥',
-    score: 60,
-    desc: '题材扩散，连板增加，赚钱效应显现',
-    suggestion: '适度加仓，紧跟主线题材',
-    features: ['连板梯队', '资金涌入', '题材动量增强'],
-  },
-  ACTIVE: {
-    name: '活跃期',
-    value: 'active',
-    color: '#ff7f50',
-    gradient: 'linear-gradient(135deg, #ff7f50, #ffa07a)',
-    icon: '🔥',
-    score: 70,
-    desc: '题材活跃，涨停增加，情绪升温',
-    suggestion: '积极参与，紧跟热点',
-    features: ['题材活跃', '涨停增加', '情绪升温'],
+    score: 66,
+    desc: '主线扩散，资金承接改善，赚钱效应开始传导',
+    suggestion: '围绕主线精选参与，重点看资金承接和持续性',
+    features: ['强资金扩散', '点火和主升增加', '连板梯队成型'],
   },
   CLIMAX: {
-    name: '高潮期',
+    name: '高潮',
     value: 'climax',
     color: '#e74c3c',
     gradient: 'linear-gradient(135deg, #a52613, #e74c3c)',
-    icon: '⚡',
-    score: 80,
-    desc: '情绪亢奋，批量涨停，连板高度打开',
-    suggestion: '持股为主，注意分化风险',
-    features: ['总龙头4板以上', '连板高度提升', '注意分化'],
+    icon: '🌋',
+    score: 88,
+    desc: '前排强度很高，但拥挤和分化风险同步上升',
+    suggestion: '持有强势核心为主，谨慎追高，重点防分歧兑现',
+    features: ['批量高涨幅', '高位拥挤增加', '成交和换手放大'],
   },
-  RECESSION: {
-    name: '退潮期',
-    value: 'recession',
+  RETREAT: {
+    name: '退潮',
+    value: 'retreat',
     color: '#9b59b6',
     gradient: 'linear-gradient(135deg, #4a235a, #8e44ad)',
-    icon: '🌊',
-    score: 100,
-    desc: '高位分歧，亏钱效应，炸板率高',
-    suggestion: '减仓防守，规避高位股',
-    features: ['高位补跌', '减仓防守', '关注穿越'],
+    icon: '⚖️',
+    score: 45,
+    desc: '风险状态升温或前排承接失败，交易优先级转向防守',
+    suggestion: '降低进攻仓位，规避高位弱承接和资金背离标的',
+    features: ['资金背离增加', '转弱预警增加', '炸板率抬升'],
   },
 } as const
 
@@ -439,8 +395,8 @@ export interface PhaseAdjustment {
 }
 
 export const PHASE_ADJUSTMENTS: Record<string, PhaseAdjustment> = {
-  // ===== 冰点期：防守为主，关注逆势 =====
-  冰点期: {
+  // ===== 冰点：防守为主，关注逆势 =====
+  冰点: {
     contrarian: 0.05, // 逆势因子大幅提高（找抗跌股）
     compRank: 0.02, // 综合排名稍提高（找强势股）
     breathDtCount: 0.03, // 跌停数权重提高（风险警示）
@@ -450,18 +406,8 @@ export const PHASE_ADJUSTMENTS: Record<string, PhaseAdjustment> = {
     zlje: -0.02, // 主力净额降权
   },
 
-  // ===== 低迷期：观望为主，轻仓试错 =====
-  低迷期: {
-    contrarian: 0.03, // 逆势因子保持
-    breathDtCount: 0.02, // 跌停数关注
-    compRank: 0.01,
-    themeHeat: -0.02,
-    breathZtCount: -0.01,
-    breathPassRate: -0.01,
-  },
-
-  // ===== 启动期：轻仓试错，关注率先反弹 =====
-  启动期: {
+  // ===== 启动：轻仓试错，关注率先修复 =====
+  启动: {
     themeHeat: 0.02, // 题材热度开始重要
     compRank: 0.02, // 排名重要（找领涨）
     breathPassRate: 0.03, // 晋级率提高
@@ -471,26 +417,8 @@ export const PHASE_ADJUSTMENTS: Record<string, PhaseAdjustment> = {
     contrarian: -0.02, // 逆势降权
   },
 
-  // ===== 震荡期：低吸为主，控制仓位 =====
-  震荡期: {
-    // 保持中性，各因子均衡
-    compRank: 0.01,
-    themeHeat: 0.01,
-    breathPassRate: 0.01,
-    breathZtCount: 0.01,
-  },
-
-  // ===== 平稳期：低吸为主，波段操作 =====
-  平稳期: {
-    compRank: 0.02, // 排名重要
-    themeHeat: 0.01,
-    turnover: 0.02, // 成交额重要（量能稳定）
-    zlje: 0.01, // 主力稳定
-    continuousDays: 0.01, // 连板保持
-  },
-
-  // ===== 发酵期：适度加仓，紧跟主线 =====
-  发酵期: {
+  // ===== 发酵：适度加仓，紧跟主线 =====
+  发酵: {
     themeHeat: 0.03, // 题材热度最重要
     themeMomentum: 0.03, // 题材动量最重要
     continuousDays: 0.02, // 连板开始发力
@@ -500,20 +428,8 @@ export const PHASE_ADJUSTMENTS: Record<string, PhaseAdjustment> = {
     compRank: -0.01, // 排名适当降低（题材更重要）
   },
 
-  // ===== 活跃期：积极参与，紧跟热点 =====
-  活跃期: {
-    themeHeat: 0.02,
-    themeMomentum: 0.02,
-    continuousDays: 0.03, // 连板最重要
-    breathZtCount: 0.02, // 涨停数重要
-    breathPassRate: 0.02,
-    zlje: 0.01,
-    turnover: 0.01,
-    compRank: -0.02, // 排名不重要（情绪更重要）
-  },
-
-  // ===== 高潮期：持股为主，注意分化 =====
-  高潮期: {
+  // ===== 高潮：持股为主，注意分化 =====
+  高潮: {
     continuousDays: 0.04, // 连板最重要（高度板）
     breathZtCount: 0.02,
     breathPhase: 0.02,
@@ -523,8 +439,8 @@ export const PHASE_ADJUSTMENTS: Record<string, PhaseAdjustment> = {
     contrarian: -0.03, // 逆势大幅降权
   },
 
-  // ===== 退潮期：减仓防守，规避高位 =====
-  退潮期: {
+  // ===== 退潮：减仓防守，规避高位 =====
+  退潮: {
     breathDtCount: 0.04, // 跌停数最重要（风险警示）
     breathZhabanRate: 0.03, // 炸板率重要
     contrarian: 0.02, // 逆势回升
@@ -711,15 +627,11 @@ export interface PerformanceStats {
 export const THEME_EMOTION_IMPACT = {
   // 1. 情绪阶段对题材热度的乘数（与龙息分析器保持一致）
   PHASE_MULTIPLIERS: {
-    冰点期: 0.5,
-    低迷期: 0.7,
-    启动期: 0.9,
-    震荡期: 1.0,
-    平稳期: 1.0,
-    发酵期: 1.2,
-    活跃期: 1.3,
-    高潮期: 1.4,
-    退潮期: 0.9, // 将 0.6 改为 0.9
+    冰点: 0.5,
+    启动: 0.9,
+    发酵: 1.2,
+    高潮: 1.4,
+    退潮: 0.9,
   },
 
   // 2. 涨停数对题材热度的加成（每涨停加多少分）
@@ -730,28 +642,20 @@ export const THEME_EMOTION_IMPACT = {
 
   // 4. 情绪阶段对题材动量的影响（动量变化速度）
   MOMENTUM_IMPACT: {
-    冰点期: 0.6, // 动量增长缓慢
-    低迷期: 0.8,
-    启动期: 1.0,
-    震荡期: 1.0,
-    平稳期: 1.0,
-    发酵期: 1.2, // 动量加速
-    活跃期: 1.3,
-    高潮期: 1.4,
-    退潮期: 0.7, // 动量衰减
+    冰点: 0.6, // 动量增长缓慢
+    启动: 1.0,
+    发酵: 1.2, // 动量加速
+    高潮: 1.4,
+    退潮: 0.7, // 动量衰减
   },
 
   // 5. 情绪分数阈值（定义各阶段的分数范围）- 与 DragonBreathAnalyzer 共享
   PHASE_SCORE_THRESHOLDS: {
-    冰点期: { min: 0, max: 25 },
-    低迷期: { min: 25, max: 35 },
-    启动期: { min: 35, max: 45 },
-    震荡期: { min: 45, max: 55 },
-    平稳期: { min: 55, max: 60 },
-    发酵期: { min: 60, max: 70 },
-    活跃期: { min: 70, max: 78 },
-    高潮期: { min: 78, max: 85 },
-    退潮期: { min: 85, max: 100 },
+    冰点: { min: 0, max: 35 },
+    启动: { min: 35, max: 55 },
+    发酵: { min: 55, max: 78 },
+    高潮: { min: 78, max: 100 },
+    退潮: { min: 0, max: 0 },
   },
 
   // 6. 因子贡献权重（各因子对题材热度的贡献比例）
@@ -764,15 +668,11 @@ export const THEME_EMOTION_IMPACT = {
 
   // 7. 情绪对题材轮动的影响（轮动速度）
   ROTATION_SPEED: {
-    冰点期: 0.8,
-    低迷期: 0.9,
-    启动期: 1.0,
-    震荡期: 1.0,
-    平稳期: 1.0,
-    发酵期: 1.2,
-    活跃期: 1.3,
-    高潮期: 1.4,
-    退潮期: 0.9,
+    冰点: 0.8,
+    启动: 1.0,
+    发酵: 1.2,
+    高潮: 1.4,
+    退潮: 0.9,
   },
 } as const
 
