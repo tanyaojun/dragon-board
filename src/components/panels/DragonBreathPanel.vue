@@ -246,6 +246,22 @@
             </div>
 
             <div class="hotlist-section">
+              <div class="section-title">📈 涨停证据</div>
+              <div class="history-grid limit-evidence-grid">
+                <div v-for="item in hotListLimitEvidenceItems" :key="item.label" class="history-item">
+                  <span class="history-label">{{ item.label }}</span>
+                  <span class="history-main">{{ item.main }}</span>
+                  <span class="history-sub">{{ item.sub }}</span>
+                </div>
+              </div>
+              <div class="history-extra">
+                <span>全市场涨停 {{ hotListMarketLimitEvidence?.ztCount || 0 }} 只</span>
+                <span>全市场炸板 {{ hotListMarketLimitEvidence?.zhabanCount || 0 }} 只</span>
+                <span>封板率 {{ formatPercentValue(hotListMarketLimitEvidence?.fengbanRate) }}</span>
+              </div>
+            </div>
+
+            <div class="hotlist-section">
               <div class="section-title">📊 前100状态结构</div>
               <div class="status-distribution">
                 <div v-for="item in hotListStatusItems" :key="item.label" class="status-item">
@@ -773,6 +789,8 @@ const hotPlates = computed(() => {
 
 const hotListComparison = computed(() => hotListSentiment.value?.metrics.comparison ?? null)
 const hotListToday = computed<HotListDayMetrics | null>(() => hotListComparison.value?.today ?? null)
+const hotListLimitEvidence = computed(() => hotListSentiment.value?.metrics.limitEvidence ?? null)
+const hotListMarketLimitEvidence = computed(() => hotListLimitEvidence.value?.market ?? null)
 const hotListYesterdayStrongPerformance = computed(
   () => hotListComparison.value?.yesterdayStrongPerformance ?? null,
 )
@@ -840,6 +858,36 @@ const hotListLayerItems = computed(() => {
     trin: formatTrin(metrics.hotTrin),
     avgChange: formatPercent(metrics.avgChange),
   }))
+})
+
+const hotListLimitEvidenceItems = computed(() => {
+  const evidence = hotListLimitEvidence.value
+  if (!evidence) return []
+  const intersection = evidence.intersection
+  const yesterdayHotLimit = evidence.yesterdayHotLimit
+
+  return [
+    {
+      label: '前100涨停',
+      main: `${intersection.top100LimitUpCount}只`,
+      sub: `占比 ${formatShare(intersection.top100LimitUpShare)} · 近涨停 ${intersection.top100NearLimitUpCount}只`,
+    },
+    {
+      label: '连板高度',
+      main: `${intersection.top100MaxBoardHeight || 0}板`,
+      sub: `二板以上 ${intersection.top100Board2PlusCount}只`,
+    },
+    {
+      label: '昨日热榜涨停',
+      main: `${yesterdayHotLimit.count}只`,
+      sub: `留榜 ${yesterdayHotLimit.retainedTop100Count}只 · 均涨 ${formatPercent(yesterdayHotLimit.avgChange)}`,
+    },
+    {
+      label: '涨停持续性',
+      main: formatShare(yesterdayHotLimit.positiveRate),
+      sub: `走弱/失败 ${formatShare(yesterdayHotLimit.failedOrWeakRate)}`,
+    },
+  ]
 })
 
 const hotListHistoryItems = computed(() => {
@@ -1170,6 +1218,7 @@ async function loadHotListSentiment() {
       stocks,
       yesterday: historical[0] || null,
       dayBefore: historical[1] || null,
+      marketData: marketData.value,
       topN: 100,
     })
   } catch (err: any) {
@@ -1216,6 +1265,11 @@ function formatAmount(amount?: number): string {
 function formatPercent(value?: number | null): string {
   if (value === undefined || value === null) return '--'
   return (value > 0 ? '+' : '') + value.toFixed(2) + '%'
+}
+
+function formatPercentValue(value?: number | null): string {
+  if (value === undefined || value === null || !Number.isFinite(Number(value))) return '--'
+  return Number(value).toFixed(0) + '%'
 }
 
 function formatShare(value?: number | null): string {

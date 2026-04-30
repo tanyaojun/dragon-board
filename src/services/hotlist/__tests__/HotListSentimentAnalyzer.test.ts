@@ -219,6 +219,80 @@ describe('HotListSentimentAnalyzer', () => {
     expect(result.metrics.layers.top20.activeOpportunityCount).toBeGreaterThan(0)
   })
 
+  it('按A股板块阈值统计热榜涨停和近涨停证据', () => {
+    const analyzer = new HotListSentimentAnalyzer()
+    const current = [
+      stock('600001', { compRank: 1, name: '主板股', change: 9.9 }),
+      stock('300001', { compRank: 2, name: '创业板股', change: 9.9 }),
+      stock('688001', { compRank: 3, name: '科创板股', change: 19.8 }),
+      stock('830001', { compRank: 4, name: '北交所股', change: 29 }),
+      stock('000001', { compRank: 5, name: '*ST测试', change: 4.9 }),
+      ...makeStocks(10, index => ({ code: `0010${String(index).padStart(2, '0')}`, compRank: index + 6 })),
+    ]
+
+    const result = analyzer.analyze({ stocks: current, topN: 100 })
+    const evidence = result.metrics.limitEvidence.intersection
+
+    expect(evidence.top100LimitUpCount).toBe(3)
+    expect(evidence.top100NearLimitUpCount).toBe(4)
+  })
+
+  it('热榜涨停证据只使用热榜交集，全市场数据仅作为背景', () => {
+    const analyzer = new HotListSentimentAnalyzer()
+    const current = makeStocks(100, index => ({
+      change: index < 4 ? 9.9 : 1,
+      zlje: index < 15 ? 2e8 : 0,
+      zljzb: index < 15 ? 15 : 0,
+      cddje: index < 15 ? 8000e4 : 0,
+      cddjzb: index < 15 ? 6 : 0,
+    }))
+
+    const result = analyzer.analyze({
+      stocks: current,
+      marketData: {
+        ztCount: 98,
+        zhaban: { count: 24, fengbanRate: 80 },
+        limitData: { yiban: 61, erban: 14, sanban: 3, sibanPlus: 1 },
+        maxContinuousDays: 5,
+      },
+    })
+
+    expect(result.metrics.limitEvidence.market.ztCount).toBe(98)
+    expect(result.metrics.limitEvidence.market.zhabanCount).toBe(24)
+    expect(result.metrics.limitEvidence.intersection.top100LimitUpCount).toBe(4)
+    expect(result.signals.join('')).toContain('全市场涨停 98 只')
+  })
+
+  it('昨日热榜涨停今日表现纳入持续性证据', () => {
+    const analyzer = new HotListSentimentAnalyzer()
+    const yesterday = makeStocks(100, index => ({
+      change: index < 6 ? 9.9 : 1,
+      zlje: index < 10 ? 2e8 : 0,
+      zljzb: index < 10 ? 15 : 0,
+      cddje: index < 10 ? 8000e4 : 0,
+      cddjzb: index < 10 ? 6 : 0,
+    }))
+    const current = makeStocks(100, index => ({
+      change: index < 2 ? 3 : index < 6 ? -3 : 1,
+      zlje: index < 2 ? 2e8 : index < 6 ? -1e8 : 0,
+      zljzb: index < 2 ? 15 : index < 6 ? -10 : 0,
+      cddje: index < 2 ? 8000e4 : index < 6 ? -4000e4 : 0,
+      cddjzb: index < 2 ? 6 : index < 6 ? -4 : 0,
+    }))
+
+    const result = analyzer.analyze({
+      stocks: current,
+      yesterday: { tradingDate: '2026-04-29', hotlist: yesterday },
+    })
+    const evidence = result.metrics.limitEvidence.yesterdayHotLimit
+
+    expect(evidence.count).toBe(6)
+    expect(evidence.retainedTop100Count).toBe(6)
+    expect(evidence.positiveRate).toBeCloseTo(2 / 6)
+    expect(evidence.failedOrWeakRate).toBeGreaterThanOrEqual(0.5)
+    expect(result.warnings.join('')).toContain('昨日热榜涨停')
+  })
+
   it('统计昨日强票今日平均涨幅、正收益率和转弱率', () => {
     const analyzer = new HotListSentimentAnalyzer()
     const yesterday = makeStocks(100, index => ({

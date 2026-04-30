@@ -9,6 +9,7 @@ import {
   getEmotionCycleStageSummary,
   type EmotionCycleStage,
 } from '../../types/emotion'
+import { StockUtils } from '../../utils/common'
 
 export type HotListStatusLabel =
   | '主升确认'
@@ -83,10 +84,66 @@ export interface HotListThreeDayComparison {
   yesterdayStrongPerformance: HotListYesterdayStrongPerformance
 }
 
+export interface DragonBreathMarketDataLike {
+  ztCount?: number
+  zhaban?: {
+    count?: number
+    rate?: number
+    fengbanRate?: number
+    ztCount?: number
+  }
+  limitData?: {
+    yiban?: number
+    erban?: number
+    sanban?: number
+    sibanPlus?: number
+  }
+  maxContinuousDays?: number
+}
+
+export interface HotListLimitMarketEvidence {
+  ztCount: number
+  zhabanCount: number
+  fengbanRate: number
+  board1: number
+  board2: number
+  board3: number
+  board4Plus: number
+  maxContinuousDays: number
+}
+
+export interface HotListLimitIntersectionEvidence {
+  top20LimitUpCount: number
+  top50LimitUpCount: number
+  top100LimitUpCount: number
+  top100LimitUpShare: number
+  top100NearLimitUpCount: number
+  top100Board2PlusCount: number
+  top100MaxBoardHeight: number
+  top100ZhabanCount: number
+  top100ZhabanShare: number
+}
+
+export interface HotListYesterdayHotLimitEvidence {
+  count: number
+  retainedTop100Count: number
+  avgChange: number | null
+  positiveRate: number | null
+  weakeningRate: number | null
+  failedOrWeakRate: number | null
+}
+
+export interface HotListLimitEvidence {
+  market: HotListLimitMarketEvidence
+  intersection: HotListLimitIntersectionEvidence
+  yesterdayHotLimit: HotListYesterdayHotLimitEvidence
+}
+
 export interface HotListSentimentMetrics {
   topN: number
   layers: HotListLayerSet
   comparison: HotListThreeDayComparison
+  limitEvidence: HotListLimitEvidence
 }
 
 export type HotListSentimentRiskLevel = '低' | '中' | '高'
@@ -111,7 +168,18 @@ export interface HotListSentimentInput {
   stocks: any[]
   yesterday?: HotListSentimentSnapshot | null
   dayBefore?: HotListSentimentSnapshot | null
+  marketData?: DragonBreathMarketDataLike | null
   topN?: number
+}
+
+interface HotListStockLimitSignal {
+  isLimitUp: boolean
+  isAlmostLimitUp: boolean
+  isLimitDown: boolean
+  threshold: number
+  boardHeight: number
+  isBoard2Plus: boolean
+  hasLimitMarker: boolean
 }
 
 const STATUS_LABELS: HotListStatusLabel[] = [
@@ -148,6 +216,10 @@ function normalizeCode(code: unknown): string {
   return String(code || '').trim()
 }
 
+function normalizeName(name: unknown): string {
+  return String(name || '').trim()
+}
+
 function getRows(snapshot?: HotListSentimentSnapshot | null): any[] {
   if (!snapshot) return []
   if (Array.isArray(snapshot.hotlist)) return snapshot.hotlist
@@ -158,6 +230,69 @@ function getRows(snapshot?: HotListSentimentSnapshot | null): any[] {
 function getRank(stock: any, fallbackIndex: number): number {
   const rank = toNumber(stock?.compRank ?? stock?.rank)
   return rank > 0 ? rank : fallbackIndex + 1
+}
+
+function parseBoardHeightText(value: unknown): number {
+  const raw = String(value || '').trim()
+  if (!raw) return 0
+  if (raw.includes('首板')) return 1
+  const match = raw.match(/(\d+)\s*(?:连?板|天|日)?/)
+  return match ? toNumber(match[1]) : 0
+}
+
+function getRawBoardHeight(stock: any): number {
+  const continuousDays = toNumber(stock?.continuousDays)
+  return Math.max(
+    toNumber(stock?.boardHeight),
+    toNumber(stock?.highDays),
+    continuousDays > 1 ? continuousDays : 0,
+    parseBoardHeightText(stock?.lianbanStr),
+    parseBoardHeightText(stock?.lianban),
+  )
+}
+
+function hasLimitUpMarker(stock: any): boolean {
+  return Boolean(
+    String(stock?.firstZtTime || '').trim() ||
+    String(stock?.lastZtTime || '').trim() ||
+    String(stock?.first_limit_up_time || '').trim() ||
+    String(stock?.last_limit_up_time || '').trim() ||
+    getRawBoardHeight(stock) > 0,
+  )
+}
+
+function hasStockZhabanSignal(stock: any): boolean {
+  return Boolean(
+    stock?.isZhaban === true ||
+    stock?.zhaban === true ||
+    stock?.openedLimit === true ||
+    stock?.limitOpened === true ||
+    stock?.failedLimitUp === true ||
+    stock?.isFailedLimitUp === true,
+  )
+}
+
+function getStockLimitSignal(stock: any): HotListStockLimitSignal {
+  const code = normalizeCode(stock?.code)
+  const name = normalizeName(stock?.name)
+  const status = StockUtils.checkLimitStatus(toNumber(stock?.change), code, name)
+  const hasLimitMarker = hasLimitUpMarker(stock)
+  const boardHeight = Math.max(getRawBoardHeight(stock), status.isLimitUp || hasLimitMarker ? 1 : 0)
+
+  return {
+    isLimitUp: status.isLimitUp,
+    isAlmostLimitUp: status.isAlmostLimitUp,
+    isLimitDown: status.isLimitDown,
+    threshold: status.threshold.up,
+    boardHeight,
+    isBoard2Plus: boardHeight >= 2,
+    hasLimitMarker,
+  }
+}
+
+function hasLimitUpEvidence(stock: any): boolean {
+  const signal = getStockLimitSignal(stock)
+  return signal.isLimitUp || signal.hasLimitMarker
 }
 
 function sortByRank(stocks: any[]): any[] {
@@ -269,7 +404,7 @@ function buildDayMetricsFromSorted(sorted: any[], options: { topN: number; tradi
       flatCount += 1
     }
 
-    if (change >= 9.5) nearLimitUpCount += 1
+    if (getStockLimitSignal(stock).isAlmostLimitUp) nearLimitUpCount += 1
     if (change >= 7) highGainCount += 1
     if (turnoverRate >= 10) highTurnoverCount += 1
   }
@@ -313,6 +448,157 @@ function buildDayMetricsFromSorted(sorted: any[], options: { topN: number; tradi
     riskShare: safeDivide(riskCount, top.length),
     crowdedCount,
     crowdedShare: safeDivide(crowdedCount, top.length),
+  }
+}
+
+function createEmptyMarketLimitEvidence(): HotListLimitMarketEvidence {
+  return {
+    ztCount: 0,
+    zhabanCount: 0,
+    fengbanRate: 0,
+    board1: 0,
+    board2: 0,
+    board3: 0,
+    board4Plus: 0,
+    maxContinuousDays: 0,
+  }
+}
+
+function buildMarketLimitEvidence(marketData?: DragonBreathMarketDataLike | null): HotListLimitMarketEvidence {
+  if (!marketData) return createEmptyMarketLimitEvidence()
+
+  const board1 = toNumber(marketData.limitData?.yiban)
+  const board2 = toNumber(marketData.limitData?.erban)
+  const board3 = toNumber(marketData.limitData?.sanban)
+  const board4Plus = toNumber(marketData.limitData?.sibanPlus)
+  const fallbackMaxContinuousDays =
+    board4Plus > 0 ? 4 : board3 > 0 ? 3 : board2 > 0 ? 2 : board1 > 0 ? 1 : 0
+
+  return {
+    ztCount: toNumber(marketData.ztCount),
+    zhabanCount: toNumber(marketData.zhaban?.count),
+    fengbanRate: toNumber(marketData.zhaban?.fengbanRate),
+    board1,
+    board2,
+    board3,
+    board4Plus,
+    maxContinuousDays: toNumber(marketData.maxContinuousDays) || fallbackMaxContinuousDays,
+  }
+}
+
+function countLimitUpInSlice(rows: any[]): number {
+  return rows.filter(hasLimitUpEvidence).length
+}
+
+function buildLimitIntersectionEvidence(sorted: any[], topN: number): HotListLimitIntersectionEvidence {
+  const top20 = sorted.slice(0, 20)
+  const top50 = sorted.slice(0, 50)
+  const top100 = sorted.slice(0, topN)
+  let top100NearLimitUpCount = 0
+  let top100Board2PlusCount = 0
+  let top100MaxBoardHeight = 0
+  let top100ZhabanCount = 0
+
+  for (const stock of top100) {
+    const signal = getStockLimitSignal(stock)
+    if (signal.isAlmostLimitUp) top100NearLimitUpCount += 1
+    if (signal.isBoard2Plus) top100Board2PlusCount += 1
+    top100MaxBoardHeight = Math.max(top100MaxBoardHeight, signal.boardHeight)
+    if (hasStockZhabanSignal(stock)) top100ZhabanCount += 1
+  }
+
+  const top100LimitUpCount = countLimitUpInSlice(top100)
+
+  return {
+    top20LimitUpCount: countLimitUpInSlice(top20),
+    top50LimitUpCount: countLimitUpInSlice(top50),
+    top100LimitUpCount,
+    top100LimitUpShare: safeDivide(top100LimitUpCount, top100.length),
+    top100NearLimitUpCount,
+    top100Board2PlusCount,
+    top100MaxBoardHeight,
+    top100ZhabanCount,
+    top100ZhabanShare: safeDivide(top100ZhabanCount, top100.length),
+  }
+}
+
+function createEmptyYesterdayHotLimitEvidence(): HotListYesterdayHotLimitEvidence {
+  return {
+    count: 0,
+    retainedTop100Count: 0,
+    avgChange: null,
+    positiveRate: null,
+    weakeningRate: null,
+    failedOrWeakRate: null,
+  }
+}
+
+function buildYesterdayHotLimitEvidence(
+  yesterdayRows: any[],
+  todayRows: any[],
+  topN: number,
+): HotListYesterdayHotLimitEvidence {
+  if (!yesterdayRows.length) return createEmptyYesterdayHotLimitEvidence()
+
+  const todayByCode = countByCode(todayRows)
+  const todayTopCodes = new Set(todayRows.slice(0, topN).map(stock => normalizeCode(stock?.code)))
+  const getTodayStatus = createStockStatusResolver(todayRows)
+  const yesterdayLimitCodes = yesterdayRows
+    .slice(0, topN)
+    .filter(hasLimitUpEvidence)
+    .map(stock => normalizeCode(stock?.code))
+    .filter(Boolean)
+
+  if (!yesterdayLimitCodes.length) return createEmptyYesterdayHotLimitEvidence()
+
+  let matchedCount = 0
+  let retainedTop100Count = 0
+  let changeSum = 0
+  let positiveCount = 0
+  let weakeningCount = 0
+  let failedOrWeakCount = 0
+
+  for (const code of yesterdayLimitCodes) {
+    const stock = todayByCode.get(code)
+    if (!stock) {
+      weakeningCount += 1
+      failedOrWeakCount += 1
+      continue
+    }
+
+    const change = toNumber(stock?.change)
+    const todayStatus = getTodayStatus(stock).label
+    const todayLimitSignal = getStockLimitSignal(stock)
+    const isRiskStatus = todayStatus === '资金背离' || todayStatus === '转弱预警'
+
+    matchedCount += 1
+    changeSum += change
+    if (change > 0) positiveCount += 1
+    if (todayTopCodes.has(code)) retainedTop100Count += 1
+    if (change <= -2 || isRiskStatus) weakeningCount += 1
+    if (change <= 0 || isRiskStatus || !todayLimitSignal.isAlmostLimitUp) failedOrWeakCount += 1
+  }
+
+  return {
+    count: yesterdayLimitCodes.length,
+    retainedTop100Count,
+    avgChange: matchedCount ? safeDivide(changeSum, matchedCount) : null,
+    positiveRate: matchedCount ? safeDivide(positiveCount, matchedCount) : null,
+    weakeningRate: safeDivide(weakeningCount, yesterdayLimitCodes.length),
+    failedOrWeakRate: safeDivide(failedOrWeakCount, yesterdayLimitCodes.length),
+  }
+}
+
+function buildLimitEvidence(
+  todayRows: any[],
+  yesterdayRows: any[],
+  topN: number,
+  marketData?: DragonBreathMarketDataLike | null,
+): HotListLimitEvidence {
+  return {
+    market: buildMarketLimitEvidence(marketData),
+    intersection: buildLimitIntersectionEvidence(todayRows, topN),
+    yesterdayHotLimit: buildYesterdayHotLimitEvidence(yesterdayRows, todayRows, topN),
   }
 }
 
@@ -622,6 +908,51 @@ function evaluateContinuity(comparison: HotListThreeDayComparison): StageEvidenc
   return { level: weak ? 'weak' : strong ? 'strong' : 'normal', signals, warnings }
 }
 
+function collectLimitEvidenceMessages(limitEvidence?: HotListLimitEvidence): StageEvidence<'neutral'> {
+  const signals: string[] = []
+  const warnings: string[] = []
+  if (!limitEvidence) return { level: 'neutral', signals, warnings }
+
+  const { market, intersection, yesterdayHotLimit } = limitEvidence
+  pushIf(
+    signals,
+    intersection.top100LimitUpCount > 0 || intersection.top100NearLimitUpCount > 0,
+    `热榜前100涨停 ${intersection.top100LimitUpCount} 只，近涨停 ${intersection.top100NearLimitUpCount} 只`,
+  )
+  pushIf(
+    signals,
+    intersection.top100Board2PlusCount > 0,
+    `热榜前100二板以上 ${intersection.top100Board2PlusCount} 只，最高 ${intersection.top100MaxBoardHeight} 板`,
+  )
+  pushIf(
+    signals,
+    market.ztCount > 0,
+    `全市场涨停 ${market.ztCount} 只，封板率 ${market.fengbanRate.toFixed(0)}%`,
+  )
+  pushIf(
+    signals,
+    yesterdayHotLimit.positiveRate !== null && yesterdayHotLimit.positiveRate >= 0.55,
+    `昨日热榜涨停今日正收益率 ${((yesterdayHotLimit.positiveRate ?? 0) * 100).toFixed(0)}%`,
+  )
+  pushIf(
+    warnings,
+    intersection.top100ZhabanCount > 0,
+    `热榜前100个股炸板 ${intersection.top100ZhabanCount} 只`,
+  )
+  pushIf(
+    warnings,
+    yesterdayHotLimit.failedOrWeakRate !== null && yesterdayHotLimit.failedOrWeakRate >= 0.5,
+    `昨日热榜涨停走弱或冲板失败率 ${((yesterdayHotLimit.failedOrWeakRate ?? 0) * 100).toFixed(0)}%`,
+  )
+  pushIf(
+    warnings,
+    market.zhabanCount > 0,
+    `全市场炸板 ${market.zhabanCount} 只，仅作背景参考`,
+  )
+
+  return { level: 'neutral', signals, warnings }
+}
+
 function isRiskElevated(risk: RiskPressureLevel): boolean {
   return risk === 'high' || risk === 'severe'
 }
@@ -639,7 +970,7 @@ function resolveRiskLevel(
   return '低'
 }
 
-function resolveStage(comparison: HotListThreeDayComparison, layers?: HotListLayerSet): {
+function resolveStage(comparison: HotListThreeDayComparison, layers?: HotListLayerSet, limitEvidence?: HotListLimitEvidence): {
   stage: EmotionCycleStage
   riskLevel: HotListSentimentRiskLevel
   signals: string[]
@@ -651,12 +982,14 @@ function resolveStage(comparison: HotListThreeDayComparison, layers?: HotListLay
   const opportunityExpansion = evaluateOpportunityExpansion(comparison)
   const riskPressure = evaluateRiskPressure(comparison)
   const continuity = evaluateContinuity(comparison)
+  const limitMessages = collectLimitEvidenceMessages(limitEvidence)
   const signals = [
     ...tapeStrength.signals,
     ...moneyAcceptance.signals,
     ...opportunityExpansion.signals,
     ...riskPressure.signals,
     ...continuity.signals,
+    ...limitMessages.signals,
   ]
   const warnings = [
     ...tapeStrength.warnings,
@@ -664,6 +997,7 @@ function resolveStage(comparison: HotListThreeDayComparison, layers?: HotListLay
     ...opportunityExpansion.warnings,
     ...riskPressure.warnings,
     ...continuity.warnings,
+    ...limitMessages.warnings,
   ]
 
   const totalExpanded = comparison.totalChange1d !== null ? comparison.totalChange1d > 0 : false
@@ -682,6 +1016,27 @@ function resolveStage(comparison: HotListThreeDayComparison, layers?: HotListLay
   const highHeat =
     today.nearLimitUpCount >= 10 ||
     (today.highGainCount >= 25 && today.highTurnoverCount >= 20)
+  const limitIntersection = limitEvidence?.intersection
+  const yesterdayHotLimit = limitEvidence?.yesterdayHotLimit
+  const limitSpread = Boolean(
+    limitIntersection &&
+    (limitIntersection.top100LimitUpCount >= 6 ||
+      limitIntersection.top100NearLimitUpCount >= 10),
+  )
+  const frontLimitHot = Boolean(
+    limitIntersection &&
+    (limitIntersection.top20LimitUpCount >= 3 || limitIntersection.top50LimitUpCount >= 6),
+  )
+  const limitHeightConfirmed = Boolean(
+    limitIntersection &&
+    (limitIntersection.top100Board2PlusCount >= 3 || limitIntersection.top100MaxBoardHeight >= 3),
+  )
+  const yesterdayLimitWeak = Boolean(
+    yesterdayHotLimit &&
+    yesterdayHotLimit.count >= 3 &&
+    yesterdayHotLimit.failedOrWeakRate !== null &&
+    yesterdayHotLimit.failedOrWeakRate >= 0.5,
+  )
   const severeRiskWithShrinkingBreadth =
     riskPressure.level === 'severe' &&
     totalShrank &&
@@ -698,9 +1053,10 @@ function resolveStage(comparison: HotListThreeDayComparison, layers?: HotListLay
 
   const retreat =
     severeRiskWithShrinkingBreadth ||
+    (yesterdayLimitWeak && riskElevated && (tapeWeak || moneyWeak)) ||
     (riskElevated && (tapeWeak || moneyWeak)) ||
     (riskPressure.level === 'severe' && continuity.level === 'weak' && today.upRatio < 0.52) ||
-    (totalShrank && opportunityExpansion.level === 'scarce' && today.upRatio < 0.5)
+    (totalShrank && opportunityExpansion.level === 'scarce' && today.upRatio < 0.5 && (riskElevated || moneyWeak))
 
   if (retreat) {
     return {
@@ -716,6 +1072,7 @@ function resolveStage(comparison: HotListThreeDayComparison, layers?: HotListLay
     moneyNotWeak &&
     (
       (moneyAcceptance.level === 'strong' && highHeat && broadSpread) ||
+      (frontLimitHot && limitHeightConfirmed && today.crowdedShare >= 0.16 && broadSpread) ||
       (today.nearLimitUpCount >= 8 && today.crowdedShare >= 0.18 && broadSpread) ||
       (today.crowdedShare >= 0.28 && today.activeOpportunityShare >= 0.22)
     )
@@ -730,7 +1087,7 @@ function resolveStage(comparison: HotListThreeDayComparison, layers?: HotListLay
   }
 
   const ferment =
-    (opportunityExpansion.level === 'broad' || effectiveSpread) &&
+    (opportunityExpansion.level === 'broad' || effectiveSpread || (limitSpread && today.activeOpportunityShare >= 0.12)) &&
     tapeAtLeastFirm &&
     moneyNotWeak
 
@@ -744,7 +1101,10 @@ function resolveStage(comparison: HotListThreeDayComparison, layers?: HotListLay
   }
 
   const start =
-    (totalExpanded || opportunityExpansion.level === 'improving' || comparison.newTop100Count >= 25) &&
+    (totalExpanded ||
+      opportunityExpansion.level === 'improving' ||
+      comparison.newTop100Count >= 25 ||
+      (limitIntersection?.top100NearLimitUpCount || 0) >= 3) &&
     today.upRatio >= 0.42 &&
     moneyNotWeak &&
     !tapeWeak
@@ -775,9 +1135,12 @@ function calculateConfidence(stage: EmotionCycleStage, signals: string[], warnin
 export class HotListSentimentAnalyzer {
   analyze(input: HotListSentimentInput): HotListSentimentResult {
     const topN = input.topN && input.topN > 0 ? input.topN : 100
+    const sortedStocks = sortByRank(input.stocks || [])
+    const yesterdayRows = sortByRank(getRows(input.yesterday))
     const layers = buildLayerMetrics(input.stocks || [])
     const comparison = buildComparison(input.stocks || [], input.yesterday, input.dayBefore, topN)
-    const stageEvidence = resolveStage(comparison, layers)
+    const limitEvidence = buildLimitEvidence(sortedStocks, yesterdayRows, topN, input.marketData)
+    const stageEvidence = resolveStage(comparison, layers, limitEvidence)
     const confidence = calculateConfidence(stageEvidence.stage, stageEvidence.signals, stageEvidence.warnings)
 
     return {
@@ -789,6 +1152,7 @@ export class HotListSentimentAnalyzer {
         topN,
         layers,
         comparison,
+        limitEvidence,
       },
       signals: stageEvidence.signals,
       warnings: stageEvidence.warnings,
