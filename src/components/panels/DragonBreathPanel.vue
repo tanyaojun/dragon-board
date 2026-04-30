@@ -232,6 +232,20 @@
             </div>
 
             <div class="hotlist-section">
+              <div class="section-title">📌 分层结构</div>
+              <div class="history-grid layer-grid">
+                <div v-for="item in hotListLayerItems" :key="item.label" class="history-item">
+                  <span class="history-label">{{ item.label }}</span>
+                  <span class="history-main">{{ item.upRatio }}</span>
+                  <span class="history-sub">
+                    机会 {{ item.activeOpportunity }} · 拥挤 {{ item.crowded }} · 风险 {{ item.risk }}
+                  </span>
+                  <span class="history-sub">TRIN {{ item.trin }} · 均涨 {{ item.avgChange }}</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="hotlist-section">
               <div class="section-title">📊 前100状态结构</div>
               <div class="status-distribution">
                 <div v-for="item in hotListStatusItems" :key="item.label" class="status-item">
@@ -262,6 +276,9 @@
                 <span>今日新入前100 {{ hotListComparison?.newTop100Count || 0 }} 只</span>
                 <span>新入强资 {{ hotListComparison?.newTop100StrongMoneyCount || 0 }} 只</span>
                 <span>昨日强资留榜 {{ formatShare(hotListComparison?.yesterdayStrongRetainRate) }}</span>
+                <span>昨日强票均涨 {{ formatPercent(hotListYesterdayStrongPerformance?.avgChange) }}</span>
+                <span>昨日强票正收益 {{ formatShare(hotListYesterdayStrongPerformance?.positiveRate) }}</span>
+                <span>昨日强票转弱 {{ formatShare(hotListYesterdayStrongPerformance?.weakeningRate) }}</span>
               </div>
             </div>
 
@@ -756,10 +773,13 @@ const hotPlates = computed(() => {
 
 const hotListComparison = computed(() => hotListSentiment.value?.metrics.comparison ?? null)
 const hotListToday = computed<HotListDayMetrics | null>(() => hotListComparison.value?.today ?? null)
+const hotListYesterdayStrongPerformance = computed(
+  () => hotListComparison.value?.yesterdayStrongPerformance ?? null,
+)
 const hotListActiveOpportunityCount = computed(() => {
   const counts = hotListToday.value?.statusCounts
   if (!counts) return 0
-  return counts['强资确认'] + counts['点火观察']
+  return hotListToday.value?.activeOpportunityCount ?? counts['强资确认'] + counts['点火观察']
 })
 const hotListActiveOpportunityShare = computed(() => {
   const topN = hotListToday.value?.topN || 0
@@ -800,6 +820,25 @@ const hotListStatusItems = computed(() => {
     ...item,
     count: today.statusCounts[item.label] || 0,
     shareText: formatShare(today.statusShares[item.label] || 0),
+  }))
+})
+
+const hotListLayerItems = computed(() => {
+  const layers = hotListSentiment.value?.metrics.layers
+  if (!layers) return []
+
+  return [
+    { label: '前20', metrics: layers.top20 },
+    { label: '前50', metrics: layers.top50 },
+    { label: '前100', metrics: layers.top100 },
+  ].map(({ label, metrics }) => ({
+    label,
+    upRatio: formatShare(metrics.upRatio),
+    activeOpportunity: `${metrics.activeOpportunityCount} / ${formatShare(metrics.activeOpportunityShare)}`,
+    crowded: `${metrics.crowdedCount} / ${formatShare(metrics.crowdedShare)}`,
+    risk: `${metrics.riskCount} / ${formatShare(metrics.riskShare)}`,
+    trin: formatTrin(metrics.hotTrin),
+    avgChange: formatPercent(metrics.avgChange),
   }))
 })
 
@@ -1174,7 +1213,7 @@ function formatAmount(amount?: number): string {
   return sign + yi.toFixed(0) + '亿'
 }
 
-function formatPercent(value?: number): string {
+function formatPercent(value?: number | null): string {
   if (value === undefined || value === null) return '--'
   return (value > 0 ? '+' : '') + value.toFixed(2) + '%'
 }

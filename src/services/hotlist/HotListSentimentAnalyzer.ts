@@ -41,12 +41,29 @@ export interface HotListDayMetrics {
   highTurnoverCount: number
   statusCounts: Record<HotListStatusLabel, number>
   statusShares: Record<HotListStatusLabel, number>
+  activeOpportunityCount: number
+  activeOpportunityShare: number
   opportunityCount: number
   opportunityShare: number
   riskCount: number
   riskShare: number
   crowdedCount: number
   crowdedShare: number
+}
+
+export type HotListLayerKey = 'top20' | 'top50' | 'top100'
+
+export type HotListLayerSet = Record<HotListLayerKey, HotListDayMetrics>
+
+export interface HotListYesterdayStrongPerformance {
+  count: number
+  matchedCount: number
+  retainedTop100Count: number
+  avgChange: number | null
+  positiveCount: number
+  positiveRate: number | null
+  weakeningCount: number
+  weakeningRate: number | null
 }
 
 export interface HotListThreeDayComparison {
@@ -63,10 +80,12 @@ export interface HotListThreeDayComparison {
   newTop100StrongMoneyCount: number
   yesterdayStrongRetainRate: number | null
   yesterdayCrowdedRiskCount: number
+  yesterdayStrongPerformance: HotListYesterdayStrongPerformance
 }
 
 export interface HotListSentimentMetrics {
   topN: number
+  layers: HotListLayerSet
   comparison: HotListThreeDayComparison
 }
 
@@ -110,6 +129,12 @@ const ZERO_STATUS_COUNTS = STATUS_LABELS.reduce(
   },
   {} as Record<HotListStatusLabel, number>,
 )
+
+const YESTERDAY_STRONG_LABELS = new Set<HotListStatusLabel>([
+  '主升确认',
+  '点火观察',
+  '强资确认',
+])
 
 function toNumber(value: unknown): number {
   const number = Number(value)
@@ -166,11 +191,17 @@ function getFallbackHistoricalStatus(stock: any): RankTrendDisplayStatus {
   return { label: '样本不足', classKey: 'insufficient', tooltip: '' }
 }
 
-function getStockStatus(stock: any, contextStocks: any[]): RankTrendDisplayStatus {
+function createStockStatusResolver(contextStocks: any[]): (stock: any) => RankTrendDisplayStatus {
   const context = buildRankTrendStatusContext(contextStocks)
-  const rankTrend = getRankTrendAnalysis(stock)
-  if (rankTrend) return getRankTrendDisplayStatus(rankTrend, stock, context)
-  return getFallbackHistoricalStatus(stock)
+  return (stock: any) => {
+    const rankTrend = getRankTrendAnalysis(stock)
+    if (rankTrend) return getRankTrendDisplayStatus(rankTrend, stock, context)
+    return getFallbackHistoricalStatus(stock)
+  }
+}
+
+function getStockStatus(stock: any, contextStocks: any[]): RankTrendDisplayStatus {
+  return createStockStatusResolver(contextStocks)(stock)
 }
 
 function countByCode(stocks: any[]): Map<string, any> {
@@ -192,10 +223,10 @@ function calculateHotTrin(upCount: number, downCount: number, upTurnover: number
   return (upCount / downCount) / (upTurnover / downTurnover)
 }
 
-function buildDayMetrics(stocks: any[], options: { topN: number; tradingDate?: string }): HotListDayMetrics {
-  const sorted = sortByRank(stocks)
+function buildDayMetricsFromSorted(sorted: any[], options: { topN: number; tradingDate?: string }): HotListDayMetrics {
   const top = sorted.slice(0, options.topN)
   const statusCounts = createStatusCounts()
+  const getStatus = createStockStatusResolver(sorted)
 
   let upCount = 0
   let downCount = 0
@@ -214,7 +245,7 @@ function buildDayMetrics(stocks: any[], options: { topN: number; tradingDate?: s
     const change = toNumber(stock?.change)
     const turnover = toNumber(stock?.turnover)
     const turnoverRate = toNumber(stock?.turnoverRate)
-    const status = getStockStatus(stock, sorted)
+    const status = getStatus(stock)
     const label = STATUS_LABELS.includes(status.label as HotListStatusLabel)
       ? status.label as HotListStatusLabel
       : '样本不足'
@@ -245,7 +276,8 @@ function buildDayMetrics(stocks: any[], options: { topN: number; tradingDate?: s
     statusShares[label] = safeDivide(statusCounts[label], top.length)
   }
 
-  const opportunityCount = statusCounts['主升确认'] + statusCounts['点火观察'] + statusCounts['强资确认'] + statusCounts['新入观察']
+  const activeOpportunityCount = statusCounts['主升确认'] + statusCounts['点火观察'] + statusCounts['强资确认']
+  const opportunityCount = activeOpportunityCount + statusCounts['新入观察']
   const riskCount = statusCounts['资金背离'] + statusCounts['转弱预警']
   const crowdedCount = statusCounts['高位拥挤']
 
@@ -270,12 +302,100 @@ function buildDayMetrics(stocks: any[], options: { topN: number; tradingDate?: s
     highTurnoverCount,
     statusCounts,
     statusShares,
+    activeOpportunityCount,
+    activeOpportunityShare: safeDivide(activeOpportunityCount, top.length),
     opportunityCount,
     opportunityShare: safeDivide(opportunityCount, top.length),
     riskCount,
     riskShare: safeDivide(riskCount, top.length),
     crowdedCount,
     crowdedShare: safeDivide(crowdedCount, top.length),
+  }
+}
+
+function buildDayMetrics(stocks: any[], options: { topN: number; tradingDate?: string }): HotListDayMetrics {
+  return buildDayMetricsFromSorted(sortByRank(stocks), options)
+}
+
+function buildLayerMetrics(stocks: any[], tradingDate?: string): HotListLayerSet {
+  const sorted = sortByRank(stocks)
+  return {
+    top20: buildDayMetricsFromSorted(sorted, { topN: 20, tradingDate }),
+    top50: buildDayMetricsFromSorted(sorted, { topN: 50, tradingDate }),
+    top100: buildDayMetricsFromSorted(sorted, { topN: 100, tradingDate }),
+  }
+}
+
+function createEmptyYesterdayStrongPerformance(): HotListYesterdayStrongPerformance {
+  return {
+    count: 0,
+    matchedCount: 0,
+    retainedTop100Count: 0,
+    avgChange: null,
+    positiveCount: 0,
+    positiveRate: null,
+    weakeningCount: 0,
+    weakeningRate: null,
+  }
+}
+
+function buildYesterdayStrongPerformance(
+  yesterdayRows: any[],
+  todayRows: any[],
+  topN: number,
+): HotListYesterdayStrongPerformance {
+  if (!yesterdayRows.length) return createEmptyYesterdayStrongPerformance()
+
+  const getYesterdayStatus = createStockStatusResolver(yesterdayRows)
+  const getTodayStatus = createStockStatusResolver(todayRows)
+  const todayByCode = countByCode(todayRows)
+  const todayTopCodes = new Set(todayRows.slice(0, topN).map(stock => normalizeCode(stock?.code)))
+
+  const strongCodes = yesterdayRows
+    .slice(0, topN)
+    .filter((stock) => {
+      const label = getYesterdayStatus(stock).label as HotListStatusLabel
+      return YESTERDAY_STRONG_LABELS.has(label)
+    })
+    .map(stock => normalizeCode(stock?.code))
+    .filter(Boolean)
+
+  if (!strongCodes.length) return createEmptyYesterdayStrongPerformance()
+
+  let matchedCount = 0
+  let retainedTop100Count = 0
+  let changeSum = 0
+  let positiveCount = 0
+  let weakeningCount = 0
+
+  for (const code of strongCodes) {
+    const stock = todayByCode.get(code)
+    if (!stock) {
+      weakeningCount += 1
+      continue
+    }
+
+    const change = toNumber(stock?.change)
+    const todayStatus = getTodayStatus(stock).label
+
+    matchedCount += 1
+    changeSum += change
+    if (change > 0) positiveCount += 1
+    if (todayTopCodes.has(code)) retainedTop100Count += 1
+    if (change <= -2 || todayStatus === '资金背离' || todayStatus === '转弱预警') {
+      weakeningCount += 1
+    }
+  }
+
+  return {
+    count: strongCodes.length,
+    matchedCount,
+    retainedTop100Count,
+    avgChange: matchedCount ? safeDivide(changeSum, matchedCount) : null,
+    positiveCount,
+    positiveRate: matchedCount ? safeDivide(positiveCount, matchedCount) : null,
+    weakeningCount,
+    weakeningRate: safeDivide(weakeningCount, strongCodes.length),
   }
 }
 
@@ -288,13 +408,15 @@ function buildComparison(
   const todayRows = sortByRank(stocks)
   const yesterdayRows = sortByRank(getRows(yesterdaySnapshot))
   const dayBeforeRows = sortByRank(getRows(dayBeforeSnapshot))
+  const getTodayStatus = createStockStatusResolver(todayRows)
+  const getYesterdayStatus = createStockStatusResolver(yesterdayRows)
 
-  const today = buildDayMetrics(todayRows, { topN })
+  const today = buildDayMetricsFromSorted(todayRows, { topN })
   const yesterday = yesterdayRows.length
-    ? buildDayMetrics(yesterdayRows, { topN, tradingDate: yesterdaySnapshot?.tradingDate })
+    ? buildDayMetricsFromSorted(yesterdayRows, { topN, tradingDate: yesterdaySnapshot?.tradingDate })
     : undefined
   const dayBefore = dayBeforeRows.length
-    ? buildDayMetrics(dayBeforeRows, { topN, tradingDate: dayBeforeSnapshot?.tradingDate })
+    ? buildDayMetricsFromSorted(dayBeforeRows, { topN, tradingDate: dayBeforeSnapshot?.tradingDate })
     : undefined
 
   const todayTopCodes = new Set(todayRows.slice(0, topN).map(stock => normalizeCode(stock?.code)))
@@ -307,18 +429,18 @@ function buildComparison(
   const newTop100Codes = [...todayTopCodes].filter(code => !yesterdayTopCodes.has(code))
   const newTop100StrongMoneyCount = newTop100Codes.filter((code) => {
     const stock = todayByCode.get(code)
-    return stock && getStockStatus(stock, todayRows).label === '强资确认'
+    return stock && getTodayStatus(stock).label === '强资确认'
   }).length
 
   const yesterdayStrongCodes = yesterdayRows
     .slice(0, topN)
-    .filter(stock => getStockStatus(stock, yesterdayRows).label === '强资确认')
+    .filter(stock => getYesterdayStatus(stock).label === '强资确认')
     .map(stock => normalizeCode(stock?.code))
     .filter(Boolean)
 
   const yesterdayCrowdedCodes = yesterdayRows
     .slice(0, topN)
-    .filter(stock => getStockStatus(stock, yesterdayRows).label === '高位拥挤')
+    .filter(stock => getYesterdayStatus(stock).label === '高位拥挤')
     .map(stock => normalizeCode(stock?.code))
     .filter(Boolean)
 
@@ -329,9 +451,10 @@ function buildComparison(
   const yesterdayCrowdedRiskCount = yesterdayCrowdedCodes.filter((code) => {
     const stock = todayByCode.get(code)
     if (!stock) return false
-    const label = getStockStatus(stock, todayRows).label
+    const label = getTodayStatus(stock).label
     return label === '资金背离' || label === '转弱预警'
   }).length
+  const yesterdayStrongPerformance = buildYesterdayStrongPerformance(yesterdayRows, todayRows, topN)
 
   return {
     today,
@@ -347,6 +470,7 @@ function buildComparison(
     newTop100StrongMoneyCount,
     yesterdayStrongRetainRate,
     yesterdayCrowdedRiskCount,
+    yesterdayStrongPerformance,
   }
 }
 
@@ -362,43 +486,198 @@ function isTrinWeak(value: number | null): boolean {
   return value !== null && value > 1.15
 }
 
-function resolveStage(comparison: HotListThreeDayComparison): {
+type TapeStrengthLevel = 'strong' | 'firm' | 'mixed' | 'weak'
+type MoneyAcceptanceLevel = 'strong' | 'neutral' | 'weak' | 'unknown'
+type OpportunityExpansionLevel = 'broad' | 'improving' | 'normal' | 'scarce'
+type RiskPressureLevel = 'severe' | 'high' | 'crowded' | 'low'
+type ContinuityLevel = 'strong' | 'normal' | 'weak'
+
+interface StageEvidence<T extends string> {
+  level: T
+  signals: string[]
+  warnings: string[]
+}
+
+function evaluateTapeStrength(today: HotListDayMetrics, layers?: HotListLayerSet): StageEvidence<TapeStrengthLevel> {
+  const top20 = layers?.top20 ?? today
+  const top50 = layers?.top50 ?? today
+  const top100 = layers?.top100 ?? today
+  const signals: string[] = []
+  const warnings: string[] = []
+
+  const strong = top20.upRatio >= 0.65 && top50.upRatio >= 0.55 && top100.upRatio >= 0.55
+  const firm = top20.upRatio >= 0.6 && top100.upRatio >= 0.48
+  const weak = top100.upRatio <= 0.42 || (top20.upRatio < 0.5 && top50.upRatio < 0.45)
+  const level: TapeStrengthLevel = strong ? 'strong' : firm ? 'firm' : weak ? 'weak' : 'mixed'
+
+  pushIf(signals, strong, '前20/前50/前100上涨扩散较强')
+  pushIf(signals, !strong && firm, '前排上涨修复，前100仍有承接')
+  pushIf(signals, today.nearLimitUpCount >= 8, `前100近涨停 ${today.nearLimitUpCount} 只`)
+  pushIf(signals, today.highGainCount >= 18, `前100高涨幅 ${today.highGainCount} 只`)
+  pushIf(warnings, weak, `热榜上涨宽度偏弱，前100上涨 ${(top100.upRatio * 100).toFixed(0)}%`)
+
+  return { level, signals, warnings }
+}
+
+function evaluateMoneyAcceptance(today: HotListDayMetrics): StageEvidence<MoneyAcceptanceLevel> {
+  const signals: string[] = []
+  const warnings: string[] = []
+  let level: MoneyAcceptanceLevel = 'neutral'
+
+  if (today.hotTrin === null) {
+    level = 'unknown'
+  } else if (isTrinStrong(today.hotTrin)) {
+    level = 'strong'
+    signals.push(`热榜 TRIN ${today.hotTrin.toFixed(2)}，上涨股成交承接占优`)
+  } else if (isTrinWeak(today.hotTrin)) {
+    level = 'weak'
+    warnings.push(`热榜 TRIN ${today.hotTrin.toFixed(2)}，上涨家数与成交承接不匹配`)
+  }
+
+  return { level, signals, warnings }
+}
+
+function evaluateOpportunityExpansion(comparison: HotListThreeDayComparison): StageEvidence<OpportunityExpansionLevel> {
+  const today = comparison.today
+  const yesterday = comparison.yesterday
+  const signals: string[] = []
+  const warnings: string[] = []
+  const activeOpportunityShare = today.activeOpportunityShare
+  const strongMoneyShare = today.statusShares['强资确认']
+  const opportunityRising = Boolean(
+    yesterday && activeOpportunityShare > yesterday.activeOpportunityShare + 0.04,
+  )
+
+  const broad = activeOpportunityShare >= 0.18 && strongMoneyShare >= 0.08
+  const improving = opportunityRising || comparison.newTop100Count >= 25
+  const scarce = activeOpportunityShare < 0.08
+  const level: OpportunityExpansionLevel = broad ? 'broad' : improving ? 'improving' : scarce ? 'scarce' : 'normal'
+
+  pushIf(signals, broad, `强资确认与点火观察形成扩散，占比 ${(activeOpportunityShare * 100).toFixed(0)}%`)
+  pushIf(signals, !broad && opportunityRising, '有效机会占比较昨日改善')
+  pushIf(signals, !broad && comparison.newTop100Count >= 25, `今日新入前100 ${comparison.newTop100Count} 只`)
+  pushIf(warnings, scarce, `有效机会偏少，占比 ${(activeOpportunityShare * 100).toFixed(0)}%`)
+
+  return { level, signals, warnings }
+}
+
+function evaluateRiskPressure(comparison: HotListThreeDayComparison): StageEvidence<RiskPressureLevel> {
+  const today = comparison.today
+  const yesterday = comparison.yesterday
+  const signals: string[] = []
+  const warnings: string[] = []
+  const riskRising = Boolean(yesterday && today.riskShare > yesterday.riskShare + 0.04)
+  const crowdedRising = Boolean(yesterday && today.crowdedShare > yesterday.crowdedShare + 0.04)
+
+  let level: RiskPressureLevel = 'low'
+  if (today.riskShare >= 0.35) {
+    level = 'severe'
+  } else if (today.riskShare >= 0.2 || riskRising) {
+    level = 'high'
+  } else if (today.crowdedShare >= 0.18 || crowdedRising) {
+    level = 'crowded'
+  }
+
+  pushIf(warnings, today.riskShare >= 0.35, `风险压力 ${(today.riskShare * 100).toFixed(0)}%，资金背离与转弱预警偏高`)
+  pushIf(warnings, today.riskShare >= 0.2 && today.riskShare < 0.35, `风险压力 ${(today.riskShare * 100).toFixed(0)}%`)
+  pushIf(warnings, riskRising, '资金背离与转弱预警占比上升')
+  pushIf(warnings, today.crowdedShare >= 0.18, `高位拥挤 ${(today.crowdedShare * 100).toFixed(0)}%`)
+  pushIf(warnings, crowdedRising, '高位拥挤占比上升')
+  pushIf(signals, level === 'low', '风险压力暂未扩散')
+
+  return { level, signals, warnings }
+}
+
+function evaluateContinuity(comparison: HotListThreeDayComparison): StageEvidence<ContinuityLevel> {
+  const signals: string[] = []
+  const warnings: string[] = []
+  const retainRate = comparison.yesterdayStrongRetainRate
+  const performance = comparison.yesterdayStrongPerformance
+  const positiveRate = performance.positiveRate
+  const weakeningRate = performance.weakeningRate
+  const weak =
+    (weakeningRate !== null && weakeningRate >= 0.45) ||
+    (retainRate !== null && retainRate <= 0.25)
+  const strong =
+    !weak &&
+    ((positiveRate !== null && positiveRate >= 0.6) ||
+      (retainRate !== null && retainRate >= 0.6))
+
+  pushIf(signals, retainRate !== null && retainRate >= 0.6, '昨日强资确认留榜率较高')
+  pushIf(warnings, retainRate !== null && retainRate <= 0.25, '昨日强资确认留榜率偏低')
+  pushIf(
+    signals,
+    positiveRate !== null && positiveRate >= 0.6,
+    `昨日强票今日正收益率 ${(((positiveRate ?? 0) * 100)).toFixed(0)}%`,
+  )
+  pushIf(
+    warnings,
+    weakeningRate !== null && weakeningRate >= 0.45,
+    `昨日强票转弱或掉榜率 ${(((weakeningRate ?? 0) * 100)).toFixed(0)}%`,
+  )
+
+  return { level: weak ? 'weak' : strong ? 'strong' : 'normal', signals, warnings }
+}
+
+function isRiskElevated(risk: RiskPressureLevel): boolean {
+  return risk === 'high' || risk === 'severe'
+}
+
+function resolveStage(comparison: HotListThreeDayComparison, layers?: HotListLayerSet): {
   stage: EmotionCycleStage
   signals: string[]
   warnings: string[]
 } {
   const today = comparison.today
-  const yesterday = comparison.yesterday
-  const signals: string[] = []
-  const warnings: string[] = []
+  const tapeStrength = evaluateTapeStrength(today, layers)
+  const moneyAcceptance = evaluateMoneyAcceptance(today)
+  const opportunityExpansion = evaluateOpportunityExpansion(comparison)
+  const riskPressure = evaluateRiskPressure(comparison)
+  const continuity = evaluateContinuity(comparison)
+  const signals = [
+    ...tapeStrength.signals,
+    ...moneyAcceptance.signals,
+    ...opportunityExpansion.signals,
+    ...riskPressure.signals,
+    ...continuity.signals,
+  ]
+  const warnings = [
+    ...tapeStrength.warnings,
+    ...moneyAcceptance.warnings,
+    ...opportunityExpansion.warnings,
+    ...riskPressure.warnings,
+    ...continuity.warnings,
+  ]
 
-  const activeOpportunityShare = today.statusShares['强资确认'] + today.statusShares['点火观察']
-  const riskShare = today.riskShare
-  const crowdedShare = today.crowdedShare
   const totalExpanded = comparison.totalChange1d !== null ? comparison.totalChange1d > 0 : false
   const totalShrank = comparison.totalChange1d !== null ? comparison.totalChange1d < 0 : false
-  const riskRising = Boolean(yesterday && today.riskShare > yesterday.riskShare + 0.04)
-  const opportunityRising = Boolean(
-    yesterday && activeOpportunityShare > yesterday.statusShares['强资确认'] + yesterday.statusShares['点火观察'] + 0.04,
-  )
-  const crowdedRising = Boolean(yesterday && crowdedShare > yesterday.crowdedShare + 0.04)
+  const riskElevated = isRiskElevated(riskPressure.level)
+  const tapeWeak = tapeStrength.level === 'weak'
+  const tapeStrong = tapeStrength.level === 'strong'
+  const tapeAtLeastFirm = tapeStrength.level === 'strong' || tapeStrength.level === 'firm'
+  const moneyWeak = moneyAcceptance.level === 'weak'
+  const moneyNotWeak = moneyAcceptance.level !== 'weak'
+  const highHeat = today.nearLimitUpCount >= 8 || (today.highGainCount >= 18 && today.highTurnoverCount >= 18)
+  const severeRiskWithWeakContinuity =
+    riskPressure.level === 'severe' && continuity.level === 'weak'
+  const severeRiskWithShrinkingBreadth =
+    riskPressure.level === 'severe' &&
+    totalShrank &&
+    opportunityExpansion.level !== 'broad'
 
   pushIf(signals, totalExpanded, `热榜池较上一日扩张 ${comparison.totalChange1d} 只`)
   pushIf(warnings, totalShrank, `热榜池较上一日收缩 ${Math.abs(comparison.totalChange1d || 0)} 只`)
-  pushIf(signals, today.upRatio >= 0.58, `前100上涨比例 ${(today.upRatio * 100).toFixed(0)}%`)
-  pushIf(warnings, today.upRatio <= 0.42, `前100上涨比例偏低，仅 ${(today.upRatio * 100).toFixed(0)}%`)
-  pushIf(signals, isTrinStrong(today.hotTrin), `热榜 TRIN ${today.hotTrin?.toFixed(2)}，上涨股成交承接占优`)
-  pushIf(warnings, isTrinWeak(today.hotTrin), `热榜 TRIN ${today.hotTrin?.toFixed(2)}，上涨家数与成交承接不匹配`)
-  pushIf(signals, opportunityRising, '强资确认与点火观察占比扩张')
-  pushIf(warnings, riskRising, '资金背离与转弱预警占比上升')
-  pushIf(warnings, crowdedRising, '高位拥挤占比上升')
-  pushIf(signals, comparison.yesterdayStrongRetainRate !== null && comparison.yesterdayStrongRetainRate >= 0.6, '昨日强资确认留榜率较高')
-  pushIf(warnings, comparison.yesterdayStrongRetainRate !== null && comparison.yesterdayStrongRetainRate <= 0.35, '昨日强资确认留榜率偏低')
+  pushIf(
+    warnings,
+    riskElevated && !tapeWeak && !moneyWeak && continuity.level !== 'weak',
+    `风险压力 ${(today.riskShare * 100).toFixed(0)}%，但上涨和成交承接尚未破坏`,
+  )
 
   const retreat =
-    riskShare >= 0.2 ||
-    (riskRising && isTrinWeak(today.hotTrin)) ||
-    (comparison.yesterdayStrongRetainRate !== null && comparison.yesterdayStrongRetainRate <= 0.25 && today.upRatio < 0.55)
+    severeRiskWithWeakContinuity ||
+    severeRiskWithShrinkingBreadth ||
+    (riskElevated && (tapeWeak || moneyWeak)) ||
+    (riskElevated && continuity.level === 'weak' && today.upRatio < 0.55)
 
   if (retreat) {
     return {
@@ -409,9 +688,12 @@ function resolveStage(comparison: HotListThreeDayComparison): {
   }
 
   const climax =
-    (crowdedShare >= 0.18 && today.upRatio >= 0.5) ||
-    (today.nearLimitUpCount >= 8 && crowdedShare >= 0.12) ||
-    (today.highGainCount >= 18 && today.highTurnoverCount >= 18 && riskShare < 0.2)
+    !severeRiskWithWeakContinuity &&
+    (
+      (tapeStrong && riskPressure.level !== 'low') ||
+      (tapeStrong && moneyAcceptance.level === 'strong' && highHeat) ||
+      (today.nearLimitUpCount >= 8 && today.crowdedShare >= 0.12)
+    )
 
   if (climax) {
     return {
@@ -422,11 +704,11 @@ function resolveStage(comparison: HotListThreeDayComparison): {
   }
 
   const ferment =
-    activeOpportunityShare >= 0.18 &&
-    today.statusShares['强资确认'] >= 0.08 &&
-    today.upRatio >= 0.48 &&
-    riskShare < 0.16 &&
-    (isTrinStrong(today.hotTrin) || comparison.yesterdayStrongRetainRate === null || comparison.yesterdayStrongRetainRate >= 0.45)
+    opportunityExpansion.level === 'broad' &&
+    tapeAtLeastFirm &&
+    !riskElevated &&
+    moneyNotWeak &&
+    continuity.level !== 'weak'
 
   if (ferment) {
     return {
@@ -437,9 +719,10 @@ function resolveStage(comparison: HotListThreeDayComparison): {
   }
 
   const start =
-    (totalExpanded || opportunityRising || comparison.newTop100Count >= 25) &&
+    (totalExpanded || opportunityExpansion.level === 'improving') &&
     today.upRatio >= 0.42 &&
-    riskShare < 0.18
+    !riskElevated &&
+    moneyNotWeak
 
   if (start) {
     return {
@@ -465,8 +748,9 @@ function calculateConfidence(stage: EmotionCycleStage, signals: string[], warnin
 export class HotListSentimentAnalyzer {
   analyze(input: HotListSentimentInput): HotListSentimentResult {
     const topN = input.topN && input.topN > 0 ? input.topN : 100
+    const layers = buildLayerMetrics(input.stocks || [])
     const comparison = buildComparison(input.stocks || [], input.yesterday, input.dayBefore, topN)
-    const stageEvidence = resolveStage(comparison)
+    const stageEvidence = resolveStage(comparison, layers)
     const confidence = calculateConfidence(stageEvidence.stage, stageEvidence.signals, stageEvidence.warnings)
 
     return {
@@ -475,6 +759,7 @@ export class HotListSentimentAnalyzer {
       summary: getEmotionCycleStageSummary(stageEvidence.stage),
       metrics: {
         topN,
+        layers,
         comparison,
       },
       signals: stageEvidence.signals,

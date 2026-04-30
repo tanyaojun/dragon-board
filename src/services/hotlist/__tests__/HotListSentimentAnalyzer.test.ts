@@ -120,6 +120,68 @@ describe('HotListSentimentAnalyzer', () => {
     expect(result.metrics.comparison.today.hotTrin).toBeGreaterThan(1)
   })
 
+  it('上涨承接较强时高风险压力不直接判为退潮', () => {
+    const analyzer = new HotListSentimentAnalyzer()
+    const current = makeStocks(120, index => ({
+      change: index < 60 ? 4 : -1,
+      turnover: index < 60 ? 18e8 : 4e8,
+      turnoverRate: index < 25 ? 14 : 6,
+      volumeRatio: index < 25 ? 2 : 1.1,
+      zlje: index < 43 ? -2e8 : 0,
+      zljzb: index < 43 ? -12 : 0,
+      cddje: index < 43 ? -8000e4 : 0,
+      cddjzb: index < 43 ? -5 : 0,
+    }))
+    const yesterday = {
+      tradingDate: '2026-04-29',
+      hotlist: makeStocks(115, index => ({
+        change: index < 55 ? 2 : -1,
+        zlje: index < 20 ? -1e8 : 0,
+        zljzb: index < 20 ? -10 : 0,
+        cddje: index < 20 ? -4000e4 : 0,
+        cddjzb: index < 20 ? -4 : 0,
+      })),
+    }
+
+    const result = analyzer.analyze({ stocks: current, yesterday })
+
+    expect(result.metrics.comparison.today.riskShare).toBeGreaterThan(0.35)
+    expect(result.metrics.comparison.today.upRatio).toBeGreaterThanOrEqual(0.5)
+    expect(result.metrics.comparison.today.hotTrin).toBeLessThan(1)
+    expect(result.stage).toBe('高潮')
+  })
+
+  it('严重风险叠加昨日强票失败时即使上涨承接强也识别为退潮', () => {
+    const analyzer = new HotListSentimentAnalyzer()
+    const current = makeStocks(120, index => ({
+      change: index < 60 ? 4 : -1,
+      turnover: index < 60 ? 18e8 : 4e8,
+      turnoverRate: index < 25 ? 14 : 6,
+      volumeRatio: index < 25 ? 2 : 1.1,
+      zlje: index < 43 ? -2e8 : 0,
+      zljzb: index < 43 ? -12 : 0,
+      cddje: index < 43 ? -8000e4 : 0,
+      cddjzb: index < 43 ? -5 : 0,
+    }))
+    const yesterday = {
+      tradingDate: '2026-04-29',
+      hotlist: makeStocks(130, index => ({
+        change: index < 12 ? 3 : 1,
+        zlje: index < 12 ? 2e8 : 0,
+        zljzb: index < 12 ? 15 : 0,
+        cddje: index < 12 ? 8000e4 : 0,
+        cddjzb: index < 12 ? 6 : 0,
+      })),
+    }
+
+    const result = analyzer.analyze({ stocks: current, yesterday })
+
+    expect(result.metrics.comparison.today.riskShare).toBeGreaterThan(0.35)
+    expect(result.metrics.comparison.today.hotTrin).toBeLessThan(1)
+    expect(result.metrics.comparison.yesterdayStrongPerformance.weakeningRate).toBeGreaterThanOrEqual(0.45)
+    expect(result.stage).toBe('退潮')
+  })
+
   it('热榜收缩且机会少时识别为冰点', () => {
     const analyzer = new HotListSentimentAnalyzer()
     const current = makeStocks(70, index => ({
@@ -133,5 +195,54 @@ describe('HotListSentimentAnalyzer', () => {
 
     expect(result.stage).toBe('冰点')
     expect(result.metrics.comparison.totalChange1d).toBeLessThan(0)
+  })
+
+  it('输出前20、前50、前100分层统计', () => {
+    const analyzer = new HotListSentimentAnalyzer()
+    const current = makeStocks(120, index => ({
+      change: index < 30 ? 5 : index < 70 ? 1 : -2,
+      zlje: index < 25 ? 2e8 : index < 85 ? 0 : -1e8,
+      zljzb: index < 25 ? 15 : index < 85 ? 0 : -10,
+      cddje: index < 25 ? 8000e4 : index < 85 ? 0 : -4000e4,
+      cddjzb: index < 25 ? 6 : index < 85 ? 0 : -4,
+    }))
+
+    const result = analyzer.analyze({ stocks: current })
+
+    expect(result.metrics.layers.top20.topN).toBe(20)
+    expect(result.metrics.layers.top50.topN).toBe(50)
+    expect(result.metrics.layers.top100.topN).toBe(100)
+    expect(result.metrics.layers.top20.upRatio).toBeGreaterThan(result.metrics.layers.top100.upRatio)
+    expect(result.metrics.layers.top20.activeOpportunityCount).toBeGreaterThan(0)
+  })
+
+  it('统计昨日强票今日平均涨幅、正收益率和转弱率', () => {
+    const analyzer = new HotListSentimentAnalyzer()
+    const yesterday = makeStocks(100, index => ({
+      change: index < 10 ? 3 : 1,
+      zlje: index < 10 ? 2e8 : 0,
+      zljzb: index < 10 ? 15 : 0,
+      cddje: index < 10 ? 8000e4 : 0,
+      cddjzb: index < 10 ? 6 : 0,
+    }))
+    const current = makeStocks(100, index => ({
+      change: index < 6 ? 2 : index < 10 ? -3 : 0,
+      zlje: index < 6 ? 2e8 : index < 10 ? -1e8 : 0,
+      zljzb: index < 6 ? 15 : index < 10 ? -10 : 0,
+      cddje: index < 6 ? 8000e4 : index < 10 ? -4000e4 : 0,
+      cddjzb: index < 6 ? 6 : index < 10 ? -4 : 0,
+    }))
+
+    const result = analyzer.analyze({
+      stocks: current,
+      yesterday: { tradingDate: '2026-04-29', hotlist: yesterday },
+    })
+    const performance = result.metrics.comparison.yesterdayStrongPerformance
+
+    expect(performance.count).toBe(10)
+    expect(performance.matchedCount).toBe(10)
+    expect(performance.positiveRate).toBeCloseTo(0.6)
+    expect(performance.weakeningRate).toBeCloseTo(0.4)
+    expect(performance.avgChange).toBeCloseTo(0)
   })
 })
