@@ -1,4 +1,8 @@
-import { cloneDefaultRankTrendRuntimeConfig } from '@/type/rankTrendDefaults'
+import {
+  cloneDefaultRankTrendRuntimeConfig,
+  normalizeRankTrendRuntimeConfig,
+  type RTConfigPatch,
+} from '@/type/rankTrendDefaults'
 import { analyzeAttentionCycle } from '@/services/rankTrend/attentionCycleAnalyzer'
 import { composeCandidateTier } from '@/services/rankTrend/candidateTierComposer'
 import { analyzeMarketRegime } from '@/services/rankTrend/marketRegimeAnalyzer'
@@ -50,16 +54,30 @@ function findStock(frame: ReplayFrame, code: string): ReplayStock | null {
 }
 
 export class RankTrendReplayEngine {
-  private readonly config = cloneDefaultRankTrendRuntimeConfig()
+  private readonly config: ReturnType<typeof cloneDefaultRankTrendRuntimeConfig>
+
+  constructor(configPatch: RTConfigPatch = {}) {
+    this.config = normalizeRankTrendRuntimeConfig(cloneDefaultRankTrendRuntimeConfig(), configPatch)
+  }
 
   replay(frames: ReplayFrame[], options: ReplayEngineOptions): ReplaySignal[] {
     const warmupCount = options.warmupCount ?? getTechnicalMinSamples(this.config)
     const windowSize = options.windowSize ?? DEFAULT_WINDOW_SIZE
     const startIndex = frames.length >= warmupCount ? warmupCount - 1 : 0
+    const maxSignals =
+      typeof options.maxSignals === 'number' && Number.isFinite(options.maxSignals) && options.maxSignals > 0
+        ? Math.floor(options.maxSignals)
+        : null
     const signals: ReplaySignal[] = []
 
     for (let index = startIndex; index < frames.length; index++) {
-      signals.push(...this.replayFrameAt(frames, index, { windowSize, meta: options.meta }))
+      const frameSignals = this.replayFrameAt(frames, index, { windowSize, meta: options.meta })
+      if (maxSignals) {
+        signals.push(...frameSignals.slice(0, Math.max(maxSignals - signals.length, 0)))
+        if (signals.length >= maxSignals) break
+      } else {
+        signals.push(...frameSignals)
+      }
     }
 
     return signals

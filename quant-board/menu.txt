@@ -1,0 +1,28 @@
+quant-board/
+├── backend/                    # Python 后端
+│   ├── core/                   # 核心引擎
+│   │   ├── engine/             # 回测引擎
+│   │   ├── strategy/           # 策略基类与注册
+│   │   └── portfolio/          # 组合与资金管理
+│   ├── data/                   # 数据层
+│   │   ├── snapshot_reader.py  # IndexedDB 快照解析
+│   │   └── data_feeder.py     # 数据供给器
+│   ├── analysis/               # 分析层
+│   │   ├── indicators.py      # 技术指标（动量/MACD等）
+│   │   └── signal_engine.py   # 信号生成
+│   ├── api/                    # FastAPI 路由
+│   ├── models/                 # 数据模型
+│   └── main.py                 # 入口
+├── frontend/                   # 可选：Vue 前端（复用 dragon-board 经验）
+│   └── src/
+│       ├── views/              # 回测结果可视化
+│       ├── components/         # 策略配置面板
+│       └── stores/             # 状态管理
+├── data/                       # 快照数据存储
+│   └── snapshots/              # 导出的 IndexedDB JSON 文件
+├── config/                     # 配置文件
+│   ├── strategies.yaml         # 策略参数配置
+│   └── backtest.yaml          # 回测配置
+├── tests/                      # 测试
+├── requirements.txt
+└── README.md

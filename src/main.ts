@@ -49,6 +49,7 @@ import { themeMapping } from './services/ThemeDataService'
 
 import { themeCorrelationAnalyzer } from './services/ThemeCorrelationAnalyzer'
 import { strategyBacktest } from './services/strategyBacktest'
+import { installQuantBoardBridge } from './services/quantBoardBridge'
 
 const app = createApp(App)
 const pinia = createPinia()
@@ -100,6 +101,7 @@ if (typeof window !== 'undefined') {
   console.log('   └─ dataLoader: 八平台数据加载')
   console.log('   └─ stockCodeManager: 股票代码管理')
   console.log('   └─ strategyBacktest: 排名趋势策略回测 v2')
+  installQuantBoardBridge()
 }
 
 app.mount('#app')

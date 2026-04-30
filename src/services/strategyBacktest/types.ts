@@ -226,5 +226,6 @@ export interface LoadedReplayFrames {
 export interface ReplayEngineOptions {
   warmupCount?: number
   windowSize?: number
+  maxSignals?: number
   meta: BacktestMeta
 }

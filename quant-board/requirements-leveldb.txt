@@ -1,0 +1,4 @@
+# Optional LevelDB forensic reader.
+# On Windows/Python 3.13 this may require Microsoft C++ Build Tools because
+# dfindexeddb pulls compression packages without ready wheels in some mirrors.
+dfindexeddb==20260210

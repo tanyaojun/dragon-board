@@ -1,0 +1,7 @@
+data_source:
+  # 手动填写 Chrome/Edge profile 下对应 origin 的 IndexedDB/leveldb 路径。
+  profile_indexeddb_path: ""
+  origin_hint: "http://localhost:5173"
+  db_name: "DragonBoardData"
+  db_version: 9
+  page_url: "http://localhost:5173"

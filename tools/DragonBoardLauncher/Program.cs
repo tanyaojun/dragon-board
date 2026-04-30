@@ -23,16 +23,27 @@ internal sealed class LauncherForm : Form
     private readonly Label _proxyStatus = new();
     private readonly Label _frontendStatus = new();
     private readonly Label _bridgeStatus = new();
+    private readonly Label _quantApiStatus = new();
+    private readonly Label _quantUiStatus = new();
     private readonly TextBox _log = new();
 
     public LauncherForm()
     {
         _root = FindProjectRoot();
+        var quantRoot = Path.Combine(_root, "quant-board");
         _services = new Dictionary<string, ManagedService>
         {
-            ["proxy"] = new("Proxy Server", 3000, Path.Combine(_root, "proxy-server"), "node", "server.js"),
-            ["frontend"] = new("Frontend", 5173, _root, "cmd.exe", "/c npm run dev -- --host 127.0.0.1"),
-            ["bridge"] = new("Python Bridge", 8765, _root, "python", "python-bridge/main.py")
+            ["proxy"] = new("DragonBoard Proxy Server", 3000, Path.Combine(_root, "proxy-server"), "node", "server.js"),
+            ["frontend"] = new("DragonBoard Frontend", 5173, _root, "cmd.exe", "/c npm run dev -- --host 127.0.0.1"),
+            ["bridge"] = new("DragonBoard Python Bridge", 8765, _root, "python", "python-bridge/main.py"),
+            ["quant-api"] = new(
+                "QuantBoard API",
+                8000,
+                quantRoot,
+                Path.Combine(quantRoot, ".venv", "Scripts", "python.exe"),
+                "-m uvicorn backend.main:app --host 127.0.0.1 --port 8000",
+                "python"),
+            ["quant-ui"] = new("QuantBoard UI", 5174, Path.Combine(quantRoot, "frontend"), "cmd.exe", "/c npm run dev -- --host 127.0.0.1 --port 5174")
         };
 
         Text = "Dragon Board Launcher";
@@ -47,7 +58,11 @@ internal sealed class LauncherForm : Form
         _timer.Tick += (_, _) => RefreshStatuses();
         _timer.Start();
 
-        FormClosing += (_, _) => _timer.Stop();
+        FormClosing += (_, _) =>
+        {
+            _timer.Stop();
+            StopStartedProcesses();
+        };
         Shown += (_, _) =>
         {
             Log("Launcher ready.");
@@ -62,9 +77,12 @@ internal sealed class LauncherForm : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
-            RowCount = 5,
+            RowCount = 8,
             Padding = new Padding(14)
         };
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -83,6 +101,8 @@ internal sealed class LauncherForm : Form
         root.Controls.Add(BuildServiceRow(_services["proxy"], _proxyStatus));
         root.Controls.Add(BuildServiceRow(_services["frontend"], _frontendStatus));
         root.Controls.Add(BuildServiceRow(_services["bridge"], _bridgeStatus));
+        root.Controls.Add(BuildServiceRow(_services["quant-api"], _quantApiStatus));
+        root.Controls.Add(BuildServiceRow(_services["quant-ui"], _quantUiStatus));
 
         var actions = new FlowLayoutPanel
         {
@@ -116,7 +136,7 @@ internal sealed class LauncherForm : Form
             Dock = DockStyle.Top,
             Margin = new Padding(0, 0, 0, 8)
         };
-        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150));
+        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 220));
         panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 110));
         panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 95));
         panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 95));
@@ -159,11 +179,15 @@ internal sealed class LauncherForm : Form
         StartService(_services["proxy"]);
         StartService(_services["frontend"]);
         StartService(_services["bridge"]);
+        StartService(_services["quant-api"]);
+        StartService(_services["quant-ui"]);
         RefreshStatuses();
     }
 
     private void StopAll()
     {
+        StopService(_services["quant-ui"]);
+        StopService(_services["quant-api"]);
         StopService(_services["bridge"]);
         StopService(_services["frontend"]);
         StopService(_services["proxy"]);
@@ -186,10 +210,21 @@ internal sealed class LauncherForm : Form
                 return;
             }
 
+            var fileName = service.FileName;
+            var arguments = service.Arguments;
+            if (Path.IsPathRooted(fileName) &&
+                !File.Exists(fileName) &&
+                !string.IsNullOrWhiteSpace(service.FallbackFileName))
+            {
+                Log($"{service.Name} executable missing: {fileName}; falling back to {service.FallbackFileName}.");
+                fileName = service.FallbackFileName;
+                arguments = service.FallbackArguments ?? service.Arguments;
+            }
+
             var info = new ProcessStartInfo
             {
-                FileName = service.FileName,
-                Arguments = service.Arguments,
+                FileName = fileName,
+                Arguments = arguments,
                 WorkingDirectory = service.WorkingDirectory,
                 CreateNoWindow = true,
                 UseShellExecute = false,
@@ -226,13 +261,7 @@ internal sealed class LauncherForm : Form
     {
         try
         {
-            if (service.Process is { HasExited: false })
-            {
-                service.Process.Kill(entireProcessTree: true);
-                service.Process.WaitForExit(3000);
-                Log($"Stopped {service.Name} process tree.");
-                service.Process = null;
-            }
+            StopStartedProcess(service);
 
             var pids = GetPidsByPort(service.Port);
             foreach (var pid in pids)
@@ -255,11 +284,43 @@ internal sealed class LauncherForm : Form
         }
     }
 
+    private void StopStartedProcesses()
+    {
+        StopStartedProcess(_services["quant-ui"]);
+        StopStartedProcess(_services["quant-api"]);
+        StopStartedProcess(_services["bridge"]);
+        StopStartedProcess(_services["frontend"]);
+        StopStartedProcess(_services["proxy"]);
+    }
+
+    private void StopStartedProcess(ManagedService service)
+    {
+        try
+        {
+            if (service.Process is { HasExited: false })
+            {
+                service.Process.Kill(entireProcessTree: true);
+                service.Process.WaitForExit(3000);
+                Log($"Stopped {service.Name} process tree.");
+            }
+        }
+        catch (Exception ex)
+        {
+            Log($"Stop {service.Name} process tree failed: {ex.Message}");
+        }
+        finally
+        {
+            service.Process = null;
+        }
+    }
+
     private void RefreshStatuses()
     {
         SetStatus(_proxyStatus, IsPortOpen(3000));
         SetStatus(_frontendStatus, IsPortOpen(5173));
         SetStatus(_bridgeStatus, IsPortOpen(8765));
+        SetStatus(_quantApiStatus, IsPortOpen(8000));
+        SetStatus(_quantUiStatus, IsPortOpen(5174));
     }
 
     private static void SetStatus(Label label, bool running)
@@ -338,9 +399,22 @@ internal sealed class LauncherForm : Form
 
     private void Log(string message)
     {
+        if (IsDisposed)
+        {
+            return;
+        }
+
         if (InvokeRequired)
         {
-            BeginInvoke(() => Log(message));
+            try
+            {
+                BeginInvoke(() => Log(message));
+            }
+            catch (InvalidOperationException)
+            {
+                // The form can be closing while background output events are still draining.
+            }
+
             return;
         }
 
@@ -374,13 +448,22 @@ internal sealed class LauncherForm : Form
 
 internal sealed class ManagedService
 {
-    public ManagedService(string name, int port, string workingDirectory, string fileName, string arguments)
+    public ManagedService(
+        string name,
+        int port,
+        string workingDirectory,
+        string fileName,
+        string arguments,
+        string? fallbackFileName = null,
+        string? fallbackArguments = null)
     {
         Name = name;
         Port = port;
         WorkingDirectory = workingDirectory;
         FileName = fileName;
         Arguments = arguments;
+        FallbackFileName = fallbackFileName;
+        FallbackArguments = fallbackArguments;
     }
 
     public string Name { get; }
@@ -388,5 +471,7 @@ internal sealed class ManagedService
     public string WorkingDirectory { get; }
     public string FileName { get; }
     public string Arguments { get; }
+    public string? FallbackFileName { get; }
+    public string? FallbackArguments { get; }
     public Process? Process { get; set; }
 }

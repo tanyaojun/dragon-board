@@ -1,0 +1,499 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from fastapi.testclient import TestClient
+
+from backend.analysis.ranktrend import RankTrendConfig
+from backend.cli import build_parser, build_ranktrend_payload
+from backend.core.backtest import TradeSimulator
+from backend.main import app
+
+
+def make_bundle(path: Path) -> Path:
+    frames = []
+    records = []
+    for i in range(35):
+        day = i // 7 + 1
+        bar = i % 7
+        date = f"2026-04-{day:02d}"
+        slot = f"{10 + (bar // 2):02d}:{(bar % 2) * 30:02d}"
+        snapshot_id = f"half_hour:{date}:{i:02d}"
+        hotlist = [
+            {
+                "code": "600001",
+                "name": "样本A",
+                "rank": max(1, 50 - i),
+                "price": 10 + i * 0.1,
+                "change": 1,
+                "volumeRatio": 1.3,
+                "zlje": 1000000,
+                "zljzb": 3,
+            },
+            {
+                "code": "600002",
+                "name": "样本B",
+                "rank": 20 + (i % 5),
+                "price": 20 - i * 0.03,
+                "change": -0.5,
+                "volumeRatio": 0.9,
+                "zlje": -100000,
+                "zljzb": -1,
+            },
+        ]
+        if i in {3, 10}:
+            hotlist = hotlist[:1]
+        record = {
+            "id": snapshot_id,
+            "type": "half_hour",
+            "tradingDate": date,
+            "slotTime": slot,
+            "timestamp": 1775000000000 + i * 1800000,
+            "captureMode": "real_time",
+            "payload": {"type": "half_hour", "tradingDate": date, "slotTime": slot, "timestamp": 1775000000000 + i * 1800000, "hotlist": hotlist},
+        }
+        records.append(record)
+    bundle = path / "bundle.json"
+    bundle.write_text(json.dumps({"records": records}, ensure_ascii=False), encoding="utf-8")
+    return bundle
+
+
+def test_import_backtest_optimize_and_golden(tmp_path: Path) -> None:
+    client = TestClient(app)
+    bundle = make_bundle(tmp_path)
+
+    health = client.get("/api/health")
+    assert health.status_code == 200
+    assert health.json()["default_snapshot_type"] == "half_hour"
+
+    imported = client.post(
+        "/api/datasets/import",
+        json={"sourceType": "json_bundle", "sourcePath": str(bundle), "name": "test", "snapshotTypes": ["half_hour"]},
+    )
+    assert imported.status_code == 200, imported.text
+    dataset = imported.json()
+    assert dataset["frame_count"] == 35
+
+    datasets = client.get("/api/datasets")
+    assert datasets.status_code == 200
+    assert any(item["id"] == dataset["id"] for item in datasets.json())
+
+    backtest = client.post(
+        "/api/backtests/rank-trend",
+        json={"datasetId": dataset["id"], "snapshotType": "half_hour", "randomSeed": 20260430},
+    )
+    assert backtest.status_code == 200, backtest.text
+    run = backtest.json()
+    assert run["runId"]
+    assert "equityCurve" in run
+    assert run["isCompact"] is True
+    assert run["signalCount"] >= len(run["signals"])
+    assert "tradeEvents" in run
+    assert "sharpe" in run
+    assert run["strategyName"] == "rank_trend_candidate"
+    assert run["tradeSimulation"]["entryStrategy"] == "rank_trend_candidate"
+    assert "controlBacktests" in run
+    assert {row["key"] for row in run["controlBacktests"]} >= {"hot_top10", "a_main_only", "b_ignition_only", "a_b_combined"}
+    assert "sampleDiagnostics" in run
+    assert "macdDiagnostics" in run
+    assert run["macdDiagnostics"]["macdFast"] == 21
+    assert run["macdDiagnostics"]["macdSlow"] == 34
+    assert run["macdDiagnostics"]["macdSignal"] == 13
+    assert run["macdDiagnostics"]["role"] == "auxiliary_observation_only"
+    assert run["dataQuality"]["researchGrade"] == "degraded"
+    assert run["dataQuality"]["lowHotlistCount"] >= 1
+    assert run["dataQuality"]["lowHotlistExamples"]
+    assert run["warnings"]
+    assert "tradeDiagnostics" in run
+
+    golden_default = RankTrendConfig()
+    assert golden_default.macdFast == 13
+    assert golden_default.macdSlow == 21
+    assert golden_default.macdSignal == 8
+
+    custom_matching_backtest = client.post(
+        "/api/backtests/rank-trend",
+        json={
+            "datasetId": dataset["id"],
+            "snapshotType": "half_hour",
+            "positionSize": 0.12,
+            "feeRate": 0.0002,
+            "stampTaxRate": 0.0007,
+            "slippageRate": 0.0009,
+            "useOrderBookPrice": False,
+            "enforceVolumeLimit": False,
+            "allowPartialFills": False,
+            "volumeParticipationRate": 0.02,
+            "orderBookParticipationRate": 0.25,
+            "intrabarAmbiguity": "take_first",
+        },
+    )
+    assert custom_matching_backtest.status_code == 200, custom_matching_backtest.text
+    custom_config = custom_matching_backtest.json()["tradeSimulation"]["config"]
+    assert custom_config["positionSize"] == 0.12
+    assert custom_config["feeRate"] == 0.0002
+    assert custom_config["stampTaxRate"] == 0.0007
+    assert custom_config["slippageRate"] == 0.0009
+    assert custom_config["useOrderBookPrice"] is False
+    assert custom_config["enforceVolumeLimit"] is False
+    assert custom_config["allowPartialFills"] is False
+    assert custom_config["volumeParticipationRate"] == 0.02
+    assert custom_config["orderBookParticipationRate"] == 0.25
+    assert custom_config["intrabarAmbiguity"] == "take_first"
+
+    fetched = client.get(f"/api/backtests/{run['runId']}")
+    assert fetched.status_code == 200
+    assert fetched.json()["runId"] == run["runId"]
+    assert fetched.json()["isCompact"] is True
+    assert fetched.json()["signalCount"] >= len(fetched.json()["signals"])
+    assert len(fetched.json()["tradeEvents"]) >= len(fetched.json()["trades"])
+    assert "sharpe" in fetched.json()
+    assert "controlBacktests" in fetched.json()
+
+    next_bar_backtest = client.post(
+        "/api/backtests/rank-trend",
+        json={
+            "datasetId": dataset["id"],
+            "snapshotType": "half_hour",
+            "strategyName": "rank_trend_candidate",
+            "executionMode": "next_bar",
+        },
+    )
+    assert next_bar_backtest.status_code == 200, next_bar_backtest.text
+    next_bar_run = next_bar_backtest.json()
+    assert next_bar_run["tradeSimulation"]["executionMode"] == "next_bar"
+    assert next_bar_run["tradeSimulation"]["config"]["executionMode"] == "next_bar"
+    assert next_bar_run["tradeSimulation"]["matchingDiagnostics"]["nextBarEntries"] >= 0
+    filled_buys = [event for event in next_bar_run["tradeEvents"] if event.get("action") == "buy"]
+    if filled_buys:
+        assert any(event.get("signalSnapshotId") and event.get("signalSnapshotId") != event.get("snapshotId") for event in filled_buys)
+
+    hot_top10_backtest = client.post(
+        "/api/backtests/rank-trend",
+        json={"datasetId": dataset["id"], "snapshotType": "half_hour", "strategyName": "hot_top10"},
+    )
+    assert hot_top10_backtest.status_code == 200, hot_top10_backtest.text
+    hot_top10_run = hot_top10_backtest.json()
+    assert hot_top10_run["strategyName"] == "hot_top10"
+    assert hot_top10_run["tradeSimulation"]["entryStrategy"] == "hot_top10"
+
+    bad_strategy = client.post(
+        "/api/backtests/rank-trend",
+        json={"datasetId": dataset["id"], "snapshotType": "half_hour", "strategyName": "not_a_strategy"},
+    )
+    assert bad_strategy.status_code == 400
+    assert "unsupported strategyName" in bad_strategy.json()["detail"]
+
+    opt = client.post(
+        "/api/optimizations/rank-trend",
+        json={
+            "datasetId": dataset["id"],
+            "snapshotType": "half_hour",
+            "strategyName": "a_main_only",
+            "method": "grid",
+            "trials": 2,
+            "objective": "stability",
+            "validationMode": "auto",
+            "validationRatio": 0.3,
+            "parameterGrid": {
+                "momentumPeriods": [[3, 5, 8, 13, 21], [2, 4, 6, 10, 16]],
+                "takeProfitPct": [0.12],
+                "stopLossPct": [0.06],
+                "maxPositions": [5],
+            },
+        },
+    )
+    assert opt.status_code == 200, opt.text
+    opt_body = opt.json()
+    assert opt_body["runId"]
+    assert opt_body["strategyName"] == "a_main_only"
+    assert opt_body["dataQuality"]["researchGrade"] == "degraded"
+    assert any("低热榜" in item for item in opt_body["warnings"])
+    assert opt_body["experiment"]["split"]["hasValidation"] is True
+    assert opt_body["overfitRisk"]["level"] in {"low", "medium", "high"}
+    assert opt_body["results"][0]["metrics"]["entryStrategy"] == "a_main_only"
+    assert opt_body["results"][0]["parameters"]["momentumPeriods"]
+    assert opt_body["results"][0]["configHash"]
+    assert opt_body["results"][0]["train"]["runId"]
+    assert opt_body["results"][0]["validation"]["runId"]
+    assert opt_body["results"][0]["scoreDetails"]["validationScore"] is not None
+    assert opt_body["parameterStability"]["topTrialCount"] >= 1
+
+    trial_report = client.get(f"/api/backtests/{opt_body['results'][0]['validation']['runId']}")
+    assert trial_report.status_code == 200
+    assert trial_report.json()["phase"] == "validation"
+    assert trial_report.json()["trialId"] == opt_body["results"][0]["trialId"]
+
+    opt_no_validation = client.post(
+        "/api/optimizations/rank-trend",
+        json={
+            "datasetId": dataset["id"],
+            "snapshotType": "half_hour",
+            "method": "grid",
+            "trials": 1,
+            "validationMode": "none",
+            "parameterGrid": {
+                "momentumPeriods": [[3, 5, 8, 13, 21]],
+                "takeProfitPct": [0.12],
+                "stopLossPct": [0.06],
+                "maxPositions": [5],
+            },
+        },
+    )
+    assert opt_no_validation.status_code == 200, opt_no_validation.text
+    assert opt_no_validation.json()["experiment"]["split"]["hasValidation"] is False
+    assert opt_no_validation.json()["overfitRisk"]["level"] == "high"
+
+    bayes_opt = client.post(
+        "/api/optimizations/rank-trend",
+        json={
+            "datasetId": dataset["id"],
+            "snapshotType": "half_hour",
+            "strategyName": "rank_trend_candidate",
+            "method": "bayesian",
+            "objective": "stability",
+            "trials": 3,
+            "validationMode": "auto",
+            "validationRatio": 0.3,
+            "walkForward": {
+                "enabled": True,
+                "trainWindowDays": 1,
+                "validationWindowDays": 1,
+                "stepDays": 1,
+                "topTrials": 2,
+            },
+            "parameterGrid": {
+                "momentumPeriods": [[3, 5, 8, 13, 21], [2, 4, 6, 10, 16]],
+                "takeProfitPct": [0.1, 0.12],
+                "stopLossPct": [0.05, 0.06],
+                "maxPositions": [3, 5],
+            },
+        },
+    )
+    assert bayes_opt.status_code == 200, bayes_opt.text
+    bayes_body = bayes_opt.json()
+    assert bayes_body["method"] == "bayesian"
+    assert bayes_body["optimizer"] == "optuna_tpe"
+    assert bayes_body["optimizerMeta"]["sampler"] == "TPESampler"
+    assert bayes_body["completedTrialCount"] == 3
+    assert bayes_body["walkForward"]["enabled"] is True
+    assert bayes_body["walkForward"]["segmentCount"] >= 1
+    assert bayes_body["results"][0]["validation"] is not None
+
+    golden = client.post("/api/golden/validate", json={"caseId": "missing", "tolerance": 1e-6})
+    assert golden.status_code == 200
+    assert golden.json()["passed"] is False
+
+    golden_signals = run["signals"][:5]
+    assert golden_signals
+    imported_golden = client.post(
+        "/api/golden/import",
+        json={
+            "caseId": "rank_trend_default",
+            "datasetId": dataset["id"],
+            "snapshotType": "half_hour",
+            "source": "ts_golden_import",
+            "payload": {"signals": golden_signals},
+        },
+    )
+    assert imported_golden.status_code == 200, imported_golden.text
+    assert imported_golden.json()["caseId"] == "rank_trend_default"
+    assert imported_golden.json()["source"] == "ts_golden_import"
+
+    validated_golden = client.post(
+        "/api/golden/validate",
+        json={"caseId": "rank_trend_default", "datasetId": dataset["id"], "tolerance": 1e-6},
+    )
+    assert validated_golden.status_code == 200
+    assert validated_golden.json()["checked"] == len(golden_signals)
+    assert "expectedPreview" in validated_golden.json()
+
+    dry_run = client.post(
+        "/api/datasets/import",
+        json={
+            "sourceType": "json_bundle",
+            "sourcePath": str(bundle),
+            "name": "dry-run-test",
+            "snapshotTypes": ["half_hour"],
+            "dryRun": True,
+        },
+    )
+    assert dry_run.status_code == 200, dry_run.text
+    assert dry_run.json()["dryRun"] is True
+    after_dry_run = client.get("/api/datasets")
+    assert not any(item["id"] == dry_run.json()["id"] for item in after_dry_run.json())
+
+    empty_browser_import = client.post(
+        "/api/datasets/import",
+        json={"sourceType": "indexeddb", "name": "empty-browser-import", "records": [], "preview": None},
+    )
+    assert empty_browser_import.status_code == 400
+    assert "browser_bridge" in empty_browser_import.json()["detail"]
+
+
+def test_trade_simulator_realistic_matching_constraints() -> None:
+    base_signal = {
+        "snapshotId": "s1",
+        "timestamp": 1,
+        "tradingDate": "2026-04-01",
+        "slotTime": "10:00",
+        "code": "600001",
+        "name": "样本A",
+        "rank": 1,
+        "price": 10,
+        "change": 3,
+        "ask1Price": 10.05,
+        "ask1Volume": 500,
+        "bid1Price": 9.95,
+        "bid1Volume": 500,
+        "volume": 1000,
+        "candidateTier": "A_MAIN",
+        "stage": "markup",
+        "regime": "strong",
+        "confidence": 80,
+        "rankTrend": {"strategy": {"momentum": {"acceleration": 1}}, "technical": {}, "risk": {}, "decision": {}},
+    }
+
+    no_fill = TradeSimulator().run(
+        [{"snapshotId": "s1", "timestamp": 1, "tradingDate": "2026-04-01", "slotTime": "10:00"}],
+        [{**base_signal, "change": 10.0, "leadStatus": "涨停"}],
+        {"initialCapital": 100000, "positionSize": 1, "maxPositions": 1},
+    )
+    assert no_fill["tradeCount"] == 0
+    assert no_fill["matchingDiagnostics"]["blockedByLimit"] == 1
+    assert no_fill["skippedOrders"][0]["reason"] == "limit_up_unbuyable"
+
+    partial = TradeSimulator().run(
+        [{"snapshotId": "s1", "timestamp": 1, "tradingDate": "2026-04-01", "slotTime": "10:00"}],
+        [base_signal],
+        {
+            "initialCapital": 100000,
+            "positionSize": 1,
+            "maxPositions": 1,
+            "slippageRate": 0,
+            "orderBookParticipationRate": 1,
+            "volumeParticipationRate": 1,
+        },
+    )
+    buy_event = partial["tradeEvents"][0]
+    assert buy_event["price"] == 10.05
+    assert buy_event["quantity"] == 500
+    assert buy_event["fill"]["partial"] is True
+    assert partial["matchingDiagnostics"]["orderBookPricedFills"] == 1
+
+    missing_next_bar_quote = TradeSimulator().run(
+        [
+            {"snapshotId": "s1", "timestamp": 1, "tradingDate": "2026-04-01", "slotTime": "10:00"},
+            {"snapshotId": "s2", "timestamp": 2, "tradingDate": "2026-04-01", "slotTime": "10:30"},
+        ],
+        [base_signal],
+        {
+            "initialCapital": 100000,
+            "positionSize": 1,
+            "maxPositions": 1,
+            "executionMode": "next_bar",
+        },
+    )
+    assert missing_next_bar_quote["eventCount"] == 0
+    assert missing_next_bar_quote["matchingDiagnostics"]["nextBarEntries"] == 0
+    assert missing_next_bar_quote["matchingDiagnostics"]["missingPriceRows"] >= 1
+
+
+def test_cli_run_ranktrend_exposes_ui_backtest_parameters() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "run-ranktrend",
+            "--dataset-id",
+            "ds_cli",
+            "--snapshot-type",
+            "half_hour",
+            "--start-date",
+            "2026-04-15",
+            "--end-date",
+            "2026-04-30",
+            "--strategy-name",
+            "a_main_only",
+            "--seed",
+            "42",
+            "--initial-cash",
+            "123456",
+            "--max-positions",
+            "3",
+            "--position-size",
+            "0.15",
+            "--target-holding-days",
+            "4.5",
+            "--max-holding-bars",
+            "32",
+            "--take-profit-pct",
+            "0.09",
+            "--stop-loss-pct",
+            "0.04",
+            "--fee-rate",
+            "0.0002",
+            "--stamp-tax-rate",
+            "0.0006",
+            "--slippage-rate",
+            "0.0008",
+            "--macd-fast",
+            "12",
+            "--macd-slow",
+            "26",
+            "--macd-signal",
+            "9",
+            "--momentum-periods",
+            "2,4,8,16",
+            "--horizons",
+            "1,2,5",
+            "--execution-mode",
+            "next_bar",
+            "--volume-participation-rate",
+            "0.02",
+            "--order-book-participation-rate",
+            "0.25",
+            "--intrabar-ambiguity",
+            "take_first",
+            "--no-t1",
+            "--no-partial-fills",
+        ]
+    )
+
+    payload = build_ranktrend_payload(args)
+
+    assert payload["dataset_id"] == "ds_cli"
+    assert payload["snapshot_type"] == "half_hour"
+    assert payload["start_date"] == "2026-04-15"
+    assert payload["end_date"] == "2026-04-30"
+    assert payload["strategy_name"] == "a_main_only"
+    assert payload["random_seed"] == 42
+    assert payload["initialCash"] == 123456
+    assert payload["maxPositions"] == 3
+    assert payload["targetHoldingDays"] == 4.5
+    assert payload["maxHoldingBars"] == 32
+    assert payload["takeProfitPct"] == 0.09
+    assert payload["stopLossPct"] == 0.04
+    assert payload["macdFast"] == 12
+    assert payload["macdSlow"] == 26
+    assert payload["macdSignal"] == 9
+    assert payload["momentumPeriods"] == [2, 4, 8, 16]
+    assert payload["horizons"] == [1, 2, 5]
+    assert payload["enable_trade_simulation"] is True
+    assert payload["tradeConfig"] == {
+        "positionSize": 0.15,
+        "feeRate": 0.0002,
+        "stampTaxRate": 0.0006,
+        "slippageRate": 0.0008,
+        "enforceT1": False,
+        "executionMode": "next_bar",
+        "useOrderBookPrice": True,
+        "enforceLimitStatus": True,
+        "enforceVolumeLimit": True,
+        "enforceOrderBookQueue": True,
+        "allowPartialFills": False,
+        "volumeParticipationRate": 0.02,
+        "orderBookParticipationRate": 0.25,
+        "useIntrabarStops": True,
+        "intrabarAmbiguity": "take_first",
+    }
