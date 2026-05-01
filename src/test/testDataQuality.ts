@@ -181,7 +181,7 @@ async function checkDataSavingStatus() {
   console.log('')
   console.log('3. 📈 下一步建议:')
   console.log('   a. 运行实际的数据质量检查')
-  console.log('   b. 开始开发回测框架')
+  console.log('   b. 将研究数据导入 QuantBoard 后端')
   console.log('   c. 创建数据预处理模块')
   console.log('   d. 实现绩效统计模块')
 }

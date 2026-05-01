@@ -48,7 +48,6 @@ import { stockCodeManager } from './services/StockCodeManager'
 import { themeMapping } from './services/ThemeDataService'
 
 import { themeCorrelationAnalyzer } from './services/ThemeCorrelationAnalyzer'
-import { strategyBacktest } from './services/strategyBacktest'
 import { installQuantBoardBridge } from './services/quantBoardBridge'
 
 const app = createApp(App)
@@ -88,7 +87,6 @@ if (typeof window !== 'undefined') {
   ;(window as any).MARKET_PHASES = MARKET_PHASES
   ;(window as any).stockCodeManager = stockCodeManager
   ;(window as any).themeCorrelationAnalyzer = themeCorrelationAnalyzer
-  ;(window as any).strategyBacktest = strategyBacktest
 
   //数据层（已经通过 import 自动挂载）(window as any).dataLayer = (window as any).dataLayer
 
@@ -100,7 +98,6 @@ if (typeof window !== 'undefined') {
   console.log('   ├─ dataLayer: 统一数据层') // 新增
   console.log('   └─ dataLoader: 八平台数据加载')
   console.log('   └─ stockCodeManager: 股票代码管理')
-  console.log('   └─ strategyBacktest: 排名趋势策略回测 v2')
   installQuantBoardBridge()
 }
 

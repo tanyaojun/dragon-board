@@ -149,6 +149,25 @@ def percentile(rank: float, total: int) -> float:
     return ((total - rank + 1) / total) * 100 if total else 0.0
 
 
+def momentum_bucket(signal: dict[str, Any]) -> str:
+    momentum = (((signal.get("rankTrend") or {}).get("strategy") or {}).get("momentum") or {})
+    if not isinstance(momentum, dict):
+        return "momentum缺失"
+
+    short = float(momentum.get("short") or 0)
+    mid = float(momentum.get("mid") or 0)
+    long = float(momentum.get("long") or 0)
+    acceleration = float(momentum.get("acceleration") or 0)
+    shock = float(momentum.get("shock") or 0)
+
+    short_bucket = "short强" if short >= 3 else "short弱" if short <= -3 else "short中"
+    mid_bucket = "mid强" if mid >= 4 else "mid弱" if mid <= -3 else "mid中"
+    long_bucket = "long高位" if long >= 4 else "long非高位"
+    acceleration_bucket = "accel正" if acceleration >= 0 else "accel负"
+    shock_bucket = "shock高" if abs(shock) >= 1.5 else "shock低"
+    return f"{short_bucket}/{mid_bucket}/{long_bucket}/{acceleration_bucket}/{shock_bucket}"
+
+
 class OutcomeEvaluator:
     tiers = ["A_MAIN", "B_IGNITION", "C_CROWDED", "D_EXIT_RISK", "N_NEUTRAL"]
 
@@ -228,6 +247,7 @@ class OutcomeEvaluator:
             "byRegime": self._group_stats(pairs, lambda s: s["regime"]),
             "byTierStage": self._group_stats(pairs, lambda s: f"{s['candidateTier']}/{s['stage']}"),
             "byTierRegime": self._group_stats(pairs, lambda s: f"{s['candidateTier']}/{s['regime']}"),
+            "byMomentumBucket": self._group_stats(pairs, momentum_bucket),
         }
 
     def _outcome(self, frames: list[dict[str, Any]], signal: dict[str, Any], horizon: int, lookup: dict[str, Any]) -> dict[str, Any]:

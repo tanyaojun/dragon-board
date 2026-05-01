@@ -6,7 +6,8 @@
 
 - 项目目标：把 dragon-board 的 `rankTrend` TypeScript 分析链落地为 Python 后端可回测、可优化、可展示的 QuantBoard。
 - Golden 标准：`src/services/RankTrendAnalyzer.ts`、`src/services/rankTrend/*`、`src/type/rankTrendDefaults.ts`。
-- 废弃基准：`ParameterOptimizer` 只作为历史资料，不再作为参数、策略、回测或优化验收标准。
+- 当前主链：QuantBoard 负责参数研究、回测、优化、交易模拟和报告展示。
+- Dragon Board 根项目只提供实时看板、快照数据和 TypeScript golden 导出。
 - 默认快照：`snapshot_type=half_hour`。
 - 可选快照：`quarter_hour` 可用于细颗粒度研究，但必须显式选择，不能替代默认口径。
 
@@ -34,7 +35,7 @@
 ## 硬约束
 
 1. `rankTrend` TypeScript 是 golden 标准。
-2. `ParameterOptimizer` 已废弃为基准。
+2. QuantBoard 是参数研究、回测、优化、交易模拟和报告展示的唯一主链。
 3. 默认 `snapshot_type` 是 `half_hour`。
 4. `quarter_hour` 是可选项，不是默认项。
 5. 回测和优化必须保存 `random_seed`、`config_hash`、`dataset_id`、`snapshot_type`、`strategy_version`。
@@ -56,7 +57,7 @@
 - README 只放总览、索引和首期硬约束。
 - 专题细节写入对应文档，不把所有内容堆到 README。
 - 修改默认值、策略合同、API 合同时，必须同步更新交叉引用文档。
-- 发现旧文档提到 `ParameterOptimizer` 为主链时，必须标注历史状态，不能照搬。
+- 发现旧文档把 Dragon Board 根项目描述为回测平台时，必须删除或改为当前 QuantBoard 口径。
 
 ## 给后续 AI 的上下文提示
 

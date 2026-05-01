@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
-from backend.analysis.ranktrend import RankTrendConfig
+from backend.analysis.ranktrend import RankTrendConfig, analyze_momentum_signals, analyze_risk, analyze_technical
 from backend.cli import build_parser, build_ranktrend_payload
 from backend.core.backtest import TradeSimulator
+from backend.data.database import SessionLocal
+from backend.data.repository import Repository
 from backend.main import app
+from backend.services import DEFAULT_BACKTEST_STRATEGY_CONFIG
 
 
 def make_bundle(path: Path) -> Path:
@@ -59,6 +64,109 @@ def make_bundle(path: Path) -> Path:
     return bundle
 
 
+def test_ranktrend_uses_fallback_until_technical_min_samples() -> None:
+    config = RankTrendConfig()
+    percentiles = [
+        40,
+        41,
+        42,
+        43,
+        44,
+        45,
+        46,
+        47,
+        48,
+        49,
+        50,
+        51,
+        52,
+        53,
+        54,
+        55,
+        56,
+        57,
+        58,
+        59,
+        60,
+        61,
+        62,
+        63,
+        64,
+        65,
+        66,
+        67,
+        68,
+    ]
+    fallback = {"displayChange": 2.2, "stockChange": 1.8, "volumeRatio": 1.5, "zlje": 1, "zljzb": 1}
+
+    technical = analyze_technical(percentiles, config, fallback)
+
+    assert len(percentiles) < 30
+    display_score = math.tanh(fallback["displayChange"] / 8)
+    price_score = math.tanh(fallback["stockChange"] / 6)
+    volume_score = math.tanh((fallback["volumeRatio"] - 1) / 0.75)
+    expected_direction_score = display_score * 0.4 + price_score * 0.3 + 0.2 + volume_score * 0.1
+    expected_direction_confidence = 50 + abs(expected_direction_score) * 40 + 4.5
+
+    assert abs(technical["signals"]["direction"]["score"] - expected_direction_score) < 1e-12
+    assert abs(technical["signals"]["direction"]["confidence"] - expected_direction_confidence) < 1e-12
+    assert technical["signals"]["direction"]["signal"] == "buy"
+    assert technical["signals"]["acceleration"]["confidence"] > 50
+
+
+def test_ranktrend_momentum_signals_match_typescript_edge_cases() -> None:
+    config = RankTrendConfig()
+    signals = analyze_momentum_signals(
+        {
+            "values": [-1, -1, 0, 0, 0],
+            "prevValues": [-4, -4, -3, -3, -3],
+        },
+        config,
+    )
+
+    assert signals["acceleration"]["signal"] == "buy"
+    assert signals["acceleration"]["score"] > 0.18
+
+    confirm_value = -math.atanh(0.13) * abs(config.sellThresholds[1])
+    zero_cross = analyze_momentum_signals(
+        {
+            "values": [1, confirm_value, 0, 0, 0],
+            "prevValues": [0, 0, 0, 0, 0],
+        },
+        config,
+    )
+
+    assert zero_cross["zeroCross"]["signal"] == "buy"
+
+
+def test_ranktrend_risk_severity_clamps_before_stage_multiplier() -> None:
+    risk = analyze_risk(
+        90,
+        {
+            "macd": {"histogram": 0},
+            "signals": {
+                "direction": {"signal": "hold"},
+                "acceleration": {"signal": "buy"},
+                "zeroCross": {"signal": "hold"},
+            },
+        },
+        {
+            "stage": "cooling",
+            "metrics": {
+                "rankVelocity": 1,
+                "rankAcceleration": 0,
+                "rankShock": 0,
+            },
+        },
+        zlje=-1,
+        zljzb=-1,
+        volume_ratio=1,
+    )
+
+    assert risk["divergence"]["severity"] == pytest.approx(0.15166666666666667)
+    assert risk["pressure"] == pytest.approx(0.0637)
+
+
 def test_import_backtest_optimize_and_golden(tmp_path: Path) -> None:
     client = TestClient(app)
     bundle = make_bundle(tmp_path)
@@ -106,6 +214,8 @@ def test_import_backtest_optimize_and_golden(tmp_path: Path) -> None:
     assert run["dataQuality"]["lowHotlistExamples"]
     assert run["warnings"]
     assert "tradeDiagnostics" in run
+    assert run["forwardValidation"]["horizons"]
+    assert "byMomentumBucket" in run["forwardValidation"]["horizons"][0]
 
     golden_default = RankTrendConfig()
     assert golden_default.macdFast == 13
@@ -287,6 +397,8 @@ def test_import_backtest_optimize_and_golden(tmp_path: Path) -> None:
 
     golden_signals = run["signals"][:5]
     assert golden_signals
+    with SessionLocal() as session:
+        golden_frames = Repository(session).load_frames(dataset["id"], snapshot_type="half_hour", include_payload=False)
     imported_golden = client.post(
         "/api/golden/import",
         json={
@@ -294,7 +406,11 @@ def test_import_backtest_optimize_and_golden(tmp_path: Path) -> None:
             "datasetId": dataset["id"],
             "snapshotType": "half_hour",
             "source": "ts_golden_import",
-            "payload": {"signals": golden_signals},
+            "payload": {
+                "input": {"frames": golden_frames},
+                "rankTrendConfig": DEFAULT_BACKTEST_STRATEGY_CONFIG,
+                "signals": golden_signals,
+            },
         },
     )
     assert imported_golden.status_code == 200, imported_golden.text
@@ -307,6 +423,7 @@ def test_import_backtest_optimize_and_golden(tmp_path: Path) -> None:
     )
     assert validated_golden.status_code == 200
     assert validated_golden.json()["checked"] == len(golden_signals)
+    assert validated_golden.json()["passed"] is True
     assert "expectedPreview" in validated_golden.json()
 
     dry_run = client.post(

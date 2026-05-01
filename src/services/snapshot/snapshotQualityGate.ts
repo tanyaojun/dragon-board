@@ -13,7 +13,7 @@ export interface SnapshotQualityGateOptions {
 
 type SnapshotFeatureCoverage = 'full' | 'partial'
 // formal validation coverage 用来区分“能否作为正式验证样本”而不是“字段越多越好”的泛质量分。
-export type SnapshotFormalValidationCoverage = 'full' | 'legacy_core' | 'optimizer_core' | 'partial'
+export type SnapshotFormalValidationCoverage = 'full' | 'legacy_core' | 'replay_core' | 'partial'
 
 type SnapshotMetadata = {
   version?: string
@@ -100,7 +100,7 @@ export interface SnapshotSeriesFormalValidationSummary {
   totalNonEmptySnapshots: number
   fullSnapshotCount: number
   legacyCoreSnapshotCount: number
-  optimizerCoreSnapshotCount: number
+  replayCoreSnapshotCount: number
   incompatibleSnapshotCount: number
   emptyHotlistCount: number
 }
@@ -266,15 +266,15 @@ function countLegacyCoreCoverageHotlistItems(hotlist: SnapshotHotlistItem[]): nu
   return hotlist.filter((stock) => hasLegacyCoreFields(stock)).length
 }
 
-function hasOptimizerCoreFields(stock: SnapshotHotlistItem): boolean {
+function hasReplayCoreFields(stock: SnapshotHotlistItem): boolean {
   const code = String(stock.code ?? '').trim()
   const rank = Number(stock.rank)
   const price = Number(stock.price)
   return !!code && Number.isFinite(rank) && rank > 0 && Number.isFinite(price) && price > 0
 }
 
-function countOptimizerCoreCoverageHotlistItems(hotlist: SnapshotHotlistItem[]): number {
-  return hotlist.filter((stock) => hasOptimizerCoreFields(stock)).length
+function countReplayCoreCoverageHotlistItems(hotlist: SnapshotHotlistItem[]): number {
+  return hotlist.filter((stock) => hasReplayCoreFields(stock)).length
 }
 
 function inferSnapshotFeatureCoverage(snapshot: SnapshotSeriesItem['snapshot']): SnapshotFeatureCoverage {
@@ -311,8 +311,8 @@ export function resolveSnapshotFormalValidationCoverage(
   const legacyCoreCount = countLegacyCoreCoverageHotlistItems(hotlist.slice(0, requiredCount))
   if (legacyCoreCount >= requiredCount) return 'legacy_core'
 
-  const optimizerCoreCount = countOptimizerCoreCoverageHotlistItems(hotlist.slice(0, requiredCount))
-  return optimizerCoreCount >= requiredCount ? 'optimizer_core' : 'partial'
+  const replayCoreCount = countReplayCoreCoverageHotlistItems(hotlist.slice(0, requiredCount))
+  return replayCoreCount >= requiredCount ? 'replay_core' : 'partial'
 }
 
 export function resolveSnapshotVersion(snapshot: SnapshotSeriesItem['snapshot']): string {
@@ -335,7 +335,7 @@ export function normalizeSnapshotPayload(
   if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) return snapshot
 
   // 旧快照可能缺 metadata、type 或 timestamp，
-  // 这里先补齐统一结构，再交给后续质量门禁和回测链路使用。
+  // 这里先补齐统一结构，再交给后续质量门禁、QuantBoard 研究链路和导出使用。
   const metadataRecord = asRecord(snapshot.metadata)
   const hotlist = normalizeSnapshotHotlist(snapshot.hotlist)
   const timestamp = resolveSnapshotTimestamp(snapshot, date)
@@ -385,7 +385,7 @@ export function summarizeSnapshotSeriesFormalValidationCoverage(
   const normalizedSnapshots = sortSnapshotSeriesItems(snapshots)
   let fullSnapshotCount = 0
   let legacyCoreSnapshotCount = 0
-  let optimizerCoreSnapshotCount = 0
+  let replayCoreSnapshotCount = 0
   let incompatibleSnapshotCount = 0
   let emptyHotlistCount = 0
 
@@ -399,19 +399,19 @@ export function summarizeSnapshotSeriesFormalValidationCoverage(
     const coverage = resolveSnapshotFormalValidationCoverage(snapshot, minHotlistSize)
     if (coverage === 'full') fullSnapshotCount += 1
     else if (coverage === 'legacy_core') legacyCoreSnapshotCount += 1
-    else if (coverage === 'optimizer_core') optimizerCoreSnapshotCount += 1
+    else if (coverage === 'replay_core') replayCoreSnapshotCount += 1
     else incompatibleSnapshotCount += 1
   }
 
   const totalNonEmptySnapshots =
-    fullSnapshotCount + legacyCoreSnapshotCount + optimizerCoreSnapshotCount + incompatibleSnapshotCount
+    fullSnapshotCount + legacyCoreSnapshotCount + replayCoreSnapshotCount + incompatibleSnapshotCount
   const coverage: SnapshotFormalValidationCoverage =
     incompatibleSnapshotCount > 0
       ? 'partial'
       : legacyCoreSnapshotCount > 0
         ? 'legacy_core'
-        : optimizerCoreSnapshotCount > 0
-          ? 'optimizer_core'
+        : replayCoreSnapshotCount > 0
+          ? 'replay_core'
           : 'full'
 
   return {
@@ -419,7 +419,7 @@ export function summarizeSnapshotSeriesFormalValidationCoverage(
     totalNonEmptySnapshots,
     fullSnapshotCount,
     legacyCoreSnapshotCount,
-    optimizerCoreSnapshotCount,
+    replayCoreSnapshotCount,
     incompatibleSnapshotCount,
     emptyHotlistCount,
   }

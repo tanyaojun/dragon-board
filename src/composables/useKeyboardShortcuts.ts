@@ -8,7 +8,6 @@ export function useKeyboardShortcuts(actions: {
   onSector?: () => void
   onConfig?: () => void
   onBreath?: () => void
-  onTrend?: () => void
   onFavorite?: () => void
   onRefresh?: () => void
   onHelp?: () => void

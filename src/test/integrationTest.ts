@@ -1,20 +1,18 @@
 // src/test/integrationTest.ts
-// 集成测试脚本 - 验证数据增强和回测系统的核心功能
+// 集成测试脚本 - 验证数据增强系统的核心功能
 
 import { dataQualityChecker } from './dataQualityChecker'
-import { BacktestEngine } from '../services/backtest/BacktestEngine'
 
 /**
  * 集成测试 - 验证整个系统的核心功能
  */
 export async function runIntegrationTest() {
-  console.log('=== 数据增强和回测系统集成测试 ===')
+  console.log('=== 数据增强系统集成测试 ===')
   console.log('开始时间:', new Date().toISOString())
   console.log('')
 
   const testResults = {
     dataQualityCheck: { passed: false, message: '' },
-    backtestEngine: { passed: false, message: '' },
     dataEnhancement: { passed: false, message: '' },
     overall: { passed: false, message: '' },
   }
@@ -53,38 +51,8 @@ export async function runIntegrationTest() {
     }
     console.log('')
 
-    // 测试2: 回测引擎初始化
-    console.log('🧪 测试2: 回测引擎初始化')
-    try {
-      const engine = new BacktestEngine({
-        startDate: '2026-04-01',
-        endDate: '2026-04-11',
-        initialCapital: 100000,
-        positionSize: 0.1,
-        maxPositions: 3,
-        confidenceThreshold: 70,
-      })
-
-      // 检查引擎配置
-      if (engine && typeof engine.runBacktest === 'function') {
-        testResults.backtestEngine.passed = true
-        testResults.backtestEngine.message = '回测引擎初始化成功'
-        console.log('  ✅ 回测引擎: 初始化成功')
-        console.log('    初始资金:', engine['config'].initialCapital)
-        console.log('    仓位比例:', engine['config'].positionSize)
-        console.log('    最大持仓:', engine['config'].maxPositions)
-      } else {
-        testResults.backtestEngine.message = '回测引擎初始化失败'
-        console.log('  ❌ 回测引擎: 初始化失败')
-      }
-    } catch (error) {
-      testResults.backtestEngine.message = `回测引擎初始化失败: ${error instanceof Error ? error.message : String(error)}`
-      console.log('  ❌ 回测引擎: 初始化异常', error)
-    }
-    console.log('')
-
-    // 测试3: 数据增强功能验证
-    console.log('🧪 测试3: 数据增强功能验证')
+    // 测试2: 数据增强功能验证
+    console.log('🧪 测试2: 数据增强功能验证')
     try {
       // 检查DataLayer是否包含增强功能
       const snapshotDates = await (window as any).dataLayer?.getSnapshotDates?.()
@@ -114,11 +82,10 @@ export async function runIntegrationTest() {
 
     const passedTests = [
       testResults.dataQualityCheck.passed,
-      testResults.backtestEngine.passed,
       testResults.dataEnhancement.passed,
     ].filter(Boolean).length
 
-    const totalTests = 3
+    const totalTests = 2
 
     console.log(`  通过测试: ${passedTests}/${totalTests}`)
     console.log('')
@@ -127,11 +94,7 @@ export async function runIntegrationTest() {
     console.log('     状态:', testResults.dataQualityCheck.message)
     console.log('')
 
-    console.log('  2. 回测引擎:', testResults.backtestEngine.passed ? '✅' : '❌')
-    console.log('     状态:', testResults.backtestEngine.message)
-    console.log('')
-
-    console.log('  3. 数据增强:', testResults.dataEnhancement.passed ? '✅' : '❌')
+    console.log('  2. 数据增强:', testResults.dataEnhancement.passed ? '✅' : '❌')
     console.log('     状态:', testResults.dataEnhancement.message)
     console.log('')
 
@@ -159,11 +122,8 @@ export async function runIntegrationTest() {
     if (!testResults.dataQualityCheck.passed) {
       console.log('  1. 检查数据质量检查工具配置')
     }
-    if (!testResults.backtestEngine.passed) {
-      console.log('  2. 检查回测引擎依赖和数据访问')
-    }
     if (!testResults.dataEnhancement.passed) {
-      console.log('  3. 确保DataLayer已正确加载')
+      console.log('  2. 确保DataLayer已正确加载')
     }
 
     if (passedTests > 0) {
@@ -171,7 +131,6 @@ export async function runIntegrationTest() {
       console.log('🚀 下一步操作:')
       console.log('  1. 让系统运行一段时间积累v2.0格式数据')
       console.log('  2. 运行数据质量检查: dataQualityChecker.generateQualityReport()')
-      console.log('  3. 运行回测测试: new BacktestEngine().runBacktest()')
     }
   } catch (error) {
     console.error('❌ 集成测试过程中发生错误:', error)
@@ -194,7 +153,6 @@ export async function quickHealthCheck() {
   const checks = [
     { name: 'DataLayer', passed: false },
     { name: 'DataQualityChecker', passed: false },
-    { name: 'BacktestEngine', passed: false },
   ]
 
   try {
@@ -206,14 +164,6 @@ export async function quickHealthCheck() {
     // 检查DataQualityChecker
     if (typeof dataQualityChecker !== 'undefined') {
       checks[1].passed = true
-    }
-
-    // 检查BacktestEngine
-    try {
-      new BacktestEngine()
-      checks[2].passed = true
-    } catch {
-      // 忽略构造函数错误
     }
 
     console.log('📋 健康检查结果:')

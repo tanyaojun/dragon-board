@@ -1,5 +1,5 @@
 // src/test/validateRankTrendAnalyzer.ts
-// 最小化的回测验证脚本 - 验证RankTrendAnalyzer的4个信号计算逻辑
+// 最小化的 RankTrend 验证脚本 - 验证RankTrendAnalyzer的4个信号计算逻辑
 
 import { rankTrendAnalyzer } from '../services/RankTrendAnalyzer'
 import { dataLayer } from '../services/DataLayer'

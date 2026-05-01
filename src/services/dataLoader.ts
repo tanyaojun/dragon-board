@@ -1716,7 +1716,7 @@ class DataLoaderService {
   }
 
   /**
-   * 对外暴露热度重算入口，方便后续接参数优化器或开发期手工微调。
+   * 对外暴露热度重算入口，方便后续接外部研究工具或开发期手工微调。
    */
   recalculateStockHotness(): MergedStock[] {
     const stocks = dataLayer.getStocks().map((stock) => ({ ...stock }))

@@ -16,7 +16,7 @@ Golden 来源：
 - `src/services/rankTrend/candidateTierComposer.ts`
 - `src/services/rankTrend/statusClassifier.ts`
 
-`ParameterOptimizer` 不属于 golden 来源。
+QuantBoard golden 只来自 dragon-board TypeScript `rankTrend` 源码。
 
 ## 默认配置
 
@@ -220,7 +220,7 @@ await window.quantBoardExportRankTrendGolden({
 })
 ```
 
-函数会读取当前页面 origin 下的 `DragonBoardData` IndexedDB，调用 TypeScript `RankTrendReplayEngine`，并下载：
+函数会读取当前页面 origin 下的 `DragonBoardData` IndexedDB，调用 TypeScript golden 回放器，并下载：
 
 ```text
 rank_trend_default.half_hour.ts-golden.json
@@ -277,7 +277,7 @@ Python 移植进入回测前必须满足：
 - golden case 全部通过。
 - 样本不足 case 能返回 `insufficient` 或 `degraded`。
 - `quarter_hour` case 只有显式选择时生效。
-- 没有任何测试以 `ParameterOptimizer` 输出作为期望值。
+- 没有任何测试以 Dragon Board 根项目浏览器内回测输出作为期望值。
 
 ## 变更管理
 

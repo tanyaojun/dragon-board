@@ -6,7 +6,7 @@
 
 `dragon-board 快照数据 -> QuantBoard 数据集 -> Python rankTrend -> 回测 -> 优化 -> API/CLI/前端报告`
 
-这里的 Python rankTrend 必须对齐 TypeScript golden 标准。`ParameterOptimizer` 不是架构依赖，也不是迁移来源。
+这里的 Python rankTrend 必须对齐 TypeScript golden 标准。QuantBoard 是仓库内唯一回测平台，Dragon Board 根项目只提供实时看板、快照数据和 TypeScript golden 导出。
 
 ## 模块分层
 
@@ -120,7 +120,15 @@ backend/
 rank_trend_candidate
 ```
 
-策略只消费 Python rankTrend 输出，不直接依赖 dragon-board UI、`ParameterOptimizer`、前端事件或浏览器全局对象。
+策略只消费 Python rankTrend 输出，不直接依赖 dragon-board UI、前端事件或浏览器全局对象。
+
+`src/services/strategyBacktest` 的历史职责归并到 Python 后端：
+
+- 快照回放与样本质量：`backend.data.repository`、`backend.data.quality_gate`
+- RankTrend 回放：`backend.analysis.ranktrend.RankTrendPythonEngine`
+- 后验分布与 forward validation：`backend.core.backtest.OutcomeEvaluator`
+- 交易模拟与撮合：`backend.core.backtest.TradeSimulator`
+- 回测编排与优化：`backend.core.backtest.BacktestEngine`、`backend.core.backtest.Optimizer`
 
 策略输出不等于交易指令。它应至少包含：
 
@@ -148,7 +156,7 @@ snapshot_type = half_hour
 禁止：
 
 - 在 API、CLI、前端里把 `quarter_hour` 写成默认。
-- 从旧 `ParameterOptimizer` 文档复制 `preferredTypes: ['quarter_hour', 'half_hour']` 作为新口径。
+- 在 API、CLI、前端里绕过 QuantBoard 后端另做根项目回测入口。
 
 ## 可复现性
 
@@ -188,5 +196,5 @@ snapshot_type = half_hour
 - 不接实盘交易。
 - 不做自动下单。
 - 不把优化结果自动写回 dragon-board 默认参数。
-- 不重建 `ParameterOptimizer`。
+- 不在 Dragon Board 根项目重建回测模块。
 - 不为了前端演示绕过 golden 校验和质量门禁。

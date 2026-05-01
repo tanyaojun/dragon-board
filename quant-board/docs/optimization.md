@@ -4,7 +4,7 @@
 
 QuantBoard 的参数优化是研究工具，不是自动改策略默认值的工具。优化结果只能生成候选参数，必须经过样本外验证后，人工决定是否采用。
 
-`ParameterOptimizer` 已废弃为基准。首期优化引擎只调用 Python 回测引擎。
+优化引擎只调用 QuantBoard Python 回测引擎。Dragon Board 根项目不提供参数搜索、交易模拟或优化入口。
 
 ## 输入
 

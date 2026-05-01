@@ -2,7 +2,7 @@
 
 ## 目标
 
-首期回测引擎用于验证 Python rankTrend 候选策略在历史快照上的表现。它不复用旧 `ParameterOptimizer` 回测逻辑，也不把前端 `finalSignal` 直接当成交易指令。
+首期回测引擎用于验证 Python rankTrend 候选策略在历史快照上的表现。Dragon Board 根项目不再承载回测职责；所有回测、优化、交易模拟和报告展示统一归 QuantBoard Python 后端。
 
 当前实现口径以 [backtest-policy.md](backtest-policy.md) 为准。本文是设计说明，若和当前运行口径冲突，优先按统一口径文档执行。
 
@@ -13,6 +13,17 @@
 - 交易成本明确；
 - 指标无 `NaN`；
 - 报告可被 API、CLI、前端读取。
+
+## 迁移边界
+
+原根项目 `src/services/strategyBacktest` 的职责已由 Python 后端承接：
+
+- `OutcomeEvaluator` 输出候选池分布、forward validation、`byMomentumBucket` 等后验分组；
+- `TradeSimulator` 负责撮合、费用、T+1、涨跌停、成交量和盘口约束；
+- `BacktestEngine` 负责编排 RankTrend 回放、质量诊断、交易模拟和对照组；
+- `Optimizer` 负责参数搜索、训练/验证切分、walk-forward 和过拟合风险提示。
+
+Dragon Board 只通过 `quantBoardBridge` 提供 IndexedDB 数据读取和 TypeScript golden 导出，不再提供浏览器内回测入口。
 
 ## 输入
 

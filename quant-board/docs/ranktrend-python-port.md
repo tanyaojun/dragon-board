@@ -203,7 +203,7 @@ dict[str, RankTrendAnalysisResult]
 
 ## 不要做的事
 
-- 不从 `ParameterOptimizer` 复制参数。
+- 不在 Dragon Board 根项目实现或恢复回测平台逻辑。
 - 不为了让回测更好看调整 golden 算法。
 - 不把 `final.signal=buy` 直接等同于开仓。
 - 不在 Python 里私自把默认快照改成 `quarter_hour`。

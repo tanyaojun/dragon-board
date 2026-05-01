@@ -248,7 +248,7 @@ await window.quantBoardExportRankTrendGolden({
 
 - 所有 API 请求和响应类型在前端建立 TypeScript 类型。
 - 后端新增字段默认前端忽略，避免展示崩溃。
-- 前端不得根据旧 `ParameterOptimizer` 类型命名新接口。
+- 前端接口按 QuantBoard 当前 API 合同命名；回测、优化和报告展示只调用 QuantBoard 后端。
 - 前端展示 `finalSignal` 时必须同时展示 `candidateTier`、风险和样本质量。
 
 ## 验收清单

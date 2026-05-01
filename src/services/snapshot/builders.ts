@@ -185,7 +185,7 @@ export function buildSnapshotHotlistItem(
   context?: SnapshotBuildContext,
 ) {
   // 单只股票在这里被压成各类快照共享的“热榜标准项”，
-  // 后续回测、复盘、导出都默认依赖这套字段。
+  // 后续 QuantBoard 研究链路、复盘、导出都默认依赖这套字段。
   const l2Summary = resolveL2Summary(context, stock)
   const depth10 = cloneDepth10Book(context?.depth10ByCode?.get?.(stock?.code))
 
@@ -264,7 +264,7 @@ export function buildIntradaySnapshotBase(
   limit: number,
 ) {
   // 一刻与半小时快照共用这套主体结构，
-  // 改字段时要同步评估参数优化、真龙复盘和导出兼容性。
+  // 改字段时要同步评估 QuantBoard 研究链路、真龙复盘和导出兼容性。
   const timestamp = snapshotTime.getTime()
   const hotlist = context.stocks
     .slice(0, limit)

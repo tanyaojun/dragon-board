@@ -230,7 +230,7 @@ function calculateWeightedHotness(
  * 个股热度的核心原则：
  * 1. avgRank 只提供“跨平台关注度”底座，不能单独冒充热度；
  * 2. 人气、人气变化、领涨状态、身位、换手共同决定“热而且活”还是“只是挂榜”；
- * 3. 权重统一走运行时配置，后续可直接接参数优化器或手工校准。
+ * 3. 权重统一走运行时配置，后续可直接接外部研究工具或手工校准。
  */
 export function calculateStockHotnessRecords(
   stocks: MergedStock[],

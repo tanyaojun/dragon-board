@@ -202,6 +202,18 @@ def rank_shock(percentiles: list[float], lookback: int = 5) -> float:
     return 0.0 if std < 1e-6 else clamp((current - mean) / std, -5, 5)
 
 
+def cycle_rank_shock(percentiles: list[float]) -> float:
+    if len(percentiles) < 6:
+        return 0.0
+    velocities = [percentiles[i] - percentiles[i - 1] for i in range(1, len(percentiles))]
+    recent = velocities[-5:]
+    current = recent[-1] if recent else 0.0
+    mean = average(recent)
+    variance = average([(value - mean) ** 2 for value in recent])
+    std = math.sqrt(variance)
+    return 0.0 if not math.isfinite(std) or std < 1e-6 else (current - mean) / std
+
+
 def momentum_data(percentiles: list[float], config: RankTrendConfig) -> dict[str, Any] | None:
     if len(percentiles) < max(config.momentumPeriods) + 1:
         return None
@@ -257,7 +269,7 @@ def analyze_momentum_signals(data: dict[str, Any] | None, config: RankTrendConfi
     accelerations = [values[i] - prev_values[i] for i in range(count)]
     accel_scores = [normalize_signed(accelerations[i], buy[i], abs(sell[i])) for i in range(count)]
     accel_raw = sum(accel_scores[i] * weights[i] for i in range(count))
-    short_scores = period_scores[:min(2, len(period_scores))]
+    short_scores = accel_scores[:min(2, len(accel_scores))]
     accel_score = clamp(accel_raw * (0.7 + 0.3 * average([abs(score) for score in short_scores])), -1, 1)
     accel_signal = "hold"
     if accel_score >= 0.18 and any(score > 0 for score in short_scores):
@@ -275,10 +287,10 @@ def analyze_momentum_signals(data: dict[str, Any] | None, config: RankTrendConfi
         confirm_score = normalize_signed(values[1], buy[1], abs(sell[1]))
         trigger_strength = min(1, abs(normalize_signed(trigger_now, buy[0], abs(sell[0]))))
         confirm_strength = min(1, abs(confirm_score))
-        if trigger_prev <= 0 < trigger_now and confirm_score >= -0.12:
+        if trigger_prev <= 0 < trigger_now and confirm_score >= -0.15:
             zero_signal = "buy"
             zero_score = clamp(0.7 * trigger_strength + 0.3 * max(0, confirm_strength), -1, 1)
-        elif trigger_prev >= 0 > trigger_now and confirm_score <= 0.12:
+        elif trigger_prev >= 0 > trigger_now and confirm_score <= 0.15:
             zero_signal = "sell"
             zero_score = -clamp(0.7 * trigger_strength + 0.3 * max(0, confirm_strength), 0, 1)
         strong_confirm = (zero_signal == "buy" and confirm_score > 0.15) or (zero_signal == "sell" and confirm_score < -0.15)
@@ -297,7 +309,7 @@ def analyze_technical(percentiles: list[float], config: RankTrendConfig, fallbac
     macd = calculate_macd(percentiles, config)
     profile = momentum_profile(percentiles)
     data = momentum_data(percentiles, config)
-    if data:
+    if len(percentiles) >= get_technical_min_samples(config) and data:
         signals = analyze_momentum_signals(data, config)
         score = data["score"]
     else:
@@ -322,7 +334,19 @@ def fallback_signals(percentiles: list[float], macd: dict[str, Any], fallback: d
     accel_score = clamp(display * 0.55 + price * 0.25 + volume * 0.2, -1, 1)
     zero_base = clamp(display * 0.5 + price * 0.35 + volume * 0.15, -1, 1)
     direction_signal = "buy" if direction_score >= 0.2 else "sell" if direction_score <= -0.2 else "hold"
+    if direction_signal == "buy":
+        direction_agreement = int(display > 0) + int(price > 0) + int(capital >= 0)
+    elif direction_signal == "sell":
+        direction_agreement = int(display < 0) + int(price < 0) + int(capital <= 0)
+    else:
+        direction_agreement = 0
     accel_signal = "buy" if accel_score >= 0.18 and (display > 0 or price > 0) else "sell" if accel_score <= -0.18 and (display < 0 or price < 0) else "hold"
+    if accel_signal == "buy":
+        accel_agreement = int(display > 0) + int(price > 0) + int(volume > 0)
+    elif accel_signal == "sell":
+        accel_agreement = int(display < 0) + int(price < 0) + int(volume < 0)
+    else:
+        accel_agreement = 0
     zero_signal = "hold"
     zero_score = 0.0
     if display > 0.15 and price > 0 and volume >= -0.2:
@@ -331,12 +355,18 @@ def fallback_signals(percentiles: list[float], macd: dict[str, Any], fallback: d
     elif display < -0.15 and price < 0 and volume <= 0.2:
         zero_signal = "sell"
         zero_score = min(0, zero_base)
+    if zero_signal == "buy":
+        zero_agreement = int(price > 0) + int(volume > 0)
+    elif zero_signal == "sell":
+        zero_agreement = int(price < 0) + int(volume < 0)
+    else:
+        zero_agreement = 0
     macd = {**macd, "cross": macd["cross"] if macd_available else "none", "rawScore": clamp(macd["rawScore"], -1, 1) if macd_available else 0}
     return (
         {
-            "direction": {"signal": direction_signal, "confidence": signal_confidence(direction_score), "score": direction_score},
-            "acceleration": {"signal": accel_signal, "confidence": signal_confidence(accel_score), "score": accel_score},
-            "zeroCross": {"signal": zero_signal, "confidence": signal_confidence(zero_score), "score": zero_score},
+            "direction": {"signal": direction_signal, "confidence": signal_confidence(direction_score, clamp(direction_agreement * 1.5, 0, 5)), "score": direction_score},
+            "acceleration": {"signal": accel_signal, "confidence": signal_confidence(accel_score, clamp(accel_agreement * 1.5, 0, 5)), "score": accel_score},
+            "zeroCross": {"signal": zero_signal, "confidence": signal_confidence(zero_score, clamp(zero_agreement * 2.5, 0, 5)), "score": zero_score},
         },
         macd,
         clamp((display * 0.45 + price * 0.35 + capital * 0.2) * 100, -100, 100),
@@ -389,7 +419,7 @@ def cycle_metrics(ranks: list[float], percentiles: list[float]) -> dict[str, Any
     return {
         "rankVelocity": velocity,
         "rankAcceleration": velocity - previous_velocity,
-        "rankShock": rank_shock(percentiles, 5),
+        "rankShock": cycle_rank_shock(percentiles),
         "hotZoneStreak": hot_streak,
         "bestRecentRank": best,
         "drawdownFromPeak": max(0, current_rank - best),
@@ -503,8 +533,7 @@ def entry_advice(stage: str, transition: str) -> dict[str, Any]:
 def analyze_risk(current_percentile: float, technical: dict[str, Any], cycle: dict[str, Any], zlje: float, zljzb: float, volume_ratio: float) -> dict[str, Any]:
     metrics = cycle["metrics"]
     overheat = 0.0
-    if current_percentile >= 75 or metrics.get("rankVelocity", 0) > 0:
-        overheat += max(0, current_percentile - 70) * 1.2
+    overheat += max(0, current_percentile - 70) * 1.2
     overheat += max(0, metrics["rankShock"]) * 12
     if metrics["rankVelocity"] > 0:
         overheat += min(15, metrics["rankVelocity"] * 1.5)
@@ -547,8 +576,8 @@ def analyze_risk(current_percentile: float, technical: dict[str, Any], cycle: di
     stage = cycle["stage"]
     over_mult = {"ignition": 0.3, "expansion": 0.55, "crowded": 0.85, "reversal": 1, "cooling": 0.3}
     div_mult = {"ignition": 0.35, "expansion": 0.65, "crowded": 0.9, "reversal": 1, "cooling": 0.35}
-    over_sev = clamp(((overheat - 45) / 30) * over_mult.get(stage, 1), 0, 1)
-    div_sev = clamp(((divergence - 40) / 30) * div_mult.get(stage, 1), 0, 1)
+    over_sev = clamp((overheat - 45) / 30, 0, 1) * over_mult.get(stage, 1)
+    div_sev = clamp((divergence - 40) / 30, 0, 1) * div_mult.get(stage, 1)
     pressure = clamp(0.58 * over_sev + 0.42 * div_sev, 0, 1)
     return {
         "overheat": {"score": overheat, "signal": "sell" if overheat >= 70 and stage in ("crowded", "reversal") else "hold" if overheat >= 45 else "buy", "severity": over_sev},
@@ -685,10 +714,12 @@ class RankTrendPythonEngine:
 
             stocks = frame.get("stocks", [])
             total_count = len(stocks)
+            seen_codes: set[str] = set()
             for stock in stocks:
                 code = str(stock.get("code") or "")
-                if not code:
+                if not code or code in seen_codes:
                     continue
+                seen_codes.add(code)
                 rank = float(stock.get("rank") or 0)
                 if rank <= 0:
                     continue
@@ -828,10 +859,15 @@ class RankTrendPythonEngine:
 
     @staticmethod
     def _build_stock_lookup(frames: list[dict[str, Any]]) -> list[dict[str, dict[str, Any]]]:
-        return [
-            {str(row.get("code")): row for row in frame.get("stocks", []) if row.get("code") is not None}
-            for frame in frames
-        ]
+        output: list[dict[str, dict[str, Any]]] = []
+        for frame in frames:
+            lookup: dict[str, dict[str, Any]] = {}
+            for row in frame.get("stocks", []):
+                code = str(row.get("code")) if row.get("code") is not None else ""
+                if code and code not in lookup:
+                    lookup[code] = row
+            output.append(lookup)
+        return output
 
     @staticmethod
     def _find_stock(frame: dict[str, Any], code: str) -> dict[str, Any] | None:

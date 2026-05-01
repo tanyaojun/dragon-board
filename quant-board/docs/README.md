@@ -5,7 +5,8 @@ QuantBoard 是 `dragon-board` 的量化回测与参数研究子项目。首期�
 ## 首期结论
 
 - `src/services/rankTrend/*` 与 `src/services/RankTrendAnalyzer.ts` 是首期唯一 golden 标准。
-- `ParameterOptimizer` 已废弃为历史实现，不能再作为参数、回测、优化或验收基准。
+- QuantBoard 是参数研究、回测、优化、交易模拟和报告展示的唯一主链。
+- Dragon Board 根项目只提供实时看板、快照数据和 TypeScript golden 导出，不承载回测平台职责。
 - Python 端必须先复刻 `rankTrend` 输出合同，再开发策略、回测和优化。
 - 默认 `snapshot_type` 为 `half_hour`。`quarter_hour` 只作为可选细颗粒度样本，不是默认口径。
 - 所有回测、优化、API、CLI、前端展示都要保留 `dataset_id`、`snapshot_type`、`strategy_version`、`config_hash`、`random_seed`，保证结果可追溯。
@@ -32,7 +33,7 @@ QuantBoard 是 `dragon-board` 的量化回测与参数研究子项目。首期�
 1. 数据导入：从 dragon-board IndexedDB 导出的 JSON 或正式快照投影生成 QuantBoard 数据集。
 2. Golden 用例：从 TypeScript `rankTrend` 产出固定输入与期望输出，写入 `golden_ranktrend_cases`。
 3. Python 移植：逐模块复刻 technical、cycle、risk、decision、candidate tier。
-4. 回测引擎：只消费 Python rankTrend 输出，不直接调用旧前端回测或 ParameterOptimizer。
+4. 回测引擎：只消费 Python rankTrend 输出，所有回测、优化和交易模拟都在 QuantBoard Python 后端执行。
 5. API 与 CLI：先覆盖导入、golden 校验、单次回测、回测列表、报告读取。
 6. 优化：基于回测引擎做网格搜索和随机/局部搜索，记录每次实验。
 7. 前端：用静态报告和 API 结果展示数据集、回测任务、权益曲线、交易列表、参数对比。
@@ -97,7 +98,7 @@ macd: 21/34/13
 
 ## 开发约束
 
-- 只把 TypeScript `rankTrend` 当 golden，不从 `ParameterOptimizer` 复制算法口径。
+- 只把 TypeScript `rankTrend` 当 golden；回测、优化和交易模拟口径以 QuantBoard Python 后端为准。
 - 数据质量门禁失败时返回结构化原因，不静默降级为可交易结果。
 - 任何优化结果都只能作为候选参数，必须经过固定样本外验证。
 - 对 Python 初学者友好：新增模块要有清晰命名、少量必要注释、可运行测试。

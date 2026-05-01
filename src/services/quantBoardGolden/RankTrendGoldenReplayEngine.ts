@@ -15,11 +15,11 @@ import {
 import type { RankTrendAnalysisResult } from '@/services/rankTrend/types'
 import { getTechnicalMinSamples } from '@/services/rankTrend/utils'
 import type {
-  BacktestMeta,
-  ReplayEngineOptions,
-  ReplayFrame,
-  ReplaySignal,
-  ReplayStock,
+  GoldenReplayFrame,
+  GoldenReplayMeta,
+  GoldenReplayOptions,
+  GoldenReplaySignal,
+  GoldenReplayStock,
 } from './types'
 
 const DEFAULT_WINDOW_SIZE = 50
@@ -34,7 +34,7 @@ function calculatePercentileRank(rank: number, totalCount: number): number {
   return ((totalCount - rank + 1) / totalCount) * 100
 }
 
-function buildMarketBreathData(frame: ReplayFrame): Record<string, any> {
+function buildMarketBreathData(frame: GoldenReplayFrame): Record<string, any> {
   return {
     ...(frame.marketContext.payload || {}),
     marketData: {
@@ -49,18 +49,18 @@ function buildMarketBreathData(frame: ReplayFrame): Record<string, any> {
   }
 }
 
-function findStock(frame: ReplayFrame, code: string): ReplayStock | null {
+function findStock(frame: GoldenReplayFrame, code: string): GoldenReplayStock | null {
   return frame.stocks.find((stock) => stock.code === code) || null
 }
 
-export class RankTrendReplayEngine {
+export class RankTrendGoldenReplayEngine {
   private readonly config: ReturnType<typeof cloneDefaultRankTrendRuntimeConfig>
 
   constructor(configPatch: RTConfigPatch = {}) {
     this.config = normalizeRankTrendRuntimeConfig(cloneDefaultRankTrendRuntimeConfig(), configPatch)
   }
 
-  replay(frames: ReplayFrame[], options: ReplayEngineOptions): ReplaySignal[] {
+  replay(frames: GoldenReplayFrame[], options: GoldenReplayOptions): GoldenReplaySignal[] {
     const warmupCount = options.warmupCount ?? getTechnicalMinSamples(this.config)
     const windowSize = options.windowSize ?? DEFAULT_WINDOW_SIZE
     const startIndex = frames.length >= warmupCount ? warmupCount - 1 : 0
@@ -68,7 +68,7 @@ export class RankTrendReplayEngine {
       typeof options.maxSignals === 'number' && Number.isFinite(options.maxSignals) && options.maxSignals > 0
         ? Math.floor(options.maxSignals)
         : null
-    const signals: ReplaySignal[] = []
+    const signals: GoldenReplaySignal[] = []
 
     for (let index = startIndex; index < frames.length; index++) {
       const frameSignals = this.replayFrameAt(frames, index, { windowSize, meta: options.meta })
@@ -84,10 +84,10 @@ export class RankTrendReplayEngine {
   }
 
   replayFrameAt(
-    frames: ReplayFrame[],
+    frames: GoldenReplayFrame[],
     frameIndex: number,
-    options: { windowSize?: number; meta: BacktestMeta },
-  ): ReplaySignal[] {
+    options: { windowSize?: number; meta: GoldenReplayMeta },
+  ): GoldenReplaySignal[] {
     const frame = frames[frameIndex]
     if (!frame) return []
 
@@ -100,16 +100,16 @@ export class RankTrendReplayEngine {
 
     return frame.stocks
       .map((stock) => this.replayStock(stock, frame, historyFrames, regime, options.meta))
-      .filter((signal: ReplaySignal | null): signal is ReplaySignal => signal !== null)
+      .filter((signal: GoldenReplaySignal | null): signal is GoldenReplaySignal => signal !== null)
   }
 
   private replayStock(
-    stock: ReplayStock,
-    frame: ReplayFrame,
-    historyFrames: ReplayFrame[],
+    stock: GoldenReplayStock,
+    frame: GoldenReplayFrame,
+    historyFrames: GoldenReplayFrame[],
     regime: ReturnType<typeof analyzeMarketRegime>,
-    meta: BacktestMeta,
-  ): ReplaySignal | null {
+    meta: GoldenReplayMeta,
+  ): GoldenReplaySignal | null {
     const ranks: number[] = []
     const percentiles: number[] = []
 

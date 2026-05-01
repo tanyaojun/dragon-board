@@ -39,7 +39,6 @@ class KeyboardService {
       { key: 'Ctrl+D', description: '显示龙头面板', category: 'panels', action: () => {} },
       { key: 'Ctrl+S', description: '显示题材分析', category: 'panels', action: () => {} },
       { key: 'Ctrl+B', description: '显示龙息分析', category: 'panels', action: () => {} },
-      { key: 'Ctrl+T', description: '显示参数回测', category: 'panels', action: () => {} },
       { key: 'Ctrl+F', description: '显示自选股', category: 'panels', action: () => {} },
       
       // 其他
@@ -168,7 +167,6 @@ class KeyboardService {
     onSector?: () => void
     onConfig?: () => void
     onBreath?: () => void
-    onTrend?: () => void
     onFavorite?: () => void
     onRefresh?: () => void
     onHelp?: () => void
@@ -210,15 +208,6 @@ class KeyboardService {
       })
     }
     
-    if (actions.onTrend) {
-      this.registerShortcut({
-        key: 'Ctrl+T',
-        description: '显示参数回测',
-        category: 'panels',
-        action: actions.onTrend
-      })
-    }
-
     if (actions.onFavorite) {
       this.registerShortcut({
         key: 'Ctrl+F',

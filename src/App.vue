@@ -28,11 +28,6 @@
 
         <DragonThemeToggle />
 
-        <!-- 回测面板按钮（新增） -->
-        <button ref="backtestBtnRef" class="btn-icon" title="参数回测 (Ctrl+T)" @click="openPanel('backtest', $event)">
-          <span class="icon">📈</span>
-        </button>
-
         <!-- 题材分析 -->
         <button ref="sectorBtnRef" class="btn-icon" title="题材分析 (Ctrl+S)" @click="openPanel('sector', $event)">
           <span class="icon">📊</span>
@@ -80,9 +75,6 @@
             </div>
             <div class="dropdown-item" @click="openSettings('algorithm')">
               <span class="item-icon">🧠</span>算法中心
-            </div>
-            <div class="dropdown-item" @click="openBacktestPanel">
-              <span class="item-icon">📈</span>参数回测
             </div>
             <div class="dropdown-divider"></div>
             <div class="dropdown-item" @click="panels.help = true">
@@ -162,10 +154,6 @@
       :stock-name="selectedStockName" :trigger-rect="panelRects.stockDetail"
       @close="panels.stockDetail = false" />
 
-    <!-- 回测面板 -->
-    <BacktestPanel v-model:visible="panels.backtest" :trigger-rect="panelRects.backtest"
-      @close="panels.backtest = false" />
-
     <!-- 题材相关面板 -->
     <SectorDetail v-model:visible="panels.sectorDetail" :sector-name="sectorDetailName"
       :trigger-rect="panelRects.sectorDetail" @close="panels.sectorDetail = false" @select-theme="openSectorDetail" />
@@ -204,7 +192,6 @@ const KeyboardHelpPanel = defineAsyncComponent(() => import('./components/panels
 const ExportPanel = defineAsyncComponent(() => import('./components/panels/ExportPanel.vue'))
 const FavoritePanel = defineAsyncComponent(() => import('./components/panels/FavoritePanel.vue'))
 const StockL2DetailPanel = defineAsyncComponent(() => import('./components/panels/StockL2DetailPanel.vue'))
-const BacktestPanel = defineAsyncComponent(() => import('./components/panels/BacktestPanel.vue'))
 const SectorDetail = defineAsyncComponent(() => import('./components/panels/SectorDetail.vue'))
 const SectorAlert = defineAsyncComponent(() => import('./components/panels/SectorAlert.vue'))
 const SectorRotation = defineAsyncComponent(() => import('./components/panels/SectorRotation.vue'))
@@ -281,7 +268,6 @@ const algorithmBtnRef = ref<HTMLElement>()
 const favoriteBtnRef = ref<HTMLElement>()
 const dropdownRef = ref<HTMLElement | null>(null)
 const themeRiskBtnRef = ref<HTMLElement>()
-const backtestBtnRef = ref<HTMLElement>()
 
 // 导航标签
 const navTabs = [
@@ -307,7 +293,6 @@ const panels = ref({
   sectorAlert: false,
   sectorRotation: false,
   themeRisk: false,
-  backtest: false,
   stockDetail: false,
 })
 
@@ -340,11 +325,6 @@ const openPanelFromShortcut = (panelName: keyof typeof panels.value, triggerRef?
     panelRects.value[panelName] = triggerRef.getBoundingClientRect()
   }
   panels.value[panelName] = true
-}
-
-const openBacktestPanel = () => {
-  showDropdown.value = false
-  panels.value.backtest = true
 }
 
 const openExportPanel = (event?: MouseEvent) => {
@@ -391,7 +371,6 @@ useKeyboardShortcuts({
   onDragon: () => openPanelFromShortcut('dragon', dragonBtnRef.value),
   onSector: () => openPanelFromShortcut('sector', sectorBtnRef.value),
   onBreath: () => openPanelFromShortcut('breath', breathBtnRef.value),
-  onTrend: () => openPanelFromShortcut('backtest', backtestBtnRef.value),
   onFavorite: () => openPanelFromShortcut('favorite', favoriteBtnRef.value),
   onAlgorithm: () => openPanelFromShortcut('algorithm', algorithmBtnRef.value),
   onExport: () => openPanelFromShortcut('export'),

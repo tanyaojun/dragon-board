@@ -1,4 +1,4 @@
-import { RankTrendReplayEngine } from '@/services/strategyBacktest/RankTrendReplayEngine'
+import { RankTrendGoldenReplayEngine } from '@/services/quantBoardGolden/RankTrendGoldenReplayEngine'
 import {
   cloneDefaultRankTrendRuntimeConfig,
   DEFAULT_RANK_TREND_SNAPSHOT_TYPE,
@@ -6,13 +6,13 @@ import {
   type RTConfigPatch,
 } from '@/type/rankTrendDefaults'
 import type {
-  BacktestMeta,
-  BacktestSnapshotType,
-  ReplayFrame,
-  ReplayMarketContext,
-  ReplaySignal,
-  ReplayStock,
-} from '@/services/strategyBacktest/types'
+  GoldenReplayFrame,
+  GoldenReplayMarketContext,
+  GoldenReplayMeta,
+  GoldenReplaySignal,
+  GoldenReplayStock,
+  GoldenSnapshotType,
+} from '@/services/quantBoardGolden/types'
 
 type QuantBoardBridgeRequest = {
   type: 'quant-board:read-indexeddb'
@@ -65,10 +65,10 @@ type QuantBoardTsGoldenPayload = {
     sampleLimit: number
     startDate?: string
     endDate?: string
-    frames: ReplayFrame[]
+    frames: GoldenReplayFrame[]
     stockRows: Record<string, unknown>[]
   }
-  signals: ReplaySignal[]
+  signals: GoldenReplaySignal[]
 }
 
 function isAllowedQuantBoardOrigin(origin: string): boolean {
@@ -134,7 +134,7 @@ function normalizeNumber(value: unknown): number | undefined {
   return Number.isFinite(n) ? n : undefined
 }
 
-function normalizeReplayStock(row: Record<string, unknown>, index: number): ReplayStock | null {
+function normalizeReplayStock(row: Record<string, unknown>, index: number): GoldenReplayStock | null {
   const code = String(row.code || row.stockCode || row.securityCode || '').trim()
   if (!code) return null
   return {
@@ -151,7 +151,7 @@ function normalizeReplayStock(row: Record<string, unknown>, index: number): Repl
   }
 }
 
-function normalizeMarketContext(frame: Record<string, unknown>): ReplayMarketContext {
+function normalizeMarketContext(frame: Record<string, unknown>): GoldenReplayMarketContext {
   const payload = frame.payload && typeof frame.payload === 'object' ? (frame.payload as Record<string, unknown>) : {}
   return {
     marketStats: (frame.marketStats as Record<string, unknown>) || (payload.marketStats as Record<string, unknown>) || null,
@@ -169,10 +169,10 @@ function normalizeMarketContext(frame: Record<string, unknown>): ReplayMarketCon
 }
 
 function buildReplayMeta(
-  frames: ReplayFrame[],
-  snapshotType: BacktestSnapshotType,
-  requestedTypes: BacktestSnapshotType[],
-): BacktestMeta {
+  frames: GoldenReplayFrame[],
+  snapshotType: GoldenSnapshotType,
+  requestedTypes: GoldenSnapshotType[],
+): GoldenReplayMeta {
   const tradingDates = Array.from(new Set(frames.map((frame) => frame.tradingDate).filter(Boolean))).sort()
   const delayedCount = frames.filter((frame) => frame.captureMode === 'delayed').length
   const restoredCount = frames.filter((frame) => frame.captureMode === 'restored').length
@@ -205,7 +205,7 @@ function buildReplayFrames(
   frames: Record<string, unknown>[],
   stockRows: Record<string, unknown>[],
   snapshotType: RankTrendSnapshotType,
-): ReplayFrame[] {
+): GoldenReplayFrame[] {
   const rowsBySnapshotId = new Map<string, Record<string, unknown>[]>()
   for (const row of stockRows) {
     const snapshotId = rowSnapshotId(row)
@@ -216,26 +216,26 @@ function buildReplayFrames(
   }
 
   return frames
-    .map((frame): ReplayFrame | null => {
+    .map((frame): GoldenReplayFrame | null => {
       const snapshotId = rowSnapshotId(frame)
       const timestamp = rowTimestamp(frame)
       if (!snapshotId || !timestamp) return null
       const stocks = (rowsBySnapshotId.get(snapshotId) || [])
         .map((row, index) => normalizeReplayStock(row, index))
-        .filter((row: ReplayStock | null): row is ReplayStock => row !== null)
+        .filter((row: GoldenReplayStock | null): row is GoldenReplayStock => row !== null)
         .sort((left, right) => left.rank - right.rank)
       return {
         snapshotId,
         timestamp,
         tradingDate: rowDate(frame),
         slotTime: String(frame.slotTime || frame.slot_time || ''),
-        type: snapshotType as BacktestSnapshotType,
-        captureMode: (frame.captureMode || frame.capture_mode || 'real_time') as ReplayFrame['captureMode'],
+        type: snapshotType as GoldenSnapshotType,
+        captureMode: (frame.captureMode || frame.capture_mode || 'real_time') as GoldenReplayFrame['captureMode'],
         stocks,
         marketContext: normalizeMarketContext(frame),
       }
     })
-    .filter((frame: ReplayFrame | null): frame is ReplayFrame => frame !== null)
+    .filter((frame: GoldenReplayFrame | null): frame is GoldenReplayFrame => frame !== null)
     .sort((left, right) => left.timestamp - right.timestamp)
 }
 
@@ -360,10 +360,10 @@ export async function exportQuantBoardRankTrendGolden(
       throw new Error(`DragonBoard IndexedDB has no replayable ${snapshotType} frames`)
     }
 
-    const requestedTypes = [snapshotType as BacktestSnapshotType]
-    const meta = buildReplayMeta(replayFrames, snapshotType as BacktestSnapshotType, requestedTypes)
+    const requestedTypes = [snapshotType as GoldenSnapshotType]
+    const meta = buildReplayMeta(replayFrames, snapshotType as GoldenSnapshotType, requestedTypes)
     const rankTrendConfig = { ...cloneDefaultRankTrendRuntimeConfig(), ...(options.rankTrendConfig || {}) }
-    const signals = new RankTrendReplayEngine(options.rankTrendConfig || {}).replay(replayFrames, {
+    const signals = new RankTrendGoldenReplayEngine(options.rankTrendConfig || {}).replay(replayFrames, {
       windowSize: 50,
       maxSignals: sampleLimit,
       meta,

@@ -334,7 +334,11 @@ class GoldenService:
             snapshot_type = str(payload.get("snapshot_type") or payload.get("snapshotType") or input_meta.get("snapshotType") or "half_hour")
             source = input_meta.get("source") or ("python_current_output" if input_meta.get("sampleLimit") else "unknown")
             rank_trend_config = input_meta.get("rankTrendConfig") or input_meta.get("rank_trend_config") or {}
-            frames = self.repo.load_frames(str(target_dataset_id), snapshot_type=snapshot_type, include_payload=False)
+            embedded_frames = input_meta.get("frames")
+            if isinstance(embedded_frames, list) and embedded_frames:
+                frames = embedded_frames
+            else:
+                frames = self.repo.load_frames(str(target_dataset_id), snapshot_type=snapshot_type, include_payload=False)
             if not frames:
                 return {"passed": False, "caseId": case_id, "checked": 0, "issues": [f"dataset has no frames for {snapshot_type}: {target_dataset_id}"]}
             expected_list = self._normalize_expected_payload(expected)

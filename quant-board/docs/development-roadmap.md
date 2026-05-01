@@ -15,7 +15,7 @@
 验收：
 
 - README、架构、数据、golden、移植、回测、优化、API/CLI、前端、路线图、AI 协作规范齐全。
-- 文档明确 `ParameterOptimizer` 已废弃为基准。
+- 文档明确 QuantBoard 是参数研究、回测、优化、交易模拟和报告展示的唯一主链。
 - 文档明确 `rankTrend` TypeScript 是 golden。
 - 文档明确默认 `snapshot_type=half_hour`。
 
@@ -78,7 +78,7 @@
 
 - CLI/API 可运行 golden 校验。
 - 失败时给出字段路径和差异。
-- 没有 case 来自 `ParameterOptimizer`。
+- 没有 case 来自 Dragon Board 根项目浏览器内回测输出。
 
 ## Phase 4：Python rankTrend 移植
 
