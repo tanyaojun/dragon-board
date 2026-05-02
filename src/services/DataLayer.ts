@@ -2832,7 +2832,7 @@ class DataLayer {
     }
   }
 
-  async validateSnapshotIndexedDbSqliteCounts(datasetId = 'dragonboard_live'): Promise<{
+  async validateSnapshotIndexedDbSqliteCounts(datasetId?: string | null): Promise<{
     ok: boolean
     datasetId: string
     indexedDb: SnapshotCountMap
@@ -2841,12 +2841,15 @@ class DataLayer {
     source: 'sqlite'
   }> {
     const indexedDbCounts = await this.getIndexedDbSnapshotCounts()
+    const payload: { datasetId?: string; indexedDbCounts: SnapshotCountMap } = {
+      indexedDbCounts,
+    }
+    if (datasetId?.trim()) {
+      payload.datasetId = datasetId.trim()
+    }
     const response = await apiService.post<any>(
       '/api/snapshots/validate-indexeddb-counts',
-      {
-        datasetId,
-        indexedDbCounts,
-      },
+      payload,
       {
         context: 'quant-board',
         priority: 'medium',
@@ -2859,7 +2862,7 @@ class DataLayer {
     const data = response && typeof response === 'object' && 'data' in response ? (response as any).data : response
     return {
       ok: Boolean(data?.ok),
-      datasetId: String(data?.datasetId || datasetId),
+      datasetId: String(data?.datasetId || datasetId || ''),
       indexedDb: { ...this.createEmptySnapshotCounts(), ...(data?.indexedDb || indexedDbCounts) },
       sqlite: { ...this.createEmptySnapshotCounts(), ...(data?.sqlite || {}) },
       diffs: data?.diffs || {},

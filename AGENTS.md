@@ -75,7 +75,7 @@ QuantBoard 的规则以 `quant-board/docs/README.md`、`quant-board/docs/AI_COLL
 - 回测、优化、API、CLI 和前端展示必须保留 `dataset_id`、`snapshot_type`、`strategy_version`、`config_hash`、`random_seed`。
 - QuantBoard 存储主链为 SQLite 主库 + Supabase 后端备份库；Supabase 必须按 `quant-board/backend/data/supabase_schema.sql` 与 SQLite 同构，超大 JSON 只允许在备份适配层透明压缩，存储、同步、恢复和冲突规则以 `quant-board/docs/database-migration-plan.md` 为准。
 - Dragon Board 正式快照写库必须走 QuantBoard 后端 `POST /api/snapshots/ingest`；历史 JSON/IndexedDB 迁移入口为 `POST /api/migrations/snapshots/import-json`，IndexedDB 只保留为迁移源、缓存或失败重放来源。
-- Dragon Board 正式快照读口走 QuantBoard 后端 `GET /api/snapshots/frames`、`/api/snapshots/records`、`/api/snapshots/stock-rows`、`/api/snapshots/sector-rows`；迁移 DataLayer 时不得删改现有快照字段，确认 SQLite 迁移和行数校验完成前，不得删除 IndexedDB 历史数据或关闭迁移工具。
+- Dragon Board 正式快照读口走 QuantBoard 后端 `GET /api/snapshots/frames`、`/api/snapshots/records`、`/api/snapshots/stock-rows`、`/api/snapshots/sector-rows`；迁移 DataLayer 时不得删改现有快照字段，确认 SQLite 迁移和 `window.dataLayer.validateSnapshotIndexedDbSqliteCounts()` 行数校验完成前，不得删除 IndexedDB 历史数据或关闭迁移工具。行数校验默认由后端选择当前有效 SQLite 数据集，不要硬编码空的 `dragonboard_live` 作为验收目标。
 - Python RankTrend 输出字段必须能与 golden case 对齐。
 - 前端展示不得把 `finalSignal` 当成唯一交易结论，应展示状态、候选分层、风险、样本质量和解释。
 

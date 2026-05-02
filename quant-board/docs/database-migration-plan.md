@@ -312,7 +312,7 @@ Dragon Board 前端正式分析入口 `listSnapshotFrameBundles` 必须调用该
 - `indexedDbCounts.snapshot_stock_rows`
 - `indexedDbCounts.snapshot_sector_rows`
 
-返回 `ok/indexedDb/sqlite/diffs`。`ok=true` 才能进入删除浏览器历史或停用迁移工具的下一步；不允许因为 Supabase 暂时不可用而跳过 SQLite 与 IndexedDB 校验。
+`datasetId` 可省略。省略时按默认快照数据集解析规则选择当前有效 SQLite 数据集；兼容旧前端时，`datasetId=dragonboard_live` 且该数据集不存在或为空，会回退到最新有快照事实行的数据集。返回 `ok/indexedDb/sqlite/diffs`。`ok=true` 才能进入删除浏览器历史或停用迁移工具的下一步；不允许因为 Supabase 暂时不可用而跳过 SQLite 与 IndexedDB 校验。
 
 ### `POST /api/migrations/snapshots/import-json`
 

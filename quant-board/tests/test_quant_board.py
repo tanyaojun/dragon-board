@@ -22,6 +22,7 @@ from backend.data.supabase_homomorphic import (
     _decode_backup_text,
     _encode_backup_text,
 )
+import backend.main as main_module
 from backend.main import app
 from backend.services import DEFAULT_BACKTEST_STRATEGY_CONFIG
 from backend.utils import json_dumps
@@ -771,10 +772,11 @@ def test_snapshot_frames_api_reads_sqlite_frame_bundles() -> None:
     assert frame["sectors"][0]["name"] == "人工智能"
 
 
-def test_snapshot_detail_read_apis_and_count_validation_use_sqlite() -> None:
+def test_snapshot_detail_read_apis_and_count_validation_use_sqlite(monkeypatch: pytest.MonkeyPatch) -> None:
     client = TestClient(app)
     suffix = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
     dataset_id = f"dragonboard_sqlite_detail_{suffix}"
+    default_dataset_id = f"dragonboard_missing_default_{suffix}"
     snapshot_id = f"half_hour:2026-04-22:{suffix}"
     bundle = {
         "version": "v4",
@@ -894,6 +896,23 @@ def test_snapshot_detail_read_apis_and_count_validation_use_sqlite() -> None:
     )
     assert validation.status_code == 200, validation.text
     assert validation.json()["ok"] is True
+
+    monkeypatch.setattr(main_module, "DEFAULT_SNAPSHOT_DATASET_ID", default_dataset_id)
+    default_validation = client.post(
+        "/api/snapshots/validate-indexeddb-counts",
+        json={
+            "datasetId": default_dataset_id,
+            "indexedDbCounts": {
+                "snapshots": 1,
+                "snapshot_frames": 1,
+                "snapshot_stock_rows": 1,
+                "snapshot_sector_rows": 1,
+            },
+        },
+    )
+    assert default_validation.status_code == 200, default_validation.text
+    assert default_validation.json()["datasetId"] == dataset_id
+    assert default_validation.json()["ok"] is True
 
 
 def test_snapshot_ingest_summary_is_persisted_and_outbox_retry_is_due_gated() -> None:

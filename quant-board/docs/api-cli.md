@@ -211,14 +211,14 @@ Invoke-RestMethod 'http://127.0.0.1:8000/api/snapshots/sector-rows?dataset_id=dr
 后端提供 SQLite 行数和校验入口：
 
 ```powershell
-Invoke-RestMethod 'http://127.0.0.1:8000/api/snapshots/counts?dataset_id=dragonboard_live'
+Invoke-RestMethod 'http://127.0.0.1:8000/api/snapshots/counts'
 
 Invoke-RestMethod -Method Post 'http://127.0.0.1:8000/api/snapshots/validate-indexeddb-counts' `
   -ContentType 'application/json' `
-  -Body '{"datasetId":"dragonboard_live","indexedDbCounts":{"snapshots":232,"snapshot_frames":232,"snapshot_stock_rows":44330,"snapshot_sector_rows":2918}}'
+  -Body '{"indexedDbCounts":{"snapshots":232,"snapshot_frames":232,"snapshot_stock_rows":44330,"snapshot_sector_rows":2918}}'
 ```
 
-浏览器端正式入口是 `window.dataLayer.validateSnapshotIndexedDbSqliteCounts()`。只有该结果 `ok=true`，才能删除浏览器历史或停用迁移工具。
+浏览器端正式入口是 `window.dataLayer.validateSnapshotIndexedDbSqliteCounts()`。不传 `datasetId` 时，后端会按默认快照数据集解析规则选择当前有效 SQLite 数据集；显式传 `datasetId` 时只校验指定数据集。兼容旧前端时，`datasetId=dragonboard_live` 且该数据集不存在或为空，会回退到最新有快照事实行的数据集。只有该结果 `ok=true`，才能删除浏览器历史或停用迁移工具。
 
 ### `GET /api/datasets`
 

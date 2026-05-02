@@ -137,16 +137,42 @@ def _assert_snapshot_sort(sort: str) -> None:
         raise HTTPException(status_code=400, detail=f"unsupported sort: {sort}")
 
 
-def _resolve_snapshot_dataset(repo: Repository, dataset_id: str | None) -> tuple[str, Dataset]:
-    resolved_dataset_id = dataset_id or "dragonboard_live"
+DEFAULT_SNAPSHOT_DATASET_ID = "dragonboard_live"
+
+
+def _dataset_has_snapshot_facts(dataset: Dataset | None) -> bool:
+    if not dataset:
+        return False
+    return any(
+        int(value or 0) > 0
+        for value in (
+            dataset.frame_count,
+            dataset.snapshot_count,
+            dataset.stock_row_count,
+            dataset.sector_row_count,
+        )
+    )
+
+
+def _latest_snapshot_dataset(repo: Repository) -> Dataset | None:
+    candidates = [item for item in repo.list_datasets() if _dataset_has_snapshot_facts(item)]
+    return candidates[0] if candidates else None
+
+
+def _resolve_snapshot_dataset(
+    repo: Repository,
+    dataset_id: str | None,
+    *,
+    allow_default_fallback: bool = False,
+) -> tuple[str, Dataset]:
+    requested_dataset_id = dataset_id.strip() if isinstance(dataset_id, str) and dataset_id.strip() else None
+    resolved_dataset_id = requested_dataset_id or DEFAULT_SNAPSHOT_DATASET_ID
     dataset = repo.get_dataset(resolved_dataset_id)
-    if not dataset and not dataset_id:
-        candidates = [
-            item
-            for item in repo.list_datasets()
-            if int(item.frame_count or item.snapshot_count or item.stock_row_count or item.sector_row_count or 0) > 0
-        ]
-        dataset = candidates[0] if candidates else None
+    should_try_default_fallback = requested_dataset_id is None or (
+        allow_default_fallback and requested_dataset_id == DEFAULT_SNAPSHOT_DATASET_ID
+    )
+    if should_try_default_fallback and (not dataset or not _dataset_has_snapshot_facts(dataset)):
+        dataset = _latest_snapshot_dataset(repo) or dataset
         resolved_dataset_id = dataset.id if dataset else resolved_dataset_id
     if not dataset:
         raise HTTPException(status_code=404, detail=f"dataset not found: {resolved_dataset_id}")
@@ -403,7 +429,11 @@ def validate_indexeddb_counts(
     if db is None:
         raise HTTPException(status_code=503, detail="primary database is unavailable")
     repo = Repository(db, enable_backup=False)
-    resolved_dataset_id, dataset = _resolve_snapshot_dataset(repo, payload.get("datasetId") or payload.get("dataset_id"))
+    resolved_dataset_id, dataset = _resolve_snapshot_dataset(
+        repo,
+        payload.get("datasetId") or payload.get("dataset_id"),
+        allow_default_fallback=True,
+    )
     sqlite_counts = repo.snapshot_table_counts(resolved_dataset_id)
     indexeddb_counts = payload.get("indexedDbCounts") or payload.get("indexeddbCounts") or payload.get("counts") or {}
     if not isinstance(indexeddb_counts, dict):
