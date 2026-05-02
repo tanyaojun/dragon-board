@@ -33,26 +33,21 @@ QuantBoard 已有本地 SQLite 模型和服务骨架，主要表包括：
 - `optimization_runs`
 - `sync_outbox`
 
-Supabase 侧为了兼容已有 `snapshots` 表和 check 约束，首期备份记录落在 `snapshots` 表中，但 SQL 列 `type` 必须继续使用合法快照类型：
+Supabase 备份库必须与 SQLite 主库保持同构 schema。云端需要使用 [../backend/data/supabase_schema.sql](../backend/data/supabase_schema.sql) 重建为同名表、同业务键和同索引。脚本末尾会执行 `notify pgrst, 'reload schema'`，执行后仍应通过 `smoke-backup` 或 `/api/health` 确认 PostgREST 已看到新表结构：
 
-- `quarter_hour`
-- `half_hour`
-- `hourly`
-- `daily`
-- `five_minute`
+- `datasets`
+- `snapshot_records`
+- `snapshot_frames`
+- `snapshot_stock_rows`
+- `snapshot_sector_rows`
+- `golden_ranktrend_cases`
+- `backtest_runs`
+- `optimization_runs`
+- `sync_outbox`
 
-QuantBoard 业务对象类型放在 `quality_flags.kind`，当前取值包括：
+旧的 Supabase `snapshots` / payload 兼容方案已经废弃。云端不再使用 `quality_flags.kind=qb_dataset`、`qb_snapshot_bundle` 等业务枚举，也不再把 QuantBoard 明细塞进 `snapshots.payload`。如果 Supabase 仍只有旧 `snapshots`、`snapshot_frames`、`snapshot_stock_rows`、`snapshot_sector_rows` 四张非同构表，健康检查会报告缺失表，`push-backup` 不应视为可用。
 
-- `qb_dataset`
-- `qb_snapshot_bundle`
-- `qb_backtest_run`
-- `qb_optimization_run`
-- `qb_golden_case`
-- `qb_smoke`
-
-快照明细首期以 bundle 写入 `payload`，避免在 Supabase 表结构完全迁移前破坏已有数据。后续若拆成 Supabase 明细表，必须先更新本文的表合同和恢复流程。
-
-真实 Supabase 联调结论：`snapshots.type` 不能写入 `qb_dataset` 等业务枚举，否则会触发 `snapshots_type_check`；`capture_mode` 也必须使用 `real_time/delayed/restored` 等云端允许值。后端备份客户端会把业务分类写入 `quality_flags.kind`，并用合法 `type/capture_mode` 写入云端。
+Supabase schema 仍与 SQLite 同构，但备份适配层允许对超大 `Text` 字段做透明 `gzip + base64` 编码，当前覆盖 `backtest_runs.request_json`、`backtest_runs.result_json`、`optimization_runs.request_json`、`optimization_runs.result_json`、`golden_ranktrend_cases.input_json` 和 `golden_ranktrend_cases.expected_json`。这是云端传输/存储适配，不改变 SQLite 原始内容；`pull-backup` 和读回退必须自动解码后再还原为原始 JSON 字符串。
 
 当前 WP2/WP3/WP4 批次已落地的能力：
 
@@ -60,13 +55,14 @@ QuantBoard 业务对象类型放在 `quality_flags.kind`，当前取值包括：
 - Supabase 立即镜像成功时，对应 outbox 标记为 `done`；镜像失败时标记为 `retry` 并写入 `last_error`、`retry_count`、`next_retry_at`。
 - `push-backup` 会先消费到期的 `pending/retry` outbox，再做全量扫描补推。
 - Dragon Board 对已存在的半小时、十五分钟、小时等正式快照，如果 IndexedDB 已有记录但后端 ingest 失败过，会重放后端入库，不再因为本地记录存在而跳过云端链路。
+- Dragon Board 正式聚合读口开始 SQLite 优先：`listSnapshotFrameBundles` 会先调用 QuantBoard `GET /api/snapshots/frames`，远端不可用或无数据时才回退 IndexedDB。
 - 历史 JSON 迁移入口 `POST /api/migrations/snapshots/import-json` 已可处理 v4 bundle、records/snapshots、frames/stockRows/sectorRows 和常见 SQLite/备份导出字段。
 
 仍未完成的边界：
 
 - SQLite 完全不可用时直接写 Supabase 的 failover 写入仍是 M3 目标能力。
-- IndexedDB 还没有关闭正式读写，只是开始降级为缓存、重放和迁移来源。
-- Supabase 仍沿用 `snapshots` typed payload 兼容方案，未拆成完整云端明细事实表。
+- IndexedDB 还没有关闭正式写入和所有零散读口；本轮只把正式聚合分析读口改为 SQLite 优先，IndexedDB 暂时保留为缓存、失败回退、重放和迁移来源。
+- Supabase 云端 schema 需要用户先在 SQL Editor 执行 `quant-board/backend/data/supabase_schema.sql`；执行前旧云端表会被删除重建，必须确认旧云端数据已经不需要或已另行备份。
 
 ## 存储拓扑
 
@@ -155,6 +151,7 @@ Dragon Board 快照/运行页桥接
 - 先消费到期 outbox，再做 SQLite 全量扫描补推。
 - outbox 成功后标记 `done`；失败后更新 `retry_count`、`last_error` 和 `next_retry_at`。
 - 不支持的 outbox 类型计入 `skipped`，不能静默丢弃。
+- Supabase REST upsert 使用 `return=minimal`，并按行数和请求体大小双限制分片；大回测和 Golden payload 会先透明压缩，避免单行几十 MB JSON 触发 PostgREST statement timeout。
 
 ### `POST /api/sync/push-outbox`
 
@@ -172,14 +169,14 @@ Dragon Board 快照/运行页桥接
 
 ### `POST /api/sync/smoke-backup`
 
-用途：Supabase 联调写读删探针。后端会写入一条 `quality_flags.kind=qb_smoke` 的临时记录，读回确认后删除。
+用途：Supabase 联调写读删探针。后端会在云端 `sync_outbox` 写入一条 `op_type=supabase_smoke` 的临时记录，读回确认后删除。
 
 行为规则：
 
 - 只验证 Supabase REST 的写入、读取和清理权限。
 - 不写入 SQLite，不登记业务 outbox。
 - 返回 `write`、`read`、`cleanup` 和 `last_error`。
-- 实际写入时 SQL 列 `type=daily`，`quality_flags.kind=qb_smoke`。
+- 该探针依赖 Supabase 已按 `supabase_schema.sql` 建好同构 `sync_outbox` 表。
 
 ### `POST /api/sync/pull-backup`
 
@@ -219,6 +216,32 @@ Dragon Board 快照/运行页桥接
 - `status`：当前 outbox 状态。
 - `outbox`
 - `deduped`
+
+### `GET /api/snapshots/frames`
+
+用途：Dragon Board 和 QuantBoard 从 SQLite 主库读取正式快照聚合帧。该接口返回 frame + stock rows + sector rows 组合后的 bundle，是逐步替换 IndexedDB 正式读取的主接口。
+
+查询字段：
+
+- `dataset_id`：可选；缺省时后端优先使用 `dragonboard_live`，不存在时选择最新有 frame 的 SQLite 数据集，便于历史迁移期逐步替换 IndexedDB。
+- `snapshot_type`：默认 `half_hour`。
+- `trading_date`、`start_date`、`end_date`、`before_trading_date`。
+- `allowed_capture_modes`：逗号分隔，例如 `real_time,delayed`。
+- `exclude_restored`。
+- `sort`：`asc` 或 `desc`。
+- `limit`。
+
+返回核心字段：
+
+- `ok`
+- `dataset`
+- `datasetId`
+- `snapshotType`
+- `frames`
+- `count`
+- `source=sqlite`
+
+Dragon Board 前端正式分析入口 `listSnapshotFrameBundles` 必须优先调用该接口；只有接口不可用、SQLite 无对应数据或迁移未完成时，才允许回退浏览器 IndexedDB。
 
 ### `POST /api/migrations/snapshots/import-json`
 

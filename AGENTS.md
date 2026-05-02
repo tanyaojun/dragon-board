@@ -73,8 +73,9 @@ QuantBoard 的规则以 `quant-board/docs/README.md`、`quant-board/docs/AI_COLL
 - 原 `src/services/strategyBacktest` 职责已迁移到 QuantBoard Python 后端：`backend.analysis.ranktrend`、`backend.core.backtest`、`backend.services`。
 - 默认 `snapshot_type` 是 `half_hour`；`quarter_hour` 只能由用户显式选择，不能替代默认口径。
 - 回测、优化、API、CLI 和前端展示必须保留 `dataset_id`、`snapshot_type`、`strategy_version`、`config_hash`、`random_seed`。
-- QuantBoard 存储主链为 SQLite 主库 + Supabase 后端备份库；存储、同步、恢复和冲突规则以 `quant-board/docs/database-migration-plan.md` 为准。
+- QuantBoard 存储主链为 SQLite 主库 + Supabase 后端备份库；Supabase 必须按 `quant-board/backend/data/supabase_schema.sql` 与 SQLite 同构，超大 JSON 只允许在备份适配层透明压缩，存储、同步、恢复和冲突规则以 `quant-board/docs/database-migration-plan.md` 为准。
 - Dragon Board 正式快照写库必须走 QuantBoard 后端 `POST /api/snapshots/ingest`；历史 JSON/IndexedDB 迁移入口为 `POST /api/migrations/snapshots/import-json`，IndexedDB 只保留为迁移源、缓存或失败重放来源。
+- Dragon Board 正式快照聚合读口应优先走 QuantBoard 后端 `GET /api/snapshots/frames`；确认 SQLite 迁移和行数校验完成前，不得删除 IndexedDB 历史数据或关闭回退。
 - Python RankTrend 输出字段必须能与 golden case 对齐。
 - 前端展示不得把 `finalSignal` 当成唯一交易结论，应展示状态、候选分层、风险、样本质量和解释。
 

@@ -128,6 +128,64 @@ def ingest_snapshot(request: SnapshotIngestRequest, db: Session | None = Depends
         raise HTTPException(status_code=503, detail=str(error)) from error
 
 
+@app.get("/api/snapshots/frames")
+def list_snapshot_frames(
+    dataset_id: str | None = None,
+    snapshot_type: str = "half_hour",
+    start_date: str | None = None,
+    end_date: str | None = None,
+    trading_date: str | None = None,
+    before_trading_date: str | None = None,
+    allowed_capture_modes: str | None = None,
+    exclude_restored: bool = False,
+    sort: str = "asc",
+    limit: int | None = None,
+    db: Session | None = Depends(get_db),
+) -> dict[str, Any]:
+    if db is None:
+        raise HTTPException(status_code=503, detail="primary database is unavailable")
+    if snapshot_type not in {"quarter_hour", "half_hour", "hourly", "daily"}:
+        raise HTTPException(status_code=400, detail=f"unsupported snapshot_type: {snapshot_type}")
+    if sort not in {"asc", "desc"}:
+        raise HTTPException(status_code=400, detail=f"unsupported sort: {sort}")
+    start = trading_date or start_date
+    end = trading_date or end_date
+    capture_modes = [
+        item.strip()
+        for item in (allowed_capture_modes or "").split(",")
+        if item.strip()
+    ]
+    repo = Repository(db, enable_backup=False)
+    resolved_dataset_id = dataset_id or "dragonboard_live"
+    dataset = repo.get_dataset(resolved_dataset_id)
+    if not dataset and not dataset_id:
+        candidates = [item for item in repo.list_datasets() if int(item.frame_count or 0) > 0]
+        dataset = candidates[0] if candidates else None
+        resolved_dataset_id = dataset.id if dataset else resolved_dataset_id
+    if not dataset:
+        raise HTTPException(status_code=404, detail=f"dataset not found: {resolved_dataset_id}")
+    frames = repo.load_frame_bundles(
+        resolved_dataset_id,
+        snapshot_type=snapshot_type,
+        start_date=start,
+        end_date=end,
+        before_trading_date=before_trading_date,
+        allowed_capture_modes=capture_modes,
+        exclude_restored=exclude_restored,
+        limit=limit,
+        sort=sort,
+    )
+    return {
+        "ok": True,
+        "dataset": Repository.dataset_to_dict(dataset),
+        "datasetId": resolved_dataset_id,
+        "snapshotType": snapshot_type,
+        "frames": frames,
+        "count": len(frames),
+        "source": "sqlite",
+    }
+
+
 @app.post("/api/migrations/snapshots/import-json")
 def import_snapshot_json_migration(
     request: SnapshotJsonMigrationRequest,

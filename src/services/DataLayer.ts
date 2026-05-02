@@ -11,6 +11,7 @@ import type { RankTrendAnalysisResult } from './rankTrend/types'
 import type { RotationAnalysis } from '../types'
 import type { StockAlert, AlertStats } from '../types'
 import type { AlertType } from '../types/core'
+import { apiService } from './apiService'
 import { SnapshotRuntime } from './snapshot/runtime'
 import type {
   SnapshotBackupSyncState,
@@ -2222,6 +2223,11 @@ class DataLayer {
   async listSnapshotFrameBundles(
     options: SnapshotFrameQueryOptions | SnapshotQueryOptions = {},
   ): Promise<SnapshotFrameBundle[]> {
+    const remoteBundles = await this.listRemoteSnapshotFrameBundles(options as SnapshotFrameQueryOptions)
+    if (remoteBundles.length > 0) {
+      return remoteBundles
+    }
+
     const frames = await this.listSnapshotFrames(options)
     if (frames.length === 0) return []
 
@@ -2306,6 +2312,71 @@ class DataLayer {
             : null,
       }
     })
+  }
+
+  private async listRemoteSnapshotFrameBundles(
+    options: SnapshotFrameQueryOptions = {},
+  ): Promise<SnapshotFrameBundle[]> {
+    try {
+      const query = new URLSearchParams()
+      const snapshotType = options.type || options.types?.[0] || 'half_hour'
+      query.set('snapshot_type', snapshotType)
+      if (options.tradingDate) query.set('trading_date', options.tradingDate)
+      if (options.startDate) query.set('start_date', options.startDate)
+      if (options.endDate) query.set('end_date', options.endDate)
+      if (options.beforeTradingDate) query.set('before_trading_date', options.beforeTradingDate)
+      if (options.allowedCaptureModes?.length) {
+        query.set('allowed_capture_modes', options.allowedCaptureModes.join(','))
+      }
+      if (options.excludeRestored) query.set('exclude_restored', 'true')
+      if (options.sort) query.set('sort', options.sort)
+      if (options.limit && options.limit > 0) query.set('limit', String(options.limit))
+
+      const response = await apiService.get<any>(`/api/snapshots/frames?${query.toString()}`, {
+        context: 'quant-board',
+        priority: 'medium',
+        timeout: 15000,
+        retries: 0,
+        cache: false,
+        silent: true,
+        throwOnHttpError: true,
+      })
+      const data = response && typeof response === 'object' && 'data' in response ? (response as any).data : response
+      const frames = Array.isArray(data?.frames) ? data.frames : []
+      return frames.map((frame: any) => this.normalizeRemoteSnapshotFrameBundle(frame))
+    } catch (error) {
+      console.warn('[DataLayer] SQLite snapshot frame read failed, fallback to IndexedDB:', error)
+      return []
+    }
+  }
+
+  private normalizeRemoteSnapshotFrameBundle(frame: any): SnapshotFrameBundle {
+    const rows = Array.isArray(frame.rows) ? frame.rows : Array.isArray(frame.hotlist) ? frame.hotlist : []
+    const sectors = Array.isArray(frame.sectors) ? frame.sectors : []
+    const hotThemes = Array.isArray(frame.hotThemes) ? frame.hotThemes : []
+    return {
+      ...frame,
+      id: frame.id || frame.snapshotId,
+      snapshotId: frame.snapshotId || frame.id,
+      displayKey: frame.displayKey || frame.snapshotId || frame.id,
+      captureMode: frame.captureMode || 'real_time',
+      source: frame.source || 'browser_runtime',
+      qualityFlags: Array.isArray(frame.qualityFlags) ? frame.qualityFlags : [],
+      delayMs: Number(frame.delayMs || 0),
+      metadata: frame.metadata || null,
+      marketStats: frame.marketStats || frame.marketContext?.marketStats || null,
+      sentiment: frame.sentiment || frame.marketContext?.sentiment || null,
+      moneyFlow: frame.moneyFlow || frame.marketContext?.moneyFlow || null,
+      indices: frame.indices || frame.marketContext?.indices || null,
+      limitSummary: frame.limitSummary || frame.marketContext?.limitSummary || null,
+      rotationSummary: frame.rotationSummary || frame.marketContext?.rotationSummary || null,
+      stockRowCount: Number(frame.stockRowCount || rows.length || 0),
+      sectorRowCount: Number(frame.sectorRowCount || sectors.length + hotThemes.length || 0),
+      rows,
+      hotlist: rows,
+      sectors,
+      hotThemes,
+    } as SnapshotFrameBundle
   }
 
   async getLatestSnapshotRecord(options?: {

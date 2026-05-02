@@ -26,6 +26,8 @@ Invoke-RestMethod http://127.0.0.1:8000/api/health
 
 - `primary.connected`：本地主库是否可用。
 - `backup.connected`：Supabase REST 备份库是否可用。
+- `backup.schema`：当前要求为 `sqlite_homomorphic`。
+- `backup.missing_or_unreadable_tables`：同构表缺失或不可读列表；非空时不能执行正式云端同步。
 - `mode`：当前为 `sqlite_primary_supabase_backup`。
 - `outbox`：待补偿同步队列摘要；字段以当前后端实现为准。
 - `autoSync`：自动 outbox 推送状态、间隔、批量大小和最近一次结果。
@@ -64,6 +66,8 @@ Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/sync/push-backup
 
 `push-backup` 会先消费 `sync_outbox` 中到期的 `pending/retry` 任务，再扫描 SQLite 里已有的数据集、回测、优化和 Golden 记录做补推。失败项会进入 `errors`，结构为 `{type,key,error}`。
 
+实现细节：Supabase REST 写入使用分片 upsert，分片同时受行数和请求体大小限制。回测、优化和 Golden 中超过阈值的 JSON 文本会在备份适配层透明压缩，读回和 `pull-backup` 自动还原；API/CLI 调用方仍看到原始 JSON 合同。
+
 ### `POST /api/sync/push-outbox`
 
 只推送到期的 outbox，不做全量历史扫描。适合自动同步和低风险补偿。
@@ -94,7 +98,7 @@ Invoke-RestMethod -Method Post 'http://127.0.0.1:8000/api/sync/auto-once?limit=5
 
 ### `POST /api/sync/smoke-backup`
 
-Supabase 联调探针。后端会写入一条 `qb_smoke` 临时记录，读回后删除，用来确认云端 REST 写读删权限。
+Supabase 联调探针。后端会在云端同构 `sync_outbox` 表写入一条 `op_type=supabase_smoke` 临时记录，读回后删除，用来确认云端 REST 写读删权限。
 
 ```powershell
 Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/sync/smoke-backup
@@ -114,7 +118,7 @@ Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/sync/smoke-backup
 }
 ```
 
-真实 Supabase 表中，业务类型存放在 `quality_flags.kind=qb_smoke`；SQL 列 `type` 保持合法快照类型，避免触发云端 `snapshots_type_check`。
+该探针要求 Supabase 已按 [../backend/data/supabase_schema.sql](../backend/data/supabase_schema.sql) 建好 SQLite 同构表；如果仍是旧 `snapshots.payload` 兼容 schema，会返回缺表或写入失败。
 
 ### `POST /api/sync/pull-backup`
 
@@ -163,6 +167,27 @@ Dragon Board 正式快照写入入口。前端提交 v4 snapshot bundle，后端
 ```
 
 同一 `idempotencyKey` 重放时返回 `deduped=true`，不会重复写入事实行。若 Supabase 镜像失败，本地 SQLite 写入仍成立，`status` 会是 `retry/failed`，后续由 `push-backup` 补偿。
+
+### `GET /api/snapshots/frames`
+
+从 SQLite 主库读取正式快照聚合帧，用于逐步替换 Dragon Board 对 IndexedDB 的正式分析读取。
+
+```powershell
+Invoke-RestMethod 'http://127.0.0.1:8000/api/snapshots/frames?dataset_id=dragonboard_live&snapshot_type=half_hour&trading_date=2026-04-21'
+```
+
+常用查询参数：
+
+- `dataset_id`：可选；缺省时优先 `dragonboard_live`，不存在时读取最新有 frame 的 SQLite 数据集。
+- `snapshot_type`：默认 `half_hour`。
+- `trading_date` 或 `start_date/end_date`。
+- `before_trading_date`。
+- `allowed_capture_modes`：逗号分隔。
+- `exclude_restored`。
+- `sort=asc|desc`。
+- `limit`。
+
+返回 `dataset`、`frames`、`count` 和 `source=sqlite`。`frames` 中每项包含 `rows/hotlist/sectors/hotThemes/rotationSummary`，供 Dragon Board `listSnapshotFrameBundles` 直接消费。远端无数据或不可用时，当前前端仍会回退 IndexedDB；迁移完成后再关闭该回退。
 
 ### `GET /api/datasets`
 

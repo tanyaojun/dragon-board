@@ -439,6 +439,100 @@ class Repository:
             frames.append(item)
         return frames or self._backup_frames(dataset_id, snapshot_type, start_date, end_date, include_payload)
 
+    def load_frame_bundles(
+        self,
+        dataset_id: str,
+        snapshot_type: str = "half_hour",
+        start_date: str | None = None,
+        end_date: str | None = None,
+        before_trading_date: str | None = None,
+        allowed_capture_modes: list[str] | None = None,
+        exclude_restored: bool = False,
+        limit: int | None = None,
+        sort: str = "asc",
+    ) -> list[dict[str, Any]]:
+        if self.session is None:
+            return self._backup_frames(dataset_id, snapshot_type, start_date, end_date, include_payload=True)
+        query = select(SnapshotFrameModel).where(
+            SnapshotFrameModel.dataset_id == dataset_id,
+            SnapshotFrameModel.type == snapshot_type,
+        )
+        if start_date:
+            query = query.where(SnapshotFrameModel.trading_date >= start_date)
+        if end_date:
+            query = query.where(SnapshotFrameModel.trading_date <= end_date)
+        if before_trading_date:
+            query = query.where(SnapshotFrameModel.trading_date < before_trading_date)
+        if allowed_capture_modes:
+            query = query.where(SnapshotFrameModel.capture_mode.in_(allowed_capture_modes))
+        if exclude_restored:
+            query = query.where(SnapshotFrameModel.capture_mode != "restored")
+        order = SnapshotFrameModel.timestamp.desc() if sort == "desc" else SnapshotFrameModel.timestamp.asc()
+        if limit and limit > 0:
+            query = query.limit(limit)
+        try:
+            frame_models = list(self.session.scalars(query.order_by(order)))
+        except SQLAlchemyError:
+            return self._backup_frames(dataset_id, snapshot_type, start_date, end_date, include_payload=True)
+
+        snapshot_ids = [frame.snapshot_id for frame in frame_models]
+        stock_rows_by_snapshot: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        sector_rows_by_snapshot: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        if snapshot_ids:
+            try:
+                stock_query = (
+                    select(SnapshotStockRowModel)
+                    .where(
+                        SnapshotStockRowModel.dataset_id == dataset_id,
+                        SnapshotStockRowModel.snapshot_id.in_(snapshot_ids),
+                    )
+                    .order_by(SnapshotStockRowModel.timestamp.asc(), SnapshotStockRowModel.rank.asc())
+                )
+                for row in self.session.scalars(stock_query):
+                    stock_rows_by_snapshot[row.snapshot_id].append(self.local_stock_to_bundle_dict(row))
+
+                sector_query = (
+                    select(SnapshotSectorRowModel)
+                    .where(
+                        SnapshotSectorRowModel.dataset_id == dataset_id,
+                        SnapshotSectorRowModel.snapshot_id.in_(snapshot_ids),
+                    )
+                    .order_by(SnapshotSectorRowModel.timestamp.asc(), SnapshotSectorRowModel.rank.asc())
+                )
+                for row in self.session.scalars(sector_query):
+                    sector_rows_by_snapshot[row.snapshot_id].append(self.local_sector_to_bundle_dict(row))
+            except SQLAlchemyError:
+                return self._backup_frames(dataset_id, snapshot_type, start_date, end_date, include_payload=True)
+
+        bundles: list[dict[str, Any]] = []
+        for frame in frame_models:
+            item = self.local_frame_to_bundle_dict(frame)
+            item["rows"] = stock_rows_by_snapshot.get(frame.snapshot_id, [])
+            item["hotlist"] = item["rows"]
+            item["entities"] = sector_rows_by_snapshot.get(frame.snapshot_id, [])
+            item["sectors"] = [
+                self._sector_entity_to_view(row)
+                for row in item["entities"]
+                if row.get("entityType") == "sector"
+            ]
+            item["hotThemes"] = [
+                self._sector_entity_to_view(row)
+                for row in item["entities"]
+                if row.get("entityType") == "hot_theme"
+            ]
+            main_lines = [
+                self._sector_entity_to_view(row)
+                for row in item["entities"]
+                if row.get("entityType") == "rotation_main_line"
+            ]
+            rotation_summary = item.get("rotationSummary") if isinstance(item.get("rotationSummary"), dict) else None
+            if rotation_summary:
+                item["rotationSummary"] = {**rotation_summary, "mainLines": main_lines}
+            elif main_lines:
+                item["rotationSummary"] = {"mainLines": main_lines}
+            bundles.append(item)
+        return bundles
+
     def save_backtest_run(self, run: BacktestRun) -> BacktestRun:
         if self.session is None:
             if not self._mirror_backtest_run(run):
@@ -773,6 +867,16 @@ class Repository:
             }
         )
         return payload
+
+    @staticmethod
+    def _sector_entity_to_view(row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            **row,
+            "id": row.get("entityKey") or row.get("rowId") or row.get("id"),
+            "code": row.get("entityCode") or row.get("entityKey"),
+            "name": row.get("entityName"),
+            "themeName": row.get("entityName"),
+        }
 
     @staticmethod
     def _record_model(dataset_id: str, item: dict[str, Any]) -> SnapshotRecordModel:

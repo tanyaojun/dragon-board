@@ -73,25 +73,17 @@ QuantBoard API/CLI -> SQLite(primary) -> Supabase(backup)
 - SQLite 不可用但 Supabase 可写时，关键写入切到 Supabase 是后续 M3 目标；能力完成前，写接口必须明确返回不可用，不能伪装成功。
 - `POST /api/sync/push-backup` 用于把已有 SQLite 历史数据主动推送到 Supabase。
 - `POST /api/sync/push-outbox` 和后台自动同步只消费到期 outbox，不做全量历史扫描。
-- `POST /api/sync/smoke-backup` 用于真实 Supabase REST 写读删联调，不写入业务表。
+- `POST /api/sync/smoke-backup` 用于真实 Supabase REST 写读删联调，只写入并清理云端 `sync_outbox` 临时探针。
 - `POST /api/snapshots/ingest` 是 Dragon Board 正式快照进入 QuantBoard 后端的主入口。
+- `GET /api/snapshots/frames` 是 Dragon Board 正式分析读取 SQLite 快照聚合帧的主入口。
 - `POST /api/migrations/snapshots/import-json` 是历史 IndexedDB/JSON/结构化导出的可重复迁移入口。
 - 同键重复同步必须幂等；同键不同 payload/hash 必须标记冲突，不允许静默覆盖。
 
-为了兼容当前 Supabase 已存在的 `snapshots` 表，QuantBoard 备份记录仍落在这张表中，但不能占用 `type` 列做业务枚举。真实云端表对 `type` 有 check 约束，只允许快照类型，例如 `quarter_hour`、`half_hour`、`hourly`、`daily`、`five_minute`。
+Supabase 备份库必须使用 SQLite 同构 schema，不再使用旧 `snapshots.payload` 兼容方案。云端 schema 由 [../backend/data/supabase_schema.sql](../backend/data/supabase_schema.sql) 维护，表名、业务键、索引和 SQLite 模型保持一致。健康检查会逐表检查 `datasets`、`snapshot_*`、回测、优化、Golden 和 `sync_outbox` 是否可读；缺表时不得继续把备份链路视为可用。
 
-QuantBoard 业务枚举放在 `quality_flags.kind`：
+为适配 Supabase REST 对大请求和长语句的限制，备份客户端会对超大回测、优化和 Golden JSON 文本做透明 `gzip + base64` 编码，并按请求体大小拆分 upsert。SQLite 主库仍保存原始 JSON；读回退和 `pull-backup` 会自动解码，调用方不应感知编码细节。
 
-- `qb_dataset`
-- `qb_snapshot_bundle`
-- `qb_backtest_run`
-- `qb_optimization_run`
-- `qb_golden_case`
-- `qb_smoke`
-
-快照明细以 bundle 形式写入 `payload`，避免在现有 Supabase 表结构尚未完全迁移前破坏业务数据。
-
-如果后续拆分 Supabase 明细表、调整 `type` 枚举或改变 payload 结构，必须同批更新 [database-migration-plan.md](database-migration-plan.md) 和 [api-cli.md](api-cli.md)。
+如果后续调整 Supabase 表字段、索引、恢复策略或 payload JSON 字段，必须同批更新 [database-migration-plan.md](database-migration-plan.md)、[api-cli.md](api-cli.md) 和 SQL schema 文件。
 
 ## 关键数据库表
 

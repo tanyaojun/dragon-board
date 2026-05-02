@@ -16,6 +16,12 @@ from backend.data.database import SessionLocal
 from backend.data.backup_sync import BackupSyncService
 from backend.data.models import BacktestRun, Dataset, GoldenRankTrendCase, OptimizationRun, SyncOutboxModel
 from backend.data.repository import Repository
+from backend.data.supabase_homomorphic import (
+    COMPRESSED_TEXT_PREFIX,
+    _chunk_rows_by_payload_size,
+    _decode_backup_text,
+    _encode_backup_text,
+)
 from backend.main import app
 from backend.services import DEFAULT_BACKTEST_STRATEGY_CONFIG
 from backend.utils import json_dumps
@@ -77,6 +83,29 @@ def make_bundle_with_empty_hotlist(path: Path) -> Path:
         records[index]["payload"]["hotlist"] = []
     bundle.write_text(json.dumps({"records": records}, ensure_ascii=False), encoding="utf-8")
     return bundle
+
+
+def test_supabase_backup_text_compression_round_trips_large_json() -> None:
+    payload = json_dumps({"items": [{"code": f"{index:06d}", "rank": index} for index in range(20000)]})
+
+    encoded = _encode_backup_text(payload)
+
+    assert encoded.startswith(COMPRESSED_TEXT_PREFIX)
+    assert len(encoded.encode("utf-8")) < len(payload.encode("utf-8"))
+    assert _decode_backup_text(encoded) == payload
+
+
+def test_supabase_upsert_chunks_are_limited_by_payload_size() -> None:
+    rows = [
+        {"id": "a", "payload_json": "x" * 40},
+        {"id": "b", "payload_json": "y" * 40},
+        {"id": "c", "payload_json": "z" * 40},
+    ]
+
+    chunks = _chunk_rows_by_payload_size(rows, max_rows=100, max_payload_bytes=90)
+
+    assert [len(chunk) for chunk in chunks] == [1, 1, 1]
+    assert [chunk[0]["id"] for chunk in chunks] == ["a", "b", "c"]
 
 
 def test_ranktrend_uses_fallback_until_technical_min_samples() -> None:
@@ -641,6 +670,105 @@ def test_snapshot_ingest_is_idempotent_and_queues_outbox() -> None:
 
     datasets = client.get("/api/datasets")
     assert any(item["id"] == dataset_id and item["frame_count"] == 1 for item in datasets.json())
+
+
+def test_snapshot_frames_api_reads_sqlite_frame_bundles() -> None:
+    client = TestClient(app)
+    suffix = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
+    dataset_id = f"dragonboard_sqlite_read_{suffix}"
+    snapshot_id = f"half_hour:2026-04-21:{suffix}"
+    bundle = {
+        "version": "v4",
+        "tradingDate": "2026-04-21",
+        "items": [
+            {
+                "id": snapshot_id,
+                "type": "half_hour",
+                "tradingDate": "2026-04-21",
+                "slotTime": "10:00",
+                "timestamp": 1776746400000,
+                "displayKey": "[半小时快照] 2026-04-21 10:00",
+                "captureMode": "real_time",
+                "source": "browser_runtime",
+                "payload": {"hotlist": [{"code": "600001", "name": "样本A", "rank": 1}]},
+            }
+        ],
+        "frames": [
+            {
+                "id": snapshot_id,
+                "snapshotId": snapshot_id,
+                "type": "half_hour",
+                "tradingDate": "2026-04-21",
+                "slotTime": "10:00",
+                "timestamp": 1776746400000,
+                "captureMode": "real_time",
+                "source": "browser_runtime",
+                "stockRowCount": 1,
+                "sectorRowCount": 1,
+                "rotationSummary": {"stage": "start"},
+            }
+        ],
+        "stockRows": [
+            {
+                "id": f"{snapshot_id}:600001",
+                "snapshotId": snapshot_id,
+                "type": "half_hour",
+                "tradingDate": "2026-04-21",
+                "slotTime": "10:00",
+                "timestamp": 1776746400000,
+                "captureMode": "real_time",
+                "source": "browser_runtime",
+                "code": "600001",
+                "name": "样本A",
+                "rank": 1,
+                "price": 10,
+            }
+        ],
+        "sectorRows": [
+            {
+                "id": f"{snapshot_id}:sector:AI",
+                "snapshotId": snapshot_id,
+                "type": "half_hour",
+                "tradingDate": "2026-04-21",
+                "slotTime": "10:00",
+                "timestamp": 1776746400000,
+                "entityType": "sector",
+                "entityKey": "AI",
+                "entityName": "人工智能",
+                "rank": 1,
+                "strength": 90,
+            }
+        ],
+    }
+
+    ingest = client.post(
+        "/api/snapshots/ingest",
+        json={
+            "datasetId": dataset_id,
+            "idempotencyKey": f"sqlite-read-key-{suffix}",
+            "tradingDate": "2026-04-21",
+            "bundle": bundle,
+        },
+    )
+    assert ingest.status_code == 200, ingest.text
+
+    response = client.get(
+        "/api/snapshots/frames",
+        params={
+            "dataset_id": dataset_id,
+            "snapshot_type": "half_hour",
+            "trading_date": "2026-04-21",
+            "allowed_capture_modes": "real_time",
+        },
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["source"] == "sqlite"
+    assert body["count"] == 1
+    frame = body["frames"][0]
+    assert frame["snapshotId"] == snapshot_id
+    assert frame["hotlist"][0]["code"] == "600001"
+    assert frame["sectors"][0]["name"] == "人工智能"
 
 
 def test_snapshot_ingest_summary_is_persisted_and_outbox_retry_is_due_gated() -> None:
