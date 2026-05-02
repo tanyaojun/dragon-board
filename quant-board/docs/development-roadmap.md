@@ -64,6 +64,8 @@
 - 建立 `sync_outbox` 或等价补偿机制。
 - 实现 `GET /api/health` 的主备状态报告。
 - 实现 `POST /api/sync/push-backup` 和 `POST /api/sync/pull-backup`。
+- 实现 `POST /api/snapshots/ingest`，让 Dragon Board 正式快照进入后端主链。
+- 实现 `POST /api/migrations/snapshots/import-json`，支持历史 JSON 可重复迁移。
 - 覆盖 SQLite 不可用、Supabase 不可用、同键重复同步和同键冲突。
 
 验收：
@@ -73,6 +75,14 @@
 - SQLite 查询失败或本地缺失目标记录时，读路径能按主计划回退。
 - 所有失败返回结构化原因，不用空数据伪装成功。
 - 修改任何存储、同步、快照或 API/CLI 合同的代码时，同批更新对应文档。
+
+当前进展：
+
+- `sync_outbox` 已覆盖 `dataset_bundle`、`snapshot_ingest`、`backtest_run`、`optimization_run`、`golden_case`。
+- `push-backup` 已先消费到期 outbox，再做 SQLite 全量补推。
+- Dragon Board 已对 IndexedDB 已存在但后端 ingest 失败的快照执行后端重放。
+- 历史 JSON 迁移 API 已可 dry run、幂等导入并进入 outbox 链路。
+- SQLite 完全不可用时的 Supabase failover 写入仍未完成，继续按 [database-migration-plan.md](database-migration-plan.md) M3 跟踪。
 
 ## Phase 2：质量门禁
 

@@ -31,6 +31,7 @@ QuantBoard 已有本地 SQLite 模型和服务骨架，主要表包括：
 - `golden_ranktrend_cases`
 - `backtest_runs`
 - `optimization_runs`
+- `sync_outbox`
 
 Supabase 侧为了兼容已有空表，首期备份记录落在 `snapshots` 表中，通过 `type` 区分 QuantBoard 业务对象：
 
@@ -41,6 +42,20 @@ Supabase 侧为了兼容已有空表，首期备份记录落在 `snapshots` 表�
 - `qb_golden_case`
 
 快照明细首期以 bundle 写入 `payload`，避免在 Supabase 表结构完全迁移前破坏已有数据。后续若拆成 Supabase 明细表，必须先更新本文的表合同和恢复流程。
+
+当前 WP2/WP3/WP4 批次已落地的能力：
+
+- `dataset_bundle`、`snapshot_ingest`、`backtest_run`、`optimization_run`、`golden_case` 都会在 SQLite 写入成功后登记 `sync_outbox`。
+- Supabase 立即镜像成功时，对应 outbox 标记为 `done`；镜像失败时标记为 `retry` 并写入 `last_error`、`retry_count`、`next_retry_at`。
+- `push-backup` 会先消费到期的 `pending/retry` outbox，再做全量扫描补推。
+- Dragon Board 对已存在的半小时、十五分钟、小时等正式快照，如果 IndexedDB 已有记录但后端 ingest 失败过，会重放后端入库，不再因为本地记录存在而跳过云端链路。
+- 历史 JSON 迁移入口 `POST /api/migrations/snapshots/import-json` 已可处理 v4 bundle、records/snapshots、frames/stockRows/sectorRows 和常见 SQLite/备份导出字段。
+
+仍未完成的边界：
+
+- SQLite 完全不可用时直接写 Supabase 的 failover 写入仍是 M3 目标能力。
+- IndexedDB 还没有关闭正式读写，只是开始降级为缓存、重放和迁移来源。
+- Supabase 仍沿用 `snapshots` typed payload 兼容方案，未拆成完整云端明细事实表。
 
 ## 存储拓扑
 
@@ -64,9 +79,10 @@ Dragon Board 快照/运行页桥接
 
 1. 校验请求、快照类型和质量门禁。
 2. 写入 SQLite，并提交事务。
-3. 以同一业务对象构造 Supabase 备份记录。
-4. Supabase 写入成功时记录同步成功状态。
-5. Supabase 写入失败时不得回滚已成功提交的 SQLite 业务事务，但必须返回或记录结构化同步诊断。
+3. 在同一主库事务中登记 `sync_outbox`，保存可重放 payload、`op_type` 和 `idempotency_key`。
+4. 以同一业务对象构造 Supabase 备份记录。
+5. Supabase 写入成功时将 outbox 标记为 `done`。
+6. Supabase 写入失败时不得回滚已成功提交的 SQLite 业务事务，但必须将 outbox 标记为 `retry/failed` 并记录结构化同步诊断。
 
 关键要求：
 
@@ -75,6 +91,19 @@ Dragon Board 快照/运行页桥接
 - 备份 payload 必须包含足够字段，能重建 SQLite 主库里的业务对象。
 - `dataset_id`、`snapshot_type`、`run_id`、`case_id` 等业务键必须稳定，不能由恢复流程重新随机生成。
 - 对同一业务键重复同步必须幂等，不能产生重复数据或覆盖更新更晚版本。
+
+当前 `sync_outbox` 合同：
+
+| 字段 | 说明 |
+| --- | --- |
+| `op_type` | 当前支持 `dataset_bundle`、`snapshot_ingest`、`backtest_run`、`optimization_run`、`golden_case` |
+| `idempotency_key` | 幂等键；Dragon Board ingest 使用前端/后端共同生成的业务键，其他对象用对象键和 payload hash 组合 |
+| `status` | `pending`、`retry`、`done`、`failed` |
+| `retry_count` | 失败重试次数；达到上限后进入 `failed` |
+| `last_error` | 最近一次 Supabase 镜像失败原因 |
+| `next_retry_at` | 下次允许 `push-backup` 消费该任务的时间 |
+
+`list_pending_outbox` 只返回 `pending/retry` 且 `next_retry_at` 已到期的任务。
 
 ## 读取合同
 
@@ -102,12 +131,19 @@ Dragon Board 快照/运行页桥接
 
 用途：把 SQLite 里已有的数据集、快照 bundle、Golden、回测和优化记录补推到 Supabase。
 
-必须返回：
+当前返回：
 
-- 推送对象类型。
-- 扫描数量、成功数量、跳过数量、失败数量。
-- 失败对象的业务键和结构化原因。
-- 本次同步是否完整成功。
+- `ok`：本次是否无错误完成。
+- `direction=push`。
+- `outbox`：`scanned`、`succeeded`、`failed`、`skipped`、`items`。
+- `datasets`、`snapshotBundles`、`backtestRuns`、`optimizationRuns`、`goldenCases`：每类对象都有 `scanned`、`succeeded`、`failed`、`skipped`。
+- `errors`：结构为 `{type,key,error}`。
+
+行为规则：
+
+- 先消费到期 outbox，再做 SQLite 全量扫描补推。
+- outbox 成功后标记 `done`；失败后更新 `retry_count`、`last_error` 和 `next_retry_at`。
+- 不支持的 outbox 类型计入 `skipped`，不能静默丢弃。
 
 ### `POST /api/sync/pull-backup`
 
@@ -128,6 +164,52 @@ Dragon Board 快照/运行页桥接
 - Supabase 备份库连接状态。
 - 当前存储模式，例如 `sqlite_primary_supabase_backup`。
 - 备份回退是否启用。
+
+### `POST /api/snapshots/ingest`
+
+用途：Dragon Board 正式快照后端入库入口。前端提交 v4 snapshot bundle，后端按 `dataset_id + snapshot_id + idempotency_key` 幂等写入 SQLite 并登记 Supabase 备份 outbox。
+
+请求核心字段：
+
+- `bundle`：Dragon Board v4 bundle，包含 `items/records`、`frames`、`stockRows`、`sectorRows`。
+- `tradingDate`：交易日。
+- `idempotencyKey`：可选；缺省时后端根据交易日、快照 ID 和来源生成。
+- `source`：默认 `dragon_board_runtime`。
+
+返回核心字段：
+
+- `ok`
+- `dataset`
+- `status`：当前 outbox 状态。
+- `outbox`
+- `deduped`
+
+### `POST /api/migrations/snapshots/import-json`
+
+用途：把旧 IndexedDB 导出、Dragon Board v4 bundle、结构化 frames/rows 或 SQLite/备份导出 JSON 导入正式 SQLite 主库，并复用 `save_snapshot_ingest` 进入 outbox 同步链路。
+
+请求核心字段：
+
+- `datasetId`
+- `sourcePath`，或 `content` / `bundle` / `payload`
+- `idempotencyKey`
+- `name`
+- `source`
+- `dryRun`
+
+返回核心字段：
+
+- `ok`
+- `datasetId`
+- `deduped`
+- `dataset`
+- `report.scanned`
+- `report.imported`
+- `report.skipped`
+- `report.errors`
+- `report.dry_run`
+
+重复迁移同一 `idempotencyKey` 或同一批已存在 `snapshot_id` 时，必须跳过已入库快照，不能制造重复事实行。
 
 ## 冲突和幂等规则
 
@@ -177,6 +259,7 @@ Dragon Board 快照/运行页桥接
 - 配置 Supabase 后，正式写入先落 SQLite，再镜像到 Supabase。
 - Supabase 写入失败有结构化诊断。
 - `push-backup` 能补偿历史 SQLite 记录。
+- `sync_outbox` 已覆盖快照 ingest、数据集 bundle、回测、优化和 Golden 业务对象。
 
 ### M3：读取回退与 failover 写入
 

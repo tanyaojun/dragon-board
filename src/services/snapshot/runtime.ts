@@ -1307,7 +1307,10 @@ export class SnapshotRuntime {
     // 写入必须串行，避免同一槽位在定时器和手工触发并发时落出重复记录。
     const task = this.snapshotWriteQueue.catch(() => undefined).then(async () => {
       const existing = await this.snapshotStore.getById(record.id)
-      if (existing) return
+      if (existing) {
+        await this.replayBackendIngestIfPending(existing)
+        return
+      }
       await this.ensurePersistentStorage()
       const effectiveBundle = bundle || this.createProjectionBundle(record)
       await this.snapshotProjectionWriter.saveBundle(effectiveBundle)
@@ -1327,6 +1330,19 @@ export class SnapshotRuntime {
     } catch (error) {
       this.logger.error('[DataLayer] Snapshot write queue failed:', record.id, error)
       return false
+    }
+  }
+
+  private async replayBackendIngestIfPending(record: SnapshotRecord): Promise<void> {
+    if (record.type === 'five_minute') return
+    const state = this.backupSyncStateStore.get(record.tradingDate)
+    const backendIngested = Number(state?.backendIngestedAt) > 0 && !state?.lastBackendIngestError
+    if (backendIngested) return
+
+    try {
+      await this.pushSnapshotBundleToBackend(record, await this.buildCanonicalPrimaryBundle(record))
+    } catch (error) {
+      this.logger.warn?.('[DataLayer] Snapshot backend ingest replay failed:', record.id, error)
     }
   }
 

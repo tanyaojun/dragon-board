@@ -20,7 +20,7 @@ from backend.data.models import (
     SyncOutboxModel,
 )
 from backend.data.supabase_backup import SupabaseBackupClient, get_backup_client
-from backend.utils import json_dumps, json_loads
+from backend.utils import json_dumps, json_loads, stable_hash
 
 
 class Repository:
@@ -32,6 +32,7 @@ class Repository:
         enable_backup: bool = True,
     ):
         self.session = session
+        self.enable_backup = enable_backup
         self.backup = None if not enable_backup else (backup_client if backup_client is not None else get_backup_client())
 
     def list_datasets(self) -> list[Dataset]:
@@ -114,6 +115,13 @@ class Repository:
             self.session.add_all([self._sector_model(dataset.id, item) for item in sector_rows])
             self.session.flush()
             self._refresh_dataset_summary(dataset.id)
+            saved_for_sync = self.session.get(Dataset, dataset.id) or dataset
+            outbox_key = self._queue_backup_outbox(
+                "dataset_bundle",
+                {"dataset": self.dataset_to_dict(saved_for_sync)},
+                dataset_id=dataset.id,
+                snapshot_id=None,
+            )
             self.session.commit()
             saved = self.session.get(Dataset, dataset.id)
         except SQLAlchemyError:
@@ -121,7 +129,8 @@ class Repository:
             if not self._mirror_dataset_bundle(dataset, records, frames, stock_rows, sector_rows):
                 raise RuntimeError("primary database write failed and Supabase backup write also failed")
             return dataset
-        self._mirror_dataset_bundle(saved or dataset, records, frames, stock_rows, sector_rows)
+        mirror_ok = self._mirror_dataset_bundle(saved or dataset, records, frames, stock_rows, sector_rows)
+        self._finalize_outbox_mirror(outbox_key, mirror_ok)
         return saved or dataset
 
     def save_snapshot_ingest(
@@ -164,27 +173,40 @@ class Repository:
         self.session.flush()
         self._refresh_dataset_summary(dataset.id)
 
-        outbox = SyncOutboxModel(
-            op_type="snapshot_ingest",
+        outbox = self._add_outbox_row(
+            "snapshot_ingest",
+            {
+                "dataset": self.dataset_to_dict(dataset),
+                "records": records,
+                "frames": frames,
+                "stockRows": stock_rows,
+                "sectorRows": sector_rows,
+                "tradingDate": trading_date,
+                "source": source,
+            },
+            idempotency_key=idempotency_key,
             dataset_id=dataset.id,
             snapshot_id=snapshot_ids[0] if snapshot_ids else None,
-            payload_json=json_dumps(
-                {
-                    "dataset": self.dataset_to_dict(dataset),
-                    "records": records,
-                    "frames": frames,
-                    "stockRows": stock_rows,
-                    "sectorRows": sector_rows,
-                    "tradingDate": trading_date,
-                    "source": source,
-                }
-            ),
-            idempotency_key=idempotency_key,
-            status="pending",
         )
-        self.session.add(outbox)
         self.session.commit()
         saved_dataset = self.session.get(Dataset, dataset.id) or dataset
+        mirror_ok = False
+        if self.backup:
+            full_bundle = self.dump_dataset_bundle(dataset.id)
+            if full_bundle:
+                mirror_dataset, mirror_records, mirror_frames, mirror_stock_rows, mirror_sector_rows = full_bundle
+                mirror_ok = self._mirror_dataset_bundle(
+                    mirror_dataset,
+                    mirror_records,
+                    mirror_frames,
+                    mirror_stock_rows,
+                    mirror_sector_rows,
+                )
+            else:
+                mirror_ok = self._mirror_dataset_bundle(saved_dataset, records, frames, stock_rows, sector_rows)
+            refreshed_outbox = self._finalize_outbox_mirror(idempotency_key, mirror_ok)
+            if refreshed_outbox:
+                outbox = refreshed_outbox
         return {
             "dataset": self.dataset_to_dict(saved_dataset),
             "status": outbox.status,
@@ -231,6 +253,64 @@ class Repository:
         self.session.add(row)
         self.session.commit()
         return row
+
+    def _add_outbox_row(
+        self,
+        op_type: str,
+        payload: dict[str, Any],
+        *,
+        idempotency_key: str,
+        dataset_id: str | None = None,
+        snapshot_id: str | None = None,
+        status: str = "pending",
+        next_retry_at: datetime | None = None,
+    ) -> SyncOutboxModel:
+        if self.session is None:
+            raise RuntimeError("primary database is unavailable")
+        existing = self.get_outbox_by_idempotency_key(idempotency_key)
+        if existing:
+            return existing
+        row = SyncOutboxModel(
+            op_type=op_type,
+            dataset_id=dataset_id,
+            snapshot_id=snapshot_id,
+            payload_json=json_dumps(payload),
+            idempotency_key=idempotency_key,
+            status=status,
+            retry_count=0,
+            next_retry_at=next_retry_at,
+        )
+        self.session.add(row)
+        return row
+
+    def _queue_backup_outbox(
+        self,
+        op_type: str,
+        payload: dict[str, Any],
+        *,
+        dataset_id: str | None = None,
+        snapshot_id: str | None = None,
+    ) -> str | None:
+        if self.session is None or not self.enable_backup:
+            return None
+        idempotency_key = f"{op_type}:{snapshot_id or dataset_id or stable_hash(payload)[:24]}:{stable_hash(payload)[:24]}"
+        self._add_outbox_row(
+            op_type,
+            payload,
+            idempotency_key=idempotency_key[:160],
+            dataset_id=dataset_id,
+            snapshot_id=snapshot_id,
+        )
+        return idempotency_key[:160]
+
+    def _finalize_outbox_mirror(self, idempotency_key: str | None, mirror_ok: bool) -> SyncOutboxModel | None:
+        if not idempotency_key or self.session is None or not self.enable_backup:
+            return None
+        if mirror_ok:
+            return self.mark_outbox_succeeded(idempotency_key)
+        if self.backup:
+            return self.mark_outbox_failed(idempotency_key, self.backup.last_error or "backup mirror failed")
+        return self.get_outbox_by_idempotency_key(idempotency_key)
 
     def list_pending_outbox(self, limit: int = 50) -> list[SyncOutboxModel]:
         if self.session is None:
@@ -365,15 +445,23 @@ class Repository:
                 raise RuntimeError("primary database is unavailable and Supabase backup is not configured or writable")
             return run
         try:
-            self.session.merge(run)
+            managed = self.session.merge(run)
+            outbox_key = self._queue_backup_outbox(
+                "backtest_run",
+                {"run": self.backtest_run_to_dict(managed)},
+                dataset_id=managed.dataset_id,
+                snapshot_id=managed.id,
+            )
             self.session.commit()
         except SQLAlchemyError:
             self.session.rollback()
             if not self._mirror_backtest_run(run):
                 raise RuntimeError("primary database write failed and Supabase backup write also failed")
             return run
-        self._mirror_backtest_run(run)
-        return run
+        saved = self.session.get(BacktestRun, run.id) or run
+        mirror_ok = self._mirror_backtest_run(saved)
+        self._finalize_outbox_mirror(outbox_key, mirror_ok)
+        return saved
 
     def get_backtest_run(self, run_id: str) -> BacktestRun | None:
         if self.session is None:
@@ -389,15 +477,23 @@ class Repository:
                 raise RuntimeError("primary database is unavailable and Supabase backup is not configured or writable")
             return run
         try:
-            self.session.merge(run)
+            managed = self.session.merge(run)
+            outbox_key = self._queue_backup_outbox(
+                "optimization_run",
+                {"run": self.optimization_run_to_dict(managed)},
+                dataset_id=managed.dataset_id,
+                snapshot_id=managed.id,
+            )
             self.session.commit()
         except SQLAlchemyError:
             self.session.rollback()
             if not self._mirror_optimization_run(run):
                 raise RuntimeError("primary database write failed and Supabase backup write also failed")
             return run
-        self._mirror_optimization_run(run)
-        return run
+        saved = self.session.get(OptimizationRun, run.id) or run
+        mirror_ok = self._mirror_optimization_run(saved)
+        self._finalize_outbox_mirror(outbox_key, mirror_ok)
+        return saved
 
     def get_optimization_run(self, run_id: str) -> OptimizationRun | None:
         if self.session is None:
@@ -413,15 +509,23 @@ class Repository:
                 raise RuntimeError("primary database is unavailable and Supabase backup is not configured or writable")
             return case
         try:
-            self.session.merge(case)
+            managed = self.session.merge(case)
+            outbox_key = self._queue_backup_outbox(
+                "golden_case",
+                {"case": self.golden_case_to_dict(managed)},
+                dataset_id=managed.dataset_id,
+                snapshot_id=managed.id,
+            )
             self.session.commit()
         except SQLAlchemyError:
             self.session.rollback()
             if not self._mirror_golden_case(case):
                 raise RuntimeError("primary database write failed and Supabase backup write also failed")
             return case
-        self._mirror_golden_case(case)
-        return case
+        saved = self.session.get(GoldenRankTrendCase, case.id) or case
+        mirror_ok = self._mirror_golden_case(saved)
+        self._finalize_outbox_mirror(outbox_key, mirror_ok)
+        return saved
 
     def get_golden_case(self, case_id: str) -> GoldenRankTrendCase | None:
         if self.session is None:
@@ -492,6 +596,48 @@ class Repository:
             "snapshot_types": json_loads(model.snapshot_types_json, []),
             "metadata": json_loads(model.metadata_json, {}),
             "created_at": model.created_at.isoformat(),
+        }
+
+    @staticmethod
+    def backtest_run_to_dict(model: BacktestRun) -> dict[str, Any]:
+        return {
+            "id": model.id,
+            "dataset_id": model.dataset_id,
+            "strategy_name": model.strategy_name,
+            "strategy_version": model.strategy_version,
+            "snapshot_type": model.snapshot_type,
+            "config_hash": model.config_hash,
+            "random_seed": model.random_seed,
+            "status": model.status,
+            "request_json": model.request_json,
+            "result_json": model.result_json,
+            "created_at": model.created_at.isoformat() if model.created_at else None,
+        }
+
+    @staticmethod
+    def optimization_run_to_dict(model: OptimizationRun) -> dict[str, Any]:
+        return {
+            "id": model.id,
+            "dataset_id": model.dataset_id,
+            "strategy_name": model.strategy_name,
+            "method": model.method,
+            "config_hash": model.config_hash,
+            "random_seed": model.random_seed,
+            "status": model.status,
+            "request_json": model.request_json,
+            "result_json": model.result_json,
+            "created_at": model.created_at.isoformat() if model.created_at else None,
+        }
+
+    @staticmethod
+    def golden_case_to_dict(model: GoldenRankTrendCase) -> dict[str, Any]:
+        return {
+            "id": model.id,
+            "name": model.name,
+            "dataset_id": model.dataset_id,
+            "input_json": model.input_json,
+            "expected_json": model.expected_json,
+            "created_at": model.created_at.isoformat() if model.created_at else None,
         }
 
     @staticmethod

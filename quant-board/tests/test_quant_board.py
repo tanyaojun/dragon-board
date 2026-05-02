@@ -7,12 +7,14 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from backend.analysis.ranktrend import RankTrendConfig, analyze_cycle, analyze_momentum_signals, analyze_risk, analyze_technical
 from backend.cli import build_parser, build_ranktrend_payload
 from backend.core.backtest import TradeSimulator
 from backend.data.database import SessionLocal
-from backend.data.models import BacktestRun, Dataset
+from backend.data.backup_sync import BackupSyncService
+from backend.data.models import BacktestRun, Dataset, GoldenRankTrendCase, OptimizationRun, SyncOutboxModel
 from backend.data.repository import Repository
 from backend.main import app
 from backend.services import DEFAULT_BACKTEST_STRATEGY_CONFIG
@@ -713,6 +715,90 @@ def test_snapshot_ingest_summary_is_persisted_and_outbox_retry_is_due_gated() ->
         assert idempotency_key not in pending_keys
 
 
+def test_snapshot_json_migration_dry_run_and_idempotent_import(tmp_path: Path) -> None:
+    client = TestClient(app)
+    suffix = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
+    dataset_id = f"dragonboard_history_{suffix}"
+    bundle = {
+        "version": "v4",
+        "items": [
+            {
+                "id": "half_hour:2026-04-23:10:00",
+                "type": "half_hour",
+                "tradingDate": "2026-04-23",
+                "slotTime": "10:00",
+                "timestamp": 1776919200000,
+                "payload": {
+                    "type": "half_hour",
+                    "tradingDate": "2026-04-23",
+                    "slotTime": "10:00",
+                    "timestamp": 1776919200000,
+                    "hotlist": [
+                        {"code": "600001", "name": "样本A", "rank": 1, "price": 10},
+                        {"code": "600002", "name": "样本B", "rank": 2, "price": 11},
+                    ],
+                    "sectors": [{"name": "样本行业", "rank": 1}],
+                },
+            },
+            {
+                "id": "half_hour:2026-04-23:10:30",
+                "type": "half_hour",
+                "tradingDate": "2026-04-23",
+                "slotTime": "10:30",
+                "timestamp": 1776921000000,
+                "payload": {
+                    "type": "half_hour",
+                    "tradingDate": "2026-04-23",
+                    "slotTime": "10:30",
+                    "timestamp": 1776921000000,
+                    "hotlist": [{"code": "600001", "name": "样本A", "rank": 1, "price": 10.2}],
+                },
+            },
+        ],
+    }
+    path = tmp_path / "dragonboard-v4.json"
+    path.write_text(json.dumps(bundle, ensure_ascii=False), encoding="utf-8")
+
+    dry_run = client.post(
+        "/api/migrations/snapshots/import-json",
+        json={"datasetId": dataset_id, "sourcePath": str(path), "dryRun": True},
+    )
+    assert dry_run.status_code == 200, dry_run.text
+    dry_report = dry_run.json()["report"]
+    assert dry_report == {"scanned": 2, "imported": 0, "skipped": 0, "errors": [], "dry_run": True}
+    assert client.get(f"/api/datasets/{dataset_id}").status_code == 404
+
+    first = client.post(
+        "/api/migrations/snapshots/import-json",
+        json={"datasetId": dataset_id, "sourcePath": str(path), "name": "history import"},
+    )
+    assert first.status_code == 200, first.text
+    first_body = first.json()
+    assert first_body["ok"] is True
+    assert first_body["deduped"] is False
+    assert first_body["report"] == {"scanned": 2, "imported": 2, "skipped": 0, "errors": [], "dry_run": False}
+    assert first_body["dataset"]["id"] == dataset_id
+    assert first_body["dataset"]["frame_count"] == 2
+    assert first_body["dataset"]["stock_row_count"] == 3
+    assert first_body["dataset"]["sector_row_count"] == 1
+
+    second = client.post(
+        "/api/migrations/snapshots/import-json",
+        json={"datasetId": dataset_id, "sourcePath": str(path), "name": "history import"},
+    )
+    assert second.status_code == 200, second.text
+    second_body = second.json()
+    assert second_body["ok"] is True
+    assert second_body["deduped"] is True
+    assert second_body["report"] == {"scanned": 2, "imported": 0, "skipped": 2, "errors": [], "dry_run": False}
+
+    dataset = client.get(f"/api/datasets/{dataset_id}")
+    assert dataset.status_code == 200
+    assert dataset.json()["frame_count"] == 2
+    assert dataset.json()["stock_row_count"] == 3
+    assert dataset.json()["sector_row_count"] == 1
+
+
 def test_trade_simulator_realistic_matching_constraints() -> None:
     base_signal = {
         "snapshotId": "s1",
@@ -887,8 +973,14 @@ class MemoryBackup:
         self.datasets: dict[str, Dataset] = {}
         self.frames: dict[str, list[dict[str, object]]] = {}
         self.backtests: dict[str, BacktestRun] = {}
+        self.optimizations: dict[str, OptimizationRun] = {}
+        self.golden_cases: dict[str, GoldenRankTrendCase] = {}
+        self.fail_writes = False
 
     def mirror_dataset_bundle(self, dataset, records, frames, stock_rows, sector_rows):
+        if self.fail_writes:
+            self.last_error = "backup offline"
+            return False
         self.datasets[dataset.id] = dataset
         self.frames[dataset.id] = [
             {
@@ -900,7 +992,24 @@ class MemoryBackup:
         return True
 
     def mirror_backtest_run(self, run):
+        if self.fail_writes:
+            self.last_error = "backup offline"
+            return False
         self.backtests[run.id] = run
+        return True
+
+    def mirror_optimization_run(self, run):
+        if self.fail_writes:
+            self.last_error = "backup offline"
+            return False
+        self.optimizations[run.id] = run
+        return True
+
+    def mirror_golden_case(self, case):
+        if self.fail_writes:
+            self.last_error = "backup offline"
+            return False
+        self.golden_cases[case.id] = case
         return True
 
     def list_rows(self, record_type, source=None, page_size=500):
@@ -1025,3 +1134,128 @@ def test_repository_falls_back_to_backup_when_primary_session_is_unavailable() -
     frames = fallback_repo.load_frames("ds_backup", "half_hour")
     assert frames[0]["snapshotId"] == "s1"
     assert frames[0]["stocks"][0]["code"] == "600001"
+
+
+def test_outbox_push_replays_failed_business_object_mirrors() -> None:
+    backup = MemoryBackup()
+    backup.fail_writes = True
+    with SessionLocal() as session:
+        suffix = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
+        dataset = Dataset(
+            id=f"ds_outbox_{suffix}",
+            name="outbox",
+            source_type="json_bundle",
+            source_path="",
+            frame_count=1,
+            stock_row_count=1,
+            snapshot_count=1,
+            sector_row_count=0,
+            start_date="2026-04-24",
+            end_date="2026-04-24",
+            snapshot_types_json='["half_hour"]',
+            metadata_json="{}",
+            created_at=datetime.utcnow(),
+        )
+        frame = {
+            "snapshotId": f"half_hour:2026-04-24:{suffix}",
+            "type": "half_hour",
+            "tradingDate": "2026-04-24",
+            "slotTime": "10:00",
+            "timestamp": 1777005600000,
+        }
+        stock = {"snapshotId": frame["snapshotId"], "code": "600001", "rank": 1}
+        repo = Repository(session, backup)
+        repo.save_dataset_bundle(dataset, [], [frame], [stock], [])
+        repo.save_backtest_run(
+            BacktestRun(
+                id=f"bt_{suffix}",
+                dataset_id=dataset.id,
+                strategy_name="rank_trend_candidate",
+                snapshot_type="half_hour",
+                config_hash="cfg",
+                random_seed=20260430,
+                request_json="{}",
+                result_json="{}",
+            )
+        )
+        repo.save_optimization_run(
+            OptimizationRun(
+                id=f"opt_{suffix}",
+                dataset_id=dataset.id,
+                strategy_name="rank_trend_candidate",
+                method="grid",
+                config_hash="cfg",
+                random_seed=20260430,
+                request_json="{}",
+                result_json="{}",
+            )
+        )
+        repo.save_golden_case(
+            GoldenRankTrendCase(
+                id=f"golden_{suffix}",
+                name="golden",
+                dataset_id=dataset.id,
+                input_json="{}",
+                expected_json="[]",
+            )
+        )
+
+        queued = list(
+            session.scalars(
+                select(SyncOutboxModel).where(
+                    SyncOutboxModel.dataset_id == dataset.id,
+                    SyncOutboxModel.op_type.in_(
+                        ["dataset_bundle", "backtest_run", "optimization_run", "golden_case"]
+                    ),
+                )
+            )
+        )
+        assert {row.op_type for row in queued} == {
+            "dataset_bundle",
+            "backtest_run",
+            "optimization_run",
+            "golden_case",
+        }
+        for row in queued:
+            row.next_retry_at = datetime.utcnow() - timedelta(seconds=1)
+        session.commit()
+
+        backup.fail_writes = False
+        service = BackupSyncService(session, backup)
+        result = service.push_outbox_to_backup(repo, limit=200)
+        for _ in range(3):
+            unfinished = list(
+                session.scalars(
+                    select(SyncOutboxModel).where(
+                        SyncOutboxModel.dataset_id == dataset.id,
+                        SyncOutboxModel.op_type.in_(
+                            ["dataset_bundle", "backtest_run", "optimization_run", "golden_case"]
+                        ),
+                        SyncOutboxModel.status.in_(["pending", "retry"]),
+                    )
+                )
+            )
+            if not unfinished:
+                break
+            for row in unfinished:
+                row.next_retry_at = datetime.utcnow() - timedelta(seconds=1)
+            session.commit()
+            result = service.push_outbox_to_backup(repo, limit=200)
+
+        assert result["scanned"] >= 0
+        assert result["failed"] == 0
+        assert dataset.id in backup.datasets
+        assert backup.backtests
+        assert backup.optimizations
+        assert backup.golden_cases
+        finished = list(
+            session.scalars(
+                select(SyncOutboxModel).where(
+                    SyncOutboxModel.dataset_id == dataset.id,
+                    SyncOutboxModel.op_type.in_(
+                        ["dataset_bundle", "backtest_run", "optimization_run", "golden_case"]
+                    ),
+                )
+            )
+        )
+        assert {row.status for row in finished} == {"done"}

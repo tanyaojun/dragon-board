@@ -12,7 +12,7 @@ QuantBoard 首期导入 dragon-board 的历史快照数据，形成可复现的�
 
 ## 数据来源
 
-首期支持两类来源：
+首期支持三类来源：
 
 1. IndexedDB 导出 JSON
    - 来自 dragon-board 浏览器端快照存储。
@@ -22,7 +22,13 @@ QuantBoard 首期导入 dragon-board 的历史快照数据，形成可复现的�
    - 如果已有 `snapshots`、`snapshot_frames`、`snapshot_stock_rows` 结构化导出，可直接映射。
    - 适合后续自动化同步。
 
+3. 后端历史迁移 JSON
+   - 通过 `POST /api/migrations/snapshots/import-json` 导入旧 IndexedDB 导出、Dragon Board v4 bundle、结构化 frames/rows 或 SQLite/备份导出。
+   - 适合从“浏览器临时资产”逐步迁移到 SQLite 主库 + Supabase 备份库。
+
 不建议首期直接读浏览器 IndexedDB 文件。浏览器存储结构、锁和 LevelDB 细节会增加不必要复杂度。
+
+IndexedDB 在迁移完成前仍可作为历史来源和离线缓存，但不应继续被视为正式事实库。
 
 ## 标准数据集结构
 
@@ -114,6 +120,37 @@ snapshot_type = half_hour
 7. 执行质量门禁。
 8. 写入 `datasets` 汇总统计。
 9. 返回导入报告。
+
+## 历史 JSON 迁移入口
+
+`POST /api/migrations/snapshots/import-json` 是数据库重构期间的正式迁移入口。它和普通 `POST /api/datasets/import` 的区别是：
+
+- 支持指定固定 `datasetId`，便于反复迁移同一个历史库。
+- 支持 `sourcePath`，也支持内联 `content` / `bundle` / `payload`。
+- 支持 `dryRun`，只解析、计数和检查已存在快照，不落库。
+- 写入时复用 `save_snapshot_ingest`，因此会登记 `sync_outbox` 并进入 Supabase 备份补偿链。
+- 对同一 `idempotencyKey` 或已存在的 `dataset_id + snapshot_id` 幂等跳过。
+
+支持的 JSON 形态：
+
+- Dragon Board v4 bundle：`items`、`frames`、`stockRows`、`sectorRows`。
+- 旧 records/snapshots 数组。
+- 结构化 `frames`、`stockRows`、`sectorRows`。
+- 常见 SQLite/备份导出字段，例如 `snapshot_id`、`trading_date`、`slot_time`、`row_id`、`market_context_json`。
+
+迁移报告字段：
+
+```json
+{
+  "scanned": 80,
+  "imported": 80,
+  "skipped": 0,
+  "errors": [],
+  "dry_run": false
+}
+```
+
+`skipped` 表示目标 `dataset_id` 下已存在的快照或同一迁移幂等键已经执行过。重复导入不能制造重复数据。
 
 ## 质量门禁
 

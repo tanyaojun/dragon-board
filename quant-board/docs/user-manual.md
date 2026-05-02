@@ -92,7 +92,26 @@ cd d:\dragon-board\quant-board
 
 导入成功后刷新页面左侧数据集。
 
-### 3.4 浏览器桥接导入
+### 3.4 后端历史迁移 API
+
+如果是在做 IndexedDB 历史资产迁移，优先用后端迁移入口。它可以固定 `datasetId`，支持 dry run，并且会把正式写入纳入 SQLite + Supabase 备份同步链。
+
+先试跑：
+
+```powershell
+Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/migrations/snapshots/import-json `
+  -ContentType 'application/json' `
+  -Body (@{
+    datasetId = 'dragonboard_history'
+    sourcePath = 'd:/exports/dragonboard-v4.json'
+    name = 'DragonBoard history'
+    dryRun = $true
+  } | ConvertTo-Json -Depth 20)
+```
+
+确认 `report.scanned`、`report.imported`、`report.skipped` 无异常后，把 `dryRun` 改为 `$false` 正式导入。重复执行同一批数据会跳过已存在快照，不应产生重复行。
+
+### 3.5 浏览器桥接导入
 
 如果 DragonBoard 正在 `http://localhost:5173` 运行，可以尝试：
 
@@ -113,7 +132,7 @@ cd d:\dragon-board\quant-board
 
 注意：Playwright 默认启动的是新的浏览器上下文，不一定能读取你日常 Chrome/Edge profile 里的 IndexedDB。如果返回空快照，改用 JSON 文件上传或 LevelDB。
 
-### 3.5 LevelDB 导入
+### 3.6 LevelDB 导入
 
 在 `quant-board/config/data_sources.yaml` 填好 Chrome 或 Edge profile 下的 IndexedDB `.leveldb` 路径后：
 

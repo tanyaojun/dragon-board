@@ -30,6 +30,20 @@ class SnapshotIngestRequest(BaseModel):
     source: str = Field(default="dragon_board_runtime", alias="source")
 
 
+class SnapshotJsonMigrationRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    dataset_id: str | None = Field(default=None, alias="datasetId")
+    idempotency_key: str | None = Field(default=None, alias="idempotencyKey")
+    source_path: str | None = Field(default=None, alias="sourcePath")
+    content: Any | None = None
+    bundle: dict[str, Any] | None = None
+    payload: Any | None = None
+    name: str | None = None
+    source: str = "dragon_board_history_migration"
+    dry_run: bool = Field(default=False, alias="dryRun")
+
+
 class DatasetSummary(BaseModel):
     id: str
     name: str

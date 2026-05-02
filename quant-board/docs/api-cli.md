@@ -8,6 +8,8 @@ QuantBoard API 和 CLI 共用同一套服务层。API 面向轻实验台和自�
 
 前端和脚本应按 HTTP 状态判断失败，不要用 HTTP 200 + 空对象表示失败。
 
+Dragon Board 前端调用 QuantBoard 快照 ingest 时会把 `503` 和其他 `5xx` 视为可重试错误；`4xx` 表示请求或数据合同错误，不做自动重试。
+
 SQLite 主库 + Supabase 备份库的完整读写、同步、恢复和冲突规则见 [database-migration-plan.md](database-migration-plan.md)。本文件只记录 API/CLI 对外合同。
 
 ## 数据集接口
@@ -37,7 +39,29 @@ Invoke-RestMethod http://127.0.0.1:8000/api/health
 Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/sync/push-backup
 ```
 
-当前返回包含 `ok`、`direction`、各对象计数和 `errors`。目标合同还应能区分扫描数量、成功数量、跳过数量、失败数量和失败业务键，详见 [database-migration-plan.md](database-migration-plan.md)。
+返回包含 outbox 补偿结果和全量补推结果：
+
+```json
+{
+  "ok": true,
+  "direction": "push",
+  "outbox": {
+    "scanned": 0,
+    "succeeded": 0,
+    "failed": 0,
+    "skipped": 0,
+    "items": []
+  },
+  "datasets": { "scanned": 0, "succeeded": 0, "failed": 0, "skipped": 0 },
+  "snapshotBundles": { "scanned": 0, "succeeded": 0, "failed": 0, "skipped": 0 },
+  "backtestRuns": { "scanned": 0, "succeeded": 0, "failed": 0, "skipped": 0 },
+  "optimizationRuns": { "scanned": 0, "succeeded": 0, "failed": 0, "skipped": 0 },
+  "goldenCases": { "scanned": 0, "succeeded": 0, "failed": 0, "skipped": 0 },
+  "errors": []
+}
+```
+
+`push-backup` 会先消费 `sync_outbox` 中到期的 `pending/retry` 任务，再扫描 SQLite 里已有的数据集、回测、优化和 Golden 记录做补推。失败项会进入 `errors`，结构为 `{type,key,error}`。
 
 ### `POST /api/sync/pull-backup`
 
@@ -48,6 +72,44 @@ Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/sync/pull-backup
 ```
 
 当前返回包含 `ok`、`direction`、各对象计数和 `errors`。目标合同还应报告恢复数量、跳过数量、冲突数量、失败数量和需要人工处理的业务键。
+
+### `POST /api/snapshots/ingest`
+
+Dragon Board 正式快照写入入口。前端提交 v4 snapshot bundle，后端先写 SQLite，再登记/更新 Supabase 备份 outbox。Vue 前端不得直连 Supabase，也不得携带数据库密钥。
+
+```json
+{
+  "bundle": {
+    "version": "v4",
+    "tradingDate": "2026-04-23",
+    "items": [],
+    "frames": [],
+    "stockRows": [],
+    "sectorRows": []
+  },
+  "tradingDate": "2026-04-23",
+  "idempotencyKey": "dragonboard:2026-04-23:half_hour:...",
+  "source": "dragon_board_runtime"
+}
+```
+
+返回：
+
+```json
+{
+  "ok": true,
+  "dataset": { "id": "dragonboard_runtime_2026-04-23" },
+  "status": "done",
+  "outbox": {
+    "op_type": "snapshot_ingest",
+    "status": "done",
+    "idempotency_key": "dragonboard:2026-04-23:half_hour:..."
+  },
+  "deduped": false
+}
+```
+
+同一 `idempotencyKey` 重放时返回 `deduped=true`，不会重复写入事实行。若 Supabase 镜像失败，本地 SQLite 写入仍成立，`status` 会是 `retry/failed`，后续由 `push-backup` 补偿。
 
 ### `GET /api/datasets`
 
@@ -88,6 +150,56 @@ Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/sync/pull-backup
 ### `POST /api/datasets/upload`
 
 上传 JSON 内容并导入，供轻实验台文件上传使用。
+
+### `POST /api/migrations/snapshots/import-json`
+
+历史快照迁移入口。用于把旧 IndexedDB 导出、Dragon Board v4 bundle、结构化 frames/rows 或 SQLite/备份导出 JSON 导入正式 SQLite 主库，并复用 `sync_outbox` 同步到 Supabase。
+
+路径导入：
+
+```powershell
+Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/migrations/snapshots/import-json `
+  -ContentType 'application/json' `
+  -Body (@{
+    datasetId = 'dragonboard_history'
+    sourcePath = 'd:/exports/dragonboard-v4.json'
+    name = 'DragonBoard history'
+    dryRun = $false
+  } | ConvertTo-Json -Depth 20)
+```
+
+内联导入：
+
+```json
+{
+  "datasetId": "dragonboard_history",
+  "content": {
+    "version": "v4",
+    "items": []
+  },
+  "idempotencyKey": "migration:dragonboard_history:2026-04",
+  "dryRun": true
+}
+```
+
+返回：
+
+```json
+{
+  "ok": true,
+  "datasetId": "dragonboard_history",
+  "deduped": false,
+  "report": {
+    "scanned": 2,
+    "imported": 2,
+    "skipped": 0,
+    "errors": [],
+    "dry_run": false
+  }
+}
+```
+
+`dryRun=true` 只解析和统计，不落库。同一 `idempotencyKey` 或已存在的 `dataset_id + snapshot_id` 会被跳过，重复执行不会制造重复快照。
 
 ## Golden 接口
 

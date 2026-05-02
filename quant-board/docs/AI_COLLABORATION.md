@@ -11,6 +11,7 @@
 - 默认快照：`snapshot_type=half_hour`。
 - 可选快照：`quarter_hour` 可用于细颗粒度研究，但必须显式选择，不能替代默认口径。
 - 存储主链：SQLite 是 QuantBoard 主库，Supabase 是后端专用备份库；实施和恢复规则以 [database-migration-plan.md](database-migration-plan.md) 为准。
+- 当前同步批次：`sync_outbox` 已覆盖快照 ingest、数据集 bundle、回测、优化和 Golden；历史 JSON 迁移入口是 `POST /api/migrations/snapshots/import-json`。
 
 ## 工作边界
 
@@ -44,6 +45,7 @@
 7. Python 端 rankTrend 输出字段必须能和 golden case 对齐。
 8. 前端展示不得把 `finalSignal` 当成唯一交易结论，应优先展示状态、候选分层、风险、样本质量和交易解释。
 9. SQLite 主库、Supabase 备份库、同步接口、快照入库和 API/CLI 合同变更，必须同批更新对应文档。
+10. Dragon Board 前端不得直连 Supabase；正式快照写库必须走 QuantBoard 后端 API。IndexedDB 只能作为迁移源、缓存或失败重放来源。
 
 ## 推荐执行流程
 

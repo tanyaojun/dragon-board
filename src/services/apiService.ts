@@ -97,6 +97,9 @@ export class ApiHttpError extends Error {
   readonly url: string
   readonly method: HttpMethod
   readonly body: unknown
+  readonly errorCode?: string
+  readonly details?: unknown
+  readonly retryable: boolean
 
   constructor(params: {
     method: HttpMethod
@@ -106,9 +109,10 @@ export class ApiHttpError extends Error {
     body: unknown
   }) {
     const body = params.body as Record<string, unknown> | null
+    const errorCode = typeof body?.errorCode === 'string' ? body.errorCode : undefined
     const message =
       (typeof body?.message === 'string' && body.message) ||
-      (typeof body?.errorCode === 'string' && body.errorCode) ||
+      errorCode ||
       `${params.method} ${params.url} failed with HTTP ${params.status}`
     super(message)
     this.name = 'ApiHttpError'
@@ -117,6 +121,9 @@ export class ApiHttpError extends Error {
     this.url = params.url
     this.method = params.method
     this.body = params.body
+    this.errorCode = errorCode
+    this.details = body?.details
+    this.retryable = params.status === 503 || params.status >= 500
   }
 }
 
@@ -371,7 +378,7 @@ export class ApiService {
         } else if (config.responseType === 'arraybuffer') {
           responseData = (await response.arrayBuffer()) as T
         } else {
-          responseData = await response.json()
+          responseData = await this.parseJsonResponse<T>(response)
         }
 
         if (config.throwOnHttpError && !response.ok) {
@@ -418,7 +425,7 @@ export class ApiService {
         retryCount++
 
         // 如果还有重试次数，等待后继续
-        if (retryCount <= (config.retries ?? 2)) {
+        if (retryCount <= (config.retries ?? 2) && this.shouldRetryRequest(error)) {
           const delay = (config.retryDelay ?? 1000) * Math.pow(2, retryCount - 1)
           debugLog(
             `[ApiService] 请求失败，${delay}ms后重试 (${retryCount}/${config.retries ?? 2}): ${url}`,
@@ -812,6 +819,26 @@ export class ApiService {
     if (url.startsWith('http')) return url
     if (url.startsWith('/')) return `${baseURL}${url}`
     return `${baseURL}/${url}`
+  }
+
+  private async parseJsonResponse<T>(response: Response): Promise<T> {
+    const text = await response.text()
+    if (!text) return null as T
+    try {
+      return JSON.parse(text) as T
+    } catch (error) {
+      if (response.ok) throw error
+      return {
+        ok: false,
+        errorCode: 'invalid_json_response',
+        message: text,
+      } as T
+    }
+  }
+
+  private shouldRetryRequest(error: unknown): boolean {
+    if (error instanceof ApiHttpError) return error.retryable
+    return true
   }
 
   private generateRequestId(url: string, method: HttpMethod): string {

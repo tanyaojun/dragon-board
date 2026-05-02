@@ -227,6 +227,60 @@ describe('SnapshotRuntime', () => {
     })
   })
 
+  it('replays backend ingest when saving an existing snapshot after backend failure', async () => {
+    const runtime = createRuntime()
+    const record = createRecord('half_hour', '2026-04-21', '10:00')
+    const ingest = vi.spyOn(snapshotBackendIngest, 'ingestDayBundle').mockResolvedValue({
+      ok: true,
+      dataset: {},
+      status: 'ingested',
+      deduped: false,
+      outbox: {},
+    })
+
+    vi.stubGlobal('window', {})
+    ;(runtime as any).backupSyncStateStore.markError('backendIngest', record.tradingDate, 'http_500')
+    ;(runtime as any).snapshotStore = {
+      getById: vi.fn().mockResolvedValue(record),
+    }
+    ;(runtime as any).snapshotStockRowStore = {
+      list: vi.fn().mockResolvedValue([
+        {
+          id: `${record.id}:600001`,
+          snapshotId: record.id,
+          type: record.type,
+          tradingDate: record.tradingDate,
+          slotTime: record.slotTime,
+          timestamp: record.timestamp,
+          captureMode: record.captureMode,
+          source: record.source,
+          code: '600001',
+          rank: 1,
+        },
+      ]),
+    }
+    ;(runtime as any).snapshotSectorRowStore = {
+      list: vi.fn().mockResolvedValue([]),
+    }
+    ;(runtime as any).snapshotProjectionWriter = {
+      saveBundle: vi.fn(),
+    }
+    ;(runtime as any).snapshotBackupSync = {
+      saveToBackups: vi.fn(),
+    }
+
+    const saved = await (runtime as any).saveSnapshotRecord(record)
+
+    expect(saved).toBe(false)
+    expect(ingest).toHaveBeenCalledTimes(1)
+    expect((runtime as any).snapshotProjectionWriter.saveBundle).not.toHaveBeenCalled()
+    const state = await runtime.getSnapshotBackupSyncState('2026-04-21')
+    expect(state).toMatchObject({
+      backendIngestedAt: expect.any(Number),
+    })
+    expect(state).not.toHaveProperty('lastBackendIngestError')
+  })
+
   it('backfills pending cloud trading dates after 15:30 in ascending order', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-04-28T15:35:00'))

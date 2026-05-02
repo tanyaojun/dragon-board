@@ -68,9 +68,12 @@ QuantBoard API/CLI -> SQLite(primary) -> Supabase(backup)
 - SQLite 是默认主库，负责本机即时写入和低延迟读取。
 - Supabase 不暴露给 Vue 前端，只由后端使用 `SUPABASE_URL` 和 `SUPABASE_SECRET_KEY` 访问。
 - 正常写入先提交 SQLite，再把同一份业务对象镜像到 Supabase。
+- SQLite 写入成功后会登记 `sync_outbox`，即使 Supabase 当次不可用，也能通过 `push-backup` 补偿。
 - SQLite 初始化或查询失败时，读路径会回退到 Supabase 备份记录。
 - SQLite 不可用但 Supabase 可写时，关键写入切到 Supabase 是后续 M3 目标；能力完成前，写接口必须明确返回不可用，不能伪装成功。
 - `POST /api/sync/push-backup` 用于把已有 SQLite 历史数据主动推送到 Supabase。
+- `POST /api/snapshots/ingest` 是 Dragon Board 正式快照进入 QuantBoard 后端的主入口。
+- `POST /api/migrations/snapshots/import-json` 是历史 IndexedDB/JSON/结构化导出的可重复迁移入口。
 - 同键重复同步必须幂等；同键不同 payload/hash 必须标记冲突，不允许静默覆盖。
 
 为了兼容当前 Supabase 已存在的空表，QuantBoard 备份记录落在 `snapshots` 表中，使用 `type` 区分：
@@ -138,6 +141,21 @@ QuantBoard API/CLI -> SQLite(primary) -> Supabase(backup)
 ### sync_outbox
 
 保存主库写入成功但 Supabase 镜像尚未确认的补偿同步任务。它只服务 SQLite 主库 + Supabase 备份库并行策略，不改变业务主链；详细语义以 [database-migration-plan.md](database-migration-plan.md) 为准。
+
+当前支持的 `op_type`：
+
+- `dataset_bundle`
+- `snapshot_ingest`
+- `backtest_run`
+- `optimization_run`
+- `golden_case`
+
+状态语义：
+
+- `pending`：SQLite 已成功写入，尚未确认 Supabase 镜像。
+- `retry`：Supabase 镜像失败，等待 `next_retry_at` 后由 `push-backup` 重试。
+- `done`：Supabase 已确认。
+- `failed`：达到重试上限，需要人工检查 `last_error`。
 
 ## 配置来源
 

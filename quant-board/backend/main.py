@@ -14,9 +14,16 @@ from backend.data.backup_sync import BackupSyncService
 from backend.data.database import get_db, init_db, primary_status
 from backend.data.dataset_service import DatasetService
 from backend.data.importers import ImporterError, frame_from_record, sector_rows_from_record, stock_rows_from_record
+from backend.data.migration import SnapshotMigrationService
 from backend.data.models import Dataset
 from backend.data.repository import Repository
-from backend.data.schemas import GoldenImportRequest, GoldenValidateRequest, ImportDatasetRequest, SnapshotIngestRequest
+from backend.data.schemas import (
+    GoldenImportRequest,
+    GoldenValidateRequest,
+    ImportDatasetRequest,
+    SnapshotIngestRequest,
+    SnapshotJsonMigrationRequest,
+)
 from backend.data.supabase_backup import get_backup_client
 from backend.services import BacktestService, GoldenService, OptimizationService
 from backend.settings import get_settings
@@ -90,6 +97,19 @@ def ingest_snapshot(request: SnapshotIngestRequest, db: Session | None = Depends
         raise HTTPException(status_code=400, detail=str(error)) from error
     except RuntimeError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
+
+
+@app.post("/api/migrations/snapshots/import-json")
+def import_snapshot_json_migration(
+    request: SnapshotJsonMigrationRequest,
+    db: Session | None = Depends(get_db),
+) -> dict[str, Any]:
+    if db is None:
+        raise HTTPException(status_code=503, detail="primary database is unavailable")
+    try:
+        return SnapshotMigrationService(db).import_json(request.model_dump(by_alias=True))
+    except (ImporterError, ValueError) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
 
 def normalize_snapshot_ingest(
