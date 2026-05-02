@@ -310,6 +310,18 @@ Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/migrations/snapshots/im
 
 `dryRun=true` 只解析和统计，不落库。同一 `idempotencyKey` 或已存在的 `dataset_id + snapshot_id` 会被跳过，重复执行不会制造重复快照。
 
+浏览器端可直接把当前 Dragon Board origin 的 IndexedDB 全量补齐到 SQLite：
+
+```js
+await window.dataLayer.migrateIndexedDbSnapshotsToSqlite({
+  datasetId: 'dragonboard_live',
+  batchSize: 20,
+  validate: true,
+})
+```
+
+该命令读取 `snapshots`、`snapshot_frames`、`snapshot_stock_rows`、`snapshot_sector_rows` 四个 store，分批调用本接口。重跑时按 `dataset_id + snapshot_id` 跳过已有快照；如果同一 `idempotencyKey` 已有 outbox 但仍有缺失快照，后端会只补缺失部分。
+
 ## Golden 接口
 
 ### `POST /api/golden/import`

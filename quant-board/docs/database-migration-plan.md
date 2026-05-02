@@ -59,6 +59,7 @@ Supabase schema 仍与 SQLite 同构，但备份适配层允许对超大 `Text` 
 - Dragon Board 正式零散读口开始 SQLite 主读：`listSnapshots`、`getSnapshotById`、`listSnapshotFrames`、`listSnapshotStockRows`、`listSnapshotSectorRows` 会读 QuantBoard SQLite API，保持原 `DataLayer` 字段合同不变；`five_minute` 等非正式临时快照仍走本地临时路径。
 - Dragon Board 正式写入口开始 SQLite 主写：正式快照保存必须先通过 `POST /api/snapshots/ingest` 落 SQLite；IndexedDB 写入只作为缓存/迁移源，缓存失败不再代表正式保存失败。
 - 浏览器端新增 IndexedDB vs SQLite 全量行数校验入口：`DataLayer.validateSnapshotIndexedDbSqliteCounts()` 会统计四个 IndexedDB store 并调用 `POST /api/snapshots/validate-indexeddb-counts` 与 SQLite 同 dataset 校验。
+- 浏览器端新增 IndexedDB -> SQLite 补齐入口：`DataLayer.migrateIndexedDbSnapshotsToSqlite()` 会直接读取当前 origin 的 `snapshots`、`snapshot_frames`、`snapshot_stock_rows`、`snapshot_sector_rows`，按批调用 `POST /api/migrations/snapshots/import-json` 导入 `dragonboard_live`，最后自动执行行数校验。
 - 历史 JSON 迁移入口 `POST /api/migrations/snapshots/import-json` 已可处理 v4 bundle、records/snapshots、frames/stockRows/sectorRows 和常见 SQLite/备份导出字段。
 
 仍未完成的边界：
@@ -314,6 +315,24 @@ Dragon Board 前端正式分析入口 `listSnapshotFrameBundles` 必须调用该
 
 `datasetId` 可省略。省略时按默认快照数据集解析规则选择当前有效 SQLite 数据集；兼容旧前端时，`datasetId=dragonboard_live` 且该数据集不存在或为空，会回退到最新有快照事实行的数据集。返回 `ok/indexedDb/sqlite/diffs`。`ok=true` 才能进入删除浏览器历史或停用迁移工具的下一步；不允许因为 Supabase 暂时不可用而跳过 SQLite 与 IndexedDB 校验。
 
+浏览器验收命令：
+
+```js
+await window.dataLayer.validateSnapshotIndexedDbSqliteCounts()
+```
+
+如果返回 `ok=false` 且 IndexedDB 行数大于 SQLite，需要先执行补齐迁移：
+
+```js
+await window.dataLayer.migrateIndexedDbSnapshotsToSqlite({
+  datasetId: 'dragonboard_live',
+  batchSize: 20,
+  validate: true,
+})
+```
+
+该迁移只追加/补齐 SQLite，按 `dataset_id + snapshot_id` 跳过已有快照，保留 `DataLayer` 原字段，不删除 IndexedDB 数据。`dryRun=true` 可先解析和统计，不落库。
+
 ### `POST /api/migrations/snapshots/import-json`
 
 用途：把旧 IndexedDB 导出、Dragon Board v4 bundle、结构化 frames/rows 或 SQLite/备份导出 JSON 导入正式 SQLite 主库，并复用 `save_snapshot_ingest` 进入 outbox 同步链路。
@@ -338,6 +357,8 @@ Dragon Board 前端正式分析入口 `listSnapshotFrameBundles` 必须调用该
 - `report.skipped`
 - `report.errors`
 - `report.dry_run`
+
+同一 `idempotencyKey` 且请求内所有 `snapshot_id` 都已存在时返回 `deduped=true`。如果迁移中断后重跑，同一 `idempotencyKey` 请求里仍有 SQLite 缺失的 `snapshot_id`，后端会为缺失部分派生内部幂等键继续补入，不会因为旧 outbox 记录直接跳过缺失快照。
 
 重复迁移同一 `idempotencyKey` 或同一批已存在 `snapshot_id` 时，必须跳过已入库快照，不能制造重复事实行。
 

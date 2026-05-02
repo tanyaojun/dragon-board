@@ -53,14 +53,24 @@ class SnapshotMigrationService:
             or stable_hash({"migration": "snapshot_json", "datasetId": dataset_id, "snapshotIds": snapshot_ids})
         )
         if self.repo.get_outbox_by_idempotency_key(idempotency_key):
-            report["skipped"] = len(snapshot_ids)
-            return {
-                "ok": True,
-                "datasetId": dataset_id,
-                "idempotencyKey": idempotency_key,
-                "deduped": True,
-                "report": report,
-            }
+            missing_ids = set(snapshot_ids) - existing_ids
+            if not missing_ids:
+                report["skipped"] = len(snapshot_ids)
+                return {
+                    "ok": True,
+                    "datasetId": dataset_id,
+                    "idempotencyKey": idempotency_key,
+                    "deduped": True,
+                    "report": report,
+                }
+            idempotency_key = stable_hash(
+                {
+                    "migration": "snapshot_json_retry",
+                    "datasetId": dataset_id,
+                    "snapshotIds": sorted(missing_ids),
+                    "sourceKey": idempotency_key,
+                }
+            )
 
         report["skipped"] = len(existing_ids)
         report["imported"] = 0 if dry_run else len(snapshot_ids) - len(existing_ids)

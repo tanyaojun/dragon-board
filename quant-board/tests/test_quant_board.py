@@ -1130,6 +1130,86 @@ def test_snapshot_json_migration_dry_run_and_idempotent_import(tmp_path: Path) -
     assert dataset.json()["sector_row_count"] == 1
 
 
+def test_snapshot_json_migration_retries_missing_rows_with_existing_outbox() -> None:
+    client = TestClient(app)
+    suffix = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
+    dataset_id = f"dragonboard_history_retry_{suffix}"
+    idempotency_key = f"migration-retry-key-{suffix}"
+    first_bundle = {
+        "version": "v4",
+        "items": [
+            {
+                "id": "half_hour:2026-04-24:10:00",
+                "type": "half_hour",
+                "tradingDate": "2026-04-24",
+                "slotTime": "10:00",
+                "timestamp": 1777005600000,
+                "payload": {
+                    "type": "half_hour",
+                    "tradingDate": "2026-04-24",
+                    "slotTime": "10:00",
+                    "timestamp": 1777005600000,
+                    "hotlist": [{"code": "600001", "name": "样本A", "rank": 1}],
+                },
+            }
+        ],
+    }
+    retry_bundle = {
+        "version": "v4",
+        "items": [
+            *first_bundle["items"],
+            {
+                "id": "half_hour:2026-04-24:10:30",
+                "type": "half_hour",
+                "tradingDate": "2026-04-24",
+                "slotTime": "10:30",
+                "timestamp": 1777007400000,
+                "payload": {
+                    "type": "half_hour",
+                    "tradingDate": "2026-04-24",
+                    "slotTime": "10:30",
+                    "timestamp": 1777007400000,
+                    "hotlist": [{"code": "600002", "name": "样本B", "rank": 1}],
+                },
+            },
+        ],
+    }
+
+    first = client.post(
+        "/api/migrations/snapshots/import-json",
+        json={
+            "datasetId": dataset_id,
+            "idempotencyKey": idempotency_key,
+            "content": first_bundle,
+        },
+    )
+    assert first.status_code == 200, first.text
+    assert first.json()["report"]["imported"] == 1
+
+    retry = client.post(
+        "/api/migrations/snapshots/import-json",
+        json={
+            "datasetId": dataset_id,
+            "idempotencyKey": idempotency_key,
+            "content": retry_bundle,
+        },
+    )
+    assert retry.status_code == 200, retry.text
+    retry_body = retry.json()
+    assert retry_body["deduped"] is False
+    assert retry_body["report"]["imported"] == 1
+    assert retry_body["report"]["skipped"] == 1
+
+    counts = client.get("/api/snapshots/counts", params={"dataset_id": dataset_id})
+    assert counts.status_code == 200, counts.text
+    assert counts.json()["counts"] == {
+        "snapshots": 2,
+        "snapshot_frames": 2,
+        "snapshot_stock_rows": 2,
+        "snapshot_sector_rows": 0,
+    }
+
+
 def test_trade_simulator_realistic_matching_constraints() -> None:
     base_signal = {
         "snapshotId": "s1",
