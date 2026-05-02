@@ -64,6 +64,14 @@ export class SnapshotBackupSyncStateStore {
     return this.readStateMap()[tradingDate] || null
   }
 
+  remove(tradingDate: string): void {
+    if (!tradingDate || !this.storage) return
+    const stateMap = this.readStateMap()
+    if (!stateMap[tradingDate]) return
+    delete stateMap[tradingDate]
+    this.persistStateMap(stateMap)
+  }
+
   getLatestCloudSyncedTradingDate(): string {
     return (
       this.list()

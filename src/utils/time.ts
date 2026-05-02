@@ -1,21 +1,45 @@
 // src/utils/time.ts
 import { Lunar } from 'lunar-javascript'
 
-export const isTradingTime = (date: Date = new Date()): boolean => {
+const A_SHARE_MARKET_HOLIDAY_RANGES = [
+  // 2026 年 A 股休市安排按上交所 2025-12-22 公告维护。
+  ['2026-01-01', '2026-01-03'],
+  ['2026-02-15', '2026-02-23'],
+  ['2026-04-04', '2026-04-06'],
+  ['2026-05-01', '2026-05-05'],
+  ['2026-06-19', '2026-06-21'],
+  ['2026-09-25', '2026-09-27'],
+  ['2026-10-01', '2026-10-07'],
+] as const
+
+function toLocalDateKey(date: Date): string {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function isAshareMarketHoliday(date: Date): boolean {
+  const key = toLocalDateKey(date)
+  return A_SHARE_MARKET_HOLIDAY_RANGES.some(([start, end]) => key >= start && key <= end)
+}
+
+export const isAshareTradingDay = (date: Date = new Date()): boolean => {
   const day = date.getDay()
-  const time = date.getHours() * 100 + date.getMinutes()
-
-  // 周末
   if (day === 0 || day === 6) return false
-
-  // 法定节假日
+  if (isAshareMarketHoliday(date)) return false
   if (isHoliday(date)) return false
+  return true
+}
 
-  // 上午盘 9:30 - 11:30
-  if (time >= 930 && time < 1200) return true
+export const isTradingTime = (date: Date = new Date()): boolean => {
+  const minutes = date.getHours() * 60 + date.getMinutes()
 
-  // 下午盘 13:00 - 15:00
-  if (time >= 1300 && time <= 1500) return true
+  if (!isAshareTradingDay(date)) return false
+
+  // A 股连续竞价时段，包含 11:30 和 15:00 快照槽位。
+  if (minutes >= 9 * 60 + 30 && minutes <= 11 * 60 + 30) return true
+  if (minutes >= 13 * 60 && minutes <= 15 * 60) return true
 
   return false
 }

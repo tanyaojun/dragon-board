@@ -29,6 +29,7 @@ import {
   type RankTrendIntradaySnapshotType,
   type RankTrendSnapshotType,
 } from '../../type/rankTrendDefaults'
+import { isTradingTime } from '../../utils/time'
 import {
   SnapshotFrameStore,
   SnapshotProjectionMetaStore,
@@ -58,6 +59,7 @@ import type {
   SnapshotStockRowQueryOptions,
   SnapshotType,
   SnapshotRawCompactionResult,
+  SnapshotPollutionCleanupResult,
 } from './types'
 
 interface SnapshotRuntimeDeps {
@@ -195,6 +197,7 @@ export class SnapshotRuntime {
     void this.ensurePersistentStorage()
     void this.cleanupLegacyPlainBackupDatabase()
     void this.migrateLegacyBucketBackupDatabase()
+    void this.cleanupInvalidRuntimeSnapshots()
     void this.initializeSnapshotGuard()
     this.startSnapshotAutoSync()
     this.scheduleProjectionBackfill(1_000)
@@ -222,6 +225,10 @@ export class SnapshotRuntime {
         this.logger.warn('[DataLayer] 跳过一刻快照保存：当前不在合法槽位')
         return false
       }
+      if (!this.isSnapshotCaptureAllowed('quarter_hour', effectiveTime)) {
+        this.logSnapshotCaptureSkipped('quarter_hour', effectiveTime)
+        return false
+      }
       const buildContext = this.getBuildContext()
       const snapshot = buildIntradaySnapshotBase(buildContext, effectiveTime, buildContext.stocks.length)
       const cleanSnapshot = JSON.parse(JSON.stringify(snapshot))
@@ -244,6 +251,10 @@ export class SnapshotRuntime {
         this.logger.warn('[DataLayer] 跳过半小时快照保存：当前不在合法槽位')
         return false
       }
+      if (!this.isSnapshotCaptureAllowed('half_hour', effectiveTime)) {
+        this.logSnapshotCaptureSkipped('half_hour', effectiveTime)
+        return false
+      }
       const buildContext = this.getBuildContext()
       const snapshot = buildIntradaySnapshotBase(buildContext, effectiveTime, buildContext.stocks.length)
       const cleanSnapshot = JSON.parse(JSON.stringify(snapshot))
@@ -264,6 +275,10 @@ export class SnapshotRuntime {
       const effectiveTime = this.resolveSnapshotTime('hourly', snapshotTime)
       if (!effectiveTime) {
         this.logger.warn('[DataLayer] 跳过小时快照保存：当前不在合法槽位')
+        return false
+      }
+      if (!this.isSnapshotCaptureAllowed('hourly', effectiveTime)) {
+        this.logSnapshotCaptureSkipped('hourly', effectiveTime)
         return false
       }
       const buildContext = this.getBuildContext()
@@ -479,6 +494,10 @@ export class SnapshotRuntime {
       const effectiveTime = this.resolveSnapshotTime('daily', snapshotTime)
       if (!effectiveTime) {
         this.logger.warn('[DataLayer] 跳过日级快照保存：当前不在合法槽位')
+        return false
+      }
+      if (!this.isSnapshotCaptureAllowed('daily', effectiveTime)) {
+        this.logSnapshotCaptureSkipped('daily', effectiveTime)
         return false
       }
       const buildContext = this.getBuildContext()
@@ -698,6 +717,50 @@ export class SnapshotRuntime {
     }
   }
 
+  async cleanupInvalidRuntimeSnapshots(
+    options: SnapshotQueryOptions = {},
+  ): Promise<SnapshotPollutionCleanupResult> {
+    const records = await this.snapshotStore.list({
+      ...options,
+      allowedCaptureModes: options.allowedCaptureModes || ['real_time', 'delayed'],
+      sort: 'asc',
+    })
+    const affectedTradingDates = new Set<string>()
+    const deletedSnapshotIds: string[] = []
+
+    for (const record of records) {
+      if (!this.isInvalidRuntimeSnapshot(record)) continue
+      const deleted = await this.deleteSnapshotRecord(record.id, {
+        removeLocalBackups: false,
+        removeBackupState: true,
+      })
+      if (!deleted) continue
+      deletedSnapshotIds.push(record.id)
+      if (record.tradingDate) affectedTradingDates.add(record.tradingDate)
+    }
+
+    const backupCleanup = await this.snapshotBackupSync.cleanupInvalidLocalBackups((record) =>
+      this.isInvalidRuntimeSnapshot(record),
+    )
+    backupCleanup.affectedTradingDates.forEach((tradingDate) => affectedTradingDates.add(tradingDate))
+    backupCleanup.affectedTradingDates.forEach((tradingDate) => this.backupSyncStateStore.remove(tradingDate))
+
+    const result: SnapshotPollutionCleanupResult = {
+      scanned: records.length + backupCleanup.scanned,
+      deleted: deletedSnapshotIds.length,
+      deletedFromPrimary: deletedSnapshotIds.length,
+      deletedFromBucketBackup: backupCleanup.deleted,
+      affectedTradingDates: Array.from(affectedTradingDates).sort(),
+      deletedSnapshotIds: Array.from(new Set([...deletedSnapshotIds, ...backupCleanup.deletedSnapshotIds])),
+    }
+
+    if (result.deleted > 0) {
+      this.logger.warn?.('[DataLayer] Snapshot pollution cleanup completed:', result)
+    }
+
+    return result
+  }
+
   async runSnapshotStorageMaintenance(
     options?: SnapshotQueryOptions & { includeCloud?: boolean },
   ): Promise<SnapshotStorageMaintenanceResult> {
@@ -816,8 +879,7 @@ export class SnapshotRuntime {
 
   async deleteSnapshot(id: string): Promise<boolean> {
     try {
-      await this.snapshotStore.delete(id)
-      return true
+      return this.deleteSnapshotRecord(id, { removeLocalBackups: true, removeBackupState: false })
     } catch (error) {
       this.logger.error('[DataLayer] 删除失败:', error)
       return false
@@ -1048,6 +1110,10 @@ export class SnapshotRuntime {
 
   async saveFiveMinuteSnapshot(snapshotTime: Date = new Date()): Promise<boolean> {
     try {
+      if (!this.isSnapshotCaptureAllowed('five_minute', snapshotTime)) {
+        this.logSnapshotCaptureSkipped('five_minute', snapshotTime)
+        return false
+      }
       const recordId = buildSnapshotId('five_minute', toLocalTradingDate(snapshotTime), toLocalSlotTime(snapshotTime))
       const existing = await this.getSnapshotById(recordId)
       if (existing) return false
@@ -1261,6 +1327,44 @@ export class SnapshotRuntime {
     }
   }
 
+  private async deleteSnapshotRecord(
+    id: string,
+    options?: { removeLocalBackups?: boolean; removeBackupState?: boolean },
+  ): Promise<boolean> {
+    if (!id) return false
+    const existing = await this.snapshotStore.getById(id)
+    if (!existing) return false
+
+    await Promise.all([
+      existing.type === 'five_minute' ? Promise.resolve() : this.snapshotFrameStore.deleteBySnapshotId(id),
+      existing.type === 'five_minute' ? Promise.resolve() : this.snapshotStockRowStore.deleteBySnapshotId(id),
+      existing.type === 'five_minute' ? Promise.resolve() : this.snapshotSectorRowStore.deleteBySnapshotId(id),
+    ])
+    await this.snapshotStore.delete(id)
+
+    if (options?.removeLocalBackups) {
+      await this.snapshotBackupSync.deleteFromLocalBackups(id)
+    }
+    if (options?.removeBackupState && existing.tradingDate) {
+      this.backupSyncStateStore.remove(existing.tradingDate)
+    }
+    return true
+  }
+
+  private isInvalidRuntimeSnapshot(record: SnapshotRecord): boolean {
+    if (!record || record.captureMode === 'restored') return false
+    if (record.source && record.source !== 'browser_runtime') return false
+    return !this.isSnapshotCaptureAllowed(record.type, this.resolveRecordSnapshotTime(record))
+  }
+
+  private resolveRecordSnapshotTime(record: SnapshotRecord): Date {
+    const slotDate = record.tradingDate && record.slotTime
+      ? new Date(`${record.tradingDate}T${record.slotTime}:00`)
+      : null
+    if (slotDate && !Number.isNaN(slotDate.getTime())) return slotDate
+    return new Date(Number(record.timestamp) || 0)
+  }
+
   private filterSnapshotsByCoverage(
     records: SnapshotRecord[],
     options: SnapshotQueryOptions,
@@ -1441,6 +1545,7 @@ export class SnapshotRuntime {
     for (const type of types) {
       const slots = getScheduledSlotsForDate(type, now)
         .filter((slot) => slot.getTime() <= now.getTime())
+        .filter((slot) => this.isSnapshotCaptureAllowed(type, slot))
         .sort((left, right) => right.getTime() - left.getTime())
 
       for (const slotTime of slots) {
@@ -1475,6 +1580,22 @@ export class SnapshotRuntime {
             ? SnapshotRuntime.HOURLY_BACKFILL_WINDOW_MS
             : SnapshotRuntime.DAILY_BACKFILL_WINDOW_MS
     return now.getTime() - slotTime.getTime() <= graceMs
+  }
+
+  private isSnapshotCaptureAllowed(type: SnapshotType, snapshotTime: Date): boolean {
+    if (!(snapshotTime instanceof Date) || Number.isNaN(snapshotTime.getTime())) return false
+    if (type === 'daily') {
+      const closeTime = new Date(snapshotTime)
+      closeTime.setHours(15, 0, 0, 0)
+      return isTradingTime(closeTime)
+    }
+    return isTradingTime(snapshotTime)
+  }
+
+  private logSnapshotCaptureSkipped(type: SnapshotType, snapshotTime: Date): void {
+    this.logger.warn?.(
+      `[DataLayer] 跳过${type}快照保存：非交易日或非交易时段 ${toLocalTradingDate(snapshotTime)} ${toLocalSlotTime(snapshotTime)}`,
+    )
   }
 
   private async saveScheduledSnapshot(type: SnapshotType, slotTime: Date): Promise<void> {

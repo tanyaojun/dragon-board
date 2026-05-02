@@ -72,6 +72,7 @@ describe('snapshotQualityGate', () => {
     const result = evaluateSnapshotQualityGate(snapshots, {
       minHotlistSize: 1,
       minSnapshotCount: 2,
+      requiredType: 'quarter_hour',
     })
 
     expect(result.passed).toBe(true)
@@ -104,6 +105,7 @@ describe('snapshotQualityGate', () => {
       {
         minHotlistSize: 1,
         minSnapshotCount: 2,
+        requiredType: 'quarter_hour',
       },
     )
 

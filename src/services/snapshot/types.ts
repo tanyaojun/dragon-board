@@ -200,6 +200,15 @@ export interface SnapshotRawCompactionResult {
   affectedTradingDates: string[]
 }
 
+export interface SnapshotPollutionCleanupResult {
+  scanned: number
+  deleted: number
+  deletedFromPrimary: number
+  deletedFromBucketBackup: number
+  affectedTradingDates: string[]
+  deletedSnapshotIds: string[]
+}
+
 export interface SnapshotBackupAlignmentResult {
   processedSnapshots: number
   localBundlesSynced: number

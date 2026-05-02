@@ -237,6 +237,76 @@ describe('SnapshotRuntime', () => {
     })
   })
 
+  it('does not collect scheduled snapshot slots on 2026 Labor Day market holiday', async () => {
+    const runtime = createRuntime()
+
+    const candidates = await (runtime as any).collectPendingSnapshotSlots(
+      new Date('2026-05-01T15:35:00'),
+    )
+
+    expect(candidates).toEqual([])
+  })
+
+  it('does not write manual snapshots on weekend non-trading days', async () => {
+    const runtime = createRuntime()
+    const saveSnapshotRecord = vi.spyOn(runtime as any, 'saveSnapshotRecord')
+
+    const saved = await runtime.saveHalfHourSnapshot(new Date('2026-05-02T10:00:00'))
+
+    expect(saved).toBe(false)
+    expect(saveSnapshotRecord).not.toHaveBeenCalled()
+  })
+
+  it('cleans non-trading-day runtime snapshots from primary projections and local backups', async () => {
+    const runtime = createRuntime()
+    const polluted = createRecord('half_hour', '2026-05-02', '10:00')
+    const valid = createRecord('half_hour', '2026-04-30', '10:00')
+
+    ;(runtime as any).snapshotStore = {
+      list: vi.fn().mockResolvedValue([polluted, valid]),
+      getById: vi.fn(async (id: string) => (id === polluted.id ? polluted : id === valid.id ? valid : null)),
+      delete: vi.fn().mockResolvedValue(undefined),
+    }
+    ;(runtime as any).snapshotFrameStore = {
+      deleteBySnapshotId: vi.fn().mockResolvedValue(undefined),
+    }
+    ;(runtime as any).snapshotStockRowStore = {
+      deleteBySnapshotId: vi.fn().mockResolvedValue(undefined),
+    }
+    ;(runtime as any).snapshotSectorRowStore = {
+      deleteBySnapshotId: vi.fn().mockResolvedValue(undefined),
+    }
+    ;(runtime as any).snapshotBackupSync = {
+      cleanupInvalidLocalBackups: vi.fn(async (predicate: (record: SnapshotRecord) => boolean) => {
+        expect(predicate(polluted)).toBe(true)
+        expect(predicate(valid)).toBe(false)
+        return {
+          scanned: 1,
+          deleted: 1,
+          affectedTradingDates: ['2026-05-02'],
+          deletedSnapshotIds: [polluted.id],
+        }
+      }),
+    }
+
+    const result = await runtime.cleanupInvalidRuntimeSnapshots()
+
+    expect(result).toMatchObject({
+      scanned: 3,
+      deleted: 1,
+      deletedFromPrimary: 1,
+      deletedFromBucketBackup: 1,
+      affectedTradingDates: ['2026-05-02'],
+      deletedSnapshotIds: [polluted.id],
+    })
+    expect((runtime as any).snapshotStore.delete).toHaveBeenCalledWith(polluted.id)
+    expect((runtime as any).snapshotStore.delete).not.toHaveBeenCalledWith(valid.id)
+    expect((runtime as any).snapshotFrameStore.deleteBySnapshotId).toHaveBeenCalledWith(polluted.id)
+    expect((runtime as any).snapshotStockRowStore.deleteBySnapshotId).toHaveBeenCalledWith(polluted.id)
+    expect((runtime as any).snapshotSectorRowStore.deleteBySnapshotId).toHaveBeenCalledWith(polluted.id)
+    expect((runtime as any).snapshotBackupSync.cleanupInvalidLocalBackups).toHaveBeenCalledTimes(1)
+  })
+
   it('uses recent primary trading dates as cloud backfill candidates when sync state is missing', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-04-28T15:35:00'))

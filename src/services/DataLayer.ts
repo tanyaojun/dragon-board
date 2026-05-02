@@ -22,6 +22,7 @@ import type {
   SnapshotProjectionRewriteResult,
   SnapshotProjectionMeta,
   SnapshotQueryOptions,
+  SnapshotPollutionCleanupResult,
   SnapshotRawCompactionResult,
   SnapshotRecord,
   SnapshotSectorRow,
@@ -2202,6 +2203,12 @@ class DataLayer {
     options?: SnapshotQueryOptions & { includeCloud?: boolean },
   ): Promise<SnapshotStorageMaintenanceResult> {
     return this.snapshotRuntime.runSnapshotStorageMaintenance(options)
+  }
+
+  async cleanupInvalidRuntimeSnapshots(
+    options: SnapshotQueryOptions = {},
+  ): Promise<SnapshotPollutionCleanupResult> {
+    return this.snapshotRuntime.cleanupInvalidRuntimeSnapshots(options)
   }
 
   async getStockVolumeHistory(

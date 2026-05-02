@@ -196,6 +196,70 @@ export class SnapshotBackupSync {
     return this.cloudBackup.getHealth()
   }
 
+  async deleteFromLocalBackups(snapshotId: string): Promise<boolean> {
+    if (!snapshotId) return false
+    const [bucketStore, bucketFrameStore, bucketStockRowStore, bucketSectorRowStore] = await Promise.all([
+      this.bucketStoreProvider(),
+      this.bucketFrameStoreProvider?.() || Promise.resolve(null),
+      this.bucketStockRowStoreProvider?.() || Promise.resolve(null),
+      this.bucketSectorRowStoreProvider?.() || Promise.resolve(null),
+    ])
+    if (!bucketStore) return false
+
+    const existing = await bucketStore.getById(snapshotId)
+    if (!existing) return false
+
+    await Promise.all([
+      bucketFrameStore?.deleteBySnapshotId(snapshotId) || Promise.resolve(),
+      bucketStockRowStore?.deleteBySnapshotId(snapshotId) || Promise.resolve(),
+      bucketSectorRowStore?.deleteBySnapshotId(snapshotId) || Promise.resolve(),
+    ])
+    await bucketStore.delete(snapshotId)
+    return true
+  }
+
+  async cleanupInvalidLocalBackups(
+    isInvalid: (record: SnapshotRecord) => boolean,
+  ): Promise<{
+    scanned: number
+    deleted: number
+    affectedTradingDates: string[]
+    deletedSnapshotIds: string[]
+  }> {
+    const [bucketStore, bucketFrameStore, bucketStockRowStore, bucketSectorRowStore] = await Promise.all([
+      this.bucketStoreProvider(),
+      this.bucketFrameStoreProvider?.() || Promise.resolve(null),
+      this.bucketStockRowStoreProvider?.() || Promise.resolve(null),
+      this.bucketSectorRowStoreProvider?.() || Promise.resolve(null),
+    ])
+    if (!bucketStore) {
+      return { scanned: 0, deleted: 0, affectedTradingDates: [], deletedSnapshotIds: [] }
+    }
+
+    const records = await bucketStore.getAll()
+    const affectedTradingDates = new Set<string>()
+    const deletedSnapshotIds: string[] = []
+
+    for (const record of records) {
+      if (!record?.id || !isInvalid(record)) continue
+      await Promise.all([
+        bucketFrameStore?.deleteBySnapshotId(record.id) || Promise.resolve(),
+        bucketStockRowStore?.deleteBySnapshotId(record.id) || Promise.resolve(),
+        bucketSectorRowStore?.deleteBySnapshotId(record.id) || Promise.resolve(),
+      ])
+      await bucketStore.delete(record.id)
+      deletedSnapshotIds.push(record.id)
+      if (record.tradingDate) affectedTradingDates.add(record.tradingDate)
+    }
+
+    return {
+      scanned: records.length,
+      deleted: deletedSnapshotIds.length,
+      affectedTradingDates: Array.from(affectedTradingDates).sort(),
+      deletedSnapshotIds,
+    }
+  }
+
   async restorePrimaryFromBackups(options?: {
     overwrite?: boolean
     limit?: number
