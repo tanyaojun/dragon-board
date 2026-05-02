@@ -13,13 +13,16 @@ import type { StockAlert, AlertStats } from '../types'
 import type { AlertType } from '../types/core'
 import { apiService } from './apiService'
 import { SnapshotRuntime } from './snapshot/runtime'
+import { getExpectedSlots, slotTimeToMinutes } from './snapshot/schedule'
 import type {
   SnapshotBackupSyncState,
   SnapshotBackupAlignmentResult,
+  SnapshotDayBundle,
   SnapshotFrameBundle,
   SnapshotFrameQueryOptions,
   SnapshotFrameRow,
   SnapshotHealthOverview,
+  SnapshotProjectionBundle,
   SnapshotProjectionRewriteResult,
   SnapshotProjectionMeta,
   SnapshotQueryOptions,
@@ -85,6 +88,16 @@ const LEGACY_LEVEL_ROLE_MAP: Record<string, LeaderRole> = {
   EMOTION_CORE: 'EMOTION_CORE',
   情绪核心: 'EMOTION_CORE',
 }
+
+const FORMAL_SQLITE_SNAPSHOT_TYPES: SnapshotType[] = ['quarter_hour', 'half_hour', 'hourly', 'daily']
+const SNAPSHOT_INDEXEDDB_COUNT_STORES = [
+  'snapshots',
+  'snapshot_frames',
+  'snapshot_stock_rows',
+  'snapshot_sector_rows',
+] as const
+type SnapshotIndexedDbCountStore = (typeof SNAPSHOT_INDEXEDDB_COUNT_STORES)[number]
+type SnapshotCountMap = Record<SnapshotIndexedDbCountStore, number>
 
 interface LeaderLookupRecord {
   code: string
@@ -737,6 +750,7 @@ class DataLayer {
   })
 
   constructor() {
+    this.snapshotRuntime.setSqlitePrimaryWriteHandler((bundle) => this.writeSnapshotBundleToSqlitePrimary(bundle))
     this.startTimer()
   }
 
@@ -2149,32 +2163,47 @@ class DataLayer {
   }
 
   async listSnapshots(options: SnapshotQueryOptions = {}): Promise<SnapshotRecord[]> {
+    const remote = await this.listRemoteSnapshots(options)
+    if (remote) {
+      return this.filterRemoteSnapshotsByCoverage(remote, options)
+    }
     return this.snapshotRuntime.listSnapshots(options)
   }
 
   async getSnapshotById(id: string): Promise<SnapshotRecord | null> {
+    const remote = await this.getRemoteSnapshotById(id)
+    if (remote !== undefined) return remote
     return this.snapshotRuntime.getSnapshotById(id)
   }
 
   async getTradingDateSnapshot(type: SnapshotType, tradingDate: string): Promise<SnapshotRecord | null> {
-    return this.snapshotRuntime.getTradingDateSnapshot(type, tradingDate)
+    const snapshots = await this.listSnapshots({ type, tradingDate, sort: 'desc', limit: 1 })
+    return snapshots[0] || null
   }
 
   async listSnapshotFrames(
     options: SnapshotFrameQueryOptions | SnapshotQueryOptions = {},
   ): Promise<SnapshotFrameRow[]> {
+    const remoteBundles = await this.listRemoteSnapshotFrameBundles(options as SnapshotFrameQueryOptions)
+    if (remoteBundles) {
+      return remoteBundles.map((bundle) => this.snapshotFrameRowFromBundle(bundle))
+    }
     return this.snapshotRuntime.listSnapshotFrames(options as SnapshotFrameQueryOptions)
   }
 
   async listSnapshotStockRows(
     options: SnapshotStockRowQueryOptions | SnapshotQueryOptions = {},
   ): Promise<SnapshotStockRow[]> {
+    const remote = await this.listRemoteSnapshotStockRows(options as SnapshotStockRowQueryOptions)
+    if (remote) return remote
     return this.snapshotRuntime.listSnapshotStockRows(options as SnapshotStockRowQueryOptions)
   }
 
   async listSnapshotSectorRows(
     options: SnapshotSectorRowQueryOptions | SnapshotQueryOptions = {},
   ): Promise<SnapshotSectorRow[]> {
+    const remote = await this.listRemoteSnapshotSectorRows(options as SnapshotSectorRowQueryOptions)
+    if (remote) return remote
     return this.snapshotRuntime.listSnapshotSectorRows(options as SnapshotSectorRowQueryOptions)
   }
 
@@ -2224,7 +2253,7 @@ class DataLayer {
     options: SnapshotFrameQueryOptions | SnapshotQueryOptions = {},
   ): Promise<SnapshotFrameBundle[]> {
     const remoteBundles = await this.listRemoteSnapshotFrameBundles(options as SnapshotFrameQueryOptions)
-    if (remoteBundles.length > 0) {
+    if (remoteBundles) {
       return remoteBundles
     }
 
@@ -2316,7 +2345,8 @@ class DataLayer {
 
   private async listRemoteSnapshotFrameBundles(
     options: SnapshotFrameQueryOptions = {},
-  ): Promise<SnapshotFrameBundle[]> {
+  ): Promise<SnapshotFrameBundle[] | null> {
+    if (!this.shouldUseSqliteSnapshotRead(options as SnapshotQueryOptions)) return null
     try {
       const query = new URLSearchParams()
       const snapshotType = options.type || options.types?.[0] || 'half_hour'
@@ -2345,9 +2375,313 @@ class DataLayer {
       const frames = Array.isArray(data?.frames) ? data.frames : []
       return frames.map((frame: any) => this.normalizeRemoteSnapshotFrameBundle(frame))
     } catch (error) {
-      console.warn('[DataLayer] SQLite snapshot frame read failed, fallback to IndexedDB:', error)
+      console.warn('[DataLayer] SQLite snapshot frame read failed:', error)
       return []
     }
+  }
+
+  private async writeSnapshotBundleToSqlitePrimary(
+    bundle: SnapshotProjectionBundle,
+  ): Promise<{ ok: boolean; error?: unknown }> {
+    if (typeof window === 'undefined') return { ok: true }
+    try {
+      const dayBundle: SnapshotDayBundle = {
+        version: 'v4',
+        tradingDate: bundle.record.tradingDate,
+        items: [bundle.record],
+        frames: bundle.frame ? [bundle.frame] : [],
+        stockRows: bundle.stockRows || [],
+        sectorRows: bundle.sectorRows || [],
+      }
+      const response = await apiService.ingestSnapshotBundle(dayBundle, {
+        datasetId: 'dragonboard_live',
+        idempotencyKey: await this.digestSnapshotBundleForSqlite(bundle),
+      })
+      const data = response && typeof response === 'object' && 'data' in response ? (response as any).data : response
+      if (!data?.ok) {
+        return { ok: false, error: new Error(data?.status || data?.message || 'snapshot_backend_ingest_failed') }
+      }
+      return { ok: true }
+    } catch (error) {
+      console.warn('[DataLayer] SQLite snapshot primary write failed:', error)
+      return { ok: false, error }
+    }
+  }
+
+  private async digestSnapshotBundleForSqlite(bundle: SnapshotProjectionBundle): Promise<string> {
+    const text = JSON.stringify({
+      snapshotId: bundle.record.id,
+      tradingDate: bundle.record.tradingDate,
+      slotTime: bundle.record.slotTime,
+      timestamp: bundle.record.timestamp,
+      payload: bundle.record.payload,
+      frame: bundle.frame,
+      stockRows: bundle.stockRows,
+      sectorRows: bundle.sectorRows,
+    })
+    if (typeof crypto === 'undefined' || !crypto.subtle) {
+      return `snapshot_ingest:${bundle.record.id}:${bundle.record.timestamp}:${text.length}`
+    }
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))
+    const hash = Array.from(new Uint8Array(digest))
+      .map((byte) => byte.toString(16).padStart(2, '0'))
+      .join('')
+    return `snapshot_ingest:${hash}`
+  }
+
+  private async listRemoteSnapshots(options: SnapshotQueryOptions = {}): Promise<SnapshotRecord[] | null> {
+    if (!this.shouldUseSqliteSnapshotRead(options)) return null
+    try {
+      const query = this.buildSnapshotRecordQuery(options)
+      const data = await this.getQuantBoardPayload(`/api/snapshots/records?${query.toString()}`, 15000)
+      const records = Array.isArray(data?.records) ? data.records : []
+      return records.map((record: any) => this.normalizeRemoteSnapshotRecord(record))
+    } catch (error) {
+      console.warn('[DataLayer] SQLite snapshot record read failed:', error)
+      return []
+    }
+  }
+
+  private async getRemoteSnapshotById(id: string): Promise<SnapshotRecord | null | undefined> {
+    if (!id || id.startsWith('five_minute:')) return undefined
+    try {
+      const data = await this.getQuantBoardPayload(`/api/snapshots/records/${encodeURIComponent(id)}`, 10000)
+      return data?.record ? this.normalizeRemoteSnapshotRecord(data.record) : null
+    } catch (error) {
+      console.warn('[DataLayer] SQLite snapshot get failed:', error)
+      return null
+    }
+  }
+
+  private async listRemoteSnapshotStockRows(
+    options: SnapshotStockRowQueryOptions = {},
+  ): Promise<SnapshotStockRow[] | null> {
+    if (!this.shouldUseSqliteSnapshotRead(options as SnapshotQueryOptions)) return null
+    try {
+      const query = this.buildSnapshotRowQuery(options)
+      if (options.code) query.set('code', options.code)
+      if (options.codes?.length) query.set('codes', options.codes.join(','))
+      if (options.slotTime) query.set('slot_time', options.slotTime)
+      const data = await this.getQuantBoardPayload(`/api/snapshots/stock-rows?${query.toString()}`, 15000)
+      const rows = Array.isArray(data?.rows) ? data.rows : []
+      return rows.map((row: any) => this.normalizeRemoteSnapshotStockRow(row))
+    } catch (error) {
+      console.warn('[DataLayer] SQLite snapshot stock row read failed:', error)
+      return []
+    }
+  }
+
+  private async listRemoteSnapshotSectorRows(
+    options: SnapshotSectorRowQueryOptions = {},
+  ): Promise<SnapshotSectorRow[] | null> {
+    if (!this.shouldUseSqliteSnapshotRead(options as SnapshotQueryOptions)) return null
+    try {
+      const query = this.buildSnapshotRowQuery(options)
+      if (options.entityType) query.set('entity_type', options.entityType)
+      if (options.entityTypes?.length) query.set('entity_types', options.entityTypes.join(','))
+      if (options.entityKey) query.set('entity_key', options.entityKey)
+      if (options.entityKeys?.length) query.set('entity_keys', options.entityKeys.join(','))
+      const data = await this.getQuantBoardPayload(`/api/snapshots/sector-rows?${query.toString()}`, 15000)
+      const rows = Array.isArray(data?.rows) ? data.rows : []
+      return rows.map((row: any) => this.normalizeRemoteSnapshotSectorRow(row))
+    } catch (error) {
+      console.warn('[DataLayer] SQLite snapshot sector row read failed:', error)
+      return []
+    }
+  }
+
+  private async getQuantBoardPayload(path: string, timeout = 15000): Promise<any> {
+    const response = await apiService.get<any>(path, {
+      context: 'quant-board',
+      priority: 'medium',
+      timeout,
+      retries: 0,
+      cache: false,
+      silent: true,
+      throwOnHttpError: true,
+    })
+    return response && typeof response === 'object' && 'data' in response ? (response as any).data : response
+  }
+
+  private shouldUseSqliteSnapshotRead(options: SnapshotQueryOptions = {}): boolean {
+    const requested = this.resolveRequestedSnapshotTypes(options)
+    return requested.length === 0 || requested.every((type) => FORMAL_SQLITE_SNAPSHOT_TYPES.includes(type))
+  }
+
+  private resolveRequestedSnapshotTypes(options: SnapshotQueryOptions = {}): SnapshotType[] {
+    if (options.type) return [options.type]
+    if (options.types?.length) return options.types
+    return []
+  }
+
+  private buildSnapshotRecordQuery(options: SnapshotQueryOptions = {}): URLSearchParams {
+    const query = this.buildSnapshotBaseQuery(options)
+    if (options.requireCoverage) {
+      query.delete('limit')
+    }
+    return query
+  }
+
+  private buildSnapshotRowQuery(
+    options: SnapshotStockRowQueryOptions | SnapshotSectorRowQueryOptions,
+  ): URLSearchParams {
+    const query = this.buildSnapshotBaseQuery(options as SnapshotQueryOptions)
+    if (options.snapshotId) query.set('snapshot_id', options.snapshotId)
+    return query
+  }
+
+  private buildSnapshotBaseQuery(options: SnapshotQueryOptions = {}): URLSearchParams {
+    const query = new URLSearchParams()
+    if (options.type) query.set('snapshot_type', options.type)
+    if (options.types?.length) query.set('types', options.types.join(','))
+    if (options.tradingDate) query.set('trading_date', options.tradingDate)
+    if (options.startDate) query.set('start_date', options.startDate)
+    if (options.endDate) query.set('end_date', options.endDate)
+    if (options.beforeTradingDate) query.set('before_trading_date', options.beforeTradingDate)
+    if (options.allowedCaptureModes?.length) {
+      query.set('allowed_capture_modes', options.allowedCaptureModes.join(','))
+    }
+    if (options.excludeRestored) query.set('exclude_restored', 'true')
+    if (options.sort) query.set('sort', options.sort)
+    if (options.limit && options.limit > 0) query.set('limit', String(options.limit))
+    return query
+  }
+
+  private filterRemoteSnapshotsByCoverage(
+    records: SnapshotRecord[],
+    options: SnapshotQueryOptions,
+  ): SnapshotRecord[] {
+    if (!options.requireCoverage) return records
+    const requestedTypes = this.resolveRequestedSnapshotTypes(options)
+    const effectiveTypes = (
+      requestedTypes.length > 0
+        ? requestedTypes.filter((type) => type !== 'five_minute')
+        : FORMAL_SQLITE_SNAPSHOT_TYPES
+    )
+    const tolerance = Math.max(0, Math.floor(Number(options.coverageTolerance) || 0))
+    const byTradingDate = new Map<string, SnapshotRecord[]>()
+    records.forEach((record) => {
+      if (!record.tradingDate) return
+      const bucket = byTradingDate.get(record.tradingDate) || []
+      bucket.push(record)
+      byTradingDate.set(record.tradingDate, bucket)
+    })
+    const qualified = new Set<string>()
+    byTradingDate.forEach((items, tradingDate) => {
+      const ok = effectiveTypes.every((type) => {
+        const typed = items.filter((record) => record.type === type)
+        const expected = getExpectedSlots(type)
+        const actual = typed.map((record) => record.slotTime).filter(Boolean)
+        const valid = new Set(expected)
+        const malformed = actual.filter((slot) => !valid.has(slot))
+        const latestObserved = actual.reduce(
+          (latest, slot) => (slotTimeToMinutes(slot) > slotTimeToMinutes(latest) ? slot : latest),
+          '',
+        )
+        const effectiveExpected = latestObserved
+          ? expected.filter((slot) => slotTimeToMinutes(slot) <= slotTimeToMinutes(latestObserved))
+          : expected
+        const missing = effectiveExpected.filter((slot) => !actual.includes(slot))
+        return malformed.length === 0 && missing.length <= tolerance
+      })
+      if (ok) qualified.add(tradingDate)
+    })
+    const filtered = records.filter((record) => qualified.has(record.tradingDate))
+    return options.limit && options.limit > 0 ? filtered.slice(0, options.limit) : filtered
+  }
+
+  private normalizeRemoteSnapshotRecord(record: any): SnapshotRecord {
+    const payload = record?.payload && typeof record.payload === 'object' ? record.payload : record
+    return {
+      ...record,
+      id: String(record?.id || record?.snapshotId || ''),
+      snapshotId: String(record?.snapshotId || record?.id || ''),
+      type: record?.type,
+      tradingDate: String(record?.tradingDate || ''),
+      slotTime: String(record?.slotTime || ''),
+      timestamp: Number(record?.timestamp || 0),
+      displayKey: String(record?.displayKey || record?.id || record?.snapshotId || ''),
+      captureMode: record?.captureMode || 'real_time',
+      capturedAt: Number(record?.capturedAt || record?.timestamp || Date.now()),
+      dataTimestamp: Number(record?.dataTimestamp || record?.timestamp || 0),
+      delayMs: Number(record?.delayMs || 0),
+      qualityFlags: Array.isArray(record?.qualityFlags) ? record.qualityFlags : [],
+      source: record?.source || 'browser_runtime',
+      payload,
+    } as SnapshotRecord
+  }
+
+  private normalizeRemoteSnapshotStockRow(row: any): SnapshotStockRow {
+    return {
+      ...row,
+      id: String(row?.id || row?.rowId || `${row?.snapshotId || ''}:${row?.code || ''}`),
+      rowId: String(row?.rowId || row?.id || `${row?.snapshotId || ''}:${row?.code || ''}`),
+      snapshotId: String(row?.snapshotId || ''),
+      type: row?.type,
+      tradingDate: String(row?.tradingDate || ''),
+      slotTime: String(row?.slotTime || ''),
+      timestamp: Number(row?.timestamp || 0),
+      captureMode: row?.captureMode || 'real_time',
+      source: row?.source || 'browser_runtime',
+      code: String(row?.code || ''),
+      name: String(row?.name || row?.code || ''),
+      rank: Number(row?.rank || row?.compRank || 0),
+      compRank: Number(row?.compRank || row?.rank || 0),
+      platforms: Number(row?.platforms || 0),
+    } as SnapshotStockRow
+  }
+
+  private normalizeRemoteSnapshotSectorRow(row: any): SnapshotSectorRow {
+    return {
+      ...row,
+      id: String(row?.id || row?.rowId || `${row?.snapshotId || ''}:${row?.entityType || ''}:${row?.entityKey || ''}`),
+      rowId: String(row?.rowId || row?.id || `${row?.snapshotId || ''}:${row?.entityType || ''}:${row?.entityKey || ''}`),
+      snapshotId: String(row?.snapshotId || ''),
+      type: row?.type,
+      tradingDate: String(row?.tradingDate || ''),
+      slotTime: String(row?.slotTime || ''),
+      timestamp: Number(row?.timestamp || 0),
+      captureMode: row?.captureMode || 'real_time',
+      source: row?.source || 'browser_runtime',
+      entityType: row?.entityType || 'sector',
+      entityKey: String(row?.entityKey || row?.entityCode || row?.id || ''),
+      entityCode: row?.entityCode || row?.entityKey,
+      entityName: String(row?.entityName || row?.name || row?.themeName || ''),
+      rank: Number(row?.rank || 0),
+    } as SnapshotSectorRow
+  }
+
+  private createEmptySnapshotCounts(): SnapshotCountMap {
+    return {
+      snapshots: 0,
+      snapshot_frames: 0,
+      snapshot_stock_rows: 0,
+      snapshot_sector_rows: 0,
+    }
+  }
+
+  private openIndexedDbForSnapshotCounts(): Promise<IDBDatabase> {
+    return new Promise((resolve, reject) => {
+      const request = indexedDB.open(this.PRIMARY_DB_NAME)
+      request.onsuccess = () => resolve(request.result)
+      request.onerror = () => reject(request.error || new Error(`open IndexedDB failed:${this.PRIMARY_DB_NAME}`))
+      request.onupgradeneeded = () => {
+        request.transaction?.abort()
+        reject(new Error(`IndexedDB database requires upgrade:${this.PRIMARY_DB_NAME}`))
+      }
+    })
+  }
+
+  private countIndexedDbStore(db: IDBDatabase, storeName: SnapshotIndexedDbCountStore): Promise<number> {
+    if (!db.objectStoreNames.contains(storeName)) return Promise.resolve(0)
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(storeName, 'readonly')
+      const store = transaction.objectStore(storeName)
+      const request = store.count()
+      request.onsuccess = () => resolve(Number(request.result) || 0)
+      request.onerror = () => reject(request.error || new Error(`count IndexedDB store failed:${storeName}`))
+      transaction.onerror = () => reject(transaction.error || new Error(`IndexedDB transaction failed:${storeName}`))
+    })
   }
 
   private normalizeRemoteSnapshotFrameBundle(frame: any): SnapshotFrameBundle {
@@ -2379,13 +2713,46 @@ class DataLayer {
     } as SnapshotFrameBundle
   }
 
+  private snapshotFrameRowFromBundle(bundle: SnapshotFrameBundle): SnapshotFrameRow {
+    return {
+      id: bundle.id || bundle.snapshotId,
+      snapshotId: bundle.snapshotId || bundle.id,
+      type: bundle.type,
+      tradingDate: bundle.tradingDate,
+      slotTime: bundle.slotTime,
+      timestamp: bundle.timestamp,
+      displayKey: bundle.displayKey || bundle.snapshotId || bundle.id,
+      captureMode: bundle.captureMode,
+      source: bundle.source,
+      qualityFlags: bundle.qualityFlags || [],
+      delayMs: Number(bundle.delayMs || 0),
+      metadata: bundle.metadata || null,
+      marketStats: bundle.marketStats || null,
+      sentiment: bundle.sentiment || null,
+      moneyFlow: bundle.moneyFlow || null,
+      indices: bundle.indices || null,
+      limitSummary: bundle.limitSummary || null,
+      rotationSummary: bundle.rotationSummary || null,
+      stockRowCount: Number(bundle.stockRowCount || bundle.rows?.length || 0),
+      sectorRowCount: Number(bundle.sectorRowCount || 0),
+    } as SnapshotFrameRow
+  }
+
   async getLatestSnapshotRecord(options?: {
     type?: SnapshotType
     beforeTradingDate?: string
     allowedCaptureModes?: ('real_time' | 'delayed' | 'restored')[]
     excludeRestored?: boolean
   }): Promise<SnapshotRecord | null> {
-    return this.snapshotRuntime.getLatestSnapshotRecord(options)
+    const snapshots = await this.listSnapshots({
+      type: options?.type,
+      beforeTradingDate: options?.beforeTradingDate,
+      allowedCaptureModes: options?.allowedCaptureModes,
+      excludeRestored: options?.excludeRestored,
+      sort: 'desc',
+      limit: 1,
+    })
+    return snapshots[0] || null
   }
 
   async exportSnapshotAsFile(id: string): Promise<void> {
@@ -2446,6 +2813,58 @@ class DataLayer {
 
   async getSnapshotHealthOverview(tradingDate?: string): Promise<SnapshotHealthOverview> {
     return this.snapshotRuntime.getSnapshotHealthOverview(tradingDate)
+  }
+
+  async getIndexedDbSnapshotCounts(): Promise<SnapshotCountMap> {
+    const empty = this.createEmptySnapshotCounts()
+    if (typeof indexedDB === 'undefined') return empty
+    const db = await this.openIndexedDbForSnapshotCounts()
+    try {
+      const entries = await Promise.all(
+        SNAPSHOT_INDEXEDDB_COUNT_STORES.map(async (storeName) => [
+          storeName,
+          await this.countIndexedDbStore(db, storeName),
+        ] as const),
+      )
+      return Object.fromEntries(entries) as SnapshotCountMap
+    } finally {
+      db.close()
+    }
+  }
+
+  async validateSnapshotIndexedDbSqliteCounts(datasetId = 'dragonboard_live'): Promise<{
+    ok: boolean
+    datasetId: string
+    indexedDb: SnapshotCountMap
+    sqlite: SnapshotCountMap
+    diffs: Record<string, { indexedDb: number; sqlite: number; delta: number }>
+    source: 'sqlite'
+  }> {
+    const indexedDbCounts = await this.getIndexedDbSnapshotCounts()
+    const response = await apiService.post<any>(
+      '/api/snapshots/validate-indexeddb-counts',
+      {
+        datasetId,
+        indexedDbCounts,
+      },
+      {
+        context: 'quant-board',
+        priority: 'medium',
+        timeout: 15000,
+        retries: 0,
+        cache: false,
+        throwOnHttpError: true,
+      },
+    )
+    const data = response && typeof response === 'object' && 'data' in response ? (response as any).data : response
+    return {
+      ok: Boolean(data?.ok),
+      datasetId: String(data?.datasetId || datasetId),
+      indexedDb: { ...this.createEmptySnapshotCounts(), ...(data?.indexedDb || indexedDbCounts) },
+      sqlite: { ...this.createEmptySnapshotCounts(), ...(data?.sqlite || {}) },
+      diffs: data?.diffs || {},
+      source: 'sqlite',
+    }
   }
 
   async restoreSnapshotsFromBackup(options?: {

@@ -56,12 +56,15 @@ Supabase schema 仍与 SQLite 同构，但备份适配层允许对超大 `Text` 
 - `push-backup` 会先消费到期的 `pending/retry` outbox，再做全量扫描补推。
 - Dragon Board 对已存在的半小时、十五分钟、小时等正式快照，如果 IndexedDB 已有记录但后端 ingest 失败过，会重放后端入库，不再因为本地记录存在而跳过云端链路。
 - Dragon Board 正式聚合读口开始 SQLite 优先：`listSnapshotFrameBundles` 会先调用 QuantBoard `GET /api/snapshots/frames`，远端不可用或无数据时才回退 IndexedDB。
+- Dragon Board 正式零散读口开始 SQLite 主读：`listSnapshots`、`getSnapshotById`、`listSnapshotFrames`、`listSnapshotStockRows`、`listSnapshotSectorRows` 会读 QuantBoard SQLite API，保持原 `DataLayer` 字段合同不变；`five_minute` 等非正式临时快照仍走本地临时路径。
+- Dragon Board 正式写入口开始 SQLite 主写：正式快照保存必须先通过 `POST /api/snapshots/ingest` 落 SQLite；IndexedDB 写入只作为缓存/迁移源，缓存失败不再代表正式保存失败。
+- 浏览器端新增 IndexedDB vs SQLite 全量行数校验入口：`DataLayer.validateSnapshotIndexedDbSqliteCounts()` 会统计四个 IndexedDB store 并调用 `POST /api/snapshots/validate-indexeddb-counts` 与 SQLite 同 dataset 校验。
 - 历史 JSON 迁移入口 `POST /api/migrations/snapshots/import-json` 已可处理 v4 bundle、records/snapshots、frames/stockRows/sectorRows 和常见 SQLite/备份导出字段。
 
 仍未完成的边界：
 
 - SQLite 完全不可用时直接写 Supabase 的 failover 写入仍是 M3 目标能力。
-- IndexedDB 还没有关闭正式写入和所有零散读口；本轮只把正式聚合分析读口改为 SQLite 优先，IndexedDB 暂时保留为缓存、失败回退、重放和迁移来源。
+- IndexedDB 正式主写已降级：后续只能作为缓存、重放和迁移来源；完全删除历史或停用迁移工具前必须先跑通全量行数校验。
 - Supabase 云端 schema 需要用户先在 SQL Editor 执行 `quant-board/backend/data/supabase_schema.sql`；执行前旧云端表会被删除重建，必须确认旧云端数据已经不需要或已另行备份。
 
 ## 存储拓扑
@@ -241,7 +244,75 @@ Dragon Board 快照/运行页桥接
 - `count`
 - `source=sqlite`
 
-Dragon Board 前端正式分析入口 `listSnapshotFrameBundles` 必须优先调用该接口；只有接口不可用、SQLite 无对应数据或迁移未完成时，才允许回退浏览器 IndexedDB。
+Dragon Board 前端正式分析入口 `listSnapshotFrameBundles` 必须调用该接口；正式快照不再把 IndexedDB 当事实读源。`five_minute` 等非正式临时数据仍可留在浏览器本地。
+
+### `GET /api/snapshots/records`
+
+用途：从 SQLite 主库读取 `SnapshotRecord` 列表，承接 Dragon Board `DataLayer.listSnapshots`。
+
+查询字段：
+
+- `dataset_id`：可选；缺省解析规则同 `/api/snapshots/frames`。
+- `snapshot_type` 或 `types`。
+- `trading_date`、`start_date`、`end_date`、`before_trading_date`。
+- `allowed_capture_modes`、`exclude_restored`。
+- `sort=asc|desc`。
+- `limit`。
+
+返回 `records`，字段保持 Dragon Board `SnapshotRecord` 的 camelCase 合同，包括 `id/type/tradingDate/slotTime/timestamp/displayKey/captureMode/source/payload`。
+
+### `GET /api/snapshots/records/{snapshot_id}`
+
+用途：从 SQLite 主库按快照 ID 读取单条 `SnapshotRecord`，承接 Dragon Board `DataLayer.getSnapshotById`。可选 `dataset_id` 用于限定数据集。
+
+### `GET /api/snapshots/stock-rows`
+
+用途：从 SQLite 主库读取正式股票投影行，承接 Dragon Board `DataLayer.listSnapshotStockRows`。
+
+查询字段：
+
+- `dataset_id`、`snapshot_id`。
+- `snapshot_type` 或 `types`。
+- `trading_date`、`start_date`、`end_date`、`before_trading_date`。
+- `code` 或 `codes`。
+- `slot_time`。
+- `allowed_capture_modes`、`exclude_restored`。
+- `sort=asc|desc`、`limit`。
+
+返回 `rows`，字段保持 Dragon Board `SnapshotStockRow` 合同，不允许删除 DataLayer 现有字段。
+
+### `GET /api/snapshots/sector-rows`
+
+用途：从 SQLite 主库读取正式题材/主线投影行，承接 Dragon Board `DataLayer.listSnapshotSectorRows`。
+
+查询字段：
+
+- `dataset_id`、`snapshot_id`。
+- `snapshot_type` 或 `types`。
+- `trading_date`、`start_date`、`end_date`、`before_trading_date`。
+- `entity_type/entity_types`、`entity_key/entity_keys`。
+- `allowed_capture_modes`、`exclude_restored`。
+- `sort=asc|desc`、`limit`。
+
+`snapshot_sector_rows` 表没有独立 `capture_mode/source` 列；这些字段由 `payload_json` 还原，缺省为 `real_time/browser_runtime`，保证返回仍满足 `SnapshotSectorRow` 字段合同。
+
+### `GET /api/snapshots/counts`
+
+用途：读取 SQLite 主库中 `snapshots/snapshot_frames/snapshot_stock_rows/snapshot_sector_rows` 四张事实表行数。可选 `dataset_id`。
+
+### `POST /api/snapshots/validate-indexeddb-counts`
+
+用途：承接浏览器端全量行数校验。浏览器先在 Dragon Board origin 内统计 IndexedDB 四个 store 的 count，然后提交给后端与 SQLite 同 dataset 行数比对。
+
+请求核心字段：
+
+- `datasetId`
+- `indexedDbCounts.snapshots`
+- `indexedDbCounts.snapshot_frames`
+- `indexedDbCounts.snapshot_stock_rows`
+- `indexedDbCounts.snapshot_sector_rows`
+
+返回 `ok/indexedDb/sqlite/diffs`。`ok=true` 才能进入删除浏览器历史或停用迁移工具的下一步；不允许因为 Supabase 暂时不可用而跳过 SQLite 与 IndexedDB 校验。
 
 ### `POST /api/migrations/snapshots/import-json`
 

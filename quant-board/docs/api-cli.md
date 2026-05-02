@@ -187,7 +187,38 @@ Invoke-RestMethod 'http://127.0.0.1:8000/api/snapshots/frames?dataset_id=dragonb
 - `sort=asc|desc`。
 - `limit`。
 
-返回 `dataset`、`frames`、`count` 和 `source=sqlite`。`frames` 中每项包含 `rows/hotlist/sectors/hotThemes/rotationSummary`，供 Dragon Board `listSnapshotFrameBundles` 直接消费。远端无数据或不可用时，当前前端仍会回退 IndexedDB；迁移完成后再关闭该回退。
+返回 `dataset`、`frames`、`count` 和 `source=sqlite`。`frames` 中每项包含 `rows/hotlist/sectors/hotThemes/rotationSummary`，供 Dragon Board `listSnapshotFrameBundles` 直接消费。正式快照不再把 IndexedDB 当事实读源；`five_minute` 等非正式临时数据仍可留在浏览器本地。
+
+### SQLite 快照明细读口
+
+这些接口承接 Dragon Board `DataLayer` 的正式 IndexedDB 读口，返回字段仍保持前端 camelCase 合同，不要求调用方理解 SQLite 列名。
+
+```powershell
+Invoke-RestMethod 'http://127.0.0.1:8000/api/snapshots/records?dataset_id=dragonboard_live&snapshot_type=half_hour&limit=20'
+Invoke-RestMethod 'http://127.0.0.1:8000/api/snapshots/records/half_hour%3A2026-04-21%3A10%3A00?dataset_id=dragonboard_live'
+Invoke-RestMethod 'http://127.0.0.1:8000/api/snapshots/stock-rows?dataset_id=dragonboard_live&snapshot_id=half_hour%3A2026-04-21%3A10%3A00'
+Invoke-RestMethod 'http://127.0.0.1:8000/api/snapshots/sector-rows?dataset_id=dragonboard_live&snapshot_id=half_hour%3A2026-04-21%3A10%3A00'
+```
+
+支持参数：
+
+- 通用：`dataset_id`、`snapshot_type` 或 `types`、`trading_date`、`start_date/end_date`、`before_trading_date`、`allowed_capture_modes`、`exclude_restored`、`sort`、`limit`。
+- 股票行：`snapshot_id`、`code`、`codes`、`slot_time`。
+- 题材行：`snapshot_id`、`entity_type/entity_types`、`entity_key/entity_keys`。
+
+### IndexedDB vs SQLite 行数校验
+
+后端提供 SQLite 行数和校验入口：
+
+```powershell
+Invoke-RestMethod 'http://127.0.0.1:8000/api/snapshots/counts?dataset_id=dragonboard_live'
+
+Invoke-RestMethod -Method Post 'http://127.0.0.1:8000/api/snapshots/validate-indexeddb-counts' `
+  -ContentType 'application/json' `
+  -Body '{"datasetId":"dragonboard_live","indexedDbCounts":{"snapshots":232,"snapshot_frames":232,"snapshot_stock_rows":44330,"snapshot_sector_rows":2918}}'
+```
+
+浏览器端正式入口是 `window.dataLayer.validateSnapshotIndexedDbSqliteCounts()`。只有该结果 `ok=true`，才能删除浏览器历史或停用迁移工具。
 
 ### `GET /api/datasets`
 

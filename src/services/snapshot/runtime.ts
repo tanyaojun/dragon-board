@@ -81,6 +81,12 @@ interface SnapshotRuntimeDeps {
   getBuildContext: () => SnapshotBuildContext
 }
 
+export interface SnapshotSqlitePrimaryWriteResult {
+  ok: boolean
+  skipped?: boolean
+  error?: unknown
+}
+
 // SnapshotRuntime 是快照模块的总编排层：
 // 它负责生成、查询、coverage、备份调度和恢复入口，但不直接承载 IndexedDB 细节实现。
 export class SnapshotRuntime {
@@ -121,6 +127,7 @@ export class SnapshotRuntime {
   private readonly snapshotProjectionMetaStore: SnapshotProjectionMetaStore
   private readonly cloudBackup: SnapshotCloudBackup
   private readonly snapshotBackupSync: SnapshotBackupSync
+  private sqlitePrimaryWrite?: (bundle: SnapshotProjectionBundle) => Promise<SnapshotSqlitePrimaryWriteResult>
 
   constructor(deps: SnapshotRuntimeDeps) {
     this.logger = deps.logger || console
@@ -857,6 +864,12 @@ export class SnapshotRuntime {
     return snapshots[0] || null
   }
 
+  setSqlitePrimaryWriteHandler(
+    handler: ((bundle: SnapshotProjectionBundle) => Promise<SnapshotSqlitePrimaryWriteResult>) | null,
+  ): void {
+    this.sqlitePrimaryWrite = handler || undefined
+  }
+
   async exportSnapshotAsFile(id: string): Promise<void> {
     const record = await this.getSnapshotById(id)
     const snapshot = record?.payload
@@ -1313,14 +1326,22 @@ export class SnapshotRuntime {
       }
       await this.ensurePersistentStorage()
       const effectiveBundle = bundle || this.createProjectionBundle(record)
-      await this.snapshotProjectionWriter.saveBundle(effectiveBundle)
-      await this.pushSnapshotBundleToBackend(record, effectiveBundle)
-      // 备份失败不会回滚主库，主库写成功仍然是唯一成功标准。
+      const sqliteWrite = await this.writeSnapshotBundleToSqlitePrimary(effectiveBundle)
+      if (!sqliteWrite.ok) {
+        throw sqliteWrite.error instanceof Error
+          ? sqliteWrite.error
+          : new Error(`snapshot_sqlite_primary_write_failed:${record.id}`)
+      }
+      // IndexedDB 仍写入完整投影，但此处已经降级为本地缓存/迁移源，失败不影响正式入库结果。
+      try {
+        await this.snapshotProjectionWriter.saveBundle(effectiveBundle)
+      } catch (error) {
+        this.logger.warn?.('[DataLayer] Snapshot IndexedDB cache write failed:', record.id, error)
+      }
+      // 备份失败不会回滚 SQLite 主库，后续由同步链路补偿。
       void this.snapshotBackupSync.saveToBackups(effectiveBundle).catch((error) => {
         this.logger.warn?.('[DataLayer] Snapshot backup sync failed:', record.id, error)
       })
-      const saved = await this.snapshotStore.getById(record.id)
-      if (!saved) throw new Error(`snapshot_write_verify_failed:${record.id}`)
       created = true
     })
     this.snapshotWriteQueue = task.then(() => undefined, () => undefined)
@@ -1331,6 +1352,22 @@ export class SnapshotRuntime {
       this.logger.error('[DataLayer] Snapshot write queue failed:', record.id, error)
       return false
     }
+  }
+
+  private async writeSnapshotBundleToSqlitePrimary(
+    bundle: SnapshotProjectionBundle,
+  ): Promise<SnapshotSqlitePrimaryWriteResult> {
+    if (this.sqlitePrimaryWrite) {
+      const result = await this.sqlitePrimaryWrite(bundle)
+      if (result.ok) {
+        this.backupSyncStateStore.markBackendIngested(bundle.record.tradingDate, Date.now())
+      } else {
+        this.backupSyncStateStore.markError('backendIngest', bundle.record.tradingDate, result.error)
+      }
+      return result
+    }
+    await this.pushSnapshotBundleToBackend(bundle.record, bundle)
+    return { ok: true }
   }
 
   private async replayBackendIngestIfPending(record: SnapshotRecord): Promise<void> {

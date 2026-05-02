@@ -533,6 +533,194 @@ class Repository:
             bundles.append(item)
         return bundles
 
+    def list_snapshot_records(
+        self,
+        dataset_id: str,
+        snapshot_type: str | None = None,
+        snapshot_types: list[str] | None = None,
+        trading_date: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        before_trading_date: str | None = None,
+        allowed_capture_modes: list[str] | None = None,
+        exclude_restored: bool = False,
+        limit: int | None = None,
+        sort: str = "desc",
+    ) -> list[dict[str, Any]]:
+        if self.session is None:
+            return []
+        query = select(SnapshotRecordModel).where(SnapshotRecordModel.dataset_id == dataset_id)
+        types = self._merge_types(snapshot_type, snapshot_types)
+        if types:
+            query = query.where(SnapshotRecordModel.type.in_(types))
+        if trading_date:
+            query = query.where(SnapshotRecordModel.trading_date == trading_date)
+        if start_date:
+            query = query.where(SnapshotRecordModel.trading_date >= start_date)
+        if end_date:
+            query = query.where(SnapshotRecordModel.trading_date <= end_date)
+        if before_trading_date:
+            query = query.where(SnapshotRecordModel.trading_date < before_trading_date)
+        if allowed_capture_modes:
+            query = query.where(SnapshotRecordModel.capture_mode.in_(allowed_capture_modes))
+        if exclude_restored:
+            query = query.where(SnapshotRecordModel.capture_mode != "restored")
+        order = SnapshotRecordModel.timestamp.asc() if sort == "asc" else SnapshotRecordModel.timestamp.desc()
+        if limit and limit > 0:
+            query = query.limit(limit)
+        try:
+            return [self.record_to_dict(row) for row in self.session.scalars(query.order_by(order))]
+        except SQLAlchemyError:
+            return []
+
+    def get_snapshot_record(self, snapshot_id: str, dataset_id: str | None = None) -> dict[str, Any] | None:
+        if self.session is None:
+            return None
+        query = select(SnapshotRecordModel).where(SnapshotRecordModel.snapshot_id == snapshot_id)
+        if dataset_id:
+            query = query.where(SnapshotRecordModel.dataset_id == dataset_id)
+        query = query.order_by(SnapshotRecordModel.timestamp.desc())
+        try:
+            row = self.session.scalars(query).first()
+            return self.record_to_dict(row) if row else None
+        except SQLAlchemyError:
+            return None
+
+    def list_snapshot_stock_rows(
+        self,
+        dataset_id: str,
+        snapshot_id: str | None = None,
+        snapshot_type: str | None = None,
+        snapshot_types: list[str] | None = None,
+        trading_date: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        before_trading_date: str | None = None,
+        code: str | None = None,
+        codes: list[str] | None = None,
+        slot_time: str | None = None,
+        allowed_capture_modes: list[str] | None = None,
+        exclude_restored: bool = False,
+        limit: int | None = None,
+        sort: str = "desc",
+    ) -> list[dict[str, Any]]:
+        if self.session is None:
+            return []
+        query = select(SnapshotStockRowModel).where(SnapshotStockRowModel.dataset_id == dataset_id)
+        types = self._merge_types(snapshot_type, snapshot_types)
+        stock_codes = self._merge_values(code, codes)
+        if snapshot_id:
+            query = query.where(SnapshotStockRowModel.snapshot_id == snapshot_id)
+        if types:
+            query = query.where(SnapshotStockRowModel.type.in_(types))
+        if trading_date:
+            query = query.where(SnapshotStockRowModel.trading_date == trading_date)
+        if start_date:
+            query = query.where(SnapshotStockRowModel.trading_date >= start_date)
+        if end_date:
+            query = query.where(SnapshotStockRowModel.trading_date <= end_date)
+        if before_trading_date:
+            query = query.where(SnapshotStockRowModel.trading_date < before_trading_date)
+        if stock_codes:
+            query = query.where(SnapshotStockRowModel.code.in_(stock_codes))
+        if slot_time:
+            query = query.where(SnapshotStockRowModel.slot_time == slot_time)
+        if allowed_capture_modes:
+            query = query.where(SnapshotStockRowModel.capture_mode.in_(allowed_capture_modes))
+        if exclude_restored:
+            query = query.where(SnapshotStockRowModel.capture_mode != "restored")
+        order = SnapshotStockRowModel.timestamp.asc() if sort == "asc" else SnapshotStockRowModel.timestamp.desc()
+        if limit and limit > 0:
+            query = query.limit(limit)
+        try:
+            return [self.local_stock_to_bundle_dict(row) for row in self.session.scalars(query.order_by(order, SnapshotStockRowModel.rank.asc()))]
+        except SQLAlchemyError:
+            return []
+
+    def list_snapshot_sector_rows(
+        self,
+        dataset_id: str,
+        snapshot_id: str | None = None,
+        snapshot_type: str | None = None,
+        snapshot_types: list[str] | None = None,
+        trading_date: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        before_trading_date: str | None = None,
+        entity_type: str | None = None,
+        entity_types: list[str] | None = None,
+        entity_key: str | None = None,
+        entity_keys: list[str] | None = None,
+        allowed_capture_modes: list[str] | None = None,
+        exclude_restored: bool = False,
+        limit: int | None = None,
+        sort: str = "desc",
+    ) -> list[dict[str, Any]]:
+        if self.session is None:
+            return []
+        query = select(SnapshotSectorRowModel).where(SnapshotSectorRowModel.dataset_id == dataset_id)
+        types = self._merge_types(snapshot_type, snapshot_types)
+        row_entity_types = self._merge_values(entity_type, entity_types)
+        row_entity_keys = self._merge_values(entity_key, entity_keys)
+        if snapshot_id:
+            query = query.where(SnapshotSectorRowModel.snapshot_id == snapshot_id)
+        if types:
+            query = query.where(SnapshotSectorRowModel.type.in_(types))
+        if trading_date:
+            query = query.where(SnapshotSectorRowModel.trading_date == trading_date)
+        if start_date:
+            query = query.where(SnapshotSectorRowModel.trading_date >= start_date)
+        if end_date:
+            query = query.where(SnapshotSectorRowModel.trading_date <= end_date)
+        if before_trading_date:
+            query = query.where(SnapshotSectorRowModel.trading_date < before_trading_date)
+        if row_entity_types:
+            query = query.where(SnapshotSectorRowModel.entity_type.in_(row_entity_types))
+        if row_entity_keys:
+            query = query.where(SnapshotSectorRowModel.entity_key.in_(row_entity_keys))
+        order = SnapshotSectorRowModel.timestamp.asc() if sort == "asc" else SnapshotSectorRowModel.timestamp.desc()
+        if limit and limit > 0 and not allowed_capture_modes and not exclude_restored:
+            query = query.limit(limit)
+        try:
+            rows = [self.local_sector_to_bundle_dict(row) for row in self.session.scalars(query.order_by(order, SnapshotSectorRowModel.rank.asc()))]
+        except SQLAlchemyError:
+            return []
+        if allowed_capture_modes:
+            allowed = set(allowed_capture_modes)
+            rows = [row for row in rows if str(row.get("captureMode") or "real_time") in allowed]
+        if exclude_restored:
+            rows = [row for row in rows if str(row.get("captureMode") or "real_time") != "restored"]
+        if limit and limit > 0:
+            rows = rows[:limit]
+        return rows
+
+    def snapshot_table_counts(self, dataset_id: str | None = None) -> dict[str, int]:
+        if self.session is None:
+            return {"snapshots": 0, "snapshot_frames": 0, "snapshot_stock_rows": 0, "snapshot_sector_rows": 0}
+        filters = {
+            "snapshots": SnapshotRecordModel.dataset_id == dataset_id if dataset_id else None,
+            "snapshot_frames": SnapshotFrameModel.dataset_id == dataset_id if dataset_id else None,
+            "snapshot_stock_rows": SnapshotStockRowModel.dataset_id == dataset_id if dataset_id else None,
+            "snapshot_sector_rows": SnapshotSectorRowModel.dataset_id == dataset_id if dataset_id else None,
+        }
+        models = {
+            "snapshots": SnapshotRecordModel,
+            "snapshot_frames": SnapshotFrameModel,
+            "snapshot_stock_rows": SnapshotStockRowModel,
+            "snapshot_sector_rows": SnapshotSectorRowModel,
+        }
+        counts: dict[str, int] = {}
+        try:
+            for key, model in models.items():
+                query = select(func.count()).select_from(model)
+                table_filter = filters[key]
+                if table_filter is not None:
+                    query = query.where(table_filter)
+                counts[key] = int(self.session.scalar(query) or 0)
+        except SQLAlchemyError:
+            return {"snapshots": 0, "snapshot_frames": 0, "snapshot_stock_rows": 0, "snapshot_sector_rows": 0}
+        return counts
+
     def save_backtest_run(self, run: BacktestRun) -> BacktestRun:
         if self.session is None:
             if not self._mirror_backtest_run(run):
@@ -736,10 +924,11 @@ class Repository:
 
     @staticmethod
     def record_to_dict(model: SnapshotRecordModel) -> dict[str, Any]:
-        payload = json_loads(model.payload_json, {})
-        if isinstance(payload, dict):
-            payload = dict(payload)
+        raw_payload = json_loads(model.payload_json, {})
+        if isinstance(raw_payload, dict):
+            payload = dict(raw_payload)
         else:
+            raw_payload = {}
             payload = {}
         payload.update(
             {
@@ -752,6 +941,7 @@ class Repository:
                 "displayKey": model.display_key,
                 "captureMode": model.capture_mode,
                 "source": model.source,
+                "payload": raw_payload,
             }
         )
         return payload
@@ -851,6 +1041,8 @@ class Repository:
             payload = dict(payload)
         else:
             payload = {}
+        capture_mode = str(payload.get("captureMode") or payload.get("capture_mode") or "real_time")
+        source = str(payload.get("source") or "browser_runtime")
         payload.update(
             {
                 "id": model.row_id,
@@ -860,6 +1052,8 @@ class Repository:
                 "tradingDate": model.trading_date,
                 "slotTime": model.slot_time,
                 "timestamp": model.timestamp,
+                "captureMode": capture_mode,
+                "source": source,
                 "entityType": model.entity_type,
                 "entityKey": model.entity_key,
                 "entityName": model.entity_name,
@@ -877,6 +1071,18 @@ class Repository:
             "name": row.get("entityName"),
             "themeName": row.get("entityName"),
         }
+
+    @staticmethod
+    def _merge_types(value: str | None, values: list[str] | None) -> list[str]:
+        return Repository._merge_values(value, values)
+
+    @staticmethod
+    def _merge_values(value: str | None, values: list[str] | None) -> list[str]:
+        output: list[str] = []
+        if value:
+            output.append(str(value))
+        output.extend(str(item) for item in values or [] if item)
+        return list(dict.fromkeys(output))
 
     @staticmethod
     def _record_model(dataset_id: str, item: dict[str, Any]) -> SnapshotRecordModel:

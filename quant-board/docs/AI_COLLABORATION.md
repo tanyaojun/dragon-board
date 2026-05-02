@@ -12,7 +12,7 @@
 - 可选快照：`quarter_hour` 可用于细颗粒度研究，但必须显式选择，不能替代默认口径。
 - 存储主链：SQLite 是 QuantBoard 主库，Supabase 是后端专用备份库；Supabase 必须按 [../backend/data/supabase_schema.sql](../backend/data/supabase_schema.sql) 使用 SQLite 同构 schema，超大 JSON 只允许在备份适配层透明压缩，实施和恢复规则以 [database-migration-plan.md](database-migration-plan.md) 为准。
 - 当前同步批次：`sync_outbox` 已覆盖快照 ingest、数据集 bundle、回测、优化和 Golden；历史 JSON 迁移入口是 `POST /api/migrations/snapshots/import-json`；自动同步默认关闭，只补传到期 outbox。
-- SQLite 替换 IndexedDB 的当前切口：Dragon Board 正式聚合读口应优先走 QuantBoard `GET /api/snapshots/frames`；IndexedDB 只作为迁移源、缓存和远端不可用回退。
+- SQLite 替换 IndexedDB 的当前切口：Dragon Board 正式写入先走 QuantBoard `POST /api/snapshots/ingest`；正式读口走 QuantBoard `GET /api/snapshots/frames`、`/api/snapshots/records`、`/api/snapshots/stock-rows`、`/api/snapshots/sector-rows`；IndexedDB 只作为迁移源、缓存和非正式临时数据来源。
 
 ## 工作边界
 
@@ -49,7 +49,9 @@
 10. Dragon Board 前端不得直连 Supabase；正式快照写库必须走 QuantBoard 后端 API。IndexedDB 只能作为迁移源、缓存或失败重放来源。
 11. 不得重新引入 Supabase `snapshots.payload` 兼容备份方案；云端表、业务键和索引必须和 SQLite 主库同构。
 12. Supabase 备份中的大字段压缩必须对调用方透明；SQLite、API、CLI、pull-backup 和读回退都必须呈现原始 JSON 字符串。
-13. 逐步替换 IndexedDB 时必须先接入 SQLite 读接口并保留可控回退；确认迁移和行数校验完成前，不得删除浏览器历史数据或关闭回退。
+13. 逐步替换 IndexedDB 时必须先接入 SQLite 读接口；确认迁移和行数校验完成前，不得删除浏览器历史数据或关闭迁移工具。
+14. 迁移 DataLayer 的 IndexedDB 读写入口时，不得删除或重命名 `SnapshotRecord`、`SnapshotFrameBundle`、`SnapshotStockRow`、`SnapshotSectorRow` 已有字段；SQLite 后端必须承接字段并以 camelCase 返回。
+15. 删除 IndexedDB 历史或停用迁移工具前必须先跑 `window.dataLayer.validateSnapshotIndexedDbSqliteCounts()` 或等价接口，确认四张事实表全量行数一致。
 
 ## 推荐执行流程
 

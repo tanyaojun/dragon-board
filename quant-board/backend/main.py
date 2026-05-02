@@ -128,6 +128,31 @@ def ingest_snapshot(request: SnapshotIngestRequest, db: Session | None = Depends
         raise HTTPException(status_code=503, detail=str(error)) from error
 
 
+def _parse_csv(value: str | None) -> list[str]:
+    return [item.strip() for item in (value or "").split(",") if item.strip()]
+
+
+def _assert_snapshot_sort(sort: str) -> None:
+    if sort not in {"asc", "desc"}:
+        raise HTTPException(status_code=400, detail=f"unsupported sort: {sort}")
+
+
+def _resolve_snapshot_dataset(repo: Repository, dataset_id: str | None) -> tuple[str, Dataset]:
+    resolved_dataset_id = dataset_id or "dragonboard_live"
+    dataset = repo.get_dataset(resolved_dataset_id)
+    if not dataset and not dataset_id:
+        candidates = [
+            item
+            for item in repo.list_datasets()
+            if int(item.frame_count or item.snapshot_count or item.stock_row_count or item.sector_row_count or 0) > 0
+        ]
+        dataset = candidates[0] if candidates else None
+        resolved_dataset_id = dataset.id if dataset else resolved_dataset_id
+    if not dataset:
+        raise HTTPException(status_code=404, detail=f"dataset not found: {resolved_dataset_id}")
+    return resolved_dataset_id, dataset
+
+
 @app.get("/api/snapshots/frames")
 def list_snapshot_frames(
     dataset_id: str | None = None,
@@ -146,24 +171,12 @@ def list_snapshot_frames(
         raise HTTPException(status_code=503, detail="primary database is unavailable")
     if snapshot_type not in {"quarter_hour", "half_hour", "hourly", "daily"}:
         raise HTTPException(status_code=400, detail=f"unsupported snapshot_type: {snapshot_type}")
-    if sort not in {"asc", "desc"}:
-        raise HTTPException(status_code=400, detail=f"unsupported sort: {sort}")
+    _assert_snapshot_sort(sort)
     start = trading_date or start_date
     end = trading_date or end_date
-    capture_modes = [
-        item.strip()
-        for item in (allowed_capture_modes or "").split(",")
-        if item.strip()
-    ]
+    capture_modes = _parse_csv(allowed_capture_modes)
     repo = Repository(db, enable_backup=False)
-    resolved_dataset_id = dataset_id or "dragonboard_live"
-    dataset = repo.get_dataset(resolved_dataset_id)
-    if not dataset and not dataset_id:
-        candidates = [item for item in repo.list_datasets() if int(item.frame_count or 0) > 0]
-        dataset = candidates[0] if candidates else None
-        resolved_dataset_id = dataset.id if dataset else resolved_dataset_id
-    if not dataset:
-        raise HTTPException(status_code=404, detail=f"dataset not found: {resolved_dataset_id}")
+    resolved_dataset_id, dataset = _resolve_snapshot_dataset(repo, dataset_id)
     frames = repo.load_frame_bundles(
         resolved_dataset_id,
         snapshot_type=snapshot_type,
@@ -182,6 +195,236 @@ def list_snapshot_frames(
         "snapshotType": snapshot_type,
         "frames": frames,
         "count": len(frames),
+        "source": "sqlite",
+    }
+
+
+@app.get("/api/snapshots/records")
+def list_snapshot_records(
+    dataset_id: str | None = None,
+    snapshot_type: str | None = None,
+    types: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    trading_date: str | None = None,
+    before_trading_date: str | None = None,
+    allowed_capture_modes: str | None = None,
+    exclude_restored: bool = False,
+    sort: str = "desc",
+    limit: int | None = None,
+    db: Session | None = Depends(get_db),
+) -> dict[str, Any]:
+    if db is None:
+        raise HTTPException(status_code=503, detail="primary database is unavailable")
+    _assert_snapshot_sort(sort)
+    repo = Repository(db, enable_backup=False)
+    resolved_dataset_id, dataset = _resolve_snapshot_dataset(repo, dataset_id)
+    records = repo.list_snapshot_records(
+        resolved_dataset_id,
+        snapshot_type=snapshot_type,
+        snapshot_types=_parse_csv(types),
+        trading_date=trading_date,
+        start_date=start_date,
+        end_date=end_date,
+        before_trading_date=before_trading_date,
+        allowed_capture_modes=_parse_csv(allowed_capture_modes),
+        exclude_restored=exclude_restored,
+        limit=limit,
+        sort=sort,
+    )
+    return {
+        "ok": True,
+        "dataset": Repository.dataset_to_dict(dataset),
+        "datasetId": resolved_dataset_id,
+        "records": records,
+        "count": len(records),
+        "source": "sqlite",
+    }
+
+
+@app.get("/api/snapshots/records/{snapshot_id}")
+def get_snapshot_record(
+    snapshot_id: str,
+    dataset_id: str | None = None,
+    db: Session | None = Depends(get_db),
+) -> dict[str, Any]:
+    if db is None:
+        raise HTTPException(status_code=503, detail="primary database is unavailable")
+    repo = Repository(db, enable_backup=False)
+    resolved_dataset_id = dataset_id
+    dataset: Dataset | None = None
+    if dataset_id:
+        resolved_dataset_id, dataset = _resolve_snapshot_dataset(repo, dataset_id)
+    record = repo.get_snapshot_record(snapshot_id, dataset_id=resolved_dataset_id)
+    if not record:
+        raise HTTPException(status_code=404, detail=f"snapshot not found: {snapshot_id}")
+    if dataset is None:
+        resolved_dataset_id = "dragonboard_live"
+        dataset = repo.get_dataset(resolved_dataset_id)
+        if not dataset:
+            resolved_dataset_id, dataset = _resolve_snapshot_dataset(repo, None)
+    return {
+        "ok": True,
+        "dataset": Repository.dataset_to_dict(dataset),
+        "datasetId": resolved_dataset_id,
+        "record": record,
+        "source": "sqlite",
+    }
+
+
+@app.get("/api/snapshots/stock-rows")
+def list_snapshot_stock_rows(
+    dataset_id: str | None = None,
+    snapshot_id: str | None = None,
+    snapshot_type: str | None = None,
+    types: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    trading_date: str | None = None,
+    before_trading_date: str | None = None,
+    code: str | None = None,
+    codes: str | None = None,
+    slot_time: str | None = None,
+    allowed_capture_modes: str | None = None,
+    exclude_restored: bool = False,
+    sort: str = "desc",
+    limit: int | None = None,
+    db: Session | None = Depends(get_db),
+) -> dict[str, Any]:
+    if db is None:
+        raise HTTPException(status_code=503, detail="primary database is unavailable")
+    _assert_snapshot_sort(sort)
+    repo = Repository(db, enable_backup=False)
+    resolved_dataset_id, dataset = _resolve_snapshot_dataset(repo, dataset_id)
+    rows = repo.list_snapshot_stock_rows(
+        resolved_dataset_id,
+        snapshot_id=snapshot_id,
+        snapshot_type=snapshot_type,
+        snapshot_types=_parse_csv(types),
+        trading_date=trading_date,
+        start_date=start_date,
+        end_date=end_date,
+        before_trading_date=before_trading_date,
+        code=code,
+        codes=_parse_csv(codes),
+        slot_time=slot_time,
+        allowed_capture_modes=_parse_csv(allowed_capture_modes),
+        exclude_restored=exclude_restored,
+        limit=limit,
+        sort=sort,
+    )
+    return {
+        "ok": True,
+        "dataset": Repository.dataset_to_dict(dataset),
+        "datasetId": resolved_dataset_id,
+        "rows": rows,
+        "count": len(rows),
+        "source": "sqlite",
+    }
+
+
+@app.get("/api/snapshots/sector-rows")
+def list_snapshot_sector_rows(
+    dataset_id: str | None = None,
+    snapshot_id: str | None = None,
+    snapshot_type: str | None = None,
+    types: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    trading_date: str | None = None,
+    before_trading_date: str | None = None,
+    entity_type: str | None = None,
+    entity_types: str | None = None,
+    entity_key: str | None = None,
+    entity_keys: str | None = None,
+    allowed_capture_modes: str | None = None,
+    exclude_restored: bool = False,
+    sort: str = "desc",
+    limit: int | None = None,
+    db: Session | None = Depends(get_db),
+) -> dict[str, Any]:
+    if db is None:
+        raise HTTPException(status_code=503, detail="primary database is unavailable")
+    _assert_snapshot_sort(sort)
+    repo = Repository(db, enable_backup=False)
+    resolved_dataset_id, dataset = _resolve_snapshot_dataset(repo, dataset_id)
+    rows = repo.list_snapshot_sector_rows(
+        resolved_dataset_id,
+        snapshot_id=snapshot_id,
+        snapshot_type=snapshot_type,
+        snapshot_types=_parse_csv(types),
+        trading_date=trading_date,
+        start_date=start_date,
+        end_date=end_date,
+        before_trading_date=before_trading_date,
+        entity_type=entity_type,
+        entity_types=_parse_csv(entity_types),
+        entity_key=entity_key,
+        entity_keys=_parse_csv(entity_keys),
+        allowed_capture_modes=_parse_csv(allowed_capture_modes),
+        exclude_restored=exclude_restored,
+        limit=limit,
+        sort=sort,
+    )
+    return {
+        "ok": True,
+        "dataset": Repository.dataset_to_dict(dataset),
+        "datasetId": resolved_dataset_id,
+        "rows": rows,
+        "count": len(rows),
+        "source": "sqlite",
+    }
+
+
+@app.get("/api/snapshots/counts")
+def get_snapshot_counts(
+    dataset_id: str | None = None,
+    db: Session | None = Depends(get_db),
+) -> dict[str, Any]:
+    if db is None:
+        raise HTTPException(status_code=503, detail="primary database is unavailable")
+    repo = Repository(db, enable_backup=False)
+    resolved_dataset_id, dataset = _resolve_snapshot_dataset(repo, dataset_id)
+    counts = repo.snapshot_table_counts(resolved_dataset_id)
+    return {
+        "ok": True,
+        "dataset": Repository.dataset_to_dict(dataset),
+        "datasetId": resolved_dataset_id,
+        "counts": counts,
+        "source": "sqlite",
+    }
+
+
+@app.post("/api/snapshots/validate-indexeddb-counts")
+def validate_indexeddb_counts(
+    payload: dict[str, Any],
+    db: Session | None = Depends(get_db),
+) -> dict[str, Any]:
+    if db is None:
+        raise HTTPException(status_code=503, detail="primary database is unavailable")
+    repo = Repository(db, enable_backup=False)
+    resolved_dataset_id, dataset = _resolve_snapshot_dataset(repo, payload.get("datasetId") or payload.get("dataset_id"))
+    sqlite_counts = repo.snapshot_table_counts(resolved_dataset_id)
+    indexeddb_counts = payload.get("indexedDbCounts") or payload.get("indexeddbCounts") or payload.get("counts") or {}
+    if not isinstance(indexeddb_counts, dict):
+        raise HTTPException(status_code=400, detail="indexedDbCounts must be an object")
+    stores = ["snapshots", "snapshot_frames", "snapshot_stock_rows", "snapshot_sector_rows"]
+    diffs = {
+        store: {
+            "indexedDb": int(indexeddb_counts.get(store) or 0),
+            "sqlite": int(sqlite_counts.get(store) or 0),
+            "delta": int(sqlite_counts.get(store) or 0) - int(indexeddb_counts.get(store) or 0),
+        }
+        for store in stores
+    }
+    ok = all(item["delta"] == 0 for item in diffs.values())
+    return {
+        "ok": ok,
+        "dataset": Repository.dataset_to_dict(dataset),
+        "datasetId": resolved_dataset_id,
+        "indexedDb": {store: diffs[store]["indexedDb"] for store in stores},
+        "sqlite": {store: diffs[store]["sqlite"] for store in stores},
+        "diffs": diffs,
         "source": "sqlite",
     }
 

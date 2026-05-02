@@ -76,12 +76,16 @@ QuantBoard API/CLI -> SQLite(primary) -> Supabase(backup)
 - `POST /api/sync/smoke-backup` 用于真实 Supabase REST 写读删联调，只写入并清理云端 `sync_outbox` 临时探针。
 - `POST /api/snapshots/ingest` 是 Dragon Board 正式快照进入 QuantBoard 后端的主入口。
 - `GET /api/snapshots/frames` 是 Dragon Board 正式分析读取 SQLite 快照聚合帧的主入口。
+- `GET /api/snapshots/records`、`GET /api/snapshots/records/{snapshot_id}`、`GET /api/snapshots/stock-rows`、`GET /api/snapshots/sector-rows` 是 Dragon Board `DataLayer` 零散正式读口的 SQLite 承接层。
+- `GET /api/snapshots/counts` 和 `POST /api/snapshots/validate-indexeddb-counts` 用于 IndexedDB -> SQLite 替换前的全量行数验收。
 - `POST /api/migrations/snapshots/import-json` 是历史 IndexedDB/JSON/结构化导出的可重复迁移入口。
 - 同键重复同步必须幂等；同键不同 payload/hash 必须标记冲突，不允许静默覆盖。
 
 Supabase 备份库必须使用 SQLite 同构 schema，不再使用旧 `snapshots.payload` 兼容方案。云端 schema 由 [../backend/data/supabase_schema.sql](../backend/data/supabase_schema.sql) 维护，表名、业务键、索引和 SQLite 模型保持一致。健康检查会逐表检查 `datasets`、`snapshot_*`、回测、优化、Golden 和 `sync_outbox` 是否可读；缺表时不得继续把备份链路视为可用。
 
 为适配 Supabase REST 对大请求和长语句的限制，备份客户端会对超大回测、优化和 Golden JSON 文本做透明 `gzip + base64` 编码，并按请求体大小拆分 upsert。SQLite 主库仍保存原始 JSON；读回退和 `pull-backup` 会自动解码，调用方不应感知编码细节。
+
+Dragon Board 前端 `DataLayer` 对外字段不随迁移删改。正式快照写入先落 SQLite；IndexedDB 只作为缓存、历史迁移源、失败回放和非正式临时数据来源。正式读取走 SQLite API，返回仍是 `SnapshotRecord`、`SnapshotFrameBundle`、`SnapshotStockRow`、`SnapshotSectorRow` 的现有 camelCase 字段。
 
 如果后续调整 Supabase 表字段、索引、恢复策略或 payload JSON 字段，必须同批更新 [database-migration-plan.md](database-migration-plan.md)、[api-cli.md](api-cli.md) 和 SQL schema 文件。
 

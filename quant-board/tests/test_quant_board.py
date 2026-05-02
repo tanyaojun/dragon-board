@@ -771,6 +771,131 @@ def test_snapshot_frames_api_reads_sqlite_frame_bundles() -> None:
     assert frame["sectors"][0]["name"] == "人工智能"
 
 
+def test_snapshot_detail_read_apis_and_count_validation_use_sqlite() -> None:
+    client = TestClient(app)
+    suffix = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
+    dataset_id = f"dragonboard_sqlite_detail_{suffix}"
+    snapshot_id = f"half_hour:2026-04-22:{suffix}"
+    bundle = {
+        "version": "v4",
+        "tradingDate": "2026-04-22",
+        "items": [
+            {
+                "id": snapshot_id,
+                "type": "half_hour",
+                "tradingDate": "2026-04-22",
+                "slotTime": "10:30",
+                "timestamp": 1776834600000,
+                "displayKey": "[半小时快照] 2026-04-22 10:30",
+                "captureMode": "real_time",
+                "source": "browser_runtime",
+                "payload": {"hotlist": [{"code": "600010", "name": "样本C", "rank": 1}]},
+            }
+        ],
+        "frames": [
+            {
+                "id": snapshot_id,
+                "snapshotId": snapshot_id,
+                "type": "half_hour",
+                "tradingDate": "2026-04-22",
+                "slotTime": "10:30",
+                "timestamp": 1776834600000,
+                "captureMode": "real_time",
+                "source": "browser_runtime",
+                "stockRowCount": 1,
+                "sectorRowCount": 1,
+            }
+        ],
+        "stockRows": [
+            {
+                "id": f"{snapshot_id}:600010",
+                "snapshotId": snapshot_id,
+                "type": "half_hour",
+                "tradingDate": "2026-04-22",
+                "slotTime": "10:30",
+                "timestamp": 1776834600000,
+                "captureMode": "real_time",
+                "source": "browser_runtime",
+                "code": "600010",
+                "name": "样本C",
+                "rank": 1,
+                "volumeRatio": 2.5,
+            }
+        ],
+        "sectorRows": [
+            {
+                "id": f"{snapshot_id}:hot_theme:robot",
+                "snapshotId": snapshot_id,
+                "type": "half_hour",
+                "tradingDate": "2026-04-22",
+                "slotTime": "10:30",
+                "timestamp": 1776834600000,
+                "captureMode": "real_time",
+                "source": "browser_runtime",
+                "entityType": "hot_theme",
+                "entityKey": "robot",
+                "entityName": "机器人",
+                "rank": 1,
+            }
+        ],
+    }
+
+    ingest = client.post(
+        "/api/snapshots/ingest",
+        json={
+            "datasetId": dataset_id,
+            "idempotencyKey": f"sqlite-detail-key-{suffix}",
+            "tradingDate": "2026-04-22",
+            "bundle": bundle,
+        },
+    )
+    assert ingest.status_code == 200, ingest.text
+
+    records = client.get(
+        "/api/snapshots/records",
+        params={"dataset_id": dataset_id, "snapshot_type": "half_hour", "trading_date": "2026-04-22"},
+    )
+    assert records.status_code == 200, records.text
+    assert records.json()["records"][0]["id"] == snapshot_id
+
+    record = client.get(f"/api/snapshots/records/{snapshot_id}", params={"dataset_id": dataset_id})
+    assert record.status_code == 200, record.text
+    assert record.json()["record"]["payload"]["hotlist"][0]["code"] == "600010"
+
+    stocks = client.get("/api/snapshots/stock-rows", params={"dataset_id": dataset_id, "snapshot_id": snapshot_id})
+    assert stocks.status_code == 200, stocks.text
+    assert stocks.json()["rows"][0]["code"] == "600010"
+
+    sectors = client.get("/api/snapshots/sector-rows", params={"dataset_id": dataset_id, "snapshot_id": snapshot_id})
+    assert sectors.status_code == 200, sectors.text
+    assert sectors.json()["rows"][0]["captureMode"] == "real_time"
+    assert sectors.json()["rows"][0]["entityName"] == "机器人"
+
+    counts = client.get("/api/snapshots/counts", params={"dataset_id": dataset_id})
+    assert counts.status_code == 200, counts.text
+    assert counts.json()["counts"] == {
+        "snapshots": 1,
+        "snapshot_frames": 1,
+        "snapshot_stock_rows": 1,
+        "snapshot_sector_rows": 1,
+    }
+
+    validation = client.post(
+        "/api/snapshots/validate-indexeddb-counts",
+        json={
+            "datasetId": dataset_id,
+            "indexedDbCounts": {
+                "snapshots": 1,
+                "snapshot_frames": 1,
+                "snapshot_stock_rows": 1,
+                "snapshot_sector_rows": 1,
+            },
+        },
+    )
+    assert validation.status_code == 200, validation.text
+    assert validation.json()["ok"] is True
+
+
 def test_snapshot_ingest_summary_is_persisted_and_outbox_retry_is_due_gated() -> None:
     client = TestClient(app)
     suffix = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
