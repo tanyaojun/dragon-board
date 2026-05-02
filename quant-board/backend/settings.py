@@ -36,6 +36,20 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
 class DataSourceConfig(BaseModel):
     profile_indexeddb_path: str = ""
     origin_hint: str = ""
@@ -57,6 +71,10 @@ class Settings(BaseModel):
     backup_mirror_enabled: bool = Field(default=True)
     backup_read_fallback: bool = Field(default=True)
     backup_timeout_seconds: float = Field(default=10.0)
+    backup_auto_sync_enabled: bool = Field(default=False)
+    backup_auto_sync_interval_seconds: float = Field(default=60.0)
+    backup_auto_sync_initial_delay_seconds: float = Field(default=10.0)
+    backup_auto_sync_batch_size: int = Field(default=50)
     data_source: DataSourceConfig = Field(default_factory=DataSourceConfig)
 
     def model_post_init(self, __context: Any) -> None:
@@ -72,10 +90,20 @@ class Settings(BaseModel):
             "QUANT_BOARD_ENABLE_BACKUP_READ_FALLBACK",
             self.backup_mirror_enabled,
         )
-        try:
-            self.backup_timeout_seconds = float(os.environ.get("QUANT_BOARD_BACKUP_TIMEOUT_SECONDS", self.backup_timeout_seconds))
-        except (TypeError, ValueError):
-            self.backup_timeout_seconds = 10.0
+        self.backup_timeout_seconds = _env_float("QUANT_BOARD_BACKUP_TIMEOUT_SECONDS", self.backup_timeout_seconds)
+        self.backup_auto_sync_enabled = _env_bool("QUANT_BOARD_AUTO_SYNC_ENABLED", self.backup_auto_sync_enabled)
+        self.backup_auto_sync_interval_seconds = max(
+            5.0,
+            _env_float("QUANT_BOARD_AUTO_SYNC_INTERVAL_SECONDS", self.backup_auto_sync_interval_seconds),
+        )
+        self.backup_auto_sync_initial_delay_seconds = max(
+            0.0,
+            _env_float("QUANT_BOARD_AUTO_SYNC_INITIAL_DELAY_SECONDS", self.backup_auto_sync_initial_delay_seconds),
+        )
+        self.backup_auto_sync_batch_size = max(
+            1,
+            _env_int("QUANT_BOARD_AUTO_SYNC_BATCH_SIZE", self.backup_auto_sync_batch_size),
+        )
 
     def ensure_dirs(self) -> None:
         self.data_dir.mkdir(parents=True, exist_ok=True)

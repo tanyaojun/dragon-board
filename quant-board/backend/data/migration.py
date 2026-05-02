@@ -40,6 +40,7 @@ class SnapshotMigrationService:
             "skipped": 0,
             "errors": [],
             "dry_run": dry_run,
+            **self._bundle_summary(normalized),
         }
         if not snapshot_ids:
             report["errors"].append("no snapshot frames found in json bundle")
@@ -53,7 +54,13 @@ class SnapshotMigrationService:
         )
         if self.repo.get_outbox_by_idempotency_key(idempotency_key):
             report["skipped"] = len(snapshot_ids)
-            return {"ok": True, "datasetId": dataset_id, "deduped": True, "report": report}
+            return {
+                "ok": True,
+                "datasetId": dataset_id,
+                "idempotencyKey": idempotency_key,
+                "deduped": True,
+                "report": report,
+            }
 
         report["skipped"] = len(existing_ids)
         report["imported"] = 0 if dry_run else len(snapshot_ids) - len(existing_ids)
@@ -63,6 +70,7 @@ class SnapshotMigrationService:
                 "ok": True,
                 "dataset": self.repo.dataset_to_dict(dataset),
                 "datasetId": dataset_id,
+                "idempotencyKey": idempotency_key,
                 "deduped": False,
                 "report": report,
             }
@@ -71,7 +79,14 @@ class SnapshotMigrationService:
         if not to_import.frames:
             saved = self.repo.get_dataset(dataset_id)
             result = {"dataset": self.repo.dataset_to_dict(saved)} if saved else {}
-            return {"ok": True, "datasetId": dataset_id, "deduped": False, "report": report, **result}
+            return {
+                "ok": True,
+                "datasetId": dataset_id,
+                "idempotencyKey": idempotency_key,
+                "deduped": False,
+                "report": report,
+                **result,
+            }
 
         try:
             result = self.repo.save_snapshot_ingest(
@@ -86,8 +101,21 @@ class SnapshotMigrationService:
             )
         except RuntimeError as error:
             report["errors"].append(str(error))
-            return {"ok": False, "datasetId": dataset_id, "deduped": False, "report": report}
-        return {"ok": True, "datasetId": dataset_id, "deduped": result.get("deduped", False), "report": report, **result}
+            return {
+                "ok": False,
+                "datasetId": dataset_id,
+                "idempotencyKey": idempotency_key,
+                "deduped": False,
+                "report": report,
+            }
+        return {
+            "ok": True,
+            "datasetId": dataset_id,
+            "idempotencyKey": idempotency_key,
+            "deduped": result.get("deduped", False),
+            "report": report,
+            **result,
+        }
 
     def _read_bundle(self, request: dict[str, Any]) -> SnapshotBundle:
         content = request.get("content") or request.get("bundle") or request.get("payload")
@@ -189,6 +217,20 @@ class SnapshotMigrationService:
         ids.update(str(record.get("id") or record.get("snapshotId") or "") for record in bundle.records)
         ids.discard("")
         return sorted(ids)
+
+    @staticmethod
+    def _bundle_summary(bundle: SnapshotBundle) -> dict[str, Any]:
+        dates = sorted({str(frame.get("tradingDate")) for frame in bundle.frames if frame.get("tradingDate")})
+        types = sorted({str(frame.get("type")) for frame in bundle.frames if frame.get("type")})
+        return {
+            "record_count": len(bundle.records),
+            "frame_count": len(bundle.frames),
+            "stock_row_count": len(bundle.stock_rows),
+            "sector_row_count": len(bundle.sector_rows),
+            "start_date": dates[0] if dates else None,
+            "end_date": dates[-1] if dates else None,
+            "snapshot_types": types,
+        }
 
     @staticmethod
     def _normalize_record_row(row: dict[str, Any]) -> dict[str, Any] | None:

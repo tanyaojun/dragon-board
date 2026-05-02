@@ -5,8 +5,12 @@ import json
 from typing import Any
 
 from backend.data.database import SessionLocal, init_db
+from backend.data.backup_sync import BackupSyncService
 from backend.data.dataset_service import DatasetService
+from backend.data.migration import SnapshotMigrationService
+from backend.data.repository import Repository
 from backend.data.schemas import ImportDatasetRequest
+from backend.data.supabase_backup import get_backup_client
 from backend.services import BacktestService, GoldenService, OptimizationService
 
 DEFAULT_MOMENTUM_PERIODS = [3, 5, 8, 13, 21]
@@ -52,6 +56,47 @@ def cmd_list_datasets(_: argparse.Namespace) -> None:
     init_db()
     with SessionLocal() as session:
         print_json(DatasetService(session).list_datasets())
+
+
+def cmd_push_backup(_: argparse.Namespace) -> None:
+    init_db()
+    with SessionLocal() as session:
+        print_json(BackupSyncService(session).push_all_to_backup())
+
+
+def cmd_push_outbox(args: argparse.Namespace) -> None:
+    init_db()
+    with SessionLocal() as session:
+        repo = Repository(session, enable_backup=False)
+        print_json(BackupSyncService(session).push_outbox_to_backup(repo, limit=args.limit))
+
+
+def cmd_pull_backup(_: argparse.Namespace) -> None:
+    init_db()
+    with SessionLocal() as session:
+        print_json(BackupSyncService(session).pull_backup_to_primary())
+
+
+def cmd_smoke_backup(_: argparse.Namespace) -> None:
+    backup = get_backup_client()
+    if not backup:
+        print_json({"ok": False, "configured": False, "error": "supabase backup is not configured"})
+        return
+    print_json(backup.smoke_test())
+
+
+def cmd_migrate_snapshots(args: argparse.Namespace) -> None:
+    init_db()
+    with SessionLocal() as session:
+        request = {
+            "datasetId": args.dataset_id,
+            "sourcePath": args.path,
+            "name": args.name,
+            "idempotencyKey": args.idempotency_key,
+            "source": args.source,
+            "dryRun": args.dry_run,
+        }
+        print_json(SnapshotMigrationService(session).import_json(request))
 
 
 def build_ranktrend_payload(args: argparse.Namespace) -> dict[str, Any]:
@@ -155,6 +200,28 @@ def build_parser() -> argparse.ArgumentParser:
 
     list_cmd = sub.add_parser("list-datasets", help="List datasets")
     list_cmd.set_defaults(func=cmd_list_datasets)
+
+    push_backup_cmd = sub.add_parser("push-backup", help="Push SQLite records to Supabase backup")
+    push_backup_cmd.set_defaults(func=cmd_push_backup)
+
+    push_outbox_cmd = sub.add_parser("push-outbox", help="Push due sync_outbox rows to Supabase backup")
+    push_outbox_cmd.add_argument("--limit", type=int, default=50)
+    push_outbox_cmd.set_defaults(func=cmd_push_outbox)
+
+    pull_backup_cmd = sub.add_parser("pull-backup", help="Pull Supabase backup records into SQLite")
+    pull_backup_cmd.set_defaults(func=cmd_pull_backup)
+
+    smoke_backup_cmd = sub.add_parser("smoke-backup", help="Run Supabase backup write/read/delete smoke test")
+    smoke_backup_cmd.set_defaults(func=cmd_smoke_backup)
+
+    migrate_cmd = sub.add_parser("migrate-snapshots", help="Import historical DragonBoard snapshot JSON into SQLite")
+    migrate_cmd.add_argument("--path", required=True)
+    migrate_cmd.add_argument("--dataset-id", default="dragonboard_history")
+    migrate_cmd.add_argument("--name", default=None)
+    migrate_cmd.add_argument("--idempotency-key", default=None)
+    migrate_cmd.add_argument("--source", default="dragon_board_history_migration")
+    migrate_cmd.add_argument("--dry-run", action="store_true")
+    migrate_cmd.set_defaults(func=cmd_migrate_snapshots)
 
     run_cmd = sub.add_parser("run-ranktrend", help="Run RankTrend backtest")
     run_cmd.add_argument("--dataset-id", required=True)

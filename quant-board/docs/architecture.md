@@ -72,17 +72,22 @@ QuantBoard API/CLI -> SQLite(primary) -> Supabase(backup)
 - SQLite 初始化或查询失败时，读路径会回退到 Supabase 备份记录。
 - SQLite 不可用但 Supabase 可写时，关键写入切到 Supabase 是后续 M3 目标；能力完成前，写接口必须明确返回不可用，不能伪装成功。
 - `POST /api/sync/push-backup` 用于把已有 SQLite 历史数据主动推送到 Supabase。
+- `POST /api/sync/push-outbox` 和后台自动同步只消费到期 outbox，不做全量历史扫描。
+- `POST /api/sync/smoke-backup` 用于真实 Supabase REST 写读删联调，不写入业务表。
 - `POST /api/snapshots/ingest` 是 Dragon Board 正式快照进入 QuantBoard 后端的主入口。
 - `POST /api/migrations/snapshots/import-json` 是历史 IndexedDB/JSON/结构化导出的可重复迁移入口。
 - 同键重复同步必须幂等；同键不同 payload/hash 必须标记冲突，不允许静默覆盖。
 
-为了兼容当前 Supabase 已存在的空表，QuantBoard 备份记录落在 `snapshots` 表中，使用 `type` 区分：
+为了兼容当前 Supabase 已存在的 `snapshots` 表，QuantBoard 备份记录仍落在这张表中，但不能占用 `type` 列做业务枚举。真实云端表对 `type` 有 check 约束，只允许快照类型，例如 `quarter_hour`、`half_hour`、`hourly`、`daily`、`five_minute`。
+
+QuantBoard 业务枚举放在 `quality_flags.kind`：
 
 - `qb_dataset`
 - `qb_snapshot_bundle`
 - `qb_backtest_run`
 - `qb_optimization_run`
 - `qb_golden_case`
+- `qb_smoke`
 
 快照明细以 bundle 形式写入 `payload`，避免在现有 Supabase 表结构尚未完全迁移前破坏业务数据。
 
@@ -157,6 +162,12 @@ QuantBoard API/CLI -> SQLite(primary) -> Supabase(backup)
 - `done`：Supabase 已确认。
 - `failed`：达到重试上限，需要人工检查 `last_error`。
 
+后台自动同步：
+
+- 默认关闭，需要设置 `QUANT_BOARD_AUTO_SYNC_ENABLED=true`。
+- 启动后只调用 outbox 推送口径，不自动执行全量 `push-backup`。
+- 设计目的只是补偿 Supabase 短暂不可用后的待同步业务对象，不承担历史大批量迁移。
+
 ## 配置来源
 
 建议配置分三层：
@@ -177,6 +188,10 @@ QuantBoard API/CLI -> SQLite(primary) -> Supabase(backup)
 | `QUANT_BOARD_ENABLE_SUPABASE_BACKUP` | 是否启用 Supabase 备份镜像，默认按 Supabase 配置自动启用 |
 | `QUANT_BOARD_ENABLE_BACKUP_READ_FALLBACK` | 是否启用备份读回退，默认跟随备份镜像 |
 | `QUANT_BOARD_BACKUP_TIMEOUT_SECONDS` | Supabase 请求超时时间 |
+| `QUANT_BOARD_AUTO_SYNC_ENABLED` | 是否自动推送到期 outbox，默认关闭 |
+| `QUANT_BOARD_AUTO_SYNC_INTERVAL_SECONDS` | 自动同步间隔，默认 60 秒 |
+| `QUANT_BOARD_AUTO_SYNC_INITIAL_DELAY_SECONDS` | API 启动后首次同步延迟，默认 10 秒 |
+| `QUANT_BOARD_AUTO_SYNC_BATCH_SIZE` | 单轮自动同步批量，默认 50 |
 
 存储和同步配置的语义变更属于 API/运维合同变更，必须同批更新 [database-migration-plan.md](database-migration-plan.md)、[api-cli.md](api-cli.md) 和 [AI_COLLABORATION.md](AI_COLLABORATION.md)。
 

@@ -3,12 +3,18 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any
+from uuid import uuid4
 
 import httpx
 
 from backend.data.models import BacktestRun, Dataset, GoldenRankTrendCase, OptimizationRun
 from backend.settings import Settings, get_settings
 from backend.utils import json_dumps, json_loads, utc_now_iso
+
+BACKUP_RECORD_TYPE = "daily"
+BACKUP_CAPTURE_MODE = "real_time"
+ALLOWED_SNAPSHOT_TYPES = {"quarter_hour", "half_hour", "hourly", "daily", "five_minute"}
+ALLOWED_CAPTURE_MODES = {"real_time", "delayed", "restored"}
 
 
 class SupabaseBackupClient:
@@ -41,6 +47,56 @@ class SupabaseBackupClient:
         ok, _ = self._request_json("GET", "/rest/v1/snapshots", params={"select": "id", "limit": "1"})
         return {"configured": True, "connected": ok, "last_error": self.last_error}
 
+    def smoke_test(self) -> dict[str, Any]:
+        if not self.enabled:
+            return {
+                "ok": False,
+                "configured": False,
+                "connected": False,
+                "write": False,
+                "read": False,
+                "cleanup": False,
+                "last_error": None,
+            }
+        display_key = f"qb_smoke_{uuid4().hex}"
+        row = {
+            "type": BACKUP_RECORD_TYPE,
+            "trading_date": datetime.utcnow().strftime("%Y-%m-%d"),
+            "slot_time": "",
+            "timestamp": _datetime_to_millis(datetime.utcnow()),
+            "display_key": display_key,
+            "capture_mode": BACKUP_CAPTURE_MODE,
+            "source": "quant_board_smoke",
+            "quality_flags": {"kind": "qb_smoke"},
+            "payload": {"displayKey": display_key, "createdAt": utc_now_iso()},
+        }
+        write_ok, _ = self._request_json("POST", "/rest/v1/snapshots", payload=[row])
+        read_ok = False
+        cleanup_ok = False
+        if write_ok:
+            found = self.get_row("qb_smoke", display_key, source="quant_board_smoke")
+            read_ok = bool(found and found.get("display_key") == display_key)
+        if write_ok:
+            cleanup_ok, _ = self._request_json(
+                "DELETE",
+                "/rest/v1/snapshots",
+                params={
+                    "quality_flags->>kind": "eq.qb_smoke",
+                    "source": "eq.quant_board_smoke",
+                    "display_key": f"eq.{display_key}",
+                },
+            )
+        return {
+            "ok": bool(write_ok and read_ok and cleanup_ok),
+            "configured": True,
+            "connected": bool(write_ok or read_ok),
+            "write": write_ok,
+            "read": read_ok,
+            "cleanup": cleanup_ok,
+            "display_key": display_key,
+            "last_error": self.last_error,
+        }
+
     def list_rows(self, record_type: str, source: str | None = None, page_size: int = 500) -> list[dict[str, Any]]:
         if not self.enabled:
             return []
@@ -49,7 +105,7 @@ class SupabaseBackupClient:
         while True:
             params: dict[str, Any] = {
                 "select": "*",
-                "type": f"eq.{record_type}",
+                "quality_flags->>kind": f"eq.{record_type}",
                 "order": "id.asc",
                 "limit": str(page_size),
                 "offset": str(offset),
@@ -70,7 +126,7 @@ class SupabaseBackupClient:
             return None
         params: dict[str, Any] = {
             "select": "*",
-            "type": f"eq.{record_type}",
+            "quality_flags->>kind": f"eq.{record_type}",
             "display_key": f"eq.{display_key}",
             "order": "id.desc",
             "limit": "1",
@@ -87,7 +143,7 @@ class SupabaseBackupClient:
         if not self.enabled:
             return False
         delete_params: dict[str, Any] = {
-            "type": f"eq.{record_type}",
+            "quality_flags->>kind": f"eq.{record_type}",
             "source": f"eq.{source}",
         }
         if display_key is not None:
@@ -97,7 +153,8 @@ class SupabaseBackupClient:
             return False
         if not rows:
             return True
-        for chunk in _chunk_rows(rows, 100):
+        normalized_rows = [self._normalize_backup_row(record_type, row) for row in rows]
+        for chunk in _chunk_rows(normalized_rows, 100):
             ok, _ = self._request_json("POST", "/rest/v1/snapshots", payload=chunk)
             if not ok:
                 return False
@@ -122,12 +179,12 @@ class SupabaseBackupClient:
             "sectorRowCount": len(sector_rows),
         }
         manifest_row = {
-            "type": "qb_dataset",
+            "type": BACKUP_RECORD_TYPE,
             "trading_date": dataset.start_date or dataset.end_date or "",
             "slot_time": "",
             "timestamp": _datetime_to_millis(dataset.created_at),
             "display_key": dataset.id,
-            "capture_mode": "local_primary",
+            "capture_mode": BACKUP_CAPTURE_MODE,
             "source": dataset.id,
             "quality_flags": summary,
             "payload": {"dataset": dataset_payload, "summary": summary},
@@ -166,12 +223,12 @@ class SupabaseBackupClient:
                 continue
             bundled_frame = frames_by_snapshot.get(snapshot_id, frame)
             row = {
-                "type": "qb_snapshot_bundle",
+                "type": _backup_snapshot_type(str(bundled_frame.get("type") or "")),
                 "trading_date": str(bundled_frame.get("tradingDate") or ""),
                 "slot_time": str(bundled_frame.get("slotTime") or ""),
                 "timestamp": int(bundled_frame.get("timestamp") or 0),
                 "display_key": snapshot_id,
-                "capture_mode": str(bundled_frame.get("captureMode") or "real_time"),
+                "capture_mode": _backup_capture_mode(str(bundled_frame.get("captureMode") or "")),
                 "source": dataset.id,
                 "quality_flags": {
                     "kind": "snapshot_bundle",
@@ -200,12 +257,12 @@ class SupabaseBackupClient:
             return False
         payload = self._backtest_payload(run)
         row = {
-            "type": "qb_backtest_run",
+            "type": BACKUP_RECORD_TYPE,
             "trading_date": "",
             "slot_time": "",
             "timestamp": _datetime_to_millis(run.created_at),
             "display_key": run.id,
-            "capture_mode": "local_primary",
+            "capture_mode": BACKUP_CAPTURE_MODE,
             "source": run.dataset_id,
             "quality_flags": {"kind": "backtest_run", "dataset_id": run.dataset_id},
             "payload": {"run": payload},
@@ -217,12 +274,12 @@ class SupabaseBackupClient:
             return False
         payload = self._optimization_payload(run)
         row = {
-            "type": "qb_optimization_run",
+            "type": BACKUP_RECORD_TYPE,
             "trading_date": "",
             "slot_time": "",
             "timestamp": _datetime_to_millis(run.created_at),
             "display_key": run.id,
-            "capture_mode": "local_primary",
+            "capture_mode": BACKUP_CAPTURE_MODE,
             "source": run.dataset_id,
             "quality_flags": {"kind": "optimization_run", "dataset_id": run.dataset_id},
             "payload": {"run": payload},
@@ -235,12 +292,12 @@ class SupabaseBackupClient:
         payload = self._golden_payload(case)
         source = str(case.dataset_id or "")
         row = {
-            "type": "qb_golden_case",
+            "type": BACKUP_RECORD_TYPE,
             "trading_date": "",
             "slot_time": "",
             "timestamp": _datetime_to_millis(case.created_at),
             "display_key": case.id,
-            "capture_mode": "local_primary",
+            "capture_mode": BACKUP_CAPTURE_MODE,
             "source": source,
             "quality_flags": {"kind": "golden_case", "dataset_id": case.dataset_id},
             "payload": {"case": payload},
@@ -444,6 +501,15 @@ class SupabaseBackupClient:
             return payload["case"]
         return payload if isinstance(payload, dict) else {}
 
+    @staticmethod
+    def _normalize_backup_row(record_type: str, row: dict[str, Any]) -> dict[str, Any]:
+        output = dict(row)
+        quality_flags = output.get("quality_flags") if isinstance(output.get("quality_flags"), dict) else {}
+        output["quality_flags"] = {**quality_flags, "kind": record_type}
+        output["type"] = _backup_snapshot_type(str(output.get("type") or ""))
+        output["capture_mode"] = _backup_capture_mode(str(output.get("capture_mode") or ""))
+        return output
+
     def _request_json(
         self,
         method: str,
@@ -468,6 +534,10 @@ class SupabaseBackupClient:
                 if not response.content:
                     return True, None
                 return True, response.json()
+        except httpx.HTTPStatusError as exc:
+            body = exc.response.text[:1000] if exc.response is not None else ""
+            self.last_error = f"{exc.response.status_code} {exc.response.request.method} {exc.response.url}: {body}"
+            return False, None
         except Exception as exc:
             self.last_error = str(exc)
             return False, None
@@ -479,6 +549,14 @@ def get_backup_client() -> SupabaseBackupClient | None:
 
 def _chunk_rows(rows: list[dict[str, Any]], size: int) -> list[list[dict[str, Any]]]:
     return [rows[index : index + size] for index in range(0, len(rows), size)]
+
+
+def _backup_snapshot_type(value: str) -> str:
+    return value if value in ALLOWED_SNAPSHOT_TYPES else BACKUP_RECORD_TYPE
+
+
+def _backup_capture_mode(value: str) -> str:
+    return value if value in ALLOWED_CAPTURE_MODES else BACKUP_CAPTURE_MODE
 
 
 def _parse_datetime(value: Any) -> datetime:

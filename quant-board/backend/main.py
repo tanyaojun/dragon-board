@@ -10,6 +10,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 
+from backend.data.auto_sync import auto_sync_runner, run_outbox_auto_sync_once
 from backend.data.backup_sync import BackupSyncService
 from backend.data.database import get_db, init_db, primary_status
 from backend.data.dataset_service import DatasetService
@@ -47,6 +48,12 @@ app.add_middleware(
 @app.on_event("startup")
 def on_startup() -> None:
     init_db()
+    auto_sync_runner.start()
+
+
+@app.on_event("shutdown")
+async def on_shutdown() -> None:
+    await auto_sync_runner.stop()
 
 
 @app.get("/api/health")
@@ -62,6 +69,7 @@ def health_check(db: Session | None = Depends(get_db)) -> dict[str, Any]:
             "backup": backup.health() if backup else {"configured": False, "connected": False, "last_error": None},
             "mode": "sqlite_primary_supabase_backup",
             "outbox": Repository(db, enable_backup=False).outbox_status() if db is not None else None,
+            "autoSync": auto_sync_runner.status(),
         },
     }
 
@@ -74,6 +82,27 @@ def push_backup(db: Session | None = Depends(get_db)) -> dict[str, Any]:
 @app.post("/api/sync/pull-backup")
 def pull_backup(db: Session | None = Depends(get_db)) -> dict[str, Any]:
     return BackupSyncService(db).pull_backup_to_primary()
+
+
+@app.post("/api/sync/push-outbox")
+def push_outbox(limit: int | None = None, db: Session | None = Depends(get_db)) -> dict[str, Any]:
+    if db is None:
+        raise HTTPException(status_code=503, detail="primary database is unavailable")
+    repo = Repository(db, enable_backup=False)
+    return BackupSyncService(db).push_outbox_to_backup(repo, limit=limit or get_settings().backup_auto_sync_batch_size)
+
+
+@app.post("/api/sync/auto-once")
+def run_auto_sync_once(limit: int | None = None) -> dict[str, Any]:
+    return run_outbox_auto_sync_once(limit)
+
+
+@app.post("/api/sync/smoke-backup")
+def smoke_backup() -> dict[str, Any]:
+    backup = get_backup_client()
+    if not backup:
+        return {"ok": False, "configured": False, "error": "supabase backup is not configured"}
+    return backup.smoke_test()
 
 
 @app.post("/api/snapshots/ingest")

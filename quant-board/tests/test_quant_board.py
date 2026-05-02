@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from backend.analysis.ranktrend import RankTrendConfig, analyze_cycle, analyze_momentum_signals, analyze_risk, analyze_technical
-from backend.cli import build_parser, build_ranktrend_payload
+from backend.cli import build_parser, build_ranktrend_payload, cmd_migrate_snapshots
 from backend.core.backtest import TradeSimulator
 from backend.data.database import SessionLocal
 from backend.data.backup_sync import BackupSyncService
@@ -256,6 +256,7 @@ def test_import_backtest_optimize_and_golden(tmp_path: Path) -> None:
     health = client.get("/api/health")
     assert health.status_code == 200
     assert health.json()["default_snapshot_type"] == "half_hour"
+    assert "autoSync" in health.json()["database"]
 
     imported = client.post(
         "/api/datasets/import",
@@ -715,6 +716,34 @@ def test_snapshot_ingest_summary_is_persisted_and_outbox_retry_is_due_gated() ->
         assert idempotency_key not in pending_keys
 
 
+def test_push_outbox_api_reports_due_items() -> None:
+    client = TestClient(app)
+    suffix = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
+    with SessionLocal() as session:
+        row = Repository(session, enable_backup=False).enqueue_outbox(
+            "unsupported_test",
+            {"value": suffix},
+            idempotency_key=f"unsupported-test-{suffix}",
+            dataset_id=f"ds_unsupported_{suffix}",
+            next_retry_at=datetime.utcnow() - timedelta(seconds=1),
+        )
+        row.updated_at = datetime(1970, 1, 1)
+        session.commit()
+
+    response = client.post("/api/sync/push-outbox", params={"limit": 1})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["scanned"] == 1
+    assert body["skipped"] == 1
+    assert body["items"][0]["op_type"] == "unsupported_test"
+
+    with SessionLocal() as session:
+        row = Repository(session, enable_backup=False).get_outbox_by_idempotency_key(f"unsupported-test-{suffix}")
+        if row:
+            row.status = "done"
+            session.commit()
+
+
 def test_snapshot_json_migration_dry_run_and_idempotent_import(tmp_path: Path) -> None:
     client = TestClient(app)
     suffix = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
@@ -765,7 +794,20 @@ def test_snapshot_json_migration_dry_run_and_idempotent_import(tmp_path: Path) -
     )
     assert dry_run.status_code == 200, dry_run.text
     dry_report = dry_run.json()["report"]
-    assert dry_report == {"scanned": 2, "imported": 0, "skipped": 0, "errors": [], "dry_run": True}
+    assert dry_report == {
+        "scanned": 2,
+        "imported": 0,
+        "skipped": 0,
+        "errors": [],
+        "dry_run": True,
+        "record_count": 2,
+        "frame_count": 2,
+        "stock_row_count": 3,
+        "sector_row_count": 1,
+        "start_date": "2026-04-23",
+        "end_date": "2026-04-23",
+        "snapshot_types": ["half_hour"],
+    }
     assert client.get(f"/api/datasets/{dataset_id}").status_code == 404
 
     first = client.post(
@@ -776,7 +818,21 @@ def test_snapshot_json_migration_dry_run_and_idempotent_import(tmp_path: Path) -
     first_body = first.json()
     assert first_body["ok"] is True
     assert first_body["deduped"] is False
-    assert first_body["report"] == {"scanned": 2, "imported": 2, "skipped": 0, "errors": [], "dry_run": False}
+    assert first_body["idempotencyKey"]
+    assert first_body["report"] == {
+        "scanned": 2,
+        "imported": 2,
+        "skipped": 0,
+        "errors": [],
+        "dry_run": False,
+        "record_count": 2,
+        "frame_count": 2,
+        "stock_row_count": 3,
+        "sector_row_count": 1,
+        "start_date": "2026-04-23",
+        "end_date": "2026-04-23",
+        "snapshot_types": ["half_hour"],
+    }
     assert first_body["dataset"]["id"] == dataset_id
     assert first_body["dataset"]["frame_count"] == 2
     assert first_body["dataset"]["stock_row_count"] == 3
@@ -790,7 +846,10 @@ def test_snapshot_json_migration_dry_run_and_idempotent_import(tmp_path: Path) -
     second_body = second.json()
     assert second_body["ok"] is True
     assert second_body["deduped"] is True
-    assert second_body["report"] == {"scanned": 2, "imported": 0, "skipped": 2, "errors": [], "dry_run": False}
+    assert second_body["report"]["scanned"] == 2
+    assert second_body["report"]["imported"] == 0
+    assert second_body["report"]["skipped"] == 2
+    assert second_body["report"]["stock_row_count"] == 3
 
     dataset = client.get(f"/api/datasets/{dataset_id}")
     assert dataset.status_code == 200
@@ -964,6 +1023,56 @@ def test_cli_run_ranktrend_exposes_ui_backtest_parameters() -> None:
         "useIntrabarStops": True,
         "intrabarAmbiguity": "take_first",
     }
+
+
+def test_cli_exposes_sync_and_migration_commands(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    parser = build_parser()
+    assert parser.parse_args(["push-backup"]).func.__name__ == "cmd_push_backup"
+    assert parser.parse_args(["push-outbox", "--limit", "7"]).limit == 7
+    assert parser.parse_args(["pull-backup"]).func.__name__ == "cmd_pull_backup"
+    assert parser.parse_args(["smoke-backup"]).func.__name__ == "cmd_smoke_backup"
+
+    bundle_path = tmp_path / "migration.json"
+    bundle_path.write_text(
+        json.dumps(
+            {
+                "items": [
+                    {
+                        "id": "half_hour:2026-04-25:10:00",
+                        "type": "half_hour",
+                        "tradingDate": "2026-04-25",
+                        "slotTime": "10:00",
+                        "timestamp": 1777092000000,
+                        "payload": {
+                            "type": "half_hour",
+                            "tradingDate": "2026-04-25",
+                            "slotTime": "10:00",
+                            "timestamp": 1777092000000,
+                            "hotlist": [{"code": "600001", "rank": 1}],
+                        },
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    captured: list[dict[str, object]] = []
+    monkeypatch.setattr("backend.cli.print_json", lambda payload: captured.append(payload))
+    args = parser.parse_args(
+        [
+            "migrate-snapshots",
+            "--path",
+            str(bundle_path),
+            "--dataset-id",
+            "cli_migration_dry_run",
+            "--dry-run",
+        ]
+    )
+    cmd_migrate_snapshots(args)
+    assert captured
+    assert captured[0]["ok"] is True
+    assert captured[0]["report"]["dry_run"] is True
+    assert captured[0]["report"]["scanned"] == 1
 
 
 class MemoryBackup:

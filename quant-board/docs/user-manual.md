@@ -111,6 +111,23 @@ Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/migrations/snapshots/im
 
 确认 `report.scanned`、`report.imported`、`report.skipped` 无异常后，把 `dryRun` 改为 `$false` 正式导入。重复执行同一批数据会跳过已存在快照，不应产生重复行。
 
+CLI 等价命令：
+
+```powershell
+cd d:\dragon-board\quant-board
+.\.venv\Scripts\python.exe -m backend.cli migrate-snapshots `
+  --path d:\exports\dragonboard-v4.json `
+  --dataset-id dragonboard_history `
+  --name "DragonBoard history" `
+  --dry-run
+```
+
+正式导入后，如果需要马上补推 Supabase：
+
+```powershell
+.\.venv\Scripts\python.exe -m backend.cli push-outbox --limit 50
+```
+
 ### 3.5 浏览器桥接导入
 
 如果 DragonBoard 正在 `http://localhost:5173` 运行，可以尝试：
@@ -154,6 +171,37 @@ cd d:\dragon-board\quant-board
 ```
 
 Windows + Python 3.13 下该依赖可能需要 Microsoft C++ Build Tools。如果安装失败，不影响 JSON 文件上传和普通回测。
+
+## 3.7 Supabase 联调和自动同步
+
+先确认后端能读到 `.env.local` 里的 Supabase 配置：
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/api/health
+```
+
+再做写读删 smoke 测试：
+
+```powershell
+Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/sync/smoke-backup
+```
+
+返回 `ok=true`、`write=true`、`read=true`、`cleanup=true` 才表示 Supabase REST 备份表权限可用。
+
+自动同步默认关闭。需要让 API 后台定时补传 outbox 时，在环境变量里设置：
+
+```powershell
+$env:QUANT_BOARD_AUTO_SYNC_ENABLED='true'
+$env:QUANT_BOARD_AUTO_SYNC_INTERVAL_SECONDS='60'
+$env:QUANT_BOARD_AUTO_SYNC_BATCH_SIZE='50'
+```
+
+自动同步只处理到期 outbox，不会自动全量补推历史数据。历史大批量补推仍手动执行：
+
+```powershell
+cd d:\dragon-board\quant-board
+.\.venv\Scripts\python.exe -m backend.cli push-backup
+```
 
 ## 4. 跑 RankTrend 回测
 

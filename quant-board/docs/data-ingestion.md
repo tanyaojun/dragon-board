@@ -146,11 +146,20 @@ snapshot_type = half_hour
   "imported": 80,
   "skipped": 0,
   "errors": [],
-  "dry_run": false
+  "dry_run": false,
+  "record_count": 80,
+  "frame_count": 80,
+  "stock_row_count": 16000,
+  "sector_row_count": 1200,
+  "start_date": "2026-04-01",
+  "end_date": "2026-04-30",
+  "snapshot_types": ["half_hour"]
 }
 ```
 
 `skipped` 表示目标 `dataset_id` 下已存在的快照或同一迁移幂等键已经执行过。重复导入不能制造重复数据。
+
+正式迁移前必须先 dry run，检查快照数、股票行数、日期范围和快照类型是否符合预期。正式导入后再运行 `push-outbox` 或等待自动 outbox 同步；大批量历史补推使用 `push-backup` 手动触发。
 
 ## 质量门禁
 

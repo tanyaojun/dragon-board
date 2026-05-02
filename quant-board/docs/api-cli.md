@@ -28,6 +28,7 @@ Invoke-RestMethod http://127.0.0.1:8000/api/health
 - `backup.connected`：Supabase REST 备份库是否可用。
 - `mode`：当前为 `sqlite_primary_supabase_backup`。
 - `outbox`：待补偿同步队列摘要；字段以当前后端实现为准。
+- `autoSync`：自动 outbox 推送状态、间隔、批量大小和最近一次结果。
 
 目标合同：健康检查必须能让调用方判断主库、备份库、读回退和补偿同步是否可用。新增或改名字段时，必须同批更新本文和 [database-migration-plan.md](database-migration-plan.md)。
 
@@ -62,6 +63,58 @@ Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/sync/push-backup
 ```
 
 `push-backup` 会先消费 `sync_outbox` 中到期的 `pending/retry` 任务，再扫描 SQLite 里已有的数据集、回测、优化和 Golden 记录做补推。失败项会进入 `errors`，结构为 `{type,key,error}`。
+
+### `POST /api/sync/push-outbox`
+
+只推送到期的 outbox，不做全量历史扫描。适合自动同步和低风险补偿。
+
+```powershell
+Invoke-RestMethod -Method Post 'http://127.0.0.1:8000/api/sync/push-outbox?limit=50'
+```
+
+返回：
+
+```json
+{
+  "scanned": 1,
+  "succeeded": 1,
+  "failed": 0,
+  "skipped": 0,
+  "items": []
+}
+```
+
+### `POST /api/sync/auto-once`
+
+手动执行一次自动同步同口径的 outbox 推送。
+
+```powershell
+Invoke-RestMethod -Method Post 'http://127.0.0.1:8000/api/sync/auto-once?limit=50'
+```
+
+### `POST /api/sync/smoke-backup`
+
+Supabase 联调探针。后端会写入一条 `qb_smoke` 临时记录，读回后删除，用来确认云端 REST 写读删权限。
+
+```powershell
+Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/sync/smoke-backup
+```
+
+返回：
+
+```json
+{
+  "ok": true,
+  "configured": true,
+  "connected": true,
+  "write": true,
+  "read": true,
+  "cleanup": true,
+  "last_error": null
+}
+```
+
+真实 Supabase 表中，业务类型存放在 `quality_flags.kind=qb_smoke`；SQL 列 `type` 保持合法快照类型，避免触发云端 `snapshots_type_check`。
 
 ### `POST /api/sync/pull-backup`
 
@@ -443,7 +496,27 @@ cd d:\dragon-board\quant-board
 
 ### 备份同步 CLI
 
-当前公开合同以 API 同步端点为准。若后续新增 CLI 形式的 `push-backup`、`pull-backup` 或健康检查命令，必须复用同一服务层，并同步更新本文、[database-migration-plan.md](database-migration-plan.md) 和 [development-roadmap.md](development-roadmap.md)。
+CLI 与 API 复用同一服务层：
+
+```powershell
+cd d:\dragon-board\quant-board
+.\.venv\Scripts\python.exe -m backend.cli smoke-backup
+.\.venv\Scripts\python.exe -m backend.cli push-outbox --limit 50
+.\.venv\Scripts\python.exe -m backend.cli push-backup
+.\.venv\Scripts\python.exe -m backend.cli pull-backup
+```
+
+历史迁移演练：
+
+```powershell
+.\.venv\Scripts\python.exe -m backend.cli migrate-snapshots `
+  --path d:\exports\dragonboard-v4.json `
+  --dataset-id dragonboard_history `
+  --name "DragonBoard history" `
+  --dry-run
+```
+
+确认 dry run 的 `report.scanned`、`frame_count`、`stock_row_count`、`start_date`、`end_date`、`snapshot_types` 后，去掉 `--dry-run` 正式导入。
 
 ## 默认参数边界
 

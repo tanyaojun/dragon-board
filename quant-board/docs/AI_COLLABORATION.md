@@ -11,7 +11,7 @@
 - 默认快照：`snapshot_type=half_hour`。
 - 可选快照：`quarter_hour` 可用于细颗粒度研究，但必须显式选择，不能替代默认口径。
 - 存储主链：SQLite 是 QuantBoard 主库，Supabase 是后端专用备份库；实施和恢复规则以 [database-migration-plan.md](database-migration-plan.md) 为准。
-- 当前同步批次：`sync_outbox` 已覆盖快照 ingest、数据集 bundle、回测、优化和 Golden；历史 JSON 迁移入口是 `POST /api/migrations/snapshots/import-json`。
+- 当前同步批次：`sync_outbox` 已覆盖快照 ingest、数据集 bundle、回测、优化和 Golden；历史 JSON 迁移入口是 `POST /api/migrations/snapshots/import-json`；自动同步默认关闭，只补传到期 outbox。
 
 ## 工作边界
 

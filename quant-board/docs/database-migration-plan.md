@@ -33,15 +33,26 @@ QuantBoard 已有本地 SQLite 模型和服务骨架，主要表包括：
 - `optimization_runs`
 - `sync_outbox`
 
-Supabase 侧为了兼容已有空表，首期备份记录落在 `snapshots` 表中，通过 `type` 区分 QuantBoard 业务对象：
+Supabase 侧为了兼容已有 `snapshots` 表和 check 约束，首期备份记录落在 `snapshots` 表中，但 SQL 列 `type` 必须继续使用合法快照类型：
+
+- `quarter_hour`
+- `half_hour`
+- `hourly`
+- `daily`
+- `five_minute`
+
+QuantBoard 业务对象类型放在 `quality_flags.kind`，当前取值包括：
 
 - `qb_dataset`
 - `qb_snapshot_bundle`
 - `qb_backtest_run`
 - `qb_optimization_run`
 - `qb_golden_case`
+- `qb_smoke`
 
 快照明细首期以 bundle 写入 `payload`，避免在 Supabase 表结构完全迁移前破坏已有数据。后续若拆成 Supabase 明细表，必须先更新本文的表合同和恢复流程。
+
+真实 Supabase 联调结论：`snapshots.type` 不能写入 `qb_dataset` 等业务枚举，否则会触发 `snapshots_type_check`；`capture_mode` 也必须使用 `real_time/delayed/restored` 等云端允许值。后端备份客户端会把业务分类写入 `quality_flags.kind`，并用合法 `type/capture_mode` 写入云端。
 
 当前 WP2/WP3/WP4 批次已落地的能力：
 
@@ -145,6 +156,31 @@ Dragon Board 快照/运行页桥接
 - outbox 成功后标记 `done`；失败后更新 `retry_count`、`last_error` 和 `next_retry_at`。
 - 不支持的 outbox 类型计入 `skipped`，不能静默丢弃。
 
+### `POST /api/sync/push-outbox`
+
+用途：只推送到期的 `sync_outbox` 任务，不做 SQLite 全量历史扫描。它是自动同步调度器使用的最小补偿动作。
+
+行为规则：
+
+- 只处理 `pending/retry` 且 `next_retry_at` 已到期的任务。
+- 默认批量大小来自 `QUANT_BOARD_AUTO_SYNC_BATCH_SIZE`。
+- 返回结构与 `push-backup.outbox` 一致。
+
+### `POST /api/sync/auto-once`
+
+用途：手动执行一次自动同步同口径的 outbox 推送，便于联调和排障。
+
+### `POST /api/sync/smoke-backup`
+
+用途：Supabase 联调写读删探针。后端会写入一条 `quality_flags.kind=qb_smoke` 的临时记录，读回确认后删除。
+
+行为规则：
+
+- 只验证 Supabase REST 的写入、读取和清理权限。
+- 不写入 SQLite，不登记业务 outbox。
+- 返回 `write`、`read`、`cleanup` 和 `last_error`。
+- 实际写入时 SQL 列 `type=daily`，`quality_flags.kind=qb_smoke`。
+
 ### `POST /api/sync/pull-backup`
 
 用途：把 Supabase 备份记录恢复到 SQLite，用于本地主库损坏、重建或后续 failover 写入能力落地后的收敛。
@@ -233,6 +269,12 @@ Dragon Board 快照/运行页桥接
 | `QUANT_BOARD_ENABLE_SUPABASE_BACKUP` | 是否启用 Supabase 备份镜像，默认按 Supabase 配置自动启用 |
 | `QUANT_BOARD_ENABLE_BACKUP_READ_FALLBACK` | 是否启用备份读回退，默认跟随备份镜像 |
 | `QUANT_BOARD_BACKUP_TIMEOUT_SECONDS` | Supabase 请求超时时间 |
+| `QUANT_BOARD_AUTO_SYNC_ENABLED` | 是否在 API 启动后自动推送到期 outbox，默认 `false` |
+| `QUANT_BOARD_AUTO_SYNC_INTERVAL_SECONDS` | 自动 outbox 推送间隔，默认 `60`，最小 `5` |
+| `QUANT_BOARD_AUTO_SYNC_INITIAL_DELAY_SECONDS` | API 启动后首次自动同步延迟，默认 `10` |
+| `QUANT_BOARD_AUTO_SYNC_BATCH_SIZE` | 单轮自动同步最多处理多少条 outbox，默认 `50` |
+
+自动同步默认关闭。打开后只消费到期 outbox，不做全量 `push-backup`，避免服务启动时把大量历史数据误推到 Supabase。全量补推仍必须手动调用 `push-backup` 或 CLI。
 
 ## 分阶段落地
 
@@ -260,6 +302,7 @@ Dragon Board 快照/运行页桥接
 - Supabase 写入失败有结构化诊断。
 - `push-backup` 能补偿历史 SQLite 记录。
 - `sync_outbox` 已覆盖快照 ingest、数据集 bundle、回测、优化和 Golden 业务对象。
+- 自动同步可按配置启动，只推送到期 outbox；Supabase smoke 探针可验证真实云端写读删。
 
 ### M3：读取回退与 failover 写入
 
