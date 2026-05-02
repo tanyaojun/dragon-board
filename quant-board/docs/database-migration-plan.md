@@ -54,16 +54,17 @@ Supabase schema 仍与 SQLite 同构，但备份适配层允许对超大 `Text` 
 - `dataset_bundle`、`snapshot_ingest`、`backtest_run`、`optimization_run`、`golden_case` 都会在 SQLite 写入成功后登记 `sync_outbox`。
 - Supabase 立即镜像成功时，对应 outbox 标记为 `done`；镜像失败时标记为 `retry` 并写入 `last_error`、`retry_count`、`next_retry_at`。
 - `push-backup` 会先消费到期的 `pending/retry` outbox，再做全量扫描补推。
-- Dragon Board 对已存在的半小时、十五分钟、小时等正式快照，如果 IndexedDB 已有记录但后端 ingest 失败过，会重放后端入库，不再因为本地记录存在而跳过后端链路。
+- Dragon Board 正式快照保存不再以 IndexedDB 是否已有记录作为幂等依据；定时保存和手工保存先查询 SQLite/QuantBoard 后端是否已有同一 `snapshot_id`，缺失时再执行 `POST /api/snapshots/ingest`。
+- `POST /api/snapshots/ingest` 除 `idempotency_key` 外，还会按 `dataset_id + snapshot_id` 做逻辑幂等；同一快照槽位已存在时返回 `deduped=true`，不会覆盖已落库的事实行。
 - Dragon Board 正式聚合读口已固定为 SQLite 唯一来源：`listSnapshotFrameBundles` 调用 QuantBoard `GET /api/snapshots/frames`，不再回落浏览器 IndexedDB。
 - Dragon Board 正式零散读口已固定为 SQLite 唯一来源：`listSnapshots`、`getSnapshotById`、`listSnapshotFrames`、`listSnapshotStockRows`、`listSnapshotSectorRows` 直接读 QuantBoard SQLite API，保持原 `DataLayer` 字段合同不变；`five_minute` 等非正式临时快照仍走本地临时路径。
-- Dragon Board 正式写入口开始 SQLite 主写：正式快照保存必须先通过 `POST /api/snapshots/ingest` 落 SQLite；IndexedDB 写入只作为缓存/迁移源，缓存失败不再代表正式保存失败。
+- Dragon Board 正式写入口已切为 SQLite 主写：正式快照保存必须先通过 `POST /api/snapshots/ingest` 落 SQLite；浏览器 IndexedDB 快照缓存默认关闭，后续只允许作为显式开启的临时缓存、历史迁移源或非正式 `five_minute` 本地数据。
 - 历史 JSON 迁移入口 `POST /api/migrations/snapshots/import-json` 已可处理 v4 bundle、records/snapshots、frames/stockRows/sectorRows 和常见 SQLite/备份导出字段。
 
 仍未完成的边界：
 
 - SQLite 完全不可用时直接写 Supabase 的 failover 写入仍是 M3 目标能力。
-- IndexedDB 已从正式读取链路中移除：后续只能作为缓存、重放和迁移来源；完全删除历史或停用迁移工具前必须先跑通全量行数校验。
+- IndexedDB 已从正式快照读写链路中移除：后续只能作为显式缓存、历史迁移来源和非正式临时数据来源；完全删除历史或停用迁移工具前必须保留一次人工验收记录，确认 SQLite 四张事实表全量行数与浏览器历史一致。
 - Supabase 云端 schema 需要用户先在 SQL Editor 执行 `quant-board/backend/data/supabase_schema.sql`；执行前旧云端表会被删除重建，必须确认旧云端数据已经不需要或已另行备份。
 
 ## 存储拓扑

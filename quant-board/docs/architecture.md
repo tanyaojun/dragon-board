@@ -85,7 +85,7 @@ Supabase 备份库必须使用 SQLite 同构 schema，不再使用旧 `snapshots
 
 为适配 Supabase REST 对大请求和长语句的限制，备份客户端会对超大回测、优化和 Golden JSON 文本做透明 `gzip + base64` 编码，并按请求体大小拆分 upsert。SQLite 主库仍保存原始 JSON；读回退和 `pull-backup` 会自动解码，调用方不应感知编码细节。
 
-Dragon Board 前端 `DataLayer` 对外字段不随迁移删改。正式快照写入先落 SQLite；IndexedDB 只作为缓存、历史迁移源、失败回放和非正式临时数据来源。正式读取走 SQLite API，返回仍是 `SnapshotRecord`、`SnapshotFrameBundle`、`SnapshotStockRow`、`SnapshotSectorRow` 的现有 camelCase 字段。
+Dragon Board 前端 `DataLayer` 对外字段不随迁移删改。正式快照写入先查询 SQLite 是否已有同一 `snapshot_id`，缺失时通过 `POST /api/snapshots/ingest` 落 SQLite；后端再按 `dataset_id + snapshot_id` 做逻辑幂等，重复槽位不会覆盖既有事实行。正式读取走 SQLite API，返回仍是 `SnapshotRecord`、`SnapshotFrameBundle`、`SnapshotStockRow`、`SnapshotSectorRow` 的现有 camelCase 字段。IndexedDB 快照缓存默认关闭，只保留历史迁移源、显式缓存和非正式临时数据用途。
 
 如果后续调整 Supabase 表字段、索引、恢复策略或 payload JSON 字段，必须同批更新 [database-migration-plan.md](database-migration-plan.md)、[api-cli.md](api-cli.md) 和 SQL schema 文件。
 

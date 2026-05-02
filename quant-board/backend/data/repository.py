@@ -58,6 +58,26 @@ class Repository:
         except SQLAlchemyError:
             return self._backup_dataset(dataset_id)
 
+    def existing_snapshot_ids(self, dataset_id: str, snapshot_ids: list[str]) -> set[str]:
+        if self.session is None or not snapshot_ids:
+            return set()
+        try:
+            frame_rows = self.session.scalars(
+                select(SnapshotFrameModel.snapshot_id).where(
+                    SnapshotFrameModel.dataset_id == dataset_id,
+                    SnapshotFrameModel.snapshot_id.in_(snapshot_ids),
+                )
+            )
+            record_rows = self.session.scalars(
+                select(SnapshotRecordModel.snapshot_id).where(
+                    SnapshotRecordModel.dataset_id == dataset_id,
+                    SnapshotRecordModel.snapshot_id.in_(snapshot_ids),
+                )
+            )
+            return {str(item) for item in [*frame_rows, *record_rows] if item}
+        except SQLAlchemyError:
+            return set()
+
     def delete_dataset_children(self, dataset_id: str) -> None:
         if self.session is None:
             return
@@ -159,11 +179,48 @@ class Repository:
 
         snapshot_ids = sorted(
             {
-                str(item.get("id") or item.get("snapshotId") or "")
+                str(item.get("snapshotId") or item.get("snapshot_id") or item.get("id") or "")
                 for item in [*records, *frames, *stock_rows, *sector_rows]
-                if isinstance(item, dict) and (item.get("id") or item.get("snapshotId"))
+                if isinstance(item, dict)
+                and (item.get("snapshotId") or item.get("snapshot_id") or item.get("id"))
             }
         )
+        existing_snapshot_ids = self.existing_snapshot_ids(dataset.id, snapshot_ids)
+        if existing_snapshot_ids and len(existing_snapshot_ids) == len(snapshot_ids):
+            outbox = self.get_outbox_by_idempotency_key(idempotency_key)
+            if outbox is None:
+                outbox = self._add_outbox_row(
+                    "snapshot_ingest",
+                    {
+                        "dataset": self.dataset_to_dict(self.session.get(Dataset, dataset.id) or dataset),
+                        "records": [],
+                        "frames": [],
+                        "stockRows": [],
+                        "sectorRows": [],
+                        "tradingDate": trading_date,
+                        "source": source,
+                        "dedupeReason": "snapshot_ids_exist",
+                        "snapshotIds": snapshot_ids,
+                    },
+                    idempotency_key=idempotency_key,
+                    dataset_id=dataset.id,
+                    snapshot_id=snapshot_ids[0] if snapshot_ids else None,
+                )
+                self.session.commit()
+            saved_dataset = self.session.get(Dataset, dataset.id) or dataset
+            return {
+                "dataset": self.dataset_to_dict(saved_dataset),
+                "status": outbox.status,
+                "outbox": self.outbox_to_dict(outbox),
+                "deduped": True,
+            }
+        if existing_snapshot_ids:
+            missing_snapshot_ids = set(snapshot_ids) - existing_snapshot_ids
+            records = self._filter_snapshot_payloads(records, missing_snapshot_ids)
+            frames = self._filter_snapshot_payloads(frames, missing_snapshot_ids)
+            stock_rows = self._filter_snapshot_payloads(stock_rows, missing_snapshot_ids)
+            sector_rows = self._filter_snapshot_payloads(sector_rows, missing_snapshot_ids)
+            snapshot_ids = sorted(missing_snapshot_ids)
         self.session.merge(dataset)
         self.delete_snapshot_children(dataset.id, snapshot_ids)
         self.session.add_all([self._record_model(dataset.id, item) for item in records])
@@ -213,6 +270,18 @@ class Repository:
             "outbox": self.outbox_to_dict(outbox),
             "deduped": False,
         }
+
+    @staticmethod
+    def _snapshot_id_from_payload(item: dict[str, Any]) -> str:
+        return str(item.get("snapshotId") or item.get("snapshot_id") or item.get("id") or "")
+
+    @classmethod
+    def _filter_snapshot_payloads(
+        cls,
+        items: list[dict[str, Any]],
+        snapshot_ids: set[str],
+    ) -> list[dict[str, Any]]:
+        return [item for item in items if isinstance(item, dict) and cls._snapshot_id_from_payload(item) in snapshot_ids]
 
     def get_outbox_by_idempotency_key(self, idempotency_key: str) -> SyncOutboxModel | None:
         if self.session is None:

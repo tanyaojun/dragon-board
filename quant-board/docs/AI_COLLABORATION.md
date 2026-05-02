@@ -12,7 +12,7 @@
 - 可选快照：`quarter_hour` 可用于细颗粒度研究，但必须显式选择，不能替代默认口径。
 - 存储主链：SQLite 是 QuantBoard 主库，Supabase 是后端专用备份库；Supabase 必须按 [../backend/data/supabase_schema.sql](../backend/data/supabase_schema.sql) 使用 SQLite 同构 schema，超大 JSON 只允许在备份适配层透明压缩，实施和恢复规则以 [database-migration-plan.md](database-migration-plan.md) 为准。
 - 当前同步批次：`sync_outbox` 已覆盖快照 ingest、数据集 bundle、回测、优化和 Golden；历史 JSON 迁移入口是 `POST /api/migrations/snapshots/import-json`；自动同步默认关闭，只补传到期 outbox。
-- SQLite 替换 IndexedDB 的当前切口：Dragon Board 正式写入先走 QuantBoard `POST /api/snapshots/ingest`；正式读口走 QuantBoard `GET /api/snapshots/frames`、`/api/snapshots/records`、`/api/snapshots/stock-rows`、`/api/snapshots/sector-rows`；IndexedDB 只作为迁移源、缓存和非正式临时数据来源。浏览器端旧的 IndexedDB 校验/补齐入口已收口，不再作为正式合同。
+- SQLite 替换 IndexedDB 的当前切口：Dragon Board 正式写入先查询 QuantBoard SQLite 是否已有同一 `snapshot_id`，缺失时走 `POST /api/snapshots/ingest`；正式读口走 QuantBoard `GET /api/snapshots/frames`、`/api/snapshots/records`、`/api/snapshots/stock-rows`、`/api/snapshots/sector-rows`；IndexedDB 快照缓存默认关闭，只作为迁移源、显式缓存和非正式临时数据来源。浏览器端旧的 IndexedDB 校验/补齐入口已收口，不再作为正式合同。
 
 ## 工作边界
 
@@ -46,12 +46,12 @@
 7. Python 端 rankTrend 输出字段必须能和 golden case 对齐。
 8. 前端展示不得把 `finalSignal` 当成唯一交易结论，应优先展示状态、候选分层、风险、样本质量和交易解释。
 9. SQLite 主库、Supabase 备份库、同步接口、快照入库和 API/CLI 合同变更，必须同批更新对应文档。
-10. Dragon Board 前端不得直连 Supabase；正式快照写库必须走 QuantBoard 后端 API。IndexedDB 只能作为迁移源、缓存或失败重放来源。
+10. Dragon Board 前端不得直连 Supabase；正式快照写库必须走 QuantBoard 后端 API。正式快照判重以 SQLite/后端 `snapshot_id` 为准，不得再以浏览器 IndexedDB 记录存在性作为正式保存条件。
 11. 不得重新引入 Supabase `snapshots.payload` 兼容备份方案；云端表、业务键和索引必须和 SQLite 主库同构。
 12. Supabase 备份中的大字段压缩必须对调用方透明；SQLite、API、CLI、pull-backup 和读回退都必须呈现原始 JSON 字符串。
 13. 逐步替换 IndexedDB 时必须先接入 SQLite 读接口；确认迁移和行数校验完成前，不得删除浏览器历史数据或关闭迁移工具。
 14. 迁移 DataLayer 的 IndexedDB 读写入口时，不得删除或重命名 `SnapshotRecord`、`SnapshotFrameBundle`、`SnapshotStockRow`、`SnapshotSectorRow` 已有字段；SQLite 后端必须承接字段并以 camelCase 返回。
-15. 删除 IndexedDB 历史前必须先完成后端迁移收口与人工验收，确认四张事实表全量行数一致；不要把浏览器端旧 IndexedDB 校验/补齐入口当成正式合同。
+15. 删除 IndexedDB 历史前必须先完成后端迁移收口与人工验收，确认四张事实表全量行数一致；不要把浏览器端旧 IndexedDB 校验/补齐入口当成正式合同。正式快照缓存默认关闭后，不得重新在 `DataLayer` 正式读写口恢复 IndexedDB fallback。
 
 ## 推荐执行流程
 

@@ -11,6 +11,7 @@ vi.mock('../snapshot/runtime', () => ({
   SnapshotRuntime: class {
     getStockVolumeHistory = vi.fn()
     setSqlitePrimaryWriteHandler = vi.fn()
+    setSqlitePrimaryExistsHandler = vi.fn()
     listSnapshots = vi.fn()
     getSnapshotById = vi.fn()
     listSnapshotFrames = vi.fn()

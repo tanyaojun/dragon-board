@@ -672,6 +672,137 @@ def test_snapshot_ingest_is_idempotent_and_queues_outbox() -> None:
     assert any(item["id"] == dataset_id and item["frame_count"] == 1 for item in datasets.json())
 
 
+def test_snapshot_ingest_dedupes_existing_snapshot_id_without_replacing_rows() -> None:
+    client = TestClient(app)
+    suffix = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
+    dataset_id = f"dragonboard_live_existing_{suffix}"
+    snapshot_id = "half_hour:2026-04-21:10:00"
+    base_bundle = {
+        "version": "v4",
+        "tradingDate": "2026-04-21",
+        "items": [
+            {
+                "id": snapshot_id,
+                "type": "half_hour",
+                "tradingDate": "2026-04-21",
+                "slotTime": "10:00",
+                "timestamp": 1776746400000,
+                "displayKey": "[半小时快照] 2026-04-21 10:00",
+                "captureMode": "real_time",
+                "source": "browser_runtime",
+                "payload": {
+                    "type": "half_hour",
+                    "tradingDate": "2026-04-21",
+                    "slotTime": "10:00",
+                    "timestamp": 1776746400000,
+                    "hotlist": [{"code": "600001", "name": "样本A", "rank": 1, "price": 10}],
+                },
+            }
+        ],
+    }
+    changed_bundle = {
+        **base_bundle,
+        "items": [
+            {
+                **base_bundle["items"][0],
+                "payload": {
+                    **base_bundle["items"][0]["payload"],
+                    "hotlist": [{"code": "600999", "name": "不应覆盖", "rank": 1, "price": 99}],
+                },
+            }
+        ],
+    }
+
+    first = client.post(
+        "/api/snapshots/ingest",
+        json={"datasetId": dataset_id, "idempotencyKey": f"first-{suffix}", "bundle": base_bundle},
+    )
+    assert first.status_code == 200, first.text
+    assert first.json()["deduped"] is False
+
+    second = client.post(
+        "/api/snapshots/ingest",
+        json={"datasetId": dataset_id, "idempotencyKey": f"second-{suffix}", "bundle": changed_bundle},
+    )
+    assert second.status_code == 200, second.text
+    second_body = second.json()
+    assert second_body["deduped"] is True
+    assert second_body["outbox"]["status"] == "pending"
+
+    stocks = client.get("/api/snapshots/stock-rows", params={"dataset_id": dataset_id, "snapshot_id": snapshot_id})
+    assert stocks.status_code == 200, stocks.text
+    assert [row["code"] for row in stocks.json()["rows"]] == ["600001"]
+
+
+def test_snapshot_ingest_filters_existing_snapshot_ids_from_mixed_bundle() -> None:
+    client = TestClient(app)
+    suffix = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
+    dataset_id = f"dragonboard_live_mixed_{suffix}"
+    existing_snapshot_id = "half_hour:2026-04-21:10:00"
+    new_snapshot_id = "half_hour:2026-04-21:10:30"
+
+    def item(snapshot_id: str, slot_time: str, code: str) -> dict[str, Any]:
+        return {
+            "id": snapshot_id,
+            "type": "half_hour",
+            "tradingDate": "2026-04-21",
+            "slotTime": slot_time,
+            "timestamp": 1776746400000,
+            "displayKey": f"[半小时快照] 2026-04-21 {slot_time}",
+            "captureMode": "real_time",
+            "source": "browser_runtime",
+            "payload": {
+                "type": "half_hour",
+                "tradingDate": "2026-04-21",
+                "slotTime": slot_time,
+                "timestamp": 1776746400000,
+                "hotlist": [{"code": code, "name": code, "rank": 1, "price": 10}],
+            },
+        }
+
+    first_bundle = {"version": "v4", "tradingDate": "2026-04-21", "items": [item(existing_snapshot_id, "10:00", "600001")]}
+    mixed_bundle = {
+        "version": "v4",
+        "tradingDate": "2026-04-21",
+        "items": [
+            item(existing_snapshot_id, "10:00", "600999"),
+            item(new_snapshot_id, "10:30", "600002"),
+        ],
+    }
+
+    first = client.post(
+        "/api/snapshots/ingest",
+        json={"datasetId": dataset_id, "idempotencyKey": f"first-mixed-{suffix}", "bundle": first_bundle},
+    )
+    assert first.status_code == 200, first.text
+
+    second = client.post(
+        "/api/snapshots/ingest",
+        json={"datasetId": dataset_id, "idempotencyKey": f"second-mixed-{suffix}", "bundle": mixed_bundle},
+    )
+    assert second.status_code == 200, second.text
+    assert second.json()["deduped"] is False
+
+    counts = client.get("/api/snapshots/counts", params={"dataset_id": dataset_id})
+    assert counts.status_code == 200, counts.text
+    assert counts.json()["counts"]["snapshot_frames"] == 2
+    assert counts.json()["counts"]["snapshot_stock_rows"] == 2
+
+    existing_rows = client.get(
+        "/api/snapshots/stock-rows",
+        params={"dataset_id": dataset_id, "snapshot_id": existing_snapshot_id},
+    )
+    assert existing_rows.status_code == 200, existing_rows.text
+    assert [row["code"] for row in existing_rows.json()["rows"]] == ["600001"]
+
+    new_rows = client.get(
+        "/api/snapshots/stock-rows",
+        params={"dataset_id": dataset_id, "snapshot_id": new_snapshot_id},
+    )
+    assert new_rows.status_code == 200, new_rows.text
+    assert [row["code"] for row in new_rows.json()["rows"]] == ["600002"]
+
+
 def test_snapshot_frames_api_reads_sqlite_frame_bundles() -> None:
     client = TestClient(app)
     suffix = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")

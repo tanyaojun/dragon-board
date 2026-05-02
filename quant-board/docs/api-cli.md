@@ -279,6 +279,27 @@ Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/migrations/snapshots/im
 
 返回：
 
+### 快照 ingest 幂等口径
+
+`POST /api/snapshots/ingest` 是 Dragon Board 正式快照写入 SQLite 的入口。调用方应传入稳定的 `datasetId`、`idempotencyKey` 和 v4 `bundle`；后端会先按 `idempotencyKey` 判重，再按 `dataset_id + snapshot_id` 做逻辑幂等。若同一快照槽位已经存在，接口返回 `ok=true`、`deduped=true`，不会删除或覆盖已落库的 `snapshot_records / snapshot_frames / snapshot_stock_rows / snapshot_sector_rows`。
+
+Dragon Board 当前会在写入前通过 SQLite 读口确认同一 `snapshot_id` 是否已存在，避免定时保存反复提交同一槽位。IndexedDB 不再参与正式快照写入判重。
+
+示例响应：
+
+```json
+{
+  "ok": true,
+  "deduped": true,
+  "status": "pending",
+  "dataset": { "id": "dragonboard_live" },
+  "outbox": {
+    "op_type": "snapshot_ingest",
+    "status": "pending"
+  }
+}
+```
+
 ```json
 {
   "ok": true,

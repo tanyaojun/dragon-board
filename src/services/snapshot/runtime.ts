@@ -69,6 +69,7 @@ interface SnapshotRuntimeDeps {
   primaryDbName: string
   primaryDbVersion: number
   primaryStoreName: string
+  enableIndexedDbSnapshotCache?: boolean
   legacyBackupDbName: string
   bucketBackupDbName: string
   backupDbVersion: number
@@ -86,6 +87,8 @@ export interface SnapshotSqlitePrimaryWriteResult {
   skipped?: boolean
   error?: unknown
 }
+
+export type SnapshotSqlitePrimaryExistsHandler = (snapshotId: string) => Promise<boolean>
 
 // SnapshotRuntime 是快照模块的总编排层：
 // 它负责生成、查询、coverage、备份调度和恢复入口，但不直接承载 IndexedDB 细节实现。
@@ -125,9 +128,11 @@ export class SnapshotRuntime {
   private readonly snapshotStockRowStore: SnapshotStockRowStore
   private readonly snapshotSectorRowStore: SnapshotSectorRowStore
   private readonly snapshotProjectionMetaStore: SnapshotProjectionMetaStore
+  private readonly enableIndexedDbSnapshotCache: boolean
   private readonly cloudBackup: SnapshotCloudBackup
   private readonly snapshotBackupSync: SnapshotBackupSync
   private sqlitePrimaryWrite?: (bundle: SnapshotProjectionBundle) => Promise<SnapshotSqlitePrimaryWriteResult>
+  private sqlitePrimaryExists?: SnapshotSqlitePrimaryExistsHandler
 
   constructor(deps: SnapshotRuntimeDeps) {
     this.logger = deps.logger || console
@@ -139,6 +144,7 @@ export class SnapshotRuntime {
     this.backupDbVersion = deps.backupDbVersion
     this.backupStoreName = deps.backupStoreName
     this.backupBucketName = deps.backupBucketName
+    this.enableIndexedDbSnapshotCache = deps.enableIndexedDbSnapshotCache === true
     this.snapshotStore = new SnapshotStore({
       dbName: deps.primaryDbName,
       dbVersion: deps.primaryDbVersion,
@@ -870,6 +876,10 @@ export class SnapshotRuntime {
     this.sqlitePrimaryWrite = handler || undefined
   }
 
+  setSqlitePrimaryExistsHandler(handler: SnapshotSqlitePrimaryExistsHandler | null): void {
+    this.sqlitePrimaryExists = handler || undefined
+  }
+
   async exportSnapshotAsFile(id: string): Promise<void> {
     const record = await this.getSnapshotById(id)
     const snapshot = record?.payload
@@ -1319,29 +1329,47 @@ export class SnapshotRuntime {
     let created = false
     // 写入必须串行，避免同一槽位在定时器和手工触发并发时落出重复记录。
     const task = this.snapshotWriteQueue.catch(() => undefined).then(async () => {
-      const existing = await this.snapshotStore.getById(record.id)
-      if (existing) {
-        await this.replayBackendIngestIfPending(existing)
+      const localOnlySnapshot = record.type === 'five_minute'
+      if (localOnlySnapshot) {
+        const existing = await this.snapshotStore.getById(record.id)
+        if (existing) return
+        await this.ensurePersistentStorage()
+      } else if (await this.snapshotExistsInSqlitePrimary(record.id)) {
         return
       }
-      await this.ensurePersistentStorage()
       const effectiveBundle = bundle || this.createProjectionBundle(record)
+
+      if (localOnlySnapshot) {
+        await this.snapshotProjectionWriter.saveBundle(effectiveBundle)
+        created = true
+        return
+      }
+
       const sqliteWrite = await this.writeSnapshotBundleToSqlitePrimary(effectiveBundle)
       if (!sqliteWrite.ok) {
         throw sqliteWrite.error instanceof Error
           ? sqliteWrite.error
           : new Error(`snapshot_sqlite_primary_write_failed:${record.id}`)
       }
-      // IndexedDB 仍写入完整投影，但此处已经降级为本地缓存/迁移源，失败不影响正式入库结果。
-      try {
-        await this.snapshotProjectionWriter.saveBundle(effectiveBundle)
-      } catch (error) {
-        this.logger.warn?.('[DataLayer] Snapshot IndexedDB cache write failed:', record.id, error)
+      if (sqliteWrite.skipped) {
+        created = false
+        return
       }
-      // 备份失败不会回滚 SQLite 主库，后续由同步链路补偿。
-      void this.snapshotBackupSync.saveToBackups(effectiveBundle).catch((error) => {
-        this.logger.warn?.('[DataLayer] Snapshot backup sync failed:', record.id, error)
-      })
+
+      if (this.enableIndexedDbSnapshotCache) {
+        await this.ensurePersistentStorage()
+        // IndexedDB 在这里仅是可选缓存，失败不影响正式 SQLite 入库结果。
+        try {
+          await this.snapshotProjectionWriter.saveBundle(effectiveBundle)
+        } catch (error) {
+          this.logger.warn?.('[DataLayer] Snapshot IndexedDB cache write failed:', record.id, error)
+        }
+        // 旧本地备份也只跟随可选缓存开关；正式备份由后端 outbox/Supabase 链路承接。
+        void this.snapshotBackupSync.saveToBackups(effectiveBundle).catch((error) => {
+          this.logger.warn?.('[DataLayer] Snapshot backup sync failed:', record.id, error)
+        })
+      }
+
       created = true
     })
     this.snapshotWriteQueue = task.then(() => undefined, () => undefined)
@@ -1368,6 +1396,16 @@ export class SnapshotRuntime {
     }
     await this.pushSnapshotBundleToBackend(bundle.record, bundle)
     return { ok: true }
+  }
+
+  private async snapshotExistsInSqlitePrimary(snapshotId: string): Promise<boolean> {
+    if (!snapshotId || !this.sqlitePrimaryExists) return false
+    try {
+      return await this.sqlitePrimaryExists(snapshotId)
+    } catch (error) {
+      this.logger.warn?.('[DataLayer] SQLite snapshot existence check failed:', snapshotId, error)
+      return false
+    }
   }
 
   private async replayBackendIngestIfPending(record: SnapshotRecord): Promise<void> {
@@ -1649,7 +1687,7 @@ export class SnapshotRuntime {
         }
 
         const snapshotId = buildSnapshotId(type, toLocalTradingDate(slotTime), toLocalSlotTime(slotTime))
-        const existing = await this.snapshotStore.getById(snapshotId)
+        const existing = await this.snapshotExistsInSqlitePrimary(snapshotId)
         if (!existing) {
           candidates.push({ type, slotTime })
         }

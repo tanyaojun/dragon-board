@@ -11,7 +11,7 @@ import type { RankTrendAnalysisResult } from './rankTrend/types'
 import type { RotationAnalysis } from '../types'
 import type { StockAlert, AlertStats } from '../types'
 import type { AlertType } from '../types/core'
-import { apiService } from './apiService'
+import { ApiHttpError, apiService } from './apiService'
 import { SnapshotRuntime } from './snapshot/runtime'
 import { FORMAL_SNAPSHOT_READ_POLICY } from './snapshot/readPolicy'
 import { getExpectedSlots, slotTimeToMinutes } from './snapshot/schedule'
@@ -714,6 +714,7 @@ class DataLayer {
     primaryDbName: this.PRIMARY_DB_NAME,
     primaryDbVersion: this.PRIMARY_DB_VERSION,
     primaryStoreName: this.PRIMARY_STORE_NAME,
+    enableIndexedDbSnapshotCache: false,
     legacyBackupDbName: this.LEGACY_BACKUP_DB_NAME,
     bucketBackupDbName: this.BUCKET_BACKUP_DB_NAME,
     backupDbVersion: this.BACKUP_DB_VERSION,
@@ -744,6 +745,9 @@ class DataLayer {
 
   constructor() {
     this.snapshotRuntime.setSqlitePrimaryWriteHandler((bundle) => this.writeSnapshotBundleToSqlitePrimary(bundle))
+    this.snapshotRuntime.setSqlitePrimaryExistsHandler((snapshotId) =>
+      this.snapshotExistsInSqlitePrimary(snapshotId),
+    )
     this.startTimer()
   }
 
@@ -2419,7 +2423,7 @@ class DataLayer {
 
   private async writeSnapshotBundleToSqlitePrimary(
     bundle: SnapshotProjectionBundle,
-  ): Promise<{ ok: boolean; error?: unknown }> {
+  ): Promise<{ ok: boolean; skipped?: boolean; error?: unknown }> {
     if (typeof window === 'undefined') return { ok: true }
     try {
       const dayBundle: SnapshotDayBundle = {
@@ -2438,10 +2442,20 @@ class DataLayer {
       if (!data?.ok) {
         return { ok: false, error: new Error(data?.status || data?.message || 'snapshot_backend_ingest_failed') }
       }
-      return { ok: true }
+      return { ok: true, skipped: data?.deduped === true }
     } catch (error) {
       console.warn('[DataLayer] SQLite snapshot primary write failed:', error)
       return { ok: false, error }
+    }
+  }
+
+  private async snapshotExistsInSqlitePrimary(snapshotId: string): Promise<boolean> {
+    if (!snapshotId || typeof window === 'undefined') return false
+    try {
+      return Boolean(await this.getRemoteSnapshotById(snapshotId))
+    } catch (error) {
+      console.warn('[DataLayer] SQLite snapshot existence check failed:', snapshotId, error)
+      return false
     }
   }
 
@@ -2484,6 +2498,9 @@ class DataLayer {
       const data = await this.getQuantBoardPayload(`/api/snapshots/records/${encodeURIComponent(id)}`, 10000)
       return data?.record ? this.normalizeRemoteSnapshotRecord(data.record) : null
     } catch (error) {
+      if (error instanceof ApiHttpError && error.status === 404) {
+        return null
+      }
       console.warn('[DataLayer] SQLite snapshot get failed:', error)
       return null
     }

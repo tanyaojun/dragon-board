@@ -36,6 +36,7 @@ function createRuntime() {
     primaryDbName: 'test-primary',
     primaryDbVersion: 1,
     primaryStoreName: 'snapshots',
+    enableIndexedDbSnapshotCache: true,
     legacyBackupDbName: 'test-backup',
     bucketBackupDbName: 'test-bucket-backup',
     backupDbVersion: 1,
@@ -227,19 +228,12 @@ describe('SnapshotRuntime', () => {
     })
   })
 
-  it('replays backend ingest when saving an existing snapshot after backend failure', async () => {
+  it('ignores IndexedDB existence and rewrites through sqlite for formal snapshots', async () => {
     const runtime = createRuntime()
     const record = createRecord('half_hour', '2026-04-21', '10:00')
-    const ingest = vi.spyOn(snapshotBackendIngest, 'ingestDayBundle').mockResolvedValue({
-      ok: true,
-      dataset: {},
-      status: 'ingested',
-      deduped: false,
-      outbox: {},
-    })
-
-    vi.stubGlobal('window', {})
-    ;(runtime as any).backupSyncStateStore.markError('backendIngest', record.tradingDate, 'http_500')
+    const sqliteWrite = vi.fn().mockResolvedValue({ ok: true })
+    ;(runtime as any).sqlitePrimaryWrite = sqliteWrite
+    runtime.setSqlitePrimaryExistsHandler(vi.fn().mockResolvedValue(false))
     ;(runtime as any).snapshotStore = {
       getById: vi.fn().mockResolvedValue(record),
     }
@@ -266,19 +260,145 @@ describe('SnapshotRuntime', () => {
       saveBundle: vi.fn(),
     }
     ;(runtime as any).snapshotBackupSync = {
-      saveToBackups: vi.fn(),
+      saveToBackups: vi.fn().mockResolvedValue(undefined),
     }
 
     const saved = await (runtime as any).saveSnapshotRecord(record)
 
-    expect(saved).toBe(false)
-    expect(ingest).toHaveBeenCalledTimes(1)
-    expect((runtime as any).snapshotProjectionWriter.saveBundle).not.toHaveBeenCalled()
+    expect(saved).toBe(true)
+    expect(sqliteWrite).toHaveBeenCalledTimes(1)
+    expect((runtime as any).snapshotStore.getById).not.toHaveBeenCalled()
+    expect((runtime as any).snapshotProjectionWriter.saveBundle).toHaveBeenCalledTimes(1)
     const state = await runtime.getSnapshotBackupSyncState('2026-04-21')
-    expect(state).toMatchObject({
-      backendIngestedAt: expect.any(Number),
+    expect(state?.backendIngestedAt).toEqual(expect.any(Number))
+  })
+
+  it('writes formal snapshots to sqlite without touching IndexedDB cache when cache is disabled', async () => {
+    const runtime = new SnapshotRuntime({
+      logger: {
+        log: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+        debug: vi.fn(),
+      },
+      primaryDbName: 'test-primary',
+      primaryDbVersion: 1,
+      primaryStoreName: 'snapshots',
+      enableIndexedDbSnapshotCache: false,
+      legacyBackupDbName: 'test-backup',
+      bucketBackupDbName: 'test-bucket-backup',
+      backupDbVersion: 1,
+      backupStoreName: 'snapshots_backup',
+      backupBucketName: 'snapshot-bucket',
+      minBackupCount: 1,
+      abnormalRatio: 0.5,
+      syncIntervalMs: 60_000,
+      getStorageBucketManager: () => null,
+      getBuildContext: () => ({
+        stocks: [],
+        breathData: null,
+        marketData: null,
+        jxbkBlocks: [],
+        jxbkStocks: {},
+        hotThemes: [],
+        rotationAnalysis: null,
+        breathHistory: [],
+        breathFactors: [],
+        marketMode: 'full',
+        stocksVersion: 1,
+      }),
     })
-    expect(state).not.toHaveProperty('lastBackendIngestError')
+    const record = createRecord('half_hour', '2026-04-21', '10:00')
+    const sqliteWrite = vi.fn().mockResolvedValue({ ok: true })
+    ;(runtime as any).sqlitePrimaryWrite = sqliteWrite
+    ;(runtime as any).snapshotStore = {
+      getById: vi.fn(),
+    }
+    ;(runtime as any).snapshotProjectionWriter = {
+      saveBundle: vi.fn(),
+    }
+    ;(runtime as any).snapshotBackupSync = {
+      saveToBackups: vi.fn(),
+    }
+    runtime.setSqlitePrimaryExistsHandler(vi.fn().mockResolvedValue(false))
+
+    const saved = await (runtime as any).saveSnapshotRecord(record, {
+      record,
+      frame: null,
+      stockRows: [],
+      sectorRows: [],
+    })
+
+    expect(saved).toBe(true)
+    expect(sqliteWrite).toHaveBeenCalledTimes(1)
+    expect((runtime as any).snapshotStore.getById).not.toHaveBeenCalled()
+    expect((runtime as any).snapshotProjectionWriter.saveBundle).not.toHaveBeenCalled()
+    expect((runtime as any).snapshotBackupSync.saveToBackups).not.toHaveBeenCalled()
+  })
+
+  it('treats sqlite duplicate snapshot responses as not-created without writing cache', async () => {
+    const runtime = createRuntime()
+    const record = createRecord('half_hour', '2026-04-21', '10:00')
+    const sqliteWrite = vi.fn().mockResolvedValue({ ok: true, skipped: true })
+    ;(runtime as any).sqlitePrimaryWrite = sqliteWrite
+    runtime.setSqlitePrimaryExistsHandler(vi.fn().mockResolvedValue(false))
+    ;(runtime as any).snapshotProjectionWriter = {
+      saveBundle: vi.fn(),
+    }
+    ;(runtime as any).snapshotBackupSync = {
+      saveToBackups: vi.fn(),
+    }
+
+    const saved = await (runtime as any).saveSnapshotRecord(record, {
+      record,
+      frame: null,
+      stockRows: [],
+      sectorRows: [],
+    })
+
+    expect(saved).toBe(false)
+    expect(sqliteWrite).toHaveBeenCalledTimes(1)
+    expect((runtime as any).snapshotProjectionWriter.saveBundle).not.toHaveBeenCalled()
+    expect((runtime as any).snapshotBackupSync.saveToBackups).not.toHaveBeenCalled()
+  })
+
+  it('skips formal snapshot writes when sqlite already has the snapshot id', async () => {
+    const runtime = createRuntime()
+    const record = createRecord('half_hour', '2026-04-21', '10:00')
+    const sqliteWrite = vi.fn()
+    const exists = vi.fn().mockResolvedValue(true)
+    ;(runtime as any).sqlitePrimaryWrite = sqliteWrite
+    runtime.setSqlitePrimaryExistsHandler(exists)
+    ;(runtime as any).snapshotProjectionWriter = {
+      saveBundle: vi.fn(),
+    }
+
+    const saved = await (runtime as any).saveSnapshotRecord(record, {
+      record,
+      frame: null,
+      stockRows: [],
+      sectorRows: [],
+    })
+
+    expect(saved).toBe(false)
+    expect(exists).toHaveBeenCalledWith(record.id)
+    expect(sqliteWrite).not.toHaveBeenCalled()
+    expect((runtime as any).snapshotProjectionWriter.saveBundle).not.toHaveBeenCalled()
+  })
+
+  it('collects pending scheduled slots by checking sqlite existence first', async () => {
+    const runtime = createRuntime()
+    const exists = vi.fn(async (snapshotId: string) => snapshotId.includes('10:00'))
+    runtime.setSqlitePrimaryExistsHandler(exists)
+    ;(runtime as any).snapshotStore = {
+      getById: vi.fn(),
+    }
+
+    const candidates = await (runtime as any).collectPendingSnapshotSlots(new Date('2026-04-21T10:01:00'))
+
+    expect(candidates.some((item: { slotTime: Date }) => item.slotTime.getHours() === 10)).toBe(false)
+    expect((runtime as any).snapshotStore.getById).not.toHaveBeenCalled()
+    expect(exists).toHaveBeenCalled()
   })
 
   it('backfills pending cloud trading dates after 15:30 in ascending order', async () => {
