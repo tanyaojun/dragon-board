@@ -10,6 +10,7 @@
 - Dragon Board 根项目只提供实时看板、快照数据和 TypeScript golden 导出。
 - 默认快照：`snapshot_type=half_hour`。
 - 可选快照：`quarter_hour` 可用于细颗粒度研究，但必须显式选择，不能替代默认口径。
+- 存储主链：SQLite 是 QuantBoard 主库，Supabase 是后端专用备份库；实施和恢复规则以 [database-migration-plan.md](database-migration-plan.md) 为准。
 
 ## 工作边界
 
@@ -42,6 +43,7 @@
 6. 数据质量门禁失败必须结构化返回，不允许静默吞掉。
 7. Python 端 rankTrend 输出字段必须能和 golden case 对齐。
 8. 前端展示不得把 `finalSignal` 当成唯一交易结论，应优先展示状态、候选分层、风险、样本质量和交易解释。
+9. SQLite 主库、Supabase 备份库、同步接口、快照入库和 API/CLI 合同变更，必须同批更新对应文档。
 
 ## 推荐执行流程
 
@@ -57,6 +59,7 @@
 - README 只放总览、索引和首期硬约束。
 - 专题细节写入对应文档，不把所有内容堆到 README。
 - 修改默认值、策略合同、API 合同时，必须同步更新交叉引用文档。
+- 修改存储、同步、快照入库、数据库表字段、Supabase payload、恢复策略或 API/CLI 请求响应字段时，必须同批更新 [database-migration-plan.md](database-migration-plan.md)、[architecture.md](architecture.md)、[api-cli.md](api-cli.md) 和必要的用户/路线图文档。
 - 发现旧文档把 Dragon Board 根项目描述为回测平台时，必须删除或改为当前 QuantBoard 口径。
 
 ## 给后续 AI 的上下文提示
@@ -64,9 +67,10 @@
 开始新任务时优先阅读：
 
 1. [README.md](README.md)
-2. [ranktrend-golden.md](ranktrend-golden.md)
-3. [ranktrend-python-port.md](ranktrend-python-port.md)
-4. 与任务直接相关的专题文档
+2. [database-migration-plan.md](database-migration-plan.md)，如果任务涉及存储、同步、快照入库、恢复或 API/CLI 合同
+3. [ranktrend-golden.md](ranktrend-golden.md)
+4. [ranktrend-python-port.md](ranktrend-python-port.md)
+5. 与任务直接相关的专题文档
 
 如果用户要求实现首期功能，推荐顺序是：
 

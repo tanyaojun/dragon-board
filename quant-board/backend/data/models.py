@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.data.database import Base
@@ -148,3 +148,24 @@ class OptimizationRun(Base):
     request_json: Mapped[str] = mapped_column(Text, default="{}")
     result_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class SyncOutboxModel(Base):
+    __tablename__ = "sync_outbox"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key"),
+        Index("ix_sync_outbox_status_next_retry_at", "status", "next_retry_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    op_type: Mapped[str] = mapped_column(String(80), index=True)
+    dataset_id: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True, default=None)
+    snapshot_id: Mapped[str | None] = mapped_column(String(160), index=True, nullable=True, default=None)
+    payload_json: Mapped[str] = mapped_column(Text, default="{}")
+    idempotency_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), index=True, default="pending")
+    retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
+    next_retry_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

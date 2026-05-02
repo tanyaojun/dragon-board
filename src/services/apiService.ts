@@ -24,6 +24,7 @@ export type RequestContext =
   | 'tdx' // 通达信数据
   | 'limitup' // 涨停数据
   | 'market' // 市场概览
+  | 'quant-board' // QuantBoard 数据后端
   | 'unknown'
 
 /** 请求配置 */
@@ -54,6 +55,8 @@ export interface RequestConfig {
   silent?: boolean
   /** 强制刷新（跳过缓存） */
   force?: boolean
+  /** HTTP 非 2xx 是否按异常处理 */
+  throwOnHttpError?: boolean
 }
 
 /** 请求指标 */
@@ -86,6 +89,35 @@ export interface ApiEnvelope<T> {
   errorCode?: string
   data: T
   details?: unknown
+}
+
+export class ApiHttpError extends Error {
+  readonly status: number
+  readonly statusText: string
+  readonly url: string
+  readonly method: HttpMethod
+  readonly body: unknown
+
+  constructor(params: {
+    method: HttpMethod
+    url: string
+    status: number
+    statusText: string
+    body: unknown
+  }) {
+    const body = params.body as Record<string, unknown> | null
+    const message =
+      (typeof body?.message === 'string' && body.message) ||
+      (typeof body?.errorCode === 'string' && body.errorCode) ||
+      `${params.method} ${params.url} failed with HTTP ${params.status}`
+    super(message)
+    this.name = 'ApiHttpError'
+    this.status = params.status
+    this.statusText = params.statusText
+    this.url = params.url
+    this.method = params.method
+    this.body = params.body
+  }
 }
 
 // ========== 请求队列（优先级控制） ==========
@@ -192,6 +224,8 @@ export class ApiService {
         return this.contextConfig.LIMITUP
       case 'market':
         return this.contextConfig.MARKET
+      case 'quant-board':
+        return this.contextConfig.QUANT_BOARD
       default:
         return {
           baseURL: this.proxies.PROXY_3000, // 默认用3000
@@ -246,6 +280,7 @@ export class ApiService {
     if (url.includes('/api/tdx')) return 'tdx'
     if (url.includes('/api/limitup') || url.includes('/api/surge-stock')) return 'limitup'
     if (url.includes('/api/market')) return 'market'
+    if (url.includes('/api/snapshots/ingest')) return 'quant-board'
     return 'unknown'
   }
 
@@ -337,6 +372,16 @@ export class ApiService {
           responseData = (await response.arrayBuffer()) as T
         } else {
           responseData = await response.json()
+        }
+
+        if (config.throwOnHttpError && !response.ok) {
+          throw new ApiHttpError({
+            method,
+            url,
+            status: response.status,
+            statusText: response.statusText,
+            body: responseData,
+          })
         }
 
         // 记录成功指标
@@ -689,6 +734,7 @@ export class ApiService {
         retries: 1,
         timeout: 15000,
         cache: false,
+        throwOnHttpError: true,
         ...options,
       },
     )
@@ -705,6 +751,32 @@ export class ApiService {
         retries: 1,
         timeout: 60000,
         cache: false,
+        ...options,
+      },
+    )
+  }
+
+  /** 发送正式快照 bundle 到 QuantBoard 后端 */
+  async ingestSnapshotBundle(
+    bundle: SnapshotDayBundle,
+    options?: RequestConfig & { datasetId?: string; idempotencyKey?: string },
+  ) {
+    return this.post<any>(
+      '/api/snapshots/ingest',
+      {
+        datasetId: options?.datasetId,
+        idempotencyKey: options?.idempotencyKey,
+        tradingDate: bundle.tradingDate,
+        bundle,
+        source: 'dragon_board_runtime',
+      },
+      {
+        context: 'quant-board',
+        priority: 'high',
+        retries: 1,
+        timeout: 15000,
+        cache: false,
+        throwOnHttpError: true,
         ...options,
       },
     )

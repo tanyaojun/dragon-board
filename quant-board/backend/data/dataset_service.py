@@ -14,7 +14,7 @@ from backend.utils import json_dumps, new_id
 
 
 class DatasetService:
-    def __init__(self, session: Session):
+    def __init__(self, session: Session | None):
         self.repo = Repository(session)
 
     def list_datasets(self) -> list[dict[str, Any]]:

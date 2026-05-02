@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createSnapshotRecord } from '../identity'
+import { snapshotBackendIngest } from '../backendIngest'
 import { SnapshotRuntime } from '../runtime'
 import { getExpectedSlots } from '../schedule'
 import type { SnapshotCaptureMode, SnapshotQueryOptions, SnapshotRecord, SnapshotType } from '../types'
@@ -200,6 +201,29 @@ describe('SnapshotRuntime', () => {
     await expect(runtime.getSnapshotBackupSyncState('2026-04-21')).resolves.toMatchObject({
       tradingDate: '2026-04-21',
       cloudBundleUploadedAt: uploadedAt,
+    })
+  })
+
+  it('records backend ingest failures outside cloud bundle state', async () => {
+    const runtime = createRuntime()
+    const record = createRecord('half_hour', '2026-04-21', '10:00')
+
+    vi.stubGlobal('window', {})
+    vi.spyOn(snapshotBackendIngest, 'ingestDayBundle').mockRejectedValue(new Error('http_500'))
+
+    await (runtime as any).pushSnapshotBundleToBackend(record, {
+      record,
+      frame: null,
+      stockRows: [],
+      sectorRows: [],
+    })
+    ;(runtime as any).recordCloudBundleUploaded('2026-04-21', 222)
+
+    await expect(runtime.getSnapshotBackupSyncState('2026-04-21')).resolves.toMatchObject({
+      tradingDate: '2026-04-21',
+      cloudBundleUploadedAt: 222,
+      lastBackendIngestError: 'http_500',
+      lastError: 'backendIngest:http_500',
     })
   })
 

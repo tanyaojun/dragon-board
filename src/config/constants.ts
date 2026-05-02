@@ -213,6 +213,7 @@ export const API_CONFIG = {
   PROXIES: {
     PROXY_3000: 'http://localhost:3000', // 热榜、行情代理（有源码）
     PROXY_5000: 'http://localhost:5000', // 题材数据代理（只有EXE）
+    QUANT_BOARD: 'http://localhost:8000', // QuantBoard 后端（SQLite/Supabase 正式数据链路）
   },
 
   // ===== 请求默认配置 =====
@@ -289,6 +290,13 @@ export const API_CONFIG = {
       timeout: 15000,
       retries: 3,
       cacheTTL: 30000,
+      priority: 'high' as const,
+    },
+    QUANT_BOARD: {
+      baseURL: 'http://localhost:8000',
+      timeout: 15000,
+      retries: 1,
+      cacheTTL: 0,
       priority: 'high' as const,
     },
   },

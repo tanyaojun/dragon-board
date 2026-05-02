@@ -1,7 +1,6 @@
-import type { SnapshotBackupSyncState } from './types'
+import type { SnapshotBackupSyncErrorKind, SnapshotBackupSyncState } from './types'
 
 type SnapshotBackupSyncStateMap = Record<string, SnapshotBackupSyncState>
-type BackupSyncErrorKind = 'bucket' | 'cloud'
 
 interface SnapshotBackupSyncStateStoreOptions {
   storage?: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>
@@ -11,6 +10,10 @@ interface SnapshotBackupSyncStateStoreOptions {
 
 function isPositiveTimestamp(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0
+}
+
+function normalizeErrorText(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined
 }
 
 function normalizeStateMap(raw: unknown): SnapshotBackupSyncStateMap {
@@ -27,8 +30,20 @@ function normalizeStateMap(raw: unknown): SnapshotBackupSyncStateMap {
       ...(isPositiveTimestamp(entry.cloudBundleUploadedAt)
         ? { cloudBundleUploadedAt: entry.cloudBundleUploadedAt }
         : {}),
-      ...(typeof entry.lastError === 'string' && entry.lastError.trim()
-        ? { lastError: entry.lastError.trim() }
+      ...(isPositiveTimestamp(entry.backendIngestedAt)
+        ? { backendIngestedAt: entry.backendIngestedAt }
+        : {}),
+      ...(normalizeErrorText(entry.lastBucketError)
+        ? { lastBucketError: normalizeErrorText(entry.lastBucketError) }
+        : {}),
+      ...(normalizeErrorText(entry.lastCloudBundleError)
+        ? { lastCloudBundleError: normalizeErrorText(entry.lastCloudBundleError) }
+        : {}),
+      ...(normalizeErrorText(entry.lastBackendIngestError)
+        ? { lastBackendIngestError: normalizeErrorText(entry.lastBackendIngestError) }
+        : {}),
+      ...(normalizeErrorText(entry.lastError)
+        ? { lastError: normalizeErrorText(entry.lastError) }
         : {}),
     }
   })
@@ -85,7 +100,8 @@ export class SnapshotBackupSyncStateStore {
     return this.upsert(tradingDate, (current) => ({
       ...current,
       bucketSyncedAt: syncedAt,
-      lastError: this.clearErrorKind(current.lastError, 'bucket'),
+      lastBucketError: undefined,
+      lastError: this.summarizeRemainingError(current, 'bucket'),
     }))
   }
 
@@ -94,16 +110,30 @@ export class SnapshotBackupSyncStateStore {
     return this.upsert(tradingDate, (current) => ({
       ...current,
       cloudBundleUploadedAt: uploadedAt,
-      lastError: this.clearErrorKind(current.lastError, 'cloud'),
+      lastCloudBundleError: undefined,
+      lastError: this.summarizeRemainingError(current, 'cloudBundle'),
     }))
   }
 
-  // lastError 采用 kind:message 形式，方便 UI 与诊断层区分 bucket/cloud 的失败来源。
-  markError(kind: BackupSyncErrorKind, tradingDate: string, error: unknown): SnapshotBackupSyncState {
+  markBackendIngested(tradingDate: string, ingestedAt: number = Date.now()): SnapshotBackupSyncState {
+    return this.upsert(tradingDate, (current) => ({
+      ...current,
+      backendIngestedAt: ingestedAt,
+      lastBackendIngestError: undefined,
+      lastError: this.summarizeRemainingError(current, 'backendIngest'),
+    }))
+  }
+
+  markError(
+    kind: SnapshotBackupSyncErrorKind,
+    tradingDate: string,
+    error: unknown,
+  ): SnapshotBackupSyncState {
     const message =
       error instanceof Error ? error.message : typeof error === 'string' ? error : String(error || 'unknown_error')
     return this.upsert(tradingDate, (current) => ({
       ...current,
+      ...this.buildErrorPatch(kind, message),
       lastError: `${kind}:${message}`,
     }))
   }
@@ -130,15 +160,54 @@ export class SnapshotBackupSyncStateStore {
       ...(isPositiveTimestamp(state.cloudBundleUploadedAt)
         ? { cloudBundleUploadedAt: state.cloudBundleUploadedAt }
         : {}),
-      ...(typeof state.lastError === 'string' && state.lastError.trim()
-        ? { lastError: state.lastError.trim() }
+      ...(isPositiveTimestamp(state.backendIngestedAt)
+        ? { backendIngestedAt: state.backendIngestedAt }
+        : {}),
+      ...(normalizeErrorText(state.lastBucketError)
+        ? { lastBucketError: normalizeErrorText(state.lastBucketError) }
+        : {}),
+      ...(normalizeErrorText(state.lastCloudBundleError)
+        ? { lastCloudBundleError: normalizeErrorText(state.lastCloudBundleError) }
+        : {}),
+      ...(normalizeErrorText(state.lastBackendIngestError)
+        ? { lastBackendIngestError: normalizeErrorText(state.lastBackendIngestError) }
+        : {}),
+      ...(normalizeErrorText(state.lastError)
+        ? { lastError: normalizeErrorText(state.lastError) }
         : {}),
     }
   }
 
-  private clearErrorKind(lastError: string | undefined, kind: BackupSyncErrorKind): string | undefined {
-    if (!lastError || !lastError.startsWith(`${kind}:`)) return lastError
+  private buildErrorPatch(
+    kind: SnapshotBackupSyncErrorKind,
+    message: string,
+  ): Partial<SnapshotBackupSyncState> {
+    if (kind === 'bucket') return { lastBucketError: message }
+    if (kind === 'cloudBundle') return { lastCloudBundleError: message }
+    return { lastBackendIngestError: message }
+  }
+
+  private clearLegacyErrorKind(
+    lastError: string | undefined,
+    kind: SnapshotBackupSyncErrorKind,
+  ): string | undefined {
+    if (!lastError) return undefined
+    const legacyKind = kind === 'cloudBundle' ? 'cloud' : kind
+    if (!lastError.startsWith(`${kind}:`) && !lastError.startsWith(`${legacyKind}:`)) return lastError
     return undefined
+  }
+
+  private summarizeRemainingError(
+    state: SnapshotBackupSyncState,
+    clearedKind: SnapshotBackupSyncErrorKind,
+  ): string | undefined {
+    const backendIngest = clearedKind === 'backendIngest' ? undefined : normalizeErrorText(state.lastBackendIngestError)
+    const cloudBundle = clearedKind === 'cloudBundle' ? undefined : normalizeErrorText(state.lastCloudBundleError)
+    const bucket = clearedKind === 'bucket' ? undefined : normalizeErrorText(state.lastBucketError)
+    if (backendIngest) return `backendIngest:${backendIngest}`
+    if (cloudBundle) return `cloudBundle:${cloudBundle}`
+    if (bucket) return `bucket:${bucket}`
+    return this.clearLegacyErrorKind(state.lastError, clearedKind)
   }
 
   private readStateMap(): SnapshotBackupSyncStateMap {

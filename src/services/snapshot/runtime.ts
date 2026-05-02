@@ -1,5 +1,6 @@
 import { SnapshotBackupSync } from './backupSync'
 import { SnapshotBackupSyncStateStore } from './backupSyncState'
+import { snapshotBackendIngest } from './backendIngest'
 import { SnapshotCloudBackup } from './cloudBackup'
 import {
   arrayToCSV,
@@ -38,6 +39,7 @@ import {
   SnapshotStockRowStore,
   SnapshotStore,
 } from './store'
+import { digestJson } from './hash'
 import type {
   SnapshotBackupSyncState,
   SnapshotBackupAlignmentResult,
@@ -1309,6 +1311,7 @@ export class SnapshotRuntime {
       await this.ensurePersistentStorage()
       const effectiveBundle = bundle || this.createProjectionBundle(record)
       await this.snapshotProjectionWriter.saveBundle(effectiveBundle)
+      await this.pushSnapshotBundleToBackend(record, effectiveBundle)
       // 备份失败不会回滚主库，主库写成功仍然是唯一成功标准。
       void this.snapshotBackupSync.saveToBackups(effectiveBundle).catch((error) => {
         this.logger.warn?.('[DataLayer] Snapshot backup sync failed:', record.id, error)
@@ -1324,6 +1327,45 @@ export class SnapshotRuntime {
     } catch (error) {
       this.logger.error('[DataLayer] Snapshot write queue failed:', record.id, error)
       return false
+    }
+  }
+
+  private async pushSnapshotBundleToBackend(
+    record: SnapshotRecord,
+    bundle: SnapshotProjectionBundle,
+  ): Promise<void> {
+    if (typeof window === 'undefined') return
+    if (record.type === 'five_minute') return
+    try {
+      const dayBundle = {
+        version: 'v4' as const,
+        tradingDate: record.tradingDate,
+        items: [record],
+        frames: bundle.frame ? [bundle.frame] : [],
+        stockRows: bundle.stockRows || [],
+        sectorRows: bundle.sectorRows || [],
+      }
+      const idempotencyKey = await digestJson({
+        snapshotId: record.id,
+        tradingDate: record.tradingDate,
+        slotTime: record.slotTime,
+        timestamp: record.timestamp,
+        payload: record.payload,
+        frame: bundle.frame,
+        stockRows: bundle.stockRows,
+        sectorRows: bundle.sectorRows,
+      })
+      const response = await snapshotBackendIngest.ingestDayBundle(dayBundle, {
+        datasetId: 'dragonboard_live',
+        idempotencyKey,
+      })
+      if (!response?.ok) {
+        throw new Error(response?.status || 'snapshot_backend_ingest_failed')
+      }
+      this.backupSyncStateStore.markBackendIngested(record.tradingDate, Date.now())
+    } catch (error) {
+      this.logger.warn?.('[DataLayer] Snapshot backend ingest failed:', record.id, error)
+      this.backupSyncStateStore.markError('backendIngest', record.tradingDate, error)
     }
   }
 
@@ -1964,7 +2006,7 @@ export class SnapshotRuntime {
   }
 
   private recordCloudBundleError(tradingDate: string, error: unknown): void {
-    this.backupSyncStateStore.markError('cloud', tradingDate, error)
+    this.backupSyncStateStore.markError('cloudBundle', tradingDate, error)
   }
 
   private downloadTextFile(content: string, filename: string, mimeType: string) {

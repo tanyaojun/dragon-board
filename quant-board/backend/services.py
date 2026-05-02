@@ -65,7 +65,7 @@ def _prepare_frames_for_backtest(frames: list[dict[str, Any]], snapshot_type: st
 
 
 class BacktestService:
-    def __init__(self, session: Session):
+    def __init__(self, session: Session | None):
         self.repo = Repository(session)
 
     @staticmethod
@@ -189,7 +189,7 @@ class BacktestService:
 
 
 class OptimizationService:
-    def __init__(self, session: Session):
+    def __init__(self, session: Session | None):
         self.repo = Repository(session)
 
     def run_ranktrend(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -288,7 +288,7 @@ class OptimizationService:
 
 
 class GoldenService:
-    def __init__(self, session: Session):
+    def __init__(self, session: Session | None):
         self.repo = Repository(session)
 
     def create_baseline(self, payload: dict[str, Any]) -> dict[str, Any]:

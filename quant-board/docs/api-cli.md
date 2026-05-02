@@ -8,6 +8,8 @@ QuantBoard API 和 CLI 共用同一套服务层。API 面向轻实验台和自�
 
 前端和脚本应按 HTTP 状态判断失败，不要用 HTTP 200 + 空对象表示失败。
 
+SQLite 主库 + Supabase 备份库的完整读写、同步、恢复和冲突规则见 [database-migration-plan.md](database-migration-plan.md)。本文件只记录 API/CLI 对外合同。
+
 ## 数据集接口
 
 ### `GET /api/health`
@@ -17,6 +19,35 @@ QuantBoard API 和 CLI 共用同一套服务层。API 面向轻实验台和自�
 ```powershell
 Invoke-RestMethod http://127.0.0.1:8000/api/health
 ```
+
+返回的 `database` 会同时报告本地 SQLite 主库和 Supabase 备份库状态：
+
+- `primary.connected`：本地主库是否可用。
+- `backup.connected`：Supabase REST 备份库是否可用。
+- `mode`：当前为 `sqlite_primary_supabase_backup`。
+- `outbox`：待补偿同步队列摘要；字段以当前后端实现为准。
+
+目标合同：健康检查必须能让调用方判断主库、备份库、读回退和补偿同步是否可用。新增或改名字段时，必须同批更新本文和 [database-migration-plan.md](database-migration-plan.md)。
+
+### `POST /api/sync/push-backup`
+
+把本地 SQLite 中的数据集、快照包、回测、优化和 Golden 记录推送到 Supabase 备份库。
+
+```powershell
+Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/sync/push-backup
+```
+
+当前返回包含 `ok`、`direction`、各对象计数和 `errors`。目标合同还应能区分扫描数量、成功数量、跳过数量、失败数量和失败业务键，详见 [database-migration-plan.md](database-migration-plan.md)。
+
+### `POST /api/sync/pull-backup`
+
+把 Supabase 备份库中的 QuantBoard 备份记录拉回本地 SQLite。用于本地主库损坏、重建或后续 failover 写入能力落地后的数据收敛。
+
+```powershell
+Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/sync/pull-backup
+```
+
+当前返回包含 `ok`、`direction`、各对象计数和 `errors`。目标合同还应报告恢复数量、跳过数量、冲突数量、失败数量和需要人工处理的业务键。
 
 ### `GET /api/datasets`
 
@@ -49,6 +80,10 @@ Invoke-RestMethod http://127.0.0.1:8000/api/health
 - `leveldb`
 
 页面的“运行页桥接”最终也会把结构化 records/frames/stockRows 作为数据集写入 SQLite，回测只读 SQLite，不直接依赖 IndexedDB。
+
+如果 `SUPABASE_URL` 和 `SUPABASE_SECRET_KEY` 已配置，正式写入会先落本地 SQLite，再镜像到 Supabase 备份库。本地主库不可用时的备库写入属于后续目标能力；完成前写接口必须明确返回不可用。读路径会在本地无数据或本地不可用时按主计划回退读取备份库。
+
+新增或修改导入请求字段、快照入库 payload、同步返回字段、错误结构时，必须同批更新 [database-migration-plan.md](database-migration-plan.md)。
 
 ### `POST /api/datasets/upload`
 
@@ -294,6 +329,10 @@ cd d:\dragon-board\quant-board
 .\.venv\Scripts\python.exe -m backend.cli show-report --run-id bt_xxx
 ```
 
+### 备份同步 CLI
+
+当前公开合同以 API 同步端点为准。若后续新增 CLI 形式的 `push-backup`、`pull-backup` 或健康检查命令，必须复用同一服务层，并同步更新本文、[database-migration-plan.md](database-migration-plan.md) 和 [development-roadmap.md](development-roadmap.md)。
+
 ## 默认参数边界
 
 这里必须区分两套默认：
@@ -327,3 +366,4 @@ cd d:\dragon-board\quant-board
 - 回测和优化结果可通过 run id 重复读取。
 - `config_hash` 必须包含最终 `strategy_config` 和 `trade_config`。
 - Golden 正式验收必须使用 `source=ts_golden_import`。
+- 存储、同步、快照入库、API/CLI 请求响应字段或错误结构变更时，必须同批更新相关文档。

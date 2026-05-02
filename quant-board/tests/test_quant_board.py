@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -11,9 +12,11 @@ from backend.analysis.ranktrend import RankTrendConfig, analyze_cycle, analyze_m
 from backend.cli import build_parser, build_ranktrend_payload
 from backend.core.backtest import TradeSimulator
 from backend.data.database import SessionLocal
+from backend.data.models import BacktestRun, Dataset
 from backend.data.repository import Repository
 from backend.main import app
 from backend.services import DEFAULT_BACKTEST_STRATEGY_CONFIG
+from backend.utils import json_dumps
 
 
 def make_bundle(path: Path) -> Path:
@@ -574,6 +577,142 @@ def test_backtest_excludes_empty_hotlist_frames_but_keeps_quality_warning(tmp_pa
     assert any("自动剔除 3 个空热榜快照" in item for item in run["warnings"])
 
 
+def test_snapshot_ingest_is_idempotent_and_queues_outbox() -> None:
+    client = TestClient(app)
+    suffix = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
+    dataset_id = f"dragonboard_live_test_{suffix}"
+    idempotency_key = f"ingest-test-key-{suffix}"
+    bundle = {
+        "version": "v4",
+        "tradingDate": "2026-04-21",
+        "items": [
+            {
+                "id": "half_hour:2026-04-21:10:00",
+                "type": "half_hour",
+                "tradingDate": "2026-04-21",
+                "slotTime": "10:00",
+                "timestamp": 1776746400000,
+                "displayKey": "[半小时快照] 2026-04-21 10:00",
+                "captureMode": "real_time",
+                "source": "browser_runtime",
+                "payload": {
+                    "type": "half_hour",
+                    "tradingDate": "2026-04-21",
+                    "slotTime": "10:00",
+                    "timestamp": 1776746400000,
+                    "hotlist": [{"code": "600001", "name": "样本A", "rank": 1, "price": 10}],
+                },
+            }
+        ],
+    }
+
+    first = client.post(
+        "/api/snapshots/ingest",
+        json={
+            "datasetId": dataset_id,
+            "idempotencyKey": idempotency_key,
+            "tradingDate": "2026-04-21",
+            "bundle": bundle,
+        },
+    )
+    assert first.status_code == 200, first.text
+    first_body = first.json()
+    assert first_body["ok"] is True
+    assert first_body["deduped"] is False
+    assert first_body["outbox"]["status"] == "pending"
+    assert first_body["dataset"]["id"] == dataset_id
+    assert first_body["dataset"]["frame_count"] == 1
+    assert first_body["dataset"]["stock_row_count"] == 1
+
+    second = client.post(
+        "/api/snapshots/ingest",
+        json={
+            "datasetId": dataset_id,
+            "idempotencyKey": idempotency_key,
+            "tradingDate": "2026-04-21",
+            "bundle": bundle,
+        },
+    )
+    assert second.status_code == 200, second.text
+    assert second.json()["deduped"] is True
+
+    datasets = client.get("/api/datasets")
+    assert any(item["id"] == dataset_id and item["frame_count"] == 1 for item in datasets.json())
+
+
+def test_snapshot_ingest_summary_is_persisted_and_outbox_retry_is_due_gated() -> None:
+    client = TestClient(app)
+    suffix = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
+    dataset_id = f"dragonboard_live_summary_{suffix}"
+    idempotency_key = f"ingest-summary-key-{suffix}"
+    bundle = {
+        "version": "v4",
+        "tradingDate": "2026-04-22",
+        "items": [
+            {
+                "id": "half_hour:2026-04-22:10:00",
+                "type": "half_hour",
+                "tradingDate": "2026-04-22",
+                "slotTime": "10:00",
+                "timestamp": 1776832800000,
+                "displayKey": "[半小时快照] 2026-04-22 10:00",
+                "captureMode": "real_time",
+                "source": "browser_runtime",
+                "payload": {
+                    "type": "half_hour",
+                    "tradingDate": "2026-04-22",
+                    "slotTime": "10:00",
+                    "timestamp": 1776832800000,
+                    "hotlist": [
+                        {"code": "600001", "name": "样本A", "rank": 1, "price": 10},
+                        {"code": "600002", "name": "样本B", "rank": 2, "price": 11},
+                    ],
+                },
+            }
+        ],
+    }
+    response = client.post(
+        "/api/snapshots/ingest",
+        json={
+            "datasetId": dataset_id,
+            "idempotencyKey": idempotency_key,
+            "tradingDate": "2026-04-22",
+            "bundle": bundle,
+        },
+    )
+    assert response.status_code == 200, response.text
+
+    with SessionLocal() as session:
+        saved = session.get(Dataset, dataset_id)
+        assert saved is not None
+        assert saved.snapshot_count == 1
+        assert saved.frame_count == 1
+        assert saved.stock_row_count == 2
+        assert saved.start_date == "2026-04-22"
+        assert saved.end_date == "2026-04-22"
+
+        repo = Repository(session, enable_backup=False)
+        row = repo.mark_outbox_failed(idempotency_key, "temporary outage", delay_seconds=3600, max_retries=3)
+        assert row is not None
+        assert row.status == "retry"
+        assert row.next_retry_at is not None and row.next_retry_at > datetime.utcnow()
+        pending_keys = {item.idempotency_key for item in repo.list_pending_outbox(limit=100)}
+        assert idempotency_key not in pending_keys
+
+        row.next_retry_at = datetime.utcnow() - timedelta(seconds=1)
+        session.commit()
+        pending_keys = {item.idempotency_key for item in repo.list_pending_outbox(limit=100)}
+        assert idempotency_key in pending_keys
+
+        repo.mark_outbox_failed(idempotency_key, "still down", delay_seconds=0, max_retries=3)
+        failed = repo.mark_outbox_failed(idempotency_key, "still down", delay_seconds=0, max_retries=3)
+        assert failed is not None
+        assert failed.status == "failed"
+        assert failed.next_retry_at is None
+        pending_keys = {item.idempotency_key for item in repo.list_pending_outbox(limit=100)}
+        assert idempotency_key not in pending_keys
+
+
 def test_trade_simulator_realistic_matching_constraints() -> None:
     base_signal = {
         "snapshotId": "s1",
@@ -739,3 +878,150 @@ def test_cli_run_ranktrend_exposes_ui_backtest_parameters() -> None:
         "useIntrabarStops": True,
         "intrabarAmbiguity": "take_first",
     }
+
+
+class MemoryBackup:
+    last_error = None
+
+    def __init__(self) -> None:
+        self.datasets: dict[str, Dataset] = {}
+        self.frames: dict[str, list[dict[str, object]]] = {}
+        self.backtests: dict[str, BacktestRun] = {}
+
+    def mirror_dataset_bundle(self, dataset, records, frames, stock_rows, sector_rows):
+        self.datasets[dataset.id] = dataset
+        self.frames[dataset.id] = [
+            {
+                "payload": {"frame": frame, "stocks": [row for row in stock_rows if row.get("snapshotId") == frame.get("snapshotId")]},
+                "timestamp": frame.get("timestamp") or 0,
+            }
+            for frame in frames
+        ]
+        return True
+
+    def mirror_backtest_run(self, run):
+        self.backtests[run.id] = run
+        return True
+
+    def list_rows(self, record_type, source=None, page_size=500):
+        if record_type == "qb_dataset":
+            return [{"payload": {"dataset": Repository.dataset_to_dict(dataset)}, "display_key": dataset.id} for dataset in self.datasets.values()]
+        if record_type == "qb_snapshot_bundle":
+            return list(self.frames.get(source, []))
+        return []
+
+    def get_row(self, record_type, display_key, source=None):
+        if record_type == "qb_dataset" and display_key in self.datasets:
+            dataset = self.datasets[display_key]
+            return {"payload": {"dataset": Repository.dataset_to_dict(dataset)}, "display_key": dataset.id}
+        if record_type == "qb_backtest_run" and display_key in self.backtests:
+            run = self.backtests[display_key]
+            return {
+                "payload": {
+                    "run": {
+                        "id": run.id,
+                        "dataset_id": run.dataset_id,
+                        "strategy_name": run.strategy_name,
+                        "strategy_version": run.strategy_version,
+                        "snapshot_type": run.snapshot_type,
+                        "config_hash": run.config_hash,
+                        "random_seed": run.random_seed,
+                        "status": run.status,
+                        "request_json": run.request_json,
+                        "result_json": run.result_json,
+                        "created_at": run.created_at.isoformat(),
+                    }
+                },
+                "display_key": run.id,
+            }
+        return None
+
+    def dataset_from_row(self, row):
+        payload = row["payload"]["dataset"]
+        return Dataset(
+            id=payload["id"],
+            name=payload["name"],
+            source_type=payload["source_type"],
+            source_path=payload["source_path"],
+            db_name=payload["db_name"],
+            schema_fingerprint=payload["schema_fingerprint"],
+            snapshot_count=payload["snapshot_count"],
+            frame_count=payload["frame_count"],
+            stock_row_count=payload["stock_row_count"],
+            sector_row_count=payload["sector_row_count"],
+            start_date=payload["start_date"],
+            end_date=payload["end_date"],
+            snapshot_types_json=json_dumps(payload["snapshot_types"]),
+            metadata_json=json_dumps(payload["metadata"]),
+        )
+
+    def frames_from_rows(self, rows, snapshot_type="half_hour", start_date=None, end_date=None, include_payload=True):
+        frames = []
+        for row in rows:
+            frame = row["payload"]["frame"]
+            if frame.get("type") != snapshot_type:
+                continue
+            item = {
+                "snapshotId": frame["snapshotId"],
+                "timestamp": frame["timestamp"],
+                "tradingDate": frame["tradingDate"],
+                "slotTime": frame["slotTime"],
+                "type": frame["type"],
+                "captureMode": frame.get("captureMode", "real_time"),
+                "source": frame.get("source", "browser_runtime"),
+                "marketContext": {},
+                "stocks": row["payload"]["stocks"],
+            }
+            frames.append(item)
+        return frames
+
+    def backtest_run_from_row(self, row):
+        payload = row["payload"]["run"]
+        return BacktestRun(
+            id=payload["id"],
+            dataset_id=payload["dataset_id"],
+            strategy_name=payload["strategy_name"],
+            strategy_version=payload["strategy_version"],
+            snapshot_type=payload["snapshot_type"],
+            config_hash=payload["config_hash"],
+            random_seed=payload["random_seed"],
+            status=payload["status"],
+            request_json=payload["request_json"],
+            result_json=payload["result_json"],
+        )
+
+
+def test_repository_falls_back_to_backup_when_primary_session_is_unavailable() -> None:
+    backup = MemoryBackup()
+    repo = Repository(None, backup)
+    dataset = Dataset(
+        id="ds_backup",
+        name="backup",
+        source_type="json_bundle",
+        source_path="",
+        frame_count=1,
+        stock_row_count=1,
+        snapshot_count=1,
+        sector_row_count=0,
+        start_date="2026-04-01",
+        end_date="2026-04-01",
+        snapshot_types_json='["half_hour"]',
+        metadata_json="{}",
+        created_at=datetime.utcnow(),
+    )
+    frame = {
+        "snapshotId": "s1",
+        "type": "half_hour",
+        "tradingDate": "2026-04-01",
+        "slotTime": "10:00",
+        "timestamp": 1,
+    }
+    stock = {"snapshotId": "s1", "code": "600001", "rank": 1}
+
+    repo.save_dataset_bundle(dataset, [], [frame], [stock], [])
+
+    fallback_repo = Repository(None, backup)
+    assert fallback_repo.get_dataset("ds_backup").name == "backup"
+    frames = fallback_repo.load_frames("ds_backup", "half_hour")
+    assert frames[0]["snapshotId"] == "s1"
+    assert frames[0]["stocks"][0]["code"] == "600001"

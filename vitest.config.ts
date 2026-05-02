@@ -5,6 +5,10 @@ import vue from '@vitejs/plugin-vue'
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [vue()],
+  test: {
+    include: ['src/**/__tests__/**/*.test.ts'],
+    exclude: ['e2e/**', 'src/test/**'],
+  },
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),

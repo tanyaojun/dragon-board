@@ -20,6 +20,16 @@ class ImportDatasetRequest(BaseModel):
     dry_run: bool = Field(default=False, alias="dryRun")
 
 
+class SnapshotIngestRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    dataset_id: str | None = Field(default=None, alias="datasetId")
+    idempotency_key: str | None = Field(default=None, alias="idempotencyKey")
+    trading_date: str | None = Field(default=None, alias="tradingDate")
+    bundle: dict[str, Any]
+    source: str = Field(default="dragon_board_runtime", alias="source")
+
+
 class DatasetSummary(BaseModel):
     id: str
     name: str

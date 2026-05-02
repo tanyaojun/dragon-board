@@ -73,6 +73,7 @@ QuantBoard 的规则以 `quant-board/docs/README.md`、`quant-board/docs/AI_COLL
 - 原 `src/services/strategyBacktest` 职责已迁移到 QuantBoard Python 后端：`backend.analysis.ranktrend`、`backend.core.backtest`、`backend.services`。
 - 默认 `snapshot_type` 是 `half_hour`；`quarter_hour` 只能由用户显式选择，不能替代默认口径。
 - 回测、优化、API、CLI 和前端展示必须保留 `dataset_id`、`snapshot_type`、`strategy_version`、`config_hash`、`random_seed`。
+- QuantBoard 存储主链为 SQLite 主库 + Supabase 后端备份库；存储、同步、恢复和冲突规则以 `quant-board/docs/database-migration-plan.md` 为准。
 - Python RankTrend 输出字段必须能与 golden case 对齐。
 - 前端展示不得把 `finalSignal` 当成唯一交易结论，应展示状态、候选分层、风险、样本质量和解释。
 
@@ -179,6 +180,7 @@ QuantBoard 前端默认代理 `http://localhost:8000`，开发端口为 `5174`�
 - QuantBoard 细节写入 `quant-board/docs/`，不要散落到后端或前端 README 中。
 - 发现旧文档仍把 Dragon Board 根项目描述为回测平台时，应删除或改为当前 QuantBoard 口径。
 - 修改默认值、策略合同、API 合同或数据表字段时，必须同步更新相关专题文档。
+- 修改存储、同步、快照入库、数据库表字段、Supabase payload、恢复策略或 API/CLI 请求响应字段时，必须同批更新相关文档；QuantBoard 相关改动至少检查 `quant-board/docs/database-migration-plan.md`、`quant-board/docs/architecture.md`、`quant-board/docs/api-cli.md` 和 `quant-board/docs/AI_COLLABORATION.md`。
 
 ## 9. 测试与验收优先级
 
@@ -193,5 +195,5 @@ QuantBoard 前端默认代理 `http://localhost:8000`，开发端口为 `5174`�
 - 当前任务属于根前端、代理服务、行情桥、TdxL2Helper 还是 QuantBoard？
 - 是否有用户或其他协作者的未提交改动需要避开？
 - 当前业务口径来自哪份最新文档或源码常量？
-- 是否触碰 RankTrend golden、快照默认值、回测口径或 L2 能力边界？
+- 是否触碰 RankTrend golden、快照默认值、回测口径、存储/同步/API 合同或 L2 能力边界？
 - 应运行哪些最小验证命令？

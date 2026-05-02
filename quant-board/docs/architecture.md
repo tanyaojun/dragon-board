@@ -31,6 +31,7 @@ backend/
 1. 导入阶段
    - 输入：dragon-board 导出的 IndexedDB JSON、备份文件或后续直连读取结果。
    - 输出：`datasets`、`snapshot_records`、`snapshot_frames`、`snapshot_stock_rows`、`snapshot_sector_rows`。
+   - 写入策略：先写本地 SQLite 主库；若配置了 Supabase，则同步写入云端备份库。
 
 2. 分析阶段
    - 输入：按 `dataset_id + snapshot_type + date range` 查询的标准快照序列。
@@ -51,6 +52,38 @@ backend/
 6. 展示阶段
    - 输入：`backtest_runs`、`optimization_runs`、报告 JSON。
    - 输出：API、CLI、前端图表。
+
+## 本地主库与 Supabase 备份库
+
+本节只描述架构边界。详细实施步骤、同步接口、恢复流程、冲突策略和验收清单统一维护在 [database-migration-plan.md](database-migration-plan.md)。
+
+当前数据库模式是本地主库加云端备份库：
+
+```text
+QuantBoard API/CLI -> SQLite(primary) -> Supabase(backup)
+```
+
+规则：
+
+- SQLite 是默认主库，负责本机即时写入和低延迟读取。
+- Supabase 不暴露给 Vue 前端，只由后端使用 `SUPABASE_URL` 和 `SUPABASE_SECRET_KEY` 访问。
+- 正常写入先提交 SQLite，再把同一份业务对象镜像到 Supabase。
+- SQLite 初始化或查询失败时，读路径会回退到 Supabase 备份记录。
+- SQLite 不可用但 Supabase 可写时，关键写入切到 Supabase 是后续 M3 目标；能力完成前，写接口必须明确返回不可用，不能伪装成功。
+- `POST /api/sync/push-backup` 用于把已有 SQLite 历史数据主动推送到 Supabase。
+- 同键重复同步必须幂等；同键不同 payload/hash 必须标记冲突，不允许静默覆盖。
+
+为了兼容当前 Supabase 已存在的空表，QuantBoard 备份记录落在 `snapshots` 表中，使用 `type` 区分：
+
+- `qb_dataset`
+- `qb_snapshot_bundle`
+- `qb_backtest_run`
+- `qb_optimization_run`
+- `qb_golden_case`
+
+快照明细以 bundle 形式写入 `payload`，避免在现有 Supabase 表结构尚未完全迁移前破坏业务数据。
+
+如果后续拆分 Supabase 明细表、调整 `type` 枚举或改变 payload 结构，必须同批更新 [database-migration-plan.md](database-migration-plan.md) 和 [api-cli.md](api-cli.md)。
 
 ## 关键数据库表
 
@@ -102,6 +135,10 @@ backend/
 
 保存一次优化实验及候选参数列表。优化不是覆盖默认参数的动作，而是产生可验证候选。
 
+### sync_outbox
+
+保存主库写入成功但 Supabase 镜像尚未确认的补偿同步任务。它只服务 SQLite 主库 + Supabase 备份库并行策略，不改变业务主链；详细语义以 [database-migration-plan.md](database-migration-plan.md) 为准。
+
 ## 配置来源
 
 建议配置分三层：
@@ -111,6 +148,19 @@ backend/
 3. 请求参数：API/CLI 显式传入，优先级最高。
 
 所有最终执行配置都要写入 `request_json`，并用稳定 JSON 计算 `config_hash`。
+
+数据库相关环境变量：
+
+| 变量 | 说明 |
+| --- | --- |
+| `QUANT_BOARD_DATABASE_URL` | 本地主库连接串，默认是 `quant-board/data/warehouse/quant_board.db` |
+| `SUPABASE_URL` | Supabase 项目 URL |
+| `SUPABASE_SECRET_KEY` | 后端专用密钥，禁止放入 `VITE_` 前端变量 |
+| `QUANT_BOARD_ENABLE_SUPABASE_BACKUP` | 是否启用 Supabase 备份镜像，默认按 Supabase 配置自动启用 |
+| `QUANT_BOARD_ENABLE_BACKUP_READ_FALLBACK` | 是否启用备份读回退，默认跟随备份镜像 |
+| `QUANT_BOARD_BACKUP_TIMEOUT_SECONDS` | Supabase 请求超时时间 |
+
+存储和同步配置的语义变更属于 API/运维合同变更，必须同批更新 [database-migration-plan.md](database-migration-plan.md)、[api-cli.md](api-cli.md) 和 [AI_COLLABORATION.md](AI_COLLABORATION.md)。
 
 ## 策略边界
 

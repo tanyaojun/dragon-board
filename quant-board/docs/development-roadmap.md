@@ -11,6 +11,7 @@
 - 明确首期完整方案；
 - 补齐 docs；
 - 确认硬约束。
+- 冻结 SQLite 主库 + Supabase 备份库并行实施主计划。
 
 验收：
 
@@ -18,6 +19,7 @@
 - 文档明确 QuantBoard 是参数研究、回测、优化、交易模拟和报告展示的唯一主链。
 - 文档明确 `rankTrend` TypeScript 是 golden。
 - 文档明确默认 `snapshot_type=half_hour`。
+- [database-migration-plan.md](database-migration-plan.md) 成为存储迁移、同步接口、恢复流程和冲突规则的唯一主计划。
 
 ## Phase 1：数据导入
 
@@ -26,6 +28,7 @@
 - 实现 IndexedDB JSON 导入；
 - 写入标准数据表；
 - 能查询数据集和快照。
+- 导入链路以 SQLite 主库为准，并为 Supabase 备份镜像保留完整业务对象。
 
 任务：
 
@@ -33,6 +36,7 @@
 - 实现 schema fingerprint。
 - 实现快照、股票行、板块行投影。
 - 实现导入报告。
+- 按 [database-migration-plan.md](database-migration-plan.md) 的写入合同保留可恢复 payload 和业务键。
 - 补数据导入测试。
 
 验收：
@@ -41,6 +45,34 @@
 - `datasets` 汇总统计准确。
 - `snapshot_stock_rows` 可按 `dataset_id + snapshot_type + date range` 查询。
 - 默认查询 `half_hour`。
+- 备份镜像失败不会伪装成导入成功的完整同步，必须有结构化同步诊断。
+
+## Phase 1.5：SQLite 主库与 Supabase 备份库并行
+
+目标：
+
+- 落地 SQLite 主库 + Supabase 备份库的正常写入、补偿同步、读取回退和恢复流程。
+
+主计划：
+
+- 具体规则、接口合同、冲突策略和验收清单统一维护在 [database-migration-plan.md](database-migration-plan.md)。
+- 本路线图只记录阶段位置，不重复维护细节，避免多处口径漂移。
+
+任务：
+
+- SQLite 写入成功后镜像 Supabase。
+- 建立 `sync_outbox` 或等价补偿机制。
+- 实现 `GET /api/health` 的主备状态报告。
+- 实现 `POST /api/sync/push-backup` 和 `POST /api/sync/pull-backup`。
+- 覆盖 SQLite 不可用、Supabase 不可用、同键重复同步和同键冲突。
+
+验收：
+
+- 正常导入、Golden、回测和优化仍以 SQLite 为主链。
+- Supabase 配置存在时，关键业务对象可被备份和恢复。
+- SQLite 查询失败或本地缺失目标记录时，读路径能按主计划回退。
+- 所有失败返回结构化原因，不用空数据伪装成功。
+- 修改任何存储、同步、快照或 API/CLI 合同的代码时，同批更新对应文档。
 
 ## Phase 2：质量门禁
 
@@ -146,6 +178,7 @@
 - CLI 能导入、校验、回测。
 - API 默认 `snapshot_type=half_hour`。
 - 错误结构一致。
+- API 同步端点和健康检查字段与 [database-migration-plan.md](database-migration-plan.md) 保持一致。
 
 ## Phase 7：前端
 
@@ -214,8 +247,9 @@
 
 文档落地后，建议立即进入：
 
-1. 数据导入 service；
-2. golden case 格式和校验器；
-3. Python defaults/utils 移植。
+1. 按 [database-migration-plan.md](database-migration-plan.md) 收敛 SQLite 主库 + Supabase 备份库合同；
+2. 数据导入 service；
+3. golden case 格式和校验器；
+4. Python defaults/utils 移植。
 
-这三步完成后，再开始回测引擎，风险最低。
+这些基础完成后，再开始回测引擎，风险最低。

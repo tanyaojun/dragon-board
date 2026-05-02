@@ -18,7 +18,7 @@ function createMemoryStorage() {
 }
 
 describe('SnapshotBackupSyncStateStore', () => {
-  it('records bucket/cloud sync timestamps and clears matching errors after success', () => {
+  it('records independent bucket, cloud bundle, and backend ingest states', () => {
     const store = new SnapshotBackupSyncStateStore({
       storage: createMemoryStorage(),
       storageKey: 'snapshot-backup-sync-state',
@@ -34,14 +34,25 @@ describe('SnapshotBackupSyncStateStore', () => {
     })
     expect(store.get('2026-04-21')?.lastError).toBeUndefined()
 
-    store.markError('cloud', '2026-04-21', 'cloud_failed')
+    store.markError('backendIngest', '2026-04-21', 'ingest_failed')
+    store.markError('cloudBundle', '2026-04-21', 'cloud_failed')
     store.markCloudBundleUploaded('2026-04-21', 222)
 
     expect(store.get('2026-04-21')).toMatchObject({
       tradingDate: '2026-04-21',
       bucketSyncedAt: 111,
       cloudBundleUploadedAt: 222,
+      lastBackendIngestError: 'ingest_failed',
     })
+    expect(store.get('2026-04-21')?.lastCloudBundleError).toBeUndefined()
+    expect(store.get('2026-04-21')?.lastError).toBe('backendIngest:ingest_failed')
+
+    store.markBackendIngested('2026-04-21', 333)
+    expect(store.get('2026-04-21')).toMatchObject({
+      backendIngestedAt: 333,
+      cloudBundleUploadedAt: 222,
+    })
+    expect(store.get('2026-04-21')?.lastBackendIngestError).toBeUndefined()
     expect(store.get('2026-04-21')?.lastError).toBeUndefined()
     expect(store.getLatestCloudSyncedTradingDate()).toBe('2026-04-21')
   })

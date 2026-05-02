@@ -343,10 +343,16 @@ export interface SnapshotCoverageRepairResult {
   skipped: number
 }
 
+export type SnapshotBackupSyncErrorKind = 'bucket' | 'cloudBundle' | 'backendIngest'
+
 export interface SnapshotBackupSyncState {
   tradingDate: string
   bucketSyncedAt?: number
   cloudBundleUploadedAt?: number
+  backendIngestedAt?: number
+  lastBucketError?: string
+  lastCloudBundleError?: string
+  lastBackendIngestError?: string
   lastError?: string
 }
 

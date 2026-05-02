@@ -1,6 +1,7 @@
 from collections.abc import Generator
 
 from sqlalchemy import create_engine
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from backend.settings import get_settings
@@ -17,22 +18,58 @@ engine = create_engine(
 )
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
 _initialized = False
+_primary_available = True
+_last_primary_error: str | None = None
 
 
-def init_db() -> None:
-    global _initialized
-    if _initialized:
-        return
+def init_db() -> bool:
+    global _initialized, _primary_available, _last_primary_error
+    if _initialized and _primary_available:
+        return _primary_available
     from backend.data import models  # noqa: F401
 
-    Base.metadata.create_all(bind=engine)
-    _initialized = True
+    try:
+        Base.metadata.create_all(bind=engine)
+        _primary_available = True
+        _last_primary_error = None
+    except SQLAlchemyError as exc:
+        _primary_available = False
+        _last_primary_error = str(exc)
+        if not settings.backup_read_fallback:
+            raise
+    finally:
+        _initialized = True
+    return _primary_available
 
 
-def get_db() -> Generator[Session, None, None]:
-    init_db()
+def primary_status() -> dict[str, str | bool | None]:
+    return {
+        "configured": bool(settings.database_url),
+        "connected": init_db(),
+        "url": _redact_database_url(settings.database_url),
+        "last_error": _last_primary_error,
+    }
+
+
+def get_db() -> Generator[Session | None, None, None]:
+    if not init_db():
+        yield None
+        return
     session = SessionLocal()
     try:
         yield session
     finally:
         session.close()
+
+
+def _redact_database_url(url: str) -> str:
+    if "://" not in url:
+        return url
+    scheme, rest = url.split("://", 1)
+    if "@" not in rest:
+        return f"{scheme}://{rest}"
+    auth, host = rest.rsplit("@", 1)
+    if ":" in auth:
+        user = auth.split(":", 1)[0]
+        return f"{scheme}://{user}:***@{host}"
+    return f"{scheme}://***@{host}"
