@@ -148,10 +148,12 @@ snapshot_type = half_hour
 
 QuantBoard 当前把质量分成两层：
 
-- 可运行门槛：快照数量足够、时间顺序合法、capture mode 合法、每个正式快照至少有可用热榜行；
+- 可运行门槛：快照数量足够、时间顺序合法、capture mode 合法，并且剔除空热榜后仍有足够可交易快照；
 - 研究可信度门槛：热榜横截面行数建议不少于 `20`。低于该阈值的快照不会直接阻断回测，但会在 `qualityGate`、回测 `dataQuality` 和优化 `warnings` 中标记为 degraded。
 
 因此“质量门禁通过但仍有低热榜 warning”是允许状态，含义是结果可用于候选观察，不应直接用于严格验收或定参数。
+
+空热榜快照会在导入质量门禁中记录为问题；回测/优化运行时会自动剔除这些不可交易快照继续执行，并在报告中输出 `runtimeFilter`、`droppedEmptyHotlistSnapshots`、源快照数和实际运行快照数。
 
 ## 样本质量状态
 

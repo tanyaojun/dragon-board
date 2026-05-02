@@ -194,7 +194,7 @@ await window.quantBoardExportRankTrendGolden({
   datasetId: 'ds_xxx',
   snapshotType: 'half_hour',
   limit: 500,
-  sampleLimit: 500
+  sampleLimit: 100
 })
 ```
 

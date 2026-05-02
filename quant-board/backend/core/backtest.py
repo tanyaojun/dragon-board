@@ -1022,6 +1022,8 @@ class BacktestEngine:
         low_hotlist_count = int(stats.get("lowHotlistCount") or 0)
         empty_hotlist_count = int(stats.get("emptyHotlistCount") or 0)
         target_frames = int(stats.get("targetFrames") or sample_diagnostics.get("snapshotCount") or 0)
+        runtime_filter = gate.get("runtimeFilter") if isinstance(gate.get("runtimeFilter"), dict) else {}
+        dropped_empty_count = int(runtime_filter.get("droppedEmptyHotlistSnapshots") or 0)
         ok_share = float((sample_diagnostics.get("statusShares") or {}).get("ok") or 0)
         degraded_share = float((sample_diagnostics.get("statusShares") or {}).get("degraded") or 0)
         has_stable_macd = bool(macd_diagnostics.get("hasStableObservationBars"))
@@ -1033,11 +1035,17 @@ class BacktestEngine:
             warnings.append(f"存在 {low_hotlist_count} 个低热榜快照（低于 {threshold} 行），横截面分位和候选池排序可信度下降。")
         if empty_hotlist_count:
             warnings.append(f"存在 {empty_hotlist_count} 个空热榜快照，正式研究应重新导入或剔除。")
+        if dropped_empty_count:
+            warnings.append(f"本次回测已自动剔除 {dropped_empty_count} 个空热榜快照，仅用可交易快照继续运行。")
         if not has_stable_macd:
             warnings.append("MACD 尚未达到稳定观察窗口，MACD 相关解释只作辅助。")
 
         severity = "pass"
-        if str(gate.get("severity") or "") == "fail" or empty_hotlist_count:
+        empty_only_runtime_filtered = bool(dropped_empty_count and not any(
+            int(stats.get(key) or 0) > 0
+            for key in ("invalidCaptureMode", "duplicateSnapshotId", "nonMonotonicTimestamp", "missingCoreFieldCount")
+        ))
+        if (str(gate.get("severity") or "") == "fail" or empty_hotlist_count) and not empty_only_runtime_filtered:
             severity = "fail"
         elif warnings:
             severity = "warn"
@@ -1060,7 +1068,10 @@ class BacktestEngine:
             "researchGrade": research_grade,
             "recommendation": recommendation,
             "qualityGate": gate,
-            "snapshotCount": target_frames,
+            "snapshotCount": int(sample_diagnostics.get("snapshotCount") or 0),
+            "sourceSnapshotCount": target_frames,
+            "runtimeFilter": runtime_filter,
+            "droppedEmptyHotlistSnapshots": dropped_empty_count,
             "lowHotlistCount": low_hotlist_count,
             "emptyHotlistCount": empty_hotlist_count,
             "lowHotlistShare": share(low_hotlist_count, target_frames),

@@ -166,7 +166,8 @@ const goldenForm = reactive<GoldenValidateRequest>({
   datasetId: "",
   caseId: "rank_trend_default",
   strict: true,
-  tolerance: 0.000001
+  tolerance: 0.000001,
+  sampleLimit: 100
 });
 
 const gridInputs = reactive({
@@ -306,8 +307,11 @@ const goldenSummary = computed(() => {
   const issueCount = Number(goldenResult.value.issueCount || 0);
   const source = goldenResult.value.source === "ts_golden_import" ? "TS Golden" : "Python 自基线";
   const mode = goldenResult.value.strict === false ? "宽松" : "严格";
+  const checked = Number(goldenResult.value.checked || 0);
+  const expectedCount = Number(goldenResult.value.expectedCount || checked);
+  const sampleText = expectedCount && expectedCount !== checked ? `检查 ${checked}/${expectedCount} 条` : `检查 ${checked} 条`;
   return passed
-    ? `${source} ${mode}校验通过：${goldenResult.value.caseId || goldenForm.caseId}，检查 ${goldenResult.value.checked || 0} 条，差异 0`
+    ? `${source} ${mode}校验通过：${goldenResult.value.caseId || goldenForm.caseId}，${sampleText}，差异 0`
     : `${source} ${mode}校验未通过：差异 ${issueCount} 条，请查看 issues`;
 });
 
@@ -701,8 +705,7 @@ async function createGoldenBaseline(): Promise<void> {
   await runRequest(goldenState, () =>
     api.createGoldenBaseline({
       ...goldenForm,
-      datasetId: selectedDatasetId.value || goldenForm.datasetId,
-      sampleLimit: 500
+      datasetId: selectedDatasetId.value || goldenForm.datasetId
     })
   );
 }
@@ -983,6 +986,10 @@ onMounted(async () => {
               tolerance / 误差容忍
               <input v-model.number="goldenForm.tolerance" type="number" step="0.000001" />
             </label>
+            <label>
+              sampleLimit / 校验样本数
+              <input v-model.number="goldenForm.sampleLimit" type="number" min="1" max="5000" />
+            </label>
             <label class="check-row">
               <input v-model="goldenForm.strict" type="checkbox" />
               strict / 严格模式
@@ -1020,7 +1027,7 @@ onMounted(async () => {
           </div>
           <div class="inline-note">
             页面有两种基线：`保存当前输出为基线` 只保存 Python 当前结果，适合临时回归；`导入 TS Golden` 才是正式跨语言对齐入口。
-            请在 DragonBoard 页面控制台执行 `window.quantBoardExportRankTrendGolden(...)` 导出 TS JSON 后在这里导入。导入后继续点击 `执行校验`。
+            请在 DragonBoard 页面控制台执行 `window.quantBoardExportRankTrendGolden({ sampleLimit: {{ goldenForm.sampleLimit }} })` 导出 TS JSON 后在这里导入。导入后继续点击 `执行校验`。
           </div>
           <div :class="goldenSummaryClass">
             <strong>{{ goldenSummary }}</strong>
@@ -1533,6 +1540,14 @@ onMounted(async () => {
               <div>
                 <span>低热榜快照</span>
                 <b>{{ dataQuality.lowHotlistCount ?? 0 }}</b>
+              </div>
+              <div>
+                <span>剔除空热榜</span>
+                <b>{{ dataQuality.droppedEmptyHotlistSnapshots ?? 0 }}</b>
+              </div>
+              <div>
+                <span>运行快照</span>
+                <b>{{ dataQuality.snapshotCount ?? "-" }} / {{ dataQuality.sourceSnapshotCount ?? "-" }}</b>
               </div>
               <div>
                 <span>低热榜占比</span>

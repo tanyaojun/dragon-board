@@ -76,3 +76,4 @@ class GoldenValidateRequest(BaseModel):
     path: str | None = None
     tolerance: float = 1e-6
     strict: bool = True
+    sample_limit: int | None = Field(default=None, alias="sampleLimit")

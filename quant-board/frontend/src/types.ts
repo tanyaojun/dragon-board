@@ -159,6 +159,7 @@ export interface GoldenValidateRequest {
   caseId: string;
   strict: boolean;
   tolerance: number;
+  sampleLimit: number;
 }
 
 export interface GoldenImportPayload {

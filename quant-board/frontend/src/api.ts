@@ -87,7 +87,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload)
     }),
-  createGoldenBaseline: (payload: GoldenValidateRequest & { sampleLimit?: number }) =>
+  createGoldenBaseline: (payload: GoldenValidateRequest) =>
     requestApi<unknown>("/api/golden/baseline", {
       method: "POST",
       body: JSON.stringify(payload)

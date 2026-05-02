@@ -19,12 +19,49 @@ DEFAULT_BACKTEST_STRATEGY_CONFIG = {
     "macdSignal": 13,
 }
 
+FATAL_QUALITY_STATS = (
+    "invalidCaptureMode",
+    "duplicateSnapshotId",
+    "nonMonotonicTimestamp",
+    "missingCoreFieldCount",
+)
+
 
 def camel_get(payload: dict[str, Any], snake: str, camel: str | None = None, default: Any = None) -> Any:
     if snake in payload:
         return payload[snake]
     camel_key = camel or snake.split("_")[0] + "".join(part.title() for part in snake.split("_")[1:])
     return payload.get(camel_key, default)
+
+
+def _stock_rows_for_quality(frames: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [{"snapshotId": frame["snapshotId"]} for frame in frames for _ in frame.get("stocks", [])]
+
+
+def _prepare_frames_for_backtest(frames: list[dict[str, Any]], snapshot_type: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    gate = evaluate_snapshot_quality(frames, _stock_rows_for_quality(frames), snapshot_type=snapshot_type)
+    gate_dict = gate.to_dict()
+    if gate.passed:
+        return frames, gate_dict
+
+    stats = gate.stats or {}
+    has_empty_hotlist = int(stats.get("emptyHotlistCount") or 0) > 0
+    has_other_fatal = any(int(stats.get(key) or 0) > 0 for key in FATAL_QUALITY_STATS)
+    non_empty_frames = [frame for frame in frames if frame.get("stocks")]
+    min_snapshot_count = int(stats.get("minSnapshotCount") or 2)
+
+    if not has_empty_hotlist or has_other_fatal or len(non_empty_frames) < min_snapshot_count:
+        raise ValueError({"qualityGate": gate_dict})
+
+    dropped_frames = [frame for frame in frames if not frame.get("stocks")]
+    gate_dict["runtimeFilter"] = {
+        "reason": "empty_hotlist_snapshots_excluded",
+        "sourceTargetFrames": len(frames),
+        "usableTargetFrames": len(non_empty_frames),
+        "droppedEmptyHotlistSnapshots": len(dropped_frames),
+        "droppedSnapshotIds": [str(frame.get("snapshotId") or "") for frame in dropped_frames[:50]],
+    }
+    return non_empty_frames, gate_dict
 
 
 class BacktestService:
@@ -64,10 +101,7 @@ class BacktestService:
         )
         if not frames:
             raise ValueError(f"dataset has no frames for {snapshot_type}: {dataset_id}")
-        stock_rows = [stock for frame in frames for stock in frame.get("stocks", [])]
-        gate = evaluate_snapshot_quality(frames, [{"snapshotId": frame["snapshotId"]} for frame in frames for _ in frame.get("stocks", [])], snapshot_type=snapshot_type)
-        if not gate.passed:
-            raise ValueError({"qualityGate": gate.to_dict()})
+        run_frames, quality_gate = _prepare_frames_for_backtest(frames, snapshot_type)
 
         trade_config = {
             "initialCapital": camel_get(payload, "initial_cash", "initialCash", 1000000),
@@ -108,9 +142,9 @@ class BacktestService:
             "trade_config": trade_config,
             "strategy_config": strategy_config,
             "strategy_name": strategy_name,
-            "quality_gate": gate.to_dict(),
+            "quality_gate": quality_gate,
         }
-        result = BacktestEngine().run(frames, options)
+        result = BacktestEngine().run(run_frames, options)
         run_id = new_id("bt")
         request_meta = {
             **payload,
@@ -180,9 +214,7 @@ class OptimizationService:
         frames = self.repo.load_frames(dataset_id, snapshot_type=snapshot_type, include_payload=True)
         if not frames:
             raise ValueError(f"dataset has no frames for {snapshot_type}: {dataset_id}")
-        gate = evaluate_snapshot_quality(frames, [{"snapshotId": frame["snapshotId"]} for frame in frames for _ in frame.get("stocks", [])], snapshot_type=snapshot_type)
-        if not gate.passed:
-            raise ValueError({"qualityGate": gate.to_dict()})
+        run_frames, quality_gate = _prepare_frames_for_backtest(frames, snapshot_type)
         search_space = camel_get(payload, "search_space", "searchSpace")
         if not search_space:
             search_space = camel_get(payload, "parameter_grid", "parameterGrid", {})
@@ -195,7 +227,7 @@ class OptimizationService:
             "strategy_name": strategy_name,
             "dataset_id": dataset_id,
             "snapshot_type": snapshot_type,
-            "quality_gate": gate.to_dict(),
+            "quality_gate": quality_gate,
             "validation_mode": camel_get(payload, "validation_mode", "validationMode", "none"),
             "validation_ratio": float(camel_get(payload, "validation_ratio", "validationRatio", 0.3)),
             "validation_warmup_bars": int(camel_get(payload, "validation_warmup_bars", "validationWarmupBars", 40)),
@@ -206,7 +238,7 @@ class OptimizationService:
         }
         run_id = new_id("opt")
         request["optimization_run_id"] = run_id
-        result = Optimizer().run(frames, request)
+        result = Optimizer().run(run_frames, request)
         backtest_artifacts = result.pop("backtestArtifacts", []) or []
         for artifact in backtest_artifacts:
             artifact_request = artifact.get("request") or {}
@@ -324,6 +356,10 @@ class GoldenService:
         dataset_id = payload.get("dataset_id") or payload.get("datasetId")
         tolerance = float(payload.get("tolerance") or 1e-6)
         strict = bool(payload.get("strict", True))
+        requested_sample_limit = payload.get("sample_limit") or payload.get("sampleLimit")
+        sample_limit = int(requested_sample_limit) if requested_sample_limit is not None else None
+        if sample_limit is not None and sample_limit <= 0:
+            return {"passed": False, "caseId": case_id, "checked": 0, "issues": ["sampleLimit must be positive"]}
         if case_id:
             case = self.repo.get_golden_case(case_id)
             if not case:
@@ -342,6 +378,29 @@ class GoldenService:
             if not frames:
                 return {"passed": False, "caseId": case_id, "checked": 0, "issues": [f"dataset has no frames for {snapshot_type}: {target_dataset_id}"]}
             expected_list = self._normalize_expected_payload(expected)
+            expected_count = len(expected_list)
+            if sample_limit is not None:
+                if expected_count < sample_limit:
+                    return {
+                        "passed": False,
+                        "caseId": case_id,
+                        "datasetId": target_dataset_id,
+                        "snapshotType": snapshot_type,
+                        "source": source,
+                        "isFormalTsGolden": source == "ts_golden_import",
+                        "rankTrendConfig": rank_trend_config,
+                        "strict": strict,
+                        "checked": expected_count,
+                        "expectedCount": expected_count,
+                        "requestedSampleLimit": sample_limit,
+                        "issues": [
+                            f"golden case has only {expected_count} expected rows, but sampleLimit={sample_limit}; re-export/import a larger TS Golden"
+                        ],
+                        "issueCount": 1,
+                        "expectedPreview": expected_list[:5],
+                        "actualPreview": [],
+                    }
+                expected_list = expected_list[:sample_limit]
             actual_list = self._normalize_signals(RankTrendPythonEngine(RankTrendConfig.from_patch(rank_trend_config)).replay(frames, meta={"sampleQuality": "ok", "warnings": []})[:len(expected_list)])
             issues = self._compare(expected_list, actual_list, tolerance, strict=strict)
             return {
@@ -354,6 +413,8 @@ class GoldenService:
                 "rankTrendConfig": rank_trend_config,
                 "strict": strict,
                 "checked": len(expected_list),
+                "expectedCount": expected_count,
+                "requestedSampleLimit": sample_limit,
                 "issues": issues[:100],
                 "issueCount": len(issues),
                 "expectedPreview": expected_list[:5],

@@ -34,6 +34,7 @@ type QuantBoardBridgeResponse = {
 
 const DEFAULT_DB_NAME = 'DragonBoardData'
 const DEFAULT_LIMIT = 500
+const DEFAULT_GOLDEN_SAMPLE_LIMIT = 100
 const inFlightRequestIds = new Set<string>()
 
 type QuantBoardTsGoldenExportOptions = {
@@ -337,7 +338,9 @@ export function installQuantBoardBridge(): void {
   })
   ;(window as any).quantBoardExportRankTrendGolden = exportQuantBoardRankTrendGolden
   console.log('[QuantBoardBridge] ready for local QuantBoard runtime import')
-  console.log('[QuantBoardBridge] TS Golden export: window.quantBoardExportRankTrendGolden({ datasetId: "ds_xxx" })')
+  console.log(
+    '[QuantBoardBridge] TS Golden export: window.quantBoardExportRankTrendGolden({ datasetId: "ds_xxx", sampleLimit: 100 })',
+  )
 }
 
 export async function exportQuantBoardRankTrendGolden(
@@ -346,7 +349,7 @@ export async function exportQuantBoardRankTrendGolden(
   const dbName = options.dbName || DEFAULT_DB_NAME
   const snapshotType = options.snapshotType || DEFAULT_RANK_TREND_SNAPSHOT_TYPE
   const limit = Math.max(1, Math.min(Number(options.limit || DEFAULT_LIMIT), 5000))
-  const sampleLimit = Math.max(1, Math.min(Number(options.sampleLimit || limit), 5000))
+  const sampleLimit = Math.max(1, Math.min(Number(options.sampleLimit || DEFAULT_GOLDEN_SAMPLE_LIMIT), 5000))
   const db = await openDragonBoardDb(dbName)
 
   try {

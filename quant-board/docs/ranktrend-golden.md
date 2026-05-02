@@ -216,7 +216,7 @@ await window.quantBoardExportRankTrendGolden({
   datasetId: 'ds_xxx',
   snapshotType: 'half_hour',
   limit: 500,
-  sampleLimit: 500
+  sampleLimit: 100
 })
 ```
 
@@ -230,8 +230,11 @@ rank_trend_default.half_hour.ts-golden.json
 
 1. 选择这个 JSON 文件；
 2. 点击 `导入 TS Golden`；
-3. 点击 `执行校验`；
+3. 确认 QuantBoard Golden 页面的 `sampleLimit / 校验样本数` 与导出时一致，默认建议 `100`；
+4. 点击 `执行校验`；
 4. 结果里的 `source=ts_golden_import` 且 `passed=true` 时，才代表正式跨语言对齐通过。
+
+如果页面要求校验 `100` 条，但已导入 TS Golden 只有 `50` 条，后端会返回样本不足提示。此时需要回到 DragonBoard 控制台用更大的 `sampleLimit` 重新导出并导入。
 
 ### 手工模块导出
 

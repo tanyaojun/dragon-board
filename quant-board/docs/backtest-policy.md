@@ -150,9 +150,11 @@ MACD 死叉不会单独触发卖出。
 
 - `research_ready`：数据质量满足正式研究口径；
 - `degraded`：可用于候选观察，但低热榜、样本 OK 占比偏低或 MACD 预热不足会降低可信度；
-- `blocked`：存在空热榜、非法快照或其他阻断问题，不建议用于验收。
+- `blocked`：存在非法快照、时间倒序、重复快照或可运行快照不足等阻断问题，不建议用于验收。
 
 低热榜样本阈值当前按 DragonBoard 回放端一致口径：单个快照热榜行数低于 `20` 记为低热榜。低热榜不会直接阻断回测，但会进入顶层 `warnings`、报告页质量结论和优化实验提示。
+
+如果数据集中夹杂空热榜快照，QuantBoard 会在回测/优化运行前剔除这些不可交易快照，并在 `dataQuality.runtimeFilter`、`droppedEmptyHotlistSnapshots` 和 `warnings` 中明确记录。此类结果通常为 `degraded`，可以用于候选观察，但不应作为严格验收口径。
 
 报告里几个收益字段含义不同：
 

@@ -83,7 +83,7 @@ Invoke-RestMethod http://127.0.0.1:8000/api/health
   "caseId": "rank_trend_default",
   "datasetId": "ds_xxx",
   "snapshotType": "half_hour",
-  "sampleLimit": 500
+  "sampleLimit": 100
 }
 ```
 

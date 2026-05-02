@@ -483,7 +483,9 @@ def normalize_stage(previous: str | None, raw: str, current_percentile: float, m
             return "reversal"
         if raw == "cooling":
             return "cooling" if cooling_ready else "reversal"
-        return "reversal" if weakening else "crowded"
+        if raw in ("expansion", "ignition"):
+            return "reversal" if weakening else "crowded"
+        return "crowded"
     if previous == "reversal":
         if raw in ("cooling", "reversal"):
             return raw

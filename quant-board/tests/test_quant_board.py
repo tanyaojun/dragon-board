@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from backend.analysis.ranktrend import RankTrendConfig, analyze_momentum_signals, analyze_risk, analyze_technical
+from backend.analysis.ranktrend import RankTrendConfig, analyze_cycle, analyze_momentum_signals, analyze_risk, analyze_technical
 from backend.cli import build_parser, build_ranktrend_payload
 from backend.core.backtest import TradeSimulator
 from backend.data.database import SessionLocal
@@ -60,6 +60,16 @@ def make_bundle(path: Path) -> Path:
         }
         records.append(record)
     bundle = path / "bundle.json"
+    bundle.write_text(json.dumps({"records": records}, ensure_ascii=False), encoding="utf-8")
+    return bundle
+
+
+def make_bundle_with_empty_hotlist(path: Path) -> Path:
+    bundle = make_bundle(path)
+    data = json.loads(bundle.read_text(encoding="utf-8"))
+    records = data["records"]
+    for index in {8, 15, 22}:
+        records[index]["payload"]["hotlist"] = []
     bundle.write_text(json.dumps({"records": records}, ensure_ascii=False), encoding="utf-8")
     return bundle
 
@@ -165,6 +175,73 @@ def test_ranktrend_risk_severity_clamps_before_stage_multiplier() -> None:
 
     assert risk["divergence"]["severity"] == pytest.approx(0.15166666666666667)
     assert risk["pressure"] == pytest.approx(0.0637)
+
+
+def test_ranktrend_cycle_crowded_raw_stage_persists_like_typescript() -> None:
+    ranks = [
+        147,
+        186,
+        192,
+        189,
+        166,
+        150,
+        53,
+        4,
+        3,
+        3,
+        8,
+        7,
+        7,
+        8,
+        8,
+        10,
+        11,
+        10,
+        12,
+        20,
+        30,
+        31,
+        20,
+        14,
+        16,
+        8,
+        5,
+    ]
+    percentiles = [
+        45.52238805970149,
+        20.600858369098713,
+        30.79710144927536,
+        27.413127413127413,
+        36.29343629343629,
+        51.77993527508091,
+        76.78571428571429,
+        98.45360824742268,
+        96.0,
+        99.10313901345292,
+        97.4910394265233,
+        98.07073954983923,
+        97.32142857142857,
+        96.72897196261681,
+        97.21115537848605,
+        96.34146341463415,
+        95.63318777292577,
+        96.08695652173913,
+        95.23809523809523,
+        92.08333333333333,
+        87.71186440677965,
+        87.28813559322035,
+        92.14876033057851,
+        94.6058091286307,
+        93.44978165938865,
+        96.875,
+        98.23008849557522,
+    ]
+
+    cycle = analyze_cycle(ranks, percentiles)
+
+    assert cycle["rawStage"] == "crowded"
+    assert cycle["stage"] == "cooling"
+    assert cycle["previousStage"] == "cooling"
 
 
 def test_import_backtest_optimize_and_golden(tmp_path: Path) -> None:
@@ -426,6 +503,24 @@ def test_import_backtest_optimize_and_golden(tmp_path: Path) -> None:
     assert validated_golden.json()["passed"] is True
     assert "expectedPreview" in validated_golden.json()
 
+    limited_golden = client.post(
+        "/api/golden/validate",
+        json={"caseId": "rank_trend_default", "datasetId": dataset["id"], "tolerance": 1e-6, "sampleLimit": 3},
+    )
+    assert limited_golden.status_code == 200
+    assert limited_golden.json()["checked"] == 3
+    assert limited_golden.json()["expectedCount"] == len(golden_signals)
+    assert limited_golden.json()["passed"] is True
+
+    insufficient_golden = client.post(
+        "/api/golden/validate",
+        json={"caseId": "rank_trend_default", "datasetId": dataset["id"], "tolerance": 1e-6, "sampleLimit": 6},
+    )
+    assert insufficient_golden.status_code == 200
+    assert insufficient_golden.json()["passed"] is False
+    assert insufficient_golden.json()["checked"] == len(golden_signals)
+    assert "re-export/import a larger TS Golden" in insufficient_golden.json()["issues"][0]
+
     dry_run = client.post(
         "/api/datasets/import",
         json={
@@ -447,6 +542,36 @@ def test_import_backtest_optimize_and_golden(tmp_path: Path) -> None:
     )
     assert empty_browser_import.status_code == 400
     assert "browser_bridge" in empty_browser_import.json()["detail"]
+
+
+def test_backtest_excludes_empty_hotlist_frames_but_keeps_quality_warning(tmp_path: Path) -> None:
+    client = TestClient(app)
+    bundle = make_bundle_with_empty_hotlist(tmp_path)
+
+    imported = client.post(
+        "/api/datasets/import",
+        json={"sourceType": "json_bundle", "sourcePath": str(bundle), "name": "empty-hotlist", "snapshotTypes": ["half_hour"]},
+    )
+    assert imported.status_code == 200, imported.text
+    dataset = imported.json()
+    assert dataset["qualityGate"]["passed"] is False
+    assert dataset["qualityGate"]["stats"]["emptyHotlistCount"] == 3
+
+    response = client.post(
+        "/api/backtests/rank-trend",
+        json={"datasetId": dataset["id"], "snapshotType": "half_hour", "randomSeed": 20260430},
+    )
+    assert response.status_code == 200, response.text
+    run = response.json()
+    data_quality = run["dataQuality"]
+    assert data_quality["severity"] == "warn"
+    assert data_quality["researchGrade"] == "degraded"
+    assert data_quality["emptyHotlistCount"] == 3
+    assert data_quality["droppedEmptyHotlistSnapshots"] == 3
+    assert data_quality["snapshotCount"] == dataset["frame_count"] - 3
+    assert data_quality["sourceSnapshotCount"] == dataset["frame_count"]
+    assert data_quality["runtimeFilter"]["reason"] == "empty_hotlist_snapshots_excluded"
+    assert any("自动剔除 3 个空热榜快照" in item for item in run["warnings"])
 
 
 def test_trade_simulator_realistic_matching_constraints() -> None:
