@@ -13,6 +13,7 @@ import type { StockAlert, AlertStats } from '../types'
 import type { AlertType } from '../types/core'
 import { apiService } from './apiService'
 import { SnapshotRuntime } from './snapshot/runtime'
+import { FORMAL_SNAPSHOT_READ_POLICY } from './snapshot/readPolicy'
 import { getExpectedSlots, slotTimeToMinutes } from './snapshot/schedule'
 import type {
   SnapshotBackupSyncState,
@@ -90,47 +91,6 @@ const LEGACY_LEVEL_ROLE_MAP: Record<string, LeaderRole> = {
 }
 
 const FORMAL_SQLITE_SNAPSHOT_TYPES: SnapshotType[] = ['quarter_hour', 'half_hour', 'hourly', 'daily']
-const SNAPSHOT_INDEXEDDB_COUNT_STORES = [
-  'snapshots',
-  'snapshot_frames',
-  'snapshot_stock_rows',
-  'snapshot_sector_rows',
-] as const
-type SnapshotIndexedDbCountStore = (typeof SNAPSHOT_INDEXEDDB_COUNT_STORES)[number]
-type SnapshotCountMap = Record<SnapshotIndexedDbCountStore, number>
-
-interface SnapshotIndexedDbSqliteMigrationBatch {
-  index: number
-  snapshotCount: number
-  frameCount: number
-  stockRowCount: number
-  sectorRowCount: number
-  imported: number
-  skipped: number
-  deduped: boolean
-  ok: boolean
-  error?: string
-}
-
-interface SnapshotIndexedDbSqliteMigrationResult {
-  ok: boolean
-  datasetId: string
-  dryRun: boolean
-  sourceCounts: SnapshotCountMap
-  scanned: number
-  imported: number
-  skipped: number
-  batches: SnapshotIndexedDbSqliteMigrationBatch[]
-  validation?: {
-    ok: boolean
-    datasetId: string
-    indexedDb: SnapshotCountMap
-    sqlite: SnapshotCountMap
-    diffs: Record<string, { indexedDb: number; sqlite: number; delta: number }>
-    source: 'sqlite'
-  }
-  errors: string[]
-}
 
 interface LeaderLookupRecord {
   code: string
@@ -2197,16 +2157,11 @@ class DataLayer {
 
   async listSnapshots(options: SnapshotQueryOptions = {}): Promise<SnapshotRecord[]> {
     const remote = await this.listRemoteSnapshots(options)
-    if (remote) {
-      return this.filterRemoteSnapshotsByCoverage(remote, options)
-    }
-    return this.snapshotRuntime.listSnapshots(options)
+    return this.filterRemoteSnapshotsByCoverage(remote, options)
   }
 
   async getSnapshotById(id: string): Promise<SnapshotRecord | null> {
-    const remote = await this.getRemoteSnapshotById(id)
-    if (remote !== undefined) return remote
-    return this.snapshotRuntime.getSnapshotById(id)
+    return (await this.getRemoteSnapshotById(id)) || null
   }
 
   async getTradingDateSnapshot(type: SnapshotType, tradingDate: string): Promise<SnapshotRecord | null> {
@@ -2218,26 +2173,19 @@ class DataLayer {
     options: SnapshotFrameQueryOptions | SnapshotQueryOptions = {},
   ): Promise<SnapshotFrameRow[]> {
     const remoteBundles = await this.listRemoteSnapshotFrameBundles(options as SnapshotFrameQueryOptions)
-    if (remoteBundles) {
-      return remoteBundles.map((bundle) => this.snapshotFrameRowFromBundle(bundle))
-    }
-    return this.snapshotRuntime.listSnapshotFrames(options as SnapshotFrameQueryOptions)
+    return remoteBundles.map((bundle) => this.snapshotFrameRowFromBundle(bundle))
   }
 
   async listSnapshotStockRows(
     options: SnapshotStockRowQueryOptions | SnapshotQueryOptions = {},
   ): Promise<SnapshotStockRow[]> {
-    const remote = await this.listRemoteSnapshotStockRows(options as SnapshotStockRowQueryOptions)
-    if (remote) return remote
-    return this.snapshotRuntime.listSnapshotStockRows(options as SnapshotStockRowQueryOptions)
+    return this.listRemoteSnapshotStockRows(options as SnapshotStockRowQueryOptions)
   }
 
   async listSnapshotSectorRows(
     options: SnapshotSectorRowQueryOptions | SnapshotQueryOptions = {},
   ): Promise<SnapshotSectorRow[]> {
-    const remote = await this.listRemoteSnapshotSectorRows(options as SnapshotSectorRowQueryOptions)
-    if (remote) return remote
-    return this.snapshotRuntime.listSnapshotSectorRows(options as SnapshotSectorRowQueryOptions)
+    return this.listRemoteSnapshotSectorRows(options as SnapshotSectorRowQueryOptions)
   }
 
   async getSnapshotProjectionMeta(): Promise<SnapshotProjectionMeta | null> {
@@ -2278,7 +2226,64 @@ class DataLayer {
     codes: string[],
     options?: { anchorTradingDate?: string; lookbackDays?: number },
   ): Promise<Map<string, number[]>> {
-    return this.snapshotRuntime.getStockVolumeHistory(codes, options)
+    const requestedCodes = Array.from(new Set((codes || []).map((code) => String(code || '').trim()).filter(Boolean)))
+    const result = new Map<string, number[]>()
+    if (requestedCodes.length === 0) return result
+
+    const lookbackDays = Math.max(1, Math.min(10, Number(options?.lookbackDays) || 3))
+    const batchSize = 50
+
+    for (let index = 0; index < requestedCodes.length; index += batchSize) {
+      const batchCodes = requestedCodes.slice(index, index + batchSize)
+      const batchCodeSet = new Set(batchCodes)
+      const batchRows = (await this.listRemoteSnapshotStockRows({
+        type: 'daily',
+        codes: batchCodes,
+        beforeTradingDate: options?.anchorTradingDate,
+        allowedCaptureModes: FORMAL_SNAPSHOT_READ_POLICY.allowedCaptureModes,
+        excludeRestored: FORMAL_SNAPSHOT_READ_POLICY.excludeRestored,
+        sort: 'desc',
+      })) || []
+      if (!batchRows.length) continue
+
+      const codeVolumes = new Map<string, number[]>()
+      const seenDatesByCode = new Map<string, Set<string>>()
+      const completedCodes = new Set<string>()
+
+      for (const row of batchRows) {
+        const code = String(row.code || '')
+        if (!code || !batchCodeSet.has(code) || completedCodes.has(code)) continue
+
+        const tradingDate = String(row.tradingDate || '')
+        const volume = Number(row.volume)
+        if (!tradingDate || !Number.isFinite(volume) || volume <= 0) continue
+
+        const seenDates = seenDatesByCode.get(code) || new Set<string>()
+        if (seenDates.has(tradingDate)) continue
+        seenDates.add(tradingDate)
+        seenDatesByCode.set(code, seenDates)
+
+        const volumes = codeVolumes.get(code) || []
+        volumes.push(volume)
+        codeVolumes.set(code, volumes)
+        if (volumes.length >= lookbackDays) {
+          completedCodes.add(code)
+        }
+
+        if (completedCodes.size === batchCodes.length) {
+          break
+        }
+      }
+
+      for (const code of batchCodes) {
+        const volumes = codeVolumes.get(code)
+        if (volumes && volumes.length > 0) {
+          result.set(code, volumes.slice(0, lookbackDays))
+        }
+      }
+    }
+
+    return result
   }
 
   // 正式聚合读口：把 frame/stock/sector 三张读模型表拼成消费方可直接使用的 bundle。
@@ -2378,8 +2383,7 @@ class DataLayer {
 
   private async listRemoteSnapshotFrameBundles(
     options: SnapshotFrameQueryOptions = {},
-  ): Promise<SnapshotFrameBundle[] | null> {
-    if (!this.shouldUseSqliteSnapshotRead(options as SnapshotQueryOptions)) return null
+  ): Promise<SnapshotFrameBundle[]> {
     try {
       const query = new URLSearchParams()
       const snapshotType = options.type || options.types?.[0] || 'half_hour'
@@ -2462,8 +2466,7 @@ class DataLayer {
     return `snapshot_ingest:${hash}`
   }
 
-  private async listRemoteSnapshots(options: SnapshotQueryOptions = {}): Promise<SnapshotRecord[] | null> {
-    if (!this.shouldUseSqliteSnapshotRead(options)) return null
+  private async listRemoteSnapshots(options: SnapshotQueryOptions = {}): Promise<SnapshotRecord[]> {
     try {
       const query = this.buildSnapshotRecordQuery(options)
       const data = await this.getQuantBoardPayload(`/api/snapshots/records?${query.toString()}`, 15000)
@@ -2475,8 +2478,8 @@ class DataLayer {
     }
   }
 
-  private async getRemoteSnapshotById(id: string): Promise<SnapshotRecord | null | undefined> {
-    if (!id || id.startsWith('five_minute:')) return undefined
+  private async getRemoteSnapshotById(id: string): Promise<SnapshotRecord | null> {
+    if (!id) return null
     try {
       const data = await this.getQuantBoardPayload(`/api/snapshots/records/${encodeURIComponent(id)}`, 10000)
       return data?.record ? this.normalizeRemoteSnapshotRecord(data.record) : null
@@ -2488,8 +2491,7 @@ class DataLayer {
 
   private async listRemoteSnapshotStockRows(
     options: SnapshotStockRowQueryOptions = {},
-  ): Promise<SnapshotStockRow[] | null> {
-    if (!this.shouldUseSqliteSnapshotRead(options as SnapshotQueryOptions)) return null
+  ): Promise<SnapshotStockRow[]> {
     try {
       const query = this.buildSnapshotRowQuery(options)
       if (options.code) query.set('code', options.code)
@@ -2506,8 +2508,7 @@ class DataLayer {
 
   private async listRemoteSnapshotSectorRows(
     options: SnapshotSectorRowQueryOptions = {},
-  ): Promise<SnapshotSectorRow[] | null> {
-    if (!this.shouldUseSqliteSnapshotRead(options as SnapshotQueryOptions)) return null
+  ): Promise<SnapshotSectorRow[]> {
     try {
       const query = this.buildSnapshotRowQuery(options)
       if (options.entityType) query.set('entity_type', options.entityType)
@@ -2534,11 +2535,6 @@ class DataLayer {
       throwOnHttpError: true,
     })
     return response && typeof response === 'object' && 'data' in response ? (response as any).data : response
-  }
-
-  private shouldUseSqliteSnapshotRead(options: SnapshotQueryOptions = {}): boolean {
-    const requested = this.resolveRequestedSnapshotTypes(options)
-    return requested.length === 0 || requested.every((type) => FORMAL_SQLITE_SNAPSHOT_TYPES.includes(type))
   }
 
   private resolveRequestedSnapshotTypes(options: SnapshotQueryOptions = {}): SnapshotType[] {
@@ -2684,241 +2680,6 @@ class DataLayer {
     } as SnapshotSectorRow
   }
 
-  private createEmptySnapshotCounts(): SnapshotCountMap {
-    return {
-      snapshots: 0,
-      snapshot_frames: 0,
-      snapshot_stock_rows: 0,
-      snapshot_sector_rows: 0,
-    }
-  }
-
-  private openIndexedDbForSnapshotCounts(): Promise<IDBDatabase> {
-    return new Promise((resolve, reject) => {
-      const request = indexedDB.open(this.PRIMARY_DB_NAME)
-      request.onsuccess = () => resolve(request.result)
-      request.onerror = () => reject(request.error || new Error(`open IndexedDB failed:${this.PRIMARY_DB_NAME}`))
-      request.onupgradeneeded = () => {
-        request.transaction?.abort()
-        reject(new Error(`IndexedDB database requires upgrade:${this.PRIMARY_DB_NAME}`))
-      }
-    })
-  }
-
-  private countIndexedDbStore(db: IDBDatabase, storeName: SnapshotIndexedDbCountStore): Promise<number> {
-    if (!db.objectStoreNames.contains(storeName)) return Promise.resolve(0)
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(storeName, 'readonly')
-      const store = transaction.objectStore(storeName)
-      const request = store.count()
-      request.onsuccess = () => resolve(Number(request.result) || 0)
-      request.onerror = () => reject(request.error || new Error(`count IndexedDB store failed:${storeName}`))
-      transaction.onerror = () => reject(transaction.error || new Error(`IndexedDB transaction failed:${storeName}`))
-    })
-  }
-
-  private readIndexedDbStoreAll<T>(db: IDBDatabase, storeName: SnapshotIndexedDbCountStore): Promise<T[]> {
-    if (!db.objectStoreNames.contains(storeName)) return Promise.resolve([])
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(storeName, 'readonly')
-      const store = transaction.objectStore(storeName)
-      const request = store.getAll()
-      request.onsuccess = () => resolve(Array.isArray(request.result) ? (request.result as T[]) : [])
-      request.onerror = () => reject(request.error || new Error(`read IndexedDB store failed:${storeName}`))
-      transaction.onerror = () => reject(transaction.error || new Error(`IndexedDB transaction failed:${storeName}`))
-    })
-  }
-
-  private async readIndexedDbSnapshotMigrationRows(): Promise<{
-    records: SnapshotRecord[]
-    frames: SnapshotFrameRow[]
-    stockRows: SnapshotStockRow[]
-    sectorRows: SnapshotSectorRow[]
-    counts: SnapshotCountMap
-  }> {
-    if (typeof indexedDB === 'undefined') {
-      return {
-        records: [],
-        frames: [],
-        stockRows: [],
-        sectorRows: [],
-        counts: this.createEmptySnapshotCounts(),
-      }
-    }
-    const db = await this.openIndexedDbForSnapshotCounts()
-    try {
-      const [records, frames, stockRows, sectorRows] = await Promise.all([
-        this.readIndexedDbStoreAll<SnapshotRecord>(db, 'snapshots'),
-        this.readIndexedDbStoreAll<SnapshotFrameRow>(db, 'snapshot_frames'),
-        this.readIndexedDbStoreAll<SnapshotStockRow>(db, 'snapshot_stock_rows'),
-        this.readIndexedDbStoreAll<SnapshotSectorRow>(db, 'snapshot_sector_rows'),
-      ])
-      return {
-        records,
-        frames,
-        stockRows,
-        sectorRows,
-        counts: {
-          snapshots: records.length,
-          snapshot_frames: frames.length,
-          snapshot_stock_rows: stockRows.length,
-          snapshot_sector_rows: sectorRows.length,
-        },
-      }
-    } finally {
-      db.close()
-    }
-  }
-
-  private buildSnapshotMigrationBatches(
-    rows: {
-      records: SnapshotRecord[]
-      frames: SnapshotFrameRow[]
-      stockRows: SnapshotStockRow[]
-      sectorRows: SnapshotSectorRow[]
-    },
-    batchSize: number,
-  ): Array<{
-    records: SnapshotRecord[]
-    frames: SnapshotFrameRow[]
-    stockRows: SnapshotStockRow[]
-    sectorRows: SnapshotSectorRow[]
-    snapshotIds: string[]
-  }> {
-    const records = rows.records
-      .filter((record) => record?.id && record.type !== 'five_minute')
-      .sort((left, right) => Number(left.timestamp || 0) - Number(right.timestamp || 0))
-    const frameBySnapshotId = new Map(
-      rows.frames
-        .filter((frame) => frame?.snapshotId || frame?.id)
-        .map((frame) => [String(frame.snapshotId || frame.id), frame]),
-    )
-    const stockRowsBySnapshotId = new Map<string, SnapshotStockRow[]>()
-    rows.stockRows.forEach((row) => {
-      const snapshotId = String(row?.snapshotId || '')
-      if (!snapshotId) return
-      const bucket = stockRowsBySnapshotId.get(snapshotId) || []
-      bucket.push(row)
-      stockRowsBySnapshotId.set(snapshotId, bucket)
-    })
-    const sectorRowsBySnapshotId = new Map<string, SnapshotSectorRow[]>()
-    rows.sectorRows.forEach((row) => {
-      const snapshotId = String(row?.snapshotId || '')
-      if (!snapshotId) return
-      const bucket = sectorRowsBySnapshotId.get(snapshotId) || []
-      bucket.push(row)
-      sectorRowsBySnapshotId.set(snapshotId, bucket)
-    })
-
-    const batches: Array<{
-      records: SnapshotRecord[]
-      frames: SnapshotFrameRow[]
-      stockRows: SnapshotStockRow[]
-      sectorRows: SnapshotSectorRow[]
-      snapshotIds: string[]
-    }> = []
-    const effectiveBatchSize = Math.max(1, Math.min(100, Math.floor(batchSize) || 25))
-
-    for (let index = 0; index < records.length; index += effectiveBatchSize) {
-      const batchRecords = records.slice(index, index + effectiveBatchSize)
-      const snapshotIds = batchRecords.map((record) => record.id)
-      const frames = snapshotIds
-        .map((snapshotId) => frameBySnapshotId.get(snapshotId))
-        .filter((frame): frame is SnapshotFrameRow => !!frame)
-      batches.push({
-        records: batchRecords,
-        frames,
-        stockRows: snapshotIds.flatMap((snapshotId) => stockRowsBySnapshotId.get(snapshotId) || []),
-        sectorRows: snapshotIds.flatMap((snapshotId) => sectorRowsBySnapshotId.get(snapshotId) || []),
-        snapshotIds,
-      })
-    }
-
-    return batches
-  }
-
-  private async importIndexedDbSnapshotBatchToSqlite(params: {
-    datasetId: string
-    batch: {
-      records: SnapshotRecord[]
-      frames: SnapshotFrameRow[]
-      stockRows: SnapshotStockRow[]
-      sectorRows: SnapshotSectorRow[]
-      snapshotIds: string[]
-    }
-    batchIndex: number
-    dryRun: boolean
-  }): Promise<SnapshotIndexedDbSqliteMigrationBatch> {
-    const idempotencyKey = await this.digestIndexedDbSnapshotMigrationBatch(
-      params.datasetId,
-      params.batch.snapshotIds,
-    )
-    const content = {
-      version: 'indexeddb-v4',
-      records: params.batch.records,
-      frames: params.batch.frames,
-      stockRows: params.batch.stockRows,
-      sectorRows: params.batch.sectorRows,
-      metadata: {
-        source: 'dragon_board_indexeddb',
-        batchIndex: params.batchIndex,
-      },
-    }
-    const response = await apiService.post<any>(
-      '/api/migrations/snapshots/import-json',
-      {
-        datasetId: params.datasetId,
-        source: 'dragon_board_indexeddb_migration',
-        name: 'DragonBoard IndexedDB Migration',
-        idempotencyKey,
-        content,
-        dryRun: params.dryRun,
-      },
-      {
-        context: 'quant-board',
-        priority: 'high',
-        timeout: 120000,
-        retries: 0,
-        cache: false,
-        throwOnHttpError: true,
-      },
-    )
-    const data = response && typeof response === 'object' && 'data' in response ? (response as any).data : response
-    const report = data?.report || {}
-    return {
-      index: params.batchIndex,
-      snapshotCount: params.batch.records.length,
-      frameCount: params.batch.frames.length,
-      stockRowCount: params.batch.stockRows.length,
-      sectorRowCount: params.batch.sectorRows.length,
-      imported: Number(report.imported || 0),
-      skipped: Number(report.skipped || 0),
-      deduped: Boolean(data?.deduped),
-      ok: Boolean(data?.ok),
-      error: Array.isArray(report.errors) && report.errors.length > 0 ? report.errors.join('; ') : undefined,
-    }
-  }
-
-  private async digestIndexedDbSnapshotMigrationBatch(
-    datasetId: string,
-    snapshotIds: string[],
-  ): Promise<string> {
-    const payload = JSON.stringify({
-      datasetId,
-      snapshotIds,
-    })
-    if (typeof crypto === 'undefined' || !crypto.subtle) {
-      const first = snapshotIds[0] || ''
-      const last = snapshotIds[snapshotIds.length - 1] || ''
-      return `migration:indexeddb:${datasetId}:${snapshotIds.length}:${first}:${last}`.slice(0, 160)
-    }
-    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(payload))
-    const hash = Array.from(new Uint8Array(digest))
-      .map((byte) => byte.toString(16).padStart(2, '0'))
-      .join('')
-    return `migration:indexeddb:${datasetId}:${hash}`.slice(0, 160)
-  }
-
   private normalizeRemoteSnapshotFrameBundle(frame: any): SnapshotFrameBundle {
     const rows = Array.isArray(frame.rows) ? frame.rows : Array.isArray(frame.hotlist) ? frame.hotlist : []
     const sectors = Array.isArray(frame.sectors) ? frame.sectors : []
@@ -3048,130 +2809,6 @@ class DataLayer {
 
   async getSnapshotHealthOverview(tradingDate?: string): Promise<SnapshotHealthOverview> {
     return this.snapshotRuntime.getSnapshotHealthOverview(tradingDate)
-  }
-
-  async getIndexedDbSnapshotCounts(): Promise<SnapshotCountMap> {
-    const empty = this.createEmptySnapshotCounts()
-    if (typeof indexedDB === 'undefined') return empty
-    const db = await this.openIndexedDbForSnapshotCounts()
-    try {
-      const entries = await Promise.all(
-        SNAPSHOT_INDEXEDDB_COUNT_STORES.map(async (storeName) => [
-          storeName,
-          await this.countIndexedDbStore(db, storeName),
-        ] as const),
-      )
-      return Object.fromEntries(entries) as SnapshotCountMap
-    } finally {
-      db.close()
-    }
-  }
-
-  async validateSnapshotIndexedDbSqliteCounts(datasetId?: string | null): Promise<{
-    ok: boolean
-    datasetId: string
-    indexedDb: SnapshotCountMap
-    sqlite: SnapshotCountMap
-    diffs: Record<string, { indexedDb: number; sqlite: number; delta: number }>
-    source: 'sqlite'
-  }> {
-    const indexedDbCounts = await this.getIndexedDbSnapshotCounts()
-    const payload: { datasetId?: string; indexedDbCounts: SnapshotCountMap } = {
-      indexedDbCounts,
-    }
-    if (datasetId?.trim()) {
-      payload.datasetId = datasetId.trim()
-    }
-    const response = await apiService.post<any>(
-      '/api/snapshots/validate-indexeddb-counts',
-      payload,
-      {
-        context: 'quant-board',
-        priority: 'medium',
-        timeout: 15000,
-        retries: 0,
-        cache: false,
-        throwOnHttpError: true,
-      },
-    )
-    const data = response && typeof response === 'object' && 'data' in response ? (response as any).data : response
-    return {
-      ok: Boolean(data?.ok),
-      datasetId: String(data?.datasetId || datasetId || ''),
-      indexedDb: { ...this.createEmptySnapshotCounts(), ...(data?.indexedDb || indexedDbCounts) },
-      sqlite: { ...this.createEmptySnapshotCounts(), ...(data?.sqlite || {}) },
-      diffs: data?.diffs || {},
-      source: 'sqlite',
-    }
-  }
-
-  async migrateIndexedDbSnapshotsToSqlite(options?: {
-    datasetId?: string
-    batchSize?: number
-    dryRun?: boolean
-    validate?: boolean
-  }): Promise<SnapshotIndexedDbSqliteMigrationResult> {
-    const datasetId = options?.datasetId?.trim() || 'dragonboard_live'
-    const dryRun = options?.dryRun === true
-    const validate = options?.validate !== false
-    const { records, frames, stockRows, sectorRows, counts } = await this.readIndexedDbSnapshotMigrationRows()
-    const batches = this.buildSnapshotMigrationBatches(
-      { records, frames, stockRows, sectorRows },
-      options?.batchSize || 20,
-    )
-    const batchReports: SnapshotIndexedDbSqliteMigrationBatch[] = []
-    const errors: string[] = []
-
-    for (let index = 0; index < batches.length; index += 1) {
-      try {
-        const report = await this.importIndexedDbSnapshotBatchToSqlite({
-          datasetId,
-          batch: batches[index],
-          batchIndex: index + 1,
-          dryRun,
-        })
-        batchReports.push(report)
-        if (!report.ok && report.error) {
-          errors.push(`batch ${index + 1}: ${report.error}`)
-        }
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
-        errors.push(`batch ${index + 1}: ${message}`)
-        batchReports.push({
-          index: index + 1,
-          snapshotCount: batches[index].records.length,
-          frameCount: batches[index].frames.length,
-          stockRowCount: batches[index].stockRows.length,
-          sectorRowCount: batches[index].sectorRows.length,
-          imported: 0,
-          skipped: 0,
-          deduped: false,
-          ok: false,
-          error: message,
-        })
-      }
-    }
-
-    let validation: SnapshotIndexedDbSqliteMigrationResult['validation']
-    if (!dryRun && validate) {
-      validation = await this.validateSnapshotIndexedDbSqliteCounts(datasetId)
-      if (!validation.ok) {
-        errors.push('IndexedDB and SQLite counts are still different after migration')
-      }
-    }
-
-    return {
-      ok: errors.length === 0 && (dryRun || validation?.ok === true || validate === false),
-      datasetId,
-      dryRun,
-      sourceCounts: counts,
-      scanned: batches.reduce((total, batch) => total + batch.snapshotIds.length, 0),
-      imported: batchReports.reduce((total, batch) => total + batch.imported, 0),
-      skipped: batchReports.reduce((total, batch) => total + batch.skipped, 0),
-      batches: batchReports,
-      validation,
-      errors,
-    }
   }
 
   async restoreSnapshotsFromBackup(options?: {

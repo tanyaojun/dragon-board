@@ -187,11 +187,11 @@ Invoke-RestMethod 'http://127.0.0.1:8000/api/snapshots/frames?dataset_id=dragonb
 - `sort=asc|desc`。
 - `limit`。
 
-返回 `dataset`、`frames`、`count` 和 `source=sqlite`。`frames` 中每项包含 `rows/hotlist/sectors/hotThemes/rotationSummary`，供 Dragon Board `listSnapshotFrameBundles` 直接消费。正式快照不再把 IndexedDB 当事实读源；`five_minute` 等非正式临时数据仍可留在浏览器本地。
+返回 `dataset`、`frames`、`count` 和 `source=sqlite`。`frames` 中每项包含 `rows/hotlist/sectors/hotThemes/rotationSummary`，供 Dragon Board `listSnapshotFrameBundles` 直接消费。正式快照不再把浏览器 IndexedDB 当事实读源；`five_minute` 等非正式临时数据仍可留在浏览器本地。
 
 ### SQLite 快照明细读口
 
-这些接口承接 Dragon Board `DataLayer` 的正式 IndexedDB 读口，返回字段仍保持前端 camelCase 合同，不要求调用方理解 SQLite 列名。
+这些接口承接 Dragon Board `DataLayer` 的正式快照读口，返回字段仍保持前端 camelCase 合同，不要求调用方理解 SQLite 列名。
 
 ```powershell
 Invoke-RestMethod 'http://127.0.0.1:8000/api/snapshots/records?dataset_id=dragonboard_live&snapshot_type=half_hour&limit=20'
@@ -205,20 +205,6 @@ Invoke-RestMethod 'http://127.0.0.1:8000/api/snapshots/sector-rows?dataset_id=dr
 - 通用：`dataset_id`、`snapshot_type` 或 `types`、`trading_date`、`start_date/end_date`、`before_trading_date`、`allowed_capture_modes`、`exclude_restored`、`sort`、`limit`。
 - 股票行：`snapshot_id`、`code`、`codes`、`slot_time`。
 - 题材行：`snapshot_id`、`entity_type/entity_types`、`entity_key/entity_keys`。
-
-### IndexedDB vs SQLite 行数校验
-
-后端提供 SQLite 行数和校验入口：
-
-```powershell
-Invoke-RestMethod 'http://127.0.0.1:8000/api/snapshots/counts'
-
-Invoke-RestMethod -Method Post 'http://127.0.0.1:8000/api/snapshots/validate-indexeddb-counts' `
-  -ContentType 'application/json' `
-  -Body '{"indexedDbCounts":{"snapshots":232,"snapshot_frames":232,"snapshot_stock_rows":44330,"snapshot_sector_rows":2918}}'
-```
-
-浏览器端正式入口是 `window.dataLayer.validateSnapshotIndexedDbSqliteCounts()`。不传 `datasetId` 时，后端会按默认快照数据集解析规则选择当前有效 SQLite 数据集；显式传 `datasetId` 时只校验指定数据集。兼容旧前端时，`datasetId=dragonboard_live` 且该数据集不存在或为空，会回退到最新有快照事实行的数据集。只有该结果 `ok=true`，才能删除浏览器历史或停用迁移工具。
 
 ### `GET /api/datasets`
 
@@ -309,18 +295,6 @@ Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/migrations/snapshots/im
 ```
 
 `dryRun=true` 只解析和统计，不落库。同一 `idempotencyKey` 或已存在的 `dataset_id + snapshot_id` 会被跳过，重复执行不会制造重复快照。
-
-浏览器端可直接把当前 Dragon Board origin 的 IndexedDB 全量补齐到 SQLite：
-
-```js
-await window.dataLayer.migrateIndexedDbSnapshotsToSqlite({
-  datasetId: 'dragonboard_live',
-  batchSize: 20,
-  validate: true,
-})
-```
-
-该命令读取 `snapshots`、`snapshot_frames`、`snapshot_stock_rows`、`snapshot_sector_rows` 四个 store，分批调用本接口。重跑时按 `dataset_id + snapshot_id` 跳过已有快照；如果同一 `idempotencyKey` 已有 outbox 但仍有缺失快照，后端会只补缺失部分。
 
 ## Golden 接口
 

@@ -421,44 +421,6 @@ def get_snapshot_counts(
     }
 
 
-@app.post("/api/snapshots/validate-indexeddb-counts")
-def validate_indexeddb_counts(
-    payload: dict[str, Any],
-    db: Session | None = Depends(get_db),
-) -> dict[str, Any]:
-    if db is None:
-        raise HTTPException(status_code=503, detail="primary database is unavailable")
-    repo = Repository(db, enable_backup=False)
-    resolved_dataset_id, dataset = _resolve_snapshot_dataset(
-        repo,
-        payload.get("datasetId") or payload.get("dataset_id"),
-        allow_default_fallback=True,
-    )
-    sqlite_counts = repo.snapshot_table_counts(resolved_dataset_id)
-    indexeddb_counts = payload.get("indexedDbCounts") or payload.get("indexeddbCounts") or payload.get("counts") or {}
-    if not isinstance(indexeddb_counts, dict):
-        raise HTTPException(status_code=400, detail="indexedDbCounts must be an object")
-    stores = ["snapshots", "snapshot_frames", "snapshot_stock_rows", "snapshot_sector_rows"]
-    diffs = {
-        store: {
-            "indexedDb": int(indexeddb_counts.get(store) or 0),
-            "sqlite": int(sqlite_counts.get(store) or 0),
-            "delta": int(sqlite_counts.get(store) or 0) - int(indexeddb_counts.get(store) or 0),
-        }
-        for store in stores
-    }
-    ok = all(item["delta"] == 0 for item in diffs.values())
-    return {
-        "ok": ok,
-        "dataset": Repository.dataset_to_dict(dataset),
-        "datasetId": resolved_dataset_id,
-        "indexedDb": {store: diffs[store]["indexedDb"] for store in stores},
-        "sqlite": {store: diffs[store]["sqlite"] for store in stores},
-        "diffs": diffs,
-        "source": "sqlite",
-    }
-
-
 @app.post("/api/migrations/snapshots/import-json")
 def import_snapshot_json_migration(
     request: SnapshotJsonMigrationRequest,

@@ -77,7 +77,7 @@ QuantBoard API/CLI -> SQLite(primary) -> Supabase(backup)
 - `POST /api/snapshots/ingest` 是 Dragon Board 正式快照进入 QuantBoard 后端的主入口。
 - `GET /api/snapshots/frames` 是 Dragon Board 正式分析读取 SQLite 快照聚合帧的主入口。
 - `GET /api/snapshots/records`、`GET /api/snapshots/records/{snapshot_id}`、`GET /api/snapshots/stock-rows`、`GET /api/snapshots/sector-rows` 是 Dragon Board `DataLayer` 零散正式读口的 SQLite 承接层。
-- `GET /api/snapshots/counts` 和 `POST /api/snapshots/validate-indexeddb-counts` 用于 IndexedDB -> SQLite 替换前的全量行数验收。
+- `GET /api/snapshots/counts` 用于 SQLite 主库快照事实表行数核对。
 - `POST /api/migrations/snapshots/import-json` 是历史 IndexedDB/JSON/结构化导出的可重复迁移入口。
 - 同键重复同步必须幂等；同键不同 payload/hash 必须标记冲突，不允许静默覆盖。
 

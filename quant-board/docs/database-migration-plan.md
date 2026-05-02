@@ -54,18 +54,16 @@ Supabase schema 仍与 SQLite 同构，但备份适配层允许对超大 `Text` 
 - `dataset_bundle`、`snapshot_ingest`、`backtest_run`、`optimization_run`、`golden_case` 都会在 SQLite 写入成功后登记 `sync_outbox`。
 - Supabase 立即镜像成功时，对应 outbox 标记为 `done`；镜像失败时标记为 `retry` 并写入 `last_error`、`retry_count`、`next_retry_at`。
 - `push-backup` 会先消费到期的 `pending/retry` outbox，再做全量扫描补推。
-- Dragon Board 对已存在的半小时、十五分钟、小时等正式快照，如果 IndexedDB 已有记录但后端 ingest 失败过，会重放后端入库，不再因为本地记录存在而跳过云端链路。
-- Dragon Board 正式聚合读口开始 SQLite 优先：`listSnapshotFrameBundles` 会先调用 QuantBoard `GET /api/snapshots/frames`，远端不可用或无数据时才回退 IndexedDB。
-- Dragon Board 正式零散读口开始 SQLite 主读：`listSnapshots`、`getSnapshotById`、`listSnapshotFrames`、`listSnapshotStockRows`、`listSnapshotSectorRows` 会读 QuantBoard SQLite API，保持原 `DataLayer` 字段合同不变；`five_minute` 等非正式临时快照仍走本地临时路径。
+- Dragon Board 对已存在的半小时、十五分钟、小时等正式快照，如果 IndexedDB 已有记录但后端 ingest 失败过，会重放后端入库，不再因为本地记录存在而跳过后端链路。
+- Dragon Board 正式聚合读口已固定为 SQLite 唯一来源：`listSnapshotFrameBundles` 调用 QuantBoard `GET /api/snapshots/frames`，不再回落浏览器 IndexedDB。
+- Dragon Board 正式零散读口已固定为 SQLite 唯一来源：`listSnapshots`、`getSnapshotById`、`listSnapshotFrames`、`listSnapshotStockRows`、`listSnapshotSectorRows` 直接读 QuantBoard SQLite API，保持原 `DataLayer` 字段合同不变；`five_minute` 等非正式临时快照仍走本地临时路径。
 - Dragon Board 正式写入口开始 SQLite 主写：正式快照保存必须先通过 `POST /api/snapshots/ingest` 落 SQLite；IndexedDB 写入只作为缓存/迁移源，缓存失败不再代表正式保存失败。
-- 浏览器端新增 IndexedDB vs SQLite 全量行数校验入口：`DataLayer.validateSnapshotIndexedDbSqliteCounts()` 会统计四个 IndexedDB store 并调用 `POST /api/snapshots/validate-indexeddb-counts` 与 SQLite 同 dataset 校验。
-- 浏览器端新增 IndexedDB -> SQLite 补齐入口：`DataLayer.migrateIndexedDbSnapshotsToSqlite()` 会直接读取当前 origin 的 `snapshots`、`snapshot_frames`、`snapshot_stock_rows`、`snapshot_sector_rows`，按批调用 `POST /api/migrations/snapshots/import-json` 导入 `dragonboard_live`，最后自动执行行数校验。
 - 历史 JSON 迁移入口 `POST /api/migrations/snapshots/import-json` 已可处理 v4 bundle、records/snapshots、frames/stockRows/sectorRows 和常见 SQLite/备份导出字段。
 
 仍未完成的边界：
 
 - SQLite 完全不可用时直接写 Supabase 的 failover 写入仍是 M3 目标能力。
-- IndexedDB 正式主写已降级：后续只能作为缓存、重放和迁移来源；完全删除历史或停用迁移工具前必须先跑通全量行数校验。
+- IndexedDB 已从正式读取链路中移除：后续只能作为缓存、重放和迁移来源；完全删除历史或停用迁移工具前必须先跑通全量行数校验。
 - Supabase 云端 schema 需要用户先在 SQL Editor 执行 `quant-board/backend/data/supabase_schema.sql`；执行前旧云端表会被删除重建，必须确认旧云端数据已经不需要或已另行备份。
 
 ## 存储拓扑
@@ -300,38 +298,6 @@ Dragon Board 前端正式分析入口 `listSnapshotFrameBundles` 必须调用该
 ### `GET /api/snapshots/counts`
 
 用途：读取 SQLite 主库中 `snapshots/snapshot_frames/snapshot_stock_rows/snapshot_sector_rows` 四张事实表行数。可选 `dataset_id`。
-
-### `POST /api/snapshots/validate-indexeddb-counts`
-
-用途：承接浏览器端全量行数校验。浏览器先在 Dragon Board origin 内统计 IndexedDB 四个 store 的 count，然后提交给后端与 SQLite 同 dataset 行数比对。
-
-请求核心字段：
-
-- `datasetId`
-- `indexedDbCounts.snapshots`
-- `indexedDbCounts.snapshot_frames`
-- `indexedDbCounts.snapshot_stock_rows`
-- `indexedDbCounts.snapshot_sector_rows`
-
-`datasetId` 可省略。省略时按默认快照数据集解析规则选择当前有效 SQLite 数据集；兼容旧前端时，`datasetId=dragonboard_live` 且该数据集不存在或为空，会回退到最新有快照事实行的数据集。返回 `ok/indexedDb/sqlite/diffs`。`ok=true` 才能进入删除浏览器历史或停用迁移工具的下一步；不允许因为 Supabase 暂时不可用而跳过 SQLite 与 IndexedDB 校验。
-
-浏览器验收命令：
-
-```js
-await window.dataLayer.validateSnapshotIndexedDbSqliteCounts()
-```
-
-如果返回 `ok=false` 且 IndexedDB 行数大于 SQLite，需要先执行补齐迁移：
-
-```js
-await window.dataLayer.migrateIndexedDbSnapshotsToSqlite({
-  datasetId: 'dragonboard_live',
-  batchSize: 20,
-  validate: true,
-})
-```
-
-该迁移只追加/补齐 SQLite，按 `dataset_id + snapshot_id` 跳过已有快照，保留 `DataLayer` 原字段，不删除 IndexedDB 数据。`dryRun=true` 可先解析和统计，不落库。
 
 ### `POST /api/migrations/snapshots/import-json`
 

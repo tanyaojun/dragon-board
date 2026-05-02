@@ -44,12 +44,12 @@
 
 核心前端服务优先从这些文件定位：
 
-- `src/services/DataLayer.ts`：中心化内存数据层和 IndexedDB 快照基础。
+- `src/services/DataLayer.ts`：中心化内存数据层和 SQLite 快照读写编排。
 - `src/services/dataLoader.ts`：八平台热榜加载、清洗、合并和综合排名。
 - `src/services/RankTrendAnalyzer.ts`：前端 RankTrend 分析入口。
 - `src/services/rankTrend/**`：RankTrend 拆分后的 golden 标准模块。
 - `src/type/rankTrendDefaults.ts`：RankTrend 默认参数和默认快照类型。
-- `src/services/quantBoardBridge.ts`：Dragon Board 与 QuantBoard 的 IndexedDB/Golden 桥接。
+- `src/services/quantBoardBridge.ts`：Dragon Board 与 QuantBoard 的数据桥接和 Golden 导出。
 - `src/services/quantBoardGolden/**`：仅用于导出 TypeScript golden case，不承载回测、优化或交易模拟。
 - `src/services/snapshot/**` 与 `src/services/quality/**`：快照质量、覆盖率和门禁。
 
@@ -75,7 +75,7 @@ QuantBoard 的规则以 `quant-board/docs/README.md`、`quant-board/docs/AI_COLL
 - 回测、优化、API、CLI 和前端展示必须保留 `dataset_id`、`snapshot_type`、`strategy_version`、`config_hash`、`random_seed`。
 - QuantBoard 存储主链为 SQLite 主库 + Supabase 后端备份库；Supabase 必须按 `quant-board/backend/data/supabase_schema.sql` 与 SQLite 同构，超大 JSON 只允许在备份适配层透明压缩，存储、同步、恢复和冲突规则以 `quant-board/docs/database-migration-plan.md` 为准。
 - Dragon Board 正式快照写库必须走 QuantBoard 后端 `POST /api/snapshots/ingest`；历史 JSON/IndexedDB 迁移入口为 `POST /api/migrations/snapshots/import-json`，IndexedDB 只保留为迁移源、缓存或失败重放来源。
-- Dragon Board 正式快照读口走 QuantBoard 后端 `GET /api/snapshots/frames`、`/api/snapshots/records`、`/api/snapshots/stock-rows`、`/api/snapshots/sector-rows`；迁移 DataLayer 时不得删改现有快照字段，确认 SQLite 迁移和 `window.dataLayer.validateSnapshotIndexedDbSqliteCounts()` 行数校验完成前，不得删除 IndexedDB 历史数据或关闭迁移工具。行数校验默认由后端选择当前有效 SQLite 数据集，不要硬编码空的 `dragonboard_live` 作为验收目标；若 IndexedDB 行数大于 SQLite，先用 `window.dataLayer.migrateIndexedDbSnapshotsToSqlite({ datasetId: 'dragonboard_live', batchSize: 20, validate: true })` 补齐，再重新校验。
+- Dragon Board 正式快照读口走 QuantBoard 后端 `GET /api/snapshots/frames`、`/api/snapshots/records`、`/api/snapshots/stock-rows`、`/api/snapshots/sector-rows`；IndexedDB 只保留为历史迁移源和缓存，不再新增或恢复浏览器端 IndexedDB 校验/补齐 API。迁移阶段只保留后端 `import-json` 和离线导入工具，字段映射不得随意删改。
 - Python RankTrend 输出字段必须能与 golden case 对齐。
 - 前端展示不得把 `finalSignal` 当成唯一交易结论，应展示状态、候选分层、风险、样本质量和解释。
 
