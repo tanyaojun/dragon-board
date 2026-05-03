@@ -71,7 +71,7 @@ QuantBoard API/CLI -> SQLite(primary) -> Supabase(backup)
 - 正常写入先提交 SQLite，再把同一份业务对象镜像到 Supabase。
 - SQLite 写入成功后会登记 `sync_outbox`，即使 Supabase 当次不可用，也能通过 `push-backup` 补偿。
 - SQLite 初始化或查询失败时，读路径会回退到 Supabase 备份记录。
-- SQLite 不可用但 Supabase 可写时，关键写入切到 Supabase 是后续 M3 目标；能力完成前，写接口必须明确返回不可用，不能伪装成功。
+- SQLite 不可用但 Supabase 可写时，正式快照 ingest 会切到 Supabase 并返回 `status=backup_only`；尚未纳入 failover 的写接口必须明确返回不可用，不能伪装成功。
 - `POST /api/sync/push-backup` 用于把已有 SQLite 历史数据主动推送到 Supabase。
 - `POST /api/sync/push-outbox` 和后台自动同步只消费到期 outbox，不做全量历史扫描。
 - `POST /api/sync/smoke-backup` 用于真实 Supabase REST 写读删联调，只写入并清理云端 `sync_outbox` 临时探针。

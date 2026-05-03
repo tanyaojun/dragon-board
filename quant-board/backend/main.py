@@ -110,8 +110,6 @@ def smoke_backup() -> dict[str, Any]:
 
 @app.post("/api/snapshots/ingest")
 def ingest_snapshot(request: SnapshotIngestRequest, db: Session | None = Depends(get_db)) -> dict[str, Any]:
-    if db is None:
-        raise HTTPException(status_code=503, detail="primary database is unavailable")
     try:
         dataset, records, frames, stock_rows, sector_rows, idempotency_key = normalize_snapshot_ingest(request)
         result = Repository(db).save_snapshot_ingest(

@@ -132,7 +132,7 @@ Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/sync/pull-backup
 
 ### `POST /api/snapshots/ingest`
 
-Dragon Board 正式快照写入入口。前端提交 v4 snapshot bundle，后端先写 SQLite，再登记/更新 Supabase 备份 outbox。Vue 前端不得直连 Supabase，也不得携带数据库密钥。
+Dragon Board 正式快照写入入口。前端提交 v4 snapshot bundle，正常路径先写 SQLite，再登记/更新 Supabase 备份 outbox。Vue 前端不得直连 Supabase，也不得携带数据库密钥。
 
 ```json
 {
@@ -167,6 +167,8 @@ Dragon Board 正式快照写入入口。前端提交 v4 snapshot bundle，后端
 ```
 
 同一 `idempotencyKey` 重放时返回 `deduped=true`，不会重复写入事实行。若 Supabase 镜像失败，本地 SQLite 写入仍成立，`status` 会是 `retry/failed`，后续由 `push-backup` 补偿。
+
+当 SQLite 主库完全不可用但 Supabase 同构备份库可写时，接口会临时执行 failover 写入，返回 `ok=true`、`status=backup_only`、`outbox=null`，并带上 `failover.active=true`、`reason`、`idempotency_key` 和恢复提示。该路径不会伪造 SQLite outbox；主库恢复后需要执行 `POST /api/sync/pull-backup` 把备份记录拉回 SQLite。若 Supabase 也不可写，接口返回 503。
 
 ### `GET /api/snapshots/frames`
 
@@ -249,7 +251,7 @@ Invoke-RestMethod 'http://127.0.0.1:8000/api/snapshots/sector-rows?dataset_id=dr
 
 旧兼容来源只用于迁移或排障。历史 JSON、旧 IndexedDB 导出或备份文件建议优先走 `POST /api/migrations/snapshots/import-json` 写入正式快照事实表，再用 `sqlite_snapshots` 生成研究数据集。
 
-如果 `SUPABASE_URL` 和 `SUPABASE_SECRET_KEY` 已配置，正式写入会先落本地 SQLite，再镜像到 Supabase 备份库。本地主库不可用时的备库写入属于后续目标能力；完成前写接口必须明确返回不可用。读路径会在本地无数据或本地不可用时按主计划回退读取备份库。
+如果 `SUPABASE_URL` 和 `SUPABASE_SECRET_KEY` 已配置，正式写入会先落本地 SQLite，再镜像到 Supabase 备份库。`POST /api/snapshots/ingest` 已支持 SQLite 不可用时的 Supabase `backup_only` failover；其他尚未纳入 failover 的写入口仍必须明确返回不可用。读路径会在本地无数据或本地不可用时按主计划回退读取备份库。
 
 新增或修改导入请求字段、快照入库 payload、同步返回字段、错误结构时，必须同批更新 [database-migration-plan.md](database-migration-plan.md)。
 

@@ -1787,6 +1787,84 @@ def test_repository_falls_back_to_backup_when_primary_session_is_unavailable() -
     assert frames[0]["stocks"][0]["code"] == "600001"
 
 
+def test_snapshot_ingest_writes_backup_only_when_primary_session_is_unavailable() -> None:
+    backup = MemoryBackup()
+    repo = Repository(None, backup)
+    dataset = Dataset(
+        id="ds_ingest_failover",
+        name="ingest failover",
+        source_type="dragon_board_runtime",
+        source_path="",
+        frame_count=1,
+        stock_row_count=1,
+        snapshot_count=1,
+        sector_row_count=0,
+        start_date="2026-04-01",
+        end_date="2026-04-01",
+        snapshot_types_json='["half_hour"]',
+        metadata_json="{}",
+        created_at=datetime.utcnow(),
+    )
+    record = {
+        "id": "half_hour:2026-04-01:10:00",
+        "type": "half_hour",
+        "tradingDate": "2026-04-01",
+        "slotTime": "10:00",
+        "timestamp": 1,
+    }
+    frame = {"snapshotId": record["id"], **record}
+    stock = {"snapshotId": record["id"], "code": "600001", "rank": 1}
+
+    result = repo.save_snapshot_ingest(
+        dataset,
+        [record],
+        [frame],
+        [stock],
+        [],
+        idempotency_key="snapshot-ingest-failover-key",
+        trading_date="2026-04-01",
+    )
+
+    assert result["status"] == "backup_only"
+    assert result["outbox"] is None
+    assert result["failover"]["active"] is True
+    assert result["failover"]["reason"] == "primary_database_unavailable"
+    assert backup.datasets[dataset.id].id == dataset.id
+    assert backup.frames[dataset.id][0]["payload"]["frame"]["snapshotId"] == record["id"]
+
+
+def test_snapshot_ingest_failover_reports_unavailable_when_backup_write_fails() -> None:
+    backup = MemoryBackup()
+    backup.fail_writes = True
+    repo = Repository(None, backup)
+    dataset = Dataset(
+        id="ds_ingest_failover_failed",
+        name="ingest failover failed",
+        source_type="dragon_board_runtime",
+        source_path="",
+        frame_count=1,
+        stock_row_count=0,
+        snapshot_count=1,
+        sector_row_count=0,
+        start_date="2026-04-01",
+        end_date="2026-04-01",
+        snapshot_types_json='["half_hour"]',
+        metadata_json="{}",
+        created_at=datetime.utcnow(),
+    )
+    record = {"id": "half_hour:2026-04-01:10:00", "type": "half_hour", "tradingDate": "2026-04-01"}
+
+    with pytest.raises(RuntimeError, match="primary_database_unavailable and Supabase backup write failed"):
+        repo.save_snapshot_ingest(
+            dataset,
+            [record],
+            [{"snapshotId": record["id"], **record}],
+            [],
+            [],
+            idempotency_key="snapshot-ingest-failover-failed-key",
+        )
+
+
 def test_outbox_push_replays_failed_business_object_mirrors() -> None:
     backup = MemoryBackup()
     backup.fail_writes = True

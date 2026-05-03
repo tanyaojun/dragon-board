@@ -166,7 +166,15 @@ class Repository:
         source: str = "dragon_board_runtime",
     ) -> dict[str, Any]:
         if self.session is None:
-            raise RuntimeError("primary database is unavailable")
+            return self._save_snapshot_ingest_to_backup(
+                dataset,
+                records,
+                frames,
+                stock_rows,
+                sector_rows,
+                idempotency_key=idempotency_key,
+                reason="primary_database_unavailable",
+            )
 
         existing = self.get_outbox_by_idempotency_key(idempotency_key)
         if existing:
@@ -221,31 +229,43 @@ class Repository:
             stock_rows = self._filter_snapshot_payloads(stock_rows, missing_snapshot_ids)
             sector_rows = self._filter_snapshot_payloads(sector_rows, missing_snapshot_ids)
             snapshot_ids = sorted(missing_snapshot_ids)
-        self.session.merge(dataset)
-        self.delete_snapshot_children(dataset.id, snapshot_ids)
-        self.session.add_all([self._record_model(dataset.id, item) for item in records])
-        self.session.add_all([self._frame_model(dataset.id, item) for item in frames])
-        self.session.add_all([self._stock_model(dataset.id, item) for item in stock_rows])
-        self.session.add_all([self._sector_model(dataset.id, item) for item in sector_rows])
-        self.session.flush()
-        self._refresh_dataset_summary(dataset.id)
+        try:
+            self.session.merge(dataset)
+            self.delete_snapshot_children(dataset.id, snapshot_ids)
+            self.session.add_all([self._record_model(dataset.id, item) for item in records])
+            self.session.add_all([self._frame_model(dataset.id, item) for item in frames])
+            self.session.add_all([self._stock_model(dataset.id, item) for item in stock_rows])
+            self.session.add_all([self._sector_model(dataset.id, item) for item in sector_rows])
+            self.session.flush()
+            self._refresh_dataset_summary(dataset.id)
 
-        outbox = self._add_outbox_row(
-            "snapshot_ingest",
-            {
-                "dataset": self.dataset_to_dict(dataset),
-                "records": records,
-                "frames": frames,
-                "stockRows": stock_rows,
-                "sectorRows": sector_rows,
-                "tradingDate": trading_date,
-                "source": source,
-            },
-            idempotency_key=idempotency_key,
-            dataset_id=dataset.id,
-            snapshot_id=snapshot_ids[0] if snapshot_ids else None,
-        )
-        self.session.commit()
+            outbox = self._add_outbox_row(
+                "snapshot_ingest",
+                {
+                    "dataset": self.dataset_to_dict(dataset),
+                    "records": records,
+                    "frames": frames,
+                    "stockRows": stock_rows,
+                    "sectorRows": sector_rows,
+                    "tradingDate": trading_date,
+                    "source": source,
+                },
+                idempotency_key=idempotency_key,
+                dataset_id=dataset.id,
+                snapshot_id=snapshot_ids[0] if snapshot_ids else None,
+            )
+            self.session.commit()
+        except SQLAlchemyError:
+            self.session.rollback()
+            return self._save_snapshot_ingest_to_backup(
+                dataset,
+                records,
+                frames,
+                stock_rows,
+                sector_rows,
+                idempotency_key=idempotency_key,
+                reason="primary_database_write_failed",
+            )
         saved_dataset = self.session.get(Dataset, dataset.id) or dataset
         mirror_ok = False
         if self.backup:
@@ -269,6 +289,33 @@ class Repository:
             "status": outbox.status,
             "outbox": self.outbox_to_dict(outbox),
             "deduped": False,
+        }
+
+    def _save_snapshot_ingest_to_backup(
+        self,
+        dataset: Dataset,
+        records: list[dict[str, Any]],
+        frames: list[dict[str, Any]],
+        stock_rows: list[dict[str, Any]],
+        sector_rows: list[dict[str, Any]],
+        *,
+        idempotency_key: str,
+        reason: str,
+    ) -> dict[str, Any]:
+        if not self._mirror_dataset_bundle(dataset, records, frames, stock_rows, sector_rows):
+            detail = self.backup.last_error if self.backup else "Supabase backup is not configured"
+            raise RuntimeError(f"{reason} and Supabase backup write failed: {detail}")
+        return {
+            "dataset": self.dataset_to_dict(dataset),
+            "status": "backup_only",
+            "outbox": None,
+            "deduped": False,
+            "failover": {
+                "active": True,
+                "reason": reason,
+                "idempotency_key": idempotency_key,
+                "recovery": "run pull-backup after SQLite primary is restored",
+            },
         }
 
     @staticmethod

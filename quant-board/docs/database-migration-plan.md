@@ -7,7 +7,7 @@
 - SQLite 是 QuantBoard 默认主库，负责本机低延迟读写、回测、优化和报告读取。
 - Supabase 是后端专用备份库，不直接暴露给 Vue 前端，也不作为常规查询的第一选择。
 - 正常路径是先写 SQLite，提交成功后镜像同一份业务对象到 Supabase。
-- SQLite 不可用时，关键写入临时落 Supabase 是 M3 目标能力；Phase 1 只保证本地主库写入、备份补偿骨架和读取回退基线。
+- SQLite 不可用时，`POST /api/snapshots/ingest` 已可在 Supabase 配置可写时临时落备份库并返回 `status=backup_only`；其他关键写入仍按各服务层能力逐步纳入 M3。
 - 读路径优先 SQLite；仅当 SQLite 不可用或本地缺失目标记录时，才尝试 Supabase 回退。
 - 所有同步、回退和恢复都必须保留 `dataset_id`、`snapshot_type`、`strategy_version`、`config_hash`、`random_seed` 等可复现字段。
 
@@ -59,11 +59,12 @@ Supabase schema 仍与 SQLite 同构，但备份适配层允许对超大 `Text` 
 - Dragon Board 正式聚合读口已固定为 SQLite 唯一来源：`listSnapshotFrameBundles` 调用 QuantBoard `GET /api/snapshots/frames`，不再回落浏览器 IndexedDB。
 - Dragon Board 正式零散读口已固定为 SQLite 唯一来源：`listSnapshots`、`getSnapshotById`、`listSnapshotFrames`、`listSnapshotStockRows`、`listSnapshotSectorRows` 直接读 QuantBoard SQLite API，保持原 `DataLayer` 字段合同不变；`five_minute` 等非正式临时快照仍走本地临时路径。
 - Dragon Board 正式写入口已切为 SQLite 主写：正式快照保存必须先通过 `POST /api/snapshots/ingest` 落 SQLite；浏览器 IndexedDB 快照缓存默认关闭，后续只允许作为显式开启的临时缓存、历史迁移源或非正式 `five_minute` 本地数据。
+- SQLite 主库完全不可用时，`POST /api/snapshots/ingest` 不再提前 503；后端会尝试把同一份 v4 bundle 直接镜像到 Supabase 同构表，成功时返回 `status=backup_only`、`outbox=null` 和 `failover` 诊断，待 SQLite 恢复后通过 `pull-backup` 收敛回主库。
 - 历史 JSON 迁移入口 `POST /api/migrations/snapshots/import-json` 已可处理 v4 bundle、records/snapshots、frames/stockRows/sectorRows 和常见 SQLite/备份导出字段。
 
 仍未完成的边界：
 
-- SQLite 完全不可用时直接写 Supabase 的 failover 写入仍是 M3 目标能力。
+- failover 写入当前只覆盖正式快照 ingest、数据集 bundle、回测、优化和 Golden 的服务层直写；数据集导入、历史迁移 API 等仍依赖 SQLite 主库事务，主库不可用时必须明确失败。
 - IndexedDB 已从正式快照读写链路中移除：后续只能作为显式缓存、历史迁移来源和非正式临时数据来源；完全删除历史或停用迁移工具前必须保留一次人工验收记录，确认 SQLite 四张事实表全量行数与浏览器历史一致。
 - Supabase 云端 schema 需要用户先在 SQL Editor 执行 `quant-board/backend/data/supabase_schema.sql`；执行前旧云端表会被删除重建，必须确认旧云端数据已经不需要或已另行备份。
 
@@ -218,9 +219,10 @@ Dragon Board 正式快照
 
 - `ok`
 - `dataset`
-- `status`：当前 outbox 状态。
-- `outbox`
+- `status`：当前 outbox 状态；SQLite 不可用但 Supabase 写入成功时为 `backup_only`。
+- `outbox`：SQLite 主写路径返回 outbox；`backup_only` 路径返回 `null`。
 - `deduped`
+- `failover`：仅 `backup_only` 路径返回，包含 `active/reason/idempotency_key/recovery`，提示 SQLite 恢复后执行 `pull-backup`。
 
 ### `GET /api/snapshots/frames`
 
@@ -417,7 +419,7 @@ Dragon Board 前端正式分析入口 `listSnapshotFrameBundles` 必须调用该
 验收：
 
 - SQLite 读取失败或本地缺失目标记录时，能按业务键从 Supabase 回退。
-- SQLite 不可用但 Supabase 可写时，关键写入能临时落备份库；该能力未完成前，写接口必须明确返回不可用，不能伪装成功。
+- SQLite 不可用但 Supabase 可写时，正式快照 ingest 能临时落备份库并返回 `backup_only` 诊断；尚未纳入 failover 的写接口必须明确返回不可用，不能伪装成功。
 - 恢复后 `pull-backup` 能把备份记录拉回 SQLite。
 
 ### M4：冲突诊断和恢复演练

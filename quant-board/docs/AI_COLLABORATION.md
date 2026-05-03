@@ -16,6 +16,7 @@
 - 存储主链：SQLite 是 QuantBoard 主库，Supabase 是后端专用备份库；Supabase 必须按 [../backend/data/supabase_schema.sql](../backend/data/supabase_schema.sql) 使用 SQLite 同构 schema，超大 JSON 只允许在备份适配层透明压缩，实施和恢复规则以 [database-migration-plan.md](database-migration-plan.md) 为准。
 - 当前同步批次：`sync_outbox` 已覆盖快照 ingest、数据集 bundle、回测、优化和 Golden；历史 JSON 迁移入口是 `POST /api/migrations/snapshots/import-json`；自动同步默认关闭，只补传到期 outbox。
 - SQLite 替换 IndexedDB 的当前切口：Dragon Board 正式写入先查询 QuantBoard SQLite 是否已有同一 `snapshot_id`，缺失时走 `POST /api/snapshots/ingest`；正式读口走 QuantBoard `GET /api/snapshots/frames`、`/api/snapshots/records`、`/api/snapshots/stock-rows`、`/api/snapshots/sector-rows`；IndexedDB 快照缓存默认关闭，只作为迁移源、显式缓存和非正式临时数据来源。浏览器端旧的 IndexedDB 校验/补齐入口已收口，不再作为正式合同。
+- failover 当前切口：SQLite 主库不可用但 Supabase 同构备份库可写时，`POST /api/snapshots/ingest` 可返回 `status=backup_only` 并写入备库；SQLite 恢复后必须执行 `pull-backup` 收敛，不能把 `backup_only` 当作本地主库已恢复。
 
 ## 工作边界
 
