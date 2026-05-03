@@ -352,6 +352,12 @@ pre {
   color: #765a15;
 }
 
+.status-running {
+  border-color: #76a7c7;
+  background: #eef7fc;
+  color: #1f607f;
+}
+
 .status-error {
   border-color: #d79595;
   background: #fff1f1;

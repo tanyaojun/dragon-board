@@ -4,7 +4,7 @@
 
 首期架构只服务一个核心闭环：
 
-`dragon-board 快照数据 -> QuantBoard 数据集 -> Python rankTrend -> 回测 -> 优化 -> API/CLI/前端报告`
+`dragon-board 快照数据 -> QuantBoard 数据集 -> Python rankTrend -> 回测 -> 独立优化模块 -> API/CLI/前端报告`
 
 这里的 Python rankTrend 必须对齐 TypeScript golden 标准。QuantBoard 是仓库内唯一回测平台，Dragon Board 根项目只提供实时看板、快照数据和 TypeScript golden 导出。
 
@@ -18,7 +18,7 @@ backend/
     strategy/           # 策略接口和 rankTrend 候选策略
     engine/             # 回测事件循环、撮合、绩效统计
     portfolio/          # 现金、持仓、交易成本、风控
-  optimization/         # 参数搜索、目标函数、实验记录
+  optimization/         # 独立参数优化模块：搜索方法、目标函数、任务状态、实验记录
   api/                  # FastAPI 路由
   cli/                  # 命令行入口
   reports/              # 报告导出辅助
@@ -47,7 +47,8 @@ backend/
 
 5. 优化阶段
    - 输入：参数搜索空间、目标函数、训练/验证区间。
-   - 输出：候选参数排名、样本内/样本外表现、实验记录。
+   - 处理：由 `backend/optimization/**` 独立编排搜索方法和任务状态，调用回测引擎执行 trial。
+   - 输出：候选参数排名、样本内/样本外表现、`running/completed/failed` 状态和实验记录。
 
 6. 展示阶段
    - 输入：`backtest_runs`、`optimization_runs`、报告 JSON。
@@ -138,7 +139,20 @@ Dragon Board 前端 `DataLayer` 对外字段不随迁移删改。正式快照写
 
 ### optimization_runs
 
-保存一次优化实验及候选参数列表。优化不是覆盖默认参数的动作，而是产生可验证候选。
+保存一次优化实验及候选参数列表。优化不是覆盖默认参数的动作，而是产生可验证候选；任何优化结果都不得自动写回策略、API、CLI 或前端默认参数。
+
+必须记录：
+
+- `dataset_id`
+- `strategy_name`
+- `strategy_version`
+- `snapshot_type`
+- `config_hash`
+- `random_seed`
+- `method`
+- `status`：`running`、`completed` 或 `failed`
+- `request_json`
+- `result_json`
 
 ### sync_outbox
 
@@ -208,7 +222,8 @@ rank_trend_candidate
 - RankTrend 回放：`backend.analysis.ranktrend.RankTrendPythonEngine`
 - 后验分布与 forward validation：`backend.core.backtest.OutcomeEvaluator`
 - 交易模拟与撮合：`backend.core.backtest.TradeSimulator`
-- 回测编排与优化：`backend.core.backtest.BacktestEngine`、`backend.core.backtest.Optimizer`
+- 回测编排：`backend.core.backtest.BacktestEngine`
+- 参数优化：`backend.optimization` 独立模块调用回测引擎执行 trial，并负责搜索方法、目标函数和实验记录
 
 策略输出不等于交易指令。它应至少包含：
 
@@ -275,6 +290,6 @@ snapshot_type = half_hour
 
 - 不接实盘交易。
 - 不做自动下单。
-- 不把优化结果自动写回 dragon-board 默认参数。
+- 不把优化结果自动写回 dragon-board、QuantBoard、API、CLI 或前端表单默认参数。
 - 不在 Dragon Board 根项目重建回测模块。
 - 不为了前端演示绕过 golden 校验和质量门禁。

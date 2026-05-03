@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 import math
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
+from importlib.util import find_spec
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
@@ -25,6 +27,19 @@ from backend.data.supabase_homomorphic import (
 from backend.main import app
 from backend.services import DEFAULT_BACKTEST_STRATEGY_CONFIG
 from backend.utils import json_dumps
+
+
+def wait_for_optimization(client: TestClient, run_id: str, timeout: float = 20.0) -> dict:
+    deadline = time.time() + timeout
+    last: dict | None = None
+    while time.time() < deadline:
+        response = client.get(f"/api/optimizations/{run_id}")
+        assert response.status_code == 200, response.text
+        last = response.json()
+        if last.get("status") in {"completed", "failed"}:
+            return last
+        time.sleep(0.1)
+    raise AssertionError(f"optimization did not finish: {last}")
 
 
 def make_bundle(path: Path) -> Path:
@@ -468,8 +483,11 @@ def test_import_backtest_optimize_and_golden(tmp_path: Path) -> None:
         },
     )
     assert opt.status_code == 200, opt.text
-    opt_body = opt.json()
-    assert opt_body["runId"]
+    opt_start = opt.json()
+    assert opt_start["runId"]
+    assert opt_start["status"] == "running"
+    opt_body = wait_for_optimization(client, opt_start["runId"])
+    assert opt_body["status"] == "completed"
     assert opt_body["strategyName"] == "a_main_only"
     assert opt_body["dataQuality"]["researchGrade"] == "degraded"
     assert any("低热榜" in item for item in opt_body["warnings"])
@@ -505,8 +523,9 @@ def test_import_backtest_optimize_and_golden(tmp_path: Path) -> None:
         },
     )
     assert opt_no_validation.status_code == 200, opt_no_validation.text
-    assert opt_no_validation.json()["experiment"]["split"]["hasValidation"] is False
-    assert opt_no_validation.json()["overfitRisk"]["level"] == "high"
+    opt_no_validation_body = wait_for_optimization(client, opt_no_validation.json()["runId"])
+    assert opt_no_validation_body["experiment"]["split"]["hasValidation"] is False
+    assert opt_no_validation_body["overfitRisk"]["level"] == "high"
 
     bayes_opt = client.post(
         "/api/optimizations/rank-trend",
@@ -535,14 +554,44 @@ def test_import_backtest_optimize_and_golden(tmp_path: Path) -> None:
         },
     )
     assert bayes_opt.status_code == 200, bayes_opt.text
-    bayes_body = bayes_opt.json()
+    bayes_body = wait_for_optimization(client, bayes_opt.json()["runId"])
     assert bayes_body["method"] == "bayesian"
-    assert bayes_body["optimizer"] == "optuna_tpe"
-    assert bayes_body["optimizerMeta"]["sampler"] == "TPESampler"
-    assert bayes_body["completedTrialCount"] == 3
-    assert bayes_body["walkForward"]["enabled"] is True
-    assert bayes_body["walkForward"]["segmentCount"] >= 1
-    assert bayes_body["results"][0]["validation"] is not None
+    if find_spec("torch") is None:
+        assert bayes_body["status"] == "failed"
+        assert bayes_body["error"]["code"] == "OPTIMIZATION_FAILED"
+        assert "torch" in bayes_body["error"]["message"]
+    else:
+        assert bayes_body["status"] == "completed"
+        assert bayes_body["optimizer"] == "optuna_gp"
+        assert bayes_body["optimizerMeta"]["sampler"] == "GPSampler"
+        assert bayes_body["optimizerMeta"]["model"] == "gaussian_process"
+        assert bayes_body["completedTrialCount"] == 3
+        assert bayes_body["walkForward"]["enabled"] is True
+        assert bayes_body["walkForward"]["segmentCount"] >= 1
+        assert bayes_body["results"][0]["validation"] is not None
+
+    tpe_opt = client.post(
+        "/api/optimizations/rank-trend",
+        json={
+            "datasetId": dataset["id"],
+            "snapshotType": "half_hour",
+            "method": "tpe",
+            "objective": "stability",
+            "trials": 2,
+            "validationMode": "auto",
+            "parameterGrid": {
+                "momentumPeriods": [[3, 5, 8, 13, 21], [2, 4, 6, 10, 16]],
+                "takeProfitPct": [0.1],
+                "stopLossPct": [0.05],
+                "maxPositions": [3],
+            },
+        },
+    )
+    assert tpe_opt.status_code == 200, tpe_opt.text
+    tpe_body = wait_for_optimization(client, tpe_opt.json()["runId"])
+    assert tpe_body["method"] == "tpe"
+    assert tpe_body["optimizer"] == "optuna_tpe"
+    assert tpe_body["optimizerMeta"]["sampler"] == "TPESampler"
 
     golden = client.post("/api/golden/validate", json={"caseId": "missing", "tolerance": 1e-6})
     assert golden.status_code == 200

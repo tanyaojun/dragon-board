@@ -95,9 +95,11 @@ const lastBacktestId = ref("");
 const lastOptimizationId = ref("");
 const manualBacktestId = ref("");
 const manualOptimizationId = ref("");
+const optimizationPollMessage = ref("");
 const replayCode = ref("");
 const goldenAction = ref<"baseline" | "validate" | "">("");
 const copiedBox = ref("");
+let optimizationPollToken = 0;
 
 const backtestForm = reactive<BacktestRequest>({
   datasetId: "",
@@ -391,6 +393,8 @@ const sampleWarnings = computed(() => {
   return Array.isArray(warnings) ? warnings.map(String) : [];
 });
 const optimizationTrials = computed(() => getOptimizationTrials(optimizationSource.value));
+const optimizationRunStatus = computed(() => getRunStatus(optimizationSource.value));
+const optimizationRunId = computed(() => getRunId(optimizationSource.value) || lastOptimizationId.value);
 const optimizationExperiment = computed(() => getObjectField(optimizationSource.value, ["experiment"]));
 const optimizationRisk = computed(() => getObjectField(optimizationSource.value, ["overfitRisk"]));
 const optimizationRiskLevel = computed(() => {
@@ -472,6 +476,42 @@ function copyLabel(id: string): string {
 
 function statusClass(status: string): string {
   return `status-${status}`;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function getRunStatus(value: unknown): string {
+  const root = asRecord(value);
+  const result = asRecord(root.result);
+  const run = asRecord(root.run);
+  return String(root.status || result.status || run.status || "");
+}
+
+function getStructuredError(value: unknown): unknown {
+  const root = asRecord(value);
+  const result = asRecord(root.result);
+  const run = asRecord(root.run);
+  return root.error || result.error || run.error || root.detail || result.detail || "";
+}
+
+function formatStructuredError(value: unknown): string {
+  if (!value) {
+    return "";
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
 }
 
 function parseNumberList(value: string): number[] {
@@ -724,21 +764,77 @@ async function runOptimization(): Promise<void> {
     maxPositions: parseNumberList(gridInputs.maxPositions)
   };
 
-  await runRequest(
-    optimizationState,
-    () =>
-      api.runOptimization({
-        ...optimizationForm,
-        datasetId: selectedDatasetId.value || optimizationForm.datasetId
-      }),
-    (data) => {
-      const id = getRunId(data);
-      if (id) {
-        lastOptimizationId.value = id;
-        manualOptimizationId.value = id;
-      }
+  const pollToken = ++optimizationPollToken;
+  optimizationState.status = "loading";
+  optimizationState.error = undefined;
+  optimizationState.data = undefined;
+  optimizationState.raw = undefined;
+  optimizationDetailState.status = "idle";
+  optimizationDetailState.error = undefined;
+  optimizationDetailState.data = undefined;
+  optimizationDetailState.raw = undefined;
+  optimizationPollMessage.value = "";
+
+  try {
+    const started = await api.runOptimization({
+      ...optimizationForm,
+      datasetId: selectedDatasetId.value || optimizationForm.datasetId
+    });
+    const id = getRunId(started);
+    if (!id) {
+      throw new Error("后端未返回 runId，无法轮询优化状态");
     }
-  );
+    lastOptimizationId.value = id;
+    manualOptimizationId.value = id;
+    optimizationState.status = "running";
+    optimizationState.data = started;
+    optimizationState.raw = started;
+    optimizationPollMessage.value = `优化任务已启动：${id}`;
+    await pollOptimization(id, pollToken);
+  } catch (error) {
+    if (pollToken !== optimizationPollToken) {
+      return;
+    }
+    optimizationState.status = "error";
+    optimizationState.error = formatApiError(error);
+    optimizationState.raw = {
+      error: optimizationState.error,
+      name: error instanceof Error ? error.name : "Error",
+      message: error instanceof Error ? error.message : String(error)
+    };
+  }
+}
+
+async function pollOptimization(id: string, pollToken: number): Promise<void> {
+  while (pollToken === optimizationPollToken) {
+    await delay(1500);
+    const data = await api.getOptimization(id);
+    if (pollToken !== optimizationPollToken) {
+      return;
+    }
+
+    const status = getRunStatus(data) || "running";
+    optimizationState.data = data;
+    optimizationState.raw = data;
+    optimizationPollMessage.value = `优化任务 ${id} 当前状态：${status}`;
+
+    if (status === "completed") {
+      optimizationState.status = "ok";
+      optimizationPollMessage.value = `优化任务已完成：${id}`;
+      return;
+    }
+
+    if (status === "failed") {
+      const structuredError = getStructuredError(data);
+      optimizationState.status = "error";
+      optimizationState.error = formatStructuredError(structuredError) || "优化任务失败";
+      optimizationState.raw = data;
+      optimizationPollMessage.value = `优化任务失败：${id}`;
+      return;
+    }
+
+    optimizationState.status = "running";
+  }
 }
 
 async function fetchOptimization(): Promise<void> {
@@ -748,7 +844,13 @@ async function fetchOptimization(): Promise<void> {
     optimizationDetailState.error = "缺少优化 ID";
     return;
   }
-  await runRequest(optimizationDetailState, () => api.getOptimization(id));
+  await runRequest(optimizationDetailState, () => api.getOptimization(id), (data) => {
+    const status = getRunStatus(data);
+    if (status === "failed") {
+      optimizationDetailState.status = "error";
+      optimizationDetailState.error = formatStructuredError(getStructuredError(data)) || "优化任务失败";
+    }
+  });
 }
 
 watch(selectedDatasetId, syncSelectedDataset);
@@ -1220,7 +1322,8 @@ onMounted(async () => {
               <select v-model="optimizationForm.method">
                 <option value="grid">grid / 网格搜索</option>
                 <option value="random">random / 随机搜索</option>
-                <option value="bayesian">bayesian / 贝叶斯搜索</option>
+                <option value="bayesian">bayesian / 高斯过程贝叶斯搜索</option>
+                <option value="tpe">tpe / TPE 搜索</option>
               </select>
             </label>
             <label>
@@ -1302,20 +1405,31 @@ onMounted(async () => {
             <button
               type="button"
               class="primary"
-              :disabled="optimizationState.status === 'loading'"
+              :disabled="optimizationState.status === 'loading' || optimizationState.status === 'running'"
               @click="runOptimization"
             >
-              {{ optimizationState.status === "loading" ? "优化中..." : "启动优化" }}
+              {{ optimizationState.status === "loading" || optimizationState.status === "running" ? "优化中..." : "启动优化" }}
             </button>
             <button type="button" :disabled="optimizationDetailState.status === 'loading'" @click="fetchOptimization">
               {{ optimizationDetailState.status === "loading" ? "拉取中..." : "拉取优化详情" }}
             </button>
           </div>
-          <div v-if="optimizationState.status === 'loading'" class="inline-note">
+          <div v-if="optimizationState.status === 'loading' || optimizationState.status === 'running'" class="inline-note">
             参数优化会按组合重复执行 train/validation 回测；真实数据集建议先把 trials / 试验次数降到 3-6 做试跑。
+            <span v-if="optimizationPollMessage"> {{ optimizationPollMessage }}</span>
+          </div>
+          <div v-else-if="optimizationPollMessage" class="inline-note">
+            {{ optimizationPollMessage }}
+          </div>
+          <div v-if="optimizationRunId" class="inline-note">
+            <b>优化 run：</b>{{ optimizationRunId }}
+            <span v-if="optimizationRunStatus">，后端状态 {{ optimizationRunStatus }}</span>
           </div>
           <div v-if="optimizationState.status === 'error'" class="inline-error">
             {{ optimizationState.error }}
+          </div>
+          <div v-if="optimizationDetailState.status === 'error'" class="inline-error">
+            {{ optimizationDetailState.error }}
           </div>
           <div v-if="Object.keys(optimizationExperiment).length" class="optimization-summary">
             <div>

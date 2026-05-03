@@ -88,7 +88,7 @@ class BacktestRequest(BaseModel):
 class OptimizationRequest(BaseModel):
     dataset_id: str
     snapshot_type: SnapshotType = "half_hour"
-    method: Literal["grid", "random", "bayesian"] = "grid"
+    method: Literal["grid", "random", "bayesian", "tpe", "optuna_tpe"] = "grid"
     random_seed: int = 20260430
     max_trials: int = 12
     search_space: dict[str, list[Any]] = Field(default_factory=dict)

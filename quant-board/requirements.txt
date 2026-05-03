@@ -25,6 +25,8 @@ playwright==1.52.0
 
 # 参数优化（Bayesian/Optuna 入口）
 optuna==4.3.0
+# Optuna GPSampler requires torch at runtime.
+torch==2.6.0
 
 # 开发工具
 pytest==8.3.4

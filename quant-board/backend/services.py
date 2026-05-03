@@ -5,10 +5,12 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from backend.analysis.ranktrend import RankTrendConfig, RankTrendPythonEngine
-from backend.core.backtest import BacktestEngine, Optimizer, normalize_strategy_name
+from backend.core.backtest import BacktestEngine, normalize_strategy_name
 from backend.data.models import BacktestRun, GoldenRankTrendCase, OptimizationRun
 from backend.data.quality_gate import evaluate_snapshot_quality
 from backend.data.repository import Repository
+from backend.optimization.jobs import submit_optimization_job
+from backend.optimization.runner import OptimizationRunner
 from backend.utils import json_dumps, json_loads, new_id, read_json_file, stable_hash
 
 
@@ -204,7 +206,57 @@ class OptimizationService:
     def __init__(self, session: Session | None):
         self.repo = Repository(session)
 
-    def run_ranktrend(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def run_ranktrend(self, payload: dict[str, Any], wait: bool = False) -> dict[str, Any]:
+        dataset_id, snapshot_type, strategy_name, run_frames, request, payload_for_request_json = self._build_request(payload)
+        if ((request.get("quality_gate") or {}).get("researchGrade")) == "blocked":
+            raise ValueError({"qualityGate": request.get("quality_gate"), "reason": "data quality blocked optimization"})
+        run_id = str(request["optimization_run_id"])
+        config_hash = stable_hash({key: value for key, value in request.items() if key != "optimization_run_id"})
+        initial = OptimizationRun(
+            id=run_id,
+            dataset_id=dataset_id,
+            strategy_name=strategy_name,
+            method=request["method"],
+            random_seed=request["random_seed"],
+            status="running",
+            config_hash=config_hash,
+            request_json=json_dumps(payload_for_request_json),
+            result_json=json_dumps({"status": "running", "runId": run_id}),
+        )
+        self.repo.save_optimization_run(initial)
+        if wait:
+            return self._run_sync(
+                run_id,
+                dataset_id,
+                snapshot_type,
+                strategy_name,
+                run_frames,
+                request,
+                payload_for_request_json,
+                config_hash,
+            )
+        submit_optimization_job(
+            run_id=run_id,
+            frames=run_frames,
+            request=request,
+            dataset_id=dataset_id,
+            snapshot_type=snapshot_type,
+            strategy_name=strategy_name,
+            random_seed=request["random_seed"],
+            config_hash=config_hash,
+            payload_for_request_json=payload_for_request_json,
+        )
+        return {
+            "id": run_id,
+            "runId": run_id,
+            "run_id": run_id,
+            "status": "running",
+            "method": request["method"],
+            "strategyName": strategy_name,
+            "randomSeed": request["random_seed"],
+        }
+
+    def _build_request(self, payload: dict[str, Any]) -> tuple[str, str, str, list[dict[str, Any]], dict[str, Any], dict[str, Any]]:
         dataset_id = str(camel_get(payload, "dataset_id", "datasetId", ""))
         snapshot_type = str(camel_get(payload, "snapshot_type", "snapshotType", "half_hour"))
         base_backtest = camel_get(payload, "backtest", default={}) or {}
@@ -231,12 +283,13 @@ class OptimizationService:
         if not search_space:
             search_space = camel_get(payload, "parameter_grid", "parameterGrid", {})
         request = {
-            "method": payload.get("method", "grid"),
+            "method": str(payload.get("method", "grid")).strip().lower(),
             "random_seed": int(camel_get(payload, "random_seed", "randomSeed", 20260430)),
             "max_trials": int(camel_get(payload, "max_trials", "trials", 12)),
             "objective": payload.get("objective", "return"),
             "search_space": search_space,
             "strategy_name": strategy_name,
+            "strategy_version": camel_get(payload, "strategy_version", "strategyVersion", "0.1.0"),
             "dataset_id": dataset_id,
             "snapshot_type": snapshot_type,
             "quality_gate": quality_gate,
@@ -250,7 +303,21 @@ class OptimizationService:
         }
         run_id = new_id("opt")
         request["optimization_run_id"] = run_id
-        result = Optimizer().run(run_frames, request)
+        payload_for_request_json = {**payload, **request}
+        return dataset_id, snapshot_type, strategy_name, run_frames, request, payload_for_request_json
+
+    def _run_sync(
+        self,
+        run_id: str,
+        dataset_id: str,
+        snapshot_type: str,
+        strategy_name: str,
+        run_frames: list[dict[str, Any]],
+        request: dict[str, Any],
+        payload_for_request_json: dict[str, Any],
+        config_hash: str,
+    ) -> dict[str, Any]:
+        result = OptimizationRunner().run(run_frames, request)
         backtest_artifacts = result.pop("backtestArtifacts", []) or []
         for artifact in backtest_artifacts:
             artifact_request = artifact.get("request") or {}
@@ -273,18 +340,34 @@ class OptimizationService:
             strategy_name=strategy_name,
             method=request["method"],
             random_seed=request["random_seed"],
-            config_hash=stable_hash(request),
-            request_json=json_dumps({**payload, **request}),
+            status="completed",
+            config_hash=config_hash,
+            request_json=json_dumps(payload_for_request_json),
             result_json=json_dumps(result),
         )
         self.repo.save_optimization_run(run)
-        return {"id": run_id, "runId": run_id, "run_id": run_id, "result": result, **result}
+        return {"id": run_id, "runId": run_id, "run_id": run_id, "status": "completed", "result": result, **result}
 
     def get_run(self, run_id: str) -> dict[str, Any] | None:
         run = self.repo.get_optimization_run(run_id)
         if not run:
             return None
         result = json_loads(run.result_json, {})
+        status = run.status or result.get("status") or "completed"
+        if status != "completed":
+            return {
+                "id": run.id,
+                "runId": run.id,
+                "datasetId": run.dataset_id,
+                "strategyName": run.strategy_name,
+                "method": run.method,
+                "randomSeed": run.random_seed,
+                "configHash": run.config_hash,
+                "status": status,
+                "createdAt": run.created_at.isoformat(),
+                "result": result,
+                **(result if isinstance(result, dict) else {}),
+            }
         return {
             "id": run.id,
             "runId": run.id,
@@ -293,6 +376,7 @@ class OptimizationService:
             "method": run.method,
             "randomSeed": run.random_seed,
             "configHash": run.config_hash,
+            "status": status,
             "createdAt": run.created_at.isoformat(),
             "result": result,
             **result,

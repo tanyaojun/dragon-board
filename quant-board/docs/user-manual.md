@@ -370,7 +370,8 @@ cd d:\dragon-board\quant-board
 3. 选择搜索方式：
    - `grid`：穷举参数组合，适合首轮小范围验证。
    - `random`：随机抽样，适合组合较多时快速探索。
-   - `bayesian`：使用 Optuna `TPESampler` 做 TPE 贝叶斯优化，固定 `randomSeed` 时可复现。
+   - `bayesian`：使用 Optuna `GPSampler` 做高斯过程优化，适合 trial 成本较高的搜索。
+   - `tpe`：使用 Optuna `TPESampler` 做 TPE 采样，固定 `randomSeed` 时可复现。
 4. 选择目标函数：
    - `stability`：默认推荐，优先看 validation，并惩罚样本内外落差和验证交易数过少。
    - `risk_adjusted`：收益、回撤、Sharpe 的综合分。
@@ -388,9 +389,12 @@ cd d:\dragon-board\quant-board
    - `maxPositions`: `3,5,8`
 9. 点击 `启动优化`。
 
+优化是异步任务。启动后页面会先拿到 `runId` 和 `running` 状态，再轮询结果；任务结束后状态变为 `completed`，失败时状态变为 `failed` 并显示错误原因。
+
 返回结果里重点看：
 
 - `runId`：优化任务 ID。
+- `status`：优化任务状态，可能是 `running`、`completed` 或 `failed`。
 - `experiment.split`：train/validation 的样本切分。
 - `overfitRisk`：当前最优 trial 的过拟合风险提示。
 - `best.parameters`：当前搜索空间内的候选参数，不是最终定参。
@@ -406,7 +410,7 @@ cd d:\dragon-board\quant-board
 .\.venv\Scripts\python.exe -m backend.cli optimize-ranktrend `
   --dataset-id ds_xxx `
   --snapshot-type half_hour `
-  --method grid `
+  --method bayesian `
   --objective stability `
   --validation-mode auto `
   --validation-ratio 0.3 `
@@ -414,6 +418,21 @@ cd d:\dragon-board\quant-board
   --trials 12 `
   --seed 20260430
 ```
+
+CLI 的 `--method` 可选 `grid`、`random`、`bayesian`、`tpe`。默认会等待优化完成；只想提交任务并立即返回 `runId` 时，加 `--no-wait`：
+
+```powershell
+.\.venv\Scripts\python.exe -m backend.cli optimize-ranktrend `
+  --dataset-id ds_xxx `
+  --snapshot-type half_hour `
+  --method tpe `
+  --objective stability `
+  --trials 36 `
+  --seed 20260430 `
+  --no-wait
+```
+
+优化结果不会自动写回默认参数。即使 `best.parameters` 看起来更好，也需要换时间区间、换数据集或做 walk-forward 验证后，再人工决定是否修改配置。
 
 ## 8. Golden 对齐
 
@@ -535,7 +554,7 @@ Invoke-RestMethod http://127.0.0.1:8000/api/health
 
 ### 优化结果不能直接当最终参数
 
-优化结果只是候选参数。正式使用前要换时间区间、换数据集或做 walk-forward 验证，避免只适配当前样本。
+优化结果只是候选参数，不会自动写回默认参数。正式使用前要换时间区间、换数据集或做 walk-forward 验证，避免只适配当前样本。
 
 ## 10. 推荐日常流程
 

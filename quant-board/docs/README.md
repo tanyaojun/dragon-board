@@ -25,6 +25,7 @@ QuantBoard 是 `dragon-board` 的量化回测与参数研究子项目。首期�
 | [backtest-policy.md](backtest-policy.md) | 当前回测统一口径：5 天/40 bars、MACD 辅助定位、T+1、收益字段 |
 | [backtest-engine.md](backtest-engine.md) | 事件驱动回测引擎、撮合、持仓、绩效指标 |
 | [optimization.md](optimization.md) | 参数搜索、目标函数、实验记录与防过拟合 |
+| [search-methods.md](search-methods.md) | 四个正式参数搜索方法的计算口径、结果字段和使用方法 |
 | [api-cli.md](api-cli.md) | FastAPI 与 CLI 接口草案 |
 | [frontend.md](frontend.md) | 前端页面、交互、结果展示与联调约定 |
 | [development-roadmap.md](development-roadmap.md) | 分阶段落地路线和验收清单 |

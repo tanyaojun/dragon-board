@@ -440,7 +440,7 @@ Dragon Board 当前会在写入前通过 SQLite 读口确认同一 `snapshot_id`
 
 ### `POST /api/optimizations/rank-trend`
 
-运行参数优化。
+启动异步参数优化任务。接口创建 `optimization_runs` 记录后立即返回 `status=running` 和 `runId`，完整结果通过 `GET /api/optimizations/{run_id}` 轮询读取。优化结果只生成候选参数，不会自动写回任何默认参数。
 
 ```json
 {
@@ -468,11 +468,71 @@ Dragon Board 当前会在写入前通过 SQLite 读口确认同一 `snapshot_id`
 }
 ```
 
-`method=bayesian` 当前使用 Optuna `TPESampler` 对离散 choices 采样。
+返回：
+
+```json
+{
+  "runId": "opt_xxx",
+  "status": "running"
+}
+```
+
+搜索方法：
+
+| method | 说明 |
+| --- | --- |
+| `grid` | 穷举离散参数组合 |
+| `random` | 固定 `randomSeed` 时可复现的随机采样 |
+| `bayesian` | Optuna `GPSampler` 高斯过程优化 |
+| `tpe` | Optuna `TPESampler` TPE 采样 |
+
+`method=bayesian` 必须写入 `optimizer=optuna_gp` 和 `optimizerMeta.sampler=GPSampler`。TPE 采样口径使用 `method=tpe`，并写入 `optimizer=optuna_tpe`、`optimizerMeta.sampler=TPESampler`。后端仍接受历史请求里的 `method=optuna_tpe`，但它只是 `tpe` 的兼容别名，不作为新的搜索方法展示。
 
 ### `GET /api/optimizations/{run_id}`
 
-读取优化结果。
+读取优化任务状态和结果。
+
+运行中：
+
+```json
+{
+  "runId": "opt_xxx",
+  "status": "running",
+  "progress": {
+    "completedTrials": 8,
+    "totalTrials": 36
+  }
+}
+```
+
+完成：
+
+```json
+{
+  "runId": "opt_xxx",
+  "status": "completed",
+  "result": {
+    "best": {},
+    "trials": []
+  }
+}
+```
+
+失败：
+
+```json
+{
+  "runId": "opt_xxx",
+  "status": "failed",
+  "error": {
+    "code": "OPTIMIZATION_FAILED",
+    "message": "参数优化失败",
+    "details": {}
+  }
+}
+```
+
+`status` 只能是 `running`、`completed` 或 `failed`。`failed` 必须返回结构化错误，不能用空 `trials` 或空 `best` 表示失败。
 
 ## CLI 命令
 
@@ -548,6 +608,21 @@ cd d:\dragon-board\quant-board
   --walk-forward `
   --trials 36 `
   --seed 20260430
+```
+
+`--method` 可选 `grid`、`random`、`bayesian`、`tpe`。`bayesian` 对应 Optuna `GPSampler` 高斯过程；`tpe` 对应 Optuna `TPESampler`。
+
+默认 CLI 会等待任务完成并输出最终结果。需要只提交异步任务、拿到 `runId` 后立即返回时，加 `--no-wait`：
+
+```powershell
+.\.venv\Scripts\python.exe -m backend.cli optimize-ranktrend `
+  --dataset-id ds_xxx `
+  --snapshot-type half_hour `
+  --method tpe `
+  --objective stability `
+  --trials 36 `
+  --seed 20260430 `
+  --no-wait
 ```
 
 ### `validate-golden`

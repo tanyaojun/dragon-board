@@ -222,7 +222,7 @@
 
 - grid search。
 - random search。
-- local search。
+- TPE search。
 - objective 评分。
 - train/validation 拆分。
 - `optimization_runs` 持久化。

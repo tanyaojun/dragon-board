@@ -1,4 +1,4 @@
-export type ApiStatus = "idle" | "loading" | "ok" | "error";
+export type ApiStatus = "idle" | "loading" | "running" | "ok" | "error";
 
 export interface HealthResponse {
   status?: string;
@@ -136,7 +136,7 @@ export interface BacktestRequest {
 export interface OptimizationRequest {
   datasetId: string;
   strategyName: StrategyName;
-  method: "grid" | "random" | "bayesian";
+  method: "grid" | "random" | "bayesian" | "tpe";
   randomSeed: number;
   objective: "sharpe" | "return" | "max_drawdown" | "win_rate" | "risk_adjusted" | "stability";
   trials: number;

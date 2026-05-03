@@ -7,6 +7,9 @@
 - 项目目标：把 dragon-board 的 `rankTrend` TypeScript 分析链落地为 Python 后端可回测、可优化、可展示的 QuantBoard。
 - Golden 标准：`src/services/RankTrendAnalyzer.ts`、`src/services/rankTrend/*`、`src/type/rankTrendDefaults.ts`。
 - 当前主链：QuantBoard 负责参数研究、回测、优化、交易模拟和报告展示。
+- 参数优化口径：优化是 `backend/optimization/**` 独立模块，负责搜索方法、目标函数、异步任务状态和实验记录；它调用回测引擎执行 trial，但不得把搜索逻辑塞回 `backend.core.backtest`。
+- 优化方法口径：正式搜索方法只有 `grid`、`random`、`bayesian`、`tpe`。`method=bayesian` 是 Optuna `GPSampler` 高斯过程优化；`method=tpe` 对应 Optuna `TPESampler`。`method=optuna_tpe` 只作为后端兼容别名保留，不在前端和 CLI 展示为独立方法。
+- 优化任务口径：`POST /api/optimizations/rank-trend` 异步返回 `status=running` 和 `runId`；`GET /api/optimizations/{run_id}` 只返回 `running`、`completed` 或 `failed`。
 - Dragon Board 根项目只提供实时看板、快照数据和 TypeScript golden 导出。
 - 默认快照：`snapshot_type=half_hour`。
 - 可选快照：`quarter_hour` 可用于细颗粒度研究，但必须显式选择，不能替代默认口径。
@@ -52,6 +55,7 @@
 13. 逐步替换 IndexedDB 时必须先接入 SQLite 读接口；确认迁移和行数校验完成前，不得删除浏览器历史数据或关闭迁移工具。
 14. 迁移 DataLayer 的 IndexedDB 读写入口时，不得删除或重命名 `SnapshotRecord`、`SnapshotFrameBundle`、`SnapshotStockRow`、`SnapshotSectorRow` 已有字段；SQLite 后端必须承接字段并以 camelCase 返回。
 15. 删除 IndexedDB 历史前必须先完成后端迁移收口与人工验收，确认四张事实表全量行数一致；不要把浏览器端旧 IndexedDB 校验/补齐入口当成正式合同。正式快照缓存默认关闭后，不得重新在 `DataLayer` 正式读写口恢复 IndexedDB fallback。
+16. 优化结果只生成候选参数，不得自动写回 Python、TypeScript、API、CLI、前端表单或文档默认值；CLI 必须支持 `tpe` 和异步提交 `--no-wait` 口径。`optuna_tpe` 仅作为后端兼容别名。
 
 ## 推荐执行流程
 

@@ -186,7 +186,7 @@ def cmd_optimize_ranktrend(args: argparse.Namespace) -> None:
                 "topTrials": args.walk_forward_top_trials,
             },
         }
-        print_json(OptimizationService(session).run_ranktrend(payload))
+        print_json(OptimizationService(session).run_ranktrend(payload, wait=not args.no_wait))
 
 
 def cmd_validate_golden(args: argparse.Namespace) -> None:
@@ -289,7 +289,7 @@ def build_parser() -> argparse.ArgumentParser:
     opt_cmd.add_argument("--dataset-id", required=True)
     opt_cmd.add_argument("--snapshot-type", default="half_hour")
     opt_cmd.add_argument("--strategy-name", default="rank_trend_candidate")
-    opt_cmd.add_argument("--method", choices=["grid", "random", "bayesian"], default="grid")
+    opt_cmd.add_argument("--method", choices=["grid", "random", "bayesian", "tpe"], default="grid")
     opt_cmd.add_argument("--seed", type=int, default=20260430)
     opt_cmd.add_argument("--trials", type=int, default=12)
     opt_cmd.add_argument("--objective", choices=["sharpe", "return", "max_drawdown", "win_rate", "risk_adjusted", "stability"], default="sharpe")
@@ -305,6 +305,7 @@ def build_parser() -> argparse.ArgumentParser:
     opt_cmd.add_argument("--walk-forward-validation-days", type=int, default=1)
     opt_cmd.add_argument("--walk-forward-step-days", type=int, default=1)
     opt_cmd.add_argument("--walk-forward-top-trials", type=int, default=5)
+    opt_cmd.add_argument("--no-wait", action="store_true")
     opt_cmd.set_defaults(func=cmd_optimize_ranktrend)
 
     golden_cmd = sub.add_parser("validate-golden", help="Validate golden case")
