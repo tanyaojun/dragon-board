@@ -18,12 +18,7 @@ from backend.data.database import SessionLocal
 from backend.data.backup_sync import BackupSyncService
 from backend.data.models import BacktestRun, Dataset, GoldenRankTrendCase, OptimizationRun, SyncOutboxModel
 from backend.data.repository import Repository
-from backend.data.supabase_homomorphic import (
-    COMPRESSED_TEXT_PREFIX,
-    _chunk_rows_by_payload_size,
-    _decode_backup_text,
-    _encode_backup_text,
-)
+from backend.data.supabase_homomorphic import _chunk_rows_by_payload_size
 from backend.main import app
 from backend.services import DEFAULT_BACKTEST_STRATEGY_CONFIG
 from backend.utils import json_dumps
@@ -100,21 +95,11 @@ def make_bundle_with_empty_hotlist(path: Path) -> Path:
     return bundle
 
 
-def test_supabase_backup_text_compression_round_trips_large_json() -> None:
-    payload = json_dumps({"items": [{"code": f"{index:06d}", "rank": index} for index in range(20000)]})
-
-    encoded = _encode_backup_text(payload)
-
-    assert encoded.startswith(COMPRESSED_TEXT_PREFIX)
-    assert len(encoded.encode("utf-8")) < len(payload.encode("utf-8"))
-    assert _decode_backup_text(encoded) == payload
-
-
 def test_supabase_upsert_chunks_are_limited_by_payload_size() -> None:
     rows = [
-        {"id": "a", "payload_json": "x" * 40},
-        {"id": "b", "payload_json": "y" * 40},
-        {"id": "c", "payload_json": "z" * 40},
+        {"id": "a", "code": "600001", "name": "x" * 40},
+        {"id": "b", "code": "600002", "name": "y" * 40},
+        {"id": "c", "code": "600003", "name": "z" * 40},
     ]
 
     chunks = _chunk_rows_by_payload_size(rows, max_rows=100, max_payload_bytes=90)
@@ -357,7 +342,9 @@ def test_import_backtest_optimize_and_golden(tmp_path: Path) -> None:
     assert derived.status_code == 200, derived.text
     derived_dataset = derived.json()
     assert derived_dataset["source_type"] == "sqlite_snapshots"
-    assert derived_dataset["source_path"] == dataset["id"]
+    assert derived_dataset["id"] == dataset["id"]
+    assert derived_dataset["virtual"] is True
+    assert derived_dataset["policy"] == "snapshot_facts_view"
     assert derived_dataset["frame_count"] == 35
     assert derived_dataset["stock_row_count"] >= 35
     assert derived_dataset["metadata"]["sourceDatasetId"] == dataset["id"]
@@ -1081,11 +1068,13 @@ def test_snapshot_detail_read_apis_use_sqlite() -> None:
 
     record = client.get(f"/api/snapshots/records/{snapshot_id}", params={"dataset_id": dataset_id})
     assert record.status_code == 200, record.text
-    assert record.json()["record"]["payload"]["hotlist"][0]["code"] == "600010"
+    assert record.json()["record"]["payload"] == {}
+    assert record.json()["record"]["source"] == "browser_runtime"
 
     stocks = client.get("/api/snapshots/stock-rows", params={"dataset_id": dataset_id, "snapshot_id": snapshot_id})
     assert stocks.status_code == 200, stocks.text
     assert stocks.json()["rows"][0]["code"] == "600010"
+    assert stocks.json()["rows"][0]["volumeRatio"] == 2.5
 
     sectors = client.get("/api/snapshots/sector-rows", params={"dataset_id": dataset_id, "snapshot_id": snapshot_id})
     assert sectors.status_code == 200, sectors.text
@@ -1623,9 +1612,6 @@ class MemoryBackup:
     def __init__(self) -> None:
         self.datasets: dict[str, Dataset] = {}
         self.frames: dict[str, list[dict[str, object]]] = {}
-        self.backtests: dict[str, BacktestRun] = {}
-        self.optimizations: dict[str, OptimizationRun] = {}
-        self.golden_cases: dict[str, GoldenRankTrendCase] = {}
         self.fail_writes = False
 
     def mirror_dataset_bundle(self, dataset, records, frames, stock_rows, sector_rows):
@@ -1642,27 +1628,6 @@ class MemoryBackup:
         ]
         return True
 
-    def mirror_backtest_run(self, run):
-        if self.fail_writes:
-            self.last_error = "backup offline"
-            return False
-        self.backtests[run.id] = run
-        return True
-
-    def mirror_optimization_run(self, run):
-        if self.fail_writes:
-            self.last_error = "backup offline"
-            return False
-        self.optimizations[run.id] = run
-        return True
-
-    def mirror_golden_case(self, case):
-        if self.fail_writes:
-            self.last_error = "backup offline"
-            return False
-        self.golden_cases[case.id] = case
-        return True
-
     def list_rows(self, record_type, source=None, page_size=500):
         if record_type == "qb_dataset":
             return [{"payload": {"dataset": Repository.dataset_to_dict(dataset)}, "display_key": dataset.id} for dataset in self.datasets.values()]
@@ -1674,26 +1639,6 @@ class MemoryBackup:
         if record_type == "qb_dataset" and display_key in self.datasets:
             dataset = self.datasets[display_key]
             return {"payload": {"dataset": Repository.dataset_to_dict(dataset)}, "display_key": dataset.id}
-        if record_type == "qb_backtest_run" and display_key in self.backtests:
-            run = self.backtests[display_key]
-            return {
-                "payload": {
-                    "run": {
-                        "id": run.id,
-                        "dataset_id": run.dataset_id,
-                        "strategy_name": run.strategy_name,
-                        "strategy_version": run.strategy_version,
-                        "snapshot_type": run.snapshot_type,
-                        "config_hash": run.config_hash,
-                        "random_seed": run.random_seed,
-                        "status": run.status,
-                        "request_json": run.request_json,
-                        "result_json": run.result_json,
-                        "created_at": run.created_at.isoformat(),
-                    }
-                },
-                "display_key": run.id,
-            }
         return None
 
     def dataset_from_row(self, row):
@@ -1734,22 +1679,6 @@ class MemoryBackup:
             }
             frames.append(item)
         return frames
-
-    def backtest_run_from_row(self, row):
-        payload = row["payload"]["run"]
-        return BacktestRun(
-            id=payload["id"],
-            dataset_id=payload["dataset_id"],
-            strategy_name=payload["strategy_name"],
-            strategy_version=payload["strategy_version"],
-            snapshot_type=payload["snapshot_type"],
-            config_hash=payload["config_hash"],
-            random_seed=payload["random_seed"],
-            status=payload["status"],
-            request_json=payload["request_json"],
-            result_json=payload["result_json"],
-        )
-
 
 def test_repository_falls_back_to_backup_when_primary_session_is_unavailable() -> None:
     backup = MemoryBackup()
@@ -1865,7 +1794,7 @@ def test_snapshot_ingest_failover_reports_unavailable_when_backup_write_fails() 
         )
 
 
-def test_outbox_push_replays_failed_business_object_mirrors() -> None:
+def test_outbox_push_replays_snapshot_mirrors_and_keeps_research_local() -> None:
     backup = MemoryBackup()
     backup.fail_writes = True
     with SessionLocal() as session:
@@ -1933,18 +1862,11 @@ def test_outbox_push_replays_failed_business_object_mirrors() -> None:
             session.scalars(
                 select(SyncOutboxModel).where(
                     SyncOutboxModel.dataset_id == dataset.id,
-                    SyncOutboxModel.op_type.in_(
-                        ["dataset_bundle", "backtest_run", "optimization_run", "golden_case"]
-                    ),
                 )
             )
         )
-        assert {row.op_type for row in queued} == {
-            "dataset_bundle",
-            "backtest_run",
-            "optimization_run",
-            "golden_case",
-        }
+        assert {row.op_type for row in queued} == {"dataset_bundle"}
+        assert all(not hasattr(row, "payload_json") for row in queued)
         for row in queued:
             row.next_retry_at = datetime.utcnow() - timedelta(seconds=1)
         session.commit()
@@ -1957,9 +1879,6 @@ def test_outbox_push_replays_failed_business_object_mirrors() -> None:
                 session.scalars(
                     select(SyncOutboxModel).where(
                         SyncOutboxModel.dataset_id == dataset.id,
-                        SyncOutboxModel.op_type.in_(
-                            ["dataset_bundle", "backtest_run", "optimization_run", "golden_case"]
-                        ),
                         SyncOutboxModel.status.in_(["pending", "retry"]),
                     )
                 )
@@ -1974,16 +1893,10 @@ def test_outbox_push_replays_failed_business_object_mirrors() -> None:
         assert result["scanned"] >= 0
         assert result["failed"] == 0
         assert dataset.id in backup.datasets
-        assert backup.backtests
-        assert backup.optimizations
-        assert backup.golden_cases
         finished = list(
             session.scalars(
                 select(SyncOutboxModel).where(
                     SyncOutboxModel.dataset_id == dataset.id,
-                    SyncOutboxModel.op_type.in_(
-                        ["dataset_bundle", "backtest_run", "optimization_run", "golden_case"]
-                    ),
                 )
             )
         )

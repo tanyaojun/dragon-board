@@ -36,7 +36,7 @@ Invoke-RestMethod http://127.0.0.1:8000/api/health
 
 ### `POST /api/sync/push-backup`
 
-把本地 SQLite 中的数据集、快照包、回测、优化和 Golden 记录推送到 Supabase 备份库。
+把本地 SQLite 快照库中的数据集和快照事实推送到 Supabase 备份库。回测、优化、Golden 和报告属于 research SQLite，不进入 Supabase Free 版备份目标。
 
 ```powershell
 Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/sync/push-backup
@@ -57,16 +57,14 @@ Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/sync/push-backup
   },
   "datasets": { "scanned": 0, "succeeded": 0, "failed": 0, "skipped": 0 },
   "snapshotBundles": { "scanned": 0, "succeeded": 0, "failed": 0, "skipped": 0 },
-  "backtestRuns": { "scanned": 0, "succeeded": 0, "failed": 0, "skipped": 0 },
-  "optimizationRuns": { "scanned": 0, "succeeded": 0, "failed": 0, "skipped": 0 },
-  "goldenCases": { "scanned": 0, "succeeded": 0, "failed": 0, "skipped": 0 },
+  "research": { "policy": "local_research_db_only" },
   "errors": []
 }
 ```
 
-`push-backup` 会先消费 `sync_outbox` 中到期的 `pending/retry` 任务，再扫描 SQLite 里已有的数据集、回测、优化和 Golden 记录做补推。失败项会进入 `errors`，结构为 `{type,key,error}`。
+`push-backup` 会先消费 `sync_outbox` 中到期的 `pending/retry` 任务，再扫描 SQLite 快照库已有的数据集和快照事实做补推。失败项会进入 `errors`，结构为 `{type,key,error}`。
 
-实现细节：Supabase REST 写入使用分片 upsert，分片同时受行数和请求体大小限制。回测、优化和 Golden 中超过阈值的 JSON 文本会在备份适配层透明压缩，读回和 `pull-backup` 自动还原；API/CLI 调用方仍看到原始 JSON 合同。
+实现细节：Supabase REST 写入使用分片 upsert，分片同时受行数和请求体大小限制。outbox 只保存业务键和重试状态，不保存完整 records/frames/rows；补推时按 `dataset_id/snapshot_id` 从事实表实时组包。
 
 ### `POST /api/sync/push-outbox`
 
@@ -118,7 +116,7 @@ Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/sync/smoke-backup
 }
 ```
 
-该探针要求 Supabase 已按 [../backend/data/supabase_schema.sql](../backend/data/supabase_schema.sql) 建好 SQLite 同构表；如果仍是旧 `snapshots.payload` 兼容 schema，会返回缺表或写入失败。
+该探针要求 Supabase 已按 [../backend/data/supabase_schema.sql](../backend/data/supabase_schema.sql) 建好快照事实同构表；如果仍是旧 `snapshots.payload` 兼容 schema，会返回缺表或写入失败。
 
 ### `POST /api/sync/pull-backup`
 
@@ -128,7 +126,7 @@ Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/sync/smoke-backup
 Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/sync/pull-backup
 ```
 
-当前返回包含 `ok`、`direction`、各对象计数和 `errors`。目标合同还应报告恢复数量、跳过数量、冲突数量、失败数量和需要人工处理的业务键。
+当前返回包含 `ok`、`direction`、快照对象计数、`research.policy=local_research_db_only` 和 `errors`。目标合同还应报告恢复数量、跳过数量、冲突数量、失败数量和需要人工处理的业务键。
 
 ### `POST /api/snapshots/ingest`
 
@@ -218,7 +216,7 @@ Invoke-RestMethod 'http://127.0.0.1:8000/api/snapshots/sector-rows?dataset_id=dr
 
 ### `POST /api/datasets/import`
 
-从 SQLite 主库已有正式快照事实表生成可复现研究数据集。日常研究入口使用 `sourceType=sqlite_snapshots`；浏览器 IndexedDB/LevelDB/运行页桥接不再作为主采集方式。
+从 SQLite 主库已有正式快照事实表生成可复现研究视图。日常研究入口使用 `sourceType=sqlite_snapshots`；浏览器 IndexedDB/LevelDB/运行页桥接不再作为主采集方式。
 
 常见请求：
 
@@ -238,10 +236,10 @@ Invoke-RestMethod 'http://127.0.0.1:8000/api/snapshots/sector-rows?dataset_id=dr
 规则：
 
 - `sourceDatasetId` 默认 `dragonboard_live`；迁移期如果该数据集不存在，后端可回退到最新有快照事实行的数据集。
-- 接口会把筛选后的 `snapshot_records / snapshot_frames / snapshot_stock_rows / snapshot_sector_rows` 复制到新的 `dataset_id`，不删除或覆盖源数据。
-- 新数据集 `source_type=sqlite_snapshots`，`source_path` 记录源数据集 ID，`metadata.filters` 记录快照类型、日期区间和最大快照数。
+- 接口不再把筛选后的 `snapshot_records / snapshot_frames / snapshot_stock_rows / snapshot_sector_rows` 复制到新的 `dataset_id`。返回对象使用源 `dataset_id`，并附带 `virtual=true`、`policy=snapshot_facts_view`，回测直接查询源快照事实表。
+- 返回元数据中的 `metadata.filters` 记录快照类型、日期区间和最大快照数。
 - `dryRun=true` 只返回会生成的数据集摘要和质量门禁结果，不落库。
-- 写入成功后仍按 `dataset_bundle` 进入 `sync_outbox`，由 Supabase 备份链路补偿同步。
+- `sqlite_snapshots` 不产生新的快照事实复制，也不产生新的 Supabase 备份对象。
 
 旧兼容 `sourceType`：
 

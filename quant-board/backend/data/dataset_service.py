@@ -74,7 +74,7 @@ class DatasetService:
         dataset = Dataset(
             id=new_id("ds"),
             name=request.name or f"QuantBoard Dataset {datetime.utcnow().strftime('%Y%m%d_%H%M%S')}",
-            source_type=request.source_type,
+            source_type="dragon_board_history_migration" if request.source_type == "json_bundle" else request.source_type,
             source_path=request.source_path or "",
             db_name=str(bundle.metadata.get("db_name") or "DragonBoardData"),
             schema_fingerprint=bundle.fingerprint(),
@@ -171,8 +171,9 @@ class DatasetService:
             "endDate": request.end_date,
             "maxSnapshots": request.max_snapshots,
         }
+        virtual_id = source_dataset_id
         dataset = Dataset(
-            id=new_id("ds"),
+            id=virtual_id,
             name=request.name or self._derived_dataset_name(source, dates, types),
             source_type="sqlite_snapshots",
             source_path=source_dataset_id,
@@ -201,15 +202,11 @@ class DatasetService:
             ),
             created_at=datetime.utcnow(),
         )
-        if request.dry_run:
-            result = self.repo.dataset_to_dict(dataset)
-            result["qualityGate"] = quality.to_dict()
-            result["dryRun"] = True
-            return result
-
-        self.repo.save_dataset_bundle(dataset, records, frames, stock_rows, sector_rows)
         result = self.repo.dataset_to_dict(dataset)
         result["qualityGate"] = quality.to_dict()
+        result["dryRun"] = bool(request.dry_run)
+        result["virtual"] = True
+        result["policy"] = "snapshot_facts_view"
         return result
 
     @staticmethod

@@ -85,7 +85,7 @@ snapshot_type = half_hour
 | `display_key` | 可读名称 |
 | `capture_mode` | `real_time`、`delayed`、`restored` |
 | `source` | `sqlite_snapshots`、`snapshot_ingest`、`json_migration` 等 |
-| `market_context_json` | 市场摘要、情绪、指数、涨跌停等 |
+| `metadata_json` / `market_stats_json` / `sentiment_json` / `money_flow_json` / `indices_json` / `limit_summary_json` / `rotation_summary_json` | 从 IndexedDB frame 结构拆出的市场摘要、情绪、指数、涨跌停和轮动上下文 |
 
 ### 股票行字段
 
@@ -102,7 +102,7 @@ snapshot_type = half_hour
 | `zljzb` | 主力净占比 |
 | `turnover` | 成交额 |
 | `turnover_rate` | 换手率 |
-| `payload_json` | 其他字段原样保留 |
+| `depth10_json`、`themes_json` | 只保留小型结构化数组/对象，不再保存整行 payload |
 
 ### 板块行字段
 
@@ -112,7 +112,7 @@ snapshot_type = half_hour
 - `entity_key`
 - `entity_name`
 - `rank`
-- `payload_json`
+- `metadata_json`
 
 ## 导入流程
 
@@ -120,12 +120,12 @@ snapshot_type = half_hour
 
 1. 选择源数据集，默认 `dragonboard_live`。
 2. 按 `snapshot_type`、日期区间和最大快照数筛选 `snapshot_frames`。
-3. 按筛选出的 `snapshot_id` 复制对应 `snapshot_records`、股票行和题材行。
-4. 生成新的 `dataset_id`、稳定 `schema_fingerprint` 和 `metadata.filters`。
+3. 不复制事实行，直接以源 `dataset_id` 和筛选条件作为研究视图。
+4. 生成稳定 `schema_fingerprint` 和 `metadata.filters`。
 5. 执行质量门禁。
-6. 写入新数据集和子表；源数据集不被删除或覆盖。
-7. 登记 `dataset_bundle` outbox，进入 Supabase 备份补偿链。
-8. 返回数据集摘要和质量门禁结果。
+6. `dryRun=false` 时仍不写入新的快照事实副本；源数据集不被删除或覆盖。
+7. 不登记新的 Supabase 备份对象。
+8. 返回带 `virtual=true`、`policy=snapshot_facts_view` 的数据集摘要和质量门禁结果。
 
 ### 历史 JSON 迁移
 

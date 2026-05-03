@@ -11,12 +11,21 @@ class Base(DeclarativeBase):
     pass
 
 
+class ResearchBase(DeclarativeBase):
+    pass
+
+
 settings = get_settings()
 engine = create_engine(
-    settings.database_url,
-    connect_args={"check_same_thread": False} if settings.database_url.startswith("sqlite") else {},
+    settings.snapshot_database_url,
+    connect_args={"check_same_thread": False} if settings.snapshot_database_url.startswith("sqlite") else {},
+)
+research_engine = create_engine(
+    settings.research_database_url,
+    connect_args={"check_same_thread": False} if settings.research_database_url.startswith("sqlite") else {},
 )
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
+ResearchSessionLocal = sessionmaker(bind=research_engine, autoflush=False, autocommit=False, expire_on_commit=False)
 _initialized = False
 _primary_available = True
 _last_primary_error: str | None = None
@@ -30,6 +39,7 @@ def init_db() -> bool:
 
     try:
         Base.metadata.create_all(bind=engine)
+        ResearchBase.metadata.create_all(bind=research_engine)
         _primary_available = True
         _last_primary_error = None
     except SQLAlchemyError as exc:
@@ -46,7 +56,8 @@ def primary_status() -> dict[str, str | bool | None]:
     return {
         "configured": bool(settings.database_url),
         "connected": init_db(),
-        "url": _redact_database_url(settings.database_url),
+        "url": _redact_database_url(settings.snapshot_database_url),
+        "research_url": _redact_database_url(settings.research_database_url),
         "last_error": _last_primary_error,
     }
 

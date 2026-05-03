@@ -7,10 +7,10 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from backend.data.models import BacktestRun, Dataset, GoldenRankTrendCase, OptimizationRun
+from backend.data.models import Dataset
 from backend.data.repository import Repository
 from backend.data.supabase_backup import SupabaseBackupClient, get_backup_client
-from backend.utils import json_dumps, json_loads
+from backend.utils import json_dumps
 
 
 class BackupSyncService:
@@ -36,9 +36,7 @@ class BackupSyncService:
             "outbox": {"scanned": 0, "succeeded": 0, "failed": 0, "skipped": 0, "items": []},
             "datasets": {"scanned": 0, "succeeded": 0, "failed": 0, "skipped": 0},
             "snapshotBundles": {"scanned": 0, "succeeded": 0, "failed": 0, "skipped": 0},
-            "backtestRuns": {"scanned": 0, "succeeded": 0, "failed": 0, "skipped": 0},
-            "optimizationRuns": {"scanned": 0, "succeeded": 0, "failed": 0, "skipped": 0},
-            "goldenCases": {"scanned": 0, "succeeded": 0, "failed": 0, "skipped": 0},
+            "research": {"policy": "local_research_db_only"},
             "errors": [],
         }
         try:
@@ -61,48 +59,6 @@ class BackupSyncService:
                         {
                             "type": "dataset_bundle",
                             "key": dataset.id,
-                            "error": self.backup.last_error or "backup mirror failed",
-                        }
-                    )
-
-            for run in self.session.scalars(select(BacktestRun).order_by(BacktestRun.created_at.asc())):
-                result["backtestRuns"]["scanned"] += 1
-                if self.backup.mirror_backtest_run(run):
-                    result["backtestRuns"]["succeeded"] += 1
-                else:
-                    result["backtestRuns"]["failed"] += 1
-                    result["errors"].append(
-                        {
-                            "type": "backtest_run",
-                            "key": run.id,
-                            "error": self.backup.last_error or "backup mirror failed",
-                        }
-                    )
-
-            for run in self.session.scalars(select(OptimizationRun).order_by(OptimizationRun.created_at.asc())):
-                result["optimizationRuns"]["scanned"] += 1
-                if self.backup.mirror_optimization_run(run):
-                    result["optimizationRuns"]["succeeded"] += 1
-                else:
-                    result["optimizationRuns"]["failed"] += 1
-                    result["errors"].append(
-                        {
-                            "type": "optimization_run",
-                            "key": run.id,
-                            "error": self.backup.last_error or "backup mirror failed",
-                        }
-                    )
-
-            for case in self.session.scalars(select(GoldenRankTrendCase).order_by(GoldenRankTrendCase.created_at.asc())):
-                result["goldenCases"]["scanned"] += 1
-                if self.backup.mirror_golden_case(case):
-                    result["goldenCases"]["succeeded"] += 1
-                else:
-                    result["goldenCases"]["failed"] += 1
-                    result["errors"].append(
-                        {
-                            "type": "golden_case",
-                            "key": case.id,
                             "error": self.backup.last_error or "backup mirror failed",
                         }
                     )
@@ -145,24 +101,6 @@ class BackupSyncService:
     def _push_outbox_row(self, repo: Repository, row: Any) -> tuple[bool, str | None]:
         if row.op_type in {"snapshot_ingest", "dataset_bundle"}:
             return self._push_dataset_outbox_row(repo, row)
-        if row.op_type == "backtest_run":
-            run = self.session.get(BacktestRun, row.snapshot_id or "") if self.session else None
-            if not run:
-                run = self._backtest_from_outbox(row)
-            ok = self.backup.mirror_backtest_run(run)
-            return ok, None if ok else self.backup.last_error
-        if row.op_type == "optimization_run":
-            run = self.session.get(OptimizationRun, row.snapshot_id or "") if self.session else None
-            if not run:
-                run = self._optimization_from_outbox(row)
-            ok = self.backup.mirror_optimization_run(run)
-            return ok, None if ok else self.backup.last_error
-        if row.op_type == "golden_case":
-            case = self.session.get(GoldenRankTrendCase, row.snapshot_id or "") if self.session else None
-            if not case:
-                case = self._golden_from_outbox(row)
-            ok = self.backup.mirror_golden_case(case)
-            return ok, None if ok else self.backup.last_error
         return False, "unsupported outbox op_type"
 
     def _push_dataset_outbox_row(self, repo: Repository, row: Any) -> tuple[bool, str | None]:
@@ -170,10 +108,7 @@ class BackupSyncService:
         if full_bundle:
             dataset, records, frames, stock_rows, sector_rows = full_bundle
         else:
-            payload = json_loads(row.payload_json, {})
-            if not isinstance(payload, dict):
-                return False, "invalid outbox payload"
-            dataset_payload = payload.get("dataset") if isinstance(payload.get("dataset"), dict) else {}
+            dataset_payload = {}
             dataset = Dataset(
                 id=str(dataset_payload.get("id") or row.dataset_id or ""),
                 name=str(dataset_payload.get("name") or row.dataset_id or ""),
@@ -191,57 +126,9 @@ class BackupSyncService:
                 metadata_json=json_dumps(dataset_payload.get("metadata") or {}),
                 created_at=_parse_datetime(dataset_payload.get("created_at")),
             )
-            records = payload.get("records") if isinstance(payload.get("records"), list) else []
-            frames = payload.get("frames") if isinstance(payload.get("frames"), list) else []
-            stock_rows = payload.get("stockRows") if isinstance(payload.get("stockRows"), list) else []
-            sector_rows = payload.get("sectorRows") if isinstance(payload.get("sectorRows"), list) else []
+            records, frames, stock_rows, sector_rows = [], [], [], []
         ok = self.backup.mirror_dataset_bundle(dataset, records, frames, stock_rows, sector_rows)
         return ok, None if ok else self.backup.last_error
-
-    def _backtest_from_outbox(self, row: Any) -> BacktestRun:
-        payload = json_loads(row.payload_json, {})
-        run_payload = payload.get("run") if isinstance(payload, dict) and isinstance(payload.get("run"), dict) else {}
-        return BacktestRun(
-            id=str(run_payload.get("id") or row.snapshot_id or ""),
-            dataset_id=str(run_payload.get("dataset_id") or row.dataset_id or ""),
-            strategy_name=str(run_payload.get("strategy_name") or "rank_trend_candidate"),
-            strategy_version=str(run_payload.get("strategy_version") or "0.1.0"),
-            snapshot_type=str(run_payload.get("snapshot_type") or "half_hour"),
-            config_hash=str(run_payload.get("config_hash") or ""),
-            random_seed=int(run_payload.get("random_seed") or 0),
-            status=str(run_payload.get("status") or "completed"),
-            request_json=str(run_payload.get("request_json") or "{}"),
-            result_json=str(run_payload.get("result_json") or "{}"),
-            created_at=_parse_datetime(run_payload.get("created_at")),
-        )
-
-    def _optimization_from_outbox(self, row: Any) -> OptimizationRun:
-        payload = json_loads(row.payload_json, {})
-        run_payload = payload.get("run") if isinstance(payload, dict) and isinstance(payload.get("run"), dict) else {}
-        return OptimizationRun(
-            id=str(run_payload.get("id") or row.snapshot_id or ""),
-            dataset_id=str(run_payload.get("dataset_id") or row.dataset_id or ""),
-            strategy_name=str(run_payload.get("strategy_name") or "rank_trend_candidate"),
-            method=str(run_payload.get("method") or "grid"),
-            config_hash=str(run_payload.get("config_hash") or ""),
-            random_seed=int(run_payload.get("random_seed") or 0),
-            status=str(run_payload.get("status") or "completed"),
-            request_json=str(run_payload.get("request_json") or "{}"),
-            result_json=str(run_payload.get("result_json") or "{}"),
-            created_at=_parse_datetime(run_payload.get("created_at")),
-        )
-
-    def _golden_from_outbox(self, row: Any) -> GoldenRankTrendCase:
-        payload = json_loads(row.payload_json, {})
-        case_payload = payload.get("case") if isinstance(payload, dict) and isinstance(payload.get("case"), dict) else {}
-        return GoldenRankTrendCase(
-            id=str(case_payload.get("id") or row.snapshot_id or ""),
-            name=str(case_payload.get("name") or row.snapshot_id or ""),
-            dataset_id=case_payload.get("dataset_id") or row.dataset_id,
-            input_json=str(case_payload.get("input_json") or "{}"),
-            expected_json=str(case_payload.get("expected_json") or "{}"),
-            created_at=_parse_datetime(case_payload.get("created_at")),
-        )
 
     def pull_backup_to_primary(self) -> dict[str, Any]:
         if not self.session:
@@ -255,9 +142,7 @@ class BackupSyncService:
             "direction": "pull",
             "datasets": 0,
             "snapshotBundles": 0,
-            "backtestRuns": 0,
-            "optimizationRuns": 0,
-            "goldenCases": 0,
+            "research": {"policy": "local_research_db_only"},
             "errors": [],
         }
 
@@ -299,15 +184,6 @@ class BackupSyncService:
                 result["datasets"] += 1
                 result["snapshotBundles"] += len(frames)
 
-            for row in self.backup.list_rows("qb_backtest_run"):
-                self.session.merge(self.backup.backtest_run_from_row(row))
-                result["backtestRuns"] += 1
-            for row in self.backup.list_rows("qb_optimization_run"):
-                self.session.merge(self.backup.optimization_run_from_row(row))
-                result["optimizationRuns"] += 1
-            for row in self.backup.list_rows("qb_golden_case"):
-                self.session.merge(self.backup.golden_case_from_row(row))
-                result["goldenCases"] += 1
             self.session.commit()
         except (SQLAlchemyError, ValueError) as exc:
             self.session.rollback()

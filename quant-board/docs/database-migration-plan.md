@@ -4,12 +4,12 @@
 
 ## 目标结论
 
-- SQLite 是 QuantBoard 默认主库，负责本机低延迟读写、回测、优化和报告读取。
-- Supabase 是后端专用备份库，不直接暴露给 Vue 前端，也不作为常规查询的第一选择。
-- 正常路径是先写 SQLite，提交成功后镜像同一份业务对象到 Supabase。
+- SQLite 采用双库边界：`quant_board_snapshots.db` 是长期快照事实库，`quant_board_research.db` 是回测、优化、Golden 和报告研究库。
+- Supabase 是后端专用快照备份库，只同步 `datasets`、四张快照事实表和轻量 `sync_outbox`，不直接暴露给 Vue 前端，也不作为常规查询的第一选择。
+- 正常路径是先写 SQLite 快照事实库，提交成功后把同一份快照事实镜像到 Supabase。
 - SQLite 不可用时，`POST /api/snapshots/ingest` 已可在 Supabase 配置可写时临时落备份库并返回 `status=backup_only`；其他关键写入仍按各服务层能力逐步纳入 M3。
 - 读路径优先 SQLite；仅当 SQLite 不可用或本地缺失目标记录时，才尝试 Supabase 回退。
-- 所有同步、回退和恢复都必须保留 `dataset_id`、`snapshot_type`、`strategy_version`、`config_hash`、`random_seed` 等可复现字段。
+- 所有同步、回退和恢复都必须保留快照事实的 `dataset_id`、`snapshot_id`、`snapshot_type` 和行级业务键；研究库继续保留 `strategy_version`、`config_hash`、`random_seed` 等可复现字段，但不进入 Supabase Free 备份目标。
 
 ## 非目标
 
@@ -21,37 +21,39 @@
 
 ## 当前事实
 
-QuantBoard 已有本地 SQLite 模型和服务骨架，主要表包括：
+QuantBoard 当前拆成两个 SQLite 库。
+
+快照事实库 `quant_board_snapshots.db` 包括：
 
 - `datasets`
 - `snapshot_records`
 - `snapshot_frames`
 - `snapshot_stock_rows`
 - `snapshot_sector_rows`
-- `golden_ranktrend_cases`
-- `backtest_runs`
-- `optimization_runs`
 - `sync_outbox`
 
-Supabase 备份库必须与 SQLite 主库保持同构 schema。云端需要使用 [../backend/data/supabase_schema.sql](../backend/data/supabase_schema.sql) 重建为同名表、同业务键和同索引。脚本末尾会执行 `notify pgrst, 'reload schema'`，执行后仍应通过 `smoke-backup` 或 `/api/health` 确认 PostgREST 已看到新表结构：
+研究库 `quant_board_research.db` 包括：
+
+- `golden_ranktrend_cases`
+- `backtest_runs`
+- `optimization_runs`
+
+Supabase 备份库必须与快照事实库保持同构 schema。云端需要使用 [../backend/data/supabase_schema.sql](../backend/data/supabase_schema.sql) 重建为同名表、同业务键和同索引。脚本末尾会执行 `notify pgrst, 'reload schema'`，执行后仍应通过 `smoke-backup` 或 `/api/health?deep=true` 确认 PostgREST 已看到新表结构：
 
 - `datasets`
 - `snapshot_records`
 - `snapshot_frames`
 - `snapshot_stock_rows`
 - `snapshot_sector_rows`
-- `golden_ranktrend_cases`
-- `backtest_runs`
-- `optimization_runs`
 - `sync_outbox`
 
 旧的 Supabase `snapshots` / payload 兼容方案已经废弃。云端不再使用 `quality_flags.kind=qb_dataset`、`qb_snapshot_bundle` 等业务枚举，也不再把 QuantBoard 明细塞进 `snapshots.payload`。如果 Supabase 仍只有旧 `snapshots`、`snapshot_frames`、`snapshot_stock_rows`、`snapshot_sector_rows` 四张非同构表，健康检查会报告缺失表，`push-backup` 不应视为可用。
 
-Supabase schema 仍与 SQLite 同构，但备份适配层允许对超大 `Text` 字段做透明 `gzip + base64` 编码，当前覆盖 `backtest_runs.request_json`、`backtest_runs.result_json`、`optimization_runs.request_json`、`optimization_runs.result_json`、`golden_ranktrend_cases.input_json` 和 `golden_ranktrend_cases.expected_json`。这是云端传输/存储适配，不改变 SQLite 原始内容；`pull-backup` 和读回退必须自动解码后再还原为原始 JSON 字符串。
+Supabase schema 不再包含回测、优化和 Golden 表，也不再对研究 JSON 做云端压缩备份。大型研究结果留在 research SQLite 或报告文件目录，避免挤占 Supabase Free 版容量。
 
 当前 WP2/WP3/WP4 批次已落地的能力：
 
-- `dataset_bundle`、`snapshot_ingest`、`backtest_run`、`optimization_run`、`golden_case` 都会在 SQLite 写入成功后登记 `sync_outbox`。
+- `dataset_bundle`、`snapshot_ingest` 会在快照事实库写入成功后登记 `sync_outbox`；回测、优化和 Golden 只写 research 库。
 - Supabase 立即镜像成功时，对应 outbox 标记为 `done`；镜像失败时标记为 `retry` 并写入 `last_error`、`retry_count`、`next_retry_at`。
 - `push-backup` 会先消费到期的 `pending/retry` outbox，再做全量扫描补推。
 - Dragon Board 正式快照保存不再以 IndexedDB 是否已有记录作为幂等依据；定时保存和手工保存先查询 SQLite/QuantBoard 后端是否已有同一 `snapshot_id`，缺失时再执行 `POST /api/snapshots/ingest`。
@@ -64,7 +66,7 @@ Supabase schema 仍与 SQLite 同构，但备份适配层允许对超大 `Text` 
 
 仍未完成的边界：
 
-- failover 写入当前只覆盖正式快照 ingest、数据集 bundle、回测、优化和 Golden 的服务层直写；数据集导入、历史迁移 API 等仍依赖 SQLite 主库事务，主库不可用时必须明确失败。
+- failover 写入当前只覆盖正式快照 ingest、数据集 bundle；回测、优化和 Golden 属于本地 research 库，不进入 Supabase failover 目标。数据集导入、历史迁移 API 等仍依赖 SQLite 主库事务，主库不可用时必须明确失败。
 - IndexedDB 已从正式快照读写链路中移除：后续只能作为显式缓存、历史迁移来源和非正式临时数据来源；完全删除历史或停用迁移工具前必须保留一次人工验收记录，确认 SQLite 四张事实表全量行数与浏览器历史一致。
 - Supabase 云端 schema 需要用户先在 SQL Editor 执行 `quant-board/backend/data/supabase_schema.sql`；执行前旧云端表会被删除重建，必须确认旧云端数据已经不需要或已另行备份。
 
@@ -73,16 +75,20 @@ Supabase schema 仍与 SQLite 同构，但备份适配层允许对超大 `Text` 
 ```text
 Dragon Board 正式快照
   -> QuantBoard API/CLI
-  -> SQLite primary
-  -> Supabase backup
+  -> SQLite snapshot primary
+  -> Supabase snapshot backup
+
+QuantBoard research
+  -> SQLite research local only
 ```
 
 职责边界：
 
 - Dragon Board 负责实时看板、正式快照生成和 TypeScript golden 导出。
 - QuantBoard API/CLI 负责导入、质量门禁、回测、优化、报告和同步编排。
-- SQLite 保存标准化后的可复现实验事实表。
-- Supabase 保存可恢复的备份对象，不承担常规低延迟分析查询。
+- SQLite 快照库保存标准化后的长期快照事实表。
+- SQLite research 库保存回测、优化、Golden 和报告索引，不污染快照库。
+- Supabase 只保存可恢复的快照事实备份，不承担常规低延迟分析查询，也不承担研究结果备份。
 
 ## 写入合同
 
@@ -90,7 +96,7 @@ Dragon Board 正式快照
 
 1. 校验请求、快照类型和质量门禁。
 2. 写入 SQLite，并提交事务。
-3. 在同一主库事务中登记 `sync_outbox`，保存可重放 payload、`op_type` 和 `idempotency_key`。
+3. 在同一快照库事务中登记 `sync_outbox`，只保存 `op_type`、业务键、状态、错误和重试字段，不保存完整 payload。
 4. 以同一业务对象构造 Supabase 备份记录。
 5. Supabase 写入成功时将 outbox 标记为 `done`。
 6. Supabase 写入失败时不得回滚已成功提交的 SQLite 业务事务，但必须将 outbox 标记为 `retry/failed` 并记录结构化同步诊断。
@@ -99,7 +105,7 @@ Dragon Board 正式快照
 
 - SQLite 事务失败时，不得声明业务写入成功。
 - Supabase 镜像失败不应阻塞本地研究主链，但必须可被 `push-backup` 后续补偿。
-- 备份 payload 必须包含足够字段，能重建 SQLite 主库里的业务对象。
+- 备份补推必须能按 `dataset_id/snapshot_id` 从事实表实时组包，不允许把完整 records/frames/rows 塞进 outbox。
 - `dataset_id`、`snapshot_type`、`run_id`、`case_id` 等业务键必须稳定，不能由恢复流程重新随机生成。
 - 对同一业务键重复同步必须幂等，不能产生重复数据或覆盖更新更晚版本。
 
@@ -107,8 +113,8 @@ Dragon Board 正式快照
 
 | 字段 | 说明 |
 | --- | --- |
-| `op_type` | 当前支持 `dataset_bundle`、`snapshot_ingest`、`backtest_run`、`optimization_run`、`golden_case` |
-| `idempotency_key` | 幂等键；Dragon Board ingest 使用前端/后端共同生成的业务键，其他对象用对象键和 payload hash 组合 |
+| `op_type` | 当前支持 `dataset_bundle`、`snapshot_ingest` |
+| `idempotency_key` | 幂等键；Dragon Board ingest 使用前端/后端共同生成的业务键，数据集 bundle 使用对象键和事实摘要 hash 组合 |
 | `status` | `pending`、`retry`、`done`、`failed` |
 | `retry_count` | 失败重试次数；达到上限后进入 `failed` |
 | `last_error` | 最近一次 Supabase 镜像失败原因 |
@@ -140,14 +146,15 @@ Dragon Board 正式快照
 
 ### `POST /api/sync/push-backup`
 
-用途：把 SQLite 里已有的数据集、快照 bundle、Golden、回测和优化记录补推到 Supabase。
+用途：把 SQLite 快照库里已有的数据集和快照事实补推到 Supabase。
 
 当前返回：
 
 - `ok`：本次是否无错误完成。
 - `direction=push`。
 - `outbox`：`scanned`、`succeeded`、`failed`、`skipped`、`items`。
-- `datasets`、`snapshotBundles`、`backtestRuns`、`optimizationRuns`、`goldenCases`：每类对象都有 `scanned`、`succeeded`、`failed`、`skipped`。
+- `datasets`、`snapshotBundles`：每类对象都有 `scanned`、`succeeded`、`failed`、`skipped`。
+- `research`：当前固定返回 `policy=local_research_db_only`。
 - `errors`：结构为 `{type,key,error}`。
 
 行为规则：
@@ -155,7 +162,7 @@ Dragon Board 正式快照
 - 先消费到期 outbox，再做 SQLite 全量扫描补推。
 - outbox 成功后标记 `done`；失败后更新 `retry_count`、`last_error` 和 `next_retry_at`。
 - 不支持的 outbox 类型计入 `skipped`，不能静默丢弃。
-- Supabase REST upsert 使用 `return=minimal`，并按行数和请求体大小双限制分片；大回测和 Golden payload 会先透明压缩，避免单行几十 MB JSON 触发 PostgREST statement timeout。
+- Supabase REST upsert 使用 `return=minimal`，并按行数和请求体大小双限制分片；研究库 JSON 不进入 Supabase。
 
 ### `POST /api/sync/push-outbox`
 
@@ -263,7 +270,7 @@ Dragon Board 前端正式分析入口 `listSnapshotFrameBundles` 必须调用该
 - `sort=asc|desc`。
 - `limit`。
 
-返回 `records`，字段保持 Dragon Board `SnapshotRecord` 的 camelCase 合同，包括 `id/type/tradingDate/slotTime/timestamp/displayKey/captureMode/source/payload`。
+返回 `records`，字段保持 Dragon Board `SnapshotRecord` 的 camelCase 合同，包括 `id/type/tradingDate/slotTime/timestamp/displayKey/captureMode/source/payload`。重构后 `payload` 固定为空对象；明细必须从 frame/stock/sector 行读取。
 
 ### `GET /api/snapshots/records/{snapshot_id}`
 
@@ -298,7 +305,7 @@ Dragon Board 前端正式分析入口 `listSnapshotFrameBundles` 必须调用该
 - `allowed_capture_modes`、`exclude_restored`。
 - `sort=asc|desc`、`limit`。
 
-`snapshot_sector_rows` 表没有独立 `capture_mode/source` 列；这些字段由 `payload_json` 还原，缺省为 `real_time/browser_runtime`，保证返回仍满足 `SnapshotSectorRow` 字段合同。
+`snapshot_sector_rows` 表已有独立 `capture_mode/source` 列；返回不再依赖 `payload_json` 还原。
 
 ### `GET /api/snapshots/counts`
 

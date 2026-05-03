@@ -1,6 +1,9 @@
--- QuantBoard Supabase schema.
--- This file intentionally matches quant-board/backend/data/models.py.
+-- QuantBoard Supabase snapshot-fact backup schema.
+-- This file intentionally matches the snapshot database models in
+-- quant-board/backend/data/models.py.
 -- Run it in Supabase SQL Editor after backing up any existing cloud data.
+-- The script drops old QuantBoard backup tables, including pre-refactor
+-- research tables, then recreates only snapshot facts and a lightweight outbox.
 
 begin;
 
@@ -43,8 +46,11 @@ create table snapshot_records (
   timestamp bigint not null,
   display_key varchar(160) not null default '',
   capture_mode varchar(32) not null default 'real_time',
+  captured_at bigint not null default 0,
+  data_timestamp bigint not null default 0,
+  delay_ms integer not null default 0,
+  quality_flags_json text not null default '[]',
   source varchar(32) not null default 'browser_runtime',
-  payload_json text not null default '{}',
   unique (dataset_id, snapshot_id)
 );
 
@@ -56,9 +62,18 @@ create table snapshot_frames (
   trading_date varchar(16) not null,
   slot_time varchar(16) not null default '',
   timestamp bigint not null,
+  display_key varchar(160) not null default '',
   capture_mode varchar(32) not null default 'real_time',
+  quality_flags_json text not null default '[]',
+  delay_ms integer not null default 0,
   source varchar(32) not null default 'browser_runtime',
-  market_context_json text not null default '{}',
+  metadata_json text not null default '{}',
+  market_stats_json text not null default '{}',
+  sentiment_json text not null default '{}',
+  money_flow_json text not null default '{}',
+  indices_json text not null default '{}',
+  limit_summary_json text not null default '{}',
+  rotation_summary_json text not null default '{}',
   stock_row_count integer not null default 0,
   sector_row_count integer not null default 0,
   unique (dataset_id, snapshot_id)
@@ -74,17 +89,72 @@ create table snapshot_stock_rows (
   slot_time varchar(16) not null default '',
   timestamp bigint not null,
   capture_mode varchar(32) not null default 'real_time',
+  source varchar(32) not null default 'browser_runtime',
   code varchar(16) not null,
   name varchar(80) not null default '',
   rank integer not null default 0,
+  comp_rank integer not null default 0,
+  platforms integer not null default 0,
+  avg_rank varchar(32),
+  avg_rank_num double precision,
   price double precision,
   change double precision,
+  volume double precision,
+  turnover double precision,
+  turnover_rate double precision,
+  total_mv double precision,
+  cir_mv double precision,
   volume_ratio double precision,
   zlje double precision,
   zljzb double precision,
-  turnover double precision,
-  turnover_rate double precision,
-  payload_json text not null default '{}',
+  cddje double precision,
+  cddjzb double precision,
+  pe double precision,
+  pb double precision,
+  depth10_json text not null default '{}',
+  bid1_price double precision,
+  bid1_volume double precision,
+  ask1_price double precision,
+  ask1_volume double precision,
+  spread double precision,
+  bid10_total double precision,
+  ask10_total double precision,
+  depth_imbalance double precision,
+  tick_buy_volume double precision,
+  tick_sell_volume double precision,
+  tick_buy_count integer,
+  tick_sell_count integer,
+  last_trade_price double precision,
+  last_trade_volume double precision,
+  speed double precision,
+  lead_status varchar(40),
+  lead_times integer,
+  lianban_str varchar(40),
+  fengdan double precision,
+  max_fengdan double precision,
+  popularity double precision,
+  popularity_change double precision,
+  institution_buy double precision,
+  big_money300 double precision,
+  themes_json text not null default '[]',
+  is_new boolean not null default false,
+  first_zt_time varchar(32),
+  last_zt_time varchar(32),
+  board_height integer,
+  high_days integer,
+  hotness double precision,
+  main_theme varchar(160),
+  theme_heat double precision,
+  theme_level varchar(40),
+  rank_change double precision,
+  direction_signal varchar(32),
+  direction_confidence double precision,
+  acceleration_signal varchar(32),
+  acceleration_confidence double precision,
+  cross_signal varchar(32),
+  cross_confidence double precision,
+  final_signal varchar(32),
+  final_confidence double precision,
   unique (dataset_id, row_id)
 );
 
@@ -97,48 +167,27 @@ create table snapshot_sector_rows (
   trading_date varchar(16) not null,
   slot_time varchar(16) not null default '',
   timestamp bigint not null,
+  capture_mode varchar(32) not null default 'real_time',
+  source varchar(32) not null default 'browser_runtime',
   entity_type varchar(40) not null default '',
   entity_key varchar(160) not null default '',
+  entity_code varchar(80),
   entity_name varchar(160) not null default '',
   rank integer not null default 0,
-  payload_json text not null default '{}',
+  strength double precision,
+  heat_score double precision,
+  heat_level varchar(40),
+  change double precision,
+  main_net_inflow double precision,
+  big_money300 double precision,
+  institution_buy double precision,
+  volume_ratio double precision,
+  zt_count integer,
+  leader_count integer,
+  persistent_days integer,
+  net_inflow double precision,
+  metadata_json text not null default '{}',
   unique (dataset_id, row_id)
-);
-
-create table golden_ranktrend_cases (
-  id varchar(64) primary key,
-  name varchar(160) not null,
-  dataset_id varchar(64),
-  input_json text not null default '{}',
-  expected_json text not null default '{}',
-  created_at timestamp without time zone not null default (now() at time zone 'utc')
-);
-
-create table backtest_runs (
-  id varchar(64) primary key,
-  dataset_id varchar(64) not null,
-  strategy_name varchar(80) not null default 'rank_trend_candidate',
-  strategy_version varchar(40) not null default '0.1.0',
-  snapshot_type varchar(32) not null default 'half_hour',
-  config_hash varchar(96) not null default '',
-  random_seed integer not null default 0,
-  status varchar(32) not null default 'completed',
-  request_json text not null default '{}',
-  result_json text not null default '{}',
-  created_at timestamp without time zone not null default (now() at time zone 'utc')
-);
-
-create table optimization_runs (
-  id varchar(64) primary key,
-  dataset_id varchar(64) not null,
-  strategy_name varchar(80) not null default 'rank_trend_candidate',
-  method varchar(40) not null default 'grid',
-  config_hash varchar(96) not null default '',
-  random_seed integer not null default 0,
-  status varchar(32) not null default 'completed',
-  request_json text not null default '{}',
-  result_json text not null default '{}',
-  created_at timestamp without time zone not null default (now() at time zone 'utc')
 );
 
 create table sync_outbox (
@@ -146,7 +195,6 @@ create table sync_outbox (
   op_type varchar(80) not null,
   dataset_id varchar(64),
   snapshot_id varchar(160),
-  payload_json text not null default '{}',
   idempotency_key varchar(160) not null unique,
   status varchar(24) not null default 'pending',
   retry_count integer not null default 0,
@@ -175,6 +223,7 @@ create index ix_snapshot_stock_rows_snapshot_id on snapshot_stock_rows(snapshot_
 create index ix_snapshot_stock_rows_timestamp on snapshot_stock_rows(timestamp);
 create index ix_snapshot_stock_rows_trading_date on snapshot_stock_rows(trading_date);
 create index ix_snapshot_stock_rows_type on snapshot_stock_rows(type);
+create index ix_snapshot_stock_rows_code_type_timestamp on snapshot_stock_rows(code, type, timestamp);
 
 create index ix_snapshot_sector_rows_dataset_id on snapshot_sector_rows(dataset_id);
 create index ix_snapshot_sector_rows_row_id on snapshot_sector_rows(row_id);
@@ -182,9 +231,8 @@ create index ix_snapshot_sector_rows_snapshot_id on snapshot_sector_rows(snapsho
 create index ix_snapshot_sector_rows_timestamp on snapshot_sector_rows(timestamp);
 create index ix_snapshot_sector_rows_trading_date on snapshot_sector_rows(trading_date);
 create index ix_snapshot_sector_rows_type on snapshot_sector_rows(type);
-
-create index ix_backtest_runs_dataset_id on backtest_runs(dataset_id);
-create index ix_optimization_runs_dataset_id on optimization_runs(dataset_id);
+create index ix_snapshot_sector_rows_entity_type_key_timestamp
+  on snapshot_sector_rows(entity_type, entity_key, timestamp);
 
 create index ix_sync_outbox_dataset_id on sync_outbox(dataset_id);
 create index ix_sync_outbox_op_type on sync_outbox(op_type);

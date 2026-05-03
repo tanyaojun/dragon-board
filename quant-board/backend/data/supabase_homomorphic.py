@@ -10,7 +10,7 @@ from uuid import uuid4
 
 import httpx
 
-from backend.data.models import BacktestRun, Dataset, GoldenRankTrendCase, OptimizationRun
+from backend.data.models import Dataset
 from backend.settings import Settings, get_settings
 from backend.utils import json_dumps, json_loads, utc_now_iso
 
@@ -21,18 +21,14 @@ REQUIRED_TABLES = [
     "snapshot_frames",
     "snapshot_stock_rows",
     "snapshot_sector_rows",
-    "backtest_runs",
-    "optimization_runs",
-    "golden_ranktrend_cases",
     "sync_outbox",
 ]
 
+COMPRESSED_TEXT_PREFIX = "__qb_gzip_b64__:"
 TRANSIENT_STATUS_CODES = {429, 500, 502, 503, 504, 520, 521, 522, 523, 524}
 UPSERT_CHUNK_SIZE = 100
 UPSERT_CHUNK_BYTES = 8 * 1024 * 1024
 REQUEST_RETRY_COUNT = 3
-COMPRESSED_TEXT_PREFIX = "__qb_gzip_b64__:"
-COMPRESSION_THRESHOLD_BYTES = 256 * 1024
 
 REQUIRED_TABLE_COLUMNS = {
     "datasets": {
@@ -62,8 +58,11 @@ REQUIRED_TABLE_COLUMNS = {
         "timestamp",
         "display_key",
         "capture_mode",
+        "captured_at",
+        "data_timestamp",
+        "delay_ms",
+        "quality_flags_json",
         "source",
-        "payload_json",
     },
     "snapshot_frames": {
         "id",
@@ -73,9 +72,18 @@ REQUIRED_TABLE_COLUMNS = {
         "trading_date",
         "slot_time",
         "timestamp",
+        "display_key",
         "capture_mode",
+        "quality_flags_json",
+        "delay_ms",
         "source",
-        "market_context_json",
+        "metadata_json",
+        "market_stats_json",
+        "sentiment_json",
+        "money_flow_json",
+        "indices_json",
+        "limit_summary_json",
+        "rotation_summary_json",
         "stock_row_count",
         "sector_row_count",
     },
@@ -89,17 +97,72 @@ REQUIRED_TABLE_COLUMNS = {
         "slot_time",
         "timestamp",
         "capture_mode",
+        "source",
         "code",
         "name",
         "rank",
+        "comp_rank",
+        "platforms",
+        "avg_rank",
+        "avg_rank_num",
         "price",
         "change",
+        "volume",
+        "turnover",
+        "turnover_rate",
+        "total_mv",
+        "cir_mv",
         "volume_ratio",
         "zlje",
         "zljzb",
-        "turnover",
-        "turnover_rate",
-        "payload_json",
+        "cddje",
+        "cddjzb",
+        "pe",
+        "pb",
+        "depth10_json",
+        "bid1_price",
+        "bid1_volume",
+        "ask1_price",
+        "ask1_volume",
+        "spread",
+        "bid10_total",
+        "ask10_total",
+        "depth_imbalance",
+        "tick_buy_volume",
+        "tick_sell_volume",
+        "tick_buy_count",
+        "tick_sell_count",
+        "last_trade_price",
+        "last_trade_volume",
+        "speed",
+        "lead_status",
+        "lead_times",
+        "lianban_str",
+        "fengdan",
+        "max_fengdan",
+        "popularity",
+        "popularity_change",
+        "institution_buy",
+        "big_money300",
+        "themes_json",
+        "is_new",
+        "first_zt_time",
+        "last_zt_time",
+        "board_height",
+        "high_days",
+        "hotness",
+        "main_theme",
+        "theme_heat",
+        "theme_level",
+        "rank_change",
+        "direction_signal",
+        "direction_confidence",
+        "acceleration_signal",
+        "acceleration_confidence",
+        "cross_signal",
+        "cross_confidence",
+        "final_signal",
+        "final_confidence",
     },
     "snapshot_sector_rows": {
         "id",
@@ -110,44 +173,32 @@ REQUIRED_TABLE_COLUMNS = {
         "trading_date",
         "slot_time",
         "timestamp",
+        "capture_mode",
+        "source",
         "entity_type",
         "entity_key",
+        "entity_code",
         "entity_name",
         "rank",
-        "payload_json",
-    },
-    "golden_ranktrend_cases": {"id", "name", "dataset_id", "input_json", "expected_json", "created_at"},
-    "backtest_runs": {
-        "id",
-        "dataset_id",
-        "strategy_name",
-        "strategy_version",
-        "snapshot_type",
-        "config_hash",
-        "random_seed",
-        "status",
-        "request_json",
-        "result_json",
-        "created_at",
-    },
-    "optimization_runs": {
-        "id",
-        "dataset_id",
-        "strategy_name",
-        "method",
-        "config_hash",
-        "random_seed",
-        "status",
-        "request_json",
-        "result_json",
-        "created_at",
+        "strength",
+        "heat_score",
+        "heat_level",
+        "change",
+        "main_net_inflow",
+        "big_money300",
+        "institution_buy",
+        "volume_ratio",
+        "zt_count",
+        "leader_count",
+        "persistent_days",
+        "net_inflow",
+        "metadata_json",
     },
     "sync_outbox": {
         "id",
         "op_type",
         "dataset_id",
         "snapshot_id",
-        "payload_json",
         "idempotency_key",
         "status",
         "retry_count",
@@ -244,7 +295,6 @@ class SupabaseBackupClient:
         now = utc_now_iso()
         row = {
             "op_type": "supabase_smoke",
-            "payload_json": json_dumps({"idempotency_key": key, "created_at": now}),
             "idempotency_key": key,
             "status": "pending",
             "retry_count": 0,
@@ -312,15 +362,6 @@ class SupabaseBackupClient:
             "dataset_id,row_id",
         )
 
-    def mirror_backtest_run(self, run: BacktestRun) -> bool:
-        return self._upsert_rows("backtest_runs", [self._backtest_to_row(run)], "id")
-
-    def mirror_optimization_run(self, run: OptimizationRun) -> bool:
-        return self._upsert_rows("optimization_runs", [self._optimization_to_row(run)], "id")
-
-    def mirror_golden_case(self, case: GoldenRankTrendCase) -> bool:
-        return self._upsert_rows("golden_ranktrend_cases", [self._golden_to_row(case)], "id")
-
     def list_rows(self, record_type: str, source: str | None = None, page_size: int = 500) -> list[dict[str, Any]]:
         if not self.enabled:
             return []
@@ -328,12 +369,6 @@ class SupabaseBackupClient:
             return self._select_all("datasets", page_size=page_size, order="created_at.asc")
         if record_type == "qb_snapshot_bundle":
             return self._snapshot_bundle_rows(source or "", page_size=page_size)
-        if record_type == "qb_backtest_run":
-            return self._select_all("backtest_runs", page_size=page_size, order="created_at.asc")
-        if record_type == "qb_optimization_run":
-            return self._select_all("optimization_runs", page_size=page_size, order="created_at.asc")
-        if record_type == "qb_golden_case":
-            return self._select_all("golden_ranktrend_cases", page_size=page_size, order="created_at.asc")
         return []
 
     def get_row(self, record_type: str, display_key: str, source: str | None = None) -> dict[str, Any] | None:
@@ -344,12 +379,6 @@ class SupabaseBackupClient:
         if record_type == "qb_snapshot_bundle":
             rows = self._snapshot_bundle_rows(source or "", snapshot_id=display_key)
             return rows[0] if rows else None
-        if record_type == "qb_backtest_run":
-            return self._get_single("backtest_runs", {"id": f"eq.{display_key}"})
-        if record_type == "qb_optimization_run":
-            return self._get_single("optimization_runs", {"id": f"eq.{display_key}"})
-        if record_type == "qb_golden_case":
-            return self._get_single("golden_ranktrend_cases", {"id": f"eq.{display_key}"})
         if record_type == "qb_smoke":
             return self._get_single("sync_outbox", {"idempotency_key": f"eq.{display_key}"})
         return None
@@ -377,48 +406,6 @@ class SupabaseBackupClient:
             metadata_json=str(
                 payload.get("metadata_json") or row.get("metadata_json") or json_dumps(payload.get("metadata") or {})
             ),
-            created_at=_parse_datetime(payload.get("created_at") or row.get("created_at")),
-        )
-
-    def backtest_run_from_row(self, row: dict[str, Any]) -> BacktestRun:
-        payload = self._record_row_payload(row)
-        return BacktestRun(
-            id=str(payload.get("id") or row.get("id") or row.get("display_key") or ""),
-            dataset_id=str(payload.get("dataset_id") or row.get("dataset_id") or ""),
-            strategy_name=str(payload.get("strategy_name") or row.get("strategy_name") or "rank_trend_candidate"),
-            strategy_version=str(payload.get("strategy_version") or row.get("strategy_version") or "0.1.0"),
-            snapshot_type=str(payload.get("snapshot_type") or row.get("snapshot_type") or "half_hour"),
-            config_hash=str(payload.get("config_hash") or row.get("config_hash") or ""),
-            random_seed=int(payload.get("random_seed") or row.get("random_seed") or 0),
-            status=str(payload.get("status") or row.get("status") or "completed"),
-            request_json=_decode_backup_text(payload.get("request_json") or row.get("request_json") or "{}"),
-            result_json=_decode_backup_text(payload.get("result_json") or row.get("result_json") or "{}"),
-            created_at=_parse_datetime(payload.get("created_at") or row.get("created_at")),
-        )
-
-    def optimization_run_from_row(self, row: dict[str, Any]) -> OptimizationRun:
-        payload = self._record_row_payload(row)
-        return OptimizationRun(
-            id=str(payload.get("id") or row.get("id") or row.get("display_key") or ""),
-            dataset_id=str(payload.get("dataset_id") or row.get("dataset_id") or ""),
-            strategy_name=str(payload.get("strategy_name") or row.get("strategy_name") or "rank_trend_candidate"),
-            method=str(payload.get("method") or row.get("method") or "grid"),
-            config_hash=str(payload.get("config_hash") or row.get("config_hash") or ""),
-            random_seed=int(payload.get("random_seed") or row.get("random_seed") or 0),
-            status=str(payload.get("status") or row.get("status") or "completed"),
-            request_json=_decode_backup_text(payload.get("request_json") or row.get("request_json") or "{}"),
-            result_json=_decode_backup_text(payload.get("result_json") or row.get("result_json") or "{}"),
-            created_at=_parse_datetime(payload.get("created_at") or row.get("created_at")),
-        )
-
-    def golden_case_from_row(self, row: dict[str, Any]) -> GoldenRankTrendCase:
-        payload = self._record_row_payload(row)
-        return GoldenRankTrendCase(
-            id=str(payload.get("id") or row.get("id") or row.get("display_key") or ""),
-            name=str(payload.get("name") or row.get("name") or row.get("display_key") or ""),
-            dataset_id=payload.get("dataset_id") or row.get("dataset_id"),
-            input_json=_decode_backup_text(payload.get("input_json") or row.get("input_json") or "{}"),
-            expected_json=_decode_backup_text(payload.get("expected_json") or row.get("expected_json") or "{}"),
             created_at=_parse_datetime(payload.get("created_at") or row.get("created_at")),
         )
 
@@ -645,23 +632,16 @@ class SupabaseBackupClient:
             "timestamp": _int(item.get("timestamp")),
             "display_key": str(item.get("displayKey") or item.get("display_key") or item.get("id") or item.get("snapshotId") or ""),
             "capture_mode": str(item.get("captureMode") or item.get("capture_mode") or "real_time"),
+            "captured_at": _int(item.get("capturedAt") or item.get("captured_at") or item.get("timestamp")),
+            "data_timestamp": _int(item.get("dataTimestamp") or item.get("data_timestamp") or item.get("timestamp")),
+            "delay_ms": _int(item.get("delayMs") or item.get("delay_ms")),
+            "quality_flags_json": json_dumps(item.get("qualityFlags") if isinstance(item.get("qualityFlags"), list) else []),
             "source": str(item.get("source") or "browser_runtime"),
-            "payload_json": json_dumps(item.get("payload") if isinstance(item.get("payload"), dict) else item),
         }
 
     @staticmethod
     def _frame_to_row(dataset_id: str, item: dict[str, Any]) -> dict[str, Any]:
-        context = {
-            "marketStats": item.get("marketStats"),
-            "sentiment": item.get("sentiment"),
-            "moneyFlow": item.get("moneyFlow"),
-            "indices": item.get("indices"),
-            "limitSummary": item.get("limitSummary"),
-            "rotationSummary": item.get("rotationSummary"),
-            "payload": item.get("payload"),
-        }
-        if isinstance(item.get("marketContext"), dict):
-            context.update(item["marketContext"])
+        market_context = item.get("marketContext") if isinstance(item.get("marketContext"), dict) else {}
         return {
             "dataset_id": dataset_id,
             "snapshot_id": str(item.get("snapshotId") or item.get("snapshot_id") or item.get("id") or ""),
@@ -669,9 +649,18 @@ class SupabaseBackupClient:
             "trading_date": str(item.get("tradingDate") or item.get("trading_date") or ""),
             "slot_time": str(item.get("slotTime") or item.get("slot_time") or ""),
             "timestamp": _int(item.get("timestamp")),
+            "display_key": str(item.get("displayKey") or item.get("display_key") or item.get("snapshotId") or item.get("id") or ""),
             "capture_mode": str(item.get("captureMode") or item.get("capture_mode") or "real_time"),
+            "quality_flags_json": json_dumps(item.get("qualityFlags") if isinstance(item.get("qualityFlags"), list) else []),
+            "delay_ms": _int(item.get("delayMs") or item.get("delay_ms")),
             "source": str(item.get("source") or "browser_runtime"),
-            "market_context_json": json_dumps(context),
+            "metadata_json": json_dumps(item.get("metadata") if isinstance(item.get("metadata"), dict) else market_context.get("metadata") or {}),
+            "market_stats_json": json_dumps(item.get("marketStats") if isinstance(item.get("marketStats"), dict) else market_context.get("marketStats") or {}),
+            "sentiment_json": json_dumps(item.get("sentiment") if isinstance(item.get("sentiment"), dict) else market_context.get("sentiment") or {}),
+            "money_flow_json": json_dumps(item.get("moneyFlow") if isinstance(item.get("moneyFlow"), dict) else market_context.get("moneyFlow") or {}),
+            "indices_json": json_dumps(item.get("indices") if isinstance(item.get("indices"), dict) else market_context.get("indices") or {}),
+            "limit_summary_json": json_dumps(item.get("limitSummary") if isinstance(item.get("limitSummary"), dict) else market_context.get("limitSummary") or {}),
+            "rotation_summary_json": json_dumps(item.get("rotationSummary") if isinstance(item.get("rotationSummary"), dict) else market_context.get("rotationSummary") or {}),
             "stock_row_count": _int(item.get("stockRowCount") or item.get("stock_row_count")),
             "sector_row_count": _int(item.get("sectorRowCount") or item.get("sector_row_count")),
         }
@@ -688,17 +677,72 @@ class SupabaseBackupClient:
             "slot_time": str(item.get("slotTime") or item.get("slot_time") or ""),
             "timestamp": _int(item.get("timestamp")),
             "capture_mode": str(item.get("captureMode") or item.get("capture_mode") or "real_time"),
+            "source": str(item.get("source") or "browser_runtime"),
             "code": str(item.get("code") or ""),
             "name": str(item.get("name") or item.get("code") or ""),
             "rank": _int(item.get("rank") or item.get("compRank")),
+            "comp_rank": _int(item.get("compRank") or item.get("comp_rank") or item.get("rank")),
+            "platforms": _int(item.get("platforms")),
+            "avg_rank": item.get("avgRank") or item.get("avg_rank"),
+            "avg_rank_num": _float(item.get("avgRankNum") or item.get("avg_rank_num")),
             "price": _float(item.get("price")),
             "change": _float(item.get("change")),
+            "volume": _float(item.get("volume")),
+            "turnover": _float(item.get("turnover")),
+            "turnover_rate": _float(item.get("turnoverRate") or item.get("turnover_rate")),
+            "total_mv": _float(item.get("totalMV") or item.get("total_mv")),
+            "cir_mv": _float(item.get("cirMV") or item.get("cir_mv")),
             "volume_ratio": _float(item.get("volumeRatio") or item.get("volume_ratio")),
             "zlje": _float(item.get("zlje")),
             "zljzb": _float(item.get("zljzb")),
-            "turnover": _float(item.get("turnover")),
-            "turnover_rate": _float(item.get("turnoverRate") or item.get("turnover_rate")),
-            "payload_json": json_dumps(item),
+            "cddje": _float(item.get("cddje")),
+            "cddjzb": _float(item.get("cddjzb")),
+            "pe": _float(item.get("pe")),
+            "pb": _float(item.get("pb")),
+            "depth10_json": json_dumps(item.get("depth10") if isinstance(item.get("depth10"), dict) else {}),
+            "bid1_price": _float(item.get("bid1Price") or item.get("bid1_price")),
+            "bid1_volume": _float(item.get("bid1Volume") or item.get("bid1_volume")),
+            "ask1_price": _float(item.get("ask1Price") or item.get("ask1_price")),
+            "ask1_volume": _float(item.get("ask1Volume") or item.get("ask1_volume")),
+            "spread": _float(item.get("spread")),
+            "bid10_total": _float(item.get("bid10Total") or item.get("bid10_total")),
+            "ask10_total": _float(item.get("ask10Total") or item.get("ask10_total")),
+            "depth_imbalance": _float(item.get("depthImbalance") or item.get("depth_imbalance")),
+            "tick_buy_volume": _float(item.get("tickBuyVolume") or item.get("tick_buy_volume")),
+            "tick_sell_volume": _float(item.get("tickSellVolume") or item.get("tick_sell_volume")),
+            "tick_buy_count": _maybe_int(item.get("tickBuyCount") or item.get("tick_buy_count")),
+            "tick_sell_count": _maybe_int(item.get("tickSellCount") or item.get("tick_sell_count")),
+            "last_trade_price": _float(item.get("lastTradePrice") or item.get("last_trade_price")),
+            "last_trade_volume": _float(item.get("lastTradeVolume") or item.get("last_trade_volume")),
+            "speed": _float(item.get("speed")),
+            "lead_status": item.get("leadStatus") or item.get("lead_status"),
+            "lead_times": _maybe_int(item.get("leadTimes") or item.get("lead_times")),
+            "lianban_str": item.get("lianbanStr") or item.get("lianban_str"),
+            "fengdan": _float(item.get("fengdan")),
+            "max_fengdan": _float(item.get("maxFengdan") or item.get("max_fengdan")),
+            "popularity": _float(item.get("popularity")),
+            "popularity_change": _float(item.get("popularityChange") or item.get("popularity_change")),
+            "institution_buy": _float(item.get("institutionBuy") or item.get("institution_buy")),
+            "big_money300": _float(item.get("bigMoney300") or item.get("big_money300")),
+            "themes_json": json_dumps(item.get("themes") if isinstance(item.get("themes"), list) else []),
+            "is_new": bool(item.get("isNew") if item.get("isNew") is not None else item.get("is_new") or False),
+            "first_zt_time": item.get("firstZtTime") or item.get("first_zt_time"),
+            "last_zt_time": item.get("lastZtTime") or item.get("last_zt_time"),
+            "board_height": _maybe_int(item.get("boardHeight") or item.get("board_height")),
+            "high_days": _maybe_int(item.get("highDays") or item.get("high_days")),
+            "hotness": _float(item.get("hotness")),
+            "main_theme": item.get("mainTheme") or item.get("main_theme"),
+            "theme_heat": _float(item.get("themeHeat") or item.get("theme_heat")),
+            "theme_level": item.get("themeLevel") or item.get("theme_level"),
+            "rank_change": _float(item.get("rankChange") or item.get("rank_change")),
+            "direction_signal": item.get("directionSignal") or item.get("direction_signal"),
+            "direction_confidence": _float(item.get("directionConfidence") or item.get("direction_confidence")),
+            "acceleration_signal": item.get("accelerationSignal") or item.get("acceleration_signal"),
+            "acceleration_confidence": _float(item.get("accelerationConfidence") or item.get("acceleration_confidence")),
+            "cross_signal": item.get("crossSignal") or item.get("cross_signal"),
+            "cross_confidence": _float(item.get("crossConfidence") or item.get("cross_confidence")),
+            "final_signal": item.get("finalSignal") or item.get("final_signal"),
+            "final_confidence": _float(item.get("finalConfidence") or item.get("final_confidence")),
         }
 
     @staticmethod
@@ -714,78 +758,48 @@ class SupabaseBackupClient:
             "trading_date": str(item.get("tradingDate") or item.get("trading_date") or ""),
             "slot_time": str(item.get("slotTime") or item.get("slot_time") or ""),
             "timestamp": _int(item.get("timestamp")),
+            "capture_mode": str(item.get("captureMode") or item.get("capture_mode") or "real_time"),
+            "source": str(item.get("source") or "browser_runtime"),
             "entity_type": entity_type,
             "entity_key": entity_key,
+            "entity_code": item.get("entityCode") or item.get("entity_code") or item.get("sectorCode") or item.get("sector_code"),
             "entity_name": str(item.get("entityName") or item.get("entity_name") or item.get("sectorName") or item.get("sector_name") or ""),
             "rank": _int(item.get("rank")),
-            "payload_json": json_dumps(item),
-        }
-
-    @staticmethod
-    def _backtest_to_row(run: BacktestRun) -> dict[str, Any]:
-        return {
-            "id": run.id,
-            "dataset_id": run.dataset_id,
-            "strategy_name": run.strategy_name,
-            "strategy_version": run.strategy_version,
-            "snapshot_type": run.snapshot_type,
-            "config_hash": run.config_hash,
-            "random_seed": run.random_seed,
-            "status": run.status,
-            "request_json": _encode_backup_text(run.request_json),
-            "result_json": _encode_backup_text(run.result_json),
-            "created_at": _datetime_to_iso(run.created_at),
-        }
-
-    @staticmethod
-    def _optimization_to_row(run: OptimizationRun) -> dict[str, Any]:
-        return {
-            "id": run.id,
-            "dataset_id": run.dataset_id,
-            "strategy_name": run.strategy_name,
-            "method": run.method,
-            "config_hash": run.config_hash,
-            "random_seed": run.random_seed,
-            "status": run.status,
-            "request_json": _encode_backup_text(run.request_json),
-            "result_json": _encode_backup_text(run.result_json),
-            "created_at": _datetime_to_iso(run.created_at),
-        }
-
-    @staticmethod
-    def _golden_to_row(case: GoldenRankTrendCase) -> dict[str, Any]:
-        return {
-            "id": case.id,
-            "name": case.name,
-            "dataset_id": case.dataset_id,
-            "input_json": _encode_backup_text(case.input_json),
-            "expected_json": _encode_backup_text(case.expected_json),
-            "created_at": _datetime_to_iso(case.created_at),
+            "strength": _float(item.get("strength")),
+            "heat_score": _float(item.get("heatScore") or item.get("heat_score")),
+            "heat_level": item.get("heatLevel") or item.get("heat_level"),
+            "change": _float(item.get("change")),
+            "main_net_inflow": _float(item.get("mainNetInflow") or item.get("main_net_inflow")),
+            "big_money300": _float(item.get("bigMoney300") or item.get("big_money300")),
+            "institution_buy": _float(item.get("institutionBuy") or item.get("institution_buy")),
+            "volume_ratio": _float(item.get("volumeRatio") or item.get("volume_ratio")),
+            "zt_count": _maybe_int(item.get("ztCount") or item.get("zt_count")),
+            "leader_count": _maybe_int(item.get("leaderCount") or item.get("leader_count")),
+            "persistent_days": _maybe_int(item.get("persistentDays") or item.get("persistent_days")),
+            "net_inflow": _float(item.get("netInflow") or item.get("net_inflow")),
+            "metadata_json": json_dumps(item.get("metadata") if isinstance(item.get("metadata"), dict) else {}),
         }
 
     @staticmethod
     def _record_from_row(row: dict[str, Any]) -> dict[str, Any]:
-        payload = json_loads(str(row.get("payload_json") or ""), {})
-        payload = dict(payload) if isinstance(payload, dict) else {}
-        payload.update(
-            {
-                "id": row.get("snapshot_id"),
-                "snapshotId": row.get("snapshot_id"),
-                "type": row.get("type"),
-                "tradingDate": row.get("trading_date"),
-                "slotTime": row.get("slot_time"),
-                "timestamp": _int(row.get("timestamp")),
-                "displayKey": row.get("display_key"),
-                "captureMode": row.get("capture_mode"),
-                "source": row.get("source"),
-            }
-        )
-        return payload
+        return {
+            "id": row.get("snapshot_id"),
+            "snapshotId": row.get("snapshot_id"),
+            "type": row.get("type"),
+            "tradingDate": row.get("trading_date"),
+            "slotTime": row.get("slot_time"),
+            "timestamp": _int(row.get("timestamp")),
+            "displayKey": row.get("display_key"),
+            "captureMode": row.get("capture_mode"),
+            "capturedAt": _int(row.get("captured_at")),
+            "dataTimestamp": _int(row.get("data_timestamp")),
+            "delayMs": _int(row.get("delay_ms")),
+            "qualityFlags": json_loads(_maybe_decompress(row.get("quality_flags_json") or "[]"), []),
+            "source": row.get("source"),
+        }
 
     @staticmethod
     def _frame_from_row(row: dict[str, Any]) -> dict[str, Any]:
-        context = json_loads(str(row.get("market_context_json") or ""), {})
-        context = context if isinstance(context, dict) else {}
         return {
             "id": row.get("snapshot_id"),
             "snapshotId": row.get("snapshot_id"),
@@ -795,65 +809,132 @@ class SupabaseBackupClient:
             "type": row.get("type"),
             "captureMode": row.get("capture_mode"),
             "source": row.get("source"),
-            "marketStats": context.get("marketStats"),
-            "sentiment": context.get("sentiment"),
-            "moneyFlow": context.get("moneyFlow"),
-            "indices": context.get("indices"),
-            "limitSummary": context.get("limitSummary"),
-            "rotationSummary": context.get("rotationSummary"),
-            "payload": context.get("payload"),
+            "displayKey": row.get("display_key"),
+            "qualityFlags": json_loads(_maybe_decompress(row.get("quality_flags_json") or "[]"), []),
+            "delayMs": _int(row.get("delay_ms")),
+            "metadata": json_loads(_maybe_decompress(row.get("metadata_json") or "{}"), {}),
+            "marketStats": json_loads(_maybe_decompress(row.get("market_stats_json") or "{}"), {}),
+            "sentiment": json_loads(_maybe_decompress(row.get("sentiment_json") or "{}"), {}),
+            "moneyFlow": json_loads(_maybe_decompress(row.get("money_flow_json") or "{}"), {}),
+            "indices": json_loads(_maybe_decompress(row.get("indices_json") or "{}"), {}),
+            "limitSummary": json_loads(_maybe_decompress(row.get("limit_summary_json") or "{}"), {}),
+            "rotationSummary": json_loads(_maybe_decompress(row.get("rotation_summary_json") or "{}"), {}),
             "stockRowCount": _int(row.get("stock_row_count")),
             "sectorRowCount": _int(row.get("sector_row_count")),
         }
 
     @staticmethod
     def _stock_from_row(row: dict[str, Any]) -> dict[str, Any]:
-        payload = json_loads(str(row.get("payload_json") or ""), {})
-        payload = dict(payload) if isinstance(payload, dict) else {}
-        payload.update(
-            {
-                "id": row.get("row_id"),
-                "rowId": row.get("row_id"),
-                "snapshotId": row.get("snapshot_id"),
-                "type": row.get("type"),
-                "tradingDate": row.get("trading_date"),
-                "slotTime": row.get("slot_time"),
-                "timestamp": _int(row.get("timestamp")),
-                "captureMode": row.get("capture_mode"),
-                "code": row.get("code"),
-                "name": row.get("name"),
-                "rank": _int(row.get("rank")),
-                "price": row.get("price"),
-                "change": row.get("change"),
-                "volumeRatio": row.get("volume_ratio"),
-                "zlje": row.get("zlje"),
-                "zljzb": row.get("zljzb"),
-                "turnover": row.get("turnover"),
-                "turnoverRate": row.get("turnover_rate"),
-            }
-        )
-        return payload
+        item = {
+            "id": row.get("row_id"),
+            "rowId": row.get("row_id"),
+            "snapshotId": row.get("snapshot_id"),
+            "type": row.get("type"),
+            "tradingDate": row.get("trading_date"),
+            "slotTime": row.get("slot_time"),
+            "timestamp": _int(row.get("timestamp")),
+            "captureMode": row.get("capture_mode"),
+            "source": row.get("source"),
+            "code": row.get("code"),
+            "name": row.get("name"),
+            "rank": _int(row.get("rank")),
+            "compRank": _int(row.get("comp_rank")),
+            "platforms": _int(row.get("platforms")),
+            "avgRank": row.get("avg_rank"),
+            "avgRankNum": row.get("avg_rank_num"),
+            "price": row.get("price"),
+            "change": row.get("change"),
+            "volume": row.get("volume"),
+            "turnover": row.get("turnover"),
+            "turnoverRate": row.get("turnover_rate"),
+            "totalMV": row.get("total_mv"),
+            "cirMV": row.get("cir_mv"),
+            "volumeRatio": row.get("volume_ratio"),
+            "zlje": row.get("zlje"),
+            "zljzb": row.get("zljzb"),
+            "cddje": row.get("cddje"),
+            "cddjzb": row.get("cddjzb"),
+            "pe": row.get("pe"),
+            "pb": row.get("pb"),
+            "depth10": json_loads(_maybe_decompress(row.get("depth10_json") or "{}"), {}),
+            "bid1Price": row.get("bid1_price"),
+            "bid1Volume": row.get("bid1_volume"),
+            "ask1Price": row.get("ask1_price"),
+            "ask1Volume": row.get("ask1_volume"),
+            "spread": row.get("spread"),
+            "bid10Total": row.get("bid10_total"),
+            "ask10Total": row.get("ask10_total"),
+            "depthImbalance": row.get("depth_imbalance"),
+            "tickBuyVolume": row.get("tick_buy_volume"),
+            "tickSellVolume": row.get("tick_sell_volume"),
+            "tickBuyCount": row.get("tick_buy_count"),
+            "tickSellCount": row.get("tick_sell_count"),
+            "lastTradePrice": row.get("last_trade_price"),
+            "lastTradeVolume": row.get("last_trade_volume"),
+            "speed": row.get("speed"),
+            "leadStatus": row.get("lead_status"),
+            "leadTimes": row.get("lead_times"),
+            "lianbanStr": row.get("lianban_str"),
+            "fengdan": row.get("fengdan"),
+            "maxFengdan": row.get("max_fengdan"),
+            "popularity": row.get("popularity"),
+            "popularityChange": row.get("popularity_change"),
+            "institutionBuy": row.get("institution_buy"),
+            "bigMoney300": row.get("big_money300"),
+            "themes": json_loads(_maybe_decompress(row.get("themes_json") or "[]"), []),
+            "isNew": bool(row.get("is_new")),
+            "firstZtTime": row.get("first_zt_time"),
+            "lastZtTime": row.get("last_zt_time"),
+            "boardHeight": row.get("board_height"),
+            "highDays": row.get("high_days"),
+            "hotness": row.get("hotness"),
+            "mainTheme": row.get("main_theme"),
+            "themeHeat": row.get("theme_heat"),
+            "themeLevel": row.get("theme_level"),
+            "rankChange": row.get("rank_change"),
+            "directionSignal": row.get("direction_signal"),
+            "directionConfidence": row.get("direction_confidence"),
+            "accelerationSignal": row.get("acceleration_signal"),
+            "accelerationConfidence": row.get("acceleration_confidence"),
+            "crossSignal": row.get("cross_signal"),
+            "crossConfidence": row.get("cross_confidence"),
+            "finalSignal": row.get("final_signal"),
+            "finalConfidence": row.get("final_confidence"),
+        }
+        return {key: value for key, value in item.items() if value is not None}
 
     @staticmethod
     def _sector_from_row(row: dict[str, Any]) -> dict[str, Any]:
-        payload = json_loads(str(row.get("payload_json") or ""), {})
-        payload = dict(payload) if isinstance(payload, dict) else {}
-        payload.update(
-            {
-                "id": row.get("row_id"),
-                "rowId": row.get("row_id"),
-                "snapshotId": row.get("snapshot_id"),
-                "type": row.get("type"),
-                "tradingDate": row.get("trading_date"),
-                "slotTime": row.get("slot_time"),
-                "timestamp": _int(row.get("timestamp")),
-                "entityType": row.get("entity_type"),
-                "entityKey": row.get("entity_key"),
-                "entityName": row.get("entity_name"),
-                "rank": _int(row.get("rank")),
-            }
-        )
-        return payload
+        item = {
+            "id": row.get("row_id"),
+            "rowId": row.get("row_id"),
+            "snapshotId": row.get("snapshot_id"),
+            "type": row.get("type"),
+            "tradingDate": row.get("trading_date"),
+            "slotTime": row.get("slot_time"),
+            "timestamp": _int(row.get("timestamp")),
+            "captureMode": row.get("capture_mode"),
+            "source": row.get("source"),
+            "entityType": row.get("entity_type"),
+            "entityKey": row.get("entity_key"),
+            "entityCode": row.get("entity_code"),
+            "entityName": row.get("entity_name"),
+            "rank": _int(row.get("rank")),
+            "strength": row.get("strength"),
+            "heatScore": row.get("heat_score"),
+            "heatLevel": row.get("heat_level"),
+            "change": row.get("change"),
+            "mainNetInflow": row.get("main_net_inflow"),
+            "bigMoney300": row.get("big_money300"),
+            "institutionBuy": row.get("institution_buy"),
+            "volumeRatio": row.get("volume_ratio"),
+            "ztCount": row.get("zt_count"),
+            "leaderCount": row.get("leader_count"),
+            "persistentDays": row.get("persistent_days"),
+            "netInflow": row.get("net_inflow"),
+            "metadata": json_loads(_maybe_decompress(row.get("metadata_json") or "{}"), {}),
+        }
+        return {key: value for key, value in item.items() if value is not None}
 
     @staticmethod
     def _frame_bundle_to_read_dict(frame: dict[str, Any]) -> dict[str, Any]:
@@ -866,13 +947,13 @@ class SupabaseBackupClient:
             "captureMode": frame.get("captureMode") or "real_time",
             "source": frame.get("source") or "browser_runtime",
             "marketContext": {
+                "metadata": frame.get("metadata"),
                 "marketStats": frame.get("marketStats"),
                 "sentiment": frame.get("sentiment"),
                 "moneyFlow": frame.get("moneyFlow"),
                 "indices": frame.get("indices"),
                 "limitSummary": frame.get("limitSummary"),
                 "rotationSummary": frame.get("rotationSummary"),
-                "payload": frame.get("payload"),
             },
             "stocks": [],
         }
@@ -973,20 +1054,18 @@ def _float(value: Any) -> float | None:
         return None
 
 
-def _encode_backup_text(value: Any) -> str:
-    text = str(value or "")
-    raw = text.encode("utf-8")
-    if len(raw) < COMPRESSION_THRESHOLD_BYTES or text.startswith(COMPRESSED_TEXT_PREFIX):
-        return text
-    compressed = gzip.compress(raw, compresslevel=6)
-    return COMPRESSED_TEXT_PREFIX + base64.b64encode(compressed).decode("ascii")
+def _maybe_int(value: Any) -> int | None:
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
 
 
-def _decode_backup_text(value: Any) -> str:
+def _maybe_decompress(value: Any) -> str:
     text = str(value or "")
     if not text.startswith(COMPRESSED_TEXT_PREFIX):
         return text
-    encoded = text[len(COMPRESSED_TEXT_PREFIX) :]
+    encoded = text[len(COMPRESSED_TEXT_PREFIX):]
     try:
         return gzip.decompress(base64.b64decode(encoded.encode("ascii"))).decode("utf-8")
     except Exception:

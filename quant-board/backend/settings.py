@@ -1,4 +1,5 @@
 import os
+import warnings
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -66,6 +67,8 @@ class Settings(BaseModel):
     reports_dir: Path = BASE_DIR / "data" / "reports"
     frontend_dir: Path = BASE_DIR / "frontend"
     database_url: str = Field(default="")
+    snapshot_database_url: str = Field(default="")
+    research_database_url: str = Field(default="")
     supabase_url: str = Field(default="")
     supabase_secret_key: str = Field(default="")
     backup_mirror_enabled: bool = Field(default=True)
@@ -78,8 +81,26 @@ class Settings(BaseModel):
     data_source: DataSourceConfig = Field(default_factory=DataSourceConfig)
 
     def model_post_init(self, __context: Any) -> None:
-        if not self.database_url:
-            self.database_url = os.environ.get("QUANT_BOARD_DATABASE_URL") or f"sqlite:///{self.warehouse_dir / 'quant_board.db'}"
+        old_db_url = os.environ.get("QUANT_BOARD_DATABASE_URL")
+        if old_db_url and not os.environ.get("QUANT_BOARD_SNAPSHOT_DATABASE_URL"):
+            warnings.warn(
+                "QUANT_BOARD_DATABASE_URL is deprecated, use QUANT_BOARD_SNAPSHOT_DATABASE_URL instead. "
+                "Falling back to the old value for now, but this will be removed in a future version.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        if not self.snapshot_database_url:
+            self.snapshot_database_url = (
+                os.environ.get("QUANT_BOARD_SNAPSHOT_DATABASE_URL")
+                or old_db_url
+                or f"sqlite:///{self.warehouse_dir / 'quant_board_snapshots.db'}"
+            )
+        if not self.research_database_url:
+            self.research_database_url = (
+                os.environ.get("QUANT_BOARD_RESEARCH_DATABASE_URL")
+                or f"sqlite:///{self.warehouse_dir / 'quant_board_research.db'}"
+            )
+        self.database_url = self.snapshot_database_url
         self.supabase_url = os.environ.get("SUPABASE_URL", self.supabase_url).rstrip("/")
         self.supabase_secret_key = os.environ.get("SUPABASE_SECRET_KEY", self.supabase_secret_key)
         self.backup_mirror_enabled = _env_bool(

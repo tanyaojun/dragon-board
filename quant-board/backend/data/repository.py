@@ -8,6 +8,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from backend.data.database import ResearchSessionLocal
 from backend.data.models import (
     BacktestRun,
     Dataset,
@@ -34,6 +35,18 @@ class Repository:
         self.session = session
         self.enable_backup = enable_backup
         self.backup = None if not enable_backup else (backup_client if backup_client is not None else get_backup_client())
+        self._research_session: Session | None = None
+
+    @property
+    def research_session(self) -> Session:
+        if self._research_session is None:
+            self._research_session = ResearchSessionLocal()
+        return self._research_session
+
+    def close(self) -> None:
+        if self._research_session is not None:
+            self._research_session.close()
+            self._research_session = None
 
     def list_datasets(self) -> list[Dataset]:
         if self.session is None:
@@ -343,7 +356,7 @@ class Repository:
     def enqueue_outbox(
         self,
         op_type: str,
-        payload: dict[str, Any],
+        payload: dict[str, Any] | None = None,
         *,
         idempotency_key: str,
         dataset_id: str | None = None,
@@ -360,7 +373,6 @@ class Repository:
             op_type=op_type,
             dataset_id=dataset_id,
             snapshot_id=snapshot_id,
-            payload_json=json_dumps(payload),
             idempotency_key=idempotency_key,
             status=status,
             retry_count=0,
@@ -373,7 +385,7 @@ class Repository:
     def _add_outbox_row(
         self,
         op_type: str,
-        payload: dict[str, Any],
+        payload: dict[str, Any] | None = None,
         *,
         idempotency_key: str,
         dataset_id: str | None = None,
@@ -390,7 +402,6 @@ class Repository:
             op_type=op_type,
             dataset_id=dataset_id,
             snapshot_id=snapshot_id,
-            payload_json=json_dumps(payload),
             idempotency_key=idempotency_key,
             status=status,
             retry_count=0,
@@ -409,7 +420,7 @@ class Repository:
     ) -> str | None:
         if self.session is None or not self.enable_backup:
             return None
-        idempotency_key = f"{op_type}:{snapshot_id or dataset_id or stable_hash(payload)[:24]}:{stable_hash(payload)[:24]}"
+        idempotency_key = f"{op_type}:{snapshot_id or dataset_id or stable_hash(payload or {})[:24]}:{stable_hash(payload or {})[:24]}"
         self._add_outbox_row(
             op_type,
             payload,
@@ -838,100 +849,49 @@ class Repository:
         return counts
 
     def save_backtest_run(self, run: BacktestRun) -> BacktestRun:
-        if self.session is None:
-            if not self._mirror_backtest_run(run):
-                raise RuntimeError("primary database is unavailable and Supabase backup is not configured or writable")
-            return run
         try:
-            managed = self.session.merge(run)
-            outbox_key = self._queue_backup_outbox(
-                "backtest_run",
-                {"run": self.backtest_run_to_dict(managed)},
-                dataset_id=managed.dataset_id,
-                snapshot_id=managed.id,
-            )
-            self.session.commit()
+            managed = self.research_session.merge(run)
+            self.research_session.commit()
         except SQLAlchemyError:
-            self.session.rollback()
-            if not self._mirror_backtest_run(run):
-                raise RuntimeError("primary database write failed and Supabase backup write also failed")
-            return run
-        saved = self.session.get(BacktestRun, run.id) or run
-        mirror_ok = self._mirror_backtest_run(saved)
-        self._finalize_outbox_mirror(outbox_key, mirror_ok)
-        return saved
+            self.research_session.rollback()
+            raise RuntimeError("research database write failed") from None
+        return self.research_session.get(BacktestRun, managed.id) or run
 
     def get_backtest_run(self, run_id: str) -> BacktestRun | None:
-        if self.session is None:
-            return self._backup_backtest_run(run_id)
         try:
-            return self.session.get(BacktestRun, run_id) or self._backup_backtest_run(run_id)
+            return self.research_session.get(BacktestRun, run_id)
         except SQLAlchemyError:
-            return self._backup_backtest_run(run_id)
+            return None
 
     def save_optimization_run(self, run: OptimizationRun) -> OptimizationRun:
-        if self.session is None:
-            if not self._mirror_optimization_run(run):
-                raise RuntimeError("primary database is unavailable and Supabase backup is not configured or writable")
-            return run
         try:
-            managed = self.session.merge(run)
-            outbox_key = self._queue_backup_outbox(
-                "optimization_run",
-                {"run": self.optimization_run_to_dict(managed)},
-                dataset_id=managed.dataset_id,
-                snapshot_id=managed.id,
-            )
-            self.session.commit()
+            managed = self.research_session.merge(run)
+            self.research_session.commit()
         except SQLAlchemyError:
-            self.session.rollback()
-            if not self._mirror_optimization_run(run):
-                raise RuntimeError("primary database write failed and Supabase backup write also failed")
-            return run
-        saved = self.session.get(OptimizationRun, run.id) or run
-        mirror_ok = self._mirror_optimization_run(saved)
-        self._finalize_outbox_mirror(outbox_key, mirror_ok)
-        return saved
+            self.research_session.rollback()
+            raise RuntimeError("research database write failed") from None
+        return self.research_session.get(OptimizationRun, managed.id) or run
 
     def get_optimization_run(self, run_id: str) -> OptimizationRun | None:
-        if self.session is None:
-            return self._backup_optimization_run(run_id)
         try:
-            return self.session.get(OptimizationRun, run_id) or self._backup_optimization_run(run_id)
+            return self.research_session.get(OptimizationRun, run_id)
         except SQLAlchemyError:
-            return self._backup_optimization_run(run_id)
+            return None
 
     def save_golden_case(self, case: GoldenRankTrendCase) -> GoldenRankTrendCase:
-        if self.session is None:
-            if not self._mirror_golden_case(case):
-                raise RuntimeError("primary database is unavailable and Supabase backup is not configured or writable")
-            return case
         try:
-            managed = self.session.merge(case)
-            outbox_key = self._queue_backup_outbox(
-                "golden_case",
-                {"case": self.golden_case_to_dict(managed)},
-                dataset_id=managed.dataset_id,
-                snapshot_id=managed.id,
-            )
-            self.session.commit()
+            managed = self.research_session.merge(case)
+            self.research_session.commit()
         except SQLAlchemyError:
-            self.session.rollback()
-            if not self._mirror_golden_case(case):
-                raise RuntimeError("primary database write failed and Supabase backup write also failed")
-            return case
-        saved = self.session.get(GoldenRankTrendCase, case.id) or case
-        mirror_ok = self._mirror_golden_case(saved)
-        self._finalize_outbox_mirror(outbox_key, mirror_ok)
-        return saved
+            self.research_session.rollback()
+            raise RuntimeError("research database write failed") from None
+        return self.research_session.get(GoldenRankTrendCase, managed.id) or case
 
     def get_golden_case(self, case_id: str) -> GoldenRankTrendCase | None:
-        if self.session is None:
-            return self._backup_golden_case(case_id)
         try:
-            return self.session.get(GoldenRankTrendCase, case_id) or self._backup_golden_case(case_id)
+            return self.research_session.get(GoldenRankTrendCase, case_id)
         except SQLAlchemyError:
-            return self._backup_golden_case(case_id)
+            return None
 
     def dump_dataset_bundle(
         self,
@@ -1121,31 +1081,26 @@ class Repository:
 
     @staticmethod
     def record_to_dict(model: SnapshotRecordModel) -> dict[str, Any]:
-        raw_payload = json_loads(model.payload_json, {})
-        if isinstance(raw_payload, dict):
-            payload = dict(raw_payload)
-        else:
-            raw_payload = {}
-            payload = {}
-        payload.update(
-            {
-                "id": model.snapshot_id,
-                "snapshotId": model.snapshot_id,
-                "type": model.type,
-                "tradingDate": model.trading_date,
-                "slotTime": model.slot_time,
-                "timestamp": model.timestamp,
-                "displayKey": model.display_key,
-                "captureMode": model.capture_mode,
-                "source": model.source,
-                "payload": raw_payload,
-            }
-        )
-        return payload
+        return {
+            "id": model.snapshot_id,
+            "snapshotId": model.snapshot_id,
+            "type": model.type,
+            "tradingDate": model.trading_date,
+            "slotTime": model.slot_time,
+            "timestamp": model.timestamp,
+            "displayKey": model.display_key,
+            "captureMode": model.capture_mode,
+            "capturedAt": model.captured_at or model.timestamp,
+            "dataTimestamp": model.data_timestamp or model.timestamp,
+            "delayMs": model.delay_ms or 0,
+            "qualityFlags": json_loads(model.quality_flags_json, []),
+            "source": model.source,
+            "payload": {},
+        }
 
     @staticmethod
     def frame_to_dict(model: SnapshotFrameModel) -> dict[str, Any]:
-        context = json_loads(model.market_context_json, {})
+        context = Repository._frame_context(model)
         return {
             "snapshotId": model.snapshot_id,
             "timestamp": model.timestamp,
@@ -1160,7 +1115,7 @@ class Repository:
 
     @staticmethod
     def local_frame_to_bundle_dict(model: SnapshotFrameModel) -> dict[str, Any]:
-        context = json_loads(model.market_context_json, {})
+        context = Repository._frame_context(model)
         return {
             "id": model.snapshot_id,
             "snapshotId": model.snapshot_id,
@@ -1168,96 +1123,149 @@ class Repository:
             "tradingDate": model.trading_date,
             "slotTime": model.slot_time,
             "type": model.type,
+            "displayKey": model.display_key or model.snapshot_id,
             "captureMode": model.capture_mode,
             "source": model.source,
+            "qualityFlags": json_loads(model.quality_flags_json, []),
+            "delayMs": model.delay_ms or 0,
             "marketStats": context.get("marketStats"),
             "sentiment": context.get("sentiment"),
             "moneyFlow": context.get("moneyFlow"),
             "indices": context.get("indices"),
             "limitSummary": context.get("limitSummary"),
             "rotationSummary": context.get("rotationSummary"),
-            "payload": context.get("payload"),
             "stockRowCount": model.stock_row_count,
             "sectorRowCount": model.sector_row_count,
         }
 
     @staticmethod
     def stock_row_to_dict(model: SnapshotStockRowModel, include_payload: bool = True) -> dict[str, Any]:
-        payload = json_loads(model.payload_json, {}) if include_payload else {}
-        payload.update(
-            {
-                "code": model.code,
-                "name": model.name,
-                "rank": model.rank,
-                "price": model.price,
-                "change": model.change,
-                "volumeRatio": model.volume_ratio,
-                "zlje": model.zlje,
-                "zljzb": model.zljzb,
-                "turnover": model.turnover,
-                "turnoverRate": model.turnover_rate,
-            }
-        )
-        return payload
+        return Repository.local_stock_to_bundle_dict(model)
 
     @staticmethod
     def local_stock_to_bundle_dict(model: SnapshotStockRowModel) -> dict[str, Any]:
-        payload = json_loads(model.payload_json, {})
-        if isinstance(payload, dict):
-            payload = dict(payload)
-        else:
-            payload = {}
-        payload.update(
-            {
-                "id": model.row_id,
-                "rowId": model.row_id,
-                "snapshotId": model.snapshot_id,
-                "type": model.type,
-                "tradingDate": model.trading_date,
-                "slotTime": model.slot_time,
-                "timestamp": model.timestamp,
-                "captureMode": model.capture_mode,
-                "code": model.code,
-                "name": model.name,
-                "rank": model.rank,
-                "price": model.price,
-                "change": model.change,
-                "volumeRatio": model.volume_ratio,
-                "zlje": model.zlje,
-                "zljzb": model.zljzb,
-                "turnover": model.turnover,
-                "turnoverRate": model.turnover_rate,
-            }
-        )
-        return payload
+        item = {
+            "id": model.row_id,
+            "rowId": model.row_id,
+            "snapshotId": model.snapshot_id,
+            "type": model.type,
+            "tradingDate": model.trading_date,
+            "slotTime": model.slot_time,
+            "timestamp": model.timestamp,
+            "captureMode": model.capture_mode,
+            "source": model.source,
+            "code": model.code,
+            "name": model.name,
+            "rank": model.rank,
+            "compRank": model.comp_rank,
+            "platforms": model.platforms,
+            "avgRank": model.avg_rank,
+            "avgRankNum": model.avg_rank_num,
+            "price": model.price,
+            "change": model.change,
+            "volume": model.volume,
+            "turnover": model.turnover,
+            "turnoverRate": model.turnover_rate,
+            "totalMV": model.total_mv,
+            "cirMV": model.cir_mv,
+            "volumeRatio": model.volume_ratio,
+            "zlje": model.zlje,
+            "zljzb": model.zljzb,
+            "cddje": model.cddje,
+            "cddjzb": model.cddjzb,
+            "pe": model.pe,
+            "pb": model.pb,
+            "depth10": json_loads(model.depth10_json, {}),
+            "bid1Price": model.bid1_price,
+            "bid1Volume": model.bid1_volume,
+            "ask1Price": model.ask1_price,
+            "ask1Volume": model.ask1_volume,
+            "spread": model.spread,
+            "bid10Total": model.bid10_total,
+            "ask10Total": model.ask10_total,
+            "depthImbalance": model.depth_imbalance,
+            "tickBuyVolume": model.tick_buy_volume,
+            "tickSellVolume": model.tick_sell_volume,
+            "tickBuyCount": model.tick_buy_count,
+            "tickSellCount": model.tick_sell_count,
+            "lastTradePrice": model.last_trade_price,
+            "lastTradeVolume": model.last_trade_volume,
+            "speed": model.speed,
+            "leadStatus": model.lead_status,
+            "leadTimes": model.lead_times,
+            "lianbanStr": model.lianban_str,
+            "fengdan": model.fengdan,
+            "maxFengdan": model.max_fengdan,
+            "popularity": model.popularity,
+            "popularityChange": model.popularity_change,
+            "institutionBuy": model.institution_buy,
+            "bigMoney300": model.big_money300,
+            "themes": json_loads(model.themes_json, []),
+            "isNew": bool(model.is_new),
+            "firstZtTime": model.first_zt_time,
+            "lastZtTime": model.last_zt_time,
+            "boardHeight": model.board_height,
+            "highDays": model.high_days,
+            "hotness": model.hotness,
+            "mainTheme": model.main_theme,
+            "themeHeat": model.theme_heat,
+            "themeLevel": model.theme_level,
+            "rankChange": model.rank_change,
+            "directionSignal": model.direction_signal,
+            "directionConfidence": model.direction_confidence,
+            "accelerationSignal": model.acceleration_signal,
+            "accelerationConfidence": model.acceleration_confidence,
+            "crossSignal": model.cross_signal,
+            "crossConfidence": model.cross_confidence,
+            "finalSignal": model.final_signal,
+            "finalConfidence": model.final_confidence,
+        }
+        return {key: value for key, value in item.items() if value is not None}
 
     @staticmethod
     def local_sector_to_bundle_dict(model: SnapshotSectorRowModel) -> dict[str, Any]:
-        payload = json_loads(model.payload_json, {})
-        if isinstance(payload, dict):
-            payload = dict(payload)
-        else:
-            payload = {}
-        capture_mode = str(payload.get("captureMode") or payload.get("capture_mode") or "real_time")
-        source = str(payload.get("source") or "browser_runtime")
-        payload.update(
-            {
-                "id": model.row_id,
-                "rowId": model.row_id,
-                "snapshotId": model.snapshot_id,
-                "type": model.type,
-                "tradingDate": model.trading_date,
-                "slotTime": model.slot_time,
-                "timestamp": model.timestamp,
-                "captureMode": capture_mode,
-                "source": source,
-                "entityType": model.entity_type,
-                "entityKey": model.entity_key,
-                "entityName": model.entity_name,
-                "rank": model.rank,
-            }
-        )
-        return payload
+        item = {
+            "id": model.row_id,
+            "rowId": model.row_id,
+            "snapshotId": model.snapshot_id,
+            "type": model.type,
+            "tradingDate": model.trading_date,
+            "slotTime": model.slot_time,
+            "timestamp": model.timestamp,
+            "captureMode": model.capture_mode,
+            "source": model.source,
+            "entityType": model.entity_type,
+            "entityKey": model.entity_key,
+            "entityCode": model.entity_code,
+            "entityName": model.entity_name,
+            "rank": model.rank,
+            "strength": model.strength,
+            "heatScore": model.heat_score,
+            "heatLevel": model.heat_level,
+            "change": model.change,
+            "mainNetInflow": model.main_net_inflow,
+            "bigMoney300": model.big_money300,
+            "institutionBuy": model.institution_buy,
+            "volumeRatio": model.volume_ratio,
+            "ztCount": model.zt_count,
+            "leaderCount": model.leader_count,
+            "persistentDays": model.persistent_days,
+            "netInflow": model.net_inflow,
+            "metadata": json_loads(model.metadata_json, {}),
+        }
+        return {key: value for key, value in item.items() if value is not None}
+
+    @staticmethod
+    def _frame_context(model: SnapshotFrameModel) -> dict[str, Any]:
+        return {
+            "metadata": json_loads(model.metadata_json, {}),
+            "marketStats": json_loads(model.market_stats_json, {}),
+            "sentiment": json_loads(model.sentiment_json, {}),
+            "moneyFlow": json_loads(model.money_flow_json, {}),
+            "indices": json_loads(model.indices_json, {}),
+            "limitSummary": json_loads(model.limit_summary_json, {}),
+            "rotationSummary": json_loads(model.rotation_summary_json, {}),
+        }
 
     @staticmethod
     def _sector_entity_to_view(row: dict[str, Any]) -> dict[str, Any]:
@@ -1283,30 +1291,25 @@ class Repository:
 
     @staticmethod
     def _record_model(dataset_id: str, item: dict[str, Any]) -> SnapshotRecordModel:
+        timestamp = int(item.get("timestamp") or 0)
         return SnapshotRecordModel(
             dataset_id=dataset_id,
             snapshot_id=str(item.get("id") or item.get("snapshotId")),
             type=str(item.get("type") or ""),
             trading_date=str(item.get("tradingDate") or ""),
             slot_time=str(item.get("slotTime") or ""),
-            timestamp=int(item.get("timestamp") or 0),
+            timestamp=timestamp,
             display_key=str(item.get("displayKey") or ""),
             capture_mode=str(item.get("captureMode") or "real_time"),
+            captured_at=int(item.get("capturedAt") or timestamp),
+            data_timestamp=int(item.get("dataTimestamp") or timestamp),
+            delay_ms=int(item.get("delayMs") or 0),
+            quality_flags_json=json_dumps(item.get("qualityFlags") if isinstance(item.get("qualityFlags"), list) else []),
             source=str(item.get("source") or "browser_runtime"),
-            payload_json=json_dumps(item.get("payload") or item),
         )
 
     @staticmethod
     def _frame_model(dataset_id: str, item: dict[str, Any]) -> SnapshotFrameModel:
-        context = {
-            "marketStats": item.get("marketStats"),
-            "sentiment": item.get("sentiment"),
-            "moneyFlow": item.get("moneyFlow"),
-            "indices": item.get("indices"),
-            "limitSummary": item.get("limitSummary"),
-            "rotationSummary": item.get("rotationSummary"),
-            "payload": item.get("payload"),
-        }
         return SnapshotFrameModel(
             dataset_id=dataset_id,
             snapshot_id=str(item.get("snapshotId") or item.get("id")),
@@ -1314,9 +1317,18 @@ class Repository:
             trading_date=str(item.get("tradingDate") or ""),
             slot_time=str(item.get("slotTime") or ""),
             timestamp=int(item.get("timestamp") or 0),
+            display_key=str(item.get("displayKey") or item.get("snapshotId") or item.get("id") or ""),
             capture_mode=str(item.get("captureMode") or "real_time"),
+            quality_flags_json=json_dumps(item.get("qualityFlags") if isinstance(item.get("qualityFlags"), list) else []),
+            delay_ms=int(item.get("delayMs") or 0),
             source=str(item.get("source") or "browser_runtime"),
-            market_context_json=json_dumps(context),
+            metadata_json=json_dumps(item.get("metadata") if isinstance(item.get("metadata"), dict) else {}),
+            market_stats_json=json_dumps(item.get("marketStats") if isinstance(item.get("marketStats"), dict) else {}),
+            sentiment_json=json_dumps(item.get("sentiment") if isinstance(item.get("sentiment"), dict) else {}),
+            money_flow_json=json_dumps(item.get("moneyFlow") if isinstance(item.get("moneyFlow"), dict) else {}),
+            indices_json=json_dumps(item.get("indices") if isinstance(item.get("indices"), dict) else {}),
+            limit_summary_json=json_dumps(item.get("limitSummary") if isinstance(item.get("limitSummary"), dict) else {}),
+            rotation_summary_json=json_dumps(item.get("rotationSummary") if isinstance(item.get("rotationSummary"), dict) else {}),
             stock_row_count=int(item.get("stockRowCount") or 0),
             sector_row_count=int(item.get("sectorRowCount") or 0),
         )
@@ -1333,17 +1345,72 @@ class Repository:
             slot_time=str(item.get("slotTime") or ""),
             timestamp=int(item.get("timestamp") or 0),
             capture_mode=str(item.get("captureMode") or "real_time"),
+            source=str(item.get("source") or "browser_runtime"),
             code=str(item.get("code") or ""),
             name=str(item.get("name") or item.get("code") or ""),
             rank=int(float(item.get("rank") or item.get("compRank") or 0)),
+            comp_rank=int(float(item.get("compRank") or item.get("rank") or 0)),
+            platforms=int(float(item.get("platforms") or 0)),
+            avg_rank=item.get("avgRank"),
+            avg_rank_num=_maybe_float(item.get("avgRankNum")),
             price=_maybe_float(item.get("price")),
             change=_maybe_float(item.get("change")),
+            volume=_maybe_float(item.get("volume")),
+            turnover=_maybe_float(item.get("turnover")),
+            turnover_rate=_maybe_float(item.get("turnoverRate")),
+            total_mv=_maybe_float(item.get("totalMV")),
+            cir_mv=_maybe_float(item.get("cirMV")),
             volume_ratio=_maybe_float(item.get("volumeRatio")),
             zlje=_maybe_float(item.get("zlje")),
             zljzb=_maybe_float(item.get("zljzb")),
-            turnover=_maybe_float(item.get("turnover")),
-            turnover_rate=_maybe_float(item.get("turnoverRate")),
-            payload_json=json_dumps(item),
+            cddje=_maybe_float(item.get("cddje")),
+            cddjzb=_maybe_float(item.get("cddjzb")),
+            pe=_maybe_float(item.get("pe")),
+            pb=_maybe_float(item.get("pb")),
+            depth10_json=json_dumps(item.get("depth10") if isinstance(item.get("depth10"), dict) else {}),
+            bid1_price=_maybe_float(item.get("bid1Price")),
+            bid1_volume=_maybe_float(item.get("bid1Volume")),
+            ask1_price=_maybe_float(item.get("ask1Price")),
+            ask1_volume=_maybe_float(item.get("ask1Volume")),
+            spread=_maybe_float(item.get("spread")),
+            bid10_total=_maybe_float(item.get("bid10Total")),
+            ask10_total=_maybe_float(item.get("ask10Total")),
+            depth_imbalance=_maybe_float(item.get("depthImbalance")),
+            tick_buy_volume=_maybe_float(item.get("tickBuyVolume")),
+            tick_sell_volume=_maybe_float(item.get("tickSellVolume")),
+            tick_buy_count=_maybe_int(item.get("tickBuyCount")),
+            tick_sell_count=_maybe_int(item.get("tickSellCount")),
+            last_trade_price=_maybe_float(item.get("lastTradePrice")),
+            last_trade_volume=_maybe_float(item.get("lastTradeVolume")),
+            speed=_maybe_float(item.get("speed")),
+            lead_status=item.get("leadStatus"),
+            lead_times=_maybe_int(item.get("leadTimes")),
+            lianban_str=item.get("lianbanStr"),
+            fengdan=_maybe_float(item.get("fengdan")),
+            max_fengdan=_maybe_float(item.get("maxFengdan")),
+            popularity=_maybe_float(item.get("popularity")),
+            popularity_change=_maybe_float(item.get("popularityChange")),
+            institution_buy=_maybe_float(item.get("institutionBuy")),
+            big_money300=_maybe_float(item.get("bigMoney300")),
+            themes_json=json_dumps(item.get("themes") if isinstance(item.get("themes"), list) else []),
+            is_new=bool(item.get("isNew")) if item.get("isNew") is not None else False,
+            first_zt_time=item.get("firstZtTime"),
+            last_zt_time=item.get("lastZtTime"),
+            board_height=_maybe_int(item.get("boardHeight")),
+            high_days=_maybe_int(item.get("highDays")),
+            hotness=_maybe_float(item.get("hotness")),
+            main_theme=item.get("mainTheme"),
+            theme_heat=_maybe_float(item.get("themeHeat")),
+            theme_level=item.get("themeLevel"),
+            rank_change=_maybe_float(item.get("rankChange")),
+            direction_signal=item.get("directionSignal"),
+            direction_confidence=_maybe_float(item.get("directionConfidence")),
+            acceleration_signal=item.get("accelerationSignal"),
+            acceleration_confidence=_maybe_float(item.get("accelerationConfidence")),
+            cross_signal=item.get("crossSignal"),
+            cross_confidence=_maybe_float(item.get("crossConfidence")),
+            final_signal=item.get("finalSignal"),
+            final_confidence=_maybe_float(item.get("finalConfidence")),
         )
 
     @staticmethod
@@ -1357,11 +1424,26 @@ class Repository:
             trading_date=str(item.get("tradingDate") or ""),
             slot_time=str(item.get("slotTime") or ""),
             timestamp=int(item.get("timestamp") or 0),
+            capture_mode=str(item.get("captureMode") or "real_time"),
+            source=str(item.get("source") or "browser_runtime"),
             entity_type=str(item.get("entityType") or ""),
             entity_key=str(item.get("entityKey") or ""),
+            entity_code=item.get("entityCode"),
             entity_name=str(item.get("entityName") or ""),
             rank=int(float(item.get("rank") or 0)),
-            payload_json=json_dumps(item),
+            strength=_maybe_float(item.get("strength")),
+            heat_score=_maybe_float(item.get("heatScore")),
+            heat_level=item.get("heatLevel"),
+            change=_maybe_float(item.get("change")),
+            main_net_inflow=_maybe_float(item.get("mainNetInflow")),
+            big_money300=_maybe_float(item.get("bigMoney300")),
+            institution_buy=_maybe_float(item.get("institutionBuy")),
+            volume_ratio=_maybe_float(item.get("volumeRatio")),
+            zt_count=_maybe_int(item.get("ztCount")),
+            leader_count=_maybe_int(item.get("leaderCount")),
+            persistent_days=_maybe_int(item.get("persistentDays")),
+            net_inflow=_maybe_float(item.get("netInflow")),
+            metadata_json=json_dumps(item.get("metadata") if isinstance(item.get("metadata"), dict) else {}),
         )
 
     def _backup_datasets(self) -> list[Dataset]:
@@ -1393,24 +1475,6 @@ class Repository:
         rows = self.backup.list_rows("qb_snapshot_bundle", source=dataset_id)
         return self.backup.frames_from_rows(rows, snapshot_type, start_date, end_date, include_payload)
 
-    def _backup_backtest_run(self, run_id: str) -> BacktestRun | None:
-        if not self.backup:
-            return None
-        row = self.backup.get_row("qb_backtest_run", run_id)
-        return self.backup.backtest_run_from_row(row) if row else None
-
-    def _backup_optimization_run(self, run_id: str) -> OptimizationRun | None:
-        if not self.backup:
-            return None
-        row = self.backup.get_row("qb_optimization_run", run_id)
-        return self.backup.optimization_run_from_row(row) if row else None
-
-    def _backup_golden_case(self, case_id: str) -> GoldenRankTrendCase | None:
-        if not self.backup:
-            return None
-        row = self.backup.get_row("qb_golden_case", case_id)
-        return self.backup.golden_case_from_row(row) if row else None
-
     def _mirror_dataset_bundle(
         self,
         dataset: Dataset,
@@ -1421,21 +1485,6 @@ class Repository:
     ) -> bool:
         if self.backup:
             return self.backup.mirror_dataset_bundle(dataset, records, frames, stock_rows, sector_rows)
-        return False
-
-    def _mirror_backtest_run(self, run: BacktestRun) -> bool:
-        if self.backup:
-            return self.backup.mirror_backtest_run(run)
-        return False
-
-    def _mirror_optimization_run(self, run: OptimizationRun) -> bool:
-        if self.backup:
-            return self.backup.mirror_optimization_run(run)
-        return False
-
-    def _mirror_golden_case(self, case: GoldenRankTrendCase) -> bool:
-        if self.backup:
-            return self.backup.mirror_golden_case(case)
         return False
 
     def _refresh_dataset_summary(self, dataset_id: str) -> None:
@@ -1481,7 +1530,7 @@ class Repository:
             "op_type": model.op_type,
             "dataset_id": model.dataset_id,
             "snapshot_id": model.snapshot_id,
-            "payload": json_loads(model.payload_json, {}),
+            "payload": {},
             "idempotency_key": model.idempotency_key,
             "status": model.status,
             "retry_count": model.retry_count,
@@ -1495,5 +1544,12 @@ class Repository:
 def _maybe_float(value: Any) -> float | None:
     try:
         return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _maybe_int(value: Any) -> int | None:
+    try:
+        return int(float(value))
     except (TypeError, ValueError):
         return None

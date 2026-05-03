@@ -31,7 +31,7 @@ backend/
 1. 导入阶段
    - 输入：SQLite 主库中的正式快照事实表，历史 JSON/IndexedDB 导出只作为迁移来源。
    - 输出：`datasets`、`snapshot_records`、`snapshot_frames`、`snapshot_stock_rows`、`snapshot_sector_rows`。
-   - 写入策略：Dragon Board 正式快照先通过 `POST /api/snapshots/ingest` 落 SQLite；QuantBoard 研究数据集再通过 `sourceType=sqlite_snapshots` 从事实表派生；若配置了 Supabase，则同步写入云端备份库。
+   - 写入策略：Dragon Board 正式快照先通过 `POST /api/snapshots/ingest` 落 SQLite 快照事实库；`sourceType=sqlite_snapshots` 只建立研究视图/筛选口径，不再复制快照事实行；若配置了 Supabase，则只同步快照事实到云端备份库。
 
 2. 分析阶段
    - 输入：按 `dataset_id + snapshot_type + date range` 查询的标准快照序列。
@@ -51,25 +51,27 @@ backend/
    - 输出：候选参数排名、样本内/样本外表现、`running/completed/failed` 状态和实验记录。
 
 6. 展示阶段
-   - 输入：`backtest_runs`、`optimization_runs`、报告 JSON。
+   - 输入：research SQLite 中的 `backtest_runs`、`optimization_runs`、报告 JSON。
    - 输出：API、CLI、前端图表。
 
 ## 本地主库与 Supabase 备份库
 
 本节只描述架构边界。详细实施步骤、同步接口、恢复流程、冲突策略和验收清单统一维护在 [database-migration-plan.md](database-migration-plan.md)。
 
-当前数据库模式是本地主库加云端备份库：
+当前数据库模式是本地双库加云端快照备份库：
 
 ```text
-QuantBoard API/CLI -> SQLite(primary) -> Supabase(backup)
+QuantBoard API/CLI -> SQLite snapshot primary -> Supabase snapshot backup
+QuantBoard API/CLI -> SQLite research local only
 ```
 
 规则：
 
-- SQLite 是默认主库，负责本机即时写入和低延迟读取。
+- `quant_board_snapshots.db` 是默认快照主库，负责正式快照即时写入和低延迟读取。
+- `quant_board_research.db` 是本地研究库，负责回测、优化、Golden 和报告索引。
 - Supabase 不暴露给 Vue 前端，只由后端使用 `SUPABASE_URL` 和 `SUPABASE_SECRET_KEY` 访问。
-- 正常写入先提交 SQLite，再把同一份业务对象镜像到 Supabase。
-- SQLite 写入成功后会登记 `sync_outbox`，即使 Supabase 当次不可用，也能通过 `push-backup` 补偿。
+- 正常快照写入先提交 SQLite 快照库，再把同一份快照事实镜像到 Supabase。
+- 快照库写入成功后会登记轻量 `sync_outbox`，即使 Supabase 当次不可用，也能通过 `push-backup` 按事实表实时组包补偿。
 - SQLite 初始化或查询失败时，读路径会回退到 Supabase 备份记录。
 - SQLite 不可用但 Supabase 可写时，正式快照 ingest 会切到 Supabase 并返回 `status=backup_only`；尚未纳入 failover 的写接口必须明确返回不可用，不能伪装成功。
 - `POST /api/sync/push-backup` 用于把已有 SQLite 历史数据主动推送到 Supabase。
@@ -79,13 +81,13 @@ QuantBoard API/CLI -> SQLite(primary) -> Supabase(backup)
 - `GET /api/snapshots/frames` 是 Dragon Board 正式分析读取 SQLite 快照聚合帧的主入口。
 - `GET /api/snapshots/records`、`GET /api/snapshots/records/{snapshot_id}`、`GET /api/snapshots/stock-rows`、`GET /api/snapshots/sector-rows` 是 Dragon Board `DataLayer` 零散正式读口的 SQLite 承接层。
 - `GET /api/snapshots/counts` 用于 SQLite 主库快照事实表行数核对。
-- `POST /api/datasets/import` 的日常主入口是 `sourceType=sqlite_snapshots`，从 SQLite 正式快照事实表生成可复现研究数据集。
+- `POST /api/datasets/import` 的日常主入口是 `sourceType=sqlite_snapshots`，从 SQLite 正式快照事实表生成可复现研究视图，不复制事实行。
 - `POST /api/migrations/snapshots/import-json` 是历史 IndexedDB/JSON/结构化导出的可重复迁移入口。
 - 同键重复同步必须幂等；同键不同 payload/hash 必须标记冲突，不允许静默覆盖。
 
-Supabase 备份库必须使用 SQLite 同构 schema，不再使用旧 `snapshots.payload` 兼容方案。云端 schema 由 [../backend/data/supabase_schema.sql](../backend/data/supabase_schema.sql) 维护，表名、业务键、索引和 SQLite 模型保持一致。健康检查会逐表检查 `datasets`、`snapshot_*`、回测、优化、Golden 和 `sync_outbox` 是否可读；缺表时不得继续把备份链路视为可用。
+Supabase 备份库必须使用快照事实库同构 schema，不再使用旧 `snapshots.payload` 兼容方案。云端 schema 由 [../backend/data/supabase_schema.sql](../backend/data/supabase_schema.sql) 维护，只包含 `datasets`、`snapshot_*` 和 `sync_outbox`。健康检查会逐表检查这些快照备份表是否可读；缺表时不得继续把备份链路视为可用。
 
-为适配 Supabase REST 对大请求和长语句的限制，备份客户端会对超大回测、优化和 Golden JSON 文本做透明 `gzip + base64` 编码，并按请求体大小拆分 upsert。SQLite 主库仍保存原始 JSON；读回退和 `pull-backup` 会自动解码，调用方不应感知编码细节。
+回测、优化和 Golden 不再作为 Supabase Free 版备份目标。大型研究结果留在 research SQLite 或报告文件目录，避免重新把快照事实和研究明细混在同一个库里。
 
 Dragon Board 前端 `DataLayer` 对外字段不随迁移删改。正式快照写入先查询 SQLite 是否已有同一 `snapshot_id`，缺失时通过 `POST /api/snapshots/ingest` 落 SQLite；后端再按 `dataset_id + snapshot_id` 做逻辑幂等，重复槽位不会覆盖既有事实行。正式读取走 SQLite API，返回仍是 `SnapshotRecord`、`SnapshotFrameBundle`、`SnapshotStockRow`、`SnapshotSectorRow` 的现有 camelCase 字段。IndexedDB 快照缓存默认关闭，只保留历史迁移源、显式缓存和非正式临时数据用途。
 
@@ -106,7 +108,7 @@ Dragon Board 前端 `DataLayer` 对外字段不随迁移删改。正式快照写
 
 ### snapshot_records
 
-保留原始快照记录，方便追溯和重新投影。正式分析不应直接扫描大 payload，而应优先读 frame/row 表。
+保留快照元信息和采集质量字段，不再保存完整 payload。正式分析应优先读 frame/row 表。
 
 ### snapshot_frames
 
@@ -122,11 +124,11 @@ Dragon Board 前端 `DataLayer` 对外字段不随迁移删改。正式快照写
 
 ### golden_ranktrend_cases
 
-保存 TypeScript golden 输入和期望输出。Python 移植必须用它做回归校验。
+保存在 research SQLite，保存 TypeScript golden 输入和期望输出。Python 移植必须用它做回归校验。
 
 ### backtest_runs
 
-保存单次回测请求和结果。必须记录：
+保存在 research SQLite，保存单次回测请求和结果。必须记录：
 
 - `dataset_id`
 - `strategy_name`
@@ -139,7 +141,7 @@ Dragon Board 前端 `DataLayer` 对外字段不随迁移删改。正式快照写
 
 ### optimization_runs
 
-保存一次优化实验及候选参数列表。优化不是覆盖默认参数的动作，而是产生可验证候选；任何优化结果都不得自动写回策略、API、CLI 或前端默认参数。
+保存在 research SQLite，保存一次优化实验及候选参数列表。优化不是覆盖默认参数的动作，而是产生可验证候选；任何优化结果都不得自动写回策略、API、CLI 或前端默认参数。
 
 必须记录：
 
@@ -162,9 +164,6 @@ Dragon Board 前端 `DataLayer` 对外字段不随迁移删改。正式快照写
 
 - `dataset_bundle`
 - `snapshot_ingest`
-- `backtest_run`
-- `optimization_run`
-- `golden_case`
 
 状态语义：
 

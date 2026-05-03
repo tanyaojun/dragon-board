@@ -78,7 +78,7 @@
 
 当前进展：
 
-- `sync_outbox` 已覆盖 `dataset_bundle`、`snapshot_ingest`、`backtest_run`、`optimization_run`、`golden_case`。
+- `sync_outbox` 已缩减为快照备份链路，只覆盖 `dataset_bundle`、`snapshot_ingest`；回测、优化和 Golden 保存在 research SQLite。
 - `push-backup` 已先消费到期 outbox，再做 SQLite 全量补推。
 - Dragon Board 已对 IndexedDB 已存在但后端 ingest 失败的快照执行后端重放。
 - 历史 JSON 迁移 API 已可 dry run、幂等导入并进入 outbox 链路。
