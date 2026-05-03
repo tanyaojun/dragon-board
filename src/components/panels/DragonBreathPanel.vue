@@ -548,6 +548,7 @@ import {
 } from '@/services/hotlist/HotListSentimentAnalyzer'
 import type { SnapshotFrameBundle } from '@/services/snapshot/types'
 import { FORMAL_SNAPSHOT_READ_POLICY } from '@/services/snapshot/readPolicy'
+import { snapshotFacade } from '@/services/snapshot/facade'
 import {
   EMOTION_PHASE_BY_VALUE,
   EMOTION_PHASE_LIST,
@@ -1201,7 +1202,7 @@ async function loadHotListSentiment() {
     }
 
     hotListSentimentRetryCount = 0
-    const historicalBundles = await dataLayer.listSnapshotFrameBundles({
+    const historicalBundles = await snapshotFacade.listSnapshotFrameBundles({
       type: 'daily',
       allowedCaptureModes: FORMAL_SNAPSHOT_READ_POLICY.allowedCaptureModes,
       excludeRestored: FORMAL_SNAPSHOT_READ_POLICY.excludeRestored,

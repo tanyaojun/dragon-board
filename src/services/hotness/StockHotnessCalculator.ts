@@ -1,4 +1,4 @@
-import type { MergedStock } from '../DataLayer'
+import type { MergedStock } from '@/types'
 
 const INVALID_RANK = 999
 

@@ -8,7 +8,7 @@ import {
   type RankTrendSnapshotType,
   normalizeRankTrendRuntimeConfig,
   type RTConfigPatch,
-} from '../type/rankTrendDefaults'
+} from '../types/rankTrendDefaults'
 import { analyzeAttentionCycle } from './rankTrend/attentionCycleAnalyzer'
 import { composeCandidateTier } from './rankTrend/candidateTierComposer'
 import { analyzeMarketRegime } from './rankTrend/marketRegimeAnalyzer'
@@ -84,13 +84,16 @@ type DataLayerApi = {
   getStocks(): any[]
   getStock(code: string): any
   getBreathData?(): any
-  listSnapshotFrameBundles?(options: Record<string, unknown>): Promise<SnapshotFrameBundle[]>
 }
 
 type DataLoaderApi = {
   updateStockSignals(
     updates: Array<{ code: string; rankTrend: RankTrendResult; coverageWarning: string | null }>,
   ): void
+}
+
+type SnapshotFacadeApi = {
+  listSnapshotFrameBundles(options: Record<string, unknown>): Promise<SnapshotFrameBundle[]>
 }
 
 async function loadRuntimeModule(specifier: string): Promise<Record<string, any>> {
@@ -245,13 +248,9 @@ export class RankTrendAnalyzer {
       toDate?: Date
     },
   ): Promise<RankTrendAnalysisSnapshot[]> {
-    const dataLayer = await this.getDataLayer()
-    if (typeof dataLayer.listSnapshotFrameBundles !== 'function') {
-      return []
-    }
-
+    const snapshotFacade = await this.getSnapshotFacade()
     const readLimit = options?.limit ? Math.max(options.limit * 3, options.minRequired ?? 0) : undefined
-    const bundles = await dataLayer.listSnapshotFrameBundles({
+    const bundles = await snapshotFacade.listSnapshotFrameBundles({
       type,
       startDate: toTradingDateString(options?.fromDate),
       endDate: toTradingDateString(options?.toDate),
@@ -732,6 +731,11 @@ export class RankTrendAnalyzer {
   private async getDataLayer(): Promise<DataLayerApi> {
     const module = await loadRuntimeModule('./DataLayer')
     return module.dataLayer as DataLayerApi
+  }
+
+  private async getSnapshotFacade(): Promise<SnapshotFacadeApi> {
+    const module = await loadRuntimeModule('./snapshot/facade')
+    return module.snapshotFacade as SnapshotFacadeApi
   }
 
   private async batchUpdateSignals(results: Map<string, RankTrendResult>): Promise<void> {

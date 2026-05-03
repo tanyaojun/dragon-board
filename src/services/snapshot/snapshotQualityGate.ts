@@ -1,7 +1,7 @@
 import {
   DEFAULT_RANK_TREND_SNAPSHOT_TYPE,
   type RankTrendSnapshotType,
-} from '../../type/rankTrendDefaults'
+} from '../../types/rankTrendDefaults'
 
 export interface SnapshotQualityGateOptions {
   enabled?: boolean

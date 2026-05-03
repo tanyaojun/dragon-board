@@ -1,5 +1,5 @@
 import { dataLayer } from '../../services/DataLayer'
-import type { MergedStock } from '../../services/DataLayer'
+import type { MergedStock } from '@/types'
 import type { BattlefieldRecord, CandidateRecord, ReviewFrame, ReviewSegment, StockArc } from './types'
 import {
   getNetCapital,

@@ -1,5 +1,5 @@
 import type { Depth10Book } from '../../types'
-import type { RankTrendSnapshotType } from '../../type/rankTrendDefaults'
+import type { RankTrendSnapshotType } from '../../types/rankTrendDefaults'
 
 export type SnapshotType = RankTrendSnapshotType | 'five_minute'
 

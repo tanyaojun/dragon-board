@@ -8,7 +8,7 @@ import {
 } from './identity'
 import {
   RANK_TREND_SNAPSHOT_TYPES,
-} from '../../type/rankTrendDefaults'
+} from '../../types/rankTrendDefaults'
 import type {
   SnapshotCaptureMode,
   SnapshotFrameQueryOptions,

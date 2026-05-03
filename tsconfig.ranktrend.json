@@ -2,8 +2,9 @@
   "extends": "./tsconfig.app.json",
   "include": [
     "env.d.ts",
-    "src/type/**/*.ts",
+    "src/types/rankTrendDefaults.ts",
     "src/utils/eventManager.ts",
+    "src/utils/logger.ts",
     "src/services/RankTrendAnalyzer.ts",
     "src/services/rankTrend/**/*.ts"
   ],

@@ -3,7 +3,7 @@ import {
   getRankTrendSnapshotLabel,
   getRankTrendSnapshotShortLabel,
   type RankTrendSnapshotType,
-} from '../../type/rankTrendDefaults'
+} from '../../types/rankTrendDefaults'
 
 type SnapshotCoverageKey = keyof SnapshotCoverageReport
 type SnapshotCoverageMetaItem = {

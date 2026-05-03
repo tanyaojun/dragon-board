@@ -342,7 +342,7 @@ import {
   normalizeRankTrendRuntimeConfig,
   type RankTrendRuntimeDefaults,
   type RankTrendSnapshotType,
-} from '@/type/rankTrendDefaults'
+} from '@/types/rankTrendDefaults'
 
 type Signal = 'buy' | 'sell' | 'hold' | 'none'
 type PreferredSnapshotType = RankTrendSnapshotType

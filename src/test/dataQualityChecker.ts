@@ -1,7 +1,7 @@
 // src/test/dataQualityChecker.ts
 // 数据质量检查工具 - 用于验证增强版快照数据的完整性和正确性
 
-import { dataLayer } from '../services/DataLayer'
+import { snapshotFacade } from '../services/snapshot/facade'
 
 /**
  * 数据质量检查器
@@ -31,12 +31,12 @@ export class DataQualityChecker {
   private readonly REQUIRED_SIGNALS = ['direction', 'acceleration', 'cross', 'final']
 
   private async listSnapshotKeys(): Promise<string[]> {
-    const records = await dataLayer.listSnapshots({ sort: 'desc' })
+    const records = await snapshotFacade.listSnapshots({ sort: 'desc' })
     return records.map((record) => record.id)
   }
 
   private async loadSnapshot(snapshotKey: string): Promise<any | null> {
-    const record = await dataLayer.getSnapshotById(snapshotKey)
+    const record = await snapshotFacade.getSnapshotById(snapshotKey)
     if (!record) return null
 
     return {

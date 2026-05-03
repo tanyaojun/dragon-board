@@ -1,4 +1,4 @@
-import type { MergedStock } from '../../services/DataLayer'
+import type { MergedStock } from '@/types'
 import type {
   AuthorityClass,
   BattlefieldRecord,

@@ -6,7 +6,7 @@ import type { Stock, MarketMode } from '@/types'
 import { EventManager } from '@/utils/eventManager'
 import { AppEvents } from '@/types'
 import { dataLayer } from '@/services/DataLayer'
-import type { MergedStock } from '@/services/DataLayer'
+import type { MergedStock } from '@/types'
 import { dragonAnalyzer } from '@/services/DragonAnalyzer'
 
 // 批量更新配置

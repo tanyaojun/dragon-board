@@ -4,7 +4,7 @@ import {
   DEFAULT_RANK_TREND_SNAPSHOT_TYPE,
   type RankTrendSnapshotType,
   type RTConfigPatch,
-} from '@/type/rankTrendDefaults'
+} from '@/types/rankTrendDefaults'
 import type {
   GoldenReplayFrame,
   GoldenReplayMarketContext,

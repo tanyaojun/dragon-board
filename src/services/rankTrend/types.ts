@@ -1,4 +1,4 @@
-import type { RankTrendSnapshotType } from '../../type/rankTrendDefaults'
+import type { RankTrendSnapshotType } from '../../types/rankTrendDefaults'
 
 export type RankSignalDirection = 'buy' | 'sell' | 'hold'
 export type RankSignalDirectionWithNone = RankSignalDirection | 'none'

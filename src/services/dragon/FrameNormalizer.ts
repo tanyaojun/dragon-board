@@ -1,13 +1,14 @@
 import { dataLayer } from '../../services/DataLayer'
 import { FORMAL_SNAPSHOT_READ_POLICY } from '../../services/snapshot/readPolicy'
+import { snapshotFacade } from '../../services/snapshot/facade'
 import type { SnapshotFrameBundle, SnapshotStockRow } from '../../services/snapshot/types'
 import { dragonBreathAnalyzer } from '../../services/DragonBreathAnalyzer'
-import type { MergedStock } from '../../services/DataLayer'
+import type { MergedStock } from '@/types'
 import {
   isRankTrendIntradaySnapshotType,
   isRankTrendSnapshotType,
   RANK_TREND_SNAPSHOT_TYPES,
-} from '../../type/rankTrendDefaults'
+} from '../../types/rankTrendDefaults'
 import type { FrameSource, ReviewFrame, ReviewHotStock, ReviewSector } from './types'
 import {
   buildHotStockFromMergedStock,
@@ -166,7 +167,7 @@ export class FrameNormalizer {
     const frames: ReviewFrame[] = []
     // 不同粒度快照在这里被压平成统一的 ReviewFrame，
     // 后续模块只消费标准化后的 frame，不再分支判断数据来源。
-    const bundles = await dataLayer.listSnapshotFrameBundles({
+    const bundles = await snapshotFacade.listSnapshotFrameBundles({
       types: RANK_TREND_SNAPSHOT_TYPES,
       tradingDate: reviewDate,
       allowedCaptureModes: FORMAL_SNAPSHOT_READ_POLICY.allowedCaptureModes,

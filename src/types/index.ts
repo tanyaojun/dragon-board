@@ -5,6 +5,18 @@ export * from './core'
 export * from './config'
 export * from './sector'
 export * from './board'
+export * from './rankTrendDefaults'
+export type {
+  DataState,
+  DataVersion,
+  JxbkBlockData as DataLayerJxbkBlockData,
+  JxbkStockData as DataLayerJxbkStockData,
+  LeaderLookupRecord,
+  LimitUpExtData,
+  MergedStock,
+  StockExtData,
+  ThemeMetrics as DataLayerThemeMetrics,
+} from './data-layer'
 export type {
   Factor,
   FactorConfig,

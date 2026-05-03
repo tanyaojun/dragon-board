@@ -18,6 +18,7 @@ import {
 
 //========== 统一数据层 ==========
 import './services/DataLayer'
+import './services/snapshot/facade'
 
 // ========== 主题样式 ==========
 import '@/assets/theme.css'

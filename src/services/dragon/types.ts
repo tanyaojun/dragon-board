@@ -1,5 +1,5 @@
-import type { MergedStock } from '../../services/DataLayer'
-import type { RankTrendSnapshotType } from '../../type/rankTrendDefaults'
+import type { MergedStock } from '@/types'
+import type { RankTrendSnapshotType } from '../../types/rankTrendDefaults'
 
 export type ReviewSegment = 'early' | 'mid' | 'late'
 export type FrameSource = RankTrendSnapshotType | 'close'

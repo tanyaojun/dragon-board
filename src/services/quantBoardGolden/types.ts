@@ -5,7 +5,7 @@ import type {
   RankTrendAnalysisResult,
   StrategyAction,
 } from '@/services/rankTrend/types'
-import type { RankTrendSnapshotType } from '@/type/rankTrendDefaults'
+import type { RankTrendSnapshotType } from '@/types/rankTrendDefaults'
 
 export type GoldenSnapshotType = RankTrendSnapshotType
 

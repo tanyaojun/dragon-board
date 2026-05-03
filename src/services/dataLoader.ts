@@ -4,7 +4,7 @@ import { debugLog } from '@/utils/logger'
 import { ref, readonly } from 'vue'
 import { Adapters } from './adapters'
 import { dataLayer } from './DataLayer'
-import type { MergedStock } from './DataLayer'
+import type { MergedStock } from '@/types'
 import { apiService } from './apiService'
 import { rankTrendAnalyzer } from './RankTrendAnalyzer'
 import { applyRankTrendAnalysis } from './rankTrend/compat'
@@ -25,6 +25,7 @@ import { calculateStockHotnessUpdates, stockHotnessConfigService } from './hotne
 import { resolvePrimaryStockTheme } from './theme/stockThemeMeta'
 import { toLocalTradingDate } from './snapshot/identity'
 import { slotTimeToMinutes } from './snapshot/schedule'
+import { snapshotFacade } from './snapshot/facade'
 import type { SnapshotRecord, SnapshotStockRow } from './snapshot/types'
 import { EventManager } from '../utils/eventManager'
 import { webSocketService } from './websocket'
@@ -1856,7 +1857,7 @@ class DataLoaderService {
     const allowedCaptureModes: Array<'real_time' | 'delayed'> = ['real_time', 'delayed']
     const snapshotGroups = await Promise.all(
       this.INTRADAY_VOLUME_SNAPSHOT_TYPES.map((type) =>
-        dataLayer.listSnapshots({
+        snapshotFacade.listSnapshots({
           type,
           beforeTradingDate: anchorTradingDate,
           allowedCaptureModes,
@@ -1966,7 +1967,7 @@ class DataLoaderService {
 
     await Promise.all(
       uniqueSnapshotIds.map(async (snapshotId) => {
-        const rows = await dataLayer.listSnapshotStockRows({ snapshotId, codes })
+        const rows = await snapshotFacade.listSnapshotStockRows({ snapshotId, codes })
         const rowsByCode = new Map<string, SnapshotStockRow>()
         rows.forEach((row) => {
           if (row.code) rowsByCode.set(row.code, row)
@@ -2014,7 +2015,7 @@ class DataLoaderService {
   public async buildVolumeHistoryMap(codes: string[] = []): Promise<Map<string, number[]>> {
     const targetCodes = filterValidStockCodes([...new Set(codes)])
     if (targetCodes.length === 0) return new Map()
-    return dataLayer.getStockVolumeHistory(targetCodes, {
+    return snapshotFacade.getStockVolumeHistory(targetCodes, {
       anchorTradingDate: toLocalTradingDate(new Date()),
       lookbackDays: 4,
     })

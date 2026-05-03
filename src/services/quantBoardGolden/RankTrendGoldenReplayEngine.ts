@@ -2,7 +2,7 @@ import {
   cloneDefaultRankTrendRuntimeConfig,
   normalizeRankTrendRuntimeConfig,
   type RTConfigPatch,
-} from '@/type/rankTrendDefaults'
+} from '@/types/rankTrendDefaults'
 import { analyzeAttentionCycle } from '@/services/rankTrend/attentionCycleAnalyzer'
 import { composeCandidateTier } from '@/services/rankTrend/candidateTierComposer'
 import { analyzeMarketRegime } from '@/services/rankTrend/marketRegimeAnalyzer'

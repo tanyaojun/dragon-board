@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { cloneDefaultRankTrendRuntimeConfig } from '../../../type/rankTrendDefaults'
+import { cloneDefaultRankTrendRuntimeConfig } from '../../../types/rankTrendDefaults'
 import { analyzeFallbackTechnicalSignals, analyzeTechnicalSignals } from '../technicalSignalAnalyzer'
 
 describe('technicalSignalAnalyzer', () => {

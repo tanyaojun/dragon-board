@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import type { MergedStock } from '../../DataLayer'
+import type { MergedStock } from '@/types'
 import {
   calculateStockHotnessRecords,
   calculateStockHotnessUpdates,

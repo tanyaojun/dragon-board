@@ -32,7 +32,7 @@
 │   ├── components/          # Vue 组件和业务面板
 │   ├── services/            # 核心业务逻辑层
 │   ├── stores/              # Pinia 状态
-│   ├── type/ types/         # TypeScript 类型与默认值
+│   ├── types/               # TypeScript 类型与默认值
 │   └── main.ts              # 应用入口和 window 服务挂载
 ├── docs/                   # Dragon Board 主项目文档与历史方案
 ├── proxy-server/            # 本地 HTTP 代理服务
@@ -44,11 +44,12 @@
 
 核心前端服务优先从这些文件定位：
 
-- `src/services/DataLayer.ts`：中心化内存数据层和 SQLite 快照读写编排。
+- `src/services/DataLayer.ts`：中心化内存数据层，只负责运行时内存状态、版本和订阅通知。
 - `src/services/dataLoader.ts`：八平台热榜加载、清洗、合并和综合排名。
 - `src/services/RankTrendAnalyzer.ts`：前端 RankTrend 分析入口。
 - `src/services/rankTrend/**`：RankTrend 拆分后的 golden 标准模块。
-- `src/type/rankTrendDefaults.ts`：RankTrend 默认参数和默认快照类型。
+- `src/types/rankTrendDefaults.ts`：RankTrend 默认参数和默认快照类型。
+- `src/types/**`：统一类型、默认值和跨模块常量目录；不要新增或恢复 `src/type/**`。
 - `src/services/quantBoardBridge.ts`：Dragon Board 与 QuantBoard 的数据桥接和 Golden 导出。
 - `src/services/quantBoardGolden/**`：仅用于导出 TypeScript golden case，不承载回测、优化或交易模拟。
 - `src/services/snapshot/**` 与 `src/services/quality/**`：快照质量、覆盖率和门禁。
@@ -59,6 +60,10 @@
 
 - 默认 RankTrend 快照类型来自 `DEFAULT_RANK_TREND_SNAPSHOT_TYPE`，当前为 `half_hour`。
 - RankTrend 默认运行参数来自 `DEFAULT_RANK_TREND_RUNTIME_CONFIG`，不要复制旧文档中的过期参数。
+- `src/services/DataLayer.ts` 的职责边界必须保持很窄：只存放当前运行态内存数据、版本号、订阅通知、内存读写方法和必要的状态投影调用。
+- 不得把以下内容新增回 `DataLayer.ts`：类型/接口定义、默认参数和常量、HTTP/API 调用、IndexedDB/SQLite/Supabase 读写、快照导入导出、快照读模型拼装、回测/优化逻辑、业务算法规则、UI 配置。
+- DataLayer 需要用到的公开结构应放在 `src/types/**`；龙头/复盘投影规则放在 `src/services/dragon/**`；快照保存、读取、覆盖率、备份和 QuantBoard 后端适配放在 `src/services/snapshot/**`。
+- 面板或服务需要快照数据时应调用 `src/services/snapshot/**` 的公开 facade/API，不要通过 `DataLayer.ts` 中转快照能力。
 - 快照、策略信号和 QuantBoard 桥接逻辑必须显式处理空数据、NaN、时间乱序、低样本量、缺字段和类型回退。
 - 数据质量门禁失败时必须返回结构化原因，不允许静默吞掉并继续产出“看似可用”的交易结果。
 - 面板层应通过公开服务 API 调用业务逻辑，不要调用服务私有成员或绕过已有数据层。
@@ -68,7 +73,7 @@
 
 QuantBoard 的规则以 `quant-board/docs/README.md`、`quant-board/docs/AI_COLLABORATION.md` 和专题文档为准：
 
-- TypeScript `src/services/RankTrendAnalyzer.ts`、`src/services/rankTrend/**`、`src/type/rankTrendDefaults.ts` 是 Python 移植的 golden 标准。
+- TypeScript `src/services/RankTrendAnalyzer.ts`、`src/services/rankTrend/**`、`src/types/rankTrendDefaults.ts` 是 Python 移植的 golden 标准。
 - QuantBoard 是参数研究、回测、优化、交易模拟和报告展示的唯一主链。
 - 原 `src/services/strategyBacktest` 职责已迁移到 QuantBoard Python 后端：`backend.analysis.ranktrend`、`backend.core.backtest`、`backend.services`。
 - 默认 `snapshot_type` 是 `half_hour`；`quarter_hour` 只能由用户显式选择，不能替代默认口径。

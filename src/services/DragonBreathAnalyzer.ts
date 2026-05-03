@@ -22,6 +22,7 @@ import { EventManager } from '../utils/eventManager'
 import { API_CONFIG } from '../config/constants'
 import { dataLayer } from './DataLayer'
 import { FORMAL_SNAPSHOT_READ_POLICY } from './snapshot/readPolicy'
+import { snapshotFacade } from './snapshot/facade'
 import { isTradingTime } from '../utils/time'
 import { StockUtils } from '../utils/common'
 
@@ -624,7 +625,7 @@ export class DragonBreathAnalyzer {
    */
   private async getLastTradeDate(): Promise<string | null> {
     try {
-      const bundles = await dataLayer.listSnapshotFrameBundles({
+      const bundles = await snapshotFacade.listSnapshotFrameBundles({
         type: 'daily',
         allowedCaptureModes: FORMAL_SNAPSHOT_READ_POLICY.allowedCaptureModes,
         excludeRestored: FORMAL_SNAPSHOT_READ_POLICY.excludeRestored,
@@ -673,7 +674,7 @@ export class DragonBreathAnalyzer {
         return
       }
 
-      const [yesterdayBundle] = await dataLayer.listSnapshotFrameBundles({
+      const [yesterdayBundle] = await snapshotFacade.listSnapshotFrameBundles({
         type: 'daily',
         tradingDate: lastTradeDate,
         allowedCaptureModes: FORMAL_SNAPSHOT_READ_POLICY.allowedCaptureModes,

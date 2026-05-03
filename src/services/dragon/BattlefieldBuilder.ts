@@ -1,6 +1,6 @@
 import { dataLayer } from '../../services/DataLayer'
 import { themeMapping } from '../../services/ThemeDataService'
-import type { MergedStock } from '../../services/DataLayer'
+import type { MergedStock } from '@/types'
 import type { BattlefieldDominance, BattlefieldRecord, ReviewFrame, SignalStrength } from './types'
 import { getNetCapital, getStockTagNames, themeNamesFromStock, toSignalStrength, uniq } from './helpers'
 

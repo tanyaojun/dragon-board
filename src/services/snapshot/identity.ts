@@ -9,7 +9,7 @@ import {
   getRankTrendSnapshotLabel,
   RANK_TREND_SNAPSHOT_TYPES,
   type RankTrendSnapshotType,
-} from '../../type/rankTrendDefaults'
+} from '../../types/rankTrendDefaults'
 
 const RANK_TREND_SNAPSHOT_LABELS = Object.fromEntries(
   RANK_TREND_SNAPSHOT_TYPES.map((type) => [type, getRankTrendSnapshotLabel(type)]),

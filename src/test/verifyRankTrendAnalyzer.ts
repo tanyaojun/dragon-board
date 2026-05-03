@@ -2,7 +2,7 @@
 // 最小化测试脚本 - 验证RankTrendAnalyzer功能是否受DataLayer修改影响
 
 import { rankTrendAnalyzer } from '../services/RankTrendAnalyzer'
-import { DEFAULT_RANK_TREND_SNAPSHOT_TYPE } from '../type/rankTrendDefaults'
+import { DEFAULT_RANK_TREND_SNAPSHOT_TYPE } from '../types/rankTrendDefaults'
 
 /**
  * 测试1：验证getSnapshotsByType方法

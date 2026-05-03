@@ -29,7 +29,7 @@ import {
   RANK_TREND_SNAPSHOT_TYPES,
   type RankTrendIntradaySnapshotType,
   type RankTrendSnapshotType,
-} from '../../type/rankTrendDefaults'
+} from '../../types/rankTrendDefaults'
 import { isTradingTime } from '../../utils/time'
 import {
   SnapshotFrameStore,
