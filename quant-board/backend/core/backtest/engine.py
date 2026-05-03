@@ -6,7 +6,7 @@ from backend.analysis.ranktrend import RankTrendConfig, RankTrendPythonEngine, g
 from backend.core.backtest.evaluator import OutcomeEvaluator
 from backend.core.backtest.execution import TradeSimulator
 from backend.core.backtest.metrics import _round_or_none, average, share
-from backend.core.backtest.strategy import DEFAULT_STRATEGY_NAME, normalize_strategy_name
+from backend.core.backtest.strategy import DEFAULT_STRATEGY_NAME, FrameStrategyResult, StrategyInput, get_strategy, normalize_strategy_name
 
 
 class BacktestEngine:
@@ -36,6 +36,7 @@ class BacktestEngine:
             report["tradeSimulation"] = TradeSimulator().run(frames, signals, trade_config)
             report["controlBacktests"] = self._control_backtests(frames, signals, trade_config)
             report["tradeDiagnostics"] = self._trade_diagnostics(report["tradeSimulation"])
+            report["strategyDecisions"] = self._record_strategy_decisions(frames, signals, strategy_name, trade_config)
             report.update({
                 "totalReturn": report["tradeSimulation"]["totalReturn"],
                 "sharpe": report["tradeSimulation"]["sharpe"],
@@ -219,6 +220,60 @@ class BacktestEngine:
                 "openPositionCount": result.get("openPositionCount"),
             })
         return rows
+
+    @staticmethod
+    def _record_strategy_decisions(
+        frames: list[dict[str, Any]],
+        signals: list[dict[str, Any]],
+        strategy_name: str,
+        trade_config: dict[str, Any],
+    ) -> dict[str, Any]:
+        """跑四层策略流水线，记录每帧的候选分层和买卖信号（不改变执行路径）。"""
+        strategy = get_strategy(strategy_name)
+        signals_by_snapshot: dict[str, list[dict[str, Any]]] = {}
+        for s in signals:
+            signals_by_snapshot.setdefault(str(s.get("snapshotId") or ""), []).append(s)
+        signal_by_key: dict[str, dict[str, Any]] = {}
+        for s in signals:
+            signal_by_key[f"{s.get('snapshotId')}:{s.get('code')}"] = s
+
+        frame_results: list[FrameStrategyResult] = []
+        positions: dict[str, Any] = {}
+        tier_counts: dict[str, int] = {tier: 0 for tier in ("A_MAIN", "B_IGNITION", "C_CROWDED", "D_EXIT_RISK", "N_NEUTRAL")}
+        signal_counts: dict[str, int] = {"buy": 0, "sell": 0, "hold": 0, "watch": 0}
+
+        for idx, frame in enumerate(frames):
+            snapshot_id = str(frame.get("snapshotId") or "")
+            frame_signals = signals_by_snapshot.get(snapshot_id, [])
+            previous_frame = frames[idx - 1] if idx > 0 else None
+            input = StrategyInput(
+                frame=frame,
+                frame_signals=frame_signals,
+                previous_frame=previous_frame,
+                signal_by_key=signal_by_key,
+                positions=positions,
+                strategy_key=strategy_name,
+                config=trade_config,
+            )
+            result = strategy.evaluate_frame(input)
+            frame_results.append(result)
+            for d in result.decisions:
+                tier_counts[d.candidate_tier] = tier_counts.get(d.candidate_tier, 0) + 1
+                signal_counts[d.signal] = signal_counts.get(d.signal, 0) + 1
+                if d.signal == "buy":
+                    positions[d.code] = {"entryTier": d.candidate_tier, "entrySnapshotId": snapshot_id}
+                elif d.signal == "sell":
+                    positions.pop(d.code, None)
+
+        return {
+            "strategyKey": strategy_name,
+            "strategyLabel": strategy.label,
+            "frameCount": len(frame_results),
+            "frameResults": [r.to_dict() for r in frame_results],
+            "tierDistribution": tier_counts,
+            "signalDistribution": signal_counts,
+            "totalDecisions": sum(tier_counts.values()),
+        }
 
     @staticmethod
     def _trade_diagnostics(simulation: dict[str, Any]) -> dict[str, Any]:
