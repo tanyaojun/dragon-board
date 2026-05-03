@@ -1,8 +1,14 @@
+from __future__ import annotations
+
 from collections.abc import Generator
+from typing import TYPE_CHECKING
 
 from sqlalchemy import create_engine
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
+
+if TYPE_CHECKING:
+    from sqlalchemy import Engine
 
 from backend.settings import get_settings
 
@@ -40,6 +46,7 @@ def init_db() -> bool:
     try:
         Base.metadata.create_all(bind=engine)
         ResearchBase.metadata.create_all(bind=research_engine)
+        _migrate_research_db(research_engine)
         _primary_available = True
         _last_primary_error = None
     except SQLAlchemyError as exc:
@@ -50,6 +57,29 @@ def init_db() -> bool:
     finally:
         _initialized = True
     return _primary_available
+
+
+def _migrate_research_db(eng: "Engine") -> None:
+    """逐列迁移，补充 create_all 无法追加的列。"""
+    from sqlalchemy import text
+
+    migrations = [
+        # Phase 4: BacktestRun 增强字段
+        ("backtest_runs", "date_start", "VARCHAR(16)"),
+        ("backtest_runs", "date_end", "VARCHAR(16)"),
+        ("backtest_runs", "error_reason", "TEXT"),
+        ("backtest_runs", "finished_at", "DATETIME"),
+    ]
+    with eng.connect() as conn:
+        for table, column, col_type in migrations:
+            try:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}"))
+                conn.commit()
+            except OperationalError as exc:
+                conn.rollback()
+                if "duplicate column name" in str(exc).lower():
+                    continue
+                raise
 
 
 def primary_status() -> dict[str, str | bool | None]:

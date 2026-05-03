@@ -158,6 +158,7 @@ class BacktestService:
             "strategy_config": strategy_config,
             "trade_config": trade_config,
         }
+        trading_dates = sorted({str(f.get("tradingDate") or "") for f in run_frames if f.get("tradingDate")})
         run = BacktestRun(
             id=run_id,
             dataset_id=dataset_id,
@@ -165,10 +166,20 @@ class BacktestService:
             snapshot_type=snapshot_type,
             random_seed=request_meta["random_seed"],
             config_hash=stable_hash(request_meta),
+            date_start=trading_dates[0] if trading_dates else None,
+            date_end=trading_dates[-1] if trading_dates else None,
             request_json=json_dumps(request_meta),
             result_json=json_dumps(result),
         )
         self.repo.save_backtest_run(run)
+
+        # 归一化结果双写
+        simulation = result.get("tradeSimulation") or {}
+        self.repo.save_backtest_trades(run_id, simulation.get("trades") or [])
+        self.repo.save_backtest_equity_curve(run_id, simulation.get("equityCurve") or [])
+        self.repo.save_backtest_signals(run_id, result.get("strategyDecisions") or {})
+        self.repo.save_backtest_quality_report(run_id, result.get("dataQuality") or {}, quality_gate)
+
         return self._summary_response(
             run_id,
             result,

@@ -10,7 +10,11 @@ from sqlalchemy.orm import Session
 
 from backend.data.database import ResearchSessionLocal
 from backend.data.models import (
+    BacktestEquityCurve,
+    BacktestQualityReport,
     BacktestRun,
+    BacktestSignal,
+    BacktestTrade,
     Dataset,
     GoldenRankTrendCase,
     OptimizationRun,
@@ -863,6 +867,262 @@ class Repository:
         except SQLAlchemyError:
             return None
 
+    # ── 归一化结果存取 ─────────────────────────────
+
+    def save_backtest_trades(self, run_id: str, trades: list[dict[str, Any]]) -> int:
+        count = 0
+        try:
+            for t in trades:
+                row = BacktestTrade(
+                    backtest_run_id=run_id,
+                    code=str(t.get("code") or ""),
+                    name=str(t.get("name") or ""),
+                    side=str(t.get("side") or t.get("action") or "buy"),
+                    entry_snapshot_id=str(t.get("entrySnapshotId") or "") or None,
+                    exit_snapshot_id=str(t.get("exitSnapshotId") or "") or None,
+                    entry_time=int(t.get("entryTime") or 0) or None,
+                    exit_time=int(t.get("exitTime") or 0) or None,
+                    entry_trading_date=str(t.get("entryTradingDate") or "") or None,
+                    exit_trading_date=str(t.get("exitTradingDate") or "") or None,
+                    entry_price=float(t.get("entryPrice")) if t.get("entryPrice") is not None else None,
+                    exit_price=float(t.get("exitPrice")) if t.get("exitPrice") is not None else None,
+                    quantity=int(t.get("quantity") or 0),
+                    gross_return=float(t.get("grossReturn")) if t.get("grossReturn") is not None else None,
+                    net_return=float(t.get("netReturn")) if t.get("netReturn") is not None else None,
+                    profit=float(t.get("profit")) if t.get("profit") is not None else None,
+                    holding_bars=int(t.get("holdingBars") or 0),
+                    reason=str(t.get("reason") or "") or None,
+                    candidate_tier=str(t.get("candidateTier") or "") or None,
+                    stage=str(t.get("stage") or "") or None,
+                    regime=str(t.get("regime") or "") or None,
+                    explanation=str(t.get("explanation") or "") or None,
+                    fill_detail_json=json_dumps(t.get("fill") or {}),
+                )
+                self.research_session.add(row)
+                count += 1
+            self.research_session.commit()
+        except SQLAlchemyError as exc:
+            self.research_session.rollback()
+            raise RuntimeError("failed to save normalized backtest trades") from exc
+        return count
+
+    def get_backtest_trades(self, run_id: str) -> list[dict[str, Any]]:
+        try:
+            rows = self.research_session.scalars(
+                select(BacktestTrade).where(BacktestTrade.backtest_run_id == run_id).order_by(BacktestTrade.id)
+            ).all()
+            return [self._trade_to_dict(r) for r in rows]
+        except SQLAlchemyError:
+            return []
+
+    def save_backtest_equity_curve(self, run_id: str, curve: list[dict[str, Any]]) -> int:
+        count = 0
+        try:
+            for pt in curve:
+                row = BacktestEquityCurve(
+                    backtest_run_id=run_id,
+                    snapshot_id=str(pt.get("snapshotId") or "") or None,
+                    timestamp=int(pt.get("timestamp") or 0) or None,
+                    trading_date=str(pt.get("tradingDate") or "") or None,
+                    equity=float(pt.get("equity")) if pt.get("equity") is not None else None,
+                    cash=float(pt.get("cash")) if pt.get("cash") is not None else None,
+                    market_value=float(pt.get("marketValue")) if pt.get("marketValue") is not None else None,
+                    position_count=int(pt.get("positionCount") or 0),
+                )
+                self.research_session.add(row)
+                count += 1
+            self.research_session.commit()
+        except SQLAlchemyError as exc:
+            self.research_session.rollback()
+            raise RuntimeError("failed to save normalized backtest equity curve") from exc
+        return count
+
+    def get_backtest_equity_curve(self, run_id: str) -> list[dict[str, Any]]:
+        try:
+            rows = self.research_session.scalars(
+                select(BacktestEquityCurve).where(BacktestEquityCurve.backtest_run_id == run_id).order_by(BacktestEquityCurve.id)
+            ).all()
+            return [self._equity_to_dict(r) for r in rows]
+        except SQLAlchemyError:
+            return []
+
+    def save_backtest_signals(self, run_id: str, strategy_decisions: dict[str, Any]) -> int:
+        count = 0
+        try:
+            for fr in strategy_decisions.get("frameResults") or []:
+                snapshot_id = str(fr.get("snapshotId") or "")
+                trading_date = str(fr.get("tradingDate") or "")
+                for d in fr.get("buyCandidates") or []:
+                    row = self._signal_from_decision(run_id, snapshot_id, trading_date, d)
+                    self.research_session.add(row)
+                    count += 1
+                for d in fr.get("watchCandidates") or []:
+                    row = self._signal_from_decision(run_id, snapshot_id, trading_date, d)
+                    self.research_session.add(row)
+                    count += 1
+                for d in fr.get("excludedCandidates") or []:
+                    row = self._signal_from_decision(run_id, snapshot_id, trading_date, d)
+                    self.research_session.add(row)
+                    count += 1
+            self.research_session.commit()
+        except SQLAlchemyError as exc:
+            self.research_session.rollback()
+            raise RuntimeError("failed to save normalized backtest signals") from exc
+        return count
+
+    @staticmethod
+    def _signal_from_decision(run_id: str, snapshot_id: str, trading_date: str, d: dict[str, Any]) -> BacktestSignal:
+        return BacktestSignal(
+            backtest_run_id=run_id,
+            snapshot_id=snapshot_id or None,
+            trading_date=trading_date or None,
+            code=str(d.get("code") or ""),
+            name=str(d.get("name") or ""),
+            candidate_tier=str(d.get("candidateTier") or "") or None,
+            signal=str(d.get("signal") or "") or None,
+            confidence=float(d.get("confidence")) if d.get("confidence") is not None else None,
+            rank=int(d.get("rank")) if d.get("rank") is not None else None,
+            stage=str(d.get("stage") or "") or None,
+            regime=str(d.get("regime") or "") or None,
+            reasons_json=json_dumps(d.get("reasons") or []),
+            risk_flags_json=json_dumps(d.get("riskFlags") or []),
+        )
+
+    def get_backtest_signals(self, run_id: str) -> list[dict[str, Any]]:
+        try:
+            rows = self.research_session.scalars(
+                select(BacktestSignal).where(BacktestSignal.backtest_run_id == run_id).order_by(BacktestSignal.id)
+            ).all()
+            return [self._signal_to_dict(r) for r in rows]
+        except SQLAlchemyError:
+            return []
+
+    def save_backtest_quality_report(self, run_id: str, data_quality: dict[str, Any], quality_gate: dict[str, Any] | None = None) -> bool:
+        try:
+            gate = quality_gate if isinstance(quality_gate, dict) else {}
+            stats = gate.get("stats") if isinstance(gate.get("stats"), dict) else {}
+            row = BacktestQualityReport(
+                backtest_run_id=run_id,
+                passed=bool(data_quality.get("severity") == "pass"),
+                severity=str(data_quality.get("severity") or "pass"),
+                research_grade=str(data_quality.get("researchGrade") or "research_ready"),
+                frame_count=int(data_quality.get("snapshotCount") or 0),
+                stock_count=int(gate.get("stockCount") or 0),
+                sector_count=int(gate.get("sectorCount") or 0),
+                missing_fields_json=json_dumps(stats.get("missingFields") or {}),
+                nan_counts_json=json_dumps(stats.get("nanCounts") or {}),
+                inf_counts_json=json_dumps(stats.get("infCounts") or {}),
+                negative_price_count=int(stats.get("negativePriceCount") or 0),
+                non_positive_price_count=int(stats.get("nonPositivePriceCount") or 0),
+                negative_volume_count=int(stats.get("negativeVolumeCount") or 0),
+                coverage_ratio=float(stats.get("coverageRatio")) if stats.get("coverageRatio") is not None else None,
+                time_order_fixed=bool(gate.get("timeOrderFixed") or False),
+                time_order_fix_count=int(gate.get("timeOrderFixCount") or 0),
+                warnings_json=json_dumps(data_quality.get("warnings") or []),
+            )
+            self.research_session.add(row)
+            self.research_session.commit()
+            return True
+        except SQLAlchemyError as exc:
+            self.research_session.rollback()
+            raise RuntimeError("failed to save normalized backtest quality report") from exc
+
+    def get_backtest_quality_report(self, run_id: str) -> dict[str, Any] | None:
+        try:
+            row = self.research_session.scalar(
+                select(BacktestQualityReport).where(BacktestQualityReport.backtest_run_id == run_id).limit(1)
+            )
+            return self._quality_to_dict(row) if row else None
+        except SQLAlchemyError:
+            return None
+
+    # ── 序列化 ─────────────────────────────────────
+
+    @staticmethod
+    def _trade_to_dict(model: BacktestTrade) -> dict[str, Any]:
+        return {
+            "id": model.id,
+            "backtestRunId": model.backtest_run_id,
+            "code": model.code,
+            "name": model.name,
+            "side": model.side,
+            "entrySnapshotId": model.entry_snapshot_id,
+            "exitSnapshotId": model.exit_snapshot_id,
+            "entryTime": model.entry_time,
+            "exitTime": model.exit_time,
+            "entryTradingDate": model.entry_trading_date,
+            "exitTradingDate": model.exit_trading_date,
+            "entryPrice": model.entry_price,
+            "exitPrice": model.exit_price,
+            "quantity": model.quantity,
+            "grossReturn": model.gross_return,
+            "netReturn": model.net_return,
+            "profit": model.profit,
+            "holdingBars": model.holding_bars,
+            "reason": model.reason,
+            "candidateTier": model.candidate_tier,
+            "stage": model.stage,
+            "regime": model.regime,
+            "explanation": model.explanation,
+            "fillDetail": json_loads(model.fill_detail_json, {}),
+        }
+
+    @staticmethod
+    def _equity_to_dict(model: BacktestEquityCurve) -> dict[str, Any]:
+        return {
+            "id": model.id,
+            "backtestRunId": model.backtest_run_id,
+            "snapshotId": model.snapshot_id,
+            "timestamp": model.timestamp,
+            "tradingDate": model.trading_date,
+            "equity": model.equity,
+            "cash": model.cash,
+            "marketValue": model.market_value,
+            "positionCount": model.position_count,
+        }
+
+    @staticmethod
+    def _signal_to_dict(model: BacktestSignal) -> dict[str, Any]:
+        return {
+            "id": model.id,
+            "backtestRunId": model.backtest_run_id,
+            "snapshotId": model.snapshot_id,
+            "tradingDate": model.trading_date,
+            "code": model.code,
+            "name": model.name,
+            "candidateTier": model.candidate_tier,
+            "signal": model.signal,
+            "confidence": model.confidence,
+            "rank": model.rank,
+            "stage": model.stage,
+            "regime": model.regime,
+            "reasons": json_loads(model.reasons_json, []),
+            "riskFlags": json_loads(model.risk_flags_json, []),
+        }
+
+    @staticmethod
+    def _quality_to_dict(model: BacktestQualityReport) -> dict[str, Any]:
+        return {
+            "id": model.id,
+            "backtestRunId": model.backtest_run_id,
+            "passed": model.passed,
+            "severity": model.severity,
+            "researchGrade": model.research_grade,
+            "frameCount": model.frame_count,
+            "stockCount": model.stock_count,
+            "sectorCount": model.sector_count,
+            "missingFields": json_loads(model.missing_fields_json, {}),
+            "nanCounts": json_loads(model.nan_counts_json, {}),
+            "infCounts": json_loads(model.inf_counts_json, {}),
+            "negativePriceCount": model.negative_price_count,
+            "nonPositivePriceCount": model.non_positive_price_count,
+            "negativeVolumeCount": model.negative_volume_count,
+            "coverageRatio": model.coverage_ratio,
+            "timeOrderFixed": model.time_order_fixed,
+            "timeOrderFixCount": model.time_order_fix_count,
+            "warnings": json_loads(model.warnings_json, []),
+        }
+
     def save_optimization_run(self, run: OptimizationRun) -> OptimizationRun:
         try:
             managed = self.research_session.merge(run)
@@ -1048,9 +1308,13 @@ class Repository:
             "config_hash": model.config_hash,
             "random_seed": model.random_seed,
             "status": model.status,
+            "dateStart": model.date_start,
+            "dateEnd": model.date_end,
+            "errorReason": model.error_reason,
             "request_json": model.request_json,
             "result_json": model.result_json,
             "created_at": model.created_at.isoformat() if model.created_at else None,
+            "finished_at": model.finished_at.isoformat() if model.finished_at else None,
         }
 
     @staticmethod

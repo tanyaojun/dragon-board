@@ -212,9 +212,101 @@ class BacktestRun(ResearchBase):
     config_hash: Mapped[str] = mapped_column(String(96), default="")
     random_seed: Mapped[int] = mapped_column(Integer, default=0)
     status: Mapped[str] = mapped_column(String(32), default="completed")
+    date_start: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    date_end: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    error_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     request_json: Mapped[str] = mapped_column(Text, default="{}")
     result_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class BacktestTrade(ResearchBase):
+    __tablename__ = "backtest_trades"
+    __table_args__ = (Index("ix_bt_trades_run_id", "backtest_run_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    backtest_run_id: Mapped[str] = mapped_column(ForeignKey("backtest_runs.id", ondelete="CASCADE"), index=True)
+    code: Mapped[str] = mapped_column(String(16), index=True)
+    name: Mapped[str] = mapped_column(String(80), default="")
+    side: Mapped[str] = mapped_column(String(8), default="buy")
+    entry_snapshot_id: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    exit_snapshot_id: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    entry_time: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    exit_time: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    entry_trading_date: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    exit_trading_date: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    entry_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    exit_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    quantity: Mapped[int] = mapped_column(Integer, default=0)
+    gross_return: Mapped[float | None] = mapped_column(Float, nullable=True)
+    net_return: Mapped[float | None] = mapped_column(Float, nullable=True)
+    profit: Mapped[float | None] = mapped_column(Float, nullable=True)
+    holding_bars: Mapped[int] = mapped_column(Integer, default=0)
+    reason: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    candidate_tier: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    stage: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    regime: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    explanation: Mapped[str | None] = mapped_column(Text, nullable=True)
+    fill_detail_json: Mapped[str] = mapped_column(Text, default="{}")
+
+
+class BacktestEquityCurve(ResearchBase):
+    __tablename__ = "backtest_equity_curve"
+    __table_args__ = (Index("ix_bt_equity_run_id", "backtest_run_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    backtest_run_id: Mapped[str] = mapped_column(ForeignKey("backtest_runs.id", ondelete="CASCADE"), index=True)
+    snapshot_id: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    timestamp: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    trading_date: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    equity: Mapped[float | None] = mapped_column(Float, nullable=True)
+    cash: Mapped[float | None] = mapped_column(Float, nullable=True)
+    market_value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    position_count: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class BacktestSignal(ResearchBase):
+    __tablename__ = "backtest_signals"
+    __table_args__ = (Index("ix_bt_signals_run_id_snapshot", "backtest_run_id", "snapshot_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    backtest_run_id: Mapped[str] = mapped_column(ForeignKey("backtest_runs.id", ondelete="CASCADE"), index=True)
+    snapshot_id: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    trading_date: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    code: Mapped[str] = mapped_column(String(16), index=True)
+    name: Mapped[str] = mapped_column(String(80), default="")
+    candidate_tier: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    signal: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    rank: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    stage: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    regime: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    reasons_json: Mapped[str] = mapped_column(Text, default="[]")
+    risk_flags_json: Mapped[str] = mapped_column(Text, default="[]")
+
+
+class BacktestQualityReport(ResearchBase):
+    __tablename__ = "backtest_quality_reports"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    backtest_run_id: Mapped[str] = mapped_column(ForeignKey("backtest_runs.id", ondelete="CASCADE"), index=True)
+    passed: Mapped[bool] = mapped_column(Boolean, default=False)
+    severity: Mapped[str] = mapped_column(String(32), default="pass")
+    research_grade: Mapped[str] = mapped_column(String(32), default="research_ready")
+    frame_count: Mapped[int] = mapped_column(Integer, default=0)
+    stock_count: Mapped[int] = mapped_column(Integer, default=0)
+    sector_count: Mapped[int] = mapped_column(Integer, default=0)
+    missing_fields_json: Mapped[str] = mapped_column(Text, default="{}")
+    nan_counts_json: Mapped[str] = mapped_column(Text, default="{}")
+    inf_counts_json: Mapped[str] = mapped_column(Text, default="{}")
+    negative_price_count: Mapped[int] = mapped_column(Integer, default=0)
+    non_positive_price_count: Mapped[int] = mapped_column(Integer, default=0)
+    negative_volume_count: Mapped[int] = mapped_column(Integer, default=0)
+    coverage_ratio: Mapped[float | None] = mapped_column(Float, nullable=True)
+    time_order_fixed: Mapped[bool] = mapped_column(Boolean, default=False)
+    time_order_fix_count: Mapped[int] = mapped_column(Integer, default=0)
+    warnings_json: Mapped[str] = mapped_column(Text, default="[]")
 
 
 class OptimizationRun(ResearchBase):
