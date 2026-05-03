@@ -8,13 +8,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "git:preflight": "node scripts/gitPreflight.mjs",
     "test:ranktrend": "vitest run src/services/rankTrend/__tests__ src/services/__tests__/RankTrendAnalyzer.test.ts",
-    "typecheck:ranktrend": "tsc --noEmit -p tsconfig.ranktrend.json",
-    "update-themes": "node scripts/updateThemeMapping.js",
-    "update-themes:dev": "cross-env NODE_ENV=development node scripts/updateThemeMapping.js",
-    "update-themes:prod": "cross-env NODE_ENV=production node scripts/updateThemeMapping.js",
-    "update-themes:monthly": "node scripts/updateThemeMapping.js && echo '题材映射已更新'"
+    "typecheck:ranktrend": "tsc --noEmit -p tsconfig.ranktrend.json"
   },
   "dependencies": {
     "echarts": "^5.5.0",

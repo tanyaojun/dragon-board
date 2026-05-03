@@ -1,5 +1,8 @@
 {
   "extends": "./tsconfig.app.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.ranktrend.tsbuildinfo"
+  },
   "include": [
     "env.d.ts",
     "src/types/rankTrendDefaults.ts",

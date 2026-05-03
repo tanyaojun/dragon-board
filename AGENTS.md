@@ -46,6 +46,13 @@
 └── e2e/                    # Playwright 端到端测试
 ```
 
+根目录文件保留规则：
+
+- 必须保留：`package.json`、`package-lock.json`、`index.html`、`env.d.ts`、`vite.config.ts`、`vitest.config.ts`、`playwright.config.ts`、`tsconfig.json`、`tsconfig.app.json`、`tsconfig.node.json`、`tsconfig.ranktrend.json`、`.editorconfig`、`.prettierrc.json`、`eslint.config.ts`、`.oxlintrc.json`、`.npmrc`、`.gitattributes`、`.gitignore`、`AGENTS.md`。
+- 根目录 `DragonBoardLauncher.exe` 是本地启动器产物，日常可保留在工作区，但 `.gitignore` 已禁止新增提交 `*.exe`。
+- 不要提交根目录构建产物或缓存：`dist/`、`.tmp/`、`*.tsbuildinfo`、`node_modules/`、`coverage/`、`playwright-report/`、`test-results/`。
+- 不新增一次性说明、截图、调试输出或临时 JSON 到根目录；需要文档放 `docs/`，需要脚本放 `scripts/`，需要诊断工具放 `src/devtools/diagnostics/` 或对应子项目目录。
+
 核心前端服务优先从这些文件定位：
 
 - `src/services/DataLayer.ts`：中心化内存数据层，只负责运行时内存状态、版本和订阅通知。

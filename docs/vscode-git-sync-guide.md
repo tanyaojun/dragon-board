@@ -655,21 +655,9 @@ exceeds GitHub's file size limit of 100.00 MB
 
 ## 自动防线
 
-项目内置了同步前自检：
+当前仓库没有可用的 `git:preflight` 脚本，也没有提交随仓库分发的 Git hook。
 
-```text
-npm run git:preflight
-```
-
-它会检查：
-
-- 当前索引是否误跟踪 `.tmp`、`node_modules`、`dist`
-- 暂存区是否包含 `.exe`、`.pdb` 等本地产物
-- 待推送历史是否包含超过 50MB 的文件
-- 待推送历史是否包含 `.tmp`、`node_modules`、`dist`
-- `.vscode` 下是否只提交了允许的 `extensions.json`
-
-本机已经配置 Git `pre-push` 钩子后，VS Code 点击“同步更改”时也会自动运行这套检查。检查失败时，不要绕过钩子，不要强制推送，把错误信息发给 Codex。
+同步前按本文的 `git status --short`、`git diff --stat`、`git diff --cached --stat`、`git diff --cached --name-status` 手工检查。后续如果恢复自动检查，必须先提交真实脚本，再把对应命令写回本文档。
 
 ## 当前项目基线
 
