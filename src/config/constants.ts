@@ -1,6 +1,4 @@
 // src/config/constants.ts
-import { EMOTION_PHASES, EMOTION_IMPACT } from '../types/emotion'
-
 /**
  * 题材分析器配置常量
  * 与 sectorAnalyzer.ts 3.0.0 保持同步
@@ -84,125 +82,6 @@ export const SECTOR_CONFIG = {
 
   // 同步防抖时间
   SYNC_DEBOUNCE_MS: 500,
-} as const
-
-/**
- * 情绪周期定义 - 已移至 emotion.ts，此处在注释中保留引用
- * @see {@link EMOTION_PHASES} in '@/types/emotion'
- */
-
-/**
- * 龙头级别定义（与 DragonAnalyzer 共享）
- */
-export const LEADER_LEVELS = {
-  TOTAL: { name: '总龙头', icon: '👑', color: '#FFD700', order: 1, minScore: 80 },
-  CONTINUOUS: { name: '连板龙头', icon: '📈', color: '#e74c3c', order: 2, minScore: 70 },
-  SECTOR: { name: '板块龙头', icon: '🏆', color: '#3498db', order: 3, minScore: 65 },
-  MIDDLE: { name: '中军龙头', icon: '⚔️', color: '#9b59b6', order: 4, minScore: 60 },
-  EMOTION: { name: '情绪龙头', icon: '🔥', color: '#f39c12', order: 5, minScore: 55 },
-} as const
-
-/**
- * 龙头变化类型
- */
-export const LEADER_CHANGE_TYPES = {
-  NEW: '新增',
-  DISAPPEAR: '消失',
-  PROMOTION: '晋级',
-  DEMOTION: '降级',
-  THEME_CHANGE: '题材变化',
-} as const
-
-/**
- * 题材对情绪的影响权重
- */
-export const THEME_IMPACT_WEIGHTS = {
-  HOT_THEME_COUNT: 0.3, // 热门题材数量
-  THEME_MOMENTUM: 0.4, // 题材动量
-  THEME_CORRELATION: 0.3, // 题材联动性
-} as const
-
-/**
- * 应用事件名称
- */
-export const APP_EVENTS = {
-  DATA: {
-    MERGED: 'data:merged',
-    UPDATED: 'data:updated',
-    PLATFORMS_LOADED: 'platforms:loaded',
-    QUOTES_UPDATED: 'quotes:updated',
-  },
-  SECTOR: {
-    UPDATED: 'sector:updated',
-    READY: 'sector:ready',
-    BATCH_UPDATED: 'sector:batch:updated',
-    HOT_UPDATED: 'sector:hot:updated',
-    ALERT: 'sector:alert',
-  },
-  DRAGON: {
-    UPDATED: 'dragon:updated',
-    CHANGED: 'dragon:changed',
-  },
-  STOCK: {
-    SELECTED: 'stock:selected',
-    CLEARED: 'stock:cleared',
-  },
-  UI: {
-    PANEL_OPEN: 'ui:panel:open',
-    PANEL_CLOSE: 'ui:panel:close',
-    TOAST: 'ui:toast',
-  },
-  REFRESH: {
-    STARTED: 'refresh:started',
-    COMPLETE: 'refresh:complete',
-    FAIL: 'refresh:fail',
-  },
-} as const
-
-/**
- * 默认阈值（与 AlgorithmManager 共享）
- */
-export const DEFAULT_THRESHOLDS = {
-  totalLeader: 80,
-  sectorLeader: 65,
-  continuousLeader: 70,
-  middleLeader: 60,
-  emotionLeader: 55,
-} as const
-
-/**
- * 阈值范围
- */
-export const THRESHOLD_RANGES = {
-  totalLeader: { min: 60, max: 95 },
-  sectorLeader: { min: 45, max: 85 },
-  continuousLeader: { min: 50, max: 90 },
-  middleLeader: { min: 40, max: 80 },
-  emotionLeader: { min: 35, max: 75 },
-} as const
-
-/**
- * 存储键名
- */
-export const STORAGE_KEYS = {
-  // 算法相关
-  ALGORITHM: 'algorithm',
-  WEIGHTS: 'algorithm_weights',
-  THRESHOLDS: 'algorithm_thresholds',
-  HISTORY: 'algorithm_history',
-
-  // 配置相关
-  APP_CONFIG: 'app_config',
-  USER_THEME: 'kpl_theme',
-  REFRESH_STRATEGY: 'refresh_strategy',
-
-  // 阈值乘数配置
-  THRESHOLD_MULTIPLIERS: 'threshold_multipliers',
-
-  // 缓存相关
-  SECTOR_CACHE: 'sector_cache',
-  DRAGON_CACHE: 'dragon_cache',
-  BREATH_CACHE: 'breath_cache',
 } as const
 
 /**
@@ -675,54 +554,6 @@ export const ALERT_THRESHOLDS = {
   },
 } as const
 
-// ========== 扩展存储键名 ==========
-export const EXTENDED_STORAGE_KEYS = {
-  ROTATION_CACHE: 'rotation_cache',
-  ROTATION_HISTORY: 'rotation_history',
-  ALERT_CACHE: 'alert_cache',
-  ALERT_HISTORY: 'alert_history',
-} as const
-
-// ========== 扩展API端点 ==========
-export const EXTENDED_API_ENDPOINTS = {
-  ROTATION: {
-    ANALYSIS: '/api/rotation/analysis',
-    HISTORY: '/api/rotation/history',
-  },
-  ALERT: {
-    LIST: '/api/alert/list',
-    STATS: '/api/alert/stats',
-    MARK_READ: '/api/alert/read',
-    CLEAR: '/api/alert/clear',
-  },
-} as const
-
-// ========== 大单交易类型常量 ==========
-export const BIG_ORDER_TYPES = {
-  PASSIVE_SELL: 1, // 被动卖
-  ACTIVE_BUY: 2, // 主动买
-  PASSIVE_BUY: 3, // 被动买
-  ACTIVE_SELL: 4, // 主动卖
-} as const
-
-export const BIG_ORDER_TYPE_NAMES = {
-  [BIG_ORDER_TYPES.PASSIVE_SELL]: '被动卖',
-  [BIG_ORDER_TYPES.ACTIVE_BUY]: '主动买',
-  [BIG_ORDER_TYPES.PASSIVE_BUY]: '被动买',
-  [BIG_ORDER_TYPES.ACTIVE_SELL]: '主动卖',
-} as const
-
-// ========== 大单标记常量 ==========
-export const FUND_MARKERS = {
-  IGNITE: '点火',
-  SMASH: '砸盘',
-} as const
-
-export const BUY_MARKERS = {
-  ACTIVE: '买活跃',
-  SUPPORT: '承接好',
-} as const
-
 // ========== 标记算法阈值 ==========
 export const MARKER_THRESHOLDS = {
   IGNITE: {
@@ -801,28 +632,25 @@ export const LIMIT_UP_CONFIG = {
 
 // ========== 预警情绪乘数配置 ==========
 export const ALERT_EMOTION_MULTIPLIERS = {
-  // 各情绪阶段的通用乘数
   BY_PHASE: {
-    冰点: 0.7, // 冰点更容易触发预警（阈值降低30%）
-    启动: 0.9, // 启动略容易触发
-    发酵: 1.1, // 发酵略难触发
-    高潮: 1.3, // 高潮最难触发（阈值提高30%，减少噪音）
-    退潮: 1.1, // 退潮略难触发
+    冰点: 0.7,
+    启动: 0.9,
+    发酵: 1.1,
+    高潮: 1.3,
+    退潮: 1.1,
   },
-
-  // 各预警类型的独立乘数（可选，会覆盖通用乘数）
   BY_ALERT_TYPE: {
     rocket_launch: {
-      冰点: 0.6, // 冰点火箭发射更敏感
-      高潮: 1.5, // 高潮火箭发射更迟钝
+      冰点: 0.6,
+      高潮: 1.5,
     },
     waterfall_dive: {
       冰点: 0.6,
       高潮: 1.5,
     },
     leader_fall: {
-      冰点: 0.5, // 冰点龙头倒下更敏感
-      高潮: 1.2, // 高潮龙头倒下相对迟钝
+      冰点: 0.5,
+      高潮: 1.2,
     },
     fengdan_drop: {
       冰点: 0.8,
@@ -883,14 +711,6 @@ export const ALERT_THRESHOLDS_EXTENDED = {
     WARNING_INFLOW: 2000, // 警告流入
     WARNING_OUTFLOW: -2000, // 警告流出
   },
-} as const
-
-// ========== 合并完整的预警阈值配置 ==========
-// 如果需要完全替换 ALERT_THRESHOLDS，可以这样写：
-export const ALERT_THRESHOLDS_COMPLETE = {
-  ...ALERT_THRESHOLDS,
-  ...ALERT_THRESHOLDS_EXTENDED,
-  BATCH_LIMIT_UP: BATCH_LIMIT_UP_CONFIG, // 替换为细化配置
 } as const
 
 // ========== 个股异动配置 ==========
@@ -958,215 +778,5 @@ export const SECTOR_ALERT_CONFIG = {
     INFO: 2, // 2-3倍
     // 最小基础量比（低于此值不预警）
     MIN_BASE_VOLUME_RATIO: 0.5,
-  },
-} as const
-
-// ========== 情绪分数计算配置 ==========
-export const SENTIMENT_SCORE_CONFIG = {
-  // 各因素的基础权重
-  WEIGHTS: {
-    MARKET_LOSS: 0.35, // 35%
-    TDX_EMOTION: 0.2, // 20%
-    UP_DOWN_RATIO: 0.15, // 15%
-    DT_COUNT: 0.1, // 10%
-    LOSS_EFFECT: 0.08, // 8%
-    ZT_COUNT: 0.04, // 4%
-    PROFIT_EFFECT: 0.03, // 3%
-    YESTERDAY_ZT: 0.02, // 2%
-    FENGBAN_RATE: 0.01, // 1%
-    INDEX: 0.01, // 1%
-    LIANBAN_HEIGHT: 0.005, // 0.5%
-    PROMOTION_RATE: 0.005, // 0.5%
-    VOLUME: 0.005, // 0.5%  ← 需要从某个地方扣0.5%
-  },
-
-  // 各因素的阈值配置
-  THRESHOLDS: {
-    YESTERDAY_ZT: {
-      VERY_GOOD: 3, // >3% 非常好
-      GOOD: 2, // 2-3% 好
-      NORMAL: 1, // 1-2% 正常
-      POOR: 0, // 0-1% 较差
-      BAD: -1, // -1-0% 差
-      VERY_BAD: -2, // -2--1% 很差
-    },
-    UP_DOWN_RATIO: {
-      EXTREME: 0.8, // >80% 极端好
-      VERY_HIGH: 0.7, // 70-80% 非常好
-      HIGH: 0.6, // 60-70% 好
-      ABOVE_AVG: 0.5, // 50-60% 略好
-      BELOW_AVG: 0.4, // 40-50% 略差
-      VERY_LOW: 0.2, // <20% 非常差
-    },
-    ZT_COUNT: {
-      EXTREME: 100, // >100 极端好
-      VERY_HIGH: 80, // 80-100 非常好
-      HIGH: 50, // 50-80 好
-      NORMAL: 30, // 30-50 正常
-      LOW: 10, // 10-30 较低
-    },
-    DT_COUNT: {
-      EXTREME: 50, // >50 极端差
-      VERY_HIGH: 30, // 30-50 非常差
-      HIGH: 20, // 20-30 差
-      NORMAL: 10, // 10-20 正常
-      LOW: 5, // 5-10 较好
-    },
-    INDEX_CHANGE: {
-      EXTREME: 2, // >2% 极端好
-      VERY_HIGH: 1.5, // 1.5-2% 非常好
-      HIGH: 1, // 1-1.5% 好
-      NORMAL: 0.5, // 0.5-1% 正常
-      LOW: 0, // 0-0.5% 较弱
-      VERY_LOW: -2, // <-2% 非常差
-    },
-    VOLUME: {
-      EXTREME: 2e12, // >2万亿 极端放量
-      VERY_HIGH: 1.5e12, // 1.5-2万亿 非常放量
-      HIGH: 1e12, // 1-1.5万亿 放量
-      NORMAL: 8000e8, // 8000亿-1万亿 正常
-      LOW: 5000e8, // <5000亿 缩量
-    },
-    // 封板率
-    FENGBAN_RATE: {
-      EXTREME: 85, // >85% 极端好
-      VERY_GOOD: 75, // 75-85% 非常好
-      GOOD: 65, // 65-75% 好
-      NORMAL: 55, // 55-65% 正常
-      POOR: 45, // 45-55% 较差
-      VERY_POOR: 35, // 35-45% 很差
-    },
-    // 晋级率阈值
-    PROMOTION_RATE: {
-      EXTREME: 30, // >30% 极端好
-      VERY_GOOD: 20, // 20-30% 非常好
-      GOOD: 15, // 15-20% 好
-      NORMAL: 10, // 10-15% 正常
-      POOR: 5, // 5-10% 较差
-      VERY_POOR: 3, // 3-5% 很差
-      EXTREME_POOR: 0, // <3% 极端差
-    },
-
-    // 昨日涨停平均涨幅
-    AVG_CHANGE: {
-      EXTREME: 5, // >5% 极好
-      VERY_GOOD: 3, // 3-5% 好
-      GOOD: 1, // 1-3% 正常
-      NORMAL: 0, // 0-1% 较差
-      POOR: -2, // -2-0% 差
-      VERY_POOR: -4, // -4--2% 很差
-      EXTREME_POOR: -6, // <-6% 极端差
-    },
-    // 连板高度
-    LIANBAN_HEIGHT: {
-      EXTREME: 7, // 7板以上 极端好
-      VERY_GOOD: 5, // 5-6板 非常好
-      GOOD: 4, // 4板 好
-      NORMAL: 3, // 3板 正常
-      POOR: 2, // 2板 较差
-      VERY_POOR: 1, // 1板 很差
-    },
-    // 市场整体赚钱效应
-    PROFIT_EFFECT: {
-      ZT_RATIO: {
-        EXTREME: 5, // >5% 得100分（大牛市）
-        VERY_GOOD: 3, // 3-5% 得90分
-        GOOD: 2, // 2-3% 得80分
-        NORMAL: 1, // 1-2% 得60分  ✅ 1.54% 落在这里
-        POOR: 0.5, // 0.5-1% 得40分
-        VERY_POOR: 0.2, // 0.2-0.5% 得20分
-        EXTREME_POOR: 0, // <0.2% 得10分
-      },
-      GT7_RATIO: {
-        // >7%比例
-        EXTREME: 3,
-        VERY_GOOD: 2,
-        GOOD: 1.5,
-        NORMAL: 1,
-        POOR: 0.5,
-        VERY_POOR: 0.2,
-        EXTREME_POOR: 0,
-      },
-      GT5_RATIO: {
-        // >5%比例
-        EXTREME: 5,
-        VERY_GOOD: 3,
-        GOOD: 2,
-        NORMAL: 1.5,
-        POOR: 1,
-        VERY_POOR: 0.5,
-        EXTREME_POOR: 0,
-      },
-    },
-    // 市场整体亏钱效应
-    MARKET_LOSS: {
-      // 跌幅>5%的股票比例
-      BIG_LOSS_RATIO: {
-        EXTREME: 5, // <5% 极好
-        VERY_GOOD: 10, // 5-10% 好
-        GOOD: 15, // 10-15% 正常
-        NORMAL: 20, // 15-20% 较差
-        POOR: 30, // 20-30% 差
-        VERY_POOR: 40, // 30-40% 很差
-        EXTREME_POOR: 50, // >50% 极端差
-      },
-      // 跌幅>3%的股票比例（温和亏钱效应）
-      MEDIUM_LOSS_RATIO: {
-        EXTREME: 10,
-        VERY_GOOD: 20,
-        GOOD: 30,
-        NORMAL: 40,
-        POOR: 50,
-        VERY_POOR: 60,
-        EXTREME_POOR: 70,
-      },
-    },
-
-    //(昨日涨停今日跌停数量)
-    LOSS_EFFECT: {
-      // 昨日涨停今日跌停（极端亏钱效应）
-      DT_COUNT: {
-        EXTREME: 0, // 0只 无亏钱效应
-        VERY_GOOD: 1, // 1只 轻微
-        GOOD: 2, // 2只 尚可
-        NORMAL: 3, // 3只 正常
-        POOR: 5, // 5只 明显亏钱效应
-        VERY_POOR: 8, // 8只 严重亏钱效应
-        EXTREME_POOR: 10, // 10只以上 极端亏钱效应
-      },
-      // 昨日涨停今日大跌>5%（大面效应）
-      BIG_LOSS_COUNT: {
-        EXTREME: 0, // 0只 无大面
-        VERY_GOOD: 2, // 2只 轻微
-        GOOD: 5, // 5只 尚可
-        NORMAL: 8, // 8只 正常
-        POOR: 12, // 12只 明显亏钱效应
-        VERY_POOR: 15, // 15只 严重亏钱效应
-        EXTREME_POOR: 20, // 20只以上 极端亏钱效应
-      },
-      // 绿盘率 = 绿盘数量 / 昨日涨停总数
-      GREEN_RATE: {
-        EXTREME: 10, // <10% 非常好
-        VERY_GOOD: 20, // 10-20% 好
-        GOOD: 30, // 20-30% 正常
-        NORMAL: 40, // 30-40% 较差
-        POOR: 50, // 40-50% 差
-        VERY_POOR: 60, // 50-60% 很差
-        EXTREME_POOR: 70, // >60% 极端差
-      },
-    },
-  },
-
-  // 分数映射（0-100分）
-  SCORE_MAPPING: {
-    EXTREME: 100, // 极端好
-    VERY_GOOD: 90, // 非常好
-    GOOD: 80, // 好
-    ABOVE_AVG: 70, // 略好
-    NORMAL: 60, // 正常
-    BELOW_AVG: 40, // 略差
-    POOR: 30, // 差
-    VERY_POOR: 20, // 很差
-    EXTREME_POOR: 10, // 极端差
   },
 } as const

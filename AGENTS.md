@@ -32,7 +32,8 @@
 │   ├── components/          # Vue 组件和业务面板
 │   ├── services/            # 核心业务逻辑层
 │   ├── stores/              # Pinia 状态
-│   ├── types/               # TypeScript 类型与默认值
+│   ├── types/               # TypeScript 类型契约
+│   ├── config/              # 运行时配置、默认参数、存储 key 和稳定业务配置
 │   └── main.ts              # 应用入口和 window 服务挂载
 ├── docs/                   # Dragon Board 主项目文档与历史方案
 ├── proxy-server/            # 本地 HTTP 代理服务
@@ -49,7 +50,8 @@
 - `src/services/RankTrendAnalyzer.ts`：前端 RankTrend 分析入口。
 - `src/services/rankTrend/**`：RankTrend 拆分后的 golden 标准模块。
 - `src/types/rankTrendDefaults.ts`：RankTrend 默认参数和默认快照类型。
-- `src/types/**`：统一类型、默认值和跨模块常量目录；不要新增或恢复 `src/type/**`。
+- `src/types/**`：统一类型契约目录；不要新增或恢复 `src/type/**`，不要放纯运行时配置。
+- `src/config/**`：运行时配置、默认参数、存储 key、固定展示配置和可调业务常量目录。
 - `src/services/quantBoardBridge.ts`：Dragon Board 与 QuantBoard 的数据桥接和 Golden 导出。
 - `src/services/quantBoardGolden/**`：仅用于导出 TypeScript golden case，不承载回测、优化或交易模拟。
 - `src/services/snapshot/**` 与 `src/services/quality/**`：快照质量、覆盖率和门禁。
@@ -64,6 +66,9 @@
 - 不得把以下内容新增回 `DataLayer.ts`：类型/接口定义、默认参数和常量、HTTP/API 调用、IndexedDB/SQLite/Supabase 读写、快照导入导出、快照读模型拼装、回测/优化逻辑、业务算法规则、UI 配置。
 - DataLayer 需要用到的公开结构应放在 `src/types/**`；龙头/复盘投影规则放在 `src/services/dragon/**`；快照保存、读取、覆盖率、备份和 QuantBoard 后端适配放在 `src/services/snapshot/**`。
 - 面板或服务需要快照数据时应调用 `src/services/snapshot/**` 的公开 facade/API，不要通过 `DataLayer.ts` 中转快照能力。
+- `src/types/**` 只承载类型、接口、字面量联合类型和类型推导必需的 `as const` 数据；纯运行时配置应放入 `src/config/**` 或业务模块就近文件。
+- 不再新增 `src/constants/**` 入口；稳定常量优先放入 `src/config/**`，模块私有常量就近放在对应 `src/services/**`、`src/stores/**` 或组件文件中。
+- 不要为了“统一出口”把运行时配置重新聚合进 `src/types/index.ts`。
 - 快照、策略信号和 QuantBoard 桥接逻辑必须显式处理空数据、NaN、时间乱序、低样本量、缺字段和类型回退。
 - 数据质量门禁失败时必须返回结构化原因，不允许静默吞掉并继续产出“看似可用”的交易结果。
 - 面板层应通过公开服务 API 调用业务逻辑，不要调用服务私有成员或绕过已有数据层。

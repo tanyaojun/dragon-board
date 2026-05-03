@@ -1,5 +1,3 @@
-// src/constants/themes.ts
-
 import type { ThemeConfig, ThemeType } from '@/types/theme'
 
 export const THEMES: Record<ThemeType, ThemeConfig> = {
@@ -23,8 +21,8 @@ export const THEMES: Record<ThemeType, ThemeConfig> = {
       '--color-leader-sector': '#5dade2',
       '--color-leader-continuous': '#e74c3c',
       '--color-leader-middle': '#9b59b6',
-      '--color-leader-emotion': '#f39c12'
-    }
+      '--color-leader-emotion': '#f39c12',
+    },
   },
   light: {
     name: '明亮',
@@ -46,8 +44,8 @@ export const THEMES: Record<ThemeType, ThemeConfig> = {
       '--color-leader-sector': '#3a6ea5',
       '--color-leader-continuous': '#b84a4a',
       '--color-leader-middle': '#8a5f9e',
-      '--color-leader-emotion': '#c97c3b'
-    }
+      '--color-leader-emotion': '#c97c3b',
+    },
   },
   matrix: {
     name: '矩阵',
@@ -69,8 +67,8 @@ export const THEMES: Record<ThemeType, ThemeConfig> = {
       '--color-leader-sector': '#00ffff',
       '--color-leader-continuous': '#ff00ff',
       '--color-leader-middle': '#00ff00',
-      '--color-leader-emotion': '#ffaa00'
-    }
+      '--color-leader-emotion': '#ffaa00',
+    },
   },
   cream: {
     name: '淡黄',
@@ -92,7 +90,7 @@ export const THEMES: Record<ThemeType, ThemeConfig> = {
       '--color-leader-sector': '#3a6ea5',
       '--color-leader-continuous': '#b84a4a',
       '--color-leader-middle': '#8a5f9e',
-      '--color-leader-emotion': '#c97c3b'
-    }
-  }
-} as const  // 添加 as const 确保类型推断
+      '--color-leader-emotion': '#c97c3b',
+    },
+  },
+} as const

@@ -1,7 +1,0 @@
-src/
-├── config/
-│   ├── storage.ts           # 存储键名配置
-│   ├── factors.ts           # 因子定义（原 data/factors.ts）
-│   └── algorithms.ts        # 算法定义（原 data/algorithms.ts）
-└── services/
-    └── AlgorithmManager.ts  # 只负责协调

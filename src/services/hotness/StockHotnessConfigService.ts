@@ -7,8 +7,7 @@ import {
   type StockHotnessConfigInput,
 } from './StockHotnessCalculator'
 
-const HOTNESS_STORAGE_KEY =
-  (STORAGE_KEYS as Record<string, string>).HOTNESS_CONFIG || 'stock_hotness_config'
+const HOTNESS_STORAGE_KEY = STORAGE_KEYS.HOTNESS_CONFIG
 
 function canUseStorage(): boolean {
   return typeof localStorage !== 'undefined'
