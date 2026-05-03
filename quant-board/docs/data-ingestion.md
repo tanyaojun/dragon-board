@@ -12,15 +12,20 @@ QuantBoard 首期导入 dragon-board 的历史快照数据，形成可复现的�
 
 ## 数据来源
 
-首期支持三类来源：
+当前正式来源已经收敛为 SQLite 主库里的快照事实表。Dragon Board 正式快照通过 `POST /api/snapshots/ingest` 写入 `snapshot_records / snapshot_frames / snapshot_stock_rows / snapshot_sector_rows`，QuantBoard 日常研究数据集再从这些事实表派生。
 
-1. IndexedDB 导出 JSON
-   - 来自 dragon-board 浏览器端快照存储。
-   - 适合人工导入和归档。
+日常主路径：
+
+1. SQLite 快照库派生
+   - `POST /api/datasets/import` 使用 `sourceType=sqlite_snapshots`。
+   - 源数据集默认 `dragonboard_live`，也可以显式指定历史迁移后的数据集。
+   - 支持按 `snapshotTypes`、日期区间和 `maxSnapshots` 生成新的可复现研究数据集。
+
+迁移辅助路径：
 
 2. 快照备份或投影 JSON
    - 如果已有 `snapshots`、`snapshot_frames`、`snapshot_stock_rows` 结构化导出，可直接映射。
-   - 适合后续自动化同步。
+   - 适合一次性历史迁移。
 
 3. 后端历史迁移 JSON
    - 通过 `POST /api/migrations/snapshots/import-json` 导入旧 IndexedDB 导出、Dragon Board v4 bundle、结构化 frames/rows 或 SQLite/备份导出。
@@ -28,7 +33,7 @@ QuantBoard 首期导入 dragon-board 的历史快照数据，形成可复现的�
 
 不建议首期直接读浏览器 IndexedDB 文件。浏览器存储结构、锁和 LevelDB 细节会增加不必要复杂度。
 
-IndexedDB 在迁移完成前仍可作为历史来源和离线缓存，但不应继续被视为正式事实库。
+IndexedDB 已从正式快照读写链路中移除。它只能作为历史迁移源、显式缓存或非正式临时数据来源，不再作为 QuantBoard 日常数据集采集入口。
 
 ## 标准数据集结构
 
@@ -79,7 +84,7 @@ snapshot_type = half_hour
 | `timestamp` | 毫秒时间戳 |
 | `display_key` | 可读名称 |
 | `capture_mode` | `real_time`、`delayed`、`restored` |
-| `source` | `browser_runtime`、`indexeddb_export` 等 |
+| `source` | `sqlite_snapshots`、`snapshot_ingest`、`json_migration` 等 |
 | `market_context_json` | 市场摘要、情绪、指数、涨跌停等 |
 
 ### 股票行字段
@@ -111,15 +116,27 @@ snapshot_type = half_hour
 
 ## 导入流程
 
-1. 读取源文件。
+### 从 SQLite 快照库生成研究数据集
+
+1. 选择源数据集，默认 `dragonboard_live`。
+2. 按 `snapshot_type`、日期区间和最大快照数筛选 `snapshot_frames`。
+3. 按筛选出的 `snapshot_id` 复制对应 `snapshot_records`、股票行和题材行。
+4. 生成新的 `dataset_id`、稳定 `schema_fingerprint` 和 `metadata.filters`。
+5. 执行质量门禁。
+6. 写入新数据集和子表；源数据集不被删除或覆盖。
+7. 登记 `dataset_bundle` outbox，进入 Supabase 备份补偿链。
+8. 返回数据集摘要和质量门禁结果。
+
+### 历史 JSON 迁移
+
+1. 读取源文件或内联内容。
 2. 识别 schema 版本和快照列表。
-3. 生成 `dataset_id` 和 `schema_fingerprint`。
-4. 标准化快照 ID、日期、时间、类型。
-5. 写入原始 `snapshot_records`。
-6. 投影到 `snapshot_frames`、`snapshot_stock_rows`、`snapshot_sector_rows`。
-7. 执行质量门禁。
-8. 写入 `datasets` 汇总统计。
-9. 返回导入报告。
+3. 标准化快照 ID、日期、时间、类型。
+4. 写入原始 `snapshot_records`。
+5. 投影到 `snapshot_frames`、`snapshot_stock_rows`、`snapshot_sector_rows`。
+6. 执行质量门禁。
+7. 更新 `datasets` 汇总统计。
+8. 返回迁移报告。
 
 ## 历史 JSON 迁移入口
 
@@ -246,7 +263,7 @@ rankTrend 输出应保留样本质量：
 ```json
 {
   "dataset_id": "ds_20260430_001",
-  "source_type": "indexeddb_export",
+  "source_type": "sqlite_snapshots",
   "snapshot_count": 80,
   "frame_count": 80,
   "stock_row_count": 16000,

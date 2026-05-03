@@ -2,8 +2,6 @@
 import { computed, onMounted, reactive, ref, watch } from "vue";
 
 import { api, formatApiError } from "./api";
-import { readDragonBoardIndexedDb } from "./dragonBridge";
-import { flattenIndexedDbSamples, inspectIndexedDb } from "./indexedDb";
 import {
   buildReplaySteps,
   formatDisplayTime,
@@ -26,14 +24,13 @@ import type {
   GoldenImportPayload,
   GoldenValidateRequest,
   HealthResponse,
-  IndexedDbPreview,
   OptimizationRequest,
   RequestResult,
   StrategyName
 } from "./types";
 
 type TabKey = "golden" | "backtest" | "optimization" | "report" | "replay";
-type ImportMode = "runtime_bridge" | "json_file" | "browser_bridge" | "leveldb" | "json_bundle" | "indexeddb";
+type ImportMode = "sqlite_snapshots" | "json_file";
 
 const strategyOptions: Array<{ value: StrategyName; label: string; description: string }> = [
   {
@@ -80,19 +77,20 @@ const backtestState = reactive<RequestResult>({ status: "idle" });
 const backtestDetailState = reactive<RequestResult>({ status: "idle" });
 const optimizationState = reactive<RequestResult>({ status: "idle" });
 const optimizationDetailState = reactive<RequestResult>({ status: "idle" });
-const indexedDbState = reactive<RequestResult<IndexedDbPreview>>({ status: "idle" });
+const snapshotCountsState = reactive<RequestResult<Record<string, unknown>>>({ status: "idle" });
 
 const selectedDatasetId = ref("");
 const datasetRefreshAt = ref("");
-const importMode = ref<ImportMode>("runtime_bridge");
-const sourcePath = ref("http://localhost:5173");
+const importMode = ref<ImportMode>("sqlite_snapshots");
+const sourceDatasetId = ref("dragonboard_live");
 const selectedJsonFile = ref<File | null>(null);
 const selectedGoldenFile = ref<File | null>(null);
 const importSnapshotType = ref<"half_hour" | "quarter_hour">("half_hour");
-const indexedDbName = ref("DragonBoardData");
 const datasetName = ref(`dragonboard-${new Date().toISOString().slice(0, 10)}`);
 const dryRunImport = ref(false);
-const importSampleLimit = ref(500);
+const importMaxSnapshots = ref(0);
+const importStartDate = ref("");
+const importEndDate = ref("");
 const lastBacktestId = ref("");
 const lastOptimizationId = ref("");
 const manualBacktestId = ref("");
@@ -181,8 +179,22 @@ const selectedDataset = computed(() => {
   return datasetsState.data?.find((dataset) => dataset.id === selectedDatasetId.value);
 });
 
-const indexedDbPreview = computed(() => indexedDbState.data || null);
-const importRecords = computed(() => flattenIndexedDbSamples(indexedDbPreview.value));
+const sqliteSourceOptions = computed(() => {
+  const seen = new Set<string>();
+  const options: Array<{ id: string; label: string }> = [];
+  const add = (id: string, label?: string) => {
+    if (!id || seen.has(id)) {
+      return;
+    }
+    seen.add(id);
+    options.push({ id, label: label || id });
+  };
+  add("dragonboard_live", "dragonboard_live / 正式快照库");
+  for (const dataset of datasetsState.data || []) {
+    add(dataset.id, datasetDisplayName(dataset));
+  }
+  return options;
+});
 const reportSource = computed(() => backtestDetailState.data || backtestState.data);
 const optimizationSource = computed(() => optimizationDetailState.data || optimizationState.data);
 const equityCurve = computed(() => getEquityCurve(reportSource.value));
@@ -231,57 +243,55 @@ const datasetStatusLabel = computed(() => {
 });
 
 const importStatusLabel = computed(() => {
-  if (importState.status === "loading" || indexedDbState.status === "loading") {
+  if (importState.status === "loading" || snapshotCountsState.status === "loading") {
     return "loading";
   }
-  if (importState.status === "error" || indexedDbState.status === "error") {
+  if (importState.status === "error" || snapshotCountsState.status === "error") {
     return "error";
   }
   if (importState.status === "ok") {
     return "ok";
   }
-  if (indexedDbState.status === "ok") {
-    return "preview";
+  if (snapshotCountsState.status === "ok") {
+    return "checked";
   }
   return "idle";
 });
 
 const importStatusClass = computed(() => {
-  if (importState.status === "loading" || indexedDbState.status === "loading") {
+  if (importState.status === "loading" || snapshotCountsState.status === "loading") {
     return "status-loading";
   }
-  if (importState.status === "error" || indexedDbState.status === "error") {
+  if (importState.status === "error" || snapshotCountsState.status === "error") {
     return "status-error";
   }
-  if (importState.status === "ok" || indexedDbState.status === "ok") {
+  if (importState.status === "ok" || snapshotCountsState.status === "ok") {
     return "status-ok";
   }
   return "status-idle";
 });
 
 const importHelpText = computed(() => {
-  if (importMode.value === "runtime_bridge") {
-    return "推荐：连接已经打开的 DragonBoard 运行页，由 localhost:5173 自己读取 DragonBoardData 后传给 QuantBoard，不需要 JSON 导出。";
-  }
   if (importMode.value === "json_file") {
-    return "推荐：选择 DragonBoard 导出的快照 JSON 文件，直接上传到后端导入。";
+    return "迁移辅助：只在需要导入历史 JSON/备份文件时使用。日常研究应优先使用 SQLite 快照库。";
   }
-  if (importMode.value === "browser_bridge") {
-    return "推荐：后端用 Playwright 打开 DragonBoard 页面读取同源 IndexedDB。请先确保 DragonBoard 正在运行。";
-  }
-  if (importMode.value === "leveldb") {
-    return "后端复制并解析浏览器 Profile 下的 IndexedDB .leveldb 目录，不会直接修改原始数据。";
-  }
-  if (importMode.value === "json_bundle") {
-    return "导入本地 JSON 快照包路径，适合已经从 DragonBoard 导出过快照文件的场景。";
-  }
-  return "仅诊断当前 QuantBoard 页面 origin 的 IndexedDB；它通常读不到 DragonBoard 的 DragonBoardData。";
+  return "推荐：从 QuantBoard SQLite 主库里的正式快照表生成研究数据集。DragonBoard 已经把正式快照写入 SQLite，不再需要浏览器 IndexedDB/LevelDB/运行页桥接。";
+});
+
+const snapshotCounts = computed(() => {
+  const raw = snapshotCountsState.data?.counts;
+  return raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
 });
 
 const importSuccessText = computed(() => {
-  const data = importState.data as DatasetSummary | undefined;
+  const raw = importState.data as unknown;
+  const data =
+    raw && typeof raw === "object"
+      ? ((raw as { dataset?: DatasetSummary } & Partial<DatasetSummary>).dataset ||
+          (raw as Partial<DatasetSummary>))
+      : undefined;
   const name = data?.name || datasetName.value;
-  return dryRunImport.value ? `Dry run 完成，未写入数据集：${name}` : `导入完成：${name}`;
+  return dryRunImport.value ? `试运行完成，未写入数据集：${name}` : `数据集已生成：${name}`;
 });
 
 const goldenResult = computed(() => {
@@ -576,8 +586,10 @@ async function loadDatasets(): Promise<void> {
   });
 }
 
-async function inspectDb(): Promise<void> {
-  await runRequest(indexedDbState, () => inspectIndexedDb(indexedDbName.value, importSampleLimit.value));
+async function inspectSnapshotSource(): Promise<void> {
+  await runRequest(snapshotCountsState, () =>
+    api.snapshotCounts(sourceDatasetId.value.trim() || "dragonboard_live") as Promise<Record<string, unknown>>
+  );
 }
 
 function selectJsonFile(event: Event): void {
@@ -599,29 +611,6 @@ async function readJsonFile(file: File): Promise<unknown> {
 }
 
 async function importDataset(): Promise<void> {
-  if (importMode.value === "runtime_bridge") {
-    await runRequest(importState, async () => {
-      const content = await readDragonBoardIndexedDb({
-        dragonBoardUrl: sourcePath.value.trim() || "http://localhost:5173",
-        dbName: indexedDbName.value,
-        snapshotType: importSnapshotType.value,
-        limit: importSampleLimit.value,
-        timeoutMs: 45000
-      });
-      return api.uploadDataset({
-        filename: "dragonboard-runtime-bridge.json",
-        name: datasetName.value,
-        content,
-        snapshotTypes: [importSnapshotType.value],
-        dryRun: dryRunImport.value
-      });
-    });
-    if (importState.status === "ok" && !dryRunImport.value) {
-      await loadDatasets();
-    }
-    return;
-  }
-
   if (importMode.value === "json_file") {
     if (!selectedJsonFile.value) {
       importState.status = "error";
@@ -644,27 +633,16 @@ async function importDataset(): Promise<void> {
     return;
   }
 
-  const payload =
-    importMode.value === "indexeddb"
-      ? {
-          sourceType: "indexeddb" as const,
-          dbName: indexedDbName.value,
-          name: datasetName.value,
-          snapshotTypes: [importSnapshotType.value],
-          preview: indexedDbPreview.value,
-          records: importRecords.value,
-          options: {
-            dryRun: dryRunImport.value,
-            maxRowsPerStore: importSampleLimit.value
-          }
-        }
-      : {
-          sourceType: importMode.value,
-          sourcePath: sourcePath.value.trim() || undefined,
-          name: datasetName.value,
-          snapshotTypes: [importSnapshotType.value],
-          dryRun: dryRunImport.value
-        };
+  const payload = {
+    sourceType: "sqlite_snapshots" as const,
+    sourceDatasetId: sourceDatasetId.value.trim() || "dragonboard_live",
+    name: datasetName.value,
+    snapshotTypes: [importSnapshotType.value],
+    startDate: importStartDate.value.trim() || undefined,
+    endDate: importEndDate.value.trim() || undefined,
+    maxSnapshots: importMaxSnapshots.value > 0 ? importMaxSnapshots.value : undefined,
+    dryRun: dryRunImport.value
+  };
 
   await runRequest(importState, () => api.importDataset(payload));
   if (importState.status === "ok" && !dryRunImport.value) {
@@ -854,30 +832,21 @@ onMounted(async () => {
           <label>
             导入方式
             <select v-model="importMode">
-              <option value="runtime_bridge">运行页桥接</option>
+              <option value="sqlite_snapshots">SQLite 快照库</option>
               <option value="json_file">JSON 文件上传</option>
-              <option value="browser_bridge">browser_bridge</option>
-              <option value="leveldb">leveldb</option>
-              <option value="json_bundle">json_bundle</option>
-              <option value="indexeddb">当前页面预览</option>
             </select>
           </label>
           <label v-if="importMode === 'json_file'">
             JSON 快照文件
             <input type="file" accept=".json,application/json" @change="selectJsonFile" />
           </label>
-          <label>
-            数据源路径 / URL
-            <input
-              v-model="sourcePath"
-              type="text"
-              :disabled="importMode === 'indexeddb' || importMode === 'json_file'"
-              placeholder="http://localhost:5173 或 JSON/LevelDB 路径"
-            />
-          </label>
-          <label v-if="importMode === 'runtime_bridge'">
-            数据库名
-            <input v-model="indexedDbName" type="text" />
+          <label v-if="importMode === 'sqlite_snapshots'">
+            源快照数据集
+            <select v-model="sourceDatasetId">
+              <option v-for="option in sqliteSourceOptions" :key="option.id" :value="option.id">
+                {{ option.label }}
+              </option>
+            </select>
           </label>
           <label>
             数据集名
@@ -893,21 +862,25 @@ onMounted(async () => {
           <div class="inline-note">
             {{ importHelpText }}
           </div>
-          <template v-if="importMode === 'indexeddb'">
+          <template v-if="importMode === 'sqlite_snapshots'">
             <label>
-              数据库名
-              <input v-model="indexedDbName" type="text" />
+              开始日期
+              <input v-model="importStartDate" type="date" />
+            </label>
+            <label>
+              结束日期
+              <input v-model="importEndDate" type="date" />
             </label>
           </template>
           <div class="form-row">
             <label>
-              预览采样
+              最大快照数
               <input
-                v-model.number="importSampleLimit"
+                v-model.number="importMaxSnapshots"
                 type="number"
-                min="1"
-                max="5000"
-                :disabled="!['indexeddb', 'runtime_bridge'].includes(importMode)"
+                min="0"
+                max="50000"
+                :disabled="importMode !== 'sqlite_snapshots'"
               />
             </label>
             <label class="check-row">
@@ -918,36 +891,36 @@ onMounted(async () => {
           <div class="button-row">
             <button
               type="button"
-              :disabled="importMode !== 'indexeddb' || indexedDbState.status === 'loading'"
-              @click="inspectDb"
+              :disabled="importMode !== 'sqlite_snapshots' || snapshotCountsState.status === 'loading'"
+              @click="inspectSnapshotSource"
             >
-              读取当前页预览
+              检查 SQLite 源
             </button>
             <button type="button" class="primary" :disabled="importState.status === 'loading'" @click="importDataset">
-              提交导入
+              生成数据集
             </button>
           </div>
           <div v-if="importState.status === 'error'" class="inline-error">
             {{ importState.error }}
           </div>
-          <div v-if="indexedDbState.status === 'error'" class="inline-error">
-            {{ indexedDbState.error }}
+          <div v-if="snapshotCountsState.status === 'error'" class="inline-error">
+            {{ snapshotCountsState.error }}
           </div>
           <div v-if="importState.status === 'ok'" class="inline-success">
             {{ importSuccessText }}
           </div>
-          <div v-if="indexedDbPreview" class="preview-grid">
+          <div v-if="snapshotCountsState.data" class="preview-grid">
             <div>
-              <b>{{ indexedDbPreview.stores.length }}</b>
-              <span>stores</span>
+              <b>{{ snapshotCounts.snapshot_frames ?? 0 }}</b>
+              <span>frames</span>
             </div>
             <div>
-              <b>{{ importRecords.length }}</b>
-              <span>samples</span>
+              <b>{{ snapshotCounts.snapshot_stock_rows ?? 0 }}</b>
+              <span>stock rows</span>
             </div>
             <div>
-              <b>{{ indexedDbPreview.snapshotLikeRows }}</b>
-              <span>snapshot-like</span>
+              <b>{{ snapshotCounts.snapshot_sector_rows ?? 0 }}</b>
+              <span>sector rows</span>
             </div>
           </div>
         </section>
@@ -1213,7 +1186,7 @@ onMounted(async () => {
             {{ strategyOptions.find((option) => option.value === backtestForm.strategyName)?.description }}
           </div>
           <div v-if="backtestState.status === 'loading'" class="inline-note">
-            回测计算中，真实 IndexedDB 数据集会先生成 RankTrend 信号，再做交易模拟和后验统计。
+            回测计算中，SQLite 派生数据集会先生成 RankTrend 信号，再做交易模拟和后验统计。
           </div>
           <div v-if="backtestState.status === 'error'" class="inline-error">
             {{ backtestState.error }}

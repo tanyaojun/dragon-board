@@ -70,7 +70,7 @@ Supabase schema 仍与 SQLite 同构，但备份适配层允许对超大 `Text` 
 ## 存储拓扑
 
 ```text
-Dragon Board 快照/运行页桥接
+Dragon Board 正式快照
   -> QuantBoard API/CLI
   -> SQLite primary
   -> Supabase backup
@@ -201,6 +201,8 @@ Dragon Board 快照/运行页桥接
 - 当前存储模式，例如 `sqlite_primary_supabase_backup`。
 - 备份回退是否启用。
 
+默认 `GET /api/health` 使用快速路径，不发起 Supabase 网络请求，供前端频繁轮询。需要完整同构表和字段检查时调用 `GET /api/health?deep=true`；深检结果中的 `missing_or_unreadable_tables` 非空时，不能执行正式云端同步验收。
+
 ### `POST /api/snapshots/ingest`
 
 用途：Dragon Board 正式快照后端入库入口。前端提交 v4 snapshot bundle，后端按 `dataset_id + snapshot_id + idempotency_key` 幂等写入 SQLite 并登记 Supabase 备份 outbox。
@@ -299,6 +301,30 @@ Dragon Board 前端正式分析入口 `listSnapshotFrameBundles` 必须调用该
 ### `GET /api/snapshots/counts`
 
 用途：读取 SQLite 主库中 `snapshots/snapshot_frames/snapshot_stock_rows/snapshot_sector_rows` 四张事实表行数。可选 `dataset_id`。
+
+### `POST /api/datasets/import`
+
+用途：从 SQLite 主库已有正式快照事实表派生可复现研究数据集。该接口的主路径是 `sourceType=sqlite_snapshots`，不再承担日常浏览器 IndexedDB/LevelDB/运行页桥接采集职责。
+
+请求核心字段：
+
+- `sourceType=sqlite_snapshots`
+- `sourceDatasetId`：源快照数据集，默认 `dragonboard_live`。
+- `name`
+- `snapshotTypes`
+- `startDate/endDate`
+- `maxSnapshots`
+- `dryRun`
+
+返回核心字段沿用 `DatasetSummary`，并在 `metadata` 中保留 `sourceDatasetId`、源数据集名称、筛选条件和质量门禁结果。
+
+行为规则：
+
+- 只复制筛选后的 `snapshot_records / snapshot_frames / snapshot_stock_rows / snapshot_sector_rows` 到新 `dataset_id`，不得删除或覆盖源事实表。
+- 新数据集必须记录 `source_type=sqlite_snapshots`、`source_path=<sourceDatasetId>` 和稳定 `schema_fingerprint`。
+- `dryRun=true` 不落库，不登记 outbox。
+- 正式写入仍按 `dataset_bundle` 登记 `sync_outbox`，由 Supabase 备份链路补偿同步。
+- `json_bundle/browser_bridge/leveldb` 只保留为迁移兼容来源；前端轻实验台默认不再展示为主入口。
 
 ### `POST /api/migrations/snapshots/import-json`
 

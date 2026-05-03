@@ -59,6 +59,10 @@ export async function requestApi<T>(path: string, init: RequestInit = {}): Promi
 export const api = {
   health: () => requestApi<HealthResponse>("/api/health"),
   datasets: () => requestApi<DatasetSummary[]>("/api/datasets"),
+  snapshotCounts: (datasetId?: string) => {
+    const query = datasetId ? `?dataset_id=${encodeURIComponent(datasetId)}` : "";
+    return requestApi<unknown>(`/api/snapshots/counts${query}`);
+  },
   importDataset: (payload: ImportPayload) =>
     requestApi<DatasetSummary | { dataset: DatasetSummary }>("/api/datasets/import", {
       method: "POST",

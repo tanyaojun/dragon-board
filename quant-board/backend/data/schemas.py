@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 SnapshotType = Literal["quarter_hour", "half_hour", "hourly", "daily"]
@@ -11,13 +11,28 @@ SnapshotType = Literal["quarter_hour", "half_hour", "hourly", "daily"]
 class ImportDatasetRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    source_type: Literal["leveldb", "browser_bridge", "json_bundle"] = Field(default="leveldb", alias="sourceType")
+    source_type: Literal["sqlite_snapshots", "leveldb", "browser_bridge", "json_bundle"] = Field(
+        default="sqlite_snapshots",
+        alias="sourceType",
+    )
     source_path: str | None = Field(default=None, alias="sourcePath")
+    source_dataset_id: str | None = Field(default=None, alias="sourceDatasetId")
     name: str | None = None
     start_date: str | None = Field(default=None, alias="startDate")
     end_date: str | None = Field(default=None, alias="endDate")
     snapshot_types: list[SnapshotType] = Field(default_factory=lambda: ["half_hour"], alias="snapshotTypes")
+    max_snapshots: int | None = Field(default=None, alias="maxSnapshots")
     dry_run: bool = Field(default=False, alias="dryRun")
+
+    @field_validator("start_date", "end_date", mode="before")
+    @classmethod
+    def normalize_date(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        normalized = str(value).strip()
+        if not normalized:
+            return None
+        return normalized.replace("/", "-")
 
 
 class SnapshotIngestRequest(BaseModel):

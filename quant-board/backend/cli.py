@@ -52,6 +52,22 @@ def cmd_import_idb(args: argparse.Namespace) -> None:
         print_json(DatasetService(session).import_dataset(request))
 
 
+def cmd_build_dataset(args: argparse.Namespace) -> None:
+    init_db()
+    with SessionLocal() as session:
+        request = ImportDatasetRequest(
+            source_type="sqlite_snapshots",
+            source_dataset_id=args.source_dataset_id,
+            name=args.name,
+            snapshot_types=args.snapshot_type or ["half_hour"],
+            start_date=args.start_date,
+            end_date=args.end_date,
+            max_snapshots=args.max_snapshots,
+            dry_run=args.dry_run,
+        )
+        print_json(DatasetService(session).import_dataset(request))
+
+
 def cmd_list_datasets(_: argparse.Namespace) -> None:
     init_db()
     with SessionLocal() as session:
@@ -189,7 +205,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="quant-board", description="QuantBoard CLI")
     sub = parser.add_subparsers(required=True)
 
-    import_cmd = sub.add_parser("import-idb", help="Import IndexedDB or JSON snapshot bundle")
+    build_dataset_cmd = sub.add_parser("build-dataset", help="Build a research dataset from SQLite snapshot tables")
+    build_dataset_cmd.add_argument("--source-dataset-id", default="dragonboard_live")
+    build_dataset_cmd.add_argument("--name", default=None)
+    build_dataset_cmd.add_argument("--snapshot-type", action="append", default=None)
+    build_dataset_cmd.add_argument("--start-date", default=None)
+    build_dataset_cmd.add_argument("--end-date", default=None)
+    build_dataset_cmd.add_argument("--max-snapshots", type=int, default=None)
+    build_dataset_cmd.add_argument("--dry-run", action="store_true")
+    build_dataset_cmd.set_defaults(func=cmd_build_dataset)
+
+    import_cmd = sub.add_parser("import-idb", help="Compatibility import for legacy IndexedDB/JSON snapshot bundles")
     import_cmd.add_argument("--source", choices=["leveldb", "browser_bridge", "json_bundle"], default="leveldb")
     import_cmd.add_argument("--path", default=None)
     import_cmd.add_argument("--name", default=None)

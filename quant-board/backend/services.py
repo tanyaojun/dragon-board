@@ -69,7 +69,7 @@ class BacktestService:
         self.repo = Repository(session)
 
     @staticmethod
-    def _summary_response(run_id: str, result: dict[str, Any]) -> dict[str, Any]:
+    def _summary_response(run_id: str, result: dict[str, Any], metadata: dict[str, Any] | None = None) -> dict[str, Any]:
         signals = result.get("signals") or []
         signal_count = int(result.get("signalCount") or len(signals))
         compact = dict(result)
@@ -80,7 +80,8 @@ class BacktestService:
             *(result.get("notes") or []),
             f"接口默认返回前 120 条 signals 预览，完整结果已落库：{run_id}",
         ]
-        return {"id": run_id, "runId": run_id, "run_id": run_id, "result": compact, **compact}
+        meta = metadata or {}
+        return {"id": run_id, "runId": run_id, "run_id": run_id, **meta, "result": compact, **compact}
 
     def run_ranktrend(self, payload: dict[str, Any]) -> dict[str, Any]:
         dataset_id = str(camel_get(payload, "dataset_id", "datasetId", ""))
@@ -166,7 +167,18 @@ class BacktestService:
             result_json=json_dumps(result),
         )
         self.repo.save_backtest_run(run)
-        return self._summary_response(run_id, result)
+        return self._summary_response(
+            run_id,
+            result,
+            {
+                "datasetId": dataset_id,
+                "dataset_id": dataset_id,
+                "strategyName": strategy_name,
+                "snapshotType": snapshot_type,
+                "randomSeed": request_meta["random_seed"],
+                "configHash": run.config_hash,
+            },
+        )
 
     def get_run(self, run_id: str) -> dict[str, Any] | None:
         run = self.repo.get_backtest_run(run_id)

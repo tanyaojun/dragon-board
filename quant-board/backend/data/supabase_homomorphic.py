@@ -183,6 +183,19 @@ class SupabaseBackupClient:
         if not self.enabled:
             return {"configured": False, "connected": False, "schema": "sqlite_homomorphic", "last_error": None}
 
+        return {
+            "configured": True,
+            "connected": None,
+            "schema": "sqlite_homomorphic",
+            "last_error": self.last_error,
+            "check": "skipped",
+            "message": "fast health check skips Supabase network probe; use /api/health?deep=true for schema validation",
+        }
+
+    def deep_health(self) -> dict[str, Any]:
+        if not self.enabled:
+            return {"configured": False, "connected": False, "schema": "sqlite_homomorphic", "last_error": None}
+
         missing: list[str] = []
         errors: dict[str, str] = {}
         ok, spec = self._request_json("GET", "/rest/v1/")

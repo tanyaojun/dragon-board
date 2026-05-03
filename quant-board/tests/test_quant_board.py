@@ -329,6 +329,47 @@ def test_import_backtest_optimize_and_golden(tmp_path: Path) -> None:
     assert run["forwardValidation"]["horizons"]
     assert "byMomentumBucket" in run["forwardValidation"]["horizons"][0]
 
+    derived = client.post(
+        "/api/datasets/import",
+        json={
+            "sourceType": "sqlite_snapshots",
+            "sourceDatasetId": dataset["id"],
+            "name": "derived",
+            "snapshotTypes": ["half_hour"],
+            "maxSnapshots": 35,
+        },
+    )
+    assert derived.status_code == 200, derived.text
+    derived_dataset = derived.json()
+    assert derived_dataset["source_type"] == "sqlite_snapshots"
+    assert derived_dataset["source_path"] == dataset["id"]
+    assert derived_dataset["frame_count"] == 35
+    assert derived_dataset["stock_row_count"] >= 35
+    assert derived_dataset["metadata"]["sourceDatasetId"] == dataset["id"]
+    assert derived_dataset["metadata"]["filters"]["maxSnapshots"] == 35
+
+    derived_backtest = client.post(
+        "/api/backtests/rank-trend",
+        json={"datasetId": derived_dataset["id"], "snapshotType": "half_hour", "randomSeed": 20260430},
+    )
+    assert derived_backtest.status_code == 200, derived_backtest.text
+    assert derived_backtest.json()["datasetId"] == derived_dataset["id"]
+
+    derived_dry_run = client.post(
+        "/api/datasets/import",
+        json={
+            "sourceType": "sqlite_snapshots",
+            "sourceDatasetId": dataset["id"],
+            "name": "derived-dry-run",
+            "snapshotTypes": ["half_hour"],
+            "maxSnapshots": 5,
+            "dryRun": True,
+        },
+    )
+    assert derived_dry_run.status_code == 200, derived_dry_run.text
+    assert derived_dry_run.json()["dryRun"] is True
+    assert derived_dry_run.json()["frame_count"] == 5
+
     golden_default = RankTrendConfig()
     assert golden_default.macdFast == 13
     assert golden_default.macdSlow == 21
@@ -1475,6 +1516,10 @@ def test_cli_run_ranktrend_exposes_ui_backtest_parameters() -> None:
 
 def test_cli_exposes_sync_and_migration_commands(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     parser = build_parser()
+    build_dataset_args = parser.parse_args(["build-dataset", "--source-dataset-id", "dragonboard_live", "--dry-run"])
+    assert build_dataset_args.func.__name__ == "cmd_build_dataset"
+    assert build_dataset_args.source_dataset_id == "dragonboard_live"
+    assert build_dataset_args.dry_run is True
     assert parser.parse_args(["push-backup"]).func.__name__ == "cmd_push_backup"
     assert parser.parse_args(["push-outbox", "--limit", "7"]).limit == 7
     assert parser.parse_args(["pull-backup"]).func.__name__ == "cmd_pull_backup"

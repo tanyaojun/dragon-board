@@ -19,7 +19,7 @@ QuantBoard 是 `dragon-board` 的量化回测与参数研究子项目。首期�
 | [user-manual.md](user-manual.md) | 面向日常使用的操作手册：启动、导入、回测、报告、优化与常见问题 |
 | [architecture.md](architecture.md) | 总体架构、模块边界、数据库表与数据流 |
 | [database-migration-plan.md](database-migration-plan.md) | SQLite 主库 + Supabase 备份库并行实施计划、同步合同和恢复规则 |
-| [data-ingestion.md](data-ingestion.md) | IndexedDB 导出数据导入、标准化、质量门禁 |
+| [data-ingestion.md](data-ingestion.md) | SQLite 快照库派生研究数据集、历史 JSON 迁移和质量门禁 |
 | [ranktrend-golden.md](ranktrend-golden.md) | TypeScript golden 标准、输出合同、验收基线 |
 | [ranktrend-python-port.md](ranktrend-python-port.md) | Python 移植步骤、数值对齐、测试策略 |
 | [backtest-policy.md](backtest-policy.md) | 当前回测统一口径：5 天/40 bars、MACD 辅助定位、T+1、收益字段 |
@@ -32,7 +32,7 @@ QuantBoard 是 `dragon-board` 的量化回测与参数研究子项目。首期�
 
 ## 推荐实现顺序
 
-1. 数据导入：从 dragon-board IndexedDB 导出的 JSON 或正式快照投影生成 QuantBoard 数据集。
+1. 数据导入：从 SQLite 正式快照事实表生成 QuantBoard 研究数据集；历史 JSON 只作为迁移辅助。
 2. Golden 用例：从 TypeScript `rankTrend` 产出固定输入与期望输出，写入 `golden_ranktrend_cases`。
 3. Python 移植：逐模块复刻 technical、cycle、risk、decision、candidate tier。
 4. 回测引擎：只消费 Python rankTrend 输出，所有回测、优化和交易模拟都在 QuantBoard Python 后端执行。

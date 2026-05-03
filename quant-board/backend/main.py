@@ -57,8 +57,11 @@ async def on_shutdown() -> None:
 
 
 @app.get("/api/health")
-def health_check(db: Session | None = Depends(get_db)) -> dict[str, Any]:
+def health_check(deep: bool = False, db: Session | None = Depends(get_db)) -> dict[str, Any]:
     backup = get_backup_client()
+    backup_status = {"configured": False, "connected": False, "last_error": None}
+    if backup:
+        backup_status = backup.deep_health() if deep else backup.health()
     return {
         "status": "ok",
         "version": "0.1.0",
@@ -66,7 +69,7 @@ def health_check(db: Session | None = Depends(get_db)) -> dict[str, Any]:
         "default_snapshot_type": "half_hour",
         "database": {
             "primary": primary_status(),
-            "backup": backup.health() if backup else {"configured": False, "connected": False, "last_error": None},
+            "backup": backup_status,
             "mode": "sqlite_primary_supabase_backup",
             "outbox": Repository(db, enable_backup=False).outbox_status() if db is not None else None,
             "autoSync": auto_sync_runner.status(),
@@ -547,9 +550,11 @@ async def upload_dataset(payload: dict[str, Any], db: Session | None = Depends(g
 def normalize_import_payload(payload: dict[str, Any]) -> ImportDatasetRequest:
     if "sourceType" in payload:
         source_type = payload.get("sourceType")
+        if source_type == "sqlite":
+            payload = {**payload, "sourceType": "sqlite_snapshots"}
         # The lightweight frontend previews browser IndexedDB and posts sampled rows.
         # Treat that as a JSON bundle import path so the backend can persist the sample.
-        if source_type == "indexeddb":
+        if payload.get("sourceType") == "indexeddb":
             records = payload.get("records") or []
             if not records:
                 raise ImporterError(

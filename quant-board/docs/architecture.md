@@ -29,9 +29,9 @@ backend/
 ## 数据流
 
 1. 导入阶段
-   - 输入：dragon-board 导出的 IndexedDB JSON、备份文件或后续直连读取结果。
+   - 输入：SQLite 主库中的正式快照事实表，历史 JSON/IndexedDB 导出只作为迁移来源。
    - 输出：`datasets`、`snapshot_records`、`snapshot_frames`、`snapshot_stock_rows`、`snapshot_sector_rows`。
-   - 写入策略：先写本地 SQLite 主库；若配置了 Supabase，则同步写入云端备份库。
+   - 写入策略：Dragon Board 正式快照先通过 `POST /api/snapshots/ingest` 落 SQLite；QuantBoard 研究数据集再通过 `sourceType=sqlite_snapshots` 从事实表派生；若配置了 Supabase，则同步写入云端备份库。
 
 2. 分析阶段
    - 输入：按 `dataset_id + snapshot_type + date range` 查询的标准快照序列。
@@ -78,6 +78,7 @@ QuantBoard API/CLI -> SQLite(primary) -> Supabase(backup)
 - `GET /api/snapshots/frames` 是 Dragon Board 正式分析读取 SQLite 快照聚合帧的主入口。
 - `GET /api/snapshots/records`、`GET /api/snapshots/records/{snapshot_id}`、`GET /api/snapshots/stock-rows`、`GET /api/snapshots/sector-rows` 是 Dragon Board `DataLayer` 零散正式读口的 SQLite 承接层。
 - `GET /api/snapshots/counts` 用于 SQLite 主库快照事实表行数核对。
+- `POST /api/datasets/import` 的日常主入口是 `sourceType=sqlite_snapshots`，从 SQLite 正式快照事实表生成可复现研究数据集。
 - `POST /api/migrations/snapshots/import-json` 是历史 IndexedDB/JSON/结构化导出的可重复迁移入口。
 - 同键重复同步必须幂等；同键不同 payload/hash 必须标记冲突，不允许静默覆盖。
 
@@ -96,7 +97,7 @@ Dragon Board 前端 `DataLayer` 对外字段不随迁移删改。正式快照写
 记录一个可复现实验数据集：
 
 - `id`：数据集 ID，例如 `ds_20260430_half_hour_import01`
-- `source_type`：`indexeddb_export`、`json_backup`、`manual_fixture`
+- `source_type`：日常为 `sqlite_snapshots`；`json_bundle`、`browser_bridge`、`leveldb` 只作为迁移兼容来源
 - `schema_fingerprint`：导入结构指纹
 - `snapshot_count`、`frame_count`、`stock_row_count`
 - `start_date`、`end_date`

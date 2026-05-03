@@ -58,11 +58,15 @@ export interface IndexedDbPreview {
 }
 
 export interface ImportPayload {
-  sourceType: "indexeddb" | "json" | "leveldb" | "browser_bridge" | "json_bundle";
+  sourceType: "sqlite_snapshots" | "indexeddb" | "json" | "leveldb" | "browser_bridge" | "json_bundle";
   sourcePath?: string;
+  sourceDatasetId?: string;
   dbName?: string;
   name: string;
   snapshotTypes?: Array<"quarter_hour" | "half_hour">;
+  startDate?: string;
+  endDate?: string;
+  maxSnapshots?: number;
   dryRun?: boolean;
   preview?: IndexedDbPreview | null;
   records?: unknown[];

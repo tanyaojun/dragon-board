@@ -22,12 +22,12 @@ SQLite 主库 + Supabase 备份库的完整读写、同步、恢复和冲突规�
 Invoke-RestMethod http://127.0.0.1:8000/api/health
 ```
 
-返回的 `database` 会同时报告本地 SQLite 主库和 Supabase 备份库状态：
+返回的 `database` 会同时报告本地 SQLite 主库和 Supabase 备份库状态。默认健康检查走快速路径，不发起 Supabase 网络请求，避免页面状态被云端备份库表结构探测拖慢；需要完整 Supabase 同构表检查时使用 `GET /api/health?deep=true`。
 
 - `primary.connected`：本地主库是否可用。
-- `backup.connected`：Supabase REST 备份库是否可用。
+- `backup.connected`：默认快速路径为 `null`，表示未做云端探测；`deep=true` 时表示 Supabase REST 备份库是否可用。
 - `backup.schema`：当前要求为 `sqlite_homomorphic`。
-- `backup.missing_or_unreadable_tables`：同构表缺失或不可读列表；非空时不能执行正式云端同步。
+- `backup.missing_or_unreadable_tables`：仅 `deep=true` 时返回，同构表缺失或不可读列表；非空时不能执行正式云端同步。
 - `mode`：当前为 `sqlite_primary_supabase_backup`。
 - `outbox`：待补偿同步队列摘要；字段以当前后端实现为准。
 - `autoSync`：自动 outbox 推送状态、间隔、批量大小和最近一次结果。
@@ -216,27 +216,38 @@ Invoke-RestMethod 'http://127.0.0.1:8000/api/snapshots/sector-rows?dataset_id=dr
 
 ### `POST /api/datasets/import`
 
-从本地路径或运行页桥接结果导入数据集。
+从 SQLite 主库已有正式快照事实表生成可复现研究数据集。日常研究入口使用 `sourceType=sqlite_snapshots`；浏览器 IndexedDB/LevelDB/运行页桥接不再作为主采集方式。
 
 常见请求：
 
 ```json
 {
-  "sourceType": "json_bundle",
-  "sourcePath": "d:/data/dragonboard-snapshot.json",
-  "name": "2026-04 half_hour",
+  "sourceType": "sqlite_snapshots",
+  "sourceDatasetId": "dragonboard_live",
+  "name": "2026-04 half_hour research",
   "snapshotTypes": ["half_hour"],
+  "startDate": "2026-04-15",
+  "endDate": "2026-04-30",
+  "maxSnapshots": null,
   "dryRun": false
 }
 ```
 
-支持的 `sourceType`：
+规则：
+
+- `sourceDatasetId` 默认 `dragonboard_live`；迁移期如果该数据集不存在，后端可回退到最新有快照事实行的数据集。
+- 接口会把筛选后的 `snapshot_records / snapshot_frames / snapshot_stock_rows / snapshot_sector_rows` 复制到新的 `dataset_id`，不删除或覆盖源数据。
+- 新数据集 `source_type=sqlite_snapshots`，`source_path` 记录源数据集 ID，`metadata.filters` 记录快照类型、日期区间和最大快照数。
+- `dryRun=true` 只返回会生成的数据集摘要和质量门禁结果，不落库。
+- 写入成功后仍按 `dataset_bundle` 进入 `sync_outbox`，由 Supabase 备份链路补偿同步。
+
+旧兼容 `sourceType`：
 
 - `json_bundle`
 - `browser_bridge`
 - `leveldb`
 
-页面的“运行页桥接”最终也会把结构化 records/frames/stockRows 作为数据集写入 SQLite，回测只读 SQLite，不直接依赖 IndexedDB。
+旧兼容来源只用于迁移或排障。历史 JSON、旧 IndexedDB 导出或备份文件建议优先走 `POST /api/migrations/snapshots/import-json` 写入正式快照事实表，再用 `sqlite_snapshots` 生成研究数据集。
 
 如果 `SUPABASE_URL` 和 `SUPABASE_SECRET_KEY` 已配置，正式写入会先落本地 SQLite，再镜像到 Supabase 备份库。本地主库不可用时的备库写入属于后续目标能力；完成前写接口必须明确返回不可用。读路径会在本地无数据或本地不可用时按主计划回退读取备份库。
 

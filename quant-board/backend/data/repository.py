@@ -929,6 +929,87 @@ class Repository:
         ]
         return dataset, records, frames, stock_rows, sector_rows
 
+    def load_dataset_bundle_slice(
+        self,
+        dataset_id: str,
+        *,
+        snapshot_types: list[str] | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        max_snapshots: int | None = None,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+        if self.session is None:
+            return [], [], [], []
+
+        query = select(SnapshotFrameModel).where(SnapshotFrameModel.dataset_id == dataset_id)
+        if snapshot_types:
+            query = query.where(SnapshotFrameModel.type.in_(snapshot_types))
+        if start_date:
+            query = query.where(SnapshotFrameModel.trading_date >= start_date)
+        if end_date:
+            query = query.where(SnapshotFrameModel.trading_date <= end_date)
+        query = query.order_by(SnapshotFrameModel.timestamp.asc(), SnapshotFrameModel.snapshot_id.asc())
+        if max_snapshots and max_snapshots > 0:
+            query = query.limit(max_snapshots)
+
+        try:
+            frame_models = list(self.session.scalars(query))
+        except SQLAlchemyError:
+            return [], [], [], []
+
+        snapshot_ids = [frame.snapshot_id for frame in frame_models if frame.snapshot_id]
+        if not snapshot_ids:
+            return [], [], [], []
+
+        try:
+            records = [
+                self.record_to_dict(row)
+                for row in self.session.scalars(
+                    select(SnapshotRecordModel)
+                    .where(
+                        SnapshotRecordModel.dataset_id == dataset_id,
+                        SnapshotRecordModel.snapshot_id.in_(snapshot_ids),
+                    )
+                    .order_by(SnapshotRecordModel.timestamp.asc(), SnapshotRecordModel.snapshot_id.asc())
+                )
+            ]
+            frames = [self.local_frame_to_bundle_dict(row) for row in frame_models]
+            stock_rows = [
+                self.local_stock_to_bundle_dict(row)
+                for row in self.session.scalars(
+                    select(SnapshotStockRowModel)
+                    .where(
+                        SnapshotStockRowModel.dataset_id == dataset_id,
+                        SnapshotStockRowModel.snapshot_id.in_(snapshot_ids),
+                    )
+                    .order_by(
+                        SnapshotStockRowModel.timestamp.asc(),
+                        SnapshotStockRowModel.rank.asc(),
+                        SnapshotStockRowModel.code.asc(),
+                    )
+                )
+            ]
+            sector_rows = [
+                self.local_sector_to_bundle_dict(row)
+                for row in self.session.scalars(
+                    select(SnapshotSectorRowModel)
+                    .where(
+                        SnapshotSectorRowModel.dataset_id == dataset_id,
+                        SnapshotSectorRowModel.snapshot_id.in_(snapshot_ids),
+                    )
+                    .order_by(
+                        SnapshotSectorRowModel.timestamp.asc(),
+                        SnapshotSectorRowModel.rank.asc(),
+                        SnapshotSectorRowModel.entity_type.asc(),
+                        SnapshotSectorRowModel.entity_key.asc(),
+                    )
+                )
+            ]
+        except SQLAlchemyError:
+            return [], [], [], []
+
+        return records, frames, stock_rows, sector_rows
+
     @staticmethod
     def dataset_to_dict(model: Dataset) -> dict[str, Any]:
         return {

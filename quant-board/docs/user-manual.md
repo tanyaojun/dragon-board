@@ -40,35 +40,40 @@ npm run dev -- --host 127.0.0.1 --port 5174
 
 ## 3. 导入真实数据
 
-当前页面左侧的 `当前页面预览` 只是浏览器同源诊断工具。你在 `127.0.0.1:5174` 打开 QuantBoard 时，它只能读取这个地址自己的 IndexedDB，不能直接读取 DragonBoard 页面 `127.0.0.1:5173` 的 IndexedDB。所以提示 `数据库 DragonBoardData 不存在或版本不可读` 是正常现象，不代表后端数据坏了。
+当前主流程已经改为 SQLite 快照库：
 
-真实导入优先用页面里的 `运行页桥接`。这条链路不需要导出 JSON，也不需要找浏览器 profile 路径：QuantBoard 会打开或复用 `localhost:5173` 的 DragonBoard 运行页，由 DragonBoard 页面在自己的 origin 下读取 `DragonBoardData`，再把结构化快照传给 QuantBoard 后端入库。
+- DragonBoard 正式快照通过 QuantBoard 后端写入 SQLite 主库。
+- QuantBoard 页面从 SQLite 主库事实表派生研究数据集。
+- JSON 文件只作为历史迁移和排障入口。
+- 浏览器 IndexedDB、LevelDB 和运行页桥接不再作为日常导入方式。
 
-### 3.1 运行页桥接导入
+### 3.1 SQLite 快照库生成数据集
 
 这是当前推荐方式。
 
 前提：
 
 - DragonBoard 正在 `http://localhost:5173` 运行；
-- QuantBoard 正在 `http://localhost:5174` 运行；
-- 刷新一次 DragonBoard 页面，确保运行页已加载 QuantBoard bridge。
+- QuantBoard API 正在 `http://127.0.0.1:8000` 运行；
+- DragonBoard 已经把正式快照写入 QuantBoard SQLite 主库。
 
 操作：
 
-1. 左侧 `数据导入` 选择 `运行页桥接`。
-2. `数据源路径 / URL` 填 `http://localhost:5173`。
-3. `数据库名` 保持 `DragonBoardData`。
+1. 左侧 `数据导入` 选择 `SQLite 快照库`。
+2. `源数据集ID` 默认保留 `dragonboard_live`；如果你要从某个历史数据集派生，可以选择下拉框里的具体数据集。
+3. `数据集名` 填本次研究数据集名称，例如 `dragonboard-2026-05-02`。
 4. `snapshotType` 选择 `half_hour`。
-5. `预览采样` 表示最多读取多少个快照，默认 `500`。
-6. 需要试跑时勾选 `dry run`；正式写入时取消勾选。
-7. 点击 `提交导入`。
+5. 可选填写 `开始日期`、`结束日期`，用于限定回测样本区间。
+6. `最多快照数` 为空表示不限制；填数字表示最多取前 N 个快照，适合先小样本验证。
+7. 点击 `检查 SQLite 源`，确认源库里有 `frames`、`stock rows`、`sector rows`。
+8. 需要试跑时勾选 `dry run`；正式生成数据集时取消勾选。
+9. 点击 `生成数据集`。
 
-浏览器可能会打开或切到一个 `localhost:5173` 标签页，这是桥接需要的运行页引用。导入成功后，左侧数据集会自动刷新。
+生成成功后，左侧数据集会自动刷新。后续回测、优化、Golden 和单票回放都使用新生成的 `datasetId`。
 
 ### 3.2 页面 JSON 文件上传
 
-如果你已经有从 DragonBoard 导出的快照 JSON：
+如果你已经有历史快照 JSON，或者需要把备份文件作为研究数据集临时验证：
 
 1. 左侧 `数据导入` 选择 `JSON 文件上传`。
 2. 选择 JSON 文件。
@@ -79,7 +84,21 @@ npm run dev -- --host 127.0.0.1 --port 5174
 
 ### 3.3 CLI JSON 快照包导入
 
-如果你已经有从 DragonBoard 导出的快照 JSON：
+如果你希望从 SQLite 快照事实表派生数据集，也可以走 CLI：
+
+```powershell
+cd d:\dragon-board\quant-board
+.\.venv\Scripts\python.exe -m backend.cli build-dataset `
+  --source-dataset-id dragonboard_live `
+  --name "dragonboard-2026-05-02" `
+  --snapshot-type half_hour `
+  --start-date 2026-04-15 `
+  --end-date 2026-05-02
+```
+
+先试跑可以加 `--dry-run`，限制样本可以加 `--max-snapshots 100`。
+
+历史 JSON 快照包仍可用兼容命令导入：
 
 ```powershell
 cd d:\dragon-board\quant-board
@@ -128,9 +147,11 @@ cd d:\dragon-board\quant-board
 .\.venv\Scripts\python.exe -m backend.cli push-outbox --limit 50
 ```
 
-### 3.5 浏览器桥接导入
+### 3.5 旧浏览器采集入口
 
-如果 DragonBoard 正在 `http://localhost:5173` 运行，可以尝试：
+`browser_bridge` 和 `leveldb` 仍保留在后端兼容层，只用于历史迁移、排障或对照验证。日常研究不要再走这两条链路。
+
+如果确实需要排障，可以尝试：
 
 ```powershell
 cd d:\dragon-board\quant-board
@@ -147,9 +168,9 @@ cd d:\dragon-board\quant-board
 .\.venv\Scripts\python.exe -m playwright install chromium
 ```
 
-注意：Playwright 默认启动的是新的浏览器上下文，不一定能读取你日常 Chrome/Edge profile 里的 IndexedDB。如果返回空快照，改用 JSON 文件上传或 LevelDB。
+注意：Playwright 默认启动的是新的浏览器上下文，不一定能读取你日常 Chrome/Edge profile 里的 IndexedDB。如果返回空快照，不要继续把它作为主链排查，优先确认 DragonBoard 是否已通过 `POST /api/snapshots/ingest` 写入 SQLite。
 
-### 3.6 LevelDB 导入
+### 3.6 LevelDB 兼容导入
 
 在 `quant-board/config/data_sources.yaml` 填好 Chrome 或 Edge profile 下的 IndexedDB `.leveldb` 路径后：
 
@@ -496,9 +517,9 @@ Invoke-RestMethod http://127.0.0.1:8000/api/health
 }
 ```
 
-### 页面读不到 DragonBoardData
+### 页面找不到旧的 DragonBoardData
 
-这是浏览器同源限制。QuantBoard UI 跑在 `localhost:5174`，DragonBoard UI 跑在 `localhost:5173`，两个 origin 的 IndexedDB 相互隔离。不要用 `当前页面预览` 导入 DragonBoard 数据，使用 `运行页桥接`。
+这是旧 IndexedDB 链路的问题。当前正式链路不再要求 QuantBoard 页面读取浏览器 IndexedDB。先确认 DragonBoard 已经把正式快照写入 SQLite，再在 QuantBoard 左侧用 `SQLite 快照库` 生成研究数据集。
 
 ### 回测提示没有 frames
 
@@ -521,8 +542,8 @@ Invoke-RestMethod http://127.0.0.1:8000/api/health
 最小可用流程：
 
 1. 启动 DragonBoard、`QuantBoard API` 和 `QuantBoard UI`。
-2. 刷新 DragonBoard 页面，让运行页 bridge 生效。
-3. 在 QuantBoard 左侧用 `运行页桥接` 导入 `half_hour` 数据集。
+2. 确认 DragonBoard 正式快照已经通过后端写入 SQLite。
+3. 在 QuantBoard 左侧用 `SQLite 快照库` 生成 `half_hour` 数据集。
 4. 页面刷新并选择数据集。
 5. 在 `回测运行` 用默认参数跑一版。
 6. 在 `回测报告` 查看收益、回撤、交易和信号分布。
