@@ -54,6 +54,7 @@ playwright-report/
 # QuantBoard local runtime state
 quant-board/.venv/
 quant-board/.pytest_cache/
+quant-board/data/
 quant-board/data/warehouse/*.db
 quant-board/data/staging/
 quant-board/data/reports/

@@ -1,13 +1,13 @@
-// src/test/testDataQuality.ts
-// 数据质量检查工具测试脚本
+// src/devtools/diagnostics/dataQualityDiagnostic.ts
+// 数据质量检查工具诊断脚本
 
 import { runDataQualityCheck } from './dataQualityChecker'
 
 /**
- * 测试数据质量检查工具
+ * 诊断数据质量检查工具
  */
-async function testDataQualityChecker() {
-  console.log('=== 测试数据质量检查工具 ===')
+async function diagnoseDataQualityChecker() {
+  console.log('=== 诊断数据质量检查工具 ===')
   console.log('开始时间:', new Date().toISOString())
   console.log('')
 
@@ -48,19 +48,19 @@ async function testDataQualityChecker() {
       console.error('❌ 数据质量检查失败:', result.error)
     }
   } catch (error) {
-    console.error('❌ 测试过程中发生错误:', error)
+    console.error('❌ 诊断过程中发生错误:', error)
   }
 
   console.log('')
-  console.log('=== 测试完成 ===')
+  console.log('=== 诊断完成 ===')
   console.log('结束时间:', new Date().toISOString())
 }
 
 /**
- * 模拟测试数据（用于开发测试）
+ * 模拟诊断数据（用于开发验证）
  */
-async function testWithMockData() {
-  console.log('=== 使用模拟数据测试 ===')
+async function diagnoseWithMockData() {
+  console.log('=== 使用模拟数据诊断 ===')
 
   // 创建模拟的快照数据
   const mockSnapshot = {
@@ -189,7 +189,7 @@ async function checkDataSavingStatus() {
 // 主函数
 async function main() {
   console.log('')
-  console.log('🚀 数据质量检查工具测试')
+  console.log('🚀 数据质量检查工具诊断')
   console.log('========================')
   console.log('')
 
@@ -200,8 +200,8 @@ async function main() {
   console.log('---')
   console.log('')
 
-  // 2. 使用模拟数据测试
-  await testWithMockData()
+  // 2. 使用模拟数据诊断
+  await diagnoseWithMockData()
 
   console.log('')
   console.log('---')
@@ -210,10 +210,10 @@ async function main() {
   // 3. 运行实际的数据质量检查（注释掉，需要时启用）
   // console.log('注意: 实际数据质量检查需要浏览器环境')
   // console.log('请在浏览器控制台中运行:')
-  // console.log('   import("./test/dataQualityChecker.ts").then(m => m.runDataQualityCheck())')
+  // console.log('   import("@/devtools/diagnostics/dataQualityChecker").then(m => m.runDataQualityCheck())')
   // console.log('')
 
-  console.log('✅ 所有测试完成！')
+  console.log('✅ 所有诊断完成！')
   console.log('')
   console.log('💡 使用说明:')
   console.log('1. 在浏览器中打开开发者工具')
@@ -225,23 +225,23 @@ async function main() {
 
 // 导出测试函数
 export {
-  testDataQualityChecker,
-  testWithMockData,
+  diagnoseDataQualityChecker,
+  diagnoseWithMockData,
   checkDataSavingStatus,
-  main as testDataQualityMain,
+  main as dataQualityDiagnosticMain,
 }
 
 // 浏览器环境自动运行（如果直接通过script标签引入）
 if (typeof window !== 'undefined') {
   // 添加到全局对象，方便在浏览器控制台中调用
-  ;(window as any).testDataQualityMain = main
-  ;(window as any).testDataQualityChecker = testDataQualityChecker
-  ;(window as any).testWithMockData = testWithMockData
+  ;(window as any).dataQualityDiagnosticMain = main
+  ;(window as any).diagnoseDataQualityChecker = diagnoseDataQualityChecker
+  ;(window as any).diagnoseWithMockData = diagnoseWithMockData
   ;(window as any).checkDataSavingStatus = checkDataSavingStatus
 
-  console.log('✅ 数据质量测试脚本已加载，可在控制台中调用:')
-  console.log('   testDataQualityMain() - 运行完整测试')
-  console.log('   testDataQualityChecker() - 测试数据质量检查工具')
-  console.log('   testWithMockData() - 使用模拟数据测试')
+  console.log('✅ 数据质量诊断脚本已加载，可在控制台中调用:')
+  console.log('   dataQualityDiagnosticMain() - 运行完整诊断')
+  console.log('   diagnoseDataQualityChecker() - 诊断数据质量检查工具')
+  console.log('   diagnoseWithMockData() - 使用模拟数据诊断')
   console.log('   checkDataSavingStatus() - 检查数据保存状态')
 }

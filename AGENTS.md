@@ -34,6 +34,9 @@
 │   ├── stores/              # Pinia 状态
 │   ├── types/               # TypeScript 类型契约
 │   ├── config/              # 运行时配置、默认参数、存储 key 和稳定业务配置
+│   ├── themes/              # 应用主题配置和主题样式
+│   ├── data/                # 自动生成或外部导入的静态业务数据
+│   ├── devtools/            # 浏览器控制台/手工诊断脚本，自动化测试默认排除
 │   └── main.ts              # 应用入口和 window 服务挂载
 ├── docs/                   # Dragon Board 主项目文档与历史方案
 ├── proxy-server/            # 本地 HTTP 代理服务
@@ -52,6 +55,10 @@
 - `src/types/rankTrendDefaults.ts`：RankTrend 默认参数和默认快照类型。
 - `src/types/**`：统一类型契约目录；不要新增或恢复 `src/type/**`，不要放纯运行时配置。
 - `src/config/**`：运行时配置、默认参数、存储 key、固定展示配置和可调业务常量目录。
+- `src/themes/**`：普通主题、龙族主题等主题配置和主题 CSS；主题相关运行时数据不要放回 `src/config/**`。
+- `src/data/**`：只保留自动生成或外部导入的静态业务数据，例如题材映射原始数据；算法、因子、主题等运行时配置不要放入该目录。
+- `src/**/__tests__/**/*.test.ts`：正式 Vitest 测试目录和文件命名；测试应尽量靠近被测模块。
+- `src/devtools/diagnostics/**`：浏览器控制台或临时手工诊断脚本，不属于自动化测试套件，默认排除在 Vitest 和应用类型检查之外。
 - `src/services/quantBoardBridge.ts`：Dragon Board 与 QuantBoard 的数据桥接和 Golden 导出。
 - `src/services/quantBoardGolden/**`：仅用于导出 TypeScript golden case，不承载回测、优化或交易模拟。
 - `src/services/snapshot/**` 与 `src/services/quality/**`：快照质量、覆盖率和门禁。
@@ -68,6 +75,13 @@
 - 面板或服务需要快照数据时应调用 `src/services/snapshot/**` 的公开 facade/API，不要通过 `DataLayer.ts` 中转快照能力。
 - `src/types/**` 只承载类型、接口、字面量联合类型和类型推导必需的 `as const` 数据；纯运行时配置应放入 `src/config/**` 或业务模块就近文件。
 - 不再新增 `src/constants/**` 入口；稳定常量优先放入 `src/config/**`，模块私有常量就近放在对应 `src/services/**`、`src/stores/**` 或组件文件中。
+- 主题配置和主题样式统一放在 `src/themes/**`；`src/config/**` 不承载主题系统，`src/assets/**` 不承载主题 TS 配置。
+- 不再恢复未挂载的 Vue 模板 `src/router/**`、`src/views/**`；Dragon Board 当前是单页工作台，面板入口在 `App.vue` 和 `src/components/panels/**`。
+- 不保留 `*-bak.ts`、`*0310.ts`、服务目录截图或说明草稿这类历史备份文件；需要历史对照时使用 Git。
+- 自动化测试统一放在被测模块旁的 `__tests__` 目录，文件名使用 `*.test.ts`；不要在业务代码目录中混放同名测试文件。
+- 手工诊断脚本统一放入 `src/devtools/diagnostics/**`，文件名使用 `*Diagnostic.ts` 或描述性工具名，不得使用 `.test.ts` / `.spec.ts` 后缀。
+- 新增测试时优先写可由 `pnpm test` 运行的 Vitest 用例；只有必须依赖浏览器全局对象或人工观察控制台时，才放入 `src/devtools/diagnostics/**`。
+- `src/devtools/diagnostics/**` 可以使用浏览器全局对象和人工观察输出，但不得被业务代码 import，也不得作为自动化验收依据。
 - 不要为了“统一出口”把运行时配置重新聚合进 `src/types/index.ts`。
 - 快照、策略信号和 QuantBoard 桥接逻辑必须显式处理空数据、NaN、时间乱序、低样本量、缺字段和类型回退。
 - 数据质量门禁失败时必须返回结构化原因，不允许静默吞掉并继续产出“看似可用”的交易结果。
@@ -197,6 +211,8 @@ QuantBoard 前端默认代理 `http://localhost:8000`，开发端口为 `5174`�
 ## 9. 测试与验收优先级
 
 - UI 或组件改动：至少运行相关构建或类型检查；有交互风险时补充浏览器验证。
+- 普通单元测试：放在被测模块邻近的 `__tests__/*.test.ts`，并通过 `pnpm test` 验证。
+- 手工诊断脚本：放在 `src/devtools/diagnostics/**`，不得命名为 `.test.ts`，不得作为 CI 通过条件。
 - RankTrend 改动：运行 `pnpm test:ranktrend`、`pnpm typecheck:ranktrend`，必要时补 golden case。
 - QuantBoard 回测、优化、策略改动：覆盖质量门禁、样本不足、空数据、交易成本、T+1、止损止盈和随机种子。
 - QuantBoard 后端改动：在 `quant-board` 目录运行 `.\.venv\Scripts\python.exe -m pytest`。

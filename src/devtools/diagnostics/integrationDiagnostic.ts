@@ -1,4 +1,4 @@
-// src/test/integrationTest.ts
+// src/devtools/diagnostics/integrationDiagnostic.ts
 // 集成测试脚本 - 验证数据增强系统的核心功能
 
 import { dataQualityChecker } from './dataQualityChecker'

@@ -7,7 +7,7 @@ export default defineConfig({
   plugins: [vue()],
   test: {
     include: ['src/**/__tests__/**/*.test.ts'],
-    exclude: ['e2e/**', 'src/test/**'],
+    exclude: ['e2e/**', 'src/devtools/**'],
   },
   resolve: {
     alias: {

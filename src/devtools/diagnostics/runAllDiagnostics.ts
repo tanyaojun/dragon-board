@@ -1,16 +1,16 @@
-// src/tests/runAllTests.ts
-import { testConfigService, testConfigServiceAfterReload } from './ConfigService.test'
-import { testRefreshManager } from './RefreshManager.test'
-import { testIncrementalUpdater } from './IncrementalUpdater.test'
+// src/devtools/diagnostics/runAllDiagnostics.ts
+import { testConfigService, testConfigServiceAfterReload } from './configServiceDiagnostic'
+import { testRefreshManager } from './refreshManagerDiagnostic'
+import { testIncrementalUpdater } from './incrementalUpdaterDiagnostic'
 
 /**
- * 运行所有测试
+ * 运行手工诊断
  * 在浏览器控制台执行：
- * import { runAllTests } from '@/tests/runAllTests'
- * runAllTests()
+ * import { runAllDiagnostics } from '@/devtools/diagnostics/runAllDiagnostics'
+ * runAllDiagnostics()
  */
-export async function runAllTests() {
-  console.log('%c========== 开始全面测试 ==========', 'color: blue; font-size: 16px')
+export async function runAllDiagnostics() {
+  console.log('%c========== 开始全面诊断 ==========', 'color: blue; font-size: 16px')
   
   // 1. 清除之前的存储
   localStorage.removeItem('kpl-refresh-config')
@@ -33,10 +33,10 @@ export async function runAllTests() {
   const finalSaved = localStorage.getItem('kpl-refresh-config')
   console.log('最终 localStorage 内容:', finalSaved)
   
-  console.log('%c\n========== 所有测试完成 ==========', 'color: blue; font-size: 16px')
+  console.log('%c\n========== 所有诊断完成 ==========', 'color: blue; font-size: 16px')
   
   return {
-    message: '测试完成，请查看控制台输出',
+    message: '诊断完成，请查看控制台输出',
     finalConfig: finalSaved ? JSON.parse(finalSaved) : null
   }
 }
@@ -48,6 +48,6 @@ if (typeof window !== 'undefined') {
     configServiceAfterReload: testConfigServiceAfterReload,
     refreshManager: testRefreshManager,
     incrementalUpdater: testIncrementalUpdater,
-    all: runAllTests
+    all: runAllDiagnostics
   }
 }

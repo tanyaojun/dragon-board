@@ -3,7 +3,7 @@
   "include": ["env.d.ts", "src/**/*", "src/**/*.vue"],
   "exclude": [
     "src/**/__tests__/*",
-    "src/test/**",
+    "src/devtools/**",
     "src/流程图/**",
     "src/constants/dataLoader.ts",
     "src/services/AlgorithmManager.ts",

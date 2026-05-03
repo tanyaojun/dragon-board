@@ -21,8 +21,8 @@ import './services/DataLayer'
 import './services/snapshot/facade'
 
 // ========== 主题样式 ==========
-import '@/assets/theme.css'
-import '@/assets/dragon-themes.css'
+import '@/themes/app-theme.css'
+import '@/themes/dragon-theme.css'
 
 // ========== 核心工具 ==========
 import './utils/errorHandler'

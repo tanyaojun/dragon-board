@@ -1,4 +1,4 @@
-// src/tests/RefreshManager.test.ts
+// src/devtools/diagnostics/refreshManagerDiagnostic.ts
 export async function testRefreshManager() {
   console.log('========== 开始测试 RefreshManager ==========')
 

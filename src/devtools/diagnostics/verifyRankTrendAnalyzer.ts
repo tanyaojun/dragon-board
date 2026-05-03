@@ -1,8 +1,8 @@
-// src/test/verifyRankTrendAnalyzer.ts
-// 最小化测试脚本 - 验证RankTrendAnalyzer功能是否受DataLayer修改影响
+// src/devtools/diagnostics/verifyRankTrendAnalyzer.ts
+// 最小化诊断脚本 - 验证 RankTrendAnalyzer 功能是否受 DataLayer 修改影响
 
-import { rankTrendAnalyzer } from '../services/RankTrendAnalyzer'
-import { DEFAULT_RANK_TREND_SNAPSHOT_TYPE } from '../types/rankTrendDefaults'
+import { rankTrendAnalyzer } from '../../services/RankTrendAnalyzer'
+import { DEFAULT_RANK_TREND_SNAPSHOT_TYPE } from '../../types/rankTrendDefaults'
 
 /**
  * 测试1：验证getSnapshotsByType方法
@@ -288,10 +288,10 @@ function testCalculateRankTrendSignal(): boolean {
 }
 
 /**
- * 主测试函数
+ * 主诊断函数
  */
-async function runAllTests() {
-  console.log('=== RankTrendAnalyzer功能验证测试 ===')
+async function runRankTrendDiagnostics() {
+  console.log('=== RankTrendAnalyzer功能验证诊断 ===')
   console.log('开始时间:', new Date().toISOString())
   console.log('')
 
@@ -310,7 +310,7 @@ async function runAllTests() {
   // 运行测试3
   results.test3 = testCalculateRankTrendSignal()
 
-  console.log('\n=== 测试结果汇总 ===')
+  console.log('\n=== 诊断结果汇总 ===')
   console.log('测试1 (getSnapshotsByType):', results.test1 ? '✅ 通过' : '❌ 失败')
   console.log('测试2 (buildPercentilesHistory):', results.test2 ? '✅ 通过' : '❌ 失败')
   console.log('测试3 (calculateRankTrendSignal):', results.test3 ? '✅ 通过' : '❌ 失败')
@@ -333,15 +333,15 @@ async function runAllTests() {
 // 如果直接运行此文件
 if (typeof window !== 'undefined') {
   // 添加到全局对象
-  ;(window as any).verifyRankTrendAnalyzer = runAllTests
+  ;(window as any).verifyRankTrendAnalyzer = runRankTrendDiagnostics
 
   console.log('✅ RankTrendAnalyzer验证脚本已加载')
   console.log('   在控制台中运行: verifyRankTrendAnalyzer()')
 
   // 自动运行测试
   setTimeout(() => {
-    console.log('\n🔍 自动运行RankTrendAnalyzer验证测试...')
-    runAllTests()
+    console.log('\n🔍 自动运行RankTrendAnalyzer验证诊断...')
+    runRankTrendDiagnostics()
       .then((passed) => {
         if (passed) {
           console.log('🎉 RankTrendAnalyzer验证通过，可以继续分析原始问题')
@@ -360,5 +360,5 @@ export {
   testGetSnapshotsByType,
   testBuildPercentilesHistory,
   testCalculateRankTrendSignal,
-  runAllTests,
+  runRankTrendDiagnostics,
 }

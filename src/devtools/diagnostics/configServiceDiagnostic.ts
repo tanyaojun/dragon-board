@@ -1,10 +1,10 @@
-// src/tests/ConfigService.test.ts
-// 在浏览器控制台执行的测试代码
+// src/devtools/diagnostics/configServiceDiagnostic.ts
+// 在浏览器控制台执行的手工诊断代码
 
 /**
- * 测试 ConfigService 的本地存储功能
+ * 诊断 ConfigService 的本地存储功能
  * 在浏览器控制台执行：
- * import { testConfigService } from '@/tests/ConfigService.test'
+ * import { testConfigService } from '@/devtools/diagnostics/configServiceDiagnostic'
  * testConfigService()
  */
 export async function testConfigService() {

@@ -1,4 +1,4 @@
-// src/tests/IncrementalUpdater.test.ts
+// src/devtools/diagnostics/incrementalUpdaterDiagnostic.ts
 export async function testIncrementalUpdater() {
   console.log('========== 开始测试 IncrementalUpdater ==========')
 
