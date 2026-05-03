@@ -28,23 +28,84 @@
 
 ```text
 /
-├── src/                    # Dragon Board 主前端源码
-│   ├── components/          # Vue 组件和业务面板
-│   ├── services/            # 核心业务逻辑层
-│   ├── stores/              # Pinia 状态
-│   ├── types/               # TypeScript 类型契约
-│   ├── config/              # 运行时配置、默认参数、存储 key 和稳定业务配置
-│   ├── themes/              # 应用主题配置和主题样式
-│   ├── data/                # 自动生成或外部导入的静态业务数据
-│   ├── devtools/            # 浏览器控制台/手工诊断脚本，自动化测试默认排除
-│   └── main.ts              # 应用入口和 window 服务挂载
-├── docs/                   # Dragon Board 主项目文档与历史方案
-├── proxy-server/            # 本地 HTTP 代理服务
-├── python-bridge/           # 通达信行情 WebSocket 桥
-├── tools/                   # 原生 helper 和启动器
-├── quant-board/             # Python 量化研究子项目
-└── e2e/                    # Playwright 端到端测试
+├── src/                     # Dragon Board 主前端源码，只承载根 Vue 工作台
+├── docs/                    # Dragon Board 主项目文档与历史方案
+├── proxy-server/            # 本地 HTTP 代理服务，提供股票数据代理，不放前端业务逻辑
+├── python-bridge/           # 通达信行情 WebSocket 桥，不放 Vue/QuantBoard 代码
+├── tools/                   # 原生 helper、启动器和隔离探针，不放日常前端源码
+├── quant-board/             # Python 量化研究子项目，回测/优化/报告主链
+└── e2e/                     # Playwright 端到端测试
 ```
+
+Dragon Board `src/` 目录边界：
+
+```text
+src/
+├── components/              # Vue 组件和业务面板
+│   ├── common/              # 可复用基础组件，不写股票业务编排
+│   ├── panels/              # 主工作台业务面板，面板只调用公开服务 API
+│   └── ...                  # 其它 UI 组件按现有领域就近归类
+├── composables/             # Vue 组合式函数，只放 UI 状态复用和浏览器交互封装
+├── config/                  # 运行时配置、默认参数、存储 key 和稳定业务配置
+├── data/                    # 自动生成或外部导入的静态业务数据
+├── devtools/                # 浏览器控制台/手工诊断脚本，自动化测试默认排除
+│   └── diagnostics/         # 人工诊断工具，不允许被业务代码 import
+├── services/                # 核心业务逻辑层，数据加载、分析器、快照、桥接和投影
+│   ├── dragon/              # 龙头/复盘业务规则和兼容投影
+│   ├── hotlist/             # 热榜情绪等热榜领域分析
+│   ├── hotness/             # 个股热度计算
+│   ├── quality/             # 数据质量、覆盖率和门禁
+│   ├── quantBoardGolden/    # TypeScript golden case 导出，不做回测/优化
+│   ├── rankTrend/           # RankTrend golden 标准模块
+│   └── snapshot/            # 快照保存、读取、覆盖率、备份和 QuantBoard 适配
+├── stores/                  # Pinia 状态，只放 UI/应用级状态，不替代服务层
+├── themes/                  # 应用主题配置和主题样式
+├── types/                   # TypeScript 类型契约和类型推导必需的 as const 数据
+├── utils/                   # 通用纯工具函数，不放业务编排、远端 API 或全局状态
+├── App.vue                  # 单页工作台根组件和面板装配入口
+└── main.ts                  # 应用入口和 window 服务挂载
+```
+
+`src/` 放置规则：
+
+- `components/**` 负责展示和交互，不直接拼远端 API、不访问服务私有成员、不承载回测/优化逻辑。
+- `services/**` 负责业务能力和外部适配，公开 facade/API 给组件使用；模块私有常量就近放在本模块。
+- `stores/**` 只保存应用状态和 UI 状态，不把 Pinia 当业务服务或持久化层。
+- `types/**` 只放类型、接口、字面量联合类型和类型推导必需的 `as const` 数据；不要放纯运行时配置。
+- `config/**` 放稳定运行时配置、默认参数、存储 key 和业务常量；不要放主题系统、类型聚合或临时实验参数。
+- `themes/**` 统一承载主题 TS 配置和 CSS；不要再新增 `src/assets/**` 或把主题配置放回 `src/config/**`。
+- `data/**` 只放静态业务数据或生成数据源；生成脚本、算法逻辑、运行态缓存不要放入该目录。
+- `devtools/**` 只服务人工诊断，不进入自动化测试，不被业务代码 import。
+- `utils/**` 应保持无状态、可复用、无领域编排；一旦依赖股票业务上下文，应移动到对应 `services/**`。
+- 不再恢复 `src/type/**`、`src/constants/**`、`src/router/**`、`src/views/**` 或 `src/assets/**`，除非先同步修改本指南并说明新职责。
+
+QuantBoard `quant-board/` 目录边界：
+
+```text
+quant-board/
+├── backend/                 # Python FastAPI 后端、回测/优化/数据服务主链
+│   ├── analysis/            # RankTrend 等分析算法和特征计算
+│   ├── api/                 # HTTP API 路由和请求响应适配
+│   ├── core/                # 回测、交易规则、组合和领域核心模型
+│   ├── data/                # SQLite/Supabase schema、仓库和数据访问适配
+│   ├── optimization/        # 参数搜索、优化 runner、搜索空间和结果管理
+│   ├── services/            # 后端业务服务编排
+│   └── tests/               # 后端就近测试或领域测试，按现有结构归类
+├── config/                  # QuantBoard 独立配置，不与根 src/config 混用
+├── data/                    # 本地研究数据、warehouse、staging、reports，默认不提交运行产物
+├── docs/                    # QuantBoard 架构、API、数据库、优化和协作细则
+├── frontend/                # QuantBoard 独立前端，默认端口 5174
+└── tests/                   # QuantBoard 跨模块/集成测试
+```
+
+`quant-board/` 放置规则：
+
+- 回测、优化、参数搜索、交易模拟、报告展示只放在 `quant-board/**`，不要回流到根 `src/services/**`。
+- `backend/**` 是 QuantBoard 主后端；新增 Python 服务应落在现有 `analysis`、`core`、`data`、`optimization`、`services` 分层中。
+- `frontend/**` 是 QuantBoard 自己的展示端，不复用根项目 `src/components/**` 作为源码目录。
+- `data/**` 下运行期数据库、warehouse、staging、reports 属于本地状态，遵守 `.gitignore`，不要提交大体积数据产物。
+- `docs/**` 是 QuantBoard 细节唯一文档区；API、数据库、迁移、优化策略变化必须同步这里的专题文档。
+- `.venv/`、`.pytest_cache/` 等本地环境目录不属于源码目录，不要写入目录树或提交。
 
 根目录文件保留规则：
 
