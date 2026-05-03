@@ -4,7 +4,7 @@
 
 QuantBoard 的参数优化是研究工具，不是自动改策略默认值的工具。优化结果只能生成候选参数，必须经过样本外验证后，人工决定是否采用。任何优化任务都不得自动写回 Python、TypeScript、API、CLI 或前端表单的默认参数。
 
-优化是 QuantBoard 后端的独立模块，职责边界在 `backend/optimization/**`：搜索方法、目标函数、任务状态和实验记录都放在该模块内维护。优化模块只调用 QuantBoard Python 回测引擎执行 trial，不把搜索逻辑塞回 `backend.core.backtest`。Dragon Board 根项目不提供参数搜索、交易模拟或优化入口。
+优化是 QuantBoard 后端的独立模块，职责边界在 `backend/optimization/**`：搜索方法、目标函数、任务状态和实验记录都放在该模块内维护。`runner.py` 只做入口编排，搜索空间、采样器、trial 执行、评分、验证、walk-forward 和稳定性分析分别由独立模块承载。优化模块只调用 QuantBoard Python 回测引擎执行 trial，不把搜索逻辑塞回 `backend.core.backtest`。Dragon Board 根项目不提供参数搜索、交易模拟或优化入口。
 
 ## 输入
 

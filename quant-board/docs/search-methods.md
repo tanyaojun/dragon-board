@@ -19,7 +19,7 @@
 | `tpe` | 前端 / API / CLI | 已实现 | Optuna `TPESampler` | `optimizer=optuna_tpe`, `optimizerMeta.sampler=TPESampler` |
 | `optuna_tpe` | 仅后端兼容 | 已实现为别名 | 与 `tpe` 完全相同 | `optimizer=optuna_tpe`, `optimizerMeta.sampler=TPESampler` |
 
-实现入口位于 `backend/optimization/runner.py`。正式搜索方法是四个；`optuna_tpe` 只保留在后端 schema 和 runner 中，避免旧记录或旧自动化脚本失效。
+`backend/optimization/runner.py` 只保留优化实验入口编排。核心能力拆分到独立运行单元：`search_space.py` 负责搜索空间，`samplers.py` 负责 Optuna 采样器，`trial.py` 负责 trial 回测产物，`objective.py` 负责评分，`validation.py` 负责 train/validation 切分，`walk_forward.py` 负责滚动复核，`stability.py` 负责参数稳定性。正式搜索方法是四个；`optuna_tpe` 只保留在后端 schema 和采样器模块中，避免旧记录或旧自动化脚本失效。
 
 ## 统一执行流程
 

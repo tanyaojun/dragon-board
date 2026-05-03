@@ -47,7 +47,7 @@ backend/
 
 5. 优化阶段
    - 输入：参数搜索空间、目标函数、训练/验证区间。
-   - 处理：由 `backend/optimization/**` 独立编排搜索方法和任务状态，调用回测引擎执行 trial。
+   - 处理：由 `backend/optimization/**` 独立编排搜索方法和任务状态；`runner.py` 只保留入口，`search_space.py`、`samplers.py`、`trial.py`、`objective.py`、`validation.py`、`walk_forward.py`、`stability.py` 等模块分别承担核心计算职责，并调用回测引擎执行 trial。
    - 输出：候选参数排名、样本内/样本外表现、`running/completed/failed` 状态和实验记录。
 
 6. 展示阶段
