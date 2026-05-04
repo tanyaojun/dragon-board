@@ -1,7 +1,6 @@
 import { SnapshotBackupSync } from './backupSync'
 import { SnapshotBackupSyncStateStore } from './backupSyncState'
 import { snapshotBackendIngest } from './backendIngest'
-import { SnapshotCloudBackup } from './cloudBackup'
 import {
   arrayToCSV,
   buildDailySnapshot,
@@ -98,7 +97,6 @@ export class SnapshotRuntime {
   private static readonly HALF_HOUR_BACKFILL_WINDOW_MS = 35 * 60 * 1000
   private static readonly HOURLY_BACKFILL_WINDOW_MS = 65 * 60 * 1000
   private static readonly DAILY_BACKFILL_WINDOW_MS = 2 * 60 * 60 * 1000
-  private static readonly LEGACY_CLOUD_SYNC_STATE_KEY = 'dragon_board_snapshot_cloud_sync_state'
   private readonly logger: Pick<Console, 'log' | 'warn' | 'error' | 'debug'>
   private readonly syncIntervalMs: number
   private readonly getBuildContext: () => SnapshotBuildContext
@@ -121,7 +119,6 @@ export class SnapshotRuntime {
   private snapshotSchedulePromise: Promise<void> | null = null
   private projectionBackfillTimer: ReturnType<typeof setTimeout> | null = null
   private projectionBackfillPromise: Promise<void> | null = null
-  private lastCloudSyncTradingDate = this.loadCloudSyncTradingDate()
   private readonly snapshotStore: SnapshotStore
   private readonly snapshotProjectionWriter: SnapshotProjectionWriter
   private readonly snapshotFrameStore: SnapshotFrameStore
@@ -129,7 +126,6 @@ export class SnapshotRuntime {
   private readonly snapshotSectorRowStore: SnapshotSectorRowStore
   private readonly snapshotProjectionMetaStore: SnapshotProjectionMetaStore
   private readonly enableIndexedDbSnapshotCache: boolean
-  private readonly cloudBackup: SnapshotCloudBackup
   private readonly snapshotBackupSync: SnapshotBackupSync
   private sqlitePrimaryWrite?: (bundle: SnapshotProjectionBundle) => Promise<SnapshotSqlitePrimaryWriteResult>
   private sqlitePrimaryExists?: SnapshotSqlitePrimaryExistsHandler
@@ -181,7 +177,6 @@ export class SnapshotRuntime {
       snapshotStoreName: deps.primaryStoreName,
       redundantStores: ['daily_snapshots', 'snapshot_meta'],
     })
-    this.cloudBackup = new SnapshotCloudBackup()
     this.snapshotBackupSync = new SnapshotBackupSync({
       primaryStore: this.snapshotStore,
       primaryProjectionWriter: this.snapshotProjectionWriter,
@@ -197,13 +192,9 @@ export class SnapshotRuntime {
       bucketName: deps.backupBucketName,
       minBackupCount: deps.minBackupCount,
       abnormalRatio: deps.abnormalRatio,
-      cloudBackup: this.cloudBackup,
       logger: this.logger,
       onBucketSyncSuccess: (tradingDate, syncedAt) => this.recordBucketSyncSuccess(tradingDate, syncedAt),
       onBucketSyncError: (tradingDate, error) => this.recordBucketSyncError(tradingDate, error),
-      onCloudBundleUploaded: (tradingDate, uploadedAt) =>
-        this.recordCloudBundleUploaded(tradingDate, uploadedAt),
-      onCloudBundleError: (tradingDate, error) => this.recordCloudBundleError(tradingDate, error),
     })
   }
 
@@ -659,14 +650,6 @@ export class SnapshotRuntime {
       ...options,
       sort: 'asc',
     })
-    const affectedTradingDates = Array.from(
-      new Set(
-        records
-          .filter((record) => record.type !== 'five_minute')
-          .map((record) => record.tradingDate)
-          .filter(Boolean),
-      ),
-    ).sort()
     let localBundlesSynced = 0
 
     for (const record of records) {
@@ -683,24 +666,9 @@ export class SnapshotRuntime {
       localBundlesSynced += 1
     }
 
-    const cloudEnabled = options?.includeCloud !== false && (await this.cloudBackup.getHealth()).enabled === true
-    const cloudUploadedTradingDates: string[] = []
-
-    if (cloudEnabled) {
-      for (const tradingDate of affectedTradingDates) {
-        await this.syncPrimarySnapshotsToCloud({
-          overwrite: true,
-          tradingDate,
-        })
-        cloudUploadedTradingDates.push(tradingDate)
-      }
-    }
-
     return {
       processedSnapshots: records.length,
       localBundlesSynced,
-      cloudEnabled,
-      cloudUploadedTradingDates,
     }
   }
 
@@ -790,67 +758,6 @@ export class SnapshotRuntime {
       rawCompaction,
       backupAlignmentAfterCompaction,
     }
-  }
-
-  async getStockVolumeHistory(
-    codes: string[],
-    options?: { anchorTradingDate?: string; lookbackDays?: number },
-  ): Promise<Map<string, number[]>> {
-    const requestedCodes = Array.from(new Set((codes || []).filter(Boolean)))
-    const result = new Map<string, number[]>()
-    if (requestedCodes.length === 0) return result
-
-    const lookbackDays = Math.max(1, Math.min(10, Number(options?.lookbackDays) || 3))
-
-    // 量比正式口径固定走日级投影行，避免回退到全量快照扫描或盘中 close-slot 近似。
-    await this.ensureProjectedRawRecords({
-      type: 'daily',
-      endDate: options?.anchorTradingDate,
-      allowedCaptureModes: FORMAL_SNAPSHOT_READ_POLICY.allowedCaptureModes,
-      excludeRestored: FORMAL_SNAPSHOT_READ_POLICY.excludeRestored,
-      sort: 'desc',
-    })
-
-    await Promise.all(
-      requestedCodes.map(async (code) => {
-        const rows = await this.snapshotStockRowStore.list({
-          code,
-          type: 'daily',
-          beforeTradingDate: options?.anchorTradingDate,
-          allowedCaptureModes: FORMAL_SNAPSHOT_READ_POLICY.allowedCaptureModes,
-          excludeRestored: FORMAL_SNAPSHOT_READ_POLICY.excludeRestored,
-          sort: 'desc',
-          limit: lookbackDays,
-        })
-
-        const volumesByDate = new Map<string, { volume: number; timestamp: number }>()
-        for (const row of rows || []) {
-          const tradingDate = String(row.tradingDate || '')
-          const volume = Number(row.volume)
-          if (!tradingDate || !Number.isFinite(volume) || volume <= 0) continue
-          if (!volumesByDate.has(tradingDate)) {
-            volumesByDate.set(tradingDate, {
-              volume,
-              timestamp: Number(row.timestamp) || 0,
-            })
-          }
-        }
-
-        const volumes = Array.from(volumesByDate.entries())
-          .sort(([leftDate, left], [rightDate, right]) => {
-            const dateOrder = rightDate.localeCompare(leftDate)
-            return dateOrder !== 0 ? dateOrder : right.timestamp - left.timestamp
-          })
-          .slice(0, lookbackDays)
-          .map(([, item]) => item.volume)
-
-        if (volumes.length > 0) {
-          result.set(code, volumes)
-        }
-      }),
-    )
-
-    return result
   }
 
   async getLatestSnapshotRecord(options?: {
@@ -974,10 +881,7 @@ export class SnapshotRuntime {
   }
 
   async syncAllSnapshotStores(options?: { overwrite?: boolean; limit?: number }) {
-    return this.snapshotBackupSync.syncAllStores({
-      ...options,
-      includeRemoteCloud: false,
-    })
+    return this.snapshotBackupSync.syncAllStores(options)
   }
 
   async runSnapshotAutoRecoveryCheck(options?: { minBackupCount?: number; abnormalRatio?: number; force?: boolean }) {
@@ -1124,12 +1028,6 @@ export class SnapshotRuntime {
     endDate?: string
   }) {
     const result = await this.snapshotBackupSync.syncPrimaryToCloud(options)
-    if (options?.tradingDate) {
-      const syncedState = this.backupSyncStateStore.get(options.tradingDate)
-      if (result.queued > 0 || syncedState?.cloudBundleUploadedAt) {
-        this.lastCloudSyncTradingDate = options.tradingDate
-      }
-    }
     return result
   }
 
@@ -1767,10 +1665,6 @@ export class SnapshotRuntime {
     }, this.syncIntervalMs)
   }
 
-  private async runDailyCloudSyncIfDue(): Promise<void> {
-    this.clearLegacyCloudSyncTradingDatePersistence()
-  }
-
   private createManagedSnapshotRecord(type: SnapshotType, snapshotTime: Date, payload: any): SnapshotRecord {
     const now = Date.now()
     const buildContext = this.getBuildContext()
@@ -1979,26 +1873,6 @@ export class SnapshotRuntime {
     }
   }
 
-  private loadCloudSyncTradingDate(): string {
-    const syncedTradingDate = this.backupSyncStateStore.getLatestCloudSyncedTradingDate()
-    if (syncedTradingDate) return syncedTradingDate
-    if (typeof localStorage === 'undefined') return ''
-    try {
-      return String(localStorage.getItem(SnapshotRuntime.LEGACY_CLOUD_SYNC_STATE_KEY) || '')
-    } catch {
-      return ''
-    }
-  }
-
-  private clearLegacyCloudSyncTradingDatePersistence(): void {
-    if (typeof localStorage === 'undefined') return
-    try {
-      localStorage.removeItem(SnapshotRuntime.LEGACY_CLOUD_SYNC_STATE_KEY)
-    } catch {
-      // ignore persistence failures
-    }
-  }
-
   private async resolveOverviewTradingDate(): Promise<string | null> {
     const latestRecord = (await this.listSnapshots({ sort: 'desc', limit: 1 }))[0] || null
     if (latestRecord?.tradingDate) return latestRecord.tradingDate
@@ -2011,16 +1885,6 @@ export class SnapshotRuntime {
 
   private recordBucketSyncError(tradingDate: string, error: unknown): void {
     this.backupSyncStateStore.markError('bucket', tradingDate, error)
-  }
-
-  private recordCloudBundleUploaded(tradingDate: string, uploadedAt: number): void {
-    this.lastCloudSyncTradingDate = tradingDate
-    this.backupSyncStateStore.markCloudBundleUploaded(tradingDate, uploadedAt)
-    this.clearLegacyCloudSyncTradingDatePersistence()
-  }
-
-  private recordCloudBundleError(tradingDate: string, error: unknown): void {
-    this.backupSyncStateStore.markError('cloudBundle', tradingDate, error)
   }
 
   private downloadTextFile(content: string, filename: string, mimeType: string) {

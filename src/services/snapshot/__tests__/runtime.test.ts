@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createSnapshotRecord } from '../identity'
-import { snapshotBackendIngest } from '../backendIngest'
 import { SnapshotRuntime } from '../runtime'
 import { getExpectedSlots } from '../schedule'
 import type { SnapshotCaptureMode, SnapshotQueryOptions, SnapshotRecord, SnapshotType } from '../types'
@@ -186,48 +185,6 @@ describe('SnapshotRuntime', () => {
     expect(coverage.daily.missing).toEqual(['15:00'])
   })
 
-  it('updates cloud bundle sync state after trading-date upload succeeds', async () => {
-    const runtime = createRuntime()
-    const uploadedAt = 1_714_000_000_000
-
-    ;(runtime as any).snapshotBackupSync = {
-      syncPrimaryToCloud: vi.fn(async (options?: { tradingDate?: string }) => {
-        ;(runtime as any).recordCloudBundleUploaded(options?.tradingDate || '', uploadedAt)
-        return { queued: 1, totalPrimary: 8 }
-      }),
-    }
-
-    await runtime.syncPrimarySnapshotsToCloud({ tradingDate: '2026-04-21' })
-
-    await expect(runtime.getSnapshotBackupSyncState('2026-04-21')).resolves.toMatchObject({
-      tradingDate: '2026-04-21',
-      cloudBundleUploadedAt: uploadedAt,
-    })
-  })
-
-  it('records backend ingest failures outside cloud bundle state', async () => {
-    const runtime = createRuntime()
-    const record = createRecord('half_hour', '2026-04-21', '10:00')
-
-    vi.stubGlobal('window', {})
-    vi.spyOn(snapshotBackendIngest, 'ingestDayBundle').mockRejectedValue(new Error('http_500'))
-
-    await (runtime as any).pushSnapshotBundleToBackend(record, {
-      record,
-      frame: null,
-      stockRows: [],
-      sectorRows: [],
-    })
-    ;(runtime as any).recordCloudBundleUploaded('2026-04-21', 222)
-
-    await expect(runtime.getSnapshotBackupSyncState('2026-04-21')).resolves.toMatchObject({
-      tradingDate: '2026-04-21',
-      cloudBundleUploadedAt: 222,
-      lastBackendIngestError: 'http_500',
-      lastError: 'backendIngest:http_500',
-    })
-  })
-
   it('ignores IndexedDB existence and rewrites through sqlite for formal snapshots', async () => {
     const runtime = createRuntime()
     const record = createRecord('half_hour', '2026-04-21', '10:00')
@@ -401,27 +358,6 @@ describe('SnapshotRuntime', () => {
     expect(exists).toHaveBeenCalled()
   })
 
-  it('does not upload cloud day bundles after 15:30 because Supabase backup owns cloud sync', async () => {
-    vi.useFakeTimers()
-    vi.setSystemTime(new Date('2026-04-28T15:35:00'))
-
-    const runtime = createRuntime()
-    const syncPrimarySnapshotsToCloud = vi.spyOn(runtime, 'syncPrimarySnapshotsToCloud')
-
-    ;(runtime as any).recordBucketSyncSuccess('2026-04-27', Date.now() - 60_000)
-    ;(runtime as any).recordBucketSyncSuccess('2026-04-28', Date.now())
-    ;(runtime as any).snapshotStore = {
-      list: vi.fn().mockResolvedValue([
-        createRecord('daily', '2026-04-28', '15:00'),
-        createRecord('daily', '2026-04-27', '15:00'),
-      ]),
-    }
-
-    await (runtime as any).runDailyCloudSyncIfDue()
-
-    expect(syncPrimarySnapshotsToCloud).not.toHaveBeenCalled()
-  })
-
   it('does not collect scheduled snapshot slots on 2026 Labor Day market holiday', async () => {
     const runtime = createRuntime()
 
@@ -492,27 +428,6 @@ describe('SnapshotRuntime', () => {
     expect((runtime as any).snapshotBackupSync.cleanupInvalidLocalBackups).toHaveBeenCalledTimes(1)
   })
 
-  it('does not use recent primary trading dates for legacy cloud bundle backfill', async () => {
-    vi.useFakeTimers()
-    vi.setSystemTime(new Date('2026-04-28T15:35:00'))
-
-    const runtime = createRuntime()
-    const syncPrimarySnapshotsToCloud = vi
-      .spyOn(runtime, 'syncPrimarySnapshotsToCloud')
-      .mockResolvedValue({ queued: 1, totalPrimary: 8 })
-
-    ;(runtime as any).snapshotStore = {
-      list: vi.fn().mockResolvedValue([
-        createRecord('daily', '2026-04-28', '15:00'),
-        createRecord('daily', '2026-04-27', '15:00'),
-      ]),
-    }
-
-    await (runtime as any).runDailyCloudSyncIfDue()
-
-    expect(syncPrimarySnapshotsToCloud).not.toHaveBeenCalled()
-  })
-
   it('returns repair candidates without writing into the primary store', async () => {
     const runtime = createRuntime()
     const primaryPut = vi.fn()
@@ -539,61 +454,6 @@ describe('SnapshotRuntime', () => {
     expect(result.normalizedQuarter).toBe(1)
     expect(result.createdHalfHour).toBe(1)
     expect(primaryPut).not.toHaveBeenCalled()
-  })
-
-  it('reads close-slot volume history from projected stock rows', async () => {
-    const runtime = createRuntime()
-    ;(runtime as any).ensureProjectedRawRecords = vi.fn().mockResolvedValue(undefined)
-
-    ;(runtime as any).snapshotStockRowStore = {
-      list: vi
-        .fn()
-        .mockResolvedValueOnce([
-          {
-            snapshotId: 'daily:2026-04-24:15:00',
-            type: 'daily',
-            tradingDate: '2026-04-24',
-            slotTime: '15:00',
-            timestamp: Date.parse('2026-04-24T15:00:00'),
-            captureMode: 'real_time',
-            source: 'browser_runtime',
-            code: '600001',
-            volume: 300,
-          },
-          {
-            snapshotId: 'daily:2026-04-23:15:00',
-            type: 'daily',
-            tradingDate: '2026-04-23',
-            slotTime: '15:00',
-            timestamp: Date.parse('2026-04-23T15:00:00'),
-            captureMode: 'delayed',
-            source: 'browser_runtime',
-            code: '600001',
-            volume: 200,
-          },
-        ])
-        .mockResolvedValueOnce([
-          {
-            snapshotId: 'daily:2026-04-24:15:00',
-            type: 'daily',
-            tradingDate: '2026-04-24',
-            slotTime: '15:00',
-            timestamp: Date.parse('2026-04-24T15:00:00'),
-            captureMode: 'real_time',
-            source: 'browser_runtime',
-            code: '600002',
-            volume: 180,
-          },
-        ]),
-    }
-
-    const result = await runtime.getStockVolumeHistory(['600001', '600002'], {
-      anchorTradingDate: '2026-04-24',
-      lookbackDays: 3,
-    })
-
-    expect(result.get('600001')).toEqual([300, 200])
-    expect(result.get('600002')).toEqual([180])
   })
 
   it('rewrites projection bundle when frame exists but child-row counts drift', async () => {
@@ -657,8 +517,6 @@ describe('SnapshotRuntime', () => {
     const backupBefore = {
       processedSnapshots: 10,
       localBundlesSynced: 10,
-      cloudEnabled: false,
-      cloudUploadedTradingDates: [],
     }
     const rawCompaction = {
       scanned: 10,
@@ -668,8 +526,6 @@ describe('SnapshotRuntime', () => {
     const backupAfter = {
       processedSnapshots: 10,
       localBundlesSynced: 10,
-      cloudEnabled: false,
-      cloudUploadedTradingDates: [],
     }
 
     const rebuildSpy = vi

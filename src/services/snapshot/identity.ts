@@ -117,3 +117,17 @@ export function withSnapshotPayloadCompatFields<T = any>(record: SnapshotRecord<
     payload: payload as T,
   }
 }
+
+export type FormalSnapshotType = Exclude<SnapshotType, 'five_minute'>
+
+export function assertFormalSnapshotType(type: SnapshotType | undefined): void {
+  if (type === 'five_minute') {
+    throw new Error('unsupported formal snapshot type: five_minute')
+  }
+}
+
+export function assertFormalSnapshotTypes(types: SnapshotType[] | undefined): void {
+  if ((types || []).includes('five_minute')) {
+    throw new Error('unsupported formal snapshot type: five_minute')
+  }
+}

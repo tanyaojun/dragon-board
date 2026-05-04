@@ -4,7 +4,7 @@ import type { RankTrendSnapshotType } from '../../types/rankTrendDefaults'
 export type SnapshotType = RankTrendSnapshotType | 'five_minute'
 
 export type SnapshotCaptureMode = 'real_time' | 'delayed' | 'restored'
-export type SnapshotSource = 'browser_runtime' | 'bucket_restore' | 'cloud_restore' | 'manual'
+export type SnapshotSource = 'browser_runtime' | 'bucket_restore' | 'manual'
 
 export interface SnapshotQualityMetadata {
   captureMode: SnapshotCaptureMode
@@ -212,8 +212,6 @@ export interface SnapshotPollutionCleanupResult {
 export interface SnapshotBackupAlignmentResult {
   processedSnapshots: number
   localBundlesSynced: number
-  cloudEnabled: boolean
-  cloudUploadedTradingDates: string[]
 }
 
 export interface SnapshotStorageMaintenanceResult {

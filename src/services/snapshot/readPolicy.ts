@@ -21,12 +21,3 @@ export function applyFormalSnapshotReadPolicy(options: SnapshotQueryOptions = {}
     excludeRestored: true,
   }
 }
-
-// 恢复/容灾路径显式放开 restored，避免“只是想排障”却仍然读不到恢复样本。
-export function createRecoverySnapshotReadOptions(options: SnapshotQueryOptions = {}): SnapshotQueryOptions {
-  return {
-    ...options,
-    allowedCaptureModes: ['real_time', 'delayed', 'restored'],
-    excludeRestored: false,
-  }
-}

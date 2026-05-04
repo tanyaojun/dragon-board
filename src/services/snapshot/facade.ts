@@ -1,5 +1,6 @@
 import { dataLayer } from '../DataLayer'
 import { snapshotBackendRead } from './backendRead'
+import { assertFormalSnapshotType, assertFormalSnapshotTypes, type FormalSnapshotType } from './identity'
 import { SnapshotRuntime } from './runtime'
 import type {
   SnapshotFrameBundle,
@@ -21,22 +22,9 @@ const BACKUP_BUCKET_NAME = 'dragon-snapshot-backup'
 const SNAPSHOT_GUARD_MIN_BACKUP = 20
 const SNAPSHOT_GUARD_RATIO = 0.4
 const SNAPSHOT_SYNC_INTERVAL_MS = 5 * 60 * 1000
-type FormalSnapshotType = Exclude<SnapshotType, 'five_minute'>
 type FormalSnapshotQueryOptions = Omit<SnapshotQueryOptions, 'type' | 'types'> & {
   type?: FormalSnapshotType
   types?: FormalSnapshotType[]
-}
-
-function assertFormalSnapshotType(type: SnapshotType | undefined): void {
-  if (type === 'five_minute') {
-    throw new Error('unsupported formal snapshot type: five_minute')
-  }
-}
-
-function assertFormalSnapshotTypes(types: SnapshotType[] | undefined): void {
-  if ((types || []).includes('five_minute')) {
-    throw new Error('unsupported formal snapshot type: five_minute')
-  }
 }
 
 const snapshotRuntime = new SnapshotRuntime({

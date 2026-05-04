@@ -1,5 +1,6 @@
 import { apiService } from '../apiService'
 import { FORMAL_SNAPSHOT_READ_POLICY } from './readPolicy'
+import { assertFormalSnapshotType, assertFormalSnapshotTypes } from './identity'
 import type {
   SnapshotFrameBundle,
   SnapshotFrameQueryOptions,
@@ -10,26 +11,12 @@ import type {
   SnapshotSectorRowQueryOptions,
   SnapshotStockRow,
   SnapshotStockRowQueryOptions,
-  SnapshotType,
 } from './types'
 
 const DEFAULT_DATASET_ID = 'dragonboard_live'
 
 type BackendReadOptions = { datasetId?: string }
-type FormalSnapshotType = Exclude<SnapshotType, 'five_minute'>
 type BackendSnapshotFrameBundle = SnapshotFrameBundle & { entities?: unknown }
-
-function assertFormalSnapshotType(type: SnapshotType | undefined): asserts type is FormalSnapshotType | undefined {
-  if (type === 'five_minute') {
-    throw new Error('unsupported formal snapshot type: five_minute')
-  }
-}
-
-function assertFormalSnapshotTypes(types: SnapshotType[] | undefined): asserts types is FormalSnapshotType[] | undefined {
-  if ((types || []).includes('five_minute')) {
-    throw new Error('unsupported formal snapshot type: five_minute')
-  }
-}
 
 function unwrapResponse<T>(response: any, key: string, fallback: T): T {
   const data = response && typeof response === 'object' && 'data' in response ? response.data : response

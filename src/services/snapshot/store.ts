@@ -136,7 +136,6 @@ function migrateLegacySnapshotRecord(rawRecord: any, sourceStoreName: string): S
         qualityFlags: Array.isArray(rawRecord.qualityFlags) ? rawRecord.qualityFlags : [],
         source:
           rawRecord.source === 'bucket_restore' ||
-          rawRecord.source === 'cloud_restore' ||
           rawRecord.source === 'manual'
             ? rawRecord.source
             : 'browser_runtime',
@@ -192,7 +191,6 @@ function migrateLegacySnapshotRecord(rawRecord: any, sourceStoreName: string): S
       : [],
     source:
       rawRecord.source === 'bucket_restore' ||
-      rawRecord.source === 'cloud_restore' ||
       rawRecord.source === 'manual'
         ? rawRecord.source
         : 'browser_runtime',
