@@ -12,7 +12,7 @@ from backend.data.importers import LevelDbIndexedDbImporter
 from backend.data.json_codec import COMPRESSED_TEXT_PREFIX, dumps_json_field, loads_json_field
 from backend.data.json_compaction import compact_json_fields
 from backend.data.legacy_split_migration import migrate_legacy_db
-from backend.data.models import Base, ResearchBase
+from backend.data.models import BacktestRun, Base, ResearchBase
 from backend.data.storage_inspector import inspect_storage
 from backend.settings import Settings
 
@@ -68,6 +68,32 @@ def test_compact_json_fields_dry_run_and_apply(tmp_path: Path) -> None:
         encoded = conn.execute("select result_json from backtest_runs where id='bt_1'").fetchone()[0]
     assert encoded.startswith(COMPRESSED_TEXT_PREFIX)
     assert loads_json_field(encoded, {}) == large
+
+
+def test_research_session_compresses_large_json_before_flush(tmp_path: Path) -> None:
+    db_path = tmp_path / "research_guard.db"
+    engine = create_engine(f"sqlite:///{db_path}")
+    ResearchBase.metadata.create_all(bind=engine)
+    Session = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
+    large = {"items": [{"value": "x" * 200} for _ in range(80)]}
+    raw = json.dumps(large)
+
+    with Session() as session:
+        session.add(
+            BacktestRun(
+                id="bt_guard",
+                dataset_id="dataset",
+                request_json="{}",
+                result_json=raw,
+            )
+        )
+        session.commit()
+
+    with sqlite3.connect(db_path) as conn:
+        stored = conn.execute("select result_json from backtest_runs where id='bt_guard'").fetchone()[0]
+
+    assert stored.startswith(COMPRESSED_TEXT_PREFIX)
+    assert loads_json_field(stored, {}) == large
 
 
 def test_migrate_legacy_db_splits_snapshot_and_research_without_payload_outbox(tmp_path: Path) -> None:

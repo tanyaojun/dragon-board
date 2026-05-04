@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, event
 from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Session as ORMSession
 
 from backend.data.database import Base, ResearchBase
+from backend.data.json_codec import dumps_json_field
 
 
 class Dataset(Base):
@@ -322,6 +324,30 @@ class OptimizationRun(ResearchBase):
     request_json: Mapped[str] = mapped_column(Text, default="{}")
     result_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+RESEARCH_JSON_FIELD_MAP = {
+    GoldenRankTrendCase: ("input_json", "expected_json"),
+    BacktestRun: ("request_json", "result_json"),
+    BacktestTrade: ("fill_detail_json",),
+    BacktestSignal: ("reasons_json", "risk_flags_json"),
+    BacktestQualityReport: ("missing_fields_json", "nan_counts_json", "inf_counts_json", "warnings_json"),
+    OptimizationRun: ("request_json", "result_json"),
+}
+
+
+def _compress_research_json_fields(session: ORMSession) -> None:
+    for instance in session.new.union(session.dirty):
+        fields = RESEARCH_JSON_FIELD_MAP.get(type(instance))
+        if not fields:
+            continue
+        for field in fields:
+            setattr(instance, field, dumps_json_field(getattr(instance, field) or "{}"))
+
+
+@event.listens_for(ORMSession, "before_flush")
+def _compress_research_json_fields_before_flush(session: ORMSession, *_args: object) -> None:
+    _compress_research_json_fields(session)
 
 
 class SyncOutboxModel(Base):

@@ -4,10 +4,11 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any, Callable
 
 from backend.data.database import SessionLocal
+from backend.data.json_codec import dumps_json_field
 from backend.data.models import BacktestRun, OptimizationRun
 from backend.data.repository import Repository
 from backend.optimization.runner import OptimizationRunner
-from backend.utils import json_dumps, stable_hash
+from backend.utils import stable_hash
 
 
 _EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="quant-optimization")
@@ -83,8 +84,8 @@ def _run_job(
                         snapshot_type=snapshot_type,
                         random_seed=random_seed,
                         config_hash=str(artifact.get("configHash") or stable_hash(artifact_request)),
-                        request_json=json_dumps(artifact_request),
-                        result_json=json_dumps(artifact_result),
+                        request_json=dumps_json_field(artifact_request),
+                        result_json=dumps_json_field(artifact_result),
                     )
                 )
             repo.save_optimization_run(
@@ -96,8 +97,8 @@ def _run_job(
                     random_seed=random_seed,
                     status="completed",
                     config_hash=config_hash,
-                    request_json=json_dumps(payload_for_request_json),
-                    result_json=json_dumps(result),
+                    request_json=dumps_json_field(payload_for_request_json),
+                    result_json=dumps_json_field(result),
                 )
             )
     except Exception as error:
@@ -119,7 +120,7 @@ def _run_job(
                     random_seed=random_seed,
                     status="failed",
                     config_hash=config_hash,
-                    request_json=json_dumps(payload_for_request_json),
-                    result_json=json_dumps(failure),
+                    request_json=dumps_json_field(payload_for_request_json),
+                    result_json=dumps_json_field(failure),
                 )
             )

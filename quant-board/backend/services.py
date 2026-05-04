@@ -8,11 +8,11 @@ from backend.analysis.ranktrend import RankTrendConfig, RankTrendPythonEngine
 from backend.core.backtest import BacktestEngine, normalize_strategy_name
 from backend.data.models import BacktestRun, GoldenRankTrendCase, OptimizationRun
 from backend.data.quality_gate import evaluate_snapshot_quality
-from backend.data.json_codec import loads_json_field
+from backend.data.json_codec import dumps_json_field, loads_json_field
 from backend.data.repository import Repository
 from backend.optimization.jobs import submit_optimization_job
 from backend.optimization.runner import OptimizationRunner
-from backend.utils import json_dumps, json_loads, new_id, read_json_file, stable_hash
+from backend.utils import json_loads, new_id, read_json_file, stable_hash
 
 
 DEFAULT_BACKTEST_STRATEGY_CONFIG = {
@@ -181,8 +181,8 @@ class BacktestService:
             config_hash=stable_hash(request_meta),
             date_start=trading_dates[0] if trading_dates else None,
             date_end=trading_dates[-1] if trading_dates else None,
-            request_json=json_dumps(request_meta),
-            result_json=json_dumps(result),
+            request_json=dumps_json_field(request_meta),
+            result_json=dumps_json_field(result),
         )
         self.repo.save_backtest_run(run)
 
@@ -386,8 +386,8 @@ class OptimizationService:
             random_seed=request["random_seed"],
             status="running",
             config_hash=config_hash,
-            request_json=json_dumps(payload_for_request_json),
-            result_json=json_dumps({"status": "running", "runId": run_id}),
+            request_json=dumps_json_field(payload_for_request_json),
+            result_json=dumps_json_field({"status": "running", "runId": run_id}),
         )
         self.repo.save_optimization_run(initial)
         if wait:
@@ -496,8 +496,8 @@ class OptimizationService:
                     snapshot_type=snapshot_type,
                     random_seed=request["random_seed"],
                     config_hash=str(artifact.get("configHash") or stable_hash(artifact_request)),
-                    request_json=json_dumps(artifact_request),
-                    result_json=json_dumps(artifact_result),
+                    request_json=dumps_json_field(artifact_request),
+                    result_json=dumps_json_field(artifact_result),
                 )
             )
         run = OptimizationRun(
@@ -508,8 +508,8 @@ class OptimizationService:
             random_seed=request["random_seed"],
             status="completed",
             config_hash=config_hash,
-            request_json=json_dumps(payload_for_request_json),
-            result_json=json_dumps(result),
+            request_json=dumps_json_field(payload_for_request_json),
+            result_json=dumps_json_field(result),
         )
         self.repo.save_optimization_run(run)
         return {"id": run_id, "runId": run_id, "run_id": run_id, "status": "completed", "result": result, **result}
@@ -567,8 +567,8 @@ class GoldenService:
             id=case_id,
             name=str(payload.get("name") or case_id),
             dataset_id=dataset_id,
-            input_json=json_dumps({"datasetId": dataset_id, "snapshotType": snapshot_type, "sampleLimit": sample_limit, "source": "python_current_output"}),
-            expected_json=json_dumps(expected),
+            input_json=dumps_json_field({"datasetId": dataset_id, "snapshotType": snapshot_type, "sampleLimit": sample_limit, "source": "python_current_output"}),
+            expected_json=dumps_json_field(expected),
         )
         self.repo.save_golden_case(case)
         return {"id": case_id, "caseId": case_id, "datasetId": dataset_id, "snapshotType": snapshot_type, "sampleLimit": sample_limit, "checked": len(expected), "source": "python_current_output", "message": "baseline saved from current Python output"}
@@ -598,8 +598,8 @@ class GoldenService:
             id=case_id,
             name=str(payload.get("name") or case_id),
             dataset_id=dataset_id,
-            input_json=json_dumps(input_meta),
-            expected_json=json_dumps(expected),
+            input_json=dumps_json_field(input_meta),
+            expected_json=dumps_json_field(expected),
         )
         self.repo.save_golden_case(case)
         return {
