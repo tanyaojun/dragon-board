@@ -68,10 +68,10 @@ QuantBoard API/CLI -> SQLite research local only
 规则：
 
 - `quant_board_snapshots.db` 是默认快照主库，负责正式快照即时写入和低延迟读取。
-- `quant_board_research.db` 是本地研究库，负责回测、优化、Golden 和报告索引。
+- `quant_board_research.db` 是本地研究库，负责回测、优化、Golden、报告索引和回测归一化结果明细。
 - Supabase 不暴露给 Vue 前端，只由后端使用 `SUPABASE_URL` 和 `SUPABASE_SECRET_KEY` 访问。
 - 正常快照写入先提交 SQLite 快照库，再把同一份快照事实镜像到 Supabase。
-- 快照库写入成功后会登记轻量 `sync_outbox`，即使 Supabase 当次不可用，也能通过 `push-backup` 按事实表实时组包补偿。
+- 快照库写入成功后会登记轻量 `sync_outbox`，即使 Supabase 当次不可用，也能通过 `push-backup` 按事实表实时组包补偿；outbox 只覆盖快照事实和数据集 bundle。
 - SQLite 初始化或查询失败时，读路径会回退到 Supabase 备份记录。
 - SQLite 不可用但 Supabase 可写时，正式快照 ingest 会切到 Supabase 并返回 `status=backup_only`；尚未纳入 failover 的写接口必须明确返回不可用，不能伪装成功。
 - `POST /api/sync/push-backup` 用于把已有 SQLite 历史数据主动推送到 Supabase。
@@ -87,7 +87,7 @@ QuantBoard API/CLI -> SQLite research local only
 
 Supabase 备份库必须使用快照事实库同构 schema，不再使用旧 `snapshots.payload` 兼容方案。云端 schema 由 [../backend/data/supabase_schema.sql](../backend/data/supabase_schema.sql) 维护，只包含 `datasets`、`snapshot_*` 和 `sync_outbox`。健康检查会逐表检查这些快照备份表是否可读；缺表时不得继续把备份链路视为可用。
 
-回测、优化和 Golden 不再作为 Supabase Free 版备份目标。大型研究结果留在 research SQLite 或报告文件目录，避免重新把快照事实和研究明细混在同一个库里。
+回测、优化和 Golden 不再作为 Supabase Free 版备份目标。`backtest_runs`、`backtest_trades`、`backtest_equity_curve`、`backtest_signals`、`backtest_quality_reports` 等研究结果表都是 `local-only`，大型研究结果留在 research SQLite 或报告文件目录，避免重新把快照事实和研究明细混在同一个库里。
 
 Dragon Board 前端 `DataLayer` 对外字段不随迁移删改。正式快照写入先查询 SQLite 是否已有同一 `snapshot_id`，缺失时通过 `POST /api/snapshots/ingest` 落 SQLite；后端再按 `dataset_id + snapshot_id` 做逻辑幂等，重复槽位不会覆盖既有事实行。正式读取走 SQLite API，返回仍是 `SnapshotRecord`、`SnapshotFrameBundle`、`SnapshotStockRow`、`SnapshotSectorRow` 的现有 camelCase 字段。IndexedDB 快照缓存默认关闭，只保留历史迁移源、显式缓存和非正式临时数据用途。
 
@@ -128,7 +128,7 @@ Dragon Board 前端 `DataLayer` 对外字段不随迁移删改。正式快照写
 
 ### backtest_runs
 
-保存在 research SQLite，保存单次回测请求和结果。必须记录：
+保存在 research SQLite，保存单次回测请求和结果摘要。`request_json` 和 `result_json` 仍是兼容追溯字段；交易、权益曲线、信号和质量报告以归一化表为主。必须记录：
 
 - `dataset_id`
 - `strategy_name`
@@ -136,8 +136,28 @@ Dragon Board 前端 `DataLayer` 对外字段不随迁移删改。正式快照写
 - `snapshot_type`
 - `config_hash`
 - `random_seed`
+- `date_start`
+- `date_end`
+- `finished_at`
+- `error_reason`
 - `request_json`
 - `result_json`
+
+### backtest_trades
+
+保存在 research SQLite，保存单次回测的成交和持仓生命周期明细。它是回测报告交易列表的主数据源，不进入 Supabase、`sync_outbox`、push/pull 或 failover 链路。
+
+### backtest_equity_curve
+
+保存在 research SQLite，保存单次回测权益曲线，按时间升序供图表读取。它属于 `local-only` 研究结果，不进入 Supabase。
+
+### backtest_signals
+
+保存在 research SQLite，保存 RankTrend 信号诊断、候选分层和市场状态。信号诊断不能当作真实成交列表使用，交易列表必须读取 `backtest_trades`。
+
+### backtest_quality_reports
+
+保存在 research SQLite，保存样本覆盖率、质量门禁和研究等级。质量报告必须显式表达 `passed`、`severity` 和结构化原因，不能用空对象表示通过。
 
 ### optimization_runs
 

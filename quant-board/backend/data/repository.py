@@ -906,14 +906,28 @@ class Repository:
             raise RuntimeError("failed to save normalized backtest trades") from exc
         return count
 
-    def get_backtest_trades(self, run_id: str) -> list[dict[str, Any]]:
+    def get_backtest_trades(self, run_id: str, limit: int | None = None, offset: int = 0) -> list[dict[str, Any]]:
         try:
-            rows = self.research_session.scalars(
-                select(BacktestTrade).where(BacktestTrade.backtest_run_id == run_id).order_by(BacktestTrade.id)
-            ).all()
+            query = select(BacktestTrade).where(BacktestTrade.backtest_run_id == run_id).order_by(BacktestTrade.id)
+            if offset:
+                query = query.offset(offset)
+            if limit is not None:
+                query = query.limit(limit)
+            rows = self.research_session.scalars(query).all()
             return [self._trade_to_dict(r) for r in rows]
         except SQLAlchemyError:
             return []
+
+    def count_backtest_trades(self, run_id: str) -> int:
+        try:
+            return int(
+                self.research_session.scalar(
+                    select(func.count()).select_from(BacktestTrade).where(BacktestTrade.backtest_run_id == run_id)
+                )
+                or 0
+            )
+        except SQLAlchemyError:
+            return 0
 
     def save_backtest_equity_curve(self, run_id: str, curve: list[dict[str, Any]]) -> int:
         count = 0
@@ -988,14 +1002,46 @@ class Repository:
             risk_flags_json=json_dumps(d.get("riskFlags") or []),
         )
 
-    def get_backtest_signals(self, run_id: str) -> list[dict[str, Any]]:
+    def get_backtest_signals(
+        self,
+        run_id: str,
+        limit: int | None = None,
+        offset: int = 0,
+        tier: str | None = None,
+        regime: str | None = None,
+    ) -> list[dict[str, Any]]:
         try:
-            rows = self.research_session.scalars(
-                select(BacktestSignal).where(BacktestSignal.backtest_run_id == run_id).order_by(BacktestSignal.id)
-            ).all()
+            query = self._backtest_signal_query(run_id, tier=tier, regime=regime).order_by(BacktestSignal.id)
+            if offset:
+                query = query.offset(offset)
+            if limit is not None:
+                query = query.limit(limit)
+            rows = self.research_session.scalars(query).all()
             return [self._signal_to_dict(r) for r in rows]
         except SQLAlchemyError:
             return []
+
+    def count_backtest_signals(self, run_id: str, tier: str | None = None, regime: str | None = None) -> int:
+        try:
+            return int(
+                self.research_session.scalar(
+                    select(func.count()).select_from(
+                        self._backtest_signal_query(run_id, tier=tier, regime=regime).subquery()
+                    )
+                )
+                or 0
+            )
+        except SQLAlchemyError:
+            return 0
+
+    @staticmethod
+    def _backtest_signal_query(run_id: str, tier: str | None = None, regime: str | None = None):
+        query = select(BacktestSignal).where(BacktestSignal.backtest_run_id == run_id)
+        if tier:
+            query = query.where(BacktestSignal.candidate_tier == tier)
+        if regime:
+            query = query.where(BacktestSignal.regime == regime)
+        return query
 
     def save_backtest_quality_report(self, run_id: str, data_quality: dict[str, Any], quality_gate: dict[str, Any] | None = None) -> bool:
         try:

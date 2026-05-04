@@ -36,6 +36,10 @@ QuantBoard 当前拆成两个 SQLite 库。
 
 - `golden_ranktrend_cases`
 - `backtest_runs`
+- `backtest_trades`
+- `backtest_equity_curve`
+- `backtest_signals`
+- `backtest_quality_reports`
 - `optimization_runs`
 
 Supabase 备份库必须与快照事实库保持同构 schema。云端需要使用 [../backend/data/supabase_schema.sql](../backend/data/supabase_schema.sql) 重建为同名表、同业务键和同索引。脚本末尾会执行 `notify pgrst, 'reload schema'`，执行后仍应通过 `smoke-backup` 或 `/api/health?deep=true` 确认 PostgREST 已看到新表结构：
@@ -49,11 +53,11 @@ Supabase 备份库必须与快照事实库保持同构 schema。云端需要使�
 
 旧的 Supabase `snapshots` / payload 兼容方案已经废弃。云端不再使用 `quality_flags.kind=qb_dataset`、`qb_snapshot_bundle` 等业务枚举，也不再把 QuantBoard 明细塞进 `snapshots.payload`。如果 Supabase 仍只有旧 `snapshots`、`snapshot_frames`、`snapshot_stock_rows`、`snapshot_sector_rows` 四张非同构表，健康检查会报告缺失表，`push-backup` 不应视为可用。
 
-Supabase schema 不再包含回测、优化和 Golden 表，也不再对研究 JSON 做云端压缩备份。大型研究结果留在 research SQLite 或报告文件目录，避免挤占 Supabase Free 版容量。
+Supabase schema 不再包含回测、优化和 Golden 表，也不再对研究 JSON 做云端压缩备份。`backtest_runs`、`backtest_trades`、`backtest_equity_curve`、`backtest_signals`、`backtest_quality_reports`、优化和 Golden 都是 research SQLite `local-only` 数据，大型研究结果留在本地研究库或报告文件目录，避免挤占 Supabase Free 版容量。
 
 当前 WP2/WP3/WP4 批次已落地的能力：
 
-- `dataset_bundle`、`snapshot_ingest` 会在快照事实库写入成功后登记 `sync_outbox`；回测、优化和 Golden 只写 research 库。
+- `dataset_bundle`、`snapshot_ingest` 会在快照事实库写入成功后登记 `sync_outbox`；回测、优化和 Golden 只写 research 库，`sync_outbox` 不覆盖研究结果。
 - Supabase 立即镜像成功时，对应 outbox 标记为 `done`；镜像失败时标记为 `retry` 并写入 `last_error`、`retry_count`、`next_retry_at`。
 - `push-backup` 会先消费到期的 `pending/retry` outbox，再做全量扫描补推。
 - Dragon Board 正式快照保存不再以 IndexedDB 是否已有记录作为幂等依据；定时保存和手工保存先查询 SQLite/QuantBoard 后端是否已有同一 `snapshot_id`，缺失时再执行 `POST /api/snapshots/ingest`。
@@ -106,6 +110,7 @@ QuantBoard research
 - SQLite 事务失败时，不得声明业务写入成功。
 - Supabase 镜像失败不应阻塞本地研究主链，但必须可被 `push-backup` 后续补偿。
 - 备份补推必须能按 `dataset_id/snapshot_id` 从事实表实时组包，不允许把完整 records/frames/rows 塞进 outbox。
+- `sync_outbox` 只覆盖快照事实和数据集 bundle；回测归一化结果、优化结果和 Golden 结果是 `local_research_db_only`，不进入 Supabase push/pull/failover。
 - `dataset_id`、`snapshot_type`、`run_id`、`case_id` 等业务键必须稳定，不能由恢复流程重新随机生成。
 - 对同一业务键重复同步必须幂等，不能产生重复数据或覆盖更新更晚版本。
 
@@ -418,7 +423,7 @@ Dragon Board 前端正式分析入口 `listSnapshotFrameBundles` 必须调用该
 - 配置 Supabase 后，正式写入先落 SQLite，再镜像到 Supabase。
 - Supabase 写入失败有结构化诊断。
 - `push-backup` 能补偿历史 SQLite 记录。
-- `sync_outbox` 已覆盖快照 ingest、数据集 bundle、回测、优化和 Golden 业务对象。
+- `sync_outbox` 已覆盖快照 ingest 和数据集 bundle；回测、优化和 Golden 业务对象保持 `local_research_db_only`，不进入 outbox 或 Supabase。
 - 自动同步可按配置启动，只推送到期 outbox；Supabase smoke 探针可验证真实云端写读删。
 
 ### M3：读取回退与 failover 写入

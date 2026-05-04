@@ -416,6 +416,62 @@ def test_import_backtest_optimize_and_golden(tmp_path: Path) -> None:
     assert "sharpe" in fetched.json()
     assert "controlBacktests" in fetched.json()
 
+    trades = client.get(f"/api/backtests/{run['runId']}/trades", params={"limit": 5, "offset": 0})
+    assert trades.status_code == 200, trades.text
+    trades_body = trades.json()
+    assert trades_body["runId"] == run["runId"]
+    assert trades_body["limit"] == 5
+    assert trades_body["offset"] == 0
+    assert trades_body["total"] >= len(trades_body["items"])
+    if trades_body["items"]:
+        assert {"code", "entryPrice", "quantity", "candidateTier"} <= set(trades_body["items"][0])
+
+    equity = client.get(f"/api/backtests/{run['runId']}/equity")
+    assert equity.status_code == 200, equity.text
+    assert equity.json()["runId"] == run["runId"]
+    assert len(equity.json()["items"]) == len(run["equityCurve"])
+
+    signals = client.get(
+        f"/api/backtests/{run['runId']}/signals",
+        params={"limit": 5, "offset": 0, "tier": "A_MAIN"},
+    )
+    assert signals.status_code == 200, signals.text
+    signals_body = signals.json()
+    assert signals_body["runId"] == run["runId"]
+    assert signals_body["filters"] == {"tier": "A_MAIN", "regime": None}
+    assert signals_body["limit"] == 5
+    assert signals_body["total"] >= len(signals_body["items"])
+    assert all(item["candidateTier"] == "A_MAIN" for item in signals_body["items"])
+
+    quality = client.get(f"/api/backtests/{run['runId']}/quality")
+    assert quality.status_code == 200, quality.text
+    quality_report = quality.json()["qualityReport"]
+    assert quality_report["severity"] == "warn"
+    assert quality_report["researchGrade"] == "degraded"
+    assert "coverageRatio" in quality_report
+
+    compare = client.post(
+        "/api/backtests/compare",
+        json={"run_ids": [run["runId"], custom_matching_backtest.json()["runId"]], "metrics": ["totalReturn", "winRate"]},
+    )
+    assert compare.status_code == 200, compare.text
+    compare_body = compare.json()
+    assert compare_body["metrics"] == ["totalReturn", "winRate"]
+    assert [item["runId"] for item in compare_body["runs"]] == [run["runId"], custom_matching_backtest.json()["runId"]]
+    assert all(item["snapshotType"] == "half_hour" for item in compare_body["runs"])
+    assert all({"totalReturn", "winRate"} <= set(item["metrics"]) for item in compare_body["runs"])
+
+    missing_detail = client.get("/api/backtests/bt_missing/trades").json()["detail"]
+    assert missing_detail["code"] == "backtest_run_not_found"
+    assert missing_detail["runId"] == "bt_missing"
+
+    invalid_metric = client.post(
+        "/api/backtests/compare",
+        json={"run_ids": [run["runId"]], "metrics": ["annualReturn"]},
+    )
+    assert invalid_metric.status_code == 400
+    assert invalid_metric.json()["detail"]["code"] == "invalid_backtest_metric"
+
     next_bar_backtest = client.post(
         "/api/backtests/rank-trend",
         json={
@@ -1562,6 +1618,13 @@ def test_cli_exposes_sync_and_migration_commands(tmp_path: Path, monkeypatch: py
     assert parser.parse_args(["push-outbox", "--limit", "7"]).limit == 7
     assert parser.parse_args(["pull-backup"]).func.__name__ == "cmd_pull_backup"
     assert parser.parse_args(["smoke-backup"]).func.__name__ == "cmd_smoke_backup"
+    compare_args = parser.parse_args(["compare-backtests", "--run-ids", "bt_1", "bt_2", "--metrics", "totalReturn,winRate"])
+    assert compare_args.func.__name__ == "cmd_compare_backtests"
+    assert compare_args.run_ids == ["bt_1", "bt_2"]
+    assert compare_args.metrics == "totalReturn,winRate"
+    export_args = parser.parse_args(["export-report", "--run-id", "bt_1", "--output", str(tmp_path / "bt_1.json")])
+    assert export_args.func.__name__ == "cmd_export_report"
+    assert export_args.run_id == "bt_1"
 
     bundle_path = tmp_path / "migration.json"
     bundle_path.write_text(

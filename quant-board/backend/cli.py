@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from backend.data.database import SessionLocal, init_db
@@ -36,6 +39,10 @@ def parse_int_list(value: str) -> list[int]:
             raise argparse.ArgumentTypeError(f"period must be positive: {item}")
         periods.append(period)
     return periods
+
+
+def parse_csv_list(value: str | None) -> list[str]:
+    return [item.strip() for item in (value or "").split(",") if item.strip()]
 
 
 def cmd_import_idb(args: argparse.Namespace) -> None:
@@ -160,6 +167,33 @@ def cmd_run_ranktrend(args: argparse.Namespace) -> None:
     with SessionLocal() as session:
         payload = build_ranktrend_payload(args)
         print_json(BacktestService(session).run_ranktrend(payload))
+
+
+def cmd_compare_backtests(args: argparse.Namespace) -> None:
+    init_db()
+    with SessionLocal() as session:
+        try:
+            print_json(BacktestService(session).compare_runs(args.run_ids, parse_csv_list(args.metrics)))
+        except LookupError as error:
+            print_json({"ok": False, "error": {"code": "backtest_run_not_found", "runId": str(error.args[0])}})
+            sys.exit(1)
+        except ValueError as error:
+            detail = error.args[0] if error.args and isinstance(error.args[0], dict) else {"code": "backtest_compare_failed", "message": str(error)}
+            print_json({"ok": False, "error": detail})
+            sys.exit(1)
+
+
+def cmd_export_report(args: argparse.Namespace) -> None:
+    init_db()
+    with SessionLocal() as session:
+        report = BacktestService(session).export_report(args.run_id)
+        if report is None:
+            print_json({"ok": False, "error": {"code": "backtest_run_not_found", "runId": args.run_id}})
+            sys.exit(1)
+        output = Path(args.output)
+        report = {**report, "exportedAt": datetime.now(timezone.utc).isoformat()}
+        output.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        print_json({"ok": True, "runId": args.run_id, "output": str(output)})
 
 
 def cmd_optimize_ranktrend(args: argparse.Namespace) -> None:
@@ -317,6 +351,16 @@ def build_parser() -> argparse.ArgumentParser:
     report_cmd = sub.add_parser("show-report", help="Show backtest report")
     report_cmd.add_argument("--run-id", required=True)
     report_cmd.set_defaults(func=cmd_show_report)
+
+    compare_cmd = sub.add_parser("compare-backtests", help="Compare backtest runs")
+    compare_cmd.add_argument("--run-ids", nargs="+", required=True)
+    compare_cmd.add_argument("--metrics", default="totalReturn,sharpe,maxDrawdown,winRate")
+    compare_cmd.set_defaults(func=cmd_compare_backtests)
+
+    export_cmd = sub.add_parser("export-report", help="Export a full backtest report JSON")
+    export_cmd.add_argument("--run-id", required=True)
+    export_cmd.add_argument("--output", required=True)
+    export_cmd.set_defaults(func=cmd_export_report)
     return parser
 
 

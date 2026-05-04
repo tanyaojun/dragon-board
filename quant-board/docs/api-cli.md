@@ -430,11 +430,143 @@ Dragon Board 当前会在写入前通过 SQLite 读口确认同一 `snapshot_id`
 
 ### `GET /api/backtests/{run_id}`
 
-读取回测报告。
+读取兼容回测报告。该接口保留旧读取口径，返回 `backtest_runs.result_json` 中的摘要和预览字段；新页面需要完整交易、权益曲线、信号和质量报告时，应继续调用下列归一化结果端点。
 
 ### `GET /api/backtests/{run_id}/report`
 
 读取回测报告，和 `GET /api/backtests/{run_id}` 同口径，供页面语义化调用。
+
+### `GET /api/backtests/{run_id}/trades`
+
+读取归一化交易明细，数据源为 research SQLite `backtest_trades`，不从 `result_json` 反解析。
+
+查询参数：
+
+| 参数 | 默认 | 说明 |
+| --- | --- | --- |
+| `limit` | `100` | 每页条数，范围 `1..1000` |
+| `offset` | `0` | 起始偏移，必须大于等于 `0` |
+
+返回：
+
+```json
+{
+  "runId": "bt_xxx",
+  "items": [],
+  "limit": 100,
+  "offset": 0,
+  "total": 0
+}
+```
+
+### `GET /api/backtests/{run_id}/equity`
+
+读取归一化权益曲线，数据源为 research SQLite `backtest_equity_curve`。权益曲线用于图表，按时间升序全量返回，不分页。
+
+```json
+{
+  "runId": "bt_xxx",
+  "items": []
+}
+```
+
+### `GET /api/backtests/{run_id}/signals`
+
+读取归一化信号诊断，数据源为 research SQLite `backtest_signals`。该端点用于解释候选分层、状态和过滤原因，不能代替 `backtest_trades` 展示真实成交。
+
+查询参数：
+
+| 参数 | 默认 | 说明 |
+| --- | --- | --- |
+| `tier` | 空 | 可选候选分层筛选，例如 `A_MAIN` |
+| `regime` | 空 | 可选市场状态筛选，例如 `advance` |
+| `limit` | `200` | 每页条数，范围 `1..1000` |
+| `offset` | `0` | 起始偏移，必须大于等于 `0` |
+
+```json
+{
+  "runId": "bt_xxx",
+  "items": [],
+  "filters": {
+    "tier": "A_MAIN",
+    "regime": "advance"
+  },
+  "limit": 200,
+  "offset": 0,
+  "total": 0
+}
+```
+
+### `GET /api/backtests/{run_id}/quality`
+
+读取归一化质量报告，数据源为 research SQLite `backtest_quality_reports`。
+
+```json
+{
+  "runId": "bt_xxx",
+  "qualityReport": {
+    "passed": true,
+    "severity": "pass",
+    "researchGrade": "research_ready"
+  }
+}
+```
+
+### `POST /api/backtests/compare`
+
+对比多个回测 run 的摘要指标。对比只读取服务层聚合结果，不要求调用方理解 repository 私有结构。
+
+请求：
+
+```json
+{
+  "run_ids": ["bt_001", "bt_002"],
+  "metrics": ["totalReturn", "sharpe", "maxDrawdown", "winRate"]
+}
+```
+
+首批允许的 `metrics`：
+
+```text
+totalReturn
+realizedReturn
+maxDrawdown
+sharpe
+winRate
+totalTrades
+profitFactor
+openPositionCount
+```
+
+响应：
+
+```json
+{
+  "runs": [
+    {
+      "runId": "bt_001",
+      "datasetId": "ds_001",
+      "snapshotType": "half_hour",
+      "strategyName": "rank_trend_candidate",
+      "strategyVersion": "0.1.0",
+      "configHash": "abc123",
+      "randomSeed": 20260430,
+      "metrics": {
+        "totalReturn": 0.12,
+        "maxDrawdown": -0.08,
+        "sharpe": 1.4,
+        "winRate": 0.52
+      },
+      "missingMetrics": []
+    }
+  ],
+  "metrics": ["totalReturn", "sharpe", "maxDrawdown", "winRate"]
+}
+```
+
+找不到 run 返回 `404`，`detail.code=backtest_run_not_found`。非法分页参数返回 `400` 或 `422`，错误体至少包含 `code`、`field` 和 `value`。非法指标返回 `400`，`detail.code=invalid_backtest_metric`，并返回 `allowedMetrics`。旧 `result_json` 中缺失的指标用 `null`，同时在对应 run 的 `missingMetrics` 列出字段名，不能用 `0` 代替。
+
+归一化回测结果表属于 research SQLite `local-only` 数据，`GET /api/backtests/{run_id}/trades`、`/equity`、`/signals`、`/quality` 和 `POST /api/backtests/compare` 都不读取 Supabase，也不触发 `sync_outbox`、push/pull 或 failover。
 
 ## 优化接口
 
@@ -591,6 +723,65 @@ cd d:\dragon-board\quant-board
   --macd-slow 34 `
   --macd-signal 13 `
   --momentum-periods 3,5,8,13,21
+```
+
+命令输出摘要应由后端服务层返回，至少包含：
+
+```text
+backtest_id: bt_xxx
+config_hash: abc123
+quality_status: pass|warn|fail
+quality_coverage: 0.95
+total_return: 0.234
+max_drawdown: -0.12
+sharpe: 1.45
+trade_count: 67
+win_rate: 0.52
+```
+
+### `compare-backtests`
+
+对比多个回测 run：
+
+```powershell
+.\.venv\Scripts\python.exe -m backend.cli compare-backtests --run-ids bt_001 bt_002 bt_003
+```
+
+可通过 `--metrics totalReturn,sharpe,maxDrawdown,winRate` 显式指定指标；未指定时使用 API 合同里的首批默认指标。CLI 只负责参数解析和格式化输出，必须调用服务层的 compare 能力，不直连 repository。
+
+### `export-report`
+
+导出完整回测报告 JSON：
+
+```powershell
+.\.venv\Scripts\python.exe -m backend.cli export-report --run-id bt_001 --output quant-board\data\reports\bt_001.json
+```
+
+导出字段至少包括 `request`、`metrics`、`trades`、`equityCurve`、`signals`、`qualityReport`。`--output` 必须是用户显式传入的单个文件路径；如文件已存在，可以覆盖该明确文件，但不得批量清理或覆盖目录，并必须打印 `output` 路径。
+
+```json
+{
+  "runId": "bt_001",
+  "datasetId": "ds_001",
+  "snapshotType": "half_hour",
+  "strategyName": "rank_trend_candidate",
+  "strategyVersion": "0.1.0",
+  "configHash": "abc123",
+  "randomSeed": 20260430,
+  "request": {},
+  "metrics": {},
+  "trades": [],
+  "equityCurve": [],
+  "signals": [],
+  "qualityReport": {},
+  "exportedAt": "2026-05-04T00:00:00Z"
+}
+```
+
+找不到 run 时返回非零退出码，并输出一行结构化错误摘要，例如：
+
+```json
+{"ok":false,"error":{"code":"backtest_run_not_found","runId":"bt_missing"}}
 ```
 
 ### `optimize-ranktrend`

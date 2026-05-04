@@ -611,11 +611,86 @@ def run_ranktrend_backtest(payload: dict[str, Any], db: Session | None = Depends
         raise HTTPException(status_code=400, detail=str(error)) from error
 
 
+def _backtest_not_found(run_id: str) -> HTTPException:
+    return HTTPException(status_code=404, detail={"code": "backtest_run_not_found", "runId": run_id})
+
+
+def _structured_bad_request(error: ValueError) -> HTTPException:
+    detail = error.args[0] if error.args and isinstance(error.args[0], dict) else str(error)
+    return HTTPException(status_code=400, detail=detail)
+
+
+@app.post("/api/backtests/compare")
+def compare_backtests(payload: dict[str, Any], db: Session | None = Depends(get_db)) -> dict[str, Any]:
+    run_ids = payload.get("run_ids") or payload.get("runIds") or []
+    if not isinstance(run_ids, list) or not run_ids:
+        raise HTTPException(status_code=400, detail={"code": "invalid_backtest_compare_request", "field": "run_ids"})
+    metrics = payload.get("metrics")
+    if metrics is not None and not isinstance(metrics, list):
+        raise HTTPException(status_code=400, detail={"code": "invalid_backtest_compare_request", "field": "metrics"})
+    try:
+        return BacktestService(db).compare_runs([str(item) for item in run_ids], [str(item) for item in metrics] if metrics else None)
+    except LookupError as error:
+        raise _backtest_not_found(str(error.args[0])) from error
+    except ValueError as error:
+        raise _structured_bad_request(error) from error
+
+
+@app.get("/api/backtests/{run_id}/trades")
+def get_backtest_trades(
+    run_id: str,
+    limit: int = 100,
+    offset: int = 0,
+    db: Session | None = Depends(get_db),
+) -> dict[str, Any]:
+    try:
+        result = BacktestService(db).get_trades(run_id, limit=limit, offset=offset)
+    except ValueError as error:
+        raise _structured_bad_request(error) from error
+    if not result:
+        raise _backtest_not_found(run_id)
+    return result
+
+
+@app.get("/api/backtests/{run_id}/equity")
+def get_backtest_equity(run_id: str, db: Session | None = Depends(get_db)) -> dict[str, Any]:
+    result = BacktestService(db).get_equity(run_id)
+    if not result:
+        raise _backtest_not_found(run_id)
+    return result
+
+
+@app.get("/api/backtests/{run_id}/signals")
+def get_backtest_signals(
+    run_id: str,
+    tier: str | None = None,
+    regime: str | None = None,
+    limit: int = 200,
+    offset: int = 0,
+    db: Session | None = Depends(get_db),
+) -> dict[str, Any]:
+    try:
+        result = BacktestService(db).get_signals(run_id, limit=limit, offset=offset, tier=tier, regime=regime)
+    except ValueError as error:
+        raise _structured_bad_request(error) from error
+    if not result:
+        raise _backtest_not_found(run_id)
+    return result
+
+
+@app.get("/api/backtests/{run_id}/quality")
+def get_backtest_quality(run_id: str, db: Session | None = Depends(get_db)) -> dict[str, Any]:
+    result = BacktestService(db).get_quality(run_id)
+    if not result:
+        raise _backtest_not_found(run_id)
+    return result
+
+
 @app.get("/api/backtests/{run_id}")
 def get_backtest(run_id: str, db: Session | None = Depends(get_db)) -> dict[str, Any]:
     result = BacktestService(db).get_run(run_id)
     if not result:
-        raise HTTPException(status_code=404, detail=f"backtest run not found: {run_id}")
+        raise _backtest_not_found(run_id)
     return result
 
 

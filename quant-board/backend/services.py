@@ -21,6 +21,18 @@ DEFAULT_BACKTEST_STRATEGY_CONFIG = {
     "macdSignal": 13,
 }
 
+BACKTEST_COMPARE_METRICS = {
+    "totalReturn",
+    "realizedReturn",
+    "maxDrawdown",
+    "sharpe",
+    "winRate",
+    "totalTrades",
+    "tradeCount",
+    "profitFactor",
+    "openPositionCount",
+}
+
 FATAL_QUALITY_STATS = (
     "invalidCaptureMode",
     "duplicateSnapshotId",
@@ -211,6 +223,120 @@ class BacktestService:
             "configHash": run.config_hash,
             "createdAt": run.created_at.isoformat(),
         }
+
+    def get_trades(self, run_id: str, limit: int = 100, offset: int = 0) -> dict[str, Any] | None:
+        if not self.repo.get_backtest_run(run_id):
+            return None
+        self._validate_pagination(limit, offset)
+        return {
+            "runId": run_id,
+            "items": self.repo.get_backtest_trades(run_id, limit=limit, offset=offset),
+            "limit": limit,
+            "offset": offset,
+            "total": self.repo.count_backtest_trades(run_id),
+        }
+
+    def get_equity(self, run_id: str) -> dict[str, Any] | None:
+        if not self.repo.get_backtest_run(run_id):
+            return None
+        return {"runId": run_id, "items": self.repo.get_backtest_equity_curve(run_id)}
+
+    def get_signals(
+        self,
+        run_id: str,
+        limit: int = 200,
+        offset: int = 0,
+        tier: str | None = None,
+        regime: str | None = None,
+    ) -> dict[str, Any] | None:
+        if not self.repo.get_backtest_run(run_id):
+            return None
+        self._validate_pagination(limit, offset)
+        return {
+            "runId": run_id,
+            "items": self.repo.get_backtest_signals(run_id, limit=limit, offset=offset, tier=tier, regime=regime),
+            "filters": {"tier": tier, "regime": regime},
+            "limit": limit,
+            "offset": offset,
+            "total": self.repo.count_backtest_signals(run_id, tier=tier, regime=regime),
+        }
+
+    def get_quality(self, run_id: str) -> dict[str, Any] | None:
+        if not self.repo.get_backtest_run(run_id):
+            return None
+        quality = self.repo.get_backtest_quality_report(run_id)
+        if quality is None:
+            return {"runId": run_id, "qualityReport": None}
+        return {"runId": run_id, "qualityReport": quality}
+
+    def compare_runs(self, run_ids: list[str], metrics: list[str] | None = None) -> dict[str, Any]:
+        metric_names = metrics or ["totalReturn", "sharpe", "maxDrawdown", "winRate"]
+        invalid = [metric for metric in metric_names if metric not in BACKTEST_COMPARE_METRICS]
+        if invalid:
+            raise ValueError(
+                {
+                    "code": "invalid_backtest_metric",
+                    "metric": invalid[0],
+                    "allowedMetrics": sorted(BACKTEST_COMPARE_METRICS),
+                }
+            )
+        runs = []
+        for run_id in run_ids:
+            run = self.repo.get_backtest_run(run_id)
+            if not run:
+                raise LookupError(run_id)
+            result = json_loads(run.result_json, {})
+            metric_values = {metric: self._metric_value(result, metric) for metric in metric_names}
+            missing = [metric for metric, value in metric_values.items() if value is None]
+            item = {
+                "runId": run.id,
+                "datasetId": run.dataset_id,
+                "snapshotType": run.snapshot_type,
+                "strategyName": run.strategy_name,
+                "strategyVersion": run.strategy_version,
+                "configHash": run.config_hash,
+                "randomSeed": run.random_seed,
+                "metrics": metric_values,
+            }
+            if missing:
+                item["missingMetrics"] = missing
+            runs.append(item)
+        return {"runs": runs, "metrics": metric_names}
+
+    def export_report(self, run_id: str) -> dict[str, Any] | None:
+        run = self.repo.get_backtest_run(run_id)
+        if not run:
+            return None
+        result = json_loads(run.result_json, {})
+        return {
+            "runId": run.id,
+            "datasetId": run.dataset_id,
+            "snapshotType": run.snapshot_type,
+            "strategyName": run.strategy_name,
+            "strategyVersion": run.strategy_version,
+            "configHash": run.config_hash,
+            "randomSeed": run.random_seed,
+            "request": json_loads(run.request_json, {}),
+            "metrics": {metric: self._metric_value(result, metric) for metric in sorted(BACKTEST_COMPARE_METRICS)},
+            "trades": self.repo.get_backtest_trades(run_id),
+            "equityCurve": self.repo.get_backtest_equity_curve(run_id),
+            "signals": self.repo.get_backtest_signals(run_id),
+            "qualityReport": self.repo.get_backtest_quality_report(run_id),
+            "result": result,
+        }
+
+    @staticmethod
+    def _validate_pagination(limit: int, offset: int) -> None:
+        if limit < 1 or limit > 1000:
+            raise ValueError({"code": "invalid_pagination", "field": "limit", "value": limit, "message": "limit must be between 1 and 1000"})
+        if offset < 0:
+            raise ValueError({"code": "invalid_pagination", "field": "offset", "value": offset, "message": "offset must be greater than or equal to 0"})
+
+    @staticmethod
+    def _metric_value(result: dict[str, Any], metric: str) -> Any:
+        if metric == "totalTrades":
+            return result.get("tradeCount")
+        return result.get(metric)
 
 
 class OptimizationService:

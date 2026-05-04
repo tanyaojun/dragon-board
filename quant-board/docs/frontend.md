@@ -233,6 +233,18 @@ await window.quantBoardExportRankTrendGolden({
 
 这些字段用于复盘和排错，不改变 RankTrend 策略算法。
 
+Phase 6 起，报告页读取顺序固定为：
+
+1. 先调用 `GET /api/backtests/{run_id}` 或 `GET /api/backtests/{run_id}/report` 读取兼容摘要、请求参数和指标。
+2. 再调用 `GET /api/backtests/{run_id}/trades` 分页读取交易列表，字段来源是 `backtest_trades`。
+3. 调用 `GET /api/backtests/{run_id}/equity` 读取权益曲线，字段来源是 `backtest_equity_curve`。
+4. 调用 `GET /api/backtests/{run_id}/signals?tier=...&regime=...&limit=...&offset=...` 读取信号诊断，字段来源是 `backtest_signals`。
+5. 调用 `GET /api/backtests/{run_id}/quality` 读取质量报告，字段来源是 `backtest_quality_reports`。
+
+交易列表和信号诊断必须分开展示：交易列表只展示真实成交和持仓生命周期，不能用 `signals` 伪造成交；信号表用于解释候选分层、市场状态、过滤原因和风险。权益图只消费后端 API 数据，前端不得重算核心收益指标。
+
+归一化回测结果是 QuantBoard 后端 research SQLite 的 `local-only` 数据。前端只调用 QuantBoard API，不直连 SQLite 或 Supabase；Supabase 不作为报告页读取源，也不承担回测报告 failover。若新归一化端点返回 404 或结构化错误，页面应展示错误原因，并可保留旧报告摘要，但不得把缺失明细渲染成空成功状态。
+
 ## 优化页
 
 优化结果必须同时展示：
