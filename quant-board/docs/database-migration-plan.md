@@ -1,20 +1,25 @@
-# SQLite 主库与 Supabase 备份库并行实施计划
+# SQLite 热库、Parquet 冷归档与对象备份实施计划
 
-本文是 QuantBoard 存储迁移与备份同步的主计划。涉及 SQLite 主库、Supabase 备份库、快照入库、同步接口、API/CLI 合同或相关配置的改动，必须先对齐本文，再同步更新 [architecture.md](architecture.md)、[api-cli.md](api-cli.md)、[development-roadmap.md](development-roadmap.md) 和 [AI_COLLABORATION.md](AI_COLLABORATION.md)。
+本文是 QuantBoard 存储迁移、归档、备份同步的主计划。涉及 SQLite 主库、Parquet 归档、DuckDB 查询、R2/S3 对象备份、Supabase 兼容链、快照入库、同步接口、API/CLI 合同或相关配置的改动，必须先对齐本文，再同步更新 [architecture.md](architecture.md)、[api-cli.md](api-cli.md)、[development-roadmap.md](development-roadmap.md) 和 [AI_COLLABORATION.md](AI_COLLABORATION.md)。
 
 ## 目标结论
 
-- SQLite 采用双库边界：`quant_board_snapshots.db` 是长期快照事实库，`quant_board_research.db` 是回测、优化、Golden 和报告研究库。
-- Supabase 是后端专用快照备份库，只同步 `datasets`、四张快照事实表和轻量 `sync_outbox`，不直接暴露给 Vue 前端，也不作为常规查询的第一选择。
+- SQLite 采用双库边界：`quant_board_snapshots.db` 是快照热库与元数据索引库，`quant_board_research.db` 是回测、优化、Golden 和报告研究热库。
+- Parquet 是历史冷数据事实归档：历史 `snapshot_stock_rows`、`snapshot_sector_rows` 和回测 `trades/equity/signals` 可按 manifest 归档到 `data/archive/**`。
+- DuckDB 是后端只读归档查询引擎，用于在 SQLite 明细已清理时读取 Parquet，不提供任意 SQL API，也不暴露给 Vue 前端直连。
+- R2/S3 兼容对象存储是新的大体积异地备份主线，只上传 Parquet、`manifest.json` 和归档索引。
+- Supabase 降级为后端专用轻量兼容备份库，只同步 `datasets`、快照事实表和轻量 `sync_outbox`，不再扩展为大明细或研究结果云端备份主线。
 - 正常路径是先写 SQLite 快照事实库，提交成功后把同一份快照事实镜像到 Supabase。
 - SQLite 不可用时，`POST /api/snapshots/ingest` 已可在 Supabase 配置可写时临时落备份库并返回 `status=backup_only`；其他关键写入仍按各服务层能力逐步纳入 M3。
 - 读路径优先 SQLite；仅当 SQLite 不可用或本地缺失目标记录时，才尝试 Supabase 回退。
-- 所有同步、回退和恢复都必须保留快照事实的 `dataset_id`、`snapshot_id`、`snapshot_type` 和行级业务键；研究库继续保留 `strategy_version`、`config_hash`、`random_seed` 等可复现字段，但不进入 Supabase Free 备份目标。
+- 所有同步、回退、归档和恢复都必须保留快照事实的 `dataset_id`、`snapshot_id`、`snapshot_type` 和行级业务键；研究库继续保留 `strategy_version`、`config_hash`、`random_seed` 等可复现字段，研究明细进入 Parquet/R2，不进入 Supabase Free 备份目标。
 
 ## 非目标
 
 - 不把 Supabase 作为前端直连数据库。
 - 不把 Supabase 备份当作新的实时协作主库。
+- 不把 R2/S3 对象存储作为前端直连数据源。
+- 不提供用户可传入 SQL 的 DuckDB 查询接口。
 - 不在 Dragon Board 根项目新增回测或优化职责。
 - 不为了备份同步绕过数据质量门禁、Golden 校验或回测合同。
 - 不自动把优化结果写回 Dragon Board 默认参数。
@@ -31,6 +36,7 @@ QuantBoard 当前拆成两个 SQLite 库。旧单库 `quant_board.db` 只作为 
 - `snapshot_stock_rows`
 - `snapshot_sector_rows`
 - `sync_outbox`
+- `archive_manifests`
 
 研究库 `quant_board_research.db` 包括：
 
@@ -56,6 +62,8 @@ Supabase 备份库必须与快照事实库保持同构 schema。云端需要使�
 旧的 Supabase `snapshots` / payload 兼容方案已经废弃。云端不再使用 `quality_flags.kind=qb_dataset`、`qb_snapshot_bundle` 等业务枚举，也不再把 QuantBoard 明细塞进 `snapshots.payload`。如果 Supabase 仍只有旧 `snapshots`、`snapshot_frames`、`snapshot_stock_rows`、`snapshot_sector_rows` 四张非同构表，健康检查会报告缺失表，`push-backup` 不应视为可用。
 
 Supabase schema 不再包含回测、优化和 Golden 表，也不再对研究 JSON 做云端压缩备份。`backtest_runs`、`backtest_trades`、`backtest_equity_curve`、`backtest_signals`、`backtest_quality_reports`、优化和 Golden 都是 research SQLite `local-only` 数据，大型研究结果留在本地研究库或报告文件目录，避免挤占 Supabase Free 版容量。
+
+长期增长控制由 Parquet 归档承担：默认保留最近 90 个交易日的 SQLite 热数据，超过保留窗口的股票/板块明细可归档到 `quant-board/data/archive/snapshots/**`；回测 trades/equity/signals 可归档到 `quant-board/data/archive/research/**`。归档成功必须写入 `archive_manifests`，记录行数、sha256、字节数、本地路径、对象存储 key 和状态。归档校验失败时不得清理 SQLite 明细。
 
 研究库历史回测清理属于本地维护动作，不属于 Supabase 备份、pull/push 或 failover 合同。`DELETE /api/backtests/{run_id}`、`POST /api/storage/research-cleanup` 和 CLI `cleanup-research` 只能删除 `quant_board_research.db` 中的回测结果表，不能删除 `quant_board_snapshots.db` 的正式快照事实，也不能登记 `sync_outbox`。删除单个回测时必须先显式删除 `backtest_trades`、`backtest_equity_curve`、`backtest_signals`、`backtest_quality_reports`，最后删除 `backtest_runs`。
 
@@ -86,20 +94,58 @@ Supabase schema 不再包含回测、优化和 Golden 表，也不再对研究 J
 ```text
 Dragon Board 正式快照
   -> QuantBoard API/CLI
-  -> SQLite snapshot primary
-  -> Supabase snapshot backup
+  -> SQLite snapshot hot primary
+  -> Parquet archive
+  -> DuckDB archive read fallback
+  -> R2/S3 object backup
+  -> Supabase lightweight compatibility backup
 
 QuantBoard research
-  -> SQLite research local only
+  -> SQLite research hot DB
+  -> Parquet research archive
+  -> DuckDB archive read fallback
 ```
 
 职责边界：
 
 - Dragon Board 负责实时看板、正式快照生成和 TypeScript golden 导出。
 - QuantBoard API/CLI 负责导入、质量门禁、回测、优化、报告和同步编排。
-- SQLite 快照库保存标准化后的长期快照事实表。
-- SQLite research 库保存回测、优化、Golden 和报告索引，不污染快照库。
-- Supabase 只保存可恢复的快照事实备份，不承担常规低延迟分析查询，也不承担研究结果备份。
+- SQLite 快照库保存标准化后的近期热数据、frame/record 元数据和归档 manifest。
+- SQLite research 库保存回测、优化、Golden、报告索引和近期研究明细。
+- Parquet 保存历史冷明细，DuckDB 负责后端只读查询。
+- R2/S3 保存大体积归档文件的异地备份。
+- Supabase 只保留轻量兼容备份，不承担大体积归档或研究结果备份。
+
+## 归档与对象备份合同
+
+快照归档入口：
+
+- `POST /api/storage/archive/snapshots/preview`
+- `POST /api/storage/archive/snapshots`
+- CLI `archive-snapshots`
+
+研究归档入口：
+
+- `POST /api/storage/archive/research/preview`
+- `POST /api/storage/archive/research`
+- CLI `archive-research`
+
+恢复与校验入口：
+
+- `GET /api/storage/archive/manifests`
+- `POST /api/storage/archive/verify`
+- `POST /api/storage/archive/restore`
+- CLI `verify-archive`
+- CLI `restore-archive`
+
+自动归档默认关闭，由 `QUANT_BOARD_ARCHIVE_AUTO_ENABLED=true` 显式开启。自动归档每轮先 preview，单轮最多处理 `QUANT_BOARD_ARCHIVE_AUTO_MAX_PARTITIONS` 个分区，只归档早于最近 `QUANT_BOARD_ARCHIVE_RETENTION_TRADING_DAYS` 个交易日的数据。任何 manifest 冲突、Parquet 写入失败或校验失败都必须停止本轮，并且不得清理 SQLite 明细。
+
+对象备份入口：
+
+- `POST /api/storage/archive/smoke-object-backup`
+- CLI `smoke-object-backup`
+
+R2/S3 凭据只允许后端读取，不得进入 `VITE_*` 或 Vue 前端构建产物。
 
 ## 写入合同
 

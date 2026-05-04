@@ -9,6 +9,7 @@ from backend.core.backtest import BacktestEngine, normalize_strategy_name
 from backend.data.models import BacktestRun, GoldenRankTrendCase, OptimizationRun
 from backend.data.quality_gate import evaluate_snapshot_quality
 from backend.data.json_codec import dumps_json_field, loads_json_field
+from backend.data.database import SessionLocal
 from backend.data.repository import Repository
 from backend.optimization.jobs import submit_optimization_job
 from backend.optimization.runner import OptimizationRunner
@@ -229,18 +230,40 @@ class BacktestService:
         if not self.repo.get_backtest_run(run_id):
             return None
         self._validate_pagination(limit, offset)
+        items = self.repo.get_backtest_trades(run_id, limit=limit, offset=offset)
+        source = "sqlite"
+        total = self.repo.count_backtest_trades(run_id)
+        if not items and total == 0:
+            from backend.data.archive.service import ArchiveService
+
+            archive = ArchiveService(SessionLocal())
+            archived = archive.query_archived_research_table(run_id, "trades", limit=limit, offset=offset)
+            if archived:
+                items = archived
+                total = archive.count_archived_research_table(run_id, "trades")
+                source = "parquet_archive"
         return {
             "runId": run_id,
-            "items": self.repo.get_backtest_trades(run_id, limit=limit, offset=offset),
+            "items": items,
             "limit": limit,
             "offset": offset,
-            "total": self.repo.count_backtest_trades(run_id),
+            "total": total,
+            "source": source,
         }
 
     def get_equity(self, run_id: str) -> dict[str, Any] | None:
         if not self.repo.get_backtest_run(run_id):
             return None
-        return {"runId": run_id, "items": self.repo.get_backtest_equity_curve(run_id)}
+        items = self.repo.get_backtest_equity_curve(run_id)
+        source = "sqlite"
+        if not items:
+            from backend.data.archive.service import ArchiveService
+
+            archived = ArchiveService(SessionLocal()).query_archived_research_table(run_id, "equity_curve")
+            if archived:
+                items = archived
+                source = "parquet_archive"
+        return {"runId": run_id, "items": items, "source": source}
 
     def get_signals(
         self,
@@ -253,13 +276,33 @@ class BacktestService:
         if not self.repo.get_backtest_run(run_id):
             return None
         self._validate_pagination(limit, offset)
+        items = self.repo.get_backtest_signals(run_id, limit=limit, offset=offset, tier=tier, regime=regime)
+        total = self.repo.count_backtest_signals(run_id, tier=tier, regime=regime)
+        source = "sqlite"
+        if not items and total == 0:
+            from backend.data.archive.service import ArchiveService
+
+            filters = {"candidateTier": tier, "regime": regime}
+            archive = ArchiveService(SessionLocal())
+            archived = archive.query_archived_research_table(
+                run_id,
+                "signals",
+                limit=limit,
+                offset=offset,
+                filters=filters,
+            )
+            if archived:
+                items = archived
+                total = archive.count_archived_research_table(run_id, "signals", filters=filters)
+                source = "parquet_archive"
         return {
             "runId": run_id,
-            "items": self.repo.get_backtest_signals(run_id, limit=limit, offset=offset, tier=tier, regime=regime),
+            "items": items,
             "filters": {"tier": tier, "regime": regime},
             "limit": limit,
             "offset": offset,
-            "total": self.repo.count_backtest_signals(run_id, tier=tier, regime=regime),
+            "total": total,
+            "source": source,
         }
 
     def get_quality(self, run_id: str) -> dict[str, Any] | None:

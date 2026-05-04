@@ -22,6 +22,16 @@ SQLite 快照模块采用一套“原始事实表 + 正式读模型表”的结�
   - 一条快照中的一个板块/题材/主线实体一行。
 - `snapshot_projection_meta`
   - 保存投影回填状态和维护水位。
+- `archive_manifests`
+  - QuantBoard 后端维护的 Parquet 归档索引。
+  - 当历史 `snapshot_stock_rows / snapshot_sector_rows` 被归档后，后端可通过 DuckDB 从 Parquet 读取冷数据。
+
+当前长期增长控制口径：
+
+- SQLite 保留近期热数据和 frame/record 元数据。
+- 历史股票/板块明细可归档到 `quant-board/data/archive/snapshots/**` 的 Parquet 文件。
+- R2/S3 对象存储用于备份 Parquet 和 manifest，不作为 Dragon Board 前端直连数据源。
+- Dragon Board 前端仍只调用 QuantBoard API；Parquet、DuckDB、R2 都属于后端实现细节。
 
 ## 正式读取口径
 正式读取统一遵循 [readPolicy.ts](/D:/dragon-board/src/services/snapshot/readPolicy.ts)：

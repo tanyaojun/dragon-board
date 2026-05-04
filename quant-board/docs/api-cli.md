@@ -31,8 +31,76 @@ Invoke-RestMethod http://127.0.0.1:8000/api/health
 - `mode`：当前为 `sqlite_primary_supabase_backup`。
 - `outbox`：待补偿同步队列摘要；字段以当前后端实现为准。
 - `autoSync`：自动 outbox 推送状态、间隔、批量大小和最近一次结果。
+- `archive.autoArchive`：自动归档状态、间隔、批量上限和最近一次结果。
+- `archive.objectBackup`：R2/S3 对象备份是否启用、bucket 是否已配置。
 
 目标合同：健康检查必须能让调用方判断主库、备份库、读回退和补偿同步是否可用。新增或改名字段时，必须同批更新本文和 [database-migration-plan.md](database-migration-plan.md)。
+
+## Parquet 归档与 DuckDB 查询
+
+### `POST /api/storage/archive/snapshots/preview`
+
+预览快照明细归档，不写 Parquet，不清理 SQLite。
+
+```json
+{
+  "datasetId": "dragonboard_live",
+  "snapshotType": "half_hour",
+  "beforeTradingDate": "2026-01-01",
+  "maxPartitions": 5
+}
+```
+
+### `POST /api/storage/archive/snapshots`
+
+执行快照明细归档。成功写出 `records.parquet`、`frames.parquet`、`stock_rows.parquet`、`sector_rows.parquet` 和 `manifest.json`，并登记 `archive_manifests`。校验成功后只清理 SQLite 中对应 `dataset_id + snapshot_type + trading_date` 的 `snapshot_stock_rows` 和 `snapshot_sector_rows`；`snapshot_records` 和 `snapshot_frames` 保留。
+
+CLI 等价命令：
+
+```powershell
+python -m backend.cli archive-snapshots --dataset-id dragonboard_live --snapshot-type half_hour --before-trading-date 2026-01-01 --dry-run
+python -m backend.cli archive-snapshots --dataset-id dragonboard_live --snapshot-type half_hour --before-trading-date 2026-01-01 --apply
+```
+
+### `POST /api/storage/archive/research/preview`
+
+预览回测研究明细归档。
+
+### `POST /api/storage/archive/research`
+
+执行回测研究明细归档。写出 `trades.parquet`、`equity_curve.parquet`、`signals.parquet` 和 `manifest.json`，保留 `backtest_runs` 和质量报告，校验后可清理 research SQLite 中的明细行。
+
+CLI 等价命令：
+
+```powershell
+python -m backend.cli archive-research --older-than-days 30 --keep-latest-per-group 10 --dry-run
+python -m backend.cli archive-research --older-than-days 30 --keep-latest-per-group 10 --apply
+```
+
+### `GET /api/storage/archive/manifests`
+
+列出归档 manifest。可选 `scope=snapshots|research`。
+
+### `POST /api/storage/archive/restore`
+
+按 `archiveId` 从本地 Parquet 恢复 SQLite 明细。
+
+```json
+{
+  "archiveId": "snapshots_dragonboard_live_half_hour_2026-01-01",
+  "apply": true
+}
+```
+
+### `POST /api/storage/archive/auto-once`
+
+手动执行一轮自动归档同口径任务。自动归档默认关闭，开启需配置 `QUANT_BOARD_ARCHIVE_AUTO_ENABLED=true`。
+
+### `POST /api/storage/archive/smoke-object-backup`
+
+R2/S3 对象备份探针。写入、读回并删除一个明确测试 object key。不会写 SQLite 业务数据。
+
+读取口径：`GET /api/snapshots/stock-rows`、`GET /api/snapshots/sector-rows`、`GET /api/backtests/{run_id}/trades`、`/equity`、`/signals` 在 SQLite 明细缺失且存在 verified/uploaded manifest 时，可通过 DuckDB 读取 Parquet，并返回 `source=parquet_archive` 或混合来源。前端不得传入 SQL。
 
 ### `POST /api/sync/push-backup`
 

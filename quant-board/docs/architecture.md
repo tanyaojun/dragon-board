@@ -54,23 +54,27 @@ backend/
    - 输入：research SQLite 中的 `backtest_runs`、`optimization_runs`、报告 JSON。
    - 输出：API、CLI、前端图表。
 
-## 本地主库与 Supabase 备份库
+## 本地热库、Parquet 归档与对象备份
 
 本节只描述架构边界。详细实施步骤、同步接口、恢复流程、冲突策略和验收清单统一维护在 [database-migration-plan.md](database-migration-plan.md)。
 
-当前数据库模式是本地双库加云端快照备份库：
+当前数据库模式是本地双库、Parquet 冷归档、DuckDB 只读查询和对象存储备份：
 
 ```text
-QuantBoard API/CLI -> SQLite snapshot primary -> Supabase snapshot backup
-QuantBoard API/CLI -> SQLite research local only
+QuantBoard API/CLI -> SQLite snapshot hot primary -> Parquet snapshot archive -> DuckDB read fallback -> R2/S3 object backup
+QuantBoard API/CLI -> SQLite research hot DB -> Parquet research archive -> DuckDB read fallback
+Supabase remains a lightweight compatibility backup for snapshot facts
 ```
 
 规则：
 
-- `quant_board_snapshots.db` 是默认快照主库，负责正式快照即时写入和低延迟读取。
-- `quant_board_research.db` 是本地研究库，负责回测、优化、Golden、报告索引和回测归一化结果明细。
+- `quant_board_snapshots.db` 是默认快照热库，负责正式快照即时写入、近期低延迟读取、frame/record 元数据和 `archive_manifests`。
+- `quant_board_research.db` 是本地研究热库，负责回测、优化、Golden、报告索引和近期回测归一化结果明细。
+- `data/archive/**` 保存 Parquet 冷归档，默认使用 zstd 压缩。
+- DuckDB 只在后端读取 Parquet，不提供任意 SQL API，也不暴露给 Vue 前端。
+- R2/S3 兼容对象存储保存 Parquet 和 manifest 的异地备份。
 - 旧 `quant_board.db` 只作为 legacy source 保留，用于 `migrate-legacy-db` 拆分迁移；它不再是默认主库。
-- Supabase 不暴露给 Vue 前端，只由后端使用 `SUPABASE_URL` 和 `SUPABASE_SECRET_KEY` 访问。
+- Supabase 不暴露给 Vue 前端，只由后端使用 `SUPABASE_URL` 和 `SUPABASE_SECRET_KEY` 访问；它是轻量兼容备份，不是大体积历史主线。
 - 正常快照写入先提交 SQLite 快照库，再把同一份快照事实镜像到 Supabase。
 - 快照库写入成功后会登记轻量 `sync_outbox`，即使 Supabase 当次不可用，也能通过 `push-backup` 按事实表实时组包补偿；outbox 只覆盖快照事实和数据集 bundle。
 - SQLite 初始化或查询失败时，读路径会回退到 Supabase 备份记录。
@@ -88,7 +92,11 @@ QuantBoard API/CLI -> SQLite research local only
 
 Supabase 备份库必须使用快照事实库同构 schema，不再使用旧 `snapshots.payload` 兼容方案。云端 schema 由 [../backend/data/supabase_schema.sql](../backend/data/supabase_schema.sql) 维护，只包含 `datasets`、`snapshot_*` 和 `sync_outbox`。健康检查会逐表检查这些快照备份表是否可读；缺表时不得继续把备份链路视为可用。
 
-回测、优化和 Golden 不再作为 Supabase Free 版备份目标。`backtest_runs`、`backtest_trades`、`backtest_equity_curve`、`backtest_signals`、`backtest_quality_reports` 等研究结果表都是 `local-only`，大型研究结果留在 research SQLite 或报告文件目录，避免重新把快照事实和研究明细混在同一个库里。
+回测、优化和 Golden 不再作为 Supabase Free 版备份目标。`backtest_trades`、`backtest_equity_curve`、`backtest_signals` 等大型研究明细可归档到 Parquet，并通过 DuckDB fallback 读取；`backtest_runs`、质量报告和摘要继续留在 research SQLite。
+
+### archive_manifests
+
+保存 Parquet 归档索引。每条记录对应一个快照分区或一个回测 run，包含 `archive_id`、`scope`、`dataset_id`、`snapshot_type`、`trading_date`、`run_id`、`local_path`、`object_key`、`status`、行数、文件 hash、字节数和错误信息。恢复、DuckDB 查询和 R2 上传都以该表为入口。
 
 Dragon Board 前端 `DataLayer` 对外字段不随迁移删改。正式快照写入先查询 SQLite 是否已有同一 `snapshot_id`，缺失时通过 `POST /api/snapshots/ingest` 落 SQLite；后端再按 `dataset_id + snapshot_id` 做逻辑幂等，重复槽位不会覆盖既有事实行。正式读取走 SQLite API，返回仍是 `SnapshotRecord`、`SnapshotFrameBundle`、`SnapshotStockRow`、`SnapshotSectorRow` 的现有 camelCase 字段。IndexedDB 快照缓存默认关闭，只保留历史迁移源和显式缓存用途；`five_minute` 浏览器本地入口不再保留。
 

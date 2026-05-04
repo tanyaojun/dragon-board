@@ -9,6 +9,9 @@ from typing import Any
 
 from backend.data.database import SessionLocal, init_db
 from backend.data.backup_sync import BackupSyncService
+from backend.data.archive.auto_archive import run_archive_auto_once
+from backend.data.archive.object_store import get_object_backup_store
+from backend.data.archive.service import ArchiveService
 from backend.data.dataset_service import DatasetService
 from backend.data.json_compaction import compact_json_fields
 from backend.data.legacy_split_migration import migrate_legacy_db
@@ -159,6 +162,79 @@ def cmd_compact_json_fields(args: argparse.Namespace) -> None:
         for target in targets
     ]
     print_json({"ok": all(item.get("ok") for item in results), "databases": results})
+
+
+def cmd_archive_snapshots(args: argparse.Namespace) -> None:
+    init_db()
+    with SessionLocal() as session:
+        print_json(
+            ArchiveService(session).archive_snapshots(
+                dataset_id=args.dataset_id,
+                snapshot_type=args.snapshot_type,
+                before_trading_date=args.before_trading_date,
+                dry_run=bool(args.dry_run),
+                apply=bool(args.apply),
+                max_partitions=args.max_partitions,
+            )
+        )
+
+
+def cmd_archive_research(args: argparse.Namespace) -> None:
+    init_db()
+    with SessionLocal() as session:
+        print_json(
+            ArchiveService(session).archive_research(
+                run_id=args.run_id,
+                older_than_days=args.older_than_days,
+                keep_latest_per_group=args.keep_latest_per_group,
+                dry_run=bool(args.dry_run),
+                apply=bool(args.apply),
+            )
+        )
+
+
+def cmd_verify_archive(args: argparse.Namespace) -> None:
+    init_db()
+    with SessionLocal() as session:
+        manifest = ArchiveService(session).get_manifest(args.archive_id)
+        print_json({"ok": bool(manifest), "archiveId": args.archive_id, "status": manifest.status if manifest else "missing"})
+
+
+def cmd_restore_archive(args: argparse.Namespace) -> None:
+    init_db()
+    with SessionLocal() as session:
+        print_json(ArchiveService(session).restore_archive(args.archive_id, dry_run=bool(args.dry_run), apply=bool(args.apply)))
+
+
+def cmd_archive_auto_once(args: argparse.Namespace) -> None:
+    init_db()
+    print_json(run_archive_auto_once(args.limit))
+
+
+def cmd_smoke_object_backup(_: argparse.Namespace) -> None:
+    store = get_object_backup_store()
+    if not store:
+        print_json({"ok": False, "configured": False, "error": "object backup bucket is not configured"})
+        return
+    print_json(store.smoke_test())
+
+
+def cmd_push_archive_backup(args: argparse.Namespace) -> None:
+    init_db()
+    with SessionLocal() as session:
+        result = ArchiveService(session).push_archive_backup(limit=args.limit)
+        print_json(result)
+
+
+def cmd_pull_archive_backup(args: argparse.Namespace) -> None:
+    init_db()
+    with SessionLocal() as session:
+        result = ArchiveService(session).pull_archive_backup(
+            args.archive_id,
+            dry_run=bool(args.dry_run),
+            apply=bool(args.apply),
+        )
+        print_json(result)
 
 
 def cmd_verify_snapshot_migration(args: argparse.Namespace) -> None:
@@ -401,6 +477,50 @@ def build_parser() -> argparse.ArgumentParser:
     compact_cmd.add_argument("--apply", action="store_true")
     compact_cmd.add_argument("--vacuum", action="store_true")
     compact_cmd.set_defaults(func=cmd_compact_json_fields)
+
+    archive_snapshots_cmd = sub.add_parser("archive-snapshots", help="Archive SQLite snapshot detail rows to Parquet")
+    archive_snapshots_cmd.add_argument("--dataset-id", default="dragonboard_live")
+    archive_snapshots_cmd.add_argument("--snapshot-type", default="half_hour")
+    archive_snapshots_cmd.add_argument("--before-trading-date", required=True)
+    archive_snapshots_cmd.add_argument("--max-partitions", type=int, default=None)
+    archive_snapshots_cmd.add_argument("--dry-run", action="store_true")
+    archive_snapshots_cmd.add_argument("--apply", action="store_true")
+    archive_snapshots_cmd.set_defaults(func=cmd_archive_snapshots)
+
+    archive_research_cmd = sub.add_parser("archive-research", help="Archive research detail rows to Parquet")
+    archive_research_cmd.add_argument("--run-id", default=None)
+    archive_research_cmd.add_argument("--older-than-days", type=int, default=30)
+    archive_research_cmd.add_argument("--keep-latest-per-group", type=int, default=10)
+    archive_research_cmd.add_argument("--dry-run", action="store_true")
+    archive_research_cmd.add_argument("--apply", action="store_true")
+    archive_research_cmd.set_defaults(func=cmd_archive_research)
+
+    verify_archive_cmd = sub.add_parser("verify-archive", help="Verify a Parquet archive manifest")
+    verify_archive_cmd.add_argument("--archive-id", required=True)
+    verify_archive_cmd.set_defaults(func=cmd_verify_archive)
+
+    restore_archive_cmd = sub.add_parser("restore-archive", help="Restore a Parquet archive into SQLite")
+    restore_archive_cmd.add_argument("--archive-id", required=True)
+    restore_archive_cmd.add_argument("--dry-run", action="store_true")
+    restore_archive_cmd.add_argument("--apply", action="store_true")
+    restore_archive_cmd.set_defaults(func=cmd_restore_archive)
+
+    archive_auto_cmd = sub.add_parser("archive-auto-once", help="Run one automatic archive cycle")
+    archive_auto_cmd.add_argument("--limit", type=int, default=None)
+    archive_auto_cmd.set_defaults(func=cmd_archive_auto_once)
+
+    smoke_object_cmd = sub.add_parser("smoke-object-backup", help="Run R2/S3 object backup smoke test")
+    smoke_object_cmd.set_defaults(func=cmd_smoke_object_backup)
+
+    push_archive_cmd = sub.add_parser("push-archive-backup", help="Push local Parquet archives to R2/S3 object storage")
+    push_archive_cmd.add_argument("--limit", type=int, default=None)
+    push_archive_cmd.set_defaults(func=cmd_push_archive_backup)
+
+    pull_archive_cmd = sub.add_parser("pull-archive-backup", help="Pull Parquet archives from R2/S3 into local storage")
+    pull_archive_cmd.add_argument("--archive-id", required=True)
+    pull_archive_cmd.add_argument("--dry-run", action="store_true")
+    pull_archive_cmd.add_argument("--apply", action="store_true")
+    pull_archive_cmd.set_defaults(func=cmd_pull_archive_backup)
 
     verify_cmd = sub.add_parser("verify-snapshot-migration", help="Verify migrated snapshot row counts")
     verify_cmd.add_argument("--dataset-id", required=True)

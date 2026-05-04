@@ -11,6 +11,9 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 
 from backend.data.auto_sync import auto_sync_runner, run_outbox_auto_sync_once
+from backend.data.archive.auto_archive import archive_auto_runner, run_archive_auto_once
+from backend.data.archive.object_store import get_object_backup_store
+from backend.data.archive.service import ArchiveService
 from backend.data.backup_sync import BackupSyncService
 from backend.data.database import get_db, init_db, primary_status
 from backend.data.dataset_service import DatasetService
@@ -49,11 +52,13 @@ app.add_middleware(
 def on_startup() -> None:
     init_db()
     auto_sync_runner.start()
+    archive_auto_runner.start()
 
 
 @app.on_event("shutdown")
 async def on_shutdown() -> None:
     await auto_sync_runner.stop()
+    await archive_auto_runner.stop()
 
 
 @app.get("/api/health")
@@ -73,6 +78,17 @@ def health_check(deep: bool = False, db: Session | None = Depends(get_db)) -> di
             "mode": "sqlite_primary_supabase_backup",
             "outbox": Repository(db, enable_backup=False).outbox_status() if db is not None else None,
             "autoSync": auto_sync_runner.status(),
+        },
+        "archive": {
+            "dir": str(get_settings().archive_dir),
+            "retentionTradingDays": get_settings().archive_retention_trading_days,
+            "parquetCompression": get_settings().archive_parquet_compression,
+            "autoArchive": archive_auto_runner.status(),
+            "objectBackup": {
+                "enabled": get_settings().object_backup_enabled,
+                "bucketConfigured": bool(get_settings().object_backup_bucket),
+                "provider": "r2",
+            },
         },
     }
 
@@ -98,6 +114,11 @@ def push_outbox(limit: int | None = None, db: Session | None = Depends(get_db)) 
 @app.post("/api/sync/auto-once")
 def run_auto_sync_once(limit: int | None = None) -> dict[str, Any]:
     return run_outbox_auto_sync_once(limit)
+
+
+@app.post("/api/storage/archive/auto-once")
+def run_archive_auto_once_api(limit: int | None = None) -> dict[str, Any]:
+    return run_archive_auto_once(limit)
 
 
 @app.post("/api/sync/smoke-backup")
@@ -330,7 +351,7 @@ def list_snapshot_stock_rows(
     _assert_snapshot_sort(sort)
     repo = Repository(db, enable_backup=False)
     resolved_dataset_id, dataset = _resolve_snapshot_dataset(repo, dataset_id)
-    rows = repo.list_snapshot_stock_rows(
+    result = repo.list_snapshot_stock_rows(
         resolved_dataset_id,
         snapshot_id=snapshot_id,
         snapshot_type=snapshot_type,
@@ -351,9 +372,9 @@ def list_snapshot_stock_rows(
         "ok": True,
         "dataset": Repository.dataset_to_dict(dataset),
         "datasetId": resolved_dataset_id,
-        "rows": rows,
-        "count": len(rows),
-        "source": "sqlite",
+        "rows": result["rows"],
+        "count": len(result["rows"]),
+        "source": result["source"],
     }
 
 
@@ -382,7 +403,7 @@ def list_snapshot_sector_rows(
     _assert_snapshot_sort(sort)
     repo = Repository(db, enable_backup=False)
     resolved_dataset_id, dataset = _resolve_snapshot_dataset(repo, dataset_id)
-    rows = repo.list_snapshot_sector_rows(
+    result = repo.list_snapshot_sector_rows(
         resolved_dataset_id,
         snapshot_id=snapshot_id,
         snapshot_type=snapshot_type,
@@ -404,9 +425,9 @@ def list_snapshot_sector_rows(
         "ok": True,
         "dataset": Repository.dataset_to_dict(dataset),
         "datasetId": resolved_dataset_id,
-        "rows": rows,
-        "count": len(rows),
-        "source": "sqlite",
+        "rows": result["rows"],
+        "count": len(result["rows"]),
+        "source": result["source"],
     }
 
 
@@ -427,6 +448,110 @@ def get_snapshot_counts(
         "counts": counts,
         "source": "sqlite",
     }
+
+
+@app.post("/api/storage/archive/snapshots/preview")
+def preview_snapshot_archive(payload: dict[str, Any], db: Session | None = Depends(get_db)) -> dict[str, Any]:
+    if db is None:
+        raise HTTPException(status_code=503, detail="primary database is unavailable")
+    return ArchiveService(db).archive_snapshots(
+        dataset_id=str(payload.get("datasetId") or payload.get("dataset_id") or "dragonboard_live"),
+        snapshot_type=str(payload.get("snapshotType") or payload.get("snapshot_type") or "half_hour"),
+        before_trading_date=str(payload.get("beforeTradingDate") or payload.get("before_trading_date") or ""),
+        dry_run=True,
+        max_partitions=payload.get("maxPartitions") or payload.get("max_partitions"),
+    )
+
+
+@app.post("/api/storage/archive/snapshots")
+def archive_snapshots(payload: dict[str, Any], db: Session | None = Depends(get_db)) -> dict[str, Any]:
+    if db is None:
+        raise HTTPException(status_code=503, detail="primary database is unavailable")
+    return ArchiveService(db).archive_snapshots(
+        dataset_id=str(payload.get("datasetId") or payload.get("dataset_id") or "dragonboard_live"),
+        snapshot_type=str(payload.get("snapshotType") or payload.get("snapshot_type") or "half_hour"),
+        before_trading_date=str(payload.get("beforeTradingDate") or payload.get("before_trading_date") or ""),
+        apply=True,
+        max_partitions=payload.get("maxPartitions") or payload.get("max_partitions"),
+    )
+
+
+@app.post("/api/storage/archive/research/preview")
+def preview_research_archive(payload: dict[str, Any], db: Session | None = Depends(get_db)) -> dict[str, Any]:
+    if db is None:
+        raise HTTPException(status_code=503, detail="primary database is unavailable")
+    return ArchiveService(db).archive_research(
+        run_id=payload.get("runId") or payload.get("run_id"),
+        older_than_days=int(payload.get("olderThanDays") or payload.get("older_than_days") or 30),
+        keep_latest_per_group=int(payload.get("keepLatestPerGroup") or payload.get("keep_latest_per_group") or 10),
+        dry_run=True,
+    )
+
+
+@app.post("/api/storage/archive/research")
+def archive_research(payload: dict[str, Any], db: Session | None = Depends(get_db)) -> dict[str, Any]:
+    if db is None:
+        raise HTTPException(status_code=503, detail="primary database is unavailable")
+    return ArchiveService(db).archive_research(
+        run_id=payload.get("runId") or payload.get("run_id"),
+        older_than_days=int(payload.get("olderThanDays") or payload.get("older_than_days") or 30),
+        keep_latest_per_group=int(payload.get("keepLatestPerGroup") or payload.get("keep_latest_per_group") or 10),
+        apply=True,
+    )
+
+
+@app.get("/api/storage/archive/manifests")
+def list_archive_manifests(scope: str | None = None, db: Session | None = Depends(get_db)) -> dict[str, Any]:
+    if db is None:
+        raise HTTPException(status_code=503, detail="primary database is unavailable")
+    manifests = ArchiveService(db).list_manifests(scope=scope)
+    return {"ok": True, "manifests": manifests, "count": len(manifests)}
+
+
+@app.post("/api/storage/archive/verify")
+def verify_archive(payload: dict[str, Any], db: Session | None = Depends(get_db)) -> dict[str, Any]:
+    if db is None:
+        raise HTTPException(status_code=503, detail="primary database is unavailable")
+    archive_id = str(payload.get("archiveId") or payload.get("archive_id") or "")
+    manifest = ArchiveService(db).get_manifest(archive_id)
+    return {"ok": bool(manifest), "archiveId": archive_id, "status": manifest.status if manifest else "missing"}
+
+
+@app.post("/api/storage/archive/restore")
+def restore_archive(payload: dict[str, Any], db: Session | None = Depends(get_db)) -> dict[str, Any]:
+    if db is None:
+        raise HTTPException(status_code=503, detail="primary database is unavailable")
+    return ArchiveService(db).restore_archive(
+        str(payload.get("archiveId") or payload.get("archive_id") or ""),
+        dry_run=bool(payload.get("dryRun") or payload.get("dry_run")),
+        apply=bool(payload.get("apply")),
+    )
+
+
+@app.post("/api/storage/archive/smoke-object-backup")
+def smoke_object_backup() -> dict[str, Any]:
+    store = get_object_backup_store()
+    if not store:
+        return {"ok": False, "configured": False, "error": "object backup bucket is not configured"}
+    return store.smoke_test()
+
+
+@app.post("/api/storage/archive/push-backup")
+def push_archive_backup(limit: int | None = None, db: Session | None = Depends(get_db)) -> dict[str, Any]:
+    if db is None:
+        raise HTTPException(status_code=503, detail="primary database is unavailable")
+    return ArchiveService(db).push_archive_backup(limit=limit)
+
+
+@app.post("/api/storage/archive/pull-backup")
+def pull_archive_backup(payload: dict[str, Any], db: Session | None = Depends(get_db)) -> dict[str, Any]:
+    if db is None:
+        raise HTTPException(status_code=503, detail="primary database is unavailable")
+    return ArchiveService(db).pull_archive_backup(
+        str(payload.get("archiveId") or payload.get("archive_id") or ""),
+        dry_run=bool(payload.get("dryRun") or payload.get("dry_run")),
+        apply=bool(payload.get("apply")),
+    )
 
 
 @app.post("/api/migrations/snapshots/import-json")

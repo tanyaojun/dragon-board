@@ -326,6 +326,33 @@ class OptimizationRun(ResearchBase):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class ArchiveManifestModel(Base):
+    __tablename__ = "archive_manifests"
+    __table_args__ = (
+        UniqueConstraint("archive_id"),
+        Index("ix_archive_manifests_scope_status", "scope", "status"),
+        Index("ix_archive_manifests_dataset_type_date", "dataset_id", "snapshot_type", "trading_date"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    archive_id: Mapped[str] = mapped_column(String(240), nullable=False)
+    scope: Mapped[str] = mapped_column(String(32), index=True)
+    dataset_id: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    snapshot_type: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True)
+    trading_date: Mapped[str | None] = mapped_column(String(16), index=True, nullable=True)
+    run_id: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    local_path: Mapped[str] = mapped_column(Text, default="")
+    object_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(32), index=True, default="local_written")
+    row_counts_json: Mapped[str] = mapped_column(Text, default="{}")
+    file_hashes_json: Mapped[str] = mapped_column(Text, default="{}")
+    byte_size: Mapped[int] = mapped_column(Integer, default=0)
+    schema_version: Mapped[str] = mapped_column(String(32), default="archive.v1")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    uploaded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
 RESEARCH_JSON_FIELD_MAP = {
     GoldenRankTrendCase: ("input_json", "expected_json"),
     BacktestRun: ("request_json", "result_json"),

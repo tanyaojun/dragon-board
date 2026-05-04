@@ -122,6 +122,25 @@ npm run build
 - 每个阶段都要有明确验收命令。
 - 不把无关重构混入计划。
 
+### 3.3 计划落盘
+
+当前本机未安装名为 `Planning with Files` 的独立 skill。遇到需要计划落盘的任务时，先使用 `superpowers:writing-plans`，再把长期计划、阶段状态和验收清单写入文件，避免上下文压缩、会话中断或多轮协作后丢失状态。
+安装地址：https://github.com/OthmanAdi/planning-with-files/tree/master/.codex
+
+典型场景：
+
+- 任务横跨根前端、QuantBoard 后端、数据库/API 文档或多轮实现。
+- 需要分阶段推进 RankTrend golden、快照入库迁移、优化任务主链或 UI 工作台改造。
+- 用户希望暂停后继续，或者后续可能由不同 agent 接手。
+- 计划中包含多个验收命令、风险项和回退点。
+
+使用要求：
+
+- 计划文件应放在合适文档目录，根项目放 `docs/`，QuantBoard 任务放 `quant-board/docs/`。
+- 文件内容至少包含目标、范围、影响文件、阶段清单、验证命令、当前状态和未决问题。
+- 更新计划时只改对应计划文件，不在根目录新增一次性草稿。
+- 文件计划不能替代源码、测试和专题文档；合同变化仍要同步正式文档。
+
 ## 4. Review Skills
 
 ### 4.1 `superpowers:receiving-code-review`
@@ -157,18 +176,56 @@ npm run build
 - Critical 和 Important 问题必须处理或说明原因。
 - Review 不能替代测试，最终仍要执行 `verification-before-completion`。
 
-## 5. Git 和 GitHub 仓库管理
+### 4.3 多视角 Code Review
+
+当前本机未安装名为 `Code Review` 的独立 skill。较大改动后优先使用 `superpowers:requesting-code-review`；如果用户明确允许并行 agent 审查，再结合可用的子 agent 做多视角审查。若工具支持置信度过滤，应优先处理高置信度、高影响面问题，避免被低置信度假阳性牵着走。
+安装地址：https://github.com/tirth8205/code-review-graph/tree/main/code-review-graph-vscode
+
+典型场景：
+
+- RankTrend、快照、QuantBoard、存储/API 或质量门禁出现多文件改动。
+- UI 面板、服务 facade、后端 API、文档合同同时变化。
+- 准备提交 PR、合并分支或交付复杂功能前。
+
+使用要求：
+
+- Review 输入必须包含需求、diff 范围、关键业务约束和已运行验证命令。
+- 问题按 Critical、Important、Minor 处理；Critical 和 Important 不应跳过。
+- 对不符合项目事实的 review 建议，使用 `receiving-code-review` 的原则验证和反驳。
+- Code Review 只审查质量，不替代 `verification-before-completion`。
+
+## 5. 实现后整理 Skills
+
+### 5.1 实现后简化
+
+当前本机未安装名为 `Code Simplifier` 的独立 skill。代码实现完成、测试通过后，可以按本节规则做一次人工简化检查，确认是否存在可以安全简化的重复逻辑、过长函数或局部复杂度。
+
+典型场景：
+
+- 同一模块内出现重复的字段映射、边界判断、格式转换或错误处理。
+- 新功能为赶进度写出临时分支逻辑，需要回看是否能收束。
+- 测试已经覆盖关键行为，可以安全做小范围整理。
+
+使用要求：
+
+- 只能合并真实重复、稳定重复的逻辑；不要为了抽象而抽象。
+- 不跨业务边界抽象，例如不要把 RankTrend、快照、QuantBoard 回测的不同口径强行合成一个通用函数。
+- 不把业务配置、默认参数或主题配置移动到不符合 `AGENTS.md` 目录职责的位置。
+- 简化后必须重新运行受影响测试和类型检查。
+
+## 6. Git 和 GitHub 仓库管理
 
 Git/GitHub 操作必须先遵守 `AGENTS.md` 的工作区保护规则：不回滚用户改动、不使用破坏性 Git 命令、不批量删除文件或目录。
 
-### 5.1 推荐使用的 Skills
+### 6.1 推荐使用的 Skills
 
 - 提交或 PR 前：使用 `superpowers:verification-before-completion`，先运行能证明改动正确的验证命令。
 - 大改动准备合并前：使用 `superpowers:requesting-code-review`，审查 diff、需求符合度和潜在回归。
+- 多 agent 或多视角审查：优先使用 `superpowers:requesting-code-review`，必要时在用户允许后结合可用子 agent 审查，聚焦高置信度、高影响面问题。
 - 处理 PR review 或外部建议：使用 `superpowers:receiving-code-review`，先验证建议是否符合本项目架构和业务边界。
 - 合并、收尾或分支清理：可按需使用 `superpowers:finishing-a-development-branch`，但必须先确认用户希望我执行 GitHub/分支操作。
 
-### 5.2 允许的常规 Git 检查
+### 6.2 允许的常规 Git 检查
 
 ```powershell
 git status --short
@@ -181,7 +238,7 @@ git remote -v
 
 这些命令只用于了解工作区、diff 和远端状态。发现无关改动时默认视为用户或其他协作者的内容，不覆盖、不格式化、不回滚。
 
-### 5.3 提交前检查
+### 6.3 提交前检查
 
 提交前至少确认：
 
@@ -199,7 +256,7 @@ git commit -m "<type>: <简短说明>"
 
 不要使用会把所有改动一并纳入的命令，除非用户明确要求并且已确认工作区没有无关改动。
 
-### 5.4 禁止或需先确认的操作
+### 6.4 禁止或需先确认的操作
 
 - 禁止使用 `git reset --hard`、`git checkout -- <path>` 等会回滚文件的命令，除非用户明确要求。
 - 禁止用 Git 命令或 shell 命令批量删除文件。
@@ -207,7 +264,7 @@ git commit -m "<type>: <简短说明>"
 - 不要把 `dist/`、`.tmp/`、`node_modules/`、`coverage/`、`playwright-report/`、`test-results/`、数据库文件或大体积运行产物提交进仓库。
 - 如果需要处理冲突、rebase、merge 或历史改写，先说明当前状态、风险和建议路径，再等用户确认。
 
-### 5.5 GitHub PR 和 Review
+### 6.5 GitHub PR 和 Review
 
 创建或更新 PR 前：
 
@@ -222,7 +279,27 @@ git commit -m "<type>: <简短说明>"
 - 对错误或不适合本项目的建议，给出技术性说明。
 - 对已修复项，说明改动位置和验证结果。
 
-## 6. 推荐组合
+## 7. UI 和浏览器验证 Skills
+
+### 7.1 浏览器和 Playwright 验证
+
+当前本机未安装名为 `WebappTesting` 的独立 skill。遇到需要浏览器真实渲染、交互验证、截图或 Playwright 自动化的任务时，按本节规则执行。
+
+典型场景：
+
+- 修改 `src/components/**`、`src/App.vue`、主题样式、面板布局或交互状态。
+- 修改 QuantBoard 前端页面、报告展示、优化任务 UI 或 API 代理配置。
+- 需要验证移动端/桌面端布局、文本是否溢出、按钮是否可点击、图表是否渲染。
+- 修复只有浏览器中才能复现的问题。
+
+使用要求：
+
+- 优先用 Playwright 脚本验证关键用户路径，并在必要时截图。
+- 若应用需要 dev server，应先启动对应服务并报告本地 URL。
+- 检查桌面和移动端关键视口；有图表、canvas 或复杂面板时确认非空渲染和无明显遮挡。
+- 浏览器验证不能替代单元测试和类型检查；UI 改动完成前仍需运行对应构建或类型验证。
+
+## 8. 推荐组合
 
 ### 明确 bug 或测试失败
 
@@ -237,6 +314,7 @@ verification-before-completion
 ```text
 brainstorming
 writing-plans
+计划落盘
 test-driven-development
 verification-before-completion
 requesting-code-review
@@ -256,9 +334,20 @@ verification-before-completion
 ```text
 brainstorming
 writing-plans
+计划落盘
 test-driven-development
 requesting-code-review
 verification-before-completion
+```
+
+### UI 或前端交互改动
+
+```text
+brainstorming
+test-driven-development
+浏览器和 Playwright 验证
+verification-before-completion
+requesting-code-review
 ```
 
 ### GitHub PR 或合并前
@@ -269,15 +358,24 @@ requesting-code-review
 receiving-code-review
 ```
 
-## 7. 项目级验证速查
+### 实现后整理
+
+```text
+实现后简化
+test-driven-development
+verification-before-completion
+```
+
+## 9. 项目级验证速查
 
 - 普通 Vue/TypeScript 改动：`pnpm test`，必要时运行 `pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false`。
 - RankTrend 改动：`pnpm test:ranktrend` 和 `pnpm typecheck:ranktrend`。
 - QuantBoard 后端改动：在 `quant-board` 目录运行 `.\.venv\Scripts\python.exe -m pytest`。
 - QuantBoard 前端改动：在 `quant-board\frontend` 目录运行 `npm run build`。
 - 文档-only 改动：检查相关文档与 `AGENTS.md`、源码常量、API/数据库口径是否一致。
+- UI/浏览器交互改动：结合浏览器和 Playwright 验证运行关键路径检查和必要截图，再运行相关构建或类型检查。
 
-## 8. 不适合用 Skills 代替的事项
+## 10. 不适合用 Skills 代替的事项
 
 - Skills 不能覆盖用户明确指令。
 - Skills 不能绕过 `AGENTS.md` 的删除、Git 和目录边界限制。

@@ -13,7 +13,7 @@
 - Dragon Board 根项目只提供实时看板、快照数据和 TypeScript golden 导出。
 - 默认快照：`snapshot_type=half_hour`。
 - 可选快照：`quarter_hour` 可用于细颗粒度研究，但必须显式选择，不能替代默认口径。
-- 存储主链：SQLite 分为快照事实库 `quant_board_snapshots.db` 和研究库 `quant_board_research.db`；Supabase 是后端专用快照备份库，只同步快照事实表和轻量 outbox，实施和恢复规则以 [database-migration-plan.md](database-migration-plan.md) 为准。
+- 存储主链：SQLite 分为快照热库 `quant_board_snapshots.db` 和研究热库 `quant_board_research.db`；Parquet 是历史冷归档，DuckDB 是后端只读归档查询引擎，R2/S3 是大体积对象备份主线；Supabase 只保留轻量兼容备份，实施和恢复规则以 [database-migration-plan.md](database-migration-plan.md) 为准。
 - 当前同步批次：`sync_outbox` 只覆盖快照 ingest、数据集 bundle；回测、优化和 Golden 保存在 research SQLite，不进入 Supabase Free 版备份目标。历史 JSON 迁移入口是 `POST /api/migrations/snapshots/import-json`；自动同步默认关闭，只补传到期 outbox。
 - SQLite 替换 IndexedDB 的当前切口：Dragon Board 正式写入先查询 QuantBoard SQLite 是否已有同一 `snapshot_id`，缺失时走 `POST /api/snapshots/ingest`；正式读口由根前端 `src/services/snapshot/backendRead.ts` 统一调用 QuantBoard `GET /api/snapshots/frames`、`/api/snapshots/records`、`/api/snapshots/stock-rows`、`/api/snapshots/sector-rows`；IndexedDB 快照缓存默认关闭，只作为迁移源和显式缓存。浏览器端旧的 IndexedDB 校验/补齐入口与 `five_minute` 本地入口已收口，不再作为正式合同。
 - failover 当前切口：SQLite 主库不可用但 Supabase 同构备份库可写时，`POST /api/snapshots/ingest` 可返回 `status=backup_only` 并写入备库；SQLite 恢复后必须执行 `pull-backup` 收敛，不能把 `backup_only` 当作本地主库已恢复。
@@ -52,7 +52,8 @@
 9. SQLite 主库、Supabase 备份库、同步接口、快照入库和 API/CLI 合同变更，必须同批更新对应文档。
 10. Dragon Board 前端不得直连 Supabase；正式快照写库必须走 QuantBoard 后端 API。正式快照判重以 SQLite/后端 `snapshot_id` 为准，不得再以浏览器 IndexedDB 记录存在性作为正式保存条件。
 11. 不得重新引入 Supabase `snapshots.payload` 兼容备份方案；云端表、业务键和索引必须和 SQLite 快照事实库同构。
-12. 不得把回测、优化、Golden 或报告大 JSON 重新塞进 Supabase Free 版备份链路；大型研究结果只属于 research SQLite 或报告文件目录。
+12. 不得把回测、优化、Golden 或报告大 JSON 重新塞进 Supabase Free 版备份链路；大型研究明细应优先进入 Parquet/R2，近期热数据才留在 SQLite。
+13. DuckDB 只能作为后端只读归档查询引擎，不允许新增前端可传 SQL 的接口。
 13. 逐步替换 IndexedDB 时必须先接入 SQLite 读接口；确认迁移和行数校验完成前，不得删除浏览器历史数据或关闭迁移工具。
 14. 迁移 DataLayer 的 IndexedDB 读写入口时，不得删除或重命名 `SnapshotRecord`、`SnapshotFrameBundle`、`SnapshotStockRow`、`SnapshotSectorRow` 已有字段；SQLite 后端必须承接字段并以 camelCase 返回。
 15. 删除 IndexedDB 历史前必须先完成后端迁移收口与人工验收，确认四张事实表全量行数一致；不要把浏览器端旧 IndexedDB 校验/补齐入口当成正式合同。正式快照缓存默认关闭后，不得重新在 `DataLayer` 或 `snapshotFacade` 正式读写口恢复 IndexedDB fallback；QuantBoard 后端不可用时正式读取必须显式失败。

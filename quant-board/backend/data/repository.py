@@ -18,6 +18,7 @@ from backend.data.models import (
     Dataset,
     GoldenRankTrendCase,
     OptimizationRun,
+    ArchiveManifestModel,
     SnapshotFrameModel,
     SnapshotRecordModel,
     SnapshotSectorRowModel,
@@ -745,9 +746,9 @@ class Repository:
         exclude_restored: bool = False,
         limit: int | None = None,
         sort: str = "desc",
-    ) -> list[dict[str, Any]]:
+    ) -> dict[str, Any]:
         if self.session is None:
-            return []
+            return {"rows": [], "source": "sqlite"}
         query = select(SnapshotStockRowModel).where(SnapshotStockRowModel.dataset_id == dataset_id)
         types = self._merge_types(snapshot_type, snapshot_types)
         stock_codes = self._merge_values(code, codes)
@@ -775,9 +776,22 @@ class Repository:
         if limit and limit > 0:
             query = query.limit(limit)
         try:
-            return [self.local_stock_to_bundle_dict(row) for row in self.session.scalars(query.order_by(order, SnapshotStockRowModel.rank.asc()))]
+            rows = [self.local_stock_to_bundle_dict(row) for row in self.session.scalars(query.order_by(order, SnapshotStockRowModel.rank.asc()))]
         except SQLAlchemyError:
-            return []
+            return {"rows": [], "source": "sqlite"}
+        archived = self._archived_stock_rows(
+            dataset_id=dataset_id,
+            snapshot_id=snapshot_id,
+            snapshot_type=types[0] if len(types) == 1 else snapshot_type,
+            trading_date=trading_date,
+            code=code,
+            slot_time=slot_time,
+            sort=sort,
+            limit=limit if not rows else None,
+        )
+        merged = self._merge_archived_rows(rows, archived, limit=limit, sort=sort)
+        source = _compute_archive_source(bool(rows), bool(archived))
+        return {"rows": merged, "source": source}
 
     def list_snapshot_sector_rows(
         self,
@@ -797,9 +811,9 @@ class Repository:
         exclude_restored: bool = False,
         limit: int | None = None,
         sort: str = "desc",
-    ) -> list[dict[str, Any]]:
+    ) -> dict[str, Any]:
         if self.session is None:
-            return []
+            return {"rows": [], "source": "sqlite"}
         query = select(SnapshotSectorRowModel).where(SnapshotSectorRowModel.dataset_id == dataset_id)
         types = self._merge_types(snapshot_type, snapshot_types)
         row_entity_types = self._merge_values(entity_type, entity_types)
@@ -826,7 +840,7 @@ class Repository:
         try:
             rows = [self.local_sector_to_bundle_dict(row) for row in self.session.scalars(query.order_by(order, SnapshotSectorRowModel.rank.asc()))]
         except SQLAlchemyError:
-            return []
+            return {"rows": [], "source": "sqlite"}
         if allowed_capture_modes:
             allowed = set(allowed_capture_modes)
             rows = [row for row in rows if str(row.get("captureMode") or "real_time") in allowed]
@@ -834,7 +848,19 @@ class Repository:
             rows = [row for row in rows if str(row.get("captureMode") or "real_time") != "restored"]
         if limit and limit > 0:
             rows = rows[:limit]
-        return rows
+        archived = self._archived_sector_rows(
+            dataset_id=dataset_id,
+            snapshot_id=snapshot_id,
+            snapshot_type=types[0] if len(types) == 1 else snapshot_type,
+            trading_date=trading_date,
+            entity_type=entity_type,
+            entity_key=entity_key,
+            sort=sort,
+            limit=limit if not rows else None,
+        )
+        merged = self._merge_archived_rows(rows, archived, limit=limit, sort=sort)
+        source = _compute_archive_source(bool(rows), bool(archived))
+        return {"rows": merged, "source": source}
 
     def snapshot_table_counts(self, dataset_id: str | None = None) -> dict[str, int]:
         if self.session is None:
@@ -862,6 +888,48 @@ class Repository:
         except SQLAlchemyError:
             return {"snapshots": 0, "snapshot_frames": 0, "snapshot_stock_rows": 0, "snapshot_sector_rows": 0}
         return counts
+
+    def _archived_stock_rows(self, **filters: Any) -> list[dict[str, Any]]:
+        if self.session is None:
+            return []
+        try:
+            from backend.data.archive.service import ArchiveService
+
+            return ArchiveService(self.session).query_archived_stock_rows(**filters)
+        except Exception:
+            return []
+
+    def _archived_sector_rows(self, **filters: Any) -> list[dict[str, Any]]:
+        if self.session is None:
+            return []
+        try:
+            from backend.data.archive.service import ArchiveService
+
+            return ArchiveService(self.session).query_archived_sector_rows(**filters)
+        except Exception:
+            return []
+
+    @staticmethod
+    def _merge_archived_rows(
+        sqlite_rows: list[dict[str, Any]],
+        archived_rows: list[dict[str, Any]],
+        *,
+        limit: int | None,
+        sort: str,
+    ) -> list[dict[str, Any]]:
+        if not archived_rows:
+            return sqlite_rows
+        by_id: dict[str, dict[str, Any]] = {}
+        for row in [*sqlite_rows, *archived_rows]:
+            key = str(row.get("rowId") or row.get("id") or f"{row.get('snapshotId')}:{row.get('code') or row.get('entityKey')}")
+            by_id[key] = row
+        rows = list(by_id.values())
+        rows.sort(key=lambda row: (int(row.get("timestamp") or 0), int(row.get("rank") or 0)), reverse=sort != "asc")
+        if limit and limit > 0:
+            return rows[:limit]
+        return rows
+
+
 
     def save_backtest_run(self, run: BacktestRun) -> BacktestRun:
         try:
@@ -964,6 +1032,29 @@ class Repository:
             raise RuntimeError("failed to save normalized backtest equity curve") from exc
         return count
 
+    def save_backtest_equity_rows(self, run_id: str, rows: list[dict[str, Any]]) -> int:
+        count = 0
+        try:
+            for pt in rows:
+                self.research_session.add(
+                    BacktestEquityCurve(
+                        backtest_run_id=run_id,
+                        snapshot_id=str(pt.get("snapshotId") or "") or None,
+                        timestamp=int(pt.get("timestamp") or 0) or None,
+                        trading_date=str(pt.get("tradingDate") or "") or None,
+                        equity=float(pt.get("equity")) if pt.get("equity") is not None else None,
+                        cash=float(pt.get("cash")) if pt.get("cash") is not None else None,
+                        market_value=float(pt.get("marketValue")) if pt.get("marketValue") is not None else None,
+                        position_count=int(pt.get("positionCount") or 0),
+                    )
+                )
+                count += 1
+            self.research_session.commit()
+        except SQLAlchemyError as exc:
+            self.research_session.rollback()
+            raise RuntimeError("failed to restore normalized backtest equity curve") from exc
+        return count
+
     def get_backtest_equity_curve(self, run_id: str) -> list[dict[str, Any]]:
         try:
             rows = self.research_session.scalars(
@@ -995,6 +1086,34 @@ class Repository:
         except SQLAlchemyError as exc:
             self.research_session.rollback()
             raise RuntimeError("failed to save normalized backtest signals") from exc
+        return count
+
+    def save_backtest_signal_rows(self, run_id: str, rows: list[dict[str, Any]]) -> int:
+        count = 0
+        try:
+            for item in rows:
+                self.research_session.add(
+                    BacktestSignal(
+                        backtest_run_id=run_id,
+                        snapshot_id=str(item.get("snapshotId") or "") or None,
+                        trading_date=str(item.get("tradingDate") or "") or None,
+                        code=str(item.get("code") or ""),
+                        name=str(item.get("name") or ""),
+                        candidate_tier=str(item.get("candidateTier") or "") or None,
+                        signal=str(item.get("signal") or "") or None,
+                        confidence=float(item.get("confidence")) if item.get("confidence") is not None else None,
+                        rank=int(item.get("rank")) if item.get("rank") is not None else None,
+                        stage=str(item.get("stage") or "") or None,
+                        regime=str(item.get("regime") or "") or None,
+                        reasons_json=dumps_json_field(item.get("reasons") or []),
+                        risk_flags_json=dumps_json_field(item.get("riskFlags") or []),
+                    )
+                )
+                count += 1
+            self.research_session.commit()
+        except SQLAlchemyError as exc:
+            self.research_session.rollback()
+            raise RuntimeError("failed to restore normalized backtest signals") from exc
         return count
 
     @staticmethod
@@ -2071,3 +2190,11 @@ def _maybe_int(value: Any) -> int | None:
         return int(float(value))
     except (TypeError, ValueError):
         return None
+
+
+def _compute_archive_source(has_sqlite: bool, has_archive: bool) -> str:
+    if has_sqlite and has_archive:
+        return "mixed"
+    if has_archive:
+        return "parquet_archive"
+    return "sqlite"
