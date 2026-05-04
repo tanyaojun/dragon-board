@@ -70,15 +70,55 @@ function clonePlainObject<T extends Record<string, any> | null | undefined>(valu
   return JSON.parse(JSON.stringify(value))
 }
 
-function toThemeRefs(themes: any): Array<{ id?: string; name?: string; heatScore?: number }> {
+function toThemeRefs(themes: any): Array<{
+  id?: string
+  name?: string
+  heatScore?: number
+  role?: string
+  exposureWeight?: number
+  themeContribution?: number
+  riskPenalty?: number
+}> {
   return (Array.isArray(themes) ? themes : [])
     .slice(0, 10)
     .map((theme: any) => ({
       id: theme?.id,
       name: theme?.name,
       heatScore: theme?.heatScore,
+      role: typeof theme?.role === 'string' ? theme.role : undefined,
+      exposureWeight: Number.isFinite(Number(theme?.exposureWeight)) ? Number(theme.exposureWeight) : undefined,
+      themeContribution: Number.isFinite(Number(theme?.themeContribution)) ? Number(theme.themeContribution) : undefined,
+      riskPenalty: Number.isFinite(Number(theme?.riskPenalty)) ? Number(theme.riskPenalty) : undefined,
     }))
     .filter((theme) => Boolean(theme.name || theme.id))
+}
+
+function compactThemeFactorMetadata(payload: Record<string, any>): Record<string, any> | undefined {
+  const factorKeys = [
+    'momentumScore',
+    'breadthScore',
+    'fundScore',
+    'leadershipScore',
+    'correlationScore',
+    'crowdingRisk',
+    'persistenceScore',
+    'rotationState',
+    'qualityFlags',
+  ]
+  const themeFactor = Object.fromEntries(
+    factorKeys
+      .filter((key) => payload[key] !== undefined)
+      .map((key) => [key, clonePlainObject(payload[key])]),
+  )
+  return Object.keys(themeFactor).length > 0 ? { themeFactor } : undefined
+}
+
+function buildSectorMetadata(payload: Record<string, any>): Record<string, any> | null {
+  const metadata = {
+    ...(clonePlainObject(payload.metadata as Record<string, any> | null) || {}),
+    ...(compactThemeFactorMetadata(payload) || {}),
+  }
+  return Object.keys(metadata).length > 0 ? metadata : null
 }
 
 function getHotlistSourceStock(sourceStocksByCode: Map<string, any> | undefined, code: string) {
@@ -635,7 +675,7 @@ function buildSectorRow(
     leaderCount: Number(payload.leaderCount) || 0,
     persistentDays: Number(payload.persistentDays) || 0,
     netInflow: Number(payload.netInflow ?? payload.mainNetInflow) || 0,
-    metadata: clonePlainObject(payload.metadata as Record<string, any> | null) || null,
+    metadata: buildSectorMetadata(payload),
   }
 }
 

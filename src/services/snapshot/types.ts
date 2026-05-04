@@ -117,7 +117,15 @@ export interface SnapshotStockRow {
   popularityChange?: number
   institutionBuy?: number
   bigMoney300?: number
-  themes?: Array<{ id?: string; name?: string; heatScore?: number }>
+  themes?: Array<{
+    id?: string
+    name?: string
+    heatScore?: number
+    role?: string
+    exposureWeight?: number
+    themeContribution?: number
+    riskPenalty?: number
+  }>
   isNew?: boolean
   firstZtTime?: string
   lastZtTime?: string

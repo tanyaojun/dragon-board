@@ -2,6 +2,8 @@
 
 本文定义 `dragon-board` 项目中 Codex/Superpowers skills 的推荐使用方式。项目入口规则仍以根目录 `AGENTS.md` 为准；本文只补充“遇到什么任务时应启用哪些 skills”。
 
+项目级 skill 正文、模板、引用材料和工作流清单统一放在根目录 `skills/`。根 `SKILLS.md` 只保留总索引和使用指南；后续新增的 `SKILL.md` 不再散落到根目录、`docs/`、`src/`、`quant-board/` 或个人 `.codex/skills` 路径中。
+
 ## 1. 基本原则
 
 - 先遵守 `AGENTS.md`：中文沟通、先读代码和文档、小范围修改、禁止破坏性 Git 命令、禁止批量删除文件或目录。
@@ -124,8 +126,7 @@ npm run build
 
 ### 3.3 计划落盘
 
-当前本机未安装名为 `Planning with Files` 的独立 skill。遇到需要计划落盘的任务时，先使用 `superpowers:writing-plans`，再把长期计划、阶段状态和验收清单写入文件，避免上下文压缩、会话中断或多轮协作后丢失状态。
-安装地址：https://github.com/OthmanAdi/planning-with-files/tree/master/.codex
+遇到需要计划落盘的任务时，优先使用项目内 `skills/` 中沉淀的计划模板或说明；如本地同时安装了 `planning-with-files` skill，应遵循其流程并把项目级长期计划、阶段状态和验收清单落到仓库内合适位置，避免上下文压缩、会话中断或多轮协作后丢失状态。
 
 典型场景：
 
@@ -178,8 +179,7 @@ npm run build
 
 ### 4.3 多视角 Code Review
 
-当前本机未安装名为 `Code Review` 的独立 skill。较大改动后优先使用 `superpowers:requesting-code-review`；如果用户明确允许并行 agent 审查，再结合可用的子 agent 做多视角审查。若工具支持置信度过滤，应优先处理高置信度、高影响面问题，避免被低置信度假阳性牵着走。
-安装地址：https://github.com/tirth8205/code-review-graph/tree/main/code-review-graph-vscode
+较大改动后优先使用 `superpowers:requesting-code-review`；如果用户明确允许并行 agent 审查，再结合可用的子 agent 或项目内 `skills/` 中的 review 流程做多视角审查。若工具支持置信度过滤，应优先处理高置信度、高影响面问题，避免被低置信度假阳性牵着走。
 
 典型场景：
 
@@ -198,7 +198,7 @@ npm run build
 
 ### 5.1 实现后简化
 
-当前本机未安装名为 `Code Simplifier` 的独立 skill。代码实现完成、测试通过后，可以按本节规则做一次人工简化检查，确认是否存在可以安全简化的重复逻辑、过长函数或局部复杂度。
+代码实现完成、测试通过后，可以按本节规则或项目内 `skills/` 中的简化流程做一次人工简化检查，确认是否存在可以安全简化的重复逻辑、过长函数或局部复杂度。
 
 典型场景：
 
@@ -283,7 +283,7 @@ git commit -m "<type>: <简短说明>"
 
 ### 7.1 浏览器和 Playwright 验证
 
-当前本机未安装名为 `WebappTesting` 的独立 skill。遇到需要浏览器真实渲染、交互验证、截图或 Playwright 自动化的任务时，按本节规则执行。
+遇到需要浏览器真实渲染、交互验证、截图或 Playwright 自动化的任务时，按本节规则或项目内 `skills/` 中的浏览器验证流程执行。
 
 典型场景：
 

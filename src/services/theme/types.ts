@@ -1,0 +1,94 @@
+import type { JxbkBlockData, MergedStock } from '@/types'
+import type { RotationAnalysis } from '@/types/core'
+import type { ThemeCorrelationDetail } from '@/services/ThemeCorrelationAnalyzer'
+
+export type ThemeRotationState = 'mainline' | 'inflow' | 'outflow' | 'quick' | 'cooling' | 'neutral'
+
+export type ThemeQualityFlagCode =
+  | 'empty_theme'
+  | 'low_sample'
+  | 'jxbk_missing'
+  | 'mapping_missing'
+  | 'invalid_number'
+  | 'time_disorder'
+
+export interface ThemeQualityFlag {
+  code: ThemeQualityFlagCode
+  level: 'fatal' | 'warning' | 'info'
+  message: string
+  count?: number
+}
+
+export interface ThemeBaseLike {
+  id: string
+  name: string
+  zsCode?: string
+}
+
+export interface ThemeFactorComponents {
+  baseScore: number
+  jxbkScore: number
+  stockScore: number
+  riskPenalty: number
+}
+
+export interface ThemeFactorSnapshot {
+  themeId: string
+  themeName: string
+  source: 'static' | 'jxbk' | 'mixed'
+  snapshotId?: string
+  timestamp: number
+  heatScore: number
+  momentumScore: number
+  breadthScore: number
+  fundScore: number
+  leadershipScore: number
+  correlationScore: number
+  crowdingRisk: number
+  persistenceScore: number
+  rotationState: ThemeRotationState
+  stockCount: number
+  ztCount: number
+  leaderCount: number
+  netInflow: number
+  strength: number
+  volumeRatio: number
+  rank: number
+  relatedThemeIds: string[]
+  qualityFlags: ThemeQualityFlag[]
+  components: ThemeFactorComponents
+}
+
+export type ThemeStockRole = 'leader' | 'core' | 'follower' | 'independent' | 'noise'
+
+export interface ThemeStockExposure {
+  code: string
+  themeId: string
+  themeName: string
+  exposureWeight: number
+  source: 'static' | 'realtime' | 'mixed'
+  themeScore: number
+  role: ThemeStockRole
+  roleScore: number
+  themeContribution: number
+  riskPenalty: number
+  reasons: string[]
+  qualityFlags: ThemeQualityFlag[]
+}
+
+export interface ThemeSourceContext {
+  timestamp?: number
+  snapshotId?: string
+  themes: ThemeBaseLike[]
+  themeStocks: Map<string, string[]>
+  stockThemes: Map<string, string[]>
+  stocks: Array<Partial<MergedStock> & { code: string; name?: string }>
+  jxbkBlocks?: JxbkBlockData[]
+  rotationAnalysis?: RotationAnalysis | null
+  correlations?: Map<string, ThemeCorrelationDetail>
+}
+
+export interface ThemeExposureProjection {
+  byCode: Map<string, ThemeStockExposure[]>
+  byTheme: Map<string, ThemeStockExposure[]>
+}

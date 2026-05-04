@@ -15,6 +15,7 @@ export interface StockHotnessWeights {
   leaderStatus: number
   boardHeight: number
   turnoverRate: number
+  themeSupport: number
 }
 
 export interface StockHotnessConfig {
@@ -29,6 +30,7 @@ export interface StockHotnessComponentScores {
   leaderStatus: number
   boardHeight: number
   turnoverRate: number
+  themeSupport: number
 }
 
 export interface StockHotnessRecord {
@@ -50,6 +52,7 @@ export const DEFAULT_STOCK_HOTNESS_CONFIG: StockHotnessConfig = {
     leaderStatus: 0.11,
     boardHeight: 0.08,
     turnoverRate: 0.08,
+    themeSupport: 0.05,
   },
 }
 
@@ -83,7 +86,7 @@ function normalize(value: unknown, range: RangeStat, reverse = false): number {
   if (range.min === Infinity || range.max === -Infinity) return 0
 
   if (range.max === range.min) {
-    return 100
+    return numeric === range.min ? 100 : 0
   }
 
   const score = ((numeric - range.min) / (range.max - range.min)) * 100
@@ -148,6 +151,18 @@ function turnoverHeatScore(stock: Pick<MergedStock, 'turnoverRate'>): number {
   return 55
 }
 
+function themeSupportScore(stock: Pick<MergedStock, 'themeHeat' | 'themes'>): number {
+  const themeHeat = toNumber(stock.themeHeat)
+  const themeContributions = Array.isArray(stock.themes)
+    ? stock.themes.map((theme: unknown) =>
+        theme && typeof theme === 'object' ? toNumber((theme as { themeContribution?: unknown }).themeContribution) : 0,
+      )
+    : []
+  const maxContribution = Math.max(0, ...themeContributions)
+  if (themeHeat <= 0 && maxContribution <= 0) return 0
+  return Math.min(100, themeHeat * 0.55 + Math.min(18, maxContribution) * 2.5)
+}
+
 function platformCoverageScore(platforms: unknown, totalPlatforms: number): number {
   const count = toNumber(platforms)
   if (count <= 0 || totalPlatforms <= 0) return 0
@@ -204,6 +219,7 @@ function buildComponentScores(
     leaderStatus: leadStatusHeatScore(stock),
     boardHeight: boardHeatScore(stock),
     turnoverRate: turnoverHeatScore(stock),
+    themeSupport: themeSupportScore(stock),
   }
 }
 
@@ -222,7 +238,8 @@ function calculateWeightedHotness(
     components.popularityChange * config.weights.popularityChange +
     components.leaderStatus * config.weights.leaderStatus +
     components.boardHeight * config.weights.boardHeight +
-    components.turnoverRate * config.weights.turnoverRate
+    components.turnoverRate * config.weights.turnoverRate +
+    components.themeSupport * config.weights.themeSupport
   )
 }
 

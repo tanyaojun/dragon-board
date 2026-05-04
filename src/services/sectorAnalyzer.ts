@@ -42,6 +42,7 @@ import {
   resolvePrimaryStockTheme,
   sortStockThemes,
 } from './theme/stockThemeMeta'
+import { themeFacade } from './theme/ThemeFacade'
 import { StockUtils } from '../utils/common'
 
 // ========== 配置常量 ==========
@@ -913,6 +914,7 @@ function startJxbkTimer() {
   state.jxbkTimer = setInterval(
     async () => {
       await fetchJxbkData()
+      updateThemeHeat()
       // ✅ jxbk 数据更新后，同步题材到股票
       const updatedCount = syncThemesToStocks()
       if (CONFIG.DEBUG && updatedCount > 0) {
@@ -932,6 +934,7 @@ function stopTimers() {
 
 function updateThemeHeat() {
   const allThemes = themeMapping.getAllThemes()
+  const { factors } = themeFacade.refreshThemeFactors()
 
   const metricsUpdates: ReturnType<typeof calculateThemeMetrics>[] = []
 
@@ -942,7 +945,7 @@ function updateThemeHeat() {
     }
   })
 
-  const hotThemes = generateHotThemes(metricsUpdates)
+  const hotThemes = generateHotThemes(metricsUpdates, factors)
 
   if (metricsUpdates.length > 0) {
     dataLayer.updateThemeMetrics(metricsUpdates)
@@ -956,6 +959,49 @@ function updateThemeHeat() {
 
 function calculateThemeMetrics(themeId: string) {
   const theme = themeMapping.getTheme(themeId)
+  const factor = themeFacade.getThemeFactors().find((item) => item.themeId === themeId)
+  if (factor) {
+    return {
+      themeId,
+      heatScore: factor.heatScore,
+      heatLevel:
+        factor.heatScore >= 80
+          ? '热门'
+          : factor.heatScore >= 60
+            ? '活跃'
+            : factor.heatScore >= 40
+              ? '温'
+              : factor.heatScore >= 20
+                ? '冷'
+                : '冰',
+      momentum: factor.momentumScore,
+      trend: factor.persistenceScore,
+      acceleration: Math.max(0, factor.momentumScore - factor.crowdingRisk),
+      correlation: factor.correlationScore / 100,
+      relatedThemes: state.correlationEngine.findRelatedThemes(
+        themeId,
+        themeMapping.getThemeStocks(themeId),
+      ),
+      stats: {
+        stockCount: factor.stockCount,
+        ztCount: factor.ztCount,
+        leaderCount: factor.leaderCount,
+      },
+      jxbk: {
+        strength: factor.strength,
+        mainNetInflow: factor.netInflow,
+        bigMoney300: 0,
+        institutionBuy: 0,
+        volumeRatio: factor.volumeRatio,
+      },
+      components: factor.components,
+      qualityFlags: factor.qualityFlags,
+      rotationState: factor.rotationState,
+      lastUpdate: factor.timestamp,
+    }
+  }
+
+  // Compatibility fallback for callers that read metrics before the theme facade has produced factors.
   const result = heatCalculator.calculateThemeHeat(themeId, theme?.name)
 
   const jxbkBlock = findJxbkBlockByThemeName(theme?.name)
@@ -993,7 +1039,17 @@ function calculateThemeMetrics(themeId: string) {
   }
 }
 
-function generateHotThemes(metricsUpdates: any[]) {
+function generateHotThemes(metricsUpdates: any[], factors: ReturnType<typeof themeFacade.getThemeFactors> = []) {
+  if (factors.length > 0) {
+    return factors
+      .filter((factor) => !factor.themeName.includes('ST') && !factor.themeName.includes('*ST'))
+      .slice(0, CONFIG.HOT_THEMES_LIMIT)
+      .map((factor, index) => ({
+        ...themeFacade.toHotThemeCompat(factor),
+        rank: index + 1,
+      }))
+  }
+
   const candidates = metricsUpdates
     .map((metrics) => {
       const theme = themeMapping.getTheme(metrics.themeId)
@@ -1087,6 +1143,7 @@ export async function updateFullThemeMapping(): Promise<{ success: boolean; mess
 export function syncThemesToStocks(): number {
   const stocks = dataLayer.getStocks()
   if (!stocks.length) return 0
+  const exposureByCode = themeFacade.getThemeExposureProjection().byCode
 
   const updates: Array<{
     code: string
@@ -1098,6 +1155,84 @@ export function syncThemesToStocks(): number {
   let updatedCount = 0
 
   stocks.forEach((stock) => {
+    const projectedExposures = exposureByCode.get(stock.code) || []
+    if (projectedExposures.length > 0) {
+      const mergedThemeMap = new Map<string, any>()
+      projectedExposures.forEach((exposure) => {
+        const theme = themeFacade.toStockThemeCompat(exposure)
+        mergedThemeMap.set(String(theme.id || theme.name), theme)
+      })
+
+      const staticThemeIds = themeMapping.getStockThemes(stock.code)
+      staticThemeIds.forEach((themeId) => {
+        const theme = themeMapping.getTheme(themeId)
+        if (!theme || mergedThemeMap.has(theme.id)) return
+        const metrics = dataLayer.getThemeMetrics(themeId)
+        mergedThemeMap.set(theme.id, {
+          id: theme.id,
+          name: theme.name,
+          zsCode: theme.zsCode || '',
+          source: 'static',
+          heatScore: metrics?.heatScore || 0,
+          heatLevel: metrics?.heatLevel || '冷',
+          correlation: metrics?.correlation || 0,
+        })
+      })
+
+      const realtimeBlocks = dataLayer.getJxbkStock(stock.code)?.blocks || []
+      realtimeBlocks.forEach((blockName) => {
+        if (mergedThemeMap.has(blockName)) return
+        const theme = themeMapping.getAllThemes().find((item) => item.name === blockName)
+        if (theme && !mergedThemeMap.has(theme.id)) {
+          const metrics = dataLayer.getThemeMetrics(theme.id)
+          mergedThemeMap.set(theme.id, {
+            id: theme.id,
+            name: blockName,
+            zsCode: theme.zsCode || '',
+            source: 'realtime',
+            heatScore: metrics?.heatScore || 0,
+            heatLevel: metrics?.heatLevel || '温',
+            correlation: metrics?.correlation || 0,
+          })
+          return
+        }
+        mergedThemeMap.set(blockName, {
+          id: blockName,
+          name: blockName,
+          zsCode: '',
+          source: 'realtime',
+          heatScore: 0,
+          heatLevel: '温',
+          correlation: 0,
+        })
+      })
+
+      const newThemes = sortStockThemes(Array.from(mergedThemeMap.values())).slice(
+        0,
+        CONFIG.MAX_THEMES_PER_STOCK,
+      )
+      const nextThemeSnapshot = resolvePrimaryStockTheme(newThemes)
+      const currentSignature = buildStockThemeSignature(stock.themes || [])
+      const nextSignature = buildStockThemeSignature(newThemes)
+
+      if (
+        currentSignature !== nextSignature ||
+        (stock.mainTheme || '') !== (nextThemeSnapshot.mainTheme || '') ||
+        (stock.themeHeat || 0) !== nextThemeSnapshot.themeHeat ||
+        (stock.themeLevel || '冷') !== nextThemeSnapshot.themeLevel
+      ) {
+        updates.push({
+          code: stock.code,
+          themes: newThemes,
+          mainTheme: nextThemeSnapshot.mainTheme,
+          themeHeat: nextThemeSnapshot.themeHeat,
+          themeLevel: nextThemeSnapshot.themeLevel,
+        })
+        updatedCount++
+      }
+      return
+    }
+
     // 1. 从 themeMapping 获取静态映射的题材
     const staticThemeIds = themeMapping.getStockThemes(stock.code)
 

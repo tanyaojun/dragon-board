@@ -195,4 +195,34 @@ describe('StockHotnessCalculator', () => {
     expect(totalWeight).toBeCloseTo(1, 6)
     expect(config.weights.avgRank).toBeGreaterThan(config.weights.platformCoverage)
   })
+
+  it('题材贡献只作为小权重支持，不会单独制造高热度', () => {
+    const strongThemeOnly = createStock({
+      code: '600800',
+      avgRankNum: 999,
+      platforms: 0,
+      popularity: 0,
+      popularityChange: 0,
+      leadStatus: '',
+      turnoverRate: 0,
+      themeHeat: 92,
+      themes: [{ id: 'AI', name: '人工智能', heatScore: 92, themeContribution: 18 }],
+    })
+    const activeStock = createStock({
+      code: '600900',
+      avgRankNum: 12,
+      platforms: 5,
+      popularity: 9000,
+      popularityChange: 8,
+      turnoverRate: 10,
+      themeHeat: 20,
+      themes: [{ id: 'COLD', name: '冷门', heatScore: 20, themeContribution: 2 }],
+    })
+
+    const records = calculateStockHotnessRecords([strongThemeOnly, activeStock], 8)
+    const hotnessMap = new Map(records.map((record) => [record.code, record.hotness]))
+
+    expect(hotnessMap.get('600800')).toBeLessThan(20)
+    expect(hotnessMap.get('600900')).toBeGreaterThan(hotnessMap.get('600800') || 0)
+  })
 })

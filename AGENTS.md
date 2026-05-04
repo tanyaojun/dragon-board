@@ -30,12 +30,22 @@
 /
 ├── src/                     # Dragon Board 主前端源码，只承载根 Vue 工作台
 ├── docs/                    # Dragon Board 主项目文档与历史方案
+├── skills/                  # 项目级 Codex/Superpowers skill 文档和协作流程说明
 ├── proxy-server/            # 本地 HTTP 代理服务，提供股票数据代理，不放前端业务逻辑
 ├── python-bridge/           # 通达信行情 WebSocket 桥，不放 Vue/QuantBoard 代码
 ├── tools/                   # 原生 helper、启动器和隔离探针，不放日常前端源码
 ├── quant-board/             # Python 量化研究子项目，回测/优化/报告主链
 └── e2e/                     # Playwright 端到端测试
 ```
+
+项目级 skills 放置规则：
+
+- 后续新增或沉淀的 `SKILL.md`、skill 使用说明、skill 模板、workflow/checklist 等 AI 协作能力文档，统一放入根目录 `skills/`。
+- `skills/` 只承载 AI 协作流程、工具使用方法、review/debug/test/plan 等 agent 能力文档，不放业务源码、不放运行时配置、不放测试夹具、不放临时输出。
+- 如一个 skill 需要多文件组织，使用 `skills/<skill-name>/SKILL.md`，相关 `references/`、`templates/`、`scripts/` 放在该 skill 子目录内。
+- 根目录 `SKILLS.md` 只作为 skills 总索引和使用指南；详细 skill 正文迁移或新增到 `skills/**/SKILL.md`。
+- 不再把新的 skill 文档散落到根目录、`docs/`、`src/`、`quant-board/` 或用户本机 `.codex/skills` 路径中；若需要把外部 skill 引入项目，应复制/整理到 `skills/` 后再引用。
+- 修改或新增项目级 skill 时，应同步检查根 `AGENTS.md` 和 `SKILLS.md` 是否需要更新入口说明。
 
 Dragon Board `src/` 目录边界：
 
@@ -109,10 +119,10 @@ quant-board/
 
 根目录文件保留规则：
 
-- 必须保留：`package.json`、`package-lock.json`、`index.html`、`env.d.ts`、`vite.config.ts`、`vitest.config.ts`、`playwright.config.ts`、`tsconfig.json`、`tsconfig.app.json`、`tsconfig.node.json`、`tsconfig.ranktrend.json`、`.editorconfig`、`.prettierrc.json`、`eslint.config.ts`、`.oxlintrc.json`、`.npmrc`、`.gitattributes`、`.gitignore`、`AGENTS.md`。
+- 必须保留：`package.json`、`package-lock.json`、`index.html`、`env.d.ts`、`vite.config.ts`、`vitest.config.ts`、`playwright.config.ts`、`tsconfig.json`、`tsconfig.app.json`、`tsconfig.node.json`、`tsconfig.ranktrend.json`、`.editorconfig`、`.prettierrc.json`、`eslint.config.ts`、`.oxlintrc.json`、`.npmrc`、`.gitattributes`、`.gitignore`、`AGENTS.md`、`SKILLS.md`。
 - 根目录 `DragonBoardLauncher.exe` 是本地启动器产物，日常可保留在工作区，但 `.gitignore` 已禁止新增提交 `*.exe`。
 - 不要提交根目录构建产物或缓存：`dist/`、`.tmp/`、`*.tsbuildinfo`、`node_modules/`、`coverage/`、`playwright-report/`、`test-results/`。
-- 不新增一次性说明、截图、调试输出或临时 JSON 到根目录；需要文档放 `docs/`，需要脚本放 `scripts/`，需要诊断工具放 `src/devtools/diagnostics/` 或对应子项目目录。
+- 不新增一次性说明、截图、调试输出或临时 JSON 到根目录；需要业务文档放 `docs/`，需要项目级 skill/AI 协作流程放 `skills/`，需要脚本放 `scripts/`，需要诊断工具放 `src/devtools/diagnostics/` 或对应子项目目录。
 
 核心前端服务优先从这些文件定位：
 
@@ -270,6 +280,7 @@ QuantBoard 前端默认代理 `http://localhost:8000`，开发端口为 `5174`�
 ## 8. 文档维护规则
 
 - 根 `AGENTS.md` 只放跨项目入口规则、当前口径和常用命令。
+- 根 `SKILLS.md` 只放项目级 skills 总索引和使用指南；具体 skill 正文、模板和引用材料统一放 `skills/`。
 - Dragon Board 主项目细节写入根 `docs/`。
 - QuantBoard 细节写入 `quant-board/docs/`，不要散落到后端或前端 README 中。
 - 发现旧文档仍把 Dragon Board 根项目描述为回测平台时，应删除或改为当前 QuantBoard 口径。
