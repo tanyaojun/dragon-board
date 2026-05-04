@@ -228,7 +228,7 @@ class ArchiveService:
             return {"ok": True, "pushed": 0, "manifests": []}
         results = []
         for manifest in manifests:
-            result = store.push_archive(Path(manifest.local_path))
+            result = store.push_archive(Path(manifest.local_path), archive_id=manifest.archive_id)
             if result.get("ok"):
                 manifest.object_key = store.archive_prefix(manifest.archive_id)
                 manifest.status = "uploaded"
@@ -277,6 +277,7 @@ class ArchiveService:
             if target_dir.exists():
                 shutil.rmtree(target_dir)
             shutil.move(str(tmp_dir), str(target_dir))
+        manifest.local_path = str(target_dir)
         manifest.status = "verified"
         manifest.last_error = None
         self.session.commit()

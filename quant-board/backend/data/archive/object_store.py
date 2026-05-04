@@ -51,10 +51,11 @@ class ObjectBackupStore:
     def archive_prefix(self, archive_id: str) -> str:
         return self.full_key(f"{archive_id}/")
 
-    def push_archive(self, local_dir: Path) -> dict[str, Any]:
+    def push_archive(self, local_dir: Path, archive_id: str | None = None) -> dict[str, Any]:
         if not local_dir.is_dir():
             return {"ok": False, "error": {"code": "local_dir_missing", "path": str(local_dir)}}
-        archive_id = local_dir.name
+        if archive_id is None:
+            archive_id = local_dir.name
         prefix = f"{archive_id}/"
         uploaded: list[dict[str, Any]] = []
         try:
