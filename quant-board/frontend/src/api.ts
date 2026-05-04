@@ -1,12 +1,17 @@
 import type {
   ApiErrorDetail,
+  BacktestEquityResponse,
+  BacktestQualityResponse,
   BacktestRequest,
+  BacktestSignal,
+  BacktestTrade,
   DatasetSummary,
   GoldenValidateRequest,
   GoldenImportPayload,
   HealthResponse,
   ImportPayload,
   OptimizationRequest,
+  PaginatedBacktestResponse,
   UploadPayload
 } from "./types";
 
@@ -79,6 +84,29 @@ export const api = {
       body: JSON.stringify(payload)
     }),
   getBacktest: (id: string) => requestApi<unknown>(`/api/backtests/${encodeURIComponent(id)}`),
+  getBacktestTrades: (id: string, limit = 100, offset = 0) =>
+    requestApi<PaginatedBacktestResponse<BacktestTrade>>(
+      `/api/backtests/${encodeURIComponent(id)}/trades?limit=${limit}&offset=${offset}`
+    ),
+  getBacktestEquity: (id: string) =>
+    requestApi<BacktestEquityResponse>(`/api/backtests/${encodeURIComponent(id)}/equity`),
+  getBacktestSignals: (id: string, limit = 200, offset = 0, tier?: string, regime?: string) => {
+    const params = new URLSearchParams({
+      limit: String(limit),
+      offset: String(offset)
+    });
+    if (tier) {
+      params.set("tier", tier);
+    }
+    if (regime) {
+      params.set("regime", regime);
+    }
+    return requestApi<PaginatedBacktestResponse<BacktestSignal>>(
+      `/api/backtests/${encodeURIComponent(id)}/signals?${params.toString()}`
+    );
+  },
+  getBacktestQuality: (id: string) =>
+    requestApi<BacktestQualityResponse>(`/api/backtests/${encodeURIComponent(id)}/quality`),
   runOptimization: (payload: OptimizationRequest) =>
     requestApi<unknown>("/api/optimizations/rank-trend", {
       method: "POST",

@@ -133,6 +133,101 @@ export interface BacktestRequest {
   macdSignal: number;
 }
 
+export interface BacktestTrade {
+  id?: number;
+  backtestRunId?: string;
+  code: string;
+  name?: string;
+  side?: string;
+  entrySnapshotId?: string | null;
+  exitSnapshotId?: string | null;
+  entryTime?: number | null;
+  exitTime?: number | null;
+  entryTradingDate?: string | null;
+  exitTradingDate?: string | null;
+  entryPrice?: number | null;
+  exitPrice?: number | null;
+  quantity?: number;
+  grossReturn?: number | null;
+  netReturn?: number | null;
+  profit?: number | null;
+  holdingBars?: number | null;
+  reason?: string | null;
+  candidateTier?: string | null;
+  stage?: string | null;
+  regime?: string | null;
+  explanation?: string | null;
+  fillDetail?: Record<string, unknown>;
+}
+
+export interface BacktestEquityPoint {
+  id?: number;
+  backtestRunId?: string;
+  snapshotId?: string | null;
+  timestamp?: number | null;
+  tradingDate?: string | null;
+  equity?: number | null;
+  cash?: number | null;
+  marketValue?: number | null;
+  positionCount?: number | null;
+}
+
+export interface BacktestSignal {
+  id?: number;
+  backtestRunId?: string;
+  snapshotId?: string | null;
+  tradingDate?: string | null;
+  code: string;
+  name?: string;
+  candidateTier?: string | null;
+  signal?: string | null;
+  confidence?: number | null;
+  rank?: number | null;
+  stage?: string | null;
+  regime?: string | null;
+  reasons?: string[];
+  riskFlags?: string[];
+}
+
+export interface BacktestQualityReport {
+  id?: number;
+  backtestRunId?: string;
+  passed?: boolean;
+  severity?: string;
+  researchGrade?: string;
+  frameCount?: number;
+  stockCount?: number;
+  sectorCount?: number;
+  missingFields?: Record<string, number>;
+  nanCounts?: Record<string, number>;
+  infCounts?: Record<string, number>;
+  negativePriceCount?: number;
+  nonPositivePriceCount?: number;
+  negativeVolumeCount?: number;
+  coverageRatio?: number | null;
+  timeOrderFixed?: boolean;
+  timeOrderFixCount?: number;
+  warnings?: string[];
+}
+
+export interface PaginatedBacktestResponse<T> {
+  runId: string;
+  items: T[];
+  limit: number;
+  offset: number;
+  total: number;
+}
+
+export interface BacktestEquityResponse {
+  runId: string;
+  items: BacktestEquityPoint[];
+}
+
+export interface BacktestQualityResponse {
+  runId: string;
+  qualityReport: BacktestQualityReport | null;
+}
+
 export interface OptimizationRequest {
   datasetId: string;
   strategyName: StrategyName;

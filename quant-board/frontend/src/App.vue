@@ -19,7 +19,11 @@ import {
   getTrades
 } from "./report";
 import type {
+  BacktestEquityPoint,
+  BacktestQualityReport,
   BacktestRequest,
+  BacktestSignal,
+  BacktestTrade,
   DatasetSummary,
   GoldenImportPayload,
   GoldenValidateRequest,
@@ -75,6 +79,14 @@ const importState = reactive<RequestResult>({ status: "idle" });
 const goldenState = reactive<RequestResult>({ status: "idle" });
 const backtestState = reactive<RequestResult>({ status: "idle" });
 const backtestDetailState = reactive<RequestResult>({ status: "idle" });
+const backtestNormalizedState = reactive<RequestResult<{
+  trades: BacktestTrade[];
+  equityCurve: BacktestEquityPoint[];
+  signals: BacktestSignal[];
+  qualityReport: BacktestQualityReport | null;
+  tradeTotal: number;
+  signalTotal: number;
+}>>({ status: "idle" });
 const optimizationState = reactive<RequestResult>({ status: "idle" });
 const optimizationDetailState = reactive<RequestResult>({ status: "idle" });
 const snapshotCountsState = reactive<RequestResult<Record<string, unknown>>>({ status: "idle" });
@@ -197,7 +209,32 @@ const sqliteSourceOptions = computed(() => {
   }
   return options;
 });
-const reportSource = computed(() => backtestDetailState.data || backtestState.data);
+const reportSource = computed(() => {
+  const base = asRecord(backtestDetailState.data || backtestState.data);
+  if (!backtestNormalizedState.data) {
+    return base;
+  }
+  const quality = backtestNormalizedState.data.qualityReport;
+  return {
+    ...base,
+    trades: backtestNormalizedState.data.trades,
+    equityCurve: backtestNormalizedState.data.equityCurve,
+    signals: backtestNormalizedState.data.signals,
+    normalizedReport: {
+      tradeTotal: backtestNormalizedState.data.tradeTotal,
+      signalTotal: backtestNormalizedState.data.signalTotal
+    },
+    qualityReport: quality,
+    dataQuality: quality
+      ? {
+          ...quality,
+          snapshotCount: quality.frameCount,
+          sourceSnapshotCount: quality.frameCount,
+          recommendation: quality.researchGrade === "research_ready" ? "样本质量满足研究报告读取要求" : "样本质量存在降级，请结合 warnings 和覆盖率解释结果"
+        }
+      : base.dataQuality
+  };
+});
 const optimizationSource = computed(() => optimizationDetailState.data || optimizationState.data);
 const equityCurve = computed(() => getEquityCurve(reportSource.value));
 const trades = computed(() => getTrades(reportSource.value));
@@ -387,6 +424,13 @@ const tradeDiagnosticsReasons = computed(() => {
 const tradeDiagnosticsTiers = computed(() => {
   const rows = tradeDiagnostics.value.byCandidateTier;
   return Array.isArray(rows) ? rows.slice(0, 8) as Array<Record<string, unknown>> : [];
+});
+const normalizedReportMeta = computed(() => getObjectField(reportSource.value, ["normalizedReport"]));
+const normalizedSignals = computed(() => getArrayField(reportSource.value, ["signals"]) as Array<Record<string, unknown>>);
+const qualityWarnings = computed(() => {
+  const report = getObjectField(reportSource.value, ["qualityReport"]);
+  const warnings = report.warnings;
+  return Array.isArray(warnings) ? warnings.map(String) : [];
 });
 const sampleWarnings = computed(() => {
   const warnings = sampleDiagnostics.value.warnings;
@@ -741,6 +785,9 @@ async function runBacktest(): Promise<void> {
       if (id) {
         lastBacktestId.value = id;
         manualBacktestId.value = id;
+        backtestNormalizedState.status = "idle";
+        backtestNormalizedState.data = undefined;
+        backtestNormalizedState.error = undefined;
       }
     }
   );
@@ -753,7 +800,45 @@ async function fetchBacktest(): Promise<void> {
     backtestDetailState.error = "缺少回测 ID";
     return;
   }
+  backtestNormalizedState.status = "loading";
+  backtestNormalizedState.error = undefined;
+  backtestNormalizedState.data = undefined;
   await runRequest(backtestDetailState, () => api.getBacktest(id));
+  if (backtestDetailState.status !== "ok") {
+    backtestNormalizedState.status = "error";
+    backtestNormalizedState.error = "兼容报告读取失败，未继续读取归一化明细";
+    return;
+  }
+  try {
+    const [tradePage, equity, signalPage, quality] = await Promise.all([
+      api.getBacktestTrades(id, 200, 0),
+      api.getBacktestEquity(id),
+      api.getBacktestSignals(id, 300, 0),
+      api.getBacktestQuality(id)
+    ]);
+    backtestNormalizedState.status = "ok";
+    backtestNormalizedState.data = {
+      trades: tradePage.items,
+      equityCurve: equity.items,
+      signals: signalPage.items,
+      qualityReport: quality.qualityReport,
+      tradeTotal: tradePage.total,
+      signalTotal: signalPage.total
+    };
+    backtestNormalizedState.raw = {
+      trades: tradePage,
+      equity,
+      signals: signalPage,
+      quality
+    };
+  } catch (error) {
+    backtestNormalizedState.status = "error";
+    backtestNormalizedState.error = formatApiError(error);
+    backtestNormalizedState.raw = {
+      error: backtestNormalizedState.error,
+      message: error instanceof Error ? error.message : String(error)
+    };
+  }
 }
 
 async function runOptimization(): Promise<void> {
@@ -1560,10 +1645,42 @@ onMounted(async () => {
             </button>
           </div>
           <div v-if="backtestDetailState.status === 'loading'" class="inline-note">
-            正在读取轻量报告，默认只返回 signals 预览，完整结果已保存在后端。
+            正在读取兼容报告和归一化明细。
           </div>
           <div v-if="backtestDetailState.status === 'error'" class="inline-error">
             {{ backtestDetailState.error }}
+          </div>
+          <div v-if="backtestNormalizedState.status === 'loading'" class="inline-note">
+            正在读取 trades / equity / signals / quality 明细。
+          </div>
+          <div v-else-if="backtestNormalizedState.status === 'error'" class="inline-error">
+            明细读取失败：{{ backtestNormalizedState.error }}。当前仅展示兼容摘要。
+          </div>
+          <div v-else-if="backtestNormalizedState.status === 'ok'" class="inline-note">
+            已读取归一化明细：交易 {{ normalizedReportMeta.tradeTotal ?? trades.length }} 条，信号
+            {{ normalizedReportMeta.signalTotal ?? normalizedSignals.length }} 条。
+          </div>
+          <div class="metric-grid compact-metrics">
+            <div>
+              <span>dataset</span>
+              <b>{{ getNestedString(reportSource, ["datasetId"]) || "-" }}</b>
+            </div>
+            <div>
+              <span>snapshot</span>
+              <b>{{ getNestedString(reportSource, ["snapshotType"]) || "-" }}</b>
+            </div>
+            <div>
+              <span>strategy</span>
+              <b>{{ getNestedString(reportSource, ["strategyName"]) || "-" }}</b>
+            </div>
+            <div>
+              <span>config</span>
+              <b>{{ shortId(getNestedString(reportSource, ["configHash"])) }}</b>
+            </div>
+            <div>
+              <span>seed</span>
+              <b>{{ getNestedString(reportSource, ["randomSeed"]) || "-" }}</b>
+            </div>
           </div>
           <div class="metric-grid">
             <div>
@@ -1611,7 +1728,7 @@ onMounted(async () => {
             <svg viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label="权益曲线">
               <polyline v-if="equityPolyline" :points="equityPolyline" />
             </svg>
-            <div v-if="!equityPolyline" class="empty-state">报告返回 equity_curve 后展示权益曲线。</div>
+            <div v-if="!equityPolyline" class="empty-state">归一化 equity 为空，无法绘制权益曲线。</div>
           </div>
           <div v-if="Object.keys(dataQuality).length" class="section-block quality-block">
             <h3>数据质量结论</h3>
@@ -1655,6 +1772,9 @@ onMounted(async () => {
             <div v-if="dataQualityWarnings.length" class="inline-note">
               <b>质量提示：</b>{{ dataQualityWarnings.slice(0, 4).join("；") }}
             </div>
+            <div v-if="qualityWarnings.length" class="inline-note">
+              <b>归一化质量报告：</b>{{ qualityWarnings.slice(0, 4).join("；") }}
+            </div>
             <div v-if="dataQualityExamples.length" class="table-wrap compact-table">
               <table>
                 <thead>
@@ -1671,6 +1791,74 @@ onMounted(async () => {
                     <td>{{ row.slotTime || "-" }}</td>
                     <td>{{ row.stockRowCount ?? "-" }}</td>
                     <td>{{ row.snapshotId }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div v-if="trades.length" class="section-block">
+            <h3>归一化交易明细</h3>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>代码</th>
+                    <th>名称</th>
+                    <th>入场</th>
+                    <th>出场</th>
+                    <th>数量</th>
+                    <th>净收益</th>
+                    <th>利润</th>
+                    <th>持有 bars</th>
+                    <th>分层</th>
+                    <th>退出原因</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="trade in trades.slice(0, 80)" :key="`${(trade as Record<string, unknown>).id}-${(trade as Record<string, unknown>).code}`">
+                    <td>{{ (trade as Record<string, unknown>).code || "-" }}</td>
+                    <td>{{ (trade as Record<string, unknown>).name || "-" }}</td>
+                    <td>{{ formatPrice(Number((trade as Record<string, unknown>).entryPrice)) }}</td>
+                    <td>{{ formatPrice(Number((trade as Record<string, unknown>).exitPrice)) }}</td>
+                    <td>{{ (trade as Record<string, unknown>).quantity ?? "-" }}</td>
+                    <td>{{ formatPercent(Number((trade as Record<string, unknown>).netReturn)) }}</td>
+                    <td>{{ formatNumber(Number((trade as Record<string, unknown>).profit)) }}</td>
+                    <td>{{ (trade as Record<string, unknown>).holdingBars ?? "-" }}</td>
+                    <td>{{ (trade as Record<string, unknown>).candidateTier || "-" }}</td>
+                    <td>{{ (trade as Record<string, unknown>).reason || "-" }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div v-if="normalizedSignals.length" class="section-block">
+            <h3>归一化信号解释</h3>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>快照</th>
+                    <th>代码</th>
+                    <th>名称</th>
+                    <th>分层</th>
+                    <th>信号</th>
+                    <th>置信度</th>
+                    <th>阶段/环境</th>
+                    <th>风险</th>
+                    <th>原因</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="signal in normalizedSignals.slice(0, 120)" :key="`${signal.id}-${signal.snapshotId}-${signal.code}`">
+                    <td>{{ shortId(signal.snapshotId) }}</td>
+                    <td>{{ signal.code || "-" }}</td>
+                    <td>{{ signal.name || "-" }}</td>
+                    <td>{{ signal.candidateTier || "-" }}</td>
+                    <td>{{ signal.signal || "-" }}</td>
+                    <td>{{ formatNumber(Number(signal.confidence)) }}</td>
+                    <td>{{ signal.stage || "-" }} / {{ signal.regime || "-" }}</td>
+                    <td>{{ Array.isArray(signal.riskFlags) ? signal.riskFlags.slice(0, 3).join("；") : "-" }}</td>
+                    <td>{{ Array.isArray(signal.reasons) ? signal.reasons.slice(0, 3).join("；") : "-" }}</td>
                   </tr>
                 </tbody>
               </table>
