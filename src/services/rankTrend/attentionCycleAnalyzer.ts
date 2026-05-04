@@ -2,17 +2,12 @@ import type { AttentionStage, CycleEntryBias, RankTrendAnalysisResult } from './
 import { ATTENTION_STAGE_SEQUENCE } from './types'
 import { clamp } from './utils'
 
-function calculateRankVelocity(percentiles: number[]): number {
-  if (percentiles.length < 2) return 0
-  return percentiles[percentiles.length - 1] - percentiles[percentiles.length - 2]
+function calculateRankVelocity(percentiles: number[], offset = 1): number {
+  if (percentiles.length < offset + 1) return 0
+  return percentiles[percentiles.length - offset] - percentiles[percentiles.length - offset - 1]
 }
 
-function calculatePreviousRankVelocity(percentiles: number[]): number {
-  if (percentiles.length < 3) return 0
-  return percentiles[percentiles.length - 2] - percentiles[percentiles.length - 3]
-}
-
-function calculateRankShock(percentiles: number[]): number {
+function calculateCycleRankShock(percentiles: number[]): number {
   if (percentiles.length < 6) return 0
   const velocities: number[] = []
   for (let i = 1; i < percentiles.length; i++) {
@@ -63,8 +58,8 @@ function buildAttentionTrajectoryMetrics(
 
   return {
     rankVelocity: calculateRankVelocity(percentiles),
-    rankAcceleration: calculateRankVelocity(percentiles) - calculatePreviousRankVelocity(percentiles),
-    rankShock: calculateRankShock(percentiles),
+    rankAcceleration: calculateRankVelocity(percentiles, 1) - calculateRankVelocity(percentiles, 2),
+    rankShock: calculateCycleRankShock(percentiles),
     hotZoneStreak,
     bestRecentRank,
     drawdownFromPeak: Math.max(0, currentRank - bestRecentRank),
@@ -283,6 +278,7 @@ export function analyzeAttentionCycle(input: {
   let currentStage: AttentionStage | null = null
   let currentMetrics: RankTrendAnalysisResult['cycle']['metrics'] | null = null
 
+  // 逐前缀模拟阶段演化路径，取终态作为当前阶段判定。n≤50 时 O(n²) 开销可接受。
   for (let index = 0; index < percentiles.length; index++) {
     const prefixRanks = ranks.slice(0, index + 1)
     const prefixPercentiles = percentiles.slice(0, index + 1)

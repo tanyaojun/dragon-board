@@ -631,10 +631,11 @@ export class RankTrendAnalyzer {
     const stockSampleQuality = this.derivePerStockSampleQuality(sampleQuality, analysisPercentiles.length)
 
     const stock = dataLayer.getStock(code)
-    const stockChange = Number(stock?.change ?? 0)
-    const volumeRatio = Number(stock?.volumeRatio ?? 0)
-    const zlje = Number(stock?.zlje ?? 0)
-    const zljzb = Number(stock?.zljzb ?? 0)
+    // || 0 防御 Number("abc") 等非数字字符串产生 NaN 污染下游计算链
+    const stockChange = Number(stock?.change ?? 0) || 0
+    const volumeRatio = Number(stock?.volumeRatio ?? 0) || 0
+    const zlje = Number(stock?.zlje ?? 0) || 0
+    const zljzb = Number(stock?.zljzb ?? 0) || 0
     const requiredSamples = stockSampleQuality.requiredSampleCount
 
     const technical =

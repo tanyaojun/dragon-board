@@ -277,6 +277,19 @@ function createStrongMoneyStatus(volumeConfirmation: VolumeConfirmation, reason?
   }
 }
 
+// 状态判定优先级（风险优先于机会，数字越小优先级越高）：
+//  (1) 无效行情 → 样本不足
+//  (2) D_EXIT_RISK+资金走弱 → 转弱预警
+//  (3) D_EXIT_RISK+强资金+高位 → 高位拥挤
+//  (4) D_EXIT_RISK+强资金+承接 → 强资确认
+//  (5) 量能背离/热+资金弱 → 资金背离
+//  (6) C_CROWDED/高位拥挤 → 高位拥挤
+//  (7) A_MAIN+过热 → 高位拥挤
+//  (8) A_MAIN+资金不弱 → 主升确认
+//  (9) B_IGNITION+资金不弱 → 点火观察
+//  (10) 强资金+承接 → 强资确认
+//  (11) 有热度 → 新入观察
+//  (12) 兜底 → 样本不足
 export function getRankTrendDisplayStatus(
   rankTrend?: RankTrendAnalysisResult | null,
   stock?: any,

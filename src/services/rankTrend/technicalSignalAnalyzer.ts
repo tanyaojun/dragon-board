@@ -52,7 +52,7 @@ function averagePrevMomentum(percentiles: number[], periods: number[]): number {
   return average(values)
 }
 
-function calculateRankShock(percentiles: number[]): number {
+function calculateMomentumRankShock(percentiles: number[]): number {
   if (percentiles.length < 6) return 0
   const velocities: number[] = []
   for (let i = 1; i < percentiles.length; i++) {
@@ -82,7 +82,7 @@ export function calculateMomentumProfile(percentiles: number[]): RankTrendMoment
   const prevShort = averagePrevMomentum(percentiles, shortPeriods)
   const prevMid = averagePrevMomentum(percentiles, midPeriods)
   const acceleration = average([short - prevShort, mid - prevMid])
-  const shock = calculateRankShock(percentiles)
+  const shock = calculateMomentumRankShock(percentiles)
   const composite = clamp(0.35 * short + 0.4 * mid + 0.25 * long + 0.2 * acceleration, -100, 100)
 
   return {
@@ -387,6 +387,99 @@ function analyzeMomentumSignals(
   }
 }
 
+function computeFallbackDirectionScores(input: {
+  displayScore: number
+  priceScore: number
+  volumeScore: number
+  capitalScore: number
+}): RankTrendAnalysisResult['technical']['signals']['direction'] {
+  const { displayScore, priceScore, volumeScore, capitalScore } = input
+  const directionScore = clamp(
+    displayScore * 0.4 + priceScore * 0.3 + capitalScore * 0.2 + volumeScore * 0.1,
+    -1,
+    1,
+  )
+  const directionSignal: RankSignalDirection =
+    directionScore >= 0.2 ? 'buy' : directionScore <= -0.2 ? 'sell' : 'hold'
+  const directionAgreement =
+    directionSignal === 'buy'
+      ? Number(displayScore > 0) + Number(priceScore > 0) + Number(capitalScore >= 0)
+      : directionSignal === 'sell'
+        ? Number(displayScore < 0) + Number(priceScore < 0) + Number(capitalScore <= 0)
+        : 0
+
+  return {
+    signal: directionSignal,
+    confidence: calculateSignalConfidence(directionScore, clamp(directionAgreement * 1.5, 0, 5)),
+    score: directionScore,
+  }
+}
+
+function computeFallbackAccelerationScores(input: {
+  displayScore: number
+  priceScore: number
+  volumeScore: number
+}): RankTrendAnalysisResult['technical']['signals']['acceleration'] {
+  const { displayScore, priceScore, volumeScore } = input
+  const accelerationScore = clamp(
+    displayScore * 0.55 + priceScore * 0.25 + volumeScore * 0.2,
+    -1,
+    1,
+  )
+  const accelerationSignal: RankSignalDirection =
+    accelerationScore >= 0.18 && (displayScore > 0 || priceScore > 0)
+      ? 'buy'
+      : accelerationScore <= -0.18 && (displayScore < 0 || priceScore < 0)
+        ? 'sell'
+        : 'hold'
+  const accelerationAgreement =
+    accelerationSignal === 'buy'
+      ? Number(displayScore > 0) + Number(priceScore > 0) + Number(volumeScore > 0)
+      : accelerationSignal === 'sell'
+        ? Number(displayScore < 0) + Number(priceScore < 0) + Number(volumeScore < 0)
+        : 0
+
+  return {
+    signal: accelerationSignal,
+    confidence: calculateSignalConfidence(accelerationScore, clamp(accelerationAgreement * 1.5, 0, 5)),
+    score: accelerationScore,
+  }
+}
+
+function computeFallbackZeroCrossScores(input: {
+  displayScore: number
+  priceScore: number
+  volumeScore: number
+}): RankTrendAnalysisResult['technical']['signals']['zeroCross'] {
+  const { displayScore, priceScore, volumeScore } = input
+  let zeroCrossScore = 0
+  let zeroCrossSignal: RankSignalDirection = 'hold'
+  const zeroCrossBase = clamp(
+    displayScore * 0.5 + priceScore * 0.35 + volumeScore * 0.15,
+    -1,
+    1,
+  )
+  if (displayScore > 0.15 && priceScore > 0 && volumeScore >= -0.2) {
+    zeroCrossSignal = 'buy'
+    zeroCrossScore = Math.max(0, zeroCrossBase)
+  } else if (displayScore < -0.15 && priceScore < 0 && volumeScore <= 0.2) {
+    zeroCrossSignal = 'sell'
+    zeroCrossScore = Math.min(0, zeroCrossBase)
+  }
+  const zeroCrossAgreement =
+    zeroCrossSignal === 'buy'
+      ? Number(priceScore > 0) + Number(volumeScore > 0)
+      : zeroCrossSignal === 'sell'
+        ? Number(priceScore < 0) + Number(volumeScore < 0)
+        : 0
+
+  return {
+    signal: zeroCrossSignal,
+    confidence: calculateSignalConfidence(zeroCrossScore, clamp(zeroCrossAgreement * 2.5, 0, 5)),
+    score: zeroCrossScore,
+  }
+}
+
 function calculateFallbackProxySignals(input: {
   displayChange: number
   stockChange: number
@@ -411,80 +504,16 @@ function calculateFallbackProxySignals(input: {
     (zlje > 0 ? 0.6 : zlje < 0 ? -0.6 : 0) + (zljzb > 0 ? 0.4 : zljzb < 0 ? -0.4 : 0)
   const capitalScore = clamp(capitalBias, -1, 1)
 
-  const directionScore = clamp(
-    displayScore * 0.4 + priceScore * 0.3 + capitalScore * 0.2 + volumeScore * 0.1,
-    -1,
-    1,
-  )
-  const directionSignal: RankSignalDirection =
-    directionScore >= 0.2 ? 'buy' : directionScore <= -0.2 ? 'sell' : 'hold'
-  const directionAgreement =
-    directionSignal === 'buy'
-      ? Number(displayScore > 0) + Number(priceScore > 0) + Number(capitalScore >= 0)
-      : directionSignal === 'sell'
-        ? Number(displayScore < 0) + Number(priceScore < 0) + Number(capitalScore <= 0)
-        : 0
-
-  const accelerationScore = clamp(
-    displayScore * 0.55 + priceScore * 0.25 + volumeScore * 0.2,
-    -1,
-    1,
-  )
-  const accelerationSignal: RankSignalDirection =
-    accelerationScore >= 0.18 && (displayScore > 0 || priceScore > 0)
-      ? 'buy'
-      : accelerationScore <= -0.18 && (displayScore < 0 || priceScore < 0)
-        ? 'sell'
-        : 'hold'
-  const accelerationAgreement =
-    accelerationSignal === 'buy'
-      ? Number(displayScore > 0) + Number(priceScore > 0) + Number(volumeScore > 0)
-      : accelerationSignal === 'sell'
-        ? Number(displayScore < 0) + Number(priceScore < 0) + Number(volumeScore < 0)
-        : 0
-
-  let zeroCrossScore = 0
-  let zeroCrossSignal: RankSignalDirection = 'hold'
-  const zeroCrossBase = clamp(
-    displayScore * 0.5 + priceScore * 0.35 + volumeScore * 0.15,
-    -1,
-    1,
-  )
-  if (displayScore > 0.15 && priceScore > 0 && volumeScore >= -0.2) {
-    zeroCrossSignal = 'buy'
-    zeroCrossScore = Math.max(0, zeroCrossBase)
-  } else if (displayScore < -0.15 && priceScore < 0 && volumeScore <= 0.2) {
-    zeroCrossSignal = 'sell'
-    zeroCrossScore = Math.min(0, zeroCrossBase)
-  }
-  const zeroCrossAgreement =
-    zeroCrossSignal === 'buy'
-      ? Number(priceScore > 0) + Number(volumeScore > 0)
-      : zeroCrossSignal === 'sell'
-        ? Number(priceScore < 0) + Number(volumeScore < 0)
-        : 0
-
-  const macdCross = macdAvailable ? macdData.cross : 'none'
-  const macdScore = macdAvailable ? clamp(macdData.rawScore, -1, 1) : 0
+  const direction = computeFallbackDirectionScores({ displayScore, priceScore, volumeScore, capitalScore })
+  const acceleration = computeFallbackAccelerationScores({ displayScore, priceScore, volumeScore })
+  const zeroCross = computeFallbackZeroCrossScores({ displayScore, priceScore, volumeScore })
 
   return {
-    direction: {
-      signal: directionSignal,
-      confidence: calculateSignalConfidence(directionScore, clamp(directionAgreement * 1.5, 0, 5)),
-      score: directionScore,
-    },
-    acceleration: {
-      signal: accelerationSignal,
-      confidence: calculateSignalConfidence(accelerationScore, clamp(accelerationAgreement * 1.5, 0, 5)),
-      score: accelerationScore,
-    },
-    zeroCross: {
-      signal: zeroCrossSignal,
-      confidence: calculateSignalConfidence(zeroCrossScore, clamp(zeroCrossAgreement * 2.5, 0, 5)),
-      score: zeroCrossScore,
-    },
-    macdCross,
-    macdScore,
+    direction,
+    acceleration,
+    zeroCross,
+    macdCross: macdAvailable ? macdData.cross : 'none',
+    macdScore: macdAvailable ? clamp(macdData.rawScore, -1, 1) : 0,
     momentumScore: clamp((displayScore * 0.45 + priceScore * 0.35 + capitalScore * 0.2) * 100, -100, 100),
   }
 }
