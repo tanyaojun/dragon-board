@@ -7,10 +7,6 @@ import { CookieJar } from 'tough-cookie'
 import iconv from 'iconv-lite'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
-import {
-  registerSnapshotRemoteRoutes,
-  SNAPSHOT_DAY_BUNDLE_JSON_LIMIT,
-} from './snapshotRemoteRoutes.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -22,7 +18,7 @@ const jar = new CookieJar()
 const client = wrapper(axios.create({ jar, withCredentials: true, maxRedirects: 5 }))
 
 app.use(cors({ origin: '*', methods: ['GET', 'POST'] }))
-app.use(express.json({ limit: SNAPSHOT_DAY_BUNDLE_JSON_LIMIT }))
+app.use(express.json({ limit: '2mb' }))
 
 // 日志中间件
 app.use((req, res, next) => {
@@ -924,8 +920,6 @@ app.get('/api/sentiment/composite', async (req, res) => {
   }
 })
 
-registerSnapshotRemoteRoutes(app)
-
 app.use((error, req, res, next) => {
   if (!error) {
     next()
@@ -934,8 +928,8 @@ app.use((error, req, res, next) => {
   if (error.type === 'entity.too.large') {
     res.status(413).json({
       ok: false,
-      errorCode: 'remote_day_bundle_payload_too_large',
-      message: `snapshot payload exceeds proxy json limit (${SNAPSHOT_DAY_BUNDLE_JSON_LIMIT})`,
+      errorCode: 'proxy_payload_too_large',
+      message: 'request payload exceeds proxy json limit',
     })
     return
   }

@@ -401,18 +401,12 @@ describe('SnapshotRuntime', () => {
     expect(exists).toHaveBeenCalled()
   })
 
-  it('backfills pending cloud trading dates after 15:30 in ascending order', async () => {
+  it('does not upload cloud day bundles after 15:30 because Supabase backup owns cloud sync', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-04-28T15:35:00'))
 
     const runtime = createRuntime()
-    const syncPrimarySnapshotsToCloud = vi
-      .spyOn(runtime, 'syncPrimarySnapshotsToCloud')
-      .mockImplementation(async (options?: { tradingDate?: string }) => {
-        const tradingDate = options?.tradingDate || ''
-        ;(runtime as any).recordCloudBundleUploaded(tradingDate, Date.now())
-        return { queued: 1, totalPrimary: 8 }
-      })
+    const syncPrimarySnapshotsToCloud = vi.spyOn(runtime, 'syncPrimarySnapshotsToCloud')
 
     ;(runtime as any).recordBucketSyncSuccess('2026-04-27', Date.now() - 60_000)
     ;(runtime as any).recordBucketSyncSuccess('2026-04-28', Date.now())
@@ -425,14 +419,7 @@ describe('SnapshotRuntime', () => {
 
     await (runtime as any).runDailyCloudSyncIfDue()
 
-    expect(syncPrimarySnapshotsToCloud).toHaveBeenNthCalledWith(1, {
-      overwrite: false,
-      tradingDate: '2026-04-27',
-    })
-    expect(syncPrimarySnapshotsToCloud).toHaveBeenNthCalledWith(2, {
-      overwrite: false,
-      tradingDate: '2026-04-28',
-    })
+    expect(syncPrimarySnapshotsToCloud).not.toHaveBeenCalled()
   })
 
   it('does not collect scheduled snapshot slots on 2026 Labor Day market holiday', async () => {
@@ -505,7 +492,7 @@ describe('SnapshotRuntime', () => {
     expect((runtime as any).snapshotBackupSync.cleanupInvalidLocalBackups).toHaveBeenCalledTimes(1)
   })
 
-  it('uses recent primary trading dates as cloud backfill candidates when sync state is missing', async () => {
+  it('does not use recent primary trading dates for legacy cloud bundle backfill', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-04-28T15:35:00'))
 
@@ -523,14 +510,7 @@ describe('SnapshotRuntime', () => {
 
     await (runtime as any).runDailyCloudSyncIfDue()
 
-    expect(syncPrimarySnapshotsToCloud).toHaveBeenNthCalledWith(1, {
-      overwrite: false,
-      tradingDate: '2026-04-27',
-    })
-    expect(syncPrimarySnapshotsToCloud).toHaveBeenNthCalledWith(2, {
-      overwrite: false,
-      tradingDate: '2026-04-28',
-    })
+    expect(syncPrimarySnapshotsToCloud).not.toHaveBeenCalled()
   })
 
   it('returns repair candidates without writing into the primary store', async () => {

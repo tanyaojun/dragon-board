@@ -141,6 +141,8 @@ QuantBoard 后端不可用时，正式读取应显式失败，不允许静默回
 - [SnapshotRuntime.compactSnapshotRawRecords](/D:/dragon-board/src/services/snapshot/runtime.ts)
 - [SnapshotRuntime.runSnapshotStorageMaintenance](/D:/dragon-board/src/services/snapshot/runtime.ts)
 
+交易日 15:30 后的坚果云 JSON day bundle 自动上传已经退出正式链路。后续云端备份由 QuantBoard/Supabase outbox 承接；根前端只保留历史 remote bundle 的手工恢复和迁移兼容能力。
+
 ## 测试
 快照模块核心回归位于：
 
