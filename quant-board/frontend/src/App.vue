@@ -4,6 +4,12 @@ import { computed, onMounted, reactive, ref, watch } from "vue";
 import { api, formatApiError } from "./api";
 import {
   buildReplaySteps,
+  buildBacktestVerdict,
+  buildControlConclusion,
+  buildDrawdownCurve,
+  buildQualityNarratives,
+  buildSignalSummary,
+  buildTradeSummary,
   formatDisplayTime,
   formatNumber,
   formatPercent,
@@ -22,6 +28,7 @@ import type {
   BacktestEquityPoint,
   BacktestQualityReport,
   BacktestRequest,
+  BacktestReportTabKey,
   BacktestSignal,
   BacktestTrade,
   DatasetSummary,
@@ -111,6 +118,12 @@ const optimizationPollMessage = ref("");
 const replayCode = ref("");
 const goldenAction = ref<"baseline" | "validate" | "">("");
 const copiedBox = ref("");
+const activeReportTab = ref<BacktestReportTabKey>("trades");
+const signalTierFilter = ref("");
+const signalTypeFilter = ref("");
+const signalRegimeFilter = ref("");
+const signalRiskFilter = ref<"all" | "risk" | "clean">("all");
+const showReportJson = ref(false);
 let optimizationPollToken = 0;
 
 const backtestForm = reactive<BacktestRequest>({
@@ -270,6 +283,24 @@ const equityPolyline = computed(() => {
     })
     .join(" ");
 });
+const drawdownCurve = computed(() => buildDrawdownCurve(equityCurve.value));
+const drawdownPolyline = computed(() => {
+  const points = drawdownCurve.value;
+  if (points.length < 2) {
+    return "";
+  }
+  const values = points.map((point) => point.value);
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = max - min || 1;
+  return points
+    .map((point, index) => {
+      const x = (index / Math.max(points.length - 1, 1)) * 100;
+      const y = 100 - ((point.value - min) / range) * 100;
+      return `${x.toFixed(2)},${y.toFixed(2)}`;
+    })
+    .join(" ");
+});
 
 const datasetStatusLabel = computed(() => {
   if (datasetsState.status === "loading") {
@@ -389,13 +420,7 @@ const controlBacktests = computed(() => {
   return getArrayField(reportSource.value, ["controlBacktests"]) as Array<Record<string, unknown>>;
 });
 
-const sampleDiagnostics = computed(() => getObjectField(reportSource.value, ["sampleDiagnostics"]));
-const macdDiagnostics = computed(() => getObjectField(reportSource.value, ["macdDiagnostics"]));
 const dataQuality = computed(() => getObjectField(reportSource.value, ["dataQuality"]));
-const dataQualityWarnings = computed(() => {
-  const warnings = dataQuality.value.warnings;
-  return Array.isArray(warnings) ? warnings.map(String) : [];
-});
 const dataQualityExamples = computed(() => {
   const rows = dataQuality.value.lowHotlistExamples;
   return Array.isArray(rows) ? rows.slice(0, 6) as Array<Record<string, unknown>> : [];
@@ -426,15 +451,57 @@ const tradeDiagnosticsTiers = computed(() => {
   return Array.isArray(rows) ? rows.slice(0, 8) as Array<Record<string, unknown>> : [];
 });
 const normalizedReportMeta = computed(() => getObjectField(reportSource.value, ["normalizedReport"]));
-const normalizedSignals = computed(() => getArrayField(reportSource.value, ["signals"]) as Array<Record<string, unknown>>);
-const qualityWarnings = computed(() => {
+const normalizedSignals = computed(() => getArrayField(reportSource.value, ["signals"]) as BacktestSignal[]);
+const qualityReport = computed(() => {
+  const fromNormalized = backtestNormalizedState.data?.qualityReport;
+  if (fromNormalized) {
+    return fromNormalized;
+  }
   const report = getObjectField(reportSource.value, ["qualityReport"]);
-  const warnings = report.warnings;
-  return Array.isArray(warnings) ? warnings.map(String) : [];
+  return Object.keys(report).length ? (report as BacktestQualityReport) : null;
 });
-const sampleWarnings = computed(() => {
-  const warnings = sampleDiagnostics.value.warnings;
-  return Array.isArray(warnings) ? warnings.map(String) : [];
+const reportVerdict = computed(() => buildBacktestVerdict(reportSource.value, qualityReport.value, trades.value as BacktestTrade[], normalizedSignals.value));
+const tradeSummary = computed(() => buildTradeSummary(trades.value as BacktestTrade[]));
+const signalSummary = computed(() => buildSignalSummary(normalizedSignals.value));
+const qualityNarratives = computed(() => buildQualityNarratives(dataQuality.value, qualityReport.value));
+const controlConclusions = computed(() => buildControlConclusion(reportSource.value, controlBacktests.value));
+const reportTabs: Array<{ key: BacktestReportTabKey; label: string }> = [
+  { key: "trades", label: "交易明细" },
+  { key: "signals", label: "信号解释" },
+  { key: "quality", label: "质量诊断" },
+  { key: "controls", label: "对照组" },
+  { key: "matching", label: "撮合诊断" },
+  { key: "config", label: "参数快照" }
+];
+const signalRegimeOptions = computed(() => {
+  const values = new Set<string>();
+  for (const signal of normalizedSignals.value) {
+    if (signal.regime) {
+      values.add(signal.regime);
+    }
+  }
+  return Array.from(values).sort();
+});
+const filteredSignals = computed(() => {
+  return normalizedSignals.value.filter((signal) => {
+    if (signalTierFilter.value && signal.candidateTier !== signalTierFilter.value) {
+      return false;
+    }
+    if (signalTypeFilter.value && signal.signal !== signalTypeFilter.value) {
+      return false;
+    }
+    if (signalRegimeFilter.value && signal.regime !== signalRegimeFilter.value) {
+      return false;
+    }
+    const hasRisk = Boolean(signal.riskFlags?.length);
+    if (signalRiskFilter.value === "risk" && !hasRisk) {
+      return false;
+    }
+    if (signalRiskFilter.value === "clean" && hasRisk) {
+      return false;
+    }
+    return true;
+  });
 });
 const optimizationTrials = computed(() => getOptimizationTrials(optimizationSource.value));
 const optimizationRunStatus = computed(() => getRunStatus(optimizationSource.value));
@@ -831,6 +898,7 @@ async function fetchBacktest(): Promise<void> {
       signals: signalPage,
       quality
     };
+    activeReportTab.value = tradePage.items.length ? "trades" : "signals";
   } catch (error) {
     backtestNormalizedState.status = "error";
     backtestNormalizedState.error = formatApiError(error);
@@ -1660,150 +1728,128 @@ onMounted(async () => {
             已读取归一化明细：交易 {{ normalizedReportMeta.tradeTotal ?? trades.length }} 条，信号
             {{ normalizedReportMeta.signalTotal ?? normalizedSignals.length }} 条。
           </div>
-          <div class="metric-grid compact-metrics">
+          <div class="report-verdict" :class="reportVerdict.tone">
             <div>
-              <span>dataset</span>
-              <b>{{ getNestedString(reportSource, ["datasetId"]) || "-" }}</b>
+              <span>报告结论</span>
+              <b>{{ reportVerdict.label }}</b>
+              <p>{{ reportVerdict.summary }}</p>
             </div>
-            <div>
-              <span>snapshot</span>
-              <b>{{ getNestedString(reportSource, ["snapshotType"]) || "-" }}</b>
+            <div class="verdict-tags">
+              <span>{{ reportVerdict.performanceLabel }}</span>
+              <span>{{ reportVerdict.tradeLabel }}</span>
+              <span>质量 {{ reportVerdict.qualityLabel }}</span>
+              <span v-if="getNestedString(reportSource, ['snapshotType']) === 'quarter_hour'">quarter_hour</span>
             </div>
-            <div>
-              <span>strategy</span>
-              <b>{{ getNestedString(reportSource, ["strategyName"]) || "-" }}</b>
+            <ul v-if="reportVerdict.reasons.length" class="narrative-list">
+              <li v-for="reason in reportVerdict.reasons" :key="reason">{{ reason }}</li>
+            </ul>
+          </div>
+
+          <div class="report-kpi-groups">
+            <div class="section-block">
+              <h3>收益表现</h3>
+              <div class="diagnostic-grid compact-diagnostic">
+                <div><span>总收益</span><b>{{ formatPercent(reportMetrics.totalReturn) }}</b></div>
+                <div><span>已实现收益</span><b>{{ formatPercent(reportMetrics.realizedReturn) }}</b></div>
+                <div><span>持仓盯市盈亏</span><b>{{ formatNumber(reportMetrics.unrealizedMarkProfit) }}</b></div>
+                <div><span>预估平仓成本</span><b>{{ formatNumber(reportMetrics.unrealizedExitCost) }}</b></div>
+                <div><span>预估平仓后盈亏</span><b>{{ formatNumber(reportMetrics.unrealizedProfit) }}</b></div>
+              </div>
             </div>
-            <div>
-              <span>config</span>
-              <b>{{ shortId(getNestedString(reportSource, ["configHash"])) }}</b>
+            <div class="section-block">
+              <h3>风险表现</h3>
+              <div class="diagnostic-grid compact-diagnostic">
+                <div><span>最大回撤</span><b>{{ formatPercent(reportMetrics.maxDrawdown) }}</b></div>
+                <div><span>Sharpe</span><b>{{ formatNumber(reportMetrics.sharpe) }}</b></div>
+                <div><span>胜率</span><b>{{ formatPercent(reportMetrics.winRate) }}</b></div>
+                <div><span>回撤深度</span><b>{{ Number(reportMetrics.maxDrawdown) < -0.1 ? "严重" : Number(reportMetrics.maxDrawdown) < -0.03 ? "中等" : "轻微" }}</b></div>
+              </div>
             </div>
-            <div>
-              <span>seed</span>
-              <b>{{ getNestedString(reportSource, ["randomSeed"]) || "-" }}</b>
+            <div class="section-block">
+              <h3>交易活跃度</h3>
+              <div class="diagnostic-grid compact-diagnostic">
+                <div><span>交易数</span><b>{{ reportMetrics.tradeCount ?? trades.length }}</b></div>
+                <div><span>买入尝试</span><b>{{ matchingDiagnostics.buyAttempts ?? 0 }}</b></div>
+                <div><span>买入成交</span><b>{{ matchingDiagnostics.buyFilled ?? 0 }}</b></div>
+                <div><span>未成交订单</span><b>{{ matchingDiagnostics.skippedOrderCount ?? 0 }}</b></div>
+                <div><span>未平仓</span><b>{{ reportMetrics.openPositionCount ?? "-" }}</b></div>
+              </div>
+            </div>
+            <div class="section-block">
+              <h3>可复现信息</h3>
+              <div class="diagnostic-grid compact-diagnostic">
+                <div><span>dataset</span><b>{{ getNestedString(reportSource, ["datasetId"]) || "-" }}</b></div>
+                <div><span>snapshot</span><b>{{ getNestedString(reportSource, ["snapshotType"]) || "-" }}</b></div>
+                <div><span>strategy</span><b>{{ getNestedString(reportSource, ["strategyName"]) || "-" }}</b></div>
+                <div><span>version</span><b>{{ getNestedString(reportSource, ["strategyVersion"]) || "-" }}</b></div>
+                <div><span>config</span><b>{{ shortId(getNestedString(reportSource, ["configHash"])) }}</b></div>
+                <div><span>seed</span><b>{{ getNestedString(reportSource, ["randomSeed"]) || "-" }}</b></div>
+              </div>
             </div>
           </div>
-          <div class="metric-grid">
-            <div>
-              <span>总收益</span>
-              <b>{{ formatPercent(reportMetrics.totalReturn) }}</b>
+
+          <div class="report-chart-grid">
+            <div class="section-block">
+              <h3>净值曲线</h3>
+              <div class="chart-panel small-chart">
+                <svg viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label="权益曲线">
+                  <polyline v-if="equityPolyline" :points="equityPolyline" />
+                </svg>
+                <div v-if="!equityPolyline" class="empty-state">权益曲线为空，无法绘制。请确认该 run 是否已写入 backtest_equity_curve。</div>
+                <div v-else-if="equityCurve.length < 2" class="empty-state">样本点不足，曲线仅供参考。</div>
+              </div>
             </div>
-            <div>
-              <span>已实现收益</span>
-              <b>{{ formatPercent(reportMetrics.realizedReturn) }}</b>
+            <div class="section-block">
+              <h3>回撤曲线</h3>
+              <div class="chart-panel small-chart drawdown-chart">
+                <svg viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label="回撤曲线">
+                  <polyline v-if="drawdownPolyline" :points="drawdownPolyline" />
+                </svg>
+                <div v-if="!drawdownPolyline" class="empty-state">权益点不足，无法计算回撤。</div>
+              </div>
             </div>
-            <div>
-              <span>持仓盯市盈亏</span>
-              <b>{{ formatNumber(reportMetrics.unrealizedMarkProfit) }}</b>
-            </div>
-            <div>
-              <span>预估平仓成本</span>
-              <b>{{ formatNumber(reportMetrics.unrealizedExitCost) }}</b>
-            </div>
-            <div>
-              <span>预估平仓后盈亏</span>
-              <b>{{ formatNumber(reportMetrics.unrealizedProfit) }}</b>
-            </div>
-            <div>
-              <span>Sharpe</span>
-              <b>{{ formatNumber(reportMetrics.sharpe) }}</b>
-            </div>
-            <div>
-              <span>最大回撤</span>
-              <b>{{ formatPercent(reportMetrics.maxDrawdown) }}</b>
-            </div>
-            <div>
-              <span>胜率</span>
-              <b>{{ formatPercent(reportMetrics.winRate) }}</b>
-            </div>
-            <div>
-              <span>交易数</span>
-              <b>{{ reportMetrics.tradeCount ?? trades.length }}</b>
-            </div>
-            <div>
-              <span>未平仓</span>
-              <b>{{ reportMetrics.openPositionCount ?? "-" }}</b>
+            <div class="section-block">
+              <h3>收益构成</h3>
+              <div class="profit-stack">
+                <div><span>已实现</span><b>{{ formatPercent(reportMetrics.realizedReturn) }}</b></div>
+                <div><span>未实现</span><b>{{ formatNumber(reportMetrics.unrealizedMarkProfit) }}</b></div>
+                <div><span>预估成本</span><b>{{ formatNumber(reportMetrics.unrealizedExitCost) }}</b></div>
+              </div>
             </div>
           </div>
-          <div class="chart-panel">
-            <svg viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label="权益曲线">
-              <polyline v-if="equityPolyline" :points="equityPolyline" />
-            </svg>
-            <div v-if="!equityPolyline" class="empty-state">归一化 equity 为空，无法绘制权益曲线。</div>
+
+          <div class="report-tabs" role="tablist" aria-label="回测报告明细">
+            <button
+              v-for="tab in reportTabs"
+              :key="tab.key"
+              type="button"
+              :class="{ active: activeReportTab === tab.key }"
+              @click="activeReportTab = tab.key"
+            >
+              {{ tab.label }}
+            </button>
           </div>
-          <div v-if="Object.keys(dataQuality).length" class="section-block quality-block">
-            <h3>数据质量结论</h3>
-            <div class="diagnostic-grid">
-              <div>
-                <span>研究等级</span>
-                <b>{{ dataQuality.researchGrade || "-" }}</b>
-              </div>
-              <div>
-                <span>质量状态</span>
-                <b>{{ dataQuality.severity || "-" }}</b>
-              </div>
-              <div>
-                <span>低热榜快照</span>
-                <b>{{ dataQuality.lowHotlistCount ?? 0 }}</b>
-              </div>
-              <div>
-                <span>剔除空热榜</span>
-                <b>{{ dataQuality.droppedEmptyHotlistSnapshots ?? 0 }}</b>
-              </div>
-              <div>
-                <span>运行快照</span>
-                <b>{{ dataQuality.snapshotCount ?? "-" }} / {{ dataQuality.sourceSnapshotCount ?? "-" }}</b>
-              </div>
-              <div>
-                <span>低热榜占比</span>
-                <b>{{ formatPercent(Number(dataQuality.lowHotlistShare)) }}</b>
-              </div>
-              <div>
-                <span>热榜行数均值</span>
-                <b>{{ formatNumber(Number(dataQuality.hotlistCountAvg)) }}</b>
-              </div>
-              <div>
-                <span>样本 OK 占比</span>
-                <b>{{ formatPercent(Number(dataQuality.sampleOkShare)) }}</b>
-              </div>
+
+          <div v-if="activeReportTab === 'trades'" class="report-tab-panel">
+            <div class="diagnostic-grid compact-diagnostic">
+              <div><span>总交易数</span><b>{{ tradeSummary.total }}</b></div>
+              <div><span>盈利交易</span><b>{{ tradeSummary.winning }}</b></div>
+              <div><span>亏损交易</span><b>{{ tradeSummary.losing }}</b></div>
+              <div><span>平均净收益</span><b>{{ formatPercent(tradeSummary.averageNetReturn) }}</b></div>
+              <div><span>最大盈利</span><b>{{ formatNumber(tradeSummary.maxProfit) }}</b></div>
+              <div><span>最大亏损</span><b>{{ formatNumber(tradeSummary.maxLoss) }}</b></div>
             </div>
-            <div class="inline-note">
-              <b>建议：</b>{{ dataQuality.recommendation || "暂无质量建议" }}
+            <div v-if="!trades.length" class="empty-explanation">
+              <b>没有真实成交</b>
+              <p>可能原因：候选不足、涨停不可买、流动性不足、T+1 限制或样本质量降级。</p>
+              <button type="button" @click="activeReportTab = 'signals'">查看信号解释</button>
+              <button type="button" @click="activeReportTab = 'matching'">查看撮合诊断</button>
             </div>
-            <div v-if="dataQualityWarnings.length" class="inline-note">
-              <b>质量提示：</b>{{ dataQualityWarnings.slice(0, 4).join("；") }}
-            </div>
-            <div v-if="qualityWarnings.length" class="inline-note">
-              <b>归一化质量报告：</b>{{ qualityWarnings.slice(0, 4).join("；") }}
-            </div>
-            <div v-if="dataQualityExamples.length" class="table-wrap compact-table">
+            <div v-else class="table-wrap">
               <table>
                 <thead>
                   <tr>
-                    <th>日期</th>
-                    <th>时间</th>
-                    <th>热榜行数</th>
-                    <th>snapshotId</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="row in dataQualityExamples" :key="String(row.snapshotId)">
-                    <td>{{ row.tradingDate || "-" }}</td>
-                    <td>{{ row.slotTime || "-" }}</td>
-                    <td>{{ row.stockRowCount ?? "-" }}</td>
-                    <td>{{ row.snapshotId }}</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-          <div v-if="trades.length" class="section-block">
-            <h3>归一化交易明细</h3>
-            <div class="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>代码</th>
-                    <th>名称</th>
+                    <th>股票</th>
                     <th>入场</th>
                     <th>出场</th>
                     <th>数量</th>
@@ -1811,62 +1857,155 @@ onMounted(async () => {
                     <th>利润</th>
                     <th>持有 bars</th>
                     <th>分层</th>
+                    <th>阶段/环境</th>
                     <th>退出原因</th>
+                    <th>成交细节</th>
                   </tr>
                 </thead>
                 <tbody>
-                  <tr v-for="trade in trades.slice(0, 80)" :key="`${(trade as Record<string, unknown>).id}-${(trade as Record<string, unknown>).code}`">
-                    <td>{{ (trade as Record<string, unknown>).code || "-" }}</td>
-                    <td>{{ (trade as Record<string, unknown>).name || "-" }}</td>
-                    <td>{{ formatPrice(Number((trade as Record<string, unknown>).entryPrice)) }}</td>
-                    <td>{{ formatPrice(Number((trade as Record<string, unknown>).exitPrice)) }}</td>
-                    <td>{{ (trade as Record<string, unknown>).quantity ?? "-" }}</td>
-                    <td>{{ formatPercent(Number((trade as Record<string, unknown>).netReturn)) }}</td>
-                    <td>{{ formatNumber(Number((trade as Record<string, unknown>).profit)) }}</td>
-                    <td>{{ (trade as Record<string, unknown>).holdingBars ?? "-" }}</td>
-                    <td>{{ (trade as Record<string, unknown>).candidateTier || "-" }}</td>
-                    <td>{{ (trade as Record<string, unknown>).reason || "-" }}</td>
+                  <tr v-for="trade in (trades as BacktestTrade[]).slice(0, 80)" :key="`${trade.id}-${trade.code}`">
+                    <td><b>{{ trade.code || "-" }}</b><br /><small>{{ trade.name || "-" }}</small></td>
+                    <td>{{ trade.entryTradingDate || formatDisplayTime(String(trade.entryTime || "")) }}<br />{{ formatPrice(Number(trade.entryPrice)) }}</td>
+                    <td>{{ trade.exitTradingDate || formatDisplayTime(String(trade.exitTime || "")) }}<br />{{ formatPrice(Number(trade.exitPrice)) }}</td>
+                    <td>{{ trade.quantity ?? "-" }}</td>
+                    <td>{{ formatPercent(Number(trade.netReturn)) }}</td>
+                    <td>{{ formatNumber(Number(trade.profit)) }}</td>
+                    <td>{{ trade.holdingBars ?? "-" }}</td>
+                    <td>{{ trade.candidateTier || "-" }}</td>
+                    <td>{{ trade.stage || "-" }} / {{ trade.regime || "-" }}</td>
+                    <td>{{ trade.reason || "-" }}</td>
+                    <td>{{ trade.fillDetail ? Object.keys(trade.fillDetail).slice(0, 3).join(" / ") : "-" }}</td>
                   </tr>
                 </tbody>
               </table>
             </div>
+            <div v-if="Number(normalizedReportMeta.tradeTotal || 0) > trades.length" class="inline-note">
+              当前仅显示前 {{ trades.length }} 条，共 {{ normalizedReportMeta.tradeTotal }} 条。
+            </div>
           </div>
-          <div v-if="normalizedSignals.length" class="section-block">
-            <h3>归一化信号解释</h3>
+
+          <div v-if="activeReportTab === 'signals'" class="report-tab-panel">
+            <div class="inline-note">信号解释展示策略判断，不代表真实成交。真实成交请查看交易明细。</div>
+            <div class="diagnostic-grid compact-diagnostic">
+              <div><span>信号总数</span><b>{{ signalSummary.total }}</b></div>
+              <div><span>强候选 A_MAIN</span><b>{{ signalSummary.strongCandidates }}</b></div>
+              <div><span>观察 B_IGNITION</span><b>{{ signalSummary.watchCandidates }}</b></div>
+              <div><span>剔除/风险候选</span><b>{{ signalSummary.excludedCandidates }}</b></div>
+              <div><span>buy</span><b>{{ signalSummary.signalCounts.buy || 0 }}</b></div>
+              <div><span>watch</span><b>{{ signalSummary.signalCounts.watch || 0 }}</b></div>
+            </div>
+            <div class="filter-row">
+              <select v-model="signalTierFilter">
+                <option value="">全部分层</option>
+                <option value="A_MAIN">A_MAIN</option>
+                <option value="B_IGNITION">B_IGNITION</option>
+                <option value="C_CROWDED">C_CROWDED</option>
+                <option value="D_EXIT_RISK">D_EXIT_RISK</option>
+                <option value="N_NEUTRAL">N_NEUTRAL</option>
+              </select>
+              <select v-model="signalTypeFilter">
+                <option value="">全部信号</option>
+                <option value="buy">buy</option>
+                <option value="watch">watch</option>
+                <option value="hold">hold</option>
+                <option value="sell">sell</option>
+              </select>
+              <select v-model="signalRegimeFilter">
+                <option value="">全部环境</option>
+                <option v-for="regime in signalRegimeOptions" :key="regime" :value="regime">{{ regime }}</option>
+              </select>
+              <select v-model="signalRiskFilter">
+                <option value="all">全部风险</option>
+                <option value="risk">有风险</option>
+                <option value="clean">无风险</option>
+              </select>
+            </div>
+            <div v-if="signalSummary.riskTop.length" class="inline-note">
+              <b>风险标记 Top：</b>{{ signalSummary.riskTop.map((item) => `${item.key} ${item.count}`).join("；") }}
+            </div>
             <div class="table-wrap">
               <table>
                 <thead>
                   <tr>
                     <th>快照</th>
-                    <th>代码</th>
-                    <th>名称</th>
+                    <th>股票</th>
                     <th>分层</th>
                     <th>信号</th>
                     <th>置信度</th>
+                    <th>排名</th>
                     <th>阶段/环境</th>
-                    <th>风险</th>
+                    <th>风险标记</th>
                     <th>原因</th>
                   </tr>
                 </thead>
                 <tbody>
-                  <tr v-for="signal in normalizedSignals.slice(0, 120)" :key="`${signal.id}-${signal.snapshotId}-${signal.code}`">
+                  <tr v-for="signal in filteredSignals.slice(0, 120)" :key="`${signal.id}-${signal.snapshotId}-${signal.code}`">
                     <td>{{ shortId(signal.snapshotId) }}</td>
-                    <td>{{ signal.code || "-" }}</td>
-                    <td>{{ signal.name || "-" }}</td>
+                    <td><b>{{ signal.code || "-" }}</b><br /><small>{{ signal.name || "-" }}</small></td>
                     <td>{{ signal.candidateTier || "-" }}</td>
                     <td>{{ signal.signal || "-" }}</td>
                     <td>{{ formatNumber(Number(signal.confidence)) }}</td>
+                    <td>{{ signal.rank ?? "-" }}</td>
                     <td>{{ signal.stage || "-" }} / {{ signal.regime || "-" }}</td>
-                    <td>{{ Array.isArray(signal.riskFlags) ? signal.riskFlags.slice(0, 3).join("；") : "-" }}</td>
-                    <td>{{ Array.isArray(signal.reasons) ? signal.reasons.slice(0, 3).join("；") : "-" }}</td>
+                    <td>{{ signal.riskFlags?.length ? signal.riskFlags.slice(0, 3).join("；") : "-" }}</td>
+                    <td>{{ signal.reasons?.length ? signal.reasons.slice(0, 3).join("；") : "-" }}</td>
                   </tr>
+                  <tr v-if="!filteredSignals.length"><td colspan="9" class="empty-cell">没有符合筛选条件的信号。</td></tr>
                 </tbody>
               </table>
             </div>
+            <div v-if="Number(normalizedReportMeta.signalTotal || 0) > normalizedSignals.length" class="inline-note">
+              当前仅显示前 {{ normalizedSignals.length }} 条，共 {{ normalizedReportMeta.signalTotal }} 条。
+            </div>
           </div>
-          <div v-if="controlBacktests.length" class="section-block">
-            <h3>对照组回测</h3>
-            <div class="table-wrap compact-table">
+          <div v-if="activeReportTab === 'quality'" class="report-tab-panel">
+            <div v-if="Object.keys(dataQuality).length" class="section-block quality-block">
+              <h3>样本覆盖</h3>
+              <div class="diagnostic-grid compact-diagnostic">
+                <div><span>研究等级</span><b>{{ dataQuality.researchGrade || qualityReport?.researchGrade || "-" }}</b></div>
+                <div><span>质量状态</span><b>{{ dataQuality.severity || qualityReport?.severity || "-" }}</b></div>
+                <div><span>运行快照</span><b>{{ dataQuality.snapshotCount ?? qualityReport?.frameCount ?? "-" }} / {{ dataQuality.sourceSnapshotCount ?? qualityReport?.frameCount ?? "-" }}</b></div>
+                <div><span>低热榜快照</span><b>{{ dataQuality.lowHotlistCount ?? 0 }}</b></div>
+                <div><span>剔除空热榜</span><b>{{ dataQuality.droppedEmptyHotlistSnapshots ?? 0 }}</b></div>
+                <div><span>覆盖率</span><b>{{ formatPercent(Number(qualityReport?.coverageRatio)) }}</b></div>
+                <div><span>低热榜占比</span><b>{{ formatPercent(Number(dataQuality.lowHotlistShare)) }}</b></div>
+                <div><span>样本 OK 占比</span><b>{{ formatPercent(Number(dataQuality.sampleOkShare)) }}</b></div>
+              </div>
+              <h3>异常数据</h3>
+              <div class="diagnostic-grid compact-diagnostic">
+                <div><span>NaN 字段</span><b>{{ Object.keys(qualityReport?.nanCounts || {}).length }}</b></div>
+                <div><span>Infinity 字段</span><b>{{ Object.keys(qualityReport?.infCounts || {}).length }}</b></div>
+                <div><span>负价格</span><b>{{ qualityReport?.negativePriceCount ?? 0 }}</b></div>
+                <div><span>非正价格</span><b>{{ qualityReport?.nonPositivePriceCount ?? 0 }}</b></div>
+                <div><span>负成交量</span><b>{{ qualityReport?.negativeVolumeCount ?? 0 }}</b></div>
+                <div><span>时间修复</span><b>{{ qualityReport?.timeOrderFixed ? `是 / ${qualityReport.timeOrderFixCount || 0}` : "否" }}</b></div>
+              </div>
+              <div class="inline-note"><b>建议：</b>{{ dataQuality.recommendation || "暂无质量建议" }}</div>
+              <ul v-if="qualityNarratives.length" class="narrative-list">
+                <li v-for="item in qualityNarratives" :key="item">{{ item }}</li>
+              </ul>
+              <div v-if="dataQualityExamples.length" class="table-wrap compact-table">
+                <table>
+                  <thead><tr><th>日期</th><th>时间</th><th>热榜行数</th><th>snapshotId</th></tr></thead>
+                  <tbody>
+                    <tr v-for="row in dataQualityExamples" :key="String(row.snapshotId)">
+                      <td>{{ row.tradingDate || "-" }}</td>
+                      <td>{{ row.slotTime || "-" }}</td>
+                      <td>{{ row.stockRowCount ?? "-" }}</td>
+                      <td>{{ row.snapshotId }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div v-else class="empty-explanation"><b>没有质量报告</b><p>兼容报告和归一化 quality 端点都没有返回质量信息。</p></div>
+          </div>
+
+          <div v-if="activeReportTab === 'controls'" class="report-tab-panel">
+            <ul class="narrative-list">
+              <li v-for="item in controlConclusions" :key="item">{{ item }}</li>
+            </ul>
+            <div v-if="controlBacktests.length" class="table-wrap compact-table">
               <table>
                 <thead>
                   <tr>
@@ -1894,146 +2033,92 @@ onMounted(async () => {
                 </tbody>
               </table>
             </div>
+            <div v-else class="empty-explanation"><b>没有对照组</b><p>当前报告没有返回 controlBacktests。</p></div>
           </div>
-          <div v-if="Object.keys(sampleDiagnostics).length || Object.keys(macdDiagnostics).length" class="section-block">
-            <h3>样本与 MACD 诊断</h3>
-            <div class="diagnostic-grid">
-              <div>
-                <span>快照数</span>
-                <b>{{ sampleDiagnostics.snapshotCount ?? macdDiagnostics.snapshotCount ?? "-" }}</b>
+
+          <div v-if="activeReportTab === 'matching'" class="report-tab-panel">
+            <div v-if="Object.keys(matchingDiagnostics).length" class="section-block">
+              <h3>撮合诊断</h3>
+              <div class="diagnostic-grid compact-diagnostic">
+                <div><span>买入尝试</span><b>{{ matchingDiagnostics.buyAttempts ?? 0 }}</b></div>
+                <div><span>买入成交</span><b>{{ matchingDiagnostics.buyFilled ?? 0 }}</b></div>
+                <div><span>卖出尝试</span><b>{{ matchingDiagnostics.sellAttempts ?? 0 }}</b></div>
+                <div><span>未成交订单</span><b>{{ matchingDiagnostics.skippedOrderCount ?? 0 }}</b></div>
+                <div><span>盘口覆盖</span><b>{{ formatPercent(Number(matchingDiagnostics.orderBookCoverage)) }}</b></div>
+                <div><span>快照价回退</span><b>{{ formatPercent(Number(matchingDiagnostics.snapshotFallbackRate)) }}</b></div>
               </div>
-              <div>
-                <span>技术最小 bars</span>
-                <b>{{ sampleDiagnostics.requiredTechnicalBars ?? "-" }}</b>
+              <div v-if="Number(matchingDiagnostics.buyAttempts || 0) > 0 && Number(matchingDiagnostics.buyFilled || 0) === 0" class="inline-note">
+                策略产生过买入意图，但全部被撮合约束过滤。
               </div>
-              <div>
-                <span>MACD 最小 bars</span>
-                <b>{{ macdDiagnostics.minimumBars ?? sampleDiagnostics.macdMinimumBars ?? "-" }}</b>
+              <div v-if="Number(matchingDiagnostics.snapshotFallbackRate || 0) > 0.5" class="inline-note">
+                大量成交依赖快照价回退，盘口数据不足。
               </div>
-              <div>
-                <span>MACD 稳定观察 bars</span>
-                <b>{{ macdDiagnostics.stableObservationBars ?? sampleDiagnostics.macdStableObservationBars ?? "-" }}</b>
+              <div v-if="Number(matchingDiagnostics.orderBookCoverage || 0) < 0.5" class="inline-note">
+                盘口覆盖不足，成交质量需要降权。
               </div>
-              <div>
-                <span>样本 OK 占比</span>
-                <b>{{ formatPercent(Number((sampleDiagnostics.statusShares as Record<string, unknown> | undefined)?.ok)) }}</b>
-              </div>
-              <div>
-                <span>MACD 定位</span>
-                <b>辅助观察</b>
-              </div>
-            </div>
-            <div v-if="sampleWarnings.length" class="inline-note">
-              <b>诊断提示：</b>{{ sampleWarnings.join("；") }}
-            </div>
-          </div>
-          <div v-if="Object.keys(matchingDiagnostics).length" class="section-block">
-            <h3>撮合诊断</h3>
-            <div class="diagnostic-grid">
-              <div>
-                <span>买入尝试</span>
-                <b>{{ matchingDiagnostics.buyAttempts ?? 0 }}</b>
-              </div>
-              <div>
-                <span>买入成交</span>
-                <b>{{ matchingDiagnostics.buyFilled ?? 0 }}</b>
-              </div>
-              <div>
-                <span>卖出尝试</span>
-                <b>{{ matchingDiagnostics.sellAttempts ?? 0 }}</b>
-              </div>
-              <div>
-                <span>未成交订单</span>
-                <b>{{ matchingDiagnostics.skippedOrderCount ?? 0 }}</b>
-              </div>
-              <div>
-                <span>盘口覆盖</span>
-                <b>{{ formatPercent(Number(matchingDiagnostics.orderBookCoverage)) }}</b>
-              </div>
-              <div>
-                <span>快照价回退</span>
-                <b>{{ formatPercent(Number(matchingDiagnostics.snapshotFallbackRate)) }}</b>
-              </div>
-            </div>
-            <div v-if="matchingWarnings.length" class="inline-note">
-              <b>撮合提示：</b>{{ matchingWarnings.join("；") }}
-            </div>
-            <div v-if="matchingSkippedReasons.length" class="table-wrap compact-table">
-              <table>
-                <thead>
-                  <tr>
-                    <th>未成交原因</th>
-                    <th>次数</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="row in matchingSkippedReasons" :key="String(row.reason)">
-                    <td>{{ row.reason }}</td>
-                    <td>{{ row.count }}</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-          <div v-if="tradeDiagnosticsReasons.length || tradeDiagnosticsTiers.length" class="section-block">
-            <h3>交易贡献分析</h3>
-            <div class="two-column">
-              <div class="table-wrap compact-table">
+              <div v-if="matchingWarnings.length" class="inline-note"><b>撮合提示：</b>{{ matchingWarnings.join("；") }}</div>
+              <div v-if="matchingSkippedReasons.length" class="table-wrap compact-table">
                 <table>
-                  <thead>
-                    <tr>
-                      <th>出场原因</th>
-                      <th>次数</th>
-                      <th>利润</th>
-                      <th>均值</th>
-                      <th>胜率</th>
-                    </tr>
-                  </thead>
+                  <thead><tr><th>未成交原因</th><th>次数</th></tr></thead>
                   <tbody>
-                    <tr v-for="row in tradeDiagnosticsReasons" :key="String(row.key)">
-                      <td>{{ row.key }}</td>
+                    <tr v-for="row in matchingSkippedReasons" :key="String(row.reason)">
+                      <td>{{ row.reason }}</td>
                       <td>{{ row.count }}</td>
-                      <td>{{ formatNumber(Number(row.profit)) }}</td>
-                      <td>{{ formatNumber(Number(row.avgProfit)) }}</td>
-                      <td>{{ formatPercent(Number(row.winRate)) }}</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-              <div class="table-wrap compact-table">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>RankTrend 分层</th>
-                      <th>次数</th>
-                      <th>利润</th>
-                      <th>均值</th>
-                      <th>胜率</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr v-for="row in tradeDiagnosticsTiers" :key="String(row.key)">
-                      <td>{{ row.key }}</td>
-                      <td>{{ row.count }}</td>
-                      <td>{{ formatNumber(Number(row.profit)) }}</td>
-                      <td>{{ formatNumber(Number(row.avgProfit)) }}</td>
-                      <td>{{ formatPercent(Number(row.winRate)) }}</td>
                     </tr>
                   </tbody>
                 </table>
               </div>
             </div>
+            <div v-else class="empty-explanation"><b>没有撮合诊断</b><p>当前报告没有返回 matchingDiagnostics。</p></div>
+            <div v-if="tradeDiagnosticsReasons.length || tradeDiagnosticsTiers.length" class="section-block">
+              <h3>交易贡献分析</h3>
+              <div class="two-column">
+                <div class="table-wrap compact-table">
+                  <table>
+                    <thead><tr><th>出场原因</th><th>次数</th><th>利润</th><th>均值</th><th>胜率</th></tr></thead>
+                    <tbody>
+                      <tr v-for="row in tradeDiagnosticsReasons" :key="String(row.key)">
+                        <td>{{ row.key }}</td><td>{{ row.count }}</td><td>{{ formatNumber(Number(row.profit)) }}</td><td>{{ formatNumber(Number(row.avgProfit)) }}</td><td>{{ formatPercent(Number(row.winRate)) }}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+                <div class="table-wrap compact-table">
+                  <table>
+                    <thead><tr><th>RankTrend 分层</th><th>次数</th><th>利润</th><th>均值</th><th>胜率</th></tr></thead>
+                    <tbody>
+                      <tr v-for="row in tradeDiagnosticsTiers" :key="String(row.key)">
+                        <td>{{ row.key }}</td><td>{{ row.count }}</td><td>{{ formatNumber(Number(row.profit)) }}</td><td>{{ formatNumber(Number(row.avgProfit)) }}</td><td>{{ formatPercent(Number(row.winRate)) }}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
           </div>
-          <div class="json-box-wrap">
-            <button
-              type="button"
-              class="copy-button"
-              @click="copyJsonBox('report', backtestDetailState.raw || reportSource)"
-            >
-              {{ copyLabel("report") }}
+
+          <div v-if="activeReportTab === 'config'" class="report-tab-panel">
+            <div class="diagnostic-grid compact-diagnostic">
+              <div><span>dataset</span><b>{{ getNestedString(reportSource, ["datasetId"]) || "-" }}</b></div>
+              <div><span>snapshot</span><b>{{ getNestedString(reportSource, ["snapshotType"]) || "-" }}</b></div>
+              <div><span>strategy</span><b>{{ getNestedString(reportSource, ["strategyName"]) || "-" }}</b></div>
+              <div><span>version</span><b>{{ getNestedString(reportSource, ["strategyVersion"]) || "-" }}</b></div>
+              <div><span>config</span><b>{{ shortId(getNestedString(reportSource, ["configHash"])) }}</b></div>
+              <div><span>seed</span><b>{{ getNestedString(reportSource, ["randomSeed"]) || "-" }}</b></div>
+              <div><span>start</span><b>{{ getNestedString(reportSource, ["dateStart"]) || "-" }}</b></div>
+              <div><span>end</span><b>{{ getNestedString(reportSource, ["dateEnd"]) || "-" }}</b></div>
+            </div>
+            <button type="button" class="secondary-button" @click="showReportJson = !showReportJson">
+              {{ showReportJson ? "收起 JSON 原文" : "展开 JSON 原文" }}
             </button>
-            <pre class="json-box">{{ jsonPreview(backtestDetailState.raw || reportSource) }}</pre>
+            <div v-if="showReportJson" class="json-box-wrap">
+              <button type="button" class="copy-button" @click="copyJsonBox('report', backtestDetailState.raw || reportSource)">
+                {{ copyLabel("report") }}
+              </button>
+              <pre class="json-box">{{ jsonPreview(backtestDetailState.raw || reportSource) }}</pre>
+            </div>
           </div>
+
         </section>
 
         <section v-if="activeTab === 'replay'" class="tab-panel">

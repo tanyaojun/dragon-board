@@ -228,6 +228,37 @@ export interface BacktestQualityResponse {
   qualityReport: BacktestQualityReport | null;
 }
 
+export type BacktestReportTabKey =
+  | "trades"
+  | "signals"
+  | "quality"
+  | "controls"
+  | "matching"
+  | "config";
+
+export interface BacktestReportVerdict {
+  level: "usable" | "degraded" | "blocked";
+  label: string;
+  tone: "good" | "warn" | "bad";
+  performanceLabel: string;
+  tradeLabel: string;
+  qualityLabel: string;
+  summary: string;
+  reasons: string[];
+}
+
+export interface BacktestCompareSummary {
+  runId: string;
+  datasetId?: string;
+  snapshotType?: string;
+  strategyName?: string;
+  strategyVersion?: string;
+  configHash?: string;
+  randomSeed?: number;
+  metrics: Record<string, number | null>;
+  missingMetrics?: string[];
+}
+
 export interface OptimizationRequest {
   datasetId: string;
   strategyName: StrategyName;
