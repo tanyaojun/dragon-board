@@ -33,7 +33,7 @@ QuantBoard 首期导入 dragon-board 的历史快照数据，形成可复现的�
 
 不建议首期直接读浏览器 IndexedDB 文件。浏览器存储结构、锁和 LevelDB 细节会增加不必要复杂度。
 
-IndexedDB 已从正式快照读写链路中移除。它只能作为历史迁移源、显式缓存或非正式临时数据来源，不再作为 QuantBoard 日常数据集采集入口。
+IndexedDB 已从正式快照读写链路中移除。它只能作为历史迁移源或显式缓存，不再作为 QuantBoard 日常数据集采集入口；`five_minute` 浏览器本地入口不再保留。
 
 旧 SQLite 单库 `data/warehouse/quant_board.db` 也是历史迁移源。迁移时先运行 `inspect-storage` 记录基线，再用 `migrate-legacy-db --dry-run` 检查将迁入双库的快照和研究表数量，最后显式 `--apply`。迁移过程不会删除旧单库或浏览器 IndexedDB。
 

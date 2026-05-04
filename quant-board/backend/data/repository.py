@@ -705,12 +705,22 @@ class Repository:
         except SQLAlchemyError:
             return []
 
-    def get_snapshot_record(self, snapshot_id: str, dataset_id: str | None = None) -> dict[str, Any] | None:
+    def get_snapshot_record(
+        self,
+        snapshot_id: str,
+        dataset_id: str | None = None,
+        allowed_capture_modes: list[str] | None = None,
+        exclude_restored: bool = False,
+    ) -> dict[str, Any] | None:
         if self.session is None:
             return None
         query = select(SnapshotRecordModel).where(SnapshotRecordModel.snapshot_id == snapshot_id)
         if dataset_id:
             query = query.where(SnapshotRecordModel.dataset_id == dataset_id)
+        if allowed_capture_modes:
+            query = query.where(SnapshotRecordModel.capture_mode.in_(allowed_capture_modes))
+        if exclude_restored:
+            query = query.where(SnapshotRecordModel.capture_mode != "restored")
         query = query.order_by(SnapshotRecordModel.timestamp.desc())
         try:
             row = self.session.scalars(query).first()

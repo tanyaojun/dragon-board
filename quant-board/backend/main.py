@@ -273,6 +273,8 @@ def list_snapshot_records(
 def get_snapshot_record(
     snapshot_id: str,
     dataset_id: str | None = None,
+    allowed_capture_modes: str | None = None,
+    exclude_restored: bool = False,
     db: Session | None = Depends(get_db),
 ) -> dict[str, Any]:
     if db is None:
@@ -282,7 +284,12 @@ def get_snapshot_record(
     dataset: Dataset | None = None
     if dataset_id:
         resolved_dataset_id, dataset = _resolve_snapshot_dataset(repo, dataset_id)
-    record = repo.get_snapshot_record(snapshot_id, dataset_id=resolved_dataset_id)
+    record = repo.get_snapshot_record(
+        snapshot_id,
+        dataset_id=resolved_dataset_id,
+        allowed_capture_modes=_parse_csv(allowed_capture_modes),
+        exclude_restored=exclude_restored,
+    )
     if not record:
         raise HTTPException(status_code=404, detail=f"snapshot not found: {snapshot_id}")
     if dataset is None:

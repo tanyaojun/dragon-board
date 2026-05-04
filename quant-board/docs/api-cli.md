@@ -187,7 +187,11 @@ Invoke-RestMethod 'http://127.0.0.1:8000/api/snapshots/frames?dataset_id=dragonb
 - `sort=asc|desc`。
 - `limit`。
 
-返回 `dataset`、`frames`、`count` 和 `source=sqlite`。`frames` 中每项包含 `rows/hotlist/sectors/hotThemes/rotationSummary`，供 Dragon Board `listSnapshotFrameBundles` 直接消费。正式快照不再把浏览器 IndexedDB 当事实读源；`five_minute` 等非正式临时数据仍可留在浏览器本地。
+返回 `dataset`、`frames`、`count` 和 `source=sqlite`。`frames` 中每项包含 `rows/hotlist/sectors/hotThemes/rotationSummary`，供 Dragon Board `listSnapshotFrameBundles` 直接消费。正式快照不再把浏览器 IndexedDB 当事实读源；`five_minute` 浏览器本地入口也不再保留。
+
+Dragon Board 根前端通过 `src/services/snapshot/backendRead.ts` 调用该接口。该适配层会默认带上
+`dataset_id=dragonboard_live`、`allowed_capture_modes=real_time,delayed` 和
+`exclude_restored=true`；QuantBoard 后端返回失败时，前端正式读取必须显式失败，不回落 IndexedDB。
 
 ### SQLite 快照明细读口
 
@@ -205,6 +209,10 @@ Invoke-RestMethod 'http://127.0.0.1:8000/api/snapshots/sector-rows?dataset_id=dr
 - 通用：`dataset_id`、`snapshot_type` 或 `types`、`trading_date`、`start_date/end_date`、`before_trading_date`、`allowed_capture_modes`、`exclude_restored`、`sort`、`limit`。
 - 股票行：`snapshot_id`、`code`、`codes`、`slot_time`。
 - 题材行：`snapshot_id`、`entity_type/entity_types`、`entity_key/entity_keys`。
+
+Dragon Board `snapshotFacade.listSnapshots/getSnapshotById/listSnapshotFrames/listSnapshotStockRows/listSnapshotSectorRows/getStockVolumeHistory`
+均通过这些 SQLite 明细读口实现。`getStockVolumeHistory` 固定读取 `daily` 的
+`snapshot_stock_rows`，不再扫描浏览器 IndexedDB 原始快照。
 
 ### `GET /api/datasets`
 

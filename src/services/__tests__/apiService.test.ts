@@ -117,4 +117,62 @@ describe('ApiService', () => {
     } satisfies Partial<ApiHttpError>)
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
+
+  it('maps sqlite snapshot frame query params to QuantBoard snake case API', async () => {
+    const api = new ApiService()
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, frames: [] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await api.listSqliteSnapshotFrames({
+      datasetId: 'dragonboard_live',
+      type: 'half_hour',
+      tradingDate: '2026-04-24',
+      beforeTradingDate: '2026-04-25',
+      allowedCaptureModes: ['real_time', 'delayed'],
+      excludeRestored: true,
+      sort: 'asc',
+      limit: 20,
+    })
+
+    const requestedUrl = String(fetchMock.mock.calls[0][0])
+    expect(requestedUrl).toContain('http://localhost:8000/api/snapshots/frames?')
+    expect(requestedUrl).toContain('dataset_id=dragonboard_live')
+    expect(requestedUrl).toContain('snapshot_type=half_hour')
+    expect(requestedUrl).toContain('trading_date=2026-04-24')
+    expect(requestedUrl).toContain('before_trading_date=2026-04-25')
+    expect(requestedUrl).toContain('allowed_capture_modes=real_time%2Cdelayed')
+    expect(requestedUrl).toContain('exclude_restored=true')
+    expect(requestedUrl).toContain('sort=asc')
+    expect(requestedUrl).toContain('limit=20')
+  })
+
+  it('maps sqlite snapshot record detail formal policy params to QuantBoard API', async () => {
+    const api = new ApiService()
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, record: null }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await api.getSqliteSnapshotRecord('half_hour:2026-04-24:10:00', {
+      datasetId: 'dragonboard_live',
+      allowedCaptureModes: ['real_time', 'delayed'],
+      excludeRestored: true,
+    })
+
+    const requestedUrl = String(fetchMock.mock.calls[0][0])
+    expect(requestedUrl).toContain(
+      'http://localhost:8000/api/snapshots/records/half_hour%3A2026-04-24%3A10%3A00?',
+    )
+    expect(requestedUrl).toContain('dataset_id=dragonboard_live')
+    expect(requestedUrl).toContain('allowed_capture_modes=real_time%2Cdelayed')
+    expect(requestedUrl).toContain('exclude_restored=true')
+  })
 })

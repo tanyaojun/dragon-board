@@ -5,6 +5,10 @@ import type {
   CloudBackupHealth,
   CloudDayBundleUploadResult,
   CloudManifestWindow,
+  SnapshotFrameQueryOptions,
+  SnapshotQueryOptions,
+  SnapshotSectorRowQueryOptions,
+  SnapshotStockRowQueryOptions,
   SnapshotDayBundle,
 } from './snapshot/types'
 // ========== 类型定义 ==========
@@ -90,6 +94,17 @@ export interface ApiEnvelope<T> {
   data: T
   details?: unknown
 }
+
+type SqliteSnapshotDatasetOptions = {
+  datasetId?: string
+  allowedCaptureModes?: SnapshotQueryOptions['allowedCaptureModes']
+  excludeRestored?: boolean
+}
+
+type SqliteSnapshotRecordQueryOptions = SnapshotQueryOptions & SqliteSnapshotDatasetOptions
+type SqliteSnapshotFrameQueryOptions = SnapshotFrameQueryOptions & SqliteSnapshotDatasetOptions
+type SqliteSnapshotStockRowQueryOptions = SnapshotStockRowQueryOptions & SqliteSnapshotDatasetOptions
+type SqliteSnapshotSectorRowQueryOptions = SnapshotSectorRowQueryOptions & SqliteSnapshotDatasetOptions
 
 export class ApiHttpError extends Error {
   readonly status: number
@@ -789,6 +804,90 @@ export class ApiService {
     )
   }
 
+  /** 从 QuantBoard SQLite 主库读取正式快照聚合帧 */
+  async listSqliteSnapshotFrames(params: SqliteSnapshotFrameQueryOptions = {}, options?: RequestConfig) {
+    return this.get<any>(`/api/snapshots/frames${this.buildSqliteSnapshotQuery(params, true)}`, {
+      context: 'quant-board',
+      priority: 'high',
+      retries: 1,
+      timeout: 15000,
+      cache: false,
+      throwOnHttpError: true,
+      ...options,
+    })
+  }
+
+  /** 从 QuantBoard SQLite 主库读取正式快照记录 */
+  async listSqliteSnapshotRecords(params: SqliteSnapshotRecordQueryOptions = {}, options?: RequestConfig) {
+    return this.get<any>(`/api/snapshots/records${this.buildSqliteSnapshotQuery(params)}`, {
+      context: 'quant-board',
+      priority: 'high',
+      retries: 1,
+      timeout: 15000,
+      cache: false,
+      throwOnHttpError: true,
+      ...options,
+    })
+  }
+
+  /** 从 QuantBoard SQLite 主库按 id 读取正式快照记录 */
+  async getSqliteSnapshotRecord(
+    snapshotId: string,
+    params: SqliteSnapshotDatasetOptions = {},
+    options?: RequestConfig,
+  ) {
+    const query = this.buildSqliteSnapshotQuery(params)
+    return this.get<any>(`/api/snapshots/records/${encodeURIComponent(snapshotId)}${query}`, {
+      context: 'quant-board',
+      priority: 'high',
+      retries: 1,
+      timeout: 15000,
+      cache: false,
+      throwOnHttpError: true,
+      ...options,
+    })
+  }
+
+  /** 从 QuantBoard SQLite 主库读取正式股票投影行 */
+  async listSqliteSnapshotStockRows(params: SqliteSnapshotStockRowQueryOptions = {}, options?: RequestConfig) {
+    return this.get<any>(`/api/snapshots/stock-rows${this.buildSqliteSnapshotQuery(params)}`, {
+      context: 'quant-board',
+      priority: 'high',
+      retries: 1,
+      timeout: 15000,
+      cache: false,
+      throwOnHttpError: true,
+      ...options,
+    })
+  }
+
+  /** 从 QuantBoard SQLite 主库读取正式题材投影行 */
+  async listSqliteSnapshotSectorRows(params: SqliteSnapshotSectorRowQueryOptions = {}, options?: RequestConfig) {
+    return this.get<any>(`/api/snapshots/sector-rows${this.buildSqliteSnapshotQuery(params)}`, {
+      context: 'quant-board',
+      priority: 'high',
+      retries: 1,
+      timeout: 15000,
+      cache: false,
+      throwOnHttpError: true,
+      ...options,
+    })
+  }
+
+  /** 从 QuantBoard SQLite 主库读取快照事实表行数 */
+  async getSqliteSnapshotCounts(datasetId?: string, options?: RequestConfig) {
+    const query = this.buildSqliteSnapshotQuery({ datasetId })
+    return this.get<any>(`/api/snapshots/counts${query}`, {
+      context: 'quant-board',
+      priority: 'medium',
+      retries: 1,
+      timeout: 15000,
+      cache: false,
+      throwOnHttpError: true,
+      ...options,
+    })
+  }
+
   /** 下载远端交易日 bundle */
   async downloadSnapshotRemoteDayBundle(tradingDate: string, options?: RequestConfig) {
     return this.get<ApiEnvelope<SnapshotDayBundle | null>>(
@@ -819,6 +918,47 @@ export class ApiService {
     if (url.startsWith('http')) return url
     if (url.startsWith('/')) return `${baseURL}${url}`
     return `${baseURL}/${url}`
+  }
+
+  private buildSqliteSnapshotQuery(
+    params: (SqliteSnapshotRecordQueryOptions | SqliteSnapshotFrameQueryOptions | SqliteSnapshotStockRowQueryOptions | SqliteSnapshotSectorRowQueryOptions) = {},
+    frameEndpoint = false,
+  ): string {
+    const query = new URLSearchParams()
+    const append = (key: string, value: unknown) => {
+      if (value === undefined || value === null || value === '') return
+      if (Array.isArray(value)) {
+        if (value.length > 0) query.set(key, value.join(','))
+        return
+      }
+      query.set(key, String(value))
+    }
+
+    append('dataset_id', params.datasetId)
+    append(frameEndpoint ? 'snapshot_type' : 'snapshot_type', params.type)
+    append('types', params.types)
+    append('trading_date', params.tradingDate)
+    append('start_date', params.startDate)
+    append('end_date', params.endDate)
+    append('before_trading_date', params.beforeTradingDate)
+    append('allowed_capture_modes', params.allowedCaptureModes)
+    append('exclude_restored', params.excludeRestored)
+    append('sort', params.sort)
+    append('limit', params.limit)
+
+    const stockParams = params as SqliteSnapshotStockRowQueryOptions
+    append('snapshot_id', stockParams.snapshotId)
+    append('code', stockParams.code)
+    append('codes', stockParams.codes)
+    append('slot_time', stockParams.slotTime)
+
+    const sectorParams = params as SqliteSnapshotSectorRowQueryOptions
+    append('entity_type', sectorParams.entityType)
+    append('entity_types', sectorParams.entityTypes)
+    append('entity_key', sectorParams.entityKey)
+    append('entity_keys', sectorParams.entityKeys)
+
+    return query.size > 0 ? `?${query.toString()}` : ''
   }
 
   private async parseJsonResponse<T>(response: Response): Promise<T> {

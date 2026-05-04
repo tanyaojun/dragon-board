@@ -1156,6 +1156,61 @@ def test_snapshot_detail_read_apis_use_sqlite() -> None:
         "snapshot_sector_rows": 1,
     }
 
+
+def test_snapshot_detail_read_api_applies_capture_mode_filters() -> None:
+    client = TestClient(app)
+    suffix = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
+    dataset_id = f"dragonboard_sqlite_detail_filter_{suffix}"
+    snapshot_id = f"half_hour:2026-04-23:{suffix}"
+    bundle = {
+        "version": "v4",
+        "tradingDate": "2026-04-23",
+        "items": [
+            {
+                "id": snapshot_id,
+                "type": "half_hour",
+                "tradingDate": "2026-04-23",
+                "slotTime": "10:30",
+                "timestamp": 1776921000000,
+                "displayKey": "[半小时快照] 2026-04-23 10:30",
+                "captureMode": "restored",
+                "source": "cloud_restore",
+                "payload": {},
+            }
+        ],
+    }
+
+    ingest = client.post(
+        "/api/snapshots/ingest",
+        json={
+            "datasetId": dataset_id,
+            "idempotencyKey": f"sqlite-detail-filter-key-{suffix}",
+            "tradingDate": "2026-04-23",
+            "bundle": bundle,
+        },
+    )
+    assert ingest.status_code == 200, ingest.text
+
+    excluded = client.get(
+        f"/api/snapshots/records/{snapshot_id}",
+        params={"dataset_id": dataset_id, "exclude_restored": True},
+    )
+    assert excluded.status_code == 404, excluded.text
+
+    real_time_only = client.get(
+        f"/api/snapshots/records/{snapshot_id}",
+        params={"dataset_id": dataset_id, "allowed_capture_modes": "real_time"},
+    )
+    assert real_time_only.status_code == 404, real_time_only.text
+
+    restored = client.get(
+        f"/api/snapshots/records/{snapshot_id}",
+        params={"dataset_id": dataset_id, "allowed_capture_modes": "restored"},
+    )
+    assert restored.status_code == 200, restored.text
+    assert restored.json()["record"]["captureMode"] == "restored"
+
+
 def test_snapshot_ingest_summary_is_persisted_and_outbox_retry_is_due_gated() -> None:
     client = TestClient(app)
     suffix = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")

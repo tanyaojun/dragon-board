@@ -1,11 +1,13 @@
 import { dataLayer } from '../DataLayer'
+import { snapshotBackendRead } from './backendRead'
 import { SnapshotRuntime } from './runtime'
 import type {
   SnapshotFrameBundle,
   SnapshotFrameQueryOptions,
   SnapshotQueryOptions,
-  SnapshotSectorRow,
-  SnapshotStockRow,
+  SnapshotSectorRowQueryOptions,
+  SnapshotStockRowQueryOptions,
+  SnapshotType,
 } from './types'
 
 const PRIMARY_DB_NAME = 'DragonBoardData'
@@ -19,6 +21,23 @@ const BACKUP_BUCKET_NAME = 'dragon-snapshot-backup'
 const SNAPSHOT_GUARD_MIN_BACKUP = 20
 const SNAPSHOT_GUARD_RATIO = 0.4
 const SNAPSHOT_SYNC_INTERVAL_MS = 5 * 60 * 1000
+type FormalSnapshotType = Exclude<SnapshotType, 'five_minute'>
+type FormalSnapshotQueryOptions = Omit<SnapshotQueryOptions, 'type' | 'types'> & {
+  type?: FormalSnapshotType
+  types?: FormalSnapshotType[]
+}
+
+function assertFormalSnapshotType(type: SnapshotType | undefined): void {
+  if (type === 'five_minute') {
+    throw new Error('unsupported formal snapshot type: five_minute')
+  }
+}
+
+function assertFormalSnapshotTypes(types: SnapshotType[] | undefined): void {
+  if ((types || []).includes('five_minute')) {
+    throw new Error('unsupported formal snapshot type: five_minute')
+  }
+}
 
 const snapshotRuntime = new SnapshotRuntime({
   logger: console,
@@ -64,20 +83,57 @@ class SnapshotFacade {
   exportSnapshotToExcel = snapshotRuntime.exportSnapshotToExcel.bind(snapshotRuntime)
   exportSnapshotsRangeToExcel = snapshotRuntime.exportSnapshotsRangeToExcel.bind(snapshotRuntime)
   saveDailySnapshot = snapshotRuntime.saveDailySnapshot.bind(snapshotRuntime)
-  listSnapshots = snapshotRuntime.listSnapshots.bind(snapshotRuntime)
-  getSnapshotById = snapshotRuntime.getSnapshotById.bind(snapshotRuntime)
-  getTradingDateSnapshot = snapshotRuntime.getTradingDateSnapshot.bind(snapshotRuntime)
-  listSnapshotFrames = snapshotRuntime.listSnapshotFrames.bind(snapshotRuntime)
-  listSnapshotStockRows = snapshotRuntime.listSnapshotStockRows.bind(snapshotRuntime)
-  listSnapshotSectorRows = snapshotRuntime.listSnapshotSectorRows.bind(snapshotRuntime)
+  async listSnapshots(options: FormalSnapshotQueryOptions = {}) {
+    assertFormalSnapshotType(options.type)
+    assertFormalSnapshotTypes(options.types)
+    return snapshotBackendRead.listSnapshots(options as SnapshotQueryOptions)
+  }
+
+  async getSnapshotById(id: string) {
+    return snapshotBackendRead.getSnapshotById(id)
+  }
+
+  async getTradingDateSnapshot(type: FormalSnapshotType, tradingDate: string) {
+    assertFormalSnapshotType(type)
+    return snapshotBackendRead.getTradingDateSnapshot(type, tradingDate)
+  }
+
+  async listSnapshotFrames(options: SnapshotFrameQueryOptions = {}) {
+    return snapshotBackendRead.listSnapshotFrames(options)
+  }
+
+  async listSnapshotStockRows(options: SnapshotStockRowQueryOptions = {}) {
+    return snapshotBackendRead.listSnapshotStockRows(options)
+  }
+
+  async listSnapshotSectorRows(options: SnapshotSectorRowQueryOptions = {}) {
+    return snapshotBackendRead.listSnapshotSectorRows(options)
+  }
   getSnapshotProjectionMeta = snapshotRuntime.getSnapshotProjectionMeta.bind(snapshotRuntime)
   rebuildSnapshotProjectionStores = snapshotRuntime.rebuildSnapshotProjectionStores.bind(snapshotRuntime)
   alignSnapshotBackups = snapshotRuntime.alignSnapshotBackups.bind(snapshotRuntime)
   compactSnapshotRawRecords = snapshotRuntime.compactSnapshotRawRecords.bind(snapshotRuntime)
   runSnapshotStorageMaintenance = snapshotRuntime.runSnapshotStorageMaintenance.bind(snapshotRuntime)
   cleanupInvalidRuntimeSnapshots = snapshotRuntime.cleanupInvalidRuntimeSnapshots.bind(snapshotRuntime)
-  getStockVolumeHistory = snapshotRuntime.getStockVolumeHistory.bind(snapshotRuntime)
-  getLatestSnapshotRecord = snapshotRuntime.getLatestSnapshotRecord.bind(snapshotRuntime)
+  getStockVolumeHistory = snapshotBackendRead.getStockVolumeHistory.bind(snapshotBackendRead)
+
+  async getLatestSnapshotRecord(options?: {
+    type?: FormalSnapshotType
+    beforeTradingDate?: string
+    allowedCaptureModes?: Array<'real_time' | 'delayed' | 'restored'>
+    excludeRestored?: boolean
+  }) {
+    assertFormalSnapshotType(options?.type)
+    const records = await snapshotBackendRead.listSnapshots({
+      type: options?.type,
+      beforeTradingDate: options?.beforeTradingDate,
+      allowedCaptureModes: options?.allowedCaptureModes,
+      excludeRestored: options?.excludeRestored,
+      sort: 'desc',
+      limit: 1,
+    })
+    return records[0] || null
+  }
   exportSnapshotAsFile = snapshotRuntime.exportSnapshotAsFile.bind(snapshotRuntime)
   exportAllSnapshots = snapshotRuntime.exportAllSnapshots.bind(snapshotRuntime)
   deleteSnapshot = snapshotRuntime.deleteSnapshot.bind(snapshotRuntime)
@@ -96,97 +152,15 @@ class SnapshotFacade {
   inspectTradingDateSnapshotCoverage = snapshotRuntime.inspectTradingDateSnapshotCoverage.bind(snapshotRuntime)
   buildSnapshotCoverageWindow = snapshotRuntime.buildSnapshotCoverageWindow.bind(snapshotRuntime)
   repairTradingDateSnapshotCoverage = snapshotRuntime.repairTradingDateSnapshotCoverage.bind(snapshotRuntime)
-  saveFiveMinuteSnapshot = snapshotRuntime.saveFiveMinuteSnapshot.bind(snapshotRuntime)
   start = snapshotRuntime.start.bind(snapshotRuntime)
   stop = snapshotRuntime.stop.bind(snapshotRuntime)
 
   async listSnapshotFrameBundles(
-    options: SnapshotFrameQueryOptions | SnapshotQueryOptions = {},
+    options: SnapshotFrameQueryOptions | FormalSnapshotQueryOptions = {},
   ): Promise<SnapshotFrameBundle[]> {
-    const frames = await snapshotRuntime.listSnapshotFrames(options as SnapshotFrameQueryOptions)
-    if (frames.length === 0) return []
-
-    const stockRowsBySnapshotId = new Map<string, SnapshotStockRow[]>()
-    const sectorRowsBySnapshotId = new Map<string, SnapshotSectorRow[]>()
-
-    await Promise.all(
-      frames.map(async (frame) => {
-        const [rows, entities] = await Promise.all([
-          snapshotRuntime.listSnapshotStockRows({ snapshotId: frame.snapshotId, sort: 'asc' }),
-          snapshotRuntime.listSnapshotSectorRows({ snapshotId: frame.snapshotId, sort: 'asc' }),
-        ])
-        stockRowsBySnapshotId.set(frame.snapshotId, rows)
-        sectorRowsBySnapshotId.set(frame.snapshotId, entities)
-      }),
-    )
-
-    return frames.map((frame) => {
-      const rows = stockRowsBySnapshotId.get(frame.snapshotId) || []
-      const entities = sectorRowsBySnapshotId.get(frame.snapshotId) || []
-      const sectors = entities
-        .filter((row) => row.entityType === 'sector')
-        .map((row) => ({
-          code: row.entityCode || row.entityKey,
-          name: row.entityName,
-          themeName: row.entityName,
-          strength: row.strength || 0,
-          heatScore: row.heatScore || 0,
-          heatLevel: row.heatLevel,
-          change: row.change || 0,
-          mainNetInflow: row.mainNetInflow || 0,
-          netInflow: row.netInflow || 0,
-          bigMoney300: row.bigMoney300 || 0,
-          institutionBuy: row.institutionBuy || 0,
-          volumeRatio: row.volumeRatio || 0,
-          ztCount: row.ztCount || 0,
-          leaderCount: row.leaderCount || 0,
-        }))
-      const hotThemes = entities
-        .filter((row) => row.entityType === 'hot_theme')
-        .map((row) => ({
-          id: row.entityKey,
-          name: row.entityName,
-          themeName: row.entityName,
-          heatScore: row.heatScore || 0,
-          heatLevel: row.heatLevel,
-          strength: row.strength || 0,
-          change: row.change || 0,
-          mainNetInflow: row.mainNetInflow || 0,
-          netInflow: row.netInflow || 0,
-          ztCount: row.ztCount || 0,
-          leaderCount: row.leaderCount || 0,
-        }))
-      const mainLines = entities
-        .filter((row) => row.entityType === 'rotation_main_line')
-        .map((row) => ({
-          name: row.entityName,
-          themeName: row.entityName,
-          strength: row.strength || 0,
-          heatScore: row.heatScore || 0,
-          change: row.change || 0,
-          mainNetInflow: row.mainNetInflow || 0,
-          netInflow: row.netInflow || 0,
-          leaderCount: row.leaderCount || 0,
-          ztCount: row.ztCount || 0,
-          persistentDays: row.persistentDays || 0,
-        }))
-
-      return {
-        ...frame,
-        rows,
-        hotlist: rows,
-        sectors,
-        hotThemes,
-        rotationSummary: frame.rotationSummary
-          ? {
-              ...frame.rotationSummary,
-              mainLines,
-            }
-          : mainLines.length > 0
-            ? { mainLines }
-            : null,
-      }
-    })
+    assertFormalSnapshotType(options.type)
+    assertFormalSnapshotTypes((options as FormalSnapshotQueryOptions).types)
+    return snapshotBackendRead.listSnapshotFrameBundles(options)
   }
 }
 

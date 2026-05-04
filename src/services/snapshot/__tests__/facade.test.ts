@@ -2,6 +2,11 @@ import { describe, expect, it, vi } from 'vitest'
 
 const start = vi.fn()
 const getStockVolumeHistory = vi.fn()
+const runtimeListSnapshotFrameBundles = vi.fn()
+const runtimeListSnapshots = vi.fn()
+const backendListSnapshotFrameBundles = vi.fn()
+const backendListSnapshots = vi.fn()
+const backendGetStockVolumeHistory = vi.fn()
 
 vi.mock('../../DataLayer', () => ({
   dataLayer: {
@@ -35,7 +40,7 @@ vi.mock('../runtime', () => ({
     exportSnapshotToExcel = vi.fn()
     exportSnapshotsRangeToExcel = vi.fn()
     saveDailySnapshot = vi.fn()
-    listSnapshots = vi.fn()
+    listSnapshots = runtimeListSnapshots
     getSnapshotById = vi.fn()
     getTradingDateSnapshot = vi.fn()
     listSnapshotFrames = vi.fn()
@@ -67,13 +72,25 @@ vi.mock('../runtime', () => ({
     inspectTradingDateSnapshotCoverage = vi.fn()
     buildSnapshotCoverageWindow = vi.fn()
     repairTradingDateSnapshotCoverage = vi.fn()
-    saveFiveMinuteSnapshot = vi.fn()
+  },
+}))
+
+vi.mock('../backendRead', () => ({
+  snapshotBackendRead: {
+    listSnapshots: backendListSnapshots,
+    getSnapshotById: vi.fn(),
+    getTradingDateSnapshot: vi.fn(),
+    listSnapshotFrames: vi.fn(),
+    listSnapshotStockRows: vi.fn(),
+    listSnapshotSectorRows: vi.fn(),
+    listSnapshotFrameBundles: backendListSnapshotFrameBundles,
+    getStockVolumeHistory: backendGetStockVolumeHistory,
   },
 }))
 
 describe('snapshotFacade', () => {
-  it('exposes stock volume history reads without auto-starting outside the browser', async () => {
-    getStockVolumeHistory.mockResolvedValue(new Map([['600001', [300, 200]]]))
+  it('routes formal stock volume history reads to sqlite without auto-starting outside the browser', async () => {
+    backendGetStockVolumeHistory.mockResolvedValue(new Map([['600001', [300, 200]]]))
 
     const { snapshotFacade } = await import('../facade')
     const result = await snapshotFacade.getStockVolumeHistory(['600001'], {
@@ -82,10 +99,32 @@ describe('snapshotFacade', () => {
     })
 
     expect(start).not.toHaveBeenCalled()
-    expect(getStockVolumeHistory).toHaveBeenCalledWith(['600001'], {
+    expect(getStockVolumeHistory).not.toHaveBeenCalled()
+    expect(backendGetStockVolumeHistory).toHaveBeenCalledWith(['600001'], {
       anchorTradingDate: '2026-04-24',
       lookbackDays: 3,
     })
     expect(result.get('600001')).toEqual([300, 200])
+  })
+
+  it('routes formal frame bundle reads to sqlite backend', async () => {
+    backendListSnapshotFrameBundles.mockResolvedValue([{ snapshotId: 'half_hour:2026-04-24:10:00' }])
+
+    const { snapshotFacade } = await import('../facade')
+    const result = await snapshotFacade.listSnapshotFrameBundles({ type: 'half_hour' })
+
+    expect(backendListSnapshotFrameBundles).toHaveBeenCalledWith({ type: 'half_hour' })
+    expect(runtimeListSnapshotFrameBundles).not.toHaveBeenCalled()
+    expect(result).toEqual([{ snapshotId: 'half_hour:2026-04-24:10:00' }])
+  })
+
+  it('does not keep five minute reads on the local IndexedDB runtime path', async () => {
+    const { snapshotFacade } = await import('../facade')
+
+    await expect(snapshotFacade.listSnapshots({ type: 'five_minute' })).rejects.toThrow(
+      'unsupported formal snapshot type: five_minute',
+    )
+    expect(runtimeListSnapshots).not.toHaveBeenCalled()
+    expect(backendListSnapshots).not.toHaveBeenCalled()
   })
 })

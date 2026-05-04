@@ -69,15 +69,16 @@ Supabase schema 不再包含回测、优化和 Golden 表，也不再对研究 J
 - Dragon Board 正式快照保存不再以 IndexedDB 是否已有记录作为幂等依据；定时保存和手工保存先查询 SQLite/QuantBoard 后端是否已有同一 `snapshot_id`，缺失时再执行 `POST /api/snapshots/ingest`。
 - `POST /api/snapshots/ingest` 除 `idempotency_key` 外，还会按 `dataset_id + snapshot_id` 做逻辑幂等；同一快照槽位已存在时返回 `deduped=true`，不会覆盖已落库的事实行。
 - Dragon Board 正式聚合读口已固定为 SQLite 唯一来源：`listSnapshotFrameBundles` 调用 QuantBoard `GET /api/snapshots/frames`，不再回落浏览器 IndexedDB。
-- Dragon Board 正式零散读口已固定为 SQLite 唯一来源：`listSnapshots`、`getSnapshotById`、`listSnapshotFrames`、`listSnapshotStockRows`、`listSnapshotSectorRows` 直接读 QuantBoard SQLite API，保持原 `DataLayer` 字段合同不变；`five_minute` 等非正式临时快照仍走本地临时路径。
-- Dragon Board 正式写入口已切为 SQLite 主写：正式快照保存必须先通过 `POST /api/snapshots/ingest` 落 SQLite；浏览器 IndexedDB 快照缓存默认关闭，后续只允许作为显式开启的临时缓存、历史迁移源或非正式 `five_minute` 本地数据。
+- Dragon Board 正式零散读口已固定为 SQLite 唯一来源：`snapshotFacade.listSnapshots`、`getSnapshotById`、`listSnapshotFrames`、`listSnapshotStockRows`、`listSnapshotSectorRows` 通过根前端 `src/services/snapshot/backendRead.ts` 直接读 QuantBoard SQLite API，保持原快照字段合同不变；不再保留 `five_minute` 浏览器本地读取入口。
+- Dragon Board 正式写入口已切为 SQLite 主写：正式快照保存必须先通过 `POST /api/snapshots/ingest` 落 SQLite；浏览器 IndexedDB 快照缓存默认关闭，后续只允许作为显式开启的临时缓存或历史迁移源。
 - SQLite 主库完全不可用时，`POST /api/snapshots/ingest` 不再提前 503；后端会尝试把同一份 v4 bundle 直接镜像到 Supabase 同构表，成功时返回 `status=backup_only`、`outbox=null` 和 `failover` 诊断，待 SQLite 恢复后通过 `pull-backup` 收敛回主库。
 - 历史 JSON 迁移入口 `POST /api/migrations/snapshots/import-json` 已可处理 v4 bundle、records/snapshots、frames/stockRows/sectorRows 和常见 SQLite/备份导出字段。
 
 仍未完成的边界：
 
 - failover 写入当前只覆盖正式快照 ingest、数据集 bundle；回测、优化和 Golden 属于本地 research 库，不进入 Supabase failover 目标。数据集导入、历史迁移 API 等仍依赖 SQLite 主库事务，主库不可用时必须明确失败。
-- IndexedDB 已从正式快照读写链路中移除：后续只能作为显式缓存、历史迁移来源和非正式临时数据来源；完全删除历史或停用迁移工具前必须保留一次人工验收记录，确认 SQLite 四张事实表全量行数与浏览器历史一致。
+- IndexedDB 已从正式快照读写链路中移除：后续只能作为显式缓存和历史迁移来源；`five_minute` 浏览器本地入口不再保留。完全删除历史或停用迁移工具前必须保留一次人工验收记录，确认 SQLite 四张事实表全量行数与浏览器历史一致。
+- Dragon Board 正式读取不得在 QuantBoard 后端不可用时静默 fallback 到 IndexedDB；读取失败应暴露为后端/API 错误，由 UI 或诊断工具明确提示 SQLite 快照库不可用。
 - Supabase 云端 schema 需要用户先在 SQL Editor 执行 `quant-board/backend/data/supabase_schema.sql`；执行前旧云端表会被删除重建，必须确认旧云端数据已经不需要或已另行备份。
 
 ## 存储拓扑
@@ -266,7 +267,7 @@ QuantBoard research
 - `count`
 - `source=sqlite`
 
-Dragon Board 前端正式分析入口 `listSnapshotFrameBundles` 必须调用该接口；正式快照不再把 IndexedDB 当事实读源。`five_minute` 等非正式临时数据仍可留在浏览器本地。
+Dragon Board 前端正式分析入口 `listSnapshotFrameBundles` 必须调用该接口；正式快照不再把 IndexedDB 当事实读源，`five_minute` 浏览器本地入口也不再保留。
 
 ### `GET /api/snapshots/records`
 
