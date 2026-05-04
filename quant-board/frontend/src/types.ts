@@ -228,6 +228,12 @@ export interface BacktestQualityResponse {
   qualityReport: BacktestQualityReport | null;
 }
 
+export interface BacktestDeleteResponse {
+  ok: boolean;
+  runId: string;
+  deleted: Record<string, number>;
+}
+
 export type BacktestReportTabKey =
   | "trades"
   | "signals"

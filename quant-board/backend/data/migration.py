@@ -13,6 +13,7 @@ from backend.data.importers import (
     SnapshotBundle,
     frame_from_record,
     normalize_record,
+    read_snapshot_bundle,
     sector_rows_from_record,
     stock_rows_from_record,
 )
@@ -135,6 +136,9 @@ class SnapshotMigrationService:
         source_path = request.get("sourcePath") or request.get("source_path") or request.get("path")
         if not source_path:
             raise ImporterError("sourcePath or content is required")
+        source_type = str(request.get("sourceType") or request.get("source_type") or "")
+        if source_type in {"leveldb", "browser_bridge"}:
+            return read_snapshot_bundle(source_type, str(source_path))
         path = Path(str(source_path))
         if path.is_file():
             return self._bundle_from_payload(read_json_file(path), {"source_file": str(path)})

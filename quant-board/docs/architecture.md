@@ -69,6 +69,7 @@ QuantBoard API/CLI -> SQLite research local only
 
 - `quant_board_snapshots.db` 是默认快照主库，负责正式快照即时写入和低延迟读取。
 - `quant_board_research.db` 是本地研究库，负责回测、优化、Golden、报告索引和回测归一化结果明细。
+- 旧 `quant_board.db` 只作为 legacy source 保留，用于 `migrate-legacy-db` 拆分迁移；它不再是默认主库。
 - Supabase 不暴露给 Vue 前端，只由后端使用 `SUPABASE_URL` 和 `SUPABASE_SECRET_KEY` 访问。
 - 正常快照写入先提交 SQLite 快照库，再把同一份快照事实镜像到 Supabase。
 - 快照库写入成功后会登记轻量 `sync_outbox`，即使 Supabase 当次不可用，也能通过 `push-backup` 按事实表实时组包补偿；outbox 只覆盖快照事实和数据集 bundle。
@@ -176,6 +177,14 @@ Dragon Board 前端 `DataLayer` 对外字段不随迁移删改。正式快照写
 - `request_json`
 - `result_json`
 
+### research SQLite 清理边界
+
+历史回测清理只作用于 `quant_board_research.db`。前端“删除本次回测”、`DELETE /api/backtests/{run_id}` 和 CLI `delete-backtest` 会按固定顺序显式删除 `backtest_trades`、`backtest_equity_curve`、`backtest_signals`、`backtest_quality_reports`，最后删除 `backtest_runs`，不依赖 SQLite 外键级联。
+
+批量清理通过 `research-cleanup-preview` / `research-cleanup` 或 CLI `cleanup-research` 执行，默认只清理 30 天以前的 completed 回测，并按 `dataset_id + strategy_name + strategy_version + snapshot_type + config_hash + random_seed` 分组至少保留最近 10 条。该能力不会删除 `quant_board_snapshots.db` 的正式快照事实，不会写入 `sync_outbox`，也不会同步到 Supabase。
+
+在线 API 删除后只允许执行 `PRAGMA wal_checkpoint(TRUNCATE)`；真正收缩 SQLite 文件的 `VACUUM` 只能由 CLI 显式传入 `--vacuum` 执行，避免前端操作长时间锁库。
+
 ### sync_outbox
 
 保存主库写入成功但 Supabase 镜像尚未确认的补偿同步任务。它只服务 SQLite 主库 + Supabase 备份库并行策略，不改变业务主链；详细语义以 [database-migration-plan.md](database-migration-plan.md) 为准。
@@ -212,7 +221,9 @@ Dragon Board 前端 `DataLayer` 对外字段不随迁移删改。正式快照写
 
 | 变量 | 说明 |
 | --- | --- |
-| `QUANT_BOARD_DATABASE_URL` | 本地主库连接串，默认是 `quant-board/data/warehouse/quant_board.db` |
+| `QUANT_BOARD_SNAPSHOT_DATABASE_URL` | SQLite 快照事实库连接串，默认是 `quant-board/data/warehouse/quant_board_snapshots.db` |
+| `QUANT_BOARD_RESEARCH_DATABASE_URL` | SQLite 研究库连接串，默认是 `quant-board/data/warehouse/quant_board_research.db` |
+| `QUANT_BOARD_DATABASE_URL` | 旧兼容变量；如果指向 legacy `quant_board.db` 会被忽略，应改用上面两个双库变量 |
 | `SUPABASE_URL` | Supabase 项目 URL |
 | `SUPABASE_SECRET_KEY` | 后端专用密钥，禁止放入 `VITE_` 前端变量 |
 | `QUANT_BOARD_ENABLE_SUPABASE_BACKUP` | 是否启用 Supabase 备份镜像，默认按 Supabase 配置自动启用 |

@@ -9,18 +9,28 @@ from pathlib import Path
 import pytest
 from importlib.util import find_spec
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from backend.analysis.ranktrend import RankTrendConfig, analyze_cycle, analyze_momentum_signals, analyze_risk, analyze_technical
 from backend.cli import build_parser, build_ranktrend_payload, cmd_migrate_snapshots
 from backend.core.backtest import TradeSimulator
-from backend.data.database import SessionLocal
+from backend.data.database import ResearchSessionLocal, SessionLocal, init_db
 from backend.data.backup_sync import BackupSyncService
-from backend.data.models import BacktestRun, Dataset, GoldenRankTrendCase, OptimizationRun, SyncOutboxModel
+from backend.data.models import (
+    BacktestEquityCurve,
+    BacktestQualityReport,
+    BacktestRun,
+    BacktestSignal,
+    BacktestTrade,
+    Dataset,
+    GoldenRankTrendCase,
+    OptimizationRun,
+    SyncOutboxModel,
+)
 from backend.data.repository import Repository
 from backend.data.supabase_homomorphic import _chunk_rows_by_payload_size
 from backend.main import app
-from backend.services import DEFAULT_BACKTEST_STRATEGY_CONFIG
+from backend.services import DEFAULT_BACKTEST_STRATEGY_CONFIG, BacktestService
 from backend.utils import json_dumps
 
 
@@ -1964,3 +1974,63 @@ def test_outbox_push_replays_snapshot_mirrors_and_keeps_research_local() -> None
             )
         )
         assert {row.status for row in finished} == {"done"}
+
+
+def test_delete_backtest_run_removes_normalized_children() -> None:
+    init_db()
+    client = TestClient(app)
+    suffix = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
+    run_id = f"bt_delete_{suffix}"
+    with SessionLocal() as session:
+        repo = Repository(session, enable_backup=False)
+        repo.save_backtest_run(
+            BacktestRun(
+                id=run_id,
+                dataset_id="ds_delete",
+                strategy_name="rank_trend_candidate",
+                snapshot_type="half_hour",
+                config_hash="cfg_delete",
+                random_seed=20260430,
+                status="completed",
+                request_json="{}",
+                result_json='{"totalReturn": 0.01}',
+            )
+        )
+        repo.save_backtest_trades(run_id, [{"code": "600001", "name": "A", "quantity": 100, "profit": 12.3}])
+        repo.save_backtest_equity_curve(run_id, [{"snapshotId": "s1", "equity": 100000.0}])
+        repo.save_backtest_signals(
+            run_id,
+            {"frameResults": [{"snapshotId": "s1", "tradingDate": "2026-04-30", "buyCandidates": [{"code": "600001", "signal": "buy"}]}]},
+        )
+        repo.save_backtest_quality_report(run_id, {"severity": "pass", "researchGrade": "research_ready", "snapshotCount": 1}, {})
+
+    response = client.delete(f"/api/backtests/{run_id}")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["ok"] is True
+    assert body["deleted"]["backtest_runs"] == 1
+    assert body["deleted"]["backtest_trades"] == 1
+    assert body["deleted"]["backtest_equity_curve"] == 1
+    assert body["deleted"]["backtest_signals"] == 1
+    assert body["deleted"]["backtest_quality_reports"] == 1
+
+    assert client.get(f"/api/backtests/{run_id}").status_code == 404
+    with ResearchSessionLocal() as session:
+        assert session.get(BacktestRun, run_id) is None
+        assert session.scalar(select(func.count()).select_from(BacktestTrade).where(BacktestTrade.backtest_run_id == run_id)) == 0
+        assert session.scalar(select(func.count()).select_from(BacktestEquityCurve).where(BacktestEquityCurve.backtest_run_id == run_id)) == 0
+        assert session.scalar(select(func.count()).select_from(BacktestSignal).where(BacktestSignal.backtest_run_id == run_id)) == 0
+        assert (
+            session.scalar(
+                select(func.count()).select_from(BacktestQualityReport).where(BacktestQualityReport.backtest_run_id == run_id)
+            )
+            == 0
+        )
+
+
+def test_research_vacuum_runs_outside_session_transaction() -> None:
+    init_db()
+    with SessionLocal() as session:
+        result = BacktestService(session).vacuum_research_sqlite()
+
+    assert result == {"ok": True, "vacuum": True}

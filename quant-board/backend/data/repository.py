@@ -4,7 +4,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -25,6 +25,7 @@ from backend.data.models import (
     SyncOutboxModel,
 )
 from backend.data.supabase_backup import SupabaseBackupClient, get_backup_client
+from backend.data.json_codec import dumps_json_field, loads_json_field
 from backend.utils import json_dumps, json_loads, stable_hash
 
 
@@ -854,6 +855,8 @@ class Repository:
 
     def save_backtest_run(self, run: BacktestRun) -> BacktestRun:
         try:
+            run.request_json = dumps_json_field(run.request_json or "{}")
+            run.result_json = dumps_json_field(run.result_json or "{}")
             managed = self.research_session.merge(run)
             self.research_session.commit()
         except SQLAlchemyError:
@@ -896,7 +899,7 @@ class Repository:
                     stage=str(t.get("stage") or "") or None,
                     regime=str(t.get("regime") or "") or None,
                     explanation=str(t.get("explanation") or "") or None,
-                    fill_detail_json=json_dumps(t.get("fill") or {}),
+                    fill_detail_json=dumps_json_field(t.get("fill") or {}),
                 )
                 self.research_session.add(row)
                 count += 1
@@ -998,8 +1001,8 @@ class Repository:
             rank=int(d.get("rank")) if d.get("rank") is not None else None,
             stage=str(d.get("stage") or "") or None,
             regime=str(d.get("regime") or "") or None,
-            reasons_json=json_dumps(d.get("reasons") or []),
-            risk_flags_json=json_dumps(d.get("riskFlags") or []),
+            reasons_json=dumps_json_field(d.get("reasons") or []),
+            risk_flags_json=dumps_json_field(d.get("riskFlags") or []),
         )
 
     def get_backtest_signals(
@@ -1055,16 +1058,16 @@ class Repository:
                 frame_count=int(data_quality.get("snapshotCount") or 0),
                 stock_count=int(gate.get("stockCount") or 0),
                 sector_count=int(gate.get("sectorCount") or 0),
-                missing_fields_json=json_dumps(stats.get("missingFields") or {}),
-                nan_counts_json=json_dumps(stats.get("nanCounts") or {}),
-                inf_counts_json=json_dumps(stats.get("infCounts") or {}),
+                missing_fields_json=dumps_json_field(stats.get("missingFields") or {}),
+                nan_counts_json=dumps_json_field(stats.get("nanCounts") or {}),
+                inf_counts_json=dumps_json_field(stats.get("infCounts") or {}),
                 negative_price_count=int(stats.get("negativePriceCount") or 0),
                 non_positive_price_count=int(stats.get("nonPositivePriceCount") or 0),
                 negative_volume_count=int(stats.get("negativeVolumeCount") or 0),
                 coverage_ratio=float(stats.get("coverageRatio")) if stats.get("coverageRatio") is not None else None,
                 time_order_fixed=bool(gate.get("timeOrderFixed") or False),
                 time_order_fix_count=int(gate.get("timeOrderFixCount") or 0),
-                warnings_json=json_dumps(data_quality.get("warnings") or []),
+                warnings_json=dumps_json_field(data_quality.get("warnings") or []),
             )
             self.research_session.add(row)
             self.research_session.commit()
@@ -1081,6 +1084,191 @@ class Repository:
             return self._quality_to_dict(row) if row else None
         except SQLAlchemyError:
             return None
+
+    # ── research SQLite 维护 ───────────────────────
+
+    def research_storage_summary(self) -> dict[str, Any]:
+        tables = {
+            "backtest_runs": BacktestRun,
+            "backtest_trades": BacktestTrade,
+            "backtest_equity_curve": BacktestEquityCurve,
+            "backtest_signals": BacktestSignal,
+            "backtest_quality_reports": BacktestQualityReport,
+            "optimization_runs": OptimizationRun,
+            "golden_ranktrend_cases": GoldenRankTrendCase,
+        }
+        try:
+            counts = {
+                name: int(self.research_session.scalar(select(func.count()).select_from(model)) or 0)
+                for name, model in tables.items()
+            }
+            oldest = self.research_session.scalar(select(func.min(BacktestRun.created_at)))
+            newest = self.research_session.scalar(select(func.max(BacktestRun.created_at)))
+            return {
+                "ok": True,
+                "tables": counts,
+                "backtestCreatedAt": {
+                    "oldest": oldest.isoformat() if oldest else None,
+                    "newest": newest.isoformat() if newest else None,
+                },
+            }
+        except SQLAlchemyError as exc:
+            return {"ok": False, "error": str(exc), "tables": {}}
+
+    def delete_backtest_run(self, run_id: str, *, checkpoint: bool = False) -> dict[str, Any] | None:
+        if not self.get_backtest_run(run_id):
+            return None
+        try:
+            deleted: dict[str, int] = {}
+            child_specs = [
+                ("backtest_trades", BacktestTrade),
+                ("backtest_equity_curve", BacktestEquityCurve),
+                ("backtest_signals", BacktestSignal),
+                ("backtest_quality_reports", BacktestQualityReport),
+            ]
+            for name, model in child_specs:
+                result = self.research_session.execute(delete(model).where(model.backtest_run_id == run_id))
+                deleted[name] = int(result.rowcount or 0)
+            result = self.research_session.execute(delete(BacktestRun).where(BacktestRun.id == run_id))
+            deleted["backtest_runs"] = int(result.rowcount or 0)
+            self.research_session.commit()
+            if checkpoint:
+                self._checkpoint_research_sqlite()
+            return {"ok": True, "runId": run_id, "deleted": deleted}
+        except SQLAlchemyError as exc:
+            self.research_session.rollback()
+            raise RuntimeError("failed to delete backtest run") from exc
+
+    def cleanup_research_backtests(
+        self,
+        *,
+        older_than_days: int = 30,
+        keep_latest_per_group: int = 10,
+        dataset_id: str | None = None,
+        snapshot_type: str | None = None,
+        include_failed: bool = False,
+        apply: bool = False,
+        checkpoint: bool = False,
+    ) -> dict[str, Any]:
+        cutoff = datetime.utcnow() - timedelta(days=max(0, older_than_days))
+        try:
+            query = select(BacktestRun).where(BacktestRun.created_at < cutoff)
+            if dataset_id:
+                query = query.where(BacktestRun.dataset_id == dataset_id)
+            if snapshot_type:
+                query = query.where(BacktestRun.snapshot_type == snapshot_type)
+            if not include_failed:
+                query = query.where(BacktestRun.status == "completed")
+            rows = list(self.research_session.scalars(query).all())
+            protected = self._protected_backtest_run_ids(keep_latest_per_group, dataset_id=dataset_id, snapshot_type=snapshot_type)
+            candidates = [row for row in rows if row.id not in protected]
+            run_ids = [row.id for row in candidates]
+            counts = self._backtest_delete_counts(run_ids)
+            result: dict[str, Any] = {
+                "ok": True,
+                "apply": bool(apply),
+                "cutoff": cutoff.isoformat(),
+                "matchedBacktestRuns": len(run_ids),
+                "deleteCounts": counts,
+                "protectedRuns": sorted(protected),
+                "runs": [self.backtest_run_to_dict(row) for row in candidates[:200]],
+                "truncated": len(candidates) > 200,
+            }
+            if apply and run_ids:
+                deleted = self._delete_backtest_runs(run_ids)
+                if checkpoint:
+                    self._checkpoint_research_sqlite()
+                result["deleted"] = deleted
+            elif apply:
+                result["deleted"] = {key: 0 for key in counts}
+            return result
+        except SQLAlchemyError as exc:
+            self.research_session.rollback()
+            raise RuntimeError("failed to cleanup research backtests") from exc
+
+    def _protected_backtest_run_ids(
+        self,
+        keep_latest_per_group: int,
+        *,
+        dataset_id: str | None = None,
+        snapshot_type: str | None = None,
+    ) -> set[str]:
+        if keep_latest_per_group <= 0:
+            return set()
+        query = select(BacktestRun).order_by(BacktestRun.created_at.desc())
+        if dataset_id:
+            query = query.where(BacktestRun.dataset_id == dataset_id)
+        if snapshot_type:
+            query = query.where(BacktestRun.snapshot_type == snapshot_type)
+        grouped: dict[tuple[Any, ...], list[str]] = defaultdict(list)
+        for row in self.research_session.scalars(query):
+            key = (
+                row.dataset_id,
+                row.strategy_name,
+                row.strategy_version,
+                row.snapshot_type,
+                row.config_hash,
+                row.random_seed,
+            )
+            if len(grouped[key]) < keep_latest_per_group:
+                grouped[key].append(row.id)
+        protected: set[str] = set()
+        for ids in grouped.values():
+            protected.update(ids)
+        return protected
+
+    def _backtest_delete_counts(self, run_ids: list[str]) -> dict[str, int]:
+        if not run_ids:
+            return {
+                "backtest_runs": 0,
+                "backtest_trades": 0,
+                "backtest_equity_curve": 0,
+                "backtest_signals": 0,
+                "backtest_quality_reports": 0,
+            }
+        specs = [
+            ("backtest_runs", BacktestRun, BacktestRun.id),
+            ("backtest_trades", BacktestTrade, BacktestTrade.backtest_run_id),
+            ("backtest_equity_curve", BacktestEquityCurve, BacktestEquityCurve.backtest_run_id),
+            ("backtest_signals", BacktestSignal, BacktestSignal.backtest_run_id),
+            ("backtest_quality_reports", BacktestQualityReport, BacktestQualityReport.backtest_run_id),
+        ]
+        return {
+            name: int(self.research_session.scalar(select(func.count()).select_from(model).where(column.in_(run_ids))) or 0)
+            for name, model, column in specs
+        }
+
+    def _delete_backtest_runs(self, run_ids: list[str]) -> dict[str, int]:
+        if not run_ids:
+            return self._backtest_delete_counts([])
+        deleted: dict[str, int] = {}
+        for name, model in [
+            ("backtest_trades", BacktestTrade),
+            ("backtest_equity_curve", BacktestEquityCurve),
+            ("backtest_signals", BacktestSignal),
+            ("backtest_quality_reports", BacktestQualityReport),
+        ]:
+            result = self.research_session.execute(delete(model).where(model.backtest_run_id.in_(run_ids)))
+            deleted[name] = int(result.rowcount or 0)
+        result = self.research_session.execute(delete(BacktestRun).where(BacktestRun.id.in_(run_ids)))
+        deleted["backtest_runs"] = int(result.rowcount or 0)
+        self.research_session.commit()
+        return deleted
+
+    def _checkpoint_research_sqlite(self) -> None:
+        bind = self.research_session.get_bind()
+        if bind and bind.dialect.name == "sqlite":
+            self.research_session.execute(text("PRAGMA wal_checkpoint(TRUNCATE)"))
+            self.research_session.commit()
+
+    def vacuum_research_sqlite(self) -> dict[str, Any]:
+        bind = self.research_session.get_bind()
+        if not bind or bind.dialect.name != "sqlite":
+            return {"ok": False, "skipped": True, "reason": "research database is not sqlite"}
+        self.research_session.rollback()
+        with bind.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+            conn.execute(text("VACUUM"))
+        return {"ok": True, "vacuum": True}
 
     # ── 序列化 ─────────────────────────────────────
 
@@ -1110,7 +1298,7 @@ class Repository:
             "stage": model.stage,
             "regime": model.regime,
             "explanation": model.explanation,
-            "fillDetail": json_loads(model.fill_detail_json, {}),
+            "fillDetail": loads_json_field(model.fill_detail_json, {}),
         }
 
     @staticmethod
@@ -1142,8 +1330,8 @@ class Repository:
             "rank": model.rank,
             "stage": model.stage,
             "regime": model.regime,
-            "reasons": json_loads(model.reasons_json, []),
-            "riskFlags": json_loads(model.risk_flags_json, []),
+            "reasons": loads_json_field(model.reasons_json, []),
+            "riskFlags": loads_json_field(model.risk_flags_json, []),
         }
 
     @staticmethod
@@ -1157,20 +1345,22 @@ class Repository:
             "frameCount": model.frame_count,
             "stockCount": model.stock_count,
             "sectorCount": model.sector_count,
-            "missingFields": json_loads(model.missing_fields_json, {}),
-            "nanCounts": json_loads(model.nan_counts_json, {}),
-            "infCounts": json_loads(model.inf_counts_json, {}),
+            "missingFields": loads_json_field(model.missing_fields_json, {}),
+            "nanCounts": loads_json_field(model.nan_counts_json, {}),
+            "infCounts": loads_json_field(model.inf_counts_json, {}),
             "negativePriceCount": model.negative_price_count,
             "nonPositivePriceCount": model.non_positive_price_count,
             "negativeVolumeCount": model.negative_volume_count,
             "coverageRatio": model.coverage_ratio,
             "timeOrderFixed": model.time_order_fixed,
             "timeOrderFixCount": model.time_order_fix_count,
-            "warnings": json_loads(model.warnings_json, []),
+            "warnings": loads_json_field(model.warnings_json, []),
         }
 
     def save_optimization_run(self, run: OptimizationRun) -> OptimizationRun:
         try:
+            run.request_json = dumps_json_field(run.request_json or "{}")
+            run.result_json = dumps_json_field(run.result_json or "{}")
             managed = self.research_session.merge(run)
             self.research_session.commit()
         except SQLAlchemyError:
@@ -1186,6 +1376,8 @@ class Repository:
 
     def save_golden_case(self, case: GoldenRankTrendCase) -> GoldenRankTrendCase:
         try:
+            case.input_json = dumps_json_field(case.input_json or "{}")
+            case.expected_json = dumps_json_field(case.expected_json or "{}")
             managed = self.research_session.merge(case)
             self.research_session.commit()
         except SQLAlchemyError:
@@ -1338,8 +1530,8 @@ class Repository:
             "sector_row_count": model.sector_row_count,
             "start_date": model.start_date,
             "end_date": model.end_date,
-            "snapshot_types": json_loads(model.snapshot_types_json, []),
-            "metadata": json_loads(model.metadata_json, {}),
+            "snapshot_types": loads_json_field(model.snapshot_types_json, []),
+            "metadata": loads_json_field(model.metadata_json, {}),
             "created_at": model.created_at.isoformat(),
         }
 
@@ -1359,6 +1551,8 @@ class Repository:
             "errorReason": model.error_reason,
             "request_json": model.request_json,
             "result_json": model.result_json,
+            "request": loads_json_field(model.request_json, {}),
+            "result": loads_json_field(model.result_json, {}),
             "created_at": model.created_at.isoformat() if model.created_at else None,
             "finished_at": model.finished_at.isoformat() if model.finished_at else None,
         }
@@ -1375,6 +1569,8 @@ class Repository:
             "status": model.status,
             "request_json": model.request_json,
             "result_json": model.result_json,
+            "request": loads_json_field(model.request_json, {}),
+            "result": loads_json_field(model.result_json, {}),
             "created_at": model.created_at.isoformat() if model.created_at else None,
         }
 
@@ -1386,6 +1582,8 @@ class Repository:
             "dataset_id": model.dataset_id,
             "input_json": model.input_json,
             "expected_json": model.expected_json,
+            "input": loads_json_field(model.input_json, {}),
+            "expected": loads_json_field(model.expected_json, {}),
             "created_at": model.created_at.isoformat() if model.created_at else None,
         }
 

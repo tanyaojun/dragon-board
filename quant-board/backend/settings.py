@@ -83,12 +83,22 @@ class Settings(BaseModel):
     def model_post_init(self, __context: Any) -> None:
         old_db_url = os.environ.get("QUANT_BOARD_DATABASE_URL")
         if old_db_url and not os.environ.get("QUANT_BOARD_SNAPSHOT_DATABASE_URL"):
-            warnings.warn(
-                "QUANT_BOARD_DATABASE_URL is deprecated, use QUANT_BOARD_SNAPSHOT_DATABASE_URL instead. "
-                "Falling back to the old value for now, but this will be removed in a future version.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
+            if "quant_board.db" in old_db_url.replace("\\", "/"):
+                warnings.warn(
+                    "QUANT_BOARD_DATABASE_URL points to legacy quant_board.db and is ignored. "
+                    "Use QUANT_BOARD_SNAPSHOT_DATABASE_URL and QUANT_BOARD_RESEARCH_DATABASE_URL, "
+                    "or migrate the legacy DB with `python -m backend.cli migrate-legacy-db`.",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                old_db_url = None
+            else:
+                warnings.warn(
+                    "QUANT_BOARD_DATABASE_URL is deprecated, use QUANT_BOARD_SNAPSHOT_DATABASE_URL instead. "
+                    "Falling back to the old value for now.",
+                    DeprecationWarning,
+                    stacklevel=2,
+                )
         if not self.snapshot_database_url:
             self.snapshot_database_url = (
                 os.environ.get("QUANT_BOARD_SNAPSHOT_DATABASE_URL")

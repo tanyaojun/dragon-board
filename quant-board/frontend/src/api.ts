@@ -1,6 +1,7 @@
 import type {
   ApiErrorDetail,
   BacktestEquityResponse,
+  BacktestDeleteResponse,
   BacktestQualityResponse,
   BacktestRequest,
   BacktestSignal,
@@ -84,6 +85,10 @@ export const api = {
       body: JSON.stringify(payload)
     }),
   getBacktest: (id: string) => requestApi<unknown>(`/api/backtests/${encodeURIComponent(id)}`),
+  deleteBacktest: (id: string) =>
+    requestApi<BacktestDeleteResponse>(`/api/backtests/${encodeURIComponent(id)}`, {
+      method: "DELETE"
+    }),
   getBacktestTrades: (id: string, limit = 100, offset = 0) =>
     requestApi<PaginatedBacktestResponse<BacktestTrade>>(
       `/api/backtests/${encodeURIComponent(id)}/trades?limit=${limit}&offset=${offset}`

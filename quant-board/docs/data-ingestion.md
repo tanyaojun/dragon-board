@@ -35,6 +35,8 @@ QuantBoard 首期导入 dragon-board 的历史快照数据，形成可复现的�
 
 IndexedDB 已从正式快照读写链路中移除。它只能作为历史迁移源、显式缓存或非正式临时数据来源，不再作为 QuantBoard 日常数据集采集入口。
 
+旧 SQLite 单库 `data/warehouse/quant_board.db` 也是历史迁移源。迁移时先运行 `inspect-storage` 记录基线，再用 `migrate-legacy-db --dry-run` 检查将迁入双库的快照和研究表数量，最后显式 `--apply`。迁移过程不会删除旧单库或浏览器 IndexedDB。
+
 ## 标准数据集结构
 
 导入后生成一个 `dataset_id`，所有表都带这个 ID。
@@ -177,6 +179,8 @@ snapshot_type = half_hour
 `skipped` 表示目标 `dataset_id` 下已存在的快照或同一迁移幂等键已经执行过。重复导入不能制造重复数据。
 
 正式迁移前必须先 dry run，检查快照数、股票行数、日期范围和快照类型是否符合预期。正式导入后再运行 `push-outbox` 或等待自动 outbox 同步；大批量历史补推使用 `push-backup` 手动触发。
+
+完成历史迁移后，使用 `verify-snapshot-migration --dataset-id <id> --source-report <dry-run-report.json>` 对齐 `records/frames/stock_rows/sector_rows` 四类行数。验收完成前，不删除浏览器 IndexedDB，不关闭迁移工具。
 
 ## 质量门禁
 

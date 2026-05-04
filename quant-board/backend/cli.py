@@ -10,10 +10,14 @@ from typing import Any
 from backend.data.database import SessionLocal, init_db
 from backend.data.backup_sync import BackupSyncService
 from backend.data.dataset_service import DatasetService
+from backend.data.json_compaction import compact_json_fields
+from backend.data.legacy_split_migration import migrate_legacy_db
 from backend.data.migration import SnapshotMigrationService
 from backend.data.repository import Repository
 from backend.data.schemas import ImportDatasetRequest
+from backend.data.storage_inspector import inspect_storage
 from backend.data.supabase_backup import get_backup_client
+from backend.settings import get_settings
 from backend.services import BacktestService, GoldenService, OptimizationService
 
 DEFAULT_MOMENTUM_PERIODS = [3, 5, 8, 13, 21]
@@ -114,12 +118,107 @@ def cmd_migrate_snapshots(args: argparse.Namespace) -> None:
         request = {
             "datasetId": args.dataset_id,
             "sourcePath": args.path,
+            "sourceType": args.source_type,
             "name": args.name,
             "idempotencyKey": args.idempotency_key,
             "source": args.source,
             "dryRun": args.dry_run,
         }
         print_json(SnapshotMigrationService(session).import_json(request))
+
+
+def cmd_inspect_storage(args: argparse.Namespace) -> None:
+    settings = get_settings()
+    target = Path(args.path or settings.warehouse_dir)
+    print_json(inspect_storage(target))
+
+
+def cmd_migrate_legacy_db(args: argparse.Namespace) -> None:
+    settings = get_settings()
+    print_json(
+        migrate_legacy_db(
+            source=args.source,
+            snapshot_database_url=args.snapshot_database_url or settings.snapshot_database_url,
+            research_database_url=args.research_database_url or settings.research_database_url,
+            apply=bool(args.apply),
+        )
+    )
+
+
+def cmd_compact_json_fields(args: argparse.Namespace) -> None:
+    settings = get_settings()
+    targets = [args.database_url] if args.database_url else [settings.snapshot_database_url, settings.research_database_url]
+    results = [
+        compact_json_fields(
+            target,
+            apply=bool(args.apply),
+            threshold=args.threshold,
+            batch_size=args.batch_size,
+            vacuum=bool(args.vacuum),
+        )
+        for target in targets
+    ]
+    print_json({"ok": all(item.get("ok") for item in results), "databases": results})
+
+
+def cmd_verify_snapshot_migration(args: argparse.Namespace) -> None:
+    init_db()
+    source_report = json.loads(Path(args.source_report).read_text(encoding="utf-8"))
+    expected = source_report.get("report") if isinstance(source_report.get("report"), dict) else source_report
+    with SessionLocal() as session:
+        repo = Repository(session, enable_backup=False)
+        counts = repo.snapshot_counts(dataset_id=args.dataset_id)
+    actual = {
+        "records": counts.get("records", 0),
+        "frames": counts.get("frames", 0),
+        "stock_rows": counts.get("stockRows", 0),
+        "sector_rows": counts.get("sectorRows", 0),
+    }
+    expected_counts = {
+        "records": int(expected.get("record_count") or expected.get("records") or expected.get("scanned") or 0),
+        "frames": int(expected.get("frame_count") or expected.get("frames") or expected.get("scanned") or 0),
+        "stock_rows": int(expected.get("stock_row_count") or expected.get("stock_rows") or 0),
+        "sector_rows": int(expected.get("sector_row_count") or expected.get("sector_rows") or 0),
+    }
+    mismatches = {
+        key: {"expected": expected_counts[key], "actual": actual[key]}
+        for key in expected_counts
+        if expected_counts[key] and expected_counts[key] != actual[key]
+    }
+    print_json({"ok": not mismatches, "datasetId": args.dataset_id, "expected": expected_counts, "actual": actual, "mismatches": mismatches})
+
+
+def cmd_inspect_research_storage(args: argparse.Namespace) -> None:
+    init_db()
+    with SessionLocal() as session:
+        print_json(BacktestService(session).research_storage_summary())
+
+
+def cmd_delete_backtest(args: argparse.Namespace) -> None:
+    init_db()
+    with SessionLocal() as session:
+        result = BacktestService(session).delete_run(args.run_id)
+    if result is None:
+        raise SystemExit(f"backtest run not found: {args.run_id}")
+    print_json(result)
+
+
+def cmd_cleanup_research(args: argparse.Namespace) -> None:
+    init_db()
+    payload = {
+        "olderThanDays": args.older_than_days,
+        "keepLatestPerGroup": args.keep_latest_per_group,
+        "datasetId": args.dataset_id,
+        "snapshotType": args.snapshot_type,
+        "includeFailed": args.include_failed,
+        "confirm": bool(args.apply),
+    }
+    with SessionLocal() as session:
+        service = BacktestService(session)
+        result = service.cleanup_research(payload, apply=bool(args.apply))
+        if args.apply and args.vacuum:
+            result["vacuum"] = service.vacuum_research_sqlite()
+    print_json(result)
 
 
 def build_ranktrend_payload(args: argparse.Namespace) -> dict[str, Any]:
@@ -276,12 +375,54 @@ def build_parser() -> argparse.ArgumentParser:
 
     migrate_cmd = sub.add_parser("migrate-snapshots", help="Import historical DragonBoard snapshot JSON into SQLite")
     migrate_cmd.add_argument("--path", required=True)
+    migrate_cmd.add_argument("--source-type", choices=["json_bundle", "leveldb", "browser_bridge"], default="json_bundle")
     migrate_cmd.add_argument("--dataset-id", default="dragonboard_history")
     migrate_cmd.add_argument("--name", default=None)
     migrate_cmd.add_argument("--idempotency-key", default=None)
     migrate_cmd.add_argument("--source", default="dragon_board_history_migration")
     migrate_cmd.add_argument("--dry-run", action="store_true")
     migrate_cmd.set_defaults(func=cmd_migrate_snapshots)
+
+    inspect_cmd = sub.add_parser("inspect-storage", help="Inspect SQLite files and JSON field sizes")
+    inspect_cmd.add_argument("--path", default=None)
+    inspect_cmd.set_defaults(func=cmd_inspect_storage)
+
+    legacy_cmd = sub.add_parser("migrate-legacy-db", help="Split legacy quant_board.db into snapshot and research DBs")
+    legacy_cmd.add_argument("--source", required=True)
+    legacy_cmd.add_argument("--snapshot-database-url", default=None)
+    legacy_cmd.add_argument("--research-database-url", default=None)
+    legacy_cmd.add_argument("--apply", action="store_true")
+    legacy_cmd.set_defaults(func=cmd_migrate_legacy_db)
+
+    compact_cmd = sub.add_parser("compact-json-fields", help="Compress large SQLite JSON text fields")
+    compact_cmd.add_argument("--database-url", default=None)
+    compact_cmd.add_argument("--threshold", type=int, default=4096)
+    compact_cmd.add_argument("--batch-size", type=int, default=500)
+    compact_cmd.add_argument("--apply", action="store_true")
+    compact_cmd.add_argument("--vacuum", action="store_true")
+    compact_cmd.set_defaults(func=cmd_compact_json_fields)
+
+    verify_cmd = sub.add_parser("verify-snapshot-migration", help="Verify migrated snapshot row counts")
+    verify_cmd.add_argument("--dataset-id", required=True)
+    verify_cmd.add_argument("--source-report", required=True)
+    verify_cmd.set_defaults(func=cmd_verify_snapshot_migration)
+
+    inspect_research_cmd = sub.add_parser("inspect-research-storage", help="Inspect local research SQLite table counts")
+    inspect_research_cmd.set_defaults(func=cmd_inspect_research_storage)
+
+    delete_backtest_cmd = sub.add_parser("delete-backtest", help="Delete one backtest run and normalized result rows")
+    delete_backtest_cmd.add_argument("--run-id", required=True)
+    delete_backtest_cmd.set_defaults(func=cmd_delete_backtest)
+
+    cleanup_research_cmd = sub.add_parser("cleanup-research", help="Preview or delete old local research backtest runs")
+    cleanup_research_cmd.add_argument("--older-than-days", type=int, default=30)
+    cleanup_research_cmd.add_argument("--keep-latest-per-group", type=int, default=10)
+    cleanup_research_cmd.add_argument("--dataset-id", default=None)
+    cleanup_research_cmd.add_argument("--snapshot-type", choices=["quarter_hour", "half_hour"], default=None)
+    cleanup_research_cmd.add_argument("--include-failed", action="store_true")
+    cleanup_research_cmd.add_argument("--apply", action="store_true")
+    cleanup_research_cmd.add_argument("--vacuum", action="store_true")
+    cleanup_research_cmd.set_defaults(func=cmd_cleanup_research)
 
     run_cmd = sub.add_parser("run-ranktrend", help="Run RankTrend backtest")
     run_cmd.add_argument("--dataset-id", required=True)

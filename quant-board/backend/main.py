@@ -686,6 +686,14 @@ def get_backtest_quality(run_id: str, db: Session | None = Depends(get_db)) -> d
     return result
 
 
+@app.delete("/api/backtests/{run_id}")
+def delete_backtest(run_id: str, db: Session | None = Depends(get_db)) -> dict[str, Any]:
+    result = BacktestService(db).delete_run(run_id)
+    if not result:
+        raise _backtest_not_found(run_id)
+    return result
+
+
 @app.get("/api/backtests/{run_id}")
 def get_backtest(run_id: str, db: Session | None = Depends(get_db)) -> dict[str, Any]:
     result = BacktestService(db).get_run(run_id)
@@ -697,6 +705,27 @@ def get_backtest(run_id: str, db: Session | None = Depends(get_db)) -> dict[str,
 @app.get("/api/backtests/{run_id}/report")
 def get_backtest_report(run_id: str, db: Session | None = Depends(get_db)) -> dict[str, Any]:
     return get_backtest(run_id, db)
+
+
+@app.get("/api/storage/research-summary")
+def get_research_storage_summary(db: Session | None = Depends(get_db)) -> dict[str, Any]:
+    return BacktestService(db).research_storage_summary()
+
+
+@app.post("/api/storage/research-cleanup-preview")
+def preview_research_cleanup(payload: dict[str, Any], db: Session | None = Depends(get_db)) -> dict[str, Any]:
+    try:
+        return BacktestService(db).cleanup_research(payload, apply=False)
+    except ValueError as error:
+        raise _structured_bad_request(error) from error
+
+
+@app.post("/api/storage/research-cleanup")
+def cleanup_research(payload: dict[str, Any], db: Session | None = Depends(get_db)) -> dict[str, Any]:
+    try:
+        return BacktestService(db).cleanup_research(payload, apply=True)
+    except ValueError as error:
+        raise _structured_bad_request(error) from error
 
 
 @app.post("/api/optimizations/rank-trend")

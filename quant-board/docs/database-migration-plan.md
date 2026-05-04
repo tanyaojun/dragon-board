@@ -21,7 +21,7 @@
 
 ## 当前事实
 
-QuantBoard 当前拆成两个 SQLite 库。
+QuantBoard 当前拆成两个 SQLite 库。旧单库 `quant_board.db` 只作为 legacy source 保留，用于拆分迁移，不再作为默认主库。
 
 快照事实库 `quant_board_snapshots.db` 包括：
 
@@ -42,6 +42,8 @@ QuantBoard 当前拆成两个 SQLite 库。
 - `backtest_quality_reports`
 - `optimization_runs`
 
+当前工作区曾在基线分支验证过 `payload_json` 相关 outbox 测试，但该结论不能代表 `main` 已完成全量旧库迁移；迁移验收必须以当前工作区 `inspect-storage` 和 `migrate-legacy-db --dry-run/--apply` 输出为准。
+
 Supabase 备份库必须与快照事实库保持同构 schema。云端需要使用 [../backend/data/supabase_schema.sql](../backend/data/supabase_schema.sql) 重建为同名表、同业务键和同索引。脚本末尾会执行 `notify pgrst, 'reload schema'`，执行后仍应通过 `smoke-backup` 或 `/api/health?deep=true` 确认 PostgREST 已看到新表结构：
 
 - `datasets`
@@ -54,6 +56,10 @@ Supabase 备份库必须与快照事实库保持同构 schema。云端需要使�
 旧的 Supabase `snapshots` / payload 兼容方案已经废弃。云端不再使用 `quality_flags.kind=qb_dataset`、`qb_snapshot_bundle` 等业务枚举，也不再把 QuantBoard 明细塞进 `snapshots.payload`。如果 Supabase 仍只有旧 `snapshots`、`snapshot_frames`、`snapshot_stock_rows`、`snapshot_sector_rows` 四张非同构表，健康检查会报告缺失表，`push-backup` 不应视为可用。
 
 Supabase schema 不再包含回测、优化和 Golden 表，也不再对研究 JSON 做云端压缩备份。`backtest_runs`、`backtest_trades`、`backtest_equity_curve`、`backtest_signals`、`backtest_quality_reports`、优化和 Golden 都是 research SQLite `local-only` 数据，大型研究结果留在本地研究库或报告文件目录，避免挤占 Supabase Free 版容量。
+
+研究库历史回测清理属于本地维护动作，不属于 Supabase 备份、pull/push 或 failover 合同。`DELETE /api/backtests/{run_id}`、`POST /api/storage/research-cleanup` 和 CLI `cleanup-research` 只能删除 `quant_board_research.db` 中的回测结果表，不能删除 `quant_board_snapshots.db` 的正式快照事实，也不能登记 `sync_outbox`。删除单个回测时必须先显式删除 `backtest_trades`、`backtest_equity_curve`、`backtest_signals`、`backtest_quality_reports`，最后删除 `backtest_runs`。
+
+在线清理后可执行 `PRAGMA wal_checkpoint(TRUNCATE)` 收敛 WAL；`VACUUM` 只允许 CLI 显式 `--vacuum`，避免前端 API 在用户使用期间长时间锁定 research SQLite。
 
 当前 WP2/WP3/WP4 批次已落地的能力：
 
@@ -385,7 +391,9 @@ Dragon Board 前端正式分析入口 `listSnapshotFrameBundles` 必须调用该
 
 | 变量 | 说明 |
 | --- | --- |
-| `QUANT_BOARD_DATABASE_URL` | SQLite 主库连接串，默认指向 `quant-board/data/warehouse/quant_board.db` |
+| `QUANT_BOARD_SNAPSHOT_DATABASE_URL` | SQLite 快照事实库连接串，默认指向 `quant-board/data/warehouse/quant_board_snapshots.db` |
+| `QUANT_BOARD_RESEARCH_DATABASE_URL` | SQLite 研究库连接串，默认指向 `quant-board/data/warehouse/quant_board_research.db` |
+| `QUANT_BOARD_DATABASE_URL` | 旧兼容变量；如果指向 legacy `quant_board.db` 会被忽略，避免把双库主链静默切回旧单库 |
 | `SUPABASE_URL` | Supabase 项目 URL |
 | `SUPABASE_SECRET_KEY` | 后端专用密钥，禁止放入 `VITE_` 前端变量 |
 | `QUANT_BOARD_ENABLE_SUPABASE_BACKUP` | 是否启用 Supabase 备份镜像，默认按 Supabase 配置自动启用 |

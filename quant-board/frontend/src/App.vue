@@ -124,6 +124,7 @@ const signalTypeFilter = ref("");
 const signalRegimeFilter = ref("");
 const signalRiskFilter = ref<"all" | "risk" | "clean">("all");
 const showReportJson = ref(false);
+const deleteBacktestMessage = ref("");
 let optimizationPollToken = 0;
 
 const backtestForm = reactive<BacktestRequest>({
@@ -906,6 +907,42 @@ async function fetchBacktest(): Promise<void> {
       error: backtestNormalizedState.error,
       message: error instanceof Error ? error.message : String(error)
     };
+  }
+}
+
+async function deleteCurrentBacktest(): Promise<void> {
+  const id = manualBacktestId.value.trim() || lastBacktestId.value.trim();
+  if (!id) {
+    deleteBacktestMessage.value = "缺少回测 ID";
+    return;
+  }
+  const confirmed = window.confirm(
+    `确认删除回测 ${id}？\n\n此操作只删除 quant_board_research.db 中的本地研究结果，不会删除正式快照事实库。`
+  );
+  if (!confirmed) {
+    return;
+  }
+  backtestDetailState.status = "loading";
+  backtestDetailState.error = undefined;
+  deleteBacktestMessage.value = "";
+  try {
+    const result = await api.deleteBacktest(id);
+    const deletedRuns = result.deleted.backtest_runs ?? 0;
+    deleteBacktestMessage.value = `已删除 ${id}，回测记录 ${deletedRuns} 条。`;
+    backtestDetailState.status = "idle";
+    backtestDetailState.data = undefined;
+    backtestDetailState.raw = undefined;
+    backtestNormalizedState.status = "idle";
+    backtestNormalizedState.data = undefined;
+    backtestNormalizedState.raw = undefined;
+    manualBacktestId.value = "";
+    if (lastBacktestId.value === id) {
+      lastBacktestId.value = "";
+    }
+  } catch (error) {
+    backtestDetailState.status = "error";
+    backtestDetailState.error = formatApiError(error);
+    deleteBacktestMessage.value = "";
   }
 }
 
@@ -1711,7 +1748,16 @@ onMounted(async () => {
             <button type="button" :disabled="backtestDetailState.status === 'loading'" @click="fetchBacktest">
               {{ backtestDetailState.status === "loading" ? "拉取中..." : "拉取报告" }}
             </button>
+            <button
+              type="button"
+              class="danger-button"
+              :disabled="backtestDetailState.status === 'loading' || !(manualBacktestId || lastBacktestId)"
+              @click="deleteCurrentBacktest"
+            >
+              删除本次回测
+            </button>
           </div>
+          <div v-if="deleteBacktestMessage" class="inline-note">{{ deleteBacktestMessage }}</div>
           <div v-if="backtestDetailState.status === 'loading'" class="inline-note">
             正在读取兼容报告和归一化明细。
           </div>

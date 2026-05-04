@@ -436,6 +436,36 @@ Dragon Board 当前会在写入前通过 SQLite 读口确认同一 `snapshot_id`
 
 读取回测报告，和 `GET /api/backtests/{run_id}` 同口径，供页面语义化调用。
 
+### `DELETE /api/backtests/{run_id}`
+
+删除单次历史回测及其归一化明细。该操作只影响 research SQLite `quant_board_research.db`，不会删除 `quant_board_snapshots.db` 中的数据集和快照事实，也不会触发 Supabase `sync_outbox`。
+
+删除顺序固定为：
+
+1. `backtest_trades`
+2. `backtest_equity_curve`
+3. `backtest_signals`
+4. `backtest_quality_reports`
+5. `backtest_runs`
+
+返回：
+
+```json
+{
+  "ok": true,
+  "runId": "bt_xxx",
+  "deleted": {
+    "backtest_trades": 3,
+    "backtest_equity_curve": 40,
+    "backtest_signals": 120,
+    "backtest_quality_reports": 1,
+    "backtest_runs": 1
+  }
+}
+```
+
+不存在的 `run_id` 返回 `404` 和 `code=backtest_run_not_found`。
+
 ### `GET /api/backtests/{run_id}/trades`
 
 读取归一化交易明细，数据源为 research SQLite `backtest_trades`，不从 `result_json` 反解析。
@@ -567,6 +597,26 @@ openPositionCount
 找不到 run 返回 `404`，`detail.code=backtest_run_not_found`。非法分页参数返回 `400` 或 `422`，错误体至少包含 `code`、`field` 和 `value`。非法指标返回 `400`，`detail.code=invalid_backtest_metric`，并返回 `allowedMetrics`。旧 `result_json` 中缺失的指标用 `null`，同时在对应 run 的 `missingMetrics` 列出字段名，不能用 `0` 代替。
 
 归一化回测结果表属于 research SQLite `local-only` 数据，`GET /api/backtests/{run_id}/trades`、`/equity`、`/signals`、`/quality` 和 `POST /api/backtests/compare` 都不读取 Supabase，也不触发 `sync_outbox`、push/pull 或 failover。
+
+### `GET /api/storage/research-summary`
+
+读取 research SQLite 研究库的轻量统计，用于前端维护页或 CLI 对照。当前返回各研究表行数和回测创建时间范围。
+
+### `POST /api/storage/research-cleanup-preview`
+
+预览历史回测清理，不实际删除。请求字段：
+
+| 字段 | 默认 | 说明 |
+| --- | --- | --- |
+| `olderThanDays` | `30` | 只匹配早于该天数的回测 |
+| `keepLatestPerGroup` | `10` | 每个 `dataset/strategy/version/snapshot/config/seed` 分组至少保留最近 N 条 |
+| `datasetId` | 空 | 可选，只清理某个数据集的研究结果 |
+| `snapshotType` | 空 | 可选，`half_hour` 或 `quarter_hour` |
+| `includeFailed` | `false` | 是否纳入非 completed 回测 |
+
+### `POST /api/storage/research-cleanup`
+
+执行历史回测清理。请求字段同 preview，但必须额外传入 `confirm=true`。该接口会显式删除回测归一化子表并执行 `PRAGMA wal_checkpoint(TRUNCATE)`；不会自动 `VACUUM`，避免在线前端操作长时间锁库。
 
 ## 优化接口
 
@@ -834,6 +884,38 @@ win_rate: 0.52
 .\.venv\Scripts\python.exe -m backend.cli show-report --run-id bt_xxx
 ```
 
+### research 清理 CLI
+
+查看 `quant_board_research.db` 的研究表行数：
+
+```powershell
+.\.venv\Scripts\python.exe -m backend.cli inspect-research-storage
+```
+
+删除单个历史回测 run 及其归一化子表：
+
+```powershell
+.\.venv\Scripts\python.exe -m backend.cli delete-backtest --run-id bt_xxx
+```
+
+预览历史回测清理，默认只匹配 30 天以前的 completed 回测，并按分组至少保留最近 10 条：
+
+```powershell
+.\.venv\Scripts\python.exe -m backend.cli cleanup-research --older-than-days 30
+```
+
+确认后执行：
+
+```powershell
+.\.venv\Scripts\python.exe -m backend.cli cleanup-research --older-than-days 30 --apply
+```
+
+如果需要真正缩小 SQLite 文件体积，可在无人使用 QuantBoard 时显式追加 `--vacuum`。`VACUUM` 会锁库，因此不由前端删除按钮自动执行：
+
+```powershell
+.\.venv\Scripts\python.exe -m backend.cli cleanup-research --older-than-days 30 --apply --vacuum
+```
+
 ### 备份同步 CLI
 
 CLI 与 API 复用同一服务层：
@@ -844,6 +926,44 @@ cd d:\dragon-board\quant-board
 .\.venv\Scripts\python.exe -m backend.cli push-outbox --limit 50
 .\.venv\Scripts\python.exe -m backend.cli push-backup
 .\.venv\Scripts\python.exe -m backend.cli pull-backup
+```
+
+### 存储收敛 CLI
+
+只读诊断 SQLite 文件体积、表行数和 JSON 字段占用：
+
+```powershell
+.\.venv\Scripts\python.exe -m backend.cli inspect-storage
+```
+
+拆分旧单库到双库，默认 dry run，不改动目标库：
+
+```powershell
+.\.venv\Scripts\python.exe -m backend.cli migrate-legacy-db `
+  --source data\warehouse\quant_board.db
+```
+
+确认输出后显式执行：
+
+```powershell
+.\.venv\Scripts\python.exe -m backend.cli migrate-legacy-db `
+  --source data\warehouse\quant_board.db `
+  --apply
+```
+
+压缩 SQLite 本地大 JSON 字段，默认 dry run；正式执行必须显式 `--apply`。`--vacuum` 只在用户明确传入时对目标数据库执行，不会批量清理文件。
+
+```powershell
+.\.venv\Scripts\python.exe -m backend.cli compact-json-fields
+.\.venv\Scripts\python.exe -m backend.cli compact-json-fields --apply
+```
+
+历史快照迁移后可用 dry-run 报告核对四张事实表行数：
+
+```powershell
+.\.venv\Scripts\python.exe -m backend.cli verify-snapshot-migration `
+  --dataset-id dragonboard_live `
+  --source-report data\staging\migration-dry-run.json
 ```
 
 历史迁移演练：

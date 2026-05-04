@@ -49,6 +49,16 @@ button.primary {
   color: #ffffff;
 }
 
+button.danger-button {
+  border-color: #b84c4c;
+  color: #9b1c1c;
+}
+
+button.danger-button:hover {
+  border-color: #8f2d2d;
+  background: #fff4f4;
+}
+
 input,
 select {
   width: 100%;

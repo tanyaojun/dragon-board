@@ -8,6 +8,7 @@ from backend.analysis.ranktrend import RankTrendConfig, RankTrendPythonEngine
 from backend.core.backtest import BacktestEngine, normalize_strategy_name
 from backend.data.models import BacktestRun, GoldenRankTrendCase, OptimizationRun
 from backend.data.quality_gate import evaluate_snapshot_quality
+from backend.data.json_codec import loads_json_field
 from backend.data.repository import Repository
 from backend.optimization.jobs import submit_optimization_job
 from backend.optimization.runner import OptimizationRunner
@@ -209,7 +210,7 @@ class BacktestService:
         run = self.repo.get_backtest_run(run_id)
         if not run:
             return None
-        result = json_loads(run.result_json, {})
+        result = loads_json_field(run.result_json, {})
         compact = self._summary_response(run.id, result)
         return {
             **compact,
@@ -269,6 +270,34 @@ class BacktestService:
             return {"runId": run_id, "qualityReport": None}
         return {"runId": run_id, "qualityReport": quality}
 
+    def delete_run(self, run_id: str) -> dict[str, Any] | None:
+        return self.repo.delete_backtest_run(run_id, checkpoint=True)
+
+    def research_storage_summary(self) -> dict[str, Any]:
+        return self.repo.research_storage_summary()
+
+    def vacuum_research_sqlite(self) -> dict[str, Any]:
+        return self.repo.vacuum_research_sqlite()
+
+    def cleanup_research(self, payload: dict[str, Any], *, apply: bool = False) -> dict[str, Any]:
+        older_than_days = int(payload.get("olderThanDays") or payload.get("older_than_days") or 30)
+        keep_latest = int(payload.get("keepLatestPerGroup") or payload.get("keep_latest_per_group") or 10)
+        if older_than_days < 0:
+            raise ValueError({"code": "invalid_cleanup_request", "field": "olderThanDays"})
+        if keep_latest < 0:
+            raise ValueError({"code": "invalid_cleanup_request", "field": "keepLatestPerGroup"})
+        if apply and not bool(payload.get("confirm")):
+            raise ValueError({"code": "cleanup_confirmation_required", "message": "confirm=true is required"})
+        return self.repo.cleanup_research_backtests(
+            older_than_days=older_than_days,
+            keep_latest_per_group=keep_latest,
+            dataset_id=str(payload.get("datasetId") or payload.get("dataset_id") or "") or None,
+            snapshot_type=str(payload.get("snapshotType") or payload.get("snapshot_type") or "") or None,
+            include_failed=bool(payload.get("includeFailed") or payload.get("include_failed")),
+            apply=apply,
+            checkpoint=apply,
+        )
+
     def compare_runs(self, run_ids: list[str], metrics: list[str] | None = None) -> dict[str, Any]:
         metric_names = metrics or ["totalReturn", "sharpe", "maxDrawdown", "winRate"]
         invalid = [metric for metric in metric_names if metric not in BACKTEST_COMPARE_METRICS]
@@ -285,7 +314,7 @@ class BacktestService:
             run = self.repo.get_backtest_run(run_id)
             if not run:
                 raise LookupError(run_id)
-            result = json_loads(run.result_json, {})
+            result = loads_json_field(run.result_json, {})
             metric_values = {metric: self._metric_value(result, metric) for metric in metric_names}
             missing = [metric for metric, value in metric_values.items() if value is None]
             item = {
@@ -307,7 +336,7 @@ class BacktestService:
         run = self.repo.get_backtest_run(run_id)
         if not run:
             return None
-        result = json_loads(run.result_json, {})
+        result = loads_json_field(run.result_json, {})
         return {
             "runId": run.id,
             "datasetId": run.dataset_id,
@@ -316,7 +345,7 @@ class BacktestService:
             "strategyVersion": run.strategy_version,
             "configHash": run.config_hash,
             "randomSeed": run.random_seed,
-            "request": json_loads(run.request_json, {}),
+            "request": loads_json_field(run.request_json, {}),
             "metrics": {metric: self._metric_value(result, metric) for metric in sorted(BACKTEST_COMPARE_METRICS)},
             "trades": self.repo.get_backtest_trades(run_id),
             "equityCurve": self.repo.get_backtest_equity_curve(run_id),
@@ -489,7 +518,7 @@ class OptimizationService:
         run = self.repo.get_optimization_run(run_id)
         if not run:
             return None
-        result = json_loads(run.result_json, {})
+        result = loads_json_field(run.result_json, {})
         status = run.status or result.get("status") or "completed"
         if status != "completed":
             return {
@@ -597,8 +626,8 @@ class GoldenService:
             case = self.repo.get_golden_case(case_id)
             if not case:
                 return {"passed": False, "caseId": case_id, "issues": [f"golden case not found: {case_id}"]}
-            expected = json_loads(case.expected_json, {})
-            input_meta = json_loads(case.input_json, {})
+            expected = loads_json_field(case.expected_json, {})
+            input_meta = loads_json_field(case.input_json, {})
             target_dataset_id = dataset_id or case.dataset_id or input_meta.get("datasetId")
             snapshot_type = str(payload.get("snapshot_type") or payload.get("snapshotType") or input_meta.get("snapshotType") or "half_hour")
             source = input_meta.get("source") or ("python_current_output" if input_meta.get("sampleLimit") else "unknown")
