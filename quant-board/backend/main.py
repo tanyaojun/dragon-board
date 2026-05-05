@@ -952,6 +952,14 @@ def run_theme_trend_optimization(payload: dict[str, Any], db: Session | None = D
         raise HTTPException(status_code=400, detail=str(error)) from error
 
 
+@app.post("/api/optimizations/theme-confluence")
+def run_theme_confluence_optimization(payload: dict[str, Any], db: Session | None = Depends(get_db)) -> dict[str, Any]:
+    try:
+        return OptimizationService(db).run_theme_confluence(payload)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
 @app.get("/api/optimizations/{run_id}")
 def get_optimization(run_id: str, db: Session | None = Depends(get_db)) -> dict[str, Any]:
     result = OptimizationService(db).get_run(run_id)

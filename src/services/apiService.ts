@@ -103,6 +103,10 @@ type SqliteSnapshotRecordQueryOptions = SnapshotQueryOptions & SqliteSnapshotDat
 type SqliteSnapshotFrameQueryOptions = SnapshotFrameQueryOptions & SqliteSnapshotDatasetOptions
 type SqliteSnapshotStockRowQueryOptions = SnapshotStockRowQueryOptions & SqliteSnapshotDatasetOptions
 type SqliteSnapshotSectorRowQueryOptions = SnapshotSectorRowQueryOptions & SqliteSnapshotDatasetOptions
+type ThemeResearchSummaryQueryOptions = {
+  datasetId?: string
+  snapshotType?: SnapshotQueryOptions['type']
+}
 
 export class ApiHttpError extends Error {
   readonly status: number
@@ -826,6 +830,24 @@ export class ApiService {
       timeout: 15000,
       cache: false,
       throwOnHttpError: true,
+      ...options,
+    })
+  }
+
+  /** 从 QuantBoard research SQLite 读取 ThemeTrend 研究摘要；不可用时由后端返回 available=false */
+  async getThemeResearchSummary(params: ThemeResearchSummaryQueryOptions = {}, options?: RequestConfig) {
+    const query = new URLSearchParams()
+    if (params.datasetId) query.set('dataset_id', params.datasetId)
+    if (params.snapshotType) query.set('snapshot_type', params.snapshotType)
+    const suffix = query.toString() ? `?${query.toString()}` : ''
+    return this.get<any>(`/api/research/theme-summary${suffix}`, {
+      context: 'quant-board',
+      priority: 'medium',
+      retries: 1,
+      timeout: 8000,
+      cache: false,
+      throwOnHttpError: false,
+      silent: true,
       ...options,
     })
   }

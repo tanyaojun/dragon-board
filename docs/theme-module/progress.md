@@ -663,3 +663,45 @@
 **Low:**
 5. 单 trial 异常中断 → try/except + trialErrors
 6. wait 未用 → docstring 说明
+
+## 2026-05-06 V12 复盘更正
+
+- 结论：V12 不是完整平台化落地，当前代码达到 ThemeTrend 研究链 MVP，尚未达到原方案中“与 RankTrend 并列的量化策略回测平台”的完整口径。
+- 已确认落地：
+  - Python ThemeTrend 引擎、研究数据模型、repository/service、研究摘要 API、报告 API、QuantBoard ThemeTrend 前端入口。
+  - `POST /api/backtests/theme-trend`、`POST /api/backtests/theme-confluence`、`POST /api/optimizations/theme-trend`。
+  - CLI `run-theme-trend`、`run-theme-confluence`、`optimize-theme-trend`、`optimize-theme-confluence`。
+- 已确认缺口：
+  - 缺少 `POST /api/optimizations/theme-confluence`。
+  - `run_theme_trend` / `run_theme_confluence` 当前主要生成研究信号和质量报告，未完整复用 `TradeSimulator` 产出真实 trades/equity。
+  - 三条策略尚未形成交易级闭环，`hotlist_theme_confluence` 中 RankTrend 更偏控制组统计，不是完整共振交易决策。
+  - Dragon Board 前端消费研究摘要仍偏预留路径，题材/龙头/热榜面板解释字段未完整闭环。
+  - TS -> Python golden 严格对齐仍需单独验收。
+- 修正原则：后续进度不再把 Phase 3-5 标记为完整完成；先补后端 API、交易模拟双写和测试，再推进前端赋能。
+
+## 2026-05-06 V12 缺口补齐：后端交易闭环和研究摘要读口
+
+- 先按 TDD 补红灯：
+  - `test_theme_trend_backtest_persists_trade_and_equity_results`：要求 ThemeTrend 回测写入 `tradeSimulation`、`/trades`、`/equity`。
+  - `test_theme_trend_backtest_generates_trade_events_for_theme_exposures`：构造带 sector/exposure 的题材样本，要求产生交易事件和成交记录。
+  - `test_theme_confluence_optimization_api_returns_run`：要求 `POST /api/optimizations/theme-confluence` 返回真实 optimization run。
+  - Dragon Board `apiService` 新增 `getThemeResearchSummary()` 前端单测，要求读取 QuantBoard `/api/research/theme-summary` 且 `available=false` 不抛错。
+- 后端实现：
+  - `BacktestService.run_theme_trend()` 将 ThemeTrend factors/exposures 投影为股票执行信号，复用 `TradeSimulator`，保存 trades/equity。
+  - `BacktestService.run_theme_confluence()` 在 RankTrend 信号上叠加 ThemeTrend 生命周期、拥挤和暴露解释，复用 `TradeSimulator`，保存 trades/equity。
+  - 新增 `POST /api/optimizations/theme-confluence`，复用 ThemeTrend 搜索器并返回 `analysisMode=theme_confluence`。
+  - CLI `optimize-theme-trend` / `optimize-theme-confluence` 从旧 stub 改为调用真实 `OptimizationService`。
+- Dragon Board 根前端：
+  - `src/services/apiService.ts` 新增 `getThemeResearchSummary()`，只读取 QuantBoard 研究摘要，不承载回测/优化。
+- 文档同步：
+  - `docs/theme-module/README.md` 和 `quant-board/docs/api-cli.md` 从“拟新增”改为“已落地 MVP + 限制说明”。
+- 验证：
+  - 后端新增红灯首次失败符合预期：缺 `tradeSimulation`、缺 `/api/optimizations/theme-confluence`。
+  - 后端目标回归：`.\.venv\Scripts\python.exe -m pytest tests/test_theme_trend_engine.py tests/test_theme_trend_storage.py tests/test_theme_research.py tests/test_quant_board.py -q` → 81 passed。
+  - 前端服务回归：`pnpm exec vitest run src/services/__tests__/apiService.test.ts` → 6 passed。
+  - 误用 `pnpm exec vitest run ... --runInBand` 失败，原因是 Vitest 不支持 Jest 的 `--runInBand` 参数；已改用项目 Vitest 命令重跑通过。
+  - `pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false` 未通过，失败点为既有 `src/services/algorithm/AlgorithmManager.ts` 第 764 行 `weight * multiplier` 类型推断问题，不在本轮 ThemeTrend 改动文件内；本轮未修改该无关算法文件。
+- 仍未完成：
+  - TS -> Python golden 严格对齐验收。
+  - QuantBoard 报告页的生命周期收益分布、控制组多维归因和参数敏感度完整展示。
+  - Dragon Board 题材/龙头/热榜面板的研究摘要 UI 展示和降级/过滤原因字段。

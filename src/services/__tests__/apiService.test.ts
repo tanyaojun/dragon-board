@@ -192,4 +192,27 @@ describe('ApiService', () => {
     expect(requestedUrl.origin).toBe('http://localhost:8000')
     expect(requestedUrl.pathname).toBe('/api/themes/mapping')
   })
+
+  it('routes ThemeTrend research summary reads to QuantBoard API without throwing on unavailable summary', async () => {
+    const api = new ApiService()
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ available: false, reason: 'backend unavailable' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await api.getThemeResearchSummary({
+      datasetId: 'dragonboard_live',
+      snapshotType: 'half_hour',
+    })
+
+    const requestedUrl = new URL(String(fetchMock.mock.calls[0][0]))
+    expect(requestedUrl.origin).toBe('http://localhost:8000')
+    expect(requestedUrl.pathname).toBe('/api/research/theme-summary')
+    expect(requestedUrl.searchParams.get('dataset_id')).toBe('dragonboard_live')
+    expect(requestedUrl.searchParams.get('snapshot_type')).toBe('half_hour')
+    expect(result.available).toBe(false)
+  })
 })

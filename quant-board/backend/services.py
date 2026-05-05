@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from backend.analysis.ranktrend import RankTrendConfig, RankTrendPythonEngine
 from backend.analysis.theme_trend import ThemeTrendConfig, ThemeTrendPythonEngine
-from backend.core.backtest import BacktestEngine, normalize_strategy_name
+from backend.core.backtest import BacktestEngine, TradeSimulator, normalize_strategy_name
 import itertools as _itertools
 import random as _random
 from backend.data.models import BacktestRun, GoldenRankTrendCase, OptimizationRun
@@ -237,6 +237,13 @@ class BacktestService:
         factors = theme_result.get("factors", [])
         signals = theme_result.get("signals", [])
         exposures = theme_result.get("exposures", [])
+        execution_signals = self._theme_execution_signals(frames, factors, exposures, strategy_name)
+        trade_config = self._theme_trade_config(payload, strategy_name)
+        trade_simulation = (
+            TradeSimulator().run(frames, execution_signals, trade_config)
+            if bool(camel_get(payload, "enable_trade_simulation", "enableTradeSimulation", True))
+            else {"enabled": False, "trades": [], "equityCurve": []}
+        )
 
         run_id = new_id("bt")
         request_meta = {
@@ -246,6 +253,7 @@ class BacktestService:
             "strategy_name": strategy_name,
             "random_seed": random_seed,
             "engine_config": engine_config,
+            "trade_config": trade_config,
         }
 
         result: dict[str, Any] = {
@@ -260,9 +268,24 @@ class BacktestService:
                 "factors": factors[:120],
                 "signals": signals[:120],
                 "exposures": exposures[:120],
+                "executionSignalCount": len(execution_signals),
+                "tradeSimulation": {
+                    "enabled": bool(trade_simulation.get("enabled", False)),
+                    "tradeCount": int(trade_simulation.get("tradeCount") or 0),
+                    "equityCount": len(trade_simulation.get("equityCurve") or []),
+                },
             },
             "signals": signals,
             "signalCount": len(signals),
+            "executionSignals": execution_signals[:120],
+            "tradeSimulation": trade_simulation,
+            "totalReturn": trade_simulation.get("totalReturn"),
+            "realizedReturn": trade_simulation.get("realizedReturn"),
+            "maxDrawdown": trade_simulation.get("maxDrawdown"),
+            "winRate": trade_simulation.get("winRate"),
+            "tradeCount": trade_simulation.get("tradeCount"),
+            "trades": trade_simulation.get("trades") or [],
+            "equityCurve": trade_simulation.get("equityCurve") or [],
             "dataQuality": {
                 "passed": not quality_report.get("blocked", False),
                 "researchGrade": "degraded" if quality_report.get("warnings") else "research_ready",
@@ -311,6 +334,8 @@ class BacktestService:
             ]
             self.repo.save_backtest_signal_rows(run_id, signal_rows)
 
+        self.repo.save_backtest_trades(run_id, trade_simulation.get("trades") or [])
+        self.repo.save_backtest_equity_curve(run_id, trade_simulation.get("equityCurve") or [])
         self.repo.save_backtest_quality_report(
             run_id, result.get("dataQuality", {}), quality_report,
         )
@@ -352,6 +377,8 @@ class BacktestService:
         theme_result = ThemeTrendPythonEngine().replay_sequence(frames, config=config)
 
         rank_trend_control: dict[str, Any] = {}
+        rank_frames: list[dict[str, Any]] = []
+        rank_signals: list[dict[str, Any]] = []
         try:
             rank_frames = self.repo.load_frames(
                 dataset_id, snapshot_type=snapshot_type, include_payload=True,
@@ -380,6 +407,16 @@ class BacktestService:
 
         quality_report = theme_result.get("qualityReport", {})
         signals = theme_result.get("signals", [])
+        factors = theme_result.get("factors", [])
+        exposures = theme_result.get("exposures", [])
+        execution_frames = rank_frames or frames
+        execution_signals = self._confluence_execution_signals(rank_signals, factors, exposures)
+        trade_config = self._theme_trade_config(payload, strategy_name)
+        trade_simulation = (
+            TradeSimulator().run(execution_frames, execution_signals, trade_config)
+            if bool(camel_get(payload, "enable_trade_simulation", "enableTradeSimulation", True))
+            else {"enabled": False, "trades": [], "equityCurve": []}
+        )
         result: dict[str, Any] = {
             "strategyName": strategy_name,
             "analysisMode": "theme_confluence",
@@ -388,10 +425,25 @@ class BacktestService:
                 "signalVersion": "theme-signal-v12",
                 "signals": signals[:120],
                 "signalCount": len(signals),
+                "executionSignalCount": len(execution_signals),
                 "rankTrendControl": rank_trend_control,
+                "tradeSimulation": {
+                    "enabled": bool(trade_simulation.get("enabled", False)),
+                    "tradeCount": int(trade_simulation.get("tradeCount") or 0),
+                    "equityCount": len(trade_simulation.get("equityCurve") or []),
+                },
             },
             "signals": signals,
             "signalCount": len(signals),
+            "executionSignals": execution_signals[:120],
+            "tradeSimulation": trade_simulation,
+            "totalReturn": trade_simulation.get("totalReturn"),
+            "realizedReturn": trade_simulation.get("realizedReturn"),
+            "maxDrawdown": trade_simulation.get("maxDrawdown"),
+            "winRate": trade_simulation.get("winRate"),
+            "tradeCount": trade_simulation.get("tradeCount"),
+            "trades": trade_simulation.get("trades") or [],
+            "equityCurve": trade_simulation.get("equityCurve") or [],
             "dataQuality": {
                 "passed": not quality_report.get("blocked", False),
                 "researchGrade": "degraded" if quality_report.get("warnings") else "research_ready",
@@ -439,6 +491,8 @@ class BacktestService:
                 for s in signals
             ]
             self.repo.save_backtest_signal_rows(run_id, signal_rows)
+        self.repo.save_backtest_trades(run_id, trade_simulation.get("trades") or [])
+        self.repo.save_backtest_equity_curve(run_id, trade_simulation.get("equityCurve") or [])
         self.repo.save_backtest_quality_report(
             run_id, result.get("dataQuality", {}), quality_report,
         )
@@ -588,6 +642,144 @@ class BacktestService:
             apply=apply,
             checkpoint=apply,
         )
+
+    @staticmethod
+    def _theme_trade_config(payload: dict[str, Any], strategy_name: str) -> dict[str, Any]:
+        patch = camel_get(payload, "trade_config", "tradeConfig", {}) or {}
+        config = {
+            "initialCapital": camel_get(payload, "initial_cash", "initialCash", 1000000),
+            "maxPositions": camel_get(payload, "max_positions", "maxPositions", 5),
+            "positionSize": camel_get(payload, "position_size", "positionSize", 0.2),
+            "takeProfit": camel_get(payload, "take_profit_pct", "takeProfitPct", 0.12),
+            "stopLoss": -abs(float(camel_get(payload, "stop_loss_pct", "stopLossPct", 0.06))),
+            "maxHoldingBars": camel_get(payload, "max_holding_bars", "maxHoldingBars", 40),
+            "targetHoldingDays": camel_get(payload, "target_holding_days", "targetHoldingDays", 5),
+            "maxThemeExposure": camel_get(payload, "max_theme_exposure", "maxThemeExposure", 0.45),
+            "enforceT1": camel_get(payload, "enforce_t1", "enforceT1", True),
+            "executionMode": camel_get(payload, "execution_mode", "executionMode", "current_bar"),
+            "feeRate": camel_get(payload, "fee_rate", "feeRate", 0.0003),
+            "stampTaxRate": camel_get(payload, "stamp_tax_rate", "stampTaxRate", 0.0005),
+            "slippageRate": camel_get(payload, "slippage_rate", "slippageRate", 0.001),
+            "useOrderBookPrice": camel_get(payload, "use_order_book_price", "useOrderBookPrice", True),
+            "enforceLimitStatus": camel_get(payload, "enforce_limit_status", "enforceLimitStatus", True),
+            "enforceVolumeLimit": camel_get(payload, "enforce_volume_limit", "enforceVolumeLimit", True),
+            "enforceOrderBookQueue": camel_get(payload, "enforce_order_book_queue", "enforceOrderBookQueue", True),
+            "allowPartialFills": camel_get(payload, "allow_partial_fills", "allowPartialFills", True),
+            "volumeParticipationRate": camel_get(payload, "volume_participation_rate", "volumeParticipationRate", 0.05),
+            "orderBookParticipationRate": camel_get(payload, "order_book_participation_rate", "orderBookParticipationRate", 0.3),
+            "useIntrabarStops": camel_get(payload, "use_intrabar_stops", "useIntrabarStops", True),
+            "intrabarAmbiguity": camel_get(payload, "intrabar_ambiguity", "intrabarAmbiguity", "stop_first"),
+            "entryStrategy": strategy_name,
+        }
+        config.update(patch)
+        config["entryStrategy"] = strategy_name
+        return config
+
+    @staticmethod
+    def _theme_execution_signals(
+        frames: list[dict[str, Any]],
+        factors: list[dict[str, Any]],
+        exposures: list[dict[str, Any]],
+        strategy_name: str,
+    ) -> list[dict[str, Any]]:
+        factor_by_snapshot_theme = {
+            (str(factor.get("snapshotId") or ""), str(factor.get("themeName") or "")): factor
+            for factor in factors
+        }
+        exposure_by_snapshot_code = {
+            (str(exposure.get("snapshotId") or ""), str(exposure.get("code") or "")): exposure
+            for exposure in exposures
+            if exposure.get("code")
+        }
+        output: list[dict[str, Any]] = []
+        for frame in frames:
+            snapshot_id = str(frame.get("snapshotId") or "")
+            for stock in frame.get("stocks") or frame.get("rows") or frame.get("hotlist") or []:
+                if not isinstance(stock, dict):
+                    continue
+                code = str(stock.get("code") or "")
+                if not code:
+                    continue
+                exposure = exposure_by_snapshot_code.get((snapshot_id, code))
+                theme_name = str((exposure or {}).get("themeName") or stock.get("mainTheme") or "")
+                factor = factor_by_snapshot_theme.get((snapshot_id, theme_name), {})
+                lifecycle = str(factor.get("lifecycle") or "neutral")
+                crowding = float(factor.get("crowdingRisk") or 0)
+                contribution = float((exposure or {}).get("themeContribution") or stock.get("themeContribution") or 0)
+                exposure_weight = float((exposure or {}).get("exposureWeight") or stock.get("themeExposureWeight") or 0)
+                tier = "N_NEUTRAL"
+                if lifecycle in {"mainline", "expansion"} and crowding < 75 and (exposure_weight >= 55 or contribution >= 8):
+                    tier = "A_MAIN"
+                elif lifecycle == "ignition" and crowding < 75:
+                    tier = "B_IGNITION"
+                elif lifecycle in {"crowded", "divergence"} or crowding >= 75:
+                    tier = "C_CROWDED"
+                elif lifecycle in {"cooling", "reversal"}:
+                    tier = "D_EXIT_RISK"
+                output.append({
+                    **stock,
+                    "snapshotId": snapshot_id,
+                    "timestamp": frame.get("timestamp"),
+                    "tradingDate": frame.get("tradingDate"),
+                    "slotTime": frame.get("slotTime"),
+                    "code": code,
+                    "name": stock.get("name") or code,
+                    "rank": int(stock.get("rank") or 999),
+                    "candidateTier": tier,
+                    "regime": "strong" if tier in {"A_MAIN", "B_IGNITION"} else "weak",
+                    "confidence": min(100.0, max(0.0, exposure_weight or float(factor.get("heatScore") or 0))),
+                    "stage": lifecycle,
+                    "rankTrend": {"strategy": {"momentum": {"acceleration": 1 if tier != "D_EXIT_RISK" else -1}}},
+                    "mainTheme": theme_name,
+                    "themeHeat": float(factor.get("heatScore") or stock.get("themeHeat") or 0),
+                    "themeContribution": contribution,
+                    "themeRole": (exposure or {}).get("role") or stock.get("themeRole") or "",
+                    "themeSupportScore": exposure_weight,
+                    "themeRiskFlags": [f"crowding:{crowding}"] if crowding >= 75 else [],
+                    "themeReasons": [f"lifecycle:{lifecycle}", f"strategy:{strategy_name}"],
+                })
+        return output
+
+    @staticmethod
+    def _confluence_execution_signals(
+        rank_signals: list[dict[str, Any]],
+        factors: list[dict[str, Any]],
+        exposures: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        factor_by_snapshot_theme = {
+            (str(factor.get("snapshotId") or ""), str(factor.get("themeName") or "")): factor
+            for factor in factors
+        }
+        exposure_by_snapshot_code = {
+            (str(exposure.get("snapshotId") or ""), str(exposure.get("code") or "")): exposure
+            for exposure in exposures
+            if exposure.get("code")
+        }
+        output: list[dict[str, Any]] = []
+        for signal in rank_signals:
+            snapshot_id = str(signal.get("snapshotId") or "")
+            code = str(signal.get("code") or "")
+            exposure = exposure_by_snapshot_code.get((snapshot_id, code))
+            theme_name = str((exposure or {}).get("themeName") or signal.get("mainTheme") or "")
+            factor = factor_by_snapshot_theme.get((snapshot_id, theme_name), {})
+            lifecycle = str(factor.get("lifecycle") or "neutral")
+            crowding = float(factor.get("crowdingRisk") or 0)
+            item = dict(signal)
+            item["mainTheme"] = theme_name
+            item["themeHeat"] = float(factor.get("heatScore") or signal.get("themeHeat") or 0)
+            item["themeContribution"] = float((exposure or {}).get("themeContribution") or signal.get("themeContribution") or 0)
+            item["themeRole"] = (exposure or {}).get("role") or signal.get("themeRole") or ""
+            item["themeSupportScore"] = float((exposure or {}).get("exposureWeight") or signal.get("themeSupportScore") or 0)
+            item["themeReasons"] = [*([str(v) for v in signal.get("themeReasons") or []]), f"theme_lifecycle:{lifecycle}"]
+            item["themeRiskFlags"] = [*([str(v) for v in signal.get("themeRiskFlags") or []])]
+            if lifecycle in {"cooling", "reversal"} or crowding >= 75:
+                item["candidateTier"] = "D_EXIT_RISK"
+                item["regime"] = "retreat"
+                item["themeRiskFlags"].append("theme_blocked")
+            elif lifecycle in {"mainline", "expansion", "ignition"} and item.get("candidateTier") in {"A_MAIN", "B_IGNITION"}:
+                item["confidence"] = min(100.0, float(item.get("confidence") or 0) + 5.0)
+            output.append(item)
+        return output
 
     def compare_runs(self, run_ids: list[str], metrics: list[str] | None = None) -> dict[str, Any]:
         metric_names = metrics or ["totalReturn", "sharpe", "maxDrawdown", "winRate"]
@@ -813,10 +1005,22 @@ class OptimizationService:
             "status": opt_run.status,
             "method": method,
             "strategyName": strategy_name,
+            "analysisMode": "theme_trend",
             "randomSeed": random_seed,
             "best": best,
             "trialCount": len(trial_results),
         }
+
+    def run_theme_confluence(self, payload: dict[str, Any], wait: bool = False) -> dict[str, Any]:
+        request = {
+            **payload,
+            "strategy_name": camel_get(payload, "strategy_name", "strategyName", "hotlist_theme_confluence"),
+            "strategyName": camel_get(payload, "strategy_name", "strategyName", "hotlist_theme_confluence"),
+        }
+        result = self.run_theme_trend(request, wait=wait)
+        result["analysisMode"] = "theme_confluence"
+        result["strategyName"] = str(request["strategyName"])
+        return result
 
     def _build_request(self, payload: dict[str, Any]) -> tuple[str, str, str, list[dict[str, Any]], dict[str, Any], dict[str, Any]]:
         dataset_id = str(camel_get(payload, "dataset_id", "datasetId", ""))

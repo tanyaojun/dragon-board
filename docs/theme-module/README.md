@@ -43,7 +43,9 @@
 ## V12 ThemeTrend 平台化口径
 
 - 计划文件：`plans/task_plan_v12.md`。
-- V12 是目标和新增合同，不代表所有后端、前端和 CLI 实现已经完成。
+- V12 后端研究链已进入可运行 MVP；完整平台化仍需继续补 TS golden 严格对齐、报告细分和 Dragon Board 面板级解释展示。
 - ThemeTrend 与 RankTrend 并列：RankTrend 继续负责个股候选趋势，ThemeTrend 负责题材强度、扩散、持续性、拥挤和共振解释。
-- `POST /api/backtests/theme-trend`、`POST /api/backtests/theme-confluence`、`POST /api/optimizations/theme-trend`、`POST /api/optimizations/theme-confluence` 是拟新增 QuantBoard 合同；CLI 对应 `run-theme-trend`、`run-theme-confluence`、`optimize-theme-trend`、`optimize-theme-confluence`。
+- 已落地 QuantBoard 合同：`POST /api/backtests/theme-trend`、`POST /api/backtests/theme-confluence`、`POST /api/optimizations/theme-trend`、`POST /api/optimizations/theme-confluence`；CLI 对应 `run-theme-trend`、`run-theme-confluence`、`optimize-theme-trend`、`optimize-theme-confluence`。
+- ThemeTrend 回测现在会把题材暴露映射为可执行股票信号，复用现有 `TradeSimulator`，并双写 `/trades`、`/equity`、`/signals`、`/quality` 读口。
+- Dragon Board 根前端只新增 `GET /api/research/theme-summary` 研究摘要读口，不承载回测、优化或交易模拟；QuantBoard 不可用时按后端 `available=false` 显示不可用。
 - 默认 `snapshotType=half_hour`；`quarter_hour` 只能显式选择，不能替代默认研究口径。

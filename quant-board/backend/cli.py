@@ -24,6 +24,7 @@ from backend.data.theme_database import ThemeSessionLocal, init_theme_db
 from backend.data.theme_service import ThemeMigrationService
 from backend.settings import get_settings
 from backend.services import BacktestService, GoldenService, OptimizationService
+from backend.utils import json_loads
 
 DEFAULT_MOMENTUM_PERIODS = [3, 5, 8, 13, 21]
 DEFAULT_HORIZONS = [1, 3, 5, 10]
@@ -390,10 +391,6 @@ def cmd_run_theme_confluence(args: argparse.Namespace) -> None:
 
 def cmd_optimize_theme_trend(args: argparse.Namespace) -> None:
     init_db()
-    from backend.data.models import OptimizationRun
-    from backend.data.repository import Repository
-    from backend.utils import new_id, stable_hash, json_dumps
-
     payload = {
         "dataset_id": args.dataset_id,
         "snapshot_type": args.snapshot_type,
@@ -403,36 +400,12 @@ def cmd_optimize_theme_trend(args: argparse.Namespace) -> None:
         "trials": args.trials,
         "objective": args.objective,
     }
-    run_id = new_id("opt")
     with SessionLocal() as session:
-        repo = Repository(session)
-        repo.save_optimization_run(OptimizationRun(
-            id=run_id,
-            dataset_id=args.dataset_id,
-            strategy_name=args.strategy_name,
-            method=args.method,
-            random_seed=args.seed,
-            status="completed",
-            config_hash=stable_hash(payload),
-            request_json=json_dumps(payload),
-            result_json=json_dumps({"best": {}, "trials": [], "notes": "Phase 3 MVP: 优化搜索器尚未接入"}),
-        ))
-    print_json({
-        "runId": run_id,
-        "status": "completed",
-        "strategyName": args.strategy_name,
-        "method": args.method,
-        "trials": args.trials,
-        "objective": args.objective,
-    })
+        print_json(OptimizationService(session).run_theme_trend(payload))
 
 
 def cmd_optimize_theme_confluence(args: argparse.Namespace) -> None:
     init_db()
-    from backend.data.models import OptimizationRun
-    from backend.data.repository import Repository
-    from backend.utils import new_id, stable_hash, json_dumps
-
     payload = {
         "dataset_id": args.dataset_id,
         "snapshot_type": args.snapshot_type,
@@ -442,28 +415,10 @@ def cmd_optimize_theme_confluence(args: argparse.Namespace) -> None:
         "trials": args.trials,
         "objective": args.objective,
     }
-    run_id = new_id("opt")
+    if args.parameter_grid:
+        payload["parameterGrid"] = json_loads(args.parameter_grid, {})
     with SessionLocal() as session:
-        repo = Repository(session)
-        repo.save_optimization_run(OptimizationRun(
-            id=run_id,
-            dataset_id=args.dataset_id,
-            strategy_name=args.strategy_name,
-            method=args.method,
-            random_seed=args.seed,
-            status="completed",
-            config_hash=stable_hash(payload),
-            request_json=json_dumps(payload),
-            result_json=json_dumps({"best": {}, "trials": [], "notes": "Phase 3 MVP: 优化搜索器尚未接入"}),
-        ))
-    print_json({
-        "runId": run_id,
-        "status": "completed",
-        "strategyName": args.strategy_name,
-        "method": args.method,
-        "trials": args.trials,
-        "objective": args.objective,
-    })
+        print_json(OptimizationService(session).run_theme_confluence(payload, wait=not args.no_wait))
 
 
 def cmd_compare_backtests(args: argparse.Namespace) -> None:

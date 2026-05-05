@@ -759,9 +759,12 @@ export class AlgorithmManager implements IAlgorithmManager {
 
           let weight: number | string = this.customWeights?.[factorId] ?? config.weight
           if (weight === 'dynamic') {
-            weight = config.baseWeight || 0.1
+            const baseWeight = config.baseWeight || 0.1
             const multiplier = multipliers[factorId] || 1
-            weight = Math.min(config.max || 0.3, Math.max(config.min || 0.03, weight * multiplier))
+            weight = Math.min(
+              config.max || 0.3,
+              Math.max(config.min || 0.03, baseWeight * multiplier),
+            )
           }
           weight = typeof weight === 'number' ? weight : 0.1
 

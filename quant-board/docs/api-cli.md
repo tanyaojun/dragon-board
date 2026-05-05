@@ -750,9 +750,11 @@ openPositionCount
 
 归一化回测结果表属于 research SQLite `local-only` 数据，`GET /api/backtests/{run_id}/trades`、`/equity`、`/signals`、`/quality` 和 `POST /api/backtests/compare` 都不读取 Supabase，也不触发 `sync_outbox`、push/pull 或 failover。
 
-### V12 拟新增 ThemeTrend 回测接口
+### V12 ThemeTrend 回测接口
 
-以下接口是 V12 目标和首批落地合同，不表示当前实现已经全部完成。ThemeTrend 回测和共振回测结果属于 research SQLite `local-only` 数据，不读取或写入 Supabase，不触发 `sync_outbox`、push/pull 或 failover；`themeDATA.db` 只提供题材基础映射。
+以下接口是 V12 已落地的 ThemeTrend 研究回测合同。ThemeTrend 回测和共振回测结果属于 research SQLite `local-only` 数据，不读取或写入 Supabase，不触发 `sync_outbox`、push/pull 或 failover；`themeDATA.db` 只提供题材基础映射。
+
+当前实现会把题材暴露投影为可执行股票信号，复用现有 `TradeSimulator` 产出 `tradeSimulation`，并双写 `/api/backtests/{run_id}/trades`、`/equity`、`/signals`、`/quality`。完整报告归因、TS golden 严格对齐和 Dragon Board 面板级解释仍按 V12 后续项推进。
 
 ### `POST /api/backtests/theme-trend`
 
@@ -921,9 +923,9 @@ openPositionCount
 
 `status` 只能是 `running`、`completed` 或 `failed`。`failed` 必须返回结构化错误，不能用空 `trials` 或空 `best` 表示失败。
 
-### V12 拟新增 ThemeTrend 优化接口
+### V12 ThemeTrend 优化接口
 
-以下接口是 V12 目标和新增合同。优化结果只生成候选参数，不自动写回 Python、TypeScript、API、CLI、前端表单或文档默认值。
+以下接口是 V12 已落地的 ThemeTrend 优化合同。优化结果只生成候选参数，不自动写回 Python、TypeScript、API、CLI、前端表单或文档默认值。
 
 ### `POST /api/optimizations/theme-trend`
 

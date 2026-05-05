@@ -105,6 +105,71 @@ def make_bundle_with_empty_hotlist(path: Path) -> Path:
     return bundle
 
 
+def make_theme_trade_bundle(path: Path) -> Path:
+    frames = []
+    records = []
+    for i in range(8):
+        date = f"2026-04-{1 + i // 4:02d}"
+        slot = f"{10 + (i % 4) // 2:02d}:{((i % 4) % 2) * 30:02d}"
+        snapshot_id = f"half_hour:{date}:theme:{i:02d}"
+        hotlist = [
+            {
+                "code": "600001",
+                "name": "题材龙头",
+                "rank": 1,
+                "price": 10 + i * 0.2,
+                "lastTradePrice": 10 + i * 0.2,
+                "change": 1.2,
+                "volume": 10000000,
+                "turnover": 100000000,
+                "volumeRatio": 2.2,
+                "zlje": 3000000,
+                "zljzb": 6,
+                "mainTheme": "机器人",
+                "themeRole": "leader",
+                "themeContribution": 20,
+                "themeExposureWeight": 88,
+            }
+        ]
+        sectors = [
+            {
+                "name": "机器人",
+                "entityName": "机器人",
+                "entityKey": "robot",
+                "rank": 1,
+                "heatScore": 86,
+                "momentumScore": 82,
+                "breadthScore": 68,
+                "fundScore": 70,
+                "leadershipScore": 85,
+                "correlationScore": 65,
+                "crowdingRisk": 35,
+                "persistenceScore": 72,
+                "rotationState": "mainline",
+            }
+        ]
+        record = {
+            "id": snapshot_id,
+            "type": "half_hour",
+            "tradingDate": date,
+            "slotTime": slot,
+            "timestamp": 1775000000000 + i * 1800000,
+            "captureMode": "real_time",
+            "payload": {
+                "type": "half_hour",
+                "tradingDate": date,
+                "slotTime": slot,
+                "timestamp": 1775000000000 + i * 1800000,
+                "hotlist": hotlist,
+                "sectors": sectors,
+            },
+        }
+        records.append(record)
+    bundle = path / "theme_trade_bundle.json"
+    bundle.write_text(json.dumps({"records": records}, ensure_ascii=False), encoding="utf-8")
+    return bundle
+
+
 def test_supabase_upsert_chunks_are_limited_by_payload_size() -> None:
     rows = [
         {"id": "a", "code": "600001", "name": "x" * 40},
@@ -2183,6 +2248,71 @@ def test_theme_trend_backtest_api_returns_theme_strategy_report(tmp_path: Path) 
     assert signals["runId"] == body["runId"]
 
 
+def test_theme_trend_backtest_persists_trade_and_equity_results(tmp_path: Path) -> None:
+    client = TestClient(app)
+    bundle = make_bundle(tmp_path)
+    imported = client.post(
+        "/api/datasets/import",
+        json={"sourceType": "json_bundle", "sourcePath": str(bundle), "name": "theme-v12-trades", "snapshotTypes": ["half_hour"]},
+    )
+    assert imported.status_code == 200, imported.text
+    dataset = imported.json()
+
+    response = client.post(
+        "/api/backtests/theme-trend",
+        json={
+            "datasetId": dataset["id"],
+            "snapshotType": "half_hour",
+            "strategyName": "theme_rotation",
+            "randomSeed": 20260430,
+            "enableTradeSimulation": True,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["result"]["tradeSimulation"]["enabled"] is True
+
+    trades = client.get(f"/api/backtests/{body['runId']}/trades").json()
+    equity = client.get(f"/api/backtests/{body['runId']}/equity").json()
+    assert trades["runId"] == body["runId"]
+    assert equity["runId"] == body["runId"]
+    assert equity["items"], "ThemeTrend 回测必须落库权益曲线，不能只保存研究信号"
+    assert body["result"]["themeTrend"]["tradeSimulation"]["equityCount"] == len(equity["items"])
+
+
+def test_theme_trend_backtest_generates_trade_events_for_theme_exposures(tmp_path: Path) -> None:
+    client = TestClient(app)
+    bundle = make_theme_trade_bundle(tmp_path)
+    imported = client.post(
+        "/api/datasets/import",
+        json={"sourceType": "json_bundle", "sourcePath": str(bundle), "name": "theme-v12-trade-events", "snapshotTypes": ["half_hour"]},
+    )
+    assert imported.status_code == 200, imported.text
+    dataset = imported.json()
+
+    response = client.post(
+        "/api/backtests/theme-trend",
+        json={
+            "datasetId": dataset["id"],
+            "snapshotType": "half_hour",
+            "strategyName": "theme_rotation",
+            "randomSeed": 20260430,
+            "maxHoldingBars": 2,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    simulation = body["result"]["tradeSimulation"]
+    assert simulation["eventCount"] > 0
+    assert simulation["matchingDiagnostics"]["buyAttempts"] > 0
+
+    trades = client.get(f"/api/backtests/{body['runId']}/trades").json()
+    assert trades["total"] >= 1
+    assert trades["items"][0]["code"] == "600001"
+
+
 def test_theme_confluence_backtest_api_keeps_ranktrend_visible(tmp_path: Path) -> None:
     client = TestClient(app)
     bundle = make_bundle(tmp_path)
@@ -2203,6 +2333,35 @@ def test_theme_confluence_backtest_api_keeps_ranktrend_visible(tmp_path: Path) -
     assert body["strategyName"] == "hotlist_theme_confluence"
     assert body["analysisMode"] == "theme_confluence"
     assert "rankTrendControl" in body["result"]["themeTrend"]
+
+
+def test_theme_confluence_optimization_api_returns_run(tmp_path: Path) -> None:
+    client = TestClient(app)
+    bundle = make_bundle(tmp_path)
+    imported = client.post(
+        "/api/datasets/import",
+        json={"sourceType": "json_bundle", "sourcePath": str(bundle), "name": "theme-confluence-opt", "snapshotTypes": ["half_hour"]},
+    )
+    assert imported.status_code == 200, imported.text
+    dataset = imported.json()
+
+    response = client.post(
+        "/api/optimizations/theme-confluence",
+        json={
+            "datasetId": dataset["id"],
+            "snapshotType": "half_hour",
+            "strategyName": "hotlist_theme_confluence",
+            "method": "random",
+            "trials": 2,
+            "parameterGrid": {"crowdingBlockThreshold": [70, 80]},
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["runId"]
+    assert body["strategyName"] == "hotlist_theme_confluence"
+    assert body["analysisMode"] == "theme_confluence"
 
 
 def test_theme_optimization_api_returns_running_theme_run(tmp_path: Path) -> None:
