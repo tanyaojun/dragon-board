@@ -7,6 +7,8 @@ from sqlalchemy.orm import Session
 from backend.analysis.ranktrend import RankTrendConfig, RankTrendPythonEngine
 from backend.analysis.theme_trend import ThemeTrendConfig, ThemeTrendPythonEngine
 from backend.core.backtest import BacktestEngine, normalize_strategy_name
+import itertools as _itertools
+import random as _random
 from backend.data.models import BacktestRun, GoldenRankTrendCase, OptimizationRun
 from backend.data.quality_gate import evaluate_snapshot_quality
 from backend.data.json_codec import dumps_json_field, loads_json_field
@@ -709,6 +711,111 @@ class OptimizationService:
             "method": request["method"],
             "strategyName": strategy_name,
             "randomSeed": request["random_seed"],
+        }
+
+    def run_theme_trend(self, payload: dict[str, Any], wait: bool = False) -> dict[str, Any]:
+        """执行题材趋势策略参数优化（grid/random 搜索）。
+
+        wait 参数保留用于与 run_ranktrend 接口对齐；当前 MVP 始终同步执行。
+        后续可扩展异步路径。
+        """
+        from backend.optimization.search_space import (
+            theme_search_space,
+            normalize_search_space,
+        )
+        from backend.optimization.objective import score_theme_trend
+
+        dataset_id = str(camel_get(payload, "dataset_id", "datasetId", ""))
+        snapshot_type = str(camel_get(payload, "snapshot_type", "snapshotType", "half_hour"))
+        strategy_name = str(camel_get(payload, "strategy_name", "strategyName", "theme_rotation"))
+        method = str(camel_get(payload, "method", default="random"))
+        objective = str(camel_get(payload, "objective", default="stability"))
+        random_seed = int(camel_get(payload, "random_seed", "randomSeed", 20260430))
+        max_trials = max(1, int(camel_get(payload, "trials", default=12)))
+
+        frames = self.repo.load_frame_bundles(dataset_id, snapshot_type=snapshot_type)
+        if not frames:
+            raise ValueError(f"dataset has no frames for {snapshot_type}: {dataset_id}")
+
+        param_grid_input = camel_get(payload, "parameter_grid", "parameterGrid", {}) or {}
+        search_space = normalize_search_space(
+            param_grid_input if param_grid_input else theme_search_space()
+        )
+
+        run_id = new_id("opt")
+        config_hash = stable_hash({k: v for k, v in payload.items() if k != "parameterGrid"})
+        _random.seed(random_seed)
+
+        trial_results: list[dict[str, Any]] = []
+        keys = list(search_space.keys())
+        all_combos = [
+            dict(zip(keys, combo))
+            for combo in _itertools.product(*[search_space[k] for k in keys])
+        ]
+
+        if method == "grid" or len(all_combos) <= max_trials:
+            trial_params_list = all_combos[:max_trials]
+        else:
+            trial_params_list = _random.sample(all_combos, min(max_trials, len(all_combos)))
+
+        trial_errors: list[dict[str, Any]] = []
+        for trial_idx, trial_params in enumerate(trial_params_list):
+            try:
+                config = ThemeTrendConfig.from_patch({
+                    k: v for k, v in trial_params.items()
+                })
+                engine_result = ThemeTrendPythonEngine().replay_sequence(frames, config=config)
+                score = score_theme_trend(engine_result, objective)
+                trial_results.append({
+                    "trialId": trial_idx,
+                    "params": {k: v for k, v in trial_params.items()},
+                    "score": score,
+                    "themeCount": len(engine_result.get("factors", [])),
+                    "mainlineCount": sum(1 for f in engine_result.get("factors", []) if f.get("lifecycle") == "mainline"),
+                    "engineFactors": engine_result.get("factors", [])[:50],
+                })
+            except Exception as exc:
+                trial_errors.append({
+                    "trialId": trial_idx,
+                    "params": {k: v for k, v in trial_params.items()},
+                    "error": str(exc)[:200],
+                })
+
+        trial_results.sort(key=lambda t: t["score"], reverse=True)
+        best = trial_results[0] if trial_results else {}
+
+        result_payload = {
+            "runId": run_id,
+            "method": method,
+            "objective": objective,
+            "trials": len(trial_results),
+            "trialErrors": trial_errors,
+            "best": best,
+            "trialList": trial_results[:50],
+        }
+
+        opt_run = OptimizationRun(
+            id=run_id,
+            dataset_id=dataset_id,
+            strategy_name=strategy_name,
+            method=method,
+            random_seed=random_seed,
+            status="completed" if trial_results else "failed",
+            config_hash=config_hash,
+            request_json=dumps_json_field(payload),
+            result_json=dumps_json_field(result_payload),
+        )
+        self.repo.save_optimization_run(opt_run)
+
+        return {
+            "id": run_id,
+            "runId": run_id,
+            "status": opt_run.status,
+            "method": method,
+            "strategyName": strategy_name,
+            "randomSeed": random_seed,
+            "best": best,
+            "trialCount": len(trial_results),
         }
 
     def _build_request(self, payload: dict[str, Any]) -> tuple[str, str, str, list[dict[str, Any]], dict[str, Any], dict[str, Any]]:

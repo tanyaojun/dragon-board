@@ -623,3 +623,23 @@
 7. Config 不一致 → `run_theme_confluence` 补 `minFrames: 2`，与 `run_theme_trend` 对齐。
 
 - 验证结果：130 全量通过，0 失败。
+
+## 2026-05-05 V12 Phase 4 实施
+
+- 扩展 `backend/optimization/search_space.py`：新增 `theme_search_space()` 8 个参数（crowdedRiskThreshold 等）
+- 扩展 `backend/optimization/objective.py`：新增 `score_theme_trend()` 主题目标函数
+- `OptimizationService.run_theme_trend()`：真实 grid/random 搜索 + trial 评分排序 + trialErrors 记录 + OptimizationRun 落库
+- `POST /api/optimizations/theme-trend` 改为调用真实搜索
+- 新增 `GET /api/reports/theme-trend/{run_id}` 报告接口（生命周期分布/信号分布/拥挤事件/迁移数）
+
+## 2026-05-05 V12 Phase 4 Code Review 修复
+
+**High:**
+1. `/api/reports/theme-trend/{run_id}` 查错表（backtest_runs vs optimization_runs）→ 改用 OptimizationService + get_optimization_run
+2. theme_search_space 5 参数不在 ThemeTrendConfig → 缩减为 8 个全映射参数
+3. score_theme_trend 数据路径错误 → 改为 result.get("factors", [])
+4. __import__ + 双嵌套列表 → 顶部 import itertools，单层 list comprehension
+
+**Low:**
+5. 单 trial 异常中断 → try/except + trialErrors
+6. wait 未用 → docstring 说明

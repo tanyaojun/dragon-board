@@ -114,3 +114,29 @@ def trial_stability(
         "tradeCountGap": int(train_metrics.get("tradeCount") or 0) - int(validation_metrics.get("tradeCount") or 0),
         "reason": score_details.get("reason"),
     }
+
+
+def score_theme_trend(result: dict[str, Any], objective: str) -> float:
+    """题材趋势策略的目标函数评分。
+
+    基于 replay_sequence() 返回的顶层 factors 列表（11 维因子），
+    而非 signals（5 维简化版）。
+    """
+    factors = result.get("factors") or []
+    signal_count = len(factors)
+    if not signal_count:
+        return -999.0
+
+    mainline_count = sum(1 for f in factors if f.get("lifecycle") == "mainline")
+    busy_count = sum(1 for f in factors if f.get("lifecycle") in ("expansion", "ignition"))
+    crowded_count = sum(1 for f in factors if f.get("lifecycle") == "crowded")
+    risk_count = sum(1 for f in factors if f.get("risk") != "none")
+
+    variety_ratio = (mainline_count + busy_count) / signal_count
+    risk_ratio = 1.0 - (risk_count / signal_count)
+
+    if objective == "stability":
+        return round(variety_ratio * 0.5 + risk_ratio * 0.35 - (crowded_count / max(1, signal_count)) * 0.15, 4)
+    if objective == "totalReturn":
+        return round(variety_ratio * 0.6 + (1.0 - crowded_count / max(1, signal_count)) * 0.4, 4)
+    return round(variety_ratio, 4)

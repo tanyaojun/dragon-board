@@ -34,7 +34,7 @@ from backend.data.theme_repository import ThemeRepository
 from backend.data.theme_service import ThemeMigrationError, ThemeMigrationService
 from backend.services import BacktestService, GoldenService, OptimizationService
 from backend.settings import get_settings
-from backend.utils import json_dumps, stable_hash
+from backend.utils import json_dumps, json_loads, stable_hash
 
 
 app = FastAPI(
@@ -946,49 +946,10 @@ def run_ranktrend_optimization(payload: dict[str, Any], db: Session | None = Dep
 
 @app.post("/api/optimizations/theme-trend")
 def run_theme_trend_optimization(payload: dict[str, Any], db: Session | None = Depends(get_db)) -> dict[str, Any]:
-    import json as _json
-    from backend.data.models import OptimizationRun
-    from backend.data.database import SessionLocal
-    from backend.data.repository import Repository
-    from backend.utils import stable_hash, new_id
-
-    dataset_id = str(payload.get("datasetId") or "")
-    strategy_name = str(payload.get("strategyName") or "theme_rotation")
-    method = str(payload.get("method", "random"))
-    random_seed = int(payload.get("randomSeed") or payload.get("seed") or 20260430)
-    run_id = new_id("opt")
-    config_hash = stable_hash(payload)
-    trials = int(payload.get("trials", 2))
-
-    repo = Repository(SessionLocal() if db is None else db)
     try:
-        run = OptimizationRun(
-            id=run_id,
-            dataset_id=dataset_id,
-            strategy_name=strategy_name,
-            method=method,
-            random_seed=random_seed,
-            status="completed",
-            config_hash=config_hash,
-            request_json=_json.dumps(payload, ensure_ascii=False, sort_keys=True),
-            result_json=_json.dumps({
-                "best": {},
-                "trials": [],
-                "notes": "Phase 3 MVP: 优化搜索器尚未接入，当前为合同预留",
-            }, ensure_ascii=False),
-        )
-        repo.save_optimization_run(run)
-    finally:
-        if db is None and repo.session is not None:
-            repo.close()
-
-    return {
-        "runId": run_id,
-        "status": "completed",
-        "strategyName": strategy_name,
-        "method": method,
-        "trials": trials,
-    }
+        return OptimizationService(db).run_theme_trend(payload)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
 
 @app.get("/api/optimizations/{run_id}")
@@ -997,6 +958,52 @@ def get_optimization(run_id: str, db: Session | None = Depends(get_db)) -> dict[
     if not result:
         raise HTTPException(status_code=404, detail=f"optimization run not found: {run_id}")
     return result
+
+
+@app.get("/api/reports/theme-trend/{run_id}")
+def get_theme_trend_report(run_id: str, db: Session | None = Depends(get_db)) -> dict[str, Any]:
+    opt_service = OptimizationService(db)
+    opt_run = opt_service.repo.get_optimization_run(run_id)
+    if not opt_run:
+        raise HTTPException(status_code=404, detail={"code": "optimization_run_not_found", "runId": run_id})
+
+    raw = json_loads(opt_run.result_json, {})
+    trial_list = raw.get("trialList") or []
+
+    # 报告基于最佳 trial 的引擎输出
+    best_trial = trial_list[0] if trial_list else {}
+    trial_factors = best_trial.get("engineFactors") or []
+
+    lifecycle_dist: dict[str, int] = {}
+    for f in trial_factors:
+        lc = str(f.get("lifecycle") or "neutral")
+        lifecycle_dist[lc] = lifecycle_dist.get(lc, 0) + 1
+
+    signal_dist: dict[str, int] = {}
+    for f in trial_factors:
+        sig = str(f.get("signal") or "watch")
+        signal_dist[sig] = signal_dist.get(sig, 0) + 1
+
+    crowding_events = [f for f in trial_factors if f.get("lifecycle") == "crowded"]
+    transitions = [f for f in trial_factors if f.get("lifecycleTransition")]
+
+    return {
+        "runId": run_id,
+        "strategyName": opt_run.strategy_name,
+        "snapshotType": "half_hour",
+        "dataset_id": opt_run.dataset_id,
+        "method": opt_run.method,
+        "objective": raw.get("objective", "stability"),
+        "bestScore": best_trial.get("score"),
+        "bestParams": best_trial.get("params", {}),
+        "lifecycleDistribution": lifecycle_dist,
+        "signalDistribution": signal_dist,
+        "crowdingEventCount": len(crowding_events),
+        "lifecycleTransitionCount": len(transitions),
+        "recentTransitions": transitions[:20],
+        "themeCount": len({f.get("themeId") for f in trial_factors if f.get("themeId")}),
+        "totalFactorCount": len(trial_factors),
+    }
 
 
 @app.post("/api/golden/import")

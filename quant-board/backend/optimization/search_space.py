@@ -17,6 +17,20 @@ def default_search_space() -> dict[str, list[Any]]:
     }
 
 
+def theme_search_space() -> dict[str, list[Any]]:
+    """V12 题材策略优化搜索空间（8 个引擎参数，map 到 ThemeTrendConfig）。"""
+    return {
+        "crowdedRiskThreshold": [70, 75, 80],
+        "mainlineHeatThreshold": [70, 75, 80],
+        "mainlineMomentumThreshold": [65, 70, 75],
+        "expansionMomentumThreshold": [55, 60, 65],
+        "ignitionMomentumThreshold": [45, 50, 55],
+        "coolingMomentumThreshold": [30, 35, 40],
+        "reversalMomentumThreshold": [22, 25, 28],
+        "minFrames": [2, 3, 5],
+    }
+
+
 def normalize_search_space(space: dict[str, Any]) -> dict[str, list[Any]]:
     if not isinstance(space, dict):
         raise ValueError("search_space must be an object")
