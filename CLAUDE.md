@@ -22,7 +22,7 @@
 - `tools/TdxL2Helper/`：独立 x86 .NET helper，用于通达信 DLL、L2 权限和深度行情探针。
 - `quant-board/`：Python QuantBoard 子项目，用于 RankTrend golden 对齐、数据导入、回测、优化和报告展示。
 
-根目录 `README.md` 仍有 Vue 模板残留，不能作为唯一事实来源。涉及 QuantBoard 时，以 `quant-board/docs/README.md` 和 `quant-board/docs/AI_COLLABORATION.md` 为准。
+根目录 `README.md` 四个原则必须严格遵守。涉及 QuantBoard 时，以 `quant-board/docs/README.md` 和 `quant-board/docs/AI_COLLABORATION.md` 为准。
 
 ## 3. 关键目录
 
