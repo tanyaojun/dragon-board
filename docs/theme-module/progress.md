@@ -433,3 +433,32 @@
   - 再次导入结果：新增 0 个题材、0 条映射，更新 237 个题材，确认导入幂等。
   - `verify-themes --path data\staging\theme_v10_http_localhost_5173_ThemeDataDB_import.json` 返回 `ok=true`，expected/actual 均为 237/12215/4166。
   - 基础读口抽样：`DeepSeek概念(302)` 返回 69 只股票；`300033` 可反查到 `大金融`，标签和原因来自 SQLite。
+
+## 2026-05-05 题材模块 V11 启动
+
+- 用户要求制定下一步《题材分析模块优化重构方案 V11》，目标是严格收口、清理兼容层、完全切断对 IndexedDB 的依赖。
+- 已复核题材相关源码：
+  - `ThemeDataService` 正式映射已走 `apiService.getSqliteThemeMapping()`，未发现 `ThemeDataDB` IndexedDB 正式读写函数。
+  - 当前残留为本地静态 JSON fallback、外部 `/api/themes/batch` 增量刷新、自动定时刷新，以及 `sectorAnalyzer` 对 `themeMapping` 私有 Map 的直接读取。
+  - `sectorAnalyzer.loadSectorStocks()` 已委托 `JxbkThemeFeed`，但 `sectorAnalyzer` 仍作为旧公开 adapter 暴露。
+  - `themeFacade` 仍暴露多组 `Compat` 读口，多个面板仍在调用。
+- 已新增 `docs/theme-module/plans/task_plan_v11.md`，将 V11 分为 SQLite-only、仓库命名收口、`sectorAnalyzer` 私有依赖清理、兼容层收窄、后端合同检查和文档验收六个阶段。
+
+## 2026-05-05 题材模块 V11 实施
+
+- 已按 TDD 补充前端红灯测试：
+  - SQLite 失败时不请求 `/data/theme_base_mapping.json` 或 `/api/themes/batch`。
+  - `ThemeDataService.getLoadStatus()` 返回 SQLite 状态。
+  - `sectorAnalyzer` 通过 `themeRepository` 公开 getter 同步标签和原因。
+- 已实现：
+  - `ThemeDataService` 移除本地 JSON fallback、批量 API 增量刷新和浏览器定时刷新入口。
+  - `ThemeRepository` 增加 `loadThemeBase/getThemes/refreshThemeBase/getThemeBaseStatus` 等正式入口。
+  - `ThemeFacade/ThemeRuntimeCoordinator/sectorAnalyzer` 改用 `themeRepository`，并新增 `getJxbkBlocks/getThemeStockMap/getHotThemes/getThemeDetail/getThemeStocks` 正式别名。
+  - 面板和服务调用迁到正式 facade 方法；旧 `Compat` wrapper 保留但不再被业务代码调用。
+  - 后端测试补强 `GET /api/themes/mapping` 标签/原因合同和 `GET /api/themes/counts` 完整字段合同。
+- 局部验证：
+  - `pnpm exec vitest run src/services/__tests__/ThemeDataService.test.ts src/services/__tests__/themeLegacyAdapters.test.ts`：通过，2 个测试文件、10 个测试通过。
+  - `cd quant-board; .\.venv\Scripts\python.exe -m pytest tests/test_theme_database.py -q`：通过，8 个测试通过。
+  - `pnpm exec vitest run src/services/__tests__/ThemeDataService.test.ts src/services/__tests__/themeLegacyAdapters.test.ts src/services/theme/__tests__/ThemeRuntimeCoordinator.test.ts src/services/__tests__/alertService.test.ts src/services/dragon/__tests__/ContextBuilder.test.ts src/services/theme/__tests__/ThemeV3Engines.test.ts`：通过，6 个测试文件、28 个测试通过。
+  - `pnpm test`：通过，33 个测试文件、212 个测试通过。
+  - `pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false`：通过。

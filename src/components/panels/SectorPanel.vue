@@ -315,7 +315,7 @@ const { panelRef, panelStyle } = usePanel({
 
 // ========== 数据源 ==========
 const jxbkBlocks = computed(() => {
-  return themeFacade.getJxbkBlocksCompat(20)
+  return themeFacade.getJxbkBlocks(20)
 })
 
 const lastUpdate = computed(() => {

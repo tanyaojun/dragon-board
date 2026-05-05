@@ -1,6 +1,6 @@
 import { dataLayer } from '../../services/DataLayer'
-import { themeMapping } from '../../services/ThemeDataService'
 import { themeFacade } from '../../services/theme/ThemeFacade'
+import { themeRepository } from '../../services/theme/ThemeRepository'
 import type { MergedStock } from '@/types'
 import type { ThemeExposureProjection } from '../theme/types'
 import type { BattlefieldDominance, BattlefieldRecord, ReviewFrame, SignalStrength } from './types'
@@ -37,7 +37,7 @@ const MAX_INDEPENDENT_BATTLEFIELDS = 3
 const MAX_TOTAL_BATTLEFIELDS = 18
 
 function findThemeIdByName(name: string): string | undefined {
-  const allThemes = themeMapping.getAllThemes()
+  const allThemes = themeRepository.getThemes()
   const exact = allThemes.find((theme) => theme.name === name)
   if (exact) return exact.id
   const fuzzy = allThemes.find((theme) => theme.name.includes(name) || name.includes(theme.name))
@@ -217,7 +217,7 @@ export class BattlefieldBuilder {
     const currentStocks = dataLayer.getStocks()
     const themeFactors = themeFacade.getThemeFactors()
     const exposureProjection = themeFacade.getThemeExposureProjection()
-    const hotThemes = themeFacade.getHotThemesCompat?.(50) || dataLayer.getHotThemes() || []
+    const hotThemes = themeFacade.getHotThemes?.(50) || dataLayer.getHotThemes() || []
     const topHotThemes = hotThemes.slice(0, 8)
     const coreHotThemes = hotThemes.slice(0, 5)
     const rotation = themeFacade.getRotationSummary?.() || dataLayer.getCurrentRotation?.()
@@ -277,7 +277,7 @@ export class BattlefieldBuilder {
       })
 
     themeIds.forEach((themeId) => {
-      const themeName = conciseBattlefieldName(themeMapping.getThemeName(themeId), themeId)
+      const themeName = conciseBattlefieldName(themeRepository.getTheme(themeId)?.name, themeId)
       const exposureCodes = new Set(
         stockExposuresByTheme(exposureProjection, themeId).map((exposure) => exposure.code),
       )

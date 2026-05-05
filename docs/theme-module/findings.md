@@ -50,3 +50,18 @@
 - `themeDATA.db` 新增只读校验入口，API/CLI 输出同一 diff 结构，适合导入后验收，不会写库。
 - `JxbkThemeFeed` 已承接板块成分股懒加载、缓存、并发复用、DataLayer 写入和 runtime refresh。
 - `sectorAnalyzer.clearCache/getStats/loadSectorStocks` 均改为委托 `JxbkThemeFeed`，继续服务旧组件和控制台入口。
+
+## 2026-05-05 V11 启动发现
+
+- V10 已把 Chrome `http_localhost_5173` 的 `ThemeDataDB/theme_mapping` 导入 `themeDATA.db`，校验结果为 237 个题材、12215 条题材-股票关系、4166 只去重股票，`verify-themes` 返回 `ok=true`。
+- `ThemeDataService` 当前没有 IndexedDB 正式读写函数，但仍保留 `/data/theme_base_mapping.json` 本地 fallback、`/api/themes/batch` 标签/原因增量刷新和自动定时刷新。
+- `sectorAnalyzer` 仍直接读取 `themeMapping`，并通过 `(themeMapping as any).stockTagsMap/stockReasonsMap` 访问私有 Map；V11 应改为仓库公开读口。
+- `themeFacade` 的 `Compat` 方法仍是多个组件的读取入口；V11 应增加正式别名并迁移组件调用，保留 wrapper 但不让新代码继续扩散旧命名。
+- 本轮收口范围只覆盖题材分析模块，不处理 `src/services/snapshot/**` 的 IndexedDB 迁移/缓存逻辑。
+
+## 2026-05-05 V11 实施发现
+
+- `ThemeDataService` 已转为 SQLite-only：QuantBoard mapping 读取失败时返回 `false` 并记录 `lastError`，不再请求本地静态 JSON 或 `/api/themes/batch`。
+- `themeRepository` 已成为前端题材基础仓库正式入口；`ThemeFacade`、`ThemeRuntimeCoordinator`、`sectorAnalyzer` 已改用仓库公开读口。
+- `sectorAnalyzer` 已移除对 `themeMapping` 私有标签/原因 Map 的读取，`getStats()` 返回 `themeBaseSource=sqlite` 和 `version=11.0.0`。
+- 业务代码已迁到 `themeFacade` 非 Compat 正式方法；`get*Compat()` wrapper 仍保留供旧测试、控制台或后续清理使用。

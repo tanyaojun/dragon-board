@@ -57,7 +57,9 @@ describe('ThemeDataService sqlite mapping facade', () => {
 
     await expect(themeMapping.load()).resolves.toBe(true)
 
-    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock.mock.calls.every(([url]) => String(url).includes('/api/themes/mapping'))).toBe(
+      true,
+    )
     expect(themeMapping.getCurrentVersion()).toBe('2026-05-05T09:30:00.000Z')
     expect(themeMapping.getAllThemes()).toEqual([
       { id: 'AI', name: '人工智能', zsCode: 'BK0800' },
@@ -113,5 +115,61 @@ describe('ThemeDataService sqlite mapping facade', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2)
     expect(themeMapping.getThemeName('AI')).toBe('人工智能')
     expect(themeMapping.getStockReason('000001')).toBe('算力龙头；电网建设')
+  })
+
+  it('fails explicitly when sqlite loading fails and does not use local or batch fallbacks', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      const text = String(url)
+      if (text.includes('/data/theme_base_mapping.json') || text.includes('/api/themes/batch')) {
+        throw new Error(`unexpected fallback request: ${text}`)
+      }
+      return new Response(JSON.stringify({ ok: false, detail: 'sqlite unavailable' }), {
+        status: 503,
+        headers: { 'content-type': 'application/json' },
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('indexedDB', {
+      open: vi.fn(() => {
+        throw new Error('IndexedDB must not be used when sqlite loading fails')
+      }),
+    })
+
+    await expect(themeMapping.load()).resolves.toBe(false)
+
+    expect(fetchMock.mock.calls.every(([url]) => String(url).includes('/api/themes/mapping'))).toBe(
+      true,
+    )
+    expect(themeMapping.getAllThemes()).toEqual([])
+    expect(themeMapping.getLoadStatus()).toMatchObject({
+      source: 'sqlite',
+      loaded: false,
+      themeCount: 0,
+      mappingCount: 0,
+    })
+    expect(themeMapping.getLoadStatus().lastError).toContain('SQLite')
+  })
+
+  it('reports sqlite load status after successful loading', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        new Response(JSON.stringify(sqlitePayload), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      ),
+    )
+
+    await expect(themeMapping.load()).resolves.toBe(true)
+
+    expect(themeMapping.getLoadStatus()).toEqual({
+      source: 'sqlite',
+      loaded: true,
+      lastUpdate: '2026-05-05T09:30:00.000Z',
+      lastError: null,
+      themeCount: 2,
+      mappingCount: 3,
+    })
   })
 })

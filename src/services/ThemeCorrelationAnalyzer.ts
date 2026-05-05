@@ -85,7 +85,7 @@ export class ThemeCorrelationAnalyzer {
     }
 
     // 获取该板块的个股
-    const stockMap = themeFacade.getThemeStockMapCompat()
+    const stockMap = themeFacade.getThemeStockMap()
     const rawStocks = Object.values(stockMap).filter((stock: any) =>
       stock.blocks?.includes(themeName),
     ) as any[]

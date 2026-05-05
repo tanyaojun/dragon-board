@@ -171,7 +171,7 @@ const previewStats = computed(() => {
   if (previewData.value.sectors) {
     stats.push(
       { label: '题材总数', value: previewData.value.sectors.length },
-      { label: '热门题材', value: themeFacade.getHotThemesCompat?.(5).length || 0 },
+      { label: '热门题材', value: themeFacade.getHotThemes?.(5).length || 0 },
     )
   }
 
@@ -212,7 +212,7 @@ async function preview() {
           }
           break
         case 'sectors':
-          previewData.value = { sectors: themeFacade.getHotThemesCompat?.(50) || [] }
+          previewData.value = { sectors: themeFacade.getHotThemes?.(50) || [] }
           break
         case 'market':
           previewData.value = {
@@ -227,7 +227,7 @@ async function preview() {
           previewData.value = {
             stocks: dataLayer.getStocks(),
             leaders: dataLayer.getStocks().filter(s => isLeaderStock(s.code)),
-            sectors: themeFacade.getHotThemesCompat?.(50) || [],
+            sectors: themeFacade.getHotThemes?.(50) || [],
             market: {
               sentiment: dragonBreathAnalyzer.getMarketSentiment(),
               marketData: dragonBreathAnalyzer.getMarketData(),

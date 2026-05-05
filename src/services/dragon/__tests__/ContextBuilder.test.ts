@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@/services/theme/ThemeFacade', () => ({
   themeFacade: {
-    getThemeDetailCompat: vi.fn(() => ({
+    getThemeDetail: vi.fn(() => ({
       heatScore: 82,
       momentum: 71,
       leaders: [{ code: '000001' }, { code: '000002' }],
@@ -46,10 +46,10 @@ describe('dragon ContextBuilder', () => {
     }
   })
 
-  it('builds sector context from themeFacade detail compat', () => {
+  it('builds sector context from themeFacade detail', () => {
     const context = buildSectorContext('人工智能')
 
-    expect(themeFacade.getThemeDetailCompat).toHaveBeenCalledWith('人工智能')
+    expect(themeFacade.getThemeDetail).toHaveBeenCalledWith('人工智能')
     expect(context.sectorHeat).toBe(82)
     expect(context.sectorMomentum).toBe(71)
     expect(context.sectorLeaderCount).toBe(2)

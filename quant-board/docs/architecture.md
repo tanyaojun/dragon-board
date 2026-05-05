@@ -104,7 +104,7 @@ Supabase 备份库必须使用快照事实库同构 schema，不再使用旧 `sn
 
 Dragon Board 前端 `DataLayer` 对外字段不随迁移删改。正式快照写入先查询 SQLite 是否已有同一 `snapshot_id`，缺失时通过 `POST /api/snapshots/ingest` 落 SQLite；后端再按 `dataset_id + snapshot_id` 做逻辑幂等，重复槽位不会覆盖既有事实行。正式读取走 SQLite API，返回仍是 `SnapshotRecord`、`SnapshotFrameBundle`、`SnapshotStockRow`、`SnapshotSectorRow` 的现有 camelCase 字段。IndexedDB 快照缓存默认关闭，只保留历史迁移源和显式缓存用途；`five_minute` 浏览器本地入口不再保留。
 
-Dragon Board 题材基础映射由 `ThemeDataService` 通过 `GET /api/themes/mapping` 读取 `themeDATA.db`。旧浏览器 `ThemeDataDB/theme_mapping` 只保留为历史迁移源或显式排障缓存，不再作为正式题材事实源；新增或更新题材映射不得写回浏览器 IndexedDB。
+Dragon Board 题材基础映射由 `ThemeDataService` 通过 `GET /api/themes/mapping` 读取 `themeDATA.db`。V11 后该运行时链路是 SQLite-only：旧浏览器 `ThemeDataDB/theme_mapping` 只保留为离线历史迁移源，不作为排障缓存或运行时 fallback；本地静态 JSON 和 `/api/themes/batch` 也不再补齐题材基础事实。新增或更新题材映射不得写回浏览器 IndexedDB。
 
 如果后续调整 Supabase 表字段、索引、恢复策略或 payload JSON 字段，必须同批更新 [database-migration-plan.md](database-migration-plan.md)、[api-cli.md](api-cli.md) 和 SQL schema 文件。
 

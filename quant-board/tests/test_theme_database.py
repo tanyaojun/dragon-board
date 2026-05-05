@@ -195,6 +195,9 @@ def test_theme_api_import_and_read_contracts() -> None:
     assert body["mapping"]["version"] == "theme-v8-test"
     assert "source" not in body["mapping"]
     assert body["mapping"]["themes"][0]["stocks"] == ["000001", "600001"]
+    ai_theme = next(theme for theme in body["mapping"]["themes"] if theme["id"] == "AI")
+    assert ai_theme["stockTags"]["000001"] == [{"Name": "算力", "Reason": "服务器订单"}]
+    assert ai_theme["stockReasons"]["600001"] == "AI 应用落地"
 
     stocks = client.get("/api/themes/stocks/AI")
     assert stocks.status_code == 200, stocks.text
@@ -208,7 +211,15 @@ def test_theme_api_import_and_read_contracts() -> None:
 
     counts = client.get("/api/themes/counts")
     assert counts.status_code == 200, counts.text
-    assert counts.json()["counts"]["themeCount"] == 2
+    assert counts.json()["source"] == "sqlite"
+    assert counts.json()["counts"] == {
+        "themeCount": 2,
+        "mappingCount": 4,
+        "stockCount": 3,
+        "version": "theme-v8-test",
+        "lastUpdate": "2026-05-05T09:30:00.000Z",
+        "source": "sqlite",
+    }
 
     bad = client.post("/api/migrations/themes/import-json", json={})
     assert bad.status_code == 400

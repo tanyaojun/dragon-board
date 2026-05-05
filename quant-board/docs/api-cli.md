@@ -407,7 +407,7 @@ Dragon Board 当前会在写入前通过 SQLite 读口确认同一 `snapshot_id`
 
 ## 题材基础数据接口
 
-题材基础映射已经从 Dragon Board 浏览器 IndexedDB 迁移到 QuantBoard 独立 SQLite 主库 `themeDATA.db`。这些接口只承载题材静态映射、题材-股票关系、股票-题材反查、标签和原因，不承载题材因子、轮动、预警、回测或快照事实。
+题材基础映射已经从 Dragon Board 浏览器 IndexedDB 迁移到 QuantBoard 独立 SQLite 主库 `themeDATA.db`。这些接口只承载题材静态映射、题材-股票关系、股票-题材反查、标签和原因，不承载题材因子、轮动、预警、回测或快照事实。V11 后 Dragon Board 运行时只读取这些 SQLite 接口；QuantBoard 不可用或返回空映射时，前端必须显式失败，不回落浏览器 IndexedDB、`/data/theme_base_mapping.json` 或 `/api/themes/batch`。
 
 ### `POST /api/migrations/themes/import-json`
 
@@ -457,7 +457,7 @@ Dragon Board 当前会在写入前通过 SQLite 读口确认同一 `snapshot_id`
 
 ### `GET /api/themes/mapping`
 
-Dragon Board `ThemeDataService` 的正式读口。返回结构兼容旧 `ThemeMappingData`，外层补充 `ok` 和 `source=sqlite`。
+Dragon Board `ThemeDataService` 的正式读口。返回结构兼容旧 `ThemeMappingData`，外层补充 `ok` 和 `source=sqlite`。`mapping.themes[*]` 必须包含当前库内已有的 `stocks`、`stockTags` 和 `stockReasons`，前端不再通过额外批量 API 补齐标签或原因。
 
 ### `GET /api/themes/stocks/{theme_id}`
 
@@ -469,7 +469,7 @@ Dragon Board `ThemeDataService` 的正式读口。返回结构兼容旧 `ThemeMa
 
 ### `GET /api/themes/counts`
 
-读取 `themeDATA.db` 基础行数，用于迁移验收和排障。
+读取 `themeDATA.db` 基础行数，用于迁移验收和排障。返回 `ok`、`source=sqlite` 和 `counts`；`counts` 至少包含 `themeCount`、`mappingCount`、`stockCount`、`version`、`lastUpdate`、`source=sqlite`。
 
 CLI 校验：
 

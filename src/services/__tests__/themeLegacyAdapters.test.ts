@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { RotationAnalysis } from '@/types/core'
 import { dataLayer } from '../DataLayer'
 import { themeFacade } from '../theme/ThemeFacade'
+import { themeRepository } from '../theme/ThemeRepository'
 import { jxbkThemeFeed } from '../theme/JxbkThemeFeed'
 import { rotationService } from '../rotationService'
 import { sectorAnalyzer } from '../sectorAnalyzer'
@@ -140,12 +141,64 @@ describe('theme legacy adapters', () => {
     ])
     const clearSpy = vi.spyOn(jxbkThemeFeed, 'clearSectorStockCache').mockImplementation(() => {})
     vi.spyOn(jxbkThemeFeed, 'getSectorStockCacheStats').mockReturnValue({ cachedSectors: 2 })
+    vi.spyOn(themeRepository, 'getThemeBaseStatus').mockReturnValue({
+      source: 'sqlite',
+      loaded: true,
+      lastUpdate: '2026-05-05T09:30:00.000Z',
+      lastError: null,
+      themeCount: 237,
+      mappingCount: 12215,
+    })
 
     await expect(sectorAnalyzer.loadSectorStocks('BKAI', '人工智能', true)).resolves.toHaveLength(1)
     expect(loadSpy).toHaveBeenCalledWith('BKAI', '人工智能', true)
     expect(sectorAnalyzer.getStats().cachedSectors).toBe(2)
+    expect(sectorAnalyzer.getStats()).toMatchObject({
+      version: '11.0.0',
+      themeBaseSource: 'sqlite',
+      mappedStocks: 12215,
+    })
 
     sectorAnalyzer.clearCache()
     expect(clearSpy).toHaveBeenCalled()
+  })
+
+  it('sectorAnalyzer syncs tag and reason data through themeRepository public getters', async () => {
+    vi.spyOn(themeRepository, 'loadThemeBase').mockResolvedValue(true)
+    vi.spyOn(themeRepository, 'getThemes').mockReturnValue([
+      { id: 'AI', name: '人工智能', zsCode: 'BK0800' },
+    ])
+    vi.spyOn(themeRepository, 'getThemeStocks').mockReturnValue(['000001'])
+    vi.spyOn(themeRepository, 'getThemeBaseStatus').mockReturnValue({
+      source: 'sqlite',
+      loaded: true,
+      lastUpdate: '2026-05-05T09:30:00.000Z',
+      lastError: null,
+      themeCount: 1,
+      mappingCount: 1,
+    })
+    vi.spyOn(themeRepository, 'getStockTags').mockReturnValue([{ Name: '算力' }])
+    vi.spyOn(themeRepository, 'getStockReason').mockReturnValue('算力龙头')
+    vi.spyOn(themeFacade, 'refreshRuntime').mockReturnValue({
+      factors: [],
+      exposures: { byCode: new Map(), byTheme: new Map() },
+      rotationSummary: null,
+      events: [],
+      qualitySummary: { totalFlags: 0, fatalCount: 0, warningCount: 0, infoCount: 0, byCode: {} },
+      changedFields: [],
+      inputSignature: 'same',
+      source: 'sectorAnalyzer',
+      timestamp: 1713751200000,
+      syncedStockCount: 0,
+    })
+    const stockTagsSpy = vi.spyOn(dataLayer, 'updateStockTags')
+    const limitUpSpy = vi.spyOn(dataLayer, 'updateLimitUpData')
+
+    await sectorAnalyzer.init()
+
+    expect(stockTagsSpy).toHaveBeenCalledWith([{ code: '000001', tags: [{ Name: '算力' }] }])
+    expect(limitUpSpy).toHaveBeenCalledWith([
+      { code: '000001', reason: '算力龙头', tags: [{ Name: '算力' }] },
+    ])
   })
 })

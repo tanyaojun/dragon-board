@@ -879,8 +879,8 @@ async function preloadHotThemes() {
 
 // ========== 计算属性 ==========
 const allThemes = computed(() => {
-  const jxbkBlocks = themeFacade.getJxbkBlocksCompat()
-  const stockMap = themeFacade.getThemeStockMapCompat()
+  const jxbkBlocks = themeFacade.getJxbkBlocks()
+  const stockMap = themeFacade.getThemeStockMap()
   const rotation = themeFacade.getRotationSummary() || dataLayer.getCurrentRotation()
   const mainLineIds = new Set((rotation?.mainLines || []).map(m => m.themeId))
 

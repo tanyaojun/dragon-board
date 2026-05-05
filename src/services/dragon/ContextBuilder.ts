@@ -64,7 +64,7 @@ export function buildMarketContext(): MarketContext {
  * 构建题材上下文
  */
 export function buildSectorContext(themeName: string): SectorContext {
-  const sectorInfo = themeFacade.getThemeDetailCompat(themeName)
+  const sectorInfo = themeFacade.getThemeDetail(themeName)
   const stocks = typeof window !== 'undefined' ? window.allData?.merged || [] : []
   
   // 找出该题材的所有股票

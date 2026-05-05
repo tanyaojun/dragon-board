@@ -207,7 +207,7 @@ const tableWrapperRef = ref<HTMLElement>()
 
 // ========== 左侧题材树数据 ==========
 const allSectors = computed(() => {
-  const blocks = themeFacade.getJxbkBlocksCompat()
+  const blocks = themeFacade.getJxbkBlocks()
   return blocks.map((block: any) => ({
     id: block.code,
     name: block.name,
@@ -245,7 +245,7 @@ const treeTotalPages = computed(() =>
 // ========== 右侧成分股数据 ==========
 const sectorStocks = computed(() => {
   if (!selectedSector.value) return []
-  const stockMap = themeFacade.getThemeStockMapCompat()
+  const stockMap = themeFacade.getThemeStockMap()
 
   return Object.values(stockMap)
     .filter((stock: any) =>

@@ -520,7 +520,7 @@ const loadData = async () => {
 
   try {
     // 找到板块代码
-    const blocks = themeFacade.getJxbkBlocksCompat()
+    const blocks = themeFacade.getJxbkBlocks()
     const block = blocks.find(b => b.name === props.sectorName)
 
     if (block) {
@@ -556,7 +556,7 @@ const safeDataLayer = {
   },
   getJxbkBlockByName: (name: string) => {
     try {
-      const blocks = themeFacade.getJxbkBlocksCompat()
+      const blocks = themeFacade.getJxbkBlocks()
       return blocks.find((b: any) => b?.name === name)
     } catch {
       return null
@@ -571,7 +571,7 @@ const blockCode = computed(() => {
   if (!props.sectorName) return null
 
   try {
-    const blocks = themeFacade.getJxbkBlocksCompat()
+    const blocks = themeFacade.getJxbkBlocks()
     const block = blocks.find((b: any) => b?.name === props.sectorName)
     return block?.code || null
   } catch (e) {
@@ -586,7 +586,7 @@ const blockData = computed(() => {
 
   try {
     // 获取板块数据
-    const blocks = themeFacade.getJxbkBlocksCompat()
+    const blocks = themeFacade.getJxbkBlocks()
     const block = blocks.find((b: any) => b?.code === blockCode.value)
 
     if (block) {
@@ -622,7 +622,7 @@ const themeStocks = computed(() => {
   if (!props.sectorName) return []
 
   try {
-    const stockMap = themeFacade.getThemeStockMapCompat()
+    const stockMap = themeFacade.getThemeStockMap()
 
     const stocks = Object.values(stockMap)
       .filter((stock: any) => {
@@ -810,7 +810,7 @@ watch(() => props.sectorName, async (newName) => {
     error.value = null
     try {
       // 找到板块代码
-      const blocks = themeFacade.getJxbkBlocksCompat()
+      const blocks = themeFacade.getJxbkBlocks()
       const block = blocks.find(b => b.name === newName)
 
       if (block) {
@@ -1134,7 +1134,7 @@ const refresh = async () => {
     }
 
     // 找到板块代码
-    const blocks = themeFacade.getJxbkBlocksCompat()
+    const blocks = themeFacade.getJxbkBlocks()
     const block = blocks.find(b => b.name === props.sectorName)
 
     if (block) {

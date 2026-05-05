@@ -16,7 +16,7 @@
 - 存储主链：SQLite 分为快照热库 `quant_board_snapshots.db`、研究热库 `quant_board_research.db` 和题材映射主库 `themeDATA.db`；Parquet 是历史冷归档，DuckDB 是后端只读归档查询引擎，R2/S3 是大体积对象备份主线；Supabase 只保留轻量兼容备份，实施和恢复规则以 [database-migration-plan.md](database-migration-plan.md) 为准。
 - 当前同步批次：`sync_outbox` 只覆盖快照 ingest、数据集 bundle；回测、优化和 Golden 保存在 research SQLite，不进入 Supabase Free 版备份目标。历史 JSON 迁移入口是 `POST /api/migrations/snapshots/import-json`；自动同步默认关闭，只补传到期 outbox。
 - SQLite 替换 IndexedDB 的当前切口：Dragon Board 正式写入先查询 QuantBoard SQLite 是否已有同一 `snapshot_id`，缺失时走 `POST /api/snapshots/ingest`；正式读口由根前端 `src/services/snapshot/backendRead.ts` 统一调用 QuantBoard `GET /api/snapshots/frames`、`/api/snapshots/records`、`/api/snapshots/stock-rows`、`/api/snapshots/sector-rows`；IndexedDB 快照缓存默认关闭，只作为迁移源和显式缓存。浏览器端旧的 IndexedDB 校验/补齐入口与 `five_minute` 本地入口已收口，不再作为正式合同。
-- 题材映射 SQLite 切口：Dragon Board `ThemeDataService` 正式读口调用 QuantBoard `GET /api/themes/mapping`，数据来自 `themeDATA.db`；旧浏览器 `ThemeDataDB/theme_mapping` 只保留为 `POST /api/migrations/themes/import-json` 的历史迁移源和显式排障缓存，不再作为正式题材事实源。
+- 题材映射 SQLite 切口：Dragon Board `ThemeDataService` 正式读口调用 QuantBoard `GET /api/themes/mapping`，数据来自 `themeDATA.db`；V11 后运行时不再回落浏览器 IndexedDB、本地静态 JSON 或 `/api/themes/batch`，旧浏览器 `ThemeDataDB/theme_mapping` 只保留为 `POST /api/migrations/themes/import-json` 的离线历史迁移源。
 - failover 当前切口：SQLite 主库不可用但 Supabase 同构备份库可写时，`POST /api/snapshots/ingest` 可返回 `status=backup_only` 并写入备库；SQLite 恢复后必须执行 `pull-backup` 收敛，不能把 `backup_only` 当作本地主库已恢复。
 - 题材模块 V2：Dragon Board 快照会写入稳定题材列，QuantBoard 回测会生成 `ThemeCandidateSupport`。默认 `useThemeFactorForExecution=false`，题材只做候选解释；只有显式开启时才参与置信度调整和拥挤风险降级。
 

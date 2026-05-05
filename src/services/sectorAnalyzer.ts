@@ -13,9 +13,9 @@ import type {
 } from '../types'
 import { SECTOR_CONFIG } from '../config/constants'
 import { dataLayer } from './DataLayer'
-import { themeMapping } from './ThemeDataService'
 import { themeFacade } from './theme/ThemeFacade'
 import { jxbkThemeFeed } from './theme/JxbkThemeFeed'
+import { themeRepository } from './theme/ThemeRepository'
 
 type SortableThemeStockKey = keyof Pick<
   ThemeStock,
@@ -61,14 +61,14 @@ function heatLevel(score: number) {
 function buildThemeBase() {
   const byCode = new Map<string, any[]>()
   const byId = new Map<string, any>()
-  themeMapping.getAllThemes().forEach((theme) => {
+  themeRepository.getThemes().forEach((theme) => {
     byId.set(theme.id, {
       id: theme.id,
       name: theme.name,
       zsCode: theme.zsCode || '',
       aliases: [],
     })
-    themeMapping.getThemeStocks(theme.id).forEach((code) => {
+    themeRepository.getThemeStocks(theme.id).forEach((code) => {
       if (!byCode.has(code)) byCode.set(code, [])
       byCode.get(code)!.push({
         id: theme.id,
@@ -81,8 +81,8 @@ function buildThemeBase() {
 }
 
 function initializeThemeInfo() {
-  themeMapping.getAllThemes().forEach((theme) => {
-    const stocks = themeMapping.getThemeStocks(theme.id)
+  themeRepository.getThemes().forEach((theme) => {
+    const stocks = themeRepository.getThemeStocks(theme.id)
     const level = heatLevel(0)
     state.themeInfo[theme.id] = {
       id: theme.id,
@@ -115,13 +115,10 @@ async function syncTagsAndReasonsToDataLayer(): Promise<void> {
     reason?: string
     tags?: Array<{ Name: string }>
   }> = []
-  const stockTags = (themeMapping as any).stockTagsMap || new Map()
-  const stockReasons = (themeMapping as any).stockReasonsMap || new Map()
-
-  for (const theme of themeMapping.getAllThemes()) {
-    for (const code of themeMapping.getThemeStocks(theme.id)) {
-      const tags = stockTags.get(code) || []
-      const reason = stockReasons.get(code) || ''
+  for (const theme of themeRepository.getThemes()) {
+    for (const code of themeRepository.getThemeStocks(theme.id)) {
+      const tags = themeRepository.getStockTags(code)
+      const reason = themeRepository.getStockReason(code)
       if (tags.length > 0) {
         stockTagsUpdates.push({
           code,
@@ -147,7 +144,7 @@ async function syncTagsAndReasonsToDataLayer(): Promise<void> {
 
 async function initTagsAndReasons(): Promise<void> {
   try {
-    await themeMapping.waitForLoaded()
+    await themeRepository.loadThemeBase()
     await syncTagsAndReasonsToDataLayer()
   } catch (error) {
     console.warn('[SectorAnalyzer] 初始化标签数据失败:', error)
@@ -157,12 +154,12 @@ async function initTagsAndReasons(): Promise<void> {
 export async function init(): Promise<() => void> {
   if (state.initialized) return () => {}
 
-  await themeMapping.waitForLoaded()
+  await themeRepository.loadThemeBase()
   initializeThemeInfo()
   const base = buildThemeBase()
   dataLayer.updateThemeBase({
     ...base,
-    lastUpdate: themeMapping.getLastUpdateTime() || new Date().toISOString(),
+    lastUpdate: themeRepository.getThemeBaseStatus()?.lastUpdate || new Date().toISOString(),
   })
   await themeFacade.refreshRuntime({
     source: 'sectorAnalyzer',
@@ -191,7 +188,7 @@ export async function triggerHeatCalculation() {
     syncStocks: true,
     emitAlerts: false,
   })
-  dataLayer.updateHotThemes(themeFacade.getHotThemesCompat(CONFIG.HOT_THEMES_LIMIT))
+  dataLayer.updateHotThemes(themeFacade.getHotThemes(CONFIG.HOT_THEMES_LIMIT))
   return result
 }
 
@@ -204,7 +201,7 @@ export async function loadSectorStocks(
 }
 
 export async function preloadTopSectors(limit: number = CONFIG.PRELOAD_COUNT) {
-  const blocks = themeFacade.getJxbkBlocksCompat(limit)
+  const blocks = themeFacade.getJxbkBlocks(limit)
   for (const block of blocks.slice(0, limit)) {
     await loadSectorStocks(block.code, block.name)
     await new Promise((resolve) => setTimeout(resolve, 100))
@@ -219,7 +216,7 @@ export async function updateFullThemeMapping(): Promise<{ success: boolean; mess
     const base = buildThemeBase()
     dataLayer.updateThemeBase({
       ...base,
-      lastUpdate: themeMapping.getLastUpdateTime() || new Date().toISOString(),
+      lastUpdate: themeRepository.getThemeBaseStatus()?.lastUpdate || new Date().toISOString(),
     })
     await themeFacade.refreshRuntime({
       source: 'sectorAnalyzer',
@@ -246,7 +243,7 @@ export function syncThemesToStocks(): number {
 }
 
 export function getHotThemes(limit: number = 10): HotTheme[] {
-  const compat = themeFacade.getHotThemesCompat(limit) as HotTheme[]
+  const compat = themeFacade.getHotThemes(limit) as HotTheme[]
   if (compat.length > 0) return compat
   return (dataLayer.getHotThemes() as HotTheme[]).slice(0, limit)
 }
@@ -255,11 +252,11 @@ export async function getThemeDetail(
   themeName: string,
   options?: { force?: boolean },
 ): Promise<ThemeDetail | null> {
-  const theme = themeMapping.getAllThemes().find((item) => item.name === themeName || item.id === themeName)
+  const theme = themeRepository.getThemes().find((item) => item.name === themeName || item.id === themeName)
   if (options?.force && theme) {
     await loadSectorStocks(theme.id, theme.name)
   }
-  const compat = themeFacade.getThemeDetailCompat(theme?.id || themeName) as ThemeDetail | null
+  const compat = themeFacade.getThemeDetail(theme?.id || themeName) as ThemeDetail | null
   if (compat) return compat
 
   const level = heatLevel(0)
@@ -279,7 +276,7 @@ export async function getThemeDetail(
         correlation: 0,
         relatedThemes: [],
         stats: {
-          stockCount: themeMapping.getThemeStocks(theme.id).length,
+          stockCount: themeRepository.getThemeStocks(theme.id).length,
           ztCount: 0,
           leaderCount: state.themeInfo[theme.id]?.leaders?.length || 0,
         },
@@ -301,7 +298,7 @@ export function getThemeStocks(
   } = {},
 ): { total: number; page: number; limit: number; totalPages: number; stocks: ThemeStock[] } {
   const { limit = 200, page = 1, sortBy = 'change', sortDesc = true } = options
-  const stockCodes = themeMapping.getThemeStocks(themeId)
+  const stockCodes = themeRepository.getThemeStocks(themeId)
   if (!stockCodes.length) return { total: 0, page, limit, totalPages: 0, stocks: [] }
 
   const stocks = stockCodes.reduce<ThemeStock[]>((acc, code) => {
@@ -368,7 +365,7 @@ export function syncLeadersToThemes(leaders: LeaderInfo[]) {
   if (!leaders?.length) return
   const themeLeaders: Record<string, LeaderInfo[]> = {}
   leaders.forEach((leader) => {
-    themeMapping.getStockThemes(leader.code).forEach((id) => {
+    themeRepository.getStockThemes(leader.code).forEach((id) => {
       if (!themeLeaders[id]) themeLeaders[id] = []
       if (!themeLeaders[id].find((item) => item.code === leader.code)) themeLeaders[id].push(leader)
     })
@@ -444,14 +441,15 @@ export const sectorAnalyzer = {
   },
 
   getStats: () => {
-    const mappingStats = themeMapping.getStats()
+    const mappingStats = themeRepository.getThemeBaseStatus()
     return {
-      totalThemes: themeMapping.getAllThemes().length,
-      mappedStocks: mappingStats.stockCount,
+      totalThemes: themeRepository.getThemes().length,
+      mappedStocks: mappingStats?.mappingCount || 0,
       hotThemes: dataLayer.getHotThemes().length,
       cachedSectors: jxbkThemeFeed.getSectorStockCacheStats().cachedSectors,
-      lastUpdate: mappingStats.lastUpdate,
-      version: '7.0.0',
+      lastUpdate: mappingStats?.lastUpdate || null,
+      version: '11.0.0',
+      themeBaseSource: 'sqlite',
     }
   },
 
@@ -462,10 +460,10 @@ export const sectorAnalyzer = {
 
   debug: {
     getState: () => ({ ...state }),
-    getJxbkBlocks: () => themeFacade.getJxbkBlocksCompat(),
+    getJxbkBlocks: () => themeFacade.getJxbkBlocks(),
   },
 
-  VERSION: '7.0.0',
+  VERSION: '11.0.0',
 }
 
 if (typeof window !== 'undefined') {

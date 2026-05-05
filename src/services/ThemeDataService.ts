@@ -1,7 +1,7 @@
 import { debugLog } from '@/utils/logger'
 // src/services/ThemeDataService.ts
 /**
- * 题材数据服务 - 提供 QuantBoard SQLite 题材主库读取 + 历史 IndexedDB 迁移源兼容
+ * 题材数据服务 - 只从 QuantBoard SQLite 题材主库读取运行时基础映射
  */
 
 import { apiService } from './apiService'
@@ -33,12 +33,9 @@ class ThemeDataService {
   private loaded: boolean = false
   private loadingPromise: Promise<boolean> | null = null
   private lastUpdateTime: string | null = null
+  private lastError: string | null = null
   private kplThemes: ThemeBase[] = []
   private currentMappingData: ThemeMappingData | null = null
-
-  private updateTimer: ReturnType<typeof setInterval> | null = null
-
-  private readonly UPDATE_INTERVAL = 2 * 60 * 60 * 1000 // 2小时
 
   private constructor() {}
 
@@ -56,83 +53,6 @@ class ThemeDataService {
         Reason: tag?.Reason ? String(tag.Reason).trim() : undefined,
       }))
       .filter((tag) => tag.Name)
-  }
-
-  private mergeTagAndReasonData(data: ThemeMappingData | null): number {
-    if (!data?.themes?.length) return 0
-
-    const currentThemesById = new Map<string, ThemeMapping>()
-    this.currentMappingData?.themes?.forEach((theme) => {
-      currentThemesById.set(theme.id, theme)
-    })
-
-    let mergedCount = 0
-
-    data.themes.forEach((sourceTheme) => {
-      const targetTheme = currentThemesById.get(sourceTheme.id)
-      const targetStockTags = targetTheme
-        ? ((targetTheme.stockTags ||= {}) as Record<string, Array<{ Name: string; Reason?: string }>>)
-        : undefined
-      const targetStockReasons = targetTheme
-        ? ((targetTheme.stockReasons ||= {}) as Record<string, string>)
-        : undefined
-
-      Object.entries(sourceTheme.stockTags || {}).forEach(([rawCode, rawTags]) => {
-        const code = this.normalizeCode(rawCode)
-        const incomingTags = this.normalizeTags(rawTags)
-        if (!code || incomingTags.length === 0) return
-
-        const existingTags = this.stockTagsMap.get(code) || []
-        const nextTags = [...existingTags]
-
-        incomingTags.forEach((tag) => {
-          const existing = nextTags.find((item) => item.Name === tag.Name)
-          if (!existing) {
-            nextTags.push(tag)
-            mergedCount++
-          } else if (!existing.Reason && tag.Reason) {
-            existing.Reason = tag.Reason
-            mergedCount++
-          }
-        })
-
-        this.stockTagsMap.set(code, nextTags)
-        if (targetStockTags) {
-          targetStockTags[code] = nextTags
-        }
-      })
-
-      Object.entries(sourceTheme.stockReasons || {}).forEach(([rawCode, reason]) => {
-        const code = this.normalizeCode(rawCode)
-        const incomingReason = String(reason || '').trim()
-        if (!code || !incomingReason) return
-
-        const existingReason = this.stockReasonsMap.get(code) || ''
-        const reasonParts = new Set(
-          existingReason
-            .split('；')
-            .map((item) => item.trim())
-            .filter(Boolean),
-        )
-        const beforeSize = reasonParts.size
-        incomingReason
-          .split('；')
-          .map((item) => item.trim())
-          .filter(Boolean)
-          .forEach((item) => reasonParts.add(item))
-
-        const nextReason = Array.from(reasonParts).join('；')
-        if (nextReason && nextReason !== existingReason) {
-          this.stockReasonsMap.set(code, nextReason)
-          if (targetStockReasons) {
-            targetStockReasons[code] = nextReason
-          }
-          mergedCount += Math.max(1, reasonParts.size - beforeSize)
-        }
-      })
-    })
-
-    return mergedCount
   }
 
   private syncTagsAndReasonsToDataLayer(): void {
@@ -178,9 +98,11 @@ class ThemeDataService {
       const response = await apiService.getSqliteThemeMapping()
       const mapping = response?.mapping
       if (!mapping?.themes?.length) {
+        this.lastError = 'SQLite 题材映射为空或结构异常'
         console.warn('[ThemeDataService] SQLite 题材映射为空或结构异常:', response)
         return null
       }
+      this.lastError = null
       return {
         version: String(mapping.version || 'unknown'),
         lastUpdate: String(mapping.lastUpdate || new Date().toISOString()),
@@ -188,122 +110,9 @@ class ThemeDataService {
         themes: mapping.themes,
       }
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      this.lastError = `SQLite 题材映射读取失败: ${message}`
       console.warn('[ThemeDataService] SQLite 题材映射读取失败:', error)
-      return null
-    }
-  }
-
-  /**
-   * 从 API 获取最新数据（通过批量接口）
-   */
-  private async fetchFromAPI(): Promise<ThemeMappingData | null> {
-    try {
-      debugLog('[ThemeDataService] 🌐 从 API 获取题材数据...')
-
-      let allThemeIds: string[] = []
-
-      allThemeIds = Array.from(this.themes.keys())
-
-      if (allThemeIds.length === 0 && this.kplThemes.length > 0) {
-        allThemeIds = this.kplThemes.map((t) => t.id)
-      }
-
-      if (allThemeIds.length === 0) {
-        console.warn('[ThemeDataService] 没有题材 ID，无法更新')
-        return null
-      }
-
-      const themesMap = new Map<string, ThemeMapping>()
-      const batchSize = 20
-      let validCount = 0
-      let duplicateCount = 0
-
-      for (let i = 0; i < allThemeIds.length; i += batchSize) {
-        const batchIds = allThemeIds.slice(i, i + batchSize)
-
-        const response = await fetch('/api/themes/batch', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ids: batchIds }),
-        })
-
-        const data = await response.json()
-
-        if (data.results) {
-          data.results.forEach((result: any) => {
-            if (
-              result.data &&
-              result.data.ID &&
-              result.data.StockList &&
-              result.data.StockList.length > 0
-            ) {
-              const stockCodes: string[] = []
-              const stockTagsMap: Record<string, Array<{ Name: string; Reason?: string }>> = {}
-              const stockReasonsMap: Record<string, string> = {}
-
-              result.data.StockList.forEach((stock: any) => {
-                const code = this.normalizeCode(stock.StockID)
-                if (code && code.length === 6) {
-                  stockCodes.push(code)
-
-                  // ✅ 提取标签和原因
-                  if (stock.Tag && stock.Tag.length > 0) {
-                    const tags: Array<{ Name: string; Reason?: string }> = []
-                    const reasons: string[] = []
-
-                    stock.Tag.forEach((tag: any) => {
-                      tags.push({ Name: tag.Name })
-                      if (tag.Reason) {
-                        reasons.push(tag.Reason)
-                      }
-                    })
-
-                    stockTagsMap[code] = tags
-                    if (reasons.length > 0) {
-                      stockReasonsMap[code] = reasons.join('；')
-                    }
-                  }
-                }
-              })
-
-              if (stockCodes.length > 0) {
-                const themeId = result.data.ID
-
-                if (!themesMap.has(themeId)) {
-                  themesMap.set(themeId, {
-                    id: themeId,
-                    name: result.data.Name,
-                    stocks: stockCodes,
-                    zsCode: result.data.ZSCode || '',
-                    stockTags: stockTagsMap, // ✅ 保存标签
-                    stockReasons: stockReasonsMap, // ✅ 保存原因
-                  })
-                  validCount++
-                } else {
-                  duplicateCount++
-                  console.warn(`[ThemeDataService] 发现重复题材 ID: ${themeId}`)
-                }
-              }
-            }
-          })
-        }
-
-        await this.delay(300)
-      }
-
-      const allThemes = Array.from(themesMap.values())
-      debugLog(
-        `[ThemeDataService] ✅ API 获取完成: 有效题材=${validCount}, 最终=${allThemes.length}`,
-      )
-
-      return {
-        version: new Date().toISOString(),
-        lastUpdate: new Date().toISOString(),
-        totalThemes: allThemes.length,
-        themes: allThemes,
-      }
-    } catch (error) {
-      console.error('[ThemeDataService] API 获取失败:', error)
       return null
     }
   }
@@ -314,29 +123,6 @@ class ThemeDataService {
   private normalizeCode(code: string): string {
     if (!code) return ''
     return String(code).replace(/[^\d]/g, '').padStart(6, '0')
-  }
-
-  /**
-   * 延迟函数
-   */
-  private delay(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms))
-  }
-
-  /**
-   * 从本地 JSON 文件加载（最终 fallback）
-   */
-  private async fetchFromLocal(): Promise<ThemeMappingData | null> {
-    try {
-      const response = await fetch('/data/theme_base_mapping.json')
-      if (!response.ok) return null
-      const data = await response.json()
-      debugLog(`[ThemeDataService] 📁 从本地文件加载: ${data.themes?.length || 0}个题材`)
-      return data
-    } catch (error) {
-      console.warn('[ThemeDataService] 本地文件加载失败:', error)
-      return null
-    }
   }
 
   /**
@@ -480,8 +266,7 @@ class ThemeDataService {
   }
 
   /**
-   * 加载数据：优先 QuantBoard SQLite → 本地文件 fallback。
-   * IndexedDB 仅保留为历史迁移源，不再作为正式题材事实源。
+   * 加载数据：只读取 QuantBoard SQLite 题材主库。
    */
   async load(): Promise<boolean> {
     if (this.loaded) return true
@@ -498,35 +283,18 @@ class ThemeDataService {
       // 加载 KPL 题材列表
       this.loadKPLThemes()
 
-      // 1. 优先从 QuantBoard SQLite 读取正式题材主库
-      let mappingData = await this.loadFromSQLiteAPI()
+      const mappingData = await this.loadFromSQLiteAPI()
 
       if (mappingData) {
         debugLog(`[ThemeDataService] 从 SQLite 加载: ${mappingData.themes.length}个题材`)
         this.buildMapping(mappingData)
         this.syncToDataLayer()
         this.loaded = true
-
-        debugLog('[ThemeDataService] 数据加载完成，定时任务将每2小时检查一次远端标签/原因更新')
+        this.lastError = null
       } else {
-        // 2. SQLite 后端不可用或无数据时，从本地文件加载作为非正式兜底
-        const localData = await this.fetchFromLocal()
-        if (localData) {
-          debugLog(`[ThemeDataService] 📁 从本地文件加载: ${localData.themes.length}个题材`)
-          this.buildMapping(localData)
-          this.syncToDataLayer()
-          this.loaded = true
-
-          // 首次加载后，从 API 获取标签/原因增量（异步，不阻塞，不写 IndexedDB）
-          debugLog('[ThemeDataService] 本地兜底加载完成，正在后台同步标签/原因增量...')
-          this.checkAndUpdateFromAPI().then((updated) => {
-            if (updated) {
-              debugLog('[ThemeDataService] 首次同步完成')
-            }
-          })
-        } else {
-          throw new Error('无法加载题材数据')
-        }
+        this.loaded = false
+        if (!this.lastError) this.lastError = 'SQLite 题材映射读取失败'
+        return false
       }
 
       return true
@@ -535,71 +303,6 @@ class ThemeDataService {
       return false
     } finally {
       this.loadingPromise = null
-    }
-  }
-
-  /**
-   * 检查并更新数据
-   */
-  async checkAndUpdateFromAPI(): Promise<boolean> {
-    try {
-      if (this.lastUpdateTime) {
-        const lastUpdateTime = new Date(this.lastUpdateTime).getTime()
-        const twoHours = this.UPDATE_INTERVAL
-        const now = Date.now()
-        const hoursSinceUpdate = (now - lastUpdateTime) / (60 * 60 * 1000)
-
-        if (now - lastUpdateTime < twoHours) {
-          debugLog(
-            `[ThemeDataService] 数据新鲜 (${hoursSinceUpdate.toFixed(1)}小时前)，跳过更新`,
-          )
-          return false
-        } else {
-          debugLog(
-            `[ThemeDataService] 数据已过时 (${hoursSinceUpdate.toFixed(1)}小时前)，开始更新...`,
-          )
-        }
-      }
-
-      const apiData = await this.fetchFromAPI()
-      if (!apiData) return false
-      const mergedTagReasonCount = this.mergeTagAndReasonData(apiData)
-      if (mergedTagReasonCount > 0) {
-        this.syncToDataLayer()
-        this.syncTagsAndReasonsToDataLayer()
-        debugLog(`[ThemeDataService] ✅ 标签/原因增量合并完成: ${mergedTagReasonCount}`)
-        return true
-      }
-
-      debugLog('[ThemeDataService] API 标签/原因无变化，跳过更新')
-      return false
-    } catch (error) {
-      console.warn('[ThemeDataService] 后台更新失败:', error)
-      return false
-    }
-  }
-
-  /**
-   * 启动定时更新
-   */
-  startAutoUpdate(): void {
-    if (this.updateTimer) return
-
-    debugLog('[ThemeDataService] 🚀 启动定时更新 (间隔: 2小时)')
-    this.updateTimer = setInterval(() => {
-      debugLog('[ThemeDataService] 定时任务触发，检查更新...')
-      this.checkAndUpdateFromAPI()
-    }, this.UPDATE_INTERVAL)
-  }
-
-  /**
-   * 停止定时更新
-   */
-  stopAutoUpdate(): void {
-    if (this.updateTimer) {
-      clearInterval(this.updateTimer)
-      this.updateTimer = null
-      debugLog('[ThemeDataService] 🛑 停止定时更新')
     }
   }
 
@@ -732,7 +435,29 @@ class ThemeDataService {
       stockCount: this.stockThemes.size,
       loaded: this.loaded,
       lastUpdate: this.lastUpdateTime,
-      autoUpdateRunning: this.updateTimer !== null,
+      autoUpdateRunning: false,
+    }
+  }
+
+  getLoadStatus(): {
+    source: 'sqlite'
+    loaded: boolean
+    lastUpdate: string | null
+    lastError: string | null
+    themeCount: number
+    mappingCount: number
+  } {
+    const mappingCount = Array.from(this.themeStocks.values()).reduce(
+      (total, stocks) => total + stocks.length,
+      0,
+    )
+    return {
+      source: 'sqlite',
+      loaded: this.loaded,
+      lastUpdate: this.lastUpdateTime,
+      lastError: this.lastError,
+      themeCount: this.themes.size,
+      mappingCount,
     }
   }
 
@@ -745,6 +470,7 @@ class ThemeDataService {
     this.loaded = false
     this.loadingPromise = null
     this.lastUpdateTime = null
+    this.lastError = null
     this.kplThemes = []
     this.currentMappingData = null
     debugLog('[ThemeDataService] 🧹 缓存已清除')
@@ -764,9 +490,6 @@ export const themeMapping = ThemeDataService.getInstance()
 if (typeof window !== 'undefined' && typeof fetch !== 'undefined') {
   themeMapping
     .load()
-    .then(() => {
-      themeMapping.startAutoUpdate()
-    })
     .catch((err) => {
       console.warn('[ThemeDataService] 自动加载失败:', err)
     })

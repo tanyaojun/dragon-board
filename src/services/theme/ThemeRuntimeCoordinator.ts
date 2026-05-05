@@ -1,5 +1,4 @@
 import { dataLayer } from '@/services/DataLayer'
-import { themeMapping } from '@/services/ThemeDataService'
 import { debugLog } from '@/utils/logger'
 import { buildThemeFactors } from './ThemeFactorEngine'
 import { projectThemeStockExposures } from './ThemeStockProjector'
@@ -8,6 +7,7 @@ import { buildThemeEvents } from './ThemeAlertEngine'
 import { buildLegacyBlockThemeEvents } from './ThemeLegacyAlertAdapter'
 import { themeRuntimeStore } from './ThemeRuntimeStore'
 import { jxbkThemeFeed } from './JxbkThemeFeed'
+import { themeRepository } from './ThemeRepository'
 import type {
   ThemeExposureProjection,
   ThemeFactorSnapshot,
@@ -123,7 +123,7 @@ function syncStocks(exposures: ThemeExposureProjection): number {
 }
 
 function buildDefaultContext(timestamp?: number, snapshotId?: string): ThemeSourceContext {
-  const themes = themeMapping.getAllThemes().map((theme) => ({
+  const themes = themeRepository.getThemes().map((theme) => ({
     id: theme.id,
     name: theme.name,
     zsCode: theme.zsCode,
@@ -131,7 +131,7 @@ function buildDefaultContext(timestamp?: number, snapshotId?: string): ThemeSour
   const themeStocks = new Map<string, string[]>()
   const stockThemes = new Map<string, string[]>()
   themes.forEach((theme) => {
-    const stocks = themeMapping.getThemeStocks(theme.id)
+    const stocks = themeRepository.getThemeStocks(theme.id)
     themeStocks.set(theme.id, stocks)
     stocks.forEach((code) => {
       if (!stockThemes.has(code)) stockThemes.set(code, [])

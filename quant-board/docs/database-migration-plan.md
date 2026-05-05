@@ -67,7 +67,7 @@ Supabase schema 不再包含回测、优化和 Golden 表，也不再对研究 J
 
 研究库 `backtest_signals` 也增加题材解释列：`main_theme/theme_heat/theme_contribution/theme_role/theme_support_score/theme_risk_flags_json/theme_reasons_json`。研究库仍是 local-only，不进入 Supabase 备份链路。
 
-题材模块 V8 新增独立题材主库 `themeDATA.db`，包含 `theme_metadata`、`themes`、`theme_stock_mappings`。该库只保存题材基础映射、题材-股票关系、股票-题材反查、标签和原因；不保存题材因子、轮动、预警、回测或快照事实。旧浏览器 `ThemeDataDB/theme_mapping` 只作为历史迁移源，正式读口固定为 `GET /api/themes/mapping`。
+题材模块 V8 新增独立题材主库 `themeDATA.db`，包含 `theme_metadata`、`themes`、`theme_stock_mappings`。该库只保存题材基础映射、题材-股票关系、股票-题材反查、标签和原因；不保存题材因子、轮动、预警、回测或快照事实。旧浏览器 `ThemeDataDB/theme_mapping` 只作为历史迁移源，正式读口固定为 `GET /api/themes/mapping`。V11 后 Dragon Board 运行时不再使用浏览器 IndexedDB、本地静态 JSON 或 `/api/themes/batch` 作为题材兜底事实源。
 
 长期增长控制由 Parquet 归档承担：默认保留最近 90 个交易日的 SQLite 热数据，超过保留窗口的股票/板块明细可归档到 `quant-board/data/archive/snapshots/**`；回测 trades/equity/signals 可归档到 `quant-board/data/archive/research/**`。归档成功必须写入 `archive_manifests`，记录行数、sha256、字节数、本地路径、对象存储 key 和状态。归档校验失败时不得清理 SQLite 明细。
 
@@ -93,7 +93,7 @@ Supabase schema 不再包含回测、优化和 Golden 表，也不再对研究 J
 - failover 写入当前只覆盖正式快照 ingest、数据集 bundle；回测、优化和 Golden 属于本地 research 库，不进入 Supabase failover 目标。数据集导入、历史迁移 API 等仍依赖 SQLite 主库事务，主库不可用时必须明确失败。
 - IndexedDB 已从正式快照读写链路中移除：后续只能作为显式缓存和历史迁移来源；`five_minute` 浏览器本地入口不再保留。完全删除历史或停用迁移工具前必须保留一次人工验收记录，确认 SQLite 四张事实表全量行数与浏览器历史一致。
 - Dragon Board 正式读取不得在 QuantBoard 后端不可用时静默 fallback 到 IndexedDB；读取失败应暴露为后端/API 错误，由 UI 或诊断工具明确提示 SQLite 快照库不可用。
-- Dragon Board 题材基础映射不再以 IndexedDB 作为事实源；`ThemeDataService` 优先读取 QuantBoard `GET /api/themes/mapping`，旧 IndexedDB 只保留为导出迁移来源或显式排障缓存。
+- Dragon Board 题材基础映射不再以 IndexedDB 作为事实源；`ThemeDataService` 只读取 QuantBoard `GET /api/themes/mapping`，旧 IndexedDB 只保留为离线导出迁移来源。QuantBoard 题材库不可用、返回空映射或结构异常时，前端必须显式失败，不回落 `/data/theme_base_mapping.json` 或 `/api/themes/batch`。
 - Supabase 云端 schema 需要用户先在 SQL Editor 执行 `quant-board/backend/data/supabase_schema.sql`；执行前旧云端表会被删除重建，必须确认旧云端数据已经不需要或已另行备份。
 
 ## 存储拓扑
@@ -394,11 +394,11 @@ Dragon Board 前端正式分析入口 `listSnapshotFrameBundles` 必须调用该
 
 ### `GET /api/themes/mapping`
 
-用途：Dragon Board 题材模块读取正式题材基础映射。返回旧 `ThemeMappingData` 兼容结构，并带 `source=sqlite`。
+用途：Dragon Board 题材模块读取正式题材基础映射。返回旧 `ThemeMappingData` 兼容结构，并带 `source=sqlite`。响应必须包含库内已有标签和原因，前端不再执行独立批量补齐。
 
 ### `GET /api/themes/stocks/{theme_id}` / `GET /api/themes/stocks/by-code/{code}` / `GET /api/themes/counts`
 
-用途：题材-股票正查、股票-题材反查和迁移行数验收。
+用途：题材-股票正查、股票-题材反查和迁移行数验收。`counts` 至少包含 `themeCount/mappingCount/stockCount/version/lastUpdate/source`。
 
 ### `POST /api/datasets/import`
 

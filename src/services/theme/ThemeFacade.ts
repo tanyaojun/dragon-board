@@ -1,10 +1,10 @@
 import { dataLayer } from '@/services/DataLayer'
-import { themeMapping } from '@/services/ThemeDataService'
 import type { RotationAnalysis } from '@/types/core'
 import type { JxbkBlockData, JxbkStockData } from '@/types'
 import { buildThemeRotationSummary } from './ThemeRotationEngine'
 import { themeRuntimeStore } from './ThemeRuntimeStore'
 import { jxbkThemeFeed } from './JxbkThemeFeed'
+import { themeRepository } from './ThemeRepository'
 import { refreshRuntime, themeInputSignature } from './ThemeRuntimeCoordinator'
 import type {
   ThemeExposureProjection,
@@ -27,8 +27,8 @@ const JXBK_CONTEXT_TTL = 5 * 60 * 1000
 
 function buildStockThemesMap(): Map<string, string[]> {
   const result = new Map<string, string[]>()
-  themeMapping.getAllThemes().forEach((theme) => {
-    themeMapping.getThemeStocks(theme.id).forEach((code) => {
+  themeRepository.getThemes().forEach((theme) => {
+    themeRepository.getThemeStocks(theme.id).forEach((code) => {
       if (!result.has(code)) result.set(code, [])
       result.get(code)!.push(theme.id)
     })
@@ -40,14 +40,14 @@ export function buildCurrentThemeSourceContext(options?: {
   timestamp?: number
   snapshotId?: string
 }): ThemeSourceContext {
-  const themes = themeMapping.getAllThemes().map((theme) => ({
+  const themes = themeRepository.getThemes().map((theme) => ({
     id: theme.id,
     name: theme.name,
     zsCode: theme.zsCode,
   }))
   const themeStocks = new Map<string, string[]>()
   themes.forEach((theme) => {
-    themeStocks.set(theme.id, themeMapping.getThemeStocks(theme.id))
+    themeStocks.set(theme.id, themeRepository.getThemeStocks(theme.id))
   })
 
   const correlations = new Map<string, any>()
@@ -180,6 +180,10 @@ export async function refreshJxbkAndFactors(options: ThemeRefreshOptions & {
 }
 
 export function getJxbkBlocksCompat(limit?: number): JxbkBlockData[] {
+  return getJxbkBlocks(limit)
+}
+
+export function getJxbkBlocks(limit?: number): JxbkBlockData[] {
   const now = Date.now()
   const contextFresh =
     Boolean(lastSourceContext?.jxbkBlocks?.length) &&
@@ -199,6 +203,10 @@ export function getJxbkLastUpdate(): number | null {
 }
 
 export function getThemeStockMapCompat(): Record<string, JxbkStockData> {
+  return getThemeStockMap()
+}
+
+export function getThemeStockMap(): Record<string, JxbkStockData> {
   const stockMap = jxbkThemeFeed.getStockMap()
   return Object.fromEntries(
     Object.entries(stockMap).map(([code, stock]) => [
@@ -297,6 +305,10 @@ export function toStockThemeCompat(exposure: ThemeStockExposure) {
 }
 
 export function getHotThemesCompat(limit: number = 10) {
+  return getHotThemes(limit)
+}
+
+export function getHotThemes(limit: number = 10) {
   return getThemeFactors()
     .map(toHotThemeCompat)
     .sort((a, b) => b.heatScore - a.heatScore)
@@ -304,6 +316,10 @@ export function getHotThemesCompat(limit: number = 10) {
 }
 
 export function getThemeStocksCompat(themeId: string, limit = 50) {
+  return getThemeStocks(themeId, limit)
+}
+
+export function getThemeStocks(themeId: string, limit = 50) {
   const exposures = getThemeExposureProjection().byTheme.get(themeId) || []
   return {
     total: exposures.length,
@@ -343,10 +359,14 @@ export function getThemeStocksCompat(themeId: string, limit = 50) {
 }
 
 export function getThemeDetailCompat(themeId: string) {
+  return getThemeDetail(themeId)
+}
+
+export function getThemeDetail(themeId: string) {
   const factor = getThemeFactors().find((item) => item.themeId === themeId)
   if (!factor) return null
   const hotTheme = toHotThemeCompat(factor)
-  const stocks = getThemeStocksCompat(themeId, 50)
+  const stocks = getThemeStocks(themeId, 50)
   return {
     id: factor.themeId,
     name: factor.themeName,
@@ -394,12 +414,17 @@ export const themeFacade = {
   getRotationSummary,
   getThemeEvents,
   getRuntimeSnapshot,
+  getJxbkBlocks,
   getJxbkBlocksCompat,
   getJxbkLastUpdate,
+  getThemeStockMap,
   getThemeStockMapCompat,
   refreshJxbkAndFactors,
+  getHotThemes,
   getHotThemesCompat,
+  getThemeDetail,
   getThemeDetailCompat,
+  getThemeStocks,
   getThemeStocksCompat,
   toHotThemeCompat,
   toStockThemeCompat,

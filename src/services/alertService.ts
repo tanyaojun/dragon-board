@@ -345,7 +345,7 @@ class AlertService {
    * 维护 legacy 板块快照。题材/板块预警统一由 ThemeRuntimeCoordinator 生成。
    */
   private updateBlockSnapshot = async () => {
-    const blocks = themeFacade.getJxbkBlocksCompat()
+    const blocks = themeFacade.getJxbkBlocks()
     const timestamp = Date.now()
 
     for (const block of blocks) {
@@ -367,7 +367,7 @@ class AlertService {
    * 检查个股预警
    */
   private checkStocks = async () => {
-    const stockMap = themeFacade.getThemeStockMapCompat()
+    const stockMap = themeFacade.getThemeStockMap()
     const stocks = Object.values(stockMap) as any[]
 
     for (const stock of stocks) {

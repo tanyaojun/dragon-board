@@ -88,7 +88,7 @@ class ExportService {
   async exportSectors(options: ExportOptionsInput = {}): Promise<ExportResult> {
     return this.debouncedExport('sectors', options, async () => {
       const data: ExportData = {
-        sectors: themeFacade.getHotThemesCompat(50),
+        sectors: themeFacade.getHotThemes(50),
         timestamp: Date.now(),
       }
 
@@ -124,7 +124,7 @@ class ExportService {
       const data: ExportData = {
         stocks: this.getCurrentStocks(),
         leaders: this.getCurrentLeaders(),
-        sectors: themeFacade.getHotThemesCompat(50),
+        sectors: themeFacade.getHotThemes(50),
         market: {
           sentiment: dragonBreathAnalyzer.getMarketSentiment(),
           marketData: dragonBreathAnalyzer.getMarketData(),
