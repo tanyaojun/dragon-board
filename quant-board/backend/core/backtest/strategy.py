@@ -33,7 +33,28 @@ STRATEGY_DEFINITIONS: list[dict[str, Any]] = [
     },
 ]
 
+THEME_STRATEGY_DEFINITIONS: list[dict[str, Any]] = [
+    {
+        "key": "theme_rotation",
+        "label": "题材轮动策略",
+        "description": "基于题材生命周期强度买卖高暴露股票。入场：ignition/expansion/mainline；退出：cooling/reversal、拥挤过高。",
+    },
+    {
+        "key": "leader_theme_confirmation",
+        "label": "龙头题材确认策略",
+        "description": "龙头股必须获得强题材确认才买入；题材退潮或拥挤过高时降级为观察。",
+    },
+    {
+        "key": "hotlist_theme_confluence",
+        "label": "热榜题材共振策略",
+        "description": "RankTrend 候选 + 题材强度/生命周期共振；题材噪声暴露、拥挤背离时过滤。",
+    },
+]
+
+THEME_STRATEGY_NAMES = {definition["key"] for definition in THEME_STRATEGY_DEFINITIONS}
+
 SUPPORTED_STRATEGY_NAMES = {definition["key"] for definition in STRATEGY_DEFINITIONS}
+SUPPORTED_STRATEGY_NAMES |= THEME_STRATEGY_NAMES
 
 CONTROL_STRATEGIES = [
     definition for definition in STRATEGY_DEFINITIONS if definition["key"] != DEFAULT_STRATEGY_NAME

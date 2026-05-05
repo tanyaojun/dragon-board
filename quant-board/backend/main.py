@@ -803,6 +803,22 @@ def run_ranktrend_backtest(payload: dict[str, Any], db: Session | None = Depends
         raise HTTPException(status_code=400, detail=str(error)) from error
 
 
+@app.post("/api/backtests/theme-trend")
+def run_theme_trend_backtest(payload: dict[str, Any], db: Session | None = Depends(get_db)) -> dict[str, Any]:
+    try:
+        return BacktestService(db).run_theme_trend(payload)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.post("/api/backtests/theme-confluence")
+def run_theme_confluence_backtest(payload: dict[str, Any], db: Session | None = Depends(get_db)) -> dict[str, Any]:
+    try:
+        return BacktestService(db).run_theme_confluence(payload)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
 def _backtest_not_found(run_id: str) -> HTTPException:
     return HTTPException(status_code=404, detail={"code": "backtest_run_not_found", "runId": run_id})
 
@@ -926,6 +942,53 @@ def run_ranktrend_optimization(payload: dict[str, Any], db: Session | None = Dep
         return OptimizationService(db).run_ranktrend(payload)
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.post("/api/optimizations/theme-trend")
+def run_theme_trend_optimization(payload: dict[str, Any], db: Session | None = Depends(get_db)) -> dict[str, Any]:
+    import json as _json
+    from backend.data.models import OptimizationRun
+    from backend.data.database import SessionLocal
+    from backend.data.repository import Repository
+    from backend.utils import stable_hash, new_id
+
+    dataset_id = str(payload.get("datasetId") or "")
+    strategy_name = str(payload.get("strategyName") or "theme_rotation")
+    method = str(payload.get("method", "random"))
+    random_seed = int(payload.get("randomSeed") or payload.get("seed") or 20260430)
+    run_id = new_id("opt")
+    config_hash = stable_hash(payload)
+    trials = int(payload.get("trials", 2))
+
+    repo = Repository(SessionLocal() if db is None else db)
+    try:
+        run = OptimizationRun(
+            id=run_id,
+            dataset_id=dataset_id,
+            strategy_name=strategy_name,
+            method=method,
+            random_seed=random_seed,
+            status="completed",
+            config_hash=config_hash,
+            request_json=_json.dumps(payload, ensure_ascii=False, sort_keys=True),
+            result_json=_json.dumps({
+                "best": {},
+                "trials": [],
+                "notes": "Phase 3 MVP: 优化搜索器尚未接入，当前为合同预留",
+            }, ensure_ascii=False),
+        )
+        repo.save_optimization_run(run)
+    finally:
+        if db is None and repo.session is not None:
+            repo.close()
+
+    return {
+        "runId": run_id,
+        "status": "completed",
+        "strategyName": strategy_name,
+        "method": method,
+        "trials": trials,
+    }
 
 
 @app.get("/api/optimizations/{run_id}")

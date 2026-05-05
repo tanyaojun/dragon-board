@@ -579,3 +579,47 @@
   - `test_replay_sequence_quality_report_warns_time_disorder`：乱序检测
   - `test_replay_sequence_typed_roundtrips`：replay_sequence_typed 返回完整 ThemeTrendResult
 - 验证结果：65 题材测试通过，全量 99 通过。
+
+## 2026-05-05 V12 Phase 3 实施
+
+- 目标：题材策略回测与 API/CLI 合同落地，修复 4 个 TDD 前瞻测试红灯。
+- 已扩展策略定义（`backend/core/backtest/strategy.py`）：
+  - 新增 `THEME_STRATEGY_DEFINITIONS`：`theme_rotation`（题材轮动）、`leader_theme_confirmation`（龙头题材确认）、`hotlist_theme_confluence`（热榜题材共振）
+  - `SUPPORTED_STRATEGY_NAMES` 扩充 `|= THEME_STRATEGY_NAMES`
+- 已新增服务方法（`backend/services.py`）：
+  - `BacktestService.run_theme_trend()`：加载 frame bundles → 运行 `ThemeTrendPythonEngine.replay_sequence()` → 写入 `backtest_runs` + 归一化 signals/quality → 返回 `analysisMode: "theme_trend"` + `themeTrend.factorVersion`
+  - `BacktestService.run_theme_confluence()`：加载 frame bundles → 运行 ThemeTrend 引擎 + RankTrend 控制组基线 → 返回 `analysisMode: "theme_confluence"` + `themeTrend.rankTrendControl`
+- 已新增 API 路由（`backend/main.py`）：
+  - `POST /api/backtests/theme-trend` — 运行纯 ThemeTrend 回测
+  - `POST /api/backtests/theme-confluence` — 运行 RankTrend + ThemeTrend 共振回测
+  - `POST /api/optimizations/theme-trend` — 启动 ThemeTrend 参数优化（返回 `runId / status / strategyName`）
+- 已新增 CLI 命令（`backend/cli.py`）：
+  - `run-theme-trend` — 参数含 `--dataset-id / --strategy-name / --max-theme-exposure / --crowding-block-threshold` 等
+  - `run-theme-confluence` — 参数含 `--rank-trend-weight / --theme-weight / --max-theme-crowding` 等
+  - `optimize-theme-trend` — 参数含 `--method / --trials / --objective`
+  - `optimize-theme-confluence` — 参数含 `--method / --trials / --objective / --parameter-grid / --no-wait`
+- TDD 验证：4 个前瞻测试（test_quant_board.py）全部由红转绿：
+  - `test_theme_trend_backtest_api_returns_theme_strategy_report` ✓
+  - `test_theme_confluence_backtest_api_keeps_ranktrend_visible` ✓
+  - `test_theme_optimization_api_returns_running_theme_run` ✓
+  - `test_cli_exposes_theme_trend_commands` ✓
+- 验证结果：130 全量通过，0 失败。
+
+## 2026-05-05 V12 Phase 3 Code Review 修复
+
+处理了外部 code review 报告的全部高中低优先级发现：
+
+**高优:**
+1. 优化 API/CLI stub → `/api/optimizations/theme-trend` 和 CLI `optimize-theme-trend`/`optimize-theme-confluence` 均改为写入真实 `OptimizationRun` 数据库记录，`GET /api/optimizations/{run_id}` 可正常查询。result 中标注 `"notes": "Phase 3 MVP: 优化搜索器尚未接入"`。
+2. CLI 参数转发 → `cmd_run_theme_trend` 和 `cmd_run_theme_confluence` 将全部 CLI 参数（`lookbackBars/persistenceBars/breadthMinStocks/minThemeCoverage/maxThemeExposure` 等）转发到服务层 payload。
+
+**中优:**
+3. bare `except Exception` → `run_theme_confluence` 中 RankTrend 控制组异常改为 `except Exception as exc`，降级结果中包含 `reason: str(exc)[:200]`。
+4. 内联 import → `ThemeTrendConfig`/`ThemeTrendPythonEngine` 的 import 从方法体提升到 `services.py` 模块顶部。
+
+**低优:**
+5. `_summary_response` metadata 重复键 → 记录为与 `run_ranktrend` 一致的既有模式，留后续统一清理。
+6. `run_theme_trend` result dict 中冗余 `isCompact`/`notes` → 移除（`_summary_response` 已统一设置）。
+7. Config 不一致 → `run_theme_confluence` 补 `minFrames: 2`，与 `run_theme_trend` 对齐。
+
+- 验证结果：130 全量通过，0 失败。

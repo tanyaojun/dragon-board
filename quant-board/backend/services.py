@@ -5,6 +5,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from backend.analysis.ranktrend import RankTrendConfig, RankTrendPythonEngine
+from backend.analysis.theme_trend import ThemeTrendConfig, ThemeTrendPythonEngine
 from backend.core.backtest import BacktestEngine, normalize_strategy_name
 from backend.data.models import BacktestRun, GoldenRankTrendCase, OptimizationRun
 from backend.data.quality_gate import evaluate_snapshot_quality
@@ -203,6 +204,251 @@ class BacktestService:
                 "strategyName": strategy_name,
                 "snapshotType": snapshot_type,
                 "randomSeed": request_meta["random_seed"],
+                "configHash": run.config_hash,
+            },
+        )
+
+    def run_theme_trend(self, payload: dict[str, Any]) -> dict[str, Any]:
+        dataset_id = str(camel_get(payload, "dataset_id", "datasetId", ""))
+        snapshot_type = str(camel_get(payload, "snapshot_type", "snapshotType", "half_hour"))
+        strategy_name = str(camel_get(payload, "strategy_name", "strategyName", "theme_rotation"))
+        from backend.core.backtest.strategy import THEME_STRATEGY_NAMES
+        if strategy_name not in THEME_STRATEGY_NAMES:
+            raise ValueError(f"unsupported theme strategy: {strategy_name}")
+        random_seed = int(camel_get(payload, "random_seed", "randomSeed", 20260430))
+
+        frames = self.repo.load_frame_bundles(
+            dataset_id, snapshot_type=snapshot_type,
+        )
+        if not frames:
+            raise ValueError(f"dataset has no frames for {snapshot_type}: {dataset_id}")
+
+
+        engine_config = {
+            "crowdedRiskThreshold": int(camel_get(payload, "crowdingBlockThreshold", "crowdingBlockThreshold", 75)),
+            "minFrames": 2,
+        }
+        config = ThemeTrendConfig.from_patch(engine_config)
+        theme_result = ThemeTrendPythonEngine().replay_sequence(frames, config=config)
+
+        quality_report = theme_result.get("qualityReport", {})
+        factors = theme_result.get("factors", [])
+        signals = theme_result.get("signals", [])
+        exposures = theme_result.get("exposures", [])
+
+        run_id = new_id("bt")
+        request_meta = {
+            **payload,
+            "dataset_id": dataset_id,
+            "snapshot_type": snapshot_type,
+            "strategy_name": strategy_name,
+            "random_seed": random_seed,
+            "engine_config": engine_config,
+        }
+
+        result: dict[str, Any] = {
+            "strategyName": strategy_name,
+            "analysisMode": "theme_trend",
+            "themeTrend": {
+                "factorVersion": "theme-factor-v12",
+                "signalVersion": "theme-signal-v12",
+                "factorCount": len(factors),
+                "exposureCount": len(exposures),
+                "signalCount": len(signals),
+                "factors": factors[:120],
+                "signals": signals[:120],
+                "exposures": exposures[:120],
+            },
+            "signals": signals,
+            "signalCount": len(signals),
+            "dataQuality": {
+                "passed": not quality_report.get("blocked", False),
+                "researchGrade": "degraded" if quality_report.get("warnings") else "research_ready",
+                "frameCount": quality_report.get("frameCount", 0),
+                "warnings": quality_report.get("warnings", []),
+            },
+        }
+
+        trading_dates = sorted({str(f.get("tradingDate") or "") for f in frames if f.get("tradingDate")})
+        run = BacktestRun(
+            id=run_id,
+            dataset_id=dataset_id,
+            strategy_name=strategy_name,
+            snapshot_type=snapshot_type,
+            random_seed=random_seed,
+            config_hash=stable_hash(request_meta),
+            date_start=trading_dates[0] if trading_dates else None,
+            date_end=trading_dates[-1] if trading_dates else None,
+            request_json=dumps_json_field(request_meta),
+            result_json=dumps_json_field(result),
+        )
+        self.repo.save_backtest_run(run)
+
+        if signals:
+            signal_rows = [
+                {
+                    "snapshotId": s.get("snapshotId", ""),
+                    "tradingDate": s.get("tradingDate", ""),
+                    "code": "",
+                    "name": s.get("themeName", ""),
+                    "candidateTier": s.get("lifecycle", ""),
+                    "signal": s.get("signal", "watch"),
+                    "confidence": s.get("score", 0.0),
+                    "rank": 0,
+                    "reasons": [f"theme_lifecycle:{s.get('lifecycle', '')}"],
+                    "riskFlags": [s.get("risk", "")] if s.get("risk") != "none" else [],
+                    "mainTheme": s.get("themeName", ""),
+                    "themeHeat": 0.0,
+                    "themeContribution": 0.0,
+                    "themeRole": "",
+                    "themeSupportScore": s.get("score", 0.0),
+                    "themeRiskFlags": [],
+                    "themeReasons": [f"lifecycle:{s.get('lifecycle', '')}"],
+                }
+                for s in signals
+            ]
+            self.repo.save_backtest_signal_rows(run_id, signal_rows)
+
+        self.repo.save_backtest_quality_report(
+            run_id, result.get("dataQuality", {}), quality_report,
+        )
+
+        return self._summary_response(
+            run_id, result,
+            {
+                "datasetId": dataset_id,
+                "dataset_id": dataset_id,
+                "strategyName": strategy_name,
+                "snapshotType": snapshot_type,
+                "randomSeed": random_seed,
+                "configHash": run.config_hash,
+            },
+        )
+
+    def run_theme_confluence(self, payload: dict[str, Any]) -> dict[str, Any]:
+        dataset_id = str(camel_get(payload, "dataset_id", "datasetId", ""))
+        snapshot_type = str(camel_get(payload, "snapshot_type", "snapshotType", "half_hour"))
+        strategy_name = str(camel_get(payload, "strategy_name", "strategyName", "hotlist_theme_confluence"))
+        from backend.core.backtest.strategy import THEME_STRATEGY_NAMES
+        if strategy_name not in THEME_STRATEGY_NAMES:
+            raise ValueError(f"unsupported confluence strategy: {strategy_name}")
+        random_seed = int(camel_get(payload, "random_seed", "randomSeed", 20260430))
+
+        frames = self.repo.load_frame_bundles(
+            dataset_id, snapshot_type=snapshot_type,
+        )
+        if not frames:
+            raise ValueError(f"dataset has no frames for {snapshot_type}: {dataset_id}")
+
+
+        config = ThemeTrendConfig.from_patch(
+            {
+                "crowdedRiskThreshold": int(camel_get(payload, "maxThemeCrowding", "maxThemeCrowding", 85)),
+                "minFrames": 2,
+            }
+        )
+        theme_result = ThemeTrendPythonEngine().replay_sequence(frames, config=config)
+
+        rank_trend_control: dict[str, Any] = {}
+        try:
+            rank_frames = self.repo.load_frames(
+                dataset_id, snapshot_type=snapshot_type, include_payload=True,
+            )
+            if rank_frames:
+                rank_config = RankTrendConfig()
+                rank_signals = RankTrendPythonEngine(rank_config).replay(rank_frames)
+                rank_trend_control = {
+                    "signalCount": len(rank_signals),
+                    "description": "RankTrend-only 控制组基线",
+                }
+        except Exception as exc:
+            rank_trend_control = {
+                "error": "RankTrend control baseline unavailable",
+                "reason": str(exc)[:200],
+            }
+
+        run_id = new_id("bt")
+        request_meta = {
+            **payload,
+            "dataset_id": dataset_id,
+            "snapshot_type": snapshot_type,
+            "strategy_name": strategy_name,
+            "random_seed": random_seed,
+        }
+
+        quality_report = theme_result.get("qualityReport", {})
+        signals = theme_result.get("signals", [])
+        result: dict[str, Any] = {
+            "strategyName": strategy_name,
+            "analysisMode": "theme_confluence",
+            "themeTrend": {
+                "factorVersion": "theme-factor-v12",
+                "signalVersion": "theme-signal-v12",
+                "signals": signals[:120],
+                "signalCount": len(signals),
+                "rankTrendControl": rank_trend_control,
+            },
+            "signals": signals,
+            "signalCount": len(signals),
+            "dataQuality": {
+                "passed": not quality_report.get("blocked", False),
+                "researchGrade": "degraded" if quality_report.get("warnings") else "research_ready",
+                "warnings": quality_report.get("warnings", []),
+            },
+            "isCompact": True,
+            "notes": [f"共振策略：RankTrend 候选为主，ThemeTrend 辅助排序/拥挤降级。完整结果已落库：{run_id}"],
+        }
+
+        trading_dates = sorted({str(f.get("tradingDate") or "") for f in frames if f.get("tradingDate")})
+        run = BacktestRun(
+            id=run_id,
+            dataset_id=dataset_id,
+            strategy_name=strategy_name,
+            snapshot_type=snapshot_type,
+            random_seed=random_seed,
+            config_hash=stable_hash(request_meta),
+            date_start=trading_dates[0] if trading_dates else None,
+            date_end=trading_dates[-1] if trading_dates else None,
+            request_json=dumps_json_field(request_meta),
+            result_json=dumps_json_field(result),
+        )
+        self.repo.save_backtest_run(run)
+        if signals:
+            signal_rows = [
+                {
+                    "snapshotId": s.get("snapshotId", ""),
+                    "tradingDate": s.get("tradingDate", ""),
+                    "code": "",
+                    "name": s.get("themeName", ""),
+                    "candidateTier": s.get("lifecycle", ""),
+                    "signal": s.get("signal", "watch"),
+                    "confidence": s.get("score", 0.0),
+                    "rank": 0,
+                    "reasons": [f"confluence:{s.get('lifecycle', '')}"],
+                    "riskFlags": [s.get("risk", "")] if s.get("risk") != "none" else [],
+                    "mainTheme": s.get("themeName", ""),
+                    "themeHeat": 0.0,
+                    "themeContribution": 0.0,
+                    "themeRole": "",
+                    "themeSupportScore": s.get("score", 0.0),
+                    "themeRiskFlags": [],
+                    "themeReasons": [f"confluence_lifecycle:{s.get('lifecycle', '')}"],
+                }
+                for s in signals
+            ]
+            self.repo.save_backtest_signal_rows(run_id, signal_rows)
+        self.repo.save_backtest_quality_report(
+            run_id, result.get("dataQuality", {}), quality_report,
+        )
+
+        return self._summary_response(
+            run_id, result,
+            {
+                "datasetId": dataset_id,
+                "dataset_id": dataset_id,
+                "strategyName": strategy_name,
+                "snapshotType": snapshot_type,
+                "randomSeed": random_seed,
                 "configHash": run.config_hash,
             },
         )

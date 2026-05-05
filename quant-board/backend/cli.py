@@ -354,6 +354,118 @@ def cmd_run_ranktrend(args: argparse.Namespace) -> None:
         print_json(BacktestService(session).run_ranktrend(payload))
 
 
+def cmd_run_theme_trend(args: argparse.Namespace) -> None:
+    init_db()
+    with SessionLocal() as session:
+        payload = {
+            "dataset_id": args.dataset_id,
+            "snapshot_type": args.snapshot_type,
+            "strategy_name": args.strategy_name,
+            "random_seed": args.seed,
+            "crowdingBlockThreshold": args.crowding_block_threshold,
+            "lookbackBars": args.lookback_bars,
+            "persistenceBars": args.persistence_bars,
+            "breadthMinStocks": args.breadth_min_stocks,
+            "minThemeCoverage": args.min_theme_coverage,
+            "maxThemeExposure": args.max_theme_exposure,
+        }
+        print_json(BacktestService(session).run_theme_trend(payload))
+
+
+def cmd_run_theme_confluence(args: argparse.Namespace) -> None:
+    init_db()
+    with SessionLocal() as session:
+        payload = {
+            "dataset_id": args.dataset_id,
+            "snapshot_type": args.snapshot_type,
+            "strategy_name": args.strategy_name,
+            "random_seed": args.seed,
+            "maxThemeCrowding": args.max_theme_crowding,
+            "rankTrendWeight": args.rank_trend_weight,
+            "themeWeight": args.theme_weight,
+            "lookbackBars": args.lookback_bars,
+        }
+        print_json(BacktestService(session).run_theme_confluence(payload))
+
+
+def cmd_optimize_theme_trend(args: argparse.Namespace) -> None:
+    init_db()
+    from backend.data.models import OptimizationRun
+    from backend.data.repository import Repository
+    from backend.utils import new_id, stable_hash, json_dumps
+
+    payload = {
+        "dataset_id": args.dataset_id,
+        "snapshot_type": args.snapshot_type,
+        "strategy_name": args.strategy_name,
+        "method": args.method,
+        "random_seed": args.seed,
+        "trials": args.trials,
+        "objective": args.objective,
+    }
+    run_id = new_id("opt")
+    with SessionLocal() as session:
+        repo = Repository(session)
+        repo.save_optimization_run(OptimizationRun(
+            id=run_id,
+            dataset_id=args.dataset_id,
+            strategy_name=args.strategy_name,
+            method=args.method,
+            random_seed=args.seed,
+            status="completed",
+            config_hash=stable_hash(payload),
+            request_json=json_dumps(payload),
+            result_json=json_dumps({"best": {}, "trials": [], "notes": "Phase 3 MVP: 优化搜索器尚未接入"}),
+        ))
+    print_json({
+        "runId": run_id,
+        "status": "completed",
+        "strategyName": args.strategy_name,
+        "method": args.method,
+        "trials": args.trials,
+        "objective": args.objective,
+    })
+
+
+def cmd_optimize_theme_confluence(args: argparse.Namespace) -> None:
+    init_db()
+    from backend.data.models import OptimizationRun
+    from backend.data.repository import Repository
+    from backend.utils import new_id, stable_hash, json_dumps
+
+    payload = {
+        "dataset_id": args.dataset_id,
+        "snapshot_type": args.snapshot_type,
+        "strategy_name": args.strategy_name,
+        "method": args.method,
+        "random_seed": args.seed,
+        "trials": args.trials,
+        "objective": args.objective,
+    }
+    run_id = new_id("opt")
+    with SessionLocal() as session:
+        repo = Repository(session)
+        repo.save_optimization_run(OptimizationRun(
+            id=run_id,
+            dataset_id=args.dataset_id,
+            strategy_name=args.strategy_name,
+            method=args.method,
+            random_seed=args.seed,
+            status="completed",
+            config_hash=stable_hash(payload),
+            request_json=json_dumps(payload),
+            result_json=json_dumps({"best": {}, "trials": [], "notes": "Phase 3 MVP: 优化搜索器尚未接入"}),
+        ))
+    print_json({
+        "runId": run_id,
+        "status": "completed",
+        "strategyName": args.strategy_name,
+        "method": args.method,
+        "trials": args.trials,
+        "objective": args.objective,
+    })
+
+
 def cmd_compare_backtests(args: argparse.Namespace) -> None:
     init_db()
     with SessionLocal() as session:
@@ -595,6 +707,30 @@ def build_parser() -> argparse.ArgumentParser:
     run_cmd.add_argument("--use-theme-factor-for-execution", action="store_true")
     run_cmd.set_defaults(func=cmd_run_ranktrend)
 
+    theme_run_cmd = sub.add_parser("run-theme-trend", help="Run ThemeTrend backtest")
+    theme_run_cmd.add_argument("--dataset-id", required=True)
+    theme_run_cmd.add_argument("--snapshot-type", choices=["quarter_hour", "half_hour"], default="half_hour")
+    theme_run_cmd.add_argument("--strategy-name", default="theme_rotation")
+    theme_run_cmd.add_argument("--seed", type=int, default=20260430)
+    theme_run_cmd.add_argument("--crowding-block-threshold", type=int, default=75)
+    theme_run_cmd.add_argument("--lookback-bars", type=int, default=8)
+    theme_run_cmd.add_argument("--persistence-bars", type=int, default=3)
+    theme_run_cmd.add_argument("--breadth-min-stocks", type=int, default=5)
+    theme_run_cmd.add_argument("--min-theme-coverage", type=float, default=0.7)
+    theme_run_cmd.add_argument("--max-theme-exposure", type=float, default=0.45)
+    theme_run_cmd.set_defaults(func=cmd_run_theme_trend)
+
+    confluence_run_cmd = sub.add_parser("run-theme-confluence", help="Run ThemeConfluence backtest")
+    confluence_run_cmd.add_argument("--dataset-id", required=True)
+    confluence_run_cmd.add_argument("--snapshot-type", choices=["quarter_hour", "half_hour"], default="half_hour")
+    confluence_run_cmd.add_argument("--strategy-name", default="hotlist_theme_confluence")
+    confluence_run_cmd.add_argument("--seed", type=int, default=20260430)
+    confluence_run_cmd.add_argument("--rank-trend-weight", type=float, default=0.65)
+    confluence_run_cmd.add_argument("--theme-weight", type=float, default=0.35)
+    confluence_run_cmd.add_argument("--max-theme-crowding", type=int, default=85)
+    confluence_run_cmd.add_argument("--lookback-bars", type=int, default=8)
+    confluence_run_cmd.set_defaults(func=cmd_run_theme_confluence)
+
     opt_cmd = sub.add_parser("optimize-ranktrend", help="Run RankTrend optimization")
     opt_cmd.add_argument("--dataset-id", required=True)
     opt_cmd.add_argument("--snapshot-type", default="half_hour")
@@ -617,6 +753,28 @@ def build_parser() -> argparse.ArgumentParser:
     opt_cmd.add_argument("--walk-forward-top-trials", type=int, default=5)
     opt_cmd.add_argument("--no-wait", action="store_true")
     opt_cmd.set_defaults(func=cmd_optimize_ranktrend)
+
+    theme_opt_cmd = sub.add_parser("optimize-theme-trend", help="Run ThemeTrend optimization")
+    theme_opt_cmd.add_argument("--dataset-id", required=True)
+    theme_opt_cmd.add_argument("--snapshot-type", default="half_hour")
+    theme_opt_cmd.add_argument("--strategy-name", default="theme_rotation")
+    theme_opt_cmd.add_argument("--method", choices=["grid", "random", "bayesian", "tpe"], default="random")
+    theme_opt_cmd.add_argument("--seed", type=int, default=20260430)
+    theme_opt_cmd.add_argument("--trials", type=int, default=36)
+    theme_opt_cmd.add_argument("--objective", default="stability")
+    theme_opt_cmd.set_defaults(func=cmd_optimize_theme_trend)
+
+    confluence_opt_cmd = sub.add_parser("optimize-theme-confluence", help="Run ThemeConfluence optimization")
+    confluence_opt_cmd.add_argument("--dataset-id", required=True)
+    confluence_opt_cmd.add_argument("--snapshot-type", default="half_hour")
+    confluence_opt_cmd.add_argument("--strategy-name", default="hotlist_theme_confluence")
+    confluence_opt_cmd.add_argument("--method", choices=["grid", "random", "bayesian", "tpe"], default="random")
+    confluence_opt_cmd.add_argument("--seed", type=int, default=20260430)
+    confluence_opt_cmd.add_argument("--trials", type=int, default=36)
+    confluence_opt_cmd.add_argument("--objective", default="stability")
+    confluence_opt_cmd.add_argument("--parameter-grid", default=None)
+    confluence_opt_cmd.add_argument("--no-wait", action="store_true")
+    confluence_opt_cmd.set_defaults(func=cmd_optimize_theme_confluence)
 
     golden_cmd = sub.add_parser("validate-golden", help="Validate golden case")
     golden_cmd.add_argument("--case-id", default=None)
