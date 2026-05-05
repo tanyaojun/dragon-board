@@ -255,6 +255,7 @@ export interface LimitData {
   erban: number
   sanban: number
   sibanPlus: number
+  maxBoard?: number  // 最高连板数, fetchLimitData 侧根据原始行 N002 填
 }
 
 export interface ZhabanData {

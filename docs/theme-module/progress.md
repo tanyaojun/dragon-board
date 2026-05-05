@@ -413,3 +413,23 @@
   - `JxbkThemeFeed.loadSectorStocks()` 收到畸形 `item[100]` 时不解析出脏 blocks/价格。
 - 局部验证：
   - `pnpm exec vitest run src/services/theme/__tests__/JxbkThemeFeed.test.ts src/services/__tests__/themeLegacyAdapters.test.ts`：2 个测试文件、7 个测试通过。
+
+## 2026-05-05 题材模块 V10 启动
+
+- 用户要求把 IndexedDB 的 `ThemeDataDB` 数据迁移到 SQLite `themeDATA.db`。
+- 已新增 `docs/theme-module/plans/task_plan_v10.md`。
+- 初步发现：
+  - 工作区干净。
+  - 仓库内未发现现成的 `ThemeDataDB` 导出 JSON。
+  - 浏览器候选 IndexedDB 目录存在：Chrome `http_localhost_5173.indexeddb.leveldb` 与 `http_127.0.0.1_5173.indexeddb.leveldb`。
+  - `public/data/theme_base_mapping.json` 和 `dist/data/theme_base_mapping.json` 存在，但它们是静态映射文件，不一定等同于 IndexedDB 当前值。
+- 用户确认 V10 源应使用 Chrome `http_localhost_5173.indexeddb.leveldb`。
+- 迁移执行记录：
+  - `http_localhost_5173.indexeddb.leveldb` 中 `ThemeDataDB/theme_mapping/theme_data` 是 Blink IndexedDB value wrapper；完整 payload 位于同名 `http_localhost_5173.indexeddb.blob`。
+  - 已从 blob `2/00/1d` 解码出 `theme_data`，版本与更新时间均为 `2026-05-04T10:51:20.267Z`。
+  - 已生成迁移导入文件：`quant-board/data/staging/theme_v10_http_localhost_5173_ThemeDataDB_import.json`。
+  - 导入目标：`quant-board/data/warehouse/themeDATA.db`。
+  - 首次导入结果：新增 237 个题材、12215 条题材-股票关系，去重股票 4166 只。
+  - 再次导入结果：新增 0 个题材、0 条映射，更新 237 个题材，确认导入幂等。
+  - `verify-themes --path data\staging\theme_v10_http_localhost_5173_ThemeDataDB_import.json` 返回 `ok=true`，expected/actual 均为 237/12215/4166。
+  - 基础读口抽样：`DeepSeek概念(302)` 返回 69 只股票；`300033` 可反查到 `大金融`，标签和原因来自 SQLite。

@@ -876,6 +876,7 @@ class DataLayer {
       emotionValue: data.marketData.emotionValue || 0,
       emotionStatus: data.marketData.emotionStatus || '震荡',
       timestamp: data.marketData.timestamp || Date.now(),
+      maxContinuousDays: data.marketData.maxContinuousDays,  // 连板高度（保持 undefined 以支持回退链）
       largeCapChange: data.marketData.largeCapChange || 0,  // 大票
       microCapChange: data.marketData.microCapChange || 0,   // 微盘
       passRate: data.marketData.passRate || { to2: 0, to3: 0, to4: 0 }, // 晋级率

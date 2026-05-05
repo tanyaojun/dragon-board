@@ -135,11 +135,18 @@ function correlationScore(context: ThemeSourceContext, themeId: string, stocks: 
 }
 
 function crowdingRiskScore(block: JxbkBlockData | undefined, heatScore: number, stocks: ThemeSourceContext['stocks']): number {
-  const volumeRatio = Math.max(toFiniteNumber(block?.volumeRatio), ...stocks.map((stock) => toFiniteNumber((stock as any).volumeRatio)))
+  // 使用成分股量比均值而非最大值，避免单只异常放量股推高整个题材的拥挤度
+  const blockVR = toFiniteNumber(block?.volumeRatio)
+  const stockVRs = stocks.map((s) => Math.min(toFiniteNumber((s as any).volumeRatio), 10))
+  const avgVolumeRatio =
+    stockVRs.length > 0
+      ? stockVRs.reduce((a, b) => a + b, 0) / stockVRs.length
+      : blockVR
+  const cappedVolumeRatio = Math.max(blockVR, avgVolumeRatio)
   const hotStockRatio = stocks.length
     ? stocks.filter((stock) => toFiniteNumber(stock.change) >= 7).length / stocks.length
     : 0
-  return clamp(round((heatScore >= 85 ? 24 : 0) + Math.max(0, volumeRatio - 2.5) * 12 + hotStockRatio * 28))
+  return clamp(round((heatScore >= 85 ? 24 : 0) + Math.max(0, cappedVolumeRatio - 2.5) * 12 + hotStockRatio * 28))
 }
 
 function persistenceScore(context: ThemeSourceContext, themeId: string, themeName: string): number {

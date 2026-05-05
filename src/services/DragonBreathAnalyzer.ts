@@ -440,6 +440,7 @@ export class DragonBreathAnalyzer {
       if (result?.ResultSets && result.ResultSets.length >= 2) {
         const rows = result.ResultSets[1].Content || []
         const limitStats: LimitData = { yiban: 0, erban: 0, sanban: 0, sibanPlus: 0 }
+        let maxBoard = 0
 
         rows.forEach((row: any[]) => {
           const n002 = parseInt(row[1]) || 0  // N002 是第2个字段（索引1）
@@ -449,7 +450,10 @@ export class DragonBreathAnalyzer {
           else if (n002 === 2) limitStats.erban = n003
           else if (n002 === 3) limitStats.sanban = n003
           else if (n002 >= 4) limitStats.sibanPlus += n003
+
+          if (n002 > maxBoard) maxBoard = n002
         })
+        limitStats.maxBoard = maxBoard || undefined
 
         return limitStats
       }
@@ -837,6 +841,9 @@ export class DragonBreathAnalyzer {
       if (todayLimitResult.status === 'fulfilled' && todayLimitResult.value) {
         const todayLimit = todayLimitResult.value
         this.state.marketData.limitData = todayLimit
+        if (todayLimit.maxBoard) {
+          this.state.marketData.maxContinuousDays = todayLimit.maxBoard
+        }
       }
 
       // 处理昨日涨停数据
