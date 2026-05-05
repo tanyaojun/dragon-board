@@ -52,3 +52,11 @@
 - 剩余兼容边界：
   - `sectorAnalyzer.ts` 文件仍保留旧公开 API 和 fallback 逻辑，供控制台、旧面板和旧调试脚本兼容。
   - `alertService.checkStocks()` 仍读取 JXBK 成分股数据，但通过 `themeFacade.getThemeStockMapCompat()`，不再直接访问 DataLayer 私有 state。
+
+## V6 审计遗留处理记录
+
+- `ThemeFacade` 两条刷新路径：改为由 `refreshRuntimeState()` 包装 `ThemeRuntimeCoordinator.refreshRuntime()`，`refresh()/refreshThemeFacadeState()` 只保留兼容包装语义。
+- `alertService` 并行题材事件链：`checkThemeEvents()` 消费 runtime result，legacy block event 由 coordinator 生成；`checkBlocks()` 仅维护板块快照，避免同帧二次生成板块事件。
+- `ThemeSyncAdapter` 重复方法：`syncThemesToStocks()` 委托 `syncData()`，保留调用方命名兼容。
+- `sectorAnalyzer` 旧同步路径：`syncThemesToStocks()/forceRefresh/forceRefreshJxbk/syncData` 主路径委托 `themeFacade.refreshRuntime()`。
+- 仍保留的 legacy 边界：`sectorAnalyzer` 中旧 JXBK 拉取、成分股懒加载和旧热度 fallback 尚未删除，等待用户 review 后再决定是否进入 V7 清理。

@@ -364,7 +364,11 @@ class RotationService {
    * 分析所有板块
    */
   analyzeAll(): RotationAnalysisCompat {
-    const facadeResult = themeFacade.refresh({ emitAlerts: false })
+    const facadeResult = themeFacade.refreshRuntime({
+      source: 'rotationService',
+      context: themeFacade.buildCurrentThemeSourceContext(),
+      emitAlerts: false,
+    })
     if (facadeResult.rotationSummary) {
       const analysis = facadeResult.rotationSummary as RotationAnalysisCompat
       dataLayer.updateRotationAnalysis?.(analysis)

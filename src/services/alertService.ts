@@ -17,7 +17,6 @@ import type { StockAlert, AlertType, AlertLevel } from '@/types/core'
 import { v4 as uuidv4 } from 'uuid'
 import { themeFacade } from './theme/ThemeFacade'
 import type { ThemeEvent } from './theme/types'
-import { buildLegacyBlockThemeEvents } from './theme/ThemeLegacyAlertAdapter'
 
 // ========== 股票工具类（增强版） ==========
 class StockTools {
@@ -284,7 +283,7 @@ class AlertService {
   async checkAll() {
     try {
       this.themeEventFrameKeys.clear()
-      await Promise.all([this.checkThemeEvents(), this.checkBlocks(), this.checkStocks()])
+      await Promise.all([this.checkThemeEvents(), this.updateBlockSnapshot(), this.checkStocks()])
       this.cleanExpiredAlerts()
       this.lastCheck = Date.now()
     } catch (error) {
@@ -293,7 +292,7 @@ class AlertService {
   }
 
   private checkThemeEvents = async () => {
-    const result = themeFacade.refresh({ emitAlerts: false })
+    const result = await themeFacade.refreshRuntime({ source: 'alertService', emitAlerts: true })
     for (const event of result.events) {
       await this.ingestThemeEvent(event)
     }
@@ -343,28 +342,11 @@ class AlertService {
   }
 
   /**
-   * 检查板块预警
+   * 维护 legacy 板块快照。题材/板块预警统一由 ThemeRuntimeCoordinator 生成。
    */
-  private checkBlocks = async () => {
+  private updateBlockSnapshot = async () => {
     const blocks = themeFacade.getJxbkBlocksCompat()
-    const stockMap = themeFacade.getThemeStockMapCompat()
     const timestamp = Date.now()
-    const legacyEvents = buildLegacyBlockThemeEvents({
-      timestamp,
-      blocks,
-      stockMap,
-    })
-
-    for (const event of legacyEvents) {
-      try {
-        const alertType = this.alertTypeForThemeEvent(event)
-        const dedupeKey = this.themeAlertDedupeKey(alertType, event.themeId, event.themeName)
-        if (this.themeEventFrameKeys.has(dedupeKey)) continue
-        await this.ingestThemeEvent(event)
-      } catch (e) {
-        console.error(`[AlertService] 处理题材 legacy 事件 ${event.id} 失败:`, e)
-      }
-    }
 
     for (const block of blocks) {
       this.blocksSnapshot.set(block.code, {

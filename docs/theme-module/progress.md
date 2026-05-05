@@ -315,3 +315,18 @@
   - `pnpm test:ranktrend`：通过，9 个测试文件、95 个测试通过。
   - `pnpm test`：通过，28 个测试文件、193 个测试通过。
   - `pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false`：通过。
+
+## 2026-05-05 题材模块 V6 启动
+
+- 用户要求实施《题材模块优化升级方案 V6：刷新主链单一化与 Legacy 退场》。
+- 本轮严格保留未提交状态，完成后交给用户 review。
+- 已新增 `task_plan_v6.md`。
+- 已开始执行：
+  - `ThemeFacade.refreshRuntimeState()` 包装 runtime coordinator，并同步 facade 读口缓存。
+  - `alertService.checkThemeEvents()` 改为消费 `themeFacade.refreshRuntime({ source: 'alertService' })`。
+  - `checkBlocks()` 退为 legacy 板块快照维护，不再二次生成 legacy block event。
+  - `ThemeSyncAdapter.syncThemesToStocks()` 委托 `syncData()`。
+  - `sectorAnalyzer` 公开刷新/同步入口进一步委托 `themeFacade.refreshRuntime()`。
+- TDD 红绿记录：
+  - 新增测试后首次运行 `pnpm exec vitest run src/services/theme/__tests__/ThemeRuntimeCoordinator.test.ts src/services/__tests__/alertService.test.ts`：按预期失败，暴露 `themeFacade.refreshRuntime()` 未同步 facade 读口、`alertService` 未走统一 runtime 事件链。
+  - 实现后重跑同命令：通过，2 个测试文件、7 个测试通过。

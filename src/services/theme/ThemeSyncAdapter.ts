@@ -17,10 +17,7 @@ export const themeSyncAdapter = {
   },
 
   async syncThemesToStocks() {
-    return themeFacade.refreshRuntime({
-      source: 'themeRuntime',
-      syncStocks: true,
-    })
+    return this.syncData()
   },
 }
 

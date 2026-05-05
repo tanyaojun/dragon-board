@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { dataLayer } from '@/services/DataLayer'
+import { refreshThemeFacadeState, themeFacade } from '../ThemeFacade'
 import { jxbkThemeFeed } from '../JxbkThemeFeed'
 import { refreshRuntime } from '../ThemeRuntimeCoordinator'
 import { themeRuntimeStore } from '../ThemeRuntimeStore'
@@ -89,5 +90,29 @@ describe('ThemeRuntimeCoordinator', () => {
     expect(stock.mainTheme).toBe('人工智能')
     expect(stock.themeHeat).toBeGreaterThan(0)
     expect(stock.themes?.[0]?.themeContribution).toBeGreaterThanOrEqual(0)
+  })
+
+  it('keeps facade read models in sync when refreshing through refreshRuntime', () => {
+    const result = themeFacade.refreshRuntime({
+      source: 'test',
+      context: context(),
+      emitAlerts: false,
+    })
+
+    expect(themeFacade.getThemeFactors()).toEqual(result.factors)
+    expect(themeFacade.getRotationSummary()).toEqual(result.rotationSummary)
+    expect(themeFacade.getRuntimeSnapshot().inputSignature).toBe(result.inputSignature)
+  })
+
+  it('keeps legacy refresh facade as a wrapper around the same runtime chain', () => {
+    const result = refreshThemeFacadeState({
+      source: 'test',
+      context: context(),
+      emitAlerts: false,
+    })
+
+    expect(result.factors).toEqual(themeFacade.getRuntimeSnapshot().factors)
+    expect(result.events).toEqual(themeFacade.getRuntimeSnapshot().events)
+    expect(result.inputSignature).toBe(themeFacade.getRuntimeSnapshot().inputSignature)
   })
 })

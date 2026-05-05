@@ -38,7 +38,7 @@
 └── e2e/                     # Playwright 端到端测试
 ```
 
-项目级 skills 放置规则：
+项目级 skills 与过程文档放置规则：
 
 - 后续新增或沉淀的 `SKILL.md`、skill 使用说明、skill 模板、workflow/checklist 等 AI 协作能力文档，统一放入根目录 `skills/`。
 - `skills/` 只承载 AI 协作流程、工具使用方法、review/debug/test/plan 等 agent 能力文档，不放业务源码、不放运行时配置、不放测试夹具、不放临时输出。
@@ -46,6 +46,8 @@
 - 根目录 `SKILLS.md` 只作为 skills 总索引和使用指南；详细 skill 正文迁移或新增到 `skills/**/SKILL.md`。
 - 不再把新的 skill 文档散落到根目录、`docs/`、`src/`、`quant-board/` 或用户本机 `.codex/skills` 路径中；若需要把外部 skill 引入项目，应复制/整理到 `skills/` 后再引用。
 - 修改或新增项目级 skill 时，应同步检查根 `AGENTS.md` 和 `SKILLS.md` 是否需要更新入口说明。
+- 项目实施计划、阶段进度、审计发现和复盘记录不是 skill，不放入 `skills/`，应放入对应业务文档目录。例如题材模块文档统一放入 `docs/theme-module/`。
+- 不在根目录新增 `task_plan*.md`、`findings.md`、`progress.md` 等过程文件；如需使用 planning-with-files 产物，应在任务结束前迁移到对应 `docs/<topic>/` 目录。
 
 Dragon Board `src/` 目录边界：
 
@@ -123,6 +125,7 @@ quant-board/
 - 根目录 `DragonBoardLauncher.exe` 是本地启动器产物，日常可保留在工作区，但 `.gitignore` 已禁止新增提交 `*.exe`。
 - 不要提交根目录构建产物或缓存：`dist/`、`.tmp/`、`*.tsbuildinfo`、`node_modules/`、`coverage/`、`playwright-report/`、`test-results/`。
 - 不新增一次性说明、截图、调试输出或临时 JSON 到根目录；需要业务文档放 `docs/`，需要项目级 skill/AI 协作流程放 `skills/`，需要脚本放 `scripts/`，需要诊断工具放 `src/devtools/diagnostics/` 或对应子项目目录。
+- 不在根目录长期保留阶段计划和过程日志。`task_plan*.md`、`findings.md`、`progress.md` 应迁移到对应专题文档目录，例如 `docs/theme-module/`。
 
 核心前端服务优先从这些文件定位：
 
@@ -282,6 +285,7 @@ QuantBoard 前端默认代理 `http://localhost:8000`，开发端口为 `5174`�
 - 根 `AGENTS.md` 只放跨项目入口规则、当前口径和常用命令。
 - 根 `SKILLS.md` 只放项目级 skills 总索引和使用指南；具体 skill 正文、模板和引用材料统一放 `skills/`。
 - Dragon Board 主项目细节写入根 `docs/`。
+- 业务专题的计划、审计发现、进度归档应放在 `docs/<topic>/`，不要散落在根目录；题材模块使用 `docs/theme-module/`。
 - QuantBoard 细节写入 `quant-board/docs/`，不要散落到后端或前端 README 中。
 - 发现旧文档仍把 Dragon Board 根项目描述为回测平台时，应删除或改为当前 QuantBoard 口径。
 - 修改默认值、策略合同、API 合同或数据表字段时，必须同步更新相关专题文档。

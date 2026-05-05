@@ -73,12 +73,11 @@ export function refreshThemeFactors(context: ThemeSourceContext = buildCurrentTh
   factors: ThemeFactorSnapshot[]
   exposures: ThemeExposureProjection
 } {
-  const result = refreshRuntime({
+  refreshRuntimeState({
     source: 'themeFacade',
     context,
     emitAlerts: false,
   } as ThemeRefreshOptions & { source: string; context: ThemeSourceContext })
-  applyRuntimeResult(context, result)
   return {
     factors: lastFactors,
     exposures: lastExposureProjection,
@@ -93,6 +92,45 @@ function applyRuntimeResult(context: ThemeSourceContext, result: ThemeRuntimeRef
   lastSourceSignature = result.inputSignature
 }
 
+function buildContextForRuntimeResult(options: ThemeRefreshOptions, result: ThemeRuntimeRefreshResult) {
+  return buildCurrentThemeSourceContext({
+    timestamp: result.timestamp || options.timestamp,
+    snapshotId: options.snapshotId,
+  })
+}
+
+export function refreshRuntimeState(
+  options: ThemeRefreshOptions & { context: ThemeSourceContext },
+): ThemeRuntimeRefreshResult
+export function refreshRuntimeState(options: ThemeRefreshOptions): Promise<ThemeRuntimeRefreshResult>
+export function refreshRuntimeState(
+  options: ThemeRefreshOptions,
+): ThemeRuntimeRefreshResult | Promise<ThemeRuntimeRefreshResult> {
+  const apply = (result: ThemeRuntimeRefreshResult, context: ThemeSourceContext) => {
+    applyRuntimeResult(context, result)
+    return result
+  }
+
+  if (options.context) {
+    const result = refreshRuntime({
+      ...options,
+      source: options.source || 'themeFacade',
+      context: options.context,
+    } as ThemeRefreshOptions & { source: string; context: ThemeSourceContext })
+    return apply(result, options.context)
+  }
+
+  const result = refreshRuntime({
+    ...options,
+    source: options.source || 'themeFacade',
+  } as ThemeRefreshOptions & { source: string })
+
+  if (result instanceof Promise) {
+    return result.then((resolved) => apply(resolved, buildContextForRuntimeResult(options, resolved)))
+  }
+  return apply(result, buildContextForRuntimeResult(options, result))
+}
+
 export function refreshThemeFacadeState(options: ThemeRefreshOptions & {
   context?: ThemeSourceContext
 } = {}) {
@@ -102,12 +140,11 @@ export function refreshThemeFacadeState(options: ThemeRefreshOptions & {
       timestamp: options.timestamp,
       snapshotId: options.snapshotId,
     })
-  const result = refreshRuntime({
+  const result = refreshRuntimeState({
     ...options,
     source: options.source || 'themeFacade',
     context,
   } as ThemeRefreshOptions & { source: string; context: ThemeSourceContext })
-  applyRuntimeResult(context, result)
 
   return {
     factors: lastFactors,
@@ -134,16 +171,11 @@ export async function refreshJxbkAndFactors(options: ThemeRefreshOptions & {
       context,
     })
   }
-  const result = await refreshRuntime({
+  const result = await refreshRuntimeState({
     ...options,
     source: options.source || 'ui',
     forceJxbk: !options.skipJxbkRefresh,
   })
-  const nextContext = buildCurrentThemeSourceContext({
-    timestamp: result.timestamp,
-    snapshotId: options.snapshotId,
-  })
-  applyRuntimeResult(nextContext, result)
   return result
 }
 
@@ -182,8 +214,6 @@ export function getThemeStockMapCompat(): Record<string, JxbkStockData> {
 export function getRuntimeSnapshot() {
   return themeRuntimeStore.getSnapshot()
 }
-
-export const refreshRuntimeState = refreshRuntime
 
 export function getThemeFactors(): ThemeFactorSnapshot[] {
   if (lastFactors.length === 0) {

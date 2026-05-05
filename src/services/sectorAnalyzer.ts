@@ -1151,205 +1151,13 @@ export async function updateFullThemeMapping(): Promise<{ success: boolean; mess
 
 // ========== 同步到股票 ==========
 export function syncThemesToStocks(): number {
-  const snapshot = themeFacade.getRuntimeSnapshot()
-  if (snapshot.exposures.byCode.size > 0) {
-    const result = themeFacade.refreshRuntime({
-      source: 'sectorAnalyzer',
-      context: themeFacade.buildCurrentThemeSourceContext(),
-      syncStocks: true,
-      emitAlerts: false,
-    })
-    return result.syncedStockCount
-  }
-
-  const stocks = dataLayer.getStocks()
-  if (!stocks.length) return 0
-  const exposureByCode = themeFacade.getThemeExposureProjection().byCode
-
-  const updates: Array<{
-    code: string
-    themes: any[]
-    mainTheme?: string
-    themeHeat: number
-    themeLevel: string
-  }> = []
-  let updatedCount = 0
-
-  stocks.forEach((stock) => {
-    const projectedExposures = exposureByCode.get(stock.code) || []
-    if (projectedExposures.length > 0) {
-      const mergedThemeMap = new Map<string, any>()
-      projectedExposures.forEach((exposure) => {
-        const theme = themeFacade.toStockThemeCompat(exposure)
-        mergedThemeMap.set(String(theme.id || theme.name), theme)
-      })
-
-      const staticThemeIds = themeMapping.getStockThemes(stock.code)
-      staticThemeIds.forEach((themeId) => {
-        const theme = themeMapping.getTheme(themeId)
-        if (!theme || mergedThemeMap.has(theme.id)) return
-        const metrics = dataLayer.getThemeMetrics(themeId)
-        mergedThemeMap.set(theme.id, {
-          id: theme.id,
-          name: theme.name,
-          zsCode: theme.zsCode || '',
-          source: 'static',
-          heatScore: metrics?.heatScore || 0,
-          heatLevel: metrics?.heatLevel || '冷',
-          correlation: metrics?.correlation || 0,
-        })
-      })
-
-      const realtimeBlocks = dataLayer.getJxbkStock(stock.code)?.blocks || []
-      realtimeBlocks.forEach((blockName) => {
-        if (mergedThemeMap.has(blockName)) return
-        const theme = themeMapping.getAllThemes().find((item) => item.name === blockName)
-        if (theme && !mergedThemeMap.has(theme.id)) {
-          const metrics = dataLayer.getThemeMetrics(theme.id)
-          mergedThemeMap.set(theme.id, {
-            id: theme.id,
-            name: blockName,
-            zsCode: theme.zsCode || '',
-            source: 'realtime',
-            heatScore: metrics?.heatScore || 0,
-            heatLevel: metrics?.heatLevel || '温',
-            correlation: metrics?.correlation || 0,
-          })
-          return
-        }
-        mergedThemeMap.set(blockName, {
-          id: blockName,
-          name: blockName,
-          zsCode: '',
-          source: 'realtime',
-          heatScore: 0,
-          heatLevel: '温',
-          correlation: 0,
-        })
-      })
-
-      const newThemes = sortStockThemes(Array.from(mergedThemeMap.values())).slice(
-        0,
-        CONFIG.MAX_THEMES_PER_STOCK,
-      )
-      const nextThemeSnapshot = resolvePrimaryStockTheme(newThemes)
-      const currentSignature = buildStockThemeSignature(stock.themes || [])
-      const nextSignature = buildStockThemeSignature(newThemes)
-
-      if (
-        currentSignature !== nextSignature ||
-        (stock.mainTheme || '') !== (nextThemeSnapshot.mainTheme || '') ||
-        (stock.themeHeat || 0) !== nextThemeSnapshot.themeHeat ||
-        (stock.themeLevel || '冷') !== nextThemeSnapshot.themeLevel
-      ) {
-        updates.push({
-          code: stock.code,
-          themes: newThemes,
-          mainTheme: nextThemeSnapshot.mainTheme,
-          themeHeat: nextThemeSnapshot.themeHeat,
-          themeLevel: nextThemeSnapshot.themeLevel,
-        })
-        updatedCount++
-      }
-      return
-    }
-
-    // 1. 从 themeMapping 获取静态映射的题材
-    const staticThemeIds = themeMapping.getStockThemes(stock.code)
-
-    // 2. 从 jxbk 获取实时板块数据
-    const jxbkStock = dataLayer.getJxbkStock(stock.code)
-    const realtimeBlocks = jxbkStock?.blocks || []
-
-    // 3. 合并两个来源的题材（使用 Map 去重）
-    const mergedThemeMap = new Map<string, any>()
-
-    // 先添加静态映射的题材
-    staticThemeIds.forEach((themeId) => {
-      const theme = themeMapping.getTheme(themeId)
-      if (theme && !mergedThemeMap.has(theme.id)) {
-        const metrics = dataLayer.getThemeMetrics(themeId)
-        mergedThemeMap.set(theme.id, {
-          id: theme.id,
-          name: theme.name,
-          zsCode: theme.zsCode || '',
-          source: 'static',
-          heatScore: metrics?.heatScore || 0,
-          heatLevel: metrics?.heatLevel || '冷',
-          correlation: metrics?.correlation || 0,
-        })
-      }
-    })
-
-    // 再添加实时板块数据（可能覆盖或补充）
-    realtimeBlocks.forEach((blockName) => {
-      if (!mergedThemeMap.has(blockName)) {
-        // 尝试从 themeMapping 获取题材信息
-        const theme = themeMapping.getAllThemes().find((t) => t.name === blockName)
-        if (theme) {
-          const metrics = dataLayer.getThemeMetrics(theme.id)
-          mergedThemeMap.set(theme.id, {
-            id: theme.id,
-            name: blockName,
-            zsCode: theme.zsCode || '',
-            source: 'realtime',
-            heatScore: metrics?.heatScore || 0,
-            heatLevel: metrics?.heatLevel || '温',
-            correlation: metrics?.correlation || 0,
-          })
-        } else {
-          // 没有在静态映射中找到，直接使用板块名称作为题材
-          mergedThemeMap.set(blockName, {
-            id: blockName,
-            name: blockName,
-            zsCode: '',
-            source: 'realtime',
-            heatScore: 0,
-            heatLevel: '温',
-            correlation: 0,
-          })
-        }
-      }
-    })
-
-    // 题材列表必须先按热度和联动性排主次，再决定主题材字段。
-    const newThemes = sortStockThemes(Array.from(mergedThemeMap.values())).slice(
-      0,
-      CONFIG.MAX_THEMES_PER_STOCK,
-    )
-    const nextThemeSnapshot = resolvePrimaryStockTheme(newThemes)
-
-    const currentThemes = stock.themes || []
-    const currentSignature = buildStockThemeSignature(currentThemes)
-    const nextSignature = buildStockThemeSignature(newThemes)
-
-    if (
-      currentSignature !== nextSignature ||
-      (stock.mainTheme || '') !== (nextThemeSnapshot.mainTheme || '') ||
-      (stock.themeHeat || 0) !== nextThemeSnapshot.themeHeat ||
-      (stock.themeLevel || '冷') !== nextThemeSnapshot.themeLevel
-    ) {
-      updates.push({
-        code: stock.code,
-        themes: newThemes,
-        mainTheme: nextThemeSnapshot.mainTheme,
-        themeHeat: nextThemeSnapshot.themeHeat,
-        themeLevel: nextThemeSnapshot.themeLevel,
-      })
-      updatedCount++
-    }
+  const result = themeFacade.refreshRuntime({
+    source: 'sectorAnalyzer',
+    context: themeFacade.buildCurrentThemeSourceContext(),
+    syncStocks: true,
+    emitAlerts: false,
   })
-
-  if (updates.length > 0) {
-    if (typeof (dataLayer as any).updateStockThemes === 'function') {
-      ;(dataLayer as any).updateStockThemes(updates)
-      debugLog(`[SectorAnalyzer] 同步题材: ${updates.length}只股票更新 (静态+实时)`)
-    } else {
-      console.warn('[sectorAnalyzer] dataLayer.updateStockThemes 方法不存在')
-    }
-  }
-
-  return updatedCount
+  return result.syncedStockCount
 }
 
 /**
@@ -1452,7 +1260,11 @@ export async function getThemeDetail(
 
   if (options?.force) {
     await loadSectorStocks(theme.id, theme.name)
-    themeFacade.refresh({ emitAlerts: false })
+    themeFacade.refreshRuntime({
+      source: 'sectorAnalyzer',
+      context: themeFacade.buildCurrentThemeSourceContext(),
+      emitAlerts: false,
+    })
   }
 
   const compat = themeFacade.getThemeDetailCompat(theme.id) as ThemeDetail | null
@@ -1626,28 +1438,41 @@ export const sectorAnalyzer = {
 
   async runUpdate(): Promise<void> {
     if (state.destroyed) return
-    await updateFullThemeMapping()
-    // ✅ 更新后确保题材同步
-    syncThemesToStocks()
+    await themeFacade.refreshRuntime({
+      source: 'sectorAnalyzer',
+      forceJxbk: true,
+      syncStocks: true,
+      emitAlerts: false,
+    })
   },
 
   async forceRefresh(): Promise<void> {
     if (state.destroyed) return
-    await fetchJxbkData()
-    await fetchJxbkStocksForTopBlocks()
-    updateThemeHeat()
-    // ✅ 强制刷新后同步题材
-    syncThemesToStocks()
+    await themeFacade.refreshRuntime({
+      source: 'sectorAnalyzer',
+      forceJxbk: true,
+      syncStocks: true,
+      emitAlerts: false,
+    })
   },
 
   async forceRefreshJxbk(): Promise<void> {
     // Deprecated compatibility entrypoint. UI callers should prefer themeFacade.refreshJxbkAndFactors().
-    await fetchJxbkData()
+    await themeFacade.refreshRuntime({
+      source: 'sectorAnalyzer',
+      forceJxbk: true,
+      syncStocks: true,
+      emitAlerts: false,
+    })
   },
 
   async syncData(): Promise<void> {
     if (state.destroyed) return
-    await updateFullThemeMapping()
+    await themeFacade.refreshRuntime({
+      source: 'sectorAnalyzer',
+      syncStocks: true,
+      emitAlerts: false,
+    })
   },
 
   destroy: () => {

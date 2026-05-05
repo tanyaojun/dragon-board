@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../theme/ThemeFacade', () => ({
   themeFacade: {
-    refresh: vi.fn(() => ({
+    refresh: vi.fn(() => ({ events: [] })),
+    refreshRuntime: vi.fn(() => ({
       events: [
         {
           id: 'theme_fund_inflow:BKAI:1713751200000',
@@ -30,6 +31,20 @@ vi.mock('../theme/ThemeFacade', () => ({
           riskFlags: ['mapping_missing'],
           reasons: ['题材映射缺失'],
         },
+        {
+          id: 'theme_crowding_high:BKAI:1713751200000',
+          type: 'theme_crowding_high',
+          level: 'warning',
+          themeId: 'BKAI',
+          themeName: '人工智能',
+          timestamp: 1713751200000,
+          source: 'theme_legacy_adapter',
+          alertType: 'volume_surge',
+          stockCodes: ['000001', '000002'],
+          metrics: { volumeRatio: 3.2 },
+          riskFlags: ['volume_surge'],
+          reasons: ['板块量比放大'],
+        },
       ],
     })),
     getJxbkBlocksCompat: vi.fn(() => [
@@ -54,6 +69,7 @@ vi.mock('../theme/ThemeFacade', () => ({
 
 import { dataLayer } from '../DataLayer'
 import { alertService } from '../alertService'
+import { themeFacade } from '../theme/ThemeFacade'
 
 describe('alertService V3 compatibility', () => {
   beforeEach(() => {
@@ -61,7 +77,7 @@ describe('alertService V3 compatibility', () => {
     alertService.destroy()
   })
 
-  it('keeps legacy block alerts while ingesting theme events', async () => {
+  it('ingests unified runtime theme events without rebuilding legacy block events', async () => {
     dataLayer.updateJxbkBlocks([
       {
         code: 'BKAI',
@@ -83,7 +99,10 @@ describe('alertService V3 compatibility', () => {
     await alertService.checkAll()
 
     const alerts = alertService.getAlerts()
+    expect(themeFacade.refreshRuntime).toHaveBeenCalledTimes(1)
+    expect(themeFacade.refresh).not.toHaveBeenCalled()
     expect(alerts.filter((alert) => alert.type === 'money_flow' && alert.themeName === '人工智能')).toHaveLength(1)
+    expect(alerts.filter((alert) => alert.type === 'volume_surge' && alert.themeName === '人工智能')).toHaveLength(1)
     expect(alerts.some((alert) => alert.type === 'volume_surge' && alert.themeName === '人工智能')).toBe(true)
     expect(alerts.some((alert) => alert.type === 'data_anomaly' && alert.themeName === '映射缺失')).toBe(true)
   })
