@@ -12,13 +12,13 @@
 
 `dragon-board` 是一个股票市场综合工作台，包含五个子系统：
 
-| 子系统 | 目录 | 技术栈 | 用途 |
-|-----------|-----------|-------|---------|
-| Dragon Board（根项目） | `src/` | Vue 3 + TS + Vite | 主看板：热榜、情绪、题材轮动、龙头识别 |
-| 代理服务 | `proxy-server/` | Node.js | 股票数据 HTTP 代理，默认端口 `3000` |
-| Python 行情桥 | `python-bridge/` | Python + mootdx + WebSocket | 通达信行情数据桥，`ws://127.0.0.1:8765/ws/quotes` |
-| QuantBoard | `quant-board/` | Python FastAPI + SQLite + Vue | 回测、优化、参数搜索、报告。后端端口 `8000`，前端端口 `5174` |
-| TDX L2 Helper | `tools/TdxL2Helper/` | .NET 8 x86 | 通达信 DLL/L2 深度行情探针（L2 尚未生产就绪） |
+| 子系统                 | 目录                 | 技术栈                        | 用途                                                         |
+| ---------------------- | -------------------- | ----------------------------- | ------------------------------------------------------------ |
+| Dragon Board（根项目） | `src/`               | Vue 3 + TS + Vite             | 主看板：热榜、情绪、题材轮动、龙头识别                       |
+| 代理服务               | `proxy-server/`      | Node.js                       | 股票数据 HTTP 代理，默认端`3000`                             |
+| Python 行情桥          | `python-bridge/`     | Python + mootdx + WebSocket   | 通达信行情数据桥，`ws://127.0.0.1:8765/ws/quotes`            |
+| QuantBoard             | `quant-board/`       | Python FastAPI + SQLite + Vue | 回测、优化、参数搜索、报告。后端端口 `8000`，前端端口 `5174` |
+| TDX L2 Helper          | `tools/TdxL2Helper/` | .NET 8 x86                    | 通达信 DLL/L2 深度行情探针（L2 尚未生产绪）                  |
 
 根 Vite 开发服务器将 `/api` 代理到 `http://localhost:3000`（代理服务）。QuantBoard 前端代理到 `http://localhost:8000`。
 
@@ -82,6 +82,7 @@ src/
 ```
 
 **关键规则：**
+
 - 服务层暴露公开 facade；组件不得调用服务私有成员或直接拼远端 API。
 - `types/` 放类型、接口和类型推导必需的 `as const` 数据。运行时配置放 `config/`。
 - `stores/` 只做 UI 状态；不得将 Pinia 当作持久化层或业务逻辑层。
@@ -109,6 +110,7 @@ quant-board/
 ```
 
 **关键规则：**
+
 - 所有回测、优化、参数搜索、交易模拟和报告展示属于 `quant-board/` — 禁止放入根 `src/services/`。
 - `src/services/RankTrendAnalyzer.ts` 和 `src/services/rankTrend/**` 是 TypeScript golden 标准，Python 移植必须对齐。
 - SQLite 是主存储；Supabase 是备份存储。二者必须按 `quant-board/docs/database-migration-plan.md` 保持 schema 同构。
