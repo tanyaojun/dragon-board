@@ -194,6 +194,7 @@ class AlertService {
   // 快照（只保留最近的数据用于对比）
   private blocksSnapshot: Map<string, any> = new Map()
   private stocksSnapshot: Map<string, any> = new Map()
+  private themeEventFrameKeys: Set<string> = new Set()
 
   private constructor() {
     this.startAutoCheck()
@@ -281,6 +282,7 @@ class AlertService {
    */
   async checkAll() {
     try {
+      this.themeEventFrameKeys.clear()
       await Promise.all([this.checkThemeEvents(), this.checkBlocks(), this.checkStocks()])
       this.cleanExpiredAlerts()
       this.lastCheck = Date.now()
@@ -301,8 +303,12 @@ class AlertService {
     if (event.type === 'theme_crowding_high') return 'volume_surge'
     if (event.type === 'theme_cooling') return 'strength_plunge'
     if (event.type === 'theme_leader_fall') return ALERT_TYPES.LEADER_FALL
-    if (event.type === 'theme_mapping_quality_warning') return ALERT_TYPES.MONEY_FLOW
+    if (event.type === 'theme_mapping_quality_warning') return ALERT_TYPES.DATA_ANOMALY
     return 'strength_surge'
+  }
+
+  private themeAlertDedupeKey(type: AlertType, themeId?: string, themeName?: string): string {
+    return `${type}:${themeId || themeName || ''}`
   }
 
   private async ingestThemeEvent(event: ThemeEvent) {
@@ -315,6 +321,9 @@ class AlertService {
       theme_leader_fall: `${event.themeName} 龙头转弱`,
       theme_mapping_quality_warning: `${event.themeName} 题材数据质量提示`,
     }
+    this.themeEventFrameKeys.add(
+      this.themeAlertDedupeKey(this.alertTypeForThemeEvent(event), event.themeId, event.themeName),
+    )
     return this.createAlert({
       type: this.alertTypeForThemeEvent(event),
       level: event.level,
@@ -375,16 +384,21 @@ class AlertService {
         // 2. 资金流向预警
         const moneyFlow = SectorTools.getMoneyFlowLevel(block.mainNetInflow || 0)
         if (moneyFlow) {
-          const isInflow = moneyFlow.type === 'inflow'
-          await this.createAlert({
-            type: ALERT_TYPES.MONEY_FLOW,
-            level: moneyFlow.level,
-            title: isInflow ? `💰 ${block.name} 巨额流入` : `💧 ${block.name} 巨额流出`,
-            message: `${block.name}板块主力${isInflow ? '净流入' : '净流出'} ${this.formatMoney(block.mainNetInflow)}`,
-            themeId: block.code,
-            themeName: block.name,
-            snapshot: { netInflow: block.mainNetInflow },
-          })
+          const dedupeKey = this.themeAlertDedupeKey(ALERT_TYPES.MONEY_FLOW, block.code, block.name)
+          if (this.themeEventFrameKeys.has(dedupeKey)) {
+            // ThemeEvent 已覆盖同一题材同类型预警，legacy block alert 不再重复入库。
+          } else {
+            const isInflow = moneyFlow.type === 'inflow'
+            await this.createAlert({
+              type: ALERT_TYPES.MONEY_FLOW,
+              level: moneyFlow.level,
+              title: isInflow ? `💰 ${block.name} 巨额流入` : `💧 ${block.name} 巨额流出`,
+              message: `${block.name}板块主力${isInflow ? '净流入' : '净流出'} ${this.formatMoney(block.mainNetInflow)}`,
+              themeId: block.code,
+              themeName: block.name,
+              snapshot: { netInflow: block.mainNetInflow },
+            })
+          }
         }
 
         // 3. 强度变化预警

@@ -4,7 +4,7 @@ import { debugLog } from '@/utils/logger'
 
 import { useStockStore } from '@/stores/stock'
 import { dragonAnalyzer } from './DragonAnalyzer'
-import { sectorAnalyzer } from './sectorAnalyzer'
+import { themeFacade } from './theme/ThemeFacade'
 import { dragonBreathAnalyzer } from './DragonBreathAnalyzer'
 import { dataLayer } from './DataLayer'
 import { EventManager } from '@/utils/eventManager'
@@ -88,7 +88,7 @@ class ExportService {
   async exportSectors(options: ExportOptionsInput = {}): Promise<ExportResult> {
     return this.debouncedExport('sectors', options, async () => {
       const data: ExportData = {
-        sectors: sectorAnalyzer.getHotThemes(50),
+        sectors: themeFacade.getHotThemesCompat(50),
         timestamp: Date.now(),
       }
 
@@ -124,7 +124,7 @@ class ExportService {
       const data: ExportData = {
         stocks: this.getCurrentStocks(),
         leaders: this.getCurrentLeaders(),
-        sectors: sectorAnalyzer.getHotThemes(50),
+        sectors: themeFacade.getHotThemesCompat(50),
         market: {
           sentiment: dragonBreathAnalyzer.getMarketSentiment(),
           marketData: dragonBreathAnalyzer.getMarketData(),

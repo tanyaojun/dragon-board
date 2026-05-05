@@ -758,6 +758,7 @@ export type AlertType =
   | 'strength_surge' // 强度飙升
   | 'strength_plunge' // 强度骤降
   | 'money_flow' // 资金异动
+  | 'data_anomaly' // 数据异常
   | 'volume_surge' // 放量异动
   | 'rocket_launch' // 火箭发射
   | 'waterfall_dive' // 瀑布跳水

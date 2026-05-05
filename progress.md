@@ -78,6 +78,60 @@
   - `pnpm exec vitest run src/services/theme/__tests__/ThemeFactorEngine.test.ts src/services/snapshot/__tests__/themeFactorProjection.test.ts src/services/hotness/__tests__/StockHotnessCalculator.test.ts`：通过，15 个测试通过。
   - `pnpm test -- src/services/theme src/services/hotness src/services/snapshot`：通过，12 个测试文件、58 个测试通过。
   - `pnpm test:ranktrend`：通过，9 个测试文件、95 个测试通过。
+
+## 2026-05-05 题材模块 V3 最终提交
+
+- V3 已复核并提交：
+  - `0c10354 feat: 收口题材前端领域服务`
+- 提交前验证：
+  - `pnpm test`：通过，26 个测试文件、183 个测试通过。
+  - `pnpm test:ranktrend`：通过，9 个测试文件、95 个测试通过。
+  - `pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false`：通过。
+  - `git diff --cached --check`：通过。
+- 提交后工作区干净。
+
+## 2026-05-05 题材模块 V4 启动
+
+- 用户要求实施《题材模块优化升级方案 V4》。
+- 已新增 `task_plan_v4.md`。
+- V4 目标：前端调用迁移、旧逻辑退场、可观测性与一致性验收。
+- 当前原则：不改 QuantBoard schema，不删除旧服务文件，UI 字段保持兼容。
+
+## 2026-05-05 题材模块 V4 实施
+
+- 已扩展 `themeFacade` UI 读口：
+  - `getJxbkBlocksCompat/getJxbkLastUpdate/getThemeStockMapCompat/getRuntimeSnapshot/refreshJxbkAndFactors`。
+  - refresh 增加受 debug 开关控制的结构化输入/输出/质量摘要日志。
+  - 同一输入 context 重复 refresh 不再导致轮动 `persistentDays` 非确定性递增。
+- 已迁移 UI/导出主路径：
+  - `SectorPanel/SectorDetail/SectorStocksTree/SectorRotation/ExportPanel/exportService` 优先调用 `themeFacade`。
+  - `ThemeCorrelationPanel/ThemeRiskDashboard` 不再直接拼 `state.theme.jxbk.stockMap`。
+- 已收敛旧服务：
+  - `sectorAnalyzer.getHotThemes/getThemeDetail` 优先委托 `themeFacade`。
+  - 旧 `ThemeHeatCalculator/generateHotThemes/forceRefreshJxbk` 标记为 V4 deprecated fallback。
+  - `ThemeDataService` 注释明确长期职责是静态映射 repository。
+  - `alertService` 对 `ThemeEvent` 与 legacy block money-flow alert 做同帧去重，保留其他 legacy 板块预警。
+- 已验证：
+  - `pnpm exec vitest run src/services/theme/__tests__/ThemeV3Engines.test.ts src/services/__tests__/alertService.test.ts`：通过，2 个测试文件、8 个测试通过。
+  - `pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false`：通过。
+  - `pnpm exec vitest run src/services/theme`：通过，3 个测试文件、17 个测试通过。
+  - `pnpm exec vitest run src/services/snapshot src/services/hotness`：通过，10 个测试文件、52 个测试通过。
+  - `pnpm test:ranktrend`：通过，9 个测试文件、95 个测试通过。
+  - `pnpm test`：通过，26 个测试文件、185 个测试通过。
+
+## 2026-05-05 题材模块 V4 review 修复
+
+- 使用 `receiving-code-review` 流程核对外部审查报告。
+- 已修复：
+  - `getJxbkBlocksCompat()` 只在显式 context 处于 5 分钟 TTL 内时使用快照，否则回落到 `JxbkThemeFeed/DataLayer` 的实时缓存。
+  - `getThemeStockMapCompat()` 深拷贝股票条目和 `blocks` 数组，避免 UI 调用方污染 feed 数据。
+  - `sourceSignature()` 对 themes 和 JXBK blocks 排序，降低上游顺序变化导致的误判。
+  - 相同 source signature 重复 refresh 复用上一轮 rotation summary，避免持续天数和主线状态抖动。
+  - `theme_mapping_quality_warning` 新增正式 `data_anomaly` 预警类型和展示配置，不再映射到资金异动。
+  - `SectorRotation` 的 legacy fallback 增加防御性说明。
+- 已验证：
+  - `pnpm exec vitest run src/services/theme/__tests__/ThemeV3Engines.test.ts src/services/__tests__/alertService.test.ts`：通过，2 个测试文件、11 个测试通过。
+  - `pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false`：通过。
   - `pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false`：通过。
   - `rg -n "trendChartService" src -S`：无代码引用。
 

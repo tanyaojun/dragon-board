@@ -407,6 +407,7 @@ export const ALERT_TYPES = {
   VOLUME_SURGE: 'volume_surge', // 放量异动
   ROTATION_SIGNAL: 'rotation_signal', // 轮动信号
   MONEY_FLOW: 'money_flow', // 资金异动
+  DATA_ANOMALY: 'data_anomaly', // 数据异常
   RANK_FAST_RISE: 'rank_fast_rise', // 排名快速上升
   RANK_FAST_FALL: 'rank_fast_fall', // 排名快速下降
 } as const
@@ -495,6 +496,12 @@ export const ALERT_TYPE_DISPLAY = {
     icon: '💰',
     desc: '资金流入/流出异常',
     level: ALERT_LEVELS.WARNING,
+  },
+  [ALERT_TYPES.DATA_ANOMALY]: {
+    name: '数据异常',
+    icon: '⚠️',
+    desc: '数据质量或映射异常',
+    level: ALERT_LEVELS.INFO,
   },
 } as const
 

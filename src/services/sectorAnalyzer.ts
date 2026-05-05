@@ -95,6 +95,9 @@ const Utils = {
 }
 
 // ========== 题材热度计算器（简化版） ==========
+/**
+ * @deprecated V4 fallback only. Theme heat authority lives in `src/services/theme/ThemeFactorEngine`.
+ */
 class ThemeHeatCalculator {
   /**
    * 计算题材热度（只使用 jxbk 强度，去掉情绪和龙头影响）
@@ -1039,6 +1042,9 @@ function calculateThemeMetrics(themeId: string) {
   }
 }
 
+/**
+ * @deprecated V4 fallback only. New callers should use `themeFacade.getHotThemesCompat()`.
+ */
 function generateHotThemes(metricsUpdates: any[], factors: ReturnType<typeof themeFacade.getThemeFactors> = []) {
   if (factors.length > 0) {
     return factors
@@ -1410,6 +1416,8 @@ async function initTagsAndReasons(): Promise<void> {
  * @param limit 返回数量限制，默认10
  */
 export function getHotThemes(limit: number = 10): HotTheme[] {
+  const compat = themeFacade.getHotThemesCompat(limit) as HotTheme[]
+  if (compat.length > 0) return compat
   const hotThemes = dataLayer.getHotThemes()
   return hotThemes.slice(0, limit) as HotTheme[]
 }
@@ -1429,7 +1437,11 @@ export async function getThemeDetail(
 
   if (options?.force) {
     await loadSectorStocks(theme.id, theme.name)
+    themeFacade.refresh({ emitAlerts: false })
   }
+
+  const compat = themeFacade.getThemeDetailCompat(theme.id) as ThemeDetail | null
+  if (compat) return compat
 
   const metrics = dataLayer.getThemeMetrics(theme.id)
   const stocksResult = getThemeStocks(theme.id, { limit: 50 })
@@ -1614,6 +1626,7 @@ export const sectorAnalyzer = {
   },
 
   async forceRefreshJxbk(): Promise<void> {
+    // Deprecated compatibility entrypoint. UI callers should prefer themeFacade.refreshJxbkAndFactors().
     await fetchJxbkData()
   },
 

@@ -284,6 +284,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { dataLayer } from '@/services/DataLayer'
 import { rotationService } from '@/services/rotationService'
+import { themeFacade } from '@/services/theme/ThemeFacade'
 import { usePanel } from '@/composables/usePanel'
 import type { RotationAnalysis } from '@/types/core'
 
@@ -320,7 +321,7 @@ const { panelRef, panelStyle } = usePanel({
 // 轮动数据
 const rotationData = computed(() => {
   const state = (dataLayer as any).state
-  return state?.analysis?.rotation?.current as RotationAnalysis | null
+  return themeFacade.getRotationSummary() || (state?.analysis?.rotation?.current as RotationAnalysis | null)
 })
 
 // 数据版本
@@ -331,8 +332,7 @@ const loadData = async () => {
   loading.value = true
   error.value = null
 
-  // 触发一次轮动分析
-  rotationService.forceAnalyze()
+  themeFacade.refresh({ emitAlerts: false })
 
   await new Promise(resolve => setTimeout(resolve, 300))
 
@@ -348,7 +348,9 @@ const loadingMessage = computed(() => loading.value ? '加载轮动数据...' : 
 // ========== 操作函数 ==========
 function refresh() {
   dataLayer.refreshStocksVersion()
-  rotationService.forceAnalyze()
+  themeFacade.refresh({ emitAlerts: false })
+  // Defensive fallback for legacy runtime states where facade cannot produce a rotation summary.
+  if (!themeFacade.getRotationSummary()) rotationService.forceAnalyze()
   loadData()
 }
 

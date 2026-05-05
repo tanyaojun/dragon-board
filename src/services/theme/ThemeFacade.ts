@@ -1,11 +1,14 @@
 import { dataLayer } from '@/services/DataLayer'
 import { themeMapping } from '@/services/ThemeDataService'
 import type { RotationAnalysis } from '@/types/core'
+import type { JxbkBlockData, JxbkStockData } from '@/types'
+import { debugLog } from '@/utils/logger'
 import { buildThemeFactors } from './ThemeFactorEngine'
 import { projectThemeStockExposures } from './ThemeStockProjector'
 import { buildThemeRotationSummary } from './ThemeRotationEngine'
 import { buildThemeEvents } from './ThemeAlertEngine'
 import { themeRuntimeStore } from './ThemeRuntimeStore'
+import { jxbkThemeFeed } from './JxbkThemeFeed'
 import type {
   ThemeExposureProjection,
   ThemeFactorSnapshot,
@@ -20,6 +23,61 @@ let lastExposureProjection: ThemeExposureProjection = {
   byTheme: new Map(),
 }
 let lastRotationSummary: RotationAnalysis | null = null
+let lastSourceContext: ThemeSourceContext | null = null
+let lastSourceSignature = ''
+const JXBK_CONTEXT_TTL = 5 * 60 * 1000
+
+function sourceSignature(context: ThemeSourceContext): string {
+  return JSON.stringify({
+    timestamp: context.timestamp || null,
+    snapshotId: context.snapshotId || null,
+    themes: context.themes.map((theme) => theme.id).sort(),
+    jxbkBlocks: (context.jxbkBlocks || [])
+      .map((block) => [
+        block.code,
+        block.name,
+        block.strength,
+        block.change,
+        block.mainNetInflow,
+        block.ztCount,
+      ])
+      .sort((a, b) => String(a[0]).localeCompare(String(b[0]))),
+    stockCount: context.stocks.length,
+  })
+}
+
+function logRefresh(context: ThemeSourceContext, result: {
+  factors: ThemeFactorSnapshot[]
+  exposures: ThemeExposureProjection
+  rotationSummary: RotationAnalysis | null
+  events: unknown[]
+}) {
+  const fatalCount = result.factors.reduce(
+    (sum, factor) => sum + factor.qualityFlags.filter((flag) => flag.level === 'fatal').length,
+    0,
+  )
+  const warningCount = result.factors.reduce(
+    (sum, factor) => sum + factor.qualityFlags.filter((flag) => flag.level === 'warning').length,
+    0,
+  )
+  debugLog('[ThemeFacade] refresh', {
+    input: {
+      themes: context.themes.length,
+      jxbkBlocks: context.jxbkBlocks?.length || 0,
+      stocks: context.stocks.length,
+    },
+    output: {
+      factors: result.factors.length,
+      exposures: result.exposures.byCode.size,
+      events: result.events.length,
+      mainLines: result.rotationSummary?.mainLines?.length || 0,
+    },
+    quality: {
+      fatal: fatalCount,
+      warning: warningCount,
+    },
+  })
+}
 
 function buildStockThemesMap(): Map<string, string[]> {
   const result = new Map<string, string[]>()
@@ -69,12 +127,22 @@ export function refreshThemeFactors(context: ThemeSourceContext = buildCurrentTh
   factors: ThemeFactorSnapshot[]
   exposures: ThemeExposureProjection
 } {
+  const signature = sourceSignature(context)
+  const canReuseRotation = signature === lastSourceSignature && lastRotationSummary
+  const previousForRotation =
+    canReuseRotation
+      ? dataLayer.getCurrentRotation?.() || null
+      : lastRotationSummary || dataLayer.getCurrentRotation?.() || null
   lastFactors = buildThemeFactors(context)
   lastExposureProjection = projectThemeStockExposures(context, lastFactors)
-  lastRotationSummary = buildThemeRotationSummary(lastFactors, {
-    timestamp: context.timestamp,
-    previous: lastRotationSummary || dataLayer.getCurrentRotation?.() || null,
-  })
+  if (!canReuseRotation) {
+    lastRotationSummary = buildThemeRotationSummary(lastFactors, {
+      timestamp: context.timestamp,
+      previous: previousForRotation,
+    })
+  }
+  lastSourceContext = context
+  lastSourceSignature = signature
   themeRuntimeStore.update({
     factors: lastFactors,
     exposures: lastExposureProjection,
@@ -86,6 +154,12 @@ export function refreshThemeFactors(context: ThemeSourceContext = buildCurrentTh
     }),
     correlations: context.correlations || new Map(),
     lastUpdate: context.timestamp || Date.now(),
+  })
+  logRefresh(context, {
+    factors: lastFactors,
+    exposures: lastExposureProjection,
+    rotationSummary: lastRotationSummary,
+    events: themeRuntimeStore.getSnapshot().events,
   })
   return {
     factors: lastFactors,
@@ -103,12 +177,22 @@ export function refreshThemeFacadeState(options: ThemeRefreshOptions & {
       timestamp: options.timestamp,
       snapshotId: options.snapshotId,
     })
+  const signature = sourceSignature(context)
+  const canReuseRotation = signature === lastSourceSignature && lastRotationSummary
+  const previousForRotation =
+    canReuseRotation
+      ? dataLayer.getCurrentRotation?.() || null
+      : lastRotationSummary || dataLayer.getCurrentRotation?.() || null
   lastFactors = buildThemeFactors(context)
   lastExposureProjection = projectThemeStockExposures(context, lastFactors)
-  lastRotationSummary = buildThemeRotationSummary(lastFactors, {
-    timestamp: context.timestamp,
-    previous: lastRotationSummary || dataLayer.getCurrentRotation?.() || null,
-  })
+  if (!canReuseRotation) {
+    lastRotationSummary = buildThemeRotationSummary(lastFactors, {
+      timestamp: context.timestamp,
+      previous: previousForRotation,
+    })
+  }
+  lastSourceContext = context
+  lastSourceSignature = signature
   const events = buildThemeEvents({
     factors: lastFactors,
     exposures: lastExposureProjection,
@@ -124,6 +208,12 @@ export function refreshThemeFacadeState(options: ThemeRefreshOptions & {
     correlations: context.correlations || new Map(),
     lastUpdate: context.timestamp || Date.now(),
   })
+  logRefresh(context, {
+    factors: lastFactors,
+    exposures: lastExposureProjection,
+    rotationSummary: lastRotationSummary,
+    events,
+  })
 
   return {
     factors: lastFactors,
@@ -131,6 +221,53 @@ export function refreshThemeFacadeState(options: ThemeRefreshOptions & {
     rotationSummary: lastRotationSummary,
     events,
   }
+}
+
+export async function refreshJxbkAndFactors(options: ThemeRefreshOptions & {
+  context?: ThemeSourceContext
+} = {}) {
+  if (!options.skipJxbkRefresh && options.context?.jxbkBlocks?.length) {
+    jxbkThemeFeed.updateBlocks(options.context.jxbkBlocks)
+  } else if (!options.skipJxbkRefresh && !options.context) {
+    await jxbkThemeFeed.refreshBlocks({ force: options.force })
+  }
+  return refreshThemeFacadeState(options)
+}
+
+export function getJxbkBlocksCompat(limit?: number): JxbkBlockData[] {
+  const now = Date.now()
+  const contextFresh =
+    Boolean(lastSourceContext?.jxbkBlocks?.length) &&
+    Boolean(lastSourceContext?.timestamp) &&
+    now - Number(lastSourceContext?.timestamp) <= JXBK_CONTEXT_TTL
+  const blocks = contextFresh && lastSourceContext
+    ? lastSourceContext.jxbkBlocks
+    : jxbkThemeFeed.getBlocks(limit)
+  const ordered = [...(blocks || [])]
+  return typeof limit === 'number' ? ordered.slice(0, Math.max(0, limit)) : ordered
+}
+
+export function getJxbkLastUpdate(): number | null {
+  if (lastSourceContext?.timestamp) return lastSourceContext.timestamp
+  const state = (dataLayer as any).state
+  return state?.theme?.jxbk?.lastUpdate || null
+}
+
+export function getThemeStockMapCompat(): Record<string, JxbkStockData> {
+  const stockMap = jxbkThemeFeed.getStockMap()
+  return Object.fromEntries(
+    Object.entries(stockMap).map(([code, stock]) => [
+      code,
+      {
+        ...stock,
+        blocks: [...(stock.blocks || [])],
+      },
+    ]),
+  )
+}
+
+export function getRuntimeSnapshot() {
+  return themeRuntimeStore.getSnapshot()
 }
 
 export function getThemeFactors(): ThemeFactorSnapshot[] {
@@ -308,6 +445,11 @@ export const themeFacade = {
   getThemeExposureProjection,
   getRotationSummary,
   getThemeEvents,
+  getRuntimeSnapshot,
+  getJxbkBlocksCompat,
+  getJxbkLastUpdate,
+  getThemeStockMapCompat,
+  refreshJxbkAndFactors,
   getHotThemesCompat,
   getThemeDetailCompat,
   getThemeStocksCompat,

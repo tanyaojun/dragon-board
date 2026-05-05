@@ -104,6 +104,7 @@ import { exportService } from '@/services/exportService'
 import { dragonAnalyzer } from '@/services/DragonAnalyzer'
 import { dragonBreathAnalyzer } from '@/services/DragonBreathAnalyzer'
 import { sectorAnalyzer } from '@/services/sectorAnalyzer'
+import { themeFacade } from '@/services/theme/ThemeFacade'
 import { dataLayer } from '@/services/DataLayer'
 import { EventManager } from '@/utils/eventManager'
 import { AppEvents } from '@/types'
@@ -170,7 +171,7 @@ const previewStats = computed(() => {
   if (previewData.value.sectors) {
     stats.push(
       { label: '题材总数', value: previewData.value.sectors.length },
-      { label: '热门题材', value: sectorAnalyzer.getHotThemes?.(5).length || 0 },
+      { label: '热门题材', value: themeFacade.getHotThemesCompat?.(5).length || 0 },
     )
   }
 
@@ -211,7 +212,7 @@ async function preview() {
           }
           break
         case 'sectors':
-          previewData.value = { sectors: sectorAnalyzer.getHotThemes?.(50) || [] }
+          previewData.value = { sectors: themeFacade.getHotThemesCompat?.(50) || [] }
           break
         case 'market':
           previewData.value = {
@@ -226,7 +227,7 @@ async function preview() {
           previewData.value = {
             stocks: dataLayer.getStocks(),
             leaders: dataLayer.getStocks().filter(s => isLeaderStock(s.code)),
-            sectors: sectorAnalyzer.getHotThemes?.(50) || [],
+            sectors: themeFacade.getHotThemesCompat?.(50) || [],
             market: {
               sentiment: dragonBreathAnalyzer.getMarketSentiment(),
               marketData: dragonBreathAnalyzer.getMarketData(),

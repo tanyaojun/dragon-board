@@ -263,6 +263,7 @@ import SectorDetail from './SectorDetail.vue'
 import ThemeCorrelationPanel from './ThemeCorrelationPanel.vue'
 import { useUIStore } from '../../stores/ui'
 import { sectorAnalyzer } from '../../services/sectorAnalyzer'
+import { themeFacade } from '../../services/theme/ThemeFacade'
 
 // 状态
 const viewMode = ref<'grid' | 'tree'>('grid') // 默认网格视图
@@ -314,17 +315,15 @@ const { panelRef, panelStyle } = usePanel({
 
 // ========== 数据源 ==========
 const jxbkBlocks = computed(() => {
-  return dataLayer.getJxbkBlocksSorted(20)
+  return themeFacade.getJxbkBlocksCompat(20)
 })
 
 const lastUpdate = computed(() => {
-  const state = (dataLayer as any).state
-  return state?.theme?.jxbk?.lastUpdate || null
+  return themeFacade.getJxbkLastUpdate()
 })
 
 const rotationData = computed(() => {
-  const state = (dataLayer as any).state
-  return state?.analysis?.rotation?.current as RotationAnalysis | null
+  return themeFacade.getRotationSummary() || ((dataLayer as any).state?.analysis?.rotation?.current as RotationAnalysis | null)
 })
 
 const alerts = computed(() => {
@@ -340,15 +339,7 @@ const loadData = async () => {
   error.value = null
 
   try {
-    // ✅ 强制刷新 JXBK 数据（从 API 重新获取）
-    if (sectorAnalyzer && typeof sectorAnalyzer.forceRefreshJxbk === 'function') {
-      await sectorAnalyzer.forceRefreshJxbk()
-    }
-
-    // ✅ 触发热度重新计算
-    if (sectorAnalyzer && typeof sectorAnalyzer.triggerHeatCalculation === 'function') {
-      await sectorAnalyzer.triggerHeatCalculation()
-    }
+    await themeFacade.refreshJxbkAndFactors({ force: true })
 
     // 验证数据是否存在
     if (jxbkBlocks.value.length === 0) {
@@ -367,27 +358,19 @@ const refresh = async () => {
     loading.value = true
     error.value = null
 
-    // ✅ 1. 清除缓存（如果方法存在）
+    // legacy fallback: 清除旧 sectorAnalyzer 缓存
     if (sectorAnalyzer && typeof sectorAnalyzer.clearCache === 'function') {
       sectorAnalyzer.clearCache()
     }
 
-    // ✅ 2. 强制刷新 JXBK 数据
-    if (sectorAnalyzer && typeof sectorAnalyzer.forceRefreshJxbk === 'function') {
-      await sectorAnalyzer.forceRefreshJxbk()
-    }
+    await themeFacade.refreshJxbkAndFactors({ force: true })
 
     // ✅ 3. 重新加载前N个板块的个股数据（可选，提升体验）
     if (sectorAnalyzer && typeof sectorAnalyzer.preloadTopSectors === 'function') {
       await sectorAnalyzer.preloadTopSectors(3)
     }
 
-    // ✅ 4. 触发热度重新计算
-    if (sectorAnalyzer && typeof sectorAnalyzer.triggerHeatCalculation === 'function') {
-      await sectorAnalyzer.triggerHeatCalculation()
-    }
-
-    // ✅ 5. 如果当前是树形视图，刷新树组件
+    // 如果当前是树形视图，刷新树组件
     if (viewMode.value === 'tree' && treeRef.value) {
       // 树组件会通过 dataLayer 自动响应数据变化
       // 如果有强制刷新方法，可以调用

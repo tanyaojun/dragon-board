@@ -431,6 +431,7 @@
 import { debugLog } from '@/utils/logger'
 import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import { dataLayer } from '@/services/DataLayer'
+import { themeFacade } from '@/services/theme/ThemeFacade'
 import { themeCorrelationAnalyzer } from '@/services/ThemeCorrelationAnalyzer'
 import { usePanel } from '@/composables/usePanel'
 import { useUIStore } from '@/stores/ui'
@@ -878,9 +879,9 @@ async function preloadHotThemes() {
 
 // ========== 计算属性 ==========
 const allThemes = computed(() => {
-  const jxbkBlocks = dataLayer.getJxbkBlocksSorted() || []
-  const stockMap = (dataLayer as any).state?.theme?.jxbk?.stockMap || {}
-  const rotation = dataLayer.getCurrentRotation()
+  const jxbkBlocks = themeFacade.getJxbkBlocksCompat()
+  const stockMap = themeFacade.getThemeStockMapCompat()
+  const rotation = themeFacade.getRotationSummary() || dataLayer.getCurrentRotation()
   const mainLineIds = new Set((rotation?.mainLines || []).map(m => m.themeId))
 
   const result = jxbkBlocks.map(block => {

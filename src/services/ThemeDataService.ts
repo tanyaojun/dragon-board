@@ -970,6 +970,8 @@ class ThemeDataService {
 
 export const themeMapping = ThemeDataService.getInstance()
 
+// V4 口径：themeMapping 长期只作为静态题材映射 repository 兼容导出。
+// 运行态题材强度、轮动、事件和个股暴露统一通过 src/services/theme/ThemeFacade。
 // 自动加载并启动定时更新；Node/Vitest 环境没有 IndexedDB 和相对 fetch 语义。
 if (typeof window !== 'undefined' && typeof indexedDB !== 'undefined') {
   themeMapping

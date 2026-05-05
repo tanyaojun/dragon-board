@@ -1,4 +1,5 @@
 import { dataLayer } from '@/services/DataLayer'
+import { apiService } from '@/services/apiService'
 import type { JxbkBlockData, JxbkStockData } from '@/types'
 
 function finiteNumber(value: unknown): number {
@@ -21,6 +22,32 @@ function normalizeBlock(block: Partial<JxbkBlockData>): JxbkBlockData {
 }
 
 export const jxbkThemeFeed = {
+  async refreshBlocks(options: { force?: boolean; limit?: number } = {}): Promise<JxbkBlockData[]> {
+    const data = await apiService.getHotBlockList(
+      { st: options.limit || 20 },
+      { force: options.force === true },
+    )
+    const blocks = Array.isArray(data?.list)
+      ? data.list
+          .map((item: any[]) =>
+            normalizeBlock({
+              code: item?.[0],
+              name: item?.[1],
+              strength: item?.[2],
+              change: item?.[3],
+              mainNetInflow: item?.[6],
+              bigMoney300: item?.[12],
+              institutionBuy: item?.[14],
+              volumeRatio: item?.[9],
+              ztCount: 0,
+            }),
+          )
+          .filter((block: JxbkBlockData) => block.code && block.name && !block.name.includes('ST'))
+      : []
+    this.updateBlocks(blocks)
+    return blocks
+  },
+
   getBlocks(limit?: number): JxbkBlockData[] {
     return dataLayer
       .getJxbkBlocksSorted?.(limit)

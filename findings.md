@@ -27,3 +27,17 @@
 - 新类型优先作为策略解释和中观因子，不直接替代 RankTrend 或最终交易信号。
 - 不批量删除文件。
 - 保护现有工作区状态。
+
+## V4 残留调用清单
+
+- `SectorPanel`：展示读取和刷新触发仍直接依赖 `dataLayer.getJxbkBlocksSorted/state.theme.jxbk.lastUpdate` 与 `sectorAnalyzer.forceRefreshJxbk/triggerHeatCalculation`。
+- `SectorDetail`：详情展示和成分股加载仍直接读取 `state.theme.jxbk.blocks/stockMap`，刷新触发仍依赖 `sectorAnalyzer`。
+- `SectorStocksTree`：树形成分股展示仍直接读取 `state.theme.jxbk.stockMap`，加载仍依赖 `sectorAnalyzer.loadSectorStocks`。
+- `SectorRotation`：轮动展示和手动刷新仍以 `rotationService.forceAnalyze()` 为主路径。
+- `ExportPanel/exportService`：热门题材导出仍通过 `sectorAnalyzer.getHotThemes()`。
+- `ThemeCorrelationPanel/ThemeRiskDashboard`：联动和风险展示仍直接拼 `jxbkBlocks/stockMap`。
+- `sectorAnalyzer.ts`：仍包含旧 JXBK 拉取、旧热度计算、旧 hot theme 生成、旧 stock theme fallback；V4 应标记为 deprecated fallback 并逐步委托 `themeFacade/JxbkThemeFeed`。
+- `rotationService.ts`：旧手动轮动计算仍作为 fallback 保留；权威来源应固定为 `ThemeRotationEngine`。
+- `alertService.ts`：`ThemeEvent` 和 legacy `checkBlocks()` 并行，需避免同一题材同帧重复预警。
+- `dataLoader.ts`：仍通过 `sectorAnalyzer.triggerHeatCalculation/syncThemesToStocks` 触发题材同步，属于兼容触发路径。
+- `dragon/*`：`BattlefieldBuilder` 已迁移到 `themeFacade`，`ContextBuilder` 仍通过 `sectorAnalyzer.getThemeDetail` 做兼容详情读取。

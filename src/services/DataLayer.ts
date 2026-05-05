@@ -1392,6 +1392,7 @@ class DataLayer {
             strength_surge: 0,
             strength_plunge: 0,
             money_flow: 0,
+            data_anomaly: 0,
             volume_surge: 0,
             rocket_launch: 0,
             waterfall_dive: 0,

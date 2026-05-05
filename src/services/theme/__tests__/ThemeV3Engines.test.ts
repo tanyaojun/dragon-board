@@ -4,7 +4,18 @@ import { buildThemeRotationSummary } from '../ThemeRotationEngine'
 import { buildThemeEvents } from '../ThemeAlertEngine'
 import { buildThemeFactors } from '../ThemeFactorEngine'
 import { projectThemeStockExposures } from '../ThemeStockProjector'
-import { refreshThemeFacadeState, getHotThemesCompat, getRotationSummary } from '../ThemeFacade'
+import {
+  refreshThemeFacadeState,
+  refreshJxbkAndFactors,
+  getHotThemesCompat,
+  getRotationSummary,
+  getJxbkBlocksCompat,
+  getJxbkLastUpdate,
+  getRuntimeSnapshot,
+  getThemeStockMapCompat,
+} from '../ThemeFacade'
+import { jxbkThemeFeed } from '../JxbkThemeFeed'
+import { dataLayer } from '@/services/DataLayer'
 import type { ThemeFactorSnapshot, ThemeSourceContext } from '../types'
 
 function factor(overrides: Partial<ThemeFactorSnapshot>): ThemeFactorSnapshot {
@@ -210,5 +221,77 @@ describe('ThemeFacade V3 compatibility', () => {
     expect(result.factors[0].themeName).toBe('人工智能')
     expect(hotThemes[0]).toMatchObject({ id: 'AI', name: '人工智能' })
     expect(getRotationSummary()?.mainLines[0]?.themeId).toBe('AI')
+  })
+})
+
+describe('ThemeFacade V4 UI compatibility', () => {
+  it('exposes stable UI read models and immutable runtime snapshots', () => {
+    const freshTimestamp = Date.now()
+    refreshThemeFacadeState({ context: { ...context(), timestamp: freshTimestamp }, emitAlerts: false })
+
+    const blocks = getJxbkBlocksCompat(5)
+    const stockMap = getThemeStockMapCompat()
+    const snapshot = getRuntimeSnapshot()
+
+    snapshot.factors.push(factor({ themeId: 'MUTATED' }))
+    snapshot.exposures.byCode.set('999999', [])
+
+    expect(blocks[0]).toMatchObject({ code: 'BKAI', name: '人工智能', strength: 4200 })
+    expect(getJxbkLastUpdate()).toBe(freshTimestamp)
+    expect(stockMap).toEqual({})
+    expect(getRuntimeSnapshot().factors.some((item) => item.themeId === 'MUTATED')).toBe(false)
+    expect(getRuntimeSnapshot().exposures.byCode.has('999999')).toBe(false)
+  })
+
+  it('keeps factor, rotation and event output deterministic for the same context', () => {
+    const first = refreshThemeFacadeState({ context: context(), emitAlerts: false })
+    const second = refreshThemeFacadeState({ context: context(), emitAlerts: false })
+
+    expect(second.factors).toEqual(first.factors)
+    expect(second.rotationSummary).toEqual(first.rotationSummary)
+    expect(second.events).toEqual(first.events)
+  })
+
+  it('refreshes JXBK feed before rebuilding factors when no explicit context is provided', async () => {
+    const spy = vi.spyOn(jxbkThemeFeed, 'refreshBlocks').mockResolvedValue([])
+
+    await refreshJxbkAndFactors({ skipJxbkRefresh: false, emitAlerts: false })
+
+    expect(spy).toHaveBeenCalledWith({ force: undefined })
+    spy.mockRestore()
+  })
+
+  it('falls back to fresh feed blocks when the last explicit context is stale', () => {
+    refreshThemeFacadeState({
+      context: {
+        ...context(),
+        timestamp: Date.now() - 10 * 60 * 1000,
+      },
+      emitAlerts: false,
+    })
+    dataLayer.updateJxbkBlocks([
+      {
+        code: 'BKNEW',
+        name: '新鲜板块',
+        strength: 5000,
+        change: 5,
+        mainNetInflow: 100000000,
+        bigMoney300: 0,
+        institutionBuy: 0,
+        volumeRatio: 2,
+        ztCount: 1,
+      },
+    ])
+
+    expect(getJxbkBlocksCompat(1)[0]).toMatchObject({ code: 'BKNEW', name: '新鲜板块' })
+  })
+
+  it('returns cloned stock map entries so callers cannot mutate feed state', () => {
+    dataLayer.updateJxbkStocks([{ code: '000001', name: '样本一', blocks: ['人工智能'] } as any])
+
+    const stockMap = getThemeStockMapCompat()
+    stockMap['000001'].blocks.push('污染板块')
+
+    expect(getThemeStockMapCompat()['000001'].blocks).toEqual(['人工智能'])
   })
 })

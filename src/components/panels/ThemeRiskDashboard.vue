@@ -258,6 +258,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { dataLayer } from '@/services/DataLayer'
+import { themeFacade } from '@/services/theme/ThemeFacade'
 import { usePanel } from '@/composables/usePanel'
 import { EMOTION_PHASE_BY_NAME } from '@/types/emotion'
 import StageBlock from './risk/StageBlock.vue'
@@ -380,8 +381,8 @@ const formatMoney = (value: number) => {
 
 // ========== 题材阶段识别 ==========
 const themeStages = computed(() => {
-  const blocks = dataLayer.getJxbkBlocksSorted() || []
-  const stockMap = (dataLayer as any).state?.theme?.jxbk?.stockMap || {}
+  const blocks = themeFacade.getJxbkBlocksCompat()
+  const stockMap = themeFacade.getThemeStockMapCompat()
 
   const stages = {
     sprout: [] as any[],
@@ -465,7 +466,7 @@ const positionRisks = computed(() => {
 
 const marketRisks = computed(() => {
   const risks = []
-  const blocks = dataLayer.getJxbkBlocksSorted() || []
+  const blocks = themeFacade.getJxbkBlocksCompat()
 
   // 炸板风险
   const explodeBlocks = blocks.filter(b => b.ztCount === 0 && b.change > 5)

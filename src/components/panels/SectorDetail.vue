@@ -107,7 +107,7 @@
                 <div class="metric-content">
                   <div class="metric-label">板块涨幅</div>
                   <div class="metric-value" :class="(blockData?.change || 0) >= 0 ? 'up' : 'down'">
-                    {{ blockData?.change > 0 ? '+' : '' }}{{ blockData?.change?.toFixed(2) || '0.00' }}%
+                    {{ (blockData?.change || 0) > 0 ? '+' : '' }}{{ blockData?.change?.toFixed(2) || '0.00' }}%
                   </div>
                   <div class="metric-desc">平均涨幅</div>
                 </div>
@@ -478,6 +478,13 @@ import { usePanel } from '../../composables/usePanel'
 import * as echarts from 'echarts'
 import { nextTick } from 'vue'
 import { sectorAnalyzer } from '../../services/sectorAnalyzer'
+import { themeFacade } from '../../services/theme/ThemeFacade'
+import type { JxbkBlockData } from '../../types'
+
+type DisplayBlockData = JxbkBlockData & {
+  lastUpdate?: number | null
+  history?: any[]
+}
 
 const props = defineProps<{
   visible: boolean
@@ -513,7 +520,7 @@ const loadData = async () => {
 
   try {
     // 找到板块代码
-    const blocks = dataLayer.getJxbkBlocksSorted() || []
+    const blocks = themeFacade.getJxbkBlocksCompat()
     const block = blocks.find(b => b.name === props.sectorName)
 
     if (block) {
@@ -523,15 +530,7 @@ const loadData = async () => {
         await sectorAnalyzer.loadSectorStocks(block.code, props.sectorName, true)
       }
 
-      // ✅ 同时强制刷新 jxbk 板块数据
-      if (sectorAnalyzer && typeof sectorAnalyzer.forceRefreshJxbk === 'function') {
-        await sectorAnalyzer.forceRefreshJxbk()
-      }
-
-      // ✅ 触发热度重新计算
-      if (sectorAnalyzer && typeof sectorAnalyzer.triggerHeatCalculation === 'function') {
-        await sectorAnalyzer.triggerHeatCalculation()
-      }
+      await themeFacade.refreshJxbkAndFactors({ force: true })
     }
 
     // 验证数据是否存在
@@ -557,8 +556,7 @@ const safeDataLayer = {
   },
   getJxbkBlockByName: (name: string) => {
     try {
-      const state = (dataLayer as any).state
-      const blocks = state?.theme?.jxbk?.blocks || []
+      const blocks = themeFacade.getJxbkBlocksCompat()
       return blocks.find((b: any) => b?.name === name)
     } catch {
       return null
@@ -573,8 +571,7 @@ const blockCode = computed(() => {
   if (!props.sectorName) return null
 
   try {
-    const state = (dataLayer as any).state
-    const blocks = state?.theme?.jxbk?.blocks || []
+    const blocks = themeFacade.getJxbkBlocksCompat()
     const block = blocks.find((b: any) => b?.name === props.sectorName)
     return block?.code || null
   } catch (e) {
@@ -589,15 +586,14 @@ const blockData = computed(() => {
 
   try {
     // 获取板块数据
-    const state = (dataLayer as any).state
-    const blocks = state?.theme?.jxbk?.blocks || []
+    const blocks = themeFacade.getJxbkBlocksCompat()
     const block = blocks.find((b: any) => b?.code === blockCode.value)
 
     if (block) {
       return {
         ...block,
-        lastUpdate: block.lastUpdate || Date.now()
-      }
+        lastUpdate: (block as DisplayBlockData).lastUpdate || Date.now()
+      } as DisplayBlockData
     }
     return null
   } catch (e) {
@@ -609,8 +605,7 @@ const blockData = computed(() => {
 // 或者从 dataLayer 的 jxbk 更新时间获取
 const jxbkLastUpdate = computed(() => {
   try {
-    const state = (dataLayer as any).state
-    return state?.theme?.jxbk?.lastUpdate || null
+    return themeFacade.getJxbkLastUpdate()
   } catch {
     return null
   }
@@ -627,8 +622,7 @@ const themeStocks = computed(() => {
   if (!props.sectorName) return []
 
   try {
-    const state = (dataLayer as any).state
-    const stockMap = state?.theme?.jxbk?.stockMap || {}
+    const stockMap = themeFacade.getThemeStockMapCompat()
 
     const stocks = Object.values(stockMap)
       .filter((stock: any) => {
@@ -816,7 +810,7 @@ watch(() => props.sectorName, async (newName) => {
     error.value = null
     try {
       // 找到板块代码
-      const blocks = dataLayer.getJxbkBlocksSorted() || []
+      const blocks = themeFacade.getJxbkBlocksCompat()
       const block = blocks.find(b => b.name === newName)
 
       if (block) {
@@ -1140,7 +1134,7 @@ const refresh = async () => {
     }
 
     // 找到板块代码
-    const blocks = dataLayer.getJxbkBlocksSorted() || []
+    const blocks = themeFacade.getJxbkBlocksCompat()
     const block = blocks.find(b => b.name === props.sectorName)
 
     if (block) {
@@ -1149,13 +1143,7 @@ const refresh = async () => {
       }
     }
 
-    if (sectorAnalyzer && typeof sectorAnalyzer.forceRefreshJxbk === 'function') {
-      await sectorAnalyzer.forceRefreshJxbk()
-    }
-
-    if (sectorAnalyzer && typeof sectorAnalyzer.triggerHeatCalculation === 'function') {
-      await sectorAnalyzer.triggerHeatCalculation()
-    }
+    await themeFacade.refreshJxbkAndFactors({ force: true })
 
     await nextTick()
 

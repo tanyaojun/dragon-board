@@ -175,6 +175,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { dataLayer } from '@/services/DataLayer'
 import { sectorAnalyzer } from '@/services/sectorAnalyzer'
 import { useUIStore } from '@/stores/ui'
+import { themeFacade } from '@/services/theme/ThemeFacade'
 
 // Props
 const props = defineProps<{
@@ -206,7 +207,7 @@ const tableWrapperRef = ref<HTMLElement>()
 
 // ========== 左侧题材树数据 ==========
 const allSectors = computed(() => {
-  const blocks = dataLayer.getJxbkBlocksSorted?.() || []
+  const blocks = themeFacade.getJxbkBlocksCompat()
   return blocks.map((block: any) => ({
     id: block.code,
     name: block.name,
@@ -244,8 +245,7 @@ const treeTotalPages = computed(() =>
 // ========== 右侧成分股数据 ==========
 const sectorStocks = computed(() => {
   if (!selectedSector.value) return []
-  const state = (dataLayer as any).state
-  const stockMap = state?.theme?.jxbk?.stockMap || {}
+  const stockMap = themeFacade.getThemeStockMapCompat()
 
   return Object.values(stockMap)
     .filter((stock: any) =>
