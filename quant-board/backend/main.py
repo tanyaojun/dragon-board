@@ -960,49 +960,118 @@ def get_optimization(run_id: str, db: Session | None = Depends(get_db)) -> dict[
     return result
 
 
+@app.get("/api/research/theme-summary")
+def get_theme_research_summary(
+    dataset_id: str = "dragonboard_live",
+    snapshot_type: str = "half_hour",
+    db: Session | None = Depends(get_db),
+) -> dict[str, Any]:
+    """Dragon Board 消费的题材研究摘要。QuantBoard 后端不可用时前端显示"不可用"。"""
+    try:
+        repo = Repository(db)
+        frames = repo.load_frame_bundles(dataset_id, snapshot_type=snapshot_type)
+        if not frames or len(frames) < 2:
+            return {"available": False, "reason": "insufficient_frames", "frameCount": len(frames) if frames else 0}
+
+        # 函数内导入避免与 FastAPI startup 事件中的 DB 初始化形成循环依赖
+        from backend.analysis.theme_trend import ThemeTrendPythonEngine
+        result = ThemeTrendPythonEngine().replay_sequence(frames)
+        factors = result.get("factors") or []
+        quality = result.get("qualityReport") or {}
+
+        lifecycle_dist: dict[str, int] = {}
+        for f in factors:
+            lc = str(f.get("lifecycle") or "neutral")
+            lifecycle_dist[lc] = lifecycle_dist.get(lc, 0) + 1
+
+        mainline_themes = [
+            {"themeId": f.get("themeId"), "themeName": f.get("themeName"), "heatScore": f.get("heatScore")}
+            for f in factors
+            if f.get("lifecycle") == "mainline"
+        ][:10]
+
+        crowding_themes = [
+            {"themeId": f.get("themeId"), "themeName": f.get("themeName"), "crowdingRisk": f.get("crowdingRisk")}
+            for f in factors
+            if f.get("lifecycle") == "crowded"
+        ][:5]
+
+        return {
+            "available": True,
+            "datasetId": dataset_id,
+            "snapshotType": snapshot_type,
+            "frameCount": len(frames),
+            "lastTradingDate": str(frames[-1].get("tradingDate") or ""),
+            "lifecycleDistribution": lifecycle_dist,
+            "mainlineThemes": mainline_themes,
+            "crowdingAlerts": crowding_themes,
+            "qualityPassed": not quality.get("blocked", False),
+            "researchGrade": "degraded" if quality.get("warnings") else "research_ready",
+            "themeCount": len({f.get("themeId") for f in factors if f.get("themeId")}),
+            "signalCount": len(factors),
+        }
+    except Exception as exc:
+        return {"available": False, "reason": f"backend_error: {str(exc)[:200]}"}
+
+
 @app.get("/api/reports/theme-trend/{run_id}")
 def get_theme_trend_report(run_id: str, db: Session | None = Depends(get_db)) -> dict[str, Any]:
+    """主题研究报告：同时查询 optimization_runs 和 backtest_runs。
+
+    bt_* 前缀的回测 ID 从 backtest_runs.result_json 提取 themeTrend 段；
+    opt_* 前缀的优化 ID 从 optimization_runs.result_json.trialList[0] 提取 engineFactors。
+    """
+    bt_service = BacktestService(db)
     opt_service = OptimizationService(db)
+
+    factors: list[dict[str, Any]] = []
+    strategy_name = ""
+    dataset_id = ""
+
+    # 优先按 optimization_runs 查询
     opt_run = opt_service.repo.get_optimization_run(run_id)
-    if not opt_run:
-        raise HTTPException(status_code=404, detail={"code": "optimization_run_not_found", "runId": run_id})
-
-    raw = json_loads(opt_run.result_json, {})
-    trial_list = raw.get("trialList") or []
-
-    # 报告基于最佳 trial 的引擎输出
-    best_trial = trial_list[0] if trial_list else {}
-    trial_factors = best_trial.get("engineFactors") or []
+    if opt_run:
+        raw = json_loads(opt_run.result_json, {})
+        trial_list = raw.get("trialList") or []
+        best_trial = trial_list[0] if trial_list else {}
+        factors = best_trial.get("engineFactors") or []
+        strategy_name = opt_run.strategy_name
+        dataset_id = opt_run.dataset_id or ""
+    else:
+        # 回退到 backtest_runs
+        bt_run = bt_service.repo.get_backtest_run(run_id)
+        if not bt_run:
+            raise HTTPException(status_code=404, detail={"code": "run_not_found", "runId": run_id})
+        result = json_loads(bt_run.result_json, {})
+        tt = result.get("themeTrend") or {}
+        factors = tt.get("factors") or tt.get("signals") or result.get("signals") or []
+        strategy_name = bt_run.strategy_name
+        dataset_id = bt_run.dataset_id
 
     lifecycle_dist: dict[str, int] = {}
-    for f in trial_factors:
+    for f in factors:
         lc = str(f.get("lifecycle") or "neutral")
         lifecycle_dist[lc] = lifecycle_dist.get(lc, 0) + 1
 
     signal_dist: dict[str, int] = {}
-    for f in trial_factors:
+    for f in factors:
         sig = str(f.get("signal") or "watch")
         signal_dist[sig] = signal_dist.get(sig, 0) + 1
 
-    crowding_events = [f for f in trial_factors if f.get("lifecycle") == "crowded"]
-    transitions = [f for f in trial_factors if f.get("lifecycleTransition")]
+    crowding_events = [f for f in factors if f.get("lifecycle") == "crowded"]
+    transitions = [f for f in factors if f.get("lifecycleTransition")]
 
     return {
         "runId": run_id,
-        "strategyName": opt_run.strategy_name,
-        "snapshotType": "half_hour",
-        "dataset_id": opt_run.dataset_id,
-        "method": opt_run.method,
-        "objective": raw.get("objective", "stability"),
-        "bestScore": best_trial.get("score"),
-        "bestParams": best_trial.get("params", {}),
+        "strategyName": strategy_name,
+        "datasetId": dataset_id,
         "lifecycleDistribution": lifecycle_dist,
         "signalDistribution": signal_dist,
         "crowdingEventCount": len(crowding_events),
         "lifecycleTransitionCount": len(transitions),
         "recentTransitions": transitions[:20],
-        "themeCount": len({f.get("themeId") for f in trial_factors if f.get("themeId")}),
-        "totalFactorCount": len(trial_factors),
+        "themeCount": len({f.get("themeId") for f in factors if f.get("themeId")}),
+        "totalFactorCount": len(factors),
     }
 
 

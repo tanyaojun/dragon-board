@@ -40,7 +40,7 @@ import type {
   StrategyName
 } from "./types";
 
-type TabKey = "golden" | "backtest" | "optimization" | "report" | "replay";
+type TabKey = "golden" | "backtest" | "theme" | "optimization" | "report" | "replay";
 type ImportMode = "sqlite_snapshots" | "json_file";
 
 const strategyOptions: Array<{ value: StrategyName; label: string; description: string }> = [
@@ -68,12 +68,28 @@ const strategyOptions: Array<{ value: StrategyName; label: string; description: 
     value: "a_b_combined",
     label: "A+B",
     description: "A_MAIN + 连续确认 B_IGNITION 对照口径"
+  },
+  {
+    value: "theme_rotation",
+    label: "题材轮动",
+    description: "基于题材生命周期买卖高暴露股票"
+  },
+  {
+    value: "leader_theme_confirmation",
+    label: "龙头题材确认",
+    description: "龙头股须获得强题材确认才买入"
+  },
+  {
+    value: "hotlist_theme_confluence",
+    label: "热榜题材共振",
+    description: "RankTrend + ThemeTrend 共振策略"
   }
 ];
 
 const tabs: Array<{ key: TabKey; label: string }> = [
   { key: "golden", label: "Golden 对齐" },
   { key: "backtest", label: "回测运行" },
+  { key: "theme", label: "ThemeTrend" },
   { key: "optimization", label: "参数优化" },
   { key: "report", label: "回测报告" },
   { key: "replay", label: "单票回放" }
@@ -126,6 +142,42 @@ const signalRiskFilter = ref<"all" | "risk" | "clean">("all");
 const showReportJson = ref(false);
 const deleteBacktestMessage = ref("");
 let optimizationPollToken = 0;
+
+// ── ThemeTrend 状态 ──
+const themeState = reactive<RequestResult>({ status: "idle" });
+const themeReportState = reactive<RequestResult>({ status: "idle" });
+const themeResearchState = reactive<RequestResult<import("./types").ThemeResearchSummary>>({ status: "idle" });
+const themeBacktestForm = reactive<import("./types").ThemeBacktestRequest>({
+  datasetId: "",
+  strategyName: "theme_rotation",
+  snapshotType: "half_hour",
+  randomSeed: 20260430,
+  crowdingBlockThreshold: 75,
+  maxPositions: 5,
+  positionSize: 0.2,
+});
+const themeOptimizationForm = reactive<import("./types").ThemeOptimizationRequest>({
+  datasetId: "",
+  strategyName: "theme_rotation",
+  snapshotType: "half_hour",
+  method: "random",
+  randomSeed: 20260430,
+  trials: 12,
+  objective: "stability",
+});
+const lastThemeBacktestId = ref("");
+const manualThemeBacktestId = ref("");
+const themeVerdict = computed(() => {
+  const data = asRecord(themeState.data || themeState.raw);
+  const result = asRecord(data?.result);
+  const tt = asRecord(data?.themeTrend || result?.themeTrend);
+  const quality = asRecord(data?.dataQuality || result?.dataQuality);
+  const grade = String(quality?.researchGrade || "unknown");
+  const signalCount = Number(tt?.signalCount || 0);
+  return {
+    label: grade === "research_ready" ? `研究就绪 · ${signalCount} 信号` : `质量降级(${grade}) · ${signalCount} 信号`,
+  };
+});
 
 const backtestForm = reactive<BacktestRequest>({
   datasetId: "",
@@ -1044,7 +1096,41 @@ async function fetchOptimization(): Promise<void> {
   });
 }
 
-watch(selectedDatasetId, syncSelectedDataset);
+watch(selectedDatasetId, (id) => {
+  syncSelectedDataset(id);
+  themeBacktestForm.datasetId = id;
+  themeOptimizationForm.datasetId = id;
+});
+
+// ── ThemeTrend handlers ──
+async function runThemeBacktest(): Promise<void> {
+  await runRequest(themeState, () => api.runThemeTrend({ ...themeBacktestForm, datasetId: selectedDatasetId.value || themeBacktestForm.datasetId }), (data) => {
+    const id = getRunId(data);
+    if (id) { lastThemeBacktestId.value = id; manualThemeBacktestId.value = id; }
+  });
+}
+async function runThemeConfluence(): Promise<void> {
+  await runRequest(themeState, () => api.runThemeConfluence({ ...themeBacktestForm, datasetId: selectedDatasetId.value || themeBacktestForm.datasetId }), (data) => {
+    const id = getRunId(data);
+    if (id) { lastThemeBacktestId.value = id; manualThemeBacktestId.value = id; }
+  });
+}
+async function fetchThemeReport(): Promise<void> {
+  const id = manualThemeBacktestId.value.trim() || lastThemeBacktestId.value.trim();
+  if (!id) { themeReportState.status = "error"; themeReportState.error = "缺少回测 ID"; return; }
+  await runRequest(themeReportState, () => api.getThemeReport(id));
+}
+async function loadThemeResearch(): Promise<void> {
+  await runRequest(themeResearchState, () =>
+    api.getThemeResearchSummary({ dataset_id: selectedDatasetId.value || "dragonboard_live", snapshot_type: "half_hour" }),
+  );
+}
+async function runThemeOptimization(): Promise<void> {
+  await runRequest(themeState, () => api.runThemeOptimization({ ...themeOptimizationForm, datasetId: selectedDatasetId.value || themeOptimizationForm.datasetId }), (data) => {
+    const id = getRunId(data);
+    if (id) { lastThemeBacktestId.value = id; manualThemeBacktestId.value = id; }
+  });
+}
 
 onMounted(async () => {
   await checkHealth();
@@ -1497,6 +1583,123 @@ onMounted(async () => {
               {{ copyLabel("backtest") }}
             </button>
             <pre class="json-box">{{ jsonPreview(backtestState.raw || backtestState.data) }}</pre>
+          </div>
+        </section>
+
+        <section v-if="activeTab === 'theme'" class="tab-panel">
+          <div class="section-heading">
+            <h2>ThemeTrend 题材趋势</h2>
+            <span class="status-pill" :class="statusClass(themeState.status)">{{ themeVerdict.label }}</span>
+          </div>
+
+          <!-- 回测运行 -->
+          <div class="section-block">
+            <h3>题材回测</h3>
+            <div class="form-grid compact">
+              <label>数据集ID <input v-model="themeBacktestForm.datasetId" type="text" /></label>
+              <label>策略
+                <select v-model="themeBacktestForm.strategyName">
+                  <option value="theme_rotation">题材轮动</option>
+                  <option value="leader_theme_confirmation">龙头题材确认</option>
+                  <option value="hotlist_theme_confluence">热榜题材共振</option>
+                </select>
+              </label>
+              <label>snapshotType
+                <select v-model="themeBacktestForm.snapshotType">
+                  <option value="half_hour">half_hour</option>
+                  <option value="quarter_hour">quarter_hour</option>
+                </select>
+              </label>
+              <label>randomSeed <input v-model.number="themeBacktestForm.randomSeed" type="number" /></label>
+              <label>拥挤阻断阈值 <input v-model.number="themeBacktestForm.crowdingBlockThreshold" type="number" /></label>
+              <label title="Phase 3 预留：当前只在前端表单展示，不参与后端计算">最大持仓（预留） <input v-model.number="themeBacktestForm.maxPositions" type="number" min="1" /></label>
+              <label title="Phase 3 预留：当前只在前端表单展示，不参与后端计算">仓位比例（预留） <input v-model.number="themeBacktestForm.positionSize" type="number" min="0.01" max="1" step="0.01" /></label>
+            </div>
+            <div class="button-row">
+              <button type="button" class="primary" :disabled="themeState.status === 'loading'" @click="runThemeBacktest">
+                {{ themeState.status === "loading" ? "运行中..." : "运行 ThemeTrend 回测" }}
+              </button>
+              <button type="button" :disabled="themeState.status === 'loading'" @click="runThemeConfluence">
+                运行共振回测
+              </button>
+            </div>
+          </div>
+
+          <!-- 查看报告 -->
+          <div class="section-block">
+            <h3>查看报告</h3>
+            <div class="lookup-row">
+              <input v-model="manualThemeBacktestId" type="text" :placeholder="lastThemeBacktestId || '回测 run ID'" />
+              <button type="button" :disabled="themeReportState.status === 'loading'" @click="fetchThemeReport">
+                {{ themeReportState.status === "loading" ? "拉取中..." : "拉取报告" }}
+              </button>
+            </div>
+            <div v-if="themeReportState.status === 'ok' && themeReportState.data" class="inline-success">
+              <div><b>生命期分布:</b> {{ ((themeReportState.data as Record<string,unknown>)?.lifecycleDistribution) ? JSON.stringify((themeReportState.data as Record<string,unknown>).lifecycleDistribution) : '-' }}</div>
+              <div><b>拥挤事件:</b> {{ (themeReportState.data as Record<string,unknown>)?.crowdingEventCount ?? '-' }}</div>
+              <div><b>生命周期迁移:</b> {{ (themeReportState.data as Record<string,unknown>)?.lifecycleTransitionCount ?? '-' }}</div>
+            </div>
+            <div v-if="themeReportState.status === 'error'" class="inline-error">{{ themeReportState.error }}</div>
+          </div>
+
+          <!-- 优化 -->
+          <div class="section-block">
+            <h3>参数优化</h3>
+            <div class="form-grid compact">
+              <label>搜索方法
+                <select v-model="themeOptimizationForm.method">
+                  <option value="grid">grid</option>
+                  <option value="random">random</option>
+                </select>
+              </label>
+              <label>trials <input v-model.number="themeOptimizationForm.trials" type="number" min="1" /></label>
+              <label>randomSeed <input v-model.number="themeOptimizationForm.randomSeed" type="number" /></label>
+              <label>目标
+                <select v-model="themeOptimizationForm.objective">
+                  <option value="stability">stability</option>
+                  <option value="totalReturn">totalReturn</option>
+                </select>
+              </label>
+            </div>
+            <button type="button" :disabled="themeState.status === 'loading'" @click="runThemeOptimization">
+              启动优化
+            </button>
+          </div>
+
+          <!-- 研究摘要 -->
+          <div class="section-block">
+            <div class="section-heading">
+              <h3>研究摘要</h3>
+              <button type="button" :disabled="themeResearchState.status === 'loading'" @click="loadThemeResearch">
+                {{ themeResearchState.status === "loading" ? "加载中..." : "刷新摘要" }}
+              </button>
+            </div>
+            <div v-if="themeResearchState.status === 'ok' && themeResearchState.data?.available" class="inline-success">
+              <div><b>帧数:</b> {{ themeResearchState.data.frameCount }} | <b>主题数:</b> {{ themeResearchState.data.themeCount }}</div>
+              <div v-if="themeResearchState.data.mainlineThemes?.length">
+                <b>主线题材:</b>
+                <span v-for="t in themeResearchState.data.mainlineThemes" :key="t.themeId" class="tag-stack">
+                  {{ t.themeName }}({{ t.heatScore }})
+                </span>
+              </div>
+              <div v-if="themeResearchState.data.crowdingAlerts?.length" class="inline-error">
+                <b>拥挤警告:</b>
+                <span v-for="t in themeResearchState.data.crowdingAlerts" :key="t.themeId">
+                  {{ t.themeName }}(风险:{{ t.crowdingRisk }})
+                </span>
+              </div>
+            </div>
+            <div v-else-if="themeResearchState.status === 'ok' && !themeResearchState.data?.available" class="inline-note">
+              研究摘要不可用：{{ themeResearchState.data?.reason || '未知原因' }}
+            </div>
+          </div>
+
+          <!-- 主题回测结果原文 -->
+          <div class="json-box-wrap">
+            <button type="button" class="copy-button" @click="copyJsonBox('theme', themeState.raw || themeState.data)">
+              {{ copyLabel("theme") }}
+            </button>
+            <pre class="json-box">{{ jsonPreview(themeState.raw || themeState.data) }}</pre>
           </div>
         </section>
 

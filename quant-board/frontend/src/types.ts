@@ -99,7 +99,47 @@ export type StrategyName =
   | "hot_top10"
   | "a_main_only"
   | "b_ignition_only"
-  | "a_b_combined";
+  | "a_b_combined"
+  | "theme_rotation"
+  | "leader_theme_confirmation"
+  | "hotlist_theme_confluence";
+
+export interface ThemeResearchSummary {
+  available: boolean;
+  reason?: string;
+  datasetId?: string;
+  snapshotType?: string;
+  frameCount?: number;
+  lastTradingDate?: string;
+  lifecycleDistribution?: Record<string, number>;
+  mainlineThemes?: Array<{ themeId: string; themeName: string; heatScore: number }>;
+  crowdingAlerts?: Array<{ themeId: string; themeName: string; crowdingRisk: number }>;
+  qualityPassed?: boolean;
+  researchGrade?: string;
+  themeCount?: number;
+  signalCount?: number;
+}
+
+export interface ThemeBacktestRequest {
+  datasetId: string;
+  strategyName: string;
+  snapshotType: "quarter_hour" | "half_hour";
+  randomSeed: number;
+  crowdingBlockThreshold?: number;
+  maxPositions?: number;
+  positionSize?: number;
+}
+
+export interface ThemeOptimizationRequest {
+  datasetId: string;
+  strategyName: string;
+  snapshotType: string;
+  method: string;
+  randomSeed: number;
+  trials: number;
+  objective: string;
+  parameterGrid?: Record<string, unknown>;
+}
 
 export interface BacktestRequest {
   datasetId: string;

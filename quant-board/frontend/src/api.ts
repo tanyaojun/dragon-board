@@ -119,6 +119,28 @@ export const api = {
     }),
   getOptimization: (id: string) =>
     requestApi<unknown>(`/api/optimizations/${encodeURIComponent(id)}`),
+  // ThemeTrend
+  runThemeTrend: (payload: import("./types").ThemeBacktestRequest) =>
+    requestApi<unknown>("/api/backtests/theme-trend", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  runThemeConfluence: (payload: import("./types").ThemeBacktestRequest) =>
+    requestApi<unknown>("/api/backtests/theme-confluence", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  getThemeReport: (id: string) =>
+    requestApi<unknown>(`/api/reports/theme-trend/${encodeURIComponent(id)}`),
+  getThemeResearchSummary: (params: { dataset_id: string; snapshot_type: string }) => {
+    const query = new URLSearchParams(params).toString();
+    return requestApi<import("./types").ThemeResearchSummary>(`/api/research/theme-summary?${query}`);
+  },
+  runThemeOptimization: (payload: import("./types").ThemeOptimizationRequest) =>
+    requestApi<unknown>("/api/optimizations/theme-trend", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   validateGolden: (payload: GoldenValidateRequest) =>
     requestApi<unknown>("/api/golden/validate", {
       method: "POST",

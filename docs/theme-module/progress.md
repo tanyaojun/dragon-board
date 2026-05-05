@@ -632,6 +632,26 @@
 - `POST /api/optimizations/theme-trend` 改为调用真实搜索
 - 新增 `GET /api/reports/theme-trend/{run_id}` 报告接口（生命周期分布/信号分布/拥挤事件/迁移数）
 
+## 2026-05-05 V12 Phase 5 实施
+
+- 目标：QuantBoard 前端题材页面 + Dragon Board 消费 API + 研究摘要。
+- 后端新增 `GET /api/research/theme-summary`（`backend/main.py`）：
+  - Dragon Board 消费的题材研究摘要，返回 `available` 开关 / 生命周期分布 / 主线题材 Top10 / 拥挤警告 / 质量状态
+  - QuantBoard 后端不可用时返回 `available: false` + reason，不阻塞调用方
+- QuantBoard 前端扩展（`quant-board/frontend/src/`）：
+  - `types.ts`：扩充 `StrategyName`（+3 题材策略）、新增 `ThemeResearchSummary`/`ThemeBacktestRequest`/`ThemeOptimizationRequest` 类型
+  - `api.ts`：新增 `runThemeTrend`/`runThemeConfluence`/`getThemeReport`/`getThemeResearchSummary`/`runThemeOptimization` 5 个 API 调用
+  - `App.vue`：新增 "ThemeTrend" tab，含：
+    - 题材回测表单（策略选择 / 拥挤阈值 / 持仓配置）
+    - 共振回测按钮
+    - 报告查看（生命周期分布 / 拥挤事件 / 迁移数）
+    - 参数优化表单（grid/random 搜索 / trials / 目标）
+    - 研究摘要面板（主线题材列表 / 拥挤警告 / 质量状态）
+    - JSON 原文复制
+  - `vue-tsc --noEmit` + `vite build` 通过
+- Dragon Board 前端：已预留 `GET /api/research/theme-summary` 调用路径；实时数据仍走 `themeFacade`，研究摘要通过 QuantBoard API 获取；后端不可用时显示"不可用"而非崩溃
+- 验证结果：后端 130 通过 + 前端构建成功
+
 ## 2026-05-05 V12 Phase 4 Code Review 修复
 
 **High:**
