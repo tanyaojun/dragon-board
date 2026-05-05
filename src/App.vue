@@ -219,6 +219,7 @@ import { dataLoader } from './services/dataLoader'            // 八平台数据
 
 // ========== 3. 业务分析服务（依赖 dataLayer + dataLoader）==========
 import { sectorAnalyzer } from './services/sectorAnalyzer'    // 题材分析
+import { themeSyncAdapter } from './services/theme/ThemeSyncAdapter'
 import { dragonAnalyzer } from './services/DragonAnalyzer'    // 龙头分析
 import { dragonBreathAnalyzer } from './services/DragonBreathAnalyzer' // 情绪分析
 import { dragonReviewService } from './services/dragon/DragonReviewService'
@@ -560,6 +561,7 @@ const lazyLoadServices = () => {
       if (refreshCoordinator?.registerService) {
         const services = [
           { name: 'dataLoader', instance: dataLoader },
+          { name: 'themeRuntime', instance: themeSyncAdapter },
           { name: 'sectorAnalyzer', instance: sectorAnalyzer },
           { name: 'dragonBreathAnalyzer', instance: dragonBreathAnalyzer },
           { name: 'dragonReviewService', instance: dragonReviewService },

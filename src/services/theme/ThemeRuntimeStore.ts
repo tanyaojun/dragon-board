@@ -27,9 +27,15 @@ function cloneSnapshot(snapshot: ThemeRuntimeSnapshot): ThemeRuntimeSnapshot {
     },
     rotationSummary: clonePlain(snapshot.rotationSummary),
     events: [...snapshot.events],
-    correlations: new Map(snapshot.correlations),
-    lastUpdate: snapshot.lastUpdate,
-  }
+      correlations: new Map(snapshot.correlations),
+      lastUpdate: snapshot.lastUpdate,
+      inputSignature: snapshot.inputSignature,
+      factorVersion: snapshot.factorVersion,
+      eventVersion: snapshot.eventVersion,
+      qualitySummary: clonePlain(snapshot.qualitySummary),
+      refreshSource: snapshot.refreshSource,
+      changedFields: snapshot.changedFields ? [...snapshot.changedFields] : undefined,
+    }
 }
 
 export function createThemeRuntimeStore(initial?: Partial<ThemeRuntimeSnapshot>) {
@@ -43,6 +49,12 @@ export function createThemeRuntimeStore(initial?: Partial<ThemeRuntimeSnapshot>)
     events: [],
     correlations: new Map(),
     lastUpdate: null,
+    inputSignature: undefined,
+    factorVersion: undefined,
+    eventVersion: undefined,
+    qualitySummary: undefined,
+    refreshSource: undefined,
+    changedFields: undefined,
     ...initial,
   }
   const listeners = new Set<ThemeRuntimeListener>()
@@ -79,6 +91,12 @@ export function createThemeRuntimeStore(initial?: Partial<ThemeRuntimeSnapshot>)
         events: [],
         correlations: new Map(),
         lastUpdate: null,
+        inputSignature: undefined,
+        factorVersion: undefined,
+        eventVersion: undefined,
+        qualitySummary: undefined,
+        refreshSource: undefined,
+        changedFields: undefined,
       }
       const nextSnapshot = cloneSnapshot(snapshot)
       listeners.forEach((listener) => listener(nextSnapshot))

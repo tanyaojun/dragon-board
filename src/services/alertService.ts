@@ -17,6 +17,7 @@ import type { StockAlert, AlertType, AlertLevel } from '@/types/core'
 import { v4 as uuidv4 } from 'uuid'
 import { themeFacade } from './theme/ThemeFacade'
 import type { ThemeEvent } from './theme/types'
+import { buildLegacyBlockThemeEvents } from './theme/ThemeLegacyAlertAdapter'
 
 // ========== 股票工具类（增强版） ==========
 class StockTools {
@@ -299,6 +300,7 @@ class AlertService {
   }
 
   private alertTypeForThemeEvent(event: ThemeEvent): AlertType {
+    if (event.alertType) return event.alertType
     if (event.type === 'theme_fund_inflow') return ALERT_TYPES.MONEY_FLOW
     if (event.type === 'theme_crowding_high') return 'volume_surge'
     if (event.type === 'theme_cooling') return 'strength_plunge'
@@ -344,128 +346,33 @@ class AlertService {
    * 检查板块预警
    */
   private checkBlocks = async () => {
-    const state = this.getState()
-    const blocks = state?.theme?.jxbk?.blocks || []
-
-    // 先计算每个板块的股票总数
-    const stockMap = state?.theme?.jxbk?.stockMap || {}
-    const stocks = Object.values(stockMap) as any[]
-
-    // 构建板块->股票数量映射
-    const sectorStockCount = new Map<string, number>()
-    stocks.forEach((stock) => {
-      stock.blocks?.forEach((blockName: string) => {
-        sectorStockCount.set(blockName, (sectorStockCount.get(blockName) || 0) + 1)
-      })
+    const blocks = themeFacade.getJxbkBlocksCompat()
+    const stockMap = themeFacade.getThemeStockMapCompat()
+    const timestamp = Date.now()
+    const legacyEvents = buildLegacyBlockThemeEvents({
+      timestamp,
+      blocks,
+      stockMap,
     })
 
-    for (const block of blocks) {
+    for (const event of legacyEvents) {
       try {
-        const prevBlock = this.blocksSnapshot.get(block.code)
-        const totalStocks = sectorStockCount.get(block.name) || 0
-
-        // 1. 批量涨停预警
-        const batchResult = SectorTools.isBatchLimitUp(block.ztCount || 0, totalStocks)
-        if (batchResult) {
-          await this.createAlert({
-            type: ALERT_TYPES.BATCH_LIMIT_UP,
-            level: batchResult.level,
-            title: `🔥 ${block.name} 批量涨停`,
-            message: `${block.name}板块 ${batchResult.desc}`,
-            themeId: block.code,
-            themeName: block.name,
-            snapshot: {
-              ztCount: block.ztCount,
-              totalStocks,
-            },
-          })
-        }
-
-        // 2. 资金流向预警
-        const moneyFlow = SectorTools.getMoneyFlowLevel(block.mainNetInflow || 0)
-        if (moneyFlow) {
-          const dedupeKey = this.themeAlertDedupeKey(ALERT_TYPES.MONEY_FLOW, block.code, block.name)
-          if (this.themeEventFrameKeys.has(dedupeKey)) {
-            // ThemeEvent 已覆盖同一题材同类型预警，legacy block alert 不再重复入库。
-          } else {
-            const isInflow = moneyFlow.type === 'inflow'
-            await this.createAlert({
-              type: ALERT_TYPES.MONEY_FLOW,
-              level: moneyFlow.level,
-              title: isInflow ? `💰 ${block.name} 巨额流入` : `💧 ${block.name} 巨额流出`,
-              message: `${block.name}板块主力${isInflow ? '净流入' : '净流出'} ${this.formatMoney(block.mainNetInflow)}`,
-              themeId: block.code,
-              themeName: block.name,
-              snapshot: { netInflow: block.mainNetInflow },
-            })
-          }
-        }
-
-        // 3. 强度变化预警
-        if (
-          prevBlock &&
-          prevBlock.strength &&
-          block.strength >= SECTOR_ALERT_CONFIG.STRENGTH_CHANGE.MIN_STRENGTH
-        ) {
-          const strengthChange = ((block.strength - prevBlock.strength) / prevBlock.strength) * 100
-          const surgeThreshold = this.getDynamicThreshold(SECTOR_ALERT_CONFIG.STRENGTH_CHANGE.SURGE)
-          const plungeThreshold = this.getDynamicThreshold(
-            Math.abs(SECTOR_ALERT_CONFIG.STRENGTH_CHANGE.PLUNGE),
-          )
-
-          if (strengthChange >= surgeThreshold) {
-            await this.createAlert({
-              type: 'strength_surge',
-              level: ALERT_LEVELS.INFO,
-              title: `📈 ${block.name} 强度飙升`,
-              message: `板块强度上升 ${strengthChange.toFixed(1)}%`,
-              themeId: block.code,
-              themeName: block.name,
-              snapshot: { strength: block.strength },
-            })
-          } else if (strengthChange <= -plungeThreshold) {
-            await this.createAlert({
-              type: 'strength_plunge',
-              level: ALERT_LEVELS.WARNING,
-              title: `📉 ${block.name} 强度骤降`,
-              message: `板块强度下降 ${Math.abs(strengthChange).toFixed(1)}%`,
-              themeId: block.code,
-              themeName: block.name,
-              snapshot: { strength: block.strength },
-            })
-          }
-        }
-
-        // 4. 放量预警
-        if (block.volumeRatio >= SECTOR_ALERT_CONFIG.VOLUME_SURGE.MIN_BASE_VOLUME_RATIO) {
-          const volumeLevel = SectorTools.getVolumeRatioLevel(block.volumeRatio || 0)
-          if (volumeLevel) {
-            await this.createAlert({
-              type: ALERT_TYPES.VOLUME_SURGE,
-              level: volumeLevel,
-              title:
-                volumeLevel === ALERT_LEVELS.CRITICAL
-                  ? `📊 ${block.name} 巨量异动`
-                  : `📊 ${block.name} 放量异动`,
-              message: `量比达到 ${block.volumeRatio.toFixed(2)}`,
-              themeId: block.code,
-              themeName: block.name,
-              snapshot: { volumeRatio: block.volumeRatio },
-            })
-          }
-        }
-
-        // 保存快照用于下次对比
-        this.blocksSnapshot.set(block.code, {
-          strength: block.strength,
-          timestamp: Date.now(),
-        })
+        const alertType = this.alertTypeForThemeEvent(event)
+        const dedupeKey = this.themeAlertDedupeKey(alertType, event.themeId, event.themeName)
+        if (this.themeEventFrameKeys.has(dedupeKey)) continue
+        await this.ingestThemeEvent(event)
       } catch (e) {
-        console.error(`[AlertService] 处理板块 ${block.code} 失败:`, e)
+        console.error(`[AlertService] 处理题材 legacy 事件 ${event.id} 失败:`, e)
       }
     }
 
-    // 清理过旧的快照（保留1小时内的）
+    for (const block of blocks) {
+      this.blocksSnapshot.set(block.code, {
+        strength: block.strength,
+        timestamp,
+      })
+    }
+
     const oneHourAgo = Date.now() - 60 * 60 * 1000
     for (const [code, data] of this.blocksSnapshot) {
       if (data.timestamp < oneHourAgo) {
@@ -478,8 +385,7 @@ class AlertService {
    * 检查个股预警
    */
   private checkStocks = async () => {
-    const state = this.getState()
-    const stockMap = state?.theme?.jxbk?.stockMap || {}
+    const stockMap = themeFacade.getThemeStockMapCompat()
     const stocks = Object.values(stockMap) as any[]
 
     for (const stock of stocks) {

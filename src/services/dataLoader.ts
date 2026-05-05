@@ -9,7 +9,7 @@ import { apiService } from './apiService'
 import { rankTrendAnalyzer } from './RankTrendAnalyzer'
 import { applyRankTrendAnalysis } from './rankTrend/compat'
 import type { RankTrendAnalysisResult } from './rankTrend/types'
-import sectorAnalyzer from './sectorAnalyzer'
+import { themeFacade } from './theme/ThemeFacade'
 import { isTradingTime } from '@/utils/time'
 import {
   COMPREHENSIVE_WEIGHTS,
@@ -797,8 +797,7 @@ class DataLoaderService {
     if (!cached || currentTs - cached.timestamp >= this.PLATFORM_CACHE_TTL) {
       await this.loadAllPlatforms(true)
       await this.loadLimitUpData(true)
-      await sectorAnalyzer.triggerHeatCalculation()
-      sectorAnalyzer.syncThemesToStocks()
+      await themeFacade.refreshRuntime({ source: 'dataLoader', syncStocks: true })
     }
 
     this.lastPlatformRefresh = currentTs
@@ -823,8 +822,7 @@ class DataLoaderService {
   async runUpdate(): Promise<void> {
     if (this.destroyed) return
     await this.handleFullRefresh(true)
-    await sectorAnalyzer.triggerHeatCalculation()
-    sectorAnalyzer.syncThemesToStocks()
+    await themeFacade.refreshRuntime({ source: 'dataLoader', syncStocks: true })
   }
 
   async runMaintenance(): Promise<void> {
@@ -1420,8 +1418,8 @@ class DataLoaderService {
 
       await this.mergeData()
 
-      await sectorAnalyzer.triggerHeatCalculation()
-      const updatedCount = sectorAnalyzer.syncThemesToStocks()
+      const result = await themeFacade.refreshRuntime({ source: 'dataLoader', syncStocks: true })
+      const updatedCount = result.syncedStockCount
       if (updatedCount > 0) debugLog(`[DataLoader] 刷新后同步题材: ${updatedCount}只股票`)
 
       this.updateProgress(100, '完成')

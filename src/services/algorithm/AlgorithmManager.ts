@@ -24,6 +24,7 @@ import { AlgorithmWarmupManager } from './AlgorithmWarmupManager'
 import { AlgorithmHealthChecker } from './AlgorithmHealthChecker'
 import { AlgorithmABTestManager } from './AlgorithmABTestManager'
 import { consistencyManager } from './ConsistencyManager'
+import { themeSyncAdapter } from '@/services/theme/ThemeSyncAdapter'
 
 import { createCacheKey, safeExecute, throttle, debounce } from '@/utils/algorithmHelpers'
 
@@ -957,7 +958,7 @@ export class AlgorithmManager implements IAlgorithmManager {
     }
 
     consistencyManager.registerRepairServices({
-      syncThemesToStocks: () => (window as any).sectorAnalyzer?.syncThemesToStocks?.(),
+      syncThemesToStocks: () => themeSyncAdapter.syncThemesToStocks(),
       recalculateDragons: () => (window as any).dragonAnalyzer?.recalculateAll?.(),
     })
 

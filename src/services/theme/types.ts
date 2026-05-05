@@ -1,5 +1,5 @@
-import type { JxbkBlockData, MergedStock } from '@/types'
-import type { AlertLevel, RotationAnalysis } from '@/types/core'
+import type { JxbkBlockData, JxbkStockData, MergedStock } from '@/types'
+import type { AlertLevel, AlertType, RotationAnalysis } from '@/types/core'
 import type { ThemeCorrelationDetail } from '@/services/ThemeCorrelationAnalyzer'
 
 export type ThemeRotationState = 'mainline' | 'inflow' | 'outflow' | 'quick' | 'cooling' | 'neutral'
@@ -109,7 +109,8 @@ export interface ThemeEvent {
   themeId: string
   themeName: string
   timestamp: number
-  source: 'theme'
+  source: 'theme' | 'theme_legacy_adapter'
+  alertType?: AlertType
   factorSnapshotId?: string
   stockCodes: string[]
   metrics: Record<string, number | string | boolean | null>
@@ -124,6 +125,44 @@ export interface ThemeRuntimeSnapshot {
   events: ThemeEvent[]
   correlations: Map<string, ThemeCorrelationDetail>
   lastUpdate: number | null
+  inputSignature?: string
+  factorVersion?: string
+  eventVersion?: string
+  qualitySummary?: ThemeRuntimeQualitySummary
+  refreshSource?: ThemeRefreshSource
+  changedFields?: ThemeRuntimeChangedField[]
+}
+
+export type ThemeRefreshSource = 'ui' | 'dataLoader' | 'timer' | 'manual' | 'sectorAnalyzer' | 'rotationService' | 'test' | string
+
+export type ThemeRuntimeChangedField =
+  | 'factors'
+  | 'exposures'
+  | 'rotation'
+  | 'events'
+  | 'quality'
+  | 'stocks'
+  | 'jxbk'
+
+export interface ThemeRuntimeQualitySummary {
+  totalFlags: number
+  fatalCount: number
+  warningCount: number
+  infoCount: number
+  byCode: Partial<Record<ThemeQualityFlagCode, number>>
+}
+
+export interface ThemeRuntimeRefreshResult {
+  factors: ThemeFactorSnapshot[]
+  exposures: ThemeExposureProjection
+  rotationSummary: RotationAnalysis | null
+  events: ThemeEvent[]
+  qualitySummary: ThemeRuntimeQualitySummary
+  changedFields: ThemeRuntimeChangedField[]
+  inputSignature: string
+  source: ThemeRefreshSource
+  timestamp: number
+  syncedStockCount: number
 }
 
 export interface ThemeRefreshOptions {
@@ -132,4 +171,19 @@ export interface ThemeRefreshOptions {
   force?: boolean
   skipJxbkRefresh?: boolean
   emitAlerts?: boolean
+  source?: ThemeRefreshSource
+  forceJxbk?: boolean
+  syncStocks?: boolean
+  context?: ThemeSourceContext
+}
+
+export interface ThemeRuntimeRefreshOptions extends ThemeRefreshOptions {
+  source: ThemeRefreshSource
+}
+
+export interface ThemeLegacyAlertBuildContext {
+  timestamp?: number
+  blocks: JxbkBlockData[]
+  stockMap: Record<string, JxbkStockData>
+  previousBlocks?: Map<string, JxbkBlockData>
 }

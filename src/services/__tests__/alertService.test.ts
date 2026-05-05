@@ -32,6 +32,23 @@ vi.mock('../theme/ThemeFacade', () => ({
         },
       ],
     })),
+    getJxbkBlocksCompat: vi.fn(() => [
+      {
+        code: 'BKAI',
+        name: '人工智能',
+        strength: 4200,
+        change: 3,
+        mainNetInflow: 200000000,
+        bigMoney300: 0,
+        institutionBuy: 0,
+        volumeRatio: 3.2,
+        ztCount: 2,
+      },
+    ]),
+    getThemeStockMapCompat: vi.fn(() => ({
+      '000001': { code: '000001', name: '样本一', blocks: ['人工智能'] },
+      '000002': { code: '000002', name: '样本二', blocks: ['人工智能'] },
+    })),
   },
 }))
 

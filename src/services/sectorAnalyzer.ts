@@ -709,9 +709,13 @@ function updateSectorStocksToDataLayer(sectorName: string, stocks: JxbkStockData
 // ========== 按需触发热度计算 ==========
 export async function triggerHeatCalculation() {
   if (state.destroyed) return
-  await fetchJxbkData()
-  updateThemeHeat()
-  syncThemesToStocks()
+  const result = await themeFacade.refreshRuntime({
+    source: 'sectorAnalyzer',
+    forceJxbk: true,
+    syncStocks: true,
+  })
+  dataLayer.updateHotThemes(themeFacade.getHotThemesCompat(CONFIG.HOT_THEMES_LIMIT))
+  return result
 }
 
 // ========== 预加载前N个板块 ==========
@@ -1147,6 +1151,17 @@ export async function updateFullThemeMapping(): Promise<{ success: boolean; mess
 
 // ========== 同步到股票 ==========
 export function syncThemesToStocks(): number {
+  const snapshot = themeFacade.getRuntimeSnapshot()
+  if (snapshot.exposures.byCode.size > 0) {
+    const result = themeFacade.refreshRuntime({
+      source: 'sectorAnalyzer',
+      context: themeFacade.buildCurrentThemeSourceContext(),
+      syncStocks: true,
+      emitAlerts: false,
+    })
+    return result.syncedStockCount
+  }
+
   const stocks = dataLayer.getStocks()
   if (!stocks.length) return 0
   const exposureByCode = themeFacade.getThemeExposureProjection().byCode

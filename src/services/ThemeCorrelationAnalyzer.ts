@@ -1,6 +1,7 @@
 // src/services/ThemeCorrelationAnalyzer.ts
 import { dataLayer } from './DataLayer'
 import { analyzeThemeCorrelationInput } from './theme/ThemeCorrelationEngine'
+import { themeFacade } from './theme/ThemeFacade'
 
 export interface StockCorrelation {
   code: string
@@ -84,7 +85,7 @@ export class ThemeCorrelationAnalyzer {
     }
 
     // 获取该板块的个股
-    const stockMap = (dataLayer as any).state?.theme?.jxbk?.stockMap || {}
+    const stockMap = themeFacade.getThemeStockMapCompat()
     const rawStocks = Object.values(stockMap).filter((stock: any) =>
       stock.blocks?.includes(themeName),
     ) as any[]

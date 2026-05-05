@@ -50,6 +50,7 @@ import { themeMapping } from './services/ThemeDataService'
 
 import { themeCorrelationAnalyzer } from './services/ThemeCorrelationAnalyzer'
 import { themeFacade } from './services/theme/ThemeFacade'
+import { themeSyncAdapter } from './services/theme/ThemeSyncAdapter'
 import { installQuantBoardBridge } from './services/quantBoardBridge'
 
 const app = createApp(App)
@@ -79,6 +80,7 @@ if (typeof window !== 'undefined') {
   //题材个股映射服务
   ;(window as any).themeMapping = themeMapping
   ;(window as any).themeFacade = themeFacade
+  ;(window as any).themeRuntime = themeSyncAdapter
 
   // 事件和常量
   ;(window as any).AppEvents = AppEvents

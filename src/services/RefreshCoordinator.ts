@@ -41,32 +41,39 @@ class RefreshCoordinator {
       syncMethod: 'mergeData',
     },
     {
-      name: 'sectorAnalyzer',
+      name: 'themeRuntime',
       priority: 20,
       fullMethod: 'runUpdate',
       syncMethod: 'syncData',
       dependsOn: ['dataLoader'],
     },
     {
+      name: 'sectorAnalyzer',
+      priority: 21,
+      fullMethod: 'runUpdate',
+      syncMethod: 'syncData',
+      dependsOn: ['themeRuntime'],
+    },
+    {
       name: 'dragonBreathAnalyzer',
       priority: 30,
       fullMethod: 'runFullUpdate',
       syncMethod: 'syncData',
-      dependsOn: ['dataLoader', 'sectorAnalyzer'],
+      dependsOn: ['dataLoader', 'themeRuntime'],
     },
     {
       name: 'dragonReviewService',
       priority: 40,
       fullMethod: 'runFullUpdate',
       syncMethod: 'syncData',
-      dependsOn: ['dataLoader', 'sectorAnalyzer', 'dragonBreathAnalyzer'],
+      dependsOn: ['dataLoader', 'themeRuntime', 'dragonBreathAnalyzer'],
     },
     {
       name: 'algorithmManager',
       priority: 50,
       fullMethod: 'runFullUpdate',
       syncMethod: 'syncData',
-      dependsOn: ['dragonReviewService', 'sectorAnalyzer'],
+      dependsOn: ['dragonReviewService', 'themeRuntime'],
     },
   ]
 

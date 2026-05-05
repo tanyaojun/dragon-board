@@ -41,3 +41,14 @@
 - `alertService.ts`：`ThemeEvent` 和 legacy `checkBlocks()` 并行，需避免同一题材同帧重复预警。
 - `dataLoader.ts`：仍通过 `sectorAnalyzer.triggerHeatCalculation/syncThemesToStocks` 触发题材同步，属于兼容触发路径。
 - `dragon/*`：`BattlefieldBuilder` 已迁移到 `themeFacade`，`ContextBuilder` 仍通过 `sectorAnalyzer.getThemeDetail` 做兼容详情读取。
+
+## V5 剩余旧服务入口
+
+- `dataLoader`：已改为调用 `themeFacade.refreshRuntime({ source: 'dataLoader', syncStocks: true })`，不再直接触发 `sectorAnalyzer.triggerHeatCalculation/syncThemesToStocks`。
+- `AlgorithmManager/ConsistencyManager`：已通过 `ThemeSyncAdapter` 注册题材同步修复服务，不再从 `window.sectorAnalyzer` 取同步能力。
+- `RefreshCoordinator`：已新增 `themeRuntime` 节点，DragonBreath、DragonReview、Algorithm 依赖改为 `themeRuntime`；`sectorAnalyzer` 作为兼容节点继续保留。
+- `alertService.checkBlocks()`：已保留方法名，但 legacy block alert 生成改为 `ThemeLegacyAlertAdapter` 输出标准 `ThemeEvent`，`alertService` 只做冷却、去重、保存和状态写入。
+- `ThemeCorrelationAnalyzer`：已改为 `themeFacade.getThemeStockMapCompat()`。
+- 剩余兼容边界：
+  - `sectorAnalyzer.ts` 文件仍保留旧公开 API 和 fallback 逻辑，供控制台、旧面板和旧调试脚本兼容。
+  - `alertService.checkStocks()` 仍读取 JXBK 成分股数据，但通过 `themeFacade.getThemeStockMapCompat()`，不再直接访问 DataLayer 私有 state。

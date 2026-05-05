@@ -132,6 +132,16 @@
 - 已验证：
   - `pnpm exec vitest run src/services/theme/__tests__/ThemeV3Engines.test.ts src/services/__tests__/alertService.test.ts`：通过，2 个测试文件、11 个测试通过。
   - `pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false`：通过。
+
+## 2026-05-05 题材模块 V5 启动
+
+- 用户要求实施《题材模块优化升级方案 V5：运行态编排统一与旧服务退场》。
+- 已新增 `task_plan_v5.md`。
+- 当前目标：
+  - 新增统一 `ThemeRuntimeCoordinator.refreshRuntime()`。
+  - 服务层旧调用从 `sectorAnalyzer` 迁移到 `themeFacade/themeRuntime`。
+  - legacy block alert 迁入 theme 模块适配器。
+  - runtime snapshot 增加可回放元数据。
   - `pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false`：通过。
   - `rg -n "trendChartService" src -S`：无代码引用。
 
@@ -281,3 +291,27 @@
   - `pnpm exec vitest run src/services/theme/__tests__/ThemeV3Engines.test.ts src/services/__tests__/alertService.test.ts`：通过，2 个测试文件、6 个测试通过。
   - `pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false`：通过。
   - `pnpm test:ranktrend`：通过，9 个测试文件、95 个测试通过。
+
+## 2026-05-05 题材模块 V5 启动与实施
+
+- 用户要求实施《题材模块优化升级方案 V5：运行态编排统一与旧服务退场》。
+- 已新增 `task_plan_v5.md`。
+- 已新增：
+  - `src/services/theme/ThemeRuntimeCoordinator.ts`：统一编排 factor、exposure、rotation、event、quality summary 和 stock sync。
+  - `src/services/theme/ThemeLegacyAlertAdapter.ts`：把 legacy block alert 规则迁入题材模块，输出标准 `ThemeEvent`。
+  - `src/services/theme/ThemeSyncAdapter.ts`：供 `RefreshCoordinator/ConsistencyManager` 显式调用题材运行态同步。
+- 已修改：
+  - `ThemeFacade.refresh/refreshJxbkAndFactors/refreshRuntime` 委托 runtime coordinator。
+  - `ThemeRuntimeStore/types` 增加 `inputSignature/factorVersion/eventVersion/qualitySummary/refreshSource/changedFields`。
+  - `dataLoader` 不再调用 `sectorAnalyzer.triggerHeatCalculation()/syncThemesToStocks()`。
+  - `RefreshCoordinator` 增加 `themeRuntime` 任务，后续龙息、复盘、算法依赖改为 `themeRuntime`。
+  - `AlgorithmManager` 一致性修复使用 `ThemeSyncAdapter`，不再从 `window.sectorAnalyzer` 取同步能力。
+  - `alertService.checkBlocks()` 保留方法名，但 legacy block alert 生成改为消费 `ThemeLegacyAlertAdapter` 事件，保存/冷却/去重仍由 alert service 管理。
+  - `ThemeCorrelationAnalyzer` 读取 JXBK stockMap 改为走 `themeFacade.getThemeStockMapCompat()`。
+- 已验证：
+  - `pnpm exec vitest run src/services/theme/__tests__/ThemeRuntimeCoordinator.test.ts src/services/theme/__tests__/ThemeLegacyAlertAdapter.test.ts src/services/theme/__tests__/ThemeV3Engines.test.ts src/services/__tests__/alertService.test.ts`：通过，4 个测试文件、16 个测试通过。
+  - `pnpm exec vitest run src/services/theme src/services/__tests__/alertService.test.ts`：通过，6 个测试文件、25 个测试通过。
+  - `pnpm exec vitest run src/services/snapshot src/services/hotness`：通过，10 个测试文件、52 个测试通过。
+  - `pnpm test:ranktrend`：通过，9 个测试文件、95 个测试通过。
+  - `pnpm test`：通过，28 个测试文件、193 个测试通过。
+  - `pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false`：通过。
