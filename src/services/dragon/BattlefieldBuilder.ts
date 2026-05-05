@@ -1,6 +1,8 @@
 import { dataLayer } from '../../services/DataLayer'
 import { themeMapping } from '../../services/ThemeDataService'
+import { themeFacade } from '../../services/theme/ThemeFacade'
 import type { MergedStock } from '@/types'
+import type { ThemeExposureProjection } from '../theme/types'
 import type { BattlefieldDominance, BattlefieldRecord, ReviewFrame, SignalStrength } from './types'
 import { getNetCapital, getStockTagNames, themeNamesFromStock, toSignalStrength, uniq } from './helpers'
 
@@ -47,6 +49,14 @@ function stockThemeIds(stock: MergedStock): string[] {
     .map((theme: any) => theme?.id || findThemeIdByName(theme?.name || String(theme)))
     .filter(Boolean)
   return uniq(ids as string[])
+}
+
+function stockExposuresByTheme(exposures: ThemeExposureProjection, themeId: string) {
+  return exposures.byTheme.get(themeId) || []
+}
+
+function themeNetInflow(hotTheme: any): number {
+  return hotTheme?.mainNetInflow || hotTheme?.jxbk?.mainNetInflow || 0
 }
 
 function isStrongCandidate(stock: MergedStock, frameHits: number): boolean {
@@ -205,10 +215,12 @@ function attentionScoreFromSeed(seed: BattlefieldSeed): number {
 export class BattlefieldBuilder {
   build(frames: ReviewFrame[]): BattlefieldRecord[] {
     const currentStocks = dataLayer.getStocks()
-    const hotThemes = dataLayer.getHotThemes() || []
+    const themeFactors = themeFacade.getThemeFactors()
+    const exposureProjection = themeFacade.getThemeExposureProjection()
+    const hotThemes = themeFacade.getHotThemesCompat?.(50) || dataLayer.getHotThemes() || []
     const topHotThemes = hotThemes.slice(0, 8)
     const coreHotThemes = hotThemes.slice(0, 5)
-    const rotation = dataLayer.getCurrentRotation?.()
+    const rotation = themeFacade.getRotationSummary?.() || dataLayer.getCurrentRotation?.()
     const latestFrame = frames[frames.length - 1]
     const zhabanRate = latestFrame?.marketStats.zhabanRate || 0
     const frameHitByCode = new Map<string, number>()
@@ -223,6 +235,7 @@ export class BattlefieldBuilder {
 
     const themeSeeds: BattlefieldSeed[] = []
     const themeIds = new Set<string>()
+    const themeFactorById = new Map(themeFactors.map((factor) => [factor.themeId, factor]))
 
     topHotThemes.forEach((theme: any, index: number) => {
       const themeId = theme.id || findThemeIdByName(theme.name || '')
@@ -236,6 +249,14 @@ export class BattlefieldBuilder {
       if ((theme.ztCount || 0) < 2) return
       themeIds.add(themeId)
     })
+
+    themeFactors
+      .filter((factor) => factor.rotationState === 'mainline' || factor.heatScore >= 75)
+      .slice(0, 8)
+      .forEach((factor) => {
+        themeIds.add(factor.themeId)
+        hotThemeRankById.set(factor.themeId, factor.rank)
+      })
 
     rotation?.mainLines?.forEach((line: any) => {
       const themeId = findThemeIdByName(line.themeName || '')
@@ -257,10 +278,18 @@ export class BattlefieldBuilder {
 
     themeIds.forEach((themeId) => {
       const themeName = conciseBattlefieldName(themeMapping.getThemeName(themeId), themeId)
-      const relatedStocks = currentStocks.filter((stock) => stockThemeIds(stock).includes(themeId))
+      const exposureCodes = new Set(
+        stockExposuresByTheme(exposureProjection, themeId).map((exposure) => exposure.code),
+      )
+      const relatedStocks = currentStocks.filter(
+        (stock) => stockThemeIds(stock).includes(themeId) || exposureCodes.has(stock.code),
+      )
       if (!relatedStocks.length) return
 
-      const hotTheme = topHotThemes.find((theme: any) => theme.id === themeId || theme.name === themeName)
+      const hotTheme: any = topHotThemes.find(
+        (theme: any) => theme.id === themeId || theme.name === themeName,
+      )
+      const factor = themeFactorById.get(themeId)
       const correlation = dataLayer.getThemeCorrelation(themeId)
       const mainLine = rotation?.mainLines?.find((line: any) => {
         const lineThemeId = findThemeIdByName(line.themeName || '')
@@ -272,11 +301,14 @@ export class BattlefieldBuilder {
       }).length
       const framePresence = themeFramePresence.get(themeId)
       const continuityScore = continuityScoreForTheme(themeId, frames)
-      const carryScore = Math.max(carryScoreForStocks(relatedStocks), (hotTheme?.ztCount || 0) * 18)
+      const carryScore = Math.max(
+        carryScoreForStocks(relatedStocks),
+        (factor?.ztCount || hotTheme?.ztCount || 0) * 18,
+      )
       const qualityScore = qualityScoreForStocks(relatedStocks)
       const capitalScore = capitalScoreForStocks(
         relatedStocks,
-        hotTheme?.mainNetInflow || hotTheme?.jxbk?.mainNetInflow,
+        factor?.netInflow || themeNetInflow(hotTheme),
       )
 
       if (
@@ -306,12 +338,12 @@ export class BattlefieldBuilder {
         qualityScore,
         capitalScore,
         fragilityScore: fragilityScore(zhabanRate),
-        themeHeatScore: hotTheme?.heatScore || 0,
-        themeZtCount: hotTheme?.ztCount || 0,
-        themeMainNetInflow: hotTheme?.mainNetInflow || hotTheme?.jxbk?.mainNetInflow || 0,
-        overallCorrelation: correlation?.overallCorrelation || 0,
-        persistentDays: mainLine?.persistentDays || 0,
-        isMainLine: (mainLine?.persistentDays || 0) >= 2,
+        themeHeatScore: factor?.heatScore || hotTheme?.heatScore || 0,
+        themeZtCount: factor?.ztCount || hotTheme?.ztCount || 0,
+        themeMainNetInflow: factor?.netInflow || themeNetInflow(hotTheme),
+        overallCorrelation: factor ? factor.correlationScore / 100 : correlation?.overallCorrelation || 0,
+        persistentDays: mainLine?.persistentDays || (factor?.rotationState === 'mainline' ? 1 : 0),
+        isMainLine: (mainLine?.persistentDays || 0) >= 2 || factor?.rotationState === 'mainline',
         attentionScore: 0,
         baseScore:
           continuityScore * 0.3 +

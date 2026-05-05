@@ -49,6 +49,7 @@ import { stockCodeManager } from './services/StockCodeManager'
 import { themeMapping } from './services/ThemeDataService'
 
 import { themeCorrelationAnalyzer } from './services/ThemeCorrelationAnalyzer'
+import { themeFacade } from './services/theme/ThemeFacade'
 import { installQuantBoardBridge } from './services/quantBoardBridge'
 
 const app = createApp(App)
@@ -77,6 +78,7 @@ if (typeof window !== 'undefined') {
 
   //题材个股映射服务
   ;(window as any).themeMapping = themeMapping
+  ;(window as any).themeFacade = themeFacade
 
   // 事件和常量
   ;(window as any).AppEvents = AppEvents
@@ -93,6 +95,7 @@ if (typeof window !== 'undefined') {
 
   console.log('[Main] 📦 服务已挂载到 window')
   console.log('   ├─ sectorAnalyzer: 题材分析')
+  console.log('   ├─ themeFacade: 题材领域 facade')
   console.log('   ├─ dragonAnalyzer: 龙头分析')
   console.log('   ├─ dragonBreathAnalyzer: 情绪分析')
   console.log('   ├─ algorithmManager: 算法管理')

@@ -1,6 +1,6 @@
-// @ts-nocheck
 // src/services/ThemeCorrelationAnalyzer.ts
 import { dataLayer } from './DataLayer'
+import { analyzeThemeCorrelationInput } from './theme/ThemeCorrelationEngine'
 
 export interface StockCorrelation {
   code: string
@@ -102,94 +102,13 @@ export class ThemeCorrelationAnalyzer {
       }
     })
 
-    // 识别龙头（带得分和置信度）
-    const { leader, leaderScore, confidence } = this.identifyLeaderWithConfidence(stocks)
-
-    // 计算板块统计
-    const stats = this.calculateThemeStats(stocks)
-
-    // 计算个股相关性
-    const stockCorrelations = new Map<string, StockCorrelation>()
-    const coreStocks: string[] = []
-    const followerStocks: string[] = []
-    const independentStocks: string[] = []
-
-    stocks.forEach((stock) => {
-      const avgCorrelation = this.calculateAvgCorrelation(stock, stocks)
-      const leaderCorrelation = leader ? this.calculatePairCorrelation(stock, leader) : 0
-      const directionConsistency = this.calculateDirectionConsistency(stock, stocks)
-      const changeDiff = this.calculateChangeDiff(stock, stocks)
-
-      let role = 'independent' as const
-      if (stock.code === leader?.code) role = 'leader'
-      else if (avgCorrelation > 0.3) role = 'follower'
-
-      const correlation: StockCorrelation = {
-        code: stock.code,
-        name: stock.name,
-        change: stock.change || 0,
-        volumeRatio: stock.volumeRatio || 0,
-        mainNetInflow: stock.mainNetInflow || 0,
-        avgCorrelation,
-        leaderCorrelation,
-        directionConsistency,
-        changeDiff,
-        role,
-      }
-
-      stockCorrelations.set(stock.code, correlation)
-      if (role === 'leader') coreStocks.push(stock.code)
-      else if (role === 'follower') followerStocks.push(stock.code)
-      else independentStocks.push(stock.code)
-    })
-
-    // 计算整体联动性
-    const overallCorrelation = this.calculateOverallCorrelation(
-      Array.from(stockCorrelations.values()),
-    )
-
-    // 构建龙头信息
-    const leaderInfo = leader
-      ? {
-          code: leader.code,
-          name: leader.name,
-          score: leaderScore,
-          confidence,
-          change: leader.change || 0,
-          lianban: leader.lianban || '',
-          fengdan: leader.fengdan || 0,
-          price: leader.price || 0,
-          volumeRatio: leader.volumeRatio || 0,
-          popularity: leader.popularity || 0,
-          popularityChange: leader.popularityChange || 0,
-          mainBuy: leader.mainBuy || 0,
-          mainSell: leader.mainSell || 0,
-          maxFengdan: leader.maxFengdan || 0,
-          circulatingMarketCap: leader.cirMV || 0,
-          largeOrder300w: leader.bigMoney300 || 0,
-          firstZtTime: leader.firstZtTime,
-          turnoverRate: leader.turnoverRate,
-          leadStatus: leader.leadStatus,
-          leadTimes: leader.leadTimes,
-          institutionBuy: leader.institutionBuy,
-        }
-      : undefined
-
-    const result: ThemeCorrelationDetail = {
+    const typedResult = analyzeThemeCorrelationInput({
       themeId: themeCode,
       themeName,
-      overallCorrelation,
-      stocks: stockCorrelations,
-      coreStocks,
-      followerStocks,
-      independentStocks,
-      lastUpdate: Date.now(),
-      leader: leaderInfo,
-      stats,
-    }
-
-    dataLayer.updateThemeCorrelation(themeCode, result)
-    return result
+      stocks,
+    })
+    dataLayer.updateThemeCorrelation(themeCode, typedResult)
+    return typedResult
   }
 
   /**

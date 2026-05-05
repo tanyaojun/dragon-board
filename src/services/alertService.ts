@@ -15,6 +15,8 @@ import {
 } from '@/config/constants'
 import type { StockAlert, AlertType, AlertLevel } from '@/types/core'
 import { v4 as uuidv4 } from 'uuid'
+import { themeFacade } from './theme/ThemeFacade'
+import type { ThemeEvent } from './theme/types'
 
 // ========== 股票工具类（增强版） ==========
 class StockTools {
@@ -279,12 +281,54 @@ class AlertService {
    */
   async checkAll() {
     try {
-      await Promise.all([this.checkBlocks(), this.checkStocks()])
+      await Promise.all([this.checkThemeEvents(), this.checkBlocks(), this.checkStocks()])
       this.cleanExpiredAlerts()
       this.lastCheck = Date.now()
     } catch (error) {
       console.error('[AlertService] 检查预警失败:', error)
     }
+  }
+
+  private checkThemeEvents = async () => {
+    const result = themeFacade.refresh({ emitAlerts: false })
+    for (const event of result.events) {
+      await this.ingestThemeEvent(event)
+    }
+  }
+
+  private alertTypeForThemeEvent(event: ThemeEvent): AlertType {
+    if (event.type === 'theme_fund_inflow') return ALERT_TYPES.MONEY_FLOW
+    if (event.type === 'theme_crowding_high') return 'volume_surge'
+    if (event.type === 'theme_cooling') return 'strength_plunge'
+    if (event.type === 'theme_leader_fall') return ALERT_TYPES.LEADER_FALL
+    if (event.type === 'theme_mapping_quality_warning') return ALERT_TYPES.MONEY_FLOW
+    return 'strength_surge'
+  }
+
+  private async ingestThemeEvent(event: ThemeEvent) {
+    const titleByType: Record<ThemeEvent['type'], string> = {
+      theme_mainline_started: `${event.themeName} 进入主线`,
+      theme_strength_surge: `${event.themeName} 强度上升`,
+      theme_fund_inflow: `${event.themeName} 资金流入`,
+      theme_crowding_high: `${event.themeName} 拥挤度偏高`,
+      theme_cooling: `${event.themeName} 题材降温`,
+      theme_leader_fall: `${event.themeName} 龙头转弱`,
+      theme_mapping_quality_warning: `${event.themeName} 题材数据质量提示`,
+    }
+    return this.createAlert({
+      type: this.alertTypeForThemeEvent(event),
+      level: event.level,
+      title: titleByType[event.type],
+      message: event.reasons.join('；') || event.type,
+      themeId: event.themeId,
+      themeName: event.themeName,
+      snapshot: {
+        themeEvent: event,
+        metrics: event.metrics,
+        riskFlags: event.riskFlags,
+        stockCodes: event.stockCodes,
+      },
+    })
   }
 
   /**
@@ -806,6 +850,10 @@ class AlertService {
     snapshot?: any
   }) {
     return this.createAlert(params)
+  }
+
+  public acceptThemeEvent(event: ThemeEvent) {
+    return this.ingestThemeEvent(event)
   }
 
   /**

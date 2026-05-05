@@ -179,3 +179,51 @@
   - `pnpm test`：通过，24 个测试文件、177 个测试通过。
   - `pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false`：通过。
   - `cd quant-board; .\.venv\Scripts\python.exe -m pytest`：通过，71 个测试通过。
+
+## 2026-05-05 题材模块 V3 启动与实施
+
+- 用户要求实施《题材模块优化升级方案 V3》。
+- 已新增 `task_plan_v3.md`。
+- TDD 红灯：
+  - `pnpm exec vitest run src/services/theme/__tests__/ThemeV3Engines.test.ts` 初始失败，原因是 `ThemeRuntimeStore` 等 V3 模块尚不存在。
+- 已新增/修改：
+  - `src/services/theme/types.ts` 增加 `ThemeEvent/ThemeRuntimeSnapshot/ThemeRefreshOptions`。
+  - 新增 `ThemeRuntimeStore.ts`、`ThemeRotationEngine.ts`、`ThemeAlertEngine.ts`。
+  - 新增 `ThemeRepository.ts`、`JxbkThemeFeed.ts`、`ThemeCorrelationEngine.ts` 作为领域边界。
+  - `ThemeFacade.ts` 新增 `refresh/getRotationSummary/getThemeEvents/getHotThemesCompat/getThemeDetailCompat/getThemeStocksCompat`，并挂载 `window.themeFacade`。
+  - `rotationService.analyzeAll()` 优先委托 `themeFacade.refresh()`，旧逻辑保留为 fallback。
+  - `alertService.checkAll()` 改为消费 `ThemeEvent` + 个股预警，题材预警事件由 `ThemeAlertEngine` 生成。
+  - `ThemeCorrelationAnalyzer.ts` 去掉 `@ts-nocheck`，主路径委托 `ThemeCorrelationEngine`。
+  - `main.ts` 显式挂载 `window.themeFacade`。
+  - `DragonReview` 的 `BattlefieldBuilder` 改为从 `themeFacade` 读取题材因子、轮动摘要和个股暴露作为战场种子。
+- 已验证：
+  - `pnpm exec vitest run src/services/theme/__tests__/ThemeV3Engines.test.ts`：通过，5 个测试通过。
+  - `pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false`：通过。
+  - `pnpm test -- src/services/theme src/services/snapshot src/services/hotness`：通过，13 个测试文件、66 个测试通过。
+  - `pnpm test:ranktrend`：通过，9 个测试文件、95 个测试通过。
+  - `pnpm test`：通过，25 个测试文件、182 个测试通过。
+  - 最终重跑 `pnpm exec vitest run src/services/theme/__tests__/ThemeV3Engines.test.ts`：通过，5 个测试通过。
+  - 最终重跑 `pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false`：通过。
+  - 最终重跑 `pnpm test`：通过，25 个测试文件、182 个测试通过。
+- 额外修复：
+  - `ThemeDataService` 自动加载限制到浏览器 IndexedDB 环境，避免 Vitest/Node 导入 facade 时触发 IndexedDB 和相对路径 fetch 噪音。
+
+## 2026-05-05 题材模块 V3 review 修复
+
+- 使用 `receiving-code-review` 流程核对外部审查报告。
+- 已修复：
+  - `alertService.checkAll()` 恢复旧板块预警与新 `ThemeEvent` 并行，避免批量涨停/资金/强度/放量板块预警失活。
+  - `ThemeRuntimeStore` 对 `rotationSummary` 做结构化克隆，避免消费者修改快照污染内部状态。
+  - `BattlefieldBuilder` 改用 `ThemeExposureProjection.byTheme.get(themeId)`，避免按题材查询时遍历全部股票 exposure。
+  - 题材事件到旧 `AlertType` 的映射调整为更贴近语义的现有类型。
+  - `ThemeAlertEngine` fatal quality 阻断业务事件处补充注释。
+  - `ThemeFacade` 不再自挂载 `window.themeFacade`，统一由 `main.ts` 挂载。
+- 已保留：
+  - `rotationService` 旧计算逻辑作为 V3 rollout 兼容 fallback，并加 deprecated fallback 注释，暂不删除。
+- 新增测试：
+  - `src/services/__tests__/alertService.test.ts` 覆盖 `checkAll()` 同时保留 legacy block alerts。
+  - 扩展 `ThemeV3Engines.test.ts` 覆盖 `rotationSummary` 快照不可变。
+- 验证：
+  - `pnpm exec vitest run src/services/theme/__tests__/ThemeV3Engines.test.ts src/services/__tests__/alertService.test.ts`：通过，2 个测试文件、6 个测试通过。
+  - `pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false`：通过。
+  - `pnpm test:ranktrend`：通过，9 个测试文件、95 个测试通过。

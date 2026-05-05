@@ -970,14 +970,16 @@ class ThemeDataService {
 
 export const themeMapping = ThemeDataService.getInstance()
 
-// 自动加载并启动定时更新
-themeMapping
-  .load()
-  .then(() => {
-    themeMapping.startAutoUpdate()
-  })
-  .catch((err) => {
-    console.warn('[ThemeDataService] 自动加载失败:', err)
-  })
+// 自动加载并启动定时更新；Node/Vitest 环境没有 IndexedDB 和相对 fetch 语义。
+if (typeof window !== 'undefined' && typeof indexedDB !== 'undefined') {
+  themeMapping
+    .load()
+    .then(() => {
+      themeMapping.startAutoUpdate()
+    })
+    .catch((err) => {
+      console.warn('[ThemeDataService] 自动加载失败:', err)
+    })
+}
 
 export default themeMapping

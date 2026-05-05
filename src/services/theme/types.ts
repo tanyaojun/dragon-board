@@ -1,5 +1,5 @@
 import type { JxbkBlockData, MergedStock } from '@/types'
-import type { RotationAnalysis } from '@/types/core'
+import type { AlertLevel, RotationAnalysis } from '@/types/core'
 import type { ThemeCorrelationDetail } from '@/services/ThemeCorrelationAnalyzer'
 
 export type ThemeRotationState = 'mainline' | 'inflow' | 'outflow' | 'quick' | 'cooling' | 'neutral'
@@ -91,4 +91,45 @@ export interface ThemeSourceContext {
 export interface ThemeExposureProjection {
   byCode: Map<string, ThemeStockExposure[]>
   byTheme: Map<string, ThemeStockExposure[]>
+}
+
+export type ThemeEventType =
+  | 'theme_mainline_started'
+  | 'theme_strength_surge'
+  | 'theme_fund_inflow'
+  | 'theme_crowding_high'
+  | 'theme_cooling'
+  | 'theme_leader_fall'
+  | 'theme_mapping_quality_warning'
+
+export interface ThemeEvent {
+  id: string
+  type: ThemeEventType
+  level: AlertLevel
+  themeId: string
+  themeName: string
+  timestamp: number
+  source: 'theme'
+  factorSnapshotId?: string
+  stockCodes: string[]
+  metrics: Record<string, number | string | boolean | null>
+  riskFlags: string[]
+  reasons: string[]
+}
+
+export interface ThemeRuntimeSnapshot {
+  factors: ThemeFactorSnapshot[]
+  exposures: ThemeExposureProjection
+  rotationSummary: RotationAnalysis | null
+  events: ThemeEvent[]
+  correlations: Map<string, ThemeCorrelationDetail>
+  lastUpdate: number | null
+}
+
+export interface ThemeRefreshOptions {
+  timestamp?: number
+  snapshotId?: string
+  force?: boolean
+  skipJxbkRefresh?: boolean
+  emitAlerts?: boolean
 }

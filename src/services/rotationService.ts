@@ -5,6 +5,7 @@ import { dataLayer } from './DataLayer'
 import { dragonBreathAnalyzer } from './DragonBreathAnalyzer'
 import { UNIFIED_EMOTION } from '../types/emotion'
 import { themeCorrelationAnalyzer } from './ThemeCorrelationAnalyzer'
+import { themeFacade } from './theme/ThemeFacade'
 import type {
   ThemeRotationStatus,
   RotationAnalysis,
@@ -363,6 +364,29 @@ class RotationService {
    * 分析所有板块
    */
   analyzeAll(): RotationAnalysisCompat {
+    const facadeResult = themeFacade.refresh({ emitAlerts: false })
+    if (facadeResult.rotationSummary) {
+      const analysis = facadeResult.rotationSummary as RotationAnalysisCompat
+      dataLayer.updateRotationAnalysis?.(analysis)
+      this.lastAnalysis = analysis
+      this.saveHotThemesToLocalStorage([
+        ...analysis.mainLines,
+        ...analysis.inflowThemes,
+        ...analysis.outflowThemes,
+      ])
+      if (analysis.mainLines.length > 0) {
+        setTimeout(() => {
+          for (const mainLine of analysis.mainLines.slice(0, 3)) {
+            themeCorrelationAnalyzer
+              .analyzeThemeCorrelation(mainLine.themeId, mainLine.themeName, { force: false })
+              .catch((e) => console.warn('联动分析失败:', e))
+          }
+        }, 100)
+      }
+      return analysis
+    }
+
+    // Deprecated fallback: retained while V3 themeFacade rollout is still compatible with legacy UI.
     // 1. 获取当前情绪
     const emotion = this.getCurrentEmotion()
 

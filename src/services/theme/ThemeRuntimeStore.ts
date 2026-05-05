@@ -1,0 +1,89 @@
+import type { ThemeRuntimeSnapshot } from './types'
+
+type ThemeRuntimeListener = (snapshot: ThemeRuntimeSnapshot) => void
+
+function clonePlain<T>(value: T): T {
+  if (value === null || value === undefined) return value
+  if (typeof structuredClone === 'function') return structuredClone(value)
+  return JSON.parse(JSON.stringify(value)) as T
+}
+
+function cloneSnapshot(snapshot: ThemeRuntimeSnapshot): ThemeRuntimeSnapshot {
+  return {
+    factors: [...snapshot.factors],
+    exposures: {
+      byCode: new Map(
+        Array.from(snapshot.exposures.byCode.entries()).map(([code, exposures]) => [
+          code,
+          [...exposures],
+        ]),
+      ),
+      byTheme: new Map(
+        Array.from(snapshot.exposures.byTheme.entries()).map(([themeId, exposures]) => [
+          themeId,
+          [...exposures],
+        ]),
+      ),
+    },
+    rotationSummary: clonePlain(snapshot.rotationSummary),
+    events: [...snapshot.events],
+    correlations: new Map(snapshot.correlations),
+    lastUpdate: snapshot.lastUpdate,
+  }
+}
+
+export function createThemeRuntimeStore(initial?: Partial<ThemeRuntimeSnapshot>) {
+  let snapshot: ThemeRuntimeSnapshot = {
+    factors: [],
+    exposures: {
+      byCode: new Map(),
+      byTheme: new Map(),
+    },
+    rotationSummary: null,
+    events: [],
+    correlations: new Map(),
+    lastUpdate: null,
+    ...initial,
+  }
+  const listeners = new Set<ThemeRuntimeListener>()
+
+  return {
+    getSnapshot(): ThemeRuntimeSnapshot {
+      return cloneSnapshot(snapshot)
+    },
+
+    update(patch: Partial<ThemeRuntimeSnapshot>): ThemeRuntimeSnapshot {
+      snapshot = {
+        ...snapshot,
+        ...patch,
+        lastUpdate: patch.lastUpdate ?? Date.now(),
+      }
+      const nextSnapshot = cloneSnapshot(snapshot)
+      listeners.forEach((listener) => listener(nextSnapshot))
+      return nextSnapshot
+    },
+
+    subscribe(listener: ThemeRuntimeListener): () => void {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
+
+    clear() {
+      snapshot = {
+        factors: [],
+        exposures: {
+          byCode: new Map(),
+          byTheme: new Map(),
+        },
+        rotationSummary: null,
+        events: [],
+        correlations: new Map(),
+        lastUpdate: null,
+      }
+      const nextSnapshot = cloneSnapshot(snapshot)
+      listeners.forEach((listener) => listener(nextSnapshot))
+    },
+  }
+}
+
+export const themeRuntimeStore = createThemeRuntimeStore()
