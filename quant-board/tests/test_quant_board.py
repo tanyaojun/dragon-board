@@ -28,7 +28,7 @@ from backend.data.models import (
     SyncOutboxModel,
 )
 from backend.data.repository import Repository
-from backend.data.supabase_homomorphic import _chunk_rows_by_payload_size
+from backend.data.supabase_homomorphic import SupabaseBackupClient, _chunk_rows_by_payload_size
 from backend.main import app
 from backend.services import DEFAULT_BACKTEST_STRATEGY_CONFIG, BacktestService
 from backend.utils import json_dumps
@@ -116,6 +116,31 @@ def test_supabase_upsert_chunks_are_limited_by_payload_size() -> None:
 
     assert [len(chunk) for chunk in chunks] == [1, 1, 1]
     assert [chunk[0]["id"] for chunk in chunks] == ["a", "b", "c"]
+
+
+def test_supabase_theme_string_fields_preserve_explicit_empty_values() -> None:
+    stock_row = SupabaseBackupClient._stock_to_row(
+        "ds_1",
+        {
+            "snapshotId": "snap_1",
+            "code": "000001",
+            "themeRole": "",
+            "theme_role": "leader",
+        },
+    )
+    sector_row = SupabaseBackupClient._sector_to_row(
+        "ds_1",
+        {
+            "snapshotId": "snap_1",
+            "entityType": "hot_theme",
+            "entityKey": "AI",
+            "rotationState": "",
+            "rotation_state": "mainline",
+        },
+    )
+
+    assert stock_row["theme_role"] == ""
+    assert sector_row["rotation_state"] == ""
 
 
 def test_ranktrend_uses_fallback_until_technical_min_samples() -> None:
@@ -1094,6 +1119,10 @@ def test_snapshot_detail_read_apis_use_sqlite() -> None:
                 "name": "样本C",
                 "rank": 1,
                 "volumeRatio": 2.5,
+                "themeContribution": 15.5,
+                "themeRole": "leader",
+                "themeExposureWeight": 1,
+                "themeRiskFlags": ["riskPenalty:2"],
             }
         ],
         "sectorRows": [
@@ -1110,6 +1139,10 @@ def test_snapshot_detail_read_apis_use_sqlite() -> None:
                 "entityKey": "robot",
                 "entityName": "机器人",
                 "rank": 1,
+                "momentumScore": 77,
+                "crowdingRisk": 18,
+                "rotationState": "mainline",
+                "themeQualityFlags": [{"code": "low_sample"}],
             }
         ],
     }
@@ -1141,11 +1174,17 @@ def test_snapshot_detail_read_apis_use_sqlite() -> None:
     assert stocks.status_code == 200, stocks.text
     assert stocks.json()["rows"][0]["code"] == "600010"
     assert stocks.json()["rows"][0]["volumeRatio"] == 2.5
+    assert stocks.json()["rows"][0]["themeContribution"] == 15.5
+    assert stocks.json()["rows"][0]["themeRole"] == "leader"
+    assert stocks.json()["rows"][0]["themeRiskFlags"] == ["riskPenalty:2"]
 
     sectors = client.get("/api/snapshots/sector-rows", params={"dataset_id": dataset_id, "snapshot_id": snapshot_id})
     assert sectors.status_code == 200, sectors.text
     assert sectors.json()["rows"][0]["captureMode"] == "real_time"
     assert sectors.json()["rows"][0]["entityName"] == "机器人"
+    assert sectors.json()["rows"][0]["momentumScore"] == 77
+    assert sectors.json()["rows"][0]["rotationState"] == "mainline"
+    assert sectors.json()["rows"][0]["themeQualityFlags"] == [{"code": "low_sample"}]
 
     counts = client.get("/api/snapshots/counts", params={"dataset_id": dataset_id})
     assert counts.status_code == 200, counts.text
@@ -1629,6 +1668,7 @@ def test_cli_run_ranktrend_exposes_ui_backtest_parameters() -> None:
             "0.25",
             "--intrabar-ambiguity",
             "take_first",
+            "--use-theme-factor-for-execution",
             "--no-t1",
             "--no-partial-fills",
         ]
@@ -1670,6 +1710,7 @@ def test_cli_run_ranktrend_exposes_ui_backtest_parameters() -> None:
         "orderBookParticipationRate": 0.25,
         "useIntrabarStops": True,
         "intrabarAmbiguity": "take_first",
+        "useThemeFactorForExecution": True,
     }
 
 

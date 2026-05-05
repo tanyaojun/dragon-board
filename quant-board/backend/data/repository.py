@@ -1107,6 +1107,13 @@ class Repository:
                         regime=str(item.get("regime") or "") or None,
                         reasons_json=dumps_json_field(item.get("reasons") or []),
                         risk_flags_json=dumps_json_field(item.get("riskFlags") or []),
+                        main_theme=str(item.get("mainTheme") or "") or None,
+                        theme_heat=float(item.get("themeHeat")) if item.get("themeHeat") is not None else None,
+                        theme_contribution=float(item.get("themeContribution")) if item.get("themeContribution") is not None else None,
+                        theme_role=str(item.get("themeRole") or "") or None,
+                        theme_support_score=float(item.get("themeSupportScore")) if item.get("themeSupportScore") is not None else None,
+                        theme_risk_flags_json=dumps_json_field(item.get("themeRiskFlags") or []),
+                        theme_reasons_json=dumps_json_field(item.get("themeReasons") or []),
                     )
                 )
                 count += 1
@@ -1132,6 +1139,13 @@ class Repository:
             regime=str(d.get("regime") or "") or None,
             reasons_json=dumps_json_field(d.get("reasons") or []),
             risk_flags_json=dumps_json_field(d.get("riskFlags") or []),
+            main_theme=str(d.get("mainTheme") or "") or None,
+            theme_heat=float(d.get("themeHeat")) if d.get("themeHeat") is not None else None,
+            theme_contribution=float(d.get("themeContribution")) if d.get("themeContribution") is not None else None,
+            theme_role=str(d.get("themeRole") or "") or None,
+            theme_support_score=float(d.get("themeSupportScore")) if d.get("themeSupportScore") is not None else None,
+            theme_risk_flags_json=dumps_json_field(d.get("themeRiskFlags") or []),
+            theme_reasons_json=dumps_json_field(d.get("themeReasons") or []),
         )
 
     def get_backtest_signals(
@@ -1461,6 +1475,13 @@ class Repository:
             "regime": model.regime,
             "reasons": loads_json_field(model.reasons_json, []),
             "riskFlags": loads_json_field(model.risk_flags_json, []),
+            "mainTheme": model.main_theme,
+            "themeHeat": model.theme_heat,
+            "themeContribution": model.theme_contribution,
+            "themeRole": model.theme_role,
+            "themeSupportScore": model.theme_support_score,
+            "themeRiskFlags": loads_json_field(model.theme_risk_flags_json, []),
+            "themeReasons": loads_json_field(model.theme_reasons_json, []),
         }
 
     @staticmethod
@@ -1838,6 +1859,10 @@ class Repository:
             "institutionBuy": model.institution_buy,
             "bigMoney300": model.big_money300,
             "themes": json_loads(model.themes_json, []),
+            "themeContribution": model.theme_contribution,
+            "themeRole": model.theme_role,
+            "themeExposureWeight": model.theme_exposure_weight,
+            "themeRiskFlags": json_loads(model.theme_risk_flags_json, []),
             "isNew": bool(model.is_new),
             "firstZtTime": model.first_zt_time,
             "lastZtTime": model.last_zt_time,
@@ -1888,6 +1913,15 @@ class Repository:
             "leaderCount": model.leader_count,
             "persistentDays": model.persistent_days,
             "netInflow": model.net_inflow,
+            "momentumScore": model.momentum_score,
+            "breadthScore": model.breadth_score,
+            "fundScore": model.fund_score,
+            "leadershipScore": model.leadership_score,
+            "correlationScore": model.correlation_score,
+            "crowdingRisk": model.crowding_risk,
+            "persistenceScore": model.persistence_score,
+            "rotationState": model.rotation_state,
+            "themeQualityFlags": json_loads(model.theme_quality_flags_json, []),
             "metadata": json_loads(model.metadata_json, {}),
         }
         return {key: value for key, value in item.items() if value is not None}
@@ -2030,6 +2064,10 @@ class Repository:
             institution_buy=_maybe_float(item.get("institutionBuy")),
             big_money300=_maybe_float(item.get("bigMoney300")),
             themes_json=json_dumps(item.get("themes") if isinstance(item.get("themes"), list) else []),
+            theme_contribution=_maybe_float(item.get("themeContribution")),
+            theme_role=item.get("themeRole"),
+            theme_exposure_weight=_maybe_float(item.get("themeExposureWeight")),
+            theme_risk_flags_json=json_dumps(item.get("themeRiskFlags") if isinstance(item.get("themeRiskFlags"), list) else []),
             is_new=bool(item.get("isNew")) if item.get("isNew") is not None else False,
             first_zt_time=item.get("firstZtTime"),
             last_zt_time=item.get("lastZtTime"),
@@ -2080,6 +2118,15 @@ class Repository:
             leader_count=_maybe_int(item.get("leaderCount")),
             persistent_days=_maybe_int(item.get("persistentDays")),
             net_inflow=_maybe_float(item.get("netInflow")),
+            momentum_score=_maybe_float(item.get("momentumScore")),
+            breadth_score=_maybe_float(item.get("breadthScore")),
+            fund_score=_maybe_float(item.get("fundScore")),
+            leadership_score=_maybe_float(item.get("leadershipScore")),
+            correlation_score=_maybe_float(item.get("correlationScore")),
+            crowding_risk=_maybe_float(item.get("crowdingRisk")),
+            persistence_score=_maybe_float(item.get("persistenceScore")),
+            rotation_state=item.get("rotationState"),
+            theme_quality_flags_json=json_dumps(item.get("themeQualityFlags") if isinstance(item.get("themeQualityFlags"), list) else []),
             metadata_json=json_dumps(item.get("metadata") if isinstance(item.get("metadata"), dict) else {}),
         )
 

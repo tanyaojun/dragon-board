@@ -126,6 +126,7 @@ export interface BacktestRequest {
   volumeParticipationRate: number;
   orderBookParticipationRate: number;
   useIntrabarStops: boolean;
+  useThemeFactorForExecution: boolean;
   intrabarAmbiguity: "stop_first" | "take_first";
   momentumPeriods: number[];
   macdFast: number;

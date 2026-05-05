@@ -145,6 +145,10 @@ REQUIRED_TABLE_COLUMNS = {
         "institution_buy",
         "big_money300",
         "themes_json",
+        "theme_contribution",
+        "theme_role",
+        "theme_exposure_weight",
+        "theme_risk_flags_json",
         "is_new",
         "first_zt_time",
         "last_zt_time",
@@ -192,6 +196,15 @@ REQUIRED_TABLE_COLUMNS = {
         "leader_count",
         "persistent_days",
         "net_inflow",
+        "momentum_score",
+        "breadth_score",
+        "fund_score",
+        "leadership_score",
+        "correlation_score",
+        "crowding_risk",
+        "persistence_score",
+        "rotation_state",
+        "theme_quality_flags_json",
         "metadata_json",
     },
     "sync_outbox": {
@@ -725,6 +738,10 @@ class SupabaseBackupClient:
             "institution_buy": _float(item.get("institutionBuy") or item.get("institution_buy")),
             "big_money300": _float(item.get("bigMoney300") or item.get("big_money300")),
             "themes_json": json_dumps(item.get("themes") if isinstance(item.get("themes"), list) else []),
+            "theme_contribution": _float(item.get("themeContribution") or item.get("theme_contribution")),
+            "theme_role": _prefer_present(item.get("themeRole"), item.get("theme_role")),
+            "theme_exposure_weight": _float(item.get("themeExposureWeight") or item.get("theme_exposure_weight")),
+            "theme_risk_flags_json": json_dumps(item.get("themeRiskFlags") if isinstance(item.get("themeRiskFlags"), list) else item.get("theme_risk_flags") or []),
             "is_new": bool(item.get("isNew") if item.get("isNew") is not None else item.get("is_new") or False),
             "first_zt_time": item.get("firstZtTime") or item.get("first_zt_time"),
             "last_zt_time": item.get("lastZtTime") or item.get("last_zt_time"),
@@ -777,6 +794,15 @@ class SupabaseBackupClient:
             "leader_count": _maybe_int(item.get("leaderCount") or item.get("leader_count")),
             "persistent_days": _maybe_int(item.get("persistentDays") or item.get("persistent_days")),
             "net_inflow": _float(item.get("netInflow") or item.get("net_inflow")),
+            "momentum_score": _float(item.get("momentumScore") or item.get("momentum_score")),
+            "breadth_score": _float(item.get("breadthScore") or item.get("breadth_score")),
+            "fund_score": _float(item.get("fundScore") or item.get("fund_score")),
+            "leadership_score": _float(item.get("leadershipScore") or item.get("leadership_score")),
+            "correlation_score": _float(item.get("correlationScore") or item.get("correlation_score")),
+            "crowding_risk": _float(item.get("crowdingRisk") or item.get("crowding_risk")),
+            "persistence_score": _float(item.get("persistenceScore") or item.get("persistence_score")),
+            "rotation_state": _prefer_present(item.get("rotationState"), item.get("rotation_state")),
+            "theme_quality_flags_json": json_dumps(item.get("themeQualityFlags") if isinstance(item.get("themeQualityFlags"), list) else item.get("theme_quality_flags") or []),
             "metadata_json": json_dumps(item.get("metadata") if isinstance(item.get("metadata"), dict) else {}),
         }
 
@@ -882,6 +908,10 @@ class SupabaseBackupClient:
             "institutionBuy": row.get("institution_buy"),
             "bigMoney300": row.get("big_money300"),
             "themes": json_loads(_maybe_decompress(row.get("themes_json") or "[]"), []),
+            "themeContribution": row.get("theme_contribution"),
+            "themeRole": row.get("theme_role"),
+            "themeExposureWeight": row.get("theme_exposure_weight"),
+            "themeRiskFlags": json_loads(_maybe_decompress(row.get("theme_risk_flags_json") or "[]"), []),
             "isNew": bool(row.get("is_new")),
             "firstZtTime": row.get("first_zt_time"),
             "lastZtTime": row.get("last_zt_time"),
@@ -932,6 +962,15 @@ class SupabaseBackupClient:
             "leaderCount": row.get("leader_count"),
             "persistentDays": row.get("persistent_days"),
             "netInflow": row.get("net_inflow"),
+            "momentumScore": row.get("momentum_score"),
+            "breadthScore": row.get("breadth_score"),
+            "fundScore": row.get("fund_score"),
+            "leadershipScore": row.get("leadership_score"),
+            "correlationScore": row.get("correlation_score"),
+            "crowdingRisk": row.get("crowding_risk"),
+            "persistenceScore": row.get("persistence_score"),
+            "rotationState": row.get("rotation_state"),
+            "themeQualityFlags": json_loads(_maybe_decompress(row.get("theme_quality_flags_json") or "[]"), []),
             "metadata": json_loads(_maybe_decompress(row.get("metadata_json") or "{}"), {}),
         }
         return {key: value for key, value in item.items() if value is not None}
@@ -1052,6 +1091,10 @@ def _float(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _prefer_present(primary: Any, fallback: Any) -> Any:
+    return primary if primary is not None else fallback
 
 
 def _maybe_int(value: Any) -> int | None:

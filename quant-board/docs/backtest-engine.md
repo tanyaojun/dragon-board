@@ -47,6 +47,12 @@ Dragon Board 只通过 `quantBoardBridge` 提供 IndexedDB 数据读取和 TypeS
 
 `strategy_name` 会真实控制交易模拟的入场过滤器。当前支持 `rank_trend_candidate`、`hot_top10`、`a_main_only`、`b_ignition_only`、`a_b_combined`，非法策略名会拒绝回测。
 
+题材因子接入：
+
+- 默认 `tradeConfig.useThemeFactorForExecution=false`，题材因子只写入候选解释、风险标记和归一化 signals，不改变交易执行。
+- 设置 `useThemeFactorForExecution=true` 后，题材支持度才参与执行：强题材支持可小幅提高候选置信度，高拥挤风险会把买入降级为观察。
+- 题材因子不能绕过 RankTrend 独立制造买入信号，只能辅助已有候选分层。
+
 ## 事件循环
 
 建议采用逐快照事件循环：
@@ -79,6 +85,18 @@ Dragon Board 只通过 `quantBoardBridge` 提供 IndexedDB 数据读取和 TypeS
 - `risk.pressure` 超过阈值
 
 这只是首期默认策略，最终要以配置形式暴露。
+
+V2 起策略同时记录 `ThemeCandidateSupport`：
+
+- `mainTheme`
+- `themeHeat`
+- `themeContribution`
+- `themeRole`
+- `themeSupportScore`
+- `themeRiskFlags`
+- `themeReasons`
+
+这些字段会落到 `backtest_signals`，用于报告解释和后续分组分析。
 
 ## 撮合模型
 

@@ -54,6 +54,50 @@ describe('theme factor snapshot projection', () => {
       themeContribution: 16.8,
       riskPenalty: 2,
     })
+    expect(row).toMatchObject({
+      themeContribution: 16.8,
+      themeRole: 'leader',
+      themeExposureWeight: 1,
+      themeRiskFlags: ['riskPenalty:2'],
+    })
+  })
+
+  it('uses the strongest projected theme as stock primary theme', () => {
+    const record = createRecord({
+      hotlist: [
+        {
+          code: '000001',
+          name: '样本股',
+          rank: 1,
+          themes: [
+            {
+              id: 'WEAK',
+              name: '弱题材',
+              role: 'follower',
+              exposureWeight: 0.2,
+              themeContribution: 3,
+            },
+            {
+              id: 'STRONG',
+              name: '强题材',
+              role: 'leader',
+              exposureWeight: 0.8,
+              themeContribution: 13,
+              riskPenalty: 1,
+            },
+          ],
+        },
+      ],
+    })
+
+    const [row] = buildSnapshotStockRows(record)
+
+    expect(row).toMatchObject({
+      themeContribution: 13,
+      themeRole: 'leader',
+      themeExposureWeight: 0.8,
+      themeRiskFlags: ['riskPenalty:1'],
+    })
   })
 
   it('stores theme factor fields in sector row metadata', () => {
@@ -90,6 +134,17 @@ describe('theme factor snapshot projection', () => {
       rotationState: 'mainline',
     })
     expect(row.metadata?.themeFactor.qualityFlags).toHaveLength(1)
+    expect(row).toMatchObject({
+      momentumScore: 77,
+      breadthScore: 64,
+      fundScore: 82,
+      leadershipScore: 72,
+      correlationScore: 69,
+      crowdingRisk: 21,
+      persistenceScore: 90,
+      rotationState: 'mainline',
+      themeQualityFlags: [{ code: 'low_sample', level: 'info', message: '样本偏低' }],
+    })
   })
 
   it('leaves metadata null when no theme factor or explicit metadata exists', () => {
@@ -100,6 +155,8 @@ describe('theme factor snapshot projection', () => {
     const [row] = buildSnapshotSectorRows(record)
 
     expect(row.metadata).toBeNull()
+    expect(row.momentumScore).toBeUndefined()
+    expect(row.themeQualityFlags).toEqual([])
   })
 
   it('stores partial theme factor fields without requiring the full factor payload', () => {
@@ -110,5 +167,30 @@ describe('theme factor snapshot projection', () => {
     const [row] = buildSnapshotSectorRows(record)
 
     expect(row.metadata?.themeFactor).toEqual({ rotationState: 'inflow' })
+  })
+
+  it('prefers top-level stable theme factor fields over legacy metadata payload', () => {
+    const record = createRecord({
+      hotThemes: [
+        {
+          id: 'AI',
+          name: '人工智能',
+          heatScore: 88,
+          momentumScore: 77,
+          metadata: {
+            themeFactor: {
+              momentumScore: 12,
+              rotationState: 'outflow',
+            },
+          },
+          rotationState: 'mainline',
+        },
+      ],
+    })
+
+    const [row] = buildSnapshotSectorRows(record)
+
+    expect(row.momentumScore).toBe(77)
+    expect(row.rotationState).toBe('mainline')
   })
 })

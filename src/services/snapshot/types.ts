@@ -126,6 +126,10 @@ export interface SnapshotStockRow {
     themeContribution?: number
     riskPenalty?: number
   }>
+  themeContribution?: number
+  themeRole?: string
+  themeExposureWeight?: number
+  themeRiskFlags?: string[]
   isNew?: boolean
   firstZtTime?: string
   lastZtTime?: string
@@ -174,6 +178,15 @@ export interface SnapshotSectorRow {
   leaderCount?: number
   persistentDays?: number
   netInflow?: number
+  momentumScore?: number
+  breadthScore?: number
+  fundScore?: number
+  leadershipScore?: number
+  correlationScore?: number
+  crowdingRisk?: number
+  persistenceScore?: number
+  rotationState?: string
+  themeQualityFlags?: any[]
   metadata?: Record<string, any> | null
 }
 

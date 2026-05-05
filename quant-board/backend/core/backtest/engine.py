@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from backend.analysis.ranktrend import RankTrendConfig, RankTrendPythonEngine, get_macd_min_samples
+from backend.analysis.theme_support import build_theme_support_index
 from backend.core.backtest.evaluator import OutcomeEvaluator
 from backend.core.backtest.execution import TradeSimulator
 from backend.core.backtest.metrics import _round_or_none, average, share
@@ -254,6 +255,7 @@ class BacktestEngine:
                 positions=positions,
                 strategy_key=strategy_name,
                 config=trade_config,
+                theme_support_by_code=build_theme_support_index(frame),
             )
             result = strategy.evaluate_frame(input)
             frame_results.append(result)

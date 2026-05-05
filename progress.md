@@ -108,3 +108,74 @@
 - 重新验证：
   - `pnpm exec vitest run src/services/theme/__tests__/ThemeFactorEngine.test.ts src/services/snapshot/__tests__/themeFactorProjection.test.ts src/services/hotness/__tests__/StockHotnessCalculator.test.ts`：通过，15 个测试通过。
   - `pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false`：通过。
+
+## 2026-05-05 题材模块 V2 启动
+
+- 用户要求实施《题材模块优化升级方案 V2》。
+- 已新增 `task_plan_v2.md`，将 V2 拆成：
+  - Dragon Board 快照题材列。
+  - QuantBoard 数据库与 repository。
+  - Python 题材支持模型。
+  - 回测策略接入。
+  - 文档与验证。
+- 当前决策：默认不改变回测执行；`useThemeFactorForExecution=true` 时才让题材因子参与置信度调整和风险降级。
+
+## 2026-05-05 题材模块 V2 实施
+
+- Dragon Board 快照：
+  - `SnapshotStockRow` 新增 `themeContribution/themeRole/themeExposureWeight/themeRiskFlags`。
+  - `SnapshotSectorRow` 新增题材因子稳定列和 `themeQualityFlags`。
+  - `snapshot/builders.ts` 从 V1 `themes[]` 与 `metadata.themeFactor` 投影新增列。
+  - `pnpm exec vitest run src/services/snapshot/__tests__/themeFactorProjection.test.ts`：通过。
+- QuantBoard 后端：
+  - 新增 `backend.analysis.theme_support`，输出 `ThemeCandidateSupport`。
+  - `snapshot_stock_rows/snapshot_sector_rows/backtest_signals` 新增题材列。
+  - SQLite 初始化增加 idempotent 迁移，补齐旧库缺失列。
+  - repository、Supabase 同构映射、JSON compaction 映射已同步。
+  - `RankTrendPythonEngine.replay()` 带出股票题材摘要。
+  - `BaseStrategy` 默认追加题材解释和风险，不改执行；`useThemeFactorForExecution=true` 时启用高支持加置信度和拥挤风险降级。
+  - `.\.venv\Scripts\python.exe -m pytest tests/test_theme_support.py tests/test_quant_board.py::test_cli_run_ranktrend_exposes_ui_backtest_parameters`：通过。
+  - `.\.venv\Scripts\python.exe -m pytest tests/test_quant_board.py::test_snapshot_detail_read_apis_use_sqlite`：通过。
+- QuantBoard 前端：
+  - 回测表单新增 `useThemeFactorForExecution`，默认关闭。
+  - `npm run build`：通过。
+- 全量验证：
+  - `pnpm test`：通过，24 个测试文件、174 个测试通过。
+  - `pnpm test:ranktrend`：通过，9 个测试文件、95 个测试通过。
+  - `pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false`：通过。
+  - `cd quant-board; .\.venv\Scripts\python.exe -m pytest`：通过，67 个测试通过。
+  - `cd quant-board\frontend; npm run build`：通过。
+
+## 2026-05-05 题材模块 V2 review 修复
+
+- 使用 `receiving-code-review` 流程核对外部审查报告。
+- 已修复：
+  - Supabase 同构映射保留 `themeRole/rotationState` 的显式空字符串，不再被 snake_case fallback 覆盖。
+  - QuantBoard `theme_support` 题材名匹配增加规范化和长度比例约束，避免“电力”误匹配“电力设备”。
+  - Dragon Board 快照股票题材摘要不再盲取 `themes[0]`，改按 `themeContribution/heatScore/exposureWeight` 选择主題材。
+  - `SnapshotSectorRow` 稳定题材列在顶层字段和 legacy `metadata.themeFactor` 同时存在时，以顶层稳定字段为准。
+- 已核对：
+  - `_apply_column_migrations()` 当前只忽略 SQLite duplicate column，其他 `OperationalError` 会重新抛出，不存在静默吞掉所有迁移失败的问题；新增幂等迁移测试固化行为。
+  - `cooling` 分支保留为合同前向兼容，虽然当前 TS factor engine 暂不产出该状态。
+- 验证：
+  - `pnpm exec vitest run src/services/snapshot/__tests__/themeFactorProjection.test.ts`：通过，6 个测试通过。
+  - `cd quant-board; .\.venv\Scripts\python.exe -m pytest tests/test_theme_support.py`：通过，10 个测试通过。
+  - `cd quant-board; .\.venv\Scripts\python.exe -m pytest tests/test_quant_board.py::test_supabase_theme_string_fields_preserve_explicit_empty_values`：通过。
+  - `pnpm test`：通过，24 个测试文件、176 个测试通过。
+  - `pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false`：通过。
+  - `cd quant-board; .\.venv\Scripts\python.exe -m pytest`：通过，71 个测试通过。
+
+## 2026-05-05 题材模块 V2 更新 review 核对
+
+- 更新版外部 review 中两项仍引用旧代码：
+  - `_apply_column_migrations()` 当前不是 `except Exception: pass`，只忽略 SQLite duplicate column，其他迁移失败会抛出；已有幂等测试。
+  - `_find_sector_factor()` 当前已移除 `name in theme_name` 双向子串匹配，改为 `_is_same_theme_name()` 规范化匹配；已有“电力/电力设备”边界测试。
+- 本次继续修复：
+  - TS `ThemeFactorEngine.rotationState()` 现在会在 `marketPhase=distribution/falling` 且题材处于 `outflowThemes` 时产出 `cooling`，让 TS 合同与 Python 侧 `cooling` 风险扣分分支对齐。
+  - 新增 `ThemeFactorEngine` 测试覆盖 cooling 产出。
+- 验证：
+  - `pnpm exec vitest run src/services/theme/__tests__/ThemeFactorEngine.test.ts src/services/snapshot/__tests__/themeFactorProjection.test.ts`：通过，12 个测试通过。
+  - `cd quant-board; .\.venv\Scripts\python.exe -m pytest tests/test_theme_support.py`：通过，10 个测试通过。
+  - `pnpm test`：通过，24 个测试文件、177 个测试通过。
+  - `pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false`：通过。
+  - `cd quant-board; .\.venv\Scripts\python.exe -m pytest`：通过，71 个测试通过。

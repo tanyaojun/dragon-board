@@ -152,6 +152,7 @@ const backtestForm = reactive<BacktestRequest>({
   volumeParticipationRate: 0.05,
   orderBookParticipationRate: 0.3,
   useIntrabarStops: true,
+  useThemeFactorForExecution: false,
   intrabarAmbiguity: "stop_first",
   momentumPeriods: [3, 5, 8, 13, 21],
   macdFast: 21,
@@ -1441,6 +1442,10 @@ onMounted(async () => {
             <label class="check-row">
               <input v-model="backtestForm.useIntrabarStops" type="checkbox" />
               useIntrabarStops / 盘中止盈止损
+            </label>
+            <label class="check-row">
+              <input v-model="backtestForm.useThemeFactorForExecution" type="checkbox" />
+              useThemeFactorForExecution / 题材因子参与执行
             </label>
             <label>
               momentumPeriods / 动量周期

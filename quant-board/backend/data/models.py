@@ -138,6 +138,10 @@ class SnapshotStockRowModel(Base):
     institution_buy: Mapped[float | None] = mapped_column(Float, nullable=True)
     big_money300: Mapped[float | None] = mapped_column(Float, nullable=True)
     themes_json: Mapped[str] = mapped_column(Text, default="[]")
+    theme_contribution: Mapped[float | None] = mapped_column(Float, nullable=True)
+    theme_role: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    theme_exposure_weight: Mapped[float | None] = mapped_column(Float, nullable=True)
+    theme_risk_flags_json: Mapped[str] = mapped_column(Text, default="[]")
     is_new: Mapped[bool] = mapped_column(Boolean, default=False)
     first_zt_time: Mapped[str | None] = mapped_column(String(32), nullable=True)
     last_zt_time: Mapped[str | None] = mapped_column(String(32), nullable=True)
@@ -189,6 +193,15 @@ class SnapshotSectorRowModel(Base):
     leader_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     persistent_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
     net_inflow: Mapped[float | None] = mapped_column(Float, nullable=True)
+    momentum_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    breadth_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    fund_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    leadership_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    correlation_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    crowding_risk: Mapped[float | None] = mapped_column(Float, nullable=True)
+    persistence_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    rotation_state: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    theme_quality_flags_json: Mapped[str] = mapped_column(Text, default="[]")
     metadata_json: Mapped[str] = mapped_column(Text, default="{}")
 
 
@@ -286,6 +299,13 @@ class BacktestSignal(ResearchBase):
     regime: Mapped[str | None] = mapped_column(String(32), nullable=True)
     reasons_json: Mapped[str] = mapped_column(Text, default="[]")
     risk_flags_json: Mapped[str] = mapped_column(Text, default="[]")
+    main_theme: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    theme_heat: Mapped[float | None] = mapped_column(Float, nullable=True)
+    theme_contribution: Mapped[float | None] = mapped_column(Float, nullable=True)
+    theme_role: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    theme_support_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    theme_risk_flags_json: Mapped[str] = mapped_column(Text, default="[]")
+    theme_reasons_json: Mapped[str] = mapped_column(Text, default="[]")
 
 
 class BacktestQualityReport(ResearchBase):
@@ -357,7 +377,7 @@ RESEARCH_JSON_FIELD_MAP = {
     GoldenRankTrendCase: ("input_json", "expected_json"),
     BacktestRun: ("request_json", "result_json"),
     BacktestTrade: ("fill_detail_json",),
-    BacktestSignal: ("reasons_json", "risk_flags_json"),
+    BacktestSignal: ("reasons_json", "risk_flags_json", "theme_risk_flags_json", "theme_reasons_json"),
     BacktestQualityReport: ("missing_fields_json", "nan_counts_json", "inf_counts_json", "warnings_json"),
     OptimizationRun: ("request_json", "result_json"),
 }

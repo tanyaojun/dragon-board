@@ -63,6 +63,10 @@ Supabase 备份库必须与快照事实库保持同构 schema。云端需要使�
 
 Supabase schema 不再包含回测、优化和 Golden 表，也不再对研究 JSON 做云端压缩备份。`backtest_runs`、`backtest_trades`、`backtest_equity_curve`、`backtest_signals`、`backtest_quality_reports`、优化和 Golden 都是 research SQLite `local-only` 数据，大型研究结果留在本地研究库或报告文件目录，避免挤占 Supabase Free 版容量。
 
+题材模块 V2 增加了快照事实库题材列：`snapshot_stock_rows` 保存 `theme_contribution/theme_role/theme_exposure_weight/theme_risk_flags_json`，`snapshot_sector_rows` 保存题材因子稳定列和 `theme_quality_flags_json`。这些字段属于快照事实合同，因此 SQLite 与 Supabase 同构 schema 必须同时更新；旧库通过 idempotent `ALTER TABLE ADD COLUMN` 兼容迁移。
+
+研究库 `backtest_signals` 也增加题材解释列：`main_theme/theme_heat/theme_contribution/theme_role/theme_support_score/theme_risk_flags_json/theme_reasons_json`。研究库仍是 local-only，不进入 Supabase 备份链路。
+
 长期增长控制由 Parquet 归档承担：默认保留最近 90 个交易日的 SQLite 热数据，超过保留窗口的股票/板块明细可归档到 `quant-board/data/archive/snapshots/**`；回测 trades/equity/signals 可归档到 `quant-board/data/archive/research/**`。归档成功必须写入 `archive_manifests`，记录行数、sha256、字节数、本地路径、对象存储 key 和状态。归档校验失败时不得清理 SQLite 明细。
 
 研究库历史回测清理属于本地维护动作，不属于 Supabase 备份、pull/push 或 failover 合同。`DELETE /api/backtests/{run_id}`、`POST /api/storage/research-cleanup` 和 CLI `cleanup-research` 只能删除 `quant_board_research.db` 中的回测结果表，不能删除 `quant_board_snapshots.db` 的正式快照事实，也不能登记 `sync_outbox`。删除单个回测时必须先显式删除 `backtest_trades`、`backtest_equity_curve`、`backtest_signals`、`backtest_quality_reports`，最后删除 `backtest_runs`。

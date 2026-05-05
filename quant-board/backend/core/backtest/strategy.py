@@ -67,6 +67,7 @@ class StrategyInput:
     positions: dict[str, Any] = field(default_factory=dict)
     strategy_key: str = DEFAULT_STRATEGY_NAME
     config: dict[str, Any] = field(default_factory=dict)
+    theme_support_by_code: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     @property
     def snapshot_id(self) -> str:
@@ -95,6 +96,13 @@ class StrategyDecision:
     reasons: list[str] = field(default_factory=list)
     risk_flags: list[str] = field(default_factory=list)
     quality_flags: list[str] = field(default_factory=list)
+    main_theme: str = ""
+    theme_heat: float = 0.0
+    theme_contribution: float = 0.0
+    theme_role: str = ""
+    theme_support_score: float = 0.0
+    theme_risk_flags: list[str] = field(default_factory=list)
+    theme_reasons: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -109,6 +117,13 @@ class StrategyDecision:
             "reasons": self.reasons,
             "riskFlags": self.risk_flags,
             "qualityFlags": self.quality_flags,
+            "mainTheme": self.main_theme,
+            "themeHeat": self.theme_heat,
+            "themeContribution": self.theme_contribution,
+            "themeRole": self.theme_role,
+            "themeSupportScore": self.theme_support_score,
+            "themeRiskFlags": self.theme_risk_flags,
+            "themeReasons": self.theme_reasons,
         }
 
 
@@ -224,6 +239,26 @@ class BaseStrategy:
                 d.reasons.append("D_EXIT_RISK: 退出风险分层，应考虑卖出")
             else:
                 d.reasons.append(f"N_NEUTRAL: 中性分层 ({tier})")
+            self._apply_theme_support(d, input)
+
+    def _apply_theme_support(self, d: StrategyDecision, input: StrategyInput) -> None:
+        support = input.theme_support_by_code.get(d.code) or {}
+        if not support:
+            return
+        d.main_theme = str(support.get("mainTheme") or "")
+        d.theme_heat = float(support.get("themeHeat") or 0)
+        d.theme_contribution = float(support.get("themeContribution") or 0)
+        d.theme_role = str(support.get("themeRole") or "")
+        d.theme_support_score = float(support.get("themeSupportScore") or 0)
+        d.theme_risk_flags = [str(item) for item in support.get("riskFlags") or []]
+        d.theme_reasons = [str(item) for item in support.get("reasons") or []]
+        d.reasons.extend(item for item in d.theme_reasons if item not in d.reasons)
+        d.risk_flags.extend(item for item in d.theme_risk_flags if item not in d.risk_flags)
+
+        if not bool(input.config.get("useThemeFactorForExecution")):
+            return
+        if d.theme_support_score >= 70 and "题材拥挤风险高" not in d.theme_risk_flags:
+            d.confidence = min(100, d.confidence + min(8, (d.theme_support_score - 70) * 0.2))
 
     # Layer 3 ─────────────────────────────────
 
@@ -286,6 +321,10 @@ class BaseStrategy:
                 d.risk_flags.append("排名过低")
             if d.confidence < 0:
                 d.risk_flags.append("信心为负")
+            if bool(input.config.get("useThemeFactorForExecution")) and "题材拥挤风险高" in d.theme_risk_flags:
+                if d.signal == "buy":
+                    d.signal = "watch"
+                    d.reasons.append("题材执行过滤: 拥挤风险高，买入降级为观察")
 
 
 # ═══════════════════════════════════════════

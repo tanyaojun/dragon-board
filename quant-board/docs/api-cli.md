@@ -1078,6 +1078,14 @@ cd d:\dragon-board\quant-board
 | `stopLossPct` | `0.06` |
 | `executionMode` | `current_bar` |
 | `randomSeed` | `20260430` |
+| `tradeConfig.useThemeFactorForExecution` | `false` |
+
+题材因子执行开关：
+
+- API 请求可在 `tradeConfig` 中传 `useThemeFactorForExecution=true`。
+- CLI 使用 `run-ranktrend --use-theme-factor-for-execution`。
+- 默认关闭时，题材因子只进入候选解释和 `backtest_signals` 字段，不改变交易结果。
+- 打开后，强题材支持可小幅提高置信度，高拥挤风险会把买入降级为观察。
 
 ## 验收清单
 

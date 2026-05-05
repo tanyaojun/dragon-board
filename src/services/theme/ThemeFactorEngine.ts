@@ -159,7 +159,9 @@ function rotationState(context: ThemeSourceContext, themeId: string, themeName: 
   if (rotation.mainLines?.some(matches)) return 'mainline'
   if (rotation.quickRotation?.some(matches)) return 'quick'
   if (rotation.inflowThemes?.some(matches)) return 'inflow'
-  if (rotation.outflowThemes?.some(matches)) return 'outflow'
+  if (rotation.outflowThemes?.some(matches)) {
+    return rotation.marketPhase === 'distribution' || rotation.marketPhase === 'falling' ? 'cooling' : 'outflow'
+  }
   return 'neutral'
 }
 

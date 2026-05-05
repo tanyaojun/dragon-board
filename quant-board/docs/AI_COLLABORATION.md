@@ -17,6 +17,7 @@
 - 当前同步批次：`sync_outbox` 只覆盖快照 ingest、数据集 bundle；回测、优化和 Golden 保存在 research SQLite，不进入 Supabase Free 版备份目标。历史 JSON 迁移入口是 `POST /api/migrations/snapshots/import-json`；自动同步默认关闭，只补传到期 outbox。
 - SQLite 替换 IndexedDB 的当前切口：Dragon Board 正式写入先查询 QuantBoard SQLite 是否已有同一 `snapshot_id`，缺失时走 `POST /api/snapshots/ingest`；正式读口由根前端 `src/services/snapshot/backendRead.ts` 统一调用 QuantBoard `GET /api/snapshots/frames`、`/api/snapshots/records`、`/api/snapshots/stock-rows`、`/api/snapshots/sector-rows`；IndexedDB 快照缓存默认关闭，只作为迁移源和显式缓存。浏览器端旧的 IndexedDB 校验/补齐入口与 `five_minute` 本地入口已收口，不再作为正式合同。
 - failover 当前切口：SQLite 主库不可用但 Supabase 同构备份库可写时，`POST /api/snapshots/ingest` 可返回 `status=backup_only` 并写入备库；SQLite 恢复后必须执行 `pull-backup` 收敛，不能把 `backup_only` 当作本地主库已恢复。
+- 题材模块 V2：Dragon Board 快照会写入稳定题材列，QuantBoard 回测会生成 `ThemeCandidateSupport`。默认 `useThemeFactorForExecution=false`，题材只做候选解释；只有显式开启时才参与置信度调整和拥挤风险降级。
 
 ## 工作边界
 
@@ -58,6 +59,7 @@
 14. 迁移 DataLayer 的 IndexedDB 读写入口时，不得删除或重命名 `SnapshotRecord`、`SnapshotFrameBundle`、`SnapshotStockRow`、`SnapshotSectorRow` 已有字段；SQLite 后端必须承接字段并以 camelCase 返回。
 15. 删除 IndexedDB 历史前必须先完成后端迁移收口与人工验收，确认四张事实表全量行数一致；不要把浏览器端旧 IndexedDB 校验/补齐入口当成正式合同。正式快照缓存默认关闭后，不得重新在 `DataLayer` 或 `snapshotFacade` 正式读写口恢复 IndexedDB fallback；QuantBoard 后端不可用时正式读取必须显式失败。
 16. 优化结果只生成候选参数，不得自动写回 Python、TypeScript、API、CLI、前端表单或文档默认值；CLI 必须支持 `tpe` 和异步提交 `--no-wait` 口径。`optuna_tpe` 仅作为后端兼容别名。
+17. 题材因子不得绕过 RankTrend 独立制造买入信号；执行开关开启时也只能辅助已有候选分层。
 
 ## 推荐执行流程
 

@@ -333,6 +333,7 @@ def build_ranktrend_payload(args: argparse.Namespace) -> dict[str, Any]:
             "orderBookParticipationRate": args.order_book_participation_rate,
             "useIntrabarStops": not args.no_intrabar_stops,
             "intrabarAmbiguity": args.intrabar_ambiguity,
+            "useThemeFactorForExecution": args.use_theme_factor_for_execution,
         },
     }
 
@@ -578,6 +579,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_cmd.add_argument("--order-book-participation-rate", type=float, default=0.3)
     run_cmd.add_argument("--no-intrabar-stops", action="store_true")
     run_cmd.add_argument("--intrabar-ambiguity", choices=["stop_first", "take_first"], default="stop_first")
+    run_cmd.add_argument("--use-theme-factor-for-execution", action="store_true")
     run_cmd.set_defaults(func=cmd_run_ranktrend)
 
     opt_cmd = sub.add_parser("optimize-ranktrend", help="Run RankTrend optimization")

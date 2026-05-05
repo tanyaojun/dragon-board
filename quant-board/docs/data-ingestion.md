@@ -105,6 +105,7 @@ snapshot_type = half_hour
 | `turnover` | 成交额 |
 | `turnover_rate` | 换手率 |
 | `depth10_json`、`themes_json` | 只保留小型结构化数组/对象，不再保存整行 payload |
+| `theme_contribution`、`theme_role`、`theme_exposure_weight`、`theme_risk_flags_json` | Dragon Board V2 题材暴露摘要；旧快照缺失时允许为空 |
 
 ### 板块行字段
 
@@ -115,6 +116,11 @@ snapshot_type = half_hour
 - `entity_name`
 - `rank`
 - `metadata_json`
+- `momentum_score`、`breadth_score`、`fund_score`、`leadership_score`、`correlation_score`、`crowding_risk`、`persistence_score`
+- `rotation_state`
+- `theme_quality_flags_json`
+
+旧数据仍可只提供 `metadata_json.themeFactor`；导入和回测会优先读取稳定列，缺失时用 JSON fallback。
 
 ## 导入流程
 

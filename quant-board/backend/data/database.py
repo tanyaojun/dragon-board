@@ -46,6 +46,7 @@ def init_db() -> bool:
     try:
         Base.metadata.create_all(bind=engine)
         ResearchBase.metadata.create_all(bind=research_engine)
+        _migrate_snapshot_db(engine)
         _migrate_research_db(research_engine)
         _primary_available = True
         _last_primary_error = None
@@ -59,17 +60,51 @@ def init_db() -> bool:
     return _primary_available
 
 
-def _migrate_research_db(eng: "Engine") -> None:
-    """逐列迁移，补充 create_all 无法追加的列。"""
+def _migrate_snapshot_db(eng: "Engine") -> None:
+    """逐列迁移快照事实库，补充 create_all 无法追加的列。"""
     from sqlalchemy import text
 
+    migrations = [
+        ("snapshot_stock_rows", "theme_contribution", "FLOAT"),
+        ("snapshot_stock_rows", "theme_role", "VARCHAR(32)"),
+        ("snapshot_stock_rows", "theme_exposure_weight", "FLOAT"),
+        ("snapshot_stock_rows", "theme_risk_flags_json", "TEXT DEFAULT '[]'"),
+        ("snapshot_sector_rows", "momentum_score", "FLOAT"),
+        ("snapshot_sector_rows", "breadth_score", "FLOAT"),
+        ("snapshot_sector_rows", "fund_score", "FLOAT"),
+        ("snapshot_sector_rows", "leadership_score", "FLOAT"),
+        ("snapshot_sector_rows", "correlation_score", "FLOAT"),
+        ("snapshot_sector_rows", "crowding_risk", "FLOAT"),
+        ("snapshot_sector_rows", "persistence_score", "FLOAT"),
+        ("snapshot_sector_rows", "rotation_state", "VARCHAR(32)"),
+        ("snapshot_sector_rows", "theme_quality_flags_json", "TEXT DEFAULT '[]'"),
+    ]
+    _apply_column_migrations(eng, migrations)
+
+
+def _migrate_research_db(eng: "Engine") -> None:
+    """逐列迁移，补充 create_all 无法追加的列。"""
     migrations = [
         # Phase 4: BacktestRun 增强字段
         ("backtest_runs", "date_start", "VARCHAR(16)"),
         ("backtest_runs", "date_end", "VARCHAR(16)"),
         ("backtest_runs", "error_reason", "TEXT"),
         ("backtest_runs", "finished_at", "DATETIME"),
+        # Theme V2: 回测信号题材解释字段
+        ("backtest_signals", "main_theme", "VARCHAR(160)"),
+        ("backtest_signals", "theme_heat", "FLOAT"),
+        ("backtest_signals", "theme_contribution", "FLOAT"),
+        ("backtest_signals", "theme_role", "VARCHAR(32)"),
+        ("backtest_signals", "theme_support_score", "FLOAT"),
+        ("backtest_signals", "theme_risk_flags_json", "TEXT DEFAULT '[]'"),
+        ("backtest_signals", "theme_reasons_json", "TEXT DEFAULT '[]'"),
     ]
+    _apply_column_migrations(eng, migrations)
+
+
+def _apply_column_migrations(eng: "Engine", migrations: list[tuple[str, str, str]]) -> None:
+    from sqlalchemy import text
+
     with eng.connect() as conn:
         for table, column, col_type in migrations:
             try:

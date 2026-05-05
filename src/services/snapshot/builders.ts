@@ -93,6 +93,35 @@ function toThemeRefs(themes: any): Array<{
     .filter((theme) => Boolean(theme.name || theme.id))
 }
 
+type SnapshotThemeRef = ReturnType<typeof toThemeRefs>[number]
+
+function themeRefScore(theme: SnapshotThemeRef): number {
+  const contribution = finiteNumberOrUndefined(theme.themeContribution) ?? -1
+  const heat = finiteNumberOrUndefined(theme.heatScore) ?? -1
+  const exposure = finiteNumberOrUndefined(theme.exposureWeight) ?? -1
+  return contribution * 10000 + heat * 100 + exposure
+}
+
+function primaryThemeRef(themes: SnapshotThemeRef[]): SnapshotThemeRef | undefined {
+  return themes
+    .map((theme, index) => ({ theme, score: themeRefScore(theme), index }))
+    .sort((left, right) => right.score - left.score || left.index - right.index)[0]?.theme
+}
+
+function toThemeRiskFlags(theme: SnapshotThemeRef | undefined): string[] {
+  if (!theme) return []
+  const flags: string[] = []
+  if (Number.isFinite(Number(theme.riskPenalty)) && Number(theme.riskPenalty) > 0) {
+    flags.push(`riskPenalty:${Number(theme.riskPenalty)}`)
+  }
+  return flags
+}
+
+function finiteNumberOrUndefined(value: unknown): number | undefined {
+  const numeric = Number(value)
+  return Number.isFinite(numeric) ? numeric : undefined
+}
+
 function compactThemeFactorMetadata(payload: Record<string, any>): Record<string, any> | undefined {
   const factorKeys = [
     'momentumScore',
@@ -119,6 +148,15 @@ function buildSectorMetadata(payload: Record<string, any>): Record<string, any> 
     ...(compactThemeFactorMetadata(payload) || {}),
   }
   return Object.keys(metadata).length > 0 ? metadata : null
+}
+
+function getThemeFactorPayload(payload: Record<string, any>): Record<string, any> {
+  const metadata = payload.metadata
+  const fromMetadata =
+    metadata && typeof metadata === 'object' && (metadata as Record<string, any>).themeFactor
+  return fromMetadata && typeof fromMetadata === 'object'
+    ? { ...(fromMetadata as Record<string, any>), ...payload }
+    : payload
 }
 
 function getHotlistSourceStock(sourceStocksByCode: Map<string, any> | undefined, code: string) {
@@ -571,6 +609,8 @@ export function buildSnapshotStockRows(
     .map((item: any, index: number) => {
       const sourceStock = getHotlistSourceStock(sourceStocksByCode, String(item.code || ''))
       const signalColumns = getCompactSignalColumns(item, sourceStock)
+      const themes = toThemeRefs(item.themes)
+      const primaryTheme = primaryThemeRef(themes)
       return {
         id: `${record.id}:${item.code}`,
         snapshotId: record.id,
@@ -626,7 +666,11 @@ export function buildSnapshotStockRows(
         popularityChange: Number(item.popularityChange) || 0,
         institutionBuy: Number(item.institutionBuy) || 0,
         bigMoney300: Number(item.bigMoney300) || 0,
-        themes: toThemeRefs(item.themes),
+        themes,
+        themeContribution: finiteNumberOrUndefined(primaryTheme?.themeContribution),
+        themeRole: primaryTheme?.role,
+        themeExposureWeight: finiteNumberOrUndefined(primaryTheme?.exposureWeight),
+        themeRiskFlags: toThemeRiskFlags(primaryTheme),
         isNew: Boolean(item.isNew),
         firstZtTime: String(item.firstZtTime || ''),
         lastZtTime: String(item.lastZtTime || ''),
@@ -649,6 +693,7 @@ function buildSectorRow(
   rank: number,
   payload: Record<string, any>,
 ): SnapshotSectorRow {
+  const themeFactor = getThemeFactorPayload(payload)
   return {
     id: `${record.id}:${entityType}:${entityKey}`,
     snapshotId: record.id,
@@ -675,6 +720,18 @@ function buildSectorRow(
     leaderCount: Number(payload.leaderCount) || 0,
     persistentDays: Number(payload.persistentDays) || 0,
     netInflow: Number(payload.netInflow ?? payload.mainNetInflow) || 0,
+    momentumScore: finiteNumberOrUndefined(themeFactor.momentumScore),
+    breadthScore: finiteNumberOrUndefined(themeFactor.breadthScore),
+    fundScore: finiteNumberOrUndefined(themeFactor.fundScore),
+    leadershipScore: finiteNumberOrUndefined(themeFactor.leadershipScore),
+    correlationScore: finiteNumberOrUndefined(themeFactor.correlationScore),
+    crowdingRisk: finiteNumberOrUndefined(themeFactor.crowdingRisk),
+    persistenceScore: finiteNumberOrUndefined(themeFactor.persistenceScore),
+    rotationState:
+      typeof themeFactor.rotationState === 'string' ? themeFactor.rotationState : undefined,
+    themeQualityFlags: Array.isArray(themeFactor.qualityFlags)
+      ? clonePlainObject(themeFactor.qualityFlags as any)
+      : [],
     metadata: buildSectorMetadata(payload),
   }
 }

@@ -164,6 +164,34 @@ describe('ThemeFactorEngine', () => {
     expect(factors[0].heatScore).toBe(0)
     expect(factors[0].qualityFlags.map((flag) => flag.code)).toContain('invalid_number')
   })
+
+  it('marks outflow themes as cooling in distribution or falling phases', () => {
+    const factors = buildThemeFactors(
+      createContext({
+        rotationAnalysis: {
+          timestamp: 1713751200000,
+          inflowThemes: [],
+          outflowThemes: [{ themeId: 'AI', themeName: '人工智能' } as any],
+          mainLines: [],
+          quickRotation: [],
+          rotationSpeed: 48,
+          marketPhase: 'distribution',
+          summary: {
+            mainLineCount: 0,
+            inflowCount: 0,
+            outflowCount: 1,
+            topInflow: '无',
+            topOutflow: '人工智能',
+            suggestion: '',
+            strongCount: 0,
+            topStrength: '无',
+          },
+        },
+      }),
+    )
+
+    expect(factors.find((factor) => factor.themeId === 'AI')?.rotationState).toBe('cooling')
+  })
 })
 
 describe('ThemeStockProjector', () => {
