@@ -453,6 +453,18 @@ Dragon Board 前端正式分析入口 `listSnapshotFrameBundles` 必须调用该
 
 重复迁移同一 `idempotencyKey` 或同一批已存在 `snapshot_id` 时，必须跳过已入库快照，不能制造重复事实行。
 
+## 题材映射迁移校验
+
+`themeDATA.db` 的题材映射迁移验收使用只读校验，不自动修复、不自动重新导入。
+
+- API：`POST /api/migrations/themes/verify-json`
+- CLI：`python -m backend.cli verify-themes --path <theme-json>`
+- 校验源：旧 `ThemeMappingData` JSON。
+- 校验目标：当前 `themeDATA.db` 中的 `themes` 与 `theme_stock_mappings`。
+- 返回字段：`ok`、`expected`、`actual`、`mismatches`、`missingThemes`、`extraThemes`、`missingMappings`、`extraMappings`、`source=sqlite`。
+
+校验和导入复用同一股票代码归一化规则：市场前缀会被剥离，股票代码补齐为六位数字；空题材、缺 `id/name`、非法股票代码返回结构化错误。
+
 ## 冲突和幂等规则
 
 首期采用保守策略：

@@ -585,6 +585,19 @@ def import_theme_json_migration(
         raise HTTPException(status_code=400, detail=error.detail) from error
 
 
+@app.post("/api/migrations/themes/verify-json")
+def verify_theme_json_migration(
+    payload: dict[str, Any],
+    db: Session | None = Depends(get_theme_db),
+) -> dict[str, Any]:
+    if db is None:
+        raise HTTPException(status_code=503, detail="theme database is unavailable")
+    try:
+        return ThemeMigrationService(db).verify_mapping(payload)
+    except ThemeMigrationError as error:
+        raise HTTPException(status_code=400, detail=error.detail) from error
+
+
 @app.get("/api/themes/mapping")
 def get_theme_mapping(db: Session | None = Depends(get_theme_db)) -> dict[str, Any]:
     if db is None:

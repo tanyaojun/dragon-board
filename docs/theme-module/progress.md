@@ -377,3 +377,39 @@
 - code review 修复局部验证：
   - `cd quant-board; .\.venv\Scripts\python.exe -m pytest tests/test_theme_database.py -q`：7 个测试通过。
   - `pnpm exec vitest run src/services/__tests__/ThemeDataService.test.ts src/services/__tests__/apiService.test.ts`：2 个测试文件、8 个测试通过。
+
+## 2026-05-05 题材模块 V9 启动
+
+- 用户要求实施《题材模块 V9：迁移校验工具化 + 题材基础读口彻底收口》。
+- 已新增 `docs/theme-module/plans/task_plan_v9.md`。
+- V9 范围确认：
+  - 后端新增 `themeDATA.db` 只读校验 API/CLI。
+  - 前端把 `sectorAnalyzer.loadSectorStocks()` 的缓存和加载职责迁入 `JxbkThemeFeed`。
+  - 不改题材因子、轮动、预警算法和 UI 布局。
+- 后端 TDD 记录：
+  - 新增测试后首次运行 `.\.venv\Scripts\python.exe -m pytest tests/test_theme_database.py tests/test_quant_board.py::test_cli_exposes_sync_and_migration_commands -q`：按预期失败，缺少 `cmd_verify_themes`。
+  - 实现 `ThemeMigrationService.verify_mapping()`、`POST /api/migrations/themes/verify-json`、`verify-themes --path` 后，同命令通过，9 个测试通过。
+- 前端 TDD 记录：
+  - 新增 `JxbkThemeFeed.test.ts` 与 legacy adapter 测试后首次运行 `pnpm exec vitest run src/services/theme/__tests__/JxbkThemeFeed.test.ts src/services/__tests__/themeLegacyAdapters.test.ts`：按预期失败，缺少 `loadSectorStocks/clearSectorStockCache`。
+  - 实现后同命令通过，2 个测试文件、5 个测试通过。
+- 已实现：
+  - `JxbkThemeFeed` 承接板块成分股加载、缓存、并发复用、失败空数组、DataLayer 写入和 runtime refresh。
+  - `sectorAnalyzer.loadSectorStocks/clearCache/getStats` 改为委托 `JxbkThemeFeed`。
+  - QuantBoard 文档补充题材迁移校验 API/CLI 合同。
+- 静态复核：
+  - `sectorAnalyzer` 已无独立 `sectorStocksCache`。
+  - 成分股 API 请求集中到 `JxbkThemeFeed.loadSectorStocks()`。
+- 完整验证中发现：
+  - `vue-tsc` 首次失败于 `JxbkThemeFeed.ts` filter 回调参数隐式 `any`，已补 `JxbkStockData` 类型标注。
+
+## 2026-05-05 V9 code review 修复
+
+- 已处理审查发现：
+  - `sectorAnalyzer.forceRefreshJxbk()` 增加 `state.destroyed` 检查，与 `runUpdate/forceRefresh/syncData` 对齐。
+  - `JxbkThemeFeed.normalizeStockRow()` 对 `item[100]` 增加 `Array.isArray` 防护，异常格式不再按字符串字符解析。
+  - `refreshBlocks()` 的 ST 过滤改为 `ST/*ST` 前缀判断，避免误杀普通名称中包含 `ST` 的板块。
+- 已补测试：
+  - `sectorAnalyzer.forceRefreshJxbk()` 在 destroy 后不触发 runtime refresh。
+  - `JxbkThemeFeed.loadSectorStocks()` 收到畸形 `item[100]` 时不解析出脏 blocks/价格。
+- 局部验证：
+  - `pnpm exec vitest run src/services/theme/__tests__/JxbkThemeFeed.test.ts src/services/__tests__/themeLegacyAdapters.test.ts`：2 个测试文件、7 个测试通过。

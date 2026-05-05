@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
 from backend.analysis.ranktrend import RankTrendConfig, analyze_cycle, analyze_momentum_signals, analyze_risk, analyze_technical
-from backend.cli import build_parser, build_ranktrend_payload, cmd_migrate_snapshots
+from backend.cli import build_parser, build_ranktrend_payload, cmd_migrate_snapshots, cmd_verify_themes
 from backend.core.backtest import TradeSimulator
 from backend.data.database import ResearchSessionLocal, SessionLocal, init_db
 from backend.data.backup_sync import BackupSyncService
@@ -1773,6 +1773,30 @@ def test_cli_exposes_sync_and_migration_commands(tmp_path: Path, monkeypatch: py
     assert captured[0]["ok"] is True
     assert captured[0]["report"]["dry_run"] is True
     assert captured[0]["report"]["scanned"] == 1
+
+    theme_path = tmp_path / "themes.json"
+    theme_payload = {
+        "version": "cli-theme-test",
+        "themes": [{"id": "AI", "name": "人工智能", "stocks": ["000001", "SZ000001"]}],
+    }
+    theme_path.write_text(json.dumps(theme_payload, ensure_ascii=False), encoding="utf-8")
+    verify_theme_args = parser.parse_args(["verify-themes", "--path", str(theme_path)])
+    assert verify_theme_args.func.__name__ == "cmd_verify_themes"
+
+    captured.clear()
+    cmd_verify_themes(verify_theme_args)
+    assert captured
+    assert set(captured[0]) >= {
+        "ok",
+        "expected",
+        "actual",
+        "mismatches",
+        "missingThemes",
+        "extraThemes",
+        "missingMappings",
+        "extraMappings",
+        "source",
+    }
 
 
 class MemoryBackup:

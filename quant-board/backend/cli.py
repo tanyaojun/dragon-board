@@ -20,6 +20,8 @@ from backend.data.repository import Repository
 from backend.data.schemas import ImportDatasetRequest
 from backend.data.storage_inspector import inspect_storage
 from backend.data.supabase_backup import get_backup_client
+from backend.data.theme_database import ThemeSessionLocal, init_theme_db
+from backend.data.theme_service import ThemeMigrationService
 from backend.settings import get_settings
 from backend.services import BacktestService, GoldenService, OptimizationService
 
@@ -128,6 +130,13 @@ def cmd_migrate_snapshots(args: argparse.Namespace) -> None:
             "dryRun": args.dry_run,
         }
         print_json(SnapshotMigrationService(session).import_json(request))
+
+
+def cmd_verify_themes(args: argparse.Namespace) -> None:
+    init_theme_db()
+    payload = json.loads(Path(args.path).read_text(encoding="utf-8"))
+    with ThemeSessionLocal() as session:
+        print_json(ThemeMigrationService(session).verify_mapping(payload))
 
 
 def cmd_inspect_storage(args: argparse.Namespace) -> None:
@@ -459,6 +468,10 @@ def build_parser() -> argparse.ArgumentParser:
     migrate_cmd.add_argument("--source", default="dragon_board_history_migration")
     migrate_cmd.add_argument("--dry-run", action="store_true")
     migrate_cmd.set_defaults(func=cmd_migrate_snapshots)
+
+    verify_themes_cmd = sub.add_parser("verify-themes", help="Verify historical DragonBoard theme JSON against themeDATA.db")
+    verify_themes_cmd.add_argument("--path", required=True)
+    verify_themes_cmd.set_defaults(func=cmd_verify_themes)
 
     inspect_cmd = sub.add_parser("inspect-storage", help="Inspect SQLite files and JSON field sizes")
     inspect_cmd.add_argument("--path", default=None)

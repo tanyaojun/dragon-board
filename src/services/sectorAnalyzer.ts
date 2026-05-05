@@ -14,8 +14,8 @@ import type {
 import { SECTOR_CONFIG } from '../config/constants'
 import { dataLayer } from './DataLayer'
 import { themeMapping } from './ThemeDataService'
-import { apiService } from './apiService'
 import { themeFacade } from './theme/ThemeFacade'
+import { jxbkThemeFeed } from './theme/JxbkThemeFeed'
 
 type SortableThemeStockKey = keyof Pick<
   ThemeStock,
@@ -47,15 +47,6 @@ const state = {
   themeInfo: {} as Record<string, ThemeInfo>,
   initialized: false,
   destroyed: false,
-  sectorStocksCache: {} as Record<
-    string,
-    {
-      stocks: JxbkStockData[]
-      loaded: boolean
-      loading: boolean
-      loadTime: number
-    }
-  >,
   topBlocksLoaded: false,
 }
 
@@ -209,91 +200,14 @@ export async function loadSectorStocks(
   sectorName: string,
   forceRefresh: boolean = false,
 ): Promise<JxbkStockData[]> {
-  const cacheKey = `${sectorCode}_${sectorName}`
-
-  if (!forceRefresh && state.sectorStocksCache[cacheKey]?.loaded) {
-    const cached = state.sectorStocksCache[cacheKey]
-    if (Date.now() - cached.loadTime < CONFIG.CACHE_TTL) return cached.stocks
-  }
-
-  if (forceRefresh && state.sectorStocksCache[cacheKey]) delete state.sectorStocksCache[cacheKey]
-
-  if (state.sectorStocksCache[cacheKey]?.loading) {
-    return new Promise((resolve) => {
-      const check = setInterval(() => {
-        if (state.sectorStocksCache[cacheKey]?.loaded) {
-          clearInterval(check)
-          resolve(state.sectorStocksCache[cacheKey].stocks)
-        }
-      }, 100)
-    })
-  }
-
-  state.sectorStocksCache[cacheKey] = {
-    stocks: [],
-    loaded: false,
-    loading: true,
-    loadTime: Date.now(),
-  }
-
-  try {
-    const data = await apiService.getBlockStockList(sectorCode, { type: 6, st: 80 })
-    if (data?.response?.data && Array.isArray(data.response.data)) {
-      const stocks = data.response.data.map((item: any) => {
-        const d = item[100] || []
-        return {
-          code: item[1],
-          name: item[2],
-          leadStatus: item[6] || '',
-          blocks: d[0] ? d[0].split('、') : [],
-          price: parseFloat(d[1]) || 0,
-          change: parseFloat(d[2]) || 0,
-          speed: parseFloat(d[3]) || 0,
-          volumeRatio: parseFloat(d[4]) || 0,
-          mainNetInflow: parseFloat(d[6]) || 0,
-          mainBuy: parseFloat(d[7]) || 0,
-          mainSell: parseFloat(d[8]) || 0,
-          institutionBuy: parseFloat(d[14]) || 0,
-          lianban: d[18] || '',
-          fengdan: parseFloat(d[21]) || 0,
-          maxFengdan: parseFloat(d[22]) || 0,
-          cirMV: parseFloat(d[29]) || 0,
-          leadTimes: parseInt(d[40]) || 0,
-          bigMoney300: parseFloat(d[50]) || 0,
-          popularity: parseInt(d[58]) || 0,
-          popularityChange: parseInt(d[59]) || 0,
-        } as JxbkStockData
-      })
-      state.sectorStocksCache[cacheKey] = {
-        stocks,
-        loaded: true,
-        loading: false,
-        loadTime: Date.now(),
-      }
-      dataLayer.updateJxbkStocks(stocks)
-      await themeFacade.refreshRuntime({
-        source: 'sectorAnalyzer',
-        context: themeFacade.buildCurrentThemeSourceContext(),
-        emitAlerts: false,
-      })
-      return stocks
-    }
-  } catch (error) {
-    console.error(`[SectorAnalyzer] 加载板块 ${sectorCode} 个股数据失败:`, error)
-  }
-
-  state.sectorStocksCache[cacheKey].loading = false
-  return []
+  return jxbkThemeFeed.loadSectorStocks(sectorCode, sectorName, forceRefresh)
 }
 
 export async function preloadTopSectors(limit: number = CONFIG.PRELOAD_COUNT) {
   const blocks = themeFacade.getJxbkBlocksCompat(limit)
   for (const block of blocks.slice(0, limit)) {
-    const cacheKey = `${block.code}_${block.name}`
-    if (!state.sectorStocksCache[cacheKey]?.loaded) {
-      await loadSectorStocks(block.code, block.name)
-      await new Promise((resolve) => setTimeout(resolve, 100))
-    }
+    await loadSectorStocks(block.code, block.name)
+    await new Promise((resolve) => setTimeout(resolve, 100))
   }
   state.topBlocksLoaded = blocks.length > 0
 }
@@ -506,6 +420,7 @@ export const sectorAnalyzer = {
   },
 
   async forceRefreshJxbk(): Promise<void> {
+    if (state.destroyed) return
     await themeFacade.refreshRuntime({
       source: 'sectorAnalyzer',
       forceJxbk: true,
@@ -534,14 +449,14 @@ export const sectorAnalyzer = {
       totalThemes: themeMapping.getAllThemes().length,
       mappedStocks: mappingStats.stockCount,
       hotThemes: dataLayer.getHotThemes().length,
-      cachedSectors: Object.keys(state.sectorStocksCache).length,
+      cachedSectors: jxbkThemeFeed.getSectorStockCacheStats().cachedSectors,
       lastUpdate: mappingStats.lastUpdate,
       version: '7.0.0',
     }
   },
 
   clearCache: () => {
-    state.sectorStocksCache = {}
+    jxbkThemeFeed.clearSectorStockCache()
     state.topBlocksLoaded = false
   },
 

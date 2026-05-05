@@ -24,13 +24,104 @@ class ThemeMigrationService:
         self.repo = ThemeRepository(session)
 
     def import_mapping(self, payload: dict[str, Any]) -> dict[str, Any]:
-        themes = payload.get("themes")
-        if not isinstance(themes, list) or not themes:
-            raise _error("missing_themes", "themes", "themes must be a non-empty list")
+        normalized = self._normalize_payload(payload)
 
         inserted_themes = 0
         updated_themes = 0
         inserted_mappings = 0
+        for theme in normalized:
+            created = self.repo.upsert_theme(theme["id"], theme["name"], theme["zsCode"])
+            if created:
+                inserted_themes += 1
+            else:
+                updated_themes += 1
+            inserted_mappings += self.repo.replace_theme_mappings(theme["id"], theme["mappings"])
+
+        version = str(payload.get("version") or "").strip() or "unknown"
+        last_update = str(payload.get("lastUpdate") or payload.get("last_update") or "").strip()
+        self.repo.set_metadata(version, last_update)
+        self.session.commit()
+
+        if updated_themes and inserted_themes == 0:
+            inserted_mappings = 0
+
+        return {
+            "ok": True,
+            "inserted": {"themes": inserted_themes, "mappings": inserted_mappings},
+            "updated": {"themes": updated_themes},
+            "counts": self.repo.counts(),
+            "source": "sqlite",
+        }
+
+    def verify_mapping(self, payload: dict[str, Any]) -> dict[str, Any]:
+        normalized = self._normalize_payload(payload)
+        expected_themes = {theme["id"]: theme["name"] for theme in normalized}
+        expected_mappings = {
+            (theme["id"], mapping["stockCode"])
+            for theme in normalized
+            for mapping in theme["mappings"]
+        }
+        expected_stocks = {stock_code for _, stock_code in expected_mappings}
+
+        actual_mapping = self.repo.get_mapping()
+        actual_themes = {theme["id"]: theme["name"] for theme in actual_mapping.get("themes", [])}
+        actual_mappings = {
+            (theme["id"], stock_code)
+            for theme in actual_mapping.get("themes", [])
+            for stock_code in theme.get("stocks", [])
+        }
+        actual_stocks = {stock_code for _, stock_code in actual_mappings}
+
+        expected_counts = {
+            "themeCount": len(expected_themes),
+            "mappingCount": len(expected_mappings),
+            "stockCount": len(expected_stocks),
+        }
+        actual_counts = {
+            "themeCount": len(actual_themes),
+            "mappingCount": len(actual_mappings),
+            "stockCount": len(actual_stocks),
+        }
+        mismatches = {
+            key: {"expected": expected_counts[key], "actual": actual_counts[key]}
+            for key in expected_counts
+            if expected_counts[key] != actual_counts[key]
+        }
+        missing_themes = [
+            {"id": theme_id, "name": expected_themes[theme_id]}
+            for theme_id in sorted(set(expected_themes) - set(actual_themes))
+        ]
+        extra_themes = [
+            {"id": theme_id, "name": actual_themes[theme_id]}
+            for theme_id in sorted(set(actual_themes) - set(expected_themes))
+        ]
+        missing_mappings = [
+            {"themeId": theme_id, "stockCode": stock_code}
+            for theme_id, stock_code in sorted(expected_mappings - actual_mappings)
+        ]
+        extra_mappings = [
+            {"themeId": theme_id, "stockCode": stock_code}
+            for theme_id, stock_code in sorted(actual_mappings - expected_mappings)
+        ]
+
+        ok = not (mismatches or missing_themes or extra_themes or missing_mappings or extra_mappings)
+        return {
+            "ok": ok,
+            "expected": expected_counts,
+            "actual": actual_counts,
+            "mismatches": mismatches,
+            "missingThemes": missing_themes,
+            "extraThemes": extra_themes,
+            "missingMappings": missing_mappings,
+            "extraMappings": extra_mappings,
+            "source": "sqlite",
+        }
+
+    def _normalize_payload(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
+        themes = payload.get("themes")
+        if not isinstance(themes, list) or not themes:
+            raise _error("missing_themes", "themes", "themes must be a non-empty list")
+
         normalized = []
         for index, raw_theme in enumerate(themes):
             if not isinstance(raw_theme, dict):
@@ -85,30 +176,7 @@ class ThemeMigrationService:
                     "mappings": list(mappings.values()),
                 }
             )
-
-        for theme in normalized:
-            created = self.repo.upsert_theme(theme["id"], theme["name"], theme["zsCode"])
-            if created:
-                inserted_themes += 1
-            else:
-                updated_themes += 1
-            inserted_mappings += self.repo.replace_theme_mappings(theme["id"], theme["mappings"])
-
-        version = str(payload.get("version") or "").strip() or "unknown"
-        last_update = str(payload.get("lastUpdate") or payload.get("last_update") or "").strip()
-        self.repo.set_metadata(version, last_update)
-        self.session.commit()
-
-        if updated_themes and inserted_themes == 0:
-            inserted_mappings = 0
-
-        return {
-            "ok": True,
-            "inserted": {"themes": inserted_themes, "mappings": inserted_mappings},
-            "updated": {"themes": updated_themes},
-            "counts": self.repo.counts(),
-            "source": "sqlite",
-        }
+        return normalized
 
     @staticmethod
     def _normalize_stock_code(value: Any) -> str:
@@ -135,4 +203,3 @@ class ThemeMigrationService:
                 tag["Reason"] = reason
             tags.append(tag)
         return tags
-

@@ -98,6 +98,56 @@ def test_import_theme_mapping_is_idempotent_and_keeps_reverse_lookup_consistent(
     engine.dispose()
 
 
+def test_verify_theme_mapping_reports_counts_and_diffs_without_writing(tmp_path: Path) -> None:
+    engine, session = _theme_session(tmp_path)
+    service = ThemeMigrationService(session)
+    service.import_mapping(_mapping_payload())
+
+    matched = service.verify_mapping(_mapping_payload())
+    assert matched["ok"] is True
+    assert matched["expected"] == {
+        "themeCount": 2,
+        "mappingCount": 4,
+        "stockCount": 3,
+    }
+    assert matched["actual"]["themeCount"] == 2
+    assert matched["actual"]["mappingCount"] == 4
+    assert matched["actual"]["stockCount"] == 3
+    assert matched["mismatches"] == {}
+    assert matched["missingThemes"] == []
+    assert matched["extraThemes"] == []
+    assert matched["missingMappings"] == []
+    assert matched["extraMappings"] == []
+    assert matched["source"] == "sqlite"
+
+    changed = _mapping_payload()
+    changed["themes"] = [
+        {
+            "id": "AI",
+            "name": "人工智能",
+            "stocks": ["SZ000001", "600001", "000003"],
+        },
+        {
+            "id": "ROBOT",
+            "name": "机器人",
+            "stocks": ["300001"],
+        },
+    ]
+    diff = service.verify_mapping(changed)
+    assert diff["ok"] is False
+    assert diff["expected"] == {"themeCount": 2, "mappingCount": 4, "stockCount": 4}
+    assert diff["actual"]["themeCount"] == 2
+    assert diff["missingThemes"] == [{"id": "ROBOT", "name": "机器人"}]
+    assert diff["extraThemes"] == [{"id": "POWER", "name": "电力"}]
+    assert {"themeId": "AI", "stockCode": "000003"} in diff["missingMappings"]
+    assert {"themeId": "ROBOT", "stockCode": "300001"} in diff["missingMappings"]
+    assert {"themeId": "POWER", "stockCode": "000002"} in diff["extraMappings"]
+    assert service.verify_mapping(_mapping_payload())["ok"] is True
+
+    session.close()
+    engine.dispose()
+
+
 @pytest.mark.parametrize(
     ("payload", "code", "field"),
     [
@@ -163,6 +213,15 @@ def test_theme_api_import_and_read_contracts() -> None:
     bad = client.post("/api/migrations/themes/import-json", json={})
     assert bad.status_code == 400
     assert bad.json()["detail"]["code"] == "missing_themes"
+
+    verified = client.post("/api/migrations/themes/verify-json", json=_mapping_payload())
+    assert verified.status_code == 200, verified.text
+    assert verified.json()["ok"] is True
+    assert verified.json()["expected"]["mappingCount"] == 4
+
+    bad_verify = client.post("/api/migrations/themes/verify-json", json={})
+    assert bad_verify.status_code == 400
+    assert bad_verify.json()["detail"]["code"] == "missing_themes"
 
     health = client.get("/api/health")
     assert health.status_code == 200

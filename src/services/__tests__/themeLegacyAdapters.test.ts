@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { RotationAnalysis } from '@/types/core'
 import { dataLayer } from '../DataLayer'
 import { themeFacade } from '../theme/ThemeFacade'
+import { jxbkThemeFeed } from '../theme/JxbkThemeFeed'
 import { rotationService } from '../rotationService'
 import { sectorAnalyzer } from '../sectorAnalyzer'
 
@@ -111,5 +112,40 @@ describe('theme legacy adapters', () => {
 
     expect(refreshSpy).toHaveBeenCalledTimes(3)
     expect(refreshSpy.mock.calls.every(([options]) => options?.source === 'sectorAnalyzer')).toBe(true)
+  })
+
+  it('sectorAnalyzer forceRefreshJxbk does not refresh after destroy', async () => {
+    const refreshSpy = vi.spyOn(themeFacade, 'refreshRuntime').mockReturnValue({
+      factors: [],
+      exposures: { byCode: new Map(), byTheme: new Map() },
+      rotationSummary: null,
+      events: [],
+      qualitySummary: { totalFlags: 0, fatalCount: 0, warningCount: 0, infoCount: 0, byCode: {} },
+      changedFields: [],
+      inputSignature: 'same',
+      source: 'sectorAnalyzer',
+      timestamp: 1713751200000,
+      syncedStockCount: 0,
+    })
+
+    sectorAnalyzer.destroy()
+    await sectorAnalyzer.forceRefreshJxbk()
+
+    expect(refreshSpy).not.toHaveBeenCalled()
+  })
+
+  it('sectorAnalyzer sector stock APIs delegate to JxbkThemeFeed', async () => {
+    const loadSpy = vi.spyOn(jxbkThemeFeed, 'loadSectorStocks').mockResolvedValue([
+      { code: '000001', name: '样本一', blocks: ['人工智能'] } as any,
+    ])
+    const clearSpy = vi.spyOn(jxbkThemeFeed, 'clearSectorStockCache').mockImplementation(() => {})
+    vi.spyOn(jxbkThemeFeed, 'getSectorStockCacheStats').mockReturnValue({ cachedSectors: 2 })
+
+    await expect(sectorAnalyzer.loadSectorStocks('BKAI', '人工智能', true)).resolves.toHaveLength(1)
+    expect(loadSpy).toHaveBeenCalledWith('BKAI', '人工智能', true)
+    expect(sectorAnalyzer.getStats().cachedSectors).toBe(2)
+
+    sectorAnalyzer.clearCache()
+    expect(clearSpy).toHaveBeenCalled()
   })
 })

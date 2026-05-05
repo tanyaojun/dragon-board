@@ -437,6 +437,24 @@ Dragon Board 当前会在写入前通过 SQLite 读口确认同一 `snapshot_id`
 
 重复导入同一 payload 不会重复写入关系行；缺字段、空题材、非法股票代码会返回 `400`，`detail` 至少包含 `code`、`field`、`message`。
 
+### `POST /api/migrations/themes/verify-json`
+
+只读校验入口。用于把旧 `ThemeMappingData` JSON 与当前 `themeDATA.db` 做迁移验收，不写库、不自动修复。
+
+返回字段固定包含：
+
+- `ok`
+- `expected`
+- `actual`
+- `mismatches`
+- `missingThemes`
+- `extraThemes`
+- `missingMappings`
+- `extraMappings`
+- `source=sqlite`
+
+缺字段、空题材、非法股票代码沿用导入接口的结构化 `400 detail`。
+
 ### `GET /api/themes/mapping`
 
 Dragon Board `ThemeDataService` 的正式读口。返回结构兼容旧 `ThemeMappingData`，外层补充 `ok` 和 `source=sqlite`。
@@ -452,6 +470,15 @@ Dragon Board `ThemeDataService` 的正式读口。返回结构兼容旧 `ThemeMa
 ### `GET /api/themes/counts`
 
 读取 `themeDATA.db` 基础行数，用于迁移验收和排障。
+
+CLI 校验：
+
+```powershell
+.\.venv\Scripts\python.exe -m backend.cli verify-themes `
+  --path data\staging\theme_mapping.json
+```
+
+CLI 输出与 `POST /api/migrations/themes/verify-json` 一致。
 
 ## Golden 接口
 

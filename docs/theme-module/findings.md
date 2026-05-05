@@ -17,15 +17,14 @@
 
 ## 当前保留边界
 
-- `sectorAnalyzer.loadSectorStocks()` 仍保留，用于 `SectorDetail/SectorStocksTree` 的板块成分股懒加载；后续可迁入 `JxbkThemeFeed`。
+- `sectorAnalyzer.loadSectorStocks()` 仍保留为旧公开 API，但 V9 后只委托 `JxbkThemeFeed`，不再持有独立成分股缓存或 API 事实源。
 - `App.vue/main.ts` 仍挂载 `window.sectorAnalyzer/window.rotationService`，用于控制台、旧调试脚本和兼容服务注册。
 - `RefreshCoordinator` 仍保留 `sectorAnalyzer` 节点，但该节点现在只是 legacy adapter，不再持有独立题材事实。
 - `DataLayer` 仍保存 JXBK 原始 blocks/stockMap，这是运行态缓存和快照来源，不是题材业务编排入口。
 
 ## 后续候选
 
-- V8 可考虑把 `loadSectorStocks` 和成分股缓存迁入 `JxbkThemeFeed`。
-- V8 可考虑增加题材 runtime 调试面板或回放一致性工具。
+- 后续可考虑增加题材 runtime 调试面板或回放一致性工具。
 - 若继续清理文档，可把 `progress.md` 中历史过程日志压缩为里程碑摘要。
 
 ## 2026-05-05 V8 启动发现
@@ -45,3 +44,9 @@
 - 旧 IndexedDB 私有读写函数已从 `ThemeDataService` 移除；浏览器 IndexedDB 只作为外部历史迁移来源，不再混在正式 facade 内。
 - code review 发现 `get_stock_themes()` 对同一股票多题材时会覆盖标签/原因；已改为按题材顺序合并标签并用 `；` 合并原因。
 - code review 发现 `buildMapping()` 初次加载原因使用 first-wins；已改为与增量合并一致的 `；` 去重合并。
+
+## 2026-05-05 V9 落地发现
+
+- `themeDATA.db` 新增只读校验入口，API/CLI 输出同一 diff 结构，适合导入后验收，不会写库。
+- `JxbkThemeFeed` 已承接板块成分股懒加载、缓存、并发复用、DataLayer 写入和 runtime refresh。
+- `sectorAnalyzer.clearCache/getStats/loadSectorStocks` 均改为委托 `JxbkThemeFeed`，继续服务旧组件和控制台入口。
