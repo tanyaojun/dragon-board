@@ -283,7 +283,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { dataLayer } from '@/services/DataLayer'
-import { rotationService } from '@/services/rotationService'
 import { themeFacade } from '@/services/theme/ThemeFacade'
 import { usePanel } from '@/composables/usePanel'
 import type { RotationAnalysis } from '@/types/core'
@@ -349,8 +348,6 @@ const loadingMessage = computed(() => loading.value ? '加载轮动数据...' : 
 function refresh() {
   dataLayer.refreshStocksVersion()
   themeFacade.refresh({ emitAlerts: false })
-  // Defensive fallback for legacy runtime states where facade cannot produce a rotation summary.
-  if (!themeFacade.getRotationSummary()) rotationService.forceAnalyze()
   loadData()
 }
 

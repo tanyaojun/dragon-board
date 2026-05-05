@@ -3,7 +3,17 @@
 
 import type { Factor, Stock } from '@/types'
 import { dragonBreathAnalyzer } from '@/services/DragonBreathAnalyzer'
-import { sectorAnalyzer } from '@/services/sectorAnalyzer'
+import { themeFacade } from '@/services/theme/ThemeFacade'
+
+function primaryThemeExposure(stock: Stock) {
+  const exposures = themeFacade.getStockExposures(stock.code)
+  return [...exposures].sort((a, b) => b.themeContribution - a.themeContribution)[0] || null
+}
+
+function themeFactorById(themeId?: string) {
+  if (!themeId) return null
+  return themeFacade.getThemeFactors().find((factor) => factor.themeId === themeId) || null
+}
 
 export const FACTORS: Record<string, Factor> = {
   // ========== 基础因子 ==========
@@ -103,10 +113,10 @@ export const FACTORS: Record<string, Factor> = {
     description: '所属题材的热度分数',
     calculate: (stock: Stock) => {
       try {
-        const factors = (sectorAnalyzer as any)?.getThemeFactors?.(stock.code) || {}
-        return Math.min(100, (factors.themeHeat || 0) / 100)
+        const exposure = primaryThemeExposure(stock)
+        return Math.min(100, exposure?.themeScore || 0)
       } catch {
-        return 50
+        return 0
       }
     },
   },
@@ -118,10 +128,11 @@ export const FACTORS: Record<string, Factor> = {
     description: '所属题材内的龙头数量',
     calculate: (stock: Stock) => {
       try {
-        const factors = (sectorAnalyzer as any)?.getThemeFactors?.(stock.code) || {}
-        return Math.min(100, (factors.themeLeaderCount || 0) * 20)
+        const exposure = primaryThemeExposure(stock)
+        const factor = themeFactorById(exposure?.themeId)
+        return Math.min(100, factor?.leadershipScore || exposure?.roleScore || 0)
       } catch {
-        return 30
+        return 0
       }
     },
   },
@@ -133,10 +144,11 @@ export const FACTORS: Record<string, Factor> = {
     description: '题材热度变化趋势',
     calculate: (stock: Stock) => {
       try {
-        const factors = (sectorAnalyzer as any)?.getThemeFactors?.(stock.code) || {}
-        return ((factors.themeMomentum || 0) + 100) / 2
+        const exposure = primaryThemeExposure(stock)
+        const factor = themeFactorById(exposure?.themeId)
+        return Math.min(100, factor?.momentumScore || 0)
       } catch {
-        return 50
+        return 0
       }
     },
   },

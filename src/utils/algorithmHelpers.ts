@@ -122,7 +122,7 @@ export function calculateConfidence(
  */
 export async function getWarmupTargets(
   type: string,
-  sectorAnalyzer?: any,
+  themeFacade?: any,
   dragonAnalyzer?: any,
   dataLayer?: any,
 ): Promise<Stock[]> {
@@ -136,7 +136,7 @@ export async function getWarmupTargets(
   try {
     switch (type) {
       case 'hotThemes': {
-        const hotThemes = sectorAnalyzer?.getHotThemes?.(5) || []
+        const hotThemes = themeFacade?.getHotThemesCompat?.(5) || []
         if (!Array.isArray(hotThemes)) {
           console.warn('[algorithmHelpers] hotThemes 不是数组:', hotThemes)
           return []
@@ -148,7 +148,7 @@ export async function getWarmupTargets(
           if (!theme?.id) continue
 
           try {
-            const themeStocks = sectorAnalyzer?.getThemeStocks?.(theme.id, 10)
+            const themeStocks = themeFacade?.getThemeStocksCompat?.(theme.id, 10)
 
             // 安全地获取股票数组
             let stocksArray: any[] = []

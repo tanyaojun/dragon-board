@@ -25,13 +25,9 @@ import { AlgorithmHealthChecker } from './AlgorithmHealthChecker'
 import { AlgorithmABTestManager } from './AlgorithmABTestManager'
 import { consistencyManager } from './ConsistencyManager'
 import { themeSyncAdapter } from '@/services/theme/ThemeSyncAdapter'
+import { themeFacade } from '@/services/theme/ThemeFacade'
 
 import { createCacheKey, safeExecute, throttle, debounce } from '@/utils/algorithmHelpers'
-
-export interface SectorAnalyzer {
-  getHotThemes?: () => any[]
-  syncLeadersToThemes?: (leaders: any[]) => void
-}
 
 // ===== 情绪反馈相关类型 =====
 export interface EmotionAdjustment {
@@ -203,14 +199,11 @@ export class AlgorithmManager implements IAlgorithmManager {
   private healthChecker!: AlgorithmHealthChecker
   private abTestManager!: AlgorithmABTestManager
 
-  // 外部服务引用
-  private sectorAnalyzer: SectorAnalyzer | null = null
-
   private constructor() {
     this.perfMonitor = new AlgorithmPerformanceMonitor(this)
     this.warmupManager = new AlgorithmWarmupManager(this, () => ({
       dataLayer,
-      sectorAnalyzer: (window as any).sectorAnalyzer,
+      themeFacade,
       dragonAnalyzer: (window as any).dragonAnalyzer,
     }))
     this.healthChecker = new AlgorithmHealthChecker(this, consistencyManager)
@@ -953,19 +946,9 @@ export class AlgorithmManager implements IAlgorithmManager {
   private tryConnectServices(): void {
     if (typeof window === 'undefined') return
 
-    if ((window as any).sectorAnalyzer) {
-      this.sectorAnalyzer = (window as any).sectorAnalyzer
-    }
-
     consistencyManager.registerRepairServices({
       syncThemesToStocks: () => themeSyncAdapter.syncThemesToStocks(),
       recalculateDragons: () => (window as any).dragonAnalyzer?.recalculateAll?.(),
-    })
-
-    EventManager.on('sector:ready', () => {
-      if ((window as any).sectorAnalyzer) {
-        this.sectorAnalyzer = (window as any).sectorAnalyzer
-      }
     })
   }
 

@@ -1,5 +1,10 @@
 // src/services/dragon/ContextBuilder.ts
 
+import type { Stock } from '@/types'
+import { dragonBreathAnalyzer } from '@/services/DragonBreathAnalyzer'
+import { themeFacade } from '@/services/theme/ThemeFacade'
+import type { MarketContext, SectorContext, StockContext } from './MarketContext'
+
 /**
  * 构建市场上下文
  */
@@ -14,7 +19,7 @@ function phaseToBand(phase?: string): number {
 }
 
 export function buildMarketContext(): MarketContext {
-  const stocks = window.allData?.merged || []
+  const stocks = typeof window !== 'undefined' ? window.allData?.merged || [] : []
   const breath = dragonBreathAnalyzer.getMarketData?.()
   const sentiment = dragonBreathAnalyzer.getMarketSentiment?.()
   
@@ -59,8 +64,8 @@ export function buildMarketContext(): MarketContext {
  * 构建题材上下文
  */
 export function buildSectorContext(themeName: string): SectorContext {
-  const sectorInfo = sectorAnalyzer.getThemeDetail?.(themeName)
-  const stocks = window.allData?.merged || []
+  const sectorInfo = themeFacade.getThemeDetailCompat(themeName)
+  const stocks = typeof window !== 'undefined' ? window.allData?.merged || [] : []
   
   // 找出该题材的所有股票
   const sectorStocks = stocks.filter(s => 

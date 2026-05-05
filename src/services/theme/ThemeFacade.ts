@@ -222,6 +222,8 @@ export function getThemeFactors(): ThemeFactorSnapshot[] {
   return lastFactors
 }
 
+export function getStockExposures(code: string): ThemeStockExposure[]
+export function getStockExposures(): Map<string, ThemeStockExposure[]>
 export function getStockExposures(code?: string): ThemeStockExposure[] | Map<string, ThemeStockExposure[]> {
   if (lastFactors.length === 0) {
     refreshThemeFactors()

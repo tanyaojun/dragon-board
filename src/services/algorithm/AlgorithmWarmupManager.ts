@@ -11,7 +11,7 @@ import { getWarmupTargets, chunkArray, safeExecute, throttle } from '@/utils/alg
 
 export interface AlgorithmWarmupDependencies {
   dataLayer?: any
-  sectorAnalyzer?: any
+  themeFacade?: any
   dragonAnalyzer?: any
 }
 
@@ -202,7 +202,7 @@ export class AlgorithmWarmupManager {
       const deps = this.getDependencies()
       const stocks = await getWarmupTargets(
         name,
-        deps.sectorAnalyzer,
+        deps.themeFacade,
         deps.dragonAnalyzer,
         deps.dataLayer,
       )
