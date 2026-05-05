@@ -45,14 +45,7 @@ export class CalculationQueue {
 
   private options: Required<QueueOptions>
 
-  // ✅ 新增：统一管理销毁状态
   private destroyed = false
-
-  // ✅ 新增：统一定时器管理
-  private timers = {
-    statsFlush: null as ReturnType<typeof setInterval> | null,
-    queueMonitor: null as ReturnType<typeof setInterval> | null,
-  }
 
   constructor(options: QueueOptions = {}) {
     this.options = { ...this.DEFAULT_OPTIONS, ...options }
@@ -79,46 +72,6 @@ export class CalculationQueue {
 
     // 监控队列健康状况
     this.monitorQueue()
-  }
-
-  /**
-   * ✅ 新增：初始化方法，返回清理函数
-   */
-  init(): () => void {
-    if (this.destroyed) {
-      console.warn('[CalculationQueue] 实例已销毁，无法初始化')
-      return () => {}
-    }
-
-    debugLog('[CalculationQueue] 📊 初始化...')
-
-    // 启动定时器
-    this.startTimers()
-
-    debugLog('[CalculationQueue] ✅ 初始化完成')
-    return () => this.destroy()
-  }
-
-  /**
-   * ✅ 新增：启动所有定时器
-   */
-  private startTimers(): void {
-    return
-  }
-
-  /**
-   * ✅ 新增：停止所有定时器
-   */
-  private stopTimers(): void {
-    Object.values(this.timers).forEach((timer) => {
-      if (timer) {
-        clearInterval(timer)
-      }
-    })
-    this.timers = {
-      statsFlush: null,
-      queueMonitor: null,
-    }
   }
 
   /**
@@ -175,22 +128,13 @@ export class CalculationQueue {
 
     return {
       queues: {
-        high: this.queues.get('high')!.length,
-        medium: this.queues.get('medium')!.length,
-        low: this.queues.get('low')!.length,
+        high: this.queues.get('high')?.length ?? 0,
+        medium: this.queues.get('medium')?.length ?? 0,
+        low: this.queues.get('low')?.length ?? 0,
       },
       inProgress: this.inProgress.size,
       stats: { ...this.stats },
       moduleStats: Object.fromEntries(this.moduleStats),
-      processing: {
-        high: this.processing.get('high'),
-        medium: this.processing.get('medium'),
-        low: this.processing.get('low'),
-      },
-      timers: {
-        statsFlush: !!this.timers.statsFlush,
-        queueMonitor: !!this.timers.queueMonitor,
-      },
       destroyed: this.destroyed,
     }
   }
@@ -425,11 +369,6 @@ export class CalculationQueue {
 
     debugLog('[CalculationQueue] 💥 开始销毁...')
     this.destroyed = true
-
-    // 1. 停止所有定时器
-    this.stopTimers()
-
-    // 2. 清空队列（拒绝所有等待中的任务）
     this.clear()
 
     debugLog('[CalculationQueue] ✅ 已销毁')

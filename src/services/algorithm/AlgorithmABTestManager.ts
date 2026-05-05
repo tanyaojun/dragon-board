@@ -150,26 +150,28 @@ export class AlgorithmABTestManager {
   }
 
   /**
-   * 记录测试结果
+   * 记录测试结果（根据算法ID查找对应的运行中测试）
    */
-  recordResult(testId: string, result: Omit<ABTestResult, 'testId' | 'timestamp'>): void {
-    const test = this.tests.get(testId)
-    if (!test || test.status !== 'running') return
+  recordResult(algorithmId: string, result: Omit<ABTestResult, 'testId' | 'timestamp'>): void {
+    const runningTests = this.getRunningTests()
+    const test = runningTests.find(
+      (t) => t.testAlgorithm === algorithmId || t.controlAlgorithm === algorithmId
+    )
+    if (!test) return
 
-    const results = this.results.get(testId) || []
+    const results = this.results.get(test.id) || []
 
     const fullResult: ABTestResult = {
       ...result,
-      testId,
+      testId: test.id,
       timestamp: Date.now(),
     }
 
     results.push(fullResult)
-    this.results.set(testId, results)
+    this.results.set(test.id, results)
 
-    // 每100条结果更新一次指标
     if (results.length % 100 === 0) {
-      this.updateTestMetrics(testId)
+      this.updateTestMetrics(test.id)
     }
   }
 

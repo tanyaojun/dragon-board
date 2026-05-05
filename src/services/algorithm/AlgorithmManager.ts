@@ -10,7 +10,6 @@ import { STORAGE_KEYS } from '@/config/storage'
 import {
   AppEvents,
   PHASE_ADJUSTMENTS,
-  type EmotionFactorWeights,
   type EmotionFeedback,
 } from '@/types'
 
@@ -27,7 +26,7 @@ import { consistencyManager } from './ConsistencyManager'
 import { themeSyncAdapter } from '@/services/theme/ThemeSyncAdapter'
 import { themeFacade } from '@/services/theme/ThemeFacade'
 
-import { createCacheKey, safeExecute, throttle, debounce } from '@/utils/algorithmHelpers'
+import { createCacheKey } from '@/utils/algorithmHelpers'
 
 // ===== 情绪反馈相关类型 =====
 export interface EmotionAdjustment {
@@ -164,13 +163,6 @@ export class AlgorithmManager implements IAlgorithmManager {
   private unsubscribeFns: (() => void)[] = []
 
   private destroyed = false
-
-  private timers = {
-    performanceFlush: null as ReturnType<typeof setTimeout> | null,
-    healthCheck: null as ReturnType<typeof setTimeout> | null,
-    warmupCheck: null as ReturnType<typeof setTimeout> | null,
-    emotionDebounce: null as ReturnType<typeof setTimeout> | null,
-  }
 
   private eventManager: AlgorithmEventManager
 
@@ -330,13 +322,6 @@ export class AlgorithmManager implements IAlgorithmManager {
     stockCache.cleanup?.()
     this.warmupManager.checkProgress?.()
     this.healthChecker.checkNow()
-  }
-
-  /**
-   * 处理待处理的情绪反馈
-   */
-  async processPendingFeedback(): Promise<void> {
-    // 如果有需要处理的情绪反馈，可以在这里处理
   }
 
   /**
@@ -524,11 +509,6 @@ export class AlgorithmManager implements IAlgorithmManager {
 
       try {
         this.loadFromStorage()
-
-        if (this.customWeights) {
-          this.applyCustomWeights()
-        }
-
         this.loadHistory()
         this.tryConnectServices()
         this.setupEssentialListeners() // 只保留必要的监听器
@@ -777,13 +757,12 @@ export class AlgorithmManager implements IAlgorithmManager {
 
           rawScore = Math.min(100, Math.max(0, rawScore))
 
-          let weight = config.weight
+          let weight: number | string = this.customWeights?.[factorId] ?? config.weight
           if (weight === 'dynamic') {
             weight = config.baseWeight || 0.1
             const multiplier = multipliers[factorId] || 1
             weight = Math.min(config.max || 0.3, Math.max(config.min || 0.03, weight * multiplier))
           }
-
           weight = typeof weight === 'number' ? weight : 0.1
 
           const contribution = rawScore * weight
@@ -859,23 +838,6 @@ export class AlgorithmManager implements IAlgorithmManager {
     stockCache.invalidateByTag('score')
     stockCache.invalidateByTag('algorithmStats')
     stockCache.invalidateByTag('factor:analysis')
-  }
-
-  // ========== 配置管理 ==========
-
-  private applyCustomWeights(): void {
-    if (!this.customWeights) return
-
-    const algo = ALGORITHMS[this.currentAlgorithm]
-    if (!algo) return
-
-    Object.entries(this.customWeights).forEach(([factorId, weight]) => {
-      if (algo.factors[factorId]) {
-        algo.factors[factorId].weight = weight
-      }
-    })
-
-    this.version++
   }
 
   // ========== 历史数据管理 ==========
@@ -1081,10 +1043,8 @@ export class AlgorithmManager implements IAlgorithmManager {
     const algo = ALGORITHMS[this.currentAlgorithm]
     if (!algo) return false
 
-    const defaultAlgo = ALGORITHMS[this.currentAlgorithm]
-    algo.factors = JSON.parse(JSON.stringify(defaultAlgo.factors))
-
     this.customWeights = null
+    this.version++
     this.saveToStorage()
     this.invalidateCache()
 

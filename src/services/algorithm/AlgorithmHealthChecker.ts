@@ -3,7 +3,7 @@ import { debugLog } from '@/utils/logger'
 // 健康检查模块
 
 import type { IAlgorithmManager } from './AlgorithmManager'
-import type { FactorHealth, HealthCheckResult, FactorPerformance } from '@/types/algorithm'
+import type { HealthCheckResult } from '@/types/algorithm'
 
 import { FACTORS } from '@/config/factors'
 import { ALGORITHMS } from '@/config/algorithms'
@@ -82,10 +82,7 @@ export class AlgorithmHealthChecker {
     // 3. 检查阶段乘数与因子定义的一致性
     this.checkPhaseMultipliers(issues, warnings, suggestions)
 
-    // 4. 检查因子健康度
-    await this.checkFactorHealth(warnings, suggestions)
-
-    // 5. 检查缓存健康度
+    // 4. 检查缓存健康度
     this.checkCacheHealth(warnings, suggestions)
 
     const result: HealthCheckResult = {
@@ -168,14 +165,6 @@ export class AlgorithmHealthChecker {
         }
       })
     })
-  }
-
-  /**
-   * 检查因子健康度
-   */
-  private async checkFactorHealth(warnings: string[], suggestions: string[]): Promise<void> {
-    // 这里需要从性能监控模块获取因子性能数据
-    // 暂时跳过，等待集成
   }
 
   /**

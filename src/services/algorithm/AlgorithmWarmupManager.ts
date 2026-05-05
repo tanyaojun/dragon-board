@@ -4,10 +4,10 @@ import { debugLog } from '@/utils/logger'
 // 注意：已移除增量刷新相关代码
 
 import type { IAlgorithmManager } from './AlgorithmManager'
-import type { WarmupStrategy, WarmupTarget } from '@/types/algorithm'
+import type { WarmupStrategy } from '@/types/algorithm'
 
 import { EventManager } from '@/utils/eventManager'
-import { getWarmupTargets, chunkArray, safeExecute, throttle } from '@/utils/algorithmHelpers'
+import { getWarmupTargets, chunkArray, safeExecute } from '@/utils/algorithmHelpers'
 
 export interface AlgorithmWarmupDependencies {
   dataLayer?: any
@@ -20,15 +20,9 @@ export class AlgorithmWarmupManager {
   private getDependencies: () => AlgorithmWarmupDependencies
   private strategies: Map<string, WarmupStrategy> = new Map()
   private isWarmingUp: Map<string, boolean> = new Map()
-  private progress: Map<string, { loaded: number; total: number }> = new Map()
+  private progress: Map<string, { loaded: number; total: number; startTime: number }> = new Map()
 
-  // 合并两个 timers 定义
-  private timers = {
-    warmupTimer: null as ReturnType<typeof setInterval> | null,
-    periodicTimers: new Map<string, ReturnType<typeof setInterval>>(),
-  }
-
-  // 默认预热策略 - 移除 periodic 策略的 interval 配置
+  // 默认预热策略
   private defaultStrategies: Record<string, WarmupStrategy> = {
     hotThemes: {
       enabled: true,
@@ -135,7 +129,7 @@ export class AlgorithmWarmupManager {
 
     if (targets.length === 0) return
 
-    this.progress.set('incremental', { loaded: 0, total: targets.length })
+    this.progress.set('incremental', { loaded: 0, total: targets.length, startTime: Date.now() })
     await this.warmupBatch(targets, {
       enabled: true,
       schedule: 'onIdle',
@@ -162,17 +156,6 @@ export class AlgorithmWarmupManager {
    * 停止预热管理
    */
   stop(): void {
-    // 清理所有定时器
-    this.timers.periodicTimers.forEach((timer) => {
-      if (timer) clearInterval(timer)
-    })
-    this.timers.periodicTimers.clear()
-
-    if (this.timers.warmupTimer) {
-      clearInterval(this.timers.warmupTimer)
-      this.timers.warmupTimer = null
-    }
-
     this.isWarmingUp.clear()
     this.progress.clear()
   }
@@ -210,7 +193,7 @@ export class AlgorithmWarmupManager {
       const targets = stocks.slice(0, strategy.maxItems)
       const batches = chunkArray(targets, strategy.batchSize)
 
-      this.progress.set(name, { loaded: 0, total: targets.length })
+      this.progress.set(name, { loaded: 0, total: targets.length, startTime: Date.now() })
 
       // 分批预热
       for (let i = 0; i < batches.length; i++) {
@@ -220,8 +203,9 @@ export class AlgorithmWarmupManager {
         await this.warmupBatch(batch, strategy)
 
         // 更新进度
+        const entry = this.progress.get(name)!
         const loaded = Math.min((i + 1) * strategy.batchSize, targets.length)
-        this.progress.set(name, { loaded, total: targets.length })
+        this.progress.set(name, { ...entry, loaded })
 
         EventManager.emit('algorithm:warmup-progress', {
           strategy: name,
@@ -283,12 +267,9 @@ export class AlgorithmWarmupManager {
     }
   }
 
-  /**
-   * 获取预热时长
-   */
   private getWarmupDuration(name: string): number {
-    const startTime = Date.now() - 1000 // 简化实现
-    return Date.now() - startTime
+    const entry = this.progress.get(name)
+    return entry ? Date.now() - entry.startTime : 0
   }
 
   /**

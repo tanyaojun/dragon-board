@@ -4,60 +4,7 @@ import { debugLog } from '@/utils/logger'
 
 import { ALGORITHMS } from '@/config/algorithms'
 import { FACTORS } from '@/config/factors'
-import type { Algorithm, LeaderThresholds } from '@/types'
-
-const DEFAULT_LEADER_THRESHOLDS: Required<LeaderThresholds> = {
-  total: {
-    maxRank: 10,
-    minDays: 3,
-    eliteRank: 3,
-    minScore: 70,
-    minTurnover: 100000000,
-    extremeChange: 9,
-  },
-  sector: {
-    maxRank: 20,
-    minChange: 3,
-    minScore: 60,
-    minThemeHeat: 60,
-    minTurnover: 80000000,
-    highTurnover: 150000000,
-  },
-  continuous: {
-    minChange: 9,
-    minDays: 2,
-    maxRank: 30,
-    minScore: 65,
-  },
-  middle: {
-    minMV: 3000000000,
-    maxChange: 7,
-    minTurnoverRate: 3,
-    maxTurnoverRate: 25,
-    maxRank: 50,
-  },
-  emotion: {
-    minTurnoverRate: 5,
-    minAbsChange: 3,
-    minScore: 50,
-  },
-}
-
-function createLeaderThresholds(scores: {
-  total: number
-  sector: number
-  continuous: number
-  middle: number
-  emotion: number
-}): LeaderThresholds {
-  return {
-    total: { ...DEFAULT_LEADER_THRESHOLDS.total, minScore: scores.total },
-    sector: { ...DEFAULT_LEADER_THRESHOLDS.sector, minScore: scores.sector },
-    continuous: { ...DEFAULT_LEADER_THRESHOLDS.continuous, minScore: scores.continuous },
-    middle: { ...DEFAULT_LEADER_THRESHOLDS.middle },
-    emotion: { ...DEFAULT_LEADER_THRESHOLDS.emotion, minScore: scores.emotion },
-  }
-}
+import type { Algorithm } from '@/types'
 
 /**
  * 算法配置管理器
@@ -208,13 +155,6 @@ export class AlgorithmConfigManager {
       category: 'custom',
       color: '#95a5a6',
       factors,
-      leaderThresholds: createLeaderThresholds({
-        total: 70,
-        sector: 60,
-        continuous: 65,
-        middle: 55,
-        emotion: 50,
-      })
     }
 
     this.customAlgorithms.set(id, algorithm)
@@ -303,22 +243,6 @@ export class AlgorithmConfigManager {
   }
 
   /**
-   * 删除自定义算法
-   */
-  deleteCustomAlgorithm(id: string): boolean {
-    if (!id.startsWith('custom_')) {
-      console.warn(`[AlgorithmConfigManager] ⚠️ 只能删除自定义算法: ${id}`)
-      return false
-    }
-    
-    const deleted = this.customAlgorithms.delete(id)
-    if (deleted) {
-      debugLog(`[AlgorithmConfigManager] 🗑️ 删除自定义算法: ${id}`)
-    }
-    return deleted
-  }
-
-  /**
    * 更新自定义算法
    */
   updateCustomAlgorithm(
@@ -369,75 +293,6 @@ export class AlgorithmConfigManager {
     }
   }
 
-  /**
-   * 导入算法配置
-   */
-  importConfig(config: any): { success: boolean; importedCount: number; errors: string[] } {
-    const errors: string[] = []
-    let importedCount = 0
-
-    if (config.customAlgorithms) {
-      Object.entries(config.customAlgorithms).forEach(([id, algo]: [string, any]) => {
-        try {
-          // 验证算法格式
-          if (!algo.name || !algo.factors) {
-            errors.push(`算法 ${id} 格式错误`)
-            return
-          }
-
-          // 验证因子是否存在
-          Object.keys(algo.factors).forEach(factorId => {
-            if (!FACTORS[factorId]) {
-              throw new Error(`因子 ${factorId} 不存在`)
-            }
-          })
-
-          this.customAlgorithms.set(id, algo as Algorithm)
-          importedCount++
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error)
-          errors.push(`算法 ${id} 导入失败: ${message}`)
-        }
-      })
-    }
-
-    debugLog(`[AlgorithmConfigManager] 📥 导入完成: ${importedCount}个算法, ${errors.length}个错误`)
-    
-    return {
-      success: errors.length === 0,
-      importedCount,
-      errors
-    }
-  }
-
-  /**
-   * 获取算法统计信息
-   */
-  getStats() {
-    return {
-      totalDefault: this.algorithms.size,
-      totalCustom: this.customAlgorithms.size,
-      total: this.algorithms.size + this.customAlgorithms.size,
-      categories: {
-        comprehensive: Array.from(this.algorithms.values()).filter(a => a.category === 'comprehensive').length,
-        leader: Array.from(this.algorithms.values()).filter(a => a.category === 'leader').length,
-        money: Array.from(this.algorithms.values()).filter(a => a.category === 'money').length,
-        sentiment: Array.from(this.algorithms.values()).filter(a => a.category === 'sentiment').length,
-        ml: Array.from(this.algorithms.values()).filter(a => a.category === 'ml').length,
-        custom: this.customAlgorithms.size
-      }
-    }
-  }
-
-  /**
-   * 重置所有自定义算法
-   */
-  resetCustomAlgorithms() {
-    const count = this.customAlgorithms.size
-    this.customAlgorithms.clear()
-    debugLog(`[AlgorithmConfigManager] 🔄 重置所有自定义算法: 共 ${count} 个`)
-    return count
-  }
 }
 
 // 导出单例

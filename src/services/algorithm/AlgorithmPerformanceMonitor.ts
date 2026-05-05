@@ -6,7 +6,6 @@ import type { IAlgorithmManager } from './AlgorithmManager'
 import type {
   PerformanceMetrics,
   FactorPerformance,
-  FactorHealth,
   EmotionRecord,
   AdjustmentRecord,
   PerformanceStats,
@@ -16,7 +15,7 @@ import { FACTORS } from '@/config/factors'
 import { PERFORMANCE_CONFIG } from '@/types/config'
 import { EventManager } from '@/utils/eventManager'
 import { stockCache } from '@/services/LRUCache' // ✅ 已正确导入
-import { calculateP95, calculateStability, throttle } from '@/utils/algorithmHelpers'
+import { calculateP95, calculateStability } from '@/utils/algorithmHelpers'
 
 export class AlgorithmPerformanceMonitor {
   private algorithmManager: IAlgorithmManager
@@ -26,10 +25,6 @@ export class AlgorithmPerformanceMonitor {
   private timer: ReturnType<typeof setInterval> | null = null
 
   private emotionHistory: EmotionRecord[] = []
-  private timers = {
-    flushTimer: null as ReturnType<typeof setTimeout> | null,
-  }
-
   private adjustmentHistory: AdjustmentRecord[] = []
 
   // 配置
@@ -152,11 +147,6 @@ export class AlgorithmPerformanceMonitor {
    * 停止性能监控
    */
   stop(): void {
-    if (this.timers.flushTimer) {
-      clearInterval(this.timers.flushTimer)
-      this.timers.flushTimer = null
-    }
-
     this.saveToCache()
   }
 
@@ -222,8 +212,8 @@ export class AlgorithmPerformanceMonitor {
     stat.avgTime = (stat.avgTime * (stat.callCount - 1) + calcTime) / stat.callCount
 
     if (!success) {
-      const errorCount = stat.callCount * stat.errorRate
-      stat.errorRate = (errorCount + 1) / stat.callCount
+      const oldErrorCount = (stat.callCount - 1) * stat.errorRate
+      stat.errorRate = (oldErrorCount + 1) / stat.callCount
     }
 
     stat.contribution = (stat.contribution * (stat.callCount - 1) + contribution) / stat.callCount
