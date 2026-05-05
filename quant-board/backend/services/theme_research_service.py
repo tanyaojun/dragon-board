@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy.exc import SQLAlchemyError
-
 from backend.analysis.theme_trend import (
     ThemeTrendConfig,
     ThemeTrendPythonEngine,
@@ -21,8 +19,6 @@ from backend.data.repository import Repository
 from backend.data.theme_research_repository import ThemeResearchRepository
 from backend.utils import stable_hash
 
-DEFAULT_MIN_FRAME_COUNT = 2
-
 
 def build_theme_research(
     dataset_id: str,
@@ -34,10 +30,11 @@ def build_theme_research(
 ) -> ThemeTrendResult:
     """从正式快照事实表回放构建题材研究帧，结果写入 research SQLite。
 
+    使用多帧序列回放（replay_sequence）以追踪题材生命周期在帧间的迁移和持续性。
     不修改 themeDATA.db，不进入 Supabase 链路。
 
-    已知限制：当前逐帧回放，跨帧概念（persistence/cooling/reversal 等生命周期推断）
-    在单帧视角下不完全可靠。后续迭代将实现真正的跨帧回放。
+    已知限制：多帧回放依赖 snapshot sector rows 中的预计算因子值（由 TS engine 在捕获时计算）；
+    跨帧概念（persistence/cooling/reversal 等）基于帧间 state 追踪而非 TS rotationAnalysis。
     """
     session = SessionLocal()
     repo = Repository(session=session)
@@ -47,11 +44,7 @@ def build_theme_research(
         frames = repo.load_frame_bundles(dataset_id=dataset_id, snapshot_type=snapshot_type)
         if not frames:
             return _empty_result(
-                dataset_id,
-                snapshot_type,
-                engine_config,
-                random_seed,
-                reason="empty_frames",
+                dataset_id, snapshot_type, engine_config, random_seed, reason="empty_frames",
             )
 
         config = ThemeTrendConfig.from_patch(engine_config or {})
@@ -59,68 +52,46 @@ def build_theme_research(
         resolved_meta = dict(meta or {})
 
         engine = ThemeTrendPythonEngine()
-        all_factors: list[ThemeFactorFrame] = []
-        all_exposures: list[ThemeStockExposureFrame] = []
-        all_signals: list[ThemeSignalRow] = []
-        quality_reports: list[dict[str, Any]] = []
-        theme_ids: set[str] = set()
-        stock_codes: set[str] = set()
+        result = engine.replay_sequence_typed(frames, config=config, meta=resolved_meta)
 
-        for frame in frames:
-            typed = engine.replay_typed([frame], config=config, meta=resolved_meta)
+        # 注入数据集级溯源字段（帧级字段已在 replay_sequence 中注入）
+        for factor in result.factors:
+            factor.datasetId = dataset_id
+            factor.snapshotType = snapshot_type
+            factor.configHash = config_hash
+            factor.randomSeed = random_seed
 
-            snapshot_id = str(frame.get("snapshotId") or "")
-            trading_date = str(frame.get("tradingDate") or "")
-            slot_time = str(frame.get("slotTime") or "")
+        for exposure in result.exposures:
+            exposure.datasetId = dataset_id
+            exposure.snapshotType = snapshot_type
+            exposure.configHash = config_hash
+            exposure.randomSeed = random_seed
 
-            for factor in typed.factors:
-                factor.datasetId = dataset_id
-                factor.snapshotId = snapshot_id
-                factor.snapshotType = snapshot_type
-                factor.tradingDate = trading_date
-                factor.slotTime = slot_time
-                factor.configHash = config_hash
-                factor.randomSeed = random_seed
-                all_factors.append(factor)
-                theme_ids.add(factor.themeId)
+        for signal in result.signals:
+            signal.datasetId = dataset_id
+            signal.snapshotType = snapshot_type
+            signal.configHash = config_hash
+            signal.randomSeed = random_seed
 
-            for exposure in typed.exposures:
-                exposure.datasetId = dataset_id
-                exposure.snapshotId = snapshot_id
-                exposure.snapshotType = snapshot_type
-                exposure.tradingDate = trading_date
-                exposure.slotTime = slot_time
-                exposure.configHash = config_hash
-                exposure.randomSeed = random_seed
-                all_exposures.append(exposure)
-                stock_codes.add(exposure.code)
+        theme_ids = {factor.themeId for factor in result.factors}
+        stock_codes = {exposure.code for exposure in result.exposures}
 
-            for signal in typed.signals:
-                signal.datasetId = dataset_id
-                signal.snapshotId = snapshot_id
-                signal.snapshotType = snapshot_type
-                signal.tradingDate = trading_date
-                signal.slotTime = slot_time
-                signal.configHash = config_hash
-                signal.randomSeed = random_seed
-                all_signals.append(signal)
-
-            quality_reports.append(typed.qualityReport.to_dict())
-
-        # 事务性写入：任一写入失败则全部回滚
+        # 事务性写入：各 save_* 方法内部有独立 rollback。
+        # 外层 try/except 阻止写入失败后继续执行 save_quality_report。
+        # 注意：当前未使用 savepoint，跨表写入不是原子事务；
+        # 若需要严格原子性，后续应使用 session.begin_nested()。
         try:
-            if all_factors:
-                research_repo.save_factor_frames([item.to_dict() for item in all_factors])
-            if all_exposures:
-                research_repo.save_stock_exposures([item.to_dict() for item in all_exposures])
-            if all_signals:
-                research_repo.save_signals([item.to_dict() for item in all_signals])
+            if result.factors:
+                research_repo.save_factor_frames([item.to_dict() for item in result.factors])
+            if result.exposures:
+                research_repo.save_stock_exposures([item.to_dict() for item in result.exposures])
+            if result.signals:
+                research_repo.save_signals([item.to_dict() for item in result.signals])
         except Exception:
-            # 回滚由各个 save_* 方法内部处理，此处仅阻止继续写入质量报告
             raise
 
-        merged_quality = _merge_quality_reports(
-            quality_reports,
+        merged_quality = _build_quality_report(
+            [result.qualityReport.to_dict()],
             dataset_id,
             snapshot_type,
             engine_config,
@@ -132,9 +103,9 @@ def build_theme_research(
         research_repo.save_quality_report(merged_quality.to_dict())
 
         return ThemeTrendResult(
-            factors=all_factors,
-            exposures=all_exposures,
-            signals=all_signals,
+            factors=result.factors,
+            exposures=result.exposures,
+            signals=result.signals,
             qualityReport=merged_quality,
             strategyVersion=STRATEGY_VERSION,
             factorVersion=FACTOR_VERSION,
@@ -147,7 +118,7 @@ def build_theme_research(
         session.close()
 
 
-def _merge_quality_reports(
+def _build_quality_report(
     reports: list[dict[str, Any]],
     dataset_id: str,
     snapshot_type: str,

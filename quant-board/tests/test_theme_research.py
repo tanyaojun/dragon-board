@@ -803,3 +803,164 @@ def test_unmatched_theme_stock_not_added_for_empty_theme_name() -> None:
 
     result = ThemeTrendPythonEngine().replay(frames)
     assert "unmatched_theme_stock" not in result["qualityReport"]["warnings"]
+
+
+# ── Phase 2: 多帧序列回放 ─────────────────────────
+
+def test_replay_sequence_tracks_consecutive_frames() -> None:
+    """验证 replay_sequence 跨帧追踪主题的 continuousFrames 计数。"""
+    frames = [
+        _frame("snap_1", 100,
+               [{"code": "000001", "mainTheme": "AI", "themeRole": "leader", "themeContribution": 15}],
+               [{"entityKey": "ai", "entityName": "AI", "heatScore": 90, "momentumScore": 84,
+                 "breadthScore": 78, "fundScore": 80, "leadershipScore": 88, "correlationScore": 74,
+                 "crowdingRisk": 20, "persistenceScore": 80, "rotationState": "mainline", "rank": 1}]),
+        _frame("snap_2", 200,
+               [{"code": "000001", "mainTheme": "AI", "themeRole": "leader", "themeContribution": 15}],
+               [{"entityKey": "ai", "entityName": "AI", "heatScore": 92, "momentumScore": 86,
+                 "breadthScore": 80, "fundScore": 82, "leadershipScore": 90, "correlationScore": 76,
+                 "crowdingRisk": 18, "persistenceScore": 82, "rotationState": "mainline", "rank": 1}]),
+        _frame("snap_3", 300,
+               [{"code": "000001", "mainTheme": "AI", "themeRole": "leader", "themeContribution": 15}],
+               [{"entityKey": "ai", "entityName": "AI", "heatScore": 94, "momentumScore": 88,
+                 "breadthScore": 82, "fundScore": 84, "leadershipScore": 92, "correlationScore": 78,
+                 "crowdingRisk": 16, "persistenceScore": 84, "rotationState": "mainline", "rank": 1}]),
+    ]
+
+    result = ThemeTrendPythonEngine().replay_sequence(frames)
+    factors = result["factors"]
+    assert len(factors) == 3  # 每帧一个 factor
+
+    assert factors[0]["consecutiveFrames"] == 1
+    assert factors[0]["prevLifecycle"] == ""
+    assert factors[0]["lifecycleTransition"] == ""
+    assert factors[0]["snapshotId"] == "snap_1"
+
+    assert factors[1]["consecutiveFrames"] == 2
+    assert factors[1]["prevLifecycle"] == "mainline"
+    assert factors[1]["lifecycleTransition"] == ""  # same lifecycle, no transition
+
+    assert factors[2]["consecutiveFrames"] == 3
+    assert factors[2]["prevLifecycle"] == "mainline"
+    assert factors[2]["snapshotId"] == "snap_3"
+
+
+def test_replay_sequence_detects_lifecycle_transition() -> None:
+    """验证 replay_sequence 检测题材生命周期迁移。"""
+    frames = [
+        _frame("snap_1", 100,
+               [{"code": "000001"}],
+               [{"entityKey": "ai", "entityName": "AI", "heatScore": 60, "momentumScore": 55,
+                 "breadthScore": 50, "fundScore": 60, "leadershipScore": 50, "correlationScore": 50,
+                 "crowdingRisk": 30, "persistenceScore": 50, "rotationState": "ignition", "rank": 1}]),
+        _frame("snap_2", 200,
+               [{"code": "000001"}],
+               [{"entityKey": "ai", "entityName": "AI", "heatScore": 82, "momentumScore": 80,
+                 "breadthScore": 75, "fundScore": 78, "leadershipScore": 84, "correlationScore": 72,
+                 "crowdingRisk": 24, "persistenceScore": 78, "rotationState": "mainline", "rank": 1}]),
+    ]
+
+    result = ThemeTrendPythonEngine().replay_sequence(frames)
+    factors = result["factors"]
+
+    assert factors[0]["lifecycle"] == "ignition"
+    assert factors[1]["lifecycle"] == "mainline"
+    assert factors[1]["prevLifecycle"] == "ignition"
+    assert factors[1]["lifecycleTransition"] == "ignition>mainline"
+
+
+def test_replay_sequence_persistence_increases_over_frames() -> None:
+    """验证 persistenceScore 随连续帧数增长。"""
+    frames = [
+        _frame(
+            "snap_1", 100,
+            [{"code": "000001", "mainTheme": "AI", "themeRole": "leader", "themeContribution": 15}],
+            [{"entityKey": "ai", "entityName": "AI", "heatScore": 90, "momentumScore": 84,
+              "breadthScore": 78, "fundScore": 80, "leadershipScore": 88, "correlationScore": 74,
+              "crowdingRisk": 20, "persistenceScore": 80, "rotationState": "mainline", "rank": 1}],
+        )
+        for snap_idx in range(1, 6)
+    ]
+    # 每帧时间戳递增
+    for idx, frame in enumerate(frames):
+        frame["timestamp"] = (idx + 1) * 100
+        frame["snapshotId"] = f"snap_{idx + 1}"
+
+    result = ThemeTrendPythonEngine().replay_sequence(frames)
+    factors = result["factors"]
+    assert len(factors) == 5
+
+    # persistenceScore 应随 consecutiveFrames 单调递增
+    scores = [factor["persistenceScore"] for factor in factors]
+    for i in range(1, len(scores)):
+        assert scores[i] >= scores[i - 1], f"persistenceScore 应在帧间递增: {scores}"
+
+
+def test_replay_sequence_exposures_have_frame_metadata() -> None:
+    """验证 replay_sequence 返回的 exposures 携带来源帧 metadata。"""
+    frames = [
+        _frame("snap_1", 100,
+               [{"code": "000001", "mainTheme": "AI", "themeRole": "leader", "themeContribution": 15}],
+               [{"entityKey": "ai", "entityName": "AI", "heatScore": 90, "momentumScore": 84,
+                 "breadthScore": 78, "fundScore": 80, "leadershipScore": 88, "correlationScore": 74,
+                 "crowdingRisk": 20, "persistenceScore": 80, "rotationState": "mainline", "rank": 1}]),
+    ]
+
+    result = ThemeTrendPythonEngine().replay_sequence(frames)
+    exposures = result["exposures"]
+    assert len(exposures) == 1
+    assert exposures[0]["snapshotId"] == "snap_1"
+    assert exposures[0]["code"] == "000001"
+
+
+def test_replay_sequence_signals_have_frame_metadata() -> None:
+    """验证 replay_sequence 返回的 signals 携带来源帧 metadata。"""
+    frames = [
+        _frame("snap_1", 100,
+               [{"code": "000001"}],
+               [{"entityKey": "ai", "entityName": "AI", "heatScore": 90, "momentumScore": 84,
+                 "breadthScore": 78, "fundScore": 80, "leadershipScore": 88, "correlationScore": 74,
+                 "crowdingRisk": 20, "persistenceScore": 80, "rotationState": "mainline", "rank": 1}]),
+    ]
+
+    result = ThemeTrendPythonEngine().replay_sequence(frames)
+    signals = result["signals"]
+    assert len(signals) == 1
+    assert signals[0]["snapshotId"] == "snap_1"
+    assert signals[0]["signal"] == "mainline"
+
+
+def test_replay_sequence_quality_report_warns_time_disorder() -> None:
+    """验证 replay_sequence 检测时间乱序。"""
+    frames = [
+        _frame("snap_2", 200, [{"code": "000001"}], [{"entityName": "AI"}]),
+        _frame("snap_1", 100, [{"code": "000001"}], [{"entityName": "AI"}]),
+    ]
+
+    result = ThemeTrendPythonEngine().replay_sequence(frames)
+    assert "time_order_invalid" in result["qualityReport"]["warnings"]
+
+
+def test_replay_sequence_typed_roundtrips() -> None:
+    """验证 replay_sequence_typed 返回完整的 ThemeTrendResult。"""
+    frames = [
+        _frame("snap_1", 100,
+               [{"code": "000001", "mainTheme": "AI", "themeRole": "leader", "themeContribution": 15}],
+               [{"entityKey": "ai", "entityName": "AI", "heatScore": 90, "momentumScore": 84,
+                 "breadthScore": 78, "fundScore": 80, "leadershipScore": 88, "correlationScore": 74,
+                 "crowdingRisk": 20, "persistenceScore": 80, "rotationState": "mainline", "rank": 1}]),
+        _frame("snap_2", 200,
+               [{"code": "000001", "mainTheme": "AI", "themeRole": "leader", "themeContribution": 15}],
+               [{"entityKey": "ai", "entityName": "AI", "heatScore": 92, "momentumScore": 86,
+                 "breadthScore": 80, "fundScore": 82, "leadershipScore": 90, "correlationScore": 76,
+                 "crowdingRisk": 18, "persistenceScore": 82, "rotationState": "mainline", "rank": 1}]),
+    ]
+
+    result = ThemeTrendPythonEngine().replay_sequence_typed(frames)
+    from backend.analysis.theme_trend import ThemeTrendResult
+
+    assert isinstance(result, ThemeTrendResult)
+    assert result.strategyVersion == "theme-trend-v12"
+    assert len(result.factors) == 2
+    assert result.factors[1].consecutiveFrames == 2
+    assert result.factors[1].prevLifecycle == "mainline"

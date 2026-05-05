@@ -37,6 +37,11 @@ class ThemeFactorFrame:
     qualityFlags: list[str] = field(default_factory=list)
     lifecycle: str = "neutral"
 
+    # 多帧增强字段（由 replay_sequence 填充）
+    consecutiveFrames: int = 0
+    prevLifecycle: str = ""
+    lifecycleTransition: str = ""
+
     # 研究溯源字段
     datasetId: str = ""
     snapshotId: str = ""
@@ -158,6 +163,14 @@ def _num(value: Any, default: float = 0.0) -> float:
     except (TypeError, ValueError):
         return default
     return numeric if math.isfinite(numeric) else default
+
+
+def _int(value: Any, default: int = 0) -> int:
+    try:
+        numeric = int(value)
+    except (TypeError, ValueError):
+        return default
+    return default if not math.isfinite(float(numeric)) else numeric
 
 
 def _round(value: float) -> float:
@@ -313,7 +326,7 @@ def _build_factor(sector: dict[str, Any], config: ThemeTrendConfig) -> dict[str,
         "crowdingRisk": _round(_clamp(_num(sector.get("crowdingRisk")))),
         "persistenceScore": _round(_clamp(_num(sector.get("persistenceScore")))),
         "rotationState": _name(sector.get("rotationState") or sector.get("rotation_state") or "neutral"),
-        "rank": int(_num(sector.get("rank"), 0)),
+        "rank": _int(sector.get("rank"), 0),
         "qualityFlags": [],
         "lifecycle": "neutral",
     }
@@ -446,6 +459,115 @@ class ThemeTrendPythonEngine:
         meta: dict[str, Any] | None = None,
     ) -> ThemeTrendResult:
         raw = self.replay(frames, config, meta)
+        return _to_typed_result(raw, meta)
+
+    def replay_sequence(
+        self,
+        frames: list[dict[str, Any]] | Any,
+        config: ThemeTrendConfig | dict[str, Any] | None = None,
+        meta: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """多帧回放：逐帧计算因子，同时追踪题材生命周期在帧间的迁移和持续性。"""
+        resolved_config = config if isinstance(config, ThemeTrendConfig) else ThemeTrendConfig.from_patch(config)
+        report = build_theme_quality_report(frames)
+        valid_frames = sorted(
+            [frame for frame in _list(frames) if isinstance(frame, dict)], key=_timestamp
+        )
+        if report["blocked"]:
+            return self._result([], [], [], report, meta)
+
+        all_factors: list[dict[str, Any]] = []
+        all_exposures: list[dict[str, Any]] = []
+        all_signals: list[dict[str, Any]] = []
+        theme_tracker: dict[str, dict[str, Any]] = {}
+        extra_warnings: list[str] = []
+
+        for i, frame in enumerate(valid_frames):
+            snapshot_id = str(frame.get("snapshotId") or "")
+            trading_date = str(frame.get("tradingDate") or "")
+            slot_time = str(frame.get("slotTime") or "")
+
+            frame_factors = [
+                _build_factor(sector, resolved_config) for sector in _sector_rows(frame)
+            ]
+            frame_factors.sort(key=lambda item: item["rank"] if item["rank"] > 0 else 999999)
+
+            for factor in frame_factors:
+                theme_id = factor["themeId"]
+                prev = theme_tracker.get(theme_id)
+                consecutive = (prev.get("consecutiveFrames", 0) + 1) if prev else 1
+                prev_lifecycle = prev.get("lifecycle") if prev else None
+                current_lifecycle = factor["lifecycle"]
+
+                factor["snapshotId"] = snapshot_id
+                factor["tradingDate"] = trading_date
+                factor["slotTime"] = slot_time
+                factor["consecutiveFrames"] = consecutive
+                factor["prevLifecycle"] = prev_lifecycle or ""
+                factor["lifecycleTransition"] = (
+                    f"{prev_lifecycle}>{current_lifecycle}"
+                    if prev_lifecycle and prev_lifecycle != current_lifecycle
+                    else ""
+                )
+                # 多帧持久性评分（与 TS golden log1p 公式对齐）
+                factor["persistenceScore"] = _round(
+                    _clamp(
+                        min(92.0, 18.0 + math.log1p(consecutive) * 28.0 + min(5, consecutive) * 6.0)
+                    )
+                )
+                # 用多帧 persistenceScore 重新推断生命周期（跨帧升级路径）
+                factor["lifecycle"] = _infer_lifecycle(factor, resolved_config)
+
+                # 追踪状态（供后续帧使用）
+                # heatScore/momentumScore 预留：未来热度趋势分析、动量背离检测
+                # firstSeen 预留：题材首次出场帧索引
+                theme_tracker[theme_id] = {
+                    "lifecycle": factor["lifecycle"],
+                    "consecutiveFrames": consecutive,
+                    "heatScore": factor["heatScore"],
+                    "momentumScore": factor["momentumScore"],
+                    "firstSeen": prev.get("firstSeen", i) if prev else i,
+                }
+
+                all_factors.append(factor)
+
+            frame_exposures: list[dict[str, Any]] = []
+            unmatched_stocks = 0
+            for stock in _stock_rows(frame):
+                exposure = _build_exposure(stock, frame_factors)
+                if exposure is not None:
+                    exposure["snapshotId"] = snapshot_id
+                    exposure["tradingDate"] = trading_date
+                    exposure["slotTime"] = slot_time
+                    frame_exposures.append(exposure)
+                elif _stock_theme(stock)[0]:
+                    unmatched_stocks += 1
+
+            if unmatched_stocks > 0:
+                extra_warnings.append("unmatched_theme_stock")
+
+            all_exposures.extend(frame_exposures)
+
+            for sig in [_build_signal(factor) for factor in frame_factors]:
+                sig["snapshotId"] = snapshot_id
+                sig["tradingDate"] = trading_date
+                sig["slotTime"] = slot_time
+                all_signals.append(sig)
+
+        # 合并额外警告到质量报告，不去原地修改 build_theme_quality_report 返回值
+        if extra_warnings:
+            report["warnings"] = list(dict.fromkeys(report.get("warnings", []) + extra_warnings))
+        else:
+            report["warnings"] = list(dict.fromkeys(report.get("warnings", [])))
+        return self._result(all_factors, all_exposures, all_signals, report, meta)
+
+    def replay_sequence_typed(
+        self,
+        frames: list[dict[str, Any]] | Any,
+        config: ThemeTrendConfig | dict[str, Any] | None = None,
+        meta: dict[str, Any] | None = None,
+    ) -> ThemeTrendResult:
+        raw = self.replay_sequence(frames, config, meta)
         return _to_typed_result(raw, meta)
 
     def _result(

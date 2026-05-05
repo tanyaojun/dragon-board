@@ -547,3 +547,35 @@
 
 - 新增测试 `test_unmatched_theme_stock_produces_warning` 和 `test_unmatched_theme_stock_not_added_for_empty_theme_name`，覆盖有主题名不匹配和无主题名两种边界。
 - 验证结果：58 题材测试通过，全量 92 通过（排除 test_quant_board.py 中 4 个 Phase 3 TDD 前瞻测试）。
+
+## 2026-05-05 V12 Phase 2 实施
+
+- 目标：Python ThemeTrend 引擎多帧回放能力，跨帧生命周期追踪，与 TS golden 标准对齐。
+- 已深度分析 TS `ThemeFactorEngine` / `ThemeStockProjector` 完整合同（通过子任务并行探索）：
+  - 11 个因子的精确公式和阈值（含 jxbkStrengthScore/stockBreadthScore/fundScore/leadershipScore/correlationScore/crowdingRisk/persistenceScore/rotationState）
+  - `rotationState` 来源是 `rotationAnalysis`（mainline/quick/inflow/outflow/cooling/neutral），`cooling` 只在 `marketPhase=distribution/falling` 时产出
+  - `persistenceScore` 来自 `rotationAnalysis.mainLines[].persistentDays`，公式 `min(92, 18 + log1p(days)*28 + min(5,days)*6)`
+  - `heatScore = max(jxbkScore, stockScore) + persistence*0.08 + baseScore*0.2 - riskPenalty`
+  - 股票角色分 leader/core/follower/independent/noise，各有权重和得分规则
+  - 质量标记包含 mapping_missing/empty_theme/low_sample/jxbk_missing/invalid_number
+- 已落地关键实现：
+  - 新增 `ThemeTrendPythonEngine.replay_sequence()`：多帧序列回放，按时间戳排序，逐帧计算因子并追踪 theme_tracker（themeId→lifecycle/consecutiveFrames/heatScore/firstSeen）
+  - 跨帧增强：每帧因子注入 `consecutiveFrames`、`prevLifecycle`、`lifecycleTransition`（如 `ignition>mainline`）、基于 `log1p` 的 `persistenceScore`
+  - 帧级溯源：`replay_sequence()` 自动向每帧的 factors/exposures/signals 注入 `snapshotId`、`tradingDate`、`slotTime`
+  - 新增 `replay_sequence_typed()`：返回完整 `ThemeTrendResult`
+  - `ThemeFactorFrame` dataclass 新增 `consecutiveFrames`、`prevLifecycle`、`lifecycleTransition` 三个多帧增强字段
+  - 服务层 `build_theme_research()` 改用 `replay_sequence_typed()` 一次调用替代逐帧循环，数据集级溯源注入移到最后统一处理
+- 已知差异（已文档化）：
+  - Python 引擎读取 snapshot sector rows 中 TS engine 预计算的因子值，不从头计算（符合计算能力迁移策略）
+  - 跨帧追踪基于帧间 state 比较而非 TS 端 `rotationAnalysis` 外部对象
+  - 缺少 JXBK feed / correlation detail / rotationAnalysis 输入支持（这些是 Dragon Board 实时 runtime 上下文，在 QuickBoard 后端不可用）
+  - 股票角色分配使用简化逻辑（leader/core/follower 来自 snapshot 存储的角色数据，不再计算）
+- 新增 7 个 Phase 2 测试：
+  - `test_replay_sequence_tracks_consecutive_frames`：3 帧同题材，验证 consecutiveFrames 从 1→3
+  - `test_replay_sequence_detects_lifecycle_transition`：ignition→mainline 迁移检测
+  - `test_replay_sequence_persistence_increases_over_frames`：5 帧 persistenceScore 单调递增
+  - `test_replay_sequence_exposures_have_frame_metadata`：exposure 携带来源帧 snapshotId
+  - `test_replay_sequence_signals_have_frame_metadata`：signal 携带来源帧 metadata
+  - `test_replay_sequence_quality_report_warns_time_disorder`：乱序检测
+  - `test_replay_sequence_typed_roundtrips`：replay_sequence_typed 返回完整 ThemeTrendResult
+- 验证结果：65 题材测试通过，全量 99 通过。
