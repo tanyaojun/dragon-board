@@ -1,142 +1,310 @@
-# CLAUDE.md
+# Dragon Board AI 协作指南
 
-本文件为 Claude Code（claude.ai/code）在本项目中工作时提供指导。
+本文是 `dragon-board` 仓库的后续代理入口文档。进入本项目后，应先阅读本文，再按任务范围读取对应专题文档和源码。
 
-## 沟通与文档语言
+## 1. 基本协作原则
 
-- 全程使用中文与用户沟通交流。
-- 所有文档、注释、提交信息使用中文编写。
-- 代码标识符（变量名、函数名、类型名）使用英文。
+- 全程使用中文沟通，结论先行，说明问题、原因、改法和影响面。
+- 先读代码和现有文档，再下结论；不要凭历史印象修改业务逻辑。
+- 每次改动保持小范围、可验证、可回退，不做与当前任务无关的大重构。
+- 尊重工作区现状：未提交、未跟踪或已修改文件默认属于用户或其他协作者，不要覆盖、回滚或格式化无关文件。
+- 禁止使用破坏性 Git 命令，例如 `git reset --hard`、`git checkout -- <path>`，除非用户明确要求。
+- 禁止批量删除文件或目录。不得使用 `del /s`、`rd /s`、`rmdir /s`、`Remove-Item -Recurse`、`rm -rf`。如需删除文件，只能一次删除一个明确路径的文件。
 
-## 项目概览
+## 2. 项目定位
 
-`dragon-board` 是一个股票市场综合工作台，包含五个子系统：
+`dragon-board` 是股票热榜、市场情绪、题材轮动、龙头识别、排名趋势和量化研究的综合工作台。仓库不是单一前端项目，而是由多个子系统组成：
 
-| 子系统                 | 目录                 | 技术栈                        | 用途                                                         |
-| ---------------------- | -------------------- | ----------------------------- | ------------------------------------------------------------ |
-| Dragon Board（根项目） | `src/`               | Vue 3 + TS + Vite             | 主看板：热榜、情绪、题材轮动、龙头识别                       |
-| 代理服务               | `proxy-server/`      | Node.js                       | 股票数据 HTTP 代理，默认端`3000`                             |
-| Python 行情桥          | `python-bridge/`     | Python + mootdx + WebSocket   | 通达信行情数据桥，`ws://127.0.0.1:8765/ws/quotes`            |
-| QuantBoard             | `quant-board/`       | Python FastAPI + SQLite + Vue | 回测、优化、参数搜索、报告。后端端口 `8000`，前端端口 `5174` |
-| TDX L2 Helper          | `tools/TdxL2Helper/` | .NET 8 x86                    | 通达信 DLL/L2 深度行情探针（L2 尚未生产绪）                  |
+- 根项目：Vue 3 + TypeScript + Vite 前端，提供 Dragon Board 主看板。
+- `src/services/**`：核心业务层，包含数据加载、数据层、分析器、快照和 QuantBoard 桥接。
+- `proxy-server/`：Node.js 股票数据代理服务，默认端口 `3000`。
+- `python-bridge/`：本地 `mootdx + WebSocket` 行情桥，默认提供 `ws://127.0.0.1:8765/ws/quotes`。
+- `tools/TdxL2Helper/`：独立 x86 .NET helper，用于通达信 DLL、L2 权限和深度行情探针。
+- `quant-board/`：Python QuantBoard 子项目，用于 RankTrend golden 对齐、数据导入、回测、优化和报告展示。
 
-根 Vite 开发服务器将 `/api` 代理到 `http://localhost:3000`（代理服务）。QuantBoard 前端代理到 `http://localhost:8000`。
+根目录 `README.md` 仍有 Vue 模板残留，不能作为唯一事实来源。涉及 QuantBoard 时，以 `quant-board/docs/README.md` 和 `quant-board/docs/AI_COLLABORATION.md` 为准。
 
-## 常用命令
+## 3. 关键目录
+
+```text
+/
+├── src/                     # Dragon Board 主前端源码，只承载根 Vue 工作台
+├── docs/                    # Dragon Board 主项目文档与历史方案
+├── skills/                  # 项目级 Codex/Superpowers skill 文档和协作流程说明
+├── proxy-server/            # 本地 HTTP 代理服务，提供股票数据代理，不放前端业务逻辑
+├── python-bridge/           # 通达信行情 WebSocket 桥，不放 Vue/QuantBoard 代码
+├── tools/                   # 原生 helper、启动器和隔离探针，不放日常前端源码
+├── quant-board/             # Python 量化研究子项目，回测/优化/报告主链
+└── e2e/                     # Playwright 端到端测试
+```
+
+项目级 skills 与过程文档放置规则：
+
+- 后续新增或沉淀的 `SKILL.md`、skill 使用说明、skill 模板、workflow/checklist 等 AI 协作能力文档，统一放入根目录 `skills/`。
+- `skills/` 只承载 AI 协作流程、工具使用方法、review/debug/test/plan 等 agent 能力文档，不放业务源码、不放运行时配置、不放测试夹具、不放临时输出。
+- 如一个 skill 需要多文件组织，使用 `skills/<skill-name>/SKILL.md`，相关 `references/`、`templates/`、`scripts/` 放在该 skill 子目录内。
+- 根目录 `SKILLS.md` 只作为 skills 总索引和使用指南；详细 skill 正文迁移或新增到 `skills/**/SKILL.md`。
+- 不再把新的 skill 文档散落到根目录、`docs/`、`src/`、`quant-board/` 或用户本机 `.codex/skills` 路径中；若需要把外部 skill 引入项目，应复制/整理到 `skills/` 后再引用。
+- 修改或新增项目级 skill 时，应同步检查根 `AGENTS.md` 和 `SKILLS.md` 是否需要更新入口说明。
+- 项目实施计划、阶段进度、审计发现和复盘记录不是 skill，不放入 `skills/`，应放入对应业务文档目录。例如题材模块文档统一放入 `docs/theme-module/`。
+- 不在根目录新增 `task_plan*.md`、`findings.md`、`progress.md` 等过程文件；如需使用 planning-with-files 产物，应在任务结束前迁移到对应 `docs/<topic>/` 目录。
+
+Dragon Board `src/` 目录边界：
+
+```text
+src/
+├── components/              # Vue 组件和业务面板
+│   ├── common/              # 可复用基础组件，不写股票业务编排
+│   ├── panels/              # 主工作台业务面板，面板只调用公开服务 API
+│   └── ...                  # 其它 UI 组件按现有领域就近归类
+├── composables/             # Vue 组合式函数，只放 UI 状态复用和浏览器交互封装
+├── config/                  # 运行时配置、默认参数、存储 key 和稳定业务配置
+├── data/                    # 自动生成或外部导入的静态业务数据
+├── devtools/                # 浏览器控制台/手工诊断脚本，自动化测试默认排除
+│   └── diagnostics/         # 人工诊断工具，不允许被业务代码 import
+├── services/                # 核心业务逻辑层，数据加载、分析器、快照、桥接和投影
+│   ├── dragon/              # 龙头/复盘业务规则和兼容投影
+│   ├── hotlist/             # 热榜情绪等热榜领域分析
+│   ├── hotness/             # 个股热度计算
+│   ├── quality/             # 数据质量、覆盖率和门禁
+│   ├── quantBoardGolden/    # TypeScript golden case 导出，不做回测/优化
+│   ├── rankTrend/           # RankTrend golden 标准模块
+│   └── snapshot/            # 快照保存、读取、覆盖率、备份和 QuantBoard 适配
+├── stores/                  # Pinia 状态，只放 UI/应用级状态，不替代服务层
+├── themes/                  # 应用主题配置和主题样式
+├── types/                   # TypeScript 类型契约和类型推导必需的 as const 数据
+├── utils/                   # 通用纯工具函数，不放业务编排、远端 API 或全局状态
+├── App.vue                  # 单页工作台根组件和面板装配入口
+└── main.ts                  # 应用入口和 window 服务挂载
+```
+
+`src/` 放置规则：
+
+- `components/**` 负责展示和交互，不直接拼远端 API、不访问服务私有成员、不承载回测/优化逻辑。
+- `services/**` 负责业务能力和外部适配，公开 facade/API 给组件使用；模块私有常量就近放在本模块。
+- `stores/**` 只保存应用状态和 UI 状态，不把 Pinia 当业务服务或持久化层。
+- `types/**` 只放类型、接口、字面量联合类型和类型推导必需的 `as const` 数据；不要放纯运行时配置。
+- `config/**` 放稳定运行时配置、默认参数、存储 key 和业务常量；不要放主题系统、类型聚合或临时实验参数。
+- `themes/**` 统一承载主题 TS 配置和 CSS；不要再新增 `src/assets/**` 或把主题配置放回 `src/config/**`。
+- `data/**` 只放静态业务数据或生成数据源；生成脚本、算法逻辑、运行态缓存不要放入该目录。
+- `devtools/**` 只服务人工诊断，不进入自动化测试，不被业务代码 import。
+- `utils/**` 应保持无状态、可复用、无领域编排；一旦依赖股票业务上下文，应移动到对应 `services/**`。
+- 不再恢复 `src/type/**`、`src/constants/**`、`src/router/**`、`src/views/**` 或 `src/assets/**`，除非先同步修改本指南并说明新职责。
+
+QuantBoard `quant-board/` 目录边界：
+
+```text
+quant-board/
+├── backend/                 # Python FastAPI 后端、回测/优化/数据服务主链
+│   ├── analysis/            # RankTrend 等分析算法和特征计算
+│   ├── api/                 # HTTP API 路由和请求响应适配
+│   ├── core/                # 回测、交易规则、组合和领域核心模型
+│   ├── data/                # SQLite/Supabase schema、仓库和数据访问适配
+│   ├── optimization/        # 参数搜索、优化 runner、搜索空间和结果管理
+│   ├── services/            # 后端业务服务编排
+│   └── tests/               # 后端就近测试或领域测试，按现有结构归类
+├── config/                  # QuantBoard 独立配置，不与根 src/config 混用
+├── data/                    # 本地研究数据、warehouse、staging、reports，默认不提交运行产物
+├── docs/                    # QuantBoard 架构、API、数据库、优化和协作细则
+├── frontend/                # QuantBoard 独立前端，默认端口 5174
+└── tests/                   # QuantBoard 跨模块/集成测试
+```
+
+`quant-board/` 放置规则：
+
+- 回测、优化、参数搜索、交易模拟、报告展示只放在 `quant-board/**`，不要回流到根 `src/services/**`。
+- `backend/**` 是 QuantBoard 主后端；新增 Python 服务应落在现有 `analysis`、`core`、`data`、`optimization`、`services` 分层中。
+- `frontend/**` 是 QuantBoard 自己的展示端，不复用根项目 `src/components/**` 作为源码目录。
+- `data/**` 下运行期数据库、warehouse、staging、reports 属于本地状态，遵守 `.gitignore`，不要提交大体积数据产物。
+- `docs/**` 是 QuantBoard 细节唯一文档区；API、数据库、迁移、优化策略变化必须同步这里的专题文档。
+- `.venv/`、`.pytest_cache/` 等本地环境目录不属于源码目录，不要写入目录树或提交。
+
+根目录文件保留规则：
+
+- 必须保留：`package.json`、`package-lock.json`、`index.html`、`env.d.ts`、`vite.config.ts`、`vitest.config.ts`、`playwright.config.ts`、`tsconfig.json`、`tsconfig.app.json`、`tsconfig.node.json`、`tsconfig.ranktrend.json`、`.editorconfig`、`.prettierrc.json`、`eslint.config.ts`、`.oxlintrc.json`、`.npmrc`、`.gitattributes`、`.gitignore`、`AGENTS.md`、`SKILLS.md`。
+- 根目录 `DragonBoardLauncher.exe` 是本地启动器产物，日常可保留在工作区，但 `.gitignore` 已禁止新增提交 `*.exe`。
+- 不要提交根目录构建产物或缓存：`dist/`、`.tmp/`、`*.tsbuildinfo`、`node_modules/`、`coverage/`、`playwright-report/`、`test-results/`。
+- 不新增一次性说明、截图、调试输出或临时 JSON 到根目录；需要业务文档放 `docs/`，需要项目级 skill/AI 协作流程放 `skills/`，需要脚本放 `scripts/`，需要诊断工具放 `src/devtools/diagnostics/` 或对应子项目目录。
+- 不在根目录长期保留阶段计划和过程日志。`task_plan*.md`、`findings.md`、`progress.md` 应迁移到对应专题文档目录，例如 `docs/theme-module/`。
+
+核心前端服务优先从这些文件定位：
+
+- `src/services/DataLayer.ts`：中心化内存数据层，只负责运行时内存状态、版本和订阅通知。
+- `src/services/dataLoader.ts`：八平台热榜加载、清洗、合并和综合排名。
+- `src/services/RankTrendAnalyzer.ts`：前端 RankTrend 分析入口。
+- `src/services/rankTrend/**`：RankTrend 拆分后的 golden 标准模块。
+- `src/types/rankTrendDefaults.ts`：RankTrend 默认参数和默认快照类型。
+- `src/types/**`：统一类型契约目录；不要新增或恢复 `src/type/**`，不要放纯运行时配置。
+- `src/config/**`：运行时配置、默认参数、存储 key、固定展示配置和可调业务常量目录。
+- `src/themes/**`：普通主题、龙族主题等主题配置和主题 CSS；主题相关运行时数据不要放回 `src/config/**`。
+- `src/data/**`：只保留自动生成或外部导入的静态业务数据，例如题材映射原始数据；算法、因子、主题等运行时配置不要放入该目录。
+- `src/**/__tests__/**/*.test.ts`：正式 Vitest 测试目录和文件命名；测试应尽量靠近被测模块。
+- `src/devtools/diagnostics/**`：浏览器控制台或临时手工诊断脚本，不属于自动化测试套件，默认排除在 Vitest 和应用类型检查之外。
+- `src/services/quantBoardBridge.ts`：Dragon Board 与 QuantBoard 的数据桥接和 Golden 导出。
+- `src/services/quantBoardGolden/**`：仅用于导出 TypeScript golden case，不承载回测、优化或交易模拟。
+- `src/services/snapshot/**` 与 `src/services/quality/**`：快照质量、覆盖率和门禁。
+
+## 4. 业务硬约束
+
+### 4.1 Dragon Board 主项目
+
+- 默认 RankTrend 快照类型来自 `DEFAULT_RANK_TREND_SNAPSHOT_TYPE`，当前为 `half_hour`。
+- RankTrend 默认运行参数来自 `DEFAULT_RANK_TREND_RUNTIME_CONFIG`，不要复制旧文档中的过期参数。
+- `src/services/DataLayer.ts` 的职责边界必须保持很窄：只存放当前运行态内存数据、版本号、订阅通知、内存读写方法和必要的状态投影调用。
+- 不得把以下内容新增回 `DataLayer.ts`：类型/接口定义、默认参数和常量、HTTP/API 调用、IndexedDB/SQLite/Supabase 读写、快照导入导出、快照读模型拼装、回测/优化逻辑、业务算法规则、UI 配置。
+- DataLayer 需要用到的公开结构应放在 `src/types/**`；龙头/复盘投影规则放在 `src/services/dragon/**`；快照保存、读取、覆盖率、备份和 QuantBoard 后端适配放在 `src/services/snapshot/**`。
+- 面板或服务需要快照数据时应调用 `src/services/snapshot/**` 的公开 facade/API，不要通过 `DataLayer.ts` 中转快照能力。
+- `src/types/**` 只承载类型、接口、字面量联合类型和类型推导必需的 `as const` 数据；纯运行时配置应放入 `src/config/**` 或业务模块就近文件。
+- 不再新增 `src/constants/**` 入口；稳定常量优先放入 `src/config/**`，模块私有常量就近放在对应 `src/services/**`、`src/stores/**` 或组件文件中。
+- 主题配置和主题样式统一放在 `src/themes/**`；`src/config/**` 不承载主题系统，`src/assets/**` 不承载主题 TS 配置。
+- 不再恢复未挂载的 Vue 模板 `src/router/**`、`src/views/**`；Dragon Board 当前是单页工作台，面板入口在 `App.vue` 和 `src/components/panels/**`。
+- 不保留 `*-bak.ts`、`*0310.ts`、服务目录截图或说明草稿这类历史备份文件；需要历史对照时使用 Git。
+- 自动化测试统一放在被测模块旁的 `__tests__` 目录，文件名使用 `*.test.ts`；不要在业务代码目录中混放同名测试文件。
+- 手工诊断脚本统一放入 `src/devtools/diagnostics/**`，文件名使用 `*Diagnostic.ts` 或描述性工具名，不得使用 `.test.ts` / `.spec.ts` 后缀。
+- 新增测试时优先写可由 `pnpm test` 运行的 Vitest 用例；只有必须依赖浏览器全局对象或人工观察控制台时，才放入 `src/devtools/diagnostics/**`。
+- `src/devtools/diagnostics/**` 可以使用浏览器全局对象和人工观察输出，但不得被业务代码 import，也不得作为自动化验收依据。
+- 不要为了“统一出口”把运行时配置重新聚合进 `src/types/index.ts`。
+- 快照、策略信号和 QuantBoard 桥接逻辑必须显式处理空数据、NaN、时间乱序、低样本量、缺字段和类型回退。
+- 数据质量门禁失败时必须返回结构化原因，不允许静默吞掉并继续产出“看似可用”的交易结果。
+- 面板层应通过公开服务 API 调用业务逻辑，不要调用服务私有成员或绕过已有数据层。
+- Dragon Board 根项目不承载回测平台职责；涉及回测、优化、参数搜索、交易模拟和报告展示的功能统一放在 `quant-board/`。
+
+### 4.2 QuantBoard 子项目
+
+QuantBoard 的规则以 `quant-board/docs/README.md`、`quant-board/docs/AI_COLLABORATION.md` 和专题文档为准：
+
+- TypeScript `src/services/RankTrendAnalyzer.ts`、`src/services/rankTrend/**`、`src/types/rankTrendDefaults.ts` 是 Python 移植的 golden 标准。
+- QuantBoard 是参数研究、回测、优化、交易模拟和报告展示的唯一主链。
+- 原 `src/services/strategyBacktest` 职责已迁移到 QuantBoard Python 后端：`backend.analysis.ranktrend`、`backend.core.backtest`、`backend.services`。
+- 默认 `snapshot_type` 是 `half_hour`；`quarter_hour` 只能由用户显式选择，不能替代默认口径。
+- 回测、优化、API、CLI 和前端展示必须保留 `dataset_id`、`snapshot_type`、`strategy_version`、`config_hash`、`random_seed`。
+- QuantBoard 存储主链为 SQLite 主库 + Supabase 后端备份库；Supabase 必须按 `quant-board/backend/data/supabase_schema.sql` 与 SQLite 同构，超大 JSON 只允许在备份适配层透明压缩，存储、同步、恢复和冲突规则以 `quant-board/docs/database-migration-plan.md` 为准。
+- Dragon Board 正式快照写库必须走 QuantBoard 后端 `POST /api/snapshots/ingest`，正式保存判重以 SQLite/后端 `snapshot_id` 为准；历史 JSON/IndexedDB 迁移入口为 `POST /api/migrations/snapshots/import-json`，IndexedDB 快照缓存默认关闭，只保留为迁移源、显式缓存或非正式临时数据来源。
+- Dragon Board 正式快照读口走 QuantBoard 后端 `GET /api/snapshots/frames`、`/api/snapshots/records`、`/api/snapshots/stock-rows`、`/api/snapshots/sector-rows`；IndexedDB 只保留为历史迁移源和缓存，不再新增或恢复浏览器端 IndexedDB 校验/补齐 API。迁移阶段只保留后端 `import-json` 和离线导入工具，字段映射不得随意删改。
+- Python RankTrend 输出字段必须能与 golden case 对齐。
+- 前端展示不得把 `finalSignal` 当成唯一交易结论，应展示状态、候选分层、风险、样本质量和解释。
+
+### 4.3 通达信实时行情与 L2
+
+- `python-bridge/` 当前已跑通的是 `7709 / L1 + 标准五档 + 本地 WebSocket`。
+- `7719 / 真 L2 十档 / 真 L2 逐笔` 尚未完成，不得把当前五档能力描述成官方客户端级 L2。
+- 任何 `7719` 或 DLL 探针必须隔离验证，不能直接改 `python-bridge/main.py` 的默认生产行为。
+- 不重新安装或恢复 `pytdx` 作为依赖；当前桥接依赖 `mootdx`。
+- `TDX_L2_USERNAME`、`TDX_L2_PASSWORD` 只是预留变量，不代表已实现真实 L2 登录。
+
+## 5. 常用命令
+
+### 5.1 根项目前端
 
 ```powershell
-# 根前端
 pnpm install
-pnpm dev                    # Vite 开发服务器，localhost:5173
-pnpm build                  # vite build（不等价于完整类型检查）
-pnpm test                   # Vitest：src/**/__tests__/**/*.test.ts
-pnpm test:ranktrend         # RankTrend 专项测试
-pnpm typecheck:ranktrend    # tsc --noEmit -p tsconfig.ranktrend.json
+pnpm dev
+pnpm build
+pnpm test
+pnpm test:ranktrend
+pnpm typecheck:ranktrend
 pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false
+```
 
-# 代理服务
-cd proxy-server && npm install && npm run start
+说明：
 
-# Python 行情桥
+- 根 `package.json` 当前没有 `lint`、`test:e2e` 脚本；不要照抄旧 README 的模板命令。
+- `pnpm build` 当前是 `vite build`，不等价于完整类型检查。需要类型验证时运行 `vue-tsc` 或对应 `tsc` 命令。
+- RankTrend 相关改动优先运行 `pnpm test:ranktrend` 和 `pnpm typecheck:ranktrend`。
+
+### 5.2 代理服务
+
+```powershell
+cd proxy-server
+npm install
+npm run start
+```
+
+默认监听 `http://localhost:3000`，根 Vite 通过 `/api` 代理到该服务。
+
+### 5.3 Python 行情桥
+
+```powershell
 pip install -r python-bridge/requirements.txt
 python python-bridge/main.py
+```
 
-# QuantBoard 后端
+日常优先使用根目录 `DragonBoardLauncher.exe` 启动，它会隐藏启动 bridge，并在 bridge 离线时允许前端回退 HTTP 备用链路。
+
+### 5.4 TdxL2Helper
+
+```powershell
+dotnet publish tools\TdxL2Helper\TdxL2Helper.csproj -c Release -r win-x86 --self-contained true
+tools\TdxL2Helper\bin\Release\net8.0-windows\win-x86\publish\TdxL2Helper.exe inspect --tdx-root D:\APP_SOFT\TDX
+```
+
+涉及 `--unsafe-deep-start`、`--unsafe-deep-func-probe` 的操作属于高风险探针，必须确认任务确实需要。
+
+### 5.5 QuantBoard
+
+后端：
+
+```powershell
 cd quant-board
 .\.venv\Scripts\python.exe -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
 .\.venv\Scripts\python.exe -m pytest
+.\.venv\Scripts\python.exe -m backend.cli list-datasets
+```
 
-# QuantBoard 前端
+前端：
+
+```powershell
 cd quant-board\frontend
-npm install && npm run dev -- --host 127.0.0.1 --port 5174
+npm install
+npm run dev -- --host 127.0.0.1 --port 5174
 npm run build
 ```
 
-## 根 `src/` 架构
+QuantBoard 前端默认代理 `http://localhost:8000`，开发端口为 `5174`，预览端口为 `4174`。Dragon Board 主页面通常运行在 `http://localhost:5173`，运行页桥接依赖两个页面同时可访问。
 
-```
-src/
-├── main.ts                  # 应用入口：创建 Pinia，挂载服务到 window，挂载 Vue 应用
-├── App.vue                  # 单页工作台根组件，面板装配入口
-├── components/
-│   ├── common/              # 可复用基础组件（不放股票业务逻辑）
-│   └── panels/              # 业务面板 — 只能调用公开服务 API
-├── composables/             # Vue 组合式函数 — 只做 UI 状态复用和浏览器交互
-├── config/                  # 运行时配置、默认参数、存储 key、稳定业务常量
-├── data/                    # 静态/生成的业务数据（不放算法、不放运行时缓存）
-├── devtools/diagnostics/    # 手工诊断脚本，排除在测试和类型检查之外
-├── services/                # 核心业务逻辑层
-│   ├── DataLayer.ts         # 中心化内存数据层（版本、订阅通知、内存状态）
-│   ├── dataLoader.ts        # 八平台热榜加载、清洗、合并、综合排名
-│   ├── snapshot/            # 快照保存/读取/覆盖率/备份 + QuantBoard 适配
-│   ├── rankTrend/           # RankTrend golden 标准模块
-│   ├── dragon/              # 龙头/复盘业务规则和兼容投影
-│   ├── hotness/             # 个股热度计算
-│   ├── quality/             # 数据质量覆盖率和门禁
-│   ├── quantBoardGolden/    # TypeScript golden case 导出（不做回测/优化）
-│   └── quantBoardBridge.ts  # Dragon Board 与 QuantBoard 桥接
-├── stores/                  # Pinia 状态 — 只放 UI/应用状态，不替代服务层
-├── themes/                  # 主题 TS 配置 + CSS（含龙族主题）
-├── types/                   # TypeScript 类型契约 + 类型推导所需的 as const 数据
-└── utils/                   # 纯工具函数（无状态、可复用、无领域编排）
-```
+## 6. 推荐工作流程
 
-**关键规则：**
+1. 先用 `rg` 定位相关文件、调用链和测试，不要先全局改动。
+2. 阅读与任务直接相关的文档。QuantBoard 任务至少先看 `quant-board/docs/README.md` 和 `quant-board/docs/AI_COLLABORATION.md`。
+3. 给出简短计划：问题、原因、改法、影响文件和验证方式。
+4. 修改时保持最小范围，优先复用现有服务、类型、工具函数和测试模式。
+5. 改完运行必要验证；如果验证受环境限制无法运行，明确说明原因和未覆盖风险。
+6. 最终回复包含：改动摘要、验证结果、风险点或后续建议。
 
-- 服务层暴露公开 facade；组件不得调用服务私有成员或直接拼远端 API。
-- `types/` 放类型、接口和类型推导必需的 `as const` 数据。运行时配置放 `config/`。
-- `stores/` 只做 UI 状态；不得将 Pinia 当作持久化层或业务逻辑层。
-- 禁止创建 `src/router/`、`src/views/`、`src/assets/`、`src/constants/`、`src/type/` 目录。
-- 测试放在被测模块旁的 `__tests__/*.test.ts`。诊断脚本放 `devtools/diagnostics/`。
-- `DataLayer.ts` 必须保持窄边界：运行时内存状态、版本号、订阅通知。不放 API 调用、数据库访问、类型定义、常量或回测逻辑。
+## 7. 代码风格
 
-## QuantBoard `quant-board/` 架构
+- TypeScript/Vue 使用现有 Vue 3 `<script setup>`、Pinia、Vite 和 `@` 路径别名风格。
+- 格式约束参考 `.prettierrc.json`：无分号、单引号、`printWidth=100`。
+- 不引入新的框架或大型依赖，除非任务明确要求并说明收益。
+- 复杂算法可加少量解释性注释；避免把显而易见的赋值写成注释。
+- 对金融、回测、优化类逻辑，优先保证可复现、可解释和边界条件明确。
+- Python 代码要保持模块名清晰，对个人开发者友好；新增服务优先落在 `quant-board/backend/**` 的现有分层中。
 
-```
-quant-board/
-├── backend/
-│   ├── main.py              # FastAPI 应用入口
-│   ├── analysis/            # RankTrend 分析算法和特征计算
-│   ├── api/                 # HTTP API 路由
-│   ├── core/                # 回测引擎、交易规则、组合、领域核心模型
-│   ├── data/                # SQLite/Supabase schema、仓库、数据访问
-│   ├── optimization/        # 参数搜索、优化 runner、搜索空间
-│   └── services/            # 后端业务服务编排
-├── config/                  # QuantBoard 独立配置（与根 src/config/ 分离）
-├── data/                    # 本地研究数据、warehouse、staging、reports（gitignore）
-├── docs/                    # QuantBoard 文档（架构、API、数据库、优化等）
-├── frontend/                # QuantBoard 独立前端（端口 5174）
-└── tests/                   # 跨模块/集成测试
-```
+## 8. 文档维护规则
 
-**关键规则：**
+- 根 `AGENTS.md` 只放跨项目入口规则、当前口径和常用命令。
+- 根 `SKILLS.md` 只放项目级 skills 总索引和使用指南；具体 skill 正文、模板和引用材料统一放 `skills/`。
+- Dragon Board 主项目细节写入根 `docs/`。
+- 业务专题的计划、审计发现、进度归档应放在 `docs/<topic>/`，不要散落在根目录；题材模块使用 `docs/theme-module/`。
+- QuantBoard 细节写入 `quant-board/docs/`，不要散落到后端或前端 README 中。
+- 发现旧文档仍把 Dragon Board 根项目描述为回测平台时，应删除或改为当前 QuantBoard 口径。
+- 修改默认值、策略合同、API 合同或数据表字段时，必须同步更新相关专题文档。
+- 修改存储、同步、快照入库、数据库表字段、Supabase payload、恢复策略或 API/CLI 请求响应字段时，必须同批更新相关文档；QuantBoard 相关改动至少检查 `quant-board/docs/database-migration-plan.md`、`quant-board/docs/architecture.md`、`quant-board/docs/api-cli.md` 和 `quant-board/docs/AI_COLLABORATION.md`。
 
-- 所有回测、优化、参数搜索、交易模拟和报告展示属于 `quant-board/` — 禁止放入根 `src/services/`。
-- `src/services/RankTrendAnalyzer.ts` 和 `src/services/rankTrend/**` 是 TypeScript golden 标准，Python 移植必须对齐。
-- SQLite 是主存储；Supabase 是备份存储。二者必须按 `quant-board/docs/database-migration-plan.md` 保持 schema 同构。
-- 所有链路必须保留：`dataset_id`、`snapshot_type`、`strategy_version`、`config_hash`、`random_seed`。
-- 默认 `snapshot_type` 为 `half_hour`。`quarter_hour` 只能由用户显式选择。
-- 前端展示必须包含候选分层、风险、样本质量和解释 — 禁止把 `finalSignal` 当作唯一交易结论。
+## 9. 测试与验收优先级
 
-## 业务硬约束
+- UI 或组件改动：至少运行相关构建或类型检查；有交互风险时补充浏览器验证。
+- 普通单元测试：放在被测模块邻近的 `__tests__/*.test.ts`，并通过 `pnpm test` 验证。
+- 手工诊断脚本：放在 `src/devtools/diagnostics/**`，不得命名为 `.test.ts`，不得作为 CI 通过条件。
+- RankTrend 改动：运行 `pnpm test:ranktrend`、`pnpm typecheck:ranktrend`，必要时补 golden case。
+- QuantBoard 回测、优化、策略改动：覆盖质量门禁、样本不足、空数据、交易成本、T+1、止损止盈和随机种子。
+- QuantBoard 后端改动：在 `quant-board` 目录运行 `.\.venv\Scripts\python.exe -m pytest`。
+- TDX bridge 或 helper 改动：区分生产链路和隔离探针，报告真实能力边界。
 
-- **Golden 对齐**：TypeScript RankTrend 输出是 golden 标准。Python 移植必须产出字段对齐的输出，并通过 golden case 验证。
-- **数据质量门禁**：失败时必须返回结构化原因（NaN、Inf、负值、低覆盖率、时间乱序）。禁止静默吞掉脏数据并产出"看似可用"的结果。
-- **TDX/L2**：当前桥接使用 `7709 / L1 + 标准五档`。真 L2（7719 / 十档 / 逐笔）尚未生产就绪。禁止将当前能力描述为客户端级 L2。
-- **快照持久化**：正式快照必须走 QuantBoard 后端 `POST /api/snapshots/ingest`。IndexedDB 仅作迁移/历史缓存。
-- **工作区安全**：禁止使用破坏性 Git 命令（`reset --hard`、`checkout --`），禁止批量删除文件，禁止覆盖用户未提交的改动。
+## 10. 开始任务前的检查清单
 
-## 代码风格
-
-- Prettier：无分号、单引号、`printWidth: 100`
-- Vue 3 `<script setup>`、Pinia、Vite、`@` 路径别名指向 `./src`
-- 不引入新框架或重型依赖，除非任务明确要求并说明收益
-- 金融/回测逻辑：优先保证可复现、可解释、边界条件明确
-
-## 文档索引
-
-- **`AGENTS.md`** — 完整的跨项目规则、目录边界、工作区约束和详细约定。非简单任务应先阅读此文件。
-- **`SKILLS.md`** — 不同任务类型应使用哪些 skills。
-- **`docs/`** — Dragon Board 主项目文档和历史方案。
-- **`quant-board/docs/README.md`** — QuantBoard 文档中心（架构、API、数据库、优化、golden 对齐）。
-- **`quant-board/docs/AI_COLLABORATION.md`** — QuantBoard 专属 AI 协作约束。
+- 当前任务属于根前端、代理服务、行情桥、TdxL2Helper 还是 QuantBoard？
+- 是否有用户或其他协作者的未提交改动需要避开？
+- 当前业务口径来自哪份最新文档或源码常量？
+- 是否触碰 RankTrend golden、快照默认值、回测口径、存储/同步/API 合同或 L2 能力边界？
+- 应运行哪些最小验证命令？
