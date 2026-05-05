@@ -1,5 +1,6 @@
 import { dataLayer } from '@/services/DataLayer'
 import { apiService } from '@/services/apiService'
+import { toFiniteNumber } from './utils'
 import type { JxbkBlockData, JxbkStockData } from '@/types'
 
 const CACHE_TTL = 5 * 60 * 1000
@@ -15,22 +16,17 @@ const sectorStocksCache: Record<
   }
 > = {}
 
-function finiteNumber(value: unknown): number {
-  const numeric = Number(value)
-  return Number.isFinite(numeric) ? numeric : 0
-}
-
 function normalizeBlock(block: Partial<JxbkBlockData>): JxbkBlockData {
   return {
     code: String(block.code || block.name || '').trim(),
     name: String(block.name || block.code || '').trim(),
-    strength: finiteNumber(block.strength),
-    change: finiteNumber(block.change),
-    mainNetInflow: finiteNumber(block.mainNetInflow),
-    bigMoney300: finiteNumber(block.bigMoney300),
-    institutionBuy: finiteNumber(block.institutionBuy),
-    volumeRatio: finiteNumber(block.volumeRatio),
-    ztCount: finiteNumber(block.ztCount),
+    strength: toFiniteNumber(block.strength),
+    change: toFiniteNumber(block.change),
+    mainNetInflow: toFiniteNumber(block.mainNetInflow),
+    bigMoney300: toFiniteNumber(block.bigMoney300),
+    institutionBuy: toFiniteNumber(block.institutionBuy),
+    volumeRatio: toFiniteNumber(block.volumeRatio),
+    ztCount: toFiniteNumber(block.ztCount),
   } as JxbkBlockData
 }
 

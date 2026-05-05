@@ -1,5 +1,6 @@
 import { dataLayer } from '@/services/DataLayer'
 import { debugLog } from '@/utils/logger'
+import { dedupeByKey } from './utils'
 import { buildThemeFactors } from './ThemeFactorEngine'
 import { projectThemeStockExposures } from './ThemeStockProjector'
 import { buildThemeRotationSummary } from './ThemeRotationEngine'
@@ -8,6 +9,7 @@ import { buildLegacyBlockThemeEvents } from './ThemeLegacyAlertAdapter'
 import { themeRuntimeStore } from './ThemeRuntimeStore'
 import { jxbkThemeFeed } from './JxbkThemeFeed'
 import { themeRepository } from './ThemeRepository'
+import { deriveThemeHeatLevel } from './stockThemeMeta'
 import type {
   ThemeExposureProjection,
   ThemeFactorSnapshot,
@@ -106,16 +108,7 @@ function syncStocks(exposures: ThemeExposureProjection): number {
       })),
       mainTheme: main?.themeName,
       themeHeat: main?.themeScore || 0,
-      themeLevel:
-        (main?.themeScore || 0) >= 80
-          ? '热门'
-          : (main?.themeScore || 0) >= 60
-            ? '活跃'
-            : (main?.themeScore || 0) >= 40
-              ? '温'
-              : (main?.themeScore || 0) >= 20
-                ? '冷'
-                : '冰',
+      themeLevel: deriveThemeHeatLevel(main?.themeScore || 0),
     }
   })
   if (updates.length) dataLayer.updateStockThemes(updates)
@@ -178,10 +171,7 @@ export function refreshRuntime(options: ThemeRuntimeRefreshOptions): ThemeRuntim
       blocks: context.jxbkBlocks || [],
       stockMap: jxbkThemeFeed.getStockMap(),
     })
-    const events = [...themeEvents, ...legacyEvents].filter((event, index, array) => {
-      const key = `${event.alertType || event.type}:${event.themeId}`
-      return array.findIndex((item) => `${item.alertType || item.type}:${item.themeId}` === key) === index
-    })
+    const events = dedupeByKey([...themeEvents, ...legacyEvents], (e) => `${e.alertType || e.type}:${e.themeId}`)
     const qualitySummary = buildQualitySummary(factors)
     const changedFields = changedFieldsFor(signature, factors, exposures, events, qualitySummary)
     const syncedStockCount = options.syncStocks ? syncStocks(exposures) : 0

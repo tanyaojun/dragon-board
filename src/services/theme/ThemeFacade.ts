@@ -6,6 +6,7 @@ import { themeRuntimeStore } from './ThemeRuntimeStore'
 import { jxbkThemeFeed } from './JxbkThemeFeed'
 import { themeRepository } from './ThemeRepository'
 import { refreshRuntime, themeInputSignature } from './ThemeRuntimeCoordinator'
+import { deriveThemeHeatLevel } from './stockThemeMeta'
 import type {
   ThemeExposureProjection,
   ThemeFactorSnapshot,
@@ -261,8 +262,7 @@ export function getThemeEvents() {
 }
 
 export function toHotThemeCompat(factor: ThemeFactorSnapshot) {
-  const heatLevel =
-    factor.heatScore >= 80 ? '热门' : factor.heatScore >= 60 ? '活跃' : factor.heatScore >= 40 ? '温' : factor.heatScore >= 20 ? '冷' : '冰'
+  const heatLevel = deriveThemeHeatLevel(factor.heatScore)
   return {
     id: factor.themeId,
     name: factor.themeName,
@@ -292,8 +292,7 @@ export function toStockThemeCompat(exposure: ThemeStockExposure) {
     name: exposure.themeName,
     source: exposure.source,
     heatScore: exposure.themeScore,
-    heatLevel:
-      exposure.themeScore >= 80 ? '热门' : exposure.themeScore >= 60 ? '活跃' : exposure.themeScore >= 40 ? '温' : exposure.themeScore >= 20 ? '冷' : '冰',
+    heatLevel: deriveThemeHeatLevel(exposure.themeScore),
     correlation: exposure.roleScore / 100,
     exposureWeight: exposure.exposureWeight,
     role: exposure.role,

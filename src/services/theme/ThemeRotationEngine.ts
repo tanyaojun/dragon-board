@@ -136,11 +136,19 @@ export function buildThemeRotationSummary(
     }
   })
 
-  const inflowThemes = statuses.filter((status) => status.direction === 'inflow')
-  const outflowThemes = statuses.filter((status) => status.direction === 'outflow')
-  const mainLines = statuses.filter((status) => status.isMainLine)
-  const strongThemes = statuses.filter((status) => (status.strengthScore || 0) >= 70)
-  const quickRotation = statuses.filter((status) => Math.abs(status.rankChange) >= 3)
+  const inflowThemes: ThemeRotationStatus[] = []
+  const outflowThemes: ThemeRotationStatus[] = []
+  const mainLines: ThemeRotationStatus[] = []
+  const strongThemes: ThemeRotationStatus[] = []
+  const quickRotation: ThemeRotationStatus[] = []
+
+  for (const status of statuses) {
+    if (status.direction === 'inflow') inflowThemes.push(status)
+    if (status.direction === 'outflow') outflowThemes.push(status)
+    if (status.isMainLine) mainLines.push(status)
+    if ((status.strengthScore || 0) >= 70) strongThemes.push(status)
+    if (Math.abs(status.rankChange) >= 3) quickRotation.push(status)
+  }
   const rotationSpeed =
     statuses.length === 0
       ? 0

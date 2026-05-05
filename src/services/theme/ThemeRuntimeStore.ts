@@ -59,6 +59,11 @@ export function createThemeRuntimeStore(initial?: Partial<ThemeRuntimeSnapshot>)
   }
   const listeners = new Set<ThemeRuntimeListener>()
 
+  function notify() {
+    const cloned = cloneSnapshot(snapshot)
+    listeners.forEach((listener) => listener(cloned))
+  }
+
   return {
     getSnapshot(): ThemeRuntimeSnapshot {
       return cloneSnapshot(snapshot)
@@ -70,9 +75,8 @@ export function createThemeRuntimeStore(initial?: Partial<ThemeRuntimeSnapshot>)
         ...patch,
         lastUpdate: patch.lastUpdate ?? Date.now(),
       }
-      const nextSnapshot = cloneSnapshot(snapshot)
-      listeners.forEach((listener) => listener(nextSnapshot))
-      return nextSnapshot
+      notify()
+      return snapshot
     },
 
     subscribe(listener: ThemeRuntimeListener): () => void {
@@ -98,8 +102,7 @@ export function createThemeRuntimeStore(initial?: Partial<ThemeRuntimeSnapshot>)
         refreshSource: undefined,
         changedFields: undefined,
       }
-      const nextSnapshot = cloneSnapshot(snapshot)
-      listeners.forEach((listener) => listener(nextSnapshot))
+      notify()
     },
   }
 }

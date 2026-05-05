@@ -1,4 +1,5 @@
 import { ALERT_LEVELS } from '@/config/constants'
+import { dedupeByKey } from './utils'
 import type { ThemeEvent, ThemeExposureProjection, ThemeFactorSnapshot } from './types'
 
 type ThemeAlertBuildContext = {
@@ -118,11 +119,5 @@ export function buildThemeEvents(context: ThemeAlertBuildContext): ThemeEvent[] 
     }
   })
 
-  const seen = new Set<string>()
-  return events.filter((event) => {
-    const key = `${event.type}:${event.themeId}`
-    if (seen.has(key)) return false
-    seen.add(key)
-    return true
-  })
+  return dedupeByKey(events, (e) => `${e.type}:${e.themeId}`)
 }

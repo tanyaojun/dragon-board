@@ -1,4 +1,5 @@
 import { ALERT_LEVELS, ALERT_TYPES } from '@/config/constants'
+import { dedupeByKey } from './utils'
 import type { ThemeEvent, ThemeLegacyAlertBuildContext } from './types'
 
 function stockCodesForTheme(stockMap: ThemeLegacyAlertBuildContext['stockMap'], themeName: string): string[] {
@@ -56,11 +57,5 @@ export function buildLegacyBlockThemeEvents(context: ThemeLegacyAlertBuildContex
     }
   })
 
-  const seen = new Set<string>()
-  return events.filter((event) => {
-    const key = `${event.alertType}:${event.themeId}`
-    if (seen.has(key)) return false
-    seen.add(key)
-    return true
-  })
+  return dedupeByKey(events, (e) => `${e.alertType}:${e.themeId}`)
 }

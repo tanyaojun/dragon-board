@@ -15,3 +15,13 @@ export function round(value: number, digits = 0): number {
   const factor = 10 ** digits
   return Math.round(value * factor) / factor
 }
+
+export function dedupeByKey<T>(items: T[], keyFn: (item: T) => string): T[] {
+  const seen = new Set<string>()
+  return items.filter((item) => {
+    const key = keyFn(item)
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}

@@ -1,3 +1,5 @@
+import { hasFiniteNumber, toFiniteNumber } from './utils'
+
 export interface StockThemeLike {
   id?: string
   name?: string
@@ -14,15 +16,13 @@ export interface StockThemeSnapshot {
 }
 
 function normalizeThemeHeatScore(value: unknown): number {
-  const numeric = Number(value || 0)
-  if (!Number.isFinite(numeric)) return 0
-  return Math.max(0, Math.round(numeric * 10) / 10)
+  if (!hasFiniteNumber(value)) return 0
+  return Math.max(0, Math.round(toFiniteNumber(value) * 10) / 10)
 }
 
 function normalizeThemeCorrelation(value: unknown): number {
-  const numeric = Number(value || 0)
-  if (!Number.isFinite(numeric)) return 0
-  return Math.max(0, Math.round(numeric * 1000) / 1000)
+  if (!hasFiniteNumber(value)) return 0
+  return Math.max(0, Math.round(toFiniteNumber(value) * 1000) / 1000)
 }
 
 function themeSourceWeight(source?: string): number {

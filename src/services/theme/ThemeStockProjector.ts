@@ -61,8 +61,9 @@ function buildExposure(
   code: string,
   factor: ThemeFactorSnapshot,
   context: ThemeSourceContext,
+  stockByCode: Map<string, ThemeSourceContext['stocks'][number]>,
 ): ThemeStockExposure | null {
-  const stock = context.stocks.find((item) => item.code === code)
+  const stock = stockByCode.get(code)
   const stockThemeIds = context.stockThemes.get(code) || []
   const role = roleFor(code, stock, factor, context)
   const stockRoleScore = roleScore(role, stock)
@@ -99,11 +100,12 @@ export function projectThemeStockExposures(
 ): ThemeExposureProjection {
   const byCode = new Map<string, ThemeStockExposure[]>()
   const byTheme = new Map<string, ThemeStockExposure[]>()
+  const stockByCode = new Map(context.stocks.map((s) => [s.code, s]))
 
   factors.forEach((factor) => {
     const stockCodes = context.themeStocks.get(factor.themeId) || []
     const exposures = stockCodes
-      .map((code) => buildExposure(code, factor, context))
+      .map((code) => buildExposure(code, factor, context, stockByCode))
       .filter((exposure): exposure is ThemeStockExposure => exposure !== null)
       .sort(
         (left, right) =>

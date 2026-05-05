@@ -4,6 +4,41 @@ import { clamp, hasFiniteNumber, round, toFiniteNumber } from './utils'
 
 const LIMIT_UP_CHANGE = 9.5
 
+// JXBK 强度分档阈值
+const STRENGTH_TIERS = [
+  { threshold: 4000, score: 40 },
+  { threshold: 3000, score: 30 },
+  { threshold: 2000, score: 20 },
+  { threshold: 1000, score: 10 },
+  { threshold: 0, score: 5 },
+] as const
+const ZT_COUNT_TIERS = [
+  { threshold: 10, score: 30 },
+  { threshold: 5, score: 25 },
+  { threshold: 3, score: 20 },
+  { threshold: 1, score: 15 },
+] as const
+const VOLUME_RATIO_TIERS = [
+  { threshold: 2.5, score: 15 },
+  { threshold: 1.5, score: 10 },
+  { threshold: 0.8, score: 5 },
+] as const
+const NET_INFLOW_TIERS = [
+  { threshold: 100_000_000, score: 15 },
+  { threshold: 50_000_000, score: 12 },
+  { threshold: 10_000_000, score: 8 },
+  { threshold: 0, score: 5 },
+] as const
+
+// heatScore 组合权重
+const HEAT_BREADTH_WEIGHT = 0.36
+const HEAT_FUND_WEIGHT = 0.22
+const HEAT_LEADERSHIP_WEIGHT = 0.28
+const HEAT_CORRELATION_WEIGHT = 0.14
+const HEAT_PERSISTENCE_WEIGHT = 0.08
+const HEAT_BASE_WEIGHT = 0.2
+const CROWDING_RISK_PENALTY_RATIO = 0.14
+
 function normalizeName(value: string): string {
   return String(value || '')
     .trim()
@@ -27,34 +62,20 @@ function findJxbkBlock(themeName: string, blocks: JxbkBlockData[] = []): JxbkBlo
   return blocks.find((block) => isSameThemeName(themeName, block.name))
 }
 
+function tierScore(value: number, tiers: ReadonlyArray<{ readonly threshold: number; readonly score: number }>): number {
+  for (const tier of tiers) {
+    if (value >= tier.threshold) return tier.score
+  }
+  return 0
+}
+
 function jxbkStrengthScore(block?: JxbkBlockData): number {
   if (!block) return 0
-  const strength = toFiniteNumber(block.strength)
-  const ztCount = toFiniteNumber(block.ztCount)
-  const volumeRatio = toFiniteNumber(block.volumeRatio)
-  const netInflow = toFiniteNumber(block.mainNetInflow)
-
   let score = 0
-  if (strength >= 4000) score += 40
-  else if (strength >= 3000) score += 30
-  else if (strength >= 2000) score += 20
-  else if (strength >= 1000) score += 10
-  else if (strength > 0) score += 5
-
-  if (ztCount >= 10) score += 30
-  else if (ztCount >= 5) score += 25
-  else if (ztCount >= 3) score += 20
-  else if (ztCount >= 1) score += 15
-
-  if (volumeRatio >= 2.5) score += 15
-  else if (volumeRatio >= 1.5) score += 10
-  else if (volumeRatio >= 0.8) score += 5
-
-  if (netInflow > 100000000) score += 15
-  else if (netInflow > 50000000) score += 12
-  else if (netInflow > 10000000) score += 8
-  else if (netInflow > 0) score += 5
-
+  score += tierScore(toFiniteNumber(block.strength), STRENGTH_TIERS)
+  score += tierScore(toFiniteNumber(block.ztCount), ZT_COUNT_TIERS)
+  score += tierScore(toFiniteNumber(block.volumeRatio), VOLUME_RATIO_TIERS)
+  score += tierScore(toFiniteNumber(block.mainNetInflow), NET_INFLOW_TIERS)
   return clamp(Math.round(score))
 }
 
@@ -223,12 +244,11 @@ export function buildThemeFactors(context: ThemeSourceContext): ThemeFactorSnaps
     const persistence = persistenceScore(context, theme.id, theme.name)
     const rotation = rotationState(context, theme.id, theme.name)
     const baseScore = stocks.length ? Math.min(18, stocks.length * 4) : 0
-    const stockScore = clamp(breadth * 0.36 + funds * 0.22 + leadership.score * 0.28 + correlation * 0.14)
-    const heatBeforeRisk = clamp(Math.max(jxbkScore, stockScore) + persistence * 0.08 + baseScore * 0.2)
+    const stockScore = clamp(breadth * HEAT_BREADTH_WEIGHT + funds * HEAT_FUND_WEIGHT + leadership.score * HEAT_LEADERSHIP_WEIGHT + correlation * HEAT_CORRELATION_WEIGHT)
+    const heatBeforeRisk = clamp(Math.max(jxbkScore, stockScore) + persistence * HEAT_PERSISTENCE_WEIGHT + baseScore * HEAT_BASE_WEIGHT)
     const crowdingRisk = crowdingRiskScore(block, heatBeforeRisk, stocks)
-    const riskPenalty = Math.min(14, crowdingRisk * 0.14)
+    const riskPenalty = Math.min(14, crowdingRisk * CROWDING_RISK_PENALTY_RATIO)
     const heatScore = (stocks.length && hasAnyValidStockSignal(stocks)) || block ? clamp(round(heatBeforeRisk - riskPenalty)) : 0
-    const relatedThemeIds: string[] = []
 
     return {
       themeId: theme.id,
@@ -252,7 +272,7 @@ export function buildThemeFactors(context: ThemeSourceContext): ThemeFactorSnaps
       strength: toFiniteNumber(block?.strength),
       volumeRatio: toFiniteNumber(block?.volumeRatio),
       rank: 0,
-      relatedThemeIds,
+      relatedThemeIds: [],
       qualityFlags: qualityFlags(context, theme.id, stocks, block),
       components: {
         baseScore,
