@@ -346,6 +346,101 @@ class OptimizationRun(ResearchBase):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class ThemeFactorFrameModel(ResearchBase):
+    __tablename__ = "theme_factor_frames"
+    __table_args__ = (Index("ix_tf_dataset_snapshot", "dataset_id", "snapshot_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    dataset_id: Mapped[str] = mapped_column(String(64), index=True)
+    snapshot_id: Mapped[str] = mapped_column(String(160), index=True)
+    snapshot_type: Mapped[str] = mapped_column(String(32), default="half_hour")
+    trading_date: Mapped[str] = mapped_column(String(16), index=True)
+    slot_time: Mapped[str] = mapped_column(String(16), default="")
+    strategy_version: Mapped[str] = mapped_column(String(40), default="theme-trend-v12")
+    config_hash: Mapped[str] = mapped_column(String(96), default="")
+    random_seed: Mapped[int] = mapped_column(Integer, default=0)
+    theme_id: Mapped[str] = mapped_column(String(160))
+    theme_name: Mapped[str] = mapped_column(String(160), default="")
+    heat_score: Mapped[float] = mapped_column(Float, default=0.0)
+    momentum_score: Mapped[float] = mapped_column(Float, default=0.0)
+    breadth_score: Mapped[float] = mapped_column(Float, default=0.0)
+    fund_score: Mapped[float] = mapped_column(Float, default=0.0)
+    leadership_score: Mapped[float] = mapped_column(Float, default=0.0)
+    correlation_score: Mapped[float] = mapped_column(Float, default=0.0)
+    crowding_risk: Mapped[float] = mapped_column(Float, default=0.0)
+    persistence_score: Mapped[float] = mapped_column(Float, default=0.0)
+    rotation_state: Mapped[str] = mapped_column(String(32), default="neutral")
+    rank: Mapped[int] = mapped_column(Integer, default=0)
+    quality_flags_json: Mapped[str] = mapped_column(Text, default="[]")
+    lifecycle: Mapped[str] = mapped_column(String(32), default="neutral")
+
+
+class ThemeStockExposureModel(ResearchBase):
+    __tablename__ = "theme_stock_exposures"
+    __table_args__ = (Index("ix_tse_dataset_snapshot", "dataset_id", "snapshot_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    dataset_id: Mapped[str] = mapped_column(String(64), index=True)
+    snapshot_id: Mapped[str] = mapped_column(String(160), index=True)
+    snapshot_type: Mapped[str] = mapped_column(String(32), default="half_hour")
+    trading_date: Mapped[str] = mapped_column(String(16), index=True)
+    slot_time: Mapped[str] = mapped_column(String(16), default="")
+    strategy_version: Mapped[str] = mapped_column(String(40), default="theme-trend-v12")
+    config_hash: Mapped[str] = mapped_column(String(96), default="")
+    random_seed: Mapped[int] = mapped_column(Integer, default=0)
+    code: Mapped[str] = mapped_column(String(16), index=True)
+    theme_id: Mapped[str] = mapped_column(String(160))
+    theme_name: Mapped[str] = mapped_column(String(160), default="")
+    role: Mapped[str] = mapped_column(String(32), default="unknown")
+    role_score: Mapped[float] = mapped_column(Float, default=0.0)
+    exposure_weight: Mapped[float] = mapped_column(Float, default=0.0)
+    theme_contribution: Mapped[float] = mapped_column(Float, default=0.0)
+    risk_penalty: Mapped[float] = mapped_column(Float, default=0.0)
+    reasons_json: Mapped[str] = mapped_column(Text, default="[]")
+
+
+class ThemeSignalModel(ResearchBase):
+    __tablename__ = "theme_signals"
+    __table_args__ = (Index("ix_ts_dataset_snapshot", "dataset_id", "snapshot_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    dataset_id: Mapped[str] = mapped_column(String(64), index=True)
+    snapshot_id: Mapped[str] = mapped_column(String(160), index=True)
+    snapshot_type: Mapped[str] = mapped_column(String(32), default="half_hour")
+    trading_date: Mapped[str] = mapped_column(String(16), index=True)
+    slot_time: Mapped[str] = mapped_column(String(16), default="")
+    strategy_version: Mapped[str] = mapped_column(String(40), default="theme-trend-v12")
+    config_hash: Mapped[str] = mapped_column(String(96), default="")
+    random_seed: Mapped[int] = mapped_column(Integer, default=0)
+    theme_id: Mapped[str] = mapped_column(String(160))
+    theme_name: Mapped[str] = mapped_column(String(160), default="")
+    signal: Mapped[str] = mapped_column(String(32), default="watch")
+    risk: Mapped[str] = mapped_column(String(32), default="none")
+    lifecycle: Mapped[str] = mapped_column(String(32), default="neutral")
+    score: Mapped[float] = mapped_column(Float, default=0.0)
+
+
+class ThemeQualityReportModel(ResearchBase):
+    __tablename__ = "theme_quality_reports"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    dataset_id: Mapped[str] = mapped_column(String(64), index=True)
+    snapshot_type: Mapped[str] = mapped_column(String(32), default="half_hour")
+    strategy_version: Mapped[str] = mapped_column(String(40), default="theme-trend-v12")
+    config_hash: Mapped[str] = mapped_column(String(96), default="")
+    random_seed: Mapped[int] = mapped_column(Integer, default=0)
+    passed: Mapped[bool] = mapped_column(Boolean, default=False)
+    severity: Mapped[str] = mapped_column(String(32), default="pass")
+    research_grade: Mapped[str] = mapped_column(String(32), default="research_ready")
+    issues_json: Mapped[str] = mapped_column(Text, default="[]")
+    warnings_json: Mapped[str] = mapped_column(Text, default="[]")
+    stats_json: Mapped[str] = mapped_column(Text, default="{}")
+    theme_coverage: Mapped[float] = mapped_column(Float, default=0.0)
+    frame_count: Mapped[int] = mapped_column(Integer, default=0)
+    stock_count: Mapped[int] = mapped_column(Integer, default=0)
+    theme_count: Mapped[int] = mapped_column(Integer, default=0)
+
+
 class ArchiveManifestModel(Base):
     __tablename__ = "archive_manifests"
     __table_args__ = (
@@ -380,6 +475,10 @@ RESEARCH_JSON_FIELD_MAP = {
     BacktestSignal: ("reasons_json", "risk_flags_json", "theme_risk_flags_json", "theme_reasons_json"),
     BacktestQualityReport: ("missing_fields_json", "nan_counts_json", "inf_counts_json", "warnings_json"),
     OptimizationRun: ("request_json", "result_json"),
+    ThemeFactorFrameModel: ("quality_flags_json",),
+    ThemeStockExposureModel: ("reasons_json",),
+    ThemeSignalModel: (),  # 信号表无 JSON 列，所有字段均为标量
+    ThemeQualityReportModel: ("issues_json", "warnings_json", "stats_json"),
 }
 
 

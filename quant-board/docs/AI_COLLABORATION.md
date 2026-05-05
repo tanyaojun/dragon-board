@@ -19,6 +19,10 @@
 - 题材映射 SQLite 切口：Dragon Board `ThemeDataService` 正式读口调用 QuantBoard `GET /api/themes/mapping`，数据来自 `themeDATA.db`；V11 后运行时不再回落浏览器 IndexedDB、本地静态 JSON 或 `/api/themes/batch`，旧浏览器 `ThemeDataDB/theme_mapping` 只保留为 `POST /api/migrations/themes/import-json` 的离线历史迁移源。
 - failover 当前切口：SQLite 主库不可用但 Supabase 同构备份库可写时，`POST /api/snapshots/ingest` 可返回 `status=backup_only` 并写入备库；SQLite 恢复后必须执行 `pull-backup` 收敛，不能把 `backup_only` 当作本地主库已恢复。
 - 题材模块 V2：Dragon Board 快照会写入稳定题材列，QuantBoard 回测会生成 `ThemeCandidateSupport`。默认 `useThemeFactorForExecution=false`，题材只做候选解释；只有显式开启时才参与置信度调整和拥挤风险降级。
+- 题材模块 V12 目标：ThemeTrend 作为与 RankTrend 并列的 QuantBoard 研究链，承接题材趋势、题材共振回测、优化、API/CLI 和报告合同。当前使用”V12 目标/新增合同/首批落地”口径，不得夸大为全部实现完成。
+- V12 Phase 1 已完成：ThemeTrend 研究数据合同（`ThemeFactorFrame`、`ThemeStockExposureFrame`、`ThemeSignalRow`、`ThemeQualityReport`）、research SQLite 归一化表（`theme_factor_frames`、`theme_stock_exposures`、`theme_signals`、`theme_quality_reports`）、`ThemeResearchRepository` 和 `ThemeResearchService`（从正式快照事实表回放构建题材研究帧，不修改 `themeDATA.db`）。所有表均保留完整溯源链，质量门禁返回结构化失败。
+- V12 存储口径：ThemeTrend 研究结果只进入 research SQLite，本轮不进入 Supabase、`sync_outbox` 或快照事实库；`themeDATA.db` 只承载题材基础映射，不承载回测、优化或运行态因子结果。
+- V12 边界：Dragon Board 根项目不新增回测平台；共振策略以 RankTrend 候选为主，ThemeTrend 只能辅助排序、置信度、拥挤风险降级和解释，不得独立制造买入信号。
 
 ## 工作边界
 
@@ -62,6 +66,9 @@
 16. 优化结果只生成候选参数，不得自动写回 Python、TypeScript、API、CLI、前端表单或文档默认值；CLI 必须支持 `tpe` 和异步提交 `--no-wait` 口径。`optuna_tpe` 仅作为后端兼容别名。
 17. 题材因子不得绕过 RankTrend 独立制造买入信号；执行开关开启时也只能辅助已有候选分层。
 18. 题材基础映射新增或更新必须进入 QuantBoard `themeDATA.db`；不得重新把浏览器 IndexedDB 当成题材主库，也不得把题材静态映射混入快照库或研究库。
+19. V12 ThemeTrend 回测、优化、signals、quality report 和报告结果必须归属 research SQLite local-only 链路；本轮不得进入 Supabase 或 `themeDATA.db`。
+20. 新增 ThemeTrend API/CLI 合同时必须保留 `dataset_id`、`snapshot_type`、`strategy_version`、`config_hash`、`random_seed`，默认 `snapshot_type=half_hour`，`quarter_hour` 只能显式传入。
+21. 文档或实现涉及 ThemeTrend 时，必须区分“已完成能力”和“V12 目标/拟新增合同/首批落地”，不得把计划中的接口描述成已上线事实。
 
 ## 推荐执行流程
 

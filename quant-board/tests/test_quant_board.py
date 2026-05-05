@@ -2154,3 +2154,118 @@ def test_research_vacuum_runs_outside_session_transaction() -> None:
         result = BacktestService(session).vacuum_research_sqlite()
 
     assert result == {"ok": True, "vacuum": True}
+
+
+def test_theme_trend_backtest_api_returns_theme_strategy_report(tmp_path: Path) -> None:
+    client = TestClient(app)
+    bundle = make_bundle(tmp_path)
+    imported = client.post(
+        "/api/datasets/import",
+        json={"sourceType": "json_bundle", "sourcePath": str(bundle), "name": "theme-v12", "snapshotTypes": ["half_hour"]},
+    )
+    assert imported.status_code == 200, imported.text
+    dataset = imported.json()
+
+    response = client.post(
+        "/api/backtests/theme-trend",
+        json={"datasetId": dataset["id"], "snapshotType": "half_hour", "strategyName": "theme_rotation", "randomSeed": 20260430},
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["runId"]
+    assert body["strategyName"] == "theme_rotation"
+    assert body["analysisMode"] == "theme_trend"
+    assert body["result"]["themeTrend"]["factorVersion"] == "theme-factor-v12"
+    assert body["dataQuality"]["researchGrade"] in {"research_ready", "degraded"}
+
+    signals = client.get(f"/api/backtests/{body['runId']}/signals").json()
+    assert signals["runId"] == body["runId"]
+
+
+def test_theme_confluence_backtest_api_keeps_ranktrend_visible(tmp_path: Path) -> None:
+    client = TestClient(app)
+    bundle = make_bundle(tmp_path)
+    imported = client.post(
+        "/api/datasets/import",
+        json={"sourceType": "json_bundle", "sourcePath": str(bundle), "name": "theme-confluence", "snapshotTypes": ["half_hour"]},
+    )
+    assert imported.status_code == 200, imported.text
+    dataset = imported.json()
+
+    response = client.post(
+        "/api/backtests/theme-confluence",
+        json={"datasetId": dataset["id"], "snapshotType": "half_hour", "strategyName": "hotlist_theme_confluence"},
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["strategyName"] == "hotlist_theme_confluence"
+    assert body["analysisMode"] == "theme_confluence"
+    assert "rankTrendControl" in body["result"]["themeTrend"]
+
+
+def test_theme_optimization_api_returns_running_theme_run(tmp_path: Path) -> None:
+    client = TestClient(app)
+    bundle = make_bundle(tmp_path)
+    imported = client.post(
+        "/api/datasets/import",
+        json={"sourceType": "json_bundle", "sourcePath": str(bundle), "name": "theme-opt", "snapshotTypes": ["half_hour"]},
+    )
+    assert imported.status_code == 200, imported.text
+    dataset = imported.json()
+
+    response = client.post(
+        "/api/optimizations/theme-trend",
+        json={
+            "datasetId": dataset["id"],
+            "snapshotType": "half_hour",
+            "strategyName": "theme_rotation",
+            "method": "random",
+            "trials": 2,
+            "parameterGrid": {"crowdingBlockThreshold": [70, 80]},
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["runId"]
+    assert body["status"] in {"running", "completed"}
+    assert body["strategyName"] == "theme_rotation"
+
+
+def test_cli_exposes_theme_trend_commands() -> None:
+    parser = build_parser()
+
+    run_args = parser.parse_args(
+        [
+            "run-theme-trend",
+            "--dataset-id",
+            "ds_theme",
+            "--snapshot-type",
+            "half_hour",
+            "--strategy-name",
+            "leader_theme_confirmation",
+            "--max-theme-exposure",
+            "0.35",
+        ]
+    )
+    assert run_args.dataset_id == "ds_theme"
+    assert run_args.strategy_name == "leader_theme_confirmation"
+    assert run_args.max_theme_exposure == 0.35
+
+    opt_args = parser.parse_args(
+        [
+            "optimize-theme-confluence",
+            "--dataset-id",
+            "ds_theme",
+            "--method",
+            "tpe",
+            "--trials",
+            "3",
+            "--no-wait",
+        ]
+    )
+    assert opt_args.dataset_id == "ds_theme"
+    assert opt_args.method == "tpe"
+    assert opt_args.no_wait is True

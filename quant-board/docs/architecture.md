@@ -8,6 +8,12 @@
 
 这里的 Python rankTrend 必须对齐 TypeScript golden 标准。QuantBoard 是仓库内唯一回测平台，Dragon Board 根项目只提供实时看板、快照数据和 TypeScript golden 导出。
 
+V12 目标新增一条与 RankTrend 并列的 ThemeTrend 研究链：
+
+`dragon-board 快照题材/股票行 + themeDATA.db 基础映射 -> Python ThemeTrend -> 题材趋势/共振回测 -> 独立优化模块 -> API/CLI/前端报告`
+
+该链路是新增平台化合同和首批落地方向，不表示所有实现已经完成。ThemeTrend 研究结果保存在 research SQLite，本轮不进入 Supabase；`themeDATA.db` 仍只承载题材基础映射，不承载回测、优化、题材因子运行态或研究结果。Dragon Board 根项目不新增回测平台。
+
 ## 模块分层
 
 ```text
@@ -36,6 +42,7 @@ backend/
 2. 分析阶段
    - 输入：按 `dataset_id + snapshot_type + date range` 查询的标准快照序列。
    - 输出：Python rankTrend 结果，结构对齐 golden case。
+   - V12 目标：ThemeTrend 读取标准快照中的题材/板块行、股票行和 `themeDATA.db` 基础映射，输出题材强度、扩散、持续性、拥挤、风险和质量报告。ThemeTrend 与 RankTrend 并列，不替代 RankTrend golden 链。
 
 3. 策略阶段
    - 输入：每个快照、每只股票的 rankTrend 结果和行情字段。
@@ -72,6 +79,7 @@ Supabase remains a lightweight compatibility backup for snapshot facts
 - `quant_board_snapshots.db` 是默认快照热库，负责正式快照即时写入、近期低延迟读取、frame/record 元数据和 `archive_manifests`。
 - `quant_board_research.db` 是本地研究热库，负责回测、优化、Golden、报告索引和近期回测归一化结果明细。
 - `themeDATA.db` 是题材静态映射主库，负责题材基础表、题材-股票关系、股票-题材反查、标签和原因。它不进入回测/优化事实链，也不承载题材因子运行态。
+- V12 ThemeTrend 研究结果只写入 `quant_board_research.db` 或后续 research Parquet 归档，不进入 `themeDATA.db`、Supabase、`sync_outbox` 或快照事实库。
 - `data/archive/**` 保存 Parquet 冷归档，默认使用 zstd 压缩。
 - DuckDB 只在后端读取 Parquet，不提供任意 SQL API，也不暴露给 Vue 前端。
 - R2/S3 兼容对象存储保存 Parquet 和 manifest 的异地备份。
@@ -191,6 +199,21 @@ Dragon Board 题材基础映射由 `ThemeDataService` 通过 `GET /api/themes/ma
 - `request_json`
 - `result_json`
 
+### ThemeTrend 研究结果
+
+V12 Phase 1 已落地 ThemeTrend 专用研究归一化表，写入 `quant_board_research.db`：
+
+- `theme_factor_frames`：单帧题材因子快照，记录每个快照时刻的题材强度、动量、扩散、资金、龙头、联动、拥挤、持续性、轮动状态、生命周期和质量标记。
+- `theme_stock_exposures`：单帧股票-题材暴露快照，记录每只股票在特定题材中的角色、得分、暴露权重、贡献度和风险惩罚。
+- `theme_signals`：单帧题材信号，记录每个题材的策略信号（mainline/expansion/ignition/risk/reduce/watch）、风险类型和生命周期。
+- `theme_quality_reports`：数据集级质量报告，记录门禁结果（passed/severity/researchGrade）、问题清单、警告清单和统计信息。
+
+以上表均保留完整溯源链：`dataset_id`、`snapshot_id`、`snapshot_type`、`trading_date`、`slot_time`、`strategy_version`、`config_hash`、`random_seed`。
+
+V12 后续 Phase 中，ThemeTrend 和 Theme Confluence 回测/优化仍复用现有 `backtest_runs`、`backtest_trades`、`backtest_equity_curve`、`backtest_signals`、`backtest_quality_reports` 和 `optimization_runs`。通过 `strategy_name=theme_trend_candidate` 或 `strategy_name=theme_confluence_candidate` 区分研究链。
+
+首批不为 ThemeTrend 建 Supabase 同步链；所有 ThemeTrend 研究表归属 `quant_board_research.db` local-only 链路，不写入 `sync_outbox`。
+
 ### research SQLite 清理边界
 
 历史回测清理只作用于 `quant_board_research.db`。前端“删除本次回测”、`DELETE /api/backtests/{run_id}` 和 CLI `delete-backtest` 会按固定顺序显式删除 `backtest_trades`、`backtest_equity_curve`、`backtest_signals`、`backtest_quality_reports`，最后删除 `backtest_runs`，不依赖 SQLite 外键级联。
@@ -259,7 +282,16 @@ Dragon Board 题材基础映射由 `ThemeDataService` 通过 `GET /api/themes/ma
 rank_trend_candidate
 ```
 
+V12 拟新增策略名：
+
+```text
+theme_trend_candidate
+theme_confluence_candidate
+```
+
 策略只消费 Python rankTrend 输出，不直接依赖 dragon-board UI、前端事件或浏览器全局对象。
+
+ThemeTrend 策略消费 Python ThemeTrend 输出和标准快照事实；共振策略以 RankTrend 候选为主，ThemeTrend 只辅助候选排序、置信度、拥挤风险降级和解释，不得绕过 RankTrend 独立制造买入信号。
 
 `src/services/strategyBacktest` 的历史职责归并到 Python 后端：
 

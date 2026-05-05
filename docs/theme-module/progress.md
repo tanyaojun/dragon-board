@@ -462,3 +462,88 @@
   - `pnpm exec vitest run src/services/__tests__/ThemeDataService.test.ts src/services/__tests__/themeLegacyAdapters.test.ts src/services/theme/__tests__/ThemeRuntimeCoordinator.test.ts src/services/__tests__/alertService.test.ts src/services/dragon/__tests__/ContextBuilder.test.ts src/services/theme/__tests__/ThemeV3Engines.test.ts`：通过，6 个测试文件、28 个测试通过。
   - `pnpm test`：通过，33 个测试文件、212 个测试通过。
   - `pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false`：通过。
+
+## 2026-05-05 题材模块 V12 启动
+
+- 用户要求按《ThemeTrend 量化研究平台化》方案进入实施，并开启多任务协同模式。
+- 当前执行原则：
+  - Dragon Board 根项目继续只做实时看板和题材 runtime，不新增回测平台。
+  - QuantBoard 承接 ThemeTrend Python 引擎、题材研究数据、回测、优化、API/CLI 和报告。
+  - `themeDATA.db` 继续只作为题材基础映射库，不承载运行态因子或研究结果。
+  - 默认 `snapshot_type=half_hour`；`quarter_hour` 只能显式选择。
+- 已启动并行协作分工：
+  - Worker A：负责 `quant-board/backend/analysis/theme_trend.py` 与 `quant-board/tests/test_theme_trend_engine.py`，先落地 Python ThemeTrend 引擎和 TDD 用例。
+  - Worker B：负责 V12 文档合同，包括 `docs/theme-module/plans/task_plan_v12.md` 以及 QuantBoard API/架构/协作文档的 ThemeTrend 入口说明。
+  - 主会话：负责总集成、服务/API/CLI 接入、progress 维护和最终验证。
+- 初步实现策略：
+  - 先交付可运行的后端核心 MVP：ThemeTrend 引擎、质量门禁、题材策略回测入口和优化入口骨架。
+  - 复用现有 `BacktestService`、`Repository`、`BacktestRun`、归一化 signals/trades/equity/quality 表，不为 V12 第一刀另起独立回测存储链。
+  - 后续再扩展研究归一化表 `theme_factor_frames/theme_stock_exposures/theme_signals/theme_quality_reports`。
+
+## 2026-05-05 V12 Phase 1 实施
+
+- 全面接手 V12，从 Phase 1（研究合同与数据层）开始实施。
+- 已在 `quant-board/backend/analysis/theme_trend.py` 新增 5 个正式数据合同 dataclass：
+  - `ThemeFactorFrame`：题材因子帧（11 个因子字段 + 生命周期 + 质量标记 + 完整溯源链）
+  - `ThemeStockExposureFrame`：股票题材暴露帧（角色/得分/权重/贡献/风险惩罚 + 溯源链）
+  - `ThemeSignalRow`：题材信号行（信号/风险/生命周期/得分 + 溯源链）
+  - `ThemeQualityReport`：质量报告（passed/severity/researchGrade/issues/warnings/stats + 溯源链）
+  - `ThemeTrendResult`：引擎输出聚合容器
+- 已在 `quant-board/backend/data/models.py` 新增 4 张 research SQLite 表模型：
+  - `ThemeFactorFrameModel` → `theme_factor_frames`
+  - `ThemeStockExposureModel` → `theme_stock_exposures`
+  - `ThemeSignalModel` → `theme_signals`
+  - `ThemeQualityReportModel` → `theme_quality_reports`
+- 每张表均保留完整溯源链：`dataset_id`、`snapshot_id`、`snapshot_type`、`trading_date`、`slot_time`、`strategy_version`、`config_hash`、`random_seed`。
+- 已新增 `quant-board/backend/data/theme_research_repository.py`：
+  - `ThemeResearchRepository` 提供 4 张表的 CRUD、查询过滤和批量删除。
+  - JSON 字段序列化复用现有 `json_codec` 模块。
+  - 写入使用 ResearchBase 绑定 `quant_board_research.db`，不进入 Supabase 链路。
+- 已新增 `quant-board/backend/services/theme_research_service.py`：
+  - `build_theme_research()` 从正式快照事实表回放构建题材研究帧。
+  - 逐帧调用 `ThemeTrendPythonEngine`，按帧注入元数据，写入研究表。
+  - 合并多帧质量报告生成数据集级 `ThemeQualityReport`。
+  - 不修改 `themeDATA.db`，不写入 Supabase。
+- 已新增 `quant-board/tests/test_theme_research.py`：19 个测试覆盖：
+  - 空帧阻塞、低样本降级、时间乱序、非法数值、缺股票/题材数据
+  - 引擎输出完整字段合同验证
+  - 默认 `half_hour` 生效
+  - repository CRUD 端到端（factor/exposure/signal/quality + 删除 + code 过滤）
+  - config_hash 一致性
+- 已修正 `quant-board/tests/test_theme_trend_storage.py`（Worker B 旧 TDD 桩）对齐实际 API。
+- 已更新 QuantBoard 文档：
+  - `architecture.md`：ThemeTrend 研究结果段改为描述已落地的 4 张表
+  - `AI_COLLABORATION.md`：记录 Phase 1 完成状态
+- 验证结果：
+  - `test_theme_trend_engine.py`：5 通过
+  - `test_theme_research.py`：19 通过
+  - `test_theme_trend_storage.py`：10 通过
+  - `test_theme_support.py`：10 通过
+  - `test_theme_database.py`：8 通过
+  - 全量 pytest：116 通过，4 失败（pre-existing Phase 3 API/CLI TDD 前瞻测试）
+- 当前原则延续：
+  - Dragon Board 不新增回测平台。
+  - `themeDATA.db` 只承载题材基础映射。
+  - Phase 1 研究结果只进入 research SQLite local-only 链路。
+
+## 2026-05-05 V12 Phase 1 Code Review 修复
+
+处理了外部 code review 报告的全部 High/Medium 级别发现：
+
+**High:**
+1. `_empty_result` 补齐 `strategyVersion/factorVersion/signalVersion` 三个版本字段，与正常路径合同一致。
+2. `build_theme_research` 去除双重 `replay()` + `replay_typed()` 调用，每个帧只执行一次 `replay_typed()`，质量报告从 `typed.qualityReport.to_dict()` 获取。
+3. 写入路径增加整体 try/except 保护，`save_*` 内部已有各表级 rollback。
+4. `build_theme_research` docstring 新增"已知限制"段，记录逐帧回放下生命周期推断的局限性。
+
+**Medium:**
+5. `_merge_quality_reports` 的 `themeCount/stockCount` 改用 `set` 去重（跨帧按 `themeId/code` 收集），不再使用整数除法截断。
+6. `ThemeTrendPythonEngine.replay()` 中 `_build_exposure` 返回 None 时计数 `unmatched_stocks`，>0 时向质量报告注入 `unmatched_theme_stock` 警告。有 theme 名但匹配不上 sector 才计数；无 theme 名的股票不计入。
+7. 新增 `test_large_json_field_roundtrips_through_compression` 测试（100 条 × ~70 字符 = ~7KB，超过 4KB 压缩阈值），验证 JSON 压缩/解压 round-trip。
+10. `RESEARCH_JSON_FIELD_MAP` 中 `ThemeSignalModel: ()` 添加注释"信号表无 JSON 列，所有字段均为标量"。
+
+**Low:**
+- Low #8 (_frame 复写)、#9 (测试 session 注入)、#11 (文档 vs 测试合同) 记录为已知，暂不修改。Low #8 涉及三份测试文件重构，#9 沿用 `test_theme_database.py` 既存模式，#11 的 Phase 3 前瞻测试属于预期失败的 TDD 红灯。
+
+- 新增测试 `test_unmatched_theme_stock_produces_warning` 和 `test_unmatched_theme_stock_not_added_for_empty_theme_name`，覆盖有主题名不匹配和无主题名两种边界。
+- 验证结果：58 题材测试通过，全量 92 通过（排除 test_quant_board.py 中 4 个 Phase 3 TDD 前瞻测试）。

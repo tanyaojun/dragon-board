@@ -750,6 +750,59 @@ openPositionCount
 
 归一化回测结果表属于 research SQLite `local-only` 数据，`GET /api/backtests/{run_id}/trades`、`/equity`、`/signals`、`/quality` 和 `POST /api/backtests/compare` 都不读取 Supabase，也不触发 `sync_outbox`、push/pull 或 failover。
 
+### V12 拟新增 ThemeTrend 回测接口
+
+以下接口是 V12 目标和首批落地合同，不表示当前实现已经全部完成。ThemeTrend 回测和共振回测结果属于 research SQLite `local-only` 数据，不读取或写入 Supabase，不触发 `sync_outbox`、push/pull 或 failover；`themeDATA.db` 只提供题材基础映射。
+
+### `POST /api/backtests/theme-trend`
+
+运行纯 ThemeTrend 题材趋势回测。
+
+```json
+{
+  "datasetId": "dragonboard_live",
+  "snapshotType": "half_hour",
+  "strategyName": "theme_trend_candidate",
+  "strategyVersion": "0.1.0",
+  "randomSeed": 20260430,
+  "lookbackBars": 8,
+  "persistenceBars": 3,
+  "breadthMinStocks": 5,
+  "minThemeCoverage": 0.7,
+  "maxThemeCrowding": 0.85,
+  "initialCash": 1000000,
+  "maxPositions": 5,
+  "positionSize": 0.2
+}
+```
+
+返回字段沿用 RankTrend 回测口径，至少包含 `runId`、`datasetId`、`snapshotType`、`strategyName`、`strategyVersion`、`configHash`、`randomSeed`、`metrics`、`qualityReport` 和 signals 预览。质量门禁失败时使用 HTTP `4xx` 或结构化失败详情，不能返回空成功报告。
+
+### `POST /api/backtests/theme-confluence`
+
+运行 RankTrend + ThemeTrend 共振回测。RankTrend 候选仍是交易候选主来源，ThemeTrend 只辅助排序、置信度、拥挤风险降级和解释。
+
+```json
+{
+  "datasetId": "dragonboard_live",
+  "snapshotType": "half_hour",
+  "strategyName": "theme_confluence_candidate",
+  "strategyVersion": "0.1.0",
+  "randomSeed": 20260430,
+  "rankTrendWeight": 0.65,
+  "themeWeight": 0.35,
+  "lookbackBars": 8,
+  "persistenceBars": 3,
+  "minThemeCoverage": 0.7,
+  "maxThemeCrowding": 0.85,
+  "initialCash": 1000000,
+  "maxPositions": 5,
+  "positionSize": 0.2
+}
+```
+
+共振 signals 必须区分 `rankTrendSignal`、`themeTrendSignal`、`confluenceScore`、`riskFlags`、`quality` 和真实成交结果；不得把题材趋势分数当作唯一交易结论。
+
 ### `GET /api/storage/research-summary`
 
 读取 research SQLite 研究库的轻量统计，用于前端维护页或 CLI 对照。当前返回各研究表行数和回测创建时间范围。
@@ -867,6 +920,58 @@ openPositionCount
 ```
 
 `status` 只能是 `running`、`completed` 或 `failed`。`failed` 必须返回结构化错误，不能用空 `trials` 或空 `best` 表示失败。
+
+### V12 拟新增 ThemeTrend 优化接口
+
+以下接口是 V12 目标和新增合同。优化结果只生成候选参数，不自动写回 Python、TypeScript、API、CLI、前端表单或文档默认值。
+
+### `POST /api/optimizations/theme-trend`
+
+启动 ThemeTrend 参数优化任务。
+
+```json
+{
+  "datasetId": "dragonboard_live",
+  "snapshotType": "half_hour",
+  "strategyName": "theme_trend_candidate",
+  "strategyVersion": "0.1.0",
+  "method": "bayesian",
+  "objective": "stability",
+  "trials": 36,
+  "randomSeed": 20260430,
+  "parameterGrid": {
+    "lookbackBars": [5, 8, 13],
+    "persistenceBars": [2, 3, 5],
+    "breadthMinStocks": [3, 5, 8],
+    "maxThemeCrowding": [0.75, 0.85, 0.92]
+  }
+}
+```
+
+### `POST /api/optimizations/theme-confluence`
+
+启动 RankTrend + ThemeTrend 共振策略参数优化任务。
+
+```json
+{
+  "datasetId": "dragonboard_live",
+  "snapshotType": "half_hour",
+  "strategyName": "theme_confluence_candidate",
+  "strategyVersion": "0.1.0",
+  "method": "bayesian",
+  "objective": "stability",
+  "trials": 36,
+  "randomSeed": 20260430,
+  "parameterGrid": {
+    "rankTrendWeight": [0.55, 0.65, 0.75],
+    "themeWeight": [0.25, 0.35, 0.45],
+    "lookbackBars": [5, 8, 13],
+    "maxThemeCrowding": [0.75, 0.85, 0.92]
+  }
+}
+```
+
+搜索方法沿用 `grid`、`random`、`bayesian`、`tpe`。返回和轮询口径沿用 `POST /api/optimizations/rank-trend` 与 `GET /api/optimizations/{run_id}`。
 
 ## CLI 命令
 
@@ -1018,6 +1123,76 @@ win_rate: 0.52
   --no-wait
 ```
 
+### V12 拟新增 ThemeTrend CLI
+
+这些命令是 V12 目标合同，必须复用后端服务层，不直连 repository，不在 Dragon Board 根项目实现回测。
+
+运行纯 ThemeTrend 回测：
+
+```powershell
+.\.venv\Scripts\python.exe -m backend.cli run-theme-trend `
+  --dataset-id dragonboard_live `
+  --snapshot-type half_hour `
+  --strategy-name theme_trend_candidate `
+  --seed 20260430 `
+  --lookback-bars 8 `
+  --persistence-bars 3 `
+  --breadth-min-stocks 5 `
+  --min-theme-coverage 0.7 `
+  --max-theme-crowding 0.85
+```
+
+运行 RankTrend + ThemeTrend 共振回测：
+
+```powershell
+.\.venv\Scripts\python.exe -m backend.cli run-theme-confluence `
+  --dataset-id dragonboard_live `
+  --snapshot-type half_hour `
+  --strategy-name theme_confluence_candidate `
+  --seed 20260430 `
+  --rank-trend-weight 0.65 `
+  --theme-weight 0.35 `
+  --lookback-bars 8 `
+  --max-theme-crowding 0.85
+```
+
+优化纯 ThemeTrend：
+
+```powershell
+.\.venv\Scripts\python.exe -m backend.cli optimize-theme-trend `
+  --dataset-id dragonboard_live `
+  --snapshot-type half_hour `
+  --method bayesian `
+  --objective stability `
+  --trials 36 `
+  --seed 20260430
+```
+
+优化共振策略：
+
+```powershell
+.\.venv\Scripts\python.exe -m backend.cli optimize-theme-confluence `
+  --dataset-id dragonboard_live `
+  --snapshot-type half_hour `
+  --method bayesian `
+  --objective stability `
+  --trials 36 `
+  --seed 20260430
+```
+
+CLI 输出摘要至少包含：
+
+```text
+run_id: bt_xxx|opt_xxx
+strategy_name: theme_trend_candidate|theme_confluence_candidate
+config_hash: abc123
+quality_status: pass|warn|fail
+theme_coverage: 0.82
+sample_count: 120
+total_return: 0.123
+max_drawdown: -0.08
+```
+
 ### `validate-golden`
 
 校验 Golden。
@@ -1155,6 +1330,23 @@ cd d:\dragon-board\quant-board
 | `executionMode` | `current_bar` |
 | `randomSeed` | `20260430` |
 | `tradeConfig.useThemeFactorForExecution` | `false` |
+
+V12 ThemeTrend 默认：
+
+| 参数 | 默认 |
+| --- | --- |
+| `snapshotType` | `half_hour` |
+| `strategyName` | `theme_trend_candidate` |
+| `confluenceStrategyName` | `theme_confluence_candidate` |
+| `strategyVersion` | `0.1.0` |
+| `randomSeed` | `20260430` |
+| `lookbackBars` | `8` |
+| `persistenceBars` | `3` |
+| `breadthMinStocks` | `5` |
+| `minThemeCoverage` | `0.7` |
+| `maxThemeCrowding` | `0.85` |
+| `themeWeight` | `0.35` |
+| `rankTrendWeight` | `0.65` |
 
 题材因子执行开关：
 

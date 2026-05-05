@@ -11,6 +11,8 @@
 - V8 后，题材基础映射事实源是 QuantBoard 后端独立 SQLite 主库 `themeDATA.db`。
 - V10 已完成本机 Chrome `http_localhost_5173` 下旧 `ThemeDataDB/theme_mapping` 数据迁移，当前 `themeDATA.db` 中有 237 个题材、12215 条题材-股票关系、4166 只去重股票。
 - V11 目标是运行时严格收口：前端题材分析模块不再把浏览器 IndexedDB、本地静态 JSON 或外部批量 API 当作正式或兜底事实源；旧 IndexedDB 仅作为离线历史迁移来源。
+- V12 目标是 ThemeTrend 量化研究平台化：QuantBoard 新增与 RankTrend 并列的 ThemeTrend 研究链，承接题材趋势、题材共振回测、优化、API/CLI 和报告合同；Dragon Board 根项目不新增回测平台。
+- V12 当前口径：`themeDATA.db` 只承载题材基础映射，ThemeTrend 回测、优化和质量报告等研究结果只进入 QuantBoard research SQLite，本轮不进入 Supabase。
 
 ## 文件说明
 
@@ -37,3 +39,11 @@
 - 前端不再通过 `/api/themes/batch` 后台修正题材映射、标签或原因；这些基础事实只能通过后端导入/维护进入 `themeDATA.db`。
 - `sectorAnalyzer/rotationService` 保留旧公开对象，但内部只作为 `themeFacade/themeRepository/JxbkThemeFeed` 的 adapter。
 - `Compat` 方法后续只作为旧调用 wrapper，新代码改用非 Compat 的正式 facade 方法。
+
+## V12 ThemeTrend 平台化口径
+
+- 计划文件：`plans/task_plan_v12.md`。
+- V12 是目标和新增合同，不代表所有后端、前端和 CLI 实现已经完成。
+- ThemeTrend 与 RankTrend 并列：RankTrend 继续负责个股候选趋势，ThemeTrend 负责题材强度、扩散、持续性、拥挤和共振解释。
+- `POST /api/backtests/theme-trend`、`POST /api/backtests/theme-confluence`、`POST /api/optimizations/theme-trend`、`POST /api/optimizations/theme-confluence` 是拟新增 QuantBoard 合同；CLI 对应 `run-theme-trend`、`run-theme-confluence`、`optimize-theme-trend`、`optimize-theme-confluence`。
+- 默认 `snapshotType=half_hour`；`quarter_hour` 只能显式选择，不能替代默认研究口径。
