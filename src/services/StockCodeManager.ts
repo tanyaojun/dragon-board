@@ -153,7 +153,6 @@ export class StockCodeManagerService {
       .then((success) => {
         if (success) {
           this.loadingState = 'success'
-          this.buildSearchIndex()
         } else {
           this.loadingState = 'error'
           this.error = new Error('所有数据源都加载失败')
@@ -308,21 +307,6 @@ export class StockCodeManagerService {
     if (codeStr.startsWith('0') || codeStr.startsWith('3')) return 'SZ'
     if (codeStr.startsWith('8') || codeStr.startsWith('4')) return 'BJ'
     return 'SH' // 默认
-  }
-
-  /**
-   * 生成拼音首字母（可选，用于搜索）
-   */
-  private generatePinyin(name: string): string | undefined {
-    // 如果有拼音库可以实现，否则返回undefined
-    return undefined
-  }
-
-  /**
-   * 构建搜索索引（可选）
-   */
-  private buildSearchIndex(): void {
-    // 如果有需要，可以在这里构建拼音索引
   }
 
   /**

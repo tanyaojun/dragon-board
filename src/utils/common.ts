@@ -332,6 +332,12 @@ export function filterValidStockCodes(codes: any[]): string[] {
   return codes.map((code) => String(code).trim()).filter((code) => /^\d{6}$/.test(code))
 }
 
+/** 规范化股票代码：去除非数字字符，补齐 6 位 */
+export function normalizeStockCode(code: string): string {
+  if (!code) return ''
+  return String(code).replace(/[^0-9]/g, '').padStart(6, '0')
+}
+
 /**
  * 涨跌停阈值配置
  */

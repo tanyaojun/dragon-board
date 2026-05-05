@@ -16,6 +16,7 @@ import { dataLayer } from './DataLayer'
 import { themeFacade } from './theme/ThemeFacade'
 import { jxbkThemeFeed } from './theme/JxbkThemeFeed'
 import { themeRepository } from './theme/ThemeRepository'
+import { deriveThemeHeatMeta } from './theme/stockThemeMeta'
 
 type SortableThemeStockKey = keyof Pick<
   ThemeStock,
@@ -50,14 +51,6 @@ const state = {
   topBlocksLoaded: false,
 }
 
-function heatLevel(score: number) {
-  if (score >= 80) return { level: '热门', icon: '🔥', color: '#ff4757' }
-  if (score >= 60) return { level: '活跃', icon: '⚡', color: '#f39c12' }
-  if (score >= 40) return { level: '温', icon: '🌟', color: '#3498db' }
-  if (score >= 20) return { level: '冷', icon: '❄️', color: '#7f8c8d' }
-  return { level: '冰', icon: '🧊', color: '#2c3e50' }
-}
-
 function buildThemeBase() {
   const byCode = new Map<string, any[]>()
   const byId = new Map<string, any>()
@@ -83,7 +76,7 @@ function buildThemeBase() {
 function initializeThemeInfo() {
   themeRepository.getThemes().forEach((theme) => {
     const stocks = themeRepository.getThemeStocks(theme.id)
-    const level = heatLevel(0)
+    const level = deriveThemeHeatMeta(0)
     state.themeInfo[theme.id] = {
       id: theme.id,
       name: theme.name,
@@ -259,7 +252,7 @@ export async function getThemeDetail(
   const compat = themeFacade.getThemeDetail(theme?.id || themeName) as ThemeDetail | null
   if (compat) return compat
 
-  const level = heatLevel(0)
+  const level = deriveThemeHeatMeta(0)
   return theme
     ? {
         id: theme.id,
@@ -406,26 +399,6 @@ export const sectorAnalyzer = {
     })
   },
 
-  async forceRefresh(): Promise<void> {
-    if (state.destroyed) return
-    await themeFacade.refreshRuntime({
-      source: 'sectorAnalyzer',
-      forceJxbk: true,
-      syncStocks: true,
-      emitAlerts: false,
-    })
-  },
-
-  async forceRefreshJxbk(): Promise<void> {
-    if (state.destroyed) return
-    await themeFacade.refreshRuntime({
-      source: 'sectorAnalyzer',
-      forceJxbk: true,
-      syncStocks: true,
-      emitAlerts: false,
-    })
-  },
-
   async syncData(): Promise<void> {
     if (state.destroyed) return
     await themeFacade.refreshRuntime({
@@ -434,6 +407,16 @@ export const sectorAnalyzer = {
       emitAlerts: false,
     })
   },
+
+  forceRefreshJxbk: async function () {
+    if (state.destroyed) return
+    await themeFacade.refreshRuntime({
+      source: 'sectorAnalyzer',
+      forceJxbk: true,
+      syncStocks: true,
+      emitAlerts: false,
+    })
+  } as () => Promise<void>,
 
   destroy: () => {
     state.destroyed = true

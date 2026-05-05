@@ -18,11 +18,12 @@ import {
   OPTIMAL_TURNOVER,
   TURNOVER_SIGMA,
 } from '@/types/config'
-import { filterValidStockCodes } from '@/utils/common'
+import { filterValidStockCodes, normalizeStockCode } from '@/utils/common'
 import { useUIStore } from '../stores/ui'
 import { stockCodeManager } from './StockCodeManager'
 import { calculateStockHotnessUpdates, stockHotnessConfigService } from './hotness'
 import { resolvePrimaryStockTheme } from './theme/stockThemeMeta'
+import { clamp } from './theme/utils'
 import { toLocalTradingDate } from './snapshot/identity'
 import { slotTimeToMinutes } from './snapshot/schedule'
 import { snapshotFacade } from './snapshot/facade'
@@ -425,17 +426,13 @@ class DataLoaderService {
     return status.subscribedCount > 0 && webSocketService.isTdxRealtimeHealthy()
   }
 
-  private clamp(value: number, min: number, max: number): number {
-    return Math.max(min, Math.min(max, value))
-  }
-
   private roundMoney(value: number): number {
     return Number.isFinite(value) ? Math.round(value) : 0
   }
 
   private capEstimatedMoneyFlowRatio(ratio: number, maxAbsRatio: number): number {
     if (!Number.isFinite(ratio)) return 0
-    return this.clamp(ratio, -maxAbsRatio, maxAbsRatio)
+    return clamp(ratio, -maxAbsRatio, maxAbsRatio)
   }
 
   private safeRatio(numerator: number, denominator: number): number {
@@ -461,7 +458,7 @@ class DataLoaderService {
     const x15 = x9 + x10 + x11 + x12 + x13 + x14
     const x16 = x15 >= 1 ? 0.8 : x15
     const amplitude = this.safeRatio(high - low, preClose)
-    const closePosition = high > low ? this.clamp((close - low) / (high - low), 0, 1) : 0.5
+    const closePosition = high > low ? clamp((close - low) / (high - low), 0, 1) : 0.5
 
     return {
       x16,
@@ -613,36 +610,36 @@ class DataLoaderService {
     // 这里按通达信公式的 X_16 思路做连续估算：价格路径决定暗盘方向，
     // 总主动买卖量只作为明盘基础。主动买卖方向和价格路径冲突时，
     // 这部分成交更接近承接/派发，不能直接推成同向主力资金。
-    const turnoverScale = this.clamp(Math.log10(Math.max(turnover, 1) / 500_000_000), 0, 1)
-    const smallActiveImbalance = this.clamp((0.035 - Math.abs(activeRatio)) / 0.035, 0, 1)
-    const churnScore = this.clamp((amplitude - 0.06) / 0.1, 0, 1)
-    const weakCloseScore = this.clamp((0.68 - closePosition) / 0.25, 0, 1)
+    const turnoverScale = clamp(Math.log10(Math.max(turnover, 1) / 500_000_000), 0, 1)
+    const smallActiveImbalance = clamp((0.035 - Math.abs(activeRatio)) / 0.035, 0, 1)
+    const churnScore = clamp((amplitude - 0.06) / 0.1, 0, 1)
+    const weakCloseScore = clamp((0.68 - closePosition) / 0.25, 0, 1)
     const hiddenMainMultiplier = 1 + smallActiveImbalance * churnScore * weakCloseScore * turnoverScale * 14
-    const closeBias = this.clamp((closePosition - 0.5) * 2, -1, 1)
+    const closeBias = clamp((closePosition - 0.5) * 2, -1, 1)
     const pathDirection = Math.abs(x16) >= 0.025 ? Math.sign(x16) : Math.sign(closeBias)
     const pathStrength = pathDirection >= 0
-      ? this.clamp((closePosition - 0.55) / 0.45, 0, 1)
-      : this.clamp((0.55 - closePosition) / 0.55, 0, 1)
-    const x16Strength = this.clamp(Math.abs(x16) / 0.16, 0, 1)
-    const priceMoveStrength = this.clamp(Math.abs(changePct) / 7, 0, 1)
-    const amplitudeStrength = this.clamp(amplitude / 0.08, 0, 1)
+      ? clamp((closePosition - 0.55) / 0.45, 0, 1)
+      : clamp((0.55 - closePosition) / 0.55, 0, 1)
+    const x16Strength = clamp(Math.abs(x16) / 0.16, 0, 1)
+    const priceMoveStrength = clamp(Math.abs(changePct) / 7, 0, 1)
+    const amplitudeStrength = clamp(amplitude / 0.08, 0, 1)
     const pathConflictStrength =
       pathDirection !== 0 && activeRatio !== 0 && Math.sign(activeRatio) !== pathDirection
-        ? this.clamp(Math.max(x16Strength * priceMoveStrength, pathStrength * amplitudeStrength), 0, 1)
+        ? clamp(Math.max(x16Strength * priceMoveStrength, pathStrength * amplitudeStrength), 0, 1)
         : 0
     const activeDamping = 1 - pathConflictStrength * 0.97
     const activeVisibleRatio = activeRatio * hiddenMainMultiplier * activeDamping
     const pathVisibleBase = pathDirection >= 0
-      ? this.clamp(0.12 + amplitude * 0.55 + turnoverScale * 0.018, 0.12, 0.28)
-      : this.clamp(0.16 + amplitude * 0.8 + turnoverScale * 0.025, 0.16, 0.42)
+      ? clamp(0.12 + amplitude * 0.55 + turnoverScale * 0.018, 0.12, 0.28)
+      : clamp(0.16 + amplitude * 0.8 + turnoverScale * 0.025, 0.16, 0.42)
     const pathVisibleRatio = x16 * pathStrength * pathVisibleBase
     const closePressureBase = pathDirection >= 0
-      ? this.clamp(0.018 + turnoverScale * 0.025 + amplitude * 0.06, 0.018, 0.075)
-      : this.clamp(0.035 + turnoverScale * 0.035 + amplitude * 0.12, 0.035, 0.12)
+      ? clamp(0.018 + turnoverScale * 0.025 + amplitude * 0.06, 0.018, 0.075)
+      : clamp(0.035 + turnoverScale * 0.035 + amplitude * 0.12, 0.035, 0.12)
     const closePressureRatio = Math.sign(closeBias) * Math.pow(Math.abs(closeBias), 1.25) * amplitudeStrength * closePressureBase
     const conflictPressureBase = pathDirection >= 0
-      ? this.clamp(0.006 + amplitude * 0.04 + turnoverScale * 0.006, 0.006, 0.035)
-      : this.clamp(0.023 + amplitude * 0.12 + turnoverScale * 0.012, 0.023, 0.063)
+      ? clamp(0.006 + amplitude * 0.04 + turnoverScale * 0.006, 0.006, 0.035)
+      : clamp(0.023 + amplitude * 0.12 + turnoverScale * 0.012, 0.023, 0.063)
     const conflictPressureRatio = pathDirection * pathConflictStrength * conflictPressureBase
     let visibleMainRatio = this.capEstimatedMoneyFlowRatio(
       activeVisibleRatio + pathVisibleRatio + closePressureRatio + conflictPressureRatio,
@@ -650,8 +647,8 @@ class DataLoaderService {
     )
 
     const neutralBaseRatio = x16 >= 0
-      ? this.clamp(0.13 + amplitude * 0.72 + turnoverScale * 0.018, 0.13, 0.28)
-      : this.clamp(0.18 + amplitude * 0.75 + turnoverScale * 0.03, 0.18, 0.32)
+      ? clamp(0.13 + amplitude * 0.72 + turnoverScale * 0.018, 0.13, 0.28)
+      : clamp(0.18 + amplitude * 0.75 + turnoverScale * 0.03, 0.18, 0.32)
     let darkRatio = neutralBaseRatio * x16
     darkRatio = this.capEstimatedMoneyFlowRatio(darkRatio, 0.12)
 
@@ -659,8 +656,8 @@ class DataLoaderService {
     mainRatio = this.capEstimatedMoneyFlowRatio(mainRatio, this.MAX_ESTIMATED_MAIN_RATIO)
 
     const currentVolume = Number(quote.tdxCurrentVolume) || 0
-    const currentPulse = turnover > 0 ? this.clamp((currentVolume * price * 100) / turnover, 0, 0.03) : 0
-    const superShare = this.clamp(0.35 + currentPulse * 6 + Math.abs(visibleMainRatio) * 0.8, 0.35, 0.75)
+    const currentPulse = turnover > 0 ? clamp((currentVolume * price * 100) / turnover, 0, 0.03) : 0
+    const superShare = clamp(0.35 + currentPulse * 6 + Math.abs(visibleMainRatio) * 0.8, 0.35, 0.75)
     let superRatio = visibleMainRatio * superShare + darkRatio * 0.35
     superRatio = this.capEstimatedMoneyFlowRatio(superRatio, this.MAX_ESTIMATED_SUPER_RATIO)
     if (Math.abs(superRatio) > Math.abs(mainRatio)) {
@@ -1027,7 +1024,7 @@ class DataLoaderService {
 
     // A 股成交量不是线性分布，开盘半小时天然放量；用经验曲线压住早盘虚高量比。
     if (elapsedMinutes <= 30) {
-      return this.clamp(0.06 + (elapsedMinutes / 30) * 0.18, 0.06, 0.24)
+      return clamp(0.06 + (elapsedMinutes / 30) * 0.18, 0.06, 0.24)
     }
     if (elapsedMinutes <= 120) {
       return 0.24 + ((elapsedMinutes - 30) / 90) * 0.26
@@ -1036,7 +1033,7 @@ class DataLoaderService {
       return 0.5 + ((elapsedMinutes - 120) / 60) * 0.25
     }
 
-    return this.clamp(
+    return clamp(
       0.75 + ((elapsedMinutes - 180) / 60) * 0.25,
       0.75,
       1,
@@ -1278,7 +1275,7 @@ class DataLoaderService {
 
       const diff = response?.data?.diff || []
       diff.forEach((item: any) => {
-        const code = this.normalizeCode(item.f12)
+        const code = normalizeStockCode(item.f12)
         result.set(code, {
           price: parseFloat(item.f2) || 0,
           change: parseFloat(item.f3) || 0,
@@ -1321,7 +1318,7 @@ class DataLoaderService {
 
       const diff = response?.data?.diff || []
       diff.forEach((item: any) => {
-        const code = this.normalizeCode(item.f12)
+        const code = normalizeStockCode(item.f12)
         result.set(code, {
           price: parseFloat(item.f2) || 0,
           change: parseFloat(item.f3) || 0,
@@ -1369,7 +1366,7 @@ class DataLoaderService {
 
       const diff = response?.data?.diff || []
       diff.forEach((item: any) => {
-        const code = this.normalizeCode(item.f12)
+        const code = normalizeStockCode(item.f12)
         result.set(code, {
           price: parseFloat(item.f2) || 0,
           change: parseFloat(item.f3) || 0,
@@ -1512,7 +1509,7 @@ class DataLoaderService {
       if (!response?.data?.info) return
 
       const updates = response.data.info.map((item: LimitUpItem) => ({
-        code: this.normalizeCode(item.code),
+        code: normalizeStockCode(item.code),
         reason: item.reason_type,
         isNew: item.is_new === 1,
         firstZtTime: item.first_limit_up_time,
@@ -1997,7 +1994,7 @@ class DataLoaderService {
     const nextVolume = Number(nextRow?.volume)
     if (!Number.isFinite(nextVolume) || nextVolume < previousVolume) return previousVolume
 
-    const progress = this.clamp(
+    const progress = clamp(
       (targetClockMinute - previousMinute) / (nextMinute - previousMinute),
       0,
       1,
@@ -2580,11 +2577,6 @@ class DataLoaderService {
 
   private isValidName(name: string): boolean {
     return !!(name && name !== '-' && name !== 'null' && name !== 'undefined' && name.trim() !== '')
-  }
-
-  private normalizeCode(code: string): string {
-    if (!code) return ''
-    return code.replace(/[^0-9]/g, '').padStart(6, '0')
   }
 
   getLoadingStatus() {

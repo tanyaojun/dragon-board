@@ -118,14 +118,6 @@ class ThemeDataService {
   }
 
   /**
-   * 规范化股票代码
-   */
-  private normalizeCode(code: string): string {
-    if (!code) return ''
-    return String(code).replace(/[^\d]/g, '').padStart(6, '0')
-  }
-
-  /**
    * 从 window.KPL_THEME_DATA 获取题材列表
    */
   private loadKPLThemes(): void {

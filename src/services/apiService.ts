@@ -1,6 +1,7 @@
 import { debugLog } from '@/utils/logger'
 // src/services/apiService.ts
 import { API_CONFIG } from '../config/constants'
+import { normalizeStockCode } from '@/utils/common'
 import type {
   SnapshotFrameQueryOptions,
   SnapshotQueryOptions,
@@ -571,7 +572,7 @@ export class ApiService {
       if (result.status === 'fulfilled' && result.value?.data?.diff) {
         result.value.data.diff.forEach((item: any) => {
           const parsed = parse ? parse(item) : item
-          const code = this.normalizeCode(item.f12 || item.code)
+          const code = normalizeStockCode(item.f12 || item.code)
           merged.set(code, parsed)
         })
       } else if (result.status === 'rejected') {
@@ -580,14 +581,6 @@ export class ApiService {
     })
 
     return merged
-  }
-
-  private normalizeCode(code: string): string {
-    if (!code) return ''
-    return code
-      .toString()
-      .replace(/[^0-9]/g, '')
-      .padStart(6, '0')
   }
 
   // ========== 🔥 新增：KPL题材数据接口（走5000） ==========

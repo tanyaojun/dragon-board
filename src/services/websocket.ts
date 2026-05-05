@@ -8,6 +8,7 @@ import type {
 } from '../types'
 import { AppEvents } from '../types'
 import { isTradingTime } from '../utils/time'
+import { normalizeStockCode } from '../utils/common'
 import { EventManager } from '../utils/eventManager'
 
 type QuotePayload = {
@@ -67,12 +68,6 @@ const WS_STATUS_DEBUG = (import.meta as any)?.env?.VITE_TDX_L2_WS_DEBUG === '1'
 const MAX_TICKS_PER_CODE = 300
 const MAX_TICK_AGE_MS = 60_000
 
-function normalizeCode(value: unknown): string {
-  const text = String(value || '').trim()
-  if (!text) return ''
-  return text.replace(/^(sh|sz)\.?/i, '').slice(-6)
-}
-
 function toNumber(value: unknown): number {
   const parsed = Number(value)
   return Number.isFinite(parsed) ? parsed : 0
@@ -115,7 +110,7 @@ function normalizeDepthSide(items: any[]): DepthLevel[] {
 }
 
 function normalizeQuotePatch(item: any): QuotePatch | null {
-  const code = normalizeCode(item?.code || item?.symbol)
+  const code = normalizeStockCode(item?.code || item?.symbol)
   if (!code) return null
 
   const lastPrice = toNumber(item?.lastPrice ?? item?.price ?? item?.f2)
@@ -154,7 +149,7 @@ function normalizeQuotePatch(item: any): QuotePatch | null {
 }
 
 function normalizeDepth10Book(item: any): Depth10Book | null {
-  const code = normalizeCode(item?.code || item?.symbol)
+  const code = normalizeStockCode(item?.code || item?.symbol)
   if (!code) return null
 
   const bids = normalizeDepthSide(item?.bids)
@@ -174,7 +169,7 @@ function normalizeDepth10Book(item: any): Depth10Book | null {
 
 function normalizeTickTrade(code: string, item: any): TickTrade | null {
   if (!code) return null
-  const normalizedCode = normalizeCode(code)
+  const normalizedCode = normalizeStockCode(code)
   if (!normalizedCode) return null
   const price = toNumber(item?.price)
   const volume = toNumber(item?.volume)
@@ -273,7 +268,7 @@ class RealTimeWebSocketService {
   }
 
   setHotPool(codes: string[]): void {
-    const normalized = new Set(codes.map((code) => normalizeCode(code)).filter(Boolean))
+    const normalized = new Set(codes.map((code) => normalizeStockCode(code)).filter(Boolean))
     this.hotPoolCodes = normalized
 
     this.updateStatus({ subscribedCount: normalized.size })
@@ -310,13 +305,13 @@ class RealTimeWebSocketService {
   }
 
   getLatestQuote(code: string): QuotePatch | null {
-    return this.latestQuotesByCode.get(normalizeCode(code)) || null
+    return this.latestQuotesByCode.get(normalizeStockCode(code)) || null
   }
 
   getQuotesBatch(codes: string[]): Map<string, QuotePatch> {
     const result = new Map<string, QuotePatch>()
     codes.forEach((code) => {
-      const normalizedCode = normalizeCode(code)
+      const normalizedCode = normalizeStockCode(code)
       const quote = this.latestQuotesByCode.get(normalizedCode)
       if (quote) result.set(normalizedCode, quote)
     })
@@ -324,11 +319,11 @@ class RealTimeWebSocketService {
   }
 
   getDepth10(code: string): Depth10Book | null {
-    return this.latestDepth10ByCode.get(normalizeCode(code)) || null
+    return this.latestDepth10ByCode.get(normalizeStockCode(code)) || null
   }
 
   getRecentTicks(code: string): TickTrade[] {
-    const ticks = this.recentTicksByCode.get(normalizeCode(code))
+    const ticks = this.recentTicksByCode.get(normalizeStockCode(code))
     return Array.isArray(ticks) ? [...ticks] : []
   }
 
@@ -493,7 +488,7 @@ class RealTimeWebSocketService {
     const normalizedItems: Array<{ code: string; items: TickTrade[] }> = []
 
     ;(Array.isArray(payload.items) ? payload.items : []).forEach((group: any) => {
-      const code = normalizeCode(group?.code)
+      const code = normalizeStockCode(group?.code)
       if (!code) return
 
       const items = (Array.isArray(group?.items) ? group.items : [])
