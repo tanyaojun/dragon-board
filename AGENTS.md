@@ -4,6 +4,7 @@
 
 ## 1. 基本协作原则
 
+- 根目录 `README.md` 四个原则必须严格遵守。
 - 全程使用中文沟通，结论先行，说明问题、原因、改法和影响面。
 - 先读代码和现有文档，再下结论；不要凭历史印象修改业务逻辑。
 - 每次改动保持小范围、可验证、可回退，不做与当前任务无关的大重构。
@@ -22,7 +23,7 @@
 - `tools/TdxL2Helper/`：独立 x86 .NET helper，用于通达信 DLL、L2 权限和深度行情探针。
 - `quant-board/`：Python QuantBoard 子项目，用于 RankTrend golden 对齐、数据导入、回测、优化和报告展示。
 
-根目录 `README.md` 四个原则必须严格遵守。涉及 QuantBoard 时，以 `quant-board/docs/README.md` 和 `quant-board/docs/AI_COLLABORATION.md` 为准。
+涉及 QuantBoard 时，以 `quant-board/docs/README.md` 和 `quant-board/docs/AI_COLLABORATION.md` 为准。
 
 ## 3. 关键目录
 
