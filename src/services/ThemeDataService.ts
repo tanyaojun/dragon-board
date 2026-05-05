@@ -1,7 +1,7 @@
 import { debugLog } from '@/utils/logger'
 // src/services/ThemeDataService.ts
 /**
- * 题材数据服务 - 提供静态基础数据 + API更新能力 + IndexedDB持久化
+ * 题材数据服务 - 提供 QuantBoard SQLite 题材主库读取 + 历史 IndexedDB 迁移源兼容
  */
 
 import { apiService } from './apiService'
@@ -17,22 +17,6 @@ declare global {
       LimitUpCount?: number
       ChangePercent?: number
     }>
-  }
-}
-
-// ========== IndexedDB 存储的数据结构（增强版）==========
-interface StoredThemeData {
-  key: string
-  data: ThemeMappingData
-  lastUpdate: string
-  savedAt: string
-  version: string
-  totalThemes: number
-  totalStocks: number
-  stats: {
-    themeCount: number
-    stockCount: number
-    avgStocksPerTheme: number
   }
 }
 
@@ -52,17 +36,9 @@ class ThemeDataService {
   private kplThemes: ThemeBase[] = []
   private currentMappingData: ThemeMappingData | null = null
 
-  // IndexedDB 配置
-  private readonly DB_NAME = 'ThemeDataDB'
-  private readonly DB_VERSION = 3 // ✅ 升级版本号
-  private readonly STORE_NAME = 'theme_mapping'
-  private db: IDBDatabase | null = null
-
   private updateTimer: ReturnType<typeof setInterval> | null = null
 
   private readonly UPDATE_INTERVAL = 2 * 60 * 60 * 1000 // 2小时
-  private readonly MIN_SAFE_THEME_COUNT = 100
-  private readonly MIN_SAFE_STOCK_COUNT = 1000
 
   private constructor() {}
 
@@ -71,114 +47,6 @@ class ThemeDataService {
       ThemeDataService.instance = new ThemeDataService()
     }
     return ThemeDataService.instance
-  }
-
-  /**
-   * 初始化 IndexedDB
-   */
-  private async initDB(): Promise<IDBDatabase> {
-    if (this.db) return this.db
-
-    return new Promise((resolve, reject) => {
-      const request = indexedDB.open(this.DB_NAME, this.DB_VERSION)
-
-      request.onerror = () => {
-        console.error('[ThemeDataService] IndexedDB 打开失败:', request.error)
-        reject(request.error)
-      }
-
-      request.onsuccess = () => {
-        this.db = request.result
-        debugLog('[ThemeDataService] IndexedDB 连接成功')
-        resolve(this.db)
-      }
-
-      request.onupgradeneeded = (event) => {
-        const db = (event.target as IDBOpenDBRequest).result
-        if (!db.objectStoreNames.contains(this.STORE_NAME)) {
-          const store = db.createObjectStore(this.STORE_NAME, { keyPath: 'key' })
-          store.createIndex('lastUpdate', 'lastUpdate', { unique: false })
-          store.createIndex('savedAt', 'savedAt', { unique: false })
-          store.createIndex('version', 'version', { unique: false })
-          debugLog('[ThemeDataService] IndexedDB 表创建成功')
-        }
-      }
-    })
-  }
-
-  /**
-   * 保存数据到 IndexedDB（增强版）
-   */
-  private async saveToIndexedDB(data: ThemeMappingData): Promise<void> {
-    try {
-      const db = await this.initDB()
-      const transaction = db.transaction([this.STORE_NAME], 'readwrite')
-      const store = transaction.objectStore(this.STORE_NAME)
-
-      // ✅ 使用传入的 data 来计算统计，而不是依赖 this.themes
-      const totalThemes = data.themes.length
-      let totalStocks = 0
-      data.themes.forEach((theme) => {
-        totalStocks += theme.stocks.length
-      })
-      const avgStocksPerTheme = totalThemes > 0 ? totalStocks / totalThemes : 0
-
-      const storedData: StoredThemeData = {
-        key: 'theme_data',
-        data: data,
-        lastUpdate: data.lastUpdate,
-        savedAt: new Date().toISOString(),
-        version: data.version,
-        totalThemes: totalThemes,
-        totalStocks: totalStocks,
-        stats: {
-          themeCount: totalThemes,
-          stockCount: totalStocks,
-          avgStocksPerTheme: Math.round(avgStocksPerTheme * 10) / 10,
-        },
-      }
-
-      store.put(storedData)
-
-      return new Promise((resolve, reject) => {
-        transaction.oncomplete = () => {
-          debugLog('[ThemeDataService] ✅ 数据已保存到 IndexedDB:', {
-            themes: storedData.totalThemes,
-            stocks: storedData.totalStocks,
-            version: storedData.version,
-          })
-          resolve()
-        }
-        transaction.onerror = () => {
-          reject(transaction.error)
-        }
-      })
-    } catch (error) {
-      console.error('[ThemeDataService] 保存到 IndexedDB 失败:', error)
-    }
-  }
-
-  private getUniqueStockCount(data: ThemeMappingData | null): number {
-    if (!data?.themes?.length) return 0
-
-    const stockCodes = new Set<string>()
-    data.themes.forEach((theme) => {
-      ;(theme.stocks || []).forEach((code) => {
-        const normalizedCode = this.normalizeCode(code)
-        if (normalizedCode && normalizedCode !== '000000') {
-          stockCodes.add(normalizedCode)
-        }
-      })
-    })
-    return stockCodes.size
-  }
-
-  private isSafeFullMapping(data: ThemeMappingData | null): boolean {
-    if (!data?.themes?.length) return false
-    return (
-      data.themes.length >= this.MIN_SAFE_THEME_COUNT &&
-      this.getUniqueStockCount(data) >= this.MIN_SAFE_STOCK_COUNT
-    )
   }
 
   private normalizeTags(tags: Array<{ Name?: string; Reason?: string }> = []) {
@@ -302,40 +170,25 @@ class ThemeDataService {
   }
 
   /**
-   * 从 IndexedDB 加载数据（增强版）
+   * 从 QuantBoard SQLite 题材主库读取正式映射。
    */
-  private async loadFromIndexedDB(): Promise<ThemeMappingData | null> {
+  private async loadFromSQLiteAPI(): Promise<ThemeMappingData | null> {
     try {
-      const db = await this.initDB()
-
-      return new Promise((resolve, reject) => {
-        const transaction = db.transaction([this.STORE_NAME], 'readonly')
-        const store = transaction.objectStore(this.STORE_NAME)
-        const request = store.get('theme_data')
-
-        request.onsuccess = () => {
-          const result = request.result as StoredThemeData | undefined
-          if (result?.data) {
-            debugLog(`[ThemeDataService] 📀 从 IndexedDB 读取数据:`, {
-              version: result.data.version,
-              lastUpdate: result.data.lastUpdate,
-              savedAt: result.savedAt,
-              themes: result.totalThemes,
-              stocks: result.totalStocks,
-            })
-            resolve(result.data)
-          } else {
-            debugLog('[ThemeDataService] IndexedDB 无缓存数据')
-            resolve(null)
-          }
-        }
-
-        request.onerror = () => {
-          reject(request.error)
-        }
-      })
+      debugLog('[ThemeDataService] 从 QuantBoard SQLite 读取题材映射...')
+      const response = await apiService.getSqliteThemeMapping()
+      const mapping = response?.mapping
+      if (!mapping?.themes?.length) {
+        console.warn('[ThemeDataService] SQLite 题材映射为空或结构异常:', response)
+        return null
+      }
+      return {
+        version: String(mapping.version || 'unknown'),
+        lastUpdate: String(mapping.lastUpdate || new Date().toISOString()),
+        totalThemes: Number(mapping.totalThemes || mapping.themes.length || 0),
+        themes: mapping.themes,
+      }
     } catch (error) {
-      console.error('[ThemeDataService] 从 IndexedDB 读取失败:', error)
+      console.warn('[ThemeDataService] SQLite 题材映射读取失败:', error)
       return null
     }
   }
@@ -554,8 +407,24 @@ class ThemeDataService {
 
       if (theme.stockReasons) {
         Object.entries(theme.stockReasons).forEach(([code, reason]) => {
-          if (!this.stockReasonsMap.has(code) && reason) {
-            this.stockReasonsMap.set(code, reason)
+          const incomingReason = String(reason || '').trim()
+          if (!incomingReason) return
+
+          const reasonParts = new Set(
+            (this.stockReasonsMap.get(code) || '')
+              .split('；')
+              .map((item) => item.trim())
+              .filter(Boolean),
+          )
+          incomingReason
+            .split('；')
+            .map((item) => item.trim())
+            .filter(Boolean)
+            .forEach((item) => reasonParts.add(item))
+
+          const nextReason = Array.from(reasonParts).join('；')
+          if (nextReason) {
+            this.stockReasonsMap.set(code, nextReason)
           }
         })
       }
@@ -611,7 +480,8 @@ class ThemeDataService {
   }
 
   /**
-   * 加载数据：优先 IndexedDB → API 更新 → 本地文件 fallback
+   * 加载数据：优先 QuantBoard SQLite → 本地文件 fallback。
+   * IndexedDB 仅保留为历史迁移源，不再作为正式题材事实源。
    */
   async load(): Promise<boolean> {
     if (this.loaded) return true
@@ -628,47 +498,27 @@ class ThemeDataService {
       // 加载 KPL 题材列表
       this.loadKPLThemes()
 
-      // 1. 优先从 IndexedDB 读取
-      let mappingData = await this.loadFromIndexedDB()
+      // 1. 优先从 QuantBoard SQLite 读取正式题材主库
+      let mappingData = await this.loadFromSQLiteAPI()
 
       if (mappingData) {
-        if (!this.isSafeFullMapping(mappingData)) {
-          console.warn('[ThemeDataService] IndexedDB 题材缓存异常，尝试使用本地完整映射修复:', {
-            themes: mappingData.themes.length,
-            stocks: this.getUniqueStockCount(mappingData),
-          })
-
-          const localData = await this.fetchFromLocal()
-          if (localData && this.isSafeFullMapping(localData)) {
-            mappingData = localData
-            await this.saveToIndexedDB(localData)
-            console.warn('[ThemeDataService] 已用本地完整映射修复题材缓存:', {
-              themes: localData.themes.length,
-              stocks: this.getUniqueStockCount(localData),
-            })
-          }
-        }
-
-        debugLog(`[ThemeDataService] 📀 从 IndexedDB 加载: ${mappingData.themes.length}个题材`)
+        debugLog(`[ThemeDataService] 从 SQLite 加载: ${mappingData.themes.length}个题材`)
         this.buildMapping(mappingData)
         this.syncToDataLayer()
         this.loaded = true
 
-        debugLog('[ThemeDataService] 数据加载完成，定时任务将每2小时检查一次更新')
+        debugLog('[ThemeDataService] 数据加载完成，定时任务将每2小时检查一次远端标签/原因更新')
       } else {
-        // 2. IndexedDB 没有数据，从本地文件加载（首次加载）
+        // 2. SQLite 后端不可用或无数据时，从本地文件加载作为非正式兜底
         const localData = await this.fetchFromLocal()
         if (localData) {
           debugLog(`[ThemeDataService] 📁 从本地文件加载: ${localData.themes.length}个题材`)
           this.buildMapping(localData)
           this.syncToDataLayer()
           this.loaded = true
-          if (this.isSafeFullMapping(localData)) {
-            await this.saveToIndexedDB(localData)
-          }
 
-          // 首次加载后，从 API 获取最新数据（异步，不阻塞）
-          debugLog('[ThemeDataService] 首次加载完成，正在后台同步最新数据...')
+          // 首次加载后，从 API 获取标签/原因增量（异步，不阻塞，不写 IndexedDB）
+          debugLog('[ThemeDataService] 本地兜底加载完成，正在后台同步标签/原因增量...')
           this.checkAndUpdateFromAPI().then((updated) => {
             if (updated) {
               debugLog('[ThemeDataService] 首次同步完成')
@@ -713,59 +563,15 @@ class ThemeDataService {
 
       const apiData = await this.fetchFromAPI()
       if (!apiData) return false
-      if (!this.isSafeFullMapping(apiData)) {
-        const mergedTagReasonCount = this.mergeTagAndReasonData(apiData)
-        if (mergedTagReasonCount > 0) {
-          if (this.currentMappingData) {
-            await this.saveToIndexedDB(this.currentMappingData)
-          }
-          this.syncTagsAndReasonsToDataLayer()
-        }
-        console.warn('[ThemeDataService] API 返回的题材映射规模异常，跳过覆盖缓存:', {
-          apiThemes: apiData.themes.length,
-          apiStocks: this.getUniqueStockCount(apiData),
-          currentThemes: this.themes.size,
-          currentStocks: this.stockThemes.size,
-          mergedTagReasons: mergedTagReasonCount,
-        })
-        return false
-      }
-
-      if (this.themes.size > 0 && apiData.themes.length < this.themes.size * 0.8) {
-        const mergedTagReasonCount = this.mergeTagAndReasonData(apiData)
-        if (mergedTagReasonCount > 0) {
-          if (this.currentMappingData) {
-            await this.saveToIndexedDB(this.currentMappingData)
-          }
-          this.syncTagsAndReasonsToDataLayer()
-        }
-        console.warn('[ThemeDataService] API 返回题材数量明显少于当前映射，跳过覆盖缓存:', {
-          apiThemes: apiData.themes.length,
-          currentThemes: this.themes.size,
-          mergedTagReasons: mergedTagReasonCount,
-        })
-        return false
-      }
-
-      const needUpdate =
-        !this.lastUpdateTime ||
-        apiData.themes.length !== this.themes.size ||
-        apiData.lastUpdate > this.lastUpdateTime
-
-      if (needUpdate) {
-        debugLog('[ThemeDataService] 🔄 检测到新数据，更新中...')
-        debugLog(`  旧数据: ${this.themes.size}个题材, 更新于 ${this.lastUpdateTime || '无'}`)
-        debugLog(`  新数据: ${apiData.themes.length}个题材, 更新于 ${apiData.lastUpdate}`)
-
-        this.buildMapping(apiData)
-        await this.saveToIndexedDB(apiData)
+      const mergedTagReasonCount = this.mergeTagAndReasonData(apiData)
+      if (mergedTagReasonCount > 0) {
         this.syncToDataLayer()
         this.syncTagsAndReasonsToDataLayer()
-        debugLog(`[ThemeDataService] ✅ 更新完成`)
+        debugLog(`[ThemeDataService] ✅ 标签/原因增量合并完成: ${mergedTagReasonCount}`)
         return true
       }
 
-      debugLog('[ThemeDataService] 数据无变化，跳过更新')
+      debugLog('[ThemeDataService] API 标签/原因无变化，跳过更新')
       return false
     } catch (error) {
       console.warn('[ThemeDataService] 后台更新失败:', error)
@@ -798,34 +604,17 @@ class ThemeDataService {
   }
 
   /**
-   * 强制刷新（从 API 获取并保存）
+   * 强制刷新（从 QuantBoard SQLite 题材主库重新读取）
    */
   async forceRefresh(): Promise<boolean> {
-    debugLog('[ThemeDataService] 🔄 强制刷新题材映射...')
-    const apiData = await this.fetchFromAPI()
-    if (apiData) {
-      if (!this.isSafeFullMapping(apiData)) {
-        const mergedTagReasonCount = this.mergeTagAndReasonData(apiData)
-        if (mergedTagReasonCount > 0) {
-          if (this.currentMappingData) {
-            await this.saveToIndexedDB(this.currentMappingData)
-          }
-          this.syncTagsAndReasonsToDataLayer()
-        }
-        console.warn('[ThemeDataService] 强制刷新返回的题材映射规模异常，已拒绝覆盖:', {
-          apiThemes: apiData.themes.length,
-          apiStocks: this.getUniqueStockCount(apiData),
-          mergedTagReasons: mergedTagReasonCount,
-        })
-        return false
-      }
-      this.buildMapping(apiData)
-      await this.saveToIndexedDB(apiData)
-      this.syncToDataLayer()
-      this.syncTagsAndReasonsToDataLayer()
-      return true
-    }
-    return false
+    debugLog('[ThemeDataService] 🔄 从 SQLite 强制刷新题材映射...')
+    const sqliteData = await this.loadFromSQLiteAPI()
+    if (!sqliteData) return false
+    this.buildMapping(sqliteData)
+    this.syncToDataLayer()
+    this.syncTagsAndReasonsToDataLayer()
+    this.loaded = true
+    return true
   }
 
   /**
@@ -963,7 +752,6 @@ class ThemeDataService {
 
   setData(data: ThemeMappingData): void {
     this.buildMapping(data)
-    this.saveToIndexedDB(data)
     this.syncToDataLayer()
   }
 }
@@ -972,8 +760,8 @@ export const themeMapping = ThemeDataService.getInstance()
 
 // V4 口径：themeMapping 长期只作为静态题材映射 repository 兼容导出。
 // 运行态题材强度、轮动、事件和个股暴露统一通过 src/services/theme/ThemeFacade。
-// 自动加载并启动定时更新；Node/Vitest 环境没有 IndexedDB 和相对 fetch 语义。
-if (typeof window !== 'undefined' && typeof indexedDB !== 'undefined') {
+// 自动加载并启动定时更新；Node/Vitest 环境没有浏览器 fetch 语义。
+if (typeof window !== 'undefined' && typeof fetch !== 'undefined') {
   themeMapping
     .load()
     .then(() => {

@@ -330,3 +330,50 @@
 - TDD 红绿记录：
   - 新增测试后首次运行 `pnpm exec vitest run src/services/theme/__tests__/ThemeRuntimeCoordinator.test.ts src/services/__tests__/alertService.test.ts`：按预期失败，暴露 `themeFacade.refreshRuntime()` 未同步 facade 读口、`alertService` 未走统一 runtime 事件链。
   - 实现后重跑同命令：通过，2 个测试文件、7 个测试通过。
+
+## 2026-05-05 题材模块 V8 启动
+
+- 用户指定使用 `planning-with-files`，按仓库规则不在根目录创建过程文件，改为使用 `docs/theme-module/plans/task_plan_v8.md`、`docs/theme-module/findings.md`、`docs/theme-module/progress.md`。
+- 已新增 V8 执行计划，范围限定为 IndexedDB 题材映射迁移到 QuantBoard 独立 SQLite 主库 `themeDATA.db`。
+- 已完成初步代码读取：
+  - `ThemeDataService` 当前正式读写仍以 IndexedDB 为中心。
+  - `ThemeFacade` 依赖 `themeMapping` 的同步兼容读口，需要在切 SQLite 后保留。
+  - QuantBoard 后端当前只有 snapshot/research 两套 DB，需要新增 theme DB 初始化、模型、仓库、迁移 API 和只读 API。
+- 已读取 `quant-board/backend/settings.py`，当前 Settings 只有 `snapshot_database_url/research_database_url`，V8 需要新增 `theme_database_url`，默认指向 `warehouse/themeDATA.db`。
+- 已确认 QuantBoard 测试目录为 `quant-board/tests/*.py`，V8 后端测试应新增到该目录。
+- 后端 TDD 记录：
+  - 首次运行 `.\.venv\Scripts\python.exe -m pytest tests/test_theme_database.py -q`：按预期失败，缺少 `backend.data.theme_database`。
+  - 新增 theme DB/model/repository/service 后重跑：失败于 `CREATE INDEX ix_theme_stock_mappings_stock_code` 重复，需修正模型重复索引定义。
+  - 修正后 `tests/test_theme_database.py` 通过，7 个测试通过。
+- 前端 TDD 记录：
+  - 新增 `src/services/__tests__/ThemeDataService.test.ts` 后运行 `pnpm exec vitest run src/services/__tests__/ThemeDataService.test.ts`：按预期失败，当前仍先读 IndexedDB，且 `setData()` 仍尝试写 IndexedDB。
+  - 修改后 `pnpm exec vitest run src/services/__tests__/ThemeDataService.test.ts` 通过，2 个测试通过。
+  - 新增 `apiService.getSqliteThemeMapping()` 路由测试，首次按预期失败，随后实现并通过。
+- 已实现：
+  - 后端新增 `backend/data/theme_database.py`、`theme_models.py`、`theme_repository.py`、`theme_service.py`。
+  - 后端新增 API：`POST /api/migrations/themes/import-json`、`GET /api/themes/mapping`、`GET /api/themes/stocks/{theme_id}`、`GET /api/themes/stocks/by-code/{code}`、`GET /api/themes/counts`。
+  - `GET /api/health` 增加 `database.theme`。
+  - 前端 `ThemeDataService` 正式读口切到 QuantBoard SQLite API，`setData()` 不再写 IndexedDB，后台 API 刷新只合并标签/原因。
+  - `apiService` 将 `/api/themes/*` 路由到 QuantBoard 上下文。
+- 已通过局部验证：
+  - `cd quant-board; .\.venv\Scripts\python.exe -m pytest tests/test_theme_database.py -q`：7 个测试通过。
+  - `pnpm exec vitest run src/services/__tests__/ThemeDataService.test.ts src/services/__tests__/apiService.test.ts src/services/theme/__tests__/ThemeRuntimeCoordinator.test.ts src/services/__tests__/themeLegacyAdapters.test.ts`：4 个测试文件、15 个测试通过。
+
+## 2026-05-05 V8 code review 修复
+
+- 已处理审查发现：
+  - `ThemeRepository.get_stock_themes()` 改为合并同一股票跨题材的标签和原因，避免只保留最后一个题材。
+  - `ThemeDataService.buildMapping()` 改为合并多题材股票原因，初次加载与后续 `mergeTagAndReasonData()` 行为一致。
+  - 从 `ThemeDataService` 移除 IndexedDB 初始化、读、写、安全映射判断等死代码；正式服务内不再持有浏览器 IndexedDB 私有路径。
+  - `GET /api/themes/mapping` 只在 API 顶层返回 `source: sqlite`，移除 mapping 内层重复 `source`。
+  - `loadFromSQLiteAPI()` 移除 `{ data: ... }` 解包分支，按后端实际 `{ ok, source, mapping }` 合同解析。
+- 已补测试：
+  - 后端测试覆盖同一股票归属多题材时的标签/原因合并，以及 mapping 内层不再重复 `source`。
+  - 前端测试覆盖多题材原因初次加载合并、畸形 SQLite 响应下 `forceRefresh()` 返回 `false` 且不污染现有映射。
+  - `apiService` 测试改为显式断言 `/api/themes/mapping` 请求发送到 `http://localhost:8000`。
+- 保留不改：
+  - `/api/snapshots/*` 路由到 QuantBoard 是快照正式读口已迁移后的既定行为，不回退到 ingest-only。
+  - `main.py` CRLF 警告暂不单独扩大改动面；如后续统一行尾，应由仓库级 `.gitattributes` 一次性治理。
+- code review 修复局部验证：
+  - `cd quant-board; .\.venv\Scripts\python.exe -m pytest tests/test_theme_database.py -q`：7 个测试通过。
+  - `pnpm exec vitest run src/services/__tests__/ThemeDataService.test.ts src/services/__tests__/apiService.test.ts`：2 个测试文件、8 个测试通过。

@@ -299,7 +299,7 @@ export class ApiService {
     if (url.includes('/api/tdx')) return 'tdx'
     if (url.includes('/api/limitup') || url.includes('/api/surge-stock')) return 'limitup'
     if (url.includes('/api/market')) return 'market'
-    if (url.includes('/api/snapshots/ingest')) return 'quant-board'
+    if (url.includes('/api/snapshots/') || url.includes('/api/themes/')) return 'quant-board'
     return 'unknown'
   }
 
@@ -816,6 +816,19 @@ export class ApiService {
     return this.get<any>(`/api/snapshots/counts${query}`, {
       context: 'quant-board',
       priority: 'medium',
+      retries: 1,
+      timeout: 15000,
+      cache: false,
+      throwOnHttpError: true,
+      ...options,
+    })
+  }
+
+  /** 从 QuantBoard SQLite 题材主库读取正式题材映射 */
+  async getSqliteThemeMapping(options?: RequestConfig) {
+    return this.get<any>('/api/themes/mapping', {
+      context: 'quant-board',
+      priority: 'high',
       retries: 1,
       timeout: 15000,
       cache: false,

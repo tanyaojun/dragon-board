@@ -8,8 +8,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 TEST_SNAPSHOT_DB = ROOT / "data" / "warehouse" / "test_quant_board_snapshots_v2.db"
 TEST_RESEARCH_DB = ROOT / "data" / "warehouse" / "test_quant_board_research_v2.db"
+TEST_THEME_DB = ROOT / "data" / "warehouse" / "test_themeDATA_v8.db"
 os.environ["QUANT_BOARD_SNAPSHOT_DATABASE_URL"] = f"sqlite:///{TEST_SNAPSHOT_DB}"
 os.environ["QUANT_BOARD_RESEARCH_DATABASE_URL"] = f"sqlite:///{TEST_RESEARCH_DB}"
+os.environ["QUANT_BOARD_THEME_DATABASE_URL"] = f"sqlite:///{TEST_THEME_DB}"
 os.environ["QUANT_BOARD_ENABLE_SUPABASE_BACKUP"] = "0"
 os.environ["QUANT_BOARD_ENABLE_BACKUP_READ_FALLBACK"] = "0"
 

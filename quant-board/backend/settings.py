@@ -70,6 +70,7 @@ class Settings(BaseModel):
     database_url: str = Field(default="")
     snapshot_database_url: str = Field(default="")
     research_database_url: str = Field(default="")
+    theme_database_url: str = Field(default="")
     supabase_url: str = Field(default="")
     supabase_secret_key: str = Field(default="")
     backup_mirror_enabled: bool = Field(default=True)
@@ -126,6 +127,11 @@ class Settings(BaseModel):
             self.research_database_url = (
                 os.environ.get("QUANT_BOARD_RESEARCH_DATABASE_URL")
                 or f"sqlite:///{self.warehouse_dir / 'quant_board_research.db'}"
+            )
+        if not self.theme_database_url:
+            self.theme_database_url = (
+                os.environ.get("QUANT_BOARD_THEME_DATABASE_URL")
+                or f"sqlite:///{self.warehouse_dir / 'themeDATA.db'}"
             )
         self.database_url = self.snapshot_database_url
         self.supabase_url = os.environ.get("SUPABASE_URL", self.supabase_url).rstrip("/")

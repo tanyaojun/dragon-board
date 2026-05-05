@@ -25,6 +25,7 @@ Invoke-RestMethod http://127.0.0.1:8000/api/health
 返回的 `database` 会同时报告本地 SQLite 主库和 Supabase 备份库状态。默认健康检查走快速路径，不发起 Supabase 网络请求，避免页面状态被云端备份库表结构探测拖慢；需要完整 Supabase 同构表检查时使用 `GET /api/health?deep=true`。
 
 - `primary.connected`：本地主库是否可用。
+- `theme.connected`：题材 SQLite 主库 `themeDATA.db` 是否可用。
 - `backup.connected`：默认快速路径为 `null`，表示未做云端探测；`deep=true` 时表示 Supabase REST 备份库是否可用。
 - `backup.schema`：当前要求为 `sqlite_homomorphic`。
 - `backup.missing_or_unreadable_tables`：仅 `deep=true` 时返回，同构表缺失或不可读列表；非空时不能执行正式云端同步。
@@ -403,6 +404,54 @@ Dragon Board 当前会在写入前通过 SQLite 读口确认同一 `snapshot_id`
 ```
 
 `dryRun=true` 只解析和统计，不落库。同一 `idempotencyKey` 或已存在的 `dataset_id + snapshot_id` 会被跳过，重复执行不会制造重复快照。
+
+## 题材基础数据接口
+
+题材基础映射已经从 Dragon Board 浏览器 IndexedDB 迁移到 QuantBoard 独立 SQLite 主库 `themeDATA.db`。这些接口只承载题材静态映射、题材-股票关系、股票-题材反查、标签和原因，不承载题材因子、轮动、预警、回测或快照事实。
+
+### `POST /api/migrations/themes/import-json`
+
+历史题材映射迁移入口。用于把旧 `ThemeDataDB/theme_mapping` 导出的 `ThemeMappingData` JSON 幂等导入 `themeDATA.db`。
+
+```json
+{
+  "version": "theme-v8",
+  "lastUpdate": "2026-05-05T09:30:00.000Z",
+  "totalThemes": 2,
+  "themes": [
+    {
+      "id": "AI",
+      "name": "人工智能",
+      "zsCode": "BK0800",
+      "stocks": ["000001", "600001"],
+      "stockTags": {
+        "000001": [{ "Name": "算力", "Reason": "服务器订单" }]
+      },
+      "stockReasons": {
+        "000001": "算力龙头"
+      }
+    }
+  ]
+}
+```
+
+重复导入同一 payload 不会重复写入关系行；缺字段、空题材、非法股票代码会返回 `400`，`detail` 至少包含 `code`、`field`、`message`。
+
+### `GET /api/themes/mapping`
+
+Dragon Board `ThemeDataService` 的正式读口。返回结构兼容旧 `ThemeMappingData`，外层补充 `ok` 和 `source=sqlite`。
+
+### `GET /api/themes/stocks/{theme_id}`
+
+按题材 ID 读取成分股。
+
+### `GET /api/themes/stocks/by-code/{code}`
+
+按股票代码读取所属题材、标签和原因。股票代码使用六位数字口径。
+
+### `GET /api/themes/counts`
+
+读取 `themeDATA.db` 基础行数，用于迁移验收和排障。
 
 ## Golden 接口
 

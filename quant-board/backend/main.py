@@ -29,6 +29,9 @@ from backend.data.schemas import (
     SnapshotJsonMigrationRequest,
 )
 from backend.data.supabase_backup import get_backup_client
+from backend.data.theme_database import get_theme_db, init_theme_db, theme_status
+from backend.data.theme_repository import ThemeRepository
+from backend.data.theme_service import ThemeMigrationError, ThemeMigrationService
 from backend.services import BacktestService, GoldenService, OptimizationService
 from backend.settings import get_settings
 from backend.utils import json_dumps, stable_hash
@@ -51,6 +54,7 @@ app.add_middleware(
 @app.on_event("startup")
 def on_startup() -> None:
     init_db()
+    init_theme_db()
     auto_sync_runner.start()
     archive_auto_runner.start()
 
@@ -74,6 +78,7 @@ def health_check(deep: bool = False, db: Session | None = Depends(get_db)) -> di
         "default_snapshot_type": "half_hour",
         "database": {
             "primary": primary_status(),
+            "theme": theme_status(),
             "backup": backup_status,
             "mode": "sqlite_primary_supabase_backup",
             "outbox": Repository(db, enable_backup=False).outbox_status() if db is not None else None,
@@ -565,6 +570,48 @@ def import_snapshot_json_migration(
         return SnapshotMigrationService(db).import_json(request.model_dump(by_alias=True))
     except (ImporterError, ValueError) as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.post("/api/migrations/themes/import-json")
+def import_theme_json_migration(
+    payload: dict[str, Any],
+    db: Session | None = Depends(get_theme_db),
+) -> dict[str, Any]:
+    if db is None:
+        raise HTTPException(status_code=503, detail="theme database is unavailable")
+    try:
+        return ThemeMigrationService(db).import_mapping(payload)
+    except ThemeMigrationError as error:
+        raise HTTPException(status_code=400, detail=error.detail) from error
+
+
+@app.get("/api/themes/mapping")
+def get_theme_mapping(db: Session | None = Depends(get_theme_db)) -> dict[str, Any]:
+    if db is None:
+        raise HTTPException(status_code=503, detail="theme database is unavailable")
+    mapping = ThemeRepository(db).get_mapping()
+    return {"ok": True, "mapping": mapping, "source": "sqlite"}
+
+
+@app.get("/api/themes/stocks/{theme_id}")
+def get_theme_stocks(theme_id: str, db: Session | None = Depends(get_theme_db)) -> dict[str, Any]:
+    if db is None:
+        raise HTTPException(status_code=503, detail="theme database is unavailable")
+    return ThemeRepository(db).get_theme_stocks(theme_id)
+
+
+@app.get("/api/themes/stocks/by-code/{code}")
+def get_stock_themes(code: str, db: Session | None = Depends(get_theme_db)) -> dict[str, Any]:
+    if db is None:
+        raise HTTPException(status_code=503, detail="theme database is unavailable")
+    return ThemeRepository(db).get_stock_themes(code)
+
+
+@app.get("/api/themes/counts")
+def get_theme_counts(db: Session | None = Depends(get_theme_db)) -> dict[str, Any]:
+    if db is None:
+        raise HTTPException(status_code=503, detail="theme database is unavailable")
+    return {"ok": True, "counts": ThemeRepository(db).counts(), "source": "sqlite"}
 
 
 def normalize_snapshot_ingest(

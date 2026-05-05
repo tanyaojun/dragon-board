@@ -27,3 +27,21 @@
 - V8 可考虑把 `loadSectorStocks` 和成分股缓存迁入 `JxbkThemeFeed`。
 - V8 可考虑增加题材 runtime 调试面板或回放一致性工具。
 - 若继续清理文档，可把 `progress.md` 中历史过程日志压缩为里程碑摘要。
+
+## 2026-05-05 V8 启动发现
+
+- 用户明确 V8 只做 IndexedDB 题材映射迁移到 QuantBoard 独立 SQLite 主库 `themeDATA.db`，不改题材因子、轮动、预警和 UI。
+- `src/services/ThemeDataService.ts` 进入 V8 前仍持有 `ThemeDataDB/theme_mapping` IndexedDB 初始化、读取、保存和自动 API 刷新写入逻辑。
+- `src/services/theme/ThemeFacade.ts` 的题材 source context 仍同步读取 `themeMapping.getAllThemes()` 和 `themeMapping.getThemeStocks()`；因此 V8 前端改造应保持 `themeMapping` 同步读口兼容。
+- QuantBoard 后端已有 `quant_board_snapshots.db` 与 `quant_board_research.db` 的双 Base/session 模式；V8 需要新增第三套 theme DB session/Base 或等价隔离实现。
+- 现有后端 `main.py` 已有快照迁移 API 模式：业务 service 抛 `ValueError`/`ImporterError`，路由转 400；V8 主题迁移应沿用结构化错误。
+
+## 2026-05-05 V8 落地发现
+
+- 已新增 `themeDATA.db` 相关 `ThemeBase/theme_engine/ThemeSessionLocal`，默认环境变量为 `QUANT_BOARD_THEME_DATABASE_URL`。
+- `themeDATA.db` 当前只包含 `theme_metadata`、`themes`、`theme_stock_mappings`，不进入 Supabase/outbox/Parquet。
+- `ThemeDataService` 正式加载已切到 `apiService.getSqliteThemeMapping()`，实际请求 `http://localhost:8000/api/themes/mapping`。
+- `ThemeDataService.checkAndUpdateFromAPI()` 只合并标签/原因，不再用外部批量 API 覆盖题材-股票关系事实。
+- 旧 IndexedDB 私有读写函数已从 `ThemeDataService` 移除；浏览器 IndexedDB 只作为外部历史迁移来源，不再混在正式 facade 内。
+- code review 发现 `get_stock_themes()` 对同一股票多题材时会覆盖标签/原因；已改为按题材顺序合并标签并用 `；` 合并原因。
+- code review 发现 `buildMapping()` 初次加载原因使用 first-wins；已改为与增量合并一致的 `；` 去重合并。

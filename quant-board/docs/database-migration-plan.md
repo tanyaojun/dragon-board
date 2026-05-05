@@ -4,7 +4,7 @@
 
 ## 目标结论
 
-- SQLite 采用双库边界：`quant_board_snapshots.db` 是快照热库与元数据索引库，`quant_board_research.db` 是回测、优化、Golden 和报告研究热库。
+- SQLite 采用三库边界：`quant_board_snapshots.db` 是快照热库与元数据索引库，`quant_board_research.db` 是回测、优化、Golden 和报告研究热库，`themeDATA.db` 是题材静态映射主库。
 - Parquet 是历史冷数据事实归档：历史 `snapshot_stock_rows`、`snapshot_sector_rows` 和回测 `trades/equity/signals` 可按 manifest 归档到 `data/archive/**`。
 - DuckDB 是后端只读归档查询引擎，用于在 SQLite 明细已清理时读取 Parquet，不提供任意 SQL API，也不暴露给 Vue 前端直连。
 - R2/S3 兼容对象存储是新的大体积异地备份主线，只上传 Parquet、`manifest.json` 和归档索引。
@@ -67,6 +67,8 @@ Supabase schema 不再包含回测、优化和 Golden 表，也不再对研究 J
 
 研究库 `backtest_signals` 也增加题材解释列：`main_theme/theme_heat/theme_contribution/theme_role/theme_support_score/theme_risk_flags_json/theme_reasons_json`。研究库仍是 local-only，不进入 Supabase 备份链路。
 
+题材模块 V8 新增独立题材主库 `themeDATA.db`，包含 `theme_metadata`、`themes`、`theme_stock_mappings`。该库只保存题材基础映射、题材-股票关系、股票-题材反查、标签和原因；不保存题材因子、轮动、预警、回测或快照事实。旧浏览器 `ThemeDataDB/theme_mapping` 只作为历史迁移源，正式读口固定为 `GET /api/themes/mapping`。
+
 长期增长控制由 Parquet 归档承担：默认保留最近 90 个交易日的 SQLite 热数据，超过保留窗口的股票/板块明细可归档到 `quant-board/data/archive/snapshots/**`；回测 trades/equity/signals 可归档到 `quant-board/data/archive/research/**`。归档成功必须写入 `archive_manifests`，记录行数、sha256、字节数、本地路径、对象存储 key 和状态。归档校验失败时不得清理 SQLite 明细。
 
 研究库历史回测清理属于本地维护动作，不属于 Supabase 备份、pull/push 或 failover 合同。`DELETE /api/backtests/{run_id}`、`POST /api/storage/research-cleanup` 和 CLI `cleanup-research` 只能删除 `quant_board_research.db` 中的回测结果表，不能删除 `quant_board_snapshots.db` 的正式快照事实，也不能登记 `sync_outbox`。删除单个回测时必须先显式删除 `backtest_trades`、`backtest_equity_curve`、`backtest_signals`、`backtest_quality_reports`，最后删除 `backtest_runs`。
@@ -91,6 +93,7 @@ Supabase schema 不再包含回测、优化和 Golden 表，也不再对研究 J
 - failover 写入当前只覆盖正式快照 ingest、数据集 bundle；回测、优化和 Golden 属于本地 research 库，不进入 Supabase failover 目标。数据集导入、历史迁移 API 等仍依赖 SQLite 主库事务，主库不可用时必须明确失败。
 - IndexedDB 已从正式快照读写链路中移除：后续只能作为显式缓存和历史迁移来源；`five_minute` 浏览器本地入口不再保留。完全删除历史或停用迁移工具前必须保留一次人工验收记录，确认 SQLite 四张事实表全量行数与浏览器历史一致。
 - Dragon Board 正式读取不得在 QuantBoard 后端不可用时静默 fallback 到 IndexedDB；读取失败应暴露为后端/API 错误，由 UI 或诊断工具明确提示 SQLite 快照库不可用。
+- Dragon Board 题材基础映射不再以 IndexedDB 作为事实源；`ThemeDataService` 优先读取 QuantBoard `GET /api/themes/mapping`，旧 IndexedDB 只保留为导出迁移来源或显式排障缓存。
 - Supabase 云端 schema 需要用户先在 SQL Editor 执行 `quant-board/backend/data/supabase_schema.sql`；执行前旧云端表会被删除重建，必须确认旧云端数据已经不需要或已另行备份。
 
 ## 存储拓扑
@@ -108,6 +111,10 @@ QuantBoard research
   -> SQLite research hot DB
   -> Parquet research archive
   -> DuckDB archive read fallback
+
+Dragon Board theme mapping
+  -> QuantBoard API
+  -> SQLite themeDATA primary
 ```
 
 职责边界：
@@ -116,6 +123,7 @@ QuantBoard research
 - QuantBoard API/CLI 负责导入、质量门禁、回测、优化、报告和同步编排。
 - SQLite 快照库保存标准化后的近期热数据、frame/record 元数据和归档 manifest。
 - SQLite research 库保存回测、优化、Golden、报告索引和近期研究明细。
+- SQLite themeDATA 库保存题材静态映射和正反查基础事实。
 - Parquet 保存历史冷明细，DuckDB 负责后端只读查询。
 - R2/S3 保存大体积归档文件的异地备份。
 - Supabase 只保留轻量兼容备份，不承担大体积归档或研究结果备份。
@@ -373,6 +381,25 @@ Dragon Board 前端正式分析入口 `listSnapshotFrameBundles` 必须调用该
 
 用途：读取 SQLite 主库中 `snapshots/snapshot_frames/snapshot_stock_rows/snapshot_sector_rows` 四张事实表行数。可选 `dataset_id`。
 
+### `POST /api/migrations/themes/import-json`
+
+用途：把旧浏览器 `ThemeDataDB/theme_mapping` 导出的 `ThemeMappingData` JSON 幂等导入独立题材主库 `themeDATA.db`。
+
+行为规则：
+
+- 按 `theme_id + stock_code` 做关系幂等。
+- 重复题材和重复股票代码会归一化后覆盖为单条关系。
+- 缺失 `themes`、缺失题材 ID、缺失题材名称、非法股票代码返回结构化 `400`，`detail` 包含 `code/field/message`。
+- 不写 `quant_board_snapshots.db`、`quant_board_research.db`、Supabase 或 outbox。
+
+### `GET /api/themes/mapping`
+
+用途：Dragon Board 题材模块读取正式题材基础映射。返回旧 `ThemeMappingData` 兼容结构，并带 `source=sqlite`。
+
+### `GET /api/themes/stocks/{theme_id}` / `GET /api/themes/stocks/by-code/{code}` / `GET /api/themes/counts`
+
+用途：题材-股票正查、股票-题材反查和迁移行数验收。
+
 ### `POST /api/datasets/import`
 
 用途：从 SQLite 主库已有正式快照事实表派生可复现研究数据集。该接口的主路径是 `sourceType=sqlite_snapshots`，不再承担日常浏览器 IndexedDB/LevelDB/运行页桥接采集职责。
@@ -444,6 +471,7 @@ Dragon Board 前端正式分析入口 `listSnapshotFrameBundles` 必须调用该
 | --- | --- |
 | `QUANT_BOARD_SNAPSHOT_DATABASE_URL` | SQLite 快照事实库连接串，默认指向 `quant-board/data/warehouse/quant_board_snapshots.db` |
 | `QUANT_BOARD_RESEARCH_DATABASE_URL` | SQLite 研究库连接串，默认指向 `quant-board/data/warehouse/quant_board_research.db` |
+| `QUANT_BOARD_THEME_DATABASE_URL` | SQLite 题材主库连接串，默认指向 `quant-board/data/warehouse/themeDATA.db` |
 | `QUANT_BOARD_DATABASE_URL` | 旧兼容变量；如果指向 legacy `quant_board.db` 会被忽略，避免把双库主链静默切回旧单库 |
 | `SUPABASE_URL` | Supabase 项目 URL |
 | `SUPABASE_SECRET_KEY` | 后端专用密钥，禁止放入 `VITE_` 前端变量 |

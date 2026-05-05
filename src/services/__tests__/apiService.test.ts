@@ -175,4 +175,21 @@ describe('ApiService', () => {
     expect(requestedUrl).toContain('allowed_capture_modes=real_time%2Cdelayed')
     expect(requestedUrl).toContain('exclude_restored=true')
   })
+
+  it('routes sqlite theme mapping reads to QuantBoard API', async () => {
+    const api = new ApiService()
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, mapping: { themes: [] } }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await api.getSqliteThemeMapping()
+
+    const requestedUrl = new URL(String(fetchMock.mock.calls[0][0]))
+    expect(requestedUrl.origin).toBe('http://localhost:8000')
+    expect(requestedUrl.pathname).toBe('/api/themes/mapping')
+  })
 })

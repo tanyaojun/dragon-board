@@ -13,9 +13,10 @@
 - Dragon Board 根项目只提供实时看板、快照数据和 TypeScript golden 导出。
 - 默认快照：`snapshot_type=half_hour`。
 - 可选快照：`quarter_hour` 可用于细颗粒度研究，但必须显式选择，不能替代默认口径。
-- 存储主链：SQLite 分为快照热库 `quant_board_snapshots.db` 和研究热库 `quant_board_research.db`；Parquet 是历史冷归档，DuckDB 是后端只读归档查询引擎，R2/S3 是大体积对象备份主线；Supabase 只保留轻量兼容备份，实施和恢复规则以 [database-migration-plan.md](database-migration-plan.md) 为准。
+- 存储主链：SQLite 分为快照热库 `quant_board_snapshots.db`、研究热库 `quant_board_research.db` 和题材映射主库 `themeDATA.db`；Parquet 是历史冷归档，DuckDB 是后端只读归档查询引擎，R2/S3 是大体积对象备份主线；Supabase 只保留轻量兼容备份，实施和恢复规则以 [database-migration-plan.md](database-migration-plan.md) 为准。
 - 当前同步批次：`sync_outbox` 只覆盖快照 ingest、数据集 bundle；回测、优化和 Golden 保存在 research SQLite，不进入 Supabase Free 版备份目标。历史 JSON 迁移入口是 `POST /api/migrations/snapshots/import-json`；自动同步默认关闭，只补传到期 outbox。
 - SQLite 替换 IndexedDB 的当前切口：Dragon Board 正式写入先查询 QuantBoard SQLite 是否已有同一 `snapshot_id`，缺失时走 `POST /api/snapshots/ingest`；正式读口由根前端 `src/services/snapshot/backendRead.ts` 统一调用 QuantBoard `GET /api/snapshots/frames`、`/api/snapshots/records`、`/api/snapshots/stock-rows`、`/api/snapshots/sector-rows`；IndexedDB 快照缓存默认关闭，只作为迁移源和显式缓存。浏览器端旧的 IndexedDB 校验/补齐入口与 `five_minute` 本地入口已收口，不再作为正式合同。
+- 题材映射 SQLite 切口：Dragon Board `ThemeDataService` 正式读口调用 QuantBoard `GET /api/themes/mapping`，数据来自 `themeDATA.db`；旧浏览器 `ThemeDataDB/theme_mapping` 只保留为 `POST /api/migrations/themes/import-json` 的历史迁移源和显式排障缓存，不再作为正式题材事实源。
 - failover 当前切口：SQLite 主库不可用但 Supabase 同构备份库可写时，`POST /api/snapshots/ingest` 可返回 `status=backup_only` 并写入备库；SQLite 恢复后必须执行 `pull-backup` 收敛，不能把 `backup_only` 当作本地主库已恢复。
 - 题材模块 V2：Dragon Board 快照会写入稳定题材列，QuantBoard 回测会生成 `ThemeCandidateSupport`。默认 `useThemeFactorForExecution=false`，题材只做候选解释；只有显式开启时才参与置信度调整和拥挤风险降级。
 
@@ -60,6 +61,7 @@
 15. 删除 IndexedDB 历史前必须先完成后端迁移收口与人工验收，确认四张事实表全量行数一致；不要把浏览器端旧 IndexedDB 校验/补齐入口当成正式合同。正式快照缓存默认关闭后，不得重新在 `DataLayer` 或 `snapshotFacade` 正式读写口恢复 IndexedDB fallback；QuantBoard 后端不可用时正式读取必须显式失败。
 16. 优化结果只生成候选参数，不得自动写回 Python、TypeScript、API、CLI、前端表单或文档默认值；CLI 必须支持 `tpe` 和异步提交 `--no-wait` 口径。`optuna_tpe` 仅作为后端兼容别名。
 17. 题材因子不得绕过 RankTrend 独立制造买入信号；执行开关开启时也只能辅助已有候选分层。
+18. 题材基础映射新增或更新必须进入 QuantBoard `themeDATA.db`；不得重新把浏览器 IndexedDB 当成题材主库，也不得把题材静态映射混入快照库或研究库。
 
 ## 推荐执行流程
 

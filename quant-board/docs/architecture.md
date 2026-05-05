@@ -58,11 +58,12 @@ backend/
 
 本节只描述架构边界。详细实施步骤、同步接口、恢复流程、冲突策略和验收清单统一维护在 [database-migration-plan.md](database-migration-plan.md)。
 
-当前数据库模式是本地双库、Parquet 冷归档、DuckDB 只读查询和对象存储备份：
+当前数据库模式是本地三库、Parquet 冷归档、DuckDB 只读查询和对象存储备份：
 
 ```text
 QuantBoard API/CLI -> SQLite snapshot hot primary -> Parquet snapshot archive -> DuckDB read fallback -> R2/S3 object backup
 QuantBoard API/CLI -> SQLite research hot DB -> Parquet research archive -> DuckDB read fallback
+Dragon Board theme mapping -> SQLite themeDATA primary
 Supabase remains a lightweight compatibility backup for snapshot facts
 ```
 
@@ -70,6 +71,7 @@ Supabase remains a lightweight compatibility backup for snapshot facts
 
 - `quant_board_snapshots.db` 是默认快照热库，负责正式快照即时写入、近期低延迟读取、frame/record 元数据和 `archive_manifests`。
 - `quant_board_research.db` 是本地研究热库，负责回测、优化、Golden、报告索引和近期回测归一化结果明细。
+- `themeDATA.db` 是题材静态映射主库，负责题材基础表、题材-股票关系、股票-题材反查、标签和原因。它不进入回测/优化事实链，也不承载题材因子运行态。
 - `data/archive/**` 保存 Parquet 冷归档，默认使用 zstd 压缩。
 - DuckDB 只在后端读取 Parquet，不提供任意 SQL API，也不暴露给 Vue 前端。
 - R2/S3 兼容对象存储保存 Parquet 和 manifest 的异地备份。
@@ -88,6 +90,8 @@ Supabase remains a lightweight compatibility backup for snapshot facts
 - `GET /api/snapshots/counts` 用于 SQLite 主库快照事实表行数核对。
 - `POST /api/datasets/import` 的日常主入口是 `sourceType=sqlite_snapshots`，从 SQLite 正式快照事实表生成可复现研究视图，不复制事实行。
 - `POST /api/migrations/snapshots/import-json` 是历史 IndexedDB/JSON/结构化导出的可重复迁移入口。
+- `POST /api/migrations/themes/import-json` 是历史 `ThemeDataDB/theme_mapping` JSON 的可重复迁移入口。
+- `GET /api/themes/mapping`、`GET /api/themes/stocks/{theme_id}`、`GET /api/themes/stocks/by-code/{code}` 和 `GET /api/themes/counts` 是 Dragon Board 题材基础数据的 SQLite 正式读口。
 - 同键重复同步必须幂等；同键不同 payload/hash 必须标记冲突，不允许静默覆盖。
 
 Supabase 备份库必须使用快照事实库同构 schema，不再使用旧 `snapshots.payload` 兼容方案。云端 schema 由 [../backend/data/supabase_schema.sql](../backend/data/supabase_schema.sql) 维护，只包含 `datasets`、`snapshot_*` 和 `sync_outbox`。健康检查会逐表检查这些快照备份表是否可读；缺表时不得继续把备份链路视为可用。
@@ -99,6 +103,8 @@ Supabase 备份库必须使用快照事实库同构 schema，不再使用旧 `sn
 保存 Parquet 归档索引。每条记录对应一个快照分区或一个回测 run，包含 `archive_id`、`scope`、`dataset_id`、`snapshot_type`、`trading_date`、`run_id`、`local_path`、`object_key`、`status`、行数、文件 hash、字节数和错误信息。恢复、DuckDB 查询和 R2 上传都以该表为入口。
 
 Dragon Board 前端 `DataLayer` 对外字段不随迁移删改。正式快照写入先查询 SQLite 是否已有同一 `snapshot_id`，缺失时通过 `POST /api/snapshots/ingest` 落 SQLite；后端再按 `dataset_id + snapshot_id` 做逻辑幂等，重复槽位不会覆盖既有事实行。正式读取走 SQLite API，返回仍是 `SnapshotRecord`、`SnapshotFrameBundle`、`SnapshotStockRow`、`SnapshotSectorRow` 的现有 camelCase 字段。IndexedDB 快照缓存默认关闭，只保留历史迁移源和显式缓存用途；`five_minute` 浏览器本地入口不再保留。
+
+Dragon Board 题材基础映射由 `ThemeDataService` 通过 `GET /api/themes/mapping` 读取 `themeDATA.db`。旧浏览器 `ThemeDataDB/theme_mapping` 只保留为历史迁移源或显式排障缓存，不再作为正式题材事实源；新增或更新题材映射不得写回浏览器 IndexedDB。
 
 如果后续调整 Supabase 表字段、索引、恢复策略或 payload JSON 字段，必须同批更新 [database-migration-plan.md](database-migration-plan.md)、[api-cli.md](api-cli.md) 和 SQL schema 文件。
 
@@ -231,6 +237,7 @@ Dragon Board 前端 `DataLayer` 对外字段不随迁移删改。正式快照写
 | --- | --- |
 | `QUANT_BOARD_SNAPSHOT_DATABASE_URL` | SQLite 快照事实库连接串，默认是 `quant-board/data/warehouse/quant_board_snapshots.db` |
 | `QUANT_BOARD_RESEARCH_DATABASE_URL` | SQLite 研究库连接串，默认是 `quant-board/data/warehouse/quant_board_research.db` |
+| `QUANT_BOARD_THEME_DATABASE_URL` | SQLite 题材映射主库连接串，默认是 `quant-board/data/warehouse/themeDATA.db` |
 | `QUANT_BOARD_DATABASE_URL` | 旧兼容变量；如果指向 legacy `quant_board.db` 会被忽略，应改用上面两个双库变量 |
 | `SUPABASE_URL` | Supabase 项目 URL |
 | `SUPABASE_SECRET_KEY` | 后端专用密钥，禁止放入 `VITE_` 前端变量 |
