@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-本文件为 Claude Code（claude.ai/code）在本仓库中工作时提供指导。
+本文件为 Claude Code（claude.ai/code）在本项目中工作时提供指导。
 
 ## 沟通与文档语言
 
