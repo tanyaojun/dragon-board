@@ -2313,6 +2313,43 @@ def test_theme_trend_backtest_generates_trade_events_for_theme_exposures(tmp_pat
     assert trades["items"][0]["code"] == "600001"
 
 
+def test_theme_trend_report_includes_lifecycle_returns_and_trade_diagnostics(tmp_path: Path) -> None:
+    client = TestClient(app)
+    bundle = make_theme_trade_bundle(tmp_path)
+    imported = client.post(
+        "/api/datasets/import",
+        json={"sourceType": "json_bundle", "sourcePath": str(bundle), "name": "theme-v12-report-diagnostics", "snapshotTypes": ["half_hour"]},
+    )
+    assert imported.status_code == 200, imported.text
+    dataset = imported.json()
+
+    response = client.post(
+        "/api/backtests/theme-trend",
+        json={
+            "datasetId": dataset["id"],
+            "snapshotType": "half_hour",
+            "strategyName": "theme_rotation",
+            "randomSeed": 20260430,
+            "maxHoldingBars": 2,
+        },
+    )
+    assert response.status_code == 200, response.text
+    run_id = response.json()["runId"]
+
+    report = client.get(f"/api/reports/theme-trend/{run_id}")
+    assert report.status_code == 200, report.text
+    body = report.json()
+
+    assert "lifecycleReturnDistribution" in body
+    assert body["lifecycleReturnDistribution"]["mainline"]["tradeCount"] >= 1
+    assert "themeTradeDiagnostics" in body
+    assert body["themeTradeDiagnostics"][0]["themeName"] == "机器人"
+    assert body["themeTradeDiagnostics"][0]["tradeCount"] >= 1
+    assert body["candidateTierDiagnostics"][0]["candidateTier"] == "A_MAIN"
+    assert body["roleDiagnostics"][0]["role"] == "leader"
+    assert body["crowdingRiskDecay"]["triggeredTradeCount"] == 0
+
+
 def test_theme_confluence_backtest_api_keeps_ranktrend_visible(tmp_path: Path) -> None:
     client = TestClient(app)
     bundle = make_bundle(tmp_path)

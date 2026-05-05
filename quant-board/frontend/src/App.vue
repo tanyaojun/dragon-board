@@ -145,7 +145,7 @@ let optimizationPollToken = 0;
 
 // ── ThemeTrend 状态 ──
 const themeState = reactive<RequestResult>({ status: "idle" });
-const themeReportState = reactive<RequestResult>({ status: "idle" });
+const themeReportState = reactive<RequestResult<import("./types").ThemeTrendReport>>({ status: "idle" });
 const themeResearchState = reactive<RequestResult<import("./types").ThemeResearchSummary>>({ status: "idle" });
 const themeBacktestForm = reactive<import("./types").ThemeBacktestRequest>({
   datasetId: "",
@@ -178,6 +178,15 @@ const themeVerdict = computed(() => {
     label: grade === "research_ready" ? `研究就绪 · ${signalCount} 信号` : `质量降级(${grade}) · ${signalCount} 信号`,
   };
 });
+const themeReport = computed(() => asRecord(themeReportState.data));
+const themeLifecycleReturns = computed(() => {
+  const dist = asRecord(themeReport.value.lifecycleReturnDistribution);
+  return Object.entries(dist).map(([lifecycle, stats]) => ({ lifecycle, ...(asRecord(stats)) })) as Array<Record<string, unknown>>;
+});
+const themeTradeDiagnostics = computed(() => (themeReport.value.themeTradeDiagnostics as Array<Record<string, unknown>> | undefined) || []);
+const themeTierDiagnostics = computed(() => (themeReport.value.candidateTierDiagnostics as Array<Record<string, unknown>> | undefined) || []);
+const themeRoleDiagnostics = computed(() => (themeReport.value.roleDiagnostics as Array<Record<string, unknown>> | undefined) || []);
+const themeCrowdingRiskDecay = computed(() => asRecord(themeReport.value.crowdingRiskDecay));
 
 const backtestForm = reactive<BacktestRequest>({
   datasetId: "",
@@ -1635,9 +1644,33 @@ onMounted(async () => {
               </button>
             </div>
             <div v-if="themeReportState.status === 'ok' && themeReportState.data" class="inline-success">
-              <div><b>生命期分布:</b> {{ ((themeReportState.data as Record<string,unknown>)?.lifecycleDistribution) ? JSON.stringify((themeReportState.data as Record<string,unknown>).lifecycleDistribution) : '-' }}</div>
-              <div><b>拥挤事件:</b> {{ (themeReportState.data as Record<string,unknown>)?.crowdingEventCount ?? '-' }}</div>
-              <div><b>生命周期迁移:</b> {{ (themeReportState.data as Record<string,unknown>)?.lifecycleTransitionCount ?? '-' }}</div>
+              <div><b>生命期分布:</b> {{ themeReport.lifecycleDistribution ? JSON.stringify(themeReport.lifecycleDistribution) : '-' }}</div>
+              <div><b>拥挤事件:</b> {{ themeReport.crowdingEventCount ?? '-' }}</div>
+              <div><b>生命周期迁移:</b> {{ themeReport.lifecycleTransitionCount ?? '-' }}</div>
+              <div v-if="themeLifecycleReturns.length" class="mini-grid">
+                <span v-for="row in themeLifecycleReturns" :key="String(row.lifecycle)" class="tag-stack">
+                  {{ row.lifecycle }}: {{ row.tradeCount ?? 0 }}笔 / {{ (((Number(row.avgNetReturn) || 0) * 100).toFixed(2)) }}%
+                </span>
+              </div>
+              <div v-if="themeTradeDiagnostics.length">
+                <b>题材诊断:</b>
+                <span v-for="row in themeTradeDiagnostics.slice(0, 4)" :key="String(row.themeName)" class="tag-stack">
+                  {{ row.themeName || '未映射' }} {{ row.tradeCount ?? 0 }}笔 胜率{{ (((Number(row.winRate) || 0) * 100).toFixed(0)) }}%
+                </span>
+              </div>
+              <div v-if="themeTierDiagnostics.length">
+                <b>候选层:</b>
+                <span v-for="row in themeTierDiagnostics.slice(0, 4)" :key="String(row.candidateTier)" class="tag-stack">
+                  {{ row.candidateTier || 'unknown' }} {{ row.tradeCount ?? 0 }}笔
+                </span>
+              </div>
+              <div v-if="themeRoleDiagnostics.length">
+                <b>角色:</b>
+                <span v-for="row in themeRoleDiagnostics.slice(0, 4)" :key="String(row.role)" class="tag-stack">
+                  {{ row.role || 'unknown' }} {{ row.tradeCount ?? 0 }}笔
+                </span>
+              </div>
+              <div><b>拥挤触发交易:</b> {{ themeCrowdingRiskDecay.triggeredTradeCount ?? 0 }}</div>
             </div>
             <div v-if="themeReportState.status === 'error'" class="inline-error">{{ themeReportState.error }}</div>
           </div>

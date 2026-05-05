@@ -120,6 +120,29 @@ export interface ThemeResearchSummary {
   signalCount?: number;
 }
 
+export interface ThemeReturnStats {
+  tradeCount: number;
+  winRate: number;
+  avgNetReturn: number;
+  totalNetReturn: number;
+  totalProfit: number;
+}
+
+export interface ThemeTrendReport {
+  runId: string;
+  strategyName: string;
+  datasetId: string;
+  lifecycleDistribution?: Record<string, number>;
+  signalDistribution?: Record<string, number>;
+  crowdingEventCount?: number;
+  lifecycleTransitionCount?: number;
+  lifecycleReturnDistribution?: Record<string, ThemeReturnStats>;
+  themeTradeDiagnostics?: Array<{ themeName: string } & ThemeReturnStats>;
+  candidateTierDiagnostics?: Array<{ candidateTier: string } & ThemeReturnStats>;
+  roleDiagnostics?: Array<{ role: string } & ThemeReturnStats>;
+  crowdingRiskDecay?: { triggeredTradeCount: number } & ThemeReturnStats;
+}
+
 export interface ThemeBacktestRequest {
   datasetId: string;
   strategyName: string;

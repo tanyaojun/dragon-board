@@ -20,6 +20,7 @@ from backend.data.dataset_service import DatasetService
 from backend.data.importers import ImporterError, frame_from_record, sector_rows_from_record, stock_rows_from_record
 from backend.data.migration import SnapshotMigrationService
 from backend.data.models import Dataset
+from backend.data.json_codec import loads_json_field
 from backend.data.repository import Repository
 from backend.data.schemas import (
     GoldenImportRequest,
@@ -1033,13 +1034,15 @@ def get_theme_trend_report(run_id: str, db: Session | None = Depends(get_db)) ->
     opt_service = OptimizationService(db)
 
     factors: list[dict[str, Any]] = []
+    trades: list[dict[str, Any]] = []
+    execution_signals: list[dict[str, Any]] = []
     strategy_name = ""
     dataset_id = ""
 
     # 优先按 optimization_runs 查询
     opt_run = opt_service.repo.get_optimization_run(run_id)
     if opt_run:
-        raw = json_loads(opt_run.result_json, {})
+        raw = loads_json_field(opt_run.result_json, {})
         trial_list = raw.get("trialList") or []
         best_trial = trial_list[0] if trial_list else {}
         factors = best_trial.get("engineFactors") or []
@@ -1050,9 +1053,13 @@ def get_theme_trend_report(run_id: str, db: Session | None = Depends(get_db)) ->
         bt_run = bt_service.repo.get_backtest_run(run_id)
         if not bt_run:
             raise HTTPException(status_code=404, detail={"code": "run_not_found", "runId": run_id})
-        result = json_loads(bt_run.result_json, {})
+        result = loads_json_field(bt_run.result_json, {})
         tt = result.get("themeTrend") or {}
         factors = tt.get("factors") or tt.get("signals") or result.get("signals") or []
+        trades = result.get("trades") or ((result.get("tradeSimulation") or {}).get("trades")) or []
+        if not trades:
+            trades = bt_service.repo.get_backtest_trades(run_id)
+        execution_signals = result.get("executionSignals") or []
         strategy_name = bt_run.strategy_name
         dataset_id = bt_run.dataset_id
 
@@ -1068,6 +1075,7 @@ def get_theme_trend_report(run_id: str, db: Session | None = Depends(get_db)) ->
 
     crowding_events = [f for f in factors if f.get("lifecycle") == "crowded"]
     transitions = [f for f in factors if f.get("lifecycleTransition")]
+    trade_report = _build_theme_trade_report(trades, execution_signals)
 
     return {
         "runId": run_id,
@@ -1080,6 +1088,82 @@ def get_theme_trend_report(run_id: str, db: Session | None = Depends(get_db)) ->
         "recentTransitions": transitions[:20],
         "themeCount": len({f.get("themeId") for f in factors if f.get("themeId")}),
         "totalFactorCount": len(factors),
+        **trade_report,
+    }
+
+
+def _build_theme_trade_report(trades: list[dict[str, Any]], execution_signals: list[dict[str, Any]]) -> dict[str, Any]:
+    signal_by_entry = {
+        (str(item.get("snapshotId") or ""), str(item.get("code") or "")): item
+        for item in execution_signals
+        if item.get("code")
+    }
+
+    def enrich(trade: dict[str, Any]) -> dict[str, Any]:
+        signal = signal_by_entry.get((str(trade.get("entrySnapshotId") or ""), str(trade.get("code") or "")), {})
+        return {
+            **trade,
+            "lifecycle": trade.get("stage") or signal.get("stage") or "neutral",
+            "themeName": signal.get("mainTheme") or trade.get("themeName") or "",
+            "role": signal.get("themeRole") or trade.get("themeRole") or "",
+            "candidateTier": trade.get("candidateTier") or signal.get("candidateTier") or "",
+            "crowdingTriggered": (
+                trade.get("candidateTier") == "C_CROWDED"
+                or signal.get("candidateTier") == "C_CROWDED"
+                or str(signal.get("stage") or "") in {"crowded", "divergence"}
+                or any(str(flag).startswith("crowding:") for flag in (signal.get("themeRiskFlags") or []))
+            ),
+        }
+
+    enriched = [enrich(trade) for trade in trades]
+
+    def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
+        count = len(rows)
+        total_profit = round(sum(float(row.get("profit") or 0) for row in rows), 2)
+        total_return = round(sum(float(row.get("netReturn") or 0) for row in rows), 4)
+        wins = sum(1 for row in rows if float(row.get("netReturn") or 0) > 0)
+        return {
+            "tradeCount": count,
+            "winRate": round(wins / count, 4) if count else 0,
+            "avgNetReturn": round(total_return / count, 4) if count else 0,
+            "totalNetReturn": total_return,
+            "totalProfit": total_profit,
+        }
+
+    def group_by(field: str) -> dict[str, list[dict[str, Any]]]:
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for row in enriched:
+            key = str(row.get(field) or "unknown")
+            grouped.setdefault(key, []).append(row)
+        return grouped
+
+    lifecycle_returns = {
+        key: summarize(rows)
+        for key, rows in sorted(group_by("lifecycle").items())
+    }
+    theme_diagnostics = [
+        {"themeName": key, **summarize(rows)}
+        for key, rows in sorted(group_by("themeName").items(), key=lambda item: (-len(item[1]), item[0]))
+    ]
+    tier_diagnostics = [
+        {"candidateTier": key, **summarize(rows)}
+        for key, rows in sorted(group_by("candidateTier").items(), key=lambda item: (-len(item[1]), item[0]))
+    ]
+    role_diagnostics = [
+        {"role": key, **summarize(rows)}
+        for key, rows in sorted(group_by("role").items(), key=lambda item: (-len(item[1]), item[0]))
+    ]
+    crowded_rows = [row for row in enriched if row.get("crowdingTriggered")]
+
+    return {
+        "lifecycleReturnDistribution": lifecycle_returns,
+        "themeTradeDiagnostics": theme_diagnostics,
+        "candidateTierDiagnostics": tier_diagnostics,
+        "roleDiagnostics": role_diagnostics,
+        "crowdingRiskDecay": {
+            "triggeredTradeCount": len(crowded_rows),
+            **summarize(crowded_rows),
+        },
     }
 
 

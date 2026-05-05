@@ -705,3 +705,21 @@
   - TS -> Python golden 严格对齐验收。
   - QuantBoard 报告页的生命周期收益分布、控制组多维归因和参数敏感度完整展示。
   - Dragon Board 题材/龙头/热榜面板的研究摘要 UI 展示和降级/过滤原因字段。
+
+## 2026-05-06 V12 继续补齐：题材报告交易诊断
+
+- 已补测试：
+  - `test_theme_trend_report_includes_lifecycle_returns_and_trade_diagnostics` 要求 `/api/reports/theme-trend/{run_id}` 返回生命周期收益分布、题材交易诊断、候选层诊断、角色诊断和拥挤风险触发交易统计。
+- 后端实现：
+  - ThemeTrend 报告读取 `backtest_runs.result_json` / `optimization_runs.result_json` 时改用 `loads_json_field()`，修复大 JSON 压缩后 `json_loads()` 读成空对象的问题。
+  - ThemeTrend 报告从 `tradeSimulation.trades` 和 `executionSignals` 关联生成：
+    - `lifecycleReturnDistribution`
+    - `themeTradeDiagnostics`
+    - `candidateTierDiagnostics`
+    - `roleDiagnostics`
+    - `crowdingRiskDecay`
+  - 当大 JSON 中没有 trades 时，回退读取归一化 `backtest_trades`，避免报告完全依赖压缩 result payload。
+- QuantBoard 前端：
+  - 新增 `ThemeTrendReport` / `ThemeReturnStats` 类型。
+  - ThemeTrend 报告页展示生命周期收益、题材诊断、候选层、角色和拥挤触发交易摘要。
+- 本切片仍不代表 V12 Phase 5 完整完成；控制组多维归因、参数敏感度报告和 Dragon Board 面板解释仍待补齐。
