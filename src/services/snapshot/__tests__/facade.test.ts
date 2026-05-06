@@ -4,8 +4,10 @@ const start = vi.fn()
 const getStockVolumeHistory = vi.fn()
 const runtimeListSnapshotFrameBundles = vi.fn()
 const runtimeListSnapshots = vi.fn()
+const setSqlitePrimaryExistsHandler = vi.fn()
 const backendListSnapshotFrameBundles = vi.fn()
 const backendListSnapshots = vi.fn()
+const backendGetSnapshotById = vi.fn()
 const backendGetStockVolumeHistory = vi.fn()
 
 vi.mock('../../DataLayer', () => ({
@@ -47,6 +49,7 @@ vi.mock('../runtime', () => ({
     listSnapshotStockRows = vi.fn()
     listSnapshotSectorRows = vi.fn()
     getSnapshotProjectionMeta = vi.fn()
+    setSqlitePrimaryExistsHandler = setSqlitePrimaryExistsHandler
     rebuildSnapshotProjectionStores = vi.fn()
     alignSnapshotBackups = vi.fn()
     compactSnapshotRawRecords = vi.fn()
@@ -78,7 +81,7 @@ vi.mock('../runtime', () => ({
 vi.mock('../backendRead', () => ({
   snapshotBackendRead: {
     listSnapshots: backendListSnapshots,
-    getSnapshotById: vi.fn(),
+    getSnapshotById: backendGetSnapshotById,
     getTradingDateSnapshot: vi.fn(),
     listSnapshotFrames: vi.fn(),
     listSnapshotStockRows: vi.fn(),
@@ -126,5 +129,16 @@ describe('snapshotFacade', () => {
     )
     expect(runtimeListSnapshots).not.toHaveBeenCalled()
     expect(backendListSnapshots).not.toHaveBeenCalled()
+  })
+
+  it('checks sqlite backend before formal snapshot writes', async () => {
+    backendGetSnapshotById.mockResolvedValue({ id: 'half_hour:2026-05-06:09:30' })
+
+    await import('../facade')
+
+    expect(setSqlitePrimaryExistsHandler).toHaveBeenCalledTimes(1)
+    const handler = setSqlitePrimaryExistsHandler.mock.calls[0]?.[0]
+    await expect(handler('half_hour:2026-05-06:09:30')).resolves.toBe(true)
+    expect(backendGetSnapshotById).toHaveBeenCalledWith('half_hour:2026-05-06:09:30')
   })
 })

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import time
+from types import SimpleNamespace
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -168,6 +169,31 @@ def make_theme_trade_bundle(path: Path) -> Path:
     bundle = path / "theme_trade_bundle.json"
     bundle.write_text(json.dumps({"records": records}, ensure_ascii=False), encoding="utf-8")
     return bundle
+
+
+def add_theme_follower_to_bundle(bundle: Path) -> None:
+    data = json.loads(bundle.read_text(encoding="utf-8"))
+    for record in data["records"]:
+        record["payload"]["hotlist"].append(
+            {
+                "code": "600002",
+                "name": "题材跟随",
+                "rank": 2,
+                "price": 9.5,
+                "lastTradePrice": 9.5,
+                "change": 0.8,
+                "volume": 8000000,
+                "turnover": 80000000,
+                "volumeRatio": 1.5,
+                "zlje": 1000000,
+                "zljzb": 3,
+                "mainTheme": "机器人",
+                "themeRole": "follower",
+                "themeContribution": 6,
+                "themeExposureWeight": 62,
+            }
+        )
+    bundle.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
 
 
 def test_supabase_upsert_chunks_are_limited_by_payload_size() -> None:
@@ -2313,6 +2339,54 @@ def test_theme_trend_backtest_generates_trade_events_for_theme_exposures(tmp_pat
     assert trades["items"][0]["code"] == "600001"
 
 
+def test_theme_strategy_execution_signals_are_strategy_specific(tmp_path: Path) -> None:
+    client = TestClient(app)
+    bundle = make_theme_trade_bundle(tmp_path)
+    add_theme_follower_to_bundle(bundle)
+    imported = client.post(
+        "/api/datasets/import",
+        json={"sourceType": "json_bundle", "sourcePath": str(bundle), "name": "theme-v12-strategy-specific", "snapshotTypes": ["half_hour"]},
+    )
+    assert imported.status_code == 200, imported.text
+    dataset = imported.json()
+
+    leader_response = client.post(
+        "/api/backtests/theme-trend",
+        json={
+            "datasetId": dataset["id"],
+            "snapshotType": "half_hour",
+            "strategyName": "leader_theme_confirmation",
+            "randomSeed": 20260430,
+            "maxHoldingBars": 2,
+        },
+    )
+    assert leader_response.status_code == 200, leader_response.text
+    leader_result = leader_response.json()["result"]
+    leader_signal = next(item for item in leader_result["executionSignals"] if item["code"] == "600001")
+    non_leader_signal = next(item for item in leader_result["executionSignals"] if item["code"] == "600002")
+    assert leader_signal["candidateTier"] == "A_MAIN"
+    assert "leader_confirmation" in leader_signal["themeReasons"]
+    assert non_leader_signal["candidateTier"] in {"N_NEUTRAL", "D_EXIT_RISK"}
+    assert "leader_required" in non_leader_signal["themeRiskFlags"]
+
+    hotlist_response = client.post(
+        "/api/backtests/theme-trend",
+        json={
+            "datasetId": dataset["id"],
+            "snapshotType": "half_hour",
+            "strategyName": "hotlist_theme_confluence",
+            "randomSeed": 20260430,
+            "maxHoldingBars": 2,
+        },
+    )
+    assert hotlist_response.status_code == 200, hotlist_response.text
+    hotlist_signals = hotlist_response.json()["result"]["executionSignals"]
+    hotlist_leader = next(item for item in hotlist_signals if item["code"] == "600001")
+    assert hotlist_leader["candidateTier"] == "A_MAIN"
+    assert hotlist_leader["themeConfluenceScore"] >= 80
+    assert "hotlist_confluence" in hotlist_leader["themeReasons"]
+
+
 def test_theme_trend_report_includes_lifecycle_returns_and_trade_diagnostics(tmp_path: Path) -> None:
     client = TestClient(app)
     bundle = make_theme_trade_bundle(tmp_path)
@@ -2427,6 +2501,82 @@ def test_theme_confluence_optimization_api_returns_run(tmp_path: Path) -> None:
     assert body["runId"]
     assert body["strategyName"] == "hotlist_theme_confluence"
     assert body["analysisMode"] == "theme_confluence"
+
+
+def test_theme_confluence_optimization_uses_confluence_specific_search_metadata(tmp_path: Path) -> None:
+    client = TestClient(app)
+    bundle = make_bundle(tmp_path)
+    imported = client.post(
+        "/api/datasets/import",
+        json={"sourceType": "json_bundle", "sourcePath": str(bundle), "name": "theme-confluence-opt-specific", "snapshotTypes": ["half_hour"]},
+    )
+    assert imported.status_code == 200, imported.text
+    dataset = imported.json()
+
+    response = client.post(
+        "/api/optimizations/theme-confluence",
+        json={
+            "datasetId": dataset["id"],
+            "snapshotType": "half_hour",
+            "strategyName": "hotlist_theme_confluence",
+            "method": "grid",
+            "trials": 3,
+            "parameterGrid": {"rankTrendWeight": [0.55], "themeWeight": [0.45], "leaderMinContribution": [10]},
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["analysisMode"] == "theme_confluence"
+    assert body["searchProfile"] == "theme_confluence"
+
+    detail = client.get(f"/api/optimizations/{body['runId']}")
+    assert detail.status_code == 200, detail.text
+    result = detail.json()["result"]
+    assert result["searchProfile"] == "theme_confluence"
+    assert result["supportedParameterGroups"] >= [
+        "factor_weights",
+        "risk_thresholds",
+        "lifecycle_thresholds",
+        "stock_exposure_thresholds",
+        "trade_config",
+        "confluence_weights",
+    ]
+
+
+def test_theme_trend_default_optimization_does_not_materialize_full_grid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = TestClient(app)
+    bundle = make_bundle(tmp_path)
+    imported = client.post(
+        "/api/datasets/import",
+        json={"sourceType": "json_bundle", "sourcePath": str(bundle), "name": "theme-opt-lazy-grid", "snapshotTypes": ["half_hour"]},
+    )
+    assert imported.status_code == 200, imported.text
+    dataset = imported.json()
+
+    from backend import services
+
+    def fail_product(*_args, **_kwargs):
+        raise AssertionError("full grid product should not be materialized")
+
+    monkeypatch.setattr(services, "_itertools", SimpleNamespace(product=fail_product))
+
+    response = client.post(
+        "/api/optimizations/theme-trend",
+        json={
+            "datasetId": dataset["id"],
+            "snapshotType": "half_hour",
+            "strategyName": "theme_rotation",
+            "method": "grid",
+            "trials": 2,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["trialCount"] == 2
 
 
 def test_theme_optimization_report_includes_parameter_sensitivity(tmp_path: Path) -> None:

@@ -192,6 +192,35 @@
               <div class="hotlist-summary">{{ hotListSentiment.summary }}</div>
             </div>
 
+            <div class="hotlist-section research-hotlist-card">
+              <div class="section-title">ThemeTrend 共振解释</div>
+              <div class="research-status">{{ themeResearch.statusText }}</div>
+              <div class="research-lines">
+                <span>{{ themeResearch.hotlistConfluenceText }}</span>
+                <span>{{ themeResearch.riskText }}</span>
+              </div>
+              <div v-if="hotlistThemeResearchItems.length" class="theme-research-stock-grid">
+                <div
+                  v-for="item in hotlistThemeResearchItems"
+                  :key="item.code"
+                  class="theme-research-stock"
+                  :class="{ noise: item.noise }"
+                >
+                  <div class="research-stock-main">
+                    <span class="research-stock-name">{{ item.name }}</span>
+                    <span class="research-stock-score">{{ item.confluenceScore }}</span>
+                  </div>
+                  <div class="research-stock-sub">
+                    <span>{{ item.themeName || '无题材' }}</span>
+                    <span>{{ item.themeRole }}</span>
+                  </div>
+                  <div class="research-stock-reason">
+                    {{ item.filterReason || item.entryReason }}
+                  </div>
+                </div>
+              </div>
+            </div>
+
             <div class="metrics-grid hotlist-metrics">
               <div class="metric-item">
                 <span class="metric-label">热榜池</span>
@@ -555,6 +584,13 @@ import {
   type UnifiedEmotionStage,
 } from '@/types/emotion'
 import { usePanel } from '@/composables/usePanel'
+import {
+  buildHotlistThemeResearchItems,
+  buildThemeResearchExplanation,
+  loadThemeResearchExplanation,
+  type HotlistThemeResearchItem,
+  type ThemeResearchExplanation,
+} from '@/services/theme/themeResearchSummary'
 
 type EmotionStageClassKey = 'ice' | 'start' | 'ferment' | 'climax' | 'retreat'
 
@@ -633,6 +669,7 @@ const unsubscribeFns: (() => void)[] = []
 const hotListSentiment = ref<HotListSentimentResult | null>(null)
 const hotListSentimentLoading = ref(false)
 const hotListSentimentError = ref<string | null>(null)
+const themeResearch = ref<ThemeResearchExplanation>(buildThemeResearchExplanation({ available: false, reason: 'not_loaded' }))
 let hotListSentimentTimer: ReturnType<typeof setTimeout> | null = null
 let hotListSentimentRetryCount = 0
 
@@ -804,6 +841,10 @@ const hotListActiveOpportunityShare = computed(() => {
   const topN = hotListToday.value?.topN || 0
   return topN ? hotListActiveOpportunityCount.value / topN : 0
 })
+
+const hotlistThemeResearchItems = computed<HotlistThemeResearchItem[]>(() =>
+  buildHotlistThemeResearchItems(dataLayer.getStocks() as Array<Record<string, any>>, themeResearch.value, 6),
+)
 
 const hotListStage = computed(() => getDisplayEmotionStage(hotListSentiment.value?.stage))
 
@@ -1170,6 +1211,7 @@ function loadData() {
 function refresh() {
   dragonBreathAnalyzer.refresh()
   loadHotListSentiment()
+  loadThemeResearch()
 }
 
 function scheduleHotListSentimentLoad() {
@@ -1228,6 +1270,10 @@ async function loadHotListSentiment() {
   } finally {
     hotListSentimentLoading.value = false
   }
+}
+
+async function loadThemeResearch() {
+  themeResearch.value = await loadThemeResearchExplanation()
 }
 
 function exportData() {
@@ -1410,17 +1456,24 @@ onMounted(() => {
   unsubscribeFns.push(unsubStocks)
 
   loadHotListSentiment()
+  loadThemeResearch()
 })
 
 watch(
   () => props.visible,
   (visible) => {
-    if (visible) scheduleHotListSentimentLoad()
+    if (visible) {
+      scheduleHotListSentimentLoad()
+      loadThemeResearch()
+    }
   },
 )
 
 watch(view, (nextView) => {
-  if (nextView === 'hotlist') scheduleHotListSentimentLoad()
+  if (nextView === 'hotlist') {
+    scheduleHotListSentimentLoad()
+    loadThemeResearch()
+  }
 })
 
 onUnmounted(() => {
@@ -1930,6 +1983,71 @@ onUnmounted(() => {
 
 .hotlist-stage-card.stage-retreat {
   background: linear-gradient(135deg, rgba(155, 89, 182, 0.24), rgba(155, 89, 182, 0.08));
+}
+
+.research-hotlist-card {
+  border: 1px solid rgba(46, 213, 115, 0.28);
+}
+
+.research-status,
+.research-lines,
+.research-stock-sub,
+.research-stock-reason {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.research-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 6px 0 10px;
+}
+
+.theme-research-stock-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.theme-research-stock {
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 8px;
+}
+
+.theme-research-stock.noise {
+  border-color: rgba(255, 165, 2, 0.45);
+}
+
+.research-stock-main,
+.research-stock-sub {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.research-stock-name {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-primary);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.research-stock-score {
+  font-size: 13px;
+  font-weight: 700;
+  color: #2ed573;
+}
+
+.research-stock-reason {
+  margin-top: 5px;
+  line-height: 1.35;
 }
 
 .hotlist-stage-main {

@@ -125,5 +125,8 @@ def test_auto_archive_verification_failure_does_not_delete_sqlite(tmp_path: Path
     assert result["ok"] is False
     assert result["results"][0]["error"]["code"] == "archive_sha256_mismatch"
     with SessionLocal() as session:
+        manifest = session.scalar(select(ArchiveManifestModel).where(ArchiveManifestModel.dataset_id == "auto_ds"))
+        assert manifest is not None
+        assert manifest.status == "verify_failed"
         remaining = int(session.scalar(select(SnapshotStockRowModel).where(SnapshotStockRowModel.dataset_id == "auto_ds").with_only_columns(SnapshotStockRowModel.id).limit(1)) or 0)
         assert remaining > 0

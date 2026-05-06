@@ -313,6 +313,16 @@ def test_multi_date_archive_is_included_in_range_lookup(tmp_path: Path) -> None:
         assert result["source"] == "parquet_archive"
         assert {row["code"] for row in result["rows"]} == {"000001", "000003"}
 
+        narrowed = Repository(session, enable_backup=False).list_snapshot_stock_rows(
+            "duck_mix",
+            snapshot_type="half_hour",
+            start_date="2026-03-01",
+            end_date="2026-03-01",
+        )
+
+        assert narrowed["source"] == "parquet_archive"
+        assert {row["code"] for row in narrowed["rows"]} == {"000001"}
+
 
 # ── research trades via archive ──
 

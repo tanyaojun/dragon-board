@@ -716,6 +716,32 @@ class BacktestService:
                     tier = "C_CROWDED"
                 elif lifecycle in {"cooling", "reversal"}:
                     tier = "D_EXIT_RISK"
+                role = str((exposure or {}).get("role") or stock.get("themeRole") or "")
+                confidence = min(100.0, max(0.0, exposure_weight or float(factor.get("heatScore") or 0)))
+                theme_risk_flags = [f"crowding:{crowding}"] if crowding >= 75 else []
+                theme_reasons = [f"lifecycle:{lifecycle}", f"strategy:{strategy_name}"]
+                confluence_score = round(
+                    min(100.0, max(0.0, float(factor.get("heatScore") or 0) * 0.45 + exposure_weight * 0.35 + contribution * 0.8)),
+                    2,
+                )
+                if strategy_name == "leader_theme_confirmation":
+                    if role == "leader" and tier in {"A_MAIN", "B_IGNITION"} and crowding < 75:
+                        theme_reasons.append("leader_confirmation")
+                        confidence = min(100.0, confidence + 6.0)
+                    else:
+                        tier = "D_EXIT_RISK" if lifecycle in {"cooling", "reversal"} or crowding >= 75 else "N_NEUTRAL"
+                        theme_risk_flags.append("leader_required")
+                        theme_reasons.append("leader_downgraded_to_watch")
+                elif strategy_name == "hotlist_theme_confluence":
+                    if confluence_score >= 75 and tier in {"A_MAIN", "B_IGNITION"} and crowding < 75:
+                        theme_reasons.append("hotlist_confluence")
+                        confidence = min(100.0, max(confidence, confluence_score))
+                    elif confluence_score < 45 or role == "noise":
+                        tier = "N_NEUTRAL"
+                        theme_risk_flags.append("theme_noise_or_weak_confluence")
+                        theme_reasons.append("hotlist_filtered")
+                else:
+                    theme_reasons.append("theme_rotation")
                 output.append({
                     **stock,
                     "snapshotId": snapshot_id,
@@ -727,16 +753,17 @@ class BacktestService:
                     "rank": int(stock.get("rank") or 999),
                     "candidateTier": tier,
                     "regime": "strong" if tier in {"A_MAIN", "B_IGNITION"} else "weak",
-                    "confidence": min(100.0, max(0.0, exposure_weight or float(factor.get("heatScore") or 0))),
+                    "confidence": confidence,
                     "stage": lifecycle,
                     "rankTrend": {"strategy": {"momentum": {"acceleration": 1 if tier != "D_EXIT_RISK" else -1}}},
                     "mainTheme": theme_name,
                     "themeHeat": float(factor.get("heatScore") or stock.get("themeHeat") or 0),
                     "themeContribution": contribution,
-                    "themeRole": (exposure or {}).get("role") or stock.get("themeRole") or "",
+                    "themeRole": role,
                     "themeSupportScore": exposure_weight,
-                    "themeRiskFlags": [f"crowding:{crowding}"] if crowding >= 75 else [],
-                    "themeReasons": [f"lifecycle:{lifecycle}", f"strategy:{strategy_name}"],
+                    "themeConfluenceScore": confluence_score,
+                    "themeRiskFlags": theme_risk_flags,
+                    "themeReasons": theme_reasons,
                 })
         return output
 
@@ -912,14 +939,18 @@ class OptimizationService:
         后续可扩展异步路径。
         """
         from backend.optimization.search_space import (
+            theme_confluence_search_space,
+            theme_parameter_groups,
             theme_search_space,
             normalize_search_space,
+            select_candidates,
         )
         from backend.optimization.objective import score_theme_trend
 
         dataset_id = str(camel_get(payload, "dataset_id", "datasetId", ""))
         snapshot_type = str(camel_get(payload, "snapshot_type", "snapshotType", "half_hour"))
         strategy_name = str(camel_get(payload, "strategy_name", "strategyName", "theme_rotation"))
+        search_profile = str(camel_get(payload, "search_profile", "searchProfile", "theme_trend"))
         method = str(camel_get(payload, "method", default="random"))
         objective = str(camel_get(payload, "objective", default="stability"))
         random_seed = int(camel_get(payload, "random_seed", "randomSeed", 20260430))
@@ -931,7 +962,9 @@ class OptimizationService:
 
         param_grid_input = camel_get(payload, "parameter_grid", "parameterGrid", {}) or {}
         search_space = normalize_search_space(
-            param_grid_input if param_grid_input else theme_search_space()
+            param_grid_input
+            if param_grid_input
+            else (theme_confluence_search_space() if search_profile == "theme_confluence" else theme_search_space())
         )
 
         run_id = new_id("opt")
@@ -939,16 +972,7 @@ class OptimizationService:
         _random.seed(random_seed)
 
         trial_results: list[dict[str, Any]] = []
-        keys = list(search_space.keys())
-        all_combos = [
-            dict(zip(keys, combo))
-            for combo in _itertools.product(*[search_space[k] for k in keys])
-        ]
-
-        if method == "grid" or len(all_combos) <= max_trials:
-            trial_params_list = all_combos[:max_trials]
-        else:
-            trial_params_list = _random.sample(all_combos, min(max_trials, len(all_combos)))
+        trial_params_list = select_candidates(search_space, max_trials, method, random_seed)
 
         trial_errors: list[dict[str, Any]] = []
         for trial_idx, trial_params in enumerate(trial_params_list):
@@ -980,6 +1004,8 @@ class OptimizationService:
             "runId": run_id,
             "method": method,
             "objective": objective,
+            "searchProfile": search_profile,
+            "supportedParameterGroups": theme_parameter_groups(search_profile),
             "trials": len(trial_results),
             "trialErrors": trial_errors,
             "best": best,
@@ -1006,6 +1032,8 @@ class OptimizationService:
             "method": method,
             "strategyName": strategy_name,
             "analysisMode": "theme_trend",
+            "searchProfile": search_profile,
+            "supportedParameterGroups": theme_parameter_groups(search_profile),
             "randomSeed": random_seed,
             "best": best,
             "trialCount": len(trial_results),
@@ -1016,10 +1044,13 @@ class OptimizationService:
             **payload,
             "strategy_name": camel_get(payload, "strategy_name", "strategyName", "hotlist_theme_confluence"),
             "strategyName": camel_get(payload, "strategy_name", "strategyName", "hotlist_theme_confluence"),
+            "search_profile": "theme_confluence",
+            "searchProfile": "theme_confluence",
         }
         result = self.run_theme_trend(request, wait=wait)
         result["analysisMode"] = "theme_confluence"
         result["strategyName"] = str(request["strategyName"])
+        result["searchProfile"] = "theme_confluence"
         return result
 
     def _build_request(self, payload: dict[str, Any]) -> tuple[str, str, str, list[dict[str, Any]], dict[str, Any], dict[str, Any]]:

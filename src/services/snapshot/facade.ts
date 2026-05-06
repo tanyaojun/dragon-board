@@ -61,6 +61,11 @@ const snapshotRuntime = new SnapshotRuntime({
   }),
 })
 
+snapshotRuntime.setSqlitePrimaryExistsHandler(async (snapshotId) => {
+  const record = await snapshotBackendRead.getSnapshotById(snapshotId)
+  return Boolean(record)
+})
+
 class SnapshotFacade {
   saveQuarterHourSnapshot = snapshotRuntime.saveQuarterHourSnapshot.bind(snapshotRuntime)
   saveHalfHourSnapshot = snapshotRuntime.saveHalfHourSnapshot.bind(snapshotRuntime)

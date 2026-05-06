@@ -739,6 +739,9 @@ class ArchiveService:
             "slotTime": filters.get("slot_time"),
             "entityType": filters.get("entity_type"),
             "entityKey": filters.get("entity_key"),
+            "__startDate": start_date,
+            "__endDate": end_date,
+            "__beforeTradingDate": before_trading_date,
         }
         for manifest in manifests:
             path = Path(manifest.local_path) / f"{table}.parquet"

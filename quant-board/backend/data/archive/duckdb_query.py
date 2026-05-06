@@ -17,8 +17,8 @@ class ArchiveQueryError(RuntimeError):
 
 
 ALLOWED_FILTERS = {
-    "stock_rows": {"datasetId", "snapshotId", "type", "tradingDate", "code", "slotTime"},
-    "sector_rows": {"datasetId", "snapshotId", "type", "tradingDate", "entityType", "entityKey"},
+    "stock_rows": {"datasetId", "snapshotId", "type", "tradingDate", "code", "slotTime", "__startDate", "__endDate", "__beforeTradingDate"},
+    "sector_rows": {"datasetId", "snapshotId", "type", "tradingDate", "entityType", "entityKey", "__startDate", "__endDate", "__beforeTradingDate"},
     "trades": {"backtestRunId", "backtest_run_id", "code", "side"},
     "equity_curve": {"backtestRunId", "backtest_run_id"},
     "signals": {"backtestRunId", "backtest_run_id", "code", "signal"},
@@ -50,7 +50,16 @@ class DuckDBArchiveQuery:
         for key, value in (filters or {}).items():
             if value is None or value == "":
                 continue
-            if isinstance(value, list):
+            if key == "__startDate":
+                clauses.append('"tradingDate" >= ?')
+                values.append(value)
+            elif key == "__endDate":
+                clauses.append('"tradingDate" <= ?')
+                values.append(value)
+            elif key == "__beforeTradingDate":
+                clauses.append('"tradingDate" < ?')
+                values.append(value)
+            elif isinstance(value, list):
                 if not value:
                     continue
                 placeholders = ", ".join(["?"] * len(value))
@@ -89,7 +98,13 @@ class DuckDBArchiveQuery:
         for key, value in (filters or {}).items():
             if value is None or value == "":
                 continue
-            if isinstance(value, list):
+            if key == "__startDate":
+                rows = [row for row in rows if str(row.get("tradingDate") or "") >= str(value)]
+            elif key == "__endDate":
+                rows = [row for row in rows if str(row.get("tradingDate") or "") <= str(value)]
+            elif key == "__beforeTradingDate":
+                rows = [row for row in rows if str(row.get("tradingDate") or "") < str(value)]
+            elif isinstance(value, list):
                 allowed = set(value)
                 rows = [row for row in rows if row.get(key) in allowed]
             else:

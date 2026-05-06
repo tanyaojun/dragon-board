@@ -214,31 +214,12 @@ class Repository:
         )
         existing_snapshot_ids = self.existing_snapshot_ids(dataset.id, snapshot_ids)
         if existing_snapshot_ids and len(existing_snapshot_ids) == len(snapshot_ids):
-            outbox = self.get_outbox_by_idempotency_key(idempotency_key)
-            if outbox is None:
-                outbox = self._add_outbox_row(
-                    "snapshot_ingest",
-                    {
-                        "dataset": self.dataset_to_dict(self.session.get(Dataset, dataset.id) or dataset),
-                        "records": [],
-                        "frames": [],
-                        "stockRows": [],
-                        "sectorRows": [],
-                        "tradingDate": trading_date,
-                        "source": source,
-                        "dedupeReason": "snapshot_ids_exist",
-                        "snapshotIds": snapshot_ids,
-                    },
-                    idempotency_key=idempotency_key,
-                    dataset_id=dataset.id,
-                    snapshot_id=snapshot_ids[0] if snapshot_ids else None,
-                )
-                self.session.commit()
+            outbox = self._latest_snapshot_ingest_outbox(dataset.id, snapshot_ids)
             saved_dataset = self.session.get(Dataset, dataset.id) or dataset
             return {
                 "dataset": self.dataset_to_dict(saved_dataset),
-                "status": outbox.status,
-                "outbox": self.outbox_to_dict(outbox),
+                "status": outbox.status if outbox else "deduped",
+                "outbox": self.outbox_to_dict(outbox) if outbox else None,
                 "deduped": True,
             }
         if existing_snapshot_ids:
@@ -356,6 +337,24 @@ class Repository:
             return self.session.scalar(
                 select(SyncOutboxModel).where(SyncOutboxModel.idempotency_key == idempotency_key)
             )
+        except SQLAlchemyError:
+            return None
+
+    def _latest_snapshot_ingest_outbox(
+        self, dataset_id: str, snapshot_ids: list[str]
+    ) -> SyncOutboxModel | None:
+        if self.session is None or not snapshot_ids:
+            return None
+        try:
+            return self.session.scalars(
+                select(SyncOutboxModel)
+                .where(
+                    SyncOutboxModel.op_type == "snapshot_ingest",
+                    SyncOutboxModel.dataset_id == dataset_id,
+                    SyncOutboxModel.snapshot_id.in_(snapshot_ids),
+                )
+                .order_by(SyncOutboxModel.created_at.desc())
+            ).first()
         except SQLAlchemyError:
             return None
 

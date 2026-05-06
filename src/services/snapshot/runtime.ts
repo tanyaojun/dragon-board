@@ -38,7 +38,6 @@ import {
   SnapshotStockRowStore,
   SnapshotStore,
 } from './store'
-import { digestJson } from './hash'
 import type {
   SnapshotBackupSyncState,
   SnapshotBackupAlignmentResult,
@@ -62,6 +61,16 @@ import type {
   SnapshotRawCompactionResult,
   SnapshotPollutionCleanupResult,
 } from './types'
+
+export function buildSnapshotBackendIngestIdempotencyKey(record: SnapshotRecord): string {
+  return [
+    'snapshot_ingest',
+    'dragonboard_live',
+    record.type,
+    record.tradingDate,
+    record.slotTime || record.id,
+  ].join(':')
+}
 
 interface SnapshotRuntimeDeps {
   logger?: Pick<Console, 'log' | 'warn' | 'error' | 'debug'>
@@ -1334,16 +1343,7 @@ export class SnapshotRuntime {
         stockRows: bundle.stockRows || [],
         sectorRows: bundle.sectorRows || [],
       }
-      const idempotencyKey = await digestJson({
-        snapshotId: record.id,
-        tradingDate: record.tradingDate,
-        slotTime: record.slotTime,
-        timestamp: record.timestamp,
-        payload: record.payload,
-        frame: bundle.frame,
-        stockRows: bundle.stockRows,
-        sectorRows: bundle.sectorRows,
-      })
+      const idempotencyKey = buildSnapshotBackendIngestIdempotencyKey(record)
       const response = await snapshotBackendIngest.ingestDayBundle(dayBundle, {
         datasetId: 'dragonboard_live',
         idempotencyKey,
@@ -1355,6 +1355,7 @@ export class SnapshotRuntime {
     } catch (error) {
       this.logger.warn?.('[DataLayer] Snapshot backend ingest failed:', record.id, error)
       this.backupSyncStateStore.markError('backendIngest', record.tradingDate, error)
+      throw error
     }
   }
 

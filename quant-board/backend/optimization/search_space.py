@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import itertools
 import math
+import random
 from typing import Any
 
 
@@ -18,8 +19,32 @@ def default_search_space() -> dict[str, list[Any]]:
 
 
 def theme_search_space() -> dict[str, list[Any]]:
-    """V12 题材策略优化搜索空间（8 个引擎参数，map 到 ThemeTrendConfig）。"""
+    """V12 题材策略优化搜索空间。
+
+    首批完整合同覆盖因子权重、风险阈值、生命周期阈值、股票暴露阈值和交易参数。
+    其中可映射到 ThemeTrendConfig 的参数会进入引擎，其余参数用于策略执行/报告敏感度。
+    """
     return {
+        "momentumWeight": [0.18, 0.24, 0.3],
+        "breadthWeight": [0.14, 0.18, 0.22],
+        "fundWeight": [0.1, 0.14, 0.18],
+        "leadershipWeight": [0.12, 0.16, 0.2],
+        "correlationWeight": [0.06, 0.1, 0.14],
+        "persistenceWeight": [0.08, 0.12, 0.16],
+        "crowdingWarnThreshold": [60, 65, 70],
+        "crowdingBlockThreshold": [70, 75, 80],
+        "divergenceBlockThreshold": [65, 70, 75],
+        "ignitionMinMomentum": [45, 50, 55],
+        "expansionMinBreadth": [55, 60, 65],
+        "mainlineMinPersistence": [65, 70, 75],
+        "coolingMaxMomentum": [30, 35, 40],
+        "leaderMinContribution": [8, 12, 16],
+        "coreMinContribution": [5, 8, 12],
+        "noiseMaxContribution": [2, 3, 5],
+        "maxThemeExposure": [0.35, 0.45, 0.55],
+        "maxPositions": [3, 5, 8],
+        "takeProfitPct": [0.08, 0.12, 0.16],
+        "stopLossPct": [0.04, 0.06, 0.08],
         "crowdedRiskThreshold": [70, 75, 80],
         "mainlineHeatThreshold": [70, 75, 80],
         "mainlineMomentumThreshold": [65, 70, 75],
@@ -29,6 +54,32 @@ def theme_search_space() -> dict[str, list[Any]]:
         "reversalMomentumThreshold": [22, 25, 28],
         "minFrames": [2, 3, 5],
     }
+
+
+def theme_confluence_search_space() -> dict[str, list[Any]]:
+    space = theme_search_space()
+    space.update(
+        {
+            "rankTrendWeight": [0.55, 0.65, 0.75],
+            "themeWeight": [0.25, 0.35, 0.45],
+            "leaderMinContribution": [10, 14, 18],
+            "hotlistMinConfluenceScore": [65, 75, 85],
+        }
+    )
+    return space
+
+
+def theme_parameter_groups(profile: str = "theme_trend") -> list[str]:
+    groups = [
+        "factor_weights",
+        "risk_thresholds",
+        "lifecycle_thresholds",
+        "stock_exposure_thresholds",
+        "trade_config",
+    ]
+    if profile == "theme_confluence":
+        groups.append("confluence_weights")
+    return groups
 
 
 def normalize_search_space(space: dict[str, Any]) -> dict[str, list[Any]]:
@@ -47,6 +98,43 @@ def normalize_search_space(space: dict[str, Any]) -> dict[str, list[Any]]:
     if not normalized:
         raise ValueError("search_space has no optimizable parameters")
     return normalized
+
+
+def candidate_count(space: dict[str, list[Any]]) -> int:
+    total = 1
+    for values in space.values():
+        total *= len(values)
+    return total
+
+
+def candidate_at_index(space: dict[str, list[Any]], index: int) -> dict[str, Any]:
+    keys = list(space.keys())
+    values = [space[key] for key in keys]
+    if not keys:
+        return {}
+
+    selected: list[Any] = [None] * len(keys)
+    remainder = index
+    for i in range(len(keys) - 1, -1, -1):
+        options = values[i]
+        size = len(options)
+        choice_index = remainder % size
+        remainder //= size
+        selected[i] = options[choice_index]
+    return dict(zip(keys, selected))
+
+
+def select_candidates(space: dict[str, list[Any]], max_count: int, method: str = "random", random_seed: int = 0) -> list[dict[str, Any]]:
+    total = candidate_count(space)
+    if total <= 0:
+        return []
+    limit = min(max(1, max_count), total)
+    if total <= limit or method == "grid":
+        return [candidate_at_index(space, idx) for idx in range(limit)]
+
+    rng = random.Random(random_seed)
+    indices = rng.sample(range(total), limit)
+    return [candidate_at_index(space, idx) for idx in indices]
 
 
 def candidates(space: dict[str, list[Any]]) -> list[dict[str, Any]]:

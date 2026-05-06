@@ -743,3 +743,33 @@
   - `ThemeRiskDashboard.vue` 市场概览新增 ThemeTrend 研究摘要，展示主线题材、拥挤/背离风险、热榜共振解释。
   - `DragonHeadPanel.vue` 龙头卡片新增研究解释，展示主线题材确认/降级口径和风险摘要。
   - 根项目仍只消费 QuantBoard 研究摘要，不承载回测、优化或交易模拟。
+
+## 2026-05-06 V12 平台化缺口补齐执行计划
+
+- 最新复盘结论：V12 主干 MVP 已实现并可运行，但仍未达到完整平台化最终态。
+- 本轮优先补齐三类硬缺口：
+  1. 后端策略拆分：`theme_rotation`、`leader_theme_confirmation`、`hotlist_theme_confluence` 需要在执行信号中体现独立入场、降级、过滤和解释规则，而不是只共用一套题材投影。
+  2. 优化扩展：ThemeTrend 搜索空间需要覆盖原方案的因子权重、风险阈值、生命周期阈值、股票暴露阈值和交易参数；`theme_confluence` 优化结果需要明确共振策略口径。
+  3. Dragon Board 热榜解释：题材/龙头已有摘要解释，热榜股票层还需要展示题材共振分、角色、噪声/过滤原因和 QuantBoard 不可用降级文案。
+- 执行约束：
+  - 继续保持 Dragon Board 根项目只消费 QuantBoard 研究摘要，不承载回测、优化或交易模拟。
+  - 修改行为前先补测试并确认红灯，再写实现。
+  - 验证后再更新状态，不再把 MVP 写成完整完成。
+
+## 2026-05-06 V12 平台化缺口补齐实施
+
+- 后端策略拆分：
+  - 新增 `test_theme_strategy_execution_signals_are_strategy_specific`，先确认当前缺少独立策略解释的红灯。
+  - `theme_rotation`、`leader_theme_confirmation`、`hotlist_theme_confluence` 在 execution signals 中区分：
+    - 题材轮动：主线/扩散/点火题材中的高暴露股票，解释 `theme_rotation`。
+    - 龙头确认：只让 `role=leader` 且题材生命周期有效的股票保持强候选，非龙头降为观察/退出风险并标记 `leader_required`。
+    - 热榜共振：增加 `themeConfluenceScore`，强共振标记 `hotlist_confluence`，弱暴露/噪声标记过滤原因。
+- 优化扩展：
+  - ThemeTrend 搜索空间从 8 个引擎阈值扩展为因子权重、风险阈值、生命周期阈值、股票暴露阈值和交易参数。
+  - `theme_confluence` 优化增加 `searchProfile=theme_confluence` 和 `confluence_weights` 参数分组元数据。
+  - 当前仍以 grid/random 同步搜索为主；真实 bayesian/tpe 搜索器接入留作后续深化，不再宣称已完整。
+- Dragon Board 热榜解释：
+  - `themeResearchSummary` 新增股票级热榜共振解释构建函数。
+  - `DragonBreathPanel` 热榜视图展示 ThemeTrend 共振摘要、股票共振分、题材角色、进入/过滤原因；QuantBoard 摘要不可用时不影响热榜情绪主流程。
+- 文档同步：
+  - `docs/theme-module/README.md`、`quant-board/docs/api-cli.md`、`quant-board/docs/AI_COLLABORATION.md` 更新为当前真实口径。

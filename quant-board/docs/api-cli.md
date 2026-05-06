@@ -1156,9 +1156,9 @@ win_rate: 0.52
   --no-wait
 ```
 
-### V12 拟新增 ThemeTrend CLI
+### V12 ThemeTrend CLI
 
-这些命令是 V12 目标合同，必须复用后端服务层，不直连 repository，不在 Dragon Board 根项目实现回测。
+这些命令已作为 V12 ThemeTrend 研究主链入口落地。命令必须复用后端服务层，不直连 repository，不在 Dragon Board 根项目实现回测。
 
 运行纯 ThemeTrend 回测：
 
@@ -1195,7 +1195,7 @@ win_rate: 0.52
 .\.venv\Scripts\python.exe -m backend.cli optimize-theme-trend `
   --dataset-id dragonboard_live `
   --snapshot-type half_hour `
-  --method bayesian `
+  --method random `
   --objective stability `
   --trials 36 `
   --seed 20260430
@@ -1207,7 +1207,7 @@ win_rate: 0.52
 .\.venv\Scripts\python.exe -m backend.cli optimize-theme-confluence `
   --dataset-id dragonboard_live `
   --snapshot-type half_hour `
-  --method bayesian `
+  --method random `
   --objective stability `
   --trials 36 `
   --seed 20260430
@@ -1217,7 +1217,7 @@ CLI 输出摘要至少包含：
 
 ```text
 run_id: bt_xxx|opt_xxx
-strategy_name: theme_trend_candidate|theme_confluence_candidate
+strategy_name: theme_rotation|leader_theme_confirmation|hotlist_theme_confluence
 config_hash: abc123
 quality_status: pass|warn|fail
 theme_coverage: 0.82

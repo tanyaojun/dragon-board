@@ -27,6 +27,19 @@ export interface ThemeResearchExplanation {
   leaderConfirmationText: string
   hotlistConfluenceText: string
   warnings: string[]
+  mainlineThemeNames: string[]
+  crowdedThemeNames: string[]
+}
+
+export interface HotlistThemeResearchItem {
+  code: string
+  name: string
+  themeName: string
+  themeRole: string
+  confluenceScore: number
+  noise: boolean
+  entryReason: string
+  filterReason: string
 }
 
 function formatThemeNames(themes: ThemeResearchThemeSummary[] | undefined, limit = 3): string {
@@ -44,6 +57,8 @@ export function buildThemeResearchExplanation(summary: ThemeResearchSummary | nu
       leaderConfirmationText: '龙头确认暂不使用研究摘要降级',
       hotlistConfluenceText: '热榜共振解释暂不可用',
       warnings: ['quantboard_research_unavailable'],
+      mainlineThemeNames: [],
+      crowdedThemeNames: [],
     }
   }
 
@@ -72,7 +87,55 @@ export function buildThemeResearchExplanation(summary: ThemeResearchSummary | nu
       ? '热榜候选需过滤拥挤、背离和噪声暴露'
       : '热榜候选可使用题材强度与生命周期做共振解释',
     warnings,
+    mainlineThemeNames: (summary.mainlineThemes || []).map((theme) => theme.themeName).filter(Boolean),
+    crowdedThemeNames: (summary.crowdingAlerts || []).map((theme) => theme.themeName).filter(Boolean),
   }
+}
+
+function toNumber(value: unknown): number {
+  const numeric = Number(value)
+  return Number.isFinite(numeric) ? numeric : 0
+}
+
+export function buildHotlistThemeResearchItems(
+  stocks: Array<Record<string, any>>,
+  explanation: ThemeResearchExplanation,
+  limit = 8,
+): HotlistThemeResearchItem[] {
+  if (!explanation.available) {
+    return []
+  }
+  const mainline = new Set(explanation.mainlineThemeNames)
+  const crowded = new Set(explanation.crowdedThemeNames)
+  return stocks.slice(0, limit).map((stock) => {
+    const primaryTheme = Array.isArray(stock.themes) ? stock.themes[0] : undefined
+    const themeName = String(stock.mainTheme || stock.themeName || primaryTheme?.name || '')
+    const role = String(stock.themeRole || stock.role || primaryTheme?.role || 'unknown')
+    const contribution = toNumber(stock.themeContribution ?? primaryTheme?.themeContribution)
+    const exposure = toNumber(
+      stock.themeExposureWeight ?? stock.exposureWeight ?? primaryTheme?.exposureWeight,
+    )
+    const mainlineHit = mainline.has(themeName)
+    const crowdedHit = crowded.has(themeName)
+    const noise = role === 'noise' || exposure < 35 || contribution <= 2 || crowdedHit
+    const confluenceScore = Math.round(Math.max(0, Math.min(100, exposure * 0.55 + contribution * 1.8 + (mainlineHit ? 22 : 0) - (crowdedHit ? 20 : 0))))
+    const entryReason = mainlineHit && !noise
+      ? `主线题材共振：${themeName} · 角色 ${role}`
+      : '未满足主线题材共振'
+    const filterReason = noise
+      ? (crowdedHit ? `拥挤/背离与噪声过滤：${themeName}` : `噪声或低暴露过滤：${themeName || '无题材'}`)
+      : ''
+    return {
+      code: String(stock.code || ''),
+      name: String(stock.name || stock.code || ''),
+      themeName,
+      themeRole: role,
+      confluenceScore,
+      noise,
+      entryReason,
+      filterReason,
+    }
+  })
 }
 
 export async function loadThemeResearchExplanation(): Promise<ThemeResearchExplanation> {

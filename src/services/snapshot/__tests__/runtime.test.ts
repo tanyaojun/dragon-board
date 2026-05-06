@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createSnapshotRecord } from '../identity'
-import { SnapshotRuntime } from '../runtime'
+import { SnapshotRuntime, buildSnapshotBackendIngestIdempotencyKey } from '../runtime'
 import { getExpectedSlots } from '../schedule'
 import type { SnapshotCaptureMode, SnapshotQueryOptions, SnapshotRecord, SnapshotType } from '../types'
 
@@ -341,6 +341,22 @@ describe('SnapshotRuntime', () => {
     expect(exists).toHaveBeenCalledWith(record.id)
     expect(sqliteWrite).not.toHaveBeenCalled()
     expect((runtime as any).snapshotProjectionWriter.saveBundle).not.toHaveBeenCalled()
+  })
+
+  it('builds stable backend ingest idempotency keys for the same snapshot slot', () => {
+    const first = createRecord('half_hour', '2026-05-06', '09:30')
+    const second: SnapshotRecord = {
+      ...first,
+      timestamp: first.timestamp + 1_000,
+      payload: {
+        ...first.payload,
+        hotlist: [{ code: '600999', rank: 1, price: 99 }],
+      },
+    }
+
+    expect(buildSnapshotBackendIngestIdempotencyKey(first)).toBe(
+      buildSnapshotBackendIngestIdempotencyKey(second),
+    )
   })
 
   it('collects pending scheduled slots by checking sqlite existence first', async () => {
