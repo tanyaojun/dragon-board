@@ -68,6 +68,21 @@
           <div class="phase-suggestion">{{ phaseSuggestion }}</div>
         </div>
 
+        <div class="research-card" :class="{ unavailable: !themeResearch.available }">
+          <div class="research-header">
+            <span class="research-title">ThemeTrend 研究摘要</span>
+            <button class="research-refresh" type="button" :disabled="researchLoading" @click="refreshResearchSummary">
+              {{ researchLoading ? '读取中' : '刷新' }}
+            </button>
+          </div>
+          <div class="research-status">{{ themeResearch.statusText }}</div>
+          <div class="research-lines">
+            <span>{{ themeResearch.mainlineText }}</span>
+            <span>{{ themeResearch.riskText }}</span>
+            <span>{{ themeResearch.hotlistConfluenceText }}</span>
+          </div>
+        </div>
+
         <!-- 市场数据网格 -->
         <div class="market-grid">
           <div class="market-item">
@@ -251,7 +266,7 @@
 
     <!-- 底部 -->
     <div class="panel-footer">
-      <span>数据来源: themeFacade + DragonBreath</span>
+      <span>数据来源: themeFacade + DragonBreath + QuantBoard Research</span>
       <span>{{ formatTime(lastUpdate) }}</span>
     </div>
   </div>
@@ -264,6 +279,11 @@ import { themeFacade } from '@/services/theme/ThemeFacade'
 import { usePanel } from '@/composables/usePanel'
 import { EMOTION_PHASE_BY_NAME } from '@/types/emotion'
 import type { ThemeFactorSnapshot, ThemeEvent, ThemeQualityFlag } from '@/services/theme/types'
+import {
+  buildThemeResearchExplanation,
+  loadThemeResearchExplanation,
+  type ThemeResearchExplanation,
+} from '@/services/theme/themeResearchSummary'
 
 // ========== 对外接口 ==========
 const props = defineProps<{
@@ -286,7 +306,9 @@ const { panelRef, panelStyle } = usePanel({
 // ========== 视图状态 ==========
 const view = ref<'overview' | 'layers' | 'alerts'>('overview')
 const loading = ref(false)
+const researchLoading = ref(false)
 const lastUpdate = ref(Date.now())
+const themeResearch = ref<ThemeResearchExplanation>(buildThemeResearchExplanation({ available: false, reason: 'not_loaded' }))
 
 // ========== 情绪呼吸数据 ==========
 const breathSentiment = computed(() => {
@@ -446,10 +468,20 @@ async function doRefresh() {
   loading.value = true
   try {
     themeFacade.refreshThemeFacadeState()
+    await refreshResearchSummary()
     lastUpdate.value = Date.now()
   } catch { /* 静默 */ }
   finally {
     setTimeout(() => { loading.value = false }, 400)
+  }
+}
+
+async function refreshResearchSummary() {
+  researchLoading.value = true
+  try {
+    themeResearch.value = await loadThemeResearchExplanation()
+  } finally {
+    researchLoading.value = false
   }
 }
 
@@ -801,6 +833,61 @@ watch(() => props.visible, (v) => { if (v) doRefresh() })
 .state-tag.outflow   { color: #3498db; background: rgba(52,152,219,0.1); }
 .state-tag.quick     { color: #9b59b6; background: rgba(155,89,182,0.1); }
 .state-tag.neutral   { color: #7f8c8d; background: rgba(127,140,141,0.1); }
+
+.research-card {
+  margin: 12px 0;
+  padding: 12px;
+  border: 1px solid rgba(77, 163, 255, 0.28);
+  border-radius: 10px;
+  background: rgba(77, 163, 255, 0.08);
+}
+
+.research-card.unavailable {
+  border-color: var(--border-color);
+  background: var(--bg-secondary);
+}
+
+.research-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.research-title {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.research-refresh {
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 11px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+
+.research-refresh:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.research-status {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.research-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-primary);
+}
 
 .theme-card-flags { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 10px; }
 

@@ -723,3 +723,23 @@
   - 新增 `ThemeTrendReport` / `ThemeReturnStats` 类型。
   - ThemeTrend 报告页展示生命周期收益、题材诊断、候选层、角色和拥挤触发交易摘要。
 - 本切片仍不代表 V12 Phase 5 完整完成；控制组多维归因、参数敏感度报告和 Dragon Board 面板解释仍待补齐。
+
+## 2026-05-06 V12 继续补齐：Golden、归因报告和 Dragon Board 解释
+
+- TS -> Python golden 严格对齐：
+  - 新增 `quant-board/tests/fixtures/theme_trend_ts_golden_v12.json`，固化 TS `ThemeFactorEngine` / `ThemeStockProjector` 运行口径。
+  - 新增 `test_theme_trend_python_matches_ts_runtime_golden_case`，校验 Python factors/exposures 的字段、排序、舍入、qualityFlags、role/contribution/reasons。
+  - Python `ThemeTrendPythonEngine` 新增 `themeContext` 输入路径，仅在 TS runtime golden 输入存在时启用，不改变正式 snapshot sector 回放路径。
+- 控制组归因和参数敏感度报告：
+  - `/api/reports/theme-trend/{run_id}` 增加 `controlGroupAttribution`：
+    - `rankTrendOnly`
+    - `themeOnly`
+    - `themeRankTrendConfluence`
+    - `leaderConfirmation`
+  - 优化报告增加 `parameterSensitivity`，展示 top 参数集、参数覆盖、top trial 主导值和按参数值聚合的平均分。
+  - 新增后端测试覆盖 confluence 报告归因与 optimization 报告参数敏感度。
+- Dragon Board 研究解释 UI：
+  - 新增 `src/services/theme/themeResearchSummary.ts`，把 QuantBoard `/api/research/theme-summary` 转成题材/龙头/热榜解释文案；QuantBoard 不可用时返回结构化降级文案。
+  - `ThemeRiskDashboard.vue` 市场概览新增 ThemeTrend 研究摘要，展示主线题材、拥挤/背离风险、热榜共振解释。
+  - `DragonHeadPanel.vue` 龙头卡片新增研究解释，展示主线题材确认/降级口径和风险摘要。
+  - 根项目仍只消费 QuantBoard 研究摘要，不承载回测、优化或交易模拟。

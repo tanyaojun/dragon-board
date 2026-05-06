@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from backend.analysis.theme_trend import (
     ThemeTrendConfig,
     ThemeTrendPythonEngine,
@@ -15,6 +18,46 @@ def _frame(snapshot_id: str, timestamp: int, stocks: list[dict], sectors: list[d
         "stocks": stocks,
         "sectors": sectors,
     }
+
+
+def test_theme_trend_python_matches_ts_runtime_golden_case() -> None:
+    fixture = json.loads(
+        (Path(__file__).parent / "fixtures" / "theme_trend_ts_golden_v12.json").read_text(encoding="utf-8")
+    )
+
+    result = ThemeTrendPythonEngine().replay(fixture["input"]["frames"], config=ThemeTrendConfig())
+
+    factor_fields = [
+        "themeId",
+        "themeName",
+        "heatScore",
+        "momentumScore",
+        "breadthScore",
+        "fundScore",
+        "leadershipScore",
+        "correlationScore",
+        "crowdingRisk",
+        "persistenceScore",
+        "rotationState",
+        "rank",
+        "qualityFlags",
+    ]
+    actual_factors = [{field: item.get(field) for field in factor_fields} for item in result["factors"]]
+    assert actual_factors == fixture["expected"]["factors"]
+
+    exposure_fields = [
+        "code",
+        "themeId",
+        "themeName",
+        "role",
+        "roleScore",
+        "exposureWeight",
+        "themeContribution",
+        "riskPenalty",
+        "reasons",
+    ]
+    actual_exposures = [{field: item.get(field) for field in exposure_fields} for item in result["exposures"]]
+    assert actual_exposures == fixture["expected"]["exposures"]
 
 
 def test_replay_outputs_mainline_theme_factor_for_single_frame() -> None:

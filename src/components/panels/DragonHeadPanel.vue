@@ -201,6 +201,11 @@
                   {{ reason }}
                 </span>
               </div>
+
+              <div class="research-explain">
+                <span>{{ themeResearch.leaderConfirmationText }}</span>
+                <span>{{ themeResearch.riskText }}</span>
+              </div>
             </div>
           </div>
         </template>
@@ -282,6 +287,11 @@ import type {
   LeaderTransition,
 } from '@/services/dragon/types'
 import { EventManager } from '@/utils/eventManager'
+import {
+  buildThemeResearchExplanation,
+  loadThemeResearchExplanation,
+  type ThemeResearchExplanation,
+} from '@/services/theme/themeResearchSummary'
 
 type ViewMode = 'list' | 'byLevel'
 type SortKey = 'score' | 'change' | 'turnover' | 'zlje' | 'continuousDays' | 'hotness'
@@ -307,6 +317,8 @@ interface PanelLeader {
   source: 'true' | 'height' | 'attention'
   sourceLabel: string
 }
+
+const themeResearch = ref<ThemeResearchExplanation>(buildThemeResearchExplanation({ available: false, reason: 'not_loaded' }))
 
 const ROLE_META: Record<LeaderRole, { label: string; icon: string; color: string }> = {
   MARKET_CORE: { label: '市场总龙头', icon: '👑', color: '#f6c453' },
@@ -771,6 +783,10 @@ function unbindGlobalListeners() {
   globalListenersBound = false
 }
 
+async function refreshThemeResearch() {
+  themeResearch.value = await loadThemeResearchExplanation()
+}
+
 watch(
   () => props.visible,
   (visible) => {
@@ -785,6 +801,7 @@ watch(
         outsideListenerTimer = null
       }, 0)
       void loadReview(false)
+      void refreshThemeResearch()
     } else {
       unbindGlobalListeners()
     }
@@ -815,6 +832,7 @@ onMounted(() => {
 
   if (props.visible) {
     void loadReview(false)
+    void refreshThemeResearch()
   }
 })
 
@@ -1404,7 +1422,8 @@ onUnmounted(() => {
 }
 
 .card-themes,
-.card-reasons {
+.card-reasons,
+.research-explain {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
@@ -1437,6 +1456,16 @@ onUnmounted(() => {
   background: rgba(46, 213, 115, 0.1);
   border: 1px solid rgba(46, 213, 115, 0.22);
   color: #69db7c;
+}
+
+.research-explain {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(77, 163, 255, 0.08);
+  border: 1px solid rgba(77, 163, 255, 0.18);
+  color: var(--text-secondary);
+  font-size: 11px;
 }
 
 .level-tab {

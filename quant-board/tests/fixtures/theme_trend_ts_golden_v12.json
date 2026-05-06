@@ -1,0 +1,169 @@
+{
+  "caseId": "theme_trend_ts_runtime_v12_001",
+  "source": "src/services/theme/ThemeFactorEngine.ts + ThemeStockProjector.ts",
+  "snapshotType": "half_hour",
+  "input": {
+    "frames": [
+      {
+        "snapshotId": "half_hour:2026-04-22:10:00",
+        "timestamp": 1713751200000,
+        "tradingDate": "2026-04-22",
+        "slotTime": "10:00",
+        "stocks": [
+          {
+            "code": "000001",
+            "name": "样本一",
+            "change": 10,
+            "volumeRatio": 2.8,
+            "leadStatus": "龙一",
+            "leadTimes": 2,
+            "fengdan": 60000,
+            "maxFengdan": 70000,
+            "continuousDays": 2,
+            "turnoverRate": 8,
+            "mainTheme": "人工智能",
+            "themeRole": "leader"
+          },
+          {
+            "code": "000002",
+            "name": "样本二",
+            "change": 5,
+            "volumeRatio": 1.8,
+            "mainNetInflow": 12000000,
+            "turnoverRate": 5,
+            "mainTheme": "人工智能",
+            "themeRole": "follower"
+          },
+          {
+            "code": "000003",
+            "name": "样本三",
+            "change": -1,
+            "volumeRatio": 0.6,
+            "mainTheme": "人工智能"
+          },
+          {
+            "code": "000004",
+            "name": "样本四",
+            "change": "NaN",
+            "volumeRatio": "Infinity",
+            "mainTheme": "电力"
+          }
+        ],
+        "themeContext": {
+          "themes": [
+            { "id": "AI", "name": "人工智能" },
+            { "id": "POWER", "name": "电力" }
+          ],
+          "themeStocks": {
+            "AI": ["000001", "000002", "000003"],
+            "POWER": ["000004"]
+          },
+          "stockThemes": {
+            "000001": ["AI"],
+            "000002": ["AI"],
+            "000003": ["AI"],
+            "000004": ["POWER"]
+          },
+          "jxbkBlocks": [
+            {
+              "code": "BKAI",
+              "name": "人工智能",
+              "strength": 4200,
+              "change": 3.8,
+              "mainNetInflow": 180000000,
+              "bigMoney300": 30000000,
+              "institutionBuy": 9000000,
+              "volumeRatio": 2.4,
+              "ztCount": 2
+            }
+          ],
+          "rotationAnalysis": {
+            "marketPhase": "rising",
+            "mainLines": [{ "themeId": "BKAI", "themeName": "人工智能", "persistentDays": 3 }],
+            "quickRotation": [],
+            "inflowThemes": [],
+            "outflowThemes": []
+          },
+          "correlations": {
+            "AI": {
+              "overallCorrelation": 0.72,
+              "stocks": {
+                "000001": { "role": "leader", "avgCorrelation": 0.8 },
+                "000002": { "role": "follower", "avgCorrelation": 0.55 }
+              }
+            }
+          }
+        }
+      }
+    ]
+  },
+  "expected": {
+    "factors": [
+      {
+        "themeId": "AI",
+        "themeName": "人工智能",
+        "heatScore": 84,
+        "momentumScore": 86,
+        "breadthScore": 59,
+        "fundScore": 60,
+        "leadershipScore": 54,
+        "correlationScore": 72,
+        "crowdingRisk": 33,
+        "persistenceScore": 75,
+        "rotationState": "mainline",
+        "rank": 1,
+        "qualityFlags": []
+      },
+      {
+        "themeId": "POWER",
+        "themeName": "电力",
+        "heatScore": 0,
+        "momentumScore": 0,
+        "breadthScore": 0,
+        "fundScore": 0,
+        "leadershipScore": 0,
+        "correlationScore": 0,
+        "crowdingRisk": 0,
+        "persistenceScore": 0,
+        "rotationState": "neutral",
+        "rank": 2,
+        "qualityFlags": ["low_sample", "jxbk_missing", "invalid_number"]
+      }
+    ],
+    "exposures": [
+      {
+        "code": "000001",
+        "themeId": "AI",
+        "themeName": "人工智能",
+        "role": "leader",
+        "roleScore": 92,
+        "exposureWeight": 1,
+        "themeContribution": 18,
+        "riskPenalty": 0,
+        "reasons": ["题材处于主线", "题材热度强", "板块联动较强", "个股是题材龙头"]
+      },
+      {
+        "code": "000002",
+        "themeId": "AI",
+        "themeName": "人工智能",
+        "role": "follower",
+        "roleScore": 56,
+        "exposureWeight": 0.62,
+        "themeContribution": 9.4,
+        "riskPenalty": 0,
+        "reasons": ["题材处于主线", "题材热度强", "板块联动较强"]
+      },
+      {
+        "code": "000003",
+        "themeId": "AI",
+        "themeName": "人工智能",
+        "role": "independent",
+        "roleScore": 34,
+        "exposureWeight": 0.38,
+        "themeContribution": 5.1,
+        "riskPenalty": 0,
+        "reasons": ["题材处于主线", "题材热度强", "板块联动较强"]
+      }
+    ]
+  }
+}

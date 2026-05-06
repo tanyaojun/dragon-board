@@ -2372,6 +2372,34 @@ def test_theme_confluence_backtest_api_keeps_ranktrend_visible(tmp_path: Path) -
     assert "rankTrendControl" in body["result"]["themeTrend"]
 
 
+def test_theme_confluence_report_includes_control_attribution(tmp_path: Path) -> None:
+    client = TestClient(app)
+    bundle = make_bundle(tmp_path)
+    imported = client.post(
+        "/api/datasets/import",
+        json={"sourceType": "json_bundle", "sourcePath": str(bundle), "name": "theme-confluence-report", "snapshotTypes": ["half_hour"]},
+    )
+    assert imported.status_code == 200, imported.text
+    dataset = imported.json()
+
+    response = client.post(
+        "/api/backtests/theme-confluence",
+        json={"datasetId": dataset["id"], "snapshotType": "half_hour", "strategyName": "hotlist_theme_confluence"},
+    )
+    assert response.status_code == 200, response.text
+    run_id = response.json()["runId"]
+
+    report = client.get(f"/api/reports/theme-trend/{run_id}")
+    assert report.status_code == 200, report.text
+    body = report.json()
+
+    assert body["controlGroupAttribution"]["rankTrendOnly"]["signalCount"] >= 0
+    assert body["controlGroupAttribution"]["themeOnly"]["signalCount"] >= 0
+    assert body["controlGroupAttribution"]["themeRankTrendConfluence"]["signalCount"] >= 0
+    assert body["controlGroupAttribution"]["leaderConfirmation"]["signalCount"] >= 0
+    assert "conclusion" in body["controlGroupAttribution"]
+
+
 def test_theme_confluence_optimization_api_returns_run(tmp_path: Path) -> None:
     client = TestClient(app)
     bundle = make_bundle(tmp_path)
@@ -2399,6 +2427,40 @@ def test_theme_confluence_optimization_api_returns_run(tmp_path: Path) -> None:
     assert body["runId"]
     assert body["strategyName"] == "hotlist_theme_confluence"
     assert body["analysisMode"] == "theme_confluence"
+
+
+def test_theme_optimization_report_includes_parameter_sensitivity(tmp_path: Path) -> None:
+    client = TestClient(app)
+    bundle = make_bundle(tmp_path)
+    imported = client.post(
+        "/api/datasets/import",
+        json={"sourceType": "json_bundle", "sourcePath": str(bundle), "name": "theme-opt-report", "snapshotTypes": ["half_hour"]},
+    )
+    assert imported.status_code == 200, imported.text
+    dataset = imported.json()
+
+    response = client.post(
+        "/api/optimizations/theme-trend",
+        json={
+            "datasetId": dataset["id"],
+            "snapshotType": "half_hour",
+            "strategyName": "theme_rotation",
+            "method": "grid",
+            "trials": 4,
+            "parameterGrid": {"crowdingBlockThreshold": [70, 80], "mainlineHeatThreshold": [72, 78]},
+        },
+    )
+    assert response.status_code == 200, response.text
+    run_id = response.json()["runId"]
+
+    report = client.get(f"/api/reports/theme-trend/{run_id}")
+    assert report.status_code == 200, report.text
+    body = report.json()
+
+    sensitivity = body["parameterSensitivity"]
+    assert sensitivity["trialCount"] >= 1
+    assert {item["parameter"] for item in sensitivity["parameters"]} >= {"crowdingBlockThreshold", "mainlineHeatThreshold"}
+    assert sensitivity["topParameterSet"]
 
 
 def test_theme_optimization_api_returns_running_theme_run(tmp_path: Path) -> None:

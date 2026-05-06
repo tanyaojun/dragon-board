@@ -1047,6 +1047,8 @@ def get_theme_trend_report(run_id: str, db: Session | None = Depends(get_db)) ->
         trial_list = raw.get("trialList") or []
         best_trial = trial_list[0] if trial_list else {}
         factors = best_trial.get("engineFactors") or []
+        parameter_sensitivity = _build_theme_parameter_sensitivity(trial_list)
+        control_attribution = _empty_theme_control_attribution()
         strategy_name = opt_run.strategy_name
         dataset_id = opt_run.dataset_id or ""
     else:
@@ -1061,6 +1063,8 @@ def get_theme_trend_report(run_id: str, db: Session | None = Depends(get_db)) ->
         if not trades:
             trades = bt_service.repo.get_backtest_trades(run_id)
         execution_signals = result.get("executionSignals") or []
+        parameter_sensitivity = _build_theme_parameter_sensitivity([])
+        control_attribution = _build_theme_control_attribution(result, trades, execution_signals)
         strategy_name = bt_run.strategy_name
         dataset_id = bt_run.dataset_id
 
@@ -1089,7 +1093,120 @@ def get_theme_trend_report(run_id: str, db: Session | None = Depends(get_db)) ->
         "recentTransitions": transitions[:20],
         "themeCount": len({f.get("themeId") for f in factors if f.get("themeId")}),
         "totalFactorCount": len(factors),
+        "controlGroupAttribution": control_attribution,
+        "parameterSensitivity": parameter_sensitivity,
         **trade_report,
+    }
+
+
+def _empty_theme_control_attribution() -> dict[str, Any]:
+    base = {"signalCount": 0, "tradeCount": 0, "winRate": 0, "avgNetReturn": 0, "totalProfit": 0}
+    return {
+        "rankTrendOnly": dict(base),
+        "themeOnly": dict(base),
+        "themeRankTrendConfluence": dict(base),
+        "leaderConfirmation": dict(base),
+        "conclusion": "optimization_run_no_trade_control_groups",
+    }
+
+
+def _summarize_theme_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    count = len(rows)
+    total_profit = round(sum(float(row.get("profit") or 0) for row in rows), 2)
+    total_return = round(sum(float(row.get("netReturn") or 0) for row in rows), 4)
+    wins = sum(1 for row in rows if float(row.get("netReturn") or 0) > 0)
+    return {
+        "tradeCount": count,
+        "winRate": round(wins / count, 4) if count else 0,
+        "avgNetReturn": round(total_return / count, 4) if count else 0,
+        "totalProfit": total_profit,
+    }
+
+
+def _build_theme_control_attribution(
+    result: dict[str, Any],
+    trades: list[dict[str, Any]],
+    execution_signals: list[dict[str, Any]],
+) -> dict[str, Any]:
+    theme_trend = result.get("themeTrend") if isinstance(result.get("themeTrend"), dict) else {}
+    rank_control = theme_trend.get("rankTrendControl") if isinstance(theme_trend.get("rankTrendControl"), dict) else {}
+    signals = result.get("signals") if isinstance(result.get("signals"), list) else []
+    confluence_count = len(execution_signals)
+    leader_signals = [
+        signal for signal in execution_signals
+        if str(signal.get("themeRole") or "").lower() == "leader"
+        or "leader" in str(signal.get("themeReasons") or "").lower()
+        or "龙头" in str(signal.get("themeReasons") or "")
+    ]
+    leader_trades = [
+        trade for trade in trades
+        if str(trade.get("explanation") or "").find("龙头") >= 0
+        or str(trade.get("candidateTier") or "") == "A_MAIN"
+    ]
+    trade_summary = _summarize_theme_rows(trades)
+    leader_trade_summary = _summarize_theme_rows(leader_trades)
+    return {
+        "rankTrendOnly": {
+            "signalCount": int(rank_control.get("signalCount") or 0),
+            "tradeCount": int(rank_control.get("tradeCount") or 0),
+            "totalReturn": rank_control.get("totalReturn"),
+            "maxDrawdown": rank_control.get("maxDrawdown"),
+            "winRate": rank_control.get("winRate") or 0,
+        },
+        "themeOnly": {
+            "signalCount": len(signals),
+            **trade_summary,
+        },
+        "themeRankTrendConfluence": {
+            "signalCount": confluence_count,
+            **trade_summary,
+        },
+        "leaderConfirmation": {
+            "signalCount": len(leader_signals),
+            **leader_trade_summary,
+        },
+        "conclusion": (
+            "theme_confluence_available"
+            if confluence_count or trades
+            else "theme_research_only_no_executable_control_group"
+        ),
+    }
+
+
+def _build_theme_parameter_sensitivity(trials: list[dict[str, Any]]) -> dict[str, Any]:
+    completed = [trial for trial in trials if isinstance(trial, dict) and isinstance(trial.get("params"), dict)]
+    if not completed:
+        return {"trialCount": 0, "parameters": [], "topParameterSet": {}, "warnings": ["no_completed_trials"]}
+    completed = sorted(completed, key=lambda trial: float(trial.get("score") or 0), reverse=True)
+    top_count = max(1, min(5, len(completed)))
+    top_trials = completed[:top_count]
+    keys = sorted({key for trial in completed for key in (trial.get("params") or {}).keys()})
+    rows: list[dict[str, Any]] = []
+    for key in keys:
+        values = [trial.get("params", {}).get(key) for trial in completed]
+        top_values = [trial.get("params", {}).get(key) for trial in top_trials]
+        score_by_value: dict[str, list[float]] = {}
+        for trial in completed:
+            value_key = str((trial.get("params") or {}).get(key))
+            score_by_value.setdefault(value_key, []).append(float(trial.get("score") or 0))
+        best_value, best_scores = max(
+            score_by_value.items(),
+            key=lambda item: (sum(item[1]) / len(item[1]) if item[1] else float("-inf")),
+        )
+        rows.append({
+            "parameter": key,
+            "bestValue": top_trials[0].get("params", {}).get(key),
+            "dominantTopValues": sorted({str(value) for value in top_values}),
+            "testedValueCount": len({str(value) for value in values}),
+            "bestAverageValue": best_value,
+            "bestAverageScore": round(sum(best_scores) / len(best_scores), 4) if best_scores else 0,
+        })
+    return {
+        "trialCount": len(completed),
+        "topTrialCount": top_count,
+        "topParameterSet": completed[0].get("params") or {},
+        "topScore": completed[0].get("score"),
+        "parameters": rows,
     }
 
 
