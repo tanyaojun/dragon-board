@@ -71,7 +71,7 @@ backend/
 QuantBoard API/CLI -> SQLite snapshot hot primary -> Parquet snapshot archive -> DuckDB read fallback -> R2/S3 object backup
 QuantBoard API/CLI -> SQLite research hot DB -> Parquet research archive -> DuckDB read fallback
 Dragon Board theme mapping -> SQLite themeDATA primary
-Supabase remains a lightweight compatibility backup for snapshot facts
+Supabase keeps only the recent dragonboard_live disaster-recovery window
 ```
 
 规则：
@@ -84,12 +84,13 @@ Supabase remains a lightweight compatibility backup for snapshot facts
 - DuckDB 只在后端读取 Parquet，不提供任意 SQL API，也不暴露给 Vue 前端。
 - R2/S3 兼容对象存储保存 Parquet 和 manifest 的异地备份。
 - 旧 `quant_board.db` 只作为 legacy source 保留，用于 `migrate-legacy-db` 拆分迁移；它不再是默认主库。
-- Supabase 不暴露给 Vue 前端，只由后端使用 `SUPABASE_URL` 和 `SUPABASE_SECRET_KEY` 访问；它是轻量兼容备份，不是大体积历史主线。
+- Supabase 不暴露给 Vue 前端，只由后端使用 `SUPABASE_URL` 和 `SUPABASE_SECRET_KEY` 访问；它只保留 `dragonboard_live` 最近 10 个交易日灾备窗口，不是大体积历史主线。
 - 正常快照写入先提交 SQLite 快照库，再把同一份快照事实镜像到 Supabase。
 - 快照库写入成功后会登记轻量 `sync_outbox`，即使 Supabase 当次不可用，也能通过 `push-backup` 按事实表实时组包补偿；outbox 只覆盖快照事实和数据集 bundle。
 - SQLite 初始化或查询失败时，读路径会回退到 Supabase 备份记录。
 - SQLite 不可用但 Supabase 可写时，正式快照 ingest 会切到 Supabase 并返回 `status=backup_only`；尚未纳入 failover 的写接口必须明确返回不可用，不能伪装成功。
-- `POST /api/sync/push-backup` 用于把已有 SQLite 历史数据主动推送到 Supabase。
+- `POST /api/sync/push-backup` 默认只把已有 SQLite 最近保留窗口内的数据主动推送到 Supabase；全历史推送必须显式使用 `full_history=true` 或 CLI `--full-history`。
+- `POST /api/sync/prune-backup` 用于按最近 10 个交易日裁剪 Supabase 云端备份库，只删除云端 `snapshot_*` 和对应 `sync_outbox`，不删除本地 SQLite 或 Parquet。
 - `POST /api/sync/push-outbox` 和后台自动同步只消费到期 outbox，不做全量历史扫描。
 - `POST /api/sync/smoke-backup` 用于真实 Supabase REST 写读删联调，只写入并清理云端 `sync_outbox` 临时探针。
 - `POST /api/snapshots/ingest` 是 Dragon Board 正式快照进入 QuantBoard 后端的主入口。

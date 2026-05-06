@@ -14,6 +14,7 @@ from backend.data.auto_sync import auto_sync_runner, run_outbox_auto_sync_once
 from backend.data.archive.auto_archive import archive_auto_runner, run_archive_auto_once
 from backend.data.archive.object_store import get_object_backup_store
 from backend.data.archive.service import ArchiveService
+from backend.data.backup_retention import backup_retention_runner, run_backup_retention_once
 from backend.data.backup_sync import BackupSyncService
 from backend.data.database import ResearchSessionLocal, get_db, init_db, primary_status
 from backend.data.dataset_service import DatasetService
@@ -58,12 +59,14 @@ def on_startup() -> None:
     init_theme_db()
     auto_sync_runner.start()
     archive_auto_runner.start()
+    backup_retention_runner.start()
 
 
 @app.on_event("shutdown")
 async def on_shutdown() -> None:
     await auto_sync_runner.stop()
     await archive_auto_runner.stop()
+    await backup_retention_runner.stop()
 
 
 @app.get("/api/health")
@@ -84,6 +87,7 @@ def health_check(deep: bool = False, db: Session | None = Depends(get_db)) -> di
             "mode": "sqlite_primary_supabase_backup",
             "outbox": Repository(db, enable_backup=False).outbox_status() if db is not None else None,
             "autoSync": auto_sync_runner.status(),
+            "backupRetention": backup_retention_runner.status(),
         },
         "archive": {
             "dir": str(get_settings().archive_dir),
@@ -100,8 +104,8 @@ def health_check(deep: bool = False, db: Session | None = Depends(get_db)) -> di
 
 
 @app.post("/api/sync/push-backup")
-def push_backup(db: Session | None = Depends(get_db)) -> dict[str, Any]:
-    return BackupSyncService(db).push_all_to_backup()
+def push_backup(full_history: bool = False, db: Session | None = Depends(get_db)) -> dict[str, Any]:
+    return BackupSyncService(db).push_all_to_backup(full_history=full_history)
 
 
 @app.post("/api/sync/pull-backup")
@@ -120,6 +124,11 @@ def push_outbox(limit: int | None = None, db: Session | None = Depends(get_db)) 
 @app.post("/api/sync/auto-once")
 def run_auto_sync_once(limit: int | None = None) -> dict[str, Any]:
     return run_outbox_auto_sync_once(limit)
+
+
+@app.post("/api/sync/prune-backup")
+def prune_backup(dry_run: bool = False) -> dict[str, Any]:
+    return run_backup_retention_once(dry_run=dry_run)
 
 
 @app.post("/api/storage/archive/auto-once")

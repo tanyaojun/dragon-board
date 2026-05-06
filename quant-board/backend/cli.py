@@ -9,6 +9,7 @@ from typing import Any
 
 from backend.data.database import ResearchSessionLocal, SessionLocal, init_db
 from backend.data.backup_sync import BackupSyncService
+from backend.data.backup_retention import run_backup_retention_once
 from backend.data.archive.auto_archive import run_archive_auto_once
 from backend.data.archive.object_store import get_object_backup_store
 from backend.data.archive.service import ArchiveService
@@ -91,10 +92,10 @@ def cmd_list_datasets(_: argparse.Namespace) -> None:
         print_json(DatasetService(session).list_datasets())
 
 
-def cmd_push_backup(_: argparse.Namespace) -> None:
+def cmd_push_backup(args: argparse.Namespace) -> None:
     init_db()
     with SessionLocal() as session:
-        print_json(BackupSyncService(session).push_all_to_backup())
+        print_json(BackupSyncService(session).push_all_to_backup(full_history=args.full_history))
 
 
 def cmd_push_outbox(args: argparse.Namespace) -> None:
@@ -116,6 +117,10 @@ def cmd_smoke_backup(_: argparse.Namespace) -> None:
         print_json({"ok": False, "configured": False, "error": "supabase backup is not configured"})
         return
     print_json(backup.smoke_test())
+
+
+def cmd_prune_backup(args: argparse.Namespace) -> None:
+    print_json(run_backup_retention_once(dry_run=args.dry_run))
 
 
 def cmd_migrate_snapshots(args: argparse.Namespace) -> None:
@@ -513,6 +518,7 @@ def build_parser() -> argparse.ArgumentParser:
     list_cmd.set_defaults(func=cmd_list_datasets)
 
     push_backup_cmd = sub.add_parser("push-backup", help="Push SQLite records to Supabase backup")
+    push_backup_cmd.add_argument("--full-history", action="store_true")
     push_backup_cmd.set_defaults(func=cmd_push_backup)
 
     push_outbox_cmd = sub.add_parser("push-outbox", help="Push due sync_outbox rows to Supabase backup")
@@ -524,6 +530,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     smoke_backup_cmd = sub.add_parser("smoke-backup", help="Run Supabase backup write/read/delete smoke test")
     smoke_backup_cmd.set_defaults(func=cmd_smoke_backup)
+
+    prune_backup_cmd = sub.add_parser("prune-backup", help="Prune Supabase backup to retention window")
+    prune_backup_cmd.add_argument("--dry-run", action="store_true")
+    prune_backup_cmd.set_defaults(func=cmd_prune_backup)
 
     migrate_cmd = sub.add_parser("migrate-snapshots", help="Import historical DragonBoard snapshot JSON into SQLite")
     migrate_cmd.add_argument("--path", required=True)

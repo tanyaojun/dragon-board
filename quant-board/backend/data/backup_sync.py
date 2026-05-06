@@ -7,10 +7,18 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from backend.data.models import Dataset
+from backend.data.models import Dataset, SnapshotFrameModel
 from backend.data.repository import Repository
 from backend.data.supabase_backup import SupabaseBackupClient, get_backup_client
+from backend.settings import get_settings
 from backend.utils import json_dumps
+
+
+class _RetentionPolicy:
+    def __init__(self, *, enabled: bool, dataset_ids: list[str], keep_trading_days: int) -> None:
+        self.enabled = enabled
+        self.dataset_ids = dataset_ids
+        self.keep_trading_days = keep_trading_days
 
 
 class BackupSyncService:
@@ -23,16 +31,28 @@ class BackupSyncService:
             return {"configured": False, "connected": False, "last_error": None}
         return self.backup.health()
 
-    def push_all_to_backup(self) -> dict[str, Any]:
+    def push_all_to_backup(self, *, full_history: bool = False) -> dict[str, Any]:
         if not self.session:
             return {"ok": False, "direction": "push", "error": "primary database is unavailable"}
         if not self.backup:
             return {"ok": False, "direction": "push", "error": "supabase backup is not configured"}
 
         repo = Repository(self.session, self.backup, enable_backup=False)
+        settings = get_settings()
+        retention_policy = _RetentionPolicy(
+            enabled=not full_history,
+            dataset_ids=_split_dataset_ids(settings.supabase_retention_dataset_ids),
+            keep_trading_days=settings.supabase_retention_keep_trading_days,
+        )
         result: dict[str, Any] = {
             "ok": True,
             "direction": "push",
+            "retention": {
+                "enabled": retention_policy.enabled,
+                "fullHistory": full_history,
+                "keepTradingDays": retention_policy.keep_trading_days,
+                "datasetIds": retention_policy.dataset_ids,
+            },
             "outbox": {"scanned": 0, "succeeded": 0, "failed": 0, "skipped": 0, "items": []},
             "datasets": {"scanned": 0, "succeeded": 0, "failed": 0, "skipped": 0},
             "snapshotBundles": {"scanned": 0, "succeeded": 0, "failed": 0, "skipped": 0},
@@ -40,10 +60,14 @@ class BackupSyncService:
             "errors": [],
         }
         try:
-            result["outbox"] = self.push_outbox_to_backup(repo)
+            result["outbox"] = self.push_outbox_to_backup(repo, retention_policy=retention_policy)
             for dataset in self.session.scalars(select(Dataset).order_by(Dataset.created_at.asc())):
                 result["datasets"]["scanned"] += 1
-                bundle = repo.dump_dataset_bundle(dataset.id)
+                start_date = self._retention_start_date(dataset.id, retention_policy)
+                if retention_policy.enabled and not self._is_retention_dataset(dataset.id, retention_policy):
+                    result["datasets"]["skipped"] += 1
+                    continue
+                bundle = repo.dump_dataset_bundle(dataset.id, start_date=start_date)
                 if not bundle:
                     result["datasets"]["skipped"] += 1
                     continue
@@ -70,7 +94,13 @@ class BackupSyncService:
             result["ok"] = False
         return result
 
-    def push_outbox_to_backup(self, repo: Repository, limit: int = 50) -> dict[str, Any]:
+    def push_outbox_to_backup(
+        self,
+        repo: Repository,
+        limit: int = 50,
+        *,
+        retention_policy: "_RetentionPolicy | None" = None,
+    ) -> dict[str, Any]:
         result: dict[str, Any] = {"scanned": 0, "succeeded": 0, "failed": 0, "skipped": 0, "items": []}
         for row in repo.list_pending_outbox(limit=limit):
             result["scanned"] += 1
@@ -81,7 +111,14 @@ class BackupSyncService:
                 "dataset_id": row.dataset_id,
                 "snapshot_id": row.snapshot_id,
             }
-            success, error = self._push_outbox_row(repo, row)
+            start_date = self._retention_start_date(row.dataset_id or "", retention_policy)
+            if retention_policy and retention_policy.enabled and not self._is_retention_dataset(row.dataset_id or "", retention_policy):
+                result["skipped"] += 1
+                item["status"] = "skipped"
+                item["error"] = "dataset is outside Supabase retention scope"
+                result["items"].append(item)
+                continue
+            success, error = self._push_outbox_row(repo, row, start_date=start_date)
             if success:
                 repo.mark_outbox_succeeded(row.idempotency_key)
                 result["succeeded"] += 1
@@ -98,13 +135,19 @@ class BackupSyncService:
             result["items"].append(item)
         return result
 
-    def _push_outbox_row(self, repo: Repository, row: Any) -> tuple[bool, str | None]:
+    def _push_outbox_row(self, repo: Repository, row: Any, *, start_date: str | None = None) -> tuple[bool, str | None]:
         if row.op_type in {"snapshot_ingest", "dataset_bundle"}:
-            return self._push_dataset_outbox_row(repo, row)
+            return self._push_dataset_outbox_row(repo, row, start_date=start_date)
         return False, "unsupported outbox op_type"
 
-    def _push_dataset_outbox_row(self, repo: Repository, row: Any) -> tuple[bool, str | None]:
-        full_bundle = repo.dump_dataset_bundle(row.dataset_id or "")
+    def _push_dataset_outbox_row(
+        self,
+        repo: Repository,
+        row: Any,
+        *,
+        start_date: str | None = None,
+    ) -> tuple[bool, str | None]:
+        full_bundle = repo.dump_dataset_bundle(row.dataset_id or "", start_date=start_date)
         if full_bundle:
             dataset, records, frames, stock_rows, sector_rows = full_bundle
         else:
@@ -129,6 +172,19 @@ class BackupSyncService:
             records, frames, stock_rows, sector_rows = [], [], [], []
         ok = self.backup.mirror_dataset_bundle(dataset, records, frames, stock_rows, sector_rows)
         return ok, None if ok else self.backup.last_error
+
+    def _retention_start_date(self, dataset_id: str, policy: "_RetentionPolicy | None") -> str | None:
+        if not policy or not policy.enabled:
+            return None
+        if not self._is_retention_dataset(dataset_id, policy):
+            return None
+        if not self.session:
+            return None
+        return _local_retention_start_date(self.session, dataset_id, policy.keep_trading_days)
+
+    @staticmethod
+    def _is_retention_dataset(dataset_id: str, policy: "_RetentionPolicy") -> bool:
+        return dataset_id in policy.dataset_ids
 
     def pull_backup_to_primary(self) -> dict[str, Any]:
         if not self.session:
@@ -205,3 +261,25 @@ def _parse_datetime(value: Any) -> datetime:
         except ValueError:
             pass
     return datetime.utcnow()
+
+
+def _split_dataset_ids(value: str) -> list[str]:
+    return [item.strip() for item in (value or "").split(",") if item.strip()] or ["dragonboard_live"]
+
+
+def _local_retention_start_date(session: Session, dataset_id: str, keep_trading_days: int) -> str | None:
+    if keep_trading_days <= 0:
+        return None
+    dates = [
+        str(row[0])
+        for row in session.execute(
+            select(SnapshotFrameModel.trading_date)
+            .where(SnapshotFrameModel.dataset_id == dataset_id)
+            .group_by(SnapshotFrameModel.trading_date)
+            .order_by(SnapshotFrameModel.trading_date.desc())
+        ).all()
+        if row[0]
+    ]
+    if len(dates) > keep_trading_days:
+        return dates[keep_trading_days - 1]
+    return None

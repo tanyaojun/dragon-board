@@ -375,6 +375,119 @@ class SupabaseBackupClient:
             "dataset_id,row_id",
         )
 
+    def list_snapshot_trading_dates(self, dataset_id: str) -> list[str]:
+        rows = self._select_all(
+            "snapshot_frames",
+            filters={"dataset_id": f"eq.{dataset_id}"},
+            page_size=1000,
+            order="trading_date.asc",
+        )
+        return sorted({str(row.get("trading_date") or "") for row in rows if row.get("trading_date")})
+
+    def prune_snapshot_facts_before(
+        self,
+        dataset_id: str,
+        cutoff_trading_date: str,
+        *,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        filters = {"dataset_id": f"eq.{dataset_id}", "trading_date": f"lt.{cutoff_trading_date}"}
+        outbox_filters = {"dataset_id": f"eq.{dataset_id}", "snapshot_id": f"like.*:{cutoff_trading_date[:4]}-*"}
+        if dry_run:
+            return {
+                "ok": True,
+                "dryRun": True,
+                "deletedRows": {"records": 0, "frames": 0, "stockRows": 0, "sectorRows": 0, "outbox": 0},
+            }
+        old_snapshot_ids = sorted(
+            {
+                str(row.get("snapshot_id"))
+                for row in self._select_all(
+                    "snapshot_frames",
+                    filters=filters,
+                    page_size=1000,
+                    order="timestamp.asc",
+                )
+                if row.get("snapshot_id")
+            }
+        )
+        deleted_rows: dict[str, int] = {}
+        for table, key in (
+            ("snapshot_sector_rows", "sectorRows"),
+            ("snapshot_stock_rows", "stockRows"),
+            ("snapshot_frames", "frames"),
+            ("snapshot_records", "records"),
+        ):
+            ok, payload = self._request_json(
+                "DELETE",
+                f"/rest/v1/{table}",
+                params=filters,
+                prefer="return=representation",
+            )
+            if not ok:
+                return {"ok": False, "error": {"code": "backup_prune_delete_failed", "table": table, "message": self.last_error}}
+            deleted_rows[key] = len(payload) if isinstance(payload, list) else 0
+        outbox_deleted = 0
+        for snapshot_id in old_snapshot_ids:
+            ok, payload = self._request_json(
+                "DELETE",
+                "/rest/v1/sync_outbox",
+                params={"dataset_id": f"eq.{dataset_id}", "snapshot_id": f"eq.{snapshot_id}"},
+                prefer="return=representation",
+            )
+            if not ok:
+                return {"ok": False, "error": {"code": "backup_prune_delete_failed", "table": "sync_outbox", "message": self.last_error}}
+            outbox_deleted += len(payload) if isinstance(payload, list) else 0
+        deleted_rows["outbox"] = outbox_deleted
+        return {"ok": True, "dryRun": False, "deletedRows": deleted_rows}
+
+    def refresh_dataset_summary(self, dataset_id: str) -> dict[str, Any]:
+        records = self._select_all(
+            "snapshot_records",
+            filters={"dataset_id": f"eq.{dataset_id}"},
+            page_size=1000,
+            order="timestamp.asc",
+        )
+        frames = self._select_all(
+            "snapshot_frames",
+            filters={"dataset_id": f"eq.{dataset_id}"},
+            page_size=1000,
+            order="timestamp.asc",
+        )
+        stock_rows = self._select_all(
+            "snapshot_stock_rows",
+            filters={"dataset_id": f"eq.{dataset_id}"},
+            page_size=1000,
+            order="timestamp.asc",
+        )
+        sector_rows = self._select_all(
+            "snapshot_sector_rows",
+            filters={"dataset_id": f"eq.{dataset_id}"},
+            page_size=1000,
+            order="timestamp.asc",
+        )
+        dates = sorted({str(row.get("trading_date") or "") for row in frames if row.get("trading_date")})
+        snapshot_types = sorted({str(row.get("type") or "") for row in frames if row.get("type")})
+        row = {
+            "snapshot_count": len(records),
+            "frame_count": len(frames),
+            "stock_row_count": len(stock_rows),
+            "sector_row_count": len(sector_rows),
+            "start_date": dates[0] if dates else None,
+            "end_date": dates[-1] if dates else None,
+            "snapshot_types_json": json_dumps(snapshot_types),
+        }
+        ok, _ = self._request_json(
+            "PATCH",
+            "/rest/v1/datasets",
+            params={"id": f"eq.{dataset_id}"},
+            payload=row,
+            prefer="return=minimal",
+        )
+        if not ok:
+            return {"ok": False, "error": {"code": "backup_dataset_summary_refresh_failed", "message": self.last_error}}
+        return {"ok": True, "datasetId": dataset_id, **row}
+
     def list_rows(self, record_type: str, source: str | None = None, page_size: int = 500) -> list[dict[str, Any]]:
         if not self.enabled:
             return []

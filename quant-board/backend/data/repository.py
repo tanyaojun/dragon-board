@@ -1549,42 +1549,51 @@ class Repository:
     def dump_dataset_bundle(
         self,
         dataset_id: str,
+        *,
+        start_date: str | None = None,
+        end_date: str | None = None,
     ) -> tuple[Dataset, list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]] | None:
         if self.session is None:
             return None
         dataset = self.session.get(Dataset, dataset_id)
         if not dataset:
             return None
+        record_query = select(SnapshotRecordModel).where(SnapshotRecordModel.dataset_id == dataset_id)
+        frame_query = select(SnapshotFrameModel).where(SnapshotFrameModel.dataset_id == dataset_id)
+        stock_query = select(SnapshotStockRowModel).where(SnapshotStockRowModel.dataset_id == dataset_id)
+        sector_query = select(SnapshotSectorRowModel).where(SnapshotSectorRowModel.dataset_id == dataset_id)
+        if start_date:
+            record_query = record_query.where(SnapshotRecordModel.trading_date >= start_date)
+            frame_query = frame_query.where(SnapshotFrameModel.trading_date >= start_date)
+            stock_query = stock_query.where(SnapshotStockRowModel.trading_date >= start_date)
+            sector_query = sector_query.where(SnapshotSectorRowModel.trading_date >= start_date)
+        if end_date:
+            record_query = record_query.where(SnapshotRecordModel.trading_date <= end_date)
+            frame_query = frame_query.where(SnapshotFrameModel.trading_date <= end_date)
+            stock_query = stock_query.where(SnapshotStockRowModel.trading_date <= end_date)
+            sector_query = sector_query.where(SnapshotSectorRowModel.trading_date <= end_date)
         records = [
             self.record_to_dict(row)
             for row in self.session.scalars(
-                select(SnapshotRecordModel)
-                .where(SnapshotRecordModel.dataset_id == dataset_id)
-                .order_by(SnapshotRecordModel.timestamp.asc())
+                record_query.order_by(SnapshotRecordModel.timestamp.asc())
             )
         ]
         frames = [
             self.local_frame_to_bundle_dict(row)
             for row in self.session.scalars(
-                select(SnapshotFrameModel)
-                .where(SnapshotFrameModel.dataset_id == dataset_id)
-                .order_by(SnapshotFrameModel.timestamp.asc())
+                frame_query.order_by(SnapshotFrameModel.timestamp.asc())
             )
         ]
         stock_rows = [
             self.local_stock_to_bundle_dict(row)
             for row in self.session.scalars(
-                select(SnapshotStockRowModel)
-                .where(SnapshotStockRowModel.dataset_id == dataset_id)
-                .order_by(SnapshotStockRowModel.timestamp.asc(), SnapshotStockRowModel.rank.asc())
+                stock_query.order_by(SnapshotStockRowModel.timestamp.asc(), SnapshotStockRowModel.rank.asc())
             )
         ]
         sector_rows = [
             self.local_sector_to_bundle_dict(row)
             for row in self.session.scalars(
-                select(SnapshotSectorRowModel)
-                .where(SnapshotSectorRowModel.dataset_id == dataset_id)
-                .order_by(SnapshotSectorRowModel.timestamp.asc(), SnapshotSectorRowModel.rank.asc())
+                sector_query.order_by(SnapshotSectorRowModel.timestamp.asc(), SnapshotSectorRowModel.rank.asc())
             )
         ]
         return dataset, records, frames, stock_rows, sector_rows

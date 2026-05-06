@@ -138,6 +138,8 @@ python -m backend.cli pull-archive-backup --archive-id <archive_id> --apply
 
 把本地 SQLite 快照库中的数据集和快照事实推送到 Supabase 备份库。回测、优化、Golden 和报告属于 research SQLite，不进入 Supabase Free 版备份目标。
 
+默认只补推 Supabase 保留窗口内的数据，避免 500MB 免费库重新写入全历史。需要一次性全量补推时显式传入 `full_history=true`，或 CLI 使用 `--full-history`。
+
 ```powershell
 Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/sync/push-backup
 ```
@@ -162,7 +164,15 @@ Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/sync/push-backup
 }
 ```
 
-`push-backup` 会先消费 `sync_outbox` 中到期的 `pending/retry` 任务，再扫描 SQLite 快照库已有的数据集和快照事实做补推。失败项会进入 `errors`，结构为 `{type,key,error}`。
+`push-backup` 会先消费 `sync_outbox` 中到期的 `pending/retry` 任务，再按 Supabase 保留窗口补推 SQLite 快照库已有的数据集和快照事实。失败项会进入 `errors`，结构为 `{type,key,error}`。
+
+### `POST /api/sync/prune-backup`
+
+按 Supabase 保留策略清理云端备份库。默认只处理 `dragonboard_live`，保留最近 10 个交易日。该接口只删除 Supabase 云端行，不删除本地 SQLite。
+
+```powershell
+Invoke-RestMethod -Method Post "http://127.0.0.1:8000/api/sync/prune-backup?dry_run=true"
+```
 
 实现细节：Supabase REST 写入使用分片 upsert，分片同时受行数和请求体大小限制。outbox 只保存业务键和重试状态，不保存完整 records/frames/rows；补推时按 `dataset_id/snapshot_id` 从事实表实时组包。
 
@@ -1285,6 +1295,8 @@ cd d:\dragon-board\quant-board
 .\.venv\Scripts\python.exe -m backend.cli smoke-backup
 .\.venv\Scripts\python.exe -m backend.cli push-outbox --limit 50
 .\.venv\Scripts\python.exe -m backend.cli push-backup
+.\.venv\Scripts\python.exe -m backend.cli push-backup --full-history
+.\.venv\Scripts\python.exe -m backend.cli prune-backup --dry-run
 .\.venv\Scripts\python.exe -m backend.cli pull-backup
 ```
 

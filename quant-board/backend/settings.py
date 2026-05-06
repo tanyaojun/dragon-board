@@ -80,6 +80,11 @@ class Settings(BaseModel):
     backup_auto_sync_interval_seconds: float = Field(default=60.0)
     backup_auto_sync_initial_delay_seconds: float = Field(default=10.0)
     backup_auto_sync_batch_size: int = Field(default=50)
+    supabase_retention_enabled: bool = Field(default=False)
+    supabase_retention_keep_trading_days: int = Field(default=10)
+    supabase_retention_dataset_ids: str = Field(default="dragonboard_live")
+    supabase_retention_interval_seconds: float = Field(default=86400.0)
+    supabase_retention_initial_delay_seconds: float = Field(default=120.0)
     archive_retention_trading_days: int = Field(default=90)
     archive_parquet_compression: str = Field(default="zstd")
     archive_auto_enabled: bool = Field(default=False)
@@ -157,6 +162,29 @@ class Settings(BaseModel):
         self.backup_auto_sync_batch_size = max(
             1,
             _env_int("QUANT_BOARD_AUTO_SYNC_BATCH_SIZE", self.backup_auto_sync_batch_size),
+        )
+        self.supabase_retention_enabled = _env_bool(
+            "QUANT_BOARD_SUPABASE_RETENTION_ENABLED",
+            self.supabase_retention_enabled,
+        )
+        self.supabase_retention_keep_trading_days = max(
+            1,
+            _env_int("QUANT_BOARD_SUPABASE_RETENTION_KEEP_TRADING_DAYS", self.supabase_retention_keep_trading_days),
+        )
+        self.supabase_retention_dataset_ids = os.environ.get(
+            "QUANT_BOARD_SUPABASE_RETENTION_DATASET_IDS",
+            self.supabase_retention_dataset_ids,
+        )
+        self.supabase_retention_interval_seconds = max(
+            60.0,
+            _env_float("QUANT_BOARD_SUPABASE_RETENTION_INTERVAL_SECONDS", self.supabase_retention_interval_seconds),
+        )
+        self.supabase_retention_initial_delay_seconds = max(
+            0.0,
+            _env_float(
+                "QUANT_BOARD_SUPABASE_RETENTION_INITIAL_DELAY_SECONDS",
+                self.supabase_retention_initial_delay_seconds,
+            ),
         )
         archive_dir = os.environ.get("QUANT_BOARD_ARCHIVE_DIR")
         if archive_dir:

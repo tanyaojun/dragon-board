@@ -412,6 +412,7 @@ def test_import_backtest_optimize_and_golden(tmp_path: Path) -> None:
     assert health.status_code == 200
     assert health.json()["default_snapshot_type"] == "half_hour"
     assert "autoSync" in health.json()["database"]
+    assert "backupRetention" in health.json()["database"]
 
     imported = client.post(
         "/api/datasets/import",
@@ -1812,9 +1813,15 @@ def test_cli_exposes_sync_and_migration_commands(tmp_path: Path, monkeypatch: py
     assert build_dataset_args.source_dataset_id == "dragonboard_live"
     assert build_dataset_args.dry_run is True
     assert parser.parse_args(["push-backup"]).func.__name__ == "cmd_push_backup"
+    push_backup_args = parser.parse_args(["push-backup", "--full-history"])
+    assert push_backup_args.func.__name__ == "cmd_push_backup"
+    assert push_backup_args.full_history is True
     assert parser.parse_args(["push-outbox", "--limit", "7"]).limit == 7
     assert parser.parse_args(["pull-backup"]).func.__name__ == "cmd_pull_backup"
     assert parser.parse_args(["smoke-backup"]).func.__name__ == "cmd_smoke_backup"
+    prune_backup_args = parser.parse_args(["prune-backup", "--dry-run"])
+    assert prune_backup_args.func.__name__ == "cmd_prune_backup"
+    assert prune_backup_args.dry_run is True
     compare_args = parser.parse_args(["compare-backtests", "--run-ids", "bt_1", "bt_2", "--metrics", "totalReturn,winRate"])
     assert compare_args.func.__name__ == "cmd_compare_backtests"
     assert compare_args.run_ids == ["bt_1", "bt_2"]

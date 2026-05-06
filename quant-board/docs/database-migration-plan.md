@@ -9,6 +9,7 @@
 - DuckDB 是后端只读归档查询引擎，用于在 SQLite 明细已清理时读取 Parquet，不提供任意 SQL API，也不暴露给 Vue 前端直连。
 - R2/S3 兼容对象存储是新的大体积异地备份主线，只上传 Parquet、`manifest.json` 和归档索引。
 - Supabase 降级为后端专用轻量兼容备份库，只同步 `datasets`、快照事实表和轻量 `sync_outbox`，不再扩展为大明细或研究结果云端备份主线。
+- Supabase 免费库只保留 `dragonboard_live` 最近 10 个交易日快照事实；完整历史以 SQLite、Parquet、DuckDB 和 R2/S3 对象备份为主线。
 - 正常路径是先写 SQLite 快照事实库，提交成功后把同一份快照事实镜像到 Supabase。
 - SQLite 不可用时，`POST /api/snapshots/ingest` 已可在 Supabase 配置可写时临时落备份库并返回 `status=backup_only`；其他关键写入仍按各服务层能力逐步纳入 M3。
 - 读路径优先 SQLite；仅当 SQLite 不可用或本地缺失目标记录时，才尝试 Supabase 回退。
@@ -229,7 +230,7 @@ R2/S3 凭据只允许后端读取，不得进入 `VITE_*` 或 Vue 前端构建�
 
 行为规则：
 
-- 先消费到期 outbox，再做 SQLite 全量扫描补推。
+- 先消费到期 outbox，再按 Supabase retention 窗口补推 SQLite 快照事实；只有显式 `full_history=true` 或 CLI `--full-history` 才允许全量扫描补推。
 - outbox 成功后标记 `done`；失败后更新 `retry_count`、`last_error` 和 `next_retry_at`。
 - 不支持的 outbox 类型计入 `skipped`，不能静默丢弃。
 - Supabase REST upsert 使用 `return=minimal`，并按行数和请求体大小双限制分片；研究库 JSON 不进入 Supabase。
@@ -494,6 +495,11 @@ Dragon Board 前端正式分析入口 `listSnapshotFrameBundles` 必须调用该
 | `QUANT_BOARD_AUTO_SYNC_INTERVAL_SECONDS` | 自动 outbox 推送间隔，默认 `60`，最小 `5` |
 | `QUANT_BOARD_AUTO_SYNC_INITIAL_DELAY_SECONDS` | API 启动后首次自动同步延迟，默认 `10` |
 | `QUANT_BOARD_AUTO_SYNC_BATCH_SIZE` | 单轮自动同步最多处理多少条 outbox，默认 `50` |
+| `QUANT_BOARD_SUPABASE_RETENTION_ENABLED` | 是否自动清理 Supabase 旧快照，默认 `false` |
+| `QUANT_BOARD_SUPABASE_RETENTION_KEEP_TRADING_DAYS` | Supabase 保留交易日数，默认 `10` |
+| `QUANT_BOARD_SUPABASE_RETENTION_DATASET_IDS` | Supabase retention 作用数据集，默认 `dragonboard_live` |
+| `QUANT_BOARD_SUPABASE_RETENTION_INTERVAL_SECONDS` | Supabase retention 自动清理间隔，默认 `86400` |
+| `QUANT_BOARD_SUPABASE_RETENTION_INITIAL_DELAY_SECONDS` | API 启动后首次 retention 延迟，默认 `120` |
 
 自动同步默认关闭。打开后只消费到期 outbox，不做全量 `push-backup`，避免服务启动时把大量历史数据误推到 Supabase。全量补推仍必须手动调用 `push-backup` 或 CLI。
 
