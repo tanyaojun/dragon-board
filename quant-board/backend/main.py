@@ -15,7 +15,7 @@ from backend.data.archive.auto_archive import archive_auto_runner, run_archive_a
 from backend.data.archive.object_store import get_object_backup_store
 from backend.data.archive.service import ArchiveService
 from backend.data.backup_sync import BackupSyncService
-from backend.data.database import get_db, init_db, primary_status
+from backend.data.database import ResearchSessionLocal, get_db, init_db, primary_status
 from backend.data.dataset_service import DatasetService
 from backend.data.importers import ImporterError, frame_from_record, sector_rows_from_record, stock_rows_from_record
 from backend.data.migration import SnapshotMigrationService
@@ -486,24 +486,26 @@ def archive_snapshots(payload: dict[str, Any], db: Session | None = Depends(get_
 def preview_research_archive(payload: dict[str, Any], db: Session | None = Depends(get_db)) -> dict[str, Any]:
     if db is None:
         raise HTTPException(status_code=503, detail="primary database is unavailable")
-    return ArchiveService(db).archive_research(
-        run_id=payload.get("runId") or payload.get("run_id"),
-        older_than_days=int(payload.get("olderThanDays") or payload.get("older_than_days") or 30),
-        keep_latest_per_group=int(payload.get("keepLatestPerGroup") or payload.get("keep_latest_per_group") or 10),
-        dry_run=True,
-    )
+    with ResearchSessionLocal() as research_session:
+        return ArchiveService(db, research_session=research_session).archive_research(
+            run_id=payload.get("runId") or payload.get("run_id"),
+            older_than_days=int(payload.get("olderThanDays") or payload.get("older_than_days") or 30),
+            keep_latest_per_group=int(payload.get("keepLatestPerGroup") or payload.get("keep_latest_per_group") or 10),
+            dry_run=True,
+        )
 
 
 @app.post("/api/storage/archive/research")
 def archive_research(payload: dict[str, Any], db: Session | None = Depends(get_db)) -> dict[str, Any]:
     if db is None:
         raise HTTPException(status_code=503, detail="primary database is unavailable")
-    return ArchiveService(db).archive_research(
-        run_id=payload.get("runId") or payload.get("run_id"),
-        older_than_days=int(payload.get("olderThanDays") or payload.get("older_than_days") or 30),
-        keep_latest_per_group=int(payload.get("keepLatestPerGroup") or payload.get("keep_latest_per_group") or 10),
-        apply=True,
-    )
+    with ResearchSessionLocal() as research_session:
+        return ArchiveService(db, research_session=research_session).archive_research(
+            run_id=payload.get("runId") or payload.get("run_id"),
+            older_than_days=int(payload.get("olderThanDays") or payload.get("older_than_days") or 30),
+            keep_latest_per_group=int(payload.get("keepLatestPerGroup") or payload.get("keep_latest_per_group") or 10),
+            apply=True,
+        )
 
 
 @app.get("/api/storage/archive/manifests")
@@ -519,8 +521,7 @@ def verify_archive(payload: dict[str, Any], db: Session | None = Depends(get_db)
     if db is None:
         raise HTTPException(status_code=503, detail="primary database is unavailable")
     archive_id = str(payload.get("archiveId") or payload.get("archive_id") or "")
-    manifest = ArchiveService(db).get_manifest(archive_id)
-    return {"ok": bool(manifest), "archiveId": archive_id, "status": manifest.status if manifest else "missing"}
+    return ArchiveService(db).verify_archive(archive_id)
 
 
 @app.post("/api/storage/archive/restore")

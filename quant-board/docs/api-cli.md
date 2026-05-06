@@ -82,6 +82,16 @@ python -m backend.cli archive-research --older-than-days 30 --keep-latest-per-gr
 
 列出归档 manifest。可选 `scope=snapshots|research`。
 
+### `POST /api/storage/archive/verify`
+
+按 `archiveId` 严格校验本地归档。校验内容包括 DB manifest、本地 `manifest.json`、必要 Parquet 文件、sha256、字节数和行数。失败返回结构化错误，例如 `archive_file_missing`、`archive_sha256_mismatch`、`archive_row_count_mismatch`。
+
+CLI 等价命令：
+
+```powershell
+python -m backend.cli verify-archive --archive-id <archive_id>
+```
+
 ### `POST /api/storage/archive/restore`
 
 按 `archiveId` 从本地 Parquet 恢复 SQLite 明细。
@@ -100,6 +110,27 @@ python -m backend.cli archive-research --older-than-days 30 --keep-latest-per-gr
 ### `POST /api/storage/archive/smoke-object-backup`
 
 R2/S3 对象备份探针。写入、读回并删除一个明确测试 object key。不会写 SQLite 业务数据。
+
+### `POST /api/storage/archive/push-backup`
+
+把本地 verified 归档上传到 R2/S3。只上传允许的归档文件：`*.parquet`、`manifest.json` 和 `archive_index.jsonl`。上传成功后 manifest 更新为 `status=uploaded` 并记录 `object_key`；上传失败不影响本地 verified 状态。
+
+CLI 等价命令：
+
+```powershell
+python -m backend.cli push-archive-backup --limit 50
+```
+
+### `POST /api/storage/archive/pull-backup`
+
+按 `archiveId` 从 R2/S3 拉回归档。`dryRun=true` 只列出远端 key；`apply=true` 会下载到 staging，校验 sha256 成功后发布到本地归档目录。
+
+CLI 等价命令：
+
+```powershell
+python -m backend.cli pull-archive-backup --archive-id <archive_id> --dry-run
+python -m backend.cli pull-archive-backup --archive-id <archive_id> --apply
+```
 
 读取口径：`GET /api/snapshots/stock-rows`、`GET /api/snapshots/sector-rows`、`GET /api/backtests/{run_id}/trades`、`/equity`、`/signals` 在 SQLite 明细缺失且存在 verified/uploaded manifest 时，可通过 DuckDB 读取 Parquet，并返回 `source=parquet_archive` 或混合来源。前端不得传入 SQL。
 

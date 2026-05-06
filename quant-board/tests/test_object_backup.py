@@ -112,6 +112,19 @@ def _patch_store(monkeypatch, client):
     return store
 
 
+def _remove_archive_files(local_path: Path) -> None:
+    for name in (
+        "records.parquet",
+        "frames.parquet",
+        "stock_rows.parquet",
+        "sector_rows.parquet",
+        "manifest.json",
+    ):
+        path = local_path / name
+        if path.is_file():
+            path.unlink()
+
+
 # ── Tests ──────────────────────────────────────────────────────
 
 def test_object_store_smoke_uses_single_explicit_key(tmp_path: Path) -> None:
@@ -146,6 +159,45 @@ def test_object_store_push_archive_uploads_parquet_and_manifest(tmp_path: Path) 
     assert names == {"manifest.json", "stock_rows.parquet"}
     assert ("bucket", "quant-board/snapshots_ds_hh_2026-01-01/stock_rows.parquet") in client.objects
     assert ("bucket", "quant-board/snapshots_ds_hh_2026-01-01/manifest.json") in client.objects
+    assert ("bucket", "quant-board/snapshots_ds_hh_2026-01-01/extra.txt") not in client.objects
+
+
+def test_object_store_push_archive_uploads_archive_index(tmp_path: Path) -> None:
+    from backend.data.archive.object_store import ObjectBackupStore
+
+    archive_dir = tmp_path / "snapshots_ds_hh_2026-01-01"
+    archive_dir.mkdir()
+    (archive_dir / "manifest.json").write_text("{}", encoding="utf-8")
+    (archive_dir / "stock_rows.parquet").write_bytes(b"parquet data")
+    (tmp_path / "archive_index.jsonl").write_text('{"archiveId":"snapshots_ds_hh_2026-01-01"}\n', encoding="utf-8")
+
+    client = FakeS3Client()
+    store = ObjectBackupStore(bucket="bucket", prefix="quant-board", client=client)
+
+    result = store.push_archive(archive_dir)
+
+    assert result["ok"] is True
+    assert ("bucket", "quant-board/archive_index.jsonl") in client.objects
+
+
+def test_push_archive_backup_uploads_current_archive_index_entry(tmp_path: Path, monkeypatch) -> None:
+    from backend.data.archive.service import ArchiveService
+
+    init_db()
+    client = FakeS3Client()
+    with SessionLocal() as session:
+        _purge_manifests(session)
+        _seed_snapshot(session)
+        result = _create_archive(session, tmp_path)
+        archive_id = result["archiveId"]
+        _patch_store(monkeypatch, client)
+
+        push_result = ArchiveService(session, archive_dir=tmp_path).push_archive_backup(limit=1)
+
+        assert push_result["ok"] is True
+        remote_index = client.objects.get(("test-bucket", "quant-board/archive_index.jsonl"))
+        assert remote_index is not None
+        assert archive_id in remote_index.decode("utf-8")
 
 
 def test_object_store_pull_archive_downloads_and_verifies(tmp_path: Path) -> None:
@@ -203,8 +255,8 @@ def test_push_archive_rolls_back_on_partial_upload_failure(tmp_path: Path) -> No
     archive_dir = tmp_path / "snapshots_test_2026-01-01"
     archive_dir.mkdir()
     (archive_dir / "manifest.json").write_text("{}", encoding="utf-8")
-    (archive_dir / "file_a.parquet").write_bytes(b"a")
-    (archive_dir / "file_b.parquet").write_bytes(b"b")
+    (archive_dir / "stock_rows.parquet").write_bytes(b"a")
+    (archive_dir / "sector_rows.parquet").write_bytes(b"b")
 
     client = FailingPutS3Client(fail_on_call=2)
     store = ObjectBackupStore(bucket="bucket", prefix="quant-board", client=client)
@@ -217,6 +269,53 @@ def test_push_archive_rolls_back_on_partial_upload_failure(tmp_path: Path) -> No
     assert "simulated S3 upload failure" in result["error"]["message"]
     # The first file should have been cleaned up
     assert client.objects == {}
+
+
+def test_push_archive_backup_failure_keeps_manifest_verified(tmp_path: Path, monkeypatch) -> None:
+    from backend.data.archive.service import ArchiveService
+
+    init_db()
+    client = FailingPutS3Client(fail_on_call=1)
+    with SessionLocal() as session:
+        _purge_manifests(session)
+        _seed_snapshot(session)
+        result = _create_archive(session, tmp_path)
+        assert result["ok"] is True
+        archive_id = result["archiveId"]
+        _patch_store(monkeypatch, client)
+
+        push_result = ArchiveService(session, archive_dir=tmp_path).push_archive_backup(limit=1)
+
+        assert push_result["ok"] is False
+        manifest = session.scalar(select(ArchiveManifestModel).where(ArchiveManifestModel.archive_id == archive_id))
+        assert manifest is not None
+        assert manifest.status == "verified"
+        assert manifest.object_key is None
+        assert manifest.last_error is not None
+
+
+def test_pull_archive_backup_dry_run_lists_remote_keys_without_local_writes(tmp_path: Path, monkeypatch) -> None:
+    from backend.data.archive.service import ArchiveService
+
+    init_db()
+    client = FakeS3Client()
+    with SessionLocal() as session:
+        _purge_manifests(session)
+        _seed_snapshot(session)
+        result = _create_archive(session, tmp_path)
+        archive_id = result["archiveId"]
+        _patch_store(monkeypatch, client)
+        pushed = ArchiveService(session, archive_dir=tmp_path).push_archive_backup(limit=1)
+        assert pushed["ok"] is True
+
+        local_path = Path(result["localPath"])
+        _remove_archive_files(local_path)
+        dry_run = ArchiveService(session, archive_dir=tmp_path).pull_archive_backup(archive_id, dry_run=True)
+
+        assert dry_run["ok"] is True
+        assert dry_run["dryRun"] is True
+        assert dry_run["remoteKeys"]
+        assert not (local_path / "manifest.json").exists()
 
 
 def test_push_archive_rejects_dir_without_parquet_or_manifest(tmp_path: Path) -> None:
@@ -291,11 +390,9 @@ def test_pull_archive_backup_detects_sha256_mismatch(tmp_path: Path, monkeypatch
         for (b, key), _body in original.items():
             client.objects[(b, key)] = b"tampered content"
 
-        # Delete local files to force pull from R2
-        import shutil
+        # Delete local archive files to force pull from R2.
         local_path = Path(result["localPath"])
-        if local_path.exists():
-            shutil.rmtree(str(local_path), ignore_errors=True)
+        _remove_archive_files(local_path)
 
         # Pull should detect sha256 mismatch
         pull_result = ArchiveService(session).pull_archive_backup(archive_id, apply=True)
@@ -338,10 +435,9 @@ def test_push_pull_archive_backup_e2e(tmp_path: Path, monkeypatch) -> None:
         assert manifest.object_key is not None
         assert manifest.object_key.startswith("quant-board/")
 
-        # Delete local files
-        import shutil
-        shutil.rmtree(str(local_path), ignore_errors=True)
-        assert not local_path.exists()
+        # Delete local archive files.
+        _remove_archive_files(local_path)
+        assert not any(path.is_file() for path in local_path.iterdir())
 
         # Pull from fake R2
         pull_result = ArchiveService(session, archive_dir=tmp_path).pull_archive_backup(archive_id, apply=True)

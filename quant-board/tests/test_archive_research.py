@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import delete, select
 
 from backend.data.database import ResearchSessionLocal, SessionLocal, init_db
-from backend.data.models import ArchiveManifestModel, BacktestEquityCurve, BacktestRun, BacktestSignal, BacktestTrade
+from backend.data.models import ArchiveManifestModel, BacktestEquityCurve, BacktestQualityReport, BacktestRun, BacktestSignal, BacktestTrade
 
 
 def _seed_backtest_run(snapshot_session, research_session, run_id: str) -> None:
@@ -137,3 +138,111 @@ def test_research_archive_preserves_run_on_restore(tmp_path: Path) -> None:
         assert result2["ok"] is True
         run = result2["runs"][0]
         assert run.get("deduped") is True
+
+
+def test_verify_archive_valid_research_checks_files_and_counts(tmp_path: Path) -> None:
+    from backend.data.archive.service import ArchiveService
+
+    init_db()
+    with SessionLocal() as snap_session, ResearchSessionLocal() as research_session:
+        _seed_backtest_run(snap_session, research_session, "bt_verify")
+        service = ArchiveService(snap_session, research_session=research_session, archive_dir=tmp_path)
+        result = service.archive_research(
+            run_id="bt_verify",
+            older_than_days=0,
+            keep_latest_per_group=0,
+            apply=True,
+        )
+        archive_id = result["runs"][0]["archiveId"]
+
+        verified = service.verify_archive(archive_id)
+
+        assert verified["ok"] is True
+        assert verified["archiveId"] == archive_id
+        assert verified["status"] == "verified"
+        assert verified["checkedFiles"] >= 4
+        assert verified["rowCounts"]["trades"] == 1
+
+
+def test_archive_research_keeps_latest_per_group_and_preserves_quality_report(tmp_path: Path) -> None:
+    from backend.data.archive.service import ArchiveService
+
+    init_db()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    run_ids = ["bt_group_old", "bt_group_mid", "bt_group_new"]
+    with SessionLocal() as snap_session, ResearchSessionLocal() as research_session:
+        for run_id in run_ids:
+            _cleanup_research(snap_session, research_session, run_id)
+        for index, run_id in enumerate(run_ids):
+            research_session.add(
+                BacktestRun(
+                    id=run_id,
+                    dataset_id="research_ds",
+                    strategy_name="rank_trend_candidate",
+                    strategy_version="v1",
+                    snapshot_type="half_hour",
+                    config_hash="same-config",
+                    random_seed=7,
+                    status="completed",
+                    created_at=now - timedelta(days=40 - index),
+                )
+            )
+            research_session.add(BacktestTrade(backtest_run_id=run_id, code="000001", name="平安银行", side="buy"))
+            research_session.add(BacktestQualityReport(backtest_run_id=run_id, passed=True, severity="pass"))
+        research_session.commit()
+
+        result = ArchiveService(snap_session, research_session=research_session, archive_dir=tmp_path).archive_research(
+            older_than_days=30,
+            keep_latest_per_group=1,
+            apply=True,
+        )
+
+        archived_ids = {run["archiveId"].replace("research_", "") for run in result["runs"]}
+        assert "bt_group_new" not in archived_ids
+        assert {"bt_group_old", "bt_group_mid"}.issubset(archived_ids)
+        assert research_session.scalar(select(BacktestTrade).where(BacktestTrade.backtest_run_id == "bt_group_new")) is not None
+        assert research_session.scalar(select(BacktestTrade).where(BacktestTrade.backtest_run_id == "bt_group_old")) is None
+        assert research_session.scalar(select(BacktestQualityReport).where(BacktestQualityReport.backtest_run_id == "bt_group_old")) is not None
+
+
+def test_archive_research_keeps_latest_per_each_group(tmp_path: Path) -> None:
+    from backend.data.archive.service import ArchiveService
+
+    init_db()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    cases = [
+        ("bt_ga_old", "config-a", now - timedelta(days=45)),
+        ("bt_ga_new", "config-a", now - timedelta(days=40)),
+        ("bt_gb_old", "config-b", now - timedelta(days=45)),
+        ("bt_gb_new", "config-b", now - timedelta(days=39)),
+    ]
+    with SessionLocal() as snap_session, ResearchSessionLocal() as research_session:
+        for run_id, _, _ in cases:
+            _cleanup_research(snap_session, research_session, run_id)
+        for run_id, config_hash, created_at in cases:
+            research_session.add(
+                BacktestRun(
+                    id=run_id,
+                    dataset_id="research_ds",
+                    strategy_name="rank_trend_candidate",
+                    strategy_version="v1",
+                    snapshot_type="half_hour",
+                    config_hash=config_hash,
+                    random_seed=7,
+                    status="completed",
+                    created_at=created_at,
+                )
+            )
+            research_session.add(BacktestTrade(backtest_run_id=run_id, code="000001", name="平安银行", side="buy"))
+        research_session.commit()
+
+        result = ArchiveService(snap_session, research_session=research_session, archive_dir=tmp_path).archive_research(
+            older_than_days=30,
+            keep_latest_per_group=1,
+            apply=True,
+        )
+
+        archived_ids = {run["archiveId"].replace("research_", "") for run in result["runs"]}
+        assert {"bt_ga_old", "bt_gb_old"}.issubset(archived_ids)
+        assert "bt_ga_new" not in archived_ids
+        assert "bt_gb_new" not in archived_ids

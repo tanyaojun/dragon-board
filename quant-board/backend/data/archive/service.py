@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -9,8 +8,8 @@ from typing import Any
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
-from backend.data.archive.duckdb_query import DuckDBArchiveQuery
-from backend.data.archive.manifest import ARCHIVE_SCHEMA_VERSION, read_manifest, research_archive_id, snapshot_archive_id, write_manifest
+from backend.data.archive.duckdb_query import ArchiveQueryError, DuckDBArchiveQuery
+from backend.data.archive.manifest import ARCHIVE_SCHEMA_VERSION, read_manifest, research_archive_id, sha256_file, snapshot_archive_id, write_manifest
 from backend.data.archive.object_store import get_object_backup_store
 from backend.data.archive.parquet_store import ParquetStore
 from backend.data.models import (
@@ -25,6 +24,42 @@ from backend.data.models import (
     SnapshotStockRowModel,
 )
 from backend.settings import get_settings
+
+
+ALLOWED_ARCHIVE_FILENAMES = {
+    "records.parquet",
+    "frames.parquet",
+    "stock_rows.parquet",
+    "sector_rows.parquet",
+    "trades.parquet",
+    "equity_curve.parquet",
+    "signals.parquet",
+    "manifest.json",
+    "archive_index.jsonl",
+}
+
+
+def _remove_known_archive_files(directory: Path) -> list[str]:
+    removed: list[str] = []
+    for name in ALLOWED_ARCHIVE_FILENAMES:
+        path = directory / name
+        if path.is_file():
+            path.unlink()
+            removed.append(str(path))
+    return removed
+
+
+def _publish_known_archive_files(source_dir: Path, target_dir: Path) -> list[str]:
+    target_dir.mkdir(parents=True, exist_ok=True)
+    _remove_known_archive_files(target_dir)
+    published: list[str] = []
+    for name in ALLOWED_ARCHIVE_FILENAMES:
+        src = source_dir / name
+        if src.is_file():
+            dest = target_dir / name
+            src.replace(dest)
+            published.append(str(dest))
+    return published
 
 
 class ArchiveService:
@@ -89,7 +124,7 @@ class ArchiveService:
             if new_hashes == old_hashes:
                 return {**base, "deduped": True, "status": existing.status}
             if local_path.exists():
-                shutil.rmtree(str(local_path), ignore_errors=True)
+                _remove_known_archive_files(local_path)
             return {
                 **base,
                 "ok": False,
@@ -124,6 +159,10 @@ class ArchiveService:
             row_counts=base["rowCounts"],
             files=files,
         )
+        verified = self.verify_archive(archive_id)
+        if not verified.get("ok"):
+            self._mark_manifest_failed(archive_id, "verify_failed", verified.get("error"))
+            return {**base, "ok": False, "status": "verify_failed", "files": files, "error": verified.get("error")}
         deleted = self._delete_snapshot_detail_rows(dataset_id, snapshot_type, dates)
         return {
             **base,
@@ -165,10 +204,22 @@ class ArchiveService:
         return {"ok": all(item.get("ok") for item in results), "dryRun": dry_run, "rowCounts": totals, "runs": results}
 
     def query_archived_stock_rows(self, **filters: Any) -> list[dict[str, Any]]:
-        return self._query_archived_snapshot_table("stock_rows", **filters)
+        result = self.query_archived_stock_rows_result(**filters)
+        if not result.get("ok"):
+            raise ArchiveQueryError(result["error"]["code"], result["error"].get("message", "archive query failed"), **{k: v for k, v in result["error"].items() if k not in {"code", "message"}})
+        return result["rows"]
 
     def query_archived_sector_rows(self, **filters: Any) -> list[dict[str, Any]]:
-        return self._query_archived_snapshot_table("sector_rows", **filters)
+        result = self.query_archived_sector_rows_result(**filters)
+        if not result.get("ok"):
+            raise ArchiveQueryError(result["error"]["code"], result["error"].get("message", "archive query failed"), **{k: v for k, v in result["error"].items() if k not in {"code", "message"}})
+        return result["rows"]
+
+    def query_archived_stock_rows_result(self, **filters: Any) -> dict[str, Any]:
+        return self._query_archived_snapshot_table_result("stock_rows", **filters)
+
+    def query_archived_sector_rows_result(self, **filters: Any) -> dict[str, Any]:
+        return self._query_archived_snapshot_table_result("sector_rows", **filters)
 
     def query_archived_research_table(
         self,
@@ -185,7 +236,7 @@ class ArchiveService:
         path = Path(manifest.local_path) / f"{table}.parquet"
         if not path.exists():
             return []
-        return DuckDBArchiveQuery().read_table(path, filters=filters or {}, sort="asc", limit=limit, offset=offset)
+        return DuckDBArchiveQuery().read_table(path, table=table, filters=filters or {}, sort="asc", limit=limit, offset=offset)
 
     def count_archived_research_table(self, run_id: str, table: str, *, filters: dict[str, Any] | None = None) -> int:
         return len(self.query_archived_research_table(run_id, table, filters=filters))
@@ -212,6 +263,104 @@ class ArchiveService:
             query = query.where(ArchiveManifestModel.scope == scope)
         return [self._manifest_to_dict(row) for row in self.session.scalars(query)]
 
+    def verify_archive(self, archive_id: str) -> dict[str, Any]:
+        manifest = self.get_manifest(archive_id)
+        if not manifest:
+            return {"ok": False, "error": {"code": "archive_not_found", "archiveId": archive_id}}
+        if manifest.scope not in {"snapshots", "research"}:
+            return {
+                "ok": False,
+                "error": {
+                    "code": "unsupported_archive_scope",
+                    "archiveId": archive_id,
+                    "scope": manifest.scope,
+                },
+            }
+        local_path = Path(manifest.local_path)
+        manifest_path = local_path / "manifest.json"
+        if not manifest_path.is_file():
+            return {
+                "ok": False,
+                "error": {"code": "archive_file_missing", "archiveId": archive_id, "file": "manifest.json"},
+            }
+        try:
+            payload = read_manifest(manifest_path)
+        except Exception as exc:
+            return {
+                "ok": False,
+                "error": {"code": "archive_manifest_invalid", "archiveId": archive_id, "message": str(exc)},
+            }
+
+        expected_counts = json.loads(manifest.row_counts_json or "{}")
+        expected_hashes = json.loads(manifest.file_hashes_json or "{}")
+        manifest_files = {
+            str(item.get("name")): item
+            for item in payload.get("files") or []
+            if isinstance(item, dict) and item.get("name")
+        }
+        required_files = ["manifest.json"] + self._required_archive_files(manifest.scope, expected_counts)
+        checked = 0
+        for name in required_files:
+            path = local_path / name
+            if not path.is_file():
+                return {
+                    "ok": False,
+                    "error": {"code": "archive_file_missing", "archiveId": archive_id, "file": name},
+                }
+            checked += 1
+            if name == "manifest.json":
+                continue
+            actual_hash = sha256_file(path)
+            expected_hash = expected_hashes.get(name) or manifest_files.get(name, {}).get("sha256")
+            if expected_hash and actual_hash != expected_hash:
+                return {
+                    "ok": False,
+                    "error": {
+                        "code": "archive_sha256_mismatch",
+                        "archiveId": archive_id,
+                        "file": name,
+                        "expected": expected_hash,
+                        "actual": actual_hash,
+                    },
+                }
+            expected_bytes = manifest_files.get(name, {}).get("bytes")
+            if expected_bytes is not None and int(path.stat().st_size) != int(expected_bytes):
+                return {
+                    "ok": False,
+                    "error": {
+                        "code": "archive_byte_size_mismatch",
+                        "archiveId": archive_id,
+                        "file": name,
+                        "expected": int(expected_bytes),
+                        "actual": int(path.stat().st_size),
+                    },
+                }
+
+        actual_counts = self._archive_actual_row_counts(manifest.scope, local_path, expected_counts)
+        for key, expected in expected_counts.items():
+            if int(actual_counts.get(key) or 0) != int(expected or 0):
+                return {
+                    "ok": False,
+                    "error": {
+                        "code": "archive_row_count_mismatch",
+                        "archiveId": archive_id,
+                        "table": key,
+                        "expected": int(expected or 0),
+                        "actual": int(actual_counts.get(key) or 0),
+                    },
+                }
+
+        manifest.status = "verified"
+        manifest.last_error = None
+        self.session.commit()
+        return {
+            "ok": True,
+            "archiveId": archive_id,
+            "status": "verified",
+            "checkedFiles": checked,
+            "rowCounts": expected_counts,
+        }
+
     def push_archive_backup(self, *, limit: int | None = None) -> dict[str, Any]:
         store = get_object_backup_store()
         if not store:
@@ -228,14 +377,20 @@ class ArchiveService:
             return {"ok": True, "pushed": 0, "manifests": []}
         results = []
         for manifest in manifests:
-            result = store.push_archive(Path(manifest.local_path), archive_id=manifest.archive_id)
+            previous_object_key = manifest.object_key
+            previous_uploaded_at = manifest.uploaded_at
+            previous_status = manifest.status
+            manifest.object_key = store.archive_prefix(manifest.archive_id)
+            manifest.uploaded_at = datetime.now(timezone.utc)
+            index_path = self._append_archive_index(manifest)
+            result = store.push_archive(Path(manifest.local_path), archive_id=manifest.archive_id, archive_index_path=index_path)
             if result.get("ok"):
-                manifest.object_key = store.archive_prefix(manifest.archive_id)
                 manifest.status = "uploaded"
-                manifest.uploaded_at = datetime.now(timezone.utc)
                 manifest.last_error = None
-                self._append_archive_index(manifest)
             else:
+                manifest.object_key = previous_object_key
+                manifest.uploaded_at = previous_uploaded_at
+                manifest.status = previous_status
                 manifest.last_error = result.get("error", {}).get("message", str(result))
             self.session.commit()
             results.append({**self._manifest_to_dict(manifest), "uploadResult": result})
@@ -274,16 +429,14 @@ class ArchiveService:
                     self.session.commit()
                     return {"ok": False, "error": {"code": "sha256_mismatch", "archiveId": archive_id, "file": f["name"], "expected": expected_hashes[f["name"]], "actual": f["sha256"]}}
             target_dir = self.archive_dir / archive_id
-            if target_dir.exists():
-                shutil.rmtree(target_dir)
-            shutil.move(str(tmp_dir), str(target_dir))
+            _publish_known_archive_files(tmp_dir, target_dir)
         manifest.local_path = str(target_dir)
         manifest.status = "verified"
         manifest.last_error = None
         self.session.commit()
         return {**result, "restored": result["files"], "dryRun": False}
 
-    def _append_archive_index(self, manifest: ArchiveManifestModel) -> None:
+    def _append_archive_index(self, manifest: ArchiveManifestModel) -> Path:
         index_path = self.archive_dir / "archive_index.jsonl"
         record = {
             "archiveId": manifest.archive_id,
@@ -298,6 +451,48 @@ class ArchiveService:
         if index_path.stat().st_size > 500_000:
             lines = index_path.read_text(encoding="utf-8").splitlines()
             index_path.write_text("\n".join(lines[-1000:]) + "\n", encoding="utf-8")
+        return index_path
+
+    def _required_archive_files(self, scope: str, row_counts: dict[str, Any]) -> list[str]:
+        if scope == "snapshots":
+            pairs = (
+                ("records", "records.parquet"),
+                ("frames", "frames.parquet"),
+                ("stockRows", "stock_rows.parquet"),
+                ("sectorRows", "sector_rows.parquet"),
+            )
+        elif scope == "research":
+            pairs = (
+                ("trades", "trades.parquet"),
+                ("equityCurve", "equity_curve.parquet"),
+                ("signals", "signals.parquet"),
+            )
+        else:
+            return []
+        return [filename for key, filename in pairs if int(row_counts.get(key) or 0) > 0]
+
+    def _archive_actual_row_counts(self, scope: str, local_path: Path, expected_counts: dict[str, Any]) -> dict[str, int]:
+        store = ParquetStore(local_path, compression=self.compression)
+        if scope == "snapshots":
+            table_map = {
+                "records": "records",
+                "frames": "frames",
+                "stockRows": "stock_rows",
+                "sectorRows": "sector_rows",
+            }
+        else:
+            table_map = {
+                "trades": "trades",
+                "equityCurve": "equity_curve",
+                "signals": "signals",
+            }
+        counts: dict[str, int] = {}
+        for key, table in table_map.items():
+            if key not in expected_counts:
+                continue
+            path = local_path / f"{table}.parquet"
+            counts[key] = len(store.read_table(table)) if path.is_file() else 0
+        return counts
 
     def _snapshot_candidate_dates(self, dataset_id: str, snapshot_type: str, before_trading_date: str) -> list[str]:
         query = (
@@ -411,7 +606,7 @@ class ArchiveService:
             if new_hashes == old_hashes:
                 return {**base, "deduped": True, "status": existing.status}
             if local_path.exists():
-                shutil.rmtree(str(local_path), ignore_errors=True)
+                _remove_known_archive_files(local_path)
             return {
                 **base,
                 "ok": False,
@@ -438,6 +633,10 @@ class ArchiveService:
             row_counts=row_counts,
             files=files,
         )
+        verified = self.verify_archive(archive_id)
+        if not verified.get("ok"):
+            self._mark_manifest_failed(archive_id, "verify_failed", verified.get("error"))
+            return {**base, "ok": False, "status": "verify_failed", "files": files, "error": verified.get("error")}
         deleted = self._delete_research_detail_rows(run_id)
         return {**base, "status": "verified", "files": files, "deletedFromSqlite": deleted}
 
@@ -479,18 +678,43 @@ class ArchiveService:
 
         research_session = self.research_session or self.session
         cutoff = datetime.now(timezone.utc) - timedelta(days=older_than_days)
-        rows = research_session.scalars(
-            select(BacktestRun.id)
-            .where(BacktestRun.created_at < cutoff)
-            .order_by(BacktestRun.created_at.desc())
-        ).all()
-        run_ids = [str(row) for row in rows]
-        return run_ids[keep_latest_per_group:] if keep_latest_per_group > 0 else run_ids
+        rows = list(
+            research_session.scalars(
+                select(BacktestRun)
+                .where(BacktestRun.created_at < cutoff)
+                .order_by(BacktestRun.created_at.desc(), BacktestRun.id.asc())
+            )
+        )
+        groups: dict[tuple[Any, ...], list[BacktestRun]] = {}
+        for row in rows:
+            key = (
+                row.dataset_id,
+                row.strategy_name,
+                row.snapshot_type,
+                row.strategy_version,
+                row.config_hash,
+                row.random_seed,
+            )
+            groups.setdefault(key, []).append(row)
+        candidates: list[BacktestRun] = []
+        for group_rows in groups.values():
+            candidates.extend(group_rows[max(0, keep_latest_per_group):] if keep_latest_per_group > 0 else group_rows)
+        candidates.sort(key=lambda row: (row.created_at, row.id))
+        return [str(row.id) for row in candidates]
 
     def _query_archived_snapshot_table(self, table: str, **filters: Any) -> list[dict[str, Any]]:
+        result = self._query_archived_snapshot_table_result(table, **filters)
+        if not result.get("ok"):
+            raise ArchiveQueryError(result["error"]["code"], result["error"].get("message", "archive query failed"), **{k: v for k, v in result["error"].items() if k not in {"code", "message"}})
+        return result["rows"]
+
+    def _query_archived_snapshot_table_result(self, table: str, **filters: Any) -> dict[str, Any]:
         dataset_id = filters.get("dataset_id")
         snapshot_type = filters.get("snapshot_type")
         trading_date = filters.get("trading_date")
+        start_date = filters.get("start_date")
+        end_date = filters.get("end_date")
+        before_trading_date = filters.get("before_trading_date")
         query = select(ArchiveManifestModel).where(ArchiveManifestModel.scope == "snapshots").where(ArchiveManifestModel.status.in_(["verified", "uploaded"]))
         if dataset_id:
             query = query.where(ArchiveManifestModel.dataset_id == dataset_id)
@@ -498,6 +722,12 @@ class ArchiveService:
             query = query.where(ArchiveManifestModel.snapshot_type == snapshot_type)
         if trading_date:
             query = query.where(ArchiveManifestModel.trading_date == trading_date)
+        if start_date:
+            query = query.where((ArchiveManifestModel.trading_date >= start_date) | ArchiveManifestModel.trading_date.is_(None))
+        if end_date:
+            query = query.where((ArchiveManifestModel.trading_date <= end_date) | ArchiveManifestModel.trading_date.is_(None))
+        if before_trading_date:
+            query = query.where((ArchiveManifestModel.trading_date < before_trading_date) | ArchiveManifestModel.trading_date.is_(None))
         manifests = list(self.session.scalars(query))
         output: list[dict[str, Any]] = []
         duck = DuckDBArchiveQuery()
@@ -512,9 +742,16 @@ class ArchiveService:
         }
         for manifest in manifests:
             path = Path(manifest.local_path) / f"{table}.parquet"
-            if path.exists():
-                output.extend(duck.read_table(path, filters=parquet_filters, sort=filters.get("sort") or "desc", limit=filters.get("limit")))
-        return output
+            if not path.exists():
+                return {
+                    "ok": False,
+                    "error": {"code": "archive_file_missing", "archiveId": manifest.archive_id, "file": path.name},
+                }
+            try:
+                output.extend(duck.read_table(path, table=table, filters=parquet_filters, sort=filters.get("sort") or "desc", limit=filters.get("limit")))
+            except ArchiveQueryError as exc:
+                return {"ok": False, "error": {"archiveId": manifest.archive_id, **exc.to_error()}}
+        return {"ok": True, "rows": output, "source": "parquet_archive" if output else "sqlite"}
 
     def _latest_manifest(self, *, scope: str, run_id: str) -> ArchiveManifestModel | None:
         return self.session.scalar(
@@ -553,6 +790,14 @@ class ArchiveService:
         self.session.merge(row)
         self.session.commit()
         return row
+
+    def _mark_manifest_failed(self, archive_id: str, status: str, error: Any) -> None:
+        row = self.get_manifest(archive_id)
+        if not row:
+            return
+        row.status = status
+        row.last_error = json.dumps(error, ensure_ascii=False) if isinstance(error, dict) else str(error)
+        self.session.commit()
 
     def _snapshot_archive_path(self, dataset_id: str, snapshot_type: str, trading_date: str) -> Path:
         return (

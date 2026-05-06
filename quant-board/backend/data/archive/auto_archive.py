@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +29,9 @@ class ArchiveAutoRunner:
         self._task: asyncio.Task[None] | None = None
         self._last_result: dict[str, Any] | None = None
         self._last_error: str | None = None
+        self._last_started_at: str | None = None
+        self._last_finished_at: str | None = None
+        self._consecutive_failures = 0
 
     def start(self) -> None:
         if not self.enabled or self._task is not None:
@@ -56,6 +60,9 @@ class ArchiveAutoRunner:
             "max_partitions": self.max_partitions,
             "last_result": self._last_result,
             "last_error": self._last_error,
+            "last_started_at": self._last_started_at,
+            "last_finished_at": self._last_finished_at,
+            "consecutive_failures": self._consecutive_failures,
         }
 
     async def _run_loop(self) -> None:
@@ -63,10 +70,19 @@ class ArchiveAutoRunner:
             await asyncio.sleep(self.initial_delay_seconds)
         while True:
             try:
+                self._last_started_at = datetime.now(timezone.utc).isoformat()
                 self._last_result = await asyncio.to_thread(run_archive_auto_once, self.max_partitions)
-                self._last_error = None
+                if self._last_result.get("ok"):
+                    self._last_error = None
+                    self._consecutive_failures = 0
+                else:
+                    self._last_error = str(self._last_result.get("error") or self._last_result)
+                    self._consecutive_failures += 1
             except Exception as exc:
                 self._last_error = str(exc)
+                self._consecutive_failures += 1
+            finally:
+                self._last_finished_at = datetime.now(timezone.utc).isoformat()
             await asyncio.sleep(self.interval_seconds)
 
 

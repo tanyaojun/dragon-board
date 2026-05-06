@@ -8,6 +8,19 @@ from backend.data.archive.manifest import sha256_file
 from backend.settings import get_settings
 
 
+ALLOWED_OBJECT_ARCHIVE_FILENAMES = {
+    "records.parquet",
+    "frames.parquet",
+    "stock_rows.parquet",
+    "sector_rows.parquet",
+    "trades.parquet",
+    "equity_curve.parquet",
+    "signals.parquet",
+    "manifest.json",
+    "archive_index.jsonl",
+}
+
+
 @dataclass
 class ObjectBackupStore:
     bucket: str
@@ -51,7 +64,7 @@ class ObjectBackupStore:
     def archive_prefix(self, archive_id: str) -> str:
         return self.full_key(f"{archive_id}/")
 
-    def push_archive(self, local_dir: Path, archive_id: str | None = None) -> dict[str, Any]:
+    def push_archive(self, local_dir: Path, archive_id: str | None = None, archive_index_path: Path | None = None) -> dict[str, Any]:
         if not local_dir.is_dir():
             return {"ok": False, "error": {"code": "local_dir_missing", "path": str(local_dir)}}
         if archive_id is None:
@@ -59,13 +72,17 @@ class ObjectBackupStore:
         prefix = f"{archive_id}/"
         uploaded: list[dict[str, Any]] = []
         try:
-            for file_path in sorted(local_dir.iterdir()):
+            candidates = [path for path in sorted(local_dir.iterdir()) if path.is_file()]
+            index_path = archive_index_path or (local_dir.parent / "archive_index.jsonl")
+            if index_path.is_file():
+                candidates.append(index_path)
+            for file_path in candidates:
                 if not file_path.is_file():
                     continue
-                if file_path.suffix not in (".parquet",) and file_path.name != "manifest.json":
+                if file_path.name not in ALLOWED_OBJECT_ARCHIVE_FILENAMES:
                     continue
                 body = file_path.read_bytes()
-                key = self.full_key(f"{prefix}{file_path.name}")
+                key = self.full_key(file_path.name if file_path.name == "archive_index.jsonl" else f"{prefix}{file_path.name}")
                 self.client.put_object(Bucket=self.bucket, Key=key, Body=body)
                 uploaded.append({"name": file_path.name, "key": key, "bytes": len(body), "sha256": sha256_file(file_path)})
         except Exception as exc:

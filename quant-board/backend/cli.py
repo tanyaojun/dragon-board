@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from backend.data.database import SessionLocal, init_db
+from backend.data.database import ResearchSessionLocal, SessionLocal, init_db
 from backend.data.backup_sync import BackupSyncService
 from backend.data.archive.auto_archive import run_archive_auto_once
 from backend.data.archive.object_store import get_object_backup_store
@@ -191,9 +191,9 @@ def cmd_archive_snapshots(args: argparse.Namespace) -> None:
 
 def cmd_archive_research(args: argparse.Namespace) -> None:
     init_db()
-    with SessionLocal() as session:
+    with SessionLocal() as session, ResearchSessionLocal() as research_session:
         print_json(
-            ArchiveService(session).archive_research(
+            ArchiveService(session, research_session=research_session).archive_research(
                 run_id=args.run_id,
                 older_than_days=args.older_than_days,
                 keep_latest_per_group=args.keep_latest_per_group,
@@ -206,8 +206,7 @@ def cmd_archive_research(args: argparse.Namespace) -> None:
 def cmd_verify_archive(args: argparse.Namespace) -> None:
     init_db()
     with SessionLocal() as session:
-        manifest = ArchiveService(session).get_manifest(args.archive_id)
-        print_json({"ok": bool(manifest), "archiveId": args.archive_id, "status": manifest.status if manifest else "missing"})
+        print_json(ArchiveService(session).verify_archive(args.archive_id))
 
 
 def cmd_restore_archive(args: argparse.Namespace) -> None:
