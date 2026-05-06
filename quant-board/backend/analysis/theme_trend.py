@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, asdict, fields
 from typing import Any
 
 LIFECYCLES = {
@@ -229,6 +229,14 @@ def _theme_context(frame: dict[str, Any]) -> dict[str, Any]:
     return context if isinstance(context, dict) else {}
 
 
+def _theme_rows_for_quality(frame: dict[str, Any]) -> list[dict[str, Any]]:
+    sectors = _sector_rows(frame)
+    if sectors:
+        return sectors
+    context = _theme_context(frame)
+    return [item for item in _list(context.get("themes")) if isinstance(item, dict)]
+
+
 def _theme_context_frames(frame: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]] | None:
     context = _theme_context(frame)
     themes = [item for item in _list(context.get("themes")) if isinstance(item, dict)]
@@ -310,7 +318,7 @@ def build_theme_quality_report(frames: list[dict[str, Any]] | Any) -> dict[str, 
     for frame in valid_frames:
         if len(_stock_rows(frame)) < 1:
             warnings.append("missing_stock_data")
-        if len(_sector_rows(frame)) < 1:
+        if len(_theme_rows_for_quality(frame)) < 1:
             warnings.append("missing_theme_data")
             break
 
@@ -320,7 +328,7 @@ def build_theme_quality_report(frames: list[dict[str, Any]] | Any) -> dict[str, 
         "warnings": list(dict.fromkeys(warnings)),
         "frameCount": len(valid_frames),
         "stockCount": sum(len(_stock_rows(frame)) for frame in valid_frames),
-        "themeCount": sum(len(_sector_rows(frame)) for frame in valid_frames),
+        "themeCount": sum(len(_theme_rows_for_quality(frame)) for frame in valid_frames),
     }
 
 
@@ -983,10 +991,13 @@ class ThemeTrendResult:
 
 def _to_typed_result(raw: dict[str, Any], meta: dict[str, Any] | None) -> ThemeTrendResult:
     qr = raw.get("qualityReport", {})
+    factor_fields = {item.name for item in fields(ThemeFactorFrame)}
+    exposure_fields = {item.name for item in fields(ThemeStockExposureFrame)}
+    signal_fields = {item.name for item in fields(ThemeSignalRow)}
     return ThemeTrendResult(
-        factors=[ThemeFactorFrame(**item) for item in raw.get("factors", [])],
-        exposures=[ThemeStockExposureFrame(**item) for item in raw.get("exposures", [])],
-        signals=[ThemeSignalRow(**item) for item in raw.get("signals", [])],
+        factors=[ThemeFactorFrame(**{key: value for key, value in item.items() if key in factor_fields}) for item in raw.get("factors", [])],
+        exposures=[ThemeStockExposureFrame(**{key: value for key, value in item.items() if key in exposure_fields}) for item in raw.get("exposures", [])],
+        signals=[ThemeSignalRow(**{key: value for key, value in item.items() if key in signal_fields}) for item in raw.get("signals", [])],
         qualityReport=ThemeQualityReport(
             passed=not qr.get("blocked", False),
             severity="fail" if qr.get("blocked") else ("warn" if qr.get("warnings") else "pass"),

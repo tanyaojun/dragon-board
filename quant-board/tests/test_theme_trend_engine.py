@@ -60,6 +60,18 @@ def test_theme_trend_python_matches_ts_runtime_golden_case() -> None:
     assert actual_exposures == fixture["expected"]["exposures"]
 
 
+def test_theme_trend_ts_runtime_golden_case_supports_typed_replay_and_quality_gate() -> None:
+    fixture = json.loads(
+        (Path(__file__).parent / "fixtures" / "theme_trend_ts_golden_v12.json").read_text(encoding="utf-8")
+    )
+
+    typed = ThemeTrendPythonEngine().replay_typed(fixture["input"]["frames"], config=ThemeTrendConfig())
+
+    assert typed.factors[0].themeId == "AI"
+    assert "missing_theme_data" not in typed.qualityReport.warnings
+    assert typed.qualityReport.themeCount == 2
+
+
 def test_replay_outputs_mainline_theme_factor_for_single_frame() -> None:
     frames = [
         _frame(
