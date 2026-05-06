@@ -2556,12 +2556,12 @@ def test_theme_trend_default_optimization_does_not_materialize_full_grid(
     assert imported.status_code == 200, imported.text
     dataset = imported.json()
 
-    from backend import services
+    from backend.optimization import search_space as search_space_module
 
     def fail_product(*_args, **_kwargs):
         raise AssertionError("full grid product should not be materialized")
 
-    monkeypatch.setattr(services, "_itertools", SimpleNamespace(product=fail_product))
+    monkeypatch.setattr(search_space_module.itertools, "product", fail_product)
 
     response = client.post(
         "/api/optimizations/theme-trend",

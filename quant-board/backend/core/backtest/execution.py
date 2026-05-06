@@ -236,6 +236,14 @@ class TradeSimulator:
                 continue
             if signal["regime"] == "retreat":
                 continue
+            if strategy_key == "leader_theme_confirmation":
+                if signal.get("themeRole") == "leader" and signal["candidateTier"] in {"A_MAIN", "B_IGNITION"}:
+                    result.append(signal)
+                continue
+            if strategy_key == "hotlist_theme_confluence":
+                if signal.get("candidateTier") in {"A_MAIN", "B_IGNITION"} and signal.get("themeConfluenceScore", 0) >= 75 and signal.get("themeRole") != "noise":
+                    result.append(signal)
+                continue
             if strategy_key == "a_main_only":
                 if signal["candidateTier"] == "A_MAIN" and signal["regime"] != "weak":
                     result.append(signal)

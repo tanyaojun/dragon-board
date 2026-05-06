@@ -7,8 +7,6 @@ from sqlalchemy.orm import Session
 from backend.analysis.ranktrend import RankTrendConfig, RankTrendPythonEngine
 from backend.analysis.theme_trend import ThemeTrendConfig, ThemeTrendPythonEngine
 from backend.core.backtest import BacktestEngine, TradeSimulator, normalize_strategy_name
-import itertools as _itertools
-import random as _random
 from backend.data.models import BacktestRun, GoldenRankTrendCase, OptimizationRun
 from backend.data.quality_gate import evaluate_snapshot_quality
 from backend.data.json_codec import dumps_json_field, loads_json_field
@@ -16,6 +14,7 @@ from backend.data.database import SessionLocal
 from backend.data.repository import Repository
 from backend.optimization.jobs import submit_optimization_job
 from backend.optimization.runner import OptimizationRunner
+from backend.optimization.search_space import candidate_count, select_candidates
 from backend.utils import json_loads, new_id, read_json_file, stable_hash
 
 
@@ -969,9 +968,9 @@ class OptimizationService:
 
         run_id = new_id("opt")
         config_hash = stable_hash({k: v for k, v in payload.items() if k != "parameterGrid"})
-        _random.seed(random_seed)
 
         trial_results: list[dict[str, Any]] = []
+        total_candidates = candidate_count(search_space)
         trial_params_list = select_candidates(search_space, max_trials, method, random_seed)
 
         trial_errors: list[dict[str, Any]] = []
@@ -1006,6 +1005,7 @@ class OptimizationService:
             "objective": objective,
             "searchProfile": search_profile,
             "supportedParameterGroups": theme_parameter_groups(search_profile),
+            "candidateCount": total_candidates,
             "trials": len(trial_results),
             "trialErrors": trial_errors,
             "best": best,
@@ -1034,6 +1034,7 @@ class OptimizationService:
             "analysisMode": "theme_trend",
             "searchProfile": search_profile,
             "supportedParameterGroups": theme_parameter_groups(search_profile),
+            "candidateCount": total_candidates,
             "randomSeed": random_seed,
             "best": best,
             "trialCount": len(trial_results),
