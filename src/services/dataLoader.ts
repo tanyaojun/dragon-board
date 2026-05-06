@@ -5,20 +5,13 @@ import { ref, readonly } from 'vue'
 import { Adapters } from './adapters'
 import { dataLayer } from './DataLayer'
 import type { MergedStock } from '@/types'
-import { apiService } from './apiService'
 import { rankTrendAnalyzer } from './RankTrendAnalyzer'
 import { applyRankTrendAnalysis } from './rankTrend/compat'
 import type { RankTrendAnalysisResult } from './rankTrend/types'
 import { themeFacade } from './theme/ThemeFacade'
 import { isTradingTime } from '@/utils/time'
-import {
-  COMPREHENSIVE_WEIGHTS,
-  PENALTY_SCORE,
-  DEFAULT_RANK,
-  OPTIMAL_TURNOVER,
-  TURNOVER_SIGMA,
-} from '@/types/config'
-import { filterValidStockCodes, normalizeStockCode } from '@/utils/common'
+import { DEFAULT_RANK } from '@/types/config'
+import { filterValidStockCodes } from '@/utils/common'
 import { useUIStore } from '../stores/ui'
 import { stockCodeManager } from './StockCodeManager'
 import { calculateStockHotnessUpdates, stockHotnessConfigService } from './hotness'
@@ -31,49 +24,34 @@ import type { SnapshotRecord, SnapshotStockRow } from './snapshot/types'
 import { EventManager } from '../utils/eventManager'
 import { webSocketService } from './websocket'
 import { AppEvents, type Depth10Book, type QuotePatch, type TickTrade } from '../types'
+import {
+  DEFAULT_PLATFORMS,
+  INTRADAY_VOLUME_SNAPSHOT_TYPES as DEFAULT_INTRADAY_VOLUME_SNAPSHOT_TYPES,
+  MAX_PLATFORM_CACHE_SIZE,
+  PLATFORM_CACHE_TTL_MS,
+  PLATFORM_REFRESH_INTERVAL_MS,
+  QUOTE_BATCH_DELAY_MS,
+  QUOTE_BATCH_SIZE as DEFAULT_QUOTE_BATCH_SIZE,
+  QUOTE_REFRESH_INTERVAL_MS,
+  REALTIME_FLUSH_DELAY_MS,
+} from './dataLoader/constants'
+import { getRankField, rankMergedStocks } from './dataLoader/ComprehensiveRankEngine'
+import { loadLimitUpData as loadLimitUpFeedData } from './dataLoader/LimitUpFeed'
+import { estimateTdxMoneyFlow, summarizeMoneyFlowTicks } from './dataLoader/MoneyFlowEstimator'
+import { quoteHttpFeed } from './dataLoader/QuoteHttpFeed'
+import {
+  calculateVolumeRatioValue,
+  getAshareVolumeClockMinute,
+} from './dataLoader/VolumeRatioCalculator'
+import type {
+  IntradayMoneyFlowStats,
+  LoaderState,
+  LoadingStatus,
+  MergedQuoteData,
+  StockSignalUpdate,
+} from './dataLoader/types'
 
-// ========== 类型定义 ==========
-interface LoaderState {
-  initialized: boolean
-  platforms: string[]
-  data: Record<string, any[]>
-  loading: boolean
-  loadingProgress: number
-  loadingMessage: string
-  lastUpdate: number | null
-}
-
-interface LimitUpItem {
-  code: string
-  reason_type: string
-  is_new: number
-  first_limit_up_time: string
-  last_limit_up_time: string
-  continue_day: number
-  high_days: number
-}
-
-interface LoadingStatus {
-  active: boolean
-  progress: number
-  message: string
-  startTime: number | null
-}
-
-interface StockSignalUpdate {
-  code: string
-  rankTrend?: RankTrendAnalysisResult | null
-  coverageWarning?: string | null
-}
-
-type IntradayVolumeSnapshotType = 'quarter_hour' | 'half_hour' | 'hourly'
-
-interface IntradayMoneyFlowStats {
-  tradingDate: string
-  activeAmount: number
-  mainNet: number
-  superNet: number
-}
+export type { MergedQuoteData } from './dataLoader/types'
 
 function isRankTrendAnalysisResult(value: unknown): value is RankTrendAnalysisResult {
   return !!(
@@ -87,43 +65,17 @@ function isRankTrendAnalysisResult(value: unknown): value is RankTrendAnalysisRe
   )
 }
 
-export interface MergedQuoteData {
-  price: number
-  change: number
-  speed?: number
-  volume: number
-  turnover: number
-  turnoverRate: number
-  pe: number
-  totalMV: number
-  cirMV: number
-  pb: number
-  zlje: number
-  zljzb: number
-  cddje: number
-  cddjzb: number
-  moneyFlowSource?: string
-  moneyFlowEstimated?: boolean
-  tdxBuyVolume?: number
-  tdxSellVolume?: number
-  tdxCurrentVolume?: number
-  name?: string
-  sources: string[]
-  confidence: number
-  timestamp: number
-}
-
 /**
  * 业务编排层
  * 职责：协调数据加载、合并计算、缓存策略、行情获取
  */
 class DataLoaderService {
   private quoteRefreshTimer: ReturnType<typeof setInterval> | null = null
-  private readonly QUOTE_REFRESH_INTERVAL = 30000 // 30秒
-  private readonly QUOTE_BATCH_SIZE = 50
+  private readonly QUOTE_REFRESH_INTERVAL = QUOTE_REFRESH_INTERVAL_MS
+  private readonly QUOTE_BATCH_SIZE = DEFAULT_QUOTE_BATCH_SIZE
   private state = ref<LoaderState>({
     initialized: false,
-    platforms: ['eastmoney', 'ths', 'kpl', 'tdx', 'xueqiu', 'cls', 'tgb', 'dzh'],
+    platforms: [...DEFAULT_PLATFORMS],
     data: {},
     loading: false,
     loadingProgress: 0,
@@ -142,8 +94,8 @@ class DataLoaderService {
 
   private platformCache = new Map<string, { data: any; timestamp: number }>()
   private lastPlatformRefresh = 0
-  private readonly PLATFORM_CACHE_TTL = 1800000 // 30分钟（缓存有效期）
-  private readonly MAX_CACHE_SIZE = 10
+  private readonly PLATFORM_CACHE_TTL = PLATFORM_CACHE_TTL_MS
+  private readonly MAX_CACHE_SIZE = MAX_PLATFORM_CACHE_SIZE
   private isLoadingDetails = false
   private destroyed = false
   private hotStockSet = new Set<string>()
@@ -155,23 +107,9 @@ class DataLoaderService {
   > = new Map()
   private pendingCodes: Set<string> = new Set()
   private batchTimer: ReturnType<typeof setTimeout> | null = null
-  private readonly BATCH_DELAY = 50
-  private readonly REALTIME_FLUSH_DELAY = 50
-  private readonly EASTMONEY_QUOTE_ENRICHMENT_ENABLED = false
-  private readonly SUPER_ORDER_AMOUNT_THRESHOLD = 1_000_000
-  private readonly SUPER_ORDER_VOLUME_THRESHOLD = 500_000
-  private readonly LARGE_ORDER_AMOUNT_THRESHOLD = 200_000
-  private readonly LARGE_ORDER_VOLUME_THRESHOLD = 100_000
-  private readonly MAX_ESTIMATED_MAIN_RATIO = 0.28
-  private readonly MAX_ESTIMATED_SUPER_RATIO = 0.16
-  private readonly MAX_ACTIVE_MONEY_FLOW_RATIO = 0.32
-  private readonly A_SHARE_TRADING_MINUTES = 240
-  private readonly VOLUME_RATIO_HISTORY_WEIGHTS = [5, 3, 2]
-  private readonly INTRADAY_VOLUME_SNAPSHOT_TYPES: IntradayVolumeSnapshotType[] = [
-    'quarter_hour',
-    'half_hour',
-    'hourly',
-  ]
+  private readonly BATCH_DELAY = QUOTE_BATCH_DELAY_MS
+  private readonly REALTIME_FLUSH_DELAY = REALTIME_FLUSH_DELAY_MS
+  private readonly INTRADAY_VOLUME_SNAPSHOT_TYPES = DEFAULT_INTRADAY_VOLUME_SNAPSHOT_TYPES
   private realtimeFlushTimer: ReturnType<typeof setTimeout> | null = null
   private pendingRealtimeQuotes = new Map<string, QuotePatch>()
   private pendingDepthBooks = new Map<string, Depth10Book>()
@@ -181,7 +119,7 @@ class DataLoaderService {
   private intradayMoneyFlowTickQueues = new Map<string, string[]>()
   private realtimeUnsubscribers: Array<() => void> = []
 
-  private readonly PLATFORM_REFRESH_INTERVAL = 1800000 // 10分钟
+  private readonly PLATFORM_REFRESH_INTERVAL = PLATFORM_REFRESH_INTERVAL_MS // 30分钟
 
   constructor() {
     debugLog('[DataLoader] 初始化完成')
@@ -269,7 +207,7 @@ class DataLoaderService {
     if (quoteItems.length) {
       dataLayer.applyRealtimeQuoteBatch(
         quoteItems.map((item) => {
-          const estimatedMoneyFlow = this.estimateTdxMoneyFlow(item.code, item)
+          const estimatedMoneyFlow = estimateTdxMoneyFlow(item.code, item)
           return {
             code: item.code,
             name: item.name,
@@ -426,57 +364,6 @@ class DataLoaderService {
     return status.subscribedCount > 0 && webSocketService.isTdxRealtimeHealthy()
   }
 
-  private roundMoney(value: number): number {
-    return Number.isFinite(value) ? Math.round(value) : 0
-  }
-
-  private capEstimatedMoneyFlowRatio(ratio: number, maxAbsRatio: number): number {
-    if (!Number.isFinite(ratio)) return 0
-    return clamp(ratio, -maxAbsRatio, maxAbsRatio)
-  }
-
-  private safeRatio(numerator: number, denominator: number): number {
-    return denominator !== 0 && Number.isFinite(numerator) && Number.isFinite(denominator)
-      ? numerator / denominator
-      : 0
-  }
-
-  private calculateTdxDarkMoneyFactor(quote: QuotePatch) {
-    const close = Number(quote.lastPrice) || 0
-    const open = Number(quote.open) || close
-    const high = Number(quote.high) || Math.max(open, close)
-    const low = Number(quote.low) || Math.min(open, close)
-    const preClose = Number(quote.preClose) || open || close
-
-    // 对齐通达信公式里的 X_9 到 X_16，用当日 OHLC 结构估算暗盘方向。
-    const x9 = this.safeRatio(open - preClose, preClose)
-    const x10 = this.safeRatio(close - open, open)
-    const x11 = this.safeRatio(high - open, open)
-    const x12 = this.safeRatio(close - high, high)
-    const x13 = this.safeRatio(low - open, open)
-    const x14 = this.safeRatio(close - low, low)
-    const x15 = x9 + x10 + x11 + x12 + x13 + x14
-    const x16 = x15 >= 1 ? 0.8 : x15
-    const amplitude = this.safeRatio(high - low, preClose)
-    const closePosition = high > low ? clamp((close - low) / (high - low), 0, 1) : 0.5
-
-    return {
-      x16,
-      amplitude,
-      closePosition,
-    }
-  }
-
-  private classifyMoneyFlowOrder(amount: number, volume: number): 'super' | 'large' | 'other' {
-    if (amount >= this.SUPER_ORDER_AMOUNT_THRESHOLD || volume >= this.SUPER_ORDER_VOLUME_THRESHOLD) {
-      return 'super'
-    }
-    if (amount >= this.LARGE_ORDER_AMOUNT_THRESHOLD || volume >= this.LARGE_ORDER_VOLUME_THRESHOLD) {
-      return 'large'
-    }
-    return 'other'
-  }
-
   private updateIntradayMoneyFlowStats(groups: Array<{ code: string; items: TickTrade[] }>) {
     const tradingDate = toLocalTradingDate(new Date())
 
@@ -492,7 +379,7 @@ class DataLoaderService {
           ? { ...current }
           : { tradingDate, activeAmount: 0, mainNet: 0, superNet: 0 }
 
-      const delta = this.summarizeMoneyFlowTicks(freshItems)
+      const delta = summarizeMoneyFlowTicks(freshItems)
       next.activeAmount += delta.activeAmount
       next.mainNet += delta.mainNet
       next.superNet += delta.superNet
@@ -537,33 +424,6 @@ class DataLoaderService {
     return fresh
   }
 
-  private summarizeMoneyFlowTicks(ticks: TickTrade[]) {
-    const summary = {
-      activeAmount: 0,
-      mainNet: 0,
-      superNet: 0,
-    }
-
-    ticks.forEach((tick) => {
-      if (tick.side !== 'buy' && tick.side !== 'sell') return
-      const amount = Number(tick.amount) || 0
-      const volume = Number(tick.volume) || 0
-      if (amount <= 0 || volume <= 0) return
-
-      summary.activeAmount += amount
-      const direction = tick.side === 'buy' ? 1 : -1
-      const bucket = this.classifyMoneyFlowOrder(amount, volume * 100)
-      if (bucket === 'super') {
-        summary.superNet += amount * direction
-        summary.mainNet += amount * direction
-      } else if (bucket === 'large') {
-        summary.mainNet += amount * direction
-      }
-    })
-
-    return summary
-  }
-
   private pickNonZeroNumber(...values: unknown[]): number {
     for (const value of values) {
       const number = Number(value)
@@ -587,105 +447,12 @@ class DataLoaderService {
     return 0
   }
 
-  private estimateTdxMoneyFlow(code: string, quote: QuotePatch): Partial<MergedQuoteData> | null {
-    const price = Number(quote.lastPrice) || 0
-    const changePct = Number(quote.changePct) || 0
-    const buyVolume = Number(quote.tdxBuyVolume) || 0
-    const sellVolume = Number(quote.tdxSellVolume) || 0
-    const activeVolume = buyVolume + sellVolume
-
-    if (price <= 0 || activeVolume <= 0) return null
-
-    const activeAmount = activeVolume * price * 100
-    const turnover = Number(quote.amount) > 0 ? Number(quote.amount) : activeAmount
-    if (turnover <= 0) return null
-
-    const activeNet = (buyVolume - sellVolume) * price * 100
-    const activeRatio = this.capEstimatedMoneyFlowRatio(
-      activeNet / Math.max(activeAmount, 1),
-      this.MAX_ACTIVE_MONEY_FLOW_RATIO,
-    )
-    const { x16, amplitude, closePosition } = this.calculateTdxDarkMoneyFactor(quote)
-    // mooTDX 只有总主动买卖量，没有 L2_AMO 的超大/大单分层。
-    // 这里按通达信公式的 X_16 思路做连续估算：价格路径决定暗盘方向，
-    // 总主动买卖量只作为明盘基础。主动买卖方向和价格路径冲突时，
-    // 这部分成交更接近承接/派发，不能直接推成同向主力资金。
-    const turnoverScale = clamp(Math.log10(Math.max(turnover, 1) / 500_000_000), 0, 1)
-    const smallActiveImbalance = clamp((0.035 - Math.abs(activeRatio)) / 0.035, 0, 1)
-    const churnScore = clamp((amplitude - 0.06) / 0.1, 0, 1)
-    const weakCloseScore = clamp((0.68 - closePosition) / 0.25, 0, 1)
-    const hiddenMainMultiplier = 1 + smallActiveImbalance * churnScore * weakCloseScore * turnoverScale * 14
-    const closeBias = clamp((closePosition - 0.5) * 2, -1, 1)
-    const pathDirection = Math.abs(x16) >= 0.025 ? Math.sign(x16) : Math.sign(closeBias)
-    const pathStrength = pathDirection >= 0
-      ? clamp((closePosition - 0.55) / 0.45, 0, 1)
-      : clamp((0.55 - closePosition) / 0.55, 0, 1)
-    const x16Strength = clamp(Math.abs(x16) / 0.16, 0, 1)
-    const priceMoveStrength = clamp(Math.abs(changePct) / 7, 0, 1)
-    const amplitudeStrength = clamp(amplitude / 0.08, 0, 1)
-    const pathConflictStrength =
-      pathDirection !== 0 && activeRatio !== 0 && Math.sign(activeRatio) !== pathDirection
-        ? clamp(Math.max(x16Strength * priceMoveStrength, pathStrength * amplitudeStrength), 0, 1)
-        : 0
-    const activeDamping = 1 - pathConflictStrength * 0.97
-    const activeVisibleRatio = activeRatio * hiddenMainMultiplier * activeDamping
-    const pathVisibleBase = pathDirection >= 0
-      ? clamp(0.12 + amplitude * 0.55 + turnoverScale * 0.018, 0.12, 0.28)
-      : clamp(0.16 + amplitude * 0.8 + turnoverScale * 0.025, 0.16, 0.42)
-    const pathVisibleRatio = x16 * pathStrength * pathVisibleBase
-    const closePressureBase = pathDirection >= 0
-      ? clamp(0.018 + turnoverScale * 0.025 + amplitude * 0.06, 0.018, 0.075)
-      : clamp(0.035 + turnoverScale * 0.035 + amplitude * 0.12, 0.035, 0.12)
-    const closePressureRatio = Math.sign(closeBias) * Math.pow(Math.abs(closeBias), 1.25) * amplitudeStrength * closePressureBase
-    const conflictPressureBase = pathDirection >= 0
-      ? clamp(0.006 + amplitude * 0.04 + turnoverScale * 0.006, 0.006, 0.035)
-      : clamp(0.023 + amplitude * 0.12 + turnoverScale * 0.012, 0.023, 0.063)
-    const conflictPressureRatio = pathDirection * pathConflictStrength * conflictPressureBase
-    let visibleMainRatio = this.capEstimatedMoneyFlowRatio(
-      activeVisibleRatio + pathVisibleRatio + closePressureRatio + conflictPressureRatio,
-      0.2,
-    )
-
-    const neutralBaseRatio = x16 >= 0
-      ? clamp(0.13 + amplitude * 0.72 + turnoverScale * 0.018, 0.13, 0.28)
-      : clamp(0.18 + amplitude * 0.75 + turnoverScale * 0.03, 0.18, 0.32)
-    let darkRatio = neutralBaseRatio * x16
-    darkRatio = this.capEstimatedMoneyFlowRatio(darkRatio, 0.12)
-
-    let mainRatio = visibleMainRatio + darkRatio
-    mainRatio = this.capEstimatedMoneyFlowRatio(mainRatio, this.MAX_ESTIMATED_MAIN_RATIO)
-
-    const currentVolume = Number(quote.tdxCurrentVolume) || 0
-    const currentPulse = turnover > 0 ? clamp((currentVolume * price * 100) / turnover, 0, 0.03) : 0
-    const superShare = clamp(0.35 + currentPulse * 6 + Math.abs(visibleMainRatio) * 0.8, 0.35, 0.75)
-    let superRatio = visibleMainRatio * superShare + darkRatio * 0.35
-    superRatio = this.capEstimatedMoneyFlowRatio(superRatio, this.MAX_ESTIMATED_SUPER_RATIO)
-    if (Math.abs(superRatio) > Math.abs(mainRatio)) {
-      superRatio = Math.sign(superRatio) * Math.abs(mainRatio)
-    }
-
-    const mainNet = turnover * mainRatio
-    const estimatedSuperNet = turnover * superRatio
-
-    return {
-      zlje: this.roundMoney(mainNet),
-      zljzb: Number((mainRatio * 100).toFixed(2)),
-      cddje: this.roundMoney(estimatedSuperNet),
-      cddjzb: Number((superRatio * 100).toFixed(2)),
-      tdxBuyVolume: buyVolume,
-      tdxSellVolume: sellVolume,
-      tdxCurrentVolume: Number(quote.tdxCurrentVolume) || 0,
-      moneyFlowSource: 'tdx_estimate',
-      moneyFlowEstimated: true,
-    }
-  }
-
   private buildRealtimeMergedQuoteData(code: string, quote: QuotePatch): MergedQuoteData {
     const existingQuote = dataLayer.getQuote(code) || {}
     const stock = dataLayer.getStock(code)
     const speedCandidate = quote.speed ?? existingQuote?.speed
     const speed = typeof speedCandidate === 'number' && Number.isFinite(speedCandidate) ? speedCandidate : undefined
-    const estimatedMoneyFlow = this.estimateTdxMoneyFlow(code, quote)
+    const estimatedMoneyFlow = estimateTdxMoneyFlow(code, quote)
 
     return {
       price: Number(quote.lastPrice) || 0,
@@ -910,7 +677,7 @@ class DataLoaderService {
       for (const code of codes) {
         const stock = stocks.find((s) => s.code === code)
         if (stock && stock.volume && stock.volume > 0) {
-          const volumeRatio = this.calculateVolumeRatioValue(
+          const volumeRatio = calculateVolumeRatioValue(
             stock,
             code,
             volumeHistoryMap,
@@ -931,142 +698,6 @@ class DataLoaderService {
     } catch (error) {
       console.warn('[DataLoader] 更新量比失败:', error)
     }
-  }
-
-  /**
-   * 计算量比值（不修改 stock 对象）
-   */
-  private calculateVolumeRatioValue(
-    stock: any,
-    code: string,
-    volumeHistoryMap: Map<string, number[]>,
-    intradayVolumeHistoryMap: Map<string, number[]> = new Map(),
-  ): number | undefined {
-    const currentVolume = Number(stock.volume)
-    if (!Number.isFinite(currentVolume) || currentVolume <= 0) return undefined
-
-    const intradayVolumes = this.normalizeVolumeHistory(intradayVolumeHistoryMap.get(code))
-    if (intradayVolumes.length >= 2) {
-      return this.calculateWeightedVolumeRatio(currentVolume, intradayVolumes)
-    }
-
-    const volumes = this.resolveVolumeRatioHistory(currentVolume, volumeHistoryMap.get(code))
-    if (volumes.length < 2) return undefined
-
-    const expectedVolumeProgress = this.getAshareExpectedVolumeProgress()
-    if (!expectedVolumeProgress) return undefined
-    const avgDailyVolume = this.calculateWeightedAverageVolume(volumes)
-    if (!avgDailyVolume) return undefined
-
-    const expectedVolume = avgDailyVolume * expectedVolumeProgress
-    return this.calculateRawVolumeRatio(currentVolume, expectedVolume)
-  }
-
-  private calculateWeightedVolumeRatio(currentVolume: number, volumes: number[]): number | undefined {
-    const avgVolume = this.calculateWeightedAverageVolume(volumes)
-    if (!avgVolume) return undefined
-    return this.calculateRawVolumeRatio(currentVolume, avgVolume)
-  }
-
-  private calculateWeightedAverageVolume(volumes: number[]): number | undefined {
-    const daysToUse = Math.min(volumes.length, this.VOLUME_RATIO_HISTORY_WEIGHTS.length)
-    if (daysToUse === 0) return undefined
-
-    let weightedSum = 0
-    let totalWeight = 0
-
-    for (let i = 0; i < daysToUse; i++) {
-      const weight = this.VOLUME_RATIO_HISTORY_WEIGHTS[i]
-      weightedSum += volumes[i] * weight
-      totalWeight += weight
-    }
-
-    if (totalWeight === 0) return undefined
-
-    const avgVolume = weightedSum / totalWeight
-    return avgVolume > 0 ? avgVolume : undefined
-  }
-
-  private calculateRawVolumeRatio(currentVolume: number, expectedVolume: number): number | undefined {
-    if (expectedVolume <= 0) return undefined
-    let ratio = currentVolume / expectedVolume
-    if (!Number.isFinite(ratio) || ratio <= 0) return undefined
-
-    ratio = Math.min(99.99, Math.max(0.01, Number(ratio.toFixed(2))))
-    return ratio
-  }
-
-  private getAshareElapsedTradingMinutes(date: Date = new Date()): number | undefined {
-    const secondsOfDay = date.getHours() * 3600 + date.getMinutes() * 60 + date.getSeconds()
-    const morningStart = 9 * 3600 + 30 * 60
-    const morningEnd = 11 * 3600 + 30 * 60
-    const afternoonStart = 13 * 3600
-    const afternoonEnd = 15 * 3600
-
-    if (secondsOfDay < morningStart) return undefined
-    if (secondsOfDay <= morningEnd) {
-      return Math.min(120, Math.max(1, Math.ceil((secondsOfDay - morningStart) / 60)))
-    }
-    if (secondsOfDay < afternoonStart) return 120
-    if (secondsOfDay <= afternoonEnd) {
-      return Math.min(
-        this.A_SHARE_TRADING_MINUTES,
-        120 + Math.max(1, Math.ceil((secondsOfDay - afternoonStart) / 60)),
-      )
-    }
-
-    return this.A_SHARE_TRADING_MINUTES
-  }
-
-  private getAshareExpectedVolumeProgress(date: Date = new Date()): number | undefined {
-    const elapsedMinutes = this.getAshareElapsedTradingMinutes(date)
-    if (!elapsedMinutes) return undefined
-
-    // A 股成交量不是线性分布，开盘半小时天然放量；用经验曲线压住早盘虚高量比。
-    if (elapsedMinutes <= 30) {
-      return clamp(0.06 + (elapsedMinutes / 30) * 0.18, 0.06, 0.24)
-    }
-    if (elapsedMinutes <= 120) {
-      return 0.24 + ((elapsedMinutes - 30) / 90) * 0.26
-    }
-    if (elapsedMinutes <= 180) {
-      return 0.5 + ((elapsedMinutes - 120) / 60) * 0.25
-    }
-
-    return clamp(
-      0.75 + ((elapsedMinutes - 180) / 60) * 0.25,
-      0.75,
-      1,
-    )
-  }
-
-  private normalizeVolumeHistory(
-    volumes?: number[],
-    limit: number = this.VOLUME_RATIO_HISTORY_WEIGHTS.length,
-  ): number[] {
-    return (volumes || [])
-      .map((volume) => Number(volume))
-      .filter((volume) => Number.isFinite(volume) && volume > 0)
-      .slice(0, limit)
-  }
-
-  private resolveVolumeRatioHistory(currentVolume: number, volumes?: number[]): number[] {
-    if (!volumes?.length) return []
-
-    const normalized = this.normalizeVolumeHistory(volumes, this.VOLUME_RATIO_HISTORY_WEIGHTS.length + 1)
-
-    if (!normalized.length) return []
-
-    const latestVolume = normalized[0]
-    const relativeDiff = Math.abs(latestVolume - currentVolume) / currentVolume
-
-    // 收盘后或凌晨刷新时，当前行情仍可能属于上一交易日。
-    // 如果最新日级快照成交量等于当前成交量，先剔除它，再用前三个历史交易日计算。
-    if (normalized.length > 1 && relativeDiff <= 0.001) {
-      return normalized.slice(1, 4)
-    }
-
-    return normalized.slice(0, 3)
   }
 
   /**
@@ -1241,157 +872,35 @@ class DataLoaderService {
    * 获取基础数据（腾讯/新浪）
    */
   private async fetchBasicData(codes: string[]): Promise<Map<string, any>> {
-    try {
-      return await this.fetchFromTencent(codes)
-    } catch (error) {
-      console.warn('[DataLoader] 腾讯接口失败，尝试新浪:', error)
-      return await this.fetchFromSina(codes)
-    }
+    return quoteHttpFeed.fetchBasicData(codes)
   }
 
   /**
    * 获取完整数据（东财）
    */
   private async fetchFullData(codes: string[], force?: boolean): Promise<Map<string, any>> {
-    if (!this.EASTMONEY_QUOTE_ENRICHMENT_ENABLED) {
-      return new Map()
-    }
-
-    return await this.fetchFromEastMoney(codes, force)
+    return quoteHttpFeed.fetchFullData(codes, force)
   }
 
   /**
    * 从腾讯获取基础数据
    */
   private async fetchFromTencent(codes: string[]): Promise<Map<string, any>> {
-    const result = new Map<string, any>()
-    const batchSize = 50
-
-    for (let i = 0; i < codes.length; i += batchSize) {
-      const batch = codes.slice(i, i + batchSize)
-
-      // ✅ 使用 getQuotes，指定 source: 'tencent'
-      const response = await apiService.getQuotes(batch, { source: 'tencent' })
-
-      const diff = response?.data?.diff || []
-      diff.forEach((item: any) => {
-        const code = normalizeStockCode(item.f12)
-        result.set(code, {
-          price: parseFloat(item.f2) || 0,
-          change: parseFloat(item.f3) || 0,
-          volume: parseInt(item.f6) || 0,
-          turnover: parseFloat(item.f5) || 0,
-          turnoverRate: parseFloat(item.f8) || 0,
-          pe: parseFloat(item.f9) || 0,
-          pb: parseFloat(item.f23) || 0,
-          name: item.f14 || '',
-          source: 'tencent',
-          totalMV: (parseFloat(item.f20) || 0) * 10000,
-          cirMV: (parseFloat(item.f21) || 0) * 10000,
-          zlje: parseFloat(item.f62) || 0,
-          zljzb: parseFloat(item.f184) || 0,
-          cddje: parseFloat(item.f66) || 0,
-          cddjzb: parseFloat(item.f69) || 0,
-        })
-      })
-
-      if (i + batchSize < codes.length) {
-        await new Promise((resolve) => setTimeout(resolve, 100))
-      }
-    }
-
-    return result
+    return quoteHttpFeed.fetchFromTencent(codes)
   }
 
   /**
    * 从新浪获取备用数据
    */
   private async fetchFromSina(codes: string[]): Promise<Map<string, any>> {
-    const result = new Map<string, any>()
-    const batchSize = 50
-
-    for (let i = 0; i < codes.length; i += batchSize) {
-      const batch = codes.slice(i, i + batchSize)
-
-      // ✅ 使用 getQuotes，指定 source: 'sina'
-      const response = await apiService.getQuotes(batch, { source: 'sina' })
-
-      const diff = response?.data?.diff || []
-      diff.forEach((item: any) => {
-        const code = normalizeStockCode(item.f12)
-        result.set(code, {
-          price: parseFloat(item.f2) || 0,
-          change: parseFloat(item.f3) || 0,
-          volume: parseInt(item.f6) || 0,
-          turnover: parseFloat(item.f5) || 0,
-          turnoverRate: parseFloat(item.f8) || 0,
-          pe: parseFloat(item.f9) || 0,
-          pb: parseFloat(item.f23) || 0,
-          name: item.f14 || '',
-          source: 'sina',
-          totalMV: (parseFloat(item.f20) || 0) * 10000,
-          cirMV: (parseFloat(item.f21) || 0) * 10000,
-          zlje: parseFloat(item.f62) || 0,
-          zljzb: parseFloat(item.f184) || 0,
-          cddje: parseFloat(item.f66) || 0,
-          cddjzb: parseFloat(item.f69) || 0,
-        })
-      })
-
-      if (i + batchSize < codes.length) {
-        await new Promise((resolve) => setTimeout(resolve, 100))
-      }
-    }
-
-    return result
+    return quoteHttpFeed.fetchFromSina(codes)
   }
 
   /**
    * 从东财获取完整数据
    */
   private async fetchFromEastMoney(codes: string[], force?: boolean): Promise<Map<string, any>> {
-    const result = new Map<string, any>()
-    const batchSize = 50
-
-    for (let i = 0; i < codes.length; i += batchSize) {
-      const batch = codes.slice(i, i + batchSize)
-
-      // ✅ 使用 getQuotes，指定 source: 'eastmoney'
-      const response = await apiService.getQuotes(batch, {
-        source: 'eastmoney',
-        force,
-        timeout: 8000,
-        retries: 2,
-      })
-
-      const diff = response?.data?.diff || []
-      diff.forEach((item: any) => {
-        const code = normalizeStockCode(item.f12)
-        result.set(code, {
-          price: parseFloat(item.f2) || 0,
-          change: parseFloat(item.f3) || 0,
-          volume: parseInt(item.f5) || 0,
-          turnover: parseFloat(item.f6) || 0,
-          turnoverRate: parseFloat(item.f8) || 0,
-          pe: parseFloat(item.f9) || 0,
-          pb: parseFloat(item.f23) || 0,
-          name: item.f14 || '',
-          source: 'eastmoney',
-          totalMV: parseFloat(item.f20) || 0,
-          cirMV: parseFloat(item.f21) || 0,
-          zlje: parseFloat(item.f62) || 0,
-          zljzb: parseFloat(item.f184) || 0,
-          cddje: parseFloat(item.f66) || 0,
-          cddjzb: parseFloat(item.f69) || 0,
-        })
-      })
-
-      if (i + batchSize < codes.length) {
-        await new Promise((resolve) => setTimeout(resolve, 200))
-      }
-    }
-
-    return result
+    return quoteHttpFeed.fetchFromEastMoney(codes, force)
   }
 
   // ========== 原有初始化方法 ==========
@@ -1504,24 +1013,8 @@ class DataLoaderService {
   }
 
   async loadLimitUpData(force = false): Promise<void> {
-    try {
-      const response = await apiService.getLimitUp()
-      if (!response?.data?.info) return
-
-      const updates = response.data.info.map((item: LimitUpItem) => ({
-        code: normalizeStockCode(item.code),
-        reason: item.reason_type,
-        isNew: item.is_new === 1,
-        firstZtTime: item.first_limit_up_time,
-        lastZtTime: item.last_limit_up_time,
-        boardHeight: item.continue_day,
-        highDays: item.high_days,
-      }))
-
-      dataLayer.updateLimitUpData?.(updates)
-    } catch (error) {
-      console.warn('[DataLoader] 加载涨停池数据失败:', error)
-    }
+    void force
+    await loadLimitUpFeedData()
   }
 
   // ========== 加载行情数据 ==========
@@ -1845,7 +1338,7 @@ class DataLoaderService {
     date: Date = new Date(),
   ): Promise<Map<string, number[]>> {
     const targetCodes = filterValidStockCodes([...new Set(codes)])
-    const targetClockMinute = this.getAshareVolumeClockMinute(date)
+    const targetClockMinute = getAshareVolumeClockMinute(date)
     if (targetCodes.length === 0 || targetClockMinute === undefined) return new Map()
 
     const anchorTradingDate = toLocalTradingDate(date)
@@ -1905,20 +1398,6 @@ class DataLoaderService {
     }
 
     return result
-  }
-
-  private getAshareVolumeClockMinute(date: Date): number | undefined {
-    const secondsOfDay = date.getHours() * 3600 + date.getMinutes() * 60 + date.getSeconds()
-    const morningStart = 9 * 3600 + 30 * 60
-    const morningEnd = 11 * 3600 + 30 * 60
-    const afternoonStart = 13 * 3600
-    const afternoonEnd = 15 * 3600
-
-    if (secondsOfDay < morningStart) return undefined
-    if (secondsOfDay <= morningEnd) return secondsOfDay / 60
-    if (secondsOfDay < afternoonStart) return morningEnd / 60
-    if (secondsOfDay <= afternoonEnd) return secondsOfDay / 60
-    return afternoonEnd / 60
   }
 
   private selectIntradayVolumeSnapshots(
@@ -2044,7 +1523,7 @@ class DataLoaderService {
         }
 
         // 平台排名 - 直接覆盖
-        const rankField = this.getRankField(platform)
+        const rankField = getRankField(platform)
         if (rankField) {
           stock[rankField] = item.rank
         }
@@ -2167,7 +1646,7 @@ class DataLoaderService {
     volumeHistoryMap: Map<string, number[]>,
     intradayVolumeHistoryMap: Map<string, number[]> = new Map(),
   ): void {
-    stock.volumeRatio = this.calculateVolumeRatioValue(
+    stock.volumeRatio = calculateVolumeRatioValue(
       stock,
       code,
       volumeHistoryMap,
@@ -2262,23 +1741,7 @@ class DataLoaderService {
    * 4. 计算综合排名
    */
   private async calculateRanks(stockMap: Map<string, any>): Promise<any[]> {
-    const platformTotals = this.getPlatformTotals()
-
-    let merged = Array.from(stockMap.values())
-    merged = merged.map((s) => this.calculateAvgRank(s, platformTotals))
-
-    // ✅ 计算综合排名（会设置 fundPenetration 和 compScore）
-    this.calculateComprehensiveRank(merged)
-
-    // ✅ 关键修复：按综合得分重新排序
-    merged.sort((a, b) => (b.compScore || 0) - (a.compScore || 0))
-
-    // 重新设置显示排名
-    merged.forEach((item, index) => {
-      item.rank = index + 1
-    })
-
-    return merged
+    return rankMergedStocks(stockMap, this.state.value.data)
   }
 
   /**
@@ -2403,178 +1866,6 @@ class DataLoaderService {
     }
   }
 
-  private getRankField(platform: string): string | null {
-    const map: Record<string, string> = {
-      eastmoney: 'emRank',
-      ths: 'thsRank',
-      kpl: 'kplRank',
-      tdx: 'tdxRank',
-      xueqiu: 'xqRank',
-      cls: 'clsRank',
-      tgb: 'tgbRank',
-      dzh: 'dzhRank',
-    }
-    return map[platform] || null
-  }
-
-  private calculateAvgRank(stock: any, platformTotals: any): any {
-    let weightedSum = 0,
-      totalWeight = 0,
-      platforms = 0
-
-    const rankData = [
-      { rank: stock.emRank, src: 'eastmoney' },
-      { rank: stock.thsRank, src: 'ths' },
-      { rank: stock.kplRank, src: 'kpl' },
-      { rank: stock.tdxRank, src: 'tdx' },
-      { rank: stock.xqRank, src: 'xueqiu' },
-      { rank: stock.clsRank, src: 'cls' },
-      { rank: stock.tgbRank, src: 'tgb' },
-      { rank: stock.dzhRank, src: 'dzh' },
-    ]
-
-    for (const { rank, src } of rankData) {
-      const total = platformTotals[src as keyof typeof platformTotals]
-      const weight = this.getWeight(src)
-      if (total > 0) {
-        totalWeight += weight
-        if (rank < DEFAULT_RANK) {
-          platforms++
-          weightedSum += (rank / total) * 100 * weight
-        } else {
-          weightedSum += PENALTY_SCORE * weight
-        }
-      }
-    }
-
-    stock.platforms = platforms
-    if (totalWeight > 0) {
-      stock.avgRankNum = weightedSum / totalWeight
-      stock.avgRank = stock.avgRankNum.toFixed(1)
-    }
-    return stock
-  }
-
-  private calculateComprehensiveRank(data: any[]) {
-    if (!data.length) return
-
-    // ✅ 第一步：正确计算资金渗透率（只计算一次）
-    data.forEach((item) => {
-      const cirMV = parseFloat(item.cirMV) || 0
-      const zlje = parseFloat(item.zlje) || 0
-      if (cirMV > 0 && zlje !== 0) {
-        // cirMV 已经是元为单位，不需要转换
-        item.fundPenetration = (zlje / cirMV) * 100
-      } else {
-        item.fundPenetration = 0
-      }
-    })
-
-    // ✅ 第二步：计算各指标的最大最小值
-    const stats = {
-      avgRankNum: { min: Infinity, max: -Infinity },
-      zljzb: { min: Infinity, max: -Infinity },
-      fundPenetration: { min: Infinity, max: -Infinity },
-      turnover: { min: Infinity, max: -Infinity },
-    }
-
-    data.forEach((item) => {
-      const avgRankNum = parseFloat(item.avgRankNum) || 0
-      const zljzb = parseFloat(item.zljzb) || 0
-      const fundPenetration = parseFloat(item.fundPenetration) || 0
-      const turnover = parseFloat(item.turnover) || 0
-
-      if (avgRankNum < stats.avgRankNum.min) stats.avgRankNum.min = avgRankNum
-      if (avgRankNum > stats.avgRankNum.max) stats.avgRankNum.max = avgRankNum
-      if (zljzb < stats.zljzb.min) stats.zljzb.min = zljzb
-      if (zljzb > stats.zljzb.max) stats.zljzb.max = zljzb
-      if (fundPenetration < stats.fundPenetration.min) stats.fundPenetration.min = fundPenetration
-      if (fundPenetration > stats.fundPenetration.max) stats.fundPenetration.max = fundPenetration
-      if (turnover < stats.turnover.min) stats.turnover.min = turnover
-      if (turnover > stats.turnover.max) stats.turnover.max = turnover
-    })
-
-    // ✅ 调试：输出统计范围
-    debugLog('[DEBUG] 统计范围:', {
-      zljzb: { min: stats.zljzb.min, max: stats.zljzb.max },
-      fundPenetration: { min: stats.fundPenetration.min, max: stats.fundPenetration.max },
-      turnover: { min: stats.turnover.min, max: stats.turnover.max },
-    })
-
-    // ✅ 第三步：标准化函数
-    const normalize = (val: number, min: number, max: number, reverse = false) => {
-      if (isNaN(val) || val === null || val === undefined) return reverse ? 100 : 0
-      if (max === min || isNaN(min) || isNaN(max) || min === Infinity || max === -Infinity) {
-        // 如果范围无效，根据 val 的正负返回合理值
-        if (val > 0) return reverse ? 0 : 100
-        if (val < 0) return reverse ? 100 : 0
-        return 50
-      }
-      const score = ((val - min) / (max - min)) * 100
-      const clampedScore = Math.min(100, Math.max(0, score))
-      return reverse ? 100 - clampedScore : clampedScore
-    }
-
-    // ✅ 第四步：换手率评分
-    const getTurnoverScore = (rate: number) => {
-      const r = parseFloat(rate as any) || 0
-      return 100 * Math.exp(-Math.pow(r - OPTIMAL_TURNOVER, 2) / (2 * TURNOVER_SIGMA ** 2))
-    }
-
-    // ✅ 第五步：计算综合得分
-    data.forEach((item) => {
-      const avgRankNum = parseFloat(item.avgRankNum) || 0
-      const zljzb = parseFloat(item.zljzb) || 0
-      const fundPenetration = parseFloat(item.fundPenetration) || 0
-      const turnover = parseFloat(item.turnover) || 0
-
-      item.compScore =
-        normalize(avgRankNum, stats.avgRankNum.min, stats.avgRankNum.max, true) *
-          COMPREHENSIVE_WEIGHTS.HOT_RANK +
-        normalize(zljzb, stats.zljzb.min, stats.zljzb.max, false) *
-          COMPREHENSIVE_WEIGHTS.MONEY_RATIO +
-        normalize(fundPenetration, stats.fundPenetration.min, stats.fundPenetration.max, false) *
-          COMPREHENSIVE_WEIGHTS.FUND_PENETRATION +
-        getTurnoverScore(item.turnoverRate) * COMPREHENSIVE_WEIGHTS.TURNOVER_RATE +
-        normalize(turnover, stats.turnover.min, stats.turnover.max, false) *
-          COMPREHENSIVE_WEIGHTS.VOLUME
-    })
-
-    // ✅ 第六步：按综合得分排序
-    const sorted = [...data].sort((a, b) => (b.compScore || 0) - (a.compScore || 0))
-    sorted.forEach((item, i) => {
-      item.compRank = i + 1
-    })
-  }
-
-  // ========== 工具方法 ==========
-  private getPlatformTotals() {
-    return {
-      eastmoney: this.state.value.data?.eastmoney?.length || 0,
-      ths: this.state.value.data?.ths?.length || 0,
-      kpl: this.state.value.data?.kpl?.length || 0,
-      tdx: this.state.value.data?.tdx?.length || 0,
-      xueqiu: this.state.value.data?.xueqiu?.length || 0,
-      cls: this.state.value.data?.cls?.length || 0,
-      tgb: this.state.value.data?.tgb?.length || 0,
-      dzh: this.state.value.data?.dzh?.length || 0,
-    }
-  }
-
-  private getWeight(platform: string): number {
-    const weightMap: Record<string, number> = {
-      kpl: 1.0,
-      tdx: 0.9,
-      ths: 0.85,
-      eastmoney: 0.75,
-      dzh: 0.7,
-      tgb: 0.4,
-      xueqiu: 0.35,
-      cls: 0.35,
-    }
-    return weightMap[platform] || 0.5
-  }
-
   private isValidName(name: string): boolean {
     return !!(name && name !== '-' && name !== 'null' && name !== 'undefined' && name.trim() !== '')
   }
@@ -2612,7 +1903,7 @@ class DataLoaderService {
     this.destroy()
     this.state.value = {
       initialized: false,
-      platforms: ['eastmoney', 'ths', 'kpl', 'tdx', 'xueqiu', 'cls', 'tgb', 'dzh'],
+      platforms: [...DEFAULT_PLATFORMS],
       data: {},
       loading: false,
       loadingProgress: 0,
