@@ -134,6 +134,27 @@ python -m backend.cli pull-archive-backup --archive-id <archive_id> --apply
 
 读取口径：`GET /api/snapshots/stock-rows`、`GET /api/snapshots/sector-rows`、`GET /api/backtests/{run_id}/trades`、`/equity`、`/signals` 在 SQLite 明细缺失且存在 verified/uploaded manifest 时，可通过 DuckDB 读取 Parquet，并返回 `source=parquet_archive` 或混合来源。前端不得传入 SQL。
 
+### `POST /api/operations/after-market-once`
+
+盘后生产编排入口。顺序固定为：
+
+1. `archive-auto-once`
+2. `push-archive-backup`
+3. `prune-backup`
+
+前一步失败会停止后续步骤并返回 `stoppedAt`。`dry_run=true` 不上传 R2，不删除 Supabase 云端行。
+
+```powershell
+Invoke-RestMethod -Method Post "http://127.0.0.1:8000/api/operations/after-market-once?archive_limit=5&backup_limit=20&dry_run=true"
+```
+
+CLI 等价命令：
+
+```powershell
+python -m backend.cli after-market-once --dry-run
+python -m backend.cli after-market-once --archive-limit 5 --backup-limit 20
+```
+
 ### `POST /api/sync/push-backup`
 
 把本地 SQLite 快照库中的数据集和快照事实推送到 Supabase 备份库。回测、优化、Golden 和报告属于 research SQLite，不进入 Supabase Free 版备份目标。

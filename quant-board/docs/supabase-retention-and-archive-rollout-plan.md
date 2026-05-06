@@ -38,6 +38,13 @@ cd quant-board
 .\.venv\Scripts\python.exe -m backend.cli push-backup --full-history
 ```
 
+盘后生产编排使用单入口，顺序固定为 `archive-auto-once -> push-archive-backup -> prune-backup`：
+
+```powershell
+.\.venv\Scripts\python.exe -m backend.cli after-market-once --dry-run
+.\.venv\Scripts\python.exe -m backend.cli after-market-once --archive-limit 5 --backup-limit 20
+```
+
 ## 自动任务配置
 
 ```text
@@ -54,10 +61,18 @@ QUANT_BOARD_SUPABASE_RETENTION_INITIAL_DELAY_SECONDS=120
 2. `push-archive-backup`：上传 verified 归档到 R2/S3。
 3. `prune-backup`：清理 Supabase，只保留最近 10 个交易日。
 
+生产落地建议：
+
+- 后端常驻 runner 负责低频后台能力和 health 可观测：`autoSync`、`autoArchive`、`backupRetention` 默认仍由环境变量显式开启。
+- Windows 任务计划程序作为盘后批处理入口，调用 `after-market-once`，避免三条命令分散配置导致顺序漂移。
+- `after-market-once --dry-run` 只执行归档同口径检查和 Supabase prune dry-run，不上传 R2、不删除 Supabase 云端行。
+- 非 dry-run 先完成本地 Parquet 归档并校验，再上传 R2，最后清理 Supabase；前一步失败会停止后续步骤。
+
 ## 验收
 
 ```powershell
 cd quant-board
+.\.venv\Scripts\python.exe -m pytest tests/test_operations_schedule.py -q
 .\.venv\Scripts\python.exe -m pytest tests/test_backup_retention.py tests/test_quant_board.py -q
 .\.venv\Scripts\python.exe -m pytest tests/test_archive_snapshots.py tests/test_duckdb_archive_query.py tests/test_object_backup.py -q
 ```

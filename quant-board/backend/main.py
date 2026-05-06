@@ -34,6 +34,7 @@ from backend.data.supabase_backup import get_backup_client
 from backend.data.theme_database import get_theme_db, init_theme_db, theme_status
 from backend.data.theme_repository import ThemeRepository
 from backend.data.theme_service import ThemeMigrationError, ThemeMigrationService
+from backend.operations.schedule import run_after_market_once
 from backend.services import BacktestService, GoldenService, OptimizationService
 from backend.settings import get_settings
 from backend.utils import json_dumps, json_loads, stable_hash
@@ -134,6 +135,15 @@ def prune_backup(dry_run: bool = False) -> dict[str, Any]:
 @app.post("/api/storage/archive/auto-once")
 def run_archive_auto_once_api(limit: int | None = None) -> dict[str, Any]:
     return run_archive_auto_once(limit)
+
+
+@app.post("/api/operations/after-market-once")
+def run_after_market_once_api(
+    archive_limit: int | None = None,
+    backup_limit: int | None = None,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    return run_after_market_once(archive_limit=archive_limit, backup_limit=backup_limit, dry_run=dry_run)
 
 
 @app.post("/api/sync/smoke-backup")

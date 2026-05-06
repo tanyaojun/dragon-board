@@ -23,6 +23,7 @@ from backend.data.storage_inspector import inspect_storage
 from backend.data.supabase_backup import get_backup_client
 from backend.data.theme_database import ThemeSessionLocal, init_theme_db
 from backend.data.theme_service import ThemeMigrationService
+from backend.operations.schedule import run_after_market_once
 from backend.settings import get_settings
 from backend.services import BacktestService, GoldenService, OptimizationService
 from backend.utils import json_loads
@@ -238,6 +239,16 @@ def cmd_push_archive_backup(args: argparse.Namespace) -> None:
     with SessionLocal() as session:
         result = ArchiveService(session).push_archive_backup(limit=args.limit)
         print_json(result)
+
+
+def cmd_after_market_once(args: argparse.Namespace) -> None:
+    print_json(
+        run_after_market_once(
+            archive_limit=args.archive_limit,
+            backup_limit=args.backup_limit,
+            dry_run=bool(args.dry_run),
+        )
+    )
 
 
 def cmd_pull_archive_backup(args: argparse.Namespace) -> None:
@@ -605,6 +616,12 @@ def build_parser() -> argparse.ArgumentParser:
     push_archive_cmd = sub.add_parser("push-archive-backup", help="Push local Parquet archives to R2/S3 object storage")
     push_archive_cmd.add_argument("--limit", type=int, default=None)
     push_archive_cmd.set_defaults(func=cmd_push_archive_backup)
+
+    after_market_cmd = sub.add_parser("after-market-once", help="Run after-market archive, R2 push, and Supabase prune pipeline")
+    after_market_cmd.add_argument("--archive-limit", type=int, default=None)
+    after_market_cmd.add_argument("--backup-limit", type=int, default=None)
+    after_market_cmd.add_argument("--dry-run", action="store_true")
+    after_market_cmd.set_defaults(func=cmd_after_market_once)
 
     pull_archive_cmd = sub.add_parser("pull-archive-backup", help="Pull Parquet archives from R2/S3 into local storage")
     pull_archive_cmd.add_argument("--archive-id", required=True)

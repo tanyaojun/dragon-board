@@ -86,7 +86,7 @@ class ArchiveAutoRunner:
             await asyncio.sleep(self.interval_seconds)
 
 
-def run_archive_auto_once(limit: int | None = None) -> dict[str, Any]:
+def run_archive_auto_once(limit: int | None = None, *, dry_run: bool = False) -> dict[str, Any]:
     from backend.data.archive.service import ArchiveService
     from backend.data.database import ResearchSessionLocal
 
@@ -112,7 +112,7 @@ def run_archive_auto_once(limit: int | None = None) -> dict[str, Any]:
             )
             if preview.get("rowCounts", {}).get("stockRows", 0) or preview.get("rowCounts", {}).get("sectorRows", 0):
                 results.append(
-                    service.archive_snapshots(
+                    preview if dry_run else service.archive_snapshots(
                         dataset_id=settings.archive_auto_dataset_id,
                         snapshot_type=snapshot_type,
                         before_trading_date=cutoff,
@@ -126,8 +126,8 @@ def run_archive_auto_once(limit: int | None = None) -> dict[str, Any]:
                 research_result = research_service.archive_research(
                     older_than_days=settings.archive_retention_trading_days,
                     keep_latest_per_group=10,
-                    dry_run=False,
-                    apply=True,
+                    dry_run=dry_run,
+                    apply=not dry_run,
                 )
                 results.append(research_result)
     return {"ok": all(item.get("ok") for item in results), "results": results, "cutoff": cutoff}

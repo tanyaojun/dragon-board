@@ -1822,6 +1822,11 @@ def test_cli_exposes_sync_and_migration_commands(tmp_path: Path, monkeypatch: py
     prune_backup_args = parser.parse_args(["prune-backup", "--dry-run"])
     assert prune_backup_args.func.__name__ == "cmd_prune_backup"
     assert prune_backup_args.dry_run is True
+    after_market_args = parser.parse_args(["after-market-once", "--archive-limit", "3", "--backup-limit", "2", "--dry-run"])
+    assert after_market_args.func.__name__ == "cmd_after_market_once"
+    assert after_market_args.archive_limit == 3
+    assert after_market_args.backup_limit == 2
+    assert after_market_args.dry_run is True
     compare_args = parser.parse_args(["compare-backtests", "--run-ids", "bt_1", "bt_2", "--metrics", "totalReturn,winRate"])
     assert compare_args.func.__name__ == "cmd_compare_backtests"
     assert compare_args.run_ids == ["bt_1", "bt_2"]

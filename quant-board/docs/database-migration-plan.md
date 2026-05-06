@@ -157,8 +157,12 @@ Dragon Board theme mapping
 
 - `POST /api/storage/archive/smoke-object-backup`
 - CLI `smoke-object-backup`
+- `POST /api/operations/after-market-once`
+- CLI `after-market-once`
 
 R2/S3 凭据只允许后端读取，不得进入 `VITE_*` 或 Vue 前端构建产物。
+
+生产盘后调度以 `after-market-once` 为单入口，顺序固定为本地自动归档、R2/S3 对象备份、Supabase 10 交易日清理。Windows 任务计划程序应调用该 CLI；后端常驻 runner 保留为显式开启的后台能力和 health 可观测入口。`after-market-once --dry-run` 不上传 R2，也不删除 Supabase 云端行。
 
 ## 写入合同
 
