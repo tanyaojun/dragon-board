@@ -281,6 +281,7 @@ class ThemeDataService {
         debugLog(`[ThemeDataService] 从 SQLite 加载: ${mappingData.themes.length}个题材`)
         this.buildMapping(mappingData)
         this.syncToDataLayer()
+        this.syncTagsAndReasonsToDataLayer()
         this.loaded = true
         this.lastError = null
       } else {

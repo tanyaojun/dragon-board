@@ -141,7 +141,7 @@ function getAshareElapsedTradingMinutes(date: Date = new Date()): number | undef
   const afternoonStart = 13 * 3600
   const afternoonEnd = 15 * 3600
 
-  if (secondsOfDay < morningStart) return undefined
+  if (secondsOfDay < morningStart) return A_SHARE_TRADING_MINUTES
   if (secondsOfDay <= morningEnd) {
     return Math.min(120, Math.max(1, Math.ceil((secondsOfDay - morningStart) / 60)))
   }

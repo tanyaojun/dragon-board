@@ -47,6 +47,19 @@ describe('VolumeRatioCalculator', () => {
     ).toBe(2.42)
   })
 
+  it('uses full-day progress outside trading hours when daily history is available', () => {
+    expect(getAshareExpectedVolumeProgress(new Date('2026-05-06T05:13:00+08:00'))).toBe(1)
+    expect(
+      calculateVolumeRatioValue(
+        { volume: 500 },
+        '600000',
+        new Map([['600000', [1000, 800, 600]]]),
+        undefined,
+        new Date('2026-05-06T05:13:00+08:00'),
+      ),
+    ).toBe(0.58)
+  })
+
   it('normalizes histories and clips raw ratios to the supported range', () => {
     expect(normalizeVolumeHistory([100, '90', 0, -1, Number.NaN, 80], 2)).toEqual([100, 90])
     expect(calculateWeightedVolumeRatio(200, [100, 80])).toBe(2.16)
@@ -56,7 +69,7 @@ describe('VolumeRatioCalculator', () => {
   })
 
   it('maps A-share trading time to elapsed progress and quote clock minute', () => {
-    expect(getAshareExpectedVolumeProgress(new Date('2026-05-06T09:29:59+08:00'))).toBeUndefined()
+    expect(getAshareExpectedVolumeProgress(new Date('2026-05-06T09:29:59+08:00'))).toBe(1)
     expect(getAshareExpectedVolumeProgress(new Date('2026-05-06T13:30:00+08:00'))).toBe(0.625)
     expect(getAshareExpectedVolumeProgress(new Date('2026-05-06T15:30:00+08:00'))).toBe(1)
     expect(getAshareVolumeClockMinute(new Date('2026-05-06T11:45:00+08:00'))).toBe(690)

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { themeMapping } from '../ThemeDataService'
+import { dataLayer } from '../DataLayer'
 
 const sqlitePayload = {
   ok: true,
@@ -34,6 +35,7 @@ describe('ThemeDataService sqlite mapping facade', () => {
   beforeEach(() => {
     vi.restoreAllMocks()
     themeMapping.clearCache()
+    dataLayer.reset()
   })
 
   afterEach(() => {
@@ -72,6 +74,25 @@ describe('ThemeDataService sqlite mapping facade', () => {
       { Name: '电网' },
     ])
     expect(themeMapping.getStockReason('000001')).toBe('算力龙头；电网建设')
+  })
+
+  it('syncs stock tags and reasons to DataLayer limit-up extension on initial load', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        new Response(JSON.stringify(sqlitePayload), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      ),
+    )
+
+    await expect(themeMapping.load()).resolves.toBe(true)
+
+    expect(dataLayer.getLimitUpData('000001')).toMatchObject({
+      tags: [{ Name: '算力' }, { Name: '电网' }],
+      reason: '算力龙头；电网建设',
+    })
   })
 
   it('setData updates only in-memory facade state and does not persist browser IndexedDB', () => {
