@@ -365,7 +365,7 @@ describe('getRankTrendDisplayStatus', () => {
     expect(status.tooltip).toContain('行情价格或成交额无效')
   })
 
-  it('有效价格但成交额缺失时不参与状态分层', () => {
+  it('集合竞价成交额为 0 时不覆盖已确认的 RankTrend 状态', () => {
     expect(
       getRankTrendDisplayStatus(createRankTrend({ tier: 'A_MAIN' }), {
         price: 12.3,
@@ -375,7 +375,7 @@ describe('getRankTrendDisplayStatus', () => {
         cddje: 3e7,
         cddjzb: 4,
       }).label,
-    ).toBe('样本不足')
+    ).toBe('主升确认')
   })
 
   it('主升确认但量能过热且主力不弱时降为高位拥挤', () => {

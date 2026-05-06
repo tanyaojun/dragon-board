@@ -130,7 +130,7 @@ function isInvalidQuoteData(stock: any): boolean {
 
   if (hasValue(stock.turnover)) {
     const turnover = Number(stock.turnover)
-    if (!Number.isFinite(turnover) || turnover <= 0) return true
+    if (!Number.isFinite(turnover) || turnover < 0) return true
   }
 
   return false
