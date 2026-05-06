@@ -1827,6 +1827,12 @@ def test_cli_exposes_sync_and_migration_commands(tmp_path: Path, monkeypatch: py
     assert after_market_args.archive_limit == 3
     assert after_market_args.backup_limit == 2
     assert after_market_args.dry_run is True
+    backup_day_args = parser.parse_args(["backup-snapshot-day", "--trading-date", "2026-05-06", "--dry-run"])
+    assert backup_day_args.func.__name__ == "cmd_backup_snapshot_day"
+    assert backup_day_args.dataset_id == "dragonboard_live"
+    assert backup_day_args.snapshot_type == "half_hour"
+    assert backup_day_args.trading_date == "2026-05-06"
+    assert backup_day_args.dry_run is True
     compare_args = parser.parse_args(["compare-backtests", "--run-ids", "bt_1", "bt_2", "--metrics", "totalReturn,winRate"])
     assert compare_args.func.__name__ == "cmd_compare_backtests"
     assert compare_args.run_ids == ["bt_1", "bt_2"]

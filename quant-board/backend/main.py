@@ -137,6 +137,38 @@ def run_archive_auto_once_api(limit: int | None = None) -> dict[str, Any]:
     return run_archive_auto_once(limit)
 
 
+@app.post("/api/storage/archive/backup-snapshot-day")
+def backup_snapshot_day(
+    dataset_id: str = "dragonboard_live",
+    snapshot_type: str = "half_hour",
+    trading_date: str | None = None,
+    dry_run: bool = False,
+    db: Session | None = Depends(get_db),
+) -> dict[str, Any]:
+    if db is None:
+        raise HTTPException(status_code=503, detail="primary database is unavailable")
+    service = ArchiveService(db)
+    target_date = trading_date or service.latest_snapshot_trading_date(
+        dataset_id=dataset_id,
+        snapshot_type=snapshot_type,
+    )
+    if not target_date:
+        return {
+            "ok": False,
+            "error": {
+                "code": "no_snapshot_trading_date",
+                "datasetId": dataset_id,
+                "snapshotType": snapshot_type,
+            },
+        }
+    return service.backup_snapshot_day_to_object(
+        dataset_id=dataset_id,
+        snapshot_type=snapshot_type,
+        trading_date=target_date,
+        dry_run=dry_run,
+    )
+
+
 @app.post("/api/operations/after-market-once")
 def run_after_market_once_api(
     archive_limit: int | None = None,

@@ -38,11 +38,18 @@ cd quant-board
 .\.venv\Scripts\python.exe -m backend.cli push-backup --full-history
 ```
 
-盘后生产编排使用单入口，顺序固定为 `archive-auto-once -> push-archive-backup -> prune-backup`：
+盘后生产编排使用单入口，顺序固定为 `backup-snapshot-day -> archive-auto-once -> push-archive-backup -> prune-backup`：
 
 ```powershell
 .\.venv\Scripts\python.exe -m backend.cli after-market-once --dry-run
 .\.venv\Scripts\python.exe -m backend.cli after-market-once --archive-limit 5 --backup-limit 20
+```
+
+也可以单独执行最新交易日快照备份。该命令会把最近一个 `dragonboard_live/half_hour` 交易日写成 Parquet 并上传 R2，不删除 SQLite 明细，不写冷归档 manifest：
+
+```powershell
+.\.venv\Scripts\python.exe -m backend.cli backup-snapshot-day --dry-run
+.\.venv\Scripts\python.exe -m backend.cli backup-snapshot-day
 ```
 
 ## 自动任务配置
@@ -57,16 +64,17 @@ QUANT_BOARD_SUPABASE_RETENTION_INITIAL_DELAY_SECONDS=120
 
 推荐盘后顺序：
 
-1. `archive-auto-once`：归档本地超保留期明细到 Parquet。
-2. `push-archive-backup`：上传 verified 归档到 R2/S3。
-3. `prune-backup`：清理 Supabase，只保留最近 10 个交易日。
+1. `backup-snapshot-day`：把最新交易日快照备份到 R2/S3，不删除 SQLite 明细。
+2. `archive-auto-once`：归档本地超过 90 个交易日保留期的明细到 Parquet。
+3. `push-archive-backup`：上传 verified 冷归档到 R2/S3。
+4. `prune-backup`：清理 Supabase，只保留最近 10 个交易日。
 
 生产落地建议：
 
 - 后端常驻 runner 负责低频后台能力和 health 可观测：`autoSync`、`autoArchive`、`backupRetention` 默认仍由环境变量显式开启。
 - Windows 任务计划程序作为盘后批处理入口，调用 `after-market-once`，避免三条命令分散配置导致顺序漂移。
-- `after-market-once --dry-run` 只执行归档同口径检查和 Supabase prune dry-run，不上传 R2、不删除 Supabase 云端行。
-- 非 dry-run 先完成本地 Parquet 归档并校验，再上传 R2，最后清理 Supabase；前一步失败会停止后续步骤。
+- `after-market-once --dry-run` 会检查最新交易日备份、冷归档和 Supabase prune 口径，不上传 R2、不删除 Supabase 云端行。
+- 非 dry-run 先完成最新交易日 R2 备份，再完成本地冷归档并校验，随后上传冷归档到 R2，最后清理 Supabase；前一步失败会停止后续步骤。
 
 ## 验收
 

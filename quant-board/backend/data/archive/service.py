@@ -62,6 +62,10 @@ def _publish_known_archive_files(source_dir: Path, target_dir: Path) -> list[str
     return published
 
 
+def _safe_archive_part(value: str) -> str:
+    return "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in str(value))
+
+
 class ArchiveService:
     def __init__(self, session: Session, *, research_session: Session | None = None, archive_dir: Path | None = None, compression: str | None = None) -> None:
         settings = get_settings()
@@ -183,6 +187,92 @@ class ArchiveService:
         if manifest.scope == "research":
             return self._restore_research_archive(manifest, payload)
         return {"ok": False, "error": {"code": "unsupported_archive_scope", "scope": manifest.scope}}
+
+    def backup_snapshot_day_to_object(
+        self,
+        *,
+        dataset_id: str,
+        snapshot_type: str,
+        trading_date: str,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        rows = self._snapshot_rows(dataset_id, snapshot_type, [trading_date])
+        row_counts = {key: len(value) for key, value in rows.items()}
+        safe_dataset_id = _safe_archive_part(dataset_id)
+        safe_snapshot_type = _safe_archive_part(snapshot_type)
+        safe_trading_date = _safe_archive_part(trading_date)
+        archive_id = f"snapshot_backup_{safe_dataset_id}_{safe_snapshot_type}_{safe_trading_date}"
+        local_path = self.archive_dir / "backups" / f"dataset_id={safe_dataset_id}" / f"snapshot_type={safe_snapshot_type}" / f"trading_date={safe_trading_date}"
+        base = {
+            "ok": True,
+            "dryRun": dry_run,
+            "archiveId": archive_id,
+            "scope": "snapshot_backup",
+            "source": "sqlite",
+            "target": "r2_object_backup",
+            "localPath": str(local_path),
+            "rowCounts": {
+                "records": row_counts["records"],
+                "frames": row_counts["frames"],
+                "stockRows": row_counts["stockRows"],
+                "sectorRows": row_counts["sectorRows"],
+            },
+            "files": [],
+            "deletedFromSqlite": {},
+            "errors": [],
+        }
+        if dry_run:
+            return base
+        if not rows["stockRows"] and not rows["sectorRows"]:
+            return {
+                **base,
+                "ok": False,
+                "error": {"code": "backup_empty_table", "message": "no snapshot detail rows to backup"},
+            }
+        store = get_object_backup_store()
+        if not store:
+            return {**base, "ok": False, "error": {"code": "object_backup_not_configured"}}
+
+        files = self._write_tables(
+            local_path,
+            {
+                "records": rows["records"] or [{"archiveId": archive_id}],
+                "frames": rows["frames"] or [{"archiveId": archive_id}],
+                "stock_rows": rows["stockRows"],
+                "sector_rows": rows["sectorRows"],
+            },
+        )
+        manifest_payload = {
+            "archiveId": archive_id,
+            "scope": "snapshot_backup",
+            "datasetId": dataset_id,
+            "snapshotType": snapshot_type,
+            "tradingDates": [trading_date],
+            "rowCounts": base["rowCounts"],
+            "files": files,
+            "createdAt": datetime.now(timezone.utc).isoformat(),
+            "sqliteRetained": True,
+        }
+        write_manifest(local_path / "manifest.json", manifest_payload)
+        result = store.push_archive(local_path, archive_id=archive_id)
+        if not result.get("ok"):
+            return {**base, "ok": False, "files": files, "error": result.get("error")}
+        return {
+            **base,
+            "files": files,
+            "uploadResult": result,
+            "objectKey": store.archive_prefix(archive_id),
+        }
+
+    def latest_snapshot_trading_date(self, *, dataset_id: str, snapshot_type: str) -> str | None:
+        return self.session.scalar(
+            select(SnapshotFrameModel.trading_date)
+            .where(SnapshotFrameModel.dataset_id == dataset_id)
+            .where(SnapshotFrameModel.type == snapshot_type)
+            .group_by(SnapshotFrameModel.trading_date)
+            .order_by(SnapshotFrameModel.trading_date.desc())
+            .limit(1)
+        )
 
     def archive_research(
         self,

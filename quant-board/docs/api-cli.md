@@ -111,6 +111,22 @@ python -m backend.cli verify-archive --archive-id <archive_id>
 
 R2/S3 对象备份探针。写入、读回并删除一个明确测试 object key。不会写 SQLite 业务数据。
 
+### `POST /api/storage/archive/backup-snapshot-day`
+
+把一个交易日的 SQLite 快照事实写成备份型 Parquet 并上传到 R2/S3。该入口用于 T+0/T+1 异地灾备，不删除 SQLite 明细，不写 `archive_manifests` 冷归档索引。未传 `trading_date` 时默认选择目标 `dataset_id/snapshot_type` 的最新交易日。
+
+```powershell
+Invoke-RestMethod -Method Post "http://127.0.0.1:8000/api/storage/archive/backup-snapshot-day?dry_run=true"
+```
+
+CLI 等价命令：
+
+```powershell
+python -m backend.cli backup-snapshot-day --dry-run
+python -m backend.cli backup-snapshot-day
+python -m backend.cli backup-snapshot-day --trading-date 2026-05-06
+```
+
 ### `POST /api/storage/archive/push-backup`
 
 把本地 verified 归档上传到 R2/S3。只上传允许的归档文件：`*.parquet`、`manifest.json` 和 `archive_index.jsonl`。上传成功后 manifest 更新为 `status=uploaded` 并记录 `object_key`；上传失败不影响本地 verified 状态。
@@ -138,9 +154,10 @@ python -m backend.cli pull-archive-backup --archive-id <archive_id> --apply
 
 盘后生产编排入口。顺序固定为：
 
-1. `archive-auto-once`
-2. `push-archive-backup`
-3. `prune-backup`
+1. `backup-snapshot-day`
+2. `archive-auto-once`
+3. `push-archive-backup`
+4. `prune-backup`
 
 前一步失败会停止后续步骤并返回 `stoppedAt`。`dry_run=true` 不上传 R2，不删除 Supabase 云端行。
 

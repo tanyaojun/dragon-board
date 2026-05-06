@@ -157,12 +157,16 @@ Dragon Board theme mapping
 
 - `POST /api/storage/archive/smoke-object-backup`
 - CLI `smoke-object-backup`
+- `POST /api/storage/archive/backup-snapshot-day`
+- CLI `backup-snapshot-day`
 - `POST /api/operations/after-market-once`
 - CLI `after-market-once`
 
 R2/S3 凭据只允许后端读取，不得进入 `VITE_*` 或 Vue 前端构建产物。
 
-生产盘后调度以 `after-market-once` 为单入口，顺序固定为本地自动归档、R2/S3 对象备份、Supabase 10 交易日清理。Windows 任务计划程序应调用该 CLI；后端常驻 runner 保留为显式开启的后台能力和 health 可观测入口。`after-market-once --dry-run` 不上传 R2，也不删除 Supabase 云端行。
+生产盘后调度以 `after-market-once` 为单入口，顺序固定为最新交易日快照备份、本地 90 交易日冷归档、R2/S3 冷归档上传、Supabase 10 交易日清理。Windows 任务计划程序应调用该 CLI；后端常驻 runner 保留为显式开启的后台能力和 health 可观测入口。`after-market-once --dry-run` 不上传 R2，也不删除 Supabase 云端行。
+
+每日备份型 Parquet 与冷归档 Parquet 必须区分：`backup-snapshot-day` 只做异地灾备，不删除 SQLite 明细，也不写 `archive_manifests` 冷归档索引；`archive-auto-once` 只处理超过 `QUANT_BOARD_ARCHIVE_RETENTION_TRADING_DAYS` 的历史明细，校验成功后才允许清理 SQLite 明细。
 
 ## 写入合同
 

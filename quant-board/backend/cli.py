@@ -241,6 +241,36 @@ def cmd_push_archive_backup(args: argparse.Namespace) -> None:
         print_json(result)
 
 
+def cmd_backup_snapshot_day(args: argparse.Namespace) -> None:
+    init_db()
+    with SessionLocal() as session:
+        service = ArchiveService(session)
+        trading_date = args.trading_date or service.latest_snapshot_trading_date(
+            dataset_id=args.dataset_id,
+            snapshot_type=args.snapshot_type,
+        )
+        if not trading_date:
+            print_json(
+                {
+                    "ok": False,
+                    "error": {
+                        "code": "no_snapshot_trading_date",
+                        "datasetId": args.dataset_id,
+                        "snapshotType": args.snapshot_type,
+                    },
+                }
+            )
+            return
+        print_json(
+            service.backup_snapshot_day_to_object(
+                dataset_id=args.dataset_id,
+                snapshot_type=args.snapshot_type,
+                trading_date=trading_date,
+                dry_run=bool(args.dry_run),
+            )
+        )
+
+
 def cmd_after_market_once(args: argparse.Namespace) -> None:
     print_json(
         run_after_market_once(
@@ -616,6 +646,13 @@ def build_parser() -> argparse.ArgumentParser:
     push_archive_cmd = sub.add_parser("push-archive-backup", help="Push local Parquet archives to R2/S3 object storage")
     push_archive_cmd.add_argument("--limit", type=int, default=None)
     push_archive_cmd.set_defaults(func=cmd_push_archive_backup)
+
+    backup_day_cmd = sub.add_parser("backup-snapshot-day", help="Backup one trading day's SQLite snapshots to R2/S3 without deleting SQLite rows")
+    backup_day_cmd.add_argument("--dataset-id", default="dragonboard_live")
+    backup_day_cmd.add_argument("--snapshot-type", default="half_hour")
+    backup_day_cmd.add_argument("--trading-date", default=None)
+    backup_day_cmd.add_argument("--dry-run", action="store_true")
+    backup_day_cmd.set_defaults(func=cmd_backup_snapshot_day)
 
     after_market_cmd = sub.add_parser("after-market-once", help="Run after-market archive, R2 push, and Supabase prune pipeline")
     after_market_cmd.add_argument("--archive-limit", type=int, default=None)

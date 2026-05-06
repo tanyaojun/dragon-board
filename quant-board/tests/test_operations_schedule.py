@@ -18,6 +18,21 @@ def test_after_market_job_runs_archive_push_and_prune_in_order(monkeypatch: Any)
         def __init__(self, _session: Any) -> None:
             pass
 
+        def latest_snapshot_trading_date(self, *, dataset_id: str, snapshot_type: str) -> str | None:
+            calls.append(f"latest:{dataset_id}:{snapshot_type}")
+            return "2026-05-06"
+
+        def backup_snapshot_day_to_object(
+            self,
+            *,
+            dataset_id: str,
+            snapshot_type: str,
+            trading_date: str,
+            dry_run: bool = False,
+        ) -> dict[str, Any]:
+            calls.append(f"daily:{dataset_id}:{snapshot_type}:{trading_date}:{dry_run}")
+            return {"ok": True, "archiveId": "snapshot_backup_dragonboard_live_half_hour_2026-05-06"}
+
         def push_archive_backup(self, *, limit: int | None = None) -> dict[str, Any]:
             calls.append(f"push:{limit}")
             return {"ok": True, "pushed": 1, "manifests": [{"archiveId": "a1"}]}
@@ -35,8 +50,14 @@ def test_after_market_job_runs_archive_push_and_prune_in_order(monkeypatch: Any)
     result = run_after_market_once(archive_limit=2, backup_limit=1)
 
     assert result["ok"] is True
-    assert result["steps"] == ["archive", "pushArchiveBackup", "pruneBackup"]
-    assert calls == ["archive:2", "push:1", "prune:False"]
+    assert result["steps"] == ["dailySnapshotBackup", "archive", "pushArchiveBackup", "pruneBackup"]
+    assert calls == [
+        "latest:dragonboard_live:half_hour",
+        "daily:dragonboard_live:half_hour:2026-05-06:False",
+        "archive:2",
+        "push:1",
+        "prune:False",
+    ]
 
 
 def test_after_market_job_dry_run_skips_mutating_push_and_prune(monkeypatch: Any) -> None:
@@ -49,6 +70,21 @@ def test_after_market_job_dry_run_skips_mutating_push_and_prune(monkeypatch: Any
     class FakeArchiveService:
         def __init__(self, _session: Any) -> None:
             pass
+
+        def latest_snapshot_trading_date(self, *, dataset_id: str, snapshot_type: str) -> str | None:
+            calls.append(f"latest:{dataset_id}:{snapshot_type}")
+            return "2026-05-06"
+
+        def backup_snapshot_day_to_object(
+            self,
+            *,
+            dataset_id: str,
+            snapshot_type: str,
+            trading_date: str,
+            dry_run: bool = False,
+        ) -> dict[str, Any]:
+            calls.append(f"daily:{dataset_id}:{snapshot_type}:{trading_date}:{dry_run}")
+            return {"ok": True, "dryRun": dry_run}
 
         def push_archive_backup(self, *, limit: int | None = None) -> dict[str, Any]:
             calls.append(f"push:{limit}")
@@ -69,7 +105,12 @@ def test_after_market_job_dry_run_skips_mutating_push_and_prune(monkeypatch: Any
     assert result["ok"] is True
     assert result["dryRun"] is True
     assert result["results"]["pushArchiveBackup"]["skipped"] is True
-    assert calls == ["archive:2:True", "prune:True"]
+    assert calls == [
+        "latest:dragonboard_live:half_hour",
+        "daily:dragonboard_live:half_hour:2026-05-06:True",
+        "archive:2:True",
+        "prune:True",
+    ]
 
 
 def test_after_market_job_stops_after_archive_failure(monkeypatch: Any) -> None:
@@ -82,6 +123,21 @@ def test_after_market_job_stops_after_archive_failure(monkeypatch: Any) -> None:
     class FakeArchiveService:
         def __init__(self, _session: Any) -> None:
             pass
+
+        def latest_snapshot_trading_date(self, *, dataset_id: str, snapshot_type: str) -> str | None:
+            calls.append(f"latest:{dataset_id}:{snapshot_type}")
+            return "2026-05-06"
+
+        def backup_snapshot_day_to_object(
+            self,
+            *,
+            dataset_id: str,
+            snapshot_type: str,
+            trading_date: str,
+            dry_run: bool = False,
+        ) -> dict[str, Any]:
+            calls.append(f"daily:{dataset_id}:{snapshot_type}:{trading_date}:{dry_run}")
+            return {"ok": True}
 
         def push_archive_backup(self, *, limit: int | None = None) -> dict[str, Any]:
             calls.append(f"push:{limit}")
@@ -101,7 +157,64 @@ def test_after_market_job_stops_after_archive_failure(monkeypatch: Any) -> None:
 
     assert result["ok"] is False
     assert result["stoppedAt"] == "archive"
-    assert calls == ["archive:2"]
+    assert calls == [
+        "latest:dragonboard_live:half_hour",
+        "daily:dragonboard_live:half_hour:2026-05-06:False",
+        "archive:2",
+    ]
+
+
+def test_after_market_job_continues_after_daily_backup_failure(monkeypatch: Any) -> None:
+    calls: list[str] = []
+
+    def fake_archive(limit: int | None = None, *, dry_run: bool = False) -> dict[str, Any]:
+        calls.append(f"archive:{limit}")
+        return {"ok": True, "results": []}
+
+    class FakeArchiveService:
+        def __init__(self, _session: Any) -> None:
+            pass
+
+        def latest_snapshot_trading_date(self, *, dataset_id: str, snapshot_type: str) -> str | None:
+            calls.append(f"latest:{dataset_id}:{snapshot_type}")
+            return "2026-05-06"
+
+        def backup_snapshot_day_to_object(
+            self,
+            *,
+            dataset_id: str,
+            snapshot_type: str,
+            trading_date: str,
+            dry_run: bool = False,
+        ) -> dict[str, Any]:
+            calls.append(f"daily:{dataset_id}:{snapshot_type}:{trading_date}:{dry_run}")
+            return {"ok": False, "error": {"code": "object_backup_not_configured"}}
+
+        def push_archive_backup(self, *, limit: int | None = None) -> dict[str, Any]:
+            calls.append(f"push:{limit}")
+            return {"ok": True}
+
+    def fake_prune(*, dry_run: bool = False) -> dict[str, Any]:
+        calls.append(f"prune:{dry_run}")
+        return {"ok": True}
+
+    monkeypatch.setattr("backend.operations.schedule.run_archive_auto_once", fake_archive)
+    monkeypatch.setattr("backend.operations.schedule.ArchiveService", FakeArchiveService)
+    monkeypatch.setattr("backend.operations.schedule.run_backup_retention_once", fake_prune)
+
+    from backend.operations.schedule import run_after_market_once
+
+    result = run_after_market_once(archive_limit=2, backup_limit=1)
+
+    assert result["ok"] is True
+    assert result["results"]["dailySnapshotBackup"]["ok"] is False
+    assert calls == [
+        "latest:dragonboard_live:half_hour",
+        "daily:dragonboard_live:half_hour:2026-05-06:False",
+        "archive:2",
+        "push:1",
+        "prune:False",
+    ]
 
 
 def test_after_market_api_returns_structured_result(monkeypatch: Any) -> None:
@@ -111,7 +224,7 @@ def test_after_market_api_returns_structured_result(monkeypatch: Any) -> None:
             "dryRun": dry_run,
             "archiveLimit": archive_limit,
             "backupLimit": backup_limit,
-            "steps": ["archive", "pushArchiveBackup", "pruneBackup"],
+            "steps": ["dailySnapshotBackup", "archive", "pushArchiveBackup", "pruneBackup"],
         }
 
     monkeypatch.setattr("backend.main.run_after_market_once", fake_once)

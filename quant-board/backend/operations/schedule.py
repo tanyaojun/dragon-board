@@ -7,6 +7,7 @@ from backend.data.archive.auto_archive import run_archive_auto_once
 from backend.data.archive.service import ArchiveService
 from backend.data.backup_retention import run_backup_retention_once
 from backend.data.database import SessionLocal, init_db
+from backend.settings import get_settings
 
 
 def run_after_market_once(
@@ -17,7 +18,33 @@ def run_after_market_once(
 ) -> dict[str, Any]:
     started_at = datetime.now(timezone.utc).isoformat()
     results: dict[str, Any] = {}
-    steps = ["archive", "pushArchiveBackup", "pruneBackup"]
+    steps = ["dailySnapshotBackup", "archive", "pushArchiveBackup", "pruneBackup"]
+
+    settings = get_settings()
+    snapshot_type = _first_snapshot_type(settings.archive_auto_snapshot_types)
+    init_db()
+    with SessionLocal() as session:
+        service = ArchiveService(session)
+        trading_date = service.latest_snapshot_trading_date(
+            dataset_id=settings.archive_auto_dataset_id,
+            snapshot_type=snapshot_type,
+        )
+        if trading_date:
+            daily_result = service.backup_snapshot_day_to_object(
+                dataset_id=settings.archive_auto_dataset_id,
+                snapshot_type=snapshot_type,
+                trading_date=trading_date,
+                dry_run=dry_run,
+            )
+        else:
+            daily_result = {
+                "ok": True,
+                "skipped": True,
+                "reason": "no_snapshot_trading_date",
+                "datasetId": settings.archive_auto_dataset_id,
+                "snapshotType": snapshot_type,
+            }
+    results["dailySnapshotBackup"] = daily_result
 
     archive_result = run_archive_auto_once(archive_limit, dry_run=dry_run)
     results["archive"] = archive_result
@@ -105,3 +132,8 @@ def _result(
     if stopped_at:
         payload["stoppedAt"] = stopped_at
     return payload
+
+
+def _first_snapshot_type(raw: str) -> str:
+    items = [item.strip() for item in (raw or "").split(",") if item.strip()]
+    return items[0] if items else "half_hour"
