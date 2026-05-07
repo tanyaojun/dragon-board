@@ -148,6 +148,8 @@
               </div>
 
               <div class="tag-row">
+                <span>{{ currentStock.qualityLabel }}</span>
+                <span>{{ currentStock.cycleLabel }}</span>
                 <span>{{ signalText(currentStock.finalSignal) }}</span>
                 <span>{{ regimeText(currentStock.regimeState) }}</span>
               </div>
@@ -329,6 +331,7 @@ import { dataLayer } from '@/services/DataLayer'
 import { rankTrendAnalyzer, type RankTrendResult } from '@/services/RankTrendAnalyzer'
 import {
   buildRankTrendStatusContext,
+  getRankTrendDisplayBreakdown,
   getRankTrendDisplayStatus,
   type RankTrendStatusContext,
 } from '@/services/rankTrend/compat'
@@ -392,6 +395,8 @@ interface PanelStockView {
   macdCross: string
   statusLabel: string
   statusClass: string
+  qualityLabel: string
+  cycleLabel: string
   tier: string
   action: string
   stage: string
@@ -654,6 +659,7 @@ function buildPanelStockView(
   const risk = analysis?.risk
   const finalSignal = (analysis?.decision?.final?.signal ?? stock?.finalSignal ?? 'hold') as Signal
   const status = getRankTrendDisplayStatus(analysis, stock, statusContext)
+  const breakdown = getRankTrendDisplayBreakdown(analysis, stock, statusContext)
 
   return {
     code: normalizeCode(stock?.code),
@@ -684,6 +690,8 @@ function buildPanelStockView(
     macdCross: String(technical?.macd?.cross ?? stock?.macdCross ?? 'none'),
     statusLabel: status.label,
     statusClass: status.classKey,
+    qualityLabel: breakdown.qualityLabel,
+    cycleLabel: breakdown.cycleLabel,
     tier: String(strategy?.candidateTier ?? 'N_NEUTRAL'),
     action: String(strategy?.action ?? 'hold'),
     stage: String(cycle?.stage ?? ''),

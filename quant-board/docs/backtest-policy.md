@@ -212,3 +212,4 @@ trade_return_cycle_5d
 - `tradeDiagnostics`：按出场原因和 RankTrend 分层汇总的交易贡献、最好/最差交易、未平仓明细；
 - `matchingDiagnostics`：盘口覆盖、快照价回退、涨跌停/流动性导致的未成交和部分成交；
 - `controlBacktests`：上述对照组表现。
+- `researchDiagnostics`：按 1/2/5 bars、候选分层、生命周期、市场环境和展示状态汇总后验表现，并列出对照组。该字段只作为研究诊断，不会自动写回 RankTrend 默认参数。

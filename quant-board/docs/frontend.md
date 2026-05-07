@@ -229,7 +229,8 @@ await window.quantBoardExportRankTrendGolden({
 - `controlBacktests`：热榜 Top10、A_MAIN only、B_IGNITION only、A+B；
 - `sampleDiagnostics`：快照数、技术最小 bars、样本 OK 占比和诊断提示；
 - `macdDiagnostics`：MACD 最小 bars、稳定观察 bars，并明确“辅助观察”；
-- `tradeDiagnostics`：按出场原因和 RankTrend 分层统计利润贡献。
+- `tradeDiagnostics`：按出场原因和 RankTrend 分层统计利润贡献；
+- `researchDiagnostics`：展示 1/2/5 bars 后验表现、市场环境 × 候选分层、生命周期 × 候选分层、展示状态分布和对照组表现。页面必须标注其为研究诊断，不得提示用户自动采用参数。
 
 这些字段用于复盘和排错，不改变 RankTrend 策略算法。
 

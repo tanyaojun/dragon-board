@@ -6,6 +6,22 @@ export interface RankTrendDisplayStatus {
   tooltip: string
 }
 
+export interface RankTrendDisplayBreakdown {
+  qualityLabel: string
+  qualityBadgeLabel: string
+  showQualityBadge: boolean
+  cycleLabel: string
+  tierLabel: string
+  riskLabel: string
+  tooltip: string
+  classKeys: {
+    quality: string
+    cycle: string
+    tier: string
+    risk: string
+  }
+}
+
 export type VolumeConfirmation = 'healthy' | 'weak' | 'overheated' | 'divergent'
 
 export interface RankTrendStatusContext {
@@ -70,6 +86,35 @@ const INVALID_QUOTE_STATUS: RankTrendDisplayStatus = {
   label: '样本不足',
   classKey: 'insufficient',
   tooltip: '行情价格或成交额无效，暂不参与状态分层。',
+}
+
+const SAMPLE_QUALITY_LABELS: Record<string, string> = {
+  ok: '样本OK',
+  degraded: '样本降级',
+  insufficient: '样本不足',
+  unknown: '样本未知',
+}
+
+const CYCLE_LABELS: Record<string, string> = {
+  ignition: '启动',
+  expansion: '扩散',
+  crowded: '拥挤',
+  reversal: '反转',
+  cooling: '降温',
+}
+
+const RISK_LABELS: Record<string, string> = {
+  crowded: '拥挤风险',
+  money_divergence: '资金背离',
+  weakening: '转弱预警',
+  insufficient: '数据不足',
+}
+
+const RISK_CLASS_KEYS: Record<string, string> = {
+  crowded: 'risk-crowded',
+  money_divergence: 'risk-money_divergence',
+  weakening: 'risk-weakening',
+  insufficient: 'risk-insufficient',
 }
 
 function toNumber(value: unknown): number {
@@ -289,7 +334,7 @@ function createStrongMoneyStatus(volumeConfirmation: VolumeConfirmation, reason?
 //  (9) B_IGNITION+资金不弱 → 点火观察
 //  (10) 强资金+承接 → 强资确认
 //  (11) 有热度 → 新入观察
-//  (12) 兜底 → 样本不足
+//  (12) 兜底 → 样本不足/新入观察
 export function getRankTrendDisplayStatus(
   rankTrend?: RankTrendAnalysisResult | null,
   stock?: any,
@@ -361,5 +406,43 @@ export function getRankTrendDisplayStatus(
     return CANDIDATE_TIER_STATUS.N_NEUTRAL
   }
 
-  return INSUFFICIENT_STATUS
+  return insufficient ? INSUFFICIENT_STATUS : CANDIDATE_TIER_STATUS.N_NEUTRAL
+}
+
+export function getRankTrendDisplayBreakdown(
+  rankTrend?: RankTrendAnalysisResult | null,
+  stock?: any,
+  context?: RankTrendStatusContext,
+): RankTrendDisplayBreakdown {
+  const status = getRankTrendDisplayStatus(rankTrend, stock, context)
+  const sampleStatus = rankTrend ? rankTrend.meta?.sampleQuality?.status ?? 'unknown' : 'insufficient'
+  const stage = rankTrend?.cycle?.stage ?? ''
+  const qualityLabel = SAMPLE_QUALITY_LABELS[sampleStatus] ?? '样本未知'
+  const showQualityBadge = false
+  const qualityBadgeLabel = ''
+  const cycleLabel = stage ? CYCLE_LABELS[stage] ?? String(stage) : '-'
+  const riskLabel = RISK_LABELS[status.classKey] ?? '正常'
+  const tooltip = [
+    `样本：${qualityLabel}`,
+    `周期：${cycleLabel}`,
+    `分层：${status.label}`,
+    `风险：${riskLabel}`,
+    status.tooltip,
+  ].filter(Boolean).join('\n')
+
+  return {
+    qualityLabel,
+    qualityBadgeLabel,
+    showQualityBadge,
+    cycleLabel,
+    tierLabel: status.label,
+    riskLabel,
+    tooltip,
+    classKeys: {
+      quality: `quality-${sampleStatus}`,
+      cycle: stage ? `cycle-${stage}` : 'cycle-empty',
+      tier: status.classKey,
+      risk: RISK_CLASS_KEYS[status.classKey] ?? 'risk-normal',
+    },
+  }
 }

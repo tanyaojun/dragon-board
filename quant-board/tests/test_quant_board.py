@@ -453,6 +453,15 @@ def test_import_backtest_optimize_and_golden(tmp_path: Path) -> None:
     assert run["dataQuality"]["lowHotlistExamples"]
     assert run["warnings"]
     assert "tradeDiagnostics" in run
+    assert "researchDiagnostics" in run
+    research = run["researchDiagnostics"]
+    assert research["policy"]["autoApplyDefaults"] is False
+    assert research["policy"]["snapshotType"] == "half_hour"
+    assert research["policy"]["randomSeed"] == 20260430
+    assert {item["key"] for item in research["baselineComparisons"]} >= {"hot_top10", "a_main_only", "b_ignition_only", "a_b_combined"}
+    assert {row["horizon"] for row in research["forwardOutcomeByTier"]} >= {1, 2, 5}
+    assert "byRegimeTier" in research
+    assert "byStageTier" in research
     assert run["forwardValidation"]["horizons"]
     assert "byMomentumBucket" in run["forwardValidation"]["horizons"][0]
 
@@ -542,6 +551,22 @@ def test_import_backtest_optimize_and_golden(tmp_path: Path) -> None:
     assert len(fetched.json()["tradeEvents"]) >= len(fetched.json()["trades"])
     assert "sharpe" in fetched.json()
     assert "controlBacktests" in fetched.json()
+
+    no_trade_backtest = client.post(
+        "/api/backtests/rank-trend",
+        json={
+            "datasetId": dataset["id"],
+            "snapshotType": "half_hour",
+            "randomSeed": 20260431,
+            "enableTradeSimulation": False,
+        },
+    )
+    assert no_trade_backtest.status_code == 200, no_trade_backtest.text
+    no_trade_run = no_trade_backtest.json()
+    assert "researchDiagnostics" in no_trade_run
+    assert no_trade_run["researchDiagnostics"]["policy"]["snapshotType"] == "half_hour"
+    assert no_trade_run["researchDiagnostics"]["policy"]["randomSeed"] == 20260431
+    assert no_trade_run["researchDiagnostics"]["forwardOutcomeByTier"]
 
     trades = client.get(f"/api/backtests/{run['runId']}/trades", params={"limit": 5, "offset": 0})
     assert trades.status_code == 200, trades.text

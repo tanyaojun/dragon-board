@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
-import { buildRankTrendStatusContext, getRankTrendDisplayStatus } from '../statusClassifier'
+import {
+  buildRankTrendStatusContext,
+  getRankTrendDisplayBreakdown,
+  getRankTrendDisplayStatus,
+} from '../statusClassifier'
 import type { RankTrendAnalysisResult } from '../types'
 
 function createRankTrend(input: {
@@ -8,6 +12,7 @@ function createRankTrend(input: {
   sampleStatus?: NonNullable<RankTrendAnalysisResult['meta']['sampleQuality']>['status']
   percentile?: number
   change?: number
+  stage?: RankTrendAnalysisResult['cycle']['stage']
 }): RankTrendAnalysisResult {
   const tier = input.tier ?? 'N_NEUTRAL'
   return {
@@ -39,8 +44,8 @@ function createRankTrend(input: {
       momentumProfile: { short: 0, mid: 0, long: 0, acceleration: 0, shock: 0, composite: 0 },
     },
     cycle: {
-      rawStage: 'cooling',
-      stage: 'cooling',
+      rawStage: input.stage ?? 'cooling',
+      stage: input.stage ?? 'cooling',
       previousStage: null,
       transition: 'cooling',
       confidence: 50,
@@ -424,6 +429,22 @@ describe('getRankTrendDisplayStatus', () => {
     ).toBe('样本不足')
   })
 
+  it('样本充足但未形成明确机会时不显示样本不足', () => {
+    const status = getRankTrendDisplayStatus(
+      createRankTrend({ sampleStatus: 'ok', percentile: 20, change: 0 }),
+      {
+        compRank: 120,
+        turnover: 10,
+        volumeRatio: 0.6,
+        turnoverRate: 2,
+        zlje: 0,
+        zljzb: 0,
+      },
+    )
+
+    expect(status.label).toBe('新入观察')
+  })
+
   it('没有热榜横截面 context 时使用 fallback 且不抛错', () => {
     expect(() =>
       getRankTrendDisplayStatus(createRankTrend({ sampleStatus: 'insufficient' }), {
@@ -434,5 +455,71 @@ describe('getRankTrendDisplayStatus', () => {
         zljzb: 2,
       }),
     ).not.toThrow()
+  })
+})
+
+describe('getRankTrendDisplayBreakdown', () => {
+  it('把样本质量、生命周期和机会分层拆成三栏投影', () => {
+    const breakdown = getRankTrendDisplayBreakdown(
+      createRankTrend({ tier: 'A_MAIN', sampleStatus: 'ok', stage: 'expansion' }),
+      { zlje: 1, zljzb: 2 },
+    )
+
+    expect(breakdown.qualityLabel).toBe('样本OK')
+    expect(breakdown.showQualityBadge).toBe(false)
+    expect(breakdown.qualityBadgeLabel).toBe('')
+    expect(breakdown.cycleLabel).toBe('扩散')
+    expect(breakdown.tierLabel).toBe('主升确认')
+    expect(breakdown.riskLabel).toBe('正常')
+    expect(breakdown.classKeys.quality).toBe('quality-ok')
+    expect(breakdown.classKeys.cycle).toBe('cycle-expansion')
+    expect(breakdown.classKeys.tier).toBe('main_confirmed')
+    expect(breakdown.classKeys.risk).toBe('risk-normal')
+    expect(breakdown.tooltip).toContain('样本OK')
+    expect(breakdown.tooltip).toContain('扩散')
+    expect(breakdown.tooltip).toContain('主升确认')
+  })
+
+  it('样本降级不覆盖分层，风险标签独立表达资金背离', () => {
+    const breakdown = getRankTrendDisplayBreakdown(
+      createRankTrend({ tier: 'A_MAIN', sampleStatus: 'degraded', stage: 'crowded' }),
+      { compRank: 10, turnover: 400, volumeRatio: 3.5, turnoverRate: 15, zlje: -1, zljzb: -5 },
+    )
+
+    expect(breakdown.qualityLabel).toBe('样本降级')
+    expect(breakdown.showQualityBadge).toBe(false)
+    expect(breakdown.qualityBadgeLabel).toBe('')
+    expect(breakdown.cycleLabel).toBe('拥挤')
+    expect(breakdown.tierLabel).toBe('资金背离')
+    expect(breakdown.riskLabel).toBe('资金背离')
+    expect(breakdown.classKeys.quality).toBe('quality-degraded')
+    expect(breakdown.classKeys.risk).toBe('risk-money_divergence')
+    expect(breakdown.tooltip).toContain('样本降级')
+  })
+
+  it('缺少 RankTrend 时三栏投影只标记样本不足，不伪造生命周期', () => {
+    const breakdown = getRankTrendDisplayBreakdown(null, {})
+
+    expect(breakdown.qualityLabel).toBe('样本不足')
+    expect(breakdown.showQualityBadge).toBe(false)
+    expect(breakdown.qualityBadgeLabel).toBe('')
+    expect(breakdown.cycleLabel).toBe('-')
+    expect(breakdown.tierLabel).toBe('样本不足')
+    expect(breakdown.riskLabel).toBe('数据不足')
+    expect(breakdown.classKeys.quality).toBe('quality-insufficient')
+    expect(breakdown.classKeys.cycle).toBe('cycle-empty')
+    expect(breakdown.tooltip).toContain('样本不足')
+  })
+
+  it('已有 RankTrend 但缺少 sampleQuality 时不误标样本不足', () => {
+    const rankTrend = createRankTrend({ tier: 'A_MAIN', stage: 'expansion' })
+    delete rankTrend.meta.sampleQuality
+
+    const breakdown = getRankTrendDisplayBreakdown(rankTrend, { zlje: 1, zljzb: 2 })
+
+    expect(breakdown.qualityLabel).toBe('样本未知')
+    expect(breakdown.showQualityBadge).toBe(false)
+    expect(breakdown.qualityBadgeLabel).toBe('')
+    expect(breakdown.classKeys.quality).toBe('quality-unknown')
   })
 })

@@ -161,6 +161,8 @@ class BacktestService:
             "trade_config": trade_config,
             "strategy_config": strategy_config,
             "strategy_name": strategy_name,
+            "snapshot_type": snapshot_type,
+            "random_seed": int(camel_get(payload, "random_seed", "randomSeed", 20260430)),
             "quality_gate": quality_gate,
         }
         result = BacktestEngine().run(run_frames, options)

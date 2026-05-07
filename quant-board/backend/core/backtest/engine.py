@@ -32,10 +32,23 @@ class BacktestEngine:
             "dataQuality": data_quality,
             "warnings": data_quality["warnings"],
         }
-        if options.get("enable_trade_simulation", True):
-            trade_config = {**(options.get("trade_config") or {}), "entryStrategy": strategy_name}
+        enable_trade_simulation = options.get("enable_trade_simulation", True)
+        trade_config = {**(options.get("trade_config") or {}), "entryStrategy": strategy_name}
+        control_backtests = (
+            self._control_backtests(frames, signals, trade_config)
+            if enable_trade_simulation
+            else []
+        )
+        report["controlBacktests"] = control_backtests
+        report["researchDiagnostics"] = self._research_diagnostics(
+            frames,
+            signals,
+            control_backtests,
+            strategy_name,
+            options,
+        )
+        if enable_trade_simulation:
             report["tradeSimulation"] = TradeSimulator().run(frames, signals, trade_config)
-            report["controlBacktests"] = self._control_backtests(frames, signals, trade_config)
             report["tradeDiagnostics"] = self._trade_diagnostics(report["tradeSimulation"])
             report["strategyDecisions"] = self._record_strategy_decisions(frames, signals, strategy_name, trade_config)
             report.update({
@@ -221,6 +234,90 @@ class BacktestEngine:
                 "openPositionCount": result.get("openPositionCount"),
             })
         return rows
+
+    @staticmethod
+    def _research_diagnostics(
+        frames: list[dict[str, Any]],
+        signals: list[dict[str, Any]],
+        control_backtests: list[dict[str, Any]],
+        strategy_name: str,
+        options: dict[str, Any],
+    ) -> dict[str, Any]:
+        evaluator = OutcomeEvaluator()
+        horizons = [1, 2, 5]
+        horizon_reports = evaluator.evaluate(frames, signals, horizons).get("horizons") or []
+        distribution = evaluator.distribution(signals)
+        tiers = ["A_MAIN", "B_IGNITION", "C_CROWDED", "D_EXIT_RISK", "N_NEUTRAL"]
+
+        def grouped_tier_distribution(group_key: str) -> list[dict[str, Any]]:
+            groups = sorted({str(signal.get(group_key) or "-") for signal in signals})
+            rows: list[dict[str, Any]] = []
+            for key in groups:
+                subset = [signal for signal in signals if str(signal.get(group_key) or "-") == key]
+                total = len(subset)
+                tier_counts = {tier: len([signal for signal in subset if signal.get("candidateTier") == tier]) for tier in tiers}
+                rows.append({
+                    "key": key,
+                    "total": total,
+                    "share": share(total, len(signals)),
+                    "tiers": tier_counts,
+                    "tierShares": {tier: share(count, total) for tier, count in tier_counts.items()},
+                })
+            return rows
+
+        def status_bucket(signal: dict[str, Any]) -> str:
+            tier = str(signal.get("candidateTier") or "N_NEUTRAL")
+            if tier == "A_MAIN":
+                return "主升确认"
+            if tier == "B_IGNITION":
+                return "点火观察"
+            if tier == "C_CROWDED":
+                return "高位拥挤"
+            if tier == "D_EXIT_RISK":
+                return "转弱预警"
+            return "新入观察"
+
+        def pick(report: dict[str, Any], key: str) -> list[dict[str, Any]]:
+            return [dict(item) for item in report.get(key) or []]
+
+        return {
+            "policy": {
+                "autoApplyDefaults": False,
+                "role": "research_report_only",
+                "strategyName": strategy_name,
+                "snapshotType": str(options.get("snapshot_type") or options.get("snapshotType") or "half_hour"),
+                "randomSeed": options.get("random_seed") or options.get("randomSeed"),
+                "notes": [
+                    "研究诊断只用于校准候选阈值和展示解释，不自动写回 RankTrend 默认参数。",
+                    "RankTrend 核心动量参数变更必须先通过 golden 对齐与样本外验证。",
+                ],
+            },
+            "forwardOutcomeByTier": [
+                {
+                    "horizon": report.get("horizon"),
+                    "byTier": pick(report, "byTier"),
+                    "byStage": pick(report, "byStage"),
+                    "byRegime": pick(report, "byRegime"),
+                    "byTierStage": pick(report, "byTierStage"),
+                    "byTierRegime": pick(report, "byTierRegime"),
+                }
+                for report in horizon_reports
+            ],
+            "byRegimeTier": grouped_tier_distribution("regime"),
+            "byStageTier": grouped_tier_distribution("stage"),
+            "byDisplayStatus": [
+                {
+                    "key": key,
+                    "count": len([signal for signal in signals if status_bucket(signal) == key]),
+                    "share": share(len([signal for signal in signals if status_bucket(signal) == key]), len(signals)),
+                }
+                for key in sorted({status_bucket(signal) for signal in signals})
+            ],
+            "baselineComparisons": [dict(item) for item in control_backtests],
+            "warnings": list(dict.fromkeys((distribution.get("warnings") or []) + [
+                "对照组和分层诊断只能作为研究线索，不能直接覆盖默认参数。",
+            ])),
+        }
 
     @staticmethod
     def _record_strategy_decisions(

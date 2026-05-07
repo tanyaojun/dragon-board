@@ -2,7 +2,9 @@ import type { RankTrendAnalysisResult } from './types'
 export {
   buildRankTrendStatusContext,
   classifyVolumeConfirmation,
+  getRankTrendDisplayBreakdown,
   getRankTrendDisplayStatus,
+  type RankTrendDisplayBreakdown,
   type RankTrendDisplayStatus,
   type RankTrendStatusContext,
   type VolumeConfirmation,

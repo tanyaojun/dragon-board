@@ -134,9 +134,19 @@
             </template>
 
             <template v-else-if="col.key === 'strategyStatus'">
-              <div class="strategy-status-cell" @mouseenter="showStatusTooltip($event, stock)"
+              <div
+                class="strategy-status-cell"
+                :class="[
+                  `cycle-marker-${getRankTrendBreakdown(stock).classKeys.cycle}`,
+                ]"
+                @mouseenter="showStatusTooltip($event, stock)"
                 @mousemove="moveStatusTooltip($event)" @mouseleave="hideStatusTooltip">
-                {{ formatRankTrendStatus(stock) }}
+                <span
+                  class="strategy-status-label"
+                  :class="`status-${getRankTrendBreakdown(stock).classKeys.tier}`"
+                >
+                  {{ getRankTrendBreakdown(stock).tierLabel }}
+                </span>
               </div>
             </template>
 
@@ -217,7 +227,11 @@ import { dataLayer } from '../../services/DataLayer'
 import { dataLoader } from '../../services/dataLoader'
 import RankTrendPanel from '../../components/panels/RankTrendPanel.vue'
 import { rankTrendAnalyzer } from '../../services/RankTrendAnalyzer'
-import { buildRankTrendStatusContext, getRankTrendDisplayStatus } from '../../services/rankTrend/compat'
+import {
+  buildRankTrendStatusContext,
+  getRankTrendDisplayBreakdown,
+  getRankTrendDisplayStatus,
+} from '../../services/rankTrend/compat'
 const props = defineProps<{
   loading?: boolean
 }>()
@@ -354,7 +368,7 @@ const COLUMN_WIDTHS: Record<string, string> = {
   compRank: '50px',
   rankChange: '50px',
   confidence: '70px',
-  strategyStatus: '78px',
+  strategyStatus: '82px',
   zlje: '90px',
   zljzb: '90px',
   cddje: '90px',
@@ -800,9 +814,12 @@ const getAttentionStage = (stock: any) =>
 const getRankTrendStatus = (stock: any) =>
   getRankTrendDisplayStatus(getRankTrendAnalysis(stock), stock, rankTrendStatusContext.value)
 
+const getRankTrendBreakdown = (stock: any) =>
+  getRankTrendDisplayBreakdown(getRankTrendAnalysis(stock), stock, rankTrendStatusContext.value)
+
 const formatRankTrendStatus = (stock: any) => getRankTrendStatus(stock).label
 
-const getRankTrendStatusTooltip = (stock: any) => getRankTrendStatus(stock).tooltip
+const getRankTrendStatusTooltip = (stock: any) => getRankTrendBreakdown(stock).tooltip
 
 const showStatusTooltip = (event: MouseEvent, stock: any) => {
   hideRowTooltip()
@@ -1579,66 +1596,102 @@ defineExpose({
 }
 
 .strategy-status-cell {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 64px;
+  gap: 4px;
+  min-width: 70px;
   height: 22px;
-  padding: 0 7px;
+  padding: 0 7px 0 10px;
   border-radius: 6px;
   border: 1px solid rgba(255, 255, 255, 0.1);
   background: rgba(255, 255, 255, 0.04);
   line-height: 1;
+  overflow: hidden;
 }
 
-.strategy-tier-main_confirmed {
-  color: #ff4d4f !important;
-  background: rgba(255, 77, 79, 0.12);
-  border-color: rgba(255, 77, 79, 0.45);
+.strategy-status-cell::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 3px;
+  bottom: 3px;
+  width: 3px;
+  border-radius: 3px;
+  background: rgba(148, 163, 184, 0.7);
+}
+
+.strategy-status-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
   font-weight: 600;
 }
 
-.strategy-tier-ignition_watch {
+.strategy-tier-main_confirmed,
+.status-main_confirmed {
+  color: #ff4d4f !important;
+}
+
+.strategy-tier-ignition_watch,
+.status-ignition_watch {
   color: #facc15 !important;
-  background: rgba(250, 204, 21, 0.12);
-  border-color: rgba(250, 204, 21, 0.45);
 }
 
-.strategy-tier-strong_money {
+.strategy-tier-strong_money,
+.status-strong_money {
   color: #38bdf8 !important;
-  background: rgba(56, 189, 248, 0.12);
-  border-color: rgba(56, 189, 248, 0.45);
 }
 
-.strategy-tier-new_watch {
+.strategy-tier-new_watch,
+.status-new_watch {
   color: #2dd4bf !important;
-  background: rgba(45, 212, 191, 0.12);
-  border-color: rgba(45, 212, 191, 0.45);
 }
 
-.strategy-tier-crowded {
+.strategy-tier-crowded,
+.status-crowded {
   color: #f8fafc !important;
-  background: rgba(248, 250, 252, 0.08);
-  border-color: rgba(248, 250, 252, 0.35);
 }
 
-.strategy-tier-money_divergence {
+.strategy-tier-money_divergence,
+.status-money_divergence {
   color: #c084fc !important;
-  background: rgba(192, 132, 252, 0.12);
-  border-color: rgba(192, 132, 252, 0.45);
 }
 
-.strategy-tier-weakening {
+.strategy-tier-weakening,
+.status-weakening {
   color: #22c55e !important;
-  background: rgba(34, 197, 94, 0.12);
-  border-color: rgba(34, 197, 94, 0.45);
 }
 
 .strategy-tier-insufficient,
-.strategy-tier-empty {
+.strategy-tier-empty,
+.status-insufficient,
+.status-quality-insufficient,
+.status-cycle-empty {
   color: #9ca3af !important;
-  background: rgba(156, 163, 175, 0.08);
-  border-color: rgba(156, 163, 175, 0.28);
+}
+
+.status-quality-degraded {
+  color: #facc15 !important;
+}
+
+.cycle-marker-cycle-ignition::before {
+  background: #facc15;
+}
+
+.cycle-marker-cycle-expansion::before {
+  background: #ff8a80;
+}
+
+.cycle-marker-cycle-crowded::before {
+  background: #e5e7eb;
+}
+
+.cycle-marker-cycle-reversal::before,
+.cycle-marker-cycle-cooling::before {
+  background: #22c55e;
 }
 
 .status-tooltip {
