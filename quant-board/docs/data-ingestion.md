@@ -226,7 +226,7 @@ QuantBoard 当前把质量分成两层：
 
 因此“质量门禁通过但仍有低热榜 warning”是允许状态，含义是结果可用于候选观察，不应直接用于严格验收或定参数。
 
-空热榜快照会在导入质量门禁中记录为问题；回测/优化运行时会自动剔除这些不可交易快照继续执行，并在报告中输出 `runtimeFilter`、`droppedEmptyHotlistSnapshots`、源快照数和实际运行快照数。
+正式 `POST /api/snapshots/ingest` 不再接受非 `five_minute` 空热榜 frame，避免 Dragon Board 自动保存阶段继续产生空正式快照。历史导入或迁移数据中已经存在的空热榜快照会在导入质量门禁中记录为问题；回测/优化运行时会自动剔除这些不可交易快照继续执行，并在报告中输出 `runtimeFilter`、`droppedEmptyHotlistSnapshots`、源快照数和实际运行快照数。
 
 ## 样本质量状态
 

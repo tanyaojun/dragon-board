@@ -703,6 +703,25 @@ def normalize_snapshot_ingest(
         for record in records:
             sector_rows.extend(sector_rows_from_record(record))
 
+    def row_snapshot_id(item: dict[str, Any]) -> str:
+        return str(item.get("snapshotId") or item.get("snapshot_id") or item.get("id") or "")
+
+    stock_row_count_by_snapshot: dict[str, int] = {}
+    for row in stock_rows:
+        snapshot_id = row_snapshot_id(row)
+        if snapshot_id:
+            stock_row_count_by_snapshot[snapshot_id] = stock_row_count_by_snapshot.get(snapshot_id, 0) + 1
+    empty_formal_snapshot_ids = [
+        snapshot_id
+        for frame in frames
+        for snapshot_id in [row_snapshot_id(frame)]
+        if str(frame.get("type") or "") != "five_minute"
+        and snapshot_id
+        and stock_row_count_by_snapshot.get(snapshot_id, 0) == 0
+    ]
+    if empty_formal_snapshot_ids:
+        raise ValueError(f"formal snapshot hotlist is empty: {empty_formal_snapshot_ids[0]}")
+
     snapshot_ids = {str(record.get("id") or record.get("snapshotId") or "") for record in records}
     snapshot_ids.update(str(frame.get("snapshotId") or frame.get("id") or "") for frame in frames)
     snapshot_ids.discard("")

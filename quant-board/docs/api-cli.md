@@ -314,6 +314,8 @@ Dragon Board 正式快照写入入口。前端提交 v4 snapshot bundle，正常
 
 同一 `idempotencyKey` 重放时返回 `deduped=true`，不会重复写入事实行。若 Supabase 镜像失败，本地 SQLite 写入仍成立，`status` 会是 `retry/failed`，后续由 `push-backup` 补偿。
 
+正式快照入库要求每个非 `five_minute` frame 至少有一条股票行。若 v4 bundle 中的 `items/records` 热榜为空，或显式 `stockRows` 缺失导致正式 frame 无股票行，接口返回 400，错误信息包含 `formal snapshot hotlist is empty`。历史导入数据中已经存在的空热榜快照仍由回测质量门禁和运行时过滤处理，不通过该正式写入口继续新增。
+
 当 SQLite 主库完全不可用但 Supabase 同构备份库可写时，接口会临时执行 failover 写入，返回 `ok=true`、`status=backup_only`、`outbox=null`，并带上 `failover.active=true`、`reason`、`idempotency_key` 和恢复提示。该路径不会伪造 SQLite outbox；主库恢复后需要执行 `POST /api/sync/pull-backup` 把备份记录拉回 SQLite。若 Supabase 也不可写，接口返回 503。
 
 ### `GET /api/snapshots/frames`

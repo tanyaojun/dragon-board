@@ -497,6 +497,33 @@ describe('getRankTrendDisplayBreakdown', () => {
     expect(breakdown.tooltip).toContain('样本降级')
   })
 
+  it('展示层降为高位拥挤时 tooltip 保留 A_MAIN 原始分层', () => {
+    const target = {
+      change: 10,
+      turnover: 400,
+      volumeRatio: 3.5,
+      turnoverRate: 15,
+      zlje: 1,
+      zljzb: 2,
+    }
+    const context = buildRankTrendStatusContext([
+      { turnover: 10, volumeRatio: 0.6, turnoverRate: 2 },
+      { turnover: 50, volumeRatio: 1, turnoverRate: 4 },
+      { turnover: 100, volumeRatio: 1.4, turnoverRate: 6 },
+      { turnover: 200, volumeRatio: 2, turnoverRate: 8 },
+      target,
+    ])
+
+    const breakdown = getRankTrendDisplayBreakdown(
+      createRankTrend({ tier: 'A_MAIN', sampleStatus: 'ok', stage: 'crowded' }),
+      target,
+      context,
+    )
+
+    expect(breakdown.tierLabel).toBe('高位拥挤')
+    expect(breakdown.tooltip).toContain('原始分层：A_MAIN')
+  })
+
   it('缺少 RankTrend 时三栏投影只标记样本不足，不伪造生命周期', () => {
     const breakdown = getRankTrendDisplayBreakdown(null, {})
 

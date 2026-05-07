@@ -233,6 +233,16 @@ export class SnapshotRuntime {
     }
   }
 
+  private isFormalSnapshotSourceReady(type: SnapshotType, buildContext: SnapshotBuildContext): boolean {
+    if (type === 'five_minute') return true
+
+    const stockCount = Array.isArray(buildContext.stocks) ? buildContext.stocks.length : 0
+    if (stockCount > 0) return true
+
+    this.logger.warn(`[DataLayer] 跳过${type}快照保存：当前热榜股票池为空`)
+    return false
+  }
+
   async saveQuarterHourSnapshot(snapshotTime?: Date): Promise<boolean> {
     try {
       const effectiveTime = this.resolveSnapshotTime('quarter_hour', snapshotTime)
@@ -245,6 +255,7 @@ export class SnapshotRuntime {
         return false
       }
       const buildContext = this.getBuildContext()
+      if (!this.isFormalSnapshotSourceReady('quarter_hour', buildContext)) return false
       const snapshot = buildIntradaySnapshotBase(buildContext, effectiveTime, buildContext.stocks.length)
       const cleanSnapshot = JSON.parse(JSON.stringify(snapshot))
       const record = this.createManagedSnapshotRecord('quarter_hour', effectiveTime, cleanSnapshot)
@@ -271,6 +282,7 @@ export class SnapshotRuntime {
         return false
       }
       const buildContext = this.getBuildContext()
+      if (!this.isFormalSnapshotSourceReady('half_hour', buildContext)) return false
       const snapshot = buildIntradaySnapshotBase(buildContext, effectiveTime, buildContext.stocks.length)
       const cleanSnapshot = JSON.parse(JSON.stringify(snapshot))
       const record = this.createManagedSnapshotRecord('half_hour', effectiveTime, cleanSnapshot)
@@ -297,6 +309,7 @@ export class SnapshotRuntime {
         return false
       }
       const buildContext = this.getBuildContext()
+      if (!this.isFormalSnapshotSourceReady('hourly', buildContext)) return false
       const snapshot = buildHourlySnapshot(buildContext, effectiveTime)
       const cleanSnapshot = JSON.parse(JSON.stringify(snapshot))
       const record = this.createManagedSnapshotRecord('hourly', effectiveTime, cleanSnapshot)
@@ -516,6 +529,7 @@ export class SnapshotRuntime {
         return false
       }
       const buildContext = this.getBuildContext()
+      if (!this.isFormalSnapshotSourceReady('daily', buildContext)) return false
       const snapshot = buildDailySnapshot(buildContext, effectiveTime)
       const cleanSnapshot = JSON.parse(JSON.stringify(snapshot))
       const record = this.createManagedSnapshotRecord('daily', effectiveTime, cleanSnapshot)

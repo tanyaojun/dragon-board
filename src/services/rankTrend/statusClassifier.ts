@@ -12,6 +12,8 @@ export interface RankTrendDisplayBreakdown {
   showQualityBadge: boolean
   cycleLabel: string
   tierLabel: string
+  candidateTierKey: string
+  candidateTierLabel: string
   riskLabel: string
   tooltip: string
   classKeys: {
@@ -62,6 +64,14 @@ const CANDIDATE_TIER_STATUS: Record<string, RankTrendDisplayStatus> = {
     classKey: 'new_watch',
     tooltip: '刚进入热榜视野，资金确认一般，先看下一轮排名和资金能否延续。',
   },
+}
+
+const CANDIDATE_TIER_LABELS: Record<string, string> = {
+  A_MAIN: 'A_MAIN / 主升候选',
+  B_IGNITION: 'B_IGNITION / 点火候选',
+  C_CROWDED: 'C_CROWDED / 拥挤候选',
+  D_EXIT_RISK: 'D_EXIT_RISK / 退出风险',
+  N_NEUTRAL: 'N_NEUTRAL / 中性观察',
 }
 
 const FALLBACK_STATUS_CONTEXT: RankTrendStatusContext = {
@@ -417,6 +427,8 @@ export function getRankTrendDisplayBreakdown(
   const status = getRankTrendDisplayStatus(rankTrend, stock, context)
   const sampleStatus = rankTrend ? rankTrend.meta?.sampleQuality?.status ?? 'unknown' : 'insufficient'
   const stage = rankTrend?.cycle?.stage ?? ''
+  const candidateTierKey = rankTrend?.strategy?.candidateTier ? String(rankTrend.strategy.candidateTier) : ''
+  const candidateTierLabel = candidateTierKey ? CANDIDATE_TIER_LABELS[candidateTierKey] ?? candidateTierKey : '-'
   const qualityLabel = SAMPLE_QUALITY_LABELS[sampleStatus] ?? '样本未知'
   const showQualityBadge = false
   const qualityBadgeLabel = ''
@@ -426,6 +438,7 @@ export function getRankTrendDisplayBreakdown(
     `样本：${qualityLabel}`,
     `周期：${cycleLabel}`,
     `分层：${status.label}`,
+    candidateTierKey ? `原始分层：${candidateTierLabel}` : '',
     `风险：${riskLabel}`,
     status.tooltip,
   ].filter(Boolean).join('\n')
@@ -436,6 +449,8 @@ export function getRankTrendDisplayBreakdown(
     showQualityBadge,
     cycleLabel,
     tierLabel: status.label,
+    candidateTierKey,
+    candidateTierLabel,
     riskLabel,
     tooltip,
     classKeys: {

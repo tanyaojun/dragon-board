@@ -394,6 +394,16 @@ describe('SnapshotRuntime', () => {
     expect(saveSnapshotRecord).not.toHaveBeenCalled()
   })
 
+  it('does not write formal half-hour snapshots when the stock pool is empty', async () => {
+    const runtime = createRuntime()
+    const saveSnapshotRecord = vi.spyOn(runtime as any, 'saveSnapshotRecord').mockResolvedValue(true)
+
+    const saved = await runtime.saveHalfHourSnapshot(new Date('2026-04-21T10:00:00'))
+
+    expect(saved).toBe(false)
+    expect(saveSnapshotRecord).not.toHaveBeenCalled()
+  })
+
   it('cleans non-trading-day runtime snapshots from primary projections and local backups', async () => {
     const runtime = createRuntime()
     const polluted = createRecord('half_hour', '2026-05-02', '10:00')

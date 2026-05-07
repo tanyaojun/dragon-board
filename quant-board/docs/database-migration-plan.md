@@ -310,6 +310,8 @@ R2/S3 凭据只允许后端读取，不得进入 `VITE_*` 或 Vue 前端构建�
 - `deduped`
 - `failover`：仅 `backup_only` 路径返回，包含 `active/reason/idempotency_key/recovery`，提示 SQLite 恢复后执行 `pull-backup`。
 
+正式写入口会拒绝空热榜：每个非 `five_minute` frame 必须能对应至少一条 `snapshot_stock_rows`。若请求只包含空 `hotlist` 或显式 `stockRows` 缺失，接口返回 400，不写入 SQLite 或备份 outbox。历史导入链路仍允许记录空热榜问题，并交由回测质量门禁剔除。
+
 ### `GET /api/snapshots/frames`
 
 用途：Dragon Board 和 QuantBoard 从 SQLite 主库读取正式快照聚合帧。该接口返回 frame + stock rows + sector rows 组合后的 bundle，是逐步替换 IndexedDB 正式读取的主接口。
