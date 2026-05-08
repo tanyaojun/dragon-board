@@ -33,7 +33,7 @@ class FakeObjectStore:
         return f"quant-board/{archive_id}/"
 
 
-def test_daily_snapshot_backup_uploads_without_deleting_sqlite_or_manifest(tmp_path: Path, monkeypatch: Any) -> None:
+def test_daily_snapshot_backup_uploads_without_deleting_sqlite_and_records_manifest(tmp_path: Path, monkeypatch: Any) -> None:
     from backend.data.archive.service import ArchiveService
 
     init_db()
@@ -63,7 +63,14 @@ def test_daily_snapshot_backup_uploads_without_deleting_sqlite_or_manifest(tmp_p
             "stock_rows.parquet",
         }
         assert session.scalar(select(SnapshotStockRowModel).where(SnapshotStockRowModel.dataset_id == "daily_backup_ds")) is not None
-        assert session.scalar(select(ArchiveManifestModel).where(ArchiveManifestModel.dataset_id == "daily_backup_ds")) is None
+        manifest = session.scalar(select(ArchiveManifestModel).where(ArchiveManifestModel.dataset_id == "daily_backup_ds"))
+        assert manifest is not None
+        assert manifest.archive_id == "snapshot_backup_daily_backup_ds_half_hour_2026-05-06"
+        assert manifest.scope == "snapshot_backup"
+        assert manifest.status == "uploaded"
+        assert manifest.object_key == "quant-board/snapshot_backup_daily_backup_ds_half_hour_2026-05-06/"
+        assert manifest.uploaded_at is not None
+        assert manifest.trading_date == "2026-05-06"
 
 
 def test_daily_snapshot_backup_dry_run_does_not_write_or_upload(tmp_path: Path, monkeypatch: Any) -> None:

@@ -147,7 +147,12 @@ class BackupSyncService:
         *,
         start_date: str | None = None,
     ) -> tuple[bool, str | None]:
-        full_bundle = repo.dump_dataset_bundle(row.dataset_id or "", start_date=start_date)
+        if row.op_type == "snapshot_ingest" and row.snapshot_id:
+            full_bundle = repo.dump_snapshot_bundle(row.dataset_id or "", row.snapshot_id)
+            if not full_bundle:
+                return False, "snapshot not found for outbox replay"
+        else:
+            full_bundle = repo.dump_dataset_bundle(row.dataset_id or "", start_date=start_date)
         if full_bundle:
             dataset, records, frames, stock_rows, sector_rows = full_bundle
         else:

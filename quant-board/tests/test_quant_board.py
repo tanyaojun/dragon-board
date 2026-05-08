@@ -2031,6 +2031,83 @@ class MemoryBackup:
             metadata_json=json_dumps(payload["metadata"]),
         )
 
+
+def test_snapshot_ingest_outbox_pushes_only_target_snapshot() -> None:
+    init_db()
+    suffix = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
+    dataset_id = f"outbox_slice_{suffix}"
+    backup = MemoryBackup()
+
+    with SessionLocal() as session:
+        repo = Repository(session, backup, enable_backup=False)
+        dataset = Dataset(
+            id=dataset_id,
+            name="Outbox Slice",
+            source_type="test",
+            snapshot_count=2,
+            frame_count=2,
+            stock_row_count=2,
+            sector_row_count=0,
+            start_date="2026-05-08",
+            end_date="2026-05-08",
+            snapshot_types_json='["half_hour"]',
+        )
+        records = []
+        frames = []
+        stock_rows = []
+        for slot, code in [("09:30", "600001"), ("10:00", "600002")]:
+            snapshot_id = f"half_hour:2026-05-08:{slot}"
+            records.append(
+                {
+                    "id": snapshot_id,
+                    "type": "half_hour",
+                    "tradingDate": "2026-05-08",
+                    "slotTime": slot,
+                    "timestamp": 1778203800000,
+                }
+            )
+            frames.append(
+                {
+                    "snapshotId": snapshot_id,
+                    "type": "half_hour",
+                    "tradingDate": "2026-05-08",
+                    "slotTime": slot,
+                    "timestamp": 1778203800000,
+                    "rows": [{"code": code, "name": code, "rank": 1}],
+                }
+            )
+            stock_rows.append(
+                {
+                    "snapshotId": snapshot_id,
+                    "type": "half_hour",
+                    "tradingDate": "2026-05-08",
+                    "timestamp": 1778203800000,
+                    "code": code,
+                    "name": code,
+                    "rank": 1,
+                }
+        )
+        repo.save_dataset_bundle(dataset, records, frames, stock_rows, [])
+        saved_dataset = session.get(Dataset, dataset_id)
+        assert saved_dataset is not None
+        row = repo.enqueue_outbox(
+            "snapshot_ingest",
+            {"dataset": Repository.dataset_to_dict(saved_dataset)},
+            idempotency_key=f"snapshot_ingest:{dataset_id}:target",
+            dataset_id=dataset_id,
+            snapshot_id="half_hour:2026-05-08:10:00",
+            next_retry_at=datetime.utcnow() - timedelta(seconds=1),
+        )
+        session.commit()
+
+        service = BackupSyncService(session, backup)
+        success, error = service._push_dataset_outbox_row(repo, row)
+
+        assert success is True
+        assert error is None
+        assert len(backup.frames[dataset_id]) == 1
+        assert backup.frames[dataset_id][0]["payload"]["frame"]["snapshotId"] == "half_hour:2026-05-08:10:00"
+
     def frames_from_rows(self, rows, snapshot_type="half_hour", start_date=None, end_date=None, include_payload=True):
         frames = []
         for row in rows:
@@ -2050,6 +2127,48 @@ class MemoryBackup:
             }
             frames.append(item)
         return frames
+
+
+def test_snapshot_ingest_outbox_fails_when_target_snapshot_is_missing() -> None:
+    init_db()
+    suffix = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
+    dataset_id = f"outbox_missing_{suffix}"
+    backup = MemoryBackup()
+
+    with SessionLocal() as session:
+        repo = Repository(session, backup, enable_backup=False)
+        dataset = Dataset(
+            id=dataset_id,
+            name="Outbox Missing",
+            source_type="test",
+            snapshot_count=0,
+            frame_count=0,
+            stock_row_count=0,
+            sector_row_count=0,
+            start_date="2026-05-08",
+            end_date="2026-05-08",
+            snapshot_types_json='["half_hour"]',
+        )
+        repo.save_dataset_bundle(dataset, [], [], [], [])
+        saved_dataset = session.get(Dataset, dataset_id)
+        assert saved_dataset is not None
+        row = repo.enqueue_outbox(
+            "snapshot_ingest",
+            {"dataset": Repository.dataset_to_dict(saved_dataset)},
+            idempotency_key=f"snapshot_ingest:{dataset_id}:missing",
+            dataset_id=dataset_id,
+            snapshot_id="half_hour:2026-05-08:10:00",
+            next_retry_at=datetime.utcnow() - timedelta(seconds=1),
+        )
+        session.commit()
+
+        service = BackupSyncService(session, backup)
+        success, error = service._push_dataset_outbox_row(repo, row)
+
+        assert success is False
+        assert error == "snapshot not found for outbox replay"
+        assert dataset_id not in backup.frames
+
 
 def test_repository_falls_back_to_backup_when_primary_session_is_unavailable() -> None:
     backup = MemoryBackup()

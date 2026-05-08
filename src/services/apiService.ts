@@ -331,147 +331,151 @@ export class ApiService {
       finalUrl = `${fullUrl}${separator}_t=${Date.now()}`
     }
 
-    // 创建取消控制器
-    const controller = new AbortController()
-    const timeoutId = setTimeout(() => controller.abort(), config.timeout)
-    this.abortControllers.set(requestId, controller)
-
-    // 合并信号
-    const signal = config.signal
-      ? this.mergeSignals(config.signal, controller.signal)
-      : controller.signal
-
     // 检查缓存（仅对GET请求）
     if (method === 'GET' && config.cache && !force) {
       const cached = this.getFromCache<T>(url, config)
       if (cached) {
-        clearTimeout(timeoutId)
-        this.abortControllers.delete(requestId)
         return cached
       }
     }
 
-    // 重试循环
-    while (retryCount <= (config.retries ?? 2)) {
-      try {
-        // 通过队列执行（根据优先级）
-        const response = await this.queue.add(config.priority ?? 'medium', async () => {
-          const fetchOptions: RequestInit = {
-            method,
-            headers: {
-              'Content-Type': 'application/json',
-              'X-Request-ID': requestId,
-              ...config.headers,
-            },
-            signal,
-          }
+    const controller = new AbortController()
+    this.abortControllers.set(requestId, controller)
 
-          let requestUrl = finalUrl
-          if (data) {
-            if (method === 'GET') {
-              // GET请求将数据转为查询参数
-              const params = new URLSearchParams(data).toString()
-              requestUrl += (requestUrl.includes('?') ? '&' : '?') + params
-            } else {
-              fetchOptions.body = JSON.stringify(data)
+    const signal = config.signal
+      ? this.mergeSignals(config.signal, controller.signal)
+      : controller.signal
+
+    try {
+      // 重试循环
+      while (retryCount <= (config.retries ?? 2)) {
+        try {
+          // 通过队列执行（根据优先级）
+          const response = await this.queue.add(config.priority ?? 'medium', async () => {
+            if (signal.aborted) {
+              throw new DOMException('Request aborted', 'AbortError')
             }
+            const timeoutId = setTimeout(() => controller.abort(), config.timeout)
+
+            const fetchOptions: RequestInit = {
+              method,
+              headers: {
+                'Content-Type': 'application/json',
+                'X-Request-ID': requestId,
+                ...config.headers,
+              },
+              signal,
+            }
+
+            let requestUrl = finalUrl
+            if (data) {
+              if (method === 'GET') {
+                // GET请求将数据转为查询参数
+                const params = new URLSearchParams(data).toString()
+                requestUrl += (requestUrl.includes('?') ? '&' : '?') + params
+              } else {
+                fetchOptions.body = JSON.stringify(data)
+              }
+            }
+
+            try {
+              return await fetch(requestUrl, fetchOptions)
+            } finally {
+              clearTimeout(timeoutId)
+            }
+          })
+
+          const duration = Date.now() - startTime
+
+          // 获取响应大小
+          const contentLength = response.headers.get('content-length')
+          const responseSize = contentLength ? parseInt(contentLength, 10) : 0
+
+          // 处理响应
+          let responseData: T
+          if (config.responseType === 'text') {
+            responseData = (await response.text()) as T
+          } else if (config.responseType === 'arraybuffer') {
+            responseData = (await response.arrayBuffer()) as T
+          } else {
+            responseData = await this.parseJsonResponse<T>(response)
           }
 
-          const response = await fetch(requestUrl, fetchOptions)
-          return response
-        })
+          if (config.throwOnHttpError && !response.ok) {
+            throw new ApiHttpError({
+              method,
+              url,
+              status: response.status,
+              statusText: response.statusText,
+              body: responseData,
+            })
+          }
 
-        clearTimeout(timeoutId)
-        const duration = Date.now() - startTime
-
-        // 获取响应大小
-        const contentLength = response.headers.get('content-length')
-        const responseSize = contentLength ? parseInt(contentLength, 10) : 0
-
-        // 处理响应
-        let responseData: T
-        if (config.responseType === 'text') {
-          responseData = (await response.text()) as T
-        } else if (config.responseType === 'arraybuffer') {
-          responseData = (await response.arrayBuffer()) as T
-        } else {
-          responseData = await this.parseJsonResponse<T>(response)
-        }
-
-        if (config.throwOnHttpError && !response.ok) {
-          throw new ApiHttpError({
-            method,
+          // 记录成功指标
+          this.recordMetrics({
             url,
+            method,
+            context: config.context ?? 'unknown',
+            startTime,
+            endTime: Date.now(),
+            duration,
             status: response.status,
-            statusText: response.statusText,
-            body: responseData,
+            success: true,
+            retryCount,
+            responseSize,
           })
+
+          // 存入缓存
+          if (method === 'GET' && config.cache) {
+            const etag = response.headers.get('etag') || undefined
+            this.setCache(url, responseData, config, etag)
+          }
+
+          return responseData
+        } catch (error) {
+          lastError = error instanceof Error ? error : new Error(String(error))
+
+          // 如果是取消请求，不重试
+          if (error instanceof Error && error.name === 'AbortError') {
+            debugLog(`[ApiService] 请求被取消: ${url}`)
+            break
+          }
+
+          retryCount++
+
+          // 如果还有重试次数，等待后继续
+          if (retryCount <= (config.retries ?? 2) && this.shouldRetryRequest(error)) {
+            const delay = (config.retryDelay ?? 1000) * Math.pow(2, retryCount - 1)
+            debugLog(
+              `[ApiService] 请求失败，${delay}ms后重试 (${retryCount}/${config.retries ?? 2}): ${url}`,
+            )
+            await this.delay(delay)
+            continue
+          }
+
+          // 最后一次尝试也失败，记录指标
+          const duration = Date.now() - startTime
+          this.recordMetrics({
+            url,
+            method,
+            context: config.context ?? 'unknown',
+            startTime,
+            endTime: Date.now(),
+            duration,
+            success: false,
+            retryCount: retryCount - 1,
+            error: error instanceof Error ? error.message : String(error),
+          })
+
+          if (!config.silent) {
+            console.error(`[ApiService] ${method} ${url} 失败:`, error)
+          }
+
+          throw error
         }
-
-        // 记录成功指标
-        this.recordMetrics({
-          url,
-          method,
-          context: config.context ?? 'unknown',
-          startTime,
-          endTime: Date.now(),
-          duration,
-          status: response.status,
-          success: true,
-          retryCount,
-          responseSize,
-        })
-
-        // 存入缓存
-        if (method === 'GET' && config.cache) {
-          const etag = response.headers.get('etag') || undefined
-          this.setCache(url, responseData, config, etag)
-        }
-
-        this.abortControllers.delete(requestId)
-        return responseData
-      } catch (error) {
-        lastError = error instanceof Error ? error : new Error(String(error))
-
-        // 如果是取消请求，不重试
-        if (error instanceof Error && error.name === 'AbortError') {
-          debugLog(`[ApiService] 请求被取消: ${url}`)
-          break
-        }
-
-        retryCount++
-
-        // 如果还有重试次数，等待后继续
-        if (retryCount <= (config.retries ?? 2) && this.shouldRetryRequest(error)) {
-          const delay = (config.retryDelay ?? 1000) * Math.pow(2, retryCount - 1)
-          debugLog(
-            `[ApiService] 请求失败，${delay}ms后重试 (${retryCount}/${config.retries ?? 2}): ${url}`,
-          )
-          await this.delay(delay)
-          continue
-        }
-
-        // 最后一次尝试也失败，记录指标
-        const duration = Date.now() - startTime
-        this.recordMetrics({
-          url,
-          method,
-          context: config.context ?? 'unknown',
-          startTime,
-          endTime: Date.now(),
-          duration,
-          success: false,
-          retryCount: retryCount - 1,
-          error: error instanceof Error ? error.message : String(error),
-        })
-
-        if (!config.silent) {
-          console.error(`[ApiService] ${method} ${url} 失败:`, error)
-        }
-
-        this.abortControllers.delete(requestId)
-        throw error
       }
+    } finally {
+      this.abortControllers.delete(requestId)
     }
 
     throw lastError || new Error('请求失败')
@@ -910,6 +914,10 @@ export class ApiService {
 
   private mergeSignals(signal1: AbortSignal, signal2: AbortSignal): AbortSignal {
     const controller = new AbortController()
+    if (signal1.aborted || signal2.aborted) {
+      controller.abort()
+      return controller.signal
+    }
 
     const onAbort = () => {
       controller.abort()
