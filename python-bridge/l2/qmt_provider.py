@@ -118,6 +118,8 @@ def normalize_tick(row: dict[str, Any]) -> TickTrade | None:
         return None
     price = to_float(pick(row, "price", "lastPrice", "trade_price"))
     volume = to_float(pick(row, "volume", "tradeVolume", "trade_volume"))
+    if price <= 0 and volume <= 0:
+        return None
     amount = to_float(pick(row, "amount", "tradeAmount", "trade_amount"))
     if amount <= 0 and price > 0 and volume > 0:
         amount = price * volume * 100
@@ -138,15 +140,28 @@ def normalize_money_flow(row: dict[str, Any]) -> MoneyFlowFrame | None:
     code = normalize_code(pick(row, "code", "stock_code", "instrument_id", "symbol"))
     if not code:
         return None
+    known_values = [
+        pick(row, "zlje", "mainNet", "main_net", "mainNetAmount"),
+        pick(row, "zljzb", "mainRatio", "main_net_ratio"),
+        pick(row, "cddje", "superNet", "super_net", "superNetAmount"),
+        pick(row, "cddjzb", "superRatio", "super_net_ratio"),
+        pick(row, "activeAmount", "active_amount", "amount"),
+    ]
+    if all(value in (None, "") for value in known_values):
+        return None
     return MoneyFlowFrame(
         code=code,
-        zlje=to_float(pick(row, "zlje", "mainNet", "main_net", "mainNetAmount")),
-        zljzb=to_float(pick(row, "zljzb", "mainRatio", "main_net_ratio")),
-        cddje=to_float(pick(row, "cddje", "superNet", "super_net", "superNetAmount")),
-        cddjzb=to_float(pick(row, "cddjzb", "superRatio", "super_net_ratio")),
-        activeAmount=to_float(pick(row, "activeAmount", "active_amount", "amount")),
+        zlje=to_float(known_values[0]),
+        zljzb=to_float(known_values[1]),
+        cddje=to_float(known_values[2]),
+        cddjzb=to_float(known_values[3]),
+        activeAmount=to_float(known_values[4]),
         sourceTs=to_int(pick(row, "time", "sourceTs", "timestamp")),
     )
+
+
+def has_l2_candidate_rows(*raw_values: Any) -> bool:
+    return any(frame_to_records(value) for value in raw_values)
 
 
 class QmtL2Provider:
@@ -196,6 +211,8 @@ class QmtL2Provider:
                 depthLevelCount=depth_count,
                 fallbackActive=False,
             )
+        if snapshot.status and snapshot.status.status == "field_mismatch":
+            return snapshot.status
         return self.status("empty_l2_data", "QMT returned no Level2 rows")
 
     def subscribe(self, codes: list[str]) -> L2ProviderStatus:
@@ -236,25 +253,43 @@ class QmtL2Provider:
                 status = self.status("unknown_error", text)
             return L2Snapshot(status=status)
 
-        depth = [item for item in (normalize_depth(row) for row in frame_to_records(depth_raw)) if item]
+        depth_rows = frame_to_records(depth_raw)
+        money_rows = frame_to_records(money_raw)
+        depth = [item for item in (normalize_depth(row) for row in depth_rows) if item]
         money_flow = [
-            item for item in (normalize_money_flow(row) for row in frame_to_records(money_raw)) if item
+            item for item in (normalize_money_flow(row) for row in money_rows) if item
         ]
         ticks = {}
-        for tick in [item for item in (normalize_tick(row) for row in frame_to_records(money_raw)) if item]:
+        for tick in [item for item in (normalize_tick(row) for row in money_rows) if item]:
             ticks.setdefault(tick.code, []).append(tick.to_dict())
 
         depth_count = max((item.depthLevelCount for item in depth), default=0)
+        has_raw_l2_rows = bool(depth_rows or money_rows)
+        mapped_any = bool(depth or money_flow or ticks)
+        status_name = (
+            "ok"
+            if mapped_any
+            else "field_mismatch"
+            if has_raw_l2_rows
+            else "empty_l2_data"
+        )
+        message = (
+            "QMT L2 data available"
+            if mapped_any
+            else "QMT returned Level2 rows but no known fields matched"
+            if has_raw_l2_rows
+            else "QMT returned no Level2 rows"
+        )
         status = L2ProviderStatus(
             provider=self.provider,
             enabled=True,
-            status="ok" if depth or money_flow or ticks else "empty_l2_data",
-            message="QMT L2 data available" if depth or money_flow or ticks else "QMT returned no Level2 rows",
+            status=status_name,
+            message=message,
             lastProbeTs=now_ms(),
-            lastDataTs=now_ms() if depth or money_flow or ticks else 0,
+            lastDataTs=now_ms() if mapped_any else 0,
             subscribedCount=len(qmt_codes),
             depthLevelCount=depth_count,
-            fallbackActive=not bool(depth or money_flow or ticks),
+            fallbackActive=not mapped_any,
         )
         return L2Snapshot(
             depth=depth,

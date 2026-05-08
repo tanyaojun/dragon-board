@@ -44,3 +44,17 @@ def test_frame_to_records_preserves_code_for_dict_of_dataframes():
     assert module.frame_to_records({"000001.SZ": FakeFrame()}) == [
         {"code": "000001.SZ", "bidPrice1": 10.1, "bidVolume1": 100}
     ]
+
+
+def test_probe_reports_field_mismatch_when_l2_rows_have_no_mappable_fields():
+    module = load_qmt_provider()
+
+    class FakeXtData:
+        def get_market_data_ex(self, *_args, **_kwargs):
+            return {"000001.SZ": [{"unknownField": 1}]}
+
+    provider = module.QmtL2Provider(xtdata=FakeXtData())
+
+    status = provider.probe(["000001.SZ"])
+
+    assert status.status == "field_mismatch"

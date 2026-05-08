@@ -175,6 +175,8 @@ QMT 可用时，WebSocket 会新增 `money_flow_patch`，资金流标记为 `mon
 - `quote_patch`
 - `depth_patch`
 - `ticks_batch`
+- `money_flow_patch`
+- `l2_status`
 - `heartbeat`
 
 说明：
@@ -183,6 +185,8 @@ QMT 可用时，WebSocket 会新增 `money_flow_patch`，资金流标记为 `mon
 - `quote_patch`：基础量价增量
 - `depth_patch`：盘口增量
 - `ticks_batch`：分笔批量
+- `money_flow_patch`：QMT L2 资金流增量，字段包含 `moneyFlowSource`、`moneyFlowEstimated`、`capitalFlowSource`、`capitalFlowConfidence`
+- `l2_status`：L2 Provider 独立状态，包含 `ok / missing_xtquant / qmt_not_running / permission_denied / empty_l2_data / field_mismatch / unknown_error`
 - `heartbeat`：链路健康包
 
 ---

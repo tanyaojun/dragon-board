@@ -89,6 +89,14 @@ export interface SnapshotStockRow {
   zljzb?: number
   cddje?: number
   cddjzb?: number
+  moneyFlowSource?: string
+  moneyFlowEstimated?: boolean
+  capitalFlowSource?: string
+  capitalFlowConfidence?: string
+  money_flow_source?: string
+  money_flow_estimated?: boolean
+  capital_flow_source?: string
+  capital_flow_confidence?: string
   pe?: number
   pb?: number
   depth10?: Depth10Book

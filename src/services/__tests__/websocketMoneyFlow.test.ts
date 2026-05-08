@@ -11,6 +11,29 @@ function emitBridgeMessage(payload: Record<string, unknown>) {
 }
 
 describe('webSocketService money flow patches', () => {
+  it('updates provider status from l2_status messages', () => {
+    emitBridgeMessage({
+      type: 'l2_status',
+      serverTs: 1000,
+      l2: {
+        provider: 'qmt',
+        enabled: true,
+        status: 'empty_l2_data',
+        message: 'QMT returned no Level2 rows',
+        fallbackActive: true,
+        depthLevelCount: 0,
+      },
+    })
+
+    expect(webSocketService.getStatus().l2).toEqual(
+      expect.objectContaining({
+        provider: 'qmt',
+        status: 'empty_l2_data',
+        fallbackActive: true,
+      }),
+    )
+  })
+
   it('preserves realtime quote fields when full_state and money_flow_patch carry only fund flow data', () => {
     const quotePatchEvents: any[] = []
     const unsubscribe = EventManager.on(AppEvents.WEBSOCKET.QUOTE_PATCH, (payload) => {

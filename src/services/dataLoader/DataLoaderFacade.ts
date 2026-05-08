@@ -306,6 +306,10 @@ class DataLoaderService {
       this.state.value.data = result.data
       this.state.value.lastUpdate = result.timestamp
       this.state.value.loading = false
+      dataLayer.updatePlatforms(result.data)
+      if (!dataLayer.getStocks().length) {
+        await this.mergeData()
+      }
       return
     }
 
@@ -317,6 +321,7 @@ class DataLoaderService {
     this.state.value.lastUpdate = result.timestamp
     dataLayer.updatePlatforms(result.data)
     await this.mergeData()
+    this.setLoading(false)
 
     return result.data
   }

@@ -499,6 +499,9 @@ class TdxL2Bridge:
             else None
         )
         self.latest_money_flow: dict[str, str] = {}
+        self.latest_l2_status_payload = ""
+        self.last_qmt_l2_poll_ts = 0
+        self.cached_qmt_l2_snapshot: tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]] = ([], [], [])
         self.helper_process: asyncio.subprocess.Process | None = None
         self.helper_runtime_root: str | None = None
         self.helper_launch_count = 0
@@ -1804,6 +1807,10 @@ class TdxL2Bridge:
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
         if not self.qmt_l2_provider:
             return [], [], []
+        now = now_ms()
+        interval = max(0, self.config.qmt_l2_poll_interval_ms)
+        if self.cached_qmt_l2_snapshot and interval and now - self.last_qmt_l2_poll_ts < interval:
+            return self.cached_qmt_l2_snapshot
         target_codes = self.qmt_l2_codes(codes)
         if not target_codes:
             return [], [], []
@@ -1816,7 +1823,9 @@ class TdxL2Bridge:
             depth = [item.to_dict() for item in snapshot.depth]
             money_flow = [item.to_dict() for item in snapshot.money_flow]
             ticks = snapshot.ticks
-            return depth, ticks, money_flow
+            self.last_qmt_l2_poll_ts = now_ms()
+            self.cached_qmt_l2_snapshot = (depth, ticks, money_flow)
+            return self.cached_qmt_l2_snapshot
         except Exception as error:
             self.l2_state.update(
                 {
@@ -1829,6 +1838,21 @@ class TdxL2Bridge:
             )
             logger.warning("qmt l2 snapshot fetch failed: %s", error)
             return [], [], []
+
+    async def broadcast_l2_status_if_changed(self) -> None:
+        if not self.clients:
+            return
+        payload = json.dumps(self.l2_state, ensure_ascii=False, sort_keys=True)
+        if payload == self.latest_l2_status_payload:
+            return
+        self.latest_l2_status_payload = payload
+        await self.broadcast(
+            {
+                "type": "l2_status",
+                "serverTs": now_ms(),
+                "l2": self.l2_state,
+            }
+        )
 
     async def poll_loop(self) -> None:
         while not self.stop_event.is_set():
@@ -1879,6 +1903,7 @@ class TdxL2Bridge:
                             "moneyFlow": money_flow,
                         }
                     )
+                    await self.broadcast_l2_status_if_changed()
                     self.full_state_requested = False
                 else:
                     if quote_patch:
@@ -1909,6 +1934,7 @@ class TdxL2Bridge:
                                 "l2": self.l2_state,
                             }
                         )
+                    await self.broadcast_l2_status_if_changed()
 
                 if ticks_batch:
                     await self.broadcast(

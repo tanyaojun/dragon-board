@@ -218,6 +218,19 @@ export interface RealtimeStreamStatus {
   reconnectAttempts: number
   transport: 'ws' | 'http' | 'idle'
   url: string
+  l2?: L2ProviderStatus
+}
+
+export interface L2ProviderStatus {
+  provider?: string
+  enabled?: boolean
+  status?: string
+  message?: string
+  lastProbeTs?: number
+  lastDataTs?: number
+  subscribedCount?: number
+  depthLevelCount?: number
+  fallbackActive?: boolean
 }
 
 export interface PlatformData {

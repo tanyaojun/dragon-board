@@ -125,6 +125,8 @@ export class StockMergeCoordinator {
       cddjzb: pickFundFlowValue(quote.cddjzb, stock.cddjzb),
       moneyFlowSource: quote.moneyFlowSource ?? stock.moneyFlowSource,
       moneyFlowEstimated: quote.moneyFlowEstimated ?? stock.moneyFlowEstimated,
+      capitalFlowSource: quote.capitalFlowSource ?? stock.capitalFlowSource,
+      capitalFlowConfidence: quote.capitalFlowConfidence ?? stock.capitalFlowConfidence,
       tdxBuyVolume: quote.tdxBuyVolume ?? stock.tdxBuyVolume,
       tdxSellVolume: quote.tdxSellVolume ?? stock.tdxSellVolume,
       tdxCurrentVolume: quote.tdxCurrentVolume ?? stock.tdxCurrentVolume,

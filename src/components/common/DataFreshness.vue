@@ -57,6 +57,16 @@
         </span>
       </div>
       <div class="detail-item">
+        <span class="detail-label">L2 Provider:</span>
+        <span class="detail-value" :class="l2StatusClass">{{ l2StatusText }}</span>
+      </div>
+      <div class="detail-item">
+        <span class="detail-label">十档深度:</span>
+        <span class="detail-value" :class="l2DepthLevelCount >= 10 ? 'good' : 'warn'">
+          {{ l2DepthLevelCount }}档
+        </span>
+      </div>
+      <div class="detail-item">
         <span class="detail-label">订阅总数:</span>
         <span class="detail-value">{{ subscribedCount }}只</span>
       </div>
@@ -170,6 +180,18 @@ const realtimeSubscribedStocks = computed(() => {
 })
 
 const subscribedCount = computed(() => streamStatus.value.subscribedCount || subscribedCodes.value.length || 0)
+const l2DepthLevelCount = computed(() => Number(streamStatus.value.l2?.depthLevelCount) || 0)
+const l2StatusText = computed(() => {
+  const l2 = streamStatus.value.l2
+  if (!l2?.provider) return '未启用'
+  return `${l2.provider}:${l2.status || 'unknown'}`
+})
+const l2StatusClass = computed(() => {
+  const status = streamStatus.value.l2?.status
+  if (status === 'ok') return 'good'
+  if (status === 'disabled' || !status) return 'info'
+  return 'warn'
+})
 
 const stockCount = computed(() => dataLayer.getStocks().length || 0)
 const isTradingSession = computed(() => isTradingTime(new Date(clockTick.value)))

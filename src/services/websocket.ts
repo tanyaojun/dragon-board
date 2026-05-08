@@ -33,6 +33,7 @@ type HeartbeatPayload = {
   tdxConnected?: boolean
   intervalMs?: number
   tradingSession?: boolean
+  l2?: any
 }
 
 type FullStateEventPayload = {
@@ -425,6 +426,9 @@ class RealTimeWebSocketService {
       case 'money_flow_patch':
         this.handleMoneyFlowPatch(payload as QuotePayload, serverTs)
         break
+      case 'l2_status':
+        this.handleL2Status(payload as QuotePayload, serverTs)
+        break
       case 'heartbeat':
         this.handleHeartbeat(payload as HeartbeatPayload, serverTs)
         break
@@ -508,6 +512,7 @@ class RealTimeWebSocketService {
     this.updateStatus({
       subscribedCount: toNumber(payload.subscribedCount) || this.hotPoolCodes.size,
       tdxConnected: true,
+      l2: this.normalizeL2Status((payload as any).l2) || this.state.l2,
     })
 
     const eventPayload: FullStateEventPayload = {
@@ -555,6 +560,19 @@ class RealTimeWebSocketService {
     }
 
     EventManager.emit(AppEvents.WEBSOCKET.QUOTE_PATCH, eventPayload)
+    const l2 = this.normalizeL2Status((payload as any).l2)
+    if (l2) {
+      this.updateStatus({ l2 })
+      EventManager.emit(AppEvents.WEBSOCKET.STATUS_CHANGED, this.getStatus())
+    }
+  }
+
+  private handleL2Status(payload: QuotePayload, serverTs: number) {
+    void serverTs
+    const l2 = this.normalizeL2Status((payload as any).l2 || payload)
+    if (!l2) return
+    this.updateStatus({ l2 })
+    EventManager.emit(AppEvents.WEBSOCKET.STATUS_CHANGED, this.getStatus())
   }
 
   private handleDepthPatch(payload: QuotePayload, serverTs: number) {
@@ -623,6 +641,7 @@ class RealTimeWebSocketService {
       fallbackActive: false,
       transport: 'ws',
       status: 'connected',
+      l2: this.normalizeL2Status(payload.l2) || this.state.l2,
     })
 
     EventManager.emit(AppEvents.WEBSOCKET.HEARTBEAT, {
@@ -711,6 +730,21 @@ class RealTimeWebSocketService {
         heartbeatIntervalHintMs: this.heartbeatIntervalHintMs,
         now: new Date().toLocaleTimeString(),
       })
+    }
+  }
+
+  private normalizeL2Status(value: any): RealtimeStreamStatus['l2'] | null {
+    if (!value || typeof value !== 'object') return null
+    return {
+      provider: typeof value.provider === 'string' ? value.provider : undefined,
+      enabled: typeof value.enabled === 'boolean' ? value.enabled : undefined,
+      status: typeof value.status === 'string' ? value.status : undefined,
+      message: typeof value.message === 'string' ? value.message : undefined,
+      lastProbeTs: toOptionalNumber(value.lastProbeTs),
+      lastDataTs: toOptionalNumber(value.lastDataTs),
+      subscribedCount: toOptionalNumber(value.subscribedCount),
+      depthLevelCount: toOptionalNumber(value.depthLevelCount),
+      fallbackActive: typeof value.fallbackActive === 'boolean' ? value.fallbackActive : undefined,
     }
   }
 
