@@ -9,14 +9,19 @@ const platformRows: Record<string, any[]> = {
 
 let fromCache = false
 let quoteError: Error | null = null
+let volumeHistoryError: Error | null = null
+let platformLoadError: Error | null = null
 
 vi.mock('../PlatformHotlistService', () => ({
   platformHotlistService: {
-    loadPlatforms: vi.fn(async () => ({
-      data: platformRows,
-      timestamp: 1000,
-      fromCache,
-    })),
+    loadPlatforms: vi.fn(async () => {
+      if (platformLoadError) throw platformLoadError
+      return {
+        data: platformRows,
+        timestamp: 1000,
+        fromCache,
+      }
+    }),
     getAllHotCodes: (data: Record<string, any[]>) =>
       new Set(Object.values(data || {}).flatMap((rows) => rows.map((row) => row.code))),
     shouldRefresh: () => false,
@@ -57,9 +62,11 @@ vi.mock('../RealtimeQuoteCoordinator', () => ({
 vi.mock('../VolumeHistoryService', () => ({
   VolumeHistoryService: class {
     async buildVolumeHistoryMap() {
+      if (volumeHistoryError) throw volumeHistoryError
       return new Map()
     }
     async buildIntradayVolumeHistoryMap() {
+      if (volumeHistoryError) throw volumeHistoryError
       return new Map()
     }
   },
@@ -79,6 +86,8 @@ describe('DataLoaderFacade', () => {
     dataLayer.reset()
     fromCache = false
     quoteError = null
+    volumeHistoryError = null
+    platformLoadError = null
   })
 
   it('keeps hotlist stocks visible even when quote enrichment returns empty', async () => {
@@ -123,5 +132,26 @@ describe('DataLoaderFacade', () => {
         name: '平安银行',
       }),
     ])
+  })
+
+  it('keeps startup usable when volume history snapshots are unavailable', async () => {
+    volumeHistoryError = new Error('snapshot unavailable')
+    const { dataLoader } = await import('../../dataLoader')
+
+    await expect(dataLoader.loadAllPlatforms(true)).resolves.toBeTruthy()
+    expect(dataLayer.getStocks()).toEqual([
+      expect.objectContaining({
+        code: '000001',
+        name: '平安银行',
+      }),
+    ])
+  })
+
+  it('keeps startup usable when platform loading fails before returning data', async () => {
+    platformLoadError = new Error('platform request aborted')
+    const { dataLoader } = await import('../../dataLoader')
+
+    await expect(dataLoader.loadAllPlatforms(true)).resolves.toEqual({})
+    expect(dataLayer.getStocks()).toEqual([])
   })
 })

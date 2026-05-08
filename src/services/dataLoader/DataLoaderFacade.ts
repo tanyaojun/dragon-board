@@ -300,7 +300,14 @@ class DataLoaderService {
     if (this.destroyed || (this.state.value.loading && !force)) return
 
     const platforms = this.state.value.platforms
-    const result = await platformHotlistService.loadPlatforms(platforms, force)
+    const result = await platformHotlistService.loadPlatforms(platforms, force).catch((error) => {
+      console.warn('[DataLoader] 平台热榜加载失败，继续进入空数据状态:', error)
+      return {
+        data: {} as Record<string, any[]>,
+        timestamp: Date.now(),
+        fromCache: false,
+      }
+    })
 
     if (result.fromCache) {
       this.state.value.data = result.data
@@ -386,8 +393,14 @@ class DataLoaderService {
     const allCodes = this.getAllHotCodes()
     const codesArray = Array.from(allCodes)
     const [volumeHistoryMap, intradayVolumeHistoryMap] = await Promise.all([
-      this.buildVolumeHistoryMap(codesArray),
-      this.buildIntradayVolumeHistoryMap(codesArray),
+      this.buildVolumeHistoryMap(codesArray).catch((error) => {
+        console.warn('[DataLoader] 历史成交量索引加载失败，继续使用空索引:', error)
+        return new Map<string, number[]>()
+      }),
+      this.buildIntradayVolumeHistoryMap(codesArray).catch((error) => {
+        console.warn('[DataLoader] 分时成交量索引加载失败，继续使用空索引:', error)
+        return new Map<string, number[]>()
+      }),
     ])
 
     // 2. ✅ 先加载行情数据

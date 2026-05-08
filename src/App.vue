@@ -301,6 +301,7 @@ const panelRects = ref<Record<string, DOMRect | undefined>>({})
 
 // 定时器
 const eventUnsubscribers: (() => void)[] = []
+let disposeUIStore: (() => void) | undefined
 
 // ========== 计算属性 ==========
 const stockCount = computed(() => dataLayer.getStocks().length)
@@ -626,6 +627,7 @@ async function safeExecute(obj: any, methodName: string, context: string, defaul
 // ========== 生命周期 ==========
 onMounted(async () => {
   themeStore.init()
+  disposeUIStore = uiStore.init()
 
   // 执行主初始化
   await initializeAll()
@@ -675,6 +677,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  disposeUIStore?.()
   document.removeEventListener('click', handleClickOutside)
   eventUnsubscribers.forEach((fn) => fn())
   eventUnsubscribers.length = 0
