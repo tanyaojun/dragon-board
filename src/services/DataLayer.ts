@@ -168,7 +168,7 @@ class DataLayer {
 
   private subscribers = new Map<string, Set<(data: any) => void>>()
   private notifyTimer: ReturnType<typeof setTimeout> | null = null
-  private pendingNotify: { path: string; data: any } | null = null
+  private pendingNotify = new Map<string, any>()
 
   // ========== 复盘兼容查询（只服务旧入口读取，不再产出龙头结论） ==========
 
@@ -1161,21 +1161,21 @@ class DataLayer {
   }
 
   private throttledNotify(path: string, data: any) {
-    this.pendingNotify = { path, data }
+    this.pendingNotify.set(path, data)
     if (this.notifyTimer) return
 
     this.notifyTimer = setTimeout(() => {
-      if (this.pendingNotify) {
-        this.subscribers.get(this.pendingNotify.path)?.forEach((cb) => {
+      this.pendingNotify.forEach((pendingData, pendingPath) => {
+        this.subscribers.get(pendingPath)?.forEach((cb) => {
           try {
-            cb(this.pendingNotify!.data)
+            cb(pendingData)
           } catch (error) {
             // ✅ 添加 error 参数
             console.warn('[DataLayer] 通知回调失败:', error)
           }
         })
-        this.pendingNotify = null
-      }
+      })
+      this.pendingNotify.clear()
       this.notifyTimer = null
     }, 50)
   }

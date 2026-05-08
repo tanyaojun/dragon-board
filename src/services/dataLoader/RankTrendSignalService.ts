@@ -1,12 +1,13 @@
 import { AppEvents } from '@/types'
 import { EventManager } from '@/utils/eventManager'
+import { debugLog } from '@/utils/logger'
 import { useUIStore } from '../../stores/ui'
 import { dataLayer } from '../DataLayer'
 import { rankTrendAnalyzer } from '../RankTrendAnalyzer'
 import { applyRankTrendAnalysis } from '../rankTrend/compat'
 import type { RankTrendAnalysisResult } from '../rankTrend/types'
 import { extraDataProjector } from './ExtraDataProjector'
-import type { StockSignalUpdate } from './types'
+import type { StockSignalUpdate, StockSignalUpdateOptions } from './types'
 
 function isRankTrendAnalysisResult(value: unknown): value is RankTrendAnalysisResult {
   return !!(
@@ -20,8 +21,17 @@ function isRankTrendAnalysisResult(value: unknown): value is RankTrendAnalysisRe
   )
 }
 
+function logCoverageWarning(message: string, coverageWarning: string) {
+  if (/^包含 \d+ 个 delayed 快照$/.test(coverageWarning)) {
+    debugLog(message, coverageWarning)
+    return
+  }
+
+  console.warn(message, coverageWarning)
+}
+
 export class RankTrendSignalService {
-  updateStockSignals(updates: StockSignalUpdate[]) {
+  updateStockSignals(updates: StockSignalUpdate[], options: StockSignalUpdateOptions = {}) {
     const stocks = dataLayer.getStocks()
     const stockMap = new Map(stocks.map((s) => [s.code, s]))
 
@@ -37,9 +47,12 @@ export class RankTrendSignalService {
     }
 
     const mergedStocks = Array.from(stockMap.values())
-    dataLayer.setMergedStocks(mergedStocks)
-    EventManager.emit(AppEvents.DATA.MERGED, { count: mergedStocks.length, timestamp: Date.now() })
-    useUIStore().updateDataVersion()
+    if (options.publish !== false) {
+      dataLayer.setMergedStocks(mergedStocks)
+      EventManager.emit(AppEvents.DATA.MERGED, { count: mergedStocks.length, timestamp: Date.now() })
+      useUIStore().updateDataVersion()
+    }
+    return mergedStocks
   }
 
   async refreshRankTrendSignals(): Promise<void> {
@@ -62,7 +75,7 @@ export class RankTrendSignalService {
     }
 
     if (coverageWarning) {
-      console.warn('[DataLoader] 排名趋势信号使用了不完整快照样本:', coverageWarning)
+      logCoverageWarning('[DataLoader] 排名趋势信号使用了不完整快照样本:', coverageWarning)
     }
 
     this.updateStockSignals(updates)
@@ -85,7 +98,7 @@ export class RankTrendSignalService {
     }
 
     if (coverageWarning) {
-      console.warn('[DataLoader] 综合榜单信号基于不完整快照样本:', coverageWarning)
+      logCoverageWarning('[DataLoader] 综合榜单信号基于不完整快照样本:', coverageWarning)
     }
     return merged
   }

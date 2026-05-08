@@ -26,7 +26,15 @@ import { stockHotnessService } from './StockHotnessService'
 import { stockMergeCoordinator } from './StockMergeCoordinator'
 import { VolumeHistoryService } from './VolumeHistoryService'
 import { calculateVolumeRatioValue } from './VolumeRatioCalculator'
-import type { LoaderState, LoadingStatus, MergedQuoteData, StockSignalUpdate } from './types'
+import type {
+  DataLoaderBootstrapOptions,
+  DataLoaderRefreshOptions,
+  DataLoaderRunSummary,
+  LoaderState,
+  LoadingStatus,
+  MergedQuoteData,
+  StockSignalUpdate,
+} from './types'
 
 export type { MergedQuoteData } from './types'
 
@@ -36,6 +44,8 @@ export type { MergedQuoteData } from './types'
  */
 class DataLoaderService {
   private quoteRefreshTimer: ReturnType<typeof setInterval> | null = null
+  private signalRefreshTimer: ReturnType<typeof setInterval> | null = null
+  private lastSignalRefreshDate: string | null = null
   private state = ref<LoaderState>({
     initialized: false,
     platforms: [...DEFAULT_PLATFORMS],
@@ -71,6 +81,7 @@ class DataLoaderService {
     })
     this.volumeHistoryService = new VolumeHistoryService(this.INTRADAY_VOLUME_SNAPSHOT_TYPES)
     this.startQuoteAutoRefresh() // 自动启动行情刷新
+    this.startSignalAutoRefresh()
   }
 
   private syncRealtimeSubscription() {
@@ -96,25 +107,145 @@ class DataLoaderService {
   }
 
   // ========== 加载状态管理 ==========
-  private setLoading(active: boolean, message: string = '', progress: number = 0) {
-    this.loadingStatus.value = { active, progress, message, startTime: active ? Date.now() : null }
+  private setLoading(
+    active: boolean,
+    message: string = '',
+    progress: number = 0,
+    phase?: LoadingStatus['phase'],
+  ) {
+    this.loadingStatus.value = {
+      active,
+      progress,
+      message,
+      startTime: active ? Date.now() : null,
+      phase,
+    }
     this.state.value.loading = active
     this.state.value.loadingProgress = progress
     this.state.value.loadingMessage = message
   }
 
-  private updateProgress(progress: number, message: string) {
+  private updateProgress(progress: number, message: string, phase?: LoadingStatus['phase']) {
     this.loadingStatus.value.progress = progress
     this.loadingStatus.value.message = message
+    this.loadingStatus.value.phase = phase
     this.state.value.loadingProgress = progress
     this.state.value.loadingMessage = message
+  }
+
+  private publishStocks(
+    stocks: any[],
+    meta: {
+      reason:
+        | 'base-merge'
+        | 'signal-enriched'
+        | 'manual-signal-update'
+        | 'hotness-recalculated'
+    },
+  ) {
+    dataLayer.setMergedStocks(stocks)
+    EventManager.emit(AppEvents.DATA.MERGED, {
+      count: stocks.length,
+      timestamp: Date.now(),
+      reason: meta.reason,
+    })
+    useUIStore().updateDataVersion()
+  }
+
+  private summarizeRun(startTime: number, fromCache: boolean): DataLoaderRunSummary {
+    const platformCount = Object.values(this.state.value.data || {}).filter(
+      (rows) => Array.isArray(rows) && rows.length > 0,
+    ).length
+
+    return {
+      stockCount: dataLayer.getStocks().length,
+      platformCount,
+      fromCache,
+      elapsedMs: Date.now() - startTime,
+    }
+  }
+
+  private async loadPlatformAndMerge(
+    force = false,
+    options: { includeLimitUpData?: boolean; allowWhileLoading?: boolean } = {},
+  ): Promise<DataLoaderRunSummary> {
+    const startTime = Date.now()
+    let fromCache = false
+
+    if (this.destroyed) return this.summarizeRun(startTime, fromCache)
+    if (this.state.value.loading && !force && !options.allowWhileLoading) {
+      if (dataLayer.getStocks().length > 0) return this.summarizeRun(startTime, fromCache)
+      this.state.value.loading = false
+    }
+
+    const platforms = this.state.value.platforms
+    const result = await platformHotlistService.loadPlatforms(platforms, force).catch((error) => {
+      console.warn('[DataLoader] 平台热榜加载失败，继续进入空数据状态:', error)
+      return {
+        data: {} as Record<string, any[]>,
+        timestamp: Date.now(),
+        fromCache: false,
+      }
+    })
+    fromCache = result.fromCache
+
+    if (result.fromCache) {
+      const hasCachedRows = Object.values(result.data || {}).some(
+        (rows) => Array.isArray(rows) && rows.length > 0,
+      )
+      if (!hasCachedRows && !dataLayer.getStocks().length) {
+        platformHotlistService.clearCache()
+        return this.loadPlatformAndMerge(true)
+      }
+    }
+
+    this.updateProgress(50, '加载平台数据完成', 'platform')
+    this.state.value.data = result.data
+    this.state.value.lastUpdate = result.timestamp
+    dataLayer.updatePlatforms(result.data)
+    if (options.includeLimitUpData) {
+      await this.loadLimitUpData(force)
+    }
+    await this.mergeData()
+
+    return this.summarizeRun(startTime, fromCache)
+  }
+
+  async bootstrapInitialData(
+    options: DataLoaderBootstrapOptions = {},
+  ): Promise<DataLoaderRunSummary> {
+    this.setLoading(true, '加载平台热榜...', 10, 'platform')
+    try {
+      const summary = await this.loadPlatformAndMerge(options.force ?? false, {
+        allowWhileLoading: true,
+      })
+      this.updateProgress(100, '完成', 'done')
+      return summary
+    } finally {
+      this.setLoading(false, '', 100, 'done')
+    }
+  }
+
+  async refreshAll(options: DataLoaderRefreshOptions = {}): Promise<DataLoaderRunSummary> {
+    void options.source
+    this.setLoading(true, '加载平台热榜...', 10, 'platform')
+    try {
+      const summary = await this.loadPlatformAndMerge(options.force ?? false, {
+        includeLimitUpData: true,
+        allowWhileLoading: true,
+      })
+      await themeFacade.refreshRuntime({ source: 'dataLoader', syncStocks: true })
+      this.updateProgress(100, '完成', 'done')
+      return summary
+    } finally {
+      this.setLoading(false, '', 100, 'done')
+    }
   }
 
   // ========== RefreshManager/Coordinator 接口 ==========
   async runUpdate(): Promise<void> {
     if (this.destroyed) return
-    await this.handleFullRefresh(true)
-    await themeFacade.refreshRuntime({ source: 'dataLoader', syncStocks: true })
+    await this.refreshAll({ force: true, source: 'timer' })
   }
 
   async runMaintenance(): Promise<void> {
@@ -233,6 +364,39 @@ class DataLoaderService {
     }
   }
 
+  startSignalAutoRefresh(interval: number = 1000): void {
+    if (this.signalRefreshTimer) return
+
+    this.signalRefreshTimer = setInterval(() => {
+      const now = new Date()
+      const hour = now.getHours()
+      const minute = now.getMinutes()
+      const today = this.getLocalDateKey(now)
+
+      if (hour === 14 && minute === 45 && this.lastSignalRefreshDate !== today) {
+        this.lastSignalRefreshDate = today
+        debugLog('[DataLoader] 14:45 触发排名趋势信号刷新')
+        this.refreshRankTrendSignals().catch((error) => {
+          console.error('[DataLoader] 14:45 排名趋势信号刷新失败:', error)
+        })
+      }
+    }, interval)
+  }
+
+  private getLocalDateKey(date: Date): string {
+    const year = date.getFullYear()
+    const month = String(date.getMonth() + 1).padStart(2, '0')
+    const day = String(date.getDate()).padStart(2, '0')
+    return `${year}-${month}-${day}`
+  }
+
+  stopSignalAutoRefresh(): void {
+    if (this.signalRefreshTimer) {
+      clearInterval(this.signalRefreshTimer)
+      this.signalRefreshTimer = null
+    }
+  }
+
   /**
    * 获取合并的行情数据
    */
@@ -259,89 +423,26 @@ class DataLoaderService {
   // ========== 原有初始化方法 ==========
   async init(autoLoad = true) {
     if (this.state.value.initialized) return
-    if (autoLoad) await this.loadAllPlatforms()
+    if (autoLoad) await this.bootstrapInitialData()
     this.state.value.initialized = true
   }
 
   // ========== 手动刷新 ==========
   private async handleFullRefresh(force = false) {
     try {
-      this.setLoading(true, '加载平台数据...', 0)
-      // 并行加载所有数据
-      await Promise.all([
-        this.loadAllPlatforms(force),
-        this.loadStockDetails(true),
-        this.loadLimitUpData(force),
-      ])
-      this.updateProgress(80, '合并数据...')
-
-      await this.mergeData()
-
-      const result = await themeFacade.refreshRuntime({ source: 'dataLoader', syncStocks: true })
-      const updatedCount = result.syncedStockCount
-      if (updatedCount > 0) debugLog(`[DataLoader] 刷新后同步题材: ${updatedCount}只股票`)
-
-      this.updateProgress(100, '完成')
-      this.setLoading(false)
-
-      const uiStore = useUIStore()
-      uiStore.updateDataVersion()
-
+      await this.refreshAll({ force, source: 'manual' })
       return true
     } catch (error) {
       console.error('[DataLoader] ❌ 刷新失败:', error)
-      this.setLoading(false, '加载失败')
+      this.setLoading(false, '加载失败', 0, 'error')
       throw error
     }
   }
 
   // ========== 加载平台数据 ==========
   async loadAllPlatforms(force = false): Promise<Record<string, any[]> | void> {
-    if (this.destroyed) return
-    if (this.state.value.loading && !force) {
-      if (dataLayer.getStocks().length > 0) return
-      this.state.value.loading = false
-    }
-
-    const platforms = this.state.value.platforms
-    const result = await platformHotlistService.loadPlatforms(platforms, force).catch((error) => {
-      console.warn('[DataLoader] 平台热榜加载失败，继续进入空数据状态:', error)
-      return {
-        data: {} as Record<string, any[]>,
-        timestamp: Date.now(),
-        fromCache: false,
-      }
-    })
-
-    if (result.fromCache) {
-      const hasCachedRows = Object.values(result.data || {}).some(
-        (rows) => Array.isArray(rows) && rows.length > 0,
-      )
-      if (!hasCachedRows && !dataLayer.getStocks().length) {
-        platformHotlistService.clearCache()
-        return this.loadAllPlatforms(true)
-      }
-      this.state.value.data = result.data
-      this.state.value.lastUpdate = result.timestamp
-      this.state.value.loading = false
-      dataLayer.updatePlatforms(result.data)
-      if (!dataLayer.getStocks().length) {
-        await this.mergeData()
-      }
-      return
-    }
-
-    this.setLoading(true, '加载平台热榜...', 10)
-
-    this.updateProgress(10, `加载平台数据 0/${platforms.length}`)
-    this.updateProgress(50, `加载平台数据完成`)
-    this.state.value.data = result.data
-    this.state.value.lastUpdate = result.timestamp
-    dataLayer.updatePlatforms(result.data)
-    await this.mergeData()
-    this.setLoading(false)
-
-    return result.data
+    await this.loadPlatformAndMerge(force)
+    return this.state.value.data
   }
 
   clearPlatformCache() {
@@ -368,7 +469,7 @@ class DataLoaderService {
       if (allCodes.size === 0) return
 
       const codesArray = Array.from(allCodes)
-      this.updateProgress(60, `加载行情数据 ${codesArray.length} 只...`)
+      this.updateProgress(60, `加载行情数据 ${codesArray.length} 只...`, 'quote')
       const quotes = await this.getQuoteBatch(codesArray, true)
 
       return quotes
@@ -418,6 +519,7 @@ class DataLoaderService {
     let quotesMap = new Map<string, any>()
     if (allCodes.size > 0) {
       try {
+        this.updateProgress(60, `加载行情数据 ${codesArray.length} 只...`, 'quote')
         quotesMap = await this.getQuoteBatch(codesArray, true)
       } catch (error) {
         console.warn('[DataLoader] 行情补全失败，保留平台热榜数据:', error)
@@ -426,7 +528,9 @@ class DataLoaderService {
 
     // 3. 获取现有 stocks（用于保留已有数据）
     const existingStocks = dataLayer.getMergedStocks()
-    const existingMap = new Map(existingStocks.map((s) => [s.code, s]))
+    const existingMap = new Map(
+      existingStocks.filter((stock) => allCodes.has(stock.code)).map((stock) => [stock.code, stock]),
+    )
 
     // 4. 构建股票数据并计算综合排名
     let merged = await stockMergeCoordinator.merge({
@@ -444,16 +548,13 @@ class DataLoaderService {
     this.updateStockHotness(merged)
 
     // 7. 先存储基础热榜，RankTrend 信号属于后置增强，不能阻塞首屏数据可见。
-    dataLayer.setMergedStocks(merged)
-    EventManager.emit(AppEvents.DATA.MERGED, { count: merged.length, timestamp: Date.now() })
-    useUIStore().updateDataVersion()
+    this.publishStocks(merged, { reason: 'base-merge' })
     this.syncRealtimeSubscription()
 
     // 8. 计算信号并回写增强字段
+    this.updateProgress(85, '计算排名趋势信号...', 'signal')
     merged = await this.calculateSignals(merged)
-    dataLayer.setMergedStocks(merged)
-    EventManager.emit(AppEvents.DATA.MERGED, { count: merged.length, timestamp: Date.now() })
-    useUIStore().updateDataVersion()
+    this.publishStocks(merged, { reason: 'signal-enriched' })
 
     return merged
   }
@@ -503,7 +604,8 @@ class DataLoaderService {
   updateStockSignals(
     updates: StockSignalUpdate[],
   ) {
-    rankTrendSignalService.updateStockSignals(updates)
+    const stocks = rankTrendSignalService.updateStockSignals(updates, { publish: false })
+    this.publishStocks(stocks, { reason: 'manual-signal-update' })
   }
 
   async refreshRankTrendSignals(): Promise<void> {
@@ -514,19 +616,26 @@ class DataLoaderService {
    * 5. 计算信号（排名变化 + 四维信号）
    */
   private async calculateSignals(merged: any[]): Promise<any[]> {
-    return rankTrendSignalService.applySignalsToMerged(merged)
+    try {
+      return await rankTrendSignalService.applySignalsToMerged(merged)
+    } catch (error) {
+      console.warn('[DataLoader] 排名趋势信号增强失败，保留基础热榜数据:', error)
+      return merged
+    }
   }
   getLoadingStatus() {
     return {
       active: this.loadingStatus.value.active,
       progress: this.loadingStatus.value.progress,
       message: this.loadingStatus.value.message,
+      phase: this.loadingStatus.value.phase,
     }
   }
 
   destroy() {
     this.destroyed = true
     this.stopQuoteAutoRefresh()
+    this.stopSignalAutoRefresh()
     platformHotlistService.clearCache()
     quoteService.clearPending()
     this.realtimeCoordinator.destroy()

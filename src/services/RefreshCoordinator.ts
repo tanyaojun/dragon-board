@@ -38,7 +38,6 @@ class RefreshCoordinator {
       name: 'dataLoader',
       priority: 10,
       fullMethod: 'runUpdate',
-      syncMethod: 'mergeData',
     },
     {
       name: 'themeRuntime',

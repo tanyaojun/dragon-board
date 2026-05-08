@@ -129,7 +129,7 @@
 
     <!-- 主要内容区 -->
     <main class="main-content">
-      <DataTable :loading="loading" @select="handleSelectStock" />
+      <DataTable @select="handleSelectStock" />
     </main>
 
     <!-- Toast 提示 -->
@@ -256,7 +256,6 @@ const showDropdown = ref(false)
 const sectorDetailName = ref('')
 const selectedStockCode = ref('')
 const selectedStockName = ref('')
-const loading = ref(false)
 const lastUpdateTime = ref<number | null>(null)
 
 
@@ -452,23 +451,11 @@ const handleRefresh = async () => {
   showToast('⏳ 正在刷新全部数据...', 'info')
 
   try {
-    // 显示加载状态
-    loading.value = true
-
-    // 1. 重新加载平台数据
-    await dataLoader.loadAllPlatforms()
-
-    // 2. 重新加载热榜行情
-    await dataLoader.loadStockDetails(false)
-
-    // 3. 合并数据
-    await dataLoader.mergeData()
+    await dataLoader.refreshAll({ force: true, source: 'manual' })
 
     showToast('✅ 数据刷新完成', 'success')
   } catch (error) {
     showToast('❌ 刷新失败', 'error')
-  } finally {
-    loading.value = false
   }
 }
 
@@ -480,18 +467,8 @@ const updateLastTime = () => {
 // ========== 优化启动流程 ==========
 const initializeAll = async () => {
   try {
-    const startTime = Date.now()
-
-    // ========== 第1步：加载平台数据和基础行情 ==========
     await updateSplash('加载平台数据...', 15, async () => {
-      await dataLoader.loadAllPlatforms()
-    })
-
-    // ========== 第2步：加载热榜行情 ==========
-    await updateSplash('加载热榜行情...', 30, async () => {
-      await dataLoader.loadStockDetails(false)
-
-      await new Promise(resolve => setTimeout(resolve, 1000))
+      await dataLoader.bootstrapInitialData({ force: false })
     })
 
     // ========== 第3步：完成基础启动 ==========

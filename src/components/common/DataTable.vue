@@ -235,7 +235,6 @@ import { useFavoriteStore } from '../../stores/favorite'
 import { dataLayer } from '../../services/DataLayer'
 import { dataLoader } from '../../services/dataLoader'
 import RankTrendPanel from '../../components/panels/RankTrendPanel.vue'
-import { rankTrendAnalyzer } from '../../services/RankTrendAnalyzer'
 import {
   buildRankTrendStatusContext,
   getRankTrendDisplayBreakdown,
@@ -416,10 +415,10 @@ const gridTemplateStyle = computed(() => {
   }
 })
 
-// ========== 从 dataLayer 获取数据的计算属性 ==========
+// ========== 从表格数据获取题材信息 ==========
 
 // 所有股票数据
-const allStocks = computed(() => dataLayer.getStocks())
+const allStocks = computed(() => sortedStocks.value)
 
 // 题材信息
 const themesInfoMap = computed(() => {
@@ -1141,15 +1140,6 @@ const handleClickOutside = (e: MouseEvent) => {
 }
 
 // ========== 生命周期 ==========
-// 添加一个响应式变量
-const currentTime = ref(new Date())
-
-// 标志，避免重复触发信号更新
-let hasTriggeredSignalUpdate = false
-
-// 启动定时器
-let timeTimer: ReturnType<typeof setInterval> | null = null
-
 onMounted(() => {
   document.addEventListener('click', handleClickOutside)
 
@@ -1158,39 +1148,10 @@ onMounted(() => {
     bodyRef.value.scrollTop = uiStore.scrollPosition
   }
 
-  // 每秒更新时间，触发界面重新渲染
-  timeTimer = setInterval(() => {
-    const now = new Date()
-    currentTime.value = now
-
-    const hour = now.getHours()
-    const minute = now.getMinutes()
-
-    // 14:45 时触发信号刷新
-    if (hour === 14 && minute === 45 && !hasTriggeredSignalUpdate) {
-      hasTriggeredSignalUpdate = true
-      debugLog('[DataTable] 14:45 触发信号刷新')
-
-      const stocks = dataLayer.getStocks()
-      const rankMap = new Map()
-      stocks.forEach((s, i) => rankMap.set(s.code, i + 1))
-      rankTrendAnalyzer.getRankTrends(rankMap).catch(console.error)
-    }
-
-    // 第二天重置标志（9:00）
-    if (hour === 9 && minute === 0) {
-      hasTriggeredSignalUpdate = false
-    }
-  }, 1000)
 })
 
 onUnmounted(() => {
   document.removeEventListener('click', handleClickOutside)
-
-  if (timeTimer) {
-    clearInterval(timeTimer)
-    timeTimer = null
-  }
 })
 
 // 监听 sortedStocks 变化，更新滚动位置（可选）

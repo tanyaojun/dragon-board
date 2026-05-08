@@ -25,12 +25,33 @@ export interface LoadingStatus {
   progress: number
   message: string
   startTime: number | null
+  phase?: 'platform' | 'quote' | 'merge' | 'signal' | 'done' | 'error'
+}
+
+export interface DataLoaderRunSummary {
+  stockCount: number
+  platformCount: number
+  fromCache: boolean
+  elapsedMs: number
+}
+
+export interface DataLoaderBootstrapOptions {
+  force?: boolean
+}
+
+export interface DataLoaderRefreshOptions {
+  force?: boolean
+  source?: 'manual' | 'timer' | 'startup'
 }
 
 export interface StockSignalUpdate {
   code: string
   rankTrend?: RankTrendAnalysisResult | null
   coverageWarning?: string | null
+}
+
+export interface StockSignalUpdateOptions {
+  publish?: boolean
 }
 
 export type IntradayVolumeSnapshotType = 'quarter_hour' | 'half_hour' | 'hourly'
