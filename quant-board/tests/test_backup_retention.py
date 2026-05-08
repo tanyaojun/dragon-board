@@ -137,6 +137,23 @@ class FakeRepository:
             frames = [frame for frame in frames if frame["tradingDate"] >= start_date]
         return SimpleNamespace(id=dataset_id), [], frames, [], []
 
+    def dump_snapshot_bundle(
+        self,
+        dataset_id: str,
+        snapshot_id: str,
+    ) -> tuple[Any, list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]] | None:
+        bundle = self.dump_dataset_bundle(dataset_id)
+        if not bundle:
+            return None
+        dataset, records, frames, stock_rows, sector_rows = bundle
+        return (
+            dataset,
+            [record for record in records if record.get("snapshotId") == snapshot_id],
+            [frame for frame in frames if frame.get("snapshotId") == snapshot_id],
+            [row for row in stock_rows if row.get("snapshotId") == snapshot_id],
+            [row for row in sector_rows if row.get("snapshotId") == snapshot_id],
+        )
+
     def list_pending_outbox(self, limit: int = 50) -> list[Any]:
         return self.pending_outbox[:limit]
 

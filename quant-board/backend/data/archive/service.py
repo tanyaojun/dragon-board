@@ -254,9 +254,29 @@ class ArchiveService:
             "sqliteRetained": True,
         }
         write_manifest(local_path / "manifest.json", manifest_payload)
+        self._upsert_manifest(
+            archive_id=archive_id,
+            scope="snapshot_backup",
+            dataset_id=dataset_id,
+            snapshot_type=snapshot_type,
+            trading_date=trading_date,
+            run_id=None,
+            local_path=local_path,
+            status="verified",
+            row_counts=base["rowCounts"],
+            files=files,
+        )
         result = store.push_archive(local_path, archive_id=archive_id)
         if not result.get("ok"):
+            self._mark_manifest_failed(archive_id, "verified", result.get("error"))
             return {**base, "ok": False, "files": files, "error": result.get("error")}
+        manifest = self.get_manifest(archive_id)
+        if manifest:
+            manifest.object_key = store.archive_prefix(archive_id)
+            manifest.uploaded_at = datetime.now(timezone.utc)
+            manifest.status = "uploaded"
+            manifest.last_error = None
+            self.session.commit()
         return {
             **base,
             "files": files,

@@ -1598,6 +1598,67 @@ class Repository:
         ]
         return dataset, records, frames, stock_rows, sector_rows
 
+    def dump_snapshot_bundle(
+        self,
+        dataset_id: str,
+        snapshot_id: str,
+    ) -> tuple[Dataset, list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]] | None:
+        if self.session is None or not snapshot_id:
+            return None
+        dataset = self.session.get(Dataset, dataset_id)
+        if not dataset:
+            return None
+        try:
+            records = [
+                self.record_to_dict(row)
+                for row in self.session.scalars(
+                    select(SnapshotRecordModel)
+                    .where(
+                        SnapshotRecordModel.dataset_id == dataset_id,
+                        SnapshotRecordModel.snapshot_id == snapshot_id,
+                    )
+                    .order_by(SnapshotRecordModel.timestamp.asc())
+                )
+            ]
+            frames = [
+                self.local_frame_to_bundle_dict(row)
+                for row in self.session.scalars(
+                    select(SnapshotFrameModel)
+                    .where(
+                        SnapshotFrameModel.dataset_id == dataset_id,
+                        SnapshotFrameModel.snapshot_id == snapshot_id,
+                    )
+                    .order_by(SnapshotFrameModel.timestamp.asc())
+                )
+            ]
+            stock_rows = [
+                self.local_stock_to_bundle_dict(row)
+                for row in self.session.scalars(
+                    select(SnapshotStockRowModel)
+                    .where(
+                        SnapshotStockRowModel.dataset_id == dataset_id,
+                        SnapshotStockRowModel.snapshot_id == snapshot_id,
+                    )
+                    .order_by(SnapshotStockRowModel.timestamp.asc(), SnapshotStockRowModel.rank.asc())
+                )
+            ]
+            sector_rows = [
+                self.local_sector_to_bundle_dict(row)
+                for row in self.session.scalars(
+                    select(SnapshotSectorRowModel)
+                    .where(
+                        SnapshotSectorRowModel.dataset_id == dataset_id,
+                        SnapshotSectorRowModel.snapshot_id == snapshot_id,
+                    )
+                    .order_by(SnapshotSectorRowModel.timestamp.asc(), SnapshotSectorRowModel.rank.asc())
+                )
+            ]
+        except SQLAlchemyError:
+            return None
+        if not records and not frames and not stock_rows and not sector_rows:
+            return None
+        return dataset, records, frames, stock_rows, sector_rows
+
     def load_dataset_bundle_slice(
         self,
         dataset_id: str,

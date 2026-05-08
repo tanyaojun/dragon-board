@@ -8,7 +8,115 @@ describe('ApiService', () => {
   })
 
   afterEach(() => {
+    vi.useRealTimers()
     vi.unstubAllGlobals()
+  })
+
+  it('starts request timeout only when the queued fetch begins', async () => {
+    vi.useFakeTimers()
+    const api = new ApiService()
+
+    const releaseBlockers: Array<() => void> = []
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      if (url.includes('blocker')) {
+        return new Promise<Response>((resolve) => {
+          releaseBlockers.push(() =>
+            resolve(
+              new Response(JSON.stringify({ ok: true }), {
+                status: 200,
+                headers: { 'content-type': 'application/json' },
+              }),
+            ),
+          )
+        })
+      }
+
+      if (init?.signal?.aborted) {
+        return Promise.reject(new DOMException('signal is aborted without reason', 'AbortError'))
+      }
+
+      return Promise.resolve(
+        new Response(JSON.stringify({ ok: true, queued: true }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      )
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const blockers = [1, 2, 3].map((index) =>
+      api.get(`/api/test/blocker-${index}`, {
+        timeout: 1000,
+        retries: 0,
+        cache: false,
+      }),
+    )
+    await vi.waitFor(() => expect(releaseBlockers).toHaveLength(3))
+
+    const queued = api.get('/api/test/queued', {
+      timeout: 1000,
+      retries: 0,
+      cache: false,
+    })
+
+    await vi.advanceTimersByTimeAsync(1500)
+    releaseBlockers.forEach((release) => release())
+    await Promise.all(blockers)
+
+    await expect(queued).resolves.toMatchObject({ ok: true, queued: true })
+  })
+
+  it('cancels a queued request before its fetch begins', async () => {
+    const api = new ApiService()
+
+    const releaseBlockers: Array<() => void> = []
+    const fetchMock = vi.fn((url: string) => {
+      if (url.includes('blocker')) {
+        return new Promise<Response>((resolve) => {
+          releaseBlockers.push(() =>
+            resolve(
+              new Response(JSON.stringify({ ok: true }), {
+                status: 200,
+                headers: { 'content-type': 'application/json' },
+              }),
+            ),
+          )
+        })
+      }
+
+      return Promise.resolve(
+        new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      )
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const blockers = [1, 2, 3].map((index) =>
+      api.get(`/api/test/blocker-${index}`, {
+        timeout: 1000,
+        retries: 0,
+        cache: false,
+      }),
+    )
+    await vi.waitFor(() => expect(releaseBlockers).toHaveLength(3))
+
+    const queued = api.get('/api/test/queued-cancel', {
+      requestId: 'queued-cancel',
+      retries: 0,
+      cache: false,
+    })
+    api.cancelRequest('queued-cancel')
+
+    releaseBlockers.forEach((release) => release())
+    await Promise.all(blockers)
+
+    await expect(queued).rejects.toMatchObject({ name: 'AbortError' })
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      expect.stringContaining('queued-cancel'),
+      expect.anything(),
+    )
   })
 
   it('retries retryable HTTP errors and throws structured ApiHttpError', async () => {
