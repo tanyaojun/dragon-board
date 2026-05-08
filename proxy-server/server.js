@@ -5,6 +5,7 @@ import axios from 'axios'
 import { wrapper } from 'axios-cookiejar-support'
 import { CookieJar } from 'tough-cookie'
 import iconv from 'iconv-lite'
+import fs from 'fs'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
 
@@ -13,6 +14,28 @@ const __dirname = dirname(__filename)
 
 const app = express()
 const PORT = 3000
+
+function loadEnvFile(filePath) {
+  if (!fs.existsSync(filePath)) return {}
+  const content = fs.readFileSync(filePath, 'utf8')
+  const result = {}
+  for (const rawLine of content.split(/\r?\n/)) {
+    const line = rawLine.trim()
+    if (!line || line.startsWith('#')) continue
+    const equalIndex = line.indexOf('=')
+    if (equalIndex <= 0) continue
+    const key = line.slice(0, equalIndex).trim()
+    const value = line.slice(equalIndex + 1).trim()
+    result[key] = value
+  }
+  return result
+}
+
+const localEnv = loadEnvFile(join(__dirname, '.env.local'))
+
+function readConfig(name, fallback = '') {
+  return process.env[name] || localEnv[name] || fallback
+}
 
 const jar = new CookieJar()
 const client = wrapper(axios.create({ jar, withCredentials: true, maxRedirects: 5 }))
@@ -281,8 +304,8 @@ app.get('/health', (req, res) => {
 // ========== 各平台接口 ==========
 app.get('/api/xueqiu/hot', async (req, res) => {
   try {
-    const cookie =
-      'xq_a_token=0c005f2d08ad61d883f7f562a47ef054a834818e; xqat=0c005f2d08ad61d883f7f562a47ef054a834818e; xq_r_token=5ab66336a5d267c9663141e65a3e24b1cd3b435e; u=9546611598'
+    const cookie = readConfig('XUEQIU_COOKIE')
+    if (!cookie) throw new Error('XUEQIU_COOKIE is not configured')
 
     const response = await axios.get(
       'https://stock.xueqiu.com/v5/stock/hot_stock/list.json?size=100&_type=10&type=10',
@@ -297,7 +320,12 @@ app.get('/api/xueqiu/hot', async (req, res) => {
 
     res.json(response.data)
   } catch (error) {
-    res.status(500).json({ error: error.message })
+    console.warn('[xueqiu] hotlist unavailable:', error.message)
+    res.json({
+      data: { items: [] },
+      degraded: true,
+      reason: error.response?.status ? `upstream_${error.response.status}` : error.message,
+    })
   }
 })
 
