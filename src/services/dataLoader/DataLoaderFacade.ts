@@ -443,14 +443,17 @@ class DataLoaderService {
     // 6. 计算个股热度
     this.updateStockHotness(merged)
 
-    // 7. 计算信号
-    merged = await this.calculateSignals(merged)
-
-    // 8. 存储到 DataLayer
+    // 7. 先存储基础热榜，RankTrend 信号属于后置增强，不能阻塞首屏数据可见。
     dataLayer.setMergedStocks(merged)
     EventManager.emit(AppEvents.DATA.MERGED, { count: merged.length, timestamp: Date.now() })
     useUIStore().updateDataVersion()
     this.syncRealtimeSubscription()
+
+    // 8. 计算信号并回写增强字段
+    merged = await this.calculateSignals(merged)
+    dataLayer.setMergedStocks(merged)
+    EventManager.emit(AppEvents.DATA.MERGED, { count: merged.length, timestamp: Date.now() })
+    useUIStore().updateDataVersion()
 
     return merged
   }

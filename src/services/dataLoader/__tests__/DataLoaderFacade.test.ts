@@ -13,6 +13,8 @@ let platformLoadCount = 0
 let quoteError: Error | null = null
 let volumeHistoryError: Error | null = null
 let platformLoadError: Error | null = null
+let blockSignalCalculation = false
+let releaseSignalCalculation: (() => void) | null = null
 
 vi.mock('../PlatformHotlistService', () => ({
   platformHotlistService: {
@@ -84,7 +86,14 @@ vi.mock('../VolumeHistoryService', () => ({
 
 vi.mock('../RankTrendSignalService', () => ({
   rankTrendSignalService: {
-    applySignalsToMerged: vi.fn(async (stocks) => stocks),
+    applySignalsToMerged: vi.fn(async (stocks) => {
+      if (blockSignalCalculation) {
+        await new Promise<void>((resolve) => {
+          releaseSignalCalculation = resolve
+        })
+      }
+      return stocks
+    }),
     updateStockSignals: vi.fn(),
     refreshRankTrendSignals: vi.fn(),
   },
@@ -100,6 +109,8 @@ describe('DataLoaderFacade', () => {
     quoteError = null
     volumeHistoryError = null
     platformLoadError = null
+    blockSignalCalculation = false
+    releaseSignalCalculation = null
   })
 
   it('keeps hotlist stocks visible even when quote enrichment returns empty', async () => {
@@ -113,6 +124,26 @@ describe('DataLoaderFacade', () => {
         name: '平安银行',
       }),
     ])
+  })
+
+  it('publishes base hotlist rows before RankTrend signal enrichment finishes', async () => {
+    blockSignalCalculation = true
+    const { dataLoader } = await import('../../dataLoader')
+
+    const loadPromise = dataLoader.loadAllPlatforms(true)
+
+    await vi.waitFor(() => {
+      expect(dataLayer.getStocks()).toEqual([
+        expect.objectContaining({
+          code: '000001',
+          name: '平安银行',
+        }),
+      ])
+    })
+
+    blockSignalCalculation = false
+    releaseSignalCalculation?.()
+    await loadPromise
   })
 
   it('hydrates DataLayer from hotlist cache when the UI data pool is empty', async () => {

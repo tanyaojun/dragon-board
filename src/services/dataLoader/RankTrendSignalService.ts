@@ -70,7 +70,9 @@ export class RankTrendSignalService {
 
   async applySignalsToMerged(merged: any[]): Promise<any[]> {
     const newRankMap = new Map(merged.map((s, i) => [s.code, i + 1]))
-    const rankTrends = await rankTrendAnalyzer.getRankTrends(newRankMap)
+    const rankTrends = await rankTrendAnalyzer.getRankTrends(newRankMap, {
+      updateSignalStore: false,
+    })
     const coverageWarning = this.extractRankTrendCoverageWarning(rankTrends)
 
     for (const stock of merged) {
