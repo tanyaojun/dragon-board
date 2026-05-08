@@ -8,6 +8,7 @@ const platformRows: Record<string, any[]> = {
 }
 
 let fromCache = false
+let quoteError: Error | null = null
 
 vi.mock('../PlatformHotlistService', () => ({
   platformHotlistService: {
@@ -28,7 +29,10 @@ vi.mock('../PlatformHotlistService', () => ({
 
 vi.mock('../QuoteService', () => ({
   quoteService: {
-    getQuoteBatch: vi.fn(async () => new Map()),
+    getQuoteBatch: vi.fn(async () => {
+      if (quoteError) throw quoteError
+      return new Map()
+    }),
     getQuotes: vi.fn(async () => new Map()),
     fetchMergedQuotes: vi.fn(async () => new Map()),
     getQuote: vi.fn(async () => null),
@@ -74,6 +78,7 @@ describe('DataLoaderFacade', () => {
     setActivePinia(createPinia())
     dataLayer.reset()
     fromCache = false
+    quoteError = null
   })
 
   it('keeps hotlist stocks visible even when quote enrichment returns empty', async () => {
@@ -95,6 +100,23 @@ describe('DataLoaderFacade', () => {
 
     await dataLoader.loadAllPlatforms(false)
 
+    expect(dataLayer.getStocks()).toEqual([
+      expect.objectContaining({
+        code: '000001',
+        name: '平安银行',
+      }),
+    ])
+  })
+
+  it('keeps startup usable when quote enrichment is aborted', async () => {
+    const error = new Error('signal is aborted without reason')
+    error.name = 'AbortError'
+    quoteError = error
+    const { dataLoader } = await import('../../dataLoader')
+
+    await dataLoader.loadAllPlatforms(true)
+
+    await expect(dataLoader.loadStockDetails(false)).resolves.toEqual(new Map())
     expect(dataLayer.getStocks()).toEqual([
       expect.objectContaining({
         code: '000001',

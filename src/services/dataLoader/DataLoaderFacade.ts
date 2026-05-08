@@ -356,6 +356,9 @@ class DataLoaderService {
       return quotes
     } catch (error) {
       console.error('[DataLoader] 加载行情详情失败:', error)
+      if (error instanceof Error && error.name === 'AbortError') {
+        return new Map()
+      }
       throw error
     } finally {
       this.isLoadingDetails = false
@@ -390,7 +393,11 @@ class DataLoaderService {
     // 2. ✅ 先加载行情数据
     let quotesMap = new Map<string, any>()
     if (allCodes.size > 0) {
-      quotesMap = await this.getQuoteBatch(codesArray, true)
+      try {
+        quotesMap = await this.getQuoteBatch(codesArray, true)
+      } catch (error) {
+        console.warn('[DataLoader] 行情补全失败，保留平台热榜数据:', error)
+      }
     }
 
     // 3. 获取现有 stocks（用于保留已有数据）

@@ -58,3 +58,17 @@ def test_probe_reports_field_mismatch_when_l2_rows_have_no_mappable_fields():
     status = provider.probe(["000001.SZ"])
 
     assert status.status == "field_mismatch"
+
+
+def test_probe_reports_qmt_not_running_for_chinese_xtquant_connection_error():
+    module = load_qmt_provider()
+
+    class FakeXtData:
+        def get_market_data_ex(self, *_args, **_kwargs):
+            raise RuntimeError("无法连接xtquant服务，请检查QMT-投研版或QMT-极简版是否开启")
+
+    provider = module.QmtL2Provider(xtdata=FakeXtData())
+
+    status = provider.probe(["000001.SZ"])
+
+    assert status.status == "qmt_not_running"

@@ -49,6 +49,17 @@ def to_int(value: Any) -> int:
         return 0
 
 
+def is_qmt_connection_error(text: str) -> bool:
+    lower = text.lower()
+    return (
+        "connect" in lower
+        or "not running" in lower
+        or "无法连接" in text
+        or "xtquant服务" in text
+        or "qmt-" in lower
+    )
+
+
 def frame_to_records(value: Any) -> list[dict[str, Any]]:
     if value is None:
         return []
@@ -228,7 +239,7 @@ class QmtL2Provider:
                 self.subscribed.add(code)
             except Exception as error:
                 text = str(error)
-                if "connect" in text.lower() or "not running" in text.lower():
+                if is_qmt_connection_error(text):
                     return self.status("qmt_not_running", text)
                 if "permission" in text.lower() or "right" in text.lower() or "level" in text.lower():
                     return self.status("permission_denied", text)
@@ -245,7 +256,7 @@ class QmtL2Provider:
             money_raw = self.xtdata.get_market_data_ex([], qmt_codes, period="l2transactioncount", count=1)
         except Exception as error:
             text = str(error)
-            if "connect" in text.lower() or "not running" in text.lower():
+            if is_qmt_connection_error(text):
                 status = self.status("qmt_not_running", text)
             elif "permission" in text.lower() or "right" in text.lower() or "level" in text.lower():
                 status = self.status("permission_denied", text)
