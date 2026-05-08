@@ -83,7 +83,7 @@
 <script setup lang="ts">
 import { ref, watch, onMounted } from 'vue'
 import { EventManager } from '@/utils/eventManager'
-import { AppEvents } from '@/types/events'
+import { AppEvents } from '@/types'
 import { algorithmManager } from '@/services/algorithm'
 
 const props = defineProps<{

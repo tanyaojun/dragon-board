@@ -1,7 +1,4 @@
 import type { MergedStock } from '@/types'
-import { AppEvents } from '@/types'
-import { EventManager } from '@/utils/eventManager'
-import { useUIStore } from '../../stores/ui'
 import { calculateStockHotnessUpdates, stockHotnessConfigService } from '../hotness'
 import { dataLayer } from '../DataLayer'
 
@@ -26,9 +23,6 @@ export class StockHotnessService {
     if (!stocks.length) return []
 
     this.updateStockHotness(stocks, totalPlatforms)
-    dataLayer.setMergedStocks(stocks)
-    EventManager.emit(AppEvents.DATA.MERGED, { count: stocks.length, timestamp: Date.now() })
-    useUIStore().updateDataVersion()
     return stocks
   }
 }

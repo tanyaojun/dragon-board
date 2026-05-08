@@ -69,10 +69,10 @@
             <!-- 题材列 -->
             <template v-if="col.key === 'themes'">
               <div class="themes-cell">
-                <span v-if="stock.themes && stock.themes.length > 0" class="themes-badge"
-                  :class="getThemeBadgeClass(stock.themes)" :style="getThemeStyle(stock.themes[0]?.name || '')"
-                  :title="getThemesTitle(stock.themes)">
-                  {{ getThemeDisplay(stock.themes) }}
+                <span v-if="getStockThemes(stock).length > 0" class="themes-badge"
+                  :class="getThemeBadgeClass(getStockThemes(stock))" :style="getThemeStyle(stock)"
+                  :title="getThemesTitle(getStockThemes(stock))">
+                  {{ getThemeDisplay(getStockThemes(stock)) }}
                 </span>
                 <span v-else class="themes-empty">-</span>
               </div>
@@ -232,7 +232,6 @@ import { EventManager } from '../../utils/eventManager'
 import { AppEvents } from '../../types'
 import { useUIStore } from '../../stores/ui'
 import { useFavoriteStore } from '../../stores/favorite'
-import { dataLayer } from '../../services/DataLayer'
 import { dataLoader } from '../../services/dataLoader'
 import RankTrendPanel from '../../components/panels/RankTrendPanel.vue'
 import {
@@ -421,38 +420,6 @@ const gridTemplateStyle = computed(() => {
 const allStocks = computed(() => sortedStocks.value)
 
 // 题材信息
-const themesInfoMap = computed(() => {
-  const map = new Map()
-  allStocks.value.forEach((stock: any) => {
-    const themes: any[] = []
-
-    // 获取题材数据
-    const themeData = dataLayer.getStockThemes?.(stock.code)
-    if (themeData?.length) {
-      themes.push(...themeData)
-    }
-
-    // 获取标签数据
-    const tags = dataLayer.getStockTags?.(stock.code)
-    if (tags?.length) {
-      tags.forEach((tag: { Name: string }) => {
-        themes.push({
-          id: `tag_${tag.Name}`,
-          name: tag.Name,
-          type: 'tag',
-          heatScore: 0
-        })
-      })
-    }
-
-    // 去重
-    const uniqueThemes = removeDuplicateThemes(themes)
-    map.set(stock.code, uniqueThemes)
-  })
-  return map
-})
-
-
 const viewTheme = () => {
   if (contextMenu.value.stock) {
     const themes = getStockThemes(contextMenu.value.stock)
@@ -475,7 +442,17 @@ const viewTheme = () => {
 }
 
 const getStockThemes = (stock: Stock) => {
-  return themesInfoMap.value.get(stock.code) || []
+  const tagThemes = (stock.tags || []).map((tag: any) => {
+    const tagName = tag?.Name || tag?.name || tag
+    return {
+      id: `tag_${tagName}`,
+      name: tagName,
+      Name: tagName,
+      type: 'tag',
+      heatScore: 0,
+    }
+  })
+  return removeDuplicateThemes([...(stock.themes || []), ...tagThemes])
 }
 
 const getThemeDisplay = (themes: any[]) => {
@@ -598,21 +575,18 @@ const getRowTitle = (stock: Stock) => {
 
   title += `${stock.name} (${stock.code})`
 
-  // ✅ 直接从 limitUpData 读取标签、原因、连板信息
-  const limitUpData = dataLayer.getLimitUpData(stock.code)
-
   // 标签
-  if (limitUpData?.tags && limitUpData.tags.length > 0) {
-    const tagNames = limitUpData.tags.map((tag: any) => tag.Name || tag).filter(Boolean)
+  if (stock.tags && stock.tags.length > 0) {
+    const tagNames = stock.tags.map((tag: any) => tag.Name || tag).filter(Boolean)
     if (tagNames.length > 0) {
       title += `\n🏷️ 标签: ${tagNames.join('/')}\n`
     }
   }
 
   // 关联原因
-  if (limitUpData?.reason) {
+  if (stock.reason) {
     title += `\n📋 关联原因:\n`
-    let reason = limitUpData.reason
+    let reason = stock.reason
     const sentences = reason.split(/([。；！？])/g)
     const paragraphs: string[] = []
     for (let i = 0; i < sentences.length; i += 2) {
@@ -631,7 +605,7 @@ const getRowTitle = (stock: Stock) => {
   }
 
   // 连板信息
-  const lianbanStr = limitUpData?.lianbanStr || stock.lianbanStr
+  const lianbanStr = stock.lianbanStr
   if (lianbanStr) {
     title += `\n📈 连板: ${lianbanStr}\n`
   }

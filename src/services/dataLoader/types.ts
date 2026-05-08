@@ -50,10 +50,6 @@ export interface StockSignalUpdate {
   coverageWarning?: string | null
 }
 
-export interface StockSignalUpdateOptions {
-  publish?: boolean
-}
-
 export type IntradayVolumeSnapshotType = 'quarter_hour' | 'half_hour' | 'hourly'
 
 export interface IntradayMoneyFlowStats {

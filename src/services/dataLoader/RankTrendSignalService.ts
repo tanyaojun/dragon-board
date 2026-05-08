@@ -1,13 +1,10 @@
-import { AppEvents } from '@/types'
-import { EventManager } from '@/utils/eventManager'
 import { debugLog } from '@/utils/logger'
-import { useUIStore } from '../../stores/ui'
 import { dataLayer } from '../DataLayer'
 import { rankTrendAnalyzer } from '../RankTrendAnalyzer'
 import { applyRankTrendAnalysis } from '../rankTrend/compat'
 import type { RankTrendAnalysisResult } from '../rankTrend/types'
 import { extraDataProjector } from './ExtraDataProjector'
-import type { StockSignalUpdate, StockSignalUpdateOptions } from './types'
+import type { StockSignalUpdate } from './types'
 
 function isRankTrendAnalysisResult(value: unknown): value is RankTrendAnalysisResult {
   return !!(
@@ -31,7 +28,7 @@ function logCoverageWarning(message: string, coverageWarning: string) {
 }
 
 export class RankTrendSignalService {
-  updateStockSignals(updates: StockSignalUpdate[], options: StockSignalUpdateOptions = {}) {
+  updateStockSignals(updates: StockSignalUpdate[]) {
     const stocks = dataLayer.getStocks()
     const stockMap = new Map(stocks.map((s) => [s.code, s]))
 
@@ -47,17 +44,12 @@ export class RankTrendSignalService {
     }
 
     const mergedStocks = Array.from(stockMap.values())
-    if (options.publish !== false) {
-      dataLayer.setMergedStocks(mergedStocks)
-      EventManager.emit(AppEvents.DATA.MERGED, { count: mergedStocks.length, timestamp: Date.now() })
-      useUIStore().updateDataVersion()
-    }
     return mergedStocks
   }
 
-  async refreshRankTrendSignals(): Promise<void> {
+  async refreshRankTrendSignals(): Promise<ReturnType<RankTrendSignalService['updateStockSignals']>> {
     const stocks = dataLayer.getStocks()
-    if (!stocks.length) return
+    if (!stocks.length) return []
 
     const rankMap = new Map<string, number>()
     stocks.forEach((stock, index) => {
@@ -78,7 +70,7 @@ export class RankTrendSignalService {
       logCoverageWarning('[DataLoader] 排名趋势信号使用了不完整快照样本:', coverageWarning)
     }
 
-    this.updateStockSignals(updates)
+    return this.updateStockSignals(updates)
   }
 
   async applySignalsToMerged(merged: any[]): Promise<any[]> {

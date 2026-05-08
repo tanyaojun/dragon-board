@@ -105,7 +105,9 @@ vi.mock('../RankTrendSignalService', () => ({
       return stocks
     }),
     updateStockSignals: vi.fn(),
-    refreshRankTrendSignals: vi.fn(),
+    refreshRankTrendSignals: vi.fn(() => [
+      { code: '000001', name: '平安银行', rankTrendCoverageWarning: 'refreshed' },
+    ]),
   },
 }))
 
@@ -124,6 +126,7 @@ describe('DataLoaderFacade', () => {
     signalCalculationError = null
     signalApplyCount = 0
     EventManager.clearHistory()
+    vi.clearAllMocks()
   })
 
   afterEach(async () => {
@@ -248,6 +251,7 @@ describe('DataLoaderFacade', () => {
       const { rankTrendSignalService } = await import('../RankTrendSignalService')
 
       dataLoader.stopSignalAutoRefresh()
+      ;(dataLoader as any).lastSignalRefreshDate = null
       dataLoader.startSignalAutoRefresh(1000)
       vi.advanceTimersByTime(1000)
       await Promise.resolve()
@@ -260,6 +264,48 @@ describe('DataLoaderFacade', () => {
     }
   })
 
+  it('publishes scheduled RankTrend refresh through the DataLoader boundary', async () => {
+    const { dataLoader } = await import('../../dataLoader')
+    const { rankTrendSignalService } = await import('../RankTrendSignalService')
+
+    await dataLoader.refreshRankTrendSignals()
+
+    expect(rankTrendSignalService.refreshRankTrendSignals).toHaveBeenCalledWith()
+    expect(EventManager.getHistory(AppEvents.DATA.MERGED)).toEqual([
+      expect.objectContaining({
+        data: expect.objectContaining({ reason: 'manual-signal-update' }),
+      }),
+    ])
+    expect(dataLayer.getStocks()).toEqual([
+      expect.objectContaining({
+        code: '000001',
+        rankTrendCoverageWarning: 'refreshed',
+      }),
+    ])
+  })
+
+  it('publishes hotness recalculation through the DataLoader boundary', async () => {
+    dataLayer.setMergedStocks([
+      { code: '000001', name: '平安银行', hotness: 0, sources: ['eastmoney'], rank: 1 } as any,
+    ])
+    EventManager.clearHistory()
+    const { dataLoader } = await import('../../dataLoader')
+
+    const stocks = dataLoader.recalculateStockHotness()
+
+    expect(stocks).toEqual([
+      expect.objectContaining({
+        code: '000001',
+        hotness: expect.any(Number),
+      }),
+    ])
+    expect(EventManager.getHistory(AppEvents.DATA.MERGED)).toEqual([
+      expect.objectContaining({
+        data: expect.objectContaining({ reason: 'hotness-recalculated' }),
+      }),
+    ])
+  })
+
   it('runs scheduled RankTrend refresh once per local date', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-05-08T14:44:59+08:00'))
@@ -268,6 +314,7 @@ describe('DataLoaderFacade', () => {
       const { rankTrendSignalService } = await import('../RankTrendSignalService')
 
       dataLoader.stopSignalAutoRefresh()
+      ;(dataLoader as any).lastSignalRefreshDate = null
       dataLoader.startSignalAutoRefresh(1000)
       vi.advanceTimersByTime(1000)
       await Promise.resolve()

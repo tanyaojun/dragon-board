@@ -6,7 +6,6 @@ import { dataLayer } from '../DataLayer'
 import type { MergedStock } from '@/types'
 import { themeFacade } from '../theme/ThemeFacade'
 import { isTradingTime } from '@/utils/time'
-import { useUIStore } from '../../stores/ui'
 import { EventManager } from '../../utils/eventManager'
 import { AppEvents } from '../../types'
 import {
@@ -345,8 +344,7 @@ class DataLoaderService {
       if (updates.length) {
         debugLog(`[DataLoader] 更新量比: ${updates.length} 只股票`)
         dataLayer.updateStockExtData(updates)
-        EventManager.emit(AppEvents.DATA.MERGED, { count: dataLayer.getStocks().length, timestamp: Date.now() })
-        useUIStore().updateDataVersion()
+        this.publishStocks(dataLayer.getStocks(), { reason: 'base-merge' })
       }
     } catch (error) {
       console.warn('[DataLoader] 更新量比失败:', error)
@@ -570,7 +568,11 @@ class DataLoaderService {
    * 对外暴露热度重算入口，方便后续接外部研究工具或开发期手工微调。
    */
   recalculateStockHotness(): MergedStock[] {
-    return stockHotnessService.recalculateStockHotness(this.state.value.platforms?.length || 8)
+    const stocks = stockHotnessService.recalculateStockHotness(this.state.value.platforms?.length || 8)
+    if (stocks.length) {
+      this.publishStocks(stocks, { reason: 'hotness-recalculated' })
+    }
+    return stocks
   }
 
   /**
@@ -603,12 +605,15 @@ class DataLoaderService {
   updateStockSignals(
     updates: StockSignalUpdate[],
   ) {
-    const stocks = rankTrendSignalService.updateStockSignals(updates, { publish: false })
+    const stocks = rankTrendSignalService.updateStockSignals(updates)
     this.publishStocks(stocks, { reason: 'manual-signal-update' })
   }
 
   async refreshRankTrendSignals(): Promise<void> {
-    await rankTrendSignalService.refreshRankTrendSignals()
+    const stocks = await rankTrendSignalService.refreshRankTrendSignals()
+    if (stocks.length) {
+      this.publishStocks(stocks, { reason: 'manual-signal-update' })
+    }
   }
 
   /**

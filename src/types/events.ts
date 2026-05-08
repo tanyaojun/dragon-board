@@ -1,61 +1,6 @@
 // src/types/events.ts
-
-/**
- * 应用事件定义
- */
-export const AppEvents = {
-  DATA: {
-    MERGED: 'data:merged',
-    UPDATED: 'data:updated',
-    PLATFORMS_LOADED: 'platforms:loaded',
-    QUOTES_UPDATED: 'quotes:updated',
-  },
-
-  SECTOR: {
-    UPDATED: 'sector:updated',
-    READY: 'sector:ready',
-    BATCH_UPDATED: 'sector:batch:updated',
-    HOT_UPDATED: 'sector:hot:updated',
-    ALERT: 'sector:alert',
-  },
-
-  DRAGON: {
-    UPDATED: 'dragon:updated',
-    CHANGED: 'dragon:changed',
-  },
-
-  // ===== 新增：龙息事件 =====
-  BREATH: {
-    UPDATED: 'breath:updated', // 龙息数据更新
-    PHASE_CHANGED: 'breath:phase:changed', // 龙息阶段变化
-    ALERT: 'breath:alert', // 龙息预警
-    FACTORS_UPDATED: 'breath:factors:updated', // 龙息因子更新
-  },
-
-  STOCK: {
-    SELECTED: 'stock:selected',
-    CLEARED: 'stock:cleared',
-  },
-
-  UI: {
-    PANEL_OPEN: 'ui:panel:open',
-    PANEL_CLOSE: 'ui:panel:close',
-    TOAST: 'ui:toast',
-  },
-
-  REFRESH: {
-    STARTED: 'refresh:started',
-    COMPLETE: 'refresh:complete',
-    FAIL: 'refresh:fail',
-  },
-
-  // 新增：协同事件
-  SYNERGY: {
-    INSIGHT: 'synergy:insight', // 市场洞察
-    EMOTION_LEADER: 'synergy:emotion:leader', // 情绪龙头出现
-    DRAGON_BREATH: 'synergy:dragon:breath', // 龙头影响情绪
-  },
-} as const
+export { AppEvents } from './config'
+import { AppEvents } from './config'
 
 export type AppEventType =
   (typeof AppEvents)[keyof typeof AppEvents][keyof (typeof AppEvents)[keyof typeof AppEvents]]
