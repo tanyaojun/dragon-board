@@ -97,6 +97,8 @@ export interface StockExtData {
   mainSell?: number
   moneyFlowSource?: string
   moneyFlowEstimated?: boolean
+  capitalFlowSource?: string
+  capitalFlowConfidence?: string
   tdxBuyVolume?: number
   tdxSellVolume?: number
   tdxCurrentVolume?: number
@@ -204,6 +206,8 @@ export interface MergedStock {
   mainSell?: number
   moneyFlowSource?: string
   moneyFlowEstimated?: boolean
+  capitalFlowSource?: string
+  capitalFlowConfidence?: string
   tdxBuyVolume?: number
   tdxSellVolume?: number
   tdxCurrentVolume?: number

@@ -59,6 +59,8 @@ export interface MergedQuoteData {
   cddjzb: number
   moneyFlowSource?: string
   moneyFlowEstimated?: boolean
+  capitalFlowSource?: 'broker_l2' | 'official_l2' | 'estimated_l1' | string
+  capitalFlowConfidence?: 'high' | 'medium' | 'low' | string
   tdxBuyVolume?: number
   tdxSellVolume?: number
   tdxCurrentVolume?: number

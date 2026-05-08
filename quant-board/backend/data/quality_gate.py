@@ -7,6 +7,7 @@ from typing import Any
 
 FORMAL_CAPTURE_MODES = {"real_time", "delayed"}
 LOW_HOTLIST_THRESHOLD = 20
+FORMAL_MONEY_FLOW_SOURCES = {"broker_l2", "official_l2"}
 
 CORE_NUMERIC_FIELDS = [
     "price",
@@ -132,6 +133,63 @@ def _check_coverage(frames: list[dict[str, Any]], snapshot_ids_with_stocks: set[
     }
 
 
+def _normalize_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def _check_money_flow_sources(stock_rows: list[dict[str, Any]]) -> dict[str, Any]:
+    total = len(stock_rows)
+    formal_count = 0
+    estimated_l1_count = 0
+    missing_source_count = 0
+    low_confidence_count = 0
+    estimated_examples: list[dict[str, Any]] = []
+    source_counts: dict[str, int] = {}
+    for row in stock_rows:
+        source = str(
+            row.get("capitalFlowSource")
+            or row.get("capital_flow_source")
+            or row.get("moneyFlowSource")
+            or row.get("money_flow_source")
+            or ""
+        )
+        confidence = str(row.get("capitalFlowConfidence") or row.get("capital_flow_confidence") or "")
+        estimated = _normalize_bool(row.get("moneyFlowEstimated") or row.get("money_flow_estimated"))
+        source_counts[source or "missing"] = source_counts.get(source or "missing", 0) + 1
+
+        if not source:
+            missing_source_count += 1
+        if source in FORMAL_MONEY_FLOW_SOURCES and not estimated:
+            formal_count += 1
+        if source == "estimated_l1" or estimated:
+            estimated_l1_count += 1
+            if len(estimated_examples) < 10:
+                estimated_examples.append(
+                    {
+                        "snapshotId": row.get("snapshotId") or row.get("snapshot_id"),
+                        "code": row.get("code"),
+                        "capitalFlowSource": source or "missing",
+                        "moneyFlowEstimated": estimated,
+                    }
+                )
+        if source in FORMAL_MONEY_FLOW_SOURCES and confidence and confidence not in {"high", "medium"}:
+            low_confidence_count += 1
+
+    return {
+        "formalMoneyFlowCount": formal_count,
+        "estimatedL1MoneyFlowCount": estimated_l1_count,
+        "missingMoneyFlowSourceCount": missing_source_count,
+        "lowConfidenceMoneyFlowCount": low_confidence_count,
+        "formalMoneyFlowCoverageRatio": round(formal_count / total, 4) if total else 0,
+        "moneyFlowSourceCounts": source_counts,
+        "estimatedL1MoneyFlowExamples": estimated_examples,
+    }
+
+
 def evaluate_snapshot_quality(
     frames: list[dict[str, Any]],
     stock_rows: list[dict[str, Any]],
@@ -140,6 +198,8 @@ def evaluate_snapshot_quality(
     min_hotlist_size: int = 1,
     research_min_hotlist_size: int = LOW_HOTLIST_THRESHOLD,
     strict: bool = False,
+    require_formal_money_flow: bool = False,
+    allow_estimated_l1_money_flow: bool = False,
 ) -> QualityGateResult:
     issues: list[str] = []
     filtered = [frame for frame in frames if frame.get("type") == snapshot_type]
@@ -150,6 +210,7 @@ def evaluate_snapshot_quality(
     nan_inf = _check_nan_inf_for_rows(stock_rows)
     neg_check = _check_negative_values(stock_rows)
     coverage = _check_coverage(frames, {str(r.get("snapshotId") or "") for r in stock_rows})
+    money_flow = _check_money_flow_sources(stock_rows)
 
     stats = {
         "totalFrames": len(frames),
@@ -179,6 +240,13 @@ def evaluate_snapshot_quality(
         "coverageRatio": coverage["coverageRatio"],
         "coveredTradingDates": coverage["coveredTradingDates"],
         "totalTradingDates": coverage["totalTradingDates"],
+        "formalMoneyFlowCount": money_flow["formalMoneyFlowCount"],
+        "estimatedL1MoneyFlowCount": money_flow["estimatedL1MoneyFlowCount"],
+        "missingMoneyFlowSourceCount": money_flow["missingMoneyFlowSourceCount"],
+        "lowConfidenceMoneyFlowCount": money_flow["lowConfidenceMoneyFlowCount"],
+        "formalMoneyFlowCoverageRatio": money_flow["formalMoneyFlowCoverageRatio"],
+        "moneyFlowSourceCounts": money_flow["moneyFlowSourceCounts"],
+        "estimatedL1MoneyFlowExamples": money_flow["estimatedL1MoneyFlowExamples"],
     }
 
     if len(filtered) < min_snapshot_count:
@@ -246,6 +314,15 @@ def evaluate_snapshot_quality(
     fatal_inf = nan_inf["fatalInfRowCount"] > 0
     fatal_negative_volume = neg_check["negativeVolumeCount"] > 0
     fatal_non_positive_price = neg_check["nonPositivePriceCount"] > 0
+    fatal_estimated_l1_money_flow = (
+        require_formal_money_flow
+        and not allow_estimated_l1_money_flow
+        and money_flow["estimatedL1MoneyFlowCount"] > 0
+    )
+    fatal_missing_money_flow = (
+        require_formal_money_flow
+        and money_flow["formalMoneyFlowCount"] < len(stock_rows)
+    )
 
     fatal = (
         len(filtered) < min_snapshot_count
@@ -258,6 +335,8 @@ def evaluate_snapshot_quality(
         or fatal_inf
         or fatal_negative_volume
         or fatal_non_positive_price
+        or fatal_estimated_l1_money_flow
+        or fatal_missing_money_flow
     )
 
     if fatal_nan:
@@ -268,6 +347,15 @@ def evaluate_snapshot_quality(
         issues.append(f"negative volume: {neg_check['negativeVolumeCount']} rows")
     if fatal_non_positive_price:
         issues.append(f"non-positive price: {neg_check['nonPositivePriceCount']} rows")
+    if fatal_estimated_l1_money_flow:
+        issues.append(
+            f"estimated_l1 money flow blocked for formal backtest: {money_flow['estimatedL1MoneyFlowCount']} rows"
+        )
+    if fatal_missing_money_flow:
+        issues.append(
+            "formal money flow coverage below required level: "
+            f"{money_flow['formalMoneyFlowCoverageRatio']}"
+        )
 
     nan_warnings = {k: v for k, v in nan_inf["nanCounts"].items() if k not in FATAL_NAN_FIELDS}
     inf_warnings = nan_inf["infCounts"]

@@ -251,7 +251,8 @@ export class QuoteService {
     const stock = this.dataLayer.getStock(code)
     const speedCandidate = quote.speed ?? existingQuote?.speed
     const speed = typeof speedCandidate === 'number' && Number.isFinite(speedCandidate) ? speedCandidate : undefined
-    const estimatedMoneyFlow = estimateTdxMoneyFlow(code, quote)
+    const hasRealtimeL2MoneyFlow = isReliableL2MoneyFlow(quote)
+    const estimatedMoneyFlow = hasRealtimeL2MoneyFlow ? null : estimateTdxMoneyFlow(code, quote)
 
     return {
       price: Number(quote.lastPrice) || 0,
@@ -264,17 +265,43 @@ export class QuoteService {
       totalMV: Number(stock?.totalMV ?? existingQuote?.totalMV) || 0,
       cirMV: Number(stock?.cirMV ?? existingQuote?.cirMV) || 0,
       pb: Number(stock?.pb ?? existingQuote?.pb) || 0,
-      zlje: pickNonZeroNumber(estimatedMoneyFlow?.zlje, stock?.zlje, existingQuote?.zlje),
-      zljzb: pickNonZeroNumber(estimatedMoneyFlow?.zljzb, stock?.zljzb, existingQuote?.zljzb),
-      cddje: pickNonZeroNumber(estimatedMoneyFlow?.cddje, stock?.cddje, existingQuote?.cddje),
-      cddjzb: pickNonZeroNumber(estimatedMoneyFlow?.cddjzb, stock?.cddjzb, existingQuote?.cddjzb),
-      moneyFlowSource: estimatedMoneyFlow?.moneyFlowSource ?? stock?.moneyFlowSource ?? existingQuote?.moneyFlowSource,
-      moneyFlowEstimated: estimatedMoneyFlow?.moneyFlowEstimated ?? stock?.moneyFlowEstimated ?? existingQuote?.moneyFlowEstimated,
+      zlje: hasRealtimeL2MoneyFlow
+        ? pickFundFlow(quote.zlje, stock?.zlje)
+        : pickNonZeroNumber(estimatedMoneyFlow?.zlje, stock?.zlje, existingQuote?.zlje),
+      zljzb: hasRealtimeL2MoneyFlow
+        ? pickFundFlow(quote.zljzb, stock?.zljzb)
+        : pickNonZeroNumber(estimatedMoneyFlow?.zljzb, stock?.zljzb, existingQuote?.zljzb),
+      cddje: hasRealtimeL2MoneyFlow
+        ? pickFundFlow(quote.cddje, stock?.cddje)
+        : pickNonZeroNumber(estimatedMoneyFlow?.cddje, stock?.cddje, existingQuote?.cddje),
+      cddjzb: hasRealtimeL2MoneyFlow
+        ? pickFundFlow(quote.cddjzb, stock?.cddjzb)
+        : pickNonZeroNumber(estimatedMoneyFlow?.cddjzb, stock?.cddjzb, existingQuote?.cddjzb),
+      moneyFlowSource: hasRealtimeL2MoneyFlow
+        ? quote.moneyFlowSource
+        : estimatedMoneyFlow?.moneyFlowSource ?? stock?.moneyFlowSource ?? existingQuote?.moneyFlowSource,
+      moneyFlowEstimated: hasRealtimeL2MoneyFlow
+        ? false
+        : estimatedMoneyFlow?.moneyFlowEstimated ?? stock?.moneyFlowEstimated ?? existingQuote?.moneyFlowEstimated,
+      capitalFlowSource: hasRealtimeL2MoneyFlow
+        ? quote.capitalFlowSource
+        : estimatedMoneyFlow
+          ? 'estimated_l1'
+          : stock?.capitalFlowSource ?? existingQuote?.capitalFlowSource,
+      capitalFlowConfidence: hasRealtimeL2MoneyFlow
+        ? quote.capitalFlowConfidence
+        : estimatedMoneyFlow
+          ? 'low'
+          : stock?.capitalFlowConfidence ?? existingQuote?.capitalFlowConfidence,
       tdxBuyVolume: Number(quote.tdxBuyVolume ?? stock?.tdxBuyVolume ?? existingQuote?.tdxBuyVolume) || 0,
       tdxSellVolume: Number(quote.tdxSellVolume ?? stock?.tdxSellVolume ?? existingQuote?.tdxSellVolume) || 0,
       tdxCurrentVolume: Number(quote.tdxCurrentVolume ?? stock?.tdxCurrentVolume ?? existingQuote?.tdxCurrentVolume) || 0,
       name: quote.name || stock?.name || existingQuote?.name,
-      sources: estimatedMoneyFlow ? ['tdx_l2', 'tdx_money_estimate'] : ['tdx_l2'],
+      sources: hasRealtimeL2MoneyFlow
+        ? [String(quote.moneyFlowSource)]
+        : estimatedMoneyFlow
+          ? ['tdx_l2', 'tdx_money_estimate']
+          : ['tdx_l2'],
       confidence: 99,
       timestamp: this.now(),
     }
@@ -283,7 +310,7 @@ export class QuoteService {
   private hasFundFlowData(quote: Partial<MergedQuoteData> | null | undefined): boolean {
     if (!quote) return false
     return ['zlje', 'zljzb', 'cddje', 'cddjzb'].some((key) => {
-      const value = Number((quote as Record<string, unknown>)[key])
+      const value = Number((quote as unknown as Record<string, unknown>)[key])
       return Number.isFinite(value) && value !== 0
     })
   }
@@ -316,6 +343,12 @@ export class QuoteService {
       cddjzb: preferHttpFundFlow ? pickFundFlow(httpQuote.cddjzb, realtimeQuote.cddjzb) : pickFundFlow(realtimeQuote.cddjzb, httpQuote.cddjzb),
       moneyFlowSource: preferHttpFundFlow ? httpQuote.moneyFlowSource : realtimeQuote.moneyFlowSource || httpQuote.moneyFlowSource,
       moneyFlowEstimated: preferHttpFundFlow ? httpQuote.moneyFlowEstimated : realtimeQuote.moneyFlowEstimated ?? httpQuote.moneyFlowEstimated,
+      capitalFlowSource: preferHttpFundFlow
+        ? httpQuote.capitalFlowSource
+        : realtimeQuote.capitalFlowSource || httpQuote.capitalFlowSource,
+      capitalFlowConfidence: preferHttpFundFlow
+        ? httpQuote.capitalFlowConfidence
+        : realtimeQuote.capitalFlowConfidence || httpQuote.capitalFlowConfidence,
       tdxBuyVolume: pickFinite(realtimeQuote.tdxBuyVolume, httpQuote.tdxBuyVolume),
       tdxSellVolume: pickFinite(realtimeQuote.tdxSellVolume, httpQuote.tdxSellVolume),
       tdxCurrentVolume: pickFinite(realtimeQuote.tdxCurrentVolume, httpQuote.tdxCurrentVolume),
@@ -362,6 +395,18 @@ function pickFinite(primary: unknown, fallback: unknown, preferPositive = false)
   }
 
   return 0
+}
+
+function isReliableL2MoneyFlow(quote: QuotePatch): boolean {
+  return (
+    quote.moneyFlowEstimated === false &&
+    quote.moneyFlowSource === 'qmt_l2' &&
+    (quote.capitalFlowSource === 'broker_l2' || quote.capitalFlowSource === 'official_l2') &&
+    ['zlje', 'zljzb', 'cddje', 'cddjzb'].some((key) => {
+      const value = Number((quote as unknown as Record<string, unknown>)[key])
+      return Number.isFinite(value) && value !== 0
+    })
+  )
 }
 
 function pickFundFlow(primary: unknown, fallback: unknown): number {

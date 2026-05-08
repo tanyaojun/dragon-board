@@ -67,6 +67,8 @@ export interface Stock {
   mainSell?: number
   moneyFlowSource?: string
   moneyFlowEstimated?: boolean
+  capitalFlowSource?: 'broker_l2' | 'official_l2' | 'estimated_l1' | string
+  capitalFlowConfidence?: 'high' | 'medium' | 'low' | string
   tdxBuyVolume?: number
   tdxSellVolume?: number
   tdxCurrentVolume?: number
@@ -142,6 +144,8 @@ export interface Depth10Book {
   sourceTs?: number
   seq?: number
   timestamp: number
+  provider?: string
+  depthLevelCount?: number
 }
 
 export interface TickTrade {
@@ -153,6 +157,7 @@ export interface TickTrade {
   tradeTime: string
   sourceTs?: number
   timestamp: number
+  provider?: string
 }
 
 export interface QuotePatch {
@@ -168,6 +173,14 @@ export interface QuotePatch {
   tdxBuyVolume?: number
   tdxSellVolume?: number
   tdxCurrentVolume?: number
+  zlje?: number
+  zljzb?: number
+  cddje?: number
+  cddjzb?: number
+  moneyFlowSource?: string
+  moneyFlowEstimated?: boolean
+  capitalFlowSource?: 'broker_l2' | 'official_l2' | 'estimated_l1' | string
+  capitalFlowConfidence?: 'high' | 'medium' | 'low' | string
   open?: number
   high?: number
   low?: number

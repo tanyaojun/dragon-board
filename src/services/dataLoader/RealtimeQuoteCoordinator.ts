@@ -134,7 +134,11 @@ export class RealtimeQuoteCoordinator {
     if (quoteItems.length) {
       dataLayer.applyRealtimeQuoteBatch(
         quoteItems.map((item) => {
-          const estimatedMoneyFlow = estimateTdxMoneyFlow(item.code, item)
+          const hasRealtimeL2MoneyFlow =
+            item.moneyFlowEstimated === false &&
+            item.moneyFlowSource === 'qmt_l2' &&
+            (item.capitalFlowSource === 'broker_l2' || item.capitalFlowSource === 'official_l2')
+          const estimatedMoneyFlow = hasRealtimeL2MoneyFlow ? null : estimateTdxMoneyFlow(item.code, item)
           return {
             code: item.code,
             name: item.name,
@@ -144,12 +148,14 @@ export class RealtimeQuoteCoordinator {
             volume: item.volume,
             turnover: item.amount,
             turnoverRate: item.turnoverRate,
-            zlje: estimatedMoneyFlow?.zlje,
-            zljzb: estimatedMoneyFlow?.zljzb,
-            cddje: estimatedMoneyFlow?.cddje,
-            cddjzb: estimatedMoneyFlow?.cddjzb,
-            moneyFlowSource: estimatedMoneyFlow?.moneyFlowSource,
-            moneyFlowEstimated: estimatedMoneyFlow?.moneyFlowEstimated,
+            zlje: hasRealtimeL2MoneyFlow ? item.zlje : estimatedMoneyFlow?.zlje,
+            zljzb: hasRealtimeL2MoneyFlow ? item.zljzb : estimatedMoneyFlow?.zljzb,
+            cddje: hasRealtimeL2MoneyFlow ? item.cddje : estimatedMoneyFlow?.cddje,
+            cddjzb: hasRealtimeL2MoneyFlow ? item.cddjzb : estimatedMoneyFlow?.cddjzb,
+            moneyFlowSource: hasRealtimeL2MoneyFlow ? item.moneyFlowSource : estimatedMoneyFlow?.moneyFlowSource,
+            moneyFlowEstimated: hasRealtimeL2MoneyFlow ? false : estimatedMoneyFlow?.moneyFlowEstimated,
+            capitalFlowSource: hasRealtimeL2MoneyFlow ? item.capitalFlowSource : estimatedMoneyFlow ? 'estimated_l1' : undefined,
+            capitalFlowConfidence: hasRealtimeL2MoneyFlow ? item.capitalFlowConfidence : estimatedMoneyFlow ? 'low' : undefined,
             tdxBuyVolume: item.tdxBuyVolume,
             tdxSellVolume: item.tdxSellVolume,
             tdxCurrentVolume: item.tdxCurrentVolume,

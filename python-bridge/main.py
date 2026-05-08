@@ -17,6 +17,7 @@ from typing import Any, Iterable
 import websockets
 from mootdx.quotes import Quotes
 
+from l2.qmt_provider import QmtL2Provider
 from tdx_hq_cache import OfficialHQCacheDepthReader
 
 
@@ -456,6 +457,11 @@ class BridgeConfig:
     l2_helper_setl2_arg3: str = os.getenv("TDX_L2_HELPER_SETL2_ARG3", "")
     official_cache_depth_enabled: bool = env_bool("TDX_OFFICIAL_CACHE_DEPTH_ENABLED", True)
     official_cache_root: str = env_path("TDX_OFFICIAL_CACHE_ROOT", r"D:\APP_SOFT\TDX\T0002\hq_cache")
+    l2_provider: str = os.getenv("L2_PROVIDER", "").strip().lower()
+    qmt_l2_enabled: bool = env_bool("QMT_L2_ENABLED", False)
+    qmt_l2_code_limit: int = env_int("QMT_L2_CODE_LIMIT", 80)
+    qmt_l2_poll_interval_ms: int = env_int("QMT_L2_POLL_INTERVAL_MS", 600)
+    qmt_l2_require_official: bool = env_bool("QMT_L2_REQUIRE_OFFICIAL", True)
 
 
 class TdxL2Bridge:
@@ -487,6 +493,12 @@ class TdxL2Bridge:
         self.healthy_fetch_cycles = 0
         self.active_server: tuple[str, int] | None = None
         self.l2_probe_cursor = 0
+        self.qmt_l2_provider = (
+            QmtL2Provider(require_official=self.config.qmt_l2_require_official)
+            if self.config.l2_provider == "qmt" and self.config.qmt_l2_enabled
+            else None
+        )
+        self.latest_money_flow: dict[str, str] = {}
         self.helper_process: asyncio.subprocess.Process | None = None
         self.helper_runtime_root: str | None = None
         self.helper_launch_count = 0
@@ -506,6 +518,15 @@ class TdxL2Bridge:
             "fallbackActive": False,
             "runtime": self.build_runtime_state(),
         }
+        if self.qmt_l2_provider:
+            self.l2_state.update(
+                {
+                    "provider": "qmt",
+                    "status": "pending",
+                    "message": "QMT L2 provider pending",
+                    "fallbackActive": True,
+                }
+            )
 
         if self.config.l2_username or self.config.l2_password:
             logger.warning(
@@ -1773,6 +1794,42 @@ class TdxL2Bridge:
 
         return results
 
+    def qmt_l2_codes(self, codes: list[str]) -> list[str]:
+        limit = max(0, self.config.qmt_l2_code_limit)
+        return codes[:limit] if limit else codes
+
+    async def fetch_qmt_l2_snapshot(
+        self,
+        codes: list[str],
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+        if not self.qmt_l2_provider:
+            return [], [], []
+        target_codes = self.qmt_l2_codes(codes)
+        if not target_codes:
+            return [], [], []
+        try:
+            snapshot = await asyncio.to_thread(self.qmt_l2_provider.poll_snapshot, target_codes)
+            if snapshot.status:
+                self.l2_state.update(snapshot.status.to_dict())
+            if snapshot.status and snapshot.status.status == "ok":
+                self.l2_state["fallbackActive"] = False
+            depth = [item.to_dict() for item in snapshot.depth]
+            money_flow = [item.to_dict() for item in snapshot.money_flow]
+            ticks = snapshot.ticks
+            return depth, ticks, money_flow
+        except Exception as error:
+            self.l2_state.update(
+                {
+                    "provider": "qmt",
+                    "status": "unknown_error",
+                    "message": str(error),
+                    "lastProbeTs": now_ms(),
+                    "fallbackActive": True,
+                }
+            )
+            logger.warning("qmt l2 snapshot fetch failed: %s", error)
+            return [], [], []
+
     async def poll_loop(self) -> None:
         while not self.stop_event.is_set():
             cycle_started = now_ms()
@@ -1784,10 +1841,18 @@ class TdxL2Bridge:
 
             try:
                 quotes, depth, quote_stats = await self.fetch_quotes_and_depth(pool)
+                qmt_depth, qmt_ticks, money_flow = await self.fetch_qmt_l2_snapshot(pool)
+                if qmt_depth:
+                    depth_by_code = {item["code"]: item for item in depth}
+                    for item in qmt_depth:
+                        if int(item.get("depthLevelCount") or 0) >= 10:
+                            depth_by_code[item["code"]] = item
+                    depth = list(depth_by_code.values())
                 self.tune_quote_batch_size(quote_stats)
                 quote_patch = self.diff_payloads(quotes, self.latest_quotes)
                 depth_patch = self.diff_payloads(depth, self.latest_depth)
-                ticks_batch = await self.fetch_ticks(pool)
+                ticks_batch = qmt_ticks or await self.fetch_ticks(pool)
+                money_flow_patch = self.diff_payloads(money_flow, self.latest_money_flow)
                 subscribed_count = len(pool)
 
                 logger.info(
@@ -1811,6 +1876,7 @@ class TdxL2Bridge:
                             "quotes": quotes,
                             "depth": depth,
                             "l2": self.l2_state,
+                            "moneyFlow": money_flow,
                         }
                     )
                     self.full_state_requested = False
@@ -1831,6 +1897,16 @@ class TdxL2Bridge:
                                 "serverTs": now_ms(),
                                 "intervalMs": self.config.poll_interval_ms,
                                 "items": depth_patch,
+                            }
+                        )
+                    if money_flow_patch:
+                        await self.broadcast(
+                            {
+                                "type": "money_flow_patch",
+                                "serverTs": now_ms(),
+                                "intervalMs": self.config.poll_interval_ms,
+                                "items": money_flow_patch,
+                                "l2": self.l2_state,
                             }
                         )
 

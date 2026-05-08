@@ -11,6 +11,7 @@ QuantBoard 是 `dragon-board` 的量化回测与参数研究子项目。首期�
 - 默认 `snapshot_type` 为 `half_hour`。`quarter_hour` 只作为可选细颗粒度样本，不是默认口径。
 - 存储主链采用 SQLite 主库 + Supabase 备份库；详细实施、同步和恢复规则以 [database-migration-plan.md](database-migration-plan.md) 为准。
 - 所有回测、优化、API、CLI、前端展示都要保留 `dataset_id`、`snapshot_type`、`strategy_version`、`config_hash`、`random_seed`，保证结果可追溯。
+- 资金流来源必须可追溯：正式资金流回测只接受 `broker_l2` 或 `official_l2`，`estimated_l1` 默认只能作为观察指标。
 
 ## 文档索引
 

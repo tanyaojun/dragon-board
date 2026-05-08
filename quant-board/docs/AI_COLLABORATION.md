@@ -24,6 +24,7 @@
 - V12 存储口径：ThemeTrend 研究结果只进入 research SQLite，本轮不进入 Supabase、`sync_outbox` 或快照事实库；`themeDATA.db` 只承载题材基础映射，不承载回测、优化或运行态因子结果。
 - V12 边界：Dragon Board 根项目不新增回测平台；共振策略以 RankTrend 候选为主，ThemeTrend 只能辅助排序、置信度、拥挤风险降级和解释，不得独立制造买入信号。
 - V12 策略口径：`theme_rotation`、`leader_theme_confirmation`、`hotlist_theme_confluence` 必须在执行信号中保留独立入场、降级、过滤和解释字段；Dragon Board 只展示 QuantBoard 研究摘要，不在根项目实现交易模拟。
+- L2 资金流口径：`estimated_l1` 只允许作为观察指标；正式资金流回测必须使用 `broker_l2` 或 `official_l2`，并在质量门禁中保留 `capital_flow_source`、`capital_flow_confidence`、`money_flow_estimated`。
 
 ## 工作边界
 
@@ -71,6 +72,7 @@
 21. V12 ThemeTrend 回测、优化、signals、quality report 和报告结果必须归属 research SQLite local-only 链路；本轮不得进入 Supabase 或 `themeDATA.db`。
 22. 新增 ThemeTrend API/CLI 合同时必须保留 `dataset_id`、`snapshot_type`、`strategy_version`、`config_hash`、`random_seed`，默认 `snapshot_type=half_hour`，`quarter_hour` 只能显式传入。
 23. 文档或实现涉及 ThemeTrend 时，必须区分“已完成能力”和“V12 目标/拟新增合同/首批落地”，不得把计划中的接口描述成已上线事实。
+24. 资金流策略正式回测不得默认消费 L1 估算主力资金；如显式允许 `estimated_l1`，报告必须标注实验口径和高风险。
 
 ## 推荐执行流程
 

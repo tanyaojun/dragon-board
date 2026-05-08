@@ -663,6 +663,12 @@ class DataLayer {
       if (typeof change.moneyFlowEstimated === 'boolean') {
         stock.moneyFlowEstimated = change.moneyFlowEstimated
       }
+      if (typeof change.capitalFlowSource === 'string' && change.capitalFlowSource.trim()) {
+        stock.capitalFlowSource = change.capitalFlowSource
+      }
+      if (typeof change.capitalFlowConfidence === 'string' && change.capitalFlowConfidence.trim()) {
+        stock.capitalFlowConfidence = change.capitalFlowConfidence
+      }
       stock.updatedAt = Date.now()
       if (typeof change.name === 'string' && change.name.trim()) {
         stock.name = change.name.trim()

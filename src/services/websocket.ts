@@ -60,6 +60,12 @@ type TickBatchEventPayload = {
   intervalMs: number
 }
 
+type MoneyFlowPatchEventPayload = {
+  items: QuotePatch[]
+  serverTs: number
+  intervalMs: number
+}
+
 const HEARTBEAT_INTERVAL_HINT_MS = 5000
 const TRADING_HEARTBEAT_INTERVAL_HINT_MS = 1000
 const RECONNECT_DELAYS_MS = [1000, 2000, 5000, 10000]
@@ -122,6 +128,10 @@ function normalizeQuotePatch(item: any): QuotePatch | null {
   const tdxBuyVolume = toOptionalNumber(item?.tdxBuyVolume ?? item?.buyVolume ?? item?.bVol ?? item?.b_vol)
   const tdxSellVolume = toOptionalNumber(item?.tdxSellVolume ?? item?.sellVolume ?? item?.sVol ?? item?.s_vol)
   const tdxCurrentVolume = toOptionalNumber(item?.tdxCurrentVolume ?? item?.currentVolume ?? item?.curVol ?? item?.cur_vol)
+  const zlje = toOptionalNumber(item?.zlje)
+  const zljzb = toOptionalNumber(item?.zljzb)
+  const cddje = toOptionalNumber(item?.cddje)
+  const cddjzb = toOptionalNumber(item?.cddjzb)
 
   const patch: QuotePatch = {
     code,
@@ -144,8 +154,52 @@ function normalizeQuotePatch(item: any): QuotePatch | null {
   if (tdxBuyVolume !== undefined) patch.tdxBuyVolume = tdxBuyVolume
   if (tdxSellVolume !== undefined) patch.tdxSellVolume = tdxSellVolume
   if (tdxCurrentVolume !== undefined) patch.tdxCurrentVolume = tdxCurrentVolume
+  if (zlje !== undefined) patch.zlje = zlje
+  if (zljzb !== undefined) patch.zljzb = zljzb
+  if (cddje !== undefined) patch.cddje = cddje
+  if (cddjzb !== undefined) patch.cddjzb = cddjzb
+  if (typeof item?.moneyFlowSource === 'string') patch.moneyFlowSource = item.moneyFlowSource
+  if (typeof item?.moneyFlowEstimated === 'boolean') patch.moneyFlowEstimated = item.moneyFlowEstimated
+  if (typeof item?.capitalFlowSource === 'string') patch.capitalFlowSource = item.capitalFlowSource
+  if (typeof item?.capitalFlowConfidence === 'string') patch.capitalFlowConfidence = item.capitalFlowConfidence
 
   return patch
+}
+
+function normalizeMoneyFlowPatch(item: any): (Partial<QuotePatch> & { code: string }) | null {
+  const code = normalizeStockCode(item?.code || item?.symbol)
+  if (!code) return null
+
+  const patch: Partial<QuotePatch> & { code: string } = { code }
+  const zlje = toOptionalNumber(item?.zlje)
+  const zljzb = toOptionalNumber(item?.zljzb)
+  const cddje = toOptionalNumber(item?.cddje)
+  const cddjzb = toOptionalNumber(item?.cddjzb)
+
+  if (zlje !== undefined) patch.zlje = zlje
+  if (zljzb !== undefined) patch.zljzb = zljzb
+  if (cddje !== undefined) patch.cddje = cddje
+  if (cddjzb !== undefined) patch.cddjzb = cddjzb
+  if (typeof item?.moneyFlowSource === 'string') patch.moneyFlowSource = item.moneyFlowSource
+  if (typeof item?.moneyFlowEstimated === 'boolean') patch.moneyFlowEstimated = item.moneyFlowEstimated
+  if (typeof item?.capitalFlowSource === 'string') patch.capitalFlowSource = item.capitalFlowSource
+  if (typeof item?.capitalFlowConfidence === 'string') patch.capitalFlowConfidence = item.capitalFlowConfidence
+
+  return patch
+}
+
+function mergeMoneyFlowPatch(
+  existing: QuotePatch | undefined,
+  patch: Partial<QuotePatch> & { code: string },
+): QuotePatch {
+  const base: QuotePatch = existing || {
+    code: patch.code,
+    lastPrice: 0,
+    changePct: 0,
+    volume: 0,
+    amount: 0,
+  }
+  return { ...base, ...patch }
 }
 
 function normalizeDepth10Book(item: any): Depth10Book | null {
@@ -164,6 +218,8 @@ function normalizeDepth10Book(item: any): Depth10Book | null {
     sourceTs: toNumber(item?.sourceTs ?? item?.timestamp),
     seq: toNumber(item?.seq),
     timestamp: Date.now(),
+    provider: typeof item?.provider === 'string' ? item.provider : undefined,
+    depthLevelCount: toNumber(item?.depthLevelCount),
   }
 }
 
@@ -188,6 +244,7 @@ function normalizeTickTrade(code: string, item: any): TickTrade | null {
     tradeTime: typeof item?.tradeTime === 'string' ? item.tradeTime : String(item?.ts || ''),
     sourceTs: toNumber(item?.sourceTs ?? item?.timestamp),
     timestamp: Date.now(),
+    provider: typeof item?.provider === 'string' ? item.provider : undefined,
   }
 }
 
@@ -365,6 +422,9 @@ class RealTimeWebSocketService {
       case 'ticks_batch':
         this.handleTicksBatch(payload as TickBatchPayload, serverTs)
         break
+      case 'money_flow_patch':
+        this.handleMoneyFlowPatch(payload as QuotePayload, serverTs)
+        break
       case 'heartbeat':
         this.handleHeartbeat(payload as HeartbeatPayload, serverTs)
         break
@@ -425,15 +485,24 @@ class RealTimeWebSocketService {
       : Array.isArray(payload.items)
         ? payload.items
         : []
+    const moneyFlowSource = Array.isArray((payload as any).moneyFlow) ? (payload as any).moneyFlow : []
     const depthSource = Array.isArray((payload as any).depth)
       ? (payload as any).depth
       : Array.isArray(payload.items)
         ? payload.items
         : []
     const quotes = quoteSource.map(normalizeQuotePatch).filter(Boolean) as QuotePatch[]
+    const moneyFlowPatches = moneyFlowSource.map(normalizeMoneyFlowPatch).filter(Boolean) as Array<
+      Partial<QuotePatch> & { code: string }
+    >
     const depth = depthSource.map(normalizeDepth10Book).filter(Boolean) as Depth10Book[]
 
     quotes.forEach((quote) => this.latestQuotesByCode.set(quote.code, quote))
+    const moneyFlow = moneyFlowPatches.map((patch) => {
+      const merged = mergeMoneyFlowPatch(this.latestQuotesByCode.get(patch.code), patch)
+      this.latestQuotesByCode.set(merged.code, merged)
+      return merged
+    })
     depth.forEach((book) => this.latestDepth10ByCode.set(book.code, book))
 
     this.updateStatus({
@@ -442,7 +511,7 @@ class RealTimeWebSocketService {
     })
 
     const eventPayload: FullStateEventPayload = {
-      quotes,
+      quotes: [...quotes, ...moneyFlow],
       depth,
       serverTs,
       subscribedCount: this.state.subscribedCount,
@@ -460,6 +529,26 @@ class RealTimeWebSocketService {
     items.forEach((quote) => this.latestQuotesByCode.set(quote.code, quote))
 
     const eventPayload: QuotePatchEventPayload = {
+      items,
+      serverTs,
+      intervalMs: toNumber(payload.intervalMs) || 100,
+    }
+
+    EventManager.emit(AppEvents.WEBSOCKET.QUOTE_PATCH, eventPayload)
+  }
+
+  private handleMoneyFlowPatch(payload: QuotePayload, serverTs: number) {
+    const patches = (Array.isArray(payload.items) ? payload.items : [])
+      .map(normalizeMoneyFlowPatch)
+      .filter(Boolean) as Array<Partial<QuotePatch> & { code: string }>
+
+    const items = patches.map((patch) => {
+      const merged = mergeMoneyFlowPatch(this.latestQuotesByCode.get(patch.code), patch)
+      this.latestQuotesByCode.set(merged.code, merged)
+      return merged
+    })
+
+    const eventPayload: MoneyFlowPatchEventPayload = {
       items,
       serverTs,
       intervalMs: toNumber(payload.intervalMs) || 100,

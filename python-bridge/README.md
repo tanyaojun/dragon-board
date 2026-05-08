@@ -24,6 +24,11 @@
 
 当前已进入实时行情第二阶段。第二阶段的主线是继续完成 `L2 十档行情 + 分笔` 的最初目标：找到并验证真实 L2 鉴权 / 权限同步入口，再进入 `7719 / TDXDeep / QSTP` 深度行情接入设计。开源方案探索只是辅助线索，不是最终验收。
 
+2026-05-08 起，实时 L2 主线调整为 QMT / miniQMT 合法 Level2 接入。TDX `7719` 探针保留为低优先级研究项，不再作为主线反复尝试。QMT 接入文档见：
+
+- [docs/market-data-l2/qmt-l2-integration-plan.md](../docs/market-data-l2/qmt-l2-integration-plan.md)
+- [docs/market-data-l2/qmt-l2-field-mapping.md](../docs/market-data-l2/qmt-l2-field-mapping.md)
+
 执行边界：
 
 - 当前 bridge 继续服务 `7709 / L1 + 标准五档 + WebSocket` 主链路。
@@ -122,8 +127,39 @@ pip install -r python-bridge/requirements.txt
 - `TDX_TIMEOUT_SECONDS`：默认 `15`
 - `TDX_PROBE_SYMBOL`：默认 `000001`
 - `TDX_L2_USERNAME` / `TDX_L2_PASSWORD`：当前仅预留，不会形成真实登录流程
+- `L2_PROVIDER`：设置为 `qmt` 时启用 QMT L2 Provider
+- `QMT_L2_ENABLED`：默认 `0`，为 `1` 时尝试通过 `xtquant.xtdata` 获取 QMT L2
+- `QMT_L2_CODE_LIMIT`：默认 `80`，限制每轮 QMT L2 股票数
+- `QMT_L2_POLL_INTERVAL_MS`：默认 `600`
+- `QMT_L2_REQUIRE_OFFICIAL`：默认 `1`，要求 L2 来源按正式资金流口径标记
 
 ---
+
+## QMT L2 探针
+
+```bash
+python python-bridge/l2/probe_qmt_l2.py --codes 000001.SZ,600000.SH
+```
+
+探针输出结构化状态：
+
+- `ok`
+- `missing_xtquant`
+- `qmt_not_running`
+- `permission_denied`
+- `empty_l2_data`
+- `field_mismatch`
+- `unknown_error`
+
+启用 bridge QMT L2：
+
+```bash
+set L2_PROVIDER=qmt
+set QMT_L2_ENABLED=1
+python python-bridge/main.py
+```
+
+QMT 可用时，WebSocket 会新增 `money_flow_patch`，资金流标记为 `moneyFlowSource=qmt_l2`、`moneyFlowEstimated=false`、`capitalFlowSource=broker_l2`。QMT 不可用时，现有 TDX L1 fallback 保持不变。
 
 ## 当前协议
 
