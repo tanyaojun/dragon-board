@@ -294,7 +294,7 @@ export class ApiService {
     }
     if (url.includes('/api/quotes')) return 'quote'
     if (
-      url.includes('/api/theme') ||
+      url.includes('/api/theme/') ||
       url.includes('/api/get_hot_block') ||
       url.includes('/api/get_block_stock') ||
       url.includes('/api/get_tradeday_list')
@@ -643,32 +643,6 @@ export class ApiService {
       cacheTTL: 24 * 60 * 60 * 1000, // 缓存1天
       ...options,
     })
-  }
-
-  // ========== 原有接口保留 ==========
-
-  /** 获取题材详情 */
-  async getThemeDetail(themeId: string, options?: RequestConfig) {
-    return this.get(`/api/theme/${themeId}`, {
-      context: 'theme',
-      cache: true,
-      cacheTTL: 300000,
-      ...options,
-    })
-  }
-
-  /** 批量获取题材数据 */
-  async getThemesBatch(themeIds: string[], options?: RequestConfig) {
-    return this.post(
-      '/api/themes/batch',
-      { ids: themeIds },
-      {
-        context: 'theme',
-        cache: true,
-        cacheTTL: 300000,
-        ...options,
-      },
-    )
   }
 
   /** 获取涨停板数据 */

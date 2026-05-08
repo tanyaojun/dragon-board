@@ -198,7 +198,6 @@ export const API_CONFIG = {
       TENCENT: '/api/quotes/tencent',
       EASTMONEY: '/api/quotes/eastmoney',
       SINA: '/api/quotes/sina',
-      SPK: '/api/quotes/tencent/spk',
     },
     // 题材数据（5000）- jxbk专用接口
     THEMES: {
@@ -209,14 +208,11 @@ export const API_CONFIG = {
       BLOCK_STOCK_HIS: '/api/get_block_stock_list_his',
       TRADEDAY: '/api/get_tradeday_list',
 
-      // 原有接口（保留，可能用不上）
-      DETAIL: (id: string) => `/api/theme/${id}`,
-      BATCH: '/api/themes/batch',
+      // 旧 proxy-server 题材接口已软废弃，正式读口走 QuantBoard /api/themes/mapping。
     },
     // 涨停数据（3000）
     LIMITUP: {
       TODAY: '/api/limitup/10jqka',
-      DETAIL: '/api/limitup/detail',
       PERFORMANCE: '/api/surge-stock/performance',
     },
     // 市场数据（3000）
