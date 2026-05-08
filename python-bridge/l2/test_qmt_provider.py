@@ -72,3 +72,17 @@ def test_probe_reports_qmt_not_running_for_chinese_xtquant_connection_error():
     status = provider.probe(["000001.SZ"])
 
     assert status.status == "qmt_not_running"
+
+
+def test_probe_preserves_permission_denied_status():
+    module = load_qmt_provider()
+
+    class FakeXtData:
+        def get_market_data_ex(self, *_args, **_kwargs):
+            raise RuntimeError("Level2 permission denied")
+
+    provider = module.QmtL2Provider(xtdata=FakeXtData())
+
+    status = provider.probe(["000001.SZ"])
+
+    assert status.status == "permission_denied"

@@ -19,6 +19,8 @@ type QuotePayload = {
   items?: any[]
 }
 
+type QuotePatchLike = Partial<QuotePatch> & { code: string }
+
 type TickBatchPayload = {
   type: string
   serverTs?: number
@@ -37,14 +39,14 @@ type HeartbeatPayload = {
 }
 
 type FullStateEventPayload = {
-  quotes: QuotePatch[]
+  quotes: QuotePatchLike[]
   depth: Depth10Book[]
   serverTs: number
   subscribedCount: number
 }
 
 type QuotePatchEventPayload = {
-  items: QuotePatch[]
+  items: QuotePatchLike[]
   serverTs: number
   intervalMs: number
 }
@@ -62,7 +64,7 @@ type TickBatchEventPayload = {
 }
 
 type MoneyFlowPatchEventPayload = {
-  items: QuotePatch[]
+  items: QuotePatchLike[]
   serverTs: number
   intervalMs: number
 }
@@ -192,15 +194,17 @@ function normalizeMoneyFlowPatch(item: any): (Partial<QuotePatch> & { code: stri
 function mergeMoneyFlowPatch(
   existing: QuotePatch | undefined,
   patch: Partial<QuotePatch> & { code: string },
-): QuotePatch {
-  const base: QuotePatch = existing || {
-    code: patch.code,
-    lastPrice: 0,
-    changePct: 0,
-    volume: 0,
-    amount: 0,
-  }
-  return { ...base, ...patch }
+): QuotePatchLike {
+  return existing ? { ...existing, ...patch } : patch
+}
+
+function isCompleteQuotePatch(item: QuotePatchLike): item is QuotePatch {
+  return (
+    typeof item.lastPrice === 'number' &&
+    typeof item.changePct === 'number' &&
+    typeof item.volume === 'number' &&
+    typeof item.amount === 'number'
+  )
 }
 
 function normalizeDepth10Book(item: any): Depth10Book | null {
@@ -496,15 +500,13 @@ class RealTimeWebSocketService {
         ? payload.items
         : []
     const quotes = quoteSource.map(normalizeQuotePatch).filter(Boolean) as QuotePatch[]
-    const moneyFlowPatches = moneyFlowSource.map(normalizeMoneyFlowPatch).filter(Boolean) as Array<
-      Partial<QuotePatch> & { code: string }
-    >
+    const moneyFlowPatches = moneyFlowSource.map(normalizeMoneyFlowPatch).filter(Boolean) as QuotePatchLike[]
     const depth = depthSource.map(normalizeDepth10Book).filter(Boolean) as Depth10Book[]
 
     quotes.forEach((quote) => this.latestQuotesByCode.set(quote.code, quote))
     const moneyFlow = moneyFlowPatches.map((patch) => {
       const merged = mergeMoneyFlowPatch(this.latestQuotesByCode.get(patch.code), patch)
-      this.latestQuotesByCode.set(merged.code, merged)
+      if (isCompleteQuotePatch(merged)) this.latestQuotesByCode.set(merged.code, merged)
       return merged
     })
     depth.forEach((book) => this.latestDepth10ByCode.set(book.code, book))
@@ -545,11 +547,11 @@ class RealTimeWebSocketService {
   private handleMoneyFlowPatch(payload: QuotePayload, serverTs: number) {
     const patches = (Array.isArray(payload.items) ? payload.items : [])
       .map(normalizeMoneyFlowPatch)
-      .filter(Boolean) as Array<Partial<QuotePatch> & { code: string }>
+      .filter(Boolean) as QuotePatchLike[]
 
     const items = patches.map((patch) => {
       const merged = mergeMoneyFlowPatch(this.latestQuotesByCode.get(patch.code), patch)
-      this.latestQuotesByCode.set(merged.code, merged)
+      if (isCompleteQuotePatch(merged)) this.latestQuotesByCode.set(merged.code, merged)
       return merged
     })
 

@@ -8,18 +8,28 @@ const platformRows: Record<string, any[]> = {
 }
 
 let fromCache = false
+let firstPlatformLoadEmptyCache = false
+let platformLoadCount = 0
 let quoteError: Error | null = null
 let volumeHistoryError: Error | null = null
 let platformLoadError: Error | null = null
 
 vi.mock('../PlatformHotlistService', () => ({
   platformHotlistService: {
-    loadPlatforms: vi.fn(async () => {
+    loadPlatforms: vi.fn(async (_platforms, force) => {
       if (platformLoadError) throw platformLoadError
+      platformLoadCount++
+      if (firstPlatformLoadEmptyCache && platformLoadCount === 1 && !force) {
+        return {
+          data: {},
+          timestamp: 1000,
+          fromCache: true,
+        }
+      }
       return {
         data: platformRows,
         timestamp: 1000,
-        fromCache,
+        fromCache: force ? false : fromCache,
       }
     }),
     getAllHotCodes: (data: Record<string, any[]>) =>
@@ -85,6 +95,8 @@ describe('DataLoaderFacade', () => {
     setActivePinia(createPinia())
     dataLayer.reset()
     fromCache = false
+    firstPlatformLoadEmptyCache = false
+    platformLoadCount = 0
     quoteError = null
     volumeHistoryError = null
     platformLoadError = null
@@ -109,6 +121,35 @@ describe('DataLoaderFacade', () => {
 
     await dataLoader.loadAllPlatforms(false)
 
+    expect(dataLayer.getStocks()).toEqual([
+      expect.objectContaining({
+        code: '000001',
+        name: '平安银行',
+      }),
+    ])
+  })
+
+  it('recovers from a stale loading flag when startup has no stocks yet', async () => {
+    const { dataLoader } = await import('../../dataLoader')
+    ;(dataLoader as any).state.value.loading = true
+
+    await dataLoader.loadAllPlatforms(false)
+
+    expect(dataLayer.getStocks()).toEqual([
+      expect.objectContaining({
+        code: '000001',
+        name: '平安银行',
+      }),
+    ])
+  })
+
+  it('refetches when a fresh platform cache is empty during startup', async () => {
+    firstPlatformLoadEmptyCache = true
+    const { dataLoader } = await import('../../dataLoader')
+
+    await dataLoader.loadAllPlatforms(false)
+
+    expect(platformLoadCount).toBe(2)
     expect(dataLayer.getStocks()).toEqual([
       expect.objectContaining({
         code: '000001',

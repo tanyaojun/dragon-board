@@ -296,8 +296,12 @@ class DataLoaderService {
   }
 
   // ========== 加载平台数据 ==========
-  async loadAllPlatforms(force = false) {
-    if (this.destroyed || (this.state.value.loading && !force)) return
+  async loadAllPlatforms(force = false): Promise<Record<string, any[]> | void> {
+    if (this.destroyed) return
+    if (this.state.value.loading && !force) {
+      if (dataLayer.getStocks().length > 0) return
+      this.state.value.loading = false
+    }
 
     const platforms = this.state.value.platforms
     const result = await platformHotlistService.loadPlatforms(platforms, force).catch((error) => {
@@ -310,6 +314,13 @@ class DataLoaderService {
     })
 
     if (result.fromCache) {
+      const hasCachedRows = Object.values(result.data || {}).some(
+        (rows) => Array.isArray(rows) && rows.length > 0,
+      )
+      if (!hasCachedRows && !dataLayer.getStocks().length) {
+        platformHotlistService.clearCache()
+        return this.loadAllPlatforms(true)
+      }
       this.state.value.data = result.data
       this.state.value.lastUpdate = result.timestamp
       this.state.value.loading = false

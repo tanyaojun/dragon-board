@@ -118,4 +118,46 @@ describe('webSocketService money flow patches', () => {
       vi.clearAllMocks()
     }
   })
+
+  it('does not synthesize zero quote fields for money_flow_patch without an existing quote', () => {
+    const quotePatchEvents: any[] = []
+    const unsubscribe = EventManager.on(AppEvents.WEBSOCKET.QUOTE_PATCH, (payload) => {
+      quotePatchEvents.push(payload)
+    })
+
+    try {
+      emitBridgeMessage({
+        type: 'money_flow_patch',
+        serverTs: 1200,
+        items: [
+          {
+            code: '600000',
+            zlje: 12000,
+            cddje: 8000,
+            moneyFlowSource: 'qmt_l2',
+            moneyFlowEstimated: false,
+            capitalFlowSource: 'broker_l2',
+            capitalFlowConfidence: 'high',
+          },
+        ],
+      })
+
+      const item = quotePatchEvents.at(-1)?.items?.[0]
+      expect(item).toEqual(
+        expect.objectContaining({
+          code: '600000',
+          zlje: 12000,
+          cddje: 8000,
+          moneyFlowSource: 'qmt_l2',
+        }),
+      )
+      expect(item).not.toHaveProperty('lastPrice')
+      expect(item).not.toHaveProperty('changePct')
+      expect(item).not.toHaveProperty('volume')
+      expect(item).not.toHaveProperty('amount')
+    } finally {
+      unsubscribe()
+      vi.clearAllMocks()
+    }
+  })
 })

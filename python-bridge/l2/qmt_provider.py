@@ -207,7 +207,12 @@ class QmtL2Provider:
         if self.import_error:
             return self.status("missing_xtquant", self.import_error)
         snapshot = self.poll_snapshot(codes)
-        if snapshot.status and snapshot.status.status in {"missing_xtquant", "qmt_not_running", "unknown_error"}:
+        if snapshot.status and snapshot.status.status in {
+            "missing_xtquant",
+            "qmt_not_running",
+            "permission_denied",
+            "unknown_error",
+        }:
             return snapshot.status
         if snapshot.depth or snapshot.money_flow or snapshot.ticks:
             depth_count = max((item.depthLevelCount for item in snapshot.depth), default=0)
