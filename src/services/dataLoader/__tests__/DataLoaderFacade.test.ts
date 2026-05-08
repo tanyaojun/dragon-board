@@ -208,6 +208,21 @@ describe('DataLoaderFacade', () => {
     expect(dataLoader.getLoadingStatus().active).toBe(false)
   })
 
+  it('does not double-increment UI data version when DATA.MERGED is subscribed', async () => {
+    const { dataLoader } = await import('../../dataLoader')
+    const { useUIStore } = await import('../../../stores/ui')
+    const uiStore = useUIStore()
+    const dispose = uiStore.init()
+
+    try {
+      await dataLoader.refreshAll({ force: true, source: 'manual' })
+
+      expect(uiStore.dataVersion).toBe(2)
+    } finally {
+      dispose()
+    }
+  })
+
   it('refreshAll returns an empty structured summary after recoverable platform failure', async () => {
     platformLoadError = new Error('platform request aborted')
     const { dataLoader } = await import('../../dataLoader')

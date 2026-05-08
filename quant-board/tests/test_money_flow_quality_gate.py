@@ -66,6 +66,54 @@ def test_formal_money_flow_gate_blocks_estimated_l1_rows() -> None:
     assert any("estimated_l1 money flow blocked" in issue for issue in result.issues)
 
 
+def test_formal_money_flow_gate_allows_estimated_l1_when_explicitly_enabled() -> None:
+    frames = [
+        {
+            "snapshotId": "s1",
+            "type": "half_hour",
+            "timestamp": 1,
+            "captureMode": "real_time",
+        },
+        {
+            "snapshotId": "s2",
+            "type": "half_hour",
+            "timestamp": 2,
+            "captureMode": "real_time",
+        },
+    ]
+    stock_rows = [
+        {
+            "snapshotId": "s1",
+            "code": "000001",
+            "price": 10,
+            "volume": 100,
+            "capitalFlowSource": "estimated_l1",
+            "capitalFlowConfidence": "low",
+            "moneyFlowEstimated": True,
+        },
+        {
+            "snapshotId": "s2",
+            "code": "600000",
+            "price": 12,
+            "volume": 120,
+            "capitalFlowSource": "broker_l2",
+            "capitalFlowConfidence": "high",
+            "moneyFlowEstimated": False,
+        },
+    ]
+
+    result = evaluate_snapshot_quality(
+        frames,
+        stock_rows,
+        require_formal_money_flow=True,
+        allow_estimated_l1_money_flow=True,
+    )
+
+    assert result.passed is True
+    assert result.stats["estimatedL1MoneyFlowCount"] == 1
+    assert result.stats["formalMoneyFlowCoverageRatio"] == 0.5
+
+
 def test_formal_money_flow_gate_passes_broker_l2_rows() -> None:
     frames = [
         {

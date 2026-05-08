@@ -321,7 +321,11 @@ def evaluate_snapshot_quality(
     )
     fatal_missing_money_flow = (
         require_formal_money_flow
-        and money_flow["formalMoneyFlowCount"] < len(stock_rows)
+        and (
+            money_flow["formalMoneyFlowCount"]
+            + (money_flow["estimatedL1MoneyFlowCount"] if allow_estimated_l1_money_flow else 0)
+            < len(stock_rows)
+        )
     )
 
     fatal = (

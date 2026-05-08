@@ -149,7 +149,6 @@ class DataLoaderService {
       timestamp: Date.now(),
       reason: meta.reason,
     })
-    useUIStore().updateDataVersion()
   }
 
   private summarizeRun(startTime: number, fromCache: boolean): DataLoaderRunSummary {
