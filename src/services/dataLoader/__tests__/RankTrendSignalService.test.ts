@@ -53,6 +53,48 @@ describe('RankTrendSignalService', () => {
     expect(warnSpy).not.toHaveBeenCalled()
   })
 
+  it('keeps existing RankTrend display fields when the analyzer returns no fresh result', async () => {
+    const { rankTrendAnalyzer } = await import('../../RankTrendAnalyzer')
+    vi.mocked(rankTrendAnalyzer.getRankTrends).mockResolvedValue(new Map())
+
+    const existingRankTrend = {
+      meta: {
+        code: '000001',
+        currentRank: 1,
+        currentPercentile: 99,
+        change: 12,
+        rawChange: 12,
+        updateTime: 1000,
+      },
+      technical: {},
+      cycle: {},
+      risk: {},
+      decision: {
+        final: {
+          signal: 'buy',
+          confidence: 78,
+        },
+      },
+    } as any
+
+    const service = new RankTrendSignalService()
+    const result = await service.applySignalsToMerged([
+      {
+        code: '000001',
+        rank: 1,
+        rankTrend: existingRankTrend,
+        rankChange: 12,
+        finalSignal: 'buy',
+        finalConfidence: 78,
+      },
+    ])
+
+    expect(result[0].rankTrend).toBe(existingRankTrend)
+    expect(result[0].rankChange).toBe(12)
+    expect(result[0].finalSignal).toBe('buy')
+    expect(result[0].finalConfidence).toBe(78)
+  })
+
   it('can update stock signals without publishing UI events', () => {
     dataLayer.setMergedStocks([{ code: '000001', name: '平安银行' } as any])
     emittedEvents = 0

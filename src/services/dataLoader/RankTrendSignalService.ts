@@ -85,7 +85,9 @@ export class RankTrendSignalService {
       extraDataProjector.projectRuntimeFields(stock)
 
       const trend = rankTrends.get(stock.code)
-      applyRankTrendAnalysis(stock, isRankTrendAnalysisResult(trend) ? trend : null)
+      if (isRankTrendAnalysisResult(trend)) {
+        applyRankTrendAnalysis(stock, trend)
+      }
       stock.rankTrendCoverageWarning = coverageWarning || undefined
     }
 
