@@ -90,4 +90,44 @@ describe('QuoteHttpFeed', () => {
     expect(result.size).toBe(0)
     expect(getQuotes).not.toHaveBeenCalled()
   })
+
+  it('fetches EastMoney full quote enrichment by default', async () => {
+    const getQuotes = vi.fn().mockResolvedValue({
+      data: {
+        diff: [
+          {
+            f12: '000001',
+            f2: '10.5',
+            f3: '2.1',
+            f5: '1200',
+            f6: '500000',
+            f62: '8000',
+            f184: '6.5',
+            f66: '3000',
+            f69: '2.4',
+            f14: '平安银行',
+          },
+        ],
+      },
+    })
+    const feed = new QuoteHttpFeed({ api: { getQuotes }, sleep: async () => undefined })
+
+    const result = await feed.fetchFullData(['000001'], true)
+
+    expect(getQuotes).toHaveBeenCalledWith(
+      ['000001'],
+      expect.objectContaining({ source: 'eastmoney', force: true }),
+    )
+    expect(result.get('000001')).toMatchObject({
+      source: 'eastmoney',
+      moneyFlowSource: 'eastmoney',
+      moneyFlowEstimated: false,
+      capitalFlowSource: 'official_l2',
+      capitalFlowConfidence: 'medium',
+      zlje: 8000,
+      zljzb: 6.5,
+      cddje: 3000,
+      cddjzb: 2.4,
+    })
+  })
 })

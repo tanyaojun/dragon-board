@@ -86,6 +86,63 @@ describe('QuoteService', () => {
     expect(quote?.sources).toEqual(['tdx_l2', 'tdx_money_estimate', 'eastmoney'])
   })
 
+  it('uses EastMoney fund flow when realtime L1 has no QMT L2 money flow', async () => {
+    const service = new QuoteService({
+      now: () => 1000,
+      isRealtimePrimaryHealthy: () => true,
+      webSocketService: {
+        getQuotesBatch: () =>
+          new Map([
+            [
+              '000001',
+              {
+                code: '000001',
+                lastPrice: 11,
+                changePct: 3,
+                volume: 2000,
+                amount: 22000,
+              },
+            ],
+          ]),
+      },
+      dataLayer: {
+        getQuote: () => null,
+        getStock: () => ({ code: '000001', turnoverRate: 0 }),
+        updateQuote: vi.fn(),
+      },
+      feed: {
+        fetchBasicData: vi.fn().mockResolvedValue(new Map()),
+        fetchFullData: vi.fn().mockResolvedValue(
+          new Map([
+            [
+              '000001',
+              {
+                ...httpQuote({
+                  source: 'eastmoney',
+                  zlje: 9000,
+                  zljzb: 7,
+                  cddje: 4000,
+                  cddjzb: 3,
+                  moneyFlowSource: 'eastmoney',
+                  moneyFlowEstimated: false,
+                }),
+                source: 'eastmoney',
+              },
+            ],
+          ]),
+        ),
+      },
+    })
+
+    const result = await service.fetchMergedQuotes(['000001'], { force: true })
+    const quote = result.get('000001')
+
+    expect(quote?.moneyFlowSource).toBe('eastmoney')
+    expect(quote?.moneyFlowEstimated).toBe(false)
+    expect(quote?.zlje).toBe(9000)
+    expect(quote?.cddje).toBe(4000)
+  })
+
   it('keeps QMT L2 fund flow as the realtime source instead of recomputing TDX estimates', async () => {
     const service = new QuoteService({
       now: () => 1000,
