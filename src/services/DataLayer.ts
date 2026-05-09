@@ -29,6 +29,7 @@ import type {
   DenseOrderAlert,
   PeriodStatistics,
 } from '../types/big-order'
+import { shouldApplyMoneyFlowUpdate } from './moneyFlowSourcePriority'
 
 /**
  * 数据存储层
@@ -613,9 +614,23 @@ class DataLayer {
     changes.forEach((change) => {
       if (!change?.code) return
       const existing = this.state.realtime.quotes.get(change.code) || {}
+      const shouldApplyMoneyFlow = shouldApplyMoneyFlowUpdate(existing, change)
+      const moneyFlowPatch = shouldApplyMoneyFlow
+        ? {}
+        : {
+            zlje: existing.zlje,
+            zljzb: existing.zljzb,
+            cddje: existing.cddje,
+            cddjzb: existing.cddjzb,
+            moneyFlowSource: existing.moneyFlowSource,
+            moneyFlowEstimated: existing.moneyFlowEstimated,
+            capitalFlowSource: existing.capitalFlowSource,
+            capitalFlowConfidence: existing.capitalFlowConfidence,
+          }
       this.state.realtime.quotes.set(change.code, {
         ...existing,
         ...change,
+        ...moneyFlowPatch,
         timestamp: Date.now(),
       })
     })
@@ -650,23 +665,38 @@ class DataLayer {
       stock.volume = Number(change.volume ?? stock.volume) || 0
       stock.turnover = Number(change.turnover ?? change.amount ?? stock.turnover) || 0
       stock.turnoverRate = Number(change.turnoverRate ?? stock.turnoverRate) || 0
-      stock.zlje = this.pickQuoteNumber(change.zlje, stock.zlje)
-      stock.zljzb = this.pickQuoteNumber(change.zljzb, stock.zljzb)
-      stock.cddje = this.pickQuoteNumber(change.cddje, stock.cddje)
-      stock.cddjzb = this.pickQuoteNumber(change.cddjzb, stock.cddjzb)
+      const shouldApplyMoneyFlow = shouldApplyMoneyFlowUpdate(stock, change)
+      if (shouldApplyMoneyFlow) {
+        stock.zlje = this.pickQuoteNumber(change.zlje, stock.zlje)
+        stock.zljzb = this.pickQuoteNumber(change.zljzb, stock.zljzb)
+        stock.cddje = this.pickQuoteNumber(change.cddje, stock.cddje)
+        stock.cddjzb = this.pickQuoteNumber(change.cddjzb, stock.cddjzb)
+      }
       stock.tdxBuyVolume = this.pickQuoteNumber(change.tdxBuyVolume, stock.tdxBuyVolume)
       stock.tdxSellVolume = this.pickQuoteNumber(change.tdxSellVolume, stock.tdxSellVolume)
       stock.tdxCurrentVolume = this.pickQuoteNumber(change.tdxCurrentVolume, stock.tdxCurrentVolume)
-      if (typeof change.moneyFlowSource === 'string' && change.moneyFlowSource.trim()) {
+      if (
+        shouldApplyMoneyFlow &&
+        typeof change.moneyFlowSource === 'string' &&
+        change.moneyFlowSource.trim()
+      ) {
         stock.moneyFlowSource = change.moneyFlowSource
       }
-      if (typeof change.moneyFlowEstimated === 'boolean') {
+      if (shouldApplyMoneyFlow && typeof change.moneyFlowEstimated === 'boolean') {
         stock.moneyFlowEstimated = change.moneyFlowEstimated
       }
-      if (typeof change.capitalFlowSource === 'string' && change.capitalFlowSource.trim()) {
+      if (
+        shouldApplyMoneyFlow &&
+        typeof change.capitalFlowSource === 'string' &&
+        change.capitalFlowSource.trim()
+      ) {
         stock.capitalFlowSource = change.capitalFlowSource
       }
-      if (typeof change.capitalFlowConfidence === 'string' && change.capitalFlowConfidence.trim()) {
+      if (
+        shouldApplyMoneyFlow &&
+        typeof change.capitalFlowConfidence === 'string' &&
+        change.capitalFlowConfidence.trim()
+      ) {
         stock.capitalFlowConfidence = change.capitalFlowConfidence
       }
       stock.updatedAt = Date.now()

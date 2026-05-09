@@ -3,6 +3,10 @@ import { dataLayer as defaultDataLayer } from '../DataLayer'
 import { webSocketService as defaultWebSocketService } from '../websocket'
 import { QUOTE_BATCH_DELAY_MS } from './constants'
 import { estimateTdxMoneyFlow } from './MoneyFlowEstimator'
+import {
+  pickHigherPriorityMoneyFlow,
+  shouldApplyMoneyFlowUpdate,
+} from '../moneyFlowSourcePriority'
 import { quoteHttpFeed } from './QuoteHttpFeed'
 import type { MergedQuoteData } from './types'
 import type { QuotePatch } from '@/types'
@@ -253,6 +257,10 @@ export class QuoteService {
     const speed = typeof speedCandidate === 'number' && Number.isFinite(speedCandidate) ? speedCandidate : undefined
     const hasRealtimeL2MoneyFlow = isReliableL2MoneyFlow(quote)
     const estimatedMoneyFlow = hasRealtimeL2MoneyFlow ? null : estimateTdxMoneyFlow(code, quote)
+    const fallbackMoneyFlow = pickHigherPriorityMoneyFlow(stock, existingQuote)
+    const shouldUseEstimatedMoneyFlow = shouldApplyMoneyFlowUpdate(fallbackMoneyFlow, estimatedMoneyFlow)
+    const shouldUseRealtimeL2MoneyFlow = shouldApplyMoneyFlowUpdate(fallbackMoneyFlow, quote)
+    const moneyFlowBase = hasRealtimeL2MoneyFlow && shouldUseRealtimeL2MoneyFlow ? quote : fallbackMoneyFlow
 
     return {
       price: Number(quote.lastPrice) || 0,
@@ -267,32 +275,32 @@ export class QuoteService {
       pb: Number(stock?.pb ?? existingQuote?.pb) || 0,
       zlje: hasRealtimeL2MoneyFlow
         ? pickFundFlow(quote.zlje, stock?.zlje)
-        : pickNonZeroNumber(estimatedMoneyFlow?.zlje, stock?.zlje, existingQuote?.zlje),
+        : shouldUseEstimatedMoneyFlow
+          ? pickNonZeroNumber(estimatedMoneyFlow?.zlje, stock?.zlje, existingQuote?.zlje)
+          : pickNonZeroNumber(moneyFlowBase?.zlje, stock?.zlje, existingQuote?.zlje),
       zljzb: hasRealtimeL2MoneyFlow
         ? pickFundFlow(quote.zljzb, stock?.zljzb)
-        : pickNonZeroNumber(estimatedMoneyFlow?.zljzb, stock?.zljzb, existingQuote?.zljzb),
+        : shouldUseEstimatedMoneyFlow
+          ? pickNonZeroNumber(estimatedMoneyFlow?.zljzb, stock?.zljzb, existingQuote?.zljzb)
+          : pickNonZeroNumber(moneyFlowBase?.zljzb, stock?.zljzb, existingQuote?.zljzb),
       cddje: hasRealtimeL2MoneyFlow
         ? pickFundFlow(quote.cddje, stock?.cddje)
-        : pickNonZeroNumber(estimatedMoneyFlow?.cddje, stock?.cddje, existingQuote?.cddje),
+        : shouldUseEstimatedMoneyFlow
+          ? pickNonZeroNumber(estimatedMoneyFlow?.cddje, stock?.cddje, existingQuote?.cddje)
+          : pickNonZeroNumber(moneyFlowBase?.cddje, stock?.cddje, existingQuote?.cddje),
       cddjzb: hasRealtimeL2MoneyFlow
         ? pickFundFlow(quote.cddjzb, stock?.cddjzb)
-        : pickNonZeroNumber(estimatedMoneyFlow?.cddjzb, stock?.cddjzb, existingQuote?.cddjzb),
-      moneyFlowSource: hasRealtimeL2MoneyFlow
-        ? quote.moneyFlowSource
-        : estimatedMoneyFlow?.moneyFlowSource ?? stock?.moneyFlowSource ?? existingQuote?.moneyFlowSource,
-      moneyFlowEstimated: hasRealtimeL2MoneyFlow
-        ? false
-        : estimatedMoneyFlow?.moneyFlowEstimated ?? stock?.moneyFlowEstimated ?? existingQuote?.moneyFlowEstimated,
-      capitalFlowSource: hasRealtimeL2MoneyFlow
-        ? quote.capitalFlowSource
-        : estimatedMoneyFlow
-          ? 'estimated_l1'
-          : stock?.capitalFlowSource ?? existingQuote?.capitalFlowSource,
-      capitalFlowConfidence: hasRealtimeL2MoneyFlow
-        ? quote.capitalFlowConfidence
-        : estimatedMoneyFlow
-          ? 'low'
-          : stock?.capitalFlowConfidence ?? existingQuote?.capitalFlowConfidence,
+        : shouldUseEstimatedMoneyFlow
+          ? pickNonZeroNumber(estimatedMoneyFlow?.cddjzb, stock?.cddjzb, existingQuote?.cddjzb)
+          : pickNonZeroNumber(moneyFlowBase?.cddjzb, stock?.cddjzb, existingQuote?.cddjzb),
+      moneyFlowSource: shouldUseEstimatedMoneyFlow
+        ? estimatedMoneyFlow?.moneyFlowSource
+        : moneyFlowBase?.moneyFlowSource,
+      moneyFlowEstimated: shouldUseEstimatedMoneyFlow
+        ? estimatedMoneyFlow?.moneyFlowEstimated
+        : moneyFlowBase?.moneyFlowEstimated,
+      capitalFlowSource: shouldUseEstimatedMoneyFlow ? 'estimated_l1' : moneyFlowBase?.capitalFlowSource,
+      capitalFlowConfidence: shouldUseEstimatedMoneyFlow ? 'low' : moneyFlowBase?.capitalFlowConfidence,
       tdxBuyVolume: Number(quote.tdxBuyVolume ?? stock?.tdxBuyVolume ?? existingQuote?.tdxBuyVolume) || 0,
       tdxSellVolume: Number(quote.tdxSellVolume ?? stock?.tdxSellVolume ?? existingQuote?.tdxSellVolume) || 0,
       tdxCurrentVolume: Number(quote.tdxCurrentVolume ?? stock?.tdxCurrentVolume ?? existingQuote?.tdxCurrentVolume) || 0,
