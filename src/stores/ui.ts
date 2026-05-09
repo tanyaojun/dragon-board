@@ -234,11 +234,26 @@ export const useUIStore = defineStore('ui', () => {
   function init() {
     debugLog('[UIStore] init')
 
-    const unsubMerged = EventManager.on(AppEvents.DATA.MERGED, updateDataVersion)
-    const unsubUpdated = EventManager.on(AppEvents.DATA.UPDATED, updateDataVersion)
+    let lastStocksVersion: number | null = null
+    const syncStocksVersion = (version: number) => {
+      if (lastStocksVersion === version) return
+      lastStocksVersion = version
+      updateDataVersion()
+    }
+    const updateFromMergedEvent = () => {
+      const stocksVersion = dataLayer.getVersion().stocks
+      if (lastStocksVersion === stocksVersion) return
+      lastStocksVersion = stocksVersion
+      updateDataVersion()
+    }
+
+    const unsubStocksVersion = dataLayer.subscribe('version.stocks', syncStocksVersion)
+    const unsubMerged = EventManager.on(AppEvents.DATA.MERGED, updateFromMergedEvent)
+    const unsubUpdated = EventManager.on(AppEvents.DATA.UPDATED, updateFromMergedEvent)
     const unsubDragon = EventManager.on(AppEvents.DRAGON.UPDATED, updateDataVersion)
 
     return () => {
+      unsubStocksVersion()
       unsubMerged()
       unsubUpdated()
       unsubDragon()
