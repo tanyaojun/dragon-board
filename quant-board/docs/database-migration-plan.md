@@ -335,6 +335,7 @@ R2/S3 凭据只允许后端读取，不得进入 `VITE_*` 或 Vue 前端构建�
 - `frames`
 - `count`
 - `source=sqlite`
+- `cache`：列表读口的缓存诊断字段，例如 `{ "hit": false, "store": "sqlite" }` 或 `{ "hit": true, "store": "redis" }`。Redis 只缓存响应，不替代 SQLite 事实源。
 
 Dragon Board 前端正式分析入口 `listSnapshotFrameBundles` 必须调用该接口；正式快照不再把 IndexedDB 当事实读源，`five_minute` 浏览器本地入口也不再保留。
 
@@ -351,7 +352,7 @@ Dragon Board 前端正式分析入口 `listSnapshotFrameBundles` 必须调用该
 - `sort=asc|desc`。
 - `limit`。
 
-返回 `records`，字段保持 Dragon Board `SnapshotRecord` 的 camelCase 合同，包括 `id/type/tradingDate/slotTime/timestamp/displayKey/captureMode/source/payload`。重构后 `payload` 固定为空对象；明细必须从 frame/stock/sector 行读取。
+返回 `records` 和 `cache`，字段保持 Dragon Board `SnapshotRecord` 的 camelCase 合同，包括 `id/type/tradingDate/slotTime/timestamp/displayKey/captureMode/source/payload`。重构后 `payload` 固定为空对象；明细必须从 frame/stock/sector 行读取。
 
 ### `GET /api/snapshots/records/{snapshot_id}`
 
@@ -371,7 +372,7 @@ Dragon Board 前端正式分析入口 `listSnapshotFrameBundles` 必须调用该
 - `allowed_capture_modes`、`exclude_restored`。
 - `sort=asc|desc`、`limit`。
 
-返回 `rows`，字段保持 Dragon Board `SnapshotStockRow` 合同，不允许删除 DataLayer 现有字段。
+返回 `rows` 和 `cache`，字段保持 Dragon Board `SnapshotStockRow` 合同，不允许删除 DataLayer 现有字段。
 
 ### `GET /api/snapshots/sector-rows`
 
@@ -386,7 +387,7 @@ Dragon Board 前端正式分析入口 `listSnapshotFrameBundles` 必须调用该
 - `allowed_capture_modes`、`exclude_restored`。
 - `sort=asc|desc`、`limit`。
 
-`snapshot_sector_rows` 表已有独立 `capture_mode/source` 列；返回不再依赖 `payload_json` 还原。
+返回 `rows` 和 `cache`；`snapshot_sector_rows` 表已有独立 `capture_mode/source` 列；返回不再依赖 `payload_json` 还原。
 
 ### `GET /api/snapshots/counts`
 

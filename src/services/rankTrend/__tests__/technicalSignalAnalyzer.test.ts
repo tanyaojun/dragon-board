@@ -23,9 +23,10 @@ describe('technicalSignalAnalyzer', () => {
   })
 
   it('达到 macdSlow 后会计算出 MACD 数值，但没有真实穿越时仍是 none', () => {
+    const config = cloneDefaultRankTrendRuntimeConfig()
     const technical = analyzeTechnicalSignals(
-      Array.from({ length: 21 }, (_, index) => 35 + index * 1.15),
-      cloneDefaultRankTrendRuntimeConfig(),
+      Array.from({ length: config.macdSlow + config.macdSignal }, (_, index) => 35 + index * 1.15),
+      config,
     )
 
     expect(Math.abs(technical.macd.dif)).toBeGreaterThan(0)

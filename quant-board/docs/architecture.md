@@ -96,6 +96,7 @@ Supabase keeps only the recent dragonboard_live disaster-recovery window
 - `POST /api/snapshots/ingest` 是 Dragon Board 正式快照进入 QuantBoard 后端的主入口。
 - `GET /api/snapshots/frames` 是 Dragon Board 正式分析读取 SQLite 快照聚合帧的主入口。
 - `GET /api/snapshots/records`、`GET /api/snapshots/records/{snapshot_id}`、`GET /api/snapshots/stock-rows`、`GET /api/snapshots/sector-rows` 是 Dragon Board `DataLayer` 零散正式读口的 SQLite 承接层。
+- `frames`、`records`、`stock-rows`、`sector-rows` 列表读口可通过 Redis read-through cache 加速；Redis 只缓存响应，SQLite 仍是事实源，`backup_only` ingest 不刷新 Redis。
 - `GET /api/snapshots/counts` 用于 SQLite 主库快照事实表行数核对。
 - `POST /api/datasets/import` 的日常主入口是 `sourceType=sqlite_snapshots`，从 SQLite 正式快照事实表生成可复现研究视图，不复制事实行。
 - `POST /api/migrations/snapshots/import-json` 是历史 IndexedDB/JSON/结构化导出的可重复迁移入口。

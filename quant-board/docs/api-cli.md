@@ -337,7 +337,9 @@ Invoke-RestMethod 'http://127.0.0.1:8000/api/snapshots/frames?dataset_id=dragonb
 - `sort=asc|desc`。
 - `limit`。
 
-返回 `dataset`、`frames`、`count` 和 `source=sqlite`。`frames` 中每项包含 `rows/hotlist/sectors/hotThemes/rotationSummary`，供 Dragon Board `listSnapshotFrameBundles` 直接消费。正式快照不再把浏览器 IndexedDB 当事实读源；`five_minute` 浏览器本地入口也不再保留。
+返回 `dataset`、`frames`、`count`、`source=sqlite` 和 `cache`。`frames` 中每项包含 `rows/hotlist/sectors/hotThemes/rotationSummary`，供 Dragon Board `listSnapshotFrameBundles` 直接消费。正式快照不再把浏览器 IndexedDB 当事实读源；`five_minute` 浏览器本地入口也不再保留。
+
+`frames`、`records`、`stock-rows` 和 `sector-rows` 列表读口启用 Redis read-through cache。Redis 只缓存查询响应，不替代 SQLite 事实源；命中时 `source` 仍表示原始事实来源，`cache.hit=true`、`cache.store=redis` 只用于诊断。Redis 不可用时读口直接回 SQLite。
 
 Dragon Board 根前端通过 `src/services/snapshot/backendRead.ts` 调用该接口。该适配层会默认带上
 `dataset_id=dragonboard_live`、`allowed_capture_modes=real_time,delayed` 和
@@ -361,7 +363,7 @@ Invoke-RestMethod 'http://127.0.0.1:8000/api/snapshots/sector-rows?dataset_id=dr
 - 题材行：`snapshot_id`、`entity_type/entity_types`、`entity_key/entity_keys`。
 
 Dragon Board `snapshotFacade.listSnapshots/getSnapshotById/listSnapshotFrames/listSnapshotStockRows/listSnapshotSectorRows/getStockVolumeHistory`
-均通过这些 SQLite 明细读口实现。`getStockVolumeHistory` 固定读取 `daily` 的
+均通过这些 SQLite 明细读口实现。列表读口返回 `cache` 诊断字段，单条 `records/{snapshot_id}` 仍直接读取 SQLite。`getStockVolumeHistory` 固定读取 `daily` 的
 `snapshot_stock_rows`，不再扫描浏览器 IndexedDB 原始快照。
 
 ### `GET /api/datasets`

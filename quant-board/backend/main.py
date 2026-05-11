@@ -30,6 +30,7 @@ from backend.data.schemas import (
     SnapshotIngestRequest,
     SnapshotJsonMigrationRequest,
 )
+from backend.data import snapshot_cache
 from backend.data.supabase_backup import get_backup_client
 from backend.data.theme_database import get_theme_db, init_theme_db, theme_status
 from backend.data.theme_repository import ThemeRepository
@@ -200,6 +201,14 @@ def ingest_snapshot(request: SnapshotIngestRequest, db: Session | None = Depends
             trading_date=request.trading_date,
             source=request.source,
         )
+        if result.get("status") != "backup_only":
+            _invalidate_snapshot_cache_after_ingest(
+                dataset_id=dataset.id,
+                records=records,
+                frames=frames,
+                stock_rows=stock_rows,
+                sector_rows=sector_rows,
+            )
         return {"ok": True, **result}
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
@@ -258,6 +267,103 @@ def _resolve_snapshot_dataset(
     return resolved_dataset_id, dataset
 
 
+def _snapshot_cache_builder() -> snapshot_cache.SnapshotCacheKeyBuilder:
+    return snapshot_cache.SnapshotCacheKeyBuilder(prefix=get_settings().redis_key_prefix)
+
+
+def _cached_snapshot_response(
+    resource: str,
+    *,
+    resolved_dataset_id: str,
+    params: dict[str, Any],
+    snapshot_type: str | None = None,
+    trading_date: str | None = None,
+    snapshot_ids: list[str] | None = None,
+    loader,
+) -> dict[str, Any]:
+    cache_key = _snapshot_cache_builder().response_key(
+        resource,
+        resolved_dataset_id=resolved_dataset_id,
+        params=params,
+    )
+    cache = snapshot_cache.get_snapshot_redis_cache()
+    cached = cache.get_response(cache_key)
+    if cached is not None:
+        return cached
+
+    response = loader()
+    response = {**response, "cache": {"hit": False, "store": "sqlite"}}
+    cache.set_response(cache_key, response)
+    cache.register_dependencies(
+        cache_key,
+        snapshot_cache.build_snapshot_cache_index_keys(
+            prefix=get_settings().redis_key_prefix,
+            dataset_id=resolved_dataset_id,
+            snapshot_type=snapshot_type,
+            trading_date=trading_date,
+            snapshot_ids=snapshot_ids or [],
+        ),
+    )
+    return response
+
+
+def _invalidate_snapshot_cache_after_ingest(
+    *,
+    dataset_id: str,
+    records: list[Any],
+    frames: list[Any],
+    stock_rows: list[Any],
+    sector_rows: list[Any],
+) -> None:
+    def pick(item: Any, *keys: str) -> str:
+        for key in keys:
+            if isinstance(item, dict) and item.get(key):
+                return str(item.get(key) or "")
+            if hasattr(item, key) and getattr(item, key):
+                return str(getattr(item, key) or "")
+        return ""
+
+    snapshot_ids = {
+        pick(item, "id", "snapshotId", "snapshot_id")
+        for item in records
+        if pick(item, "id", "snapshotId", "snapshot_id")
+    }
+    snapshot_ids.update(
+        pick(item, "snapshotId", "snapshot_id", "id")
+        for item in [*frames, *stock_rows, *sector_rows]
+        if pick(item, "snapshotId", "snapshot_id", "id")
+    )
+
+    index_keys: list[str] = []
+    seen_date_keys: set[tuple[str, str]] = set()
+    for item in [*records, *frames, *stock_rows, *sector_rows]:
+        snapshot_type = pick(item, "type")
+        trading_date = pick(item, "tradingDate", "trading_date")
+        if snapshot_type and trading_date:
+            seen_date_keys.add((snapshot_type, trading_date))
+
+    for snapshot_type, trading_date in seen_date_keys:
+        index_keys.extend(
+            snapshot_cache.build_snapshot_cache_index_keys(
+                prefix=get_settings().redis_key_prefix,
+                dataset_id=dataset_id,
+                snapshot_type=snapshot_type,
+                trading_date=trading_date,
+            ),
+        )
+    index_keys.extend(
+        snapshot_cache.build_snapshot_cache_index_keys(
+            prefix=get_settings().redis_key_prefix,
+            dataset_id=dataset_id,
+            snapshot_ids=sorted(snapshot_ids),
+        ),
+    )
+    try:
+        snapshot_cache.get_snapshot_redis_cache().invalidate_indexes(list(dict.fromkeys(index_keys)))
+    except Exception:
+        return
+
+
 @app.get("/api/snapshots/frames")
 def list_snapshot_frames(
     dataset_id: str | None = None,
@@ -282,26 +388,49 @@ def list_snapshot_frames(
     capture_modes = _parse_csv(allowed_capture_modes)
     repo = Repository(db, enable_backup=False)
     resolved_dataset_id, dataset = _resolve_snapshot_dataset(repo, dataset_id)
-    frames = repo.load_frame_bundles(
-        resolved_dataset_id,
+    snapshot_ids: list[str] = []
+
+    def load_response() -> dict[str, Any]:
+        frames = repo.load_frame_bundles(
+            resolved_dataset_id,
+            snapshot_type=snapshot_type,
+            start_date=start,
+            end_date=end,
+            before_trading_date=before_trading_date,
+            allowed_capture_modes=capture_modes,
+            exclude_restored=exclude_restored,
+            limit=limit,
+            sort=sort,
+        )
+        snapshot_ids.extend(str(frame.get("snapshotId") or "") for frame in frames if frame.get("snapshotId"))
+        return {
+            "ok": True,
+            "dataset": Repository.dataset_to_dict(dataset),
+            "datasetId": resolved_dataset_id,
+            "snapshotType": snapshot_type,
+            "frames": frames,
+            "count": len(frames),
+            "source": "sqlite",
+        }
+
+    return _cached_snapshot_response(
+        "frames",
+        resolved_dataset_id=resolved_dataset_id,
+        params={
+            "snapshot_type": snapshot_type,
+            "start_date": start,
+            "end_date": end,
+            "before_trading_date": before_trading_date,
+            "allowed_capture_modes": allowed_capture_modes,
+            "exclude_restored": exclude_restored,
+            "sort": sort,
+            "limit": limit,
+        },
         snapshot_type=snapshot_type,
-        start_date=start,
-        end_date=end,
-        before_trading_date=before_trading_date,
-        allowed_capture_modes=capture_modes,
-        exclude_restored=exclude_restored,
-        limit=limit,
-        sort=sort,
+        trading_date=start if start == end else None,
+        snapshot_ids=snapshot_ids,
+        loader=load_response,
     )
-    return {
-        "ok": True,
-        "dataset": Repository.dataset_to_dict(dataset),
-        "datasetId": resolved_dataset_id,
-        "snapshotType": snapshot_type,
-        "frames": frames,
-        "count": len(frames),
-        "source": "sqlite",
-    }
 
 
 @app.get("/api/snapshots/records")
@@ -324,27 +453,52 @@ def list_snapshot_records(
     _assert_snapshot_sort(sort)
     repo = Repository(db, enable_backup=False)
     resolved_dataset_id, dataset = _resolve_snapshot_dataset(repo, dataset_id)
-    records = repo.list_snapshot_records(
-        resolved_dataset_id,
+    snapshot_ids: list[str] = []
+
+    def load_response() -> dict[str, Any]:
+        records = repo.list_snapshot_records(
+            resolved_dataset_id,
+            snapshot_type=snapshot_type,
+            snapshot_types=_parse_csv(types),
+            trading_date=trading_date,
+            start_date=start_date,
+            end_date=end_date,
+            before_trading_date=before_trading_date,
+            allowed_capture_modes=_parse_csv(allowed_capture_modes),
+            exclude_restored=exclude_restored,
+            limit=limit,
+            sort=sort,
+        )
+        snapshot_ids.extend(str(record.get("id") or "") for record in records if record.get("id"))
+        return {
+            "ok": True,
+            "dataset": Repository.dataset_to_dict(dataset),
+            "datasetId": resolved_dataset_id,
+            "records": records,
+            "count": len(records),
+            "source": "sqlite",
+        }
+
+    return _cached_snapshot_response(
+        "records",
+        resolved_dataset_id=resolved_dataset_id,
+        params={
+            "snapshot_type": snapshot_type,
+            "types": types,
+            "trading_date": trading_date,
+            "start_date": start_date,
+            "end_date": end_date,
+            "before_trading_date": before_trading_date,
+            "allowed_capture_modes": allowed_capture_modes,
+            "exclude_restored": exclude_restored,
+            "sort": sort,
+            "limit": limit,
+        },
         snapshot_type=snapshot_type,
-        snapshot_types=_parse_csv(types),
         trading_date=trading_date,
-        start_date=start_date,
-        end_date=end_date,
-        before_trading_date=before_trading_date,
-        allowed_capture_modes=_parse_csv(allowed_capture_modes),
-        exclude_restored=exclude_restored,
-        limit=limit,
-        sort=sort,
+        snapshot_ids=snapshot_ids,
+        loader=load_response,
     )
-    return {
-        "ok": True,
-        "dataset": Repository.dataset_to_dict(dataset),
-        "datasetId": resolved_dataset_id,
-        "records": records,
-        "count": len(records),
-        "source": "sqlite",
-    }
 
 
 @app.get("/api/snapshots/records/{snapshot_id}")
@@ -408,31 +562,60 @@ def list_snapshot_stock_rows(
     _assert_snapshot_sort(sort)
     repo = Repository(db, enable_backup=False)
     resolved_dataset_id, dataset = _resolve_snapshot_dataset(repo, dataset_id)
-    result = repo.list_snapshot_stock_rows(
-        resolved_dataset_id,
-        snapshot_id=snapshot_id,
+    row_snapshot_ids: list[str] = []
+
+    def load_response() -> dict[str, Any]:
+        result = repo.list_snapshot_stock_rows(
+            resolved_dataset_id,
+            snapshot_id=snapshot_id,
+            snapshot_type=snapshot_type,
+            snapshot_types=_parse_csv(types),
+            trading_date=trading_date,
+            start_date=start_date,
+            end_date=end_date,
+            before_trading_date=before_trading_date,
+            code=code,
+            codes=_parse_csv(codes),
+            slot_time=slot_time,
+            allowed_capture_modes=_parse_csv(allowed_capture_modes),
+            exclude_restored=exclude_restored,
+            limit=limit,
+            sort=sort,
+        )
+        row_snapshot_ids.extend(str(row.get("snapshotId") or "") for row in result["rows"] if row.get("snapshotId"))
+        return {
+            "ok": True,
+            "dataset": Repository.dataset_to_dict(dataset),
+            "datasetId": resolved_dataset_id,
+            "rows": result["rows"],
+            "count": len(result["rows"]),
+            "source": result["source"],
+        }
+
+    return _cached_snapshot_response(
+        "stock_rows",
+        resolved_dataset_id=resolved_dataset_id,
+        params={
+            "snapshot_id": snapshot_id,
+            "snapshot_type": snapshot_type,
+            "types": types,
+            "trading_date": trading_date,
+            "start_date": start_date,
+            "end_date": end_date,
+            "before_trading_date": before_trading_date,
+            "code": code,
+            "codes": codes,
+            "slot_time": slot_time,
+            "allowed_capture_modes": allowed_capture_modes,
+            "exclude_restored": exclude_restored,
+            "sort": sort,
+            "limit": limit,
+        },
         snapshot_type=snapshot_type,
-        snapshot_types=_parse_csv(types),
         trading_date=trading_date,
-        start_date=start_date,
-        end_date=end_date,
-        before_trading_date=before_trading_date,
-        code=code,
-        codes=_parse_csv(codes),
-        slot_time=slot_time,
-        allowed_capture_modes=_parse_csv(allowed_capture_modes),
-        exclude_restored=exclude_restored,
-        limit=limit,
-        sort=sort,
+        snapshot_ids=[snapshot_id] if snapshot_id else row_snapshot_ids,
+        loader=load_response,
     )
-    return {
-        "ok": True,
-        "dataset": Repository.dataset_to_dict(dataset),
-        "datasetId": resolved_dataset_id,
-        "rows": result["rows"],
-        "count": len(result["rows"]),
-        "source": result["source"],
-    }
 
 
 @app.get("/api/snapshots/sector-rows")
@@ -460,32 +643,62 @@ def list_snapshot_sector_rows(
     _assert_snapshot_sort(sort)
     repo = Repository(db, enable_backup=False)
     resolved_dataset_id, dataset = _resolve_snapshot_dataset(repo, dataset_id)
-    result = repo.list_snapshot_sector_rows(
-        resolved_dataset_id,
-        snapshot_id=snapshot_id,
+    row_snapshot_ids: list[str] = []
+
+    def load_response() -> dict[str, Any]:
+        result = repo.list_snapshot_sector_rows(
+            resolved_dataset_id,
+            snapshot_id=snapshot_id,
+            snapshot_type=snapshot_type,
+            snapshot_types=_parse_csv(types),
+            trading_date=trading_date,
+            start_date=start_date,
+            end_date=end_date,
+            before_trading_date=before_trading_date,
+            entity_type=entity_type,
+            entity_types=_parse_csv(entity_types),
+            entity_key=entity_key,
+            entity_keys=_parse_csv(entity_keys),
+            allowed_capture_modes=_parse_csv(allowed_capture_modes),
+            exclude_restored=exclude_restored,
+            limit=limit,
+            sort=sort,
+        )
+        row_snapshot_ids.extend(str(row.get("snapshotId") or "") for row in result["rows"] if row.get("snapshotId"))
+        return {
+            "ok": True,
+            "dataset": Repository.dataset_to_dict(dataset),
+            "datasetId": resolved_dataset_id,
+            "rows": result["rows"],
+            "count": len(result["rows"]),
+            "source": result["source"],
+        }
+
+    return _cached_snapshot_response(
+        "sector_rows",
+        resolved_dataset_id=resolved_dataset_id,
+        params={
+            "snapshot_id": snapshot_id,
+            "snapshot_type": snapshot_type,
+            "types": types,
+            "trading_date": trading_date,
+            "start_date": start_date,
+            "end_date": end_date,
+            "before_trading_date": before_trading_date,
+            "entity_type": entity_type,
+            "entity_types": entity_types,
+            "entity_key": entity_key,
+            "entity_keys": entity_keys,
+            "allowed_capture_modes": allowed_capture_modes,
+            "exclude_restored": exclude_restored,
+            "sort": sort,
+            "limit": limit,
+        },
         snapshot_type=snapshot_type,
-        snapshot_types=_parse_csv(types),
         trading_date=trading_date,
-        start_date=start_date,
-        end_date=end_date,
-        before_trading_date=before_trading_date,
-        entity_type=entity_type,
-        entity_types=_parse_csv(entity_types),
-        entity_key=entity_key,
-        entity_keys=_parse_csv(entity_keys),
-        allowed_capture_modes=_parse_csv(allowed_capture_modes),
-        exclude_restored=exclude_restored,
-        limit=limit,
-        sort=sort,
+        snapshot_ids=[snapshot_id] if snapshot_id else row_snapshot_ids,
+        loader=load_response,
     )
-    return {
-        "ok": True,
-        "dataset": Repository.dataset_to_dict(dataset),
-        "datasetId": resolved_dataset_id,
-        "rows": result["rows"],
-        "count": len(result["rows"]),
-        "source": result["source"],
-    }
 
 
 @app.get("/api/snapshots/counts")

@@ -35,10 +35,9 @@ export class RankTrendSignalService {
     for (const update of updates) {
       const stock = stockMap.get(update.code)
       if (stock) {
-        applyRankTrendAnalysis(
-          stock,
-          isRankTrendAnalysisResult(update.rankTrend) ? update.rankTrend : null,
-        )
+        if (isRankTrendAnalysisResult(update.rankTrend)) {
+          applyRankTrendAnalysis(stock, update.rankTrend)
+        }
         stock.rankTrendCoverageWarning = update.coverageWarning || undefined
       }
     }

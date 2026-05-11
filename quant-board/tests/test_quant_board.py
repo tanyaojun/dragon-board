@@ -1231,6 +1231,92 @@ def test_snapshot_frames_api_reads_sqlite_frame_bundles() -> None:
     assert frame["sectors"][0]["name"] == "人工智能"
 
 
+def test_snapshot_frames_api_uses_snapshot_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    from backend.data import snapshot_cache
+
+    class FakeCache:
+        def __init__(self) -> None:
+            self.values: dict[str, dict] = {}
+            self.get_count = 0
+            self.set_count = 0
+            self.registered: list[tuple[str, list[str]]] = []
+
+        def get_response(self, key: str):
+            self.get_count += 1
+            return self.values.get(key)
+
+        def set_response(self, key: str, response: dict) -> None:
+            self.set_count += 1
+            self.values[key] = {**response, "cache": {"hit": True, "store": "redis"}}
+
+        def register_dependencies(self, response_key: str, index_keys: list[str]) -> None:
+            self.registered.append((response_key, index_keys))
+
+    fake_cache = FakeCache()
+    monkeypatch.setattr(snapshot_cache, "get_snapshot_redis_cache", lambda: fake_cache)
+
+    client = TestClient(app)
+    suffix = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
+    dataset_id = f"dragonboard_cache_read_{suffix}"
+    snapshot_id = f"half_hour:2026-04-21:{suffix}"
+    ingest = client.post(
+        "/api/snapshots/ingest",
+        json={
+            "datasetId": dataset_id,
+            "idempotencyKey": f"cache-read-key-{suffix}",
+            "tradingDate": "2026-04-21",
+            "bundle": {
+                "version": "v4",
+                "tradingDate": "2026-04-21",
+                "items": [
+                    {
+                        "id": snapshot_id,
+                        "type": "half_hour",
+                        "tradingDate": "2026-04-21",
+                        "slotTime": "10:00",
+                        "timestamp": 1776746400000,
+                        "displayKey": "[半小时快照] 2026-04-21 10:00",
+                        "captureMode": "real_time",
+                        "source": "browser_runtime",
+                        "payload": {"hotlist": [{"code": "600001", "name": "样本A", "rank": 1}]},
+                    }
+                ],
+                "frames": [
+                    {
+                        "id": snapshot_id,
+                        "snapshotId": snapshot_id,
+                        "type": "half_hour",
+                        "tradingDate": "2026-04-21",
+                        "slotTime": "10:00",
+                        "timestamp": 1776746400000,
+                        "captureMode": "real_time",
+                        "source": "browser_runtime",
+                    }
+                ],
+                "stockRows": [],
+                "sectorRows": [],
+            },
+        },
+    )
+    assert ingest.status_code == 200, ingest.text
+
+    params = {
+        "dataset_id": dataset_id,
+        "snapshot_type": "half_hour",
+        "trading_date": "2026-04-21",
+        "allowed_capture_modes": "real_time",
+    }
+    first = client.get("/api/snapshots/frames", params=params)
+    second = client.get("/api/snapshots/frames", params=params)
+
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+    assert first.json()["cache"]["hit"] is False
+    assert second.json()["cache"]["hit"] is True
+    assert fake_cache.set_count == 1
+    assert fake_cache.registered
+
+
 def test_snapshot_detail_read_apis_use_sqlite() -> None:
     client = TestClient(app)
     suffix = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
@@ -1355,6 +1441,113 @@ def test_snapshot_detail_read_apis_use_sqlite() -> None:
         "snapshot_stock_rows": 1,
         "snapshot_sector_rows": 1,
     }
+
+
+def test_snapshot_detail_list_apis_use_snapshot_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    from backend.data import snapshot_cache
+
+    class FakeCache:
+        def __init__(self) -> None:
+            self.values: dict[str, dict] = {}
+            self.set_count = 0
+
+        def get_response(self, key: str):
+            return self.values.get(key)
+
+        def set_response(self, key: str, response: dict) -> None:
+            self.set_count += 1
+            self.values[key] = {**response, "cache": {"hit": True, "store": "redis"}}
+
+        def register_dependencies(self, response_key: str, index_keys: list[str]) -> None:
+            return None
+
+    fake_cache = FakeCache()
+    monkeypatch.setattr(snapshot_cache, "get_snapshot_redis_cache", lambda: fake_cache)
+
+    client = TestClient(app)
+    suffix = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
+    dataset_id = f"dragonboard_cache_detail_{suffix}"
+    snapshot_id = f"half_hour:2026-04-23:{suffix}"
+    ingest = client.post(
+        "/api/snapshots/ingest",
+        json={
+            "datasetId": dataset_id,
+            "idempotencyKey": f"cache-detail-key-{suffix}",
+            "tradingDate": "2026-04-23",
+            "bundle": {
+                "version": "v4",
+                "tradingDate": "2026-04-23",
+                "items": [{"id": snapshot_id, "type": "half_hour", "tradingDate": "2026-04-23"}],
+                "frames": [{"id": snapshot_id, "snapshotId": snapshot_id, "type": "half_hour", "tradingDate": "2026-04-23"}],
+                "stockRows": [{"id": f"{snapshot_id}:600010", "snapshotId": snapshot_id, "type": "half_hour", "tradingDate": "2026-04-23", "code": "600010", "volume": 123}],
+                "sectorRows": [{"id": f"{snapshot_id}:sector:AI", "snapshotId": snapshot_id, "type": "half_hour", "tradingDate": "2026-04-23", "entityType": "sector", "entityKey": "AI"}],
+            },
+        },
+    )
+    assert ingest.status_code == 200, ingest.text
+
+    checks = [
+        ("/api/snapshots/records", {"dataset_id": dataset_id, "snapshot_type": "half_hour", "trading_date": "2026-04-23"}),
+        ("/api/snapshots/stock-rows", {"dataset_id": dataset_id, "snapshot_id": snapshot_id}),
+        ("/api/snapshots/sector-rows", {"dataset_id": dataset_id, "snapshot_id": snapshot_id}),
+    ]
+    for path, params in checks:
+        first = client.get(path, params=params)
+        second = client.get(path, params=params)
+        assert first.status_code == 200, first.text
+        assert second.status_code == 200, second.text
+        assert first.json()["cache"]["hit"] is False
+        assert second.json()["cache"]["hit"] is True
+
+
+def test_snapshot_ingest_invalidates_snapshot_cache_indexes(monkeypatch: pytest.MonkeyPatch) -> None:
+    from backend.data import snapshot_cache
+
+    class FakeCache:
+        def __init__(self) -> None:
+            self.invalidated: list[list[str]] = []
+
+        def get_response(self, key: str):
+            return None
+
+        def set_response(self, key: str, response: dict) -> None:
+            return None
+
+        def register_dependencies(self, response_key: str, index_keys: list[str]) -> None:
+            return None
+
+        def invalidate_indexes(self, index_keys: list[str]) -> None:
+            self.invalidated.append(index_keys)
+
+    fake_cache = FakeCache()
+    monkeypatch.setattr(snapshot_cache, "get_snapshot_redis_cache", lambda: fake_cache)
+
+    client = TestClient(app)
+    suffix = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
+    dataset_id = f"dragonboard_cache_invalidate_{suffix}"
+    snapshot_id = f"half_hour:2026-04-24:{suffix}"
+    ingest = client.post(
+        "/api/snapshots/ingest",
+        json={
+            "datasetId": dataset_id,
+            "idempotencyKey": f"cache-invalidate-key-{suffix}",
+            "tradingDate": "2026-04-24",
+            "bundle": {
+                "version": "v4",
+                "tradingDate": "2026-04-24",
+                "items": [{"id": snapshot_id, "type": "half_hour", "tradingDate": "2026-04-24"}],
+                "frames": [{"id": snapshot_id, "snapshotId": snapshot_id, "type": "half_hour", "tradingDate": "2026-04-24"}],
+                "stockRows": [{"id": f"{snapshot_id}:600010", "snapshotId": snapshot_id, "type": "half_hour", "tradingDate": "2026-04-24", "code": "600010"}],
+                "sectorRows": [{"id": f"{snapshot_id}:sector:AI", "snapshotId": snapshot_id, "type": "half_hour", "tradingDate": "2026-04-24", "entityType": "sector", "entityKey": "AI"}],
+            },
+        },
+    )
+
+    assert ingest.status_code == 200, ingest.text
+    flattened = [key for group in fake_cache.invalidated for key in group]
+    assert f"hellobiga:dragon-board:local:snapshot:index:dataset:{dataset_id}" in flattened
+    assert f"hellobiga:dragon-board:local:snapshot:index:date:{dataset_id}:half_hour:2026-04-24" in flattened
+    assert f"hellobiga:dragon-board:local:snapshot:index:snapshot:{dataset_id}:{snapshot_id}" in flattened
 
 
 def test_snapshot_detail_read_api_applies_capture_mode_filters() -> None:

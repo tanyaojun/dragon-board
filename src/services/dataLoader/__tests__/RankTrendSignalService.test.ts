@@ -89,7 +89,7 @@ describe('RankTrendSignalService', () => {
       },
     ])
 
-    expect(result[0].rankTrend).toBe(existingRankTrend)
+    expect(result[0].rankTrend).toStrictEqual(existingRankTrend)
     expect(result[0].rankChange).toBe(12)
     expect(result[0].finalSignal).toBe('buy')
     expect(result[0].finalConfidence).toBe(78)
@@ -112,6 +112,45 @@ describe('RankTrendSignalService', () => {
       }),
     ])
     expect(emittedEvents).toBe(0)
+  })
+
+  it('keeps existing RankTrend when a signal update has no fresh result', () => {
+    const existingRankTrend = {
+      meta: {
+        code: '000001',
+        change: 9,
+      },
+      technical: {},
+      cycle: {},
+      risk: {},
+      decision: {
+        final: {
+          signal: 'buy',
+          confidence: 81,
+        },
+      },
+    } as any
+    dataLayer.setMergedStocks([
+      {
+        code: '000001',
+        name: '平安银行',
+        rankTrend: existingRankTrend,
+        rankChange: 9,
+        finalSignal: 'buy',
+        finalConfidence: 81,
+      } as any,
+    ])
+
+    const service = new RankTrendSignalService()
+    const result = service.updateStockSignals([
+      { code: '000001', rankTrend: null, coverageWarning: '信号未刷新' },
+    ])
+
+    expect(result[0].rankTrend).toStrictEqual(existingRankTrend)
+    expect(result[0].rankChange).toBe(9)
+    expect(result[0].finalSignal).toBe('buy')
+    expect(result[0].finalConfidence).toBe(81)
+    expect(result[0].rankTrendCoverageWarning).toBe('信号未刷新')
   })
 
   it('keeps stock signal updates as calculation-only by default', () => {
