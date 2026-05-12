@@ -1,7 +1,16 @@
 import { createProxyApp } from './app.js'
+import { createConfigReader, loadEnvFile } from './helpers/http.js'
+import { createProxyRedisCache } from './helpers/proxyCache.js'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 const PORT = Number(process.env.PORT || 3000)
-const app = createProxyApp({ port: PORT })
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = dirname(__filename)
+const localEnv = loadEnvFile(join(__dirname, '.env.local'))
+const readConfig = createConfigReader(localEnv)
+const cache = await createProxyRedisCache({ readConfig })
+const app = createProxyApp({ port: PORT, localEnv, readConfig, cache })
 
 const formalRoutes = [
   'GET  /health',

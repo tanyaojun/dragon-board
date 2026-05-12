@@ -6,6 +6,11 @@ import {
   getMarketPrefix,
   parseCodeList,
 } from '../helpers/http.js'
+import {
+  attachCacheMeta,
+  normalizeCodeCacheKey,
+  PROXY_CACHE_TTLS,
+} from '../helpers/proxyCache.js'
 import { sendBadRequest, sendDegraded } from '../helpers/response.js'
 
 const EMPTY_QUOTES = { rc: 0, data: { diff: [] } }
@@ -196,7 +201,14 @@ function normalizeEastmoneyHistFlowResponse(data, code) {
   })
 }
 
-async function fetchEastmoneyHistFlowQuote(plainClient, code) {
+async function fetchEastmoneyHistFlowQuote(plainClient, code, cache = null) {
+  const cacheKey = `quotes:eastmoney:hist-flow:v1:${cleanCode(code)}`
+  const ttlSeconds = PROXY_CACHE_TTLS.quotes.eastmoneyHistFlow
+  if (cache) {
+    const cached = await cache.get(cacheKey)
+    if (cached) return cached.value
+  }
+
   let lastError = null
   for (let attempt = 0; attempt <= EASTMONEY_HIST_FLOW_RETRIES; attempt += 1) {
     try {
@@ -207,7 +219,14 @@ async function fetchEastmoneyHistFlowQuote(plainClient, code) {
           Referer: 'https://data.eastmoney.com/zjlx/detail.html',
         },
       })
-      return normalizeEastmoneyHistFlowResponse(response.data, code)
+      const row = normalizeEastmoneyHistFlowResponse(response.data, code)
+      if (row && cache) {
+        await cache.set(cacheKey, row, {
+          ttlSeconds,
+          staleTtlSeconds: ttlSeconds * 4,
+        })
+      }
+      return row
     } catch (error) {
       lastError = error
     }
@@ -215,7 +234,12 @@ async function fetchEastmoneyHistFlowQuote(plainClient, code) {
   throw lastError
 }
 
-async function fetchEastmoneyHistFlowQuotes(plainClient, codeList, concurrency = EASTMONEY_HIST_FLOW_CONCURRENCY) {
+async function fetchEastmoneyHistFlowQuotes(
+  plainClient,
+  codeList,
+  concurrency = EASTMONEY_HIST_FLOW_CONCURRENCY,
+  cache = null,
+) {
   const rows = []
   const failures = []
   const queue = codeList.map(cleanCode).filter(Boolean)
@@ -228,7 +252,7 @@ async function fetchEastmoneyHistFlowQuotes(plainClient, codeList, concurrency =
         const code = queue[cursor]
         cursor += 1
         try {
-          const row = await fetchEastmoneyHistFlowQuote(plainClient, code)
+          const row = await fetchEastmoneyHistFlowQuote(plainClient, code, cache)
           if (row) rows.push(row)
         } catch (error) {
           failures.push({
@@ -268,79 +292,137 @@ export const __quoteRouteInternals = {
   buildEastmoneyHistFlowUrl,
 }
 
-export function registerQuoteRoutes(app, { plainClient }) {
+async function sendEastmoneyQuoteResponse(res, cache, cacheKey, data, cacheMeta) {
+  void cache
+  void cacheKey
+  res.json(
+    attachCacheMeta(data, {
+      store: 'redis',
+      ...cacheMeta,
+    }),
+  )
+}
+
+async function loadEastmoneyQuotePayload(plainClient, cache, codeList, ttlSeconds) {
+  void ttlSeconds
+  const response = await plainClient.get(buildEastmoneyUlistUrl(codeList), {
+    timeout: 8000,
+    headers: DEFAULT_BROWSER_HEADERS,
+  })
+
+  const ulistData = normalizeEastmoneyResponse(response.data, codeList)
+  const missingFundFlowCodes = codesMissingFundFlow(ulistData, codeList)
+  const histRequestCodes = missingFundFlowCodes.slice(0, EASTMONEY_ULIST_HIST_FLOW_LIMIT)
+  const histSkippedCount = Math.max(0, missingFundFlowCodes.length - histRequestCodes.length)
+  const histData = histRequestCodes.length
+    ? await fetchEastmoneyHistFlowQuotes(plainClient, histRequestCodes, EASTMONEY_HIST_FLOW_CONCURRENCY, cache)
+    : EMPTY_QUOTES
+  const mergedData = histRequestCodes.length
+    ? mergeEastmoneyFundFlowRows(ulistData, histData, codeList)
+    : ulistData
+
+  return withEastmoneyQuoteMeta(mergedData, {
+    route: 'ulist',
+    fallback: false,
+    histFillCount: histData.data.diff.length,
+    histFailed: histData.dragonMeta?.histFailed || 0,
+    missingFundFlowCount: missingFundFlowCodes.length,
+    histSkippedCount,
+  })
+}
+
+async function loadEastmoneyQuoteFallbackPayload(plainClient, cache, codeList, primaryError, ttlSeconds) {
+  void ttlSeconds
+  try {
+    const fallbackResponse = await plainClient.get(buildEastmoneyClistUrl(codeList), {
+      timeout: 10000,
+      headers: {
+        ...DEFAULT_BROWSER_HEADERS,
+        Referer: 'https://data.eastmoney.com/zjlx/detail.html',
+      },
+    })
+    const clistData = mergeEastmoneyRows(EMPTY_QUOTES, fallbackResponse.data, codeList)
+    const missingCodes = missingEastmoneyCodes(clistData, codeList)
+    const histData = missingCodes.length
+      ? await fetchEastmoneyHistFlowQuotes(plainClient, missingCodes, EASTMONEY_HIST_FLOW_CONCURRENCY, cache)
+      : EMPTY_QUOTES
+    const mergedData = mergeEastmoneyRows(clistData, histData, codeList)
+    return withEastmoneyQuoteMeta(mergedData, {
+      route: 'clist',
+      fallback: true,
+      primaryError: primaryError?.code || primaryError?.message || 'unknown',
+      histFillCount: histData.data.diff.length,
+      histFailed: histData.dragonMeta?.histFailed || 0,
+      missingAfterClist: missingCodes.length,
+    })
+  } catch (clistError) {
+    console.warn('[东财行情] clist fallback 失败，尝试 push2his 当日资金流:', clistError.message)
+    try {
+      const histData = await fetchEastmoneyHistFlowQuotes(
+        plainClient,
+        codeList,
+        EASTMONEY_HIST_FLOW_CONCURRENCY,
+        cache,
+      )
+      return withEastmoneyQuoteMeta(histData, {
+        route: 'hist-flow',
+        fallback: true,
+        primaryError: primaryError?.code || primaryError?.message || 'unknown',
+        clistError: clistError?.code || clistError?.message || 'unknown',
+        histRequested: histData.dragonMeta?.histRequested || codeList.length,
+        histReturned: histData.dragonMeta?.histReturned || histData.data.diff.length,
+        histFailed: histData.dragonMeta?.histFailed || 0,
+        histFailures: histData.dragonMeta?.histFailures || [],
+      })
+    } catch (histError) {
+      console.error('[东财行情] hist-flow fallback 失败:', histError.message)
+      histError.cause = clistError
+      throw histError
+    }
+  }
+}
+
+export function registerQuoteRoutes(app, { plainClient, cache }) {
   app.get('/api/quotes/eastmoney', async (req, res) => {
     const codeList = requireCodes(req, res)
     if (!codeList) return
-
+    const cacheKey = `quotes:eastmoney:v1:${normalizeCodeCacheKey(codeList)}`
+    const ttlSeconds = PROXY_CACHE_TTLS.quotes.eastmoneyResponse
     try {
-      const response = await plainClient.get(buildEastmoneyUlistUrl(codeList), {
-        timeout: 8000,
-        headers: DEFAULT_BROWSER_HEADERS,
+      const result = await cache.remember(
+        cacheKey,
+        {
+          ttlSeconds,
+          staleTtlSeconds: ttlSeconds * 6,
+        },
+        () => loadEastmoneyQuotePayload(plainClient, cache, codeList, ttlSeconds),
+      )
+      await sendEastmoneyQuoteResponse(res, cache, cacheKey, result.value, {
+        ...result.cache,
+        ttlSeconds,
       })
-
-      const ulistData = normalizeEastmoneyResponse(response.data, codeList)
-      const missingFundFlowCodes = codesMissingFundFlow(ulistData, codeList)
-      const histRequestCodes = missingFundFlowCodes.slice(0, EASTMONEY_ULIST_HIST_FLOW_LIMIT)
-      const histSkippedCount = Math.max(0, missingFundFlowCodes.length - histRequestCodes.length)
-      const histData = histRequestCodes.length
-        ? await fetchEastmoneyHistFlowQuotes(plainClient, histRequestCodes)
-        : EMPTY_QUOTES
-      const mergedData = histRequestCodes.length
-        ? mergeEastmoneyFundFlowRows(ulistData, histData, codeList)
-        : ulistData
-
-      res.json(withEastmoneyQuoteMeta(mergedData, {
-        route: 'ulist',
-        fallback: false,
-        histFillCount: histData.data.diff.length,
-        histFailed: histData.dragonMeta?.histFailed || 0,
-        missingFundFlowCount: missingFundFlowCodes.length,
-        histSkippedCount,
-      }))
-    } catch (primaryError) {
-      console.warn('[东财行情] ulist 失败，尝试 clist 资金流 fallback:', primaryError.message)
+    } catch (error) {
+      console.warn('[东财行情] ulist 失败，尝试 clist 资金流 fallback:', error.message)
       try {
-        const fallbackResponse = await plainClient.get(buildEastmoneyClistUrl(codeList), {
-          timeout: 10000,
-          headers: {
-            ...DEFAULT_BROWSER_HEADERS,
-            Referer: 'https://data.eastmoney.com/zjlx/detail.html',
-          },
+        const payload = await loadEastmoneyQuoteFallbackPayload(
+          plainClient,
+          cache,
+          codeList,
+          error,
+          ttlSeconds,
+        )
+        await cache.set(cacheKey, payload, {
+          ttlSeconds,
+          staleTtlSeconds: ttlSeconds * 6,
         })
-        const clistData = mergeEastmoneyRows(EMPTY_QUOTES, fallbackResponse.data, codeList)
-        const missingCodes = missingEastmoneyCodes(clistData, codeList)
-        const histData = missingCodes.length
-          ? await fetchEastmoneyHistFlowQuotes(plainClient, missingCodes)
-          : EMPTY_QUOTES
-        const mergedData = mergeEastmoneyRows(clistData, histData, codeList)
-        res.json(withEastmoneyQuoteMeta(mergedData, {
-          route: 'clist',
-          fallback: true,
-          primaryError: primaryError?.code || primaryError?.message || 'unknown',
-          histFillCount: histData.data.diff.length,
-          histFailed: histData.dragonMeta?.histFailed || 0,
-          missingAfterClist: missingCodes.length,
-        }))
-      } catch (clistError) {
-        console.warn('[东财行情] clist fallback 失败，尝试 push2his 当日资金流:', clistError.message)
-        try {
-          const histData = await fetchEastmoneyHistFlowQuotes(plainClient, codeList)
-          res.json(withEastmoneyQuoteMeta(histData, {
-            route: 'hist-flow',
-            fallback: true,
-            primaryError: primaryError?.code || primaryError?.message || 'unknown',
-            clistError: clistError?.code || clistError?.message || 'unknown',
-            histRequested: histData.dragonMeta?.histRequested || codeList.length,
-            histReturned: histData.dragonMeta?.histReturned || histData.data.diff.length,
-            histFailed: histData.dragonMeta?.histFailed || 0,
-            histFailures: histData.dragonMeta?.histFailures || [],
-          }))
-        } catch (histError) {
-          console.error('[东财行情] hist-flow fallback 失败:', histError.message)
-          histError.cause = clistError
-          sendDegraded(res, { source: 'quotes-eastmoney', error: histError, fallbackData: EMPTY_QUOTES })
-        }
+        await sendEastmoneyQuoteResponse(res, cache, cacheKey, payload, {
+          hit: false,
+          stale: false,
+          upstreamCalled: true,
+          ttlSeconds,
+        })
+      } catch (fallbackError) {
+        sendDegraded(res, { source: 'quotes-eastmoney', error: fallbackError, fallbackData: EMPTY_QUOTES })
       }
     }
   })
