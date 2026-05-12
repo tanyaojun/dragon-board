@@ -23,6 +23,7 @@ from backend.data.migration import SnapshotMigrationService
 from backend.data.models import Dataset
 from backend.data.json_codec import loads_json_field
 from backend.data.repository import Repository
+from backend.data.repository_factory import create_repository, get_runtime_mongodb_database, storage_source_label
 from backend.data.schemas import (
     GoldenImportRequest,
     GoldenValidateRequest,
@@ -30,9 +31,11 @@ from backend.data.schemas import (
     SnapshotIngestRequest,
     SnapshotJsonMigrationRequest,
 )
+from backend.data.stock_name_repository import STOCK_NAMES_VERSION, StockNameRepository
 from backend.data import snapshot_cache
 from backend.data.supabase_backup import get_backup_client
 from backend.data.theme_database import get_theme_db, init_theme_db, theme_status
+from backend.data.mongo_theme_repository import MongoThemeRepository
 from backend.data.theme_repository import ThemeRepository
 from backend.data.theme_service import ThemeMigrationError, ThemeMigrationService
 from backend.operations.schedule import run_after_market_once
@@ -57,6 +60,8 @@ app.add_middleware(
 
 @app.on_event("startup")
 def on_startup() -> None:
+    if get_settings().storage_backend == "mongodb":
+        return
     init_db()
     init_theme_db()
     auto_sync_runner.start()
@@ -66,6 +71,8 @@ def on_startup() -> None:
 
 @app.on_event("shutdown")
 async def on_shutdown() -> None:
+    if get_settings().storage_backend == "mongodb":
+        return
     await auto_sync_runner.stop()
     await archive_auto_runner.stop()
     await backup_retention_runner.stop()
@@ -73,8 +80,8 @@ async def on_shutdown() -> None:
 
 @app.get("/api/health")
 def health_check(deep: bool = False, db: Session | None = Depends(get_db)) -> dict[str, Any]:
-    backup = get_backup_client()
     backup_status = {"configured": False, "connected": False, "last_error": None}
+    backup = None if storage_source_label() == "mongodb" else get_backup_client()
     if backup:
         backup_status = backup.deep_health() if deep else backup.health()
     return {
@@ -86,8 +93,8 @@ def health_check(deep: bool = False, db: Session | None = Depends(get_db)) -> di
             "primary": primary_status(),
             "theme": theme_status(),
             "backup": backup_status,
-            "mode": "sqlite_primary_supabase_backup",
-            "outbox": Repository(db, enable_backup=False).outbox_status() if db is not None else None,
+            "mode": "mongodb_primary" if storage_source_label() == "mongodb" else "sqlite_primary_supabase_backup",
+            "outbox": None if storage_source_label() == "mongodb" else (Repository(db, enable_backup=False).outbox_status() if db is not None else None),
             "autoSync": auto_sync_runner.status(),
             "backupRetention": backup_retention_runner.status(),
         },
@@ -105,18 +112,92 @@ def health_check(deep: bool = False, db: Session | None = Depends(get_db)) -> di
     }
 
 
+def get_stock_name_repository() -> StockNameRepository:
+    return StockNameRepository(get_runtime_mongodb_database())
+
+
+def get_theme_repository(db: Session | None = None) -> ThemeRepository | MongoThemeRepository:
+    if storage_source_label() == "mongodb":
+        return MongoThemeRepository(get_runtime_mongodb_database())
+    if db is None:
+        raise HTTPException(status_code=503, detail="theme database is unavailable")
+    return ThemeRepository(db)
+
+
+@app.get("/api/stocks/names")
+def list_stock_names(
+    market: str | None = None,
+    type: str | None = None,
+    active: bool | None = True,
+) -> dict[str, Any]:
+    try:
+        stocks = get_stock_name_repository().list_names(market=market, type=type, active=active)
+        return {
+            "ok": True,
+            "source": "mongodb",
+            "version": STOCK_NAMES_VERSION,
+            "stocks": stocks,
+            "count": len(stocks),
+        }
+    except RuntimeError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+
+
+@app.get("/api/stocks/names/{code}")
+def get_stock_name(code: str, active: bool | None = True) -> dict[str, Any]:
+    try:
+        stock = get_stock_name_repository().get_by_code(code, active=active)
+    except RuntimeError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    if not stock:
+        raise HTTPException(status_code=404, detail=f"stock not found: {code}")
+    return {
+        "ok": True,
+        "source": "mongodb",
+        "version": STOCK_NAMES_VERSION,
+        "stock": stock,
+    }
+
+
+@app.get("/api/stocks/search")
+def search_stock_names(
+    q: str,
+    market: str | None = None,
+    type: str | None = None,
+    active: bool | None = True,
+    limit: int = 50,
+) -> dict[str, Any]:
+    try:
+        stocks = get_stock_name_repository().search(q, market=market, type=type, active=active, limit=limit)
+        return {
+            "ok": True,
+            "source": "mongodb",
+            "version": STOCK_NAMES_VERSION,
+            "stocks": stocks,
+            "count": len(stocks),
+        }
+    except RuntimeError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+
+
 @app.post("/api/sync/push-backup")
 def push_backup(full_history: bool = False, db: Session | None = Depends(get_db)) -> dict[str, Any]:
+    if storage_source_label() == "mongodb":
+        raise HTTPException(status_code=410, detail="Supabase backup is disabled after MongoDB migration")
     return BackupSyncService(db).push_all_to_backup(full_history=full_history)
 
 
 @app.post("/api/sync/pull-backup")
 def pull_backup(db: Session | None = Depends(get_db)) -> dict[str, Any]:
+    if storage_source_label() == "mongodb":
+        raise HTTPException(status_code=410, detail="Supabase backup is disabled after MongoDB migration")
     return BackupSyncService(db).pull_backup_to_primary()
 
 
 @app.post("/api/sync/push-outbox")
 def push_outbox(limit: int | None = None, db: Session | None = Depends(get_db)) -> dict[str, Any]:
+    if storage_source_label() == "mongodb":
+        raise HTTPException(status_code=410, detail="sync_outbox is disabled after MongoDB migration")
     if db is None:
         raise HTTPException(status_code=503, detail="primary database is unavailable")
     repo = Repository(db, enable_backup=False)
@@ -125,16 +206,22 @@ def push_outbox(limit: int | None = None, db: Session | None = Depends(get_db)) 
 
 @app.post("/api/sync/auto-once")
 def run_auto_sync_once(limit: int | None = None) -> dict[str, Any]:
+    if storage_source_label() == "mongodb":
+        raise HTTPException(status_code=410, detail="sync_outbox auto sync is disabled after MongoDB migration")
     return run_outbox_auto_sync_once(limit)
 
 
 @app.post("/api/sync/prune-backup")
 def prune_backup(dry_run: bool = False) -> dict[str, Any]:
+    if storage_source_label() == "mongodb":
+        raise HTTPException(status_code=410, detail="Supabase retention is disabled after MongoDB migration")
     return run_backup_retention_once(dry_run=dry_run)
 
 
 @app.post("/api/storage/archive/auto-once")
 def run_archive_auto_once_api(limit: int | None = None) -> dict[str, Any]:
+    if storage_source_label() == "mongodb":
+        raise HTTPException(status_code=410, detail="SQLite archive auto cleanup is disabled after MongoDB migration")
     return run_archive_auto_once(limit)
 
 
@@ -146,6 +233,8 @@ def backup_snapshot_day(
     dry_run: bool = False,
     db: Session | None = Depends(get_db),
 ) -> dict[str, Any]:
+    if storage_source_label() == "mongodb":
+        raise HTTPException(status_code=410, detail="SQLite snapshot-day backup endpoint is disabled after MongoDB migration")
     if db is None:
         raise HTTPException(status_code=503, detail="primary database is unavailable")
     service = ArchiveService(db)
@@ -170,17 +259,26 @@ def backup_snapshot_day(
     )
 
 
+def _reject_sqlite_archive_for_mongodb() -> None:
+    if storage_source_label() == "mongodb":
+        raise HTTPException(status_code=410, detail="SQLite archive endpoints are disabled after MongoDB migration")
+
+
 @app.post("/api/operations/after-market-once")
 def run_after_market_once_api(
     archive_limit: int | None = None,
     backup_limit: int | None = None,
     dry_run: bool = False,
 ) -> dict[str, Any]:
+    if storage_source_label() == "mongodb":
+        raise HTTPException(status_code=410, detail="SQLite after-market archive workflow is disabled after MongoDB migration")
     return run_after_market_once(archive_limit=archive_limit, backup_limit=backup_limit, dry_run=dry_run)
 
 
 @app.post("/api/sync/smoke-backup")
 def smoke_backup() -> dict[str, Any]:
+    if storage_source_label() == "mongodb":
+        raise HTTPException(status_code=410, detail="Supabase backup is disabled after MongoDB migration")
     backup = get_backup_client()
     if not backup:
         return {"ok": False, "configured": False, "error": "supabase backup is not configured"}
@@ -191,7 +289,7 @@ def smoke_backup() -> dict[str, Any]:
 def ingest_snapshot(request: SnapshotIngestRequest, db: Session | None = Depends(get_db)) -> dict[str, Any]:
     try:
         dataset, records, frames, stock_rows, sector_rows, idempotency_key = normalize_snapshot_ingest(request)
-        result = Repository(db).save_snapshot_ingest(
+        result = create_repository(db).save_snapshot_ingest(
             dataset,
             records,
             frames,
@@ -379,7 +477,7 @@ def list_snapshot_frames(
     projection: str = "full",
     db: Session | None = Depends(get_db),
 ) -> dict[str, Any]:
-    if db is None:
+    if db is None and storage_source_label() != "mongodb":
         raise HTTPException(status_code=503, detail="primary database is unavailable")
     if snapshot_type not in {"quarter_hour", "half_hour", "hourly", "daily"}:
         raise HTTPException(status_code=400, detail=f"unsupported snapshot_type: {snapshot_type}")
@@ -389,7 +487,7 @@ def list_snapshot_frames(
     start = trading_date or start_date
     end = trading_date or end_date
     capture_modes = _parse_csv(allowed_capture_modes)
-    repo = Repository(db, enable_backup=False)
+    repo = create_repository(db, enable_backup=False)
     resolved_dataset_id, dataset = _resolve_snapshot_dataset(repo, dataset_id)
     snapshot_ids: list[str] = []
 
@@ -409,12 +507,12 @@ def list_snapshot_frames(
         snapshot_ids.extend(str(frame.get("snapshotId") or "") for frame in frames if frame.get("snapshotId"))
         return {
             "ok": True,
-            "dataset": Repository.dataset_to_dict(dataset),
+            "dataset": repo.dataset_to_dict(dataset),
             "datasetId": resolved_dataset_id,
             "snapshotType": snapshot_type,
             "frames": frames,
             "count": len(frames),
-            "source": "sqlite",
+            "source": storage_source_label(),
         }
 
     return _cached_snapshot_response(
@@ -453,7 +551,7 @@ def get_ranktrend_rank_series(
     limit: int | None = 50,
     db: Session | None = Depends(get_db),
 ) -> dict[str, Any]:
-    if db is None:
+    if db is None and storage_source_label() != "mongodb":
         raise HTTPException(status_code=503, detail="primary database is unavailable")
     if snapshot_type not in {"quarter_hour", "half_hour", "hourly", "daily"}:
         raise HTTPException(status_code=400, detail=f"unsupported snapshot_type: {snapshot_type}")
@@ -462,7 +560,7 @@ def get_ranktrend_rank_series(
     end = trading_date or end_date
     capture_modes = _parse_csv(allowed_capture_modes)
     stock_codes = _parse_csv(codes)
-    repo = Repository(db, enable_backup=False)
+    repo = create_repository(db, enable_backup=False)
     resolved_dataset_id, dataset = _resolve_snapshot_dataset(repo, dataset_id)
     snapshot_ids: list[str] = []
 
@@ -482,12 +580,12 @@ def get_ranktrend_rank_series(
         snapshot_ids.extend(str(frame.get("snapshotId") or "") for frame in frames if frame.get("snapshotId"))
         return {
             "ok": True,
-            "dataset": Repository.dataset_to_dict(dataset),
+            "dataset": repo.dataset_to_dict(dataset),
             "datasetId": resolved_dataset_id,
             "snapshotType": snapshot_type,
             "frames": frames,
             "count": len(frames),
-            "source": "sqlite",
+            "source": storage_source_label(),
         }
 
     return _cached_snapshot_response(
@@ -526,10 +624,10 @@ def list_snapshot_records(
     limit: int | None = None,
     db: Session | None = Depends(get_db),
 ) -> dict[str, Any]:
-    if db is None:
+    if db is None and storage_source_label() != "mongodb":
         raise HTTPException(status_code=503, detail="primary database is unavailable")
     _assert_snapshot_sort(sort)
-    repo = Repository(db, enable_backup=False)
+    repo = create_repository(db, enable_backup=False)
     resolved_dataset_id, dataset = _resolve_snapshot_dataset(repo, dataset_id)
     snapshot_ids: list[str] = []
 
@@ -550,11 +648,11 @@ def list_snapshot_records(
         snapshot_ids.extend(str(record.get("id") or "") for record in records if record.get("id"))
         return {
             "ok": True,
-            "dataset": Repository.dataset_to_dict(dataset),
+            "dataset": repo.dataset_to_dict(dataset),
             "datasetId": resolved_dataset_id,
             "records": records,
             "count": len(records),
-            "source": "sqlite",
+            "source": storage_source_label(),
         }
 
     return _cached_snapshot_response(
@@ -587,9 +685,9 @@ def get_snapshot_record(
     exclude_restored: bool = False,
     db: Session | None = Depends(get_db),
 ) -> dict[str, Any]:
-    if db is None:
+    if db is None and storage_source_label() != "mongodb":
         raise HTTPException(status_code=503, detail="primary database is unavailable")
-    repo = Repository(db, enable_backup=False)
+    repo = create_repository(db, enable_backup=False)
     resolved_dataset_id = dataset_id
     dataset: Dataset | None = None
     if dataset_id:
@@ -609,10 +707,10 @@ def get_snapshot_record(
             resolved_dataset_id, dataset = _resolve_snapshot_dataset(repo, None)
     return {
         "ok": True,
-        "dataset": Repository.dataset_to_dict(dataset),
+        "dataset": repo.dataset_to_dict(dataset),
         "datasetId": resolved_dataset_id,
         "record": record,
-        "source": "sqlite",
+        "source": storage_source_label(),
     }
 
 
@@ -635,10 +733,10 @@ def list_snapshot_stock_rows(
     limit: int | None = None,
     db: Session | None = Depends(get_db),
 ) -> dict[str, Any]:
-    if db is None:
+    if db is None and storage_source_label() != "mongodb":
         raise HTTPException(status_code=503, detail="primary database is unavailable")
     _assert_snapshot_sort(sort)
-    repo = Repository(db, enable_backup=False)
+    repo = create_repository(db, enable_backup=False)
     resolved_dataset_id, dataset = _resolve_snapshot_dataset(repo, dataset_id)
     row_snapshot_ids: list[str] = []
 
@@ -663,7 +761,7 @@ def list_snapshot_stock_rows(
         row_snapshot_ids.extend(str(row.get("snapshotId") or "") for row in result["rows"] if row.get("snapshotId"))
         return {
             "ok": True,
-            "dataset": Repository.dataset_to_dict(dataset),
+            "dataset": repo.dataset_to_dict(dataset),
             "datasetId": resolved_dataset_id,
             "rows": result["rows"],
             "count": len(result["rows"]),
@@ -716,10 +814,10 @@ def list_snapshot_sector_rows(
     limit: int | None = None,
     db: Session | None = Depends(get_db),
 ) -> dict[str, Any]:
-    if db is None:
+    if db is None and storage_source_label() != "mongodb":
         raise HTTPException(status_code=503, detail="primary database is unavailable")
     _assert_snapshot_sort(sort)
-    repo = Repository(db, enable_backup=False)
+    repo = create_repository(db, enable_backup=False)
     resolved_dataset_id, dataset = _resolve_snapshot_dataset(repo, dataset_id)
     row_snapshot_ids: list[str] = []
 
@@ -745,7 +843,7 @@ def list_snapshot_sector_rows(
         row_snapshot_ids.extend(str(row.get("snapshotId") or "") for row in result["rows"] if row.get("snapshotId"))
         return {
             "ok": True,
-            "dataset": Repository.dataset_to_dict(dataset),
+            "dataset": repo.dataset_to_dict(dataset),
             "datasetId": resolved_dataset_id,
             "rows": result["rows"],
             "count": len(result["rows"]),
@@ -784,22 +882,23 @@ def get_snapshot_counts(
     dataset_id: str | None = None,
     db: Session | None = Depends(get_db),
 ) -> dict[str, Any]:
-    if db is None:
+    if db is None and storage_source_label() != "mongodb":
         raise HTTPException(status_code=503, detail="primary database is unavailable")
-    repo = Repository(db, enable_backup=False)
+    repo = create_repository(db, enable_backup=False)
     resolved_dataset_id, dataset = _resolve_snapshot_dataset(repo, dataset_id)
     counts = repo.snapshot_table_counts(resolved_dataset_id)
     return {
         "ok": True,
-        "dataset": Repository.dataset_to_dict(dataset),
+        "dataset": repo.dataset_to_dict(dataset),
         "datasetId": resolved_dataset_id,
         "counts": counts,
-        "source": "sqlite",
+        "source": storage_source_label(),
     }
 
 
 @app.post("/api/storage/archive/snapshots/preview")
 def preview_snapshot_archive(payload: dict[str, Any], db: Session | None = Depends(get_db)) -> dict[str, Any]:
+    _reject_sqlite_archive_for_mongodb()
     if db is None:
         raise HTTPException(status_code=503, detail="primary database is unavailable")
     return ArchiveService(db).archive_snapshots(
@@ -813,6 +912,7 @@ def preview_snapshot_archive(payload: dict[str, Any], db: Session | None = Depen
 
 @app.post("/api/storage/archive/snapshots")
 def archive_snapshots(payload: dict[str, Any], db: Session | None = Depends(get_db)) -> dict[str, Any]:
+    _reject_sqlite_archive_for_mongodb()
     if db is None:
         raise HTTPException(status_code=503, detail="primary database is unavailable")
     return ArchiveService(db).archive_snapshots(
@@ -826,6 +926,7 @@ def archive_snapshots(payload: dict[str, Any], db: Session | None = Depends(get_
 
 @app.post("/api/storage/archive/research/preview")
 def preview_research_archive(payload: dict[str, Any], db: Session | None = Depends(get_db)) -> dict[str, Any]:
+    _reject_sqlite_archive_for_mongodb()
     if db is None:
         raise HTTPException(status_code=503, detail="primary database is unavailable")
     with ResearchSessionLocal() as research_session:
@@ -839,6 +940,7 @@ def preview_research_archive(payload: dict[str, Any], db: Session | None = Depen
 
 @app.post("/api/storage/archive/research")
 def archive_research(payload: dict[str, Any], db: Session | None = Depends(get_db)) -> dict[str, Any]:
+    _reject_sqlite_archive_for_mongodb()
     if db is None:
         raise HTTPException(status_code=503, detail="primary database is unavailable")
     with ResearchSessionLocal() as research_session:
@@ -852,6 +954,7 @@ def archive_research(payload: dict[str, Any], db: Session | None = Depends(get_d
 
 @app.get("/api/storage/archive/manifests")
 def list_archive_manifests(scope: str | None = None, db: Session | None = Depends(get_db)) -> dict[str, Any]:
+    _reject_sqlite_archive_for_mongodb()
     if db is None:
         raise HTTPException(status_code=503, detail="primary database is unavailable")
     manifests = ArchiveService(db).list_manifests(scope=scope)
@@ -860,6 +963,7 @@ def list_archive_manifests(scope: str | None = None, db: Session | None = Depend
 
 @app.post("/api/storage/archive/verify")
 def verify_archive(payload: dict[str, Any], db: Session | None = Depends(get_db)) -> dict[str, Any]:
+    _reject_sqlite_archive_for_mongodb()
     if db is None:
         raise HTTPException(status_code=503, detail="primary database is unavailable")
     archive_id = str(payload.get("archiveId") or payload.get("archive_id") or "")
@@ -868,6 +972,7 @@ def verify_archive(payload: dict[str, Any], db: Session | None = Depends(get_db)
 
 @app.post("/api/storage/archive/restore")
 def restore_archive(payload: dict[str, Any], db: Session | None = Depends(get_db)) -> dict[str, Any]:
+    _reject_sqlite_archive_for_mongodb()
     if db is None:
         raise HTTPException(status_code=503, detail="primary database is unavailable")
     return ArchiveService(db).restore_archive(
@@ -887,6 +992,7 @@ def smoke_object_backup() -> dict[str, Any]:
 
 @app.post("/api/storage/archive/push-backup")
 def push_archive_backup(limit: int | None = None, db: Session | None = Depends(get_db)) -> dict[str, Any]:
+    _reject_sqlite_archive_for_mongodb()
     if db is None:
         raise HTTPException(status_code=503, detail="primary database is unavailable")
     return ArchiveService(db).push_archive_backup(limit=limit)
@@ -894,6 +1000,7 @@ def push_archive_backup(limit: int | None = None, db: Session | None = Depends(g
 
 @app.post("/api/storage/archive/pull-backup")
 def pull_archive_backup(payload: dict[str, Any], db: Session | None = Depends(get_db)) -> dict[str, Any]:
+    _reject_sqlite_archive_for_mongodb()
     if db is None:
         raise HTTPException(status_code=503, detail="primary database is unavailable")
     return ArchiveService(db).pull_archive_backup(
@@ -908,6 +1015,8 @@ def import_snapshot_json_migration(
     request: SnapshotJsonMigrationRequest,
     db: Session | None = Depends(get_db),
 ) -> dict[str, Any]:
+    if storage_source_label() == "mongodb":
+        raise HTTPException(status_code=410, detail="SQLite snapshot JSON migration endpoint is disabled after MongoDB migration")
     if db is None:
         raise HTTPException(status_code=503, detail="primary database is unavailable")
     try:
@@ -921,7 +1030,7 @@ def import_theme_json_migration(
     payload: dict[str, Any],
     db: Session | None = Depends(get_theme_db),
 ) -> dict[str, Any]:
-    if db is None:
+    if db is None and storage_source_label() != "mongodb":
         raise HTTPException(status_code=503, detail="theme database is unavailable")
     try:
         return ThemeMigrationService(db).import_mapping(payload)
@@ -934,7 +1043,7 @@ def verify_theme_json_migration(
     payload: dict[str, Any],
     db: Session | None = Depends(get_theme_db),
 ) -> dict[str, Any]:
-    if db is None:
+    if db is None and storage_source_label() != "mongodb":
         raise HTTPException(status_code=503, detail="theme database is unavailable")
     try:
         return ThemeMigrationService(db).verify_mapping(payload)
@@ -944,31 +1053,24 @@ def verify_theme_json_migration(
 
 @app.get("/api/themes/mapping")
 def get_theme_mapping(db: Session | None = Depends(get_theme_db)) -> dict[str, Any]:
-    if db is None:
-        raise HTTPException(status_code=503, detail="theme database is unavailable")
-    mapping = ThemeRepository(db).get_mapping()
-    return {"ok": True, "mapping": mapping, "source": "sqlite"}
+    repo = get_theme_repository(db)
+    mapping = repo.get_mapping()
+    return {"ok": True, "mapping": mapping, "source": storage_source_label()}
 
 
 @app.get("/api/themes/stocks/{theme_id}")
 def get_theme_stocks(theme_id: str, db: Session | None = Depends(get_theme_db)) -> dict[str, Any]:
-    if db is None:
-        raise HTTPException(status_code=503, detail="theme database is unavailable")
-    return ThemeRepository(db).get_theme_stocks(theme_id)
+    return get_theme_repository(db).get_theme_stocks(theme_id)
 
 
 @app.get("/api/themes/stocks/by-code/{code}")
 def get_stock_themes(code: str, db: Session | None = Depends(get_theme_db)) -> dict[str, Any]:
-    if db is None:
-        raise HTTPException(status_code=503, detail="theme database is unavailable")
-    return ThemeRepository(db).get_stock_themes(code)
+    return get_theme_repository(db).get_stock_themes(code)
 
 
 @app.get("/api/themes/counts")
 def get_theme_counts(db: Session | None = Depends(get_theme_db)) -> dict[str, Any]:
-    if db is None:
-        raise HTTPException(status_code=503, detail="theme database is unavailable")
-    return {"ok": True, "counts": ThemeRepository(db).counts(), "source": "sqlite"}
+    return {"ok": True, "counts": get_theme_repository(db).counts(), "source": storage_source_label()}
 
 
 def normalize_snapshot_ingest(
@@ -1008,6 +1110,7 @@ def normalize_snapshot_ingest(
         for snapshot_id in [row_snapshot_id(frame)]
         if str(frame.get("type") or "") != "five_minute"
         and snapshot_id
+        and str(frame.get("captureMode") or "real_time") != "restored"
         and stock_row_count_by_snapshot.get(snapshot_id, 0) == 0
     ]
     if empty_formal_snapshot_ids:
@@ -1339,7 +1442,7 @@ def get_theme_research_summary(
 ) -> dict[str, Any]:
     """Dragon Board 消费的题材研究摘要。QuantBoard 后端不可用时前端显示"不可用"。"""
     try:
-        repo = Repository(db)
+        repo = create_repository(db)
         frames = repo.load_frame_bundles(dataset_id, snapshot_type=snapshot_type)
         if not frames or len(frames) < 2:
             return {"available": False, "reason": "insufficient_frames", "frameCount": len(frames) if frames else 0}

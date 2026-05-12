@@ -1,8 +1,9 @@
 import { debugLog } from '@/utils/logger'
+import { apiService } from './apiService'
 // src/services/StockCodeManager.ts
 /**
- * 股票代码管理器 - 龙王号航海图 🗺️
- * 负责从 public/data/stock_code.json 加载全市场股票代码
+ * 股票代码管理器
+ * 负责从 QuantBoard stock_names API 加载全市场股票代码
  */
 
 export interface StockCodeInfo {
@@ -11,10 +12,30 @@ export interface StockCodeInfo {
   market: 'SH' | 'SZ' | 'BJ' // 市场
   type: 'stock' | 'index' | 'etf' | 'bond' // 类型
   pinyin?: string // 拼音首字母（可选，用于搜索）
+  pinyinInitials?: string
+  pinyinFull?: string
+  active?: boolean
 }
 
 // 加载状态
 type LoadingState = 'idle' | 'loading' | 'success' | 'error'
+type StockCodeCacheSource = 'mongodb'
+type StockCodeDataSource = 'api' | 'cache' | 'manual' | null
+
+interface StockCodeCachePayload {
+  version: string
+  source: StockCodeCacheSource
+  stale: boolean
+  timestamp: number
+  codes: StockCodeInfo[]
+}
+
+interface StockNamesApiResponse {
+  ok?: boolean
+  source?: string
+  version?: string
+  stocks?: unknown
+}
 
 export class StockCodeManagerService {
   private static instance: StockCodeManagerService
@@ -26,10 +47,13 @@ export class StockCodeManagerService {
   private loadingPromise: Promise<boolean> | null = null
   private lastUpdate: number = 0
   private error: Error | null = null
+  private dataSource: StockCodeDataSource = null
+  private stale = false
+  private version = ''
 
   // 配置
-  private readonly STOCK_DATA_PATH = '/data/stock_code.json'
   private readonly CACHE_KEY = 'stock_codes_cache'
+  private readonly CACHE_VERSION = 'stock_names.v1'
   private readonly CACHE_TTL = 24 * 60 * 60 * 1000 // 24小时
 
   private constructor() {}
@@ -100,30 +124,12 @@ export class StockCodeManagerService {
     if (!keyword || !this.stockCodes.length) return []
 
     const lowerKeyword = keyword.toLowerCase().trim()
+    const results = this.stockCodes
+      .map((stock) => ({ stock, rank: this.getSearchRank(stock, lowerKeyword) }))
+      .filter((item): item is { stock: StockCodeInfo; rank: number } => item.rank !== null)
+      .sort((a, b) => a.rank - b.rank || a.stock.code.localeCompare(b.stock.code))
 
-    // 如果是纯数字，优先按代码匹配
-    if (/^\d+$/.test(lowerKeyword)) {
-      const exactMatches = this.stockCodes.filter((s) => s.code.startsWith(lowerKeyword))
-      if (exactMatches.length > 0) {
-        return exactMatches.slice(0, limit)
-      }
-    }
-
-    // 按名称匹配
-    const results = this.stockCodes.filter((s) => {
-      // 代码匹配
-      if (s.code.includes(lowerKeyword)) return true
-
-      // 名称匹配
-      if (s.name.toLowerCase().includes(lowerKeyword)) return true
-
-      // 拼音匹配（如果有）
-      if (s.pinyin && s.pinyin.includes(lowerKeyword)) return true
-
-      return false
-    })
-
-    return results.slice(0, limit)
+    return results.slice(0, limit).map((item) => item.stock)
   }
 
   /**
@@ -143,10 +149,10 @@ export class StockCodeManagerService {
 
     // 开始加载
     this.loadingState = 'loading'
-    this.loadingPromise = this.loadFromCache()
+    this.loadingPromise = this.loadFromApi()
       .then((success) => {
         if (!success) {
-          return this.loadFromFile()
+          return this.loadFromCache(true)
         }
         return true
       })
@@ -169,24 +175,35 @@ export class StockCodeManagerService {
   /**
    * 从缓存加载
    */
-  private async loadFromCache(): Promise<boolean> {
+  private async loadFromCache(markStale: boolean): Promise<boolean> {
     try {
       const cached = localStorage.getItem(this.CACHE_KEY)
       if (!cached) return false
 
-      const data = JSON.parse(cached)
+      const data = JSON.parse(cached) as Partial<StockCodeCachePayload>
+      if (data.source !== 'mongodb' || data.version !== this.CACHE_VERSION) {
+        return false
+      }
+      if (!Array.isArray(data.codes)) {
+        return false
+      }
 
       // 检查是否过期
-      if (Date.now() - data.timestamp > this.CACHE_TTL) {
+      if (Date.now() - Number(data.timestamp || 0) > this.CACHE_TTL) {
         debugLog('[StockCodeManager] 缓存已过期')
         return false
       }
 
-      this.stockCodes = data.codes
-      this.codeStrings = this.stockCodes.map((s) => s.code)
-      this.stockMap = new Map(this.stockCodes.map((s) => [s.code, s]))
+      this.applyStockData(data.codes)
+      this.dataSource = 'cache'
+      this.stale = markStale || Boolean(data.stale)
+      this.version = data.version
+      this.lastUpdate = Number(data.timestamp || Date.now())
+      if (this.stale) {
+        this.saveToCache(true)
+      }
 
-      debugLog(`[StockCodeManager] ✅ 从缓存加载: ${this.codeStrings.length}只`)
+      debugLog(`[StockCodeManager] 从缓存加载: ${this.codeStrings.length}只`)
       return true
     } catch (error) {
       console.warn('[StockCodeManager] 缓存加载失败:', error)
@@ -194,80 +211,54 @@ export class StockCodeManagerService {
     }
   }
 
-  private async loadFromFile(): Promise<boolean> {
-    debugLog('[StockCodeManager] 📥 从文件加载股票代码...')
+  private async loadFromApi(): Promise<boolean> {
+    debugLog('[StockCodeManager] 从 QuantBoard API 加载股票代码...')
 
     try {
-      // 设置一个内部超时
-      const controller = new AbortController()
-      const timeoutId = setTimeout(() => controller.abort(), 5000)
+      const response = (await apiService.listStockNames()) as StockNamesApiResponse
 
-      const response = await fetch('/data/stock_code.json', {
-        signal: controller.signal,
-      }).finally(() => clearTimeout(timeoutId))
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`)
+      if (!Array.isArray(response.stocks)) {
+        throw new Error('stock_names API 返回数据不是数组')
       }
 
-      const data = await response.json()
-
-      if (!Array.isArray(data)) {
-        throw new Error('数据不是数组')
-      }
-
-      // 处理数据
-      this.stockCodes = data
-        .map((item: any) => ({
-          code: String(item.code || '').padStart(6, '0'),
-          name: (item.name || '未知').trim().replace(/\s+/g, ''),
-          market: item.market || this.determineMarket(item.code),
-          type: item.type || 'stock',
-        }))
-        .filter((item) => item.code && item.code !== '000000')
-
-      this.codeStrings = this.stockCodes.map((s) => s.code)
-      this.stockMap = new Map(this.stockCodes.map((s) => [s.code, s]))
+      this.applyStockData(response.stocks)
       this.lastUpdate = Date.now()
       this.loadingState = 'success'
+      this.dataSource = 'api'
+      this.stale = false
+      this.version = response.version || this.CACHE_VERSION
+      this.error = null
+      this.saveToCache(false)
 
-      debugLog(`[StockCodeManager] ✅ 加载成功: ${this.codeStrings.length}只`)
+      debugLog(`[StockCodeManager] 加载成功: ${this.codeStrings.length}只`)
       return true
     } catch (error) {
       console.error('[StockCodeManager] 加载失败:', error)
-      this.loadingState = 'error'
       this.error = error instanceof Error ? error : new Error(String(error))
-
-      // 即使失败，也设置一些空数据，避免 undefined
-      this.stockCodes = []
-      this.codeStrings = []
-      this.stockMap.clear()
-
       return false
     }
   }
 
   // 添加一个手动设置数据的方法（用于调试）
   public setStockData(data: any[]) {
-    this.stockCodes = data.map((item: any) => ({
-      code: String(item.code).padStart(6, '0'),
-      name: item.name.trim(),
-      market: item.market,
-      type: item.type,
-    }))
-    this.codeStrings = this.stockCodes.map((s) => s.code)
-    this.stockMap = new Map(this.stockCodes.map((s) => [s.code, s]))
+    this.applyStockData(data)
     this.lastUpdate = Date.now()
     this.loadingState = 'success'
-    debugLog(`[StockCodeManager] 📦 手动设置数据: ${this.codeStrings.length}只`)
+    this.dataSource = 'manual'
+    this.stale = false
+    this.version = this.CACHE_VERSION
+    debugLog(`[StockCodeManager] 手动设置数据: ${this.codeStrings.length}只`)
   }
 
   /**
    * 保存到缓存
    */
-  private saveToCache(): void {
+  private saveToCache(stale: boolean): void {
     try {
-      const cacheData = {
+      const cacheData: StockCodeCachePayload = {
+        version: this.version || this.CACHE_VERSION,
+        source: 'mongodb',
+        stale,
         codes: this.stockCodes,
         timestamp: Date.now(),
       }
@@ -286,6 +277,9 @@ export class StockCodeManagerService {
     this.stockMap.clear()
     this.loadingState = 'idle'
     this.loadingPromise = null
+    this.dataSource = null
+    this.stale = false
+    this.version = ''
     localStorage.removeItem(this.CACHE_KEY)
   }
 
@@ -296,6 +290,53 @@ export class StockCodeManagerService {
     this.clearCache()
     await this.ensureLoaded()
     return this.loadingState === 'success'
+  }
+
+  private applyStockData(data: unknown[]): void {
+    this.stockCodes = data
+      .map((item: any) => this.normalizeStockInfo(item))
+      .filter((item): item is StockCodeInfo => Boolean(item && item.code && item.code !== '000000'))
+    this.codeStrings = this.stockCodes.map((s) => s.code)
+    this.stockMap = new Map(this.stockCodes.map((s) => [s.code, s]))
+  }
+
+  private normalizeStockInfo(item: any): StockCodeInfo | null {
+    const code = this.normalizeCode(item?.code)
+    if (!code) return null
+    const pinyinInitials = String(item?.pinyinInitials || item?.pinyin || '').trim().toLowerCase()
+    const pinyinFull = String(item?.pinyinFull || '').trim().toLowerCase()
+    return {
+      code,
+      name: String(item?.name || '未知').trim().replace(/\s+/g, ''),
+      market: item?.market || this.determineMarket(code),
+      type: item?.type || 'stock',
+      pinyin: pinyinInitials,
+      pinyinInitials,
+      pinyinFull,
+      active: item?.active !== false,
+    }
+  }
+
+  private normalizeCode(code: unknown): string {
+    const value = String(code || '').trim()
+    if (!value) return ''
+    return /^\d+$/.test(value) ? value.padStart(6, '0') : value
+  }
+
+  private getSearchRank(stock: StockCodeInfo, keyword: string): number | null {
+    const code = stock.code.toLowerCase()
+    const name = stock.name.toLowerCase()
+    const nameNormalized = name.replace(/\s+/g, '')
+    const pinyinInitials = (stock.pinyinInitials || stock.pinyin || '').toLowerCase()
+    const pinyinFull = (stock.pinyinFull || '').toLowerCase()
+
+    if (code === keyword) return 0
+    if (code.startsWith(keyword)) return 1
+    if (name.startsWith(keyword) || nameNormalized.startsWith(keyword)) return 2
+    if (name.includes(keyword) || nameNormalized.includes(keyword)) return 3
+    if (pinyinInitials.startsWith(keyword)) return 4
+    if (pinyinFull.startsWith(keyword)) return 5
+    return null
   }
 
   /**
@@ -317,6 +358,9 @@ export class StockCodeManagerService {
       state: this.loadingState,
       count: this.codeStrings.length,
       lastUpdate: this.lastUpdate,
+      source: this.dataSource,
+      stale: this.stale,
+      version: this.version || undefined,
       error: this.error?.message,
     }
   }

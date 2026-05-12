@@ -12,6 +12,7 @@ from backend.data.quality_gate import evaluate_snapshot_quality
 from backend.data.json_codec import dumps_json_field, loads_json_field
 from backend.data.database import SessionLocal
 from backend.data.repository import Repository
+from backend.data.repository_factory import create_repository, storage_source_label
 from backend.optimization.jobs import submit_optimization_job
 from backend.optimization.runner import OptimizationRunner
 from backend.optimization.search_space import candidate_count, select_candidates
@@ -84,7 +85,7 @@ def _prepare_frames_for_backtest(frames: list[dict[str, Any]], snapshot_type: st
 
 class BacktestService:
     def __init__(self, session: Session | None):
-        self.repo = Repository(session)
+        self.repo = create_repository(session)
 
     @staticmethod
     def _summary_response(run_id: str, result: dict[str, Any], metadata: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -534,9 +535,9 @@ class BacktestService:
             return None
         self._validate_pagination(limit, offset)
         items = self.repo.get_backtest_trades(run_id, limit=limit, offset=offset)
-        source = "sqlite"
+        source = storage_source_label()
         total = self.repo.count_backtest_trades(run_id)
-        if not items and total == 0:
+        if source == "sqlite" and not items and total == 0:
             from backend.data.archive.service import ArchiveService
 
             archive = ArchiveService(SessionLocal())
@@ -558,8 +559,8 @@ class BacktestService:
         if not self.repo.get_backtest_run(run_id):
             return None
         items = self.repo.get_backtest_equity_curve(run_id)
-        source = "sqlite"
-        if not items:
+        source = storage_source_label()
+        if source == "sqlite" and not items:
             from backend.data.archive.service import ArchiveService
 
             archived = ArchiveService(SessionLocal()).query_archived_research_table(run_id, "equity_curve")
@@ -581,8 +582,8 @@ class BacktestService:
         self._validate_pagination(limit, offset)
         items = self.repo.get_backtest_signals(run_id, limit=limit, offset=offset, tier=tier, regime=regime)
         total = self.repo.count_backtest_signals(run_id, tier=tier, regime=regime)
-        source = "sqlite"
-        if not items and total == 0:
+        source = storage_source_label()
+        if source == "sqlite" and not items and total == 0:
             from backend.data.archive.service import ArchiveService
 
             filters = {"candidateTier": tier, "regime": regime}
@@ -881,7 +882,7 @@ class BacktestService:
 
 class OptimizationService:
     def __init__(self, session: Session | None):
-        self.repo = Repository(session)
+        self.repo = create_repository(session)
 
     def run_ranktrend(self, payload: dict[str, Any], wait: bool = False) -> dict[str, Any]:
         dataset_id, snapshot_type, strategy_name, run_frames, request, payload_for_request_json = self._build_request(payload)
@@ -1185,7 +1186,7 @@ class OptimizationService:
 
 class GoldenService:
     def __init__(self, session: Session | None):
-        self.repo = Repository(session)
+        self.repo = create_repository(session)
 
     def create_baseline(self, payload: dict[str, Any]) -> dict[str, Any]:
         dataset_id = str(payload.get("dataset_id") or payload.get("datasetId") or "")

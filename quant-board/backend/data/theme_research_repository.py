@@ -18,6 +18,22 @@ from backend.data.json_codec import dumps_json_field, loads_json_field
 class ThemeResearchRepository:
     def __init__(self) -> None:
         self._session: Any = None
+        self._mongo_repo: Any = None
+
+    @property
+    def mongo_repo(self) -> Any:
+        if self._mongo_repo is None:
+            from backend.data.repository_factory import get_runtime_mongodb_database
+            from backend.data.mongo_research_repository import MongoResearchRepository
+
+            self._mongo_repo = MongoResearchRepository(get_runtime_mongodb_database())
+        return self._mongo_repo
+
+    @property
+    def is_mongodb(self) -> bool:
+        from backend.settings import get_settings
+
+        return get_settings().storage_backend == "mongodb"
 
     @property
     def session(self) -> Any:
@@ -33,6 +49,8 @@ class ThemeResearchRepository:
     # ── 因子帧 ─────────────────────────────
 
     def save_factor_frames(self, rows: list[dict[str, Any]]) -> int:
+        if self.is_mongodb:
+            return self.mongo_repo.save_factor_frames(rows)
         count = 0
         try:
             for item in rows:
@@ -74,6 +92,8 @@ class ThemeResearchRepository:
         snapshot_type: str = "half_hour",
         trading_date: str | None = None,
     ) -> list[dict[str, Any]]:
+        if self.is_mongodb:
+            return self.mongo_repo.get_factor_frames(dataset_id, snapshot_type, trading_date)
         try:
             stmt = select(ThemeFactorFrameModel).where(
                 ThemeFactorFrameModel.dataset_id == dataset_id,
@@ -89,6 +109,8 @@ class ThemeResearchRepository:
     # ── 个股暴露 ─────────────────────────────
 
     def save_stock_exposures(self, rows: list[dict[str, Any]]) -> int:
+        if self.is_mongodb:
+            return self.mongo_repo.save_stock_exposures(rows)
         count = 0
         try:
             for item in rows:
@@ -125,6 +147,8 @@ class ThemeResearchRepository:
         snapshot_id: str | None = None,
         code: str | None = None,
     ) -> list[dict[str, Any]]:
+        if self.is_mongodb:
+            return self.mongo_repo.get_stock_exposures(dataset_id, snapshot_id=snapshot_id, code=code)
         try:
             stmt = select(ThemeStockExposureModel).where(
                 ThemeStockExposureModel.dataset_id == dataset_id,
@@ -141,6 +165,8 @@ class ThemeResearchRepository:
     # ── 信号 ─────────────────────────────
 
     def save_signals(self, rows: list[dict[str, Any]]) -> int:
+        if self.is_mongodb:
+            return self.mongo_repo.save_signals(rows)
         count = 0
         try:
             for item in rows:
@@ -174,6 +200,8 @@ class ThemeResearchRepository:
         snapshot_type: str = "half_hour",
         signal: str | None = None,
     ) -> list[dict[str, Any]]:
+        if self.is_mongodb:
+            return self.mongo_repo.get_signals(dataset_id, snapshot_type, signal=signal)
         try:
             stmt = select(ThemeSignalModel).where(
                 ThemeSignalModel.dataset_id == dataset_id,
@@ -189,6 +217,8 @@ class ThemeResearchRepository:
     # ── 质量报告 ─────────────────────────────
 
     def save_quality_report(self, report: dict[str, Any]) -> bool:
+        if self.is_mongodb:
+            return self.mongo_repo.save_quality_report(report)
         try:
             model = ThemeQualityReportModel(
                 dataset_id=str(report.get("datasetId") or ""),
@@ -219,6 +249,8 @@ class ThemeResearchRepository:
         dataset_id: str,
         snapshot_type: str = "half_hour",
     ) -> list[dict[str, Any]]:
+        if self.is_mongodb:
+            return self.mongo_repo.get_quality_reports(dataset_id, snapshot_type)
         try:
             stmt = (
                 select(ThemeQualityReportModel)
@@ -241,6 +273,8 @@ class ThemeResearchRepository:
         snapshot_type: str = "half_hour",
         snapshot_id: str | None = None,
     ) -> dict[str, int]:
+        if self.is_mongodb:
+            return self.mongo_repo.delete_theme_research(dataset_id, snapshot_type, snapshot_id)
         deleted: dict[str, int] = {}
         try:
             for attr in ("theme_signals", "theme_stock_exposures", "theme_factor_frames"):

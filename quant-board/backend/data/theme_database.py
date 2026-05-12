@@ -47,6 +47,9 @@ def init_theme_db() -> bool:
 
 
 def get_theme_db() -> Generator[Session | None, None, None]:
+    if get_settings().storage_backend == "mongodb":
+        yield None
+        return
     if not init_theme_db():
         yield None
         return
@@ -58,6 +61,17 @@ def get_theme_db() -> Generator[Session | None, None, None]:
 
 
 def theme_status() -> dict[str, str | bool | None]:
+    if get_settings().storage_backend == "mongodb":
+        from backend.data.repository_factory import mongodb_status
+
+        status = mongodb_status()
+        return {
+            "configured": status.get("configured"),
+            "connected": status.get("connected"),
+            "url": None,
+            "last_error": status.get("last_error"),
+            "source": "mongodb",
+        }
     return {
         "configured": bool(settings.theme_database_url),
         "connected": init_theme_db(),
@@ -77,4 +91,3 @@ def _redact_database_url(url: str) -> str:
         user = auth.split(":", 1)[0]
         return f"{scheme}://{user}:***@{host}"
     return f"{scheme}://***@{host}"
-

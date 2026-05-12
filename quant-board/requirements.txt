@@ -11,6 +11,7 @@ boto3>=1.43.2
 
 # ORM 和数据库
 sqlalchemy==2.0.36
+pymongo>=4.7.0
 redis>=5.0.0
 
 # 配置管理

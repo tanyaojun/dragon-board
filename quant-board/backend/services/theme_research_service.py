@@ -15,7 +15,7 @@ from backend.analysis.theme_trend import (
     SIGNAL_VERSION,
 )
 from backend.data.database import SessionLocal
-from backend.data.repository import Repository
+from backend.data.repository_factory import create_repository, storage_source_label
 from backend.data.theme_research_repository import ThemeResearchRepository
 from backend.utils import stable_hash
 
@@ -36,8 +36,8 @@ def build_theme_research(
     已知限制：多帧回放依赖 snapshot sector rows 中的预计算因子值（由 TS engine 在捕获时计算）；
     跨帧概念（persistence/cooling/reversal 等）基于帧间 state 追踪而非 TS rotationAnalysis。
     """
-    session = SessionLocal()
-    repo = Repository(session=session)
+    session = None if storage_source_label() == "mongodb" else SessionLocal()
+    repo = create_repository(session)
     research_repo = ThemeResearchRepository()
 
     try:
@@ -115,7 +115,8 @@ def build_theme_research(
     finally:
         research_repo.close()
         repo.close()
-        session.close()
+        if session is not None:
+            session.close()
 
 
 def _build_quality_report(

@@ -6,7 +6,8 @@
     <!-- 头部 -->
     <div class="panel-header">
       <div class="header-left">
-        <h3>🔥 龙息分析 · 市场情绪</h3>
+        <div class="panel-kicker">DRAGON BREATH</div>
+        <h3>龙息市场情绪</h3>
         <div class="stats-badge" v-if="marketData">
           <span :class="marketData.upCount >= marketData.downCount ? 'up-text' : ''">
             {{ formatNumber(marketData.upCount) }}涨
@@ -18,9 +19,13 @@
         </div>
       </div>
       <div class="panel-actions">
-        <button class="btn-icon" @click.stop="refresh" :class="{ loading }" title="刷新">🔄</button>
-        <button class="btn-icon" @click.stop="exportData" title="导出数据">📥</button>
-        <button class="btn-icon" @click.stop="handleClose" title="关闭">✕</button>
+        <button class="btn-icon action-refresh" @click.stop="refresh" :class="{ loading }" title="刷新" aria-label="刷新">
+          刷新
+        </button>
+        <button class="btn-icon" @click.stop="exportData" title="导出数据" aria-label="导出数据">
+          导出
+        </button>
+        <button class="btn-icon close-btn" @click.stop="handleClose" title="关闭" aria-label="关闭">关闭</button>
       </div>
     </div>
 
@@ -28,12 +33,13 @@
     <div class="sentiment-card" :class="`stage-${displaySentiment.stageClass}`">
       <div class="sentiment-main">
         <div class="sentiment-left">
-          <div class="sentiment-stage-badge" :style="{ boxShadow: `0 0 20px ${stageColor}80` }">
-            <span class="stage-badge-icon">{{ stageIcon }}</span>
+          <div class="sentiment-stage-badge" :style="{ borderColor: stageColor }">
+            <span class="stage-badge-icon"></span>
           </div>
           <div class="sentiment-info">
+            <span class="sentiment-label">当前周期</span>
             <div class="sentiment-phase">
-              {{ stageIcon }} {{ displaySentiment.stageName }}
+              {{ displaySentiment.stageName }}
             </div>
             <div class="sentiment-risk" :class="`risk-${displaySentiment.riskLevel}`">
               <span class="risk-dot"></span>
@@ -69,22 +75,22 @@
     <!-- 标签页 -->
     <div class="panel-tabs">
       <button class="tab-btn" :class="{ active: view === 'overview' }" @click="view = 'overview'">
-        📊 市场概览
+        市场概览
       </button>
       <button class="tab-btn" :class="{ active: view === 'hotlist' }" @click="view = 'hotlist'">
-        🔥 热榜情绪
+        热榜情绪
       </button>
       <button class="tab-btn" :class="{ active: view === 'limit' }" @click="view = 'limit'">
-        📈 连板分析
+        连板分析
       </button>
       <button class="tab-btn" :class="{ active: view === 'money' }" @click="view = 'money'">
-        💰 资金流向
+        资金流向
       </button>
       <button class="tab-btn" :class="{ active: view === 'plates' }" @click="view = 'plates'">
-        📋 热点板块
+        热点板块
       </button>
       <button class="tab-btn" :class="{ active: view === 'factors' }" @click="view = 'factors'">
-        🌬️ 龙息因子
+        龙息因子
       </button>
     </div>
 
@@ -108,12 +114,12 @@
         <div v-if="view === 'overview'" class="overview-view">
           <!-- 情绪指标网格 -->
           <div class="metrics-grid">
-            <div class="metric-item">
+            <div class="metric-item metric-primary">
               <span class="metric-label">上涨家数</span>
               <span class="metric-value up-text">{{ marketData.upCount }}</span>
               <span class="metric-percent">{{ upRatio }}%</span>
             </div>
-            <div class="metric-item">
+            <div class="metric-item metric-primary">
               <span class="metric-label">下跌家数</span>
               <span class="metric-value down-text">{{ marketData.downCount }}</span>
               <span class="metric-percent">{{ downRatio }}%</span>
@@ -145,7 +151,7 @@
           <!-- 涨跌比例图 -->
           <div class="ratio-section">
             <div class="ratio-header">
-              <span class="ratio-title">📊 涨跌分布</span>
+              <span class="ratio-title">市场宽度分布</span>
               <div class="ratio-values">
                 <span class="up-text">上涨 {{ upRatio }}%</span>
                 <span class="dot">|</span>
@@ -162,7 +168,7 @@
 
           <!-- 指数表现 -->
           <div class="indices-section">
-            <div class="section-title">📈 主要指数</div>
+            <div class="section-title">主要指数</div>
             <div class="indices-grid">
               <div v-for="item in indexItems" :key="item.key" class="index-item">
                 <span class="index-name">{{ item.name }}</span>
@@ -954,7 +960,6 @@ const hotListHistoryItems = computed(() => {
 // ========== 五阶段情绪显示 ==========
 const currentStage = computed(() => getDisplayEmotionStage(displaySentiment.value.stage))
 const stageColor = computed(() => currentStage.value.color)
-const stageIcon = computed(() => currentStage.value.icon)
 
 function getStageRiskLevel(stage: UnifiedEmotionStage): string {
   if (stage === '退潮') return '高'
@@ -2906,5 +2911,603 @@ onUnmounted(() => {
   margin-bottom: 10px;
   line-height: 1.4;
   min-height: 32px;
+}
+
+/* High-contrast trading terminal redesign */
+.breath-panel {
+  --breath-bg: #070b11;
+  --breath-panel: #0d131d;
+  --breath-panel-2: #111925;
+  --breath-panel-3: #151f2d;
+  --breath-line: #334155;
+  --breath-line-soft: #223044;
+  --breath-text: #f8fafc;
+  --breath-strong: #ffffff;
+  --breath-muted: #cbd5e1;
+  --breath-dim: #94a3b8;
+  --breath-accent: #f59e0b;
+  --breath-red: #ff4d64;
+  --breath-green: #22e58f;
+  --breath-blue: #38bdf8;
+  width: min(720px, calc(100vw - 32px));
+  max-height: min(84vh, 860px);
+  background: var(--breath-bg);
+  border: 1px solid #3b4658;
+  border-radius: 10px;
+  box-shadow: 0 28px 70px rgba(0, 0, 0, 0.72);
+  color: var(--breath-text);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.breath-panel::before {
+  display: none;
+}
+
+.panel-header,
+.panel-footer,
+.sentiment-card,
+.panel-tabs,
+.panel-content {
+  position: relative;
+  z-index: 1;
+}
+
+.panel-header {
+  align-items: center;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--breath-line-soft);
+  background: #0a0f17;
+}
+
+.header-left {
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.panel-kicker {
+  color: var(--breath-accent);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.panel-header h3 {
+  color: var(--breath-strong);
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+.panel-header h3::before {
+  content: ' ';
+  display: inline-block;
+  width: 6px;
+  height: 20px;
+  margin-right: 10px;
+  border-radius: 2px;
+  vertical-align: -3px;
+  background: var(--breath-accent);
+}
+
+.stats-badge {
+  gap: 9px;
+  padding: 4px 9px;
+  background: #111827;
+  border-color: var(--breath-line);
+  border-radius: 6px;
+  color: var(--breath-text);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.panel-actions {
+  gap: 8px;
+}
+
+.btn-icon {
+  width: auto;
+  min-width: 52px;
+  height: 34px;
+  padding: 0 12px;
+  border-color: var(--breath-line);
+  border-radius: 6px;
+  background: var(--breath-panel-2);
+  color: var(--breath-text);
+  font-size: 12px;
+  font-weight: 700;
+  touch-action: manipulation;
+}
+
+.btn-icon:hover,
+.btn-icon:focus-visible {
+  background: #1e293b;
+  border-color: var(--breath-accent);
+  color: var(--breath-strong);
+  outline: 2px solid rgba(245, 158, 11, 0.28);
+  outline-offset: 2px;
+}
+
+.action-refresh {
+  background: var(--breath-accent);
+  border-color: var(--breath-accent);
+  color: #111827;
+}
+
+.close-btn {
+  color: var(--breath-muted);
+}
+
+.sentiment-card {
+  margin: 16px 18px 12px;
+  padding: 16px;
+  border: 1px solid var(--breath-line);
+  border-radius: 8px;
+  box-shadow: none;
+  background: var(--breath-panel);
+}
+
+.sentiment-card.stage-ice {
+  border-left: 5px solid #94a3b8;
+}
+
+.sentiment-card.stage-start {
+  border-left: 5px solid var(--breath-blue);
+}
+
+.sentiment-card.stage-ferment {
+  border-left: 5px solid var(--breath-accent);
+}
+
+.sentiment-card.stage-climax {
+  border-left: 5px solid var(--breath-red);
+}
+
+.sentiment-card.stage-retreat {
+  border-left: 5px solid #a78bfa;
+}
+
+.sentiment-main {
+  align-items: stretch;
+}
+
+.sentiment-left {
+  min-width: 0;
+}
+
+.sentiment-stage-badge {
+  width: 76px;
+  height: 76px;
+  border: 2px solid var(--breath-accent);
+  border-radius: 50%;
+  background: conic-gradient(from 220deg, var(--breath-accent), transparent 62%, var(--breath-line) 0);
+  position: relative;
+}
+
+.stage-badge-icon {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: var(--breath-bg);
+}
+
+.stage-badge-icon::after {
+  content: '';
+  display: block;
+  width: 18px;
+  height: 18px;
+  margin: 17px;
+  border-radius: 50%;
+  background: currentColor;
+  color: var(--breath-accent);
+}
+
+.sentiment-label {
+  color: var(--breath-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.sentiment-phase {
+  margin-bottom: 8px;
+  color: var(--breath-strong);
+  font-size: 30px;
+  font-weight: 800;
+  line-height: 1.1;
+}
+
+.sentiment-risk {
+  padding: 4px 10px;
+  background: #1f2937;
+  color: var(--breath-strong);
+  font-weight: 800;
+}
+
+.sentiment-suggestion {
+  max-width: 390px;
+  color: var(--breath-muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.sentiment-stats {
+  min-width: 230px;
+  gap: 0;
+  padding: 0;
+  border: 1px solid var(--breath-line-soft);
+  border-radius: 8px;
+  background: #0a0f17;
+}
+
+.stat-row {
+  display: grid;
+  grid-template-columns: 48px minmax(70px, 1fr) 68px;
+  gap: 10px;
+  padding: 11px 12px;
+  border-bottom: 1px solid var(--breath-line-soft);
+}
+
+.stat-row:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.stat-label,
+.stat-sub {
+  color: var(--breath-muted);
+}
+
+.stat-value {
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+}
+
+.panel-tabs {
+  gap: 8px;
+  padding: 0 18px 14px;
+  overflow-x: auto;
+}
+
+.tab-btn {
+  flex: 0 0 auto;
+  min-width: 80px;
+  min-height: 36px;
+  padding: 8px 12px;
+  border: 1px solid var(--breath-line-soft);
+  border-radius: 6px;
+  background: #0d131d;
+  color: var(--breath-muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.tab-btn:hover {
+  background: #172033;
+  color: var(--breath-text);
+}
+
+.tab-btn.active {
+  background: var(--breath-accent);
+  border-color: var(--breath-accent);
+  color: #111827;
+  box-shadow: none;
+}
+
+.panel-content {
+  padding: 0 18px 18px;
+  max-height: calc(84vh - 258px);
+  scrollbar-color: rgba(255, 179, 92, 0.52) rgba(255, 255, 255, 0.06);
+}
+
+.metrics-grid,
+.limit-stats-grid,
+.super-money-grid,
+.indices-grid,
+.history-grid,
+.theme-research-stock-grid,
+.hotlist-evidence-grid,
+.factors-grid {
+  gap: 10px;
+}
+
+.metric-item,
+.limit-stat-card,
+.index-item,
+.promotion-item,
+.money-item,
+.super-money-item,
+.history-item,
+.theme-research-stock,
+.factor-card {
+  border: 1px solid var(--breath-line-soft);
+  border-radius: 8px;
+  background: var(--breath-panel-2);
+  box-shadow: none;
+}
+
+.metric-item {
+  padding: 13px 14px;
+  text-align: left;
+}
+
+.metric-primary {
+  background: #141f2d;
+  border-color: #40516a;
+}
+
+.metric-label,
+.limit-label,
+.money-label,
+.history-label,
+.index-name,
+.promotion-label,
+.factor-tip,
+.plate-desc,
+.research-status,
+.research-lines,
+.research-stock-sub,
+.research-stock-reason,
+.history-sub,
+.metric-percent,
+.limit-sub {
+  color: var(--breath-muted);
+}
+
+.metric-value,
+.limit-value,
+.money-value,
+.history-main,
+.index-value,
+.promotion-value,
+.factor-raw {
+  color: var(--breath-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.metric-label {
+  margin-bottom: 8px;
+  color: var(--breath-muted);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.metric-value {
+  margin-bottom: 5px;
+  color: var(--breath-strong);
+  font-size: 28px;
+  font-weight: 800;
+}
+
+.metric-percent {
+  color: var(--breath-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.ratio-section,
+.indices-section,
+.hotlist-section,
+.limit-distribution,
+.zhaban-section,
+.promotion-section,
+.money-section,
+.flow-section,
+.super-money-section,
+.suggestions-card {
+  border: 1px solid var(--breath-line-soft);
+  border-radius: 8px;
+  background: var(--breath-panel);
+  box-shadow: none;
+}
+
+.section-title,
+.ratio-title,
+.zhaban-title,
+.suggestions-title {
+  color: var(--breath-accent);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.ratio-bar-container,
+.status-bar,
+.zhaban-bar,
+.factor-bar {
+  background: rgba(2, 6, 23, 0.48);
+}
+
+.ratio-bar {
+  height: 12px;
+}
+
+.ratio-bar-up,
+.flow-bar-in {
+  background: linear-gradient(90deg, #ff3f5f, #ff8a8f);
+}
+
+.ratio-bar-down {
+  background: linear-gradient(90deg, #22c55e, #74f2b3);
+}
+
+.flow-bar-out {
+  background: linear-gradient(90deg, #2563eb, #7dd3fc);
+}
+
+.hotlist-stage-card {
+  border: 1px solid var(--breath-line-soft);
+  border-left: 4px solid var(--breath-blue);
+  border-radius: 8px;
+  background: var(--breath-panel-2);
+}
+
+.hotlist-stage-value {
+  color: var(--breath-strong);
+  font-size: 22px;
+}
+
+.hotlist-summary,
+.evidence-list {
+  color: var(--breath-text);
+}
+
+.research-hotlist-card {
+  border-color: #2f6f55;
+}
+
+.status-bar {
+  height: 7px;
+}
+
+.history-extra span,
+.factor-tip,
+.factor-state,
+.plate-count {
+  background: #182337;
+  border: 1px solid var(--breath-line-soft);
+}
+
+.limit-bar {
+  width: 32px;
+  border-radius: 7px 7px 2px 2px;
+  background: linear-gradient(180deg, var(--breath-accent), var(--breath-red));
+  box-shadow: 0 8px 18px rgba(255, 93, 108, 0.18);
+}
+
+.flow-bar {
+  height: 34px;
+  border-radius: 8px;
+  background: rgba(2, 6, 23, 0.52);
+}
+
+.plate-item {
+  border: 1px solid var(--breath-line-soft);
+  border-radius: 8px;
+  background: var(--breath-panel-2);
+}
+
+.plate-item:hover,
+.plate-item.active {
+  background: #182337;
+  border-color: var(--breath-accent);
+}
+
+.plate-name,
+.research-stock-name,
+.factor-name {
+  color: var(--breath-text);
+}
+
+.suggestions-card {
+  margin-top: 16px;
+  border-color: #5a4524;
+  background: #15130f;
+}
+
+.suggestions-icon {
+  display: none;
+}
+
+.suggestions-list li {
+  color: var(--breath-text);
+}
+
+.loading-state,
+.error-state,
+.mini-loading,
+.empty-state {
+  border: 1px solid var(--breath-line-soft);
+  border-radius: 8px;
+  background: var(--breath-panel-2);
+  color: var(--breath-text);
+}
+
+.loading-spinner {
+  border-color: rgba(148, 163, 184, 0.18);
+  border-top-color: var(--breath-accent);
+}
+
+.retry-btn {
+  border-radius: 8px;
+  background: var(--breath-accent);
+  color: #111827;
+  font-weight: 700;
+}
+
+.panel-footer {
+  justify-content: space-between;
+  padding: 10px 18px 12px;
+  border-top-color: var(--breath-line-soft);
+  background: #0a0f17;
+  color: var(--breath-muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.up-text {
+  color: var(--breath-red) !important;
+}
+
+.down-text {
+  color: var(--breath-green) !important;
+}
+
+@media (max-width: 680px) {
+  .breath-panel {
+    width: min(100vw - 18px, 560px);
+    max-height: 88vh;
+  }
+
+  .panel-header {
+    gap: 12px;
+  }
+
+  .sentiment-main,
+  .money-main {
+    flex-direction: column;
+  }
+
+  .sentiment-stats {
+    min-width: 0;
+  }
+
+  .metrics-grid,
+  .indices-grid,
+  .history-grid,
+  .limit-stats-grid,
+  .status-distribution,
+  .theme-research-stock-grid,
+  .hotlist-evidence-grid,
+  .factors-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 430px) {
+  .panel-header {
+    flex-direction: column;
+  }
+
+  .panel-actions {
+    align-self: stretch;
+  }
+
+  .btn-icon {
+    flex: 1;
+  }
+
+  .metrics-grid,
+  .indices-grid,
+  .history-grid,
+  .limit-stats-grid,
+  .status-distribution,
+  .theme-research-stock-grid,
+  .hotlist-evidence-grid,
+  .factors-grid,
+  .promotion-grid,
+  .super-money-grid {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

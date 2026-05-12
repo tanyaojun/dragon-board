@@ -5,6 +5,9 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from backend.settings import get_settings
+from backend.data.repository_factory import get_runtime_mongodb_database
+from backend.data.mongo_theme_repository import MongoThemeRepository
 from backend.data.theme_repository import ThemeRepository
 
 
@@ -19,9 +22,13 @@ def _error(code: str, field: str, message: str) -> ThemeMigrationError:
 
 
 class ThemeMigrationService:
-    def __init__(self, session: Session) -> None:
+    def __init__(self, session: Session | None) -> None:
         self.session = session
-        self.repo = ThemeRepository(session)
+        self.repo = (
+            MongoThemeRepository(get_runtime_mongodb_database())
+            if get_settings().storage_backend == "mongodb"
+            else ThemeRepository(session)
+        )
 
     def import_mapping(self, payload: dict[str, Any]) -> dict[str, Any]:
         normalized = self._normalize_payload(payload)
@@ -40,7 +47,8 @@ class ThemeMigrationService:
         version = str(payload.get("version") or "").strip() or "unknown"
         last_update = str(payload.get("lastUpdate") or payload.get("last_update") or "").strip()
         self.repo.set_metadata(version, last_update)
-        self.session.commit()
+        if self.session is not None:
+            self.session.commit()
 
         if updated_themes and inserted_themes == 0:
             inserted_mappings = 0
@@ -50,7 +58,7 @@ class ThemeMigrationService:
             "inserted": {"themes": inserted_themes, "mappings": inserted_mappings},
             "updated": {"themes": updated_themes},
             "counts": self.repo.counts(),
-            "source": "sqlite",
+            "source": "mongodb" if get_settings().storage_backend == "mongodb" else "sqlite",
         }
 
     def verify_mapping(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -114,7 +122,7 @@ class ThemeMigrationService:
             "extraThemes": extra_themes,
             "missingMappings": missing_mappings,
             "extraMappings": extra_mappings,
-            "source": "sqlite",
+            "source": "mongodb" if get_settings().storage_backend == "mongodb" else "sqlite",
         }
 
     def _normalize_payload(self, payload: dict[str, Any]) -> list[dict[str, Any]]:

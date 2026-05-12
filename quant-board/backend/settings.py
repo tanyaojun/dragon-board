@@ -101,6 +101,13 @@ class Settings(BaseModel):
     object_backup_access_key_id: str = Field(default="")
     object_backup_secret_access_key: str = Field(default="")
     object_backup_region: str = Field(default="auto")
+    mongodb_uri: str = Field(default="")
+    mongodb_database: str = Field(default="dragon_board_quant")
+    mongodb_connect_timeout_ms: int = Field(default=2000)
+    mongodb_server_selection_timeout_ms: int = Field(default=2000)
+    mongodb_backup_dir: Path = BASE_DIR / "data" / "backups" / "mongodb"
+    mongodb_backup_retention_days: int = Field(default=30)
+    storage_backend: str = Field(default="sqlite")
     redis_url: str = Field(default="redis://127.0.0.1:6379/0")
     redis_key_prefix: str = Field(default="hellobiga:dragon-board:local")
     snapshot_cache_enabled: bool = Field(default=True)
@@ -245,6 +252,29 @@ class Settings(BaseModel):
             self.object_backup_secret_access_key,
         )
         self.object_backup_region = os.environ.get("QUANT_BOARD_OBJECT_BACKUP_REGION", self.object_backup_region)
+        self.mongodb_uri = os.environ.get("QUANT_BOARD_MONGODB_URI", self.mongodb_uri)
+        self.mongodb_database = os.environ.get("QUANT_BOARD_MONGODB_DATABASE", self.mongodb_database)
+        self.mongodb_connect_timeout_ms = max(
+            100,
+            _env_int("QUANT_BOARD_MONGODB_CONNECT_TIMEOUT_MS", self.mongodb_connect_timeout_ms),
+        )
+        self.mongodb_server_selection_timeout_ms = max(
+            100,
+            _env_int(
+                "QUANT_BOARD_MONGODB_SERVER_SELECTION_TIMEOUT_MS",
+                self.mongodb_server_selection_timeout_ms,
+            ),
+        )
+        mongodb_backup_dir = os.environ.get("QUANT_BOARD_MONGODB_BACKUP_DIR")
+        if mongodb_backup_dir:
+            self.mongodb_backup_dir = Path(mongodb_backup_dir)
+        self.mongodb_backup_retention_days = max(
+            1,
+            _env_int("QUANT_BOARD_MONGODB_BACKUP_RETENTION_DAYS", self.mongodb_backup_retention_days),
+        )
+        self.storage_backend = os.environ.get("QUANT_BOARD_STORAGE_BACKEND", self.storage_backend).strip().lower()
+        if self.storage_backend not in {"sqlite", "mongodb"}:
+            self.storage_backend = "sqlite"
         self.redis_url = os.environ.get("QUANT_BOARD_REDIS_URL", self.redis_url)
         self.redis_key_prefix = os.environ.get("QUANT_BOARD_REDIS_KEY_PREFIX", self.redis_key_prefix).strip(":")
         self.snapshot_cache_enabled = _env_bool(
@@ -283,6 +313,7 @@ class Settings(BaseModel):
         self.warehouse_dir.mkdir(parents=True, exist_ok=True)
         self.reports_dir.mkdir(parents=True, exist_ok=True)
         self.archive_dir.mkdir(parents=True, exist_ok=True)
+        self.mongodb_backup_dir.mkdir(parents=True, exist_ok=True)
 
 
 def _load_yaml_config() -> dict[str, Any]:

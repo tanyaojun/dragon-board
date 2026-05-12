@@ -2922,8 +2922,9 @@ def test_outbox_push_replays_snapshot_mirrors_and_keeps_research_local() -> None
             session.commit()
             result = service.push_outbox_to_backup(repo, limit=200)
 
-        assert result["scanned"] >= 0
-        assert result["failed"] == 0
+        target_items = [item for item in result["items"] if item["dataset_id"] == dataset.id]
+        assert target_items
+        assert all(item["status"] == "done" for item in target_items)
         assert dataset.id in backup.datasets
         finished = list(
             session.scalars(

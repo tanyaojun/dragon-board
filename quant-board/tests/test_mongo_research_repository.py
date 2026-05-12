@@ -1,0 +1,373 @@
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any
+
+from backend.data.models import BacktestRun, GoldenRankTrendCase, OptimizationRun
+from backend.data.mongo_research_repository import MongoResearchRepository
+
+
+class FakeCursor:
+    def __init__(self, rows: list[dict[str, Any]]) -> None:
+        self.rows = rows
+
+    def sort(self, keys) -> "FakeCursor":
+        sort_keys = list(keys if isinstance(keys, list) else [keys])
+        for key, direction in reversed(sort_keys):
+            self.rows.sort(key=lambda row: row.get(key) or 0, reverse=int(direction) < 0)
+        return self
+
+    def limit(self, count: int) -> "FakeCursor":
+        if count and count > 0:
+            self.rows = self.rows[:count]
+        return self
+
+    def skip(self, count: int) -> "FakeCursor":
+        if count and count > 0:
+            self.rows = self.rows[count:]
+        return self
+
+    def __iter__(self):
+        return iter(self.rows)
+
+
+class FakeDeleteResult:
+    def __init__(self, deleted_count: int) -> None:
+        self.deleted_count = deleted_count
+
+
+class FakeCollection:
+    def __init__(self) -> None:
+        self.rows: list[dict[str, Any]] = []
+
+    def count_documents(self, query: dict[str, Any]) -> int:
+        return len(list(self.find(query)))
+
+    def delete_many(self, query: dict[str, Any]) -> FakeDeleteResult:
+        before = len(self.rows)
+        self.rows = [row for row in self.rows if not _matches(row, query)]
+        return FakeDeleteResult(before - len(self.rows))
+
+    def insert_many(self, rows: list[dict[str, Any]], ordered: bool = False) -> None:
+        assert ordered is False
+        self.rows.extend(dict(row) for row in rows)
+
+    def replace_one(self, query: dict[str, Any], document: dict[str, Any], upsert: bool = False) -> None:
+        for index, row in enumerate(self.rows):
+            if _matches(row, query):
+                self.rows[index] = dict(document)
+                return
+        if upsert:
+            self.rows.append(dict(document))
+
+    def find_one(self, query: dict[str, Any]) -> dict[str, Any] | None:
+        return next(iter(self.find(query)), None)
+
+    def find(self, query: dict[str, Any] | None = None) -> FakeCursor:
+        return FakeCursor([dict(row) for row in self.rows if _matches(row, query or {})])
+
+
+class FakeMongoDatabase(dict):
+    def __getitem__(self, name: str) -> FakeCollection:
+        if name not in self:
+            self[name] = FakeCollection()
+        return dict.__getitem__(self, name)
+
+
+def test_backtest_run_roundtrips_request_and_result_as_structured_fields() -> None:
+    db = FakeMongoDatabase()
+    repo = MongoResearchRepository(db)
+    created_at = datetime(2026, 5, 12, 9, 30)
+    finished_at = datetime(2026, 5, 12, 15, 0)
+
+    saved = repo.save_backtest_run(
+        BacktestRun(
+            id="bt_1",
+            dataset_id="ds_1",
+            strategy_name="rank_trend_candidate",
+            strategy_version="0.1.0",
+            snapshot_type="half_hour",
+            config_hash="hash_1",
+            random_seed=20260430,
+            status="completed",
+            date_start="2026-05-11",
+            date_end="2026-05-12",
+            request_json='{"datasetId":"ds_1","nested":{"a":1}}',
+            result_json='{"metrics":{"totalReturn":0.12}}',
+            created_at=created_at,
+            finished_at=finished_at,
+        )
+    )
+
+    fetched = repo.get_backtest_run("bt_1")
+    as_dict = repo.backtest_run_to_dict(fetched)
+    raw_doc = db["backtest_runs"].rows[0]
+
+    assert saved.id == "bt_1"
+    assert fetched is not None
+    assert fetched.request_json == '{"datasetId":"ds_1","nested":{"a":1}}'
+    assert fetched.result_json == '{"metrics":{"totalReturn":0.12}}'
+    assert as_dict["request"] == {"datasetId": "ds_1", "nested": {"a": 1}}
+    assert as_dict["result"] == {"metrics": {"totalReturn": 0.12}}
+    assert raw_doc["request"] == {"datasetId": "ds_1", "nested": {"a": 1}}
+    assert raw_doc["result"] == {"metrics": {"totalReturn": 0.12}}
+    assert "request_json" not in raw_doc
+    assert "result_json" not in raw_doc
+
+
+def test_backtest_signals_keep_sequence_order_and_support_tier_regime_filters() -> None:
+    repo = MongoResearchRepository(FakeMongoDatabase())
+
+    count = repo.save_backtest_signal_rows(
+        "bt_1",
+        [
+            _signal("000003", 3, "watch", "weak"),
+            _signal("000001", 1, "buy", "strong"),
+            _signal("000002", 2, "buy", "weak"),
+        ],
+    )
+
+    assert count == 3
+    assert [row["code"] for row in repo.get_backtest_signals("bt_1")] == ["000003", "000001", "000002"]
+    assert [row["sequence"] for row in repo.get_backtest_signals("bt_1")] == [1, 2, 3]
+    assert [row["code"] for row in repo.get_backtest_signals("bt_1", tier="buy")] == ["000001", "000002"]
+    assert [row["code"] for row in repo.get_backtest_signals("bt_1", regime="weak")] == ["000003", "000002"]
+    assert repo.count_backtest_signals("bt_1", tier="buy", regime="weak") == 1
+
+
+def test_optimization_run_roundtrips_structured_request_and_result() -> None:
+    db = FakeMongoDatabase()
+    repo = MongoResearchRepository(db)
+    created_at = datetime(2026, 5, 12, 10, 0)
+
+    repo.save_optimization_run(
+        OptimizationRun(
+            id="opt_1",
+            dataset_id="ds_1",
+            strategy_name="rank_trend_candidate",
+            method="grid",
+            config_hash="hash_opt",
+            random_seed=7,
+            status="completed",
+            request_json='{"space":{"threshold":[1,2]}}',
+            result_json='{"best":{"score":0.88}}',
+            created_at=created_at,
+        )
+    )
+
+    fetched = repo.get_optimization_run("opt_1")
+    raw_doc = db["optimization_runs"].rows[0]
+
+    assert fetched is not None
+    assert fetched.request_json == '{"space":{"threshold":[1,2]}}'
+    assert fetched.result_json == '{"best":{"score":0.88}}'
+    assert raw_doc["request"] == {"space": {"threshold": [1, 2]}}
+    assert raw_doc["result"] == {"best": {"score": 0.88}}
+    assert "request_json" not in raw_doc
+    assert "result_json" not in raw_doc
+
+
+def test_golden_case_roundtrips_structured_input_and_expected() -> None:
+    db = FakeMongoDatabase()
+    repo = MongoResearchRepository(db)
+
+    repo.save_golden_case(
+        GoldenRankTrendCase(
+            id="case_1",
+            name="case one",
+            dataset_id="ds_1",
+            input_json='{"datasetId":"ds_1","frames":[{"id":"s1"}]}',
+            expected_json='[{"code":"000001","signal":"buy"}]',
+            created_at=datetime(2026, 5, 12, 11, 0),
+        )
+    )
+
+    fetched = repo.get_golden_case("case_1")
+    raw_doc = db["golden_ranktrend_cases"].rows[0]
+
+    assert fetched is not None
+    assert fetched.input_json == '{"datasetId":"ds_1","frames":[{"id":"s1"}]}'
+    assert fetched.expected_json == '[{"code":"000001","signal":"buy"}]'
+    assert raw_doc["input"] == {"datasetId": "ds_1", "frames": [{"id": "s1"}]}
+    assert raw_doc["expected"] == [{"code": "000001", "signal": "buy"}]
+    assert "input_json" not in raw_doc
+    assert "expected_json" not in raw_doc
+
+
+def test_theme_trend_research_tables_store_json_as_structured_fields() -> None:
+    db = FakeMongoDatabase()
+    repo = MongoResearchRepository(db)
+
+    assert repo.save_factor_frames([_factor("snap_2", 2), _factor("snap_1", 1)]) == 2
+    assert repo.save_stock_exposures([_exposure("000002", 0.4), _exposure("000001", 0.8)]) == 2
+    assert repo.save_signals([_theme_signal("watch", 50), _theme_signal("mainline", 90)]) == 2
+    assert repo.save_quality_report(_quality_report()) is True
+
+    factors = repo.get_factor_frames("ds_1", "half_hour")
+    exposures = repo.get_stock_exposures("ds_1", snapshot_id="snap_1")
+    signals = repo.get_signals("ds_1", "half_hour", signal="mainline")
+    reports = repo.get_quality_reports("ds_1", "half_hour")
+
+    assert [row["snapshotId"] for row in factors] == ["snap_1", "snap_2"]
+    assert factors[0]["qualityFlags"] == ["low_sample"]
+    assert [row["code"] for row in exposures] == ["000001", "000002"]
+    assert exposures[0]["reasons"] == ["role:leader", "theme:mainline"]
+    assert signals[0]["signal"] == "mainline"
+    assert reports[0]["issues"] == ["low_coverage"]
+    assert reports[0]["warnings"] == ["low_sample"]
+    assert reports[0]["stats"] == {"totalFrames": 2}
+
+    for collection_name in (
+        "theme_factor_frames",
+        "theme_stock_exposures",
+        "theme_signals",
+        "theme_quality_reports",
+    ):
+        assert not any(key.endswith("_json") for key in db[collection_name].rows[0])
+
+
+def test_repository_factory_returns_research_capable_mongo_repository(monkeypatch) -> None:
+    import backend.data.repository_factory as factory
+
+    fake_db = FakeMongoDatabase()
+    monkeypatch.setattr(factory, "get_settings", lambda: type("Settings", (), {"storage_backend": "mongodb"})())
+    monkeypatch.setattr(factory, "get_runtime_mongodb_database", lambda: fake_db)
+
+    repo = factory.create_repository(None)
+
+    assert isinstance(repo, MongoResearchRepository)
+    assert repo.db is fake_db
+    assert hasattr(repo, "save_backtest_run")
+    assert hasattr(repo, "save_factor_frames")
+
+
+def _signal(code: str, rank: int, tier: str, regime: str) -> dict[str, Any]:
+    return {
+        "snapshotId": "snap_1",
+        "tradingDate": "2026-05-12",
+        "code": code,
+        "name": code,
+        "candidateTier": tier,
+        "signal": "buy" if tier == "buy" else "watch",
+        "confidence": 0.8,
+        "rank": rank,
+        "stage": "open",
+        "regime": regime,
+        "reasons": ["rank"],
+        "riskFlags": ["none"],
+        "mainTheme": "AI",
+        "themeHeat": 90.0,
+        "themeContribution": 18.0,
+        "themeRole": "leader",
+        "themeSupportScore": 88.0,
+        "themeRiskFlags": ["crowding:low"],
+        "themeReasons": ["theme:AI"],
+    }
+
+
+def _factor(snapshot_id: str, rank: int) -> dict[str, Any]:
+    return {
+        "datasetId": "ds_1",
+        "snapshotId": snapshot_id,
+        "snapshotType": "half_hour",
+        "tradingDate": "2026-05-12",
+        "slotTime": "10:00",
+        "strategyVersion": "theme-trend-v12",
+        "configHash": "hash_theme",
+        "randomSeed": 20260430,
+        "themeId": "ai",
+        "themeName": "AI",
+        "heatScore": 88.0,
+        "momentumScore": 82.0,
+        "breadthScore": 76.0,
+        "fundScore": 78.0,
+        "leadershipScore": 84.0,
+        "correlationScore": 72.0,
+        "crowdingRisk": 24.0,
+        "persistenceScore": 78.0,
+        "rotationState": "mainline",
+        "rank": rank,
+        "qualityFlags": ["low_sample"],
+        "lifecycle": "mainline",
+    }
+
+
+def _exposure(code: str, weight: float) -> dict[str, Any]:
+    return {
+        "datasetId": "ds_1",
+        "snapshotId": "snap_1",
+        "snapshotType": "half_hour",
+        "tradingDate": "2026-05-12",
+        "slotTime": "10:00",
+        "strategyVersion": "theme-trend-v12",
+        "configHash": "hash_theme",
+        "randomSeed": 20260430,
+        "code": code,
+        "themeId": "ai",
+        "themeName": "AI",
+        "role": "leader",
+        "roleScore": 90.0,
+        "exposureWeight": weight,
+        "themeContribution": 18.0,
+        "riskPenalty": 0.0,
+        "reasons": ["role:leader", "theme:mainline"],
+    }
+
+
+def _theme_signal(signal: str, score: float) -> dict[str, Any]:
+    return {
+        "datasetId": "ds_1",
+        "snapshotId": "snap_1",
+        "snapshotType": "half_hour",
+        "tradingDate": "2026-05-12",
+        "slotTime": "10:00",
+        "strategyVersion": "theme-trend-v12",
+        "configHash": "hash_theme",
+        "randomSeed": 20260430,
+        "themeId": "ai",
+        "themeName": "AI",
+        "signal": signal,
+        "risk": "none",
+        "lifecycle": "mainline",
+        "score": score,
+    }
+
+
+def _quality_report() -> dict[str, Any]:
+    return {
+        "datasetId": "ds_1",
+        "snapshotType": "half_hour",
+        "strategyVersion": "theme-trend-v12",
+        "configHash": "hash_theme",
+        "randomSeed": 20260430,
+        "passed": False,
+        "severity": "warn",
+        "researchGrade": "degraded",
+        "issues": ["low_coverage"],
+        "warnings": ["low_sample"],
+        "stats": {"totalFrames": 2},
+        "themeCoverage": 0.5,
+        "frameCount": 2,
+        "stockCount": 100,
+        "themeCount": 8,
+    }
+
+
+def _matches(row: dict[str, Any], query: dict[str, Any]) -> bool:
+    for key, expected in query.items():
+        value = row.get(key)
+        if isinstance(expected, dict):
+            if "$in" in expected and value not in expected["$in"]:
+                return False
+            if "$gte" in expected and value < expected["$gte"]:
+                return False
+            if "$lte" in expected and value > expected["$lte"]:
+                return False
+            if "$lt" in expected and value >= expected["$lt"]:
+                return False
+            if "$ne" in expected and value == expected["$ne"]:
+                return False
+            continue
+        if value != expected:
+            return False
+    return True

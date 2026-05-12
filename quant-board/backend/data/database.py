@@ -39,6 +39,11 @@ _last_primary_error: str | None = None
 
 def init_db() -> bool:
     global _initialized, _primary_available, _last_primary_error
+    if settings.storage_backend == "mongodb":
+        _initialized = True
+        _primary_available = True
+        _last_primary_error = None
+        return True
     if _initialized and _primary_available:
         return _primary_available
     from backend.data import models  # noqa: F401
@@ -118,6 +123,10 @@ def _apply_column_migrations(eng: "Engine", migrations: list[tuple[str, str, str
 
 
 def primary_status() -> dict[str, str | bool | None]:
+    if settings.storage_backend == "mongodb":
+        from backend.data.repository_factory import mongodb_status
+
+        return mongodb_status()
     return {
         "configured": bool(settings.database_url),
         "connected": init_db(),
@@ -128,6 +137,9 @@ def primary_status() -> dict[str, str | bool | None]:
 
 
 def get_db() -> Generator[Session | None, None, None]:
+    if settings.storage_backend == "mongodb":
+        yield None
+        return
     if not init_db():
         yield None
         return

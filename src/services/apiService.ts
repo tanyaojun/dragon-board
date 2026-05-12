@@ -110,6 +110,11 @@ type ThemeResearchSummaryQueryOptions = {
   datasetId?: string
   snapshotType?: SnapshotQueryOptions['type']
 }
+type StockNameQueryOptions = {
+  market?: 'SH' | 'SZ' | 'BJ'
+  type?: 'stock' | 'index' | 'etf' | 'bond'
+  active?: boolean
+}
 
 export class ApiHttpError extends Error {
   readonly status: number
@@ -824,6 +829,24 @@ export class ApiService {
   /** 从 QuantBoard SQLite 题材主库读取正式题材映射 */
   async getSqliteThemeMapping(options?: RequestConfig) {
     return this.get<any>('/api/themes/mapping', {
+      context: 'quant-board',
+      priority: 'high',
+      retries: 1,
+      timeout: 15000,
+      cache: false,
+      throwOnHttpError: true,
+      ...options,
+    })
+  }
+
+  /** 从 QuantBoard MongoDB stock_names 集合读取正式股票名称表 */
+  async listStockNames(params: StockNameQueryOptions = {}, options?: RequestConfig) {
+    const query = new URLSearchParams()
+    if (params.market) query.set('market', params.market)
+    if (params.type) query.set('type', params.type)
+    if (params.active !== undefined) query.set('active', String(params.active))
+    const suffix = query.toString() ? `?${query.toString()}` : ''
+    return this.get<any>(`/api/stocks/names${suffix}`, {
       context: 'quant-board',
       priority: 'high',
       retries: 1,

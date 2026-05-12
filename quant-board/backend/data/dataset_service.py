@@ -8,14 +8,14 @@ from sqlalchemy.orm import Session
 from backend.data.importers import ImporterError, read_snapshot_bundle
 from backend.data.models import Dataset
 from backend.data.quality_gate import evaluate_snapshot_quality
-from backend.data.repository import Repository
+from backend.data.repository_factory import create_repository
 from backend.data.schemas import ImportDatasetRequest
 from backend.utils import json_dumps, new_id, stable_hash
 
 
 class DatasetService:
     def __init__(self, session: Session | None):
-        self.repo = Repository(session)
+        self.repo = create_repository(session)
 
     def list_datasets(self) -> list[dict[str, Any]]:
         return [self.repo.dataset_to_dict(model) for model in self.repo.list_datasets()]

@@ -376,4 +376,21 @@ describe('ApiService', () => {
     expect(requestedUrl.searchParams.get('snapshot_type')).toBe('half_hour')
     expect(result.available).toBe(false)
   })
+
+  it('routes stock name reads to QuantBoard API', async () => {
+    const api = new ApiService()
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, source: 'mongodb', stocks: [] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await api.listStockNames()
+
+    const requestedUrl = new URL(String(fetchMock.mock.calls[0][0]))
+    expect(requestedUrl.origin).toBe('http://localhost:8000')
+    expect(requestedUrl.pathname).toBe('/api/stocks/names')
+  })
 })

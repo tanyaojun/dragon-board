@@ -20,6 +20,7 @@ QuantBoard 是 `dragon-board` 的量化回测与参数研究子项目。首期�
 | [user-manual.md](user-manual.md) | 面向日常使用的操作手册：启动、导入、回测、报告、优化与常见问题 |
 | [architecture.md](architecture.md) | 总体架构、模块边界、数据库表与数据流 |
 | [database-migration-plan.md](database-migration-plan.md) | SQLite 主库 + Supabase 备份库并行实施计划、同步合同和恢复规则 |
+| [mongodb-migration-plan.md](mongodb-migration-plan.md) | 拟执行的 MongoDB 全量主库迁移方案，覆盖快照库、研究库、题材库和股票基础库 |
 | [data-ingestion.md](data-ingestion.md) | SQLite 快照库派生研究数据集、历史 JSON 迁移和质量门禁 |
 | [ranktrend-golden.md](ranktrend-golden.md) | TypeScript golden 标准、输出合同、验收基线 |
 | [ranktrend-python-port.md](ranktrend-python-port.md) | Python 移植步骤、数值对齐、测试策略 |

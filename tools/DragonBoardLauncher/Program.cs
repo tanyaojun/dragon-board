@@ -303,11 +303,11 @@ internal sealed class LauncherForm : Form
 
     private void StopManaged()
     {
-        StopStartedProcess(_services["quant-ui"]);
-        StopStartedProcess(_services["quant-api"]);
-        StopStartedProcess(_services["bridge"]);
-        StopStartedProcess(_services["frontend"]);
-        StopStartedProcess(_services["proxy"]);
+        StopService(_services["quant-ui"]);
+        StopService(_services["quant-api"]);
+        StopService(_services["bridge"]);
+        StopService(_services["frontend"]);
+        StopService(_services["proxy"]);
         RefreshStatuses();
     }
 
@@ -415,7 +415,7 @@ internal sealed class LauncherForm : Form
             return;
         }
 
-        StopStartedProcess(service);
+        StopProcessService(service);
     }
 
     private static void OpenService(ManagedService service)
@@ -433,24 +433,52 @@ internal sealed class LauncherForm : Form
         StopManaged();
     }
 
-    private void StopStartedProcess(ManagedService service)
+    private void StopProcessService(ManagedService service)
+    {
+        var targetPids = new HashSet<int>();
+        if (service.Process is { HasExited: false })
+        {
+            targetPids.Add(service.Process.Id);
+        }
+
+        foreach (var pid in GetPidsByPort(service.Port))
+        {
+            targetPids.Add(pid);
+        }
+
+        targetPids.Remove(Environment.ProcessId);
+
+        if (targetPids.Count == 0)
+        {
+            service.Process = null;
+            Log($"{service.Name} 未发现可停止的进程。");
+            return;
+        }
+
+        foreach (var pid in targetPids)
+        {
+            StopProcessTree(service, pid);
+        }
+
+        service.Process = null;
+    }
+
+    private void StopProcessTree(ManagedService service, int pid)
     {
         try
         {
-            if (service.Process is { HasExited: false })
-            {
-                service.Process.Kill(entireProcessTree: true);
-                service.Process.WaitForExit(3000);
-                Log($"已停止 {service.Name} 进程树。");
-            }
+            using var process = Process.GetProcessById(pid);
+            process.Kill(entireProcessTree: true);
+            process.WaitForExit(3000);
+            Log($"已停止 {service.Name} 进程树，PID={pid}。");
+        }
+        catch (ArgumentException)
+        {
+            Log($"{service.Name} 进程 PID={pid} 已退出。");
         }
         catch (Exception ex)
         {
-            Log($"停止 {service.Name} 进程树失败: {ex.Message}");
-        }
-        finally
-        {
-            service.Process = null;
+            Log($"停止 {service.Name} 进程 PID={pid} 失败: {ex.Message}");
         }
     }
 

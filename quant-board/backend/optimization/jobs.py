@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from concurrent.futures import Future, ThreadPoolExecutor
+from contextlib import nullcontext
 from typing import Any, Callable
 
 from backend.data.database import SessionLocal
 from backend.data.json_codec import dumps_json_field
 from backend.data.models import BacktestRun, OptimizationRun
-from backend.data.repository import Repository
+from backend.data.repository_factory import create_repository, storage_source_label
 from backend.optimization.runner import OptimizationRunner
 from backend.utils import stable_hash
 
@@ -71,8 +72,8 @@ def _run_job(
     try:
         result = OptimizationRunner().run(frames, request)
         backtest_artifacts = result.pop("backtestArtifacts", []) or []
-        with session_factory() as session:
-            repo = Repository(session)
+        with _job_session(session_factory) as session:
+            repo = create_repository(session)
             for artifact in backtest_artifacts:
                 artifact_request = artifact.get("request") or {}
                 artifact_result = artifact.get("result") or {}
@@ -110,8 +111,8 @@ def _run_job(
                 "details": {"runId": run_id},
             },
         }
-        with session_factory() as session:
-            Repository(session).save_optimization_run(
+        with _job_session(session_factory) as session:
+            create_repository(session).save_optimization_run(
                 OptimizationRun(
                     id=run_id,
                     dataset_id=dataset_id,
@@ -124,3 +125,9 @@ def _run_job(
                     result_json=dumps_json_field(failure),
                 )
             )
+
+
+def _job_session(session_factory: Callable[[], Any]) -> Any:
+    if storage_source_label() == "mongodb":
+        return nullcontext(None)
+    return session_factory()

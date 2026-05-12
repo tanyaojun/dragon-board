@@ -21,6 +21,17 @@ def run_after_market_once(
     steps = ["dailySnapshotBackup", "archive", "pushArchiveBackup", "pruneBackup"]
 
     settings = get_settings()
+    if settings.storage_backend == "mongodb":
+        return _result(
+            ok=False,
+            started_at=started_at,
+            steps=steps,
+            results={"rejected": {"reason": "mongodb_storage_backend"}},
+            archive_limit=archive_limit,
+            backup_limit=backup_limit,
+            dry_run=dry_run,
+            stopped_at="storageBackend",
+        )
     snapshot_type = _first_snapshot_type(settings.archive_auto_snapshot_types)
     init_db()
     with SessionLocal() as session:

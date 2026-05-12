@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,13 @@ from backend.data.dataset_service import DatasetService
 from backend.data.json_compaction import compact_json_fields
 from backend.data.legacy_split_migration import migrate_legacy_db
 from backend.data.migration import SnapshotMigrationService
+from backend.data.mongodb_migration import (
+    MongoMigrationPlan,
+    apply_mongodb_migration,
+    get_mongodb_database,
+    plan_mongodb_migration,
+)
+from backend.data.mongodb_backup import get_mongodb_backup_service
 from backend.data.repository import Repository
 from backend.data.schemas import ImportDatasetRequest
 from backend.data.storage_inspector import inspect_storage
@@ -57,9 +65,20 @@ def parse_csv_list(value: str | None) -> list[str]:
     return [item.strip() for item in (value or "").split(",") if item.strip()]
 
 
-def cmd_import_idb(args: argparse.Namespace) -> None:
+def reject_legacy_storage_command_in_mongodb(command: str) -> None:
+    if get_settings().storage_backend == "mongodb":
+        raise SystemExit(f"{command} is disabled after MongoDB migration; use MongoDB backup/migration commands instead")
+
+
+def runtime_session():
     init_db()
-    with SessionLocal() as session:
+    if get_settings().storage_backend == "mongodb":
+        return nullcontext(None)
+    return SessionLocal()
+
+
+def cmd_import_idb(args: argparse.Namespace) -> None:
+    with runtime_session() as session:
         request = ImportDatasetRequest(
             source_type=args.source,
             source_path=args.path,
@@ -72,8 +91,7 @@ def cmd_import_idb(args: argparse.Namespace) -> None:
 
 
 def cmd_build_dataset(args: argparse.Namespace) -> None:
-    init_db()
-    with SessionLocal() as session:
+    with runtime_session() as session:
         request = ImportDatasetRequest(
             source_type="sqlite_snapshots",
             source_dataset_id=args.source_dataset_id,
@@ -88,18 +106,19 @@ def cmd_build_dataset(args: argparse.Namespace) -> None:
 
 
 def cmd_list_datasets(_: argparse.Namespace) -> None:
-    init_db()
-    with SessionLocal() as session:
+    with runtime_session() as session:
         print_json(DatasetService(session).list_datasets())
 
 
 def cmd_push_backup(args: argparse.Namespace) -> None:
+    reject_legacy_storage_command_in_mongodb("push-backup")
     init_db()
     with SessionLocal() as session:
         print_json(BackupSyncService(session).push_all_to_backup(full_history=args.full_history))
 
 
 def cmd_push_outbox(args: argparse.Namespace) -> None:
+    reject_legacy_storage_command_in_mongodb("push-outbox")
     init_db()
     with SessionLocal() as session:
         repo = Repository(session, enable_backup=False)
@@ -107,12 +126,14 @@ def cmd_push_outbox(args: argparse.Namespace) -> None:
 
 
 def cmd_pull_backup(_: argparse.Namespace) -> None:
+    reject_legacy_storage_command_in_mongodb("pull-backup")
     init_db()
     with SessionLocal() as session:
         print_json(BackupSyncService(session).pull_backup_to_primary())
 
 
 def cmd_smoke_backup(_: argparse.Namespace) -> None:
+    reject_legacy_storage_command_in_mongodb("smoke-backup")
     backup = get_backup_client()
     if not backup:
         print_json({"ok": False, "configured": False, "error": "supabase backup is not configured"})
@@ -121,10 +142,12 @@ def cmd_smoke_backup(_: argparse.Namespace) -> None:
 
 
 def cmd_prune_backup(args: argparse.Namespace) -> None:
+    reject_legacy_storage_command_in_mongodb("prune-backup")
     print_json(run_backup_retention_once(dry_run=args.dry_run))
 
 
 def cmd_migrate_snapshots(args: argparse.Namespace) -> None:
+    reject_legacy_storage_command_in_mongodb("migrate-snapshots")
     init_db()
     with SessionLocal() as session:
         request = {
@@ -140,8 +163,11 @@ def cmd_migrate_snapshots(args: argparse.Namespace) -> None:
 
 
 def cmd_verify_themes(args: argparse.Namespace) -> None:
-    init_theme_db()
     payload = json.loads(Path(args.path).read_text(encoding="utf-8"))
+    if get_settings().storage_backend == "mongodb":
+        print_json(ThemeMigrationService(None).verify_mapping(payload))
+        return
+    init_theme_db()
     with ThemeSessionLocal() as session:
         print_json(ThemeMigrationService(session).verify_mapping(payload))
 
@@ -153,6 +179,7 @@ def cmd_inspect_storage(args: argparse.Namespace) -> None:
 
 
 def cmd_migrate_legacy_db(args: argparse.Namespace) -> None:
+    reject_legacy_storage_command_in_mongodb("migrate-legacy-db")
     settings = get_settings()
     print_json(
         migrate_legacy_db(
@@ -165,6 +192,7 @@ def cmd_migrate_legacy_db(args: argparse.Namespace) -> None:
 
 
 def cmd_compact_json_fields(args: argparse.Namespace) -> None:
+    reject_legacy_storage_command_in_mongodb("compact-json-fields")
     settings = get_settings()
     targets = [args.database_url] if args.database_url else [settings.snapshot_database_url, settings.research_database_url]
     results = [
@@ -181,6 +209,7 @@ def cmd_compact_json_fields(args: argparse.Namespace) -> None:
 
 
 def cmd_archive_snapshots(args: argparse.Namespace) -> None:
+    reject_legacy_storage_command_in_mongodb("archive-snapshots")
     init_db()
     with SessionLocal() as session:
         print_json(
@@ -196,6 +225,7 @@ def cmd_archive_snapshots(args: argparse.Namespace) -> None:
 
 
 def cmd_archive_research(args: argparse.Namespace) -> None:
+    reject_legacy_storage_command_in_mongodb("archive-research")
     init_db()
     with SessionLocal() as session, ResearchSessionLocal() as research_session:
         print_json(
@@ -210,18 +240,21 @@ def cmd_archive_research(args: argparse.Namespace) -> None:
 
 
 def cmd_verify_archive(args: argparse.Namespace) -> None:
+    reject_legacy_storage_command_in_mongodb("verify-archive")
     init_db()
     with SessionLocal() as session:
         print_json(ArchiveService(session).verify_archive(args.archive_id))
 
 
 def cmd_restore_archive(args: argparse.Namespace) -> None:
+    reject_legacy_storage_command_in_mongodb("restore-archive")
     init_db()
     with SessionLocal() as session:
         print_json(ArchiveService(session).restore_archive(args.archive_id, dry_run=bool(args.dry_run), apply=bool(args.apply)))
 
 
 def cmd_archive_auto_once(args: argparse.Namespace) -> None:
+    reject_legacy_storage_command_in_mongodb("archive-auto-once")
     init_db()
     print_json(run_archive_auto_once(args.limit))
 
@@ -235,6 +268,7 @@ def cmd_smoke_object_backup(_: argparse.Namespace) -> None:
 
 
 def cmd_push_archive_backup(args: argparse.Namespace) -> None:
+    reject_legacy_storage_command_in_mongodb("push-archive-backup")
     init_db()
     with SessionLocal() as session:
         result = ArchiveService(session).push_archive_backup(limit=args.limit)
@@ -242,6 +276,7 @@ def cmd_push_archive_backup(args: argparse.Namespace) -> None:
 
 
 def cmd_backup_snapshot_day(args: argparse.Namespace) -> None:
+    reject_legacy_storage_command_in_mongodb("backup-snapshot-day")
     init_db()
     with SessionLocal() as session:
         service = ArchiveService(session)
@@ -272,6 +307,7 @@ def cmd_backup_snapshot_day(args: argparse.Namespace) -> None:
 
 
 def cmd_after_market_once(args: argparse.Namespace) -> None:
+    reject_legacy_storage_command_in_mongodb("after-market-once")
     print_json(
         run_after_market_once(
             archive_limit=args.archive_limit,
@@ -281,7 +317,75 @@ def cmd_after_market_once(args: argparse.Namespace) -> None:
     )
 
 
+def cmd_migrate_mongodb(args: argparse.Namespace) -> None:
+    settings = get_settings()
+    if args.apply and args.dry_run:
+        raise SystemExit("choose either --dry-run or --apply, not both")
+    plan = MongoMigrationPlan(
+        snapshot_db=Path(args.snapshot_db or settings.warehouse_dir / "quant_board_snapshots.db"),
+        research_db=Path(args.research_db or settings.warehouse_dir / "quant_board_research.db"),
+        theme_db=Path(args.theme_db or settings.warehouse_dir / "themeDATA.db"),
+        stock_json=Path(args.stock_json or settings.project_root.parent / "public" / "data" / "stock_code.json"),
+        target_database=args.target_database or settings.mongodb_database,
+    )
+    if args.apply:
+        db = get_mongodb_database(
+            settings.mongodb_uri,
+            plan.target_database,
+            connect_timeout_ms=settings.mongodb_connect_timeout_ms,
+            server_selection_timeout_ms=settings.mongodb_server_selection_timeout_ms,
+        )
+        print_json(
+            apply_mongodb_migration(
+                plan,
+                db,
+                replace_confirmed=bool(args.replace_confirmed),
+                batch_size=args.batch_size,
+            )
+        )
+        return
+    print_json(plan_mongodb_migration(plan))
+
+
+def cmd_backup_mongodb(args: argparse.Namespace) -> None:
+    if not args.full:
+        raise SystemExit("only --full MongoDB backup is supported")
+    settings = get_settings()
+    db = get_mongodb_database(
+        settings.mongodb_uri,
+        settings.mongodb_database,
+        connect_timeout_ms=settings.mongodb_connect_timeout_ms,
+        server_selection_timeout_ms=settings.mongodb_server_selection_timeout_ms,
+    )
+    service = get_mongodb_backup_service()
+    result = service.create_full_backup(db)
+    if result.get("ok"):
+        result["verify"] = service.verify_backup(result["backupId"])
+    print_json(result)
+
+
+def cmd_verify_mongodb_backup(args: argparse.Namespace) -> None:
+    print_json(get_mongodb_backup_service().verify_backup(args.backup_id))
+
+
+def cmd_push_mongodb_backup(args: argparse.Namespace) -> None:
+    print_json(get_mongodb_backup_service().push_backup(args.backup_id))
+
+
+def cmd_pull_mongodb_backup(args: argparse.Namespace) -> None:
+    print_json(get_mongodb_backup_service().pull_backup(args.backup_id, dry_run=bool(args.dry_run)))
+
+
+def cmd_list_mongodb_backups(_: argparse.Namespace) -> None:
+    print_json(get_mongodb_backup_service().list_backups())
+
+
+def cmd_prune_mongodb_backups(args: argparse.Namespace) -> None:
+    print_json(get_mongodb_backup_service().prune_local_backups(dry_run=bool(args.dry_run)))
+
+
 def cmd_pull_archive_backup(args: argparse.Namespace) -> None:
+    reject_legacy_storage_command_in_mongodb("pull-archive-backup")
     init_db()
     with SessionLocal() as session:
         result = ArchiveService(session).pull_archive_backup(
@@ -293,6 +397,7 @@ def cmd_pull_archive_backup(args: argparse.Namespace) -> None:
 
 
 def cmd_verify_snapshot_migration(args: argparse.Namespace) -> None:
+    reject_legacy_storage_command_in_mongodb("verify-snapshot-migration")
     init_db()
     source_report = json.loads(Path(args.source_report).read_text(encoding="utf-8"))
     expected = source_report.get("report") if isinstance(source_report.get("report"), dict) else source_report
@@ -320,14 +425,12 @@ def cmd_verify_snapshot_migration(args: argparse.Namespace) -> None:
 
 
 def cmd_inspect_research_storage(args: argparse.Namespace) -> None:
-    init_db()
-    with SessionLocal() as session:
+    with runtime_session() as session:
         print_json(BacktestService(session).research_storage_summary())
 
 
 def cmd_delete_backtest(args: argparse.Namespace) -> None:
-    init_db()
-    with SessionLocal() as session:
+    with runtime_session() as session:
         result = BacktestService(session).delete_run(args.run_id)
     if result is None:
         raise SystemExit(f"backtest run not found: {args.run_id}")
@@ -335,7 +438,6 @@ def cmd_delete_backtest(args: argparse.Namespace) -> None:
 
 
 def cmd_cleanup_research(args: argparse.Namespace) -> None:
-    init_db()
     payload = {
         "olderThanDays": args.older_than_days,
         "keepLatestPerGroup": args.keep_latest_per_group,
@@ -344,7 +446,7 @@ def cmd_cleanup_research(args: argparse.Namespace) -> None:
         "includeFailed": args.include_failed,
         "confirm": bool(args.apply),
     }
-    with SessionLocal() as session:
+    with runtime_session() as session:
         service = BacktestService(session)
         result = service.cleanup_research(payload, apply=bool(args.apply))
         if args.apply and args.vacuum:
@@ -394,15 +496,13 @@ def build_ranktrend_payload(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def cmd_run_ranktrend(args: argparse.Namespace) -> None:
-    init_db()
-    with SessionLocal() as session:
+    with runtime_session() as session:
         payload = build_ranktrend_payload(args)
         print_json(BacktestService(session).run_ranktrend(payload))
 
 
 def cmd_run_theme_trend(args: argparse.Namespace) -> None:
-    init_db()
-    with SessionLocal() as session:
+    with runtime_session() as session:
         payload = {
             "dataset_id": args.dataset_id,
             "snapshot_type": args.snapshot_type,
@@ -419,8 +519,7 @@ def cmd_run_theme_trend(args: argparse.Namespace) -> None:
 
 
 def cmd_run_theme_confluence(args: argparse.Namespace) -> None:
-    init_db()
-    with SessionLocal() as session:
+    with runtime_session() as session:
         payload = {
             "dataset_id": args.dataset_id,
             "snapshot_type": args.snapshot_type,
@@ -435,7 +534,6 @@ def cmd_run_theme_confluence(args: argparse.Namespace) -> None:
 
 
 def cmd_optimize_theme_trend(args: argparse.Namespace) -> None:
-    init_db()
     payload = {
         "dataset_id": args.dataset_id,
         "snapshot_type": args.snapshot_type,
@@ -445,12 +543,11 @@ def cmd_optimize_theme_trend(args: argparse.Namespace) -> None:
         "trials": args.trials,
         "objective": args.objective,
     }
-    with SessionLocal() as session:
+    with runtime_session() as session:
         print_json(OptimizationService(session).run_theme_trend(payload))
 
 
 def cmd_optimize_theme_confluence(args: argparse.Namespace) -> None:
-    init_db()
     payload = {
         "dataset_id": args.dataset_id,
         "snapshot_type": args.snapshot_type,
@@ -462,13 +559,12 @@ def cmd_optimize_theme_confluence(args: argparse.Namespace) -> None:
     }
     if args.parameter_grid:
         payload["parameterGrid"] = json_loads(args.parameter_grid, {})
-    with SessionLocal() as session:
+    with runtime_session() as session:
         print_json(OptimizationService(session).run_theme_confluence(payload, wait=not args.no_wait))
 
 
 def cmd_compare_backtests(args: argparse.Namespace) -> None:
-    init_db()
-    with SessionLocal() as session:
+    with runtime_session() as session:
         try:
             print_json(BacktestService(session).compare_runs(args.run_ids, parse_csv_list(args.metrics)))
         except LookupError as error:
@@ -481,8 +577,7 @@ def cmd_compare_backtests(args: argparse.Namespace) -> None:
 
 
 def cmd_export_report(args: argparse.Namespace) -> None:
-    init_db()
-    with SessionLocal() as session:
+    with runtime_session() as session:
         report = BacktestService(session).export_report(args.run_id)
         if report is None:
             print_json({"ok": False, "error": {"code": "backtest_run_not_found", "runId": args.run_id}})
@@ -494,8 +589,7 @@ def cmd_export_report(args: argparse.Namespace) -> None:
 
 
 def cmd_optimize_ranktrend(args: argparse.Namespace) -> None:
-    init_db()
-    with SessionLocal() as session:
+    with runtime_session() as session:
         payload = {
             "dataset_id": args.dataset_id,
             "snapshot_type": args.snapshot_type,
@@ -521,14 +615,12 @@ def cmd_optimize_ranktrend(args: argparse.Namespace) -> None:
 
 
 def cmd_validate_golden(args: argparse.Namespace) -> None:
-    init_db()
-    with SessionLocal() as session:
+    with runtime_session() as session:
         print_json(GoldenService(session).validate({"caseId": args.case_id, "path": args.path, "tolerance": args.tolerance}))
 
 
 def cmd_show_report(args: argparse.Namespace) -> None:
-    init_db()
-    with SessionLocal() as session:
+    with runtime_session() as session:
         print_json(BacktestService(session).get_run(args.run_id) or {"error": "run not found"})
 
 
@@ -659,6 +751,42 @@ def build_parser() -> argparse.ArgumentParser:
     after_market_cmd.add_argument("--backup-limit", type=int, default=None)
     after_market_cmd.add_argument("--dry-run", action="store_true")
     after_market_cmd.set_defaults(func=cmd_after_market_once)
+
+    migrate_mongodb_cmd = sub.add_parser("migrate-mongodb", help="Inspect SQLite sources for one-shot MongoDB migration")
+    migrate_mongodb_cmd.add_argument("--snapshot-db", default=None)
+    migrate_mongodb_cmd.add_argument("--research-db", default=None)
+    migrate_mongodb_cmd.add_argument("--theme-db", default=None)
+    migrate_mongodb_cmd.add_argument("--stock-json", default=None)
+    migrate_mongodb_cmd.add_argument("--target-database", default=None)
+    migrate_mongodb_cmd.add_argument("--batch-size", type=int, default=1000)
+    migrate_mongodb_cmd.add_argument("--dry-run", action="store_true")
+    migrate_mongodb_cmd.add_argument("--apply", action="store_true")
+    migrate_mongodb_cmd.add_argument("--replace-confirmed", action="store_true")
+    migrate_mongodb_cmd.set_defaults(func=cmd_migrate_mongodb)
+
+    backup_mongodb_cmd = sub.add_parser("backup-mongodb", help="Create a full local MongoDB backup")
+    backup_mongodb_cmd.add_argument("--full", action="store_true", required=True)
+    backup_mongodb_cmd.set_defaults(func=cmd_backup_mongodb)
+
+    verify_mongodb_backup_cmd = sub.add_parser("verify-mongodb-backup", help="Verify a local MongoDB backup")
+    verify_mongodb_backup_cmd.add_argument("--backup-id", required=True)
+    verify_mongodb_backup_cmd.set_defaults(func=cmd_verify_mongodb_backup)
+
+    push_mongodb_backup_cmd = sub.add_parser("push-mongodb-backup", help="Push a verified MongoDB backup to R2/S3")
+    push_mongodb_backup_cmd.add_argument("--backup-id", required=True)
+    push_mongodb_backup_cmd.set_defaults(func=cmd_push_mongodb_backup)
+
+    pull_mongodb_backup_cmd = sub.add_parser("pull-mongodb-backup", help="Pull a MongoDB backup into restore-staging")
+    pull_mongodb_backup_cmd.add_argument("--backup-id", required=True)
+    pull_mongodb_backup_cmd.add_argument("--dry-run", action="store_true")
+    pull_mongodb_backup_cmd.set_defaults(func=cmd_pull_mongodb_backup)
+
+    list_mongodb_backups_cmd = sub.add_parser("list-mongodb-backups", help="List local MongoDB backups")
+    list_mongodb_backups_cmd.set_defaults(func=cmd_list_mongodb_backups)
+
+    prune_mongodb_backups_cmd = sub.add_parser("prune-mongodb-backups", help="Prune old local MongoDB backup files")
+    prune_mongodb_backups_cmd.add_argument("--dry-run", action="store_true")
+    prune_mongodb_backups_cmd.set_defaults(func=cmd_prune_mongodb_backups)
 
     pull_archive_cmd = sub.add_parser("pull-archive-backup", help="Pull Parquet archives from R2/S3 into local storage")
     pull_archive_cmd.add_argument("--archive-id", required=True)
