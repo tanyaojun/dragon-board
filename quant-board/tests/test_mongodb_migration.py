@@ -10,6 +10,7 @@ from backend.data.mongodb_migration import (
     build_mongodb_indexes,
     map_sqlite_row_to_mongo,
     plan_mongodb_migration,
+    verify_mongodb_migration,
 )
 
 
@@ -20,7 +21,19 @@ class FakeCollection:
         self.deleted = False
 
     def count_documents(self, _filter: dict[str, object]) -> int:
-        return len(self.rows)
+        return len([row for row in self.rows if _matches(row, _filter)])
+
+    def find(self, _filter: dict[str, object] | None = None) -> list[dict[str, object]]:
+        return [row for row in self.rows if _matches(row, _filter or {})]
+
+    def index_information(self) -> dict[str, dict[str, object]]:
+        return {
+            str(item.get("name") or "_".join(f"{key}_{direction}" for key, direction in item["keys"])): {
+                "key": item["keys"],
+                "unique": item.get("unique", False),
+            }
+            for item in self.indexes
+        }
 
     def delete_many(self, _filter: dict[str, object]) -> None:
         self.rows.clear()
@@ -237,6 +250,105 @@ def test_apply_mongodb_migration_writes_structured_documents_and_indexes(tmp_pat
     assert fake_db["snapshot_frames"].indexes
 
 
+def test_apply_mongodb_migration_deduplicates_stock_names_and_audits_duplicates(tmp_path: Path) -> None:
+    snapshot_db, research_db, theme_db, stock_json = _create_minimal_sources(tmp_path)
+    stock_json.write_text(
+        """
+        [
+          {"code":"000001","name":"平安银行","market":"SZ","type":"stock"},
+          {"code":"000001","name":"平安银行","market":"SZ","type":"stock"}
+        ]
+        """,
+        encoding="utf-8",
+    )
+    fake_db = FakeMongoDatabase()
+
+    result = apply_mongodb_migration(
+        MongoMigrationPlan(snapshot_db, research_db, theme_db, stock_json, "dragon_board_quant"),
+        fake_db,
+        replace_confirmed=True,
+    )
+
+    assert result["ok"] is True
+    assert result["collections"]["stock_names"]["sourceRows"] == 2
+    assert result["collections"]["stock_names"]["insertedRows"] == 1
+    assert fake_db["stock_names"].rows == [
+        {
+            "code": "000001",
+            "name": "平安银行",
+            "market": "SZ",
+            "type": "stock",
+            "nameNormalized": "平安银行",
+            "pinyinInitials": "",
+            "pinyinFull": "",
+            "searchText": "000001 平安银行 SZ stock",
+            "active": True,
+        }
+    ]
+    assert result["audit"][0]["collection"] == "stock_names"
+    assert result["audit"][0]["reason"] == "duplicate_code"
+    assert fake_db["migration_audit"].rows[0]["opType"] == "mongodb_migration"
+    assert fake_db["migration_audit"].rows[0]["reason"] == "duplicate_code"
+
+
+def test_apply_mongodb_migration_can_skip_research_source(tmp_path: Path) -> None:
+    snapshot_db, research_db, theme_db, stock_json = _create_minimal_sources(tmp_path)
+    fake_db = FakeMongoDatabase()
+
+    result = apply_mongodb_migration(
+        MongoMigrationPlan(
+            snapshot_db,
+            research_db,
+            theme_db,
+            stock_json,
+            "dragon_board_quant",
+            include_research=False,
+        ),
+        fake_db,
+        replace_confirmed=True,
+    )
+
+    assert result["ok"] is True
+    assert result["collections"]["snapshot_frames"]["insertedRows"] == 1
+    assert result["collections"]["backtest_runs"]["sourceRows"] == 0
+    assert result["collections"]["backtest_runs"]["insertedRows"] == 0
+    assert result["collections"]["backtest_runs"]["skipped"] is True
+    assert result["collections"]["backtest_runs"]["sourceReadable"] is False
+    assert fake_db["snapshot_frames"].rows
+    assert fake_db["themes"].rows
+    assert fake_db["backtest_runs"].rows == []
+    assert fake_db["backtest_runs"].indexes
+
+
+def test_skip_research_does_not_require_readable_research_db(tmp_path: Path) -> None:
+    snapshot_db, research_db, theme_db, stock_json = _create_minimal_sources(tmp_path)
+    research_db.write_text("not a sqlite database", encoding="utf-8")
+    fake_db = FakeMongoDatabase()
+
+    plan = MongoMigrationPlan(
+        snapshot_db,
+        research_db,
+        theme_db,
+        stock_json,
+        "dragon_board_quant",
+        include_research=False,
+    )
+
+    dry_run = plan_mongodb_migration(plan)
+    result = apply_mongodb_migration(plan, fake_db, replace_confirmed=True)
+
+    assert dry_run["ok"] is True
+    assert dry_run["collections"]["backtest_runs"]["sourceRows"] == 0
+    assert dry_run["collections"]["backtest_runs"]["skipped"] is True
+    assert dry_run["collections"]["backtest_runs"]["sourceReadable"] is False
+    assert result["ok"] is True
+    assert result["collections"]["backtest_runs"]["sourceRows"] == 0
+    assert result["collections"]["backtest_runs"]["skipped"] is True
+    assert result["collections"]["backtest_runs"]["sourceReadable"] is False
+    assert fake_db["snapshot_frames"].rows
+    assert fake_db["backtest_runs"].rows == []
+
+
 def test_get_mongodb_database_requires_uri() -> None:
     from backend.data.mongodb_migration import get_mongodb_database
 
@@ -246,6 +358,101 @@ def test_get_mongodb_database_requires_uri() -> None:
         assert "QUANT_BOARD_MONGODB_URI" in str(exc)
     else:
         raise AssertionError("expected missing MongoDB URI to fail")
+
+
+def test_mongodb_inspect_and_verify_cli_commands_parse() -> None:
+    from backend.cli import build_parser
+
+    parser = build_parser()
+
+    inspect_args = parser.parse_args(["inspect-mongodb"])
+    verify_args = parser.parse_args(["verify-mongodb-migration", "--code", "000001", "--code", "600001"])
+
+    assert inspect_args.func.__name__ == "cmd_inspect_mongodb"
+    assert verify_args.func.__name__ == "cmd_verify_mongodb_migration"
+    assert verify_args.code == ["000001", "600001"]
+
+
+def test_verify_mongodb_migration_reports_counts_indexes_and_continuity() -> None:
+    fake_db = FakeMongoDatabase()
+    for name in ALL_COLLECTIONS:
+        fake_db[name]
+    fake_db["datasets"].rows.append({"id": "dragonboard_live"})
+    fake_db["snapshot_frames"].rows.extend(
+        [
+            {
+                "datasetId": "dragonboard_live",
+                "snapshotId": "s1",
+                "type": "half_hour",
+                "tradingDate": "2026-05-11",
+                "timestamp": 1,
+                "stockRowCount": 1,
+            },
+            {
+                "datasetId": "dragonboard_live",
+                "snapshotId": "s2",
+                "type": "half_hour",
+                "tradingDate": "2026-05-12",
+                "timestamp": 2,
+                "stockRowCount": 1,
+            },
+        ]
+    )
+    fake_db["snapshot_stock_rows"].rows.extend(
+        [
+            {"datasetId": "dragonboard_live", "snapshotId": "s1", "code": "000001", "rank": 3},
+            {"datasetId": "dragonboard_live", "snapshotId": "s2", "code": "000001", "rank": 2},
+        ]
+    )
+    fake_db["snapshot_sector_rows"].rows.extend(
+        [
+            {"datasetId": "dragonboard_live", "snapshotId": "s1", "rowId": "sector-1"},
+            {"datasetId": "dragonboard_live", "snapshotId": "s2", "rowId": "sector-2"},
+        ]
+    )
+    fake_db["stock_names"].rows.append({"code": "000001", "active": True})
+    for name, indexes in build_mongodb_indexes().items():
+        fake_db[name].indexes.extend(indexes)
+
+    result = verify_mongodb_migration(
+        fake_db,
+        dataset_id="dragonboard_live",
+        snapshot_type="half_hour",
+        codes=["000001"],
+    )
+
+    assert result["ok"] is True
+    assert result["counts"]["snapshot_frames"] == 2
+    assert result["indexes"]["missing"] == []
+    assert result["continuity"]["emptyFrames"] == []
+    assert result["rankSeries"]["000001"]["snapshotCount"] == 2
+    assert result["rankSeries"]["000001"]["missingSnapshots"] == []
+
+
+def test_verify_mongodb_migration_fails_on_missing_rows_and_indexes() -> None:
+    fake_db = FakeMongoDatabase()
+    fake_db["snapshot_frames"].rows.append(
+        {
+            "datasetId": "dragonboard_live",
+            "snapshotId": "empty",
+            "type": "half_hour",
+            "tradingDate": "2026-05-12",
+            "timestamp": 1,
+            "stockRowCount": 1,
+        }
+    )
+
+    result = verify_mongodb_migration(
+        fake_db,
+        dataset_id="dragonboard_live",
+        snapshot_type="half_hour",
+        codes=["000001"],
+    )
+
+    assert result["ok"] is False
+    assert result["indexes"]["missing"]
+    assert result["continuity"]["emptyFrames"][0]["snapshotId"] == "empty"
+    assert result["rankSeries"]["000001"]["missingSnapshots"] == ["empty"]
 
 
 def _create_minimal_sources(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
@@ -340,3 +547,21 @@ def _create_minimal_sources(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
             """
         )
     return snapshot_db, research_db, theme_db, stock_json
+
+
+def _matches(row: dict[str, object], query: dict[str, object]) -> bool:
+    for key, expected in query.items():
+        actual = row.get(key)
+        if isinstance(expected, dict):
+            if "$in" in expected and actual not in expected["$in"]:
+                return False
+            if "$gte" in expected and actual < expected["$gte"]:
+                return False
+            if "$lte" in expected and actual > expected["$lte"]:
+                return False
+            if "$lt" in expected and actual >= expected["$lt"]:
+                return False
+            continue
+        if actual != expected:
+            return False
+    return True

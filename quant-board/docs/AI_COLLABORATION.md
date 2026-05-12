@@ -13,15 +13,15 @@
 - Dragon Board 根项目只提供实时看板、快照数据和 TypeScript golden 导出。
 - 默认快照：`snapshot_type=half_hour`。
 - 可选快照：`quarter_hour` 可用于细颗粒度研究，但必须显式选择，不能替代默认口径。
-- 存储主链：SQLite 分为快照热库 `quant_board_snapshots.db`、研究热库 `quant_board_research.db` 和题材映射主库 `themeDATA.db`；Parquet 是历史冷归档，DuckDB 是后端只读归档查询引擎，R2/S3 是大体积对象备份主线；Supabase 只作为 `dragonboard_live` 最近 10 个交易日的轻量灾备库，实施和恢复规则以 [database-migration-plan.md](database-migration-plan.md) 为准。
-- 当前同步批次：`sync_outbox` 只覆盖快照 ingest、数据集 bundle；回测、优化和 Golden 保存在 research SQLite，不进入 Supabase Free 版备份目标。历史 JSON 迁移入口是 `POST /api/migrations/snapshots/import-json`；自动同步默认关闭，只补传到期 outbox。手工 `push-backup` 默认按本地 SQLite 最近 10 个交易日补推，只有显式 `--full-history` 才允许全历史推送。
-- SQLite 替换 IndexedDB 的当前切口：Dragon Board 正式写入先查询 QuantBoard SQLite 是否已有同一 `snapshot_id`，缺失时走 `POST /api/snapshots/ingest`；正式读口由根前端 `src/services/snapshot/backendRead.ts` 统一调用 QuantBoard `GET /api/snapshots/frames`、`/api/snapshots/records`、`/api/snapshots/stock-rows`、`/api/snapshots/sector-rows`；IndexedDB 快照缓存默认关闭，只作为迁移源和显式缓存。浏览器端旧的 IndexedDB 校验/补齐入口与 `five_minute` 本地入口已收口，不再作为正式合同。
-- 题材映射 SQLite 切口：Dragon Board `ThemeDataService` 正式读口调用 QuantBoard `GET /api/themes/mapping`，数据来自 `themeDATA.db`；V11 后运行时不再回落浏览器 IndexedDB、本地静态 JSON 或 `/api/themes/batch`，旧浏览器 `ThemeDataDB/theme_mapping` 只保留为 `POST /api/migrations/themes/import-json` 的离线历史迁移源。
-- failover 当前切口：SQLite 主库不可用但 Supabase 同构备份库可写时，`POST /api/snapshots/ingest` 可返回 `status=backup_only` 并写入备库；SQLite 恢复后必须执行 `pull-backup` 收敛，不能把 `backup_only` 当作本地主库已恢复。
+- 存储主链：当前运行主库是 MongoDB。SQLite/Supabase/Parquet 旧链路只保留为迁移前历史说明、审计/离线备份资产或 Mongo 模式下显式禁用的维护入口；实施状态、备份恢复和禁用清单以 [mongodb-migration-plan.md](mongodb-migration-plan.md) 为准。
+- 当前同步批次：MongoDB 模式不再登记 SQLite/Supabase `sync_outbox`，不再运行 Supabase 自动同步、`push-backup`、`prune-backup` 或 SQLite 90 天明细归档作为生产链路；旧 API/CLI 在 Mongo 模式下应返回 410 或拒绝执行。
+- MongoDB 替换 IndexedDB/SQLite 的当前切口：Dragon Board 正式写入和读取仍只通过 QuantBoard 后端 API；`POST /api/snapshots/ingest` 写入 MongoDB，`GET /api/snapshots/frames`、`/api/snapshots/records`、`/api/snapshots/stock-rows`、`/api/snapshots/sector-rows` 从 MongoDB 读取并保持 camelCase 字段合同。IndexedDB 和历史 JSON 只作为迁移前来源，不再作为正式 fallback。
+- 题材映射当前切口：Dragon Board `ThemeDataService` 正式读口调用 QuantBoard `GET /api/themes/mapping`，数据来自 MongoDB 题材集合；旧 `themeDATA.db` 和旧浏览器 `ThemeDataDB/theme_mapping` 只作为迁移源或审计参考。
+- failover 当前切口：不保留 SQLite + Supabase 运行时降级路径。MongoDB 不可用时正式接口必须结构化失败，不返回空列表或 `backup_only` 伪装成功。
 - 题材模块 V2：Dragon Board 快照会写入稳定题材列，QuantBoard 回测会生成 `ThemeCandidateSupport`。默认 `useThemeFactorForExecution=false`，题材只做候选解释；只有显式开启时才参与置信度调整和拥挤风险降级。
 - 题材模块 V12 目标：ThemeTrend 作为与 RankTrend 并列的 QuantBoard 研究链，承接题材趋势、题材共振回测、优化、API/CLI 和报告合同。当前已进入可运行主链，但 TS golden 多场景自动导出、walk-forward/样本外报告和真实 bayesian/tpe 搜索器仍是后续深化项。
-- V12 Phase 1 已完成：ThemeTrend 研究数据合同（`ThemeFactorFrame`、`ThemeStockExposureFrame`、`ThemeSignalRow`、`ThemeQualityReport`）、research SQLite 归一化表（`theme_factor_frames`、`theme_stock_exposures`、`theme_signals`、`theme_quality_reports`）、`ThemeResearchRepository` 和 `ThemeResearchService`（从正式快照事实表回放构建题材研究帧，不修改 `themeDATA.db`）。所有表均保留完整溯源链，质量门禁返回结构化失败。
-- V12 存储口径：ThemeTrend 研究结果只进入 research SQLite，本轮不进入 Supabase、`sync_outbox` 或快照事实库；`themeDATA.db` 只承载题材基础映射，不承载回测、优化或运行态因子结果。
+- V12 Phase 1 已完成：ThemeTrend 研究数据合同（`ThemeFactorFrame`、`ThemeStockExposureFrame`、`ThemeSignalRow`、`ThemeQualityReport`）、研究结果集合/表、`ThemeResearchRepository` 和 `ThemeResearchService`（从正式快照事实回放构建题材研究帧，不修改题材基础映射）。所有记录均保留完整溯源链，质量门禁返回结构化失败。
+- V12 存储口径：MongoDB 模式下 ThemeTrend 新研究结果进入 MongoDB 研究集合；旧 research SQLite 和 `themeDATA.db` 只作为迁移前历史口径，不再作为运行主库。
 - V12 边界：Dragon Board 根项目不新增回测平台；共振策略以 RankTrend 候选为主，ThemeTrend 只能辅助排序、置信度、拥挤风险降级和解释，不得独立制造买入信号。
 - V12 策略口径：`theme_rotation`、`leader_theme_confirmation`、`hotlist_theme_confluence` 必须在执行信号中保留独立入场、降级、过滤和解释字段；Dragon Board 只展示 QuantBoard 研究摘要，不在根项目实现交易模拟。
 - L2 资金流口径：`estimated_l1` 只允许作为观察指标；正式资金流回测必须使用 `broker_l2` 或 `official_l2`，并在质量门禁中保留 `capital_flow_source`、`capital_flow_confidence`、`money_flow_estimated`。
@@ -57,19 +57,19 @@
 6. 数据质量门禁失败必须结构化返回，不允许静默吞掉。
 7. Python 端 rankTrend 输出字段必须能和 golden case 对齐。
 8. 前端展示不得把 `finalSignal` 当成唯一交易结论，应优先展示状态、候选分层、风险、样本质量和交易解释。
-9. SQLite 主库、Supabase 备份库、同步接口、快照入库和 API/CLI 合同变更，必须同批更新对应文档。
-10. Dragon Board 前端不得直连 Supabase；正式快照写库必须走 QuantBoard 后端 API。正式快照判重以 SQLite/后端 `snapshot_id` 为准，不得再以浏览器 IndexedDB 记录存在性作为正式保存条件。
-11. 不得重新引入 Supabase `snapshots.payload` 兼容备份方案；云端表、业务键和索引必须和 SQLite 快照事实库同构。
-12. Supabase Free 版只保留 `dragonboard_live` 最近 10 个交易日快照，`prune-backup` 只能清理云端 Supabase，不得删除本地 SQLite 或 Parquet。
-13. 不得把回测、优化、Golden 或报告大 JSON 重新塞进 Supabase Free 版备份链路；大型研究明细应优先进入 Parquet/R2，近期热数据才留在 SQLite。
+9. MongoDB 主库、备份恢复、禁用旧维护入口、快照入库和 API/CLI 合同变更，必须同批更新对应文档。
+10. Dragon Board 前端不得直连 MongoDB 或 Supabase；正式快照写库必须走 QuantBoard 后端 API。正式快照判重以后端 `dataset_id + snapshot_id` 为准，不得再以浏览器 IndexedDB 记录存在性作为正式保存条件。
+11. 不得重新引入 Supabase `snapshots.payload` 兼容备份方案，也不得恢复 SQLite/Supabase 运行时 failover。
+12. Supabase、旧 Parquet 归档和 SQLite archive retention 只属于迁移前历史口径；MongoDB 主库明细不得因旧 retention/归档任务被删除。
+13. 不得把回测、优化、Golden 或报告大 JSON 重新塞进 Supabase Free 版备份链路；MongoDB 模式下新研究结果进入 MongoDB 研究集合。
 14. DuckDB 只能作为后端只读归档查询引擎，不允许新增前端可传 SQL 的接口。
-15. 逐步替换 IndexedDB 时必须先接入 SQLite 读接口；确认迁移和行数校验完成前，不得删除浏览器历史数据或关闭迁移工具。
-16. 迁移 DataLayer 的 IndexedDB 读写入口时，不得删除或重命名 `SnapshotRecord`、`SnapshotFrameBundle`、`SnapshotStockRow`、`SnapshotSectorRow` 已有字段；SQLite 后端必须承接字段并以 camelCase 返回。
-17. 删除 IndexedDB 历史前必须先完成后端迁移收口与人工验收，确认四张事实表全量行数一致；不要把浏览器端旧 IndexedDB 校验/补齐入口当成正式合同。正式快照缓存默认关闭后，不得重新在 `DataLayer` 或 `snapshotFacade` 正式读写口恢复 IndexedDB fallback；QuantBoard 后端不可用时正式读取必须显式失败。
+15. IndexedDB 替换已经进入 MongoDB 后端读写口阶段；后续不得恢复浏览器 IndexedDB 作为正式读写 fallback，历史数据只作为迁移源或审计参考。
+16. 迁移 DataLayer 的 IndexedDB 读写入口时，不得删除或重命名 `SnapshotRecord`、`SnapshotFrameBundle`、`SnapshotStockRow`、`SnapshotSectorRow` 已有字段；MongoDB 后端 API 必须承接字段并以 camelCase 返回。
+17. 删除 IndexedDB 历史前必须先完成后端迁移收口与人工验收，确认 MongoDB 正式集合行数/文档数与迁移源一致；不要把浏览器端旧 IndexedDB 校验/补齐入口当成正式合同。正式快照缓存默认关闭后，不得重新在 `DataLayer` 或 `snapshotFacade` 正式读写口恢复 IndexedDB fallback；QuantBoard 后端不可用时正式读取必须显式失败。
 18. 优化结果只生成候选参数，不得自动写回 Python、TypeScript、API、CLI、前端表单或文档默认值；CLI 必须支持 `tpe` 和异步提交 `--no-wait` 口径。`optuna_tpe` 仅作为后端兼容别名。
 19. 题材因子不得绕过 RankTrend 独立制造买入信号；执行开关开启时也只能辅助已有候选分层。
-20. 题材基础映射新增或更新必须进入 QuantBoard `themeDATA.db`；不得重新把浏览器 IndexedDB 当成题材主库，也不得把题材静态映射混入快照库或研究库。
-21. V12 ThemeTrend 回测、优化、signals、quality report 和报告结果必须归属 research SQLite local-only 链路；本轮不得进入 Supabase 或 `themeDATA.db`。
+20. 题材基础映射新增或更新必须进入 QuantBoard MongoDB 题材集合；不得重新把浏览器 IndexedDB 或旧 `themeDATA.db` 当成运行主库，也不得把题材静态映射混入快照事实集合或研究集合。
+21. V12 ThemeTrend 回测、优化、signals、quality report 和报告结果在 MongoDB 模式下必须归属 MongoDB 研究集合；不得进入 Supabase 或旧 `themeDATA.db`。
 22. 新增 ThemeTrend API/CLI 合同时必须保留 `dataset_id`、`snapshot_type`、`strategy_version`、`config_hash`、`random_seed`，默认 `snapshot_type=half_hour`，`quarter_hour` 只能显式传入。
 23. 文档或实现涉及 ThemeTrend 时，必须区分“已完成能力”和“V12 目标/拟新增合同/首批落地”，不得把计划中的接口描述成已上线事实。
 24. 资金流策略正式回测不得默认消费 L1 估算主力资金；如显式允许 `estimated_l1`，报告必须标注实验口径和高风险。
@@ -88,7 +88,7 @@
 - README 只放总览、索引和首期硬约束。
 - 专题细节写入对应文档，不把所有内容堆到 README。
 - 修改默认值、策略合同、API 合同时，必须同步更新交叉引用文档。
-- 修改存储、同步、快照入库、数据库表字段、Supabase payload、恢复策略或 API/CLI 请求响应字段时，必须同批更新 [database-migration-plan.md](database-migration-plan.md)、[architecture.md](architecture.md)、[api-cli.md](api-cli.md) 和必要的用户/路线图文档。
+- 修改存储、同步、快照入库、数据库表字段、恢复策略或 API/CLI 请求响应字段时，必须同批更新 [mongodb-migration-plan.md](mongodb-migration-plan.md)、[architecture.md](architecture.md)、[api-cli.md](api-cli.md) 和必要的用户/路线图文档。若只涉及迁移前 SQLite/Supabase 历史说明，再同步 [database-migration-plan.md](database-migration-plan.md)。
 - 发现旧文档把 Dragon Board 根项目描述为回测平台时，必须删除或改为当前 QuantBoard 口径。
 
 ## 给后续 AI 的上下文提示
@@ -96,7 +96,7 @@
 开始新任务时优先阅读：
 
 1. [README.md](README.md)
-2. [database-migration-plan.md](database-migration-plan.md)，如果任务涉及存储、同步、快照入库、恢复或 API/CLI 合同
+2. [mongodb-migration-plan.md](mongodb-migration-plan.md)，如果任务涉及当前存储、同步、快照入库、恢复或 API/CLI 合同
 3. [ranktrend-golden.md](ranktrend-golden.md)
 4. [ranktrend-python-port.md](ranktrend-python-port.md)
 5. 与任务直接相关的专题文档

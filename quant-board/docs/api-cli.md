@@ -10,7 +10,7 @@ QuantBoard API 和 CLI 共用同一套服务层。API 面向轻实验台和自�
 
 Dragon Board 前端调用 QuantBoard 快照 ingest 时会把 `503` 和其他 `5xx` 视为可重试错误；`4xx` 表示请求或数据合同错误，不做自动重试。
 
-SQLite 主库 + Supabase 备份库的完整读写、同步、恢复和冲突规则见 [database-migration-plan.md](database-migration-plan.md)。本文件只记录 API/CLI 对外合同。
+当前运行主库是 MongoDB。MongoDB 备份恢复、旧 SQLite/Supabase/Parquet 维护入口禁用清单和迁移验收见 [mongodb-migration-plan.md](mongodb-migration-plan.md)。本文保留的 SQLite/Supabase/Parquet API/CLI 段落属于迁移前历史合同；在 `QUANT_BOARD_STORAGE_BACKEND=mongodb` 下，这些旧维护入口应返回 410 或由 CLI 拒绝执行，不能作为当前生产链路。
 
 ## 数据集接口
 
@@ -22,22 +22,29 @@ SQLite 主库 + Supabase 备份库的完整读写、同步、恢复和冲突规�
 Invoke-RestMethod http://127.0.0.1:8000/api/health
 ```
 
-返回的 `database` 会同时报告本地 SQLite 主库和 Supabase 备份库状态。默认健康检查走快速路径，不发起 Supabase 网络请求，避免页面状态被云端备份库表结构探测拖慢；需要完整 Supabase 同构表检查时使用 `GET /api/health?deep=true`。
+返回的 `database` 会报告 MongoDB 主库状态；`GET /api/health?deep=true` 还会做更完整的 MongoDB 连接和集合检查。旧 SQLite/Supabase 状态只属于迁移前模式，不是当前 MongoDB 生产健康判定。
 
-- `primary.connected`：本地主库是否可用。
-- `theme.connected`：题材 SQLite 主库 `themeDATA.db` 是否可用。
-- `backup.connected`：默认快速路径为 `null`，表示未做云端探测；`deep=true` 时表示 Supabase REST 备份库是否可用。
-- `backup.schema`：当前要求为 `sqlite_homomorphic`。
-- `backup.missing_or_unreadable_tables`：仅 `deep=true` 时返回，同构表缺失或不可读列表；非空时不能执行正式云端同步。
-- `mode`：当前为 `sqlite_primary_supabase_backup`。
-- `outbox`：待补偿同步队列摘要；字段以当前后端实现为准。
-- `autoSync`：自动 outbox 推送状态、间隔、批量大小和最近一次结果。
-- `archive.autoArchive`：自动归档状态、间隔、批量上限和最近一次结果。
-- `archive.objectBackup`：R2/S3 对象备份是否启用、bucket 是否已配置。
+- `primary.connected`：MongoDB 主库是否可用。
+- `theme.connected`：MongoDB 题材集合是否可用。
+- `mode`：当前应为 `mongodb_primary` 或等价 MongoDB 主库模式。
+- `backup` / `archive`：仅表示 MongoDB dump/R2 备份相关状态；旧 Supabase 同构备份和 SQLite 归档状态不再作为生产健康条件。
 
-目标合同：健康检查必须能让调用方判断主库、备份库、读回退和补偿同步是否可用。新增或改名字段时，必须同批更新本文和 [database-migration-plan.md](database-migration-plan.md)。
+目标合同：健康检查必须能让调用方判断 MongoDB 主库和 MongoDB 备份能力是否可用。新增或改名字段时，必须同批更新本文和 [mongodb-migration-plan.md](mongodb-migration-plan.md)。
+
+## MongoDB 备份与旧维护入口状态
+
+MongoDB 模式下：
+
+- 快照、研究、题材和股票基础数据 API 通过 MongoDB repository 运行。
+- `/api/storage/archive/*` 旧 SQLite/Parquet 归档接口返回 410。
+- `/api/sync/*` 旧 Supabase 同步接口返回 410。
+- `/api/migrations/snapshots/import-json` 返回 410；历史导入只允许走停服迁移脚本。
+- CLI 旧 SQLite/Supabase/Parquet 命令拒绝执行；业务回测、优化、查询命令继续通过 MongoDB repository 运行。
+- MongoDB 备份、校验、R2 上传和拉回恢复命令以 [mongodb-migration-plan.md](mongodb-migration-plan.md) 的当前实施状态为准。
 
 ## Parquet 归档与 DuckDB 查询
+
+本节为迁移前 SQLite/Parquet 历史合同。MongoDB 模式下这些接口不再是生产链路。
 
 ### `POST /api/storage/archive/snapshots/preview`
 
@@ -174,6 +181,8 @@ python -m backend.cli after-market-once --archive-limit 5 --backup-limit 20
 
 ### `POST /api/sync/push-backup`
 
+> MongoDB 模式下该旧 Supabase 同步入口返回 410；以下为迁移前历史合同。
+
 把本地 SQLite 快照库中的数据集和快照事实推送到 Supabase 备份库。回测、优化、Golden 和报告属于 research SQLite，不进入 Supabase Free 版备份目标。
 
 默认只补推 Supabase 保留窗口内的数据，避免 500MB 免费库重新写入全历史。需要一次性全量补推时显式传入 `full_history=true`，或 CLI 使用 `--full-history`。
@@ -278,7 +287,7 @@ Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/sync/pull-backup
 
 ### `POST /api/snapshots/ingest`
 
-Dragon Board 正式快照写入入口。前端提交 v4 snapshot bundle，正常路径先写 SQLite，再登记/更新 Supabase 备份 outbox。Vue 前端不得直连 Supabase，也不得携带数据库密钥。
+Dragon Board 正式快照写入入口。前端提交 v4 snapshot bundle，当前正常路径写入 MongoDB。Vue 前端不得直连 MongoDB 或 Supabase，也不得携带数据库密钥。
 
 ```json
 {
@@ -312,15 +321,15 @@ Dragon Board 正式快照写入入口。前端提交 v4 snapshot bundle，正常
 }
 ```
 
-同一 `idempotencyKey` 重放时返回 `deduped=true`，不会重复写入事实行。若 Supabase 镜像失败，本地 SQLite 写入仍成立，`status` 会是 `retry/failed`，后续由 `push-backup` 补偿。
+同一 `idempotencyKey` 重放时返回 `deduped=true`，不会重复写入事实行。MongoDB 模式不再登记 Supabase outbox，也不通过 `push-backup` 补偿。
 
 正式快照入库要求每个非 `five_minute` frame 至少有一条股票行。若 v4 bundle 中的 `items/records` 热榜为空，或显式 `stockRows` 缺失导致正式 frame 无股票行，接口返回 400，错误信息包含 `formal snapshot hotlist is empty`。历史导入数据中已经存在的空热榜快照仍由回测质量门禁和运行时过滤处理，不通过该正式写入口继续新增。
 
-当 SQLite 主库完全不可用但 Supabase 同构备份库可写时，接口会临时执行 failover 写入，返回 `ok=true`、`status=backup_only`、`outbox=null`，并带上 `failover.active=true`、`reason`、`idempotency_key` 和恢复提示。该路径不会伪造 SQLite outbox；主库恢复后需要执行 `POST /api/sync/pull-backup` 把备份记录拉回 SQLite。若 Supabase 也不可写，接口返回 503。
+MongoDB 不可用时接口必须结构化失败，不回退 Supabase/SQLite 并返回 `backup_only`。
 
 ### `GET /api/snapshots/frames`
 
-从 SQLite 主库读取正式快照聚合帧，用于逐步替换 Dragon Board 对 IndexedDB 的正式分析读取。
+从 MongoDB 主库读取正式快照聚合帧，用于 Dragon Board 正式分析读取。
 
 ```powershell
 Invoke-RestMethod 'http://127.0.0.1:8000/api/snapshots/frames?dataset_id=dragonboard_live&snapshot_type=half_hour&trading_date=2026-04-21'
@@ -328,7 +337,7 @@ Invoke-RestMethod 'http://127.0.0.1:8000/api/snapshots/frames?dataset_id=dragonb
 
 常用查询参数：
 
-- `dataset_id`：可选；缺省时优先 `dragonboard_live`，不存在时读取最新有 frame 的 SQLite 数据集。
+- `dataset_id`：可选；缺省时优先 `dragonboard_live`，不存在时读取最新有 frame 的 MongoDB 数据集。
 - `snapshot_type`：默认 `half_hour`。
 - `trading_date` 或 `start_date/end_date`。
 - `before_trading_date`。
@@ -337,17 +346,17 @@ Invoke-RestMethod 'http://127.0.0.1:8000/api/snapshots/frames?dataset_id=dragonb
 - `sort=asc|desc`。
 - `limit`。
 
-返回 `dataset`、`frames`、`count`、`source=sqlite` 和 `cache`。`frames` 中每项包含 `rows/hotlist/sectors/hotThemes/rotationSummary`，供 Dragon Board `listSnapshotFrameBundles` 直接消费。正式快照不再把浏览器 IndexedDB 当事实读源；`five_minute` 浏览器本地入口也不再保留。
+返回 `dataset`、`frames`、`count`、`source=mongodb` 和 `cache`。`frames` 中每项包含 `rows/hotlist/sectors/hotThemes/rotationSummary`，供 Dragon Board `listSnapshotFrameBundles` 直接消费。正式快照不再把浏览器 IndexedDB 当事实读源；`five_minute` 浏览器本地入口也不再保留。
 
-`frames`、`records`、`stock-rows` 和 `sector-rows` 列表读口启用 Redis read-through cache。Redis 只缓存查询响应，不替代 SQLite 事实源；命中时 `source` 仍表示原始事实来源，`cache.hit=true`、`cache.store=redis` 只用于诊断。Redis 不可用时读口直接回 SQLite。
+`frames`、`records`、`stock-rows` 和 `sector-rows` 列表读口可启用 Redis read-through cache。Redis 只缓存查询响应，不替代 MongoDB 事实源；命中时 `source` 仍表示原始事实来源，`cache.hit=true`、`cache.store=redis` 只用于诊断。Redis 不可用时读口直接回 MongoDB。
 
 Dragon Board 根前端通过 `src/services/snapshot/backendRead.ts` 调用该接口。该适配层会默认带上
 `dataset_id=dragonboard_live`、`allowed_capture_modes=real_time,delayed` 和
 `exclude_restored=true`；QuantBoard 后端返回失败时，前端正式读取必须显式失败，不回落 IndexedDB。
 
-### SQLite 快照明细读口
+### MongoDB 快照明细读口
 
-这些接口承接 Dragon Board `DataLayer` 的正式快照读口，返回字段仍保持前端 camelCase 合同，不要求调用方理解 SQLite 列名。
+这些接口承接 Dragon Board `DataLayer` 的正式快照读口，返回字段仍保持前端 camelCase 合同，不要求调用方理解 MongoDB 集合字段。
 
 ```powershell
 Invoke-RestMethod 'http://127.0.0.1:8000/api/snapshots/records?dataset_id=dragonboard_live&snapshot_type=half_hour&limit=20'
@@ -363,7 +372,7 @@ Invoke-RestMethod 'http://127.0.0.1:8000/api/snapshots/sector-rows?dataset_id=dr
 - 题材行：`snapshot_id`、`entity_type/entity_types`、`entity_key/entity_keys`。
 
 Dragon Board `snapshotFacade.listSnapshots/getSnapshotById/listSnapshotFrames/listSnapshotStockRows/listSnapshotSectorRows/getStockVolumeHistory`
-均通过这些 SQLite 明细读口实现。列表读口返回 `cache` 诊断字段，单条 `records/{snapshot_id}` 仍直接读取 SQLite。`getStockVolumeHistory` 固定读取 `daily` 的
+均通过这些 MongoDB 明细读口实现。列表读口返回 `cache` 诊断字段，单条 `records/{snapshot_id}` 仍直接读取 MongoDB。`getStockVolumeHistory` 固定读取 `daily` 的
 `snapshot_stock_rows`，不再扫描浏览器 IndexedDB 原始快照。
 
 ### `GET /api/datasets`
@@ -376,7 +385,7 @@ Dragon Board `snapshotFacade.listSnapshots/getSnapshotById/listSnapshotFrames/li
 
 ### `POST /api/datasets/import`
 
-从 SQLite 主库已有正式快照事实表生成可复现研究视图。日常研究入口使用 `sourceType=sqlite_snapshots`；浏览器 IndexedDB/LevelDB/运行页桥接不再作为主采集方式。
+从 MongoDB 主库已有正式快照事实集合生成可复现研究视图。日常研究入口使用 `sourceType=mongodb_snapshots`；旧 `sqlite_snapshots` 只作为迁移前兼容口径。浏览器 IndexedDB/LevelDB/运行页桥接不再作为主采集方式。
 
 常见请求：
 
@@ -399,7 +408,7 @@ Dragon Board `snapshotFacade.listSnapshots/getSnapshotById/listSnapshotFrames/li
 - 接口不再把筛选后的 `snapshot_records / snapshot_frames / snapshot_stock_rows / snapshot_sector_rows` 复制到新的 `dataset_id`。返回对象使用源 `dataset_id`，并附带 `virtual=true`、`policy=snapshot_facts_view`，回测直接查询源快照事实表。
 - 返回元数据中的 `metadata.filters` 记录快照类型、日期区间和最大快照数。
 - `dryRun=true` 只返回会生成的数据集摘要和质量门禁结果，不落库。
-- `sqlite_snapshots` 不产生新的快照事实复制，也不产生新的 Supabase 备份对象。
+- `mongodb_snapshots` 不产生新的快照事实复制。旧 `sqlite_snapshots` 只属于迁移前兼容口径，不产生新的 Supabase 备份对象。
 
 旧兼容 `sourceType`：
 
@@ -407,11 +416,11 @@ Dragon Board `snapshotFacade.listSnapshots/getSnapshotById/listSnapshotFrames/li
 - `browser_bridge`
 - `leveldb`
 
-旧兼容来源只用于迁移或排障。历史 JSON、旧 IndexedDB 导出或备份文件建议优先走 `POST /api/migrations/snapshots/import-json` 写入正式快照事实表，再用 `sqlite_snapshots` 生成研究数据集。
+旧兼容来源只用于迁移或排障。MongoDB 切换后，历史 JSON、旧 IndexedDB 导出或备份文件不再通过在线 `import-json` 入口导入；需要补迁时应走 [mongodb-migration-plan.md](mongodb-migration-plan.md) 约定的停服迁移脚本。
 
-如果 `SUPABASE_URL` 和 `SUPABASE_SECRET_KEY` 已配置，正式写入会先落本地 SQLite，再镜像到 Supabase 备份库。`POST /api/snapshots/ingest` 已支持 SQLite 不可用时的 Supabase `backup_only` failover；其他尚未纳入 failover 的写入口仍必须明确返回不可用。读路径会在本地无数据或本地不可用时按主计划回退读取备份库。
+MongoDB 模式下 `SUPABASE_URL` 和 `SUPABASE_SECRET_KEY` 不参与正式写入、读回退或 failover。MongoDB 不可用时，尚未完成的写入口必须明确返回不可用。
 
-新增或修改导入请求字段、快照入库 payload、同步返回字段、错误结构时，必须同批更新 [database-migration-plan.md](database-migration-plan.md)。
+新增或修改导入请求字段、快照入库 payload、同步返回字段、错误结构时，必须同批更新 [mongodb-migration-plan.md](mongodb-migration-plan.md)。
 
 ### `POST /api/datasets/upload`
 
@@ -419,7 +428,7 @@ Dragon Board `snapshotFacade.listSnapshots/getSnapshotById/listSnapshotFrames/li
 
 ### `POST /api/migrations/snapshots/import-json`
 
-历史快照迁移入口。用于把旧 IndexedDB 导出、Dragon Board v4 bundle、结构化 frames/rows 或 SQLite/备份导出 JSON 导入正式 SQLite 主库，并复用 `sync_outbox` 同步到 Supabase。
+历史快照迁移入口。MongoDB 模式下该在线入口返回 410；旧 IndexedDB 导出、Dragon Board v4 bundle、结构化 frames/rows 或 SQLite/备份导出 JSON 需要补迁时，应走停服迁移脚本。
 
 路径导入：
 
@@ -452,9 +461,9 @@ Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/migrations/snapshots/im
 
 ### 快照 ingest 幂等口径
 
-`POST /api/snapshots/ingest` 是 Dragon Board 正式快照写入 SQLite 的入口。调用方应传入稳定的 `datasetId`、`idempotencyKey` 和 v4 `bundle`；后端会先按 `idempotencyKey` 判重，再按 `dataset_id + snapshot_id` 做逻辑幂等。若同一快照槽位已经存在，接口返回 `ok=true`、`deduped=true`，不会删除或覆盖已落库的 `snapshot_records / snapshot_frames / snapshot_stock_rows / snapshot_sector_rows`。
+`POST /api/snapshots/ingest` 是 Dragon Board 正式快照写入 MongoDB 的入口。调用方应传入稳定的 `datasetId`、`idempotencyKey` 和 v4 `bundle`；后端会先按 `idempotencyKey` 判重，再按 `dataset_id + snapshot_id` 做逻辑幂等。若同一快照槽位已经存在，接口返回 `ok=true`、`deduped=true`，不会删除或覆盖已落库的 `snapshot_records / snapshot_frames / snapshot_stock_rows / snapshot_sector_rows`。
 
-Dragon Board 当前会在写入前通过 SQLite 读口确认同一 `snapshot_id` 是否已存在，避免定时保存反复提交同一槽位。IndexedDB 不再参与正式快照写入判重。
+Dragon Board 当前会在写入前通过 MongoDB 后端读口确认同一 `snapshot_id` 是否已存在，避免定时保存反复提交同一槽位。IndexedDB 不再参与正式快照写入判重。
 
 示例响应：
 
@@ -490,11 +499,11 @@ Dragon Board 当前会在写入前通过 SQLite 读口确认同一 `snapshot_id`
 
 ## 题材基础数据接口
 
-题材基础映射已经从 Dragon Board 浏览器 IndexedDB 迁移到 QuantBoard 独立 SQLite 主库 `themeDATA.db`。这些接口只承载题材静态映射、题材-股票关系、股票-题材反查、标签和原因，不承载题材因子、轮动、预警、回测或快照事实。V11 后 Dragon Board 运行时只读取这些 SQLite 接口；QuantBoard 不可用或返回空映射时，前端必须显式失败，不回落浏览器 IndexedDB、`/data/theme_base_mapping.json` 或 `/api/themes/batch`。
+题材基础映射已经从 Dragon Board 浏览器 IndexedDB 和旧 `themeDATA.db` 迁移到 MongoDB 题材集合。这些接口只承载题材静态映射、题材-股票关系、股票-题材反查、标签和原因，不承载题材因子、轮动、预警、回测或快照事实。Dragon Board 运行时只读取 QuantBoard 后端接口；QuantBoard 不可用或返回空映射时，前端必须显式失败，不回落浏览器 IndexedDB、`/data/theme_base_mapping.json` 或 `/api/themes/batch`。
 
 ### `POST /api/migrations/themes/import-json`
 
-历史题材映射迁移入口。用于把旧 `ThemeDataDB/theme_mapping` 导出的 `ThemeMappingData` JSON 幂等导入 `themeDATA.db`。
+历史题材映射迁移入口。MongoDB 模式下在线导入入口应返回 410；旧 `ThemeDataDB/theme_mapping` 或 `themeDATA.db` 只作为停服迁移源。
 
 ```json
 {
@@ -522,7 +531,7 @@ Dragon Board 当前会在写入前通过 SQLite 读口确认同一 `snapshot_id`
 
 ### `POST /api/migrations/themes/verify-json`
 
-只读校验入口。用于把旧 `ThemeMappingData` JSON 与当前 `themeDATA.db` 做迁移验收，不写库、不自动修复。
+只读校验入口。用于把旧 `ThemeMappingData` JSON 或旧 `themeDATA.db` 与当前 MongoDB 题材集合做迁移验收，不写库、不自动修复。
 
 返回字段固定包含：
 
@@ -534,13 +543,13 @@ Dragon Board 当前会在写入前通过 SQLite 读口确认同一 `snapshot_id`
 - `extraThemes`
 - `missingMappings`
 - `extraMappings`
-- `source=sqlite`
+- `source=mongodb`
 
 缺字段、空题材、非法股票代码沿用导入接口的结构化 `400 detail`。
 
 ### `GET /api/themes/mapping`
 
-Dragon Board `ThemeDataService` 的正式读口。返回结构兼容旧 `ThemeMappingData`，外层补充 `ok` 和 `source=sqlite`。`mapping.themes[*]` 必须包含当前库内已有的 `stocks`、`stockTags` 和 `stockReasons`，前端不再通过额外批量 API 补齐标签或原因。
+Dragon Board `ThemeDataService` 的正式读口。返回结构兼容旧 `ThemeMappingData`，外层补充 `ok` 和 `source=mongodb`。`mapping.themes[*]` 必须包含当前库内已有的 `stocks`、`stockTags` 和 `stockReasons`，前端不再通过额外批量 API 补齐标签或原因。
 
 ### `GET /api/themes/stocks/{theme_id}`
 
@@ -552,7 +561,7 @@ Dragon Board `ThemeDataService` 的正式读口。返回结构兼容旧 `ThemeMa
 
 ### `GET /api/themes/counts`
 
-读取 `themeDATA.db` 基础行数，用于迁移验收和排障。返回 `ok`、`source=sqlite` 和 `counts`；`counts` 至少包含 `themeCount`、`mappingCount`、`stockCount`、`version`、`lastUpdate`、`source=sqlite`。
+读取 MongoDB 题材基础集合行数，用于迁移验收和排障。返回 `ok`、`source=mongodb` 和 `counts`；`counts` 至少包含 `themeCount`、`mappingCount`、`stockCount`、`version`、`lastUpdate`、`source=mongodb`。
 
 CLI 校验：
 
@@ -673,7 +682,7 @@ CLI 输出与 `POST /api/migrations/themes/verify-json` 一致。
 
 ### `DELETE /api/backtests/{run_id}`
 
-删除单次历史回测及其归一化明细。该操作只影响 research SQLite `quant_board_research.db`，不会删除 `quant_board_snapshots.db` 中的数据集和快照事实，也不会触发 Supabase `sync_outbox`。
+删除单次历史回测及其归一化明细。MongoDB 模式下该操作只影响 MongoDB 研究集合，不会删除快照事实集合，也不会触发 Supabase `sync_outbox`。
 
 删除顺序固定为：
 
@@ -703,7 +712,7 @@ CLI 输出与 `POST /api/migrations/themes/verify-json` 一致。
 
 ### `GET /api/backtests/{run_id}/trades`
 
-读取归一化交易明细，数据源为 research SQLite `backtest_trades`，不从 `result_json` 反解析。
+读取归一化交易明细，数据源为 MongoDB `backtest_trades` 集合，不从 `result` 摘要反解析。
 
 查询参数：
 
@@ -726,7 +735,7 @@ CLI 输出与 `POST /api/migrations/themes/verify-json` 一致。
 
 ### `GET /api/backtests/{run_id}/equity`
 
-读取归一化权益曲线，数据源为 research SQLite `backtest_equity_curve`。权益曲线用于图表，按时间升序全量返回，不分页。
+读取归一化权益曲线，数据源为 MongoDB `backtest_equity_curve` 集合。权益曲线用于图表，按时间升序全量返回，不分页。
 
 ```json
 {
@@ -737,7 +746,7 @@ CLI 输出与 `POST /api/migrations/themes/verify-json` 一致。
 
 ### `GET /api/backtests/{run_id}/signals`
 
-读取归一化信号诊断，数据源为 research SQLite `backtest_signals`。该端点用于解释候选分层、状态和过滤原因，不能代替 `backtest_trades` 展示真实成交。
+读取归一化信号诊断，数据源为 MongoDB `backtest_signals` 集合。该端点用于解释候选分层、状态和过滤原因，不能代替 `backtest_trades` 展示真实成交。
 
 查询参数：
 
@@ -764,7 +773,7 @@ CLI 输出与 `POST /api/migrations/themes/verify-json` 一致。
 
 ### `GET /api/backtests/{run_id}/quality`
 
-读取归一化质量报告，数据源为 research SQLite `backtest_quality_reports`。
+读取归一化质量报告，数据源为 MongoDB `backtest_quality_reports` 集合。
 
 ```json
 {
@@ -831,11 +840,11 @@ openPositionCount
 
 找不到 run 返回 `404`，`detail.code=backtest_run_not_found`。非法分页参数返回 `400` 或 `422`，错误体至少包含 `code`、`field` 和 `value`。非法指标返回 `400`，`detail.code=invalid_backtest_metric`，并返回 `allowedMetrics`。旧 `result_json` 中缺失的指标用 `null`，同时在对应 run 的 `missingMetrics` 列出字段名，不能用 `0` 代替。
 
-归一化回测结果表属于 research SQLite `local-only` 数据，`GET /api/backtests/{run_id}/trades`、`/equity`、`/signals`、`/quality` 和 `POST /api/backtests/compare` 都不读取 Supabase，也不触发 `sync_outbox`、push/pull 或 failover。
+归一化回测结果属于 MongoDB 研究集合，`GET /api/backtests/{run_id}/trades`、`/equity`、`/signals`、`/quality` 和 `POST /api/backtests/compare` 都不读取 Supabase，也不触发 `sync_outbox`、push/pull 或 failover。
 
 ### V12 ThemeTrend 回测接口
 
-以下接口是 V12 已落地的 ThemeTrend 研究回测合同。ThemeTrend 回测和共振回测结果属于 research SQLite `local-only` 数据，不读取或写入 Supabase，不触发 `sync_outbox`、push/pull 或 failover；`themeDATA.db` 只提供题材基础映射。
+以下接口是 V12 已落地的 ThemeTrend 研究回测合同。ThemeTrend 回测和共振回测结果属于 MongoDB 研究集合，不读取或写入 Supabase，不触发 `sync_outbox`、push/pull 或 failover；题材基础映射来自 MongoDB 题材集合。
 
 当前实现会把题材暴露投影为可执行股票信号，复用现有 `TradeSimulator` 产出 `tradeSimulation`，并双写 `/api/backtests/{run_id}/trades`、`/equity`、`/signals`、`/quality`。完整报告归因、TS golden 严格对齐和 Dragon Board 面板级解释仍按 V12 后续项推进。
 
@@ -890,7 +899,7 @@ openPositionCount
 
 ### `GET /api/storage/research-summary`
 
-读取 research SQLite 研究库的轻量统计，用于前端维护页或 CLI 对照。当前返回各研究表行数和回测创建时间范围。
+读取 MongoDB 研究集合的轻量统计，用于前端维护页或 CLI 对照。当前返回各研究集合文档数和回测创建时间范围。
 
 ### `POST /api/storage/research-cleanup-preview`
 

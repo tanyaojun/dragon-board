@@ -22,7 +22,9 @@ from backend.data.mongodb_migration import (
     MongoMigrationPlan,
     apply_mongodb_migration,
     get_mongodb_database,
+    inspect_mongodb_database,
     plan_mongodb_migration,
+    verify_mongodb_migration,
 )
 from backend.data.mongodb_backup import get_mongodb_backup_service
 from backend.data.repository import Repository
@@ -327,6 +329,7 @@ def cmd_migrate_mongodb(args: argparse.Namespace) -> None:
         theme_db=Path(args.theme_db or settings.warehouse_dir / "themeDATA.db"),
         stock_json=Path(args.stock_json or settings.project_root.parent / "public" / "data" / "stock_code.json"),
         target_database=args.target_database or settings.mongodb_database,
+        include_research=not bool(args.skip_research),
     )
     if args.apply:
         db = get_mongodb_database(
@@ -345,6 +348,31 @@ def cmd_migrate_mongodb(args: argparse.Namespace) -> None:
         )
         return
     print_json(plan_mongodb_migration(plan))
+
+
+def _runtime_mongodb_database() -> Any:
+    settings = get_settings()
+    return get_mongodb_database(
+        settings.mongodb_uri,
+        settings.mongodb_database,
+        connect_timeout_ms=settings.mongodb_connect_timeout_ms,
+        server_selection_timeout_ms=settings.mongodb_server_selection_timeout_ms,
+    )
+
+
+def cmd_inspect_mongodb(_: argparse.Namespace) -> None:
+    print_json(inspect_mongodb_database(_runtime_mongodb_database()))
+
+
+def cmd_verify_mongodb_migration(args: argparse.Namespace) -> None:
+    print_json(
+        verify_mongodb_migration(
+            _runtime_mongodb_database(),
+            dataset_id=args.dataset_id,
+            snapshot_type=args.snapshot_type,
+            codes=args.code or [],
+        )
+    )
 
 
 def cmd_backup_mongodb(args: argparse.Namespace) -> None:
@@ -366,6 +394,10 @@ def cmd_backup_mongodb(args: argparse.Namespace) -> None:
 
 def cmd_verify_mongodb_backup(args: argparse.Namespace) -> None:
     print_json(get_mongodb_backup_service().verify_backup(args.backup_id))
+
+
+def cmd_verify_mongodb_restore_staging(args: argparse.Namespace) -> None:
+    print_json(get_mongodb_backup_service().verify_restore_staging_backup(args.backup_id))
 
 
 def cmd_push_mongodb_backup(args: argparse.Namespace) -> None:
@@ -762,7 +794,17 @@ def build_parser() -> argparse.ArgumentParser:
     migrate_mongodb_cmd.add_argument("--dry-run", action="store_true")
     migrate_mongodb_cmd.add_argument("--apply", action="store_true")
     migrate_mongodb_cmd.add_argument("--replace-confirmed", action="store_true")
+    migrate_mongodb_cmd.add_argument("--skip-research", action="store_true")
     migrate_mongodb_cmd.set_defaults(func=cmd_migrate_mongodb)
+
+    inspect_mongodb_cmd = sub.add_parser("inspect-mongodb", help="Inspect MongoDB collection counts and indexes")
+    inspect_mongodb_cmd.set_defaults(func=cmd_inspect_mongodb)
+
+    verify_mongodb_migration_cmd = sub.add_parser("verify-mongodb-migration", help="Verify MongoDB migration counts, indexes, and snapshot continuity")
+    verify_mongodb_migration_cmd.add_argument("--dataset-id", default="dragonboard_live")
+    verify_mongodb_migration_cmd.add_argument("--snapshot-type", default="half_hour")
+    verify_mongodb_migration_cmd.add_argument("--code", action="append", default=[])
+    verify_mongodb_migration_cmd.set_defaults(func=cmd_verify_mongodb_migration)
 
     backup_mongodb_cmd = sub.add_parser("backup-mongodb", help="Create a full local MongoDB backup")
     backup_mongodb_cmd.add_argument("--full", action="store_true", required=True)
@@ -771,6 +813,10 @@ def build_parser() -> argparse.ArgumentParser:
     verify_mongodb_backup_cmd = sub.add_parser("verify-mongodb-backup", help="Verify a local MongoDB backup")
     verify_mongodb_backup_cmd.add_argument("--backup-id", required=True)
     verify_mongodb_backup_cmd.set_defaults(func=cmd_verify_mongodb_backup)
+
+    verify_mongodb_restore_cmd = sub.add_parser("verify-mongodb-restore-staging", help="Verify a pulled MongoDB backup under restore-staging")
+    verify_mongodb_restore_cmd.add_argument("--backup-id", required=True)
+    verify_mongodb_restore_cmd.set_defaults(func=cmd_verify_mongodb_restore_staging)
 
     push_mongodb_backup_cmd = sub.add_parser("push-mongodb-backup", help="Push a verified MongoDB backup to R2/S3")
     push_mongodb_backup_cmd.add_argument("--backup-id", required=True)

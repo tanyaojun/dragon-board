@@ -17,6 +17,8 @@ const EASTMONEY_HIST_FLOW_FIELDS1 = 'f1,f2,f3,f7'
 const EASTMONEY_HIST_FLOW_FIELDS2 = 'f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63,f64,f65'
 const EASTMONEY_HIST_FLOW_CONCURRENCY = 4
 const EASTMONEY_HIST_FLOW_RETRIES = 2
+const EASTMONEY_ULIST_HIST_FLOW_LIMIT = 20
+const EASTMONEY_FUND_FLOW_FIELDS = new Set(['f62', 'f66', 'f69', 'f184'])
 
 function requireCodes(req, res) {
   const codes = parseCodeList(req.query.codes)
@@ -82,9 +84,45 @@ function mergeEastmoneyRows(baseData, fallbackData, codeList) {
   return { rc: 0, data: { diff: Array.from(rowsByCode.values()) } }
 }
 
+function mergeEastmoneyFundFlowRows(baseData, fallbackData, codeList) {
+  const rowsByCode = new Map()
+  for (const row of normalizeEastmoneyResponse(baseData, codeList).data.diff) {
+    rowsByCode.set(row.f12, row)
+  }
+  for (const row of normalizeEastmoneyResponse(fallbackData, codeList).data.diff) {
+    const existing = rowsByCode.get(row.f12) || { f12: row.f12 }
+    const merged = { ...existing }
+    if (row.f14 && !merged.f14) merged.f14 = row.f14
+    for (const key of EASTMONEY_FUND_FLOW_FIELDS) {
+      const value = row[key]
+      if (Number(value) !== 0 || merged[key] === undefined) {
+        merged[key] = value
+      }
+    }
+    rowsByCode.set(row.f12, merged)
+  }
+  return { rc: 0, data: { diff: Array.from(rowsByCode.values()) } }
+}
+
 function missingEastmoneyCodes(data, codeList) {
   const present = new Set(normalizeEastmoneyResponse(data, codeList).data.diff.map((row) => row.f12))
   return codeList.map(cleanCode).filter((code) => code && !present.has(code))
+}
+
+function hasFundFlow(row) {
+  return [row?.f62, row?.f184, row?.f66, row?.f69].some((value) => {
+    const number = Number(value)
+    return Number.isFinite(number) && number !== 0
+  })
+}
+
+function codesMissingFundFlow(data, codeList) {
+  const rowsByCode = new Map(
+    normalizeEastmoneyResponse(data, codeList).data.diff.map((row) => [row.f12, row]),
+  )
+  return codeList
+    .map(cleanCode)
+    .filter((code) => code && !hasFundFlow(rowsByCode.get(code)))
 }
 
 function withEastmoneyQuoteMeta(data, meta) {
@@ -218,10 +256,13 @@ async function fetchEastmoneyHistFlowQuotes(plainClient, codeList, concurrency =
 }
 
 export const __quoteRouteInternals = {
+  EASTMONEY_ULIST_HIST_FLOW_LIMIT,
   normalizeEastmoneyResponse,
   normalizeEastmoneyHistFlowResponse,
   mergeEastmoneyRows,
   missingEastmoneyCodes,
+  codesMissingFundFlow,
+  mergeEastmoneyFundFlowRows,
   buildEastmoneyUlistUrl,
   buildEastmoneyClistUrl,
   buildEastmoneyHistFlowUrl,
@@ -238,9 +279,24 @@ export function registerQuoteRoutes(app, { plainClient }) {
         headers: DEFAULT_BROWSER_HEADERS,
       })
 
-      res.json(withEastmoneyQuoteMeta(normalizeEastmoneyResponse(response.data, codeList), {
+      const ulistData = normalizeEastmoneyResponse(response.data, codeList)
+      const missingFundFlowCodes = codesMissingFundFlow(ulistData, codeList)
+      const histRequestCodes = missingFundFlowCodes.slice(0, EASTMONEY_ULIST_HIST_FLOW_LIMIT)
+      const histSkippedCount = Math.max(0, missingFundFlowCodes.length - histRequestCodes.length)
+      const histData = histRequestCodes.length
+        ? await fetchEastmoneyHistFlowQuotes(plainClient, histRequestCodes)
+        : EMPTY_QUOTES
+      const mergedData = histRequestCodes.length
+        ? mergeEastmoneyFundFlowRows(ulistData, histData, codeList)
+        : ulistData
+
+      res.json(withEastmoneyQuoteMeta(mergedData, {
         route: 'ulist',
         fallback: false,
+        histFillCount: histData.data.diff.length,
+        histFailed: histData.dragonMeta?.histFailed || 0,
+        missingFundFlowCount: missingFundFlowCodes.length,
+        histSkippedCount,
       }))
     } catch (primaryError) {
       console.warn('[东财行情] ulist 失败，尝试 clist 资金流 fallback:', primaryError.message)

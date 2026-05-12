@@ -9,7 +9,7 @@ QuantBoard 是 `dragon-board` 的量化回测与参数研究子项目。首期�
 - Dragon Board 根项目只提供实时看板、快照数据和 TypeScript golden 导出，不承载回测平台职责。
 - Python 端必须先复刻 `rankTrend` 输出合同，再开发策略、回测和优化。
 - 默认 `snapshot_type` 为 `half_hour`。`quarter_hour` 只作为可选细颗粒度样本，不是默认口径。
-- 存储主链采用 SQLite 主库 + Supabase 备份库；详细实施、同步和恢复规则以 [database-migration-plan.md](database-migration-plan.md) 为准。
+- 当前运行主库是 MongoDB，SQLite/Supabase/Parquet 旧链路仅作为迁移前历史、审计/离线备份参考或 Mongo 模式下显式禁用入口；详细切换方案和实施状态以 [mongodb-migration-plan.md](mongodb-migration-plan.md) 为准。
 - 所有回测、优化、API、CLI、前端展示都要保留 `dataset_id`、`snapshot_type`、`strategy_version`、`config_hash`、`random_seed`，保证结果可追溯。
 - 资金流来源必须可追溯：正式资金流回测只接受 `broker_l2` 或 `official_l2`，`estimated_l1` 默认只能作为观察指标。
 
@@ -19,8 +19,8 @@ QuantBoard 是 `dragon-board` 的量化回测与参数研究子项目。首期�
 | --- | --- |
 | [user-manual.md](user-manual.md) | 面向日常使用的操作手册：启动、导入、回测、报告、优化与常见问题 |
 | [architecture.md](architecture.md) | 总体架构、模块边界、数据库表与数据流 |
-| [database-migration-plan.md](database-migration-plan.md) | SQLite 主库 + Supabase 备份库并行实施计划、同步合同和恢复规则 |
-| [mongodb-migration-plan.md](mongodb-migration-plan.md) | 拟执行的 MongoDB 全量主库迁移方案，覆盖快照库、研究库、题材库和股票基础库 |
+| [mongodb-migration-plan.md](mongodb-migration-plan.md) | 当前 MongoDB 全量主库迁移方案和实施记录，覆盖快照库、研究库、题材库和股票基础库 |
+| [database-migration-plan.md](database-migration-plan.md) | 迁移前 SQLite 主库 + Supabase 备份库历史计划；Mongo 模式下旧入口禁用口径以文档顶部说明为准 |
 | [data-ingestion.md](data-ingestion.md) | SQLite 快照库派生研究数据集、历史 JSON 迁移和质量门禁 |
 | [ranktrend-golden.md](ranktrend-golden.md) | TypeScript golden 标准、输出合同、验收基线 |
 | [ranktrend-python-port.md](ranktrend-python-port.md) | Python 移植步骤、数值对齐、测试策略 |
@@ -35,7 +35,7 @@ QuantBoard 是 `dragon-board` 的量化回测与参数研究子项目。首期�
 
 ## 推荐实现顺序
 
-1. 数据导入：从 SQLite 正式快照事实表生成 QuantBoard 研究数据集；历史 JSON 只作为迁移辅助。
+1. 数据导入：从 MongoDB 正式快照事实集合生成 QuantBoard 研究数据集；历史 SQLite/JSON 只作为迁移辅助。
 2. Golden 用例：从 TypeScript `rankTrend` 产出固定输入与期望输出，写入 `golden_ranktrend_cases`。
 3. Python 移植：逐模块复刻 technical、cycle、risk、decision、candidate tier。
 4. 回测引擎：只消费 Python rankTrend 输出，所有回测、优化和交易模拟都在 QuantBoard Python 后端执行。
@@ -109,4 +109,4 @@ macd: 21/34/13
 - 任何优化结果都只能作为候选参数，必须经过固定样本外验证。
 - 对 Python 初学者友好：新增模块要有清晰命名、少量必要注释、可运行测试。
 - 文档变更优先更新本目录，避免把过期说明散落到 backend/frontend。
-- 修改存储、同步、快照入库、数据库表字段、API/CLI 合同或恢复策略时，必须同批更新对应文档，尤其是 [database-migration-plan.md](database-migration-plan.md)。
+- 修改存储、同步、快照入库、数据库表字段、API/CLI 合同或恢复策略时，必须同批更新对应文档，尤其是 [mongodb-migration-plan.md](mongodb-migration-plan.md)。

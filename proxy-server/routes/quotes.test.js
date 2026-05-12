@@ -3,14 +3,19 @@ import assert from 'node:assert/strict'
 import { __quoteRouteInternals } from './quotes.js'
 
 const {
+  EASTMONEY_ULIST_HIST_FLOW_LIMIT,
   buildEastmoneyClistUrl,
   buildEastmoneyHistFlowUrl,
   mergeEastmoneyRows,
   missingEastmoneyCodes,
+  codesMissingFundFlow,
+  mergeEastmoneyFundFlowRows,
   normalizeEastmoneyHistFlowResponse,
   normalizeEastmoneyResponse,
 } =
   __quoteRouteInternals
+
+assert.equal(EASTMONEY_ULIST_HIST_FLOW_LIMIT, 20)
 
 const normalized = normalizeEastmoneyResponse(
   {
@@ -63,6 +68,33 @@ assert.equal(merged.data.diff[0].f2, 6.8)
 assert.equal(merged.data.diff[0].f62, 12000000)
 assert.equal(merged.data.diff[0].f184, 3.4)
 assert.deepEqual(missingEastmoneyCodes(merged, ['002081', '002580']), ['002580'])
+
+const fundFlowMerged = mergeEastmoneyFundFlowRows(
+  { rc: 0, data: { diff: [{ f12: '002081', f2: 8.88, f3: 1.23, f62: 0, f184: 0 }] } },
+  { rc: 0, data: { diff: [{ f12: '002081', f2: 6.8, f3: -2.2, f62: 12000000, f184: 3.4 }] } },
+  ['002081'],
+)
+
+assert.equal(fundFlowMerged.data.diff[0].f2, 8.88)
+assert.equal(fundFlowMerged.data.diff[0].f3, 1.23)
+assert.equal(fundFlowMerged.data.diff[0].f62, 12000000)
+assert.equal(fundFlowMerged.data.diff[0].f184, 3.4)
+
+assert.deepEqual(
+  codesMissingFundFlow(
+    {
+      rc: 0,
+      data: {
+        diff: [
+          { f12: '002081', f62: 0, f184: 0, f66: 0, f69: 0 },
+          { f12: '002580', f62: 12000000, f184: 3.4, f66: 5000000, f69: 1.2 },
+        ],
+      },
+    },
+    ['002081', '002580', '600076'],
+  ),
+  ['002081', '600076'],
+)
 
 const clistWithHistFill = mergeEastmoneyRows(
   { rc: 0, data: { diff: [{ f12: '002580', f62: 334315408, f184: 12.03 }] } },

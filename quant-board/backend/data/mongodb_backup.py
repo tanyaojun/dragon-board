@@ -161,6 +161,13 @@ class MongoBackupService:
 
     def verify_backup(self, backup_id: str) -> dict[str, Any]:
         local_dir = self.full_backup_dir(backup_id)
+        return self._verify_backup_dir(local_dir, backup_id=backup_id, mark_manifest=True)
+
+    def verify_restore_staging_backup(self, backup_id: str) -> dict[str, Any]:
+        staging_dir = self.backup_dir / "restore-staging" / f"backup_id={backup_id}"
+        return self._verify_backup_dir(staging_dir, backup_id=backup_id, mark_manifest=False)
+
+    def _verify_backup_dir(self, local_dir: Path, *, backup_id: str, mark_manifest: bool) -> dict[str, Any]:
         manifest_result = self._read_manifest(local_dir)
         if not manifest_result["ok"]:
             return manifest_result
@@ -206,18 +213,34 @@ class MongoBackupService:
                         "actual": actual_bytes,
                     },
                 )
+            actual_rows = _count_jsonl_rows(file_path)
+            expected_rows = int(detail.get("docCount") or 0)
+            if actual_rows != expected_rows:
+                return self._mark_verification_failed(
+                    local_dir,
+                    manifest,
+                    {
+                        "code": "restore_row_count_mismatch" if not mark_manifest else "backup_row_count_mismatch",
+                        "collection": collection_name,
+                        "file": str(relative),
+                        "expected": expected_rows,
+                        "actual": actual_rows,
+                    },
+                )
 
-        manifest["verified"] = True
-        manifest["verifiedAt"] = _utc_now()
-        manifest["lastError"] = None
-        self._write_sha256sums(local_dir, manifest)
-        self._write_manifest(local_dir, manifest)
+        if mark_manifest:
+            manifest["verified"] = True
+            manifest["verifiedAt"] = _utc_now()
+            manifest["lastError"] = None
+            self._write_sha256sums(local_dir, manifest)
+            self._write_manifest(local_dir, manifest)
         return {
             "ok": True,
             "backupId": backup_id,
             "database": manifest.get("database"),
             "verified": True,
             "checkedFiles": len(manifest.get("collections") or {}),
+            "docCounts": manifest.get("docCounts") or {},
             "manifest": manifest,
         }
 
@@ -521,3 +544,8 @@ def _remove_tree(path: Path) -> None:
         else:
             child.unlink()
     path.rmdir()
+
+
+def _count_jsonl_rows(path: Path) -> int:
+    with path.open("r", encoding="utf-8") as handle:
+        return sum(1 for line in handle if line.strip())

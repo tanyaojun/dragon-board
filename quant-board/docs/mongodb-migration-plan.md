@@ -1,17 +1,17 @@
 # MongoDB 全量主库迁移方案
 
-本文是 QuantBoard 从 SQLite 三库全量迁移到 MongoDB 的设计方案和实施记录。代码改造已完成并通过本地测试；真实数据 `--apply`、环境变量切换、MongoDB 全库备份和 R2 恢复演练仍必须在停服窗口执行。
+本文是 QuantBoard 从 SQLite 主链切换到 MongoDB 的设计方案和实施记录。2026-05-12 停服窗口已完成真实数据迁移、`.env.local` 切换、MongoDB 本地全库备份、Cloudflare R2 上传和 R2 拉回到 `restore-staging` 校验。
 
 ## 目标结论
 
 - 一次性切换运行主库到 MongoDB，不做 SQLite/MongoDB 双写，不保留 SQLite 运行时 fallback，不做灰度降级。
 - 保留当前事实表颗粒度，MongoDB 使用集合承接原 SQLite 表，不把一个快照的所有股票行嵌入到单个大文档。
 - 尽量把现有 JSON 文本字段拆成结构化字段、子文档或数组字段；MongoDB 中不再保存 `*_json` 字符串字段作为正式查询合同。
-- 全量迁移范围包括：
+- 本轮正式迁移范围包括：
   - 快照库 `quant_board_snapshots.db`
-  - 研究库 `quant_board_research.db`
   - 题材主库 `themeDATA.db`
   - 新增股票基础库 `stock_names`，从 `public/data/stock_code.json` 初始化
+- 研究库 `quant_board_research.db` 旧数据按本次停服窗口决策暂不迁移；MongoDB 研究集合只创建空集合和索引，后续新回测、优化、Golden 和 ThemeTrend 研究结果直接写 MongoDB。
 - MongoDB 主库保留全量快照历史；废止会导致 RankTrend 样本断裂的 90 交易日主库明细清理。
 - Dragon Board 前端仍只能通过 QuantBoard 后端 API 访问正式数据，不直连 MongoDB。
 
@@ -26,12 +26,14 @@
 - 旧 SQLite/Supabase/Parquet 运行维护入口在 Mongo 模式下显式 410 或 CLI 拒绝，不再静默触碰旧主链。
 - MongoDB 本地全量备份、校验、R2 上传、R2 拉回到 `restore-staging`、本地备份保留裁剪 CLI 已实现。
 
-仍未在本会话执行：
+2026-05-12 停服窗口已执行：
 
-- 未修改 `.env.local`。
-- 未执行真实 MongoDB `--apply`。
-- 未连接真实 R2 上传。
-- 未执行正式 MongoDB restore-staging 恢复演练。
+- 已把 `.env.local` 切换为 `QUANT_BOARD_STORAGE_BACKEND=mongodb`，连接 `mongodb://127.0.0.1:27017/dragon_board_quant`。
+- 已关闭旧 Supabase 自动同步、Supabase retention 和 SQLite 90 天归档自动任务。
+- 已执行 `migrate-mongodb --apply --replace-confirmed --skip-research`。
+- 已执行 MongoDB 本地全量备份，备份 ID `20260512T111904Z`，`verify-mongodb-backup` 通过。
+- 已上传该备份到 Cloudflare R2 路径 `quant-board/mongodb-backups/full/backup_id=20260512T111904Z/`。
+- 已从 R2 拉回到 `data/backups/mongodb/restore-staging/backup_id=20260512T111904Z`，22 个校验文件 hash 全部匹配。
 
 ## 非目标
 
@@ -48,15 +50,15 @@
 
 `quant_board_snapshots.db` 当前保存正式快照事实和同步/归档元数据。
 
-| 表 | 当前行数 | 关键约束/索引 | MongoDB 迁移集合 |
+| 表 | 停服迁移源行数 | MongoDB 文档数 | 关键约束/索引 | MongoDB 迁移集合 |
 | --- | ---: | --- | --- |
-| `datasets` | 4 | `id` 主键 | `datasets` |
-| `snapshot_records` | 516 | unique `dataset_id + snapshot_id` | `snapshot_records` |
-| `snapshot_frames` | 516 | unique `dataset_id + snapshot_id` | `snapshot_frames` |
-| `snapshot_stock_rows` | 105501 | unique `dataset_id + row_id`，索引 `dataset_id/type/trading_date/timestamp/code/snapshot_id` | `snapshot_stock_rows` |
-| `snapshot_sector_rows` | 8084 | unique `dataset_id + row_id`，索引 `dataset_id/type/trading_date/timestamp/snapshot_id` | `snapshot_sector_rows` |
-| `sync_outbox` | 152 | unique `idempotency_key` | 不进入新运行主链，仅迁移到 `migration_audit` 或归档 |
-| `archive_manifests` | 2 | unique `archive_id` | `archive_manifests`，只保留审计和历史恢复参考 |
+| `datasets` | 4 | 4 | `id` 主键 | `datasets` |
+| `snapshot_records` | 536 | 536 | unique `dataset_id + snapshot_id` | `snapshot_records` |
+| `snapshot_frames` | 536 | 536 | unique `dataset_id + snapshot_id` | `snapshot_frames` |
+| `snapshot_stock_rows` | 109952 | 109952 | unique `dataset_id + row_id`，索引 `dataset_id/type/trading_date/timestamp/code/snapshot_id` | `snapshot_stock_rows` |
+| `snapshot_sector_rows` | 8369 | 8369 | unique `dataset_id + row_id`，索引 `dataset_id/type/trading_date/timestamp/snapshot_id` | `snapshot_sector_rows` |
+| `sync_outbox` | 172 | 0 | unique `idempotency_key` | 不进入新运行主链 |
+| `archive_manifests` | 3 | 3 | unique `archive_id` | `archive_manifests`，只保留审计和历史恢复参考 |
 
 当前问题是归档链路会在校验后删除 SQLite 中的 `snapshot_stock_rows` 和 `snapshot_sector_rows`，但 `load_frame_bundles`、`load_frames`、`load_rank_series` 等 RankTrend 主入口仍依赖 SQLite 明细行。因此会出现有 `snapshot_frames` 元数据、但缺少股票行，导致 RankTrend 样本不足。
 
@@ -64,37 +66,37 @@
 
 `quant_board_research.db` 当前保存回测、优化、Golden 和 ThemeTrend 研究结果。
 
-| 表 | 当前行数 | 关键约束/索引 | MongoDB 迁移集合 |
+| 表 | 停服迁移源行数 | MongoDB 文档数 | 关键约束/索引 | MongoDB 迁移集合 |
 | --- | ---: | --- | --- |
-| `golden_ranktrend_cases` | 1 | `id` 主键 | `golden_ranktrend_cases` |
-| `backtest_runs` | 1030 | `id` 主键，索引 `dataset_id` | `backtest_runs` |
-| `backtest_trades` | 122 | 索引 `backtest_run_id/code` | `backtest_trades` |
-| `backtest_equity_curve` | 1045 | 索引 `backtest_run_id` | `backtest_equity_curve` |
-| `backtest_signals` | 170527 | 索引 `backtest_run_id/snapshot_id/code` | `backtest_signals` |
-| `backtest_quality_reports` | 26 | 索引 `backtest_run_id` | `backtest_quality_reports` |
-| `optimization_runs` | 32 | `id` 主键，索引 `dataset_id` | `optimization_runs` |
-| `theme_factor_frames` | 0 | 索引 `dataset_id/snapshot_id/trading_date` | `theme_factor_frames` |
-| `theme_stock_exposures` | 0 | 索引 `dataset_id/snapshot_id/code/trading_date` | `theme_stock_exposures` |
-| `theme_signals` | 0 | 索引 `dataset_id/snapshot_id/trading_date` | `theme_signals` |
-| `theme_quality_reports` | 0 | 索引 `dataset_id` | `theme_quality_reports` |
+| `golden_ranktrend_cases` | 1 | 0 | `id` 主键 | `golden_ranktrend_cases` |
+| `backtest_runs` | 1030 | 0 | `id` 主键，索引 `dataset_id` | `backtest_runs` |
+| `backtest_trades` | 122 | 0 | 索引 `backtest_run_id/code` | `backtest_trades` |
+| `backtest_equity_curve` | 1045 | 0 | 索引 `backtest_run_id` | `backtest_equity_curve` |
+| `backtest_signals` | 170527 | 0 | 索引 `backtest_run_id/snapshot_id/code` | `backtest_signals` |
+| `backtest_quality_reports` | 26 | 0 | 索引 `backtest_run_id` | `backtest_quality_reports` |
+| `optimization_runs` | 32 | 0 | `id` 主键，索引 `dataset_id` | `optimization_runs` |
+| `theme_factor_frames` | 0 | 0 | 索引 `dataset_id/snapshot_id/trading_date` | `theme_factor_frames` |
+| `theme_stock_exposures` | 0 | 0 | 索引 `dataset_id/snapshot_id/code/trading_date` | `theme_stock_exposures` |
+| `theme_signals` | 0 | 0 | 索引 `dataset_id/snapshot_id/trading_date` | `theme_signals` |
+| `theme_quality_reports` | 0 | 0 | 索引 `dataset_id` | `theme_quality_reports` |
 
-`backtest_signals` 是当前研究库增长压力最大表。迁移后要保留按 `runId`、`snapshotId`、`code` 查询的能力，不建议嵌入到 `backtest_runs` 大文档。
+`backtest_signals` 是当前研究库增长压力最大表。本次停服窗口按决策暂不迁移旧研究库数据，MongoDB 只创建空研究集合和索引；后续新研究结果保留按 `runId`、`snapshotId`、`code` 查询的能力，不嵌入到 `backtest_runs` 大文档。
 
 ### 题材主库
 
 `themeDATA.db` 当前保存题材基础映射。
 
-| 表 | 当前行数 | 关键约束/索引 | MongoDB 迁移集合 |
+| 表 | 停服迁移源行数 | MongoDB 文档数 | 关键约束/索引 | MongoDB 迁移集合 |
 | --- | ---: | --- | --- |
-| `themes` | 237 | `id` 主键 | `themes` |
-| `theme_stock_mappings` | 12215 | unique `theme_id + stock_code` | `theme_stock_mappings` |
-| `theme_metadata` | 2 | `key` 主键 | `theme_metadata` |
+| `themes` | 237 | 237 | `id` 主键 | `themes` |
+| `theme_stock_mappings` | 12215 | 12215 | unique `theme_id + stock_code` | `theme_stock_mappings` |
+| `theme_metadata` | 2 | 2 | `key` 主键 | `theme_metadata` |
 
 题材基础库仍只保存静态映射、标签和原因，不保存 ThemeTrend 运行态因子、回测、优化或快照事实。
 
 ### 股票代码静态源
 
-当前 `src/services/StockCodeManager.ts` 从 `public/data/stock_code.json` 加载股票代码和名称，并用 `localStorage` 缓存。该文件当前约 5617 条记录。`public/data/stock-codes.json` 只有少量样例数据，不作为正式源。
+当前 `src/services/StockCodeManager.ts` 已从 QuantBoard `/api/stocks/*` 读取股票基础库。停服迁移时 `public/data/stock_code.json` 源文件 5617 条，其中 `871753` 重复 1 条；MongoDB `stock_names` 去重后 5616 条，重复项写入 `migration_audit`。
 
 迁移后新增 `stock_names` 集合，前端 `StockCodeManager` 通过 QuantBoard 后端 API 读取，不再依赖静态 JSON 文件。
 
@@ -651,6 +653,14 @@ MongoDB 迁移后的“归档”定义改为长期备份和审计导出，不再
 12. 执行一次 `backup-mongodb --full`、`verify-mongodb-backup` 和 `push-mongodb-backup`。
 13. 运行最小自动化验证。
 
+实际执行记录：
+
+- 源文件备份：`data/backups/pre_mongodb_migration_20260512_184927/`。
+- 正式迁移命令：`migrate-mongodb --apply --replace-confirmed --skip-research`。
+- 迁移结果：快照集合、题材集合、`stock_names` 完成写入；研究集合按本次决策跳过旧数据，仅保留空集合和索引。
+- `stock_names` 源 5617 条，去重后 5616 条；重复代码 `871753` 已写入 `migration_audit`。
+- 已知源数据质量事项：源 SQLite 中有 5 个历史 frame 无 stock rows，集中在 2026-05-08 13:45-14:15 的空快照，迁移未新增该缺口。
+
 ### 停服后检查
 
 - `GET /api/health?deep=true` 显示 MongoDB 主库可用。
@@ -661,6 +671,13 @@ MongoDB 迁移后的“归档”定义改为长期备份和审计导出，不再
 - `StockCodeManager` 首次加载返回 `source=mongodb`，旧 `stock_codes_cache` 不再影响结果。
 - 旧 `archive-auto-once/prune-backup/after-market-once` 调度确认不会再运行。
 - 至少一份 MongoDB 全库备份 `verified=true`，已上传 Cloudflare R2，并可从 R2 拉回恢复到 staging 库通过校验。
+
+实际检查结果：
+
+- `GET /api/health?deep=true` 返回 `mode=mongodb_primary`，MongoDB primary/theme 均 connected。
+- 快照 counts、stock rows、sector rows、RankTrend rank-series、题材 counts、股票基础库和股票搜索接口均返回 `source=mongodb`。
+- MongoDB 本地备份 `20260512T111904Z` 已 `verified=true`。
+- R2 上传和拉回均成功；`restore-staging/backup_id=20260512T111904Z` 中 22 个 `sha256sums.txt` 记录文件校验通过。
 
 ## 回滚边界
 
@@ -703,10 +720,10 @@ MongoDB 迁移后的“归档”定义改为长期备份和审计导出，不再
 
 ### 数据验收
 
-- `datasets`、`snapshot_records`、`snapshot_frames`、`snapshot_stock_rows`、`snapshot_sector_rows` 文档数与 SQLite 源表一致。
-- `backtest_*`、`optimization_runs`、`golden_ranktrend_cases` 文档数与 SQLite 源表一致。
-- `themes`、`theme_stock_mappings`、`theme_metadata` 文档数与 SQLite 源表一致。
-- `stock_names` 文档数等于 `public/data/stock_code.json` 中有效代码数量。
+- `datasets`、`snapshot_records`、`snapshot_frames`、`snapshot_stock_rows`、`snapshot_sector_rows` 文档数与 SQLite 源表一致。已验收：4 / 536 / 536 / 109952 / 8369。
+- `backtest_*`、`optimization_runs`、`golden_ranktrend_cases` 本轮按 `--skip-research` 暂不迁移旧数据，MongoDB 研究集合文档数为 0，索引已创建。
+- `themes`、`theme_stock_mappings`、`theme_metadata` 文档数与 SQLite 源表一致。已验收：237 / 12215 / 2。
+- `stock_names` 文档数等于 `public/data/stock_code.json` 有效去重代码数量。已验收：源 5617，重复 `871753` 1 条，MongoDB 5616。
 - 所有 unique index 无冲突。
 - `migration_audit` 中无阻断级错误。
 - 对每个 `datasetId + snapshotType + tradingDate` 输出 frame、stock row、sector row 计数，并与 SQLite 源表一致。
@@ -813,21 +830,25 @@ MongoDB 不会自动执行跨集合外键。处理方式是用业务唯一键和
 5. 已完成：前端 `apiService.listStockNames` 和 `StockCodeManager` 改为读取后端股票基础 API。
 6. 已完成：新增 SQLite -> MongoDB 全量迁移脚本。
 7. 已完成：新增 MongoDB 备份、校验、上传、staging 拉回和本地保留裁剪 CLI。
-8. 待停服执行：真实数据 dry-run 和 apply。
-9. 待停服执行：切换后端到 MongoDB。
-10. 待停服执行：MongoDB 全库备份和至少一次 staging 恢复演练。
-11. 待停服执行：跑验收命令和手工检查。
-12. 待停服执行：将 SQLite 文件作为迁移备份封存，不再作为运行时主库。
+8. 已完成：真实数据 dry-run 和 apply，本轮使用 `--skip-research`。
+9. 已完成：切换后端到 MongoDB。
+10. 已完成：MongoDB 全库备份、R2 上传、R2 拉回到 staging 和 hash 校验。
+11. 已完成：跑验收命令和手工检查。
+12. 已完成：SQLite 文件作为迁移前备份封存，不再作为运行时主库。
 
 本轮已验证：
 
 ```powershell
 cd quant-board
-.\.venv\Scripts\python.exe -m pytest -q
-
-cd ..
-pnpm exec vitest run src/services/__tests__/StockCodeManager.test.ts src/services/__tests__/apiService.test.ts
-pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false
+.\.venv\Scripts\python.exe -m pytest tests/test_mongodb_migration.py -q
+.\.venv\Scripts\python.exe -m backend.cli migrate-mongodb --dry-run --skip-research
+.\.venv\Scripts\python.exe -m backend.cli migrate-mongodb --apply --replace-confirmed --skip-research
+.\.venv\Scripts\python.exe -m backend.cli list-datasets
+.\.venv\Scripts\python.exe -m backend.cli backup-mongodb --full
+.\.venv\Scripts\python.exe -m backend.cli verify-mongodb-backup --backup-id 20260512T111904Z
+.\.venv\Scripts\python.exe -m backend.cli push-mongodb-backup --backup-id 20260512T111904Z
+.\.venv\Scripts\python.exe -m backend.cli pull-mongodb-backup --backup-id 20260512T111904Z --dry-run
+.\.venv\Scripts\python.exe -m backend.cli pull-mongodb-backup --backup-id 20260512T111904Z
 ```
 
-验证结果：后端 `262 passed`，前端股票基础库相关测试 `13 passed`，Vue 类型检查通过。
+验证结果：迁移测试 `11 passed`；MongoDB 主库、API、R2 上传和 R2 拉回 hash 校验通过。

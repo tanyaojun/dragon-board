@@ -1,8 +1,12 @@
 # SQLite 热库、Parquet 冷归档与对象备份实施计划
 
-本文是 QuantBoard 存储迁移、归档、备份同步的主计划。涉及 SQLite 主库、Parquet 归档、DuckDB 查询、R2/S3 对象备份、Supabase 兼容链、快照入库、同步接口、API/CLI 合同或相关配置的改动，必须先对齐本文，再同步更新 [architecture.md](architecture.md)、[api-cli.md](api-cli.md)、[development-roadmap.md](development-roadmap.md) 和 [AI_COLLABORATION.md](AI_COLLABORATION.md)。
+> 当前状态：本文是迁移前 SQLite/Supabase/Parquet 方案的历史计划，不再代表 QuantBoard 运行主链。QuantBoard 当前运行主库已切换到 MongoDB；SQLite/Supabase/Parquet 旧链路只保留为迁移源、历史审计或离线备份参考，在 MongoDB 模式下相关 API/CLI 维护入口应显式 410 或拒绝执行。当前主库、备份恢复和禁用清单以 [mongodb-migration-plan.md](mongodb-migration-plan.md) 为准。
+
+本文保留 QuantBoard 迁移前存储迁移、归档、备份同步计划，供追溯 SQLite 源库、Supabase 同构备份和旧 Parquet 归档语义。涉及当前 MongoDB 主库、备份恢复、快照入库、同步接口、API/CLI 合同或相关配置的改动，必须先对齐 [mongodb-migration-plan.md](mongodb-migration-plan.md)，再同步更新 [architecture.md](architecture.md)、[api-cli.md](api-cli.md)、[development-roadmap.md](development-roadmap.md) 和 [AI_COLLABORATION.md](AI_COLLABORATION.md)。
 
 ## 目标结论
+
+以下结论是迁移前目标；MongoDB 切换后不再作为生产运行目标。
 
 - SQLite 采用三库边界：`quant_board_snapshots.db` 是快照热库与元数据索引库，`quant_board_research.db` 是回测、优化、Golden 和报告研究热库，`themeDATA.db` 是题材静态映射主库。
 - Parquet 是历史冷数据事实归档：历史 `snapshot_stock_rows`、`snapshot_sector_rows` 和回测 `trades/equity/signals` 可按 manifest 归档到 `data/archive/**`。
@@ -26,6 +30,8 @@
 - 不自动把优化结果写回 Dragon Board 默认参数。
 
 ## 当前事实
+
+以下事实描述迁移前 SQLite/Supabase/Parquet 状态和迁移来源；当前运行事实源已改为 MongoDB。
 
 QuantBoard 当前拆成两个 SQLite 库。旧单库 `quant_board.db` 只作为 legacy source 保留，用于拆分迁移，不再作为默认主库。
 
@@ -98,6 +104,8 @@ Supabase schema 不再包含回测、优化和 Golden 表，也不再对研究 J
 - Supabase 云端 schema 需要用户先在 SQL Editor 执行 `quant-board/backend/data/supabase_schema.sql`；执行前旧云端表会被删除重建，必须确认旧云端数据已经不需要或已另行备份。
 
 ## 存储拓扑
+
+以下拓扑是迁移前历史拓扑；当前拓扑见 [mongodb-migration-plan.md](mongodb-migration-plan.md)。
 
 ```text
 Dragon Board 正式快照

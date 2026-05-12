@@ -232,6 +232,46 @@ def test_pull_mongodb_backup_uses_restore_staging_and_dry_run_writes_nothing(tmp
     assert (staging_dir / "dump" / "snapshot_frames.jsonl").is_file()
     assert not (tmp_path / "target" / "full" / "backup_id=20260512T154000Z").exists()
 
+    verified = target.verify_restore_staging_backup("20260512T154000Z")
+    assert verified["ok"] is True
+    assert verified["backupId"] == "20260512T154000Z"
+    assert verified["checkedFiles"] == 1
+    assert verified["docCounts"] == {"snapshot_frames": 1}
+
+
+def test_verify_restore_staging_backup_rejects_row_count_mismatch(tmp_path: Path) -> None:
+    from backend.data.mongodb_backup import MongoBackupService
+    from backend.data.mongodb_backup import sha256_file
+
+    service = MongoBackupService(
+        backup_dir=tmp_path,
+        database="dragon_board_quant",
+        collections=("snapshot_frames",),
+    )
+    result = service.create_full_backup(
+        FakeMongoDatabase({"snapshot_frames": FakeCollection([{"snapshotId": "s1"}])}),
+        backup_id="20260512T155000Z",
+    )
+    staging_dir = tmp_path / "restore-staging" / "backup_id=20260512T155000Z"
+    staging_dir.mkdir(parents=True)
+    source_dir = Path(result["localPath"])
+    (staging_dir / "manifest.json").write_text(
+        (source_dir / "manifest.json").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    (staging_dir / "dump").mkdir()
+    dump_path = staging_dir / "dump" / "snapshot_frames.jsonl"
+    dump_path.write_text("", encoding="utf-8")
+    manifest = json.loads((staging_dir / "manifest.json").read_text(encoding="utf-8"))
+    manifest["collections"]["snapshot_frames"]["fileHash"] = sha256_file(dump_path)
+    manifest["collections"]["snapshot_frames"]["bytes"] = 0
+    (staging_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    verified = service.verify_restore_staging_backup("20260512T155000Z")
+
+    assert verified["ok"] is False
+    assert verified["error"]["code"] == "restore_row_count_mismatch"
+
 
 def test_prune_mongodb_local_backups_deletes_only_expired_backup_dirs(tmp_path: Path) -> None:
     from backend.data.mongodb_backup import MongoBackupService
@@ -285,5 +325,9 @@ def test_mongodb_backup_cli_commands_parse() -> None:
     pull_args = parser.parse_args(["pull-mongodb-backup", "--backup-id", "b1", "--dry-run"])
     assert pull_args.func.__name__ == "cmd_pull_mongodb_backup"
     assert pull_args.dry_run is True
+    assert (
+        parser.parse_args(["verify-mongodb-restore-staging", "--backup-id", "b1"]).func.__name__
+        == "cmd_verify_mongodb_restore_staging"
+    )
     assert parser.parse_args(["list-mongodb-backups"]).func.__name__ == "cmd_list_mongodb_backups"
     assert parser.parse_args(["prune-mongodb-backups", "--dry-run"]).func.__name__ == "cmd_prune_mongodb_backups"

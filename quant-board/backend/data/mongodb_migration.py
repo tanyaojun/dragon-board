@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import UTC, datetime
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -77,6 +78,7 @@ class MongoMigrationPlan:
     theme_db: Path
     stock_json: Path
     target_database: str
+    include_research: bool = True
 
 
 def build_mongodb_indexes() -> dict[str, list[dict[str, Any]]]:
@@ -275,7 +277,6 @@ def plan_mongodb_migration(plan: MongoMigrationPlan) -> dict[str, Any]:
     collections: dict[str, dict[str, Any]] = {}
     for path, names in [
         (plan.snapshot_db, SNAPSHOT_COLLECTIONS),
-        (plan.research_db, RESEARCH_COLLECTIONS),
         (plan.theme_db, THEME_COLLECTIONS),
     ]:
         tables = _sqlite_tables(path)
@@ -284,6 +285,26 @@ def plan_mongodb_migration(plan: MongoMigrationPlan) -> dict[str, Any]:
                 "source": str(path),
                 "sourceRows": _sqlite_count(path, name) if name in tables else 0,
                 "exists": name in tables,
+            }
+
+    if plan.include_research:
+        research_tables = _sqlite_tables(plan.research_db)
+        for name in RESEARCH_COLLECTIONS:
+            collections[name] = {
+                "source": str(plan.research_db),
+                "sourceRows": _sqlite_count(plan.research_db, name) if name in research_tables else 0,
+                "exists": name in research_tables,
+                "skipped": False,
+                "sourceReadable": True,
+            }
+    else:
+        for name in RESEARCH_COLLECTIONS:
+            collections[name] = {
+                "source": str(plan.research_db),
+                "sourceRows": 0,
+                "exists": plan.research_db.exists(),
+                "skipped": True,
+                "sourceReadable": False,
             }
 
     stock_rows = _load_stock_json(plan.stock_json)
@@ -299,6 +320,56 @@ def plan_mongodb_migration(plan: MongoMigrationPlan) -> dict[str, Any]:
         "writeMode": "dry_run",
         "collections": collections,
         "indexes": build_mongodb_indexes(),
+    }
+
+
+def inspect_mongodb_database(database: Any) -> dict[str, Any]:
+    collections: dict[str, dict[str, Any]] = {}
+    for name in ALL_COLLECTIONS:
+        collection = database[name]
+        index_info = collection.index_information() if hasattr(collection, "index_information") else {}
+        collections[name] = {
+            "count": int(collection.count_documents({})),
+            "indexes": sorted(str(key) for key in index_info.keys()),
+        }
+    return {
+        "ok": True,
+        "collections": collections,
+    }
+
+
+def verify_mongodb_migration(
+    database: Any,
+    *,
+    dataset_id: str = "dragonboard_live",
+    snapshot_type: str = "half_hour",
+    codes: list[str] | None = None,
+) -> dict[str, Any]:
+    counts = {name: int(database[name].count_documents({})) for name in ALL_COLLECTIONS}
+    indexes = _verify_mongodb_indexes(database)
+    frames = list(
+        database["snapshot_frames"].find(
+            {"datasetId": dataset_id, "type": snapshot_type}
+        )
+    )
+    frames.sort(key=lambda row: (str(row.get("tradingDate") or ""), int(row.get("timestamp") or 0), str(row.get("snapshotId") or "")))
+    snapshot_ids = [str(row.get("snapshotId") or "") for row in frames if row.get("snapshotId")]
+    empty_frames = _find_empty_snapshot_frames(database, dataset_id, frames)
+    rank_series = _verify_rank_series(database, dataset_id, snapshot_ids, codes or [])
+    ok = not indexes["missing"] and not empty_frames and all(not item["missingSnapshots"] for item in rank_series.values())
+    return {
+        "ok": ok,
+        "datasetId": dataset_id,
+        "snapshotType": snapshot_type,
+        "counts": counts,
+        "indexes": indexes,
+        "continuity": {
+            "frameCount": len(frames),
+            "emptyFrames": empty_frames,
+            "firstTradingDate": frames[0].get("tradingDate") if frames else None,
+            "lastTradingDate": frames[-1].get("tradingDate") if frames else None,
+        },
+        "rankSeries": rank_series,
     }
 
 
@@ -341,7 +412,6 @@ def apply_mongodb_migration(
     results: dict[str, dict[str, Any]] = {}
     for path, names in [
         (plan.snapshot_db, SNAPSHOT_COLLECTIONS),
-        (plan.research_db, RESEARCH_COLLECTIONS),
         (plan.theme_db, THEME_COLLECTIONS),
     ]:
         tables = _sqlite_tables(path)
@@ -363,15 +433,47 @@ def apply_mongodb_migration(
                 "exists": True,
             }
 
-    stock_rows = [map_stock_name_to_mongo(item) for item in _load_stock_json(plan.stock_json)]
+    if plan.include_research:
+        research_tables = _sqlite_tables(plan.research_db)
+        for name in RESEARCH_COLLECTIONS:
+            if name not in research_tables:
+                results[name] = {"source": str(plan.research_db), "sourceRows": 0, "insertedRows": 0, "exists": False}
+                continue
+            inserted = _copy_sqlite_table_to_mongo(
+                plan.research_db,
+                name,
+                database[name],
+                audit=audit,
+                batch_size=batch_size,
+            )
+            results[name] = {
+                "source": str(plan.research_db),
+                "sourceRows": inserted,
+                "insertedRows": inserted,
+                "exists": True,
+            }
+    else:
+        for name in RESEARCH_COLLECTIONS:
+            results[name] = {
+                "source": str(plan.research_db),
+                "sourceRows": 0,
+                "insertedRows": 0,
+                "exists": plan.research_db.exists(),
+                "skipped": True,
+                "sourceReadable": False,
+            }
+
+    raw_stock_rows = _load_stock_json(plan.stock_json)
+    stock_rows = _dedupe_stock_names([map_stock_name_to_mongo(item) for item in raw_stock_rows], audit=audit)
     _insert_batches(database["stock_names"], stock_rows, batch_size=batch_size)
     results["stock_names"] = {
         "source": str(plan.stock_json),
-        "sourceRows": len(stock_rows),
+        "sourceRows": len(raw_stock_rows),
         "insertedRows": len(stock_rows),
         "exists": plan.stock_json.exists(),
     }
 
+    _persist_migration_audit(database["migration_audit"], audit, batch_size=batch_size)
     _create_indexes(database)
     return {
         "ok": True,
@@ -382,11 +484,81 @@ def apply_mongodb_migration(
     }
 
 
+def _verify_mongodb_indexes(database: Any) -> dict[str, Any]:
+    missing: list[dict[str, Any]] = []
+    present: dict[str, list[str]] = {}
+    for collection_name, expected_indexes in build_mongodb_indexes().items():
+        collection = database[collection_name]
+        index_info = collection.index_information() if hasattr(collection, "index_information") else {}
+        normalized = [_normalize_index_detail(detail) for detail in index_info.values()]
+        present[collection_name] = sorted(str(key) for key in index_info.keys())
+        for expected in expected_indexes:
+            expected_key = list(expected["keys"])
+            expected_unique = bool(expected.get("unique", False))
+            if not any(item["keys"] == expected_key and (not expected_unique or item["unique"]) for item in normalized):
+                missing.append(
+                    {
+                        "collection": collection_name,
+                        "keys": expected_key,
+                        "unique": expected_unique,
+                    }
+                )
+    return {"missing": missing, "present": present}
+
+
+def _normalize_index_detail(detail: dict[str, Any]) -> dict[str, Any]:
+    keys = detail.get("key") or detail.get("keys") or []
+    return {
+        "keys": [tuple(item) for item in keys],
+        "unique": bool(detail.get("unique", False)),
+    }
+
+
+def _find_empty_snapshot_frames(database: Any, dataset_id: str, frames: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    empty: list[dict[str, Any]] = []
+    for frame in frames:
+        snapshot_id = str(frame.get("snapshotId") or "")
+        if not snapshot_id:
+            continue
+        stock_count = int(
+            database["snapshot_stock_rows"].count_documents(
+                {"datasetId": dataset_id, "snapshotId": snapshot_id}
+            )
+        )
+        if stock_count == 0:
+            empty.append(
+                {
+                    "snapshotId": snapshot_id,
+                    "tradingDate": frame.get("tradingDate"),
+                    "slotTime": frame.get("slotTime"),
+                    "declaredStockRowCount": int(frame.get("stockRowCount") or 0),
+                }
+            )
+    return empty
+
+
+def _verify_rank_series(
+    database: Any,
+    dataset_id: str,
+    snapshot_ids: list[str],
+    codes: list[str],
+) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for code in codes:
+        query = {"datasetId": dataset_id, "snapshotId": {"$in": snapshot_ids}, "code": code}
+        rows = list(database["snapshot_stock_rows"].find(query))
+        seen = {str(row.get("snapshotId") or "") for row in rows}
+        result[code] = {
+            "snapshotCount": len(rows),
+            "missingSnapshots": [snapshot_id for snapshot_id in snapshot_ids if snapshot_id not in seen],
+        }
+    return result
+
+
 def _validate_migration_sources(plan: MongoMigrationPlan) -> list[dict[str, Any]]:
     errors: list[dict[str, Any]] = []
     for path, names, label in [
         (plan.snapshot_db, SNAPSHOT_COLLECTIONS, "snapshot_db"),
-        (plan.research_db, RESEARCH_COLLECTIONS, "research_db"),
         (plan.theme_db, THEME_COLLECTIONS, "theme_db"),
     ]:
         if not path.is_file():
@@ -407,6 +579,26 @@ def _validate_migration_sources(plan: MongoMigrationPlan) -> list[dict[str, Any]
                     "tables": missing_tables,
                 }
             )
+    if plan.include_research:
+        path = plan.research_db
+        if not path.is_file():
+            errors.append({"source": "research_db", "path": str(path), "code": "file_missing"})
+        else:
+            try:
+                tables = _sqlite_tables(path)
+            except sqlite3.Error as exc:
+                errors.append({"source": "research_db", "path": str(path), "code": "sqlite_unreadable", "message": str(exc)})
+            else:
+                missing_tables = [name for name in RESEARCH_COLLECTIONS if name not in tables]
+                if missing_tables:
+                    errors.append(
+                        {
+                            "source": "research_db",
+                            "path": str(path),
+                            "code": "tables_missing",
+                            "tables": missing_tables,
+                        }
+                    )
     if not plan.stock_json.is_file():
         errors.append({"source": "stock_json", "path": str(plan.stock_json), "code": "file_missing"})
     else:
@@ -497,6 +689,43 @@ def _load_stock_json(path: Path) -> list[dict[str, Any]]:
     with path.open("r", encoding="utf-8") as handle:
         payload = json.load(handle)
     return payload if isinstance(payload, list) else []
+
+
+def _dedupe_stock_names(
+    rows: list[dict[str, Any]],
+    *,
+    audit: list[dict[str, object]],
+) -> list[dict[str, Any]]:
+    seen: set[str] = set()
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        code = str(row.get("code") or "")
+        if not code:
+            audit.append({"collection": "stock_names", "reason": "missing_code", "row": row})
+            continue
+        if code in seen:
+            audit.append({"collection": "stock_names", "reason": "duplicate_code", "code": code, "row": row})
+            continue
+        seen.add(code)
+        result.append(row)
+    return result
+
+
+def _persist_migration_audit(collection: Any, audit: list[dict[str, object]], *, batch_size: int) -> None:
+    if not audit:
+        return
+    created_at = datetime.now(UTC).replace(tzinfo=None).isoformat()
+    rows = []
+    for index, item in enumerate(audit, start=1):
+        rows.append(
+            {
+                "opType": "mongodb_migration",
+                "idempotencyKey": f"{item.get('collection', 'unknown')}:{item.get('reason', 'unknown')}:{item.get('code', index)}:{index}",
+                "createdAt": created_at,
+                **item,
+            }
+        )
+    _insert_batches(collection, rows, batch_size=batch_size)
 
 
 def _non_empty_collections(database: Any, collection_names: tuple[str, ...]) -> list[dict[str, Any]]:
