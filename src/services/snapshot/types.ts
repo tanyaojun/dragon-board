@@ -296,6 +296,43 @@ export interface SnapshotStockRowQueryOptions {
   limit?: number
 }
 
+export interface RankTrendRankSeriesQueryOptions {
+  datasetId?: string
+  type?: Exclude<SnapshotType, 'five_minute'>
+  types?: never
+  tradingDate?: string
+  startDate?: string
+  endDate?: string
+  beforeTradingDate?: string
+  allowedCaptureModes?: SnapshotCaptureMode[]
+  excludeRestored?: boolean
+  codes?: string[]
+  sort?: 'asc' | 'desc'
+  limit?: number
+}
+
+export interface RankTrendRankSeriesFrame {
+  snapshotId: string
+  displayKey?: string
+  timestamp: number
+  type: Exclude<SnapshotType, 'five_minute'>
+  tradingDate?: string
+  slotTime?: string
+  captureMode?: SnapshotCaptureMode
+  totalCount: number
+  ranks: Record<string, number>
+}
+
+export interface RankTrendRankSeriesResponse {
+  ok: boolean
+  datasetId: string
+  snapshotType: Exclude<SnapshotType, 'five_minute'>
+  frames: RankTrendRankSeriesFrame[]
+  count: number
+  source: string
+  cache?: { hit: boolean; store: string }
+}
+
 export interface SnapshotSectorRowQueryOptions {
   snapshotId?: string
   type?: Exclude<SnapshotType, 'five_minute'>

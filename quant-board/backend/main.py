@@ -438,6 +438,79 @@ def list_snapshot_frames(
     )
 
 
+@app.get("/api/ranktrend/rank-series")
+def get_ranktrend_rank_series(
+    dataset_id: str | None = None,
+    snapshot_type: str = "half_hour",
+    start_date: str | None = None,
+    end_date: str | None = None,
+    trading_date: str | None = None,
+    before_trading_date: str | None = None,
+    allowed_capture_modes: str | None = None,
+    exclude_restored: bool = False,
+    codes: str | None = None,
+    sort: str = "asc",
+    limit: int | None = 50,
+    db: Session | None = Depends(get_db),
+) -> dict[str, Any]:
+    if db is None:
+        raise HTTPException(status_code=503, detail="primary database is unavailable")
+    if snapshot_type not in {"quarter_hour", "half_hour", "hourly", "daily"}:
+        raise HTTPException(status_code=400, detail=f"unsupported snapshot_type: {snapshot_type}")
+    _assert_snapshot_sort(sort)
+    start = trading_date or start_date
+    end = trading_date or end_date
+    capture_modes = _parse_csv(allowed_capture_modes)
+    stock_codes = _parse_csv(codes)
+    repo = Repository(db, enable_backup=False)
+    resolved_dataset_id, dataset = _resolve_snapshot_dataset(repo, dataset_id)
+    snapshot_ids: list[str] = []
+
+    def load_response() -> dict[str, Any]:
+        frames = repo.load_rank_series(
+            resolved_dataset_id,
+            snapshot_type=snapshot_type,
+            start_date=start,
+            end_date=end,
+            before_trading_date=before_trading_date,
+            allowed_capture_modes=capture_modes,
+            exclude_restored=exclude_restored,
+            codes=stock_codes,
+            limit=limit,
+            sort=sort,
+        )
+        snapshot_ids.extend(str(frame.get("snapshotId") or "") for frame in frames if frame.get("snapshotId"))
+        return {
+            "ok": True,
+            "dataset": Repository.dataset_to_dict(dataset),
+            "datasetId": resolved_dataset_id,
+            "snapshotType": snapshot_type,
+            "frames": frames,
+            "count": len(frames),
+            "source": "sqlite",
+        }
+
+    return _cached_snapshot_response(
+        "ranktrend:rank-series",
+        resolved_dataset_id=resolved_dataset_id,
+        params={
+            "snapshot_type": snapshot_type,
+            "start_date": start,
+            "end_date": end,
+            "before_trading_date": before_trading_date,
+            "allowed_capture_modes": allowed_capture_modes,
+            "exclude_restored": exclude_restored,
+            "codes": ",".join(stock_codes),
+            "sort": sort,
+            "limit": limit,
+        },
+        snapshot_type=snapshot_type,
+        trading_date=start if start == end else None,
+        snapshot_ids=snapshot_ids,
+        loader=load_response,
+    )
+
+
 @app.get("/api/snapshots/records")
 def list_snapshot_records(
     dataset_id: str | None = None,

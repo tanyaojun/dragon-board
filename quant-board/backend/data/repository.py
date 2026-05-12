@@ -682,6 +682,89 @@ class Repository:
             bundles.append(item)
         return bundles
 
+    def load_rank_series(
+        self,
+        dataset_id: str,
+        snapshot_type: str = "half_hour",
+        start_date: str | None = None,
+        end_date: str | None = None,
+        before_trading_date: str | None = None,
+        allowed_capture_modes: list[str] | None = None,
+        exclude_restored: bool = False,
+        codes: list[str] | None = None,
+        limit: int | None = 50,
+        sort: str = "asc",
+    ) -> list[dict[str, Any]]:
+        if self.session is None:
+            return []
+
+        query = select(SnapshotFrameModel).where(
+            SnapshotFrameModel.dataset_id == dataset_id,
+            SnapshotFrameModel.type == snapshot_type,
+        )
+        if start_date:
+            query = query.where(SnapshotFrameModel.trading_date >= start_date)
+        if end_date:
+            query = query.where(SnapshotFrameModel.trading_date <= end_date)
+        if before_trading_date:
+            query = query.where(SnapshotFrameModel.trading_date < before_trading_date)
+        if allowed_capture_modes:
+            query = query.where(SnapshotFrameModel.capture_mode.in_(allowed_capture_modes))
+        if exclude_restored:
+            query = query.where(SnapshotFrameModel.capture_mode != "restored")
+
+        order = SnapshotFrameModel.timestamp.desc() if sort == "desc" else SnapshotFrameModel.timestamp.asc()
+        if limit and limit > 0:
+            query = query.limit(limit)
+
+        try:
+            frame_models = list(self.session.scalars(query.order_by(order)))
+        except SQLAlchemyError:
+            return []
+
+        snapshot_ids = [frame.snapshot_id for frame in frame_models]
+        ranks_by_snapshot: dict[str, dict[str, int]] = defaultdict(dict)
+        if snapshot_ids:
+            try:
+                stock_query = select(
+                    SnapshotStockRowModel.snapshot_id,
+                    SnapshotStockRowModel.code,
+                    SnapshotStockRowModel.rank,
+                ).where(
+                    SnapshotStockRowModel.dataset_id == dataset_id,
+                    SnapshotStockRowModel.snapshot_id.in_(snapshot_ids),
+                )
+                if codes:
+                    stock_query = stock_query.where(SnapshotStockRowModel.code.in_(codes))
+                stock_query = stock_query.order_by(
+                    SnapshotStockRowModel.timestamp.asc(),
+                    SnapshotStockRowModel.rank.asc(),
+                )
+                for snapshot_id, code, rank in self.session.execute(stock_query):
+                    if code and rank:
+                        ranks_by_snapshot[str(snapshot_id)][str(code)] = int(rank)
+            except SQLAlchemyError:
+                return []
+
+        frames: list[dict[str, Any]] = []
+        for frame in frame_models:
+            ranks = ranks_by_snapshot.get(frame.snapshot_id, {})
+            total_count = int(frame.stock_row_count or 0) or len(ranks)
+            frames.append(
+                {
+                    "snapshotId": frame.snapshot_id,
+                    "displayKey": frame.display_key,
+                    "timestamp": frame.timestamp,
+                    "type": frame.type,
+                    "tradingDate": frame.trading_date,
+                    "slotTime": frame.slot_time,
+                    "captureMode": frame.capture_mode,
+                    "totalCount": total_count,
+                    "ranks": ranks,
+                }
+            )
+        return frames
+
     def list_snapshot_records(
         self,
         dataset_id: str,

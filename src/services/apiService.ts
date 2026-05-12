@@ -3,6 +3,8 @@ import { debugLog } from '@/utils/logger'
 import { API_CONFIG } from '../config/constants'
 import { normalizeStockCode } from '@/utils/common'
 import type {
+  RankTrendRankSeriesQueryOptions,
+  RankTrendRankSeriesResponse,
   SnapshotFrameQueryOptions,
   SnapshotQueryOptions,
   SnapshotSectorRowQueryOptions,
@@ -103,6 +105,7 @@ type SqliteSnapshotRecordQueryOptions = SnapshotQueryOptions & SqliteSnapshotDat
 type SqliteSnapshotFrameQueryOptions = SnapshotFrameQueryOptions & SqliteSnapshotDatasetOptions
 type SqliteSnapshotStockRowQueryOptions = SnapshotStockRowQueryOptions & SqliteSnapshotDatasetOptions
 type SqliteSnapshotSectorRowQueryOptions = SnapshotSectorRowQueryOptions & SqliteSnapshotDatasetOptions
+type RankTrendRankSeriesApiQueryOptions = RankTrendRankSeriesQueryOptions & SqliteSnapshotDatasetOptions
 type ThemeResearchSummaryQueryOptions = {
   datasetId?: string
   snapshotType?: SnapshotQueryOptions['type']
@@ -728,6 +731,25 @@ export class ApiService {
     })
   }
 
+  /** 从 QuantBoard SQLite 主库读取 RankTrend 专用排名时序 */
+  async getRankTrendRankSeries(
+    params: RankTrendRankSeriesApiQueryOptions = {},
+    options?: RequestConfig,
+  ) {
+    return this.get<RankTrendRankSeriesResponse>(
+      `/api/ranktrend/rank-series${this.buildSqliteSnapshotQuery(params)}`,
+      {
+        context: 'quant-board',
+        priority: 'high',
+        retries: 1,
+        timeout: 15000,
+        cache: false,
+        throwOnHttpError: true,
+        ...options,
+      },
+    )
+  }
+
   /** 从 QuantBoard SQLite 主库读取正式快照记录 */
   async listSqliteSnapshotRecords(params: SqliteSnapshotRecordQueryOptions = {}, options?: RequestConfig) {
     return this.get<any>(`/api/snapshots/records${this.buildSqliteSnapshotQuery(params)}`, {
@@ -848,7 +870,7 @@ export class ApiService {
   }
 
   private buildSqliteSnapshotQuery(
-    params: (SqliteSnapshotRecordQueryOptions | SqliteSnapshotFrameQueryOptions | SqliteSnapshotStockRowQueryOptions | SqliteSnapshotSectorRowQueryOptions) = {},
+    params: (SqliteSnapshotRecordQueryOptions | SqliteSnapshotFrameQueryOptions | SqliteSnapshotStockRowQueryOptions | SqliteSnapshotSectorRowQueryOptions | RankTrendRankSeriesApiQueryOptions) = {},
     frameEndpoint = false,
   ): string {
     const query = new URLSearchParams()

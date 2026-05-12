@@ -66,8 +66,21 @@ vi.mock('../dataLoader', () => ({
   },
 }))
 
+vi.mock('../apiService', () => ({
+  apiService: {
+    getRankTrendRankSeries: vi.fn(),
+  },
+}))
+
+vi.mock('../snapshot/facade', () => ({
+  snapshotFacade: {
+    listSnapshotFrameBundles: vi.fn(),
+  },
+}))
+
 describe('RankTrendAnalyzer', () => {
   afterEach(async () => {
+    vi.resetAllMocks()
     const { rankTrendAnalyzer } = await import('../RankTrendAnalyzer')
     rankTrendAnalyzer.stop()
   })
@@ -95,5 +108,55 @@ describe('RankTrendAnalyzer', () => {
     expect(result?.meta.sampleQuality?.status).toBe('degraded')
     expect(result?.meta.sampleQuality?.coverageWarning).toContain('回退 half_hour')
     expect(result?.meta.sampleQuality?.latestTradingDate).toBe('2026-04-27')
+  })
+
+  it('读取 RankTrend 专用排名时序而不是完整快照帧', async () => {
+    const { apiService } = await import('../apiService')
+    const { snapshotFacade } = await import('../snapshot/facade')
+    vi.mocked(snapshotFacade.listSnapshotFrameBundles).mockRejectedValue(
+      new Error('RankTrend should not read snapshot frame bundles'),
+    )
+    vi.mocked(apiService.getRankTrendRankSeries).mockResolvedValue({
+      ok: true,
+      datasetId: 'dragonboard_live',
+      snapshotType: 'half_hour',
+      source: 'sqlite',
+      count: 50,
+      frames: Array.from({ length: 50 }, (_, index) => {
+        const timestamp = Date.parse('2026-04-27T09:30:00') + index * 30 * 60 * 1000
+        return {
+          snapshotId: `half_hour:2026-04-27:${index}`,
+          displayKey: `[半小时快照] 2026-04-27 ${index}`,
+          timestamp,
+          type: 'half_hour',
+          tradingDate: '2026-04-27',
+          slotTime: '09:30',
+          captureMode: 'real_time',
+          totalCount: 100,
+          ranks: {
+            '600001': Math.max(1, 80 - index),
+          },
+        }
+      }),
+    })
+
+    const { rankTrendAnalyzer } = await import('../RankTrendAnalyzer')
+    const results = await rankTrendAnalyzer.getRankTrends(new Map([['600001', 33]]), {
+      updateSignalStore: false,
+    })
+
+    expect(apiService.getRankTrendRankSeries).toHaveBeenCalledWith({
+      type: 'half_hour',
+      startDate: undefined,
+      endDate: undefined,
+      allowedCaptureModes: ['real_time', 'delayed'],
+      excludeRestored: true,
+      sort: 'desc',
+      limit: 150,
+      codes: ['600001'],
+    })
+    expect(snapshotFacade.listSnapshotFrameBundles).not.toHaveBeenCalled()
+    expect(results.get('600001')?.change).toBeTypeOf('number')
+    expect(results.get('600001')?.confidence).toBeTypeOf('number')
   })
 })

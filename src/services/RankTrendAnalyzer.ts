@@ -31,22 +31,16 @@ import type {
 const runtimeConfig: RankTrendRuntimeConfigModel = cloneDefaultRankTrendRuntimeConfig()
 type SnapshotCaptureMode = 'real_time' | 'delayed' | 'restored'
 type SupportedSnapshotType = RankTrendSnapshotType
-type SnapshotFrameBundle = {
+type RankTrendRankSeriesFrame = {
   snapshotId: string
-  displayKey: string
+  displayKey?: string
   timestamp: number
   type: SupportedSnapshotType
   tradingDate?: string
   slotTime?: string
   captureMode?: SnapshotCaptureMode
-  hotlist?: any[]
-  sectors?: Array<Record<string, any>>
-  marketStats?: Record<string, any> | null
-  sentiment?: Record<string, any> | null
-  moneyFlow?: Record<string, any> | null
-  indices?: Record<string, any> | null
-  limitSummary?: Record<string, any> | null
-  rotationSummary?: Record<string, any> | null
+  totalCount: number
+  ranks: Record<string, number>
 }
 
 const FORMAL_SNAPSHOT_READ_POLICY = {
@@ -70,6 +64,7 @@ type RankTrendAnalysisOptions = {
   preferredSnapshotType?: SupportedSnapshotType
   fromDate?: Date
   toDate?: Date
+  codes?: string[]
 }
 
 type RankHistoryData = {
@@ -92,8 +87,10 @@ type DataLoaderApi = {
   ): void
 }
 
-type SnapshotFacadeApi = {
-  listSnapshotFrameBundles(options: Record<string, unknown>): Promise<SnapshotFrameBundle[]>
+type ApiServiceApi = {
+  getRankTrendRankSeries(options: Record<string, unknown>): Promise<{
+    frames?: RankTrendRankSeriesFrame[]
+  }>
 }
 
 async function loadRuntimeModule(specifier: string): Promise<Record<string, any>> {
@@ -246,51 +243,55 @@ export class RankTrendAnalyzer {
       minRequired?: number
       fromDate?: Date
       toDate?: Date
+      codes?: string[]
     },
   ): Promise<RankTrendAnalysisSnapshot[]> {
-    const snapshotFacade = await this.getSnapshotFacade()
+    const apiService = await this.getApiService()
     const readLimit = options?.limit ? Math.max(options.limit * 3, options.minRequired ?? 0) : undefined
-    const bundles = await snapshotFacade.listSnapshotFrameBundles({
+    const response = await apiService.getRankTrendRankSeries({
       type,
-      projection: 'ranktrend',
       startDate: toTradingDateString(options?.fromDate),
       endDate: toTradingDateString(options?.toDate),
       allowedCaptureModes: FORMAL_SNAPSHOT_READ_POLICY.allowedCaptureModes,
       excludeRestored: FORMAL_SNAPSHOT_READ_POLICY.excludeRestored,
       sort: 'desc',
       limit: readLimit,
+      codes: options?.codes,
     })
 
-    const snapshots = (bundles || [])
-      .map((bundle: SnapshotFrameBundle): RankTrendAnalysisSnapshot | null => {
-        const hotlist = Array.isArray(bundle.hotlist)
-          ? [...bundle.hotlist].sort((left, right) => (left.rank || 999) - (right.rank || 999))
-          : []
-        if (!hotlist.length || !bundle.timestamp) return null
+    const snapshots = (response.frames || [])
+      .map((frame: RankTrendRankSeriesFrame): RankTrendAnalysisSnapshot | null => {
+        const ranks = frame.ranks && typeof frame.ranks === 'object' ? frame.ranks : {}
+        const hotlist = Object.entries(ranks)
+          .map(([code, rank]) => ({ code, rank: Number(rank) }))
+          .filter((item) => Number.isFinite(item.rank) && item.rank > 0)
+          .sort((left, right) => left.rank - right.rank)
+        if (!hotlist.length || !frame.timestamp) return null
 
-        const date = bundle.displayKey || bundle.snapshotId
+        const date = frame.displayKey || frame.snapshotId
         return {
           date,
-          timestamp: Number(bundle.timestamp),
-          type: bundle.type,
-          tradingDate: bundle.tradingDate,
-          slotTime: bundle.slotTime,
-          captureMode: bundle.captureMode,
+          timestamp: Number(frame.timestamp),
+          type: frame.type,
+          tradingDate: frame.tradingDate,
+          slotTime: frame.slotTime,
+          captureMode: frame.captureMode,
           snapshot: {
             date,
-            type: bundle.type,
-            timestamp: Number(bundle.timestamp),
-            tradingDate: bundle.tradingDate,
-            slotTime: bundle.slotTime,
-            captureMode: bundle.captureMode,
+            type: frame.type,
+            timestamp: Number(frame.timestamp),
+            tradingDate: frame.tradingDate,
+            slotTime: frame.slotTime,
+            captureMode: frame.captureMode,
             hotlist,
-            sectors: bundle.sectors || [],
-            marketStats: bundle.marketStats || {},
-            sentiment: bundle.sentiment || {},
-            moneyFlow: bundle.moneyFlow || {},
-            indices: bundle.indices || {},
-            limitSummary: bundle.limitSummary || {},
-            rotationSummary: bundle.rotationSummary || {},
+            totalCount: Number(frame.totalCount) || hotlist.length,
+            sectors: [],
+            marketStats: {},
+            sentiment: {},
+            moneyFlow: {},
+            indices: {},
+            limitSummary: {},
+            rotationSummary: {},
           },
         }
       })
@@ -315,7 +316,7 @@ export class RankTrendAnalyzer {
     const results = new Map<string, RankTrendResult>()
     const recentSnapshots = options.snapshots?.length
       ? this.normalizeAnalysisSnapshots(options.snapshots)
-      : await this.loadRequiredSnapshots(options)
+      : await this.loadRequiredSnapshots({ ...options, codes: Array.from(rankMap.keys()) })
 
     if (recentSnapshots.length === 0) {
       debugLog('[RankTrendAnalyzer] 快照不足，跳过计算')
@@ -380,6 +381,7 @@ export class RankTrendAnalyzer {
         minRequired: requiredSnapshots,
         fromDate: options.fromDate,
         toDate: options.toDate,
+        codes: options.codes,
       })
       if (strictSnapshots.length > 0) {
         if (type !== preferredType) {
@@ -396,6 +398,7 @@ export class RankTrendAnalyzer {
         limit,
         fromDate: options.fromDate,
         toDate: options.toDate,
+        codes: options.codes,
       })
       if (looseSnapshots.length > fallbackPicked.length) {
         fallbackPicked = looseSnapshots
@@ -602,11 +605,12 @@ export class RankTrendAnalyzer {
         const hotlist = Array.isArray(snapshot?.hotlist) ? snapshot.hotlist : []
         const itemIndex = hotlist.findIndex((item: any) => item.code === code)
         const item = itemIndex >= 0 ? hotlist[itemIndex] : null
+        const totalCount = Number(snapshot?.totalCount) || hotlist.length
         const rank = Number(item?.rank ?? (itemIndex >= 0 ? itemIndex + 1 : 0))
-        if (rank > 0 && hotlist.length > 0) {
+        if (rank > 0 && totalCount > 0) {
           ranks.push(rank)
-          percentiles.push(this.calculatePercentileRank(rank, hotlist.length))
-          totalCounts.push(hotlist.length)
+          percentiles.push(this.calculatePercentileRank(rank, totalCount))
+          totalCounts.push(totalCount)
         }
       }
 
@@ -735,9 +739,9 @@ export class RankTrendAnalyzer {
     return module.dataLayer as DataLayerApi
   }
 
-  private async getSnapshotFacade(): Promise<SnapshotFacadeApi> {
-    const module = await loadRuntimeModule('./snapshot/facade')
-    return module.snapshotFacade as SnapshotFacadeApi
+  private async getApiService(): Promise<ApiServiceApi> {
+    const module = await loadRuntimeModule('./apiService')
+    return module.apiService as ApiServiceApi
   }
 
   private async batchUpdateSignals(results: Map<string, RankTrendResult>): Promise<void> {

@@ -1328,6 +1328,258 @@ def test_snapshot_frames_api_ranktrend_projection_returns_lightweight_hotlist() 
     assert "zlje" not in frame["hotlist"][0]
 
 
+def test_ranktrend_rank_series_api_returns_compact_rank_history() -> None:
+    client = TestClient(app)
+    suffix = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
+    dataset_id = f"dragonboard_rank_series_{suffix}"
+    first_snapshot_id = f"half_hour:2026-04-21:1000:{suffix}"
+    second_snapshot_id = f"half_hour:2026-04-21:1030:{suffix}"
+    bundle = {
+        "version": "v4",
+        "tradingDate": "2026-04-21",
+        "items": [
+            {
+                "id": first_snapshot_id,
+                "type": "half_hour",
+                "tradingDate": "2026-04-21",
+                "slotTime": "10:00",
+                "timestamp": 1776746400000,
+                "displayKey": "[半小时快照] 2026-04-21 10:00",
+                "captureMode": "real_time",
+                "source": "browser_runtime",
+                "payload": {"hotlist": []},
+            },
+            {
+                "id": second_snapshot_id,
+                "type": "half_hour",
+                "tradingDate": "2026-04-21",
+                "slotTime": "10:30",
+                "timestamp": 1776748200000,
+                "displayKey": "[半小时快照] 2026-04-21 10:30",
+                "captureMode": "real_time",
+                "source": "browser_runtime",
+                "payload": {"hotlist": []},
+            },
+        ],
+        "frames": [
+            {
+                "id": first_snapshot_id,
+                "snapshotId": first_snapshot_id,
+                "type": "half_hour",
+                "tradingDate": "2026-04-21",
+                "slotTime": "10:00",
+                "timestamp": 1776746400000,
+                "displayKey": "[半小时快照] 2026-04-21 10:00",
+                "captureMode": "real_time",
+                "source": "browser_runtime",
+                "stockRowCount": 2,
+                "sectorRowCount": 0,
+            },
+            {
+                "id": second_snapshot_id,
+                "snapshotId": second_snapshot_id,
+                "type": "half_hour",
+                "tradingDate": "2026-04-21",
+                "slotTime": "10:30",
+                "timestamp": 1776748200000,
+                "displayKey": "[半小时快照] 2026-04-21 10:30",
+                "captureMode": "real_time",
+                "source": "browser_runtime",
+                "stockRowCount": 2,
+                "sectorRowCount": 0,
+            },
+        ],
+        "stockRows": [
+            {
+                "id": f"{first_snapshot_id}:600001",
+                "snapshotId": first_snapshot_id,
+                "type": "half_hour",
+                "tradingDate": "2026-04-21",
+                "slotTime": "10:00",
+                "timestamp": 1776746400000,
+                "captureMode": "real_time",
+                "source": "browser_runtime",
+                "code": "600001",
+                "name": "样本A",
+                "rank": 1,
+                "zlje": 1234,
+            },
+            {
+                "id": f"{first_snapshot_id}:600002",
+                "snapshotId": first_snapshot_id,
+                "type": "half_hour",
+                "tradingDate": "2026-04-21",
+                "slotTime": "10:00",
+                "timestamp": 1776746400000,
+                "captureMode": "real_time",
+                "source": "browser_runtime",
+                "code": "600002",
+                "name": "样本B",
+                "rank": 2,
+            },
+            {
+                "id": f"{second_snapshot_id}:600001",
+                "snapshotId": second_snapshot_id,
+                "type": "half_hour",
+                "tradingDate": "2026-04-21",
+                "slotTime": "10:30",
+                "timestamp": 1776748200000,
+                "captureMode": "real_time",
+                "source": "browser_runtime",
+                "code": "600001",
+                "name": "样本A",
+                "rank": 3,
+            },
+            {
+                "id": f"{second_snapshot_id}:600002",
+                "snapshotId": second_snapshot_id,
+                "type": "half_hour",
+                "tradingDate": "2026-04-21",
+                "slotTime": "10:30",
+                "timestamp": 1776748200000,
+                "captureMode": "real_time",
+                "source": "browser_runtime",
+                "code": "600002",
+                "name": "样本B",
+                "rank": 1,
+            },
+        ],
+        "sectorRows": [],
+    }
+
+    ingest = client.post(
+        "/api/snapshots/ingest",
+        json={
+            "datasetId": dataset_id,
+            "idempotencyKey": f"rank-series-key-{suffix}",
+            "tradingDate": "2026-04-21",
+            "bundle": bundle,
+        },
+    )
+    assert ingest.status_code == 200, ingest.text
+
+    response = client.get(
+        "/api/ranktrend/rank-series",
+        params={
+            "dataset_id": dataset_id,
+            "snapshot_type": "half_hour",
+            "trading_date": "2026-04-21",
+            "allowed_capture_modes": "real_time",
+            "sort": "asc",
+            "limit": 10,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["source"] == "sqlite"
+    assert body["count"] == 2
+    assert body["frames"][0]["snapshotId"] == first_snapshot_id
+    assert body["frames"][0]["ranks"] == {"600001": 1, "600002": 2}
+    assert body["frames"][0]["totalCount"] == 2
+    assert "hotlist" not in body["frames"][0]
+    assert "rows" not in body["frames"][0]
+
+
+def test_ranktrend_rank_series_api_filters_codes() -> None:
+    client = TestClient(app)
+    suffix = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
+    dataset_id = f"dragonboard_rank_series_codes_{suffix}"
+    snapshot_id = f"half_hour:2026-04-21:1000:{suffix}"
+    bundle = {
+        "version": "v4",
+        "tradingDate": "2026-04-21",
+        "items": [
+            {
+                "id": snapshot_id,
+                "type": "half_hour",
+                "tradingDate": "2026-04-21",
+                "slotTime": "10:00",
+                "timestamp": 1776746400000,
+                "displayKey": "[半小时快照] 2026-04-21 10:00",
+                "captureMode": "real_time",
+                "source": "browser_runtime",
+                "payload": {"hotlist": []},
+            }
+        ],
+        "frames": [
+            {
+                "id": snapshot_id,
+                "snapshotId": snapshot_id,
+                "type": "half_hour",
+                "tradingDate": "2026-04-21",
+                "slotTime": "10:00",
+                "timestamp": 1776746400000,
+                "captureMode": "real_time",
+                "source": "browser_runtime",
+                "stockRowCount": 3,
+            }
+        ],
+        "stockRows": [
+            {
+                "id": f"{snapshot_id}:600001",
+                "snapshotId": snapshot_id,
+                "type": "half_hour",
+                "tradingDate": "2026-04-21",
+                "slotTime": "10:00",
+                "timestamp": 1776746400000,
+                "code": "600001",
+                "name": "样本A",
+                "rank": 1,
+            },
+            {
+                "id": f"{snapshot_id}:600002",
+                "snapshotId": snapshot_id,
+                "type": "half_hour",
+                "tradingDate": "2026-04-21",
+                "slotTime": "10:00",
+                "timestamp": 1776746400000,
+                "code": "600002",
+                "name": "样本B",
+                "rank": 2,
+            },
+            {
+                "id": f"{snapshot_id}:600003",
+                "snapshotId": snapshot_id,
+                "type": "half_hour",
+                "tradingDate": "2026-04-21",
+                "slotTime": "10:00",
+                "timestamp": 1776746400000,
+                "code": "600003",
+                "name": "样本C",
+                "rank": 3,
+            },
+        ],
+        "sectorRows": [],
+    }
+
+    ingest = client.post(
+        "/api/snapshots/ingest",
+        json={
+            "datasetId": dataset_id,
+            "idempotencyKey": f"rank-series-codes-key-{suffix}",
+            "tradingDate": "2026-04-21",
+            "bundle": bundle,
+        },
+    )
+    assert ingest.status_code == 200, ingest.text
+
+    response = client.get(
+        "/api/ranktrend/rank-series",
+        params={
+            "dataset_id": dataset_id,
+            "snapshot_type": "half_hour",
+            "trading_date": "2026-04-21",
+            "codes": "600001,600003",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    frame = response.json()["frames"][0]
+    assert frame["ranks"] == {"600001": 1, "600003": 3}
+    assert frame["totalCount"] == 3
+
+
 def test_snapshot_frames_api_uses_snapshot_cache(monkeypatch: pytest.MonkeyPatch) -> None:
     from backend.data import snapshot_cache
 

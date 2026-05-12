@@ -279,6 +279,39 @@ describe('ApiService', () => {
     expect(requestedUrl).toContain('projection=ranktrend')
   })
 
+  it('maps ranktrend rank series params to QuantBoard API', async () => {
+    const api = new ApiService()
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, frames: [] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await api.getRankTrendRankSeries({
+      datasetId: 'dragonboard_live',
+      type: 'half_hour',
+      startDate: '2026-04-21',
+      allowedCaptureModes: ['real_time', 'delayed'],
+      excludeRestored: true,
+      sort: 'desc',
+      limit: 50,
+      codes: ['600001', '600002'],
+    })
+
+    const requestedUrl = String(fetchMock.mock.calls[0][0])
+    expect(requestedUrl).toContain('http://localhost:8000/api/ranktrend/rank-series?')
+    expect(requestedUrl).toContain('dataset_id=dragonboard_live')
+    expect(requestedUrl).toContain('snapshot_type=half_hour')
+    expect(requestedUrl).toContain('start_date=2026-04-21')
+    expect(requestedUrl).toContain('allowed_capture_modes=real_time%2Cdelayed')
+    expect(requestedUrl).toContain('exclude_restored=true')
+    expect(requestedUrl).toContain('sort=desc')
+    expect(requestedUrl).toContain('limit=50')
+    expect(requestedUrl).toContain('codes=600001%2C600002')
+  })
+
   it('maps sqlite snapshot record detail formal policy params to QuantBoard API', async () => {
     const api = new ApiService()
     const fetchMock = vi.fn().mockResolvedValue(
