@@ -8,6 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.data.models import OptimizationRun
+from backend.utils import json_loads
 
 
 class FakeRepo:
@@ -78,6 +79,10 @@ def test_optimization_background_job_uses_repository_factory_in_mongodb_mode(mon
     )
 
     assert [run.id for run in repo.saved_backtests] == ["bt_1"]
+    assert repo.saved_backtests[0].status == "completed"
+    artifact_request = json_loads(repo.saved_backtests[0].request_json)
+    assert artifact_request["artifact_type"] == "optimization_trial"
+    assert artifact_request["artifactType"] == "optimization_trial"
     assert [run.id for run in repo.saved_optimizations] == ["opt_1"]
     assert repo.saved_optimizations[0].status == "completed"
 

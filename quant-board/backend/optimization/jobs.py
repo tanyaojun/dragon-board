@@ -75,7 +75,11 @@ def _run_job(
         with _job_session(session_factory) as session:
             repo = create_repository(session)
             for artifact in backtest_artifacts:
-                artifact_request = artifact.get("request") or {}
+                artifact_request = {
+                    **(artifact.get("request") or {}),
+                    "artifact_type": "optimization_trial",
+                    "artifactType": "optimization_trial",
+                }
                 artifact_result = artifact.get("result") or {}
                 repo.save_backtest_run(
                     BacktestRun(
@@ -84,6 +88,7 @@ def _run_job(
                         strategy_name=strategy_name,
                         snapshot_type=snapshot_type,
                         random_seed=random_seed,
+                        status="completed",
                         config_hash=str(artifact.get("configHash") or stable_hash(artifact_request)),
                         request_json=dumps_json_field(artifact_request),
                         result_json=dumps_json_field(artifact_result),

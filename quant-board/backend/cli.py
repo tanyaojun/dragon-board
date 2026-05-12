@@ -29,6 +29,7 @@ from backend.data.mongodb_migration import (
 from backend.data.mongodb_cleanup import plan_mongodb_dataset_cleanup
 from backend.data.mongodb_snapshot_repair import backfill_empty_snapshot_rows
 from backend.data.mongodb_backup import get_mongodb_backup_service
+from backend.data.mongodb_research_repair import repair_mongodb_research_metadata
 from backend.data.repository import Repository
 from backend.data.schemas import ImportDatasetRequest
 from backend.data.storage_inspector import inspect_storage
@@ -393,6 +394,15 @@ def cmd_backfill_empty_mongodb_snapshots(args: argparse.Namespace) -> None:
             _runtime_mongodb_database(),
             dataset_id=args.dataset_id,
             snapshot_ids=args.snapshot_id,
+            apply=bool(args.apply),
+        )
+    )
+
+
+def cmd_repair_mongodb_research_metadata(args: argparse.Namespace) -> None:
+    print_json(
+        repair_mongodb_research_metadata(
+            _runtime_mongodb_database(),
             apply=bool(args.apply),
         )
     )
@@ -839,6 +849,10 @@ def build_parser() -> argparse.ArgumentParser:
     backfill_mongodb_cmd.add_argument("--snapshot-id", action="append", default=None)
     backfill_mongodb_cmd.add_argument("--apply", action="store_true")
     backfill_mongodb_cmd.set_defaults(func=cmd_backfill_empty_mongodb_snapshots)
+
+    repair_mongodb_research_cmd = sub.add_parser("repair-mongodb-research-metadata", help="Preview or repair MongoDB research metadata and test theme pollution")
+    repair_mongodb_research_cmd.add_argument("--apply", action="store_true")
+    repair_mongodb_research_cmd.set_defaults(func=cmd_repair_mongodb_research_metadata)
 
     backup_mongodb_cmd = sub.add_parser("backup-mongodb", help="Create a full local MongoDB backup")
     backup_mongodb_cmd.add_argument("--full", action="store_true", required=True)

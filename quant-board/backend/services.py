@@ -184,6 +184,7 @@ class BacktestService:
             strategy_name=strategy_name,
             snapshot_type=snapshot_type,
             random_seed=request_meta["random_seed"],
+            status="completed",
             config_hash=stable_hash(request_meta),
             date_start=trading_dates[0] if trading_dates else None,
             date_end=trading_dates[-1] if trading_dates else None,
@@ -303,6 +304,7 @@ class BacktestService:
             strategy_name=strategy_name,
             snapshot_type=snapshot_type,
             random_seed=random_seed,
+            status="completed",
             config_hash=stable_hash(request_meta),
             date_start=trading_dates[0] if trading_dates else None,
             date_end=trading_dates[-1] if trading_dates else None,
@@ -462,6 +464,7 @@ class BacktestService:
             strategy_name=strategy_name,
             snapshot_type=snapshot_type,
             random_seed=random_seed,
+            status="completed",
             config_hash=stable_hash(request_meta),
             date_start=trading_dates[0] if trading_dates else None,
             date_end=trading_dates[-1] if trading_dates else None,
@@ -1121,7 +1124,11 @@ class OptimizationService:
         result = OptimizationRunner().run(run_frames, request)
         backtest_artifacts = result.pop("backtestArtifacts", []) or []
         for artifact in backtest_artifacts:
-            artifact_request = artifact.get("request") or {}
+            artifact_request = {
+                **(artifact.get("request") or {}),
+                "artifact_type": "optimization_trial",
+                "artifactType": "optimization_trial",
+            }
             artifact_result = artifact.get("result") or {}
             self.repo.save_backtest_run(
                 BacktestRun(
@@ -1130,6 +1137,7 @@ class OptimizationService:
                     strategy_name=strategy_name,
                     snapshot_type=snapshot_type,
                     random_seed=request["random_seed"],
+                    status="completed",
                     config_hash=str(artifact.get("configHash") or stable_hash(artifact_request)),
                     request_json=dumps_json_field(artifact_request),
                     result_json=dumps_json_field(artifact_result),

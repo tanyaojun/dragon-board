@@ -166,6 +166,28 @@ def test_backtest_run_doc_compresses_large_result_without_losing_payload() -> No
     assert restored_result == result
 
 
+def test_backtest_run_without_status_is_stored_as_completed() -> None:
+    db = FakeMongoDatabase()
+    repo = MongoResearchRepository(db)
+    run = BacktestRun(
+        id="bt_missing_status",
+        dataset_id="ds_1",
+        strategy_name="rank_trend_candidate",
+        snapshot_type="half_hour",
+        config_hash="hash_1",
+        random_seed=20260430,
+        request_json='{"datasetId":"ds_1"}',
+        result_json='{"metrics":{"totalReturn":0.12}}',
+    )
+    run.status = None
+
+    saved = repo.save_backtest_run(run)
+    raw_doc = db["backtest_runs"].rows[0]
+
+    assert raw_doc["status"] == "completed"
+    assert saved.status == "completed"
+
+
 def test_backtest_signals_keep_sequence_order_and_support_tier_regime_filters() -> None:
     repo = MongoResearchRepository(FakeMongoDatabase())
 

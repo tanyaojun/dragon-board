@@ -371,7 +371,7 @@ class MongoResearchRepository(MongoRepository):
             "snapshotType": run.snapshot_type,
             "configHash": run.config_hash,
             "randomSeed": run.random_seed,
-            "status": run.status,
+            "status": run.status or "completed",
             "dateStart": run.date_start,
             "dateEnd": run.date_end,
             "errorReason": run.error_reason,
