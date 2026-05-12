@@ -41,7 +41,7 @@ import type {
 } from "./types";
 
 type TabKey = "golden" | "backtest" | "theme" | "optimization" | "report" | "replay";
-type ImportMode = "sqlite_snapshots" | "json_file";
+type ImportMode = "snapshot_store" | "json_file";
 
 const strategyOptions: Array<{ value: StrategyName; label: string; description: string }> = [
   {
@@ -116,7 +116,7 @@ const snapshotCountsState = reactive<RequestResult<Record<string, unknown>>>({ s
 
 const selectedDatasetId = ref("");
 const datasetRefreshAt = ref("");
-const importMode = ref<ImportMode>("sqlite_snapshots");
+const importMode = ref<ImportMode>("snapshot_store");
 const sourceDatasetId = ref("dragonboard_live");
 const selectedJsonFile = ref<File | null>(null);
 const selectedGoldenFile = ref<File | null>(null);
@@ -269,7 +269,26 @@ const selectedDataset = computed(() => {
   return datasetsState.data?.find((dataset) => dataset.id === selectedDatasetId.value);
 });
 
-const sqliteSourceOptions = computed(() => {
+const databaseStatus = computed(() => {
+  const database = asRecord(health.data?.database);
+  const primary = asRecord(database?.primary);
+  return {
+    mode: String(database?.mode || ""),
+    primaryMode: String(primary?.mode || ""),
+    connected: primary?.connected === true,
+    lastError: typeof primary?.last_error === "string" ? primary.last_error : ""
+  };
+});
+
+const isMongoMode = computed(() => {
+  return databaseStatus.value.mode === "mongodb_primary" || databaseStatus.value.primaryMode === "mongodb";
+});
+
+const canUseSnapshotStore = computed(() => {
+  return !isMongoMode.value || databaseStatus.value.connected;
+});
+
+const snapshotSourceOptions = computed(() => {
   const seen = new Set<string>();
   const options: Array<{ id: string; label: string }> = [];
   const add = (id: string, label?: string) => {
@@ -279,7 +298,7 @@ const sqliteSourceOptions = computed(() => {
     seen.add(id);
     options.push({ id, label: label || id });
   };
-  add("dragonboard_live", "dragonboard_live / 正式快照库");
+  add("dragonboard_live", "dragonboard_live / 正式快照主库");
   for (const dataset of datasetsState.data || []) {
     add(dataset.id, datasetDisplayName(dataset));
   }
@@ -405,10 +424,17 @@ const importStatusClass = computed(() => {
 });
 
 const importHelpText = computed(() => {
-  if (importMode.value === "json_file") {
-    return "迁移辅助：只在需要导入历史 JSON/备份文件时使用。日常研究应优先使用 SQLite 快照库。";
+  if (isMongoMode.value && !databaseStatus.value.connected) {
+    return `MongoDB 主库未连接，无法读取数据集或生成研究数据集：${databaseStatus.value.lastError || "unknown error"}`;
   }
-  return "推荐：从 QuantBoard SQLite 主库里的正式快照表生成研究数据集。DragonBoard 已经把正式快照写入 SQLite，不再需要浏览器 IndexedDB/LevelDB/运行页桥接。";
+  if (importMode.value === "json_file") {
+    return isMongoMode.value
+      ? "MongoDB 迁移后 JSON 上传入口默认关闭；历史 JSON 请先走后端迁移/导入脚本，再进入 MongoDB 主库。"
+      : "迁移辅助：只在需要导入历史 JSON/备份文件时使用。日常研究应优先使用快照主库。";
+  }
+  return isMongoMode.value
+    ? "推荐：直接使用 MongoDB 主库中的正式快照数据集运行回测和优化；通常不需要再生成派生数据集。"
+    : "推荐：从 QuantBoard 快照主库里的正式快照表生成研究数据集。DragonBoard 已经把正式快照写入后端主库，不再需要浏览器 IndexedDB/LevelDB/运行页桥接。";
 });
 
 const snapshotCounts = computed(() => {
@@ -592,12 +618,21 @@ const walkForwardAggregate = computed(() => getObjectField(walkForward.value, ["
 
 const healthLabel = computed(() => {
   if (health.status === "ok") {
-    return `API ${health.data?.status || "ok"} ${health.data?.version || ""}`.trim();
+    const storage = isMongoMode.value ? "MongoDB" : "SQLite";
+    const connection = canUseSnapshotStore.value ? "ok" : "down";
+    return `API ${health.data?.status || "ok"} ${health.data?.version || ""} · ${storage} ${connection}`.trim();
   }
   if (health.status === "error") {
     return `API 异常: ${health.error}`;
   }
   return health.status === "loading" ? "API 检查中" : "API 未检查";
+});
+
+const healthStatusClass = computed(() => {
+  if (health.status === "ok" && !canUseSnapshotStore.value) {
+    return "status-error";
+  }
+  return statusClass(health.status);
 });
 
 function jsonPreview(value: unknown): string {
@@ -801,6 +836,11 @@ async function loadDatasets(): Promise<void> {
 }
 
 async function inspectSnapshotSource(): Promise<void> {
+  if (!canUseSnapshotStore.value) {
+    snapshotCountsState.status = "error";
+    snapshotCountsState.error = "MongoDB 主库未连接，无法检查快照源";
+    return;
+  }
   await runRequest(snapshotCountsState, () =>
     api.snapshotCounts(sourceDatasetId.value.trim() || "dragonboard_live") as Promise<Record<string, unknown>>
   );
@@ -844,6 +884,12 @@ async function importDataset(): Promise<void> {
     if (importState.status === "ok" && !dryRunImport.value) {
       await loadDatasets();
     }
+    return;
+  }
+
+  if (!canUseSnapshotStore.value) {
+    importState.status = "error";
+    importState.error = "MongoDB 主库未连接，无法生成研究数据集";
     return;
   }
 
@@ -1111,6 +1157,12 @@ watch(selectedDatasetId, (id) => {
   themeOptimizationForm.datasetId = id;
 });
 
+watch(isMongoMode, (enabled) => {
+  if (enabled && importMode.value === "json_file") {
+    importMode.value = "snapshot_store";
+  }
+});
+
 // ── ThemeTrend handlers ──
 async function runThemeBacktest(): Promise<void> {
   await runRequest(themeState, () => api.runThemeTrend({ ...themeBacktestForm, datasetId: selectedDatasetId.value || themeBacktestForm.datasetId }), (data) => {
@@ -1155,7 +1207,7 @@ onMounted(async () => {
         <p>数据导入、Golden 对齐、回测、优化、报告与单票解释联调面板</p>
       </div>
       <div class="topbar-actions">
-        <span class="status-pill" :class="statusClass(health.status)">{{ healthLabel }}</span>
+        <span class="status-pill" :class="healthStatusClass">{{ healthLabel }}</span>
         <button type="button" class="icon-button" title="刷新 API 状态" @click="checkHealth">↻</button>
       </div>
     </header>
@@ -1220,18 +1272,18 @@ onMounted(async () => {
           <label>
             导入方式
             <select v-model="importMode">
-              <option value="sqlite_snapshots">SQLite 快照库</option>
-              <option value="json_file">JSON 文件上传</option>
+              <option value="snapshot_store">快照主库</option>
+              <option value="json_file" :disabled="isMongoMode">JSON 文件上传</option>
             </select>
           </label>
           <label v-if="importMode === 'json_file'">
             JSON 快照文件
             <input type="file" accept=".json,application/json" @change="selectJsonFile" />
           </label>
-          <label v-if="importMode === 'sqlite_snapshots'">
+          <label v-if="importMode === 'snapshot_store'">
             源快照数据集
             <select v-model="sourceDatasetId">
-              <option v-for="option in sqliteSourceOptions" :key="option.id" :value="option.id">
+              <option v-for="option in snapshotSourceOptions" :key="option.id" :value="option.id">
                 {{ option.label }}
               </option>
             </select>
@@ -1250,7 +1302,7 @@ onMounted(async () => {
           <div class="inline-note">
             {{ importHelpText }}
           </div>
-          <template v-if="importMode === 'sqlite_snapshots'">
+          <template v-if="importMode === 'snapshot_store'">
             <label>
               开始日期
               <input v-model="importStartDate" type="date" />
@@ -1268,7 +1320,7 @@ onMounted(async () => {
                 type="number"
                 min="0"
                 max="50000"
-                :disabled="importMode !== 'sqlite_snapshots'"
+                :disabled="importMode !== 'snapshot_store'"
               />
             </label>
             <label class="check-row">
@@ -1279,12 +1331,17 @@ onMounted(async () => {
           <div class="button-row">
             <button
               type="button"
-              :disabled="importMode !== 'sqlite_snapshots' || snapshotCountsState.status === 'loading'"
+              :disabled="importMode !== 'snapshot_store' || snapshotCountsState.status === 'loading' || !canUseSnapshotStore"
               @click="inspectSnapshotSource"
             >
-              检查 SQLite 源
+              检查快照源
             </button>
-            <button type="button" class="primary" :disabled="importState.status === 'loading'" @click="importDataset">
+            <button
+              type="button"
+              class="primary"
+              :disabled="importState.status === 'loading' || (importMode === 'snapshot_store' && !canUseSnapshotStore)"
+              @click="importDataset"
+            >
               生成数据集
             </button>
           </div>
@@ -1578,7 +1635,7 @@ onMounted(async () => {
             {{ strategyOptions.find((option) => option.value === backtestForm.strategyName)?.description }}
           </div>
           <div v-if="backtestState.status === 'loading'" class="inline-note">
-            回测计算中，SQLite 派生数据集会先生成 RankTrend 信号，再做交易模拟和后验统计。
+            回测计算中，后端会从当前快照主库读取 RankTrend 序列，再做交易模拟和后验统计。
           </div>
           <div v-if="backtestState.status === 'error'" class="inline-error">
             {{ backtestState.error }}

@@ -207,6 +207,55 @@ def test_theme_status_reports_mongodb_connection_failure(monkeypatch) -> None:
     assert status["last_error"] == "missing uri"
 
 
+def test_dataset_list_reports_service_unavailable_when_mongodb_is_down(monkeypatch) -> None:
+    import backend.main as main
+
+    class UnavailableDatasetService:
+        def __init__(self, session) -> None:
+            pass
+
+        def list_datasets(self) -> list[dict[str, Any]]:
+            raise TimeoutError("mongo timed out")
+
+    monkeypatch.setattr(main, "storage_source_label", lambda: "mongodb")
+    monkeypatch.setattr(main, "DatasetService", UnavailableDatasetService)
+    main.app.dependency_overrides[main.get_db] = lambda: None
+    client = TestClient(main.app)
+    try:
+        response = client.get("/api/datasets")
+    finally:
+        main.app.dependency_overrides.clear()
+
+    assert response.status_code == 503
+    assert "MongoDB primary is unavailable" in response.json()["detail"]
+
+
+def test_pytest_cannot_connect_to_production_mongodb_database(monkeypatch) -> None:
+    from backend.data import repository_factory
+
+    repository_factory._runtime_mongodb_database = None
+    monkeypatch.setenv("PYTEST_CURRENT_TEST", "test_guard")
+    monkeypatch.setattr(
+        repository_factory,
+        "get_settings",
+        lambda: type(
+            "Settings",
+            (),
+            {
+                "mongodb_uri": "mongodb://127.0.0.1:27017",
+                "mongodb_database": "dragon_board_quant",
+                "mongodb_connect_timeout_ms": 100,
+                "mongodb_server_selection_timeout_ms": 100,
+            },
+        )(),
+    )
+
+    with pytest.raises(RuntimeError, match="pytest must not connect"):
+        repository_factory.get_runtime_mongodb_database()
+
+    repository_factory._runtime_mongodb_database = None
+
+
 @pytest.mark.parametrize(
     "command",
     [

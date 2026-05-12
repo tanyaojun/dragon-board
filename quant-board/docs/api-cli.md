@@ -670,11 +670,11 @@ CLI 输出与 `POST /api/migrations/themes/verify-json` 一致。
 }
 ```
 
-返回会包含 `runId`，并把完整结果落库到 `backtest_runs`。为避免真实数据集响应过大，接口默认只返回前 120 条 `signals` 预览，完整结果通过 `runId` 读取。报告会包含 `researchDiagnostics`，用于展示 1/2/5 bars 后验表现、市场环境和生命周期下的候选分层分布、展示状态分布及对照组表现；该字段只作为研究诊断，不会自动写回默认参数。
+返回会包含 `runId`，并把完整结果落库到 `backtest_runs`。MongoDB 模式下完整结果写入 `resultCompressed` 可逆压缩字段，读取层透明还原；不裁剪 `backtest_runs` 中的回测结果。为避免真实数据集响应过大，接口默认只返回前 120 条 `signals` 预览，完整结果通过 `runId` 读取。报告会包含 `researchDiagnostics`，用于展示 1/2/5 bars 后验表现、市场环境和生命周期下的候选分层分布、展示状态分布及对照组表现；该字段只作为研究诊断，不会自动写回默认参数。
 
 ### `GET /api/backtests/{run_id}`
 
-读取兼容回测报告。该接口保留旧读取口径，返回 `backtest_runs.result_json` 中的摘要和预览字段；新页面需要完整交易、权益曲线、信号和质量报告时，应继续调用下列归一化结果端点。
+读取兼容回测报告。SQLite 模式读取 `backtest_runs.result_json`；MongoDB 模式读取 `backtest_runs.resultCompressed` 并透明解压，旧 `result` 子文档仅作为兼容字段。新页面需要完整交易、权益曲线、信号和质量报告时，应继续调用下列归一化结果端点。
 
 ### `GET /api/backtests/{run_id}/report`
 

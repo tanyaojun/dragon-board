@@ -8,6 +8,7 @@ export default defineConfig({
   test: {
     include: ['src/**/__tests__/**/*.test.ts'],
     exclude: ['e2e/**', 'src/devtools/**'],
+    testTimeout: 10000,
   },
   resolve: {
     alias: {

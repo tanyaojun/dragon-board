@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from backend.data.json_codec import loads_json_field
+from backend.data.json_codec import dumps_json_field, loads_json_field
 
 
 SNAPSHOT_COLLECTIONS = (
@@ -242,13 +242,17 @@ def map_sqlite_row_to_mongo(
             continue
         if key in JSON_FIELD_DEFAULTS:
             target_key, fallback = JSON_FIELD_DEFAULTS[key]
-            document[target_key] = _parse_json_field(
+            parsed = _parse_json_field(
                 collection,
                 key,
                 value,
                 fallback,
                 audit=audit,
             )
+            if collection == "backtest_runs" and key == "result_json":
+                document["resultCompressed"] = dumps_json_field(parsed)
+            else:
+                document[target_key] = parsed
             continue
         document[_camel_case(key)] = value
     return document

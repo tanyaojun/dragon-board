@@ -1168,12 +1168,28 @@ def normalize_snapshot_ingest(
 
 @app.get("/api/datasets")
 def list_datasets(db: Session | None = Depends(get_db)) -> list[dict[str, Any]]:
-    return DatasetService(db).list_datasets()
+    try:
+        return DatasetService(db).list_datasets()
+    except Exception as error:
+        if storage_source_label() == "mongodb":
+            raise HTTPException(
+                status_code=503,
+                detail=f"MongoDB primary is unavailable: {error}",
+            ) from error
+        raise
 
 
 @app.get("/api/datasets/{dataset_id}")
 def get_dataset(dataset_id: str, db: Session | None = Depends(get_db)) -> dict[str, Any]:
-    dataset = DatasetService(db).get_dataset(dataset_id)
+    try:
+        dataset = DatasetService(db).get_dataset(dataset_id)
+    except Exception as error:
+        if storage_source_label() == "mongodb":
+            raise HTTPException(
+                status_code=503,
+                detail=f"MongoDB primary is unavailable: {error}",
+            ) from error
+        raise
     if not dataset:
         raise HTTPException(status_code=404, detail=f"dataset not found: {dataset_id}")
     return dataset

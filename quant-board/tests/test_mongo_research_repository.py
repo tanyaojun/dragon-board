@@ -5,6 +5,8 @@ from typing import Any
 
 from backend.data.models import BacktestRun, GoldenRankTrendCase, OptimizationRun
 from backend.data.mongo_research_repository import MongoResearchRepository
+from backend.data.json_codec import loads_json_field
+from backend.utils import json_dumps
 
 
 class FakeCursor:
@@ -110,9 +112,58 @@ def test_backtest_run_roundtrips_request_and_result_as_structured_fields() -> No
     assert as_dict["request"] == {"datasetId": "ds_1", "nested": {"a": 1}}
     assert as_dict["result"] == {"metrics": {"totalReturn": 0.12}}
     assert raw_doc["request"] == {"datasetId": "ds_1", "nested": {"a": 1}}
-    assert raw_doc["result"] == {"metrics": {"totalReturn": 0.12}}
+    assert raw_doc["resultCompressed"].startswith("__qb_gzip_b64__:") is False
+    assert "result" not in raw_doc
     assert "request_json" not in raw_doc
     assert "result_json" not in raw_doc
+
+
+def test_backtest_run_doc_compresses_large_result_without_losing_payload() -> None:
+    db = FakeMongoDatabase()
+    repo = MongoResearchRepository(db)
+    result = {
+        "totalReturn": 0.12,
+        "signals": [{"code": f"{index:06d}"} for index in range(200)],
+        "tradeEvents": [{"code": f"{index:06d}"} for index in range(200)],
+        "strategyDecisions": {
+            "frameResults": [
+                {
+                    "snapshotId": f"s{index}",
+                    "buyCandidates": [{"code": f"{index:06d}"} for _ in range(30)],
+                    "watchCandidates": [{"code": f"{index:06d}"} for _ in range(30)],
+                    "excludedCandidates": [{"code": f"{index:06d}"} for _ in range(30)],
+                }
+                for index in range(40)
+            ]
+        },
+        "tradeSimulation": {
+            "trades": [{"code": f"{index:06d}"} for index in range(200)],
+            "equityCurve": [{"equity": 1000000 + index} for index in range(200)],
+            "config": {"positionSize": 0.2},
+        },
+    }
+
+    saved = repo.save_backtest_run(
+        BacktestRun(
+            id="bt_large",
+            dataset_id="ds_1",
+            strategy_name="rank_trend_candidate",
+            snapshot_type="half_hour",
+            config_hash="hash_large",
+            random_seed=20260430,
+            request_json='{"datasetId":"ds_1"}',
+            result_json=json_dumps(result),
+        )
+    )
+
+    raw_doc = db["backtest_runs"].rows[0]
+    restored = repo.get_backtest_run("bt_large")
+    restored_result = loads_json_field(restored.result_json, {})
+
+    assert saved.id == "bt_large"
+    assert "result" not in raw_doc
+    assert raw_doc["resultCompressed"].startswith("__qb_gzip_b64__:")
+    assert restored_result == result
 
 
 def test_backtest_signals_keep_sequence_order_and_support_tier_regime_filters() -> None:
@@ -241,6 +292,29 @@ def test_repository_factory_returns_research_capable_mongo_repository(monkeypatc
     assert hasattr(repo, "save_factor_frames")
 
 
+def test_backtest_service_runs_on_mongodb_snapshots_without_historical_research(monkeypatch) -> None:
+    import backend.data.repository_factory as factory
+    import backend.services as services
+
+    db = FakeMongoDatabase()
+    _seed_snapshot_frames(db)
+
+    monkeypatch.setattr(factory, "get_settings", lambda: type("Settings", (), {"storage_backend": "mongodb"})())
+    monkeypatch.setattr(factory, "get_runtime_mongodb_database", lambda: db)
+    monkeypatch.setattr(services, "storage_source_label", lambda: "mongodb")
+
+    service = services.BacktestService(None)
+    response = service.run_ranktrend({"datasetId": "ds_1", "snapshotType": "half_hour", "enableTradeSimulation": True})
+    run_id = response["runId"]
+
+    assert db["backtest_runs"].count_documents({}) == 1
+    assert service.get_run(run_id)["datasetId"] == "ds_1"
+    assert service.get_trades(run_id)["source"] == "mongodb"
+    assert service.get_equity(run_id)["source"] == "mongodb"
+    assert service.get_signals(run_id)["source"] == "mongodb"
+    assert service.get_quality(run_id)["qualityReport"]["frameCount"] == 3
+
+
 def _signal(code: str, rank: int, tier: str, regime: str) -> dict[str, Any]:
     return {
         "snapshotId": "snap_1",
@@ -351,6 +425,45 @@ def _quality_report() -> dict[str, Any]:
         "stockCount": 100,
         "themeCount": 8,
     }
+
+
+def _seed_snapshot_frames(db: FakeMongoDatabase) -> None:
+    frames = []
+    stock_rows = []
+    for index, slot_time in enumerate(("09:30", "10:00", "10:30"), start=1):
+        snapshot_id = f"s{index}"
+        timestamp = 1_778_520_000 + index * 1_800
+        frames.append(
+            {
+                "datasetId": "ds_1",
+                "snapshotId": snapshot_id,
+                "type": "half_hour",
+                "tradingDate": "2026-05-12",
+                "slotTime": slot_time,
+                "timestamp": timestamp,
+                "captureMode": "real_time",
+                "stockRowCount": 20,
+            }
+        )
+        for rank in range(1, 21):
+            stock_rows.append(
+                {
+                    "datasetId": "ds_1",
+                    "snapshotId": snapshot_id,
+                    "timestamp": timestamp,
+                    "rank": rank,
+                    "code": f"000{rank:03d}",
+                    "name": f"stock-{rank}",
+                    "price": 10 + rank + index / 10,
+                    "changePct": rank / 100,
+                    "volume": 10000 + rank,
+                    "amount": 100000 + rank,
+                    "moneyFlowSource": "formal",
+                    "moneyFlowConfidence": 1,
+                }
+            )
+    db["snapshot_frames"].insert_many(frames, ordered=False)
+    db["snapshot_stock_rows"].insert_many(stock_rows, ordered=False)
 
 
 def _matches(row: dict[str, Any], query: dict[str, Any]) -> bool:

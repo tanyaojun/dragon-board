@@ -14,6 +14,8 @@
 - 研究库 `quant_board_research.db` 旧数据按本次停服窗口决策暂不迁移；MongoDB 研究集合只创建空集合和索引，后续新回测、优化、Golden 和 ThemeTrend 研究结果直接写 MongoDB。
 - MongoDB 主库保留全量快照历史；废止会导致 RankTrend 样本断裂的 90 交易日主库明细清理。
 - Dragon Board 前端仍只能通过 QuantBoard 后端 API 访问正式数据，不直连 MongoDB。
+- 2026-05-12 清理补充：正式库曾被测试/调试路径写入 59 个非正式 dataset；已通过 `cleanup-mongodb-datasets --apply` 清理，只保留 `dragonboard_live` 快照主库和全局基础数据。
+- 2026-05-12 补数补充：对调试期产生的 5 个空股票快照，已通过 `backfill-empty-mongodb-snapshots --apply` 按同类型同交易日最近非空 frame 补齐股票行，并在 MongoDB frame metadata 中记录 donor。
 
 ## 当前实施状态
 
@@ -25,6 +27,8 @@
 - `stock_names` 后端 API 已实现：`/api/stocks/names`、`/api/stocks/names/{code}`、`/api/stocks/search`；前端 `StockCodeManager` 已改为从 QuantBoard API 加载。
 - 旧 SQLite/Supabase/Parquet 运行维护入口在 Mongo 模式下显式 410 或 CLI 拒绝，不再静默触碰旧主链。
 - MongoDB 本地全量备份、校验、R2 上传、R2 拉回到 `restore-staging`、本地备份保留裁剪 CLI 已实现。
+- `cleanup-mongodb-datasets` 已实现：默认 dry-run；`--apply` 只删除非保留 dataset、四个快照子集合、可通过 `datasetId/backtestRunId` 追踪的研究结果，不删除 `dragonboard_live`、`stock_names`、题材主数据或 `migration_audit`。
+- `backfill-empty-mongodb-snapshots` 已实现：默认 dry-run；`--apply` 只处理已知空股票快照，复制同类型最近非空 donor 的股票行，重写 `snapshotId/type/tradingDate/slotTime/timestamp/rowId/id`，更新 frame/dataset 汇总，并写 `migration_audit`。
 
 2026-05-12 停服窗口已执行：
 
@@ -34,6 +38,8 @@
 - 已执行 MongoDB 本地全量备份，备份 ID `20260512T111904Z`，`verify-mongodb-backup` 通过。
 - 已上传该备份到 Cloudflare R2 路径 `quant-board/mongodb-backups/full/backup_id=20260512T111904Z/`。
 - 已从 R2 拉回到 `data/backups/mongodb/restore-staging/backup_id=20260512T111904Z`，22 个校验文件 hash 全部匹配。
+- 已执行污染清理：`/api/datasets` 当前仅返回 `dragonboard_live`；`inspect-mongodb` 显示正式快照仍保留 519 records/frames、109936 stock rows、8353 sector rows。
+- 已执行空股票快照补齐：`dragonboard_live` 当前仍为 519 records/frames，`snapshot_stock_rows` 从 109936 增至 110940，`snapshot_sector_rows` 仍为 8353。
 
 ## 非目标
 
@@ -134,7 +140,7 @@ SQLite 中的 `*_json` 字段迁移到 MongoDB 时应解析为结构化字段：
 | `theme_quality_flags_json` | `themeQualityFlags: string[]` |
 | `snapshot_types_json` | `snapshotTypes: string[]` |
 | `request_json` | `request: object` |
-| `result_json` | `result: object` |
+| `result_json` | `resultCompressed: "__qb_gzip_b64__:<payload>" 或未压缩 JSON 文本；读取层透明还原。旧迁移遗留的 `result: object` 仅作为兼容读取字段。`backtest_runs` 不再直接嵌入完整 `result` 子文档，避免 MongoDB 16MB 单文档限制。 |
 | `input_json` | `input: object` |
 | `expected_json` | `expected: object` |
 | `fill_detail_json` | `fillDetail: object` |
@@ -519,6 +525,10 @@ cd quant-board
 .\.venv\Scripts\python.exe -m backend.cli pull-mongodb-backup --backup-id <backup_id> --dry-run
 .\.venv\Scripts\python.exe -m backend.cli list-mongodb-backups
 .\.venv\Scripts\python.exe -m backend.cli prune-mongodb-backups --dry-run
+.\.venv\Scripts\python.exe -m backend.cli cleanup-mongodb-datasets
+.\.venv\Scripts\python.exe -m backend.cli cleanup-mongodb-datasets --apply
+.\.venv\Scripts\python.exe -m backend.cli backfill-empty-mongodb-snapshots
+.\.venv\Scripts\python.exe -m backend.cli backfill-empty-mongodb-snapshots --apply
 ```
 
 行为要求：
@@ -852,3 +862,27 @@ cd quant-board
 ```
 
 验证结果：迁移测试 `11 passed`；MongoDB 主库、API、R2 上传和 R2 拉回 hash 校验通过。
+
+2026-05-12 追加清理验收：
+
+```powershell
+cd quant-board
+.\.venv\Scripts\python.exe -m backend.cli cleanup-mongodb-datasets
+.\.venv\Scripts\python.exe -m backend.cli cleanup-mongodb-datasets --apply
+.\.venv\Scripts\python.exe -m backend.cli inspect-mongodb
+.\.venv\Scripts\python.exe -m backend.cli verify-mongodb-migration --dataset-id dragonboard_live --snapshot-type half_hour
+```
+
+结果：
+
+- dry-run 清单确认只会删除非保留 datasets。
+- apply 删除 59 个非保留 datasets、867 条非主库 `snapshot_records`、867 条非主库 `snapshot_frames`、1604 条非主库 `snapshot_stock_rows`、74 条非主库 `snapshot_sector_rows`、61 条非主库 `backtest_runs` 及其派生研究结果。
+- `datasets` 当前为 1，仅 `dragonboard_live`。
+- `dragonboard_live` 正式快照主库仍保留 519 records、519 frames、109936 stock rows、8353 sector rows。
+- 随后执行 `backfill-empty-mongodb-snapshots --apply`：
+  - `half_hour:2026-05-08:14:00` 从 `half_hour:2026-05-08:13:30` 复制 224 条股票行。
+  - `hourly:2026-05-08:14:00` 从 `hourly:2026-05-08:13:00` 复制 100 条股票行。
+  - `quarter_hour:2026-05-08:13:45` 从 `quarter_hour:2026-05-08:13:30` 复制 224 条股票行。
+  - `quarter_hour:2026-05-08:14:00` 从 `quarter_hour:2026-05-08:13:30` 复制 224 条股票行。
+  - `quarter_hour:2026-05-08:14:15` 从 `quarter_hour:2026-05-08:14:30` 复制 232 条股票行。
+- 补齐后 `verify-mongodb-migration --dataset-id dragonboard_live --snapshot-type half_hour` 通过，`emptyFrames=[]`。

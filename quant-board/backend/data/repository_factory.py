@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -24,6 +25,8 @@ def get_runtime_mongodb_database() -> Any:
     global _runtime_mongodb_database
     if _runtime_mongodb_database is None:
         settings = get_settings()
+        if os.environ.get("PYTEST_CURRENT_TEST") and settings.mongodb_database == "dragon_board_quant":
+            raise RuntimeError("pytest must not connect to production MongoDB database dragon_board_quant")
         _runtime_mongodb_database = get_mongodb_database(
             settings.mongodb_uri,
             settings.mongodb_database,

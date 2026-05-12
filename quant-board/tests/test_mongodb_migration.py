@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+from backend.data.json_codec import loads_json_field
 from backend.data.mongodb_migration import (
     ALL_COLLECTIONS,
     MongoMigrationPlan,
@@ -82,6 +83,26 @@ def test_snapshot_mapping_parses_json_and_removes_json_columns() -> None:
     assert doc["stockRowCount"] == 243
     assert not any(key.endswith("_json") for key in doc)
     assert audit == []
+
+
+def test_backtest_run_mapping_uses_compressed_result_contract() -> None:
+    doc = map_sqlite_row_to_mongo(
+        "backtest_runs",
+        {
+            "id": "bt_1",
+            "dataset_id": "dragonboard_live",
+            "request_json": '{"datasetId":"dragonboard_live"}',
+            "result_json": '{"signals":[{"code":"000001"}],"totalReturn":0.12}',
+        },
+    )
+
+    assert doc["id"] == "bt_1"
+    assert doc["request"] == {"datasetId": "dragonboard_live"}
+    assert "result" not in doc
+    assert loads_json_field(str(doc["resultCompressed"]), {}) == {
+        "signals": [{"code": "000001"}],
+        "totalReturn": 0.12,
+    }
 
 
 def test_invalid_json_is_audited_and_defaulted() -> None:

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from backend.data.json_codec import loads_json_field
+from backend.data.json_codec import dumps_json_field, loads_json_field
 from backend.data.models import BacktestRun, GoldenRankTrendCase, OptimizationRun
 from backend.data.mongo_repository import MongoRepository
 from backend.utils import json_dumps
@@ -376,7 +376,7 @@ class MongoResearchRepository(MongoRepository):
             "dateEnd": run.date_end,
             "errorReason": run.error_reason,
             "request": loads_json_field(run.request_json, {}),
-            "result": loads_json_field(run.result_json, {}),
+            "resultCompressed": dumps_json_field(loads_json_field(run.result_json, {})),
             "createdAt": run.created_at or _utc_now_naive(),
             "finishedAt": run.finished_at,
         }
@@ -396,7 +396,11 @@ class MongoResearchRepository(MongoRepository):
             date_end=row.get("dateEnd"),
             error_reason=row.get("errorReason"),
             request_json=json_dumps(row.get("request") or {}),
-            result_json=json_dumps(row.get("result") or {}),
+            result_json=dumps_json_field(
+                row.get("result")
+                if isinstance(row.get("result"), dict)
+                else loads_json_field(row.get("resultCompressed"), {})
+            ),
             created_at=_datetime_or_now(row.get("createdAt")),
             finished_at=_datetime_or_none(row.get("finishedAt")),
         )

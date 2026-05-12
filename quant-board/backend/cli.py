@@ -26,6 +26,8 @@ from backend.data.mongodb_migration import (
     plan_mongodb_migration,
     verify_mongodb_migration,
 )
+from backend.data.mongodb_cleanup import plan_mongodb_dataset_cleanup
+from backend.data.mongodb_snapshot_repair import backfill_empty_snapshot_rows
 from backend.data.mongodb_backup import get_mongodb_backup_service
 from backend.data.repository import Repository
 from backend.data.schemas import ImportDatasetRequest
@@ -371,6 +373,27 @@ def cmd_verify_mongodb_migration(args: argparse.Namespace) -> None:
             dataset_id=args.dataset_id,
             snapshot_type=args.snapshot_type,
             codes=args.code or [],
+        )
+    )
+
+
+def cmd_cleanup_mongodb_datasets(args: argparse.Namespace) -> None:
+    print_json(
+        plan_mongodb_dataset_cleanup(
+            _runtime_mongodb_database(),
+            keep_dataset_ids=args.keep_dataset_id,
+            apply=bool(args.apply),
+        )
+    )
+
+
+def cmd_backfill_empty_mongodb_snapshots(args: argparse.Namespace) -> None:
+    print_json(
+        backfill_empty_snapshot_rows(
+            _runtime_mongodb_database(),
+            dataset_id=args.dataset_id,
+            snapshot_ids=args.snapshot_id,
+            apply=bool(args.apply),
         )
     )
 
@@ -805,6 +828,17 @@ def build_parser() -> argparse.ArgumentParser:
     verify_mongodb_migration_cmd.add_argument("--snapshot-type", default="half_hour")
     verify_mongodb_migration_cmd.add_argument("--code", action="append", default=[])
     verify_mongodb_migration_cmd.set_defaults(func=cmd_verify_mongodb_migration)
+
+    cleanup_mongodb_cmd = sub.add_parser("cleanup-mongodb-datasets", help="Preview or delete non-kept MongoDB datasets and derived research rows")
+    cleanup_mongodb_cmd.add_argument("--keep-dataset-id", action="append", default=["dragonboard_live"])
+    cleanup_mongodb_cmd.add_argument("--apply", action="store_true")
+    cleanup_mongodb_cmd.set_defaults(func=cmd_cleanup_mongodb_datasets)
+
+    backfill_mongodb_cmd = sub.add_parser("backfill-empty-mongodb-snapshots", help="Preview or backfill known empty MongoDB snapshot rows from nearest same-type frames")
+    backfill_mongodb_cmd.add_argument("--dataset-id", default="dragonboard_live")
+    backfill_mongodb_cmd.add_argument("--snapshot-id", action="append", default=None)
+    backfill_mongodb_cmd.add_argument("--apply", action="store_true")
+    backfill_mongodb_cmd.set_defaults(func=cmd_backfill_empty_mongodb_snapshots)
 
     backup_mongodb_cmd = sub.add_parser("backup-mongodb", help="Create a full local MongoDB backup")
     backup_mongodb_cmd.add_argument("--full", action="store_true", required=True)
