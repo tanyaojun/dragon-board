@@ -252,6 +252,7 @@ export class RankTrendAnalyzer {
     const readLimit = options?.limit ? Math.max(options.limit * 3, options.minRequired ?? 0) : undefined
     const bundles = await snapshotFacade.listSnapshotFrameBundles({
       type,
+      projection: 'ranktrend',
       startDate: toTradingDateString(options?.fromDate),
       endDate: toTradingDateString(options?.toDate),
       allowedCaptureModes: FORMAL_SNAPSHOT_READ_POLICY.allowedCaptureModes,

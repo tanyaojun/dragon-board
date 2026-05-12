@@ -268,6 +268,7 @@ export interface SnapshotQueryOptions {
 export interface SnapshotFrameQueryOptions {
   type?: Exclude<SnapshotType, 'five_minute'>
   types?: Array<Exclude<SnapshotType, 'five_minute'>>
+  projection?: 'full' | 'ranktrend'
   tradingDate?: string
   startDate?: string
   endDate?: string

@@ -582,6 +582,7 @@ class Repository:
         exclude_restored: bool = False,
         limit: int | None = None,
         sort: str = "asc",
+        projection: str = "full",
     ) -> list[dict[str, Any]]:
         if self.session is None:
             return self._backup_frames(dataset_id, snapshot_type, start_date, end_date, include_payload=True)
@@ -621,18 +622,28 @@ class Repository:
                     .order_by(SnapshotStockRowModel.timestamp.asc(), SnapshotStockRowModel.rank.asc())
                 )
                 for row in self.session.scalars(stock_query):
-                    stock_rows_by_snapshot[row.snapshot_id].append(self.local_stock_to_bundle_dict(row))
+                    if projection == "ranktrend":
+                        stock_rows_by_snapshot[row.snapshot_id].append(
+                            {
+                                "code": row.code,
+                                "name": row.name,
+                                "rank": row.rank,
+                            }
+                        )
+                    else:
+                        stock_rows_by_snapshot[row.snapshot_id].append(self.local_stock_to_bundle_dict(row))
 
-                sector_query = (
-                    select(SnapshotSectorRowModel)
-                    .where(
-                        SnapshotSectorRowModel.dataset_id == dataset_id,
-                        SnapshotSectorRowModel.snapshot_id.in_(snapshot_ids),
+                if projection != "ranktrend":
+                    sector_query = (
+                        select(SnapshotSectorRowModel)
+                        .where(
+                            SnapshotSectorRowModel.dataset_id == dataset_id,
+                            SnapshotSectorRowModel.snapshot_id.in_(snapshot_ids),
+                        )
+                        .order_by(SnapshotSectorRowModel.timestamp.asc(), SnapshotSectorRowModel.rank.asc())
                     )
-                    .order_by(SnapshotSectorRowModel.timestamp.asc(), SnapshotSectorRowModel.rank.asc())
-                )
-                for row in self.session.scalars(sector_query):
-                    sector_rows_by_snapshot[row.snapshot_id].append(self.local_sector_to_bundle_dict(row))
+                    for row in self.session.scalars(sector_query):
+                        sector_rows_by_snapshot[row.snapshot_id].append(self.local_sector_to_bundle_dict(row))
             except SQLAlchemyError:
                 return self._backup_frames(dataset_id, snapshot_type, start_date, end_date, include_payload=True)
 
@@ -641,6 +652,12 @@ class Repository:
             item = self.local_frame_to_bundle_dict(frame)
             item["rows"] = stock_rows_by_snapshot.get(frame.snapshot_id, [])
             item["hotlist"] = item["rows"]
+            if projection == "ranktrend":
+                item["entities"] = []
+                item["sectors"] = []
+                item["hotThemes"] = []
+                bundles.append(item)
+                continue
             item["entities"] = sector_rows_by_snapshot.get(frame.snapshot_id, [])
             item["sectors"] = [
                 self._sector_entity_to_view(row)

@@ -1231,6 +1231,103 @@ def test_snapshot_frames_api_reads_sqlite_frame_bundles() -> None:
     assert frame["sectors"][0]["name"] == "人工智能"
 
 
+def test_snapshot_frames_api_ranktrend_projection_returns_lightweight_hotlist() -> None:
+    client = TestClient(app)
+    suffix = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
+    dataset_id = f"dragonboard_ranktrend_projection_{suffix}"
+    snapshot_id = f"half_hour:2026-04-21:{suffix}"
+    bundle = {
+        "version": "v4",
+        "tradingDate": "2026-04-21",
+        "items": [
+            {
+                "id": snapshot_id,
+                "type": "half_hour",
+                "tradingDate": "2026-04-21",
+                "slotTime": "10:00",
+                "timestamp": 1776746400000,
+                "displayKey": "[半小时快照] 2026-04-21 10:00",
+                "captureMode": "real_time",
+                "source": "browser_runtime",
+                "payload": {"hotlist": [{"code": "600001", "name": "样本A", "rank": 1}]},
+            }
+        ],
+        "frames": [
+            {
+                "id": snapshot_id,
+                "snapshotId": snapshot_id,
+                "type": "half_hour",
+                "tradingDate": "2026-04-21",
+                "slotTime": "10:00",
+                "timestamp": 1776746400000,
+                "captureMode": "real_time",
+                "source": "browser_runtime",
+                "stockRowCount": 1,
+                "sectorRowCount": 1,
+            }
+        ],
+        "stockRows": [
+            {
+                "id": f"{snapshot_id}:600001",
+                "snapshotId": snapshot_id,
+                "type": "half_hour",
+                "tradingDate": "2026-04-21",
+                "slotTime": "10:00",
+                "timestamp": 1776746400000,
+                "captureMode": "real_time",
+                "source": "browser_runtime",
+                "code": "600001",
+                "name": "样本A",
+                "rank": 1,
+                "price": 10,
+                "zlje": 1234,
+            }
+        ],
+        "sectorRows": [
+            {
+                "id": f"{snapshot_id}:sector:AI",
+                "snapshotId": snapshot_id,
+                "type": "half_hour",
+                "tradingDate": "2026-04-21",
+                "slotTime": "10:00",
+                "timestamp": 1776746400000,
+                "entityType": "sector",
+                "entityKey": "AI",
+                "entityName": "人工智能",
+                "rank": 1,
+            }
+        ],
+    }
+
+    ingest = client.post(
+        "/api/snapshots/ingest",
+        json={
+            "datasetId": dataset_id,
+            "idempotencyKey": f"ranktrend-projection-key-{suffix}",
+            "tradingDate": "2026-04-21",
+            "bundle": bundle,
+        },
+    )
+    assert ingest.status_code == 200, ingest.text
+
+    response = client.get(
+        "/api/snapshots/frames",
+        params={
+            "dataset_id": dataset_id,
+            "snapshot_type": "half_hour",
+            "trading_date": "2026-04-21",
+            "allowed_capture_modes": "real_time",
+            "projection": "ranktrend",
+        },
+    )
+    assert response.status_code == 200, response.text
+    frame = response.json()["frames"][0]
+    assert frame["hotlist"] == [{"code": "600001", "name": "样本A", "rank": 1}]
+    assert frame["rows"] == frame["hotlist"]
+    assert frame["sectors"] == []
+    assert "zlje" not in frame["hotlist"][0]
+
+
 def test_snapshot_frames_api_uses_snapshot_cache(monkeypatch: pytest.MonkeyPatch) -> None:
     from backend.data import snapshot_cache
 

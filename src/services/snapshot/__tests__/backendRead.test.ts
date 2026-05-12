@@ -69,6 +69,29 @@ describe('snapshotBackendRead', () => {
     expect(frames[0].rows[0].code).toBe('600001')
   })
 
+  it('requests ranktrend projection for lightweight frame bundle reads', async () => {
+    vi.mocked(apiService.listSqliteSnapshotFrames).mockResolvedValue({
+      ok: true,
+      frames: [],
+    })
+
+    const { snapshotBackendRead } = await import('../backendRead')
+    await snapshotBackendRead.listSnapshotFrameBundles({
+      type: 'half_hour',
+      sort: 'desc',
+      projection: 'ranktrend',
+    })
+
+    expect(apiService.listSqliteSnapshotFrames).toHaveBeenCalledWith({
+      datasetId: 'dragonboard_live',
+      type: 'half_hour',
+      sort: 'desc',
+      projection: 'ranktrend',
+      allowedCaptureModes: ['real_time', 'delayed'],
+      excludeRestored: true,
+    })
+  })
+
   it('unwraps sqlite stock rows for volume history consumers', async () => {
     vi.mocked(apiService.listSqliteSnapshotStockRows).mockResolvedValue({
       ok: true,

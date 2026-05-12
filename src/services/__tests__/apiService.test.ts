@@ -259,6 +259,26 @@ describe('ApiService', () => {
     expect(requestedUrl).toContain('limit=20')
   })
 
+  it('maps sqlite snapshot frame projection params to QuantBoard API', async () => {
+    const api = new ApiService()
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, frames: [] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await api.listSqliteSnapshotFrames({
+      datasetId: 'dragonboard_live',
+      type: 'half_hour',
+      projection: 'ranktrend',
+    })
+
+    const requestedUrl = String(fetchMock.mock.calls[0][0])
+    expect(requestedUrl).toContain('projection=ranktrend')
+  })
+
   it('maps sqlite snapshot record detail formal policy params to QuantBoard API', async () => {
     const api = new ApiService()
     const fetchMock = vi.fn().mockResolvedValue(

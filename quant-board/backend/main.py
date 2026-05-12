@@ -376,12 +376,15 @@ def list_snapshot_frames(
     exclude_restored: bool = False,
     sort: str = "asc",
     limit: int | None = None,
+    projection: str = "full",
     db: Session | None = Depends(get_db),
 ) -> dict[str, Any]:
     if db is None:
         raise HTTPException(status_code=503, detail="primary database is unavailable")
     if snapshot_type not in {"quarter_hour", "half_hour", "hourly", "daily"}:
         raise HTTPException(status_code=400, detail=f"unsupported snapshot_type: {snapshot_type}")
+    if projection not in {"full", "ranktrend"}:
+        raise HTTPException(status_code=400, detail=f"unsupported projection: {projection}")
     _assert_snapshot_sort(sort)
     start = trading_date or start_date
     end = trading_date or end_date
@@ -401,6 +404,7 @@ def list_snapshot_frames(
             exclude_restored=exclude_restored,
             limit=limit,
             sort=sort,
+            projection=projection,
         )
         snapshot_ids.extend(str(frame.get("snapshotId") or "") for frame in frames if frame.get("snapshotId"))
         return {
@@ -425,6 +429,7 @@ def list_snapshot_frames(
             "exclude_restored": exclude_restored,
             "sort": sort,
             "limit": limit,
+            "projection": projection,
         },
         snapshot_type=snapshot_type,
         trading_date=start if start == end else None,

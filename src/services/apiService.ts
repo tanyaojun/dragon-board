@@ -864,6 +864,7 @@ export class ApiService {
     append('dataset_id', params.datasetId)
     append(frameEndpoint ? 'snapshot_type' : 'snapshot_type', params.type)
     append('types', params.types)
+    append('projection', (params as SqliteSnapshotFrameQueryOptions).projection)
     append('trading_date', params.tradingDate)
     append('start_date', params.startDate)
     append('end_date', params.endDate)
