@@ -159,4 +159,44 @@ describe('RankTrendAnalyzer', () => {
     expect(results.get('600001')?.change).toBeTypeOf('number')
     expect(results.get('600001')?.confidence).toBeTypeOf('number')
   })
+
+  it('rank-series 过滤 codes 后仍使用 totalCount 计算上一期百分位', async () => {
+    const { apiService } = await import('../apiService')
+    vi.mocked(apiService.getRankTrendRankSeries).mockResolvedValue({
+      ok: true,
+      datasetId: 'dragonboard_live',
+      snapshotType: 'half_hour',
+      source: 'sqlite',
+      count: 50,
+      frames: Array.from({ length: 50 }, (_, index) => {
+        const rank = index === 49 ? 90 : Math.max(1, 100 - index)
+        return {
+          snapshotId: `half_hour:2026-04-27:${index}`,
+          displayKey: `[半小时快照] 2026-04-27 ${index}`,
+          timestamp: Date.parse('2026-04-27T09:30:00') + index * 30 * 60 * 1000,
+          type: 'half_hour',
+          tradingDate: '2026-04-27',
+          slotTime: '09:30',
+          captureMode: 'real_time',
+          totalCount: 100,
+          ranks: {
+            '600001': rank,
+          },
+        }
+      }),
+    })
+
+    const { rankTrendAnalyzer } = await import('../RankTrendAnalyzer')
+    const rankMap = new Map<string, number>(
+      Array.from({ length: 100 }, (_, index) => [
+        index === 21 ? '600001' : `FILL${String(index + 1).padStart(3, '0')}`,
+        index + 1,
+      ]),
+    )
+    const results = await rankTrendAnalyzer.getRankTrends(rankMap, {
+      updateSignalStore: false,
+    })
+
+    expect(results.get('600001')?.change).toBeCloseTo(68, 6)
+  })
 })

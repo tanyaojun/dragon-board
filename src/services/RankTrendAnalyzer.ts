@@ -539,7 +539,8 @@ export class RankTrendAnalyzer {
     recentSnapshots: RankTrendAnalysisSnapshot[],
   ): { prevRankMap: Map<string, number>; prevTotalCount: number } {
     const prevSnapshot = recentSnapshots[recentSnapshots.length - 1] || null
-    const prevTotalCount = prevSnapshot?.snapshot?.hotlist?.length || 200
+    const prevTotalCount =
+      Number(prevSnapshot?.snapshot?.totalCount) || prevSnapshot?.snapshot?.hotlist?.length || 200
     const prevRankMap = new Map<string, number>()
 
     if (prevSnapshot?.snapshot?.hotlist) {
