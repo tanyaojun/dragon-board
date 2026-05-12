@@ -240,6 +240,10 @@ pre {
   margin-top: 10px;
 }
 
+.dataset-delete-row {
+  margin-top: 12px;
+}
+
 .preview-grid,
 .metric-grid {
   display: grid;

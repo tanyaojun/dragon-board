@@ -113,6 +113,7 @@ const backtestNormalizedState = reactive<RequestResult<{
 const optimizationState = reactive<RequestResult>({ status: "idle" });
 const optimizationDetailState = reactive<RequestResult>({ status: "idle" });
 const snapshotCountsState = reactive<RequestResult<Record<string, unknown>>>({ status: "idle" });
+const deleteDatasetState = reactive<RequestResult>({ status: "idle" });
 
 const selectedDatasetId = ref("");
 const datasetRefreshAt = ref("");
@@ -141,6 +142,7 @@ const signalRegimeFilter = ref("");
 const signalRiskFilter = ref<"all" | "risk" | "clean">("all");
 const showReportJson = ref(false);
 const deleteBacktestMessage = ref("");
+const deleteDatasetMessage = ref("");
 let optimizationPollToken = 0;
 
 // ── ThemeTrend 状态 ──
@@ -267,6 +269,16 @@ const gridInputs = reactive({
 
 const selectedDataset = computed(() => {
   return datasetsState.data?.find((dataset) => dataset.id === selectedDatasetId.value);
+});
+
+const canDeleteSelectedDataset = computed(() => {
+  const dataset = selectedDataset.value;
+  return Boolean(
+    dataset &&
+      dataset.id !== "dragonboard_live" &&
+      dataset.source_type !== "dragon_board_runtime" &&
+      deleteDatasetState.status !== "loading"
+  );
 });
 
 const databaseStatus = computed(() => {
@@ -910,6 +922,52 @@ async function importDataset(): Promise<void> {
   }
 }
 
+async function deleteSelectedDataset(): Promise<void> {
+  const datasetId = selectedDatasetId.value.trim();
+  if (!datasetId) {
+    deleteDatasetState.status = "error";
+    deleteDatasetState.error = "请先选择要删除的数据集";
+    deleteDatasetMessage.value = "";
+    return;
+  }
+  if (!canDeleteSelectedDataset.value) {
+    deleteDatasetState.status = "error";
+    deleteDatasetState.error = "快照主库数据不能删除，只能删除派生/测试数据集";
+    deleteDatasetMessage.value = "";
+    return;
+  }
+  const confirmed = window.confirm(
+    `确认删除派生/测试数据集 ${datasetId}？\n\n此操作会删除该数据集及其快照事实行，不会删除正式快照主库或已生成的回测、优化、题材研究结果。`
+  );
+  if (!confirmed) {
+    return;
+  }
+  deleteDatasetState.status = "loading";
+  deleteDatasetState.error = undefined;
+  deleteDatasetState.data = undefined;
+  deleteDatasetState.raw = undefined;
+  deleteDatasetMessage.value = "";
+  try {
+    const result = await api.deleteDataset(datasetId);
+    const deletedDatasets = result.deleted.datasets ?? 0;
+    deleteDatasetState.status = "ok";
+    deleteDatasetState.data = result;
+    deleteDatasetState.raw = result;
+    deleteDatasetMessage.value = `已删除 ${datasetId}，数据集记录 ${deletedDatasets} 条。`;
+    if (sourceDatasetId.value === datasetId) {
+      sourceDatasetId.value = "dragonboard_live";
+    }
+    await loadDatasets();
+  } catch (error) {
+    deleteDatasetState.status = "error";
+    deleteDatasetState.error = formatApiError(error);
+    deleteDatasetState.raw = {
+      error: deleteDatasetState.error,
+      message: error instanceof Error ? error.message : String(error)
+    };
+  }
+}
+
 async function validateGolden(): Promise<void> {
   goldenAction.value = "validate";
   await runRequest(goldenState, () => api.validateGolden({ ...goldenForm }));
@@ -1367,6 +1425,25 @@ onMounted(async () => {
               <b>{{ snapshotCounts.snapshot_sector_rows ?? 0 }}</b>
               <span>sector rows</span>
             </div>
+          </div>
+          <div class="button-row dataset-delete-row">
+            <button
+              type="button"
+              class="danger-button"
+              :disabled="!canDeleteSelectedDataset"
+              @click="deleteSelectedDataset"
+            >
+              {{ deleteDatasetState.status === "loading" ? "删除中" : "删除数据集" }}
+            </button>
+          </div>
+          <div v-if="selectedDataset && !canDeleteSelectedDataset" class="inline-note">
+            快照主库数据受保护，只能删除派生/测试数据集。
+          </div>
+          <div v-if="deleteDatasetState.status === 'error'" class="inline-error">
+            {{ deleteDatasetState.error }}
+          </div>
+          <div v-if="deleteDatasetMessage" class="inline-note">
+            {{ deleteDatasetMessage }}
           </div>
         </section>
       </aside>

@@ -235,6 +235,49 @@ def test_dataset_list_reports_service_unavailable_when_mongodb_is_down(monkeypat
     assert "MongoDB primary is unavailable" in response.json()["detail"]
 
 
+def test_delete_dataset_api_uses_mongodb_service_and_preserves_primary_guard(monkeypatch) -> None:
+    import backend.main as main
+
+    calls: list[str] = []
+
+    class FakeDatasetService:
+        def __init__(self, session) -> None:
+            pass
+
+        def delete_dataset(self, dataset_id: str) -> dict[str, Any] | None:
+            calls.append(dataset_id)
+            if dataset_id == "dragonboard_live":
+                raise ValueError("snapshot primary dataset cannot be deleted from UI/API: dragonboard_live")
+            return {
+                "ok": True,
+                "datasetId": dataset_id,
+                "deleted": {
+                    "snapshot_sector_rows": 1,
+                    "snapshot_stock_rows": 1,
+                    "snapshot_frames": 1,
+                    "snapshot_records": 1,
+                    "datasets": 1,
+                },
+                "source": "mongodb",
+            }
+
+    monkeypatch.setattr(main, "storage_source_label", lambda: "mongodb")
+    monkeypatch.setattr(main, "DatasetService", FakeDatasetService)
+    main.app.dependency_overrides[main.get_db] = lambda: None
+    client = TestClient(main.app)
+    try:
+        deleted = client.delete("/api/datasets/ds_test")
+        protected = client.delete("/api/datasets/dragonboard_live")
+    finally:
+        main.app.dependency_overrides.clear()
+
+    assert deleted.status_code == 200, deleted.text
+    assert deleted.json()["source"] == "mongodb"
+    assert protected.status_code == 400, protected.text
+    assert protected.json()["detail"] == "snapshot primary dataset cannot be deleted from UI/API: dragonboard_live"
+    assert calls == ["ds_test", "dragonboard_live"]
+
+
 def test_pytest_cannot_connect_to_production_mongodb_database(monkeypatch) -> None:
     from backend.data import repository_factory
 

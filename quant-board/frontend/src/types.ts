@@ -298,6 +298,12 @@ export interface BacktestDeleteResponse {
   deleted: Record<string, number>;
 }
 
+export interface DatasetDeleteResponse {
+  ok: boolean;
+  datasetId: string;
+  deleted: Record<string, number>;
+}
+
 export type BacktestReportTabKey =
   | "trades"
   | "signals"

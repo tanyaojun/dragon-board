@@ -33,8 +33,10 @@ class FakeCollection:
     def count_documents(self, query: dict[str, Any]) -> int:
         return len(list(self.find(query)))
 
-    def delete_many(self, query: dict[str, Any]) -> None:
+    def delete_many(self, query: dict[str, Any]) -> Any:
+        before = len(self.rows)
         self.rows = [row for row in self.rows if not _matches(row, query)]
+        return type("DeleteResult", (), {"deleted_count": before - len(self.rows)})()
 
     def insert_many(self, rows: list[dict[str, Any]], ordered: bool = False) -> None:
         assert ordered is False
@@ -166,6 +168,56 @@ def test_mongo_repository_saves_imported_dataset_bundle_without_outbox() -> None
     assert repo.db["migration_audit"].count_documents({}) == 0
 
 
+def test_mongo_repository_deletes_non_primary_dataset_bundle() -> None:
+    repo = MongoRepository(FakeMongoDatabase())
+    dataset = _dataset(id="ds_delete", source_type="json_bundle")
+    repo.save_dataset_bundle(
+        dataset,
+        records=[_record("s1")],
+        frames=[_frame("s1", 1)],
+        stock_rows=[_stock("s1", "000001", 1)],
+        sector_rows=[_sector("s1", "bank", 1)],
+    )
+
+    result = repo.delete_dataset("ds_delete")
+
+    assert result == {
+        "ok": True,
+        "datasetId": "ds_delete",
+        "deleted": {
+            "snapshot_sector_rows": 1,
+            "snapshot_stock_rows": 1,
+            "snapshot_frames": 1,
+            "snapshot_records": 1,
+            "datasets": 1,
+        },
+        "source": "mongodb",
+    }
+    assert repo.get_dataset("ds_delete") is None
+    assert repo.snapshot_table_counts("ds_delete") == {
+        "snapshots": 0,
+        "snapshot_frames": 0,
+        "snapshot_stock_rows": 0,
+        "snapshot_sector_rows": 0,
+    }
+
+
+def test_mongo_repository_rejects_primary_dataset_delete() -> None:
+    repo = MongoRepository(FakeMongoDatabase())
+    dataset = _dataset(id="dragonboard_live", source_type="dragon_board_runtime")
+    repo.save_dataset_bundle(dataset, records=[_record("s1")], frames=[_frame("s1", 1)], stock_rows=[], sector_rows=[])
+
+    try:
+        repo.delete_dataset("dragonboard_live")
+    except ValueError as error:
+        assert str(error) == "snapshot primary dataset cannot be deleted from UI/API: dragonboard_live"
+    else:
+        raise AssertionError("delete_dataset should reject dragonboard_live")
+
+    assert repo.get_dataset("dragonboard_live") is not None
+    assert repo.snapshot_table_counts("dragonboard_live")["snapshot_frames"] == 1
+
+
 def test_repository_factory_uses_mongo_backend_without_sqlite_session(monkeypatch) -> None:
     import backend.data.repository_factory as factory
 
@@ -179,11 +231,11 @@ def test_repository_factory_uses_mongo_backend_without_sqlite_session(monkeypatc
     assert repo.db is fake_db
 
 
-def _dataset() -> Dataset:
+def _dataset(id: str = "dragonboard_live", source_type: str = "snapshot_ingest") -> Dataset:
     return Dataset(
-        id="dragonboard_live",
+        id=id,
         name="DragonBoard Live",
-        source_type="snapshot_ingest",
+        source_type=source_type,
         source_path="",
         db_name="DragonBoardData",
         schema_fingerprint="",

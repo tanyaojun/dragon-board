@@ -43,6 +43,24 @@ class MongoRepository:
         self._refresh_dataset_summary(dataset.id)
         return self.get_dataset(dataset.id) or dataset
 
+    def delete_dataset(self, dataset_id: str) -> dict[str, Any] | None:
+        dataset = self.get_dataset(dataset_id)
+        if not dataset:
+            return None
+        if dataset.id == "dragonboard_live" or dataset.source_type == "dragon_board_runtime":
+            raise ValueError(f"snapshot primary dataset cannot be deleted from UI/API: {dataset_id}")
+        deleted = {
+            name: int(self.db[name].delete_many(query).deleted_count)
+            for name, query in {
+                "snapshot_sector_rows": {"datasetId": dataset_id},
+                "snapshot_stock_rows": {"datasetId": dataset_id},
+                "snapshot_frames": {"datasetId": dataset_id},
+                "snapshot_records": {"datasetId": dataset_id},
+                "datasets": {"id": dataset_id},
+            }.items()
+        }
+        return {"ok": True, "datasetId": dataset_id, "deleted": deleted, "source": "mongodb"}
+
     def close(self) -> None:
         return None
 

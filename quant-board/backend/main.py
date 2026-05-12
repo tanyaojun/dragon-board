@@ -1195,6 +1195,26 @@ def get_dataset(dataset_id: str, db: Session | None = Depends(get_db)) -> dict[s
     return dataset
 
 
+@app.delete("/api/datasets/{dataset_id}")
+def delete_dataset(dataset_id: str, db: Session | None = Depends(get_db)) -> dict[str, Any]:
+    if storage_source_label() != "mongodb":
+        raise HTTPException(status_code=410, detail="dataset deletion is only available in MongoDB mode")
+    try:
+        result = DatasetService(db).delete_dataset(dataset_id)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except Exception as error:
+        if storage_source_label() == "mongodb":
+            raise HTTPException(
+                status_code=503,
+                detail=f"MongoDB primary is unavailable: {error}",
+            ) from error
+        raise
+    if not result:
+        raise HTTPException(status_code=404, detail=f"dataset not found: {dataset_id}")
+    return result
+
+
 @app.post("/api/datasets/upload")
 async def upload_dataset(payload: dict[str, Any], db: Session | None = Depends(get_db)) -> dict[str, Any]:
     content = payload.get("content")

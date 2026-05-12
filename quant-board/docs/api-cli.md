@@ -383,6 +383,17 @@ Dragon Board `snapshotFacade.listSnapshots/getSnapshotById/listSnapshotFrames/li
 
 返回单个数据集详情。
 
+### `DELETE /api/datasets/{dataset_id}`
+
+删除 MongoDB 中的派生/测试数据集及其快照事实子集合行。
+
+规则：
+
+- 仅在 `QUANT_BOARD_STORAGE_BACKEND=mongodb` 下可用；非 MongoDB 模式返回 410。
+- 禁止删除正式快照主库：`dragonboard_live` 或 `source_type=dragon_board_runtime` 返回 400。
+- 删除范围只包含目标 dataset 的 `datasets`、`snapshot_records`、`snapshot_frames`、`snapshot_stock_rows`、`snapshot_sector_rows`。
+- 不删除正式快照主库，不删除回测、优化、Golden、题材研究或 MongoDB 备份。
+
 ### `POST /api/datasets/import`
 
 从 MongoDB 主库已有正式快照事实集合生成可复现研究视图。日常研究入口使用 `sourceType=mongodb_snapshots`；旧 `sqlite_snapshots` 只作为迁移前兼容口径。浏览器 IndexedDB/LevelDB/运行页桥接不再作为主采集方式。

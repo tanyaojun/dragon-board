@@ -13,6 +13,14 @@ from backend.data.schemas import ImportDatasetRequest
 from backend.utils import json_dumps, new_id, stable_hash
 
 
+SNAPSHOT_PRIMARY_DATASET_IDS = {"dragonboard_live"}
+SNAPSHOT_PRIMARY_SOURCE_TYPES = {"dragon_board_runtime"}
+
+
+def is_snapshot_primary_dataset(dataset: Dataset) -> bool:
+    return dataset.id in SNAPSHOT_PRIMARY_DATASET_IDS or dataset.source_type in SNAPSHOT_PRIMARY_SOURCE_TYPES
+
+
 class DatasetService:
     def __init__(self, session: Session | None):
         self.repo = create_repository(session)
@@ -23,6 +31,14 @@ class DatasetService:
     def get_dataset(self, dataset_id: str) -> dict[str, Any] | None:
         model = self.repo.get_dataset(dataset_id)
         return self.repo.dataset_to_dict(model) if model else None
+
+    def delete_dataset(self, dataset_id: str) -> dict[str, Any] | None:
+        model = self.repo.get_dataset(dataset_id)
+        if not model:
+            return None
+        if is_snapshot_primary_dataset(model):
+            raise ValueError(f"snapshot primary dataset cannot be deleted from UI/API: {dataset_id}")
+        return self.repo.delete_dataset(dataset_id)
 
     def import_dataset(self, request: ImportDatasetRequest) -> dict[str, Any]:
         if request.source_type == "sqlite_snapshots":

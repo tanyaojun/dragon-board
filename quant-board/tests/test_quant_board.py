@@ -2988,6 +2988,13 @@ def test_delete_backtest_run_removes_normalized_children() -> None:
         )
 
 
+def test_delete_dataset_api_is_disabled_outside_mongodb_mode() -> None:
+    client = TestClient(app)
+    response = client.delete("/api/datasets/ds_legacy")
+    assert response.status_code == 410, response.text
+    assert response.json()["detail"] == "dataset deletion is only available in MongoDB mode"
+
+
 def test_research_vacuum_runs_outside_session_transaction() -> None:
     init_db()
     with SessionLocal() as session:
