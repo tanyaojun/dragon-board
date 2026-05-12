@@ -1,5 +1,5 @@
 using System.Diagnostics;
-using System.Net.NetworkInformation;
+using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Text;
 using Microsoft.Win32;
@@ -8,9 +8,17 @@ namespace DragonBoardLauncher;
 
 internal static class Program
 {
+    private const string SingleInstanceMutexName = @"Global\DragonBoardLauncher.SingleInstance";
+
     [STAThread]
     private static void Main()
     {
+        using var mutex = new Mutex(initiallyOwned: true, SingleInstanceMutexName, out var ownsMutex);
+        if (!ownsMutex)
+        {
+            return;
+        }
+
         ApplicationConfiguration.Initialize();
         Application.Run(new LauncherForm());
     }
@@ -48,7 +56,13 @@ internal sealed class LauncherForm : Form
         _services = new Dictionary<string, ManagedService>
         {
             ["redis"] = ManagedService.WindowsService("Redis 缓存", 6379, "Redis"),
-            ["proxy"] = ManagedService.ProcessService("本地代理服务", 3000, Path.Combine(_root, "proxy-server"), "node", "server.js"),
+            ["proxy"] = ManagedService.ProcessService(
+                "本地代理服务",
+                3000,
+                Path.Combine(_root, "proxy-server"),
+                "node",
+                "server.js",
+                openUrl: "http://127.0.0.1:3000/docs"),
             ["frontend"] = ManagedService.ProcessService("龙头看板前端", 5173, _root, "cmd.exe", "/c npm run dev -- --host 127.0.0.1"),
             ["bridge"] = ManagedService.ProcessService("通达信行情桥", 8765, _root, "python", "python-bridge/main.py"),
             ["quant-api"] = ManagedService.ProcessService(
@@ -80,11 +94,11 @@ internal sealed class LauncherForm : Form
         _trayIcon = BuildTrayIcon();
         _trayIcon.Visible = true;
 
-        _timer = new System.Windows.Forms.Timer { Interval = 1500 };
+        _timer = new System.Windows.Forms.Timer { Interval = 5000 };
         _timer.Tick += (_, _) => RefreshStatuses();
         _timer.Start();
 
-        _dockTimer = new System.Windows.Forms.Timer { Interval = 350 };
+        _dockTimer = new System.Windows.Forms.Timer { Interval = 1000 };
         _dockTimer.Tick += (_, _) => UpdateDockState();
         _dockTimer.Start();
 
@@ -208,7 +222,7 @@ internal sealed class LauncherForm : Form
         actions.Controls.Add(MakeButton("停止托管", (_, _) => StopManaged()));
         actions.Controls.Add(MakeButton("打开看板", (_, _) => OpenUrl("http://127.0.0.1:5173")));
         actions.Controls.Add(MakeButton("打开量化", (_, _) => OpenUrl("http://127.0.0.1:5174")));
-        actions.Controls.Add(MakeButton("健康检查", async (_, _) => await RefreshStatusesAsync()));
+        actions.Controls.Add(MakeButton("健康检查", async (_, _) => await RefreshStatusesAsync(detailed: true)));
         _autoStartButton.Text = IsAutoStartEnabled() ? "自启动: 开" : "自启动: 关";
         StyleButton(_autoStartButton);
         _autoStartButton.Width = 116;
@@ -291,14 +305,14 @@ internal sealed class LauncherForm : Form
         StartService(_services["frontend"]);
         StartService(_services["bridge"]);
         StartService(_services["quant-api"]);
-        RefreshStatuses();
+        _ = RefreshStatusesAsync(detailed: true);
     }
 
     private void StartAll()
     {
         StartCore();
         StartService(_services["quant-ui"]);
-        RefreshStatuses();
+        _ = RefreshStatusesAsync(detailed: true);
     }
 
     private void StopManaged()
@@ -308,7 +322,7 @@ internal sealed class LauncherForm : Form
         StopService(_services["bridge"]);
         StopService(_services["frontend"]);
         StopService(_services["proxy"]);
-        RefreshStatuses();
+        _ = RefreshStatusesAsync(detailed: true);
     }
 
     private void StartService(ManagedService service)
@@ -425,7 +439,7 @@ internal sealed class LauncherForm : Form
             return;
         }
 
-        OpenUrl($"http://127.0.0.1:{service.Port}");
+        OpenUrl(service.OpenUrl ?? $"http://127.0.0.1:{service.Port}");
     }
 
     private void StopStartedProcesses()
@@ -487,7 +501,7 @@ internal sealed class LauncherForm : Form
         _ = RefreshStatusesAsync();
     }
 
-    private async Task RefreshStatusesAsync()
+    private async Task RefreshStatusesAsync(bool detailed = false)
     {
         if (_refreshInProgress)
         {
@@ -500,7 +514,7 @@ internal sealed class LauncherForm : Form
             var online = 0;
             foreach (var service in _services.Values)
             {
-                var status = GetServiceStatus(service);
+                var status = detailed ? GetDetailedServiceStatus(service) : GetQuickServiceStatus(service);
                 if (status.Running)
                 {
                     online++;
@@ -511,7 +525,14 @@ internal sealed class LauncherForm : Form
 
             _summary.Text = $"服务在线 {online}/{_services.Count}  ·  {DateTime.Now:HH:mm:ss}";
             _trayIcon.Text = $"龙头看板: {online}/{_services.Count} 个服务在线";
-            _redisCache.Text = await GetQuantCacheStatusAsync();
+            if (detailed)
+            {
+                _redisCache.Text = await GetQuantCacheStatusAsync();
+            }
+            else if (!IsPortOpen(8000))
+            {
+                _redisCache.Text = "缓存: 后端离线";
+            }
         }
         catch (Exception ex)
         {
@@ -523,7 +544,22 @@ internal sealed class LauncherForm : Form
         }
     }
 
-    private ServiceStatus GetServiceStatus(ManagedService service)
+    private ServiceStatus GetQuickServiceStatus(ManagedService service)
+    {
+        var running = IsPortOpen(service.Port);
+        var serviceState = service.Kind == ServiceKind.WindowsService
+            ? (running ? "RUNNING" : "")
+            : "";
+
+        return new ServiceStatus(
+            service,
+            running,
+            Array.Empty<int>(),
+            Array.Empty<string>(),
+            serviceState);
+    }
+
+    private ServiceStatus GetDetailedServiceStatus(ManagedService service)
     {
         var pids = GetPidsByPort(service.Port);
         var processNames = pids.Select(GetProcessName).Where(name => !string.IsNullOrWhiteSpace(name)).Distinct().ToList();
@@ -707,13 +743,18 @@ internal sealed class LauncherForm : Form
         Close();
     }
 
-    private static bool IsPortOpen(int port)
+    private static bool IsPortOpen(int port, int timeoutMs = 250)
     {
-        var properties = IPGlobalProperties.GetIPGlobalProperties();
-        return properties.GetActiveTcpListeners().Any(endpoint => endpoint.Port == port)
-            || properties.GetActiveTcpConnections().Any(connection =>
-                connection.LocalEndPoint.Port == port &&
-                connection.State is TcpState.Listen or TcpState.Established);
+        try
+        {
+            using var client = new TcpClient();
+            var task = client.ConnectAsync("127.0.0.1", port);
+            return task.Wait(TimeSpan.FromMilliseconds(timeoutMs)) && client.Connected;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static IReadOnlyList<int> GetPidsByPort(int port)
@@ -1055,7 +1096,8 @@ internal sealed class ManagedService
         string arguments,
         string? fallbackFileName,
         string? fallbackArguments,
-        string? windowsServiceName)
+        string? windowsServiceName,
+        string? openUrl)
     {
         Key = key;
         Name = name;
@@ -1067,6 +1109,7 @@ internal sealed class ManagedService
         FallbackFileName = fallbackFileName;
         FallbackArguments = fallbackArguments;
         WindowsServiceName = windowsServiceName;
+        OpenUrl = openUrl;
     }
 
     public string Key { get; }
@@ -1079,6 +1122,7 @@ internal sealed class ManagedService
     public string? FallbackFileName { get; }
     public string? FallbackArguments { get; }
     public string? WindowsServiceName { get; }
+    public string? OpenUrl { get; }
     public Process? Process { get; set; }
 
     public static ManagedService ProcessService(
@@ -1088,7 +1132,8 @@ internal sealed class ManagedService
         string fileName,
         string arguments,
         string? fallbackFileName = null,
-        string? fallbackArguments = null)
+        string? fallbackArguments = null,
+        string? openUrl = null)
     {
         return new ManagedService(
             KeyFromName(name),
@@ -1100,7 +1145,8 @@ internal sealed class ManagedService
             arguments,
             fallbackFileName,
             fallbackArguments,
-            null);
+            null,
+            openUrl);
     }
 
     public static ManagedService WindowsService(string name, int port, string serviceName)
@@ -1115,7 +1161,8 @@ internal sealed class ManagedService
             "",
             null,
             null,
-            serviceName);
+            serviceName,
+            null);
     }
 
     private static string KeyFromName(string name)
