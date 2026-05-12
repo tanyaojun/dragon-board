@@ -12,6 +12,7 @@ import { ProxyRedisCache } from './helpers/proxyCache.js'
 import { buildBadRequestEnvelope } from './helpers/response.js'
 import { registerBigOrderRoutes } from './routes/bigOrder.js'
 import { registerDeprecatedRoutes } from './routes/deprecated.js'
+import { registerDocsRoutes } from './routes/docs.js'
 import { registerHotlistRoutes } from './routes/hotlists.js'
 import { registerMarketRoutes } from './routes/market.js'
 import { registerQuoteRoutes } from './routes/quotes.js'
@@ -57,6 +58,7 @@ export function createProxyApp(options = {}) {
     })
   })
 
+  registerDocsRoutes(app, context)
   registerHotlistRoutes(app, context)
   registerQuoteRoutes(app, context)
   registerDeprecatedRoutes(app, context)

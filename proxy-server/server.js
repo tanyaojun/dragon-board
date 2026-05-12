@@ -13,6 +13,8 @@ const cache = await createProxyRedisCache({ readConfig })
 const app = createProxyApp({ port: PORT, localEnv, readConfig, cache })
 
 const formalRoutes = [
+  'GET  /docs',
+  'GET  /openapi.json',
   'GET  /health',
   'GET  /api/xueqiu/hot',
   'GET  /api/cls/hot',
@@ -25,13 +27,17 @@ const formalRoutes = [
   'GET  /api/quotes/tencent',
   'GET  /api/quotes/eastmoney',
   'GET  /api/quotes/sina',
+  'GET  /api/quotes/tencent/spk',
   'POST /api/tdx/:entry',
   'GET  /api/limitup/10jqka',
+  'GET  /api/limitup/detail',
   'GET  /api/surge-stock/performance',
   'GET  /api/market/overview',
   'GET  /api/sentiment/composite',
   'GET  /api/big-order/main-monitor',
   'GET  /api/big-order/all-day',
+  'GET  /api/theme/:id',
+  'POST /api/themes/batch',
 ]
 
 app.listen(PORT, () => {
@@ -41,6 +47,6 @@ app.listen(PORT, () => {
   console.log(`本地地址: http://localhost:${PORT}`)
   console.log('正式接口:')
   formalRoutes.forEach((route) => console.log(`   ${route}`))
-  console.log('兼容接口: /api/theme/:id, /api/themes/batch, /api/limitup/detail, /api/quotes/tencent/spk')
+  console.log(`API 文档: http://localhost:${PORT}/docs`)
   console.log('='.repeat(60))
 })
