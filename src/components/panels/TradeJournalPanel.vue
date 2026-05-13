@@ -26,7 +26,10 @@ interface JournalEntry {
 }
 
 const props = defineProps<{ visible: boolean }>()
-const emit = defineEmits<{ close: [] }>()
+const emit = defineEmits<{
+  (e: 'update:visible', value: boolean): void
+  (e: 'close'): void
+}>()
 
 const entries = ref<JournalEntry[]>([])
 const loading = ref(false)
@@ -276,11 +279,11 @@ const stockOptions = computed(() => {
 
 <template>
   <Teleport to="body">
-    <div v-if="visible" class="trade-journal-overlay" @click.self="emit('close')">
+    <div v-if="visible" class="trade-journal-overlay" @click.self="emit('update:visible', false); emit('close')">
     <div class="trade-journal-panel">
       <div class="panel-header">
         <h2>交易日记</h2>
-        <button class="btn-close" @click="emit('close')">✕</button>
+        <button class="btn-close" @click="emit('update:visible', false); emit('close')">✕</button>
       </div>
 
       <div class="panel-body">
