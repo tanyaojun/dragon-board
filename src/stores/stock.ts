@@ -7,7 +7,7 @@ import { EventManager } from '@/utils/eventManager'
 import { AppEvents } from '@/types'
 import { dataLayer } from '@/services/DataLayer'
 import type { MergedStock } from '@/types'
-import { dragonAnalyzer } from '@/services/DragonAnalyzer'
+import { dragonReviewService } from '@/services/dragon/DragonReviewService'
 
 // 批量更新配置
 const BATCH_UPDATE_DELAY = 100 // 100ms
@@ -282,7 +282,7 @@ export const useStockStore = defineStore('stock', () => {
   function refreshLeaders() {
     if (stocks.value.length === 0) return 0
 
-    const leaders = dragonAnalyzer.getAllLeaders?.() || []
+    const leaders = dragonReviewService.getAllLeaders?.() || []
     const leaderMap = new Map()
 
     leaders.forEach((leader: any) => {
