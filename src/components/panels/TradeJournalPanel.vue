@@ -549,7 +549,7 @@ const stockOptions = computed(() => {
   </Teleport>
 </template>
 
-<style scoped>
+<style>
 .trade-journal-overlay {
   position: fixed;
   inset: 0;

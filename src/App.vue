@@ -201,7 +201,7 @@ const SectorDetail = defineAsyncComponent(() => import('./components/panels/Sect
 const SectorAlert = defineAsyncComponent(() => import('./components/panels/SectorAlert.vue'))
 const SectorRotation = defineAsyncComponent(() => import('./components/panels/SectorRotation.vue'))
 const ThemeRiskDashboard = defineAsyncComponent(() => import('./components/panels/ThemeRiskDashboard.vue'))
-import TradeJournalPanel from './components/panels/TradeJournalPanel.vue'
+const TradeJournalPanel = defineAsyncComponent(() => import('./components/panels/TradeJournalPanel.vue'))
 
 // Stores
 import { useThemeStore } from './stores/theme'

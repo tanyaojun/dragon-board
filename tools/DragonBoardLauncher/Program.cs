@@ -20,6 +20,8 @@ internal sealed class LauncherForm : Form
     private readonly Dictionary<string, ManagedService> _services;
     private readonly System.Windows.Forms.Timer _timer;
 
+    private readonly Label _mongoStatus = new();
+    private readonly Label _redisStatus = new();
     private readonly Label _proxyStatus = new();
     private readonly Label _frontendStatus = new();
     private readonly Label _bridgeStatus = new();
@@ -33,6 +35,8 @@ internal sealed class LauncherForm : Form
         var quantRoot = Path.Combine(_root, "quant-board");
         _services = new Dictionary<string, ManagedService>
         {
+            ["mongo"] = new("MongoDB 数据库", 27017, @"D:\APP_SOFT\MongoDB\bin", @"D:\APP_SOFT\MongoDB\bin\mongod.exe", @"--dbpath D:\APP_SOFT\MongoDB\data --logpath D:\APP_SOFT\MongoDB\log\mongod.log --port 27017"),
+            ["redis"] = new("Redis 缓存", 6379, @"D:\APP_SOFT\redis", @"D:\APP_SOFT\redis\redis-server.exe", @"D:\APP_SOFT\redis\redis.windows-service.conf"),
             ["proxy"] = new("DragonBoard Proxy Server", 3000, Path.Combine(_root, "proxy-server"), "node", "server.js"),
             ["frontend"] = new("DragonBoard Frontend", 5173, _root, "cmd.exe", "/c npm run dev -- --host 127.0.0.1"),
             ["bridge"] = new("DragonBoard Python Bridge", 8765, _root, "python", "python-bridge/main.py"),
@@ -77,9 +81,11 @@ internal sealed class LauncherForm : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
-            RowCount = 8,
+            RowCount = 10,
             Padding = new Padding(14)
         };
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -98,6 +104,8 @@ internal sealed class LauncherForm : Form
         };
         root.Controls.Add(title);
 
+        root.Controls.Add(BuildServiceRow(_services["mongo"], _mongoStatus));
+        root.Controls.Add(BuildServiceRow(_services["redis"], _redisStatus));
         root.Controls.Add(BuildServiceRow(_services["proxy"], _proxyStatus));
         root.Controls.Add(BuildServiceRow(_services["frontend"], _frontendStatus));
         root.Controls.Add(BuildServiceRow(_services["bridge"], _bridgeStatus));
@@ -176,6 +184,8 @@ internal sealed class LauncherForm : Form
 
     private void StartAll()
     {
+        StartService(_services["mongo"]);
+        StartService(_services["redis"]);
         StartService(_services["proxy"]);
         StartService(_services["frontend"]);
         StartService(_services["bridge"]);
@@ -191,6 +201,8 @@ internal sealed class LauncherForm : Form
         StopService(_services["bridge"]);
         StopService(_services["frontend"]);
         StopService(_services["proxy"]);
+        StopService(_services["redis"]);
+        StopService(_services["mongo"]);
         RefreshStatuses();
     }
 
@@ -291,6 +303,8 @@ internal sealed class LauncherForm : Form
         StopStartedProcess(_services["bridge"]);
         StopStartedProcess(_services["frontend"]);
         StopStartedProcess(_services["proxy"]);
+        StopStartedProcess(_services["redis"]);
+        StopStartedProcess(_services["mongo"]);
     }
 
     private void StopStartedProcess(ManagedService service)
@@ -316,6 +330,8 @@ internal sealed class LauncherForm : Form
 
     private void RefreshStatuses()
     {
+        SetStatus(_mongoStatus, IsPortOpen(27017));
+        SetStatus(_redisStatus, IsPortOpen(6379));
         SetStatus(_proxyStatus, IsPortOpen(3000));
         SetStatus(_frontendStatus, IsPortOpen(5173));
         SetStatus(_bridgeStatus, IsPortOpen(8765));
