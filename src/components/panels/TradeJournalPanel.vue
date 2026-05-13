@@ -265,7 +265,9 @@ onMounted(() => {
 })
 
 const stockOptions = computed(() => {
-  return dataLayer.getMergedStocks().slice(0, 200).map((s: any) => ({
+  const stocks = dataLayer.getMergedStocks?.()
+  if (!stocks || !Array.isArray(stocks)) return []
+  return stocks.slice(0, 200).map((s: any) => ({
     code: s.code,
     name: s.name,
   }))
@@ -273,7 +275,8 @@ const stockOptions = computed(() => {
 </script>
 
 <template>
-  <div v-if="visible" class="trade-journal-overlay" @click.self="emit('close')">
+  <Teleport to="body">
+    <div v-if="visible" class="trade-journal-overlay" @click.self="emit('close')">
     <div class="trade-journal-panel">
       <div class="panel-header">
         <h2>交易日记</h2>
@@ -420,7 +423,8 @@ const stockOptions = computed(() => {
         <span>已平仓: <strong>{{ stats.totalExits }}</strong>笔</span>
       </div>
     </div>
-  </div>
+    </div>
+  </Teleport>
 </template>
 
 <style scoped>
