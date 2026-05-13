@@ -167,8 +167,8 @@ const saveThresholds = () => {
   })
 
   // 重新计算龙头
-  if ((window as any).DragonAnalyzer) {
-    ;(window as any).DragonAnalyzer.recalculateAll()
+  if ((window as any).dragonReviewService) {
+    ;(window as any).dragonReviewService.recalculateAll()
   }
 }
 
@@ -194,8 +194,8 @@ const resetThresholds = () => {
 
 // 获取龙头统计
 const fetchLeaderStats = () => {
-  if ((window as any).DragonAnalyzer) {
-    const stats = (window as any).DragonAnalyzer.getStats?.()
+  if ((window as any).dragonReviewService) {
+    const stats = (window as any).dragonReviewService.getStats?.()
     if (stats) {
       leaderStats.value = stats
     }

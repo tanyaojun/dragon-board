@@ -82,7 +82,7 @@
       results.dragonReviewService.leaders = leaders
       results.dragonReviewService.status = '✅'
     } else {
-      console.log('❌ DragonAnalyzer 未加载')
+      console.log('❌ DragonReviewService 未加载')
     }
 
     // 5. 测试单个股票分数计算
