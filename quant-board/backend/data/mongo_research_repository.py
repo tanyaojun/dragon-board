@@ -626,3 +626,132 @@ def _iso_or_none(value: Any) -> str | None:
 
 def _utc_now_naive() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None)
+
+
+    # ========== Trade Journal ==========
+
+    def save_journal_entry(self, entry):
+        """Save or update a trade journal entry (upsert by id)."""
+        from backend.data.models import TradeJournal
+        doc = entry.to_dict()
+        self.db["trade_journal"].replace_one({"id": entry.id}, doc, upsert=True)
+        row = self.db["trade_journal"].find_one({"id": entry.id})
+        return TradeJournal.from_dict(self._drop_mongo_id(row)) if row else entry
+
+    def get_journal_entry(self, entry_id: str):
+        """Get a single journal entry by id."""
+        row = self.db["trade_journal"].find_one({"id": entry_id})
+        return self._drop_mongo_id(row) if row else None
+
+    def list_journal_entries(
+        self,
+        stock_code=None,
+        trade_type=None,
+        direction=None,
+        date_from=None,
+        date_to=None,
+        review_tags=None,
+        limit=50,
+        offset=0,
+    ):
+        """List journal entries with optional filters."""
+        query = {}
+        if stock_code:
+            query["stockCode"] = stock_code
+        if trade_type:
+            query["tradeType"] = trade_type
+        if direction:
+            query["direction"] = direction
+        if date_from or date_to:
+            time_filter = {}
+            if date_from:
+                time_filter["$gte"] = date_from
+            if date_to:
+                time_filter["$lte"] = date_to
+            if time_filter:
+                query["tradeTime"] = time_filter
+        if review_tags:
+            query["reviewTags"] = {"$in": review_tags}
+
+        cursor = (
+            self.db["trade_journal"]
+            .find(query)
+            .sort([("tradeTime", -1)])
+            .skip(offset)
+            .limit(limit)
+        )
+        return [self._drop_mongo_id(row) for row in cursor]
+
+    def count_journal_entries(
+        self,
+        stock_code=None,
+        trade_type=None,
+        direction=None,
+        date_from=None,
+        date_to=None,
+    ):
+        """Count journal entries with optional filters."""
+        query = {}
+        if stock_code:
+            query["stockCode"] = stock_code
+        if trade_type:
+            query["tradeType"] = trade_type
+        if direction:
+            query["direction"] = direction
+        if date_from or date_to:
+            time_filter = {}
+            if date_from:
+                time_filter["$gte"] = date_from
+            if date_to:
+                time_filter["$lte"] = date_to
+            if time_filter:
+                query["tradeTime"] = time_filter
+        return self.db["trade_journal"].count_documents(query)
+
+    def delete_journal_entry(self, entry_id: str):
+        """Delete a single journal entry by id. Returns True if deleted."""
+        result = self.db["trade_journal"].delete_one({"id": entry_id})
+        return result.deleted_count > 0
+
+    def delete_linked_exits(self, linked_entry_id: str):
+        """Delete all exit entries linked to a given entry. Returns count deleted."""
+        result = self.db["trade_journal"].delete_many({"linkedEntryId": linked_entry_id})
+        return result.deleted_count
+
+    def update_journal_entry(self, entry_id: str, updates: dict):
+        """Update specific fields of a journal entry. Returns updated doc or None."""
+        from datetime import UTC, datetime
+        updates["updatedAt"] = datetime.now(UTC).isoformat()
+        result = self.db["trade_journal"].update_one({"id": entry_id}, {"$set": updates})
+        if result.matched_count == 0:
+            return None
+        return self.get_journal_entry(entry_id)
+
+    def get_journal_stats(self):
+        """Get aggregated journal statistics."""
+        pipeline = [
+            {"$match": {"reviewTags": {"$ne": None, "$not": {"$size": 0}}}},
+            {"$unwind": "$reviewTags"},
+            {"$group": {"_id": "$reviewTags", "count": {"$sum": 1}}},
+            {"$sort": {"count": -1}},
+        ]
+        tag_counts = {
+            doc["_id"]: doc["count"]
+            for doc in self.db["trade_journal"].aggregate(pipeline)
+        }
+
+        entries_with_pnl = list(
+            self.db["trade_journal"].find(
+                {"pnl": {"$ne": None}, "tradeType": "exit"}
+            )
+        )
+        total_pnl = sum(e.get("pnl", 0) for e in entries_with_pnl)
+        win_count = sum(1 for e in entries_with_pnl if e.get("pnl", 0) > 0)
+        total_exits = len(entries_with_pnl)
+
+        return {
+            "tagCounts": tag_counts,
+            "totalPnl": total_pnl,
+            "winRate": win_count / total_exits if total_exits > 0 else 0,
+            "totalExits": total_exits,
+        }
