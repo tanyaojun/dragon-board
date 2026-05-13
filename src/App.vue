@@ -84,7 +84,7 @@
               <span class="item-icon">📤</span>数据导出
             </div>
             <div class="dropdown-divider"></div>
-            <div class="dropdown-item" @click="panels.journal = true">
+            <div class="dropdown-item" @click.stop="panels.journal = true">
               <span class="item-icon">📓</span>交易日记
             </div>
           </div>
