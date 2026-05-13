@@ -134,7 +134,6 @@ export class SnapshotRuntime {
   private readonly snapshotStockRowStore: SnapshotStockRowStore
   private readonly snapshotSectorRowStore: SnapshotSectorRowStore
   private readonly snapshotProjectionMetaStore: SnapshotProjectionMetaStore
-  private readonly enableIndexedDbSnapshotCache: boolean
   private readonly snapshotBackupSync: SnapshotBackupSync
   private sqlitePrimaryWrite?: (bundle: SnapshotProjectionBundle) => Promise<SnapshotSqlitePrimaryWriteResult>
   private sqlitePrimaryExists?: SnapshotSqlitePrimaryExistsHandler
@@ -149,7 +148,6 @@ export class SnapshotRuntime {
     this.backupDbVersion = deps.backupDbVersion
     this.backupStoreName = deps.backupStoreName
     this.backupBucketName = deps.backupBucketName
-    this.enableIndexedDbSnapshotCache = deps.enableIndexedDbSnapshotCache === true
     this.snapshotStore = new SnapshotStore({
       dbName: deps.primaryDbName,
       dbVersion: deps.primaryDbVersion,
@@ -1275,20 +1273,6 @@ export class SnapshotRuntime {
       if (sqliteWrite.skipped) {
         created = false
         return
-      }
-
-      if (this.enableIndexedDbSnapshotCache) {
-        await this.ensurePersistentStorage()
-        // IndexedDB 在这里仅是可选缓存，失败不影响正式 SQLite 入库结果。
-        try {
-          await this.snapshotProjectionWriter.saveBundle(effectiveBundle)
-        } catch (error) {
-          this.logger.warn?.('[DataLayer] Snapshot IndexedDB cache write failed:', record.id, error)
-        }
-        // 旧本地备份也只跟随可选缓存开关；正式备份由后端 outbox/Supabase 链路承接。
-        void this.snapshotBackupSync.saveToBackups(effectiveBundle).catch((error) => {
-          this.logger.warn?.('[DataLayer] Snapshot backup sync failed:', record.id, error)
-        })
       }
 
       created = true

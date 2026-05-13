@@ -346,6 +346,8 @@ export function installQuantBoardBridge(): void {
 export async function exportQuantBoardRankTrendGolden(
   options: QuantBoardTsGoldenExportOptions = {},
 ): Promise<QuantBoardTsGoldenPayload> {
+  // 历史遗留：仅读取迁移前的 IndexedDB 历史数据，不再作为正式快照来源。
+  // 正式快照已迁移至 MongoDB 后端，此函数仅用于回放旧数据或导出 golden case。
   const dbName = options.dbName || DEFAULT_DB_NAME
   const snapshotType = options.snapshotType || DEFAULT_RANK_TREND_SNAPSHOT_TYPE
   const limit = Math.max(1, Math.min(Number(options.limit || DEFAULT_LIMIT), 5000))
