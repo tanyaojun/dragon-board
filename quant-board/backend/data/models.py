@@ -514,3 +514,71 @@ class SyncOutboxModel(Base):
     next_retry_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+from dataclasses import dataclass, field
+from typing import Any
+
+
+@dataclass
+class TradeJournal:
+    id: str
+    stock_code: str
+    stock_name: str
+    direction: str  # "buy" | "sell"
+    trade_type: str  # "entry" | "exit"
+    price: float
+    volume: int
+    trade_time: str  # ISO 8601
+    linked_entry_id: str | None = None
+    signals_snapshot: dict[str, Any] | None = field(default_factory=dict)
+    notes: str = ""
+    screenshot_paths: list[str] = field(default_factory=list)
+    review_tags: list[str] = field(default_factory=list)
+    pnl: float | None = None
+    pnl_pct: float | None = None
+    created_at: str = ""
+    updated_at: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "stockCode": self.stock_code,
+            "stockName": self.stock_name,
+            "direction": self.direction,
+            "tradeType": self.trade_type,
+            "price": self.price,
+            "volume": self.volume,
+            "tradeTime": self.trade_time,
+            "linkedEntryId": self.linked_entry_id,
+            "signalsSnapshot": self.signals_snapshot,
+            "notes": self.notes,
+            "screenshotPaths": self.screenshot_paths,
+            "reviewTags": self.review_tags,
+            "pnl": self.pnl,
+            "pnlPct": self.pnl_pct,
+            "createdAt": self.created_at,
+            "updatedAt": self.updated_at,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "TradeJournal":
+        return cls(
+            id=str(data.get("id") or ""),
+            stock_code=str(data.get("stockCode") or ""),
+            stock_name=str(data.get("stockName") or ""),
+            direction=str(data.get("direction") or ""),
+            trade_type=str(data.get("tradeType") or "entry"),
+            price=float(data.get("price") or 0),
+            volume=int(data.get("volume") or 0),
+            trade_time=str(data.get("tradeTime") or ""),
+            linked_entry_id=data.get("linkedEntryId"),
+            signals_snapshot=data.get("signalsSnapshot") or {},
+            notes=str(data.get("notes") or ""),
+            screenshot_paths=list(data.get("screenshotPaths") or []),
+            review_tags=list(data.get("reviewTags") or []),
+            pnl=float(data["pnl"]) if data.get("pnl") is not None else None,
+            pnl_pct=float(data["pnlPct"]) if data.get("pnlPct") is not None else None,
+            created_at=str(data.get("createdAt") or ""),
+            updated_at=str(data.get("updatedAt") or ""),
+        )
