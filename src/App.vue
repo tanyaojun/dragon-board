@@ -83,6 +83,10 @@
             <div class="dropdown-item" @click="openExportPanel($event)">
               <span class="item-icon">📤</span>数据导出
             </div>
+            <div class="dropdown-divider"></div>
+            <div class="dropdown-item" @click="panels.journal = true">
+              <span class="item-icon">📓</span>交易日记
+            </div>
           </div>
         </div>
       </div>
@@ -149,6 +153,7 @@
     <KeyboardHelpPanel v-model:visible="panels.help" @close="panels.help = false" />
     <ExportPanel v-model:visible="panels.export" :trigger-rect="panelRects.export" @close="panels.export = false" />
     <FavoritePanel v-model:visible="panels.favorite" @close="panels.favorite = false" />
+    <TradeJournalPanel v-model:visible="panels.journal" @close="panels.journal = false" />
     <ContextMenu />
     <StockL2DetailPanel :visible="panels.stockDetail" :stock-code="selectedStockCode"
       :stock-name="selectedStockName" :trigger-rect="panelRects.stockDetail"
@@ -196,6 +201,7 @@ const SectorDetail = defineAsyncComponent(() => import('./components/panels/Sect
 const SectorAlert = defineAsyncComponent(() => import('./components/panels/SectorAlert.vue'))
 const SectorRotation = defineAsyncComponent(() => import('./components/panels/SectorRotation.vue'))
 const ThemeRiskDashboard = defineAsyncComponent(() => import('./components/panels/ThemeRiskDashboard.vue'))
+const TradeJournalPanel = defineAsyncComponent(() => import('./components/panels/TradeJournalPanel.vue'))
 
 // Stores
 import { useThemeStore } from './stores/theme'
@@ -293,6 +299,7 @@ const panels = ref({
   sectorRotation: false,
   themeRisk: false,
   stockDetail: false,
+  journal: false,
 })
 
 const panelRects = ref<Record<string, DOMRect | undefined>>({})
