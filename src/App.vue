@@ -220,9 +220,8 @@ import { dataLoader } from './services/dataLoader'            // 八平台数据
 // ========== 3. 业务分析服务（依赖 dataLayer + dataLoader）==========
 import { sectorAnalyzer } from './services/sectorAnalyzer'    // 题材分析
 import { themeSyncAdapter } from './services/theme/ThemeSyncAdapter'
-import { dragonAnalyzer } from './services/DragonAnalyzer'    // 龙头分析
 import { dragonBreathAnalyzer } from './services/DragonBreathAnalyzer' // 情绪分析
-import { dragonReviewService } from './services/dragon/DragonReviewService'
+import { dragonReviewService } from './services/dragon/DragonReviewService'  // 龙头分析
 import { rotationService } from './services/rotationService'  // 轮动分析
 import { ThemeCorrelationAnalyzer } from './services/ThemeCorrelationAnalyzer' // 联动分析
 import { RankTrendAnalyzer } from './services/RankTrendAnalyzer' // 排名趋势分析
@@ -511,7 +510,7 @@ const lazyLoadServices = () => {
       }
 
       // 旧龙头分析保留兼容；真龙复盘结果才是新主结论
-      safeExecute(dragonAnalyzer, 'recalculateAll', '旧龙头兼容计算').then(() => {})
+      safeExecute(dragonReviewService, 'recalculateAll', '旧龙头兼容计算').then(() => {})
     }, 500)
 
     // 第2批：辅助分析服务（延迟1.5秒）
