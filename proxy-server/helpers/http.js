@@ -49,6 +49,40 @@ export function createHttpClients() {
   return { client, plainClient }
 }
 
+export function buildAxiosProxyConfig(proxyUrl) {
+  const value = String(proxyUrl || '').trim()
+  if (!value) return {}
+
+  const url = new URL(value)
+  const protocol = url.protocol.replace(':', '')
+  if (protocol !== 'http' && protocol !== 'https') {
+    throw new Error(`unsupported axios proxy protocol: ${protocol}`)
+  }
+
+  const proxy = {
+    protocol,
+    host: url.hostname,
+    port: Number(url.port) || (protocol === 'https' ? 443 : 80),
+  }
+  if (url.username || url.password) {
+    proxy.auth = {
+      username: decodeURIComponent(url.username),
+      password: decodeURIComponent(url.password),
+    }
+  }
+  return { proxy }
+}
+
+export function createSourceProxyConfig(readConfig, source) {
+  if (source !== 'eastmoney') return {}
+  return buildAxiosProxyConfig(
+    readConfig?.('EASTMONEY_PROXY_URL') ||
+      readConfig?.('EASTMONEY_HTTP_PROXY') ||
+      readConfig?.('EASTMONEY_HTTPS_PROXY') ||
+      '',
+  )
+}
+
 export function cleanCode(code) {
   return String(code || '')
     .replace(/[^0-9]/g, '')

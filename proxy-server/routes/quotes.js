@@ -3,6 +3,7 @@ import iconv from 'iconv-lite'
 import {
   DEFAULT_BROWSER_HEADERS,
   cleanCode,
+  createSourceProxyConfig,
   getMarketPrefix,
   parseCodeList,
 } from '../helpers/http.js'
@@ -201,7 +202,7 @@ function normalizeEastmoneyHistFlowResponse(data, code) {
   })
 }
 
-async function fetchEastmoneyHistFlowQuote(plainClient, code, cache = null) {
+async function fetchEastmoneyHistFlowQuote(plainClient, code, cache = null, eastmoneyProxyConfig = {}) {
   const cacheKey = `quotes:eastmoney:hist-flow:v1:${cleanCode(code)}`
   const ttlSeconds = PROXY_CACHE_TTLS.quotes.eastmoneyHistFlow
   if (cache) {
@@ -214,6 +215,7 @@ async function fetchEastmoneyHistFlowQuote(plainClient, code, cache = null) {
     try {
       const response = await plainClient.get(buildEastmoneyHistFlowUrl(code), {
         timeout: 8000,
+        ...eastmoneyProxyConfig,
         headers: {
           ...DEFAULT_BROWSER_HEADERS,
           Referer: 'https://data.eastmoney.com/zjlx/detail.html',
@@ -239,6 +241,7 @@ async function fetchEastmoneyHistFlowQuotes(
   codeList,
   concurrency = EASTMONEY_HIST_FLOW_CONCURRENCY,
   cache = null,
+  eastmoneyProxyConfig = {},
 ) {
   const rows = []
   const failures = []
@@ -252,7 +255,12 @@ async function fetchEastmoneyHistFlowQuotes(
         const code = queue[cursor]
         cursor += 1
         try {
-          const row = await fetchEastmoneyHistFlowQuote(plainClient, code, cache)
+          const row = await fetchEastmoneyHistFlowQuote(
+            plainClient,
+            code,
+            cache,
+            eastmoneyProxyConfig,
+          )
           if (row) rows.push(row)
         } catch (error) {
           failures.push({
@@ -303,10 +311,17 @@ async function sendEastmoneyQuoteResponse(res, cache, cacheKey, data, cacheMeta)
   )
 }
 
-async function loadEastmoneyQuotePayload(plainClient, cache, codeList, ttlSeconds) {
+async function loadEastmoneyQuotePayload(
+  plainClient,
+  cache,
+  codeList,
+  ttlSeconds,
+  eastmoneyProxyConfig = {},
+) {
   void ttlSeconds
   const response = await plainClient.get(buildEastmoneyUlistUrl(codeList), {
     timeout: 8000,
+    ...eastmoneyProxyConfig,
     headers: DEFAULT_BROWSER_HEADERS,
   })
 
@@ -315,7 +330,13 @@ async function loadEastmoneyQuotePayload(plainClient, cache, codeList, ttlSecond
   const histRequestCodes = missingFundFlowCodes.slice(0, EASTMONEY_ULIST_HIST_FLOW_LIMIT)
   const histSkippedCount = Math.max(0, missingFundFlowCodes.length - histRequestCodes.length)
   const histData = histRequestCodes.length
-    ? await fetchEastmoneyHistFlowQuotes(plainClient, histRequestCodes, EASTMONEY_HIST_FLOW_CONCURRENCY, cache)
+    ? await fetchEastmoneyHistFlowQuotes(
+        plainClient,
+        histRequestCodes,
+        EASTMONEY_HIST_FLOW_CONCURRENCY,
+        cache,
+        eastmoneyProxyConfig,
+      )
     : EMPTY_QUOTES
   const mergedData = histRequestCodes.length
     ? mergeEastmoneyFundFlowRows(ulistData, histData, codeList)
@@ -331,11 +352,19 @@ async function loadEastmoneyQuotePayload(plainClient, cache, codeList, ttlSecond
   })
 }
 
-async function loadEastmoneyQuoteFallbackPayload(plainClient, cache, codeList, primaryError, ttlSeconds) {
+async function loadEastmoneyQuoteFallbackPayload(
+  plainClient,
+  cache,
+  codeList,
+  primaryError,
+  ttlSeconds,
+  eastmoneyProxyConfig = {},
+) {
   void ttlSeconds
   try {
     const fallbackResponse = await plainClient.get(buildEastmoneyClistUrl(codeList), {
       timeout: 10000,
+      ...eastmoneyProxyConfig,
       headers: {
         ...DEFAULT_BROWSER_HEADERS,
         Referer: 'https://data.eastmoney.com/zjlx/detail.html',
@@ -344,7 +373,13 @@ async function loadEastmoneyQuoteFallbackPayload(plainClient, cache, codeList, p
     const clistData = mergeEastmoneyRows(EMPTY_QUOTES, fallbackResponse.data, codeList)
     const missingCodes = missingEastmoneyCodes(clistData, codeList)
     const histData = missingCodes.length
-      ? await fetchEastmoneyHistFlowQuotes(plainClient, missingCodes, EASTMONEY_HIST_FLOW_CONCURRENCY, cache)
+      ? await fetchEastmoneyHistFlowQuotes(
+          plainClient,
+          missingCodes,
+          EASTMONEY_HIST_FLOW_CONCURRENCY,
+          cache,
+          eastmoneyProxyConfig,
+        )
       : EMPTY_QUOTES
     const mergedData = mergeEastmoneyRows(clistData, histData, codeList)
     return withEastmoneyQuoteMeta(mergedData, {
@@ -363,6 +398,7 @@ async function loadEastmoneyQuoteFallbackPayload(plainClient, cache, codeList, p
         codeList,
         EASTMONEY_HIST_FLOW_CONCURRENCY,
         cache,
+        eastmoneyProxyConfig,
       )
       return withEastmoneyQuoteMeta(histData, {
         route: 'hist-flow',
@@ -382,12 +418,13 @@ async function loadEastmoneyQuoteFallbackPayload(plainClient, cache, codeList, p
   }
 }
 
-export function registerQuoteRoutes(app, { plainClient, cache }) {
+export function registerQuoteRoutes(app, { plainClient, readConfig, cache }) {
   app.get('/api/quotes/eastmoney', async (req, res) => {
     const codeList = requireCodes(req, res)
     if (!codeList) return
     const cacheKey = `quotes:eastmoney:v1:${normalizeCodeCacheKey(codeList)}`
     const ttlSeconds = PROXY_CACHE_TTLS.quotes.eastmoneyResponse
+    const eastmoneyProxyConfig = createSourceProxyConfig(readConfig, 'eastmoney')
     try {
       const result = await cache.remember(
         cacheKey,
@@ -395,7 +432,14 @@ export function registerQuoteRoutes(app, { plainClient, cache }) {
           ttlSeconds,
           staleTtlSeconds: ttlSeconds * 6,
         },
-        () => loadEastmoneyQuotePayload(plainClient, cache, codeList, ttlSeconds),
+        () =>
+          loadEastmoneyQuotePayload(
+            plainClient,
+            cache,
+            codeList,
+            ttlSeconds,
+            eastmoneyProxyConfig,
+          ),
       )
       await sendEastmoneyQuoteResponse(res, cache, cacheKey, result.value, {
         ...result.cache,
@@ -410,6 +454,7 @@ export function registerQuoteRoutes(app, { plainClient, cache }) {
           codeList,
           error,
           ttlSeconds,
+          eastmoneyProxyConfig,
         )
         await cache.set(cacheKey, payload, {
           ttlSeconds,

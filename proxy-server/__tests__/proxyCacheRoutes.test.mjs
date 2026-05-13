@@ -278,3 +278,54 @@ test('eastmoney quote route coalesces concurrent cache misses', async () => {
     server.close()
   }
 })
+
+test('eastmoney quote route applies configured proxy only to eastmoney requests', async () => {
+  const calls = []
+  const app = createProxyApp({
+    logRequests: false,
+    readConfig: (name, fallback = '') =>
+      name === 'EASTMONEY_PROXY_URL' ? 'http://127.0.0.1:7890' : fallback,
+    clients: {
+      client: {},
+      plainClient: {
+        get: async (url, config = {}) => {
+          calls.push({ url, proxy: config.proxy })
+          if (url.includes('qt.gtimg.cn')) {
+            return {
+              data: Buffer.from(
+                'v_sz000001="51~平安银行~000001~10.00~9.90~10.10~1000~0~0~100000~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~1.01~0~0~0~0~0~1.2~8~0~0~0~0~100~200~1.1";\n',
+                'utf8',
+              ),
+            }
+          }
+          return {
+            data: {
+              rc: 0,
+              data: {
+                diff: [{ f12: '000001', f14: '平安银行', f2: 10, f62: 100, f184: 1 }],
+              },
+            },
+          }
+        },
+      },
+    },
+  })
+
+  const { server, baseUrl } = await listen(app)
+  try {
+    await fetch(`${baseUrl}/api/quotes/eastmoney?codes=000001`)
+    await fetch(`${baseUrl}/api/quotes/tencent?codes=000001`)
+
+    assert.equal(calls.length, 2)
+    assert.match(calls[0].url, /eastmoney\.com/)
+    assert.deepEqual(calls[0].proxy, {
+      protocol: 'http',
+      host: '127.0.0.1',
+      port: 7890,
+    })
+    assert.match(calls[1].url, /qt\.gtimg\.cn/)
+    assert.equal(calls[1].proxy, undefined)
+  } finally {
+    server.close()
+  }
+})
