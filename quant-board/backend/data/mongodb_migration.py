@@ -35,7 +35,8 @@ RESEARCH_COLLECTIONS = (
 
 THEME_COLLECTIONS = ("themes", "theme_stock_mappings", "theme_metadata")
 RUNTIME_COLLECTIONS = ("stock_names", "migration_audit")
-ALL_COLLECTIONS = (*SNAPSHOT_COLLECTIONS, *RESEARCH_COLLECTIONS, *THEME_COLLECTIONS, *RUNTIME_COLLECTIONS)
+JOURNAL_COLLECTIONS = ("trade_journal",)
+ALL_COLLECTIONS = (*SNAPSHOT_COLLECTIONS, *RESEARCH_COLLECTIONS, *THEME_COLLECTIONS, *RUNTIME_COLLECTIONS, *JOURNAL_COLLECTIONS)
 
 JSON_FIELD_DEFAULTS: dict[str, tuple[str, Any]] = {
     "quality_flags_json": ("qualityFlags", []),
@@ -206,6 +207,12 @@ def build_mongodb_indexes() -> dict[str, list[dict[str, Any]]]:
         "migration_audit": [
             {"keys": [("opType", 1), ("idempotencyKey", 1)], "unique": True},
             {"keys": [("opType", 1), ("createdAt", -1)]},
+        ],
+        "trade_journal": [
+            {"keys": [("id", 1)], "unique": True},
+            {"keys": [("stockCode", 1), ("tradeTime", -1)]},
+            {"keys": [("tradeType", 1), ("createdAt", -1)]},
+            {"keys": [("linkedEntryId", 1)]},
         ],
     }
 
