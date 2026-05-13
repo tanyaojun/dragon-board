@@ -10,6 +10,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 
+from backend.api.journal_routes import router as journal_router
 from backend.data.auto_sync import auto_sync_runner, run_outbox_auto_sync_once
 from backend.data.archive.auto_archive import archive_auto_runner, run_archive_auto_once
 from backend.data.archive.object_store import get_object_backup_store
@@ -57,6 +58,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(journal_router)
 
 @app.on_event("startup")
 def on_startup() -> None:
