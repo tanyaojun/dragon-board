@@ -10,7 +10,7 @@
   const results = {
     algorithm: { status: '❌', weights: null },
     localStorage: { status: '❌', config: null },
-    dragonAnalyzer: { status: '❌', leaders: null },
+    dragonReviewService: { status: '❌', leaders: null },
     score: { status: '❌', details: null },
   }
 
@@ -66,8 +66,8 @@
 
     // 4. 测试龙头分析器
     console.log('\n%c4. 测试龙头分析器', 'color: #3498db; font-weight: bold')
-    if (window.dragonAnalyzer) {
-      const leaders = window.dragonAnalyzer.getAllLeaders?.()
+    if (window.dragonReviewService) {
+      const leaders = window.dragonReviewService?.getAllLeaders?.()
       console.log(`✅ 当前龙头数量: ${leaders?.length || 0} 个`)
 
       if (leaders?.length > 0) {
@@ -79,8 +79,8 @@
         })
       }
 
-      results.dragonAnalyzer.leaders = leaders
-      results.dragonAnalyzer.status = '✅'
+      results.dragonReviewService.leaders = leaders
+      results.dragonReviewService.status = '✅'
     } else {
       console.log('❌ DragonAnalyzer 未加载')
     }
@@ -164,7 +164,7 @@
     console.log(`
    算法管理器: ${results.algorithm.status}
    localStorage: ${results.localStorage.status}
-   龙头分析器: ${results.dragonAnalyzer.status}
+   龙头分析器: ${results.dragonReviewService.status}
    分数计算: ${results.score.status}
     `)
 
@@ -182,7 +182,7 @@
       success: allPass,
       algorithm: results.algorithm.status === '✅',
       localStorage: results.localStorage.config,
-      leaders: results.dragonAnalyzer.leaders?.length || 0,
+      leaders: results.dragonReviewService.leaders?.length || 0,
       sample: results.score.details,
       timestamp: Date.now(),
     }
