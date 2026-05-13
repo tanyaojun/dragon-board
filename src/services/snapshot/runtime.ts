@@ -208,12 +208,9 @@ export class SnapshotRuntime {
   start() {
     this.startTimer()
     void this.ensurePersistentStorage()
-    void this.cleanupLegacyPlainBackupDatabase()
-    void this.migrateLegacyBucketBackupDatabase()
-    void this.cleanupInvalidRuntimeSnapshots()
-    void this.initializeSnapshotGuard()
-    this.startSnapshotAutoSync()
-    this.scheduleProjectionBackfill(1_000)
+    // IndexedDB stores removed — formal persistence is MongoDB-only.
+    // Legacy cleanup, bucket migration, auto-sync, projection backfill,
+    // and snapshot guard are no-ops (store stubs return empty results).
   }
 
   stop() {
@@ -232,7 +229,7 @@ export class SnapshotRuntime {
   }
 
   private isFormalSnapshotSourceReady(type: SnapshotType, buildContext: SnapshotBuildContext): boolean {
-    if (type === 'five_minute') return true
+    if (type === 'five_minute') return false
 
     const stockCount = Array.isArray(buildContext.stocks) ? buildContext.stocks.length : 0
     if (stockCount > 0) return true
@@ -1052,32 +1049,9 @@ export class SnapshotRuntime {
     return result
   }
 
-  async saveFiveMinuteSnapshot(snapshotTime: Date = new Date()): Promise<boolean> {
-    try {
-      if (!this.isSnapshotCaptureAllowed('five_minute', snapshotTime)) {
-        this.logSnapshotCaptureSkipped('five_minute', snapshotTime)
-        return false
-      }
-      const recordId = buildSnapshotId('five_minute', toLocalTradingDate(snapshotTime), toLocalSlotTime(snapshotTime))
-      const existing = await this.getSnapshotById(recordId)
-      if (existing) return false
-      const snapshot = {
-        timestamp: snapshotTime.getTime(),
-        type: 'five_minute',
-        hotlist: this.getBuildContext().stocks.slice(0, 100).map((stock, index) => ({
-          code: stock.code,
-          name: stock.name,
-          rank: index + 1,
-          price: stock.price,
-          change: stock.change,
-        })),
-      }
-      const record = this.createManagedSnapshotRecord('five_minute', snapshotTime, snapshot)
-      return this.saveSnapshotRecord(record)
-    } catch (error) {
-      this.logger.error('[DataLayer] 保存5分钟快照失败:', error)
-      return false
-    }
+  async saveFiveMinuteSnapshot(_snapshotTime: Date = new Date()): Promise<boolean> {
+    // Five-minute snapshots removed — IndexedDB stores deleted.
+    return false
   }
 
   startTimer() {
@@ -1191,78 +1165,27 @@ export class SnapshotRuntime {
   }
 
   private async cleanupLegacyPlainBackupDatabase(): Promise<void> {
-    if (typeof indexedDB?.deleteDatabase !== 'function') return
-
-    try {
-      await new Promise<void>((resolve, reject) => {
-        const request = indexedDB.deleteDatabase(this.legacyBackupDbName)
-        request.onerror = () => reject(request.error)
-        request.onblocked = () =>
-          this.logger.warn?.('[DataLayer] Legacy plain backup delete blocked:', this.legacyBackupDbName)
-        request.onsuccess = () => resolve()
-      })
-    } catch (error) {
-      this.logger.warn?.('[DataLayer] Legacy plain backup cleanup skipped:', error)
-    }
+    // IndexedDB stores removed — no-op
   }
 
   private async migrateLegacyBucketBackupDatabase(): Promise<void> {
-    if (this.bucketBackupDbName === this.legacyBackupDbName) return
-    const bucket = await this.openBackupBucket()
-    if (!bucket?.indexedDB?.deleteDatabase) return
-
-    try {
-      const legacyStore = await this.createLegacyBucketBackupSnapshotStore()
-      const targetStore = await this.createBucketBackupSnapshotStore()
-      if (!legacyStore || !targetStore) return
-
-      const legacyRecords = await legacyStore.getAll()
-      if (legacyRecords.length > 0) {
-        for (const record of legacyRecords) {
-          const existing = await targetStore.getById(record.id)
-          if (!existing) {
-            await targetStore.put(record)
-          }
-        }
-        this.logger.log?.(
-          `[DataLayer] Bucket backup migration completed: legacy=${legacyRecords.length}, targetDb=${this.bucketBackupDbName}`,
-        )
-      }
-
-      await new Promise<void>((resolve, reject) => {
-        const request = bucket.indexedDB.deleteDatabase(this.legacyBackupDbName)
-        request.onerror = () => reject(request.error)
-        request.onblocked = () =>
-          this.logger.warn?.('[DataLayer] Legacy bucket backup delete blocked:', this.legacyBackupDbName)
-        request.onsuccess = () => resolve()
-      })
-    } catch (error) {
-      this.logger.warn?.('[DataLayer] Legacy bucket backup migration skipped:', error)
-    }
+    // IndexedDB stores removed — no-op
   }
 
   private async saveSnapshotRecord(
     record: SnapshotRecord,
     bundle: SnapshotProjectionBundle | null = null,
   ): Promise<boolean> {
+    // Five-minute snapshots removed — IndexedDB stores deleted.
+    if (record.type === 'five_minute') return false
+
     let created = false
     // 写入必须串行，避免同一槽位在定时器和手工触发并发时落出重复记录。
     const task = this.snapshotWriteQueue.catch(() => undefined).then(async () => {
-      const localOnlySnapshot = record.type === 'five_minute'
-      if (localOnlySnapshot) {
-        const existing = await this.snapshotStore.getById(record.id)
-        if (existing) return
-        await this.ensurePersistentStorage()
-      } else if (await this.snapshotExistsInSqlitePrimary(record.id)) {
+      if (await this.snapshotExistsInSqlitePrimary(record.id)) {
         return
       }
       const effectiveBundle = bundle || this.createProjectionBundle(record)
-
-      if (localOnlySnapshot) {
-        await this.snapshotProjectionWriter.saveBundle(effectiveBundle)
-        created = true
-        return
-      }
 
       const sqliteWrite = await this.writeSnapshotBundleToSqlitePrimary(effectiveBundle)
       if (!sqliteWrite.ok) {

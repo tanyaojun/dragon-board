@@ -225,7 +225,8 @@ describe('SnapshotRuntime', () => {
     expect(saved).toBe(true)
     expect(sqliteWrite).toHaveBeenCalledTimes(1)
     expect((runtime as any).snapshotStore.getById).not.toHaveBeenCalled()
-    expect((runtime as any).snapshotProjectionWriter.saveBundle).toHaveBeenCalledTimes(1)
+    // IndexedDB projection writer is not called for formal snapshots — sqlite is the primary write path.
+    expect((runtime as any).snapshotProjectionWriter.saveBundle).not.toHaveBeenCalled()
     const state = await runtime.getSnapshotBackupSyncState('2026-04-21')
     expect(state?.backendIngestedAt).toEqual(expect.any(Number))
   })
