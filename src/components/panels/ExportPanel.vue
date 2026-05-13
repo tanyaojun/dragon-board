@@ -101,7 +101,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { exportService } from '@/services/exportService'
-import { dragonAnalyzer } from '@/services/DragonAnalyzer'
+import { dragonReviewService } from '@/services/dragon/DragonReviewService'
 import { dragonBreathAnalyzer } from '@/services/DragonBreathAnalyzer'
 import { sectorAnalyzer } from '@/services/sectorAnalyzer'
 import { themeFacade } from '@/services/theme/ThemeFacade'
@@ -160,7 +160,7 @@ const previewStats = computed(() => {
   }
 
   if (previewData.value.leaders) {
-    const byLevel = dragonAnalyzer.getStats()
+    const byLevel = dragonReviewService.getStats()
     stats.push(
       { label: '总龙头', value: byLevel.totalLeadersCount },
       { label: '板块龙头', value: byLevel.sectorLeaders },
@@ -187,7 +187,7 @@ const previewStats = computed(() => {
 })
 
 function isLeaderStock(code: string): boolean {
-  const leaders = dragonAnalyzer.getAllLeaders?.() || []
+  const leaders = dragonReviewService.getAllLeaders?.() || []
   return leaders.some((leader: any) => leader.code === code)
 }
 
@@ -219,7 +219,7 @@ async function preview() {
             market: {
               sentiment: dragonBreathAnalyzer.getMarketSentiment(),
               marketData: dragonBreathAnalyzer.getMarketData(),
-              leaders: dragonAnalyzer.getStats(),
+              leaders: dragonReviewService.getStats(),
             },
           }
           break
@@ -231,7 +231,7 @@ async function preview() {
             market: {
               sentiment: dragonBreathAnalyzer.getMarketSentiment(),
               marketData: dragonBreathAnalyzer.getMarketData(),
-              leaders: dragonAnalyzer.getStats(),
+              leaders: dragonReviewService.getStats(),
             },
           }
           break
