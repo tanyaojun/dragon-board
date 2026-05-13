@@ -38,7 +38,7 @@ import { dataLoader } from './services/dataLoader'
 
 //========== 分析服务 ==========
 import { sectorAnalyzer } from './services/sectorAnalyzer'
-import { dragonAnalyzer } from './services/DragonAnalyzer'
+import { dragonReviewService } from './services/dragon/DragonReviewService'
 import { dragonBreathAnalyzer } from './services/DragonBreathAnalyzer'
 import { algorithmManager } from './services/algorithm'
 import { algorithmConfigManager } from './services/algorithm/AlgorithmConfigManager'
@@ -64,7 +64,7 @@ if (typeof window !== 'undefined') {
 
   // 分析服务
   ;(window as any).sectorAnalyzer = sectorAnalyzer
-  ;(window as any).dragonAnalyzer = dragonAnalyzer
+  ;(window as any).dragonReviewService = dragonReviewService
   ;(window as any).dragonBreathAnalyzer = dragonBreathAnalyzer
 
   //算法服务
@@ -98,7 +98,7 @@ if (typeof window !== 'undefined') {
   console.log('[Main] 📦 服务已挂载到 window')
   console.log('   ├─ sectorAnalyzer: 题材分析')
   console.log('   ├─ themeFacade: 题材领域 facade')
-  console.log('   ├─ dragonAnalyzer: 龙头分析')
+  console.log('   ├─ dragonReviewService: 龙头分析')
   console.log('   ├─ dragonBreathAnalyzer: 情绪分析')
   console.log('   ├─ algorithmManager: 算法管理')
   console.log('   ├─ dataLayer: 统一数据层') // 新增
