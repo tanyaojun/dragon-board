@@ -49,7 +49,7 @@ internal sealed class LauncherForm : Form
             ["mongo"] = new("MongoDB 数据库", 27017, @"D:\APP_SOFT\MongoDB\bin", @"D:\APP_SOFT\MongoDB\bin\mongod.exe", @"--dbpath D:\APP_SOFT\MongoDB\data --logpath D:\APP_SOFT\MongoDB\log\mongod.log --port 27017"),
             ["redis"] = new("Redis 缓存", 6379, @"D:\APP_SOFT\redis", @"D:\APP_SOFT\redis\redis-server.exe", @"D:\APP_SOFT\redis\redis.windows-service.conf"),
             ["proxy"] = new("本地代理服务", 3000, Path.Combine(_root, "proxy-server"), "node", "server.js"),
-            ["frontend"] = new("龙头看板前端", 5173, _root, "cmd.exe", "/c npm run dev -- --host 127.0.0.1"),
+            ["frontend"] = new("龙头看板前端", 5173, _root, "cmd.exe", "/c node node_modules/vite/bin/vite.js --host 127.0.0.1 --port 5173"),
             ["bridge"] = new("通达信行情桥", 8765, _root, "python", "python-bridge/main.py"),
             ["quant-api"] = new(
                 "量化后端 API",
@@ -58,7 +58,7 @@ internal sealed class LauncherForm : Form
                 Path.Combine(quantRoot, ".venv", "Scripts", "python.exe"),
                 "-m uvicorn backend.main:app --host 127.0.0.1 --port 8000",
                 "python"),
-            ["quant-ui"] = new("量化面板前端", 5174, Path.Combine(quantRoot, "frontend"), "cmd.exe", "/c npm run dev -- --host 127.0.0.1 --port 5174")
+            ["quant-ui"] = new("量化面板前端", 5174, Path.Combine(quantRoot, "frontend"), "cmd.exe", "/c node node_modules/vite/bin/vite.js --host 127.0.0.1 --port 5174")
         };
 
         Text = "龙头看板 · 启动管理器";
@@ -304,7 +304,7 @@ internal sealed class LauncherForm : Form
         stopBtn.Click += (_, _) => StopService(svc);
         p.Controls.Add(stopBtn);
 
-        if (svc.Port is 5173 or 5174 or 3000 or 27017 or 6379)
+        if (svc.Port is 5173 or 5174 or 3000 or 8000 or 8765 or 27017 or 6379)
         {
             var openBtn = new Button
             {
@@ -322,11 +322,18 @@ internal sealed class LauncherForm : Form
             {
                 5173 => "http://127.0.0.1:5173",
                 5174 => "http://127.0.0.1:5174",
+                8000 => "http://127.0.0.1:8000/docs",
+                8765 => "http://127.0.0.1:8765/docs",
                 27017 => "http://127.0.0.1:8081",
                 6379 => "http://127.0.0.1:8082",
                 _ => "http://127.0.0.1:3000/docs"
             };
-            openBtn.Click += (_, _) => OpenUrl(url);
+            openBtn.Click += (_, _) =>
+            {
+                if (svc.Port == 6379)
+                    StartRedisCommander();
+                OpenUrl(url);
+            };
             p.Controls.Add(openBtn);
         }
 
@@ -367,7 +374,7 @@ internal sealed class LauncherForm : Form
             if (service.Port == 6379)
                 StartRedisCommander();
 
-            if (IsPortOpen(service.Port))
+            if (IsServiceRunning(service))
             {
                 Log($"{service.Name} 已在端口 {service.Port} 运行。");
                 return;
@@ -488,6 +495,12 @@ internal sealed class LauncherForm : Form
     private void StartRedisCommander()
     {
         if (_redisCommanderProcess is { HasExited: false }) return;
+        if (IsPortOpen(8082))
+        {
+            Log("Redis Commander 已在端口 8082 运行。");
+            return;
+        }
+
         try
         {
             var rcBin = Path.Combine(
@@ -544,28 +557,55 @@ internal sealed class LauncherForm : Form
                 StopMongoExpress();
 
             if (service.Port == 6379)
+            {
                 StopRedisCommander();
+                StopRedisService();
+            }
 
             StopStartedProcess(service);
 
             var pids = GetPidsByPort(service.Port);
             foreach (var pid in pids)
             {
-                try
-                {
-                    using var process = Process.GetProcessById(pid);
-                    process.Kill(entireProcessTree: true);
-                    Log($"已终止端口 {service.Port} 上的进程，PID={pid}。");
-                }
-                catch (Exception ex)
-                {
-                    Log($"无法终止 PID={pid}: {ex.Message}");
-                }
+                KillProcessTree(pid, $"端口 {service.Port}");
             }
         }
         catch (Exception ex)
         {
             Log($"停止 {service.Name} 失败: {ex.Message}");
+        }
+    }
+
+    private void StopRedisService()
+    {
+        try
+        {
+            var info = new ProcessStartInfo
+            {
+                FileName = "sc.exe",
+                Arguments = "stop Redis",
+                CreateNoWindow = true,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                StandardOutputEncoding = Encoding.UTF8,
+                StandardErrorEncoding = Encoding.UTF8
+            };
+            using var process = Process.Start(info);
+            if (process == null)
+                return;
+
+            var output = process.StandardOutput.ReadToEnd();
+            var error = process.StandardError.ReadToEnd();
+            process.WaitForExit(5000);
+            if (process.ExitCode == 0)
+                Log("已请求停止 Redis Windows 服务。");
+            else if (!string.IsNullOrWhiteSpace(output) || !string.IsNullOrWhiteSpace(error))
+                Log($"停止 Redis Windows 服务返回: {(output + error).Trim()}");
+        }
+        catch (Exception ex)
+        {
+            Log($"停止 Redis Windows 服务失败: {ex.Message}");
         }
     }
 
@@ -610,7 +650,7 @@ internal sealed class LauncherForm : Form
         {
             var key = kv.Key;
             var svc = kv.Value;
-            var isRunning = IsPortOpen(svc.Port);
+            var isRunning = IsServiceRunning(svc);
 
             if (_dots.TryGetValue(key, out var dot))
             {
@@ -638,6 +678,28 @@ internal sealed class LauncherForm : Form
                 connection.State is TcpState.Listen or TcpState.Established);
     }
 
+    private static bool IsServiceRunning(ManagedService service)
+    {
+        if (service.Port is 5173 or 5174)
+            return IsTcpListeningOn("127.0.0.1", service.Port);
+
+        return IsPortOpen(service.Port);
+    }
+
+    private static bool IsTcpListeningOn(string host, int port)
+    {
+        try
+        {
+            using var client = new System.Net.Sockets.TcpClient();
+            var task = client.ConnectAsync(host, port);
+            return task.Wait(TimeSpan.FromMilliseconds(500)) && client.Connected;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private static IReadOnlyList<int> GetPidsByPort(int port)
     {
         var result = new List<int>();
@@ -659,13 +721,55 @@ internal sealed class LauncherForm : Form
             foreach (var line in output.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
             {
                 var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-                if (parts.Length < 5 || !parts[1].EndsWith($":{port}", StringComparison.Ordinal)) continue;
+                if (parts.Length < 5 || !IsEndpointForPort(parts[1], port)) continue;
                 if (int.TryParse(parts[^1], out var pid) && pid > 0 && !result.Contains(pid))
                     result.Add(pid);
             }
         }
         catch { }
         return result;
+    }
+
+    private static bool IsEndpointForPort(string endpoint, int port)
+    {
+        if (endpoint.EndsWith($":{port}", StringComparison.Ordinal))
+            return true;
+
+        return endpoint.Equals($"[::1]:{port}", StringComparison.OrdinalIgnoreCase)
+            || endpoint.Equals($"[::]:{port}", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void KillProcessTree(int pid, string label)
+    {
+        try
+        {
+            var info = new ProcessStartInfo
+            {
+                FileName = "taskkill.exe",
+                Arguments = $"/PID {pid} /T /F",
+                CreateNoWindow = true,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                StandardOutputEncoding = Encoding.UTF8,
+                StandardErrorEncoding = Encoding.UTF8
+            };
+            using var process = Process.Start(info);
+            if (process == null)
+                return;
+
+            var output = process.StandardOutput.ReadToEnd();
+            var error = process.StandardError.ReadToEnd();
+            process.WaitForExit(5000);
+            if (process.ExitCode == 0)
+                Log($"已终止{label}进程树，PID={pid}。");
+            else
+                Log($"无法终止{label}进程树，PID={pid}: {(output + error).Trim()}");
+        }
+        catch (Exception ex)
+        {
+            Log($"无法终止{label}进程树，PID={pid}: {ex.Message}");
+        }
     }
 
     private void ToggleAutoStart()

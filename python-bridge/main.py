@@ -14,7 +14,9 @@ from datetime import datetime
 from logging.handlers import TimedRotatingFileHandler
 from typing import Any, Iterable
 
-import websockets
+import uvicorn
+from fastapi import FastAPI, WebSocket
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from mootdx.quotes import Quotes
 
 from l2.qmt_provider import QmtL2Provider
@@ -64,6 +66,18 @@ def configure_logging() -> str:
 
 LOG_FILE_PATH = configure_logging()
 logger = logging.getLogger("tdx_l2_bridge")
+
+
+class FastApiWebSocketClient:
+    def __init__(self, websocket: WebSocket) -> None:
+        self.websocket = websocket
+
+    async def __aiter__(self):
+        async for message in self.websocket.iter_text():
+            yield message
+
+    async def send(self, message: str) -> None:
+        await self.websocket.send_text(message)
 
 
 DEFAULT_L2_SERVER_CANDIDATES = (
@@ -500,6 +514,9 @@ class TdxL2Bridge:
         )
         self.latest_money_flow: dict[str, str] = {}
         self.latest_l2_status_payload = ""
+        self.latest_quote_stats = QuoteFetchStats()
+        self.last_quote_cycle_ts = 0
+        self.last_quote_error = ""
         self.last_qmt_l2_poll_ts = 0
         self.cached_qmt_l2_snapshot: tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]] = ([], [], [])
         self.helper_process: asyncio.subprocess.Process | None = None
@@ -1547,19 +1564,150 @@ class TdxL2Bridge:
                 self.client_pools[websocket] = codes
                 self.full_state_requested = True
                 logger.info("updated hot pool from client: %s", len(codes))
-        except websockets.ConnectionClosed:
+        except Exception:
             pass
         finally:
             self.clients.discard(websocket)
             self.client_pools.pop(websocket, None)
             self.full_state_requested = True
 
-    async def ws_router(self, websocket: Any) -> None:
-        path = getattr(websocket, "path", None)
-        if path is not None and path != self.config.path:
-            await websocket.close(code=1008, reason="invalid_path")
-            return
-        await self.handle_client(websocket)
+    def status_snapshot(self) -> dict[str, Any]:
+        pool = self.aggregate_pool()
+        active_server = (
+            f"{self.active_server[0]}:{self.active_server[1]}" if self.active_server else ""
+        )
+        return {
+            "ok": True,
+            "service": "tdx-quote-bridge",
+            "serverTs": now_ms(),
+            "websocket": {
+                "url": f"ws://{self.config.host}:{self.config.port}{self.config.path}",
+                "clients": len(self.clients),
+                "subscribedCount": len(pool),
+            },
+            "tdx": {
+                "connected": self.tdx_connected,
+                "activeServer": active_server,
+            },
+            "quotes": {
+                "received": len(self.latest_quotes),
+                "depth": len(self.latest_depth),
+                "batchSize": self.current_quote_batch_size,
+                "lastCycleTs": self.last_quote_cycle_ts,
+                "lastCycle": {
+                    "requested": self.latest_quote_stats.requested_codes,
+                    "batches": self.latest_quote_stats.batches,
+                    "failedBatches": self.latest_quote_stats.failed_batches,
+                    "truncatedBatches": self.latest_quote_stats.truncated_batches,
+                    "slowBatches": self.latest_quote_stats.slow_batches,
+                    "receivedQuotes": self.latest_quote_stats.received_quotes,
+                    "receivedDepth": self.latest_quote_stats.received_depth,
+                    "elapsedMs": self.latest_quote_stats.elapsed_ms,
+                },
+                "lastError": self.last_quote_error,
+            },
+            "l2": self.l2_state,
+            "logFile": LOG_FILE_PATH,
+        }
+
+    def monitor_html(self) -> str:
+        status = self.status_snapshot()
+        status_json = json.dumps(status, ensure_ascii=False, indent=2)
+        return f"""<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TDX Bridge Monitor</title>
+  <style>
+    body {{ margin: 0; font-family: Consolas, "Microsoft YaHei UI", sans-serif; background: #111419; color: #eef2f7; }}
+    main {{ max-width: 1120px; margin: 0 auto; padding: 28px; }}
+    h1 {{ color: #ffb046; margin: 0 0 8px; font-size: 28px; }}
+    .sub {{ color: #91a1b4; margin-bottom: 24px; }}
+    .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; }}
+    .card {{ background: #1d222b; border: 1px solid #303846; padding: 14px; border-radius: 6px; }}
+    .label {{ color: #91a1b4; font-size: 12px; }}
+    .value {{ margin-top: 8px; font-size: 24px; font-weight: 700; }}
+    .ok {{ color: #2cd28c; }}
+    .bad {{ color: #eb4b55; }}
+    pre {{ background: #090b0f; border: 1px solid #303846; padding: 14px; overflow: auto; border-radius: 6px; }}
+    a {{ color: #61a8ff; }}
+  </style>
+</head>
+<body>
+  <main>
+    <h1>TDX Bridge Monitor</h1>
+    <div class="sub">WebSocket: {status["websocket"]["url"]} · JSON: <a href="/status">/status</a> · Health: <a href="/health">/health</a></div>
+    <section class="grid">
+      <div class="card"><div class="label">TDX 连接</div><div class="value {'ok' if status['tdx']['connected'] else 'bad'}">{'已连接' if status['tdx']['connected'] else '未连接'}</div></div>
+      <div class="card"><div class="label">客户端</div><div class="value">{status["websocket"]["clients"]}</div></div>
+      <div class="card"><div class="label">订阅股票</div><div class="value">{status["websocket"]["subscribedCount"]}</div></div>
+      <div class="card"><div class="label">报价 / 深度缓存</div><div class="value">{status["quotes"]["received"]} / {status["quotes"]["depth"]}</div></div>
+      <div class="card"><div class="label">Batch Size</div><div class="value">{status["quotes"]["batchSize"]}</div></div>
+      <div class="card"><div class="label">最近循环耗时</div><div class="value">{status["quotes"]["lastCycle"]["elapsedMs"]} ms</div></div>
+      <div class="card"><div class="label">截断 / 慢批次</div><div class="value">{status["quotes"]["lastCycle"]["truncatedBatches"]} / {status["quotes"]["lastCycle"]["slowBatches"]}</div></div>
+      <div class="card"><div class="label">L2 状态</div><div class="value">{status["l2"].get("status", "")}</div></div>
+    </section>
+    <h2>状态快照</h2>
+    <pre id="status">{status_json}</pre>
+  </main>
+  <script>
+    async function refresh() {{
+      const res = await fetch('/status');
+      document.getElementById('status').textContent = JSON.stringify(await res.json(), null, 2);
+    }}
+    setInterval(refresh, 3000);
+  </script>
+</body>
+</html>"""
+
+    def create_app(self) -> FastAPI:
+        app = FastAPI(
+            title="TDX Bridge Monitor API",
+            version="1.0.0",
+            description="通达信行情桥运行状态、健康检查和 WebSocket 行情入口。",
+        )
+
+        @app.get("/", include_in_schema=False)
+        async def index() -> HTMLResponse:
+            return HTMLResponse(self.monitor_html())
+
+        @app.get("/monitor", include_in_schema=False)
+        async def monitor() -> HTMLResponse:
+            return HTMLResponse(self.monitor_html())
+
+        @app.get("/health", summary="健康检查")
+        async def health() -> JSONResponse:
+            return JSONResponse(self.status_snapshot())
+
+        @app.get("/status", summary="运行状态快照")
+        async def status() -> JSONResponse:
+            return JSONResponse(self.status_snapshot())
+
+        @app.get("/metrics", summary="人类可读关键指标")
+        async def metrics() -> PlainTextResponse:
+            snapshot = self.status_snapshot()
+            lines = [
+                f"service={snapshot['service']}",
+                f"tdx_connected={snapshot['tdx']['connected']}",
+                f"active_server={snapshot['tdx']['activeServer']}",
+                f"clients={snapshot['websocket']['clients']}",
+                f"subscribed={snapshot['websocket']['subscribedCount']}",
+                f"quotes={snapshot['quotes']['received']}",
+                f"depth={snapshot['quotes']['depth']}",
+                f"elapsed_ms={snapshot['quotes']['lastCycle']['elapsedMs']}",
+                f"truncated_batches={snapshot['quotes']['lastCycle']['truncatedBatches']}",
+                f"slow_batches={snapshot['quotes']['lastCycle']['slowBatches']}",
+                f"l2_status={snapshot['l2'].get('status', '')}",
+            ]
+            return PlainTextResponse("\n".join(lines) + "\n")
+
+        @app.websocket(self.config.path)
+        async def quotes_socket(websocket: WebSocket) -> None:
+            await websocket.accept()
+            await self.handle_client(FastApiWebSocketClient(websocket))
+
+        return app
 
     async def broadcast(self, payload: dict[str, Any]) -> None:
         if not self.clients:
@@ -1865,6 +2013,9 @@ class TdxL2Bridge:
 
             try:
                 quotes, depth, quote_stats = await self.fetch_quotes_and_depth(pool)
+                self.latest_quote_stats = quote_stats
+                self.last_quote_cycle_ts = now_ms()
+                self.last_quote_error = ""
                 qmt_depth, qmt_ticks, money_flow = await self.fetch_qmt_l2_snapshot(pool)
                 if qmt_depth:
                     depth_by_code = {item["code"]: item for item in depth}
@@ -1949,6 +2100,7 @@ class TdxL2Bridge:
                 self.tdx_connected = True
             except Exception as error:
                 logger.exception("poll loop failed: %s", error)
+                self.last_quote_error = str(error)
                 await self.reset_client()
                 self.full_state_requested = True
                 self.healthy_fetch_cycles = 0
@@ -1999,22 +2151,35 @@ class TdxL2Bridge:
             await asyncio.sleep(self.config.l2_probe_interval_ms / 1000)
 
     async def run(self) -> None:
+        tasks: list[asyncio.Task[Any]] = []
         try:
-            async with websockets.serve(self.ws_router, self.config.host, self.config.port):
-                logger.info(
-                    "TDX bridge listening on ws://%s:%s%s",
-                    self.config.host,
-                    self.config.port,
-                    self.config.path,
-                )
-                await asyncio.gather(
-                    self.poll_loop(),
-                    self.heartbeat_loop(),
-                    self.l2_probe_loop(),
-                    self.helper_loop(),
-                    self.stop_event.wait(),
-                )
+            config = uvicorn.Config(
+                self.create_app(),
+                host=self.config.host,
+                port=self.config.port,
+                log_level="info",
+            )
+            server = uvicorn.Server(config)
+            logger.info(
+                "TDX bridge listening on ws://%s:%s%s",
+                self.config.host,
+                self.config.port,
+                self.config.path,
+            )
+            tasks = [
+                asyncio.create_task(server.serve()),
+                asyncio.create_task(self.poll_loop()),
+                asyncio.create_task(self.heartbeat_loop()),
+                asyncio.create_task(self.l2_probe_loop()),
+                asyncio.create_task(self.helper_loop()),
+            ]
+            await self.stop_event.wait()
+            server.should_exit = True
         finally:
+            for task in tasks:
+                task.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
             await self.stop_helper_process()
             await self.reset_client()
 
