@@ -51,7 +51,6 @@ import { themeMapping } from './services/ThemeDataService'
 import { themeCorrelationAnalyzer } from './services/ThemeCorrelationAnalyzer'
 import { themeFacade } from './services/theme/ThemeFacade'
 import { themeSyncAdapter } from './services/theme/ThemeSyncAdapter'
-import { installQuantBoardBridge } from './services/quantBoardBridge'
 
 const app = createApp(App)
 const pinia = createPinia()
@@ -104,7 +103,6 @@ if (typeof window !== 'undefined') {
   console.log('   ├─ dataLayer: 统一数据层') // 新增
   console.log('   └─ dataLoader: 八平台数据加载')
   console.log('   └─ stockCodeManager: 股票代码管理')
-  installQuantBoardBridge()
 }
 
 app.mount('#app')

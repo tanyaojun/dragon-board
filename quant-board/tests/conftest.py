@@ -15,7 +15,6 @@ os.environ["QUANT_BOARD_THEME_DATABASE_URL"] = f"sqlite:///{TEST_THEME_DB}"
 os.environ["QUANT_BOARD_STORAGE_BACKEND"] = "sqlite"
 os.environ["QUANT_BOARD_MONGODB_DATABASE"] = "dragon_board_quant_pytest"
 os.environ["QUANT_BOARD_ENABLE_SUPABASE_BACKUP"] = "0"
-os.environ["QUANT_BOARD_ENABLE_BACKUP_READ_FALLBACK"] = "0"
 
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))

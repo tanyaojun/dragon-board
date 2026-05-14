@@ -58,8 +58,7 @@ def init_db() -> bool:
     except SQLAlchemyError as exc:
         _primary_available = False
         _last_primary_error = str(exc)
-        if not settings.backup_read_fallback:
-            raise
+        raise
     finally:
         _initialized = True
     return _primary_available

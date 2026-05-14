@@ -1522,7 +1522,7 @@ onMounted(async () => {
           </div>
           <div class="inline-note">
             页面有两种基线：`保存当前输出为基线` 只保存 Python 当前结果，适合临时回归；`导入 TS Golden` 才是正式跨语言对齐入口。
-            请在 DragonBoard 页面控制台执行 `window.quantBoardExportRankTrendGolden({ sampleLimit: {{ goldenForm.sampleLimit }} })` 导出 TS JSON 后在这里导入。导入后继续点击 `执行校验`。
+            请导入已生成的 TS Golden JSON 文件。导入后继续点击 `执行校验`。
           </div>
           <div :class="goldenSummaryClass">
             <strong>{{ goldenSummary }}</strong>

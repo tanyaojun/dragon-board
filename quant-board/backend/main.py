@@ -301,14 +301,13 @@ def ingest_snapshot(request: SnapshotIngestRequest, db: Session | None = Depends
             trading_date=request.trading_date,
             source=request.source,
         )
-        if result.get("status") != "backup_only":
-            _invalidate_snapshot_cache_after_ingest(
-                dataset_id=dataset.id,
-                records=records,
-                frames=frames,
-                stock_rows=stock_rows,
-                sector_rows=sector_rows,
-            )
+        _invalidate_snapshot_cache_after_ingest(
+            dataset_id=dataset.id,
+            records=records,
+            frames=frames,
+            stock_rows=stock_rows,
+            sector_rows=sector_rows,
+        )
         return {"ok": True, **result}
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
@@ -356,14 +355,10 @@ def _resolve_snapshot_dataset(
     requested_dataset_id = dataset_id.strip() if isinstance(dataset_id, str) and dataset_id.strip() else None
     resolved_dataset_id = requested_dataset_id or DEFAULT_SNAPSHOT_DATASET_ID
     dataset = repo.get_dataset(resolved_dataset_id)
-    should_try_default_fallback = requested_dataset_id is None or (
-        allow_default_fallback and requested_dataset_id == DEFAULT_SNAPSHOT_DATASET_ID
-    )
-    if should_try_default_fallback and (not dataset or not _dataset_has_snapshot_facts(dataset)):
-        dataset = _latest_snapshot_dataset(repo) or dataset
-        resolved_dataset_id = dataset.id if dataset else resolved_dataset_id
     if not dataset:
         raise HTTPException(status_code=404, detail=f"dataset not found: {resolved_dataset_id}")
+    if not _dataset_has_snapshot_facts(dataset):
+        raise HTTPException(status_code=404, detail=f"dataset has no snapshot facts: {resolved_dataset_id}")
     return resolved_dataset_id, dataset
 
 
@@ -392,7 +387,7 @@ def _cached_snapshot_response(
         return cached
 
     response = loader()
-    response = {**response, "cache": {"hit": False, "store": "sqlite"}}
+    response = {**response, "cache": {"hit": False, "store": storage_source_label()}}
     cache.set_response(cache_key, response)
     cache.register_dependencies(
         cache_key,
@@ -1246,23 +1241,9 @@ def normalize_import_payload(payload: dict[str, Any]) -> ImportDatasetRequest:
         source_type = payload.get("sourceType")
         if source_type == "sqlite":
             payload = {**payload, "sourceType": "sqlite_snapshots"}
-        # The lightweight frontend previews browser IndexedDB and posts sampled rows.
-        # Treat that as a JSON bundle import path so the backend can persist the sample.
         if payload.get("sourceType") == "indexeddb":
-            records = payload.get("records") or []
-            if not records:
-                raise ImporterError(
-                    "当前页面没有读到 IndexedDB 样本。浏览器 IndexedDB 受 origin 隔离，"
-                    "请改用 browser_bridge、leveldb 或 json_bundle 导入 DragonBoard 数据。"
-                )
-            preview = payload.get("preview") or {}
-            options = payload.get("options") if isinstance(payload.get("options"), dict) else {}
-            return ImportDatasetRequest(
-                source_type="json_bundle",
-                source_path=_write_inline_import_bundle(payload.get("name") or "frontend-import", records, preview),
-                name=payload.get("name"),
-                snapshot_types=payload.get("snapshotTypes") or ["half_hour", "quarter_hour"],
-                dry_run=bool(options.get("dryRun")),
+            raise ImporterError(
+                "sourceType=indexeddb is removed; use leveldb or json_bundle for explicit historical migration"
             )
         if source_type == "json":
             return ImportDatasetRequest(

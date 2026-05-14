@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 from importlib.util import find_spec
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy import func, select
 
 from backend.analysis.ranktrend import RankTrendConfig, analyze_cycle, analyze_momentum_signals, analyze_risk, analyze_technical
@@ -858,12 +859,12 @@ def test_import_backtest_optimize_and_golden(tmp_path: Path) -> None:
     after_dry_run = client.get("/api/datasets")
     assert not any(item["id"] == dry_run.json()["id"] for item in after_dry_run.json())
 
-    empty_browser_import = client.post(
+    indexeddb_import = client.post(
         "/api/datasets/import",
-        json={"sourceType": "indexeddb", "name": "empty-browser-import", "records": [], "preview": None},
+        json={"sourceType": "indexeddb", "name": "legacy-browser-import", "records": [{"id": "s1"}]},
     )
-    assert empty_browser_import.status_code == 400
-    assert "browser_bridge" in empty_browser_import.json()["detail"]
+    assert indexeddb_import.status_code == 400
+    assert "sourceType=indexeddb is removed" in indexeddb_import.json()["detail"]
 
 
 def test_backtest_excludes_empty_hotlist_frames_but_keeps_quality_warning(tmp_path: Path) -> None:
@@ -2712,7 +2713,7 @@ def test_snapshot_ingest_outbox_fails_when_target_snapshot_is_missing() -> None:
         assert dataset_id not in backup.frames
 
 
-def test_repository_falls_back_to_backup_when_primary_session_is_unavailable() -> None:
+def test_repository_reports_primary_unavailable_without_backup_read_fallback() -> None:
     backup = MemoryBackup()
     repo = Repository(None, backup)
     dataset = Dataset(
@@ -2739,16 +2740,37 @@ def test_repository_falls_back_to_backup_when_primary_session_is_unavailable() -
     }
     stock = {"snapshotId": "s1", "code": "600001", "rank": 1}
 
-    repo.save_dataset_bundle(dataset, [], [frame], [stock], [])
+    writer = Repository(SessionLocal(), backup)
+    try:
+        writer.save_dataset_bundle(dataset, [], [frame], [stock], [])
+    finally:
+        writer.close()
 
     fallback_repo = Repository(None, backup)
-    assert fallback_repo.get_dataset("ds_backup").name == "backup"
-    frames = fallback_repo.load_frames("ds_backup", "half_hour")
-    assert frames[0]["snapshotId"] == "s1"
-    assert frames[0]["stocks"][0]["code"] == "600001"
+    assert fallback_repo.list_datasets() == []
+    assert fallback_repo.get_dataset("ds_backup") is None
+    with pytest.raises(RuntimeError, match="primary database is unavailable"):
+        fallback_repo.load_frames("ds_backup", "half_hour")
 
 
-def test_snapshot_ingest_writes_backup_only_when_primary_session_is_unavailable() -> None:
+def test_repository_dataset_reads_raise_when_primary_query_fails() -> None:
+    class FailingSession:
+        def scalars(self, *_args, **_kwargs):
+            raise SQLAlchemyError("database offline")
+
+        def get(self, *_args, **_kwargs):
+            raise SQLAlchemyError("database offline")
+
+    repo = Repository(FailingSession())  # type: ignore[arg-type]
+
+    with pytest.raises(RuntimeError, match="primary database read failed"):
+        repo.list_datasets()
+
+    with pytest.raises(RuntimeError, match="primary database read failed"):
+        repo.get_dataset("ds_missing")
+
+
+def test_snapshot_ingest_fails_when_primary_session_is_unavailable() -> None:
     backup = MemoryBackup()
     repo = Repository(None, backup)
     dataset = Dataset(
@@ -2776,25 +2798,21 @@ def test_snapshot_ingest_writes_backup_only_when_primary_session_is_unavailable(
     frame = {"snapshotId": record["id"], **record}
     stock = {"snapshotId": record["id"], "code": "600001", "rank": 1}
 
-    result = repo.save_snapshot_ingest(
-        dataset,
-        [record],
-        [frame],
-        [stock],
-        [],
-        idempotency_key="snapshot-ingest-failover-key",
-        trading_date="2026-04-01",
-    )
+    with pytest.raises(RuntimeError, match="primary database is unavailable"):
+        repo.save_snapshot_ingest(
+            dataset,
+            [record],
+            [frame],
+            [stock],
+            [],
+            idempotency_key="snapshot-ingest-failover-key",
+            trading_date="2026-04-01",
+        )
 
-    assert result["status"] == "backup_only"
-    assert result["outbox"] is None
-    assert result["failover"]["active"] is True
-    assert result["failover"]["reason"] == "primary_database_unavailable"
-    assert backup.datasets[dataset.id].id == dataset.id
-    assert backup.frames[dataset.id][0]["payload"]["frame"]["snapshotId"] == record["id"]
+    assert dataset.id not in backup.datasets
 
 
-def test_snapshot_ingest_failover_reports_unavailable_when_backup_write_fails() -> None:
+def test_snapshot_ingest_primary_unavailable_does_not_try_backup_write() -> None:
     backup = MemoryBackup()
     backup.fail_writes = True
     repo = Repository(None, backup)
@@ -2815,7 +2833,7 @@ def test_snapshot_ingest_failover_reports_unavailable_when_backup_write_fails() 
     )
     record = {"id": "half_hour:2026-04-01:10:00", "type": "half_hour", "tradingDate": "2026-04-01"}
 
-    with pytest.raises(RuntimeError, match="primary_database_unavailable and Supabase backup write failed"):
+    with pytest.raises(RuntimeError, match="primary database is unavailable"):
         repo.save_snapshot_ingest(
             dataset,
             [record],

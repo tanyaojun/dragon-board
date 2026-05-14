@@ -56,26 +56,19 @@ class Repository:
 
     def list_datasets(self) -> list[Dataset]:
         if self.session is None:
-            return self._backup_datasets()
+            return []
         try:
-            datasets = list(self.session.scalars(select(Dataset).order_by(Dataset.created_at.desc())))
-            backup_by_id = {dataset.id: dataset for dataset in self._backup_datasets()}
-            merged = []
-            for dataset in datasets:
-                backup_by_id.pop(dataset.id, None)
-                merged.append(dataset)
-            merged.extend(backup_by_id.values())
-            return sorted(merged, key=lambda item: item.created_at, reverse=True)
-        except SQLAlchemyError:
-            return self._backup_datasets()
+            return list(self.session.scalars(select(Dataset).order_by(Dataset.created_at.desc())))
+        except SQLAlchemyError as exc:
+            raise RuntimeError("primary database read failed") from exc
 
     def get_dataset(self, dataset_id: str) -> Dataset | None:
         if self.session is None:
-            return self._backup_dataset(dataset_id)
+            return None
         try:
-            return self.session.get(Dataset, dataset_id) or self._backup_dataset(dataset_id)
-        except SQLAlchemyError:
-            return self._backup_dataset(dataset_id)
+            return self.session.get(Dataset, dataset_id)
+        except SQLAlchemyError as exc:
+            raise RuntimeError("primary database read failed") from exc
 
     def existing_snapshot_ids(self, dataset_id: str, snapshot_ids: list[str]) -> set[str]:
         if self.session is None or not snapshot_ids:
@@ -140,9 +133,7 @@ class Repository:
         sector_rows: list[dict[str, Any]],
     ) -> Dataset:
         if self.session is None:
-            if not self._mirror_dataset_bundle(dataset, records, frames, stock_rows, sector_rows):
-                raise RuntimeError("primary database is unavailable and Supabase backup is not configured or writable")
-            return dataset
+            raise RuntimeError("primary database is unavailable")
 
         try:
             self.session.merge(dataset)
@@ -165,9 +156,7 @@ class Repository:
             saved = self.session.get(Dataset, dataset.id)
         except SQLAlchemyError:
             self.session.rollback()
-            if not self._mirror_dataset_bundle(dataset, records, frames, stock_rows, sector_rows):
-                raise RuntimeError("primary database write failed and Supabase backup write also failed")
-            return dataset
+            raise RuntimeError("primary database write failed")
         mirror_ok = self._mirror_dataset_bundle(saved or dataset, records, frames, stock_rows, sector_rows)
         self._finalize_outbox_mirror(outbox_key, mirror_ok)
         return saved or dataset
@@ -185,15 +174,7 @@ class Repository:
         source: str = "dragon_board_runtime",
     ) -> dict[str, Any]:
         if self.session is None:
-            return self._save_snapshot_ingest_to_backup(
-                dataset,
-                records,
-                frames,
-                stock_rows,
-                sector_rows,
-                idempotency_key=idempotency_key,
-                reason="primary_database_unavailable",
-            )
+            raise RuntimeError("primary database is unavailable")
 
         existing = self.get_outbox_by_idempotency_key(idempotency_key)
         if existing:
@@ -257,15 +238,7 @@ class Repository:
             self.session.commit()
         except SQLAlchemyError:
             self.session.rollback()
-            return self._save_snapshot_ingest_to_backup(
-                dataset,
-                records,
-                frames,
-                stock_rows,
-                sector_rows,
-                idempotency_key=idempotency_key,
-                reason="primary_database_write_failed",
-            )
+            raise RuntimeError("primary database write failed")
         saved_dataset = self.session.get(Dataset, dataset.id) or dataset
         mirror_ok = False
         if self.backup:
@@ -289,33 +262,6 @@ class Repository:
             "status": outbox.status,
             "outbox": self.outbox_to_dict(outbox),
             "deduped": False,
-        }
-
-    def _save_snapshot_ingest_to_backup(
-        self,
-        dataset: Dataset,
-        records: list[dict[str, Any]],
-        frames: list[dict[str, Any]],
-        stock_rows: list[dict[str, Any]],
-        sector_rows: list[dict[str, Any]],
-        *,
-        idempotency_key: str,
-        reason: str,
-    ) -> dict[str, Any]:
-        if not self._mirror_dataset_bundle(dataset, records, frames, stock_rows, sector_rows):
-            detail = self.backup.last_error if self.backup else "Supabase backup is not configured"
-            raise RuntimeError(f"{reason} and Supabase backup write failed: {detail}")
-        return {
-            "dataset": self.dataset_to_dict(dataset),
-            "status": "backup_only",
-            "outbox": None,
-            "deduped": False,
-            "failover": {
-                "active": True,
-                "reason": reason,
-                "idempotency_key": idempotency_key,
-                "recovery": "run pull-backup after SQLite primary is restored",
-            },
         }
 
     @staticmethod
@@ -533,7 +479,7 @@ class Repository:
         include_payload: bool = True,
     ) -> list[dict[str, Any]]:
         if self.session is None:
-            return self._backup_frames(dataset_id, snapshot_type, start_date, end_date, include_payload)
+            raise RuntimeError("primary database is unavailable")
         query = select(SnapshotFrameModel).where(
             SnapshotFrameModel.dataset_id == dataset_id,
             SnapshotFrameModel.type == snapshot_type,
@@ -545,7 +491,7 @@ class Repository:
         try:
             frame_models = list(self.session.scalars(query.order_by(SnapshotFrameModel.timestamp.asc())))
         except SQLAlchemyError:
-            return self._backup_frames(dataset_id, snapshot_type, start_date, end_date, include_payload)
+            raise RuntimeError("primary database read failed")
 
         snapshot_ids = [frame.snapshot_id for frame in frame_models]
         rows_by_snapshot: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -562,14 +508,14 @@ class Repository:
                 for row in self.session.scalars(row_query):
                     rows_by_snapshot[row.snapshot_id].append(self.stock_row_to_dict(row, include_payload=include_payload))
             except SQLAlchemyError:
-                return self._backup_frames(dataset_id, snapshot_type, start_date, end_date, include_payload)
+                raise RuntimeError("primary database read failed")
 
         frames: list[dict[str, Any]] = []
         for frame in frame_models:
             item = self.frame_to_dict(frame)
             item["stocks"] = rows_by_snapshot.get(frame.snapshot_id, [])
             frames.append(item)
-        return frames or self._backup_frames(dataset_id, snapshot_type, start_date, end_date, include_payload)
+        return frames
 
     def load_frame_bundles(
         self,
@@ -585,7 +531,7 @@ class Repository:
         projection: str = "full",
     ) -> list[dict[str, Any]]:
         if self.session is None:
-            return self._backup_frames(dataset_id, snapshot_type, start_date, end_date, include_payload=True)
+            raise RuntimeError("primary database is unavailable")
         query = select(SnapshotFrameModel).where(
             SnapshotFrameModel.dataset_id == dataset_id,
             SnapshotFrameModel.type == snapshot_type,
@@ -606,7 +552,7 @@ class Repository:
         try:
             frame_models = list(self.session.scalars(query.order_by(order)))
         except SQLAlchemyError:
-            return self._backup_frames(dataset_id, snapshot_type, start_date, end_date, include_payload=True)
+            raise RuntimeError("primary database read failed")
 
         snapshot_ids = [frame.snapshot_id for frame in frame_models]
         stock_rows_by_snapshot: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -645,7 +591,7 @@ class Repository:
                     for row in self.session.scalars(sector_query):
                         sector_rows_by_snapshot[row.snapshot_id].append(self.local_sector_to_bundle_dict(row))
             except SQLAlchemyError:
-                return self._backup_frames(dataset_id, snapshot_type, start_date, end_date, include_payload=True)
+                raise RuntimeError("primary database read failed")
 
         bundles: list[dict[str, Any]] = []
         for frame in frame_models:
@@ -2304,37 +2250,6 @@ class Repository:
             theme_quality_flags_json=json_dumps(item.get("themeQualityFlags") if isinstance(item.get("themeQualityFlags"), list) else []),
             metadata_json=json_dumps(item.get("metadata") if isinstance(item.get("metadata"), dict) else {}),
         )
-
-    def _backup_datasets(self) -> list[Dataset]:
-        if not self.backup:
-            return []
-        rows = self.backup.list_rows("qb_dataset")
-        return sorted(
-            [self.backup.dataset_from_row(row) for row in rows],
-            key=lambda item: item.created_at,
-            reverse=True,
-        )
-
-    def _backup_dataset(self, dataset_id: str) -> Dataset | None:
-        if not self.backup:
-            return None
-        row = self.backup.get_row("qb_dataset", dataset_id, source=dataset_id)
-        return self.backup.dataset_from_row(row) if row else None
-
-    def _backup_frames(
-        self,
-        dataset_id: str,
-        snapshot_type: str,
-        start_date: str | None,
-        end_date: str | None,
-        include_payload: bool,
-    ) -> list[dict[str, Any]]:
-        if not self.backup:
-            return []
-        rows = self.backup.list_rows("qb_snapshot_bundle", source=dataset_id)
-        if not hasattr(self.backup, "frames_from_rows"):
-            return _frames_from_backup_rows(rows, snapshot_type, start_date, end_date, include_payload)
-        return self.backup.frames_from_rows(rows, snapshot_type, start_date, end_date, include_payload)
 
     def _mirror_dataset_bundle(
         self,

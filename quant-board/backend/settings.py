@@ -74,7 +74,6 @@ class Settings(BaseModel):
     supabase_url: str = Field(default="")
     supabase_secret_key: str = Field(default="")
     backup_mirror_enabled: bool = Field(default=True)
-    backup_read_fallback: bool = Field(default=True)
     backup_timeout_seconds: float = Field(default=10.0)
     backup_auto_sync_enabled: bool = Field(default=False)
     backup_auto_sync_interval_seconds: float = Field(default=60.0)
@@ -158,10 +157,6 @@ class Settings(BaseModel):
         self.backup_mirror_enabled = _env_bool(
             "QUANT_BOARD_ENABLE_SUPABASE_BACKUP",
             bool(self.supabase_url and self.supabase_secret_key),
-        )
-        self.backup_read_fallback = _env_bool(
-            "QUANT_BOARD_ENABLE_BACKUP_READ_FALLBACK",
-            self.backup_mirror_enabled,
         )
         self.backup_timeout_seconds = _env_float("QUANT_BOARD_BACKUP_TIMEOUT_SECONDS", self.backup_timeout_seconds)
         self.backup_auto_sync_enabled = _env_bool("QUANT_BOARD_AUTO_SYNC_ENABLED", self.backup_auto_sync_enabled)
@@ -274,7 +269,7 @@ class Settings(BaseModel):
         )
         self.storage_backend = os.environ.get("QUANT_BOARD_STORAGE_BACKEND", self.storage_backend).strip().lower()
         if self.storage_backend not in {"sqlite", "mongodb"}:
-            self.storage_backend = "sqlite"
+            raise ValueError(f"unsupported QUANT_BOARD_STORAGE_BACKEND: {self.storage_backend}")
         self.redis_url = os.environ.get("QUANT_BOARD_REDIS_URL", self.redis_url)
         self.redis_key_prefix = os.environ.get("QUANT_BOARD_REDIS_KEY_PREFIX", self.redis_key_prefix).strip(":")
         self.snapshot_cache_enabled = _env_bool(

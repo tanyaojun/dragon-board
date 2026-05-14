@@ -40,25 +40,8 @@ export interface RequestResult<T = unknown> {
   raw?: unknown;
 }
 
-export interface IndexedDbStorePreview {
-  name: string;
-  keyPath: string | string[] | null;
-  autoIncrement: boolean;
-  indexes: string[];
-  count: number;
-  samples: unknown[];
-}
-
-export interface IndexedDbPreview {
-  dbName: string;
-  version: number;
-  stores: IndexedDbStorePreview[];
-  snapshotLikeRows: number;
-  capturedAt: string;
-}
-
 export interface ImportPayload {
-  sourceType: "sqlite_snapshots" | "indexeddb" | "json" | "leveldb" | "browser_bridge" | "json_bundle";
+  sourceType: "sqlite_snapshots" | "json" | "leveldb" | "browser_bridge" | "json_bundle";
   sourcePath?: string;
   sourceDatasetId?: string;
   dbName?: string;
@@ -68,12 +51,6 @@ export interface ImportPayload {
   endDate?: string;
   maxSnapshots?: number;
   dryRun?: boolean;
-  preview?: IndexedDbPreview | null;
-  records?: unknown[];
-  options?: {
-    dryRun: boolean;
-    maxRowsPerStore: number;
-  };
 }
 
 export interface UploadPayload {
@@ -82,16 +59,6 @@ export interface UploadPayload {
   content: unknown;
   snapshotTypes?: Array<"quarter_hour" | "half_hour">;
   dryRun?: boolean;
-}
-
-export interface RuntimeBridgeRequest {
-  dragonBoardUrl: string;
-  dbName: string;
-  snapshotType: "quarter_hour" | "half_hour";
-  limit: number;
-  startDate?: string;
-  endDate?: string;
-  timeoutMs?: number;
 }
 
 export type StrategyName =
