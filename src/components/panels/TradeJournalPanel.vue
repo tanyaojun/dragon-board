@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { API_CONFIG } from '@/config/constants'
 import { dataLayer } from '@/services/DataLayer'
 import { dragonReviewService } from '@/services/dragon/DragonReviewService'
 import { dragonBreathAnalyzer } from '@/services/DragonBreathAnalyzer'
 import { getRankTrendAnalysis } from '@/services/rankTrend/compat'
+import { apiService } from '@/services/apiService'
 
 interface JournalEntry {
   id: string
@@ -21,8 +23,207 @@ interface JournalEntry {
   reviewTags: string[]
   pnl: number | null
   pnlPct: number | null
+  status: string
+  marketPhase: string
+  themeRole: string
+  stockRole: string
+  entryReason: string
+  tradeHypothesis: string
+  entryPrerequisites: string
+  invalidationRules: string
+  expectedHoldingDays: number
+  humanDecision: string
+  skipReason: string
+  reviewOutcome: string
+  modelResult: string
+  executionResult: string
+  reviewNotes: string
   createdAt: string
   updatedAt: string
+}
+
+interface JournalStats {
+  tagCounts: Record<string, number>
+  totalPnl: number
+  winRate: number
+  totalExits: number
+}
+
+type JournalForm = Omit<
+  JournalEntry,
+  'id' | 'screenshotPaths' | 'reviewTags' | 'pnl' | 'pnlPct' | 'createdAt' | 'updatedAt'
+>
+
+const STATUS_OPTIONS = [
+  { value: '', label: '全部状态' },
+  { value: 'observe', label: '观察' },
+  { value: 'candidate', label: '候选' },
+  { value: 'triggered', label: '触发' },
+  { value: 'tracking', label: '跟踪中' },
+  { value: 'reviewed', label: '已复盘' },
+]
+
+const ENTRY_STATUS_OPTIONS = STATUS_OPTIONS.filter(option => option.value)
+
+const HUMAN_DECISION_OPTIONS = [
+  { value: 'watch', label: '观察' },
+  { value: 'execute', label: '执行' },
+  { value: 'skip', label: '跳过' },
+]
+
+const REVIEW_OUTCOME_OPTIONS = [
+  { value: 'pending', label: '待复盘' },
+  { value: 'success', label: '成功' },
+  { value: 'partial', label: '部分兑现' },
+  { value: 'failed', label: '失败' },
+  { value: 'not_triggered', label: '未触发' },
+]
+
+const MODEL_RESULT_OPTIONS = [
+  { value: 'unknown', label: '未判断' },
+  { value: 'correct', label: '模型正确' },
+  { value: 'partial', label: '部分正确' },
+  { value: 'wrong', label: '模型错误' },
+]
+
+const EXECUTION_RESULT_OPTIONS = [
+  { value: 'unknown', label: '未判断' },
+  { value: 'good', label: '执行到位' },
+  { value: 'early_sell', label: '卖早' },
+  { value: 'late_sell', label: '卖晚' },
+  { value: 'chased', label: '追高' },
+  { value: 'missed', label: '错过' },
+  { value: 'no_trade', label: '未交易' },
+]
+
+const PRESET_TAGS = [
+  '追高',
+  '卖早',
+  '信号正确未执行',
+  '信号正确执行到位',
+  '信号错误',
+  '止损',
+  '止盈',
+  '恐慌卖出',
+  '仓位过重',
+  '仓位过轻',
+  '模型正确',
+  '模型错误',
+  '未触发',
+  '主线确认',
+  '支线误判',
+  '情绪退潮',
+  '题材掉队',
+  'RankTrend失效',
+]
+
+const JOURNAL_API_BASE = API_CONFIG.CONTEXTS.QUANT_BOARD.baseURL
+
+function createDefaultForm(): JournalForm {
+  return {
+    stockCode: '',
+    stockName: '',
+    direction: 'buy',
+    tradeType: 'thesis',
+    price: 0,
+    volume: 0,
+    tradeTime: new Date().toISOString(),
+    linkedEntryId: null,
+    notes: '',
+    signalsSnapshot: null,
+    status: 'observe',
+    marketPhase: '',
+    themeRole: '',
+    stockRole: '',
+    entryReason: '',
+    tradeHypothesis: '',
+    entryPrerequisites: '',
+    invalidationRules: '',
+    expectedHoldingDays: 3,
+    humanDecision: 'watch',
+    skipReason: '',
+    reviewOutcome: 'pending',
+    modelResult: 'unknown',
+    executionResult: 'unknown',
+    reviewNotes: '',
+  }
+}
+
+function textValue(row: Record<string, any>, camelKey: string, snakeKey: string, fallback = '') {
+  const value = row[camelKey] ?? row[snakeKey]
+  return value == null ? fallback : String(value)
+}
+
+function numberValue(
+  row: Record<string, any>,
+  camelKey: string,
+  snakeKey: string,
+  fallback: number | null,
+) {
+  const value = row[camelKey] ?? row[snakeKey]
+  if (value == null || value === '') return fallback
+  const numeric = Number(value)
+  return Number.isFinite(numeric) ? numeric : fallback
+}
+
+function arrayValue(row: Record<string, any>, camelKey: string, snakeKey: string) {
+  const value = row[camelKey] ?? row[snakeKey]
+  return Array.isArray(value) ? value.map(item => String(item)) : []
+}
+
+function normalizeEntry(raw: unknown): JournalEntry {
+  const row = (raw && typeof raw === 'object' ? raw : {}) as Record<string, any>
+  return {
+    id: textValue(row, 'id', 'id'),
+    stockCode: textValue(row, 'stockCode', 'stock_code'),
+    stockName: textValue(row, 'stockName', 'stock_name'),
+    direction: textValue(row, 'direction', 'direction', 'buy'),
+    tradeType: textValue(row, 'tradeType', 'trade_type', 'thesis'),
+    price: numberValue(row, 'price', 'price', 0) ?? 0,
+    volume: numberValue(row, 'volume', 'volume', 0) ?? 0,
+    tradeTime: textValue(row, 'tradeTime', 'trade_time', new Date().toISOString()),
+    linkedEntryId: (row.linkedEntryId ?? row.linked_entry_id ?? null) as string | null,
+    signalsSnapshot: (row.signalsSnapshot ?? row.signals_snapshot ?? null) as Record<string, any> | null,
+    notes: textValue(row, 'notes', 'notes'),
+    screenshotPaths: arrayValue(row, 'screenshotPaths', 'screenshot_paths'),
+    reviewTags: arrayValue(row, 'reviewTags', 'review_tags'),
+    pnl: numberValue(row, 'pnl', 'pnl', null),
+    pnlPct: numberValue(row, 'pnlPct', 'pnl_pct', null),
+    status: textValue(row, 'status', 'status', 'observe'),
+    marketPhase: textValue(row, 'marketPhase', 'market_phase'),
+    themeRole: textValue(row, 'themeRole', 'theme_role'),
+    stockRole: textValue(row, 'stockRole', 'stock_role'),
+    entryReason: textValue(row, 'entryReason', 'entry_reason'),
+    tradeHypothesis: textValue(row, 'tradeHypothesis', 'trade_hypothesis'),
+    entryPrerequisites: textValue(row, 'entryPrerequisites', 'entry_prerequisites'),
+    invalidationRules: textValue(row, 'invalidationRules', 'invalidation_rules'),
+    expectedHoldingDays: numberValue(row, 'expectedHoldingDays', 'expected_holding_days', 3) ?? 3,
+    humanDecision: textValue(row, 'humanDecision', 'human_decision', 'watch'),
+    skipReason: textValue(row, 'skipReason', 'skip_reason'),
+    reviewOutcome: textValue(row, 'reviewOutcome', 'review_outcome', 'pending'),
+    modelResult: textValue(row, 'modelResult', 'model_result', 'unknown'),
+    executionResult: textValue(row, 'executionResult', 'execution_result', 'unknown'),
+    reviewNotes: textValue(row, 'reviewNotes', 'review_notes'),
+    createdAt: textValue(row, 'createdAt', 'created_at'),
+    updatedAt: textValue(row, 'updatedAt', 'updated_at'),
+  }
+}
+
+function normalizeStats(raw: unknown): JournalStats {
+  const row = (raw && typeof raw === 'object' ? raw : {}) as Record<string, any>
+  return {
+    tagCounts:
+      row.tagCounts && typeof row.tagCounts === 'object'
+        ? (row.tagCounts as Record<string, number>)
+        : {},
+    totalPnl: numberValue(row, 'totalPnl', 'total_pnl', 0) ?? 0,
+    winRate: numberValue(row, 'winRate', 'win_rate', 0) ?? 0,
+    totalExits: numberValue(row, 'totalExits', 'total_exits', 0) ?? 0,
+  }
+}
+
+function optionLabel(options: { value: string; label: string }[], value: string) {
+  return options.find(option => option.value === value)?.label || value || '未设置'
 }
 
 const props = defineProps<{ visible: boolean }>()
@@ -38,32 +239,18 @@ function close() {
 
 const entries = ref<JournalEntry[]>([])
 const loading = ref(false)
+const errorMessage = ref('')
 const selectedId = ref<string | null>(null)
 const filterStock = ref('')
 const filterDirection = ref('')
+const filterStatus = ref('')
 
-const form = ref({
-  stockCode: '',
-  stockName: '',
-  direction: 'buy' as 'buy' | 'sell',
-  tradeType: 'entry' as 'entry' | 'exit',
-  price: 0,
-  volume: 0,
-  tradeTime: new Date().toISOString(),
-  linkedEntryId: null as string | null,
-  notes: '',
-  signalsSnapshot: null as Record<string, any> | null,
-})
+const form = ref<JournalForm>(createDefaultForm())
 
 const reviewTagsInput = ref('')
 const entryNotes = ref('')
 const exitPrice = ref(0)
 const exitVolume = ref(0)
-
-const PRESET_TAGS = [
-  '追高', '卖早', '信号正确未执行', '信号正确执行到位', '信号错误',
-  '止损', '止盈', '恐慌卖出', '仓位过重', '仓位过轻',
-]
 
 const selectedEntry = computed(() =>
   entries.value.find(e => e.id === selectedId.value) || null,
@@ -81,22 +268,26 @@ const filteredEntries = computed(() => {
   return list
 })
 
-const stats = ref<{
-  tagCounts: Record<string, number>
-  totalPnl: number
-  winRate: number
-  totalExits: number
-} | null>(null)
+const stats = ref<JournalStats | null>(null)
 
 async function loadEntries() {
   loading.value = true
+  errorMessage.value = ''
   try {
     const params = new URLSearchParams({ limit: '100' })
-    if (filterStock.value) params.set('stockCode', filterStock.value)
+    if (filterStock.value) params.set('stock_code', filterStock.value)
     if (filterDirection.value) params.set('direction', filterDirection.value)
-    const res = await fetch(`/api/journal/entries?${params}`)
-    const data = await res.json()
-    entries.value = data.entries || []
+    if (filterStatus.value) params.set('status', filterStatus.value)
+    const data = await apiService.get(`/api/journal/entries?${params}`, {
+      context: 'quant-board',
+      cache: false,
+      silent: true,
+      throwOnHttpError: true,
+    })
+    entries.value = Array.isArray(data.entries) ? data.entries.map(normalizeEntry) : []
+  } catch (error) {
+    errorMessage.value = `候选/假设列表加载失败：${error instanceof Error ? error.message : '未知错误'}`
+    entries.value = []
   } finally {
     loading.value = false
   }
@@ -104,9 +295,15 @@ async function loadEntries() {
 
 async function loadStats() {
   try {
-    const res = await fetch('/api/journal/stats')
-    stats.value = await res.json()
+    const data = await apiService.get('/api/journal/stats', {
+      context: 'quant-board',
+      cache: false,
+      silent: true,
+      throwOnHttpError: true,
+    })
+    stats.value = normalizeStats(data)
   } catch {
+    stats.value = null
     /* backend may be unavailable */
   }
 }
@@ -125,25 +322,28 @@ function captureSignals(stockCode: string) {
     : null
 
   form.value.signalsSnapshot = {
-    dragon: dragonRecord
-      ? {
-          primaryRole: (dragonRecord as any).primaryRole,
-          authorityClass: (dragonRecord as any).authority,
-          tradeability: (dragonRecord as any).tradeability,
-        }
-      : null,
+    dragon: dragonRecord ? {
+      primaryRole: (dragonRecord as any).primaryRole,
+      authorityClass: (dragonRecord as any).authority,
+      tradeability: (dragonRecord as any).tradeability,
+    } : null,
     sentiment: {
       emotionPhase: sentiment?.phaseName || sentiment?.phase || '',
       breathScore: sentiment?.overall ?? 0,
     },
-    rankTrend: rankTrend
-      ? {
-          candidateTier: rankTrend.strategy?.candidateTier || 'N_NEUTRAL',
-          momentumComposite: rankTrend.technical.momentumProfile.composite,
-          attentionStage: rankTrend.cycle.stage,
-          decision: rankTrend.decision.final.signal,
-        }
-      : null,
+    rankTrend: rankTrend ? {
+      candidateTier: rankTrend.strategy?.candidateTier || 'N_NEUTRAL',
+      momentumComposite: rankTrend.technical.momentumProfile.composite,
+      attentionStage: rankTrend.cycle.stage,
+      decision: rankTrend.decision.final.signal,
+    } : null,
+  }
+
+  if (!form.value.marketPhase && sentiment?.phaseName) {
+    form.value.marketPhase = String(sentiment.phaseName)
+  }
+  if (!form.value.stockRole && form.value.signalsSnapshot.dragon?.primaryRole) {
+    form.value.stockRole = String(form.value.signalsSnapshot.dragon.primaryRole)
   }
 }
 
@@ -159,27 +359,44 @@ async function saveEntry() {
     linked_entry_id: form.value.linkedEntryId,
     signals_snapshot: form.value.signalsSnapshot || {},
     notes: form.value.notes,
+    status: form.value.status,
+    market_phase: form.value.marketPhase,
+    theme_role: form.value.themeRole,
+    stock_role: form.value.stockRole,
+    entry_reason: form.value.entryReason,
+    trade_hypothesis: form.value.tradeHypothesis,
+    entry_prerequisites: form.value.entryPrerequisites,
+    invalidation_rules: form.value.invalidationRules,
+    expected_holding_days: form.value.expectedHoldingDays,
+    human_decision: form.value.humanDecision,
+    skip_reason: form.value.skipReason,
+    review_outcome: form.value.reviewOutcome,
+    model_result: form.value.modelResult,
+    execution_result: form.value.executionResult,
+    review_notes: form.value.reviewNotes,
   }
 
-  let res: Response
-  if (selectedId.value) {
-    res = await fetch(`/api/journal/entries/${selectedId.value}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    })
-  } else {
-    res = await fetch('/api/journal/entries', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    })
-  }
-
-  if (res.ok) {
+  try {
+    if (selectedId.value) {
+      await apiService.put(`/api/journal/entries/${selectedId.value}`, payload, {
+        context: 'quant-board',
+        cache: false,
+        silent: true,
+        throwOnHttpError: true,
+      })
+    } else {
+      await apiService.post('/api/journal/entries', payload, {
+        context: 'quant-board',
+        cache: false,
+        silent: true,
+        throwOnHttpError: true,
+      })
+    }
     resetForm()
     await loadEntries()
     await loadStats()
+  } catch (error) {
+    errorMessage.value = `保存失败：${error instanceof Error ? error.message : '未知错误'}`
   }
 }
 
@@ -195,29 +412,54 @@ async function recordExit() {
     trade_time: new Date().toISOString(),
     linked_entry_id: selectedEntry.value.id,
     notes: entryNotes.value,
+    status: 'tracking',
+    market_phase: selectedEntry.value.marketPhase,
+    theme_role: selectedEntry.value.themeRole,
+    stock_role: selectedEntry.value.stockRole,
+    entry_reason: selectedEntry.value.entryReason,
+    trade_hypothesis: selectedEntry.value.tradeHypothesis,
+    entry_prerequisites: selectedEntry.value.entryPrerequisites,
+    invalidation_rules: selectedEntry.value.invalidationRules,
+    expected_holding_days: selectedEntry.value.expectedHoldingDays,
+    human_decision: 'execute',
+    skip_reason: selectedEntry.value.skipReason,
+    review_outcome: selectedEntry.value.reviewOutcome,
+    model_result: selectedEntry.value.modelResult,
+    execution_result: selectedEntry.value.executionResult,
+    review_notes: selectedEntry.value.reviewNotes,
   }
-  const res = await fetch('/api/journal/entries', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(exitPayload),
-  })
-  if (res.ok) {
-    const pnl =
-      (exitPayload.price - selectedEntry.value.price) * exitPayload.volume
-    const pnlPct =
-      ((exitPayload.price - selectedEntry.value.price) /
-        selectedEntry.value.price) *
-      100
-    await fetch(`/api/journal/entries/${selectedEntry.value.id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pnl, pnl_pct: pnlPct }),
+  try {
+    await apiService.post('/api/journal/entries', exitPayload, {
+      context: 'quant-board',
+      cache: false,
+      silent: true,
+      throwOnHttpError: true,
     })
+    if (selectedEntry.value.price > 0) {
+      const pnl =
+        (exitPayload.price - selectedEntry.value.price) * exitPayload.volume
+      const pnlPct =
+        ((exitPayload.price - selectedEntry.value.price) /
+          selectedEntry.value.price) *
+        100
+      await apiService.put(
+        `/api/journal/entries/${selectedEntry.value.id}`,
+        { pnl, pnl_pct: pnlPct },
+        {
+          context: 'quant-board',
+          cache: false,
+          silent: true,
+          throwOnHttpError: true,
+        },
+      )
+    }
     exitPrice.value = 0
     exitVolume.value = 0
     entryNotes.value = ''
     await loadEntries()
     await loadStats()
+  } catch (error) {
+    errorMessage.value = `记录出场失败：${error instanceof Error ? error.message : '未知错误'}`
   }
 }
 
@@ -229,10 +471,11 @@ async function addReviewTags() {
     .filter(Boolean)
   const existingTags = selectedEntry.value.reviewTags || []
   const merged = [...new Set([...existingTags, ...newTags])]
-  await fetch(`/api/journal/entries/${selectedEntry.value.id}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ review_tags: merged }),
+  await apiService.put(`/api/journal/entries/${selectedEntry.value.id}`, { review_tags: merged }, {
+    context: 'quant-board',
+    cache: false,
+    silent: true,
+    throwOnHttpError: true,
   })
   reviewTagsInput.value = ''
   await loadEntries()
@@ -241,7 +484,12 @@ async function addReviewTags() {
 
 async function deleteEntry(id: string) {
   if (!confirm('确认删除此交易记录？关联的出场记录也会被删除。')) return
-  await fetch(`/api/journal/entries/${id}`, { method: 'DELETE' })
+  await apiService.delete(`/api/journal/entries/${id}`, {
+    context: 'quant-board',
+    cache: false,
+    silent: true,
+    throwOnHttpError: true,
+  })
   if (selectedId.value === id) selectedId.value = null
   await loadEntries()
   await loadStats()
@@ -251,7 +499,7 @@ async function uploadScreenshot(file: File) {
   if (!selectedId.value) return
   const formData = new FormData()
   formData.append('file', file)
-  await fetch(`/api/journal/entries/${selectedId.value}/screenshot`, {
+  await fetch(`${JOURNAL_API_BASE}/api/journal/entries/${selectedId.value}/screenshot`, {
     method: 'POST',
     body: formData,
   })
@@ -260,33 +508,38 @@ async function uploadScreenshot(file: File) {
 
 function resetForm() {
   selectedId.value = null
-  form.value = {
-    stockCode: '',
-    stockName: '',
-    direction: 'buy',
-    tradeType: 'entry',
-    price: 0,
-    volume: 0,
-    tradeTime: new Date().toISOString(),
-    linkedEntryId: null,
-    notes: '',
-    signalsSnapshot: null,
-  }
+  form.value = createDefaultForm()
 }
 
 function selectEntry(entry: JournalEntry) {
+  const normalized = normalizeEntry(entry)
   selectedId.value = entry.id
   form.value = {
-    stockCode: entry.stockCode,
-    stockName: entry.stockName,
-    direction: entry.direction as 'buy' | 'sell',
-    tradeType: entry.tradeType as 'entry' | 'exit',
-    price: entry.price,
-    volume: entry.volume,
-    tradeTime: entry.tradeTime,
-    linkedEntryId: entry.linkedEntryId,
-    notes: entry.notes,
-    signalsSnapshot: entry.signalsSnapshot,
+    stockCode: normalized.stockCode,
+    stockName: normalized.stockName,
+    direction: normalized.direction,
+    tradeType: normalized.tradeType,
+    price: normalized.price,
+    volume: normalized.volume,
+    tradeTime: normalized.tradeTime,
+    linkedEntryId: normalized.linkedEntryId,
+    notes: normalized.notes,
+    signalsSnapshot: normalized.signalsSnapshot,
+    status: normalized.status,
+    marketPhase: normalized.marketPhase,
+    themeRole: normalized.themeRole,
+    stockRole: normalized.stockRole,
+    entryReason: normalized.entryReason,
+    tradeHypothesis: normalized.tradeHypothesis,
+    entryPrerequisites: normalized.entryPrerequisites,
+    invalidationRules: normalized.invalidationRules,
+    expectedHoldingDays: normalized.expectedHoldingDays,
+    humanDecision: normalized.humanDecision,
+    skipReason: normalized.skipReason,
+    reviewOutcome: normalized.reviewOutcome,
+    modelResult: normalized.modelResult,
+    executionResult: normalized.executionResult,
+    reviewNotes: normalized.reviewNotes,
   }
 }
 
@@ -307,240 +560,230 @@ const stockOptions = computed(() => {
 
 <template>
   <Teleport to="body">
-    <div
-      v-if="visible"
-      class="trade-journal-overlay"
-      @click.self="close"
-    >
-      <div class="trade-journal-panel">
-        <div class="panel-header">
-          <h2>📓 交易日记</h2>
-          <button class="btn-close" @click="close">✕</button>
+    <div v-if="visible" style="position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:1000;display:flex;align-items:center;justify-content:center" @click.self="close">
+      <div style="width:1120px;max-width:calc(100vw - 32px);max-height:88vh;background:#fff;border-radius:8px;display:flex;flex-direction:column;overflow:hidden">
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid #e0e0e0">
+          <h2 style="margin:0;font-size:16px">候选与交易假设</h2>
+          <button style="background:none;border:none;font-size:18px;cursor:pointer" @click="close">✕</button>
         </div>
 
-        <div class="panel-body">
+        <div style="display:flex;flex:1;overflow:hidden">
           <!-- Left: Entry List -->
-          <div class="journal-list">
-            <div class="list-header">
-              <input
-                v-model="filterStock"
-                placeholder="搜索标的..."
-                @input="loadEntries"
-              />
-              <select v-model="filterDirection" @change="loadEntries">
+          <div style="flex:1;min-width:280px;max-width:380px;border-right:1px solid #e0e0e0;display:flex;flex-direction:column">
+            <div style="display:flex;flex-wrap:wrap;gap:4px;padding:8px">
+              <input v-model="filterStock" placeholder="搜索标的..." @input="loadEntries" style="flex:1;padding:4px;border:1px solid #ddd;border-radius:4px;font-size:12px" />
+              <select v-model="filterDirection" @change="loadEntries" style="flex:1;padding:4px;border:1px solid #ddd;border-radius:4px;font-size:12px">
                 <option value="">全部</option>
                 <option value="buy">买入</option>
                 <option value="sell">卖出</option>
               </select>
-              <button @click="resetForm()">+ 新增</button>
+              <select v-model="filterStatus" @change="loadEntries" style="flex:1 1 96px;padding:4px;border:1px solid #ddd;border-radius:4px;font-size:12px">
+                <option v-for="option in STATUS_OPTIONS" :key="option.value" :value="option.value">{{ option.label }}</option>
+              </select>
+              <button @click="resetForm()" style="padding:4px 12px;background:#1565c0;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px">+ 新增候选/假设</button>
             </div>
-            <div class="entries" v-if="!loading">
+            <div v-if="errorMessage" style="margin:0 8px 8px;padding:8px;background:#fff3e0;color:#b45f06;border:1px solid #ffcc80;border-radius:4px;font-size:12px;line-height:1.5">{{ errorMessage }}</div>
+            <div style="flex:1;overflow-y:auto" v-if="!loading">
               <div
                 v-for="entry in filteredEntries"
                 :key="entry.id"
-                :class="['entry-row', { selected: entry.id === selectedId }]"
+                :style="{ display:'flex', gap:'6px', padding:'6px 8px', cursor:'pointer', borderBottom:'1px solid #f0f0f0', fontSize:'13px', alignItems:'center', background: entry.id === selectedId ? '#e3f2fd' : '' }"
                 @click="selectEntry(entry)"
               >
-                <span :class="`dir-${entry.direction}`">
-                  {{ entry.direction === 'buy' ? '买' : '卖' }}
-                </span>
-                <span class="code">{{ entry.stockCode }}</span>
-                <span class="name">{{ entry.stockName }}</span>
-                <span class="price">{{ entry.price }}</span>
-                <span
-                  v-if="entry.pnl != null"
-                  :class="entry.pnl >= 0 ? 'pnl-pos' : 'pnl-neg'"
-                >
-                  {{ entry.pnl >= 0 ? '+' : '' }}{{ entry.pnl.toFixed(0) }}
-                </span>
+                <span style="min-width:42px;color:#1565c0;font-size:12px">{{ optionLabel(STATUS_OPTIONS, entry.status) }}</span>
+                <span style="font-family:monospace;min-width:60px">{{ entry.stockCode }}</span>
+                <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ entry.stockName }}</span>
+                <span :style="{ color: entry.direction === 'buy' ? '#e53935' : '#43a047', fontWeight:'bold', minWidth:'20px' }">{{ entry.direction === 'buy' ? '买' : '卖' }}</span>
+                <span v-if="entry.pnl != null" :style="{ color: entry.pnl >= 0 ? '#e53935' : '#43a047', minWidth:'60px', textAlign:'right' }">{{ entry.pnl >= 0 ? '+' : '' }}{{ entry.pnl.toFixed(0) }}</span>
               </div>
+              <div v-if="!filteredEntries.length" style="padding:24px 12px;text-align:center;color:#888;font-size:13px">暂无候选/假设记录</div>
             </div>
+            <div v-else style="padding:24px 12px;text-align:center;color:#888;font-size:13px">加载中...</div>
           </div>
 
-          <!-- Right: Form / Detail -->
-          <div class="journal-form">
-            <template v-if="!selectedEntry || selectedEntry.tradeType === 'entry'">
-              <h3>{{ selectedId ? '编辑入场' : '新增入场' }}</h3>
-              <div class="form-group">
-                <label>标的</label>
-                <div class="stock-picker">
-                  <input
-                    v-model="form.stockCode"
-                    placeholder="代码"
-                    list="stock-list"
-                  />
-                  <input v-model="form.stockName" placeholder="名称" />
-                  <datalist id="stock-list">
-                    <option
-                      v-for="s in stockOptions"
-                      :key="s.code"
-                      :value="s.code"
-                    >
-                      {{ s.code }} {{ s.name }}
-                    </option>
-                  </datalist>
-                  <button
-                    @click="captureSignals(form.stockCode)"
-                    :disabled="!form.stockCode"
-                  >
-                    抓取信号
-                  </button>
+          <!-- Right: Form -->
+          <div style="flex:2;padding:12px 16px;overflow-y:auto">
+            <template v-if="!selectedEntry || selectedEntry.tradeType !== 'exit'">
+              <h3 style="font-size:14px;margin:12px 0 8px;padding-bottom:4px;border-bottom:1px solid #eee">{{ selectedId ? '编辑候选/假设' : '新增候选/假设' }}</h3>
+              <div style="margin-bottom:8px">
+                <label style="display:block;font-size:12px;color:#666;margin-bottom:2px">标的</label>
+                <div style="display:flex;gap:4px;align-items:center">
+                  <input v-model="form.stockCode" placeholder="代码" style="flex:1;padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px" />
+                  <input v-model="form.stockName" placeholder="名称" style="flex:1;padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px" />
+                  <button @click="captureSignals(form.stockCode)" :disabled="!form.stockCode" style="padding:4px 8px;font-size:12px;white-space:nowrap;border:1px solid #ddd;border-radius:4px;background:#f5f5f5;cursor:pointer">抓取信号</button>
                 </div>
               </div>
-              <div class="form-row">
-                <div class="form-group">
-                  <label>方向</label>
-                  <select v-model="form.direction">
+              <div style="display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin-bottom:8px">
+                <div>
+                  <label style="display:block;font-size:12px;color:#666;margin-bottom:2px">状态</label>
+                  <select v-model="form.status" style="width:100%;padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px">
+                    <option v-for="option in ENTRY_STATUS_OPTIONS" :key="option.value" :value="option.value">{{ option.label }}</option>
+                  </select>
+                </div>
+                <div>
+                  <label style="display:block;font-size:12px;color:#666;margin-bottom:2px">市场环境</label>
+                  <input v-model="form.marketPhase" placeholder="如 修复期/退潮期" style="width:100%;padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px" />
+                </div>
+                <div>
+                  <label style="display:block;font-size:12px;color:#666;margin-bottom:2px">题材地位</label>
+                  <select v-model="form.themeRole" style="width:100%;padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px">
+                    <option value="">未设置</option>
+                    <option value="mainline">主线</option>
+                    <option value="branch">支线</option>
+                    <option value="rotation">轮动</option>
+                    <option value="rebound">反弹</option>
+                    <option value="decline">退潮</option>
+                    <option value="unknown">未知</option>
+                  </select>
+                </div>
+                <div>
+                  <label style="display:block;font-size:12px;color:#666;margin-bottom:2px">个股角色</label>
+                  <select v-model="form.stockRole" style="width:100%;padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px">
+                    <option value="">未设置</option>
+                    <option value="leader">龙头</option>
+                    <option value="core">核心</option>
+                    <option value="follower">跟随</option>
+                    <option value="rebound">反弹</option>
+                    <option value="abnormal_watch">异常观察</option>
+                    <option value="unknown">未知</option>
+                  </select>
+                </div>
+                <div>
+                  <label style="display:block;font-size:12px;color:#666;margin-bottom:2px">预期持仓天数</label>
+                  <input v-model.number="form.expectedHoldingDays" type="number" min="1" style="width:100%;padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px" />
+                </div>
+              </div>
+              <div style="display:grid;grid-template-columns:160px 1fr;gap:8px;margin-bottom:8px">
+                <div>
+                  <label style="display:block;font-size:12px;color:#666;margin-bottom:2px">人工决策</label>
+                  <select v-model="form.humanDecision" style="width:100%;padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px">
+                    <option v-for="option in HUMAN_DECISION_OPTIONS" :key="option.value" :value="option.value">{{ option.label }}</option>
+                  </select>
+                </div>
+                <div>
+                  <label style="display:block;font-size:12px;color:#666;margin-bottom:2px">未执行原因</label>
+                  <input v-model="form.skipReason" placeholder="未执行时填写，如 仓位不足/条件未确认" style="width:100%;padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px" />
+                </div>
+              </div>
+              <div style="margin-bottom:8px">
+                <label style="display:block;font-size:12px;color:#666;margin-bottom:2px">入池理由</label>
+                <textarea v-model="form.entryReason" rows="2" style="width:100%;padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px"></textarea>
+              </div>
+              <div style="margin-bottom:8px">
+                <label style="display:block;font-size:12px;color:#666;margin-bottom:2px">交易假设</label>
+                <textarea v-model="form.tradeHypothesis" rows="2" style="width:100%;padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px"></textarea>
+              </div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+                <div>
+                  <label style="display:block;font-size:12px;color:#666;margin-bottom:2px">买入前提</label>
+                  <textarea v-model="form.entryPrerequisites" rows="2" style="width:100%;padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px"></textarea>
+                </div>
+                <div>
+                  <label style="display:block;font-size:12px;color:#666;margin-bottom:2px">失效条件</label>
+                  <textarea v-model="form.invalidationRules" rows="2" style="width:100%;padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px"></textarea>
+                </div>
+              </div>
+              <h3 style="font-size:14px;margin:12px 0 8px;padding-bottom:4px;border-bottom:1px solid #eee">成交信息（可选）</h3>
+              <div style="display:flex;gap:8px;margin-bottom:8px">
+                <div style="flex:1">
+                  <label style="display:block;font-size:12px;color:#666;margin-bottom:2px">方向</label>
+                  <select v-model="form.direction" style="width:100%;padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px">
                     <option value="buy">买入</option>
                     <option value="sell">卖出</option>
                   </select>
                 </div>
-                <div class="form-group">
-                  <label>价格</label>
-                  <input
-                    v-model.number="form.price"
-                    type="number"
-                    step="0.01"
-                  />
+                <div style="flex:1">
+                  <label style="display:block;font-size:12px;color:#666;margin-bottom:2px">价格</label>
+                  <input v-model.number="form.price" type="number" step="0.01" style="width:100%;padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px" />
                 </div>
-                <div class="form-group">
-                  <label>数量(股)</label>
-                  <input v-model.number="form.volume" type="number" />
+                <div style="flex:1">
+                  <label style="display:block;font-size:12px;color:#666;margin-bottom:2px">数量(股)</label>
+                  <input v-model.number="form.volume" type="number" style="width:100%;padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px" />
                 </div>
               </div>
-              <div class="form-group">
-                <label>笔记</label>
-                <textarea v-model="form.notes" rows="3"></textarea>
+              <div style="margin-bottom:8px">
+                <label style="display:block;font-size:12px;color:#666;margin-bottom:2px">笔记</label>
+                <textarea v-model="form.notes" rows="3" style="width:100%;padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px"></textarea>
               </div>
-
-              <div v-if="form.signalsSnapshot" class="signals-display">
-                <h4>信号快照</h4>
-                <div v-if="form.signalsSnapshot.dragon" class="signal-block">
-                  <strong>龙头:</strong>
-                  {{ form.signalsSnapshot.dragon.primaryRole }} |
-                  {{ form.signalsSnapshot.dragon.authorityClass }} |
-                  {{ form.signalsSnapshot.dragon.tradeability }}
-                </div>
-                <div v-if="form.signalsSnapshot.sentiment" class="signal-block">
-                  <strong>情绪:</strong>
-                  {{ form.signalsSnapshot.sentiment.emotionPhase }}
-                  ({{ form.signalsSnapshot.sentiment.breathScore }})
-                </div>
-                <div v-if="form.signalsSnapshot.rankTrend" class="signal-block">
-                  <strong>排名趋势:</strong>
-                  {{ form.signalsSnapshot.rankTrend.candidateTier }} |
-                  动量:{{ form.signalsSnapshot.rankTrend.momentumComposite }} |
-                  {{ form.signalsSnapshot.rankTrend.attentionStage }} |
-                  {{ form.signalsSnapshot.rankTrend.decision }}
-                </div>
+              <div v-if="form.signalsSnapshot" style="background:#f5f5f5;padding:8px;border-radius:4px;margin:8px 0;font-size:12px">
+                <h4 style="margin:0 0 4px">信号快照</h4>
+                <div v-if="form.signalsSnapshot.dragon"><strong>龙头:</strong> {{ form.signalsSnapshot.dragon.primaryRole }} | {{ form.signalsSnapshot.dragon.authorityClass }} | {{ form.signalsSnapshot.dragon.tradeability }}</div>
+                <div v-if="form.signalsSnapshot.sentiment"><strong>情绪:</strong> {{ form.signalsSnapshot.sentiment.emotionPhase }} ({{ form.signalsSnapshot.sentiment.breathScore }})</div>
+                <div v-if="form.signalsSnapshot.rankTrend"><strong>排名趋势:</strong> {{ form.signalsSnapshot.rankTrend.candidateTier }} | 动量:{{ form.signalsSnapshot.rankTrend.momentumComposite }} | {{ form.signalsSnapshot.rankTrend.attentionStage }} | {{ form.signalsSnapshot.rankTrend.decision }}</div>
               </div>
-
-              <button class="btn-save" @click="saveEntry">保存</button>
+              <button @click="saveEntry" style="background:#1565c0;color:#fff;border:none;padding:8px 16px;border-radius:4px;cursor:pointer;margin-top:8px">保存</button>
             </template>
 
-            <template
-              v-if="
-                selectedEntry &&
-                selectedEntry.tradeType === 'entry' &&
-                !selectedEntry.linkedEntryId
-              "
-            >
-              <h3>记录出场</h3>
-              <div class="form-group">
-                <label>卖出价格</label>
-                <input
-                  v-model.number="exitPrice"
-                  type="number"
-                  step="0.01"
-                />
+            <template v-if="selectedEntry && selectedEntry.tradeType !== 'exit' && !selectedEntry.linkedEntryId">
+              <h3 style="font-size:14px;margin:12px 0 8px;padding-bottom:4px;border-bottom:1px solid #eee">记录出场</h3>
+              <div style="margin-bottom:8px">
+                <label style="display:block;font-size:12px;color:#666;margin-bottom:2px">卖出价格</label>
+                <input v-model.number="exitPrice" type="number" step="0.01" style="width:100%;padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px" />
               </div>
-              <div class="form-group">
-                <label>卖出数量(默认全部)</label>
-                <input
-                  v-model.number="exitVolume"
-                  type="number"
-                  :placeholder="String(selectedEntry.volume)"
-                />
+              <div style="margin-bottom:8px">
+                <label style="display:block;font-size:12px;color:#666;margin-bottom:2px">卖出数量(默认全部)</label>
+                <input v-model.number="exitVolume" type="number" :placeholder="String(selectedEntry.volume)" style="width:100%;padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px" />
               </div>
-              <div class="form-group">
-                <label>复盘笔记</label>
-                <textarea v-model="entryNotes" rows="3"></textarea>
+              <div style="margin-bottom:8px">
+                <label style="display:block;font-size:12px;color:#666;margin-bottom:2px">复盘笔记</label>
+                <textarea v-model="entryNotes" rows="3" style="width:100%;padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px"></textarea>
               </div>
-              <button
-                class="btn-save"
-                @click="recordExit"
-                :disabled="!exitPrice"
-              >
-                记录出场
-              </button>
+              <button @click="recordExit" :disabled="!exitPrice" style="background:#1565c0;color:#fff;border:none;padding:8px 16px;border-radius:4px;cursor:pointer;margin-top:8px">记录出场</button>
             </template>
 
             <template v-if="selectedEntry">
-              <h3>复盘标签</h3>
-              <div class="tags-display">
-                <span
-                  v-for="tag in selectedEntry.reviewTags"
-                  :key="tag"
-                  class="tag"
-                >
-                  {{ tag }}
-                </span>
-              </div>
-              <div class="tag-input-row">
-                <input
-                  v-model="reviewTagsInput"
-                  placeholder="添加标签（逗号分隔）"
-                />
-                <button @click="addReviewTags">添加</button>
-              </div>
-              <div class="preset-tags">
-                <span
-                  v-for="tag in PRESET_TAGS"
-                  :key="tag"
-                  class="preset-tag"
-                  @click="reviewTagsInput = tag"
-                >
-                  {{ tag }}
-                </span>
-              </div>
-
-              <h3>截图</h3>
-              <div class="screenshots">
-                <div
-                  v-for="path in selectedEntry.screenshotPaths"
-                  :key="path"
-                  class="screenshot-thumb"
-                >
-                  <img :src="`/api/static/${path}`" :alt="path" />
+              <h3 style="font-size:14px;margin:12px 0 8px;padding-bottom:4px;border-bottom:1px solid #eee">复盘结果</h3>
+              <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:8px">
+                <div>
+                  <label style="display:block;font-size:12px;color:#666;margin-bottom:2px">复盘结果</label>
+                  <select v-model="form.reviewOutcome" style="width:100%;padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px">
+                    <option v-for="option in REVIEW_OUTCOME_OPTIONS" :key="option.value" :value="option.value">{{ option.label }}</option>
+                  </select>
+                </div>
+                <div>
+                  <label style="display:block;font-size:12px;color:#666;margin-bottom:2px">模型结果</label>
+                  <select v-model="form.modelResult" style="width:100%;padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px">
+                    <option v-for="option in MODEL_RESULT_OPTIONS" :key="option.value" :value="option.value">{{ option.label }}</option>
+                  </select>
+                </div>
+                <div>
+                  <label style="display:block;font-size:12px;color:#666;margin-bottom:2px">执行结果</label>
+                  <select v-model="form.executionResult" style="width:100%;padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px">
+                    <option v-for="option in EXECUTION_RESULT_OPTIONS" :key="option.value" :value="option.value">{{ option.label }}</option>
+                  </select>
                 </div>
               </div>
-              <input
-                type="file"
-                accept="image/png,image/jpeg,image/webp"
-                @change="
-                  (e) => {
-                    const f = (e.target as HTMLInputElement).files?.[0]
-                    if (f) uploadScreenshot(f)
-                  }
-                "
-              />
+              <div style="margin-bottom:8px">
+                <label style="display:block;font-size:12px;color:#666;margin-bottom:2px">复盘结论</label>
+                <textarea v-model="form.reviewNotes" rows="3" style="width:100%;padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px"></textarea>
+              </div>
+              <button @click="saveEntry" style="background:#1565c0;color:#fff;border:none;padding:8px 16px;border-radius:4px;cursor:pointer;margin:0 0 8px">保存复盘</button>
 
-              <button class="btn-delete" @click="deleteEntry(selectedEntry.id)">
-                删除记录
-              </button>
+              <h3 style="font-size:14px;margin:12px 0 8px;padding-bottom:4px;border-bottom:1px solid #eee">复盘标签</h3>
+              <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px">
+                <span v-for="tag in selectedEntry.reviewTags" :key="tag" style="background:#e3f2fd;color:#1565c0;padding:2px 8px;border-radius:12px;font-size:12px">{{ tag }}</span>
+              </div>
+              <div style="display:flex;gap:4px;margin-bottom:8px">
+                <input v-model="reviewTagsInput" placeholder="添加标签（逗号分隔）" style="flex:1;padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px" />
+                <button @click="addReviewTags" style="padding:4px 8px;font-size:12px;border:1px solid #ddd;border-radius:4px;cursor:pointer">添加</button>
+              </div>
+              <div style="display:flex;flex-wrap:wrap;gap:4px;margin:4px 0 8px">
+                <span v-for="tag in PRESET_TAGS" :key="tag" @click="reviewTagsInput = tag" style="background:#f5f5f5;padding:2px 8px;border-radius:8px;font-size:11px;cursor:pointer">{{ tag }}</span>
+              </div>
+              <h3 style="font-size:14px;margin:12px 0 8px;padding-bottom:4px;border-bottom:1px solid #eee">截图</h3>
+              <div style="display:flex;flex-wrap:wrap;gap:8px;margin:8px 0">
+                <div v-for="path in selectedEntry.screenshotPaths" :key="path">
+                  <img :src="`/api/static/${path}`" :alt="path" style="max-width:120px;max-height:80px;border:1px solid #ddd;border-radius:4px" />
+                </div>
+              </div>
+              <input type="file" accept="image/png,image/jpeg,image/webp" @change="(e) => { const f = (e.target as HTMLInputElement).files?.[0]; if (f) uploadScreenshot(f) }" />
+              <button @click="deleteEntry(selectedEntry.id)" style="background:#c62828;color:#fff;border:none;padding:8px 16px;border-radius:4px;cursor:pointer;margin-top:16px">删除记录</button>
             </template>
           </div>
         </div>
 
-        <div class="stats-panel" v-if="stats">
-          <span>
-            总盈亏:
-            <strong
-              :class="stats.totalPnl >= 0 ? 'pnl-pos' : 'pnl-neg'"
-            >
-              {{ stats.totalPnl >= 0 ? '+' : '' }}{{ stats.totalPnl.toFixed(0) }}
-            </strong>
-          </span>
+        <div v-if="stats" style="display:flex;gap:16px;padding:8px 16px;background:#f5f5f5;border-top:1px solid #e0e0e0;font-size:13px">
+          <span>总盈亏: <strong :style="{ color: stats.totalPnl >= 0 ? '#e53935' : '#43a047' }">{{ stats.totalPnl >= 0 ? '+' : '' }}{{ stats.totalPnl.toFixed(0) }}</strong></span>
           <span>胜率: <strong>{{ (stats.winRate * 100).toFixed(1) }}%</strong></span>
           <span>已平仓: <strong>{{ stats.totalExits }}</strong>笔</span>
         </div>
@@ -548,267 +791,3 @@ const stockOptions = computed(() => {
     </div>
   </Teleport>
 </template>
-
-<style>
-.trade-journal-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.4);
-  z-index: 1000;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.trade-journal-panel {
-  width: 960px;
-  max-height: 85vh;
-  background: #fff;
-  border-radius: 8px;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-.panel-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 12px 16px;
-  border-bottom: 1px solid #e0e0e0;
-}
-.panel-header h2 {
-  margin: 0;
-  font-size: 16px;
-}
-.btn-close {
-  background: none;
-  border: none;
-  font-size: 18px;
-  cursor: pointer;
-}
-.panel-body {
-  display: flex;
-  flex: 1;
-  overflow: hidden;
-}
-.journal-list {
-  flex: 1;
-  min-width: 280px;
-  max-width: 380px;
-  border-right: 1px solid #e0e0e0;
-  display: flex;
-  flex-direction: column;
-}
-.list-header {
-  display: flex;
-  gap: 4px;
-  padding: 8px;
-}
-.list-header input,
-.list-header select {
-  flex: 1;
-  padding: 4px;
-  border: 1px solid #ddd;
-  border-radius: 4px;
-  font-size: 12px;
-}
-.list-header button {
-  padding: 4px 12px;
-  background: #1565c0;
-  color: #fff;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 12px;
-}
-.entries {
-  flex: 1;
-  overflow-y: auto;
-}
-.entry-row {
-  display: flex;
-  gap: 6px;
-  padding: 6px 8px;
-  cursor: pointer;
-  border-bottom: 1px solid #f0f0f0;
-  font-size: 13px;
-  align-items: center;
-}
-.entry-row.selected {
-  background: #e3f2fd;
-}
-.entry-row:hover {
-  background: #f5f5f5;
-}
-.dir-buy {
-  color: #e53935;
-  font-weight: bold;
-  min-width: 20px;
-}
-.dir-sell {
-  color: #43a047;
-  font-weight: bold;
-  min-width: 20px;
-}
-.code {
-  font-family: monospace;
-  min-width: 60px;
-}
-.name {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.price {
-  min-width: 50px;
-  text-align: right;
-}
-.pnl-pos {
-  color: #e53935;
-  min-width: 60px;
-  text-align: right;
-}
-.pnl-neg {
-  color: #43a047;
-  min-width: 60px;
-  text-align: right;
-}
-.journal-form {
-  flex: 2;
-  padding: 12px 16px;
-  overflow-y: auto;
-}
-.journal-form h3 {
-  font-size: 14px;
-  margin: 12px 0 8px;
-  padding-bottom: 4px;
-  border-bottom: 1px solid #eee;
-}
-.form-group {
-  margin-bottom: 8px;
-}
-.form-group label {
-  display: block;
-  font-size: 12px;
-  color: #666;
-  margin-bottom: 2px;
-}
-.form-group input,
-.form-group select,
-.form-group textarea {
-  width: 100%;
-  padding: 4px 8px;
-  border: 1px solid #ddd;
-  border-radius: 4px;
-  font-size: 13px;
-}
-.form-row {
-  display: flex;
-  gap: 8px;
-}
-.form-row .form-group {
-  flex: 1;
-}
-.stock-picker {
-  display: flex;
-  gap: 4px;
-  align-items: center;
-}
-.stock-picker input {
-  flex: 1;
-}
-.stock-picker button {
-  padding: 4px 8px;
-  font-size: 12px;
-  white-space: nowrap;
-}
-.signals-display {
-  background: #f5f5f5;
-  padding: 8px;
-  border-radius: 4px;
-  margin: 8px 0;
-  font-size: 12px;
-}
-.signal-block {
-  margin-bottom: 4px;
-}
-.tags-display {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  margin-bottom: 8px;
-}
-.tag {
-  background: #e3f2fd;
-  color: #1565c0;
-  padding: 2px 8px;
-  border-radius: 12px;
-  font-size: 12px;
-}
-.preset-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  margin: 4px 0 8px;
-}
-.preset-tag {
-  background: #f5f5f5;
-  padding: 2px 8px;
-  border-radius: 8px;
-  font-size: 11px;
-  cursor: pointer;
-}
-.preset-tag:hover {
-  background: #e0e0e0;
-}
-.tag-input-row {
-  display: flex;
-  gap: 4px;
-  margin-bottom: 8px;
-}
-.tag-input-row input {
-  flex: 1;
-}
-.tag-input-row button {
-  padding: 4px 8px;
-  font-size: 12px;
-}
-.btn-save {
-  background: #1565c0;
-  color: #fff;
-  border: none;
-  padding: 8px 16px;
-  border-radius: 4px;
-  cursor: pointer;
-  margin-top: 8px;
-}
-.btn-delete {
-  background: #c62828;
-  color: #fff;
-  border: none;
-  padding: 8px 16px;
-  border-radius: 4px;
-  cursor: pointer;
-  margin-top: 16px;
-}
-.stats-panel {
-  display: flex;
-  gap: 16px;
-  padding: 8px 16px;
-  background: #f5f5f5;
-  border-top: 1px solid #e0e0e0;
-  font-size: 13px;
-}
-.screenshots {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin: 8px 0;
-}
-.screenshot-thumb img {
-  max-width: 120px;
-  max-height: 80px;
-  border: 1px solid #ddd;
-  border-radius: 4px;
-}
-</style>

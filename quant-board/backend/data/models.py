@@ -525,11 +525,11 @@ class TradeJournal:
     id: str
     stock_code: str
     stock_name: str
-    direction: str  # "buy" | "sell"
-    trade_type: str  # "entry" | "exit"
-    price: float
-    volume: int
-    trade_time: str  # ISO 8601
+    direction: str = "buy"  # "buy" | "sell"
+    trade_type: str = "thesis"  # "thesis" | "entry" | "exit"
+    price: float = 0
+    volume: int = 0
+    trade_time: str = ""  # ISO 8601
     linked_entry_id: str | None = None
     signals_snapshot: dict[str, Any] | None = field(default_factory=dict)
     notes: str = ""
@@ -537,6 +537,21 @@ class TradeJournal:
     review_tags: list[str] = field(default_factory=list)
     pnl: float | None = None
     pnl_pct: float | None = None
+    status: str = "observe"
+    market_phase: str = ""
+    theme_role: str = ""
+    stock_role: str = ""
+    entry_reason: str = ""
+    trade_hypothesis: str = ""
+    entry_prerequisites: str = ""
+    invalidation_rules: str = ""
+    expected_holding_days: int = 3
+    human_decision: str = "watch"
+    skip_reason: str = ""
+    review_outcome: str = "pending"
+    model_result: str = "unknown"
+    execution_result: str = "unknown"
+    review_notes: str = ""
     created_at: str = ""
     updated_at: str = ""
 
@@ -557,6 +572,21 @@ class TradeJournal:
             "reviewTags": self.review_tags,
             "pnl": self.pnl,
             "pnlPct": self.pnl_pct,
+            "status": self.status,
+            "marketPhase": self.market_phase,
+            "themeRole": self.theme_role,
+            "stockRole": self.stock_role,
+            "entryReason": self.entry_reason,
+            "tradeHypothesis": self.trade_hypothesis,
+            "entryPrerequisites": self.entry_prerequisites,
+            "invalidationRules": self.invalidation_rules,
+            "expectedHoldingDays": self.expected_holding_days,
+            "humanDecision": self.human_decision,
+            "skipReason": self.skip_reason,
+            "reviewOutcome": self.review_outcome,
+            "modelResult": self.model_result,
+            "executionResult": self.execution_result,
+            "reviewNotes": self.review_notes,
             "createdAt": self.created_at,
             "updatedAt": self.updated_at,
         }
@@ -567,8 +597,8 @@ class TradeJournal:
             id=str(data.get("id") or ""),
             stock_code=str(data.get("stockCode") or ""),
             stock_name=str(data.get("stockName") or ""),
-            direction=str(data.get("direction") or ""),
-            trade_type=str(data.get("tradeType") or "entry"),
+            direction=str(data.get("direction") or "buy"),
+            trade_type=str(data.get("tradeType") or "thesis"),
             price=float(data.get("price") or 0),
             volume=int(data.get("volume") or 0),
             trade_time=str(data.get("tradeTime") or ""),
@@ -579,6 +609,21 @@ class TradeJournal:
             review_tags=list(data.get("reviewTags") or []),
             pnl=float(data["pnl"]) if data.get("pnl") is not None else None,
             pnl_pct=float(data["pnlPct"]) if data.get("pnlPct") is not None else None,
+            status=str(data.get("status") or "observe"),
+            market_phase=str(data.get("marketPhase") or ""),
+            theme_role=str(data.get("themeRole") or ""),
+            stock_role=str(data.get("stockRole") or ""),
+            entry_reason=str(data.get("entryReason") or ""),
+            trade_hypothesis=str(data.get("tradeHypothesis") or ""),
+            entry_prerequisites=str(data.get("entryPrerequisites") or ""),
+            invalidation_rules=str(data.get("invalidationRules") or ""),
+            expected_holding_days=int(data.get("expectedHoldingDays") or 3),
+            human_decision=str(data.get("humanDecision") or "watch"),
+            skip_reason=str(data.get("skipReason") or ""),
+            review_outcome=str(data.get("reviewOutcome") or "pending"),
+            model_result=str(data.get("modelResult") or "unknown"),
+            execution_result=str(data.get("executionResult") or "unknown"),
+            review_notes=str(data.get("reviewNotes") or ""),
             created_at=str(data.get("createdAt") or ""),
             updated_at=str(data.get("updatedAt") or ""),
         )

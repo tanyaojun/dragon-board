@@ -213,6 +213,10 @@ def build_mongodb_indexes() -> dict[str, list[dict[str, Any]]]:
             {"keys": [("stockCode", 1), ("tradeTime", -1)]},
             {"keys": [("tradeType", 1), ("createdAt", -1)]},
             {"keys": [("linkedEntryId", 1)]},
+            {"keys": [("status", 1), ("createdAt", -1)]},
+            {"keys": [("stockCode", 1), ("status", 1), ("createdAt", -1)]},
+            {"keys": [("modelResult", 1), ("createdAt", -1)]},
+            {"keys": [("executionResult", 1), ("createdAt", -1)]},
         ],
     }
 

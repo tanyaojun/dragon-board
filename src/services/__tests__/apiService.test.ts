@@ -393,4 +393,22 @@ describe('ApiService', () => {
     expect(requestedUrl.origin).toBe('http://localhost:8000')
     expect(requestedUrl.pathname).toBe('/api/stocks/names')
   })
+
+  it('routes journal reads to QuantBoard API', async () => {
+    const api = new ApiService()
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ entries: [], total: 0 }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await api.get('/api/journal/entries?status=candidate')
+
+    const requestedUrl = new URL(String(fetchMock.mock.calls[0][0]))
+    expect(requestedUrl.origin).toBe('http://localhost:8000')
+    expect(requestedUrl.pathname).toBe('/api/journal/entries')
+    expect(requestedUrl.searchParams.get('status')).toBe('candidate')
+  })
 })

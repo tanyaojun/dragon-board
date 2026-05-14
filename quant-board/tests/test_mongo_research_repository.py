@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from backend.data.models import BacktestRun, GoldenRankTrendCase, OptimizationRun
+from backend.data.models import BacktestRun, GoldenRankTrendCase, OptimizationRun, TradeJournal
 from backend.data.mongo_research_repository import MongoResearchRepository
 from backend.data.json_codec import loads_json_field
 from backend.utils import json_dumps
@@ -38,6 +38,11 @@ class FakeDeleteResult:
         self.deleted_count = deleted_count
 
 
+class FakeUpdateResult:
+    def __init__(self, matched_count: int) -> None:
+        self.matched_count = matched_count
+
+
 class FakeCollection:
     def __init__(self) -> None:
         self.rows: list[dict[str, Any]] = []
@@ -61,6 +66,14 @@ class FakeCollection:
                 return
         if upsert:
             self.rows.append(dict(document))
+
+    def update_one(self, query: dict[str, Any], update: dict[str, Any]) -> FakeUpdateResult:
+        updates = update.get("$set") if isinstance(update.get("$set"), dict) else {}
+        for index, row in enumerate(self.rows):
+            if _matches(row, query):
+                self.rows[index] = {**row, **updates}
+                return FakeUpdateResult(1)
+        return FakeUpdateResult(0)
 
     def find_one(self, query: dict[str, Any]) -> dict[str, Any] | None:
         return next(iter(self.find(query)), None)
@@ -312,6 +325,111 @@ def test_repository_factory_returns_research_capable_mongo_repository(monkeypatc
     assert repo.db is fake_db
     assert hasattr(repo, "save_backtest_run")
     assert hasattr(repo, "save_factor_frames")
+
+
+def test_mongo_research_repository_saves_candidate_thesis_fields() -> None:
+    db = FakeMongoDatabase()
+    repo = MongoResearchRepository(db)
+    entry = TradeJournal(
+        id="tj_candidate",
+        stock_code="000001",
+        stock_name="平安银行",
+        status="candidate",
+        market_phase="repair",
+        theme_role="mainline",
+        stock_role="core",
+        entry_reason="RankTrend 持续上行，题材扩散，情绪修复",
+        trade_hypothesis="未来 3-5 天沿主线继续走强",
+        entry_prerequisites="次日不弱于题材，排名不明显回落",
+        invalidation_rules="题材退潮或 RankTrend 断档",
+        expected_holding_days=3,
+        human_decision="watch",
+        signals_snapshot={"rankTrend": {"candidateTier": "B_IGNITION"}},
+    )
+
+    saved = repo.save_journal_entry(entry)
+    row = repo.get_journal_entry(saved.id)
+
+    assert row["id"] == "tj_candidate"
+    assert row["status"] == "candidate"
+    assert row["marketPhase"] == "repair"
+    assert row["themeRole"] == "mainline"
+    assert row["stockRole"] == "core"
+    assert row["tradeHypothesis"] == "未来 3-5 天沿主线继续走强"
+    assert row["expectedHoldingDays"] == 3
+    assert row["signalsSnapshot"]["rankTrend"]["candidateTier"] == "B_IGNITION"
+
+
+def test_mongo_research_repository_filters_journal_entries_by_status() -> None:
+    db = FakeMongoDatabase()
+    repo = MongoResearchRepository(db)
+    repo.save_journal_entry(TradeJournal(id="tj_1", stock_code="000001", stock_name="a", status="candidate"))
+    repo.save_journal_entry(TradeJournal(id="tj_2", stock_code="000002", stock_name="b", status="reviewed"))
+
+    rows = repo.list_journal_entries(status="candidate")
+
+    assert [row["id"] for row in rows] == ["tj_1"]
+
+
+def test_mongo_research_repository_updates_review_result_separately_from_execution() -> None:
+    db = FakeMongoDatabase()
+    repo = MongoResearchRepository(db)
+    repo.save_journal_entry(TradeJournal(id="tj_1", stock_code="000001", stock_name="a", status="triggered"))
+
+    row = repo.update_journal_entry(
+        "tj_1",
+        {
+            "status": "reviewed",
+            "reviewOutcome": "success",
+            "modelResult": "correct",
+            "executionResult": "missed",
+            "skipReason": "盘中未确认仓位",
+            "reviewNotes": "模型判断正确，但没有执行",
+        },
+    )
+
+    assert row["status"] == "reviewed"
+    assert row["modelResult"] == "correct"
+    assert row["executionResult"] == "missed"
+    assert row["skipReason"] == "盘中未确认仓位"
+    assert row["reviewNotes"] == "模型判断正确，但没有执行"
+
+
+def test_mongo_research_repository_journal_stats_include_status_and_review_breakdowns() -> None:
+    db = FakeMongoDatabase()
+    repo = MongoResearchRepository(db)
+    repo.save_journal_entry(
+        TradeJournal(
+            id="tj_1",
+            stock_code="000001",
+            stock_name="a",
+            status="candidate",
+            review_tags=["主线确认"],
+        )
+    )
+    repo.save_journal_entry(
+        TradeJournal(
+            id="tj_2",
+            stock_code="000002",
+            stock_name="b",
+            trade_type="exit",
+            status="reviewed",
+            review_tags=["主线确认", "模型正确"],
+            pnl=1200,
+            model_result="correct",
+            execution_result="missed",
+        )
+    )
+
+    stats = repo.get_journal_stats()
+
+    assert stats["tagCounts"] == {"主线确认": 2, "模型正确": 1}
+    assert stats["statusCounts"] == {"candidate": 1, "reviewed": 1}
+    assert stats["modelResultCounts"] == {"unknown": 1, "correct": 1}
+    assert stats["executionResultCounts"] == {"unknown": 1, "missed": 1}
+    assert stats["totalPnl"] == 1200
+    assert stats["winRate"] == 1
+    assert stats["totalExits"] == 1
 
 
 def test_backtest_service_runs_on_mongodb_snapshots_without_historical_research(monkeypatch) -> None:

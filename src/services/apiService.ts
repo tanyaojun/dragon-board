@@ -312,7 +312,7 @@ export class ApiService {
     if (url.includes('/api/tdx')) return 'tdx'
     if (url.includes('/api/limitup') || url.includes('/api/surge-stock')) return 'limitup'
     if (url.includes('/api/market')) return 'market'
-    if (url.includes('/api/snapshots/') || url.includes('/api/themes/')) return 'quant-board'
+    if (url.includes('/api/snapshots/') || url.includes('/api/themes/') || url.includes('/api/journal/')) return 'quant-board'
     return 'unknown'
   }
 
