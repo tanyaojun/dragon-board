@@ -17,6 +17,7 @@ import { registerHotlistRoutes } from './routes/hotlists.js'
 import { registerMarketRoutes } from './routes/market.js'
 import { registerQuoteRoutes } from './routes/quotes.js'
 import { registerTdxRoutes } from './routes/tdx.js'
+import { registerXuangubaoRoutes } from './routes/xuangubao.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -65,6 +66,7 @@ export function createProxyApp(options = {}) {
   registerBigOrderRoutes(app, context)
   registerTdxRoutes(app, context)
   registerMarketRoutes(app, context)
+  registerXuangubaoRoutes(app, context)
 
   app.use('/static', express.static(join(__dirname, 'public')))
 

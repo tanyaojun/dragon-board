@@ -1,0 +1,76 @@
+import type { MergedStock } from '@/types/data-layer'
+import type { DragonReviewResult } from '../dragon/types'
+
+export type HotStockEventDirection = 'up' | 'down' | 'neutral'
+export type HotStockEventSeverity = 'normal' | 'important'
+
+export type HotStockAbnormalEventType =
+  | 10001
+  | 10005
+  | 10003
+  | 10007
+  | 10002
+  | 10006
+  | 10004
+  | 10008
+  | 10012
+  | 10014
+  | 10009
+  | 10010
+
+export interface HotStockAbnormalEvent {
+  id: string
+  eventType: HotStockAbnormalEventType
+  type: HotStockAbnormalEventType
+  typeName: string
+  direction: HotStockEventDirection
+  severity: HotStockEventSeverity
+  timestamp: number
+  code: string
+  name: string
+  changePct: number | null
+  price: number | null
+  relatedPlates: string[]
+  matchedHotStock: boolean
+  matchedCandidate: boolean
+  raw: unknown
+}
+
+export interface HotStockEventFetcher {
+  fetchEvents: () => Promise<HotStockAbnormalEvent[]>
+}
+
+export interface HotStockEventDataLayer {
+  getStocks: () => MergedStock[]
+  getDragonReview: () => (DragonReviewResult & { candidates?: Array<{ code?: string }> }) | null
+}
+
+export interface HotStockEventRefreshResult {
+  ok: boolean
+  added: number
+  events: HotStockAbnormalEvent[]
+  watchedCodes: string[]
+  error?: string
+}
+
+export interface HotStockEventMonitorState {
+  events: HotStockAbnormalEvent[]
+  latestAdded: HotStockAbnormalEvent[]
+  watchedCodes: string[]
+  lastUpdate: number | null
+  loading: boolean
+  running: boolean
+  error: string | null
+}
+
+export function normalizeHotStockCode(code: unknown): string {
+  const raw = String(code || '').trim().toUpperCase()
+  if (!raw) return ''
+
+  const withoutSuffix = raw.replace(/\.(?:SZ|SS|SH|BJ)$/i, '')
+  const withoutPrefix = withoutSuffix.replace(/^(?:SZ|SS|SH|BJ)/i, '')
+  if (/^\d{6}$/.test(withoutPrefix)) return withoutPrefix
+
+  const digits = withoutPrefix.replace(/\D/g, '')
+  return /^\d{6}$/.test(digits) ? digits : ''
+}

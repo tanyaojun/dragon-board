@@ -37,6 +37,10 @@
           <span class="icon">🎯</span>
         </button>
 
+        <button ref="eventMonitorBtnRef" class="btn-icon" title="异动监控" @click="openPanel('eventMonitor', $event)">
+          <span class="icon">🔔</span>
+        </button>
+
         <!-- 龙头监测 -->
         <button ref="dragonBtnRef" class="btn-icon" title="龙头监测 (Ctrl+D)" @click="openPanel('dragon', $event)">
           <span class="icon">🐲</span>
@@ -154,6 +158,8 @@
     <ExportPanel v-model:visible="panels.export" :trigger-rect="panelRects.export" @close="panels.export = false" />
     <FavoritePanel v-model:visible="panels.favorite" @close="panels.favorite = false" />
     <TradeJournalPanel v-model:visible="panels.journal" @close="panels.journal = false" />
+    <HotStockEventMonitorPanel v-model:visible="panels.eventMonitor" :trigger-rect="panelRects.eventMonitor"
+      @close="panels.eventMonitor = false" @select-stock="handleSelectStock" />
     <ContextMenu />
     <StockL2DetailPanel :visible="panels.stockDetail" :stock-code="selectedStockCode"
       :stock-name="selectedStockName" :trigger-rect="panelRects.stockDetail"
@@ -201,6 +207,7 @@ const SectorDetail = defineAsyncComponent(() => import('./components/panels/Sect
 const SectorAlert = defineAsyncComponent(() => import('./components/panels/SectorAlert.vue'))
 const SectorRotation = defineAsyncComponent(() => import('./components/panels/SectorRotation.vue'))
 const ThemeRiskDashboard = defineAsyncComponent(() => import('./components/panels/ThemeRiskDashboard.vue'))
+const HotStockEventMonitorPanel = defineAsyncComponent(() => import('./components/panels/HotStockEventMonitorPanel.vue'))
 import TradeJournalPanel from './components/panels/TradeJournalPanel.vue'
 
 // Stores
@@ -273,6 +280,7 @@ const algorithmBtnRef = ref<HTMLElement>()
 const favoriteBtnRef = ref<HTMLElement>()
 const dropdownRef = ref<HTMLElement | null>(null)
 const themeRiskBtnRef = ref<HTMLElement>()
+const eventMonitorBtnRef = ref<HTMLElement>()
 
 // 导航标签
 const navTabs = [
@@ -280,6 +288,7 @@ const navTabs = [
   { id: 'dragon', label: '龙头监测', icon: '🐲' },
   { id: 'emotion', label: '龙息监测', icon: '📈' },
   { id: 'sector', label: '题材热点', icon: '🎯' },
+  { id: 'events', label: '异动监控', icon: '🔔' },
   { id: 'algorithm', label: '算法中心', icon: '🧠' },
 ]
 
@@ -300,6 +309,7 @@ const panels = ref({
   themeRisk: false,
   stockDetail: false,
   journal: false,
+  eventMonitor: false,
 })
 
 const panelRects = ref<Record<string, DOMRect | undefined>>({})
@@ -403,6 +413,7 @@ const handleTabChange = (tabId: string) => {
     dragon: 'dragon',
     emotion: 'breath',
     sector: 'sector',
+    events: 'eventMonitor',
     algorithm: 'algorithm',
   }
   if (panelMap[tabId]) {

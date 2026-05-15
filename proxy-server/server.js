@@ -32,6 +32,7 @@ const formalRoutes = [
   'GET  /api/limitup/10jqka',
   'GET  /api/limitup/detail',
   'GET  /api/surge-stock/performance',
+  'GET  /api/xuangubao/events',
   'GET  /api/market/overview',
   'GET  /api/sentiment/composite',
   'GET  /api/big-order/main-monitor',
