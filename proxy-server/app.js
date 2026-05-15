@@ -14,6 +14,7 @@ import { registerBigOrderRoutes } from './routes/bigOrder.js'
 import { registerDeprecatedRoutes } from './routes/deprecated.js'
 import { registerDocsRoutes } from './routes/docs.js'
 import { registerHotlistRoutes } from './routes/hotlists.js'
+import { registerLocalVoiceRoutes } from './routes/localVoice.js'
 import { registerMarketRoutes } from './routes/market.js'
 import { registerQuoteRoutes } from './routes/quotes.js'
 import { registerTdxRoutes } from './routes/tdx.js'
@@ -35,6 +36,7 @@ export function createProxyApp(options = {}) {
     readConfig,
     cache,
     port,
+    localVoice: options.localVoice,
   }
 
   app.use(cors({ origin: '*', methods: ['GET', 'POST'] }))
@@ -64,6 +66,7 @@ export function createProxyApp(options = {}) {
   registerQuoteRoutes(app, context)
   registerDeprecatedRoutes(app, context)
   registerBigOrderRoutes(app, context)
+  registerLocalVoiceRoutes(app, context)
   registerTdxRoutes(app, context)
   registerMarketRoutes(app, context)
   registerXuangubaoRoutes(app, context)

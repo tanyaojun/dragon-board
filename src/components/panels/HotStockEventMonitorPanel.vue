@@ -52,6 +52,7 @@
 
     <div class="speech-row">
       <span>语音提醒</span>
+      <span class="speech-mode">{{ speechModeLabel }}</span>
       <label class="speech-toggle">
         <input v-model="speechEnabled" type="checkbox" :disabled="!speechSupported" />
         <span>{{ speechEnabled ? '开' : '关' }}</span>
@@ -180,6 +181,7 @@ const state = ref<HotStockEventMonitorState>(blankState)
 const enabledTypes = ref<HotStockAbnormalEventType[]>([...XUANGUBAO_STOCK_ABNORMAL_EVENT_TYPES])
 const speechSupported = ref(hotStockEventSpeechService.isSupported())
 const speechEnabled = ref(speechSupported.value)
+const speechMode = ref(hotStockEventSpeechService.getStatus().mode)
 
 const close = () => {
   emit('update:visible', false)
@@ -213,6 +215,12 @@ const filteredEvents = computed(() => {
   })
 })
 
+const speechModeLabel = computed(() => {
+  if (speechMode.value === 'local') return '本地语音'
+  if (speechMode.value === 'browser') return '浏览器兜底'
+  return '未连接'
+})
+
 function setAllTypes(checked: boolean) {
   enabledTypes.value = checked ? [...XUANGUBAO_STOCK_ABNORMAL_EVENT_TYPES] : []
 }
@@ -240,8 +248,20 @@ function selectStock(event: HotStockAbnormalEvent) {
   emit('select-stock', event.code)
 }
 
-function testSpeech() {
-  hotStockEventSpeechService.speakTest()
+async function refreshSpeechStatus() {
+  const status = await hotStockEventSpeechService.refreshStatus()
+  speechMode.value = status.mode
+  speechSupported.value = status.supported
+  if (status.supported && !speechEnabled.value) {
+    speechEnabled.value = true
+  }
+}
+
+async function testSpeech() {
+  await hotStockEventSpeechService.speakTest()
+  const status = hotStockEventSpeechService.getStatus()
+  speechMode.value = status.mode
+  speechSupported.value = status.supported
 }
 
 let unsubscribe: (() => void) | null = null
@@ -250,11 +270,12 @@ watch(
   () => props.visible,
   (visible) => {
     if (visible) {
+      void refreshSpeechStatus()
       if (!unsubscribe) {
         unsubscribe = hotStockEventMonitorService.subscribe((nextState) => {
           state.value = nextState
           if (speechEnabled.value) {
-            hotStockEventSpeechService.handleLatestAdded(nextState.latestAdded)
+            void hotStockEventSpeechService.handleLatestAdded(nextState.latestAdded)
           }
         })
       }
@@ -465,6 +486,12 @@ onUnmounted(() => {
   align-items: center;
   gap: 4px;
   color: var(--text-primary);
+}
+
+.speech-mode {
+  margin-left: auto;
+  color: #7aa7d9;
+  font-size: 11px;
 }
 
 .speech-disabled {
