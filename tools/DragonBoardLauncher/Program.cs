@@ -18,6 +18,8 @@ internal static class Program
 internal sealed class LauncherForm : Form
 {
     private const string AutoStartName = "DragonBoardLauncher";
+    private const string VoiceServiceKey = "voice";
+    private const int VoiceWorkerPort = 32145;
 
     private readonly string _root;
     private readonly Dictionary<string, ManagedService> _services;
@@ -44,11 +46,21 @@ internal sealed class LauncherForm : Form
     {
         _root = FindProjectRoot();
         var quantRoot = Path.Combine(_root, "quant-board");
+        var voiceWorkerExe = Path.Combine(_root, "tools", "VoiceWorker", "bin", "Release", "net8.0-windows", "VoiceWorker.exe");
         _services = new Dictionary<string, ManagedService>
         {
             ["mongo"] = new("MongoDB 数据库", 27017, @"D:\APP_SOFT\MongoDB\bin", @"D:\APP_SOFT\MongoDB\bin\mongod.exe", @"--dbpath D:\APP_SOFT\MongoDB\data --logpath D:\APP_SOFT\MongoDB\log\mongod.log --port 27017"),
             ["redis"] = new("Redis 缓存", 6379, @"D:\APP_SOFT\redis", @"D:\APP_SOFT\redis\redis-server.exe", @"D:\APP_SOFT\redis\redis.windows-service.conf"),
             ["proxy"] = new("本地代理服务", 3000, Path.Combine(_root, "proxy-server"), "node", "server.js"),
+            [VoiceServiceKey] = new(
+                "本地语音服务",
+                VoiceWorkerPort,
+                _root,
+                voiceWorkerExe,
+                "",
+                "dotnet",
+                @"run --project tools\VoiceWorker\VoiceWorker.csproj",
+                isVoiceWorker: true),
             ["frontend"] = new("龙头看板前端", 5173, _root, "cmd.exe", "/c node node_modules/vite/bin/vite.js --host 127.0.0.1 --port 5173"),
             ["bridge"] = new("通达信行情桥", 8765, _root, "python", "python-bridge/main.py"),
             ["quant-api"] = new(
@@ -63,8 +75,8 @@ internal sealed class LauncherForm : Form
 
         Text = "龙头看板 · 启动管理器";
         Width = 660;
-        Height = 740;
-        MinimumSize = new Size(600, 620);
+        Height = 820;
+        MinimumSize = new Size(600, 760);
         StartPosition = FormStartPosition.CenterScreen;
         BackColor = _bg;
         ForeColor = _text;
@@ -111,8 +123,8 @@ internal sealed class LauncherForm : Form
         Controls.Add(titlePanel);
 
         int y = titlePanel.Bottom + 8;
-        var iconKeys = new[] { "DB", "RD", "PX", "FE", "BR", "QA", "QU" };
-        var keys = new[] { "mongo", "redis", "proxy", "frontend", "bridge", "quant-api", "quant-ui" };
+        var iconKeys = new[] { "DB", "RD", "PX", "VO", "FE", "BR", "QA", "QU" };
+        var keys = new[] { "mongo", "redis", "proxy", VoiceServiceKey, "frontend", "bridge", "quant-api", "quant-ui" };
         for (int i = 0; i < keys.Length; i++)
         {
             var card = BuildServiceCard(_services[keys[i]], iconKeys[i], keys[i], y);
@@ -345,6 +357,7 @@ internal sealed class LauncherForm : Form
         StartService(_services["mongo"]);
         StartService(_services["redis"]);
         StartService(_services["proxy"]);
+        StartService(_services[VoiceServiceKey]);
         StartService(_services["frontend"]);
         StartService(_services["bridge"]);
         StartService(_services["quant-api"]);
@@ -358,6 +371,7 @@ internal sealed class LauncherForm : Form
         StopService(_services["quant-api"]);
         StopService(_services["bridge"]);
         StopService(_services["frontend"]);
+        StopService(_services[VoiceServiceKey]);
         StopService(_services["proxy"]);
         StopService(_services["redis"]);
         StopService(_services["mongo"]);
@@ -564,6 +578,13 @@ internal sealed class LauncherForm : Form
 
             StopStartedProcess(service);
 
+            if (service.IsVoiceWorker)
+            {
+                if (IsVoiceWorkerHealthy())
+                    Log("本地语音服务由外部进程占用，未按端口强制结束。");
+                return;
+            }
+
             var pids = GetPidsByPort(service.Port);
             foreach (var pid in pids)
             {
@@ -617,6 +638,7 @@ internal sealed class LauncherForm : Form
         StopStartedProcess(_services["quant-api"]);
         StopStartedProcess(_services["bridge"]);
         StopStartedProcess(_services["frontend"]);
+        StopStartedProcess(_services[VoiceServiceKey]);
         StopStartedProcess(_services["proxy"]);
         StopStartedProcess(_services["redis"]);
         StopStartedProcess(_services["mongo"]);
@@ -680,10 +702,31 @@ internal sealed class LauncherForm : Form
 
     private static bool IsServiceRunning(ManagedService service)
     {
+        if (service.IsVoiceWorker)
+            return IsVoiceWorkerHealthy();
+
         if (service.Port is 5173 or 5174)
             return IsTcpListeningOn("127.0.0.1", service.Port);
 
         return IsPortOpen(service.Port);
+    }
+
+    private static bool IsVoiceWorkerHealthy()
+    {
+        try
+        {
+            using var client = new HttpClient { Timeout = TimeSpan.FromMilliseconds(700) };
+            var response = client.GetAsync($"http://127.0.0.1:{VoiceWorkerPort}/health").GetAwaiter().GetResult();
+            if (!response.IsSuccessStatusCode)
+                return false;
+
+            var body = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+            return body.Contains("\"service\":\"VoiceWorker\"", StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static bool IsTcpListeningOn(string host, int port)
@@ -859,7 +902,8 @@ internal sealed class ManagedService
         string arguments,
         string? fallbackFileName = null,
         string? fallbackArguments = null,
-        Dictionary<string, string>? envVars = null)
+        Dictionary<string, string>? envVars = null,
+        bool isVoiceWorker = false)
     {
         Name = name;
         Port = port;
@@ -869,6 +913,7 @@ internal sealed class ManagedService
         FallbackFileName = fallbackFileName;
         FallbackArguments = fallbackArguments;
         EnvVars = envVars;
+        IsVoiceWorker = isVoiceWorker;
     }
 
     public string Name { get; }
@@ -879,5 +924,6 @@ internal sealed class ManagedService
     public string? FallbackFileName { get; }
     public string? FallbackArguments { get; }
     public Dictionary<string, string>? EnvVars { get; }
+    public bool IsVoiceWorker { get; }
     public Process? Process { get; set; }
 }
