@@ -1,8 +1,5 @@
 using System.Net;
-using System.Text;
 using System.Text.Json;
-using System.Speech.Synthesis;
-using System.Collections.Concurrent;
 
 const string DefaultPrefix = "http://127.0.0.1:32145/";
 const string TestText = "热榜异动本地语音测试，当前语音提醒正常";
@@ -98,91 +95,6 @@ static async Task WriteJsonAsync(HttpListenerResponse response, int statusCode, 
   response.ContentLength64 = bytes.Length;
   await response.OutputStream.WriteAsync(bytes);
   response.Close();
-}
-
-sealed class VoiceWorker : IDisposable
-{
-  private readonly ConcurrentQueue<string> _queue = new();
-  private readonly AutoResetEvent _signal = new(false);
-  private readonly Thread _thread;
-  private readonly SpeechSynthesizer _speaker = new();
-  private volatile bool _disposed;
-  private volatile bool _speaking;
-  private string _currentText = "";
-
-  public VoiceWorker()
-  {
-    _speaker.Rate = 1;
-    _speaker.Volume = 100;
-    _thread = new Thread(Run)
-    {
-      IsBackground = true,
-      Name = "VoiceWorker.SpeechLoop",
-    };
-    _thread.SetApartmentState(ApartmentState.STA);
-    _thread.Start();
-  }
-
-  public int QueueLength => _queue.Count + (_speaking ? 1 : 0);
-
-  public object GetStatus() => new
-  {
-    ok = true,
-    supported = OperatingSystem.IsWindows(),
-    speaking = _speaking,
-    currentText = _currentText,
-    queueLength = QueueLength,
-  };
-
-  public void Enqueue(string text)
-  {
-    _queue.Enqueue(text);
-    _signal.Set();
-  }
-
-  public void Stop()
-  {
-    while (_queue.TryDequeue(out _)) { }
-    _speaker.SpeakAsyncCancelAll();
-    _currentText = "";
-    _speaking = false;
-  }
-
-  public void Dispose()
-  {
-    _disposed = true;
-    _signal.Set();
-    _speaker.Dispose();
-    _signal.Dispose();
-  }
-
-  private void Run()
-  {
-    while (!_disposed)
-    {
-      if (!_queue.TryDequeue(out var text))
-      {
-        _signal.WaitOne();
-        continue;
-      }
-
-      _currentText = text;
-      _speaking = true;
-      try
-      {
-        _speaker.Speak(text);
-      }
-      catch (Exception error)
-      {
-        Console.Error.WriteLine($"VoiceWorker speak failed: {error.Message}");
-      }
-      finally
-      {
-        _speaking = false;
-        _currentText = "";
-      }
-    }
-  }
 }
 
 sealed record SpeakRequest(string? Text);

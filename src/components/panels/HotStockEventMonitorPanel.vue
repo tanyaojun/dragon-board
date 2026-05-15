@@ -182,6 +182,7 @@ const enabledTypes = ref<HotStockAbnormalEventType[]>([...XUANGUBAO_STOCK_ABNORM
 const speechSupported = ref(hotStockEventSpeechService.isSupported())
 const speechEnabled = ref(speechSupported.value)
 const speechMode = ref(hotStockEventSpeechService.getStatus().mode)
+const speechEngine = ref(hotStockEventSpeechService.getStatus().engine)
 
 const close = () => {
   emit('update:visible', false)
@@ -216,6 +217,7 @@ const filteredEvents = computed(() => {
 })
 
 const speechModeLabel = computed(() => {
+  if (speechMode.value === 'local' && speechEngine.value === 'volcengine') return '火山语音'
   if (speechMode.value === 'local') return '本地语音'
   return 'VoiceWorker 未连接'
 })
@@ -250,6 +252,7 @@ function selectStock(event: HotStockAbnormalEvent) {
 async function refreshSpeechStatus() {
   const status = await hotStockEventSpeechService.refreshStatus()
   speechMode.value = status.mode
+  speechEngine.value = status.engine
   speechSupported.value = status.supported
   if (status.supported && !speechEnabled.value) {
     speechEnabled.value = true
@@ -260,6 +263,7 @@ async function testSpeech() {
   await hotStockEventSpeechService.speakTest()
   const status = hotStockEventSpeechService.getStatus()
   speechMode.value = status.mode
+  speechEngine.value = status.engine
   speechSupported.value = status.supported
 }
 

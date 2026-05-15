@@ -13,6 +13,7 @@ export interface HotStockEventSpeechStatus {
   mode: SpeechMode
   supported: boolean
   queueLength: number
+  engine?: string
 }
 
 const LOCAL_SPEAK_ENDPOINT = '/api/local-voice/speak'
@@ -72,12 +73,17 @@ export class HotStockEventSpeechService {
     try {
       const response = await this.fetcher(LOCAL_STATUS_ENDPOINT)
       if (!response.ok) throw new Error(`local voice status failed: ${response.status}`)
-      const payload = await response.json() as { supported?: boolean; queueLength?: number }
+      const payload = await response.json() as {
+        supported?: boolean
+        queueLength?: number
+        engine?: string
+      }
       if (payload.supported) {
         this.status = {
           mode: 'local',
           supported: true,
           queueLength: Number(payload.queueLength || 0),
+          engine: payload.engine || 'unknown',
         }
         return this.getStatus()
       }

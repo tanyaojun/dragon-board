@@ -87,13 +87,13 @@ describe('HotStockEventSpeechService', () => {
   it('reports local voice support status', async () => {
     const fetcher = vi.fn(async () => ({
       ok: true,
-      json: async () => ({ ok: true, supported: true, queueLength: 0 }),
+      json: async () => ({ ok: true, supported: true, engine: 'volcengine', queueLength: 0 }),
     }) as Response)
     const service = new HotStockEventSpeechService({ fetcher })
 
     const status = await service.refreshStatus()
 
-    expect(status).toEqual({ mode: 'local', supported: true, queueLength: 0 })
+    expect(status).toEqual({ mode: 'local', supported: true, engine: 'volcengine', queueLength: 0 })
   })
 
   it('merges at most three new events into one announcement', async () => {

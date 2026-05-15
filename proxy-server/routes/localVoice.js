@@ -57,6 +57,7 @@ export function registerLocalVoiceRoutes(app, context = {}) {
         source: 'local-voice',
         workerOnline: true,
         supported: Boolean(status.supported),
+        engine: status.engine || 'unknown',
         speaking: Boolean(status.speaking),
         queueLength: Number(status.queueLength || 0),
       })

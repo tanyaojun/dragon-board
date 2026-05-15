@@ -15,7 +15,7 @@ function listen(app) {
 test('local voice proxies status and commands to voice worker', async () => {
   const calls = []
   const localVoice = {
-    status: async () => ({ supported: true, queueLength: 0, speaking: false }),
+    status: async () => ({ supported: true, engine: 'volcengine', queueLength: 0, speaking: false }),
     speak: async (text) => calls.push(['speak', text]),
     test: async () => calls.push(['test']),
     stop: async () => calls.push(['stop']),
@@ -30,6 +30,7 @@ test('local voice proxies status and commands to voice worker', async () => {
     assert.equal(statusBody.ok, true)
     assert.equal(statusBody.supported, true)
     assert.equal(statusBody.workerOnline, true)
+    assert.equal(statusBody.engine, 'volcengine')
 
     const speakResponse = await fetch(`${baseUrl}/api/local-voice/speak`, {
       method: 'POST',
