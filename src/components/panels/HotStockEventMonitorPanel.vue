@@ -217,8 +217,7 @@ const filteredEvents = computed(() => {
 
 const speechModeLabel = computed(() => {
   if (speechMode.value === 'local') return '本地语音'
-  if (speechMode.value === 'browser') return '浏览器兜底'
-  return '未连接'
+  return 'VoiceWorker 未连接'
 })
 
 function setAllTypes(checked: boolean) {
