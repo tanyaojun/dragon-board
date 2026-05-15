@@ -428,6 +428,8 @@ internal sealed class LauncherForm : Form
             if (service.EnvVars != null)
                 foreach (var kv in service.EnvVars)
                     info.Environment[kv.Key] = kv.Value;
+            if (service.IsVoiceWorker)
+                LoadVoiceWorkerEnv(info);
 
             var process = new Process { StartInfo = info, EnableRaisingEvents = true };
             process.OutputDataReceived += (_, e) => { if (!string.IsNullOrWhiteSpace(e.Data)) Log($"[{service.Name}] {e.Data}"); };
@@ -489,6 +491,18 @@ internal sealed class LauncherForm : Form
         {
             Log($"启动 Mongo Express 失败: {ex.Message}");
         }
+    }
+
+    private void LoadVoiceWorkerEnv(ProcessStartInfo info)
+    {
+        var envPath = Path.Combine(_root, "tools", "VoiceWorker", ".env.local");
+        var values = EnvFileLoader.Load(envPath);
+        if (values.Count == 0) return;
+
+        foreach (var kv in values)
+            info.Environment[kv.Key] = kv.Value;
+
+        Log($"本地语音服务已加载环境变量: {envPath} ({values.Count} 项)。");
     }
 
     private void StopMongoExpress()
