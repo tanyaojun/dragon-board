@@ -1,60 +1,71 @@
-import { spawn } from 'node:child_process'
-import os from 'node:os'
-
-const TEST_TEXT = '热榜异动本地语音测试，当前语音提醒正常'
+const DEFAULT_WORKER_URL = 'http://127.0.0.1:32145'
 const MAX_TEXT_LENGTH = 200
 
-export function createWindowsSapiVoice() {
-  return {
-    isSupported() {
-      return os.platform() === 'win32'
-    },
-    speak(text) {
-      if (os.platform() !== 'win32') {
-        return Promise.reject(new Error('local voice only supports Windows SAPI'))
+export function createVoiceWorkerClient(options = {}) {
+  const baseUrl = String(options.baseUrl || process.env.VOICE_WORKER_URL || DEFAULT_WORKER_URL).replace(/\/$/, '')
+  const fetcher = options.fetcher || globalThis.fetch?.bind(globalThis)
+  const timeoutMs = Number(options.timeoutMs || 1500)
+
+  async function request(path, init = {}) {
+    if (!fetcher) throw new Error('fetch is not available')
+
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
+    try {
+      const response = await fetcher(`${baseUrl}${path}`, {
+        ...init,
+        signal: controller.signal,
+      })
+      const payload = await safeJson(response)
+      if (!response.ok || payload?.ok === false) {
+        throw new Error(payload?.message || `voice worker request failed: ${response.status}`)
       }
-      return speakWithPowerShell(text)
+      return payload || {}
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
+  return {
+    async status() {
+      return request('/status')
     },
-    stop() {},
+    async speak(text) {
+      return request('/speak', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ text }),
+      })
+    },
+    async test() {
+      return request('/test', { method: 'POST' })
+    },
+    async stop() {
+      return request('/stop', { method: 'POST' })
+    },
   }
 }
 
 export function registerLocalVoiceRoutes(app, context = {}) {
-  const localVoice = context.localVoice || createWindowsSapiVoice()
-  const queue = []
-  let speaking = false
+  const localVoice = context.localVoice || createVoiceWorkerClient()
 
-  async function drainQueue() {
-    if (speaking) return
-    const text = queue.shift()
-    if (!text) return
-
-    speaking = true
+  app.get('/api/local-voice/status', async (req, res) => {
     try {
-      await localVoice.speak(text)
+      const status = await localVoice.status()
+      res.json({
+        ok: true,
+        source: 'local-voice',
+        workerOnline: true,
+        supported: Boolean(status.supported),
+        speaking: Boolean(status.speaking),
+        queueLength: Number(status.queueLength || 0),
+      })
     } catch (error) {
-      console.warn('[local-voice] speak failed:', error?.message || error)
-    } finally {
-      speaking = false
-      void drainQueue()
+      res.json(buildWorkerOfflineEnvelope(error))
     }
-  }
-
-  function enqueue(text) {
-    queue.push(text)
-    void drainQueue()
-  }
-
-  app.get('/api/local-voice/status', (req, res) => {
-    res.json({
-      ok: true,
-      source: 'local-voice',
-      supported: Boolean(localVoice.isSupported()),
-      queueLength: queue.length + (speaking ? 1 : 0),
-    })
   })
 
-  app.post('/api/local-voice/speak', (req, res) => {
+  app.post('/api/local-voice/speak', async (req, res) => {
     const text = normalizeSpeechText(req.body?.text)
     if (!text) {
       res.status(400).json({
@@ -66,53 +77,44 @@ export function registerLocalVoiceRoutes(app, context = {}) {
       return
     }
 
-    if (!localVoice.isSupported()) {
-      res.status(503).json({
-        ok: false,
+    try {
+      const result = await localVoice.speak(text)
+      res.json({
+        ok: true,
         source: 'local-voice',
-        errorCode: 'local_voice_unsupported',
-        message: 'local voice is not supported on this host',
+        queued: result.queued !== false,
+        queueLength: Number(result.queueLength || 0),
       })
-      return
+    } catch (error) {
+      res.status(503).json(buildWorkerOfflineEnvelope(error))
     }
-
-    enqueue(text)
-    res.json({
-      ok: true,
-      source: 'local-voice',
-      queued: true,
-      queueLength: queue.length + (speaking ? 1 : 0),
-    })
   })
 
-  app.post('/api/local-voice/test', (req, res) => {
-    if (!localVoice.isSupported()) {
-      res.status(503).json({
-        ok: false,
+  app.post('/api/local-voice/test', async (req, res) => {
+    try {
+      const result = await localVoice.test()
+      res.json({
+        ok: true,
         source: 'local-voice',
-        errorCode: 'local_voice_unsupported',
-        message: 'local voice is not supported on this host',
+        queued: result.queued !== false,
+        queueLength: Number(result.queueLength || 0),
       })
-      return
+    } catch (error) {
+      res.status(503).json(buildWorkerOfflineEnvelope(error))
     }
-
-    enqueue(TEST_TEXT)
-    res.json({
-      ok: true,
-      source: 'local-voice',
-      queued: true,
-      queueLength: queue.length + (speaking ? 1 : 0),
-    })
   })
 
-  app.post('/api/local-voice/stop', (req, res) => {
-    queue.length = 0
-    localVoice.stop()
-    res.json({
-      ok: true,
-      source: 'local-voice',
-      queueLength: 0,
-    })
+  app.post('/api/local-voice/stop', async (req, res) => {
+    try {
+      const result = await localVoice.stop()
+      res.json({
+        ok: true,
+        source: 'local-voice',
+        queueLength: Number(result.queueLength || 0),
+      })
+    } catch (error) {
+      res.status(503).json(buildWorkerOfflineEnvelope(error))
+    }
   })
 }
 
@@ -121,27 +123,22 @@ function normalizeSpeechText(value) {
   return text.slice(0, MAX_TEXT_LENGTH)
 }
 
-function speakWithPowerShell(text) {
-  const escapedText = text.replace(/'/g, "''")
-  const script = [
-    'Add-Type -AssemblyName System.Speech',
-    '$speaker = New-Object System.Speech.Synthesis.SpeechSynthesizer',
-    '$speaker.Rate = 1',
-    '$speaker.Volume = 100',
-    `$speaker.Speak('${escapedText}')`,
-  ].join('; ')
+async function safeJson(response) {
+  try {
+    return await response.json()
+  } catch {
+    return null
+  }
+}
 
-  return new Promise((resolve, reject) => {
-    const child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], {
-      windowsHide: true,
-    })
-    child.on('error', reject)
-    child.on('exit', (code) => {
-      if (code === 0) {
-        resolve()
-        return
-      }
-      reject(new Error(`powershell speech exited with code ${code}`))
-    })
-  })
+function buildWorkerOfflineEnvelope(error) {
+  return {
+    ok: false,
+    source: 'local-voice',
+    workerOnline: false,
+    supported: false,
+    queueLength: 0,
+    errorCode: 'local_voice_worker_offline',
+    message: error?.message || 'local voice worker is offline',
+  }
 }
