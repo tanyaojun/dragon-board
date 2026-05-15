@@ -50,6 +50,15 @@
       </div>
     </div>
 
+    <div class="speech-row">
+      <span>语音提醒</span>
+      <label class="speech-toggle">
+        <input v-model="speechEnabled" type="checkbox" :disabled="!speechSupported" />
+        <span>{{ speechEnabled ? '开' : '关' }}</span>
+      </label>
+      <span v-if="!speechSupported" class="speech-disabled">不可用</span>
+    </div>
+
     <div class="section-title">
       <span>⚠实时异动提醒</span>
       <span class="count-badge">{{ filteredEvents.length }}</span>
@@ -100,6 +109,9 @@
       <button class="refresh-btn" type="button" :disabled="state.loading" @click="refresh">
         {{ state.loading ? '刷新中' : '刷新' }}
       </button>
+      <button class="refresh-btn" type="button" :disabled="!speechSupported" @click="testSpeech">
+        语音测试
+      </button>
       <span>{{ state.lastUpdate ? formatEventTime(state.lastUpdate) : '未更新' }}</span>
     </div>
   </div>
@@ -111,6 +123,7 @@ import { usePanel } from '../../composables/usePanel'
 import {
   hotStockEventMonitorService,
 } from '../../services/hotlist/HotStockEventMonitorService'
+import { hotStockEventSpeechService } from '../../services/hotlist/HotStockEventSpeechService'
 import {
   type HotStockAbnormalEvent,
   type HotStockAbnormalEventType,
@@ -165,6 +178,8 @@ const keyword = ref('')
 const showFilters = ref(false)
 const state = ref<HotStockEventMonitorState>(blankState)
 const enabledTypes = ref<HotStockAbnormalEventType[]>([...XUANGUBAO_STOCK_ABNORMAL_EVENT_TYPES])
+const speechSupported = ref(hotStockEventSpeechService.isSupported())
+const speechEnabled = ref(speechSupported.value)
 
 const close = () => {
   emit('update:visible', false)
@@ -225,6 +240,10 @@ function selectStock(event: HotStockAbnormalEvent) {
   emit('select-stock', event.code)
 }
 
+function testSpeech() {
+  hotStockEventSpeechService.speakTest()
+}
+
 let unsubscribe: (() => void) | null = null
 
 watch(
@@ -234,6 +253,9 @@ watch(
       if (!unsubscribe) {
         unsubscribe = hotStockEventMonitorService.subscribe((nextState) => {
           state.value = nextState
+          if (speechEnabled.value) {
+            hotStockEventSpeechService.handleLatestAdded(nextState.latestAdded)
+          }
         })
       }
       void hotStockEventMonitorService.refresh()
@@ -244,13 +266,19 @@ watch(
     unsubscribe?.()
     unsubscribe = null
     hotStockEventMonitorService.stop()
+    hotStockEventSpeechService.stop()
   },
   { immediate: true },
 )
 
+watch(speechEnabled, (enabled) => {
+  hotStockEventSpeechService.setEnabled(enabled)
+})
+
 onUnmounted(() => {
   unsubscribe?.()
   hotStockEventMonitorService.stop()
+  hotStockEventSpeechService.stop()
 })
 </script>
 
@@ -417,6 +445,31 @@ onUnmounted(() => {
   align-items: center;
   gap: 4px;
   color: var(--text-primary);
+}
+
+.speech-row {
+  margin: 0 10px 8px;
+  padding: 7px 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+  color: #d4a574;
+}
+
+.speech-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-primary);
+}
+
+.speech-disabled {
+  color: #ff7f50;
+  font-size: 11px;
 }
 
 .section-title {
