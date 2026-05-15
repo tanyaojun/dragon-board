@@ -7,6 +7,26 @@ import {
 } from '../XuangubaoAbnormalEventFeed'
 
 describe('XuangubaoAbnormalEventFeed', () => {
+  it('binds the default browser fetch to globalThis', async () => {
+    const originalFetch = globalThis.fetch
+    const fetcher = vi.fn(function (this: typeof globalThis) {
+      if (this !== globalThis) throw new TypeError('Illegal invocation')
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ data: [] }),
+      } as Response)
+    })
+    vi.stubGlobal('fetch', fetcher)
+
+    try {
+      const feed = new XuangubaoAbnormalEventFeed()
+      await expect(feed.fetchEvents()).resolves.toEqual([])
+      expect(fetcher).toHaveBeenCalledWith('/api/xuangubao/events')
+    } finally {
+      vi.stubGlobal('fetch', originalFetch)
+    }
+  })
+
   it('requests local proxy and parses stock abnormal events', async () => {
     const fetcher = vi.fn().mockResolvedValue({
       ok: true,

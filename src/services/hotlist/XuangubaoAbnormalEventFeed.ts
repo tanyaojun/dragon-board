@@ -170,7 +170,7 @@ export class XuangubaoAbnormalEventFeed {
 
   constructor(options: XuangubaoAbnormalEventFeedOptions = {}) {
     this.endpoint = options.endpoint || DEFAULT_ENDPOINT
-    this.fetcher = options.fetcher || fetch
+    this.fetcher = options.fetcher || globalThis.fetch.bind(globalThis)
   }
 
   async fetchEvents(): Promise<HotStockAbnormalEvent[]> {

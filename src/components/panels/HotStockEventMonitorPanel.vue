@@ -106,7 +106,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
 import { usePanel } from '../../composables/usePanel'
 import {
   hotStockEventMonitorService,
@@ -227,13 +227,26 @@ function selectStock(event: HotStockAbnormalEvent) {
 
 let unsubscribe: (() => void) | null = null
 
-onMounted(() => {
-  unsubscribe = hotStockEventMonitorService.subscribe((nextState) => {
-    state.value = nextState
-  })
-  void hotStockEventMonitorService.refresh()
-  hotStockEventMonitorService.start()
-})
+watch(
+  () => props.visible,
+  (visible) => {
+    if (visible) {
+      if (!unsubscribe) {
+        unsubscribe = hotStockEventMonitorService.subscribe((nextState) => {
+          state.value = nextState
+        })
+      }
+      void hotStockEventMonitorService.refresh()
+      hotStockEventMonitorService.start()
+      return
+    }
+
+    unsubscribe?.()
+    unsubscribe = null
+    hotStockEventMonitorService.stop()
+  },
+  { immediate: true },
+)
 
 onUnmounted(() => {
   unsubscribe?.()
@@ -244,7 +257,7 @@ onUnmounted(() => {
 <style scoped>
 .event-panel {
   position: fixed;
-  width: 292px;
+  width: 360px;
   max-width: calc(100vw - 20px);
   max-height: 86vh;
   overflow: hidden;
