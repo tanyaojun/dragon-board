@@ -4,22 +4,22 @@ using System.Text;
 public sealed class VoiceEngineTests
 {
   [Fact]
-  public void VolcengineOptionsRequiresAppIdTokenClusterAndVoiceType()
+  public void VolcengineOptionsRequiresAppIdAccessKeyResourceAndVoiceType()
   {
     var missingToken = new VolcengineTtsOptions
     {
       AppId = "app",
       AccessToken = "",
-      Cluster = "volcano_tts",
-      VoiceType = "BV001_streaming",
+      ResourceId = "volc.service_type.10029",
+      VoiceType = "S_7BMNX9V22",
     };
 
     var complete = new VolcengineTtsOptions
     {
       AppId = "app",
       AccessToken = "token",
-      Cluster = "volcano_tts",
-      VoiceType = "BV001_streaming",
+      ResourceId = "volc.service_type.10029",
+      VoiceType = "S_7BMNX9V22",
     };
 
     Assert.False(missingToken.IsConfigured);
@@ -69,9 +69,9 @@ public sealed class VoiceEngineTests
       {
         AppId = "app-id",
         AccessToken = "access-token",
-        Cluster = "volcano_tts",
-        VoiceType = "BV001_streaming",
-        Endpoint = "https://example.test/tts",
+        ResourceId = "volc.service_type.10029",
+        VoiceType = "S_7BMNX9V22",
+        Endpoint = "https://example.test/api/v3/tts/unidirectional",
       },
       httpClient,
       played.Add);
@@ -79,12 +79,15 @@ public sealed class VoiceEngineTests
     engine.Speak("热榜异动语音测试");
 
     Assert.Equal(HttpMethod.Post, handler.Request?.Method);
-    Assert.Equal("https://example.test/tts", handler.Request?.RequestUri?.ToString());
+    Assert.Equal("https://example.test/api/v3/tts/unidirectional", handler.Request?.RequestUri?.ToString());
     Assert.NotNull(handler.Request);
-    Assert.True(handler.Request.Headers.TryGetValues("Authorization", out var authorizationValues));
-    Assert.Equal("Bearer;access-token", Assert.Single(authorizationValues));
-    Assert.Contains("\"appid\":\"app-id\"", handler.Body);
-    Assert.Contains("\"voice_type\":\"BV001_streaming\"", handler.Body);
+    Assert.True(handler.Request.Headers.TryGetValues("X-Api-App-Id", out var appIds));
+    Assert.True(handler.Request.Headers.TryGetValues("X-Api-Access-Key", out var accessKeys));
+    Assert.True(handler.Request.Headers.TryGetValues("X-Api-Resource-Id", out var resourceIds));
+    Assert.Equal("app-id", Assert.Single(appIds));
+    Assert.Equal("access-token", Assert.Single(accessKeys));
+    Assert.Equal("volc.service_type.10029", Assert.Single(resourceIds));
+    Assert.Contains("\"speaker\":\"S_7BMNX9V22\"", handler.Body);
     Assert.Contains(@"""text"":""\u70ED\u699C\u5F02\u52A8\u8BED\u97F3\u6D4B\u8BD5""", handler.Body);
     Assert.Single(played);
     Assert.Equal(audioBytes, played[0]);

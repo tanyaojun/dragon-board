@@ -87,23 +87,26 @@ public sealed class VolcengineTtsOptions
 {
   public string AppId { get; init; } = "";
   public string AccessToken { get; init; } = "";
-  public string Cluster { get; init; } = "volcano_tts";
-  public string VoiceType { get; init; } = "BV001_streaming";
-  public string Endpoint { get; init; } = "https://openspeech.bytedance.com/api/v1/tts";
+  public string ResourceId { get; init; } = "";
+  public string VoiceType { get; init; } = "";
+  public string Endpoint { get; init; } = "https://openspeech.bytedance.com/api/v3/tts/unidirectional";
 
   public bool IsConfigured =>
     !string.IsNullOrWhiteSpace(AppId)
     && !string.IsNullOrWhiteSpace(AccessToken)
-    && !string.IsNullOrWhiteSpace(Cluster)
+    && !string.IsNullOrWhiteSpace(ResourceId)
     && !string.IsNullOrWhiteSpace(VoiceType);
 
   public static VolcengineTtsOptions FromEnvironment() => new()
   {
     AppId = Environment.GetEnvironmentVariable("VOLC_TTS_APP_ID") ?? "",
-    AccessToken = Environment.GetEnvironmentVariable("VOLC_TTS_ACCESS_TOKEN") ?? "",
-    Cluster = Environment.GetEnvironmentVariable("VOLC_TTS_CLUSTER") ?? "volcano_tts",
-    VoiceType = Environment.GetEnvironmentVariable("VOLC_TTS_VOICE_TYPE") ?? "BV001_streaming",
-    Endpoint = Environment.GetEnvironmentVariable("VOLC_TTS_ENDPOINT") ?? "https://openspeech.bytedance.com/api/v1/tts",
+    AccessToken = Environment.GetEnvironmentVariable("VOLC_TTS_ACCESS_KEY")
+      ?? Environment.GetEnvironmentVariable("VOLC_TTS_ACCESS_TOKEN")
+      ?? "",
+    ResourceId = Environment.GetEnvironmentVariable("VOLC_TTS_RESOURCE_ID") ?? "",
+    VoiceType = Environment.GetEnvironmentVariable("VOLC_TTS_VOICE_TYPE") ?? "",
+    Endpoint = Environment.GetEnvironmentVariable("VOLC_TTS_ENDPOINT")
+      ?? "https://openspeech.bytedance.com/api/v3/tts/unidirectional",
   };
 }
 
@@ -131,14 +134,17 @@ public sealed class VolcengineTtsEngine : IVoiceEngine
     if (!IsConfigured) throw new InvalidOperationException("volcengine tts is not configured");
 
     using var request = new HttpRequestMessage(HttpMethod.Post, _options.Endpoint);
-    request.Headers.TryAddWithoutValidation("Authorization", $"Bearer;{_options.AccessToken}");
+    request.Headers.TryAddWithoutValidation("X-Api-App-Id", _options.AppId);
+    request.Headers.TryAddWithoutValidation("X-Api-Access-Key", _options.AccessToken);
+    request.Headers.TryAddWithoutValidation("X-Api-Resource-Id", _options.ResourceId);
+    request.Headers.TryAddWithoutValidation("X-Api-Request-Id", Guid.NewGuid().ToString());
     request.Content = new StringContent(BuildRequestJson(text), Encoding.UTF8, "application/json");
 
     using var response = _client.SendAsync(request).GetAwaiter().GetResult();
     var body = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
     if (!response.IsSuccessStatusCode)
     {
-      throw new InvalidOperationException($"volcengine tts failed: {(int)response.StatusCode}");
+      throw new InvalidOperationException($"volcengine tts failed: {(int)response.StatusCode} {body}");
     }
 
     var audio = DecodeAudio(body);
@@ -152,24 +158,15 @@ public sealed class VolcengineTtsEngine : IVoiceEngine
   {
     var payload = new
     {
-      app = new
+      req_params = new
       {
-        appid = _options.AppId,
-        token = _options.AccessToken,
-        cluster = _options.Cluster,
-      },
-      user = new { uid = "dragon-board" },
-      audio = new
-      {
-        voice_type = _options.VoiceType,
-        encoding = "wav",
-        speed_ratio = 1.0,
-      },
-      request = new
-      {
-        reqid = Guid.NewGuid().ToString("N"),
         text,
-        operation = "query",
+        speaker = _options.VoiceType,
+        audio_params = new
+        {
+          format = "wav",
+          sample_rate = 24000,
+        },
       },
     };
 
@@ -179,7 +176,19 @@ public sealed class VolcengineTtsEngine : IVoiceEngine
   private static byte[] DecodeAudio(string json)
   {
     using var document = JsonDocument.Parse(json);
-    if (!document.RootElement.TryGetProperty("data", out var dataElement))
+    if (document.RootElement.TryGetProperty("code", out var codeElement) &&
+      codeElement.TryGetInt32(out var code) &&
+      code != 0 &&
+      code != 3000)
+    {
+      var message = document.RootElement.TryGetProperty("message", out var messageElement)
+        ? messageElement.GetString()
+        : "unknown error";
+      throw new InvalidOperationException($"volcengine tts returned {code}: {message}");
+    }
+
+    if (!document.RootElement.TryGetProperty("data", out var dataElement) &&
+      !document.RootElement.TryGetProperty("audio", out dataElement))
     {
       throw new InvalidOperationException("volcengine tts response missing audio data");
     }

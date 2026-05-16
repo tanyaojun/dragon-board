@@ -35,24 +35,26 @@ dotnet run --project tools\VoiceWorker\VoiceWorker.csproj -- --url=http://127.0.
 
 ## 火山引擎豆包语音
 
-先在火山引擎控制台开通语音服务并取得 AppID、Access Token、Cluster 和音色 ID。免费试用额度以控制台显示为准，代码不会内置任何免费密钥。
+先在火山引擎控制台开通豆包语音合成大模型，并取得 AppID、Access Key、Resource ID 和声音 ID。免费试用额度以控制台显示为准，代码不会内置任何免费密钥。
 
 ```powershell
 $env:VOICE_ENGINE='volcengine'
 $env:VOLC_TTS_APP_ID='你的 AppID'
-$env:VOLC_TTS_ACCESS_TOKEN='你的 Access Token'
-$env:VOLC_TTS_CLUSTER='volcano_tts'
-$env:VOLC_TTS_VOICE_TYPE='BV001_streaming'
+$env:VOLC_TTS_ACCESS_KEY='你的 Access Key'
+$env:VOLC_TTS_RESOURCE_ID='该服务的 Resource ID'
+$env:VOLC_TTS_VOICE_TYPE='声音 ID，例如 S_7BMNX9V22'
 dotnet run --project tools\VoiceWorker\VoiceWorker.csproj
 ```
 
 可选：
 
 ```powershell
-$env:VOLC_TTS_ENDPOINT='https://openspeech.bytedance.com/api/v1/tts'
+$env:VOLC_TTS_ENDPOINT='https://openspeech.bytedance.com/api/v3/tts/unidirectional'
 ```
 
 `VOICE_ENGINE` 不设置或不是 `volcengine` 时，VoiceWorker 使用本地 SAPI。设置为 `volcengine` 但缺少密钥时，会直接使用本地 SAPI 兜底。
+
+兼容旧变量名：`VOLC_TTS_ACCESS_TOKEN` 仍可作为 `VOLC_TTS_ACCESS_KEY` 使用。`VOLC_TTS_CLUSTER` 是旧 V1 接口字段，V3 接口不再使用。
 
 ## 验证
 
