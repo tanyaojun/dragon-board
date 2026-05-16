@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { HotStockEventSpeechService } from '../HotStockEventSpeechService'
+import { HotStockEventSpeechService, resolveSpeechVoiceSelection } from '../HotStockEventSpeechService'
 import type { HotStockAbnormalEvent } from '../hotStockEventTypes'
 
 function makeEvent(overrides: Partial<HotStockAbnormalEvent>): HotStockAbnormalEvent {
@@ -43,7 +43,12 @@ describe('HotStockEventSpeechService', () => {
     expect(fetcher).toHaveBeenCalledWith('/api/local-voice/speak', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ text: '热榜异动，中南文化即将打开涨停，涨幅9.54%', rate: 1, volume: 100 }),
+      body: JSON.stringify({
+        text: '热榜异动，中南文化即将打开涨停，涨幅9.54%',
+        rate: 1,
+        volume: 100,
+        voice: undefined,
+      }),
     })
   })
 
@@ -62,7 +67,7 @@ describe('HotStockEventSpeechService', () => {
     expect(fetcher).toHaveBeenCalledWith('/api/local-voice/test', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ rate: 1, volume: 100 }),
+      body: JSON.stringify({ rate: 1, volume: 100, voice: undefined }),
     })
     expect(speak).not.toHaveBeenCalled()
     expect(service.getStatus()).toEqual({ mode: 'offline', supported: false, queueLength: 0 })
@@ -99,7 +104,14 @@ describe('HotStockEventSpeechService', () => {
 
     const status = await service.refreshStatus()
 
-    expect(status).toEqual({ mode: 'local', supported: true, engine: 'volcengine', queueLength: 0 })
+    expect(status).toEqual({
+      mode: 'local',
+      supported: true,
+      engine: 'volcengine',
+      queueLength: 0,
+      voice: undefined,
+      voices: [],
+    })
   })
 
   it('merges at most three new events into one announcement', async () => {
@@ -133,7 +145,7 @@ describe('HotStockEventSpeechService', () => {
     expect(fetcher).toHaveBeenCalledWith('/api/local-voice/test', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ rate: 0.8, volume: 55 }),
+      body: JSON.stringify({ rate: 0.8, volume: 55, voice: undefined }),
     })
   })
 
@@ -149,6 +161,32 @@ describe('HotStockEventSpeechService', () => {
       text: '热榜异动，中南文化封涨停板，涨幅9.54%',
       rate: 0.8,
       volume: 55,
+      voice: undefined,
     })
+  })
+
+  it('passes selected SAPI voice to local voice', async () => {
+    const fetcher = createLocalVoiceMock()
+    const service = new HotStockEventSpeechService({ fetcher, flushDelayMs: 0 })
+
+    service.setVoiceOptions({ voice: 'Microsoft Kangkang' })
+    await service.handleLatestAdded([makeEvent({ id: 'seed' })])
+    await service.handleLatestAdded([makeEvent({ id: 'next', name: '中南文化' })])
+
+    expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body))).toEqual({
+      text: '热榜异动，中南文化封涨停板，涨幅9.54%',
+      rate: 1,
+      volume: 100,
+      voice: 'Microsoft Kangkang',
+    })
+  })
+
+  it('resets selected voice when status no longer reports that voice', () => {
+    expect(
+      resolveSpeechVoiceSelection('Microsoft Kangkang', 'Microsoft Huihui Desktop', [
+        { name: 'Microsoft Huihui Desktop', culture: 'zh-CN', gender: 'Female' },
+        { name: 'Microsoft Zira Desktop', culture: 'en-US', gender: 'Female' },
+      ]),
+    ).toBe('Microsoft Huihui Desktop')
   })
 })

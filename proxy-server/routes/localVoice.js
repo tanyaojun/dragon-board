@@ -34,14 +34,14 @@ export function createVoiceWorkerClient(options = {}) {
       return request('/speak', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ text, rate: options.rate, volume: options.volume }),
+        body: JSON.stringify({ text, rate: options.rate, volume: options.volume, voice: options.voice }),
       })
     },
     async test(options = {}) {
       return request('/test', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ rate: options.rate, volume: options.volume }),
+        body: JSON.stringify({ rate: options.rate, volume: options.volume, voice: options.voice }),
       })
     },
     async stop() {
@@ -62,6 +62,8 @@ export function registerLocalVoiceRoutes(app, context = {}) {
         workerOnline: true,
         supported: Boolean(status.supported),
         engine: status.engine || 'unknown',
+        voice: status.voice || '',
+        voices: normalizeVoices(status.voices),
         speaking: Boolean(status.speaking),
         queueLength: Number(status.queueLength || 0),
       })
@@ -86,6 +88,7 @@ export function registerLocalVoiceRoutes(app, context = {}) {
       const result = await localVoice.speak(text, {
         rate: normalizeRate(req.body?.rate),
         volume: normalizeVolume(req.body?.volume),
+        voice: normalizeVoice(req.body?.voice),
       })
       res.json({
         ok: true,
@@ -103,6 +106,7 @@ export function registerLocalVoiceRoutes(app, context = {}) {
       const result = await localVoice.test({
         rate: normalizeRate(req.body?.rate),
         volume: normalizeVolume(req.body?.volume),
+        voice: normalizeVoice(req.body?.voice),
       })
       res.json({
         ok: true,
@@ -144,6 +148,27 @@ function normalizeVolume(value) {
   const volume = Number(value)
   if (!Number.isFinite(volume)) return undefined
   return Math.round(Math.min(100, Math.max(0, volume)))
+}
+
+function normalizeVoice(value) {
+  const voice = String(value || '').trim()
+  return voice || undefined
+}
+
+function normalizeVoices(value) {
+  if (!Array.isArray(value)) return []
+  return value
+    .map((item) => {
+      if (!item || typeof item !== 'object') return null
+      const name = normalizeVoice(item.name ?? item.Name)
+      if (!name) return null
+      return {
+        name,
+        culture: normalizeVoice(item.culture ?? item.Culture),
+        gender: normalizeVoice(item.gender ?? item.Gender),
+      }
+    })
+    .filter(Boolean)
 }
 
 async function safeJson(response) {

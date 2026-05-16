@@ -68,7 +68,7 @@ static async Task HandleRequestAsync(
         return;
       }
 
-      worker.Enqueue(text, NormalizeRate(payload?.Rate), NormalizeVolume(payload?.Volume));
+      worker.Enqueue(text, NormalizeRate(payload?.Rate), NormalizeVolume(payload?.Volume), payload?.Voice);
       await WriteJsonAsync(context.Response, 200, new { ok = true, queued = true, queueLength = worker.QueueLength });
       return;
     }
@@ -76,7 +76,7 @@ static async Task HandleRequestAsync(
     if (request.HttpMethod == "POST" && path == "/test")
     {
       var payload = await ReadSpeakRequestAsync(request);
-      worker.Enqueue(TestText, NormalizeRate(payload?.Rate), NormalizeVolume(payload?.Volume));
+      worker.Enqueue(TestText, NormalizeRate(payload?.Rate), NormalizeVolume(payload?.Volume), payload?.Voice);
       await WriteJsonAsync(context.Response, 200, new { ok = true, queued = true, queueLength = worker.QueueLength });
       return;
     }
@@ -144,4 +144,4 @@ static async Task WriteJsonAsync(HttpListenerResponse response, int statusCode, 
   response.Close();
 }
 
-sealed record SpeakRequest(string? Text, double? Rate, int? Volume);
+sealed record SpeakRequest(string? Text, double? Rate, int? Volume, string? Voice);

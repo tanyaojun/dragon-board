@@ -15,7 +15,14 @@ function listen(app) {
 test('local voice proxies status and commands to voice worker', async () => {
   const calls = []
   const localVoice = {
-    status: async () => ({ supported: true, engine: 'volcengine', queueLength: 0, speaking: false }),
+    status: async () => ({
+      supported: true,
+      engine: 'local-sapi',
+      queueLength: 0,
+      speaking: false,
+      voice: 'Microsoft Kangkang',
+      voices: [{ Name: 'Microsoft Kangkang', Culture: 'zh-CN', Gender: 'Male' }],
+    }),
     speak: async (text, options) => calls.push(['speak', text, options]),
     test: async (options) => calls.push(['test', options]),
     stop: async () => calls.push(['stop']),
@@ -30,28 +37,37 @@ test('local voice proxies status and commands to voice worker', async () => {
     assert.equal(statusBody.ok, true)
     assert.equal(statusBody.supported, true)
     assert.equal(statusBody.workerOnline, true)
-    assert.equal(statusBody.engine, 'volcengine')
+    assert.equal(statusBody.engine, 'local-sapi')
+    assert.equal(statusBody.voice, 'Microsoft Kangkang')
+    assert.deepEqual(statusBody.voices, [{ name: 'Microsoft Kangkang', culture: 'zh-CN', gender: 'Male' }])
 
     const speakResponse = await fetch(`${baseUrl}/api/local-voice/speak`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ text: '中南文化即将打开涨停', rate: 1.2, volume: 80 }),
+      body: JSON.stringify({
+        text: '中南文化即将打开涨停',
+        rate: 1.2,
+        volume: 80,
+        voice: 'Microsoft Kangkang',
+      }),
     })
     const speakBody = await speakResponse.json()
     assert.equal(speakResponse.status, 200)
     assert.equal(speakBody.ok, true)
     assert.equal(speakBody.queued, true)
-    assert.deepEqual(calls, [['speak', '中南文化即将打开涨停', { rate: 1.2, volume: 80 }]])
+    assert.deepEqual(calls, [
+      ['speak', '中南文化即将打开涨停', { rate: 1.2, volume: 80, voice: 'Microsoft Kangkang' }],
+    ])
 
     const testResponse = await fetch(`${baseUrl}/api/local-voice/test`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ rate: 0.8, volume: 55 }),
+      body: JSON.stringify({ rate: 0.8, volume: 55, voice: 'Microsoft Huihui' }),
     })
     const testBody = await testResponse.json()
     assert.equal(testResponse.status, 200)
     assert.equal(testBody.ok, true)
-    assert.deepEqual(calls[1], ['test', { rate: 0.8, volume: 55 }])
+    assert.deepEqual(calls[1], ['test', { rate: 0.8, volume: 55, voice: 'Microsoft Huihui' }])
 
     const stopResponse = await fetch(`${baseUrl}/api/local-voice/stop`, { method: 'POST' })
     const stopBody = await stopResponse.json()

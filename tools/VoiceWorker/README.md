@@ -23,6 +23,18 @@ dotnet run --project tools\VoiceWorker\VoiceWorker.csproj
 dotnet run --project tools\VoiceWorker\VoiceWorker.csproj -- --url=http://127.0.0.1:32145/
 ```
 
+## Windows SAPI 语音
+
+不设置 `VOICE_ENGINE` 或设为 `local` 时，VoiceWorker 使用常驻 `System.Speech.Synthesis.SpeechSynthesizer`。这是高频异动播报的默认方案。可通过 `VOICE_SAPI_VOICE_NAME` 指定默认声音。前端设置页会展示当前引擎实际可用的声音并随请求传入。
+
+```powershell
+$env:VOICE_ENGINE='local'
+$env:VOICE_SAPI_VOICE_NAME='Microsoft Huihui Desktop'
+dotnet run --project tools\VoiceWorker\VoiceWorker.csproj
+```
+
+`VOICE_ENGINE=onecore` 不作为生产播报入口。OneCore + PowerShell 临时 WAV 方案启动慢、文件中转重，只保留为隔离诊断/测试用途，不适合高频异动播报。
+
 ## 接口
 
 - `GET /health`
@@ -41,7 +53,7 @@ dotnet run --project tools\VoiceWorker\VoiceWorker.csproj -- --url=http://127.0.
 $env:VOICE_ENGINE='volcengine'
 $env:VOLC_TTS_APP_ID='你的 AppID'
 $env:VOLC_TTS_ACCESS_KEY='你的 Access Key'
-$env:VOLC_TTS_RESOURCE_ID='该服务的 Resource ID'
+$env:VOLC_TTS_RESOURCE_ID='seed-tts-2.0'
 $env:VOLC_TTS_VOICE_TYPE='声音 ID，例如 S_7BMNX9V22'
 dotnet run --project tools\VoiceWorker\VoiceWorker.csproj
 ```
@@ -54,7 +66,9 @@ $env:VOLC_TTS_SPEECH_RATE='-20'
 $env:VOLC_TTS_LOUDNESS_RATE='20'
 ```
 
-`VOICE_ENGINE` 不设置或不是 `volcengine` 时，VoiceWorker 使用本地 SAPI。设置为 `volcengine` 但缺少密钥时，会直接使用本地 SAPI 兜底。
+`VOICE_ENGINE` 不设置或不是 `volcengine` 时，VoiceWorker 使用常驻本地 SAPI。设置为 `volcengine` 但缺少密钥时，会直接使用本地 SAPI 兜底。
+
+`VOLC_TTS_RESOURCE_ID` 是接口模型资源 ID，不是控制台的 `TTS-SeedTTS2...` 服务实例 ID。豆包语音合成模型 2.0 字符版应配置为 `seed-tts-2.0`；代码会兼容把 `TTS-SeedTTS2...` 自动归一为 `seed-tts-2.0`。
 
 兼容旧变量名：`VOLC_TTS_ACCESS_TOKEN` 仍可作为 `VOLC_TTS_ACCESS_KEY` 使用。`VOLC_TTS_CLUSTER` 是旧 V1 接口字段，V3 接口不再使用。
 

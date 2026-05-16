@@ -9,6 +9,7 @@ export interface HotStockEventSpeechServiceOptions {
   flushDelayMs?: number
   rate?: number
   volume?: number
+  voice?: string
 }
 
 export interface HotStockEventSpeechStatus {
@@ -16,6 +17,14 @@ export interface HotStockEventSpeechStatus {
   supported: boolean
   queueLength: number
   engine?: string
+  voice?: string
+  voices?: SapiVoiceOption[]
+}
+
+export interface SapiVoiceOption {
+  name: string
+  culture?: string
+  gender?: string
 }
 
 const LOCAL_SPEAK_ENDPOINT = '/api/local-voice/speak'
@@ -45,6 +54,7 @@ export class HotStockEventSpeechService {
   private enabled = true
   private rate: number
   private volume: number
+  private voice?: string
   private spokenIds = new Set<string>()
   private pendingEvents: HotStockAbnormalEvent[] = []
   private flushTimer: ReturnType<typeof setTimeout> | null = null
@@ -60,6 +70,7 @@ export class HotStockEventSpeechService {
     this.flushDelayMs = options.flushDelayMs ?? 3_000
     this.rate = normalizeRate(options.rate)
     this.volume = normalizeVolume(options.volume)
+    this.voice = normalizeVoice(options.voice)
   }
 
   isSupported(): boolean {
@@ -83,6 +94,8 @@ export class HotStockEventSpeechService {
         supported?: boolean
         queueLength?: number
         engine?: string
+        voice?: string
+        voices?: SapiVoiceOption[]
       }
       if (payload.supported) {
         this.status = {
@@ -90,6 +103,8 @@ export class HotStockEventSpeechService {
           supported: true,
           queueLength: Number(payload.queueLength || 0),
           engine: payload.engine || 'unknown',
+          voice: normalizeVoice(payload.voice),
+          voices: normalizeVoices(payload.voices),
         }
         return this.getStatus()
       }
@@ -106,15 +121,17 @@ export class HotStockEventSpeechService {
     if (!enabled) this.stop()
   }
 
-  setVoiceOptions(options: { rate?: number; volume?: number }) {
+  setVoiceOptions(options: { rate?: number; volume?: number; voice?: string }) {
     if (options.rate !== undefined) this.rate = normalizeRate(options.rate)
     if (options.volume !== undefined) this.volume = normalizeVolume(options.volume)
+    if (options.voice !== undefined) this.voice = normalizeVoice(options.voice)
   }
 
   getVoiceOptions() {
     return {
       rate: this.rate,
       volume: this.volume,
+      voice: this.voice,
     }
   }
 
@@ -182,7 +199,7 @@ export class HotStockEventSpeechService {
       const response = await this.fetcher(LOCAL_SPEAK_ENDPOINT, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ text, rate: this.rate, volume: this.volume }),
+        body: JSON.stringify({ text, rate: this.rate, volume: this.volume, voice: this.voice }),
       })
       if (!response.ok) return false
       this.status = { ...this.status, mode: 'local', supported: true }
@@ -199,7 +216,7 @@ export class HotStockEventSpeechService {
       const response = await this.fetcher(LOCAL_TEST_ENDPOINT, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ rate: this.rate, volume: this.volume }),
+        body: JSON.stringify({ rate: this.rate, volume: this.volume, voice: this.voice }),
       })
       if (!response.ok) return false
       this.status = { ...this.status, mode: 'local', supported: true }
@@ -261,6 +278,43 @@ function normalizeVolume(value: unknown): number {
   const volume = Number(value)
   if (!Number.isFinite(volume)) return 100
   return Math.round(Math.min(100, Math.max(0, volume)))
+}
+
+function normalizeVoice(value: unknown): string | undefined {
+  const voice = String(value || '').trim()
+  return voice || undefined
+}
+
+function normalizeVoices(value: unknown): SapiVoiceOption[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .map((item) => {
+      if (!item || typeof item !== 'object') return null
+      const voice = item as Partial<SapiVoiceOption>
+      const name = normalizeVoice(voice.name)
+      if (!name) return null
+      const normalized: SapiVoiceOption = { name }
+      const culture = normalizeVoice(voice.culture)
+      const gender = normalizeVoice(voice.gender)
+      if (culture) normalized.culture = culture
+      if (gender) normalized.gender = gender
+      return normalized
+    })
+    .filter((item): item is SapiVoiceOption => Boolean(item))
+}
+
+export function resolveSpeechVoiceSelection(
+  currentVoice: string | undefined,
+  statusVoice: string | undefined,
+  voices: SapiVoiceOption[],
+): string | undefined {
+  const current = normalizeVoice(currentVoice)
+  if (current && voices.some((voice) => voice.name === current)) return current
+
+  const active = normalizeVoice(statusVoice)
+  if (active && voices.some((voice) => voice.name === active)) return active
+
+  return undefined
 }
 
 export const hotStockEventSpeechService = new HotStockEventSpeechService()

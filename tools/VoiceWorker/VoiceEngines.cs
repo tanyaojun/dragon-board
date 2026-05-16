@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Speech.Synthesis;
 using System.Text;
@@ -8,30 +9,59 @@ public interface IVoiceEngine : IDisposable
 {
   string Name { get; }
   bool IsConfigured { get; }
+  string? ActiveVoiceName { get; }
+  IReadOnlyList<SapiVoiceInfo> GetVoices();
   void Speak(VoiceUtterance utterance);
   void Stop();
 }
 
-public sealed record VoiceUtterance(string Text, double Rate = 1, int Volume = 100);
+public sealed record VoiceUtterance(string Text, double Rate = 1, int Volume = 100, string? Voice = null);
+
+public sealed record SapiVoiceInfo(string Name, string Culture, string Gender);
 
 public sealed class LocalSpeechEngine : IVoiceEngine
 {
   private readonly SpeechSynthesizer _speaker = new();
+  private readonly Lazy<IReadOnlyList<SapiVoiceInfo>> _voices;
+  private readonly Action<string> _selectVoice;
+  private readonly Action<VoiceUtterance, int, int> _speak;
 
   public LocalSpeechEngine()
+    : this(
+      Environment.GetEnvironmentVariable("VOICE_SAPI_VOICE_NAME"))
+  {
+  }
+
+  public LocalSpeechEngine(
+    string? defaultVoiceName,
+    Func<IReadOnlyList<SapiVoiceInfo>>? getVoices = null,
+    Action<string>? selectVoice = null,
+    Action<VoiceUtterance, int, int>? speak = null)
   {
     _speaker.Rate = 1;
     _speaker.Volume = 100;
+    _voices = new Lazy<IReadOnlyList<SapiVoiceInfo>>(
+      () => getVoices?.Invoke() ?? GetInstalledSapiVoices(),
+      LazyThreadSafetyMode.ExecutionAndPublication);
+    _selectVoice = selectVoice ?? _speaker.SelectVoice;
+    _speak = speak ?? SpeakWithSynthesizer;
+    DefaultVoiceName = ResolveAvailableVoiceName(NormalizeVoiceName(defaultVoiceName));
   }
 
   public string Name => "local-sapi";
   public bool IsConfigured => OperatingSystem.IsWindows();
+  public string? DefaultVoiceName { get; }
+  public string? ActiveVoiceName => DefaultVoiceName ?? _speaker.Voice?.Name;
+  public IReadOnlyList<SapiVoiceInfo> GetVoices() => _voices.Value;
 
   public void Speak(VoiceUtterance utterance)
   {
-    _speaker.Rate = ToSapiRate(utterance.Rate);
-    _speaker.Volume = Math.Clamp(utterance.Volume, 0, 100);
-    _speaker.Speak(utterance.Text);
+    var voiceName = ResolveVoiceName(utterance.Voice);
+    if (!string.IsNullOrWhiteSpace(voiceName))
+    {
+      _selectVoice(voiceName);
+    }
+    _speak(utterance, ToSapiRate(utterance.Rate), Math.Clamp(utterance.Volume, 0, 100));
   }
   public void Stop() => _speaker.SpeakAsyncCancelAll();
   public void Dispose() => _speaker.Dispose();
@@ -40,6 +70,257 @@ public sealed class LocalSpeechEngine : IVoiceEngine
   {
     var normalized = double.IsFinite(rate) ? rate : 1;
     return Math.Clamp((int)Math.Round((normalized - 1) * 5), -5, 4);
+  }
+
+  private string? ResolveVoiceName(string? requestedVoice)
+  {
+    return ResolveAvailableVoiceName(NormalizeVoiceName(requestedVoice) ?? DefaultVoiceName);
+  }
+
+  private string? ResolveAvailableVoiceName(string? requestedVoice)
+  {
+    if (string.IsNullOrWhiteSpace(requestedVoice)) return null;
+
+    return GetVoices()
+      .FirstOrDefault(voice => voice.Name.Equals(requestedVoice, StringComparison.OrdinalIgnoreCase))
+      ?.Name;
+  }
+
+  private static string? NormalizeVoiceName(string? value)
+  {
+    var text = value?.Trim();
+    return string.IsNullOrWhiteSpace(text) ? null : text;
+  }
+
+  private void SpeakWithSynthesizer(VoiceUtterance utterance, int rate, int volume)
+  {
+    _speaker.Rate = rate;
+    _speaker.Volume = volume;
+    _speaker.Speak(utterance.Text);
+  }
+
+  private static IReadOnlyList<SapiVoiceInfo> GetInstalledSapiVoices()
+  {
+    using var speaker = new SpeechSynthesizer();
+    return speaker.GetInstalledVoices()
+      .Where(voice => voice.Enabled)
+      .Select(voice => new SapiVoiceInfo(
+        voice.VoiceInfo.Name,
+        voice.VoiceInfo.Culture.Name,
+        voice.VoiceInfo.Gender.ToString()))
+      .OrderByDescending(voice => voice.Culture.Equals("zh-CN", StringComparison.OrdinalIgnoreCase))
+      .ThenBy(voice => voice.Name, StringComparer.OrdinalIgnoreCase)
+      .ToArray();
+  }
+}
+
+public sealed class OneCoreSpeechEngine : IVoiceEngine
+{
+  private readonly Func<IReadOnlyList<SapiVoiceInfo>> _getVoices;
+  private readonly Action<VoiceUtterance> _speak;
+
+  public OneCoreSpeechEngine()
+    : this(
+      Environment.GetEnvironmentVariable("VOICE_ONECORE_VOICE_NAME"),
+      GetInstalledOneCoreVoices,
+      null)
+  {
+  }
+
+  public OneCoreSpeechEngine(
+    string? defaultVoiceName,
+    Func<IReadOnlyList<SapiVoiceInfo>>? getVoices = null,
+    Action<VoiceUtterance>? speak = null)
+  {
+    _getVoices = getVoices ?? GetInstalledOneCoreVoices;
+    DefaultVoiceName = ResolveAvailableVoiceName(NormalizeVoiceName(defaultVoiceName));
+    _speak = speak ?? SpeakWithPowerShell;
+  }
+
+  public string Name => "local-onecore";
+  public bool IsConfigured => OperatingSystem.IsWindows() && GetVoices().Count > 0;
+  public string? DefaultVoiceName { get; }
+  public string? ActiveVoiceName => DefaultVoiceName ?? GetVoices().FirstOrDefault()?.Name;
+  public IReadOnlyList<SapiVoiceInfo> GetVoices() => _getVoices();
+
+  public void Speak(VoiceUtterance utterance)
+  {
+    var voiceName = ResolveAvailableVoiceName(NormalizeVoiceName(utterance.Voice)) ?? ActiveVoiceName;
+    _speak(utterance with { Voice = voiceName });
+  }
+
+  public void Stop() { }
+  public void Dispose() { }
+
+  private string? ResolveAvailableVoiceName(string? requestedVoice)
+  {
+    if (string.IsNullOrWhiteSpace(requestedVoice)) return null;
+
+    return GetVoices()
+      .FirstOrDefault(voice => voice.Name.Equals(requestedVoice, StringComparison.OrdinalIgnoreCase))
+      ?.Name;
+  }
+
+  private static string? NormalizeVoiceName(string? value)
+  {
+    var text = value?.Trim();
+    return string.IsNullOrWhiteSpace(text) ? null : text;
+  }
+
+  private static IReadOnlyList<SapiVoiceInfo> GetInstalledOneCoreVoices()
+  {
+    if (!OperatingSystem.IsWindows()) return Array.Empty<SapiVoiceInfo>();
+
+    using var root = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(
+      @"SOFTWARE\Microsoft\Speech_OneCore\Voices\Tokens");
+    if (root == null) return Array.Empty<SapiVoiceInfo>();
+
+    return root.GetSubKeyNames()
+      .Select(name => ReadOneCoreVoice(root, name))
+      .Where(voice => voice != null)
+      .Select(voice => voice!)
+      .OrderByDescending(voice => voice.Culture.Equals("zh-CN", StringComparison.OrdinalIgnoreCase))
+      .ThenBy(voice => voice.Name, StringComparer.OrdinalIgnoreCase)
+      .ToArray();
+  }
+
+  private static SapiVoiceInfo? ReadOneCoreVoice(Microsoft.Win32.RegistryKey root, string tokenName)
+  {
+    using var token = root.OpenSubKey(tokenName);
+    using var attributes = token?.OpenSubKey("Attributes");
+    if (token == null || attributes == null) return null;
+
+    var displayName = token.GetValue(null) as string;
+    var gender = attributes.GetValue("Gender") as string ?? "";
+    var language = attributes.GetValue("Language") as string ?? "";
+    var culture = ToCultureName(language);
+    var normalizedName = NormalizeOneCoreDisplayName(displayName, tokenName);
+    if (string.IsNullOrWhiteSpace(normalizedName)) return null;
+
+    return new SapiVoiceInfo(normalizedName, culture, gender);
+  }
+
+  private static string NormalizeOneCoreDisplayName(string? displayName, string tokenName)
+  {
+    var text = displayName?.Trim();
+    if (!string.IsNullOrWhiteSpace(text))
+    {
+      var separator = text.IndexOf(" - ", StringComparison.Ordinal);
+      return separator > 0 ? text[..separator] : text;
+    }
+
+    const string prefix = "MSTTS_V110_zhCN_";
+    if (tokenName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) &&
+      tokenName.EndsWith("M", StringComparison.OrdinalIgnoreCase))
+    {
+      return $"Microsoft {tokenName[prefix.Length..^1]}";
+    }
+
+    return tokenName;
+  }
+
+  private static string ToCultureName(string language)
+  {
+    return language.Trim().ToUpperInvariant() switch
+    {
+      "804" => "zh-CN",
+      "409" => "en-US",
+      _ => language.Trim(),
+    };
+  }
+
+  private static void SpeakWithPowerShell(VoiceUtterance utterance)
+  {
+    var filePath = Path.Combine(Path.GetTempPath(), $"dragon-board-onecore-{Guid.NewGuid():N}.wav");
+    try
+    {
+      RunPowerShellSynthesis(utterance, filePath);
+      NativeAudioPlayer.PlayFile(filePath);
+      Thread.Sleep(GetOneCorePlaybackTimeoutMs(filePath));
+      NativeAudioPlayer.Stop();
+    }
+    finally
+    {
+      TryDeleteFile(filePath);
+    }
+  }
+
+  private static void RunPowerShellSynthesis(VoiceUtterance utterance, string filePath)
+  {
+    var script = BuildSynthesisScript(utterance, filePath);
+    using var process = Process.Start(new ProcessStartInfo
+    {
+      FileName = "powershell.exe",
+      Arguments = $"-NoProfile -ExecutionPolicy Bypass -EncodedCommand {Convert.ToBase64String(Encoding.Unicode.GetBytes(script))}",
+      UseShellExecute = false,
+      CreateNoWindow = true,
+      RedirectStandardOutput = true,
+      RedirectStandardError = true,
+      StandardOutputEncoding = Encoding.UTF8,
+      StandardErrorEncoding = Encoding.UTF8,
+    });
+    if (process == null) throw new InvalidOperationException("failed to start powershell");
+
+    var output = process.StandardOutput.ReadToEnd();
+    var error = process.StandardError.ReadToEnd();
+    if (!process.WaitForExit(30_000))
+    {
+      process.Kill(entireProcessTree: true);
+      throw new TimeoutException("onecore synthesis timed out");
+    }
+    if (process.ExitCode != 0)
+    {
+      throw new InvalidOperationException($"onecore synthesis failed: {(error + output).Trim()}");
+    }
+  }
+
+  private static string BuildSynthesisScript(VoiceUtterance utterance, string filePath)
+  {
+    var text = ToPowerShellSingleQuotedString(utterance.Text);
+    var voice = ToPowerShellSingleQuotedString(utterance.Voice ?? "");
+    var path = ToPowerShellSingleQuotedString(filePath);
+    var rate = ToSapiRate(utterance.Rate);
+    var volume = Math.Clamp(utterance.Volume, 0, 100);
+
+    return $$"""
+      Add-Type -AssemblyName System.Speech
+      $speaker = New-Object System.Speech.Synthesis.SpeechSynthesizer
+      $speaker.Rate = {{rate}}
+      $speaker.Volume = {{volume}}
+      $voice = {{voice}}
+      if ($voice) { $speaker.SelectVoice($voice) }
+      $speaker.SetOutputToWaveFile({{path}})
+      $speaker.Speak({{text}})
+      $speaker.Dispose()
+      """;
+  }
+
+  private static string ToPowerShellSingleQuotedString(string value)
+  {
+    return $"'{value.Replace("'", "''")}'";
+  }
+
+  private static int ToSapiRate(double rate)
+  {
+    var normalized = double.IsFinite(rate) ? rate : 1;
+    return Math.Clamp((int)Math.Round((normalized - 1) * 5), -5, 4);
+  }
+
+  private static int GetOneCorePlaybackTimeoutMs(string filePath)
+  {
+    var length = new FileInfo(filePath).Length;
+    var estimatedMs = (int)Math.Ceiling(length * 1000d / 48_000d);
+    return Math.Clamp(estimatedMs + 1_500, 2_000, 15_000);
+  }
+
+  private static void TryDeleteFile(string filePath)
+  {
+    try
+    {
+      File.Delete(filePath);
+    }
+    catch (IOException) { }
+    catch (UnauthorizedAccessException) { }
   }
 }
 
@@ -61,6 +342,9 @@ public sealed class FallbackVoiceEngine : IVoiceEngine
 
   public string Name => _activeEngineName;
   public bool IsConfigured => _primary.IsConfigured || _fallback.IsConfigured;
+  public string? ActiveVoiceName =>
+    _activeEngineName == _fallback.Name ? _fallback.ActiveVoiceName : _primary.ActiveVoiceName;
+  public IReadOnlyList<SapiVoiceInfo> GetVoices() => _fallback.GetVoices();
 
   public void Speak(VoiceUtterance utterance)
   {
@@ -100,6 +384,8 @@ public sealed class FallbackVoiceEngine : IVoiceEngine
 
 public sealed class VolcengineTtsOptions
 {
+  private const string Tts2ResourceId = "seed-tts-2.0";
+
   public string AppId { get; init; } = "";
   public string AccessToken { get; init; } = "";
   public string ResourceId { get; init; } = "";
@@ -120,7 +406,7 @@ public sealed class VolcengineTtsOptions
     AccessToken = Environment.GetEnvironmentVariable("VOLC_TTS_ACCESS_KEY")
       ?? Environment.GetEnvironmentVariable("VOLC_TTS_ACCESS_TOKEN")
       ?? "",
-    ResourceId = Environment.GetEnvironmentVariable("VOLC_TTS_RESOURCE_ID") ?? "",
+    ResourceId = NormalizeResourceId(Environment.GetEnvironmentVariable("VOLC_TTS_RESOURCE_ID")),
     VoiceType = Environment.GetEnvironmentVariable("VOLC_TTS_VOICE_TYPE") ?? "",
     Endpoint = Environment.GetEnvironmentVariable("VOLC_TTS_ENDPOINT")
       ?? "https://openspeech.bytedance.com/api/v3/tts/unidirectional",
@@ -133,6 +419,13 @@ public sealed class VolcengineTtsOptions
     var value = Environment.GetEnvironmentVariable(key);
     if (!int.TryParse(value, out var parsed)) return defaultValue;
     return Math.Clamp(parsed, min, max);
+  }
+
+  private static string NormalizeResourceId(string? value)
+  {
+    var text = value?.Trim() ?? "";
+    if (text.StartsWith("TTS-SeedTTS2.", StringComparison.OrdinalIgnoreCase)) return Tts2ResourceId;
+    return text;
   }
 }
 
@@ -154,6 +447,8 @@ public sealed class VolcengineTtsEngine : IVoiceEngine
 
   public string Name => "volcengine";
   public bool IsConfigured => _options.IsConfigured;
+  public string? ActiveVoiceName => _options.VoiceType;
+  public IReadOnlyList<SapiVoiceInfo> GetVoices() => Array.Empty<SapiVoiceInfo>();
 
   public void Speak(VoiceUtterance utterance)
   {
@@ -305,7 +600,7 @@ public sealed class VolcengineTtsEngine : IVoiceEngine
     try
     {
       NativeAudioPlayer.PlayFile(filePath);
-      Thread.Sleep(GetPlaybackTimeoutMs(audio));
+      Thread.Sleep(GetWavePlaybackTimeoutMs(audio));
       NativeAudioPlayer.Stop();
     }
     finally
@@ -324,7 +619,7 @@ public sealed class VolcengineTtsEngine : IVoiceEngine
     catch (UnauthorizedAccessException) { }
   }
 
-  private static int GetPlaybackTimeoutMs(byte[] audio)
+  public static int GetWavePlaybackTimeoutMs(byte[] audio)
   {
     var dataOffset = FindAscii(audio, "data");
     var fmtOffset = FindAscii(audio, "fmt ");
@@ -403,11 +698,13 @@ public sealed class VoiceWorker : IDisposable
     speaking = _speaking,
     currentText = _currentText,
     queueLength = QueueLength,
+    voice = _engine.ActiveVoiceName,
+    voices = _engine.GetVoices(),
   };
 
-  public void Enqueue(string text, double rate = 1, int volume = 100)
+  public void Enqueue(string text, double rate = 1, int volume = 100, string? voice = null)
   {
-    _queue.Enqueue(new VoiceUtterance(text, NormalizeRate(rate), Math.Clamp(volume, 0, 100)));
+    _queue.Enqueue(new VoiceUtterance(text, NormalizeRate(rate), Math.Clamp(volume, 0, 100), NormalizeVoice(voice)));
     _signal.Set();
   }
 
@@ -459,6 +756,12 @@ public sealed class VoiceWorker : IDisposable
   {
     if (!double.IsFinite(rate)) return 1;
     return Math.Clamp(Math.Round(rate, 2), 0.6, 1.8);
+  }
+
+  private static string? NormalizeVoice(string? voice)
+  {
+    var text = voice?.Trim();
+    return string.IsNullOrWhiteSpace(text) ? null : text;
   }
 
   private static IVoiceEngine CreateDefaultEngine()

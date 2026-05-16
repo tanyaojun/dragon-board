@@ -108,6 +108,16 @@
           <span>音量 {{ speechVolume }}</span>
           <input v-model.number="speechVolume" type="range" min="0" max="100" step="5" />
         </label>
+        <label v-if="showSpeechVoiceSelect" class="select-row">
+          <span>本地语音</span>
+          <select v-model="speechVoice" :disabled="!speechVoices.length">
+            <option value="">系统默认</option>
+            <option v-for="voice in speechVoices" :key="voice.name" :value="voice.name">
+              {{ formatVoiceLabel(voice) }}
+            </option>
+            <option v-if="!speechVoices.length" value="" disabled>未检测到系统语音</option>
+          </select>
+        </label>
       </div>
 
       <div v-if="state.error" class="empty-state error">
@@ -135,7 +145,10 @@ import { usePanel } from '../../composables/usePanel'
 import {
   hotStockEventMonitorService,
 } from '../../services/hotlist/HotStockEventMonitorService'
-import { hotStockEventSpeechService } from '../../services/hotlist/HotStockEventSpeechService'
+import {
+  hotStockEventSpeechService,
+  resolveSpeechVoiceSelection,
+} from '../../services/hotlist/HotStockEventSpeechService'
 import {
   type HotStockAbnormalEvent,
   type HotStockAbnormalEventType,
@@ -207,9 +220,11 @@ const speechSupported = ref(hotStockEventSpeechService.isSupported())
 const speechEnabled = ref(speechSupported.value)
 const speechMode = ref(hotStockEventSpeechService.getStatus().mode)
 const speechEngine = ref(hotStockEventSpeechService.getStatus().engine)
+const speechVoices = ref(hotStockEventSpeechService.getStatus().voices || [])
 const voiceOptions = hotStockEventSpeechService.getVoiceOptions()
 const speechRate = ref(voiceOptions.rate)
 const speechVolume = ref(voiceOptions.volume)
+const speechVoice = ref(voiceOptions.voice || '')
 
 const close = () => {
   emit('update:visible', false)
@@ -264,6 +279,7 @@ const speechModeLabel = computed(() => {
   if (speechMode.value === 'local') return '本地语音'
   return 'VoiceWorker 未连接'
 })
+const showSpeechVoiceSelect = computed(() => speechMode.value === 'local' && speechEngine.value !== 'volcengine')
 
 function setAllTypes(checked: boolean) {
   enabledTypes.value = checked ? [...ALL_EVENT_TYPES] : []
@@ -297,10 +313,17 @@ function displayName(event: HotStockAbnormalEvent) {
   return event.category === 'sector' ? event.sectorName || event.name || '--' : event.name || '--'
 }
 
+function formatVoiceLabel(voice: { name: string; culture?: string; gender?: string }) {
+  const tags = [voice.culture, voice.gender].filter(Boolean).join(' / ')
+  return tags ? `${voice.name} (${tags})` : voice.name
+}
+
 async function refreshSpeechStatus() {
   const status = await hotStockEventSpeechService.refreshStatus()
   speechMode.value = status.mode
   speechEngine.value = status.engine
+  speechVoices.value = status.voices || []
+  speechVoice.value = resolveSpeechVoiceSelection(speechVoice.value, status.voice, speechVoices.value) || ''
   speechSupported.value = status.supported
   if (status.supported && !speechEnabled.value) {
     speechEnabled.value = true
@@ -312,6 +335,7 @@ async function testSpeech() {
   const status = hotStockEventSpeechService.getStatus()
   speechMode.value = status.mode
   speechEngine.value = status.engine
+  speechVoices.value = status.voices || []
   speechSupported.value = status.supported
 }
 
@@ -347,8 +371,8 @@ watch(speechEnabled, (enabled) => {
   hotStockEventSpeechService.setEnabled(enabled)
 })
 
-watch([speechRate, speechVolume], ([rate, volume]) => {
-  hotStockEventSpeechService.setVoiceOptions({ rate, volume })
+watch([speechRate, speechVolume, speechVoice], ([rate, volume, voice]) => {
+  hotStockEventSpeechService.setVoiceOptions({ rate, volume, voice })
 })
 
 onUnmounted(() => {
@@ -558,6 +582,24 @@ onUnmounted(() => {
 
 .range-row input {
   width: 100%;
+}
+
+.select-row {
+  display: grid;
+  gap: 6px;
+  color: var(--text-primary);
+  margin-top: 10px;
+}
+
+.select-row select {
+  width: 100%;
+  min-width: 0;
+  height: 30px;
+  border: 1px solid #333;
+  border-radius: 4px;
+  background: #191717;
+  color: var(--text-primary);
+  padding: 0 8px;
 }
 
 .speech-toggle {
