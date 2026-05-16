@@ -50,6 +50,8 @@ dotnet run --project tools\VoiceWorker\VoiceWorker.csproj
 
 ```powershell
 $env:VOLC_TTS_ENDPOINT='https://openspeech.bytedance.com/api/v3/tts/unidirectional'
+$env:VOLC_TTS_SPEECH_RATE='-20'
+$env:VOLC_TTS_LOUDNESS_RATE='20'
 ```
 
 `VOICE_ENGINE` 不设置或不是 `volcengine` 时，VoiceWorker 使用本地 SAPI。设置为 `volcengine` 但缺少密钥时，会直接使用本地 SAPI 兜底。
@@ -59,6 +61,5 @@ $env:VOLC_TTS_ENDPOINT='https://openspeech.bytedance.com/api/v3/tts/unidirection
 ## 验证
 
 ```powershell
-dotnet test tools\VoiceWorker.Tests\VoiceWorker.Tests.csproj
 dotnet build tools\VoiceWorker\VoiceWorker.csproj -c Debug
 ```

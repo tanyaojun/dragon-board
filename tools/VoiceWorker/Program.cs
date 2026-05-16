@@ -2,7 +2,7 @@ using System.Net;
 using System.Text.Json;
 
 const string DefaultPrefix = "http://127.0.0.1:32145/";
-const string TestText = "热榜异动本地语音测试，当前语音提醒正常";
+const string TestText = "语音测试。中南文化，逼近涨停，涨幅百分之九点五四。";
 const int MaxTextLength = 200;
 
 var prefix = args.FirstOrDefault(arg => arg.StartsWith("--url=", StringComparison.OrdinalIgnoreCase))?.Split('=', 2)[1]
@@ -12,18 +12,34 @@ if (!prefix.EndsWith('/')) prefix += "/";
 
 using var worker = new VoiceWorker();
 using var listener = new HttpListener();
+using var shutdown = new CancellationTokenSource();
 listener.Prefixes.Add(prefix);
 listener.Start();
 
 Console.WriteLine($"VoiceWorker listening on {prefix}");
 
-while (true)
+while (!shutdown.IsCancellationRequested)
 {
-  var context = await listener.GetContextAsync();
-  _ = Task.Run(() => HandleRequestAsync(context, worker));
+  try
+  {
+    var context = await listener.GetContextAsync();
+    _ = Task.Run(() => HandleRequestAsync(context, worker, listener, shutdown));
+  }
+  catch (HttpListenerException) when (shutdown.IsCancellationRequested)
+  {
+    break;
+  }
+  catch (ObjectDisposedException) when (shutdown.IsCancellationRequested)
+  {
+    break;
+  }
 }
 
-static async Task HandleRequestAsync(HttpListenerContext context, VoiceWorker worker)
+static async Task HandleRequestAsync(
+  HttpListenerContext context,
+  VoiceWorker worker,
+  HttpListener listener,
+  CancellationTokenSource shutdown)
 {
   try
   {
@@ -68,6 +84,19 @@ static async Task HandleRequestAsync(HttpListenerContext context, VoiceWorker wo
     {
       worker.Stop();
       await WriteJsonAsync(context.Response, 200, new { ok = true, queueLength = worker.QueueLength });
+      return;
+    }
+
+    if (request.HttpMethod == "POST" && path == "/shutdown")
+    {
+      worker.Stop();
+      await WriteJsonAsync(context.Response, 200, new { ok = true, shuttingDown = true });
+      _ = Task.Run(() =>
+      {
+        Thread.Sleep(100);
+        shutdown.Cancel();
+        listener.Stop();
+      });
       return;
     }
 

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Runtime.InteropServices;
 using System.Speech.Synthesis;
 using System.Text;
 using System.Text.Json;
@@ -91,6 +92,8 @@ public sealed class VolcengineTtsOptions
   public string ResourceId { get; init; } = "";
   public string VoiceType { get; init; } = "";
   public string Endpoint { get; init; } = "https://openspeech.bytedance.com/api/v3/tts/unidirectional";
+  public int SpeechRate { get; init; } = -20;
+  public int LoudnessRate { get; init; } = 20;
 
   public bool IsConfigured =>
     !string.IsNullOrWhiteSpace(AppId)
@@ -108,7 +111,16 @@ public sealed class VolcengineTtsOptions
     VoiceType = Environment.GetEnvironmentVariable("VOLC_TTS_VOICE_TYPE") ?? "",
     Endpoint = Environment.GetEnvironmentVariable("VOLC_TTS_ENDPOINT")
       ?? "https://openspeech.bytedance.com/api/v3/tts/unidirectional",
+    SpeechRate = ReadIntEnvironment("VOLC_TTS_SPEECH_RATE", -20, -50, 100),
+    LoudnessRate = ReadIntEnvironment("VOLC_TTS_LOUDNESS_RATE", 20, -50, 100),
   };
+
+  private static int ReadIntEnvironment(string key, int defaultValue, int min, int max)
+  {
+    var value = Environment.GetEnvironmentVariable(key);
+    if (!int.TryParse(value, out var parsed)) return defaultValue;
+    return Math.Clamp(parsed, min, max);
+  }
 }
 
 public sealed class VolcengineTtsEngine : IVoiceEngine
@@ -167,6 +179,8 @@ public sealed class VolcengineTtsEngine : IVoiceEngine
         {
           format = "wav",
           sample_rate = 24000,
+          speech_rate = _options.SpeechRate,
+          loudness_rate = _options.LoudnessRate,
         },
       },
     };
@@ -176,13 +190,16 @@ public sealed class VolcengineTtsEngine : IVoiceEngine
 
   private static byte[] DecodeAudio(string json)
   {
+    using var audio = new MemoryStream();
+
     foreach (var line in SplitJsonLines(json))
     {
       using var document = JsonDocument.Parse(line);
       if (document.RootElement.TryGetProperty("code", out var codeElement) &&
         codeElement.TryGetInt32(out var code) &&
         code != 0 &&
-        code != 3000)
+        code != 3000 &&
+        code != 20000000)
       {
         var message = document.RootElement.TryGetProperty("message", out var messageElement)
           ? messageElement.GetString()
@@ -198,10 +215,16 @@ public sealed class VolcengineTtsEngine : IVoiceEngine
 
       var base64 = dataElement.GetString();
       if (string.IsNullOrWhiteSpace(base64)) continue;
-      return NormalizeWaveHeader(Convert.FromBase64String(base64));
+      var chunk = Convert.FromBase64String(base64);
+      audio.Write(chunk, 0, chunk.Length);
     }
 
-    throw new InvalidOperationException("volcengine tts response missing audio data");
+    if (audio.Length == 0)
+    {
+      throw new InvalidOperationException("volcengine tts response missing audio data");
+    }
+
+    return NormalizeWaveHeader(audio.ToArray());
   }
 
   private static IEnumerable<string> SplitJsonLines(string value)
@@ -252,15 +275,75 @@ public sealed class VolcengineTtsEngine : IVoiceEngine
 
   private static void PlayWaveAudio(byte[] audio)
   {
-    using var stream = new MemoryStream(audio);
-    using var player = new System.Media.SoundPlayer(stream);
-    player.PlaySync();
+    var filePath = Path.Combine(Path.GetTempPath(), $"dragon-board-voice-{Guid.NewGuid():N}.wav");
+    File.WriteAllBytes(filePath, audio);
+    try
+    {
+      NativeAudioPlayer.PlayFile(filePath);
+      Thread.Sleep(GetPlaybackTimeoutMs(audio));
+      NativeAudioPlayer.Stop();
+    }
+    finally
+    {
+      TryDeleteFile(filePath);
+    }
+  }
+
+  private static void TryDeleteFile(string filePath)
+  {
+    try
+    {
+      File.Delete(filePath);
+    }
+    catch (IOException) { }
+    catch (UnauthorizedAccessException) { }
+  }
+
+  private static int GetPlaybackTimeoutMs(byte[] audio)
+  {
+    var dataOffset = FindAscii(audio, "data");
+    var fmtOffset = FindAscii(audio, "fmt ");
+    if (dataOffset < 0 || dataOffset + 8 > audio.Length || fmtOffset < 0 || fmtOffset + 24 > audio.Length)
+    {
+      return 10_000;
+    }
+
+    var dataSize = BitConverter.ToUInt32(audio, dataOffset + 4);
+    var channels = BitConverter.ToUInt16(audio, fmtOffset + 10);
+    var sampleRate = BitConverter.ToUInt32(audio, fmtOffset + 12);
+    var bitsPerSample = BitConverter.ToUInt16(audio, fmtOffset + 22);
+    var bytesPerSecond = sampleRate * channels * bitsPerSample / 8;
+    if (bytesPerSecond == 0) return 10_000;
+
+    var durationMs = (int)Math.Ceiling(dataSize * 1000d / bytesPerSecond);
+    return Math.Clamp(durationMs + 1_500, 2_000, 35_000);
   }
 
   private static JsonSerializerOptions JsonOptions() => new()
   {
     PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
   };
+}
+
+internal static class NativeAudioPlayer
+{
+  private const uint SndSync = 0x0000;
+  private const uint SndAsync = 0x0001;
+  private const uint SndNodefault = 0x0002;
+  private const uint SndFilename = 0x00020000;
+
+  public static void PlayFile(string filePath)
+  {
+    if (!PlaySound(filePath, IntPtr.Zero, SndAsync | SndFilename | SndNodefault))
+    {
+      throw new InvalidOperationException("winmm PlaySound failed");
+    }
+  }
+
+  public static void Stop() => PlaySound(null, IntPtr.Zero, SndSync);
+
+  [DllImport("winmm.dll", SetLastError = true)]
+  private static extern bool PlaySound(string? pszSound, IntPtr hmod, uint fdwSound);
 }
 
 public sealed class VoiceWorker : IDisposable
