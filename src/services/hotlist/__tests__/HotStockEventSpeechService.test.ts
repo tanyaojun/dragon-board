@@ -5,6 +5,7 @@ import type { HotStockAbnormalEvent } from '../hotStockEventTypes'
 
 function makeEvent(overrides: Partial<HotStockAbnormalEvent>): HotStockAbnormalEvent {
   return {
+    category: overrides.category || 'stock',
     id: String(overrides.id || 'event-1'),
     eventType: overrides.eventType || overrides.type || 10001,
     type: overrides.type || 10001,
@@ -17,6 +18,7 @@ function makeEvent(overrides: Partial<HotStockAbnormalEvent>): HotStockAbnormalE
     changePct: overrides.changePct ?? 0.0954,
     price: overrides.price ?? 10,
     relatedPlates: overrides.relatedPlates || [],
+    sectorName: overrides.sectorName || '',
     matchedHotStock: true,
     matchedCandidate: overrides.matchedCandidate || false,
     raw: overrides.raw || {},
@@ -41,7 +43,7 @@ describe('HotStockEventSpeechService', () => {
     expect(fetcher).toHaveBeenCalledWith('/api/local-voice/speak', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ text: '热榜异动，中南文化即将打开涨停，涨幅9.54%' }),
+      body: JSON.stringify({ text: '热榜异动，中南文化即将打开涨停，涨幅9.54%', rate: 1, volume: 100 }),
     })
   })
 
@@ -57,7 +59,11 @@ describe('HotStockEventSpeechService', () => {
 
     await service.speakTest()
 
-    expect(fetcher).toHaveBeenCalledWith('/api/local-voice/test', { method: 'POST' })
+    expect(fetcher).toHaveBeenCalledWith('/api/local-voice/test', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ rate: 1, volume: 100 }),
+    })
     expect(speak).not.toHaveBeenCalled()
     expect(service.getStatus()).toEqual({ mode: 'offline', supported: false, queueLength: 0 })
   })
@@ -121,8 +127,28 @@ describe('HotStockEventSpeechService', () => {
     const fetcher = createLocalVoiceMock()
     const service = new HotStockEventSpeechService({ fetcher })
 
+    service.setVoiceOptions({ rate: 0.8, volume: 55 })
     await service.speakTest()
 
-    expect(fetcher).toHaveBeenCalledWith('/api/local-voice/test', { method: 'POST' })
+    expect(fetcher).toHaveBeenCalledWith('/api/local-voice/test', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ rate: 0.8, volume: 55 }),
+    })
+  })
+
+  it('passes configured rate and volume to local voice', async () => {
+    const fetcher = createLocalVoiceMock()
+    const service = new HotStockEventSpeechService({ fetcher, flushDelayMs: 0 })
+
+    service.setVoiceOptions({ rate: 0.8, volume: 55 })
+    await service.handleLatestAdded([makeEvent({ id: 'seed' })])
+    await service.handleLatestAdded([makeEvent({ id: 'next', name: '中南文化' })])
+
+    expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body))).toEqual({
+      text: '热榜异动，中南文化封涨停板，涨幅9.54%',
+      rate: 0.8,
+      volume: 55,
+    })
   })
 })

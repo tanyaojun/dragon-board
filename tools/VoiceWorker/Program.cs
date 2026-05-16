@@ -60,7 +60,7 @@ static async Task HandleRequestAsync(
 
     if (request.HttpMethod == "POST" && path == "/speak")
     {
-      var payload = await JsonSerializer.DeserializeAsync<SpeakRequest>(request.InputStream, JsonOptions());
+      var payload = await ReadSpeakRequestAsync(request);
       var text = NormalizeSpeechText(payload?.Text);
       if (string.IsNullOrWhiteSpace(text))
       {
@@ -68,14 +68,15 @@ static async Task HandleRequestAsync(
         return;
       }
 
-      worker.Enqueue(text);
+      worker.Enqueue(text, NormalizeRate(payload?.Rate), NormalizeVolume(payload?.Volume));
       await WriteJsonAsync(context.Response, 200, new { ok = true, queued = true, queueLength = worker.QueueLength });
       return;
     }
 
     if (request.HttpMethod == "POST" && path == "/test")
     {
-      worker.Enqueue(TestText);
+      var payload = await ReadSpeakRequestAsync(request);
+      worker.Enqueue(TestText, NormalizeRate(payload?.Rate), NormalizeVolume(payload?.Volume));
       await WriteJsonAsync(context.Response, 200, new { ok = true, queued = true, queueLength = worker.QueueLength });
       return;
     }
@@ -114,6 +115,23 @@ static string NormalizeSpeechText(string? value)
   return text.Length > MaxTextLength ? text[..MaxTextLength] : text;
 }
 
+static async Task<SpeakRequest?> ReadSpeakRequestAsync(HttpListenerRequest request)
+{
+  if (!request.HasEntityBody || request.ContentLength64 == 0) return null;
+  return await JsonSerializer.DeserializeAsync<SpeakRequest>(request.InputStream, JsonOptions());
+}
+
+static double NormalizeRate(double? value)
+{
+  if (value is null || !double.IsFinite(value.Value)) return 1;
+  return Math.Clamp(Math.Round(value.Value, 2), 0.6, 1.8);
+}
+
+static int NormalizeVolume(int? value)
+{
+  return Math.Clamp(value ?? 100, 0, 100);
+}
+
 static JsonSerializerOptions JsonOptions() => new() { PropertyNameCaseInsensitive = true };
 
 static async Task WriteJsonAsync(HttpListenerResponse response, int statusCode, object payload)
@@ -126,4 +144,4 @@ static async Task WriteJsonAsync(HttpListenerResponse response, int statusCode, 
   response.Close();
 }
 
-sealed record SpeakRequest(string? Text);
+sealed record SpeakRequest(string? Text, double? Rate, int? Volume);

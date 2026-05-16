@@ -8,9 +8,11 @@ public interface IVoiceEngine : IDisposable
 {
   string Name { get; }
   bool IsConfigured { get; }
-  void Speak(string text);
+  void Speak(VoiceUtterance utterance);
   void Stop();
 }
+
+public sealed record VoiceUtterance(string Text, double Rate = 1, int Volume = 100);
 
 public sealed class LocalSpeechEngine : IVoiceEngine
 {
@@ -25,9 +27,20 @@ public sealed class LocalSpeechEngine : IVoiceEngine
   public string Name => "local-sapi";
   public bool IsConfigured => OperatingSystem.IsWindows();
 
-  public void Speak(string text) => _speaker.Speak(text);
+  public void Speak(VoiceUtterance utterance)
+  {
+    _speaker.Rate = ToSapiRate(utterance.Rate);
+    _speaker.Volume = Math.Clamp(utterance.Volume, 0, 100);
+    _speaker.Speak(utterance.Text);
+  }
   public void Stop() => _speaker.SpeakAsyncCancelAll();
   public void Dispose() => _speaker.Dispose();
+
+  private static int ToSapiRate(double rate)
+  {
+    var normalized = double.IsFinite(rate) ? rate : 1;
+    return Math.Clamp((int)Math.Round((normalized - 1) * 5), -5, 4);
+  }
 }
 
 public sealed class FallbackVoiceEngine : IVoiceEngine
@@ -49,18 +62,18 @@ public sealed class FallbackVoiceEngine : IVoiceEngine
   public string Name => _activeEngineName;
   public bool IsConfigured => _primary.IsConfigured || _fallback.IsConfigured;
 
-  public void Speak(string text)
+  public void Speak(VoiceUtterance utterance)
   {
     if (!_primary.IsConfigured || DateTimeOffset.UtcNow < _primaryUnavailableUntil)
     {
       _activeEngineName = _fallback.Name;
-      _fallback.Speak(text);
+      _fallback.Speak(utterance);
       return;
     }
 
     try
     {
-      _primary.Speak(text);
+      _primary.Speak(utterance);
       _activeEngineName = _primary.Name;
     }
     catch (Exception error)
@@ -68,7 +81,7 @@ public sealed class FallbackVoiceEngine : IVoiceEngine
       Console.Error.WriteLine($"VoiceWorker primary engine failed: {error.Message}");
       _activeEngineName = _fallback.Name;
       _primaryUnavailableUntil = DateTimeOffset.UtcNow.Add(_retryAfterFailure);
-      _fallback.Speak(text);
+      _fallback.Speak(utterance);
     }
   }
 
@@ -142,7 +155,7 @@ public sealed class VolcengineTtsEngine : IVoiceEngine
   public string Name => "volcengine";
   public bool IsConfigured => _options.IsConfigured;
 
-  public void Speak(string text)
+  public void Speak(VoiceUtterance utterance)
   {
     if (!IsConfigured) throw new InvalidOperationException("volcengine tts is not configured");
 
@@ -151,7 +164,7 @@ public sealed class VolcengineTtsEngine : IVoiceEngine
     request.Headers.TryAddWithoutValidation("X-Api-Access-Key", _options.AccessToken);
     request.Headers.TryAddWithoutValidation("X-Api-Resource-Id", _options.ResourceId);
     request.Headers.TryAddWithoutValidation("X-Api-Request-Id", Guid.NewGuid().ToString());
-    request.Content = new StringContent(BuildRequestJson(text), Encoding.UTF8, "application/json");
+    request.Content = new StringContent(BuildRequestJson(utterance), Encoding.UTF8, "application/json");
 
     using var response = _client.SendAsync(request).GetAwaiter().GetResult();
     var body = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
@@ -167,25 +180,37 @@ public sealed class VolcengineTtsEngine : IVoiceEngine
   public void Stop() { }
   public void Dispose() => _client.Dispose();
 
-  private string BuildRequestJson(string text)
+  private string BuildRequestJson(VoiceUtterance utterance)
   {
     var payload = new
     {
       req_params = new
       {
-        text,
+        text = utterance.Text,
         speaker = _options.VoiceType,
         audio_params = new
         {
           format = "wav",
           sample_rate = 24000,
-          speech_rate = _options.SpeechRate,
-          loudness_rate = _options.LoudnessRate,
+          speech_rate = ToVolcengineRate(utterance.Rate),
+          loudness_rate = ToVolcengineLoudness(utterance.Volume),
         },
       },
     };
 
     return JsonSerializer.Serialize(payload, JsonOptions());
+  }
+
+  private int ToVolcengineRate(double rate)
+  {
+    var normalized = double.IsFinite(rate) ? rate : 1;
+    return Math.Clamp(_options.SpeechRate + (int)Math.Round((normalized - 1) * 50), -50, 100);
+  }
+
+  private int ToVolcengineLoudness(int volume)
+  {
+    var normalized = Math.Clamp(volume, 0, 100);
+    return Math.Clamp(_options.LoudnessRate + normalized - 100, -50, 100);
   }
 
   private static byte[] DecodeAudio(string json)
@@ -348,7 +373,7 @@ internal static class NativeAudioPlayer
 
 public sealed class VoiceWorker : IDisposable
 {
-  private readonly ConcurrentQueue<string> _queue = new();
+  private readonly ConcurrentQueue<VoiceUtterance> _queue = new();
   private readonly AutoResetEvent _signal = new(false);
   private readonly Thread _thread;
   private readonly IVoiceEngine _engine;
@@ -380,9 +405,9 @@ public sealed class VoiceWorker : IDisposable
     queueLength = QueueLength,
   };
 
-  public void Enqueue(string text)
+  public void Enqueue(string text, double rate = 1, int volume = 100)
   {
-    _queue.Enqueue(text);
+    _queue.Enqueue(new VoiceUtterance(text, NormalizeRate(rate), Math.Clamp(volume, 0, 100)));
     _signal.Set();
   }
 
@@ -412,7 +437,7 @@ public sealed class VoiceWorker : IDisposable
         continue;
       }
 
-      _currentText = text;
+      _currentText = text.Text;
       _speaking = true;
       try
       {
@@ -428,6 +453,12 @@ public sealed class VoiceWorker : IDisposable
         _currentText = "";
       }
     }
+  }
+
+  private static double NormalizeRate(double rate)
+  {
+    if (!double.IsFinite(rate)) return 1;
+    return Math.Clamp(Math.Round(rate, 2), 0.6, 1.8);
   }
 
   private static IVoiceEngine CreateDefaultEngine()

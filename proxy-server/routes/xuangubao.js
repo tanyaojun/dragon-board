@@ -5,7 +5,7 @@ const XUANGUBAO_EVENT_HOSTS = [
   'https://flash-api.xuangubao.cn/api/event/history',
 ]
 
-const DEFAULT_STOCK_EVENT_TYPES = [
+const DEFAULT_EVENT_TYPES = [
   10001,
   10005,
   10003,
@@ -18,10 +18,11 @@ const DEFAULT_STOCK_EVENT_TYPES = [
   10014,
   10009,
   10010,
+  11000,
+  11001,
 ]
 
-const BLOCKED_EVENT_TYPES = new Set([11000, 11001])
-const STOCK_EVENT_TYPE_SET = new Set(DEFAULT_STOCK_EVENT_TYPES)
+const EVENT_TYPE_SET = new Set(DEFAULT_EVENT_TYPES)
 const DEFAULT_COUNT = 100
 const MAX_COUNT = 200
 
@@ -37,8 +38,8 @@ function normalizeTypes(value) {
     .map((item) => Number.parseInt(item.trim(), 10))
     .filter((item) => Number.isFinite(item))
 
-  const requestedTypes = rawTypes.filter((type) => STOCK_EVENT_TYPE_SET.has(type))
-  const types = requestedTypes.length ? requestedTypes : DEFAULT_STOCK_EVENT_TYPES
+  const requestedTypes = rawTypes.filter((type) => EVENT_TYPE_SET.has(type))
+  const types = requestedTypes.length ? requestedTypes : DEFAULT_EVENT_TYPES
   return Array.from(new Set(types))
 }
 
@@ -50,18 +51,37 @@ function buildEventHistoryUrl(baseUrl, query) {
 }
 
 function extractEvents(payload) {
-  if (Array.isArray(payload?.data)) return payload.data
-  if (Array.isArray(payload?.data?.items)) return payload.data.items
-  if (Array.isArray(payload?.data?.list)) return payload.data.list
+  const source = payload?.data ?? payload
+  const nestedEvents = [
+    ...toArray(source?.stock_abnormal_event_data),
+    ...toArray(source?.plate_abnormal_event_data),
+    ...toArray(source?.stockAbnormalEventData),
+    ...toArray(source?.plateAbnormalEventData),
+  ]
+  if (nestedEvents.length) return nestedEvents
+  if (Array.isArray(source)) return source
+  if (Array.isArray(source?.items)) return source.items
+  if (Array.isArray(source?.list)) return source.list
+  if (Array.isArray(source?.events)) return source.events
   if (Array.isArray(payload?.events)) return payload.events
   return []
 }
 
-function filterStockEvents(events) {
+function filterSupportedEvents(events) {
   return events.filter((event) => {
-    const type = Number(event?.event_type ?? event?.eventType ?? event?.type)
-    return STOCK_EVENT_TYPE_SET.has(type) && !BLOCKED_EVENT_TYPES.has(type)
+    const nested = event?.stock_abnormal_event_data
+      || event?.plate_abnormal_event_data
+      || event?.stockAbnormalEventData
+      || event?.plateAbnormalEventData
+      || {}
+    const type = Number(event?.event_type ?? event?.eventType ?? event?.type
+      ?? nested.event_type ?? nested.eventType ?? nested.type)
+    return EVENT_TYPE_SET.has(type)
   })
+}
+
+function toArray(value) {
+  return Array.isArray(value) ? value : []
 }
 
 export function registerXuangubaoRoutes(app, { plainClient }) {
@@ -77,7 +97,7 @@ export function registerXuangubaoRoutes(app, { plainClient }) {
         return res.json({
           ok: true,
           source: 'xuangubao-events',
-          data: filterStockEvents(extractEvents(response.data)),
+          data: filterSupportedEvents(extractEvents(response.data)),
           upstreamCode: response.data?.code ?? response.status,
           timestamp: Date.now(),
         })

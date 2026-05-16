@@ -30,15 +30,19 @@ export function createVoiceWorkerClient(options = {}) {
     async status() {
       return request('/status')
     },
-    async speak(text) {
+    async speak(text, options = {}) {
       return request('/speak', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ text }),
+        body: JSON.stringify({ text, rate: options.rate, volume: options.volume }),
       })
     },
-    async test() {
-      return request('/test', { method: 'POST' })
+    async test(options = {}) {
+      return request('/test', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ rate: options.rate, volume: options.volume }),
+      })
     },
     async stop() {
       return request('/stop', { method: 'POST' })
@@ -79,7 +83,10 @@ export function registerLocalVoiceRoutes(app, context = {}) {
     }
 
     try {
-      const result = await localVoice.speak(text)
+      const result = await localVoice.speak(text, {
+        rate: normalizeRate(req.body?.rate),
+        volume: normalizeVolume(req.body?.volume),
+      })
       res.json({
         ok: true,
         source: 'local-voice',
@@ -93,7 +100,10 @@ export function registerLocalVoiceRoutes(app, context = {}) {
 
   app.post('/api/local-voice/test', async (req, res) => {
     try {
-      const result = await localVoice.test()
+      const result = await localVoice.test({
+        rate: normalizeRate(req.body?.rate),
+        volume: normalizeVolume(req.body?.volume),
+      })
       res.json({
         ok: true,
         source: 'local-voice',
@@ -122,6 +132,18 @@ export function registerLocalVoiceRoutes(app, context = {}) {
 function normalizeSpeechText(value) {
   const text = String(value || '').replace(/\s+/g, ' ').trim()
   return text.slice(0, MAX_TEXT_LENGTH)
+}
+
+function normalizeRate(value) {
+  const rate = Number(value)
+  if (!Number.isFinite(rate)) return undefined
+  return Math.round(Math.min(1.8, Math.max(0.6, rate)) * 100) / 100
+}
+
+function normalizeVolume(value) {
+  const volume = Number(value)
+  if (!Number.isFinite(volume)) return undefined
+  return Math.round(Math.min(100, Math.max(0, volume)))
 }
 
 async function safeJson(response) {

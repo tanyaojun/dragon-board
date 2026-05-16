@@ -21,8 +21,16 @@ export const XUANGUBAO_STOCK_ABNORMAL_EVENT_TYPES: HotStockAbnormalEventType[] =
   10010,
 ]
 
+export const XUANGUBAO_SECTOR_ABNORMAL_EVENT_TYPES: HotStockAbnormalEventType[] = [
+  11000,
+  11001,
+]
+
 const STOCK_EVENT_TYPE_SET = new Set<number>(XUANGUBAO_STOCK_ABNORMAL_EVENT_TYPES)
+const SECTOR_EVENT_TYPE_SET = new Set<number>(XUANGUBAO_SECTOR_ABNORMAL_EVENT_TYPES)
 const DOWN_EVENT_TYPES = new Set<number>([10002, 10006, 10004, 10008, 10010])
+const SECTOR_UP_EVENT_TYPES = new Set<number>([11000])
+const SECTOR_DOWN_EVENT_TYPES = new Set<number>([11001])
 const DEFAULT_ENDPOINT = '/api/xuangubao/events'
 
 const EVENT_TYPE_NAMES: Record<number, string> = {
@@ -38,6 +46,8 @@ const EVENT_TYPE_NAMES: Record<number, string> = {
   10014: '新股开板回封',
   10009: '大幅拉升',
   10010: '快速跳水',
+  11000: '板块拉升',
+  11001: '板块跳水',
 }
 
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
@@ -79,35 +89,63 @@ function getFirst(row: any, keys: string[]): unknown {
 
 function getRows(payload: any): any[] {
   const source = payload?.data ?? payload
-  if (Array.isArray(source?.stock_abnormal_event_data)) return source.stock_abnormal_event_data
-  if (Array.isArray(source?.stockAbnormalEventData)) return source.stockAbnormalEventData
+  const nestedRows = [
+    ...toArray(source?.stock_abnormal_event_data),
+    ...toArray(source?.plate_abnormal_event_data),
+    ...toArray(source?.stockAbnormalEventData),
+    ...toArray(source?.plateAbnormalEventData),
+  ]
+  if (nestedRows.length) return nestedRows
   if (Array.isArray(source?.events)) return source.events
   if (Array.isArray(source)) return source
   return []
 }
 
+function toArray(value: unknown): any[] {
+  return Array.isArray(value) ? value : []
+}
+
 function normalizeEventRow(row: any): any {
   const nested = row?.stock_abnormal_event_data || row?.stockAbnormalEventData
-  if (!nested || typeof nested !== 'object') return row
+  const sectorNested = row?.plate_abnormal_event_data || row?.plateAbnormalEventData
+  const source = nested || sectorNested
+  if (!source || typeof source !== 'object') return row
 
   return {
-    ...nested,
-    id: row.id ?? nested.id,
-    event_id: row.event_id ?? nested.event_id,
-    event_type: row.event_type ?? nested.event_type,
-    event_type_name: row.event_type_name ?? nested.event_type_name,
-    event_timestamp: row.event_timestamp ?? nested.event_timestamp,
-    created_at: row.created_at ?? nested.created_at,
-    timestamp: row.timestamp ?? nested.timestamp,
+    ...source,
+    id: row.id ?? source.id,
+    event_id: row.event_id ?? source.event_id,
+    event_type: row.event_type ?? source.event_type,
+    event_type_name: row.event_type_name ?? source.event_type_name,
+    event_timestamp: row.event_timestamp ?? source.event_timestamp,
+    created_at: row.created_at ?? source.created_at,
+    timestamp: row.timestamp ?? source.timestamp,
     raw_event: row,
   }
 }
 
 function resolveDirection(type: number, changePct: number | null): HotStockEventDirection {
   if (DOWN_EVENT_TYPES.has(type)) return 'down'
+  if (SECTOR_UP_EVENT_TYPES.has(type)) return 'up'
+  if (SECTOR_DOWN_EVENT_TYPES.has(type)) return 'down'
   if (changePct !== null && changePct < 0) return 'down'
   if (changePct !== null && changePct > 0) return 'up'
   return 'neutral'
+}
+
+function normalizeSectorName(row: any): string {
+  return String(getFirst(row, [
+    'plate_name',
+    'plateName',
+    'sector_name',
+    'sectorName',
+    'name',
+    'title',
+    'stock_name',
+    'stockName',
+    'stock_code',
+    'code',
+  ]) || '').trim()
 }
 
 function resolveSeverity(type: number): HotStockEventSeverity {
@@ -132,17 +170,20 @@ export function parseXuangubaoAbnormalEvents(payload: unknown): HotStockAbnormal
   for (const sourceRow of getRows(payload)) {
     const row = normalizeEventRow(sourceRow)
     const type = Number(getFirst(row, ['event_type', 'type', 'eventType']))
-    if (!STOCK_EVENT_TYPE_SET.has(type)) continue
-
-    const code = normalizeHotStockCode(getFirst(row, ['stock_code', 'code', 'symbol', 'stockCode']))
-    if (!code) continue
+    if (!STOCK_EVENT_TYPE_SET.has(type) && !SECTOR_EVENT_TYPE_SET.has(type)) continue
 
     const changePct = toRatio(getFirst(row, ['change_percent', 'change_pct', 'changePct', 'change', 'pcp']))
     const price = toNumber(getFirst(row, ['price', 'current_price', 'currentPrice', 'last', 'close']))
     const timestamp = toTimestamp(getFirst(row, ['event_timestamp', 'created_at', 'timestamp', 'time', 'createdAt']))
-    const id = String(getFirst(row, ['id', 'event_id', 'eventId']) || `${type}-${code}-${timestamp}`)
+    const isSector = SECTOR_EVENT_TYPE_SET.has(type)
+    const code = isSector ? '' : normalizeHotStockCode(getFirst(row, ['stock_code', 'code', 'symbol', 'stockCode']))
+    if (!isSector && !code) continue
+    const sectorName = isSector ? normalizeSectorName(row) : ''
+    const identity = isSector ? sectorName || 'sector' : code
+    const id = String(getFirst(row, ['id', 'event_id', 'eventId']) || `${type}-${identity}-${timestamp}`)
 
     events.push({
+      category: isSector ? 'sector' : 'stock',
       id,
       eventType: type as HotStockAbnormalEventType,
       type: type as HotStockAbnormalEventType,
@@ -151,10 +192,11 @@ export function parseXuangubaoAbnormalEvents(payload: unknown): HotStockAbnormal
       severity: resolveSeverity(type),
       timestamp,
       code,
-      name: String(getFirst(row, ['stock_name', 'name', 'stockName']) || ''),
+      name: isSector ? sectorName : String(getFirst(row, ['stock_name', 'name', 'stockName']) || ''),
       changePct,
       price,
       relatedPlates: normalizeRelatedPlates(getFirst(row, ['related_plates', 'relatedPlates', 'plates'])),
+      sectorName,
       matchedHotStock: false,
       matchedCandidate: false,
       raw: sourceRow,

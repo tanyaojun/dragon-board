@@ -80,7 +80,11 @@ export class HotStockEventMonitorService {
   private readonly now: () => number
   private timer: ReturnType<typeof setInterval> | null = null
   private events: HotStockAbnormalEvent[] = []
+  private hotStockEvents: HotStockAbnormalEvent[] = []
+  private otherStockEvents: HotStockAbnormalEvent[] = []
+  private sectorEvents: HotStockAbnormalEvent[] = []
   private latestAdded: HotStockAbnormalEvent[] = []
+  private latestHotStockAdded: HotStockAbnormalEvent[] = []
   private watchedCodes: string[] = []
   private lastUpdate: number | null = null
   private loading = false
@@ -106,7 +110,11 @@ export class HotStockEventMonitorService {
   getState(): HotStockEventMonitorState {
     return {
       events: this.getEvents(),
+      hotStockEvents: [...this.hotStockEvents],
+      otherStockEvents: [...this.otherStockEvents],
+      sectorEvents: [...this.sectorEvents],
       latestAdded: [...this.latestAdded],
+      latestHotStockAdded: [...this.latestHotStockAdded],
       watchedCodes: [...this.watchedCodes],
       lastUpdate: this.lastUpdate,
       loading: this.loading,
@@ -130,26 +138,41 @@ export class HotStockEventMonitorService {
 
     try {
       const previousIds = new Set(this.events.map(event => event.id))
+      const previousHotStockIds = new Set(this.hotStockEvents.map(event => event.id))
       const watchedCodeSet = new Set(watchedCodes)
       const candidateCodes = getCandidateCodes(this.dataLayer.getDragonReview())
       const today = this.now()
-      const nextEvents = dedupeById(await this.feed.fetchEvents())
+      const allTodayEvents = dedupeById(await this.feed.fetchEvents())
         .map(event => ({
           ...event,
-          code: normalizeHotStockCode(event.code),
+          category: event.category || 'stock',
+          code: event.category === 'sector' ? '' : normalizeHotStockCode(event.code),
         }))
-        .filter(event => event.code && watchedCodeSet.has(event.code))
         .filter(event => isSameLocalDate(event.timestamp, today))
         .map(event => ({
           ...event,
-          matchedHotStock: true,
-          matchedCandidate: candidateCodes.has(event.code),
+          matchedHotStock: event.category === 'stock' && watchedCodeSet.has(event.code),
+          matchedCandidate: event.category === 'stock' && candidateCodes.has(event.code),
         }))
         .sort((a, b) => b.timestamp - a.timestamp)
+
+      const nextHotStockEvents = allTodayEvents
+        .filter(event => event.category === 'stock' && event.matchedHotStock)
         .slice(0, this.maxEvents)
+      const nextOtherStockEvents = allTodayEvents
+        .filter(event => event.category === 'stock' && !event.matchedHotStock)
+        .slice(0, this.maxEvents)
+      const nextSectorEvents = allTodayEvents
+        .filter(event => event.category === 'sector')
+        .slice(0, this.maxEvents)
+      const nextEvents = [...allTodayEvents].slice(0, this.maxEvents)
 
       this.events = nextEvents
+      this.hotStockEvents = nextHotStockEvents
+      this.otherStockEvents = nextOtherStockEvents
+      this.sectorEvents = nextSectorEvents
       this.latestAdded = nextEvents.filter(event => !previousIds.has(event.id))
+      this.latestHotStockAdded = nextHotStockEvents.filter(event => !previousHotStockIds.has(event.id))
       this.lastUpdate = this.now()
       this.loading = false
       this.notify()
@@ -158,6 +181,9 @@ export class HotStockEventMonitorService {
         ok: true,
         added: this.latestAdded.length,
         events: this.getEvents(),
+        hotStockEvents: [...this.hotStockEvents],
+        otherStockEvents: [...this.otherStockEvents],
+        sectorEvents: [...this.sectorEvents],
         watchedCodes,
       }
     } catch (error) {
@@ -168,6 +194,9 @@ export class HotStockEventMonitorService {
         ok: false,
         added: 0,
         events: this.getEvents(),
+        hotStockEvents: [...this.hotStockEvents],
+        otherStockEvents: [...this.otherStockEvents],
+        sectorEvents: [...this.sectorEvents],
         watchedCodes,
         error: this.error,
       }

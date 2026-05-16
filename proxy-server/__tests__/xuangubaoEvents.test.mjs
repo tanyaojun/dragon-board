@@ -12,7 +12,7 @@ function listen(app) {
   })
 }
 
-test('xuangubao events proxies stock event history with sanitized default types', async () => {
+test('xuangubao events proxies stock and sector event history with sanitized default types', async () => {
   const requestedUrls = []
   const plainClient = {
     async get(url) {
@@ -20,10 +20,14 @@ test('xuangubao events proxies stock event history with sanitized default types'
       return {
         data: {
           code: 20000,
-          data: [
-            { id: 1, event_type: 10001, title: 'stock event' },
-            { id: 2, event_type: 11000, title: 'sector event' },
-          ],
+          data: {
+            stock_abnormal_event_data: [
+              { id: 1, event_type: 10001, title: 'stock event' },
+            ],
+            plate_abnormal_event_data: [
+              { id: 2, event_type: 11000, title: 'sector event' },
+            ],
+          },
         },
       }
     },
@@ -43,16 +47,20 @@ test('xuangubao events proxies stock event history with sanitized default types'
     assert.equal(body.ok, true)
     assert.equal(body.source, 'xuangubao-events')
     assert.equal(body.upstreamCode, 20000)
-    assert.deepEqual(body.data, [{ id: 1, event_type: 10001, title: 'stock event' }])
+    assert.deepEqual(body.data, [
+      { id: 1, event_type: 10001, title: 'stock event' },
+      { id: 2, event_type: 11000, title: 'sector event' },
+    ])
     assert.equal(upstreamUrl.searchParams.get('count'), '100')
     assert.match(upstreamUrl.searchParams.get('types'), /10001/)
-    assert.doesNotMatch(upstreamUrl.searchParams.get('types'), /11000|11001/)
+    assert.match(upstreamUrl.searchParams.get('types'), /11000/)
+    assert.match(upstreamUrl.searchParams.get('types'), /11001/)
   } finally {
     server.close()
   }
 })
 
-test('xuangubao events clamps count and filters requested sector event types', async () => {
+test('xuangubao events clamps count and keeps requested sector event types', async () => {
   let requestedUrl = ''
   const plainClient = {
     async get(url) {
@@ -74,7 +82,7 @@ test('xuangubao events clamps count and filters requested sector event types', a
     assert.equal(response.status, 200)
     assert.equal(body.ok, true)
     assert.equal(upstreamUrl.searchParams.get('count'), '200')
-    assert.equal(upstreamUrl.searchParams.get('types'), '10001,10005')
+    assert.equal(upstreamUrl.searchParams.get('types'), '10001,11000,11001,10005')
   } finally {
     server.close()
   }
@@ -95,14 +103,14 @@ test('xuangubao events falls back to default types when requested types are unsu
   const { server, baseUrl } = await listen(app)
 
   try {
-    const response = await fetch(`${baseUrl}/api/xuangubao/events?types=99999,11000`)
+    const response = await fetch(`${baseUrl}/api/xuangubao/events?types=99999`)
     const body = await response.json()
     const upstreamUrl = new URL(requestedUrl)
 
     assert.equal(response.status, 200)
     assert.equal(body.ok, true)
     assert.match(upstreamUrl.searchParams.get('types'), /10001/)
-    assert.doesNotMatch(upstreamUrl.searchParams.get('types'), /99999|11000/)
+    assert.doesNotMatch(upstreamUrl.searchParams.get('types'), /99999/)
   } finally {
     server.close()
   }

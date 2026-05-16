@@ -58,3 +58,5 @@ quant-board/data/
 quant-board/data/warehouse/*.db
 quant-board/data/staging/
 quant-board/data/reports/
+# Added by code-review-graph
+.code-review-graph/

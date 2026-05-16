@@ -5,6 +5,7 @@ import type { HotStockAbnormalEvent } from '../hotStockEventTypes'
 
 function makeEvent(overrides: Partial<HotStockAbnormalEvent>): HotStockAbnormalEvent {
   return {
+    category: overrides.category || 'stock',
     id: String(overrides.id || `${overrides.type || 10001}-${overrides.code || '000001'}`),
     eventType: overrides.eventType || overrides.type || 10001,
     type: overrides.type || 10001,
@@ -17,6 +18,7 @@ function makeEvent(overrides: Partial<HotStockAbnormalEvent>): HotStockAbnormalE
     changePct: overrides.changePct || 0,
     price: overrides.price || 10,
     relatedPlates: overrides.relatedPlates || [],
+    sectorName: overrides.sectorName || '',
     matchedHotStock: false,
     matchedCandidate: false,
     raw: overrides.raw || {},
@@ -24,7 +26,7 @@ function makeEvent(overrides: Partial<HotStockAbnormalEvent>): HotStockAbnormalE
 }
 
 describe('HotStockEventMonitorService', () => {
-  it('keeps only watched hotlist codes, marks candidates, dedupes and sorts today events', async () => {
+  it('splits today events into hot stocks, other stocks and sectors', async () => {
     const feed = {
       fetchEvents: vi.fn().mockResolvedValue([
         makeEvent({ id: 'old', code: '600001', timestamp: Date.parse('2026-05-14T14:00:00+08:00') }),
@@ -32,6 +34,17 @@ describe('HotStockEventMonitorService', () => {
         makeEvent({ id: 'a', code: '600001', timestamp: Date.parse('2026-05-15T09:41:00+08:00') }),
         makeEvent({ id: 'b', code: '000002.SZ', timestamp: Date.parse('2026-05-15T10:01:00+08:00') }),
         makeEvent({ id: 'c', code: '300001', timestamp: Date.parse('2026-05-15T10:02:00+08:00') }),
+        makeEvent({
+          id: 'sector-a',
+          category: 'sector',
+          code: '',
+          name: '',
+          sectorName: '机器人',
+          type: 11000,
+          eventType: 11000,
+          typeName: '板块拉升',
+          timestamp: Date.parse('2026-05-15T10:03:00+08:00'),
+        }),
       ]),
     }
     const dataLayer = {
@@ -54,19 +67,34 @@ describe('HotStockEventMonitorService', () => {
     const result = await service.refresh()
 
     expect(result.ok).toBe(true)
-    expect(result.added).toBe(2)
+    expect(result.added).toBe(4)
     expect(result.watchedCodes).toEqual(['600001', '000002'])
-    expect(result.events.map(event => event.id)).toEqual(['b', 'a'])
-    expect(result.events[0]).toMatchObject({
+    expect(result.hotStockEvents.map(event => event.id)).toEqual(['b', 'a'])
+    expect(result.otherStockEvents.map(event => event.id)).toEqual(['c'])
+    expect(result.sectorEvents.map(event => event.id)).toEqual(['sector-a'])
+    expect(result.events.map(event => event.id)).toEqual(['sector-a', 'c', 'b', 'a'])
+    expect(result.hotStockEvents[0]).toMatchObject({
       code: '000002',
       matchedHotStock: true,
       matchedCandidate: false,
     })
-    expect(result.events[1]).toMatchObject({
+    expect(result.hotStockEvents[1]).toMatchObject({
       code: '600001',
       matchedHotStock: true,
       matchedCandidate: true,
     })
+    expect(result.otherStockEvents[0]).toMatchObject({
+      code: '300001',
+      matchedHotStock: false,
+      matchedCandidate: false,
+    })
+    expect(result.sectorEvents[0]).toMatchObject({
+      category: 'sector',
+      sectorName: '机器人',
+      matchedHotStock: false,
+      matchedCandidate: false,
+    })
+    expect(service.getState().latestHotStockAdded.map(event => event.id)).toEqual(['b', 'a'])
   })
 
   it('preserves previous events when feed fails', async () => {
@@ -95,5 +123,6 @@ describe('HotStockEventMonitorService', () => {
     expect(result.added).toBe(0)
     expect(result.error).toBe('network')
     expect(result.events.map(event => event.id)).toEqual(['a'])
+    expect(result.hotStockEvents.map(event => event.id)).toEqual(['a'])
   })
 })

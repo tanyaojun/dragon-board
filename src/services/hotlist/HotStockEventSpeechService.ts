@@ -7,6 +7,8 @@ export interface HotStockEventSpeechServiceOptions {
   fetcher?: SpeechFetcher | null
   maxEventsPerSpeech?: number
   flushDelayMs?: number
+  rate?: number
+  volume?: number
 }
 
 export interface HotStockEventSpeechStatus {
@@ -41,6 +43,8 @@ export class HotStockEventSpeechService {
   private readonly flushDelayMs: number
   private initialized = false
   private enabled = true
+  private rate: number
+  private volume: number
   private spokenIds = new Set<string>()
   private pendingEvents: HotStockAbnormalEvent[] = []
   private flushTimer: ReturnType<typeof setTimeout> | null = null
@@ -54,6 +58,8 @@ export class HotStockEventSpeechService {
     this.fetcher = options.fetcher === undefined ? getBrowserFetcher() : options.fetcher
     this.maxEventsPerSpeech = options.maxEventsPerSpeech ?? 3
     this.flushDelayMs = options.flushDelayMs ?? 3_000
+    this.rate = normalizeRate(options.rate)
+    this.volume = normalizeVolume(options.volume)
   }
 
   isSupported(): boolean {
@@ -98,6 +104,18 @@ export class HotStockEventSpeechService {
   setEnabled(enabled: boolean) {
     this.enabled = enabled
     if (!enabled) this.stop()
+  }
+
+  setVoiceOptions(options: { rate?: number; volume?: number }) {
+    if (options.rate !== undefined) this.rate = normalizeRate(options.rate)
+    if (options.volume !== undefined) this.volume = normalizeVolume(options.volume)
+  }
+
+  getVoiceOptions() {
+    return {
+      rate: this.rate,
+      volume: this.volume,
+    }
   }
 
   isEnabled(): boolean {
@@ -164,7 +182,7 @@ export class HotStockEventSpeechService {
       const response = await this.fetcher(LOCAL_SPEAK_ENDPOINT, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ text }),
+        body: JSON.stringify({ text, rate: this.rate, volume: this.volume }),
       })
       if (!response.ok) return false
       this.status = { ...this.status, mode: 'local', supported: true }
@@ -178,7 +196,11 @@ export class HotStockEventSpeechService {
   private async tryLocalTest(): Promise<boolean> {
     if (!this.fetcher) return false
     try {
-      const response = await this.fetcher(LOCAL_TEST_ENDPOINT, { method: 'POST' })
+      const response = await this.fetcher(LOCAL_TEST_ENDPOINT, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ rate: this.rate, volume: this.volume }),
+      })
       if (!response.ok) return false
       this.status = { ...this.status, mode: 'local', supported: true }
       return true
@@ -227,6 +249,18 @@ function formatPct(value: number | null): string {
 
 function buildOfflineStatus(): HotStockEventSpeechStatus {
   return { mode: 'offline', supported: false, queueLength: 0 }
+}
+
+function normalizeRate(value: unknown): number {
+  const rate = Number(value)
+  if (!Number.isFinite(rate)) return 1
+  return Math.round(Math.min(1.8, Math.max(0.6, rate)) * 100) / 100
+}
+
+function normalizeVolume(value: unknown): number {
+  const volume = Number(value)
+  if (!Number.isFinite(volume)) return 100
+  return Math.round(Math.min(100, Math.max(0, volume)))
 }
 
 export const hotStockEventSpeechService = new HotStockEventSpeechService()

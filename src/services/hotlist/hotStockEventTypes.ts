@@ -3,6 +3,7 @@ import type { DragonReviewResult } from '../dragon/types'
 
 export type HotStockEventDirection = 'up' | 'down' | 'neutral'
 export type HotStockEventSeverity = 'normal' | 'important'
+export type HotStockEventCategory = 'stock' | 'sector'
 
 export type HotStockAbnormalEventType =
   | 10001
@@ -17,8 +18,11 @@ export type HotStockAbnormalEventType =
   | 10014
   | 10009
   | 10010
+  | 11000
+  | 11001
 
 export interface HotStockAbnormalEvent {
+  category: HotStockEventCategory
   id: string
   eventType: HotStockAbnormalEventType
   type: HotStockAbnormalEventType
@@ -31,6 +35,7 @@ export interface HotStockAbnormalEvent {
   changePct: number | null
   price: number | null
   relatedPlates: string[]
+  sectorName: string
   matchedHotStock: boolean
   matchedCandidate: boolean
   raw: unknown
@@ -49,13 +54,20 @@ export interface HotStockEventRefreshResult {
   ok: boolean
   added: number
   events: HotStockAbnormalEvent[]
+  hotStockEvents: HotStockAbnormalEvent[]
+  otherStockEvents: HotStockAbnormalEvent[]
+  sectorEvents: HotStockAbnormalEvent[]
   watchedCodes: string[]
   error?: string
 }
 
 export interface HotStockEventMonitorState {
   events: HotStockAbnormalEvent[]
+  hotStockEvents: HotStockAbnormalEvent[]
+  otherStockEvents: HotStockAbnormalEvent[]
+  sectorEvents: HotStockAbnormalEvent[]
   latestAdded: HotStockAbnormalEvent[]
+  latestHotStockAdded: HotStockAbnormalEvent[]
   watchedCodes: string[]
   lastUpdate: number | null
   loading: boolean

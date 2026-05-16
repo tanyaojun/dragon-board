@@ -47,6 +47,8 @@ describe('XuangubaoAbnormalEventFeed', () => {
                 { name: '储能' },
               ],
             },
+          ],
+          plate_abnormal_event_data: [
             {
               id: 'sector-1',
               event_type: 11000,
@@ -62,8 +64,9 @@ describe('XuangubaoAbnormalEventFeed', () => {
     const events = await feed.fetchEvents()
 
     expect(fetcher).toHaveBeenCalledWith('/api/xuangubao/events')
-    expect(events).toHaveLength(1)
+    expect(events).toHaveLength(2)
     expect(events[0]).toMatchObject({
+      category: 'stock',
       id: 'evt-1',
       eventType: 10001,
       type: 10001,
@@ -78,6 +81,15 @@ describe('XuangubaoAbnormalEventFeed', () => {
       relatedPlates: ['锂电池', '储能'],
       matchedHotStock: false,
       matchedCandidate: false,
+    })
+    expect(events[1]).toMatchObject({
+      category: 'sector',
+      id: 'sector-1',
+      eventType: 11000,
+      type: 11000,
+      typeName: '板块拉升',
+      direction: 'up',
+      sectorName: 'BK001',
     })
   })
 
@@ -110,8 +122,9 @@ describe('XuangubaoAbnormalEventFeed', () => {
       ],
     })
 
-    expect(events).toHaveLength(1)
+    expect(events).toHaveLength(2)
     expect(events[0]).toMatchObject({
+      category: 'stock',
       id: '100',
       eventType: 10007,
       type: 10007,
@@ -123,9 +136,18 @@ describe('XuangubaoAbnormalEventFeed', () => {
       price: 3.21,
       relatedPlates: ['影视', '知识产权'],
     })
+    expect(events[1]).toMatchObject({
+      category: 'sector',
+      id: '101',
+      eventType: 11000,
+      typeName: '板块拉升',
+      timestamp: 1778810401000,
+      sectorName: '影视',
+      direction: 'up',
+    })
   })
 
-  it('parses alternate payload shapes and ignores non-stock event types', () => {
+  it('parses alternate payload shapes and keeps sector event types', () => {
     const events = parseXuangubaoAbnormalEvents({
       stock_abnormal_event_data: [
         {
@@ -151,6 +173,7 @@ describe('XuangubaoAbnormalEventFeed', () => {
     expect(XUANGUBAO_STOCK_ABNORMAL_EVENT_TYPES).not.toContain(11001)
     expect(events).toEqual([
       expect.objectContaining({
+        category: 'stock',
         id: 'evt-2',
         type: 10006,
         typeName: '有大卖盘',
@@ -161,6 +184,13 @@ describe('XuangubaoAbnormalEventFeed', () => {
         name: '贵州茅台',
         changePct: -0.0234,
         price: 1700.1,
+      }),
+      expect.objectContaining({
+        category: 'sector',
+        id: 'evt-3',
+        type: 11001,
+        typeName: '板块跳水',
+        direction: 'down',
       }),
     ])
   })

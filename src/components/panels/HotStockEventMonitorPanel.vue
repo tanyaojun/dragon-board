@@ -8,101 +8,112 @@
       <button class="icon-btn" type="button" title="关闭" @click="close">✕</button>
     </div>
 
-    <div class="search-box">
-      <span class="search-icon">⌕</span>
-      <input v-model="keyword" type="text" placeholder="代码/名称/拼音首字母" />
-    </div>
-
-    <div class="mode-tabs">
+    <div class="page-tabs">
       <button
-        v-for="tab in tabs"
-        :key="tab.id"
+        v-for="page in pages"
+        :key="page.id"
         type="button"
-        :class="{ active: activeTab === tab.id }"
-        @click="activeTab = tab.id"
+        :class="{ active: activePage === page.id }"
+        @click="activePage = page.id"
       >
-        <span>{{ tab.icon }}</span>{{ tab.label }}
+        <span>{{ page.icon }}</span>{{ page.label }}
       </button>
     </div>
 
-    <div class="filter-bar">
-      <button class="filter-toggle" type="button" @click="showFilters = !showFilters">
-        <span>⚑筛选设置</span>
-        <span class="filter-action">⚙设置</span>
-      </button>
-    </div>
+    <template v-if="activePage !== 'settings'">
+      <div class="section-title">
+        <span>{{ activePageTitle }}</span>
+        <span class="count-badge">{{ filteredEvents.length }}</span>
+      </div>
 
-    <div v-if="showFilters" class="filter-panel">
-      <div class="filter-title">
-        <span>异动类型筛选</span>
-        <button type="button" @click="showFilters = false">×</button>
+      <div class="event-list">
+        <div v-if="state.loading && !state.events.length" class="empty-state">正在加载选股通数据...</div>
+        <div v-else-if="state.error && !state.events.length" class="empty-state error">
+          {{ state.error }}
+          <button type="button" @click="refresh">重试</button>
+        </div>
+        <div v-else-if="!filteredEvents.length" class="empty-state">{{ emptyText }}</div>
+
+        <button
+          v-for="event in filteredEvents"
+          :key="event.id"
+          class="event-card"
+          type="button"
+          :class="[event.direction, { candidate: event.matchedCandidate, sector: event.category === 'sector' }]"
+          @click="selectStock(event)"
+        >
+          <div class="event-time-row">
+            <span>{{ formatEventTime(event.timestamp) }}</span>
+            <span class="event-badge" :class="event.direction">{{ event.typeName }}</span>
+          </div>
+          <div class="stock-row">
+            <div class="stock-name-code">
+              <span class="stock-name">{{ displayName(event) }}</span>
+              <span v-if="event.code" class="stock-code">{{ event.code }}</span>
+              <span v-if="event.matchedCandidate" class="candidate-badge">候选</span>
+            </div>
+            <span class="change" :class="event.direction">{{ formatPct(event.changePct) }}</span>
+          </div>
+          <div v-if="event.relatedPlates.length" class="related-plates">
+            <span class="related-title">相关板块</span>
+            <span v-for="plate in event.relatedPlates.slice(0, 4)" :key="plate" class="plate-chip">
+              {{ plate }}
+            </span>
+            <span v-if="event.relatedPlates.length > 4" class="plate-chip more">
+              +{{ event.relatedPlates.length - 4 }}
+            </span>
+          </div>
+        </button>
       </div>
-      <div class="filter-actions">
-        <button type="button" @click="setAllTypes(true)">全选</button>
-        <button type="button" @click="invertTypes">反选</button>
-        <button type="button" @click="setAllTypes(false)">清空</button>
+    </template>
+
+    <div v-else class="settings-page">
+      <div class="search-box">
+        <span class="search-icon">⌕</span>
+        <input v-model="keyword" type="text" placeholder="代码/名称/板块/拼音首字母" />
       </div>
-      <div class="type-grid">
-        <label v-for="item in eventTypeOptions" :key="item.type">
-          <input v-model="enabledTypes" type="checkbox" :value="item.type" />
-          <span>{{ item.name }}</span>
+
+      <div class="filter-panel">
+        <div class="filter-title">
+          <span>异动类型筛选</span>
+        </div>
+        <div class="filter-actions">
+          <button type="button" @click="setAllTypes(true)">全选</button>
+          <button type="button" @click="invertTypes">反选</button>
+          <button type="button" @click="setAllTypes(false)">清空</button>
+        </div>
+        <div class="type-grid">
+          <label v-for="item in eventTypeOptions" :key="item.type">
+            <input v-model="enabledTypes" type="checkbox" :value="item.type" />
+            <span>{{ item.name }}</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="settings-card">
+        <div class="speech-row">
+          <span>语音提醒</span>
+          <span class="speech-mode">{{ speechModeLabel }}</span>
+          <label class="speech-toggle">
+            <input v-model="speechEnabled" type="checkbox" :disabled="!speechSupported" />
+            <span>{{ speechEnabled ? '开' : '关' }}</span>
+          </label>
+          <span v-if="!speechSupported" class="speech-disabled">不可用</span>
+        </div>
+        <label class="range-row">
+          <span>语速 {{ speechRate.toFixed(1) }}x</span>
+          <input v-model.number="speechRate" type="range" min="0.6" max="1.8" step="0.1" />
+        </label>
+        <label class="range-row">
+          <span>音量 {{ speechVolume }}</span>
+          <input v-model.number="speechVolume" type="range" min="0" max="100" step="5" />
         </label>
       </div>
-    </div>
 
-    <div class="speech-row">
-      <span>语音提醒</span>
-      <span class="speech-mode">{{ speechModeLabel }}</span>
-      <label class="speech-toggle">
-        <input v-model="speechEnabled" type="checkbox" :disabled="!speechSupported" />
-        <span>{{ speechEnabled ? '开' : '关' }}</span>
-      </label>
-      <span v-if="!speechSupported" class="speech-disabled">不可用</span>
-    </div>
-
-    <div class="section-title">
-      <span>⚠实时异动提醒</span>
-      <span class="count-badge">{{ filteredEvents.length }}</span>
-    </div>
-
-    <div class="event-list">
-      <div v-if="state.loading && !state.events.length" class="empty-state">正在加载选股通数据...</div>
-      <div v-else-if="state.error && !state.events.length" class="empty-state error">
+      <div v-if="state.error" class="empty-state error">
         {{ state.error }}
         <button type="button" @click="refresh">重试</button>
       </div>
-      <div v-else-if="!filteredEvents.length" class="empty-state">暂无热榜个股异动</div>
-
-      <button
-        v-for="event in filteredEvents"
-        :key="event.id"
-        class="event-card"
-        type="button"
-        :class="[event.direction, { candidate: event.matchedCandidate }]"
-        @click="selectStock(event)"
-      >
-        <div class="event-time-row">
-          <span>{{ formatEventTime(event.timestamp) }}</span>
-          <span class="event-badge" :class="event.direction">{{ event.typeName }}</span>
-        </div>
-        <div class="stock-row">
-          <div class="stock-name-code">
-            <span class="stock-name">{{ event.name || '--' }}</span>
-            <span class="stock-code">{{ event.code }}</span>
-            <span v-if="event.matchedCandidate" class="candidate-badge">候选</span>
-          </div>
-          <span class="change" :class="event.direction">{{ formatPct(event.changePct) }}</span>
-        </div>
-        <div v-if="event.relatedPlates.length" class="related-plates">
-          <span class="related-title">相关板块</span>
-          <span v-for="plate in event.relatedPlates.slice(0, 4)" :key="plate" class="plate-chip">
-            {{ plate }}
-          </span>
-          <span v-if="event.relatedPlates.length > 4" class="plate-chip more">
-            +{{ event.relatedPlates.length - 4 }}
-          </span>
-        </div>
-      </button>
     </div>
 
     <div class="event-footer">
@@ -130,7 +141,10 @@ import {
   type HotStockAbnormalEventType,
   type HotStockEventMonitorState,
 } from '../../services/hotlist/hotStockEventTypes'
-import { XUANGUBAO_STOCK_ABNORMAL_EVENT_TYPES } from '../../services/hotlist/XuangubaoAbnormalEventFeed'
+import {
+  XUANGUBAO_SECTOR_ABNORMAL_EVENT_TYPES,
+  XUANGUBAO_STOCK_ABNORMAL_EVENT_TYPES,
+} from '../../services/hotlist/XuangubaoAbnormalEventFeed'
 
 const props = defineProps<{
   visible: boolean
@@ -156,17 +170,28 @@ const EVENT_TYPE_NAMES: Record<HotStockAbnormalEventType, string> = {
   10014: '新股开板回封',
   10009: '大幅拉升',
   10010: '快速跳水',
+  11000: '板块拉升',
+  11001: '板块跳水',
 }
 
-const tabs = [
-  { id: 'all', label: '全部', icon: '☷' },
-  { id: 'up', label: '上涨', icon: '⌁' },
-  { id: 'candidate', label: '候选', icon: '◆' },
+const pages = [
+  { id: 'hot', label: '热榜个股', icon: '☷' },
+  { id: 'other', label: '其他个股', icon: '⌁' },
+  { id: 'sector', label: '板块', icon: '◆' },
+  { id: 'settings', label: '设置', icon: '⚙' },
 ] as const
+const ALL_EVENT_TYPES = [
+  ...XUANGUBAO_STOCK_ABNORMAL_EVENT_TYPES,
+  ...XUANGUBAO_SECTOR_ABNORMAL_EVENT_TYPES,
+]
 
 const blankState: HotStockEventMonitorState = {
   events: [],
+  hotStockEvents: [],
+  otherStockEvents: [],
+  sectorEvents: [],
   latestAdded: [],
+  latestHotStockAdded: [],
   watchedCodes: [],
   lastUpdate: null,
   loading: false,
@@ -174,15 +199,17 @@ const blankState: HotStockEventMonitorState = {
   error: null,
 }
 
-const activeTab = ref<(typeof tabs)[number]['id']>('all')
+const activePage = ref<(typeof pages)[number]['id']>('hot')
 const keyword = ref('')
-const showFilters = ref(false)
 const state = ref<HotStockEventMonitorState>(blankState)
-const enabledTypes = ref<HotStockAbnormalEventType[]>([...XUANGUBAO_STOCK_ABNORMAL_EVENT_TYPES])
+const enabledTypes = ref<HotStockAbnormalEventType[]>([...ALL_EVENT_TYPES])
 const speechSupported = ref(hotStockEventSpeechService.isSupported())
 const speechEnabled = ref(speechSupported.value)
 const speechMode = ref(hotStockEventSpeechService.getStatus().mode)
 const speechEngine = ref(hotStockEventSpeechService.getStatus().engine)
+const voiceOptions = hotStockEventSpeechService.getVoiceOptions()
+const speechRate = ref(voiceOptions.rate)
+const speechVolume = ref(voiceOptions.volume)
 
 const close = () => {
   emit('update:visible', false)
@@ -198,22 +225,38 @@ const { panelRef, panelStyle } = usePanel({
 })
 
 const eventTypeOptions = computed(() =>
-  XUANGUBAO_STOCK_ABNORMAL_EVENT_TYPES.map((type) => ({
+  ALL_EVENT_TYPES.map((type) => ({
     type,
     name: EVENT_TYPE_NAMES[type],
   })),
 )
 
+const pageEvents = computed(() => {
+  if (activePage.value === 'other') return state.value.otherStockEvents
+  if (activePage.value === 'sector') return state.value.sectorEvents
+  return state.value.hotStockEvents
+})
+
 const filteredEvents = computed(() => {
   const text = keyword.value.trim().toUpperCase()
   const enabled = new Set(enabledTypes.value)
-  return state.value.events.filter((event) => {
+  return pageEvents.value.filter((event) => {
     if (!enabled.has(event.type)) return false
-    if (activeTab.value === 'up' && event.direction !== 'up') return false
-    if (activeTab.value === 'candidate' && !event.matchedCandidate) return false
     if (!text) return true
-    return `${event.code}${event.name}${event.relatedPlates.join('')}`.toUpperCase().includes(text)
+    return `${event.code}${event.name}${event.sectorName}${event.relatedPlates.join('')}`.toUpperCase().includes(text)
   })
+})
+
+const activePageTitle = computed(() => {
+  if (activePage.value === 'other') return '其他个股异动'
+  if (activePage.value === 'sector') return '板块异动'
+  return '热榜个股异动'
+})
+
+const emptyText = computed(() => {
+  if (activePage.value === 'other') return '暂无其他个股异动'
+  if (activePage.value === 'sector') return '暂无板块异动'
+  return '暂无热榜个股异动'
 })
 
 const speechModeLabel = computed(() => {
@@ -223,12 +266,12 @@ const speechModeLabel = computed(() => {
 })
 
 function setAllTypes(checked: boolean) {
-  enabledTypes.value = checked ? [...XUANGUBAO_STOCK_ABNORMAL_EVENT_TYPES] : []
+  enabledTypes.value = checked ? [...ALL_EVENT_TYPES] : []
 }
 
 function invertTypes() {
   const enabled = new Set(enabledTypes.value)
-  enabledTypes.value = XUANGUBAO_STOCK_ABNORMAL_EVENT_TYPES.filter((type) => !enabled.has(type))
+  enabledTypes.value = ALL_EVENT_TYPES.filter((type) => !enabled.has(type))
 }
 
 function formatEventTime(timestamp: number) {
@@ -246,7 +289,12 @@ async function refresh() {
 }
 
 function selectStock(event: HotStockAbnormalEvent) {
+  if (event.category === 'sector' || !event.code) return
   emit('select-stock', event.code)
+}
+
+function displayName(event: HotStockAbnormalEvent) {
+  return event.category === 'sector' ? event.sectorName || event.name || '--' : event.name || '--'
 }
 
 async function refreshSpeechStatus() {
@@ -278,7 +326,7 @@ watch(
         unsubscribe = hotStockEventMonitorService.subscribe((nextState) => {
           state.value = nextState
           if (speechEnabled.value) {
-            void hotStockEventSpeechService.handleLatestAdded(nextState.latestAdded)
+            void hotStockEventSpeechService.handleLatestAdded(nextState.latestHotStockAdded)
           }
         })
       }
@@ -297,6 +345,10 @@ watch(
 
 watch(speechEnabled, (enabled) => {
   hotStockEventSpeechService.setEnabled(enabled)
+})
+
+watch([speechRate, speechVolume], ([rate, volume]) => {
+  hotStockEventSpeechService.setVoiceOptions({ rate, volume })
 })
 
 onUnmounted(() => {
@@ -383,15 +435,15 @@ onUnmounted(() => {
   font-size: 12px;
 }
 
-.mode-tabs,
+.page-tabs,
 .filter-actions {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 4px;
   padding: 0 10px 8px;
 }
 
-.mode-tabs button,
+.page-tabs button,
 .filter-actions button {
   height: 30px;
   border: 1px solid #333;
@@ -402,7 +454,7 @@ onUnmounted(() => {
   font-size: 12px;
 }
 
-.mode-tabs button.active {
+.page-tabs button.active {
   border-color: #4dabf7;
   color: #4dabf7;
   background: rgba(77, 171, 247, 0.08);
@@ -432,6 +484,19 @@ onUnmounted(() => {
 }
 
 .filter-panel {
+  margin: 0 10px 10px;
+  border: 1px solid #333;
+  border-radius: 6px;
+  background: rgba(30, 28, 28, 0.92);
+  padding: 10px;
+}
+
+.settings-page {
+  overflow-y: auto;
+  padding-bottom: 10px;
+}
+
+.settings-card {
   margin: 0 10px 10px;
   border: 1px solid #333;
   border-radius: 6px;
@@ -472,7 +537,7 @@ onUnmounted(() => {
 }
 
 .speech-row {
-  margin: 0 10px 8px;
+  margin: 0 0 8px;
   padding: 7px 8px;
   display: flex;
   align-items: center;
@@ -482,6 +547,17 @@ onUnmounted(() => {
   border-radius: 6px;
   background: rgba(255, 255, 255, 0.03);
   color: #d4a574;
+}
+
+.range-row {
+  display: grid;
+  gap: 6px;
+  color: var(--text-primary);
+  margin-top: 10px;
+}
+
+.range-row input {
+  width: 100%;
 }
 
 .speech-toggle {
@@ -562,6 +638,10 @@ onUnmounted(() => {
 
 .event-card.candidate {
   box-shadow: inset 0 0 0 1px rgba(212, 165, 116, 0.18);
+}
+
+.event-card.sector {
+  border-left-color: #d4a574;
 }
 
 .event-time-row,

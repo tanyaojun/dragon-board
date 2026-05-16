@@ -16,8 +16,8 @@ test('local voice proxies status and commands to voice worker', async () => {
   const calls = []
   const localVoice = {
     status: async () => ({ supported: true, engine: 'volcengine', queueLength: 0, speaking: false }),
-    speak: async (text) => calls.push(['speak', text]),
-    test: async () => calls.push(['test']),
+    speak: async (text, options) => calls.push(['speak', text, options]),
+    test: async (options) => calls.push(['test', options]),
     stop: async () => calls.push(['stop']),
   }
   const app = createProxyApp({ logRequests: false, localVoice })
@@ -35,19 +35,23 @@ test('local voice proxies status and commands to voice worker', async () => {
     const speakResponse = await fetch(`${baseUrl}/api/local-voice/speak`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ text: '中南文化即将打开涨停' }),
+      body: JSON.stringify({ text: '中南文化即将打开涨停', rate: 1.2, volume: 80 }),
     })
     const speakBody = await speakResponse.json()
     assert.equal(speakResponse.status, 200)
     assert.equal(speakBody.ok, true)
     assert.equal(speakBody.queued, true)
-    assert.deepEqual(calls, [['speak', '中南文化即将打开涨停']])
+    assert.deepEqual(calls, [['speak', '中南文化即将打开涨停', { rate: 1.2, volume: 80 }]])
 
-    const testResponse = await fetch(`${baseUrl}/api/local-voice/test`, { method: 'POST' })
+    const testResponse = await fetch(`${baseUrl}/api/local-voice/test`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ rate: 0.8, volume: 55 }),
+    })
     const testBody = await testResponse.json()
     assert.equal(testResponse.status, 200)
     assert.equal(testBody.ok, true)
-    assert.deepEqual(calls[1], ['test'])
+    assert.deepEqual(calls[1], ['test', { rate: 0.8, volume: 55 }])
 
     const stopResponse = await fetch(`${baseUrl}/api/local-voice/stop`, { method: 'POST' })
     const stopBody = await stopResponse.json()
