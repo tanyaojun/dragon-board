@@ -406,7 +406,7 @@ internal sealed class LauncherProcessManager
             "VoiceWorker",
             "bin",
             "Debug",
-            "net8.0-windows",
+            "net8.0-windows10.0.19041.0",
             "VoiceWorker.exe");
     }
 

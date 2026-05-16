@@ -26,7 +26,7 @@ internal static class LauncherServices
             "VoiceWorker",
             "bin",
             "Release",
-            "net8.0-windows",
+            "net8.0-windows10.0.19041.0",
             "VoiceWorker.exe");
 
         return new Dictionary<string, ManagedService>

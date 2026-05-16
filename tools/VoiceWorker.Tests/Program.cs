@@ -119,10 +119,16 @@ Run("OneCoreSpeechEngineListsAndSpeaksOneCoreVoices", () =>
     new SapiVoiceInfo("Microsoft Yaoyao", "zh-CN", "Female"),
   };
   (string Text, string Voice, double Rate, int Volume)? spoken = null;
+  var audio = new byte[] { 82, 73, 70, 70 };
   using var engine = new OneCoreSpeechEngine(
     "Microsoft Kangkang",
     () => voices,
-    utterance => spoken = (utterance.Text, utterance.Voice ?? "", utterance.Rate, utterance.Volume));
+    utterance =>
+    {
+      spoken = (utterance.Text, utterance.Voice ?? "", utterance.Rate, utterance.Volume);
+      return audio;
+    },
+    (_, _) => { });
 
   AssertEqual("local-onecore", engine.Name, "Name");
   AssertEqual("Microsoft Kangkang", engine.ActiveVoiceName, "ActiveVoiceName");
@@ -136,22 +142,56 @@ Run("OneCoreSpeechEngineListsAndSpeaksOneCoreVoices", () =>
   AssertEqual(70, spoken?.Volume, "spoken volume");
 });
 
-Run("OneCoreSynthesisScriptPreservesChineseText", () =>
+Run("OneCoreSpeechEngineSynthesizesAndPlaysMemoryAudio", () =>
 {
-  var method = typeof(OneCoreSpeechEngine).GetMethod(
-    "BuildSynthesisScript",
-    BindingFlags.NonPublic | BindingFlags.Static);
-  if (method == null) throw new InvalidOperationException("BuildSynthesisScript not found");
+  var voices = new[]
+  {
+    new SapiVoiceInfo("Microsoft Kangkang", "zh-CN", "Male"),
+    new SapiVoiceInfo("Microsoft Yaoyao", "zh-CN", "Female"),
+  };
+  var audio = new byte[] { 82, 73, 70, 70 };
+  VoiceUtterance? synthesized = null;
+  (byte[] Audio, int TimeoutMs)? played = null;
+  using var engine = new OneCoreSpeechEngine(
+    "Microsoft Kangkang",
+    () => voices,
+    utterance =>
+    {
+      synthesized = utterance;
+      return audio;
+    },
+    (bytes, timeoutMs) => played = (bytes, timeoutMs));
 
-  var script = (string)method.Invoke(
-    null,
-    [new VoiceUtterance("热榜异动，中南文化封涨停板", 1, 100, "Microsoft Kangkang"), @"C:\Temp\voice.wav"])!;
+  engine.Speak(new VoiceUtterance("热榜异动，中南文化封涨停板", 1.2, 80, "Microsoft Yaoyao"));
 
-  AssertContains("热榜异动，中南文化封涨停板", script, "Chinese speech text");
-  AssertDoesNotContain("\\u70ed", script, "escaped Chinese speech text");
+  AssertEqual("热榜异动，中南文化封涨停板", synthesized?.Text, "synthesized text");
+  AssertEqual("Microsoft Yaoyao", synthesized?.Voice, "synthesized voice");
+  AssertEqual(1.2, synthesized?.Rate, "synthesized rate");
+  AssertEqual(80, synthesized?.Volume, "synthesized volume");
+  AssertTrue(ReferenceEquals(audio, played?.Audio), "played synthesized audio");
+  AssertEqual(10_000, played?.TimeoutMs, "fallback playback timeout");
 });
 
-Run("VoiceWorkerUsesSapiForProductionEvenWhenOneCoreIsRequested", () =>
+Run("OneCoreSpeechEngineStopsMemoryPlayback", () =>
+{
+  var voices = new[]
+  {
+    new SapiVoiceInfo("Microsoft Kangkang", "zh-CN", "Male"),
+  };
+  var stopped = false;
+  using var engine = new OneCoreSpeechEngine(
+    "Microsoft Kangkang",
+    () => voices,
+    _ => [82, 73, 70, 70],
+    (_, _) => { },
+    () => stopped = true);
+
+  engine.Stop();
+
+  AssertTrue(stopped, "stopped memory playback");
+});
+
+Run("VoiceWorkerUsesOneCoreWhenRequested", () =>
 {
   var previous = SnapshotEnvironment();
   try
@@ -163,12 +203,30 @@ Run("VoiceWorkerUsesSapiForProductionEvenWhenOneCoreIsRequested", () =>
     using var worker = new VoiceWorker();
     var status = worker.GetStatus();
 
-    AssertEqual("local-sapi", GetAnonymousString(status, "engine"), "production engine");
+    AssertEqual("local-onecore", GetAnonymousString(status, "engine"), "production engine");
   }
   finally
   {
     RestoreEnvironment(previous);
   }
+});
+
+Run("FallbackVoiceEngineReportsActiveEngineVoices", () =>
+{
+  using var primary = new StubVoiceEngine(
+    "local-onecore",
+    true,
+    "Microsoft Kangkang",
+    [new SapiVoiceInfo("Microsoft Kangkang", "zh-CN", "Male")]);
+  using var fallback = new StubVoiceEngine(
+    "local-sapi",
+    true,
+    "Microsoft Huihui Desktop",
+    [new SapiVoiceInfo("Microsoft Huihui Desktop", "zh-CN", "Female")]);
+  using var engine = new FallbackVoiceEngine(primary, fallback);
+
+  AssertEqual("local-onecore", engine.Name, "active engine");
+  AssertEqual("Microsoft Kangkang", engine.GetVoices().Single().Name, "active engine voice");
 });
 
 if (Environment.ExitCode != 0)
@@ -202,18 +260,6 @@ static void AssertTrue(bool value, string label)
 {
   if (value) return;
   throw new InvalidOperationException($"{label}: expected true");
-}
-
-static void AssertContains(string expected, string actual, string label)
-{
-  if (actual.Contains(expected, StringComparison.Ordinal)) return;
-  throw new InvalidOperationException($"{label}: expected to contain {expected}");
-}
-
-static void AssertDoesNotContain(string unexpected, string actual, string label)
-{
-  if (!actual.Contains(unexpected, StringComparison.Ordinal)) return;
-  throw new InvalidOperationException($"{label}: expected not to contain {unexpected}");
 }
 
 static string GetAnonymousString(object value, string propertyName)
@@ -256,4 +302,25 @@ internal sealed class CaptureHandler : HttpMessageHandler
   {
     return Task.FromResult(_handle(request));
   }
+}
+
+internal sealed class StubVoiceEngine : IVoiceEngine
+{
+  private readonly IReadOnlyList<SapiVoiceInfo> _voices;
+
+  public StubVoiceEngine(string name, bool isConfigured, string? activeVoiceName, IReadOnlyList<SapiVoiceInfo> voices)
+  {
+    Name = name;
+    IsConfigured = isConfigured;
+    ActiveVoiceName = activeVoiceName;
+    _voices = voices;
+  }
+
+  public string Name { get; }
+  public bool IsConfigured { get; }
+  public string? ActiveVoiceName { get; }
+  public IReadOnlyList<SapiVoiceInfo> GetVoices() => _voices;
+  public void Speak(VoiceUtterance utterance) { }
+  public void Stop() { }
+  public void Dispose() { }
 }
