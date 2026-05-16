@@ -60,6 +60,7 @@
           index % 2 === 0 ? 'row-even' : 'row-odd',
           { selected: uiStore.selectedCode === stock.code },
         ]" :style="gridTemplateStyle" @click="onRowClick($event, stock.code)"
+          @dblclick="openStockDetailFromRow($event, stock)"
           @contextmenu.prevent="showContextMenu($event, stock)" @mouseenter="showRowTooltip($event, stock)"
           @mousemove="moveRowTooltip($event)" @mouseleave="hideRowTooltip">
 
@@ -1076,22 +1077,39 @@ const copyCode = () => {
   hideContextMenu()
 }
 
+const openStockDetail = (stock: Stock, triggerRect: DOMRect, source: string) => {
+  uiStore.selectStock(stock.code)
+  EventManager.emit('stock:show-detail', {
+    code: stock.code,
+    name: stock.name,
+    triggerRect,
+    source,
+  })
+  EventManager.emit(AppEvents.UI.TOAST, {
+    message: `🔍 查看 ${stock.name} 详情`,
+    duration: 1500,
+    type: 'info',
+  })
+  hideConfidenceTooltip()
+  hideStatusTooltip()
+  hideRowTooltip()
+}
+
 const viewDetails = () => {
   if (contextMenu.value.stock) {
-    const stock = contextMenu.value.stock
-    uiStore.selectStock(stock.code)
-    EventManager.emit('stock:show-detail', {
-      code: stock.code,
-      name: stock.name,
-      triggerRect: new DOMRect(contextMenu.value.x, contextMenu.value.y, 1, 1),
-      source: 'datatable-context-menu',
-    })
-    EventManager.emit(AppEvents.UI.TOAST, {
-      message: `🔍 查看 ${stock.name} 详情`,
-      duration: 1500,
-      type: 'info',
-    })
+    openStockDetail(
+      contextMenu.value.stock,
+      new DOMRect(contextMenu.value.x, contextMenu.value.y, 1, 1),
+      'datatable-context-menu',
+    )
   }
+  hideContextMenu()
+}
+
+const openStockDetailFromRow = (event: MouseEvent, stock: Stock) => {
+  const target = event.currentTarget as HTMLElement | null
+  const triggerRect = target?.getBoundingClientRect() ?? new DOMRect(event.clientX, event.clientY, 1, 1)
+  openStockDetail(stock, triggerRect, 'datatable-row-double-click')
   hideContextMenu()
 }
 
