@@ -60,6 +60,7 @@ public sealed class FallbackVoiceEngine : IVoiceEngine
     try
     {
       _primary.Speak(text);
+      _activeEngineName = _primary.Name;
     }
     catch (Exception error)
     {
@@ -175,31 +176,78 @@ public sealed class VolcengineTtsEngine : IVoiceEngine
 
   private static byte[] DecodeAudio(string json)
   {
-    using var document = JsonDocument.Parse(json);
-    if (document.RootElement.TryGetProperty("code", out var codeElement) &&
-      codeElement.TryGetInt32(out var code) &&
-      code != 0 &&
-      code != 3000)
+    foreach (var line in SplitJsonLines(json))
     {
-      var message = document.RootElement.TryGetProperty("message", out var messageElement)
-        ? messageElement.GetString()
-        : "unknown error";
-      throw new InvalidOperationException($"volcengine tts returned {code}: {message}");
+      using var document = JsonDocument.Parse(line);
+      if (document.RootElement.TryGetProperty("code", out var codeElement) &&
+        codeElement.TryGetInt32(out var code) &&
+        code != 0 &&
+        code != 3000)
+      {
+        var message = document.RootElement.TryGetProperty("message", out var messageElement)
+          ? messageElement.GetString()
+          : "unknown error";
+        throw new InvalidOperationException($"volcengine tts returned {code}: {message}");
+      }
+
+      if (!document.RootElement.TryGetProperty("data", out var dataElement) &&
+        !document.RootElement.TryGetProperty("audio", out dataElement))
+      {
+        continue;
+      }
+
+      var base64 = dataElement.GetString();
+      if (string.IsNullOrWhiteSpace(base64)) continue;
+      return NormalizeWaveHeader(Convert.FromBase64String(base64));
     }
 
-    if (!document.RootElement.TryGetProperty("data", out var dataElement) &&
-      !document.RootElement.TryGetProperty("audio", out dataElement))
+    throw new InvalidOperationException("volcengine tts response missing audio data");
+  }
+
+  private static IEnumerable<string> SplitJsonLines(string value)
+  {
+    return value
+      .Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries)
+      .Select(line => line.Trim())
+      .Where(line => line.Length > 0);
+  }
+
+  private static byte[] NormalizeWaveHeader(byte[] audio)
+  {
+    if (audio.Length < 44 ||
+      Encoding.ASCII.GetString(audio, 0, 4) != "RIFF" ||
+      Encoding.ASCII.GetString(audio, 8, 4) != "WAVE")
     {
-      throw new InvalidOperationException("volcengine tts response missing audio data");
+      return audio;
     }
 
-    var base64 = dataElement.GetString();
-    if (string.IsNullOrWhiteSpace(base64))
+    var normalized = (byte[])audio.Clone();
+    BitConverter.GetBytes((uint)(normalized.Length - 8)).CopyTo(normalized, 4);
+
+    var dataOffset = FindAscii(normalized, "data");
+    if (dataOffset >= 0 && dataOffset + 8 <= normalized.Length)
     {
-      throw new InvalidOperationException("volcengine tts response audio data is empty");
+      BitConverter.GetBytes((uint)(normalized.Length - dataOffset - 8)).CopyTo(normalized, dataOffset + 4);
     }
 
-    return Convert.FromBase64String(base64);
+    return normalized;
+  }
+
+  private static int FindAscii(byte[] bytes, string text)
+  {
+    var needle = Encoding.ASCII.GetBytes(text);
+    for (var i = 0; i <= bytes.Length - needle.Length; i++)
+    {
+      var matched = true;
+      for (var j = 0; j < needle.Length; j++)
+      {
+        if (bytes[i + j] == needle[j]) continue;
+        matched = false;
+        break;
+      }
+      if (matched) return i;
+    }
+    return -1;
   }
 
   private static void PlayWaveAudio(byte[] audio)
