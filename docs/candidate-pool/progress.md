@@ -258,6 +258,23 @@
   - `docs/candidate-pool/task_plan.md`
   - `docs/candidate-pool/progress.md`
 
+### Phase 15: 生产化联调与真实使用闭环
+
+- **Status:** in_progress
+- **Started:** 2026-05-17 22:08:00 +08:00
+- Actions taken:
+  - 用户确认 `HotStockEventMonitorPanel.vue` 与对应测试是面板样式美化改动，本阶段明确避开。
+  - 读取候选池计划、进度、方案文档和候选分析/发现服务，确认 Phase 15 应先做真实使用稳定性收口。
+  - 补充 Phase 15 计划，成功标准从继续堆功能改为真实行情、真实 journal、异常提示和自动推荐质量校准。
+  - 先补 RED 测试，复现候选发现冷却期内切换行情样本或推荐参数后仍复用上一批推荐的问题。
+  - `CandidateDiscoveryService` 增加缓存 key，按股票代码集合、`minScore` 和 `limit` 隔离冷却缓存；重复候选标记仍允许冷却期即时刷新。
+  - 追加空行情回归测试，确保无行情样本时继续返回 `skippedReason=empty`，不被冷却缓存误标为 `cooldown`。
+- Files created/modified:
+  - `docs/candidate-pool/task_plan.md`
+  - `docs/candidate-pool/progress.md`
+  - `src/services/candidate/CandidateDiscoveryService.ts`
+  - `src/services/candidate/__tests__/CandidateDiscoveryService.test.ts`
+
 ## Test Results
 
 | Test | Input | Expected | Actual | Status |
@@ -318,6 +335,10 @@
 | Phase 14 前端构建 | `pnpm build` | exit 0 | exit 0，保留既有 ThemeFacade 动静态混用 warning | 通过 |
 | Phase 14 E2E 回归 | `$env:PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH='C:\Program Files\Google\Chrome\Application\chrome.exe'; pnpm exec playwright test e2e/vue.spec.ts --project=chromium --reporter=line` | 2 tests passed | 2 tests passed，截图写入 `test-results/**` | 通过 |
 | Phase 14 diff 检查 | `git diff --check` | exit 0 | exit 0 | 通过 |
+| Phase 15 RED 验证 | `pnpm exec vitest run src/services/candidate/__tests__/CandidateDiscoveryService.test.ts --reporter=dot` | 新增冷却缓存隔离测试失败 | 1 failed / 3 passed，失败点为切换行情集合和参数后仍返回 `skippedReason=cooldown` | 通过 |
+| Phase 15 候选发现缓存隔离回归 | `pnpm exec vitest run src/services/candidate/__tests__/CandidateDiscoveryService.test.ts --reporter=dot` | 4 tests passed | 4 tests passed | 通过 |
+| Phase 15 空行情 RED 验证 | `pnpm exec vitest run src/services/candidate/__tests__/CandidateDiscoveryService.test.ts --reporter=dot` | 新增空行情语义测试失败 | 1 failed / 4 passed，失败点为空行情第二次发现被标为 `cooldown` | 通过 |
+| Phase 15 自动发现边界回归 | `pnpm exec vitest run src/services/candidate/__tests__/CandidateDiscoveryService.test.ts --reporter=dot` | 5 tests passed | 5 tests passed | 通过 |
 
 ## Error Log
 
@@ -345,13 +366,15 @@
 | 2026-05-17 | `pnpm exec playwright install chromium` 超时，Node Playwright 自带 Chromium 未就绪 | 检查本机 `ms-playwright` 与系统 Chrome | 配置 `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH`，本机使用系统 Chrome 完成 E2E 验证 |
 | 2026-05-17 | Phase 14 E2E 初版菜单定位被图标文本和同名按钮干扰 | 读取 Playwright error-context | 定位收敛到 `.context-menu`、`.dropdown-menu`、`.candidate-toolbar` 和具体卡片容器 |
 | 2026-05-17 | Phase 14 复盘保存测试被前一次“写回当前分析”的异步响应重置表单 | 查看失败现场快照 | 等待写回按钮完成 enable 后再操作复盘区，并限定复盘卡片内控件 |
+| 2026-05-17 | Phase 15 候选发现冷却缓存只按时间判断，切换行情样本或推荐参数时可能返回上一批推荐 | 先补 RED 测试复现 | 缓存 key 纳入股票代码集合、`minScore` 和 `limit`；仅 key 一致时复用分析结果 |
+| 2026-05-17 | Phase 15 空行情样本第二次发现会被冷却逻辑覆盖为 `cooldown` | 追加 RED 测试复现 | 空样本判断前置到冷却复用之前，保证面板能区分无数据和冷却复用 |
 
 ## 5-Question Reboot Check
 
 | Question | Answer |
 |----------|--------|
-| Where am I? | 已完成候选池 Phase 14 端到端测试与回归固化 |
-| Where am I going? | 下一步可进入候选池后续重构或真实 QuantBoard 后端联调 |
+| Where am I? | 已进入候选池 Phase 15 生产化联调与真实使用闭环 |
+| Where am I going? | 继续复核真实行情和真实 journal 后端链路，校准自动推荐质量和异常提示 |
 | What's the goal? | 将手工候选/交易假设升级为候选池工作台 |
 | What have I learned? | 见 `findings.md` |
-| What have I done? | 已实现并验证右键入池、规则分析、候选池面板、状态推进、journal 标签入库契约、统计概览、当前重分析、已入池识别、候选详情定位、假设编辑、分析写回、复盘保存、基础复盘统计、Phase 8 端到端交互、Phase 9 历史交易日志入口收敛、Phase 10 候选删除/快捷操作/筛选排序、Phase 11 候选漏斗/质量拆解/命中率/失效率/平均跟踪，Phase 12 结构化证据、扣分项、条件组、风险和变化归因，Phase 13 自动建议入池、重复候选识别、人工确认入池和推荐冷却控制，以及 Phase 14 Playwright E2E、历史交易隔离、失败/重复/删除/截图回归 |
+| What have I done? | 已实现并验证右键入池、规则分析、候选池面板、状态推进、journal 标签入库契约、统计概览、当前重分析、已入池识别、候选详情定位、假设编辑、分析写回、复盘保存、基础复盘统计、Phase 8 端到端交互、Phase 9 历史交易日志入口收敛、Phase 10 候选删除/快捷操作/筛选排序、Phase 11 候选漏斗/质量拆解/命中率/失效率/平均跟踪，Phase 12 结构化证据、扣分项、条件组、风险和变化归因，Phase 13 自动建议入池、重复候选识别、人工确认入池和推荐冷却控制，Phase 14 Playwright E2E、历史交易隔离、失败/重复/删除/截图回归，以及 Phase 15 首个稳定性修复：候选发现冷却缓存按行情集合和推荐参数隔离 |

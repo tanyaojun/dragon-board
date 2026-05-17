@@ -190,4 +190,62 @@ describe('CandidateDiscoveryService', () => {
     })
     expect(analyze).toHaveBeenCalledTimes(1)
   })
+
+  it('does not reuse cooldown recommendations when quote universe or scoring options change', () => {
+    let now = 1778992800000
+    const firstStocks: CandidateStockLike[] = [
+      { code: '600584', name: '长电科技' },
+      { code: '002407', name: '多氟多' },
+    ]
+    const secondStocks: CandidateStockLike[] = [{ code: '601991', name: '大唐发电' }]
+    const scores: Record<string, CandidateAnalysisResult> = {
+      '600584': analysisFor(82),
+      '002407': analysisFor(66),
+      '601991': analysisFor(76),
+    }
+    const analyze = vi.fn((context: CandidateAnalysisContext) => scores[context.stock.code])
+    const service = new CandidateDiscoveryService({
+      analyze,
+      buildContext: (stock, allStocks) => ({ stock, allStocks }),
+      now: () => now,
+    })
+
+    const first = service.discover({
+      stocks: firstStocks,
+      minScore: 80,
+      limit: 1,
+      cooldownMs: 60_000,
+    })
+    now += 30_000
+    const second = service.discover({
+      stocks: secondStocks,
+      minScore: 55,
+      limit: 6,
+      cooldownMs: 60_000,
+    })
+
+    expect(first.recommendations.map((item) => item.stock.code)).toEqual(['600584'])
+    expect(second.skippedReason).toBeUndefined()
+    expect(second.recommendations.map((item) => item.stock.code)).toEqual(['601991'])
+    expect(analyze).toHaveBeenCalledTimes(3)
+  })
+
+  it('keeps empty quote universe classified as empty instead of cooldown', () => {
+    let now = 1778992800000
+    const analyze = vi.fn(() => analysisFor(82))
+    const service = new CandidateDiscoveryService({
+      analyze,
+      buildContext: (stock, allStocks) => ({ stock, allStocks }),
+      now: () => now,
+    })
+
+    const first = service.discover({ stocks: [], cooldownMs: 60_000 })
+    now += 30_000
+    const second = service.discover({ stocks: [], cooldownMs: 60_000 })
+
+    expect(first.skippedReason).toBe('empty')
+    expect(second.skippedReason).toBe('empty')
+    expect(second.recommendations).toEqual([])
+    expect(analyze).not.toHaveBeenCalled()
+  })
 })

@@ -80,6 +80,14 @@ function withDuplicateMarkers(
   }
 }
 
+function buildCacheKey(stocks: CandidateStockLike[], options: CandidateDiscoveryOptions): string {
+  return JSON.stringify({
+    codes: stocks.map((stock) => normalizeCode(stock.code)).sort(),
+    limit: options.limit ?? DEFAULT_LIMIT,
+    minScore: options.minScore ?? DEFAULT_MIN_SCORE,
+  })
+}
+
 function compactReasons(analysis: CandidateAnalysisResult): string[] {
   return [
     ...analysis.strengths,
@@ -117,6 +125,7 @@ export class CandidateDiscoveryService {
   private now: () => number
   private lastResult: CandidateDiscoveryResult | null = null
   private lastGeneratedAt = 0
+  private lastCacheKey = ''
 
   constructor(deps: CandidateDiscoveryServiceDeps = {}) {
     this.analyze = deps.analyze || analyzeCandidateStock
@@ -127,19 +136,11 @@ export class CandidateDiscoveryService {
   discover(options: CandidateDiscoveryOptions = {}): CandidateDiscoveryResult {
     const now = this.now()
     const cooldownMs = options.cooldownMs ?? DEFAULT_COOLDOWN_MS
-    if (!options.force && this.lastResult && now - this.lastGeneratedAt < cooldownMs) {
-      const result = options.existingCandidates
-        ? withDuplicateMarkers(this.lastResult, options.existingCandidates)
-        : this.lastResult
-      return {
-        ...result,
-        skippedReason: 'cooldown',
-      }
-    }
 
     const stocks = (options.stocks || (dataLayer.getStocks() as CandidateStockLike[])).filter((stock) =>
       Boolean(normalizeCode(stock.code)),
     )
+    const cacheKey = buildCacheKey(stocks, options)
     if (!stocks.length) {
       const result = {
         generatedAt: now,
@@ -149,7 +150,23 @@ export class CandidateDiscoveryService {
       }
       this.lastResult = result
       this.lastGeneratedAt = now
+      this.lastCacheKey = cacheKey
       return result
+    }
+
+    if (
+      !options.force &&
+      this.lastResult &&
+      this.lastCacheKey === cacheKey &&
+      now - this.lastGeneratedAt < cooldownMs
+    ) {
+      const result = options.existingCandidates
+        ? withDuplicateMarkers(this.lastResult, options.existingCandidates)
+        : this.lastResult
+      return {
+        ...result,
+        skippedReason: 'cooldown',
+      }
     }
 
     const existingByCode = buildExistingCandidateMap(options.existingCandidates)
@@ -190,6 +207,7 @@ export class CandidateDiscoveryService {
     }
     this.lastResult = result
     this.lastGeneratedAt = now
+    this.lastCacheKey = cacheKey
     return result
   }
 

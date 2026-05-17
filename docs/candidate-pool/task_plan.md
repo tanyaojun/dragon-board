@@ -6,7 +6,7 @@
 
 ## Current Phase
 
-Phase 14 complete
+Phase 15 in progress
 
 ## Phases
 
@@ -123,6 +123,16 @@ Phase 14 complete
 - [x] 更新进度文档和验收清单，形成后续重构基线
 - **Status:** complete
 
+### Phase 15: 生产化联调与真实使用闭环
+
+- [x] 明确 Phase 15 成功标准：不再继续堆面板功能，优先修真实盘中使用会暴露的稳定性问题
+- [x] 候选发现冷却缓存按行情集合、推荐阈值和推荐数量隔离，避免切换行情样本后复用上一批推荐
+- [ ] 用真实行情与真实 journal 后端复核右键入池、建议入池、重复识别、删除、复盘全链路
+- [ ] 校准自动发现推荐质量：推荐阈值、数量、冷却策略和重复候选提示
+- [ ] 收口候选池异常提示：后端断开、脏数据、字段缺失、写入失败都给出可操作反馈
+- [ ] 更新 Phase 15 验收记录，形成候选池进入日常使用前的稳定性基线
+- **Status:** in_progress
+
 ## Key Questions
 
 1. 候选池是否替代自选股？
@@ -153,6 +163,7 @@ Phase 14 complete
 | Phase 8 临时验证数据导致 `601991` 已复盘记录不再算开放候选 | 1 | 清理临时 journal 记录后，用真实右键新增链路重新验证 |
 | Phase 14 Node Playwright 未安装浏览器 | 1 | 安装 Chromium 超时后，配置 `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` 允许本机使用系统 Chrome 验证 |
 | Phase 14 候选池列表可能混入历史交易日志 | 1 | `CandidateJournalService.listCandidates()` 查询固定带 `trade_type=thesis`，并防御性过滤非 thesis 记录 |
+| Phase 15 候选发现冷却缓存未区分行情集合和推荐参数 | 1 | 增加缓存 key，按股票代码集合、`limit`、`minScore` 隔离缓存；重复候选标记继续允许冷却期即时刷新 |
 
 ## Notes
 
