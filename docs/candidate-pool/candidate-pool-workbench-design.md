@@ -171,6 +171,10 @@ interface CandidateAnalysisResult {
   riskWarnings: string[]
   strengths: string[]
   weaknesses: string[]
+  evidence: CandidateRuleEvidence[]
+  penalties: CandidateRuleEvidence[]
+  structuredThesis: CandidateStructuredThesis
+  structuredRisks: CandidateStructuredRisk[]
   tags: string[]
   signalsSnapshot: Record<string, unknown>
 }
@@ -238,6 +242,36 @@ RankTrend 降为 D_EXIT_RISK，题材进入拥挤/背离，或主力净额连续
 - 量比异常但资金不配合。
 - 样本质量不足或 RankTrend 缺失。
 
+### 7.7 结构化解释字段
+
+Phase 12 后，规则分析不再只依赖自然语言字段。`CandidateAnalysisService` 同时输出：
+
+- `evidence`：按 RankTrend、题材、龙头/地位、情绪、资金流拆分的证据项，标记 `positive`、`neutral`、`negative` 或 `missing`。
+- `penalties`：从证据项中抽取的扣分项和缺样本项，用于候选池详情区直接展示。
+- `structuredThesis`：把触发条件、买入前提、失效条件拆为结构化数组，每项都有 `dimension`、`status` 和说明。
+- `structuredRisks`：对 RankTrend 缺失、题材缺失、情绪退潮、资金转负、低样本量、D_EXIT_RISK 等风险输出 `code`、`level`、`dimension`、`message`。
+
+这些字段仍保存在 `signalsSnapshot.candidateAnalysis` 内，不新增后端表字段；旧文本字段保留，作为人工编辑和兼容展示。
+
+### 7.8 自动候选发现
+
+Phase 13 增加 `CandidateDiscoveryService`，用于从当前行情列表中生成“建议入池”清单。
+
+服务边界：
+
+- 输入当前 `dataLayer.getStocks()` 行情样本，也可在测试中显式传入股票数组。
+- 对每只股票复用 `CandidateAnalysisService` 生成规则分析。
+- 按评分排序，默认只保留达到观察线的样本，并限制推荐数量。
+- 接收当前开放候选列表，标记 `duplicate.isOpen`、候选记录 id 和状态。
+- 输出推荐原因、评分、等级、风险、重复候选状态和预期跟踪天数。
+- 内置冷却时间，非强制刷新时复用上次结果，避免刷新过程反复打扰用户。
+
+硬约束：
+
+- 自动发现只产出建议，不自动写入 `/api/journal`。
+- 用户点击“确认入池”后，才调用 `CandidateJournalService.addCandidateFromStock()`。
+- 已存在开放候选的股票只提示“重复候选”，不再次创建记录。
+
 ## 8. 右键入口设计
 
 在 `DataTable.vue` 右键菜单新增：
@@ -297,6 +331,16 @@ src/components/panels/CandidatePoolPanel.vue
 - 跟踪中。
 - 待复盘。
 - 平均评分。
+- 候选命中率、失效率、触发率、平均跟踪天数。
+
+统计口径：
+
+- 候选统计只计算 `trade_type=thesis` 的候选研究样本，不纳入历史交易日志的 `entry` / `exit` 记录。
+- 命中率等同候选复盘胜率，分子为 `review_outcome=success|partial`，分母为 `status=reviewed` 的已复盘候选。
+- 失效率分子为 `review_outcome=failed|not_triggered`，分母同样为已复盘候选。
+- 触发率分子为状态进入 `triggered|tracking|reviewed` 的候选，分母为候选总数。
+- 平均跟踪天数按候选 `createdAt` 到 `updatedAt` 的自然日估算，最小记 1 天；这是研究样本跟踪时长，不代表真实持仓天数或交易盈亏。
+- 质量拆解按题材、RankTrend 分层、规则评分等级和资金状态分组展示候选数量、均分、命中率、失效率和风险数。
 
 ### 9.3 候选列表卡片
 
@@ -321,6 +365,9 @@ src/components/panels/CandidatePoolPanel.vue
 - 买入前提。
 - 失效条件。
 - 风险提示。
+- 证据项与扣分项。
+- 结构化条件：触发条件、买入前提、失效条件。
+- 结构化风险：缺样本、退潮、资金转负、RankTrend 失效等可比较风险。
 - 信号快照：
   - RankTrend。
   - 题材。
@@ -380,6 +427,14 @@ GET /api/journal/stats
     "strengths": [],
     "weaknesses": [],
     "riskWarnings": [],
+    "evidence": [],
+    "penalties": [],
+    "structuredThesis": {
+      "triggerConditions": [],
+      "entryPrerequisites": [],
+      "invalidationConditions": []
+    },
+    "structuredRisks": [],
     "scoreBreakdown": {
       "rankTrend": 24,
       "theme": 14,
@@ -397,6 +452,7 @@ GET /api/journal/stats
 
 ```text
 src/services/candidate/CandidateAnalysisService.ts
+src/services/candidate/CandidateDiscoveryService.ts
 src/services/candidate/CandidateJournalService.ts
 src/services/candidate/types.ts
 ```
@@ -404,6 +460,7 @@ src/services/candidate/types.ts
 职责：
 
 - `CandidateAnalysisService`：纯规则分析，输入股票和上下文，输出分析结果。
+- `CandidateDiscoveryService`：自动扫描当前行情样本，输出人工确认的建议入池清单，不写 journal。
 - `CandidateJournalService`：封装 `/api/journal` 的候选 CRUD，处理 snake_case payload。
 - `types.ts`：候选分析和候选记录类型。
 
@@ -471,8 +528,20 @@ src/services/candidate/types.ts
 - 状态过滤。
 - 展示评分、理由和风险。
 - 状态更新调用 PUT。
+- 建议入池区位于右侧详情容器内。
+- 推荐结果必须通过确认按钮才调用候选入池服务。
 
-### 13.5 验证命令
+### 13.5 CandidateDiscoveryService 单元测试
+
+覆盖：
+
+- 从行情样本生成按评分排序的推荐清单。
+- 低于最低评分线的股票不会进入建议。
+- 已有开放候选时标记重复候选，不创建 journal。
+- 推荐清单包含原因、风险、预期跟踪天数和候选等级。
+- 冷却时间内复用上次推荐，强制刷新时重新分析。
+
+### 13.6 验证命令
 
 建议第一批至少运行：
 

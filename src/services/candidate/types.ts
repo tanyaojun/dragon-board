@@ -42,6 +42,44 @@ export interface CandidateScoreBreakdown {
   moneyFlow: number
 }
 
+export type CandidateEvidenceDimension = keyof CandidateScoreBreakdown
+export type CandidateEvidenceKind = 'positive' | 'negative' | 'neutral' | 'missing'
+export type CandidateDataQuality = 'ok' | 'missing' | 'low_sample' | 'invalid'
+export type CandidateConditionStatus = 'met' | 'watch' | 'failed' | 'unknown'
+export type CandidateRiskLevel = 'info' | 'warning' | 'danger'
+
+export interface CandidateRuleEvidence {
+  dimension: CandidateEvidenceDimension
+  kind: CandidateEvidenceKind
+  title: string
+  detail: string
+  scoreImpact: number
+  dataQuality: CandidateDataQuality
+  source?: string
+}
+
+export interface CandidateStructuredCondition {
+  id: string
+  label: string
+  dimension: CandidateEvidenceDimension
+  status: CandidateConditionStatus
+  description: string
+}
+
+export interface CandidateStructuredThesis {
+  triggerConditions: CandidateStructuredCondition[]
+  entryPrerequisites: CandidateStructuredCondition[]
+  invalidationConditions: CandidateStructuredCondition[]
+}
+
+export interface CandidateStructuredRisk {
+  code: string
+  level: CandidateRiskLevel
+  dimension: CandidateEvidenceDimension | 'dataQuality'
+  message: string
+  reason: string
+}
+
 export interface CandidateAnalysisResult {
   score: number
   grade: CandidateGrade
@@ -53,6 +91,10 @@ export interface CandidateAnalysisResult {
   riskWarnings: string[]
   strengths: string[]
   weaknesses: string[]
+  evidence: CandidateRuleEvidence[]
+  penalties: CandidateRuleEvidence[]
+  structuredThesis: CandidateStructuredThesis
+  structuredRisks: CandidateStructuredRisk[]
   tags: string[]
   scoreBreakdown: CandidateScoreBreakdown
   signalsSnapshot: Record<string, any>
@@ -65,6 +107,10 @@ export interface CandidateSavedAnalysis {
   riskWarnings: string[]
   strengths: string[]
   weaknesses: string[]
+  evidence: CandidateRuleEvidence[]
+  penalties: CandidateRuleEvidence[]
+  structuredThesis: CandidateStructuredThesis
+  structuredRisks: CandidateStructuredRisk[]
   scoreBreakdown: CandidateScoreBreakdown
   generatedAt?: number
 }
@@ -114,4 +160,30 @@ export interface CandidateReviewUpdate {
   modelResult: string
   executionResult: string
   reviewNotes: string
+}
+
+export interface CandidateDiscoveryDuplicate {
+  isOpen: boolean
+  entryId?: string
+  status?: CandidateStatus
+}
+
+export interface CandidateDiscoveryRecommendation {
+  rank: number
+  stock: CandidateStockLike
+  analysis: CandidateAnalysisResult
+  score: number
+  grade: CandidateGrade
+  suggestedStatus: Extract<CandidateStatus, 'observe' | 'candidate' | 'triggered'>
+  reasons: string[]
+  risks: string[]
+  expectedTrackingDays: number
+  duplicate: CandidateDiscoveryDuplicate
+}
+
+export interface CandidateDiscoveryResult {
+  generatedAt: number
+  totalAnalyzed: number
+  recommendations: CandidateDiscoveryRecommendation[]
+  skippedReason?: 'cooldown' | 'empty'
 }

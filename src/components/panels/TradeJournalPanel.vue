@@ -1,10 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { API_CONFIG } from '@/config/constants'
-import { dataLayer } from '@/services/DataLayer'
-import { dragonReviewService } from '@/services/dragon/DragonReviewService'
-import { dragonBreathAnalyzer } from '@/services/DragonBreathAnalyzer'
-import { getRankTrendAnalysis } from '@/services/rankTrend/compat'
 import { apiService } from '@/services/apiService'
 
 interface JournalEntry {
@@ -57,19 +53,12 @@ type JournalForm = Omit<
 const STATUS_OPTIONS = [
   { value: '', label: '全部状态' },
   { value: 'observe', label: '观察' },
-  { value: 'candidate', label: '候选' },
   { value: 'triggered', label: '触发' },
   { value: 'tracking', label: '跟踪中' },
   { value: 'reviewed', label: '已复盘' },
 ]
 
 const ENTRY_STATUS_OPTIONS = STATUS_OPTIONS.filter(option => option.value)
-
-const HUMAN_DECISION_OPTIONS = [
-  { value: 'watch', label: '观察' },
-  { value: 'execute', label: '执行' },
-  { value: 'skip', label: '跳过' },
-]
 
 const REVIEW_OUTCOME_OPTIONS = [
   { value: 'pending', label: '待复盘' },
@@ -118,13 +107,14 @@ const PRESET_TAGS = [
 ]
 
 const JOURNAL_API_BASE = API_CONFIG.CONTEXTS.QUANT_BOARD.baseURL
+const TRADE_LOG_TYPES = ['entry', 'exit'] as const
 
 function createDefaultForm(): JournalForm {
   return {
     stockCode: '',
     stockName: '',
     direction: 'buy',
-    tradeType: 'thesis',
+    tradeType: 'entry',
     price: 0,
     volume: 0,
     tradeTime: new Date().toISOString(),
@@ -178,7 +168,7 @@ function normalizeEntry(raw: unknown): JournalEntry {
     stockCode: textValue(row, 'stockCode', 'stock_code'),
     stockName: textValue(row, 'stockName', 'stock_name'),
     direction: textValue(row, 'direction', 'direction', 'buy'),
-    tradeType: textValue(row, 'tradeType', 'trade_type', 'thesis'),
+    tradeType: textValue(row, 'tradeType', 'trade_type', 'entry'),
     price: numberValue(row, 'price', 'price', 0) ?? 0,
     volume: numberValue(row, 'volume', 'volume', 0) ?? 0,
     tradeTime: textValue(row, 'tradeTime', 'trade_time', new Date().toISOString()),
@@ -270,23 +260,35 @@ const filteredEntries = computed(() => {
 
 const stats = ref<JournalStats | null>(null)
 
+function buildListParams(tradeType: (typeof TRADE_LOG_TYPES)[number]) {
+  const params = new URLSearchParams({ limit: '100', trade_type: tradeType })
+  if (filterStock.value) params.set('stock_code', filterStock.value)
+  if (filterDirection.value) params.set('direction', filterDirection.value)
+  if (filterStatus.value) params.set('status', filterStatus.value)
+  return params
+}
+
 async function loadEntries() {
   loading.value = true
   errorMessage.value = ''
   try {
-    const params = new URLSearchParams({ limit: '100' })
-    if (filterStock.value) params.set('stock_code', filterStock.value)
-    if (filterDirection.value) params.set('direction', filterDirection.value)
-    if (filterStatus.value) params.set('status', filterStatus.value)
-    const data = await apiService.get(`/api/journal/entries?${params}`, {
-      context: 'quant-board',
-      cache: false,
-      silent: true,
-      throwOnHttpError: true,
-    })
-    entries.value = Array.isArray(data.entries) ? data.entries.map(normalizeEntry) : []
+    const responses = await Promise.all(
+      TRADE_LOG_TYPES.map((tradeType) =>
+        apiService.get(`/api/journal/entries?${buildListParams(tradeType)}`, {
+          context: 'quant-board',
+          cache: false,
+          silent: true,
+          throwOnHttpError: true,
+        }),
+      ),
+    )
+    entries.value = responses
+      .flatMap((data) => (Array.isArray(data.entries) ? data.entries.map(normalizeEntry) : []))
+      .filter((entry) => entry.tradeType !== 'thesis')
+      .sort((left, right) => Date.parse(right.tradeTime) - Date.parse(left.tradeTime))
+      .slice(0, 100)
   } catch (error) {
-    errorMessage.value = `候选/假设列表加载失败：${error instanceof Error ? error.message : '未知错误'}`
+    errorMessage.value = `历史交易日志加载失败：${error instanceof Error ? error.message : '未知错误'}`
     entries.value = []
   } finally {
     loading.value = false
@@ -305,45 +307,6 @@ async function loadStats() {
   } catch {
     stats.value = null
     /* backend may be unavailable */
-  }
-}
-
-function captureSignals(stockCode: string) {
-  const stock = dataLayer.getStock(stockCode)
-  const review = dragonReviewService.getLatestReview()
-  const sentiment = dragonBreathAnalyzer.getMarketSentiment()
-  const rankTrend = stock ? getRankTrendAnalysis(stock) : null
-
-  const dragonRecord = review
-    ? (review.trueLeaders || []).find((r: any) => r.code === stockCode)
-      || (review.heightBoard || []).find((r: any) => r.code === stockCode)
-      || (review.attentionBoard || []).find((r: any) => r.code === stockCode)
-      || review.marketCore
-    : null
-
-  form.value.signalsSnapshot = {
-    dragon: dragonRecord ? {
-      primaryRole: (dragonRecord as any).primaryRole,
-      authorityClass: (dragonRecord as any).authority,
-      tradeability: (dragonRecord as any).tradeability,
-    } : null,
-    sentiment: {
-      emotionPhase: sentiment?.phaseName || sentiment?.phase || '',
-      breathScore: sentiment?.overall ?? 0,
-    },
-    rankTrend: rankTrend ? {
-      candidateTier: rankTrend.strategy?.candidateTier || 'N_NEUTRAL',
-      momentumComposite: rankTrend.technical.momentumProfile.composite,
-      attentionStage: rankTrend.cycle.stage,
-      decision: rankTrend.decision.final.signal,
-    } : null,
-  }
-
-  if (!form.value.marketPhase && sentiment?.phaseName) {
-    form.value.marketPhase = String(sentiment.phaseName)
-  }
-  if (!form.value.stockRole && form.value.signalsSnapshot.dragon?.primaryRole) {
-    form.value.stockRole = String(form.value.signalsSnapshot.dragon.primaryRole)
   }
 }
 
@@ -547,15 +510,6 @@ onMounted(() => {
   loadEntries()
   loadStats()
 })
-
-const stockOptions = computed(() => {
-  const stocks = dataLayer.getMergedStocks?.()
-  if (!stocks || !Array.isArray(stocks)) return []
-  return stocks.slice(0, 200).map((s: any) => ({
-    code: s.code,
-    name: s.name,
-  }))
-})
 </script>
 
 <template>
@@ -563,7 +517,7 @@ const stockOptions = computed(() => {
     <div v-if="visible" style="position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:1000;display:flex;align-items:center;justify-content:center" @click.self="close">
       <div style="width:1120px;max-width:calc(100vw - 32px);max-height:88vh;background:#fff;border-radius:8px;display:flex;flex-direction:column;overflow:hidden">
         <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid #e0e0e0">
-          <h2 style="margin:0;font-size:16px">候选与交易假设</h2>
+          <h2 style="margin:0;font-size:16px">历史交易日志</h2>
           <button style="background:none;border:none;font-size:18px;cursor:pointer" @click="close">✕</button>
         </div>
 
@@ -580,7 +534,7 @@ const stockOptions = computed(() => {
               <select v-model="filterStatus" @change="loadEntries" style="flex:1 1 96px;padding:4px;border:1px solid #ddd;border-radius:4px;font-size:12px">
                 <option v-for="option in STATUS_OPTIONS" :key="option.value" :value="option.value">{{ option.label }}</option>
               </select>
-              <button @click="resetForm()" style="padding:4px 12px;background:#1565c0;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px">+ 新增候选/假设</button>
+              <button @click="resetForm()" style="padding:4px 12px;background:#1565c0;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px">+ 新增交易记录</button>
             </div>
             <div v-if="errorMessage" style="margin:0 8px 8px;padding:8px;background:#fff3e0;color:#b45f06;border:1px solid #ffcc80;border-radius:4px;font-size:12px;line-height:1.5">{{ errorMessage }}</div>
             <div style="flex:1;overflow-y:auto" v-if="!loading">
@@ -596,7 +550,7 @@ const stockOptions = computed(() => {
                 <span :style="{ color: entry.direction === 'buy' ? '#e53935' : '#43a047', fontWeight:'bold', minWidth:'20px' }">{{ entry.direction === 'buy' ? '买' : '卖' }}</span>
                 <span v-if="entry.pnl != null" :style="{ color: entry.pnl >= 0 ? '#e53935' : '#43a047', minWidth:'60px', textAlign:'right' }">{{ entry.pnl >= 0 ? '+' : '' }}{{ entry.pnl.toFixed(0) }}</span>
               </div>
-              <div v-if="!filteredEntries.length" style="padding:24px 12px;text-align:center;color:#888;font-size:13px">暂无候选/假设记录</div>
+              <div v-if="!filteredEntries.length" style="padding:24px 12px;text-align:center;color:#888;font-size:13px">暂无历史交易记录</div>
             </div>
             <div v-else style="padding:24px 12px;text-align:center;color:#888;font-size:13px">加载中...</div>
           </div>
@@ -604,86 +558,23 @@ const stockOptions = computed(() => {
           <!-- Right: Form -->
           <div style="flex:2;padding:12px 16px;overflow-y:auto">
             <template v-if="!selectedEntry || selectedEntry.tradeType !== 'exit'">
-              <h3 style="font-size:14px;margin:12px 0 8px;padding-bottom:4px;border-bottom:1px solid #eee">{{ selectedId ? '编辑候选/假设' : '新增候选/假设' }}</h3>
+              <h3 style="font-size:14px;margin:12px 0 8px;padding-bottom:4px;border-bottom:1px solid #eee">{{ selectedId ? '编辑交易记录' : '新增交易记录' }}</h3>
               <div style="margin-bottom:8px">
                 <label style="display:block;font-size:12px;color:#666;margin-bottom:2px">标的</label>
                 <div style="display:flex;gap:4px;align-items:center">
                   <input v-model="form.stockCode" placeholder="代码" style="flex:1;padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px" />
                   <input v-model="form.stockName" placeholder="名称" style="flex:1;padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px" />
-                  <button @click="captureSignals(form.stockCode)" :disabled="!form.stockCode" style="padding:4px 8px;font-size:12px;white-space:nowrap;border:1px solid #ddd;border-radius:4px;background:#f5f5f5;cursor:pointer">抓取信号</button>
                 </div>
               </div>
-              <div style="display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin-bottom:8px">
+              <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-bottom:8px">
                 <div>
                   <label style="display:block;font-size:12px;color:#666;margin-bottom:2px">状态</label>
                   <select v-model="form.status" style="width:100%;padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px">
                     <option v-for="option in ENTRY_STATUS_OPTIONS" :key="option.value" :value="option.value">{{ option.label }}</option>
                   </select>
                 </div>
-                <div>
-                  <label style="display:block;font-size:12px;color:#666;margin-bottom:2px">市场环境</label>
-                  <input v-model="form.marketPhase" placeholder="如 修复期/退潮期" style="width:100%;padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px" />
-                </div>
-                <div>
-                  <label style="display:block;font-size:12px;color:#666;margin-bottom:2px">题材地位</label>
-                  <select v-model="form.themeRole" style="width:100%;padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px">
-                    <option value="">未设置</option>
-                    <option value="mainline">主线</option>
-                    <option value="branch">支线</option>
-                    <option value="rotation">轮动</option>
-                    <option value="rebound">反弹</option>
-                    <option value="decline">退潮</option>
-                    <option value="unknown">未知</option>
-                  </select>
-                </div>
-                <div>
-                  <label style="display:block;font-size:12px;color:#666;margin-bottom:2px">个股角色</label>
-                  <select v-model="form.stockRole" style="width:100%;padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px">
-                    <option value="">未设置</option>
-                    <option value="leader">龙头</option>
-                    <option value="core">核心</option>
-                    <option value="follower">跟随</option>
-                    <option value="rebound">反弹</option>
-                    <option value="abnormal_watch">异常观察</option>
-                    <option value="unknown">未知</option>
-                  </select>
-                </div>
-                <div>
-                  <label style="display:block;font-size:12px;color:#666;margin-bottom:2px">预期持仓天数</label>
-                  <input v-model.number="form.expectedHoldingDays" type="number" min="1" style="width:100%;padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px" />
-                </div>
               </div>
-              <div style="display:grid;grid-template-columns:160px 1fr;gap:8px;margin-bottom:8px">
-                <div>
-                  <label style="display:block;font-size:12px;color:#666;margin-bottom:2px">人工决策</label>
-                  <select v-model="form.humanDecision" style="width:100%;padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px">
-                    <option v-for="option in HUMAN_DECISION_OPTIONS" :key="option.value" :value="option.value">{{ option.label }}</option>
-                  </select>
-                </div>
-                <div>
-                  <label style="display:block;font-size:12px;color:#666;margin-bottom:2px">未执行原因</label>
-                  <input v-model="form.skipReason" placeholder="未执行时填写，如 仓位不足/条件未确认" style="width:100%;padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px" />
-                </div>
-              </div>
-              <div style="margin-bottom:8px">
-                <label style="display:block;font-size:12px;color:#666;margin-bottom:2px">入池理由</label>
-                <textarea v-model="form.entryReason" rows="2" style="width:100%;padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px"></textarea>
-              </div>
-              <div style="margin-bottom:8px">
-                <label style="display:block;font-size:12px;color:#666;margin-bottom:2px">交易假设</label>
-                <textarea v-model="form.tradeHypothesis" rows="2" style="width:100%;padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px"></textarea>
-              </div>
-              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
-                <div>
-                  <label style="display:block;font-size:12px;color:#666;margin-bottom:2px">买入前提</label>
-                  <textarea v-model="form.entryPrerequisites" rows="2" style="width:100%;padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px"></textarea>
-                </div>
-                <div>
-                  <label style="display:block;font-size:12px;color:#666;margin-bottom:2px">失效条件</label>
-                  <textarea v-model="form.invalidationRules" rows="2" style="width:100%;padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px"></textarea>
-                </div>
-              </div>
-              <h3 style="font-size:14px;margin:12px 0 8px;padding-bottom:4px;border-bottom:1px solid #eee">成交信息（可选）</h3>
+              <h3 style="font-size:14px;margin:12px 0 8px;padding-bottom:4px;border-bottom:1px solid #eee">成交信息</h3>
               <div style="display:flex;gap:8px;margin-bottom:8px">
                 <div style="flex:1">
                   <label style="display:block;font-size:12px;color:#666;margin-bottom:2px">方向</label>

@@ -124,7 +124,45 @@ npm run build
 - 每个阶段都要有明确验收命令。
 - 不把无关重构混入计划。
 
-### 3.3 计划落盘
+### 3.3 `frontend-design`
+
+用于前端页面、组件、面板、仪表盘、表格、图表、视觉美化和交互体验改造，目标是避免泛化、低辨识度的 AI 式界面。
+
+典型场景：
+
+- 用户指出界面“不好看、没质感、和参考图差距大、对比度/字体/颜色不好”。
+- 新增或重做 Dragon Board 面板、弹窗、工作台、数据表、图表或工具栏。
+- 修改 QuantBoard 前端报告页、优化任务页、参数面板或数据可视化。
+- 需要形成明确视觉方向，例如工业金融、暗色数据工作台、精致极简、高密度交易台等。
+
+使用要求：
+
+- 在 `brainstorming` 阶段先明确用途、用户、视觉方向、密度、字体、颜色层级和状态反馈。
+- 实现时优先匹配项目现有 Vue/TypeScript/CSS 组织方式，不为视觉效果引入大型依赖。
+- 视觉创意不能牺牲金融工作台的可读性、扫描效率、对比度和状态辨识度。
+- 和 `ui-ux-pro-max` 同用时，`frontend-design` 负责视觉方向和质感，`ui-ux-pro-max` 负责系统化 UI/UX 规则、可访问性、颜色/字体/布局检查。
+- UI 改动必须结合浏览器真实渲染验证；有响应式风险时检查桌面和移动端截图、横向溢出和控制台错误。
+
+### 3.4 计划自审和工程审查
+
+`autoplan / plan review` 与 `plan-eng-review` 在本项目中默认作为人工审查阶段，不假定存在同名可调用 skill。
+
+计划自审检查：
+
+- 需求是否完整，目标和非目标是否清楚。
+- 范围是否过大，是否需要拆成多个可独立验证的子项目。
+- 验收标准是否可测，是否有明确命令或浏览器检查路径。
+- 是否涉及文档、数据合同、默认值、存储/API 或跨子项目同步。
+
+工程审查检查：
+
+- 文件边界和模块职责是否符合 `AGENTS.md`。
+- 是否绕过公开 facade/API、把业务逻辑塞进组件或 Pinia。
+- 是否过度抽象、引入不必要依赖或混入无关重构。
+- 测试策略是否覆盖关键行为和边界条件。
+- 是否触碰 RankTrend golden、快照、QuantBoard、存储/API 或 TDX L2 能力边界。
+
+### 3.5 计划落盘
 
 遇到需要计划落盘的任务时，优先使用项目内 `skills/` 中沉淀的计划模板或说明；如本地同时安装了 `planning-with-files` skill，应遵循其流程并把项目级长期计划、阶段状态和验收清单落到仓库内合适位置，避免上下文压缩、会话中断或多轮协作后丢失状态。
 
@@ -313,8 +351,10 @@ verification-before-completion
 
 ```text
 brainstorming
+autoplan / plan review
 writing-plans
 计划落盘
+plan-eng-review
 test-driven-development
 verification-before-completion
 requesting-code-review
@@ -333,8 +373,10 @@ verification-before-completion
 
 ```text
 brainstorming
+autoplan / plan review
 writing-plans
 计划落盘
+plan-eng-review
 test-driven-development
 requesting-code-review
 verification-before-completion
@@ -344,10 +386,26 @@ verification-before-completion
 
 ```text
 brainstorming
+frontend-design
+ui-ux-pro-max（需要系统化 UI/UX 检查时）
+autoplan / plan review
+writing-plans（多步骤或高风险 UI 改动）
+plan-eng-review
 test-driven-development
 浏览器和 Playwright 验证
 verification-before-completion
 requesting-code-review
+```
+
+### UI 美化或视觉质感问题
+
+```text
+brainstorming
+frontend-design
+ui-ux-pro-max
+test-driven-development（结构/视觉合同或行为变化）
+浏览器和 Playwright 验证
+verification-before-completion
 ```
 
 ### GitHub PR 或合并前
@@ -356,6 +414,14 @@ requesting-code-review
 verification-before-completion
 requesting-code-review
 receiving-code-review
+```
+
+### 发布或交付前
+
+```text
+verification-before-completion
+requesting-code-review（较大改动）
+finishing-a-development-branch（需要分支收尾或合并时）
 ```
 
 ### 实现后整理

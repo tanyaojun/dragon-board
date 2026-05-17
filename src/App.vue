@@ -92,7 +92,7 @@
               <span class="item-icon">🎯</span>候选池
             </div>
             <div class="dropdown-item" @click.stop="panels.journal = true">
-              <span class="item-icon">📓</span>交易日记
+              <span class="item-icon">📓</span>历史交易日志
             </div>
           </div>
         </div>
@@ -168,6 +168,9 @@
     <StockL2DetailPanel :visible="panels.stockDetail" :stock-code="selectedStockCode"
       :stock-name="selectedStockName" :trigger-rect="panelRects.stockDetail"
       @close="panels.stockDetail = false" />
+    <RankTrendPanel :visible="panels.rankTrend" :stock-code="rankTrendStockCode"
+      :trigger-rect="panelRects.rankTrend" @update:visible="panels.rankTrend = $event"
+      @close="panels.rankTrend = false" />
 
     <!-- 题材相关面板 -->
     <SectorDetail v-model:visible="panels.sectorDetail" :sector-name="sectorDetailName"
@@ -194,6 +197,7 @@ import TradingStatus from './components/common/TradingStatus.vue'
 import SearchBox from './components/common/SearchBox.vue'
 import DataTable from './components/common/DataTable.vue'
 import DataFreshness from './components/common/DataFreshness.vue'
+import RankTrendPanel from './components/panels/RankTrendPanel.vue'
 
 // 面板组件体积较大，按需异步加载，降低首屏 chunk 体积。
 const SettingsPanel = defineAsyncComponent(() => import('./components/panels/SettingsPanel.vue'))
@@ -273,6 +277,7 @@ const showDropdown = ref(false)
 const sectorDetailName = ref('')
 const selectedStockCode = ref('')
 const selectedStockName = ref('')
+const rankTrendStockCode = ref('')
 const lastUpdateTime = ref<number | null>(null)
 
 
@@ -316,6 +321,7 @@ const panels = ref({
   sectorRotation: false,
   themeRisk: false,
   stockDetail: false,
+  rankTrend: false,
   candidatePool: false,
   journal: false,
   eventMonitor: false,
@@ -384,6 +390,14 @@ const openCandidatePool = async (data: { candidateId?: string; stockCode?: strin
   panels.value.candidatePool = true
   await nextTick()
   await candidatePoolPanelRef.value?.openCandidate(data)
+}
+
+const openRankTrend = (data: { stockCode?: string; code?: string; triggerRect?: DOMRect } = {}) => {
+  const code = String(data.stockCode || data.code || '').replace(/\D/g, '').padStart(6, '0').slice(-6)
+  if (!code) return
+  rankTrendStockCode.value = code
+  panelRects.value.rankTrend = data.triggerRect
+  panels.value.rankTrend = true
 }
 
 const openSettings = (type: string) => {
@@ -668,6 +682,12 @@ onMounted(async () => {
       'stock:show-detail',
       (data: any) => {
         openStockDetail(data)
+      },
+    ],
+    [
+      'rank-trend:open',
+      (data: any) => {
+        openRankTrend(data)
       },
     ],
     [

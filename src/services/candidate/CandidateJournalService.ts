@@ -13,9 +13,13 @@ import type {
   CandidateAnalysisResult,
   CandidateJournalEntry,
   CandidateReviewUpdate,
+  CandidateRuleEvidence,
   CandidateSavedAnalysis,
   CandidateStatus,
   CandidateStockLike,
+  CandidateStructuredCondition,
+  CandidateStructuredRisk,
+  CandidateStructuredThesis,
   CandidateThesisUpdate,
   CandidateWorkbenchReview,
 } from './types'
@@ -46,9 +50,22 @@ interface CandidateJournalServiceDeps {
 }
 
 const OPEN_STATUSES: CandidateStatus[] = ['observe', 'candidate', 'triggered', 'tracking']
+const BREAKDOWN_LABELS: Record<keyof CandidateSavedAnalysis['scoreBreakdown'], string> = {
+  rankTrend: 'RankTrend',
+  theme: '题材',
+  dragon: '龙头/地位',
+  sentiment: '情绪',
+  moneyFlow: '资金流',
+}
+
 function normalizeCode(code: unknown): string {
   const digits = String(code || '').replace(/\D/g, '')
   return digits ? digits.padStart(6, '0').slice(-6) : ''
+}
+
+function toSafeNumber(value: unknown, fallback = 0): number {
+  const numeric = Number(value)
+  return Number.isFinite(numeric) ? numeric : fallback
 }
 
 function normalizeEntry(raw: any): CandidateJournalEntry {
@@ -96,7 +113,7 @@ function findDragonRecord(stockCode: string): Record<string, any> | null {
 function normalizeSavedAnalysis(snapshot: Record<string, any> | null | undefined): CandidateSavedAnalysis {
   const analysis = snapshot?.candidateAnalysis || {}
   return {
-    score: Number(analysis.score || 0),
+    score: toSafeNumber(analysis.score),
     grade: (analysis.grade || '-') as CandidateSavedAnalysis['grade'],
     suggestedStatus: (analysis.suggestedStatus || '') as CandidateSavedAnalysis['suggestedStatus'],
     riskWarnings: Array.isArray(analysis.riskWarnings)
@@ -104,15 +121,67 @@ function normalizeSavedAnalysis(snapshot: Record<string, any> | null | undefined
       : [],
     strengths: Array.isArray(analysis.strengths) ? analysis.strengths.map((item: unknown) => String(item)) : [],
     weaknesses: Array.isArray(analysis.weaknesses) ? analysis.weaknesses.map((item: unknown) => String(item)) : [],
+    evidence: normalizeEvidenceList(analysis.evidence),
+    penalties: normalizeEvidenceList(analysis.penalties),
+    structuredThesis: normalizeStructuredThesis(analysis.structuredThesis),
+    structuredRisks: normalizeStructuredRisks(analysis.structuredRisks),
     scoreBreakdown: {
-      rankTrend: Number(analysis.scoreBreakdown?.rankTrend || 0),
-      theme: Number(analysis.scoreBreakdown?.theme || 0),
-      dragon: Number(analysis.scoreBreakdown?.dragon || 0),
-      sentiment: Number(analysis.scoreBreakdown?.sentiment || 0),
-      moneyFlow: Number(analysis.scoreBreakdown?.moneyFlow || 0),
+      rankTrend: toSafeNumber(analysis.scoreBreakdown?.rankTrend),
+      theme: toSafeNumber(analysis.scoreBreakdown?.theme),
+      dragon: toSafeNumber(analysis.scoreBreakdown?.dragon),
+      sentiment: toSafeNumber(analysis.scoreBreakdown?.sentiment),
+      moneyFlow: toSafeNumber(analysis.scoreBreakdown?.moneyFlow),
     },
-    generatedAt: Number(analysis.generatedAt || 0) || undefined,
+    generatedAt: toSafeNumber(analysis.generatedAt) || undefined,
   }
+}
+
+function normalizeEvidenceList(value: unknown): CandidateRuleEvidence[] {
+  if (!Array.isArray(value)) return []
+  return value.map((item: any) => ({
+    dimension: String(item?.dimension || 'rankTrend') as CandidateRuleEvidence['dimension'],
+    kind: String(item?.kind || 'neutral') as CandidateRuleEvidence['kind'],
+    title: String(item?.title || ''),
+    detail: String(item?.detail || ''),
+    scoreImpact: toSafeNumber(item?.scoreImpact),
+    dataQuality: String(item?.dataQuality || 'ok') as CandidateRuleEvidence['dataQuality'],
+    source: item?.source ? String(item.source) : undefined,
+  }))
+}
+
+function normalizeConditionList(value: unknown): CandidateStructuredCondition[] {
+  if (!Array.isArray(value)) return []
+  return value.map((item: any) => ({
+    id: String(item?.id || ''),
+    label: String(item?.label || ''),
+    dimension: String(item?.dimension || 'rankTrend') as CandidateStructuredCondition['dimension'],
+    status: String(item?.status || 'unknown') as CandidateStructuredCondition['status'],
+    description: String(item?.description || ''),
+  }))
+}
+
+function normalizeStructuredThesis(value: any): CandidateStructuredThesis {
+  return {
+    triggerConditions: normalizeConditionList(value?.triggerConditions),
+    entryPrerequisites: normalizeConditionList(value?.entryPrerequisites),
+    invalidationConditions: normalizeConditionList(value?.invalidationConditions),
+  }
+}
+
+function normalizeStructuredRisks(value: unknown): CandidateStructuredRisk[] {
+  if (!Array.isArray(value)) return []
+  return value.map((item: any) => ({
+    code: String(item?.code || ''),
+    level: String(item?.level || 'info') as CandidateStructuredRisk['level'],
+    dimension: String(item?.dimension || 'dataQuality') as CandidateStructuredRisk['dimension'],
+    message: String(item?.message || ''),
+    reason: String(item?.reason || ''),
+  }))
+}
+
+function formatDimensionChange(label: string, action: '改善' | '走弱', points: number): string {
+  const separator = /^[A-Za-z]/.test(label) ? ' ' : ''
+  return `${label}${separator}${action} ${points} 分`
 }
 
 function compareAnalysis(saved: CandidateSavedAnalysis, current: CandidateAnalysisResult) {
@@ -126,13 +195,46 @@ function compareAnalysis(saved: CandidateSavedAnalysis, current: CandidateAnalys
     stateReasons.push(`建议状态从 ${saved.suggestedStatus || '未设置'} 变为 ${current.suggestedStatus}`)
   }
 
+  const dimensions = Object.keys(BREAKDOWN_LABELS) as Array<keyof CandidateSavedAnalysis['scoreBreakdown']>
+  for (const dimension of dimensions) {
+    const delta = current.scoreBreakdown[dimension] - saved.scoreBreakdown[dimension]
+    if (delta >= 5) {
+      stateReasons.push(formatDimensionChange(BREAKDOWN_LABELS[dimension], '改善', delta))
+    } else if (delta <= -5) {
+      stateReasons.push(formatDimensionChange(BREAKDOWN_LABELS[dimension], '走弱', Math.abs(delta)))
+    }
+  }
+
+  const savedRiskByCode = new Map(saved.structuredRisks.map((item) => [item.code, item]))
+  const currentRiskByCode = new Map(current.structuredRisks.map((item) => [item.code, item]))
+  const newRisks = current.structuredRisks.filter(
+    (item) => item.code && !savedRiskByCode.has(item.code) && (item.level === 'warning' || item.level === 'danger'),
+  )
+  const removedRisks = saved.structuredRisks.filter((item) => item.code && !currentRiskByCode.has(item.code))
+  for (const item of newRisks) {
+    stateReasons.push(`新增风险：${item.message}`)
+  }
+  for (const item of removedRisks) {
+    stateReasons.push(`风险解除：${item.message}`)
+  }
+
+  const missingEvidence = current.evidence.filter((item) => item.kind === 'missing')
+  if (missingEvidence.length) {
+    stateReasons.push(`缺样本：${missingEvidence.map((item) => item.title).join('、')}`)
+  }
+
   let stateLabel = '条件持平'
-  if (current.riskWarnings.some((risk) => risk.includes('D_EXIT_RISK') || risk.includes('退潮'))) {
+  if (
+    newRisks.some((item) => item.level === 'danger') ||
+    current.riskWarnings.some((risk) => risk.includes('D_EXIT_RISK') || risk.includes('退潮'))
+  ) {
     stateLabel = '风险升高'
   } else if (scoreDelta >= 8) {
     stateLabel = '条件改善'
   } else if (scoreDelta <= -8 || current.riskWarnings.length > saved.riskWarnings.length) {
     stateLabel = '条件转弱'
+  } else if (missingEvidence.length) {
+    stateLabel = '样本不足'
   }
 
   if (!stateReasons.length) stateReasons.push('当前信号与入池快照差异不大')
@@ -153,7 +255,10 @@ export class CandidateJournalService {
   }
 
   async listCandidates(params: { status?: string; stockCode?: string; limit?: number } = {}): Promise<CandidateJournalEntry[]> {
-    const search = new URLSearchParams({ limit: String(params.limit || 100) })
+    const search = new URLSearchParams({
+      limit: String(params.limit || 100),
+      trade_type: 'thesis',
+    })
     if (params.status) search.set('status', params.status)
     if (params.stockCode) search.set('stock_code', normalizeCode(params.stockCode))
     const data = await this.api.get(`/api/journal/entries?${search.toString()}`, {
@@ -162,7 +267,9 @@ export class CandidateJournalService {
       silent: true,
       throwOnHttpError: true,
     })
-    return Array.isArray(data?.entries) ? data.entries.map(normalizeEntry) : []
+    return Array.isArray(data?.entries)
+      ? data.entries.map(normalizeEntry).filter((entry: CandidateJournalEntry) => entry.tradeType === 'thesis')
+      : []
   }
 
   async addCandidateFromStock(
@@ -266,6 +373,24 @@ export class CandidateJournalService {
       throwOnHttpError: true,
     })
     return normalizeEntry(updated)
+  }
+
+  async deleteCandidate(entry: CandidateJournalEntry): Promise<void> {
+    if (entry.tradeType !== 'thesis') {
+      throw new Error('仅允许删除候选池记录')
+    }
+    await this.api.delete(`/api/journal/entries/${entry.id}`, {
+      context: 'quant-board',
+      cache: false,
+      silent: true,
+      throwOnHttpError: true,
+    })
+  }
+
+  addCandidateToFavorites(entry: CandidateJournalEntry): boolean {
+    const stockCode = normalizeCode(entry.stockCode)
+    if (!stockCode) return false
+    return this.addFavorite ? this.addFavorite(stockCode) : useFavoriteStore().addToFavorites(stockCode)
   }
 
   async getOpenCandidateForStock(stockCode: string): Promise<CandidateJournalEntry | null> {

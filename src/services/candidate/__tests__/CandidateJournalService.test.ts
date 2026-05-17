@@ -19,6 +19,47 @@ const analysis: CandidateAnalysisResult = {
   riskWarnings: [],
   strengths: ['RankTrend A_MAIN'],
   weaknesses: [],
+  evidence: [
+    {
+      dimension: 'rankTrend',
+      kind: 'positive',
+      title: 'RankTrend A_MAIN',
+      detail: '排名趋势进入核心候选',
+      scoreImpact: 30,
+      dataQuality: 'ok',
+    },
+  ],
+  penalties: [],
+  structuredThesis: {
+    triggerConditions: [
+      {
+        id: 'ranktrend-trigger',
+        label: 'RankTrend 进入主升候选',
+        dimension: 'rankTrend',
+        status: 'met',
+        description: 'A_MAIN',
+      },
+    ],
+    entryPrerequisites: [
+      {
+        id: 'ranktrend-hold',
+        label: '排名维持前排',
+        dimension: 'rankTrend',
+        status: 'met',
+        description: '排名趋势未走弱',
+      },
+    ],
+    invalidationConditions: [
+      {
+        id: 'ranktrend-exit',
+        label: 'RankTrend 失效',
+        dimension: 'rankTrend',
+        status: 'watch',
+        description: '降为 D_EXIT_RISK',
+      },
+    ],
+  },
+  structuredRisks: [],
   tags: ['A', 'A_MAIN', '先进封装'],
   scoreBreakdown: {
     rankTrend: 30,
@@ -32,6 +73,47 @@ const analysis: CandidateAnalysisResult = {
       version: 'candidate-rules-v1',
       score: 82,
       grade: 'A',
+      evidence: [
+        {
+          dimension: 'rankTrend',
+          kind: 'positive',
+          title: 'RankTrend A_MAIN',
+          detail: '排名趋势进入核心候选',
+          scoreImpact: 30,
+          dataQuality: 'ok',
+        },
+      ],
+      penalties: [],
+      structuredThesis: {
+        triggerConditions: [
+          {
+            id: 'ranktrend-trigger',
+            label: 'RankTrend 进入主升候选',
+            dimension: 'rankTrend',
+            status: 'met',
+            description: 'A_MAIN',
+          },
+        ],
+        entryPrerequisites: [
+          {
+            id: 'ranktrend-hold',
+            label: '排名维持前排',
+            dimension: 'rankTrend',
+            status: 'met',
+            description: '排名趋势未走弱',
+          },
+        ],
+        invalidationConditions: [
+          {
+            id: 'ranktrend-exit',
+            label: 'RankTrend 失效',
+            dimension: 'rankTrend',
+            status: 'watch',
+            description: '降为 D_EXIT_RISK',
+          },
+        ],
+      },
+      structuredRisks: [],
     },
   },
 }
@@ -147,7 +229,32 @@ describe('CandidateJournalService', () => {
 
     expect(result?.id).toBe('tj_existing')
     expect(api.get).toHaveBeenCalledWith(
-      '/api/journal/entries?limit=100&stock_code=600584',
+      '/api/journal/entries?limit=100&trade_type=thesis&stock_code=600584',
+      expect.objectContaining({ context: 'quant-board', throwOnHttpError: true }),
+    )
+  })
+
+  it('lists only thesis entries so historical trades never leak into the candidate pool', async () => {
+    const { service, api } = createService()
+    api.get.mockResolvedValue({
+      entries: [
+        existingCandidate,
+        {
+          ...existingCandidate,
+          id: 'tj_trade',
+          tradeType: 'entry',
+          status: 'observe',
+          entryReason: '历史交易不应进入候选池',
+        },
+      ],
+      total: 2,
+    })
+
+    const result = await service.listCandidates()
+
+    expect(result.map((entry) => entry.id)).toEqual(['tj_existing'])
+    expect(api.get).toHaveBeenCalledWith(
+      '/api/journal/entries?limit=100&trade_type=thesis',
       expect.objectContaining({ context: 'quant-board', throwOnHttpError: true }),
     )
   })
@@ -174,6 +281,93 @@ describe('CandidateJournalService', () => {
       expect.objectContaining({
         stock: expect.objectContaining({ code: '600584', name: '长电科技' }),
       }),
+    )
+  })
+
+  it('attributes current reanalysis changes by score dimension and new structured risks', async () => {
+    const currentAnalysis: CandidateAnalysisResult = {
+      ...analysis,
+      score: 45,
+      grade: 'D',
+      suggestedStatus: 'observe',
+      riskWarnings: ['RankTrend 为 D_EXIT_RISK，候选失效风险高'],
+      strengths: [],
+      weaknesses: ['RankTrend 为 D_EXIT_RISK'],
+      evidence: [
+        {
+          dimension: 'rankTrend',
+          kind: 'negative',
+          title: 'RankTrend D_EXIT_RISK',
+          detail: '排名趋势失效',
+          scoreImpact: 0,
+          dataQuality: 'ok',
+        },
+        {
+          dimension: 'theme',
+          kind: 'missing',
+          title: '题材样本缺失',
+          detail: '未识别到题材暴露',
+          scoreImpact: 0,
+          dataQuality: 'missing',
+        },
+      ],
+      penalties: [
+        {
+          dimension: 'rankTrend',
+          kind: 'negative',
+          title: 'RankTrend D_EXIT_RISK',
+          detail: '排名趋势失效',
+          scoreImpact: 0,
+          dataQuality: 'ok',
+        },
+      ],
+      structuredRisks: [
+        {
+          code: 'RANKTREND_EXIT_RISK',
+          level: 'danger',
+          dimension: 'rankTrend',
+          message: 'RankTrend 为 D_EXIT_RISK，候选失效风险高',
+          reason: '排名趋势失效',
+        },
+      ],
+      scoreBreakdown: {
+        rankTrend: 0,
+        theme: 5,
+        dragon: 10,
+        sentiment: 8,
+        moneyFlow: 2,
+      },
+    }
+    const { service } = createService()
+    ;(service as any).analyze = vi.fn(() => currentAnalysis)
+
+    const result = service.reanalyzeCandidate({
+      ...existingCandidate,
+      signalsSnapshot: {
+        candidateAnalysis: {
+          score: 82,
+          grade: 'A',
+          suggestedStatus: 'candidate',
+          scoreBreakdown: {
+            rankTrend: 30,
+            theme: 18,
+            dragon: 20,
+            sentiment: 10,
+            moneyFlow: 4,
+          },
+          structuredRisks: [],
+        },
+      },
+    })
+
+    expect(result.stateLabel).toBe('风险升高')
+    expect(result.stateReasons).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('RankTrend 走弱'),
+        expect.stringContaining('题材走弱'),
+        expect.stringContaining('新增风险'),
+        expect.stringContaining('缺样本'),
+      ]),
     )
   })
 
@@ -317,5 +511,42 @@ describe('CandidateJournalService', () => {
       },
       expect.objectContaining({ context: 'quant-board', throwOnHttpError: true }),
     )
+  })
+
+  it('deletes only thesis candidate records through the journal API', async () => {
+    const { service, api } = createService()
+    api.delete.mockResolvedValue({ status: 'deleted', id: 'tj_existing' })
+
+    await service.deleteCandidate(existingCandidate)
+
+    expect(api.delete).toHaveBeenCalledWith(
+      '/api/journal/entries/tj_existing',
+      expect.objectContaining({ context: 'quant-board', throwOnHttpError: true }),
+    )
+  })
+
+  it('rejects deleting non-candidate trade records from the candidate service', async () => {
+    const { service, api } = createService()
+
+    await expect(
+      service.deleteCandidate({
+        ...existingCandidate,
+        tradeType: 'entry',
+      }),
+    ).rejects.toThrow('仅允许删除候选池记录')
+
+    expect(api.delete).not.toHaveBeenCalled()
+  })
+
+  it('adds a candidate entry to favorites by normalized stock code', () => {
+    const { service, addToFavorites } = createService()
+
+    const result = service.addCandidateToFavorites({
+      ...existingCandidate,
+      stockCode: 'sh600584',
+    })
+
+    expect(result).toBe(true)
+    expect(addToFavorites).toHaveBeenCalledWith('600584')
   })
 })

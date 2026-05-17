@@ -84,9 +84,45 @@ describe('CandidateAnalysisService', () => {
     expect(result.entryPrerequisites).toContain('排名')
     expect(result.invalidationRules).toContain('D_EXIT_RISK')
     expect(result.riskWarnings).toEqual([])
+    expect(result.evidence.map((item) => item.dimension)).toEqual([
+      'rankTrend',
+      'theme',
+      'dragon',
+      'sentiment',
+      'moneyFlow',
+    ])
+    expect(result.evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ dimension: 'rankTrend', kind: 'positive', title: expect.stringContaining('A_MAIN') }),
+        expect.objectContaining({ dimension: 'theme', kind: 'positive', title: expect.stringContaining('先进封装') }),
+        expect.objectContaining({ dimension: 'dragon', kind: 'positive' }),
+        expect.objectContaining({ dimension: 'moneyFlow', kind: 'positive' }),
+      ]),
+    )
+    expect(result.penalties).toEqual([])
+    expect(result.structuredThesis.triggerConditions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ dimension: 'rankTrend', status: 'met' }),
+        expect.objectContaining({ dimension: 'theme', status: 'met' }),
+        expect.objectContaining({ dimension: 'moneyFlow', status: 'met' }),
+      ]),
+    )
+    expect(result.structuredThesis.entryPrerequisites.length).toBeGreaterThan(0)
+    expect(result.structuredThesis.invalidationConditions).toEqual(
+      expect.arrayContaining([expect.objectContaining({ dimension: 'rankTrend' })]),
+    )
+    expect(result.structuredRisks).toEqual([])
     expect(result.signalsSnapshot.candidateAnalysis).toMatchObject({
       version: 'candidate-rules-v1',
       grade: 'A',
+      evidence: expect.any(Array),
+      penalties: [],
+      structuredThesis: expect.objectContaining({
+        triggerConditions: expect.any(Array),
+        entryPrerequisites: expect.any(Array),
+        invalidationConditions: expect.any(Array),
+      }),
+      structuredRisks: [],
     })
   })
 
@@ -138,9 +174,98 @@ describe('CandidateAnalysisService', () => {
       ]),
     )
     expect(result.invalidationRules).toContain('拥挤')
+    expect(result.penalties).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ dimension: 'rankTrend', kind: 'negative' }),
+        expect.objectContaining({ dimension: 'sentiment', kind: 'negative' }),
+        expect.objectContaining({ dimension: 'moneyFlow', kind: 'negative' }),
+      ]),
+    )
+    expect(result.structuredRisks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: 'RANKTREND_CROWDED', level: 'warning' }),
+        expect.objectContaining({ code: 'SENTIMENT_EBB', level: 'warning' }),
+        expect.objectContaining({ code: 'MONEY_FLOW_NEGATIVE', level: 'warning' }),
+      ]),
+    )
     expect(result.signalsSnapshot.candidateAnalysis).toMatchObject({
       version: 'candidate-rules-v1',
       suggestedStatus: 'observe',
     })
+  })
+
+  it('returns structured missing-data risks without producing NaN scores', () => {
+    const result = analyzeCandidateStock(
+      baseContext({
+        rankTrend: null,
+        themeExposures: [],
+        dragonRecord: null,
+        sentiment: null,
+        stock: {
+          code: '600000',
+          name: '低样本',
+          zlje: Number.NaN,
+          zljzb: Number.NaN,
+          cddje: Number.NaN,
+          volumeRatio: Number.NaN,
+          turnoverRate: Number.NaN,
+          themes: [],
+        },
+        allStocks: [{ code: '600001', name: '低样本参照' }],
+      }),
+    )
+
+    expect(Number.isNaN(result.score)).toBe(false)
+    expect(result.evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ dimension: 'rankTrend', kind: 'missing' }),
+        expect.objectContaining({ dimension: 'theme', kind: 'missing' }),
+        expect.objectContaining({ dimension: 'dragon', kind: 'missing' }),
+        expect.objectContaining({ dimension: 'sentiment', kind: 'missing' }),
+        expect.objectContaining({ dimension: 'moneyFlow', kind: 'missing' }),
+      ]),
+    )
+    expect(result.structuredRisks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: 'RANKTREND_MISSING', level: 'warning' }),
+        expect.objectContaining({ code: 'THEME_MISSING', level: 'info' }),
+        expect.objectContaining({ code: 'SENTIMENT_MISSING', level: 'info' }),
+        expect.objectContaining({ code: 'MONEY_FLOW_MISSING', level: 'info' }),
+        expect.objectContaining({ code: 'DATA_LOW_SAMPLE', level: 'info', dimension: 'dataQuality' }),
+      ]),
+    )
+    expect(result.structuredThesis.triggerConditions).toEqual(
+      expect.arrayContaining([expect.objectContaining({ dimension: 'rankTrend', status: 'unknown' })]),
+    )
+  })
+
+  it('treats null and blank money-flow fields as missing data instead of neutral samples', () => {
+    const result = analyzeCandidateStock(
+      baseContext({
+        stock: {
+          code: '600000',
+          name: '空资金字段',
+          zlje: null,
+          zljzb: '',
+          cddje: ' ',
+          volumeRatio: undefined,
+          themes: [{ id: 'chip', name: '先进封装' }],
+        },
+      }),
+    )
+
+    expect(result.evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ dimension: 'moneyFlow', kind: 'missing' }),
+      ]),
+    )
+    expect(result.structuredRisks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: 'MONEY_FLOW_MISSING', level: 'info' }),
+      ]),
+    )
+    expect(result.structuredThesis.triggerConditions).toEqual(
+      expect.arrayContaining([expect.objectContaining({ dimension: 'moneyFlow', status: 'unknown' })]),
+    )
   })
 })

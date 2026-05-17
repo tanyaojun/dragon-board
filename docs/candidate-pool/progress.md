@@ -133,6 +133,131 @@
   - `docs/candidate-pool/task_plan.md`
   - `docs/candidate-pool/progress.md`
 
+### Phase 9: 旧入口与历史交易日志收敛
+
+- **Status:** complete
+- Actions taken:
+  - 将 `docs/candidate-pool/task_plan.md` 补充 Phase 9-Phase 14，明确后续候选池操作、统计、规则增强、自动发现和 E2E 回归阶段。
+  - 将 `TradeJournalPanel.vue` 从“候选与交易假设”收敛为“历史交易日志”。
+  - 历史交易日志默认新建 `tradeType=entry` 交易记录，出场记录继续使用 `trade_type=exit`。
+  - 历史交易日志加载时分别查询 `entry` 和 `exit`，合并排序，并过滤 `tradeType=thesis`，避免候选池记录污染历史交易列表。
+  - 删除旧面板中候选研究式的可见输入：抓取信号、入池理由、交易假设、买入前提、失效条件、市场环境、题材地位、个股角色、人工决策、未执行原因、预期持仓天数。
+  - App 下拉菜单入口从“交易日记”改为“历史交易日志”，候选相关工作流继续走“候选池”。
+- Files created/modified:
+  - `docs/candidate-pool/task_plan.md`
+  - `docs/candidate-pool/progress.md`
+  - `src/App.vue`
+  - `src/components/panels/TradeJournalPanel.vue`
+  - `src/components/panels/__tests__/TradeJournalPanel.test.ts`
+
+### Phase 10: 候选池操作补全
+
+- **Status:** complete
+- Actions taken:
+  - `CandidateJournalService` 增加 `deleteCandidate`，删除前校验 `tradeType=thesis`，避免误删历史交易日志。
+  - `CandidateJournalService` 增加 `addCandidateToFavorites`，统一候选池加入自选股入口。
+  - 候选池详情区增加快捷操作：加入自选、股票详情、排名趋势、删除候选。
+  - App 增加 `rank-trend:open` 事件桥接，候选池可直接打开对应股票的 RankTrend 面板。
+  - 候选列表增加评分排序、等级排序、更新时间排序、风险筛选和题材关键词筛选。
+  - 候选池列表数量改为展示筛选后数量和总数，快捷操作区补齐按钮布局和删除态样式。
+- Files created/modified:
+  - `docs/candidate-pool/task_plan.md`
+  - `docs/candidate-pool/progress.md`
+  - `src/App.vue`
+  - `src/components/panels/CandidatePoolPanel.vue`
+  - `src/components/panels/__tests__/CandidatePoolPanel.test.ts`
+  - `src/services/candidate/CandidateJournalService.ts`
+  - `src/services/candidate/__tests__/CandidateJournalService.test.ts`
+
+### Phase 11: 候选质量统计与复盘分析
+
+- **Status:** complete
+- **Started:** 2026-05-17 14:35:49 +08:00
+- Actions taken:
+  - 读取 `docs/candidate-pool/task_plan.md` 与进度记录，确认 Phase 11 成功标准。
+  - 先补 RED 测试，锁定候选质量统计服务与候选池面板的 Phase 11 合同。
+  - 新增 `CandidateQualityStatsService`，基于候选重分析结果计算漏斗、命中率、失效率、触发率、平均跟踪天数、复盘分布和质量拆解。
+  - 候选池面板接入质量统计，新增候选漏斗、题材/RankTrend/等级/资金拆解和复盘结果分布。
+  - 在方案文档补充候选统计口径，明确不与历史交易日志盈亏统计混用。
+  - 清理组件内旧统计派生字段，候选质量指标统一由 `CandidateQualityStatsService` 生成。
+  - 根据用户反馈恢复候选池“左侧候选目录 + 右侧详情容器”主布局，Phase 11 统计改为右侧详情内的紧凑候选质量小节。
+  - 运行候选池完整定向测试、类型检查和前端构建，均通过。
+- Files created/modified:
+  - `src/services/candidate/CandidateQualityStatsService.ts`
+  - `src/services/candidate/__tests__/CandidateQualityStatsService.test.ts`
+  - `src/components/panels/CandidatePoolPanel.vue`
+  - `src/components/panels/__tests__/CandidatePoolPanel.test.ts`
+  - `docs/candidate-pool/candidate-pool-workbench-design.md`
+  - `docs/candidate-pool/task_plan.md`
+  - `docs/candidate-pool/progress.md`
+
+### Phase 12: 规则分析增强
+
+- **Status:** complete
+- **Started:** 2026-05-17 18:57:52 +08:00
+- Actions taken:
+  - 先补 RED 测试，锁定结构化证据、扣分项、条件组、结构化风险和重分析变化归因合同。
+  - `CandidateAnalysisService` 增加 `evidence`、`penalties`、`structuredThesis`、`structuredRisks`，按 RankTrend、题材、龙头/地位、情绪、资金流输出可解释证据。
+  - 对 RankTrend 缺失、题材缺失、情绪缺失、资金字段 NaN/缺失、低样本量、资金转负、拥挤和 D_EXIT_RISK 输出结构化风险，不再只依赖文本风险提示。
+  - `CandidateJournalService` 增强入池快照与当前重分析对比，按评分维度归因改善/走弱，并识别新增风险、风险解除和缺样本。
+  - 候选池详情区在原“左目录 + 右详情容器”布局内补充证据项、扣分项、结构化条件和结构化风险展示，没有再改主布局。
+  - 更新方案文档，明确 Phase 12 结构化字段仍存放于 `signalsSnapshot.candidateAnalysis`，不新增后端表字段。
+- Files created/modified:
+  - `src/services/candidate/types.ts`
+  - `src/services/candidate/CandidateAnalysisService.ts`
+  - `src/services/candidate/CandidateJournalService.ts`
+  - `src/services/candidate/__tests__/CandidateAnalysisService.test.ts`
+  - `src/services/candidate/__tests__/CandidateJournalService.test.ts`
+  - `src/components/panels/CandidatePoolPanel.vue`
+  - `src/components/panels/__tests__/CandidatePoolPanel.test.ts`
+  - `docs/candidate-pool/candidate-pool-workbench-design.md`
+  - `docs/candidate-pool/task_plan.md`
+  - `docs/candidate-pool/progress.md`
+
+### Phase 13: 自动候选发现
+
+- **Status:** complete
+- **Started:** 2026-05-17 19:25:00 +08:00
+- Actions taken:
+  - 先补 RED 测试，锁定自动候选发现服务和候选池面板的人工确认合同。
+  - 新增 `CandidateDiscoveryService`，基于当前行情样本复用规则分析引擎生成建议入池清单。
+  - 推荐结果按评分排序，默认过滤低分样本，限制推荐数量，并输出原因、风险、等级、重复候选状态和预期跟踪天数。
+  - 自动发现服务只产出建议，不写 journal；候选池面板点击“确认入池”后才调用 `CandidateJournalService.addCandidateFromStock`。
+  - 增加冷却时间控制，非强制刷新时复用上次推荐，避免面板打开和刷新过程反复打扰。
+  - 候选池右侧详情容器增加“建议入池”紧凑区，保留左侧候选目录 + 右侧详情主布局。
+  - 按新增视觉合同补齐高对比金融配色 token、数据字体 token 和统计卡顶部状态线。
+- Files created/modified:
+  - `src/services/candidate/CandidateDiscoveryService.ts`
+  - `src/services/candidate/__tests__/CandidateDiscoveryService.test.ts`
+  - `src/services/candidate/types.ts`
+  - `src/components/panels/CandidatePoolPanel.vue`
+  - `src/components/panels/__tests__/CandidatePoolPanel.test.ts`
+  - `docs/candidate-pool/candidate-pool-workbench-design.md`
+  - `docs/candidate-pool/task_plan.md`
+  - `docs/candidate-pool/progress.md`
+
+### Phase 14: 端到端测试与回归固化
+
+- **Status:** complete
+- **Started:** 2026-05-17 20:20:00 +08:00
+- Actions taken:
+  - 用单元测试先复现候选池读取未限定 `trade_type=thesis` 的问题，确认历史交易可能混入候选池。
+  - `CandidateJournalService.listCandidates()` 查询固定带 `trade_type=thesis`，并对后端误返回的非候选记录做防御性过滤。
+  - 安装并接入 `@playwright/test`，新增 `test:e2e` 脚本。
+  - 将旧 Vite 示例 E2E 替换为候选池真实回归：右键入池、查看详情、编辑假设、写回分析、保存复盘、历史交易日志隔离。
+  - E2E 使用路由 mock 覆盖行情、RankTrend、题材、journal、stock names 和快照读口，不依赖本机代理或 QuantBoard 实例。
+  - 增加重复候选、服务失败提示、删除候选，以及宽屏/窄屏截图回归。
+  - Playwright 配置保留默认浏览器行为，同时支持 `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` 以便本机复用系统 Chrome。
+- Files created/modified:
+  - `e2e/vue.spec.ts`
+  - `package.json`
+  - `package-lock.json`
+  - `playwright.config.ts`
+  - `src/services/candidate/CandidateJournalService.ts`
+  - `src/services/candidate/__tests__/CandidateJournalService.test.ts`
+  - `docs/candidate-pool/task_plan.md`
+  - `docs/candidate-pool/progress.md`
+
 ## Test Results
 
 | Test | Input | Expected | Actual | Status |
@@ -163,6 +288,36 @@
 | Phase 8 编辑与复盘 | 保存假设、写回当前分析、保存 pending 复盘 | 三次 `PUT` 成功，pending 不推进 reviewed | journal 记录保持 `status=observe`、`reviewOutcome=pending`，备注持久化 | 通过 |
 | Phase 8 窄屏视觉 | Playwright 900x700 | 候选池自身无横向溢出，内容可读可编辑 | `panelScrollWidth=panelClientWidth=892`，当前活动候选数 1 | 通过 |
 | Phase 8 临时数据清理 | 删除 Playwright 创建的 journal 记录 | 测试样本不残留 | `DELETE /api/journal/entries/tj_ae476469f99b471f` 返回 deleted | 通过 |
+| Phase 9 RED 验证 | `pnpm exec vitest run src/components/panels/__tests__/TradeJournalPanel.test.ts --reporter=dot` | 新增历史日志契约测试失败 | 先后失败于旧标题、默认 `thesis`、候选研究字段残留 | 通过 |
+| Phase 9 候选池/交易日志定向测试 | `pnpm exec vitest run src/services/candidate/__tests__/CandidateAnalysisService.test.ts src/services/candidate/__tests__/CandidateJournalService.test.ts src/components/common/__tests__/DataTable.test.ts src/components/panels/__tests__/CandidatePoolPanel.test.ts src/components/panels/__tests__/TradeJournalPanel.test.ts --reporter=dot` | 20 tests passed | 5 files / 20 tests passed | 通过 |
+| Phase 9 类型检查 | `pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false` | exit 0 | exit 0 | 通过 |
+| Phase 9 旧文案扫描 | `rg -n "候选与交易假设|新增候选|编辑候选|暂无候选|市场环境|题材地位|个股角色|人工决策|未执行原因|预期持仓天数|captureSignals|stockOptions|tradeType:\s*'thesis'|trade_type:\s*'thesis'" src\components\panels\TradeJournalPanel.vue src\App.vue` | 无命中 | exit 1，无匹配 | 通过 |
+| Phase 10 RED 验证 | `pnpm exec vitest run src/services/candidate/__tests__/CandidateJournalService.test.ts src/components/panels/__tests__/CandidatePoolPanel.test.ts --reporter=dot` | 新增操作契约测试失败 | 失败点为缺少删除候选、加入自选、RankTrend 事件桥接和列表控制 | 通过 |
+| Phase 10 候选池/交易日志定向测试 | `pnpm exec vitest run src/services/candidate/__tests__/CandidateAnalysisService.test.ts src/services/candidate/__tests__/CandidateJournalService.test.ts src/components/common/__tests__/DataTable.test.ts src/components/panels/__tests__/CandidatePoolPanel.test.ts src/components/panels/__tests__/TradeJournalPanel.test.ts --reporter=dot` | 24 tests passed | 5 files / 24 tests passed | 通过 |
+| Phase 10 类型检查 | `pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false` | exit 0 | exit 0 | 通过 |
+| Phase 10 前端构建 | `pnpm build` | exit 0 | exit 0，保留既有 ThemeFacade 动静态混用 warning | 通过 |
+| Phase 11 RED 验证 | `pnpm exec vitest run src/services/candidate/__tests__/CandidateQualityStatsService.test.ts src/components/panels/__tests__/CandidatePoolPanel.test.ts --reporter=dot` | 新增统计合同测试失败 | 失败点为缺少 `CandidateQualityStatsService` 和面板候选质量视图 | 通过 |
+| Phase 11 候选池完整定向测试 | `pnpm exec vitest run src/services/candidate/__tests__/CandidateAnalysisService.test.ts src/services/candidate/__tests__/CandidateJournalService.test.ts src/services/candidate/__tests__/CandidateQualityStatsService.test.ts src/components/common/__tests__/DataTable.test.ts src/components/panels/__tests__/CandidatePoolPanel.test.ts src/components/panels/__tests__/TradeJournalPanel.test.ts --reporter=dot` | 26 tests passed | 6 files / 26 tests passed | 通过 |
+| Phase 11 类型检查 | `pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false` | exit 0 | exit 0 | 通过 |
+| Phase 11 前端构建 | `pnpm build` | exit 0 | exit 0，保留既有 ThemeFacade 动静态混用 warning | 通过 |
+| Phase 11 布局回归修复 | `pnpm exec vitest run src/components/panels/__tests__/CandidatePoolPanel.test.ts src/services/candidate/__tests__/CandidateQualityStatsService.test.ts --reporter=dot` | 7 tests passed | 2 files / 7 tests passed | 通过 |
+| Phase 12 RED 验证 | `pnpm exec vitest run src/services/candidate/__tests__/CandidateAnalysisService.test.ts src/services/candidate/__tests__/CandidateJournalService.test.ts src/components/panels/__tests__/CandidatePoolPanel.test.ts --reporter=dot` | 新增结构化分析合同测试失败 | 5 failed / 18 passed，失败点为缺少结构化证据、风险、条件和归因展示 | 通过 |
+| Phase 12 结构化分析定向测试 | `pnpm exec vitest run src/services/candidate/__tests__/CandidateAnalysisService.test.ts src/services/candidate/__tests__/CandidateJournalService.test.ts src/components/panels/__tests__/CandidatePoolPanel.test.ts --reporter=dot` | 23 tests passed | 3 files / 23 tests passed | 通过 |
+| Phase 12 候选池完整定向测试 | `pnpm exec vitest run src/services/candidate/__tests__/CandidateAnalysisService.test.ts src/services/candidate/__tests__/CandidateJournalService.test.ts src/services/candidate/__tests__/CandidateQualityStatsService.test.ts src/components/common/__tests__/DataTable.test.ts src/components/panels/__tests__/CandidatePoolPanel.test.ts src/components/panels/__tests__/TradeJournalPanel.test.ts --reporter=dot` | 31 tests passed | 6 files / 31 tests passed | 通过 |
+| Phase 12 类型检查 | `pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false` | exit 0 | exit 0 | 通过 |
+| Phase 12 前端构建 | `pnpm build` | exit 0 | exit 0，保留既有 ThemeFacade 动静态混用 warning | 通过 |
+| Phase 13 RED 验证 | `pnpm exec vitest run src/services/candidate/__tests__/CandidateDiscoveryService.test.ts src/components/panels/__tests__/CandidatePoolPanel.test.ts --reporter=dot` | 新增自动发现合同测试失败 | 失败点为缺少 `CandidateDiscoveryService` 和候选池建议入池区 | 通过 |
+| Phase 13 服务/面板定向测试 | `pnpm exec vitest run src/services/candidate/__tests__/CandidateDiscoveryService.test.ts src/components/panels/__tests__/CandidatePoolPanel.test.ts --reporter=dot` | 12 tests passed | 2 files / 12 tests passed | 通过 |
+| Phase 13 候选池完整定向测试 | `pnpm exec vitest run src/services/candidate/__tests__/CandidateAnalysisService.test.ts src/services/candidate/__tests__/CandidateJournalService.test.ts src/services/candidate/__tests__/CandidateQualityStatsService.test.ts src/services/candidate/__tests__/CandidateDiscoveryService.test.ts src/components/common/__tests__/DataTable.test.ts src/components/panels/__tests__/CandidatePoolPanel.test.ts src/components/panels/__tests__/TradeJournalPanel.test.ts --reporter=dot` | 35 tests passed | 7 files / 35 tests passed | 通过 |
+| Phase 13 类型检查 | `pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false` | exit 0 | exit 0 | 通过 |
+| Phase 13 前端构建 | `pnpm build` | exit 0 | exit 0，保留既有 ThemeFacade 动静态混用 warning | 通过 |
+| Phase 14 RED 验证 | `pnpm exec vitest run src/services/candidate/__tests__/CandidateJournalService.test.ts --reporter=dot` | 新增 thesis 隔离测试失败 | 2 failed / 12 passed，失败点为候选查询未带 `trade_type=thesis` 且未过滤历史交易 | 通过 |
+| Phase 14 候选服务隔离回归 | `pnpm exec vitest run src/services/candidate/__tests__/CandidateJournalService.test.ts --reporter=dot` | 14 tests passed | 14 tests passed | 通过 |
+| Phase 14 候选池完整定向测试 | `pnpm exec vitest run src/services/candidate/__tests__/CandidateAnalysisService.test.ts src/services/candidate/__tests__/CandidateJournalService.test.ts src/services/candidate/__tests__/CandidateQualityStatsService.test.ts src/services/candidate/__tests__/CandidateDiscoveryService.test.ts src/components/common/__tests__/DataTable.test.ts src/components/panels/__tests__/CandidatePoolPanel.test.ts src/components/panels/__tests__/TradeJournalPanel.test.ts --reporter=dot` | 36 tests passed | 7 files / 36 tests passed | 通过 |
+| Phase 14 类型检查 | `pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false` | exit 0 | exit 0 | 通过 |
+| Phase 14 前端构建 | `pnpm build` | exit 0 | exit 0，保留既有 ThemeFacade 动静态混用 warning | 通过 |
+| Phase 14 E2E 回归 | `$env:PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH='C:\Program Files\Google\Chrome\Application\chrome.exe'; pnpm exec playwright test e2e/vue.spec.ts --project=chromium --reporter=line` | 2 tests passed | 2 tests passed，截图写入 `test-results/**` | 通过 |
+| Phase 14 diff 检查 | `git diff --check` | exit 0 | exit 0 | 通过 |
 
 ## Error Log
 
@@ -179,13 +334,24 @@
 | 2026-05-17 | 保存 pending 复盘会误把候选标为 reviewed | 先补 RED 测试 | `saveCandidateReview` 仅在复盘结果非 pending 时提交 `status: reviewed` |
 | 2026-05-17 | Phase 8 诊断脚本直出页面文本被 PowerShell GBK 编码卡住 | 重新运行诊断 | 设置 `PYTHONIOENCODING=utf-8` 并输出结构化字段 |
 | 2026-05-17 | Phase 8 初次复测时 `601991` 存在临时已复盘记录，导致右键再次新增 | 检查 journal 后端数据 | 删除临时记录后重跑真实新增链路，确认新建、打开、编辑、复盘和清理均通过 |
+| 2026-05-17 | Phase 9 初次收敛后旧交易日志面板仍保留候选研究字段 | 先补 RED 契约测试 | 删除旧面板可见候选研究输入，保留后端兼容字段默认值和历史记录展示能力 |
+| 2026-05-17 | Phase 10 初次构建新增 `RankTrendPanel` 动静态混用 warning | 查看 Vite 输出 | App 改为静态导入 `RankTrendPanel`，消除新增 warning，仅保留既有 ThemeFacade warning |
+| 2026-05-17 | Phase 11 复盘结果分布初版按数量排序，待复盘会压过已复盘结果 | 定向测试定位 | 复盘结果分布改为固定语义顺序：成功、部分兑现、失败、未触发、待复盘 |
+| 2026-05-17 | Phase 11 质量统计大面板破坏原“左目录右容器”工作台结构 | 用户截图反馈后复核 `CandidatePoolPanel.vue` 模板层级 | 新增布局回归测试，把统计改为右侧详情内紧凑小节，恢复主结构 |
+| 2026-05-17 | Phase 12 归因文案中中文维度出现多余空格，例如“题材 走弱” | 定向测试定位 | 增加维度变化格式化函数，仅英文 RankTrend 保留空格，中文维度直接拼接 |
+| 2026-05-17 | Phase 13 面板定向测试出现新增视觉 token 合同失败 | 系统化调试定位到测试文件新增 `--candidate-font-data` 等断言，而非 Phase 13 逻辑失败 | 补齐高对比金融配色、数据字体 token 和 `stat-card::before` 状态线 |
+| 2026-05-17 | Phase 14 `CandidateJournalService.listCandidates()` 未带 `trade_type=thesis`，历史交易可能混入候选池 | 先补 RED 测试复现 | 查询固定附加 `trade_type=thesis`，并在前端服务层过滤非 thesis 记录 |
+| 2026-05-17 | Node Playwright runner 未安装，`pnpm exec playwright` 先解析到 Python CLI 且无 `test` 命令 | 检查 `@playwright/test` 依赖和命令解析 | 安装 `@playwright/test` 并新增 `test:e2e` 脚本 |
+| 2026-05-17 | `pnpm exec playwright install chromium` 超时，Node Playwright 自带 Chromium 未就绪 | 检查本机 `ms-playwright` 与系统 Chrome | 配置 `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH`，本机使用系统 Chrome 完成 E2E 验证 |
+| 2026-05-17 | Phase 14 E2E 初版菜单定位被图标文本和同名按钮干扰 | 读取 Playwright error-context | 定位收敛到 `.context-menu`、`.dropdown-menu`、`.candidate-toolbar` 和具体卡片容器 |
+| 2026-05-17 | Phase 14 复盘保存测试被前一次“写回当前分析”的异步响应重置表单 | 查看失败现场快照 | 等待写回按钮完成 enable 后再操作复盘区，并限定复盘卡片内控件 |
 
 ## 5-Question Reboot Check
 
 | Question | Answer |
 |----------|--------|
-| Where am I? | 已完成候选池 Phase 8 视觉与端到端交互验证 |
-| Where am I going? | 下一步可进入候选池后续增强，或回到刷新机制工作流 |
+| Where am I? | 已完成候选池 Phase 14 端到端测试与回归固化 |
+| Where am I going? | 下一步可进入候选池后续重构或真实 QuantBoard 后端联调 |
 | What's the goal? | 将手工候选/交易假设升级为候选池工作台 |
 | What have I learned? | 见 `findings.md` |
-| What have I done? | 已实现并验证右键入池、规则分析、候选池面板、状态推进、journal 标签入库契约、统计概览、当前重分析、已入池识别、候选详情定位、假设编辑、分析写回、复盘保存、基础复盘统计和 Phase 8 端到端交互 |
+| What have I done? | 已实现并验证右键入池、规则分析、候选池面板、状态推进、journal 标签入库契约、统计概览、当前重分析、已入池识别、候选详情定位、假设编辑、分析写回、复盘保存、基础复盘统计、Phase 8 端到端交互、Phase 9 历史交易日志入口收敛、Phase 10 候选删除/快捷操作/筛选排序、Phase 11 候选漏斗/质量拆解/命中率/失效率/平均跟踪，Phase 12 结构化证据、扣分项、条件组、风险和变化归因，Phase 13 自动建议入池、重复候选识别、人工确认入池和推荐冷却控制，以及 Phase 14 Playwright E2E、历史交易隔离、失败/重复/删除/截图回归 |
