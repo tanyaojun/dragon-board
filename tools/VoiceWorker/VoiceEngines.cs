@@ -220,6 +220,133 @@ public sealed class OneCoreSpeechEngine : IVoiceEngine
   }
 }
 
+public sealed class HybridLocalVoiceEngine : IVoiceEngine
+{
+  private readonly IVoiceEngine _sapi;
+  private readonly IVoiceEngine _oneCore;
+  private readonly Lazy<IReadOnlyList<SapiVoiceInfo>> _voices;
+  private readonly string? _sapiDefaultVoiceName;
+  private volatile string _activeEngineName;
+
+  public HybridLocalVoiceEngine(IVoiceEngine sapi, IVoiceEngine oneCore)
+  {
+    _sapi = sapi;
+    _oneCore = oneCore;
+    _activeEngineName = sapi.Name;
+    _sapiDefaultVoiceName = NormalizeVoiceName(sapi.ActiveVoiceName);
+    _voices = new Lazy<IReadOnlyList<SapiVoiceInfo>>(BuildVoiceList, LazyThreadSafetyMode.ExecutionAndPublication);
+  }
+
+  public string Name => _activeEngineName;
+  public bool IsConfigured => _sapi.IsConfigured || _oneCore.IsConfigured;
+  public string? ActiveVoiceName => IsOneCoreActive ? _oneCore.ActiveVoiceName : _sapi.ActiveVoiceName;
+  public IReadOnlyList<SapiVoiceInfo> GetVoices() => _voices.Value;
+
+  public void Speak(VoiceUtterance utterance)
+  {
+    var voiceName = NormalizeVoiceName(utterance.Voice);
+    if (!string.IsNullOrWhiteSpace(voiceName) && HasVoice(_oneCore, voiceName))
+    {
+      try
+      {
+        _oneCore.Speak(utterance);
+        _activeEngineName = _oneCore.Name;
+        return;
+      }
+      catch (Exception error)
+      {
+        Console.Error.WriteLine($"VoiceWorker onecore selected voice failed: {error.Message}");
+      }
+    }
+
+    _sapi.Speak(utterance);
+    _activeEngineName = _sapi.Name;
+  }
+
+  public void Stop()
+  {
+    _sapi.Stop();
+    _oneCore.Stop();
+  }
+
+  public void Dispose()
+  {
+    _sapi.Dispose();
+    _oneCore.Dispose();
+  }
+
+  private bool IsOneCoreActive => _activeEngineName == _oneCore.Name;
+
+  private IReadOnlyList<SapiVoiceInfo> BuildVoiceList()
+  {
+    var byName = new Dictionary<string, SapiVoiceInfo>(StringComparer.OrdinalIgnoreCase);
+    foreach (var voice in ReadVoices(_sapi).Concat(ReadVoices(_oneCore)).Where(IsSelectableVoice))
+    {
+      byName.TryAdd(voice.Name, voice);
+    }
+
+    return byName.Values
+      .OrderByDescending(voice => voice.Culture.Equals("zh-CN", StringComparison.OrdinalIgnoreCase))
+      .ThenBy(voice => voice.Name, StringComparer.OrdinalIgnoreCase)
+      .ToArray();
+  }
+
+  private bool IsSelectableVoice(SapiVoiceInfo voice)
+  {
+    return IsChineseVoice(voice) && !IsDefaultVoiceDuplicate(voice);
+  }
+
+  private bool IsDefaultVoiceDuplicate(SapiVoiceInfo voice)
+  {
+    if (string.IsNullOrWhiteSpace(_sapiDefaultVoiceName)) return false;
+
+    return voice.Name.Equals(_sapiDefaultVoiceName, StringComparison.OrdinalIgnoreCase)
+      || NormalizeComparableVoiceName(voice.Name).Equals(
+        NormalizeComparableVoiceName(_sapiDefaultVoiceName),
+        StringComparison.OrdinalIgnoreCase);
+  }
+
+  private static bool IsChineseVoice(SapiVoiceInfo voice)
+  {
+    return voice.Culture.StartsWith("zh", StringComparison.OrdinalIgnoreCase);
+  }
+
+  private static string NormalizeComparableVoiceName(string value)
+  {
+    return value
+      .Replace("Microsoft", "", StringComparison.OrdinalIgnoreCase)
+      .Replace("Desktop", "", StringComparison.OrdinalIgnoreCase)
+      .Replace("Online", "", StringComparison.OrdinalIgnoreCase)
+      .Replace("Natural", "", StringComparison.OrdinalIgnoreCase)
+      .Replace(" ", "", StringComparison.OrdinalIgnoreCase)
+      .Trim();
+  }
+
+  private static IReadOnlyList<SapiVoiceInfo> ReadVoices(IVoiceEngine engine)
+  {
+    try
+    {
+      return engine.GetVoices();
+    }
+    catch (Exception error)
+    {
+      Console.Error.WriteLine($"VoiceWorker {engine.Name} voice enumeration failed: {error.Message}");
+      return Array.Empty<SapiVoiceInfo>();
+    }
+  }
+
+  private static bool HasVoice(IVoiceEngine engine, string voiceName)
+  {
+    return ReadVoices(engine).Any(voice => voice.Name.Equals(voiceName, StringComparison.OrdinalIgnoreCase));
+  }
+
+  private static string? NormalizeVoiceName(string? value)
+  {
+    var text = value?.Trim();
+    return string.IsNullOrWhiteSpace(text) ? null : text;
+  }
+}
+
 public sealed class FallbackVoiceEngine : IVoiceEngine
 {
   private readonly IVoiceEngine _primary;
@@ -678,13 +805,14 @@ public sealed class VoiceWorker : IDisposable
 
   private static IVoiceEngine CreateDefaultEngine()
   {
-    var local = new LocalSpeechEngine();
+    var sapi = new LocalSpeechEngine();
     var selected = Environment.GetEnvironmentVariable("VOICE_ENGINE") ?? "local";
     if (selected.Equals("onecore", StringComparison.OrdinalIgnoreCase))
     {
-      return new FallbackVoiceEngine(new OneCoreSpeechEngine(), local);
+      return new FallbackVoiceEngine(new OneCoreSpeechEngine(), sapi);
     }
 
+    var local = new HybridLocalVoiceEngine(sapi, new OneCoreSpeechEngine(null));
     if (!selected.Equals("volcengine", StringComparison.OrdinalIgnoreCase))
     {
       return local;

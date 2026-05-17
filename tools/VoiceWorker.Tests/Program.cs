@@ -191,6 +191,127 @@ Run("OneCoreSpeechEngineStopsMemoryPlayback", () =>
   AssertTrue(stopped, "stopped memory playback");
 });
 
+Run("HybridLocalVoiceEngineListsSelectableChineseVoicesWithoutDefaultDuplicate", () =>
+{
+  using var sapi = new StubVoiceEngine(
+    "local-sapi",
+    true,
+    "Microsoft Huihui Desktop",
+    [
+      new SapiVoiceInfo("Microsoft Huihui Desktop", "zh-CN", "Female"),
+      new SapiVoiceInfo("Microsoft Zira Desktop", "en-US", "Female"),
+    ]);
+  using var oneCore = new StubVoiceEngine(
+    "local-onecore",
+    true,
+    "Microsoft Kangkang",
+    [
+      new SapiVoiceInfo("Microsoft Huihui", "zh-CN", "Female"),
+      new SapiVoiceInfo("Microsoft Kangkang", "zh-CN", "Male"),
+      new SapiVoiceInfo("Microsoft Yaoyao", "zh-CN", "Female"),
+    ]);
+  using var engine = new HybridLocalVoiceEngine(sapi, oneCore);
+
+  var voices = engine.GetVoices().Select(voice => voice.Name).ToArray();
+
+  AssertEqual("local-sapi", engine.Name, "default engine");
+  AssertEqual(2, voices.Length, "voice count");
+  AssertTrue(!voices.Contains("Microsoft Huihui"), "hides OneCore duplicate of default Huihui");
+  AssertTrue(!voices.Contains("Microsoft Huihui Desktop"), "hides SAPI default Huihui");
+  AssertTrue(!voices.Contains("Microsoft Zira Desktop"), "hides English-only voice");
+  AssertTrue(voices.Contains("Microsoft Kangkang"), "lists OneCore Kangkang");
+  AssertTrue(voices.Contains("Microsoft Yaoyao"), "lists OneCore Yaoyao");
+});
+
+Run("HybridLocalVoiceEngineKeepsSapiDefaultButRoutesOneCoreSelection", () =>
+{
+  using var sapi = new StubVoiceEngine(
+    "local-sapi",
+    true,
+    "Microsoft Huihui Desktop",
+    [new SapiVoiceInfo("Microsoft Huihui Desktop", "zh-CN", "Female")]);
+  using var oneCore = new StubVoiceEngine(
+    "local-onecore",
+    true,
+    "Microsoft Kangkang",
+    [
+      new SapiVoiceInfo("Microsoft Kangkang", "zh-CN", "Male"),
+      new SapiVoiceInfo("Microsoft Yaoyao", "zh-CN", "Female"),
+    ]);
+  using var engine = new HybridLocalVoiceEngine(sapi, oneCore);
+
+  engine.Speak(new VoiceUtterance("默认播报", 1, 100));
+  engine.Speak(new VoiceUtterance("OneCore 播报", 1, 100, "Microsoft Yaoyao"));
+
+  AssertEqual(1, sapi.Spoken.Count, "SAPI speak count");
+  AssertEqual("默认播报", sapi.Spoken.Single().Text, "SAPI default text");
+  AssertEqual(1, oneCore.Spoken.Count, "OneCore speak count");
+  AssertEqual("Microsoft Yaoyao", oneCore.Spoken.Single().Voice, "OneCore selected voice");
+  AssertEqual("local-onecore", engine.Name, "active engine after OneCore selection");
+});
+
+Run("HybridLocalVoiceEngineKeepsSapiDefaultWhenOneCoreEnumerationFails", () =>
+{
+  using var sapi = new StubVoiceEngine(
+    "local-sapi",
+    true,
+    "Microsoft Huihui Desktop",
+    [new SapiVoiceInfo("Microsoft Huihui Desktop", "zh-CN", "Female")]);
+  using var oneCore = new ThrowingVoiceEngine("local-onecore");
+  using var engine = new HybridLocalVoiceEngine(sapi, oneCore);
+
+  var voices = engine.GetVoices().Select(voice => voice.Name).ToArray();
+
+  AssertEqual(0, voices.Length, "voice count");
+
+  engine.Speak(new VoiceUtterance("枚举失败回退", 1, 100, "Microsoft Yaoyao"));
+  AssertEqual(1, sapi.Spoken.Count, "SAPI fallback speak count");
+  AssertEqual("枚举失败回退", sapi.Spoken.Single().Text, "SAPI fallback text");
+});
+
+Run("HybridLocalVoiceEngineFallsBackToSapiWhenSelectedOneCoreFails", () =>
+{
+  using var sapi = new StubVoiceEngine(
+    "local-sapi",
+    true,
+    "Microsoft Huihui Desktop",
+    [new SapiVoiceInfo("Microsoft Huihui Desktop", "zh-CN", "Female")]);
+  using var oneCore = new StubVoiceEngine(
+    "local-onecore",
+    true,
+    "Microsoft Kangkang",
+    [new SapiVoiceInfo("Microsoft Yaoyao", "zh-CN", "Female")],
+    failSpeak: true);
+  using var engine = new HybridLocalVoiceEngine(sapi, oneCore);
+
+  engine.Speak(new VoiceUtterance("OneCore 失败回退", 1, 100, "Microsoft Yaoyao"));
+
+  AssertEqual(1, oneCore.Spoken.Count, "OneCore attempted speak count");
+  AssertEqual(1, sapi.Spoken.Count, "SAPI fallback speak count");
+  AssertEqual("OneCore 失败回退", sapi.Spoken.Single().Text, "SAPI fallback text");
+  AssertEqual("local-sapi", engine.Name, "active engine after fallback");
+});
+
+Run("VoiceWorkerLocalModeIgnoresOneCoreDefaultVoiceEnvironment", () =>
+{
+  var previous = SnapshotEnvironment();
+  try
+  {
+    Environment.SetEnvironmentVariable("VOICE_ENGINE", "local");
+    Environment.SetEnvironmentVariable("VOICE_SAPI_VOICE_NAME", "");
+    Environment.SetEnvironmentVariable("VOICE_ONECORE_VOICE_NAME", "Not Installed OneCore Voice");
+
+    using var worker = new VoiceWorker();
+    var status = worker.GetStatus();
+
+    AssertEqual("local-sapi", GetAnonymousString(status, "engine"), "production engine");
+  }
+  finally
+  {
+    RestoreEnvironment(previous);
+  }
+});
+
 Run("VoiceWorkerUsesOneCoreWhenRequested", () =>
 {
   var previous = SnapshotEnvironment();
@@ -307,20 +428,49 @@ internal sealed class CaptureHandler : HttpMessageHandler
 internal sealed class StubVoiceEngine : IVoiceEngine
 {
   private readonly IReadOnlyList<SapiVoiceInfo> _voices;
+  private readonly List<VoiceUtterance> _spoken = [];
+  private readonly bool _failSpeak;
 
-  public StubVoiceEngine(string name, bool isConfigured, string? activeVoiceName, IReadOnlyList<SapiVoiceInfo> voices)
+  public StubVoiceEngine(
+    string name,
+    bool isConfigured,
+    string? activeVoiceName,
+    IReadOnlyList<SapiVoiceInfo> voices,
+    bool failSpeak = false)
   {
     Name = name;
     IsConfigured = isConfigured;
     ActiveVoiceName = activeVoiceName;
     _voices = voices;
+    _failSpeak = failSpeak;
   }
 
   public string Name { get; }
   public bool IsConfigured { get; }
   public string? ActiveVoiceName { get; }
+  public IReadOnlyList<VoiceUtterance> Spoken => _spoken;
   public IReadOnlyList<SapiVoiceInfo> GetVoices() => _voices;
-  public void Speak(VoiceUtterance utterance) { }
+  public void Speak(VoiceUtterance utterance)
+  {
+    _spoken.Add(utterance);
+    if (_failSpeak) throw new InvalidOperationException("speak failed");
+  }
+  public void Stop() { }
+  public void Dispose() { }
+}
+
+internal sealed class ThrowingVoiceEngine : IVoiceEngine
+{
+  public ThrowingVoiceEngine(string name)
+  {
+    Name = name;
+  }
+
+  public string Name { get; }
+  public bool IsConfigured => false;
+  public string? ActiveVoiceName => null;
+  public IReadOnlyList<SapiVoiceInfo> GetVoices() => throw new InvalidOperationException("voice enumeration failed");
+  public void Speak(VoiceUtterance utterance) => throw new InvalidOperationException("speak failed");
   public void Stop() { }
   public void Dispose() { }
 }

@@ -54,6 +54,12 @@ internal sealed class LauncherProcessManager
             if (service.Port == 6379)
                 StartRedisCommander();
 
+            if (service.IsVoiceWorker && !IsCurrentVoiceWorkerHealthy(service))
+            {
+                _log($"{service.Name} 正在运行旧版本，准备重启。");
+                StopVoiceWorkerProcesses(service);
+            }
+
             if (IsServiceRunning(service))
             {
                 _log($"{service.Name} 已在端口 {service.Port} 运行。");
@@ -367,7 +373,12 @@ internal sealed class LauncherProcessManager
 
     private void StopVoiceWorkerExecutableProcesses(ManagedService service)
     {
-        var expectedPaths = GetVoiceWorkerExecutablePaths(service)
+        var voiceWorkerBin = Path.GetFullPath(Path.Combine(
+            service.WorkingDirectory,
+            "tools",
+            "VoiceWorker",
+            "bin"));
+        var currentPaths = GetCurrentVoiceWorkerExecutablePaths(service)
             .Select(Path.GetFullPath)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
@@ -376,8 +387,14 @@ internal sealed class LauncherProcessManager
             try
             {
                 var path = process.MainModule?.FileName;
-                if (string.IsNullOrWhiteSpace(path) ||
-                    !expectedPaths.Contains(Path.GetFullPath(path)))
+                if (string.IsNullOrWhiteSpace(path))
+                {
+                    continue;
+                }
+
+                var fullPath = Path.GetFullPath(path);
+                if (!currentPaths.Contains(fullPath) &&
+                    !fullPath.StartsWith(voiceWorkerBin + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
                 {
                     continue;
                 }
@@ -397,7 +414,7 @@ internal sealed class LauncherProcessManager
         }
     }
 
-    private static IEnumerable<string> GetVoiceWorkerExecutablePaths(ManagedService service)
+    private static IEnumerable<string> GetCurrentVoiceWorkerExecutablePaths(ManagedService service)
     {
         yield return service.FileName;
         yield return Path.Combine(
@@ -408,6 +425,28 @@ internal sealed class LauncherProcessManager
             "Debug",
             "net8.0-windows10.0.19041.0",
             "VoiceWorker.exe");
+    }
+
+    private static bool IsCurrentVoiceWorkerHealthy(ManagedService service)
+    {
+        var health = VoiceWorkerProbe.GetHealth();
+        if (!health.IsHealthy)
+        {
+            return true;
+        }
+
+        var processPath = health.ProcessPath;
+        if (string.IsNullOrWhiteSpace(processPath))
+        {
+            return false;
+        }
+
+        var fullPath = Path.GetFullPath(processPath);
+        var currentPaths = GetCurrentVoiceWorkerExecutablePaths(service)
+            .Select(Path.GetFullPath)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        return currentPaths.Contains(fullPath);
     }
 
     private void KillProcessTree(int pid, string label)

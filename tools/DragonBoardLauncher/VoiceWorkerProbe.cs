@@ -1,10 +1,19 @@
+using System.Text.Json;
+
 namespace DragonBoardLauncher;
+
+public sealed record VoiceWorkerHealth(bool IsHealthy, string ProcessPath);
 
 internal static class VoiceWorkerProbe
 {
     private static readonly Uri BaseUri = new($"http://127.0.0.1:{LauncherServices.VoiceWorkerPort}");
 
     public static bool IsHealthy()
+    {
+        return GetHealth().IsHealthy;
+    }
+
+    public static VoiceWorkerHealth GetHealth()
     {
         try
         {
@@ -14,14 +23,25 @@ internal static class VoiceWorkerProbe
                 .GetAwaiter()
                 .GetResult();
             if (!response.IsSuccessStatusCode)
-                return false;
+                return new VoiceWorkerHealth(false, "");
 
-            var body = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
-            return body.Contains("\"service\":\"VoiceWorker\"", StringComparison.OrdinalIgnoreCase);
+            using var body = response.Content.ReadAsStream();
+            using var json = JsonDocument.Parse(body);
+            var root = json.RootElement;
+            if (!root.TryGetProperty("service", out var service) ||
+                !string.Equals(service.GetString(), "VoiceWorker", StringComparison.OrdinalIgnoreCase))
+            {
+                return new VoiceWorkerHealth(false, "");
+            }
+
+            var processPath = root.TryGetProperty("processPath", out var path)
+                ? path.GetString() ?? ""
+                : "";
+            return new VoiceWorkerHealth(true, processPath);
         }
         catch
         {
-            return false;
+            return new VoiceWorkerHealth(false, "");
         }
     }
 

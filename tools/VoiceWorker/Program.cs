@@ -48,7 +48,16 @@ static async Task HandleRequestAsync(
 
     if (request.HttpMethod == "GET" && (path == "" || path == "/health"))
     {
-      await WriteJsonAsync(context.Response, 200, new { ok = true, service = "VoiceWorker" });
+      await WriteJsonAsync(
+        context.Response,
+        200,
+        new
+        {
+          ok = true,
+          service = "VoiceWorker",
+          processId = Environment.ProcessId,
+          processPath = Environment.ProcessPath ?? "",
+        });
       return;
     }
 
