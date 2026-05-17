@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { CandidateJournalService } from '../CandidateJournalService'
-import type { CandidateAnalysisResult, CandidateStockLike } from '../types'
+import type { CandidateAnalysisResult, CandidateJournalEntry, CandidateStockLike } from '../types'
 
 const stock: CandidateStockLike = {
   code: '600584',
@@ -34,6 +34,28 @@ const analysis: CandidateAnalysisResult = {
       grade: 'A',
     },
   },
+}
+
+const existingCandidate: CandidateJournalEntry = {
+  id: 'tj_existing',
+  stockCode: '600584',
+  stockName: '长电科技',
+  status: 'observe',
+  tradeType: 'thesis',
+  entryReason: '已有候选',
+  tradeHypothesis: '',
+  entryPrerequisites: '',
+  invalidationRules: '',
+  humanDecision: 'watch',
+  skipReason: '',
+  reviewOutcome: 'pending',
+  modelResult: 'unknown',
+  executionResult: 'unknown',
+  reviewNotes: '',
+  reviewTags: [],
+  signalsSnapshot: {},
+  createdAt: '',
+  updatedAt: '',
 }
 
 function createService() {
@@ -105,27 +127,7 @@ describe('CandidateJournalService', () => {
   it('returns an existing open candidate instead of creating duplicates', async () => {
     const { service, api, analyze } = createService()
     api.get.mockResolvedValue({
-      entries: [
-        {
-          id: 'tj_existing',
-          stockCode: '600584',
-          stockName: '长电科技',
-          status: 'observe',
-          tradeType: 'thesis',
-          entryReason: '已有候选',
-          tradeHypothesis: '',
-          entryPrerequisites: '',
-          invalidationRules: '',
-          humanDecision: 'watch',
-          reviewOutcome: 'pending',
-          modelResult: 'unknown',
-          executionResult: 'unknown',
-          reviewTags: [],
-          signalsSnapshot: {},
-          createdAt: '',
-          updatedAt: '',
-        },
-      ],
+      entries: [existingCandidate],
       total: 1,
     })
 
@@ -135,6 +137,44 @@ describe('CandidateJournalService', () => {
     expect(result.entry?.id).toBe('tj_existing')
     expect(api.post).not.toHaveBeenCalled()
     expect(analyze).not.toHaveBeenCalled()
+  })
+
+  it('exposes the current open candidate for a stock code so UI can avoid duplicate add actions', async () => {
+    const { service, api } = createService()
+    api.get.mockResolvedValue({ entries: [existingCandidate], total: 1 })
+
+    const result = await service.getOpenCandidateForStock('sh600584')
+
+    expect(result?.id).toBe('tj_existing')
+    expect(api.get).toHaveBeenCalledWith(
+      '/api/journal/entries?limit=100&stock_code=600584',
+      expect.objectContaining({ context: 'quant-board', throwOnHttpError: true }),
+    )
+  })
+
+  it('reanalyzes an existing candidate from the latest stock context without mutating the saved snapshot', async () => {
+    const { service, analyze } = createService()
+
+    const result = service.reanalyzeCandidate({
+      ...existingCandidate,
+      signalsSnapshot: {
+        candidateAnalysis: {
+          score: 43,
+          grade: 'D',
+        },
+      },
+    })
+
+    expect(result.entry.id).toBe('tj_existing')
+    expect(result.savedAnalysis.score).toBe(43)
+    expect(result.currentAnalysis.score).toBe(82)
+    expect(result.scoreDelta).toBe(39)
+    expect(result.stateLabel).toBe('条件改善')
+    expect(analyze).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stock: expect.objectContaining({ code: '600584', name: '长电科技' }),
+      }),
+    )
   })
 
   it('rejects stocks without a valid code before querying or creating candidates', async () => {
@@ -147,5 +187,135 @@ describe('CandidateJournalService', () => {
     expect(api.get).not.toHaveBeenCalled()
     expect(api.post).not.toHaveBeenCalled()
     expect(analyze).not.toHaveBeenCalled()
+  })
+
+  it('updates lightweight thesis fields without replacing the saved analysis snapshot', async () => {
+    const { service, api } = createService()
+    api.put.mockResolvedValue({
+      ...existingCandidate,
+      entryReason: '人工修正后的入池理由',
+      tradeHypothesis: '人工修正后的交易假设',
+      entryPrerequisites: '人工修正后的买入前提',
+      invalidationRules: '人工修正后的失效条件',
+      humanDecision: 'skip',
+      skipReason: '条件未确认',
+    })
+
+    const result = await service.updateCandidateThesis('tj_existing', {
+      entryReason: '人工修正后的入池理由',
+      tradeHypothesis: '人工修正后的交易假设',
+      entryPrerequisites: '人工修正后的买入前提',
+      invalidationRules: '人工修正后的失效条件',
+      humanDecision: 'skip',
+      skipReason: '条件未确认',
+    })
+
+    expect(result.tradeHypothesis).toBe('人工修正后的交易假设')
+    expect(api.put).toHaveBeenCalledWith(
+      '/api/journal/entries/tj_existing',
+      {
+        entry_reason: '人工修正后的入池理由',
+        trade_hypothesis: '人工修正后的交易假设',
+        entry_prerequisites: '人工修正后的买入前提',
+        invalidation_rules: '人工修正后的失效条件',
+        human_decision: 'skip',
+        skip_reason: '条件未确认',
+      },
+      expect.objectContaining({ context: 'quant-board', throwOnHttpError: true }),
+    )
+  })
+
+  it('writes the current rule analysis back to the candidate snapshot on demand', async () => {
+    const { service, api, analyze } = createService()
+    api.put.mockResolvedValue({
+      ...existingCandidate,
+      reviewTags: analysis.tags,
+      signalsSnapshot: {
+        quote: { code: '600584' },
+        ...analysis.signalsSnapshot,
+      },
+    })
+
+    const result = await service.writeBackCurrentAnalysis({
+      ...existingCandidate,
+      signalsSnapshot: { quote: { code: '600584' } },
+    })
+
+    expect(result.reviewTags).toEqual(analysis.tags)
+    expect(analyze).toHaveBeenCalled()
+    expect(api.put).toHaveBeenCalledWith(
+      '/api/journal/entries/tj_existing',
+      expect.objectContaining({
+        review_tags: analysis.tags,
+        signals_snapshot: expect.objectContaining({
+          quote: { code: '600584' },
+          candidateAnalysis: analysis.signalsSnapshot.candidateAnalysis,
+        }),
+      }),
+      expect.objectContaining({ context: 'quant-board', throwOnHttpError: true }),
+    )
+  })
+
+  it('saves review outcome, model result and execution result as a reviewed candidate', async () => {
+    const { service, api } = createService()
+    api.put.mockResolvedValue({
+      ...existingCandidate,
+      status: 'reviewed',
+      reviewOutcome: 'success',
+      modelResult: 'correct',
+      executionResult: 'missed',
+      reviewNotes: '模型判断正确，但盘中没有执行。',
+    })
+
+    const result = await service.saveCandidateReview('tj_existing', {
+      reviewOutcome: 'success',
+      modelResult: 'correct',
+      executionResult: 'missed',
+      reviewNotes: '模型判断正确，但盘中没有执行。',
+    })
+
+    expect(result.status).toBe('reviewed')
+    expect(result.reviewOutcome).toBe('success')
+    expect(api.put).toHaveBeenCalledWith(
+      '/api/journal/entries/tj_existing',
+      {
+        status: 'reviewed',
+        review_outcome: 'success',
+        model_result: 'correct',
+        execution_result: 'missed',
+        review_notes: '模型判断正确，但盘中没有执行。',
+      },
+      expect.objectContaining({ context: 'quant-board', throwOnHttpError: true }),
+    )
+  })
+
+  it('keeps a pending review in its current lifecycle status when saving review notes', async () => {
+    const { service, api } = createService()
+    api.put.mockResolvedValue({
+      ...existingCandidate,
+      reviewOutcome: 'pending',
+      modelResult: 'unknown',
+      executionResult: 'unknown',
+      reviewNotes: '先记录观察，尚未复盘。',
+    })
+
+    const result = await service.saveCandidateReview('tj_existing', {
+      reviewOutcome: 'pending',
+      modelResult: 'unknown',
+      executionResult: 'unknown',
+      reviewNotes: '先记录观察，尚未复盘。',
+    })
+
+    expect(result.status).toBe('observe')
+    expect(api.put).toHaveBeenCalledWith(
+      '/api/journal/entries/tj_existing',
+      {
+        review_outcome: 'pending',
+        model_result: 'unknown',
+        execution_result: 'unknown',
+        review_notes: '先记录观察，尚未复盘。',
+      },
+      expect.objectContaining({ context: 'quant-board', throwOnHttpError: true }),
+    )
   })
 })

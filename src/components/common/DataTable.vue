@@ -180,7 +180,7 @@
     <div v-if="contextMenu.visible" class="context-menu"
       :style="{ left: contextMenu.x + 'px', top: contextMenu.y + 'px' }" ref="contextMenuRef">
       <div class="menu-item" @click="addToFavorite"><span class="menu-icon">⭐</span> 加入自选</div>
-      <div class="menu-item" @click="addToCandidatePool"><span class="menu-icon">🎯</span> 加入候选池</div>
+      <div class="menu-item" @click="addToCandidatePool"><span class="menu-icon">🎯</span> {{ candidateMenuLabel }}</div>
       <div class="menu-divider"></div>
       <div class="menu-item" @mouseenter="showBoardMenu" @click.stop>
         <span class="menu-icon">📁</span> 加入板块
@@ -302,6 +302,7 @@ const contextMenu = ref({
   stock: null as Stock | null,
 })
 const contextMenuRef = ref<HTMLElement | null>(null)
+const openCandidateId = ref('')
 const confidenceTooltip = ref({
   visible: false,
   x: 0,
@@ -416,6 +417,7 @@ const gridTemplateStyle = computed(() => {
     width: 'fit-content',
   }
 })
+const candidateMenuLabel = computed(() => (openCandidateId.value ? '查看候选详情' : '加入候选池'))
 
 // ========== 从表格数据获取题材信息 ==========
 
@@ -1016,17 +1018,28 @@ const onRowClick = (event: MouseEvent, code: string) => {
 }
 
 const showContextMenu = (e: MouseEvent, stock: Stock) => {
+  openCandidateId.value = ''
   contextMenu.value = {
     visible: true,
     x: e.clientX,
     y: e.clientY,
     stock: { ...stock },
   }
+  void candidateJournalService.getOpenCandidateForStock(stock.code).then((entry) => {
+    if (contextMenu.value.visible && contextMenu.value.stock?.code === stock.code) {
+      openCandidateId.value = entry?.id || ''
+    }
+  }).catch(() => {
+    if (contextMenu.value.visible && contextMenu.value.stock?.code === stock.code) {
+      openCandidateId.value = ''
+    }
+  })
 }
 
 const hideContextMenu = () => {
   contextMenu.value.visible = false
   showBoardSubMenu.value = false
+  openCandidateId.value = ''
 }
 
 const loadBoardList = () => {
@@ -1072,9 +1085,21 @@ const addToCandidatePool = async () => {
   }
 
   try {
-    await candidateJournalService.addCandidateFromStock(contextMenu.value.stock, {
+    if (openCandidateId.value) {
+      EventManager.emit('candidate-pool:open', {
+        stockCode: contextMenu.value.stock.code,
+        candidateId: openCandidateId.value,
+      })
+      return
+    }
+
+    const result = await candidateJournalService.addCandidateFromStock(contextMenu.value.stock, {
       addToFavorites: true,
       source: 'datatable-context-menu',
+    })
+    EventManager.emit('candidate-pool:open', {
+      stockCode: contextMenu.value.stock.code,
+      candidateId: result.entry?.id,
     })
   } catch (error) {
     EventManager.emit(AppEvents.UI.TOAST, {

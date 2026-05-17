@@ -160,7 +160,8 @@
     <KeyboardHelpPanel v-model:visible="panels.help" @close="panels.help = false" />
     <ExportPanel v-model:visible="panels.export" :trigger-rect="panelRects.export" @close="panels.export = false" />
     <FavoritePanel v-model:visible="panels.favorite" @close="panels.favorite = false" />
-    <CandidatePoolPanel v-model:visible="panels.candidatePool" @close="panels.candidatePool = false" />
+    <CandidatePoolPanel v-model:visible="panels.candidatePool" ref="candidatePoolPanelRef"
+      @close="panels.candidatePool = false" />
     <TradeJournalPanel v-model:visible="panels.journal" @close="panels.journal = false" />
     <HotStockEventMonitorPanel v-model:visible="panels.eventMonitor" :trigger-rect="panelRects.eventMonitor"
       @close="panels.eventMonitor = false" @select-stock="handleSelectStock" />
@@ -285,6 +286,9 @@ const favoriteBtnRef = ref<HTMLElement>()
 const dropdownRef = ref<HTMLElement | null>(null)
 const themeRiskBtnRef = ref<HTMLElement>()
 const eventMonitorBtnRef = ref<HTMLElement>()
+const candidatePoolPanelRef = ref<{
+  openCandidate: (data?: { candidateId?: string; stockCode?: string }) => Promise<void>
+} | null>(null)
 
 // 导航标签
 const navTabs = [
@@ -374,6 +378,12 @@ const openStockDetail = (data: { code?: string; name?: string; triggerRect?: DOM
   selectedStockName.value = data?.name || stock?.name || code
   panelRects.value.stockDetail = data?.triggerRect
   panels.value.stockDetail = true
+}
+
+const openCandidatePool = async (data: { candidateId?: string; stockCode?: string } = {}) => {
+  panels.value.candidatePool = true
+  await nextTick()
+  await candidatePoolPanelRef.value?.openCandidate(data)
 }
 
 const openSettings = (type: string) => {
@@ -650,6 +660,12 @@ onMounted(async () => {
     [AppEvents.DATA.MERGED, updateLastTime],
     [AppEvents.REFRESH.COMPLETE, updateLastTime],
     [AppEvents.DRAGON.UPDATED, updateLastTime],
+    [
+      'candidate-pool:open',
+      (data: any) => {
+        void openCandidatePool(data)
+      },
+    ],
     [
       'stock:show-detail',
       (data: any) => {

@@ -58,6 +58,26 @@ export interface CandidateAnalysisResult {
   signalsSnapshot: Record<string, any>
 }
 
+export interface CandidateSavedAnalysis {
+  score: number
+  grade: CandidateGrade | '-'
+  suggestedStatus: CandidateStatus | ''
+  riskWarnings: string[]
+  strengths: string[]
+  weaknesses: string[]
+  scoreBreakdown: CandidateScoreBreakdown
+  generatedAt?: number
+}
+
+export interface CandidateWorkbenchReview {
+  entry: CandidateJournalEntry
+  savedAnalysis: CandidateSavedAnalysis
+  currentAnalysis: CandidateAnalysisResult
+  scoreDelta: number
+  stateLabel: string
+  stateReasons: string[]
+}
+
 export interface CandidateJournalEntry {
   id: string
   stockCode: string
@@ -69,11 +89,29 @@ export interface CandidateJournalEntry {
   entryPrerequisites: string
   invalidationRules: string
   humanDecision: string
+  skipReason: string
   reviewOutcome: string
   modelResult: string
   executionResult: string
+  reviewNotes: string
   reviewTags: string[]
   signalsSnapshot: Record<string, any> | null
   createdAt: string
   updatedAt: string
+}
+
+export interface CandidateThesisUpdate {
+  entryReason: string
+  tradeHypothesis: string
+  entryPrerequisites: string
+  invalidationRules: string
+  humanDecision: string
+  skipReason: string
+}
+
+export interface CandidateReviewUpdate {
+  reviewOutcome: string
+  modelResult: string
+  executionResult: string
+  reviewNotes: string
 }

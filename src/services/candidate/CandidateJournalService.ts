@@ -12,8 +12,12 @@ import type {
   CandidateAnalysisContext,
   CandidateAnalysisResult,
   CandidateJournalEntry,
+  CandidateReviewUpdate,
+  CandidateSavedAnalysis,
   CandidateStatus,
   CandidateStockLike,
+  CandidateThesisUpdate,
+  CandidateWorkbenchReview,
 } from './types'
 
 interface CandidateApi {
@@ -42,7 +46,6 @@ interface CandidateJournalServiceDeps {
 }
 
 const OPEN_STATUSES: CandidateStatus[] = ['observe', 'candidate', 'triggered', 'tracking']
-
 function normalizeCode(code: unknown): string {
   const digits = String(code || '').replace(/\D/g, '')
   return digits ? digits.padStart(6, '0').slice(-6) : ''
@@ -60,9 +63,11 @@ function normalizeEntry(raw: any): CandidateJournalEntry {
     entryPrerequisites: String(raw?.entryPrerequisites || raw?.entry_prerequisites || ''),
     invalidationRules: String(raw?.invalidationRules || raw?.invalidation_rules || ''),
     humanDecision: String(raw?.humanDecision || raw?.human_decision || 'watch'),
+    skipReason: String(raw?.skipReason || raw?.skip_reason || ''),
     reviewOutcome: String(raw?.reviewOutcome || raw?.review_outcome || 'pending'),
     modelResult: String(raw?.modelResult || raw?.model_result || 'unknown'),
     executionResult: String(raw?.executionResult || raw?.execution_result || 'unknown'),
+    reviewNotes: String(raw?.reviewNotes || raw?.review_notes || ''),
     reviewTags: Array.isArray(raw?.reviewTags || raw?.review_tags)
       ? (raw.reviewTags || raw.review_tags).map((item: unknown) => String(item))
       : [],
@@ -86,6 +91,52 @@ function findDragonRecord(stockCode: string): Record<string, any> | null {
   }
   const marketCore = review.marketCore as Record<string, any> | undefined
   return marketCore && normalizeCode(marketCore.code) === stockCode ? marketCore : null
+}
+
+function normalizeSavedAnalysis(snapshot: Record<string, any> | null | undefined): CandidateSavedAnalysis {
+  const analysis = snapshot?.candidateAnalysis || {}
+  return {
+    score: Number(analysis.score || 0),
+    grade: (analysis.grade || '-') as CandidateSavedAnalysis['grade'],
+    suggestedStatus: (analysis.suggestedStatus || '') as CandidateSavedAnalysis['suggestedStatus'],
+    riskWarnings: Array.isArray(analysis.riskWarnings)
+      ? analysis.riskWarnings.map((item: unknown) => String(item))
+      : [],
+    strengths: Array.isArray(analysis.strengths) ? analysis.strengths.map((item: unknown) => String(item)) : [],
+    weaknesses: Array.isArray(analysis.weaknesses) ? analysis.weaknesses.map((item: unknown) => String(item)) : [],
+    scoreBreakdown: {
+      rankTrend: Number(analysis.scoreBreakdown?.rankTrend || 0),
+      theme: Number(analysis.scoreBreakdown?.theme || 0),
+      dragon: Number(analysis.scoreBreakdown?.dragon || 0),
+      sentiment: Number(analysis.scoreBreakdown?.sentiment || 0),
+      moneyFlow: Number(analysis.scoreBreakdown?.moneyFlow || 0),
+    },
+    generatedAt: Number(analysis.generatedAt || 0) || undefined,
+  }
+}
+
+function compareAnalysis(saved: CandidateSavedAnalysis, current: CandidateAnalysisResult) {
+  const scoreDelta = current.score - saved.score
+  const stateReasons: string[] = []
+
+  if (scoreDelta >= 10) stateReasons.push(`当前评分较入池提升 ${scoreDelta} 分`)
+  if (scoreDelta <= -10) stateReasons.push(`当前评分较入池下降 ${Math.abs(scoreDelta)} 分`)
+  if (current.riskWarnings.length > saved.riskWarnings.length) stateReasons.push('当前风险提示增加')
+  if (current.suggestedStatus !== saved.suggestedStatus) {
+    stateReasons.push(`建议状态从 ${saved.suggestedStatus || '未设置'} 变为 ${current.suggestedStatus}`)
+  }
+
+  let stateLabel = '条件持平'
+  if (current.riskWarnings.some((risk) => risk.includes('D_EXIT_RISK') || risk.includes('退潮'))) {
+    stateLabel = '风险升高'
+  } else if (scoreDelta >= 8) {
+    stateLabel = '条件改善'
+  } else if (scoreDelta <= -8 || current.riskWarnings.length > saved.riskWarnings.length) {
+    stateLabel = '条件转弱'
+  }
+
+  if (!stateReasons.length) stateReasons.push('当前信号与入池快照差异不大')
+  return { scoreDelta, stateLabel, stateReasons }
 }
 
 export class CandidateJournalService {
@@ -159,6 +210,87 @@ export class CandidateJournalService {
       throwOnHttpError: true,
     })
     return normalizeEntry(updated)
+  }
+
+  async updateCandidateThesis(id: string, update: CandidateThesisUpdate): Promise<CandidateJournalEntry> {
+    const updated = await this.api.put(`/api/journal/entries/${id}`, {
+      entry_reason: update.entryReason,
+      trade_hypothesis: update.tradeHypothesis,
+      entry_prerequisites: update.entryPrerequisites,
+      invalidation_rules: update.invalidationRules,
+      human_decision: update.humanDecision,
+      skip_reason: update.skipReason,
+    }, {
+      context: 'quant-board',
+      cache: false,
+      silent: true,
+      throwOnHttpError: true,
+    })
+    return normalizeEntry(updated)
+  }
+
+  async writeBackCurrentAnalysis(entry: CandidateJournalEntry): Promise<CandidateJournalEntry> {
+    const current = this.reanalyzeCandidate(entry).currentAnalysis
+    const updatedSnapshot = {
+      ...(entry.signalsSnapshot || {}),
+      ...current.signalsSnapshot,
+    }
+    const updated = await this.api.put(`/api/journal/entries/${entry.id}`, {
+      signals_snapshot: updatedSnapshot,
+      review_tags: current.tags,
+    }, {
+      context: 'quant-board',
+      cache: false,
+      silent: true,
+      throwOnHttpError: true,
+    })
+    return normalizeEntry(updated)
+  }
+
+  async saveCandidateReview(id: string, update: CandidateReviewUpdate): Promise<CandidateJournalEntry> {
+    const payload: Record<string, unknown> = {
+      review_outcome: update.reviewOutcome,
+      model_result: update.modelResult,
+      execution_result: update.executionResult,
+      review_notes: update.reviewNotes,
+    }
+    if (update.reviewOutcome !== 'pending') {
+      payload.status = 'reviewed'
+    }
+    const updated = await this.api.put(`/api/journal/entries/${id}`, {
+      ...payload,
+    }, {
+      context: 'quant-board',
+      cache: false,
+      silent: true,
+      throwOnHttpError: true,
+    })
+    return normalizeEntry(updated)
+  }
+
+  async getOpenCandidateForStock(stockCode: string): Promise<CandidateJournalEntry | null> {
+    const normalizedCode = normalizeCode(stockCode)
+    if (!normalizedCode) return null
+    return this.findOpenCandidate(normalizedCode)
+  }
+
+  reanalyzeCandidate(entry: CandidateJournalEntry): CandidateWorkbenchReview {
+    const stockCode = normalizeCode(entry.stockCode)
+    const stock = {
+      ...(entry.signalsSnapshot?.quote || {}),
+      ...(dataLayer.getStock(stockCode) || {}),
+      code: stockCode,
+      name: entry.stockName || entry.stockCode,
+    } as CandidateStockLike
+    const currentAnalysis = this.analyze(this.buildAnalysisContext(stock))
+    const savedAnalysis = normalizeSavedAnalysis(entry.signalsSnapshot)
+    const comparison = compareAnalysis(savedAnalysis, currentAnalysis)
+    return {
+      entry,
+      savedAnalysis,
+      currentAnalysis,
+      ...comparison,
+    }
   }
 
   private async findOpenCandidate(stockCode: string): Promise<CandidateJournalEntry | null> {
