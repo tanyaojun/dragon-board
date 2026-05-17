@@ -87,6 +87,20 @@
 | `snapshot.backupSync` | `SnapshotRuntime.startSnapshotAutoSync()` 周期备份同步 | 已登记；标记 `runWhenHidden: true` |
 | `websocket.staleCheck` | `WebSocketService.startStaleMonitor()` 500ms stale monitor | 已登记；标记实时流观测任务 |
 
+## Phase 3 First Batch Mapping
+
+| Task | Phase 3 State |
+| --- | --- |
+| `dataLoader.quote` | 已由 `RefreshScheduler` 创建 interval，runner 保留原 HTTP fallback、量比更新和平台缓存维护逻辑。 |
+| `dataLoader.ranktrendSignal` | 已由 `RefreshScheduler` 创建 interval，runner 保留每日 14:45 只执行一次的判断。 |
+| `theme.runtime` | 已由 `RefreshScheduler` 创建 interval，runner 调用 `rotationService.analyzeAll()`。 |
+| `dragon.breath` | 已由 `RefreshScheduler` 创建 interval，runner 调用 `DragonBreathAnalyzer.analyzeMarketBreath(false)`；`DATA.MERGED` 防抖派生仍保留在分析器内部。 |
+| `alert.check` | 已由 `RefreshScheduler` 创建 interval，runner 调用 `alertService.checkAll()`。 |
+| `snapshot.sweep` / `snapshot.backupSync` | 仍由快照 runtime 自身维护 timer，本批只保留登记状态。 |
+| `websocket.staleCheck` | 仍由 WebSocket 服务自身维护 stale monitor，本批只保留登记状态。 |
+
+Phase 3 第一批只迁移 timer 创建和状态记录，不提前改变旧 timer 的交易时间或页面隐藏行为；相关降频/暂停策略留到 Phase 5 统一处理。
+
 ## Resources
 
 - `src/services/RefreshManager.ts`

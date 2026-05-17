@@ -38,6 +38,31 @@ describe('RefreshTaskRegistry', () => {
     expect(registry.getTask('snapshot.backupSync')?.intervalMs).toBe(300_000)
   })
 
+  it('keeps Phase 3 migrated timers compatible with their previous runtime policies', () => {
+    const registry = createRefreshTaskRegistry()
+
+    expect(registry.getTask('dataLoader.quote')).toMatchObject({
+      tradingTimeOnly: true,
+      runWhenHidden: true,
+    })
+    expect(registry.getTask('dataLoader.ranktrendSignal')).toMatchObject({
+      tradingTimeOnly: false,
+      runWhenHidden: true,
+    })
+    expect(registry.getTask('theme.runtime')).toMatchObject({
+      tradingTimeOnly: false,
+      runWhenHidden: true,
+    })
+    expect(registry.getTask('dragon.breath')).toMatchObject({
+      tradingTimeOnly: true,
+      runWhenHidden: true,
+    })
+    expect(registry.getTask('alert.check')).toMatchObject({
+      tradingTimeOnly: false,
+      runWhenHidden: true,
+    })
+  })
+
   it('updates task state for start, success, failure and enable toggles', () => {
     const now = vi.fn()
       .mockReturnValueOnce(1_000)

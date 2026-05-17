@@ -16,6 +16,7 @@ import {
 import type { StockAlert, AlertType, AlertLevel } from '@/types/core'
 import { v4 as uuidv4 } from 'uuid'
 import { themeFacade } from './theme/ThemeFacade'
+import { refreshScheduler } from './refresh/RefreshTaskRuntime'
 import type { ThemeEvent } from './theme/types'
 
 // ========== 股票工具类（增强版） ==========
@@ -188,7 +189,6 @@ class AlertService {
   private static instance: AlertService
   private alertHistory: Map<string, StockAlert> = new Map()
   private lastCheck: number = 0
-  private checkTimer: ReturnType<typeof setInterval> | null = null
   private cooldownMap: Map<string, number> = new Map()
 
   // 快照（只保留最近的数据用于对比）
@@ -210,19 +210,17 @@ class AlertService {
   /**
    * 启动自动检查
    */
-  private startAutoCheck() {
+  startAutoCheck(interval: number = ALERT_CONFIG.CHECK_INTERVAL) {
     if (!ALERT_CONFIG.ENABLED) return
-    this.checkTimer = setInterval(() => this.checkAll(), ALERT_CONFIG.CHECK_INTERVAL)
+    refreshScheduler.registerRunner('alert.check', () => this.checkAll())
+    refreshScheduler.startTask('alert.check', interval)
   }
 
   /**
    * 停止自动检查
    */
   stopAutoCheck() {
-    if (this.checkTimer) {
-      clearInterval(this.checkTimer)
-      this.checkTimer = null
-    }
+    refreshScheduler.stopTask('alert.check')
   }
 
   /**

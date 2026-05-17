@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../theme/ThemeFacade', () => ({
   themeFacade: {
@@ -67,13 +67,24 @@ vi.mock('../theme/ThemeFacade', () => ({
   },
 }))
 
+vi.mock('../../utils/time', () => ({
+  isTradingTime: vi.fn(() => true),
+}))
+
 import { dataLayer } from '../DataLayer'
 import { alertService } from '../alertService'
 import { themeFacade } from '../theme/ThemeFacade'
 
 describe('alertService V3 compatibility', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     dataLayer.reset()
+    alertService.destroy()
+    const { refreshTaskRegistry } = await import('../refresh/RefreshTaskRuntime')
+    refreshTaskRegistry.resetRuntimeState()
+    vi.clearAllMocks()
+  })
+
+  afterEach(() => {
     alertService.destroy()
   })
 
@@ -105,5 +116,28 @@ describe('alertService V3 compatibility', () => {
     expect(alerts.filter((alert) => alert.type === 'volume_surge' && alert.themeName === '人工智能')).toHaveLength(1)
     expect(alerts.some((alert) => alert.type === 'volume_surge' && alert.themeName === '人工智能')).toBe(true)
     expect(alerts.some((alert) => alert.type === 'data_anomaly' && alert.themeName === '映射缺失')).toBe(true)
+  })
+
+  it('records automatic alert checks through the shared refresh scheduler', async () => {
+    vi.useFakeTimers()
+    try {
+      const { refreshTaskRegistry } = await import('../refresh/RefreshTaskRuntime')
+
+      alertService.startAutoCheck(1000)
+      await vi.advanceTimersByTimeAsync(1000)
+
+      expect(themeFacade.refreshRuntime).toHaveBeenCalledTimes(1)
+      expect(refreshTaskRegistry.getTask('alert.check')).toMatchObject({
+        running: false,
+        lastRunAt: expect.any(Number),
+        lastSuccessAt: expect.any(Number),
+        lastError: null,
+        successCount: 1,
+        source: 'scheduler',
+      })
+    } finally {
+      alertService.stopAutoCheck()
+      vi.useRealTimers()
+    }
   })
 })

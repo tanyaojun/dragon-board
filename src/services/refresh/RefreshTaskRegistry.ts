@@ -17,6 +17,7 @@ export const REFRESH_TASK_DEFINITIONS: RefreshTaskDefinition[] = [
     owner: 'DataLoaderFacade',
     intervalMs: 30_000,
     tradingTimeOnly: true,
+    runWhenHidden: true,
     description: 'WebSocket 不健康时的 HTTP 行情补偿',
   },
   {
@@ -25,7 +26,8 @@ export const REFRESH_TASK_DEFINITIONS: RefreshTaskDefinition[] = [
     category: 'derived',
     owner: 'DataLoaderFacade',
     intervalMs: 1_000,
-    tradingTimeOnly: true,
+    tradingTimeOnly: false,
+    runWhenHidden: true,
     description: '14:45 每日一次 RankTrend 信号检查',
   },
   {
@@ -34,7 +36,8 @@ export const REFRESH_TASK_DEFINITIONS: RefreshTaskDefinition[] = [
     category: 'derived',
     owner: 'ThemeRuntimeCoordinator',
     intervalMs: 5_000,
-    tradingTimeOnly: true,
+    tradingTimeOnly: false,
+    runWhenHidden: true,
     description: '题材轮动运行态刷新',
   },
   {
@@ -44,6 +47,7 @@ export const REFRESH_TASK_DEFINITIONS: RefreshTaskDefinition[] = [
     owner: 'DragonBreathAnalyzer',
     intervalMs: 300_000,
     tradingTimeOnly: true,
+    runWhenHidden: true,
   },
   {
     id: 'dragon.review',
@@ -59,7 +63,8 @@ export const REFRESH_TASK_DEFINITIONS: RefreshTaskDefinition[] = [
     category: 'business',
     owner: 'AlertService',
     intervalMs: 10_000,
-    tradingTimeOnly: true,
+    tradingTimeOnly: false,
+    runWhenHidden: true,
   },
   {
     id: 'snapshot.sweep',

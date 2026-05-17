@@ -135,4 +135,52 @@ describe('RefreshScheduler', () => {
 
     scheduler.destroy()
   })
+
+  it('allows callers to override the registered interval when starting a task', async () => {
+    const registry = new RefreshTaskRegistry()
+    const run = vi.fn(async () => undefined)
+
+    registry.register({
+      id: 'example.task',
+      label: '示例任务',
+      category: 'business',
+      owner: 'test',
+      intervalMs: 60_000,
+    })
+
+    const scheduler = new RefreshScheduler(registry)
+    scheduler.registerRunner('example.task', run)
+    scheduler.startTask('example.task', 1_000)
+
+    await vi.advanceTimersByTimeAsync(1_000)
+
+    expect(run).toHaveBeenCalledTimes(1)
+
+    scheduler.destroy()
+  })
+
+  it('keeps registered runners when only stopping all timers', async () => {
+    const registry = new RefreshTaskRegistry()
+    const run = vi.fn(async () => undefined)
+
+    registry.register({
+      id: 'example.task',
+      label: '示例任务',
+      category: 'business',
+      owner: 'test',
+      intervalMs: 1_000,
+    })
+
+    const scheduler = new RefreshScheduler(registry)
+    scheduler.registerRunner('example.task', run)
+    scheduler.startTask('example.task')
+    scheduler.stopAll()
+    scheduler.startTask('example.task')
+
+    await vi.advanceTimersByTimeAsync(1_000)
+
+    expect(run).toHaveBeenCalledTimes(1)
+
+    scheduler.destroy()
+  })
 })

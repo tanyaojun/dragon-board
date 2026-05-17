@@ -158,4 +158,38 @@ describe('RefreshManager Phase 0 behavior', () => {
       'websocket.staleCheck',
     ])
   })
+
+  it('does not reset shared task runtime state when resetting manager config', async () => {
+    const { RefreshManager } = await loadRefreshManager()
+
+    await RefreshManager.init()
+    const { refreshTaskRegistry } = await import('../refresh/RefreshTaskRuntime')
+    refreshTaskRegistry.markStarted('theme.runtime', 'scheduler')
+    refreshTaskRegistry.markSuccess('theme.runtime', 'scheduler')
+
+    RefreshManager.reset()
+
+    expect(refreshTaskRegistry.getTask('theme.runtime')).toMatchObject({
+      lastRunAt: expect.any(Number),
+      lastSuccessAt: expect.any(Number),
+      successCount: 1,
+      source: 'scheduler',
+    })
+  })
+
+  it('does not stop shared scheduler tasks when destroying the manager', async () => {
+    const { RefreshManager } = await loadRefreshManager()
+
+    await RefreshManager.init()
+    const { refreshScheduler } = await import('../refresh/RefreshTaskRuntime')
+    const run = vi.fn(async () => undefined)
+    refreshScheduler.registerRunner('theme.runtime', run)
+    refreshScheduler.startTask('theme.runtime', 1_000)
+
+    RefreshManager.destroy()
+    await vi.advanceTimersByTimeAsync(1_000)
+
+    expect(run).toHaveBeenCalledTimes(1)
+    refreshScheduler.stopTask('theme.runtime')
+  })
 })

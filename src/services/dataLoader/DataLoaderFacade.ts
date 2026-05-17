@@ -21,6 +21,7 @@ import { platformHotlistService } from './PlatformHotlistService'
 import { quoteService } from './QuoteService'
 import { rankTrendSignalService } from './RankTrendSignalService'
 import { RealtimeQuoteCoordinator } from './RealtimeQuoteCoordinator'
+import { refreshScheduler } from '../refresh/RefreshTaskRuntime'
 import { stockHotnessService } from './StockHotnessService'
 import { stockMergeCoordinator } from './StockMergeCoordinator'
 import { VolumeHistoryService } from './VolumeHistoryService'
@@ -42,8 +43,6 @@ export type { MergedQuoteData } from './types'
  * 职责：协调数据加载、合并计算、缓存策略、行情获取
  */
 class DataLoaderService {
-  private quoteRefreshTimer: ReturnType<typeof setInterval> | null = null
-  private signalRefreshTimer: ReturnType<typeof setInterval> | null = null
   private lastSignalRefreshDate: string | null = null
   private state = ref<LoaderState>({
     initialized: false,
@@ -259,58 +258,55 @@ class DataLoaderService {
     interval: number = QUOTE_REFRESH_INTERVAL_MS,
     batchSize: number = DEFAULT_QUOTE_BATCH_SIZE,
   ): void {
-    if (this.quoteRefreshTimer) return
+    refreshScheduler.registerRunner('dataLoader.quote', () => this.runQuoteRefresh(batchSize))
+    refreshScheduler.startTask('dataLoader.quote', interval)
+  }
 
-    this.quoteRefreshTimer = setInterval(async () => {
-      try {
-        if (!isTradingTime(new Date())) return
+  private async runQuoteRefresh(batchSize: number = DEFAULT_QUOTE_BATCH_SIZE): Promise<void> {
+    if (!isTradingTime(new Date())) return
 
-        const stocks = dataLayer.getStocks()
-        if (!stocks.length) return
+    const stocks = dataLayer.getStocks()
+    if (!stocks.length) return
 
-        const allStockCodes = stocks
-          .map((s: any) => s.code)
-          .filter((code: string) => code && code.length === 6 && code !== '000000')
+    const allStockCodes = stocks
+      .map((s: any) => s.code)
+      .filter((code: string) => code && code.length === 6 && code !== '000000')
 
-        if (allStockCodes.length === 0) return
+    if (allStockCodes.length === 0) return
 
-        if (this.isRealtimePrimaryHealthy()) {
-          await this.updateVolumeRatios(allStockCodes)
-          await this.maybeRefreshPlatformCache()
-          return
-        }
+    if (this.isRealtimePrimaryHealthy()) {
+      await this.updateVolumeRatios(allStockCodes)
+      await this.maybeRefreshPlatformCache()
+      return
+    }
 
-        // 缩短批次延迟
-        for (let i = 0; i < allStockCodes.length; i += batchSize) {
-          const batchCodes = allStockCodes.slice(i, i + batchSize)
-          const quotes = await this.fetchMergedQuotes(batchCodes, { force: true })
+    // 缩短批次延迟
+    for (let i = 0; i < allStockCodes.length; i += batchSize) {
+      const batchCodes = allStockCodes.slice(i, i + batchSize)
+      const quotes = await this.fetchMergedQuotes(batchCodes, { force: true })
 
-          if (quotes.size > 0) {
-            dataLayer.applyRealtimeQuoteBatch(
-              Array.from(quotes.entries()).map(([code, quote]) => ({
-                code,
-                ...quote,
-              })),
-            )
-          }
-
-          if (i + batchSize < allStockCodes.length) {
-            await new Promise((resolve) => setTimeout(resolve, 100)) // 500 -> 100
-          }
-        }
-
-        // 更新量比
-        if (allStockCodes.length) {
-          await this.updateVolumeRatios(allStockCodes)
-        }
-
-        await this.maybeRefreshPlatformCache()
-
-        debugLog('[DataLoader] 行情刷新完成')
-      } catch (error) {
-        console.error('[DataLoader] 行情刷新失败:', error)
+      if (quotes.size > 0) {
+        dataLayer.applyRealtimeQuoteBatch(
+          Array.from(quotes.entries()).map(([code, quote]) => ({
+            code,
+            ...quote,
+          })),
+        )
       }
-    }, interval)
+
+      if (i + batchSize < allStockCodes.length) {
+        await new Promise((resolve) => setTimeout(resolve, 100)) // 500 -> 100
+      }
+    }
+
+    // 更新量比
+    if (allStockCodes.length) {
+      await this.updateVolumeRatios(allStockCodes)
+    }
+
+    await this.maybeRefreshPlatformCache()
+
+    debugLog('[DataLoader] 行情刷新完成')
   }
 
   /**
@@ -355,29 +351,25 @@ class DataLoaderService {
    * 停止行情自动刷新
    */
   stopQuoteAutoRefresh(): void {
-    if (this.quoteRefreshTimer) {
-      clearInterval(this.quoteRefreshTimer)
-      this.quoteRefreshTimer = null
-    }
+    refreshScheduler.stopTask('dataLoader.quote')
   }
 
   startSignalAutoRefresh(interval: number = 1000): void {
-    if (this.signalRefreshTimer) return
+    refreshScheduler.registerRunner('dataLoader.ranktrendSignal', () => this.runSignalRefreshCheck())
+    refreshScheduler.startTask('dataLoader.ranktrendSignal', interval)
+  }
 
-    this.signalRefreshTimer = setInterval(() => {
-      const now = new Date()
-      const hour = now.getHours()
-      const minute = now.getMinutes()
-      const today = this.getLocalDateKey(now)
+  private async runSignalRefreshCheck(): Promise<void> {
+    const now = new Date()
+    const hour = now.getHours()
+    const minute = now.getMinutes()
+    const today = this.getLocalDateKey(now)
 
-      if (hour === 14 && minute === 45 && this.lastSignalRefreshDate !== today) {
-        this.lastSignalRefreshDate = today
-        debugLog('[DataLoader] 14:45 触发排名趋势信号刷新')
-        this.refreshRankTrendSignals().catch((error) => {
-          console.error('[DataLoader] 14:45 排名趋势信号刷新失败:', error)
-        })
-      }
-    }, interval)
+    if (hour === 14 && minute === 45 && this.lastSignalRefreshDate !== today) {
+      this.lastSignalRefreshDate = today
+      debugLog('[DataLoader] 14:45 触发排名趋势信号刷新')
+      await this.refreshRankTrendSignals()
+    }
   }
 
   private getLocalDateKey(date: Date): string {
@@ -388,10 +380,7 @@ class DataLoaderService {
   }
 
   stopSignalAutoRefresh(): void {
-    if (this.signalRefreshTimer) {
-      clearInterval(this.signalRefreshTimer)
-      this.signalRefreshTimer = null
-    }
+    refreshScheduler.stopTask('dataLoader.ranktrendSignal')
   }
 
   /**

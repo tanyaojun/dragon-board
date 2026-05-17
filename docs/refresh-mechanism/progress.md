@@ -35,10 +35,26 @@
 - `pnpm exec vitest run src/services/__tests__/RefreshCoordinator.test.ts src/services/__tests__/RefreshManager.test.ts src/services/refresh/__tests__/RefreshTaskRegistry.test.ts src/services/refresh/__tests__/RefreshScheduler.test.ts`：通过，14 tests passed。
 - `pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false`：通过。
 - `pnpm test`：未全绿；331 passed、1 failed。失败为既有/独立快照测试 `src/services/snapshot/__tests__/runtime.test.ts` 的 `ignores IndexedDB existence and rewrites through sqlite for formal snapshots`，单独运行同样失败，未纳入本次 Phase 0 修复范围。
+- `pnpm exec vitest run src/services/dataLoader/__tests__/DataLoaderFacade.test.ts src/services/refresh/__tests__/RefreshTaskRegistry.test.ts src/services/refresh/__tests__/RefreshScheduler.test.ts src/services/__tests__/RefreshManager.test.ts src/services/__tests__/RefreshCoordinator.test.ts src/services/__tests__/DragonBreathAnalyzer.refreshScheduler.test.ts src/services/__tests__/alertService.test.ts src/services/__tests__/themeLegacyAdapters.test.ts`：通过，49 tests passed。
+
+## Phase 3 First Batch
+
+- 新增 `src/services/refresh/RefreshTaskRuntime.ts`，提供共享 `refreshTaskRegistry` 和 `refreshScheduler`，作为业务 timer 逐步接入的统一运行时。
+- `RefreshManager` 改为读取共享任务注册表，但不拥有共享 scheduler 生命周期；`reset()` / `destroy()` 只处理自身全量刷新 timer，不停止或重置其它服务任务。
+- `RefreshScheduler.startTask()` 支持调用方传入 interval override，用于保持各业务服务原有测试和启动参数语义。
+- 本批迁移显式保留旧 timer 运行策略：题材轮动、预警和 RankTrend 检查不提前套交易时间 gating，已迁移任务默认允许 hidden page 继续 tick；隐藏页降频留到 Phase 5。
+- 迁移 `DataLoaderFacade` 的行情 HTTP fallback 自动轮询到 `dataLoader.quote`。
+- 迁移 `DataLoaderFacade` 的 14:45 RankTrend 信号检查到 `dataLoader.ranktrendSignal`。
+- 迁移 `rotationService` 的题材轮动自动分析到 `theme.runtime`。
+- 迁移 `DragonBreathAnalyzer` 的 5 分钟自动刷新到 `dragon.breath`，保留 `DATA.MERGED` 触发的 500ms 防抖派生分析。
+- 迁移 `alertService` 的 10 秒预警检查到 `alert.check`。
+- WebSocket stale monitor、连接/重连/心跳和快照槽位/备份同步本批不接管，只保留 Phase 2 登记；隐藏页降频留到 Phase 5。
+- 当前工作区存在候选池和 QuantBoard journal 的独立未提交改动，刷新机制提交需要显式排除这些路径。
+- `pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false`：通过。
 
 ## Next Step
 
-- 回到 Phase 1：统一全量刷新入口。
-- 优先处理 `DataFreshness.vue` 仍绕过 `RefreshManager` 的手动刷新入口。
-- Phase 3 前不要直接启用 `RefreshScheduler.startAll()`；应逐个迁移业务 timer 并保留回归测试。
+- 继续 Phase 3 后半段前，先决定 WebSocket stale monitor 和快照 runtime 是否只做状态桥接，还是真正交由 `RefreshScheduler` 创建 timer。
+- 回到 Phase 1：统一全量刷新入口，优先处理 `DataFreshness.vue` 仍绕过 `RefreshManager` 的手动刷新入口。
+- 后续不要直接启用 `RefreshScheduler.startAll()`；仍应逐个迁移任务并保留回归测试。
 - 另行决定是否单独修复 `snapshot/runtime.test.ts` 的既有失败。

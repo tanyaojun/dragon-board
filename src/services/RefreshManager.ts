@@ -9,8 +9,7 @@ import { isTradingTime } from '../utils/time'
 import type { RefreshStrategy as ConfigRefreshStrategy, RefreshConfig } from '../types/config'
 import { REFRESH_STRATEGY_CONFIGS, REFRESH_STORAGE_KEY } from '../types/config'
 import { refreshCoordinator } from './RefreshCoordinator'
-import { RefreshScheduler } from './refresh/RefreshScheduler'
-import { createRefreshTaskRegistry } from './refresh/RefreshTaskRegistry'
+import { refreshTaskRegistry } from './refresh/RefreshTaskRuntime'
 
 export type RefreshStrategy = 'conservative' | 'balanced' | 'aggressive'
 
@@ -81,10 +80,7 @@ class RefreshManagerService {
   }
 
   private currentConfig: RefreshConfig
-  private readonly taskRegistry = createRefreshTaskRegistry()
-  private readonly scheduler = new RefreshScheduler(this.taskRegistry, {
-    isTradingTime: () => isTradingTime(),
-  })
+  private readonly taskRegistry = refreshTaskRegistry
   private unsubscribeFns: (() => void)[] = []
   private destroyed = false
   private isTradingTimeCache = false
@@ -604,8 +600,6 @@ class RefreshManagerService {
       totalStocksLoaded: 0,
       totalLeadersFound: 0,
     }
-    this.taskRegistry.resetRuntimeState()
-
     if (this.state.enabled && !this.destroyed) {
       this.start()
     }
@@ -630,7 +624,6 @@ class RefreshManagerService {
     this.unsubscribeFns = []
 
     this.clearAllTimers()
-    this.scheduler.destroy()
 
     debugLog('[RefreshManager] 💥 已销毁')
   }

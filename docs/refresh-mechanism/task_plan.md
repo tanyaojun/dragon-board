@@ -6,7 +6,7 @@
 
 ## Current Phase
 
-Phase 2 complete as an observability layer. Phase 1 remains pending.
+Phase 3 first batch complete for business timers. Phase 1 remains pending.
 
 ## Success Criteria
 
@@ -62,15 +62,16 @@ Phase 2 complete as an observability layer. Phase 1 remains pending.
 
 ### Phase 3: 迁移业务型定时器
 
-- [ ] 迁移 `DataLoaderFacade` 行情 HTTP fallback 30 秒轮询到统一 scheduler。
-- [ ] 迁移 `DataLoaderFacade` 14:45 RankTrend 信号检查到统一 scheduler。
-- [ ] 迁移 `rotationService` 5 秒题材轮动到统一 scheduler，或先降频后迁移。
-- [ ] 迁移 `DragonBreathAnalyzer` 5 分钟自动刷新到统一 scheduler，保留 `DATA.MERGED` 防抖派生分析但纳入单飞保护。
-- [ ] 迁移 `alertService` 10 秒预警检查到统一 scheduler。
+- [x] 迁移 `DataLoaderFacade` 行情 HTTP fallback 30 秒轮询到统一 scheduler。
+- [x] 迁移 `DataLoaderFacade` 14:45 RankTrend 信号检查到统一 scheduler。
+- [x] 迁移 `rotationService` 5 秒题材轮动到统一 scheduler，或先降频后迁移。
+- [x] 迁移 `DragonBreathAnalyzer` 5 分钟自动刷新到统一 scheduler，保留 `DATA.MERGED` 防抖派生分析。
+- [x] 迁移 `alertService` 10 秒预警检查到统一 scheduler。
 - [ ] 保留 WebSocket 连接/重连/心跳为独立实时流，但登记状态和隐藏页降频策略。
 - [ ] 保留快照槽位扫描/备份同步为独立存储维护任务，但登记状态和质量依赖。
 - **验证:** fake timer 测试各任务 interval、暂停、恢复、错误记录。
-- **Status:** pending
+- **Status:** partial
+- **Scope note:** 本阶段第一批只迁移会主动写入全局业务状态的业务 timer：行情 HTTP fallback、RankTrend 信号检查、题材轮动、龙息自动刷新和预警检查。WebSocket stale monitor 与快照槽位/备份任务仍保持独立运行流，只保留登记状态，隐藏页降频策略留到 Phase 5。
 
 ### Phase 4: 并发控制与写入仲裁
 

@@ -20,6 +20,14 @@ let releaseSignalCalculation: (() => void) | null = null
 let signalCalculationError: Error | null = null
 let signalApplyCount = 0
 
+const timeState = vi.hoisted(() => ({
+  tradingTime: true,
+}))
+
+vi.mock('@/utils/time', () => ({
+  isTradingTime: vi.fn(() => timeState.tradingTime),
+}))
+
 vi.mock('../PlatformHotlistService', () => ({
   platformHotlistService: {
     loadPlatforms: vi.fn(async (_platforms, force) => {
@@ -115,6 +123,7 @@ describe('DataLoaderFacade', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     dataLayer.reset()
+    timeState.tradingTime = true
     fromCache = false
     firstPlatformLoadEmptyCache = false
     platformLoadCount = 0
@@ -131,7 +140,10 @@ describe('DataLoaderFacade', () => {
 
   afterEach(async () => {
     const { dataLoader } = await import('../../dataLoader')
+    dataLoader.stopQuoteAutoRefresh()
     dataLoader.stopSignalAutoRefresh()
+    const runtime = await import('../../refresh/RefreshTaskRuntime').catch(() => null)
+    runtime?.refreshTaskRegistry.resetRuntimeState()
   })
 
   it('bootstrapInitialData publishes base hotlist rows and returns a structured summary', async () => {
@@ -253,10 +265,64 @@ describe('DataLoaderFacade', () => {
       dataLoader.stopSignalAutoRefresh()
       ;(dataLoader as any).lastSignalRefreshDate = null
       dataLoader.startSignalAutoRefresh(1000)
-      vi.advanceTimersByTime(1000)
-      await Promise.resolve()
+      await vi.advanceTimersByTimeAsync(1000)
 
       expect(rankTrendSignalService.refreshRankTrendSignals).toHaveBeenCalledTimes(1)
+    } finally {
+      const { dataLoader } = await import('../../dataLoader')
+      dataLoader.stopSignalAutoRefresh()
+      vi.useRealTimers()
+    }
+  })
+
+  it('records quote fallback refresh through the shared refresh scheduler', async () => {
+    vi.useFakeTimers()
+    try {
+      const { dataLoader } = await import('../../dataLoader')
+      const { refreshTaskRegistry } = await import('../../refresh/RefreshTaskRuntime')
+
+      dataLayer.setMergedStocks([{ code: '000001', name: '平安银行' } as any])
+      dataLoader.stopQuoteAutoRefresh()
+      dataLoader.startQuoteAutoRefresh(1000)
+
+      await vi.advanceTimersByTimeAsync(1000)
+
+      expect(refreshTaskRegistry.getTask('dataLoader.quote')).toMatchObject({
+        running: false,
+        lastRunAt: expect.any(Number),
+        lastSuccessAt: expect.any(Number),
+        lastError: null,
+        successCount: 1,
+        source: 'scheduler',
+      })
+    } finally {
+      const { dataLoader } = await import('../../dataLoader')
+      dataLoader.stopQuoteAutoRefresh()
+      vi.useRealTimers()
+    }
+  })
+
+  it('records scheduled RankTrend checks through the shared refresh scheduler', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-05-08T14:44:59+08:00'))
+    try {
+      const { dataLoader } = await import('../../dataLoader')
+      const { refreshTaskRegistry } = await import('../../refresh/RefreshTaskRuntime')
+
+      dataLoader.stopSignalAutoRefresh()
+      ;(dataLoader as any).lastSignalRefreshDate = null
+      dataLoader.startSignalAutoRefresh(1000)
+
+      await vi.advanceTimersByTimeAsync(1000)
+
+      expect(refreshTaskRegistry.getTask('dataLoader.ranktrendSignal')).toMatchObject({
+        running: false,
+        lastRunAt: expect.any(Number),
+        lastSuccessAt: expect.any(Number),
+        lastError: null,
+        successCount: 1,
+        source: 'scheduler',
+      })
     } finally {
       const { dataLoader } = await import('../../dataLoader')
       dataLoader.stopSignalAutoRefresh()
@@ -316,18 +382,15 @@ describe('DataLoaderFacade', () => {
       dataLoader.stopSignalAutoRefresh()
       ;(dataLoader as any).lastSignalRefreshDate = null
       dataLoader.startSignalAutoRefresh(1000)
-      vi.advanceTimersByTime(1000)
-      await Promise.resolve()
+      await vi.advanceTimersByTimeAsync(1000)
       expect(rankTrendSignalService.refreshRankTrendSignals).toHaveBeenCalledTimes(1)
 
       vi.setSystemTime(new Date('2026-05-08T14:45:30+08:00'))
-      vi.advanceTimersByTime(1000)
-      await Promise.resolve()
+      await vi.advanceTimersByTimeAsync(1000)
       expect(rankTrendSignalService.refreshRankTrendSignals).toHaveBeenCalledTimes(1)
 
       vi.setSystemTime(new Date('2026-05-09T14:44:59+08:00'))
-      vi.advanceTimersByTime(1000)
-      await Promise.resolve()
+      await vi.advanceTimersByTimeAsync(1000)
       expect(rankTrendSignalService.refreshRankTrendSignals).toHaveBeenCalledTimes(2)
     } finally {
       const { dataLoader } = await import('../../dataLoader')

@@ -7,6 +7,10 @@ import { jxbkThemeFeed } from '../theme/JxbkThemeFeed'
 import { rotationService } from '../rotationService'
 import { sectorAnalyzer } from '../sectorAnalyzer'
 
+vi.mock('../../utils/time', () => ({
+  isTradingTime: vi.fn(() => true),
+}))
+
 const rotationSummary: RotationAnalysis = {
   timestamp: 1713751200000,
   mainLines: [
@@ -57,8 +61,11 @@ const rotationSummary: RotationAnalysis = {
 }
 
 describe('theme legacy adapters', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     dataLayer.reset()
+    rotationService.stopAutoAnalysis()
+    const { refreshTaskRegistry } = await import('../refresh/RefreshTaskRuntime')
+    refreshTaskRegistry.resetRuntimeState()
     vi.restoreAllMocks()
   })
 
@@ -91,6 +98,52 @@ describe('theme legacy adapters', () => {
     expect(rotationService.forceAnalyze()).toEqual(rotationSummary)
     expect(refreshSpy).toHaveBeenCalledTimes(2)
     expect(jxbkSpy).not.toHaveBeenCalled()
+  })
+
+  it('records rotation analysis through the shared refresh scheduler', async () => {
+    vi.useFakeTimers()
+    const refreshSpy = vi.spyOn(themeFacade, 'refreshRuntime').mockReturnValue({
+      factors: [],
+      exposures: { byCode: new Map(), byTheme: new Map() },
+      rotationSummary,
+      events: [],
+      qualitySummary: { totalFlags: 0, fatalCount: 0, warningCount: 0, infoCount: 0, byCode: {} },
+      changedFields: [],
+      inputSignature: 'same',
+      source: 'rotationService',
+      timestamp: 1713751200000,
+      syncedStockCount: 0,
+    })
+    vi.spyOn(themeFacade, 'buildCurrentThemeSourceContext').mockReturnValue({
+      timestamp: 1713751200000,
+      themes: [],
+      themeStocks: new Map(),
+      stockThemes: new Map(),
+      stocks: [],
+      jxbkBlocks: [],
+      rotationAnalysis: null,
+      correlations: new Map(),
+    })
+
+    try {
+      const { refreshTaskRegistry } = await import('../refresh/RefreshTaskRuntime')
+
+      rotationService.startAutoAnalysis(1000)
+      await vi.advanceTimersByTimeAsync(1000)
+
+      expect(refreshSpy).toHaveBeenCalledTimes(1)
+      expect(refreshTaskRegistry.getTask('theme.runtime')).toMatchObject({
+        running: false,
+        lastRunAt: expect.any(Number),
+        lastSuccessAt: expect.any(Number),
+        lastError: null,
+        successCount: 1,
+        source: 'scheduler',
+      })
+    } finally {
+      rotationService.stopAutoAnalysis()
+      vi.useRealTimers()
+    }
   })
 
   it('sectorAnalyzer sync and refresh APIs delegate to theme runtime', async () => {

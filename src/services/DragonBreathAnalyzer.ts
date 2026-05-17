@@ -23,7 +23,7 @@ import { API_CONFIG } from '../config/constants'
 import { dataLayer } from './DataLayer'
 import { FORMAL_SNAPSHOT_READ_POLICY } from './snapshot/readPolicy'
 import { snapshotFacade } from './snapshot/facade'
-import { isTradingTime } from '../utils/time'
+import { refreshScheduler } from './refresh/RefreshTaskRuntime'
 import { StockUtils } from '../utils/common'
 
 import { EMOTION_FACTOR_CONFIG, type EmotionFactor } from '../types/emotion'
@@ -36,7 +36,6 @@ interface DragonBreathState {
   marketData: MarketData
   sentiment: Sentiment
   history: BreathHistorySnapshot[]
-  refreshTimer: number | null
   _analyzing: boolean
   _fetching: boolean
 
@@ -81,7 +80,6 @@ export class DragonBreathAnalyzer {
       marketData: this.getDefaultMarketData(),
       sentiment: this.getDefaultSentiment(),
       history: [],
-      refreshTimer: null,
       _analyzing: false,
       _fetching: false,
       themeImpact: 0,
@@ -135,16 +133,10 @@ export class DragonBreathAnalyzer {
    * 启动定时刷新
    */
   startAutoRefresh(interval: number = 300000): void {
-    if (this.state.refreshTimer) {
-      clearInterval(this.state.refreshTimer)
-    }
-
-    this.state.refreshTimer = setInterval(() => {
-      if (!isTradingTime()) return
-      this.analyzeMarketBreath(false).catch((err) => {
-        console.warn('[DragonBreathAnalyzer] 定时分析失败:', err)
-      })
-    }, interval) as unknown as number
+    refreshScheduler.registerRunner('dragon.breath', async () => {
+      await this.analyzeMarketBreath(false)
+    })
+    refreshScheduler.startTask('dragon.breath', interval)
   }
 
   /**
@@ -1301,10 +1293,7 @@ private buildFactorData(): any[] {
    * 停止自动刷新
    */
   stopAutoRefresh(): void {
-    if (this.state.refreshTimer) {
-      clearInterval(this.state.refreshTimer)
-      this.state.refreshTimer = null
-    }
+    refreshScheduler.stopTask('dragon.breath')
   }
 
   /**

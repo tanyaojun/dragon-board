@@ -6,6 +6,7 @@ import { themeCorrelationAnalyzer } from './ThemeCorrelationAnalyzer'
 import { themeFacade } from './theme/ThemeFacade'
 import type { RotationAnalysis, ThemeRotationStatus } from '../types/core'
 import { ROTATION_CONFIG } from '../config/constants'
+import { refreshScheduler } from './refresh/RefreshTaskRuntime'
 
 type RotationStrongTheme = {
   themeId: string
@@ -46,24 +47,21 @@ function emptyAnalysis(): RotationAnalysisCompat {
 
 class RotationService {
   private lastAnalysis: RotationAnalysisCompat | null = null
-  private analysisTimer: ReturnType<typeof setInterval> | null = null
 
   constructor() {
     this.startAutoAnalysis()
   }
 
-  private startAutoAnalysis() {
+  startAutoAnalysis(interval: number = ROTATION_CONFIG.ANALYSIS_INTERVAL) {
     if (!ROTATION_CONFIG.ENABLED) return
-    this.analysisTimer = setInterval(() => {
+    refreshScheduler.registerRunner('theme.runtime', () => {
       this.analyzeAll()
-    }, ROTATION_CONFIG.ANALYSIS_INTERVAL)
+    })
+    refreshScheduler.startTask('theme.runtime', interval)
   }
 
   stopAutoAnalysis() {
-    if (this.analysisTimer) {
-      clearInterval(this.analysisTimer)
-      this.analysisTimer = null
-    }
+    refreshScheduler.stopTask('theme.runtime')
   }
 
   analyzeAll(): RotationAnalysisCompat {

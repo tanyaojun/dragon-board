@@ -29,13 +29,14 @@ export class RefreshScheduler {
     this.runners.set(id, runner)
   }
 
-  startTask(id: RefreshTaskId): boolean {
+  startTask(id: RefreshTaskId, intervalMs?: number): boolean {
     const task = this.registry.getTask(id)
-    if (!task?.intervalMs || this.timers.has(id)) return false
+    const effectiveInterval = intervalMs ?? task?.intervalMs
+    if (!task || !effectiveInterval || this.timers.has(id)) return false
 
     const timer = setInterval(() => {
       void this.runTask(id)
-    }, task.intervalMs)
+    }, effectiveInterval)
 
     this.timers.set(id, timer)
     return true
