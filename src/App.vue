@@ -160,7 +160,6 @@
     <TradeJournalPanel v-model:visible="panels.journal" @close="panels.journal = false" />
     <HotStockEventMonitorPanel v-model:visible="panels.eventMonitor" :trigger-rect="panelRects.eventMonitor"
       @close="panels.eventMonitor = false" @select-stock="handleSelectStock" />
-    <ContextMenu />
     <StockL2DetailPanel :visible="panels.stockDetail" :stock-code="selectedStockCode"
       :stock-name="selectedStockName" :trigger-rect="panelRects.stockDetail"
       @close="panels.stockDetail = false" />
@@ -187,7 +186,6 @@ import Toast from './components/common/Toast.vue'
 import SplashScreen from './components/common/SplashScreen.vue'
 import NavTabs from './components/common/NavTabs.vue'
 import TradingStatus from './components/common/TradingStatus.vue'
-import ContextMenu from './components/common/ContextMenu.vue'
 import SearchBox from './components/common/SearchBox.vue'
 import DataTable from './components/common/DataTable.vue'
 import DataFreshness from './components/common/DataFreshness.vue'
