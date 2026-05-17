@@ -95,11 +95,12 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { AppEvents } from '@/types'
 import { dataLayer } from '@/services/DataLayer'
+import { RefreshManager } from '@/services/RefreshManager'
 import { webSocketService } from '@/services/websocket'
 import { EventManager } from '@/utils/eventManager'
 import { isTradingTime } from '@/utils/time'
+import { AppEvents } from '@/types'
 
 const showDetails = ref(false)
 const streamStatus = ref(webSocketService.getStatus())
@@ -372,12 +373,30 @@ const handleTick = (payload: any) => {
 }
 
 const manualRefresh = async () => {
-  EventManager.emit(AppEvents.REFRESH.MANUAL_REQUESTED, { source: 'data-freshness', force: true })
   EventManager.emit(AppEvents.UI.TOAST, {
     message: '正在刷新数据...',
     duration: 1000,
     type: 'info',
   })
+  const result = await RefreshManager.requestRefresh({
+    kind: 'full',
+    source: 'data-freshness',
+    trigger: 'manual',
+    force: true,
+  })
+  if (result.busy || result.skipped) {
+    EventManager.emit(AppEvents.UI.TOAST, {
+      message: result.busy ? '刷新进行中' : '刷新已跳过',
+      duration: 1500,
+      type: 'info',
+    })
+  } else if (!result.success) {
+    EventManager.emit(AppEvents.UI.TOAST, {
+      message: '刷新失败，请稍后重试',
+      duration: 2000,
+      type: 'error',
+    })
+  }
   showDetails.value = false
 }
 

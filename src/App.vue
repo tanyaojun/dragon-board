@@ -473,7 +473,15 @@ const handleRefresh = async () => {
   showToast('⏳ 正在刷新全部数据...', 'info')
 
   try {
-    await RefreshManager.manualRefresh('full')
+    const result = await RefreshManager.requestRefresh({
+      kind: 'full',
+      source: 'app',
+      trigger: 'manual',
+      force: true,
+    })
+    if (!result.success) {
+      showToast(result.busy ? '⏳ 刷新进行中' : '❌ 刷新失败', result.busy ? 'info' : 'error')
+    }
   } catch (error) {
     showToast('❌ 刷新失败', 'error')
   }

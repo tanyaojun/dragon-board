@@ -6,7 +6,7 @@
 
 ## Current Phase
 
-Phase 4 resource locks and write arbitration complete. Phase 1 remains pending.
+Phase 1 unified full refresh entry complete. Remaining work: Phase 3 realtime/storage residuals, Phase 5 visibility/config policy, and Phase 6 cleanup.
 
 ## Success Criteria
 
@@ -31,13 +31,14 @@ Phase 4 resource locks and write arbitration complete. Phase 1 remains pending.
 
 ### Phase 1: 统一全量刷新入口
 
-- [ ] 在 `RefreshManager` 暴露一个唯一请求入口，例如 `requestRefresh({ kind, source, force })`。
-- [ ] 让 `RefreshManager.manualRefresh()`、定时全量刷新、`App.vue` 主刷新、`DataFreshness.vue` 手动刷新都调用该入口。
-- [ ] 将 `RefreshCoordinator` 定位为执行器：接收已规范化请求，返回结构化结果。
-- [ ] 明确返回结果类型：`success`、`skipped`、`busy`、`errors`、`duration`、`executedTasks`。
-- [ ] 保留局部面板刷新，但不得把局部刷新伪装为“全局刷新中”。
+- [x] 在 `RefreshManager` 暴露一个唯一请求入口，例如 `requestRefresh({ kind, source, force })`。
+- [x] 让 `RefreshManager.manualRefresh()`、定时全量刷新、`App.vue` 主刷新、`DataFreshness.vue` 手动刷新都调用该入口。
+- [x] 将 `RefreshCoordinator` 定位为执行器：接收已规范化请求，返回结构化结果。
+- [x] 明确返回结果类型：`success`、`skipped`、`busy`、`errors`、`duration`、`executedTasks`。
+- [x] 保留局部面板刷新，但不得把局部刷新伪装为“全局刷新中”。
 - **验证:** 新增/更新 `src/services/__tests__/RefreshCoordinator.test.ts` 和 `RefreshManager` 测试。
-- **Status:** pending
+- **Status:** complete
+- **Scope note:** `RefreshManager.requestRefresh()` 现在是全局全量刷新唯一入口；`RefreshCoordinator.executeRequest()` 只执行规范化请求并返回结构化结果。旧 `FULL_REQUESTED` / `MANUAL_REQUESTED` 事件保留兼容，但在浏览器中由 `RefreshManager` 消费，避免绕过统一入口。`App.vue`、`SettingsPanel.vue` 和 `DataFreshness.vue` 的手动全量刷新均已带明确 `source` 调用 `requestRefresh()`。
 
 ### Phase 2: 建立刷新任务注册表
 

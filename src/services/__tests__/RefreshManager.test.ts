@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { RefreshRequestResult } from '../refresh/types'
 
 type RefreshManagerModule = typeof import('../RefreshManager')
 
@@ -18,19 +19,34 @@ const storage = (() => {
   }
 })()
 
+const successResult = (overrides: Partial<RefreshRequestResult> = {}): RefreshRequestResult => ({
+  kind: 'full',
+  source: 'manual',
+  success: true,
+  skipped: false,
+  busy: false,
+  duration: 12,
+  executedTasks: ['dataLoader'],
+  errors: {},
+  ...overrides,
+})
+
 async function loadRefreshManager(options: {
-  manualRefresh?: () => Promise<boolean>
+  executeRequest?: (request: any) => Promise<RefreshRequestResult>
+  coordinatorRefreshing?: boolean
   isTradingTime?: () => boolean
-} = {}): Promise<RefreshManagerModule & { coordinatorManualRefresh: ReturnType<typeof vi.fn> }> {
+} = {}): Promise<RefreshManagerModule & { coordinatorExecuteRequest: ReturnType<typeof vi.fn> }> {
   vi.resetModules()
 
-  const manualRefresh = vi.fn(options.manualRefresh || (() => Promise.resolve(true)))
+  const executeRequest = vi.fn(
+    options.executeRequest || ((request: any) => Promise.resolve(successResult({ source: request.source }))),
+  )
   const isTradingTime = vi.fn(options.isTradingTime || (() => true))
 
   vi.doMock('../RefreshCoordinator', () => ({
     refreshCoordinator: {
-      getStatus: vi.fn(() => ({ isRefreshing: false })),
-      manualRefresh,
+      getStatus: vi.fn(() => ({ isRefreshing: Boolean(options.coordinatorRefreshing) })),
+      executeRequest,
     },
   }))
 
@@ -45,7 +61,7 @@ async function loadRefreshManager(options: {
   }))
 
   const module = await import('../RefreshManager')
-  return { ...module, coordinatorManualRefresh: manualRefresh }
+  return { ...module, coordinatorExecuteRequest: executeRequest }
 }
 
 describe('RefreshManager Phase 0 behavior', () => {
@@ -66,7 +82,7 @@ describe('RefreshManager Phase 0 behavior', () => {
 
   it('resets refreshing state after manual refresh succeeds', async () => {
     const { RefreshManager } = await loadRefreshManager({
-      manualRefresh: () => Promise.resolve(true),
+      executeRequest: () => Promise.resolve(successResult()),
     })
 
     await RefreshManager.init()
@@ -78,7 +94,7 @@ describe('RefreshManager Phase 0 behavior', () => {
 
   it('resets refreshing state after manual refresh fails', async () => {
     const { RefreshManager } = await loadRefreshManager({
-      manualRefresh: () => Promise.resolve(false),
+      executeRequest: () => Promise.resolve(successResult({ success: false })),
     })
 
     await RefreshManager.init()
@@ -95,7 +111,7 @@ describe('RefreshManager Phase 0 behavior', () => {
     })
 
     const { RefreshManager } = await loadRefreshManager({
-      manualRefresh: () => firstRefresh,
+      executeRequest: () => firstRefresh.then((success) => successResult({ success })),
     })
 
     await RefreshManager.init()
@@ -110,15 +126,127 @@ describe('RefreshManager Phase 0 behavior', () => {
   })
 
   it('does not call the coordinator when manual refresh is disabled', async () => {
-    const { RefreshManager, coordinatorManualRefresh } = await loadRefreshManager()
+    const { RefreshManager, coordinatorExecuteRequest } = await loadRefreshManager()
 
     await RefreshManager.init()
     RefreshManager.toggleAllowManualRefresh(false)
 
     await expect(RefreshManager.manualRefresh('full')).resolves.toBe(false)
 
-    expect(coordinatorManualRefresh).not.toHaveBeenCalled()
+    expect(coordinatorExecuteRequest).not.toHaveBeenCalled()
     expect(RefreshManager.getStatus().isRefreshing).toBe(false)
+  })
+
+  it('returns a structured request result from the unified refresh entry', async () => {
+    const { RefreshManager, coordinatorExecuteRequest } = await loadRefreshManager()
+
+    await RefreshManager.init()
+
+    await expect(
+      RefreshManager.requestRefresh({
+        kind: 'full',
+        source: 'app',
+        trigger: 'manual',
+        force: true,
+      }),
+    ).resolves.toMatchObject({
+      kind: 'full',
+      source: 'app',
+      success: true,
+      skipped: false,
+      busy: false,
+      executedTasks: ['dataLoader'],
+      errors: {},
+    })
+
+    expect(coordinatorExecuteRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: 'full',
+        source: 'app',
+        trigger: 'manual',
+        force: true,
+      }),
+    )
+    expect(RefreshManager.getStatus().isRefreshing).toBe(false)
+  })
+
+  it('routes legacy manual refresh events through the unified manager entry', async () => {
+    const { RefreshManager, coordinatorExecuteRequest } = await loadRefreshManager()
+    const { EventManager } = await import('../../utils/eventManager')
+    const { AppEvents } = await import('../../types')
+
+    await RefreshManager.init()
+
+    EventManager.emit(AppEvents.REFRESH.MANUAL_REQUESTED, {
+      source: 'data-freshness',
+      force: true,
+    })
+    await Promise.resolve()
+
+    expect(coordinatorExecuteRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: 'full',
+        source: 'data-freshness',
+        trigger: 'manual',
+        force: true,
+      }),
+    )
+  })
+
+  it('reports busy without invoking the coordinator when a refresh is already running', async () => {
+    let resolveFirst!: (value: RefreshRequestResult) => void
+    const firstRefresh = new Promise<RefreshRequestResult>((resolve) => {
+      resolveFirst = resolve
+    })
+
+    const { RefreshManager, coordinatorExecuteRequest } = await loadRefreshManager({
+      executeRequest: () => firstRefresh,
+    })
+
+    await RefreshManager.init()
+
+    const first = RefreshManager.requestRefresh({ kind: 'full', source: 'app', trigger: 'manual' })
+    await expect(
+      RefreshManager.requestRefresh({ kind: 'full', source: 'data-freshness', trigger: 'manual' }),
+    ).resolves.toMatchObject({
+      success: false,
+      skipped: false,
+      busy: true,
+      executedTasks: [],
+    })
+
+    resolveFirst(successResult({ source: 'app' }))
+    await first
+
+    expect(coordinatorExecuteRequest).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not count coordinator-skipped requests as failed refreshes', async () => {
+    const { RefreshManager } = await loadRefreshManager({
+      executeRequest: (request: any) =>
+        Promise.resolve(
+          successResult({
+            source: request.source,
+            success: false,
+            skipped: true,
+            duration: 0,
+            executedTasks: [],
+            reason: 'request-throttled',
+          }),
+        ),
+    })
+
+    await RefreshManager.init()
+
+    await expect(
+      RefreshManager.requestRefresh({ kind: 'full', source: 'timer', trigger: 'timer', force: true }),
+    ).resolves.toMatchObject({
+      success: false,
+      skipped: true,
+      busy: false,
+    })
+
+    expect(RefreshManager.getStats().failedRefreshes).toBe(0)
   })
 
   it('keeps the trading checker alive after pausing outside trading time', async () => {

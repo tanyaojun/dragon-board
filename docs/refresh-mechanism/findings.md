@@ -69,7 +69,7 @@
 | 刷新机制范围很大，单线程分析容易遗漏 | 使用 3 个只读子 agent 分别分析核心文件、全局 timer、业务耦合，并交叉核对。 |
 | planning-with-files 默认建议根目录产物，但项目规则禁止根目录过程文件 | 直接将 `task_plan.md`、`findings.md`、`progress.md` 放入 `docs/refresh-mechanism/`。 |
 | Phase 0 全量 `pnpm test` 未全绿 | 失败集中在 `src/services/snapshot/__tests__/runtime.test.ts`，单独运行同一用例也失败，判断为独立快照测试问题，不混入刷新止血修复。 |
-| `DataFreshness.vue` 仍直接 emit `AppEvents.REFRESH.MANUAL_REQUESTED` | 保持为 Phase 1 统一入口范围，Phase 0 只处理 `App.vue` 和 `SettingsPanel.vue` 两个计划内入口。 |
+| `DataFreshness.vue` 仍直接 emit `AppEvents.REFRESH.MANUAL_REQUESTED` | Phase 1 已改为直接调用 `RefreshManager.requestRefresh({ source: 'data-freshness', trigger: 'manual' })`。 |
 | Phase 2 实现前 registry/scheduler 测试导入失败 | 符合 TDD 红灯预期；新增 `src/services/refresh/RefreshTaskRegistry.ts` 和 `src/services/refresh/RefreshScheduler.ts` 后相关测试通过。 |
 
 ## Phase 2 Task Mapping
@@ -114,6 +114,19 @@ Phase 3 第一批只迁移 timer 创建和状态记录，不提前改变旧 time
 | `ranktrend-signal` | 已接入 `DataLoaderFacade.refreshRankTrendSignals()`，手工/定时信号刷新等待串行。 |
 | `snapshot-write` | 已接入 `SnapshotRuntime.saveSnapshotRecord()`，替换本地写入队列，保留原重复槽位返回 `false` 语义。 |
 | `DataLayer.subscribe` + `AppEvents.DATA.MERGED` | UI store 和 `StockStore` 都按 DataLayer 股票版本去重；其它面板级订阅仍按自身渲染职责保留。 |
+
+## Phase 1 Unified Entry Mapping
+
+| Entry / Contract | Phase 1 State |
+| --- | --- |
+| `RefreshManager.requestRefresh()` | 全局全量刷新唯一入口，规范化 `kind/source/trigger/force`，负责手动权限、交易时间、busy、统计和异常兜底。 |
+| `RefreshCoordinator.executeRequest()` | 执行器，只接收规范化请求，返回 `RefreshRequestResult`；包含 `success/skipped/busy/duration/executedTasks/errors`。 |
+| `RefreshManager.refresh()` / `manualRefresh()` | 保留兼容 API，但内部调用 `requestRefresh()`；`manualRefresh()` 仍返回 boolean 供旧调用方使用。 |
+| `App.vue` 主刷新按钮 | 已改为 `RefreshManager.requestRefresh({ source: 'app', trigger: 'manual', force: true })`。 |
+| `SettingsPanel.vue` 全量刷新 | 已改为 `RefreshManager.requestRefresh({ source: 'settings-panel', trigger: 'manual', force: true })`。 |
+| `DataFreshness.vue` 手动刷新 | 已改为 `RefreshManager.requestRefresh({ source: 'data-freshness', trigger: 'manual', force: true })`。 |
+| 旧刷新事件 | `FULL_REQUESTED` / `MANUAL_REQUESTED` 保留兼容；浏览器中存在 `RefreshManager` 时由 Manager 消费，Coordinator 不再直接执行事件，避免重复入口。 |
+| 失败统计 | `busy` 和 `skipped` 不计入 `failedRefreshes`；只有真实执行失败计失败次数。 |
 
 ## Resources
 

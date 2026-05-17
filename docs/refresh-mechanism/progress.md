@@ -72,8 +72,21 @@
 - 验证：刷新相关 12 个测试文件 61 个测试通过；`vue-tsc --noEmit -p tsconfig.app.json --pretty false` 通过；`git diff --check` 通过。
 - 已知边界：`src/services/snapshot/__tests__/runtime.test.ts` 全量仍有 1 个既有失败，失败点是正式快照本地投影写入期望；本次新增 `snapshot-write` 并发测试已单独通过。
 
+## Phase 1 Completion
+
+- 新增统一全量刷新请求合同：`RefreshRequest`、`RefreshRequestResult`，结果显式包含 `success`、`skipped`、`busy`、`duration`、`executedTasks`、`errors` 和 `reason`。
+- `RefreshManager.requestRefresh()` 成为全局全量刷新唯一入口，负责手动权限、交易时间、运行中状态、统计更新和异常兜底。
+- `RefreshManager.refresh()`、`manualRefresh()` 和全量定时器均改为调用 `requestRefresh()`；`manualRefresh()` 保留为兼容布尔返回 API。
+- `RefreshCoordinator.executeRequest()` 成为规范化请求执行器，返回结构化结果；原 `manualRefresh()` 保留为兼容包装。
+- 旧 `FULL_REQUESTED` / `MANUAL_REQUESTED` 事件仍保留兼容，但由 `RefreshManager` 转入 `requestRefresh()`；浏览器中存在 `RefreshManager` 时，`RefreshCoordinator` 不再直接执行旧事件，避免第二条入口。
+- `App.vue` 主刷新按钮、`SettingsPanel.vue` 全量刷新按钮、`DataFreshness.vue` 手动刷新按钮均改为直接调用 `RefreshManager.requestRefresh()`，并带明确 `source`。
+- `skipped` / `busy` 不再计入失败刷新次数，避免冷却或并发拒绝污染失败统计。
+- 根据 review 修复旧事件兼容边界：Manager 未挂载时 Coordinator 不再直执行旧事件；Manager 已挂载但尚未初始化时旧事件转交 `requestRefresh()`，避免初始化窗口期丢事件。
+- `DataFreshness.vue` 对 `busy` / `skipped` 结果增加明确 toast，避免先提示“正在刷新”但实际跳过后无反馈。
+- 验证：`pnpm exec vitest run src/services/__tests__/RefreshManager.test.ts src/services/__tests__/RefreshCoordinator.test.ts src/services/refresh/__tests__/RefreshTaskRegistry.test.ts src/services/refresh/__tests__/RefreshScheduler.test.ts` 通过，29 tests passed；`pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false` 通过；`git diff --check --cached` 通过。
+
 ## Next Step
 
-- 回到 Phase 1：统一全量刷新入口，优先处理 `DataFreshness.vue` 仍绕过 `RefreshManager` 的手动刷新入口。
+- 继续 Phase 3 剩余项：WebSocket stale monitor 与快照槽位/备份任务仍保持独立运行流，只登记状态；下一步应决定是否先做 Phase 5 页面可见性/配置策略，再迁移这些实时/存储维护任务。
 - 后续不要直接启用 `RefreshScheduler.startAll()`；仍应逐个迁移任务并保留回归测试。
 - 另行决定是否单独修复 `snapshot/runtime.test.ts` 的既有失败。

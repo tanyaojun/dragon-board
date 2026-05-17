@@ -10,6 +10,7 @@ import type { RefreshStrategy as ConfigRefreshStrategy, RefreshConfig } from '..
 import { REFRESH_STRATEGY_CONFIGS, REFRESH_STORAGE_KEY } from '../types/config'
 import { refreshCoordinator } from './RefreshCoordinator'
 import { refreshTaskRegistry } from './refresh/RefreshTaskRuntime'
+import type { RefreshRequest, RefreshRequestResult } from './refresh/types'
 
 export type RefreshStrategy = 'conservative' | 'balanced' | 'aggressive'
 
@@ -84,6 +85,7 @@ class RefreshManagerService {
   private unsubscribeFns: (() => void)[] = []
   private destroyed = false
   private isTradingTimeCache = false
+  private refreshEventsBound = false
 
   constructor() {
     this.currentConfig = { ...REFRESH_STRATEGY_CONFIGS.balanced }
@@ -208,30 +210,67 @@ class RefreshManagerService {
     type: 'full' | 'manual' = 'full',
     options: { force?: boolean; retryCount?: number } = {},
   ): Promise<boolean> {
-    if (this.destroyed) return false
+    const result = await this.requestRefresh({
+      kind: 'full',
+      source: type === 'manual' ? 'manual' : 'timer',
+      trigger: type === 'manual' ? 'manual' : 'timer',
+      force: Boolean(options.force),
+      retryCount: options.retryCount,
+    })
+    return result.success
+  }
 
-    const isManual = type === 'manual'
-
-    if (!isManual && !options.force) {
-      if (!this.state.isRunning) return false
-      if (this.state.isRefreshing) return false
-      if (this.state.tradingTimeOnly && !isTradingTime()) return false
+  async requestRefresh(request: RefreshRequest): Promise<RefreshRequestResult> {
+    const normalizedRequest: RefreshRequest = {
+      kind: 'full',
+      source: request.source || 'unknown',
+      trigger: request.trigger || 'external',
+      force: Boolean(request.force),
+      retryCount: request.retryCount,
+      timestamp: request.timestamp || Date.now(),
     }
 
-    // 更新统计
-    if (type === 'full') {
-      this.state.stats.fullRefreshes++
-      this.state.stats.lastFullRefreshTime = Date.now()
+    const skipped = (reason: string): RefreshRequestResult => ({
+      kind: normalizedRequest.kind,
+      source: normalizedRequest.source,
+      success: false,
+      skipped: true,
+      busy: false,
+      duration: 0,
+      executedTasks: [],
+      errors: {},
+      reason,
+      timestamp: Date.now(),
+    })
+
+    const busy = (reason: string): RefreshRequestResult => ({
+      kind: normalizedRequest.kind,
+      source: normalizedRequest.source,
+      success: false,
+      skipped: false,
+      busy: true,
+      duration: 0,
+      executedTasks: [],
+      errors: {},
+      reason,
+      timestamp: Date.now(),
+    })
+
+    if (this.destroyed) return skipped('manager-destroyed')
+
+    const isManual = normalizedRequest.trigger === 'manual'
+    if (isManual && !this.state.allowManualRefresh) return skipped('manual-disabled')
+    if (!isManual && !normalizedRequest.force) {
+      if (!this.state.isRunning) return skipped('manager-stopped')
+      if (this.state.tradingTimeOnly && !isTradingTime()) return skipped('outside-trading-time')
     }
 
-    if (isManual) {
-      this.state.stats.manualRefreshes++
-    }
+    if (this.state.isRefreshing) return busy('manager-busy')
+    if (refreshCoordinator.getStatus().isRefreshing) return busy('coordinator-busy')
 
-    this.state.stats.lastRefreshTime = Date.now()
+    const startTime = Date.now()
     this.state.isRefreshing = true
 
-    // 设置一个定时器，30秒后自动重置刷新状态
     const timeoutId = setTimeout(() => {
       if (this.state.isRefreshing) {
         console.warn('[RefreshManager] 刷新超时，强制重置刷新状态')
@@ -240,37 +279,43 @@ class RefreshManagerService {
     }, 30000)
 
     try {
-      EventManager.emit(AppEvents.REFRESH.FULL_REQUESTED, {
+      const result = await refreshCoordinator.executeRequest(normalizedRequest)
+      const finishedAt = Date.now()
+
+      if (isManual) {
+        this.state.stats.manualRefreshes++
+      } else {
+        this.state.stats.fullRefreshes++
+      }
+      this.state.stats.lastRefreshTime = finishedAt
+      this.state.stats.lastFullRefreshTime = finishedAt
+      if (!result.success && !result.skipped && !result.busy) {
+        this.state.stats.failedRefreshes++
+      }
+
+      return {
+        ...result,
+        duration: result.duration || finishedAt - startTime,
+      }
+    } catch (error) {
+      this.state.stats.failedRefreshes++
+      const message = error instanceof Error ? error.message : String(error)
+      const result: RefreshRequestResult = {
+        kind: normalizedRequest.kind,
+        source: normalizedRequest.source,
+        success: false,
+        skipped: false,
+        busy: false,
+        duration: Date.now() - startTime,
+        executedTasks: [],
+        errors: { refresh: message },
         timestamp: Date.now(),
-        config: this.getStatus(),
-        force: options.force,
-      })
+      }
 
-      // 等待刷新完成
-      const result = await new Promise<boolean>((resolve) => {
-        const onComplete = (data: any) => {
-          if (data.type === 'full') {
-            EventManager.off(AppEvents.REFRESH.COMPLETE, onComplete)
-            resolve(data.success)
-          }
-        }
-
-        const onFailed = (data: any) => {
-          if (data.type === 'full') {
-            EventManager.off(AppEvents.REFRESH.FAILED, onFailed)
-            resolve(false)
-          }
-        }
-
-        EventManager.on(AppEvents.REFRESH.COMPLETE, onComplete)
-        EventManager.on(AppEvents.REFRESH.FAILED, onFailed)
-
-        // 超时保护
-        setTimeout(() => {
-          EventManager.off(AppEvents.REFRESH.COMPLETE, onComplete)
-          EventManager.off(AppEvents.REFRESH.FAILED, onFailed)
-          resolve(false)
-        }, 25000)
+      EventManager.emit(AppEvents.REFRESH.FAILED, {
+        ...result,
+        type: result.kind,
+        error: message,
       })
 
       return result
@@ -296,40 +341,31 @@ class RefreshManagerService {
       return false
     }
 
-    if (this.state.isRefreshing) {
-      console.warn('[RefreshManager] 正在刷新中，请稍后')
-      EventManager.emit(AppEvents.UI.TOAST, {
-        message: '⏳ 正在刷新中，请稍后',
-        type: 'info',
-        duration: 1500,
-      })
-      return false
-    }
-
-    if (refreshCoordinator.getStatus().isRefreshing) {
-      console.warn('[RefreshManager] 协调器正在刷新中')
-      EventManager.emit(AppEvents.UI.TOAST, {
-        message: '⏳ 刷新进行中',
-        type: 'info',
-        duration: 1500,
-      })
-      return false
-    }
-
-    this.state.isRefreshing = true
-
     try {
-      const result = await refreshCoordinator.manualRefresh()
+      const result = await this.requestRefresh({
+        kind: 'full',
+        source: 'manual',
+        trigger: 'manual',
+        force: true,
+      })
 
-      if (result) {
-        this.state.stats.manualRefreshes++
-        this.state.stats.lastRefreshTime = Date.now()
-        this.state.stats.lastFullRefreshTime = Date.now()
-
+      if (result.success) {
         EventManager.emit(AppEvents.UI.TOAST, {
           message: '✅ 数据已更新',
           type: 'success',
           duration: 2000,
+        })
+      } else if (result.busy) {
+        EventManager.emit(AppEvents.UI.TOAST, {
+          message: '⏳ 刷新进行中',
+          type: 'info',
+          duration: 1500,
+        })
+      } else if (result.skipped) {
+        EventManager.emit(AppEvents.UI.TOAST, {
+          message: '刷新已跳过',
+          type: 'info',
+          duration: 1500,
         })
       } else {
         EventManager.emit(AppEvents.UI.TOAST, {
@@ -339,7 +375,7 @@ class RefreshManagerService {
         })
       }
 
-      return result
+      return result.success
     } catch (error) {
       console.error('[RefreshManager] 手动刷新异常:', error)
 
@@ -348,11 +384,9 @@ class RefreshManagerService {
         type: 'error',
         duration: 3000,
       })
-
-      return false
-    } finally {
-      this.state.isRefreshing = false
     }
+
+    return false
   }
 
   // ========== 定时器管理 ==========
@@ -362,7 +396,12 @@ class RefreshManagerService {
 
     this.timers.full = setInterval(() => {
       if (this.shouldAutoRefresh('full')) {
-        this.refresh('full')
+        void this.requestRefresh({
+          kind: 'full',
+          source: 'timer',
+          trigger: 'timer',
+          force: false,
+        })
       }
     }, this.currentConfig.fullRefreshInterval)
   }
@@ -476,6 +515,36 @@ class RefreshManagerService {
 
   // ========== 事件监听 ==========
   private setupListeners(): void {
+    if (!this.refreshEventsBound) {
+      this.refreshEventsBound = true
+
+      const unsubFull = EventManager.on(AppEvents.REFRESH.FULL_REQUESTED, (data: any) => {
+        if (this.destroyed) return
+        void this.requestRefresh({
+          kind: 'full',
+          source: data?.source || 'event',
+          trigger: data?.trigger || 'event',
+          force: Boolean(data?.force),
+          retryCount: data?.retryCount,
+          timestamp: data?.timestamp,
+        })
+      })
+      this.unsubscribeFns.push(unsubFull)
+
+      const unsubManual = EventManager.on(AppEvents.REFRESH.MANUAL_REQUESTED, (data: any) => {
+        if (this.destroyed) return
+        void this.requestRefresh({
+          kind: 'full',
+          source: data?.source || 'manual',
+          trigger: 'manual',
+          force: data?.force !== false,
+          retryCount: data?.retryCount,
+          timestamp: data?.timestamp,
+        })
+      })
+      this.unsubscribeFns.push(unsubManual)
+    }
+
     // 监听数据合并完成，更新统计
     const unsub1 = EventManager.on(AppEvents.DATA.MERGED, (data: any) => {
       if (this.destroyed) return
@@ -622,6 +691,7 @@ class RefreshManagerService {
       }
     })
     this.unsubscribeFns = []
+    this.refreshEventsBound = false
 
     this.clearAllTimers()
 

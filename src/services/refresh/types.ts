@@ -55,3 +55,29 @@ export interface RefreshTaskState extends Required<Omit<RefreshTaskDefinition, '
 }
 
 export type RefreshTaskRunner = () => void | Promise<void>
+
+export type RefreshRequestKind = 'full'
+
+export type RefreshRequestTrigger = 'manual' | 'timer' | 'event' | 'external'
+
+export interface RefreshRequest {
+  kind: RefreshRequestKind
+  source: string
+  trigger?: RefreshRequestTrigger
+  force?: boolean
+  retryCount?: number
+  timestamp?: number
+}
+
+export interface RefreshRequestResult {
+  kind: RefreshRequestKind
+  source: string
+  success: boolean
+  skipped: boolean
+  busy: boolean
+  duration: number
+  executedTasks: string[]
+  errors: Record<string, string>
+  reason?: string
+  timestamp?: number
+}

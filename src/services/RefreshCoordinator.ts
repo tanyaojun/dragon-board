@@ -3,6 +3,7 @@
 
 import { EventManager } from '../utils/eventManager'
 import { AppEvents } from '../types'
+import type { RefreshRequest, RefreshRequestResult } from './refresh/types'
 
 interface ServiceDefinition {
   name: string
@@ -17,9 +18,8 @@ interface ServiceEntry extends ServiceDefinition {
 }
 
 interface RefreshContext {
-  type: 'full'
+  request: RefreshRequest
   startTime: number
-  requestData: any
   results: Map<string, any>
   errors: Map<string, Error>
 }
@@ -83,12 +83,30 @@ class RefreshCoordinator {
 
   private setupListeners(): void {
     EventManager.on(AppEvents.REFRESH.FULL_REQUESTED, async (data: any) => {
-      await this.executeRefresh('full', { source: 'event', ...(data || {}) })
+      await this.forwardLegacyRequest({ source: 'event', trigger: 'event', force: false, ...(data || {}) })
     })
 
     EventManager.on(AppEvents.REFRESH.MANUAL_REQUESTED, async (data: any) => {
-      await this.executeRefresh('full', { source: 'manual', ...(data || {}) })
+      await this.forwardLegacyRequest({ source: 'manual', trigger: 'manual', force: true, ...(data || {}) })
     })
+  }
+
+  private async forwardLegacyRequest(data: any): Promise<void> {
+    const manager = typeof window !== 'undefined' ? (window as any).RefreshManager : null
+    if (manager?.requestRefresh) {
+      if (!manager.getStatus?.().initialized) {
+        await manager.requestRefresh({
+          kind: 'full',
+          source: data?.source || 'event',
+          trigger: data?.trigger || 'event',
+          force: Boolean(data?.force),
+          timestamp: data?.timestamp || Date.now(),
+        })
+      }
+      return
+    }
+
+    console.warn('[RefreshCoordinator] 忽略旧刷新事件：RefreshManager 未就绪')
   }
 
   private scheduleRegistration(): void {
@@ -219,8 +237,8 @@ class RefreshCoordinator {
     })
   }
 
-  private shouldThrottle(type: 'full', requestData: any): boolean {
-    const requestKey = `${type}:${requestData?.source || 'unknown'}`
+  private shouldThrottle(request: RefreshRequest): boolean {
+    const requestKey = `${request.kind}:${request.source || 'unknown'}`
     const now = Date.now()
     const last = this.pendingRequests.get(requestKey) || 0
 
@@ -232,27 +250,58 @@ class RefreshCoordinator {
     return false
   }
 
-  private async executeRefresh(type: 'full', requestData: any = {}): Promise<boolean> {
+  async executeRequest(request: RefreshRequest): Promise<RefreshRequestResult> {
+    const normalizedRequest: RefreshRequest = {
+      kind: 'full',
+      source: request.source || 'unknown',
+      trigger: request.trigger || 'external',
+      force: Boolean(request.force),
+      retryCount: request.retryCount,
+      timestamp: request.timestamp || Date.now(),
+    }
+    const startTime = Date.now()
+
     if (this.isRefreshing) {
-      return false
+      return {
+        kind: normalizedRequest.kind,
+        source: normalizedRequest.source,
+        success: false,
+        skipped: false,
+        busy: true,
+        duration: 0,
+        executedTasks: [],
+        errors: {},
+        reason: 'refresh-busy',
+        timestamp: startTime,
+      }
     }
 
-    if (this.shouldThrottle(type, requestData)) {
-      return false
+    if (this.shouldThrottle(normalizedRequest)) {
+      return {
+        kind: normalizedRequest.kind,
+        source: normalizedRequest.source,
+        success: false,
+        skipped: true,
+        busy: false,
+        duration: 0,
+        executedTasks: [],
+        errors: {},
+        reason: 'request-throttled',
+        timestamp: startTime,
+      }
     }
 
     this.isRefreshing = true
     this.currentContext = {
-      type,
-      startTime: Date.now(),
-      requestData,
+      request: normalizedRequest,
+      startTime,
       results: new Map(),
       errors: new Map(),
     }
 
     EventManager.emit(AppEvents.REFRESH.STARTED, {
-      type,
-      requestData,
+      type: normalizedRequest.kind,
+      requestData: normalizedRequest,
       timestamp: this.currentContext.startTime,
     })
 
@@ -265,31 +314,58 @@ class RefreshCoordinator {
       this.forceRender()
 
       const payload = {
+        kind: normalizedRequest.kind,
+        source: normalizedRequest.source,
         success: this.currentContext.errors.size === 0,
-        type,
+        skipped: false,
+        busy: false,
+        type: normalizedRequest.kind,
         duration: Date.now() - this.currentContext.startTime,
+        executedTasks: Array.from(this.currentContext.results.keys()),
         results: Object.fromEntries(this.currentContext.results),
         errors: Object.fromEntries(
           Array.from(this.currentContext.errors.entries()).map(([key, error]) => [key, error.message]),
         ),
+        timestamp: Date.now(),
       }
 
       EventManager.emit(AppEvents.REFRESH.FULL_COMPLETE, payload)
       EventManager.emit(AppEvents.REFRESH.COMPLETE, payload)
-      return payload.success
+      return payload
     } catch (error) {
       const payload = {
+        kind: normalizedRequest.kind,
+        source: normalizedRequest.source,
         success: false,
-        type,
+        skipped: false,
+        busy: false,
+        type: normalizedRequest.kind,
+        duration: Date.now() - startTime,
+        executedTasks: this.currentContext ? Array.from(this.currentContext.results.keys()) : [],
+        errors: {
+          refresh: error instanceof Error ? error.message : String(error),
+        },
         error: error instanceof Error ? error.message : String(error),
         timestamp: Date.now(),
       }
       EventManager.emit(AppEvents.REFRESH.FAILED, payload)
-      return false
+      return payload
     } finally {
       this.isRefreshing = false
       this.currentContext = null
     }
+  }
+
+  private async executeRefresh(type: 'full', requestData: any = {}): Promise<boolean> {
+    const result = await this.executeRequest({
+      kind: type,
+      source: requestData?.source || 'unknown',
+      trigger: requestData?.trigger || 'event',
+      force: Boolean(requestData?.force),
+      retryCount: requestData?.retryCount,
+      timestamp: requestData?.timestamp,
+    })
+    return result.success
   }
 
   async manualRefresh(): Promise<boolean> {
@@ -304,7 +380,7 @@ class RefreshCoordinator {
       isRefreshing: this.isRefreshing,
       currentContext: this.currentContext
         ? {
-            type: this.currentContext.type,
+            type: this.currentContext.request.kind,
             startTime: this.currentContext.startTime,
             elapsed: Date.now() - this.currentContext.startTime,
             successCount: this.currentContext.results.size,

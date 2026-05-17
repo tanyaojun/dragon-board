@@ -399,10 +399,17 @@ function setFullInterval(e: Event) {
 }
 
 async function manualRefresh(type: 'full') {
-  const success = await RefreshManager.manualRefresh(type)
-  if (success) {
+  const result = await RefreshManager.requestRefresh({
+    kind: type,
+    source: 'settings-panel',
+    trigger: 'manual',
+    force: true,
+  })
+  if (result.success) {
     showToast(`🔄 开始全量刷新`, 'info')
     setTimeout(loadStatus, 1000)
+  } else if (result.busy) {
+    showToast(`⏳ 刷新进行中`, 'info')
   } else {
     showToast(`❌ 刷新失败`, 'error')
   }
