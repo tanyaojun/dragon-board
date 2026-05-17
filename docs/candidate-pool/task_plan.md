@@ -6,7 +6,7 @@
 
 ## Current Phase
 
-Phase 8
+Phase 8 complete
 
 ## Phases
 
@@ -69,10 +69,10 @@ Phase 8
 
 ### Phase 8: 视觉与交互验证
 
-- [ ] 启动前端工作台，人工检查候选池弹层在桌面宽屏和较窄视口下的可读性
-- [ ] 验证右键入池、查看候选、编辑假设、写回分析、保存复盘的端到端交互
-- [ ] 根据实际视觉问题收敛布局密度、按钮层级和滚动区域
-- **Status:** pending
+- [x] 启动前端工作台，检查候选池弹层在桌面宽屏和较窄视口下的可读性
+- [x] 验证右键入池、查看候选、编辑假设、写回分析、保存复盘的端到端交互
+- [x] 根据实际视觉问题复核布局密度、按钮层级和滚动区域
+- **Status:** complete
 
 ## Key Questions
 
@@ -100,9 +100,11 @@ Phase 8
 
 | Error | Attempt | Resolution |
 |-------|---------|------------|
-| 无 | 1 | 无 |
+| Phase 8 Playwright 诊断输出被 GBK 编码卡住 | 1 | 改用 `PYTHONIOENCODING=utf-8` 并减少页面文本直出后继续验证 |
+| Phase 8 临时验证数据导致 `601991` 已复盘记录不再算开放候选 | 1 | 清理临时 journal 记录后，用真实右键新增链路重新验证 |
 
 ## Notes
 
 - 本目录是业务专题文档目录，避免在根目录新增过程文件。
-- 当前工作区存在刷新机制相关未提交改动：`src/App.vue`、`src/components/panels/SettingsPanel.vue`、`src/services/RefreshManager.ts`、`docs/refresh-mechanism/`、`src/services/__tests__/RefreshManager.test.ts`、`src/services/refresh/`。候选池方案不修改这些文件。
+- Phase 8 验证截图保存在本机临时目录 `C:\Users\Think\AppData\Local\Temp\dragon-candidate-phase8\`，不作为仓库产物提交。
+- 窄屏 900px 下候选池浮层自身无横向溢出；页面级 `documentScrollWidth` 大于视口来自底层行情宽表的既有横向滚动。

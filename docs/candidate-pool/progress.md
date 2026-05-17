@@ -119,6 +119,20 @@
   - `docs/candidate-pool/task_plan.md`
   - `docs/candidate-pool/progress.md`
 
+### Phase 8: 视觉与端到端交互验证
+
+- **Status:** complete
+- Actions taken:
+  - 使用本机已运行的 Dragon Board 前端 `http://127.0.0.1:5173` 和 QuantBoard 后端 `http://127.0.0.1:8000` 进行 Playwright 验证。
+  - 验证主页面加载、行情列表右键菜单、右键“加入候选池”、候选池自动打开并选中新候选。
+  - 验证候选池详情里的“保存假设”“写回当前分析”“保存复盘”三条写入链路均返回 journal API `200`。
+  - 验证 `reviewOutcome=pending` 保存后，候选状态仍保持开放状态，没有再误改为 `reviewed`。
+  - 验证桌面宽屏和 900px 窄屏候选池弹层可读、可编辑，候选池自身无横向溢出。
+  - 清理 Phase 8 过程中创建的临时 journal 记录，避免污染候选池样本。
+- Files created/modified:
+  - `docs/candidate-pool/task_plan.md`
+  - `docs/candidate-pool/progress.md`
+
 ## Test Results
 
 | Test | Input | Expected | Actual | Status |
@@ -143,6 +157,12 @@
 | Phase 7 Review 修复候选池完整定向测试 | `pnpm exec vitest run src/services/candidate/__tests__/CandidateAnalysisService.test.ts src/services/candidate/__tests__/CandidateJournalService.test.ts src/components/common/__tests__/DataTable.test.ts src/components/panels/__tests__/CandidatePoolPanel.test.ts --reporter=dot` | 17 tests passed | 17 tests passed | 通过 |
 | Phase 7 Review 修复类型检查 | `pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false` | exit 0 | exit 0 | 通过 |
 | Phase 7 Review 修复前端构建 | `pnpm build` | exit 0 | exit 0，存在既有 ThemeFacade 动静态混用 warning | 通过 |
+| Phase 8 浏览器冒烟 | Playwright 打开 `http://127.0.0.1:5173` | 首页非空、无框架错误覆盖 | 行情总览和行情行正常渲染，截图已保存至临时目录 | 通过 |
+| Phase 8 候选池桌面视觉 | Playwright 1366x768 打开候选池 | 弹层可读、列表和详情可操作 | 候选池覆盖层、统计卡片、详情、假设编辑和复盘区均可见 | 通过 |
+| Phase 8 右键端到端 | 右键行情行 `601991` 并点击“加入候选池” | 创建候选、打开面板、选中新记录 | journal `POST` 成功，`candidate-pool:open` 事件携带 `candidateId`，面板选中新候选 | 通过 |
+| Phase 8 编辑与复盘 | 保存假设、写回当前分析、保存 pending 复盘 | 三次 `PUT` 成功，pending 不推进 reviewed | journal 记录保持 `status=observe`、`reviewOutcome=pending`，备注持久化 | 通过 |
+| Phase 8 窄屏视觉 | Playwright 900x700 | 候选池自身无横向溢出，内容可读可编辑 | `panelScrollWidth=panelClientWidth=892`，当前活动候选数 1 | 通过 |
+| Phase 8 临时数据清理 | 删除 Playwright 创建的 journal 记录 | 测试样本不残留 | `DELETE /api/journal/entries/tj_ae476469f99b471f` 返回 deleted | 通过 |
 
 ## Error Log
 
@@ -157,13 +177,15 @@
 | 2026-05-17 | Phase 7 面板与服务缺少轻量编辑、写回分析和复盘保存合同 | 先补 RED 测试 | 新增候选服务更新 API，并在候选池详情页接入轻量表单 |
 | 2026-05-17 | 外部打开指定候选可能被候选池旧状态筛选挡住 | 先补 RED 测试 | `openCandidate` 在指定目标时切到“全部状态”并重载定位 |
 | 2026-05-17 | 保存 pending 复盘会误把候选标为 reviewed | 先补 RED 测试 | `saveCandidateReview` 仅在复盘结果非 pending 时提交 `status: reviewed` |
+| 2026-05-17 | Phase 8 诊断脚本直出页面文本被 PowerShell GBK 编码卡住 | 重新运行诊断 | 设置 `PYTHONIOENCODING=utf-8` 并输出结构化字段 |
+| 2026-05-17 | Phase 8 初次复测时 `601991` 存在临时已复盘记录，导致右键再次新增 | 检查 journal 后端数据 | 删除临时记录后重跑真实新增链路，确认新建、打开、编辑、复盘和清理均通过 |
 
 ## 5-Question Reboot Check
 
 | Question | Answer |
 |----------|--------|
-| Where am I? | 已完成候选池 Phase 7 交易假设编辑与复盘闭环 |
-| Where am I going? | 下一步可做桌面 UI 视觉验证和端到端交互打磨 |
+| Where am I? | 已完成候选池 Phase 8 视觉与端到端交互验证 |
+| Where am I going? | 下一步可进入候选池后续增强，或回到刷新机制工作流 |
 | What's the goal? | 将手工候选/交易假设升级为候选池工作台 |
 | What have I learned? | 见 `findings.md` |
-| What have I done? | 已实现右键入池、规则分析、候选池面板、状态推进、journal 标签入库契约、统计概览、当前重分析、已入池识别、候选详情定位、假设编辑、分析写回、复盘保存和基础复盘统计 |
+| What have I done? | 已实现并验证右键入池、规则分析、候选池面板、状态推进、journal 标签入库契约、统计概览、当前重分析、已入池识别、候选详情定位、假设编辑、分析写回、复盘保存、基础复盘统计和 Phase 8 端到端交互 |
