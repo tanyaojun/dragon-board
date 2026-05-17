@@ -21,6 +21,7 @@ describe('RefreshTaskRegistry', () => {
       'snapshot.sweep',
       'snapshot.backupSync',
       'websocket.staleCheck',
+      'hotStockEvent.monitor',
     ])
 
     expect(registry.getTask('dataLoader.quote')).toMatchObject({
@@ -38,28 +39,46 @@ describe('RefreshTaskRegistry', () => {
     expect(registry.getTask('snapshot.backupSync')?.intervalMs).toBe(300_000)
   })
 
-  it('keeps Phase 3 migrated timers compatible with their previous runtime policies', () => {
+  it('defines Phase 5 visibility policies for migrated and residual timers', () => {
     const registry = createRefreshTaskRegistry()
 
     expect(registry.getTask('dataLoader.quote')).toMatchObject({
       tradingTimeOnly: true,
-      runWhenHidden: true,
+      visibilityPolicy: 'slow',
+      hiddenIntervalMs: 120_000,
     })
     expect(registry.getTask('dataLoader.ranktrendSignal')).toMatchObject({
       tradingTimeOnly: false,
-      runWhenHidden: true,
+      visibilityPolicy: 'run',
     })
     expect(registry.getTask('theme.runtime')).toMatchObject({
       tradingTimeOnly: false,
-      runWhenHidden: true,
+      visibilityPolicy: 'pause',
     })
     expect(registry.getTask('dragon.breath')).toMatchObject({
       tradingTimeOnly: true,
-      runWhenHidden: true,
+      visibilityPolicy: 'pause',
     })
     expect(registry.getTask('alert.check')).toMatchObject({
       tradingTimeOnly: false,
-      runWhenHidden: true,
+      visibilityPolicy: 'pause',
+    })
+    expect(registry.getTask('snapshot.sweep')).toMatchObject({
+      tradingTimeOnly: true,
+      visibilityPolicy: 'run',
+    })
+    expect(registry.getTask('snapshot.backupSync')).toMatchObject({
+      tradingTimeOnly: true,
+      visibilityPolicy: 'run',
+    })
+    expect(registry.getTask('websocket.staleCheck')).toMatchObject({
+      tradingTimeOnly: false,
+      visibilityPolicy: 'slow',
+      hiddenIntervalMs: 5_000,
+    })
+    expect(registry.getTask('hotStockEvent.monitor')).toMatchObject({
+      tradingTimeOnly: false,
+      visibilityPolicy: 'pause',
     })
   })
 

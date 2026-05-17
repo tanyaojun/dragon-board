@@ -1,8 +1,9 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { webSocketService } from '../websocket'
 import { AppEvents } from '@/types'
 import { EventManager } from '@/utils/eventManager'
+import { refreshScheduler, refreshTaskRegistry } from '../refresh/RefreshTaskRuntime'
 
 function emitBridgeMessage(payload: Record<string, unknown>) {
   ;(webSocketService as any).handleMessage({
@@ -11,6 +12,12 @@ function emitBridgeMessage(payload: Record<string, unknown>) {
 }
 
 describe('webSocketService money flow patches', () => {
+  afterEach(() => {
+    refreshScheduler.stopTask('websocket.staleCheck')
+    refreshTaskRegistry.resetRuntimeState()
+    vi.useRealTimers()
+  })
+
   it('updates provider status from l2_status messages', () => {
     emitBridgeMessage({
       type: 'l2_status',
@@ -159,5 +166,36 @@ describe('webSocketService money flow patches', () => {
       unsubscribe()
       vi.clearAllMocks()
     }
+  })
+
+  it('records stale checks through the shared refresh scheduler', async () => {
+    vi.useFakeTimers()
+
+    ;(webSocketService as any).stopStaleMonitor()
+    ;(webSocketService as any).state = {
+      ...(webSocketService as any).state,
+      status: 'connected',
+      lastMessageTime: Date.now() - 20_000,
+      lastHeartbeatTime: null,
+      fallbackActive: false,
+      transport: 'ws',
+    }
+
+    ;(webSocketService as any).startStaleMonitor()
+    await vi.advanceTimersByTimeAsync(500)
+
+    expect(webSocketService.getStatus()).toMatchObject({
+      status: 'stale',
+      fallbackActive: true,
+      transport: 'http',
+    })
+    expect(refreshTaskRegistry.getTask('websocket.staleCheck')).toMatchObject({
+      running: false,
+      lastRunAt: expect.any(Number),
+      lastSuccessAt: expect.any(Number),
+      lastError: null,
+      successCount: 1,
+      source: 'scheduler',
+    })
   })
 })

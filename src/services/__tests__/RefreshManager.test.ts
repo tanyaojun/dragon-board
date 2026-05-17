@@ -268,6 +268,35 @@ describe('RefreshManager Phase 0 behavior', () => {
     expect(RefreshManager.getStatus().isRunning).toBe(true)
   })
 
+  it('starts automatic full refresh immediately when trading-time restriction is disabled outside trading time', async () => {
+    const { RefreshManager } = await loadRefreshManager({
+      isTradingTime: () => false,
+    })
+
+    await RefreshManager.init()
+    RefreshManager.toggleEnabled(true)
+
+    expect(RefreshManager.getStatus().isRunning).toBe(false)
+
+    RefreshManager.toggleTradingTimeOnly(false)
+
+    expect(RefreshManager.getStatus().isRunning).toBe(true)
+  })
+
+  it('stops automatic full refresh immediately when trading-time restriction is enabled outside trading time', async () => {
+    const { RefreshManager } = await loadRefreshManager({
+      isTradingTime: () => false,
+    })
+
+    await RefreshManager.init()
+    RefreshManager.toggleTradingTimeOnly(false)
+    expect(RefreshManager.getStatus().isRunning).toBe(true)
+
+    RefreshManager.toggleTradingTimeOnly(true)
+
+    expect(RefreshManager.getStatus().isRunning).toBe(false)
+  })
+
   it('exposes the registered refresh task inventory for diagnostics', async () => {
     const { RefreshManager } = await loadRefreshManager()
 
@@ -284,6 +313,7 @@ describe('RefreshManager Phase 0 behavior', () => {
       'snapshot.sweep',
       'snapshot.backupSync',
       'websocket.staleCheck',
+      'hotStockEvent.monitor',
     ])
   })
 

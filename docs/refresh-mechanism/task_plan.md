@@ -6,7 +6,7 @@
 
 ## Current Phase
 
-Phase 1 unified full refresh entry complete. Remaining work: Phase 3 realtime/storage residuals, Phase 5 visibility/config policy, and Phase 6 cleanup.
+Phase 5 visibility/config policy complete. Remaining work: Phase 6 cleanup and any separately approved cleanup of legacy incremental config.
 
 ## Success Criteria
 
@@ -94,13 +94,14 @@ Phase 1 unified full refresh entry complete. Remaining work: Phase 3 realtime/st
 
 ### Phase 5: 页面可见性、交易时间和配置策略
 
-- [ ] 增加统一页面可见性策略：`run`、`pause`、`slow`。
-- [ ] 页面隐藏时暂停或降频非关键任务：题材轮动、预警、HTTP fallback、热股异动面板刷新。
-- [ ] WebSocket 保持独立连接，但 stale 检查可降频。
-- [ ] 快照槽位扫描是否隐藏页继续执行需业务确认；建议交易时间内继续，但保存前检查质量。
-- [ ] SettingsPanel 拆成全局策略和任务明细两层。
+- [x] 增加统一页面可见性策略：`run`、`pause`、`slow`。
+- [x] 页面隐藏时暂停或降频非关键任务：题材轮动、预警、HTTP fallback、热股异动面板刷新。
+- [x] WebSocket 保持独立连接，但 stale 检查可降频。
+- [x] 快照槽位扫描隐藏页继续执行，仍受交易时间和保存质量检查约束。
+- [x] SettingsPanel 拆成全局策略和任务明细两层。
 - **验证:** 模拟 `document.hidden` 的任务调度测试。
-- **Status:** pending
+- **Status:** complete
+- **Scope note:** `RefreshTaskDefinition` 新增 `visibilityPolicy` 和 `hiddenIntervalMs`；`RefreshScheduler` 按任务策略执行隐藏页 `run/pause/slow`，并由 `RefreshManager` 同步全局交易时间策略。`websocket.staleCheck`、`snapshot.sweep`、`snapshot.backupSync` 和 `hotStockEvent.monitor` 已接入统一 scheduler。WebSocket 连接/重连本身不受隐藏页策略控制；快照初始化恢复和 projection backfill 的一次性延迟任务留到 Phase 6 或后续单独梳理。
 
 ### Phase 6: 清理旧口径和文档
 

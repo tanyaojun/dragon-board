@@ -9,7 +9,7 @@ import { isTradingTime } from '../utils/time'
 import type { RefreshStrategy as ConfigRefreshStrategy, RefreshConfig } from '../types/config'
 import { REFRESH_STRATEGY_CONFIGS, REFRESH_STORAGE_KEY } from '../types/config'
 import { refreshCoordinator } from './RefreshCoordinator'
-import { refreshTaskRegistry } from './refresh/RefreshTaskRuntime'
+import { refreshScheduler, refreshTaskRegistry } from './refresh/RefreshTaskRuntime'
 import type { RefreshRequest, RefreshRequestResult } from './refresh/types'
 
 export type RefreshStrategy = 'conservative' | 'balanced' | 'aggressive'
@@ -154,6 +154,7 @@ class RefreshManagerService {
       this.state.fullRefreshInterval = this.currentConfig.fullRefreshInterval
       this.state.incrementalRefreshInterval = this.currentConfig.incrementalRefreshInterval
       this.state.retryOnFailure = this.currentConfig.retryOnFailure
+      refreshScheduler.setPolicy({ tradingTimeOnly: this.currentConfig.tradingTimeOnly })
 
       this.setupListeners()
       this.isTradingTimeCache = isTradingTime()
@@ -470,16 +471,24 @@ class RefreshManagerService {
     this.state.fullRefreshInterval = this.currentConfig.fullRefreshInterval
     this.state.incrementalRefreshInterval = this.currentConfig.incrementalRefreshInterval
     this.state.retryOnFailure = this.currentConfig.retryOnFailure
+    refreshScheduler.setPolicy({ tradingTimeOnly: this.currentConfig.tradingTimeOnly })
 
     if (
       oldConfig.fullRefreshInterval !== this.currentConfig.fullRefreshInterval ||
-      oldConfig.enabled !== this.currentConfig.enabled
+      oldConfig.enabled !== this.currentConfig.enabled ||
+      oldConfig.tradingTimeOnly !== this.currentConfig.tradingTimeOnly
     ) {
-      if (this.state.isRunning) {
+      const canRunNow =
+        this.currentConfig.enabled &&
+        (!this.currentConfig.tradingTimeOnly || isTradingTime())
+
+      if (this.state.isRunning && !canRunNow) {
         this.stop()
-        if (this.state.enabled) {
-          this.start()
-        }
+      } else if (!this.state.isRunning && canRunNow) {
+        this.start()
+      } else if (this.state.isRunning && canRunNow) {
+        this.stop()
+        this.start()
       }
     }
 
@@ -596,6 +605,7 @@ class RefreshManagerService {
           this.state.fullRefreshInterval = this.currentConfig.fullRefreshInterval
           this.state.incrementalRefreshInterval = this.currentConfig.incrementalRefreshInterval
           this.state.retryOnFailure = this.currentConfig.retryOnFailure
+          refreshScheduler.setPolicy({ tradingTimeOnly: this.currentConfig.tradingTimeOnly })
 
           debugLog('[RefreshManager] 检测到 localStorage 变化，配置已同步')
         }
@@ -629,6 +639,7 @@ class RefreshManagerService {
       isRefreshing: this.state.isRefreshing,
       isTradingTime: isTradingTime(),
       stats: { ...this.state.stats },
+      policy: refreshScheduler.getPolicy(),
       tasks: this.taskRegistry.listTasks(),
       lastError: null,
       hotStocksLimit: this.currentConfig.hotStocksLimit,
@@ -657,6 +668,7 @@ class RefreshManagerService {
     this.state.fullRefreshInterval = this.currentConfig.fullRefreshInterval
     this.state.incrementalRefreshInterval = this.currentConfig.incrementalRefreshInterval
     this.state.retryOnFailure = this.currentConfig.retryOnFailure
+    refreshScheduler.setPolicy({ tradingTimeOnly: this.currentConfig.tradingTimeOnly })
 
     this.state.stats = {
       fullRefreshes: 0,

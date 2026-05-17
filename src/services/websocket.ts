@@ -10,6 +10,7 @@ import { AppEvents } from '../types'
 import { isTradingTime } from '../utils/time'
 import { normalizeStockCode } from '../utils/common'
 import { EventManager } from '../utils/eventManager'
+import { refreshScheduler } from './refresh/RefreshTaskRuntime'
 
 type QuotePayload = {
   type: string
@@ -256,7 +257,7 @@ function normalizeTickTrade(code: string, item: any): TickTrade | null {
 class RealTimeWebSocketService {
   private socket: WebSocket | null = null
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
-  private staleCheckTimer: ReturnType<typeof setInterval> | null = null
+  private staleCheckRegistered = false
   private manuallyClosed = false
   private reconnectGraceUntil = 0
   private heartbeatIntervalHintMs = isTradingTime()
@@ -767,28 +768,36 @@ class RealTimeWebSocketService {
   }
 
   private startStaleMonitor() {
-    if (this.staleCheckTimer) return
+    if (this.staleCheckRegistered) return
+    refreshScheduler.registerRunner('websocket.staleCheck', () => this.runStaleCheck())
+    refreshScheduler.startTask('websocket.staleCheck', 500)
+    this.staleCheckRegistered = true
+  }
 
-    this.staleCheckTimer = setInterval(() => {
-      if (this.state.status !== 'connected') return
-      const lastActivityTime = Math.max(this.state.lastMessageTime || 0, this.state.lastHeartbeatTime || 0)
-      if (!lastActivityTime) return
+  private stopStaleMonitor() {
+    refreshScheduler.stopTask('websocket.staleCheck')
+    this.staleCheckRegistered = false
+  }
 
-      const age = Date.now() - lastActivityTime
-      if (age <= this.connectionStaleThresholdMs()) return
-      if (this.isReconnectGraceActive()) return
+  private runStaleCheck() {
+    if (this.state.status !== 'connected') return
+    const lastActivityTime = Math.max(this.state.lastMessageTime || 0, this.state.lastHeartbeatTime || 0)
+    if (!lastActivityTime) return
 
-      this.updateStatus({
-        status: 'stale',
-        fallbackActive: true,
-        transport: 'http',
-      })
-      EventManager.emit(AppEvents.WEBSOCKET.STATUS_CHANGED, this.getStatus())
+    const age = Date.now() - lastActivityTime
+    if (age <= this.connectionStaleThresholdMs()) return
+    if (this.isReconnectGraceActive()) return
 
-      if (this.socket && this.socket.readyState === WebSocket.OPEN) {
-        this.socket.close()
-      }
-    }, 500)
+    this.updateStatus({
+      status: 'stale',
+      fallbackActive: true,
+      transport: 'http',
+    })
+    EventManager.emit(AppEvents.WEBSOCKET.STATUS_CHANGED, this.getStatus())
+
+    if (this.socket && this.socket.readyState === WebSocket.OPEN) {
+      this.socket.close()
+    }
   }
 
   private parsePayload(data: unknown): Record<string, unknown> | null {

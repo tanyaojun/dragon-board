@@ -103,6 +103,42 @@
                 {{ getStatusText }}
               </span>
             </div>
+            <div class="status-detail">
+              <div class="detail-item">
+                <span>页面隐藏策略</span>
+                <span>{{ visibilityPolicySummary }}</span>
+              </div>
+              <div class="detail-item">
+                <span>交易时间策略</span>
+                <span>{{ config.tradingTimeOnly ? '限制交易时间' : '全天允许' }}</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- 任务明细 -->
+          <div class="settings-section" v-if="taskStates.length">
+            <h4>🧭 任务明细</h4>
+            <div class="task-list">
+              <div v-for="task in taskStates" :key="task.id" class="task-item">
+                <div class="task-main">
+                  <span class="task-label">{{ task.label }}</span>
+                  <span class="task-owner">{{ task.owner }}</span>
+                </div>
+                <div class="task-meta">
+                  <span :class="['task-status', task.running ? 'status-refreshing' : task.enabled ? 'status-running' : 'status-stopped']">
+                    {{ task.running ? '运行中' : task.enabled ? '已启用' : '已停用' }}
+                  </span>
+                  <span>{{ formatTaskPolicy(task) }}</span>
+                  <span>{{ formatInterval(task.intervalMs) }}</span>
+                </div>
+                <div class="task-time">
+                  <span>成功: {{ formatTime(task.lastSuccessAt) }}</span>
+                  <span v-if="task.lastError" class="task-error" :title="task.lastError">
+                    错误: {{ task.lastError }}
+                  </span>
+                </div>
+              </div>
+            </div>
           </div>
 
           <!-- 刷新统计 -->
@@ -185,6 +221,7 @@ import { EventManager } from '@/utils/eventManager'
 import { AppEvents } from '@/types'
 import { RefreshManager } from '@/services/RefreshManager'
 import { isTradingTime } from '@/utils/time'
+import type { RefreshTaskState } from '@/services/refresh/types'
 import {
   REFRESH_STRATEGY_CONFIGS,
   FULL_REFRESH_OPTIONS,
@@ -258,6 +295,7 @@ const config = ref<SettingsRefreshConfig>({} as SettingsRefreshConfig)
 const stats = ref(RefreshManager.getStats())
 const lastError = ref<string | null>(null)
 const refreshHistory = ref<Array<{ type: string, timestamp: number, duration: number, error?: string }>>([])
+const taskStates = ref<RefreshTaskState[]>([])
 
 // ========== 计算属性 ==========
 const getStatusClass = computed(() => {
@@ -280,6 +318,19 @@ const isConfigConsistent = computed(() => {
     config.value.fullRefreshInterval === preset.fullRefreshInterval &&
     config.value.tradingTimeOnly === preset.tradingTimeOnly
   )
+})
+
+const visibilityPolicySummary = computed(() => {
+  const counts = taskStates.value.reduce(
+    (acc, task) => {
+      const policy = task.visibilityPolicy || (task.runWhenHidden ? 'run' : 'pause')
+      acc[policy] += 1
+      return acc
+    },
+    { run: 0, pause: 0, slow: 0 },
+  )
+
+  return `运行 ${counts.run} / 暂停 ${counts.pause} / 降频 ${counts.slow}`
 })
 
 // ========== 方法 ==========
@@ -329,6 +380,7 @@ function updateConfigFromStatus(status: any) {
   } as any
 
   stats.value = RefreshManager.getStats()
+  taskStates.value = Array.isArray(status.tasks) ? status.tasks : []
 }
 
 function refreshStatus() {
@@ -448,6 +500,24 @@ function formatPresetInterval(strategy: RefreshStrategy, type: 'full'): string {
   const preset = REFRESH_STRATEGY_CONFIGS[strategy]
   const minutes = preset.fullRefreshInterval / 60000
   return minutes >= 60 ? `${minutes / 60}小时` : `${minutes}分钟`
+}
+
+function formatInterval(intervalMs: number | null): string {
+  if (!intervalMs) return '手动'
+  if (intervalMs < 60_000) return `${intervalMs / 1000}秒`
+  const minutes = intervalMs / 60_000
+  return minutes >= 60 ? `${minutes / 60}小时` : `${minutes}分钟`
+}
+
+function formatTaskPolicy(task: RefreshTaskState): string {
+  const policy = task.visibilityPolicy || (task.runWhenHidden ? 'run' : 'pause')
+  const hidden =
+    policy === 'run'
+      ? '隐藏运行'
+      : policy === 'slow'
+        ? `隐藏降频${task.hiddenIntervalMs ? `/${formatInterval(task.hiddenIntervalMs)}` : ''}`
+        : '隐藏暂停'
+  return `${task.tradingTimeOnly ? '交易时段' : '全天'} · ${hidden}`
 }
 
 function showToast(message: string, type: 'success' | 'info' | 'error' = 'info') {
@@ -1172,6 +1242,61 @@ input:checked+.slider:before {
   color: var(--color-highlight);
   font-size: 10px;
   margin-left: auto;
+}
+
+.task-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.task-item {
+  padding: 10px;
+  background: var(--bg-secondary);
+  border-radius: 6px;
+  font-size: 11px;
+}
+
+.task-main,
+.task-meta,
+.task-time {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.task-main {
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.task-meta,
+.task-time {
+  flex-wrap: wrap;
+  color: var(--text-tertiary);
+}
+
+.task-label {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.task-owner {
+  color: var(--text-tertiary);
+  font-size: 10px;
+}
+
+.task-status {
+  font-weight: 600;
+}
+
+.task-error {
+  color: #ff4757;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 

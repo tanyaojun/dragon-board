@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createSnapshotRecord } from '../identity'
 import { SnapshotRuntime, buildSnapshotBackendIngestIdempotencyKey } from '../runtime'
 import { refreshResourceLocks } from '../../refresh/RefreshResourceLocks'
+import { refreshScheduler, refreshTaskRegistry } from '../../refresh/RefreshTaskRuntime'
 import { getExpectedSlots } from '../schedule'
 import type { SnapshotCaptureMode, SnapshotQueryOptions, SnapshotRecord, SnapshotType } from '../types'
 
@@ -110,9 +111,13 @@ function createTradingDateRecords(
 describe('SnapshotRuntime', () => {
   beforeEach(() => {
     vi.restoreAllMocks()
+    refreshScheduler.stopAll()
+    refreshTaskRegistry.resetRuntimeState()
   })
 
   afterEach(() => {
+    refreshScheduler.stopAll()
+    refreshTaskRegistry.resetRuntimeState()
     vi.useRealTimers()
     vi.unstubAllGlobals()
   })
@@ -409,6 +414,50 @@ describe('SnapshotRuntime', () => {
     expect(candidates.some((item: { slotTime: Date }) => item.slotTime.getHours() === 10)).toBe(false)
     expect((runtime as any).snapshotStore.getById).not.toHaveBeenCalled()
     expect(exists).toHaveBeenCalled()
+  })
+
+  it('records scheduled snapshot sweep and backup sync through the shared scheduler', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-04-21T10:00:00+08:00'))
+    vi.stubGlobal('window', {
+      setTimeout,
+      clearTimeout,
+      setInterval,
+      clearInterval,
+    })
+    const runtime = createRuntime()
+    const scheduleSnapshotSweep = vi.spyOn(runtime as any, 'scheduleSnapshotSweep').mockImplementation(() => {})
+    const syncPrimarySnapshotsToBackup = vi
+      .spyOn(runtime, 'syncPrimarySnapshotsToBackup')
+      .mockResolvedValue({} as any)
+
+    runtime.startTimer()
+    ;(runtime as any).startSnapshotAutoSync()
+    await vi.advanceTimersByTimeAsync(1_000)
+
+    expect(scheduleSnapshotSweep).toHaveBeenCalledTimes(1)
+    expect(refreshTaskRegistry.getTask('snapshot.sweep')).toMatchObject({
+      running: false,
+      lastRunAt: expect.any(Number),
+      lastSuccessAt: expect.any(Number),
+      lastError: null,
+      successCount: 1,
+      source: 'scheduler',
+    })
+
+    await vi.advanceTimersByTimeAsync(60_000)
+
+    expect(syncPrimarySnapshotsToBackup).toHaveBeenCalled()
+    expect(refreshTaskRegistry.getTask('snapshot.backupSync')).toMatchObject({
+      running: false,
+      lastRunAt: expect.any(Number),
+      lastSuccessAt: expect.any(Number),
+      lastError: null,
+      successCount: 1,
+      source: 'scheduler',
+    })
+
+    runtime.stop()
   })
 
   it('does not collect scheduled snapshot slots on 2026 Labor Day market holiday', async () => {

@@ -136,6 +136,153 @@ describe('RefreshScheduler', () => {
     scheduler.destroy()
   })
 
+  it('allows global policy to relax trading-time gating for scheduled tasks', async () => {
+    const registry = new RefreshTaskRegistry()
+    const run = vi.fn(async () => undefined)
+
+    registry.register({
+      id: 'example.task',
+      label: '示例任务',
+      category: 'market',
+      owner: 'test',
+      intervalMs: 1_000,
+      tradingTimeOnly: true,
+    })
+
+    const scheduler = new RefreshScheduler(registry, {
+      isTradingTime: () => false,
+    })
+    scheduler.registerRunner('example.task', run)
+    scheduler.startTask('example.task')
+
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(run).not.toHaveBeenCalled()
+
+    scheduler.setPolicy({ tradingTimeOnly: false })
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(run).toHaveBeenCalledTimes(1)
+
+    scheduler.destroy()
+  })
+
+  it('resets shared scheduler policy with the refresh task runtime', async () => {
+    const runtime = await import('../RefreshTaskRuntime')
+
+    runtime.refreshScheduler.setPolicy({ tradingTimeOnly: false })
+    runtime.resetRefreshTaskRuntime()
+
+    expect(runtime.refreshScheduler.getPolicy()).toMatchObject({
+      tradingTimeOnly: true,
+      defaultVisibilityPolicy: 'pause',
+    })
+  })
+
+  it('pauses hidden-page tasks with visibility policy pause', async () => {
+    const registry = new RefreshTaskRegistry()
+    const run = vi.fn(async () => undefined)
+    let visible = false
+
+    registry.register({
+      id: 'example.task',
+      label: '示例任务',
+      category: 'business',
+      owner: 'test',
+      intervalMs: 1_000,
+      visibilityPolicy: 'pause',
+      tradingTimeOnly: false,
+    })
+
+    const scheduler = new RefreshScheduler(registry, {
+      isVisible: () => visible,
+    })
+    scheduler.registerRunner('example.task', run)
+    scheduler.startTask('example.task')
+
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(run).not.toHaveBeenCalled()
+
+    visible = true
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(run).toHaveBeenCalledTimes(1)
+
+    scheduler.destroy()
+  })
+
+  it('slows hidden-page tasks according to visibility slow interval', async () => {
+    const registry = new RefreshTaskRegistry()
+    const run = vi.fn(async () => undefined)
+    let visible = false
+
+    registry.register({
+      id: 'example.task',
+      label: '示例任务',
+      category: 'market',
+      owner: 'test',
+      intervalMs: 1_000,
+      visibilityPolicy: 'slow',
+      hiddenIntervalMs: 5_000,
+      tradingTimeOnly: false,
+    })
+
+    const scheduler = new RefreshScheduler(registry, {
+      now: () => Date.now(),
+      isVisible: () => visible,
+    })
+    scheduler.registerRunner('example.task', run)
+    scheduler.startTask('example.task')
+
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(run).toHaveBeenCalledTimes(1)
+
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(run).toHaveBeenCalledTimes(1)
+
+    await vi.advanceTimersByTimeAsync(4_000)
+    expect(run).toHaveBeenCalledTimes(2)
+
+    visible = true
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(run).toHaveBeenCalledTimes(3)
+
+    scheduler.destroy()
+  })
+
+  it('keeps slow hidden-page cadence after runner failures', async () => {
+    const registry = new RefreshTaskRegistry()
+    const run = vi.fn(async () => {
+      throw new Error('temporary')
+    })
+
+    registry.register({
+      id: 'example.task',
+      label: '示例任务',
+      category: 'market',
+      owner: 'test',
+      intervalMs: 1_000,
+      visibilityPolicy: 'slow',
+      hiddenIntervalMs: 5_000,
+      tradingTimeOnly: false,
+    })
+
+    const scheduler = new RefreshScheduler(registry, {
+      now: () => Date.now(),
+      isVisible: () => false,
+    })
+    scheduler.registerRunner('example.task', run)
+    scheduler.startTask('example.task')
+
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(run).toHaveBeenCalledTimes(1)
+
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(run).toHaveBeenCalledTimes(1)
+
+    await vi.advanceTimersByTimeAsync(4_000)
+    expect(run).toHaveBeenCalledTimes(2)
+
+    scheduler.destroy()
+  })
+
   it('allows callers to override the registered interval when starting a task', async () => {
     const registry = new RefreshTaskRegistry()
     const run = vi.fn(async () => undefined)

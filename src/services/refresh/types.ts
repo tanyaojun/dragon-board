@@ -21,6 +21,8 @@ export type RefreshTaskSource =
   | 'timer'
   | 'external'
 
+export type RefreshVisibilityPolicy = 'run' | 'pause' | 'slow'
+
 export type RefreshResourceKey =
   | 'hotlist-platform'
   | 'quote-http'
@@ -37,9 +39,11 @@ export interface RefreshTaskDefinition {
   category: RefreshTaskCategory
   owner: string
   intervalMs?: number | null
+  hiddenIntervalMs?: number | null
   enabled?: boolean
   tradingTimeOnly?: boolean
   runWhenHidden?: boolean
+  visibilityPolicy?: RefreshVisibilityPolicy
   description?: string
 }
 
@@ -80,4 +84,9 @@ export interface RefreshRequestResult {
   errors: Record<string, string>
   reason?: string
   timestamp?: number
+}
+
+export interface RefreshSchedulerPolicy {
+  tradingTimeOnly: boolean
+  defaultVisibilityPolicy: RefreshVisibilityPolicy
 }

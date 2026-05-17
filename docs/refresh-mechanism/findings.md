@@ -115,6 +115,22 @@ Phase 3 第一批只迁移 timer 创建和状态记录，不提前改变旧 time
 | `snapshot-write` | 已接入 `SnapshotRuntime.saveSnapshotRecord()`，替换本地写入队列，保留原重复槽位返回 `false` 语义。 |
 | `DataLayer.subscribe` + `AppEvents.DATA.MERGED` | UI store 和 `StockStore` 都按 DataLayer 股票版本去重；其它面板级订阅仍按自身渲染职责保留。 |
 
+## Phase 5 Visibility and Policy Mapping
+
+| Task | Visibility Policy | Trading Policy | Phase 5 State |
+| --- | --- | --- | --- |
+| `dataLoader.quote` | `slow`, hidden interval 120s | trading time only | 已接入 scheduler；隐藏页降频，避免后台高频 HTTP fallback。 |
+| `dataLoader.ranktrendSignal` | `run` | all day | 保持隐藏页运行，避免错过 14:45 日内触发窗口。 |
+| `theme.runtime` | `pause` | all day | 隐藏页暂停，减少非关键题材派生刷新。 |
+| `dragon.breath` | `pause` | trading time only | 隐藏页暂停；事件防抖派生仍保留在分析器内。 |
+| `alert.check` | `pause` | all day | 隐藏页暂停，避免后台继续推业务预警。 |
+| `websocket.staleCheck` | `slow`, hidden interval 5s | all day | stale 检查接入 scheduler；WebSocket 连接、重连和心跳仍保持独立实时流。 |
+| `snapshot.sweep` | `run` | trading time only | 槽位扫描接入 scheduler；隐藏页继续执行，保存仍走槽位、交易时间和质量检查。 |
+| `snapshot.backupSync` | `run` | trading time only | 周期备份同步接入 scheduler；初始 10 秒补同步仍为一次性延迟任务。 |
+| `hotStockEvent.monitor` | `pause` | all day | 新增任务登记；面板可见时启动，隐藏页/不可见时暂停。 |
+
+`RefreshManager` 仍是全局交易时间策略来源，会把 `tradingTimeOnly` 同步给 `RefreshScheduler`。`SettingsPanel` 已消费 `RefreshManager.getStatus().tasks` 做只读任务明细展示，不在 Phase 5 增加任务级启停控制。
+
 ## Phase 1 Unified Entry Mapping
 
 | Entry / Contract | Phase 1 State |
@@ -141,13 +157,13 @@ Phase 3 第一批只迁移 timer 创建和状态记录，不提前改变旧 time
 - `src/services/snapshot/runtime.ts`
 - `src/services/snapshot/facade.ts`
 - `src/services/websocket.ts`
+- `src/services/hotlist/HotStockEventMonitorService.ts`
 - `src/components/panels/SettingsPanel.vue`
 - `src/components/common/DataFreshness.vue`
 
 ## Open Decisions
 
 - “关闭自动刷新”是否关闭行情 HTTP fallback、题材轮动、龙息和预警。
-- 快照槽位扫描在页面隐藏时是否继续。
 - 主刷新按钮是否执行完整全局链。
 - `incrementalRefreshInterval` 删除还是重新定义。
 - Store 同步主通道选择 DataLayer 订阅还是事件。

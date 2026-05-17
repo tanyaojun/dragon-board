@@ -16,8 +16,9 @@ export const REFRESH_TASK_DEFINITIONS: RefreshTaskDefinition[] = [
     category: 'market',
     owner: 'DataLoaderFacade',
     intervalMs: 30_000,
+    hiddenIntervalMs: 120_000,
     tradingTimeOnly: true,
-    runWhenHidden: true,
+    visibilityPolicy: 'slow',
     description: 'WebSocket 不健康时的 HTTP 行情补偿',
   },
   {
@@ -27,7 +28,7 @@ export const REFRESH_TASK_DEFINITIONS: RefreshTaskDefinition[] = [
     owner: 'DataLoaderFacade',
     intervalMs: 1_000,
     tradingTimeOnly: false,
-    runWhenHidden: true,
+    visibilityPolicy: 'run',
     description: '14:45 每日一次 RankTrend 信号检查',
   },
   {
@@ -37,7 +38,7 @@ export const REFRESH_TASK_DEFINITIONS: RefreshTaskDefinition[] = [
     owner: 'ThemeRuntimeCoordinator',
     intervalMs: 5_000,
     tradingTimeOnly: false,
-    runWhenHidden: true,
+    visibilityPolicy: 'pause',
     description: '题材轮动运行态刷新',
   },
   {
@@ -47,7 +48,7 @@ export const REFRESH_TASK_DEFINITIONS: RefreshTaskDefinition[] = [
     owner: 'DragonBreathAnalyzer',
     intervalMs: 300_000,
     tradingTimeOnly: true,
-    runWhenHidden: true,
+    visibilityPolicy: 'pause',
   },
   {
     id: 'dragon.review',
@@ -64,7 +65,7 @@ export const REFRESH_TASK_DEFINITIONS: RefreshTaskDefinition[] = [
     owner: 'AlertService',
     intervalMs: 10_000,
     tradingTimeOnly: false,
-    runWhenHidden: true,
+    visibilityPolicy: 'pause',
   },
   {
     id: 'snapshot.sweep',
@@ -73,7 +74,7 @@ export const REFRESH_TASK_DEFINITIONS: RefreshTaskDefinition[] = [
     owner: 'SnapshotRuntime',
     intervalMs: 1_000,
     tradingTimeOnly: true,
-    runWhenHidden: true,
+    visibilityPolicy: 'run',
   },
   {
     id: 'snapshot.backupSync',
@@ -82,7 +83,7 @@ export const REFRESH_TASK_DEFINITIONS: RefreshTaskDefinition[] = [
     owner: 'SnapshotRuntime',
     intervalMs: 300_000,
     tradingTimeOnly: true,
-    runWhenHidden: true,
+    visibilityPolicy: 'run',
   },
   {
     id: 'websocket.staleCheck',
@@ -90,8 +91,19 @@ export const REFRESH_TASK_DEFINITIONS: RefreshTaskDefinition[] = [
     category: 'realtime',
     owner: 'WebSocketService',
     intervalMs: 500,
+    hiddenIntervalMs: 5_000,
     tradingTimeOnly: false,
-    runWhenHidden: true,
+    visibilityPolicy: 'slow',
+  },
+  {
+    id: 'hotStockEvent.monitor',
+    label: '热股异动面板刷新',
+    category: 'business',
+    owner: 'HotStockEventMonitorService',
+    intervalMs: 30_000,
+    tradingTimeOnly: false,
+    visibilityPolicy: 'pause',
+    description: '异动提醒面板可见时轮询选股通异动数据',
   },
 ]
 
@@ -102,6 +114,12 @@ export class RefreshTaskRegistry {
 
   register(definition: RefreshTaskDefinition): RefreshTaskState {
     const existing = this.tasks.get(definition.id)
+    const explicitRunWhenHidden = definition.runWhenHidden ?? existing?.runWhenHidden
+    const visibilityPolicy =
+      definition.visibilityPolicy ??
+      (definition.runWhenHidden !== undefined ? undefined : existing?.visibilityPolicy) ??
+      (explicitRunWhenHidden ? 'run' : 'pause')
+    const runWhenHidden = explicitRunWhenHidden ?? visibilityPolicy !== 'pause'
     const task: RefreshTaskState = {
       id: definition.id,
       label: definition.label,
@@ -109,9 +127,11 @@ export class RefreshTaskRegistry {
       owner: definition.owner,
       description: definition.description ?? '',
       intervalMs: definition.intervalMs ?? null,
+      hiddenIntervalMs: definition.hiddenIntervalMs ?? existing?.hiddenIntervalMs ?? null,
       enabled: definition.enabled ?? existing?.enabled ?? true,
       tradingTimeOnly: definition.tradingTimeOnly ?? existing?.tradingTimeOnly ?? true,
-      runWhenHidden: definition.runWhenHidden ?? existing?.runWhenHidden ?? false,
+      runWhenHidden,
+      visibilityPolicy,
       running: existing?.running ?? false,
       lastRunAt: existing?.lastRunAt ?? null,
       lastSuccessAt: existing?.lastSuccessAt ?? null,

@@ -1,4 +1,5 @@
 import { dataLayer } from '../DataLayer'
+import { refreshScheduler } from '../refresh/RefreshTaskRuntime'
 import {
   XuangubaoAbnormalEventFeed,
 } from './XuangubaoAbnormalEventFeed'
@@ -78,7 +79,7 @@ export class HotStockEventMonitorService {
   private readonly intervalMs: number
   private readonly maxEvents: number
   private readonly now: () => number
-  private timer: ReturnType<typeof setInterval> | null = null
+  private running = false
   private events: HotStockAbnormalEvent[] = []
   private hotStockEvents: HotStockAbnormalEvent[] = []
   private otherStockEvents: HotStockAbnormalEvent[] = []
@@ -118,7 +119,7 @@ export class HotStockEventMonitorService {
       watchedCodes: [...this.watchedCodes],
       lastUpdate: this.lastUpdate,
       loading: this.loading,
-      running: Boolean(this.timer),
+      running: this.running,
       error: this.error,
     }
   }
@@ -204,16 +205,18 @@ export class HotStockEventMonitorService {
   }
 
   start() {
-    if (this.timer) return
-    this.timer = setInterval(() => {
-      void this.refresh()
-    }, this.intervalMs)
+    if (this.running) return
+    refreshScheduler.registerRunner('hotStockEvent.monitor', async () => {
+      await this.refresh()
+    })
+    refreshScheduler.startTask('hotStockEvent.monitor', this.intervalMs)
+    this.running = true
   }
 
   stop() {
-    if (!this.timer) return
-    clearInterval(this.timer)
-    this.timer = null
+    if (!this.running) return
+    refreshScheduler.stopTask('hotStockEvent.monitor')
+    this.running = false
     this.notify()
   }
 

@@ -10,5 +10,9 @@ export const refreshScheduler = new RefreshScheduler(refreshTaskRegistry, {
 
 export function resetRefreshTaskRuntime(): void {
   refreshScheduler.stopAll()
+  refreshScheduler.setPolicy({
+    tradingTimeOnly: true,
+    defaultVisibilityPolicy: 'pause',
+  })
   refreshTaskRegistry.resetRuntimeState()
 }

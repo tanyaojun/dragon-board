@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { HotStockEventMonitorService } from '../HotStockEventMonitorService'
+import { refreshScheduler, refreshTaskRegistry } from '../../refresh/RefreshTaskRuntime'
 import type { HotStockAbnormalEvent } from '../hotStockEventTypes'
 
 function makeEvent(overrides: Partial<HotStockAbnormalEvent>): HotStockAbnormalEvent {
@@ -26,6 +27,12 @@ function makeEvent(overrides: Partial<HotStockAbnormalEvent>): HotStockAbnormalE
 }
 
 describe('HotStockEventMonitorService', () => {
+  afterEach(() => {
+    refreshScheduler.stopTask('hotStockEvent.monitor')
+    refreshTaskRegistry.resetRuntimeState()
+    vi.useRealTimers()
+  })
+
   it('splits today events into hot stocks, other stocks and sectors', async () => {
     const feed = {
       fetchEvents: vi.fn().mockResolvedValue([
@@ -124,5 +131,49 @@ describe('HotStockEventMonitorService', () => {
     expect(result.error).toBe('network')
     expect(result.events.map(event => event.id)).toEqual(['a'])
     expect(result.hotStockEvents.map(event => event.id)).toEqual(['a'])
+  })
+
+  it('runs panel polling through the shared scheduler and pauses when hidden', async () => {
+    vi.useFakeTimers()
+    const visibility = { visibilityState: 'hidden' }
+    vi.stubGlobal('document', visibility)
+    const feed = {
+      fetchEvents: vi.fn().mockResolvedValue([
+        makeEvent({ id: 'a', code: '600001', timestamp: Date.parse('2026-05-15T09:40:00+08:00') }),
+      ]),
+    }
+    const dataLayer = {
+      getStocks: vi.fn().mockReturnValue([{ code: '600001', name: '一号' }]),
+      getDragonReview: vi.fn().mockReturnValue(null),
+    }
+    const service = new HotStockEventMonitorService({
+      feed,
+      dataLayer,
+      intervalMs: 1_000,
+      now: () => Date.parse('2026-05-15T10:05:00+08:00'),
+    })
+
+    service.start()
+    await vi.advanceTimersByTimeAsync(1_000)
+
+    expect(feed.fetchEvents).not.toHaveBeenCalled()
+    expect(refreshTaskRegistry.getTask('hotStockEvent.monitor')).toMatchObject({
+      visibilityPolicy: 'pause',
+      running: false,
+      successCount: 0,
+    })
+
+    visibility.visibilityState = 'visible'
+    await vi.advanceTimersByTimeAsync(1_000)
+
+    expect(feed.fetchEvents).toHaveBeenCalledTimes(1)
+    expect(refreshTaskRegistry.getTask('hotStockEvent.monitor')).toMatchObject({
+      running: false,
+      lastSuccessAt: expect.any(Number),
+      successCount: 1,
+      source: 'scheduler',
+    })
+
+    service.stop()
   })
 })

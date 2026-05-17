@@ -87,6 +87,24 @@
 
 ## Next Step
 
-- 继续 Phase 3 剩余项：WebSocket stale monitor 与快照槽位/备份任务仍保持独立运行流，只登记状态；下一步应决定是否先做 Phase 5 页面可见性/配置策略，再迁移这些实时/存储维护任务。
+## Phase 5 Completion
+
+- `RefreshTaskDefinition` / `RefreshTaskState` 增加 `visibilityPolicy: run | pause | slow` 与 `hiddenIntervalMs`，替代仅靠 `runWhenHidden` 的布尔口径。
+- `RefreshScheduler` 增加全局策略 `setPolicy/getPolicy`，支持交易时间策略和隐藏页 `pause/slow` gating；`RefreshManager` 在初始化、配置更新、跨标签同步和 reset 时同步 `tradingTimeOnly`。
+- Phase 5 任务策略：
+  - `dataLoader.quote`: 交易时间内运行，隐藏页 120 秒降频。
+  - `theme.runtime`、`dragon.breath`、`alert.check`、`hotStockEvent.monitor`: 隐藏页暂停。
+  - `dataLoader.ranktrendSignal`: 保持隐藏页运行，避免错过 14:45 日内信号窗口。
+  - `websocket.staleCheck`: WebSocket 连接独立保留，stale 检查隐藏页 5 秒降频。
+  - `snapshot.sweep`、`snapshot.backupSync`: 交易时间内隐藏页继续运行，保存仍走原质量和槽位检查。
+- `WebSocketService` 的 stale monitor、`SnapshotRuntime` 的槽位扫描/备份同步、`HotStockEventMonitorService` 的面板轮询已改由共享 `RefreshScheduler` 执行和记录状态。
+- `SettingsPanel` 新增全局页面隐藏策略摘要和任务明细，只读展示任务 owner、启停/运行状态、策略、间隔、最近成功和错误。
+- 本阶段未迁移 WebSocket 连接/重连/心跳，也未迁移快照初始化恢复和 projection backfill 的一次性延迟任务。
+- 验证：刷新机制相关 10 个测试文件通过，75 tests passed；`pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false` 通过；`pnpm exec vitest run src/services/snapshot/__tests__/runtime.test.ts -t "records scheduled snapshot sweep"` 通过；`git diff --check` 通过。
+- 已知边界：完整 `src/services/snapshot/__tests__/runtime.test.ts` 仍包含既有失败 `ignores IndexedDB existence and rewrites through sqlite for formal snapshots`，本阶段未修复。
+
+## Next Step
+
+- 进入 Phase 6：清理旧口径和文档，重点处理 `incrementalRefreshInterval` 的删除/重定义、`RefreshCoordinator.destroy()` 和事件解绑、以及 `window` 延迟解析主路径。
 - 后续不要直接启用 `RefreshScheduler.startAll()`；仍应逐个迁移任务并保留回归测试。
 - 另行决定是否单独修复 `snapshot/runtime.test.ts` 的既有失败。

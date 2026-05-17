@@ -2,6 +2,7 @@ import { SnapshotBackupSync } from './backupSync'
 import { SnapshotBackupSyncStateStore } from './backupSyncState'
 import { snapshotBackendIngest } from './backendIngest'
 import { refreshResourceLocks } from '../refresh/RefreshResourceLocks'
+import { refreshScheduler } from '../refresh/RefreshTaskRuntime'
 import {
   arrayToCSV,
   buildDailySnapshot,
@@ -123,8 +124,8 @@ export class SnapshotRuntime {
   })
   private persistRequested = false
   private backupBucketPersistRequested = false
-  private timer: ReturnType<typeof setInterval> | null = null
-  private snapshotSyncTimer: number | null = null
+  private sweepTimerStarted = false
+  private snapshotSyncTimerStarted = false
   private snapshotSchedulePromise: Promise<void> | null = null
   private projectionBackfillTimer: ReturnType<typeof setTimeout> | null = null
   private projectionBackfillPromise: Promise<void> | null = null
@@ -217,14 +218,10 @@ export class SnapshotRuntime {
   }
 
   stop() {
-    if (this.timer) {
-      clearInterval(this.timer)
-      this.timer = null
-    }
-    if (this.snapshotSyncTimer) {
-      clearInterval(this.snapshotSyncTimer)
-      this.snapshotSyncTimer = null
-    }
+    refreshScheduler.stopTask('snapshot.sweep')
+    refreshScheduler.stopTask('snapshot.backupSync')
+    this.sweepTimerStarted = false
+    this.snapshotSyncTimerStarted = false
     if (this.projectionBackfillTimer) {
       clearTimeout(this.projectionBackfillTimer)
       this.projectionBackfillTimer = null
@@ -1081,10 +1078,10 @@ export class SnapshotRuntime {
   }
 
   startTimer() {
-    if (this.timer) return
-    this.timer = setInterval(() => {
-      void this.scheduleSnapshotSweep(new Date())
-    }, 1000)
+    if (this.sweepTimerStarted) return
+    refreshScheduler.registerRunner('snapshot.sweep', () => this.scheduleSnapshotSweep(new Date()))
+    refreshScheduler.startTask('snapshot.sweep', 1000)
+    this.sweepTimerStarted = true
   }
 
   stopTimer() {
@@ -1649,14 +1646,16 @@ export class SnapshotRuntime {
   }
 
   private startSnapshotAutoSync() {
-    if (this.snapshotSyncTimer || typeof window === 'undefined') return
+    if (this.snapshotSyncTimerStarted || typeof window === 'undefined') return
     // 自动同步只负责本地 bucket 补同步；云端备份由 QuantBoard/Supabase outbox 承接。
     window.setTimeout(() => {
       void this.syncPrimarySnapshotsToBackup({ overwrite: false, limit: 20 })
     }, 10000)
-    this.snapshotSyncTimer = window.setInterval(() => {
-      void this.syncPrimarySnapshotsToBackup({ overwrite: false, limit: 20 })
-    }, this.syncIntervalMs)
+    refreshScheduler.registerRunner('snapshot.backupSync', async () => {
+      await this.syncPrimarySnapshotsToBackup({ overwrite: false, limit: 20 })
+    })
+    refreshScheduler.startTask('snapshot.backupSync', this.syncIntervalMs)
+    this.snapshotSyncTimerStarted = true
   }
 
   private createManagedSnapshotRecord(type: SnapshotType, snapshotTime: Date, payload: any): SnapshotRecord {
