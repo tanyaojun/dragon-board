@@ -21,6 +21,16 @@ export type RefreshTaskSource =
   | 'timer'
   | 'external'
 
+export type RefreshResourceKey =
+  | 'hotlist-platform'
+  | 'quote-http'
+  | 'theme-runtime'
+  | 'dragon-breath'
+  | 'dragon-review'
+  | 'ranktrend-signal'
+  | 'snapshot-write'
+  | (string & {})
+
 export interface RefreshTaskDefinition {
   id: RefreshTaskId
   label: string

@@ -21,6 +21,7 @@ import { platformHotlistService } from './PlatformHotlistService'
 import { quoteService } from './QuoteService'
 import { rankTrendSignalService } from './RankTrendSignalService'
 import { RealtimeQuoteCoordinator } from './RealtimeQuoteCoordinator'
+import { refreshResourceLocks } from '../refresh/RefreshResourceLocks'
 import { refreshScheduler } from '../refresh/RefreshTaskRuntime'
 import { stockHotnessService } from './StockHotnessService'
 import { stockMergeCoordinator } from './StockMergeCoordinator'
@@ -166,6 +167,17 @@ class DataLoaderService {
     force = false,
     options: { includeLimitUpData?: boolean; allowWhileLoading?: boolean } = {},
   ): Promise<DataLoaderRunSummary> {
+    const locked = await refreshResourceLocks.runExclusive(
+      'hotlist-platform',
+      () => this.doLoadPlatformAndMerge(force, options),
+    )
+    return locked.value!
+  }
+
+  private async doLoadPlatformAndMerge(
+    force = false,
+    options: { includeLimitUpData?: boolean; allowWhileLoading?: boolean } = {},
+  ): Promise<DataLoaderRunSummary> {
     const startTime = Date.now()
     let fromCache = false
 
@@ -192,7 +204,7 @@ class DataLoaderService {
       )
       if (!hasCachedRows && !dataLayer.getStocks().length) {
         platformHotlistService.clearCache()
-        return this.loadPlatformAndMerge(true)
+        return this.doLoadPlatformAndMerge(true, options)
       }
     }
 
@@ -283,7 +295,14 @@ class DataLoaderService {
     // 缩短批次延迟
     for (let i = 0; i < allStockCodes.length; i += batchSize) {
       const batchCodes = allStockCodes.slice(i, i + batchSize)
-      const quotes = await this.fetchMergedQuotes(batchCodes, { force: true })
+      const quoteResult = await refreshResourceLocks.runExclusive(
+        'quote-http',
+        () => this.fetchMergedQuotes(batchCodes, { force: true }),
+        { skipIfLocked: true },
+      )
+      if (!quoteResult.executed) return
+
+      const quotes = quoteResult.value ?? new Map()
 
       if (quotes.size > 0) {
         dataLayer.applyRealtimeQuoteBatch(
@@ -456,7 +475,11 @@ class DataLoaderService {
 
       const codesArray = Array.from(allCodes)
       this.updateProgress(60, `加载行情数据 ${codesArray.length} 只...`, 'quote')
-      const quotes = await this.getQuoteBatch(codesArray, true)
+      const quoteResult = await refreshResourceLocks.runExclusive(
+        'quote-http',
+        () => this.getQuoteBatch(codesArray, true),
+      )
+      const quotes = quoteResult.value ?? new Map()
 
       return quotes
     } catch (error) {
@@ -506,7 +529,11 @@ class DataLoaderService {
     if (allCodes.size > 0) {
       try {
         this.updateProgress(60, `加载行情数据 ${codesArray.length} 只...`, 'quote')
-        quotesMap = await this.getQuoteBatch(codesArray, true)
+        const quoteResult = await refreshResourceLocks.runExclusive(
+          'quote-http',
+          () => this.getQuoteBatch(codesArray, true),
+        )
+        quotesMap = quoteResult.value ?? new Map()
       } catch (error) {
         console.warn('[DataLoader] 行情补全失败，保留平台热榜数据:', error)
       }

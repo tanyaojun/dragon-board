@@ -19,6 +19,8 @@ let blockSignalCalculation = false
 let releaseSignalCalculation: (() => void) | null = null
 let signalCalculationError: Error | null = null
 let signalApplyCount = 0
+let blockQuoteBatch = false
+let releaseQuoteBatch: (() => void) | null = null
 
 const timeState = vi.hoisted(() => ({
   tradingTime: true,
@@ -60,6 +62,11 @@ vi.mock('../QuoteService', () => ({
   quoteService: {
     getQuoteBatch: vi.fn(async () => {
       if (quoteError) throw quoteError
+      if (blockQuoteBatch) {
+        await new Promise<void>((resolve) => {
+          releaseQuoteBatch = resolve
+        })
+      }
       return new Map()
     }),
     getQuotes: vi.fn(async () => new Map()),
@@ -134,6 +141,8 @@ describe('DataLoaderFacade', () => {
     releaseSignalCalculation = null
     signalCalculationError = null
     signalApplyCount = 0
+    blockQuoteBatch = false
+    releaseQuoteBatch = null
     EventManager.clearHistory()
     vi.clearAllMocks()
   })
@@ -295,6 +304,37 @@ describe('DataLoaderFacade', () => {
         successCount: 1,
         source: 'scheduler',
       })
+    } finally {
+      const { dataLoader } = await import('../../dataLoader')
+      dataLoader.stopQuoteAutoRefresh()
+      vi.useRealTimers()
+    }
+  })
+
+  it('skips quote fallback while a full refresh owns the quote HTTP resource', async () => {
+    vi.useFakeTimers()
+    blockQuoteBatch = true
+    try {
+      const { dataLoader } = await import('../../dataLoader')
+      const { quoteService } = await import('../QuoteService')
+
+      dataLayer.setMergedStocks([{ code: '000001', name: '平安银行' } as any])
+      const refreshPromise = dataLoader.refreshAll({ force: true, source: 'manual' })
+
+      await vi.waitFor(() => {
+        expect(releaseQuoteBatch).toEqual(expect.any(Function))
+      })
+
+      vi.mocked(quoteService.fetchMergedQuotes).mockClear()
+      dataLoader.stopQuoteAutoRefresh()
+      dataLoader.startQuoteAutoRefresh(1000)
+      await vi.advanceTimersByTimeAsync(1000)
+
+      expect(quoteService.fetchMergedQuotes).not.toHaveBeenCalled()
+
+      blockQuoteBatch = false
+      releaseQuoteBatch?.()
+      await refreshPromise
     } finally {
       const { dataLoader } = await import('../../dataLoader')
       dataLoader.stopQuoteAutoRefresh()

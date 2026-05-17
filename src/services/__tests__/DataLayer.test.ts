@@ -167,3 +167,83 @@ describe('DataLayer money flow source precedence', () => {
     }
   })
 })
+
+describe('DataLayer realtime merge arbitration', () => {
+  test('keeps realtime quote and L2 fields when merged stocks are written later', () => {
+    dataLayer.reset()
+
+    try {
+      dataLayer.setMergedStocks([
+        {
+          code: '000001',
+          name: '平安银行',
+          price: 10,
+          change: 1,
+          volume: 1000,
+          turnover: 10000,
+          turnoverRate: 2,
+        },
+      ])
+
+      dataLayer.applyRealtimeQuoteBatch([
+        {
+          code: '000001',
+          price: 10.8,
+          change: 8,
+          volume: 1800,
+          turnover: 18000,
+          turnoverRate: 3,
+          tdxBuyVolume: 900,
+        },
+      ])
+      dataLayer.updateL2SummaryBatch([
+        {
+          code: '000001',
+          bid1Price: 10.79,
+          bid1Volume: 1200,
+          ask1Price: 10.81,
+          ask1Volume: 800,
+          spread: 0.02,
+          bid10Total: 10000,
+          ask10Total: 9000,
+          depthImbalance: 0.08,
+          tickBuyVolume: 5000,
+          tickSellVolume: 3200,
+          tickBuyCount: 42,
+          tickSellCount: 31,
+          lastTradePrice: 10.8,
+          lastTradeVolume: 100,
+        },
+      ])
+
+      dataLayer.setMergedStocks([
+        {
+          code: '000001',
+          name: '平安银行',
+          price: 10,
+          change: 1,
+          volume: 1000,
+          turnover: 10000,
+          turnoverRate: 2,
+        },
+      ])
+
+      expect(dataLayer.getStock('000001')).toMatchObject({
+        price: 10.8,
+        change: 8,
+        volume: 1800,
+        turnover: 18000,
+        turnoverRate: 3,
+        tdxBuyVolume: 900,
+        bid1Price: 10.79,
+        bid1Volume: 1200,
+        ask1Price: 10.81,
+        ask1Volume: 800,
+        depthImbalance: 0.08,
+        lastTradePrice: 10.8,
+      })
+    } finally {
+      dataLayer.reset()
+    }
+  })
+})

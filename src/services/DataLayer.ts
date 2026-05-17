@@ -1096,7 +1096,7 @@ class DataLayer {
    */
   setMergedStocks(stocks: any[]) {
     const normalizedStocks = (stocks as MergedStock[]).map((stock) => {
-      const normalized = stripLegacyLeaderFields(stock)
+      const normalized = this.applyRealtimeProjection(stripLegacyLeaderFields(stock))
       if ('rankTrend' in normalized) {
         applyRankTrendAnalysis(normalized, normalized.rankTrend ?? null)
       }
@@ -1111,6 +1111,63 @@ class DataLayer {
     this.state.meta.lastMergeTime = Date.now()
     this.throttledNotify('merged.stocks', this.state.merged.stocks)
     this.throttledNotify('version.stocks', this.state.version.stocks)
+  }
+
+  private applyRealtimeProjection(stock: MergedStock): MergedStock {
+    const quote = this.state.realtime.quotes.get(stock.code)
+    const l2Summary = this.state.realtime.l2Summary.get(stock.code)
+    const next = { ...stock }
+
+    if (quote) {
+      next.price = this.pickQuoteNumber(quote.price ?? quote.lastPrice, next.price)
+      next.change = this.pickQuoteNumber(quote.change ?? quote.changePct, next.change)
+      next.volume = this.pickQuoteNumber(quote.volume, next.volume)
+      next.turnover = this.pickQuoteNumber(quote.turnover ?? quote.amount, next.turnover)
+      next.turnoverRate = this.pickQuoteNumber(quote.turnoverRate, next.turnoverRate)
+      next.speed = this.pickOptionalQuoteNumber(quote.speed, next.speed)
+
+      const shouldApplyMoneyFlow = shouldApplyMoneyFlowUpdate(next, quote)
+      if (shouldApplyMoneyFlow) {
+        next.zlje = this.pickQuoteNumber(quote.zlje, next.zlje)
+        next.zljzb = this.pickQuoteNumber(quote.zljzb, next.zljzb)
+        next.cddje = this.pickQuoteNumber(quote.cddje, next.cddje)
+        next.cddjzb = this.pickQuoteNumber(quote.cddjzb, next.cddjzb)
+      }
+      next.tdxBuyVolume = this.pickOptionalQuoteNumber(quote.tdxBuyVolume, next.tdxBuyVolume)
+      next.tdxSellVolume = this.pickOptionalQuoteNumber(quote.tdxSellVolume, next.tdxSellVolume)
+      next.tdxCurrentVolume = this.pickOptionalQuoteNumber(
+        quote.tdxCurrentVolume,
+        next.tdxCurrentVolume,
+      )
+      if (shouldApplyMoneyFlow && typeof quote.moneyFlowSource === 'string') {
+        next.moneyFlowSource = quote.moneyFlowSource
+      }
+      if (shouldApplyMoneyFlow && typeof quote.moneyFlowEstimated === 'boolean') {
+        next.moneyFlowEstimated = quote.moneyFlowEstimated
+      }
+      if (shouldApplyMoneyFlow && typeof quote.capitalFlowSource === 'string') {
+        next.capitalFlowSource = quote.capitalFlowSource
+      }
+      if (shouldApplyMoneyFlow && typeof quote.capitalFlowConfidence === 'string') {
+        next.capitalFlowConfidence = quote.capitalFlowConfidence
+      }
+    }
+
+    if (l2Summary) {
+      Object.assign(next, l2Summary)
+    }
+
+    return next
+  }
+
+  private pickOptionalQuoteNumber(nextValue: unknown, currentValue: unknown): number | undefined {
+    const nextNumber = Number(nextValue)
+    const currentNumber = Number(currentValue)
+
+    if (Number.isFinite(nextNumber) && nextNumber !== 0) return nextNumber
+    if (Number.isFinite(currentNumber)) return currentNumber
+    if (Number.isFinite(nextNumber)) return nextNumber
+    return undefined
   }
 
   // ========== 工具方法 ==========

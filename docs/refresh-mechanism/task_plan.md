@@ -6,7 +6,7 @@
 
 ## Current Phase
 
-Phase 3 first batch complete for business timers. Phase 1 remains pending.
+Phase 4 first batch complete for resource locks and write arbitration. Phase 1 remains pending.
 
 ## Success Criteria
 
@@ -75,7 +75,7 @@ Phase 3 first batch complete for business timers. Phase 1 remains pending.
 
 ### Phase 4: 并发控制与写入仲裁
 
-- [ ] 引入资源级单飞锁或冷却键：
+- [x] 引入资源级单飞锁或冷却键：
   - `hotlist-platform`
   - `quote-http`
   - `theme-runtime`
@@ -83,12 +83,13 @@ Phase 3 first batch complete for business timers. Phase 1 remains pending.
   - `dragon-review`
   - `ranktrend-signal`
   - `snapshot-write`
-- [ ] 防止 `dataLoader.refreshAll()` 与行情轮询重叠。
-- [ ] 防止 `setMergedStocks()` 后续增强结果覆盖 WebSocket/L2 已 patch 的实时行情字段。
+- [x] 防止 `dataLoader.refreshAll()` 与行情轮询重叠。
+- [x] 防止 `setMergedStocks()` 后续增强结果覆盖 WebSocket/L2 已 patch 的实时行情字段。
 - [ ] 梳理 `DataLayer.subscribe('merged.stocks')` 与 `AppEvents.DATA.MERGED` 的消费关系，减少重复 reload。
 - [ ] 统一失败重试合同：哪些错误跳过、哪些返回失败、哪些保留旧数据。
 - **验证:** 并发刷新测试；实时行情字段不被全量写回覆盖的回归测试。
-- **Status:** pending
+- **Status:** partial
+- **Scope note:** 第一批落地资源锁基础设施、`hotlist-platform` 串行、`quote-http` 单飞/跳过，以及 DataLayer 实时 quote/L2 字段写入仲裁。`theme-runtime`、`dragon-*`、`ranktrend-signal`、`snapshot-write` 的实际接入和失败重试合同留待后续批次。
 
 ### Phase 5: 页面可见性、交易时间和配置策略
 

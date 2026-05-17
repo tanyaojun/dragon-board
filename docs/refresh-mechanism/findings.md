@@ -101,6 +101,16 @@
 
 Phase 3 第一批只迁移 timer 创建和状态记录，不提前改变旧 timer 的交易时间或页面隐藏行为；相关降频/暂停策略留到 Phase 5 统一处理。
 
+## Phase 4 First Batch Mapping
+
+| Resource / Path | Phase 4 State |
+| --- | --- |
+| `hotlist-platform` | 已接入 `DataLoaderFacade.loadPlatformAndMerge()`，平台热榜加载和合并链按资源串行执行。 |
+| `quote-http` | 已接入全量行情补全、手工行情详情和 HTTP fallback；fallback 遇到已有 quote HTTP 占用时跳过本轮。 |
+| `setMergedStocks()` | 已在全量/增强写入时叠加已有 realtime quote 和 L2 summary，保护实时价格、成交、盘口、逐笔聚合和资金流优先级。 |
+| `theme-runtime` / `dragon-*` / `ranktrend-signal` / `snapshot-write` | 已定义 key，但本批未实际接入，避免一次性改变多个业务链路。 |
+| `DataLayer.subscribe` + `AppEvents.DATA.MERGED` | UI store 已有版本去重；`StockStore` 仍有双监听 reload 风险，留到后续批次。 |
+
 ## Resources
 
 - `src/services/RefreshManager.ts`
