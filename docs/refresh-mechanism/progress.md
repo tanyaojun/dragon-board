@@ -1,0 +1,44 @@
+# Unified Refresh Mechanism Progress
+
+## 2026-05-17
+
+- 完成 `RefreshManager.ts` 和 `RefreshCoordinator.ts` 只读审计。
+- 完成全局定时器、轮询、WebSocket、快照、题材、龙息、预警、面板 UI tick 的只读盘点。
+- 完成业务刷新与 `DataLayer` 多源写入路径梳理。
+- 确认当前 `RefreshManager/RefreshCoordinator` 不是统一刷新中心，只覆盖部分全量刷新链。
+- 形成 0-6 阶段统一刷新机制优化方案。
+- 按用户要求使用 `planning-with-files` 工作流，将计划和发现沉淀到：
+  - `docs/refresh-mechanism/task_plan.md`
+  - `docs/refresh-mechanism/findings.md`
+  - `docs/refresh-mechanism/progress.md`
+- 开始执行 Phase 0 止血修复。
+- 新增 `src/services/__tests__/RefreshManager.test.ts`，先验证当前实现红灯，再实施修复。
+- 修复 `RefreshManager.manualRefresh()` 成功、失败和并发后的 `isRefreshing` 复位。
+- 调整 `RefreshManager.stop()`，停止业务刷新 timer 时保留交易时间 checker，避免非交易暂停后无法自动恢复。
+- 为 rotation timer 增加非浏览器环境防护。
+- 将 `App.vue` 主刷新按钮改为走 `RefreshManager.manualRefresh('full')`。
+- 移除 `SettingsPanel.vue` 手动刷新成功后额外 emit `AppEvents.REFRESH.MANUAL_REQUESTED` 的重复入口。
+- 记录已知例外：`DataFreshness.vue` 仍直接 emit `MANUAL_REQUESTED`，按计划留到 Phase 1 统一入口阶段处理。
+- 跳过 Phase 1 实施，按用户要求继续 Phase 2；本轮只做任务注册表和调度骨架，不迁移业务 timer。
+- 新增 `src/services/refresh/types.ts`，定义刷新任务 id、分类、来源、任务定义和运行状态。
+- 新增 `src/services/refresh/RefreshTaskRegistry.ts`，登记 Phase 2 任务清单，并支持启停、运行中、成功、失败和运行统计状态。
+- 新增 `src/services/refresh/RefreshScheduler.ts`，提供通用 interval 调度、交易时间策略、页面可见性策略和任务状态更新能力；当前未接管既有业务 timer。
+- 将 `RefreshManager.getStatus()` 扩展为返回 `tasks` 诊断列表，用于后续设置面板或调试入口展示。
+- 新增 registry/scheduler 单测，覆盖任务清单、状态更新、错误记录、禁用任务跳过、隐藏页/交易时间 gating。
+
+## Verification
+
+- `pnpm exec vitest run src/services/__tests__/RefreshManager.test.ts`：通过，5 tests passed。
+- `pnpm exec vitest run src/services/__tests__/RefreshManager.test.ts src/services/__tests__/RefreshCoordinator.test.ts`：通过，6 tests passed。
+- `pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false`：通过。
+- `pnpm exec vitest run src/services/refresh/__tests__/RefreshTaskRegistry.test.ts src/services/refresh/__tests__/RefreshScheduler.test.ts src/services/__tests__/RefreshManager.test.ts`：通过，13 tests passed。
+- `pnpm exec vitest run src/services/__tests__/RefreshCoordinator.test.ts src/services/__tests__/RefreshManager.test.ts src/services/refresh/__tests__/RefreshTaskRegistry.test.ts src/services/refresh/__tests__/RefreshScheduler.test.ts`：通过，14 tests passed。
+- `pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false`：通过。
+- `pnpm test`：未全绿；331 passed、1 failed。失败为既有/独立快照测试 `src/services/snapshot/__tests__/runtime.test.ts` 的 `ignores IndexedDB existence and rewrites through sqlite for formal snapshots`，单独运行同样失败，未纳入本次 Phase 0 修复范围。
+
+## Next Step
+
+- 回到 Phase 1：统一全量刷新入口。
+- 优先处理 `DataFreshness.vue` 仍绕过 `RefreshManager` 的手动刷新入口。
+- Phase 3 前不要直接启用 `RefreshScheduler.startAll()`；应逐个迁移业务 timer 并保留回归测试。
+- 另行决定是否单独修复 `snapshot/runtime.test.ts` 的既有失败。

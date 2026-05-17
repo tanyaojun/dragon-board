@@ -467,9 +467,7 @@ const handleRefresh = async () => {
   showToast('⏳ 正在刷新全部数据...', 'info')
 
   try {
-    await dataLoader.refreshAll({ force: true, source: 'manual' })
-
-    showToast('✅ 数据刷新完成', 'success')
+    await RefreshManager.manualRefresh('full')
   } catch (error) {
     showToast('❌ 刷新失败', 'error')
   }

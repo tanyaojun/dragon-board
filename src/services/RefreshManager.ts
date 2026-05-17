@@ -9,6 +9,8 @@ import { isTradingTime } from '../utils/time'
 import type { RefreshStrategy as ConfigRefreshStrategy, RefreshConfig } from '../types/config'
 import { REFRESH_STRATEGY_CONFIGS, REFRESH_STORAGE_KEY } from '../types/config'
 import { refreshCoordinator } from './RefreshCoordinator'
+import { RefreshScheduler } from './refresh/RefreshScheduler'
+import { createRefreshTaskRegistry } from './refresh/RefreshTaskRegistry'
 
 export type RefreshStrategy = 'conservative' | 'balanced' | 'aggressive'
 
@@ -79,6 +81,10 @@ class RefreshManagerService {
   }
 
   private currentConfig: RefreshConfig
+  private readonly taskRegistry = createRefreshTaskRegistry()
+  private readonly scheduler = new RefreshScheduler(this.taskRegistry, {
+    isTradingTime: () => isTradingTime(),
+  })
   private unsubscribeFns: (() => void)[] = []
   private destroyed = false
   private isTradingTimeCache = false
@@ -192,7 +198,7 @@ class RefreshManagerService {
    * 停止刷新
    */
   stop(): boolean {
-    this.clearAllTimers()
+    this.clearRefreshTimers()
     this.state.isRunning = false
     EventManager.emit('refresh:stopped', { timestamp: Date.now() })
     debugLog('[RefreshManager] ⏸️ 已停止')
@@ -348,6 +354,8 @@ class RefreshManagerService {
       })
 
       return false
+    } finally {
+      this.state.isRefreshing = false
     }
   }
 
@@ -390,13 +398,17 @@ class RefreshManagerService {
   }
 
   private clearAllTimers(): void {
-    if (this.timers.full) {
-      clearInterval(this.timers.full)
-      this.timers.full = null
-    }
+    this.clearRefreshTimers()
     if (this.timers.trading) {
       clearInterval(this.timers.trading)
       this.timers.trading = null
+    }
+  }
+
+  private clearRefreshTimers(): void {
+    if (this.timers.full) {
+      clearInterval(this.timers.full)
+      this.timers.full = null
     }
     if (this.timers.maintenance) {
       clearInterval(this.timers.maintenance)
@@ -530,7 +542,7 @@ class RefreshManagerService {
     // AllTick 轮换定时器（纳入统一清理，避免泄漏）
     if (this.timers.rotation) clearInterval(this.timers.rotation)
     this.timers.rotation = setInterval(() => {
-      if (this.state.isRunning && !this.destroyed) {
+      if (typeof window !== 'undefined' && this.state.isRunning && !this.destroyed) {
         ;(window as any).webSocketService?.runRotation?.()
       }
     }, 45000)
@@ -552,6 +564,7 @@ class RefreshManagerService {
       isRefreshing: this.state.isRefreshing,
       isTradingTime: isTradingTime(),
       stats: { ...this.state.stats },
+      tasks: this.taskRegistry.listTasks(),
       lastError: null,
       hotStocksLimit: this.currentConfig.hotStocksLimit,
     }
@@ -591,6 +604,7 @@ class RefreshManagerService {
       totalStocksLoaded: 0,
       totalLeadersFound: 0,
     }
+    this.taskRegistry.resetRuntimeState()
 
     if (this.state.enabled && !this.destroyed) {
       this.start()
@@ -616,6 +630,7 @@ class RefreshManagerService {
     this.unsubscribeFns = []
 
     this.clearAllTimers()
+    this.scheduler.destroy()
 
     debugLog('[RefreshManager] 💥 已销毁')
   }

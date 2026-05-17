@@ -403,7 +403,6 @@ async function manualRefresh(type: 'full') {
   if (success) {
     showToast(`🔄 开始全量刷新`, 'info')
     setTimeout(loadStatus, 1000)
-    EventManager.emit(AppEvents.REFRESH.MANUAL_REQUESTED, { type })
   } else {
     showToast(`❌ 刷新失败`, 'error')
   }
