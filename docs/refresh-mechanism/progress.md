@@ -59,12 +59,21 @@
 - `DataLoaderFacade` 的全量行情补全、手工行情详情和 HTTP fallback 接入 `quote-http` 锁；fallback 在全量刷新占用 quote HTTP 时跳过本轮，避免重复请求和写入交错。
 - `DataLayer.setMergedStocks()` 在写入全量/增强股票行时重新叠加已有 realtime quote 与 L2 summary 投影，防止 WebSocket/L2 已 patch 的价格、成交、盘口和逐笔聚合字段被旧全量结果覆盖。
 - 新增资源锁单测、DataLoader 并发回归测试和 DataLayer 实时字段保护测试。
-- 本批未处理 `theme-runtime`、`dragon-breath`、`dragon-review`、`ranktrend-signal`、`snapshot-write` 的实际接入；失败重试合同和 `StockStore` 双通道 reload 去重仍留待后续。
+
+## Phase 4 Second Batch
+
+- `themeFacade.refreshRuntime()` 的异步无 context 路径接入 `theme-runtime` 锁，保留显式 context 的同步计算口径，避免扩大同步调用方影响面。
+- `DragonBreathAnalyzer.analyzeMarketBreath()` 接入 `dragon-breath` 锁，已有分析运行时跳过本轮事件/定时触发，保留原 cooldown 与 `_analyzing` 合同。
+- `dragonReviewService.runFullUpdate()` 接入 `dragon-review` 锁，真龙复盘在统一资源层等待串行，保留内部 `building` 兜底。
+- `DataLoaderFacade.refreshRankTrendSignals()` 接入 `ranktrend-signal` 锁，手工/定时信号刷新等待串行。
+- `SnapshotRuntime.saveSnapshotRecord()` 用 `snapshot-write` 锁替代本地写入队列，保留原正式快照 SQLite 主写和本地投影策略。
+- `StockStore` 通过 DataLayer `version.stocks` 去重，避免 `merged.stocks` 通知和 `DATA.MERGED` 事件在同一股票版本上重复 `loadStocks()`。
+- 失败/跳过合同暂按现有业务语义收敛：等待串行的资源失败继续由调用方原有 catch/返回值处理；`quote-http` fallback 与龙息分析在资源占用时跳过本轮；快照重复槽位返回 `false`。
+- 验证：刷新相关 12 个测试文件 61 个测试通过；`vue-tsc --noEmit -p tsconfig.app.json --pretty false` 通过；`git diff --check` 通过。
+- 已知边界：`src/services/snapshot/__tests__/runtime.test.ts` 全量仍有 1 个既有失败，失败点是正式快照本地投影写入期望；本次新增 `snapshot-write` 并发测试已单独通过。
 
 ## Next Step
 
-- 继续 Phase 4 后半段：给题材、龙息、复盘、RankTrend 信号和快照写入逐步接入资源锁，并定义失败重试/跳过合同。
-- 梳理 `StockStore` 的 `DataLayer.subscribe('merged.stocks')` 与 `AppEvents.DATA.MERGED` 双监听，减少重复 `loadStocks()`。
 - 回到 Phase 1：统一全量刷新入口，优先处理 `DataFreshness.vue` 仍绕过 `RefreshManager` 的手动刷新入口。
 - 后续不要直接启用 `RefreshScheduler.startAll()`；仍应逐个迁移任务并保留回归测试。
 - 另行决定是否单独修复 `snapshot/runtime.test.ts` 的既有失败。

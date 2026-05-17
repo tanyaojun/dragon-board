@@ -6,6 +6,7 @@ import { themeRuntimeStore } from './ThemeRuntimeStore'
 import { jxbkThemeFeed } from './JxbkThemeFeed'
 import { themeRepository } from './ThemeRepository'
 import { refreshRuntime, themeInputSignature } from './ThemeRuntimeCoordinator'
+import { refreshResourceLocks } from '../refresh/RefreshResourceLocks'
 import { deriveThemeHeatLevel } from './stockThemeMeta'
 import type {
   ThemeExposureProjection,
@@ -121,15 +122,17 @@ export function refreshRuntimeState(
     return apply(result, options.context)
   }
 
-  const result = refreshRuntime({
-    ...options,
-    source: options.source || 'themeFacade',
-  } as ThemeRefreshOptions & { source: string })
-
-  if (result instanceof Promise) {
-    return result.then((resolved) => apply(resolved, buildContextForRuntimeResult(options, resolved)))
-  }
-  return apply(result, buildContextForRuntimeResult(options, result))
+  return refreshResourceLocks
+    .runExclusive('theme-runtime', () =>
+      refreshRuntime({
+        ...options,
+        source: options.source || 'themeFacade',
+      } as ThemeRefreshOptions & { source: string }),
+    )
+    .then((locked) => {
+      const result = locked.value!
+      return apply(result, buildContextForRuntimeResult(options, result))
+    })
 }
 
 export function refreshThemeFacadeState(options: ThemeRefreshOptions & {

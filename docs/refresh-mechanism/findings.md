@@ -108,8 +108,12 @@ Phase 3 第一批只迁移 timer 创建和状态记录，不提前改变旧 time
 | `hotlist-platform` | 已接入 `DataLoaderFacade.loadPlatformAndMerge()`，平台热榜加载和合并链按资源串行执行。 |
 | `quote-http` | 已接入全量行情补全、手工行情详情和 HTTP fallback；fallback 遇到已有 quote HTTP 占用时跳过本轮。 |
 | `setMergedStocks()` | 已在全量/增强写入时叠加已有 realtime quote 和 L2 summary，保护实时价格、成交、盘口、逐笔聚合和资金流优先级。 |
-| `theme-runtime` / `dragon-*` / `ranktrend-signal` / `snapshot-write` | 已定义 key，但本批未实际接入，避免一次性改变多个业务链路。 |
-| `DataLayer.subscribe` + `AppEvents.DATA.MERGED` | UI store 已有版本去重；`StockStore` 仍有双监听 reload 风险，留到后续批次。 |
+| `theme-runtime` | 已接入 `themeFacade.refreshRuntime()` 的异步无 context 路径；显式 context 的同步路径保持不变。 |
+| `dragon-breath` | 已接入 `DragonBreathAnalyzer.analyzeMarketBreath()`；资源占用时跳过本轮，保留 cooldown 语义。 |
+| `dragon-review` | 已接入 `DragonReviewService.runFullUpdate()`；统一等待串行，保留内部 `building` 兜底。 |
+| `ranktrend-signal` | 已接入 `DataLoaderFacade.refreshRankTrendSignals()`，手工/定时信号刷新等待串行。 |
+| `snapshot-write` | 已接入 `SnapshotRuntime.saveSnapshotRecord()`，替换本地写入队列，保留原重复槽位返回 `false` 语义。 |
+| `DataLayer.subscribe` + `AppEvents.DATA.MERGED` | UI store 和 `StockStore` 都按 DataLayer 股票版本去重；其它面板级订阅仍按自身渲染职责保留。 |
 
 ## Resources
 

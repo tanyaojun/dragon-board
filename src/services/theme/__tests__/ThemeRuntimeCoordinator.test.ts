@@ -4,6 +4,7 @@ import { refreshThemeFacadeState, themeFacade } from '../ThemeFacade'
 import { jxbkThemeFeed } from '../JxbkThemeFeed'
 import { refreshRuntime } from '../ThemeRuntimeCoordinator'
 import { themeRuntimeStore } from '../ThemeRuntimeStore'
+import { refreshResourceLocks } from '../../refresh/RefreshResourceLocks'
 import type { ThemeSourceContext } from '../types'
 
 function context(timestamp = 1713751200000): ThemeSourceContext {
@@ -102,6 +103,49 @@ describe('ThemeRuntimeCoordinator', () => {
     expect(themeFacade.getThemeFactors()).toEqual(result.factors)
     expect(themeFacade.getRotationSummary()).toEqual(result.rotationSummary)
     expect(themeFacade.getRuntimeSnapshot().inputSignature).toBe(result.inputSignature)
+  })
+
+  it('serializes async facade runtime refreshes through the theme resource', async () => {
+    const releases: Array<() => void> = []
+    const spy = vi.spyOn(jxbkThemeFeed, 'refreshBlocks').mockImplementation(
+      () =>
+        new Promise<any[]>((resolve) => {
+          releases.push(() => resolve([]))
+        }),
+    )
+
+    try {
+      const first = themeFacade.refreshRuntime({
+        source: 'manual',
+        forceJxbk: true,
+        emitAlerts: false,
+      }) as Promise<any>
+
+      await vi.waitFor(() => {
+        expect(refreshResourceLocks.isLocked('theme-runtime')).toBe(true)
+      })
+
+      const second = themeFacade.refreshRuntime({
+        source: 'manual',
+        forceJxbk: true,
+        emitAlerts: false,
+      }) as Promise<any>
+      await Promise.resolve()
+
+      expect(spy).toHaveBeenCalledTimes(1)
+
+      releases.shift()?.()
+      await first
+      await vi.waitFor(() => {
+        expect(spy).toHaveBeenCalledTimes(2)
+      })
+      releases.shift()?.()
+      await second
+
+      expect(refreshResourceLocks.isLocked('theme-runtime')).toBe(false)
+    } finally {
+      spy.mockRestore()
+    }
   })
 
   it('keeps legacy refresh facade as a wrapper around the same runtime chain', () => {

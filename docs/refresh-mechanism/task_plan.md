@@ -6,7 +6,7 @@
 
 ## Current Phase
 
-Phase 4 first batch complete for resource locks and write arbitration. Phase 1 remains pending.
+Phase 4 resource locks and write arbitration complete. Phase 1 remains pending.
 
 ## Success Criteria
 
@@ -85,11 +85,11 @@ Phase 4 first batch complete for resource locks and write arbitration. Phase 1 r
   - `snapshot-write`
 - [x] 防止 `dataLoader.refreshAll()` 与行情轮询重叠。
 - [x] 防止 `setMergedStocks()` 后续增强结果覆盖 WebSocket/L2 已 patch 的实时行情字段。
-- [ ] 梳理 `DataLayer.subscribe('merged.stocks')` 与 `AppEvents.DATA.MERGED` 的消费关系，减少重复 reload。
-- [ ] 统一失败重试合同：哪些错误跳过、哪些返回失败、哪些保留旧数据。
+- [x] 梳理 `DataLayer.subscribe('merged.stocks')` 与 `AppEvents.DATA.MERGED` 的消费关系，减少重复 reload。
+- [x] 统一失败重试合同：哪些错误跳过、哪些返回失败、哪些保留旧数据。
 - **验证:** 并发刷新测试；实时行情字段不被全量写回覆盖的回归测试。
-- **Status:** partial
-- **Scope note:** 第一批落地资源锁基础设施、`hotlist-platform` 串行、`quote-http` 单飞/跳过，以及 DataLayer 实时 quote/L2 字段写入仲裁。`theme-runtime`、`dragon-*`、`ranktrend-signal`、`snapshot-write` 的实际接入和失败重试合同留待后续批次。
+- **Status:** complete
+- **Scope note:** 资源锁已覆盖 `hotlist-platform`、`quote-http`、`theme-runtime`、`dragon-breath`、`dragon-review`、`ranktrend-signal`、`snapshot-write`。`quote-http` fallback 和龙息分析使用 `skipIfLocked` 跳过本轮，平台/题材/复盘/RankTrend/快照写入等待串行；失败仍按各服务既有合同返回结构化失败或保留旧数据，不在本阶段统一改变业务降级语义。`StockStore` 按 DataLayer 股票版本去重，减少 `merged.stocks` 与 `DATA.MERGED` 双通道 reload。
 
 ### Phase 5: 页面可见性、交易时间和配置策略
 

@@ -120,9 +120,14 @@ vi.mock('../RankTrendSignalService', () => ({
       return stocks
     }),
     updateStockSignals: vi.fn(),
-    refreshRankTrendSignals: vi.fn(() => [
-      { code: '000001', name: '平安银行', rankTrendCoverageWarning: 'refreshed' },
-    ]),
+    refreshRankTrendSignals: vi.fn(async () => {
+      if (blockSignalCalculation) {
+        await new Promise<void>((resolve) => {
+          releaseSignalCalculation = resolve
+        })
+      }
+      return [{ code: '000001', name: '平安银行', rankTrendCoverageWarning: 'refreshed' }]
+    }),
   },
 }))
 
@@ -388,6 +393,29 @@ describe('DataLoaderFacade', () => {
         rankTrendCoverageWarning: 'refreshed',
       }),
     ])
+  })
+
+  it('serializes manual RankTrend signal refreshes through the ranktrend resource', async () => {
+    blockSignalCalculation = true
+    const { dataLoader } = await import('../../dataLoader')
+    const { rankTrendSignalService } = await import('../RankTrendSignalService')
+
+    const first = dataLoader.refreshRankTrendSignals()
+
+    await vi.waitFor(() => {
+      expect(releaseSignalCalculation).toEqual(expect.any(Function))
+    })
+
+    const second = dataLoader.refreshRankTrendSignals()
+    await Promise.resolve()
+
+    expect(rankTrendSignalService.refreshRankTrendSignals).toHaveBeenCalledTimes(1)
+
+    blockSignalCalculation = false
+    releaseSignalCalculation?.()
+    await Promise.all([first, second])
+
+    expect(rankTrendSignalService.refreshRankTrendSignals).toHaveBeenCalledTimes(2)
   })
 
   it('publishes hotness recalculation through the DataLoader boundary', async () => {

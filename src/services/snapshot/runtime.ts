@@ -1,6 +1,7 @@
 import { SnapshotBackupSync } from './backupSync'
 import { SnapshotBackupSyncStateStore } from './backupSyncState'
 import { snapshotBackendIngest } from './backendIngest'
+import { refreshResourceLocks } from '../refresh/RefreshResourceLocks'
 import {
   arrayToCSV,
   buildDailySnapshot,
@@ -122,7 +123,6 @@ export class SnapshotRuntime {
   })
   private persistRequested = false
   private backupBucketPersistRequested = false
-  private snapshotWriteQueue: Promise<void> = Promise.resolve()
   private timer: ReturnType<typeof setInterval> | null = null
   private snapshotSyncTimer: number | null = null
   private snapshotSchedulePromise: Promise<void> | null = null
@@ -1245,44 +1245,39 @@ export class SnapshotRuntime {
     record: SnapshotRecord,
     bundle: SnapshotProjectionBundle | null = null,
   ): Promise<boolean> {
-    let created = false
-    // 写入必须串行，避免同一槽位在定时器和手工触发并发时落出重复记录。
-    const task = this.snapshotWriteQueue.catch(() => undefined).then(async () => {
-      const localOnlySnapshot = record.type === 'five_minute'
-      if (localOnlySnapshot) {
-        const existing = await this.snapshotStore.getById(record.id)
-        if (existing) return
-        await this.ensurePersistentStorage()
-      } else if (await this.snapshotExistsInSqlitePrimary(record.id)) {
-        return
-      }
-      const effectiveBundle = bundle || this.createProjectionBundle(record)
-
-      if (localOnlySnapshot) {
-        await this.snapshotProjectionWriter.saveBundle(effectiveBundle)
-        created = true
-        return
-      }
-
-      const sqliteWrite = await this.writeSnapshotBundleToSqlitePrimary(effectiveBundle)
-      if (!sqliteWrite.ok) {
-        throw sqliteWrite.error instanceof Error
-          ? sqliteWrite.error
-          : new Error(`snapshot_sqlite_primary_write_failed:${record.id}`)
-      }
-      if (sqliteWrite.skipped) {
-        created = false
-        return
-      }
-
-      created = true
-    })
-    this.snapshotWriteQueue = task.then(() => undefined, () => undefined)
     try {
-      await task
-      return created
+      const locked = await refreshResourceLocks.runExclusive('snapshot-write', async () => {
+        const localOnlySnapshot = record.type === 'five_minute'
+        if (localOnlySnapshot) {
+          const existing = await this.snapshotStore.getById(record.id)
+          if (existing) return false
+          await this.ensurePersistentStorage()
+        } else if (await this.snapshotExistsInSqlitePrimary(record.id)) {
+          return false
+        }
+        const effectiveBundle = bundle || this.createProjectionBundle(record)
+
+        if (localOnlySnapshot) {
+          await this.snapshotProjectionWriter.saveBundle(effectiveBundle)
+          return true
+        }
+
+        const sqliteWrite = await this.writeSnapshotBundleToSqlitePrimary(effectiveBundle)
+        if (!sqliteWrite.ok) {
+          throw sqliteWrite.error instanceof Error
+            ? sqliteWrite.error
+            : new Error(`snapshot_sqlite_primary_write_failed:${record.id}`)
+        }
+        if (sqliteWrite.skipped) {
+          return false
+        }
+
+        return true
+      })
+
+      return locked.value ?? false
     } catch (error) {
-      this.logger.error('[DataLayer] Snapshot write queue failed:', record.id, error)
+      this.logger.error('[DataLayer] Snapshot write failed:', record.id, error)
       return false
     }
   }

@@ -626,7 +626,11 @@ class DataLoaderService {
   }
 
   async refreshRankTrendSignals(): Promise<void> {
-    const stocks = await rankTrendSignalService.refreshRankTrendSignals()
+    const result = await refreshResourceLocks.runExclusive(
+      'ranktrend-signal',
+      () => rankTrendSignalService.refreshRankTrendSignals(),
+    )
+    const stocks = result.value ?? []
     if (stocks.length) {
       this.publishStocks(stocks, { reason: 'manual-signal-update' })
     }

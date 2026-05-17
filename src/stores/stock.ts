@@ -29,6 +29,7 @@ export const useStockStore = defineStore('stock', () => {
 
   // 缓存 Map
   const stockMap = new Map<string, Stock>()
+  let lastLoadedStocksVersion = -1
 
   function normalizeStock(stock: MergedStock): Stock {
     return {
@@ -228,6 +229,9 @@ export const useStockStore = defineStore('stock', () => {
   async function loadStocks(force = false) {
     if (loading.value && !force) return
 
+    const currentStocksVersion = dataLayer.getVersion().stocks
+    if (!force && currentStocksVersion === lastLoadedStocksVersion) return
+
     const startTime = performance.now()
     loading.value = true
     error.value = null
@@ -247,6 +251,7 @@ export const useStockStore = defineStore('stock', () => {
         updateStockCache()
 
         lastUpdate.value = Date.now()
+        lastLoadedStocksVersion = currentStocksVersion
         version.value++
 
         // 重置重试计数
@@ -263,6 +268,7 @@ export const useStockStore = defineStore('stock', () => {
       } else {
         stocks.value = []
         stockMap.clear()
+        lastLoadedStocksVersion = currentStocksVersion
         console.warn('[StockStore] ⚠️ 无数据，计划重试')
         scheduleRetry()
       }
@@ -514,6 +520,7 @@ export const useStockStore = defineStore('stock', () => {
       }
       pendingUpdates.clear()
       stockMap.clear()
+      lastLoadedStocksVersion = -1
     }
   }
 

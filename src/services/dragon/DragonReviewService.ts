@@ -1,6 +1,7 @@
 import { EventManager } from '../../utils/eventManager'
 import { AppEvents } from '../../types'
 import { dataLayer } from '../../services/DataLayer'
+import { refreshResourceLocks } from '../refresh/RefreshResourceLocks'
 import { frameNormalizer } from './FrameNormalizer'
 import { sessionSegmenter } from './SessionSegmenter'
 import { regimeClassifier } from './RegimeClassifier'
@@ -80,9 +81,15 @@ class DragonReviewService {
   }
 
   async runFullUpdate(date?: string): Promise<number> {
-    const result = await this.rebuildReview(date)
-    this.syncData()
-    return result.trueLeaders.length
+    const locked = await refreshResourceLocks.runExclusive(
+      'dragon-review',
+      async () => {
+        const result = await this.rebuildReview(date)
+        this.syncData()
+        return result.trueLeaders.length
+      },
+    )
+    return locked.value ?? 0
   }
 
   async recalculateAll(date?: string): Promise<number> {

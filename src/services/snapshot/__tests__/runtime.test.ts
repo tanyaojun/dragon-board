@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createSnapshotRecord } from '../identity'
 import { SnapshotRuntime, buildSnapshotBackendIngestIdempotencyKey } from '../runtime'
+import { refreshResourceLocks } from '../../refresh/RefreshResourceLocks'
 import { getExpectedSlots } from '../schedule'
 import type { SnapshotCaptureMode, SnapshotQueryOptions, SnapshotRecord, SnapshotType } from '../types'
 
@@ -341,6 +342,42 @@ describe('SnapshotRuntime', () => {
     expect(exists).toHaveBeenCalledWith(record.id)
     expect(sqliteWrite).not.toHaveBeenCalled()
     expect((runtime as any).snapshotProjectionWriter.saveBundle).not.toHaveBeenCalled()
+  })
+
+  it('serializes snapshot record writes through the snapshot-write resource', async () => {
+    const runtime = createRuntime()
+    const releases: Array<() => void> = []
+    const writeSnapshotBundleToSqlitePrimary = vi.fn(
+      () =>
+        new Promise<{ ok: true }>((resolve) => {
+          releases.push(() => resolve({ ok: true }))
+        }),
+    )
+    ;(runtime as any).writeSnapshotBundleToSqlitePrimary = writeSnapshotBundleToSqlitePrimary
+
+    const first = (runtime as any).saveSnapshotRecord(
+      createRecord('half_hour', '2026-04-21', '10:00'),
+    )
+
+    await vi.waitFor(() => {
+      expect(refreshResourceLocks.isLocked('snapshot-write')).toBe(true)
+    })
+
+    const second = (runtime as any).saveSnapshotRecord(
+      createRecord('half_hour', '2026-04-21', '10:30'),
+    )
+    await Promise.resolve()
+
+    expect(writeSnapshotBundleToSqlitePrimary).toHaveBeenCalledTimes(1)
+
+    releases.shift()?.()
+    await expect(first).resolves.toBe(true)
+    await vi.waitFor(() => {
+      expect(writeSnapshotBundleToSqlitePrimary).toHaveBeenCalledTimes(2)
+    })
+    releases.shift()?.()
+    await expect(second).resolves.toBe(true)
+    expect(refreshResourceLocks.isLocked('snapshot-write')).toBe(false)
   })
 
   it('builds stable backend ingest idempotency keys for the same snapshot slot', () => {

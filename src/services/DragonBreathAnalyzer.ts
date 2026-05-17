@@ -23,6 +23,7 @@ import { API_CONFIG } from '../config/constants'
 import { dataLayer } from './DataLayer'
 import { FORMAL_SNAPSHOT_READ_POLICY } from './snapshot/readPolicy'
 import { snapshotFacade } from './snapshot/facade'
+import { refreshResourceLocks } from './refresh/RefreshResourceLocks'
 import { refreshScheduler } from './refresh/RefreshTaskRuntime'
 import { StockUtils } from '../utils/common'
 
@@ -1211,6 +1212,15 @@ private buildFactorData(): any[] {
   }
 
   async analyzeMarketBreath(force: boolean = false): Promise<boolean> {
+    const locked = await refreshResourceLocks.runExclusive(
+      'dragon-breath',
+      () => this.doAnalyzeMarketBreath(force),
+      { skipIfLocked: true },
+    )
+    return locked.value ?? false
+  }
+
+  private async doAnalyzeMarketBreath(force: boolean = false): Promise<boolean> {
     const now = Date.now()
     if (!force && now - this.lastAnalysisTime < this.ANALYSIS_COOLDOWN) {
       return false
