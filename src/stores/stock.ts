@@ -397,8 +397,8 @@ export const useStockStore = defineStore('stock', () => {
     })
   }
 
-  // ===== 监听增量更新器的事件 =====
-  function setupIncrementalListeners(): (() => void)[] {
+  // ===== 监听业务数据变更事件 =====
+  function setupDataListeners(): (() => void)[] {
     const listeners: (() => void)[] = []
 
     // 监听行情更新（WebSocket）
@@ -434,24 +434,12 @@ export const useStockStore = defineStore('stock', () => {
     })
     listeners.push(unsubSector)
 
-    // 监听增量更新器任务失败（可选）
-    const unsubTaskFailed = EventManager.on('incremental:task-failed', (data: any) => {
-      console.warn('[StockStore] 增量更新任务失败:', data)
-    })
-    listeners.push(unsubTaskFailed)
-
     return listeners
   }
 
   // ===== 监听刷新管理器的事件 =====
   function setupRefreshListeners(): (() => void)[] {
     const listeners: (() => void)[] = []
-
-    // 监听增量刷新请求
-    const unsubIncremental = EventManager.on(AppEvents.REFRESH.INCREMENTAL_REQUESTED, () => {
-      debugLog('[StockStore] 📥 收到增量刷新请求')
-    })
-    listeners.push(unsubIncremental)
 
     // 监听全量刷新完成
     const unsubFullComplete = EventManager.on(AppEvents.REFRESH.COMPLETE, (data: any) => {
@@ -479,7 +467,7 @@ export const useStockStore = defineStore('stock', () => {
     const unsubscribeFns: (() => void)[] = []
 
     // 设置监听器
-    unsubscribeFns.push(...setupIncrementalListeners())
+    unsubscribeFns.push(...setupDataListeners())
     unsubscribeFns.push(...setupRefreshListeners())
 
     // 保留 DataLayer 订阅作为后备

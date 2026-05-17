@@ -100,7 +100,7 @@ export class AlgorithmWarmupManager {
   }
 
   /**
-   * 供 RefreshManager 调用的更新方法 - 全量预热
+   * 供 AlgorithmManager/协调刷新链调用的全量预热方法。
    */
   async runUpdate(): Promise<void> {
     debugLog('[AlgorithmWarmup] 收到刷新指令，执行全量预热')

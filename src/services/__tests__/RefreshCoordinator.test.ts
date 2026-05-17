@@ -4,6 +4,11 @@ import { refreshCoordinator } from '../RefreshCoordinator'
 
 describe('RefreshCoordinator service registry', () => {
   afterEach(() => {
+    ;(refreshCoordinator as any).destroy?.()
+    ;(refreshCoordinator as any).reset?.()
+    ;(refreshCoordinator as any).pendingRequests?.clear()
+    ;(refreshCoordinator as any).services?.clear()
+    ;(refreshCoordinator as any).setupListeners?.()
     vi.unstubAllGlobals()
   })
 
@@ -21,6 +26,11 @@ describe('RefreshCoordinator service registry', () => {
     )
     expect(registry.find((service) => service.name === 'dataLoader')).not.toHaveProperty(
       'syncMethod',
+    )
+    expect(registry.find((service) => service.name === 'algorithmManager')).toEqual(
+      expect.objectContaining({
+        fullMethod: 'runFullUpdate',
+      }),
     )
   })
 
@@ -199,5 +209,51 @@ describe('RefreshCoordinator service registry', () => {
     await Promise.resolve()
 
     expect(runUpdate).not.toHaveBeenCalled()
+  })
+
+  it('does not auto-register services from window after import', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.stubGlobal('window', {
+        dataLoader: { runUpdate: vi.fn(async () => undefined) },
+      })
+
+      vi.resetModules()
+      const { refreshCoordinator: importedCoordinator } = await import('../RefreshCoordinator')
+      await vi.advanceTimersByTimeAsync(6_000)
+
+      expect(importedCoordinator.getStatus().registeredServices).not.toContain('dataLoader')
+      importedCoordinator.destroy?.()
+    } finally {
+      vi.useRealTimers()
+      vi.resetModules()
+    }
+  })
+
+  it('removes legacy refresh event listeners when destroyed', async () => {
+    ;(refreshCoordinator as any).reset()
+    ;(refreshCoordinator as any).pendingRequests.clear()
+    ;(refreshCoordinator as any).services.clear()
+
+    const requestRefresh = vi.fn(async () => undefined)
+    vi.stubGlobal('window', {
+      RefreshManager: {
+        getStatus: () => ({ initialized: false }),
+        requestRefresh,
+      },
+    })
+
+    refreshCoordinator.destroy()
+
+    const { EventManager } = await import('../../utils/eventManager')
+    const { AppEvents } = await import('../../types')
+
+    EventManager.emit(AppEvents.REFRESH.MANUAL_REQUESTED, {
+      source: 'legacy-after-destroy',
+      force: true,
+    })
+    await Promise.resolve()
+
+    expect(requestRefresh).not.toHaveBeenCalled()
   })
 })

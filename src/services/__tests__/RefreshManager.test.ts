@@ -350,4 +350,38 @@ describe('RefreshManager Phase 0 behavior', () => {
     expect(run).toHaveBeenCalledTimes(1)
     refreshScheduler.stopTask('theme.runtime')
   })
+
+  it('does not expose legacy incremental refresh config or stats', async () => {
+    const { RefreshManager } = await loadRefreshManager()
+
+    await RefreshManager.init()
+
+    expect(RefreshManager.getStatus()).not.toHaveProperty('incrementalRefreshInterval')
+    expect(RefreshManager.getStats()).not.toHaveProperty('incrementalRefreshes')
+    expect(RefreshManager.getStats()).not.toHaveProperty('lastIncrementalRefreshTime')
+  })
+
+  it('drops legacy incremental refresh config when saving stored settings', async () => {
+    storage.setItem(
+      'refresh-config',
+      JSON.stringify({
+        enabled: true,
+        strategy: 'balanced',
+        tradingTimeOnly: true,
+        allowManualRefresh: true,
+        fullRefreshInterval: 15 * 60 * 1000,
+        incrementalRefreshInterval: 1234,
+        hotStocksLimit: 100,
+        retryOnFailure: true,
+        maxRetries: 2,
+      }),
+    )
+    const { RefreshManager } = await loadRefreshManager()
+
+    await RefreshManager.init()
+    RefreshManager.updateConfig({ fullRefreshInterval: 30 * 60 * 1000 })
+
+    const saved = JSON.parse(String(storage.setItem.mock.calls.at(-1)?.[1] || '{}'))
+    expect(saved.incrementalRefreshInterval).toBeUndefined()
+  })
 })

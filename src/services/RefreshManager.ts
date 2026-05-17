@@ -13,6 +13,7 @@ import { refreshScheduler, refreshTaskRegistry } from './refresh/RefreshTaskRunt
 import type { RefreshRequest, RefreshRequestResult } from './refresh/types'
 
 export type RefreshStrategy = 'conservative' | 'balanced' | 'aggressive'
+type StoredRefreshConfig = RefreshConfig & { incrementalRefreshInterval?: number }
 
 interface RefreshStatus {
   initialized: boolean
@@ -21,7 +22,6 @@ interface RefreshStatus {
   tradingTimeOnly: boolean
   allowManualRefresh: boolean
   fullRefreshInterval: number
-  incrementalRefreshInterval: number
   hotStocksLimit?: number
   retryOnFailure: boolean
   maxRetries?: number
@@ -29,12 +29,10 @@ interface RefreshStatus {
   isRefreshing: boolean
   stats: {
     fullRefreshes: number
-    incrementalRefreshes: number
     manualRefreshes: number
     failedRefreshes: number
     lastRefreshTime: number | null
     lastFullRefreshTime: number | null
-    lastIncrementalRefreshTime: number | null
     totalStocksLoaded: number
     totalLeadersFound: number
   }
@@ -46,7 +44,10 @@ function normalizeRefreshStrategy(strategy: ConfigRefreshStrategy | undefined): 
     : 'balanced'
 }
 
-// 注意：已移除 incrementalUpdater 依赖
+function sanitizeRefreshConfig(config: StoredRefreshConfig): RefreshConfig {
+  const { incrementalRefreshInterval: _legacyIncrementalInterval, ...nextConfig } = config
+  return nextConfig
+}
 
 class RefreshManagerService {
   private state = reactive<RefreshStatus>({
@@ -56,18 +57,15 @@ class RefreshManagerService {
     tradingTimeOnly: true,
     allowManualRefresh: true,
     fullRefreshInterval: 3600000,
-    incrementalRefreshInterval: 300000, // 保留但不再使用
     retryOnFailure: true,
     isRunning: false,
     isRefreshing: false,
     stats: {
       fullRefreshes: 0,
-      incrementalRefreshes: 0,
       manualRefreshes: 0,
       failedRefreshes: 0,
       lastRefreshTime: null,
       lastFullRefreshTime: null,
-      lastIncrementalRefreshTime: null,
       totalStocksLoaded: 0,
       totalLeadersFound: 0,
     },
@@ -98,24 +96,22 @@ class RefreshManagerService {
     try {
       const saved = localStorage.getItem(REFRESH_STORAGE_KEY)
       if (saved) {
-        const parsed = JSON.parse(saved) as RefreshConfig
+        const parsed = JSON.parse(saved) as StoredRefreshConfig
 
         if (parsed.strategy && REFRESH_STRATEGY_CONFIGS[parsed.strategy]) {
           const preset = REFRESH_STRATEGY_CONFIGS[parsed.strategy]
 
-          return {
+          return sanitizeRefreshConfig({
             ...preset,
             ...parsed,
             strategy: parsed.strategy,
             fullRefreshInterval: parsed.fullRefreshInterval ?? preset.fullRefreshInterval,
-            incrementalRefreshInterval:
-              parsed.incrementalRefreshInterval ?? preset.incrementalRefreshInterval,
             hotStocksLimit: parsed.hotStocksLimit ?? preset.hotStocksLimit,
             tradingTimeOnly: parsed.tradingTimeOnly ?? preset.tradingTimeOnly,
             allowManualRefresh: parsed.allowManualRefresh ?? preset.allowManualRefresh,
-          }
+          })
         }
-        return parsed
+        return sanitizeRefreshConfig(parsed)
       }
     } catch (e) {
       console.warn('[RefreshManager] 加载配置失败:', e)
@@ -130,7 +126,7 @@ class RefreshManagerService {
    */
   private saveToStorage(config: RefreshConfig): void {
     try {
-      localStorage.setItem(REFRESH_STORAGE_KEY, JSON.stringify(config))
+      localStorage.setItem(REFRESH_STORAGE_KEY, JSON.stringify(sanitizeRefreshConfig(config)))
       debugLog('[RefreshManager] 配置已保存到 localStorage:', config)
     } catch (e) {
       console.error('[RefreshManager] 保存配置失败:', e)
@@ -152,7 +148,6 @@ class RefreshManagerService {
       this.state.tradingTimeOnly = this.currentConfig.tradingTimeOnly
       this.state.allowManualRefresh = this.currentConfig.allowManualRefresh
       this.state.fullRefreshInterval = this.currentConfig.fullRefreshInterval
-      this.state.incrementalRefreshInterval = this.currentConfig.incrementalRefreshInterval
       this.state.retryOnFailure = this.currentConfig.retryOnFailure
       refreshScheduler.setPolicy({ tradingTimeOnly: this.currentConfig.tradingTimeOnly })
 
@@ -469,7 +464,6 @@ class RefreshManagerService {
     this.state.tradingTimeOnly = this.currentConfig.tradingTimeOnly
     this.state.allowManualRefresh = this.currentConfig.allowManualRefresh
     this.state.fullRefreshInterval = this.currentConfig.fullRefreshInterval
-    this.state.incrementalRefreshInterval = this.currentConfig.incrementalRefreshInterval
     this.state.retryOnFailure = this.currentConfig.retryOnFailure
     refreshScheduler.setPolicy({ tradingTimeOnly: this.currentConfig.tradingTimeOnly })
 
@@ -603,7 +597,6 @@ class RefreshManagerService {
           this.state.tradingTimeOnly = this.currentConfig.tradingTimeOnly
           this.state.allowManualRefresh = this.currentConfig.allowManualRefresh
           this.state.fullRefreshInterval = this.currentConfig.fullRefreshInterval
-          this.state.incrementalRefreshInterval = this.currentConfig.incrementalRefreshInterval
           this.state.retryOnFailure = this.currentConfig.retryOnFailure
           refreshScheduler.setPolicy({ tradingTimeOnly: this.currentConfig.tradingTimeOnly })
 
@@ -633,7 +626,6 @@ class RefreshManagerService {
       tradingTimeOnly: this.state.tradingTimeOnly,
       allowManualRefresh: this.state.allowManualRefresh,
       fullRefreshInterval: this.state.fullRefreshInterval,
-      incrementalRefreshInterval: this.state.incrementalRefreshInterval,
       retryOnFailure: this.state.retryOnFailure,
       isRunning: this.state.isRunning,
       isRefreshing: this.state.isRefreshing,
@@ -666,18 +658,15 @@ class RefreshManagerService {
     this.state.tradingTimeOnly = this.currentConfig.tradingTimeOnly
     this.state.allowManualRefresh = this.currentConfig.allowManualRefresh
     this.state.fullRefreshInterval = this.currentConfig.fullRefreshInterval
-    this.state.incrementalRefreshInterval = this.currentConfig.incrementalRefreshInterval
     this.state.retryOnFailure = this.currentConfig.retryOnFailure
     refreshScheduler.setPolicy({ tradingTimeOnly: this.currentConfig.tradingTimeOnly })
 
     this.state.stats = {
       fullRefreshes: 0,
-      incrementalRefreshes: 0,
       manualRefreshes: 0,
       failedRefreshes: 0,
       lastRefreshTime: null,
       lastFullRefreshTime: null,
-      lastIncrementalRefreshTime: null,
       totalStocksLoaded: 0,
       totalLeadersFound: 0,
     }

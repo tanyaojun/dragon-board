@@ -105,6 +105,20 @@
 
 ## Next Step
 
-- 进入 Phase 6：清理旧口径和文档，重点处理 `incrementalRefreshInterval` 的删除/重定义、`RefreshCoordinator.destroy()` 和事件解绑、以及 `window` 延迟解析主路径。
+## Phase 6 Completion
+
+- 删除旧 `incrementalRefreshInterval` 运行态口径：`RefreshConfig`、策略预设、`RefreshManager.getStatus()`、刷新统计、SettingsPanel 和 UserConfig 不再暴露或保存该字段。
+- `RefreshManager` 增加旧存储兼容剥离：旧 localStorage 里存在 `incrementalRefreshInterval` 时可正常读取，但后续保存不会写回该字段。
+- 移除旧增量刷新事件和空监听：`REFRESH.INCREMENTAL_REQUESTED`、`REFRESH.INCREMENTAL_COMPLETE`、`StockStore` 中的空日志监听和过期 `incrementalUpdaterDiagnostic.ts` 已清理。
+- `RefreshCoordinator` 不再构造期从 `window` 自动扫描服务，也不再延迟重试缺失服务；全量链服务改由 App 初始化显式注册。
+- App 在启动 `RefreshManager` 前注册 `dataLoader`、`themeRuntime`、`sectorAnalyzer`、`dragonBreathAnalyzer`、`dragonReviewService` 和 `algorithmManager`，避免手动刷新窗口期缺服务。
+- `RefreshCoordinator.destroy()` 已新增，负责解绑旧刷新事件监听、清空服务表和 pending 请求。
+- 清理误导性注释：算法性能监控、计算队列、预热管理和刷新任务描述不再声称由 `RefreshManager` 直接调度未接入的维护任务。
+- 验证：刷新机制相关 11 个测试文件通过，80 tests passed；`pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false` 通过；`pnpm test:ranktrend` 通过，103 tests passed；`pnpm build` 通过；`git diff --check` 通过。
+- 已知边界：完整 `pnpm test` 仍只有既有 `src/services/snapshot/__tests__/runtime.test.ts` 用例 `ignores IndexedDB existence and rewrites through sqlite for formal snapshots` 失败，失败点仍为 `snapshotProjectionWriter.saveBundle` 调用次数期望不满足，本阶段未修改该快照投影问题。
+
+## Next Step
+
+- Phase 6 已完成；后续如需继续，应单独决策是否修复 `snapshot/runtime.test.ts` 的既有失败。
 - 后续不要直接启用 `RefreshScheduler.startAll()`；仍应逐个迁移任务并保留回归测试。
 - 另行决定是否单独修复 `snapshot/runtime.test.ts` 的既有失败。

@@ -81,7 +81,6 @@ const DEFAULT_CONFIG: AppConfig = {
     refreshEnabled: true,
     tradingTimeOnly: true,
     fullRefreshInterval: 60 * 60 * 1000,
-    incrementalRefreshInterval: 5 * 60 * 1000,
     favoriteGroups: ['默认'],
   },
   algorithm: {
@@ -94,6 +93,21 @@ const DEFAULT_CONFIG: AppConfig = {
       emotionLeader: 55,
     },
   },
+}
+
+function sanitizeUserConfig(user: any): any {
+  if (!user || typeof user !== 'object') return user
+  const { incrementalRefreshInterval: _legacyIncrementalInterval, ...nextUser } = user
+  return nextUser
+}
+
+function sanitizeAppConfig(input: any): any {
+  if (!input || typeof input !== 'object') return input
+  const nextConfig = { ...input }
+  if (nextConfig.user) {
+    nextConfig.user = sanitizeUserConfig(nextConfig.user)
+  }
+  return nextConfig
 }
 
 export const useConfigStore = defineStore('config', () => {
@@ -113,7 +127,7 @@ export const useConfigStore = defineStore('config', () => {
       // 从 localStorage 加载
       const saved = localStorage.getItem('app_config')
       if (saved) {
-        const parsed = JSON.parse(saved)
+        const parsed = sanitizeAppConfig(JSON.parse(saved))
         config.value = mergeConfig(DEFAULT_CONFIG, parsed)
       }
 
@@ -155,6 +169,7 @@ export const useConfigStore = defineStore('config', () => {
 
   function saveConfig() {
     try {
+      config.value = sanitizeAppConfig(config.value)
       localStorage.setItem('app_config', JSON.stringify(config.value))
 
       // 向后兼容
@@ -169,7 +184,9 @@ export const useConfigStore = defineStore('config', () => {
   }
 
   function setUserConfig<K extends keyof UserConfig>(key: K, value: UserConfig[K]) {
+    if (key === ('incrementalRefreshInterval' as keyof UserConfig)) return
     config.value.user[key] = value
+    config.value.user = sanitizeUserConfig(config.value.user)
     saveConfig()
 
     // 触发自定义事件（用于兼容旧代码）
@@ -214,7 +231,7 @@ export const useConfigStore = defineStore('config', () => {
   }
 
   function resetToDefaults() {
-    config.value = { ...DEFAULT_CONFIG }
+    config.value = sanitizeAppConfig({ ...DEFAULT_CONFIG })
     saveConfig()
   }
 
@@ -228,7 +245,7 @@ export const useConfigStore = defineStore('config', () => {
         output[key] = source[key]
       }
     }
-    return output
+    return sanitizeAppConfig(output)
   }
 
   // 初始化

@@ -6,7 +6,7 @@
 
 ## Current Phase
 
-Phase 5 visibility/config policy complete. Remaining work: Phase 6 cleanup and any separately approved cleanup of legacy incremental config.
+Phase 6 cleanup complete. Remaining work is limited to separately approved follow-ups, such as the pre-existing snapshot runtime test failure.
 
 ## Success Criteria
 
@@ -105,20 +105,21 @@ Phase 5 visibility/config policy complete. Remaining work: Phase 6 cleanup and a
 
 ### Phase 6: 清理旧口径和文档
 
-- [ ] 删除或重新定义未使用的 `incrementalRefreshInterval` UI/配置。
-- [ ] 移除 `RefreshCoordinator` 依赖 `window` 延迟解析服务的主路径，改为 App 初始化显式注册。
-- [ ] 给 `RefreshCoordinator` 增加 `destroy()` 和事件解绑。
-- [ ] 更新刷新机制专题文档、设置面板说明和开发协作说明。
-- [ ] 清理历史误导性注释，例如“由 RefreshManager 调度”但实际未接入的模块注释。
+- [x] 删除或重新定义未使用的 `incrementalRefreshInterval` UI/配置。
+- [x] 移除 `RefreshCoordinator` 依赖 `window` 延迟解析服务的主路径，改为 App 初始化显式注册。
+- [x] 给 `RefreshCoordinator` 增加 `destroy()` 和事件解绑。
+- [x] 更新刷新机制专题文档、设置面板说明和开发协作说明。
+- [x] 清理历史误导性注释，例如“由 RefreshManager 调度”但实际未接入的模块注释。
 - **验证:** `pnpm test`；`pnpm test:ranktrend`；`pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false`；`pnpm build`
-- **Status:** pending
+- **Status:** complete
+- **Scope note:** Phase 6 选择删除旧 `incrementalRefreshInterval` 运行态口径：设置页和用户配置页不再展示或保存该字段，`RefreshManager` 只在读取旧 localStorage 时做兼容剥离；新配置保存不再写回该字段。`RefreshCoordinator` 不再构造期扫描 `window` 服务，也不再定时重试缺失服务；App 初始化在启动 `RefreshManager` 前显式注册完整全量链服务，包括 `algorithmManager`。`RefreshCoordinator.destroy()` 会解绑旧事件监听、清空服务和 pending 请求。
 
 ## Key Questions
 
 1. 关闭“自动刷新”时，是否关闭行情 HTTP fallback、题材轮动、龙息、预警？
 2. 页面隐藏时，快照槽位扫描是否继续？
 3. 主刷新按钮是否执行完整链：热榜 -> 题材 -> 龙息 -> 复盘 -> 算法？
-4. `incrementalRefreshInterval` 是删除，还是重新定义为行情/派生任务的策略参数？
+4. `incrementalRefreshInterval` 是删除，还是重新定义为行情/派生任务的策略参数？已在 Phase 6 决定删除旧运行态口径，仅保留旧存储读取兼容。
 5. Store 同步是否统一只订阅 DataLayer 版本，减少事件和订阅双通道？
 
 ## Recommended Decisions

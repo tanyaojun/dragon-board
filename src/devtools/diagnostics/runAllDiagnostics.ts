@@ -1,7 +1,6 @@
 // src/devtools/diagnostics/runAllDiagnostics.ts
 import { testConfigService, testConfigServiceAfterReload } from './configServiceDiagnostic'
 import { testRefreshManager } from './refreshManagerDiagnostic'
-import { testIncrementalUpdater } from './incrementalUpdaterDiagnostic'
 
 /**
  * 运行手工诊断
@@ -24,11 +23,7 @@ export async function runAllDiagnostics() {
   console.log('\n%c--- 测试 RefreshManager ---', 'color: green')
   await testRefreshManager()
   
-  // 4. 测试 IncrementalUpdater
-  console.log('\n%c--- 测试 IncrementalUpdater ---', 'color: green')
-  await testIncrementalUpdater()
-  
-  // 5. 验证 localStorage 最终状态
+  // 4. 验证 localStorage 最终状态
   console.log('\n%c--- 最终验证 ---', 'color: green')
   const finalSaved = localStorage.getItem('kpl-refresh-config')
   console.log('最终 localStorage 内容:', finalSaved)
@@ -47,7 +42,6 @@ if (typeof window !== 'undefined') {
     configService: testConfigService,
     configServiceAfterReload: testConfigServiceAfterReload,
     refreshManager: testRefreshManager,
-    incrementalUpdater: testIncrementalUpdater,
     all: runAllDiagnostics
   }
 }

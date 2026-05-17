@@ -22,7 +22,6 @@ export async function testConfigService() {
   const defaultConfig = configService.getConfig()
   console.assert(defaultConfig.strategy === 'balanced', '默认策略应为 balanced')
   console.assert(defaultConfig.fullRefreshInterval === 15 * 60 * 1000, '默认全量间隔应为15分钟')
-  console.assert(defaultConfig.incrementalRefreshInterval === 2000, '默认增量间隔应为2秒')
   console.assert(defaultConfig.hotStocksLimit === 100, '默认热点股票应为100只')
   console.log('✅ 默认配置验证通过')
   
@@ -58,7 +57,6 @@ export async function testConfigService() {
   const aggressiveConfig = configService.getConfig()
   console.assert(aggressiveConfig.strategy === 'aggressive', '策略应切换为 aggressive')
   console.assert(aggressiveConfig.fullRefreshInterval === 5 * 60 * 1000, '激进型全量间隔应为5分钟')
-  console.assert(aggressiveConfig.incrementalRefreshInterval === 500, '激进型增量间隔应为0.5秒')
   console.assert(aggressiveConfig.hotStocksLimit === 200, '激进型热点股票应为200只')
   console.log('✅ 策略切换验证通过')
   

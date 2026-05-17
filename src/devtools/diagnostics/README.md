@@ -14,7 +14,6 @@
 - `runAllDiagnostics.ts`：聚合运行手工诊断。
 - `configServiceDiagnostic.ts`：配置存储手工诊断。
 - `refreshManagerDiagnostic.ts`：刷新管理手工诊断。
-- `incrementalUpdaterDiagnostic.ts`：增量更新手工诊断。
 - `dataQualityChecker.ts` / `dataQualityDiagnostic.ts`：数据质量检查工具和入口。
 - `integrationDiagnostic.ts`：应用集成状态诊断。
 - `dragonDiagnostic.ts`：龙头相关手工诊断。

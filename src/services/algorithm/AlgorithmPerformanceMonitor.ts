@@ -139,7 +139,7 @@ export class AlgorithmPerformanceMonitor {
    */
   start(): void {
     // 不再启动独立定时器
-    debugLog('[AlgorithmPerformanceMonitor] 已启动（由RefreshManager调度）')
+    debugLog('[AlgorithmPerformanceMonitor] 已启动（等待上层维护入口调用）')
     return
   }
 
@@ -151,7 +151,7 @@ export class AlgorithmPerformanceMonitor {
   }
 
   /**
-   * ✅ 新增：供 RefreshManager 调用的维护方法
+   * 供上层维护入口调用的后台维护方法。
    */
   async runMaintenance(): Promise<void> {
     if (!this.algorithmManager) return
@@ -165,7 +165,7 @@ export class AlgorithmPerformanceMonitor {
   }
 
   /**
-   * 供 AlgorithmManager/RefreshManager 主动刷新统计。
+   * 供 AlgorithmManager 或维护入口主动刷新统计。
    */
   flushStats(): void {
     this.updateMetrics()

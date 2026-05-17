@@ -29,8 +29,8 @@ class RefreshCoordinator {
   private isRefreshing = false
   private currentContext: RefreshContext | null = null
   private pendingRequests = new Map<string, number>()
-  private registrationTimer: ReturnType<typeof setTimeout> | null = null
-  private registered = false
+  private unsubscribeFns: (() => void)[] = []
+  private destroyed = false
   private readonly REQUEST_COOLDOWN = 5000
 
   private readonly SERVICE_REGISTRY: ServiceDefinition[] = [
@@ -78,20 +78,28 @@ class RefreshCoordinator {
 
   constructor() {
     this.setupListeners()
-    this.scheduleRegistration()
   }
 
   private setupListeners(): void {
-    EventManager.on(AppEvents.REFRESH.FULL_REQUESTED, async (data: any) => {
+    if (this.destroyed) {
+      this.destroyed = false
+    }
+
+    if (this.unsubscribeFns.length) return
+
+    const unsubFull = EventManager.on(AppEvents.REFRESH.FULL_REQUESTED, async (data: any) => {
       await this.forwardLegacyRequest({ source: 'event', trigger: 'event', force: false, ...(data || {}) })
     })
+    this.unsubscribeFns.push(unsubFull)
 
-    EventManager.on(AppEvents.REFRESH.MANUAL_REQUESTED, async (data: any) => {
+    const unsubManual = EventManager.on(AppEvents.REFRESH.MANUAL_REQUESTED, async (data: any) => {
       await this.forwardLegacyRequest({ source: 'manual', trigger: 'manual', force: true, ...(data || {}) })
     })
+    this.unsubscribeFns.push(unsubManual)
   }
 
   private async forwardLegacyRequest(data: any): Promise<void> {
+    if (this.destroyed) return
     const manager = typeof window !== 'undefined' ? (window as any).RefreshManager : null
     if (manager?.requestRefresh) {
       if (!manager.getStatus?.().initialized) {
@@ -107,72 +115,6 @@ class RefreshCoordinator {
     }
 
     console.warn('[RefreshCoordinator] 忽略旧刷新事件：RefreshManager 未就绪')
-  }
-
-  private scheduleRegistration(): void {
-    if (this.registrationTimer) {
-      clearTimeout(this.registrationTimer)
-    }
-
-    this.registrationTimer = setTimeout(() => {
-      this.registerServices()
-      this.registrationTimer = null
-    }, 1000)
-  }
-
-  private resolveServiceFromWindow(name: string): any {
-    if (typeof window === 'undefined') return null
-    const names = [name]
-
-    names.push(name.replace('Service', ''))
-    names.push(name.replace('Analyzer', ''))
-    names.push(name.toLowerCase())
-
-    for (const candidate of names) {
-      const instance = (window as any)[candidate]
-      if (instance) return instance
-    }
-
-    return null
-  }
-
-  private registerServices(): void {
-    const missing: string[] = []
-
-    this.SERVICE_REGISTRY.forEach((definition) => {
-      const existing = this.services.get(definition.name)
-      if (existing?.instance) return
-
-      const instance = this.resolveServiceFromWindow(definition.name)
-      if (instance) {
-        this.services.set(definition.name, {
-          ...definition,
-          instance,
-        })
-      } else {
-        missing.push(definition.name)
-      }
-    })
-
-    this.registered = true
-
-    if (missing.length) {
-      setTimeout(() => this.retryMissingServices(missing), 5000)
-    }
-  }
-
-  private retryMissingServices(names: string[]): void {
-    names.forEach((name) => {
-      if (this.services.has(name)) return
-      const definition = this.SERVICE_REGISTRY.find((item) => item.name === name)
-      const instance = this.resolveServiceFromWindow(name)
-      if (definition && instance) {
-        this.services.set(name, {
-          ...definition,
-          instance,
-        })
-      }
-    })
   }
 
   registerService(name: string, instance: any): void {
@@ -397,6 +339,24 @@ class RefreshCoordinator {
     EventManager.emit(AppEvents.REFRESH.STOPPED, {
       timestamp: Date.now(),
     })
+  }
+
+  destroy(): void {
+    if (this.destroyed) return
+
+    this.destroyed = true
+    this.isRefreshing = false
+    this.currentContext = null
+    this.services.clear()
+    this.pendingRequests.clear()
+    this.unsubscribeFns.forEach((unsubscribe) => {
+      try {
+        unsubscribe()
+      } catch (error) {
+        console.warn('[RefreshCoordinator] 清理监听失败:', error)
+      }
+    })
+    this.unsubscribeFns = []
   }
 }
 

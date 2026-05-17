@@ -1,6 +1,4 @@
 <!-- src/components/panels/SettingsPanel.vue -->
-<!-- 已移除增量更新器相关代码 -->
-
 <template>
   <Teleport to="body">
     <div v-if="visible" class="settings-panel" :style="panelStyle" ref="panelRef">
@@ -372,7 +370,6 @@ function updateConfigFromStatus(status: any) {
     tradingTimeOnly: status.tradingTimeOnly,
     allowManualRefresh: status.allowManualRefresh,
     fullRefreshInterval: status.fullRefreshInterval,
-    incrementalRefreshInterval: status.incrementalRefreshInterval,
     retryOnFailure: status.retryOnFailure,
     isRunning: status.isRunning,
     isRefreshing: status.isRefreshing,
@@ -420,7 +417,6 @@ function setStrategy(strategy: RefreshStrategy) {
     tradingTimeOnly: status.tradingTimeOnly,
     allowManualRefresh: status.allowManualRefresh,
     fullRefreshInterval: status.fullRefreshInterval,
-    incrementalRefreshInterval: status.incrementalRefreshInterval,
     retryOnFailure: status.retryOnFailure,
     isRunning: status.isRunning,
     isRefreshing: status.isRefreshing,
@@ -675,19 +671,6 @@ onUnmounted(() => {
   font-size: 10px;
   color: var(--text-tertiary);
   margin-left: 4px;
-}
-
-.incremental-stats {
-  margin-top: 12px;
-  padding: 10px;
-  background: var(--bg-primary);
-  border-radius: 8px;
-}
-
-.incremental-stats h5 {
-  margin: 0 0 8px 0;
-  font-size: 12px;
-  color: var(--text-secondary);
 }
 
 .stats-mini-grid {
@@ -1351,11 +1334,6 @@ input:checked+.slider:before {
 .history-type.type-full {
   background: var(--color-highlight);
   color: #000;
-}
-
-.history-type.type-incremental {
-  background: #3498db;
-  color: #fff;
 }
 
 .history-time {

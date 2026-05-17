@@ -894,7 +894,6 @@ export interface UserConfig {
   refreshEnabled: boolean
   tradingTimeOnly: boolean
   fullRefreshInterval: number
-  incrementalRefreshInterval: number
   favoriteGroups: string[]
 }
 

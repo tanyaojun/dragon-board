@@ -11,7 +11,7 @@
 ### RefreshManager
 
 - `RefreshManager` 当前负责配置、状态统计、全量刷新 timer、交易时间检查、设置面板 API 和手动刷新代理。
-- `incrementalRefreshInterval` 在状态中保留，但注释说明“不再使用”。
+- `incrementalRefreshInterval` 曾在状态中保留但已无调度消费；Phase 6 已删除运行态/UI 口径，仅在读取旧 localStorage 时兼容剥离。
 - `manualRefresh()` 设置 `isRefreshing = true` 后没有 `finally` 复位，存在状态卡死风险。
 - `stop()` 会调用 `clearAllTimers()`，同时清掉 full、trading、maintenance、rotation timer；非交易时间触发 stop 后可能失去下一次交易时间恢复能力。
 - `rotation` timer 每 45 秒调用 `window.webSocketService?.runRotation?.()`，职责和刷新管理混在一起。
@@ -165,5 +165,15 @@ Phase 3 第一批只迁移 timer 创建和状态记录，不提前改变旧 time
 
 - “关闭自动刷新”是否关闭行情 HTTP fallback、题材轮动、龙息和预警。
 - 主刷新按钮是否执行完整全局链。
-- `incrementalRefreshInterval` 删除还是重新定义。
+- `incrementalRefreshInterval` 已删除旧运行态口径，不重定义为行情/派生任务策略参数。
+
+## Phase 6 Cleanup Mapping
+
+| Area | Phase 6 State |
+| --- | --- |
+| `incrementalRefreshInterval` | 已从 `RefreshConfig`、策略预设、`RefreshManager.getStatus()`、刷新统计、设置面板和用户配置页移除；旧 localStorage 中的同名字段会被读取但不会再次保存。 |
+| Incremental refresh events | `REFRESH.INCREMENTAL_REQUESTED` / `INCREMENTAL_COMPLETE` 和 `StockStore` 的空监听已移除；过期 `incrementalUpdaterDiagnostic.ts` 已删除。 |
+| `RefreshCoordinator` service registration | 已删除构造期 `window` 自动扫描、1 秒延迟注册和 5 秒缺失重试；App 初始化显式注册 `dataLoader`、`themeRuntime`、`sectorAnalyzer`、`dragonBreathAnalyzer`、`dragonReviewService` 和 `algorithmManager`。 |
+| `RefreshCoordinator.destroy()` | 已新增销毁入口，解绑旧刷新事件、清空服务表和 pending 请求。 |
+| Misleading comments | 算法性能监控、计算队列、预热管理和任务注册表中的 “RefreshManager 调度/调用” 旧口径已改为上层维护入口或协调刷新链口径。 |
 - Store 同步主通道选择 DataLayer 订阅还是事件。

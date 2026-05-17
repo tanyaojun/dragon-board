@@ -566,14 +566,6 @@ const lazyLoadServices = () => {
 
     // 第4批：刷新相关服务（延迟3.5秒）
     setTimeout(() => {
-      // 刷新管理器
-      safeExecute(RefreshManager, 'init', '刷新管理器')
-      safeExecute(RefreshManager, 'start', '启动刷新')
-
-    }, 3500)
-
-    // 第5批：注册服务（延迟4.5秒）
-    setTimeout(() => {
       if (refreshCoordinator?.registerService) {
         const services = [
           { name: 'dataLoader', instance: dataLoader },
@@ -581,6 +573,7 @@ const lazyLoadServices = () => {
           { name: 'sectorAnalyzer', instance: sectorAnalyzer },
           { name: 'dragonBreathAnalyzer', instance: dragonBreathAnalyzer },
           { name: 'dragonReviewService', instance: dragonReviewService },
+          { name: 'algorithmManager', instance: algorithmManager },
         ]
         services.forEach(({ name, instance }) => {
           if (instance) {
@@ -588,7 +581,12 @@ const lazyLoadServices = () => {
           }
         })
       }
-    }, 4500)
+
+      // 刷新管理器
+      safeExecute(RefreshManager, 'init', '刷新管理器')
+      safeExecute(RefreshManager, 'start', '启动刷新')
+
+    }, 3500)
   })
 }
 

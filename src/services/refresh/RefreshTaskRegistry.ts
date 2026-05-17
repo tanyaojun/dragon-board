@@ -8,7 +8,7 @@ export const REFRESH_TASK_DEFINITIONS: RefreshTaskDefinition[] = [
     owner: 'DataLoaderFacade',
     intervalMs: null,
     tradingTimeOnly: true,
-    description: 'RefreshManager 当前全量刷新链入口',
+    description: '全量刷新链任务，由 RefreshManager 触发、RefreshCoordinator 执行',
   },
   {
     id: 'dataLoader.quote',

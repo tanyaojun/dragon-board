@@ -61,7 +61,7 @@ export class CalculationQueue {
   }
 
   /**
-   * ✅ 新增：供 RefreshManager 调用的维护方法
+   * 供上层维护入口调用的后台维护方法。
    */
   async runMaintenance(): Promise<void> {
     if (this.destroyed) return

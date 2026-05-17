@@ -57,18 +57,6 @@
       >
       <span class="config-unit">分钟</span>
     </div>
-    <div class="config-item">
-      <span class="config-label">增量间隔</span>
-      <input 
-        type="number" 
-        class="config-input" 
-        v-model.number="incIntervalMinutes"
-        @input="updateIncInterval"
-        min="1"
-        max="60"
-      >
-      <span class="config-unit">分钟</span>
-    </div>
   </div>
 </template>
 
@@ -94,18 +82,8 @@ const fullIntervalMinutes = computed({
   set: (val) => { local.value.user.fullRefreshInterval = val * 60000 }
 })
 
-const incIntervalMinutes = computed({
-  get: () => Math.round(local.value.user.incrementalRefreshInterval / 60000),
-  set: (val) => { local.value.user.incrementalRefreshInterval = val * 60000 }
-})
-
 function updateFullInterval() {
   local.value.user.fullRefreshInterval = fullIntervalMinutes.value * 60000
-  emitChange()
-}
-
-function updateIncInterval() {
-  local.value.user.incrementalRefreshInterval = incIntervalMinutes.value * 60000
   emitChange()
 }
 

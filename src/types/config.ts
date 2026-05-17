@@ -581,23 +581,13 @@ export const AppEvents = {
     REFRESH_REQUESTED: 'ui:refresh-requested',
   },
 
-  // ===== 增量更新相关事件 =====
-  INCREMENTAL: {
-    QUEUE_PROCESSED: 'incremental:queue-processed',
-    BATCH_COMPLETED: 'incremental:batch-completed',
-    SLOW_QUERY: 'incremental:slow-query',
-    TASK_FAILED: 'incremental:task-failed',
-  },
-
   // ===== 刷新管理相关事件 =====
   REFRESH: {
     FULL_REQUESTED: 'refresh:full-requested',
-    INCREMENTAL_REQUESTED: 'refresh:incremental-requested',
     MANUAL_REQUESTED: 'refresh:manual-requested',
     MAINTENANCE_REQUESTED: 'refresh:maintenance-requested',
     COMPLETE: 'refresh:complete',
     FULL_COMPLETE: 'refresh:full-complete', // ✅ 新增
-    INCREMENTAL_COMPLETE: 'refresh:incremental-complete', // ✅ 新增
     FAILED: 'refresh:failed',
     STARTED: 'refresh:started',
     STOPPED: 'refresh:stopped',
@@ -644,7 +634,6 @@ export interface RefreshConfig {
 
   // 刷新间隔
   fullRefreshInterval: number // 单位：毫秒
-  incrementalRefreshInterval: number // 单位：毫秒
 
   // 热点股票配置
   hotStocksLimit: number // HTTP校准的股票数量
@@ -662,7 +651,6 @@ export const REFRESH_STRATEGY_CONFIGS: Record<RefreshStrategy, RefreshConfig> = 
     tradingTimeOnly: true,
     allowManualRefresh: true,
     fullRefreshInterval: 5 * 60 * 1000, // 5分钟
-    incrementalRefreshInterval: 500, // 0.5秒
     hotStocksLimit: 200, // 200只
     retryOnFailure: true,
     maxRetries: 3,
@@ -673,7 +661,6 @@ export const REFRESH_STRATEGY_CONFIGS: Record<RefreshStrategy, RefreshConfig> = 
     tradingTimeOnly: true,
     allowManualRefresh: true,
     fullRefreshInterval: 15 * 60 * 1000, // 15分钟
-    incrementalRefreshInterval: 2000, // 2秒
     hotStocksLimit: 100, // 100只
     retryOnFailure: true,
     maxRetries: 2,
@@ -684,7 +671,6 @@ export const REFRESH_STRATEGY_CONFIGS: Record<RefreshStrategy, RefreshConfig> = 
     tradingTimeOnly: true,
     allowManualRefresh: true,
     fullRefreshInterval: 2 * 60 * 60 * 1000, // 2小时
-    incrementalRefreshInterval: 10 * 60 * 1000, // 10分钟
     hotStocksLimit: 50, // 50只
     retryOnFailure: true,
     maxRetries: 1,
@@ -695,7 +681,6 @@ export const REFRESH_STRATEGY_CONFIGS: Record<RefreshStrategy, RefreshConfig> = 
     tradingTimeOnly: false,
     allowManualRefresh: true,
     fullRefreshInterval: 15 * 60 * 1000, // 15分钟
-    incrementalRefreshInterval: 60 * 1000, // 1分钟
     hotStocksLimit: 100, // 100只
     retryOnFailure: true,
     maxRetries: 5,
@@ -707,19 +692,19 @@ export const REFRESH_STRATEGY_DISPLAY = {
   [REFRESH_STRATEGY_PRESETS.AGGRESSIVE]: {
     name: '激进型',
     icon: '⚡',
-    desc: '高频刷新，适合短线交易 (增量0.5秒)',
+    desc: '高频全量刷新，适合短线交易',
     color: '#e74c3c',
   },
   [REFRESH_STRATEGY_PRESETS.BALANCED]: {
     name: '平衡型',
     icon: '⚖️',
-    desc: '默认配置，兼顾性能和实时性 (增量2秒)',
+    desc: '默认配置，兼顾性能和时效性',
     color: '#3498db',
   },
   [REFRESH_STRATEGY_PRESETS.CONSERVATIVE]: {
     name: '保守型',
     icon: '🐢',
-    desc: '低频刷新，节省资源 (增量10分钟)',
+    desc: '低频全量刷新，节省资源',
     color: '#2ecc71',
   },
   [REFRESH_STRATEGY_PRESETS.RECOVERY]: {
@@ -741,18 +726,6 @@ export const FULL_REFRESH_OPTIONS = [
   { value: 60 * 60 * 1000, label: '60分钟' },
   { value: 2 * 60 * 60 * 1000, label: '2小时', strategy: REFRESH_STRATEGY_PRESETS.CONSERVATIVE },
   { value: 4 * 60 * 60 * 1000, label: '4小时' },
-] as const
-
-export const INCREMENTAL_REFRESH_OPTIONS = [
-  { value: 500, label: '0.5秒', strategy: REFRESH_STRATEGY_PRESETS.AGGRESSIVE },
-  { value: 1000, label: '1秒' },
-  { value: 2000, label: '2秒', strategy: REFRESH_STRATEGY_PRESETS.BALANCED },
-  { value: 5000, label: '5秒' },
-  { value: 10000, label: '10秒' },
-  { value: 30000, label: '30秒' },
-  { value: 60000, label: '1分钟', strategy: REFRESH_STRATEGY_PRESETS.RECOVERY },
-  { value: 300000, label: '5分钟' },
-  { value: 600000, label: '10分钟', strategy: REFRESH_STRATEGY_PRESETS.CONSERVATIVE },
 ] as const
 
 export const HOT_STOCKS_OPTIONS = [

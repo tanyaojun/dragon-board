@@ -16,19 +16,16 @@ export async function testRefreshManager() {
 
   console.assert(status.strategy === 'balanced', '策略应为 balanced')
   console.assert(status.fullRefreshInterval === 15 * 60 * 1000, '全量间隔应为15分钟')
-  console.assert(status.incrementalRefreshInterval === 2000, '增量间隔应为2秒')
   console.log('✅ 初始状态验证通过')
 
   // 4. 测试更新配置
   console.log('\n--- 测试更新配置 ---')
   RefreshManager.updateConfig({
     fullRefreshInterval: 30 * 60 * 1000,
-    incrementalRefreshInterval: 5000,
   })
 
   const updatedStatus = RefreshManager.getStatus()
   console.assert(updatedStatus.fullRefreshInterval === 30 * 60 * 1000, '全量间隔应更新为30分钟')
-  console.assert(updatedStatus.incrementalRefreshInterval === 5000, '增量间隔应更新为5秒')
   console.log('✅ 配置更新验证通过')
 
   // 5. 验证 localStorage 是否保存
@@ -48,7 +45,6 @@ export async function testRefreshManager() {
   const aggressiveStatus = RefreshManager.getStatus()
   console.assert(aggressiveStatus.strategy === 'aggressive', '策略应切换为 aggressive')
   console.assert(aggressiveStatus.fullRefreshInterval === 5 * 60 * 1000, '全量间隔应为5分钟')
-  console.assert(aggressiveStatus.incrementalRefreshInterval === 500, '增量间隔应为0.5秒')
   console.log('✅ 策略切换验证通过')
 
   // 7. 验证定时器是否重启（查看控制台日志）
