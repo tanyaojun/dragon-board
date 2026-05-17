@@ -238,6 +238,7 @@ import { dragonReviewService } from './services/dragon/DragonReviewService'  // 
 import { rotationService } from './services/rotationService'  // 轮动分析
 import { ThemeCorrelationAnalyzer } from './services/ThemeCorrelationAnalyzer' // 联动分析
 import { RankTrendAnalyzer } from './services/RankTrendAnalyzer' // 排名趋势分析
+import { stockCodeManager } from './services/StockCodeManager'
 
 // ========== 4. 算法服务 ==========
 import { algorithmManager } from './services/algorithm'       // 算法管理
@@ -622,6 +623,8 @@ async function safeExecute(obj: any, methodName: string, context: string, defaul
 onMounted(async () => {
   themeStore.init()
   disposeUIStore = uiStore.init()
+  favoriteStore.init()
+  void stockCodeManager.getAllStocks()
 
   // 执行主初始化
   await initializeAll()

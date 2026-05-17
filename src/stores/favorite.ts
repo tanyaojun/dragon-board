@@ -2,9 +2,8 @@ import { debugLog } from '@/utils/logger'
 // src/stores/favorite.ts
 
 import { defineStore } from 'pinia'
-import { ref, computed, watch } from 'vue'
+import { ref, computed, onScopeDispose } from 'vue'
 import type { FavoriteStock, FavoriteGroup, FavoriteStats, Board, StockBoard } from '@/types'
-import { useStockStore } from './stock'
 import { EventManager } from '@/utils/eventManager'
 import { AppEvents } from '@/types'
 import { stockCodeManager } from '@/services/StockCodeManager'
@@ -106,6 +105,38 @@ export const useFavoriteStore = defineStore('favorite', () => {
     debugLog(`   └─ 分组: ${groups.value.size}个`)
   }
 
+  function ensureInitialized(): void {
+    if (!initialized.value) {
+      init()
+    }
+  }
+
+  function normalizeFavoriteCode(code: unknown): string {
+    const digits = String(code || '').replace(/\D/g, '')
+    if (!digits) return ''
+    const normalized = digits.padStart(6, '0')
+    return /^\d{6}$/.test(normalized) && normalized !== '000000' ? normalized : ''
+  }
+
+  function getValidStockName(name: unknown): string {
+    const value = String(name || '').trim()
+    return value && value !== '-' && value !== '未知' ? value : ''
+  }
+
+  function cleanupStockBoardLinks(stockCode: string): void {
+    const boardLinks = stockBoards.value.get(stockCode)
+    if (!boardLinks) return
+
+    stockBoards.value.delete(stockCode)
+    boardLinks.forEach((link) => {
+      const board = boards.value.get(link.boardId)
+      if (board) {
+        board.count = getBoardStockCount(link.boardId)
+        board.updateTime = Date.now()
+      }
+    })
+  }
+
   // ========== 存储（修改） ==========
   function loadFromStorage() {
     try {
@@ -150,15 +181,19 @@ export const useFavoriteStore = defineStore('favorite', () => {
 
   // ========== 原有自选股操作（保持不变）==========
   function addToFavorites(code: string, group = '默认', notes = ''): boolean {
-    if (!code) return false
+    ensureInitialized()
 
-    // 1. 从 StockCodeManager 获取股票名称（现在一定能获取到）
-    const stockInfo = stockCodeManager.getStockInfo(code)
+    const normalizedCode = normalizeFavoriteCode(code)
+    if (!normalizedCode) return false
 
-    if (!stockInfo) {
-      console.warn(`[FavoriteStore] 未找到股票代码: ${code}`)
+    const dataLayerStock = dataLayer.getStock(normalizedCode)
+    const stockInfo = stockCodeManager.getStockInfo(normalizedCode)
+    const stockName = getValidStockName(stockInfo?.name) || getValidStockName(dataLayerStock?.name)
+
+    if (!stockInfo && !dataLayerStock) {
+      console.warn(`[FavoriteStore] 未找到股票代码: ${normalizedCode}`)
       EventManager.emit(AppEvents.UI.TOAST, {
-        message: `❌ 无效的股票代码: ${code}`,
+        message: `❌ 无效的股票代码: ${normalizedCode}`,
         duration: 1500,
         type: 'error',
       })
@@ -166,22 +201,19 @@ export const useFavoriteStore = defineStore('favorite', () => {
     }
 
     // 2. 检查是否已在自选股中
-    if (favorites.value.has(code)) {
+    if (favorites.value.has(normalizedCode)) {
       EventManager.emit(AppEvents.UI.TOAST, {
-        message: `⚠️ ${stockInfo.name} 已在自选股中`,
+        message: `⚠️ ${stockName || normalizedCode} 已在自选股中`,
         duration: 1500,
         type: 'warning',
       })
       return false
     }
 
-    // 3. 从 dataLayer 获取实时数据（如果有）
-    const dataLayerStock = dataLayer.getStock(code)
-
     // 4. 添加到自选
-    favorites.value.set(code, {
-      code,
-      name: stockInfo.name, // 现在一定能拿到正确的名称
+    favorites.value.set(normalizedCode, {
+      code: normalizedCode,
+      name: stockName || normalizedCode,
       group,
       notes,
       addTime: Date.now(),
@@ -195,18 +227,21 @@ export const useFavoriteStore = defineStore('favorite', () => {
     saveToStorage()
 
     EventManager.emit(AppEvents.UI.TOAST, {
-      message: `⭐ 已加入自选: ${stockInfo.name}`,
+      message: `⭐ 已加入自选: ${stockName || normalizedCode}`,
       duration: 1500,
       type: 'success',
     })
 
-    EventManager.emit('favorite-added', { code, group })
+    EventManager.emit('favorite-added', { code: normalizedCode, group })
 
     return true
   }
 
   function removeFromFavorites(code: string): boolean {
-    if (!favorites.value.has(code)) {
+    ensureInitialized()
+
+    const normalizedCode = normalizeFavoriteCode(code)
+    if (!favorites.value.has(normalizedCode)) {
       EventManager.emit(AppEvents.UI.TOAST, {
         message: '❌ 该股票不在自选中',
         duration: 1500,
@@ -215,11 +250,12 @@ export const useFavoriteStore = defineStore('favorite', () => {
       return false
     }
 
-    const fav = favorites.value.get(code)!
+    const fav = favorites.value.get(normalizedCode)!
     const stockName = fav.name
 
     updateGroupCount(fav.group, -1)
-    favorites.value.delete(code)
+    favorites.value.delete(normalizedCode)
+    cleanupStockBoardLinks(normalizedCode)
 
     saveToStorage()
 
@@ -229,24 +265,30 @@ export const useFavoriteStore = defineStore('favorite', () => {
       type: 'info',
     })
 
-    EventManager.emit('favorite-removed', { code })
+    EventManager.emit('favorite-removed', { code: normalizedCode })
 
     return true
   }
 
   function toggleFavorite(code: string, group = '默认'): boolean {
-    if (favorites.value.has(code)) {
-      return removeFromFavorites(code)
+    ensureInitialized()
+
+    const normalizedCode = normalizeFavoriteCode(code)
+    if (favorites.value.has(normalizedCode)) {
+      return removeFromFavorites(normalizedCode)
     } else {
-      return addToFavorites(code, group)
+      return addToFavorites(normalizedCode, group)
     }
   }
 
   function isFavorite(code: string): boolean {
-    return favorites.value.has(code)
+    ensureInitialized()
+    return favorites.value.has(normalizeFavoriteCode(code))
   }
 
   function getFavorites(group: string | null = null): FavoriteStock[] {
+    ensureInitialized()
+
     let favs = favoriteList.value
     if (group) {
       favs = favs.filter((f) => f.group === group)
@@ -255,9 +297,12 @@ export const useFavoriteStore = defineStore('favorite', () => {
   }
 
   function updateFavorite(code: string, updates: Partial<FavoriteStock>): boolean {
-    if (!favorites.value.has(code)) return false
+    ensureInitialized()
 
-    const fav = favorites.value.get(code)!
+    const normalizedCode = normalizeFavoriteCode(code)
+    if (!favorites.value.has(normalizedCode)) return false
+
+    const fav = favorites.value.get(normalizedCode)!
     const oldGroup = fav.group
 
     Object.assign(fav, updates, { lastUpdate: Date.now() })
@@ -268,7 +313,7 @@ export const useFavoriteStore = defineStore('favorite', () => {
     }
 
     saveToStorage()
-    EventManager.emit('favorite-updated', { code })
+    EventManager.emit('favorite-updated', { code: normalizedCode })
 
     return true
   }
@@ -326,11 +371,18 @@ export const useFavoriteStore = defineStore('favorite', () => {
   }
 
   function clearAllFavorites(): number {
+    ensureInitialized()
+
     const count = favorites.value.size
     favorites.value.clear()
+    stockBoards.value.clear()
 
     groups.value.forEach((group) => {
       group.count = 0
+    })
+    boards.value.forEach((board) => {
+      board.count = 0
+      board.updateTime = Date.now()
     })
 
     saveToStorage()
@@ -352,6 +404,8 @@ export const useFavoriteStore = defineStore('favorite', () => {
    * 添加板块
    */
   function addBoard(name: string, color?: string): Board | null {
+    ensureInitialized()
+
     if (!name.trim()) return null
 
     // 检查是否已存在同名板块
@@ -391,6 +445,8 @@ export const useFavoriteStore = defineStore('favorite', () => {
    * 删除板块
    */
   function removeBoard(boardId: string): boolean {
+    ensureInitialized()
+
     const board = boards.value.get(boardId)
     if (!board) return false
 
@@ -420,6 +476,8 @@ export const useFavoriteStore = defineStore('favorite', () => {
    * 更新板块信息
    */
   function updateBoard(boardId: string, updates: Partial<Board>): boolean {
+    ensureInitialized()
+
     const board = boards.value.get(boardId)
     if (!board) return false
 
@@ -434,6 +492,9 @@ export const useFavoriteStore = defineStore('favorite', () => {
    * 将股票加入板块
    */
   function addStockToBoard(stockCode: string, boardId: string, notes: string = ''): boolean {
+    ensureInitialized()
+
+    const normalizedCode = normalizeFavoriteCode(stockCode)
     const board = boards.value.get(boardId)
     if (!board) {
       EventManager.emit(AppEvents.UI.TOAST, {
@@ -444,7 +505,7 @@ export const useFavoriteStore = defineStore('favorite', () => {
       return false
     }
 
-    const stock = favorites.value.get(stockCode)
+    const stock = favorites.value.get(normalizedCode)
     if (!stock) {
       EventManager.emit(AppEvents.UI.TOAST, {
         message: '❌ 股票不在自选股中',
@@ -455,7 +516,7 @@ export const useFavoriteStore = defineStore('favorite', () => {
     }
 
     // 获取股票的板块关联
-    const stockBoardList = stockBoards.value.get(stockCode) || []
+    const stockBoardList = stockBoards.value.get(normalizedCode) || []
 
     // 检查是否已在同一板块
     if (stockBoardList.some((sb) => sb.boardId === boardId)) {
@@ -469,13 +530,13 @@ export const useFavoriteStore = defineStore('favorite', () => {
 
     // 添加关联
     stockBoardList.push({
-      stockCode,
+      stockCode: normalizedCode,
       boardId,
       addTime: Date.now(),
       notes: notes.trim(),
     })
 
-    stockBoards.value.set(stockCode, stockBoardList)
+    stockBoards.value.set(normalizedCode, stockBoardList)
 
     // 更新板块计数
     board.count = getBoardStockCount(boardId)
@@ -495,15 +556,18 @@ export const useFavoriteStore = defineStore('favorite', () => {
    * 从板块中移除股票
    */
   function removeStockFromBoard(stockCode: string, boardId: string): boolean {
-    const stockBoardList = stockBoards.value.get(stockCode)
+    ensureInitialized()
+
+    const normalizedCode = normalizeFavoriteCode(stockCode)
+    const stockBoardList = stockBoards.value.get(normalizedCode)
     if (!stockBoardList) return false
 
     const filtered = stockBoardList.filter((sb) => sb.boardId !== boardId)
 
     if (filtered.length === 0) {
-      stockBoards.value.delete(stockCode)
+      stockBoards.value.delete(normalizedCode)
     } else {
-      stockBoards.value.set(stockCode, filtered)
+      stockBoards.value.set(normalizedCode, filtered)
     }
 
     // 更新板块计数
@@ -520,7 +584,9 @@ export const useFavoriteStore = defineStore('favorite', () => {
    * 获取股票所属的板块
    */
   function getStockBoards(stockCode: string): Array<{ board: Board; notes: string }> {
-    const stockBoardList = stockBoards.value.get(stockCode) || []
+    ensureInitialized()
+
+    const stockBoardList = stockBoards.value.get(normalizeFavoriteCode(stockCode)) || []
     return stockBoardList
       .map((sb) => {
         const board = boards.value.get(sb.boardId)
@@ -533,6 +599,8 @@ export const useFavoriteStore = defineStore('favorite', () => {
    * 获取板块内的股票
    */
   function getBoardStocks(boardId: string): Array<{ stock: FavoriteStock; notes: string }> {
+    ensureInitialized()
+
     const stocks: Array<{ stock: FavoriteStock; notes: string }> = []
 
     stockBoards.value.forEach((boards, stockCode) => {
@@ -568,6 +636,8 @@ export const useFavoriteStore = defineStore('favorite', () => {
    * 从自选股创建板块
    */
   function createBoardFromFavorites(boardName: string): Board | null {
+    ensureInitialized()
+
     if (favoriteList.value.length === 0) {
       EventManager.emit(AppEvents.UI.TOAST, {
         message: '⚠️ 自选股列表为空',
@@ -599,6 +669,8 @@ export const useFavoriteStore = defineStore('favorite', () => {
    * 快速将股票加入板块（智能推荐板块）
    */
   function quickAddToBoard(stockCode: string, boardName: string, notes: string = ''): boolean {
+    ensureInitialized()
+
     // 查找或创建板块
     let board = Array.from(boards.value.values()).find((b) => b.name === boardName)
 
@@ -615,6 +687,8 @@ export const useFavoriteStore = defineStore('favorite', () => {
    * 搜索板块
    */
   function searchBoards(keyword: string): Board[] {
+    ensureInitialized()
+
     if (!keyword) return boardList.value
 
     const upperKeyword = keyword.toUpperCase()
@@ -625,6 +699,8 @@ export const useFavoriteStore = defineStore('favorite', () => {
    * 获取板块统计数据
    */
   function getBoardStatistics() {
+    ensureInitialized()
+
     const stats = {
       totalBoards: boards.value.size,
       totalStockBoards: stockBoards.value.size,
@@ -644,18 +720,22 @@ export const useFavoriteStore = defineStore('favorite', () => {
 
   // ========== 数据同步（修改） ==========
   function syncWithMarketData(): number {
-    const stockStore = useStockStore()
-    const stocks = stockStore.stocks
+    ensureInitialized()
+
+    const stocks = dataLayer.getStocks()
 
     if (!stocks || stocks.length === 0) return 0
 
     let updated = 0
+    const stockByCode = new Map(stocks.map((stock) => [normalizeFavoriteCode(stock.code), stock]))
 
     favorites.value.forEach((fav, code) => {
-      const stock = stocks.find((s) => s.code === code)
+      const stock = stockByCode.get(code)
       if (stock) {
-        fav.lastPrice = stock.price
-        fav.lastChange = stock.change
+        const price = Number(stock.price)
+        const change = Number(stock.change)
+        if (Number.isFinite(price)) fav.lastPrice = price
+        if (Number.isFinite(change)) fav.lastChange = change
         fav.lastUpdate = Date.now()
         updated++
       }
@@ -671,6 +751,8 @@ export const useFavoriteStore = defineStore('favorite', () => {
 
   // ========== 导出/导入（修改） ==========
   function exportFavorites(): void {
+    ensureInitialized()
+
     const data = {
       version: '2.0.0', // 升级版本号
       exportTime: Date.now(),
@@ -698,6 +780,8 @@ export const useFavoriteStore = defineStore('favorite', () => {
   }
 
   function importFavorites(jsonStr: string): boolean {
+    ensureInitialized()
+
     try {
       const data = JSON.parse(jsonStr)
 
@@ -745,6 +829,8 @@ export const useFavoriteStore = defineStore('favorite', () => {
 
   // ========== 搜索（保持不变） ==========
   function searchInFavorites(keyword: string): FavoriteStock[] {
+    ensureInitialized()
+
     if (!keyword) return favoriteList.value
 
     const upperKeyword = keyword.toUpperCase()
@@ -757,14 +843,10 @@ export const useFavoriteStore = defineStore('favorite', () => {
     )
   }
 
-  // ========== 监听数据更新（保持不变） ==========
-  watch(
-    () => useStockStore().stocks,
-    () => {
-      syncWithMarketData()
-    },
-    { deep: true },
-  )
+  const unsubscribeMergedStocks = dataLayer.subscribe('merged.stocks', () => {
+    syncWithMarketData()
+  })
+  onScopeDispose(unsubscribeMergedStocks)
 
   return {
     // State
