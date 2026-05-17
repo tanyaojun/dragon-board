@@ -1,3 +1,6 @@
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, disposePinia, setActivePinia } from 'pinia'
 
@@ -177,6 +180,27 @@ describe('FavoriteStore', () => {
     expect(store.boards.get(board.id)?.count).toBe(0)
   })
 
+  it('adds a visible stock to favorites before linking it to a board', () => {
+    seedStock('600584')
+    const store = useFavoriteStore()
+    store.init()
+    const board = store.addBoard('芯片链')!
+
+    expect(store.addStockToBoard('600584', board.id, '先进封装')).toBe(true)
+
+    expect(store.favorites.get('600584')).toMatchObject({
+      code: '600584',
+      name: '长电科技',
+    })
+    expect(store.getBoardStocks(board.id)).toEqual([
+      expect.objectContaining({
+        stock: expect.objectContaining({ code: '600584' }),
+        notes: '先进封装',
+      }),
+    ])
+    expect(store.boards.get(board.id)?.count).toBe(1)
+  })
+
   it('unsubscribes from DataLayer updates when the store scope is disposed', async () => {
     seedStock()
     const store = useFavoriteStore()
@@ -197,5 +221,9 @@ describe('FavoriteStore', () => {
     await new Promise((resolve) => setTimeout(resolve, 80))
 
     expect(EventManager.getHistory('favorites-synced')).toHaveLength(0)
+  })
+
+  it('does not keep the unused standalone board store with separate storage', () => {
+    expect(existsSync(join(process.cwd(), 'src', 'stores', 'board.ts'))).toBe(false)
   })
 })

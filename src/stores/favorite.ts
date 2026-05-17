@@ -505,14 +505,18 @@ export const useFavoriteStore = defineStore('favorite', () => {
       return false
     }
 
-    const stock = favorites.value.get(normalizedCode)
+    let stock = favorites.value.get(normalizedCode)
     if (!stock) {
-      EventManager.emit(AppEvents.UI.TOAST, {
-        message: '❌ 股票不在自选股中',
-        duration: 1500,
-        type: 'error',
-      })
-      return false
+      if (!addToFavorites(normalizedCode)) {
+        EventManager.emit(AppEvents.UI.TOAST, {
+          message: '❌ 股票不在自选股中',
+          duration: 1500,
+          type: 'error',
+        })
+        return false
+      }
+      stock = favorites.value.get(normalizedCode)
+      if (!stock) return false
     }
 
     // 获取股票的板块关联
