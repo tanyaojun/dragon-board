@@ -642,6 +642,50 @@ CLI 输出与 `POST /api/migrations/themes/verify-json` 一致。
 - `expectedPreview`
 - `actualPreview`
 
+## 交易日记与候选池接口
+
+Dragon Board 候选池第一版复用 QuantBoard journal 存储，候选记录使用 `trade_type=thesis`，不新增前端本地持久化双轨。
+
+### `POST /api/journal/entries`
+
+创建交易日记或候选池记录。候选池入池时至少提交：
+
+```json
+{
+  "stock_code": "000001",
+  "stock_name": "平安银行",
+  "direction": "buy",
+  "trade_type": "thesis",
+  "status": "candidate",
+  "price": 0,
+  "volume": 0,
+  "signals_snapshot": {
+    "candidateAnalysis": {
+      "version": "candidate-rules-v1",
+      "score": 82,
+      "grade": "A"
+    }
+  },
+  "entry_reason": "规则分析生成的入池理由",
+  "trade_hypothesis": "3-5 天候选跟踪假设",
+  "entry_prerequisites": "买入前提",
+  "invalidation_rules": "失效条件",
+  "expected_holding_days": 3,
+  "human_decision": "watch",
+  "review_tags": ["A", "B_IGNITION", "主线题材"]
+}
+```
+
+响应仍返回 camelCase 字段，例如 `stockCode`、`signalsSnapshot`、`tradeHypothesis`、`reviewTags`。创建候选时 `review_tags` 必须入库，后续候选过滤和复盘统计会依赖这些标签。
+
+### `GET /api/journal/entries`
+
+读取 journal 记录，支持 `stock_code`、`trade_type`、`direction`、`status`、`date_from/date_to`、`review_tags`、`limit`、`offset`。候选池面板默认按 `status` 过滤并读取 `limit=100`。
+
+### `PUT /api/journal/entries/{entry_id}`
+
+更新记录。候选池当前主要用于推进 `status`，也可更新 `review_tags`、`signals_snapshot`、`trade_hypothesis`、`entry_prerequisites`、`invalidation_rules`、`review_outcome`、`model_result`、`execution_result` 等复盘字段。
+
 ## 回测接口
 
 ### `POST /api/backtests/rank-trend`

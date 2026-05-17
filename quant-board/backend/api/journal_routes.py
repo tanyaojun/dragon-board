@@ -49,6 +49,7 @@ class CreateJournalEntryRequest(BaseModel):
     linked_entry_id: str | None = None
     signals_snapshot: dict[str, Any] | None = None
     notes: str = ""
+    review_tags: list[str] | None = None
     status: str = "observe"
     market_phase: str = ""
     theme_role: str = ""
@@ -115,6 +116,7 @@ def create_entry(payload: CreateJournalEntryRequest) -> dict[str, Any]:
         linked_entry_id=payload.linked_entry_id,
         signals_snapshot=payload.signals_snapshot,
         notes=payload.notes,
+        review_tags=payload.review_tags or [],
         status=payload.status,
         market_phase=payload.market_phase,
         theme_role=payload.theme_role,

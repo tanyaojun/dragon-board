@@ -53,6 +53,7 @@ def test_create_candidate_thesis_entry_round_trips_core_fields(monkeypatch) -> N
             "expected_holding_days": 3,
             "human_decision": "watch",
             "signals_snapshot": {"rankTrend": {"candidateTier": "B_IGNITION"}},
+            "review_tags": ["A", "B_IGNITION", "主线题材"],
         },
     )
 
@@ -63,6 +64,7 @@ def test_create_candidate_thesis_entry_round_trips_core_fields(monkeypatch) -> N
     assert data["themeRole"] == "mainline"
     assert data["stockRole"] == "core"
     assert data["tradeHypothesis"] == "未来 3-5 天沿主线继续走强"
+    assert data["reviewTags"] == ["A", "B_IGNITION", "主线题材"]
     assert data["price"] == 0
     assert data["volume"] == 0
 

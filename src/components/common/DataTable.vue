@@ -180,6 +180,7 @@
     <div v-if="contextMenu.visible" class="context-menu"
       :style="{ left: contextMenu.x + 'px', top: contextMenu.y + 'px' }" ref="contextMenuRef">
       <div class="menu-item" @click="addToFavorite"><span class="menu-icon">⭐</span> 加入自选</div>
+      <div class="menu-item" @click="addToCandidatePool"><span class="menu-icon">🎯</span> 加入候选池</div>
       <div class="menu-divider"></div>
       <div class="menu-item" @mouseenter="showBoardMenu" @click.stop>
         <span class="menu-icon">📁</span> 加入板块
@@ -234,6 +235,7 @@ import { AppEvents } from '../../types'
 import { useUIStore } from '../../stores/ui'
 import { useFavoriteStore } from '../../stores/favorite'
 import { dataLoader } from '../../services/dataLoader'
+import { candidateJournalService } from '@/services/candidate/CandidateJournalService'
 import RankTrendPanel from '../../components/panels/RankTrendPanel.vue'
 import {
   buildRankTrendStatusContext,
@@ -1061,6 +1063,28 @@ const addToFavorite = () => {
     favoriteStore.toggleFavorite(contextMenu.value.stock.code, '默认')
   }
   hideContextMenu()
+}
+
+const addToCandidatePool = async () => {
+  if (!contextMenu.value.stock) {
+    hideContextMenu()
+    return
+  }
+
+  try {
+    await candidateJournalService.addCandidateFromStock(contextMenu.value.stock, {
+      addToFavorites: true,
+      source: 'datatable-context-menu',
+    })
+  } catch (error) {
+    EventManager.emit(AppEvents.UI.TOAST, {
+      message: `加入候选池失败：${error instanceof Error ? error.message : '未知错误'}`,
+      duration: 2000,
+      type: 'error',
+    })
+  } finally {
+    hideContextMenu()
+  }
 }
 
 const copyCode = () => {

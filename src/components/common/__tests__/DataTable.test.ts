@@ -32,4 +32,16 @@ describe('DataTable row detail interactions', () => {
     )
     expect(existsSync(join(process.cwd(), 'src', 'composables', 'useStockSelector.ts'))).toBe(false)
   })
+
+  test('adds candidates from the row context menu through the candidate journal service', () => {
+    const source = dataTableSource()
+
+    expect(source).toMatch(/import\s+\{\s*candidateJournalService\s+\}\s+from\s+['"]@\/services\/candidate\/CandidateJournalService['"]/)
+    expect(source).toContain('加入候选池')
+    expect(source).toMatch(/@click="addToCandidatePool"/)
+    expect(source).toMatch(/const\s+addToCandidatePool\s*=\s*async\s*\(\)\s*=>/)
+    expect(source).toMatch(/candidateJournalService\.addCandidateFromStock\(\s*contextMenu\.value\.stock/)
+    expect(source).not.toMatch(/\/api\/journal\/entries/)
+    expect(source).not.toMatch(/trade_hypothesis/)
+  })
 })

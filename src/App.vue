@@ -88,6 +88,9 @@
               <span class="item-icon">📤</span>数据导出
             </div>
             <div class="dropdown-divider"></div>
+            <div class="dropdown-item" @click.stop="panels.candidatePool = true">
+              <span class="item-icon">🎯</span>候选池
+            </div>
             <div class="dropdown-item" @click.stop="panels.journal = true">
               <span class="item-icon">📓</span>交易日记
             </div>
@@ -157,6 +160,7 @@
     <KeyboardHelpPanel v-model:visible="panels.help" @close="panels.help = false" />
     <ExportPanel v-model:visible="panels.export" :trigger-rect="panelRects.export" @close="panels.export = false" />
     <FavoritePanel v-model:visible="panels.favorite" @close="panels.favorite = false" />
+    <CandidatePoolPanel v-model:visible="panels.candidatePool" @close="panels.candidatePool = false" />
     <TradeJournalPanel v-model:visible="panels.journal" @close="panels.journal = false" />
     <HotStockEventMonitorPanel v-model:visible="panels.eventMonitor" :trigger-rect="panelRects.eventMonitor"
       @close="panels.eventMonitor = false" @select-stock="handleSelectStock" />
@@ -200,6 +204,7 @@ const DragonBreathPanel = defineAsyncComponent(() => import('./components/panels
 const KeyboardHelpPanel = defineAsyncComponent(() => import('./components/panels/KeyboardHelpPanel.vue'))
 const ExportPanel = defineAsyncComponent(() => import('./components/panels/ExportPanel.vue'))
 const FavoritePanel = defineAsyncComponent(() => import('./components/panels/FavoritePanel.vue'))
+const CandidatePoolPanel = defineAsyncComponent(() => import('./components/panels/CandidatePoolPanel.vue'))
 const StockL2DetailPanel = defineAsyncComponent(() => import('./components/panels/StockL2DetailPanel.vue'))
 const SectorDetail = defineAsyncComponent(() => import('./components/panels/SectorDetail.vue'))
 const SectorAlert = defineAsyncComponent(() => import('./components/panels/SectorAlert.vue'))
@@ -307,6 +312,7 @@ const panels = ref({
   sectorRotation: false,
   themeRisk: false,
   stockDetail: false,
+  candidatePool: false,
   journal: false,
   eventMonitor: false,
 })
