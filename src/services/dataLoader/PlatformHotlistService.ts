@@ -1,5 +1,6 @@
 import { Adapters } from '../adapters'
 import { MAX_PLATFORM_CACHE_SIZE, PLATFORM_CACHE_TTL_MS } from './constants'
+import type { PlatformLoadProgress } from './types'
 
 export interface PlatformHotlistResult {
   data: Record<string, any[]>
@@ -16,13 +17,18 @@ export class PlatformHotlistService {
     private readonly maxCacheSize = MAX_PLATFORM_CACHE_SIZE,
   ) {}
 
-  async loadPlatforms(platforms: string[], force = false): Promise<PlatformHotlistResult> {
+  async loadPlatforms(
+    platforms: string[],
+    force = false,
+    options: { onProgress?: (progress: PlatformLoadProgress) => void } = {},
+  ): Promise<PlatformHotlistResult> {
     const cached = this.platformCache.get('platforms')
     if (!force && cached && Date.now() - cached.timestamp < this.cacheTtl) {
       return { data: cached.data, timestamp: cached.timestamp, fromCache: true }
     }
 
     const results: Record<string, any[]> = {}
+    let completed = 0
     const allResults = await Promise.allSettled(
       platforms.map(async (platform) => {
         try {
@@ -34,6 +40,13 @@ export class PlatformHotlistService {
         } catch (error) {
           console.warn(`[DataLoader] 平台 ${platform} 加载失败:`, error)
           return { platform, data: [], success: false }
+        } finally {
+          completed += 1
+          options.onProgress?.({
+            completed,
+            total: platforms.length,
+            platform,
+          })
         }
       }),
     )

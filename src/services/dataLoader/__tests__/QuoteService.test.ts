@@ -417,4 +417,108 @@ describe('QuoteService', () => {
     expect(fetchBasicData).toHaveBeenCalledTimes(1)
     expect(fetchBasicData).toHaveBeenCalledWith(['000001', '000002'])
   })
+
+  it('reports HTTP progress only after both basic and full quote feeds advance', async () => {
+    const progressEvents: Array<{ completedCodes: number; totalCodes: number }> = []
+    let releaseFullData: (() => void) | null = null
+    const service = new QuoteService({
+      now: () => 1000,
+      dataLayer: {
+        getQuote: () => null,
+        getStock: () => null,
+        updateQuote: vi.fn(),
+      },
+      feed: {
+        fetchBasicData: vi.fn(async (_codes, options) => {
+          options?.onProgress?.({
+            source: 'tencent',
+            completedBatches: 1,
+            totalBatches: 1,
+            completedCodes: 2,
+            totalCodes: 2,
+          })
+          return new Map()
+        }),
+        fetchFullData: vi.fn(async (_codes, _force, options) => {
+          await new Promise<void>((resolve) => {
+            releaseFullData = resolve
+          })
+          options?.onProgress?.({
+            source: 'eastmoney',
+            completedBatches: 1,
+            totalBatches: 1,
+            completedCodes: 2,
+            totalCodes: 2,
+          })
+          return new Map()
+        }),
+      },
+      webSocketService: { getQuotesBatch: () => new Map() },
+      isRealtimePrimaryHealthy: () => false,
+    })
+
+    const request = service.fetchMergedQuotes(['000001', '000002'], {
+      force: true,
+      onProgress: (progress) => progressEvents.push(progress),
+    })
+
+    await vi.waitFor(() => {
+      expect(releaseFullData).toEqual(expect.any(Function))
+    })
+    expect(progressEvents).toEqual([
+      expect.objectContaining({
+        completedCodes: 1,
+        totalCodes: 2,
+      }),
+    ])
+
+    releaseFullData?.()
+    await request
+
+    expect(progressEvents.at(-1)).toEqual(
+      expect.objectContaining({
+        completedCodes: 2,
+        totalCodes: 2,
+      }),
+    )
+  })
+
+  it('completes HTTP progress when full quote feed settles without progress events', async () => {
+    const progressEvents: Array<{ completedCodes: number; totalCodes: number }> = []
+    const service = new QuoteService({
+      now: () => 1000,
+      dataLayer: {
+        getQuote: () => null,
+        getStock: () => null,
+        updateQuote: vi.fn(),
+      },
+      feed: {
+        fetchBasicData: vi.fn(async (_codes, options) => {
+          options?.onProgress?.({
+            source: 'tencent',
+            completedBatches: 1,
+            totalBatches: 1,
+            completedCodes: 2,
+            totalCodes: 2,
+          })
+          return new Map()
+        }),
+        fetchFullData: vi.fn(async () => new Map()),
+      },
+      webSocketService: { getQuotesBatch: () => new Map() },
+      isRealtimePrimaryHealthy: () => false,
+    })
+
+    await service.fetchMergedQuotes(['000001', '000002'], {
+      force: true,
+      onProgress: (progress) => progressEvents.push(progress),
+    })
+
+    expect(progressEvents.at(-1)).toEqual(
+      expect.objectContaining({
+        completedCodes: 2,
+        totalCodes: 2,
+      }),
+    )
+  })
 })

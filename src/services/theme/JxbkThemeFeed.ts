@@ -16,6 +16,12 @@ const sectorStocksCache: Record<
   }
 > = {}
 
+let runtimeRefreshHandler: (() => void) | null = null
+
+export function setJxbkThemeFeedRuntimeRefreshHandler(handler: (() => void) | null): void {
+  runtimeRefreshHandler = handler
+}
+
 function normalizeBlock(block: Partial<JxbkBlockData>): JxbkBlockData {
   return {
     code: String(block.code || block.name || '').trim(),
@@ -158,12 +164,7 @@ export const jxbkThemeFeed = {
         if (stocks.length > 0) {
           dataLayer.updateJxbkStocks(stocks)
         }
-        const { themeFacade } = await import('./ThemeFacade')
-        themeFacade.refreshRuntime({
-          source: 'jxbkThemeFeed',
-          context: themeFacade.buildCurrentThemeSourceContext(),
-          emitAlerts: false,
-        })
+        runtimeRefreshHandler?.()
         return stocks
       } catch (error) {
         console.error(`[JxbkThemeFeed] 加载板块 ${sectorCode} 个股数据失败:`, error)

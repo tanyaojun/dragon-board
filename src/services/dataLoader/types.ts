@@ -29,11 +29,26 @@ export interface LoadingStatus {
   phase?: 'platform' | 'quote' | 'merge' | 'signal' | 'done' | 'error'
 }
 
+export interface PlatformLoadProgress {
+  completed: number
+  total: number
+  platform: string
+}
+
+export interface QuoteBatchProgress {
+  source: 'tencent' | 'sina' | 'eastmoney'
+  completedBatches: number
+  totalBatches: number
+  completedCodes: number
+  totalCodes: number
+}
+
 export interface DataLoaderRunSummary {
   stockCount: number
   platformCount: number
   fromCache: boolean
   elapsedMs: number
+  timings?: Record<string, number>
 }
 
 export interface DataLoaderBootstrapOptions {

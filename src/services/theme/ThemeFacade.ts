@@ -3,7 +3,7 @@ import type { RotationAnalysis } from '@/types/core'
 import type { JxbkBlockData, JxbkStockData } from '@/types'
 import { buildThemeRotationSummary } from './ThemeRotationEngine'
 import { themeRuntimeStore } from './ThemeRuntimeStore'
-import { jxbkThemeFeed } from './JxbkThemeFeed'
+import { jxbkThemeFeed, setJxbkThemeFeedRuntimeRefreshHandler } from './JxbkThemeFeed'
 import { themeRepository } from './ThemeRepository'
 import { refreshRuntime, themeInputSignature } from './ThemeRuntimeCoordinator'
 import { refreshResourceLocks } from '../refresh/RefreshResourceLocks'
@@ -432,3 +432,11 @@ export const themeFacade = {
   toStockThemeCompat,
   runtimeStore: themeRuntimeStore,
 }
+
+setJxbkThemeFeedRuntimeRefreshHandler(() => {
+  themeFacade.refreshRuntime({
+    source: 'jxbkThemeFeed',
+    context: themeFacade.buildCurrentThemeSourceContext(),
+    emitAlerts: false,
+  })
+})

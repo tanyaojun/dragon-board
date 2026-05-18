@@ -40,4 +40,12 @@ describe('architecture boundaries', () => {
     expect(source).not.toContain('dataLayer.')
     expect(source).toMatch(/const getStockThemes[\s\S]*stock\.tags[\s\S]*removeDuplicateThemes/)
   })
+
+  test('keeps JxbkThemeFeed from dynamically importing ThemeFacade', () => {
+    const feedPath = join(srcRoot, 'services', 'theme', 'JxbkThemeFeed.ts')
+    const source = readFileSync(feedPath, 'utf8')
+
+    expect(source).not.toContain("import('./ThemeFacade')")
+    expect(source).not.toContain('import("./ThemeFacade")')
+  })
 })

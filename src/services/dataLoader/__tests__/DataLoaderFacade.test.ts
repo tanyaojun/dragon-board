@@ -9,16 +9,20 @@ const platformRows: Record<string, any[]> = {
   eastmoney: [{ code: '000001', name: '平安银行', rank: 1, source: 'eastmoney' }],
 }
 
+let platformRowsByLoad: Array<Record<string, any[]>> = []
 let fromCache = false
 let firstPlatformLoadEmptyCache = false
 let platformLoadCount = 0
 let quoteError: Error | null = null
 let volumeHistoryError: Error | null = null
 let platformLoadError: Error | null = null
+let blockPlatformLoad = false
+let releasePlatformLoad: (() => void) | null = null
 let blockSignalCalculation = false
 let releaseSignalCalculation: (() => void) | null = null
 let signalCalculationError: Error | null = null
 let signalApplyCount = 0
+let signalCompletionCount = 0
 let blockQuoteBatch = false
 let releaseQuoteBatch: (() => void) | null = null
 
@@ -32,9 +36,15 @@ vi.mock('@/utils/time', () => ({
 
 vi.mock('../PlatformHotlistService', () => ({
   platformHotlistService: {
-    loadPlatforms: vi.fn(async (_platforms, force) => {
+    loadPlatforms: vi.fn(async (_platforms, force, options) => {
       if (platformLoadError) throw platformLoadError
       platformLoadCount++
+      if (blockPlatformLoad) {
+        options?.onProgress?.({ completed: 2, total: 8, platform: 'ths' })
+        await new Promise<void>((resolve) => {
+          releasePlatformLoad = resolve
+        })
+      }
       if (firstPlatformLoadEmptyCache && platformLoadCount === 1 && !force) {
         return {
           data: {},
@@ -42,8 +52,9 @@ vi.mock('../PlatformHotlistService', () => ({
           fromCache: true,
         }
       }
+      const rows = platformRowsByLoad[platformLoadCount - 1] || platformRows
       return {
-        data: platformRows,
+        data: rows,
         timestamp: 1000,
         fromCache: force ? false : fromCache,
       }
@@ -60,9 +71,16 @@ vi.mock('../PlatformHotlistService', () => ({
 
 vi.mock('../QuoteService', () => ({
   quoteService: {
-    getQuoteBatch: vi.fn(async () => {
+    getQuoteBatch: vi.fn(async (_codes, _force, options) => {
       if (quoteError) throw quoteError
       if (blockQuoteBatch) {
+        options?.onProgress?.({
+          source: 'tencent',
+          completedBatches: 1,
+          totalBatches: 4,
+          completedCodes: 50,
+          totalCodes: 200,
+        })
         await new Promise<void>((resolve) => {
           releaseQuoteBatch = resolve
         })
@@ -118,6 +136,7 @@ vi.mock('../RankTrendSignalService', () => ({
           releaseSignalCalculation = resolve
         })
       }
+      signalCompletionCount++
       return stocks
     }),
     updateStockSignals: vi.fn(),
@@ -137,16 +156,20 @@ describe('DataLoaderFacade', () => {
     setActivePinia(createPinia())
     dataLayer.reset()
     timeState.tradingTime = true
+    platformRowsByLoad = []
     fromCache = false
     firstPlatformLoadEmptyCache = false
     platformLoadCount = 0
     quoteError = null
     volumeHistoryError = null
     platformLoadError = null
+    blockPlatformLoad = false
+    releasePlatformLoad = null
     blockSignalCalculation = false
     releaseSignalCalculation = null
     signalCalculationError = null
     signalApplyCount = 0
+    signalCompletionCount = 0
     blockQuoteBatch = false
     releaseQuoteBatch = null
     EventManager.clearHistory()
@@ -183,6 +206,100 @@ describe('DataLoaderFacade', () => {
         name: '平安银行',
       }),
     ])
+  })
+
+  it('reports platform item progress during startup loading', async () => {
+    blockPlatformLoad = true
+    const { dataLoader } = await import('../../dataLoader')
+
+    const loadingPromise = dataLoader.bootstrapInitialData({ force: true })
+
+    await vi.waitFor(() => {
+      expect(releasePlatformLoad).toEqual(expect.any(Function))
+    })
+    expect(dataLoader.getLoadingStatus()).toMatchObject({
+      active: true,
+      phase: 'platform',
+      progress: 13,
+      message: '加载平台热榜 2/8...',
+    })
+
+    blockPlatformLoad = false
+    releasePlatformLoad?.()
+    await loadingPromise
+  })
+
+  it('reports quote batch progress during startup loading', async () => {
+    blockQuoteBatch = true
+    const { dataLoader } = await import('../../dataLoader')
+
+    const loadingPromise = dataLoader.bootstrapInitialData({ force: true })
+
+    await vi.waitFor(() => {
+      expect(releaseQuoteBatch).toEqual(expect.any(Function))
+    })
+    expect(dataLoader.getLoadingStatus()).toMatchObject({
+      active: true,
+      phase: 'quote',
+      progress: 51,
+      message: '加载行情数据 50/200...',
+    })
+
+    blockQuoteBatch = false
+    releaseQuoteBatch?.()
+    await loadingPromise
+  })
+
+  it('does not block startup completion on RankTrend signal enrichment', async () => {
+    blockSignalCalculation = true
+    const { dataLoader } = await import('../../dataLoader')
+
+    const summary = await dataLoader.bootstrapInitialData({ force: true })
+
+    expect(summary.stockCount).toBe(1)
+    expect(dataLoader.getLoadingStatus()).toMatchObject({
+      active: false,
+      phase: 'done',
+      progress: 100,
+    })
+    expect(signalApplyCount).toBe(1)
+
+    blockSignalCalculation = false
+    releaseSignalCalculation?.()
+    await vi.waitFor(() => {
+      expect(EventManager.getHistory(AppEvents.DATA.MERGED)).toEqual([
+        expect.objectContaining({ data: expect.objectContaining({ reason: 'base-merge' }) }),
+        expect.objectContaining({ data: expect.objectContaining({ reason: 'signal-enriched' }) }),
+      ])
+    })
+  })
+
+  it('does not let stale background signal enrichment overwrite newer hotlist data', async () => {
+    platformRowsByLoad = [
+      {
+        eastmoney: [{ code: '000001', name: '第一轮', rank: 1, source: 'eastmoney' }],
+      },
+      {
+        eastmoney: [{ code: '000002', name: '第二轮', rank: 1, source: 'eastmoney' }],
+      },
+    ]
+    blockSignalCalculation = true
+    const { dataLoader } = await import('../../dataLoader')
+
+    await dataLoader.bootstrapInitialData({ force: true })
+    expect(dataLayer.getStocks()).toEqual([expect.objectContaining({ code: '000001' })])
+
+    blockSignalCalculation = false
+    await dataLoader.refreshAll({ force: true, source: 'manual' })
+    expect(dataLayer.getStocks()).toEqual([expect.objectContaining({ code: '000002' })])
+
+    releaseSignalCalculation?.()
+    await vi.waitFor(() => {
+      expect(signalCompletionCount).toBe(2)
+    })
+
+    expect(EventManager.getHistory(AppEvents.DATA.MERGED)).toHaveLength(3)
+    expect(dataLayer.getStocks()).toEqual([expect.objectContaining({ code: '000002' })])
   })
 
   it('bootstrapInitialData reloads through the startup path when old rows already exist', async () => {

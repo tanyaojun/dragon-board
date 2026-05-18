@@ -270,6 +270,7 @@ const configStore = useConfigStore()
 const showSplash = ref(true)
 const splashProgress = ref(0)
 const splashStatus = ref('初始化中...')
+const splashClosing = ref(false)
 const currentTab = ref('market')
 const searchKeyword = ref('')
 const modeSwitching = ref(false)
@@ -516,10 +517,35 @@ const updateLastTime = () => {
   lastUpdateTime.value = Date.now()
 }
 
+const splashStatusByPhase: Record<string, string> = {
+  platform: '加载八平台热榜数据...',
+  merge: '整理基础数据...',
+  quote: '加载热榜行情数据...',
+  signal: '计算排名趋势信号...',
+  done: '准备就绪',
+  error: '启动失败',
+}
+
+const syncSplashFromDataLoader = () => {
+  if (!showSplash.value || splashClosing.value) return
+
+  const status = dataLoader.isLoading?.value
+  if (!status?.active) return
+
+  splashProgress.value = Math.max(splashProgress.value, status.progress || 0)
+  splashStatus.value = status.message || splashStatusByPhase[status.phase || ''] || '加载平台数据...'
+}
+
+watch(
+  () => dataLoader.isLoading?.value,
+  () => syncSplashFromDataLoader(),
+  { deep: true },
+)
+
 // ========== 优化启动流程 ==========
 const initializeAll = async () => {
   try {
-    await updateSplash('加载平台数据...', 15, async () => {
+    await updateSplash('加载平台数据...', 5, async () => {
       await dataLoader.bootstrapInitialData({ force: false })
     })
 
@@ -527,6 +553,7 @@ const initializeAll = async () => {
     splashProgress.value = 100
     splashStatus.value = '准备就绪'
     lastUpdateTime.value = Date.now()
+    splashClosing.value = true
 
     // 延迟关闭启动画面
     setTimeout(() => {
@@ -539,6 +566,7 @@ const initializeAll = async () => {
   } catch (error) {
     console.error('[App] ❌ 启动失败:', error)
     splashStatus.value = `启动失败: ${error instanceof Error ? error.message : '未知错误'}`
+    splashClosing.value = true
     setTimeout(() => {
       showSplash.value = false
     }, 2000)

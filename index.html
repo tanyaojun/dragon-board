@@ -31,20 +31,8 @@
           // 备用数据...
         }
 
-        // 3. 拼音库加载检查
-        const checkPinyin = setInterval(() => {
-          if (window.pinyinPro) {
-            clearInterval(checkPinyin)
-            console.log('[bridge] ✅ 拼音库已加载')
-            window.dispatchEvent(new CustomEvent('pinyin-ready'))
-          }
-        }, 100)
-        setTimeout(() => clearInterval(checkPinyin), 5000)
       })()
     </script>
-
-    <!-- 4. 拼音库 -->
-    <script src="https://cdn.jsdelivr.net/npm/pinyin-pro@3.19.0/dist/index.js"></script>
 
     <!-- 5. 最后加载 Vue 应用 -->
     <script type="module" src="/src/main.ts"></script>

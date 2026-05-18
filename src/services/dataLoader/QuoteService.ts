@@ -8,12 +8,19 @@ import {
   shouldApplyMoneyFlowUpdate,
 } from '../moneyFlowSourcePriority'
 import { quoteHttpFeed } from './QuoteHttpFeed'
-import type { MergedQuoteData } from './types'
+import type { MergedQuoteData, QuoteBatchProgress } from './types'
 import type { QuotePatch } from '@/types'
 
 type QuoteFeed = {
-  fetchBasicData: (codes: string[]) => Promise<Map<string, any>>
-  fetchFullData: (codes: string[], force?: boolean) => Promise<Map<string, any>>
+  fetchBasicData: (
+    codes: string[],
+    options?: { onProgress?: (progress: QuoteBatchProgress) => void },
+  ) => Promise<Map<string, any>>
+  fetchFullData: (
+    codes: string[],
+    force?: boolean,
+    options?: { onProgress?: (progress: QuoteBatchProgress) => void },
+  ) => Promise<Map<string, any>>
 }
 
 type QuoteDataLayer = {
@@ -29,6 +36,7 @@ type QuoteWebSocketService = {
 type PendingBatchRequest = {
   codes: string[]
   force: boolean
+  onProgress?: (progress: QuoteBatchProgress) => void
   resolve: (value: Map<string, any>) => void
   reject: (reason?: any) => void
 }
@@ -62,7 +70,7 @@ export class QuoteService {
 
   async fetchMergedQuotes(
     codes: string[],
-    options: { force?: boolean } = {},
+    options: { force?: boolean; onProgress?: (progress: QuoteBatchProgress) => void } = {},
   ): Promise<Map<string, MergedQuoteData>> {
     const validCodes = filterValidStockCodes([...new Set(codes)])
     if (validCodes.length === 0) return new Map()
@@ -95,7 +103,7 @@ export class QuoteService {
       return result
     }
 
-    const httpResult = await this.fetchHttpQuotes(httpCodes, options.force)
+    const httpResult = await this.fetchHttpQuotes(httpCodes, options.force, options.onProgress)
     httpResult.forEach((quote, code) => {
       const realtimeQuote = result.get(code)
       result.set(code, realtimeQuote ? this.mergeHttpIntoRealtimeQuote(realtimeQuote, quote) : quote)
@@ -120,8 +128,12 @@ export class QuoteService {
     return quote
   }
 
-  async getQuotes(codes: string[], force = false): Promise<Map<string, any>> {
-    const quotes = await this.fetchMergedQuotes(codes, { force })
+  async getQuotes(
+    codes: string[],
+    force = false,
+    options: { onProgress?: (progress: QuoteBatchProgress) => void } = {},
+  ): Promise<Map<string, any>> {
+    const quotes = await this.fetchMergedQuotes(codes, { force, onProgress: options.onProgress })
     const result = new Map()
 
     quotes.forEach((quote, code) => {
@@ -148,12 +160,16 @@ export class QuoteService {
     return result
   }
 
-  async getQuoteBatch(codes: string[], force = false): Promise<Map<string, any>> {
+  async getQuoteBatch(
+    codes: string[],
+    force = false,
+    options: { onProgress?: (progress: QuoteBatchProgress) => void } = {},
+  ): Promise<Map<string, any>> {
     const uniqueCodes = [...new Set(codes)]
     if (uniqueCodes.length === 0) return new Map()
 
     return new Promise((resolve, reject) => {
-      this.pendingBatchRequests.push({ codes: uniqueCodes, force, resolve, reject })
+      this.pendingBatchRequests.push({ codes: uniqueCodes, force, onProgress: options.onProgress, resolve, reject })
       for (const code of uniqueCodes) this.pendingCodes.add(code)
 
       if (!this.batchTimer) {
@@ -187,8 +203,15 @@ export class QuoteService {
     }
 
     try {
+      const callbacks = new Set(requests.map((request) => request.onProgress).filter(Boolean))
       const quotes = await this.fetchMergedQuotes(batchCodes, {
         force: requests.some((request) => request.force),
+        onProgress:
+          callbacks.size > 0
+            ? (progress) => {
+                callbacks.forEach((callback) => callback?.(progress))
+              }
+            : undefined,
       })
       quotes.forEach((quote, code) => {
         this.dataLayer.updateQuote(code, quote)
@@ -207,11 +230,38 @@ export class QuoteService {
     }
   }
 
-  private async fetchHttpQuotes(codes: string[], force?: boolean): Promise<Map<string, MergedQuoteData>> {
+  private async fetchHttpQuotes(
+    codes: string[],
+    force?: boolean,
+    onProgress?: (progress: QuoteBatchProgress) => void,
+  ): Promise<Map<string, MergedQuoteData>> {
     const httpResult = new Map<string, MergedQuoteData>()
+    const progressReporter = onProgress ? createHttpQuoteProgressReporter(codes.length, onProgress) : null
+    const basicOptions = progressReporter
+      ? { onProgress: (progress: QuoteBatchProgress) => progressReporter.report('basic', progress) }
+      : undefined
+    const fullOptions = progressReporter
+      ? { onProgress: (progress: QuoteBatchProgress) => progressReporter.report('full', progress) }
+      : undefined
     const [basicResult, fullResult] = await Promise.allSettled([
-      this.feed.fetchBasicData(codes),
-      this.feed.fetchFullData(codes, force),
+      (async () => {
+        try {
+          return basicOptions
+            ? await this.feed.fetchBasicData(codes, basicOptions)
+            : await this.feed.fetchBasicData(codes)
+        } finally {
+          progressReporter?.settle('basic')
+        }
+      })(),
+      (async () => {
+        try {
+          return fullOptions
+            ? await this.feed.fetchFullData(codes, force, fullOptions)
+            : await this.feed.fetchFullData(codes, force)
+        } finally {
+          progressReporter?.settle('full')
+        }
+      })(),
     ])
 
     if (basicResult.status === 'fulfilled' && basicResult.value.size > 0) {
@@ -380,6 +430,58 @@ function pickNonZeroNumber(...values: unknown[]): number {
   }
 
   return 0
+}
+
+function createHttpQuoteProgressReporter(
+  totalCodes: number,
+  onProgress: (progress: QuoteBatchProgress) => void,
+) {
+  type FeedKind = 'basic' | 'full'
+
+  const progressByFeed = new Map<FeedKind, QuoteBatchProgress>()
+  let lastCompletedCodes = -1
+  let lastTotalCodes = -1
+
+  const fallbackProgress = (feed: FeedKind): QuoteBatchProgress => ({
+    source: feed === 'basic' ? 'tencent' : 'eastmoney',
+    completedBatches: 0,
+    totalBatches: 1,
+    completedCodes: 0,
+    totalCodes,
+  })
+
+  const emit = (latest: QuoteBatchProgress) => {
+    const basic = progressByFeed.get('basic') || fallbackProgress('basic')
+    const full = progressByFeed.get('full') || fallbackProgress('full')
+    const completedCodes = Math.floor((basic.completedCodes + full.completedCodes) / 2)
+    const normalizedTotalCodes = Math.max(basic.totalCodes, full.totalCodes, totalCodes)
+    if (completedCodes === lastCompletedCodes && normalizedTotalCodes === lastTotalCodes) return
+    lastCompletedCodes = completedCodes
+    lastTotalCodes = normalizedTotalCodes
+    onProgress({
+      ...latest,
+      completedCodes,
+      totalCodes: normalizedTotalCodes,
+    })
+  }
+
+  return {
+    report(feed: FeedKind, progress: QuoteBatchProgress) {
+      progressByFeed.set(feed, progress)
+      emit(progress)
+    },
+    settle(feed: FeedKind) {
+      const current = progressByFeed.get(feed)
+      const completed: QuoteBatchProgress = {
+        ...(current || fallbackProgress(feed)),
+        completedBatches: current?.totalBatches || 1,
+        completedCodes: totalCodes,
+        totalCodes,
+      }
+      progressByFeed.set(feed, completed)
+      emit(completed)
+    },
+  }
 }
 
 function pickPositiveNumber(...values: unknown[]): number {

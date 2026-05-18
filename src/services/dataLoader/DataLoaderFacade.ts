@@ -37,6 +37,8 @@ import type {
   LoaderState,
   LoadingStatus,
   MergedQuoteData,
+  PlatformLoadProgress,
+  QuoteBatchProgress,
   StockSignalUpdate,
 } from './types'
 
@@ -69,12 +71,27 @@ class DataLoaderService {
 
   private isLoadingDetails = false
   private destroyed = false
+  private quoteProgressCompletedCodes = 0
+  private runTimings: Record<string, number> = {}
+  private stockPublishVersion = 0
 
   private readonly INTRADAY_VOLUME_SNAPSHOT_TYPES = DEFAULT_INTRADAY_VOLUME_SNAPSHOT_TYPES
   private realtimeCoordinator: RealtimeQuoteCoordinator
   private volumeHistoryService: VolumeHistoryService
 
   private readonly PLATFORM_REFRESH_INTERVAL = PLATFORM_REFRESH_INTERVAL_MS // 30分钟
+  private readonly startupProgress = {
+    platformStart: 5,
+    platformEnd: 35,
+    historyStart: 35,
+    historyEnd: 45,
+    quoteStart: 45,
+    quoteEnd: 70,
+    mergeStart: 70,
+    mergeEnd: 80,
+    signalStart: 80,
+    signalEnd: 95,
+  } as const
 
   constructor() {
     debugLog('[DataLoader] 初始化完成')
@@ -135,6 +152,41 @@ class DataLoaderService {
     this.state.value.loadingMessage = message
   }
 
+  private mapProgress(start: number, end: number, completed: number, total: number): number {
+    if (!Number.isFinite(total) || total <= 0) return start
+    const ratio = Math.max(0, Math.min(1, completed / total))
+    return Math.round(start + (end - start) * ratio)
+  }
+
+  private reportPlatformProgress(progress: PlatformLoadProgress) {
+    this.updateProgress(
+      this.mapProgress(
+        this.startupProgress.platformStart,
+        this.startupProgress.platformEnd,
+        progress.completed,
+        progress.total,
+      ),
+      `加载平台热榜 ${progress.completed}/${progress.total}...`,
+      'platform',
+    )
+  }
+
+  private reportQuoteProgress(progress: QuoteBatchProgress) {
+    if (progress.completedCodes < this.quoteProgressCompletedCodes) return
+    this.quoteProgressCompletedCodes = progress.completedCodes
+
+    this.updateProgress(
+      this.mapProgress(
+        this.startupProgress.quoteStart,
+        this.startupProgress.quoteEnd,
+        progress.completedCodes,
+        progress.totalCodes,
+      ),
+      `加载行情数据 ${progress.completedCodes}/${progress.totalCodes}...`,
+      'quote',
+    )
+  }
+
   private publishStocks(
     stocks: any[],
     meta: {
@@ -144,13 +196,15 @@ class DataLoaderService {
         | 'manual-signal-update'
         | 'hotness-recalculated'
     },
-  ) {
+  ): number {
+    const publishVersion = ++this.stockPublishVersion
     dataLayer.setMergedStocks(stocks)
     EventManager.emit(AppEvents.DATA.MERGED, {
       count: stocks.length,
       timestamp: Date.now(),
       reason: meta.reason,
     })
+    return publishVersion
   }
 
   private summarizeRun(startTime: number, fromCache: boolean): DataLoaderRunSummary {
@@ -163,12 +217,26 @@ class DataLoaderService {
       platformCount,
       fromCache,
       elapsedMs: Date.now() - startTime,
+      timings: { ...this.runTimings },
+    }
+  }
+
+  private async measureStartupStep<T>(name: string, task: () => Promise<T>): Promise<T> {
+    const start = Date.now()
+    try {
+      return await task()
+    } finally {
+      this.runTimings[name] = Date.now() - start
     }
   }
 
   private async loadPlatformAndMerge(
     force = false,
-    options: { includeLimitUpData?: boolean; allowWhileLoading?: boolean } = {},
+    options: {
+      includeLimitUpData?: boolean
+      allowWhileLoading?: boolean
+      deferSignalEnrichment?: boolean
+    } = {},
   ): Promise<DataLoaderRunSummary> {
     const locked = await refreshResourceLocks.runExclusive(
       'hotlist-platform',
@@ -179,10 +247,15 @@ class DataLoaderService {
 
   private async doLoadPlatformAndMerge(
     force = false,
-    options: { includeLimitUpData?: boolean; allowWhileLoading?: boolean } = {},
+    options: {
+      includeLimitUpData?: boolean
+      allowWhileLoading?: boolean
+      deferSignalEnrichment?: boolean
+    } = {},
   ): Promise<DataLoaderRunSummary> {
     const startTime = Date.now()
     let fromCache = false
+    this.runTimings = {}
 
     if (this.destroyed) return this.summarizeRun(startTime, fromCache)
     if (this.state.value.loading && !force && !options.allowWhileLoading) {
@@ -191,14 +264,20 @@ class DataLoaderService {
     }
 
     const platforms = this.state.value.platforms
-    const result = await platformHotlistService.loadPlatforms(platforms, force).catch((error) => {
-      console.warn('[DataLoader] 平台热榜加载失败，继续进入空数据状态:', error)
-      return {
-        data: {} as Record<string, any[]>,
-        timestamp: Date.now(),
-        fromCache: false,
-      }
-    })
+    const result = await this.measureStartupStep('platform', () =>
+      platformHotlistService
+        .loadPlatforms(platforms, force, {
+          onProgress: (progress) => this.reportPlatformProgress(progress),
+        })
+        .catch((error) => {
+          console.warn('[DataLoader] 平台热榜加载失败，继续进入空数据状态:', error)
+          return {
+            data: {} as Record<string, any[]>,
+            timestamp: Date.now(),
+            fromCache: false,
+          }
+        }),
+    )
     fromCache = result.fromCache
 
     if (result.fromCache) {
@@ -211,25 +290,29 @@ class DataLoaderService {
       }
     }
 
-    this.updateProgress(50, '加载平台数据完成', 'platform')
+    this.updateProgress(this.startupProgress.historyStart, '加载平台数据完成', 'platform')
     this.state.value.data = result.data
     this.state.value.lastUpdate = result.timestamp
     dataLayer.updatePlatforms(result.data)
     if (options.includeLimitUpData) {
-      await this.loadLimitUpData(force)
+      await this.measureStartupStep('limitUp', () => this.loadLimitUpData(force))
     }
-    await this.mergeData()
+    await this.mergeData({ deferSignalEnrichment: options.deferSignalEnrichment })
 
-    return this.summarizeRun(startTime, fromCache)
+    const summary = this.summarizeRun(startTime, fromCache)
+    debugLog('[DataLoader] 启动加载耗时', summary)
+    return summary
   }
 
   async bootstrapInitialData(
     options: DataLoaderBootstrapOptions = {},
   ): Promise<DataLoaderRunSummary> {
-    this.setLoading(true, '加载平台热榜...', 10, 'platform')
+    this.quoteProgressCompletedCodes = 0
+    this.setLoading(true, '加载平台热榜...', this.startupProgress.platformStart, 'platform')
     try {
       const summary = await this.loadPlatformAndMerge(options.force ?? false, {
         allowWhileLoading: true,
+        deferSignalEnrichment: true,
       })
       this.updateProgress(100, '完成', 'done')
       return summary
@@ -240,7 +323,8 @@ class DataLoaderService {
 
   async refreshAll(options: DataLoaderRefreshOptions = {}): Promise<DataLoaderRunSummary> {
     void options.source
-    this.setLoading(true, '加载平台热榜...', 10, 'platform')
+    this.quoteProgressCompletedCodes = 0
+    this.setLoading(true, '加载平台热榜...', this.startupProgress.platformStart, 'platform')
     try {
       const summary = await this.loadPlatformAndMerge(options.force ?? false, {
         includeLimitUpData: true,
@@ -464,8 +548,12 @@ class DataLoaderService {
   }
 
   // ========== 加载行情数据 ==========
-  private async getQuoteBatch(codes: string[], force = false): Promise<Map<string, any>> {
-    return quoteService.getQuoteBatch(codes, force)
+  private async getQuoteBatch(
+    codes: string[],
+    force = false,
+    options: { onProgress?: (progress: QuoteBatchProgress) => void } = {},
+  ): Promise<Map<string, any>> {
+    return quoteService.getQuoteBatch(codes, force, options)
   }
 
   // ========== 加载行情数据 ==========
@@ -478,10 +566,12 @@ class DataLoaderService {
       if (allCodes.size === 0) return
 
       const codesArray = Array.from(allCodes)
-      this.updateProgress(60, `加载行情数据 ${codesArray.length} 只...`, 'quote')
+      this.updateProgress(this.startupProgress.quoteStart, `加载行情数据 ${codesArray.length} 只...`, 'quote')
       const quoteResult = await refreshResourceLocks.runExclusive(
         'quote-http',
-        () => this.getQuoteBatch(codesArray, true),
+        () => this.getQuoteBatch(codesArray, true, {
+          onProgress: (progress) => this.reportQuoteProgress(progress),
+        }),
       )
       const quotes = quoteResult.value ?? new Map()
 
@@ -513,29 +603,37 @@ class DataLoaderService {
   /**
    * 合并数据主入口
    */
-  async mergeData(): Promise<any[]> {
+  async mergeData(options: { deferSignalEnrichment?: boolean } = {}): Promise<any[]> {
     // 1. 获取历史成交量索引
     const allCodes = this.getAllHotCodes()
     const codesArray = Array.from(allCodes)
-    const [volumeHistoryMap, intradayVolumeHistoryMap] = await Promise.all([
-      this.buildVolumeHistoryMap(codesArray).catch((error) => {
-        console.warn('[DataLoader] 历史成交量索引加载失败，继续使用空索引:', error)
-        return new Map<string, number[]>()
-      }),
-      this.buildIntradayVolumeHistoryMap(codesArray).catch((error) => {
-        console.warn('[DataLoader] 分时成交量索引加载失败，继续使用空索引:', error)
-        return new Map<string, number[]>()
-      }),
-    ])
+    this.updateProgress(this.startupProgress.historyStart, '加载历史成交量索引...', 'merge')
+    const [volumeHistoryMap, intradayVolumeHistoryMap] = await this.measureStartupStep('history', () =>
+      Promise.all([
+        this.buildVolumeHistoryMap(codesArray).catch((error) => {
+          console.warn('[DataLoader] 历史成交量索引加载失败，继续使用空索引:', error)
+          return new Map<string, number[]>()
+        }),
+        this.buildIntradayVolumeHistoryMap(codesArray).catch((error) => {
+          console.warn('[DataLoader] 分时成交量索引加载失败，继续使用空索引:', error)
+          return new Map<string, number[]>()
+        }),
+      ]),
+    )
+    this.updateProgress(this.startupProgress.historyEnd, '历史成交量索引完成', 'merge')
 
     // 2. ✅ 先加载行情数据
     let quotesMap = new Map<string, any>()
     if (allCodes.size > 0) {
       try {
-        this.updateProgress(60, `加载行情数据 ${codesArray.length} 只...`, 'quote')
-        const quoteResult = await refreshResourceLocks.runExclusive(
-          'quote-http',
-          () => this.getQuoteBatch(codesArray, true),
+        this.updateProgress(this.startupProgress.quoteStart, `加载行情数据 ${codesArray.length} 只...`, 'quote')
+        const quoteResult = await this.measureStartupStep('quote', () =>
+          refreshResourceLocks.runExclusive(
+            'quote-http',
+            () => this.getQuoteBatch(codesArray, true, {
+              onProgress: (progress) => this.reportQuoteProgress(progress),
+            }),
+          ),
         )
         quotesMap = quoteResult.value ?? new Map()
       } catch (error) {
@@ -550,13 +648,16 @@ class DataLoaderService {
     )
 
     // 4. 构建股票数据并计算综合排名
-    let merged = await stockMergeCoordinator.merge({
-      platformData: this.state.value.data || {},
-      latestQuotes: quotesMap,
-      volumeHistoryMap,
-      intradayVolumeHistoryMap,
-      existingMap,
-    })
+    this.updateProgress(this.startupProgress.mergeStart, '合并热榜与行情数据...', 'merge')
+    let merged = await this.measureStartupStep('merge', () =>
+      stockMergeCoordinator.merge({
+        platformData: this.state.value.data || {},
+        latestQuotes: quotesMap,
+        volumeHistoryMap,
+        intradayVolumeHistoryMap,
+        existingMap,
+      }),
+    )
 
     // 5. 合并额外数据
     merged = this.mergeExtraData(merged)
@@ -565,15 +666,35 @@ class DataLoaderService {
     this.updateStockHotness(merged)
 
     // 7. 先存储基础热榜，RankTrend 信号属于后置增强，不能阻塞首屏数据可见。
-    this.publishStocks(merged, { reason: 'base-merge' })
+    const basePublishVersion = this.publishStocks(merged, { reason: 'base-merge' })
     this.syncRealtimeSubscription()
+    this.updateProgress(this.startupProgress.mergeEnd, '基础榜单已就绪', 'merge')
+
+    if (options.deferSignalEnrichment) {
+      void this.enrichSignalsInBackground(merged, basePublishVersion)
+      return merged
+    }
 
     // 8. 计算信号并回写增强字段
-    this.updateProgress(85, '计算排名趋势信号...', 'signal')
-    merged = await this.calculateSignals(merged)
+    this.updateProgress(this.startupProgress.signalStart, '计算排名趋势信号...', 'signal')
+    merged = await this.measureStartupStep('signal', () => this.calculateSignals(merged))
     this.publishStocks(merged, { reason: 'signal-enriched' })
+    this.updateProgress(this.startupProgress.signalEnd, '排名趋势信号完成', 'signal')
 
     return merged
+  }
+
+  private async enrichSignalsInBackground(baseMerged: any[], basePublishVersion: number): Promise<void> {
+    try {
+      const enriched = await this.calculateSignals(baseMerged)
+      if (this.stockPublishVersion !== basePublishVersion) {
+        debugLog('[DataLoader] 跳过过期的后台排名趋势信号增强')
+        return
+      }
+      this.publishStocks(enriched, { reason: 'signal-enriched' })
+    } catch (error) {
+      console.warn('[DataLoader] 后台排名趋势信号增强失败，保留基础热榜数据:', error)
+    }
   }
 
   /**

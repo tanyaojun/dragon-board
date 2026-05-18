@@ -3,7 +3,7 @@
 
 <template>
   <transition name="fade" @after-leave="onAfterLeave">
-    <div v-if="visible" class="splash-screen" :class="themeClass">
+    <div v-if="visible" class="splash-screen" :class="themeClass" :style="progressStyle">
       <!-- 龙鳞背景动画 -->
       <div class="dragon-scale-bg">
         <div v-for="i in 81" :key="i" class="scale" :style="{ '--i': i }"></div>
@@ -85,6 +85,10 @@ const props = defineProps<{
   progress: number
   status: string
 }>()
+
+const progressStyle = computed(() => ({
+  '--progress': String(Math.max(0, Math.min(100, props.progress))),
+}))
 
 const emit = defineEmits<{
   (e: 'update:visible', value: boolean): void

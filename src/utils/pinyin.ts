@@ -1,19 +1,11 @@
+import { pinyin as convertToPinyin } from 'pinyin-pro'
+
 import { debugLog } from '@/utils/logger'
 // src/utils/pinyin.ts
 
 /**
- * 拼音工具 - 使用 pinyin-pro 库
- * 
- * 依赖：已在 index.html 中引入 pinyin-pro
- * CDN: https://cdn.jsdelivr.net/npm/pinyin-pro@3.19.0/dist/index.js
+ * 拼音工具 - 使用项目依赖 pinyin-pro
  */
-
-// 声明全局变量
-declare global {
-  interface Window {
-    pinyinPro: any
-  }
-}
 
 // LRU缓存
 class LRUCache<K, V> {
@@ -57,34 +49,15 @@ export class PinyinUtils {
    * 检查拼音库是否可用
    */
   static isAvailable(): boolean {
-    return !!(window.pinyinPro?.pinyin)
+    return typeof convertToPinyin === 'function'
   }
 
   /**
    * 等待拼音库加载
    */
-  static async waitForLibrary(timeout = 5000): Promise<boolean> {
-    if (this.isAvailable()) {
-      this.isReady = true
-      return true
-    }
-
-    return new Promise((resolve) => {
-      const startTime = Date.now()
-      
-      const checkInterval = setInterval(() => {
-        if (this.isAvailable()) {
-          clearInterval(checkInterval)
-          this.isReady = true
-          debugLog('[PinyinUtils] ✅ 拼音库加载成功')
-          resolve(true)
-        } else if (Date.now() - startTime > timeout) {
-          clearInterval(checkInterval)
-          console.warn('[PinyinUtils] ⚠️ 拼音库加载超时，将使用降级方案')
-          resolve(false)
-        }
-      }, 100)
-    })
+  static async waitForLibrary(_timeout = 5000): Promise<boolean> {
+    this.isReady = this.isAvailable()
+    return this.isReady
   }
 
   /**
@@ -106,7 +79,7 @@ export class PinyinUtils {
     // 使用 pinyin-pro 库
     if (this.isAvailable()) {
       try {
-        const result = window.pinyinPro.pinyin(name, {
+        const result = convertToPinyin(name, {
           toneType: 'none',
           pattern: 'first',
           type: 'array'
@@ -197,7 +170,7 @@ export class PinyinUtils {
    */
   static getVersion(): string {
     if (this.isAvailable()) {
-      return window.pinyinPro?.version || 'unknown'
+      return 'pinyin-pro'
     }
     return 'simple (fallback)'
   }
