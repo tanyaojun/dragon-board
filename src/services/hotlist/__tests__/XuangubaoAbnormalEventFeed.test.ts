@@ -147,6 +147,38 @@ describe('XuangubaoAbnormalEventFeed', () => {
     })
   })
 
+  it('uses plate_abnormal_event_data when stock_abnormal_event_data is an empty object', () => {
+    const events = parseXuangubaoAbnormalEvents({
+      data: [
+        {
+          id: 9110082,
+          target: '785',
+          event_type: 11000,
+          event_timestamp: 1779081368,
+          stock_abnormal_event_data: {},
+          plate_abnormal_event_data: {
+            plate_id: 86475809,
+            plate_name: '英伟达概念',
+            pcp: 0.01203161291621622,
+          },
+          good_or_bad: 1,
+        },
+      ],
+    })
+
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({
+      category: 'sector',
+      id: '9110082',
+      eventType: 11000,
+      typeName: '板块拉升',
+      timestamp: 1779081368000,
+      sectorName: '英伟达概念',
+      name: '英伟达概念',
+      changePct: 0.012032,
+    })
+  })
+
   it('parses alternate payload shapes and keeps sector event types', () => {
     const events = parseXuangubaoAbnormalEvents({
       stock_abnormal_event_data: [

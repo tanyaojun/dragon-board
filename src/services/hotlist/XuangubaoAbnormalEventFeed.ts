@@ -105,9 +105,17 @@ function toArray(value: unknown): any[] {
   return Array.isArray(value) ? value : []
 }
 
+function isNonEmptyRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length > 0
+}
+
 function normalizeEventRow(row: any): any {
-  const nested = row?.stock_abnormal_event_data || row?.stockAbnormalEventData
+  const stockNested = row?.stock_abnormal_event_data || row?.stockAbnormalEventData
   const sectorNested = row?.plate_abnormal_event_data || row?.plateAbnormalEventData
+  const rowType = Number(row?.event_type ?? row?.eventType ?? row?.type)
+  const nested = SECTOR_EVENT_TYPE_SET.has(rowType) && isNonEmptyRecord(sectorNested)
+    ? sectorNested
+    : stockNested
   const source = nested || sectorNested
   if (!source || typeof source !== 'object') return row
 
