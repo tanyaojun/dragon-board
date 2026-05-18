@@ -191,7 +191,7 @@ describe('SnapshotRuntime', () => {
     expect(coverage.daily.missing).toEqual(['15:00'])
   })
 
-  it('ignores IndexedDB existence and rewrites through sqlite for formal snapshots', async () => {
+  it('ignores IndexedDB existence and writes formal snapshots through the backend primary', async () => {
     const runtime = createRuntime()
     const record = createRecord('half_hour', '2026-04-21', '10:00')
     const sqliteWrite = vi.fn().mockResolvedValue({ ok: true })
@@ -231,7 +231,7 @@ describe('SnapshotRuntime', () => {
     expect(saved).toBe(true)
     expect(sqliteWrite).toHaveBeenCalledTimes(1)
     expect((runtime as any).snapshotStore.getById).not.toHaveBeenCalled()
-    expect((runtime as any).snapshotProjectionWriter.saveBundle).toHaveBeenCalledTimes(1)
+    expect((runtime as any).snapshotProjectionWriter.saveBundle).not.toHaveBeenCalled()
     const state = await runtime.getSnapshotBackupSyncState('2026-04-21')
     expect(state?.backendIngestedAt).toEqual(expect.any(Number))
   })
