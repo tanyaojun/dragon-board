@@ -7,6 +7,8 @@ export interface EventRadarFeishuStatus {
   configured: boolean
   webhookConfigured: boolean
   secretConfigured: boolean
+  batchWindowMs?: number
+  pendingCount?: number
   background?: EventRadarFeishuBackgroundStatus | null
   lastMessage?: string
   lastCheckedAt?: number
@@ -136,6 +138,8 @@ function normalizeStatus(payload: Record<string, unknown>): EventRadarFeishuStat
     configured: Boolean(payload.configured),
     webhookConfigured: Boolean(payload.webhookConfigured),
     secretConfigured: Boolean(payload.secretConfigured),
+    batchWindowMs: Number(payload.batchWindowMs) || 0,
+    pendingCount: Number(payload.pendingCount) || 0,
     background: normalizeBackgroundStatus(payload.background),
     lastMessage: typeof payload.message === 'string' ? payload.message : undefined,
     lastCheckedAt: Date.now(),

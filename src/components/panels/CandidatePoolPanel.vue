@@ -80,14 +80,8 @@
           <aside class="candidate-list">
             <div v-if="loading" class="empty">加载中...</div>
             <div v-else-if="!visibleCandidates.length" class="empty">暂无候选股</div>
-            <button
-              v-for="entry in visibleCandidates"
-              v-else
-              :key="entry.id"
-              class="candidate-item"
-              :class="{ active: selectedId === entry.id }"
-              @click="selectedId = entry.id"
-            >
+            <button v-for="entry in visibleCandidates" v-else :key="entry.id" class="candidate-item"
+              :class="{ active: selectedId === entry.id }" @click="selectedId = entry.id">
               <span class="candidate-item-main">
                 <span class="candidate-name">
                   <strong>{{ entry.stockName || entry.stockCode }}</strong>
@@ -137,11 +131,13 @@
                     <div class="analysis-compare decision-metrics">
                       <div>
                         <span>当前重分析</span>
-                        <strong>{{ selectedReview.currentAnalysis.grade }}级 · {{ selectedReview.currentAnalysis.score }}分</strong>
+                        <strong>{{ selectedReview.currentAnalysis.grade }}级 · {{ selectedReview.currentAnalysis.score
+                          }}分</strong>
                       </div>
                       <div>
                         <span>入池快照</span>
-                        <strong>{{ selectedReview.savedAnalysis.grade }}级 · {{ selectedReview.savedAnalysis.score }}分</strong>
+                        <strong>{{ selectedReview.savedAnalysis.grade }}级 · {{ selectedReview.savedAnalysis.score
+                          }}分</strong>
                       </div>
                       <div>
                         <span>{{ selectedReview.stateLabel }}</span>
@@ -162,12 +158,8 @@
                         </p>
                       </div>
                       <div class="status-actions">
-                        <button
-                          v-for="status in nextStatuses"
-                          :key="status"
-                          :disabled="updatingStatus"
-                          @click="updateStatus(status)"
-                        >
+                        <button v-for="status in nextStatuses" :key="status" :disabled="updatingStatus"
+                          @click="updateStatus(status)">
                           {{ statusLabel(status) }}
                         </button>
                       </div>
@@ -185,22 +177,20 @@
                       </button>
                     </div>
                     <div class="breakdown">
-                      <span>RankTrend {{ selectedReview.currentAnalysis.scoreBreakdown.rankTrend }}</span>
-                      <span>题材 {{ selectedReview.currentAnalysis.scoreBreakdown.theme }}</span>
-                      <span>龙头 {{ selectedReview.currentAnalysis.scoreBreakdown.dragon }}</span>
-                      <span>情绪 {{ selectedReview.currentAnalysis.scoreBreakdown.sentiment }}</span>
-                      <span>资金 {{ selectedReview.currentAnalysis.scoreBreakdown.moneyFlow }}</span>
+                      <span>RankTrend {{ formatScoreValue(selectedReview.currentAnalysis.scoreBreakdown.rankTrend)
+                        }}</span>
+                      <span>题材 {{ formatScoreValue(selectedReview.currentAnalysis.scoreBreakdown.theme) }}</span>
+                      <span>龙头 {{ formatScoreValue(selectedReview.currentAnalysis.scoreBreakdown.dragon) }}</span>
+                      <span>情绪 {{ formatScoreValue(selectedReview.currentAnalysis.scoreBreakdown.sentiment) }}</span>
+                      <span>资金 {{ formatScoreValue(selectedReview.currentAnalysis.scoreBreakdown.moneyFlow) }}</span>
                     </div>
                     <div class="evidence-grid">
                       <div>
                         <h5>证据项</h5>
                         <div v-if="selectedReview.currentAnalysis.evidence.length" class="evidence-list">
-                          <div
-                            v-for="item in selectedReview.currentAnalysis.evidence"
-                            :key="`evidence-${item.dimension}-${item.title}`"
-                            class="evidence-item"
-                            :class="`evidence-${item.kind}`"
-                          >
+                          <div v-for="item in selectedReview.currentAnalysis.evidence"
+                            :key="`evidence-${item.dimension}-${item.title}`" class="evidence-item"
+                            :class="`evidence-${item.kind}`">
                             <span>
                               <strong>{{ item.title }}</strong>
                               <em>{{ formatScoreImpact(item.scoreImpact) }}</em>
@@ -213,12 +203,9 @@
                       <div>
                         <h5>扣分项</h5>
                         <div v-if="selectedReview.currentAnalysis.penalties.length" class="evidence-list">
-                          <div
-                            v-for="item in selectedReview.currentAnalysis.penalties"
-                            :key="`penalty-${item.dimension}-${item.title}`"
-                            class="evidence-item"
-                            :class="`evidence-${item.kind}`"
-                          >
+                          <div v-for="item in selectedReview.currentAnalysis.penalties"
+                            :key="`penalty-${item.dimension}-${item.title}`" class="evidence-item"
+                            :class="`evidence-${item.kind}`">
                             <span>
                               <strong>{{ item.title }}</strong>
                               <em>{{ formatScoreImpact(item.scoreImpact) }}</em>
@@ -234,34 +221,22 @@
                       <div class="condition-columns">
                         <div>
                           <span class="condition-title">触发条件</span>
-                          <span
-                            v-for="item in selectedReview.currentAnalysis.structuredThesis.triggerConditions"
-                            :key="`trigger-${item.id}`"
-                            class="condition-pill"
-                            :class="`condition-${item.status}`"
-                          >
+                          <span v-for="item in selectedReview.currentAnalysis.structuredThesis.triggerConditions"
+                            :key="`trigger-${item.id}`" class="condition-pill" :class="`condition-${item.status}`">
                             {{ item.label }} · {{ conditionStatusText(item.status) }}
                           </span>
                         </div>
                         <div>
                           <span class="condition-title">买入前提</span>
-                          <span
-                            v-for="item in selectedReview.currentAnalysis.structuredThesis.entryPrerequisites"
-                            :key="`entry-${item.id}`"
-                            class="condition-pill"
-                            :class="`condition-${item.status}`"
-                          >
+                          <span v-for="item in selectedReview.currentAnalysis.structuredThesis.entryPrerequisites"
+                            :key="`entry-${item.id}`" class="condition-pill" :class="`condition-${item.status}`">
                             {{ item.label }} · {{ conditionStatusText(item.status) }}
                           </span>
                         </div>
                         <div>
                           <span class="condition-title">失效条件</span>
-                          <span
-                            v-for="item in selectedReview.currentAnalysis.structuredThesis.invalidationConditions"
-                            :key="`invalid-${item.id}`"
-                            class="condition-pill"
-                            :class="`condition-${item.status}`"
-                          >
+                          <span v-for="item in selectedReview.currentAnalysis.structuredThesis.invalidationConditions"
+                            :key="`invalid-${item.id}`" class="condition-pill" :class="`condition-${item.status}`">
                             {{ item.label }} · {{ conditionStatusText(item.status) }}
                           </span>
                         </div>
@@ -269,12 +244,8 @@
                     </div>
                     <div v-if="selectedReview.currentAnalysis.structuredRisks.length" class="structured-risk-list">
                       <h5>结构化风险</h5>
-                      <span
-                        v-for="item in selectedReview.currentAnalysis.structuredRisks"
-                        :key="item.code"
-                        class="risk-chip"
-                        :class="`risk-${item.level}`"
-                      >
+                      <span v-for="item in selectedReview.currentAnalysis.structuredRisks" :key="item.code"
+                        class="risk-chip" :class="`risk-${item.level}`">
                         {{ riskLevelText(item.level) }} · {{ item.message }}
                       </span>
                     </div>
@@ -384,12 +355,8 @@
                     </div>
                   </div>
                   <div v-if="discoveryRecommendations.length" class="discovery-list">
-                    <article
-                      v-for="item in discoveryRecommendations"
-                      :key="item.stock.code"
-                      class="discovery-item"
-                      :class="{ duplicate: item.duplicate.isOpen }"
-                    >
+                    <article v-for="item in discoveryRecommendations" :key="item.stock.code" class="discovery-item"
+                      :class="{ duplicate: item.duplicate.isOpen }">
                       <div class="discovery-main">
                         <strong>{{ item.stock.name || item.stock.code }}</strong>
                         <span>{{ item.stock.code }} · {{ item.grade }}级 · {{ item.score }}分</span>
@@ -403,11 +370,9 @@
                       </div>
                       <p>{{ item.reasons[0] || '规则评分达到候选观察线' }}</p>
                       <p v-if="item.risks.length" class="discovery-risk">{{ item.risks[0] }}</p>
-                      <button
-                        type="button"
+                      <button type="button"
                         :disabled="item.duplicate.isOpen || confirmingDiscoveryCode === item.stock.code"
-                        @click="confirmDiscoveryRecommendation(item)"
-                      >
+                        @click="confirmDiscoveryRecommendation(item)">
                         {{ item.duplicate.isOpen ? '已在候选池' : '确认入池' }}
                       </button>
                     </article>
@@ -624,9 +589,19 @@ function formatDays(value: number) {
   return `${value}天`
 }
 
+function toRoundedScore(value: number) {
+  const numeric = Number(value)
+  return Number.isFinite(numeric) ? Math.round(numeric) : 0
+}
+
+function formatScoreValue(value: number) {
+  return String(toRoundedScore(value))
+}
+
 function formatScoreImpact(value: number) {
-  if (value > 0) return `+${value}`
-  return String(value)
+  const score = toRoundedScore(value)
+  if (score > 0) return `+${score}`
+  return String(score)
 }
 
 function conditionStatusText(status: string) {
@@ -1258,7 +1233,7 @@ textarea:focus-visible {
   min-width: 0;
 }
 
-.candidate-item-foot > span:first-child {
+.candidate-item-foot>span:first-child {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1327,7 +1302,7 @@ textarea:focus-visible {
   margin-bottom: 12px;
 }
 
-.section-header > span {
+.section-header>span {
   color: var(--candidate-muted);
   font-size: 12px;
 }
@@ -1340,8 +1315,8 @@ textarea:focus-visible {
   font-size: 12px;
 }
 
-.candidate-workflow > section,
-.candidate-side-brief > section {
+.candidate-workflow>section,
+.candidate-side-brief>section {
   margin: 0 0 16px;
   padding: 14px;
   background: var(--candidate-surface-soft);
@@ -1350,18 +1325,18 @@ textarea:focus-visible {
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.045);
 }
 
-.candidate-workflow > section h4,
-.candidate-side-brief > section h4 {
+.candidate-workflow>section h4,
+.candidate-side-brief>section h4 {
   margin: 0;
   color: var(--candidate-text);
   font-size: 13px;
   font-weight: 800;
 }
 
-.candidate-workflow > section p,
-.candidate-workflow > section li,
-.candidate-side-brief > section p,
-.candidate-side-brief > section li {
+.candidate-workflow>section p,
+.candidate-workflow>section li,
+.candidate-side-brief>section p,
+.candidate-side-brief>section li {
   margin: 0;
   color: var(--candidate-muted);
   font-size: 13px;
@@ -1519,7 +1494,7 @@ ul {
 .analysis-compare strong {
   color: var(--candidate-accent);
   font-family: var(--candidate-font-data);
-  font-size: 22px;
+  font-size: 20px;
   font-weight: 800;
   font-variant-numeric: tabular-nums;
 }

@@ -161,6 +161,16 @@ describe('CandidatePoolPanel source contract', () => {
     expect(source).toMatch(/currentAnalysis\.structuredRisks/)
   })
 
+  test('formats visible rule scores as whole numbers in the candidate panel', () => {
+    const source = panelSource()
+
+    expect(source).toMatch(/RankTrend\s+\{\{\s*formatScoreValue\(selectedReview\.currentAnalysis\.scoreBreakdown\.rankTrend\)\s*\}\}/)
+    expect(source).toMatch(/题材\s+\{\{\s*formatScoreValue\(selectedReview\.currentAnalysis\.scoreBreakdown\.theme\)\s*\}\}/)
+    expect(source).toMatch(/function formatScoreValue\(value: number\)/)
+    expect(source).toMatch(/Math\.round\(numeric\)/)
+    expect(source).toMatch(/function formatScoreImpact\(value: number\)[\s\S]*toRoundedScore\(value\)/)
+  })
+
   test('exposes phase 13 manual-confirm discovery recommendations without changing the left-right layout', () => {
     const source = panelSource()
     const bodyIndex = source.indexOf('<div class="candidate-body">')

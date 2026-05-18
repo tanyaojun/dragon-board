@@ -51,7 +51,7 @@ test('event radar background worker builds a baseline on first run without sendi
   assert.equal(worker.status().lastFetchedCount, 1)
 })
 
-test('event radar background worker sends only new stock events after baseline', async () => {
+test('event radar background worker queues only new stock events after baseline', async () => {
   const sent = []
   let run = 0
   const worker = createEventRadarBackgroundWorker({
@@ -59,9 +59,16 @@ test('event radar background worker sends only new stock events after baseline',
     fetchEvents: async () => {
       run += 1
       if (run === 1) return [makeRawEvent({ id: 'event-a', stock_code: '600386' })]
+      if (run === 2) {
+        return [
+          makeRawEvent({ id: 'event-a', stock_code: '600386' }),
+          makeRawEvent({ id: 'event-b', stock_code: '000002', stock_name: '万科A', event_type_name: '大幅拉升' }),
+        ]
+      }
       return [
         makeRawEvent({ id: 'event-a', stock_code: '600386' }),
         makeRawEvent({ id: 'event-b', stock_code: '000002', stock_name: '万科A', event_type_name: '大幅拉升' }),
+        makeRawEvent({ id: 'event-c', stock_code: '002858', stock_name: '力盛体育', event_type_name: '打开涨停板' }),
         makeRawEvent({ id: 'sector-a', stock_code: '', event_type: 11000, event_type_name: '板块拉升' }),
       ]
     },
@@ -74,20 +81,23 @@ test('event radar background worker sends only new stock events after baseline',
       }),
       sendEvents: async (events) => {
         sent.push(events)
-        return { ok: true, sent: events.length, skipped: 0 }
+        return { ok: true, queued: events.length, sent: 0, skipped: 0 }
       },
     },
     now: () => Date.parse('2026-05-18T10:24:00+08:00'),
   })
 
   await worker.runOnce()
-  const result = await worker.runOnce()
+  const second = await worker.runOnce()
+  const third = await worker.runOnce()
 
-  assert.equal(result.ok, true)
-  assert.equal(result.baseline, false)
-  assert.equal(result.sent, 1)
-  assert.equal(sent.length, 1)
-  assert.deepEqual(sent[0].map((event) => event.code), ['000002'])
+  assert.equal(second.ok, true)
+  assert.equal(second.baseline, false)
+  assert.equal(second.sent, 0)
+  assert.equal(second.queued, 1)
+  assert.equal(third.queued, 1)
+  assert.equal(sent.length, 2)
+  assert.deepEqual(sent.flat().map((event) => event.code), ['000002', '002858'])
   assert.equal(sent[0][0].typeName, '大幅拉升')
 })
 

@@ -388,6 +388,9 @@ const feishuBackgroundLabel = computed(() => {
   if (!background?.backgroundEnabled) return '未启用'
   if (!background.running) return '代理未运行'
   if (!background.initialized) return '代理运行中，等待首轮基线'
+  if (feishuStatus.value.pendingCount) {
+    return `代理运行中 · 待合并 ${feishuStatus.value.pendingCount} 条`
+  }
   return `代理运行中 · 已拉取 ${background.lastFetchedCount} 条`
 })
 

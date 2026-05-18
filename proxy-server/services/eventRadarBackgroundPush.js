@@ -49,6 +49,7 @@ export function createEventRadarBackgroundWorker(options = {}) {
   let lastError = null
   let lastFetchedCount = 0
   let lastSentCount = 0
+  let lastQueuedCount = 0
   let successCount = 0
   let failureCount = 0
   let knownEventKeys = new Set()
@@ -66,6 +67,7 @@ export function createEventRadarBackgroundWorker(options = {}) {
       lastError,
       lastFetchedCount,
       lastSentCount,
+      lastQueuedCount,
       successCount,
       failureCount,
     }
@@ -92,20 +94,21 @@ export function createEventRadarBackgroundWorker(options = {}) {
         return { ok: true, baseline: true, fetched: events.length, sent: 0, skipped: events.length }
       }
 
-      let sent = 0
+      let queued = 0
       if (freshEvents.length) {
         const result = await notifier.sendEvents(freshEvents, { source: 'proxy-background-event-radar' })
-        sent = Number(result?.sent || 0)
+        queued = Number(result?.queued || result?.sent || 0)
       }
       knownEventKeys = new Set([...knownEventKeys, ...nextKeys])
-      lastSentCount = sent
+      lastQueuedCount = queued
       lastSuccessAt = now()
       successCount += 1
       return {
         ok: true,
         baseline: false,
         fetched: events.length,
-        sent,
+        queued,
+        sent: 0,
         skipped: events.length - freshEvents.length,
       }
     } catch (error) {

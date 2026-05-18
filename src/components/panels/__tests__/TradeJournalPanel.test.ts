@@ -39,4 +39,20 @@ describe('TradeJournalPanel source contract', () => {
     expect(source).toContain('历史交易日志')
     expect(source).not.toContain('<span class="item-icon">📓</span>交易日记')
   })
+
+  test('uses a scoped, maintainable journal workspace layout', () => {
+    const source = panelSource()
+
+    expect(source).toContain('<style scoped>')
+    expect(source).toContain('class="trade-journal-overlay"')
+    expect(source).toContain('class="journal-shell"')
+    expect(source).toContain('class="journal-list-panel"')
+    expect(source).toContain('class="journal-detail-panel"')
+    expect(source).toContain('class="metric-card"')
+    expect(source).not.toMatch(/<div[^>]+style="/)
+    expect(source).not.toMatch(/<button[^>]+style="/)
+    expect(source).not.toMatch(/<input[^>]+style="/)
+    expect(source).not.toMatch(/<select[^>]+style="/)
+    expect(source).not.toMatch(/<textarea[^>]+style="/)
+  })
 })

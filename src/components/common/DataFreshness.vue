@@ -116,11 +116,10 @@ const realtimeSubscribedStocks = computed(() => {
   const stocks = dataLayer.getStocks()
   const stockMap = new Map(stocks.map((item) => [item.code, item]))
 
-  const getCandidateTier = (stock: any) => stock?.rankTrend?.strategy?.candidateTier ?? null
-  const getStrategyAction = (stock: any) => stock?.rankTrend?.strategy?.action ?? null
   const getFinalSignal = (stock: any) => stock?.rankTrend?.decision?.final?.signal ?? 'none'
   const getFinalConfidence = (stock: any) => Number(stock?.rankTrend?.decision?.final?.confidence) || 0
-  const getMacdCross = (stock: any) => stock?.rankTrend?.technical?.macd?.cross ?? 'none'
+  const getMacdCross = (stock: any) =>
+    stock?.rankTrend?.technical?.macd?.cross ?? stock?.macdCross ?? 'none'
   const getRankChange = (stock: any) => Number(stock?.rankTrend?.meta?.change) || 0
   const getCompRank = (stock: any) => {
     const compRank = Number(stock?.compRank)
@@ -130,8 +129,7 @@ const realtimeSubscribedStocks = computed(() => {
     return 9999
   }
 
-  const isMainFocusStock = (stock: any) =>
-    getCandidateTier(stock) === 'A_MAIN' && getStrategyAction(stock) === 'focus'
+  const isMacdGoldenCross = (stock: any) => getMacdCross(stock) === 'golden'
 
   const priorityOf = (stock: any) => {
     const finalSignal = getFinalSignal(stock)
@@ -144,7 +142,7 @@ const realtimeSubscribedStocks = computed(() => {
 
   return subscribedCodes.value
     .map((code) => stockMap.get(code) || null)
-    .filter((stock): stock is NonNullable<typeof stock> => Boolean(stock) && isMainFocusStock(stock))
+    .filter((stock): stock is NonNullable<typeof stock> => Boolean(stock) && isMacdGoldenCross(stock))
     .map((stock) => ({
       code: stock.code,
       name: stock.name || stock.code,

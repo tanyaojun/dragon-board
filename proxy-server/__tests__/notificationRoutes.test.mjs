@@ -87,7 +87,7 @@ test('proxy runtime shares event radar cooldown state between background worker 
     }),
   }
 
-  const { app, eventRadarBackgroundWorker } = await createProxyRuntime({
+  const { app, eventRadarBackgroundWorker, feishuEventRadar } = await createProxyRuntime({
     port: 0,
     logRequests: false,
     localEnv: {},
@@ -114,6 +114,9 @@ test('proxy runtime shares event radar cooldown state between background worker 
     await eventRadarBackgroundWorker.runOnce()
     await eventRadarBackgroundWorker.runOnce()
 
+    assert.equal(eventRadarBackgroundWorker.status().lastQueuedCount, 1)
+    assert.equal(webhookCalls.length, 0)
+    await feishuEventRadar.flushPending()
     assert.equal(webhookCalls.length, 1)
 
     const response = await fetch(`${baseUrl}/api/notifications/event-radar/events`, {

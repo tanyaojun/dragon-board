@@ -3,6 +3,7 @@ import crypto from 'node:crypto'
 import { sendBadRequest } from '../helpers/response.js'
 
 const DEFAULT_COOLDOWN_MS = 180_000
+const DEFAULT_BATCH_WINDOW_MS = 300_000
 const DEFAULT_MAX_EVENTS = 5
 const MAX_TITLE_LENGTH = 80
 const MAX_TEXT_LENGTH = 120
@@ -59,7 +60,12 @@ export function createFeishuEventRadarClient(options = {}) {
   const readConfig = options.readConfig || (() => '')
   const fetcher = options.fetcher || globalThis.fetch?.bind(globalThis)
   const now = options.now || Date.now
+  const setTimeoutFn = options.setTimeoutFn || setTimeout
+  const clearTimeoutFn = options.clearTimeoutFn || clearTimeout
   const cooldownMap = new Map()
+  const pendingEvents = new Map()
+  let batchTimer = null
+  let flushing = false
 
   function status() {
     const enabled = readBoolean(readConfig('FEISHU_EVENT_RADAR_ENABLED'))
@@ -70,6 +76,8 @@ export function createFeishuEventRadarClient(options = {}) {
       configured: enabled && webhookConfigured && secretConfigured,
       webhookConfigured,
       secretConfigured,
+      batchWindowMs: readBatchWindowMs(readConfig),
+      pendingCount: pendingEvents.size,
     }
   }
 
@@ -114,6 +122,7 @@ export function createFeishuEventRadarClient(options = {}) {
       return { ok: true, sent: 1, skipped: 0 }
     },
     async sendEvents(events, options = {}) {
+      assertReady()
       const maxEvents = readPositiveInt(readConfig('FEISHU_EVENT_RADAR_MAX_EVENTS_PER_PUSH'), DEFAULT_MAX_EVENTS)
       const normalized = normalizeEventRadarEvents(events, maxEvents)
       const freshEvents = filterFreshEvents(normalized, cooldownMap, now(), readCooldownMs(readConfig))
@@ -121,10 +130,52 @@ export function createFeishuEventRadarClient(options = {}) {
         return { ok: true, sent: 0, skipped: normalized.length }
       }
 
-      await sendPayload(formatEventRadarMessage(freshEvents, { ...options, now }))
-      rememberEvents(freshEvents, cooldownMap, now())
-      return { ok: true, sent: freshEvents.length, skipped: normalized.length - freshEvents.length }
+      const queued = queueEvents(freshEvents)
+      return { ok: true, queued, sent: 0, skipped: normalized.length - freshEvents.length }
     },
+    flushPending,
+    stopBatch() {
+      if (batchTimer !== null) clearTimeoutFn(batchTimer)
+      batchTimer = null
+    },
+  }
+
+  function queueEvents(events) {
+    let queued = 0
+    for (const event of events) {
+      const key = eventCooldownKey(event)
+      if (pendingEvents.has(key)) continue
+      pendingEvents.set(key, event)
+      queued += 1
+    }
+    if (queued > 0 && batchTimer === null) {
+      batchTimer = setTimeoutFn(() => {
+        batchTimer = null
+        return flushPending()
+      }, readBatchWindowMs(readConfig))
+    }
+    return queued
+  }
+
+  async function flushPending() {
+    if (flushing) return { ok: false, skipped: true, reason: 'flush_in_flight', sent: 0 }
+    if (!pendingEvents.size) return { ok: true, sent: 0, skipped: 0 }
+
+    flushing = true
+    if (batchTimer !== null) clearTimeoutFn(batchTimer)
+    batchTimer = null
+    const events = [...pendingEvents.values()].sort((a, b) => b.timestamp - a.timestamp)
+    pendingEvents.clear()
+    try {
+      await sendPayload(formatEventRadarMessage(events, { now, maxEvents: events.length }))
+      rememberEvents(events, cooldownMap, now())
+      return { ok: true, sent: events.length, skipped: 0 }
+    } catch (error) {
+      for (const event of events) pendingEvents.set(eventCooldownKey(event), event)
+      throw error
+    } finally {
+      flushing = false
+    }
   }
 }
 
@@ -167,37 +218,54 @@ export function formatEventRadarMessage(events, options = {}) {
   const lines = normalizeEventRadarEvents(events, readPositiveInt(options.maxEvents, DEFAULT_MAX_EVENTS))
   const content = []
 
-  for (const event of lines) {
-    content.push([
-      {
-        tag: 'text',
-        text: `${event.name} ${event.code} · ${event.typeName} · ${formatPct(event.changePct)}`,
-      },
-    ])
-    if (event.relatedPlates.length) {
+  groupEventsByType(lines).forEach((group, groupIndex) => {
+    if (groupIndex > 0) content.push([{ tag: 'text', text: '' }])
+    content.push([{ tag: 'text', text: `【${group.typeName}】${group.events.length}条` }])
+    group.events.forEach((event, eventIndex) => {
       content.push([
         {
           tag: 'text',
-          text: `板块：${event.relatedPlates.join(' / ')}`,
+          text: `${eventIndex + 1}. ${event.name} ${event.code}  ${formatPct(event.changePct)}`,
         },
       ])
-    }
-    if (event.matchedCandidate) {
-      content.push([{ tag: 'text', text: '标记：龙头复盘候选' }])
-    }
-  }
+      if (event.relatedPlates.length) {
+        content.push([
+          {
+            tag: 'text',
+            text: `   板块：${event.relatedPlates.join(' / ')}`,
+          },
+        ])
+      }
+      if (event.matchedCandidate) {
+        content.push([{ tag: 'text', text: '   标记：龙头复盘候选' }])
+      }
+    })
+  })
 
   return {
     msg_type: 'post',
     content: {
       post: {
         zh_cn: {
-          title: normalizeText(`异动雷达 · ${formatTime(now())}`, MAX_TITLE_LENGTH),
+          title: normalizeText(`异动雷达 · ${formatTime(now())} · ${lines.length}条`, MAX_TITLE_LENGTH),
           content,
         },
       },
     },
   }
+}
+
+function groupEventsByType(events) {
+  const groups = new Map()
+  for (const event of events) {
+    const group = groups.get(event.typeName) || []
+    group.push(event)
+    groups.set(event.typeName, group)
+  }
+  return [...groups.entries()].map(([typeName, groupEvents]) => ({
+    typeName,
+    events: groupEvents,
+  }))
 }
 
 function filterFreshEvents(events, cooldownMap, timestamp, cooldownMs) {
@@ -229,6 +297,10 @@ function readPositiveInt(value, fallback) {
 
 function readCooldownMs(readConfig) {
   return readPositiveInt(readConfig('FEISHU_EVENT_RADAR_COOLDOWN_MS'), DEFAULT_COOLDOWN_MS)
+}
+
+function readBatchWindowMs(readConfig) {
+  return readPositiveInt(readConfig('FEISHU_EVENT_RADAR_BATCH_WINDOW_MS'), DEFAULT_BATCH_WINDOW_MS)
 }
 
 function normalizeText(value, maxLength) {
