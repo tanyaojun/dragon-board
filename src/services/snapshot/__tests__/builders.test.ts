@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { buildDailySnapshot, buildSnapshotStockRows } from '../builders'
+import { buildDailySnapshot, buildSnapshotFrameRow, buildSnapshotStockRows } from '../builders'
 import { createSnapshotRecord } from '../identity'
 
 describe('snapshot builders', () => {
@@ -53,6 +53,27 @@ describe('snapshot builders', () => {
         limitData: { yiban: 40, erban: 16, sanban: 8, sibanPlus: 4 },
         zhaban: {},
         yesterdayLimit: {},
+        thsLimitUpPools: {
+          source: 'ths-limitup-pools',
+          degraded: false,
+          errors: [],
+          poolCounts: {
+            one: 40,
+            two: 16,
+            three: 8,
+            four: 4,
+            high: 2,
+            failed: 6,
+            rushing: 5,
+            drawdown: 3,
+          },
+          failedCount: 6,
+          rushingCount: 5,
+          drawdownCount: 3,
+          drawdownRiskLabel: '涨停股回撤榜',
+          maxDrawdown: -11.2,
+          avgDrawdown: -5.6,
+        },
       },
       jxbkBlocks: [],
       jxbkStocks: {},
@@ -104,6 +125,19 @@ describe('snapshot builders', () => {
     expect(snapshot.hotlist[0]).not.toHaveProperty('signals')
     expect(snapshot.hotlist[0]).not.toHaveProperty('rankChange')
     expect(snapshot.hotlist[0]).not.toHaveProperty('technicalIndicators')
+
+    expect(snapshot.limitSummary.thsPools).toMatchObject({
+      failedCount: 6,
+      drawdownCount: 3,
+      drawdownRiskLabel: '涨停股回撤榜',
+    })
+
+    const frame = buildSnapshotFrameRow(createSnapshotRecord('daily', new Date('2026-04-24T15:00:00'), snapshot))
+    expect(frame?.limitSummary.thsPools).toMatchObject({
+      failedCount: 6,
+      drawdownCount: 3,
+      drawdownRiskLabel: '涨停股回撤榜',
+    })
   })
 
   it('projects compact stock-row signal columns from legacy hotlist payload', () => {

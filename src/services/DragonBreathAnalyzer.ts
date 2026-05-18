@@ -7,6 +7,8 @@ import type {
   Sentiment,
   LimitData,
   ZhabanData,
+  ThsLimitUpPoolEvidence,
+  ThsLimitUpPoolKey,
   BreathHistorySnapshot,
   EmotionFeedback,
 } from '../types'
@@ -28,6 +30,85 @@ import { refreshScheduler } from './refresh/RefreshTaskRuntime'
 import { StockUtils } from '../utils/common'
 
 import { EMOTION_FACTOR_CONFIG, type EmotionFactor } from '../types/emotion'
+
+const THS_LIMIT_UP_POOL_KEYS: ThsLimitUpPoolKey[] = [
+  'one',
+  'two',
+  'three',
+  'four',
+  'high',
+  'failed',
+  'rushing',
+  'drawdown',
+]
+
+function toFiniteNumber(value: unknown): number | null {
+  const number = Number(value)
+  return Number.isFinite(number) ? number : null
+}
+
+function countThsPool(pool: any): number {
+  const total = toFiniteNumber(pool?.total)
+  if (total !== null && total >= 0) return total
+  return Array.isArray(pool?.items) ? pool.items.length : 0
+}
+
+function buildEmptyThsPoolCounts(): Record<ThsLimitUpPoolKey, number> {
+  return THS_LIMIT_UP_POOL_KEYS.reduce(
+    (counts, key) => {
+      counts[key] = 0
+      return counts
+    },
+    {} as Record<ThsLimitUpPoolKey, number>,
+  )
+}
+
+export function buildThsLimitUpPoolEvidence(response: any): ThsLimitUpPoolEvidence {
+  const pools = response?.pools && typeof response.pools === 'object' ? response.pools : {}
+  const poolCounts = buildEmptyThsPoolCounts()
+  const unavailable = !response
+
+  for (const key of THS_LIMIT_UP_POOL_KEYS) {
+    poolCounts[key] = countThsPool(pools[key])
+  }
+
+  const drawdownItems = Array.isArray(pools.drawdown?.items) ? pools.drawdown.items : []
+  const drawdowns = drawdownItems
+    .map((item: any): number | null => toFiniteNumber(item?.max_drawdown ?? item?.maxDrawdown))
+    .filter((value: number | null): value is number => value !== null)
+  const avgDrawdown = drawdowns.length
+    ? Number((drawdowns.reduce((sum: number, value: number) => sum + value, 0) / drawdowns.length).toFixed(2))
+    : null
+
+  return {
+    source: 'ths-limitup-pools',
+    date: response?.date ? String(response.date) : undefined,
+    timestamp: toFiniteNumber(response?.timestamp) ?? undefined,
+    degraded: unavailable || Boolean(response?.degraded),
+    errors: unavailable
+      ? [
+          {
+            pool: 'all',
+            errorCode: 'THS_POOL_UNAVAILABLE',
+            message: '同花顺涨停池不可用',
+          },
+        ]
+      : Array.isArray(response?.errors)
+      ? response.errors.map((error: any) => ({
+          pool: String(error?.pool || ''),
+          errorCode: error?.errorCode ? String(error.errorCode) : undefined,
+          message: error?.message ? String(error.message) : undefined,
+        }))
+      : [],
+    poolCounts,
+    failedCount: poolCounts.failed,
+    rushingCount: poolCounts.rushing,
+    drawdownCount: poolCounts.drawdown,
+    drawdownRiskLabel: '涨停股回撤榜',
+    maxDrawdown: drawdowns.length ? Math.min(...drawdowns) : null,
+    avgDrawdown,
+  }
+}
 
 /**
  * 龙息分析器状态
@@ -179,6 +260,7 @@ export class DragonBreathAnalyzer {
       limitData: { yiban: 0, erban: 0, sanban: 0, sibanPlus: 0 },
       yesterdayLimit: { yiban: 0, erban: 0, sanban: 0, sibanPlus: 0 },
       zhaban: { count: 0, rate: 0, fengbanRate: 0 },
+      thsLimitUpPools: buildThsLimitUpPoolEvidence(null),
       indices: {
         sh: { change: 0 },
         hs300: { change: 0 },
@@ -539,6 +621,16 @@ export class DragonBreathAnalyzer {
     return null
   }
 
+  private async fetchThsLimitUpPoolEvidence(): Promise<ThsLimitUpPoolEvidence | null> {
+    try {
+      const response = await apiService.getThsLimitUpPools()
+      return buildThsLimitUpPoolEvidence(response)
+    } catch (error) {
+      console.warn('[fetchThsLimitUpPoolEvidence] 获取THS涨停池失败:', error)
+      return buildThsLimitUpPoolEvidence(null)
+    }
+  }
+
   /**
    * 获取情绪数据
    */
@@ -802,12 +894,13 @@ export class DragonBreathAnalyzer {
       debugLog('[fetchAllData] 昨日信息:', yesterdayInfo)
 
       // 2. 并行获取其他不依赖的数据
-      const [marketResult, todayLimitResult, zhabanResult, emotionResult] =
+      const [marketResult, todayLimitResult, zhabanResult, emotionResult, thsPoolResult] =
         await Promise.allSettled([
           this.fetchMarketStats(),
           this.fetchLimitData(), // 今日涨停
           this.fetchZhaban(),
           this.fetchEmotionData(),
+          this.fetchThsLimitUpPoolEvidence(),
 
         ])
 
@@ -828,6 +921,10 @@ export class DragonBreathAnalyzer {
       // 处理炸板数据
       if (zhabanResult.status === 'fulfilled' && zhabanResult.value) {
         this.state.marketData.zhaban = zhabanResult.value
+      }
+
+      if (thsPoolResult.status === 'fulfilled' && thsPoolResult.value) {
+        this.state.marketData.thsLimitUpPools = thsPoolResult.value
       }
 
       // 处理今日涨停数据
@@ -931,6 +1028,7 @@ export class DragonBreathAnalyzer {
           // 炸板数据
           zhaban: this.state.marketData.zhaban,
           zhabanRate: this.state.marketData.zhaban?.rate,
+          thsLimitUpPools: this.state.marketData.thsLimitUpPools,
 
           // 涨停数据
           limitData: this.state.marketData.limitData,
@@ -1271,6 +1369,9 @@ private buildFactorData(): any[] {
         dtCount: this.state.marketData.dtCount,
         limitData: { ...this.state.marketData.limitData },
         zhaban: { ...this.state.marketData.zhaban },
+        thsLimitUpPools: this.state.marketData.thsLimitUpPools
+          ? { ...this.state.marketData.thsLimitUpPools }
+          : null,
         emotionValue: this.state.marketData.emotionValue,
         maxContinuousDays: this.state.marketData.maxContinuousDays,
         yesterdayZtPerformance: this.state.marketData.yesterdayZtPerformance,

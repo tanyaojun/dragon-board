@@ -147,16 +147,21 @@
 
 ### 阶段 6：情绪和复盘扩展
 
-状态：pending
+状态：complete
 
-建议改动：
-- 情绪面板使用 THS 炸板池数量作为全市场炸板补充证据。
-- 大面回撤明确标注为“涨停股回撤榜”，不等同于全市场亏钱效应。
-- 快照 `limitSummary` 可后续增加 THS 池计数，但不影响现有字段。
+已改动：
+- `DragonBreathAnalyzer` 读取 `/api/limitup/ths/pools`，归一化为 `thsLimitUpPools` 结构化市场证据。
+- `HotListSentimentAnalyzer` 将 THS 炸板池和涨停股回撤榜写入 `limitEvidence.market.thsPools`。
+- 情绪告警中明确区分：
+  - `THS炸板池` 只作为全市场炸板补充证据。
+  - `涨停股回撤榜` 不等同于全市场亏钱效应。
+- `DragonBreathPanel` 涨停证据区域展示 THS 炸板池数量和涨停股回撤榜数量。
+- 快照 `limitSummary.thsPools` 增加 THS 池计数和回撤风险摘要，旧 `limit/zhaban/yesterdayZt` 字段保持不变。
 
 验证：
 - 只新增结构化字段，不改变旧情绪指标含义。
 - 快照质量门禁仍通过。
+- `pnpm test -- src/services/hotlist/__tests__/HotListSentimentAnalyzer.test.ts src/services/snapshot/__tests__/builders.test.ts src/services/__tests__/DragonBreathAnalyzer.thsLimitUpPools.test.ts`
 
 ## 风险与约束
 

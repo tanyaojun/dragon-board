@@ -292,6 +292,8 @@
               <div class="history-extra">
                 <span>全市场涨停 {{ hotListMarketLimitEvidence?.ztCount || 0 }} 只</span>
                 <span>全市场炸板 {{ hotListMarketLimitEvidence?.zhabanCount || 0 }} 只</span>
+                <span>THS炸板池 {{ hotListMarketLimitEvidence?.thsPools?.failedCount || 0 }} 只</span>
+                <span>涨停股回撤榜 {{ hotListMarketLimitEvidence?.thsPools?.drawdownCount || 0 }} 只</span>
                 <span>封板率 {{ formatPercentValue(hotListMarketLimitEvidence?.fengbanRate) }}</span>
               </div>
             </div>
@@ -707,6 +709,7 @@ const marketData = computed(() => {
     cddje: marketData.cddje ?? 0,
     cddjzb: marketData.cddjzb ?? 0,
     yesterdayZtPerformance: marketData.yesterdayZtPerformance,
+    thsLimitUpPools: marketData.thsLimitUpPools ?? null,
     timestamp: marketData.timestamp ?? Date.now(),
   }
 })

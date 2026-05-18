@@ -43,6 +43,12 @@
   - 新增组合 feed，服务层融合选股通与 THS 事件，并按事件身份去重。
   - 大面回撤池不伪造成封板事件，留作后续风险扩展。
   - 代理端后台 worker 与 HTTP route 共享同一个飞书异动雷达客户端，避免冷却状态割裂造成重复推送。
+- 已完成阶段 6 情绪和复盘扩展：
+  - `DragonBreathAnalyzer` 将 `/api/limitup/ths/pools` 归一化为 `thsLimitUpPools` 市场证据。
+  - 热榜情绪 `limitEvidence.market.thsPools` 增加 THS 池计数、炸板池数量和涨停股回撤榜摘要。
+  - 情绪提示明确 `THS炸板池` 只作为全市场炸板补充证据，`涨停股回撤榜` 不等同于全市场亏钱效应。
+  - DragonBreath 面板涨停证据区展示 THS 炸板池和涨停股回撤榜数量。
+  - 快照 `limitSummary.thsPools` 增加 THS 池计数和回撤摘要，旧 `limit/zhaban/yesterdayZt` 字段保持不变。
 - 已完成验证：
   - `pnpm test -- src/services/dataLoader/__tests__/LimitUpFeed.test.ts`
   - `pnpm test -- src/services/dataLoader/__tests__/DataLoaderFacade.test.ts`
@@ -51,8 +57,9 @@
   - `node --test proxy-server/__tests__/thsLimitupPools.test.mjs`
   - `node --test proxy-server/__tests__/notificationRoutes.test.mjs`
   - `pnpm test -- src/services/hotlist/__tests__/ThsLimitUpEventFeed.test.ts src/services/hotlist/__tests__/CompositeHotStockEventFeed.test.ts`
+  - `pnpm test -- src/services/hotlist/__tests__/HotListSentimentAnalyzer.test.ts src/services/snapshot/__tests__/builders.test.ts src/services/__tests__/DragonBreathAnalyzer.thsLimitUpPools.test.ts`
   - `pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false`
 
 ## 下一步
 
-- 阶段 6：把 THS 炸板池计数和涨停股回撤池作为情绪/复盘补充证据。
+- 观察实盘期间 THS 细分池字段漂移和限流情况；如后续要正式入 QuantBoard 数据库，再按数据库迁移规则补 schema/API 文档。

@@ -9,6 +9,7 @@ import {
   getEmotionCycleStageSummary,
   type EmotionCycleStage,
 } from '../../types/emotion'
+import type { ThsLimitUpPoolEvidence } from '../../types'
 import { StockUtils } from '../../utils/common'
 
 export type HotListStatusLabel =
@@ -99,6 +100,7 @@ export interface DragonBreathMarketDataLike {
     sibanPlus?: number
   }
   maxContinuousDays?: number
+  thsLimitUpPools?: ThsLimitUpPoolEvidence | null
 }
 
 export interface HotListLimitMarketEvidence {
@@ -110,6 +112,7 @@ export interface HotListLimitMarketEvidence {
   board3: number
   board4Plus: number
   maxContinuousDays: number
+  thsPools: ThsLimitUpPoolEvidence
 }
 
 export interface HotListLimitIntersectionEvidence {
@@ -461,6 +464,31 @@ function createEmptyMarketLimitEvidence(): HotListLimitMarketEvidence {
     board3: 0,
     board4Plus: 0,
     maxContinuousDays: 0,
+    thsPools: createEmptyThsPoolsEvidence(),
+  }
+}
+
+function createEmptyThsPoolsEvidence(): ThsLimitUpPoolEvidence {
+  return {
+    source: 'ths-limitup-pools',
+    degraded: false,
+    errors: [],
+    poolCounts: {
+      one: 0,
+      two: 0,
+      three: 0,
+      four: 0,
+      high: 0,
+      failed: 0,
+      rushing: 0,
+      drawdown: 0,
+    },
+    failedCount: 0,
+    rushingCount: 0,
+    drawdownCount: 0,
+    drawdownRiskLabel: '涨停股回撤榜',
+    maxDrawdown: null,
+    avgDrawdown: null,
   }
 }
 
@@ -483,6 +511,7 @@ function buildMarketLimitEvidence(marketData?: DragonBreathMarketDataLike | null
     board3,
     board4Plus,
     maxContinuousDays: toNumber(marketData.maxContinuousDays) || fallbackMaxContinuousDays,
+    thsPools: marketData.thsLimitUpPools ?? createEmptyThsPoolsEvidence(),
   }
 }
 
@@ -948,6 +977,16 @@ function collectLimitEvidenceMessages(limitEvidence?: HotListLimitEvidence): Sta
     warnings,
     market.zhabanCount > 0,
     `全市场炸板 ${market.zhabanCount} 只，仅作背景参考`,
+  )
+  pushIf(
+    warnings,
+    market.thsPools.failedCount > 0,
+    `THS炸板池 ${market.thsPools.failedCount} 只，仅作全市场炸板补充证据`,
+  )
+  pushIf(
+    warnings,
+    market.thsPools.drawdownCount > 0,
+    `${market.thsPools.drawdownRiskLabel} ${market.thsPools.drawdownCount} 只，不等同于全市场亏钱效应`,
   )
 
   return { level: 'neutral', signals, warnings }

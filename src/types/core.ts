@@ -291,6 +291,37 @@ export interface ZhabanData {
   ztCount?: number
 }
 
+export type ThsLimitUpPoolKey =
+  | 'one'
+  | 'two'
+  | 'three'
+  | 'four'
+  | 'high'
+  | 'failed'
+  | 'rushing'
+  | 'drawdown'
+
+export interface ThsLimitUpPoolError {
+  pool: string
+  errorCode?: string
+  message?: string
+}
+
+export interface ThsLimitUpPoolEvidence {
+  source: 'ths-limitup-pools'
+  date?: string
+  timestamp?: number
+  degraded: boolean
+  errors: ThsLimitUpPoolError[]
+  poolCounts: Record<ThsLimitUpPoolKey, number>
+  failedCount: number
+  rushingCount: number
+  drawdownCount: number
+  drawdownRiskLabel: '涨停股回撤榜'
+  maxDrawdown: number | null
+  avgDrawdown: number | null
+}
+
 export interface LimitStockInfo {
   code: string
   name: string
@@ -315,6 +346,7 @@ export interface MarketData {
   limitData: LimitData
   yesterdayLimit: LimitData
   zhaban: ZhabanData
+  thsLimitUpPools?: ThsLimitUpPoolEvidence | null
   indices: {
     sh: { change: number }
     hs300: { change: number }
@@ -438,6 +470,7 @@ export interface BreathHistorySnapshot {
     dtCount: number
     limitData: LimitData
     zhaban: ZhabanData
+    thsLimitUpPools?: ThsLimitUpPoolEvidence | null
     emotionValue: number
     maxContinuousDays?: number
     yesterdayZtPerformance?: number

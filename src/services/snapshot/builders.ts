@@ -70,6 +70,20 @@ function clonePlainObject<T extends Record<string, any> | null | undefined>(valu
   return JSON.parse(JSON.stringify(value))
 }
 
+function buildLimitSummary(limitData: {
+  continuousBoards?: Record<string, any> | null
+  zhaban?: Record<string, any> | null
+  yesterdayZt?: Record<string, any> | null
+  thsPools?: Record<string, any> | null
+}) {
+  return {
+    continuousBoards: clonePlainObject(limitData.continuousBoards || null),
+    zhaban: clonePlainObject(limitData.zhaban || null),
+    yesterdayZt: clonePlainObject(limitData.yesterdayZt || null),
+    thsPools: clonePlainObject(limitData.thsPools || null),
+  }
+}
+
 function toThemeRefs(themes: any): Array<{
   id?: string
   name?: string
@@ -356,6 +370,17 @@ export function buildIntradaySnapshotBase(
   const hotlist = context.stocks
     .slice(0, limit)
     .map((stock, index) => buildSnapshotHotlistItem(stock, index, context.stocks.length, context))
+  const continuousBoards = {
+    board1: context.marketData?.limitData?.yiban || 0,
+    board2: context.marketData?.limitData?.erban || 0,
+    board3: context.marketData?.limitData?.sanban || 0,
+    board4plus: context.marketData?.limitData?.sibanPlus || 0,
+  }
+  const zhaban = {
+    count: context.marketData?.zhaban?.count || 0,
+    rate: context.marketData?.zhaban?.rate || 0,
+    fengbanRate: context.marketData?.zhaban?.fengbanRate || 0,
+  }
 
   return {
     timestamp,
@@ -388,6 +413,11 @@ export function buildIntradaySnapshotBase(
       dtCount: context.marketData?.dtCount || 0,
       totalAmo: context.marketData?.totalAmo || 0,
     },
+    limitSummary: buildLimitSummary({
+      continuousBoards,
+      zhaban,
+      thsPools: clonePlainObject(context.marketData?.thsLimitUpPools || null),
+    }),
     metadata: buildIntradaySnapshotMetadata(
       hotlist,
       timestamp,
@@ -404,6 +434,17 @@ export function buildHourlySnapshot(context: SnapshotBuildContext, snapshotTime:
   const hotlist = context.stocks
     .slice(0, 100)
     .map((stock, index) => buildSnapshotHotlistItem(stock, index, context.stocks.length, context))
+  const continuousBoards = {
+    board1: context.marketData?.limitData?.yiban || 0,
+    board2: context.marketData?.limitData?.erban || 0,
+    board3: context.marketData?.limitData?.sanban || 0,
+    board4plus: context.marketData?.limitData?.sibanPlus || 0,
+  }
+  const zhaban = {
+    count: context.marketData?.zhaban?.count || 0,
+    rate: context.marketData?.zhaban?.rate || 0,
+    fengbanRate: context.marketData?.zhaban?.fengbanRate || 0,
+  }
 
   return {
     timestamp,
@@ -440,22 +481,18 @@ export function buildHourlySnapshot(context: SnapshotBuildContext, snapshotTime:
       totalAmo: context.marketData?.totalAmo || 0,
       zhabanRate: context.marketData?.zhaban?.rate || 0,
     },
-    zhaban: {
-      count: context.marketData?.zhaban?.count || 0,
-      rate: context.marketData?.zhaban?.rate || 0,
-      fengbanRate: context.marketData?.zhaban?.fengbanRate || 0,
-    },
+    zhaban,
     moneyFlow: {
       main: context.marketData?.moneyFlow?.main || 0,
       retail: context.marketData?.moneyFlow?.retail || 0,
       cddje: context.marketData?.cddje || 0,
     },
-    continuousBoards: {
-      board1: context.marketData?.limitData?.yiban || 0,
-      board2: context.marketData?.limitData?.erban || 0,
-      board3: context.marketData?.limitData?.sanban || 0,
-      board4plus: context.marketData?.limitData?.sibanPlus || 0,
-    },
+    continuousBoards,
+    limitSummary: buildLimitSummary({
+      continuousBoards,
+      zhaban,
+      thsPools: clonePlainObject(context.marketData?.thsLimitUpPools || null),
+    }),
     rotationSummary: buildRotationSummary(context.rotationAnalysis),
   }
 }
@@ -507,7 +544,9 @@ export function buildDailySnapshot(context: SnapshotBuildContext, snapshotTime: 
       maxChange: context.marketData?.yesterdayLimit?.maxChange || 0,
       minChange: context.marketData?.yesterdayLimit?.minChange || 0,
     },
+    thsPools: clonePlainObject(context.marketData?.thsLimitUpPools || null),
   }
+  const limitSummary = buildLimitSummary(limitData)
 
   const moneyFlow = {
     main: context.marketData?.moneyFlow?.main || 0,
@@ -550,6 +589,7 @@ export function buildDailySnapshot(context: SnapshotBuildContext, snapshotTime: 
     limit: limitData.continuousBoards,
     zhaban: limitData.zhaban,
     yesterdayZt: limitData.yesterdayZt,
+    limitSummary,
     sectors,
     hotlist,
     rotationSummary: buildRotationSummary(context.rotationAnalysis),
@@ -565,11 +605,20 @@ export function buildSnapshotFrameRow(record: SnapshotRecord): SnapshotFrameRow 
   if (record.type === 'five_minute') return null
   const payload = (record.payload && typeof record.payload === 'object' ? record.payload : {}) as Record<string, any>
   const marketStats = clonePlainObject((payload.marketStats || payload.market) as Record<string, any> | null)
-  const limitSummary = {
-    continuousBoards: clonePlainObject((payload.limit || payload.continuousBoards) as Record<string, any> | null),
-    zhaban: clonePlainObject(payload.zhaban as Record<string, any> | null),
-    yesterdayZt: clonePlainObject(payload.yesterdayZt as Record<string, any> | null),
-  }
+  const payloadLimitSummary =
+    payload.limitSummary && typeof payload.limitSummary === 'object'
+      ? (payload.limitSummary as Record<string, any>)
+      : {}
+  const limitSummary = buildLimitSummary({
+    continuousBoards: (payloadLimitSummary.continuousBoards || payload.limit || payload.continuousBoards) as
+      | Record<string, any>
+      | null,
+    zhaban: (payloadLimitSummary.zhaban || payload.zhaban) as Record<string, any> | null,
+    yesterdayZt: (payloadLimitSummary.yesterdayZt || payload.yesterdayZt) as Record<string, any> | null,
+    thsPools: (payloadLimitSummary.thsPools || payload.thsPools || payload.thsLimitUpPools) as
+      | Record<string, any>
+      | null,
+  })
 
   const stockRowCount = Array.isArray(payload.hotlist) ? payload.hotlist.length : 0
   const sectorCount = Array.isArray(payload.sectors) ? payload.sectors.length : 0

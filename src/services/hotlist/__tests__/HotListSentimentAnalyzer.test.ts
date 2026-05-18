@@ -263,6 +263,53 @@ describe('HotListSentimentAnalyzer', () => {
     expect(result.signals.join('')).toContain('全市场涨停 98 只')
   })
 
+  it('THS炸板池和涨停股回撤榜只作为全市场补充证据', () => {
+    const analyzer = new HotListSentimentAnalyzer()
+    const current = makeStocks(100, index => ({
+      change: index < 4 ? 9.9 : 1,
+      zlje: index < 15 ? 2e8 : 0,
+      zljzb: index < 15 ? 15 : 0,
+      cddje: index < 15 ? 8000e4 : 0,
+      cddjzb: index < 15 ? 6 : 0,
+    }))
+
+    const result = analyzer.analyze({
+      stocks: current,
+      marketData: {
+        ztCount: 98,
+        zhaban: { count: 24, fengbanRate: 80 },
+        thsLimitUpPools: {
+          source: 'ths-limitup-pools',
+          degraded: false,
+          errors: [],
+          poolCounts: {
+            one: 61,
+            two: 14,
+            three: 3,
+            four: 1,
+            high: 5,
+            failed: 11,
+            rushing: 8,
+            drawdown: 7,
+          },
+          failedCount: 11,
+          rushingCount: 8,
+          drawdownCount: 7,
+          drawdownRiskLabel: '涨停股回撤榜',
+          maxDrawdown: -12.4,
+          avgDrawdown: -6.3,
+        },
+      },
+    })
+
+    expect(result.metrics.limitEvidence.market.zhabanCount).toBe(24)
+    expect(result.metrics.limitEvidence.market.thsPools.failedCount).toBe(11)
+    expect(result.metrics.limitEvidence.market.thsPools.drawdownCount).toBe(7)
+    expect(result.metrics.limitEvidence.market.thsPools.drawdownRiskLabel).toBe('涨停股回撤榜')
+    expect(result.warnings.join('')).toContain('THS炸板池 11 只')
+    expect(result.warnings.join('')).toContain('不等同于全市场亏钱效应')
+  })
+
   it('昨日热榜涨停今日表现纳入持续性证据', () => {
     const analyzer = new HotListSentimentAnalyzer()
     const yesterday = makeStocks(100, index => ({
