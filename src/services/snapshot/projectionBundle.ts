@@ -287,6 +287,7 @@ function compactHotlistItem(item: any): Record<string, any> {
     bigMoney300: item?.bigMoney300,
     themes: clonePlain(item?.themes),
     isNew: item?.isNew,
+    reason: item?.reason,
     firstZtTime: item?.firstZtTime,
     lastZtTime: item?.lastZtTime,
     boardHeight: item?.boardHeight,

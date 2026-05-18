@@ -133,7 +133,9 @@ describe('HotStockEventMonitorService', () => {
     expect(result.hotStockEvents.map(event => event.id)).toEqual(['a'])
   })
 
-  it('pushes only newly added hot stock events after the first refresh', async () => {
+  it('pushes only newly added hot stock events after the first refresh when feishu owner is active', async () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('document', { visibilityState: 'visible' })
     const notifier = {
       sendEvents: vi.fn().mockResolvedValue({ ok: true, sent: 1 }),
     }
@@ -163,6 +165,7 @@ describe('HotStockEventMonitorService', () => {
       now: () => Date.parse('2026-05-15T10:05:00+08:00'),
     })
 
+    service.start('feishu')
     await service.refresh()
     await service.refresh()
 
@@ -170,6 +173,36 @@ describe('HotStockEventMonitorService', () => {
     expect(notifier.sendEvents).toHaveBeenCalledWith([
       expect.objectContaining({ id: 'b', code: '000002', matchedHotStock: true }),
     ])
+    service.stop('feishu')
+  })
+
+  it('does not push feishu events from panel-only polling', async () => {
+    const notifier = {
+      sendEvents: vi.fn().mockResolvedValue({ ok: true, sent: 1 }),
+    }
+    const feed = {
+      fetchEvents: vi
+        .fn()
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([
+          makeEvent({ id: 'a', code: '600001', timestamp: Date.parse('2026-05-15T09:40:00+08:00') }),
+        ]),
+    }
+    const dataLayer = {
+      getStocks: vi.fn().mockReturnValue([{ code: '600001', name: '一号' }]),
+      getDragonReview: vi.fn().mockReturnValue(null),
+    }
+    const service = new HotStockEventMonitorService({
+      feed,
+      dataLayer,
+      notifier,
+      now: () => Date.parse('2026-05-15T10:05:00+08:00'),
+    })
+
+    await service.refresh()
+    await service.refresh()
+
+    expect(notifier.sendEvents).not.toHaveBeenCalled()
   })
 
   it('keeps refresh successful when event radar notification fails', async () => {
@@ -201,7 +234,7 @@ describe('HotStockEventMonitorService', () => {
 
     expect(result.ok).toBe(true)
     expect(result.hotStockEvents.map(event => event.id)).toEqual(['a'])
-    expect(notifier.sendEvents).toHaveBeenCalledTimes(1)
+    expect(notifier.sendEvents).not.toHaveBeenCalled()
     warnSpy.mockRestore()
   })
 

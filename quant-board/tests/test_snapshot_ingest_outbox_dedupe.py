@@ -6,7 +6,8 @@ from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
 from backend.data.database import SessionLocal
-from backend.data.models import SyncOutboxModel
+from backend.data.models import SnapshotStockRowModel, SyncOutboxModel
+from backend.data.repository import Repository
 from backend.main import app
 
 
@@ -76,3 +77,42 @@ def test_snapshot_ingest_existing_snapshot_id_does_not_append_outbox_rows() -> N
         )
 
     assert outbox_count == 1
+
+
+def test_snapshot_ingest_persists_stock_row_reason() -> None:
+    client = TestClient(app)
+    suffix = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
+    dataset_id = f"dragonboard_live_reason_{suffix}"
+    snapshot_id = "half_hour:2026-05-06:09:30"
+    bundle = _snapshot_bundle(snapshot_id, "600001")
+    bundle["items"][0]["payload"]["hotlist"][0]["reason"] = "机器人+涨停原因"
+
+    response = client.post(
+        "/api/snapshots/ingest",
+        json={
+            "datasetId": dataset_id,
+            "idempotencyKey": f"reason-{suffix}",
+            "bundle": bundle,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    with SessionLocal() as session:
+        model = session.scalar(
+            select(SnapshotStockRowModel).where(
+                SnapshotStockRowModel.dataset_id == dataset_id,
+                SnapshotStockRowModel.snapshot_id == snapshot_id,
+                SnapshotStockRowModel.code == "600001",
+            )
+        )
+        assert model is not None
+        assert model.reason == "机器人+涨停原因"
+
+        rows = Repository(session, enable_backup=False).list_snapshot_stock_rows(
+            dataset_id,
+            snapshot_id=snapshot_id,
+        )["rows"]
+
+    assert len(rows) == 1
+    assert rows[0]["code"] == "600001"
+    assert rows[0]["reason"] == "机器人+涨停原因"

@@ -476,6 +476,8 @@ Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/migrations/snapshots/im
 
 Dragon Board 当前会在写入前通过 MongoDB 后端读口确认同一 `snapshot_id` 是否已存在，避免定时保存反复提交同一槽位。IndexedDB 不再参与正式快照写入判重。
 
+`snapshot_stock_rows` 读写保持 camelCase 合同，涨停池复盘字段会随 `/api/snapshots/stock-rows` 返回，包括 `reason`、`firstZtTime`、`lastZtTime`、`boardHeight`、`highDays` 和 `fengdan`。迁移前 SQLite/Supabase 历史链路使用对应 snake_case 列保存 `reason`。
+
 示例响应：
 
 ```json

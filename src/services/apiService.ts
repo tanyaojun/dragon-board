@@ -667,6 +667,19 @@ export class ApiService {
     })
   }
 
+  /** 获取同花顺细分涨停池 */
+  async getThsLimitUpPools(params: { date?: string } = {}, options?: RequestConfig) {
+    const query = new URLSearchParams()
+    if (params.date) query.set('date', params.date)
+    const suffix = query.toString() ? `?${query.toString()}` : ''
+    return this.get(`/api/limitup/ths/pools${suffix}`, {
+      context: 'limitup',
+      cache: true,
+      cacheTTL: 30000,
+      ...options,
+    })
+  }
+
   /** 获取昨日涨停表现 */
   async getYesterdayZtPerformance(options?: RequestConfig) {
     return this.get('/api/surge-stock/performance', {

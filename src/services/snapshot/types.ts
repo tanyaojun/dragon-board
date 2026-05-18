@@ -139,6 +139,7 @@ export interface SnapshotStockRow {
   themeExposureWeight?: number
   themeRiskFlags?: string[]
   isNew?: boolean
+  reason?: string
   firstZtTime?: string
   lastZtTime?: string
   boardHeight?: number

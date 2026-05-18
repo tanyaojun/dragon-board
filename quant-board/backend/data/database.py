@@ -73,6 +73,7 @@ def _migrate_snapshot_db(eng: "Engine") -> None:
         ("snapshot_stock_rows", "theme_role", "VARCHAR(32)"),
         ("snapshot_stock_rows", "theme_exposure_weight", "FLOAT"),
         ("snapshot_stock_rows", "theme_risk_flags_json", "TEXT DEFAULT '[]'"),
+        ("snapshot_stock_rows", "reason", "TEXT"),
         ("snapshot_sector_rows", "momentum_score", "FLOAT"),
         ("snapshot_sector_rows", "breadth_score", "FLOAT"),
         ("snapshot_sector_rows", "fund_score", "FLOAT"),

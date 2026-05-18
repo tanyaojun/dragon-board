@@ -180,6 +180,9 @@
           </span>
         </div>
         <div v-if="feishuStatus.lastMessage" class="feishu-message">{{ feishuStatus.lastMessage }}</div>
+        <div v-if="feishuStatus.background" class="feishu-message">
+          后台：{{ feishuBackgroundLabel }}
+        </div>
         <div class="feishu-actions">
           <button type="button" :disabled="feishuLoading" @click="refreshFeishuStatus">
             {{ feishuLoading ? '检查中' : '刷新状态' }}
@@ -379,6 +382,13 @@ const feishuStatusLabel = computed(() => {
   if (feishuStatus.value.configured) return '已启用'
   if (feishuStatus.value.enabled) return '配置不完整'
   return '未启用'
+})
+const feishuBackgroundLabel = computed(() => {
+  const background = feishuStatus.value.background
+  if (!background?.backgroundEnabled) return '未启用'
+  if (!background.running) return '代理未运行'
+  if (!background.initialized) return '代理运行中，等待首轮基线'
+  return `代理运行中 · 已拉取 ${background.lastFetchedCount} 条`
 })
 
 function setAllTypes(checked: boolean) {

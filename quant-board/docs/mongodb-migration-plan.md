@@ -204,6 +204,8 @@ MongoDB 正式字段使用 camelCase，保持 Dragon Board 和 QuantBoard API �
 - `{ datasetId: 1, code: 1, type: 1, tradingDate: 1, timestamp: 1 }`
 - `{ datasetId: 1, code: 1, timestamp: 1 }`
 
+文档保留 Dragon Board 快照股票行的 camelCase 字段合同。涨停池增强字段 `reason/firstZtTime/lastZtTime/boardHeight/highDays/fengdan` 必须随 `snapshot_stock_rows` 写入和读回，用于复盘与导出。
+
 `snapshot_sector_rows`
 
 - unique `{ datasetId: 1, rowId: 1 }`
@@ -743,6 +745,7 @@ MongoDB 迁移后的“归档”定义改为长期备份和审计导出，不再
 ### 业务验收
 
 - Dragon Board 正式快照保存成功，MongoDB 中出现对应 `snapshot_records/snapshot_frames/snapshot_stock_rows/snapshot_sector_rows`。
+- 带涨停池增强的正式快照保存后，`snapshot_stock_rows` 能读回 `reason`、涨停时间和连板高度。
 - `GET /api/snapshots/frames?dataset_id=dragonboard_live&snapshot_type=half_hour` 返回 `source=mongodb`。
 - `GET /api/ranktrend/rank-series` 对 90 交易日以前日期仍能返回股票排名序列。
 - 对固定股票代码集合运行完整 rank-series 校验，报告首尾日期、快照数、缺失 snapshot 数和 sampleQuality 分布；不得只验证默认 `limit=50` 的非空返回。

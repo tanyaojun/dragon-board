@@ -142,6 +142,7 @@ create table snapshot_stock_rows (
   theme_exposure_weight double precision,
   theme_risk_flags_json text not null default '[]',
   is_new boolean not null default false,
+  reason text,
   first_zt_time varchar(32),
   last_zt_time varchar(32),
   board_height integer,

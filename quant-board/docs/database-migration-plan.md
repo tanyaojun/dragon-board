@@ -72,6 +72,8 @@ Supabase schema 不再包含回测、优化和 Golden 表，也不再对研究 J
 
 题材模块 V2 增加了快照事实库题材列：`snapshot_stock_rows` 保存 `theme_contribution/theme_role/theme_exposure_weight/theme_risk_flags_json`，`snapshot_sector_rows` 保存题材因子稳定列和 `theme_quality_flags_json`。这些字段属于快照事实合同，因此 SQLite 与 Supabase 同构 schema 必须同时更新；旧库通过 idempotent `ALTER TABLE ADD COLUMN` 兼容迁移。
 
+同花顺涨停池集成增加了股票行涨停原因列：`snapshot_stock_rows.reason`。该字段与 `first_zt_time/last_zt_time/board_height/high_days/fengdan` 一起作为复盘事实保存；SQLite 旧库通过 idempotent `ALTER TABLE ADD COLUMN reason TEXT` 迁移，Supabase 同构 schema 必须同步包含 `reason text`。
+
 研究库 `backtest_signals` 也增加题材解释列：`main_theme/theme_heat/theme_contribution/theme_role/theme_support_score/theme_risk_flags_json/theme_reasons_json`。研究库仍是 local-only，不进入 Supabase 备份链路。
 
 题材模块 V8 新增独立题材主库 `themeDATA.db`，包含 `theme_metadata`、`themes`、`theme_stock_mappings`。该库只保存题材基础映射、题材-股票关系、股票-题材反查、标签和原因；不保存题材因子、轮动、预警、回测或快照事实。旧浏览器 `ThemeDataDB/theme_mapping` 只作为历史迁移源，正式读口固定为 `GET /api/themes/mapping`。V11 后 Dragon Board 运行时不再使用浏览器 IndexedDB、本地静态 JSON 或 `/api/themes/batch` 作为题材兜底事实源。

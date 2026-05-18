@@ -1,16 +1,7 @@
-import { createProxyApp } from './app.js'
-import { createConfigReader, loadEnvFile } from './helpers/http.js'
-import { createProxyRedisCache } from './helpers/proxyCache.js'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { createProxyRuntime } from './runtime.js'
 
 const PORT = Number(process.env.PORT || 3000)
-const __filename = fileURLToPath(import.meta.url)
-const __dirname = dirname(__filename)
-const localEnv = loadEnvFile(join(__dirname, '.env.local'))
-const readConfig = createConfigReader(localEnv)
-const cache = await createProxyRedisCache({ readConfig })
-const app = createProxyApp({ port: PORT, localEnv, readConfig, cache })
+const { app, eventRadarBackgroundWorker } = await createProxyRuntime({ port: PORT })
 
 const formalRoutes = [
   'GET  /docs',
@@ -56,5 +47,10 @@ app.listen(PORT, () => {
   console.log('正式接口:')
   formalRoutes.forEach((route) => console.log(`   ${route}`))
   console.log(`API 文档: http://localhost:${PORT}/docs`)
+  if (eventRadarBackgroundWorker.start()) {
+    console.log('异动雷达飞书后台推送: 已启动')
+  } else {
+    console.log('异动雷达飞书后台推送: 未启用或配置不完整')
+  }
   console.log('='.repeat(60))
 })

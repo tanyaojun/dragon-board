@@ -143,6 +143,7 @@ class SnapshotStockRowModel(Base):
     theme_exposure_weight: Mapped[float | None] = mapped_column(Float, nullable=True)
     theme_risk_flags_json: Mapped[str] = mapped_column(Text, default="[]")
     is_new: Mapped[bool] = mapped_column(Boolean, default=False)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     first_zt_time: Mapped[str | None] = mapped_column(String(32), nullable=True)
     last_zt_time: Mapped[str | None] = mapped_column(String(32), nullable=True)
     board_height: Mapped[int | None] = mapped_column(Integer, nullable=True)

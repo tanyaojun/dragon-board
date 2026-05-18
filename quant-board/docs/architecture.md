@@ -162,6 +162,7 @@ Dragon Board 题材基础映射由 `ThemeDataService` 通过 `GET /api/themes/ma
 ### snapshot_stock_rows
 
 一条快照内的一只股票一行，是 rankTrend、回测、前端列表的主要事实表。
+涨停池增强字段随股票行保存，包括 `reason`、`firstZtTime`、`lastZtTime`、`boardHeight`、`highDays`、`fengdan` 等；MongoDB 模式保持 camelCase 字段，SQLite/Supabase 历史同构表使用对应 snake_case 列。
 
 ### snapshot_sector_rows
 

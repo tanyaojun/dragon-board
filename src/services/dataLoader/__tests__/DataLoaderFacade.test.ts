@@ -77,6 +77,7 @@ vi.mock('../QuoteService', () => ({
 
 vi.mock('../LimitUpFeed', () => ({
   loadLimitUpData: vi.fn(async () => undefined),
+  loadThsLimitUpPoolData: vi.fn(async () => undefined),
 }))
 
 vi.mock('../../theme/ThemeFacade', () => ({
@@ -218,6 +219,7 @@ describe('DataLoaderFacade', () => {
 
   it('refreshAll performs one platform load and one merge cycle', async () => {
     const { dataLoader } = await import('../../dataLoader')
+    const { loadLimitUpData, loadThsLimitUpPoolData } = await import('../LimitUpFeed')
 
     const summary = await dataLoader.refreshAll({ force: true, source: 'manual' })
 
@@ -228,6 +230,8 @@ describe('DataLoaderFacade', () => {
         fromCache: false,
       }),
     )
+    expect(loadLimitUpData).toHaveBeenCalledTimes(1)
+    expect(loadThsLimitUpPoolData).toHaveBeenCalledTimes(1)
     expect(platformLoadCount).toBe(1)
     expect(signalApplyCount).toBe(1)
     expect(EventManager.getHistory(AppEvents.DATA.MERGED)).toEqual([

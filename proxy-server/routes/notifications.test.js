@@ -60,6 +60,15 @@ assert.deepEqual(client.status(), {
   secretConfigured: true,
 })
 
+const backgroundStatus = { running: true, initialized: true, lastFetchedCount: 3 }
+const statusPayload = {
+  ok: true,
+  source: 'event-radar-feishu',
+  ...client.status(),
+  background: backgroundStatus,
+}
+assert.deepEqual(statusPayload.background, backgroundStatus)
+
 const first = await client.sendEvents([event])
 assert.equal(first.ok, true)
 assert.equal(first.sent, 1)

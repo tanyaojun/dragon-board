@@ -9,12 +9,14 @@ const MAX_TEXT_LENGTH = 120
 
 export function registerNotificationRoutes(app, context = {}) {
   const client = context.feishuEventRadar || createFeishuEventRadarClient(context)
+  const backgroundWorker = context.eventRadarBackgroundWorker || null
 
   app.get('/api/notifications/event-radar/status', (req, res) => {
     res.json({
       ok: true,
       source: 'event-radar-feishu',
       ...client.status(),
+      background: backgroundWorker?.status?.() || null,
     })
   })
 

@@ -1,6 +1,8 @@
 import { dataLayer } from '../DataLayer'
 import { eventRadarFeishuNotifier } from '../notifications/EventRadarFeishuNotifier'
 import { refreshScheduler, refreshTaskRegistry } from '../refresh/RefreshTaskRuntime'
+import { CompositeHotStockEventFeed } from './CompositeHotStockEventFeed'
+import { ThsLimitUpEventFeed } from './ThsLimitUpEventFeed'
 import {
   XuangubaoAbnormalEventFeed,
 } from './XuangubaoAbnormalEventFeed'
@@ -101,7 +103,10 @@ export class HotStockEventMonitorService {
   private subscribers = new Set<(state: HotStockEventMonitorState) => void>()
 
   constructor(options: HotStockEventMonitorOptions = {}) {
-    this.feed = options.feed || new XuangubaoAbnormalEventFeed()
+    this.feed = options.feed || new CompositeHotStockEventFeed([
+      new XuangubaoAbnormalEventFeed(),
+      new ThsLimitUpEventFeed(),
+    ])
     this.dataLayer = options.dataLayer || dataLayer
     this.notifier = options.notifier || eventRadarFeishuNotifier
     this.intervalMs = options.intervalMs || DEFAULT_INTERVAL_MS
@@ -261,6 +266,7 @@ export class HotStockEventMonitorService {
       this.initializedForPush = true
       return
     }
+    if (!this.owners.has(FEISHU_OWNER)) return
     if (!events.length) return
 
     try {

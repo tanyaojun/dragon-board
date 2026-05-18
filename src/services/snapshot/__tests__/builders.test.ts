@@ -98,9 +98,9 @@ describe('snapshot builders', () => {
       capitalFlowSource: 'broker_l2',
       capitalFlowConfidence: 'high',
       themes: [{ id: 'POWER', name: '电力', heatScore: 83 }],
+      reason: '旧原因',
     })
     expect(snapshot.hotlist[0]).not.toHaveProperty('tags')
-    expect(snapshot.hotlist[0]).not.toHaveProperty('reason')
     expect(snapshot.hotlist[0]).not.toHaveProperty('signals')
     expect(snapshot.hotlist[0]).not.toHaveProperty('rankChange')
     expect(snapshot.hotlist[0]).not.toHaveProperty('technicalIndicators')
@@ -132,6 +132,7 @@ describe('snapshot builders', () => {
             moneyFlowEstimated: true,
             capitalFlowSource: 'estimated_l1',
             capitalFlowConfidence: 'low',
+            reason: '涨停原因样本',
           },
         ],
       },
@@ -162,6 +163,7 @@ describe('snapshot builders', () => {
       capital_flow_source: 'estimated_l1',
       capital_flow_confidence: 'low',
       money_flow_estimated: true,
+      reason: '涨停原因样本',
     })
   })
 })

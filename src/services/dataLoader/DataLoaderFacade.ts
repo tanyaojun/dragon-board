@@ -16,7 +16,10 @@ import {
   QUOTE_REFRESH_INTERVAL_MS,
 } from './constants'
 import { extraDataProjector } from './ExtraDataProjector'
-import { loadLimitUpData as loadLimitUpFeedData } from './LimitUpFeed'
+import {
+  loadLimitUpData as loadLimitUpFeedData,
+  loadThsLimitUpPoolData,
+} from './LimitUpFeed'
 import { platformHotlistService } from './PlatformHotlistService'
 import { quoteService } from './QuoteService'
 import { rankTrendSignalService } from './RankTrendSignalService'
@@ -457,6 +460,7 @@ class DataLoaderService {
   async loadLimitUpData(force = false): Promise<void> {
     void force
     await loadLimitUpFeedData()
+    await loadThsLimitUpPoolData()
   }
 
   // ========== 加载行情数据 ==========

@@ -257,8 +257,6 @@ import { RefreshManager } from './services/RefreshManager'
 
 // ========== 6. 通知服务（最上层）==========
 import { alertService } from './services/alertService'        // 预警服务
-import { hotStockEventMonitorService } from './services/hotlist/HotStockEventMonitorService'
-import { eventRadarFeishuNotifier } from './services/notifications/EventRadarFeishuNotifier'
 
 
 // ========== Stores ==========
@@ -601,21 +599,9 @@ const lazyLoadServices = () => {
       // 刷新管理器
       safeExecute(RefreshManager, 'init', '刷新管理器')
       safeExecute(RefreshManager, 'start', '启动刷新')
-      startEventRadarFeishuPush()
 
     }, 3500)
   })
-}
-
-const startEventRadarFeishuPush = async () => {
-  try {
-    const status = await eventRadarFeishuNotifier.refreshStatus()
-    if (!status.configured) return
-    await hotStockEventMonitorService.refresh()
-    hotStockEventMonitorService.start('feishu')
-  } catch (error) {
-    console.warn('[App] 飞书异动推送启动失败:', error)
-  }
 }
 
 // ========== 辅助函数 ==========
@@ -736,7 +722,6 @@ onUnmounted(() => {
   document.removeEventListener('click', handleClickOutside)
   eventUnsubscribers.forEach((fn) => fn())
   eventUnsubscribers.length = 0
-  hotStockEventMonitorService.stop('feishu')
   sectorAnalyzer.destroy?.()
 })
 </script>

@@ -7,8 +7,23 @@ export interface EventRadarFeishuStatus {
   configured: boolean
   webhookConfigured: boolean
   secretConfigured: boolean
+  background?: EventRadarFeishuBackgroundStatus | null
   lastMessage?: string
   lastCheckedAt?: number
+}
+
+export interface EventRadarFeishuBackgroundStatus {
+  backgroundEnabled: boolean
+  running: boolean
+  initialized: boolean
+  intervalMs: number
+  lastRunAt: number | null
+  lastSuccessAt: number | null
+  lastError: string | null
+  lastFetchedCount: number
+  lastSentCount: number
+  successCount: number
+  failureCount: number
 }
 
 export interface EventRadarFeishuNotifierOptions {
@@ -43,6 +58,7 @@ export class EventRadarFeishuNotifier {
         configured: false,
         webhookConfigured: false,
         secretConfigured: false,
+        background: null,
         lastMessage: '浏览器 fetch 不可用',
         lastCheckedAt: Date.now(),
       }
@@ -120,9 +136,33 @@ function normalizeStatus(payload: Record<string, unknown>): EventRadarFeishuStat
     configured: Boolean(payload.configured),
     webhookConfigured: Boolean(payload.webhookConfigured),
     secretConfigured: Boolean(payload.secretConfigured),
+    background: normalizeBackgroundStatus(payload.background),
     lastMessage: typeof payload.message === 'string' ? payload.message : undefined,
     lastCheckedAt: Date.now(),
   }
+}
+
+function normalizeBackgroundStatus(value: unknown): EventRadarFeishuBackgroundStatus | null {
+  if (!value || typeof value !== 'object') return null
+  const payload = value as Record<string, unknown>
+  return {
+    backgroundEnabled: Boolean(payload.backgroundEnabled),
+    running: Boolean(payload.running),
+    initialized: Boolean(payload.initialized),
+    intervalMs: Number(payload.intervalMs) || 0,
+    lastRunAt: normalizeNullableNumber(payload.lastRunAt),
+    lastSuccessAt: normalizeNullableNumber(payload.lastSuccessAt),
+    lastError: typeof payload.lastError === 'string' ? payload.lastError : null,
+    lastFetchedCount: Number(payload.lastFetchedCount) || 0,
+    lastSentCount: Number(payload.lastSentCount) || 0,
+    successCount: Number(payload.successCount) || 0,
+    failureCount: Number(payload.failureCount) || 0,
+  }
+}
+
+function normalizeNullableNumber(value: unknown): number | null {
+  const number = Number(value)
+  return Number.isFinite(number) && number > 0 ? number : null
 }
 
 function toPayloadEvent(event: HotStockAbnormalEvent) {

@@ -66,6 +66,24 @@ describe('ApiService', () => {
     await expect(queued).resolves.toMatchObject({ ok: true, queued: true })
   })
 
+  it('requests ths segmented limit-up pools through the limitup proxy endpoint', async () => {
+    const api = new ApiService()
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ ok: true, pools: {} }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await api.getThsLimitUpPools({ date: '20260515' }, { cache: false, retries: 0 })
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/api/limitup/ths/pools?date=20260515'),
+      expect.any(Object),
+    )
+  })
+
   it('cancels a queued request before its fetch begins', async () => {
     const api = new ApiService()
 

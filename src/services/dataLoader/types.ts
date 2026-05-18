@@ -16,8 +16,9 @@ export interface LimitUpItem {
   is_new: number
   first_limit_up_time: string
   last_limit_up_time: string
-  continue_day: number
-  high_days: number
+  continue_day: number | null
+  high_days: number | string | null
+  high_days_value?: number | string | null
 }
 
 export interface LoadingStatus {
