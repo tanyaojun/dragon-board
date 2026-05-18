@@ -9,11 +9,13 @@ import type { IntradayMoneyFlowStats } from './types'
 
 export interface RealtimeQuoteCoordinatorOptions {
   getHotCodes: () => Set<string>
+  onQuoteFlushed?: (codes: string[]) => void | Promise<void>
   flushDelay?: number
 }
 
 export class RealtimeQuoteCoordinator {
   private readonly getHotCodes: () => Set<string>
+  private readonly onQuoteFlushed?: (codes: string[]) => void | Promise<void>
   private readonly flushDelay: number
   private realtimeFlushTimer: ReturnType<typeof setTimeout> | null = null
   private pendingRealtimeQuotes = new Map<string, QuotePatch>()
@@ -26,6 +28,7 @@ export class RealtimeQuoteCoordinator {
 
   constructor(options: RealtimeQuoteCoordinatorOptions) {
     this.getHotCodes = options.getHotCodes
+    this.onQuoteFlushed = options.onQuoteFlushed
     this.flushDelay = options.flushDelay ?? REALTIME_FLUSH_DELAY_MS
     this.setupRealtimeFeed()
   }
@@ -185,6 +188,13 @@ export class RealtimeQuoteCoordinator {
         depth: depthItems.length,
         ticks: tickGroups.length,
         source: 'tdx_l2',
+      })
+    }
+
+    if (quoteItems.length && this.onQuoteFlushed) {
+      const changedCodes = quoteItems.map((item) => item.code).filter(Boolean)
+      void Promise.resolve(this.onQuoteFlushed([...new Set(changedCodes)])).catch((error) => {
+        console.warn('[RealtimeQuoteCoordinator] 量比刷新回调失败:', error)
       })
     }
   }

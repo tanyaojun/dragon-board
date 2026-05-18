@@ -14,6 +14,7 @@ import type {
   CandidateStructuredThesis,
   CandidateThemeExposureLike,
 } from './types'
+import { getTrustedVolumeRatio } from '../dataLoader/VolumeRatioTrust'
 
 const ANALYSIS_VERSION = 'candidate-rules-v1'
 
@@ -92,7 +93,7 @@ function moneyFlowScore(stock: Record<string, unknown>): number {
   const main = toNumber(stock.zlje)
   const mainPct = toNumber(stock.zljzb)
   const superLarge = toNumber(stock.cddje)
-  const volumeRatio = toNumber(stock.volumeRatio)
+  const volumeRatio = getTrustedVolumeRatio(stock)
   let score = 0
   if (main > 0) score += 6
   if (mainPct > 0) score += 4
@@ -105,6 +106,11 @@ function hasFiniteValue(value: unknown): boolean {
   if (value == null) return false
   if (typeof value === 'string' && value.trim() === '') return false
   return Number.isFinite(Number(value))
+}
+
+function hasTrustedMoneyFlowValue(stock: Record<string, unknown>, key: string): boolean {
+  if (key === 'volumeRatio') return getTrustedVolumeRatio(stock) > 0
+  return hasFiniteValue(stock[key])
 }
 
 function evidence(
@@ -240,7 +246,9 @@ function buildEvidence(
     items.push(evidence('sentiment', 'positive', `情绪 ${phase}`, '市场情绪未处于退潮', breakdown.sentiment))
   }
 
-  const hasMoneyFlow = ['zlje', 'zljzb', 'cddje', 'volumeRatio'].some((key) => hasFiniteValue(stock[key]))
+  const hasMoneyFlow = ['zlje', 'zljzb', 'cddje', 'volumeRatio'].some((key) =>
+    hasTrustedMoneyFlowValue(stock, key),
+  )
   if (!hasMoneyFlow) {
     items.push(evidence('moneyFlow', 'missing', '资金流样本缺失', '主力净额、占比或量比缺失', 0, 'missing'))
   } else if (toNumber(stock.zlje) < 0 || toNumber(stock.zljzb) < 0) {
@@ -280,7 +288,9 @@ function buildStructuredRisks(
     risks.push(risk('SENTIMENT_MISSING', 'info', 'sentiment', '情绪样本缺失，无法确认市场环境', '缺少市场情绪输入'))
   }
 
-  const hasMoneyFlow = ['zlje', 'zljzb', 'cddje', 'volumeRatio'].some((key) => hasFiniteValue(stock[key]))
+  const hasMoneyFlow = ['zlje', 'zljzb', 'cddje', 'volumeRatio'].some((key) =>
+    hasTrustedMoneyFlowValue(stock, key),
+  )
   if (!hasMoneyFlow) {
     risks.push(risk('MONEY_FLOW_MISSING', 'info', 'moneyFlow', '资金流样本缺失，无法确认买盘强度', '资金字段缺失或无效'))
   } else if (toNumber(stock.zlje) < 0 || toNumber(stock.zljzb) < 0) {
@@ -309,7 +319,9 @@ function buildStructuredThesis(
   const stock = context.stock
   const rankTrendConfirmed = context.rankTrend ? tier === 'A_MAIN' || tier === 'B_IGNITION' : null
   const themeConfirmed = themeName === '无明确题材' ? null : breakdown.theme >= 12
-  const moneyFlowConfirmed = ['zlje', 'zljzb', 'cddje', 'volumeRatio'].some((key) => hasFiniteValue(stock[key]))
+  const moneyFlowConfirmed = ['zlje', 'zljzb', 'cddje', 'volumeRatio'].some((key) =>
+    hasTrustedMoneyFlowValue(stock, key),
+  )
     ? toNumber(stock.zlje) >= 0 && toNumber(stock.zljzb) >= 0 && breakdown.moneyFlow >= 8
     : null
   const sentimentOk = context.sentiment ? !phase.includes('退潮') && !phase.includes('冰点') : null

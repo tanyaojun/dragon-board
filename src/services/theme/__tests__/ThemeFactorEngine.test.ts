@@ -165,6 +165,88 @@ describe('ThemeFactorEngine', () => {
     expect(factors[0].qualityFlags.map((flag) => flag.code)).toContain('invalid_number')
   })
 
+  it('reports invalid raw stock volume ratio even when trusted ratio is zeroed', () => {
+    const factors = buildThemeFactors(
+      createContext({
+        themes: [{ id: 'BROKEN', name: '异常题材' }],
+        themeStocks: new Map([['BROKEN', ['000005']]]),
+        stockThemes: new Map([['000005', ['BROKEN']]]),
+        stocks: [
+          {
+            code: '000005',
+            name: '异常量比',
+            change: 3,
+            volumeRatio: Number.POSITIVE_INFINITY,
+            volumeRatioMeta: {
+              status: 'suspicious',
+              source: 'intraday_snapshot',
+              calculatedAt: Date.now(),
+              currentVolume: 100000,
+              capped: true,
+              reason: 'ratio_capped',
+            },
+          },
+        ],
+        jxbkBlocks: [],
+      }),
+    )
+
+    expect(factors[0].qualityFlags.map((flag) => flag.code)).toContain('invalid_number')
+  })
+
+  it('ignores suspicious capped stock volume ratio when calculating crowding risk', () => {
+    const suspicious = buildThemeFactors(
+      createContext({
+        stocks: [
+          {
+            code: '000001',
+            name: '样本一',
+            change: 10,
+            volumeRatio: 99.99,
+            volumeRatioMeta: {
+              status: 'suspicious',
+              source: 'intraday_snapshot',
+              calculatedAt: Date.now(),
+              currentVolume: 100000,
+              capped: true,
+              reason: 'ratio_capped',
+            },
+            leadStatus: '龙一',
+          },
+          { code: '000002', name: '样本二', change: 4, volumeRatio: 1.2 },
+          { code: '000003', name: '样本三', change: -1, volumeRatio: 0.6 },
+        ],
+        jxbkBlocks: [],
+      }),
+    )
+    const trusted = buildThemeFactors(
+      createContext({
+        stocks: [
+          {
+            code: '000001',
+            name: '样本一',
+            change: 10,
+            volumeRatio: 99.99,
+            volumeRatioMeta: {
+              status: 'fresh',
+              source: 'intraday_snapshot',
+              calculatedAt: Date.now(),
+              currentVolume: 100000,
+            },
+            leadStatus: '龙一',
+          },
+          { code: '000002', name: '样本二', change: 4, volumeRatio: 1.2 },
+          { code: '000003', name: '样本三', change: -1, volumeRatio: 0.6 },
+        ],
+        jxbkBlocks: [],
+      }),
+    )
+
+    expect(suspicious.find((factor) => factor.themeId === 'AI')?.crowdingRisk).toBeLessThan(
+      trusted.find((factor) => factor.themeId === 'AI')?.crowdingRisk || 0,
+    )
+  })
+
   it('marks outflow themes as cooling in distribution or falling phases', () => {
     const factors = buildThemeFactors(
       createContext({

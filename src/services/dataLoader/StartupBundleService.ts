@@ -40,6 +40,37 @@ function isValidBundle(bundle: unknown, now = Date.now()): bundle is StartupBund
   return Number.isFinite(ageMs) && ageMs >= 0 && ageMs <= MAX_BUNDLE_AGE_MS
 }
 
+function markCachedVolumeRatioStale(stock: any): any {
+  if (!stock || typeof stock !== 'object' || Array.isArray(stock)) return stock
+  const volumeRatio = Number(stock.volumeRatio)
+  const hasVolumeRatio = Number.isFinite(volumeRatio) && volumeRatio > 0
+  const existingMeta =
+    stock.volumeRatioMeta && typeof stock.volumeRatioMeta === 'object' && !Array.isArray(stock.volumeRatioMeta)
+      ? stock.volumeRatioMeta
+      : null
+
+  if (!hasVolumeRatio && !existingMeta) return stock
+
+  return {
+    ...stock,
+    volumeRatioMeta: {
+      ...(existingMeta || {}),
+      status: 'stale',
+      source: existingMeta?.source || 'unavailable',
+      calculatedAt: Number(existingMeta?.calculatedAt) || 0,
+      currentVolume: Number(stock.volume) || Number(existingMeta?.currentVolume) || 0,
+      reason: 'startup_cache_hydrated',
+    },
+  }
+}
+
+function markStartupBundleVolumeRatiosStale(bundle: StartupBundle): StartupBundle {
+  return {
+    ...bundle,
+    stocks: bundle.stocks.map(markCachedVolumeRatioStale),
+  }
+}
+
 class StartupBundleService {
   async read(): Promise<StartupBundle | null> {
     try {
@@ -56,7 +87,7 @@ class StartupBundleService {
       const bundle = response?.data
       if (!isValidBundle(bundle)) return null
       return {
-        ...bundle,
+        ...markStartupBundleVolumeRatiosStale(bundle),
         cacheMeta: {
           stale: Boolean(response?.dragonMeta?.cache?.stale),
         },

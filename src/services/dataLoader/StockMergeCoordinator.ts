@@ -2,7 +2,6 @@ import type { MergedStock } from '@/types'
 import { DEFAULT_RANK } from '@/types/config'
 import { stockCodeManager } from '../StockCodeManager'
 import { getRankField, rankMergedStocks } from './ComprehensiveRankEngine'
-import { calculateVolumeRatioValue } from './VolumeRatioCalculator'
 
 export interface StockMergeCoordinatorInput {
   platformData: Record<string, any[]>
@@ -23,7 +22,6 @@ export class StockMergeCoordinator {
     const quoteMap = input.latestQuotes ?? new Map()
     const stockMap = new Map<string, any>()
     const quoteProcessedCodes = new Set<string>()
-    const volumeRatioCalculatedCodes = new Set<string>()
 
     for (const [platform, items] of Object.entries(input.platformData || {})) {
       for (const item of items) {
@@ -50,16 +48,6 @@ export class StockMergeCoordinator {
           this.mergeQuoteData(stock, code, quoteMap)
           quoteProcessedCodes.add(code)
         }
-
-        if (!volumeRatioCalculatedCodes.has(code)) {
-          this.calculateVolumeRatio(
-            stock,
-            code,
-            input.volumeHistoryMap,
-            input.intradayVolumeHistoryMap ?? new Map(),
-          )
-          volumeRatioCalculatedCodes.add(code)
-        }
       }
     }
 
@@ -69,15 +57,6 @@ export class StockMergeCoordinator {
         if (quoteMap.has(code) && !quoteProcessedCodes.has(code)) {
           this.mergeQuoteData(stock, code, quoteMap)
           quoteProcessedCodes.add(code)
-        }
-        if (!volumeRatioCalculatedCodes.has(code)) {
-          this.calculateVolumeRatio(
-            stock,
-            code,
-            input.volumeHistoryMap,
-            input.intradayVolumeHistoryMap ?? new Map(),
-          )
-          volumeRatioCalculatedCodes.add(code)
         }
         stockMap.set(code, stock)
       }
@@ -150,20 +129,6 @@ export class StockMergeCoordinator {
     if (stockName) {
       stock.name = stockName
     }
-  }
-
-  private calculateVolumeRatio(
-    stock: any,
-    code: string,
-    volumeHistoryMap: Map<string, number[]>,
-    intradayVolumeHistoryMap: Map<string, number[]> = new Map(),
-  ): void {
-    stock.volumeRatio = calculateVolumeRatioValue(
-      stock,
-      code,
-      volumeHistoryMap,
-      intradayVolumeHistoryMap,
-    )
   }
 
   private applyStockNameFallbacks(stockMap: Map<string, any>): void {

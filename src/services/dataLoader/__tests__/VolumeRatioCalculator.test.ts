@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   calculateRawVolumeRatio,
+  calculateVolumeRatio,
   calculateVolumeRatioValue,
   calculateWeightedAverageVolume,
   calculateWeightedVolumeRatio,
@@ -66,6 +67,27 @@ describe('VolumeRatioCalculator', () => {
     expect(calculateRawVolumeRatio(1, 1000)).toBe(0.01)
     expect(calculateRawVolumeRatio(100000, 1)).toBe(99.99)
     expect(calculateRawVolumeRatio(100, 0)).toBeUndefined()
+  })
+
+  it('returns structured diagnostics when raw volume ratio is capped', () => {
+    const result = calculateVolumeRatio(
+      { volume: 100000 },
+      '600000',
+      new Map([['600000', [1, 1, 1]]]),
+      undefined,
+      new Date('2026-05-06T15:30:00+08:00'),
+    )
+
+    expect(result).toMatchObject({
+      value: 99.99,
+      status: 'suspicious',
+      source: 'daily_snapshot',
+      currentVolume: 100000,
+      expectedVolume: 1,
+      rawRatio: 100000,
+      capped: true,
+      reason: 'ratio_capped',
+    })
   })
 
   it('maps A-share trading time to elapsed progress and quote clock minute', () => {

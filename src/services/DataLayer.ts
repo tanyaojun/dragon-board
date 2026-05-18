@@ -662,7 +662,9 @@ class DataLayer {
       if (Number.isFinite(nextSpeed)) {
         stock.speed = nextSpeed
       }
+      const previousVolume = Number(stock.volume) || 0
       stock.volume = Number(change.volume ?? stock.volume) || 0
+      this.markVolumeRatioStaleIfVolumeChanged(stock, previousVolume)
       stock.turnover = Number(change.turnover ?? change.amount ?? stock.turnover) || 0
       stock.turnoverRate = Number(change.turnoverRate ?? stock.turnoverRate) || 0
       const shouldApplyMoneyFlow = shouldApplyMoneyFlowUpdate(stock, change)
@@ -1157,7 +1159,9 @@ class DataLayer {
     if (quote) {
       next.price = this.pickQuoteNumber(quote.price ?? quote.lastPrice, next.price)
       next.change = this.pickQuoteNumber(quote.change ?? quote.changePct, next.change)
+      const previousVolume = Number(next.volume) || 0
       next.volume = this.pickQuoteNumber(quote.volume, next.volume)
+      this.markVolumeRatioStaleIfVolumeChanged(next, previousVolume)
       next.turnover = this.pickQuoteNumber(quote.turnover ?? quote.amount, next.turnover)
       next.turnoverRate = this.pickQuoteNumber(quote.turnoverRate, next.turnoverRate)
       next.speed = this.pickOptionalQuoteNumber(quote.speed, next.speed)
@@ -1194,6 +1198,20 @@ class DataLayer {
     }
 
     return next
+  }
+
+  private markVolumeRatioStaleIfVolumeChanged(stock: MergedStock, previousVolume: number): void {
+    const nextVolume = Number(stock.volume) || 0
+    if (!stock.volumeRatioMeta || stock.volumeRatioMeta.status !== 'fresh') return
+    if (!Number.isFinite(previousVolume) || !Number.isFinite(nextVolume)) return
+    if (previousVolume <= 0 || nextVolume <= 0 || previousVolume === nextVolume) return
+
+    stock.volumeRatioMeta = {
+      ...stock.volumeRatioMeta,
+      status: 'stale',
+      currentVolume: nextVolume,
+      reason: 'volume_changed_after_ratio_calculated',
+    }
   }
 
   private pickOptionalQuoteNumber(nextValue: unknown, currentValue: unknown): number | undefined {

@@ -1,4 +1,5 @@
 import type { RankTrendAnalysisResult } from './types'
+import { getTrustedVolumeRatio } from '@/services/dataLoader/VolumeRatioTrust'
 
 export interface RankTrendDisplayStatus {
   label: string
@@ -150,7 +151,7 @@ function percentile(values: number[], ratio: number): number {
 
 export function buildRankTrendStatusContext(stocks: any[]): RankTrendStatusContext {
   const turnoverValues = stocks.map(stock => toNumber(stock?.turnover))
-  const volumeRatioValues = stocks.map(stock => toNumber(stock?.volumeRatio))
+  const volumeRatioValues = stocks.map(stock => getTrustedVolumeRatio(stock))
   const turnoverRateValues = stocks.map(stock => toNumber(stock?.turnoverRate))
 
   return {
@@ -231,7 +232,7 @@ function isHotAttention(rankTrend: RankTrendAnalysisResult | null | undefined, s
 
 function isHighCrowded(rankTrend: RankTrendAnalysisResult | null | undefined, stock: any): boolean {
   const change = toNumber(stock?.change)
-  const volumeRatio = toNumber(stock?.volumeRatio)
+  const volumeRatio = getTrustedVolumeRatio(stock)
   const turnoverRate = toNumber(stock?.turnoverRate)
   const currentPercentile = toNumber(rankTrend?.meta?.currentPercentile)
 
@@ -248,7 +249,7 @@ function isTurnoverSupported(stock: any, context: RankTrendStatusContext): boole
 }
 
 function isVolumeRatioSupported(stock: any, context: RankTrendStatusContext): boolean {
-  const volumeRatio = toNumber(stock?.volumeRatio)
+  const volumeRatio = getTrustedVolumeRatio(stock)
   return volumeRatio > 0 && volumeRatio >= context.volumeRatioP50
 }
 
@@ -266,7 +267,7 @@ function isMoneyAcceptanceSupported(stock: any, context: RankTrendStatusContext)
 }
 
 function isVolumeReasonable(stock: any, context: RankTrendStatusContext): boolean {
-  const volumeRatio = toNumber(stock?.volumeRatio)
+  const volumeRatio = getTrustedVolumeRatio(stock)
   const turnoverRate = toNumber(stock?.turnoverRate)
   return volumeRatio < context.volumeRatioP85 && turnoverRate < context.turnoverRateP85
 }
@@ -278,13 +279,13 @@ function isNearLimitUp(stock: any): boolean {
 
 function isVolumeAmplified(stock: any, context: RankTrendStatusContext): boolean {
   const turnover = toNumber(stock?.turnover)
-  const volumeRatio = toNumber(stock?.volumeRatio)
+  const volumeRatio = getTrustedVolumeRatio(stock)
   return (turnover > 0 && turnover >= context.turnoverP70) || volumeRatio >= context.volumeRatioP70
 }
 
 function isVolumeOverheated(stock: any, context: RankTrendStatusContext): boolean {
   const change = toNumber(stock?.change)
-  const volumeRatio = toNumber(stock?.volumeRatio)
+  const volumeRatio = getTrustedVolumeRatio(stock)
   const turnoverRate = toNumber(stock?.turnoverRate)
   return (change >= 8 || isNearLimitUp(stock)) && (volumeRatio >= context.volumeRatioP85 || turnoverRate >= context.turnoverRateP85)
 }

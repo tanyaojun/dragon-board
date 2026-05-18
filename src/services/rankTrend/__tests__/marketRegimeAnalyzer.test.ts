@@ -86,6 +86,38 @@ describe('analyzeMarketRegime', () => {
     expect(rich.score).toBeGreaterThan(poor.score)
   })
 
+  it('可疑封顶量比不计入市场量能活跃占比', () => {
+    const suspicious = analyzeMarketRegime({
+      stocks: Array.from({ length: 10 }, () => ({
+        zlje: 1e8,
+        volumeRatio: 99.99,
+        volumeRatioMeta: {
+          status: 'suspicious',
+          source: 'intraday_snapshot',
+          calculatedAt: Date.now(),
+          currentVolume: 100000,
+          capped: true,
+          reason: 'ratio_capped',
+        },
+      })),
+    })
+    const trusted = analyzeMarketRegime({
+      stocks: Array.from({ length: 10 }, () => ({
+        zlje: 1e8,
+        volumeRatio: 2,
+        volumeRatioMeta: {
+          status: 'fresh',
+          source: 'intraday_snapshot',
+          calculatedAt: Date.now(),
+          currentVolume: 100000,
+        },
+      })),
+    })
+
+    expect(suspicious.score).toBeLessThan(trusted.score)
+    expect(suspicious.reasons.some((reason) => reason.includes('量能活跃'))).toBe(false)
+  })
+
   it('score 不会超出 [0, 100]', () => {
     const regime = analyzeMarketRegime({
       breathData: {

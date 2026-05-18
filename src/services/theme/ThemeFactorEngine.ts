@@ -1,6 +1,7 @@
 import type { JxbkBlockData } from '@/types'
 import type { ThemeFactorSnapshot, ThemeQualityFlag, ThemeRotationState, ThemeSourceContext } from './types'
 import { clamp, hasFiniteNumber, round, toFiniteNumber } from './utils'
+import { getTrustedVolumeRatio } from '@/services/dataLoader/VolumeRatioTrust'
 
 const LIMIT_UP_CHANGE = 9.5
 
@@ -93,7 +94,7 @@ function hasAnyValidStockSignal(stocks: ThemeSourceContext['stocks']): boolean {
   return stocks.some(
     (stock) =>
       hasFiniteNumber(stock.change) ||
-      hasFiniteNumber((stock as any).volumeRatio) ||
+      getTrustedVolumeRatio(stock) > 0 ||
       hasFiniteNumber((stock as any).mainNetInflow),
   )
 }
@@ -158,7 +159,7 @@ function correlationScore(context: ThemeSourceContext, themeId: string, stocks: 
 function crowdingRiskScore(block: JxbkBlockData | undefined, heatScore: number, stocks: ThemeSourceContext['stocks']): number {
   // 使用成分股量比均值而非最大值，避免单只异常放量股推高整个题材的拥挤度
   const blockVR = toFiniteNumber(block?.volumeRatio)
-  const stockVRs = stocks.map((s) => Math.min(toFiniteNumber((s as any).volumeRatio), 10))
+  const stockVRs = stocks.map((s) => Math.min(getTrustedVolumeRatio(s), 10))
   const avgVolumeRatio =
     stockVRs.length > 0
       ? stockVRs.reduce((a, b) => a + b, 0) / stockVRs.length

@@ -403,6 +403,34 @@ describe('getRankTrendDisplayStatus', () => {
     expect(getRankTrendDisplayStatus(createRankTrend({ tier: 'A_MAIN' }), target, context).label).toBe('高位拥挤')
   })
 
+  it('可疑封顶量比不参与高位拥挤判定', () => {
+    const target = {
+      change: 10,
+      turnover: 100,
+      volumeRatio: 99.99,
+      volumeRatioMeta: {
+        status: 'suspicious',
+        source: 'intraday_snapshot',
+        calculatedAt: Date.now(),
+        currentVolume: 100000,
+        capped: true,
+        reason: 'ratio_capped',
+      },
+      turnoverRate: 4,
+      zlje: 1,
+      zljzb: 2,
+    }
+    const context = buildRankTrendStatusContext([
+      { turnover: 10, volumeRatio: 0.6, turnoverRate: 2 },
+      { turnover: 50, volumeRatio: 1, turnoverRate: 4 },
+      target,
+      { turnover: 200, volumeRatio: 2, turnoverRate: 8 },
+      { turnover: 400, volumeRatio: 3, turnoverRate: 12 },
+    ])
+
+    expect(getRankTrendDisplayStatus(createRankTrend({ tier: 'A_MAIN' }), target, context).label).toBe('主升确认')
+  })
+
   it('样本不足且资金不强量能偏弱时保持样本不足', () => {
     const target = {
       compRank: 120,

@@ -1,6 +1,7 @@
 import type { ThemeCorrelationDetail, StockCorrelation } from '@/services/ThemeCorrelationAnalyzer'
 import type { MergedStock } from '@/types'
 import { toFiniteNumber } from './utils'
+import { getTrustedVolumeRatio } from '@/services/dataLoader/VolumeRatioTrust'
 
 type CorrelationInput = {
   themeId: string
@@ -13,7 +14,7 @@ type StockWithCode = Partial<MergedStock> & { code: string; name?: string }
 
 function calcStockScore(stock: StockWithCode): number {
   const change = Math.max(0, toFiniteNumber(stock.change))
-  const volumeRatio = Math.max(0, toFiniteNumber(stock.volumeRatio))
+  const volumeRatio = getTrustedVolumeRatio(stock)
   const leadBonus = String((stock as any).leadStatus || '').includes('龙') ? 25 : 0
   const limitBonus = change >= 9.5 ? 20 : 0
   return change * 4 + Math.min(20, volumeRatio * 4) + leadBonus + limitBonus
@@ -71,7 +72,7 @@ export function analyzeThemeCorrelationInput(input: CorrelationInput): ThemeCorr
 
   for (const stock of stocks) {
     const change = toFiniteNumber(stock.change)
-    const volumeRatio = toFiniteNumber(stock.volumeRatio)
+    const volumeRatio = getTrustedVolumeRatio(stock)
     const mainInflow = toFiniteNumber((stock as any).mainNetInflow)
     sumChange += change
     sumVolumeRatio += volumeRatio
@@ -132,7 +133,7 @@ export function analyzeThemeCorrelationInput(input: CorrelationInput): ThemeCorr
             lianban: String((leader as any).lianban || ''),
             fengdan: toFiniteNumber((leader as any).fengdan),
             price: toFiniteNumber((leader as any).price),
-            volumeRatio: toFiniteNumber(leader.volumeRatio),
+            volumeRatio: getTrustedVolumeRatio(leader),
             popularity: toFiniteNumber((leader as any).popularity),
             popularityChange: toFiniteNumber((leader as any).popularityChange),
             mainBuy: toFiniteNumber((leader as any).mainBuy),

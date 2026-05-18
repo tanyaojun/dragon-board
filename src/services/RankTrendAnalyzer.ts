@@ -18,6 +18,7 @@ import {
   analyzeFallbackTechnicalSignals,
   analyzeTechnicalSignals,
 } from './rankTrend/technicalSignalAnalyzer'
+import { getTrustedVolumeRatio } from './dataLoader/VolumeRatioTrust'
 import {
   summarizeRankTrendStrategyDistribution,
   type RankTrendStrategyValidationReport,
@@ -639,7 +640,7 @@ export class RankTrendAnalyzer {
     const stock = dataLayer.getStock(code)
     // || 0 防御 Number("abc") 等非数字字符串产生 NaN 污染下游计算链
     const stockChange = Number(stock?.change ?? 0) || 0
-    const volumeRatio = Number(stock?.volumeRatio ?? 0) || 0
+    const volumeRatio = getTrustedVolumeRatio(stock)
     const zlje = Number(stock?.zlje ?? 0) || 0
     const zljzb = Number(stock?.zljzb ?? 0) || 0
     const requiredSamples = stockSampleQuality.requiredSampleCount

@@ -30,7 +30,7 @@ import { startupBundleService } from './StartupBundleService'
 import { stockHotnessService } from './StockHotnessService'
 import { stockMergeCoordinator } from './StockMergeCoordinator'
 import { VolumeHistoryService } from './VolumeHistoryService'
-import { calculateVolumeRatioValue } from './VolumeRatioCalculator'
+import { VolumeRatioUpdateService } from './VolumeRatioUpdateService'
 import type {
   DataLoaderBootstrapOptions,
   DataLoaderRefreshOptions,
@@ -44,6 +44,8 @@ import type {
 } from './types'
 
 export type { MergedQuoteData } from './types'
+
+const REALTIME_VOLUME_RATIO_REFRESH_DELAY_MS = 1000
 
 /**
  * 业务编排层
@@ -75,10 +77,14 @@ class DataLoaderService {
   private quoteProgressCompletedCodes = 0
   private runTimings: Record<string, number> = {}
   private stockPublishVersion = 0
+  private pendingVolumeRatioCodes = new Set<string>()
+  private volumeRatioRefreshTimer: ReturnType<typeof setTimeout> | null = null
+  private volumeRatioRefreshRunning = false
 
   private readonly INTRADAY_VOLUME_SNAPSHOT_TYPES = DEFAULT_INTRADAY_VOLUME_SNAPSHOT_TYPES
   private realtimeCoordinator: RealtimeQuoteCoordinator
   private volumeHistoryService: VolumeHistoryService
+  private volumeRatioUpdateService: VolumeRatioUpdateService
 
   private readonly PLATFORM_REFRESH_INTERVAL = PLATFORM_REFRESH_INTERVAL_MS // 30分钟
   private readonly startupProgress = {
@@ -98,8 +104,12 @@ class DataLoaderService {
     debugLog('[DataLoader] 初始化完成')
     this.realtimeCoordinator = new RealtimeQuoteCoordinator({
       getHotCodes: () => this.getAllHotCodes(),
+      onQuoteFlushed: (codes) => this.handleRealtimeQuoteFlushed(codes),
     })
     this.volumeHistoryService = new VolumeHistoryService(this.INTRADAY_VOLUME_SNAPSHOT_TYPES)
+    this.volumeRatioUpdateService = new VolumeRatioUpdateService({
+      volumeHistoryService: this.volumeHistoryService,
+    })
     this.startQuoteAutoRefresh() // 自动启动行情刷新
     this.startSignalAutoRefresh()
   }
@@ -110,6 +120,37 @@ class DataLoaderService {
 
   private isRealtimePrimaryHealthy(): boolean {
     return this.realtimeCoordinator.isRealtimePrimaryHealthy()
+  }
+
+  private handleRealtimeQuoteFlushed(codes: string[]): void {
+    const validCodes = codes.filter((code) => code && code.length === 6)
+    validCodes.forEach((code) => this.pendingVolumeRatioCodes.add(code))
+    this.scheduleRealtimeVolumeRatioRefresh()
+  }
+
+  private scheduleRealtimeVolumeRatioRefresh(): void {
+    if (this.volumeRatioRefreshTimer || this.volumeRatioRefreshRunning) return
+    this.volumeRatioRefreshTimer = setTimeout(() => {
+      this.volumeRatioRefreshTimer = null
+      void this.flushRealtimeVolumeRatioRefresh()
+    }, REALTIME_VOLUME_RATIO_REFRESH_DELAY_MS)
+  }
+
+  private async flushRealtimeVolumeRatioRefresh(): Promise<void> {
+    if (this.volumeRatioRefreshRunning) return
+    const codes = Array.from(this.pendingVolumeRatioCodes)
+    this.pendingVolumeRatioCodes.clear()
+    if (!codes.length) return
+
+    this.volumeRatioRefreshRunning = true
+    try {
+      await this.updateVolumeRatios(codes)
+    } finally {
+      this.volumeRatioRefreshRunning = false
+      if (this.pendingVolumeRatioCodes.size > 0) {
+        this.scheduleRealtimeVolumeRatioRefresh()
+      }
+    }
   }
 
   private async maybeRefreshPlatformCache() {
@@ -511,32 +552,11 @@ class DataLoaderService {
    */
   private async updateVolumeRatios(codes: string[]): Promise<void> {
     try {
-      const stocks = dataLayer.getStocks()
-      const [volumeHistoryMap, intradayVolumeHistoryMap] = await Promise.all([
-        this.buildVolumeHistoryMap(codes),
-        this.buildIntradayVolumeHistoryMap(codes),
-      ])
-
-      const updates: Array<{ code: string; volumeRatio?: number }> = []
-
-      for (const code of codes) {
-        const stock = stocks.find((s) => s.code === code)
-        if (stock && stock.volume && stock.volume > 0) {
-          const volumeRatio = calculateVolumeRatioValue(
-            stock,
-            code,
-            volumeHistoryMap,
-            intradayVolumeHistoryMap,
-          )
-          if (volumeRatio !== stock.volumeRatio) {
-            updates.push({ code, volumeRatio })
-          }
-        }
-      }
-
-      if (updates.length) {
-        debugLog(`[DataLoader] 更新量比: ${updates.length} 只股票`)
-        dataLayer.updateStockExtData(updates)
+      const summary = await this.volumeRatioUpdateService.updateVolumeRatios(codes)
+      if (summary.updated > 0) {
+        debugLog(
+          `[DataLoader] 更新量比: ${summary.updated} 只股票，异常 ${summary.suspicious}，不可用 ${summary.unavailable}`,
+        )
         this.publishStocks(dataLayer.getStocks(), { reason: 'base-merge' })
       }
     } catch (error) {
@@ -757,6 +777,12 @@ class DataLoaderService {
     // 5. 合并额外数据
     merged = this.mergeExtraData(merged)
 
+    merged = this.volumeRatioUpdateService.enrichStocks(
+      merged,
+      volumeHistoryMap,
+      intradayVolumeHistoryMap,
+    )
+
     // 6. 计算个股热度
     this.updateStockHotness(merged)
 
@@ -880,6 +906,12 @@ class DataLoaderService {
     this.destroyed = true
     this.stopQuoteAutoRefresh()
     this.stopSignalAutoRefresh()
+    if (this.volumeRatioRefreshTimer) {
+      clearTimeout(this.volumeRatioRefreshTimer)
+      this.volumeRatioRefreshTimer = null
+    }
+    this.pendingVolumeRatioCodes.clear()
+    this.volumeRatioRefreshRunning = false
     platformHotlistService.clearCache()
     quoteService.clearPending()
     this.realtimeCoordinator.destroy()

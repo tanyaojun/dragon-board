@@ -340,6 +340,34 @@ describe('HotListSentimentAnalyzer', () => {
     expect(result.warnings.join('')).toContain('昨日热榜涨停')
   })
 
+  it('fallback status ignores suspicious capped volume ratio when detecting crowded stocks', () => {
+    const analyzer = new HotListSentimentAnalyzer()
+    const current = makeStocks(100, (index) => ({
+      change: index < 20 ? 9.8 : 1,
+      turnoverRate: 4,
+      volumeRatio: index < 20 ? 99.99 : 1,
+      volumeRatioMeta:
+        index < 20
+          ? {
+              status: 'suspicious',
+              source: 'intraday_snapshot',
+              calculatedAt: Date.now(),
+              currentVolume: 100000,
+              capped: true,
+              reason: 'ratio_capped',
+            }
+          : undefined,
+      zlje: 0,
+      zljzb: 0,
+      cddje: 0,
+      cddjzb: 0,
+    }))
+
+    const result = analyzer.analyze({ stocks: current })
+
+    expect(result.metrics.comparison.today.statusCounts['高位拥挤']).toBe(0)
+  })
+
   it('统计昨日强票今日平均涨幅、正收益率和转弱率', () => {
     const analyzer = new HotListSentimentAnalyzer()
     const yesterday = makeStocks(100, index => ({

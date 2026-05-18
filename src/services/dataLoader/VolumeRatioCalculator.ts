@@ -4,8 +4,103 @@ type StockWithVolume = {
   volume?: unknown
 }
 
+export type VolumeRatioSource = 'intraday_snapshot' | 'daily_snapshot' | 'unavailable'
+export type VolumeRatioStatus = 'fresh' | 'suspicious' | 'unavailable'
+
+export interface VolumeRatioResult {
+  value?: number
+  status: VolumeRatioStatus
+  source: VolumeRatioSource
+  currentVolume: number
+  expectedVolume?: number
+  historyVolumes: number[]
+  rawRatio?: number
+  capped: boolean
+  reason?: string
+  calculatedAt: number
+}
+
 const clamp = (value: number, min: number, max: number): number => {
   return Math.min(max, Math.max(min, value))
+}
+
+export function calculateVolumeRatio(
+  stock: StockWithVolume,
+  code: string,
+  volumeHistoryMap: Map<string, number[]>,
+  intradayVolumeHistoryMap: Map<string, number[]> = new Map(),
+  date: Date = new Date(),
+): VolumeRatioResult {
+  const currentVolume = Number(stock.volume)
+  const calculatedAt = date.getTime()
+  if (!Number.isFinite(currentVolume) || currentVolume <= 0) {
+    return {
+      status: 'unavailable',
+      source: 'unavailable',
+      currentVolume: Number.isFinite(currentVolume) ? currentVolume : 0,
+      historyVolumes: [],
+      capped: false,
+      reason: 'invalid_current_volume',
+      calculatedAt,
+    }
+  }
+
+  const intradayVolumes = normalizeVolumeHistory(intradayVolumeHistoryMap.get(code))
+  if (intradayVolumes.length >= 2) {
+    return calculateStructuredRawVolumeRatio({
+      currentVolume,
+      expectedVolume: calculateWeightedAverageVolume(intradayVolumes),
+      source: 'intraday_snapshot',
+      historyVolumes: intradayVolumes,
+      calculatedAt,
+    })
+  }
+
+  const volumes = resolveVolumeRatioHistory(currentVolume, volumeHistoryMap.get(code))
+  if (volumes.length < 2) {
+    return {
+      status: 'unavailable',
+      source: 'unavailable',
+      currentVolume,
+      historyVolumes: volumes,
+      capped: false,
+      reason: 'insufficient_history',
+      calculatedAt,
+    }
+  }
+
+  const expectedVolumeProgress = getAshareExpectedVolumeProgress(date)
+  if (!expectedVolumeProgress) {
+    return {
+      status: 'unavailable',
+      source: 'daily_snapshot',
+      currentVolume,
+      historyVolumes: volumes,
+      capped: false,
+      reason: 'invalid_trading_progress',
+      calculatedAt,
+    }
+  }
+  const avgDailyVolume = calculateWeightedAverageVolume(volumes)
+  if (!avgDailyVolume) {
+    return {
+      status: 'unavailable',
+      source: 'daily_snapshot',
+      currentVolume,
+      historyVolumes: volumes,
+      capped: false,
+      reason: 'invalid_history_average',
+      calculatedAt,
+    }
+  }
+
+  return calculateStructuredRawVolumeRatio({
+    currentVolume,
+    expectedVolume: avgDailyVolume * expectedVolumeProgress,
+    source: 'daily_snapshot',
+    historyVolumes: volumes,
+    calculatedAt,
+  })
 }
 
 export function calculateVolumeRatioValue(
@@ -15,24 +110,7 @@ export function calculateVolumeRatioValue(
   intradayVolumeHistoryMap: Map<string, number[]> = new Map(),
   date: Date = new Date(),
 ): number | undefined {
-  const currentVolume = Number(stock.volume)
-  if (!Number.isFinite(currentVolume) || currentVolume <= 0) return undefined
-
-  const intradayVolumes = normalizeVolumeHistory(intradayVolumeHistoryMap.get(code))
-  if (intradayVolumes.length >= 2) {
-    return calculateWeightedVolumeRatio(currentVolume, intradayVolumes)
-  }
-
-  const volumes = resolveVolumeRatioHistory(currentVolume, volumeHistoryMap.get(code))
-  if (volumes.length < 2) return undefined
-
-  const expectedVolumeProgress = getAshareExpectedVolumeProgress(date)
-  if (!expectedVolumeProgress) return undefined
-  const avgDailyVolume = calculateWeightedAverageVolume(volumes)
-  if (!avgDailyVolume) return undefined
-
-  const expectedVolume = avgDailyVolume * expectedVolumeProgress
-  return calculateRawVolumeRatio(currentVolume, expectedVolume)
+  return calculateVolumeRatio(stock, code, volumeHistoryMap, intradayVolumeHistoryMap, date).value
 }
 
 export function calculateWeightedVolumeRatio(
@@ -74,6 +152,58 @@ export function calculateRawVolumeRatio(
 
   ratio = Math.min(99.99, Math.max(0.01, Number(ratio.toFixed(2))))
   return ratio
+}
+
+function calculateStructuredRawVolumeRatio(input: {
+  currentVolume: number
+  expectedVolume?: number
+  source: Exclude<VolumeRatioSource, 'unavailable'>
+  historyVolumes: number[]
+  calculatedAt: number
+}): VolumeRatioResult {
+  const expectedVolume = Number(input.expectedVolume)
+  if (!Number.isFinite(expectedVolume) || expectedVolume <= 0) {
+    return {
+      status: 'unavailable',
+      source: input.source,
+      currentVolume: input.currentVolume,
+      expectedVolume: Number.isFinite(expectedVolume) ? expectedVolume : undefined,
+      historyVolumes: input.historyVolumes,
+      capped: false,
+      reason: 'invalid_expected_volume',
+      calculatedAt: input.calculatedAt,
+    }
+  }
+
+  const rawRatio = input.currentVolume / expectedVolume
+  if (!Number.isFinite(rawRatio) || rawRatio <= 0) {
+    return {
+      status: 'unavailable',
+      source: input.source,
+      currentVolume: input.currentVolume,
+      expectedVolume,
+      historyVolumes: input.historyVolumes,
+      rawRatio: Number.isFinite(rawRatio) ? rawRatio : undefined,
+      capped: false,
+      reason: 'invalid_raw_ratio',
+      calculatedAt: input.calculatedAt,
+    }
+  }
+
+  const value = calculateRawVolumeRatio(input.currentVolume, expectedVolume)
+  const capped = rawRatio > 99.99
+  return {
+    value,
+    status: capped ? 'suspicious' : 'fresh',
+    source: input.source,
+    currentVolume: input.currentVolume,
+    expectedVolume,
+    historyVolumes: input.historyVolumes,
+    rawRatio: Number(rawRatio.toFixed(4)),
+    capped,
+    reason: capped ? 'ratio_capped' : undefined,
+    calculatedAt: input.calculatedAt,
+  }
 }
 
 export function getAshareExpectedVolumeProgress(date: Date = new Date()): number | undefined {

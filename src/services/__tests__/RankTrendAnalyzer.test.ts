@@ -199,4 +199,51 @@ describe('RankTrendAnalyzer', () => {
 
     expect(results.get('600001')?.change).toBeCloseTo(68, 6)
   })
+
+  it('可疑封顶量比不推高 RankTrend 风险背离分', async () => {
+    Object.assign(mockStocks[0], {
+      volumeRatio: 99.99,
+      volumeRatioMeta: {
+        status: 'suspicious',
+        source: 'intraday_snapshot',
+        calculatedAt: Date.now(),
+        currentVolume: 100000,
+        capped: true,
+        reason: 'ratio_capped',
+      },
+      zlje: -10_000_000,
+      zljzb: -3,
+    })
+    const { rankTrendAnalyzer } = await import('../RankTrendAnalyzer')
+    const snapshots = [
+      { date: '2026-04-27 09:30', timestamp: Date.parse('2026-04-27T09:30:00'), snapshot: { type: 'half_hour', tradingDate: '2026-04-27', slotTime: '09:30', hotlist: buildHotlist(78) } },
+      { date: '2026-04-27 10:00', timestamp: Date.parse('2026-04-27T10:00:00'), snapshot: { type: 'half_hour', tradingDate: '2026-04-27', slotTime: '10:00', hotlist: buildHotlist(70) } },
+      { date: '2026-04-27 10:30', timestamp: Date.parse('2026-04-27T10:30:00'), snapshot: { type: 'half_hour', tradingDate: '2026-04-27', slotTime: '10:30', hotlist: buildHotlist(62) } },
+      { date: '2026-04-27 11:00', timestamp: Date.parse('2026-04-27T11:00:00'), snapshot: { type: 'half_hour', tradingDate: '2026-04-27', slotTime: '11:00', hotlist: buildHotlist(54) } },
+      { date: '2026-04-27 13:30', timestamp: Date.parse('2026-04-27T13:30:00'), snapshot: { type: 'half_hour', tradingDate: '2026-04-27', slotTime: '13:30', hotlist: buildHotlist(46) } },
+    ]
+    const rankMap = new Map<string, number>(
+      Array.from({ length: 100 }, (_, index) => [
+        index === 20 ? '600001' : `FILL${String(index + 1).padStart(3, '0')}`,
+        index + 1,
+      ]),
+    )
+
+    const suspiciousResults = await rankTrendAnalyzer.getRankTrends(rankMap, {
+      updateSignalStore: false,
+      snapshots,
+    })
+    Object.assign(mockStocks[0].volumeRatioMeta, {
+      status: 'fresh',
+      reason: undefined,
+    })
+    const trustedResults = await rankTrendAnalyzer.getRankTrends(rankMap, {
+      updateSignalStore: false,
+      snapshots,
+    })
+
+    expect(suspiciousResults.get('600001')?.risk.divergence.score).toBeLessThan(
+      trustedResults.get('600001')?.risk.divergence.score || 0,
+    )
+  })
 })

@@ -140,4 +140,29 @@ describe('alertService V3 compatibility', () => {
       vi.useRealTimers()
     }
   })
+
+  it('does not use suspicious capped volume ratio for stock speed alerts', async () => {
+    vi.mocked(themeFacade.getThemeStockMap).mockReturnValue({
+      '000001': {
+        code: '000001',
+        name: '样本一',
+        speed: 4,
+        change: 5,
+        volumeRatio: 99.99,
+        volumeRatioMeta: {
+          status: 'suspicious',
+          source: 'intraday_snapshot',
+          calculatedAt: Date.now(),
+          currentVolume: 100000,
+          capped: true,
+          reason: 'ratio_capped',
+        },
+        blocks: ['人工智能'],
+      },
+    })
+
+    await alertService.checkAll()
+
+    expect(alertService.getAlerts().some((alert) => alert.type === 'rocket_launch')).toBe(false)
+  })
 })

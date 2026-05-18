@@ -86,6 +86,7 @@ export interface LimitUpExtData {
 export interface StockExtData {
   speed?: number
   volumeRatio?: number
+  volumeRatioMeta?: VolumeRatioMeta
   leadTimes?: number
   leadStatus?: string
   lianbanStr?: string
@@ -195,6 +196,7 @@ export interface MergedStock {
   themes?: any[]
   speed?: number
   volumeRatio?: number
+  volumeRatioMeta?: VolumeRatioMeta
   leadTimes?: number
   leadStatus?: string
   lianbanStr?: string
@@ -245,6 +247,21 @@ export interface MergedStock {
   lastCalculated?: number
   rankTrend?: RankTrendAnalysisResult
   rankTrendCoverageWarning?: string
+}
+
+export type VolumeRatioSource = 'intraday_snapshot' | 'daily_snapshot' | 'unavailable'
+export type VolumeRatioStatus = 'fresh' | 'suspicious' | 'stale' | 'unavailable'
+
+export interface VolumeRatioMeta {
+  status: VolumeRatioStatus
+  source: VolumeRatioSource
+  calculatedAt: number
+  currentVolume: number
+  expectedVolume?: number
+  historyVolumes?: number[]
+  rawRatio?: number
+  capped?: boolean
+  reason?: string
 }
 
 export interface DataState {

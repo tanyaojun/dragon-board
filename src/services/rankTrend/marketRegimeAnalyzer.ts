@@ -1,5 +1,6 @@
 import type { MarketRegimeAnalysis } from './types'
 import { clamp } from './utils'
+import { getTrustedVolumeRatio } from '@/services/dataLoader/VolumeRatioTrust'
 
 function toNumber(value: unknown): number {
   const n = Number(value)
@@ -53,7 +54,7 @@ export function analyzeMarketRegime(input: {
   const hotStockCount = stocks.length
   const positiveMoneyCount = stocks.filter((stock) => toNumber(stock?.zlje) > 0).length
   const moneyShare = hotStockCount > 0 ? positiveMoneyCount / hotStockCount : 0
-  const highVolumeCount = stocks.filter((stock) => toNumber(stock?.volumeRatio) >= 1.2).length
+  const highVolumeCount = stocks.filter((stock) => getTrustedVolumeRatio(stock) >= 1.2).length
   const highVolumeShare = hotStockCount > 0 ? highVolumeCount / hotStockCount : 0
   const upDownSpread = upCount + downCount > 0 ? (upCount - downCount) / (upCount + downCount) : 0
 

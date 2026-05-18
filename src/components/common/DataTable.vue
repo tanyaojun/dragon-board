@@ -160,6 +160,10 @@
               >估</span>
             </template>
 
+            <template v-else-if="col.key === 'volumeRatio'">
+              <span :title="getVolumeRatioTitle(stock)">{{ formatCell(col.key, stock) }}</span>
+            </template>
+
             <template v-else>
               {{ formatCell(col.key, stock) }}
             </template>
@@ -893,7 +897,7 @@ const formatCell = (key: string, stock: any) => {
 
   // ✅ 量比格式化：保留两位小数
   if (key === 'volumeRatio') {
-    return value ? Number(value).toFixed(2) : '-'
+    return formatVolumeRatioCell(stock)
   }
 
   if (['zlje', 'cddje', 'turnover', 'cirMV', 'totalMV'].includes(key)) {
@@ -926,7 +930,11 @@ const getCellClass = (key: string, stock: any) => {
   // ✅ 量比颜色样式：大于1.2显示暖色，小于0.8显示冷色
   if (key === 'volumeRatio') {
     const ratio = stock.volumeRatio
-    if (ratio && ratio > 1.2) classes.push('volume-ratio-high')
+    const status = stock.volumeRatioMeta?.status
+    if (status === 'stale') classes.push('volume-ratio-stale')
+    else if (status === 'suspicious') classes.push('volume-ratio-suspicious')
+    else if (status === 'unavailable') classes.push('volume-ratio-unavailable')
+    else if (ratio && ratio > 1.2) classes.push('volume-ratio-high')
     else if (ratio && ratio < 0.8) classes.push('volume-ratio-low')
   }
 
@@ -949,6 +957,33 @@ const getCellClass = (key: string, stock: any) => {
   }
 
   return classes.join(' ')
+}
+
+const formatVolumeRatioCell = (stock: any) => {
+  const ratio = Number(stock.volumeRatio)
+  const status = stock.volumeRatioMeta?.status
+  if (status === 'unavailable') return '-'
+  if (!Number.isFinite(ratio) || ratio <= 0) return '-'
+  if (status === 'stale') return `${ratio.toFixed(2)}*`
+  if (status === 'suspicious') return `!${ratio.toFixed(2)}`
+  return ratio.toFixed(2)
+}
+
+const getVolumeRatioTitle = (stock: any) => {
+  const meta = stock.volumeRatioMeta
+  if (!meta) return ''
+  return [
+    `状态: ${meta.status}`,
+    `来源: ${meta.source}`,
+    Number.isFinite(Number(meta.currentVolume)) ? `当前成交量: ${meta.currentVolume}` : '',
+    Number.isFinite(Number(meta.expectedVolume))
+      ? `预期成交量: ${Number(meta.expectedVolume).toFixed(2)}`
+      : '',
+    Number.isFinite(Number(meta.rawRatio)) ? `原始量比: ${Number(meta.rawRatio).toFixed(2)}` : '',
+    meta.reason ? `原因: ${meta.reason}` : '',
+  ]
+    .filter(Boolean)
+    .join('\n')
 }
 
 const getGroupLabel = (group: string) => {
@@ -2188,6 +2223,21 @@ defineExpose({
 .volume-ratio-low {
   color: #4a90e2 !important;
   font-weight: 500;
+}
+
+.volume-ratio-stale {
+  color: var(--text-secondary) !important;
+  font-weight: 500;
+}
+
+.volume-ratio-suspicious {
+  color: #ff6b6b !important;
+  font-weight: 700;
+}
+
+.volume-ratio-unavailable {
+  color: var(--text-muted) !important;
+  font-weight: 400;
 }
 
 /* 八平台排名前三样式 */

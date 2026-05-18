@@ -16,6 +16,7 @@ let platformLoadCount = 0
 let quoteError: Error | null = null
 let volumeHistoryError: Error | null = null
 let platformLoadError: Error | null = null
+let quoteBatchResult = new Map<string, any>()
 let blockPlatformLoad = false
 let releasePlatformLoad: (() => void) | null = null
 let blockSignalCalculation = false
@@ -28,6 +29,11 @@ let releaseQuoteBatch: (() => void) | null = null
 let startupBundle: any = null
 let startupBundleGetCount = 0
 let startupBundleSaveCount = 0
+let realtimeOptions: any = null
+let volumeHistoryMapResult = new Map<string, number[]>()
+let intradayVolumeHistoryMapResult = new Map<string, number[]>()
+let volumeHistoryRequestCount = 0
+let intradayVolumeHistoryRequestCount = 0
 
 const timeState = vi.hoisted(() => ({
   tradingTime: true,
@@ -88,7 +94,7 @@ vi.mock('../QuoteService', () => ({
           releaseQuoteBatch = resolve
         })
       }
-      return new Map()
+      return quoteBatchResult
     }),
     getQuotes: vi.fn(async () => new Map()),
     fetchMergedQuotes: vi.fn(async () => new Map()),
@@ -109,6 +115,9 @@ vi.mock('../../theme/ThemeFacade', () => ({
 
 vi.mock('../RealtimeQuoteCoordinator', () => ({
   RealtimeQuoteCoordinator: class {
+    constructor(options: any) {
+      realtimeOptions = options
+    }
     syncRealtimeSubscription() {}
     isRealtimePrimaryHealthy() {
       return false
@@ -119,12 +128,14 @@ vi.mock('../RealtimeQuoteCoordinator', () => ({
 vi.mock('../VolumeHistoryService', () => ({
   VolumeHistoryService: class {
     async buildVolumeHistoryMap() {
+      volumeHistoryRequestCount++
       if (volumeHistoryError) throw volumeHistoryError
-      return new Map()
+      return volumeHistoryMapResult
     }
     async buildIntradayVolumeHistoryMap() {
+      intradayVolumeHistoryRequestCount++
       if (volumeHistoryError) throw volumeHistoryError
-      return new Map()
+      return intradayVolumeHistoryMapResult
     }
   },
 }))
@@ -178,6 +189,7 @@ describe('DataLoaderFacade', () => {
     quoteError = null
     volumeHistoryError = null
     platformLoadError = null
+    quoteBatchResult = new Map()
     blockPlatformLoad = false
     releasePlatformLoad = null
     blockSignalCalculation = false
@@ -190,6 +202,10 @@ describe('DataLoaderFacade', () => {
     startupBundle = null
     startupBundleGetCount = 0
     startupBundleSaveCount = 0
+    volumeHistoryMapResult = new Map()
+    intradayVolumeHistoryMapResult = new Map()
+    volumeHistoryRequestCount = 0
+    intradayVolumeHistoryRequestCount = 0
     EventManager.clearHistory()
     vi.clearAllMocks()
   })
@@ -816,5 +832,87 @@ describe('DataLoaderFacade', () => {
 
     await expect(dataLoader.loadAllPlatforms(true)).resolves.toEqual({})
     expect(dataLayer.getStocks()).toEqual([])
+  })
+
+  it('refreshes volume ratios for realtime quote changed codes', async () => {
+    vi.useFakeTimers()
+    try {
+      const { dataLoader } = await import('../../dataLoader')
+      dataLayer.setMergedStocks([
+        {
+          code: '000001',
+          name: '平安银行',
+          volume: 100,
+          volumeRatio: 1,
+        } as any,
+      ])
+
+      realtimeOptions.onQuoteFlushed(['000001'])
+      await vi.advanceTimersByTimeAsync(1000)
+
+      expect(dataLayer.getStock('000001')).toMatchObject({
+        volumeRatioMeta: expect.objectContaining({
+          status: 'unavailable',
+          reason: 'insufficient_history',
+        }),
+      })
+      expect(dataLoader.getMerged()).toEqual([expect.objectContaining({ code: '000001' })])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('coalesces realtime volume ratio refreshes instead of reading history on every flush', async () => {
+    vi.useFakeTimers()
+    try {
+      const { dataLoader } = await import('../../dataLoader')
+      dataLayer.setMergedStocks([
+        { code: '000001', name: '平安银行', volume: 100, volumeRatio: 1 } as any,
+        { code: '000002', name: '万科A', volume: 200, volumeRatio: 1 } as any,
+      ])
+
+      void realtimeOptions.onQuoteFlushed(['000001'])
+      void realtimeOptions.onQuoteFlushed(['000001', '000002'])
+      await Promise.resolve()
+
+      expect(volumeHistoryRequestCount).toBe(0)
+      expect(intradayVolumeHistoryRequestCount).toBe(0)
+
+      await vi.advanceTimersByTimeAsync(1000)
+
+      expect(volumeHistoryRequestCount).toBe(1)
+      expect(intradayVolumeHistoryRequestCount).toBe(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('writes structured volume ratio metadata during startup merge', async () => {
+    quoteBatchResult = new Map([
+      [
+        '000001',
+        {
+          price: 10,
+          change: 1,
+          volume: 200,
+          turnover: 2000,
+          turnoverRate: 2,
+        },
+      ],
+    ])
+    volumeHistoryMapResult = new Map([['000001', [100, 100, 100]]])
+    const { dataLoader } = await import('../../dataLoader')
+
+    await dataLoader.loadAllPlatforms(true)
+
+    expect(dataLayer.getStock('000001')).toMatchObject({
+      volume: 200,
+      volumeRatio: 2,
+      volumeRatioMeta: expect.objectContaining({
+        status: 'fresh',
+        source: 'daily_snapshot',
+        currentVolume: 200,
+      }),
+    })
   })
 })

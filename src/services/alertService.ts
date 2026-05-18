@@ -18,6 +18,7 @@ import { v4 as uuidv4 } from 'uuid'
 import { themeFacade } from './theme/ThemeFacade'
 import { refreshScheduler } from './refresh/RefreshTaskRuntime'
 import type { ThemeEvent } from './theme/types'
+import { getTrustedVolumeRatio } from './dataLoader/VolumeRatioTrust'
 
 // ========== 股票工具类（增强版） ==========
 class StockTools {
@@ -388,7 +389,7 @@ class AlertService {
             stock.speed > rocketThreshold &&
             stock.speed < STOCK_ALERT_CONFIG.ROCKET_LAUNCH.MAX_CHANGE &&
             (!STOCK_ALERT_CONFIG.ROCKET_LAUNCH.REQUIRE_VOLUME ||
-              stock.volumeRatio >= STOCK_ALERT_CONFIG.ROCKET_LAUNCH.MIN_VOLUME_RATIO)
+              getTrustedVolumeRatio(stock) >= STOCK_ALERT_CONFIG.ROCKET_LAUNCH.MIN_VOLUME_RATIO)
           ) {
             await this.createAlert({
               type: 'rocket_launch',
@@ -405,7 +406,7 @@ class AlertService {
             stock.speed < -diveThreshold &&
             stock.speed > STOCK_ALERT_CONFIG.WATERFALL_DIVE.MIN_CHANGE &&
             (!STOCK_ALERT_CONFIG.WATERFALL_DIVE.REQUIRE_VOLUME ||
-              stock.volumeRatio >= STOCK_ALERT_CONFIG.WATERFALL_DIVE.MIN_VOLUME_RATIO)
+              getTrustedVolumeRatio(stock) >= STOCK_ALERT_CONFIG.WATERFALL_DIVE.MIN_VOLUME_RATIO)
           ) {
             await this.createAlert({
               type: 'waterfall_dive',

@@ -268,4 +268,37 @@ describe('CandidateAnalysisService', () => {
       expect.arrayContaining([expect.objectContaining({ dimension: 'moneyFlow', status: 'unknown' })]),
     )
   })
+
+  it('does not use suspicious capped volume ratio as candidate money-flow evidence', () => {
+    const result = analyzeCandidateStock(
+      baseContext({
+        stock: {
+          code: '600000',
+          name: '异常量比',
+          zlje: null,
+          zljzb: '',
+          cddje: ' ',
+          volumeRatio: 99.99,
+          volumeRatioMeta: {
+            status: 'suspicious',
+            source: 'intraday_snapshot',
+            calculatedAt: Date.now(),
+            currentVolume: 100000,
+            capped: true,
+            reason: 'ratio_capped',
+          },
+          themes: [{ id: 'chip', name: '先进封装' }],
+        },
+      }),
+    )
+
+    expect(result.evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ dimension: 'moneyFlow', kind: 'missing' }),
+      ]),
+    )
+    expect(result.structuredThesis.triggerConditions).toEqual(
+      expect.arrayContaining([expect.objectContaining({ dimension: 'moneyFlow', status: 'unknown' })]),
+    )
+  })
 })

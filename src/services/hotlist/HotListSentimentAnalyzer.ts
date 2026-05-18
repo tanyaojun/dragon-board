@@ -11,6 +11,7 @@ import {
 } from '../../types/emotion'
 import type { ThsLimitUpPoolEvidence } from '../../types'
 import { StockUtils } from '../../utils/common'
+import { getTrustedVolumeRatio } from '../dataLoader/VolumeRatioTrust'
 
 export type HotListStatusLabel =
   | '主升确认'
@@ -315,7 +316,7 @@ function getFallbackHistoricalStatus(stock: any): RankTrendDisplayStatus {
   const zljzb = toNumber(stock?.zljzb)
   const cddje = toNumber(stock?.cddje)
   const cddjzb = toNumber(stock?.cddjzb)
-  const volumeRatio = toNumber(stock?.volumeRatio)
+  const volumeRatio = getTrustedVolumeRatio(stock)
   const turnoverRate = toNumber(stock?.turnoverRate)
 
   const strongMoney = zlje > 0 && zljzb >= 8 && (cddje > 0 || cddjzb >= 3)
