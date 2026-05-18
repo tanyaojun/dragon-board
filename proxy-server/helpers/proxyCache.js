@@ -103,7 +103,7 @@ export class ProxyRedisCache {
   }
 
   async set(key, value, { ttlSeconds, staleTtlSeconds, stale = false } = {}) {
-    if (!this.redisClient) return
+    if (!this.redisClient) return false
     const ttl = Math.max(1, Number(ttlSeconds) || 1)
     const staleTtl = Math.max(ttl, Number(staleTtlSeconds) || ttl * 3)
     const now = this.now()
@@ -115,8 +115,9 @@ export class ProxyRedisCache {
     })
     try {
       await this.redisClient.setEx(this.fullKey(key), staleTtl, payload)
+      return true
     } catch {
-      return
+      return false
     }
   }
 

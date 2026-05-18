@@ -260,6 +260,7 @@ class DataLoaderService {
       includeLimitUpData?: boolean
       allowWhileLoading?: boolean
       deferSignalEnrichment?: boolean
+      preserveExistingOnEmpty?: boolean
     } = {},
   ): Promise<DataLoaderRunSummary> {
     const locked = await refreshResourceLocks.runExclusive(
@@ -301,8 +302,12 @@ class DataLoaderService {
     void this.loadPlatformAndMerge(force, {
       allowWhileLoading: true,
       deferSignalEnrichment: true,
+      preserveExistingOnEmpty: true,
     })
-      .then((summary) => this.writeStartupBundle(summary))
+      .then((summary) => {
+        if (summary.degraded) return
+        return this.writeStartupBundle(summary)
+      })
       .catch((error) => {
         console.warn('[DataLoader] 后台刷新启动快照包失败:', error)
       })
@@ -314,6 +319,7 @@ class DataLoaderService {
       includeLimitUpData?: boolean
       allowWhileLoading?: boolean
       deferSignalEnrichment?: boolean
+      preserveExistingOnEmpty?: boolean
     } = {},
   ): Promise<DataLoaderRunSummary> {
     const startTime = Date.now()
@@ -350,6 +356,16 @@ class DataLoaderService {
       if (!hasCachedRows && !dataLayer.getStocks().length) {
         platformHotlistService.clearCache()
         return this.doLoadPlatformAndMerge(true, options)
+      }
+    }
+
+    const hasRows = this.hasPlatformRows(result.data)
+    if (!hasRows && options.preserveExistingOnEmpty && dataLayer.getStocks().length > 0) {
+      console.warn('[DataLoader] 后台平台刷新无有效数据，保留启动缓存数据')
+      return {
+        ...this.summarizeRun(startTime, fromCache),
+        degraded: true,
+        degradeReason: 'empty-platform-refresh',
       }
     }
 
@@ -664,6 +680,10 @@ class DataLoaderService {
 
   private getAllHotCodes(): Set<string> {
     return platformHotlistService.getAllHotCodes(this.state.value.data || {})
+  }
+
+  private hasPlatformRows(data: Record<string, any[]> | null | undefined): boolean {
+    return Object.values(data || {}).some((rows) => Array.isArray(rows) && rows.length > 0)
   }
 
   getMerged() {

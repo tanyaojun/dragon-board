@@ -49,6 +49,8 @@ export interface DataLoaderRunSummary {
   fromCache: boolean
   elapsedMs: number
   timings?: Record<string, number>
+  degraded?: boolean
+  degradeReason?: string
   startupCache?: {
     hit: boolean
     stale?: boolean

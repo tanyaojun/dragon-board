@@ -32,8 +32,10 @@ function isValidBundle(bundle: unknown, now = Date.now()): bundle is StartupBund
   const candidate = bundle as StartupBundle
   if (!candidate || typeof candidate !== 'object') return false
   if (Number(candidate.schemaVersion) !== STARTUP_BUNDLE_SCHEMA_VERSION) return false
+  if (candidate.tradingDate !== getLocalTradingDate(new Date(now))) return false
   if (!Array.isArray(candidate.stocks) || !candidate.stocks.length) return false
   if (!candidate.platformData || typeof candidate.platformData !== 'object') return false
+  if (Array.isArray(candidate.platformData)) return false
   const ageMs = now - Number(candidate.createdAt || 0)
   return Number.isFinite(ageMs) && ageMs >= 0 && ageMs <= MAX_BUNDLE_AGE_MS
 }

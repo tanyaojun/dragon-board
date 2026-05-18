@@ -26,6 +26,15 @@ test('openapi json documents the proxy server routes', async () => {
     assert.ok(body.paths['/api/quotes/eastmoney'].get)
     assert.ok(body.paths['/api/cache/startup-bundle'].get)
     assert.ok(body.paths['/api/cache/startup-bundle'].post)
+    assert.equal(
+      body.paths['/api/cache/startup-bundle'].post.requestBody.content['application/json'].schema.properties.key
+        .pattern,
+      '^[0-9A-Za-z:_-]{1,120}$',
+    )
+    assert.deepEqual(
+      body.paths['/api/cache/startup-bundle'].post.requestBody.content['application/json'].schema.required,
+      ['key', 'bundle'],
+    )
     assert.ok(body.paths['/api/market/overview'].get)
     assert.ok(body.paths['/api/tdx/{entry}'].post)
   } finally {

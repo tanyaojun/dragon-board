@@ -284,6 +284,31 @@ describe('DataLoaderFacade', () => {
     expect(startupBundleSaveCount).toBeGreaterThanOrEqual(1)
   })
 
+  it('keeps hydrated startup data when background platform refresh returns no rows', async () => {
+    platformRowsByLoad = [{ eastmoney: [] }]
+    startupBundle = {
+      schemaVersion: 1,
+      tradingDate: '2026-05-18',
+      createdAt: Date.now(),
+      platformData: {
+        eastmoney: [{ code: '000001', name: '缓存数据', rank: 1, source: 'eastmoney' }],
+      },
+      stocks: [{ code: '000001', name: '缓存数据', rank: 1, source: 'eastmoney' }],
+    }
+    const { dataLoader } = await import('../../dataLoader')
+
+    const summary = await dataLoader.bootstrapInitialData({ force: false })
+
+    expect(summary.fromCache).toBe(true)
+    expect(dataLayer.getStocks()).toEqual([expect.objectContaining({ code: '000001' })])
+    await vi.waitFor(() => {
+      expect(platformLoadCount).toBe(1)
+    })
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(dataLayer.getStocks()).toEqual([expect.objectContaining({ code: '000001' })])
+    expect(startupBundleSaveCount).toBe(0)
+  })
+
   it('reports platform item progress during startup loading', async () => {
     blockPlatformLoad = true
     const { dataLoader } = await import('../../dataLoader')

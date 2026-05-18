@@ -142,6 +142,31 @@ function withEastmoneyQuoteMeta(data, meta) {
   }
 }
 
+function orderQuoteResponseByCodes(data, codeList) {
+  const rows = Array.isArray(data?.data?.diff) ? data.data.diff : []
+  if (!rows.length) return data
+  const rowsByCode = new Map(rows.map((row) => [cleanCode(row?.f12), row]))
+  const orderedRows = []
+  const usedCodes = new Set()
+  for (const code of codeList.map(cleanCode)) {
+    const row = rowsByCode.get(code)
+    if (!row) continue
+    orderedRows.push(row)
+    usedCodes.add(code)
+  }
+  for (const row of rows) {
+    const code = cleanCode(row?.f12)
+    if (!usedCodes.has(code)) orderedRows.push(row)
+  }
+  return {
+    ...data,
+    data: {
+      ...(data.data || {}),
+      diff: orderedRows,
+    },
+  }
+}
+
 function buildEastmoneyUlistUrl(codeList) {
   const marketCodes = codeList.map((code) => `${getMarketPrefix(code)}.${cleanCode(code)}`).join(',')
   return (
@@ -370,19 +395,19 @@ function parseSinaQuotePayload(rawData) {
   return { rc: 0, data: { diff: results } }
 }
 
-function sendCachedQuoteResponse(res, data, cacheMeta) {
+function sendCachedQuoteResponse(res, data, cacheMeta, codeList = []) {
   res.json(
-    attachCacheMeta(data, {
+    attachCacheMeta(orderQuoteResponseByCodes(data, codeList), {
       store: 'redis',
       ...cacheMeta,
     }),
   )
 }
 
-async function sendEastmoneyQuoteResponse(res, cache, cacheKey, data, cacheMeta) {
+async function sendEastmoneyQuoteResponse(res, cache, cacheKey, data, cacheMeta, codeList = []) {
   void cache
   void cacheKey
-  sendCachedQuoteResponse(res, data, cacheMeta)
+  sendCachedQuoteResponse(res, data, cacheMeta, codeList)
 }
 
 async function loadEastmoneyQuotePayload(
@@ -515,10 +540,17 @@ export function registerQuoteRoutes(app, { plainClient, readConfig, cache }) {
             eastmoneyProxyConfig,
           ),
       )
-      await sendEastmoneyQuoteResponse(res, cache, cacheKey, result.value, {
-        ...result.cache,
-        ttlSeconds,
-      })
+      await sendEastmoneyQuoteResponse(
+        res,
+        cache,
+        cacheKey,
+        result.value,
+        {
+          ...result.cache,
+          ttlSeconds,
+        },
+        codeList,
+      )
     } catch (error) {
       console.warn('[东财行情] ulist 失败，尝试 clist 资金流 fallback:', error.message)
       try {
@@ -534,12 +566,19 @@ export function registerQuoteRoutes(app, { plainClient, readConfig, cache }) {
           ttlSeconds,
           staleTtlSeconds: ttlSeconds * 6,
         })
-        await sendEastmoneyQuoteResponse(res, cache, cacheKey, payload, {
-          hit: false,
-          stale: false,
-          upstreamCalled: true,
-          ttlSeconds,
-        })
+        await sendEastmoneyQuoteResponse(
+          res,
+          cache,
+          cacheKey,
+          payload,
+          {
+            hit: false,
+            stale: false,
+            upstreamCalled: true,
+            ttlSeconds,
+          },
+          codeList,
+        )
       } catch (fallbackError) {
         sendDegraded(res, { source: 'quotes-eastmoney', error: fallbackError, fallbackData: EMPTY_QUOTES })
       }
@@ -575,10 +614,15 @@ export function registerQuoteRoutes(app, { plainClient, readConfig, cache }) {
           return parseTencentQuotePayload(response.data)
         },
       )
-      sendCachedQuoteResponse(res, result.value, {
-        ...result.cache,
-        ttlSeconds,
-      })
+      sendCachedQuoteResponse(
+        res,
+        result.value,
+        {
+          ...result.cache,
+          ttlSeconds,
+        },
+        codeList,
+      )
     } catch (error) {
       console.error('[腾讯行情] 失败:', error.message)
       sendDegraded(res, { source: 'quotes-tencent', error, fallbackData: EMPTY_QUOTES })
@@ -615,10 +659,15 @@ export function registerQuoteRoutes(app, { plainClient, readConfig, cache }) {
           return parseSinaQuotePayload(response.data)
         },
       )
-      sendCachedQuoteResponse(res, result.value, {
-        ...result.cache,
-        ttlSeconds,
-      })
+      sendCachedQuoteResponse(
+        res,
+        result.value,
+        {
+          ...result.cache,
+          ttlSeconds,
+        },
+        codeList,
+      )
     } catch (error) {
       console.error('[新浪行情] 失败:', error.message)
       sendDegraded(res, { source: 'quotes-sina', error, fallbackData: EMPTY_QUOTES })

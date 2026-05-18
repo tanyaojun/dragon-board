@@ -61,6 +61,49 @@ const passthroughBody = {
   },
 }
 
+const startupBundleBody = {
+  required: true,
+  content: {
+    'application/json': {
+      schema: {
+        type: 'object',
+        required: ['key', 'bundle'],
+        additionalProperties: false,
+        properties: {
+          key: {
+            type: 'string',
+            pattern: '^[0-9A-Za-z:_-]{1,120}$',
+            example: 'default:2026-05-18',
+          },
+          bundle: {
+            type: 'object',
+            required: ['schemaVersion', 'tradingDate', 'createdAt', 'platformData', 'stocks'],
+            additionalProperties: true,
+            properties: {
+              schemaVersion: { type: 'integer', const: 1 },
+              tradingDate: {
+                type: 'string',
+                pattern: '^\\d{4}-\\d{2}-\\d{2}$',
+                example: '2026-05-18',
+              },
+              createdAt: { type: 'number', minimum: 1 },
+              platformData: {
+                type: 'object',
+                additionalProperties: { type: 'array' },
+              },
+              stocks: {
+                type: 'array',
+                minItems: 1,
+                items: { type: 'object', additionalProperties: true },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+}
+
 export function buildOpenApiDocument({ port = 3000 } = {}) {
   return {
     openapi: '3.1.0',
@@ -182,10 +225,11 @@ export function buildOpenApiDocument({ port = 3000 } = {}) {
           tags: ['cache'],
           summary: '写入启动快照包',
           description: '将热榜合并结果写入 Redis，供下次启动快速恢复。',
-          requestBody: passthroughBody,
+          requestBody: startupBundleBody,
           responses: {
             200: jsonResponse,
             400: errorResponse,
+            503: errorResponse,
             502: errorResponse,
           },
         },

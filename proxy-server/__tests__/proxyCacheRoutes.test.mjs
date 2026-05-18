@@ -33,6 +33,7 @@ class MemoryCache {
         ttlSeconds: options.ttlSeconds,
       },
     })
+    return true
   }
 
   async remember(key, options, loader) {
@@ -141,8 +142,8 @@ test('eastmoney quote cache key ignores code order', async () => {
     assert.equal(firstBody.dragonMeta.cache.hit, false)
     assert.equal(secondBody.dragonMeta.cache.hit, true)
     assert.deepEqual(
-      secondBody.data.diff.map((row) => row.f12).sort(),
-      ['000001', '000002'],
+      secondBody.data.diff.map((row) => row.f12),
+      ['000002', '000001'],
     )
   } finally {
     server.close()
@@ -185,8 +186,8 @@ test('tencent quote cache key ignores code order', async () => {
     assert.equal(firstBody.dragonMeta.cache.hit, false)
     assert.equal(secondBody.dragonMeta.cache.hit, true)
     assert.deepEqual(
-      secondBody.data.diff.map((row) => row.f12).sort(),
-      ['000001', '000002'],
+      secondBody.data.diff.map((row) => row.f12),
+      ['000002', '000001'],
     )
   } finally {
     server.close()
@@ -329,7 +330,7 @@ test('startup bundle is stored in and read from cache', async () => {
   const bundle = {
     schemaVersion: 1,
     tradingDate: '2026-05-18',
-    createdAt: 1779091200000,
+    createdAt: Date.now(),
     platformData: {
       eastmoney: [{ code: '000001', name: '平安银行', rank: 1 }],
     },
@@ -355,6 +356,201 @@ test('startup bundle is stored in and read from cache', async () => {
     assert.equal(readBody.ok, true)
     assert.equal(readBody.dragonMeta.cache.hit, true)
     assert.deepEqual(readBody.data.stocks, bundle.stocks)
+  } finally {
+    server.close()
+  }
+})
+
+test('startup bundle rejects unsafe cache keys without silently normalizing them', async () => {
+  const cache = new MemoryCache()
+  const app = createProxyApp({
+    logRequests: false,
+    cache,
+    clients: {
+      client: {},
+      plainClient: {},
+    },
+  })
+  const bundle = {
+    schemaVersion: 1,
+    tradingDate: '2026-05-18',
+    createdAt: Date.now(),
+    platformData: {
+      eastmoney: [{ code: '000001', name: '平安银行', rank: 1 }],
+    },
+    stocks: [{ code: '000001', name: '平安银行', rank: 1 }],
+  }
+
+  const { server, baseUrl } = await listen(app)
+  try {
+    const response = await fetch(`${baseUrl}/api/cache/startup-bundle`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: 'default/2026-05-18', bundle }),
+    })
+    const body = await response.json()
+
+    assert.equal(response.status, 400)
+    assert.equal(body.errorCode, 'invalid_cache_key')
+    assert.equal(cache.store.size, 0)
+  } finally {
+    server.close()
+  }
+})
+
+test('startup bundle rejects payloads whose trading date does not match the cache key', async () => {
+  const cache = new MemoryCache()
+  const app = createProxyApp({
+    logRequests: false,
+    cache,
+    clients: {
+      client: {},
+      plainClient: {},
+    },
+  })
+  const bundle = {
+    schemaVersion: 1,
+    tradingDate: '2026-05-17',
+    createdAt: Date.now(),
+    platformData: {
+      eastmoney: [{ code: '000001', name: '平安银行', rank: 1 }],
+    },
+    stocks: [{ code: '000001', name: '平安银行', rank: 1 }],
+  }
+
+  const { server, baseUrl } = await listen(app)
+  try {
+    const response = await fetch(`${baseUrl}/api/cache/startup-bundle`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: 'default:2026-05-18', bundle }),
+    })
+    const body = await response.json()
+
+    assert.equal(response.status, 400)
+    assert.equal(body.errorCode, 'invalid_startup_bundle')
+    assert.equal(cache.store.size, 0)
+  } finally {
+    server.close()
+  }
+})
+
+test('startup bundle read treats invalid cached payloads as a miss', async () => {
+  const cache = new MemoryCache()
+  await cache.set(
+    'startup:bundle:v1:default:2026-05-18',
+    {
+      schemaVersion: 1,
+      tradingDate: '2026-05-17',
+      createdAt: Date.now(),
+      platformData: {
+        eastmoney: [{ code: '000001', name: '平安银行', rank: 1 }],
+      },
+      stocks: [{ code: '000001', name: '平安银行', rank: 1 }],
+    },
+    { ttlSeconds: 300 },
+  )
+  const app = createProxyApp({
+    logRequests: false,
+    cache,
+    clients: {
+      client: {},
+      plainClient: {},
+    },
+  })
+
+  const { server, baseUrl } = await listen(app)
+  try {
+    const response = await fetch(
+      `${baseUrl}/api/cache/startup-bundle?key=default%3A2026-05-18`,
+    )
+    const body = await response.json()
+
+    assert.equal(response.status, 200)
+    assert.equal(body.ok, true)
+    assert.equal(body.data, null)
+    assert.equal(body.dragonMeta.cache.hit, false)
+  } finally {
+    server.close()
+  }
+})
+
+test('startup bundle write reports degraded when cache storage is unavailable', async () => {
+  const app = createProxyApp({
+    logRequests: false,
+    cache: {
+      enabled: () => false,
+      get: async () => null,
+      set: async () => false,
+      remember: async () => {
+        throw new Error('not used')
+      },
+    },
+    clients: {
+      client: {},
+      plainClient: {},
+    },
+  })
+  const bundle = {
+    schemaVersion: 1,
+    tradingDate: '2026-05-18',
+    createdAt: Date.now(),
+    platformData: {
+      eastmoney: [{ code: '000001', name: '平安银行', rank: 1 }],
+    },
+    stocks: [{ code: '000001', name: '平安银行', rank: 1 }],
+  }
+
+  const { server, baseUrl } = await listen(app)
+  try {
+    const response = await fetch(`${baseUrl}/api/cache/startup-bundle`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: 'default:2026-05-18', bundle }),
+    })
+    const body = await response.json()
+
+    assert.equal(response.status, 503)
+    assert.equal(body.ok, false)
+    assert.equal(body.degraded, true)
+    assert.equal(body.source, 'startup-cache')
+  } finally {
+    server.close()
+  }
+})
+
+test('startup bundle rejects stale payloads before writing cache', async () => {
+  const cache = new MemoryCache()
+  const app = createProxyApp({
+    logRequests: false,
+    cache,
+    clients: {
+      client: {},
+      plainClient: {},
+    },
+  })
+  const bundle = {
+    schemaVersion: 1,
+    tradingDate: '2026-05-18',
+    createdAt: Date.now() - 31 * 60 * 1000,
+    platformData: {
+      eastmoney: [{ code: '000001', name: '平安银行', rank: 1 }],
+    },
+    stocks: [{ code: '000001', name: '平安银行', rank: 1 }],
+  }
+
+  const { server, baseUrl } = await listen(app)
+  try {
+    const response = await fetch(`${baseUrl}/api/cache/startup-bundle`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: 'default:2026-05-18', bundle }),
+    })
+    const body = await response.json()
+
+    assert.equal(response.status, 400)
+    assert.equal(body.errorCode, 'invalid_startup_bundle')
+    assert.equal(cache.store.size, 0)
   } finally {
     server.close()
   }
