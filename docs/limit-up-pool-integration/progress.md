@@ -63,3 +63,15 @@
 ## 下一步
 
 - 观察实盘期间 THS 细分池字段漂移和限流情况；如后续要正式入 QuantBoard 数据库，再按数据库迁移规则补 schema/API 文档。
+
+## 2026-05-18 盘中落库修复
+
+- 根据盘中 MongoDB 审计，确认 `snapshot_frames.limitSummary.thsPools` 今日没有对象落库，代理接口本身实时返回正常。
+- 修复 `DataLayer.updateBreathData()` 白名单漏字段问题：保留 `marketData.thsLimitUpPools`，使后续快照构建能写入 `limitSummary.thsPools`。
+- 修复个股涨停字段落库断档窗口：`updateLimitUpData()` 写入 tck2 扩展后，同步把涨停复盘字段投影到当前 `merged.stocks`，避免快照保存发生在下一次平台 merge 前时丢失 `firstZtTime/lastZtTime/boardHeight/highDays/reason/isNew`。
+- 同步投影只覆盖涨停复盘字段，不用 THS 池中的 `speed/turnover/poolType` 覆盖当前行情字段。
+- 影响范围：仅影响修复后新生成的快照；已落库的旧快照不会因 MongoDB ingest 幂等策略自动覆盖。
+- 验证：
+  - `pnpm test -- src/services/__tests__/DataLayer.test.ts`
+  - `pnpm test -- src/services/__tests__/DataLayer.test.ts src/services/dataLoader/__tests__/LimitUpFeed.test.ts src/services/dataLoader/__tests__/ExtraDataProjector.test.ts src/services/snapshot/__tests__/builders.test.ts src/services/__tests__/DragonBreathAnalyzer.thsLimitUpPools.test.ts`
+  - `pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false`

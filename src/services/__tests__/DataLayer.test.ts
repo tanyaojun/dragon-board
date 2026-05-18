@@ -1,6 +1,148 @@
 import { describe, expect, test, vi } from 'vitest'
 import { dataLayer } from '../DataLayer'
 
+describe('DataLayer breath market data', () => {
+  test('keeps THS limit-up pool evidence for snapshot builders', () => {
+    dataLayer.reset()
+
+    try {
+      dataLayer.updateBreathData({
+        timestamp: 1779084000000,
+        sentiment: {
+          overall: 60,
+          phase: 'start',
+          phaseName: '启动期',
+          riskLevel: 'medium',
+          suggestion: 'observe',
+          phaseInfo: { name: '启动期' },
+        },
+        marketData: {
+          upCount: 3000,
+          downCount: 1800,
+          ztCount: 74,
+          dtCount: 18,
+          zhaban: { count: 37, rate: 33.6, fengbanRate: 66.4 },
+          thsLimitUpPools: {
+            source: 'limitup-ths-pools',
+            timestamp: 1779084000000,
+            degraded: false,
+            poolCounts: {
+              one: 65,
+              two: 5,
+              three: 1,
+              four: 2,
+              high: 1,
+              failed: 37,
+              rushing: 20,
+              drawdown: 6,
+            },
+            failedCount: 37,
+            drawdownCount: 6,
+            drawdownRiskLabel: '涨停股回撤榜',
+            avgDrawdown: -13.2,
+            maxDrawdown: -18.19,
+            errors: [],
+          },
+        },
+      })
+
+      expect(dataLayer.getBreathMarketData()?.thsLimitUpPools).toMatchObject({
+        failedCount: 37,
+        drawdownCount: 6,
+        poolCounts: {
+          one: 65,
+          failed: 37,
+          drawdown: 6,
+        },
+        degraded: false,
+      })
+    } finally {
+      dataLayer.reset()
+    }
+  })
+})
+
+describe('DataLayer limit-up runtime projection', () => {
+  test('applies limit-up updates to already merged stocks before the next platform merge', () => {
+    vi.useFakeTimers()
+    dataLayer.reset()
+
+    try {
+      dataLayer.setMergedStocks([{ code: '000001', name: '样本股' }])
+      dataLayer.updateLimitUpData([
+        {
+          code: '000001',
+          reason: '存储芯片+先进封装',
+          firstZtTime: '09:37:00',
+          lastZtTime: '09:37:00',
+          boardHeight: 2,
+          highDays: 2,
+        },
+      ])
+
+      expect(dataLayer.getStock('000001')).toMatchObject({
+        reason: '存储芯片+先进封装',
+        firstZtTime: '09:37:00',
+        lastZtTime: '09:37:00',
+        boardHeight: 2,
+        highDays: 2,
+      })
+    } finally {
+      vi.runOnlyPendingTimers()
+      dataLayer.reset()
+      vi.useRealTimers()
+    }
+  })
+
+  test('projects isNew to already merged stocks before the next platform merge', () => {
+    vi.useFakeTimers()
+    dataLayer.reset()
+
+    try {
+      dataLayer.setMergedStocks([{ code: '000001', name: '样本股', isNew: false }])
+      dataLayer.updateLimitUpData([{ code: '000001', isNew: true }])
+
+      expect(dataLayer.getStock('000001')?.isNew).toBe(true)
+      expect(dataLayer.getStockIsNew('000001')).toBe(true)
+      expect(dataLayer.getLimitUpData('000001')?.isNew).toBe(true)
+    } finally {
+      vi.runOnlyPendingTimers()
+      dataLayer.reset()
+      vi.useRealTimers()
+    }
+  })
+
+  test('does not overwrite quote fields with THS pool-only metrics during instant projection', () => {
+    vi.useFakeTimers()
+    dataLayer.reset()
+
+    try {
+      dataLayer.setMergedStocks([
+        { code: '000001', name: '样本股', speed: 0.8, turnover: 1000000 } as any,
+      ])
+      dataLayer.updateLimitUpData([
+        {
+          code: '000001',
+          reason: '存储芯片',
+          speed: 5.6,
+          turnover: 9999999,
+          poolType: 'failed',
+        } as any,
+      ])
+
+      expect(dataLayer.getStock('000001')).toMatchObject({
+        reason: '存储芯片',
+        speed: 0.8,
+        turnover: 1000000,
+      })
+    } finally {
+      vi.runOnlyPendingTimers()
+      dataLayer.reset()
+      vi.useRealTimers()
+    }
+  })
+})
+
 describe('DataLayer throttled notifications', () => {
   test('flushes each pending path and keeps only the latest payload per path', () => {
     vi.useFakeTimers()

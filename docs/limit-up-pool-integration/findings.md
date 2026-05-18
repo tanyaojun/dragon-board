@@ -176,3 +176,49 @@
 - 同花顺 `volume_money` 在 `get_limit_up_stocks` 中是否始终代表封单额，需用真实响应样本确认。
 - `limit_up_time` 与现有 `first_limit_up_time` 语义是否完全一致，建议保留为 `limitUpTime` 并同步写 `firstZtTime`。
 - `get_drawdown_stocks` 的“大面”应标注为“涨停股回撤”，不能替代全市场亏钱效应。
+
+## 2026-05-18 盘中 MongoDB 落库审计
+
+审计时间：2026-05-18 14:23-14:30。
+
+环境：
+
+- `QUANT_BOARD_STORAGE_BACKEND=mongodb`
+- `QUANT_BOARD_MONGODB_URI=mongodb://127.0.0.1:27017`
+- `QUANT_BOARD_MONGODB_DATABASE=dragon_board_quant`
+- 数据集：`dragonboard_live`
+- 交易日：`2026-05-18`
+
+MongoDB 当前数据：
+
+- `snapshot_frames` 今日 24 条。
+- `snapshot_stock_rows` 今日 5136 条。
+- 最新快照到 `14:00`，包含 `half_hour/hourly/quarter_hour`。
+
+THS 代理实时响应：
+
+- `GET /api/limitup/ths/pools?date=20260518` 返回 `ok=true`、`degraded=false`、`errors=[]`。
+- 分池计数：首板 65、二板 5、三板 1、四板 2、高标 1、炸板 37、冲板 20、涨停股回撤 6。
+- 结论：盘中 THS 上游和本地代理当前有真实数据，不是上游无数据。
+
+MongoDB 落库结果：
+
+- 今日没有任何 `limitSummary.thsPools` 对象落库。
+- `limitSummary.thsPools` 为 `null` 的快照 24 条，其中最新 `13:45`、`14:00` 已有 `limitSummary.thsPools: null`。
+- `limitSummary.thsPools` 字段缺失的快照 20 条，主要是阶段 6 代码落地前生成的早盘快照。
+- 今日个股级涨停字段曾成功落库：
+  - `13:15`：`firstZtTime` 33 条、`boardHeight > 0` 33 条。
+  - `13:30`：`firstZtTime` 39 条、`boardHeight > 0` 38 条。
+- 但 `13:45`、`14:00` 个股级 `firstZtTime/boardHeight/highDays` 又变为 0 条，只剩 `reason` 大量存在。
+
+疑似原因：
+
+- `DragonBreathAnalyzer` 产出的 `breathData.marketData` 已包含 `thsLimitUpPools`。
+- `snapshotFacade` 构建快照时读取的是 `dataLayer.getBreathMarketData()`。
+- `DataLayer.updateBreathData()` 当前重建 `state.analysis.breath.marketData` 时没有拷贝 `data.marketData.thsLimitUpPools`，导致快照构建看到的是 `null`。
+- 因此 THS 市场池摘要未进入 MongoDB 的直接疑点在 DataLayer 白名单丢字段，而不是 THS 代理失败。
+
+额外现象：
+
+- `13:45` 和 `14:00` 个股级涨停时间、连板高度断档，说明运行态股票增强字段在这些快照槽位也不稳定。
+- 这需要进一步区分是 `LimitUpFeed.loadEnhancedLimitUpPools()` 调用时序、THS 增强只写部分股票、还是快照保存时拿到的股票列表被后续数据源覆盖。

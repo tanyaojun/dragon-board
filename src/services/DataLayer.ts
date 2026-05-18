@@ -916,6 +916,7 @@ class DataLayer {
       largeCapChange: data.marketData.largeCapChange || 0,  // 大票
       microCapChange: data.marketData.microCapChange || 0,   // 微盘
       passRate: data.marketData.passRate || { to2: 0, to3: 0, to4: 0 }, // 晋级率
+      thsLimitUpPools: data.marketData.thsLimitUpPools ?? null,
     }
 
     // 更新因子数据
@@ -1036,6 +1037,9 @@ class DataLayer {
   ) {
     if (!this.state.tck2) this.initTck2Store()
 
+    const stockMap = new Map(this.state.merged.stocks.map((stock) => [stock.code, stock]))
+    let touchedStocks = false
+
     updates.forEach(({ code, reason, isNew, tags, ...rest }) => {
       // 更新 reason
       if (reason !== undefined) this.state.tck2!.stockReasons.set(code, reason)
@@ -1056,6 +1060,9 @@ class DataLayer {
       if (reason !== undefined) {
         limitData.reason = reason
       }
+      if (isNew !== undefined) {
+        limitData.isNew = isNew
+      }
 
       // 更新 limitUpData
       const existing = this.state.tck2!.limitUpData.get(code) || {}
@@ -1063,9 +1070,38 @@ class DataLayer {
         ...existing,
         ...limitData,
       })
+
+      const stock = stockMap.get(code)
+      if (stock) {
+        this.applyLimitUpProjectionToStock(stock, limitData)
+        stockMap.set(code, stock)
+        touchedStocks = true
+      }
     })
 
+    if (touchedStocks) {
+      this.state.merged.stocks = Array.from(stockMap.values())
+      this.state.version.stocks++
+      this.throttledNotify('merged.stocks', this.state.merged.stocks)
+      this.throttledNotify('version.stocks', this.state.version.stocks)
+    }
+
     this.throttledNotify('tck2.limitup', { count: updates.length })
+  }
+
+  private applyLimitUpProjectionToStock(stock: MergedStock, limitData: LimitUpExtData) {
+    stock.firstZtTime = limitData.firstZtTime ?? stock.firstZtTime
+    stock.lastZtTime = limitData.lastZtTime ?? stock.lastZtTime
+    stock.boardHeight = limitData.boardHeight ?? stock.boardHeight
+    stock.highDays = limitData.highDays ?? stock.highDays
+    stock.fengdan = limitData.fengdan ?? stock.fengdan
+    stock.maxFengdan = limitData.maxFengdan ?? stock.maxFengdan
+    stock.leadStatus = limitData.leadStatus ?? stock.leadStatus
+    stock.leadTimes = limitData.leadTimes ?? stock.leadTimes
+    stock.lianbanStr = limitData.lianbanStr ?? stock.lianbanStr
+    stock.reason = limitData.reason ?? stock.reason
+    stock.tags = limitData.tags ?? stock.tags
+    stock.isNew = limitData.isNew ?? stock.isNew
   }
 
   getStockHotness(code: string): number | undefined {
