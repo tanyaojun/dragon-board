@@ -118,6 +118,28 @@ describe('CandidatePoolPanel source contract', () => {
     expect(source.indexOf('<section class="quality-dashboard')).toBe(source.lastIndexOf('<section class="quality-dashboard'))
   })
 
+  test('orders the right detail area as a candidate decision workflow with auxiliary dashboards aside', () => {
+    const source = panelSource()
+    const detailIndex = source.indexOf('<main class="candidate-detail">')
+    const workflowIndex = source.indexOf('<div class="candidate-workflow">')
+    const decisionIndex = source.indexOf('当前决策')
+    const analysisIndex = source.indexOf('规则分析', decisionIndex)
+    const thesisIndex = source.indexOf('假设编辑', analysisIndex)
+    const reviewIndex = source.indexOf('复盘闭环', thesisIndex)
+    const sideBriefIndex = source.indexOf('<aside class="candidate-side-brief">')
+    const discoveryIndex = source.indexOf('建议入池')
+    const qualityIndex = source.indexOf('候选质量')
+
+    expect(workflowIndex).toBeGreaterThan(detailIndex)
+    expect(decisionIndex).toBeGreaterThan(workflowIndex)
+    expect(analysisIndex).toBeGreaterThan(decisionIndex)
+    expect(thesisIndex).toBeGreaterThan(analysisIndex)
+    expect(reviewIndex).toBeGreaterThan(thesisIndex)
+    expect(sideBriefIndex).toBeGreaterThan(workflowIndex)
+    expect(discoveryIndex).toBeGreaterThan(sideBriefIndex)
+    expect(qualityIndex).toBeGreaterThan(discoveryIndex)
+  })
+
   test('exposes phase 12 structured rule evidence, penalties and condition groups in the right detail area', () => {
     const source = panelSource()
     const detailIndex = source.indexOf('<main class="candidate-detail">')

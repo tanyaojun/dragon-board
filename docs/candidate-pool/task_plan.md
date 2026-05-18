@@ -6,7 +6,7 @@
 
 ## Current Phase
 
-Phase 15 in progress
+Phase 16 complete; Phase 15 production validation remains in progress
 
 ## Phases
 
@@ -133,6 +133,16 @@ Phase 15 in progress
 - [ ] 更新 Phase 15 验收记录，形成候选池进入日常使用前的稳定性基线
 - **Status:** in_progress
 
+### Phase 16: 异动雷达与候选池桥接
+
+- [x] 明确 `HotStockEventMonitorPanel.vue` 的产品语义是“异动雷达”，不是“历史交易日志”
+- [x] 将面板标题、关闭提示和分类 aria 文案统一为“异动雷达”，避免与历史交易日志混淆
+- [x] 异动卡片区分“龙头复盘候选”与“候选池正式记录”，候选池只以 journal `trade_type=thesis` 开放候选为准
+- [x] 支持从个股异动一键加入候选池；已存在开放候选时改为查看候选，避免重复创建
+- [x] 候选池操作失败时给出清晰提示，不影响异动雷达继续刷新和选股
+- [x] 补充单元测试、类型检查和 diff 检查，固化异动雷达到候选池的入口合同
+- **Status:** complete
+
 ## Key Questions
 
 1. 候选池是否替代自选股？
@@ -164,6 +174,7 @@ Phase 15 in progress
 | Phase 14 Node Playwright 未安装浏览器 | 1 | 安装 Chromium 超时后，配置 `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` 允许本机使用系统 Chrome 验证 |
 | Phase 14 候选池列表可能混入历史交易日志 | 1 | `CandidateJournalService.listCandidates()` 查询固定带 `trade_type=thesis`，并防御性过滤非 thesis 记录 |
 | Phase 15 候选发现冷却缓存未区分行情集合和推荐参数 | 1 | 增加缓存 key，按股票代码集合、`limit`、`minScore` 隔离缓存；重复候选标记继续允许冷却期即时刷新 |
+| Phase 16 异动提醒、龙头复盘候选、候选池三者语义混在一起 | 1 | 将 `HotStockEventMonitorPanel.vue` 收敛为“异动雷达”，正式候选池状态改由 journal 开放候选驱动 |
 
 ## Notes
 

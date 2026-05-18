@@ -97,13 +97,13 @@ export const REFRESH_TASK_DEFINITIONS: RefreshTaskDefinition[] = [
   },
   {
     id: 'hotStockEvent.monitor',
-    label: '热股异动面板刷新',
+    label: '异动雷达刷新',
     category: 'business',
     owner: 'HotStockEventMonitorService',
     intervalMs: 30_000,
     tradingTimeOnly: false,
     visibilityPolicy: 'pause',
-    description: '异动提醒面板可见时轮询选股通异动数据',
+    description: '异动雷达面板可见时轮询选股通异动数据',
   },
 ]
 

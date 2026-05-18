@@ -275,6 +275,25 @@
   - `src/services/candidate/CandidateDiscoveryService.ts`
   - `src/services/candidate/__tests__/CandidateDiscoveryService.test.ts`
 
+## 2026-05-17 Phase 16 异动雷达与候选池桥接
+
+- **Started:** 2026-05-17 22:32:00 +08:00
+- Actions taken:
+  - 用户确认 `HotStockEventMonitorPanel.vue` 是“异动雷达”，不是历史交易日志。
+  - Phase 16 成功标准定为：异动雷达负责盘中线索发现，候选池负责正式候选与交易假设，历史交易日志只保留真实交易记录。
+  - 补充 `docs/candidate-pool/task_plan.md` Phase 16，明确“龙头复盘候选”和“候选池开放候选”需要分开表达。
+  - 先补 RED 测试，锁定“异动雷达”命名、入口文案、候选池 journal 桥接和不得使用历史交易日志语义。
+  - `HotStockEventMonitorPanel.vue` 标题、关闭提示、分类 aria 统一为“异动雷达”，顶栏入口和刷新任务描述同步改名。
+  - 异动卡片保留龙头复盘候选标识为“龙头复盘”，新增正式候选池标识“已入候选池”，后者只来自 `CandidateJournalService.listCandidates({ limit: 200 })` 的开放 thesis 记录。
+  - 个股异动卡片新增“加入候选池 / 查看候选”动作，创建成功后通过 `candidate-pool:open` 打开候选池并定位候选；失败时 toast 提示，不影响异动雷达刷新。
+- Files created/modified:
+  - `src/App.vue`
+  - `docs/candidate-pool/task_plan.md`
+  - `docs/candidate-pool/progress.md`
+  - `src/components/panels/HotStockEventMonitorPanel.vue`
+  - `src/components/panels/__tests__/HotStockEventMonitorPanel.test.ts`
+  - `src/services/refresh/RefreshTaskRegistry.ts`
+
 ## Test Results
 
 | Test | Input | Expected | Actual | Status |
@@ -339,6 +358,15 @@
 | Phase 15 候选发现缓存隔离回归 | `pnpm exec vitest run src/services/candidate/__tests__/CandidateDiscoveryService.test.ts --reporter=dot` | 4 tests passed | 4 tests passed | 通过 |
 | Phase 15 空行情 RED 验证 | `pnpm exec vitest run src/services/candidate/__tests__/CandidateDiscoveryService.test.ts --reporter=dot` | 新增空行情语义测试失败 | 1 failed / 4 passed，失败点为空行情第二次发现被标为 `cooldown` | 通过 |
 | Phase 15 自动发现边界回归 | `pnpm exec vitest run src/services/candidate/__tests__/CandidateDiscoveryService.test.ts --reporter=dot` | 5 tests passed | 5 tests passed | 通过 |
+| Phase 15 候选池完整定向测试 | `pnpm exec vitest run src/services/candidate/__tests__/CandidateAnalysisService.test.ts src/services/candidate/__tests__/CandidateJournalService.test.ts src/services/candidate/__tests__/CandidateQualityStatsService.test.ts src/services/candidate/__tests__/CandidateDiscoveryService.test.ts src/components/common/__tests__/DataTable.test.ts src/components/panels/__tests__/CandidatePoolPanel.test.ts src/components/panels/__tests__/TradeJournalPanel.test.ts --reporter=dot` | 40 tests passed | 7 files / 40 tests passed | 通过 |
+| Phase 15 类型检查 | `pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false` | exit 0 | exit 0 | 通过 |
+| Phase 15 diff 检查 | `git diff --check` | exit 0 | exit 0 | 通过 |
+| Phase 16 RED 验证 | `pnpm exec vitest run src/components/panels/__tests__/HotStockEventMonitorPanel.test.ts --reporter=dot` | 新增语义和候选池桥接测试失败 | 2 failed / 3 passed，失败点为仍叫“异动提醒”且缺少 candidate journal 桥接 | 通过 |
+| Phase 16 面板语义 RED 验证 | `pnpm exec vitest run src/components/panels/__tests__/HotStockEventMonitorPanel.test.ts --reporter=dot` | 入口仍未统一时失败 | 1 failed / 4 passed，失败点为 `App.vue` 仍显示“异动监控” | 通过 |
+| Phase 16 异动雷达定向测试 | `pnpm exec vitest run src/components/panels/__tests__/HotStockEventMonitorPanel.test.ts --reporter=dot` | 5 tests passed | 5 tests passed | 通过 |
+| Phase 16 候选池完整定向测试 | `pnpm exec vitest run src/services/candidate/__tests__/CandidateAnalysisService.test.ts src/services/candidate/__tests__/CandidateJournalService.test.ts src/services/candidate/__tests__/CandidateQualityStatsService.test.ts src/services/candidate/__tests__/CandidateDiscoveryService.test.ts src/components/common/__tests__/DataTable.test.ts src/components/panels/__tests__/CandidatePoolPanel.test.ts src/components/panels/__tests__/TradeJournalPanel.test.ts src/components/panels/__tests__/HotStockEventMonitorPanel.test.ts src/services/refresh/__tests__/RefreshTaskRegistry.test.ts --reporter=dot` | 49 tests passed | 9 files / 49 tests passed | 通过 |
+| Phase 16 类型检查 | `pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false` | exit 0 | exit 0 | 通过 |
+| Phase 16 浏览器冒烟 | Playwright + 系统 Chrome 打开 `http://127.0.0.1:5173` 并点击“异动雷达” | 面板标题、Tab、空态或候选动作区域可渲染，无框架错误覆盖 | 面板可见，标题“异动雷达”，Tab 完整，截图 `C:\Users\Think\AppData\Local\Temp\dragon-phase16-event-radar.png`；真实启动层仍卡在平台数据加载 15%，属 Phase 15 数据链路风险 | 通过 |
 
 ## Error Log
 
@@ -368,13 +396,15 @@
 | 2026-05-17 | Phase 14 复盘保存测试被前一次“写回当前分析”的异步响应重置表单 | 查看失败现场快照 | 等待写回按钮完成 enable 后再操作复盘区，并限定复盘卡片内控件 |
 | 2026-05-17 | Phase 15 候选发现冷却缓存只按时间判断，切换行情样本或推荐参数时可能返回上一批推荐 | 先补 RED 测试复现 | 缓存 key 纳入股票代码集合、`minScore` 和 `limit`；仅 key 一致时复用分析结果 |
 | 2026-05-17 | Phase 15 空行情样本第二次发现会被冷却逻辑覆盖为 `cooldown` | 追加 RED 测试复现 | 空样本判断前置到冷却复用之前，保证面板能区分无数据和冷却复用 |
+| 2026-05-17 | Node Playwright 托管 Chromium 缺失，无法直接启动浏览器冒烟 | 读取 launch 错误 | 复用系统 Chrome `C:\Program Files\Google\Chrome\Application\chrome.exe` 完成 Phase 16 冒烟 |
+| 2026-05-17 | 浏览器冒烟时真实页面停在启动层“加载平台数据 15%”，顶栏按钮被 `v-show` 隐藏 | 检查 DOM、样式和控制台 | 记录为 Phase 15 真实数据链路风险；Phase 16 仅临时显示主 App 验证面板渲染和交互入口 |
 
 ## 5-Question Reboot Check
 
 | Question | Answer |
 |----------|--------|
-| Where am I? | 已进入候选池 Phase 15 生产化联调与真实使用闭环 |
-| Where am I going? | 继续复核真实行情和真实 journal 后端链路，校准自动推荐质量和异常提示 |
+| Where am I? | Phase 16 异动雷达与候选池桥接已完成；Phase 15 真实使用联调仍有未完成项 |
+| Where am I going? | 回到 Phase 15，继续复核真实行情和真实 journal 后端链路，校准自动推荐质量和异常提示 |
 | What's the goal? | 将手工候选/交易假设升级为候选池工作台 |
 | What have I learned? | 见 `findings.md` |
-| What have I done? | 已实现并验证右键入池、规则分析、候选池面板、状态推进、journal 标签入库契约、统计概览、当前重分析、已入池识别、候选详情定位、假设编辑、分析写回、复盘保存、基础复盘统计、Phase 8 端到端交互、Phase 9 历史交易日志入口收敛、Phase 10 候选删除/快捷操作/筛选排序、Phase 11 候选漏斗/质量拆解/命中率/失效率/平均跟踪，Phase 12 结构化证据、扣分项、条件组、风险和变化归因，Phase 13 自动建议入池、重复候选识别、人工确认入池和推荐冷却控制，Phase 14 Playwright E2E、历史交易隔离、失败/重复/删除/截图回归，以及 Phase 15 首个稳定性修复：候选发现冷却缓存按行情集合和推荐参数隔离 |
+| What have I done? | 已实现并验证右键入池、规则分析、候选池面板、状态推进、journal 标签入库契约、统计概览、当前重分析、已入池识别、候选详情定位、假设编辑、分析写回、复盘保存、基础复盘统计、Phase 8 端到端交互、Phase 9 历史交易日志入口收敛、Phase 10 候选删除/快捷操作/筛选排序、Phase 11 候选漏斗/质量拆解/命中率/失效率/平均跟踪，Phase 12 结构化证据、扣分项、条件组、风险和变化归因，Phase 13 自动建议入池、重复候选识别、人工确认入池和推荐冷却控制，Phase 14 Playwright E2E、历史交易隔离、失败/重复/删除/截图回归，Phase 15 首个稳定性修复：候选发现冷却缓存按行情集合和推荐参数隔离，以及 Phase 16 异动雷达命名收敛、候选池开放候选标识和一键加入/查看候选桥接 |

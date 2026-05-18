@@ -37,7 +37,7 @@
           <span class="icon">🎯</span>
         </button>
 
-        <button ref="eventMonitorBtnRef" class="btn-icon" title="异动监控" @click="openPanel('eventMonitor', $event)">
+        <button ref="eventMonitorBtnRef" class="btn-icon" title="异动雷达" @click="openPanel('eventMonitor', $event)">
           <span class="icon">🔔</span>
         </button>
 
@@ -301,7 +301,7 @@ const navTabs = [
   { id: 'dragon', label: '龙头监测', icon: '🐲' },
   { id: 'emotion', label: '龙息监测', icon: '📈' },
   { id: 'sector', label: '题材热点', icon: '🎯' },
-  { id: 'events', label: '异动监控', icon: '🔔' },
+  { id: 'events', label: '异动雷达', icon: '🔔' },
   { id: 'algorithm', label: '算法中心', icon: '🧠' },
 ]
 

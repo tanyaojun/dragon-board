@@ -1,29 +1,49 @@
 <template>
   <div v-if="visible" ref="panelRef" class="event-panel" :style="panelStyle">
     <div class="event-header">
-      <div>
-        <h3>🔔 异动提醒</h3>
-        <p>选股通数据源 | 热榜个股异动监控</p>
+      <div class="event-title">
+        <div class="title-row">
+          <span class="title-mark" aria-hidden="true"></span>
+          <h3>异动雷达</h3>
+        </div>
+        <p>选股通数据源 · 盘中异动线索雷达</p>
       </div>
-      <button class="icon-btn" type="button" title="关闭" @click="close">✕</button>
+      <button class="icon-btn" type="button" title="关闭" aria-label="关闭异动雷达" @click="close">
+        ×
+      </button>
     </div>
 
-    <div class="page-tabs">
+    <div class="page-tabs" role="tablist" aria-label="异动雷达分类">
       <button
         v-for="page in pages"
         :key="page.id"
         type="button"
+        class="page-tab"
         :class="{ active: activePage === page.id }"
+        :aria-pressed="activePage === page.id"
         @click="activePage = page.id"
       >
-        <span>{{ page.icon }}</span>{{ page.label }}
+        <span class="tab-icon" aria-hidden="true">{{ page.icon }}</span>
+        <span>{{ page.label }}</span>
       </button>
     </div>
 
     <template v-if="activePage !== 'settings'">
       <div class="section-title">
-        <span>{{ activePageTitle }}</span>
+        <span class="section-name">{{ activePageTitle }}</span>
         <span class="count-badge">{{ filteredEvents.length }}</span>
+      </div>
+
+      <div v-if="showEventSearch" class="event-search-bar">
+        <label class="search-box">
+          <span class="search-icon" aria-hidden="true">⌕</span>
+          <input
+            v-model="keyword"
+            type="text"
+            placeholder="代码/名称/板块/拼音首字母"
+            aria-label="搜索异动个股"
+          />
+        </label>
       </div>
 
       <div class="event-list">
@@ -34,13 +54,23 @@
         </div>
         <div v-else-if="!filteredEvents.length" class="empty-state">{{ emptyText }}</div>
 
-        <button
+        <article
           v-for="event in filteredEvents"
           :key="event.id"
           class="event-card"
-          type="button"
-          :class="[event.direction, { candidate: event.matchedCandidate, sector: event.category === 'sector' }]"
+          role="button"
+          tabindex="0"
+          :class="[
+            event.direction,
+            {
+              candidate: event.matchedCandidate,
+              'pool-candidate': Boolean(candidatePoolEntry(event)),
+              sector: event.category === 'sector',
+            },
+          ]"
           @click="selectStock(event)"
+          @keydown.enter.prevent="selectStock(event)"
+          @keydown.space.prevent="selectStock(event)"
         >
           <div class="event-time-row">
             <span>{{ formatEventTime(event.timestamp) }}</span>
@@ -50,7 +80,8 @@
             <div class="stock-name-code">
               <span class="stock-name">{{ displayName(event) }}</span>
               <span v-if="event.code" class="stock-code">{{ event.code }}</span>
-              <span v-if="event.matchedCandidate" class="candidate-badge">候选</span>
+              <span v-if="event.matchedCandidate" class="candidate-badge dragon">龙头复盘</span>
+              <span v-if="candidatePoolEntry(event)" class="candidate-badge pool">已入候选池</span>
             </div>
             <span class="change" :class="event.direction">{{ formatPct(event.changePct) }}</span>
           </div>
@@ -63,27 +94,36 @@
               +{{ event.relatedPlates.length - 4 }}
             </span>
           </div>
-        </button>
+          <div v-if="event.category === 'stock' && event.code" class="candidate-pool-actions">
+            <button
+              class="candidate-action-btn"
+              type="button"
+              :disabled="candidateActionLoadingCode === normalizeHotStockCode(event.code)"
+              @click.stop="handleCandidatePoolAction(event)"
+            >
+              {{ candidateActionLabel(event) }}
+            </button>
+          </div>
+        </article>
       </div>
     </template>
 
     <div v-else class="settings-page">
-      <div class="search-box">
-        <span class="search-icon">⌕</span>
-        <input v-model="keyword" type="text" placeholder="代码/名称/板块/拼音首字母" />
-      </div>
-
       <div class="filter-panel">
         <div class="filter-title">
-          <span>异动类型筛选</span>
+          <div>
+            <span class="card-kicker">筛选规则</span>
+            <strong>异动类型</strong>
+          </div>
+          <span class="filter-summary">已启用 {{ enabledTypes.length }}/{{ ALL_EVENT_TYPES.length }}</span>
         </div>
-        <div class="filter-actions">
+        <div class="filter-actions" aria-label="异动类型批量操作">
           <button type="button" @click="setAllTypes(true)">全选</button>
           <button type="button" @click="invertTypes">反选</button>
           <button type="button" @click="setAllTypes(false)">清空</button>
         </div>
         <div class="type-grid">
-          <label v-for="item in eventTypeOptions" :key="item.type">
+          <label v-for="item in eventTypeOptions" :key="item.type" class="filter-chip">
             <input v-model="enabledTypes" type="checkbox" :value="item.type" />
             <span>{{ item.name }}</span>
           </label>
@@ -92,7 +132,10 @@
 
       <div class="settings-card">
         <div class="speech-row">
-          <span>语音提醒</span>
+          <div>
+            <span class="card-kicker">播报设置</span>
+            <strong class="speech-card-title">语音提醒</strong>
+          </div>
           <span class="speech-mode">{{ speechModeLabel }}</span>
           <label class="speech-toggle">
             <input v-model="speechEnabled" type="checkbox" :disabled="!speechSupported" />
@@ -101,11 +144,17 @@
           <span v-if="!speechSupported" class="speech-disabled">不可用</span>
         </div>
         <label class="range-row">
-          <span>语速 {{ speechRate.toFixed(1) }}x</span>
+          <span>
+            <span>语速</span>
+            <strong>{{ speechRate.toFixed(1) }}x</strong>
+          </span>
           <input v-model.number="speechRate" type="range" min="0.6" max="1.8" step="0.1" />
         </label>
         <label class="range-row">
-          <span>音量 {{ speechVolume }}</span>
+          <span>
+            <span>音量</span>
+            <strong>{{ speechVolume }}</strong>
+          </span>
           <input v-model.number="speechVolume" type="range" min="0" max="100" step="5" />
         </label>
         <label v-if="showSpeechVoiceSelect" class="select-row">
@@ -127,20 +176,28 @@
     </div>
 
     <div class="event-footer">
-      <span>监控 {{ state.watchedCodes.length }} 只热榜股</span>
-      <button class="refresh-btn" type="button" :disabled="state.loading" @click="refresh">
-        {{ state.loading ? '刷新中' : '刷新' }}
-      </button>
-      <button class="refresh-btn" type="button" :disabled="!speechSupported" @click="testSpeech">
-        语音测试
-      </button>
-      <span>{{ state.lastUpdate ? formatEventTime(state.lastUpdate) : '未更新' }}</span>
+      <div class="footer-status">
+        <span>监控 {{ state.watchedCodes.length }} 只热榜股</span>
+        <span>{{ state.lastUpdate ? formatEventTime(state.lastUpdate) : '未更新' }}</span>
+      </div>
+      <div class="footer-actions">
+        <button class="refresh-btn" type="button" :disabled="state.loading" @click="refresh">
+          {{ state.loading ? '刷新中' : '刷新' }}
+        </button>
+        <button class="refresh-btn" type="button" :disabled="!speechSupported" @click="testSpeech">
+          语音测试
+        </button>
+      </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from 'vue'
+import { candidateJournalService } from '@/services/candidate/CandidateJournalService'
+import type { CandidateJournalEntry, CandidateStockLike, CandidateStatus } from '@/services/candidate/types'
+import { AppEvents } from '@/types'
+import { EventManager } from '@/utils/eventManager'
 import { usePanel } from '../../composables/usePanel'
 import {
   hotStockEventMonitorService,
@@ -153,6 +210,7 @@ import {
   type HotStockAbnormalEvent,
   type HotStockAbnormalEventType,
   type HotStockEventMonitorState,
+  normalizeHotStockCode,
 } from '../../services/hotlist/hotStockEventTypes'
 import {
   XUANGUBAO_SECTOR_ABNORMAL_EVENT_TYPES,
@@ -197,6 +255,12 @@ const ALL_EVENT_TYPES = [
   ...XUANGUBAO_STOCK_ABNORMAL_EVENT_TYPES,
   ...XUANGUBAO_SECTOR_ABNORMAL_EVENT_TYPES,
 ]
+const OPEN_CANDIDATE_STATUSES = new Set<CandidateStatus>([
+  'observe',
+  'candidate',
+  'triggered',
+  'tracking',
+])
 
 const blankState: HotStockEventMonitorState = {
   events: [],
@@ -225,6 +289,8 @@ const voiceOptions = hotStockEventSpeechService.getVoiceOptions()
 const speechRate = ref(voiceOptions.rate)
 const speechVolume = ref(voiceOptions.volume)
 const speechVoice = ref(voiceOptions.voice || '')
+const candidatePoolEntries = ref<Record<string, CandidateJournalEntry>>({})
+const candidateActionLoadingCode = ref('')
 
 const close = () => {
   emit('update:visible', false)
@@ -235,7 +301,7 @@ const { panelRef, panelStyle } = usePanel({
   name: 'HotStockEventMonitorPanel',
   visible: props.visible,
   triggerRect: props.triggerRect,
-  triggerSelectors: ['[title*="异动监控"]'],
+  triggerSelectors: ['[title*="异动雷达"]', '[title*="异动监控"]'],
   onClose: close,
 })
 
@@ -252,8 +318,10 @@ const pageEvents = computed(() => {
   return state.value.hotStockEvents
 })
 
+const showEventSearch = computed(() => activePage.value === 'hot' || activePage.value === 'other')
+
 const filteredEvents = computed(() => {
-  const text = keyword.value.trim().toUpperCase()
+  const text = showEventSearch.value ? keyword.value.trim().toUpperCase() : ''
   const enabled = new Set(enabledTypes.value)
   return pageEvents.value.filter((event) => {
     if (!enabled.has(event.type)) return false
@@ -301,7 +369,10 @@ function formatPct(value: number | null) {
 }
 
 async function refresh() {
-  await hotStockEventMonitorService.refresh()
+  await Promise.all([
+    hotStockEventMonitorService.refresh(),
+    loadCandidatePoolState(),
+  ])
 }
 
 function selectStock(event: HotStockAbnormalEvent) {
@@ -311,6 +382,87 @@ function selectStock(event: HotStockAbnormalEvent) {
 
 function displayName(event: HotStockAbnormalEvent) {
   return event.category === 'sector' ? event.sectorName || event.name || '--' : event.name || '--'
+}
+
+function candidatePoolEntry(event: HotStockAbnormalEvent): CandidateJournalEntry | null {
+  const code = normalizeHotStockCode(event.code)
+  return code ? candidatePoolEntries.value[code] || null : null
+}
+
+function candidateActionLabel(event: HotStockAbnormalEvent) {
+  const code = normalizeHotStockCode(event.code)
+  if (candidateActionLoadingCode.value === code) return '处理中'
+  return candidatePoolEntry(event) ? '查看候选' : '加入候选池'
+}
+
+function eventStock(event: HotStockAbnormalEvent): CandidateStockLike {
+  const code = normalizeHotStockCode(event.code)
+  return {
+    code,
+    name: event.name || code,
+    price: event.price || 0,
+    change: event.changePct === null ? undefined : event.changePct * 100,
+    themes: event.relatedPlates.map((name) => ({ name, Name: name })),
+    sourceEventType: event.typeName,
+    sourceEventTimestamp: event.timestamp,
+  }
+}
+
+async function loadCandidatePoolState() {
+  try {
+    const entries = await candidateJournalService.listCandidates({ limit: 200 })
+    const next: Record<string, CandidateJournalEntry> = {}
+    for (const entry of entries) {
+      const code = normalizeHotStockCode(entry.stockCode)
+      if (code && OPEN_CANDIDATE_STATUSES.has(entry.status)) {
+        next[code] = entry
+      }
+    }
+    candidatePoolEntries.value = next
+  } catch {
+    candidatePoolEntries.value = {}
+  }
+}
+
+function openCandidatePool(stockCode: string, candidateId?: string) {
+  EventManager.emit('candidate-pool:open', {
+    stockCode,
+    candidateId,
+    source: 'hot-stock-event-radar',
+  })
+}
+
+async function handleCandidatePoolAction(event: HotStockAbnormalEvent) {
+  const stock = eventStock(event)
+  if (!stock.code) return
+
+  const existing = candidatePoolEntry(event)
+  if (existing) {
+    openCandidatePool(stock.code, existing.id)
+    return
+  }
+
+  candidateActionLoadingCode.value = stock.code
+  try {
+    const result = await candidateJournalService.addCandidateFromStock(eventStock(event), {
+      source: 'hot-stock-event-radar',
+    })
+    if (result.entry) {
+      candidatePoolEntries.value = {
+        ...candidatePoolEntries.value,
+        [stock.code]: result.entry,
+      }
+    }
+    openCandidatePool(stock.code, result.entry?.id)
+  } catch (error) {
+    EventManager.emit(AppEvents.UI.TOAST, {
+      message: `加入候选池失败：${error instanceof Error ? error.message : '未知错误'}`,
+      duration: 2000,
+      type: 'error',
+    })
+  } finally {
+    candidateActionLoadingCode.value = ''
+  }
 }
 
 function formatVoiceLabel(voice: { name: string; culture?: string; gender?: string }) {
@@ -354,13 +506,14 @@ watch(
           }
         })
       }
-      void hotStockEventMonitorService.refresh()
+      void refresh()
       hotStockEventMonitorService.start()
       return
     }
 
     unsubscribe?.()
     unsubscribe = null
+    candidatePoolEntries.value = {}
     hotStockEventMonitorService.stop()
     hotStockEventSpeechService.stop()
   },
@@ -385,68 +538,106 @@ onUnmounted(() => {
 <style scoped>
 .event-panel {
   position: fixed;
-  width: 360px;
+  width: 372px;
   max-width: calc(100vw - 20px);
   max-height: 86vh;
   overflow: hidden;
   z-index: 10005;
-  border: 1px solid var(--border-color);
+  border: 1px solid rgba(215, 178, 117, 0.2);
   border-radius: 8px;
-  background: #141212;
+  background: linear-gradient(180deg, #191514 0%, #111315 54%, #0e1113 100%);
   color: var(--text-primary);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.05);
   font-size: 12px;
   display: flex;
   flex-direction: column;
+  font-variant-numeric: tabular-nums;
 }
 
 .event-header {
-  padding: 12px 10px 8px;
-  text-align: center;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 14px 42px 12px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
   position: relative;
+  background: linear-gradient(135deg, rgba(212, 165, 116, 0.11), rgba(77, 171, 247, 0.05) 64%);
+}
+
+.event-title {
+  min-width: 0;
+}
+
+.title-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.title-mark {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #f6b45f;
+  box-shadow: 0 0 14px rgba(246, 180, 95, 0.8);
 }
 
 .event-header h3 {
-  margin: 0 20px 4px;
-  color: #d4a574;
+  margin: 0;
+  color: #f1bd7a;
   font-size: 16px;
+  line-height: 20px;
+  letter-spacing: 0;
 }
 
 .event-header p {
-  margin: 0;
-  color: var(--text-secondary);
+  margin: 4px 0 0;
+  color: #9ba8b5;
   font-size: 11px;
+  line-height: 16px;
+  text-align: center;
 }
 
 .icon-btn {
   position: absolute;
-  top: 8px;
-  right: 8px;
-  width: 24px;
-  height: 24px;
-  border: 1px solid var(--border-color);
+  top: 10px;
+  right: 10px;
+  width: 28px;
+  height: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 4px;
-  background: transparent;
-  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.04);
+  color: #9ba8b5;
   cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.icon-btn:hover,
+.icon-btn:focus-visible {
+  border-color: rgba(246, 180, 95, 0.55);
+  color: #f1bd7a;
+  outline: none;
+}
+
+.event-search-bar {
+  padding: 10px 12px 8px;
 }
 
 .search-box {
-  margin: 10px;
-  height: 32px;
+  min-height: 38px;
   display: flex;
   align-items: center;
-  gap: 6px;
-  border: 1px solid #333;
-  border-radius: 4px;
-  background: rgba(255, 255, 255, 0.03);
-  padding: 0 8px;
+  gap: 8px;
+  border: 1px solid rgba(121, 151, 176, 0.24);
+  border-radius: 6px;
+  background: rgba(7, 10, 12, 0.48);
+  padding: 0 10px;
+  box-shadow: inset 0 1px 8px rgba(0, 0, 0, 0.24);
 }
 
 .search-icon {
   color: #4dabf7;
   font-size: 16px;
+  line-height: 1;
 }
 
 .search-box input {
@@ -455,33 +646,55 @@ onUnmounted(() => {
   border: none;
   outline: none;
   background: transparent;
-  color: var(--text-primary);
+  color: #edf3f8;
   font-size: 12px;
+  line-height: 18px;
 }
 
-.page-tabs,
-.filter-actions {
+.search-box input::placeholder {
+  color: #6e7c88;
+}
+
+.page-tabs {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 4px;
-  padding: 0 10px 8px;
+  gap: 6px;
+  padding: 10px 12px 9px;
+  background: rgba(0, 0, 0, 0.08);
 }
 
-.page-tabs button,
-.filter-actions button {
-  height: 30px;
-  border: 1px solid #333;
-  border-radius: 4px;
-  background: rgba(255, 255, 255, 0.03);
-  color: var(--text-primary);
+.page-tab {
+  min-width: 0;
+  min-height: 32px;
+  border: 1px solid rgba(121, 151, 176, 0.24);
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.035);
+  color: #c7d0da;
   cursor: pointer;
-  font-size: 12px;
+  font-size: 11px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  transition: border-color 0.16s ease, background 0.16s ease, color 0.16s ease;
+}
+
+.page-tab:hover,
+.page-tab:focus-visible {
+  border-color: rgba(77, 171, 247, 0.48);
+  color: #edf3f8;
+  outline: none;
 }
 
 .page-tabs button.active {
-  border-color: #4dabf7;
-  color: #4dabf7;
-  background: rgba(77, 171, 247, 0.08);
+  border-color: rgba(77, 171, 247, 0.75);
+  color: #7dc6ff;
+  background: linear-gradient(180deg, rgba(77, 171, 247, 0.16), rgba(77, 171, 247, 0.05));
+  box-shadow: inset 0 0 0 1px rgba(77, 171, 247, 0.08);
+}
+
+.tab-icon {
+  color: #f1bd7a;
 }
 
 .filter-bar {
@@ -508,147 +721,244 @@ onUnmounted(() => {
 }
 
 .filter-panel {
-  margin: 0 10px 10px;
-  border: 1px solid #333;
-  border-radius: 6px;
-  background: rgba(30, 28, 28, 0.92);
-  padding: 10px;
+  margin: 0 12px 10px;
+  border: 1px solid rgba(121, 151, 176, 0.2);
+  border-radius: 8px;
+  background: rgba(24, 24, 24, 0.76);
+  padding: 11px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 .settings-page {
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
-  padding-bottom: 10px;
+  padding-bottom: 2px;
+  scrollbar-width: thin;
 }
 
 .settings-card {
-  margin: 0 10px 10px;
-  border: 1px solid #333;
-  border-radius: 6px;
-  background: rgba(30, 28, 28, 0.92);
-  padding: 10px;
+  margin: 0 12px 10px;
+  border: 1px solid rgba(121, 151, 176, 0.2);
+  border-radius: 8px;
+  background: rgba(24, 24, 24, 0.76);
+  padding: 11px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 .filter-title {
   display: flex;
   justify-content: space-between;
-  align-items: center;
-  color: #d4a574;
+  align-items: flex-start;
+  gap: 10px;
+  color: #f1bd7a;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  padding-bottom: 8px;
-  margin-bottom: 8px;
+  padding-bottom: 9px;
+  margin-bottom: 9px;
   font-weight: 600;
 }
 
-.filter-title button {
-  border: none;
-  background: transparent;
-  color: #7aa7d9;
+.filter-title strong,
+.speech-card-title {
+  display: block;
+  color: #edf3f8;
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.card-kicker {
+  display: block;
+  color: #8b9aaa;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 14px;
+}
+
+.filter-summary {
+  flex: 0 0 auto;
+  color: #7dc6ff;
+  font-size: 11px;
+  line-height: 18px;
+}
+
+.filter-actions {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 7px;
+  margin-bottom: 10px;
+}
+
+.filter-actions button {
+  min-height: 30px;
+  border: 1px solid rgba(121, 151, 176, 0.24);
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.035);
+  color: #c7d0da;
   cursor: pointer;
-  font-size: 18px;
+  font-size: 12px;
+}
+
+.filter-actions button:hover,
+.filter-actions button:focus-visible {
+  border-color: rgba(246, 180, 95, 0.46);
+  color: #f1bd7a;
+  outline: none;
 }
 
 .type-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px 10px;
+  gap: 7px;
 }
 
-.type-grid label {
+.filter-chip {
+  min-width: 0;
+  min-height: 28px;
   display: flex;
   align-items: center;
-  gap: 4px;
-  color: var(--text-primary);
+  gap: 6px;
+  color: #cbd5df;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.025);
+  padding: 4px 7px;
+  cursor: pointer;
+}
+
+.filter-chip input {
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  accent-color: #7dc6ff;
+}
+
+.filter-chip span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .speech-row {
   margin: 0 0 8px;
-  padding: 7px 8px;
+  padding: 8px 9px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 6px;
-  background: rgba(255, 255, 255, 0.03);
-  color: #d4a574;
+  background: rgba(255, 255, 255, 0.035);
+  color: #f1bd7a;
 }
 
 .range-row {
   display: grid;
   gap: 6px;
-  color: var(--text-primary);
-  margin-top: 10px;
+  color: #cbd5df;
+  margin-top: 11px;
+}
+
+.range-row > span {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.range-row strong {
+  color: #edf3f8;
+  font-weight: 600;
 }
 
 .range-row input {
   width: 100%;
+  accent-color: #7dc6ff;
 }
 
 .select-row {
   display: grid;
   gap: 6px;
-  color: var(--text-primary);
+  color: #cbd5df;
   margin-top: 10px;
 }
 
 .select-row select {
   width: 100%;
   min-width: 0;
-  height: 30px;
-  border: 1px solid #333;
-  border-radius: 4px;
-  background: #191717;
-  color: var(--text-primary);
+  min-height: 34px;
+  border: 1px solid rgba(121, 151, 176, 0.24);
+  border-radius: 5px;
+  background: #111416;
+  color: #edf3f8;
   padding: 0 8px;
 }
 
 .speech-toggle {
+  flex: 0 0 auto;
+  min-height: 26px;
   display: flex;
   align-items: center;
-  gap: 4px;
-  color: var(--text-primary);
+  gap: 5px;
+  color: #edf3f8;
 }
 
 .speech-mode {
   margin-left: auto;
-  color: #7aa7d9;
+  color: #7dc6ff;
   font-size: 11px;
+  white-space: nowrap;
 }
 
 .speech-disabled {
   color: #ff7f50;
   font-size: 11px;
+  white-space: nowrap;
 }
 
 .section-title {
-  padding: 0 10px 8px;
-  color: #d4a574;
+  padding: 2px 12px 9px;
+  color: #f1bd7a;
   font-size: 13px;
   font-weight: 600;
   display: flex;
   align-items: center;
-  gap: 6px;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.section-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .count-badge {
-  background: #1c6fb8;
-  color: #fff;
-  border-radius: 2px;
-  padding: 1px 5px;
+  flex: 0 0 auto;
+  min-width: 24px;
+  text-align: center;
+  background: rgba(77, 171, 247, 0.18);
+  color: #7dc6ff;
+  border: 1px solid rgba(77, 171, 247, 0.28);
+  border-radius: 999px;
+  padding: 1px 6px;
   font-size: 11px;
 }
 
 .event-list {
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
-  padding: 0 10px 10px;
+  padding: 0 12px 10px;
   display: flex;
   flex-direction: column;
   gap: 8px;
+  scrollbar-width: thin;
 }
 
 .empty-state {
   padding: 16px 8px;
-  color: var(--text-secondary);
+  color: #9ba8b5;
   text-align: center;
 }
 
@@ -659,19 +969,21 @@ onUnmounted(() => {
 .event-card {
   width: 100%;
   text-align: left;
-  border: none;
+  border: 1px solid rgba(255, 255, 255, 0.07);
   border-left: 3px solid #4dabf7;
-  border-radius: 6px;
-  background: rgba(30, 28, 28, 0.92);
-  color: var(--text-primary);
+  border-radius: 8px;
+  background: rgba(24, 24, 24, 0.78);
+  color: #edf3f8;
   padding: 8px 8px 10px;
   cursor: pointer;
-  transition: border-color 0.2s, transform 0.2s;
+  transition: border-color 0.16s ease, transform 0.16s ease, background 0.16s ease;
 }
 
-.event-card:hover {
+.event-card:hover,
+.event-card:focus-visible {
   transform: translateY(-1px);
   border-left-color: #d4a574;
+  outline: none;
 }
 
 .event-card.down {
@@ -680,6 +992,10 @@ onUnmounted(() => {
 
 .event-card.candidate {
   box-shadow: inset 0 0 0 1px rgba(212, 165, 116, 0.18);
+}
+
+.event-card.pool-candidate {
+  box-shadow: inset 0 0 0 1px rgba(77, 171, 247, 0.24);
 }
 
 .event-card.sector {
@@ -715,7 +1031,8 @@ onUnmounted(() => {
 }
 
 .stock-row {
-  background: #1f2b35;
+  background: rgba(20, 31, 40, 0.82);
+  border-radius: 5px;
   padding: 6px;
   margin: 0 -2px;
 }
@@ -730,15 +1047,23 @@ onUnmounted(() => {
 .stock-name {
   font-weight: 600;
   color: #fff;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .stock-code,
 .candidate-badge {
   color: #ffd43b;
   font-size: 11px;
+  white-space: nowrap;
 }
 
-.candidate-badge {
+.candidate-badge.dragon {
+  color: #f1bd7a;
+}
+
+.candidate-badge.pool {
   color: #4dabf7;
 }
 
@@ -753,7 +1078,9 @@ onUnmounted(() => {
 }
 
 .related-plates {
-  background: rgba(255, 213, 79, 0.08);
+  margin-top: 7px;
+  background: rgba(255, 213, 79, 0.07);
+  border-radius: 5px;
   color: #ffd43b;
   display: flex;
   flex-wrap: wrap;
@@ -779,23 +1106,115 @@ onUnmounted(() => {
   color: #d4a574;
 }
 
-.event-footer {
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-  padding: 8px 10px;
+.candidate-pool-actions {
+  margin-top: 8px;
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-  color: var(--text-secondary);
+  justify-content: flex-end;
+}
+
+.candidate-action-btn {
+  min-height: 26px;
+  border: 1px solid rgba(77, 171, 247, 0.34);
+  border-radius: 5px;
+  background: rgba(77, 171, 247, 0.1);
+  color: #7dc6ff;
+  cursor: pointer;
+  padding: 0 10px;
   font-size: 11px;
 }
 
+.candidate-action-btn:hover:not(:disabled),
+.candidate-action-btn:focus-visible:not(:disabled) {
+  border-color: rgba(246, 180, 95, 0.55);
+  color: #f1bd7a;
+  outline: none;
+}
+
+.candidate-action-btn:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.event-footer {
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 9px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: #9ba8b5;
+  font-size: 11px;
+  background: rgba(0, 0, 0, 0.16);
+}
+
+.footer-status {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.footer-status span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.footer-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .refresh-btn {
-  border: 1px solid #333;
-  border-radius: 4px;
-  background: rgba(77, 171, 247, 0.08);
-  color: #4dabf7;
+  min-height: 30px;
+  border: 1px solid rgba(77, 171, 247, 0.36);
+  border-radius: 5px;
+  background: rgba(77, 171, 247, 0.09);
+  color: #7dc6ff;
   cursor: pointer;
-  padding: 3px 8px;
+  padding: 0 10px;
+}
+
+.refresh-btn:hover:not(:disabled),
+.refresh-btn:focus-visible:not(:disabled) {
+  border-color: rgba(246, 180, 95, 0.5);
+  color: #f1bd7a;
+  outline: none;
+}
+
+.refresh-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+@media (max-width: 380px) {
+  .event-panel {
+    width: calc(100vw - 20px);
+  }
+
+  .page-tabs {
+    gap: 4px;
+    padding-right: 10px;
+    padding-left: 10px;
+  }
+
+  .page-tab {
+    font-size: 10px;
+  }
+
+  .type-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .event-footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .footer-actions {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+  }
 }
 </style>

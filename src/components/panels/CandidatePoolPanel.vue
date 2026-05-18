@@ -111,329 +111,353 @@
           </aside>
 
           <main class="candidate-detail">
-            <section class="quality-dashboard">
-              <div class="section-header">
-                <h4>候选质量</h4>
-                <span>候选研究，不含交易盈亏</span>
-              </div>
-              <div class="quality-compact">
-                <div class="quality-block quality-block-primary">
-                  <span class="quality-label">候选漏斗</span>
-                  <p>
-                    观察 {{ qualityStats.funnel.observe }} 候选 {{ qualityStats.funnel.candidate }} 触发
-                    {{ qualityStats.funnel.triggered }} 跟踪 {{ qualityStats.funnel.tracking }} 已复盘
-                    {{ qualityStats.funnel.reviewed }}
-                  </p>
-                  <p>
-                    成功 {{ qualityStats.funnel.success }} 失败 {{ qualityStats.funnel.failed }} 未触发
-                    {{ qualityStats.funnel.notTriggered }}
-                  </p>
-                </div>
-                <div class="quality-block">
-                  <span class="quality-label">质量拆解</span>
-                  <p>
-                    题材 {{ qualitySummary.themes }} / RankTrend {{ qualitySummary.rankTrend }} / 等级
-                    {{ qualitySummary.grades }} / 资金 {{ qualitySummary.moneyFlow }}
-                  </p>
-                </div>
-                <div class="quality-block">
-                  <span class="quality-label">复盘结果</span>
-                  <p>
-                    <span v-for="item in qualityStats.reviewOutcomeSegments" :key="item.key">
-                      {{ item.label }} {{ item.total }}
-                    </span>
-                  </p>
-                </div>
-              </div>
-            </section>
+            <div class="candidate-workbench-layout">
+              <div class="candidate-workflow">
+                <template v-if="selectedEntry && selectedReview">
+                  <div class="detail-title">
+                    <div>
+                      <h3>{{ selectedEntry.stockName || selectedEntry.stockCode }}</h3>
+                      <span>{{ selectedEntry.stockCode }} · {{ statusLabel(selectedEntry.status) }}</span>
+                    </div>
+                    <div class="quick-actions">
+                      <button type="button" @click="addToFavorites">加入自选</button>
+                      <button type="button" @click="openStockDetail">股票详情</button>
+                      <button type="button" @click="openRankTrend">排名趋势</button>
+                      <button type="button" class="danger-btn" :disabled="deletingCandidate" @click="deleteCandidate">
+                        删除候选
+                      </button>
+                    </div>
+                  </div>
 
-            <section class="discovery-dashboard">
-              <div class="section-header">
-                <h4>建议入池</h4>
-                <div class="section-actions">
-                  <span>人工确认后入池</span>
-                  <button class="text-btn" :disabled="discovering" @click="refreshDiscovery(true)">
-                    刷新建议
-                  </button>
-                </div>
-              </div>
-              <div v-if="discoveryRecommendations.length" class="discovery-list">
-                <article
-                  v-for="item in discoveryRecommendations"
-                  :key="item.stock.code"
-                  class="discovery-item"
-                  :class="{ duplicate: item.duplicate.isOpen }"
-                >
-                  <div class="discovery-main">
-                    <strong>{{ item.stock.name || item.stock.code }}</strong>
-                    <span>{{ item.stock.code }} · {{ item.grade }}级 · {{ item.score }}分</span>
-                  </div>
-                  <div class="discovery-meta">
-                    <span>预期跟踪 {{ item.expectedTrackingDays }}天</span>
-                    <span v-if="item.duplicate.isOpen">重复候选 · {{ statusLabel(item.duplicate.status || '') }}</span>
-                    <span v-else>可确认入池</span>
-                  </div>
-                  <p>{{ item.reasons[0] || '规则评分达到候选观察线' }}</p>
-                  <p v-if="item.risks.length" class="discovery-risk">{{ item.risks[0] }}</p>
-                  <button
-                    type="button"
-                    :disabled="item.duplicate.isOpen || confirmingDiscoveryCode === item.stock.code"
-                    @click="confirmDiscoveryRecommendation(item)"
-                  >
-                    {{ item.duplicate.isOpen ? '已在候选池' : '确认入池' }}
-                  </button>
-                </article>
-              </div>
-              <p v-else class="discovery-empty">
-                {{
-                  discoveryResult?.skippedReason === 'empty'
-                    ? '当前行情样本为空，暂无建议。'
-                    : '暂无建议，点击刷新建议重新扫描当前行情列表。'
-                }}
-              </p>
-            </section>
+                  <section class="decision-card">
+                    <div class="section-header">
+                      <h4>当前决策</h4>
+                      <span>先判断是否继续跟踪，再推进状态</span>
+                    </div>
+                    <div class="analysis-compare decision-metrics">
+                      <div>
+                        <span>当前重分析</span>
+                        <strong>{{ selectedReview.currentAnalysis.grade }}级 · {{ selectedReview.currentAnalysis.score }}分</strong>
+                      </div>
+                      <div>
+                        <span>入池快照</span>
+                        <strong>{{ selectedReview.savedAnalysis.grade }}级 · {{ selectedReview.savedAnalysis.score }}分</strong>
+                      </div>
+                      <div>
+                        <span>{{ selectedReview.stateLabel }}</span>
+                        <strong :class="deltaClass(selectedReview.scoreDelta)">
+                          {{ formatDelta(selectedReview.scoreDelta) }}
+                        </strong>
+                      </div>
+                    </div>
+                    <div class="decision-strip">
+                      <div>
+                        <span class="decision-label">主要风险</span>
+                        <p>
+                          {{
+                            selectedReview.currentAnalysis.riskWarnings[0] ||
+                            selectedReview.currentAnalysis.structuredRisks[0]?.message ||
+                            '暂无明确风险'
+                          }}
+                        </p>
+                      </div>
+                      <div class="status-actions">
+                        <button
+                          v-for="status in nextStatuses"
+                          :key="status"
+                          :disabled="updatingStatus"
+                          @click="updateStatus(status)"
+                        >
+                          {{ statusLabel(status) }}
+                        </button>
+                      </div>
+                    </div>
+                    <ul class="state-reasons">
+                      <li v-for="reason in selectedReview.stateReasons" :key="reason">{{ reason }}</li>
+                    </ul>
+                  </section>
 
-            <template v-if="selectedEntry && selectedReview">
-              <div class="detail-title">
-                <div>
-                  <h3>{{ selectedEntry.stockName || selectedEntry.stockCode }}</h3>
-                  <span>{{ selectedEntry.stockCode }} · {{ statusLabel(selectedEntry.status) }}</span>
-                </div>
-                <div class="detail-actions">
-                  <div class="quick-actions">
-                    <button type="button" @click="addToFavorites">加入自选</button>
-                    <button type="button" @click="openStockDetail">股票详情</button>
-                    <button type="button" @click="openRankTrend">排名趋势</button>
-                    <button type="button" class="danger-btn" :disabled="deletingCandidate" @click="deleteCandidate">
-                      删除候选
-                    </button>
+                  <section class="analysis-card">
+                    <div class="section-header">
+                      <h4>规则分析</h4>
+                      <button class="text-btn" :disabled="writingAnalysis" @click="writeBackAnalysis">
+                        写回当前分析
+                      </button>
+                    </div>
+                    <div class="breakdown">
+                      <span>RankTrend {{ selectedReview.currentAnalysis.scoreBreakdown.rankTrend }}</span>
+                      <span>题材 {{ selectedReview.currentAnalysis.scoreBreakdown.theme }}</span>
+                      <span>龙头 {{ selectedReview.currentAnalysis.scoreBreakdown.dragon }}</span>
+                      <span>情绪 {{ selectedReview.currentAnalysis.scoreBreakdown.sentiment }}</span>
+                      <span>资金 {{ selectedReview.currentAnalysis.scoreBreakdown.moneyFlow }}</span>
+                    </div>
+                    <div class="evidence-grid">
+                      <div>
+                        <h5>证据项</h5>
+                        <div v-if="selectedReview.currentAnalysis.evidence.length" class="evidence-list">
+                          <div
+                            v-for="item in selectedReview.currentAnalysis.evidence"
+                            :key="`evidence-${item.dimension}-${item.title}`"
+                            class="evidence-item"
+                            :class="`evidence-${item.kind}`"
+                          >
+                            <span>
+                              <strong>{{ item.title }}</strong>
+                              <em>{{ formatScoreImpact(item.scoreImpact) }}</em>
+                            </span>
+                            <small>{{ item.detail }}</small>
+                          </div>
+                        </div>
+                        <p v-else>暂无证据项</p>
+                      </div>
+                      <div>
+                        <h5>扣分项</h5>
+                        <div v-if="selectedReview.currentAnalysis.penalties.length" class="evidence-list">
+                          <div
+                            v-for="item in selectedReview.currentAnalysis.penalties"
+                            :key="`penalty-${item.dimension}-${item.title}`"
+                            class="evidence-item"
+                            :class="`evidence-${item.kind}`"
+                          >
+                            <span>
+                              <strong>{{ item.title }}</strong>
+                              <em>{{ formatScoreImpact(item.scoreImpact) }}</em>
+                            </span>
+                            <small>{{ item.detail }}</small>
+                          </div>
+                        </div>
+                        <p v-else>暂无扣分项</p>
+                      </div>
+                    </div>
+                    <div class="condition-grid">
+                      <h5>结构化条件</h5>
+                      <div class="condition-columns">
+                        <div>
+                          <span class="condition-title">触发条件</span>
+                          <span
+                            v-for="item in selectedReview.currentAnalysis.structuredThesis.triggerConditions"
+                            :key="`trigger-${item.id}`"
+                            class="condition-pill"
+                            :class="`condition-${item.status}`"
+                          >
+                            {{ item.label }} · {{ conditionStatusText(item.status) }}
+                          </span>
+                        </div>
+                        <div>
+                          <span class="condition-title">买入前提</span>
+                          <span
+                            v-for="item in selectedReview.currentAnalysis.structuredThesis.entryPrerequisites"
+                            :key="`entry-${item.id}`"
+                            class="condition-pill"
+                            :class="`condition-${item.status}`"
+                          >
+                            {{ item.label }} · {{ conditionStatusText(item.status) }}
+                          </span>
+                        </div>
+                        <div>
+                          <span class="condition-title">失效条件</span>
+                          <span
+                            v-for="item in selectedReview.currentAnalysis.structuredThesis.invalidationConditions"
+                            :key="`invalid-${item.id}`"
+                            class="condition-pill"
+                            :class="`condition-${item.status}`"
+                          >
+                            {{ item.label }} · {{ conditionStatusText(item.status) }}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                    <div v-if="selectedReview.currentAnalysis.structuredRisks.length" class="structured-risk-list">
+                      <h5>结构化风险</h5>
+                      <span
+                        v-for="item in selectedReview.currentAnalysis.structuredRisks"
+                        :key="item.code"
+                        class="risk-chip"
+                        :class="`risk-${item.level}`"
+                      >
+                        {{ riskLevelText(item.level) }} · {{ item.message }}
+                      </span>
+                    </div>
+                    <div v-if="selectedReview.currentAnalysis.riskWarnings.length" class="risk-warning-list">
+                      <h5>风险提示</h5>
+                      <ul>
+                        <li v-for="risk in selectedReview.currentAnalysis.riskWarnings" :key="risk">{{ risk }}</li>
+                      </ul>
+                    </div>
+                  </section>
+
+                  <section class="editor-card">
+                    <div class="section-header">
+                      <h4>假设编辑</h4>
+                      <button class="text-btn" :disabled="savingThesis" @click="saveThesis">保存假设</button>
+                    </div>
+                    <div class="form-grid thesis-grid">
+                      <label>
+                        <span>入池理由</span>
+                        <textarea v-model="thesisForm.entryReason" rows="3" />
+                      </label>
+                      <label>
+                        <span>交易假设</span>
+                        <textarea v-model="thesisForm.tradeHypothesis" rows="3" />
+                      </label>
+                      <label>
+                        <span>买入前提</span>
+                        <textarea v-model="thesisForm.entryPrerequisites" rows="3" />
+                      </label>
+                      <label>
+                        <span>失效条件</span>
+                        <textarea v-model="thesisForm.invalidationRules" rows="3" />
+                      </label>
+                    </div>
+                    <div class="inline-form">
+                      <label>
+                        <span>人工决策</span>
+                        <select v-model="thesisForm.humanDecision">
+                          <option value="watch">观察</option>
+                          <option value="execute">执行</option>
+                          <option value="skip">跳过</option>
+                        </select>
+                      </label>
+                      <label>
+                        <span>未执行原因</span>
+                        <input v-model="thesisForm.skipReason" placeholder="如 条件未确认 / 仓位不足" />
+                      </label>
+                    </div>
+                  </section>
+
+                  <section class="review-card">
+                    <div class="section-header">
+                      <h4>复盘闭环</h4>
+                      <button class="text-btn" :disabled="savingReview" @click="saveReview">保存复盘</button>
+                    </div>
+                    <div class="form-grid review-grid">
+                      <label>
+                        <span>复盘结果</span>
+                        <select v-model="reviewForm.reviewOutcome">
+                          <option value="pending">待复盘</option>
+                          <option value="success">成功</option>
+                          <option value="partial">部分兑现</option>
+                          <option value="failed">失败</option>
+                          <option value="not_triggered">未触发</option>
+                        </select>
+                      </label>
+                      <label>
+                        <span>模型结果</span>
+                        <select v-model="reviewForm.modelResult">
+                          <option value="unknown">未判断</option>
+                          <option value="correct">模型正确</option>
+                          <option value="partial">部分正确</option>
+                          <option value="wrong">模型错误</option>
+                        </select>
+                      </label>
+                      <label>
+                        <span>执行结果</span>
+                        <select v-model="reviewForm.executionResult">
+                          <option value="unknown">未判断</option>
+                          <option value="good">执行到位</option>
+                          <option value="early_sell">卖早</option>
+                          <option value="late_sell">卖晚</option>
+                          <option value="chased">追高</option>
+                          <option value="missed">错过</option>
+                          <option value="no_trade">未交易</option>
+                        </select>
+                      </label>
+                    </div>
+                    <label class="full-field">
+                      <span>复盘结论</span>
+                      <textarea v-model="reviewForm.reviewNotes" rows="3" />
+                    </label>
+                  </section>
+                </template>
+                <div v-else class="empty detail-empty">选择一条候选股查看分析详情</div>
+              </div>
+
+              <aside class="candidate-side-brief">
+                <section class="discovery-dashboard">
+                  <div class="section-header">
+                    <h4>建议入池</h4>
+                    <div class="section-actions">
+                      <span>人工确认后入池</span>
+                      <button class="text-btn" :disabled="discovering" @click="refreshDiscovery(true)">
+                        刷新建议
+                      </button>
+                    </div>
                   </div>
-                  <div class="status-actions">
-                    <button
-                      v-for="status in nextStatuses"
-                      :key="status"
-                      :disabled="updatingStatus"
-                      @click="updateStatus(status)"
+                  <div v-if="discoveryRecommendations.length" class="discovery-list">
+                    <article
+                      v-for="item in discoveryRecommendations"
+                      :key="item.stock.code"
+                      class="discovery-item"
+                      :class="{ duplicate: item.duplicate.isOpen }"
                     >
-                      {{ statusLabel(status) }}
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              <section class="analysis-card">
-                <div class="section-header">
-                  <h4>规则分析</h4>
-                  <button class="text-btn" :disabled="writingAnalysis" @click="writeBackAnalysis">
-                    写回当前分析
-                  </button>
-                </div>
-                <div class="analysis-compare">
-                  <div>
-                    <span>入池快照</span>
-                    <strong>{{ selectedReview.savedAnalysis.grade }}级 · {{ selectedReview.savedAnalysis.score }}分</strong>
-                  </div>
-                  <div>
-                    <span>当前重分析</span>
-                    <strong>{{ selectedReview.currentAnalysis.grade }}级 · {{ selectedReview.currentAnalysis.score }}分</strong>
-                  </div>
-                  <div>
-                    <span>{{ selectedReview.stateLabel }}</span>
-                    <strong :class="deltaClass(selectedReview.scoreDelta)">
-                      {{ formatDelta(selectedReview.scoreDelta) }}
-                    </strong>
-                  </div>
-                </div>
-                <div class="breakdown">
-                  <span>RankTrend {{ selectedReview.currentAnalysis.scoreBreakdown.rankTrend }}</span>
-                  <span>题材 {{ selectedReview.currentAnalysis.scoreBreakdown.theme }}</span>
-                  <span>龙头 {{ selectedReview.currentAnalysis.scoreBreakdown.dragon }}</span>
-                  <span>情绪 {{ selectedReview.currentAnalysis.scoreBreakdown.sentiment }}</span>
-                  <span>资金 {{ selectedReview.currentAnalysis.scoreBreakdown.moneyFlow }}</span>
-                </div>
-                <div class="evidence-grid">
-                  <div>
-                    <h5>证据项</h5>
-                    <div v-if="selectedReview.currentAnalysis.evidence.length" class="evidence-list">
-                      <div
-                        v-for="item in selectedReview.currentAnalysis.evidence"
-                        :key="`evidence-${item.dimension}-${item.title}`"
-                        class="evidence-item"
-                        :class="`evidence-${item.kind}`"
-                      >
-                        <span>
-                          <strong>{{ item.title }}</strong>
-                          <em>{{ formatScoreImpact(item.scoreImpact) }}</em>
-                        </span>
-                        <small>{{ item.detail }}</small>
+                      <div class="discovery-main">
+                        <strong>{{ item.stock.name || item.stock.code }}</strong>
+                        <span>{{ item.stock.code }} · {{ item.grade }}级 · {{ item.score }}分</span>
                       </div>
-                    </div>
-                    <p v-else>暂无证据项</p>
-                  </div>
-                  <div>
-                    <h5>扣分项</h5>
-                    <div v-if="selectedReview.currentAnalysis.penalties.length" class="evidence-list">
-                      <div
-                        v-for="item in selectedReview.currentAnalysis.penalties"
-                        :key="`penalty-${item.dimension}-${item.title}`"
-                        class="evidence-item"
-                        :class="`evidence-${item.kind}`"
-                      >
-                        <span>
-                          <strong>{{ item.title }}</strong>
-                          <em>{{ formatScoreImpact(item.scoreImpact) }}</em>
+                      <div class="discovery-meta">
+                        <span>预期跟踪 {{ item.expectedTrackingDays }}天</span>
+                        <span v-if="item.duplicate.isOpen">
+                          重复候选 · {{ statusLabel(item.duplicate.status || '') }}
                         </span>
-                        <small>{{ item.detail }}</small>
+                        <span v-else>可确认入池</span>
                       </div>
-                    </div>
-                    <p v-else>暂无扣分项</p>
+                      <p>{{ item.reasons[0] || '规则评分达到候选观察线' }}</p>
+                      <p v-if="item.risks.length" class="discovery-risk">{{ item.risks[0] }}</p>
+                      <button
+                        type="button"
+                        :disabled="item.duplicate.isOpen || confirmingDiscoveryCode === item.stock.code"
+                        @click="confirmDiscoveryRecommendation(item)"
+                      >
+                        {{ item.duplicate.isOpen ? '已在候选池' : '确认入池' }}
+                      </button>
+                    </article>
                   </div>
-                </div>
-                <div class="condition-grid">
-                  <h5>结构化条件</h5>
-                  <div class="condition-columns">
-                    <div>
-                      <span class="condition-title">触发条件</span>
-                      <span
-                        v-for="item in selectedReview.currentAnalysis.structuredThesis.triggerConditions"
-                        :key="`trigger-${item.id}`"
-                        class="condition-pill"
-                        :class="`condition-${item.status}`"
-                      >
-                        {{ item.label }} · {{ conditionStatusText(item.status) }}
-                      </span>
+                  <p v-else class="discovery-empty">
+                    {{
+                      discoveryResult?.skippedReason === 'empty'
+                        ? '当前行情样本为空，暂无建议。'
+                        : '暂无建议，点击刷新建议重新扫描当前行情列表。'
+                    }}
+                  </p>
+                </section>
+
+                <section class="quality-dashboard">
+                  <div class="section-header">
+                    <h4>候选质量</h4>
+                    <span>候选研究，不含交易盈亏</span>
+                  </div>
+                  <div class="quality-compact">
+                    <div class="quality-block quality-block-primary">
+                      <span class="quality-label">候选漏斗</span>
+                      <p>
+                        观察 {{ qualityStats.funnel.observe }} 候选 {{ qualityStats.funnel.candidate }} 触发
+                        {{ qualityStats.funnel.triggered }} 跟踪 {{ qualityStats.funnel.tracking }} 已复盘
+                        {{ qualityStats.funnel.reviewed }}
+                      </p>
+                      <p>
+                        成功 {{ qualityStats.funnel.success }} 失败 {{ qualityStats.funnel.failed }} 未触发
+                        {{ qualityStats.funnel.notTriggered }}
+                      </p>
                     </div>
-                    <div>
-                      <span class="condition-title">买入前提</span>
-                      <span
-                        v-for="item in selectedReview.currentAnalysis.structuredThesis.entryPrerequisites"
-                        :key="`entry-${item.id}`"
-                        class="condition-pill"
-                        :class="`condition-${item.status}`"
-                      >
-                        {{ item.label }} · {{ conditionStatusText(item.status) }}
-                      </span>
+                    <div class="quality-block">
+                      <span class="quality-label">质量拆解</span>
+                      <p>
+                        题材 {{ qualitySummary.themes }} / RankTrend {{ qualitySummary.rankTrend }} / 等级
+                        {{ qualitySummary.grades }} / 资金 {{ qualitySummary.moneyFlow }}
+                      </p>
                     </div>
-                    <div>
-                      <span class="condition-title">失效条件</span>
-                      <span
-                        v-for="item in selectedReview.currentAnalysis.structuredThesis.invalidationConditions"
-                        :key="`invalid-${item.id}`"
-                        class="condition-pill"
-                        :class="`condition-${item.status}`"
-                      >
-                        {{ item.label }} · {{ conditionStatusText(item.status) }}
-                      </span>
+                    <div class="quality-block">
+                      <span class="quality-label">复盘结果</span>
+                      <p>
+                        <span v-for="item in qualityStats.reviewOutcomeSegments" :key="item.key">
+                          {{ item.label }} {{ item.total }}
+                        </span>
+                      </p>
                     </div>
                   </div>
-                </div>
-                <div v-if="selectedReview.currentAnalysis.structuredRisks.length" class="structured-risk-list">
-                  <h5>结构化风险</h5>
-                  <span
-                    v-for="item in selectedReview.currentAnalysis.structuredRisks"
-                    :key="item.code"
-                    class="risk-chip"
-                    :class="`risk-${item.level}`"
-                  >
-                    {{ riskLevelText(item.level) }} · {{ item.message }}
-                  </span>
-                </div>
-                <ul class="state-reasons">
-                  <li v-for="reason in selectedReview.stateReasons" :key="reason">{{ reason }}</li>
-                </ul>
-              </section>
-
-              <section class="editor-card">
-                <div class="section-header">
-                  <h4>假设编辑</h4>
-                  <button class="text-btn" :disabled="savingThesis" @click="saveThesis">保存假设</button>
-                </div>
-                <div class="form-grid thesis-grid">
-                  <label>
-                    <span>入池理由</span>
-                    <textarea v-model="thesisForm.entryReason" rows="3" />
-                  </label>
-                  <label>
-                    <span>交易假设</span>
-                    <textarea v-model="thesisForm.tradeHypothesis" rows="3" />
-                  </label>
-                  <label>
-                    <span>买入前提</span>
-                    <textarea v-model="thesisForm.entryPrerequisites" rows="3" />
-                  </label>
-                  <label>
-                    <span>失效条件</span>
-                    <textarea v-model="thesisForm.invalidationRules" rows="3" />
-                  </label>
-                </div>
-                <div class="inline-form">
-                  <label>
-                    <span>人工决策</span>
-                    <select v-model="thesisForm.humanDecision">
-                      <option value="watch">观察</option>
-                      <option value="execute">执行</option>
-                      <option value="skip">跳过</option>
-                    </select>
-                  </label>
-                  <label>
-                    <span>未执行原因</span>
-                    <input v-model="thesisForm.skipReason" placeholder="如 条件未确认 / 仓位不足" />
-                  </label>
-                </div>
-              </section>
-
-              <section class="review-card">
-                <div class="section-header">
-                  <h4>复盘闭环</h4>
-                  <button class="text-btn" :disabled="savingReview" @click="saveReview">保存复盘</button>
-                </div>
-                <div class="form-grid review-grid">
-                  <label>
-                    <span>复盘结果</span>
-                    <select v-model="reviewForm.reviewOutcome">
-                      <option value="pending">待复盘</option>
-                      <option value="success">成功</option>
-                      <option value="partial">部分兑现</option>
-                      <option value="failed">失败</option>
-                      <option value="not_triggered">未触发</option>
-                    </select>
-                  </label>
-                  <label>
-                    <span>模型结果</span>
-                    <select v-model="reviewForm.modelResult">
-                      <option value="unknown">未判断</option>
-                      <option value="correct">模型正确</option>
-                      <option value="partial">部分正确</option>
-                      <option value="wrong">模型错误</option>
-                    </select>
-                  </label>
-                  <label>
-                    <span>执行结果</span>
-                    <select v-model="reviewForm.executionResult">
-                      <option value="unknown">未判断</option>
-                      <option value="good">执行到位</option>
-                      <option value="early_sell">卖早</option>
-                      <option value="late_sell">卖晚</option>
-                      <option value="chased">追高</option>
-                      <option value="missed">错过</option>
-                      <option value="no_trade">未交易</option>
-                    </select>
-                  </label>
-                </div>
-                <label class="full-field">
-                  <span>复盘结论</span>
-                  <textarea v-model="reviewForm.reviewNotes" rows="3" />
-                </label>
-              </section>
-
-              <section v-if="selectedReview.currentAnalysis.riskWarnings.length">
-                <h4>风险提示</h4>
-                <ul>
-                  <li v-for="risk in selectedReview.currentAnalysis.riskWarnings" :key="risk">{{ risk }}</li>
-                </ul>
-              </section>
-            </template>
-            <div v-else class="empty detail-empty">选择一条候选股查看分析详情</div>
+                </section>
+              </aside>
+            </div>
           </main>
         </div>
       </section>
@@ -935,7 +959,6 @@ defineExpose({
 .candidate-item-main,
 .candidate-item-meta,
 .candidate-item-foot,
-.detail-actions,
 .quick-actions,
 .status-actions,
 .breakdown,
@@ -1247,17 +1270,31 @@ textarea:focus-visible {
   background: #171b22;
 }
 
+.candidate-workbench-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 14px;
+  align-items: start;
+}
+
+.candidate-workflow,
+.candidate-side-brief {
+  min-width: 0;
+}
+
+.candidate-side-brief {
+  position: sticky;
+  top: 0;
+  display: grid;
+  gap: 12px;
+  align-content: start;
+}
+
 .detail-title {
   justify-content: space-between;
   gap: 16px;
   margin-bottom: 16px;
   padding: 4px 2px 0;
-}
-
-.detail-actions {
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 8px;
 }
 
 .quick-actions {
@@ -1303,7 +1340,8 @@ textarea:focus-visible {
   font-size: 12px;
 }
 
-.candidate-detail > section {
+.candidate-workflow > section,
+.candidate-side-brief > section {
   margin: 0 0 16px;
   padding: 14px;
   background: var(--candidate-surface-soft);
@@ -1312,19 +1350,47 @@ textarea:focus-visible {
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.045);
 }
 
-.candidate-detail > section h4 {
+.candidate-workflow > section h4,
+.candidate-side-brief > section h4 {
   margin: 0;
   color: var(--candidate-text);
   font-size: 13px;
   font-weight: 800;
 }
 
-.candidate-detail > section p,
-.candidate-detail > section li {
+.candidate-workflow > section p,
+.candidate-workflow > section li,
+.candidate-side-brief > section p,
+.candidate-side-brief > section li {
   margin: 0;
   color: var(--candidate-muted);
   font-size: 13px;
   line-height: 1.65;
+}
+
+.decision-card {
+  background:
+    linear-gradient(135deg, rgba(255, 177, 59, 0.16), rgba(94, 182, 255, 0.055) 58%, rgba(255, 255, 255, 0.02)),
+    var(--candidate-surface-soft);
+  border-color: rgba(255, 177, 59, 0.34);
+}
+
+.decision-strip {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--candidate-line);
+}
+
+.decision-label {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--candidate-muted);
+  font-size: 12px;
+  font-weight: 800;
 }
 
 .quality-dashboard {
@@ -1348,7 +1414,7 @@ textarea:focus-visible {
 
 .discovery-item {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   gap: 6px 12px;
   padding: 10px 12px;
   background: rgba(13, 17, 24, 0.76);
@@ -1381,7 +1447,7 @@ textarea:focus-visible {
 }
 
 .discovery-item p {
-  grid-column: 1 / -1;
+  grid-column: 1;
 }
 
 .discovery-risk {
@@ -1389,8 +1455,8 @@ textarea:focus-visible {
 }
 
 .discovery-item button {
-  grid-row: 1 / 3;
-  grid-column: 2;
+  grid-column: 1;
+  justify-self: start;
   min-width: 86px;
   min-height: 32px;
   color: var(--candidate-text);
@@ -1412,7 +1478,7 @@ textarea:focus-visible {
 
 .quality-compact {
   display: grid;
-  grid-template-columns: 1.15fr 1fr 0.86fr;
+  grid-template-columns: 1fr;
   gap: 8px;
 }
 
@@ -1512,7 +1578,8 @@ ul {
 
 .evidence-grid h5,
 .condition-grid h5,
-.structured-risk-list h5 {
+.structured-risk-list h5,
+.risk-warning-list h5 {
   margin: 0 0 6px;
   color: var(--candidate-text);
   font-size: 12px;
@@ -1566,7 +1633,8 @@ ul {
 }
 
 .condition-grid,
-.structured-risk-list {
+.structured-risk-list,
+.risk-warning-list {
   margin-top: 10px;
 }
 
@@ -1742,14 +1810,17 @@ select {
     padding: 16px;
   }
 
+  .candidate-workbench-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .candidate-side-brief {
+    position: static;
+  }
+
   .detail-title {
     align-items: flex-start;
     flex-direction: column;
-  }
-
-  .detail-actions {
-    align-items: stretch;
-    width: 100%;
   }
 
   .quick-actions,
@@ -1760,6 +1831,7 @@ select {
 
   .quality-compact,
   .analysis-compare,
+  .decision-strip,
   .discovery-item,
   .evidence-grid,
   .condition-columns,
