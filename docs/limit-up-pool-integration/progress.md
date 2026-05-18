@@ -75,3 +75,37 @@
   - `pnpm test -- src/services/__tests__/DataLayer.test.ts`
   - `pnpm test -- src/services/__tests__/DataLayer.test.ts src/services/dataLoader/__tests__/LimitUpFeed.test.ts src/services/dataLoader/__tests__/ExtraDataProjector.test.ts src/services/snapshot/__tests__/builders.test.ts src/services/__tests__/DragonBreathAnalyzer.thsLimitUpPools.test.ts`
   - `pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false`
+
+## 2026-05-18 收盘 15:00 四类快照审计
+
+- 完成 MongoDB 只读审计，目标为 `dragonboard_live` 的 `quarter_hour/half_hour/hourly/daily` 四类 `15:00` 快照。
+- 四类快照均存在 `snapshot_records`、`snapshot_frames`、`snapshot_stock_rows`、`snapshot_sector_rows`。
+- 行数一致：
+  - `quarter_hour`：247 股票行、24 板块/主线行。
+  - `half_hour`：247 股票行、24 板块/主线行。
+  - `hourly`：100 股票行、24 板块/主线行。
+  - `daily`：247 股票行、24 板块/主线行。
+- 四类快照均已落库 `limitSummary.thsPools`，且 `degraded=false`、`errors=[]`。
+- THS 15:00 摘要计数：首板 72、二板 5、三板 1、四板 2、高标 1、炸板 34、冲板 23、涨停股回撤 6。
+- 热榜股票行中涨停字段已落库：
+  - 一刻/半点/日级：34 条有 `firstZtTime/lastZtTime/boardHeight/highDays`。
+  - 整点：22 条有 `firstZtTime/lastZtTime/boardHeight/highDays`，因整点快照只保留前 100 名。
+- 发现剩余质量风险：
+  - `fengdan` 在四类 15:00 股票行均为 0，仍需确认 THS 上游封单额字段和映射。
+  - `quarter_hour/half_hour/daily` 的 15:00 槽位各有 6 条 `price=0` 股票行，按 QuantBoard 当前 `evaluate_snapshot_quality` 会触发质量门禁失败；该问题主要来自港股/非 A 股热榜项，不属于 THS 涨停池落库失败。
+- 详细审计记录已写入 `docs/limit-up-pool-integration/findings.md`。
+
+## 2026-05-18 `fengdan` 字段追踪
+
+- 已确认 THS 上游不是无数据：
+  - 新细分池 `one/two/three/four/high` 合计 81 条，`volume_money` 81/81 存在且均为正数。
+  - 旧 `/api/limitup/10jqka` 合计 81 条，`order_amount` 81/81 存在且均为正数。
+  - 旧 HTML 端也把 `get_limit_up_stocks` 的 `item.volume_money` 直接展示为“封单额”。
+- 已确认 15:00 不是股票未匹配：
+  - 一刻/半点/日级各有 34 条快照股票行能匹配上游封单额代码，整点有 22 条。
+  - 这些匹配行都有 `firstZtTime`，但 `fengdan > 0` 全部为 0。
+- 全天序列显示 `fengdan` 曾在 11:00、13:15、13:30 快照中出现正值，15:00 又归零，说明字段语义可用，但刷新/投影链路不稳定。
+- 当前疑点：
+  - 旧 `mapLimitUpItems()` 没有把 `order_amount` 映射为 `fengdan`。
+  - `ExtraDataProjector.projectRuntimeFields()` 没有从 `DataLayer.getLimitUpData()` 回灌 `fengdan/maxFengdan`。
+- 详细证据已追加到 `findings.md` 的 `2026-05-18 fengdan 字段追踪审计`。
