@@ -1,4 +1,10 @@
-import type { RefreshTaskDefinition, RefreshTaskId, RefreshTaskSource, RefreshTaskState } from './types'
+import type {
+  RefreshTaskDefinition,
+  RefreshTaskId,
+  RefreshTaskSource,
+  RefreshTaskState,
+  RefreshVisibilityPolicy,
+} from './types'
 
 export const REFRESH_TASK_DEFINITIONS: RefreshTaskDefinition[] = [
   {
@@ -103,7 +109,7 @@ export const REFRESH_TASK_DEFINITIONS: RefreshTaskDefinition[] = [
     intervalMs: 30_000,
     tradingTimeOnly: false,
     visibilityPolicy: 'pause',
-    description: '异动雷达面板可见时轮询选股通异动数据',
+    description: '异动雷达面板或飞书推送启用时轮询选股通异动数据',
   },
 ]
 
@@ -165,6 +171,14 @@ export class RefreshTaskRegistry {
     if (!enabled) {
       task.running = false
     }
+    return true
+  }
+
+  setVisibilityPolicy(id: RefreshTaskId, visibilityPolicy: RefreshVisibilityPolicy): boolean {
+    const task = this.tasks.get(id)
+    if (!task) return false
+    task.visibilityPolicy = visibilityPolicy
+    task.runWhenHidden = visibilityPolicy !== 'pause'
     return true
   }
 

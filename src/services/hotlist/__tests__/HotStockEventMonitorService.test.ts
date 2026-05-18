@@ -133,6 +133,78 @@ describe('HotStockEventMonitorService', () => {
     expect(result.hotStockEvents.map(event => event.id)).toEqual(['a'])
   })
 
+  it('pushes only newly added hot stock events after the first refresh', async () => {
+    const notifier = {
+      sendEvents: vi.fn().mockResolvedValue({ ok: true, sent: 1 }),
+    }
+    const feed = {
+      fetchEvents: vi
+        .fn()
+        .mockResolvedValueOnce([
+          makeEvent({ id: 'a', code: '600001', timestamp: Date.parse('2026-05-15T09:40:00+08:00') }),
+        ])
+        .mockResolvedValueOnce([
+          makeEvent({ id: 'a', code: '600001', timestamp: Date.parse('2026-05-15T09:40:00+08:00') }),
+          makeEvent({ id: 'b', code: '000002', timestamp: Date.parse('2026-05-15T10:01:00+08:00') }),
+          makeEvent({ id: 'c', code: '300001', timestamp: Date.parse('2026-05-15T10:02:00+08:00') }),
+        ]),
+    }
+    const dataLayer = {
+      getStocks: vi.fn().mockReturnValue([
+        { code: '600001', name: '一号' },
+        { code: '000002', name: '二号' },
+      ]),
+      getDragonReview: vi.fn().mockReturnValue(null),
+    }
+    const service = new HotStockEventMonitorService({
+      feed,
+      dataLayer,
+      notifier,
+      now: () => Date.parse('2026-05-15T10:05:00+08:00'),
+    })
+
+    await service.refresh()
+    await service.refresh()
+
+    expect(notifier.sendEvents).toHaveBeenCalledTimes(1)
+    expect(notifier.sendEvents).toHaveBeenCalledWith([
+      expect.objectContaining({ id: 'b', code: '000002', matchedHotStock: true }),
+    ])
+  })
+
+  it('keeps refresh successful when event radar notification fails', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const notifier = {
+      sendEvents: vi.fn().mockRejectedValue(new Error('feishu offline')),
+    }
+    const feed = {
+      fetchEvents: vi
+        .fn()
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([
+          makeEvent({ id: 'a', code: '600001', timestamp: Date.parse('2026-05-15T09:40:00+08:00') }),
+        ]),
+    }
+    const dataLayer = {
+      getStocks: vi.fn().mockReturnValue([{ code: '600001', name: '一号' }]),
+      getDragonReview: vi.fn().mockReturnValue(null),
+    }
+    const service = new HotStockEventMonitorService({
+      feed,
+      dataLayer,
+      notifier,
+      now: () => Date.parse('2026-05-15T10:05:00+08:00'),
+    })
+
+    await service.refresh()
+    const result = await service.refresh()
+
+    expect(result.ok).toBe(true)
+    expect(result.hotStockEvents.map(event => event.id)).toEqual(['a'])
+    expect(notifier.sendEvents).toHaveBeenCalledTimes(1)
+    warnSpy.mockRestore()
+  })
+
   it('runs panel polling through the shared scheduler and pauses when hidden', async () => {
     vi.useFakeTimers()
     const visibility = { visibilityState: 'hidden' }
@@ -175,5 +247,63 @@ describe('HotStockEventMonitorService', () => {
     })
 
     service.stop()
+  })
+
+  it('keeps polling while any owner still needs event radar updates', async () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('document', { visibilityState: 'visible' })
+    const feed = {
+      fetchEvents: vi.fn().mockResolvedValue([]),
+    }
+    const dataLayer = {
+      getStocks: vi.fn().mockReturnValue([]),
+      getDragonReview: vi.fn().mockReturnValue(null),
+    }
+    const service = new HotStockEventMonitorService({
+      feed,
+      dataLayer,
+      intervalMs: 1_000,
+      now: () => Date.parse('2026-05-15T10:05:00+08:00'),
+    })
+
+    service.start('panel')
+    service.start('feishu')
+    service.stop('panel')
+
+    await vi.advanceTimersByTimeAsync(1_000)
+
+    expect(feed.fetchEvents).toHaveBeenCalledTimes(1)
+    service.stop('feishu')
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(feed.fetchEvents).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps feishu event radar polling active when the page is hidden', async () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('document', { visibilityState: 'hidden' })
+    const feed = {
+      fetchEvents: vi.fn().mockResolvedValue([]),
+    }
+    const dataLayer = {
+      getStocks: vi.fn().mockReturnValue([]),
+      getDragonReview: vi.fn().mockReturnValue(null),
+    }
+    const service = new HotStockEventMonitorService({
+      feed,
+      dataLayer,
+      intervalMs: 1_000,
+      now: () => Date.parse('2026-05-15T10:05:00+08:00'),
+    })
+
+    service.start('feishu')
+    await vi.advanceTimersByTimeAsync(1_000)
+
+    expect(feed.fetchEvents).toHaveBeenCalledTimes(1)
+    expect(refreshTaskRegistry.getTask('hotStockEvent.monitor')).toMatchObject({
+      visibilityPolicy: 'run',
+      runWhenHidden: true,
+    })
+
+    service.stop('feishu')
   })
 })

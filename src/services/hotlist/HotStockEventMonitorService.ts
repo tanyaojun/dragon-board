@@ -1,5 +1,6 @@
 import { dataLayer } from '../DataLayer'
-import { refreshScheduler } from '../refresh/RefreshTaskRuntime'
+import { eventRadarFeishuNotifier } from '../notifications/EventRadarFeishuNotifier'
+import { refreshScheduler, refreshTaskRegistry } from '../refresh/RefreshTaskRuntime'
 import {
   XuangubaoAbnormalEventFeed,
 } from './XuangubaoAbnormalEventFeed'
@@ -15,6 +16,7 @@ import {
 export interface HotStockEventMonitorOptions {
   feed?: HotStockEventFetcher
   dataLayer?: HotStockEventDataLayer
+  notifier?: { sendEvents: (events: HotStockAbnormalEvent[]) => Promise<unknown> }
   intervalMs?: number
   maxEvents?: number
   now?: () => number
@@ -22,6 +24,9 @@ export interface HotStockEventMonitorOptions {
 
 const DEFAULT_INTERVAL_MS = 30_000
 const DEFAULT_MAX_EVENTS = 500
+const DEFAULT_OWNER = 'panel'
+const FEISHU_OWNER = 'feishu'
+const TASK_ID = 'hotStockEvent.monitor'
 
 function isSameLocalDate(timestamp: number, now: number): boolean {
   const left = new Date(timestamp)
@@ -76,9 +81,12 @@ function dedupeById(events: HotStockAbnormalEvent[]): HotStockAbnormalEvent[] {
 export class HotStockEventMonitorService {
   private feed: HotStockEventFetcher
   private readonly dataLayer: HotStockEventDataLayer
+  private readonly notifier: { sendEvents: (events: HotStockAbnormalEvent[]) => Promise<unknown> }
   private readonly intervalMs: number
   private readonly maxEvents: number
   private readonly now: () => number
+  private readonly owners = new Set<string>()
+  private initializedForPush = false
   private running = false
   private events: HotStockAbnormalEvent[] = []
   private hotStockEvents: HotStockAbnormalEvent[] = []
@@ -95,6 +103,7 @@ export class HotStockEventMonitorService {
   constructor(options: HotStockEventMonitorOptions = {}) {
     this.feed = options.feed || new XuangubaoAbnormalEventFeed()
     this.dataLayer = options.dataLayer || dataLayer
+    this.notifier = options.notifier || eventRadarFeishuNotifier
     this.intervalMs = options.intervalMs || DEFAULT_INTERVAL_MS
     this.maxEvents = options.maxEvents || DEFAULT_MAX_EVENTS
     this.now = options.now || Date.now
@@ -174,6 +183,7 @@ export class HotStockEventMonitorService {
       this.sectorEvents = nextSectorEvents
       this.latestAdded = nextEvents.filter(event => !previousIds.has(event.id))
       this.latestHotStockAdded = nextHotStockEvents.filter(event => !previousHotStockIds.has(event.id))
+      await this.pushLatestHotStockEvents(this.latestHotStockAdded)
       this.lastUpdate = this.now()
       this.loading = false
       this.notify()
@@ -204,18 +214,23 @@ export class HotStockEventMonitorService {
     }
   }
 
-  start() {
+  start(owner: string = DEFAULT_OWNER) {
+    this.owners.add(owner)
+    this.updateVisibilityPolicy()
     if (this.running) return
-    refreshScheduler.registerRunner('hotStockEvent.monitor', async () => {
+    refreshScheduler.registerRunner(TASK_ID, async () => {
       await this.refresh()
     })
-    refreshScheduler.startTask('hotStockEvent.monitor', this.intervalMs)
+    refreshScheduler.startTask(TASK_ID, this.intervalMs)
     this.running = true
   }
 
-  stop() {
+  stop(owner: string = DEFAULT_OWNER) {
+    this.owners.delete(owner)
+    this.updateVisibilityPolicy()
+    if (this.owners.size > 0) return
     if (!this.running) return
-    refreshScheduler.stopTask('hotStockEvent.monitor')
+    refreshScheduler.stopTask(TASK_ID)
     this.running = false
     this.notify()
   }
@@ -232,6 +247,27 @@ export class HotStockEventMonitorService {
   private notify() {
     const state = this.getState()
     this.subscribers.forEach((callback) => callback(state))
+  }
+
+  private updateVisibilityPolicy() {
+    refreshTaskRegistry.setVisibilityPolicy(
+      TASK_ID,
+      this.owners.has(FEISHU_OWNER) ? 'run' : 'pause',
+    )
+  }
+
+  private async pushLatestHotStockEvents(events: HotStockAbnormalEvent[]) {
+    if (!this.initializedForPush) {
+      this.initializedForPush = true
+      return
+    }
+    if (!events.length) return
+
+    try {
+      await this.notifier.sendEvents(events)
+    } catch (error) {
+      console.warn('[HotStockEventMonitorService] 飞书异动推送失败:', error)
+    }
   }
 }
 

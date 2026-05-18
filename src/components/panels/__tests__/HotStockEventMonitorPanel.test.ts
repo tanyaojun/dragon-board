@@ -25,6 +25,8 @@ describe('HotStockEventMonitorPanel speech settings', () => {
     expect(source).toContain('filter-summary')
     expect(source).toContain('filter-chip')
     expect(source).toContain('speech-card-title')
+    expect(source).toContain('feishu-card-title')
+    expect(source).toContain('测试飞书')
     expect(source).toContain('footer-status')
   })
 
@@ -48,7 +50,7 @@ describe('HotStockEventMonitorPanel speech settings', () => {
     expect(source).toContain('aria-label="异动雷达分类"')
     expect(app).toContain('title="异动雷达"')
     expect(app).toContain("{ id: 'events', label: '异动雷达', icon: '🔔' }")
-    expect(refreshTask).toContain('异动雷达面板可见时轮询选股通异动数据')
+    expect(refreshTask).toContain('异动雷达面板或飞书推送启用时轮询选股通异动数据')
     expect(source).not.toContain('历史交易日志')
   })
 

@@ -169,6 +169,27 @@
         </label>
       </div>
 
+      <div class="settings-card">
+        <div class="feishu-row">
+          <div>
+            <span class="card-kicker">手机推送</span>
+            <strong class="feishu-card-title">飞书机器人</strong>
+          </div>
+          <span class="feishu-status" :class="{ ready: feishuStatus.configured }">
+            {{ feishuStatusLabel }}
+          </span>
+        </div>
+        <div v-if="feishuStatus.lastMessage" class="feishu-message">{{ feishuStatus.lastMessage }}</div>
+        <div class="feishu-actions">
+          <button type="button" :disabled="feishuLoading" @click="refreshFeishuStatus">
+            {{ feishuLoading ? '检查中' : '刷新状态' }}
+          </button>
+          <button type="button" :disabled="feishuLoading || !feishuStatus.configured" @click="testFeishu">
+            测试飞书
+          </button>
+        </div>
+      </div>
+
       <div v-if="state.error" class="empty-state error">
         {{ state.error }}
         <button type="button" @click="refresh">重试</button>
@@ -206,6 +227,10 @@ import {
   hotStockEventSpeechService,
   resolveSpeechVoiceSelection,
 } from '../../services/hotlist/HotStockEventSpeechService'
+import {
+  eventRadarFeishuNotifier,
+  type EventRadarFeishuStatus,
+} from '../../services/notifications/EventRadarFeishuNotifier'
 import {
   type HotStockAbnormalEvent,
   type HotStockAbnormalEventType,
@@ -291,6 +316,8 @@ const speechVolume = ref(voiceOptions.volume)
 const speechVoice = ref(voiceOptions.voice || '')
 const candidatePoolEntries = ref<Record<string, CandidateJournalEntry>>({})
 const candidateActionLoadingCode = ref('')
+const feishuLoading = ref(false)
+const feishuStatus = ref<EventRadarFeishuStatus>(eventRadarFeishuNotifier.getStatus())
 
 const close = () => {
   emit('update:visible', false)
@@ -348,6 +375,11 @@ const speechModeLabel = computed(() => {
   return 'VoiceWorker 未连接'
 })
 const showSpeechVoiceSelect = computed(() => speechMode.value === 'local' && speechEngine.value !== 'volcengine')
+const feishuStatusLabel = computed(() => {
+  if (feishuStatus.value.configured) return '已启用'
+  if (feishuStatus.value.enabled) return '配置不完整'
+  return '未启用'
+})
 
 function setAllTypes(checked: boolean) {
   enabledTypes.value = checked ? [...ALL_EVENT_TYPES] : []
@@ -491,6 +523,41 @@ async function testSpeech() {
   speechSupported.value = status.supported
 }
 
+async function refreshFeishuStatus() {
+  feishuLoading.value = true
+  try {
+    feishuStatus.value = await eventRadarFeishuNotifier.refreshStatus()
+  } finally {
+    feishuLoading.value = false
+  }
+}
+
+async function testFeishu() {
+  feishuLoading.value = true
+  try {
+    await eventRadarFeishuNotifier.sendTest()
+    feishuStatus.value = eventRadarFeishuNotifier.getStatus()
+    EventManager.emit(AppEvents.UI.TOAST, {
+      message: '飞书测试消息已发送',
+      duration: 1500,
+      type: 'success',
+    })
+  } catch (error) {
+    feishuStatus.value = {
+      ...feishuStatus.value,
+      lastMessage: error instanceof Error ? error.message : '飞书测试推送失败',
+      lastCheckedAt: Date.now(),
+    }
+    EventManager.emit(AppEvents.UI.TOAST, {
+      message: `飞书测试失败：${feishuStatus.value.lastMessage}`,
+      duration: 2000,
+      type: 'error',
+    })
+  } finally {
+    feishuLoading.value = false
+  }
+}
+
 let unsubscribe: (() => void) | null = null
 
 watch(
@@ -498,6 +565,7 @@ watch(
   (visible) => {
     if (visible) {
       void refreshSpeechStatus()
+      void refreshFeishuStatus()
       if (!unsubscribe) {
         unsubscribe = hotStockEventMonitorService.subscribe((nextState) => {
           state.value = nextState
@@ -507,14 +575,14 @@ watch(
         })
       }
       void refresh()
-      hotStockEventMonitorService.start()
+      hotStockEventMonitorService.start('panel')
       return
     }
 
     unsubscribe?.()
     unsubscribe = null
     candidatePoolEntries.value = {}
-    hotStockEventMonitorService.stop()
+    hotStockEventMonitorService.stop('panel')
     hotStockEventSpeechService.stop()
   },
   { immediate: true },
@@ -530,7 +598,7 @@ watch([speechRate, speechVolume, speechVoice], ([rate, volume, voice]) => {
 
 onUnmounted(() => {
   unsubscribe?.()
-  hotStockEventMonitorService.stop()
+  hotStockEventMonitorService.stop('panel')
   hotStockEventSpeechService.stop()
 })
 </script>
@@ -849,6 +917,71 @@ onUnmounted(() => {
   border-radius: 6px;
   background: rgba(255, 255, 255, 0.035);
   color: #f1bd7a;
+}
+
+.feishu-row {
+  margin: 0 0 8px;
+  padding: 8px 9px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  background: rgba(77, 171, 247, 0.055);
+  color: #f1bd7a;
+}
+
+.feishu-card-title {
+  display: block;
+  color: #edf3f8;
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.feishu-status {
+  color: #ff7f50;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.feishu-status.ready {
+  color: #7dc6ff;
+}
+
+.feishu-message {
+  margin: 0 0 8px;
+  color: #9ba8b5;
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.feishu-actions {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 7px;
+}
+
+.feishu-actions button {
+  min-height: 30px;
+  border: 1px solid rgba(77, 171, 247, 0.34);
+  border-radius: 5px;
+  background: rgba(77, 171, 247, 0.09);
+  color: #7dc6ff;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.feishu-actions button:hover:not(:disabled),
+.feishu-actions button:focus-visible:not(:disabled) {
+  border-color: rgba(246, 180, 95, 0.55);
+  color: #f1bd7a;
+  outline: none;
+}
+
+.feishu-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .range-row {
