@@ -18,6 +18,7 @@ import { registerLocalVoiceRoutes } from './routes/localVoice.js'
 import { registerMarketRoutes } from './routes/market.js'
 import { registerNotificationRoutes } from './routes/notifications.js'
 import { registerQuoteRoutes } from './routes/quotes.js'
+import { registerStartupCacheRoutes } from './routes/startupCache.js'
 import { registerTdxRoutes } from './routes/tdx.js'
 import { registerXuangubaoRoutes } from './routes/xuangubao.js'
 
@@ -67,6 +68,7 @@ export function createProxyApp(options = {}) {
   registerDocsRoutes(app, context)
   registerHotlistRoutes(app, context)
   registerQuoteRoutes(app, context)
+  registerStartupCacheRoutes(app, context)
   registerDeprecatedRoutes(app, context)
   registerBigOrderRoutes(app, context)
   registerLocalVoiceRoutes(app, context)

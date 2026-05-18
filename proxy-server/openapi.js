@@ -79,6 +79,7 @@ export function buildOpenApiDocument({ port = 3000 } = {}) {
       { name: 'health', description: '服务健康检查' },
       { name: 'hotlists', description: '八平台热榜代理' },
       { name: 'quotes', description: '行情与主力资金代理' },
+      { name: 'cache', description: '启动快照和代理缓存' },
       { name: 'market', description: '市场情绪和涨停数据' },
       { name: 'tdx', description: '通达信兼容代理' },
       { name: 'deprecated', description: '兼容旧接口' },
@@ -158,6 +159,37 @@ export function buildOpenApiDocument({ port = 3000 } = {}) {
         summary: '腾讯 SPK 兼容行情',
         parameters: codesQuery,
       }),
+      '/api/cache/startup-bundle': {
+        get: {
+          tags: ['cache'],
+          summary: '读取启动快照包',
+          description: '从 Redis 读取 Dragon Board 启动快照包，用于首屏快速恢复。',
+          parameters: [
+            {
+              name: 'key',
+              in: 'query',
+              required: true,
+              schema: { type: 'string', example: 'default:2026-05-18' },
+            },
+          ],
+          responses: {
+            200: jsonResponse,
+            400: errorResponse,
+            502: errorResponse,
+          },
+        },
+        post: {
+          tags: ['cache'],
+          summary: '写入启动快照包',
+          description: '将热榜合并结果写入 Redis，供下次启动快速恢复。',
+          requestBody: passthroughBody,
+          responses: {
+            200: jsonResponse,
+            400: errorResponse,
+            502: errorResponse,
+          },
+        },
+      },
       '/api/tdx/{entry}': {
         post: {
           tags: ['tdx'],
@@ -256,4 +288,3 @@ export function buildOpenApiDocument({ port = 3000 } = {}) {
     },
   }
 }
-

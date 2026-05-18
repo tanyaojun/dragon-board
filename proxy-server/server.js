@@ -19,6 +19,8 @@ const formalRoutes = [
   'GET  /api/quotes/eastmoney',
   'GET  /api/quotes/sina',
   'GET  /api/quotes/tencent/spk',
+  'GET  /api/cache/startup-bundle',
+  'POST /api/cache/startup-bundle',
   'POST /api/tdx/:entry',
   'GET  /api/limitup/10jqka',
   'GET  /api/limitup/detail',

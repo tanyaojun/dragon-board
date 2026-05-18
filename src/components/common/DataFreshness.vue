@@ -88,6 +88,10 @@
         <span class="detail-label">数据状态:</span>
         <span class="detail-value" :class="dataStatusClass">{{ dataStatusText }}</span>
       </div>
+      <div class="detail-item">
+        <span class="detail-label">启动缓存:</span>
+        <span class="detail-value" :class="startupCacheClass">{{ startupCacheText }}</span>
+      </div>
       <button class="refresh-btn" @click="manualRefresh">手动刷新</button>
     </div>
   </div>
@@ -107,6 +111,13 @@ const streamStatus = ref(webSocketService.getStatus())
 const subscribedCodes = ref<string[]>(webSocketService.getSubscribedStocks())
 const lastTick = ref<{ code: string; price: number; volume: number } | null>(null)
 const clockTick = ref(Date.now())
+const startupCacheState = ref<{
+  hit: boolean
+  refreshing: boolean
+  ageMs?: number
+  updatedAt: number
+} | null>(null)
+const STARTUP_CACHE_REFRESHING_TIMEOUT_MS = 30000
 
 let clickOutsideHandler: ((event: MouseEvent) => void) | null = null
 let updateTimer: ReturnType<typeof setInterval> | null = null
@@ -276,6 +287,7 @@ const dataStatus = computed(() => {
 })
 
 const dataStatusText = computed(() => {
+  if (isStartupCacheRefreshing.value) return '启动缓存，刷新中'
   const texts: Record<string, string> = {
     fresh: '数据新鲜',
     normal: '数据正常',
@@ -300,6 +312,7 @@ const dataStatusClass = computed(() => {
 })
 
 const badgeLevel = computed<'fresh' | 'normal' | 'expired' | 'unknown'>(() => {
+  if (isStartupCacheRefreshing.value) return 'normal'
   if (dataStatus.value === 'fresh') return 'fresh'
   if (dataStatus.value === 'expired' || dataStatus.value === 'empty') return 'expired'
   if (dataStatus.value === 'unknown') return 'unknown'
@@ -352,6 +365,48 @@ const combinedIcon = computed(() => {
 
 const updateStatus = () => {
   streamStatus.value = webSocketService.getStatus()
+}
+
+const isStartupCacheRefreshing = computed(() => {
+  const state = startupCacheState.value
+  if (!state?.refreshing) return false
+  return clockTick.value - state.updatedAt < STARTUP_CACHE_REFRESHING_TIMEOUT_MS
+})
+
+const startupCacheText = computed(() => {
+  const state = startupCacheState.value
+  if (!state?.hit) return '未命中'
+  if (isStartupCacheRefreshing.value) return '已恢复，后台刷新中'
+  if (state.refreshing) return '已恢复，刷新未确认'
+  const ageSeconds = Math.max(0, Math.round((state.ageMs || 0) / 1000))
+  return ageSeconds > 0 ? `已更新，缓存约${ageSeconds}秒` : '已更新'
+})
+
+const startupCacheClass = computed(() => {
+  const state = startupCacheState.value
+  if (!state?.hit) return 'info'
+  return state.refreshing ? 'warn' : 'good'
+})
+
+const handleDataMerged = (payload: any) => {
+  if (payload?.startupCache?.hit) {
+    startupCacheState.value = {
+      hit: true,
+      refreshing: Boolean(payload.startupCache.backgroundRefresh),
+      ageMs: Number(payload.startupCache.ageMs) || 0,
+      updatedAt: Date.now(),
+    }
+    return
+  }
+
+  if (startupCacheState.value?.refreshing && payload?.reason === 'base-merge') {
+    startupCacheState.value = {
+      ...startupCacheState.value,
+      refreshing: false,
+      ageMs: 0,
+      updatedAt: Date.now(),
+    }
+  }
 }
 
 const updateSubscriptionList = (payload?: any) => {
@@ -421,6 +476,7 @@ onMounted(() => {
   unsubscribeFns.push(EventManager.on(AppEvents.WEBSOCKET.DEPTH_PATCH, updateStatus))
   unsubscribeFns.push(EventManager.on(AppEvents.WEBSOCKET.HEARTBEAT, updateStatus))
   unsubscribeFns.push(EventManager.on(AppEvents.WEBSOCKET.TICK, handleTick))
+  unsubscribeFns.push(EventManager.on(AppEvents.DATA.MERGED, handleDataMerged))
 })
 
 onUnmounted(() => {

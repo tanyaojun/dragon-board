@@ -149,6 +149,94 @@ test('eastmoney quote cache key ignores code order', async () => {
   }
 })
 
+test('tencent quote cache key ignores code order', async () => {
+  let upstreamCalls = 0
+  const cache = new MemoryCache()
+  const app = createProxyApp({
+    logRequests: false,
+    cache,
+    clients: {
+      client: {},
+      plainClient: {
+        get: async () => {
+          upstreamCalls += 1
+          return {
+            data: Buffer.from(
+              [
+                'v_sz000001="51~平安银行~000001~10.00~9.90~10.10~1000~0~0~100000~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~1.01~0~0~0~0~0~1.2~8~0~0~0~0~100~200~1.1~0~0";',
+                'v_sz000002="51~万科A~000002~11.00~10.90~11.10~2000~0~0~200000~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0.92~0~0~0~0~0~1.4~9~0~0~0~0~110~220~1.2~0~0";',
+              ].join('\n'),
+              'utf8',
+            ),
+          }
+        },
+      },
+    },
+  })
+
+  const { server, baseUrl } = await listen(app)
+  try {
+    const first = await fetch(`${baseUrl}/api/quotes/tencent?codes=000001,000002`)
+    const second = await fetch(`${baseUrl}/api/quotes/tencent?codes=000002,000001`)
+    const firstBody = await first.json()
+    const secondBody = await second.json()
+
+    assert.equal(upstreamCalls, 1)
+    assert.equal(firstBody.dragonMeta.cache.hit, false)
+    assert.equal(secondBody.dragonMeta.cache.hit, true)
+    assert.deepEqual(
+      secondBody.data.diff.map((row) => row.f12).sort(),
+      ['000001', '000002'],
+    )
+  } finally {
+    server.close()
+  }
+})
+
+test('sina quote cache key ignores code order', async () => {
+  let upstreamCalls = 0
+  const cache = new MemoryCache()
+  const app = createProxyApp({
+    logRequests: false,
+    cache,
+    clients: {
+      client: {},
+      plainClient: {
+        get: async () => {
+          upstreamCalls += 1
+          return {
+            data: Buffer.from(
+              [
+                'var hq_str_sz000001="平安银行,10.00,9.90,10.10,10.20,9.80,10.09,10.10,1000,100000";',
+                'var hq_str_sz000002="万科A,11.00,10.90,11.10,11.20,10.80,11.09,11.10,2000,200000";',
+              ].join('\n'),
+              'utf8',
+            ),
+          }
+        },
+      },
+    },
+  })
+
+  const { server, baseUrl } = await listen(app)
+  try {
+    const first = await fetch(`${baseUrl}/api/quotes/sina?codes=000001,000002`)
+    const second = await fetch(`${baseUrl}/api/quotes/sina?codes=000002,000001`)
+    const firstBody = await first.json()
+    const secondBody = await second.json()
+
+    assert.equal(upstreamCalls, 1)
+    assert.equal(firstBody.dragonMeta.cache.hit, false)
+    assert.equal(secondBody.dragonMeta.cache.hit, true)
+    assert.deepEqual(
+      secondBody.data.diff.map((row) => row.f12).sort(),
+      ['000001', '000002'],
+    )
+  } finally {
+    server.close()
+  }
+})
+
 test('eastmoney quote route returns stale cache when upstream fails', async () => {
   let upstreamCalls = 0
   const cache = new MemoryCache()
@@ -222,6 +310,51 @@ test('eastmoney hotlist returns stale cache when upstream fails', async () => {
     assert.equal(body.dragonMeta.cache.hit, true)
     assert.equal(body.dragonMeta.cache.stale, true)
     assert.deepEqual(body.data, [{ sc: 'SZ000001', sn: '平安银行' }])
+  } finally {
+    server.close()
+  }
+})
+
+test('startup bundle is stored in and read from cache', async () => {
+  const cache = new MemoryCache()
+  const app = createProxyApp({
+    logRequests: false,
+    cache,
+    clients: {
+      client: {},
+      plainClient: {},
+    },
+  })
+
+  const bundle = {
+    schemaVersion: 1,
+    tradingDate: '2026-05-18',
+    createdAt: 1779091200000,
+    platformData: {
+      eastmoney: [{ code: '000001', name: '平安银行', rank: 1 }],
+    },
+    stocks: [{ code: '000001', name: '平安银行', rank: 1 }],
+  }
+
+  const { server, baseUrl } = await listen(app)
+  try {
+    const writeResponse = await fetch(`${baseUrl}/api/cache/startup-bundle`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: 'default:2026-05-18', bundle }),
+    })
+    const writeBody = await writeResponse.json()
+    const readResponse = await fetch(
+      `${baseUrl}/api/cache/startup-bundle?key=default%3A2026-05-18`,
+    )
+    const readBody = await readResponse.json()
+
+    assert.equal(writeResponse.status, 200)
+    assert.equal(writeBody.ok, true)
+    assert.equal(readResponse.status, 200)
+    assert.equal(readBody.ok, true)
+    assert.equal(readBody.dragonMeta.cache.hit, true)
+    assert.deepEqual(readBody.data.stocks, bundle.stocks)
   } finally {
     server.close()
   }

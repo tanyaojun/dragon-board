@@ -26,6 +26,7 @@ import { rankTrendSignalService } from './RankTrendSignalService'
 import { RealtimeQuoteCoordinator } from './RealtimeQuoteCoordinator'
 import { refreshResourceLocks } from '../refresh/RefreshResourceLocks'
 import { refreshScheduler } from '../refresh/RefreshTaskRuntime'
+import { startupBundleService } from './StartupBundleService'
 import { stockHotnessService } from './StockHotnessService'
 import { stockMergeCoordinator } from './StockMergeCoordinator'
 import { VolumeHistoryService } from './VolumeHistoryService'
@@ -195,6 +196,7 @@ class DataLoaderService {
         | 'signal-enriched'
         | 'manual-signal-update'
         | 'hotness-recalculated'
+      startupCache?: DataLoaderRunSummary['startupCache']
     },
   ): number {
     const publishVersion = ++this.stockPublishVersion
@@ -203,6 +205,7 @@ class DataLoaderService {
       count: stocks.length,
       timestamp: Date.now(),
       reason: meta.reason,
+      startupCache: meta.startupCache,
     })
     return publishVersion
   }
@@ -218,6 +221,27 @@ class DataLoaderService {
       fromCache,
       elapsedMs: Date.now() - startTime,
       timings: { ...this.runTimings },
+    }
+  }
+
+  private summarizeStartupBundleRun(startTime: number, bundle: any): DataLoaderRunSummary {
+    const platformCount = Object.values(bundle.platformData || {}).filter(
+      (rows) => Array.isArray(rows) && rows.length > 0,
+    ).length
+    const createdAt = Number(bundle.createdAt) || 0
+
+    return {
+      stockCount: dataLayer.getStocks().length,
+      platformCount,
+      fromCache: true,
+      elapsedMs: Date.now() - startTime,
+      timings: { ...this.runTimings },
+      startupCache: {
+        hit: true,
+        stale: Boolean(bundle.cacheMeta?.stale),
+        ageMs: createdAt ? Date.now() - createdAt : undefined,
+        backgroundRefresh: true,
+      },
     }
   }
 
@@ -243,6 +267,45 @@ class DataLoaderService {
       () => this.doLoadPlatformAndMerge(force, options),
     )
     return locked.value!
+  }
+
+  private publishStartupBundle(bundle: any, startTime: number): DataLoaderRunSummary {
+    this.state.value.data = bundle.platformData || {}
+    this.state.value.lastUpdate = Number(bundle.createdAt) || Date.now()
+    dataLayer.updatePlatforms(this.state.value.data)
+    this.publishStocks(bundle.stocks || [], {
+      reason: 'base-merge',
+      startupCache: {
+        hit: true,
+        stale: Boolean(bundle.cacheMeta?.stale),
+        ageMs: Number(bundle.createdAt) ? Date.now() - Number(bundle.createdAt) : undefined,
+        backgroundRefresh: true,
+      },
+    })
+    this.syncRealtimeSubscription()
+    return this.summarizeStartupBundleRun(startTime, bundle)
+  }
+
+  private async writeStartupBundle(summary: DataLoaderRunSummary): Promise<void> {
+    const stocks = dataLayer.getStocks()
+    if (!stocks.length) return
+
+    await startupBundleService.write({
+      platformData: this.state.value.data || {},
+      stocks,
+      summary,
+    })
+  }
+
+  private refreshStartupBundleInBackground(force: boolean): void {
+    void this.loadPlatformAndMerge(force, {
+      allowWhileLoading: true,
+      deferSignalEnrichment: true,
+    })
+      .then((summary) => this.writeStartupBundle(summary))
+      .catch((error) => {
+        console.warn('[DataLoader] 后台刷新启动快照包失败:', error)
+      })
   }
 
   private async doLoadPlatformAndMerge(
@@ -307,13 +370,25 @@ class DataLoaderService {
   async bootstrapInitialData(
     options: DataLoaderBootstrapOptions = {},
   ): Promise<DataLoaderRunSummary> {
+    const startTime = Date.now()
     this.quoteProgressCompletedCodes = 0
     this.setLoading(true, '加载平台热榜...', this.startupProgress.platformStart, 'platform')
     try {
+      if (!options.force) {
+        const bundle = await this.measureStartupStep('startupCache', () => startupBundleService.read())
+        if (bundle) {
+          this.updateProgress(100, '已从缓存恢复，后台刷新中...', 'cache')
+          const summary = this.publishStartupBundle(bundle, startTime)
+          this.refreshStartupBundleInBackground(true)
+          return summary
+        }
+      }
+
       const summary = await this.loadPlatformAndMerge(options.force ?? false, {
         allowWhileLoading: true,
         deferSignalEnrichment: true,
       })
+      void this.writeStartupBundle(summary)
       this.updateProgress(100, '完成', 'done')
       return summary
     } finally {

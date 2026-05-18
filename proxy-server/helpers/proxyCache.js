@@ -11,7 +11,13 @@ export const PROXY_CACHE_TTLS = {
   quotes: {
     eastmoneyResponse: 20,
     eastmoneyHistFlow: 300,
+    tencentResponse: 5,
+    sinaResponse: 5,
     empty: 10,
+  },
+  startupBundle: {
+    default: 300,
+    stale: 1800,
   },
 }
 

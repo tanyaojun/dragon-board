@@ -25,6 +25,9 @@ let signalApplyCount = 0
 let signalCompletionCount = 0
 let blockQuoteBatch = false
 let releaseQuoteBatch: (() => void) | null = null
+let startupBundle: any = null
+let startupBundleGetCount = 0
+let startupBundleSaveCount = 0
 
 const timeState = vi.hoisted(() => ({
   tradingTime: true,
@@ -151,6 +154,18 @@ vi.mock('../RankTrendSignalService', () => ({
   },
 }))
 
+vi.mock('../StartupBundleService', () => ({
+  startupBundleService: {
+    read: vi.fn(async () => {
+      startupBundleGetCount++
+      return startupBundle
+    }),
+    write: vi.fn(async (_bundle) => {
+      startupBundleSaveCount++
+    }),
+  },
+}))
+
 describe('DataLoaderFacade', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
@@ -172,6 +187,9 @@ describe('DataLoaderFacade', () => {
     signalCompletionCount = 0
     blockQuoteBatch = false
     releaseQuoteBatch = null
+    startupBundle = null
+    startupBundleGetCount = 0
+    startupBundleSaveCount = 0
     EventManager.clearHistory()
     vi.clearAllMocks()
   })
@@ -206,6 +224,64 @@ describe('DataLoaderFacade', () => {
         name: '平安银行',
       }),
     ])
+  })
+
+  it('hydrates startup data from Redis bundle before running a background refresh', async () => {
+    platformRowsByLoad = [
+      {
+        eastmoney: [{ code: '000002', name: '刷新数据', rank: 1, source: 'eastmoney' }],
+      },
+    ]
+    blockPlatformLoad = true
+    startupBundle = {
+      schemaVersion: 1,
+      tradingDate: '2026-05-18',
+      createdAt: Date.now(),
+      platformData: {
+        eastmoney: [{ code: '000001', name: '缓存数据', rank: 1, source: 'eastmoney' }],
+      },
+      stocks: [{ code: '000001', name: '缓存数据', rank: 1, source: 'eastmoney' }],
+      cacheMeta: { stale: true },
+    }
+    const { dataLoader } = await import('../../dataLoader')
+
+    const summaryPromise = dataLoader.bootstrapInitialData({ force: false })
+
+    try {
+      const summary = await Promise.race([
+        summaryPromise,
+        new Promise((resolve) => setTimeout(() => resolve('blocked-on-refresh'), 25)),
+      ])
+
+      expect(summary).toEqual(
+        expect.objectContaining({
+          stockCount: 1,
+          fromCache: true,
+          startupCache: expect.objectContaining({
+            hit: true,
+            stale: true,
+            backgroundRefresh: true,
+          }),
+        }),
+      )
+      expect(dataLayer.getStocks()).toEqual([expect.objectContaining({ code: '000001' })])
+      expect(platformLoadCount).toBe(1)
+      expect(startupBundleGetCount).toBe(1)
+      expect(dataLoader.getLoadingStatus()).toMatchObject({
+        active: false,
+        phase: 'done',
+        progress: 100,
+      })
+    } finally {
+      blockPlatformLoad = false
+      releasePlatformLoad?.()
+      await summaryPromise.catch(() => undefined)
+    }
+
+    await vi.waitFor(() => {
+      expect(dataLayer.getStocks()).toEqual([expect.objectContaining({ code: '000002' })])
+    })
+    expect(startupBundleSaveCount).toBeGreaterThanOrEqual(1)
   })
 
   it('reports platform item progress during startup loading', async () => {

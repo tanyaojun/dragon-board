@@ -300,15 +300,89 @@ export const __quoteRouteInternals = {
   buildEastmoneyHistFlowUrl,
 }
 
-async function sendEastmoneyQuoteResponse(res, cache, cacheKey, data, cacheMeta) {
-  void cache
-  void cacheKey
+function parseTencentQuotePayload(rawData) {
+  const text = iconv.decode(rawData, 'gbk')
+  const results = []
+
+  text.split('\n').forEach((line) => {
+    if (!line || !line.includes('~')) return
+    const match = line.match(/v_[^=]+="([^"]+)"/)
+    if (!match) return
+
+    const parts = match[1].split('~')
+    if (parts.length < 49) return
+
+    results.push({
+      f12: parts[2],
+      f14: parts[1],
+      f2: parseFloat(parts[3]) || 0,
+      f3: parseFloat(parts[32]) || 0,
+      f6: parseFloat(parts[6]) || 0,
+      f5: (parseFloat(parts[3]) || 0) * (parseFloat(parts[6]) || 0) * 100,
+      f8: parseFloat(parts[38]) || 0,
+      f9: parseFloat(parts[39]) || 0,
+      f20: (parseFloat(parts[45]) || 0) * 10000,
+      f21: (parseFloat(parts[44]) || 0) * 10000,
+      f23: parseFloat(parts[46]) || 0,
+      f62: 0,
+      f66: 0,
+      f69: 0,
+      f184: 0,
+    })
+  })
+
+  return { rc: 0, data: { diff: results } }
+}
+
+function parseSinaQuotePayload(rawData) {
+  const text = iconv.decode(rawData, 'gbk')
+  const results = []
+
+  text.split('\n').forEach((line) => {
+    if (!line || !line.includes('="')) return
+    const match = line.match(/var hq_str_([^=]+)="([^"]+)"/)
+    if (!match) return
+
+    const code = match[1].replace('sh', '').replace('sz', '')
+    const parts = match[2].split(',')
+    const prevClose = parseFloat(parts[2]) || 0
+    const price = parseFloat(parts[3]) || 0
+
+    results.push({
+      f12: code,
+      f14: parts[0],
+      f2: price,
+      f3: prevClose > 0 ? parseFloat((((price - prevClose) / prevClose) * 100).toFixed(2)) : 0,
+      f6: parseFloat(parts[8]) || 0,
+      f5: parseFloat(parts[9]) || 0,
+      f8: 0,
+      f9: 0,
+      f20: 0,
+      f21: 0,
+      f23: 0,
+      f62: 0,
+      f66: 0,
+      f69: 0,
+      f184: 0,
+    })
+  })
+
+  return { rc: 0, data: { diff: results } }
+}
+
+function sendCachedQuoteResponse(res, data, cacheMeta) {
   res.json(
     attachCacheMeta(data, {
       store: 'redis',
       ...cacheMeta,
     }),
   )
+}
+
+async function sendEastmoneyQuoteResponse(res, cache, cacheKey, data, cacheMeta) {
+  void cache
+  void cacheKey
+  sendCachedQuoteResponse(res, data, cacheMeta)
 }
 
 async function loadEastmoneyQuotePayload(
@@ -475,51 +549,36 @@ export function registerQuoteRoutes(app, { plainClient, readConfig, cache }) {
   app.get('/api/quotes/tencent', async (req, res) => {
     const codeList = requireCodes(req, res)
     if (!codeList) return
+    const cacheKey = `quotes:tencent:v1:${normalizeCodeCacheKey(codeList)}`
+    const ttlSeconds = PROXY_CACHE_TTLS.quotes.tencentResponse
 
     try {
-      const tencentCodes = codeList
-        .map((code) => {
-          const c = cleanCode(code)
-          return c.startsWith('6') ? `sh${c}` : `sz${c}`
-        })
-        .join(',')
+      const result = await cache.remember(
+        cacheKey,
+        {
+          ttlSeconds,
+          staleTtlSeconds: ttlSeconds * 6,
+        },
+        async () => {
+          const tencentCodes = codeList
+            .map((code) => {
+              const c = cleanCode(code)
+              return c.startsWith('6') ? `sh${c}` : `sz${c}`
+            })
+            .join(',')
 
-      const response = await plainClient.get(`http://qt.gtimg.cn/q=${tencentCodes}`, {
-        timeout: 5000,
-        responseType: 'arraybuffer',
+          const response = await plainClient.get(`http://qt.gtimg.cn/q=${tencentCodes}`, {
+            timeout: 5000,
+            responseType: 'arraybuffer',
+          })
+
+          return parseTencentQuotePayload(response.data)
+        },
+      )
+      sendCachedQuoteResponse(res, result.value, {
+        ...result.cache,
+        ttlSeconds,
       })
-
-      const text = iconv.decode(response.data, 'gbk')
-      const results = []
-
-      text.split('\n').forEach((line) => {
-        if (!line || !line.includes('~')) return
-        const match = line.match(/v_[^=]+="([^"]+)"/)
-        if (!match) return
-
-        const parts = match[1].split('~')
-        if (parts.length < 49) return
-
-        results.push({
-          f12: parts[2],
-          f14: parts[1],
-          f2: parseFloat(parts[3]) || 0,
-          f3: parseFloat(parts[32]) || 0,
-          f6: parseFloat(parts[6]) || 0,
-          f5: (parseFloat(parts[3]) || 0) * (parseFloat(parts[6]) || 0) * 100,
-          f8: parseFloat(parts[38]) || 0,
-          f9: parseFloat(parts[39]) || 0,
-          f20: (parseFloat(parts[45]) || 0) * 10000,
-          f21: (parseFloat(parts[44]) || 0) * 10000,
-          f23: parseFloat(parts[46]) || 0,
-          f62: 0,
-          f66: 0,
-          f69: 0,
-          f184: 0,
-        })
-      })
-
-      res.json({ rc: 0, data: { diff: results } })
     } catch (error) {
       console.error('[腾讯行情] 失败:', error.message)
       sendDegraded(res, { source: 'quotes-tencent', error, fallbackData: EMPTY_QUOTES })
@@ -529,54 +588,37 @@ export function registerQuoteRoutes(app, { plainClient, readConfig, cache }) {
   app.get('/api/quotes/sina', async (req, res) => {
     const codeList = requireCodes(req, res)
     if (!codeList) return
+    const cacheKey = `quotes:sina:v1:${normalizeCodeCacheKey(codeList)}`
+    const ttlSeconds = PROXY_CACHE_TTLS.quotes.sinaResponse
 
     try {
-      const sinaCodes = codeList
-        .map((code) => {
-          const c = cleanCode(code)
-          return c.startsWith('6') ? `sh${c}` : `sz${c}`
-        })
-        .join(',')
+      const result = await cache.remember(
+        cacheKey,
+        {
+          ttlSeconds,
+          staleTtlSeconds: ttlSeconds * 6,
+        },
+        async () => {
+          const sinaCodes = codeList
+            .map((code) => {
+              const c = cleanCode(code)
+              return c.startsWith('6') ? `sh${c}` : `sz${c}`
+            })
+            .join(',')
 
-      const response = await plainClient.get(`http://hq.sinajs.cn/list=${sinaCodes}`, {
-        timeout: 5000,
-        responseType: 'arraybuffer',
-        headers: { Referer: 'http://finance.sina.com.cn' },
+          const response = await plainClient.get(`http://hq.sinajs.cn/list=${sinaCodes}`, {
+            timeout: 5000,
+            responseType: 'arraybuffer',
+            headers: { Referer: 'http://finance.sina.com.cn' },
+          })
+
+          return parseSinaQuotePayload(response.data)
+        },
+      )
+      sendCachedQuoteResponse(res, result.value, {
+        ...result.cache,
+        ttlSeconds,
       })
-
-      const text = iconv.decode(response.data, 'gbk')
-      const results = []
-
-      text.split('\n').forEach((line) => {
-        if (!line || !line.includes('="')) return
-        const match = line.match(/var hq_str_([^=]+)="([^"]+)"/)
-        if (!match) return
-
-        const code = match[1].replace('sh', '').replace('sz', '')
-        const parts = match[2].split(',')
-        const prevClose = parseFloat(parts[2]) || 0
-        const price = parseFloat(parts[3]) || 0
-
-        results.push({
-          f12: code,
-          f14: parts[0],
-          f2: price,
-          f3: prevClose > 0 ? parseFloat((((price - prevClose) / prevClose) * 100).toFixed(2)) : 0,
-          f6: parseFloat(parts[8]) || 0,
-          f5: parseFloat(parts[9]) || 0,
-          f8: 0,
-          f9: 0,
-          f20: 0,
-          f21: 0,
-          f23: 0,
-          f62: 0,
-          f66: 0,
-          f69: 0,
-          f184: 0,
-        })
-      })
-
-      res.json({ rc: 0, data: { diff: results } })
     } catch (error) {
       console.error('[新浪行情] 失败:', error.message)
       sendDegraded(res, { source: 'quotes-sina', error, fallbackData: EMPTY_QUOTES })

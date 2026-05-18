@@ -26,7 +26,7 @@ export interface LoadingStatus {
   progress: number
   message: string
   startTime: number | null
-  phase?: 'platform' | 'quote' | 'merge' | 'signal' | 'done' | 'error'
+  phase?: 'cache' | 'platform' | 'quote' | 'merge' | 'signal' | 'done' | 'error'
 }
 
 export interface PlatformLoadProgress {
@@ -49,6 +49,12 @@ export interface DataLoaderRunSummary {
   fromCache: boolean
   elapsedMs: number
   timings?: Record<string, number>
+  startupCache?: {
+    hit: boolean
+    stale?: boolean
+    ageMs?: number
+    backgroundRefresh?: boolean
+  }
 }
 
 export interface DataLoaderBootstrapOptions {
