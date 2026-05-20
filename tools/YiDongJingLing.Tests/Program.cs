@@ -2,6 +2,7 @@ using YiDongJingLing;
 using YiDongJingLing.Blocks;
 using YiDongJingLing.Events;
 using YiDongJingLing.MarketData;
+using YiDongJingLing.Notifications;
 using YiDongJingLing.Settings;
 using YiDongJingLing.Speech;
 using System.Net;
@@ -93,6 +94,28 @@ Run("Event engine emits highest crossed rise and amount tiers", () =>
     AssertEqual(1, events.Count(item => item.Type == L1EventType.AmountTier), "amount tier count");
 });
 
+Run("Event engine emits drop tier, large orders, and open shape events", () =>
+{
+    var engine = new L1EventEngine(new L1EventRules
+    {
+        RiseTiers = [7m],
+        DropTiers = [7m],
+        AmountTiers = [100_000_000m],
+        LargeOrderAmount = 10_000_000m,
+        OpenGapPct = 1m,
+        LongBodyPct = 4m,
+    });
+    var drop = Quote("600000", "浦发银行", 9.2m, -8m, 10m, asks: [Level(9.21m, 20_000m)]);
+    var lowOpenLongYang = Quote("300001", "特锐德", 10.3m, 3m, 10m) with { Open = 9.8m };
+
+    var dropEvents = engine.Evaluate(drop, null, [drop]);
+    var shapeEvents = engine.Evaluate(lowOpenLongYang, null, [lowOpenLongYang]);
+
+    AssertTrue(dropEvents.Any(item => item.Type == L1EventType.BigDropTier && item.Reason.Contains("7%")), "drop tier");
+    AssertTrue(dropEvents.Any(item => item.Type == L1EventType.LargeAskOrder), "large ask order");
+    AssertTrue(shapeEvents.Any(item => item.Type == L1EventType.LowOpenLongYang), "low open long yang");
+});
+
 Run("Event engine priming suppresses existing rise and amount tiers", () =>
 {
     var engine = new L1EventEngine();
@@ -108,6 +131,22 @@ Run("Event engine priming suppresses existing rise and amount tiers", () =>
 
     AssertEqual(0, events.Count(item => item.Type == L1EventType.BigRiseTier), "rise tier after prime");
     AssertEqual(0, events.Count(item => item.Type == L1EventType.AmountTier), "amount tier after prime");
+});
+
+Run("Event engine priming suppresses existing open shape events", () =>
+{
+    var engine = new L1EventEngine(new L1EventRules
+    {
+        OpenGapPct = 1m,
+        LongBodyPct = 4m,
+    });
+    var quote = Quote("300001", "特锐德", 10.3m, 3m, 10m) with { Open = 9.8m };
+    var next = quote with { SourceTime = quote.SourceTime.AddSeconds(3) };
+
+    engine.Prime(quote);
+    var events = engine.Evaluate(next, quote, [quote, next]);
+
+    AssertEqual(0, events.Count(item => item.Type == L1EventType.LowOpenLongYang), "low open long yang after prime");
 });
 
 Run("Trading session excludes lunch break snapshots", () =>
@@ -135,6 +174,41 @@ Run("Event engine emits fast rise and fast drop from local history", () =>
 
     AssertTrue(riseEvents.Any(item => item.Type == L1EventType.FastRise), "fast rise");
     AssertTrue(dropEvents.Any(item => item.Type == L1EventType.FastDrop), "fast drop");
+});
+
+Run("Event engine emits five minute fast move from local history", () =>
+{
+    var engine = new L1EventEngine(new L1EventRules
+    {
+        FastRise30SecPct = 99m,
+        FastRise60SecPct = 99m,
+        FastRise300SecPct = 5m,
+        FastDrop30SecPct = -99m,
+        FastDrop60SecPct = -99m,
+        FastDrop300SecPct = -5m,
+    });
+    var t0 = DateTimeOffset.Parse("2026-05-20T09:30:00+08:00");
+    var old = Quote("300001", "特锐德", 10m, 0m, 10m, time: t0);
+    var rise = Quote("300001", "特锐德", 10.6m, 6m, 10m, time: t0.AddMinutes(5));
+
+    _ = engine.Evaluate(old, null, [old]);
+    var events = engine.Evaluate(rise, old, [old, rise]);
+
+    AssertTrue(events.Any(item => item.Type == L1EventType.FastRise && item.Reason.Contains("5分钟 6.00%")), "five minute fast rise");
+});
+
+Run("Quote state store keeps enough history for five minute fast move", () =>
+{
+    var store = new QuoteStateStore();
+    var t0 = DateTimeOffset.Parse("2026-05-20T09:30:00+08:00");
+    var old = Quote("300001", "特锐德", 10m, 0m, 10m, time: t0);
+    var current = Quote("300001", "特锐德", 10.6m, 6m, 10m, time: t0.AddMinutes(5));
+
+    _ = store.Apply(old);
+    _ = store.Apply(current);
+    var history = store.GetHistory("300001");
+
+    AssertTrue(history.Any(item => item.SourceTime == t0), "five minute baseline retained");
 });
 
 Run("Event engine clear resets per-stock state", () =>
@@ -273,6 +347,14 @@ Run("App settings clone is independent", () =>
         BridgeUrl = "ws://old",
         StockPoolSource = StockPoolSource.Hotlist,
         FilterStStocks = true,
+        SyncMessages = true,
+        RiseBreakthroughPct = 8m,
+        DropBreakthroughPct = 6m,
+        FiveMinuteMovePct = 4m,
+        LargeAmountThresholdWan = 5_000m,
+        LargeOrderThresholdWan = 800m,
+        OpenGapPct = 1.5m,
+        LongBodyPct = 3.5m,
         VoiceMode = VoiceMode.All,
         SelectedBlockFiles = ["old.blk"],
         EnabledEvents = { [L1EventType.FastRise.ToString()] = true },
@@ -287,6 +369,14 @@ Run("App settings clone is independent", () =>
     AssertEqual("ws://old", original.BridgeUrl, "bridge url unchanged");
     AssertEqual(StockPoolSource.Hotlist, original.StockPoolSource, "stock pool source unchanged");
     AssertTrue(original.FilterStStocks, "filter ST unchanged");
+    AssertTrue(original.SyncMessages, "sync messages unchanged");
+    AssertEqual(8m, original.RiseBreakthroughPct, "rise threshold unchanged");
+    AssertEqual(6m, original.DropBreakthroughPct, "drop threshold unchanged");
+    AssertEqual(4m, original.FiveMinuteMovePct, "five minute threshold unchanged");
+    AssertEqual(5_000m, original.LargeAmountThresholdWan, "amount threshold unchanged");
+    AssertEqual(800m, original.LargeOrderThresholdWan, "order threshold unchanged");
+    AssertEqual(1.5m, original.OpenGapPct, "open gap unchanged");
+    AssertEqual(3.5m, original.LongBodyPct, "long body unchanged");
     AssertEqual(VoiceMode.All, original.VoiceMode, "voice mode unchanged");
     AssertEqual(1, original.SelectedBlockFiles.Count, "selected files unchanged");
     AssertTrue(original.EnabledEvents[L1EventType.FastRise.ToString()], "event setting unchanged");
@@ -365,6 +455,31 @@ Run("Main form detects ST stock names", () =>
     AssertTrue(MainForm.IsStStockName("*ST华铁"), "*ST prefix");
     AssertTrue(MainForm.IsStStockName("华铁退"), "delisting name");
     AssertTrue(!MainForm.IsStStockName("平安银行"), "normal name");
+});
+
+Run("Event radar message notifier posts compatible payload to proxy", () =>
+{
+    var handler = new StubNotificationHandler();
+    using var notifier = new EventRadarMessageNotifier(handler);
+    var timestamp = DateTimeOffset.Parse("2026-05-20T10:00:00+08:00");
+
+    var result = notifier.SendEventsAsync(
+        [Event("002445", "中南文化", L1EventType.FastRise, "快速拉升", timestamp)],
+        new Uri("http://127.0.0.1:3000"))
+        .GetAwaiter()
+        .GetResult();
+
+    AssertEqual(1, result.Queued, "queued count");
+    AssertEqual("/api/notifications/event-radar/events", handler.LastRequestPath, "request path");
+    using var document = JsonDocument.Parse(handler.LastRequestBody);
+    var root = document.RootElement;
+    AssertEqual("yidong-jingling", root.GetProperty("source").GetString(), "source");
+    var payload = root.GetProperty("events")[0];
+    AssertEqual("快速拉升", payload.GetProperty("typeName").GetString(), "typeName");
+    AssertEqual("002445", payload.GetProperty("code").GetString(), "code");
+    AssertEqual("中南文化", payload.GetProperty("name").GetString(), "name");
+    AssertEqual(timestamp.ToUnixTimeMilliseconds(), payload.GetProperty("timestamp").GetInt64(), "timestamp");
+    AssertEqual(5m, payload.GetProperty("changePct").GetDecimal(), "change pct");
 });
 
 Run("TDX bridge full state merges quote and depth into one snapshot", () =>
@@ -565,6 +680,22 @@ sealed class StubVoiceWorkerHandler : HttpMessageHandler
         return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = new StringContent(json, Encoding.UTF8, "application/json"),
+        });
+    }
+}
+
+sealed class StubNotificationHandler : HttpMessageHandler
+{
+    public string LastRequestPath { get; private set; } = "";
+    public string LastRequestBody { get; private set; } = "";
+
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        LastRequestPath = request.RequestUri?.AbsolutePath ?? "";
+        LastRequestBody = request.Content?.ReadAsStringAsync(cancellationToken).GetAwaiter().GetResult() ?? "";
+        return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("""{"ok":true,"queued":1,"sent":0,"skipped":0}""", Encoding.UTF8, "application/json"),
         });
     }
 }

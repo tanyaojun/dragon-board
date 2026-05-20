@@ -1,5 +1,34 @@
 # 异动精灵 V1 进度记录
 
+## 2026-05-20 TDX 雷达设置迁移项
+
+- **目标：** 按 TDX 市场雷达设置页，把现有行情桥可稳定提供的数据尽量迁移为桌面版可配置规则。
+- **改动：**
+  - 新增可配置阈值：涨幅突破、跌幅突破、5 分钟涨跌幅、成交额门限、买卖挂单额门限、开盘跳空幅度、长阳/长阴实体幅度。
+  - 新增事件类型：大幅跳水、出现大买挂盘、出现大卖挂盘、低开长阳、高开长阴。
+  - 快速拉升/快速跳水扩展到 5 分钟窗口；成交额跨档改为使用设置页门限；大买/大卖挂盘按买一/卖一挂单金额计算。
+  - 设置页增加“异动参数”区域，参数保存到 `AppSettings` 并在 `MainForm` 中同步到 `L1EventRules`。
+  - 本地行情历史缓存扩展到 6 分钟，确保 5 分钟快涨/快跌规则在实盘路径可触发。
+  - 启动基线会吸收已经成立的低开长阳/高开长阴形态，避免工具启动后把存量形态误报为新增异动。
+  - 补充测试覆盖新增规则、5 分钟快涨、开盘形态基线吸收、设置克隆。
+- **验证：**
+  - `dotnet build tools\YiDongJingLing\YiDongJingLing.csproj -c Release`：0 warnings, 0 errors。
+  - `dotnet run --project tools\YiDongJingLing.Tests\YiDongJingLing.Tests.csproj`：全部 PASS。
+  - `dotnet publish ... -o tools\YiDongJingLing\publish\win-x64`：用户关闭运行实例后已成功发布。
+
+## 2026-05-20 设置页同步消息与飞书机器人
+
+- **目标：** 在设置页增加“同步消息”勾选框，并复用网页版“异动雷达”的飞书聊天机器人发送能力。
+- **改动：**
+  - `AppSettings` 增加 `SyncMessages`，设置窗保存/加载该开关。
+  - 设置页“股票池、窗口与行情桥”区域增加“同步消息”复选框。
+  - 新增 `EventRadarMessageNotifier`，把桌面版 L1 异动转换为代理 `/api/notifications/event-radar/events` 接口兼容 payload。
+  - `MainForm` 在异动去重后、语音播报旁异步同步消息；代理未运行时尝试启动 `proxy-server`，失败只写诊断日志。
+  - 使用说明补充飞书配置前置条件和代理端冷却/批量窗口语义。
+- **验证：**
+  - `dotnet run --project tools\YiDongJingLing.Tests\YiDongJingLing.Tests.csproj`：全部 PASS。
+  - `dotnet build tools\YiDongJingLing\YiDongJingLing.csproj -c Release`：0 warnings, 0 errors。
+
 ## 2026-05-20 TDX 自选股切回保留修复
 
 - **目标：** 修复从 `八平台热榜` 切回 `TDX自选股` 时，原先勾选的 `.blk` 文件可能被空列表覆盖的问题。

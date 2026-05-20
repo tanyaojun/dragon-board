@@ -75,8 +75,12 @@ public sealed class EventDeduper
             L1EventType.UpcomingLimitDownOpen => 41,
             L1EventType.FastRise => 35,
             L1EventType.FastDrop => 34,
+            L1EventType.LowOpenLongYang => 33,
+            L1EventType.HighOpenLongYin => 32,
             L1EventType.NearLimitUp => 30,
             L1EventType.NearLimitDown => 28,
+            L1EventType.BigRiseTier => 25,
+            L1EventType.BigDropTier => 24,
             _ => 0,
         };
 

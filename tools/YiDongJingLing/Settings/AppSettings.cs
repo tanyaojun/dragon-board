@@ -23,6 +23,14 @@ public sealed class AppSettings
     public StockPoolSource StockPoolSource { get; set; } = StockPoolSource.TdxBlock;
     public bool TopMost { get; set; }
     public bool FilterStStocks { get; set; }
+    public bool SyncMessages { get; set; }
+    public decimal RiseBreakthroughPct { get; set; } = 7m;
+    public decimal DropBreakthroughPct { get; set; } = 7m;
+    public decimal FiveMinuteMovePct { get; set; } = 5m;
+    public decimal LargeAmountThresholdWan { get; set; } = 10_000m;
+    public decimal LargeOrderThresholdWan { get; set; } = 1_000m;
+    public decimal OpenGapPct { get; set; } = 1m;
+    public decimal LongBodyPct { get; set; } = 4m;
     public bool VoiceEnabled { get; set; } = true;
     public double VoiceRate { get; set; } = 1;
     public int VoiceVolume { get; set; } = 100;
@@ -46,6 +54,14 @@ public sealed class AppSettings
             StockPoolSource = StockPoolSource,
             TopMost = TopMost,
             FilterStStocks = FilterStStocks,
+            SyncMessages = SyncMessages,
+            RiseBreakthroughPct = RiseBreakthroughPct,
+            DropBreakthroughPct = DropBreakthroughPct,
+            FiveMinuteMovePct = FiveMinuteMovePct,
+            LargeAmountThresholdWan = LargeAmountThresholdWan,
+            LargeOrderThresholdWan = LargeOrderThresholdWan,
+            OpenGapPct = OpenGapPct,
+            LongBodyPct = LongBodyPct,
             VoiceEnabled = VoiceEnabled,
             VoiceRate = VoiceRate,
             VoiceVolume = VoiceVolume,

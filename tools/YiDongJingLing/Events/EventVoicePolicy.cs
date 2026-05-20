@@ -19,7 +19,8 @@ public static class EventVoicePolicy
     public static bool IsStrongSignal(EventRecord item)
     {
         return item.Severity is L1EventSeverity.Critical or L1EventSeverity.Important &&
-            item.Type is not L1EventType.BidPressure and not L1EventType.AskPressure and not L1EventType.SpreadWidened;
+            item.Type is not L1EventType.BidPressure and not L1EventType.AskPressure and not L1EventType.SpreadWidened
+                and not L1EventType.LargeBidOrder and not L1EventType.LargeAskOrder;
     }
 
     public static string DisplayName(VoiceMode mode)

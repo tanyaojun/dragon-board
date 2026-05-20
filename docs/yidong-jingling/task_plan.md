@@ -268,7 +268,25 @@ V1 交付时，只要用户可以打开一个 GUI、选择通达信板块文件�
 - **验证：** `dotnet run --project tools\YiDongJingLing.Tests\YiDongJingLing.Tests.csproj`；`dotnet build tools\YiDongJingLing\YiDongJingLing.csproj -c Release`。
 - **状态：** complete
 
-## V2 Phase 5：验收和发布
+## V2 Phase 6：飞书消息同步
+
+- [x] 设置页增加“同步消息”勾选框，保存到 `AppSettings.SyncMessages`。
+- [x] 开启后，桌面版捕获到已启用且通过去重的异动时，复用本地代理 `/api/notifications/event-radar/events` 同步到飞书聊天机器人。
+- [x] 复用网页版异动雷达的代理侧飞书配置、签名、冷却和批量发送逻辑，不在桌面端重复实现飞书 webhook 签名。
+- [x] 代理未运行时自动尝试启动 `proxy-server`；发送失败只写诊断日志，不影响行情监控和语音播报。
+- **验证：** `dotnet run --project tools\YiDongJingLing.Tests\YiDongJingLing.Tests.csproj`；`dotnet build tools\YiDongJingLing\YiDongJingLing.csproj -c Release`。
+- **状态：** complete
+
+## V2 Phase 7：TDX 雷达设置迁移
+
+- [x] 设置页增加“异动参数”区域，支持配置涨幅突破、跌幅突破、5 分钟涨跌幅、成交额门限、挂单额门限、开盘跳空幅度、长阳/长阴幅度。
+- [x] 基于 TDX L1 行情桥现有字段迁移：大幅跳水、5 分钟快涨快跌、出现大买/大卖挂盘、低开长阳、高开长阴、成交额门限。
+- [x] 新增事件进入异动类型勾选列表、去重优先级和语音策略。
+- [x] 不接入不稳定逐笔口径，不迁移自由流通股占比类规则。
+- **验证：** `dotnet run --project tools\YiDongJingLing.Tests\YiDongJingLing.Tests.csproj`；`dotnet build tools\YiDongJingLing\YiDongJingLing.csproj -c Release`。
+- **状态：** complete
+
+## V2 Phase 8：验收和发布
 
 - [x] 更新 `docs/yidong-jingling/progress.md`。
 - [x] 更新使用说明。

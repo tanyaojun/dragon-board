@@ -12,6 +12,7 @@ internal sealed class SettingsForm : Form
     private readonly CheckedListBox _eventTypeList = new();
     private readonly CheckBox _voiceEnabledBox = new();
     private readonly CheckBox _filterStBox = new();
+    private readonly CheckBox _syncMessageBox = new();
     private readonly TrackBar _volumeBar = new();
     private readonly TrackBar _rateBar = new();
     private readonly TrackBar _opacityBar = new();
@@ -19,6 +20,13 @@ internal sealed class SettingsForm : Form
     private readonly ComboBox _voiceModeBox = new();
     private readonly ComboBox _stockPoolSourceBox = new();
     private readonly TextBox _bridgeUrlBox = new();
+    private readonly NumericUpDown _riseBreakthroughBox = new();
+    private readonly NumericUpDown _dropBreakthroughBox = new();
+    private readonly NumericUpDown _fiveMinuteMoveBox = new();
+    private readonly NumericUpDown _largeAmountBox = new();
+    private readonly NumericUpDown _largeOrderBox = new();
+    private readonly NumericUpDown _openGapBox = new();
+    private readonly NumericUpDown _longBodyBox = new();
     private readonly Label _rateValueLabel = new();
     private readonly Label _volumeValueLabel = new();
     private readonly Label _opacityValueLabel = new();
@@ -31,8 +39,8 @@ internal sealed class SettingsForm : Form
 
         Text = "异动精灵设置";
         Width = 860;
-        Height = 740;
-        MinimumSize = new Size(820, 700);
+        Height = 820;
+        MinimumSize = new Size(820, 760);
         StartPosition = FormStartPosition.CenterParent;
         Font = new Font("Microsoft YaHei UI", 9f);
         BackColor = Color.FromArgb(241, 244, 248);
@@ -99,12 +107,13 @@ internal sealed class SettingsForm : Form
         var right = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
-            RowCount = 4,
+            RowCount = 5,
             BackColor = BackColor,
         };
         right.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
         right.RowStyles.Add(new RowStyle(SizeType.Absolute, 236));
         right.RowStyles.Add(new RowStyle(SizeType.Absolute, 226));
+        right.RowStyles.Add(new RowStyle(SizeType.Absolute, 170));
         right.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         root.Controls.Add(right, 1, 0);
 
@@ -228,11 +237,23 @@ internal sealed class SettingsForm : Form
         appLayout.Controls.Add(_opacityBar, 1, 1);
         appLayout.Controls.Add(ValueLabel(_opacityValueLabel), 2, 1);
 
+        var optionFlow = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            Padding = new Padding(0, 4, 0, 0),
+        };
         _filterStBox.Text = "过滤 ST 股";
-        _filterStBox.Dock = DockStyle.Fill;
         _filterStBox.AutoSize = true;
-        appLayout.Controls.Add(_filterStBox, 1, 2);
-        appLayout.SetColumnSpan(_filterStBox, 2);
+        _filterStBox.Margin = new Padding(0, 0, 28, 0);
+        optionFlow.Controls.Add(_filterStBox);
+        _syncMessageBox.Text = "同步消息";
+        _syncMessageBox.AutoSize = true;
+        _syncMessageBox.ForeColor = Color.FromArgb(220, 38, 38);
+        optionFlow.Controls.Add(_syncMessageBox);
+        appLayout.Controls.Add(optionFlow, 1, 2);
+        appLayout.SetColumnSpan(optionFlow, 2);
 
         appLayout.Controls.Add(FieldLabel("行情桥"), 0, 3);
         _bridgeUrlBox.Dock = DockStyle.Fill;
@@ -240,6 +261,32 @@ internal sealed class SettingsForm : Form
         appLayout.Controls.Add(_bridgeUrlBox, 1, 3);
         appLayout.SetColumnSpan(_bridgeUrlBox, 2);
         right.Controls.Add(appGroup, 0, 2);
+
+        var ruleGroup = SectionBox("异动参数");
+        var ruleLayout = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 4,
+            RowCount = 4,
+            Padding = new Padding(14, 18, 14, 10),
+        };
+        ruleLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 118));
+        ruleLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        ruleLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 118));
+        ruleLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        for (var i = 0; i < 4; i++)
+        {
+            ruleLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
+        }
+        ruleGroup.Controls.Add(ruleLayout);
+        AddDecimalField(ruleLayout, "涨幅突破 %", _riseBreakthroughBox, 0, 0, 1, 30, 7);
+        AddDecimalField(ruleLayout, "跌幅突破 %", _dropBreakthroughBox, 2, 0, 1, 30, 7);
+        AddDecimalField(ruleLayout, "5分钟涨跌 %", _fiveMinuteMoveBox, 0, 1, 1, 30, 5);
+        AddDecimalField(ruleLayout, "成交额 万", _largeAmountBox, 2, 1, 100, 1_000_000, 10_000);
+        AddDecimalField(ruleLayout, "挂单额 万", _largeOrderBox, 0, 2, 100, 1_000_000, 1_000);
+        AddDecimalField(ruleLayout, "开盘跳空 %", _openGapBox, 2, 2, 0.1m, 20, 1);
+        AddDecimalField(ruleLayout, "长阳长阴 %", _longBodyBox, 0, 3, 0.1m, 30, 4);
+        right.Controls.Add(ruleGroup, 0, 3);
 
         var footer = new FlowLayoutPanel
         {
@@ -259,7 +306,7 @@ internal sealed class SettingsForm : Form
         cancelBtn.DialogResult = DialogResult.Cancel;
         footer.Controls.Add(cancelBtn);
         CancelButton = cancelBtn;
-        right.Controls.Add(footer, 0, 3);
+        right.Controls.Add(footer, 0, 4);
     }
 
     private void LoadSettings()
@@ -270,7 +317,15 @@ internal sealed class SettingsForm : Form
         _opacityBar.Value = Math.Clamp((int)Math.Round(_settings.Opacity * 100), 60, 100);
         _stockPoolSourceBox.SelectedItem = StockPoolSourceOption.FromSource(_settings.StockPoolSource);
         _filterStBox.Checked = _settings.FilterStStocks;
+        _syncMessageBox.Checked = _settings.SyncMessages;
         _bridgeUrlBox.Text = _settings.BridgeUrl;
+        _riseBreakthroughBox.Value = ClampDecimal(_settings.RiseBreakthroughPct, _riseBreakthroughBox);
+        _dropBreakthroughBox.Value = ClampDecimal(_settings.DropBreakthroughPct, _dropBreakthroughBox);
+        _fiveMinuteMoveBox.Value = ClampDecimal(_settings.FiveMinuteMovePct, _fiveMinuteMoveBox);
+        _largeAmountBox.Value = ClampDecimal(_settings.LargeAmountThresholdWan, _largeAmountBox);
+        _largeOrderBox.Value = ClampDecimal(_settings.LargeOrderThresholdWan, _largeOrderBox);
+        _openGapBox.Value = ClampDecimal(_settings.OpenGapPct, _openGapBox);
+        _longBodyBox.Value = ClampDecimal(_settings.LongBodyPct, _longBodyBox);
 
         _voiceBox.Items.Clear();
         _voiceBox.Items.Add("");
@@ -308,6 +363,14 @@ internal sealed class SettingsForm : Form
         _settings.Opacity = _opacityBar.Value / 100d;
         _settings.TopMost = false;
         _settings.FilterStStocks = _filterStBox.Checked;
+        _settings.SyncMessages = _syncMessageBox.Checked;
+        _settings.RiseBreakthroughPct = _riseBreakthroughBox.Value;
+        _settings.DropBreakthroughPct = _dropBreakthroughBox.Value;
+        _settings.FiveMinuteMovePct = _fiveMinuteMoveBox.Value;
+        _settings.LargeAmountThresholdWan = _largeAmountBox.Value;
+        _settings.LargeOrderThresholdWan = _largeOrderBox.Value;
+        _settings.OpenGapPct = _openGapBox.Value;
+        _settings.LongBodyPct = _longBodyBox.Value;
         _settings.EnabledEvents.Clear();
         for (var i = 0; i < _eventTypeList.Items.Count; i++)
         {
@@ -372,6 +435,33 @@ internal sealed class SettingsForm : Form
         return label;
     }
 
+    private static void AddDecimalField(
+        TableLayoutPanel layout,
+        string label,
+        NumericUpDown input,
+        int column,
+        int row,
+        decimal increment,
+        decimal maximum,
+        decimal value)
+    {
+        layout.Controls.Add(FieldLabel(label), column, row);
+        input.Dock = DockStyle.Fill;
+        input.DecimalPlaces = increment < 1m ? 1 : 0;
+        input.Increment = increment;
+        input.Minimum = 0;
+        input.Maximum = maximum;
+        input.Value = Math.Clamp(value, input.Minimum, input.Maximum);
+        input.Margin = new Padding(0, 2, 8, 0);
+        input.TextAlign = HorizontalAlignment.Right;
+        layout.Controls.Add(input, column + 1, row);
+    }
+
+    private static decimal ClampDecimal(decimal value, NumericUpDown input)
+    {
+        return Math.Clamp(value, input.Minimum, input.Maximum);
+    }
+
     private static GroupBox SectionBox(string text)
     {
         return new GroupBox
@@ -432,14 +522,19 @@ internal sealed class SettingsForm : Form
             new EventTypeOption(L1EventType.SealOrderIncreased, "封单增强"),
             new EventTypeOption(L1EventType.SealOrderWeakened, "封单变弱"),
             new EventTypeOption(L1EventType.BigRiseTier, "大幅拉升"),
+            new EventTypeOption(L1EventType.BigDropTier, "大幅跳水"),
             new EventTypeOption(L1EventType.FastRise, "快速拉升"),
             new EventTypeOption(L1EventType.FastDrop, "快速跳水"),
+            new EventTypeOption(L1EventType.LowOpenLongYang, "低开长阳"),
+            new EventTypeOption(L1EventType.HighOpenLongYin, "高开长阴"),
             new EventTypeOption(L1EventType.TurnRed, "翻红"),
             new EventTypeOption(L1EventType.TurnGreen, "翻绿"),
             new EventTypeOption(L1EventType.IntradayHigh, "创日内新高"),
             new EventTypeOption(L1EventType.IntradayLow, "创日内新低"),
             new EventTypeOption(L1EventType.AmountTier, "成交额跨档"),
             new EventTypeOption(L1EventType.VolumeAcceleration, "成交增量加速"),
+            new EventTypeOption(L1EventType.LargeBidOrder, "出现大买挂盘"),
+            new EventTypeOption(L1EventType.LargeAskOrder, "出现大卖挂盘"),
             new EventTypeOption(L1EventType.BidPressure, "盘口买压增强"),
             new EventTypeOption(L1EventType.AskPressure, "盘口卖压增强"),
             new EventTypeOption(L1EventType.SpreadWidened, "买卖价差异常"),

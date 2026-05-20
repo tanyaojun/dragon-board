@@ -3,6 +3,7 @@ using YiDongJingLing.Blocks;
 using YiDongJingLing.Diagnostics;
 using YiDongJingLing.Events;
 using YiDongJingLing.MarketData;
+using YiDongJingLing.Notifications;
 using YiDongJingLing.Settings;
 using YiDongJingLing.Speech;
 
@@ -27,11 +28,13 @@ public sealed class MainForm : Form
     private readonly BlockFileScanner _scanner = new();
     private readonly BlockFileParser _parser = new();
     private readonly QuoteStateStore _quoteStore = new();
-    private readonly L1EventEngine _eventEngine = new();
+    private readonly L1EventRules _eventRules = new();
+    private readonly L1EventEngine _eventEngine;
     private readonly EventDeduper _deduper = new();
     private readonly SpeechAnnouncer _speech;
     private readonly StockNameResolver _nameResolver = new();
     private readonly HotlistPoolLoader _hotlistLoader = new();
+    private readonly EventRadarMessageNotifier _messageNotifier = new();
     private readonly List<EventRecord> _eventRecords = [];
     private readonly string _root;
     private readonly BridgeProcessManager _bridgeManager;
@@ -77,6 +80,7 @@ public sealed class MainForm : Form
     public MainForm()
     {
         _root = ProjectRootLocator.Find();
+        _eventEngine = new L1EventEngine(_eventRules);
         _bridgeManager = new BridgeProcessManager(_root);
         _proxyManager = new ProxyProcessManager(_root);
         _speech = new SpeechAnnouncer(_root, Log);
@@ -669,6 +673,7 @@ public sealed class MainForm : Form
         TopMost = false;
         Opacity = Math.Clamp(_settings.Opacity, 0.6d, 1d);
         SetBlockControlsEnabled();
+        ApplyEventRuleSettings();
         ApplySpeechSettings();
         UpdateRuntimeStatus();
     }
@@ -688,7 +693,21 @@ public sealed class MainForm : Form
             _blockListLoadedForTdx);
         _settings.TopMost = false;
         _settingsStore.Save(_settings);
+        ApplyEventRuleSettings();
         ApplySpeechSettings();
+    }
+
+    private void ApplyEventRuleSettings()
+    {
+        _eventRules.RiseTiers = [NormalizePositive(_settings.RiseBreakthroughPct, 7m)];
+        _eventRules.DropTiers = [NormalizePositive(_settings.DropBreakthroughPct, 7m)];
+        var fiveMinuteMovePct = NormalizePositive(_settings.FiveMinuteMovePct, 5m);
+        _eventRules.FastRise300SecPct = fiveMinuteMovePct;
+        _eventRules.FastDrop300SecPct = -fiveMinuteMovePct;
+        _eventRules.AmountTiers = [NormalizePositive(_settings.LargeAmountThresholdWan, 10_000m) * 10_000m];
+        _eventRules.LargeOrderAmount = NormalizePositive(_settings.LargeOrderThresholdWan, 1_000m) * 10_000m;
+        _eventRules.OpenGapPct = NormalizePositive(_settings.OpenGapPct, 1m);
+        _eventRules.LongBodyPct = NormalizePositive(_settings.LongBodyPct, 4m);
     }
 
     private void SetBlockControlsEnabled()
@@ -958,7 +977,7 @@ public sealed class MainForm : Form
         if (!BridgeProcessManager.IsPortOpen(3000))
         {
             _proxyManager.StartProxy(Log);
-            await WaitForProxyPortAsync(3000);
+            await WaitForProxyPortAsync(3000, "八平台热榜可能加载失败");
         }
 
         var result = await _hotlistLoader.LoadAsync(new Uri("http://127.0.0.1:3000"));
@@ -1122,7 +1141,7 @@ public sealed class MainForm : Form
         Log($"行情桥启动后暂未检测到 {port} 端口，请查看诊断日志。");
     }
 
-    private async Task WaitForProxyPortAsync(int port)
+    private async Task WaitForProxyPortAsync(int port, string failureHint)
     {
         for (var attempt = 0; attempt < 20; attempt++)
         {
@@ -1135,7 +1154,7 @@ public sealed class MainForm : Form
             await Task.Delay(300);
         }
 
-        Log($"本地代理启动后暂未检测到 {port} 端口，八平台热榜可能加载失败。");
+        Log($"本地代理启动后暂未检测到 {port} 端口，{failureHint}。");
     }
 
     private void HandleQuotes(IReadOnlyList<QuoteSnapshot> quotes)
@@ -1203,6 +1222,38 @@ public sealed class MainForm : Form
         if (voiceEvents.Count > 0)
         {
             _speech.Announce(voiceEvents);
+        }
+        if (_settings.SyncMessages)
+        {
+            _ = SyncMessagesAsync(emitted.ToArray());
+        }
+    }
+
+    private async Task SyncMessagesAsync(IReadOnlyList<EventRecord> events)
+    {
+        if (events.Count == 0) return;
+
+        try
+        {
+            if (!BridgeProcessManager.IsPortOpen(3000))
+            {
+                _proxyManager.StartProxy(Log);
+                await WaitForProxyPortAsync(3000, "同步消息可能发送失败");
+            }
+
+            var result = await _messageNotifier.SendEventsAsync(events, new Uri("http://127.0.0.1:3000"));
+            if (result.Queued > 0 || result.Sent > 0)
+            {
+                Log($"同步消息已提交飞书机器人: 入队 {result.Queued} 条，已发 {result.Sent} 条。");
+            }
+            else if (result.Skipped > 0)
+            {
+                Log($"同步消息已跳过 {result.Skipped} 条重复或冷却中的异动。");
+            }
+        }
+        catch (Exception ex)
+        {
+            Log($"同步消息失败: {ex.Message}");
         }
     }
 
@@ -1472,6 +1523,7 @@ public sealed class MainForm : Form
         _bridgeClient?.Disconnect();
         _bridgeClient?.Dispose();
         _blockWatcher?.Dispose();
+        _messageNotifier.Dispose();
         _speech.Dispose();
         _bridgeManager.StopStartedBridge();
         _proxyManager.StopStartedProxy();
@@ -1539,6 +1591,11 @@ public sealed class MainForm : Form
             text.StartsWith("S*ST", StringComparison.OrdinalIgnoreCase) ||
             text.StartsWith("SST", StringComparison.OrdinalIgnoreCase) ||
             text.Contains("退", StringComparison.Ordinal);
+    }
+
+    private static decimal NormalizePositive(decimal value, decimal fallback)
+    {
+        return value > 0m ? value : fallback;
     }
 
     private static Color EventTextColor(EventRecord item)

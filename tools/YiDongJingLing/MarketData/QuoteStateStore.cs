@@ -4,7 +4,7 @@ public sealed class QuoteStateStore
 {
     private readonly Dictionary<string, QuoteSnapshot> _latest = new(StringComparer.Ordinal);
     private readonly Dictionary<string, List<QuoteSnapshot>> _history = new(StringComparer.Ordinal);
-    private readonly TimeSpan _historyWindow = TimeSpan.FromMinutes(3);
+    private readonly TimeSpan _historyWindow = TimeSpan.FromMinutes(6);
 
     public QuoteSnapshot? GetLatest(string code)
     {

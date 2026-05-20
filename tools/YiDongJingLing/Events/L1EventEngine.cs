@@ -70,11 +70,14 @@ public sealed class L1EventEngine
         EvaluateUpcomingOpen(events, quote, history, state, sealedUp, sealedDown);
         EvaluateSealOrder(events, quote, state, sealedUp, sealedDown);
         EvaluateRiseTiers(events, quote, state);
+        EvaluateDropTiers(events, quote, state);
         EvaluateAmountTiers(events, quote, state);
+        EvaluateOpenShape(events, quote, state);
         EvaluateDirectionChanges(events, quote, previous);
         EvaluateIntradayHighLow(events, quote, state);
         EvaluateSpeed(events, quote, history);
         EvaluateVolumeAcceleration(events, quote, history);
+        EvaluateLargeOrders(events, quote);
         EvaluatePressure(events, quote);
         EvaluateSpread(events, quote);
 
@@ -173,6 +176,16 @@ public sealed class L1EventEngine
         }
     }
 
+    private void EvaluateDropTiers(List<EventRecord> events, QuoteSnapshot quote, StockState state)
+    {
+        var tier = HighestTriggeredTier(_rules.DropTiers, -quote.ChangePct, state.MaxDropTierTriggered);
+        if (tier > 0m)
+        {
+            state.MaxDropTierTriggered = tier;
+            Add(events, quote, L1EventType.BigDropTier, "大幅跳水", L1EventSeverity.Important, $"跌幅突破 {tier:0.##}%");
+        }
+    }
+
     private void EvaluateAmountTiers(List<EventRecord> events, QuoteSnapshot quote, StockState state)
     {
         var tier = HighestTriggeredTier(_rules.AmountTiers, quote.Amount, state.MaxAmountTierTriggered);
@@ -180,6 +193,24 @@ public sealed class L1EventEngine
         {
             state.MaxAmountTierTriggered = tier;
             Add(events, quote, L1EventType.AmountTier, "成交额跨档", L1EventSeverity.Normal, $"成交额突破 {FormatMoney(tier)}");
+        }
+    }
+
+    private void EvaluateOpenShape(List<EventRecord> events, QuoteSnapshot quote, StockState state)
+    {
+        if (quote.Open <= 0m || quote.PreClose <= 0m || quote.LastPrice <= 0m || state.OpenShapeTriggered) return;
+
+        var openGapPct = (quote.Open - quote.PreClose) / quote.PreClose * 100m;
+        var bodyPct = (quote.LastPrice - quote.Open) / quote.Open * 100m;
+        if (openGapPct <= -_rules.OpenGapPct && bodyPct >= _rules.LongBodyPct)
+        {
+            state.OpenShapeTriggered = true;
+            Add(events, quote, L1EventType.LowOpenLongYang, "低开长阳", L1EventSeverity.Important, $"低开 {Math.Abs(openGapPct):0.00}%，开盘后拉升 {bodyPct:0.00}%");
+        }
+        else if (openGapPct >= _rules.OpenGapPct && bodyPct <= -_rules.LongBodyPct)
+        {
+            state.OpenShapeTriggered = true;
+            Add(events, quote, L1EventType.HighOpenLongYin, "高开长阴", L1EventSeverity.Important, $"高开 {openGapPct:0.00}%，开盘后回落 {Math.Abs(bodyPct):0.00}%");
         }
     }
 
@@ -205,11 +236,12 @@ public sealed class L1EventEngine
     {
         var change30 = ChangeFromWindow(quote, history, TimeSpan.FromSeconds(30));
         var change60 = ChangeFromWindow(quote, history, TimeSpan.FromSeconds(60));
+        var change300 = ChangeFromWindow(quote, history, TimeSpan.FromMinutes(5));
 
-        if (change30 >= _rules.FastRise30SecPct || change60 >= _rules.FastRise60SecPct)
-            Add(events, quote, L1EventType.FastRise, "快速拉升", L1EventSeverity.Important, $"30秒 {change30:0.00}%，60秒 {change60:0.00}%");
-        if (change30 <= _rules.FastDrop30SecPct || change60 <= _rules.FastDrop60SecPct)
-            Add(events, quote, L1EventType.FastDrop, "快速跳水", L1EventSeverity.Important, $"30秒 {change30:0.00}%，60秒 {change60:0.00}%");
+        if (change30 >= _rules.FastRise30SecPct || change60 >= _rules.FastRise60SecPct || change300 >= _rules.FastRise300SecPct)
+            Add(events, quote, L1EventType.FastRise, "快速拉升", L1EventSeverity.Important, $"30秒 {change30:0.00}%，60秒 {change60:0.00}%，5分钟 {change300:0.00}%");
+        if (change30 <= _rules.FastDrop30SecPct || change60 <= _rules.FastDrop60SecPct || change300 <= _rules.FastDrop300SecPct)
+            Add(events, quote, L1EventType.FastDrop, "快速跳水", L1EventSeverity.Important, $"30秒 {change30:0.00}%，60秒 {change60:0.00}%，5分钟 {change300:0.00}%");
     }
 
     private void EvaluateVolumeAcceleration(List<EventRecord> events, QuoteSnapshot quote, IReadOnlyList<QuoteSnapshot> history)
@@ -236,6 +268,26 @@ public sealed class L1EventEngine
                 Add(events, quote, L1EventType.BidPressure, "盘口买压增强", L1EventSeverity.Normal, $"五档买量/卖量 {quote.BidVolume5 / quote.AskVolume5:0.0}");
             if (quote.AskVolume5 >= quote.BidVolume5 * _rules.PressureRatio)
                 Add(events, quote, L1EventType.AskPressure, "盘口卖压增强", L1EventSeverity.Normal, $"五档卖量/买量 {quote.AskVolume5 / quote.BidVolume5:0.0}");
+        }
+    }
+
+    private void EvaluateLargeOrders(List<EventRecord> events, QuoteSnapshot quote)
+    {
+        if (quote.Bid1Price > 0m && quote.Bid1Volume > 0m)
+        {
+            var amount = quote.Bid1Price * quote.Bid1Volume * SharesPerLot;
+            if (amount >= _rules.LargeOrderAmount)
+            {
+                Add(events, quote, L1EventType.LargeBidOrder, "出现大买挂盘", L1EventSeverity.Normal, $"买一挂单 {FormatMoney(amount)}");
+            }
+        }
+        if (quote.Ask1Price > 0m && quote.Ask1Volume > 0m)
+        {
+            var amount = quote.Ask1Price * quote.Ask1Volume * SharesPerLot;
+            if (amount >= _rules.LargeOrderAmount)
+            {
+                Add(events, quote, L1EventType.LargeAskOrder, "出现大卖挂盘", L1EventSeverity.Normal, $"卖一挂单 {FormatMoney(amount)}");
+            }
         }
     }
 
@@ -296,11 +348,25 @@ public sealed class L1EventEngine
         state.MaxRiseTierTriggered = Math.Max(
             state.MaxRiseTierTriggered,
             HighestTriggeredTier(_rules.RiseTiers, quote.ChangePct, 0m));
+        state.MaxDropTierTriggered = Math.Max(
+            state.MaxDropTierTriggered,
+            HighestTriggeredTier(_rules.DropTiers, -quote.ChangePct, 0m));
         state.MaxAmountTierTriggered = Math.Max(
             state.MaxAmountTierTriggered,
             HighestTriggeredTier(_rules.AmountTiers, quote.Amount, 0m));
         state.IntradayHigh = Math.Max(state.IntradayHigh, quote.LastPrice);
         state.IntradayLow = state.IntradayLow == 0m ? quote.LastPrice : Math.Min(state.IntradayLow, quote.LastPrice);
+        state.OpenShapeTriggered = state.OpenShapeTriggered || IsOpenShapeTriggered(quote);
+    }
+
+    private bool IsOpenShapeTriggered(QuoteSnapshot quote)
+    {
+        if (quote.Open <= 0m || quote.PreClose <= 0m || quote.LastPrice <= 0m) return false;
+
+        var openGapPct = (quote.Open - quote.PreClose) / quote.PreClose * 100m;
+        var bodyPct = (quote.LastPrice - quote.Open) / quote.Open * 100m;
+        return openGapPct <= -_rules.OpenGapPct && bodyPct >= _rules.LongBodyPct ||
+            openGapPct >= _rules.OpenGapPct && bodyPct <= -_rules.LongBodyPct;
     }
 
     private static decimal HighestTriggeredTier(IEnumerable<decimal> tiers, decimal value, decimal current)
@@ -348,8 +414,10 @@ public sealed class L1EventEngine
         public decimal LastLimitUpSealAmount { get; set; }
         public decimal LastLimitDownSealAmount { get; set; }
         public decimal MaxRiseTierTriggered { get; set; }
+        public decimal MaxDropTierTriggered { get; set; }
         public decimal MaxAmountTierTriggered { get; set; }
         public decimal IntradayHigh { get; set; }
         public decimal IntradayLow { get; set; }
+        public bool OpenShapeTriggered { get; set; }
     }
 }
