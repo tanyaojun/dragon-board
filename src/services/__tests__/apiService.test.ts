@@ -244,7 +244,7 @@ describe('ApiService', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
-  it('maps sqlite snapshot frame query params to QuantBoard snake case API', async () => {
+  it('maps mongo snapshot frame query params to QuantBoard snake case API', async () => {
     const api = new ApiService()
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ ok: true, frames: [] }), {
@@ -254,7 +254,7 @@ describe('ApiService', () => {
     )
     vi.stubGlobal('fetch', fetchMock)
 
-    await api.listSqliteSnapshotFrames({
+    await api.listMongoSnapshotFrames({
       datasetId: 'dragonboard_live',
       type: 'half_hour',
       tradingDate: '2026-04-24',
@@ -277,7 +277,7 @@ describe('ApiService', () => {
     expect(requestedUrl).toContain('limit=20')
   })
 
-  it('maps sqlite snapshot frame projection params to QuantBoard API', async () => {
+  it('maps mongo snapshot frame projection params to QuantBoard API', async () => {
     const api = new ApiService()
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ ok: true, frames: [] }), {
@@ -287,7 +287,7 @@ describe('ApiService', () => {
     )
     vi.stubGlobal('fetch', fetchMock)
 
-    await api.listSqliteSnapshotFrames({
+    await api.listMongoSnapshotFrames({
       datasetId: 'dragonboard_live',
       type: 'half_hour',
       projection: 'ranktrend',
@@ -330,7 +330,7 @@ describe('ApiService', () => {
     expect(requestedUrl).toContain('codes=600001%2C600002')
   })
 
-  it('maps sqlite snapshot record detail formal policy params to QuantBoard API', async () => {
+  it('maps mongo snapshot record detail formal policy params to QuantBoard API', async () => {
     const api = new ApiService()
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ ok: true, record: null }), {
@@ -340,7 +340,7 @@ describe('ApiService', () => {
     )
     vi.stubGlobal('fetch', fetchMock)
 
-    await api.getSqliteSnapshotRecord('half_hour:2026-04-24:10:00', {
+    await api.getMongoSnapshotRecord('half_hour:2026-04-24:10:00', {
       datasetId: 'dragonboard_live',
       allowedCaptureModes: ['real_time', 'delayed'],
       excludeRestored: true,
@@ -355,7 +355,7 @@ describe('ApiService', () => {
     expect(requestedUrl).toContain('exclude_restored=true')
   })
 
-  it('routes sqlite theme mapping reads to QuantBoard API', async () => {
+  it('routes mongo theme mapping reads to QuantBoard API', async () => {
     const api = new ApiService()
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ ok: true, mapping: { themes: [] } }), {
@@ -365,7 +365,7 @@ describe('ApiService', () => {
     )
     vi.stubGlobal('fetch', fetchMock)
 
-    await api.getSqliteThemeMapping()
+    await api.getMongoThemeMapping()
 
     const requestedUrl = new URL(String(fetchMock.mock.calls[0][0]))
     expect(requestedUrl.origin).toBe('http://localhost:8000')

@@ -92,13 +92,13 @@ interface SnapshotRuntimeDeps {
   getBuildContext: () => SnapshotBuildContext
 }
 
-export interface SnapshotSqlitePrimaryWriteResult {
+export interface SnapshotMongoPrimaryWriteResult {
   ok: boolean
   skipped?: boolean
   error?: unknown
 }
 
-export type SnapshotSqlitePrimaryExistsHandler = (snapshotId: string) => Promise<boolean>
+export type SnapshotMongoPrimaryExistsHandler = (snapshotId: string) => Promise<boolean>
 
 // SnapshotRuntime 是快照模块的总编排层：
 // 它负责生成、查询、coverage、备份调度和恢复入口，但不直接承载 IndexedDB 细节实现。
@@ -136,8 +136,8 @@ export class SnapshotRuntime {
   private readonly snapshotSectorRowStore: SnapshotSectorRowStore
   private readonly snapshotProjectionMetaStore: SnapshotProjectionMetaStore
   private readonly snapshotBackupSync: SnapshotBackupSync
-  private sqlitePrimaryWrite?: (bundle: SnapshotProjectionBundle) => Promise<SnapshotSqlitePrimaryWriteResult>
-  private sqlitePrimaryExists?: SnapshotSqlitePrimaryExistsHandler
+  private mongoPrimaryWrite?: (bundle: SnapshotProjectionBundle) => Promise<SnapshotMongoPrimaryWriteResult>
+  private mongoPrimaryExists?: SnapshotMongoPrimaryExistsHandler
 
   constructor(deps: SnapshotRuntimeDeps) {
     this.logger = deps.logger || console
@@ -795,14 +795,14 @@ export class SnapshotRuntime {
     return snapshots[0] || null
   }
 
-  setSqlitePrimaryWriteHandler(
-    handler: ((bundle: SnapshotProjectionBundle) => Promise<SnapshotSqlitePrimaryWriteResult>) | null,
+  setMongoPrimaryWriteHandler(
+    handler: ((bundle: SnapshotProjectionBundle) => Promise<SnapshotMongoPrimaryWriteResult>) | null,
   ): void {
-    this.sqlitePrimaryWrite = handler || undefined
+    this.mongoPrimaryWrite = handler || undefined
   }
 
-  setSqlitePrimaryExistsHandler(handler: SnapshotSqlitePrimaryExistsHandler | null): void {
-    this.sqlitePrimaryExists = handler || undefined
+  setMongoPrimaryExistsHandler(handler: SnapshotMongoPrimaryExistsHandler | null): void {
+    this.mongoPrimaryExists = handler || undefined
   }
 
   async exportSnapshotAsFile(id: string): Promise<void> {
@@ -1249,7 +1249,7 @@ export class SnapshotRuntime {
           const existing = await this.snapshotStore.getById(record.id)
           if (existing) return false
           await this.ensurePersistentStorage()
-        } else if (await this.snapshotExistsInSqlitePrimary(record.id)) {
+        } else if (await this.snapshotExistsInMongoPrimary(record.id)) {
           return false
         }
         const effectiveBundle = bundle || this.createProjectionBundle(record)
@@ -1259,13 +1259,13 @@ export class SnapshotRuntime {
           return true
         }
 
-        const sqliteWrite = await this.writeSnapshotBundleToSqlitePrimary(effectiveBundle)
-        if (!sqliteWrite.ok) {
-          throw sqliteWrite.error instanceof Error
-            ? sqliteWrite.error
-            : new Error(`snapshot_sqlite_primary_write_failed:${record.id}`)
+        const mongoWrite = await this.writeSnapshotBundleToMongoPrimary(effectiveBundle)
+        if (!mongoWrite.ok) {
+          throw mongoWrite.error instanceof Error
+            ? mongoWrite.error
+            : new Error(`snapshot_mongo_primary_write_failed:${record.id}`)
         }
-        if (sqliteWrite.skipped) {
+        if (mongoWrite.skipped) {
           return false
         }
 
@@ -1279,11 +1279,11 @@ export class SnapshotRuntime {
     }
   }
 
-  private async writeSnapshotBundleToSqlitePrimary(
+  private async writeSnapshotBundleToMongoPrimary(
     bundle: SnapshotProjectionBundle,
-  ): Promise<SnapshotSqlitePrimaryWriteResult> {
-    if (this.sqlitePrimaryWrite) {
-      const result = await this.sqlitePrimaryWrite(bundle)
+  ): Promise<SnapshotMongoPrimaryWriteResult> {
+    if (this.mongoPrimaryWrite) {
+      const result = await this.mongoPrimaryWrite(bundle)
       if (result.ok) {
         this.backupSyncStateStore.markBackendIngested(bundle.record.tradingDate, Date.now())
       } else {
@@ -1295,12 +1295,12 @@ export class SnapshotRuntime {
     return { ok: true }
   }
 
-  private async snapshotExistsInSqlitePrimary(snapshotId: string): Promise<boolean> {
-    if (!snapshotId || !this.sqlitePrimaryExists) return false
+  private async snapshotExistsInMongoPrimary(snapshotId: string): Promise<boolean> {
+    if (!snapshotId || !this.mongoPrimaryExists) return false
     try {
-      return await this.sqlitePrimaryExists(snapshotId)
+      return await this.mongoPrimaryExists(snapshotId)
     } catch (error) {
-      this.logger.warn?.('[DataLayer] SQLite snapshot existence check failed:', snapshotId, error)
+      this.logger.warn?.('[DataLayer] MongoDB snapshot existence check failed:', snapshotId, error)
       return false
     }
   }
@@ -1576,7 +1576,7 @@ export class SnapshotRuntime {
         }
 
         const snapshotId = buildSnapshotId(type, toLocalTradingDate(slotTime), toLocalSlotTime(slotTime))
-        const existing = await this.snapshotExistsInSqlitePrimary(snapshotId)
+        const existing = await this.snapshotExistsInMongoPrimary(snapshotId)
         if (!existing) {
           candidates.push({ type, slotTime })
         }

@@ -432,7 +432,7 @@ export const sectorAnalyzer = {
       cachedSectors: jxbkThemeFeed.getSectorStockCacheStats().cachedSectors,
       lastUpdate: mappingStats?.lastUpdate || null,
       version: '11.0.0',
-      themeBaseSource: 'sqlite',
+      themeBaseSource: 'mongodb',
     }
   },
 

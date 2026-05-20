@@ -4,7 +4,7 @@ const start = vi.fn()
 const getStockVolumeHistory = vi.fn()
 const runtimeListSnapshotFrameBundles = vi.fn()
 const runtimeListSnapshots = vi.fn()
-const setSqlitePrimaryExistsHandler = vi.fn()
+const setMongoPrimaryExistsHandler = vi.fn()
 const backendListSnapshotFrameBundles = vi.fn()
 const backendListSnapshots = vi.fn()
 const backendGetSnapshotById = vi.fn()
@@ -49,7 +49,7 @@ vi.mock('../runtime', () => ({
     listSnapshotStockRows = vi.fn()
     listSnapshotSectorRows = vi.fn()
     getSnapshotProjectionMeta = vi.fn()
-    setSqlitePrimaryExistsHandler = setSqlitePrimaryExistsHandler
+    setMongoPrimaryExistsHandler = setMongoPrimaryExistsHandler
     rebuildSnapshotProjectionStores = vi.fn()
     alignSnapshotBackups = vi.fn()
     compactSnapshotRawRecords = vi.fn()
@@ -92,7 +92,7 @@ vi.mock('../backendRead', () => ({
 }))
 
 describe('snapshotFacade', () => {
-  it('routes formal stock volume history reads to sqlite without auto-starting outside the browser', async () => {
+  it('routes formal stock volume history reads to MongoDB without auto-starting outside the browser', async () => {
     backendGetStockVolumeHistory.mockResolvedValue(new Map([['600001', [300, 200]]]))
 
     const { snapshotFacade } = await import('../facade')
@@ -110,7 +110,7 @@ describe('snapshotFacade', () => {
     expect(result.get('600001')).toEqual([300, 200])
   })
 
-  it('routes formal frame bundle reads to sqlite backend', async () => {
+  it('routes formal frame bundle reads to MongoDB backend', async () => {
     backendListSnapshotFrameBundles.mockResolvedValue([{ snapshotId: 'half_hour:2026-04-24:10:00' }])
 
     const { snapshotFacade } = await import('../facade')
@@ -131,13 +131,13 @@ describe('snapshotFacade', () => {
     expect(backendListSnapshots).not.toHaveBeenCalled()
   })
 
-  it('checks sqlite backend before formal snapshot writes', async () => {
+  it('checks MongoDB backend before formal snapshot writes', async () => {
     backendGetSnapshotById.mockResolvedValue({ id: 'half_hour:2026-05-06:09:30' })
 
     await import('../facade')
 
-    expect(setSqlitePrimaryExistsHandler).toHaveBeenCalledTimes(1)
-    const handler = setSqlitePrimaryExistsHandler.mock.calls[0]?.[0]
+    expect(setMongoPrimaryExistsHandler).toHaveBeenCalledTimes(1)
+    const handler = setMongoPrimaryExistsHandler.mock.calls[0]?.[0]
     await expect(handler('half_hour:2026-05-06:09:30')).resolves.toBe(true)
     expect(backendGetSnapshotById).toHaveBeenCalledWith('half_hour:2026-05-06:09:30')
   })

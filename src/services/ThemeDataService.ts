@@ -1,7 +1,7 @@
 import { debugLog } from '@/utils/logger'
 // src/services/ThemeDataService.ts
 /**
- * 题材数据服务 - 只从 QuantBoard SQLite 题材主库读取运行时基础映射
+ * 题材数据服务 - 只从 QuantBoard MongoDB 题材集合读取运行时基础映射
  */
 
 import { apiService } from './apiService'
@@ -90,16 +90,16 @@ class ThemeDataService {
   }
 
   /**
-   * 从 QuantBoard SQLite 题材主库读取正式映射。
+   * 从 QuantBoard MongoDB 题材集合读取正式映射。
    */
-  private async loadFromSQLiteAPI(): Promise<ThemeMappingData | null> {
+  private async loadFromMongoAPI(): Promise<ThemeMappingData | null> {
     try {
-      debugLog('[ThemeDataService] 从 QuantBoard SQLite 读取题材映射...')
-      const response = await apiService.getSqliteThemeMapping()
+      debugLog('[ThemeDataService] 从 QuantBoard MongoDB 读取题材映射...')
+      const response = await apiService.getMongoThemeMapping()
       const mapping = response?.mapping
       if (!mapping?.themes?.length) {
-        this.lastError = 'SQLite 题材映射为空或结构异常'
-        console.warn('[ThemeDataService] SQLite 题材映射为空或结构异常:', response)
+        this.lastError = 'MongoDB 题材映射为空或结构异常'
+        console.warn('[ThemeDataService] MongoDB 题材映射为空或结构异常:', response)
         return null
       }
       this.lastError = null
@@ -111,8 +111,8 @@ class ThemeDataService {
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      this.lastError = `SQLite 题材映射读取失败: ${message}`
-      console.warn('[ThemeDataService] SQLite 题材映射读取失败:', error)
+      this.lastError = `MongoDB 题材映射读取失败: ${message}`
+      console.warn('[ThemeDataService] MongoDB 题材映射读取失败:', error)
       return null
     }
   }
@@ -258,7 +258,7 @@ class ThemeDataService {
   }
 
   /**
-   * 加载数据：只读取 QuantBoard SQLite 题材主库。
+   * 加载数据：只读取 QuantBoard MongoDB 题材集合。
    */
   async load(): Promise<boolean> {
     if (this.loaded) return true
@@ -275,10 +275,10 @@ class ThemeDataService {
       // 加载 KPL 题材列表
       this.loadKPLThemes()
 
-      const mappingData = await this.loadFromSQLiteAPI()
+      const mappingData = await this.loadFromMongoAPI()
 
       if (mappingData) {
-        debugLog(`[ThemeDataService] 从 SQLite 加载: ${mappingData.themes.length}个题材`)
+        debugLog(`[ThemeDataService] 从 MongoDB 加载: ${mappingData.themes.length}个题材`)
         this.buildMapping(mappingData)
         this.syncToDataLayer()
         this.syncTagsAndReasonsToDataLayer()
@@ -286,7 +286,7 @@ class ThemeDataService {
         this.lastError = null
       } else {
         this.loaded = false
-        if (!this.lastError) this.lastError = 'SQLite 题材映射读取失败'
+        if (!this.lastError) this.lastError = 'MongoDB 题材映射读取失败'
         return false
       }
 
@@ -300,13 +300,13 @@ class ThemeDataService {
   }
 
   /**
-   * 强制刷新（从 QuantBoard SQLite 题材主库重新读取）
+   * 强制刷新（从 QuantBoard MongoDB 题材集合重新读取）
    */
   async forceRefresh(): Promise<boolean> {
-    debugLog('[ThemeDataService] 🔄 从 SQLite 强制刷新题材映射...')
-    const sqliteData = await this.loadFromSQLiteAPI()
-    if (!sqliteData) return false
-    this.buildMapping(sqliteData)
+    debugLog('[ThemeDataService] 🔄 从 MongoDB 强制刷新题材映射...')
+    const mongoData = await this.loadFromMongoAPI()
+    if (!mongoData) return false
+    this.buildMapping(mongoData)
     this.syncToDataLayer()
     this.syncTagsAndReasonsToDataLayer()
     this.loaded = true
@@ -433,7 +433,7 @@ class ThemeDataService {
   }
 
   getLoadStatus(): {
-    source: 'sqlite'
+    source: 'mongodb'
     loaded: boolean
     lastUpdate: string | null
     lastError: string | null
@@ -445,7 +445,7 @@ class ThemeDataService {
       0,
     )
     return {
-      source: 'sqlite',
+      source: 'mongodb',
       loaded: this.loaded,
       lastUpdate: this.lastUpdateTime,
       lastError: this.lastError,

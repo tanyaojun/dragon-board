@@ -95,17 +95,17 @@ export interface ApiEnvelope<T> {
   details?: unknown
 }
 
-type SqliteSnapshotDatasetOptions = {
+type MongoSnapshotDatasetOptions = {
   datasetId?: string
   allowedCaptureModes?: SnapshotQueryOptions['allowedCaptureModes']
   excludeRestored?: boolean
 }
 
-type SqliteSnapshotRecordQueryOptions = SnapshotQueryOptions & SqliteSnapshotDatasetOptions
-type SqliteSnapshotFrameQueryOptions = SnapshotFrameQueryOptions & SqliteSnapshotDatasetOptions
-type SqliteSnapshotStockRowQueryOptions = SnapshotStockRowQueryOptions & SqliteSnapshotDatasetOptions
-type SqliteSnapshotSectorRowQueryOptions = SnapshotSectorRowQueryOptions & SqliteSnapshotDatasetOptions
-type RankTrendRankSeriesApiQueryOptions = RankTrendRankSeriesQueryOptions & SqliteSnapshotDatasetOptions
+type MongoSnapshotRecordQueryOptions = SnapshotQueryOptions & MongoSnapshotDatasetOptions
+type MongoSnapshotFrameQueryOptions = SnapshotFrameQueryOptions & MongoSnapshotDatasetOptions
+type MongoSnapshotStockRowQueryOptions = SnapshotStockRowQueryOptions & MongoSnapshotDatasetOptions
+type MongoSnapshotSectorRowQueryOptions = SnapshotSectorRowQueryOptions & MongoSnapshotDatasetOptions
+type RankTrendRankSeriesApiQueryOptions = RankTrendRankSeriesQueryOptions & MongoSnapshotDatasetOptions
 type ThemeResearchSummaryQueryOptions = {
   datasetId?: string
   snapshotType?: SnapshotQueryOptions['type']
@@ -736,9 +736,9 @@ export class ApiService {
     )
   }
 
-  /** 从 QuantBoard SQLite 主库读取正式快照聚合帧 */
-  async listSqliteSnapshotFrames(params: SqliteSnapshotFrameQueryOptions = {}, options?: RequestConfig) {
-    return this.get<any>(`/api/snapshots/frames${this.buildSqliteSnapshotQuery(params, true)}`, {
+  /** 从 QuantBoard MongoDB 主库读取正式快照聚合帧 */
+  async listMongoSnapshotFrames(params: MongoSnapshotFrameQueryOptions = {}, options?: RequestConfig) {
+    return this.get<any>(`/api/snapshots/frames${this.buildMongoSnapshotQuery(params, true)}`, {
       context: 'quant-board',
       priority: 'high',
       retries: 1,
@@ -749,13 +749,13 @@ export class ApiService {
     })
   }
 
-  /** 从 QuantBoard SQLite 主库读取 RankTrend 专用排名时序 */
+  /** 从 QuantBoard MongoDB 主库读取 RankTrend 专用排名时序 */
   async getRankTrendRankSeries(
     params: RankTrendRankSeriesApiQueryOptions = {},
     options?: RequestConfig,
   ) {
     return this.get<RankTrendRankSeriesResponse>(
-      `/api/ranktrend/rank-series${this.buildSqliteSnapshotQuery(params)}`,
+      `/api/ranktrend/rank-series${this.buildMongoSnapshotQuery(params)}`,
       {
         context: 'quant-board',
         priority: 'high',
@@ -768,9 +768,9 @@ export class ApiService {
     )
   }
 
-  /** 从 QuantBoard SQLite 主库读取正式快照记录 */
-  async listSqliteSnapshotRecords(params: SqliteSnapshotRecordQueryOptions = {}, options?: RequestConfig) {
-    return this.get<any>(`/api/snapshots/records${this.buildSqliteSnapshotQuery(params)}`, {
+  /** 从 QuantBoard MongoDB 主库读取正式快照记录 */
+  async listMongoSnapshotRecords(params: MongoSnapshotRecordQueryOptions = {}, options?: RequestConfig) {
+    return this.get<any>(`/api/snapshots/records${this.buildMongoSnapshotQuery(params)}`, {
       context: 'quant-board',
       priority: 'high',
       retries: 1,
@@ -781,13 +781,13 @@ export class ApiService {
     })
   }
 
-  /** 从 QuantBoard SQLite 主库按 id 读取正式快照记录 */
-  async getSqliteSnapshotRecord(
+  /** 从 QuantBoard MongoDB 主库按 id 读取正式快照记录 */
+  async getMongoSnapshotRecord(
     snapshotId: string,
-    params: SqliteSnapshotDatasetOptions = {},
+    params: MongoSnapshotDatasetOptions = {},
     options?: RequestConfig,
   ) {
-    const query = this.buildSqliteSnapshotQuery(params)
+    const query = this.buildMongoSnapshotQuery(params)
     return this.get<any>(`/api/snapshots/records/${encodeURIComponent(snapshotId)}${query}`, {
       context: 'quant-board',
       priority: 'high',
@@ -799,9 +799,9 @@ export class ApiService {
     })
   }
 
-  /** 从 QuantBoard SQLite 主库读取正式股票投影行 */
-  async listSqliteSnapshotStockRows(params: SqliteSnapshotStockRowQueryOptions = {}, options?: RequestConfig) {
-    return this.get<any>(`/api/snapshots/stock-rows${this.buildSqliteSnapshotQuery(params)}`, {
+  /** 从 QuantBoard MongoDB 主库读取正式股票投影行 */
+  async listMongoSnapshotStockRows(params: MongoSnapshotStockRowQueryOptions = {}, options?: RequestConfig) {
+    return this.get<any>(`/api/snapshots/stock-rows${this.buildMongoSnapshotQuery(params)}`, {
       context: 'quant-board',
       priority: 'high',
       retries: 1,
@@ -812,9 +812,9 @@ export class ApiService {
     })
   }
 
-  /** 从 QuantBoard SQLite 主库读取正式题材投影行 */
-  async listSqliteSnapshotSectorRows(params: SqliteSnapshotSectorRowQueryOptions = {}, options?: RequestConfig) {
-    return this.get<any>(`/api/snapshots/sector-rows${this.buildSqliteSnapshotQuery(params)}`, {
+  /** 从 QuantBoard MongoDB 主库读取正式题材投影行 */
+  async listMongoSnapshotSectorRows(params: MongoSnapshotSectorRowQueryOptions = {}, options?: RequestConfig) {
+    return this.get<any>(`/api/snapshots/sector-rows${this.buildMongoSnapshotQuery(params)}`, {
       context: 'quant-board',
       priority: 'high',
       retries: 1,
@@ -825,9 +825,9 @@ export class ApiService {
     })
   }
 
-  /** 从 QuantBoard SQLite 主库读取快照事实表行数 */
-  async getSqliteSnapshotCounts(datasetId?: string, options?: RequestConfig) {
-    const query = this.buildSqliteSnapshotQuery({ datasetId })
+  /** 从 QuantBoard MongoDB 主库读取快照事实集合行数 */
+  async getMongoSnapshotCounts(datasetId?: string, options?: RequestConfig) {
+    const query = this.buildMongoSnapshotQuery({ datasetId })
     return this.get<any>(`/api/snapshots/counts${query}`, {
       context: 'quant-board',
       priority: 'medium',
@@ -839,8 +839,8 @@ export class ApiService {
     })
   }
 
-  /** 从 QuantBoard SQLite 题材主库读取正式题材映射 */
-  async getSqliteThemeMapping(options?: RequestConfig) {
+  /** 从 QuantBoard MongoDB 题材集合读取正式题材映射 */
+  async getMongoThemeMapping(options?: RequestConfig) {
     return this.get<any>('/api/themes/mapping', {
       context: 'quant-board',
       priority: 'high',
@@ -870,7 +870,7 @@ export class ApiService {
     })
   }
 
-  /** 从 QuantBoard research SQLite 读取 ThemeTrend 研究摘要；不可用时由后端返回 available=false */
+  /** 从 QuantBoard MongoDB 研究集合读取 ThemeTrend 研究摘要；不可用时由后端返回 available=false */
   async getThemeResearchSummary(params: ThemeResearchSummaryQueryOptions = {}, options?: RequestConfig) {
     const query = new URLSearchParams()
     if (params.datasetId) query.set('dataset_id', params.datasetId)
@@ -905,8 +905,8 @@ export class ApiService {
     return `${baseURL}/${url}`
   }
 
-  private buildSqliteSnapshotQuery(
-    params: (SqliteSnapshotRecordQueryOptions | SqliteSnapshotFrameQueryOptions | SqliteSnapshotStockRowQueryOptions | SqliteSnapshotSectorRowQueryOptions | RankTrendRankSeriesApiQueryOptions) = {},
+  private buildMongoSnapshotQuery(
+    params: (MongoSnapshotRecordQueryOptions | MongoSnapshotFrameQueryOptions | MongoSnapshotStockRowQueryOptions | MongoSnapshotSectorRowQueryOptions | RankTrendRankSeriesApiQueryOptions) = {},
     frameEndpoint = false,
   ): string {
     const query = new URLSearchParams()
@@ -922,7 +922,7 @@ export class ApiService {
     append('dataset_id', params.datasetId)
     append(frameEndpoint ? 'snapshot_type' : 'snapshot_type', params.type)
     append('types', params.types)
-    append('projection', (params as SqliteSnapshotFrameQueryOptions).projection)
+    append('projection', (params as MongoSnapshotFrameQueryOptions).projection)
     append('trading_date', params.tradingDate)
     append('start_date', params.startDate)
     append('end_date', params.endDate)
@@ -932,13 +932,13 @@ export class ApiService {
     append('sort', params.sort)
     append('limit', params.limit)
 
-    const stockParams = params as SqliteSnapshotStockRowQueryOptions
+    const stockParams = params as MongoSnapshotStockRowQueryOptions
     append('snapshot_id', stockParams.snapshotId)
     append('code', stockParams.code)
     append('codes', stockParams.codes)
     append('slot_time', stockParams.slotTime)
 
-    const sectorParams = params as SqliteSnapshotSectorRowQueryOptions
+    const sectorParams = params as MongoSnapshotSectorRowQueryOptions
     append('entity_type', sectorParams.entityType)
     append('entity_types', sectorParams.entityTypes)
     append('entity_key', sectorParams.entityKey)

@@ -120,7 +120,7 @@ describe('RankTrendAnalyzer', () => {
       ok: true,
       datasetId: 'dragonboard_live',
       snapshotType: 'half_hour',
-      source: 'sqlite',
+      source: 'mongodb',
       count: 50,
       frames: Array.from({ length: 50 }, (_, index) => {
         const timestamp = Date.parse('2026-04-27T09:30:00') + index * 30 * 60 * 1000
@@ -166,7 +166,7 @@ describe('RankTrendAnalyzer', () => {
       ok: true,
       datasetId: 'dragonboard_live',
       snapshotType: 'half_hour',
-      source: 'sqlite',
+      source: 'mongodb',
       count: 50,
       frames: Array.from({ length: 50 }, (_, index) => {
         const rank = index === 49 ? 90 : Math.max(1, 100 - index)

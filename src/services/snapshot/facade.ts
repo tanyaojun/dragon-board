@@ -61,7 +61,7 @@ const snapshotRuntime = new SnapshotRuntime({
   }),
 })
 
-snapshotRuntime.setSqlitePrimaryExistsHandler(async (snapshotId) => {
+snapshotRuntime.setMongoPrimaryExistsHandler(async (snapshotId) => {
   const record = await snapshotBackendRead.getSnapshotById(snapshotId)
   return Boolean(record)
 })

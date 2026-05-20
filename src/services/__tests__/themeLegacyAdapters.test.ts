@@ -195,7 +195,7 @@ describe('theme legacy adapters', () => {
     const clearSpy = vi.spyOn(jxbkThemeFeed, 'clearSectorStockCache').mockImplementation(() => {})
     vi.spyOn(jxbkThemeFeed, 'getSectorStockCacheStats').mockReturnValue({ cachedSectors: 2 })
     vi.spyOn(themeRepository, 'getThemeBaseStatus').mockReturnValue({
-      source: 'sqlite',
+      source: 'mongodb',
       loaded: true,
       lastUpdate: '2026-05-05T09:30:00.000Z',
       lastError: null,
@@ -208,7 +208,7 @@ describe('theme legacy adapters', () => {
     expect(sectorAnalyzer.getStats().cachedSectors).toBe(2)
     expect(sectorAnalyzer.getStats()).toMatchObject({
       version: '11.0.0',
-      themeBaseSource: 'sqlite',
+      themeBaseSource: 'mongodb',
       mappedStocks: 12215,
     })
 
@@ -223,7 +223,7 @@ describe('theme legacy adapters', () => {
     ])
     vi.spyOn(themeRepository, 'getThemeStocks').mockReturnValue(['000001'])
     vi.spyOn(themeRepository, 'getThemeBaseStatus').mockReturnValue({
-      source: 'sqlite',
+      source: 'mongodb',
       loaded: true,
       lastUpdate: '2026-05-05T09:30:00.000Z',
       lastError: null,

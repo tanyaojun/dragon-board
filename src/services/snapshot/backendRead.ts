@@ -14,6 +14,9 @@ import type {
 } from './types'
 
 const DEFAULT_DATASET_ID = 'dragonboard_live'
+const STOCK_VOLUME_HISTORY_CANDIDATE_FACTOR = 4
+const STOCK_VOLUME_HISTORY_MIN_CANDIDATES = 12
+const STOCK_VOLUME_HISTORY_BATCH_SIZE = 50
 
 type BackendReadOptions = { datasetId?: string }
 type BackendSnapshotFrameBundle = SnapshotFrameBundle & { entities?: unknown }
@@ -22,7 +25,7 @@ function unwrapResponse<T>(response: any, key: string, fallback: T): T {
   const data = response && typeof response === 'object' && 'data' in response ? response.data : response
   if (!data?.ok) {
     const message =
-      [data?.errorCode, data?.message].filter(Boolean).join(':') || 'snapshot_sqlite_read_failed'
+      [data?.errorCode, data?.message].filter(Boolean).join(':') || 'snapshot_backend_read_failed'
     throw new Error(message)
   }
   return (data[key] ?? fallback) as T
@@ -51,7 +54,7 @@ export class SnapshotBackendRead {
     assertFormalSnapshotType(options.type)
     assertFormalSnapshotTypes(options.types)
     return unwrapResponse<SnapshotRecord[]>(
-      await apiService.listSqliteSnapshotRecords(withFormalPolicy(options)),
+      await apiService.listMongoSnapshotRecords(withFormalPolicy(options)),
       'records',
       [],
     )
@@ -59,7 +62,7 @@ export class SnapshotBackendRead {
 
   async getSnapshotById(id: string, options: BackendReadOptions = {}): Promise<SnapshotRecord | null> {
     return unwrapResponse<SnapshotRecord | null>(
-      await apiService.getSqliteSnapshotRecord(id, withFormalPolicy({
+      await apiService.getMongoSnapshotRecord(id, withFormalPolicy({
         datasetId: options.datasetId || DEFAULT_DATASET_ID,
       })),
       'record',
@@ -110,7 +113,7 @@ export class SnapshotBackendRead {
     options: SnapshotStockRowQueryOptions & BackendReadOptions = {},
   ): Promise<SnapshotStockRow[]> {
     return unwrapResponse<SnapshotStockRow[]>(
-      await apiService.listSqliteSnapshotStockRows(withFormalPolicy(options)),
+      await apiService.listMongoSnapshotStockRows(withFormalPolicy(options)),
       'rows',
       [],
     )
@@ -120,7 +123,7 @@ export class SnapshotBackendRead {
     options: SnapshotSectorRowQueryOptions & BackendReadOptions = {},
   ): Promise<SnapshotSectorRow[]> {
     return unwrapResponse<SnapshotSectorRow[]>(
-      await apiService.listSqliteSnapshotSectorRows(withFormalPolicy(options)),
+      await apiService.listMongoSnapshotSectorRows(withFormalPolicy(options)),
       'rows',
       [],
     )
@@ -157,7 +160,7 @@ export class SnapshotBackendRead {
     }
 
     return unwrapResponse<SnapshotFrameBundle[]>(
-      await apiService.listSqliteSnapshotFrames(withFormalPolicy(options as SnapshotFrameQueryOptions & BackendReadOptions)),
+      await apiService.listMongoSnapshotFrames(withFormalPolicy(options as SnapshotFrameQueryOptions & BackendReadOptions)),
       'frames',
       [],
     )
@@ -172,27 +175,34 @@ export class SnapshotBackendRead {
     if (requestedCodes.length === 0) return result
 
     const lookbackDays = Math.max(1, Math.min(10, Number(options?.lookbackDays) || 3))
-    await Promise.all(
-      requestedCodes.map(async (code) => {
-        const rows = await this.listSnapshotStockRows({
-          code,
-          type: 'daily',
-          beforeTradingDate: options?.anchorTradingDate,
-          sort: 'desc',
-          limit: lookbackDays,
-        })
-        const volumesByDate = new Map<string, { volume: number; timestamp: number }>()
-        for (const row of rows || []) {
-          const tradingDate = String(row.tradingDate || '')
-          const volume = rowVolume(row)
-          if (!tradingDate || volume <= 0) continue
-          if (!volumesByDate.has(tradingDate)) {
-            volumesByDate.set(tradingDate, {
-              volume,
-              timestamp: Number(row.timestamp) || 0,
-            })
-          }
+    const candidateLimit = Math.max(
+      lookbackDays * STOCK_VOLUME_HISTORY_CANDIDATE_FACTOR,
+      STOCK_VOLUME_HISTORY_MIN_CANDIDATES,
+    )
+    const loadRows = (params: { code?: string; codes?: string[]; limit: number }) =>
+      this.listSnapshotStockRows({
+        ...params,
+        type: 'daily',
+        beforeTradingDate: options?.anchorTradingDate,
+        sort: 'desc',
+      })
+    const appendHistory = (rows: SnapshotStockRow[]) => {
+      const historyByCode = new Map<string, Map<string, { volume: number; timestamp: number }>>()
+      for (const row of rows || []) {
+        const code = String(row.code || '')
+        const tradingDate = String(row.tradingDate || '')
+        const volume = rowVolume(row)
+        if (!code || !tradingDate || volume <= 0) continue
+        const byDate = historyByCode.get(code) || new Map<string, { volume: number; timestamp: number }>()
+        const existing = byDate.get(tradingDate)
+        const timestamp = Number(row.timestamp) || 0
+        if (!existing || timestamp > existing.timestamp) {
+          byDate.set(tradingDate, { volume, timestamp })
         }
+        historyByCode.set(code, byDate)
+      }
+
+      historyByCode.forEach((volumesByDate, code) => {
         const volumes = Array.from(volumesByDate.entries())
           .sort(([leftDate, left], [rightDate, right]) => {
             const dateOrder = rightDate.localeCompare(leftDate)
@@ -203,8 +213,31 @@ export class SnapshotBackendRead {
         if (volumes.length > 0) {
           result.set(code, volumes)
         }
-      }),
-    )
+      })
+    }
+
+    const fallbackCodes: string[] = []
+    for (let index = 0; index < requestedCodes.length; index += STOCK_VOLUME_HISTORY_BATCH_SIZE) {
+      const chunk = requestedCodes.slice(index, index + STOCK_VOLUME_HISTORY_BATCH_SIZE)
+      const batchLimit = candidateLimit * chunk.length
+      const rows = await loadRows({ codes: chunk, limit: batchLimit })
+      appendHistory(rows)
+      if (rows.length >= batchLimit) {
+        fallbackCodes.push(
+          ...chunk.filter((code) => (result.get(code)?.length || 0) < lookbackDays),
+        )
+      }
+    }
+
+    for (let index = 0; index < fallbackCodes.length; index += STOCK_VOLUME_HISTORY_BATCH_SIZE) {
+      const chunk = fallbackCodes.slice(index, index + STOCK_VOLUME_HISTORY_BATCH_SIZE)
+      await Promise.all(
+        chunk.map(async (code) => {
+          const rows = await loadRows({ code, limit: candidateLimit })
+          appendHistory(rows)
+        }),
+      )
+    }
 
     return result
   }

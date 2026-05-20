@@ -194,9 +194,9 @@ describe('SnapshotRuntime', () => {
   it('ignores IndexedDB existence and writes formal snapshots through the backend primary', async () => {
     const runtime = createRuntime()
     const record = createRecord('half_hour', '2026-04-21', '10:00')
-    const sqliteWrite = vi.fn().mockResolvedValue({ ok: true })
-    ;(runtime as any).sqlitePrimaryWrite = sqliteWrite
-    runtime.setSqlitePrimaryExistsHandler(vi.fn().mockResolvedValue(false))
+    const mongoWrite = vi.fn().mockResolvedValue({ ok: true })
+    ;(runtime as any).mongoPrimaryWrite = mongoWrite
+    runtime.setMongoPrimaryExistsHandler(vi.fn().mockResolvedValue(false))
     ;(runtime as any).snapshotStore = {
       getById: vi.fn().mockResolvedValue(record),
     }
@@ -229,14 +229,14 @@ describe('SnapshotRuntime', () => {
     const saved = await (runtime as any).saveSnapshotRecord(record)
 
     expect(saved).toBe(true)
-    expect(sqliteWrite).toHaveBeenCalledTimes(1)
+    expect(mongoWrite).toHaveBeenCalledTimes(1)
     expect((runtime as any).snapshotStore.getById).not.toHaveBeenCalled()
     expect((runtime as any).snapshotProjectionWriter.saveBundle).not.toHaveBeenCalled()
     const state = await runtime.getSnapshotBackupSyncState('2026-04-21')
     expect(state?.backendIngestedAt).toEqual(expect.any(Number))
   })
 
-  it('writes formal snapshots to sqlite without touching IndexedDB cache when cache is disabled', async () => {
+  it('writes formal snapshots to MongoDB without touching IndexedDB cache when cache is disabled', async () => {
     const runtime = new SnapshotRuntime({
       logger: {
         log: vi.fn(),
@@ -272,8 +272,8 @@ describe('SnapshotRuntime', () => {
       }),
     })
     const record = createRecord('half_hour', '2026-04-21', '10:00')
-    const sqliteWrite = vi.fn().mockResolvedValue({ ok: true })
-    ;(runtime as any).sqlitePrimaryWrite = sqliteWrite
+    const mongoWrite = vi.fn().mockResolvedValue({ ok: true })
+    ;(runtime as any).mongoPrimaryWrite = mongoWrite
     ;(runtime as any).snapshotStore = {
       getById: vi.fn(),
     }
@@ -283,7 +283,7 @@ describe('SnapshotRuntime', () => {
     ;(runtime as any).snapshotBackupSync = {
       saveToBackups: vi.fn(),
     }
-    runtime.setSqlitePrimaryExistsHandler(vi.fn().mockResolvedValue(false))
+    runtime.setMongoPrimaryExistsHandler(vi.fn().mockResolvedValue(false))
 
     const saved = await (runtime as any).saveSnapshotRecord(record, {
       record,
@@ -293,18 +293,18 @@ describe('SnapshotRuntime', () => {
     })
 
     expect(saved).toBe(true)
-    expect(sqliteWrite).toHaveBeenCalledTimes(1)
+    expect(mongoWrite).toHaveBeenCalledTimes(1)
     expect((runtime as any).snapshotStore.getById).not.toHaveBeenCalled()
     expect((runtime as any).snapshotProjectionWriter.saveBundle).not.toHaveBeenCalled()
     expect((runtime as any).snapshotBackupSync.saveToBackups).not.toHaveBeenCalled()
   })
 
-  it('treats sqlite duplicate snapshot responses as not-created without writing cache', async () => {
+  it('treats MongoDB duplicate snapshot responses as not-created without writing cache', async () => {
     const runtime = createRuntime()
     const record = createRecord('half_hour', '2026-04-21', '10:00')
-    const sqliteWrite = vi.fn().mockResolvedValue({ ok: true, skipped: true })
-    ;(runtime as any).sqlitePrimaryWrite = sqliteWrite
-    runtime.setSqlitePrimaryExistsHandler(vi.fn().mockResolvedValue(false))
+    const mongoWrite = vi.fn().mockResolvedValue({ ok: true, skipped: true })
+    ;(runtime as any).mongoPrimaryWrite = mongoWrite
+    runtime.setMongoPrimaryExistsHandler(vi.fn().mockResolvedValue(false))
     ;(runtime as any).snapshotProjectionWriter = {
       saveBundle: vi.fn(),
     }
@@ -320,18 +320,18 @@ describe('SnapshotRuntime', () => {
     })
 
     expect(saved).toBe(false)
-    expect(sqliteWrite).toHaveBeenCalledTimes(1)
+    expect(mongoWrite).toHaveBeenCalledTimes(1)
     expect((runtime as any).snapshotProjectionWriter.saveBundle).not.toHaveBeenCalled()
     expect((runtime as any).snapshotBackupSync.saveToBackups).not.toHaveBeenCalled()
   })
 
-  it('skips formal snapshot writes when sqlite already has the snapshot id', async () => {
+  it('skips formal snapshot writes when MongoDB already has the snapshot id', async () => {
     const runtime = createRuntime()
     const record = createRecord('half_hour', '2026-04-21', '10:00')
-    const sqliteWrite = vi.fn()
+    const mongoWrite = vi.fn()
     const exists = vi.fn().mockResolvedValue(true)
-    ;(runtime as any).sqlitePrimaryWrite = sqliteWrite
-    runtime.setSqlitePrimaryExistsHandler(exists)
+    ;(runtime as any).mongoPrimaryWrite = mongoWrite
+    runtime.setMongoPrimaryExistsHandler(exists)
     ;(runtime as any).snapshotProjectionWriter = {
       saveBundle: vi.fn(),
     }
@@ -345,20 +345,20 @@ describe('SnapshotRuntime', () => {
 
     expect(saved).toBe(false)
     expect(exists).toHaveBeenCalledWith(record.id)
-    expect(sqliteWrite).not.toHaveBeenCalled()
+    expect(mongoWrite).not.toHaveBeenCalled()
     expect((runtime as any).snapshotProjectionWriter.saveBundle).not.toHaveBeenCalled()
   })
 
   it('serializes snapshot record writes through the snapshot-write resource', async () => {
     const runtime = createRuntime()
     const releases: Array<() => void> = []
-    const writeSnapshotBundleToSqlitePrimary = vi.fn(
+    const writeSnapshotBundleToMongoPrimary = vi.fn(
       () =>
         new Promise<{ ok: true }>((resolve) => {
           releases.push(() => resolve({ ok: true }))
         }),
     )
-    ;(runtime as any).writeSnapshotBundleToSqlitePrimary = writeSnapshotBundleToSqlitePrimary
+    ;(runtime as any).writeSnapshotBundleToMongoPrimary = writeSnapshotBundleToMongoPrimary
 
     const first = (runtime as any).saveSnapshotRecord(
       createRecord('half_hour', '2026-04-21', '10:00'),
@@ -373,12 +373,12 @@ describe('SnapshotRuntime', () => {
     )
     await Promise.resolve()
 
-    expect(writeSnapshotBundleToSqlitePrimary).toHaveBeenCalledTimes(1)
+    expect(writeSnapshotBundleToMongoPrimary).toHaveBeenCalledTimes(1)
 
     releases.shift()?.()
     await expect(first).resolves.toBe(true)
     await vi.waitFor(() => {
-      expect(writeSnapshotBundleToSqlitePrimary).toHaveBeenCalledTimes(2)
+      expect(writeSnapshotBundleToMongoPrimary).toHaveBeenCalledTimes(2)
     })
     releases.shift()?.()
     await expect(second).resolves.toBe(true)
@@ -401,10 +401,10 @@ describe('SnapshotRuntime', () => {
     )
   })
 
-  it('collects pending scheduled slots by checking sqlite existence first', async () => {
+  it('collects pending scheduled slots by checking MongoDB existence first', async () => {
     const runtime = createRuntime()
     const exists = vi.fn(async (snapshotId: string) => snapshotId.includes('10:00'))
-    runtime.setSqlitePrimaryExistsHandler(exists)
+    runtime.setMongoPrimaryExistsHandler(exists)
     ;(runtime as any).snapshotStore = {
       getById: vi.fn(),
     }

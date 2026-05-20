@@ -3,9 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { themeMapping } from '../ThemeDataService'
 import { dataLayer } from '../DataLayer'
 
-const sqlitePayload = {
+const mongoPayload = {
   ok: true,
-  source: 'sqlite',
+  source: 'mongodb',
   mapping: {
     version: 'theme-v8-test',
     lastUpdate: '2026-05-05T09:30:00.000Z',
@@ -31,7 +31,7 @@ const sqlitePayload = {
   },
 }
 
-describe('ThemeDataService sqlite mapping facade', () => {
+describe('ThemeDataService mongo mapping facade', () => {
   beforeEach(() => {
     vi.restoreAllMocks()
     themeMapping.clearCache()
@@ -42,10 +42,10 @@ describe('ThemeDataService sqlite mapping facade', () => {
     vi.unstubAllGlobals()
   })
 
-  it('loads formal theme mapping from QuantBoard sqlite API without writing IndexedDB', async () => {
+  it('loads formal theme mapping from QuantBoard mongo API without writing IndexedDB', async () => {
     const fetchMock = vi.fn(async (url: string) => {
       expect(url).toBe('http://localhost:8000/api/themes/mapping')
-      return new Response(JSON.stringify(sqlitePayload), {
+      return new Response(JSON.stringify(mongoPayload), {
         status: 200,
         headers: { 'content-type': 'application/json' },
       })
@@ -80,7 +80,7 @@ describe('ThemeDataService sqlite mapping facade', () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () =>
-        new Response(JSON.stringify(sqlitePayload), {
+        new Response(JSON.stringify(mongoPayload), {
           status: 200,
           headers: { 'content-type': 'application/json' },
         }),
@@ -113,17 +113,17 @@ describe('ThemeDataService sqlite mapping facade', () => {
     expect(themeMapping.getThemeStocks('POWER')).toEqual(['000002'])
   })
 
-  it('keeps existing mapping when sqlite refresh returns malformed payload', async () => {
+  it('keeps existing mapping when mongo refresh returns malformed payload', async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(
-        new Response(JSON.stringify(sqlitePayload), {
+        new Response(JSON.stringify(mongoPayload), {
           status: 200,
           headers: { 'content-type': 'application/json' },
         }),
       )
       .mockResolvedValueOnce(
-        new Response(JSON.stringify({ ok: true, source: 'sqlite' }), {
+        new Response(JSON.stringify({ ok: true, source: 'mongodb' }), {
           status: 200,
           headers: { 'content-type': 'application/json' },
         }),
@@ -138,13 +138,13 @@ describe('ThemeDataService sqlite mapping facade', () => {
     expect(themeMapping.getStockReason('000001')).toBe('算力龙头；电网建设')
   })
 
-  it('fails explicitly when sqlite loading fails and does not use local or batch fallbacks', async () => {
+  it('fails explicitly when mongo loading fails and does not use local or batch fallbacks', async () => {
     const fetchMock = vi.fn(async (url: string) => {
       const text = String(url)
       if (text.includes('/data/theme_base_mapping.json') || text.includes('/api/themes/batch')) {
         throw new Error(`unexpected fallback request: ${text}`)
       }
-      return new Response(JSON.stringify({ ok: false, detail: 'sqlite unavailable' }), {
+      return new Response(JSON.stringify({ ok: false, detail: 'mongodb unavailable' }), {
         status: 503,
         headers: { 'content-type': 'application/json' },
       })
@@ -152,7 +152,7 @@ describe('ThemeDataService sqlite mapping facade', () => {
     vi.stubGlobal('fetch', fetchMock)
     vi.stubGlobal('indexedDB', {
       open: vi.fn(() => {
-        throw new Error('IndexedDB must not be used when sqlite loading fails')
+        throw new Error('IndexedDB must not be used when mongo loading fails')
       }),
     })
 
@@ -163,19 +163,19 @@ describe('ThemeDataService sqlite mapping facade', () => {
     )
     expect(themeMapping.getAllThemes()).toEqual([])
     expect(themeMapping.getLoadStatus()).toMatchObject({
-      source: 'sqlite',
+      source: 'mongodb',
       loaded: false,
       themeCount: 0,
       mappingCount: 0,
     })
-    expect(themeMapping.getLoadStatus().lastError).toContain('SQLite')
+    expect(themeMapping.getLoadStatus().lastError).toContain('MongoDB')
   })
 
-  it('reports sqlite load status after successful loading', async () => {
+  it('reports mongo load status after successful loading', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () =>
-        new Response(JSON.stringify(sqlitePayload), {
+        new Response(JSON.stringify(mongoPayload), {
           status: 200,
           headers: { 'content-type': 'application/json' },
         }),
@@ -185,7 +185,7 @@ describe('ThemeDataService sqlite mapping facade', () => {
     await expect(themeMapping.load()).resolves.toBe(true)
 
     expect(themeMapping.getLoadStatus()).toEqual({
-      source: 'sqlite',
+      source: 'mongodb',
       loaded: true,
       lastUpdate: '2026-05-05T09:30:00.000Z',
       lastError: null,
