@@ -1,5 +1,46 @@
 # 异动精灵 V1 进度记录
 
+## 2026-05-20 TDX 自选股切回保留修复
+
+- **目标：** 修复从 `八平台热榜` 切回 `TDX自选股` 时，原先勾选的 `.blk` 文件可能被空列表覆盖的问题。
+- **改动：**
+  - `MainForm` 增加 TDX 列表加载状态，只有 `.blk` 列表完成加载后才允许用当前勾选项覆盖 `SelectedBlockFiles`。
+  - 切回 `TDX自选股` 并订阅前，如果列表尚未加载，会先扫描 `blocknew` 目录，恢复旧勾选再读取股票池。
+  - 增加纯函数测试，覆盖“列表未加载时保留旧 `.blk` 选择”和“列表已加载时保存新选择”。
+- **验证：**
+  - `dotnet build tools\YiDongJingLing\YiDongJingLing.csproj -c Release`：0 warnings, 0 errors。
+  - `dotnet run --project tools\YiDongJingLing.Tests\YiDongJingLing.Tests.csproj`：全部 PASS。
+  - 发布覆盖 `tools\YiDongJingLing\publish\win-x64\YiDongJingLing.exe` 时失败：目标 exe 正在被其它进程占用，未强制结束用户进程。
+
+## 2026-05-20 设置置顶取消与八平台热榜股票池
+
+- **目标：** 修复设置窗口反选“窗口置顶”后主窗体覆盖设置窗的问题，并增加股票池来源二选一。
+- **改动：**
+  - 设置页移除“窗口置顶”，启动、保存设置和主窗体应用设置时都强制 `TopMost=false`，兼容旧配置但不再启用置顶。
+  - “监控板块”页增加“股票池来源”下拉：`TDX自选股` / `八平台热榜`。
+  - 新增 `HotlistPoolLoader`，复用本地 `proxy-server` 的八个平台热榜接口，归一化 A 股 6 位代码并过滤港股/指数样式代码。
+  - 新增 `ProxyProcessManager`，热榜来源下如果 3000 端口未运行，会尝试后台启动 `proxy-server/server.js`；不启动 Dragon Board 前端。
+  - 更新 `docs/yidong-jingling/usage.md` 与 `task_plan.md`。
+- **验证：**
+  - `dotnet run --project tools\YiDongJingLing.Tests\YiDongJingLing.Tests.csproj`：全部 PASS。
+  - `dotnet build tools\YiDongJingLing\YiDongJingLing.csproj -c Release`：0 warnings, 0 errors。
+  - `dotnet publish tools\YiDongJingLing\YiDongJingLing.csproj -c Release -r win-x64 --self-contained true ... -o tools\YiDongJingLing\publish\win-x64`：成功。
+  - 启动烟测 `tools\YiDongJingLing\publish\win-x64\YiDongJingLing.exe`：进程保持运行，随后关闭烟测实例；`startup-error.log` 未刷新。
+
+## 2026-05-20 设置窗容器高度补丁
+
+- **目标：** 修复设置窗右侧容器过小导致新功能和行情桥输入框不可见的问题。
+- **改动：**
+  - 设置窗扩大到 `860x740`，最小尺寸调整为 `820x700`。
+  - 右侧设置组改为“股票池、窗口与行情桥”，第一行直接显示股票池来源下拉。
+  - 保存设置时如果股票池来源变化，会立即刷新监控池并重新订阅。
+- **验证：**
+  - `dotnet run --project tools\YiDongJingLing.Tests\YiDongJingLing.Tests.csproj`：全部 PASS。
+  - `dotnet build tools\YiDongJingLing\YiDongJingLing.csproj -c Release`：0 warnings, 0 errors。
+  - `dotnet publish tools\YiDongJingLing\YiDongJingLing.csproj -c Release -r win-x64 --self-contained true ... -o tools\YiDongJingLing\publish\win-x64`：成功。
+  - 发布版启动烟测通过，`startup-error.log` 未刷新。
+
+
 ## Session: 2026-05-20
 
 ### V2 Phase 1-4：实盘盯盘体验落地

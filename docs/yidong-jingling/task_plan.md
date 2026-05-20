@@ -62,7 +62,7 @@ tools/YiDongJingLing.Tests/
 - [x] 新建 `tools/YiDongJingLing` WinForms 项目。
 - [x] 新建 `tools/YiDongJingLing.Tests` 测试项目。
 - [x] 实现主窗口基础布局：异动列表、监控板块、设置、诊断日志。
-- [x] 保存窗口位置、透明度、置顶、语音设置和规则开关。
+- [x] 保存窗口位置、透明度、语音设置和规则开关；置顶功能已在后续版本取消。
 - **验证：** `dotnet build tools\YiDongJingLing\YiDongJingLing.csproj`
 - **状态：** complete
 
@@ -125,7 +125,7 @@ tools/YiDongJingLing.Tests/
 - [x] 监控板块页显示选中 `.blk` 的股票数和异常行数量。
 - [x] 诊断区显示行情桥状态、订阅数量、最近行情时间、语音状态。
 - [ ] 支持最小化到托盘。
-- [x] 支持置顶、透明度。
+- [x] 支持透明度；置顶功能因设置窗遮挡风险已取消。
 - [x] 联动页先提供复制代码、尝试打开通达信目录；具体通达信定位方式需实测后确认。
 - **验证：** 手工打开 GUI，切换各页，加载真实 `D:\APP_SOFT\TDX\T0002\blocknew`。
 - **状态：** partial
@@ -257,6 +257,15 @@ V1 交付时，只要用户可以打开一个 GUI、选择通达信板块文件�
 - [x] 双击异动记录复制股票代码。
 - [x] 导出记录改进为包含表头的 CSV 或制表符文本。
 - **验证：** 手工验证托盘、恢复窗口、退出释放行情桥。
+- **状态：** complete
+
+## V2 Phase 5：股票池来源和设置稳定性
+
+- [x] 设置页取消窗口置顶入口，旧配置中的 `TopMost` 启动和保存时强制忽略。
+- [x] “监控板块”页增加股票池来源下拉：`TDX自选股` / `八平台热榜`。
+- [x] 八平台热榜来源复用本地 `proxy-server` 八个平台接口，只合并 A 股 6 位代码后订阅行情桥。
+- [x] 八平台热榜来源下自动尝试启动本地代理服务，不启动 Dragon Board 前端。
+- **验证：** `dotnet run --project tools\YiDongJingLing.Tests\YiDongJingLing.Tests.csproj`；`dotnet build tools\YiDongJingLing\YiDongJingLing.csproj -c Release`。
 - **状态：** complete
 
 ## V2 Phase 5：验收和发布

@@ -271,6 +271,7 @@ Run("App settings clone is independent", () =>
     var original = new AppSettings
     {
         BridgeUrl = "ws://old",
+        StockPoolSource = StockPoolSource.Hotlist,
         FilterStStocks = true,
         VoiceMode = VoiceMode.All,
         SelectedBlockFiles = ["old.blk"],
@@ -284,6 +285,7 @@ Run("App settings clone is independent", () =>
     copy.EnabledEvents[L1EventType.FastRise.ToString()] = false;
 
     AssertEqual("ws://old", original.BridgeUrl, "bridge url unchanged");
+    AssertEqual(StockPoolSource.Hotlist, original.StockPoolSource, "stock pool source unchanged");
     AssertTrue(original.FilterStStocks, "filter ST unchanged");
     AssertEqual(VoiceMode.All, original.VoiceMode, "voice mode unchanged");
     AssertEqual(1, original.SelectedBlockFiles.Count, "selected files unchanged");
@@ -305,6 +307,56 @@ Run("Main form resolves bridge port from configured URL", () =>
     AssertEqual(8765, MainForm.ResolveBridgePort("ws://127.0.0.1:8765/ws/quotes"), "default port");
     AssertEqual(9876, MainForm.ResolveBridgePort("ws://127.0.0.1:9876/ws/quotes"), "custom port");
     AssertEqual(8765, MainForm.ResolveBridgePort("not-a-url"), "fallback port");
+});
+
+Run("Main form preserves TDX block selection until list is loaded", () =>
+{
+    var saved = new[] { "old-a.blk", "old-b.blk" };
+    var checkedPaths = Array.Empty<string>();
+
+    AssertSequence(
+        saved,
+        MainForm.ResolveSelectedBlockFilesForSave(StockPoolSource.TdxBlock, saved, checkedPaths, false),
+        "preserve unloaded TDX selection");
+    AssertSequence(
+        saved,
+        MainForm.ResolveSelectedBlockFilesForSave(StockPoolSource.Hotlist, saved, checkedPaths, false),
+        "preserve hotlist selection");
+    AssertSequence(
+        ["new.blk"],
+        MainForm.ResolveSelectedBlockFilesForSave(StockPoolSource.TdxBlock, saved, ["new.blk"], true),
+        "persist loaded TDX selection");
+});
+
+Run("Hotlist pool loader normalizes platform payloads", () =>
+{
+    using var eastmoney = JsonDocument.Parse("""{"data":[{"sc":"SZ000001","sn":"平安银行"},{"sc":"SH688001","sn":"样本股"}]}""");
+    using var ths = JsonDocument.Parse("""{"data":{"stock_list":[{"code":"300750","name":"宁德时代"}]}}""");
+    using var kpl = JsonDocument.Parse("""{"List":[["600519","贵州茅台","1.2","",1]]}""");
+    using var cls = JsonDocument.Parse("""{"errno":0,"data":[{"stock":{"StockID":"002594","name":"比亚迪"}}]}""");
+    using var tgb = JsonDocument.Parse("""{"dto":[{"fullCode":"SZ002475","stockName":"立讯精密"}]}""");
+    using var dzh = JsonDocument.Parse("""{"result":[{"SH600000":100}]}""");
+
+    var stocks = HotlistPoolLoader.ExtractStocks("eastmoney", eastmoney.RootElement)
+        .Concat(HotlistPoolLoader.ExtractStocks("ths", ths.RootElement))
+        .Concat(HotlistPoolLoader.ExtractStocks("kpl", kpl.RootElement))
+        .Concat(HotlistPoolLoader.ExtractStocks("cls", cls.RootElement))
+        .Concat(HotlistPoolLoader.ExtractStocks("tgb", tgb.RootElement))
+        .Concat(HotlistPoolLoader.ExtractStocks("dzh", dzh.RootElement))
+        .ToArray();
+
+    AssertSequence(
+        ["000001", "688001", "300750", "600519", "002594", "002475", "600000"],
+        stocks.Select(stock => stock.Code).ToArray(),
+        "hotlist codes");
+    AssertEqual("平安银行", stocks[0].Name, "hotlist stock name");
+});
+
+Run("Hotlist pool loader rejects non A-share codes", () =>
+{
+    AssertEqual(null, HotlistPoolLoader.NormalizeStockCode("HK00700"), "HK code rejected");
+    AssertEqual(null, HotlistPoolLoader.NormalizeStockCode("1000001"), "index code rejected");
+    AssertEqual("000001", HotlistPoolLoader.NormalizeStockCode("SZ000001"), "A-share normalized");
 });
 
 Run("Main form detects ST stock names", () =>

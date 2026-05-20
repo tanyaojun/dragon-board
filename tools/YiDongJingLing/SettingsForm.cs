@@ -11,13 +11,13 @@ internal sealed class SettingsForm : Form
     private readonly SpeechAnnouncer _speech;
     private readonly CheckedListBox _eventTypeList = new();
     private readonly CheckBox _voiceEnabledBox = new();
-    private readonly CheckBox _topMostBox = new();
     private readonly CheckBox _filterStBox = new();
     private readonly TrackBar _volumeBar = new();
     private readonly TrackBar _rateBar = new();
     private readonly TrackBar _opacityBar = new();
     private readonly ComboBox _voiceBox = new();
     private readonly ComboBox _voiceModeBox = new();
+    private readonly ComboBox _stockPoolSourceBox = new();
     private readonly TextBox _bridgeUrlBox = new();
     private readonly Label _rateValueLabel = new();
     private readonly Label _volumeValueLabel = new();
@@ -30,9 +30,9 @@ internal sealed class SettingsForm : Form
         _speech = speech;
 
         Text = "异动精灵设置";
-        Width = 760;
-        Height = 660;
-        MinimumSize = new Size(700, 620);
+        Width = 860;
+        Height = 740;
+        MinimumSize = new Size(820, 700);
         StartPosition = FormStartPosition.CenterParent;
         Font = new Font("Microsoft YaHei UI", 9f);
         BackColor = Color.FromArgb(241, 244, 248);
@@ -104,7 +104,7 @@ internal sealed class SettingsForm : Form
         };
         right.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
         right.RowStyles.Add(new RowStyle(SizeType.Absolute, 236));
-        right.RowStyles.Add(new RowStyle(SizeType.Absolute, 162));
+        right.RowStyles.Add(new RowStyle(SizeType.Absolute, 226));
         right.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         root.Controls.Add(right, 1, 0);
 
@@ -194,7 +194,7 @@ internal sealed class SettingsForm : Form
         voiceLayout.Controls.Add(ValueLabel(_volumeValueLabel), 3, 4);
         right.Controls.Add(voiceGroup, 0, 1);
 
-        var appGroup = SectionBox("窗口、过滤与行情桥");
+        var appGroup = SectionBox("股票池、窗口与行情桥");
         var appLayout = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
@@ -205,26 +205,28 @@ internal sealed class SettingsForm : Form
         appLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 74));
         appLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         appLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 72));
+        appLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 40));
         appLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 46));
-        appLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
         appLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
         appLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
         appGroup.Controls.Add(appLayout);
 
-        appLayout.Controls.Add(FieldLabel("透明度"), 0, 0);
+        appLayout.Controls.Add(FieldLabel("股票池"), 0, 0);
+        _stockPoolSourceBox.Dock = DockStyle.Fill;
+        _stockPoolSourceBox.DropDownStyle = ComboBoxStyle.DropDownList;
+        _stockPoolSourceBox.Margin = new Padding(0, 3, 8, 0);
+        _stockPoolSourceBox.Items.AddRange([StockPoolSourceOption.TdxBlock, StockPoolSourceOption.Hotlist]);
+        appLayout.Controls.Add(_stockPoolSourceBox, 1, 0);
+        appLayout.SetColumnSpan(_stockPoolSourceBox, 2);
+
+        appLayout.Controls.Add(FieldLabel("透明度"), 0, 1);
         _opacityBar.Minimum = 60;
         _opacityBar.Maximum = 100;
         _opacityBar.TickFrequency = 5;
         _opacityBar.Dock = DockStyle.Fill;
         _opacityBar.ValueChanged += (_, _) => UpdateValueLabels();
-        appLayout.Controls.Add(_opacityBar, 1, 0);
-        appLayout.Controls.Add(ValueLabel(_opacityValueLabel), 2, 0);
-
-        _topMostBox.Text = "窗口置顶";
-        _topMostBox.Dock = DockStyle.Fill;
-        _topMostBox.AutoSize = true;
-        appLayout.Controls.Add(_topMostBox, 1, 1);
-        appLayout.SetColumnSpan(_topMostBox, 2);
+        appLayout.Controls.Add(_opacityBar, 1, 1);
+        appLayout.Controls.Add(ValueLabel(_opacityValueLabel), 2, 1);
 
         _filterStBox.Text = "过滤 ST 股";
         _filterStBox.Dock = DockStyle.Fill;
@@ -266,7 +268,7 @@ internal sealed class SettingsForm : Form
         _rateBar.Value = Math.Clamp((int)Math.Round(_settings.VoiceRate * 10), 6, 18);
         _volumeBar.Value = Math.Clamp(_settings.VoiceVolume, 0, 100);
         _opacityBar.Value = Math.Clamp((int)Math.Round(_settings.Opacity * 100), 60, 100);
-        _topMostBox.Checked = _settings.TopMost;
+        _stockPoolSourceBox.SelectedItem = StockPoolSourceOption.FromSource(_settings.StockPoolSource);
         _filterStBox.Checked = _settings.FilterStStocks;
         _bridgeUrlBox.Text = _settings.BridgeUrl;
 
@@ -300,8 +302,11 @@ internal sealed class SettingsForm : Form
         _settings.VoiceMode = _voiceModeBox.SelectedItem is VoiceModeOption selectedVoiceMode
             ? selectedVoiceMode.Mode
             : VoiceMode.StrongOnly;
+        _settings.StockPoolSource = _stockPoolSourceBox.SelectedItem is StockPoolSourceOption selectedPool
+            ? selectedPool.Source
+            : StockPoolSource.TdxBlock;
         _settings.Opacity = _opacityBar.Value / 100d;
-        _settings.TopMost = _topMostBox.Checked;
+        _settings.TopMost = false;
         _settings.FilterStStocks = _filterStBox.Checked;
         _settings.EnabledEvents.Clear();
         for (var i = 0; i < _eventTypeList.Items.Count; i++)
@@ -460,6 +465,19 @@ internal sealed class SettingsForm : Form
                 VoiceMode.Muted => Muted,
                 _ => StrongOnly,
             };
+        }
+
+        public override string ToString() => Label;
+    }
+
+    private sealed record StockPoolSourceOption(StockPoolSource Source, string Label)
+    {
+        public static StockPoolSourceOption TdxBlock { get; } = new(StockPoolSource.TdxBlock, "TDX自选股");
+        public static StockPoolSourceOption Hotlist { get; } = new(StockPoolSource.Hotlist, "八平台热榜");
+
+        public static StockPoolSourceOption FromSource(StockPoolSource source)
+        {
+            return source == StockPoolSource.Hotlist ? Hotlist : TdxBlock;
         }
 
         public override string ToString() => Label;

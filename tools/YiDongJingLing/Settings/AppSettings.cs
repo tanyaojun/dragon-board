@@ -9,11 +9,18 @@ public enum VoiceMode
     Muted,
 }
 
+public enum StockPoolSource
+{
+    TdxBlock,
+    Hotlist,
+}
+
 public sealed class AppSettings
 {
     public string BlockDirectory { get; set; } = @"D:\APP_SOFT\TDX\T0002\blocknew";
     public List<string> SelectedBlockFiles { get; set; } = [];
     public string BridgeUrl { get; set; } = "ws://127.0.0.1:8765/ws/quotes";
+    public StockPoolSource StockPoolSource { get; set; } = StockPoolSource.TdxBlock;
     public bool TopMost { get; set; }
     public bool FilterStStocks { get; set; }
     public bool VoiceEnabled { get; set; } = true;
@@ -36,6 +43,7 @@ public sealed class AppSettings
             BlockDirectory = BlockDirectory,
             SelectedBlockFiles = SelectedBlockFiles.ToList(),
             BridgeUrl = BridgeUrl,
+            StockPoolSource = StockPoolSource,
             TopMost = TopMost,
             FilterStStocks = FilterStStocks,
             VoiceEnabled = VoiceEnabled,

@@ -31,14 +31,17 @@ public sealed class MainForm : Form
     private readonly EventDeduper _deduper = new();
     private readonly SpeechAnnouncer _speech;
     private readonly StockNameResolver _nameResolver = new();
+    private readonly HotlistPoolLoader _hotlistLoader = new();
     private readonly List<EventRecord> _eventRecords = [];
     private readonly string _root;
     private readonly BridgeProcessManager _bridgeManager;
+    private readonly ProxyProcessManager _proxyManager;
 
     private AppSettings _settings;
     private TdxBridgeClient? _bridgeClient;
     private FileSystemWatcher? _blockWatcher;
     private bool _loadingBlocks;
+    private bool _blockListLoadedForTdx;
     private bool _connecting;
     private bool _closing;
     private bool _healthTicking;
@@ -69,11 +72,13 @@ public sealed class MainForm : Form
     private readonly Label _eventsSummaryLabel = new();
     private readonly Label _blockSummaryLabel = new();
     private readonly TextBox _bridgeUrlBox = new();
+    private readonly ComboBox _poolSourceBox = new();
 
     public MainForm()
     {
         _root = ProjectRootLocator.Find();
         _bridgeManager = new BridgeProcessManager(_root);
+        _proxyManager = new ProxyProcessManager(_root);
         _speech = new SpeechAnnouncer(_root, Log);
         _settings = _settingsStore.Load();
 
@@ -375,7 +380,7 @@ public sealed class MainForm : Form
             ColumnCount = 1,
             RowCount = 2,
         };
-        pageLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 88));
+        pageLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 122));
         pageLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         page.Controls.Add(pageLayout);
 
@@ -383,11 +388,12 @@ public sealed class MainForm : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
-            RowCount = 2,
+            RowCount = 3,
             BackColor = TerminalPanelAlt,
             Padding = new Padding(12, 8, 12, 8),
         };
         top.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
+        top.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
         top.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         pageLayout.Controls.Add(top, 0, 0);
 
@@ -414,6 +420,48 @@ public sealed class MainForm : Form
         _blockSummaryLabel.TextAlign = ContentAlignment.MiddleRight;
         blockHeader.Controls.Add(_blockSummaryLabel, 1, 0);
         top.Controls.Add(blockHeader, 0, 0);
+
+        var sourceRow = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 2,
+            RowCount = 1,
+        };
+        sourceRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 138));
+        sourceRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 240));
+        sourceRow.Controls.Add(new Label
+        {
+            Text = "股票池来源",
+            Dock = DockStyle.Fill,
+            ForeColor = TerminalText,
+            TextAlign = ContentAlignment.MiddleLeft,
+        }, 0, 0);
+        _poolSourceBox.Dock = DockStyle.Fill;
+        _poolSourceBox.DropDownStyle = ComboBoxStyle.DropDownList;
+        _poolSourceBox.Margin = new Padding(0, 3, 8, 0);
+        _poolSourceBox.BackColor = TerminalPanel;
+        _poolSourceBox.ForeColor = TerminalText;
+        _poolSourceBox.Items.AddRange([StockPoolSourceOption.TdxBlock, StockPoolSourceOption.Hotlist]);
+        _poolSourceBox.SelectedIndexChanged += async (_, _) =>
+        {
+            if (_poolSourceBox.SelectedItem is not StockPoolSourceOption selected ||
+                _settings.StockPoolSource == selected.Source)
+            {
+                return;
+            }
+
+            _settings.StockPoolSource = selected.Source;
+            SaveSettingsFromUi();
+            SetBlockControlsEnabled();
+            if (_settings.StockPoolSource == StockPoolSource.TdxBlock)
+            {
+                LoadBlockFiles();
+            }
+            UpdateBlockSelectionSummary();
+            await LoadSelectedBlocksAndSubscribeAsync(resetRuntimeState: true);
+        };
+        sourceRow.Controls.Add(_poolSourceBox, 1, 0);
+        top.Controls.Add(sourceRow, 0, 1);
 
         var pathRow = new TableLayoutPanel
         {
@@ -467,7 +515,7 @@ public sealed class MainForm : Form
         };
         blockActions.Controls.Add(saveBtn);
         pathRow.Controls.Add(blockActions, 2, 0);
-        top.Controls.Add(pathRow, 0, 1);
+        top.Controls.Add(pathRow, 0, 2);
 
         var split = new SplitContainer
         {
@@ -617,8 +665,10 @@ public sealed class MainForm : Form
     {
         _blockDirBox.Text = _settings.BlockDirectory;
         _bridgeUrlBox.Text = _settings.BridgeUrl;
-        TopMost = _settings.TopMost;
+        _poolSourceBox.SelectedItem = StockPoolSourceOption.FromSource(_settings.StockPoolSource);
+        TopMost = false;
         Opacity = Math.Clamp(_settings.Opacity, 0.6d, 1d);
+        SetBlockControlsEnabled();
         ApplySpeechSettings();
         UpdateRuntimeStatus();
     }
@@ -626,10 +676,27 @@ public sealed class MainForm : Form
     private void SaveSettingsFromUi()
     {
         _settings.BlockDirectory = _blockDirBox.Text.Trim();
-        _settings.SelectedBlockFiles = CheckedBlockPaths().ToList();
         _settings.BridgeUrl = _bridgeUrlBox.Text.Trim();
+        if (_poolSourceBox.SelectedItem is StockPoolSourceOption selected)
+        {
+            _settings.StockPoolSource = selected.Source;
+        }
+        _settings.SelectedBlockFiles = ResolveSelectedBlockFilesForSave(
+            _settings.StockPoolSource,
+            _settings.SelectedBlockFiles,
+            CheckedBlockPaths(),
+            _blockListLoadedForTdx);
+        _settings.TopMost = false;
         _settingsStore.Save(_settings);
         ApplySpeechSettings();
+    }
+
+    private void SetBlockControlsEnabled()
+    {
+        var enabled = _settings.StockPoolSource == StockPoolSource.TdxBlock;
+        _blockDirBox.Enabled = enabled;
+        _blockList.Enabled = enabled;
+        _blocksGrid.Enabled = enabled;
     }
 
     private void ApplySpeechSettings()
@@ -646,10 +713,12 @@ public sealed class MainForm : Form
         using var dialog = new SettingsForm(_settings, _speech.GetVoices(), _speech);
         if (dialog.ShowDialog(this) != DialogResult.OK) return;
 
-        var shouldRefreshPool = _settings.FilterStStocks != dialog.Settings.FilterStStocks;
+        var shouldRefreshPool = _settings.FilterStStocks != dialog.Settings.FilterStStocks ||
+            _settings.StockPoolSource != dialog.Settings.StockPoolSource;
         _settings = dialog.Settings;
         ApplySettingsToUi();
         SaveSettingsFromUi();
+        TopMost = false;
         if (shouldRefreshPool)
         {
             _ = LoadSelectedBlocksAndSubscribeAsync(resetRuntimeState: true);
@@ -678,7 +747,16 @@ public sealed class MainForm : Form
     {
         var directory = _blockDirBox.Text.Trim();
         _nameResolver.LoadFromBlockDirectory(directory);
+        if (_settings.StockPoolSource == StockPoolSource.Hotlist)
+        {
+            _blockListLoadedForTdx = false;
+            _blockSummaryLabel.Text = "当前使用八平台热榜股票池";
+            ResetBlockWatcher("");
+            return;
+        }
+
         _loadingBlocks = true;
+        _blockListLoadedForTdx = false;
         try
         {
             _blockList.Items.Clear();
@@ -694,6 +772,7 @@ public sealed class MainForm : Form
             }
 
             Log($"扫描板块目录完成: {blocks.Count} 个 .blk 文件。");
+            _blockListLoadedForTdx = true;
         }
         finally
         {
@@ -723,6 +802,12 @@ public sealed class MainForm : Form
 
     private async Task BrowseBlockDirectoryAsync()
     {
+        if (_settings.StockPoolSource == StockPoolSource.Hotlist)
+        {
+            Log("当前股票池来源为八平台热榜，无需选择 .blk 目录。");
+            return;
+        }
+
         using var dialog = new FolderBrowserDialog
         {
             Description = "选择通达信 T0002\\blocknew 目录",
@@ -756,9 +841,12 @@ public sealed class MainForm : Form
     {
         try
         {
-            LoadBlockFiles();
+            if (_settings.StockPoolSource == StockPoolSource.TdxBlock)
+            {
+                LoadBlockFiles();
+            }
             await LoadSelectedBlocksAndSubscribeAsync(resetRuntimeState: true);
-            Log(manual ? "已手动刷新板块和监控订阅。" : "板块目录变化，已自动刷新监控订阅。");
+            Log(manual ? "已手动刷新股票池和监控订阅。" : "股票池变化，已自动刷新监控订阅。");
         }
         catch (Exception ex)
         {
@@ -768,6 +856,12 @@ public sealed class MainForm : Form
 
     private async Task PickBlockFilesAndSubscribeAsync()
     {
+        if (_settings.StockPoolSource == StockPoolSource.Hotlist)
+        {
+            await LoadSelectedBlocksAndSubscribeAsync(resetRuntimeState: true);
+            return;
+        }
+
         var initialDir = Directory.Exists(_blockDirBox.Text)
             ? _blockDirBox.Text
             : Directory.Exists(_settings.BlockDirectory)
@@ -799,7 +893,8 @@ public sealed class MainForm : Form
     private async Task LoadSelectedBlocksAndSubscribeAsync(bool resetRuntimeState)
     {
         SaveSettingsFromUi();
-        var codes = LoadSelectedCodes();
+        var loadResult = await LoadSelectedCodesAsync();
+        var codes = loadResult.Codes;
         _watchedCodes = new HashSet<string>(codes, StringComparer.Ordinal);
         if (resetRuntimeState)
         {
@@ -809,7 +904,7 @@ public sealed class MainForm : Form
         _watchCountLabel.Text = $"监控 {codes.Count} 只";
         _statusLabel.Text = codes.Count > 0 ? $"已加载 {codes.Count} 只股票" : "未选择有效股票";
         UpdateRuntimeStatus();
-        Log($"已加载监控池: {codes.Count} 只股票，来自 {CheckedBlockPaths().Count()} 个 .blk 文件。");
+        Log(loadResult.Message);
 
         if (_bridgeClient?.IsConnected == true)
         {
@@ -818,7 +913,24 @@ public sealed class MainForm : Form
         }
     }
 
-    private IReadOnlyList<string> LoadSelectedCodes()
+    private async Task<StockPoolLoadResult> LoadSelectedCodesAsync()
+    {
+        if (_settings.StockPoolSource == StockPoolSource.Hotlist)
+        {
+            return await LoadHotlistCodesAsync();
+        }
+
+        if (!_blockListLoadedForTdx)
+        {
+            LoadBlockFiles();
+        }
+        var codes = LoadSelectedBlockCodes();
+        return new StockPoolLoadResult(
+            codes,
+            $"已加载监控池: {codes.Count} 只股票，来自 {CheckedBlockPaths().Count()} 个 .blk 文件。");
+    }
+
+    private IReadOnlyList<string> LoadSelectedBlockCodes()
     {
         var codes = new SortedSet<string>(StringComparer.Ordinal);
         foreach (var path in CheckedBlockPaths())
@@ -839,6 +951,38 @@ public sealed class MainForm : Form
         }
 
         return codes.ToArray();
+    }
+
+    private async Task<StockPoolLoadResult> LoadHotlistCodesAsync()
+    {
+        if (!BridgeProcessManager.IsPortOpen(3000))
+        {
+            _proxyManager.StartProxy(Log);
+            await WaitForProxyPortAsync(3000);
+        }
+
+        var result = await _hotlistLoader.LoadAsync(new Uri("http://127.0.0.1:3000"));
+        foreach (var stock in result.Stocks)
+        {
+            if (!string.IsNullOrWhiteSpace(stock.Name))
+            {
+                _nameResolver.Resolve(stock.Code, stock.Name);
+            }
+        }
+
+        var codes = result.Stocks
+            .Where(stock => !_settings.FilterStStocks || !IsStStockName(_nameResolver.Resolve(stock.Code, stock.Name)))
+            .Select(stock => stock.Code)
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        var failedText = result.Errors.Count > 0 ? $"，{result.Errors.Count} 个平台失败" : "";
+        if (result.Errors.Count > 0)
+        {
+            Log("八平台热榜部分来源失败: " + string.Join("; ", result.Errors.Take(3)));
+        }
+
+        return new StockPoolLoadResult(codes, $"已加载八平台热榜股票池: {codes.Length} 只股票{failedText}。");
     }
 
     private void SelectBlockFiles(IEnumerable<string> paths)
@@ -911,7 +1055,7 @@ public sealed class MainForm : Form
         SaveSettingsFromUi();
         try
         {
-            var codes = LoadSelectedCodes();
+            var codes = (await LoadSelectedCodesAsync()).Codes;
             _watchedCodes = new HashSet<string>(codes, StringComparer.Ordinal);
             if (codes.Count == 0)
             {
@@ -976,6 +1120,22 @@ public sealed class MainForm : Form
         _bridgeStatusLabel.Text = "行情桥：未就绪";
         UpdateRuntimeStatus();
         Log($"行情桥启动后暂未检测到 {port} 端口，请查看诊断日志。");
+    }
+
+    private async Task WaitForProxyPortAsync(int port)
+    {
+        for (var attempt = 0; attempt < 20; attempt++)
+        {
+            if (BridgeProcessManager.IsPortOpen(port))
+            {
+                Log($"本地代理端口 {port} 已就绪。");
+                return;
+            }
+
+            await Task.Delay(300);
+        }
+
+        Log($"本地代理启动后暂未检测到 {port} 端口，八平台热榜可能加载失败。");
     }
 
     private void HandleQuotes(IReadOnlyList<QuoteSnapshot> quotes)
@@ -1102,9 +1262,16 @@ public sealed class MainForm : Form
     {
         var selected = CheckedBlockPaths().ToArray();
         _watchCountLabel.Text = $"板块 {selected.Length} 个";
-        _blockSummaryLabel.Text = selected.Length == 0
-            ? "请选择要监控的 .blk 文件"
-            : $"已选择 {selected.Length} 个板块文件";
+        if (_settings.StockPoolSource == StockPoolSource.Hotlist)
+        {
+            _blockSummaryLabel.Text = "当前使用八平台热榜股票池";
+        }
+        else
+        {
+            _blockSummaryLabel.Text = selected.Length == 0
+                ? "请选择要监控的 .blk 文件"
+                : $"已选择 {selected.Length} 个板块文件";
+        }
         UpdateRuntimeStatus();
     }
 
@@ -1307,6 +1474,7 @@ public sealed class MainForm : Form
         _blockWatcher?.Dispose();
         _speech.Dispose();
         _bridgeManager.StopStartedBridge();
+        _proxyManager.StopStartedProxy();
         _trayIcon.Dispose();
         _trayMenu.Dispose();
     }
@@ -1349,6 +1517,17 @@ public sealed class MainForm : Form
         return Uri.TryCreate(bridgeUrl, UriKind.Absolute, out var uri) && uri.Port > 0
             ? uri.Port
             : 8765;
+    }
+
+    public static List<string> ResolveSelectedBlockFilesForSave(
+        StockPoolSource source,
+        IEnumerable<string> currentSelectedBlockFiles,
+        IEnumerable<string> checkedBlockPaths,
+        bool canPersistCheckedBlockPaths)
+    {
+        return source == StockPoolSource.TdxBlock && canPersistCheckedBlockPaths
+            ? checkedBlockPaths.ToList()
+            : currentSelectedBlockFiles.ToList();
     }
 
     public static bool IsStStockName(string name)
@@ -1525,4 +1704,18 @@ public sealed class MainForm : Form
         public override string ToString() => Name;
     }
 
+    private sealed record StockPoolLoadResult(IReadOnlyList<string> Codes, string Message);
+
+    private sealed record StockPoolSourceOption(StockPoolSource Source, string Label)
+    {
+        public static StockPoolSourceOption TdxBlock { get; } = new(StockPoolSource.TdxBlock, "TDX自选股");
+        public static StockPoolSourceOption Hotlist { get; } = new(StockPoolSource.Hotlist, "八平台热榜");
+
+        public static StockPoolSourceOption FromSource(StockPoolSource source)
+        {
+            return source == StockPoolSource.Hotlist ? Hotlist : TdxBlock;
+        }
+
+        public override string ToString() => Label;
+    }
 }
