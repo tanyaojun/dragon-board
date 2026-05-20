@@ -24,8 +24,11 @@ let releaseSignalCalculation: (() => void) | null = null
 let signalCalculationError: Error | null = null
 let signalApplyCount = 0
 let signalCompletionCount = 0
+let signalPreloadCount = 0
 let blockQuoteBatch = false
 let releaseQuoteBatch: (() => void) | null = null
+let blockIntradayVolumeHistory = false
+let releaseIntradayVolumeHistory: (() => void) | null = null
 let startupBundle: any = null
 let startupBundleGetCount = 0
 let startupBundleSaveCount = 0
@@ -135,6 +138,11 @@ vi.mock('../VolumeHistoryService', () => ({
     async buildIntradayVolumeHistoryMap() {
       intradayVolumeHistoryRequestCount++
       if (volumeHistoryError) throw volumeHistoryError
+      if (blockIntradayVolumeHistory) {
+        await new Promise<void>((resolve) => {
+          releaseIntradayVolumeHistory = resolve
+        })
+      }
       return intradayVolumeHistoryMapResult
     }
   },
@@ -142,6 +150,20 @@ vi.mock('../VolumeHistoryService', () => ({
 
 vi.mock('../RankTrendSignalService', () => ({
   rankTrendSignalService: {
+    preloadSnapshots: vi.fn(async () => {
+      signalPreloadCount++
+      return [
+        {
+          date: '2026-05-18 10:00',
+          timestamp: 1,
+          snapshot: {
+            type: 'half_hour',
+            hotlist: [{ code: '000001', rank: 30 }],
+            totalCount: 100,
+          },
+        },
+      ]
+    }),
     applySignalsToMerged: vi.fn(async (stocks) => {
       signalApplyCount++
       if (signalCalculationError) throw signalCalculationError
@@ -151,7 +173,16 @@ vi.mock('../RankTrendSignalService', () => ({
         })
       }
       signalCompletionCount++
-      return stocks
+      return stocks.map((stock: any) => ({
+        ...stock,
+        rankTrend: {
+          meta: { change: 12 },
+          technical: {},
+          cycle: {},
+          risk: {},
+          decision: {},
+        },
+      }))
     }),
     updateStockSignals: vi.fn(),
     refreshRankTrendSignals: vi.fn(async () => {
@@ -197,8 +228,11 @@ describe('DataLoaderFacade', () => {
     signalCalculationError = null
     signalApplyCount = 0
     signalCompletionCount = 0
+    signalPreloadCount = 0
     blockQuoteBatch = false
     releaseQuoteBatch = null
+    blockIntradayVolumeHistory = false
+    releaseIntradayVolumeHistory = null
     startupBundle = null
     startupBundleGetCount = 0
     startupBundleSaveCount = 0
@@ -256,7 +290,16 @@ describe('DataLoaderFacade', () => {
       platformData: {
         eastmoney: [{ code: '000001', name: '缓存数据', rank: 1, source: 'eastmoney' }],
       },
-      stocks: [{ code: '000001', name: '缓存数据', rank: 1, source: 'eastmoney' }],
+      stocks: [
+        {
+          code: '000001',
+          name: '缓存数据',
+          rank: 1,
+          compRank: 1,
+          source: 'eastmoney',
+          rankTrend: { meta: { change: 8 } },
+        },
+      ],
       cacheMeta: { stale: true },
     }
     const { dataLoader } = await import('../../dataLoader')
@@ -309,7 +352,16 @@ describe('DataLoaderFacade', () => {
       platformData: {
         eastmoney: [{ code: '000001', name: '缓存数据', rank: 1, source: 'eastmoney' }],
       },
-      stocks: [{ code: '000001', name: '缓存数据', rank: 1, source: 'eastmoney' }],
+      stocks: [
+        {
+          code: '000001',
+          name: '缓存数据',
+          rank: 1,
+          compRank: 1,
+          source: 'eastmoney',
+          rankTrend: { meta: { change: 8 } },
+        },
+      ],
     }
     const { dataLoader } = await import('../../dataLoader')
 
@@ -367,6 +419,23 @@ describe('DataLoaderFacade', () => {
     await loadingPromise
   })
 
+  it('preloads RankTrend snapshots while startup quote loading is still in flight', async () => {
+    blockQuoteBatch = true
+    const { dataLoader } = await import('../../dataLoader')
+
+    const loadingPromise = dataLoader.bootstrapInitialData({ force: true })
+
+    await vi.waitFor(() => {
+      expect(releaseQuoteBatch).toEqual(expect.any(Function))
+    })
+    expect(signalPreloadCount).toBe(1)
+    expect(signalApplyCount).toBe(0)
+
+    blockQuoteBatch = false
+    releaseQuoteBatch?.()
+    await loadingPromise
+  })
+
   it('does not block startup completion on RankTrend signal enrichment', async () => {
     blockSignalCalculation = true
     const { dataLoader } = await import('../../dataLoader')
@@ -389,6 +458,76 @@ describe('DataLoaderFacade', () => {
         expect.objectContaining({ data: expect.objectContaining({ reason: 'signal-enriched' }) }),
       ])
     })
+  })
+
+  it('does not block initial startup on intraday volume history loading', async () => {
+    blockIntradayVolumeHistory = true
+    const { dataLoader } = await import('../../dataLoader')
+
+    const summary = await dataLoader.bootstrapInitialData({ force: true })
+
+    expect(summary.stockCount).toBe(1)
+    expect(intradayVolumeHistoryRequestCount).toBe(1)
+    expect(dataLoader.getLoadingStatus()).toMatchObject({
+      active: false,
+      phase: 'done',
+      progress: 100,
+    })
+
+    blockIntradayVolumeHistory = false
+    releaseIntradayVolumeHistory?.()
+  })
+
+  it('does not write half-enriched startup bundles before RankTrend signals finish', async () => {
+    blockSignalCalculation = true
+    const { dataLoader } = await import('../../dataLoader')
+
+    await dataLoader.bootstrapInitialData({ force: true })
+
+    expect(startupBundleSaveCount).toBe(0)
+
+    blockSignalCalculation = false
+    releaseSignalCalculation?.()
+
+    await vi.waitFor(() => {
+      expect(startupBundleSaveCount).toBe(1)
+    })
+  })
+
+  it('merges deferred RankTrend signals after realtime volume-ratio publish changes the loader version', async () => {
+    blockSignalCalculation = true
+    const { dataLoader } = await import('../../dataLoader')
+
+    await dataLoader.bootstrapInitialData({ force: true })
+
+    expect(dataLayer.getStock('000001')?.rankTrend).toBeUndefined()
+    dataLayer.updateStockExtData([
+      {
+        code: '000001',
+        volumeRatio: 1.5,
+        volumeRatioMeta: {
+          status: 'fresh',
+          source: 'daily_snapshot',
+          calculatedAt: 1,
+          currentVolume: 100,
+          historyVolumes: [80, 90],
+          capped: false,
+        },
+      } as any,
+    ])
+    ;(dataLoader as any).publishStocks(dataLayer.getStocks(), { reason: 'base-merge' })
+
+    blockSignalCalculation = false
+    releaseSignalCalculation?.()
+
+    await vi.waitFor(() => {
+      expect(dataLayer.getStock('000001')?.rankTrend?.meta?.change).toBe(12)
+    })
+    expect(EventManager.getHistory(AppEvents.DATA.MERGED)).toEqual([
+      expect.objectContaining({ data: expect.objectContaining({ reason: 'base-merge' }) }),
+      expect.objectContaining({ data: expect.objectContaining({ reason: 'base-merge' }) }),
+      expect.objectContaining({ data: expect.objectContaining({ reason: 'signal-enriched' }) }),
+    ])
   })
 
   it('does not let stale background signal enrichment overwrite newer hotlist data', async () => {

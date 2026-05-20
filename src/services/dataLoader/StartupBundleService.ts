@@ -34,10 +34,24 @@ function isValidBundle(bundle: unknown, now = Date.now()): bundle is StartupBund
   if (Number(candidate.schemaVersion) !== STARTUP_BUNDLE_SCHEMA_VERSION) return false
   if (candidate.tradingDate !== getLocalTradingDate(new Date(now))) return false
   if (!Array.isArray(candidate.stocks) || !candidate.stocks.length) return false
+  if (!candidate.stocks.every(hasValidComprehensiveRank)) return false
+  if (!candidate.stocks.some(hasRankTrendChange)) return false
   if (!candidate.platformData || typeof candidate.platformData !== 'object') return false
   if (Array.isArray(candidate.platformData)) return false
   const ageMs = now - Number(candidate.createdAt || 0)
   return Number.isFinite(ageMs) && ageMs >= 0 && ageMs <= MAX_BUNDLE_AGE_MS
+}
+
+function hasValidComprehensiveRank(stock: any): boolean {
+  if (!stock || typeof stock !== 'object' || Array.isArray(stock)) return false
+  const code = String(stock.code || '')
+  const compRank = Number(stock.compRank)
+  return code.length === 6 && Number.isFinite(compRank) && compRank > 0
+}
+
+function hasRankTrendChange(stock: any): boolean {
+  const value = Number(stock?.rankTrend?.meta?.change ?? stock?.rankChange)
+  return Number.isFinite(value)
 }
 
 function markCachedVolumeRatioStale(stock: any): any {

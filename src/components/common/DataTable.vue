@@ -108,27 +108,27 @@
                   <span class="signal-percent">{{ Math.round(getFinalConfidence(stock) || 0) }}%</span>
                   <!-- ✅ 只在收盘前显示金叉死叉标记 -->
                   <span v-if="shouldShowMacdSignal(stock) && getMacdCross(stock) === 'golden'" class="macd-badge golden"
-                    title="MACD金叉">🔱</span>
+                    title="MACD金叉">▲</span>
                   <span v-if="shouldShowMacdSignal(stock) && getMacdCross(stock) === 'death'" class="macd-badge death"
-                    title="MACD死叉">💀</span>
+                    title="MACD死叉">▼</span>
                 </div>
                 <!-- 卖出信号 -->
                 <div v-else-if="getFinalSignal(stock) === 'sell'" class="signal-badge sell-badge">
                   <span class="signal-percent">{{ Math.round(getFinalConfidence(stock) || 0) }}%</span>
                   <!-- ✅ 只在收盘前显示金叉死叉标记 -->
                   <span v-if="shouldShowMacdSignal(stock) && getMacdCross(stock) === 'golden'" class="macd-badge golden"
-                    title="MACD金叉">🔱</span>
+                    title="MACD金叉">▲</span>
                   <span v-if="shouldShowMacdSignal(stock) && getMacdCross(stock) === 'death'" class="macd-badge death"
-                    title="MACD死叉">💀</span>
+                    title="MACD死叉">▼</span>
                 </div>
                 <!-- 持有信号 -->
                 <div v-else-if="getFinalSignal(stock) === 'hold'" class="signal-badge hold-badge">
                   <span class="signal-percent">{{ Math.round(getFinalConfidence(stock) || 0) }}%</span>
                   <!-- ✅ 只在收盘前显示金叉死叉标记 -->
                   <span v-if="shouldShowMacdSignal(stock) && getMacdCross(stock) === 'golden'" class="macd-badge golden"
-                    title="MACD金叉">🔱</span>
+                    title="MACD金叉">▲</span>
                   <span v-if="shouldShowMacdSignal(stock) && getMacdCross(stock) === 'death'" class="macd-badge death"
-                    title="MACD死叉">💀</span>
+                    title="MACD死叉">▼</span>
                 </div>
                 <span v-else class="trend-steady">-</span>
               </div>
@@ -152,12 +152,13 @@
             </template>
 
             <template v-else-if="col.key === 'zlje' || col.key === 'cddje'">
-              <span>{{ formatCell(col.key, stock) }}</span>
               <span
-                v-if="stock.moneyFlowEstimated === true || stock.capitalFlowSource === 'estimated_l1'"
-                class="money-flow-source-tag"
-                title="L1估算资金流"
-              >估</span>
+                :title="
+                  stock.moneyFlowEstimated === true || stock.capitalFlowSource === 'estimated_l1'
+                    ? 'L1估算资金流'
+                    : undefined
+                "
+              >{{ formatCell(col.key, stock) }}</span>
             </template>
 
             <template v-else-if="col.key === 'volumeRatio'">
@@ -1610,20 +1611,6 @@ defineExpose({
   font-weight: 600;
 }
 
-.money-flow-source-tag {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  margin-left: 4px;
-  border: 1px solid rgba(255, 165, 2, 0.7);
-  border-radius: 3px;
-  color: #ffa502;
-  font-size: 11px;
-  line-height: 1;
-}
-
 /* 排名变化单元格 */
 .rank-change-cell {
   display: inline-flex;
@@ -2161,10 +2148,9 @@ defineExpose({
   align-items: center;
   justify-content: center;
   gap: 4px;
-  padding: 2px 8px;
-  border-radius: 16px;
+  padding: 0;
   font-size: 12px;
-  font-weight: 500;
+  font-weight: 600;
   white-space: nowrap;
 }
 
@@ -2176,23 +2162,17 @@ defineExpose({
 
 /* 买入徽章 - 红色 */
 .buy-badge {
-  background: rgba(255, 71, 87, 0.15);
   color: #ff4757;
-  border: 1px solid rgba(255, 71, 87, 0.3);
 }
 
 /* 卖出徽章 - 绿色 */
 .sell-badge {
-  background: rgba(46, 213, 115, 0.15);
   color: #2ed573;
-  border: 1px solid rgba(46, 213, 115, 0.3);
 }
 
 /* 持有徽章 - 橙色 */
 .hold-badge {
-  background: rgba(243, 156, 18, 0.15);
   color: #f39c12;
-  border: 1px solid rgba(243, 156, 18, 0.3);
 }
 
 /* MACD 徽章样式 */

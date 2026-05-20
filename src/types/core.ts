@@ -291,6 +291,13 @@ export interface ZhabanData {
   ztCount?: number
 }
 
+export interface PreviousMarketStats {
+  tradingDate: string
+  ztCount?: number
+  dtCount?: number
+  source: 'daily_snapshot'
+}
+
 export type ThsLimitUpPoolKey =
   | 'one'
   | 'two'
@@ -345,6 +352,7 @@ export interface MarketData {
   amoDiff: number
   limitData: LimitData
   yesterdayLimit: LimitData
+  previousMarketStats?: PreviousMarketStats | null
   zhaban: ZhabanData
   thsLimitUpPools?: ThsLimitUpPoolEvidence | null
   indices: {
@@ -468,6 +476,7 @@ export interface BreathHistorySnapshot {
     downCount: number
     ztCount: number
     dtCount: number
+    previousMarketStats?: PreviousMarketStats | null
     limitData: LimitData
     zhaban: ZhabanData
     thsLimitUpPools?: ThsLimitUpPoolEvidence | null

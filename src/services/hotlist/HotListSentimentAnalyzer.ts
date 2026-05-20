@@ -360,6 +360,13 @@ function safeDivide(numerator: number, denominator: number): number {
   return numerator / denominator
 }
 
+function resolveSampleSize(rows: any[], topN?: number): number {
+  if (topN && Number.isFinite(topN) && topN > 0) {
+    return Math.min(rows.length, Math.floor(topN))
+  }
+  return rows.length
+}
+
 function calculateHotTrin(upCount: number, downCount: number, upTurnover: number, downTurnover: number): number | null {
   if (upCount <= 0 || downCount <= 0 || upTurnover <= 0 || downTurnover <= 0) return null
   return (upCount / downCount) / (upTurnover / downTurnover)
@@ -520,10 +527,10 @@ function countLimitUpInSlice(rows: any[]): number {
   return rows.filter(hasLimitUpEvidence).length
 }
 
-function buildLimitIntersectionEvidence(sorted: any[], topN: number): HotListLimitIntersectionEvidence {
+function buildLimitIntersectionEvidence(sorted: any[], topN?: number): HotListLimitIntersectionEvidence {
   const top20 = sorted.slice(0, 20)
   const top50 = sorted.slice(0, 50)
-  const top100 = sorted.slice(0, topN)
+  const top100 = sorted.slice(0, resolveSampleSize(sorted, topN))
   let top100NearLimitUpCount = 0
   let top100Board2PlusCount = 0
   let top100MaxBoardHeight = 0
@@ -566,15 +573,17 @@ function createEmptyYesterdayHotLimitEvidence(): HotListYesterdayHotLimitEvidenc
 function buildYesterdayHotLimitEvidence(
   yesterdayRows: any[],
   todayRows: any[],
-  topN: number,
+  topN?: number,
 ): HotListYesterdayHotLimitEvidence {
   if (!yesterdayRows.length) return createEmptyYesterdayHotLimitEvidence()
 
   const todayByCode = countByCode(todayRows)
-  const todayTopCodes = new Set(todayRows.slice(0, topN).map(stock => normalizeCode(stock?.code)))
+  const todaySampleSize = resolveSampleSize(todayRows, topN)
+  const yesterdaySampleSize = resolveSampleSize(yesterdayRows, topN)
+  const todayTopCodes = new Set(todayRows.slice(0, todaySampleSize).map(stock => normalizeCode(stock?.code)))
   const getTodayStatus = createStockStatusResolver(todayRows)
   const yesterdayLimitCodes = yesterdayRows
-    .slice(0, topN)
+    .slice(0, yesterdaySampleSize)
     .filter(hasLimitUpEvidence)
     .map(stock => normalizeCode(stock?.code))
     .filter(Boolean)
@@ -622,7 +631,7 @@ function buildYesterdayHotLimitEvidence(
 function buildLimitEvidence(
   todayRows: any[],
   yesterdayRows: any[],
-  topN: number,
+  topN: number | undefined,
   marketData?: DragonBreathMarketDataLike | null,
 ): HotListLimitEvidence {
   return {
@@ -661,17 +670,19 @@ function createEmptyYesterdayStrongPerformance(): HotListYesterdayStrongPerforma
 function buildYesterdayStrongPerformance(
   yesterdayRows: any[],
   todayRows: any[],
-  topN: number,
+  topN?: number,
 ): HotListYesterdayStrongPerformance {
   if (!yesterdayRows.length) return createEmptyYesterdayStrongPerformance()
 
   const getYesterdayStatus = createStockStatusResolver(yesterdayRows)
   const getTodayStatus = createStockStatusResolver(todayRows)
   const todayByCode = countByCode(todayRows)
-  const todayTopCodes = new Set(todayRows.slice(0, topN).map(stock => normalizeCode(stock?.code)))
+  const todaySampleSize = resolveSampleSize(todayRows, topN)
+  const yesterdaySampleSize = resolveSampleSize(yesterdayRows, topN)
+  const todayTopCodes = new Set(todayRows.slice(0, todaySampleSize).map(stock => normalizeCode(stock?.code)))
 
   const strongCodes = yesterdayRows
-    .slice(0, topN)
+    .slice(0, yesterdaySampleSize)
     .filter((stock) => {
       const label = getYesterdayStatus(stock).label as HotListStatusLabel
       return YESTERDAY_STRONG_LABELS.has(label)
@@ -722,25 +733,28 @@ function buildComparison(
   stocks: any[],
   yesterdaySnapshot: HotListSentimentSnapshot | null | undefined,
   dayBeforeSnapshot: HotListSentimentSnapshot | null | undefined,
-  topN: number,
+  topN?: number,
 ): HotListThreeDayComparison {
   const todayRows = sortByRank(stocks)
   const yesterdayRows = sortByRank(getRows(yesterdaySnapshot))
   const dayBeforeRows = sortByRank(getRows(dayBeforeSnapshot))
   const getTodayStatus = createStockStatusResolver(todayRows)
   const getYesterdayStatus = createStockStatusResolver(yesterdayRows)
+  const todaySampleSize = resolveSampleSize(todayRows, topN)
+  const yesterdaySampleSize = resolveSampleSize(yesterdayRows, topN)
+  const dayBeforeSampleSize = resolveSampleSize(dayBeforeRows, topN)
 
-  const today = buildDayMetricsFromSorted(todayRows, { topN })
+  const today = buildDayMetricsFromSorted(todayRows, { topN: todaySampleSize })
   const yesterday = yesterdayRows.length
-    ? buildDayMetricsFromSorted(yesterdayRows, { topN, tradingDate: yesterdaySnapshot?.tradingDate })
+    ? buildDayMetricsFromSorted(yesterdayRows, { topN: yesterdaySampleSize, tradingDate: yesterdaySnapshot?.tradingDate })
     : undefined
   const dayBefore = dayBeforeRows.length
-    ? buildDayMetricsFromSorted(dayBeforeRows, { topN, tradingDate: dayBeforeSnapshot?.tradingDate })
+    ? buildDayMetricsFromSorted(dayBeforeRows, { topN: dayBeforeSampleSize, tradingDate: dayBeforeSnapshot?.tradingDate })
     : undefined
 
-  const todayTopCodes = new Set(todayRows.slice(0, topN).map(stock => normalizeCode(stock?.code)))
-  const yesterdayTopCodes = new Set(yesterdayRows.slice(0, topN).map(stock => normalizeCode(stock?.code)))
-  const dayBeforeTopCodes = new Set(dayBeforeRows.slice(0, topN).map(stock => normalizeCode(stock?.code)))
+  const todayTopCodes = new Set(todayRows.slice(0, todaySampleSize).map(stock => normalizeCode(stock?.code)))
+  const yesterdayTopCodes = new Set(yesterdayRows.slice(0, yesterdaySampleSize).map(stock => normalizeCode(stock?.code)))
+  const dayBeforeTopCodes = new Set(dayBeforeRows.slice(0, dayBeforeSampleSize).map(stock => normalizeCode(stock?.code)))
   const todayByCode = countByCode(todayRows)
 
   const top100RetainFromYesterday = [...todayTopCodes].filter(code => yesterdayTopCodes.has(code)).length
@@ -752,13 +766,13 @@ function buildComparison(
   }).length
 
   const yesterdayStrongCodes = yesterdayRows
-    .slice(0, topN)
+    .slice(0, yesterdaySampleSize)
     .filter(stock => getYesterdayStatus(stock).label === '强资确认')
     .map(stock => normalizeCode(stock?.code))
     .filter(Boolean)
 
   const yesterdayCrowdedCodes = yesterdayRows
-    .slice(0, topN)
+    .slice(0, yesterdaySampleSize)
     .filter(stock => getYesterdayStatus(stock).label === '高位拥挤')
     .map(stock => normalizeCode(stock?.code))
     .filter(Boolean)
@@ -783,8 +797,8 @@ function buildComparison(
     totalChange2d: dayBefore ? today.total - dayBefore.total : null,
     top100RetainFromYesterday,
     top100RetainFromDayBefore,
-    top100RetainRateFromYesterday: safeDivide(top100RetainFromYesterday, Math.min(topN, yesterdayRows.length || topN)),
-    top100RetainRateFromDayBefore: safeDivide(top100RetainFromDayBefore, Math.min(topN, dayBeforeRows.length || topN)),
+    top100RetainRateFromYesterday: safeDivide(top100RetainFromYesterday, yesterdaySampleSize || todaySampleSize),
+    top100RetainRateFromDayBefore: safeDivide(top100RetainFromDayBefore, dayBeforeSampleSize || todaySampleSize),
     newTop100Count: newTop100Codes.length,
     newTop100StrongMoneyCount,
     yesterdayStrongRetainRate,
@@ -820,20 +834,19 @@ interface StageEvidence<T extends string> {
 function evaluateTapeStrength(today: HotListDayMetrics, layers?: HotListLayerSet): StageEvidence<TapeStrengthLevel> {
   const top20 = layers?.top20 ?? today
   const top50 = layers?.top50 ?? today
-  const top100 = layers?.top100 ?? today
   const signals: string[] = []
   const warnings: string[] = []
 
-  const strong = top20.upRatio >= 0.65 && top50.upRatio >= 0.55 && top100.upRatio >= 0.55
-  const firm = top20.upRatio >= 0.6 && top100.upRatio >= 0.48
-  const weak = top100.upRatio <= 0.42 || (top20.upRatio < 0.5 && top50.upRatio < 0.45)
+  const strong = top20.upRatio >= 0.65 && top50.upRatio >= 0.55 && today.upRatio >= 0.55
+  const firm = top20.upRatio >= 0.6 && today.upRatio >= 0.48
+  const weak = today.upRatio <= 0.42 || (top20.upRatio < 0.5 && top50.upRatio < 0.45)
   const level: TapeStrengthLevel = strong ? 'strong' : firm ? 'firm' : weak ? 'weak' : 'mixed'
 
-  pushIf(signals, strong, '前20/前50/前100上涨扩散较强')
-  pushIf(signals, !strong && firm, '前排上涨修复，前100仍有承接')
-  pushIf(signals, today.nearLimitUpCount >= 8, `前100近涨停 ${today.nearLimitUpCount} 只`)
-  pushIf(signals, today.highGainCount >= 18, `前100高涨幅 ${today.highGainCount} 只`)
-  pushIf(warnings, weak, `热榜上涨宽度偏弱，前100上涨 ${(top100.upRatio * 100).toFixed(0)}%`)
+  pushIf(signals, strong, '前20/前50/全池上涨扩散较强')
+  pushIf(signals, !strong && firm, '前排上涨修复，全池仍有承接')
+  pushIf(signals, today.nearLimitUpCount >= 8, `全池近涨停 ${today.nearLimitUpCount} 只`)
+  pushIf(signals, today.highGainCount >= 18, `全池高涨幅 ${today.highGainCount} 只`)
+  pushIf(warnings, weak, `热榜上涨宽度偏弱，全池上涨 ${(today.upRatio * 100).toFixed(0)}%`)
 
   return { level, signals, warnings }
 }
@@ -874,7 +887,7 @@ function evaluateOpportunityExpansion(comparison: HotListThreeDayComparison): St
 
   pushIf(signals, broad, `强资确认与点火观察形成扩散，占比 ${(activeOpportunityShare * 100).toFixed(0)}%`)
   pushIf(signals, !broad && opportunityRising, '有效机会占比较昨日改善')
-  pushIf(signals, !broad && comparison.newTop100Count >= 25, `今日新入前100 ${comparison.newTop100Count} 只`)
+  pushIf(signals, !broad && comparison.newTop100Count >= 25, `今日新入全池 ${comparison.newTop100Count} 只`)
   pushIf(warnings, scarce, `有效机会偏少，占比 ${(activeOpportunityShare * 100).toFixed(0)}%`)
 
   return { level, signals, warnings }
@@ -947,12 +960,12 @@ function collectLimitEvidenceMessages(limitEvidence?: HotListLimitEvidence): Sta
   pushIf(
     signals,
     intersection.top100LimitUpCount > 0 || intersection.top100NearLimitUpCount > 0,
-    `热榜前100涨停 ${intersection.top100LimitUpCount} 只，近涨停 ${intersection.top100NearLimitUpCount} 只`,
+    `热榜全池涨停 ${intersection.top100LimitUpCount} 只，近涨停 ${intersection.top100NearLimitUpCount} 只`,
   )
   pushIf(
     signals,
     intersection.top100Board2PlusCount > 0,
-    `热榜前100二板以上 ${intersection.top100Board2PlusCount} 只，最高 ${intersection.top100MaxBoardHeight} 板`,
+    `热榜全池二板以上 ${intersection.top100Board2PlusCount} 只，最高 ${intersection.top100MaxBoardHeight} 板`,
   )
   pushIf(
     signals,
@@ -967,7 +980,7 @@ function collectLimitEvidenceMessages(limitEvidence?: HotListLimitEvidence): Sta
   pushIf(
     warnings,
     intersection.top100ZhabanCount > 0,
-    `热榜前100个股炸板 ${intersection.top100ZhabanCount} 只`,
+    `热榜全池个股炸板 ${intersection.top100ZhabanCount} 只`,
   )
   pushIf(
     warnings,
@@ -1095,7 +1108,10 @@ function resolveStage(comparison: HotListThreeDayComparison, layers?: HotListLay
     severeRiskWithShrinkingBreadth ||
     (yesterdayLimitWeak && riskElevated && (tapeWeak || moneyWeak)) ||
     (riskElevated && (tapeWeak || moneyWeak)) ||
-    (riskPressure.level === 'severe' && continuity.level === 'weak' && today.upRatio < 0.52) ||
+    (riskPressure.level === 'severe' &&
+      continuity.level === 'weak' &&
+      today.upRatio < 0.52 &&
+      moneyAcceptance.level !== 'strong') ||
     (totalShrank && opportunityExpansion.level === 'scarce' && today.upRatio < 0.5 && (riskElevated || moneyWeak))
 
   if (retreat) {
@@ -1174,9 +1190,10 @@ function calculateConfidence(stage: EmotionCycleStage, signals: string[], warnin
 
 export class HotListSentimentAnalyzer {
   analyze(input: HotListSentimentInput): HotListSentimentResult {
-    const topN = input.topN && input.topN > 0 ? input.topN : 100
     const sortedStocks = sortByRank(input.stocks || [])
     const yesterdayRows = sortByRank(getRows(input.yesterday))
+    const topN = input.topN && input.topN > 0 ? input.topN : undefined
+    const sampleSize = resolveSampleSize(sortedStocks, topN)
     const layers = buildLayerMetrics(input.stocks || [])
     const comparison = buildComparison(input.stocks || [], input.yesterday, input.dayBefore, topN)
     const limitEvidence = buildLimitEvidence(sortedStocks, yesterdayRows, topN, input.marketData)
@@ -1189,7 +1206,7 @@ export class HotListSentimentAnalyzer {
       confidence,
       summary: getEmotionCycleStageSummary(stageEvidence.stage),
       metrics: {
-        topN,
+        topN: sampleSize,
         layers,
         comparison,
         limitEvidence,

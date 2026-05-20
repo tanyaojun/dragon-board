@@ -127,12 +127,12 @@
             <div class="metric-item">
               <span class="metric-label">涨停家数</span>
               <span class="metric-value up-text">{{ marketData.ztCount }}</span>
-              <span class="metric-percent">昨日 {{ marketData.yesterdayLimit?.yiban || 0 }}</span>
+              <span class="metric-percent">昨日 {{ formatNullableCount(marketData.previousMarketStats?.ztCount) }}</span>
             </div>
             <div class="metric-item">
               <span class="metric-label">跌停家数</span>
               <span class="metric-value down-text">{{ marketData.dtCount }}</span>
-              <span class="metric-percent">昨日 {{ marketData.yesterdayLimit?.sanban || 0 }}</span>
+              <span class="metric-percent">昨日 {{ formatNullableCount(marketData.previousMarketStats?.dtCount) }}</span>
             </div>
             <div class="metric-item">
               <span class="metric-label">总成交额</span>
@@ -182,13 +182,14 @@
 
         <!-- 热榜情绪视图 -->
         <div v-if="view === 'hotlist'" class="hotlist-view">
-          <div v-if="hotListSentimentLoading" class="mini-loading">正在分析热榜情绪...</div>
-          <div v-else-if="hotListSentimentError" class="error-state compact">
+          <div v-if="hotListSentimentLoading && !hotListSentiment" class="mini-loading">正在分析热榜情绪...</div>
+          <div v-else-if="hotListSentimentError && !hotListSentiment" class="error-state compact">
             <span class="error-icon">⚠️</span>
             <span>{{ hotListSentimentError }}</span>
             <button class="retry-btn" @click="loadHotListSentiment">重试</button>
           </div>
           <template v-else-if="hotListSentiment">
+            <div v-if="hotListSentimentLoading" class="hotlist-refresh-status">正在刷新热榜情绪...</div>
             <div class="hotlist-stage-card" :class="`stage-${hotListStage.classKey}`">
               <div class="hotlist-stage-main">
                 <span class="hotlist-stage-label">热榜情绪</span>
@@ -236,7 +237,7 @@
                 </span>
               </div>
               <div class="metric-item">
-                <span class="metric-label">前100上涨</span>
+                <span class="metric-label">全池上涨</span>
                 <span class="metric-value up-text">{{ formatShare(hotListToday?.upRatio) }}</span>
                 <span class="metric-percent">{{ hotListToday?.upCount || 0 }}涨 / {{ hotListToday?.downCount || 0 }}跌</span>
               </div>
@@ -250,7 +251,7 @@
               <div class="metric-item">
                 <span class="metric-label">留榜率</span>
                 <span class="metric-value">{{ formatShare(hotListComparison?.top100RetainRateFromYesterday) }}</span>
-                <span class="metric-percent">昨日前100</span>
+                <span class="metric-percent">昨日全池</span>
               </div>
               <div class="metric-item">
                 <span class="metric-label">强资+点火</span>
@@ -299,7 +300,7 @@
             </div>
 
             <div class="hotlist-section">
-              <div class="section-title">📊 前100状态结构</div>
+              <div class="section-title">📊 全池状态结构</div>
               <div class="status-distribution">
                 <div v-for="item in hotListStatusItems" :key="item.label" class="status-item">
                   <div class="status-row">
@@ -326,7 +327,7 @@
                 </div>
               </div>
               <div class="history-extra">
-                <span>今日新入前100 {{ hotListComparison?.newTop100Count || 0 }} 只</span>
+                <span>今日新入全池 {{ hotListComparison?.newTop100Count || 0 }} 只</span>
                 <span>新入强资 {{ hotListComparison?.newTop100StrongMoneyCount || 0 }} 只</span>
                 <span>昨日强资留榜 {{ formatShare(hotListComparison?.yesterdayStrongRetainRate) }}</span>
                 <span>昨日强票均涨 {{ formatPercent(hotListYesterdayStrongPerformance?.avgChange) }}</span>
@@ -700,6 +701,7 @@ const marketData = computed(() => {
     passRate: marketData.passRate ?? { to2: 0, to3: 0, to4: 0 },
     limitData: marketData.limitData ?? { yiban: 0, erban: 0, sanban: 0, sibanPlus: 0 },
     yesterdayLimit: marketData.yesterdayLimit ?? {},
+    previousMarketStats: marketData.previousMarketStats ?? null,
     zhaban: marketData.zhaban ?? {},
     moneyFlow: marketData.moneyFlow ?? {},
     totalAmo: marketData.totalAmo ?? 0,
@@ -847,8 +849,8 @@ const hotListActiveOpportunityCount = computed(() => {
   return hotListToday.value?.activeOpportunityCount ?? counts['强资确认'] + counts['点火观察']
 })
 const hotListActiveOpportunityShare = computed(() => {
-  const topN = hotListToday.value?.topN || 0
-  return topN ? hotListActiveOpportunityCount.value / topN : 0
+  const sampleSize = hotListToday.value?.topN || 0
+  return sampleSize ? hotListActiveOpportunityCount.value / sampleSize : 0
 })
 
 const hotlistThemeResearchItems = computed<HotlistThemeResearchItem[]>(() =>
@@ -919,7 +921,7 @@ const hotListLimitEvidenceItems = computed(() => {
 
   return [
     {
-      label: '前100涨停',
+      label: '全池涨停',
       main: `${intersection.top100LimitUpCount}只`,
       sub: `占比 ${formatShare(intersection.top100LimitUpShare)} · 近涨停 ${intersection.top100NearLimitUpCount}只`,
     },
@@ -1270,7 +1272,6 @@ async function loadHotListSentiment() {
       yesterday: historical[0] || null,
       dayBefore: historical[1] || null,
       marketData: marketData.value,
-      topN: 100,
     })
   } catch (err: any) {
     console.warn('[DragonBreathPanel] 热榜情绪分析失败:', err)
@@ -1307,6 +1308,10 @@ function exportData() {
 function formatNumber(num: number): string {
   if (num >= 10000) return (num / 10000).toFixed(2) + '万'
   return num.toString()
+}
+
+function formatNullableCount(value?: number | null): string {
+  return Number.isFinite(Number(value)) ? String(Number(value)) : '--'
 }
 
 function formatAmount(amount?: number): string {
@@ -1948,6 +1953,7 @@ onUnmounted(() => {
 
 /* 热榜情绪 */
 .hotlist-view {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -1960,6 +1966,21 @@ onUnmounted(() => {
   background: var(--bg-secondary);
   border: 1px solid var(--border-color);
   border-radius: 8px;
+}
+
+.hotlist-refresh-status {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
+  padding: 6px 10px;
+  border: 1px solid rgba(255, 165, 2, 0.35);
+  border-radius: 6px;
+  background: rgba(12, 18, 28, 0.92);
+  color: var(--color-highlight);
+  font-size: 11px;
+  font-weight: 600;
+  pointer-events: none;
 }
 
 .error-state.compact {

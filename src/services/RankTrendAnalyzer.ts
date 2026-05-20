@@ -68,6 +68,8 @@ type RankTrendAnalysisOptions = {
   codes?: string[]
 }
 
+export type RankTrendPreparedSnapshot = NonNullable<RankTrendAnalysisOptions['snapshots']>[number]
+
 type RankHistoryData = {
   snapshotSignature: string
   ranks: number[]
@@ -370,50 +372,66 @@ export class RankTrendAnalyzer {
     return this.lastStrategyValidationReport
   }
 
+  public async preloadSnapshots(
+    options: Pick<
+      RankTrendAnalysisOptions,
+      'preferredSnapshotType' | 'fromDate' | 'toDate' | 'codes'
+    > = {},
+  ): Promise<RankTrendPreparedSnapshot[]> {
+    const snapshots = await this.loadRequiredSnapshots(options)
+    return snapshots.map((item) => ({
+      date: item.date,
+      timestamp: item.timestamp,
+      snapshot: item.snapshot,
+    }))
+  }
+
   private async loadRequiredSnapshots(options: RankTrendAnalysisOptions): Promise<RankTrendAnalysisSnapshot[]> {
     const requiredSnapshots = getTechnicalMinSamples(runtimeConfig)
     const limit = 50
     const preferredType = options.preferredSnapshotType ?? DEFAULT_RANK_TREND_SNAPSHOT_TYPE
     const priorityTypes = buildRankTrendSnapshotPriority(preferredType)
 
-    for (const type of priorityTypes) {
-      const strictSnapshots = await this.getSnapshotsByType(type, {
-        limit,
-        minRequired: requiredSnapshots,
-        fromDate: options.fromDate,
-        toDate: options.toDate,
-        codes: options.codes,
-      })
-      if (strictSnapshots.length > 0) {
-        if (type !== preferredType) {
-          debugLog(`[RankTrendAnalyzer] 首选快照不足，回退 ${type}: ${strictSnapshots.length} 条`)
-        }
-        return strictSnapshots
-      }
+    const readOptions = {
+      limit,
+      fromDate: options.fromDate,
+      toDate: options.toDate,
+      codes: options.codes,
     }
+    const preferredSnapshots = await this.getSnapshotsByType(preferredType, readOptions)
+    if (preferredSnapshots.length >= requiredSnapshots) return preferredSnapshots
 
-    let fallbackPicked: RankTrendAnalysisSnapshot[] = []
-    let fallbackType: SupportedSnapshotType | null = null
-    for (const type of priorityTypes) {
-      const looseSnapshots = await this.getSnapshotsByType(type, {
-        limit,
-        fromDate: options.fromDate,
-        toDate: options.toDate,
-        codes: options.codes,
-      })
-      if (looseSnapshots.length > fallbackPicked.length) {
-        fallbackPicked = looseSnapshots
-        fallbackType = type
-      }
-    }
-
-    if (fallbackPicked.length > 0) {
+    const fallbackTypes = priorityTypes.filter((type) => type !== preferredType)
+    const fallbackResults = await Promise.all(
+      fallbackTypes.map(async (type) => ({
+        type,
+        snapshots: await this.getSnapshotsByType(type, readOptions),
+      })),
+    )
+    const strictFallback = fallbackResults.find((item) => item.snapshots.length >= requiredSnapshots)
+    if (strictFallback) {
       debugLog(
-        `[RankTrendAnalyzer] 快照不足最小阈值(${requiredSnapshots})，使用可用最多类型: ${fallbackType || 'unknown'} ${fallbackPicked.length} 条`,
+        `[RankTrendAnalyzer] 首选快照不足，回退 ${strictFallback.type}: ${strictFallback.snapshots.length} 条`,
       )
+      return strictFallback.snapshots
     }
 
-    return fallbackPicked
+    const looseFallback = [
+      { type: preferredType, snapshots: preferredSnapshots },
+      ...fallbackResults,
+    ].reduce<{ type: SupportedSnapshotType; snapshots: RankTrendAnalysisSnapshot[] } | null>(
+      (picked, item) => (!picked || item.snapshots.length > picked.snapshots.length ? item : picked),
+      null,
+    )
+
+    if (looseFallback?.snapshots.length) {
+      debugLog(
+        `[RankTrendAnalyzer] 快照不足最小阈值(${requiredSnapshots})，使用可用最多类型: ${looseFallback.type} ${looseFallback.snapshots.length} 条`,
+      )
+      return looseFallback.snapshots
+    }
+
+    return []
   }
 
   private normalizeAnalysisSnapshots(

@@ -219,6 +219,22 @@ describe('HotListSentimentAnalyzer', () => {
     expect(result.metrics.layers.top20.activeOpportunityCount).toBeGreaterThan(0)
   })
 
+  it('默认使用全热榜池统计主情绪指标', () => {
+    const analyzer = new HotListSentimentAnalyzer()
+    const current = makeStocks(120, index => ({
+      change: index < 100 ? 1 : -2,
+    }))
+
+    const result = analyzer.analyze({ stocks: current })
+
+    expect(result.metrics.topN).toBe(120)
+    expect(result.metrics.comparison.today.topN).toBe(120)
+    expect(result.metrics.comparison.today.upCount).toBe(100)
+    expect(result.metrics.comparison.today.downCount).toBe(20)
+    expect(result.metrics.comparison.today.upRatio).toBeCloseTo(100 / 120)
+    expect(result.metrics.layers.top100.topN).toBe(100)
+  })
+
   it('按A股板块阈值统计热榜涨停和近涨停证据', () => {
     const analyzer = new HotListSentimentAnalyzer()
     const current = [

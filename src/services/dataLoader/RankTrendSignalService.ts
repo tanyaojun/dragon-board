@@ -1,6 +1,6 @@
 import { debugLog } from '@/utils/logger'
 import { dataLayer } from '../DataLayer'
-import { rankTrendAnalyzer } from '../RankTrendAnalyzer'
+import { rankTrendAnalyzer, type RankTrendPreparedSnapshot } from '../RankTrendAnalyzer'
 import { applyRankTrendAnalysis } from '../rankTrend/compat'
 import type { RankTrendAnalysisResult } from '../rankTrend/types'
 import { extraDataProjector } from './ExtraDataProjector'
@@ -72,10 +72,18 @@ export class RankTrendSignalService {
     return this.updateStockSignals(updates)
   }
 
-  async applySignalsToMerged(merged: any[]): Promise<any[]> {
+  async preloadSnapshots(codes: string[]): Promise<RankTrendPreparedSnapshot[]> {
+    return rankTrendAnalyzer.preloadSnapshots({ codes })
+  }
+
+  async applySignalsToMerged(
+    merged: any[],
+    options: { snapshots?: RankTrendPreparedSnapshot[] } = {},
+  ): Promise<any[]> {
     const newRankMap = new Map(merged.map((s, i) => [s.code, i + 1]))
     const rankTrends = await rankTrendAnalyzer.getRankTrends(newRankMap, {
       updateSignalStore: false,
+      snapshots: options.snapshots,
     })
     const coverageWarning = this.extractRankTrendCoverageWarning(rankTrends)
 

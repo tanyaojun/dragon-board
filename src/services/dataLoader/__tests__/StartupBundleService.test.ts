@@ -59,6 +59,10 @@ describe('StartupBundleService', () => {
           {
             code: '000001',
             name: '缓存数据',
+            compRank: 1,
+            rankTrend: {
+              meta: { change: 8 },
+            },
             volume: 120000,
             volumeRatio: 99.99,
             volumeRatioMeta: {
@@ -110,6 +114,8 @@ describe('StartupBundleService', () => {
           {
             code: '000001',
             name: '旧缓存',
+            compRank: 1,
+            rankChange: 6,
             volume: 88000,
             volumeRatio: 8.88,
           },
@@ -136,5 +142,49 @@ describe('StartupBundleService', () => {
         }),
       }),
     )
+  })
+
+  it('rejects cached startup bundles without comprehensive ranks', async () => {
+    api.get.mockResolvedValue({
+      data: {
+        schemaVersion: 1,
+        tradingDate: '2026-05-18',
+        createdAt: Date.now(),
+        platformData: {
+          eastmoney: [{ code: '000001', name: '坏缓存' }],
+        },
+        stocks: [{ code: '000001', name: '坏缓存' }],
+      },
+      dragonMeta: {
+        cache: {
+          stale: false,
+        },
+      },
+    })
+    const { startupBundleService } = await import('../StartupBundleService')
+
+    await expect(startupBundleService.read()).resolves.toBeNull()
+  })
+
+  it('rejects cached startup bundles without RankTrend change values', async () => {
+    api.get.mockResolvedValue({
+      data: {
+        schemaVersion: 1,
+        tradingDate: '2026-05-18',
+        createdAt: Date.now(),
+        platformData: {
+          eastmoney: [{ code: '000001', name: '半成品缓存' }],
+        },
+        stocks: [{ code: '000001', name: '半成品缓存', compRank: 1 }],
+      },
+      dragonMeta: {
+        cache: {
+          stale: false,
+        },
+      },
+    })
+    const { startupBundleService } = await import('../StartupBundleService')
+
+    await expect(startupBundleService.read()).resolves.toBeNull()
   })
 })

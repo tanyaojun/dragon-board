@@ -21,6 +21,12 @@ describe('DataLayer breath market data', () => {
           downCount: 1800,
           ztCount: 74,
           dtCount: 18,
+          previousMarketStats: {
+            tradingDate: '2026-05-19',
+            ztCount: 122,
+            dtCount: 58,
+            source: 'daily_snapshot',
+          },
           zhaban: { count: 37, rate: 33.6, fengbanRate: 66.4 },
           thsLimitUpPools: {
             source: 'limitup-ths-pools',
@@ -55,6 +61,12 @@ describe('DataLayer breath market data', () => {
           drawdown: 6,
         },
         degraded: false,
+      })
+      expect(dataLayer.getBreathMarketData()?.previousMarketStats).toMatchObject({
+        tradingDate: '2026-05-19',
+        ztCount: 122,
+        dtCount: 58,
+        source: 'daily_snapshot',
       })
     } finally {
       dataLayer.reset()

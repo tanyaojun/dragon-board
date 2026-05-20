@@ -160,6 +160,52 @@ describe('RankTrendAnalyzer', () => {
     expect(results.get('600001')?.confidence).toBeTypeOf('number')
   })
 
+  it('首选快照样本不足时并发读取备用 RankTrend 时序', async () => {
+    const { apiService } = await import('../apiService')
+    const requestedTypes: string[] = []
+    const pendingFallbackTypes = new Set<string>()
+    const releaseFallbacks: Array<() => void> = []
+    vi.mocked(apiService.getRankTrendRankSeries).mockImplementation(async (params: any) => {
+      const type = String(params.type)
+      requestedTypes.push(type)
+      if (type === 'half_hour') {
+        return {
+          ok: true,
+          datasetId: 'dragonboard_live',
+          snapshotType: type,
+          source: 'mongodb',
+          count: 0,
+          frames: [],
+        }
+      }
+      pendingFallbackTypes.add(type)
+      await new Promise<void>((resolve) => {
+        releaseFallbacks.push(resolve)
+      })
+      return {
+        ok: true,
+        datasetId: 'dragonboard_live',
+        snapshotType: type,
+        source: 'mongodb',
+        count: 0,
+        frames: [],
+      }
+    })
+
+    const { rankTrendAnalyzer } = await import('../RankTrendAnalyzer')
+    const promise = rankTrendAnalyzer.getRankTrends(new Map([['600001', 33]]), {
+      updateSignalStore: false,
+    })
+
+    await vi.waitFor(() => {
+      expect(pendingFallbackTypes).toEqual(new Set(['quarter_hour', 'hourly', 'daily']))
+      expect(requestedTypes).toEqual(['half_hour', 'quarter_hour', 'hourly', 'daily'])
+    })
+
+    releaseFallbacks.forEach((release) => release())
+    await promise
+  })
+
   it('rank-series 过滤 codes 后仍使用 totalCount 计算上一期百分位', async () => {
     const { apiService } = await import('../apiService')
     vi.mocked(apiService.getRankTrendRankSeries).mockResolvedValue({

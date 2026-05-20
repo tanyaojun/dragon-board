@@ -6,6 +6,7 @@ import type {
   MarketData,
   Sentiment,
   LimitData,
+  PreviousMarketStats,
   ZhabanData,
   ThsLimitUpPoolEvidence,
   ThsLimitUpPoolKey,
@@ -259,6 +260,7 @@ export class DragonBreathAnalyzer {
       amoDiff: 0,
       limitData: { yiban: 0, erban: 0, sanban: 0, sibanPlus: 0 },
       yesterdayLimit: { yiban: 0, erban: 0, sanban: 0, sibanPlus: 0 },
+      previousMarketStats: null,
       zhaban: { count: 0, rate: 0, fengbanRate: 0 },
       thsLimitUpPools: buildThsLimitUpPoolEvidence(null),
       indices: {
@@ -413,6 +415,12 @@ export class DragonBreathAnalyzer {
     return `${year}-${month}-${day}`
   }
 
+  private formatTdxTradingDate(date: string | null): string | null {
+    const digits = String(date || '').replace(/\D/g, '')
+    if (digits.length !== 8) return null
+    return `${digits.slice(0, 4)}-${digits.slice(4, 6)}-${digits.slice(6, 8)}`
+  }
+
   private isSnapshotLimitUpStock(stock: any): boolean {
     if (!stock || !stock.code) return false
     if ((Number(stock.boardHeight) || 0) > 0) return true
@@ -536,6 +544,38 @@ export class DragonBreathAnalyzer {
       console.error('[fetchLimitData] 失败:', error)
     }
     return null
+  }
+
+  private async fetchPreviousMarketStats(tdxDate: string | null): Promise<PreviousMarketStats | null> {
+    const tradingDate = this.formatTdxTradingDate(tdxDate)
+    if (!tradingDate) return null
+
+    try {
+      const [bundle] = await snapshotFacade.listSnapshotFrameBundles({
+        type: 'daily',
+        tradingDate,
+        allowedCaptureModes: FORMAL_SNAPSHOT_READ_POLICY.allowedCaptureModes,
+        excludeRestored: FORMAL_SNAPSHOT_READ_POLICY.excludeRestored,
+        sort: 'desc',
+        limit: 1,
+      })
+      const marketStats = bundle?.marketStats
+      if (!marketStats || typeof marketStats !== 'object') return null
+
+      const ztCount = toFiniteNumber((marketStats as any).ztCount)
+      const dtCount = toFiniteNumber((marketStats as any).dtCount)
+      if (ztCount === null && dtCount === null) return null
+
+      return {
+        tradingDate,
+        ztCount: ztCount ?? undefined,
+        dtCount: dtCount ?? undefined,
+        source: 'daily_snapshot',
+      }
+    } catch (error) {
+      console.warn('[DragonBreathAnalyzer] 获取昨日市场统计失败:', error)
+      return null
+    }
   }
 
 
@@ -904,11 +944,14 @@ export class DragonBreathAnalyzer {
 
         ])
 
-      // 3. 获取昨日涨停数据（需要昨日日期）
+      // 3. 获取昨日涨停数据和昨日市场统计（需要昨日日期）
       let yesterdayLimit = null
+      let previousMarketStats = null
       if (yesterdayInfo.yesterdayDate) {
-        yesterdayLimit = await this.fetchLimitData(yesterdayInfo.yesterdayDate)
-
+        ;[yesterdayLimit, previousMarketStats] = await Promise.all([
+          this.fetchLimitData(yesterdayInfo.yesterdayDate),
+          this.fetchPreviousMarketStats(yesterdayInfo.yesterdayDate),
+        ])
       }
 
       // 处理市场统计数据
@@ -969,6 +1012,8 @@ export class DragonBreathAnalyzer {
 
         }
       }
+
+      this.state.marketData.previousMarketStats = previousMarketStats
 
       // 处理情绪数据
       if (emotionResult.status === 'fulfilled' && emotionResult.value) {
@@ -1033,6 +1078,7 @@ export class DragonBreathAnalyzer {
           // 涨停数据
           limitData: this.state.marketData.limitData,
           yesterdayLimit: this.state.marketData.yesterdayLimit,
+          previousMarketStats: this.state.marketData.previousMarketStats,
 
           // 晋级率 - 确保传递
           passRate: this.state.marketData.passRate || { to2: 0, to3: 0, to4: 0 },
@@ -1367,6 +1413,7 @@ private buildFactorData(): any[] {
         downCount: this.state.marketData.downCount,
         ztCount: this.state.marketData.ztCount,
         dtCount: this.state.marketData.dtCount,
+        previousMarketStats: this.state.marketData.previousMarketStats,
         limitData: { ...this.state.marketData.limitData },
         zhaban: { ...this.state.marketData.zhaban },
         thsLimitUpPools: this.state.marketData.thsLimitUpPools

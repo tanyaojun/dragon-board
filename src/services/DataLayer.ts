@@ -906,6 +906,7 @@ class DataLayer {
       volumeRatio: data.marketData.volumeRatio || 0,
       limitData: data.marketData.limitData || { yiban: 0, erban: 0, sanban: 0, sibanPlus: 0 },
       yesterdayLimit: data.marketData.yesterdayLimit || {},
+      previousMarketStats: data.marketData.previousMarketStats ?? null,
       indices: data.marketData.indices || {},
       moneyFlow: data.marketData.moneyFlow || { main: 0, retail: 0 },
       cddje: data.marketData.cddje || 0,

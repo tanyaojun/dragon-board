@@ -42,6 +42,7 @@ import type {
   QuoteBatchProgress,
   StockSignalUpdate,
 } from './types'
+import type { RankTrendPreparedSnapshot } from '../RankTrendAnalyzer'
 
 export type { MergedQuoteData } from './types'
 
@@ -301,6 +302,7 @@ class DataLoaderService {
       includeLimitUpData?: boolean
       allowWhileLoading?: boolean
       deferSignalEnrichment?: boolean
+      deferIntradayVolumeHistory?: boolean
       preserveExistingOnEmpty?: boolean
     } = {},
   ): Promise<DataLoaderRunSummary> {
@@ -343,12 +345,9 @@ class DataLoaderService {
     void this.loadPlatformAndMerge(force, {
       allowWhileLoading: true,
       deferSignalEnrichment: true,
+      deferIntradayVolumeHistory: true,
       preserveExistingOnEmpty: true,
     })
-      .then((summary) => {
-        if (summary.degraded) return
-        return this.writeStartupBundle(summary)
-      })
       .catch((error) => {
         console.warn('[DataLoader] 后台刷新启动快照包失败:', error)
       })
@@ -360,6 +359,7 @@ class DataLoaderService {
       includeLimitUpData?: boolean
       allowWhileLoading?: boolean
       deferSignalEnrichment?: boolean
+      deferIntradayVolumeHistory?: boolean
       preserveExistingOnEmpty?: boolean
     } = {},
   ): Promise<DataLoaderRunSummary> {
@@ -414,10 +414,17 @@ class DataLoaderService {
     this.state.value.data = result.data
     this.state.value.lastUpdate = result.timestamp
     dataLayer.updatePlatforms(result.data)
+    const rankTrendSnapshotPromise = options.deferSignalEnrichment
+      ? this.preloadRankTrendSnapshotsInBackground(Array.from(this.getAllHotCodes()))
+      : undefined
     if (options.includeLimitUpData) {
       await this.measureStartupStep('limitUp', () => this.loadLimitUpData(force))
     }
-    await this.mergeData({ deferSignalEnrichment: options.deferSignalEnrichment })
+    await this.mergeData({
+      deferSignalEnrichment: options.deferSignalEnrichment,
+      deferIntradayVolumeHistory: options.deferIntradayVolumeHistory,
+      rankTrendSnapshotPromise,
+    })
 
     const summary = this.summarizeRun(startTime, fromCache)
     debugLog('[DataLoader] 启动加载耗时', summary)
@@ -444,8 +451,8 @@ class DataLoaderService {
       const summary = await this.loadPlatformAndMerge(options.force ?? false, {
         allowWhileLoading: true,
         deferSignalEnrichment: true,
+        deferIntradayVolumeHistory: true,
       })
-      void this.writeStartupBundle(summary)
       this.updateProgress(100, '完成', 'done')
       return summary
     } finally {
@@ -718,23 +725,31 @@ class DataLoaderService {
   /**
    * 合并数据主入口
    */
-  async mergeData(options: { deferSignalEnrichment?: boolean } = {}): Promise<any[]> {
+  async mergeData(
+    options: {
+      deferSignalEnrichment?: boolean
+      deferIntradayVolumeHistory?: boolean
+      rankTrendSnapshotPromise?: Promise<RankTrendPreparedSnapshot[]>
+    } = {},
+  ): Promise<any[]> {
     // 1. 获取历史成交量索引
     const allCodes = this.getAllHotCodes()
     const codesArray = Array.from(allCodes)
     this.updateProgress(this.startupProgress.historyStart, '加载历史成交量索引...', 'merge')
-    const [volumeHistoryMap, intradayVolumeHistoryMap] = await this.measureStartupStep('history', () =>
-      Promise.all([
-        this.buildVolumeHistoryMap(codesArray).catch((error) => {
-          console.warn('[DataLoader] 历史成交量索引加载失败，继续使用空索引:', error)
-          return new Map<string, number[]>()
-        }),
-        this.buildIntradayVolumeHistoryMap(codesArray).catch((error) => {
-          console.warn('[DataLoader] 分时成交量索引加载失败，继续使用空索引:', error)
-          return new Map<string, number[]>()
-        }),
-      ]),
+    const volumeHistoryMap = await this.measureStartupStep('history', () =>
+      this.buildVolumeHistoryMap(codesArray).catch((error) => {
+        console.warn('[DataLoader] 历史成交量索引加载失败，继续使用空索引:', error)
+        return new Map<string, number[]>()
+      }),
     )
+    const intradayVolumeHistoryMap = options.deferIntradayVolumeHistory
+      ? new Map<string, number[]>()
+      : await this.measureStartupStep('intradayHistory', () =>
+          this.buildIntradayVolumeHistoryMap(codesArray).catch((error) => {
+            console.warn('[DataLoader] 分时成交量索引加载失败，继续使用空索引:', error)
+            return new Map<string, number[]>()
+          }),
+        )
     this.updateProgress(this.startupProgress.historyEnd, '历史成交量索引完成', 'merge')
 
     // 2. ✅ 先加载行情数据
@@ -791,31 +806,121 @@ class DataLoaderService {
     this.syncRealtimeSubscription()
     this.updateProgress(this.startupProgress.mergeEnd, '基础榜单已就绪', 'merge')
 
+    if (options.deferIntradayVolumeHistory) {
+      this.refreshIntradayVolumeRatiosInBackground(codesArray, volumeHistoryMap)
+    }
+
     if (options.deferSignalEnrichment) {
-      void this.enrichSignalsInBackground(merged, basePublishVersion)
+      void this.enrichSignalsInBackground(merged, basePublishVersion, options.rankTrendSnapshotPromise)
       return merged
     }
 
     // 8. 计算信号并回写增强字段
     this.updateProgress(this.startupProgress.signalStart, '计算排名趋势信号...', 'signal')
-    merged = await this.measureStartupStep('signal', () => this.calculateSignals(merged))
+    merged = await this.measureStartupStep('signal', () =>
+      this.calculateSignals(merged, options.rankTrendSnapshotPromise),
+    )
     this.publishStocks(merged, { reason: 'signal-enriched' })
     this.updateProgress(this.startupProgress.signalEnd, '排名趋势信号完成', 'signal')
 
     return merged
   }
 
-  private async enrichSignalsInBackground(baseMerged: any[], basePublishVersion: number): Promise<void> {
+  private preloadRankTrendSnapshotsInBackground(
+    codes: string[],
+  ): Promise<RankTrendPreparedSnapshot[]> | undefined {
+    const targetCodes = codes.filter((code) => code && code.length === 6)
+    if (!targetCodes.length) return undefined
+
+    return this.measureStartupStep('rankTrendSnapshot', () =>
+      rankTrendSignalService.preloadSnapshots(targetCodes),
+    ).catch((error) => {
+      console.warn('[DataLoader] 排名趋势历史快照预取失败，将回退即时读取:', error)
+      return []
+    })
+  }
+
+  private refreshIntradayVolumeRatiosInBackground(
+    codes: string[],
+    volumeHistoryMap: Map<string, number[]>,
+  ): void {
+    void this.buildIntradayVolumeHistoryMap(codes)
+      .then((intradayVolumeHistoryMap) => {
+        if (!intradayVolumeHistoryMap.size) return
+
+        const codeSet = new Set(codes)
+        const enrichedByCode = new Map(
+          this.volumeRatioUpdateService
+            .enrichStocks(
+              dataLayer.getStocks().filter((stock) => codeSet.has(stock.code)),
+              volumeHistoryMap,
+              intradayVolumeHistoryMap,
+            )
+            .map((stock) => [stock.code, stock]),
+        )
+
+        if (!enrichedByCode.size) return
+
+        const nextStocks = dataLayer.getStocks().map((stock) => {
+          const enriched = enrichedByCode.get(stock.code)
+          if (!enriched) return stock
+          return {
+            ...stock,
+            volumeRatio: enriched.volumeRatio,
+            volumeRatioMeta: enriched.volumeRatioMeta,
+          }
+        })
+        this.publishStocks(nextStocks, { reason: 'base-merge' })
+      })
+      .catch((error) => {
+        console.warn('[DataLoader] 后台分时成交量索引加载失败，保留日级量比:', error)
+      })
+  }
+
+  private async enrichSignalsInBackground(
+    baseMerged: any[],
+    basePublishVersion: number,
+    snapshotPromise?: Promise<RankTrendPreparedSnapshot[]>,
+  ): Promise<void> {
     try {
-      const enriched = await this.calculateSignals(baseMerged)
+      const enriched = await this.calculateSignals(baseMerged, snapshotPromise)
       if (this.stockPublishVersion !== basePublishVersion) {
+        if (this.tryMergeStaleSignalEnrichment(baseMerged, enriched)) return
         debugLog('[DataLoader] 跳过过期的后台排名趋势信号增强')
         return
       }
       this.publishStocks(enriched, { reason: 'signal-enriched' })
+      void this.writeStartupBundle(this.summarizeRun(Date.now(), false))
     } catch (error) {
       console.warn('[DataLoader] 后台排名趋势信号增强失败，保留基础热榜数据:', error)
     }
+  }
+
+  private tryMergeStaleSignalEnrichment(baseMerged: any[], enriched: any[]): boolean {
+    const current = dataLayer.getStocks()
+    const sameOrderedPool =
+      current.length === baseMerged.length &&
+      current.every((stock, index) => {
+        const baseStock = baseMerged[index]
+        return stock.code === baseStock?.code && stock.compRank === baseStock?.compRank
+      })
+
+    if (!sameOrderedPool) return false
+
+    const enrichedByCode = new Map(enriched.map((stock) => [stock.code, stock]))
+    const merged = current.map((stock) => {
+      const signalStock = enrichedByCode.get(stock.code)
+      if (!signalStock) return stock
+      return {
+        ...stock,
+        rankTrend: signalStock.rankTrend,
+        rankTrendCoverageWarning: signalStock.rankTrendCoverageWarning,
+      }
+    })
+
+    this.publishStocks(merged, { reason: 'signal-enriched' })
+    void this.writeStartupBundle(this.summarizeRun(Date.now(), false))
+    return true
   }
 
   /**
@@ -885,9 +990,13 @@ class DataLoaderService {
   /**
    * 5. 计算信号（排名变化 + 四维信号）
    */
-  private async calculateSignals(merged: any[]): Promise<any[]> {
+  private async calculateSignals(
+    merged: any[],
+    snapshotPromise?: Promise<RankTrendPreparedSnapshot[]>,
+  ): Promise<any[]> {
     try {
-      return await rankTrendSignalService.applySignalsToMerged(merged)
+      const snapshots = snapshotPromise ? await snapshotPromise : undefined
+      return await rankTrendSignalService.applySignalsToMerged(merged, { snapshots })
     } catch (error) {
       console.warn('[DataLoader] 排名趋势信号增强失败，保留基础热榜数据:', error)
       return merged
