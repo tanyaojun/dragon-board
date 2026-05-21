@@ -131,6 +131,11 @@ class BacktestEngine:
         empty_hotlist_count = int(stats.get("emptyHotlistCount") or 0)
         target_frames = int(stats.get("targetFrames") or sample_diagnostics.get("snapshotCount") or 0)
         runtime_filter = gate.get("runtimeFilter") if isinstance(gate.get("runtimeFilter"), dict) else {}
+        report_only_diagnostics = (
+            gate.get("reportOnlyDiagnostics")
+            if isinstance(gate.get("reportOnlyDiagnostics"), dict)
+            else {}
+        )
         dropped_empty_count = int(runtime_filter.get("droppedEmptyHotlistSnapshots") or 0)
         ok_share = float((sample_diagnostics.get("statusShares") or {}).get("ok") or 0)
         degraded_share = float((sample_diagnostics.get("statusShares") or {}).get("degraded") or 0)
@@ -179,6 +184,7 @@ class BacktestEngine:
             "snapshotCount": int(sample_diagnostics.get("snapshotCount") or 0),
             "sourceSnapshotCount": target_frames,
             "runtimeFilter": runtime_filter,
+            "reportOnlyDiagnostics": report_only_diagnostics,
             "droppedEmptyHotlistSnapshots": dropped_empty_count,
             "lowHotlistCount": low_hotlist_count,
             "emptyHotlistCount": empty_hotlist_count,

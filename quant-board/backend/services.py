@@ -264,6 +264,79 @@ def _drop_all_zero_price_frames(frames: list[dict[str, Any]]) -> tuple[list[dict
     }
 
 
+def _price_quality_diagnostics(
+    frames: list[dict[str, Any]],
+    a_share_codes: set[str] | None = None,
+) -> dict[str, Any]:
+    cross_market_rows = 0
+    cross_market_snapshots: set[str] = set()
+    cross_market_examples: list[dict[str, Any]] = []
+    all_zero_frame_ids: list[str] = []
+    all_zero_rows = 0
+    partial_a_share_rows = 0
+    partial_a_share_snapshots: set[str] = set()
+    partial_a_share_examples: list[dict[str, Any]] = []
+
+    for frame in frames:
+        snapshot_id = str(frame.get("snapshotId") or "")
+        stocks = frame.get("stocks") if isinstance(frame.get("stocks"), list) else []
+        is_all_zero = bool(stocks) and all(
+            isinstance(stock, dict) and not _price_is_positive(stock.get("price"))
+            for stock in stocks
+        )
+        if is_all_zero:
+            all_zero_frame_ids.append(snapshot_id)
+            all_zero_rows += len(stocks)
+            continue
+
+        for stock in stocks:
+            if not isinstance(stock, dict) or _price_is_positive(stock.get("price")):
+                continue
+            if _is_cross_market_zero_price_stock(stock, a_share_codes):
+                cross_market_rows += 1
+                cross_market_snapshots.add(snapshot_id)
+                if len(cross_market_examples) < 20:
+                    cross_market_examples.append({
+                        "snapshotId": snapshot_id,
+                        "code": _raw_stock_code(stock.get("code")),
+                        "name": str(stock.get("name") or ""),
+                    })
+                continue
+            partial_a_share_rows += 1
+            partial_a_share_snapshots.add(snapshot_id)
+            if len(partial_a_share_examples) < 20:
+                partial_a_share_examples.append({
+                    "snapshotId": snapshot_id,
+                    "code": _raw_stock_code(stock.get("code")),
+                    "name": str(stock.get("name") or ""),
+                    "price": stock.get("price"),
+                })
+
+    return {
+        "role": "report_only",
+        "autoApplyDefaults": False,
+        "computedBeforeResearchFilters": True,
+        "crossMarketZeroPriceRows": {
+            "rowCount": cross_market_rows,
+            "snapshotCount": len(cross_market_snapshots),
+            "examples": cross_market_examples,
+            "aShareUniverseAvailable": a_share_codes is not None,
+            "aShareUniverseCodeCount": len(a_share_codes or set()),
+            "skippedAllZeroPriceFrames": len(all_zero_frame_ids),
+        },
+        "allZeroPriceFrames": {
+            "frameCount": len(all_zero_frame_ids),
+            "rowCount": all_zero_rows,
+            "snapshotIds": all_zero_frame_ids[:50],
+        },
+        "partialAshareZeroPriceRows": {
+            "rowCount": partial_a_share_rows,
+            "snapshotCount": len(partial_a_share_snapshots),
+            "examples": partial_a_share_examples,
+        },
+    }
+
+
 def _ensure_runtime_filtered_frames_usable(frames: list[dict[str, Any]], quality_gate: dict[str, Any]) -> None:
     stats = quality_gate.get("stats") if isinstance(quality_gate.get("stats"), dict) else {}
     min_snapshot_count = int(stats.get("minSnapshotCount") or 2)
@@ -460,6 +533,15 @@ class BacktestService:
         if not frames:
             raise ValueError(f"dataset has no frames for {snapshot_type}: {dataset_id}")
         run_frames, quality_gate = _prepare_frames_for_backtest(frames, snapshot_type)
+        a_share_codes = _load_a_share_codes(self.repo)
+        report_only_diagnostics = (
+            quality_gate.get("reportOnlyDiagnostics")
+            if isinstance(quality_gate.get("reportOnlyDiagnostics"), dict)
+            else {}
+        )
+        report_only_diagnostics = dict(report_only_diagnostics)
+        report_only_diagnostics["priceQuality"] = _price_quality_diagnostics(run_frames, a_share_codes)
+        quality_gate["reportOnlyDiagnostics"] = report_only_diagnostics
         exclude_non_positive_price_rows = bool(camel_get(payload, "exclude_non_positive_price_rows", "excludeNonPositivePriceRows", False))
         exclude_cross_market_zero_price_rows = bool(camel_get(payload, "exclude_cross_market_zero_price_rows", "excludeCrossMarketZeroPriceRows", False))
         exclude_all_zero_price_frames = bool(camel_get(payload, "exclude_all_zero_price_frames", "excludeAllZeroPriceFrames", False))
@@ -474,7 +556,7 @@ class BacktestService:
         if exclude_cross_market_zero_price_rows:
             run_frames, cross_market_price_filter = _cross_market_zero_price_stock_rows(
                 run_frames,
-                _load_a_share_codes(self.repo),
+                a_share_codes,
             )
             runtime_filter["crossMarketPriceFilter"] = cross_market_price_filter
         if exclude_non_positive_price_rows:

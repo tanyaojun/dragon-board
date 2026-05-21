@@ -736,6 +736,8 @@ Dragon Board 候选池第一版复用 QuantBoard journal 存储，候选记录�
 
 `excludeCrossMarketZeroPriceRows` 与 `excludeAllZeroPriceFrames` 也默认关闭。前者只过滤带零行情形态的跨市场/非 A 股热榜条目，并把统计写入 `dataQuality.runtimeFilter.crossMarketPriceFilter`；后者只剔除整帧股票行价格全为 `0` 或不可解析的异常快照，并把统计写入 `dataQuality.runtimeFilter.allZeroPriceFrameFilter`。两者都只用于 Phase 12 价格质量归因研究，不修改 MongoDB 源快照事实，不改变默认回测口径。
 
+默认回测还会输出只读价格质量诊断，不触发过滤、不写入 warnings、不改变 `severity` 或 `researchGrade`。字段位于 `dataQuality.reportOnlyDiagnostics.priceQuality`，包含 `crossMarketZeroPriceRows`、`allZeroPriceFrames` 和 `partialAshareZeroPriceRows`，用于后续长测 checkpoint 观察价格污染来源。
+
 ### `GET /api/backtests/{run_id}`
 
 读取兼容回测报告。SQLite 模式读取 `backtest_runs.result_json`；MongoDB 模式读取 `backtest_runs.resultCompressed`，或在 `resultChunked=true` 时读取 `backtest_result_chunks` 后透明拼接解压；旧 `result` 子文档仅作为兼容字段。新页面需要完整交易、权益曲线、信号和质量报告时，应继续调用下列归一化结果端点。
@@ -1285,7 +1287,7 @@ win_rate: 0.52
 | `H2_half_hour_next_bar` | `half_hour` | `next_bar` | `40` | 正式保守验收主线 |
 | `Q1_quarter_hour_next_bar` | `quarter_hour` | `next_bar` | `80` | 研究压力测试 |
 
-默认把 checkpoint 摘要以 JSONL 追加到 `data/reports/long_test_runs.jsonl`。每行保留 `checkpointId`、`runId`、`datasetId`、`snapshotType`、`strategyName`、`strategyVersion`、`configHash`、`randomSeed`、核心收益/回撤/交易指标、质量等级、资金流缺失统计，以及显式价格过滤统计。价格统计包括全量非正价格过滤 `priceFilter`、跨市场零行情过滤 `crossMarketPriceFilter` 和全零异常帧过滤 `allZeroPriceFrameFilter`。可用 `--output` 指定单个输出文件，或用 `--dry-run` 只查看将要执行的三条 payload。
+默认把 checkpoint 摘要以 JSONL 追加到 `data/reports/long_test_runs.jsonl`。每行保留 `checkpointId`、`runId`、`datasetId`、`snapshotType`、`strategyName`、`strategyVersion`、`configHash`、`randomSeed`、核心收益/回撤/交易指标、质量等级、资金流缺失统计，以及显式价格过滤统计。价格统计包括全量非正价格过滤 `priceFilter`、跨市场零行情过滤 `crossMarketPriceFilter`、全零异常帧过滤 `allZeroPriceFrameFilter`，以及默认 report-only 的 `priceQualityDiagnostics`。可用 `--output` 指定单个输出文件，或用 `--dry-run` 只查看将要执行的三条 payload。
 
 ### `optimize-ranktrend`
 

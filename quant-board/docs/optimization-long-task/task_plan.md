@@ -6,7 +6,7 @@
 
 ## Current Phase
 
-Phase 12 complete
+Phase 13 in progress
 
 ## Success Criteria
 
@@ -19,6 +19,7 @@ Phase 12 complete
 7. `price=0` / 非正价格行有独立诊断结论，明确它是否影响当前固定基线成交。
 8. 显式 `price<=0` 过滤研究口径已复跑 H1/H2/Q1，并记录过滤前后指标和信号分布。
 9. `price=0` 来源已拆分为跨市场无行情与全零异常帧两类研究过滤，并分别复跑 H1/H2/Q1。
+10. 默认回测报告包含 report-only 价格质量诊断字段，且不改变默认过滤、收益、质量等级和交易逻辑。
 
 ## Phases
 
@@ -111,6 +112,15 @@ Phase 12 complete
 - [x] 对比两类过滤与全量 `price<=0` 过滤的收益、回撤、交易数和信号分布
 - [x] 判断哪一类适合 report-only diagnostic，哪一类可进入后续 formal quality gate 候选
 - **Status:** complete
+
+### Phase 13: Report-Only Price Quality Diagnostics
+
+- [ ] 新增只读价格质量诊断：`crossMarketZeroPriceRows`、`allZeroPriceFrames`、`partialAshareZeroPriceRows`
+- [ ] 将诊断透传到 `dataQuality.reportOnlyDiagnostics.priceQuality`
+- [ ] 确保默认回测不启用任何价格过滤，不改变 `severity/researchGrade`
+- [ ] 让 long-test 摘要记录该诊断，便于后续 weekly checkpoint 观察
+- [ ] 补充 API/service 与 helper 测试
+- **Status:** in_progress
 
 ## Optimization Setup
 
@@ -448,6 +458,16 @@ v1 `checkpoint_2026-05-21_cross_market_zero_filter` 已落库，但因第一版�
 - 全量 `price<=0` 过滤清零信号污染，但它把跨市场行、全零帧和局部 A 股报价缺失合并处理，不适合作为当前默认 formal quality gate。
 
 结论：下一步正式质量诊断可以优先加入 report-only 字段：`crossMarketZeroPriceRows`、`allZeroPriceFrames`、`partialAshareZeroPriceRows`。默认回测口径仍不自动开启任何价格过滤；若要候选默认化，优先考虑“跨市场/非 A 股/代码失配零行情”作为研究过滤，而“全零异常帧”作为更高优先级的数据采集修复/人工审计项。
+
+## Phase 13 Implementation Plan
+
+Phase 13 只做报告诊断，不做过滤：
+
+1. 在 `BacktestService.run_ranktrend` 中，基于 `_prepare_frames_for_backtest` 后、显式研究过滤前的 `run_frames` 计算价格诊断。
+2. 将结果挂到 `quality_gate["reportOnlyDiagnostics"]["priceQuality"]`。
+3. 在 `BacktestEngine._data_quality_summary` 中原样透传到 `dataQuality.reportOnlyDiagnostics`。
+4. 在 `summarize_longtest_baseline` 中追加 `priceQualityDiagnostics` 摘要字段。
+5. 增加测试确认默认行为不变，显式过滤时诊断仍基于过滤前 frames。
 
 ## Errors Encountered
 

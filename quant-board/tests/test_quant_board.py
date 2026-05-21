@@ -965,6 +965,49 @@ def test_ranktrend_backtest_blocks_when_price_filter_leaves_too_few_usable_frame
     assert "runtime filters left usable snapshots below minimum 2: 1" in quality_gate["issues"]
 
 
+def test_ranktrend_backtest_price_quality_diagnostics_are_report_only_by_default(tmp_path: Path) -> None:
+    client = TestClient(app)
+    bundle = make_bundle(tmp_path)
+    data = json.loads(bundle.read_text(encoding="utf-8"))
+    first_hotlist = data["records"][0]["payload"]["hotlist"]
+    first_hotlist.append(
+        {"code": "009992", "name": "泡泡玛特", "rank": 3, "price": 0, "change": 0, "volume": 0, "turnover": 0}
+    )
+    first_hotlist.append(
+        {"code": "600537", "name": "亿晶光电", "rank": 4, "price": 0, "change": 0, "volume": 100, "turnover": 1000}
+    )
+    data["records"][1]["payload"]["hotlist"] = [
+        {"code": "000001", "name": "平安银行", "rank": 1, "price": 0},
+        {"code": "000002", "name": "万科A", "rank": 2, "price": None},
+    ]
+    bundle.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+    imported = client.post(
+        "/api/datasets/import",
+        json={"sourceType": "json_bundle", "sourcePath": str(bundle), "name": "price-diagnostics", "snapshotTypes": ["half_hour"]},
+    )
+    assert imported.status_code == 200, imported.text
+    dataset = imported.json()
+
+    response = client.post(
+        "/api/backtests/rank-trend",
+        json={"datasetId": dataset["id"], "snapshotType": "half_hour", "randomSeed": 20260430},
+    )
+
+    assert response.status_code == 200, response.text
+    run = response.json()
+    data_quality = run["dataQuality"]
+    price_quality = data_quality["reportOnlyDiagnostics"]["priceQuality"]
+    assert data_quality["severity"] == "warn"
+    assert data_quality["runtimeFilter"] == {}
+    assert price_quality["role"] == "report_only"
+    assert price_quality["autoApplyDefaults"] is False
+    assert price_quality["computedBeforeResearchFilters"] is True
+    assert price_quality["crossMarketZeroPriceRows"]["rowCount"] == 1
+    assert price_quality["allZeroPriceFrames"]["frameCount"] == 1
+    assert price_quality["partialAshareZeroPriceRows"]["rowCount"] == 1
+
+
 def test_snapshot_ingest_is_idempotent_and_queues_outbox() -> None:
     client = TestClient(app)
     suffix = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
@@ -2633,6 +2676,14 @@ def test_longtest_baseline_summary_extracts_metrics_and_quality() -> None:
             "droppedAllZeroPriceFrames": 1,
         },
     }
+    run["dataQuality"]["reportOnlyDiagnostics"] = {
+        "priceQuality": {
+            "role": "report_only",
+            "crossMarketZeroPriceRows": {"rowCount": 3},
+            "allZeroPriceFrames": {"frameCount": 1},
+            "partialAshareZeroPriceRows": {"rowCount": 2},
+        }
+    }
     spec["payload"]["excludeNonPositivePriceRows"] = True
     spec["payload"]["excludeCrossMarketZeroPriceRows"] = True
     spec["payload"]["excludeAllZeroPriceFrames"] = True
@@ -2652,6 +2703,7 @@ def test_longtest_baseline_summary_extracts_metrics_and_quality() -> None:
     assert summary["priceFilter"]["droppedNonPositivePriceRows"] == 5
     assert summary["crossMarketPriceFilter"]["droppedCrossMarketZeroPriceRows"] == 3
     assert summary["allZeroPriceFrameFilter"]["droppedAllZeroPriceFrames"] == 1
+    assert summary["priceQualityDiagnostics"]["crossMarketZeroPriceRows"]["rowCount"] == 3
     assert summary["blockedByLimit"] == 3
 
 

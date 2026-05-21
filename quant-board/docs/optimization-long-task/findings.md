@@ -511,6 +511,43 @@ Q1 的全零帧为 `quarter_hour:2026-04-03:14:15`。跨市场过滤 v2 跳过�
 - 显式过滤后会再次检查可用股票帧数量；如果低于质量门禁 `minSnapshotCount`，不再产出 completed/零信号报告，而是返回结构化 `qualityGate` 失败。
 - 跨市场零行情判断保留原始数字代码前缀；例如港股 `00700` 不会先补零成 `000700` 再与 A 股代码表比对，避免漏判或代码混淆。
 
+## Phase 13 Report-Only Diagnostic Findings
+
+### Planned Contract
+
+下一阶段诊断字段只做报告观察，不参与默认过滤：
+
+```json
+{
+  "dataQuality": {
+    "reportOnlyDiagnostics": {
+      "priceQuality": {
+        "role": "report_only",
+        "autoApplyDefaults": false,
+        "computedBeforeResearchFilters": true,
+        "crossMarketZeroPriceRows": {},
+        "allZeroPriceFrames": {},
+        "partialAshareZeroPriceRows": {}
+      }
+    }
+  }
+}
+```
+
+关键约束：
+
+- 不把价格字段加回 formal `_stock_rows_for_quality()`。
+- 不把诊断加入 `warnings`。
+- 不改变 `severity` / `researchGrade`。
+- 不自动启用 `exclude*` 过滤。
+
+### Implementation
+
+- `BacktestService.run_ranktrend` 在显式研究过滤前计算诊断，保证它反映过滤前源样本状态。
+- `BacktestEngine._data_quality_summary` 原样透传 `reportOnlyDiagnostics`。
+- `run-longtest-baselines` 摘要记录 `priceQualityDiagnostics`，用于 weekly checkpoint 横向观察。
+- 当前验证通过：`14 passed`，覆盖 helper 分类、默认 report-only API 输出、显式过滤阻断和 long-test 摘要。
+
 ## Issues Encountered
 
 | Issue | Resolution |

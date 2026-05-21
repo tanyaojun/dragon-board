@@ -5,6 +5,7 @@ from backend.services import (
     _cross_market_zero_price_stock_rows,
     _drop_all_zero_price_frames,
     _ensure_runtime_filtered_frames_usable,
+    _price_quality_diagnostics,
     _positive_price_stock_rows,
     _prepare_frames_for_backtest,
     _stock_rows_for_quality,
@@ -319,6 +320,39 @@ def test_all_zero_price_frame_filter_drops_only_full_zero_frames() -> None:
     assert stats["droppedAllZeroPriceFrames"] == 1
     assert stats["droppedAllZeroPriceRows"] == 2
     assert stats["droppedSnapshotIds"] == ["all_zero"]
+
+
+def test_price_quality_diagnostics_classifies_zero_price_root_causes() -> None:
+    frames = [
+        {
+            "snapshotId": "partial",
+            "stocks": [
+                {"code": "009992", "name": "泡泡玛特", "price": 0, "change": 0, "volume": 0, "turnover": 0},
+                {"code": "600537", "name": "亿晶光电", "price": 0, "change": 0, "volume": 100, "turnover": 1000},
+                {"code": "000001", "name": "平安银行", "price": 12, "change": 1, "volume": 100, "turnover": 1000},
+            ],
+        },
+        {
+            "snapshotId": "all_zero",
+            "stocks": [
+                {"code": "000001", "name": "平安银行", "price": 0},
+                {"code": "000002", "name": "万科A", "price": None},
+            ],
+        },
+    ]
+
+    diagnostics = _price_quality_diagnostics(frames, {"000001", "000002", "600537"})
+
+    assert diagnostics["role"] == "report_only"
+    assert diagnostics["autoApplyDefaults"] is False
+    assert diagnostics["computedBeforeResearchFilters"] is True
+    assert diagnostics["crossMarketZeroPriceRows"]["rowCount"] == 1
+    assert diagnostics["crossMarketZeroPriceRows"]["snapshotCount"] == 1
+    assert diagnostics["crossMarketZeroPriceRows"]["skippedAllZeroPriceFrames"] == 1
+    assert diagnostics["allZeroPriceFrames"]["frameCount"] == 1
+    assert diagnostics["allZeroPriceFrames"]["rowCount"] == 2
+    assert diagnostics["partialAshareZeroPriceRows"]["rowCount"] == 1
+    assert diagnostics["partialAshareZeroPriceRows"]["snapshotCount"] == 1
 
 
 def test_formal_money_flow_gate_allows_estimated_l1_when_explicitly_enabled() -> None:

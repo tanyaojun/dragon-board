@@ -271,6 +271,29 @@ Conclusion:
 - Q1 中，全零帧过滤改善回撤并减少交易数，但跨市场过滤使回撤加深，说明 quarter_hour 入场路径对早期历史样本很敏感。
 - 全量 `price<=0` 过滤仍只适合作为显式研究口径；下一步更适合新增 report-only 价格质量诊断字段，而不是默认开启任何价格过滤。
 
+## Session: 2026-05-22
+
+### Phase 12 Review Fixes
+
+- **Status:** complete
+- Actions taken:
+  - 修复显式过滤后可用股票帧不足仍继续产出 completed 报告的问题。
+  - 修复跨市场零行情判断中港股短码被 A 股 6 位归一化混淆的问题。
+  - 补 helper 与 API/service 层回归测试。
+  - 已提交：`73c788b Add RankTrend price quality research filters`。
+- Remaining local files:
+  - `.playwright-cli/` 为无关未跟踪工具产物，未纳入提交。
+
+### Phase 13: Report-Only Price Quality Diagnostics
+
+- **Status:** in_progress
+- Actions taken:
+  - 新增默认开启的只读诊断字段，不改变默认过滤、交易逻辑和质量等级。
+  - 诊断字段：`crossMarketZeroPriceRows`、`allZeroPriceFrames`、`partialAshareZeroPriceRows`。
+  - 输出位置：`dataQuality.reportOnlyDiagnostics.priceQuality`。
+  - long-test JSONL 摘要追加 `priceQualityDiagnostics`，用于后续 checkpoint 横向观察。
+  - 补充 helper 分类测试、API/service 默认 report-only 测试和 long-test 摘要测试。
+
 ## Test Results
 
 | Test | Input | Expected | Actual | Status |
@@ -297,6 +320,7 @@ Conclusion:
 | Split price filter tests | `pytest tests/test_money_flow_quality_gate.py tests/test_quant_board.py -k "money_flow or positive_price or cross_market or all_zero or longtest_baseline or cli_run_ranktrend_exposes_ui_backtest_parameters"` | 分拆过滤开关、统计和 CLI payload 通过 | `14 passed` | pass |
 | Phase 12 review regression tests | `pytest tests/test_money_flow_quality_gate.py tests/test_quant_board.py -k "money_flow or positive_price or cross_market or all_zero or runtime_price or longtest_baseline or cli_run_ranktrend_exposes_ui_backtest_parameters"` | 过滤后样本不足阻断、港股原始前缀识别和既有过滤开关通过 | `16 passed` | pass |
 | Phase 12 service/API regression tests | `pytest tests/test_money_flow_quality_gate.py tests/test_quant_board.py -k "price or cross_market or all_zero or runtime_price_filters or cli_run_ranktrend or longtest_baselines"` | helper、CLI、API/service 层价格过滤回归通过 | `12 passed` | pass |
+| Phase 13 report-only diagnostics tests | `pytest tests/test_money_flow_quality_gate.py tests/test_quant_board.py -k "price or cross_market or all_zero or runtime_price_filters or cli_run_ranktrend or longtest_baselines or price_quality_diagnostics"` | report-only 价格诊断、默认不过滤和 long-test 摘要通过 | `14 passed` | pass |
 | Cross-market zero-price checkpoint | `run-longtest-baselines --checkpoint-id checkpoint_2026-05-21_cross_market_zero_filter_v2 --exclude-cross-market-zero-price-rows` | 三条 split baseline 落库并追加 JSONL | `bt_57371fbc97ad4371`、`bt_4fe7fd28fcce4146`、`bt_b59b804884ae465a` | pass |
 | All-zero frame checkpoint | `run-longtest-baselines --checkpoint-id checkpoint_2026-05-21_all_zero_frame_filter --exclude-all-zero-price-frames` | 三条 split baseline 落库并追加 JSONL | `bt_ac33b22a9f974170`、`bt_70c9e89288504b24`、`bt_751dbc4783614ace` | pass |
 | Split signal distribution extraction | 完整回测报告读取 | 对比分拆过滤后的 zero-price signal 分布 | cross-market 后 H1/H2 `257`、Q1 `683`；all-zero 后 H1/H2 `976`、Q1 `2381` | pass |

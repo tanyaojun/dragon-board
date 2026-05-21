@@ -643,6 +643,11 @@ def summarize_longtest_baseline(spec: dict[str, Any], run: dict[str, Any]) -> di
     data_quality = run.get("dataQuality") if isinstance(run.get("dataQuality"), dict) else {}
     quality_gate = data_quality.get("qualityGate") if isinstance(data_quality.get("qualityGate"), dict) else {}
     quality_stats = quality_gate.get("stats") if isinstance(quality_gate.get("stats"), dict) else {}
+    report_only_diagnostics = (
+        data_quality.get("reportOnlyDiagnostics")
+        if isinstance(data_quality.get("reportOnlyDiagnostics"), dict)
+        else {}
+    )
     simulation = run.get("tradeSimulation") if isinstance(run.get("tradeSimulation"), dict) else {}
     matching = simulation.get("matchingDiagnostics") if isinstance(simulation.get("matchingDiagnostics"), dict) else {}
     trade_config = payload.get("tradeConfig") if isinstance(payload.get("tradeConfig"), dict) else {}
@@ -680,6 +685,7 @@ def summarize_longtest_baseline(spec: dict[str, Any], run: dict[str, Any]) -> di
         "priceFilter": (data_quality.get("runtimeFilter") or {}).get("priceFilter") if isinstance(data_quality.get("runtimeFilter"), dict) else None,
         "crossMarketPriceFilter": (data_quality.get("runtimeFilter") or {}).get("crossMarketPriceFilter") if isinstance(data_quality.get("runtimeFilter"), dict) else None,
         "allZeroPriceFrameFilter": (data_quality.get("runtimeFilter") or {}).get("allZeroPriceFrameFilter") if isinstance(data_quality.get("runtimeFilter"), dict) else None,
+        "priceQualityDiagnostics": report_only_diagnostics.get("priceQuality"),
         "blockedByLimit": matching.get("blockedByLimit"),
         "nextBarEntries": matching.get("nextBarEntries"),
         "nextBarExits": matching.get("nextBarExits"),
