@@ -29,4 +29,92 @@ describe('StockMergeCoordinator', () => {
     expect(stock.volumeRatio).toBeUndefined()
     expect(stock.volumeRatioMeta).toBeUndefined()
   })
+
+  it('lets explicit zero money-flow fields clear existing values', async () => {
+    const [stock] = await new StockMergeCoordinator().merge({
+      platformData: {
+        eastmoney: [{ code: '000001', name: '样本股', rank: 1 }],
+      },
+      latestQuotes: new Map([
+        [
+          '000001',
+          {
+            code: '000001',
+            zlje: 500,
+            zljzb: 5,
+            cddje: 0,
+            cddjzb: 0,
+            moneyFlowSource: 'tdx_estimate',
+            moneyFlowEstimated: true,
+          },
+        ],
+      ]),
+      existingMap: new Map([
+        [
+          '000001',
+          {
+            code: '000001',
+            name: '样本股',
+            zlje: 100,
+            zljzb: 1,
+            cddje: 50,
+            cddjzb: 0.5,
+          },
+        ],
+      ]),
+    })
+
+    expect(stock).toMatchObject({
+      zlje: 500,
+      zljzb: 5,
+      cddje: 0,
+      cddjzb: 0,
+    })
+  })
+
+  it('keeps existing fund flow when quote has no authoritative money-flow source', async () => {
+    const [stock] = await new StockMergeCoordinator().merge({
+      platformData: {
+        eastmoney: [{ code: '000001', name: '样本股', rank: 1 }],
+      },
+      latestQuotes: new Map([
+        [
+          '000001',
+          {
+            code: '000001',
+            price: 10,
+            zlje: 0,
+            zljzb: 0,
+            cddje: 0,
+            cddjzb: 0,
+          },
+        ],
+      ]),
+      existingMap: new Map([
+        [
+          '000001',
+          {
+            code: '000001',
+            name: '样本股',
+            zlje: -9700,
+            zljzb: -4.5,
+            cddje: -10800,
+            cddjzb: -5.1,
+            moneyFlowSource: 'eastmoney',
+            moneyFlowEstimated: false,
+            capitalFlowSource: 'official_l2',
+          },
+        ],
+      ]),
+    })
+
+    expect(stock).toMatchObject({
+      price: 10,
+      zlje: -9700,
+      zljzb: -4.5,
+      cddje: -10800,
+      cddjzb: -5.1,
+      moneyFlowSource: 'eastmoney',
+    })
+  })
 })

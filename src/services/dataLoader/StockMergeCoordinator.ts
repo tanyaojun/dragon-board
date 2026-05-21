@@ -1,6 +1,7 @@
 import type { MergedStock } from '@/types'
 import { DEFAULT_RANK } from '@/types/config'
 import { stockCodeManager } from '../StockCodeManager'
+import { shouldApplyMoneyFlowUpdate } from '../moneyFlowSourcePriority'
 import { getRankField, rankMergedStocks } from './ComprehensiveRankEngine'
 
 export interface StockMergeCoordinatorInput {
@@ -73,9 +74,8 @@ export class StockMergeCoordinator {
       const nextNumber = Number(nextValue)
       const currentNumber = Number(currentValue)
 
-      if (Number.isFinite(nextNumber) && nextNumber !== 0) return nextNumber
-      if (Number.isFinite(currentNumber)) return currentNumber
       if (Number.isFinite(nextNumber)) return nextNumber
+      if (Number.isFinite(currentNumber)) return currentNumber
       return 0
     }
     const pickPositiveValue = (nextValue: unknown, currentValue: unknown) => {
@@ -87,6 +87,7 @@ export class StockMergeCoordinator {
       if (Number.isFinite(nextNumber)) return nextNumber
       return 0
     }
+    const shouldApplyMoneyFlow = shouldApplyMoneyFlowUpdate(stock, quote)
 
     Object.assign(stock, {
       price: pickPositiveValue(quote.price, stock.price),
@@ -98,14 +99,22 @@ export class StockMergeCoordinator {
       pb: pickPositiveValue(quote.pb, stock.pb),
       totalMV: pickPositiveValue(quote.totalMV, stock.totalMV),
       cirMV: pickPositiveValue(quote.cirMV, stock.cirMV),
-      zlje: pickFundFlowValue(quote.zlje, stock.zlje),
-      zljzb: pickFundFlowValue(quote.zljzb, stock.zljzb),
-      cddje: pickFundFlowValue(quote.cddje, stock.cddje),
-      cddjzb: pickFundFlowValue(quote.cddjzb, stock.cddjzb),
-      moneyFlowSource: quote.moneyFlowSource ?? stock.moneyFlowSource,
-      moneyFlowEstimated: quote.moneyFlowEstimated ?? stock.moneyFlowEstimated,
-      capitalFlowSource: quote.capitalFlowSource ?? stock.capitalFlowSource,
-      capitalFlowConfidence: quote.capitalFlowConfidence ?? stock.capitalFlowConfidence,
+      zlje: shouldApplyMoneyFlow ? pickFundFlowValue(quote.zlje, stock.zlje) : stock.zlje,
+      zljzb: shouldApplyMoneyFlow ? pickFundFlowValue(quote.zljzb, stock.zljzb) : stock.zljzb,
+      cddje: shouldApplyMoneyFlow ? pickFundFlowValue(quote.cddje, stock.cddje) : stock.cddje,
+      cddjzb: shouldApplyMoneyFlow ? pickFundFlowValue(quote.cddjzb, stock.cddjzb) : stock.cddjzb,
+      moneyFlowSource: shouldApplyMoneyFlow
+        ? quote.moneyFlowSource ?? stock.moneyFlowSource
+        : stock.moneyFlowSource,
+      moneyFlowEstimated: shouldApplyMoneyFlow
+        ? quote.moneyFlowEstimated ?? stock.moneyFlowEstimated
+        : stock.moneyFlowEstimated,
+      capitalFlowSource: shouldApplyMoneyFlow
+        ? quote.capitalFlowSource ?? stock.capitalFlowSource
+        : stock.capitalFlowSource,
+      capitalFlowConfidence: shouldApplyMoneyFlow
+        ? quote.capitalFlowConfidence ?? stock.capitalFlowConfidence
+        : stock.capitalFlowConfidence,
       tdxBuyVolume: quote.tdxBuyVolume ?? stock.tdxBuyVolume,
       tdxSellVolume: quote.tdxSellVolume ?? stock.tdxSellVolume,
       tdxCurrentVolume: quote.tdxCurrentVolume ?? stock.tdxCurrentVolume,

@@ -41,6 +41,7 @@ export function createProxyApp(options = {}) {
     localVoice: options.localVoice,
     feishuEventRadar: options.feishuEventRadar,
     eventRadarBackgroundWorker: options.eventRadarBackgroundWorker,
+    fetchImpl: options.fetchImpl,
   }
 
   app.use(cors({ origin: '*', methods: ['GET', 'POST'] }))

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { QuotePatch, TickTrade } from '../../../types'
 import {
-  calculateTdxDarkMoneyFactor,
+  buildOfficialStyleMoneyFlow,
   classifyMoneyFlowOrder,
   estimateTdxMoneyFlow,
   summarizeMoneyFlowTicks,
@@ -23,42 +23,69 @@ describe('MoneyFlowEstimator', () => {
     preClose: 9.8,
   }
 
-  it('returns null when price or active volume is invalid', () => {
-    expect(estimateTdxMoneyFlow('000001', { ...baseQuote, lastPrice: 0 })).toBeNull()
-    expect(
-      estimateTdxMoneyFlow('000001', {
-        ...baseQuote,
-        tdxBuyVolume: 0,
-        tdxSellVolume: 0,
-      }),
-    ).toBeNull()
+  it('does not derive official money-flow fields from L1 active buy-sell imbalance', () => {
+    expect(estimateTdxMoneyFlow('000001', baseQuote)).toBeNull()
   })
 
-  it('estimates TDX money flow fields from valid quote active volume', () => {
-    const result = estimateTdxMoneyFlow('000001', baseQuote)
+  it('calculates the four money flow fields from official-style large order buckets', () => {
+    const summary = {
+      activeAmount: 1_600_000,
+      mainNet: 800_000,
+      superNet: 1_000_000,
+    }
 
-    expect(result).toMatchObject({
-      tdxBuyVolume: 3_000,
-      tdxSellVolume: 2_000,
-      tdxCurrentVolume: 120,
+    expect(buildOfficialStyleMoneyFlow(summary, 2_000_000)).toMatchObject({
+      zlje: 800_000,
+      zljzb: 40,
+      cddje: 1_000_000,
+      cddjzb: 50,
       moneyFlowSource: 'tdx_estimate',
       moneyFlowEstimated: true,
     })
-    expect(result?.zlje).toEqual(expect.any(Number))
-    expect(result?.zljzb).toEqual(expect.any(Number))
-    expect(result?.cddje).toEqual(expect.any(Number))
-    expect(result?.cddjzb).toEqual(expect.any(Number))
   })
 
-  it('calculates dark money factors from OHLC structure', () => {
-    const factor = calculateTdxDarkMoneyFactor(baseQuote)
+  it('uses tick-trade buckets before the L1 active-volume estimate', () => {
+    const result = estimateTdxMoneyFlow('000001', baseQuote, {
+      activeAmount: 1_600_000,
+      mainNet: 800_000,
+      superNet: 1_000_000,
+    })
 
-    expect(factor.x16).toBeCloseTo(0.0644, 4)
-    expect(factor.amplitude).toBeCloseTo(0.0816, 4)
-    expect(factor.closePosition).toBeCloseTo(0.5, 4)
+    expect(result).toMatchObject({
+      zlje: 800_000,
+      zljzb: 0.67,
+      cddje: 1_000_000,
+      cddjzb: 0.83,
+      tdxBuyVolume: 3_000,
+      tdxSellVolume: 2_000,
+      tdxCurrentVolume: 120,
+    })
   })
 
-  it('keeps existing order classification thresholds', () => {
+  it('can calculate tick-based money flow even when L1 active volumes are missing', () => {
+    const result = estimateTdxMoneyFlow(
+      '000001',
+      {
+        ...baseQuote,
+        tdxBuyVolume: 0,
+        tdxSellVolume: 0,
+      },
+      {
+        activeAmount: 1_600_000,
+        mainNet: 800_000,
+        superNet: 1_000_000,
+      },
+    )
+
+    expect(result).toMatchObject({
+      zlje: 800_000,
+      cddje: 1_000_000,
+      tdxBuyVolume: 0,
+      tdxSellVolume: 0,
+    })
+  })
+
+  it('classifies order buckets with EastMoney-style amount or share thresholds', () => {
     expect(classifyMoneyFlowOrder(1_000_000, 1)).toBe('super')
     expect(classifyMoneyFlowOrder(1, 500_000)).toBe('super')
     expect(classifyMoneyFlowOrder(200_000, 1)).toBe('large')

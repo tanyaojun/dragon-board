@@ -320,6 +320,50 @@ describe('DataLayer money flow source precedence', () => {
       dataLayer.reset()
     }
   })
+
+  test('allows estimated L1 money flow to clear stale super-order fields', () => {
+    dataLayer.reset()
+
+    try {
+      dataLayer.setMergedStocks([
+        {
+          code: '000001',
+          name: '平安银行',
+          zlje: 100,
+          zljzb: 1,
+          cddje: 50,
+          cddjzb: 0.5,
+          moneyFlowSource: 'tdx_estimate',
+          moneyFlowEstimated: true,
+          capitalFlowSource: 'estimated_l1',
+          capitalFlowConfidence: 'low',
+        },
+      ])
+
+      dataLayer.applyRealtimeQuoteBatch([
+        {
+          code: '000001',
+          zlje: 500,
+          zljzb: 5,
+          cddje: 0,
+          cddjzb: 0,
+          moneyFlowSource: 'tdx_estimate',
+          moneyFlowEstimated: true,
+          capitalFlowSource: 'estimated_l1',
+          capitalFlowConfidence: 'low',
+        },
+      ])
+
+      expect(dataLayer.getStock('000001')).toMatchObject({
+        zlje: 500,
+        zljzb: 5,
+        cddje: 0,
+        cddjzb: 0,
+      })
+    } finally {
+      dataLayer.reset()
+    }
+  })
 })
 
 describe('DataLayer realtime merge arbitration', () => {

@@ -1242,6 +1242,25 @@ win_rate: 0.52
 {"ok":false,"error":{"code":"backtest_run_not_found","runId":"bt_missing"}}
 ```
 
+### `run-longtest-baselines`
+
+一键复跑长测固定基线集合。该命令只编排现有 RankTrend 回测服务，不改变默认参数、不启动优化、不写回任何候选参数。
+
+```powershell
+.\.venv\Scripts\python.exe -m backend.cli run-longtest-baselines `
+  --checkpoint-id checkpoint_2026-05-21_initial
+```
+
+固定执行三条基线：
+
+| Label | snapshot_type | execution_mode | max_holding_bars | 用途 |
+| --- | --- | --- | ---: | --- |
+| `H1_half_hour_current_bar` | `half_hour` | `current_bar` | `40` | 页面兼容/乐观上限 |
+| `H2_half_hour_next_bar` | `half_hour` | `next_bar` | `40` | 正式保守验收主线 |
+| `Q1_quarter_hour_next_bar` | `quarter_hour` | `next_bar` | `80` | 研究压力测试 |
+
+默认把 checkpoint 摘要以 JSONL 追加到 `data/reports/long_test_runs.jsonl`。每行保留 `checkpointId`、`runId`、`datasetId`、`snapshotType`、`strategyName`、`strategyVersion`、`configHash`、`randomSeed`、核心收益/回撤/交易指标、质量等级和资金流缺失统计。可用 `--output` 指定单个输出文件，或用 `--dry-run` 只查看将要执行的三条 payload。
+
 ### `optimize-ranktrend`
 
 运行参数优化。

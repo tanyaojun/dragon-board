@@ -14,7 +14,14 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy import func, select
 
 from backend.analysis.ranktrend import RankTrendConfig, analyze_cycle, analyze_momentum_signals, analyze_risk, analyze_technical
-from backend.cli import build_parser, build_ranktrend_payload, cmd_migrate_snapshots, cmd_verify_themes
+from backend.cli import (
+    build_longtest_baseline_payloads,
+    build_parser,
+    build_ranktrend_payload,
+    cmd_migrate_snapshots,
+    cmd_verify_themes,
+    summarize_longtest_baseline,
+)
 from backend.core.backtest import TradeSimulator
 from backend.data.database import ResearchSessionLocal, SessionLocal, init_db
 from backend.data.backup_sync import BackupSyncService
@@ -2436,6 +2443,106 @@ def test_cli_run_ranktrend_exposes_ui_backtest_parameters() -> None:
         "intrabarAmbiguity": "take_first",
         "useThemeFactorForExecution": True,
     }
+
+
+def test_cli_longtest_baselines_use_fixed_research_contract() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "run-longtest-baselines",
+            "--dataset-id",
+            "dragonboard_live",
+            "--checkpoint-id",
+            "checkpoint_test",
+            "--dry-run",
+        ]
+    )
+
+    specs = build_longtest_baseline_payloads(args)
+
+    assert [item["label"] for item in specs] == [
+        "H1_half_hour_current_bar",
+        "H2_half_hour_next_bar",
+        "Q1_quarter_hour_next_bar",
+    ]
+    assert [item["payload"]["snapshot_type"] for item in specs] == [
+        "half_hour",
+        "half_hour",
+        "quarter_hour",
+    ]
+    assert [item["payload"]["tradeConfig"]["executionMode"] for item in specs] == [
+        "current_bar",
+        "next_bar",
+        "next_bar",
+    ]
+    assert [item["payload"]["maxHoldingBars"] for item in specs] == [40, 40, 80]
+    assert all(item["payload"]["random_seed"] == 20260430 for item in specs)
+    assert all(item["payload"]["strategy_name"] == "rank_trend_candidate" for item in specs)
+
+
+def test_longtest_baseline_summary_extracts_metrics_and_quality() -> None:
+    spec = {
+        "label": "H2_half_hour_next_bar",
+        "purpose": "formal conservative baseline",
+        "payload": {
+            "dataset_id": "dragonboard_live",
+            "snapshot_type": "half_hour",
+            "strategy_name": "rank_trend_candidate",
+            "random_seed": 20260430,
+            "maxHoldingBars": 40,
+            "targetHoldingDays": 5,
+            "tradeConfig": {"executionMode": "next_bar"},
+        },
+    }
+    run = {
+        "runId": "bt_test",
+        "datasetId": "dragonboard_live",
+        "snapshotType": "half_hour",
+        "strategyName": "rank_trend_candidate",
+        "configHash": "abc",
+        "randomSeed": 20260430,
+        "totalReturn": -0.01,
+        "realizedReturn": -0.02,
+        "maxDrawdown": -0.05,
+        "sharpe": -1.2,
+        "winRate": 0.4,
+        "tradeCount": 10,
+        "openPositionCount": 1,
+        "dataQuality": {
+            "severity": "warn",
+            "researchGrade": "degraded",
+            "sampleOkShare": 0.5,
+            "sampleDegradedShare": 0.3,
+            "sampleInsufficientShare": 0.2,
+            "qualityGate": {
+                "stats": {
+                    "missingMoneyFlowSourceCount": 12,
+                    "formalMoneyFlowCount": 1,
+                    "estimatedL1MoneyFlowCount": 2,
+                }
+            },
+        },
+        "tradeSimulation": {
+            "matchingDiagnostics": {
+                "blockedByLimit": 3,
+                "nextBarEntries": 7,
+                "nextBarExits": 8,
+                "buyFilled": 7,
+                "sellFilled": 8,
+            }
+        },
+    }
+
+    summary = summarize_longtest_baseline(spec, run)
+
+    assert summary["label"] == "H2_half_hour_next_bar"
+    assert summary["runId"] == "bt_test"
+    assert summary["executionMode"] == "next_bar"
+    assert summary["maxHoldingBars"] == 40
+    assert summary["totalReturn"] == -0.01
+    assert summary["researchGrade"] == "degraded"
+    assert summary["missingMoneyFlowSourceCount"] == 12
+    assert summary["blockedByLimit"] == 3
 
 
 def test_cli_exposes_sync_and_migration_commands(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

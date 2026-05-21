@@ -667,12 +667,16 @@ class DataLayer {
       this.markVolumeRatioStaleIfVolumeChanged(stock, previousVolume)
       stock.turnover = Number(change.turnover ?? change.amount ?? stock.turnover) || 0
       stock.turnoverRate = Number(change.turnoverRate ?? stock.turnoverRate) || 0
+      stock.pe = this.pickQuoteNumber(change.pe, stock.pe)
+      stock.pb = this.pickQuoteNumber(change.pb, stock.pb)
+      stock.totalMV = this.pickPositiveQuoteNumber(change.totalMV, stock.totalMV)
+      stock.cirMV = this.pickPositiveQuoteNumber(change.cirMV, stock.cirMV)
       const shouldApplyMoneyFlow = shouldApplyMoneyFlowUpdate(stock, change)
       if (shouldApplyMoneyFlow) {
-        stock.zlje = this.pickQuoteNumber(change.zlje, stock.zlje)
-        stock.zljzb = this.pickQuoteNumber(change.zljzb, stock.zljzb)
-        stock.cddje = this.pickQuoteNumber(change.cddje, stock.cddje)
-        stock.cddjzb = this.pickQuoteNumber(change.cddjzb, stock.cddjzb)
+        stock.zlje = this.pickMoneyFlowNumber(change.zlje, stock.zlje)
+        stock.zljzb = this.pickMoneyFlowNumber(change.zljzb, stock.zljzb)
+        stock.cddje = this.pickMoneyFlowNumber(change.cddje, stock.cddje)
+        stock.cddjzb = this.pickMoneyFlowNumber(change.cddjzb, stock.cddjzb)
       }
       stock.tdxBuyVolume = this.pickQuoteNumber(change.tdxBuyVolume, stock.tdxBuyVolume)
       stock.tdxSellVolume = this.pickQuoteNumber(change.tdxSellVolume, stock.tdxSellVolume)
@@ -724,6 +728,25 @@ class DataLayer {
 
     if (Number.isFinite(nextNumber) && nextNumber !== 0) return nextNumber
     if (Number.isFinite(currentNumber)) return currentNumber
+    if (Number.isFinite(nextNumber)) return nextNumber
+    return 0
+  }
+
+  private pickMoneyFlowNumber(nextValue: unknown, currentValue: unknown): number {
+    const nextNumber = Number(nextValue)
+    const currentNumber = Number(currentValue)
+
+    if (Number.isFinite(nextNumber)) return nextNumber
+    if (Number.isFinite(currentNumber)) return currentNumber
+    return 0
+  }
+
+  private pickPositiveQuoteNumber(nextValue: unknown, currentValue: unknown): number {
+    const nextNumber = Number(nextValue)
+    const currentNumber = Number(currentValue)
+
+    if (Number.isFinite(nextNumber) && nextNumber > 0) return nextNumber
+    if (Number.isFinite(currentNumber) && currentNumber > 0) return currentNumber
     if (Number.isFinite(nextNumber)) return nextNumber
     return 0
   }
@@ -1165,14 +1188,18 @@ class DataLayer {
       this.markVolumeRatioStaleIfVolumeChanged(next, previousVolume)
       next.turnover = this.pickQuoteNumber(quote.turnover ?? quote.amount, next.turnover)
       next.turnoverRate = this.pickQuoteNumber(quote.turnoverRate, next.turnoverRate)
+      next.pe = this.pickQuoteNumber(quote.pe, next.pe)
+      next.pb = this.pickQuoteNumber(quote.pb, next.pb)
+      next.totalMV = this.pickPositiveQuoteNumber(quote.totalMV, next.totalMV)
+      next.cirMV = this.pickPositiveQuoteNumber(quote.cirMV, next.cirMV)
       next.speed = this.pickOptionalQuoteNumber(quote.speed, next.speed)
 
       const shouldApplyMoneyFlow = shouldApplyMoneyFlowUpdate(next, quote)
       if (shouldApplyMoneyFlow) {
-        next.zlje = this.pickQuoteNumber(quote.zlje, next.zlje)
-        next.zljzb = this.pickQuoteNumber(quote.zljzb, next.zljzb)
-        next.cddje = this.pickQuoteNumber(quote.cddje, next.cddje)
-        next.cddjzb = this.pickQuoteNumber(quote.cddjzb, next.cddjzb)
+        next.zlje = this.pickMoneyFlowNumber(quote.zlje, next.zlje)
+        next.zljzb = this.pickMoneyFlowNumber(quote.zljzb, next.zljzb)
+        next.cddje = this.pickMoneyFlowNumber(quote.cddje, next.cddje)
+        next.cddjzb = this.pickMoneyFlowNumber(quote.cddjzb, next.cddjzb)
       }
       next.tdxBuyVolume = this.pickOptionalQuoteNumber(quote.tdxBuyVolume, next.tdxBuyVolume)
       next.tdxSellVolume = this.pickOptionalQuoteNumber(quote.tdxSellVolume, next.tdxSellVolume)

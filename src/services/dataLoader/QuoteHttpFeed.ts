@@ -110,6 +110,7 @@ export class QuoteHttpFeed {
       const response = await this.api.getQuotes(batch, {
         source: 'eastmoney',
         force,
+        refresh: force ? '1' : undefined,
         timeout: 8000,
         retries: 2,
       })

@@ -560,6 +560,160 @@ def build_ranktrend_payload(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+LONGTEST_BASELINES = (
+    {
+        "label": "H1_half_hour_current_bar",
+        "snapshot_type": "half_hour",
+        "execution_mode": "current_bar",
+        "max_holding_bars": 40,
+        "purpose": "page-compatible optimistic baseline",
+    },
+    {
+        "label": "H2_half_hour_next_bar",
+        "snapshot_type": "half_hour",
+        "execution_mode": "next_bar",
+        "max_holding_bars": 40,
+        "purpose": "formal conservative baseline",
+    },
+    {
+        "label": "Q1_quarter_hour_next_bar",
+        "snapshot_type": "quarter_hour",
+        "execution_mode": "next_bar",
+        "max_holding_bars": 80,
+        "purpose": "research pressure-test baseline",
+    },
+)
+
+
+def build_longtest_baseline_payloads(args: argparse.Namespace) -> list[dict[str, Any]]:
+    payloads: list[dict[str, Any]] = []
+    for baseline in LONGTEST_BASELINES:
+        ranktrend_args = argparse.Namespace(
+            dataset_id=args.dataset_id,
+            snapshot_type=baseline["snapshot_type"],
+            start_date=args.start_date,
+            end_date=args.end_date,
+            strategy_name=args.strategy_name,
+            seed=args.seed,
+            no_trade_simulation=False,
+            initial_cash=args.initial_cash,
+            max_positions=args.max_positions,
+            position_size=args.position_size,
+            target_holding_days=args.target_holding_days,
+            max_holding_bars=baseline["max_holding_bars"],
+            take_profit_pct=args.take_profit_pct,
+            stop_loss_pct=args.stop_loss_pct,
+            fee_rate=args.fee_rate,
+            stamp_tax_rate=args.stamp_tax_rate,
+            slippage_rate=args.slippage_rate,
+            no_t1=False,
+            macd_fast=args.macd_fast,
+            macd_slow=args.macd_slow,
+            macd_signal=args.macd_signal,
+            momentum_periods=args.momentum_periods,
+            horizons=args.horizons,
+            execution_mode=baseline["execution_mode"],
+            no_order_book_price=False,
+            no_limit_status=False,
+            no_volume_limit=False,
+            no_order_book_queue=False,
+            no_partial_fills=False,
+            volume_participation_rate=args.volume_participation_rate,
+            order_book_participation_rate=args.order_book_participation_rate,
+            no_intrabar_stops=False,
+            intrabar_ambiguity=args.intrabar_ambiguity,
+            use_theme_factor_for_execution=False,
+        )
+        payloads.append({
+            "label": baseline["label"],
+            "purpose": baseline["purpose"],
+            "payload": build_ranktrend_payload(ranktrend_args),
+        })
+    return payloads
+
+
+def summarize_longtest_baseline(spec: dict[str, Any], run: dict[str, Any]) -> dict[str, Any]:
+    payload = spec.get("payload") if isinstance(spec.get("payload"), dict) else {}
+    data_quality = run.get("dataQuality") if isinstance(run.get("dataQuality"), dict) else {}
+    quality_gate = data_quality.get("qualityGate") if isinstance(data_quality.get("qualityGate"), dict) else {}
+    quality_stats = quality_gate.get("stats") if isinstance(quality_gate.get("stats"), dict) else {}
+    simulation = run.get("tradeSimulation") if isinstance(run.get("tradeSimulation"), dict) else {}
+    matching = simulation.get("matchingDiagnostics") if isinstance(simulation.get("matchingDiagnostics"), dict) else {}
+    trade_config = payload.get("tradeConfig") if isinstance(payload.get("tradeConfig"), dict) else {}
+    return {
+        "label": spec.get("label"),
+        "purpose": spec.get("purpose"),
+        "runId": run.get("runId") or run.get("id"),
+        "datasetId": run.get("datasetId") or payload.get("dataset_id"),
+        "snapshotType": run.get("snapshotType") or payload.get("snapshot_type"),
+        "strategyName": run.get("strategyName") or payload.get("strategy_name"),
+        "strategyVersion": run.get("strategyVersion") or "0.1.0",
+        "configHash": run.get("configHash"),
+        "randomSeed": run.get("randomSeed") or payload.get("random_seed"),
+        "executionMode": trade_config.get("executionMode"),
+        "maxHoldingBars": payload.get("maxHoldingBars"),
+        "targetHoldingDays": payload.get("targetHoldingDays"),
+        "totalReturn": run.get("totalReturn"),
+        "realizedReturn": run.get("realizedReturn"),
+        "maxDrawdown": run.get("maxDrawdown"),
+        "sharpe": run.get("sharpe"),
+        "winRate": run.get("winRate"),
+        "tradeCount": run.get("tradeCount"),
+        "openPositionCount": run.get("openPositionCount"),
+        "qualitySeverity": data_quality.get("severity"),
+        "researchGrade": data_quality.get("researchGrade"),
+        "sampleOkShare": data_quality.get("sampleOkShare"),
+        "sampleDegradedShare": data_quality.get("sampleDegradedShare"),
+        "sampleInsufficientShare": data_quality.get("sampleInsufficientShare"),
+        "missingMoneyFlowSourceCount": quality_stats.get("missingMoneyFlowSourceCount"),
+        "formalMoneyFlowCount": quality_stats.get("formalMoneyFlowCount"),
+        "estimatedL1MoneyFlowCount": quality_stats.get("estimatedL1MoneyFlowCount"),
+        "blockedByLimit": matching.get("blockedByLimit"),
+        "nextBarEntries": matching.get("nextBarEntries"),
+        "nextBarExits": matching.get("nextBarExits"),
+        "buyFilled": matching.get("buyFilled"),
+        "sellFilled": matching.get("sellFilled"),
+    }
+
+
+def cmd_run_longtest_baselines(args: argparse.Namespace) -> None:
+    checkpoint_id = args.checkpoint_id or datetime.now(timezone.utc).strftime("longtest_%Y%m%dT%H%M%SZ")
+    specs = build_longtest_baseline_payloads(args)
+    created_at = datetime.now(timezone.utc).isoformat()
+    baselines: list[dict[str, Any]] = []
+
+    if args.dry_run:
+        print_json({
+            "ok": True,
+            "dryRun": True,
+            "checkpointId": checkpoint_id,
+            "createdAt": created_at,
+            "baselines": specs,
+        })
+        return
+
+    with runtime_session() as session:
+        service = BacktestService(session)
+        for spec in specs:
+            run = service.run_ranktrend(spec["payload"])
+            baselines.append(summarize_longtest_baseline(spec, run))
+
+    result = {
+        "ok": True,
+        "checkpointId": checkpoint_id,
+        "createdAt": created_at,
+        "datasetId": args.dataset_id,
+        "strategyName": args.strategy_name,
+        "randomSeed": args.seed,
+        "baselines": baselines,
+    }
+    output = Path(args.output) if args.output else get_settings().reports_dir / "long_test_runs.jsonl"
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with output.open("a", encoding="utf-8") as file:
+        file.write(json.dumps(result, ensure_ascii=False, separators=(",", ":")) + "\n")
+    print_json({**result, "output": str(output)})
+
+
 def cmd_run_ranktrend(args: argparse.Namespace) -> None:
     with runtime_session() as session:
         payload = build_ranktrend_payload(args)
@@ -946,6 +1100,34 @@ def build_parser() -> argparse.ArgumentParser:
     run_cmd.add_argument("--intrabar-ambiguity", choices=["stop_first", "take_first"], default="stop_first")
     run_cmd.add_argument("--use-theme-factor-for-execution", action="store_true")
     run_cmd.set_defaults(func=cmd_run_ranktrend)
+
+    longtest_cmd = sub.add_parser("run-longtest-baselines", help="Run fixed long-test RankTrend baseline set")
+    longtest_cmd.add_argument("--dataset-id", default="dragonboard_live")
+    longtest_cmd.add_argument("--start-date", default=None)
+    longtest_cmd.add_argument("--end-date", default=None)
+    longtest_cmd.add_argument("--strategy-name", default="rank_trend_candidate")
+    longtest_cmd.add_argument("--seed", type=int, default=20260430)
+    longtest_cmd.add_argument("--initial-cash", type=float, default=1000000)
+    longtest_cmd.add_argument("--max-positions", type=int, default=5)
+    longtest_cmd.add_argument("--position-size", type=float, default=0.2)
+    longtest_cmd.add_argument("--target-holding-days", type=float, default=5)
+    longtest_cmd.add_argument("--take-profit-pct", type=float, default=0.12)
+    longtest_cmd.add_argument("--stop-loss-pct", type=float, default=0.06)
+    longtest_cmd.add_argument("--fee-rate", type=float, default=0.0003)
+    longtest_cmd.add_argument("--stamp-tax-rate", type=float, default=0.0005)
+    longtest_cmd.add_argument("--slippage-rate", type=float, default=0.001)
+    longtest_cmd.add_argument("--macd-fast", type=int, default=21)
+    longtest_cmd.add_argument("--macd-slow", type=int, default=34)
+    longtest_cmd.add_argument("--macd-signal", type=int, default=13)
+    longtest_cmd.add_argument("--momentum-periods", type=parse_int_list, default=DEFAULT_MOMENTUM_PERIODS)
+    longtest_cmd.add_argument("--horizons", type=parse_int_list, default=DEFAULT_HORIZONS)
+    longtest_cmd.add_argument("--volume-participation-rate", type=float, default=0.05)
+    longtest_cmd.add_argument("--order-book-participation-rate", type=float, default=0.3)
+    longtest_cmd.add_argument("--intrabar-ambiguity", choices=["stop_first", "take_first"], default="stop_first")
+    longtest_cmd.add_argument("--checkpoint-id", default=None)
+    longtest_cmd.add_argument("--output", default=None)
+    longtest_cmd.add_argument("--dry-run", action="store_true")
+    longtest_cmd.set_defaults(func=cmd_run_longtest_baselines)
 
     theme_run_cmd = sub.add_parser("run-theme-trend", help="Run ThemeTrend backtest")
     theme_run_cmd.add_argument("--dataset-id", required=True)

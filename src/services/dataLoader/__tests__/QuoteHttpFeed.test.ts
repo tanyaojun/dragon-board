@@ -116,7 +116,7 @@ describe('QuoteHttpFeed', () => {
 
     expect(getQuotes).toHaveBeenCalledWith(
       ['000001'],
-      expect.objectContaining({ source: 'eastmoney', force: true }),
+      expect.objectContaining({ source: 'eastmoney', force: true, refresh: '1' }),
     )
     expect(result.get('000001')).toMatchObject({
       source: 'eastmoney',

@@ -91,6 +91,9 @@ export class QuoteService {
         ) {
           enrichmentCodes.add(code)
         }
+        if (!this.hasQuoteSupplementData(mergedRealtimeQuote)) {
+          enrichmentCodes.add(code)
+        }
         if (!this.hasFundFlowData(mergedRealtimeQuote)) {
           enrichmentCodes.add(code)
         }
@@ -279,13 +282,7 @@ export class QuoteService {
       fullResult.value.forEach((fullQuote, code) => {
         const existing = httpResult.get(code)
         if (existing) {
-          httpResult.set(code, {
-            ...existing,
-            ...fullQuote,
-            sources: [...existing.sources, fullQuote.source],
-            confidence: 95,
-            timestamp: this.now(),
-          })
+          httpResult.set(code, mergeHttpQuoteSources(existing, fullQuote, this.now()))
         } else {
           httpResult.set(code, {
             ...fullQuote,
@@ -319,29 +316,29 @@ export class QuoteService {
       volume: Number(quote.volume ?? stock?.volume ?? existingQuote?.volume) || 0,
       turnover: Number(quote.amount ?? stock?.turnover ?? existingQuote?.turnover) || 0,
       turnoverRate: pickPositiveNumber(quote.turnoverRate, stock?.turnoverRate, existingQuote?.turnoverRate),
-      pe: Number(stock?.pe ?? existingQuote?.pe) || 0,
-      totalMV: Number(stock?.totalMV ?? existingQuote?.totalMV) || 0,
-      cirMV: Number(stock?.cirMV ?? existingQuote?.cirMV) || 0,
-      pb: Number(stock?.pb ?? existingQuote?.pb) || 0,
+      pe: pickNonZeroNumber(stock?.pe, existingQuote?.pe),
+      totalMV: pickPositiveNumber(stock?.totalMV, existingQuote?.totalMV),
+      cirMV: pickPositiveNumber(stock?.cirMV, existingQuote?.cirMV),
+      pb: pickPositiveNumber(stock?.pb, existingQuote?.pb),
       zlje: hasRealtimeL2MoneyFlow
         ? pickFundFlow(quote.zlje, stock?.zlje)
         : shouldUseEstimatedMoneyFlow
-          ? pickNonZeroNumber(estimatedMoneyFlow?.zlje, stock?.zlje, existingQuote?.zlje)
+          ? pickMoneyFlowNumber(estimatedMoneyFlow?.zlje, stock?.zlje, existingQuote?.zlje)
           : pickNonZeroNumber(moneyFlowBase?.zlje, stock?.zlje, existingQuote?.zlje),
       zljzb: hasRealtimeL2MoneyFlow
         ? pickFundFlow(quote.zljzb, stock?.zljzb)
         : shouldUseEstimatedMoneyFlow
-          ? pickNonZeroNumber(estimatedMoneyFlow?.zljzb, stock?.zljzb, existingQuote?.zljzb)
+          ? pickMoneyFlowNumber(estimatedMoneyFlow?.zljzb, stock?.zljzb, existingQuote?.zljzb)
           : pickNonZeroNumber(moneyFlowBase?.zljzb, stock?.zljzb, existingQuote?.zljzb),
       cddje: hasRealtimeL2MoneyFlow
         ? pickFundFlow(quote.cddje, stock?.cddje)
         : shouldUseEstimatedMoneyFlow
-          ? pickNonZeroNumber(estimatedMoneyFlow?.cddje, stock?.cddje, existingQuote?.cddje)
+          ? pickMoneyFlowNumber(estimatedMoneyFlow?.cddje, stock?.cddje, existingQuote?.cddje)
           : pickNonZeroNumber(moneyFlowBase?.cddje, stock?.cddje, existingQuote?.cddje),
       cddjzb: hasRealtimeL2MoneyFlow
         ? pickFundFlow(quote.cddjzb, stock?.cddjzb)
         : shouldUseEstimatedMoneyFlow
-          ? pickNonZeroNumber(estimatedMoneyFlow?.cddjzb, stock?.cddjzb, existingQuote?.cddjzb)
+          ? pickMoneyFlowNumber(estimatedMoneyFlow?.cddjzb, stock?.cddjzb, existingQuote?.cddjzb)
           : pickNonZeroNumber(moneyFlowBase?.cddjzb, stock?.cddjzb, existingQuote?.cddjzb),
       moneyFlowSource: shouldUseEstimatedMoneyFlow
         ? estimatedMoneyFlow?.moneyFlowSource
@@ -367,21 +364,35 @@ export class QuoteService {
 
   private hasFundFlowData(quote: Partial<MergedQuoteData> | null | undefined): boolean {
     if (!quote) return false
+    if (quote.moneyFlowEstimated === true || quote.capitalFlowSource === 'estimated_l1') return false
     return ['zlje', 'zljzb', 'cddje', 'cddjzb'].some((key) => {
       const value = Number((quote as unknown as Record<string, unknown>)[key])
       return Number.isFinite(value) && value !== 0
     })
   }
 
+  private hasQuoteSupplementData(quote: Partial<MergedQuoteData> | null | undefined): boolean {
+    if (!quote) return false
+    return (
+      Number(quote.turnoverRate) > 0 &&
+      Number(quote.totalMV) > 0 &&
+      Number(quote.cirMV) > 0 &&
+      Number(quote.pb) > 0 &&
+      Number.isFinite(Number(quote.pe)) &&
+      Number(quote.pe) !== 0
+    )
+  }
+
   private mergeHttpIntoRealtimeQuote(
     realtimeQuote: MergedQuoteData,
     httpQuote: MergedQuoteData,
   ): MergedQuoteData {
+    const preferHttpSupplement = this.hasQuoteSupplementData(httpQuote)
     const preferHttpFundFlow =
-      realtimeQuote.moneyFlowEstimated === true &&
-      httpQuote.moneyFlowEstimated !== true &&
       httpQuote.moneyFlowSource === 'eastmoney' &&
-      this.hasFundFlowData(httpQuote)
+      httpQuote.moneyFlowEstimated !== true &&
+      this.hasFundFlowData(httpQuote) &&
+      shouldApplyMoneyFlowUpdate(realtimeQuote, httpQuote)
 
     return {
       ...httpQuote,
@@ -390,15 +401,25 @@ export class QuoteService {
       change: pickFinite(realtimeQuote.change, httpQuote.change),
       volume: pickFinite(realtimeQuote.volume, httpQuote.volume, true),
       turnover: pickFinite(realtimeQuote.turnover, httpQuote.turnover, true),
-      turnoverRate: pickFinite(realtimeQuote.turnoverRate, httpQuote.turnoverRate, true),
-      pe: pickFinite(realtimeQuote.pe, httpQuote.pe),
-      totalMV: pickFinite(realtimeQuote.totalMV, httpQuote.totalMV, true),
-      cirMV: pickFinite(realtimeQuote.cirMV, httpQuote.cirMV, true),
-      pb: pickFinite(realtimeQuote.pb, httpQuote.pb),
-      zlje: preferHttpFundFlow ? pickFundFlow(httpQuote.zlje, realtimeQuote.zlje) : pickFundFlow(realtimeQuote.zlje, httpQuote.zlje),
-      zljzb: preferHttpFundFlow ? pickFundFlow(httpQuote.zljzb, realtimeQuote.zljzb) : pickFundFlow(realtimeQuote.zljzb, httpQuote.zljzb),
-      cddje: preferHttpFundFlow ? pickFundFlow(httpQuote.cddje, realtimeQuote.cddje) : pickFundFlow(realtimeQuote.cddje, httpQuote.cddje),
-      cddjzb: preferHttpFundFlow ? pickFundFlow(httpQuote.cddjzb, realtimeQuote.cddjzb) : pickFundFlow(realtimeQuote.cddjzb, httpQuote.cddjzb),
+      turnoverRate: preferHttpSupplement
+        ? pickFinite(httpQuote.turnoverRate, realtimeQuote.turnoverRate, true)
+        : pickFinite(realtimeQuote.turnoverRate, httpQuote.turnoverRate, true),
+      pe: preferHttpSupplement
+        ? pickNonZeroNumber(httpQuote.pe, realtimeQuote.pe)
+        : pickNonZeroNumber(realtimeQuote.pe, httpQuote.pe),
+      totalMV: preferHttpSupplement
+        ? pickFinite(httpQuote.totalMV, realtimeQuote.totalMV, true)
+        : pickFinite(realtimeQuote.totalMV, httpQuote.totalMV, true),
+      cirMV: preferHttpSupplement
+        ? pickFinite(httpQuote.cirMV, realtimeQuote.cirMV, true)
+        : pickFinite(realtimeQuote.cirMV, httpQuote.cirMV, true),
+      pb: preferHttpSupplement
+        ? pickFinite(httpQuote.pb, realtimeQuote.pb, true)
+        : pickFinite(realtimeQuote.pb, httpQuote.pb, true),
+      zlje: preferHttpFundFlow ? pickMoneyFlowNumber(httpQuote.zlje, realtimeQuote.zlje) : pickFundFlow(realtimeQuote.zlje, httpQuote.zlje),
+      zljzb: preferHttpFundFlow ? pickMoneyFlowNumber(httpQuote.zljzb, realtimeQuote.zljzb) : pickFundFlow(realtimeQuote.zljzb, httpQuote.zljzb),
+      cddje: preferHttpFundFlow ? pickMoneyFlowNumber(httpQuote.cddje, realtimeQuote.cddje) : pickFundFlow(realtimeQuote.cddje, httpQuote.cddje),
+      cddjzb: preferHttpFundFlow ? pickMoneyFlowNumber(httpQuote.cddjzb, realtimeQuote.cddjzb) : pickFundFlow(realtimeQuote.cddjzb, httpQuote.cddjzb),
       moneyFlowSource: preferHttpFundFlow ? httpQuote.moneyFlowSource : realtimeQuote.moneyFlowSource || httpQuote.moneyFlowSource,
       moneyFlowEstimated: preferHttpFundFlow ? httpQuote.moneyFlowEstimated : realtimeQuote.moneyFlowEstimated ?? httpQuote.moneyFlowEstimated,
       capitalFlowSource: preferHttpFundFlow
@@ -430,6 +451,60 @@ function pickNonZeroNumber(...values: unknown[]): number {
   }
 
   return 0
+}
+
+function pickMoneyFlowNumber(...values: unknown[]): number {
+  for (const value of values) {
+    const number = Number(value)
+    if (Number.isFinite(number)) return number
+  }
+
+  return 0
+}
+
+function mergeHttpQuoteSources(
+  existing: MergedQuoteData,
+  fullQuote: MergedQuoteData & { source?: string },
+  timestamp: number,
+): MergedQuoteData {
+  const useFullQuoteMoneyFlow =
+    fullQuote.moneyFlowEstimated === false &&
+    Boolean(fullQuote.moneyFlowSource) &&
+    ['zlje', 'zljzb', 'cddje', 'cddjzb'].some((key) => {
+      const value = Number((fullQuote as unknown as Record<string, unknown>)[key])
+      return Number.isFinite(value) && value !== 0
+    })
+
+  return {
+    ...existing,
+    price: pickFinite(fullQuote.price, existing.price, true),
+    change: pickFinite(fullQuote.change, existing.change),
+    volume: pickFinite(fullQuote.volume, existing.volume, true),
+    turnover: pickFinite(fullQuote.turnover, existing.turnover, true),
+    turnoverRate: pickFinite(fullQuote.turnoverRate, existing.turnoverRate, true),
+    pe: pickNonZeroNumber(fullQuote.pe, existing.pe),
+    totalMV: pickFinite(fullQuote.totalMV, existing.totalMV, true),
+    cirMV: pickFinite(fullQuote.cirMV, existing.cirMV, true),
+    pb: pickFinite(fullQuote.pb, existing.pb, true),
+    zlje: useFullQuoteMoneyFlow ? pickMoneyFlowNumber(fullQuote.zlje) : existing.zlje,
+    zljzb: useFullQuoteMoneyFlow ? pickMoneyFlowNumber(fullQuote.zljzb) : existing.zljzb,
+    cddje: useFullQuoteMoneyFlow ? pickMoneyFlowNumber(fullQuote.cddje) : existing.cddje,
+    cddjzb: useFullQuoteMoneyFlow ? pickMoneyFlowNumber(fullQuote.cddjzb) : existing.cddjzb,
+    moneyFlowSource: useFullQuoteMoneyFlow ? fullQuote.moneyFlowSource : existing.moneyFlowSource,
+    moneyFlowEstimated: useFullQuoteMoneyFlow
+      ? fullQuote.moneyFlowEstimated
+      : existing.moneyFlowEstimated,
+    capitalFlowSource: useFullQuoteMoneyFlow
+      ? fullQuote.capitalFlowSource
+      : existing.capitalFlowSource,
+    capitalFlowConfidence: useFullQuoteMoneyFlow
+      ? fullQuote.capitalFlowConfidence
+      : existing.capitalFlowConfidence,
+    name: fullQuote.name || existing.name,
+    sources: [...existing.sources, fullQuote.source || fullQuote.sources?.[0] || 'eastmoney'],
+    confidence: 95,
+    timestamp,
+  }
 }
 
 function createHttpQuoteProgressReporter(

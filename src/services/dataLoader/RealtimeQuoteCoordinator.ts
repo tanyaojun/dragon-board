@@ -3,7 +3,7 @@ import { EventManager } from '@/utils/eventManager'
 import { dataLayer } from '../DataLayer'
 import { webSocketService } from '../websocket'
 import { toLocalTradingDate } from '../snapshot/identity'
-import { estimateTdxMoneyFlow, summarizeMoneyFlowTicks } from './MoneyFlowEstimator'
+import { summarizeMoneyFlowTicks } from './MoneyFlowEstimator'
 import { REALTIME_FLUSH_DELAY_MS } from './constants'
 import type { IntradayMoneyFlowStats } from './types'
 
@@ -141,7 +141,6 @@ export class RealtimeQuoteCoordinator {
             item.moneyFlowEstimated === false &&
             item.moneyFlowSource === 'qmt_l2' &&
             (item.capitalFlowSource === 'broker_l2' || item.capitalFlowSource === 'official_l2')
-          const estimatedMoneyFlow = hasRealtimeL2MoneyFlow ? null : estimateTdxMoneyFlow(item.code, item)
           return {
             code: item.code,
             name: item.name,
@@ -151,14 +150,14 @@ export class RealtimeQuoteCoordinator {
             volume: item.volume,
             turnover: item.amount,
             turnoverRate: item.turnoverRate,
-            zlje: hasRealtimeL2MoneyFlow ? item.zlje : estimatedMoneyFlow?.zlje,
-            zljzb: hasRealtimeL2MoneyFlow ? item.zljzb : estimatedMoneyFlow?.zljzb,
-            cddje: hasRealtimeL2MoneyFlow ? item.cddje : estimatedMoneyFlow?.cddje,
-            cddjzb: hasRealtimeL2MoneyFlow ? item.cddjzb : estimatedMoneyFlow?.cddjzb,
-            moneyFlowSource: hasRealtimeL2MoneyFlow ? item.moneyFlowSource : estimatedMoneyFlow?.moneyFlowSource,
-            moneyFlowEstimated: hasRealtimeL2MoneyFlow ? false : estimatedMoneyFlow?.moneyFlowEstimated,
-            capitalFlowSource: hasRealtimeL2MoneyFlow ? item.capitalFlowSource : estimatedMoneyFlow ? 'estimated_l1' : undefined,
-            capitalFlowConfidence: hasRealtimeL2MoneyFlow ? item.capitalFlowConfidence : estimatedMoneyFlow ? 'low' : undefined,
+            zlje: hasRealtimeL2MoneyFlow ? item.zlje : undefined,
+            zljzb: hasRealtimeL2MoneyFlow ? item.zljzb : undefined,
+            cddje: hasRealtimeL2MoneyFlow ? item.cddje : undefined,
+            cddjzb: hasRealtimeL2MoneyFlow ? item.cddjzb : undefined,
+            moneyFlowSource: hasRealtimeL2MoneyFlow ? item.moneyFlowSource : undefined,
+            moneyFlowEstimated: hasRealtimeL2MoneyFlow ? false : undefined,
+            capitalFlowSource: hasRealtimeL2MoneyFlow ? item.capitalFlowSource : undefined,
+            capitalFlowConfidence: hasRealtimeL2MoneyFlow ? item.capitalFlowConfidence : undefined,
             tdxBuyVolume: item.tdxBuyVolume,
             tdxSellVolume: item.tdxSellVolume,
             tdxCurrentVolume: item.tdxCurrentVolume,

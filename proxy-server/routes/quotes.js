@@ -26,6 +26,83 @@ const EASTMONEY_HIST_FLOW_RETRIES = 2
 const EASTMONEY_ULIST_HIST_FLOW_LIMIT = 20
 const EASTMONEY_FUND_FLOW_FIELDS = new Set(['f62', 'f66', 'f69', 'f184'])
 
+function hasProxyConfig(proxyConfig = {}) {
+  return Boolean(proxyConfig && typeof proxyConfig === 'object' && proxyConfig.proxy)
+}
+
+async function getEastmoneyWithProxyFallback(
+  plainClient,
+  url,
+  requestOptions = {},
+  eastmoneyProxyConfig = {},
+  fetchImpl = globalThis.fetch,
+) {
+  const fetchDirect = () => fetchEastmoneyJson(fetchImpl, url, requestOptions)
+
+  if (!hasProxyConfig(eastmoneyProxyConfig)) {
+    try {
+      return await plainClient.get(url, requestOptions)
+    } catch (error) {
+      console.warn(
+        '[东财行情] axios 直连失败，尝试 native fetch:',
+        error?.code || error?.message || 'unknown',
+      )
+      return fetchDirect()
+    }
+  }
+
+  try {
+    return await plainClient.get(url, {
+      ...requestOptions,
+      ...eastmoneyProxyConfig,
+    })
+  } catch (error) {
+    console.warn(
+      '[东财行情] 代理请求失败，尝试直连:',
+      error?.code || error?.message || 'unknown',
+    )
+    try {
+      return await plainClient.get(url, requestOptions)
+    } catch (directError) {
+      console.warn(
+        '[东财行情] axios 直连失败，尝试 native fetch:',
+        directError?.code || directError?.message || 'unknown',
+      )
+      return fetchDirect()
+    }
+  }
+}
+
+async function fetchEastmoneyJson(fetchImpl, url, requestOptions = {}) {
+  if (typeof fetchImpl !== 'function') {
+    throw new Error('native fetch unavailable')
+  }
+
+  const controller = new AbortController()
+  const timeout = Number(requestOptions.timeout) || 8000
+  const timeoutId = setTimeout(() => controller.abort(), timeout)
+
+  try {
+    const response = await fetchImpl(url, {
+      headers: requestOptions.headers || {},
+      signal: controller.signal,
+    })
+
+    if (!response?.ok) {
+      throw new Error(`native fetch failed with HTTP ${response?.status || 'unknown'}`)
+    }
+
+    return { data: await response.json() }
+  } finally {
+    clearTimeout(timeoutId)
+  }
+}
+
+function shouldBypassQuoteCache(query = {}) {
+  const force = String(query.force || query.refresh || '').toLowerCase()
+  return force === '1' || force === 'true' || force === 'yes' || query._t !== undefined
+}
+
 function requireCodes(req, res) {
   const codes = parseCodeList(req.query.codes)
   if (!req.query.codes || codes.length === 0) {
@@ -227,7 +304,13 @@ function normalizeEastmoneyHistFlowResponse(data, code) {
   })
 }
 
-async function fetchEastmoneyHistFlowQuote(plainClient, code, cache = null, eastmoneyProxyConfig = {}) {
+async function fetchEastmoneyHistFlowQuote(
+  plainClient,
+  code,
+  cache = null,
+  eastmoneyProxyConfig = {},
+  fetchImpl = globalThis.fetch,
+) {
   const cacheKey = `quotes:eastmoney:hist-flow:v1:${cleanCode(code)}`
   const ttlSeconds = PROXY_CACHE_TTLS.quotes.eastmoneyHistFlow
   if (cache) {
@@ -238,14 +321,19 @@ async function fetchEastmoneyHistFlowQuote(plainClient, code, cache = null, east
   let lastError = null
   for (let attempt = 0; attempt <= EASTMONEY_HIST_FLOW_RETRIES; attempt += 1) {
     try {
-      const response = await plainClient.get(buildEastmoneyHistFlowUrl(code), {
-        timeout: 8000,
-        ...eastmoneyProxyConfig,
-        headers: {
-          ...DEFAULT_BROWSER_HEADERS,
-          Referer: 'https://data.eastmoney.com/zjlx/detail.html',
+      const response = await getEastmoneyWithProxyFallback(
+        plainClient,
+        buildEastmoneyHistFlowUrl(code),
+        {
+          timeout: 8000,
+          headers: {
+            ...DEFAULT_BROWSER_HEADERS,
+            Referer: 'https://data.eastmoney.com/zjlx/detail.html',
+          },
         },
-      })
+        eastmoneyProxyConfig,
+        fetchImpl,
+      )
       const row = normalizeEastmoneyHistFlowResponse(response.data, code)
       if (row && cache) {
         await cache.set(cacheKey, row, {
@@ -267,6 +355,7 @@ async function fetchEastmoneyHistFlowQuotes(
   concurrency = EASTMONEY_HIST_FLOW_CONCURRENCY,
   cache = null,
   eastmoneyProxyConfig = {},
+  fetchImpl = globalThis.fetch,
 ) {
   const rows = []
   const failures = []
@@ -285,6 +374,7 @@ async function fetchEastmoneyHistFlowQuotes(
             code,
             cache,
             eastmoneyProxyConfig,
+            fetchImpl,
           )
           if (row) rows.push(row)
         } catch (error) {
@@ -416,13 +506,19 @@ async function loadEastmoneyQuotePayload(
   codeList,
   ttlSeconds,
   eastmoneyProxyConfig = {},
+  fetchImpl = globalThis.fetch,
 ) {
   void ttlSeconds
-  const response = await plainClient.get(buildEastmoneyUlistUrl(codeList), {
-    timeout: 8000,
-    ...eastmoneyProxyConfig,
-    headers: DEFAULT_BROWSER_HEADERS,
-  })
+  const response = await getEastmoneyWithProxyFallback(
+    plainClient,
+    buildEastmoneyUlistUrl(codeList),
+    {
+      timeout: 8000,
+      headers: DEFAULT_BROWSER_HEADERS,
+    },
+    eastmoneyProxyConfig,
+    fetchImpl,
+  )
 
   const ulistData = normalizeEastmoneyResponse(response.data, codeList)
   const missingFundFlowCodes = codesMissingFundFlow(ulistData, codeList)
@@ -435,6 +531,7 @@ async function loadEastmoneyQuotePayload(
         EASTMONEY_HIST_FLOW_CONCURRENCY,
         cache,
         eastmoneyProxyConfig,
+        fetchImpl,
       )
     : EMPTY_QUOTES
   const mergedData = histRequestCodes.length
@@ -458,17 +555,23 @@ async function loadEastmoneyQuoteFallbackPayload(
   primaryError,
   ttlSeconds,
   eastmoneyProxyConfig = {},
+  fetchImpl = globalThis.fetch,
 ) {
   void ttlSeconds
   try {
-    const fallbackResponse = await plainClient.get(buildEastmoneyClistUrl(codeList), {
-      timeout: 10000,
-      ...eastmoneyProxyConfig,
-      headers: {
-        ...DEFAULT_BROWSER_HEADERS,
-        Referer: 'https://data.eastmoney.com/zjlx/detail.html',
+    const fallbackResponse = await getEastmoneyWithProxyFallback(
+      plainClient,
+      buildEastmoneyClistUrl(codeList),
+      {
+        timeout: 10000,
+        headers: {
+          ...DEFAULT_BROWSER_HEADERS,
+          Referer: 'https://data.eastmoney.com/zjlx/detail.html',
+        },
       },
-    })
+      eastmoneyProxyConfig,
+      fetchImpl,
+    )
     const clistData = mergeEastmoneyRows(EMPTY_QUOTES, fallbackResponse.data, codeList)
     const missingCodes = missingEastmoneyCodes(clistData, codeList)
     const histData = missingCodes.length
@@ -478,6 +581,7 @@ async function loadEastmoneyQuoteFallbackPayload(
           EASTMONEY_HIST_FLOW_CONCURRENCY,
           cache,
           eastmoneyProxyConfig,
+          fetchImpl,
         )
       : EMPTY_QUOTES
     const mergedData = mergeEastmoneyRows(clistData, histData, codeList)
@@ -498,6 +602,7 @@ async function loadEastmoneyQuoteFallbackPayload(
         EASTMONEY_HIST_FLOW_CONCURRENCY,
         cache,
         eastmoneyProxyConfig,
+        fetchImpl,
       )
       return withEastmoneyQuoteMeta(histData, {
         route: 'hist-flow',
@@ -517,29 +622,47 @@ async function loadEastmoneyQuoteFallbackPayload(
   }
 }
 
-export function registerQuoteRoutes(app, { plainClient, readConfig, cache }) {
+export function registerQuoteRoutes(app, { plainClient, readConfig, cache, fetchImpl = globalThis.fetch }) {
   app.get('/api/quotes/eastmoney', async (req, res) => {
     const codeList = requireCodes(req, res)
     if (!codeList) return
     const cacheKey = `quotes:eastmoney:v1:${normalizeCodeCacheKey(codeList)}`
     const ttlSeconds = PROXY_CACHE_TTLS.quotes.eastmoneyResponse
     const eastmoneyProxyConfig = createSourceProxyConfig(readConfig, 'eastmoney')
+    const loadFreshPayload = () =>
+      loadEastmoneyQuotePayload(
+        plainClient,
+        cache,
+        codeList,
+        ttlSeconds,
+        eastmoneyProxyConfig,
+        fetchImpl,
+      )
     try {
-      const result = await cache.remember(
-        cacheKey,
-        {
+      const result = shouldBypassQuoteCache(req.query)
+        ? {
+            value: await loadFreshPayload(),
+            cache: {
+              hit: false,
+              stale: false,
+              upstreamCalled: true,
+              ttlSeconds,
+            },
+          }
+        : await cache.remember(
+            cacheKey,
+            {
+              ttlSeconds,
+              staleTtlSeconds: ttlSeconds * 6,
+            },
+            loadFreshPayload,
+          )
+      if (shouldBypassQuoteCache(req.query)) {
+        await cache.set(cacheKey, result.value, {
           ttlSeconds,
           staleTtlSeconds: ttlSeconds * 6,
-        },
-        () =>
-          loadEastmoneyQuotePayload(
-            plainClient,
-            cache,
-            codeList,
-            ttlSeconds,
-            eastmoneyProxyConfig,
-          ),
-      )
+        })
+      }
       await sendEastmoneyQuoteResponse(
         res,
         cache,
@@ -561,6 +684,7 @@ export function registerQuoteRoutes(app, { plainClient, readConfig, cache }) {
           error,
           ttlSeconds,
           eastmoneyProxyConfig,
+          fetchImpl,
         )
         await cache.set(cacheKey, payload, {
           ttlSeconds,

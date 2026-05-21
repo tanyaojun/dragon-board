@@ -863,6 +863,26 @@ const formatMoney = (value: number): string => {
   return value.toString()
 }
 
+const hasMoneyFlowSource = (stock: any) =>
+  stock.moneyFlowEstimated !== undefined ||
+  Boolean(stock.moneyFlowSource) ||
+  Boolean(stock.capitalFlowSource)
+
+const shouldDisplayMoneyFlow = (key: string, stock: any) => {
+  if (!['zlje', 'zljzb', 'cddje', 'cddjzb'].includes(key)) return false
+  const value = Number(stock[key])
+  return Number.isFinite(value) && (value !== 0 || hasMoneyFlowSource(stock))
+}
+
+const formatMoneyFlowCell = (key: string, stock: any): string => {
+  if (!shouldDisplayMoneyFlow(key, stock)) return '-'
+  const value = Number(stock[key])
+  if (key === 'zljzb' || key === 'cddjzb') {
+    return `${value > 0 ? '+' : ''}${value.toFixed(2)}%`
+  }
+  return formatMoney(value)
+}
+
 const formatVolume = (volume: number): string => {
   if (!volume && volume !== 0) return '-'
   const absVolume = Math.abs(volume)
@@ -887,6 +907,10 @@ const formatCell = (key: string, stock: any) => {
     return `${speed > 0 ? '+' : ''}${speed.toFixed(2)}%`
   }
 
+  if (['zlje', 'zljzb', 'cddje', 'cddjzb'].includes(key)) {
+    return formatMoneyFlowCell(key, stock)
+  }
+
   if (key.includes('Rate') || key === 'change' || key.includes('zb')) {
     return value ? (value > 0 ? '+' : '') + Number(value).toFixed(2) + '%' : '-'
   }
@@ -901,7 +925,7 @@ const formatCell = (key: string, stock: any) => {
     return formatVolumeRatioCell(stock)
   }
 
-  if (['zlje', 'cddje', 'turnover', 'cirMV', 'totalMV'].includes(key)) {
+  if (['turnover', 'cirMV', 'totalMV'].includes(key)) {
     return formatMoney(value)
   }
 

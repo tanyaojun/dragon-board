@@ -513,6 +513,24 @@ class DataLoaderService {
     if (allStockCodes.length === 0) return
 
     if (this.isRealtimePrimaryHealthy()) {
+      const quoteResult = await refreshResourceLocks.runExclusive(
+        'quote-http',
+        () => this.fetchMergedQuotes(allStockCodes, { force: true }),
+        { skipIfLocked: true },
+      )
+
+      if (quoteResult.executed) {
+        const quotes = quoteResult.value ?? new Map()
+        if (quotes.size > 0) {
+          dataLayer.applyRealtimeQuoteBatch(
+            Array.from(quotes.entries()).map(([code, quote]) => ({
+              code,
+              ...quote,
+            })),
+          )
+        }
+      }
+
       await this.updateVolumeRatios(allStockCodes)
       await this.maybeRefreshPlatformCache()
       return

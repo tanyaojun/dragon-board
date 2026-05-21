@@ -110,6 +110,7 @@ test('eastmoney quote cache key ignores code order', async () => {
   const app = createProxyApp({
     logRequests: false,
     cache,
+    readConfig: () => '',
     clients: {
       client: {},
       plainClient: {
@@ -145,6 +146,172 @@ test('eastmoney quote cache key ignores code order', async () => {
       secondBody.data.diff.map((row) => row.f12),
       ['000002', '000001'],
     )
+  } finally {
+    server.close()
+  }
+})
+
+test('eastmoney quote route falls back to direct connection when configured proxy refuses', async () => {
+  let upstreamCalls = 0
+  const cache = new MemoryCache()
+  const app = createProxyApp({
+    logRequests: false,
+    cache,
+    readConfig: (name) =>
+      name === 'EASTMONEY_PROXY_URL' ? 'http://127.0.0.1:9' : '',
+    clients: {
+      client: {},
+      plainClient: {
+        get: async (_url, options = {}) => {
+          upstreamCalls += 1
+          if (options.proxy) {
+            const error = new Error('proxy refused')
+            error.code = 'ECONNREFUSED'
+            throw error
+          }
+          return {
+            data: {
+              rc: 0,
+              data: {
+                diff: [
+                  {
+                    f12: '600584',
+                    f14: '长电科技',
+                    f62: -970465792,
+                    f184: -4.55,
+                    f66: -1080225280,
+                    f69: -5.07,
+                  },
+                ],
+              },
+            },
+          }
+        },
+      },
+    },
+  })
+
+  const { server, baseUrl } = await listen(app)
+  try {
+    const response = await fetch(`${baseUrl}/api/quotes/eastmoney?codes=600584`)
+    const body = await response.json()
+
+    assert.equal(response.status, 200)
+    assert.equal(upstreamCalls, 2)
+    assert.equal(body.data.diff[0].f62, -970465792)
+    assert.equal(body.data.diff[0].f184, -4.55)
+  } finally {
+    server.close()
+  }
+})
+
+test('eastmoney quote route falls back to native fetch when axios direct connection resets', async () => {
+  let axiosCalls = 0
+  let nativeFetchCalls = 0
+  const cache = new MemoryCache()
+  const app = createProxyApp({
+    logRequests: false,
+    cache,
+    readConfig: () => '',
+    clients: {
+      client: {},
+      plainClient: {
+        get: async () => {
+          axiosCalls += 1
+          const error = new Error('socket hang up')
+          error.code = 'ECONNRESET'
+          throw error
+        },
+      },
+    },
+    fetchImpl: async () => {
+      nativeFetchCalls += 1
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          rc: 0,
+          data: {
+            diff: [
+              {
+                f12: '600584',
+                f14: '长电科技',
+                f62: -970465792,
+                f184: -4.55,
+                f66: -1080225280,
+                f69: -5.07,
+              },
+            ],
+          },
+        }),
+      }
+    },
+  })
+
+  const { server, baseUrl } = await listen(app)
+  try {
+    const response = await fetch(`${baseUrl}/api/quotes/eastmoney?codes=600584&_t=1`)
+    const body = await response.json()
+
+    assert.equal(response.status, 200)
+    assert.equal(axiosCalls, 1)
+    assert.equal(nativeFetchCalls, 1)
+    assert.equal(body.data.diff[0].f62, -970465792)
+    assert.equal(body.data.diff[0].f184, -4.55)
+    assert.equal(body.data.diff[0].f66, -1080225280)
+    assert.equal(body.data.diff[0].f69, -5.07)
+  } finally {
+    server.close()
+  }
+})
+
+test('eastmoney quote route bypasses cached zero fund flow when cache-busting query is present', async () => {
+  let upstreamCalls = 0
+  const cache = new MemoryCache()
+  await cache.set(
+    'quotes:eastmoney:v1:600584',
+    {
+      rc: 0,
+      data: { diff: [{ f12: '600584', f14: '长电科技', f62: 0, f184: 0 }] },
+      dragonMeta: { source: 'eastmoney', route: 'ulist' },
+    },
+    { ttlSeconds: 20 },
+  )
+  const app = createProxyApp({
+    logRequests: false,
+    cache,
+    readConfig: () => '',
+    clients: {
+      client: {},
+      plainClient: {
+        get: async () => {
+          upstreamCalls += 1
+          return {
+            data: {
+              rc: 0,
+              data: {
+                diff: [{ f12: '600584', f14: '长电科技', f62: -970465792, f184: -4.55 }],
+              },
+            },
+          }
+        },
+      },
+    },
+  })
+
+  const { server, baseUrl } = await listen(app)
+  try {
+    const cached = await fetch(`${baseUrl}/api/quotes/eastmoney?codes=600584`)
+    const fresh = await fetch(`${baseUrl}/api/quotes/eastmoney?codes=600584&_t=1`)
+    const cachedBody = await cached.json()
+    const freshBody = await fresh.json()
+
+    assert.equal(upstreamCalls, 1)
+    assert.equal(cachedBody.dragonMeta.cache.hit, true)
+    assert.equal(cachedBody.data.diff[0].f62, 0)
+    assert.equal(freshBody.dragonMeta.cache.hit, false)
+    assert.equal(freshBody.dragonMeta.cache.upstreamCalled, true)
+    assert.equal(freshBody.data.diff[0].f62, -970465792)
   } finally {
     server.close()
   }
@@ -262,6 +429,9 @@ test('eastmoney quote route returns stale cache when upstream fails', async () =
         },
       },
     },
+    fetchImpl: async () => {
+      throw new Error('blocked')
+    },
   })
 
   const { server, baseUrl } = await listen(app)
@@ -270,7 +440,7 @@ test('eastmoney quote route returns stale cache when upstream fails', async () =
     const body = await response.json()
 
     assert.equal(response.status, 200)
-    assert.equal(upstreamCalls, 1)
+    assert.ok(upstreamCalls >= 1)
     assert.equal(body.dragonMeta.cache.hit, true)
     assert.equal(body.dragonMeta.cache.stale, true)
     assert.equal(body.data.diff[0].f12, '000001')
