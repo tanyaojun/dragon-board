@@ -53,8 +53,82 @@ def camel_get(payload: dict[str, Any], snake: str, camel: str | None = None, def
     return payload.get(camel_key, default)
 
 
+MONEY_FLOW_QUALITY_FIELDS = (
+    "capitalFlowSource",
+    "capital_flow_source",
+    "capitalFlowConfidence",
+    "capital_flow_confidence",
+    "moneyFlowSource",
+    "money_flow_source",
+    "moneyFlowEstimated",
+    "money_flow_estimated",
+)
+
+CROSS_MARKET_ZERO_PRICE_PREFIXES = ("001", "003", "006", "007", "009")
+
+
 def _stock_rows_for_quality(frames: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [{"snapshotId": frame["snapshotId"]} for frame in frames for _ in frame.get("stocks", [])]
+    rows: list[dict[str, Any]] = []
+    for frame in frames:
+        snapshot_id = frame.get("snapshotId")
+        for stock in frame.get("stocks", []):
+            row: dict[str, Any] = {"snapshotId": snapshot_id}
+            if isinstance(stock, dict):
+                row["snapshotId"] = stock.get("snapshotId") or snapshot_id
+                for key in ("rowId", "row_id", "code", *MONEY_FLOW_QUALITY_FIELDS):
+                    if key in stock:
+                        row[key] = stock.get(key)
+            rows.append(row)
+    return rows
+
+
+def _price_is_positive(value: Any) -> bool:
+    try:
+        return float(value or 0) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _stock_code(value: Any) -> str:
+    code = str(value or "").strip()
+    return code.zfill(6) if code.isdigit() else code
+
+
+def _raw_stock_code(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _has_zero_quote_shape(stock: dict[str, Any]) -> bool:
+    return all(not _price_is_positive(stock.get(key)) for key in ("price", "change", "volume", "turnover"))
+
+
+def _is_cross_market_zero_price_stock(stock: dict[str, Any], a_share_codes: set[str] | None = None) -> bool:
+    if not _has_zero_quote_shape(stock):
+        return False
+    raw_code = _raw_stock_code(stock.get("code"))
+    if raw_code == "000000":
+        return True
+    if not raw_code.isdigit():
+        return False
+    if a_share_codes is None:
+        return raw_code.startswith(("007", "009"))
+    if len(raw_code) != 6:
+        return raw_code.startswith(CROSS_MARKET_ZERO_PRICE_PREFIXES)
+    return raw_code not in a_share_codes and raw_code.startswith(CROSS_MARKET_ZERO_PRICE_PREFIXES)
+
+
+def _load_a_share_codes(repo: Any) -> set[str] | None:
+    database = getattr(repo, "db", None)
+    if database is None:
+        return None
+    try:
+        rows = database["stock_names"].find(
+            {"active": True, "market": {"$in": ["SH", "SZ", "BJ"]}},
+            {"code": 1},
+        )
+        return {_stock_code(row.get("code")) for row in rows if row.get("code")}
+    except Exception:
+        return None
 
 
 def _prepare_frames_for_backtest(frames: list[dict[str, Any]], snapshot_type: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -81,6 +155,131 @@ def _prepare_frames_for_backtest(frames: list[dict[str, Any]], snapshot_type: st
         "droppedSnapshotIds": [str(frame.get("snapshotId") or "") for frame in dropped_frames[:50]],
     }
     return non_empty_frames, gate_dict
+
+
+def _positive_price_stock_rows(frames: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    output: list[dict[str, Any]] = []
+    dropped_rows = 0
+    impacted_snapshots: set[str] = set()
+    empty_snapshots: list[str] = []
+    for frame in frames:
+        stocks = frame.get("stocks") if isinstance(frame.get("stocks"), list) else []
+        kept: list[dict[str, Any]] = []
+        for stock in stocks:
+            if not isinstance(stock, dict):
+                kept.append(stock)
+                continue
+            if _price_is_positive(stock.get("price")):
+                kept.append(stock)
+            else:
+                dropped_rows += 1
+                impacted_snapshots.add(str(frame.get("snapshotId") or ""))
+        next_frame = {**frame, "stocks": kept}
+        if stocks and not kept:
+            empty_snapshots.append(str(frame.get("snapshotId") or ""))
+        output.append(next_frame)
+    return output, {
+        "reason": "positive_price_stock_rows_only",
+        "sourceTargetFrames": len(frames),
+        "usableTargetFrames": len([frame for frame in output if frame.get("stocks")]),
+        "droppedNonPositivePriceRows": dropped_rows,
+        "impactedSnapshots": len(impacted_snapshots),
+        "emptySnapshotsAfterFilter": len(empty_snapshots),
+        "emptySnapshotIdsAfterFilter": empty_snapshots[:50],
+    }
+
+
+def _cross_market_zero_price_stock_rows(
+    frames: list[dict[str, Any]],
+    a_share_codes: set[str] | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    output: list[dict[str, Any]] = []
+    dropped_rows = 0
+    impacted_snapshots: set[str] = set()
+    empty_snapshots: list[str] = []
+    examples: list[dict[str, Any]] = []
+    skipped_all_zero_frames: list[str] = []
+    for frame in frames:
+        stocks = frame.get("stocks") if isinstance(frame.get("stocks"), list) else []
+        if stocks and all(isinstance(stock, dict) and not _price_is_positive(stock.get("price")) for stock in stocks):
+            skipped_all_zero_frames.append(str(frame.get("snapshotId") or ""))
+            output.append(frame)
+            continue
+        kept: list[dict[str, Any]] = []
+        for stock in stocks:
+            if not isinstance(stock, dict) or not _is_cross_market_zero_price_stock(stock, a_share_codes):
+                kept.append(stock)
+                continue
+            dropped_rows += 1
+            snapshot_id = str(frame.get("snapshotId") or "")
+            impacted_snapshots.add(snapshot_id)
+            if len(examples) < 20:
+                examples.append({
+                    "snapshotId": snapshot_id,
+                    "code": _raw_stock_code(stock.get("code")),
+                    "name": str(stock.get("name") or ""),
+                })
+        next_frame = {**frame, "stocks": kept}
+        if stocks and not kept:
+            empty_snapshots.append(str(frame.get("snapshotId") or ""))
+        output.append(next_frame)
+    return output, {
+        "reason": "cross_market_zero_price_rows_excluded",
+        "sourceTargetFrames": len(frames),
+        "usableTargetFrames": len([frame for frame in output if frame.get("stocks")]),
+        "droppedCrossMarketZeroPriceRows": dropped_rows,
+        "impactedSnapshots": len(impacted_snapshots),
+        "emptySnapshotsAfterFilter": len(empty_snapshots),
+        "emptySnapshotIdsAfterFilter": empty_snapshots[:50],
+        "skippedAllZeroPriceFrames": len(skipped_all_zero_frames),
+        "skippedAllZeroPriceFrameIds": skipped_all_zero_frames[:50],
+        "aShareUniverseAvailable": a_share_codes is not None,
+        "aShareUniverseCodeCount": len(a_share_codes or set()),
+        "examples": examples,
+    }
+
+
+def _drop_all_zero_price_frames(frames: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    output: list[dict[str, Any]] = []
+    dropped_ids: list[str] = []
+    dropped_rows = 0
+    for frame in frames:
+        stocks = frame.get("stocks") if isinstance(frame.get("stocks"), list) else []
+        is_all_zero = bool(stocks) and all(
+            isinstance(stock, dict) and not _price_is_positive(stock.get("price"))
+            for stock in stocks
+        )
+        if is_all_zero:
+            dropped_ids.append(str(frame.get("snapshotId") or ""))
+            dropped_rows += len(stocks)
+            continue
+        output.append(frame)
+    return output, {
+        "reason": "all_zero_price_frames_excluded",
+        "sourceTargetFrames": len(frames),
+        "usableTargetFrames": len(output),
+        "droppedAllZeroPriceFrames": len(dropped_ids),
+        "droppedAllZeroPriceRows": dropped_rows,
+        "droppedSnapshotIds": dropped_ids[:50],
+    }
+
+
+def _ensure_runtime_filtered_frames_usable(frames: list[dict[str, Any]], quality_gate: dict[str, Any]) -> None:
+    stats = quality_gate.get("stats") if isinstance(quality_gate.get("stats"), dict) else {}
+    min_snapshot_count = int(stats.get("minSnapshotCount") or 2)
+    usable_frames = [frame for frame in frames if frame.get("stocks")]
+    if len(usable_frames) >= min_snapshot_count:
+        return
+    failed_gate = {
+        **quality_gate,
+        "passed": False,
+        "severity": "fail",
+        "issues": [
+            *(quality_gate.get("issues") or []),
+            f"runtime filters left usable snapshots below minimum {min_snapshot_count}: {len(usable_frames)}",
+        ],
+    }
+    raise ValueError({"qualityGate": failed_gate})
 
 
 class BacktestService:
@@ -261,6 +460,30 @@ class BacktestService:
         if not frames:
             raise ValueError(f"dataset has no frames for {snapshot_type}: {dataset_id}")
         run_frames, quality_gate = _prepare_frames_for_backtest(frames, snapshot_type)
+        exclude_non_positive_price_rows = bool(camel_get(payload, "exclude_non_positive_price_rows", "excludeNonPositivePriceRows", False))
+        exclude_cross_market_zero_price_rows = bool(camel_get(payload, "exclude_cross_market_zero_price_rows", "excludeCrossMarketZeroPriceRows", False))
+        exclude_all_zero_price_frames = bool(camel_get(payload, "exclude_all_zero_price_frames", "excludeAllZeroPriceFrames", False))
+        price_filter: dict[str, Any] | None = None
+        cross_market_price_filter: dict[str, Any] | None = None
+        all_zero_frame_filter: dict[str, Any] | None = None
+        runtime_filter = quality_gate.get("runtimeFilter") if isinstance(quality_gate.get("runtimeFilter"), dict) else {}
+        runtime_filter = dict(runtime_filter)
+        if exclude_all_zero_price_frames:
+            run_frames, all_zero_frame_filter = _drop_all_zero_price_frames(run_frames)
+            runtime_filter["allZeroPriceFrameFilter"] = all_zero_frame_filter
+        if exclude_cross_market_zero_price_rows:
+            run_frames, cross_market_price_filter = _cross_market_zero_price_stock_rows(
+                run_frames,
+                _load_a_share_codes(self.repo),
+            )
+            runtime_filter["crossMarketPriceFilter"] = cross_market_price_filter
+        if exclude_non_positive_price_rows:
+            run_frames, price_filter = _positive_price_stock_rows(run_frames)
+            runtime_filter["priceFilter"] = price_filter
+        if runtime_filter:
+            quality_gate["runtimeFilter"] = runtime_filter
+        if exclude_all_zero_price_frames or exclude_cross_market_zero_price_rows or exclude_non_positive_price_rows:
+            _ensure_runtime_filtered_frames_usable(run_frames, quality_gate)
 
         trade_config = {
             "initialCapital": camel_get(payload, "initial_cash", "initialCash", 1000000),
@@ -304,6 +527,14 @@ class BacktestService:
             "snapshot_type": snapshot_type,
             "random_seed": int(camel_get(payload, "random_seed", "randomSeed", 20260430)),
             "quality_gate": quality_gate,
+            "research_filters": {
+                "excludeNonPositivePriceRows": exclude_non_positive_price_rows,
+                "excludeCrossMarketZeroPriceRows": exclude_cross_market_zero_price_rows,
+                "excludeAllZeroPriceFrames": exclude_all_zero_price_frames,
+                "priceFilter": price_filter,
+                "crossMarketPriceFilter": cross_market_price_filter,
+                "allZeroPriceFrameFilter": all_zero_frame_filter,
+            },
         }
         result = BacktestEngine().run(run_frames, options)
         run_id = new_id("bt")
@@ -315,6 +546,7 @@ class BacktestService:
             "strategy_name": strategy_name,
             "strategy_config": strategy_config,
             "trade_config": trade_config,
+            "research_filters": options["research_filters"],
         }
         trading_dates = sorted({str(f.get("tradingDate") or "") for f in run_frames if f.get("tradingDate")})
         run = BacktestRun(

@@ -6,7 +6,7 @@
 
 ## Current Phase
 
-Phase 8
+Phase 12 complete
 
 ## Success Criteria
 
@@ -15,6 +15,10 @@ Phase 8
 3. `current_bar` 与 `next_bar` 两个基线 run 已落库并记录核心指标。
 4. 第一轮优化任务通过后端 API 启动，保留 `dataset_id`、`snapshot_type`、`strategy_name`、`random_seed`、`config_hash`。
 5. 优化结果只输出候选参数和风险解释，不自动写回默认参数。
+6. 资金流质量统计能解释 `0 formal / 全 missing` 的根因，并用真实数据复核。
+7. `price=0` / 非正价格行有独立诊断结论，明确它是否影响当前固定基线成交。
+8. 显式 `price<=0` 过滤研究口径已复跑 H1/H2/Q1，并记录过滤前后指标和信号分布。
+9. `price=0` 来源已拆分为跨市场无行情与全零异常帧两类研究过滤，并分别复跑 H1/H2/Q1。
 
 ## Phases
 
@@ -74,6 +78,40 @@ Phase 8
 - [x] 执行一次当前 checkpoint，并把结果追加到长测记录
 - **Status:** complete
 
+### Phase 9: Money-Flow Quality Diagnostics
+
+- [x] 确认 `half_hour` 样本少于 `quarter_hour` 的原因：早期只启用了 IndexedDB 测试快照，且 `quarter_hour` 启用早于 `half_hour`
+- [x] 抽样 MongoDB `snapshot_stock_rows`，确认真实历史行里存在资金流来源字段
+- [x] 定位回测质量门禁把股票行压成 `snapshotId` only，导致资金流字段在统计前被丢弃
+- [x] 最小修复：回测质量门禁只透传资金流来源字段，不改变价格质量门禁和交易逻辑
+- [x] 补测试并用真实 `half_hour/next_bar` 回测验证资金流统计恢复
+- **Status:** complete
+
+### Phase 10: Non-Positive Price Diagnostics
+
+- [x] 统计 `dragonboard_live` 中 `price <= 0` 行在 `half_hour` 与 `quarter_hour` 的分布
+- [x] 抽样定位涉及的交易日、slot、股票代码和是否集中在特定快照
+- [x] 检查非正价格行是否进入当前固定基线的实际成交记录
+- [x] 给出后续质量门禁建议，但本阶段不改变默认交易逻辑
+- **Status:** complete
+
+### Phase 11: Explicit Positive-Price Filter Rerun
+
+- [x] 新增显式研究开关 `excludeNonPositivePriceRows`，默认关闭
+- [x] 复跑 H1/H2/Q1 三条 fixed baseline
+- [x] 对比过滤前后收益、回撤、Sharpe、交易数和候选层分布
+- [x] 记录结论：该过滤只作为显式研究口径，暂不设为默认质量门禁
+- **Status:** complete
+
+### Phase 12: Price Quality Attribution Rerun
+
+- [x] 新增显式研究开关：只过滤跨市场/非 A 股/代码失配零行情行
+- [x] 新增显式研究开关：只剔除全零价格异常帧
+- [x] 分别复跑 H1/H2/Q1 三条 fixed baseline
+- [x] 对比两类过滤与全量 `price<=0` 过滤的收益、回撤、交易数和信号分布
+- [x] 判断哪一类适合 report-only diagnostic，哪一类可进入后续 formal quality gate 候选
+- **Status:** complete
+
 ## Optimization Setup
 
 第一轮优化使用保守但不太重的配置：
@@ -118,6 +156,10 @@ walk_forward.topTrials = 5
 | Optimization | `opt_70e72a69c40143be` | completed | `tpe + stability + 36 trials + auto validation + walk-forward` |
 | Quarter-hour research optimization | `opt_fcf1f30063514bb7` | completed | `grid + stability + 27 trials + next_bar + walk-forward` |
 | Long-test checkpoint | `checkpoint_2026-05-21_initial` | completed | 三条固定基线，摘要追加到 `quant-board/data/reports/long_test_runs.jsonl` |
+| Money-flow diagnostic backtest | `bt_1f012ea44bb44092` | completed | `half_hour/next_bar`，用于验证质量统计修复 |
+| Positive-price filter checkpoint | `checkpoint_2026-05-21_price_filter` | completed | 显式过滤 `price<=0` 行后复跑 H1/H2/Q1 |
+| Cross-market zero-price checkpoint | `checkpoint_2026-05-21_cross_market_zero_filter_v2` | completed | 只过滤跨市场/非 A 股/代码失配零行情行后复跑 H1/H2/Q1；v1 因未隔离全零帧，已被 v2 取代 |
+| All-zero frame checkpoint | `checkpoint_2026-05-21_all_zero_frame_filter` | completed | 只剔除全零价格异常帧后复跑 H1/H2/Q1 |
 
 ## First Optimization Result
 
@@ -262,8 +304,154 @@ walk_forward.topTrials = 5
 
 解读：当前 checkpoint 仍不支持写回默认参数。`quarter_hour` 的交易数更高，但回撤更深，说明更细粒度样本没有自动改善保守成交表现。
 
+## Money-Flow Diagnostics
+
+结论：此前回测报告里的 `formalMoneyFlowCount=0`、`estimatedL1MoneyFlowCount=0`、`missingMoneyFlowSourceCount=全部` 不是 MongoDB 源数据全缺，而是回测质量统计前把股票行简化成 `{"snapshotId": ...}`，把 `capitalFlowSource`、`moneyFlowEstimated` 等字段丢掉了。
+
+真实 MongoDB 抽样：
+
+| Snapshot | formal `official_l2` | `estimated_l1` | missing | formal coverage |
+| --- | ---: | ---: | ---: | ---: |
+| `half_hour` | `4711` | `10802` | `29568` | `10.45%` |
+| `quarter_hour` | `8698` | `19770` | `73113` | `8.56%` |
+
+已修复 `BacktestService` 的质量门禁输入，只透传资金流来源字段，避免把历史 `price=0` 行纳入本轮门禁而改变既有回测可运行性。验证回测 `bt_1f012ea44bb44092` 的核心绩效与原 `half_hour/next_bar` 基线一致，资金流统计已恢复为非零。
+
+## Non-Positive Price Diagnostics
+
+本轮只做诊断，不改变默认回测口径。真实 MongoDB 源数据中存在 `price <= 0` 行，但当前固定基线没有用这些行完成实际成交。
+
+| Snapshot | total rows | `price <= 0` | ratio | impacted snapshots | impacted codes |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `half_hour` | `45081` | `1165` | `2.58%` | `185` | `99` |
+| `quarter_hour` | `101581` | `2673` | `2.63%` | `391` | `331` |
+
+主要来源分两类：
+
+1. 非 A 股或跨市场热榜条目缺行情，例如 `009992` 泡泡玛特、`001810` 小米集团-W、`009988` 阿里巴巴-W、`003690` 美团-W、`000000` 美股占位代码。这些通常有热榜排名，但 `price/change/volume/turnover` 均为 `0`。
+2. 早期历史采集异常帧，例如 `quarter_hour:2026-04-03:14:15` 全帧 `187/187` 行价格为 `0`，`quarter_hour:2026-04-01:09:45` 有 `98/185` 行价格为 `0`。
+
+对已落库固定基线的影响：
+
+| Baseline | Run ID | zero-price trade events | zero-price trades | source bad refs |
+| --- | --- | ---: | ---: | ---: |
+| H1 `half_hour/current_bar` | `bt_7493e60c21574bd8` | `0` | `0` | `0` |
+| H2 `half_hour/next_bar` | `bt_923ecfa4517948f4` | `0` | `0` | `0` |
+| Q1 `quarter_hour/next_bar` | `bt_359953a7dba24206` | `0` | `0` | `0` |
+
+信号层仍有污染风险：`half_hour` 固定基线中 `price=0` 信号为 `976/37618`，其中 `B_IGNITION=7`、`A_MAIN=0`；`quarter_hour` 固定基线中 `price=0` 信号为 `2568/95585`，其中 `B_IGNITION=29`、`A_MAIN=1`。交易模拟会跳过缺价格成交，但 RankTrend 信号分布和研究解释仍会被这些行轻微污染。
+
+下一步建议：把价格质量收口拆成单独 Phase，而不是立刻打开 fatal 门禁。优先新增研究口径过滤或诊断字段，区分“跨市场热榜无行情”和“整帧采集异常”，再用固定三基线对比过滤前后绩效和信号分布。
+
+## Explicit Positive-Price Filter Rerun
+
+本阶段新增显式研究开关，不改变默认回测行为：
+
+```powershell
+.\.venv\Scripts\python.exe -m backend.cli run-longtest-baselines `
+  --checkpoint-id checkpoint_2026-05-21_price_filter `
+  --exclude-non-positive-price-rows
+```
+
+### Filtered Checkpoint
+
+| Baseline | Run ID | dropped rows | impacted snapshots | empty snapshots |
+| --- | --- | ---: | ---: | ---: |
+| H1 `half_hour/current_bar` | `bt_a5e56233f6fb4805` | `1165` | `185` | `0` |
+| H2 `half_hour/next_bar` | `bt_801abe6f44e146df` | `1165` | `185` | `0` |
+| Q1 `quarter_hour/next_bar` | `bt_56d52c783fd84776` | `2673` | `391` | `1` |
+
+Q1 的空帧为 `quarter_hour:2026-04-03:14:15`，即此前诊断中的全零价异常帧。
+
+### Metrics Before vs After
+
+| Baseline | totalReturn before -> after | maxDrawdown before -> after | Sharpe before -> after | trades before -> after |
+| --- | ---: | ---: | ---: | ---: |
+| H1 | `+4.49%` -> `+6.47%` | `-2.82%` -> `-2.81%` | `-0.0003` -> `0.4117` | `54` -> `54` |
+| H2 | `-6.37%` -> `-2.47%` | `-9.16%` -> `-5.52%` | `-1.3844` -> `-0.8583` | `64` -> `64` |
+| Q1 | `-3.27%` -> `-3.26%` | `-11.06%` -> `-14.67%` | `-0.5817` -> `-1.5199` | `126` -> `138` |
+
+### Signal Distribution Before vs After
+
+| Baseline | signals before -> after | A_MAIN | B_IGNITION | C_CROWDED | D_EXIT_RISK | N_NEUTRAL | zero-price signals |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| H1/H2 | `37618` -> `36642` | `448` -> `452` | `1283` -> `1264` | `1847` -> `1804` | `19398` -> `19044` | `14642` -> `14078` | `976` -> `0` |
+| Q1 | `95585` -> `93017` | `775` -> `752` | `2776` -> `2759` | `5891` -> `5806` | `46472` -> `45466` | `39671` -> `38234` | `2568` -> `0` |
+
+结论：过滤能清零信号层的零价污染；H1/H2 指标改善明显，但 Q1 的回撤和 Sharpe 变差，说明更细粒度历史里的异常帧会改变后续路径。该过滤适合作为显式研究选项和 report-only diagnostic，暂不作为默认 formal quality gate。
+
+## Price Quality Attribution Rerun
+
+Phase 12 将 `price=0` 问题拆成两个显式研究口径：
+
+1. `excludeCrossMarketZeroPriceRows`：只过滤零行情形态下的跨市场/非 A 股/代码失配行。实现中使用 MongoDB `stock_names` A 股代码表辅助识别，并跳过整帧全零异常帧，避免把两类问题混在一起。
+2. `excludeAllZeroPriceFrames`：只剔除整帧股票价格全为 `0` 或不可解析的异常快照。
+
+### Cross-Market Zero-Price Filter
+
+正式比较采用 v2 checkpoint：
+
+```powershell
+.\.venv\Scripts\python.exe -m backend.cli run-longtest-baselines `
+  --checkpoint-id checkpoint_2026-05-21_cross_market_zero_filter_v2 `
+  --exclude-cross-market-zero-price-rows
+```
+
+v1 `checkpoint_2026-05-21_cross_market_zero_filter` 已落库，但因第一版跨市场过滤会在全零异常帧里做行级过滤，归因不够干净；v2 已改为跳过全零帧，作为 Phase 12 正式结论。
+
+| Baseline | Run ID | dropped rows | skipped all-zero frames | zero-price signals |
+| --- | --- | ---: | ---: | ---: |
+| H1 `half_hour/current_bar` | `bt_57371fbc97ad4371` | `902` | `0` | `257` |
+| H2 `half_hour/next_bar` | `bt_4fe7fd28fcce4146` | `902` | `0` | `257` |
+| Q1 `quarter_hour/next_bar` | `bt_b59b804884ae465a` | `1886` | `1` | `683` |
+
+### All-Zero Frame Filter
+
+```powershell
+.\.venv\Scripts\python.exe -m backend.cli run-longtest-baselines `
+  --checkpoint-id checkpoint_2026-05-21_all_zero_frame_filter `
+  --exclude-all-zero-price-frames
+```
+
+| Baseline | Run ID | dropped frames | dropped rows | zero-price signals |
+| --- | --- | ---: | ---: | ---: |
+| H1 `half_hour/current_bar` | `bt_ac33b22a9f974170` | `0` | `0` | `976` |
+| H2 `half_hour/next_bar` | `bt_70c9e89288504b24` | `0` | `0` | `976` |
+| Q1 `quarter_hour/next_bar` | `bt_751dbc4783614ace` | `1` | `187` | `2381` |
+
+被剔除的全零帧为 `quarter_hour:2026-04-03:14:15`。
+
+### Metrics Attribution
+
+| Baseline | base totalReturn | cross-market filter | all-zero-frame filter | all `price<=0` filter |
+| --- | ---: | ---: | ---: | ---: |
+| H1 | `+4.49%` | `+6.47%` | `+4.49%` | `+6.47%` |
+| H2 | `-6.37%` | `-1.40%` | `-6.37%` | `-2.47%` |
+| Q1 | `-3.27%` | `-5.85%` | `-2.79%` | `-3.26%` |
+
+| Baseline | base maxDrawdown | cross-market filter | all-zero-frame filter | all `price<=0` filter |
+| --- | ---: | ---: | ---: | ---: |
+| H1 | `-2.82%` | `-2.81%` | `-2.82%` | `-2.81%` |
+| H2 | `-9.16%` | `-5.46%` | `-9.16%` | `-5.52%` |
+| Q1 | `-11.06%` | `-14.80%` | `-9.20%` | `-14.67%` |
+
+| Baseline | base trades | cross-market filter | all-zero-frame filter | all `price<=0` filter |
+| --- | ---: | ---: | ---: | ---: |
+| H1 | `54` | `54` | `54` | `54` |
+| H2 | `64` | `64` | `64` | `64` |
+| Q1 | `126` | `133` | `105` | `138` |
+
+### Interpretation
+
+- `half_hour` 的改善几乎全部来自跨市场/非 A 股/代码失配零行情过滤；全零帧过滤对 H1/H2 没有影响，因为 half_hour 当前没有全零价格帧。
+- `quarter_hour` 的异常来源是混合的：全零帧过滤能改善 Q1 回撤（`-11.06% -> -9.20%`）并减少交易数（`126 -> 105`），但跨市场过滤会使 Q1 回撤变差（`-11.06% -> -14.80%`）。
+- 全量 `price<=0` 过滤清零信号污染，但它把跨市场行、全零帧和局部 A 股报价缺失合并处理，不适合作为当前默认 formal quality gate。
+
+结论：下一步正式质量诊断可以优先加入 report-only 字段：`crossMarketZeroPriceRows`、`allZeroPriceFrames`、`partialAshareZeroPriceRows`。默认回测口径仍不自动开启任何价格过滤；若要候选默认化，优先考虑“跨市场/非 A 股/代码失配零行情”作为研究过滤，而“全零异常帧”作为更高优先级的数据采集修复/人工审计项。
+
 ## Errors Encountered
 
 | Error | Attempt | Resolution |
 | --- | --- | --- |
-| 暂无 | 1 | 暂无 |
+| CLI 回测完整 JSON 输出过大导致 shell 超时 | 1 | run 已落库；改用小脚本读取 `bt_1f012ea44bb44092` 的质量字段完成验证。 |
+| 一次性读取 6 个完整回测报告提取信号分布超时 | 1 | 改为按 run 分批读取完整报告，最终取得 H1/H2/Q1 过滤前后信号分布。 |

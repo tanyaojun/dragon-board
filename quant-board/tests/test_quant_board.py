@@ -114,6 +114,17 @@ def make_bundle_with_empty_hotlist(path: Path) -> Path:
     return bundle
 
 
+def make_bundle_with_one_positive_price_frame(path: Path) -> Path:
+    bundle = make_bundle(path)
+    data = json.loads(bundle.read_text(encoding="utf-8"))
+    records = data["records"]
+    for index, record in enumerate(records):
+        for stock in record["payload"]["hotlist"]:
+            stock["price"] = 0 if index else 10
+    bundle.write_text(json.dumps({"records": records}, ensure_ascii=False), encoding="utf-8")
+    return bundle
+
+
 def make_theme_trade_bundle(path: Path) -> Path:
     frames = []
     records = []
@@ -922,6 +933,36 @@ def test_backtest_excludes_empty_hotlist_frames_but_keeps_quality_warning(tmp_pa
     assert data_quality["sourceSnapshotCount"] == dataset["frame_count"]
     assert data_quality["runtimeFilter"]["reason"] == "empty_hotlist_snapshots_excluded"
     assert any("自动剔除 3 个空热榜快照" in item for item in run["warnings"])
+
+
+def test_ranktrend_backtest_blocks_when_price_filter_leaves_too_few_usable_frames(tmp_path: Path) -> None:
+    client = TestClient(app)
+    bundle = make_bundle_with_one_positive_price_frame(tmp_path)
+
+    imported = client.post(
+        "/api/datasets/import",
+        json={"sourceType": "json_bundle", "sourcePath": str(bundle), "name": "price-filter-block", "snapshotTypes": ["half_hour"]},
+    )
+    assert imported.status_code == 200, imported.text
+    dataset = imported.json()
+
+    response = client.post(
+        "/api/backtests/rank-trend",
+        json={
+            "datasetId": dataset["id"],
+            "snapshotType": "half_hour",
+            "randomSeed": 20260430,
+            "excludeNonPositivePriceRows": True,
+        },
+    )
+
+    assert response.status_code == 400
+    quality_gate = response.json()["detail"]["qualityGate"]
+    assert quality_gate["passed"] is False
+    assert quality_gate["severity"] == "fail"
+    assert quality_gate["runtimeFilter"]["priceFilter"]["emptySnapshotsAfterFilter"] == dataset["frame_count"] - 1
+    assert quality_gate["runtimeFilter"]["priceFilter"]["usableTargetFrames"] == 1
+    assert "runtime filters left usable snapshots below minimum 2: 1" in quality_gate["issues"]
 
 
 def test_snapshot_ingest_is_idempotent_and_queues_outbox() -> None:
@@ -2400,6 +2441,9 @@ def test_cli_run_ranktrend_exposes_ui_backtest_parameters() -> None:
             "--intrabar-ambiguity",
             "take_first",
             "--use-theme-factor-for-execution",
+            "--exclude-non-positive-price-rows",
+            "--exclude-cross-market-zero-price-rows",
+            "--exclude-all-zero-price-frames",
             "--no-t1",
             "--no-partial-fills",
         ]
@@ -2443,6 +2487,9 @@ def test_cli_run_ranktrend_exposes_ui_backtest_parameters() -> None:
         "intrabarAmbiguity": "take_first",
         "useThemeFactorForExecution": True,
     }
+    assert payload["excludeNonPositivePriceRows"] is True
+    assert payload["excludeCrossMarketZeroPriceRows"] is True
+    assert payload["excludeAllZeroPriceFrames"] is True
 
 
 def test_cli_longtest_baselines_use_fixed_research_contract() -> None:
@@ -2478,6 +2525,46 @@ def test_cli_longtest_baselines_use_fixed_research_contract() -> None:
     assert [item["payload"]["maxHoldingBars"] for item in specs] == [40, 40, 80]
     assert all(item["payload"]["random_seed"] == 20260430 for item in specs)
     assert all(item["payload"]["strategy_name"] == "rank_trend_candidate" for item in specs)
+    assert all(item["payload"]["excludeNonPositivePriceRows"] is False for item in specs)
+    assert all(item["payload"]["excludeCrossMarketZeroPriceRows"] is False for item in specs)
+    assert all(item["payload"]["excludeAllZeroPriceFrames"] is False for item in specs)
+
+
+def test_cli_longtest_baselines_can_enable_positive_price_research_filter() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "run-longtest-baselines",
+            "--dataset-id",
+            "dragonboard_live",
+            "--exclude-non-positive-price-rows",
+            "--dry-run",
+        ]
+    )
+
+    specs = build_longtest_baseline_payloads(args)
+
+    assert all(item["payload"]["excludeNonPositivePriceRows"] is True for item in specs)
+
+
+def test_cli_longtest_baselines_can_enable_split_price_research_filters() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "run-longtest-baselines",
+            "--dataset-id",
+            "dragonboard_live",
+            "--exclude-cross-market-zero-price-rows",
+            "--exclude-all-zero-price-frames",
+            "--dry-run",
+        ]
+    )
+
+    specs = build_longtest_baseline_payloads(args)
+
+    assert all(item["payload"]["excludeCrossMarketZeroPriceRows"] is True for item in specs)
+    assert all(item["payload"]["excludeAllZeroPriceFrames"] is True for item in specs)
+    assert all(item["payload"]["excludeNonPositivePriceRows"] is False for item in specs)
 
 
 def test_longtest_baseline_summary_extracts_metrics_and_quality() -> None:
@@ -2532,6 +2619,23 @@ def test_longtest_baseline_summary_extracts_metrics_and_quality() -> None:
             }
         },
     }
+    run["dataQuality"]["runtimeFilter"] = {
+        "priceFilter": {
+            "reason": "positive_price_stock_rows_only",
+            "droppedNonPositivePriceRows": 5,
+        },
+        "crossMarketPriceFilter": {
+            "reason": "cross_market_zero_price_rows_excluded",
+            "droppedCrossMarketZeroPriceRows": 3,
+        },
+        "allZeroPriceFrameFilter": {
+            "reason": "all_zero_price_frames_excluded",
+            "droppedAllZeroPriceFrames": 1,
+        },
+    }
+    spec["payload"]["excludeNonPositivePriceRows"] = True
+    spec["payload"]["excludeCrossMarketZeroPriceRows"] = True
+    spec["payload"]["excludeAllZeroPriceFrames"] = True
 
     summary = summarize_longtest_baseline(spec, run)
 
@@ -2542,6 +2646,12 @@ def test_longtest_baseline_summary_extracts_metrics_and_quality() -> None:
     assert summary["totalReturn"] == -0.01
     assert summary["researchGrade"] == "degraded"
     assert summary["missingMoneyFlowSourceCount"] == 12
+    assert summary["excludeNonPositivePriceRows"] is True
+    assert summary["excludeCrossMarketZeroPriceRows"] is True
+    assert summary["excludeAllZeroPriceFrames"] is True
+    assert summary["priceFilter"]["droppedNonPositivePriceRows"] == 5
+    assert summary["crossMarketPriceFilter"]["droppedCrossMarketZeroPriceRows"] == 3
+    assert summary["allZeroPriceFrameFilter"]["droppedAllZeroPriceFrames"] == 1
     assert summary["blockedByLimit"] == 3
 
 

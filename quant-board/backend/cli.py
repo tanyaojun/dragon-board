@@ -557,6 +557,9 @@ def build_ranktrend_payload(args: argparse.Namespace) -> dict[str, Any]:
             "intrabarAmbiguity": args.intrabar_ambiguity,
             "useThemeFactorForExecution": args.use_theme_factor_for_execution,
         },
+        "excludeNonPositivePriceRows": args.exclude_non_positive_price_rows,
+        "excludeCrossMarketZeroPriceRows": args.exclude_cross_market_zero_price_rows,
+        "excludeAllZeroPriceFrames": args.exclude_all_zero_price_frames,
     }
 
 
@@ -623,6 +626,9 @@ def build_longtest_baseline_payloads(args: argparse.Namespace) -> list[dict[str,
             no_intrabar_stops=False,
             intrabar_ambiguity=args.intrabar_ambiguity,
             use_theme_factor_for_execution=False,
+            exclude_non_positive_price_rows=args.exclude_non_positive_price_rows,
+            exclude_cross_market_zero_price_rows=args.exclude_cross_market_zero_price_rows,
+            exclude_all_zero_price_frames=args.exclude_all_zero_price_frames,
         )
         payloads.append({
             "label": baseline["label"],
@@ -668,6 +674,12 @@ def summarize_longtest_baseline(spec: dict[str, Any], run: dict[str, Any]) -> di
         "missingMoneyFlowSourceCount": quality_stats.get("missingMoneyFlowSourceCount"),
         "formalMoneyFlowCount": quality_stats.get("formalMoneyFlowCount"),
         "estimatedL1MoneyFlowCount": quality_stats.get("estimatedL1MoneyFlowCount"),
+        "excludeNonPositivePriceRows": bool(payload.get("excludeNonPositivePriceRows")),
+        "excludeCrossMarketZeroPriceRows": bool(payload.get("excludeCrossMarketZeroPriceRows")),
+        "excludeAllZeroPriceFrames": bool(payload.get("excludeAllZeroPriceFrames")),
+        "priceFilter": (data_quality.get("runtimeFilter") or {}).get("priceFilter") if isinstance(data_quality.get("runtimeFilter"), dict) else None,
+        "crossMarketPriceFilter": (data_quality.get("runtimeFilter") or {}).get("crossMarketPriceFilter") if isinstance(data_quality.get("runtimeFilter"), dict) else None,
+        "allZeroPriceFrameFilter": (data_quality.get("runtimeFilter") or {}).get("allZeroPriceFrameFilter") if isinstance(data_quality.get("runtimeFilter"), dict) else None,
         "blockedByLimit": matching.get("blockedByLimit"),
         "nextBarEntries": matching.get("nextBarEntries"),
         "nextBarExits": matching.get("nextBarExits"),
@@ -1099,6 +1111,9 @@ def build_parser() -> argparse.ArgumentParser:
     run_cmd.add_argument("--no-intrabar-stops", action="store_true")
     run_cmd.add_argument("--intrabar-ambiguity", choices=["stop_first", "take_first"], default="stop_first")
     run_cmd.add_argument("--use-theme-factor-for-execution", action="store_true")
+    run_cmd.add_argument("--exclude-non-positive-price-rows", action="store_true")
+    run_cmd.add_argument("--exclude-cross-market-zero-price-rows", action="store_true")
+    run_cmd.add_argument("--exclude-all-zero-price-frames", action="store_true")
     run_cmd.set_defaults(func=cmd_run_ranktrend)
 
     longtest_cmd = sub.add_parser("run-longtest-baselines", help="Run fixed long-test RankTrend baseline set")
@@ -1124,6 +1139,9 @@ def build_parser() -> argparse.ArgumentParser:
     longtest_cmd.add_argument("--volume-participation-rate", type=float, default=0.05)
     longtest_cmd.add_argument("--order-book-participation-rate", type=float, default=0.3)
     longtest_cmd.add_argument("--intrabar-ambiguity", choices=["stop_first", "take_first"], default="stop_first")
+    longtest_cmd.add_argument("--exclude-non-positive-price-rows", action="store_true")
+    longtest_cmd.add_argument("--exclude-cross-market-zero-price-rows", action="store_true")
+    longtest_cmd.add_argument("--exclude-all-zero-price-frames", action="store_true")
     longtest_cmd.add_argument("--checkpoint-id", default=None)
     longtest_cmd.add_argument("--output", default=None)
     longtest_cmd.add_argument("--dry-run", action="store_true")

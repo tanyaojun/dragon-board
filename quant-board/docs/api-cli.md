@@ -720,6 +720,9 @@ Dragon Board 候选池第一版复用 QuantBoard journal 存储，候选记录�
   "orderBookParticipationRate": 0.3,
   "useIntrabarStops": true,
   "intrabarAmbiguity": "stop_first",
+  "excludeNonPositivePriceRows": false,
+  "excludeCrossMarketZeroPriceRows": false,
+  "excludeAllZeroPriceFrames": false,
   "momentumPeriods": [3, 5, 8, 13, 21],
   "macdFast": 21,
   "macdSlow": 34,
@@ -728,6 +731,10 @@ Dragon Board 候选池第一版复用 QuantBoard journal 存储，候选记录�
 ```
 
 返回会包含 `runId`，并把完整结果落库到 `backtest_runs`。MongoDB 模式下完整结果优先写入 `resultCompressed` 可逆压缩字段；如果压缩后仍超过安全阈值，则拆入 `backtest_result_chunks`，读取层透明拼接并还原。为避免真实数据集响应过大，接口默认只返回轻量摘要、前 120 条 `signals` 预览、交易/权益预览和 `strategyDecisions` 帧计数，完整结果通过 `runId` 追溯。报告会包含 `researchDiagnostics`，用于展示 1/2/5 bars 后验表现、市场环境和生命周期下的候选分层分布、展示状态分布及对照组表现；该字段只作为研究诊断，不会自动写回默认参数。
+
+`excludeNonPositivePriceRows` 默认关闭。显式设为 `true` 时，服务会在 RankTrend replay 前剔除每个 frame 中 `price <= 0` 或无法解析为正价格的股票行，并把统计写入 `dataQuality.runtimeFilter.priceFilter`。该字段仅用于研究复跑和质量诊断，不修改 MongoDB 源快照事实，不代表默认 formal quality gate。
+
+`excludeCrossMarketZeroPriceRows` 与 `excludeAllZeroPriceFrames` 也默认关闭。前者只过滤带零行情形态的跨市场/非 A 股热榜条目，并把统计写入 `dataQuality.runtimeFilter.crossMarketPriceFilter`；后者只剔除整帧股票行价格全为 `0` 或不可解析的异常快照，并把统计写入 `dataQuality.runtimeFilter.allZeroPriceFrameFilter`。两者都只用于 Phase 12 价格质量归因研究，不修改 MongoDB 源快照事实，不改变默认回测口径。
 
 ### `GET /api/backtests/{run_id}`
 
@@ -1177,11 +1184,18 @@ cd d:\dragon-board\quant-board
   --volume-participation-rate 0.05 `
   --order-book-participation-rate 0.3 `
   --intrabar-ambiguity stop_first `
+  --exclude-non-positive-price-rows `
+  --exclude-cross-market-zero-price-rows `
+  --exclude-all-zero-price-frames `
   --macd-fast 21 `
   --macd-slow 34 `
   --macd-signal 13 `
   --momentum-periods 3,5,8,13,21
 ```
+
+`--exclude-non-positive-price-rows` 是显式研究开关，默认不启用。启用后只在本次回测内过滤 `price<=0` 股票行，并在报告中记录 `priceFilter` 统计。
+
+`--exclude-cross-market-zero-price-rows` 和 `--exclude-all-zero-price-frames` 是 Phase 12 价格质量归因开关，默认不启用。前者用于单独评估跨市场/非 A 股零行情条目的影响，后者用于单独评估整帧零价采集异常的影响。两个开关可以和 `--exclude-non-positive-price-rows` 分开使用，以避免把不同数据问题混成一个结论。
 
 命令输出摘要应由后端服务层返回，至少包含：
 
@@ -1249,6 +1263,18 @@ win_rate: 0.52
 ```powershell
 .\.venv\Scripts\python.exe -m backend.cli run-longtest-baselines `
   --checkpoint-id checkpoint_2026-05-21_initial
+
+.\.venv\Scripts\python.exe -m backend.cli run-longtest-baselines `
+  --checkpoint-id checkpoint_2026-05-21_price_filter `
+  --exclude-non-positive-price-rows
+
+.\.venv\Scripts\python.exe -m backend.cli run-longtest-baselines `
+  --checkpoint-id checkpoint_2026-05-21_cross_market_zero_filter `
+  --exclude-cross-market-zero-price-rows
+
+.\.venv\Scripts\python.exe -m backend.cli run-longtest-baselines `
+  --checkpoint-id checkpoint_2026-05-21_all_zero_frame_filter `
+  --exclude-all-zero-price-frames
 ```
 
 固定执行三条基线：
@@ -1259,7 +1285,7 @@ win_rate: 0.52
 | `H2_half_hour_next_bar` | `half_hour` | `next_bar` | `40` | 正式保守验收主线 |
 | `Q1_quarter_hour_next_bar` | `quarter_hour` | `next_bar` | `80` | 研究压力测试 |
 
-默认把 checkpoint 摘要以 JSONL 追加到 `data/reports/long_test_runs.jsonl`。每行保留 `checkpointId`、`runId`、`datasetId`、`snapshotType`、`strategyName`、`strategyVersion`、`configHash`、`randomSeed`、核心收益/回撤/交易指标、质量等级和资金流缺失统计。可用 `--output` 指定单个输出文件，或用 `--dry-run` 只查看将要执行的三条 payload。
+默认把 checkpoint 摘要以 JSONL 追加到 `data/reports/long_test_runs.jsonl`。每行保留 `checkpointId`、`runId`、`datasetId`、`snapshotType`、`strategyName`、`strategyVersion`、`configHash`、`randomSeed`、核心收益/回撤/交易指标、质量等级、资金流缺失统计，以及显式价格过滤统计。价格统计包括全量非正价格过滤 `priceFilter`、跨市场零行情过滤 `crossMarketPriceFilter` 和全零异常帧过滤 `allZeroPriceFrameFilter`。可用 `--output` 指定单个输出文件，或用 `--dry-run` 只查看将要执行的三条 payload。
 
 ### `optimize-ranktrend`
 
