@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -32,7 +33,15 @@ class ImportDatasetRequest(BaseModel):
         normalized = str(value).strip()
         if not normalized:
             return None
-        return normalized.replace("/", "-")
+        normalized = normalized.replace("/", "-")
+        parts = normalized.split("-")
+        if len(parts) == 3 and all(part.isdigit() for part in parts):
+            year, month, day = parts
+            normalized = f"{year.zfill(4)}-{month.zfill(2)}-{day.zfill(2)}"
+        try:
+            return date.fromisoformat(normalized).isoformat()
+        except ValueError:
+            return normalized
 
 
 class SnapshotIngestRequest(BaseModel):

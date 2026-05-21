@@ -742,6 +742,27 @@ function parseNumberList(value: string): number[] {
     .filter((item) => Number.isFinite(item));
 }
 
+function apiErrorRaw(error: unknown, fallback: string): Record<string, unknown> {
+  if (error && typeof error === "object") {
+    const detail =
+      "body" in error
+        ? asRecord((error as { body?: unknown }).body).detail
+        : undefined;
+    return {
+      error: fallback,
+      name: "name" in error ? String((error as { name?: unknown }).name || "Error") : "Error",
+      message: "message" in error ? String((error as { message?: unknown }).message || fallback) : fallback,
+      detail,
+      body: "body" in error ? (error as { body?: unknown }).body : undefined
+    };
+  }
+  return {
+    error: fallback,
+    name: error instanceof Error ? error.name : "Error",
+    message: error instanceof Error ? error.message : String(error)
+  };
+}
+
 function parsePeriodGrid(value: string): number[][] {
   return value
     .split(";")
@@ -754,18 +775,40 @@ function parsePeriodGrid(value: string): number[][] {
     .filter((group) => group.length > 0);
 }
 
+function datasetFilters(dataset: DatasetSummary): Record<string, unknown> {
+  const metadata = asRecord(dataset.metadata);
+  return asRecord(metadata.filters);
+}
+
+function requestedDatasetRange(dataset: DatasetSummary): string {
+  const filters = datasetFilters(dataset);
+  const start = typeof filters.startDate === "string" && filters.startDate ? filters.startDate : dataset.start_date;
+  const end = typeof filters.endDate === "string" && filters.endDate ? filters.endDate : dataset.end_date;
+  return start && end ? `${start}~${end}` : "";
+}
+
+function actualDatasetRange(dataset: DatasetSummary): string {
+  return dataset.start_date && dataset.end_date ? `${dataset.start_date}~${dataset.end_date}` : "";
+}
+
 function datasetDisplayName(dataset: DatasetSummary): string {
   const name = dataset.name || dataset.id;
   const shortId = dataset.id ? dataset.id.slice(-6) : "";
   const frames = dataset.frame_count ?? dataset.snapshot_count ?? 0;
-  const range = dataset.start_date && dataset.end_date ? `${dataset.start_date}~${dataset.end_date}` : "无区间";
-  return `${name} · ${range} · ${frames}帧 · ${shortId}`;
+  const requested = requestedDatasetRange(dataset);
+  const actual = actualDatasetRange(dataset);
+  const range = requested || actual || "无区间";
+  const actualText = requested && actual && requested !== actual ? ` · 实际${actual}` : "";
+  return `${name} · ${range}${actualText} · ${frames}帧 · ${shortId}`;
 }
 
 function datasetRange(dataset: DatasetSummary): string {
-  const start = dataset.start_date || "-";
-  const end = dataset.end_date || "-";
-  return `${start} / ${end}`;
+  const requested = requestedDatasetRange(dataset);
+  const actual = actualDatasetRange(dataset);
+  if (requested && actual && requested !== actual) {
+    return `请求 ${requested} / 实际 ${actual}`;
+  }
+  return requested || actual || "-";
 }
 
 function shortId(value: unknown): string {
@@ -824,11 +867,7 @@ async function runRequest<T>(
   } catch (error) {
     state.status = "error";
     state.error = formatApiError(error);
-    state.raw = {
-      error: state.error,
-      name: error instanceof Error ? error.name : "Error",
-      message: error instanceof Error ? error.message : String(error)
-    };
+    state.raw = apiErrorRaw(error, state.error);
   }
 }
 
@@ -918,6 +957,15 @@ async function importDataset(): Promise<void> {
 
   await runRequest(importState, () => api.importDataset(payload));
   if (importState.status === "ok" && !dryRunImport.value) {
+    const raw = importState.data as unknown;
+    const data =
+      raw && typeof raw === "object"
+        ? ((raw as { dataset?: DatasetSummary } & Partial<DatasetSummary>).dataset ||
+            (raw as Partial<DatasetSummary>))
+        : undefined;
+    if (data?.id) {
+      selectedDatasetId.value = data.id;
+    }
     await loadDatasets();
   }
 }
@@ -961,10 +1009,7 @@ async function deleteSelectedDataset(): Promise<void> {
   } catch (error) {
     deleteDatasetState.status = "error";
     deleteDatasetState.error = formatApiError(error);
-    deleteDatasetState.raw = {
-      error: deleteDatasetState.error,
-      message: error instanceof Error ? error.message : String(error)
-    };
+    deleteDatasetState.raw = apiErrorRaw(error, deleteDatasetState.error);
   }
 }
 

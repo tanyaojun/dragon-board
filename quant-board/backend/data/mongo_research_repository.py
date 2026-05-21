@@ -9,9 +9,17 @@ from backend.data.mongo_repository import MongoRepository
 from backend.utils import json_dumps
 
 
+BACKTEST_RESULT_CHUNK_THRESHOLD = 8_000_000
+BACKTEST_RESULT_CHUNK_SIZE = 4_000_000
+
+
 class MongoResearchRepository(MongoRepository):
     def save_backtest_run(self, run: BacktestRun) -> BacktestRun:
-        self.db["backtest_runs"].replace_one({"id": run.id}, self._backtest_run_doc(run), upsert=True)
+        doc, chunks = self._backtest_run_doc_and_chunks(run)
+        self.db["backtest_runs"].replace_one({"id": run.id}, doc, upsert=True)
+        self.db["backtest_result_chunks"].delete_many({"backtestRunId": run.id})
+        if chunks:
+            self.db["backtest_result_chunks"].insert_many(chunks, ordered=False)
         return self.get_backtest_run(run.id) or run
 
     def get_backtest_run(self, run_id: str) -> BacktestRun | None:
@@ -153,6 +161,7 @@ class MongoResearchRepository(MongoRepository):
             name: int(self.db[name].delete_many(query).deleted_count)
             for name, query in {
                 "backtest_runs": {"id": run_id},
+                "backtest_result_chunks": {"backtestRunId": run_id},
                 "backtest_trades": {"backtestRunId": run_id},
                 "backtest_equity_curve": {"backtestRunId": run_id},
                 "backtest_signals": {"backtestRunId": run_id},
@@ -166,6 +175,7 @@ class MongoResearchRepository(MongoRepository):
             name: int(self.db[name].count_documents({}))
             for name in (
                 "backtest_runs",
+                "backtest_result_chunks",
                 "backtest_trades",
                 "backtest_equity_curve",
                 "backtest_signals",
@@ -496,6 +506,24 @@ class MongoResearchRepository(MongoRepository):
 
     @staticmethod
     def _backtest_run_doc(run: BacktestRun) -> dict[str, Any]:
+        doc, _chunks = MongoResearchRepository._backtest_run_doc_and_chunks(run)
+        return doc
+
+    @staticmethod
+    def _backtest_run_doc_and_chunks(run: BacktestRun) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        result_compressed = dumps_json_field(loads_json_field(run.result_json, {}))
+        chunks: list[dict[str, Any]] = []
+        result_chunked = len(result_compressed.encode("utf-8")) > BACKTEST_RESULT_CHUNK_THRESHOLD
+        if result_chunked:
+            chunks = [
+                {
+                    "backtestRunId": run.id,
+                    "sequence": index,
+                    "payload": result_compressed[start : start + BACKTEST_RESULT_CHUNK_SIZE],
+                }
+                for index, start in enumerate(range(0, len(result_compressed), BACKTEST_RESULT_CHUNK_SIZE))
+            ]
+
         return {
             "id": run.id,
             "datasetId": run.dataset_id,
@@ -509,13 +537,23 @@ class MongoResearchRepository(MongoRepository):
             "dateEnd": run.date_end,
             "errorReason": run.error_reason,
             "request": loads_json_field(run.request_json, {}),
-            "resultCompressed": dumps_json_field(loads_json_field(run.result_json, {})),
+            "resultCompressed": "" if result_chunked else result_compressed,
+            "resultChunked": result_chunked,
+            "resultChunkCount": len(chunks),
             "createdAt": run.created_at or _utc_now_naive(),
             "finishedAt": run.finished_at,
-        }
+        }, chunks
 
-    @staticmethod
-    def _backtest_run_from_doc(row: dict[str, Any]) -> BacktestRun:
+    def _backtest_run_from_doc(self, row: dict[str, Any]) -> BacktestRun:
+        result_compressed = str(row.get("resultCompressed") or "")
+        if row.get("resultChunked"):
+            chunks = list(
+                self.db["backtest_result_chunks"]
+                .find({"backtestRunId": str(row.get("id") or "")})
+                .sort([("sequence", 1)])
+            )
+            if chunks:
+                result_compressed = "".join(str(chunk.get("payload") or "") for chunk in chunks)
         return BacktestRun(
             id=str(row.get("id") or ""),
             dataset_id=str(row.get("datasetId") or ""),
@@ -532,7 +570,7 @@ class MongoResearchRepository(MongoRepository):
             result_json=dumps_json_field(
                 row.get("result")
                 if isinstance(row.get("result"), dict)
-                else loads_json_field(row.get("resultCompressed"), {})
+                else loads_json_field(result_compressed, {})
             ),
             created_at=_datetime_or_now(row.get("createdAt")),
             finished_at=_datetime_or_none(row.get("finishedAt")),

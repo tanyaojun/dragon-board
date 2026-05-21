@@ -103,6 +103,37 @@ def test_backtest_run_mapping_uses_compressed_result_contract() -> None:
         "signals": [{"code": "000001"}],
         "totalReturn": 0.12,
     }
+    assert doc["resultChunked"] is False
+    assert doc["resultChunkCount"] == 0
+
+
+def test_backtest_run_mapping_chunks_oversized_compressed_result(monkeypatch) -> None:
+    import backend.data.mongodb_migration as migration
+
+    monkeypatch.setattr(migration, "BACKTEST_RESULT_CHUNK_THRESHOLD", 20)
+    monkeypatch.setattr(migration, "BACKTEST_RESULT_CHUNK_SIZE", 10)
+    generated: dict[str, list[dict[str, object]]] = {}
+
+    doc = map_sqlite_row_to_mongo(
+        "backtest_runs",
+        {
+            "id": "bt_large",
+            "dataset_id": "dragonboard_live",
+            "request_json": '{"datasetId":"dragonboard_live"}',
+            "result_json": '{"signals":[{"code":"000001","payload":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]}',
+        },
+        generated=generated,
+    )
+
+    chunks = generated["backtest_result_chunks"]
+    restored = "".join(str(chunk["payload"]) for chunk in chunks)
+
+    assert doc["resultCompressed"] == ""
+    assert doc["resultChunked"] is True
+    assert doc["resultChunkCount"] == len(chunks)
+    assert len(chunks) > 1
+    assert [chunk["sequence"] for chunk in chunks] == list(range(len(chunks)))
+    assert loads_json_field(restored, {})["signals"][0]["code"] == "000001"
 
 
 def test_invalid_json_is_audited_and_defaulted() -> None:
@@ -138,6 +169,9 @@ def test_build_mongodb_indexes_contains_snapshot_and_stock_name_unique_keys() ->
     assert indexes["snapshot_frames"][0]["keys"] == [("datasetId", 1), ("snapshotId", 1)]
     assert indexes["snapshot_frames"][0]["unique"] is True
     assert indexes["snapshot_stock_rows"][0]["keys"] == [("datasetId", 1), ("rowId", 1)]
+    assert "backtest_result_chunks" in ALL_COLLECTIONS
+    assert indexes["backtest_result_chunks"][0]["keys"] == [("backtestRunId", 1), ("sequence", 1)]
+    assert indexes["backtest_result_chunks"][0]["unique"] is True
     assert indexes["stock_names"][0]["keys"] == [("code", 1)]
     assert indexes["stock_names"][0]["unique"] is True
     assert indexes["migration_audit"][0]["keys"] == [("opType", 1), ("idempotencyKey", 1)]

@@ -44,6 +44,7 @@ def test_mongodb_cleanup_dry_run_preserves_database() -> None:
     assert result["deleteDatasetIds"] == ["debug_dataset"]
     assert result["counts"]["snapshot_frames"] == 1
     assert result["counts"]["backtest_runs"] == 1
+    assert result["counts"]["backtest_result_chunks"] == 1
     assert len(db["datasets"].rows) == 2
     assert len(db["snapshot_frames"].rows) == 2
 
@@ -59,6 +60,7 @@ def test_mongodb_cleanup_apply_deletes_only_non_kept_dataset_and_research_childr
     assert db["snapshot_frames"].rows == [{"datasetId": "dragonboard_live", "snapshotId": "live-1"}]
     assert db["snapshot_stock_rows"].rows == [{"datasetId": "dragonboard_live", "snapshotId": "live-1"}]
     assert db["backtest_runs"].rows == [{"id": "bt-live", "datasetId": "dragonboard_live"}]
+    assert db["backtest_result_chunks"].rows == [{"backtestRunId": "bt-live"}]
     assert db["backtest_signals"].rows == [{"backtestRunId": "bt-live"}]
     assert db["stock_names"].rows == [{"code": "000001"}]
     assert db["themes"].rows == [{"id": "theme-1"}]
@@ -113,6 +115,7 @@ def _seed_database() -> FakeMongoDatabase:
                 ]
             ),
             "backtest_trades": FakeCollection([{"backtestRunId": "bt-debug"}]),
+            "backtest_result_chunks": FakeCollection([{"backtestRunId": "bt-live"}, {"backtestRunId": "bt-debug"}]),
             "backtest_equity_curve": FakeCollection([{"backtestRunId": "bt-debug"}]),
             "backtest_signals": FakeCollection([{"backtestRunId": "bt-live"}, {"backtestRunId": "bt-debug"}]),
             "backtest_quality_reports": FakeCollection([{"backtestRunId": "bt-debug"}]),

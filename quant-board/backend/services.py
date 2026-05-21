@@ -91,16 +91,155 @@ class BacktestService:
     def _summary_response(run_id: str, result: dict[str, Any], metadata: dict[str, Any] | None = None) -> dict[str, Any]:
         signals = result.get("signals") or []
         signal_count = int(result.get("signalCount") or len(signals))
-        compact = dict(result)
-        compact["signals"] = signals[:120]
+        compact = BacktestService._compact_backtest_result(result, signal_count=signal_count)
         compact["signalCount"] = signal_count
         compact["isCompact"] = True
         compact["notes"] = [
             *(result.get("notes") or []),
-            f"接口默认返回前 120 条 signals 预览，完整结果已落库：{run_id}",
+            f"接口默认返回轻量摘要和前 120 条 signals 预览，完整压缩结果已落库：{run_id}",
         ]
         meta = metadata or {}
         return {"id": run_id, "runId": run_id, "run_id": run_id, **meta, "result": compact, **compact}
+
+    @staticmethod
+    def _compact_backtest_result(result: dict[str, Any], *, signal_count: int) -> dict[str, Any]:
+        compact = {
+            key: value
+            for key, value in result.items()
+            if key
+            not in {
+                "signals",
+                "strategyDecisions",
+                "tradeSimulation",
+                "trades",
+                "tradeEvents",
+                "equityCurve",
+                "openPositions",
+            }
+        }
+
+        signals = result.get("signals") if isinstance(result.get("signals"), list) else []
+        compact["signals"] = [
+            BacktestService._compact_signal_preview(signal)
+            for signal in signals[:120]
+            if isinstance(signal, dict)
+        ]
+        compact["signalPreviewCount"] = len(compact["signals"])
+        compact["signalCount"] = signal_count
+
+        for key in ("trades", "tradeEvents", "equityCurve", "openPositions"):
+            values = result.get(key)
+            if isinstance(values, list):
+                compact[key] = values[:120]
+
+        simulation = result.get("tradeSimulation")
+        if isinstance(simulation, dict):
+            compact["tradeSimulation"] = BacktestService._compact_trade_simulation(simulation)
+
+        decisions = result.get("strategyDecisions")
+        if isinstance(decisions, dict):
+            frame_results = decisions.get("frameResults") if isinstance(decisions.get("frameResults"), list) else []
+            compact["strategyDecisions"] = {
+                key: value
+                for key, value in decisions.items()
+                if key != "frameResults"
+            }
+            compact["strategyDecisions"]["frameResultCount"] = len(frame_results)
+            compact["strategyDecisions"]["frameResults"] = [
+                BacktestService._compact_strategy_frame(frame)
+                for frame in frame_results[:20]
+                if isinstance(frame, dict)
+            ]
+
+        return compact
+
+    @staticmethod
+    def _compact_signal_preview(signal: dict[str, Any]) -> dict[str, Any]:
+        rank_trend = signal.get("rankTrend") if isinstance(signal.get("rankTrend"), dict) else {}
+        decision = rank_trend.get("decision") if isinstance(rank_trend.get("decision"), dict) else {}
+        final = decision.get("final") if isinstance(decision.get("final"), dict) else {}
+        technical = rank_trend.get("technical") if isinstance(rank_trend.get("technical"), dict) else {}
+        momentum = technical.get("momentumProfile") if isinstance(technical.get("momentumProfile"), dict) else {}
+        return {
+            "snapshotId": signal.get("snapshotId"),
+            "tradingDate": signal.get("tradingDate"),
+            "slotTime": signal.get("slotTime"),
+            "code": signal.get("code"),
+            "name": signal.get("name"),
+            "rank": signal.get("rank"),
+            "price": signal.get("price"),
+            "candidateTier": signal.get("candidateTier"),
+            "action": signal.get("action"),
+            "signal": signal.get("signal") or final.get("signal"),
+            "finalSignal": final.get("signal"),
+            "confidence": signal.get("confidence"),
+            "stage": signal.get("stage"),
+            "regime": signal.get("regime"),
+            "score": signal.get("score"),
+            "technicalSignals": technical.get("signals"),
+            "momentumProfile": momentum,
+            "risk": rank_trend.get("risk"),
+            "momentum": momentum.get("momentum"),
+            "acceleration": momentum.get("acceleration"),
+            "riskFlags": signal.get("riskFlags") or [],
+            "reasons": signal.get("reasons") or [],
+            "mainTheme": signal.get("mainTheme"),
+            "themeRole": signal.get("themeRole"),
+        }
+
+    @staticmethod
+    def _compact_trade_simulation(simulation: dict[str, Any]) -> dict[str, Any]:
+        compact = {
+            key: value
+            for key, value in simulation.items()
+            if key not in {"trades", "tradeEvents", "equityHistory", "equityCurve", "openPositions"}
+        }
+        for key in ("trades", "tradeEvents", "equityHistory", "equityCurve", "openPositions"):
+            values = simulation.get(key)
+            if isinstance(values, list):
+                compact[key] = values[:120]
+                compact[f"{key}Count"] = len(values)
+        return compact
+
+    @staticmethod
+    def _compact_strategy_frame(frame: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "snapshotId": frame.get("snapshotId"),
+            "tradingDate": frame.get("tradingDate"),
+            "slotTime": frame.get("slotTime"),
+            "buyCandidateCount": len(frame.get("buyCandidates") or []),
+            "watchCandidateCount": len(frame.get("watchCandidates") or []),
+            "excludedCandidateCount": len(frame.get("excludedCandidates") or []),
+            "buyCandidates": [
+                BacktestService._compact_decision_preview(item)
+                for item in (frame.get("buyCandidates") or [])[:20]
+                if isinstance(item, dict)
+            ],
+            "watchCandidates": [
+                BacktestService._compact_decision_preview(item)
+                for item in (frame.get("watchCandidates") or [])[:20]
+                if isinstance(item, dict)
+            ],
+            "excludedCandidates": [
+                BacktestService._compact_decision_preview(item)
+                for item in (frame.get("excludedCandidates") or [])[:20]
+                if isinstance(item, dict)
+            ],
+        }
+
+    @staticmethod
+    def _compact_decision_preview(item: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "code": item.get("code"),
+            "name": item.get("name"),
+            "rank": item.get("rank"),
+            "signal": item.get("signal"),
+            "candidateTier": item.get("candidateTier"),
+            "confidence": item.get("confidence"),
+            "stage": item.get("stage"),
+            "regime": item.get("regime"),
+            "reason": item.get("reason") or item.get("explanation"),
+        }
 
     def run_ranktrend(self, payload: dict[str, Any]) -> dict[str, Any]:
         dataset_id = str(camel_get(payload, "dataset_id", "datasetId", ""))

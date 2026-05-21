@@ -21,6 +21,7 @@ DATASET_RESEARCH_COLLECTIONS = (
 )
 
 BACKTEST_CHILD_COLLECTIONS = (
+    "backtest_result_chunks",
     "backtest_trades",
     "backtest_equity_curve",
     "backtest_signals",

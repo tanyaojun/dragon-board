@@ -34,6 +34,8 @@ function toApiError(response: Response, body: unknown): ApiErrorDetail {
   if (body && typeof body === "object" && "detail" in body) {
     const detail = (body as { detail?: unknown }).detail;
     message = typeof detail === "string" ? detail : JSON.stringify(detail);
+  } else if (body && typeof body === "object") {
+    message = JSON.stringify(body);
   } else if (typeof body === "string" && body.trim()) {
     message = body;
   }
@@ -164,6 +166,13 @@ export const api = {
 };
 
 export function formatApiError(error: unknown): string {
+  if (error && typeof error === "object" && "body" in error) {
+    const body = (error as { body?: unknown }).body;
+    if (body && typeof body === "object" && "detail" in body) {
+      const detail = (body as { detail?: unknown }).detail;
+      return typeof detail === "string" ? detail : JSON.stringify(detail, null, 2);
+    }
+  }
   if (error && typeof error === "object" && "message" in error) {
     return String((error as { message: unknown }).message);
   }

@@ -128,12 +128,11 @@ snapshot_type = half_hour
 
 1. 选择源数据集，默认 `dragonboard_live`。
 2. 按 `snapshot_type`、日期区间和最大快照数筛选 `snapshot_frames`。
-3. 不复制事实行，直接以源 `dataset_id` 和筛选条件作为研究视图。
-4. 生成稳定 `schema_fingerprint` 和 `metadata.filters`。
-5. 执行质量门禁。
-6. `dryRun=false` 时仍不写入新的快照事实副本；源数据集不被删除或覆盖。
-7. 不登记新的 Supabase 备份对象。
-8. 返回带 `virtual=true`、`policy=snapshot_facts_view` 的数据集摘要和质量门禁结果。
+3. `dryRun=true` 时只返回带 `virtual=true`、`policy=snapshot_facts_view` 的预览摘要和质量门禁结果，不落库。
+4. `dryRun=false` 时复制筛选出的 `snapshot_records / snapshot_frames / snapshot_stock_rows / snapshot_sector_rows` 到新的 `ds_*` 派生数据集。
+5. 源数据集不被删除、覆盖或改写；派生数据集的 `metadata.sourceDatasetId` 和 `metadata.filters` 记录来源和筛选条件。
+6. 执行质量门禁，真实生成结果返回 `policy=snapshot_facts_derived_dataset`。
+7. MongoDB 模式下不登记新的 Supabase 备份对象。
 
 ### 历史 JSON 迁移
 

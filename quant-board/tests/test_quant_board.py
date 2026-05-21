@@ -479,13 +479,31 @@ def test_import_backtest_optimize_and_golden(tmp_path: Path) -> None:
     assert derived.status_code == 200, derived.text
     derived_dataset = derived.json()
     assert derived_dataset["source_type"] == "sqlite_snapshots"
-    assert derived_dataset["id"] == dataset["id"]
-    assert derived_dataset["virtual"] is True
-    assert derived_dataset["policy"] == "snapshot_facts_view"
+    assert derived_dataset["id"] != dataset["id"]
+    assert derived_dataset["policy"] == "snapshot_facts_derived_dataset"
     assert derived_dataset["frame_count"] == 35
     assert derived_dataset["stock_row_count"] >= 35
     assert derived_dataset["metadata"]["sourceDatasetId"] == dataset["id"]
     assert derived_dataset["metadata"]["filters"]["maxSnapshots"] == 35
+    assert any(item["id"] == derived_dataset["id"] for item in client.get("/api/datasets").json())
+
+    derived_range = client.post(
+        "/api/datasets/import",
+        json={
+            "sourceType": "sqlite_snapshots",
+            "sourceDatasetId": dataset["id"],
+            "name": "derived-range",
+            "snapshotTypes": ["half_hour"],
+            "startDate": "2026/4/1",
+            "endDate": "2026/04/05",
+        },
+    )
+    assert derived_range.status_code == 200, derived_range.text
+    derived_range_dataset = derived_range.json()
+    assert derived_range_dataset["metadata"]["filters"]["startDate"] == "2026-04-01"
+    assert derived_range_dataset["metadata"]["filters"]["endDate"] == "2026-04-05"
+    assert derived_range_dataset["start_date"] >= "2026-04-01"
+    assert derived_range_dataset["end_date"] <= "2026-04-05"
 
     derived_backtest = client.post(
         "/api/backtests/rank-trend",
@@ -507,6 +525,8 @@ def test_import_backtest_optimize_and_golden(tmp_path: Path) -> None:
     )
     assert derived_dry_run.status_code == 200, derived_dry_run.text
     assert derived_dry_run.json()["dryRun"] is True
+    assert derived_dry_run.json()["virtual"] is True
+    assert derived_dry_run.json()["policy"] == "snapshot_facts_view"
     assert derived_dry_run.json()["frame_count"] == 5
 
     golden_default = RankTrendConfig()

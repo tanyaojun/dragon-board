@@ -4,8 +4,9 @@ from datetime import datetime
 from typing import Any
 
 from backend.data.models import BacktestRun, GoldenRankTrendCase, OptimizationRun, TradeJournal
+from backend.data import mongo_research_repository as mongo_research_module
 from backend.data.mongo_research_repository import MongoResearchRepository
-from backend.data.json_codec import loads_json_field
+from backend.data.json_codec import COMPRESSED_TEXT_PREFIX, loads_json_field
 from backend.utils import json_dumps
 
 
@@ -175,8 +176,41 @@ def test_backtest_run_doc_compresses_large_result_without_losing_payload() -> No
 
     assert saved.id == "bt_large"
     assert "result" not in raw_doc
-    assert raw_doc["resultCompressed"].startswith("__qb_gzip_b64__:")
+    assert raw_doc["resultCompressed"].startswith(COMPRESSED_TEXT_PREFIX)
+    assert len(raw_doc["resultCompressed"].encode("utf-8")) < len(json_dumps(result).encode("utf-8"))
     assert restored_result == result
+
+
+def test_backtest_run_doc_chunks_oversized_compressed_result(monkeypatch) -> None:
+    db = FakeMongoDatabase()
+    repo = MongoResearchRepository(db)
+    monkeypatch.setattr(mongo_research_module, "BACKTEST_RESULT_CHUNK_THRESHOLD", 20)
+    monkeypatch.setattr(mongo_research_module, "BACKTEST_RESULT_CHUNK_SIZE", 10)
+    result = {"signals": [{"code": f"{index:06d}", "payload": "sample" * 20} for index in range(80)]}
+
+    repo.save_backtest_run(
+        BacktestRun(
+            id="bt_chunked",
+            dataset_id="ds_1",
+            strategy_name="rank_trend_candidate",
+            snapshot_type="half_hour",
+            config_hash="hash_chunked",
+            random_seed=20260430,
+            request_json='{"datasetId":"ds_1"}',
+            result_json=json_dumps(result),
+        )
+    )
+
+    raw_doc = db["backtest_runs"].rows[0]
+    chunks = db["backtest_result_chunks"].rows
+    restored = repo.get_backtest_run("bt_chunked")
+
+    assert raw_doc["resultChunked"] is True
+    assert raw_doc["resultCompressed"] == ""
+    assert raw_doc["resultChunkCount"] == len(chunks)
+    assert len(chunks) > 1
+    assert [chunk["sequence"] for chunk in chunks] == list(range(len(chunks)))
+    assert loads_json_field(restored.result_json, {}) == result
 
 
 def test_backtest_run_without_status_is_stored_as_completed() -> None:

@@ -416,10 +416,10 @@ Dragon Board `snapshotFacade.listSnapshots/getSnapshotById/listSnapshotFrames/li
 规则：
 
 - `sourceDatasetId` 默认 `dragonboard_live`；迁移期如果该数据集不存在，后端可回退到最新有快照事实行的数据集。
-- 接口不再把筛选后的 `snapshot_records / snapshot_frames / snapshot_stock_rows / snapshot_sector_rows` 复制到新的 `dataset_id`。返回对象使用源 `dataset_id`，并附带 `virtual=true`、`policy=snapshot_facts_view`，回测直接查询源快照事实表。
-- 返回元数据中的 `metadata.filters` 记录快照类型、日期区间和最大快照数。
-- `dryRun=true` 只返回会生成的数据集摘要和质量门禁结果，不落库。
-- `mongodb_snapshots` 不产生新的快照事实复制。旧 `sqlite_snapshots` 只属于迁移前兼容口径，不产生新的 Supabase 备份对象。
+- `dryRun=true` 只返回会生成的数据集摘要和质量门禁结果，不落库；返回对象带 `virtual=true`、`policy=snapshot_facts_view`。
+- `dryRun=false` 会复制筛选后的 `snapshot_records / snapshot_frames / snapshot_stock_rows / snapshot_sector_rows` 到新的 `ds_*` 派生数据集；源数据集不被删除、覆盖或改写。
+- 真实生成结果返回 `policy=snapshot_facts_derived_dataset`，元数据中的 `metadata.sourceDatasetId` 和 `metadata.filters` 记录来源数据集、快照类型、日期区间和最大快照数。
+- `mongodb_snapshots` / `sqlite_snapshots` 生成派生研究数据集时不产生新的 Supabase 备份对象。
 
 旧兼容 `sourceType`：
 
@@ -727,11 +727,11 @@ Dragon Board 候选池第一版复用 QuantBoard journal 存储，候选记录�
 }
 ```
 
-返回会包含 `runId`，并把完整结果落库到 `backtest_runs`。MongoDB 模式下完整结果写入 `resultCompressed` 可逆压缩字段，读取层透明还原；不裁剪 `backtest_runs` 中的回测结果。为避免真实数据集响应过大，接口默认只返回前 120 条 `signals` 预览，完整结果通过 `runId` 读取。报告会包含 `researchDiagnostics`，用于展示 1/2/5 bars 后验表现、市场环境和生命周期下的候选分层分布、展示状态分布及对照组表现；该字段只作为研究诊断，不会自动写回默认参数。
+返回会包含 `runId`，并把完整结果落库到 `backtest_runs`。MongoDB 模式下完整结果优先写入 `resultCompressed` 可逆压缩字段；如果压缩后仍超过安全阈值，则拆入 `backtest_result_chunks`，读取层透明拼接并还原。为避免真实数据集响应过大，接口默认只返回轻量摘要、前 120 条 `signals` 预览、交易/权益预览和 `strategyDecisions` 帧计数，完整结果通过 `runId` 追溯。报告会包含 `researchDiagnostics`，用于展示 1/2/5 bars 后验表现、市场环境和生命周期下的候选分层分布、展示状态分布及对照组表现；该字段只作为研究诊断，不会自动写回默认参数。
 
 ### `GET /api/backtests/{run_id}`
 
-读取兼容回测报告。SQLite 模式读取 `backtest_runs.result_json`；MongoDB 模式读取 `backtest_runs.resultCompressed` 并透明解压，旧 `result` 子文档仅作为兼容字段。新页面需要完整交易、权益曲线、信号和质量报告时，应继续调用下列归一化结果端点。
+读取兼容回测报告。SQLite 模式读取 `backtest_runs.result_json`；MongoDB 模式读取 `backtest_runs.resultCompressed`，或在 `resultChunked=true` 时读取 `backtest_result_chunks` 后透明拼接解压；旧 `result` 子文档仅作为兼容字段。新页面需要完整交易、权益曲线、信号和质量报告时，应继续调用下列归一化结果端点。
 
 ### `GET /api/backtests/{run_id}/report`
 

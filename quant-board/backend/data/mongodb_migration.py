@@ -10,6 +10,10 @@ from typing import Any
 from backend.data.json_codec import dumps_json_field, loads_json_field
 
 
+BACKTEST_RESULT_CHUNK_THRESHOLD = 8_000_000
+BACKTEST_RESULT_CHUNK_SIZE = 4_000_000
+
+
 SNAPSHOT_COLLECTIONS = (
     "datasets",
     "snapshot_records",
@@ -19,7 +23,7 @@ SNAPSHOT_COLLECTIONS = (
     "archive_manifests",
 )
 
-RESEARCH_COLLECTIONS = (
+RESEARCH_SOURCE_COLLECTIONS = (
     "golden_ranktrend_cases",
     "backtest_runs",
     "backtest_trades",
@@ -32,6 +36,8 @@ RESEARCH_COLLECTIONS = (
     "theme_signals",
     "theme_quality_reports",
 )
+RESEARCH_GENERATED_COLLECTIONS = ("backtest_result_chunks",)
+RESEARCH_COLLECTIONS = (*RESEARCH_SOURCE_COLLECTIONS, *RESEARCH_GENERATED_COLLECTIONS)
 
 THEME_COLLECTIONS = ("themes", "theme_stock_mappings", "theme_metadata")
 RUNTIME_COLLECTIONS = ("stock_names", "migration_audit")
@@ -138,6 +144,9 @@ def build_mongodb_indexes() -> dict[str, list[dict[str, Any]]]:
             {"keys": [("datasetId", 1), ("strategyName", 1), ("snapshotType", 1), ("createdAt", -1)]},
             {"keys": [("status", 1), ("createdAt", -1)]},
         ],
+        "backtest_result_chunks": [
+            {"keys": [("backtestRunId", 1), ("sequence", 1)], "unique": True},
+        ],
         "backtest_trades": [
             {"keys": [("backtestRunId", 1), ("code", 1)]},
             {"keys": [("backtestRunId", 1), ("entryTime", 1)]},
@@ -226,6 +235,7 @@ def map_sqlite_row_to_mongo(
     row: sqlite3.Row | dict[str, Any],
     *,
     audit: list[dict[str, object]] | None = None,
+    generated: dict[str, list[dict[str, Any]]] | None = None,
 ) -> dict[str, Any]:
     source = dict(row)
     document: dict[str, Any] = {}
@@ -261,12 +271,35 @@ def map_sqlite_row_to_mongo(
                 audit=audit,
             )
             if collection == "backtest_runs" and key == "result_json":
-                document["resultCompressed"] = dumps_json_field(parsed)
+                result_compressed = dumps_json_field(parsed)
+                chunks = _backtest_result_chunks(str(source.get("id") or ""), result_compressed)
+                if chunks and generated is not None:
+                    document["resultCompressed"] = ""
+                    document["resultChunked"] = True
+                    document["resultChunkCount"] = len(chunks)
+                    generated.setdefault("backtest_result_chunks", []).extend(chunks)
+                else:
+                    document["resultCompressed"] = result_compressed
+                    document["resultChunked"] = False
+                    document["resultChunkCount"] = 0
             else:
                 document[target_key] = parsed
             continue
         document[_camel_case(key)] = value
     return document
+
+
+def _backtest_result_chunks(run_id: str, result_compressed: str) -> list[dict[str, Any]]:
+    if len(result_compressed.encode("utf-8")) <= BACKTEST_RESULT_CHUNK_THRESHOLD:
+        return []
+    return [
+        {
+            "backtestRunId": run_id,
+            "sequence": index,
+            "payload": result_compressed[start : start + BACKTEST_RESULT_CHUNK_SIZE],
+        }
+        for index, start in enumerate(range(0, len(result_compressed), BACKTEST_RESULT_CHUNK_SIZE))
+    ]
 
 
 def map_stock_name_to_mongo(item: dict[str, Any]) -> dict[str, Any]:
@@ -304,11 +337,19 @@ def plan_mongodb_migration(plan: MongoMigrationPlan) -> dict[str, Any]:
 
     if plan.include_research:
         research_tables = _sqlite_tables(plan.research_db)
-        for name in RESEARCH_COLLECTIONS:
+        for name in RESEARCH_SOURCE_COLLECTIONS:
             collections[name] = {
                 "source": str(plan.research_db),
                 "sourceRows": _sqlite_count(plan.research_db, name) if name in research_tables else 0,
                 "exists": name in research_tables,
+                "skipped": False,
+                "sourceReadable": True,
+            }
+        for name in RESEARCH_GENERATED_COLLECTIONS:
+            collections[name] = {
+                "source": "generated",
+                "sourceRows": 0,
+                "exists": True,
                 "skipped": False,
                 "sourceReadable": True,
             }
@@ -450,16 +491,18 @@ def apply_mongodb_migration(
 
     if plan.include_research:
         research_tables = _sqlite_tables(plan.research_db)
-        for name in RESEARCH_COLLECTIONS:
+        for name in RESEARCH_SOURCE_COLLECTIONS:
             if name not in research_tables:
                 results[name] = {"source": str(plan.research_db), "sourceRows": 0, "insertedRows": 0, "exists": False}
                 continue
+            generated: dict[str, list[dict[str, Any]]] = {}
             inserted = _copy_sqlite_table_to_mongo(
                 plan.research_db,
                 name,
                 database[name],
                 audit=audit,
                 batch_size=batch_size,
+                generated=generated,
             )
             results[name] = {
                 "source": str(plan.research_db),
@@ -467,6 +510,28 @@ def apply_mongodb_migration(
                 "insertedRows": inserted,
                 "exists": True,
             }
+            for generated_name, rows in generated.items():
+                _insert_batches(database[generated_name], rows, batch_size=batch_size)
+                current = results.setdefault(
+                    generated_name,
+                    {
+                        "source": "generated",
+                        "sourceRows": 0,
+                        "insertedRows": 0,
+                        "exists": True,
+                    },
+                )
+                current["insertedRows"] = int(current["insertedRows"]) + len(rows)
+        for name in RESEARCH_GENERATED_COLLECTIONS:
+            results.setdefault(
+                name,
+                {
+                    "source": "generated",
+                    "sourceRows": 0,
+                    "insertedRows": 0,
+                    "exists": True,
+                },
+            )
     else:
         for name in RESEARCH_COLLECTIONS:
             results[name] = {
@@ -604,7 +669,7 @@ def _validate_migration_sources(plan: MongoMigrationPlan) -> list[dict[str, Any]
             except sqlite3.Error as exc:
                 errors.append({"source": "research_db", "path": str(path), "code": "sqlite_unreadable", "message": str(exc)})
             else:
-                missing_tables = [name for name in RESEARCH_COLLECTIONS if name not in tables]
+                missing_tables = [name for name in RESEARCH_SOURCE_COLLECTIONS if name not in tables]
                 if missing_tables:
                     errors.append(
                         {
@@ -759,13 +824,14 @@ def _copy_sqlite_table_to_mongo(
     *,
     audit: list[dict[str, object]],
     batch_size: int,
+    generated: dict[str, list[dict[str, Any]]] | None = None,
 ) -> int:
     inserted = 0
     batch: list[dict[str, Any]] = []
     with sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True) as conn:
         conn.row_factory = sqlite3.Row
         for row in conn.execute(f'select * from "{table}"'):
-            batch.append(map_sqlite_row_to_mongo(table, row, audit=audit))
+            batch.append(map_sqlite_row_to_mongo(table, row, audit=audit, generated=generated))
             if len(batch) >= batch_size:
                 _insert_batches(collection, batch, batch_size=batch_size)
                 inserted += len(batch)

@@ -174,7 +174,7 @@ MongoDB 模式下保存在 `golden_ranktrend_cases` 集合，保存 TypeScript g
 
 ### backtest_runs
 
-MongoDB 模式下保存在 `backtest_runs` 集合，保存单次回测请求和完整结果载荷。`request` 使用结构化子文档；完整回测结果写入可逆 gzip/base64 文本字段 `resultCompressed`，读取层透明还原为 `result_json`。旧数据中的 `result` 子文档只作为兼容读取字段。交易、权益曲线、信号和质量报告仍以独立集合为主。必须记录：
+MongoDB 模式下保存在 `backtest_runs` 集合，保存单次回测请求和完整结果载荷。`request` 使用结构化子文档；完整回测结果优先写入可逆 gzip/base64 文本字段 `resultCompressed`，读取层透明还原为 `result_json`。如果压缩后仍超过安全阈值，则 `backtest_runs` 只保存 `resultChunked=true` 和分块数量，实际压缩文本按顺序写入 `backtest_result_chunks`，读取时透明拼接。旧数据中的 `result` 子文档只作为兼容读取字段。交易、权益曲线、信号和质量报告仍以独立集合为主。必须记录：
 
 - `dataset_id`
 - `strategy_name`
@@ -188,6 +188,12 @@ MongoDB 模式下保存在 `backtest_runs` 集合，保存单次回测请求和�
 - `error_reason`
 - `request`
 - `resultCompressed`
+- `resultChunked`
+- `resultChunkCount`
+
+### backtest_result_chunks
+
+MongoDB 模式下保存在 `backtest_result_chunks` 集合，保存压缩后仍过大的 `backtest_runs.resultCompressed` 分块。每行包含 `backtestRunId`、`sequence` 和 `payload`，并通过 `(backtestRunId, sequence)` 唯一索引保证顺序与幂等。该集合只服务兼容完整结果追溯；页面明细仍优先读取归一化的交易、权益、信号和质量集合。
 
 ### backtest_trades
 

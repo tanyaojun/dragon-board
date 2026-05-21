@@ -140,7 +140,7 @@ SQLite 中的 `*_json` 字段迁移到 MongoDB 时应解析为结构化字段：
 | `theme_quality_flags_json` | `themeQualityFlags: string[]` |
 | `snapshot_types_json` | `snapshotTypes: string[]` |
 | `request_json` | `request: object` |
-| `result_json` | `resultCompressed: "__qb_gzip_b64__:<payload>" 或未压缩 JSON 文本；读取层透明还原。旧迁移遗留的 `result: object` 仅作为兼容读取字段。`backtest_runs` 不再直接嵌入完整 `result` 子文档，避免 MongoDB 16MB 单文档限制。 |
+| `result_json` | `resultCompressed: "__qb_gzip_b64__:<payload>" 或未压缩 JSON 文本；读取层透明还原。压缩后仍超过安全阈值时写入 `backtest_result_chunks(backtestRunId, sequence, payload)` 并在 `backtest_runs` 标记 `resultChunked=true`。旧迁移遗留的 `result: object` 仅作为兼容读取字段。`backtest_runs` 不再直接嵌入完整 `result` 子文档，避免 MongoDB 16MB 单文档限制。 |
 | `input_json` | `input: object` |
 | `expected_json` | `expected: object` |
 | `fill_detail_json` | `fillDetail: object` |

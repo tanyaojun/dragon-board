@@ -1285,7 +1285,9 @@ def run_ranktrend_backtest(payload: dict[str, Any], db: Session | None = Depends
     try:
         return BacktestService(db).run_ranktrend(payload)
     except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
+        raise _structured_bad_request(error) from error
+    except Exception as error:
+        raise _structured_backtest_error("rank_trend_backtest_failed", error) from error
 
 
 @app.post("/api/backtests/theme-trend")
@@ -1293,7 +1295,9 @@ def run_theme_trend_backtest(payload: dict[str, Any], db: Session | None = Depen
     try:
         return BacktestService(db).run_theme_trend(payload)
     except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
+        raise _structured_bad_request(error) from error
+    except Exception as error:
+        raise _structured_backtest_error("theme_trend_backtest_failed", error) from error
 
 
 @app.post("/api/backtests/theme-confluence")
@@ -1301,7 +1305,9 @@ def run_theme_confluence_backtest(payload: dict[str, Any], db: Session | None = 
     try:
         return BacktestService(db).run_theme_confluence(payload)
     except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
+        raise _structured_bad_request(error) from error
+    except Exception as error:
+        raise _structured_backtest_error("theme_confluence_backtest_failed", error) from error
 
 
 def _backtest_not_found(run_id: str) -> HTTPException:
@@ -1311,6 +1317,18 @@ def _backtest_not_found(run_id: str) -> HTTPException:
 def _structured_bad_request(error: ValueError) -> HTTPException:
     detail = error.args[0] if error.args and isinstance(error.args[0], dict) else str(error)
     return HTTPException(status_code=400, detail=detail)
+
+
+def _structured_backtest_error(code: str, error: Exception) -> HTTPException:
+    return HTTPException(
+        status_code=500,
+        detail={
+            "code": code,
+            "message": str(error) or error.__class__.__name__,
+            "errorType": error.__class__.__name__,
+            "storage": storage_source_label(),
+        },
+    )
 
 
 @app.post("/api/backtests/compare")
