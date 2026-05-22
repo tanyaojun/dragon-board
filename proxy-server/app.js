@@ -17,6 +17,7 @@ import { registerHotlistRoutes } from './routes/hotlists.js'
 import { registerLocalVoiceRoutes } from './routes/localVoice.js'
 import { registerMarketRoutes } from './routes/market.js'
 import { registerNotificationRoutes } from './routes/notifications.js'
+import { registerOpeningSignalRoutes } from './routes/openingSignals.js'
 import { registerQuoteRoutes } from './routes/quotes.js'
 import { registerStartupCacheRoutes } from './routes/startupCache.js'
 import { registerTdxRoutes } from './routes/tdx.js'
@@ -42,6 +43,7 @@ export function createProxyApp(options = {}) {
     feishuEventRadar: options.feishuEventRadar,
     eventRadarBackgroundWorker: options.eventRadarBackgroundWorker,
     fetchImpl: options.fetchImpl,
+    openingSignalStore: options.openingSignalStore,
   }
 
   app.use(cors({ origin: '*', methods: ['GET', 'POST'] }))
@@ -74,6 +76,7 @@ export function createProxyApp(options = {}) {
   registerBigOrderRoutes(app, context)
   registerLocalVoiceRoutes(app, context)
   registerNotificationRoutes(app, context)
+  registerOpeningSignalRoutes(app, context)
   registerTdxRoutes(app, context)
   registerMarketRoutes(app, context)
   registerXuangubaoRoutes(app, context)

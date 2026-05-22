@@ -58,7 +58,10 @@
       <div class="table-body" ref="bodyRef" @scroll="handleBodyScroll">
         <div v-for="(stock, index) in sortedStocks" :key="stock.code" :data-code="stock.code" class="data-row" :class="[
           index % 2 === 0 ? 'row-even' : 'row-odd',
-          { selected: uiStore.selectedCode === stock.code },
+          {
+            selected: uiStore.selectedCode === stock.code,
+            'opening-signal-row': hasOpeningWeakToStrongSignal(stock),
+          },
         ]" :style="gridTemplateStyle" @click="onRowClick($event, stock.code)"
           @dblclick="openStockDetailFromRow($event, stock)"
           @contextmenu.prevent="showContextMenu($event, stock)" @mouseenter="showRowTooltip($event, stock)"
@@ -87,6 +90,15 @@
               ]">
                 {{ formatPlatformRank(Number(getStockValue(stock, col.key))) }}
               </span>
+            </template>
+
+            <template v-else-if="col.key === 'name'">
+              <span class="stock-name-text">{{ formatCell(col.key, stock) }}</span>
+              <span
+                v-if="hasOpeningWeakToStrongSignal(stock)"
+                class="opening-signal-badge"
+                :title="openingSignalTitle(stock)"
+              >竞强</span>
             </template>
 
             <!-- 变化列 - 显示百分位变化 -->
@@ -241,6 +253,7 @@ import { useUIStore } from '../../stores/ui'
 import { useFavoriteStore } from '../../stores/favorite'
 import { dataLoader } from '../../services/dataLoader'
 import { candidateJournalService } from '@/services/candidate/CandidateJournalService'
+import { openingSignalClient, type OpeningCanonicalSignal } from '@/services/hotlist/OpeningSignalClient'
 import RankTrendPanel from '../../components/panels/RankTrendPanel.vue'
 import {
   buildRankTrendStatusContext,
@@ -326,6 +339,8 @@ const statusTooltip = ref({
   y: 0,
   content: '',
 })
+const openingSignalsByCode = ref<Map<string, OpeningCanonicalSignal>>(new Map())
+let openingSignalRefreshTimer: ReturnType<typeof setInterval> | null = null
 
 // 板块列表状态
 const boardList = ref<Board[]>([])
@@ -423,6 +438,19 @@ const gridTemplateStyle = computed(() => {
   }
 })
 const candidateMenuLabel = computed(() => (openCandidateId.value ? '查看候选详情' : '加入候选池'))
+
+const hasOpeningWeakToStrongSignal = (stock: Stock) => openingSignalsByCode.value.has(stock.code)
+
+const openingSignalTitle = (stock: Stock) => {
+  const signal = openingSignalsByCode.value.get(stock.code)
+  if (!signal) return ''
+  const confidence = signal.confidence === 'critical' ? '强' : signal.confidence === 'strong' ? '中' : '观察'
+  return `竞价弱转强｜${confidence}｜分数 ${signal.score ?? '--'}`
+}
+
+const refreshOpeningSignals = async () => {
+  openingSignalsByCode.value = await openingSignalClient.fetchTodaySignals()
+}
 
 // ========== 从表格数据获取题材信息 ==========
 
@@ -1243,6 +1271,10 @@ const handleClickOutside = (e: MouseEvent) => {
 // ========== 生命周期 ==========
 onMounted(() => {
   document.addEventListener('click', handleClickOutside)
+  void refreshOpeningSignals()
+  openingSignalRefreshTimer = setInterval(() => {
+    void refreshOpeningSignals()
+  }, 10_000)
 
   // 恢复滚动位置
   if (bodyRef.value && uiStore.scrollPosition) {
@@ -1253,6 +1285,10 @@ onMounted(() => {
 
 onUnmounted(() => {
   document.removeEventListener('click', handleClickOutside)
+  if (openingSignalRefreshTimer) {
+    clearInterval(openingSignalRefreshTimer)
+    openingSignalRefreshTimer = null
+  }
 })
 
 // 监听 sortedStocks 变化，更新滚动位置（可选）
@@ -1564,6 +1600,15 @@ defineExpose({
   background: rgba(0, 0, 0, 0.02);
 }
 
+.data-row.opening-signal-row {
+  background: linear-gradient(90deg, rgba(255, 71, 87, 0.13), rgba(255, 179, 92, 0.06)) !important;
+  box-shadow: inset 3px 0 0 rgba(255, 179, 92, 0.92);
+}
+
+.data-row.opening-signal-row:hover {
+  background: linear-gradient(90deg, rgba(255, 71, 87, 0.18), rgba(255, 179, 92, 0.09)) !important;
+}
+
 /* 单元格通用样式 */
 .cell {
   padding: 0 8px;
@@ -1601,6 +1646,26 @@ defineExpose({
 .name-cell {
   font-weight: 500;
   color: var(--text-primary);
+}
+
+.stock-name-text {
+  vertical-align: middle;
+}
+
+.opening-signal-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  margin-left: 4px;
+  padding: 0 5px;
+  border: 1px solid rgba(255, 167, 38, 0.6);
+  border-radius: 3px;
+  background: rgba(255, 71, 87, 0.14);
+  color: #ffb35c;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 18px;
+  vertical-align: middle;
 }
 
 /* 题材列 */

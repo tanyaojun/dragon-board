@@ -51,6 +51,7 @@ import { themeMapping } from './services/ThemeDataService'
 import { themeCorrelationAnalyzer } from './services/ThemeCorrelationAnalyzer'
 import { themeFacade } from './services/theme/ThemeFacade'
 import { themeSyncAdapter } from './services/theme/ThemeSyncAdapter'
+import { openingRealtimeEventBridge } from './services/hotlist/OpeningRealtimeEventBridge'
 
 const app = createApp(App)
 const pinia = createPinia()
@@ -93,6 +94,8 @@ if (typeof window !== 'undefined') {
   ;(window as any).themeCorrelationAnalyzer = themeCorrelationAnalyzer
 
   //数据层（已经通过 import 自动挂载）(window as any).dataLayer = (window as any).dataLayer
+  openingRealtimeEventBridge.start()
+  ;(window as any).openingRealtimeEventBridge = openingRealtimeEventBridge
 
   console.log('[Main] 📦 服务已挂载到 window')
   console.log('   ├─ sectorAnalyzer: 题材分析')
@@ -103,6 +106,7 @@ if (typeof window !== 'undefined') {
   console.log('   ├─ dataLayer: 统一数据层') // 新增
   console.log('   └─ dataLoader: 八平台数据加载')
   console.log('   └─ stockCodeManager: 股票代码管理')
+  console.log('   └─ openingRealtimeEventBridge: 竞价弱转强实时检测')
 }
 
 app.mount('#app')

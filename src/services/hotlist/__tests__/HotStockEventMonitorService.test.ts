@@ -205,6 +205,85 @@ describe('HotStockEventMonitorService', () => {
     expect(notifier.sendEvents).not.toHaveBeenCalled()
   })
 
+  it('accepts realtime derived opening weak-to-strong events without HTTP feed involvement', async () => {
+    const feed = {
+      fetchEvents: vi.fn().mockResolvedValue([
+        makeEvent({
+          id: 'http-limitup',
+          code: '600001',
+          type: 10005,
+          eventType: 10005,
+          typeName: '逼近涨停',
+          timestamp: Date.parse('2026-05-22T09:30:30+08:00'),
+        }),
+      ]),
+    }
+    const dataLayer = {
+      getStocks: vi.fn().mockReturnValue([{ code: '002552', name: '宝鼎科技' }]),
+      getDragonReview: vi.fn().mockReturnValue(null),
+    }
+    const service = new HotStockEventMonitorService({
+      feed,
+      dataLayer,
+      now: () => Date.parse('2026-05-22T09:31:00+08:00'),
+    })
+
+    service.acceptDerivedEvents([
+      makeEvent({
+        id: 'opening_weak_to_strong:2026-05-22:002552',
+        code: '002552',
+        name: '宝鼎科技',
+        type: 12001,
+        eventType: 12001,
+        typeName: '竞价弱转强',
+        timestamp: Date.parse('2026-05-22T09:30:06+08:00'),
+        raw: { source: 'opening_weak_to_strong_v3' },
+      }),
+    ])
+    const result = await service.refresh()
+
+    expect(result.ok).toBe(true)
+    expect(feed.fetchEvents).toHaveBeenCalledTimes(1)
+    expect(result.hotStockEvents.map(event => event.typeName)).toEqual(['竞价弱转强'])
+    expect(result.otherStockEvents.map(event => event.typeName)).toEqual(['逼近涨停'])
+    expect(result.events.some(event => event.typeName === '竞价弱转强')).toBe(true)
+    expect(result.events.some(event => event.typeName === 'opening_weak_to_strong')).toBe(false)
+  })
+
+  it('still shows realtime derived opening events when HTTP feed is unavailable', async () => {
+    const feed = {
+      fetchEvents: vi.fn().mockRejectedValue(new Error('http feed offline')),
+    }
+    const dataLayer = {
+      getStocks: vi.fn().mockReturnValue([{ code: '002552', name: '宝鼎科技' }]),
+      getDragonReview: vi.fn().mockReturnValue(null),
+    }
+    const service = new HotStockEventMonitorService({
+      feed,
+      dataLayer,
+      now: () => Date.parse('2026-05-22T09:31:00+08:00'),
+    })
+
+    service.acceptDerivedEvents([
+      makeEvent({
+        id: 'opening_weak_to_strong:2026-05-22:002552',
+        code: '002552',
+        name: '宝鼎科技',
+        type: 12001,
+        eventType: 12001,
+        typeName: '竞价弱转强',
+        timestamp: Date.parse('2026-05-22T09:30:06+08:00'),
+        raw: { source: 'opening_weak_to_strong_v3' },
+      }),
+    ])
+    const result = await service.refresh()
+
+    expect(result.ok).toBe(false)
+    expect(result.error).toBe('http feed offline')
+    expect(result.events.map(event => event.typeName)).toEqual(['竞价弱转强'])
+    expect(result.hotStockEvents.map(event => event.code)).toEqual(['002552'])
+  })
+
   it('keeps refresh successful when event radar notification fails', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const notifier = {

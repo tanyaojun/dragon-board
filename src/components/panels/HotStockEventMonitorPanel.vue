@@ -6,7 +6,7 @@
           <span class="title-mark" aria-hidden="true"></span>
           <h3>异动雷达</h3>
         </div>
-        <p>选股通数据源 · 盘中异动线索雷达</p>
+        <p>实时行情 + 异动事件源 · 盘中线索雷达</p>
       </div>
       <button class="icon-btn" type="button" title="关闭" aria-label="关闭异动雷达" @click="close">
         ×
@@ -47,7 +47,7 @@
       </div>
 
       <div class="event-list">
-        <div v-if="state.loading && !state.events.length" class="empty-state">正在加载选股通数据...</div>
+        <div v-if="state.loading && !state.events.length" class="empty-state">正在加载实时行情与异动事件...</div>
         <div v-else-if="state.error && !state.events.length" class="empty-state error">
           {{ state.error }}
           <button type="button" @click="refresh">重试</button>
@@ -66,6 +66,7 @@
               candidate: event.matchedCandidate,
               'pool-candidate': Boolean(candidatePoolEntry(event)),
               sector: event.category === 'sector',
+              'opening-weak-to-strong': event.type === OPENING_WEAK_TO_STRONG_EVENT_TYPE,
             },
           ]"
           @click="selectStock(event)"
@@ -237,6 +238,7 @@ import {
 import {
   type HotStockAbnormalEvent,
   type HotStockAbnormalEventType,
+  OPENING_WEAK_TO_STRONG_EVENT_TYPE,
   type HotStockEventMonitorState,
   normalizeHotStockCode,
 } from '../../services/hotlist/hotStockEventTypes'
@@ -269,6 +271,7 @@ const EVENT_TYPE_NAMES: Record<HotStockAbnormalEventType, string> = {
   10014: '新股开板回封',
   10009: '大幅拉升',
   10010: '快速跳水',
+  12001: '竞价弱转强',
   11000: '板块拉升',
   11001: '板块跳水',
 }
@@ -279,10 +282,11 @@ const pages = [
   { id: 'sector', label: '板块', icon: '◆' },
   { id: 'settings', label: '设置', icon: '⚙' },
 ] as const
-const ALL_EVENT_TYPES = [
+const ALL_EVENT_TYPES: HotStockAbnormalEventType[] = [
+  OPENING_WEAK_TO_STRONG_EVENT_TYPE,
   ...XUANGUBAO_STOCK_ABNORMAL_EVENT_TYPES,
   ...XUANGUBAO_SECTOR_ABNORMAL_EVENT_TYPES,
-]
+] as HotStockAbnormalEventType[]
 const OPEN_CANDIDATE_STATUSES = new Set<CandidateStatus>([
   'observe',
   'candidate',
@@ -583,7 +587,7 @@ watch(
         unsubscribe = hotStockEventMonitorService.subscribe((nextState) => {
           state.value = nextState
           if (speechEnabled.value) {
-            void hotStockEventSpeechService.handleLatestAdded(nextState.latestHotStockAdded)
+            void hotStockEventSpeechService.handleLatestAdded(speechEligibleEvents(nextState.latestHotStockAdded))
           }
         })
       }
@@ -614,6 +618,14 @@ onUnmounted(() => {
   hotStockEventMonitorService.stop('panel')
   hotStockEventSpeechService.stop()
 })
+
+function speechEligibleEvents(events: HotStockAbnormalEvent[]) {
+  return events.filter((event) => {
+    if (event.type !== OPENING_WEAK_TO_STRONG_EVENT_TYPE) return true
+    const raw = event.raw as { voiceOwner?: string; openingSignalPost?: { voiceOwner?: string } } | null
+    return (raw?.voiceOwner || raw?.openingSignalPost?.voiceOwner) === 'web'
+  })
+}
 </script>
 
 <style scoped>
@@ -1146,6 +1158,12 @@ onUnmounted(() => {
 
 .event-card.sector {
   border-left-color: #d4a574;
+}
+
+.event-card.opening-weak-to-strong {
+  border-left-color: #ffb35c;
+  background: linear-gradient(90deg, rgba(255, 71, 87, 0.18), rgba(24, 24, 24, 0.84));
+  box-shadow: inset 0 0 0 1px rgba(255, 179, 92, 0.28);
 }
 
 .event-time-row,

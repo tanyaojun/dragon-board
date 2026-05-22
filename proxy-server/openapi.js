@@ -104,6 +104,43 @@ const startupBundleBody = {
   },
 }
 
+const openingSignalBody = {
+  required: true,
+  content: {
+    'application/json': {
+      schema: {
+        type: 'object',
+        required: ['source', 'signal'],
+        additionalProperties: false,
+        properties: {
+          source: {
+            type: 'string',
+            enum: ['web', 'desktop'],
+          },
+          signal: {
+            type: 'object',
+            required: ['tradingDate', 'code', 'signalType', 'confidence', 'triggerAt'],
+            additionalProperties: true,
+            properties: {
+              tradingDate: {
+                type: 'string',
+                pattern: '^\\d{4}-\\d{2}-\\d{2}$',
+                example: '2026-05-22',
+              },
+              code: { type: 'string', pattern: '^\\d{6}$', example: '002552' },
+              signalType: { type: 'string', const: 'opening_weak_to_strong' },
+              confidence: { type: 'string', enum: ['watch', 'strong', 'critical'] },
+              score: { type: 'number', minimum: 0, maximum: 100 },
+              dryRun: { type: 'boolean' },
+              triggerAt: { type: 'string', example: '2026-05-22T09:30:06+08:00' },
+            },
+          },
+        },
+      },
+    },
+  },
+}
+
 export function buildOpenApiDocument({ port = 3000 } = {}) {
   return {
     openapi: '3.1.0',
@@ -125,6 +162,7 @@ export function buildOpenApiDocument({ port = 3000 } = {}) {
       { name: 'cache', description: '启动快照和代理缓存' },
       { name: 'market', description: '市场情绪和涨停数据' },
       { name: 'tdx', description: '通达信兼容代理' },
+      { name: 'opening-signals', description: '开盘竞价弱转强本地信号缓存' },
       { name: 'deprecated', description: '兼容旧接口' },
     ],
     paths: {
@@ -278,6 +316,30 @@ export function buildOpenApiDocument({ port = 3000 } = {}) {
         method: 'get',
         tag: 'market',
         summary: '综合情绪',
+      }),
+      '/api/opening-signals': operation({
+        method: 'post',
+        tag: 'opening-signals',
+        summary: '上报开盘竞价弱转强信号',
+        description: '接收网页板或桌面版已经生成的 opening_weak_to_strong 信号，做同日去重、代表信号合并和语音仲裁。',
+        requestBody: openingSignalBody,
+      }),
+      '/api/opening-signals/today': operation({
+        method: 'get',
+        tag: 'opening-signals',
+        summary: '查询今日开盘竞价弱转强信号',
+        parameters: [
+          {
+            name: 'tradingDate',
+            in: 'query',
+            required: false,
+            schema: {
+              type: 'string',
+              pattern: '^\\d{4}-\\d{2}-\\d{2}$',
+              example: '2026-05-22',
+            },
+          },
+        ],
       }),
       '/api/big-order/main-monitor': operation({
         method: 'get',

@@ -42,6 +42,7 @@ const EVENT_PRIORITIES: Partial<Record<HotStockAbnormalEvent['type'], number>> =
   10004: 60,
   10008: 55,
   10006: 50,
+  12001: 88,
   10009: 40,
   10010: 35,
 }

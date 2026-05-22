@@ -47,4 +47,15 @@ describe('DataTable row detail interactions', () => {
     expect(source).not.toMatch(/\/api\/journal\/entries/)
     expect(source).not.toMatch(/trade_hypothesis/)
   })
+
+  test('renders compact opening weak-to-strong badge in the stock name cell', () => {
+    const source = dataTableSource()
+
+    expect(source).toContain('opening-signal-badge')
+    expect(source).toContain('opening-signal-row')
+    expect(source).toContain('竞强')
+    expect(source).toMatch(/openingSignalClient\.fetchTodaySignals/)
+    expect(source).toMatch(/hasOpeningWeakToStrongSignal\(\s*stock\s*\)/)
+    expect(source).not.toMatch(/openingSignalClient\.postSignal/)
+  })
 })

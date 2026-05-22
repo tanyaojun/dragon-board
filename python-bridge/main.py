@@ -174,6 +174,23 @@ def now_ms() -> int:
     return int(time.time() * 1000)
 
 
+def iso_from_ms(value: int) -> str:
+    return datetime.fromtimestamp(value / 1000).astimezone().isoformat(timespec="seconds")
+
+
+def is_opening_sampling_window(start: datetime | None = None, end: datetime | None = None) -> bool:
+    current = start or datetime.now()
+    finished = end or current
+    if current.weekday() >= 5 and finished.weekday() >= 5:
+        return False
+
+    window_start = 9 * 3600 + 24 * 60 + 50
+    window_end = 9 * 3600 + 25 * 60 + 10
+    start_seconds = current.hour * 3600 + current.minute * 60 + current.second
+    end_seconds = finished.hour * 3600 + finished.minute * 60 + finished.second
+    return start_seconds <= window_end and end_seconds >= window_start
+
+
 def is_trading_session_now(now: datetime | None = None) -> bool:
     current = now or datetime.now()
     if current.weekday() >= 5:
@@ -240,12 +257,14 @@ def frame_to_records(frame: Any) -> list[dict[str, Any]]:
     return []
 
 
-def normalize_quote_row(row: dict[str, Any]) -> dict[str, Any] | None:
+def normalize_quote_row(row: dict[str, Any], captured_ms: int | None = None) -> dict[str, Any] | None:
     code = normalize_code(pick(row, "code", "symbol"))
     if not code:
         return None
 
-    last_price = to_number(pick(row, "price", "last_close", "lastPrice"))
+    raw_last_price = pick(row, "price", "lastPrice", "last_price")
+    last_price = to_number(raw_last_price)
+    last_price_source = "last" if last_price > 0 else "missing"
     pre_close = to_number(pick(row, "last_close", "pre_close", "preClose"))
     derived_change_pct = ((last_price - pre_close) / pre_close * 100) if last_price > 0 and pre_close > 0 else 0.0
     change_pct = to_number(pick(row, "percent", "change", "change_pct", "changePct"))
@@ -259,6 +278,7 @@ def normalize_quote_row(row: dict[str, Any]) -> dict[str, Any] | None:
     tdx_sell_volume = to_number(pick(row, "s_vol", "sell_volume", "sellVolume"))
     tdx_current_volume = to_number(pick(row, "cur_vol", "current_volume", "currentVolume"))
 
+    captured_ms = captured_ms or now_ms()
     payload = {
         "code": code,
         "name": str(pick(row, "name", "volunit", default="") or "").strip(),
@@ -274,7 +294,10 @@ def normalize_quote_row(row: dict[str, Any]) -> dict[str, Any] | None:
         "tdxBuyVolume": tdx_buy_volume,
         "tdxSellVolume": tdx_sell_volume,
         "tdxCurrentVolume": tdx_current_volume,
-        "sourceTs": now_ms(),
+        "sourceTs": captured_ms,
+        "capturedAt": iso_from_ms(captured_ms),
+        "bridgeTs": iso_from_ms(captured_ms),
+        "lastPriceSource": last_price_source,
     }
 
     if turnover_rate is not None:
@@ -411,6 +434,18 @@ class QuoteFetchStats:
     received_quotes: int = 0
     received_depth: int = 0
     elapsed_ms: int = 0
+
+    def to_payload(self) -> dict[str, int]:
+        return {
+            "requestedCount": self.requested_codes,
+            "receivedCount": self.received_quotes,
+            "receivedDepthCount": self.received_depth,
+            "elapsedMs": self.elapsed_ms,
+            "batches": self.batches,
+            "failedBatches": self.failed_batches,
+            "slowBatches": self.slow_batches,
+            "truncatedBatches": self.truncated_batches,
+        }
 
 
 @dataclass
@@ -1743,6 +1778,29 @@ class TdxL2Bridge:
             changed.append(item)
         return changed
 
+    def attach_quote_sampling_metadata(
+        self,
+        quotes: Iterable[dict[str, Any]],
+        stats: QuoteFetchStats,
+        forced_opening_sample: bool,
+    ) -> list[dict[str, Any]]:
+        payload = stats.to_payload()
+        sample_kind = "opening_auction_forced" if forced_opening_sample else "regular"
+        annotated: list[dict[str, Any]] = []
+        for item in quotes:
+            code = str(item.get("code") or "")
+            if not code:
+                continue
+            annotated.append(
+                {
+                    **item,
+                    "sampleKind": sample_kind,
+                    "openingForcedSample": forced_opening_sample,
+                    **payload,
+                }
+            )
+        return annotated
+
     def chunk_codes(self, codes: list[str], batch_size: int) -> list[list[str]]:
         size = self.clamp_quote_batch_size(batch_size)
         return [codes[index : index + size] for index in range(0, len(codes), size)]
@@ -1824,7 +1882,7 @@ class TdxL2Bridge:
                         )
 
                     for row in records:
-                        quote_item = normalize_quote_row(row)
+                        quote_item = normalize_quote_row(row, captured_ms=batch_started)
                         if quote_item:
                             if not is_trading_session_now() and is_placeholder_quote_row(quote_item):
                                 continue
@@ -2011,8 +2069,15 @@ class TdxL2Bridge:
                 await asyncio.sleep(0.2)
                 continue
 
+            cycle_started_dt = datetime.now().astimezone()
             try:
                 quotes, depth, quote_stats = await self.fetch_quotes_and_depth(pool)
+                forced_opening_sample = is_opening_sampling_window(cycle_started_dt, datetime.now().astimezone())
+                quotes = self.attach_quote_sampling_metadata(
+                    quotes,
+                    quote_stats,
+                    forced_opening_sample,
+                )
                 self.latest_quote_stats = quote_stats
                 self.last_quote_cycle_ts = now_ms()
                 self.last_quote_error = ""
@@ -2024,7 +2089,11 @@ class TdxL2Bridge:
                             depth_by_code[item["code"]] = item
                     depth = list(depth_by_code.values())
                 self.tune_quote_batch_size(quote_stats)
-                quote_patch = self.diff_payloads(quotes, self.latest_quotes)
+                quote_patch = (
+                    quotes
+                    if forced_opening_sample
+                    else self.diff_payloads(quotes, self.latest_quotes)
+                )
                 depth_patch = self.diff_payloads(depth, self.latest_depth)
                 ticks_batch = qmt_ticks or await self.fetch_ticks(pool)
                 money_flow_patch = self.diff_payloads(money_flow, self.latest_money_flow)
@@ -2050,6 +2119,8 @@ class TdxL2Bridge:
                             "subscribedCount": subscribed_count,
                             "quotes": quotes,
                             "depth": depth,
+                            "quoteStats": quote_stats.to_payload(),
+                            "openingForcedSample": forced_opening_sample,
                             "l2": self.l2_state,
                             "moneyFlow": money_flow,
                         }
@@ -2064,6 +2135,8 @@ class TdxL2Bridge:
                                 "serverTs": now_ms(),
                                 "intervalMs": self.config.poll_interval_ms,
                                 "items": quote_patch,
+                                "quoteStats": quote_stats.to_payload(),
+                                "openingForcedSample": forced_opening_sample,
                             }
                         )
                     if depth_patch:

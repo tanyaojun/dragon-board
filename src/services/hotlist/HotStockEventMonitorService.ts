@@ -80,6 +80,26 @@ function dedupeById(events: HotStockAbnormalEvent[]): HotStockAbnormalEvent[] {
   return [...byId.values()]
 }
 
+function splitEvents(events: HotStockAbnormalEvent[], maxEvents: number) {
+  const nextHotStockEvents = events
+    .filter(event => event.category === 'stock' && event.matchedHotStock)
+    .slice(0, maxEvents)
+  const nextOtherStockEvents = events
+    .filter(event => event.category === 'stock' && !event.matchedHotStock)
+    .slice(0, maxEvents)
+  const nextSectorEvents = events
+    .filter(event => event.category === 'sector')
+    .slice(0, maxEvents)
+  const nextEvents = [...events].slice(0, maxEvents)
+
+  return {
+    nextEvents,
+    nextHotStockEvents,
+    nextOtherStockEvents,
+    nextSectorEvents,
+  }
+}
+
 export class HotStockEventMonitorService {
   private feed: HotStockEventFetcher
   private readonly dataLayer: HotStockEventDataLayer
@@ -91,6 +111,7 @@ export class HotStockEventMonitorService {
   private initializedForPush = false
   private running = false
   private events: HotStockAbnormalEvent[] = []
+  private derivedEventsById = new Map<string, HotStockAbnormalEvent>()
   private hotStockEvents: HotStockAbnormalEvent[] = []
   private otherStockEvents: HotStockAbnormalEvent[] = []
   private sectorEvents: HotStockAbnormalEvent[] = []
@@ -116,6 +137,13 @@ export class HotStockEventMonitorService {
 
   setFeed(feed: HotStockEventFetcher) {
     this.feed = feed
+  }
+
+  acceptDerivedEvents(events: HotStockAbnormalEvent[]) {
+    for (const event of events) {
+      if (!event?.id) continue
+      this.derivedEventsById.set(event.id, event)
+    }
   }
 
   getEvents(): HotStockAbnormalEvent[] {
@@ -151,13 +179,17 @@ export class HotStockEventMonitorService {
     this.error = null
     this.notify()
 
+    const previousIds = new Set(this.events.map(event => event.id))
+    const previousHotStockIds = new Set(this.hotStockEvents.map(event => event.id))
+    const watchedCodeSet = new Set(watchedCodes)
+    const candidateCodes = getCandidateCodes(this.dataLayer.getDragonReview())
+    const today = this.now()
+
     try {
-      const previousIds = new Set(this.events.map(event => event.id))
-      const previousHotStockIds = new Set(this.hotStockEvents.map(event => event.id))
-      const watchedCodeSet = new Set(watchedCodes)
-      const candidateCodes = getCandidateCodes(this.dataLayer.getDragonReview())
-      const today = this.now()
-      const allTodayEvents = dedupeById(await this.feed.fetchEvents())
+      const allTodayEvents = dedupeById([
+        ...(await this.feed.fetchEvents()),
+        ...this.derivedEventsById.values(),
+      ])
         .map(event => ({
           ...event,
           category: event.category || 'stock',
@@ -171,16 +203,8 @@ export class HotStockEventMonitorService {
         }))
         .sort((a, b) => b.timestamp - a.timestamp)
 
-      const nextHotStockEvents = allTodayEvents
-        .filter(event => event.category === 'stock' && event.matchedHotStock)
-        .slice(0, this.maxEvents)
-      const nextOtherStockEvents = allTodayEvents
-        .filter(event => event.category === 'stock' && !event.matchedHotStock)
-        .slice(0, this.maxEvents)
-      const nextSectorEvents = allTodayEvents
-        .filter(event => event.category === 'sector')
-        .slice(0, this.maxEvents)
-      const nextEvents = [...allTodayEvents].slice(0, this.maxEvents)
+      const { nextEvents, nextHotStockEvents, nextOtherStockEvents, nextSectorEvents } =
+        splitEvents(allTodayEvents, this.maxEvents)
 
       this.events = nextEvents
       this.hotStockEvents = nextHotStockEvents
@@ -203,6 +227,32 @@ export class HotStockEventMonitorService {
         watchedCodes,
       }
     } catch (error) {
+      const derivedTodayEvents = dedupeById([...this.derivedEventsById.values()])
+        .map(event => ({
+          ...event,
+          category: event.category || 'stock',
+          code: event.category === 'sector' ? '' : normalizeHotStockCode(event.code),
+        }))
+        .filter(event => isSameLocalDate(event.timestamp, today))
+        .map(event => ({
+          ...event,
+          matchedHotStock: event.category === 'stock' && watchedCodeSet.has(event.code),
+          matchedCandidate: event.category === 'stock' && candidateCodes.has(event.code),
+        }))
+        .sort((a, b) => b.timestamp - a.timestamp)
+      const { nextEvents, nextHotStockEvents, nextOtherStockEvents, nextSectorEvents } =
+        splitEvents(derivedTodayEvents, this.maxEvents)
+
+      if (nextEvents.length > 0) {
+        this.events = nextEvents
+        this.hotStockEvents = nextHotStockEvents
+        this.otherStockEvents = nextOtherStockEvents
+        this.sectorEvents = nextSectorEvents
+        this.latestAdded = nextEvents.filter(event => !previousIds.has(event.id))
+        this.latestHotStockAdded = nextHotStockEvents.filter(event => !previousHotStockIds.has(event.id))
+        await this.pushLatestHotStockEvents(this.latestHotStockAdded)
+        this.lastUpdate = this.now()
+      }
       this.error = getErrorMessage(error)
       this.loading = false
       this.notify()

@@ -86,6 +86,81 @@
 | 事件去重和冷却是 V1 必做 | 盘中语音提醒如果不去重会不可用。 |
 | “全市监控”默认关闭 | 全市场轮询会增加行情桥压力，V1 可提供分片扫描能力，但默认以 `.blk` 监控池为主。 |
 
+## V3 开盘竞价弱转强补充
+
+用户明确放弃 QMT L2 和 TDX 真十档需求，当前目标收敛为：使用 `mootdx` L1 实时采样，在 `09:25` 集合竞价结束后保存最后可见撮合价，并在 `09:30-09:35` 捕捉价格大幅上移的“竞价弱转强”股票。
+
+关键发现：
+
+| 项目 | 发现 |
+|------|------|
+| 目标形态 | 不是固定高开 2%，而是 `09:25` 竞价价偏弱到 `09:30` 连续竞价价格显著上移。 |
+| 样例 | `002552 宝鼎科技`：`09:25` 价 35.68、涨幅 -1.44%；通达信第一根分时价 37.48、涨幅 3.54%；跳空约 4.98 个昨收百分点。 |
+| 数据口径 | `quotes().open` 是官方日线开盘价；`mootdx.minute()[0].price` 或 `09:30` 后首次 `quotes().price` 更贴近通达信分时第一条价格。两个口径都应保存。 |
+| 历史限制 | 盘后分钟线通常不能补齐 `09:25` 竞价最后价，必须当天实盘在 `09:24:50-09:25:10` 采样。 |
+| 可行链路 | 现有 `python-bridge` 已能通过 WebSocket 把 L1 行情推给 `YiDongJingLing.exe`，适合做 MVP。 |
+| 性能边界 | 默认不做全市场高频扫描，应先用 `.blk` 强势池或八平台热榜池。 |
+
+2026-05-22 追加确认：
+
+| 项目 | 发现 |
+|------|------|
+| 三端范围 | V3 第一版必须同时覆盖网页板异动雷达、桌面版 `YiDongJingLing.exe`、Dragon Board 主行情表信号，主表展示不是额外项。 |
+| 网页板实现 | TypeScript 侧应基于 `webSocketService` 的 `FULL_STATE` / `QUOTE_PATCH` 做本地检测，进入现有 `HotStockEventMonitorService`、面板和本地语音链路。 |
+| 桌面版实现 | C# 侧独立实现 `OpeningAuctionStateStore` 和 `OpeningWeakToStrongDetector`，接入现有 `EventRecord -> EventDeduper -> EventVoicePolicy -> AddEventRow` 链路。 |
+| 主表展示 | `DataTable.vue` 只消费今日信号并展示徽标/短时高亮，不承载弱转强检测逻辑。 |
+| 跨端去重 | 推荐由 `proxy-server` 提供本地 opening signal 缓存 API，按 `tradingDate + code + signalType` 去重，避免网页板和桌面版重复刷屏。 |
+| 共享合同 | 信号类型固定为 `opening_weak_to_strong`，显示名固定为“竞价弱转强”，字段同时保存 `auctionFinalPrice`、`officialOpen`、`firstWindowPrice` 三种价格口径。 |
+| 文档来源 | Superpowers 设计规格已写入 `docs/superpowers/specs/2026-05-22-opening-weak-to-strong-design.md`。 |
+
+2026-05-22 数据源校正：
+
+| 项目 | 发现 |
+|------|------|
+| 网页板当前事件源 | `HotStockEventMonitorService` 默认组合 `XuangubaoAbnormalEventFeed` 和 `ThsLimitUpEventFeed`，任务注册说明为轮询选股通异动数据。 |
+| 轮询频率 | 代码默认是 `30_000ms`，后台飞书事件雷达默认也是 `30_000ms`；语音服务有 `3_000ms` 批量 flush，但不是行情轮询。用户提到的 3 秒不能当作当前异动雷达默认行情采样频率。 |
+| 选股通事件字段 | `/api/xuangubao/events` 上游返回事件历史，主要字段是 `event_type`、`event_timestamp`、`price`、`pcp`、`mtm`、相关板块。没有 `09:25` 竞价最终价、官方开盘价、逐股成交额增量，也不能按自定义股票池采样。 |
+| 同花顺涨停池字段 | `ThsLimitUpEventFeed` 适合确认封板、炸板、冲板状态，但不提供 `09:25 → 09:30` 弱转强过程。 |
+| 技术结论 | 网页板 `opening_weak_to_strong` 主检测源必须改为 `python-bridge` WebSocket 实时 L1 行情；选股通/同花顺 HTTP feed 只保留为普通异动辅助源。 |
+| 实现边界 | 网页端检测器应直接读取 `webSocketService` 的 `QuotePatch`，不要从当前 DataLayer 实时投影反推 `open/preClose`；`proxy-server` 只做信号缓存和展示同步，不采样行情。 |
+| 文案影响 | `HotStockEventMonitorPanel.vue` 当前写着“选股通数据源”，V3 应改成“实时行情 + 异动事件源”或类似文案。 |
+
+2026-05-22 弱转强规则族复核：
+
+| 项目 | 发现 |
+|------|------|
+| 官方交易边界 | 深交所 2023 交易规则确认：`09:15-09:25` 为开盘集合竞价，`09:30-11:30`、`13:00-14:57` 为连续竞价；`09:20-09:25` 不接受竞价撤销申报；集合竞价按最大成交量等原则确定成交价，所有交易同一价格成交；开盘价通过集合竞价产生，不能产生时由连续竞价产生。 |
+| 行情字段边界 | 深交所开放式集合竞价历史提示说明，开盘参考价、匹配量、未匹配量曾通过买一/卖一字段揭示；若 `mootdx` 实盘字段不能稳定给出匹配量/未匹配量，第一版不得把“未匹配买盘/卖盘”写成硬条件，只能作为可选增强字段。 |
+| 游资语义 | 短线社区常把弱转强定义为“前一日烂板、炸板、放量分歧、长上影或尾盘弱势，次日却超预期高开/快速上攻/封板”，本质是预期差和分歧转一致。 |
+| 量能共识 | 多个短线文章都强调“高开必须带量”，无量高开容易是假强；常见观察包括竞价额、竞价量相对昨日竞价或昨日总量的占比、开盘 1-5 分钟成交额增量。 |
+| 盘口确认 | 社区经验普遍重视 `09:20` 后价格是否稳定上移、买盘是否承接、开盘 1-5 分钟是否站稳开盘价/均价线、是否快速脱离成本区或冲板。 |
+| 风险过滤 | 非核心跟风股、中位股、高位末期、板块不配合、竞价高开但量价背离、开盘后快速回补缺口，都容易是假弱转强。 |
+| 实现结论 | `002552` 样例应归为“竞价内弱、开盘跳空上移”的子形态，而不是全部竞价弱转强。V3 合同应增加 `variant`、`score`、`factors`、`riskFlags`，检测器按模式族评分，避免写死单一公式。 |
+
+2026-05-22 子 Agent 交叉评审：
+
+| 评审域 | 结论 |
+|--------|------|
+| 行情数据可行性 | 有条件通过。现有 L1 字段基础存在，但仅监听 `QUOTE_PATCH` 不能保证 `09:25` 每只票都被确认采样，因为 bridge 差分可能不广播未变化报价；必须增加开盘窗口强制快照/强制采样闭环。 |
+| 规则口径 | 有条件通过。模式族方向正确，但 `strong_open_board_attempt` 会漂成普通开盘冲板；必须要求弱转强前置条件，否则只能 `watch` 且不强播。 |
+| 三端架构 | 有条件通过。三端职责边界整体正确，但 proxy 事后去重无法阻止网页和桌面重复语音；必须让 `/api/opening-signals` 返回语音仲裁结果。 |
+| 测试验收 | 有条件通过。需要统一 TS/C# golden fixture、dry-run 演练模式、早盘分钟级联调表、离线矩阵和可观测字段。 |
+| 必改门禁 | 实施前必须补齐：强制采样、字段口径、基线质量、语音仲裁、canonical/reportsBySource 合并、统一 fixture、dry-run、异常数据和跨日测试。 |
+
+2026-05-22 实现复核：
+
+| 项目 | 发现 |
+|------|------|
+| bridge 强制采样 | `python-bridge` 已在 `09:24:50-09:25:10` 强制广播 quote patch，并把采样统计写入 quote payload；这解决“价格没变化就不发 patch”的主要盲点。 |
+| 当前价口径 | `normalize_quote_row` 不再把 `last_close` 当作 `lastPrice` fallback，新增 `lastPriceSource`，Web 检测桥会忽略非真实当前价。 |
+| Web 实时链路 | `OpeningRealtimeEventBridge` 已监听 `FULL_STATE/QUOTE_PATCH`，直接消费 `QuotePatch`，不从 HTTP 事件源或 DataLayer 反推 `open/preClose`。 |
+| 跨端语音仲裁 | `proxy-server` 的 `/api/opening-signals` 返回 `voiceOwner`；Web 只有 `voiceOwner=web` 才播，桌面只有 `voiceOwner=desktop` 才播。 |
+| 桌面上报 | `YiDongJingLing.exe` 的竞价弱转强上报路径不绑定“同步消息/飞书”开关，普通飞书同步仍走原有事件雷达通道。 |
+| 主表展示 | `DataTable.vue` 只读 `/api/opening-signals/today`，显示“竞强”徽标和行级高亮，不承担检测逻辑。 |
+| 待实盘验证 | 早盘真实覆盖率、端到端延迟、proxy 离线降级和 dry-run UI 仍需盘前/盘中演练。 |
+
+落地方案见 `docs/yidong-jingling/opening-weak-to-strong-plan.md`。
+
 ## 风险与处理
 
 | 风险 | 处理 |

@@ -15,7 +15,7 @@ public sealed class EventDeduper
     public IReadOnlyList<EventRecord> Filter(IReadOnlyList<EventRecord> events)
     {
         var result = new List<EventRecord>();
-        foreach (var group in events.GroupBy(item => item.Code))
+        foreach (var group in events.GroupBy(BatchGroupKey))
         {
             foreach (var item in group.OrderByDescending(Score).ThenByDescending(item => item.Timestamp))
             {
@@ -42,8 +42,16 @@ public sealed class EventDeduper
     {
         return type is L1EventType.LimitUpOpened or L1EventType.LimitDownOpened
                 or L1EventType.UpcomingLimitUpOpen or L1EventType.UpcomingLimitDownOpen
+                or L1EventType.OpeningWeakToStrong
             ? TimeSpan.FromSeconds(30)
             : _defaultCooldown;
+    }
+
+    private static string BatchGroupKey(EventRecord item)
+    {
+        return item.Type == L1EventType.OpeningWeakToStrong
+            ? $"{item.Code}:{item.Type}"
+            : item.Code;
     }
 
     public static string BuildSpeechText(IReadOnlyList<EventRecord> events, int maxItems = 3)
@@ -75,6 +83,7 @@ public sealed class EventDeduper
             L1EventType.UpcomingLimitDownOpen => 41,
             L1EventType.FastRise => 35,
             L1EventType.FastDrop => 34,
+            L1EventType.OpeningWeakToStrong => 34,
             L1EventType.LowOpenLongYang => 33,
             L1EventType.HighOpenLongYin => 32,
             L1EventType.NearLimitUp => 30,

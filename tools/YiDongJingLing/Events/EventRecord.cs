@@ -24,6 +24,7 @@ public enum L1EventType
     VolumeAcceleration,
     LargeBidOrder,
     LargeAskOrder,
+    OpeningWeakToStrong,
     LowOpenLongYang,
     HighOpenLongYin,
     BidPressure,
@@ -49,7 +50,8 @@ public sealed record EventRecord(
     decimal Amount,
     DateTimeOffset Timestamp,
     L1EventSeverity Severity,
-    string Reason)
+    string Reason,
+    OpeningWeakToStrongSignal? OpeningSignal = null)
 {
     public string DedupeKey => $"{Code}:{Type}";
     public string DisplayName => string.IsNullOrWhiteSpace(Name) ? Code : Name;

@@ -5,6 +5,8 @@ export type HotStockEventDirection = 'up' | 'down' | 'neutral'
 export type HotStockEventSeverity = 'normal' | 'important'
 export type HotStockEventCategory = 'stock' | 'sector'
 
+export const OPENING_WEAK_TO_STRONG_EVENT_TYPE = 12001
+
 export type HotStockAbnormalEventType =
   | 10001
   | 10005
@@ -18,6 +20,7 @@ export type HotStockAbnormalEventType =
   | 10014
   | 10009
   | 10010
+  | 12001
   | 11000
   | 11001
 

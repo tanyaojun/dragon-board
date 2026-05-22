@@ -5,18 +5,39 @@ namespace YiDongJingLing.Events;
 public sealed class L1EventEngine
 {
     private const decimal SharesPerLot = 100m;
+    private static readonly OpeningWeakToStrongRules OpeningRules = new(
+        "09:24:50",
+        "09:25:10",
+        "09:30:00",
+        "09:35:00",
+        0.5m,
+        3m,
+        1.5m,
+        1.5m,
+        1m,
+        3m,
+        2m,
+        30_000_000m,
+        20_000_000m);
     private readonly L1EventRules _rules;
     private readonly Dictionary<string, StockState> _states = new(StringComparer.Ordinal);
+    private readonly OpeningAuctionStateStore _openingStore = new(OpeningRules);
+    private readonly OpeningWeakToStrongDetector _openingDetector = new(OpeningRules);
 
     public L1EventEngine(L1EventRules? rules = null)
     {
         _rules = rules ?? new L1EventRules();
     }
 
-    public void Clear() => _states.Clear();
+    public void Clear()
+    {
+        _states.Clear();
+        _openingStore.Clear();
+    }
 
     public void Prime(QuoteSnapshot quote)
     {
+        _openingStore.Capture(ToOpeningQuote(quote, ResolveLimitPct(quote)));
         var state = GetState(quote.Code);
         var limitPct = ResolveLimitPct(quote);
         var limitUpPrice = RoundPrice(quote.PreClose * (1m + limitPct / 100m));
@@ -73,6 +94,7 @@ public sealed class L1EventEngine
         EvaluateDropTiers(events, quote, state);
         EvaluateAmountTiers(events, quote, state);
         EvaluateOpenShape(events, quote, state);
+        EvaluateOpeningWeakToStrong(events, quote, state, limitUpPrice);
         EvaluateDirectionChanges(events, quote, previous);
         EvaluateIntradayHighLow(events, quote, state);
         EvaluateSpeed(events, quote, history);
@@ -214,6 +236,31 @@ public sealed class L1EventEngine
         }
     }
 
+    private void EvaluateOpeningWeakToStrong(
+        List<EventRecord> events,
+        QuoteSnapshot quote,
+        StockState state,
+        decimal limitUpPrice)
+    {
+        var tradingDate = quote.SourceTime.ToLocalTime().ToString("yyyy-MM-dd");
+        if (state.OpeningWeakToStrongTriggeredDate == tradingDate) return;
+
+        var openingQuote = ToOpeningQuote(quote, limitUpPrice);
+        var result = _openingDetector.Evaluate(openingQuote, _openingStore.GetBaseline(quote.Code, quote.SourceTime));
+        if (!result.Triggered) return;
+
+        state.OpeningWeakToStrongTriggeredDate = tradingDate;
+        var severity = result.Confidence == "critical" ? L1EventSeverity.Critical : L1EventSeverity.Important;
+        Add(
+            events,
+            quote,
+            L1EventType.OpeningWeakToStrong,
+            "竞价弱转强",
+            severity,
+            OpeningReason(result),
+            ToOpeningSignal(result));
+    }
+
     private static void EvaluateDirectionChanges(List<EventRecord> events, QuoteSnapshot quote, QuoteSnapshot? previous)
     {
         if (previous is null) return;
@@ -321,6 +368,70 @@ public sealed class L1EventEngine
         return 10m;
     }
 
+    private static OpeningWeakToStrongQuote ToOpeningQuote(QuoteSnapshot quote, decimal? limitUpPrice = null)
+    {
+        return new OpeningWeakToStrongQuote(
+            quote.Code,
+            quote.Name,
+            quote.SourceTime,
+            quote.LastPrice,
+            quote.PreClose,
+            quote.Open,
+            quote.Amount,
+            quote.Volume,
+            limitUpPrice ?? 0m,
+            quote.SourceTime,
+            quote.SourceTime);
+    }
+
+    private static string OpeningReason(OpeningWeakToStrongResult result)
+    {
+        var variantName = result.Variant switch
+        {
+            "low_open_red_reversal" => "低开翻红",
+            "strong_open_board_attempt" => "冲板抢筹",
+            _ => "跳空上移",
+        };
+        var amount = FormatMoney(result.Amount);
+        var distance = result.LimitDistancePct.HasValue ? $"，距涨停 {result.LimitDistancePct:0.00}%" : "";
+        return $"{variantName}｜分数 {result.Score:0}｜09:25 {FormatSignedPct(result.AuctionPct)} → 09:30 {FormatSignedPct(result.FirstWindowPct)}，跳空 {result.JumpPctPoint:0.00}pct，成交额 {amount}{distance}";
+    }
+
+    private static OpeningWeakToStrongSignal ToOpeningSignal(OpeningWeakToStrongResult result)
+    {
+        return new OpeningWeakToStrongSignal(
+            result.TriggerAt.ToString("yyyy-MM-dd"),
+            result.Code,
+            result.Name,
+            result.SignalType,
+            result.Confidence ?? "watch",
+            result.Score,
+            result.Variant ?? "",
+            result.TriggerAt,
+            false,
+            result.AuctionFinalPrice ?? 0m,
+            result.AuctionPct ?? 0m,
+            result.OfficialOpen,
+            result.OfficialOpenPct,
+            result.FirstWindowPrice ?? 0m,
+            result.FirstWindowPct ?? 0m,
+            result.JumpPctPoint ?? 0m,
+            result.Amount,
+            result.AmountDelta ?? 0m,
+            result.LimitDistancePct,
+            result.BaselineQuality,
+            result.RuleVersion,
+            result.ConfigHash,
+            result.Factors,
+            result.RiskFlags);
+    }
+
+    private static string FormatSignedPct(decimal? value)
+    {
+        if (!value.HasValue) return "--";
+        return $"{(value.Value >= 0m ? "+" : "")}{value.Value:0.00}%";
+    }
+
     private static bool IsLimitUpSealed(QuoteSnapshot quote, decimal limitUpPrice)
     {
         if (quote.PreClose <= 0m || quote.LastPrice <= 0m) return false;
@@ -377,7 +488,14 @@ public sealed class L1EventEngine
             .Max();
     }
 
-    private static void Add(List<EventRecord> events, QuoteSnapshot quote, L1EventType type, string typeName, L1EventSeverity severity, string reason)
+    private static void Add(
+        List<EventRecord> events,
+        QuoteSnapshot quote,
+        L1EventType type,
+        string typeName,
+        L1EventSeverity severity,
+        string reason,
+        OpeningWeakToStrongSignal? openingSignal = null)
     {
         events.Add(new EventRecord(
             type,
@@ -390,7 +508,8 @@ public sealed class L1EventEngine
             quote.Amount,
             quote.SourceTime,
             severity,
-            reason));
+            reason,
+            openingSignal));
     }
 
     private static string FormatMoney(decimal value)
@@ -419,5 +538,6 @@ public sealed class L1EventEngine
         public decimal IntradayHigh { get; set; }
         public decimal IntradayLow { get; set; }
         public bool OpenShapeTriggered { get; set; }
+        public string OpeningWeakToStrongTriggeredDate { get; set; } = "";
     }
 }

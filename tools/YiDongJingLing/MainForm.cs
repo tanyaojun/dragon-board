@@ -35,6 +35,7 @@ public sealed class MainForm : Form
     private readonly StockNameResolver _nameResolver = new();
     private readonly HotlistPoolLoader _hotlistLoader = new();
     private readonly EventRadarMessageNotifier _messageNotifier = new();
+    private readonly OpeningSignalReporter _openingSignalReporter = new();
     private readonly List<EventRecord> _eventRecords = [];
     private readonly string _root;
     private readonly BridgeProcessManager _bridgeManager;
@@ -1218,7 +1219,17 @@ public sealed class MainForm : Form
         {
             AddEventRow(item);
         }
-        var voiceEvents = EventVoicePolicy.FilterForVoice(emitted, _settings.VoiceMode);
+        var openingEvents = emitted
+            .Where(item => item.Type == L1EventType.OpeningWeakToStrong)
+            .ToArray();
+        var shouldAnnounceOpening = EventVoicePolicy.FilterForVoice(openingEvents, _settings.VoiceMode).Count > 0;
+        var voiceEvents = EventVoicePolicy
+            .FilterForVoice(emitted.Where(item => item.Type != L1EventType.OpeningWeakToStrong), _settings.VoiceMode)
+            .ToList();
+        if (openingEvents.Length > 0)
+        {
+            _ = ReportOpeningSignalsAndAnnounceAsync(openingEvents, shouldAnnounceOpening);
+        }
         if (voiceEvents.Count > 0)
         {
             _speech.Announce(voiceEvents);
@@ -1254,6 +1265,46 @@ public sealed class MainForm : Form
         catch (Exception ex)
         {
             Log($"同步消息失败: {ex.Message}");
+        }
+    }
+
+    private async Task ReportOpeningSignalsAndAnnounceAsync(
+        IReadOnlyList<EventRecord> events,
+        bool announceWhenOwned)
+    {
+        if (events.Count == 0) return;
+
+        try
+        {
+            if (!BridgeProcessManager.IsPortOpen(3000))
+            {
+                _proxyManager.StartProxy(Log);
+                await WaitForProxyPortAsync(3000, "竞价信号语音仲裁可能失败");
+            }
+
+            var voiceEvents = new List<EventRecord>();
+            foreach (var item in events)
+            {
+                var result = await _openingSignalReporter.ReportAsync(item, new Uri("http://127.0.0.1:3000"));
+                Log($"竞价弱转强信号已上报: {item.Code} {result.DedupeAction} voiceOwner={result.VoiceOwner}");
+                if (announceWhenOwned && result.VoiceOwner == "desktop")
+                {
+                    voiceEvents.Add(item);
+                }
+            }
+
+            if (voiceEvents.Count > 0)
+            {
+                _speech.Announce(voiceEvents);
+            }
+        }
+        catch (Exception ex)
+        {
+            Log($"竞价弱转强信号上报失败，已降级为本地播报: {ex.Message}");
+            if (announceWhenOwned)
+            {
+                _speech.Announce(events);
+            }
         }
     }
 
@@ -1524,6 +1575,7 @@ public sealed class MainForm : Form
         _bridgeClient?.Dispose();
         _blockWatcher?.Dispose();
         _messageNotifier.Dispose();
+        _openingSignalReporter.Dispose();
         _speech.Dispose();
         _bridgeManager.StopStartedBridge();
         _proxyManager.StopStartedProxy();
@@ -1725,6 +1777,18 @@ public sealed class MainForm : Form
 
     private static void ApplyEventRowStyle(DataGridViewRow row, EventRecord item)
     {
+        if (item.Type == L1EventType.OpeningWeakToStrong)
+        {
+            row.DefaultCellStyle.BackColor = Color.FromArgb(58, 31, 24);
+            row.DefaultCellStyle.ForeColor = Color.FromArgb(255, 216, 148);
+            row.Cells["Type"].Style.BackColor = Color.FromArgb(92, 38, 31);
+            row.Cells["Type"].Style.ForeColor = Color.FromArgb(255, 221, 154);
+            row.Cells["Reason"].Style.ForeColor = Color.FromArgb(255, 196, 96);
+            row.Cells["Change"].Style.ForeColor = UpRed;
+            row.Cells["Price"].Style.ForeColor = UpRed;
+            return;
+        }
+
         row.DefaultCellStyle.BackColor = item.Severity switch
         {
             L1EventSeverity.Critical => Color.FromArgb(42, 24, 28),

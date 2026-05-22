@@ -160,6 +160,201 @@ Run("Trading session excludes lunch break snapshots", () =>
     AssertTrue(TradingSession.IsContinuousAuction(afternoon), "afternoon included");
 });
 
+Run("Opening weak-to-strong detector matches shared golden fixture cases", () =>
+{
+    var fixturePath = Path.Combine(
+        ProjectRootLocator.Find(),
+        "docs",
+        "yidong-jingling",
+        "fixtures",
+        "opening-weak-to-strong-cases.json");
+    using var document = JsonDocument.Parse(File.ReadAllText(fixturePath));
+    var root = document.RootElement;
+    var rules = OpeningWeakToStrongRules.FromJson(root.GetProperty("rules"));
+    var ruleVersion = root.GetProperty("ruleVersion").GetString() ?? "opening-weak-to-strong.v1";
+
+    foreach (var sample in root.GetProperty("cases").EnumerateArray())
+    {
+        var caseId = sample.GetProperty("caseId").GetString() ?? "";
+        var expected = sample.GetProperty("expected");
+        var store = new OpeningAuctionStateStore(rules);
+        var detector = new OpeningWeakToStrongDetector(rules, ruleVersion);
+        OpeningWeakToStrongResult? result = null;
+
+        foreach (var quoteElement in sample.GetProperty("quotes").EnumerateArray())
+        {
+            var quote = OpeningWeakToStrongQuote.FromJson(quoteElement);
+            store.Capture(quote);
+            result = detector.Evaluate(quote, store.GetBaseline(quote.Code, quote.At));
+        }
+
+        var expectedTriggered = expected.GetProperty("triggered").GetBoolean();
+        if (expectedTriggered)
+        {
+            AssertTrue(result is { Triggered: true }, $"{caseId} triggered");
+            AssertEqual(expected.GetProperty("variant").GetString(), result!.Variant, $"{caseId} variant");
+            AssertEqual(expected.GetProperty("confidence").GetString(), result.Confidence, $"{caseId} confidence");
+            var scoreRange = expected.GetProperty("scoreRange").EnumerateArray().Select(item => item.GetDecimal()).ToArray();
+            AssertTrue(result.Score >= scoreRange[0] && result.Score <= scoreRange[1], $"{caseId} score range");
+        }
+        else
+        {
+            AssertTrue(result is null or { Triggered: false }, $"{caseId} not triggered");
+            AssertEqual(expected.GetProperty("invalidReason").GetString(), result?.InvalidReason, $"{caseId} invalid reason");
+        }
+
+        foreach (var riskFlag in expected.GetProperty("riskFlags").EnumerateArray())
+        {
+            var key = riskFlag.GetString() ?? "";
+            AssertTrue(result?.RiskFlags.Any(item => item.Key == key) ?? false, $"{caseId} risk flag {key}");
+        }
+    }
+});
+
+Run("Event engine emits opening weak-to-strong from auction baseline", () =>
+{
+    var engine = new L1EventEngine();
+    var auction = Quote(
+        "002552",
+        "宝鼎科技",
+        35.68m,
+        -1.44m,
+        36.2m,
+        amount: 6_000_000m,
+        time: DateTimeOffset.Parse("2026-05-22T09:25:00+08:00"));
+    var open = Quote(
+        "002552",
+        "宝鼎科技",
+        37.48m,
+        3.54m,
+        36.2m,
+        amount: 56_000_000m,
+        time: DateTimeOffset.Parse("2026-05-22T09:30:06+08:00")) with { Open = 36.92m };
+
+    engine.Prime(auction);
+    var events = engine.Evaluate(open, auction, [auction, open]);
+
+    AssertTrue(events.Any(item => item.Type == L1EventType.OpeningWeakToStrong), "opening weak-to-strong event");
+    var signal = events.Single(item => item.Type == L1EventType.OpeningWeakToStrong);
+    AssertEqual("竞价弱转强", signal.TypeName, "event type name");
+    AssertTrue(signal.Reason.Contains("09:25 -1.44%"), "auction pct in reason");
+    AssertTrue(signal.Reason.Contains("09:30 +3.54%"), "open pct in reason");
+    AssertTrue(signal.OpeningSignal is not null, "opening canonical signal attached");
+    AssertEqual("opening_weak_to_strong", signal.OpeningSignal!.SignalType, "opening signal type");
+    AssertEqual("2026-05-22", signal.OpeningSignal.TradingDate, "opening trading date");
+    AssertTrue(signal.OpeningSignal.ConfigHash.StartsWith("owts-", StringComparison.Ordinal), "opening config hash");
+});
+
+Run("Opening weak-to-strong detector rejects previous trading day baseline", () =>
+{
+    var rules = new OpeningWeakToStrongRules(
+        "09:24:50",
+        "09:25:10",
+        "09:30:00",
+        "09:35:00",
+        0.5m,
+        3m,
+        1.5m,
+        1.5m,
+        1m,
+        3m,
+        2m,
+        30_000_000m,
+        20_000_000m);
+    var store = new OpeningAuctionStateStore(rules);
+    var detector = new OpeningWeakToStrongDetector(rules);
+    var auction = new OpeningWeakToStrongQuote(
+        "002552",
+        "宝鼎科技",
+        DateTimeOffset.Parse("2026-05-21T09:25:00+08:00"),
+        35.68m,
+        36.2m,
+        0m,
+        6_000_000m,
+        1_680_000m,
+        0m,
+        DateTimeOffset.Parse("2026-05-21T09:25:00+08:00"),
+        DateTimeOffset.Parse("2026-05-21T09:25:00+08:00"));
+    var nextDayOpen = auction with
+    {
+        At = DateTimeOffset.Parse("2026-05-22T09:30:06+08:00"),
+        LastPrice = 37.48m,
+        Open = 36.92m,
+        Amount = 56_000_000m,
+        CapturedAt = DateTimeOffset.Parse("2026-05-22T09:30:06+08:00"),
+        BridgeTs = DateTimeOffset.Parse("2026-05-22T09:30:06+08:00"),
+    };
+
+    store.Capture(auction);
+    var result = detector.Evaluate(nextDayOpen, store.GetBaseline(nextDayOpen.Code, nextDayOpen.At));
+
+    AssertTrue(!result.Triggered, "previous day baseline rejected");
+    AssertEqual("baseline_missing", result.InvalidReason, "previous day invalid reason");
+});
+
+Run("Event engine does not reuse previous trading day opening state", () =>
+{
+    var engine = new L1EventEngine();
+    var auction = Quote(
+        "002552",
+        "宝鼎科技",
+        35.68m,
+        -1.44m,
+        36.2m,
+        amount: 6_000_000m,
+        time: DateTimeOffset.Parse("2026-05-21T09:25:00+08:00"));
+    var nextDayOpen = Quote(
+        "002552",
+        "宝鼎科技",
+        37.48m,
+        3.54m,
+        36.2m,
+        amount: 56_000_000m,
+        time: DateTimeOffset.Parse("2026-05-22T09:30:06+08:00")) with { Open = 36.92m };
+
+    engine.Prime(auction);
+    var events = engine.Evaluate(nextDayOpen, null, [nextDayOpen]);
+
+    AssertEqual(0, events.Count(item => item.Type == L1EventType.OpeningWeakToStrong), "no cross-day opening signal");
+});
+
+Run("Event engine allows opening weak-to-strong again on the next trading day", () =>
+{
+    var engine = new L1EventEngine();
+    var day1Auction = Quote(
+        "002552",
+        "宝鼎科技",
+        35.68m,
+        -1.44m,
+        36.2m,
+        amount: 6_000_000m,
+        time: DateTimeOffset.Parse("2026-05-21T09:25:00+08:00"));
+    var day1Open = Quote(
+        "002552",
+        "宝鼎科技",
+        37.48m,
+        3.54m,
+        36.2m,
+        amount: 56_000_000m,
+        time: DateTimeOffset.Parse("2026-05-21T09:30:06+08:00")) with { Open = 36.92m };
+    var day2Auction = day1Auction with
+    {
+        SourceTime = DateTimeOffset.Parse("2026-05-22T09:25:00+08:00"),
+    };
+    var day2Open = day1Open with
+    {
+        SourceTime = DateTimeOffset.Parse("2026-05-22T09:30:06+08:00"),
+    };
+
+    engine.Prime(day1Auction);
+    var day1Events = engine.Evaluate(day1Open, day1Auction, [day1Auction, day1Open]);
+    engine.Prime(day2Auction);
+    var day2Events = engine.Evaluate(day2Open, day2Auction, [day2Auction, day2Open]);
+
+    AssertTrue(day1Events.Any(item => item.Type == L1EventType.OpeningWeakToStrong), "day 1 opening signal");
+    AssertTrue(day2Events.Any(item => item.Type == L1EventType.OpeningWeakToStrong), "day 2 opening signal");
+});
+
 Run("Event engine emits fast rise and fast drop from local history", () =>
 {
     var engine = new L1EventEngine();
@@ -263,6 +458,22 @@ Run("Event deduper keeps only highest priority event per stock in one batch", ()
 
     AssertEqual(1, emitted.Count, "emitted count");
     AssertEqual(L1EventType.FastRise, emitted[0].Type, "highest priority");
+});
+
+Run("Event deduper keeps opening weak-to-strong even with same-stock ordinary events", () =>
+{
+    var deduper = new EventDeduper(TimeSpan.FromSeconds(180));
+    var now = DateTimeOffset.Parse("2026-05-22T09:30:06+08:00");
+    var opening = Event("002552", "宝鼎科技", L1EventType.OpeningWeakToStrong, "竞价弱转强", now)
+        with { Severity = L1EventSeverity.Important };
+    var fastRise = Event("002552", "宝鼎科技", L1EventType.FastRise, "快速拉升", now.AddSeconds(1))
+        with { Severity = L1EventSeverity.Important };
+
+    var emitted = deduper.Filter([opening, fastRise]);
+
+    AssertEqual(2, emitted.Count, "opening plus ordinary event count");
+    AssertTrue(emitted.Any(item => item.Type == L1EventType.OpeningWeakToStrong), "opening event preserved");
+    AssertTrue(emitted.Any(item => item.Type == L1EventType.FastRise), "ordinary event preserved");
 });
 
 Run("Event deduper keeps different stocks in one batch", () =>
@@ -482,6 +693,55 @@ Run("Event radar message notifier posts compatible payload to proxy", () =>
     AssertEqual(5m, payload.GetProperty("changePct").GetDecimal(), "change pct");
 });
 
+Run("Opening signal reporter posts canonical payload to proxy", () =>
+{
+    var handler = new StubNotificationHandler("""{"ok":true,"accepted":true,"voiceOwner":"desktop","dedupeAction":"created"}""");
+    using var reporter = new OpeningSignalReporter(handler);
+    var timestamp = DateTimeOffset.Parse("2026-05-22T09:30:06+08:00");
+    var item = Event("002552", "宝鼎科技", L1EventType.OpeningWeakToStrong, "竞价弱转强", timestamp) with
+    {
+        OpeningSignal = new OpeningWeakToStrongSignal(
+            "2026-05-22",
+            "002552",
+            "宝鼎科技",
+            "opening_weak_to_strong",
+            "strong",
+            82m,
+            "auction_gap_reversal",
+            timestamp,
+            false,
+            35.68m,
+            -1.44m,
+            36.92m,
+            1.99m,
+            37.48m,
+            3.54m,
+            4.98m,
+            56_000_000m,
+            50_000_000m,
+            null,
+            "good",
+            "opening-weak-to-strong.v1",
+            "owts-test",
+            [],
+            [])
+    };
+
+    var result = reporter.ReportAsync(item, new Uri("http://127.0.0.1:3000"))
+        .GetAwaiter()
+        .GetResult();
+
+    AssertEqual("/api/opening-signals", handler.LastRequestPath, "opening request path");
+    AssertEqual("desktop", result.VoiceOwner, "voice owner");
+    using var document = JsonDocument.Parse(handler.LastRequestBody);
+    var root = document.RootElement;
+    AssertEqual("desktop", root.GetProperty("source").GetString(), "source");
+    var payload = root.GetProperty("signal");
+    AssertEqual("opening_weak_to_strong", payload.GetProperty("signalType").GetString(), "signal type");
+    AssertEqual("002552", payload.GetProperty("code").GetString(), "signal code");
+    AssertEqual(82m, payload.GetProperty("score").GetDecimal(), "signal score");
+});
+
 Run("TDX bridge full state merges quote and depth into one snapshot", () =>
 {
     using var client = new TdxBridgeClient("ws://127.0.0.1:8765/ws/quotes");
@@ -686,8 +946,14 @@ sealed class StubVoiceWorkerHandler : HttpMessageHandler
 
 sealed class StubNotificationHandler : HttpMessageHandler
 {
+    private readonly string _responseBody;
     public string LastRequestPath { get; private set; } = "";
     public string LastRequestBody { get; private set; } = "";
+
+    public StubNotificationHandler(string responseBody = """{"ok":true,"queued":1,"sent":0,"skipped":0}""")
+    {
+        _responseBody = responseBody;
+    }
 
     protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
@@ -695,7 +961,7 @@ sealed class StubNotificationHandler : HttpMessageHandler
         LastRequestBody = request.Content?.ReadAsStringAsync(cancellationToken).GetAwaiter().GetResult() ?? "";
         return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
         {
-            Content = new StringContent("""{"ok":true,"queued":1,"sent":0,"skipped":0}""", Encoding.UTF8, "application/json"),
+            Content = new StringContent(_responseBody, Encoding.UTF8, "application/json"),
         });
     }
 }

@@ -525,6 +525,7 @@ internal sealed class SettingsForm : Form
             new EventTypeOption(L1EventType.BigDropTier, "大幅跳水"),
             new EventTypeOption(L1EventType.FastRise, "快速拉升"),
             new EventTypeOption(L1EventType.FastDrop, "快速跳水"),
+            new EventTypeOption(L1EventType.OpeningWeakToStrong, "竞价弱转强"),
             new EventTypeOption(L1EventType.LowOpenLongYang, "低开长阳"),
             new EventTypeOption(L1EventType.HighOpenLongYin, "高开长阴"),
             new EventTypeOption(L1EventType.TurnRed, "翻红"),

@@ -1,10 +1,17 @@
 import os
 import sys
 import unittest
+from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from main import BridgeConfig, QuoteFetchStats, TdxL2Bridge
+from main import (
+    BridgeConfig,
+    QuoteFetchStats,
+    TdxL2Bridge,
+    is_opening_sampling_window,
+    normalize_quote_row,
+)
 from fastapi.testclient import TestClient
 
 
@@ -54,6 +61,28 @@ class BridgeMonitorTest(unittest.TestCase):
         status = client.get("/status")
         self.assertEqual(status.status_code, 200)
         self.assertEqual(status.json()["service"], "tdx-quote-bridge")
+
+    def test_opening_sampling_window_uses_cycle_start_and_end(self):
+        start = datetime.fromisoformat("2026-05-22T09:24:49+08:00")
+        end = datetime.fromisoformat("2026-05-22T09:25:02+08:00")
+
+        self.assertTrue(is_opening_sampling_window(start, end))
+
+    def test_quote_capture_timestamp_uses_batch_start_time(self):
+        quote = normalize_quote_row(
+            {
+                "code": "002552",
+                "price": 35.68,
+                "last_close": 36.2,
+                "amount": 6000000,
+                "volume": 1680000,
+            },
+            captured_ms=1779413100000,
+        )
+
+        self.assertIsNotNone(quote)
+        self.assertEqual(quote["capturedAt"], "2026-05-22T09:25:00+08:00")
+        self.assertEqual(quote["sourceTs"], 1779413100000)
 
 
 if __name__ == "__main__":

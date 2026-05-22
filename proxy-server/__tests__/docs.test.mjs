@@ -37,6 +37,12 @@ test('openapi json documents the proxy server routes', async () => {
     )
     assert.ok(body.paths['/api/market/overview'].get)
     assert.ok(body.paths['/api/tdx/{entry}'].post)
+    assert.ok(body.paths['/api/opening-signals'].post)
+    assert.ok(body.paths['/api/opening-signals/today'].get)
+    assert.deepEqual(
+      body.paths['/api/opening-signals'].post.requestBody.content['application/json'].schema.required,
+      ['source', 'signal'],
+    )
   } finally {
     server.close()
   }

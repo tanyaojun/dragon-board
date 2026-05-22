@@ -185,6 +185,16 @@ export interface QuotePatch {
   high?: number
   low?: number
   preClose?: number
+  capturedAt?: string
+  bridgeTs?: string
+  lastPriceSource?: string
+  sampleKind?: string
+  openingForcedSample?: boolean
+  requestedCount?: number
+  receivedCount?: number
+  elapsedMs?: number
+  slowBatches?: number
+  truncatedBatches?: number
   sourceTs?: number
   seq?: number
 }

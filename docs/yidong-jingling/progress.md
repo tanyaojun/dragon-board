@@ -1,5 +1,162 @@
 # 异动精灵 V1 进度记录
 
+## 2026-05-22 V3 代码审查修复
+
+- **目标：** 修复竞价弱转强首版实现中的高风险缺口，重点是跨日状态、Web 实时链路可靠性、proxy dry-run 合并和 bridge 采样时间。
+- **使用流程：**
+  - 使用 `superpowers:using-superpowers`、`superpowers:receiving-code-review`、`superpowers:test-driven-development`。
+  - 使用 `planning-with-files` 更新专题进度。
+- **修复内容：**
+  - TS/C# 竞价基线加入交易日维度，避免隔夜运行复用昨日 `09:25` 基线。
+  - 桌面端 `L1EventEngine` 的 `OpeningWeakToStrong` 触发状态改为按交易日记录，避免次日同股信号被昨日状态压住。
+  - 桌面端 `EventDeduper` 允许同股同批保留 `OpeningWeakToStrong` 和一个普通最高优先级事件，避免竞价信号被快速拉升等事件吞掉。
+  - Web `OpeningRealtimeEventBuffer` 支持同日 `watch -> strong/critical` 升级，不再首个弱信号后永久丢弃更强信号。
+  - Web `HotStockEventMonitorService` 在选股通/同花顺 HTTP feed 离线时仍保留 WebSocket 推导出的本地 opening 信号，避免主数据源被辅助源拖住。
+  - Web `OpeningRealtimeEventBridge` 从 `preClose/code/name` 推导 `limitUpPrice`，让真实 quote path 可命中 `strong_open_board_attempt`。
+  - Web 上报 proxy 失败时，仍把本地强信号写入异动雷达并允许网页端本地语音降级播报。
+  - proxy canonical 选择优先真实信号，避免 dry-run 高分信号遮蔽后续实盘信号。
+  - `python-bridge` 使用批次 fetch 开始时间作为 quote `capturedAt/sourceTs`，并用采样周期起止判断是否覆盖 `09:24:50-09:25:10` 强制窗口，降低慢批次错过窗口的风险。
+- **新增/扩展测试：**
+  - TS 检测器跨日基线污染测试。
+  - TS realtime buffer 跨日再次触发和同日信号升级测试。
+  - Web bridge proxy 失败降级、真实 quote path 推导涨停价测试。
+  - Web monitor HTTP feed 离线仍展示 opening 信号测试。
+  - C# 检测器跨日基线、桌面 engine 跨日触发状态、EventDeduper 保留 opening 信号测试。
+  - proxy dry-run 被真实信号替换测试。
+  - python-bridge 采样窗口覆盖和 quote capture 时间测试。
+- **验证：**
+  - `pnpm exec vitest run src/services/hotlist/__tests__/OpeningWeakToStrongDetector.test.ts src/services/hotlist/__tests__/OpeningRealtimeEventBuffer.test.ts src/services/hotlist/__tests__/OpeningRealtimeEventBridge.test.ts src/services/hotlist/__tests__/OpeningSignalClient.test.ts src/services/hotlist/__tests__/HotStockEventMonitorService.test.ts src/services/hotlist/__tests__/HotStockEventSpeechService.test.ts src/components/common/__tests__/DataTable.test.ts`：33 项通过。
+  - `pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false`：通过。
+  - `pnpm build`：通过。
+  - `node --test proxy-server\__tests__\openingSignals.test.mjs proxy-server\__tests__\docs.test.mjs`：8 项通过。
+  - `python -m py_compile python-bridge\main.py`：通过。
+  - `python python-bridge\test_monitor.py`：4 项通过。
+  - `dotnet run --project tools\YiDongJingLing.Tests\YiDongJingLing.Tests.csproj`：全部通过。
+  - `dotnet build tools\YiDongJingLing\YiDongJingLing.csproj -c Release`：0 warnings, 0 errors。
+
+## 2026-05-22 V3 竞价弱转强实现落地
+
+- **目标：** 按用户确认开工，把“竞价弱转强”同时落到网页板异动雷达、桌面版 `YiDongJingLing.exe` 和 Dragon Board 主行情表。
+- **使用流程：**
+  - 使用 `superpowers:subagent-driven-development` 做实现阶段协调。
+  - 使用 `superpowers:test-driven-development` 约束新检测器、proxy API、Web 事件桥和桌面上报路径。
+  - 使用 `planning-with-files` 同步计划、发现和进度。
+  - 安排子 Agent 对 Web/proxy 链路和桌面链路做只读交叉复核，并按复核结果补齐缺口。
+- **核心改动：**
+  - 新增共享 golden fixture：`docs/yidong-jingling/fixtures/opening-weak-to-strong-cases.json`。
+  - 新增 TS 检测器和 C# 检测器，统一支持 `auction_gap_reversal`、`low_open_red_reversal`、`strong_open_board_attempt`，并输出 `score/confidence/factors/riskFlags`。
+  - `python-bridge` 在 `09:24:50-09:25:10` 强制广播 quote patch，payload 增加 `capturedAt/bridgeTs`、采样统计和 `lastPriceSource`，且不再把 `last_close` fallback 当成有效当前价。
+  - `proxy-server` 新增 `/api/opening-signals` 和 `/api/opening-signals/today`，只缓存和仲裁已生成信号，不采样行情、不计算策略。
+  - 网页端新增 `OpeningRealtimeEventBridge`，监听 WebSocket `FULL_STATE/QUOTE_PATCH`，命中后 POST proxy，进入 `HotStockEventMonitorService`，并按 `voiceOwner=web` 控制本地语音。
+  - 桌面端新增 `OpeningSignalReporter`，`OpeningWeakToStrong` 命中后上报 proxy，只有 `voiceOwner=desktop` 时播报；proxy 不可用时降级本地播报并记录日志。
+  - `DataTable.vue` 只读 `/api/opening-signals/today`，在名称列显示“竞强”徽标，并做行级高亮。
+- **仍需实盘确认：**
+  - 第一轮早盘仍需在 `09:24:50-09:25:10` 观察 100-300 只监控池的 `capturedAt/bridgeTs` 覆盖率。
+  - `dryRun` 开关 UI 尚未完成；目前检测器和 proxy 合同支持 `dryRun` 字段，默认实盘路径按正常信号执行。
+- **验证：**
+  - `python -m py_compile python-bridge/main.py`：通过。
+  - `pnpm exec vitest run src/services/hotlist/__tests__/OpeningWeakToStrongDetector.test.ts src/services/hotlist/__tests__/OpeningRealtimeEventBuffer.test.ts src/services/hotlist/__tests__/OpeningRealtimeEventBridge.test.ts src/services/hotlist/__tests__/OpeningSignalClient.test.ts`：5 项通过。
+  - `pnpm exec vitest run src/services/hotlist/__tests__/OpeningRealtimeEventBuffer.test.ts src/services/hotlist/__tests__/OpeningRealtimeEventBridge.test.ts src/services/hotlist/__tests__/HotStockEventMonitorService.test.ts src/services/hotlist/__tests__/HotStockEventSpeechService.test.ts src/services/hotlist/__tests__/OpeningSignalClient.test.ts src/components/common/__tests__/DataTable.test.ts`：26 项通过。
+  - `dotnet run --project tools\YiDongJingLing.Tests\YiDongJingLing.Tests.csproj`：全部通过。
+  - `dotnet build tools\YiDongJingLing\YiDongJingLing.csproj -c Release`：0 warnings, 0 errors。
+  - `node --test __tests__\openingSignals.test.mjs`：5 项通过。
+  - `node --test __tests__\docs.test.mjs`：2 项通过。
+  - `pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false`：通过。
+  - `pnpm build`：通过。
+  - `git diff --check`：通过。
+
+## 2026-05-22 子 Agent 方案交叉评审
+
+- **目标：** 按用户要求使用 `superpowers:subagent-driven-development` 思路，安排子 Agent 对 V3 竞价弱转强方案做交叉评审。
+- **评审方式：**
+  - 行情数据可行性：检查 `python-bridge`、WebSocket、桌面 quote 字段和 09:25 采样链路。
+  - 规则口径：检查模式族、误报控制、评分和风险标记。
+  - 三端架构：检查网页板、桌面版、主表、proxy、DataLayer、QuantBoard 边界。
+  - 测试验收：检查统一 fixture、dry-run、早盘联调、日志和离线矩阵。
+- **结论：**
+  - 四个评审均为“有条件通过”。
+  - 最大风险是仅监听 `QUOTE_PATCH` 不能证明 09:25 每只票都被采到，需要强制采样或强制快照。
+  - proxy 事后去重不能阻止网页和桌面重复语音，需要 `voiceOwner` 仲裁。
+  - `strong_open_board_attempt` 需要弱转强前置条件，否则容易漂成普通开盘冲板。
+  - TS/C# 必须共用一份 golden fixture，不能只靠口头同口径。
+  - 第一轮实盘应先 dry-run，只记录不播报不强高亮。
+- **已更新：**
+  - `docs/yidong-jingling/opening-weak-to-strong-plan.md`
+  - `docs/superpowers/specs/2026-05-22-opening-weak-to-strong-design.md`
+  - `docs/yidong-jingling/task_plan.md`
+  - `docs/yidong-jingling/findings.md`
+- **验证：** 文档方案阶段，未改生产代码。
+
+## 2026-05-22 竞价弱转强规则族复核
+
+- **目标：** 回应用户提醒，避免把 `002552 宝鼎科技` 单一样例写死成全部“竞价弱转强”规则。
+- **使用流程：**
+  - 使用 `superpowers:brainstorming` 做规则抽象。
+  - 使用 `planning-with-files` 同步发现、方案、任务计划和 Superpowers 规格文档。
+  - 联网检索官方交易规则、短线社区和量化文章口径，按来源可靠性分层采纳。
+- **结论：**
+  - 官方规则只用于确认时间窗口、撤单边界、开盘价口径和集合竞价成交价原则。
+  - 游资/社区经验可归纳为“预期差 + 放量承接 + 板块/地位确认”，不能照搬成硬公式。
+  - V3 方案改为模式族：`auction_gap_reversal`、`low_open_red_reversal`、`strong_open_board_attempt` 第一版可做；前日分歧修复、竞价尾盘抬升作为增强或后续扩展。
+  - 共享信号合同增加 `variant`、`score`、`confidence`、`factors`、`riskFlags`，用评分分层控制语音和主表高亮。
+- **已更新：**
+  - `docs/yidong-jingling/opening-weak-to-strong-plan.md`
+  - `docs/superpowers/specs/2026-05-22-opening-weak-to-strong-design.md`
+  - `docs/yidong-jingling/task_plan.md`
+  - `docs/yidong-jingling/findings.md`
+- **验证：** 文档方案阶段，未改生产代码。
+
+## 2026-05-22 网页板数据源复核
+
+- **目标：** 核查用户提醒的“网页板当前是选股通 HTTP 轮询，和桌面版 python-bridge WebSocket 不同”，确认 V3 技术可行路径。
+- **使用流程：**
+  - 使用 `superpowers:brainstorming` 做数据源方案收束。
+  - 使用 `superpowers:dispatching-parallel-agents` 并行复核 HTTP 事件源、python-bridge 实时链路和方案文档风险。
+  - 使用 `planning-with-files` 同步方案、发现和任务计划。
+- **结论：**
+  - 选股通/同花顺 HTTP feed 是事件历史和涨停池结果源，不能作为 `opening_weak_to_strong` 主检测源。
+  - 当前网页板事件雷达默认轮询是 `30_000ms`，不是 3 秒；`3_000ms` 只出现在语音批量 flush 等链路，不能当行情采样频率。
+  - 网页板 V3 第一版必须使用 `python-bridge` WebSocket 的 `FULL_STATE` / `QUOTE_PATCH` 实时 L1 行情，和桌面版统一主数据源。
+  - 网页检测器应直接读取 `webSocketService` 的 `QuotePatch` / `getQuotesBatch()`，不要从当前 DataLayer 实时投影反推 `open/preClose`。
+  - `proxy-server` 只做信号缓存、去重和主表展示同步，不做行情采样或弱转强推导。
+- **已更新：**
+  - `docs/yidong-jingling/opening-weak-to-strong-plan.md`
+  - `docs/superpowers/specs/2026-05-22-opening-weak-to-strong-design.md`
+  - `docs/yidong-jingling/task_plan.md`
+  - `docs/yidong-jingling/findings.md`
+- **验证：** 文档方案阶段，未改生产代码；已运行 `git diff --check`，通过。
+
+## 2026-05-22 Superpowers 三端方案确认
+
+- **目标：** 按用户确认，把“竞价弱转强”从桌面端优先方案重梳为网页板、桌面版、Dragon Board 主界面同时落地的 V3 第一版方案。
+- **使用流程：**
+  - 使用 `superpowers:brainstorming` 收束设计。
+  - 使用 `planning-with-files` 同步 `task_plan.md`、`findings.md`、`progress.md` 和专题方案文件。
+- **决策：**
+  - 采用“共享信号合同 + TS/C# 独立检测 + proxy 本地缓存去重 + Dragon Board 主表消费信号”的架构。
+  - 网页板异动雷达通过 TypeScript 检测实时 L1 报价，进入现有异动雷达列表和本地语音链路。
+  - 桌面版 `YiDongJingLing.exe` 通过纯 C# 独立检测并使用 VoiceWorker 语音提醒。
+  - Dragon Board 主界面通过 `DataTable.vue` 展示“竞价弱转强”徽标或短时行高亮，不承担检测逻辑。
+- **产出：**
+  - 新增 `docs/superpowers/specs/2026-05-22-opening-weak-to-strong-design.md`。
+  - 更新 `docs/yidong-jingling/opening-weak-to-strong-plan.md`，纳入网页板、桌面版、代理缓存和主表信号。
+  - 更新 `docs/yidong-jingling/task_plan.md`，V3 阶段拆为共享合同、桌面端、网页板、代理缓存、主表、实盘联调。
+  - 更新 `docs/yidong-jingling/findings.md`，记录三端范围和共享信号合同。
+- **验证：** 文档设计阶段，未改生产代码，未运行构建。
+
+## 2026-05-22 开盘竞价弱转强方案
+
+- **目标：** 基于用户对 `002552 宝鼎科技` 样例的修正，制定“不接 QMT L2、不做真十档，只用 mootdx L1 抓 09:25 到 09:30 弱转强跳空”的落地方案。
+- **发现：**
+  - 核心信号不是固定高开，而是 `09:25` 竞价最后价偏弱到 `09:30-09:35` 连续竞价快速上移。
+  - `09:25` 竞价最后价需要实盘采样，盘后分钟线不能可靠补齐。
+  - 现有 `YiDongJingLing` 已有行情桥、事件去重、语音和表格高亮链路，适合最小增量实现。
+- **产出：**
+  - 新增 `docs/yidong-jingling/opening-weak-to-strong-plan.md`。
+  - 在 `task_plan.md` 增加 V3 开盘竞价弱转强阶段计划。
+  - 在 `findings.md` 增加 V3 关键发现。
+- **验证：** 文档方案阶段，未改生产代码，未运行构建。
+
 ## 2026-05-20 TDX 雷达设置迁移项
 
 - **目标：** 按 TDX 市场雷达设置页，把现有行情桥可稳定提供的数据尽量迁移为桌面版可配置规则。

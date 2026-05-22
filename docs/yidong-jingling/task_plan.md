@@ -301,3 +301,130 @@ dotnet publish tools\YiDongJingLing\YiDongJingLing.csproj -c Release -r win-x64 
 ```
 
 - **状态：** complete
+
+---
+
+# 异动精灵 V3 任务计划：开盘竞价弱转强
+
+## V3 目标
+
+在不接入 QMT L2、不恢复 TDX 真十档探针的前提下，使用当前 `mootdx + python-bridge` 的 L1 行情链路，于早盘 `09:25` 记录集合竞价最后可见价，并在 `09:30-09:35` 快速识别“竞价弱转强”股票。
+
+规则口径校正：`002552 宝鼎科技` 只是“竞价尾价弱、开盘跳空上移”的子形态。V3 不把弱转强写死成单一公式，而是使用 `variant + score + factors + riskFlags` 的模式族合同。
+
+技术校正：网页板 `opening_weak_to_strong` 第一版主检测源必须使用 `python-bridge` WebSocket 实时行情，不使用选股通/同花顺 HTTP 异动事件 feed。选股通/同花顺 feed 只保留为普通盘中异动辅助线索。
+
+子 Agent 交叉评审门禁：实施前必须补齐强制采样、跨端语音仲裁、统一 fixture、dry-run、可观测字段和离线矩阵。
+
+V3 第一版必须同时覆盖三个实现点：
+
+1. 网页板异动雷达：TypeScript 检测，进入现有异动雷达列表和本地语音链路。
+2. 桌面版异动精灵：纯 C# 独立检测，`YiDongJingLing.exe` 主表高亮并语音提醒。
+3. Dragon Board 主界面：行情主表对命中股票显示醒目信号标识。
+
+详细方案见：[opening-weak-to-strong-plan.md](opening-weak-to-strong-plan.md)。
+Superpowers 设计规格见：[../superpowers/specs/2026-05-22-opening-weak-to-strong-design.md](../superpowers/specs/2026-05-22-opening-weak-to-strong-design.md)。
+
+## V3 成功标准
+
+1. `09:24:50-09:25:10` 网页板和桌面版都能对当前监控池锁定 `auctionFinalPrice`。
+2. `09:30:00-09:35:00` 两端都能计算 `auctionPct`、`firstWindowPct` 和 `jumpPctPoint`。
+3. 满足条件时触发 `竞价弱转强` 事件，事件包含 `variant`、`score`、`confidence`、`factors`、`riskFlags`、`baselineQuality`、`ruleVersion`、`configHash`，`confidence >= strong` 时按 proxy `voiceOwner` 仲裁后播报。
+4. 异动精灵主表格高亮显示该事件，详情包含 `09:25` 价、`09:30` 价、跳空百分点、成交额和距涨停。
+5. 网页板异动雷达显示同一事件，复用现有去重、列表和语音服务。
+6. Dragon Board 行情主界面展示同一信号徽标或短时行高亮。
+7. 本地代理缓存今日信号，并按 `tradingDate + code + signalType` 去重，避免网页板和桌面版重复刷屏。
+8. 缺少 `09:25` 基线、非开盘窗口、低成交额和重复触发都不会误报。
+
+## V3 非目标
+
+- 不接入 QMT L2。
+- 不宣称真 L2 十档、逐笔委托、撤单队列。
+- 不做默认全市场高频扫描。
+- 不把盘后分钟线当作 `09:25` 竞价历史数据来源。
+- 不把选股通/同花顺 HTTP 事件接口当作竞价弱转强主数据源。
+- 不把信号写入 QuantBoard 正式数据库；第一版只做本地当日缓存。
+- 不把 `python-bridge` 改成策略引擎；但允许新增强制采样快照、`capturedAt/bridgeTs` 等行情元数据。
+
+## V3 Phase 1：共享口径和事件合同
+
+- [x] 固化 `signalType = opening_weak_to_strong`、显示名“竞价弱转强”和 `dedupeKey = tradingDate + code + signalType`。
+- [x] 明确共享字段：`auctionFinalPrice`、`auctionPct`、`officialOpen`、`officialOpenPct`、`firstWindowPrice`、`firstWindowPct`、`jumpPctPoint`、`amount`、`amountDelta`、`limitDistancePct`、`triggerAt`、`source`、`variant`、`score`、`confidence`、`factors`、`riskFlags`、`baselineQuality`、`capturedAt/bridgeTs`、`ruleVersion`、`dryRun`。
+- [x] 明确单位：`*Pct` / `*PctPoint` 为百分数点，金额为元，成交量为股。
+- [x] 固化模式族：`auction_gap_reversal`、`low_open_red_reversal`、`strong_open_board_attempt`；`previous_day_divergence_repair` 和 `auction_late_lift` 先作为增强因子或后续扩展。
+- [x] 收紧 `strong_open_board_attempt`：必须有弱转强前置条件；无前置条件只能作为普通开盘冲板观察，不强播。
+- [x] 固化硬门槛、评分模型和强信号升级规则，避免只用单个 `jumpPctPoint` 阈值判断全部形态。
+- [x] 为 TS 和 C# 准备同一组样例测试数据，包含 `002552` 命中样例、低开翻红样例、冲板抢筹样例、缺少基线、普通冲板和 `09:35` 后不触发。
+- [x] 新增 `docs/yidong-jingling/fixtures/opening-weak-to-strong-cases.json`，TS/C# 测试共同读取。
+- **验证：** `OpeningWeakToStrongDetector.test.ts`；`YiDongJingLing.Tests` 共享 fixture 测试。
+- **状态：** complete
+
+## V3 Phase 2：桌面版纯 C# 检测和语音
+
+- [x] 在 C# 检测器中实现开盘竞价采样窗口和弱转强检测窗口。
+- [x] 新增 `OpeningAuctionStateStore` 保存当日 `09:25` 基线。
+- [x] 新增 `OpeningWeakToStrongDetector`，只负责弱转强检测。
+- [x] 新增桌面 opening signal 上报路径，不绑定飞书同步开关。
+- [x] 增加 `L1EventType.OpeningWeakToStrong`、去重优先级和强信号语音策略。
+- [x] `L1EventEngine.Prime` 在 `09:24:50-09:25:10` 采样竞价基线。
+- [x] `09:30-09:35` 把检测结果并入现有事件链路。
+- [x] 设置页增加“竞价弱转强”事件开关。
+- [ ] 设置页或状态栏支持 dry-run 演练模式。
+- [x] 主表格和摘要栏突出显示“竞价弱转强”。
+- **验证：** `dotnet run --project tools\YiDongJingLing.Tests\YiDongJingLing.Tests.csproj`；`dotnet build tools\YiDongJingLing\YiDongJingLing.csproj -c Release`。
+- **状态：** partial
+
+## V3 Phase 2A：python-bridge 强制采样元数据
+
+- [x] 在开盘窗口提供强制 `quote_patch`，确保价格不变也能证明每只订阅股票被采样。
+- [x] quote payload 提供 `capturedAt/bridgeTs`、`elapsedMs`、`requestedCount/receivedCount`、`slowBatches/truncatedBatches`。
+- [x] 避免把 `last_close` fallback 当成有效当前价，新增 `lastPriceSource`。
+- [x] 不在 bridge 中计算 `opening_weak_to_strong`，只提供行情和采样质量。
+- **验证：** `python -m py_compile python-bridge/main.py`；真实 `09:24:50-09:25:10` 覆盖率仍需早盘实盘确认。
+- **状态：** partial
+
+## V3 Phase 3：网页板异动雷达检测
+
+- [x] 在 `src/services/hotlist/**` 增加网页端 `OpeningAuctionStateStore` 和 `OpeningWeakToStrongDetector`。
+- [x] 在 `src/services/hotlist/**` 增加 realtime buffer，把 opening realtime 事件合并后再进入面板状态。
+- [x] 监听 `webSocketService` 的 `FULL_STATE` / `QUOTE_PATCH`，并支持开盘强制采样元数据，在浏览器内维护 `09:25` 基线和 `09:30-09:35` 检测窗口。
+- [x] 明确 `opening_weak_to_strong` 不从 `XuangubaoAbnormalEventFeed` / `ThsLimitUpEventFeed` 读取检测输入；两者只保留为普通异动事件源。
+- [x] 网页端只消费现有 WebSocket 订阅池，不直接抢占 `webSocketService.setHotPool`。
+- [x] 检测器直接消费 WebSocket `QuotePatch`，不从不完整的 DataLayer 投影反推 `open/preClose`。
+- [x] 将命中结果转换为现有 `HotStockEvent`，进入 `HotStockEventMonitorService` 列表、去重和 `HotStockEventSpeechService`。
+- [x] `HotStockEventMonitorPanel.vue` 对“竞价弱转强”使用高优先级显示。
+- [x] `HotStockEventMonitorPanel.vue` 数据源文案从单一“选股通数据源”调整为“实时行情 + 异动事件源”。
+- **验证：** `OpeningRealtimeEventBuffer.test.ts`；`OpeningRealtimeEventBridge.test.ts`；`HotStockEventMonitorService.test.ts`；`HotStockEventSpeechService.test.ts`；`pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false`。
+- **状态：** complete
+
+## V3 Phase 4：本地代理信号缓存
+
+- [x] `proxy-server` 增加 `POST /api/opening-signals` 和 `GET /api/opening-signals/today`。
+- [x] 以内存缓存当日信号，重启后可接受丢失，不进入 QuantBoard。
+- [x] 按 `tradingDate + code + signalType` 去重，缓存 `canonicalSignal`、`reportsBySource`、`sources`、`firstTriggerAt`、`lastReportedAt`。
+- [x] `POST /api/opening-signals` 返回 `accepted/isNew/dedupeAction/voiceOwner/canonicalSignal/sources`。
+- [x] 桌面版和网页板触发后都可上报同一信号合同。
+- [x] 明确代理不采样行情、不计算 `auctionFinalPrice`，只缓存已生成信号。
+- [x] 新 API 接入 `proxy-server/app.js` 和 `proxy-server/openapi.js`。
+- **验证：** `node --test __tests__\openingSignals.test.mjs`；`node --test __tests__\docs.test.mjs`。
+- **状态：** complete
+
+## V3 Phase 5：Dragon Board 主界面信号
+
+- [x] 前端增加今日 opening signal 读取服务 `OpeningSignalClient`。
+- [x] `DataTable.vue` 在股票名称旁展示“竞强”徽标，并支持行级高亮。
+- [x] 主表展示不改变现有排序和信息密度，不使用大卡片或弹窗。
+- [x] `/api/opening-signals/today` 轮询只用于展示同步，不作为行情轮询或弱转强检测输入。
+- **验证：** `DataTable.test.ts`；`pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false`；`pnpm build`。
+- **状态：** complete
+
+## V3 Phase 6：早盘实盘联调和复盘
+
+- [ ] `09:20` 前启动工具并加载 100-300 只候选池。
+- [ ] `09:25` 检查网页板和桌面版竞价基线覆盖率。
+- [ ] `09:30-09:35` 记录触发延迟、播报、主表高亮和重复情况。
+- [ ] 盘后导出命中记录，保留 `09:25` 价、首次上移价、跳空百分点和冲板状态。
+- [ ] 第一轮实盘默认 dry-run，按 `09:20/09:24:50/09:25:10/09:29:59/09:30:00/09:35:01` 检查表记录。
+- [ ] 验证 bridge 离线、proxy 离线、只开网页、只开桌面、跨日清理和时区边界。
+- **验证：** 基线覆盖率大于 95%，有 per-code `capturedAt/bridgeTs`，信号首次满足后 2 秒内展示，网页板和桌面版不重复刷屏/不重复语音。
+- **状态：** pending
