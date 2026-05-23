@@ -197,6 +197,7 @@ dedupeKey = tradingDate + code + signalType
 | `factors` | 命中因子明细，例如跳空、放量、承接、逼近涨停、前日分歧 |
 | `riskFlags` | 风险扣分，例如无量高开、开盘回落、流动性不足、上下文缺失 |
 | `baselineQuality` | `good`、`degraded`、`missing`，用于说明 `09:25` 基线质量 |
+| `previousWeakScore` / `previousWeakSignals` / `previousWeakSource` | 前日弱势上下文；V4 已支持桌面端从 `TDX自选股` 候选池注入 `tdx_block` 上下文 |
 | `auctionCapturedAt` / `bridgeTs` | bridge 捕获/广播时间，不宣称为交易所时间 |
 | `auctionSampleCount` | 竞价基线窗口内有效样本数 |
 | `quoteAgeMs` / `latencyMs` | 报价年龄和端到端延迟估计 |
@@ -273,6 +274,8 @@ riskFlag: { key: "auction_amount_missing", severity: "medium", penalty: -8 }
 3. 昨日连板、涨停、强趋势候选池，后续可接 Dragon Board 现有热榜/题材数据。
 4. 全市场扫描默认关闭，后续作为独立性能优化项。
 
+V4 已把桌面端 `TDX自选股` 接入为前日弱势上下文：当股票池来源为 `TDX自选股` 时，已加载 `.blk` 候选股会在 C# 检测输入中带上 `previousWeakScore = 30`、`previousWeakSignals = ["tdx_block_candidate"]`、`previousWeakSource = "tdx_block"`。该分数只表示人工候选池证据，不等同于真实炸板/烂板；八平台热榜不会自动写入该上下文。
+
 不建议第一版全市场高频扫，因为当前 `python-bridge` 是分批 `quotes(symbol=batch)`，全市场会带来延迟、截断和节点压力。用户真正关心的是早盘可操作性，候选池高质量比全市场覆盖更重要。
 
 网页端订阅约束：不要在异动雷达里直接抢占 `webSocketService.setHotPool()`。弱转强候选池必须通过统一订阅 owner 合并，或由 `RealtimeQuoteCoordinator/DataLoaderFacade` 合并主行情池、热榜池和弱转强候选池后统一下发，避免打开异动雷达覆盖主行情订阅。
@@ -317,7 +320,7 @@ followThroughPctPoint = currentPct - firstWindowPct
 ```text
 auctionPct <= 0.5
 或 officialOpenPct <= 0.5
-或 previousWeakScore > 0
+或 previousWeakScore >= previousWeakScoreMin，默认 30
 或 09:20-09:25 后段出现从弱到强的 auction_late_lift 序列
 ```
 

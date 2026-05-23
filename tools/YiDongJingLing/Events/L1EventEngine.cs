@@ -28,11 +28,13 @@ public sealed class L1EventEngine
         5_000_000m,
         2.5m,
         2m,
-        0.2m);
+        0.2m,
+        30m);
     private readonly L1EventRules _rules;
     private readonly Dictionary<string, StockState> _states = new(StringComparer.Ordinal);
     private readonly OpeningAuctionStateStore _openingStore = new(OpeningRules);
     private readonly OpeningWeakToStrongDetector _openingDetector = new(OpeningRules);
+    private readonly HashSet<string> _tdxBlockWeakContextCodes = new(StringComparer.Ordinal);
 
     public L1EventEngine(L1EventRules? rules = null)
     {
@@ -43,6 +45,18 @@ public sealed class L1EventEngine
     {
         _states.Clear();
         _openingStore.Clear();
+    }
+
+    public void ReplaceTdxBlockWeakContext(IEnumerable<string> codes)
+    {
+        _tdxBlockWeakContextCodes.Clear();
+        foreach (var code in codes)
+        {
+            if (!string.IsNullOrWhiteSpace(code))
+            {
+                _tdxBlockWeakContextCodes.Add(code.Trim());
+            }
+        }
     }
 
     public void Prime(QuoteSnapshot quote)
@@ -383,7 +397,7 @@ public sealed class L1EventEngine
         return 10m;
     }
 
-    private static OpeningWeakToStrongQuote ToOpeningQuote(QuoteSnapshot quote, decimal? limitUpPrice = null)
+    private OpeningWeakToStrongQuote ToOpeningQuote(QuoteSnapshot quote, decimal? limitUpPrice = null)
     {
         return new OpeningWeakToStrongQuote(
             quote.Code,
@@ -402,7 +416,10 @@ public sealed class L1EventEngine
             quote.ReceivedCount,
             quote.ElapsedMs,
             quote.SlowBatches,
-            quote.TruncatedBatches);
+            quote.TruncatedBatches,
+            _tdxBlockWeakContextCodes.Contains(quote.Code) ? 30m : null,
+            _tdxBlockWeakContextCodes.Contains(quote.Code) ? ["tdx_block_candidate"] : Array.Empty<string>(),
+            _tdxBlockWeakContextCodes.Contains(quote.Code) ? "tdx_block" : "");
     }
 
     private static string OpeningReason(OpeningWeakToStrongResult result)
@@ -454,6 +471,9 @@ public sealed class L1EventEngine
             result.ElapsedMs,
             result.SlowBatches,
             result.TruncatedBatches,
+            result.PreviousWeakScore,
+            result.PreviousWeakSignals,
+            result.PreviousWeakSource,
             result.RuleVersion,
             result.ConfigHash,
             result.Factors,

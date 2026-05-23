@@ -451,3 +451,15 @@ Superpowers 设计规格见：[../superpowers/specs/2026-05-22-opening-weak-to-s
 - [ ] 早盘基线覆盖率状态栏/门禁仍需实盘联调补齐。
 - **验证：** `dotnet run --project tools\YiDongJingLing.Tests\YiDongJingLing.Tests.csproj`；`pnpm exec vitest run src/services/hotlist/__tests__/OpeningWeakToStrongDetector.test.ts src/services/hotlist/__tests__/OpeningRealtimeEventBuffer.test.ts src/services/hotlist/__tests__/OpeningRealtimeEventBridge.test.ts src/services/hotlist/__tests__/OpeningSignalClient.test.ts src/services/hotlist/__tests__/HotStockEventMonitorService.test.ts src/services/hotlist/__tests__/HotStockEventSpeechService.test.ts src/components/common/__tests__/DataTable.test.ts`；`node --test proxy-server\__tests__\openingSignals.test.mjs proxy-server\__tests__\docs.test.mjs`；`pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false`；`dotnet build tools\YiDongJingLing\YiDongJingLing.csproj -c Release`；`pnpm build`；`git diff --check`。
 - **状态：** partial
+
+## V4 Phase 3：TDX 自选股前日弱势上下文
+
+- [x] Superpowers 规格写入 `docs/superpowers/specs/2026-05-23-opening-weak-context-design.md`，并单独提交。
+- [x] TS/C# 共享合同新增 `previousWeakScore`、`previousWeakSignals`、`previousWeakSource` 和规则阈值 `previousWeakScoreMin`。
+- [x] `strong_open_board_attempt` 的弱势前置条件支持 `previousWeakScore >= previousWeakScoreMin`。
+- [x] 桌面端 `L1EventEngine` 支持 `ReplaceTdxBlockWeakContext`，当股票池来源为 `TDX自选股` 时向候选股注入 `tdx_block` 上下文。
+- [x] 切换到 `八平台热榜` 时不写入 TDX 上下文，避免把热榜池误作前日弱势证据。
+- [x] 桌面端导出增加前日弱势分、来源和标签，便于盘后复盘。
+- [x] 共享 fixture 增加“TDX 上下文触发冲板抢筹”样例，并保留“无弱势前置普通冲板拒绝”样例。
+- **验证：** `pnpm exec vitest run src/services/hotlist/__tests__/OpeningWeakToStrongDetector.test.ts src/services/hotlist/__tests__/OpeningRealtimeEventBuffer.test.ts src/services/hotlist/__tests__/OpeningRealtimeEventBridge.test.ts src/services/hotlist/__tests__/OpeningSignalClient.test.ts src/services/hotlist/__tests__/HotStockEventMonitorService.test.ts src/services/hotlist/__tests__/HotStockEventSpeechService.test.ts src/components/common/__tests__/DataTable.test.ts`；`dotnet run --project tools\YiDongJingLing.Tests\YiDongJingLing.Tests.csproj`；`node --test proxy-server\__tests__\openingSignals.test.mjs proxy-server\__tests__\docs.test.mjs`；`pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false`；`dotnet build tools\YiDongJingLing\YiDongJingLing.csproj -c Release`；`pnpm build`；`git diff --check`。
+- **状态：** complete

@@ -494,6 +494,7 @@
 | 2026-05-23 | 补齐竞价弱转强量价核心：`09:20-09:25` 序列画像、`auction_late_lift` 正式 variant、无量抬价/放量不涨/高位回落风险降级，并用 TS/C# 共享 fixture 验证。 | complete |
 | 2026-05-23 | 补做 V2 提交后 code review，发现桌面端 `ConfigHash` 未纳入新增量价阈值；按 TDD 增加回归测试并修复。 | complete |
 | 2026-05-23 | 按文档审计偏差修复弱转强落地：补 TS/C# 复盘字段透传、金额倒退风险降级、主表轮询服务边界、桌面导出弱转强专有字段。 | complete |
+| 2026-05-23 | 按 Superpowers 规格落地 TDX 自选股前日弱势上下文：`.blk` 候选池注入 `tdx_block` 上下文，`previousWeakScore >= 30` 可作为冲板抢筹弱势前置，并补共享 fixture、桌面导出和 TS/C# 口径。 | complete |
 
 ## V4 验证记录
 
@@ -513,6 +514,10 @@
 | 文档偏差修复类型检查 | `pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false` | 通过。 |
 | 文档偏差修复构建 | `dotnet build tools\YiDongJingLing\YiDongJingLing.csproj -c Release`；`pnpm build` | 桌面端 0 warnings/0 errors；前端生产构建通过。 |
 | 文档偏差修复空白检查 | `git diff --check` | 通过。 |
+| TDX 上下文 Web 链路 | `pnpm exec vitest run src/services/hotlist/__tests__/OpeningWeakToStrongDetector.test.ts src/services/hotlist/__tests__/OpeningRealtimeEventBuffer.test.ts src/services/hotlist/__tests__/OpeningRealtimeEventBridge.test.ts src/services/hotlist/__tests__/OpeningSignalClient.test.ts src/services/hotlist/__tests__/HotStockEventMonitorService.test.ts src/services/hotlist/__tests__/HotStockEventSpeechService.test.ts src/components/common/__tests__/DataTable.test.ts` | 7 files / 36 tests passed。 |
+| TDX 上下文桌面端 | `dotnet run --project tools\YiDongJingLing.Tests\YiDongJingLing.Tests.csproj` | All YiDongJingLing tests passed，包含 TDX 上下文触发 `strong_open_board_attempt` 和导出字段测试。 |
+| TDX 上下文 proxy | `node --test proxy-server\__tests__\openingSignals.test.mjs proxy-server\__tests__\docs.test.mjs` | 8 tests passed。 |
+| TDX 上下文类型与构建 | `pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false`；`dotnet build tools\YiDongJingLing\YiDongJingLing.csproj -c Release`；`pnpm build` | 类型检查通过；桌面端 0 warnings/0 errors；前端生产构建通过。 |
 
 ## 5 问恢复检查
 

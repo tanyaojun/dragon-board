@@ -192,6 +192,16 @@
 | 桌面导出复盘 | `YiDongJingLing.exe` 导出记录已追加弱转强专有列，覆盖形态、强度、09:25/09:30 价格、跳空、成交额增量、基线质量、采样统计和风险标记。 |
 | 仍待实盘确认 | dry-run UI、早盘基线覆盖率状态栏/门禁、真实 `09:24:50-09:25:10` 覆盖率和端到端延迟仍未完成，需要在 V3 Phase 6 实盘联调中验收。 |
 
+2026-05-23 TDX 自选股前日弱势上下文落地：
+
+| 项目 | 发现 |
+|------|------|
+| 上游边界 | `TDX自选股` 复用现有 `.blk` 监控池，不新增行情源、不新增第二套股池 UI、不做全市场扫描。 |
+| 上下文语义 | 桌面端对 `TDX自选股` 中的候选股注入 `previousWeakScore = 30`、`previousWeakSignals = ["tdx_block_candidate"]`、`previousWeakSource = "tdx_block"`；该分数只代表人工候选证据，不等同于结构化炸板/烂板。 |
+| 检测规则 | `strong_open_board_attempt` 的弱势前置条件已扩展为当日竞价弱、官方开盘弱、或 `previousWeakScore >= previousWeakScoreMin`。默认阈值为 30。 |
+| 兼容性 | 缺少 `previousWeak*` 字段时保持旧行为；普通无上下文开盘冲板仍返回 `weak_precondition_missing`。 |
+| 复盘字段 | 桌面导出已追加前日弱势分、来源和标签；proxy/Web canonical signal 使用既有 JSON 透传，不需要新增 API。 |
+
 ## 风险与处理
 
 | 风险 | 处理 |

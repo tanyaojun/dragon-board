@@ -916,6 +916,8 @@ public sealed class MainForm : Form
         var loadResult = await LoadSelectedCodesAsync();
         var codes = loadResult.Codes;
         _watchedCodes = new HashSet<string>(codes, StringComparer.Ordinal);
+        _eventEngine.ReplaceTdxBlockWeakContext(
+            _settings.StockPoolSource == StockPoolSource.TdxBlock ? codes : Array.Empty<string>());
         if (resetRuntimeState)
         {
             ClearRuntimeState();
@@ -1077,6 +1079,8 @@ public sealed class MainForm : Form
         {
             var codes = (await LoadSelectedCodesAsync()).Codes;
             _watchedCodes = new HashSet<string>(codes, StringComparer.Ordinal);
+            _eventEngine.ReplaceTdxBlockWeakContext(
+                _settings.StockPoolSource == StockPoolSource.TdxBlock ? codes : Array.Empty<string>());
             if (codes.Count == 0)
             {
                 _statusLabel.Text = "未选择有效股票";
@@ -1627,6 +1631,9 @@ public sealed class MainForm : Form
         "采样耗时ms",
         "慢批次",
         "截断批次",
+        "前日弱势分",
+        "前日弱势来源",
+        "前日弱势标签",
         "风险标记",
     ];
 
@@ -1665,6 +1672,9 @@ public sealed class MainForm : Form
             FormatNullable(signal?.ElapsedMs),
             FormatNullable(signal?.SlowBatches),
             FormatNullable(signal?.TruncatedBatches),
+            FormatNullable(signal?.PreviousWeakScore),
+            signal?.PreviousWeakSource ?? "",
+            signal is null ? "" : string.Join(";", signal.PreviousWeakSignals),
             signal is null ? "" : string.Join(";", signal.RiskFlags.Select(item => item.Key)),
         ];
     }

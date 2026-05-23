@@ -29,7 +29,8 @@
     "auctionLateLiftLateAmountDeltaMin": 5000000,
     "auctionLateLiftFirstWindowMinPct": 2.5,
     "auctionLateLiftJumpMinPctPoint": 2,
-    "auctionLateHighRetreatPctPoint": 0.2
+    "auctionLateHighRetreatPctPoint": 0.2,
+    "previousWeakScoreMin": 30
   },
   "cases": [
     {
@@ -135,6 +136,50 @@
           "limitUpPrice": 11,
           "capturedAt": "2026-05-22T09:30:20+08:00",
           "bridgeTs": "2026-05-22T09:30:20+08:00"
+        }
+      ],
+      "expected": {
+        "triggered": true,
+        "variant": "strong_open_board_attempt",
+        "confidence": "critical",
+        "scoreRange": [80, 100],
+        "riskFlags": []
+      }
+    },
+    {
+      "caseId": "strong-open-board-attempt-with-tdx-previous-context",
+      "description": "当日竞价和官方开盘都不弱，但 TDX 自选股上下文提供前日弱势证据，允许作为弱转强冲板形态。",
+      "quotes": [
+        {
+          "code": "600010",
+          "name": "TDX候选",
+          "at": "2026-05-22T09:25:00+08:00",
+          "lastPrice": 10.18,
+          "preClose": 10,
+          "open": 0,
+          "amount": 12000000,
+          "volume": 1180000,
+          "capturedAt": "2026-05-22T09:25:00+08:00",
+          "bridgeTs": "2026-05-22T09:25:00+08:00",
+          "previousWeakScore": 30,
+          "previousWeakSignals": ["tdx_block_candidate"],
+          "previousWeakSource": "tdx_block"
+        },
+        {
+          "code": "600010",
+          "name": "TDX候选",
+          "at": "2026-05-22T09:30:20+08:00",
+          "lastPrice": 10.86,
+          "preClose": 10,
+          "open": 10.2,
+          "amount": 86000000,
+          "volume": 7900000,
+          "limitUpPrice": 11,
+          "capturedAt": "2026-05-22T09:30:20+08:00",
+          "bridgeTs": "2026-05-22T09:30:20+08:00",
+          "previousWeakScore": 30,
+          "previousWeakSignals": ["tdx_block_candidate"],
+          "previousWeakSource": "tdx_block"
         }
       ],
       "expected": {

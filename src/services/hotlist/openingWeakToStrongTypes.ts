@@ -31,6 +31,7 @@ export interface OpeningWeakToStrongRules {
   auctionLateLiftFirstWindowMinPct: number
   auctionLateLiftJumpMinPctPoint: number
   auctionLateHighRetreatPctPoint: number
+  previousWeakScoreMin: number
 }
 
 export interface OpeningWeakToStrongQuote {
@@ -51,6 +52,9 @@ export interface OpeningWeakToStrongQuote {
   elapsedMs?: number
   slowBatches?: number
   truncatedBatches?: number
+  previousWeakScore?: number
+  previousWeakSignals?: string[]
+  previousWeakSource?: string
 }
 
 export interface OpeningWeakToStrongBaseline {
@@ -134,6 +138,9 @@ export interface OpeningWeakToStrongSignal {
   elapsedMs?: number
   slowBatches?: number
   truncatedBatches?: number
+  previousWeakScore?: number
+  previousWeakSignals?: string[]
+  previousWeakSource?: string
   factors: OpeningWeakToStrongFactor[]
   riskFlags: OpeningWeakToStrongRiskFlag[]
   invalidReason?: string

@@ -230,7 +230,7 @@ Run("Opening weak-to-strong config hash includes auction price-volume rules", ()
     var baseHash = new OpeningWeakToStrongDetector(baseRules).Evaluate(quote, null).ConfigHash;
     var changedHash = new OpeningWeakToStrongDetector(changedRules).Evaluate(quote, null).ConfigHash;
 
-    AssertEqual("owts-ce35ecba", baseHash, "fixture config hash matches web");
+    AssertEqual("owts-feac3a30", baseHash, "fixture config hash matches web");
     AssertTrue(baseHash != changedHash, "auction price-volume rule hash changes");
 });
 
@@ -350,6 +350,37 @@ Run("Event engine emits opening weak-to-strong from auction baseline", () =>
     AssertTrue(signal.OpeningSignal.BridgeTs is null, "missing per-code bridgeTs is not forged from source time");
 });
 
+Run("Event engine uses TDX block context for opening board attempt", () =>
+{
+    var engine = new L1EventEngine();
+    engine.ReplaceTdxBlockWeakContext(["600010"]);
+    var auction = Quote(
+        "600010",
+        "TDX候选",
+        10.18m,
+        1.8m,
+        10m,
+        amount: 12_000_000m,
+        time: DateTimeOffset.Parse("2026-05-22T09:25:00+08:00"));
+    var open = Quote(
+        "600010",
+        "TDX候选",
+        10.86m,
+        8.6m,
+        10m,
+        amount: 86_000_000m,
+        time: DateTimeOffset.Parse("2026-05-22T09:30:20+08:00")) with { Open = 10.2m };
+
+    engine.Prime(auction);
+    var events = engine.Evaluate(open, auction, [auction, open]);
+    var signal = events.Single(item => item.Type == L1EventType.OpeningWeakToStrong).OpeningSignal;
+
+    AssertEqual("strong_open_board_attempt", signal?.Variant, "tdx context variant");
+    AssertEqual(30m, signal?.PreviousWeakScore ?? 0m, "tdx context score");
+    AssertEqual("tdx_block", signal?.PreviousWeakSource, "tdx context source");
+    AssertTrue(signal?.Factors.Any(item => item.Key == "previousWeakContext") ?? false, "previous context factor");
+});
+
 Run("Event engine keeps watch opening weak-to-strong out of strong voice policy", () =>
 {
     var engine = new L1EventEngine();
@@ -422,7 +453,8 @@ Run("Opening weak-to-strong detector rejects previous trading day baseline", () 
         5_000_000m,
         2.5m,
         2m,
-        0.2m);
+        0.2m,
+        30m);
     var store = new OpeningAuctionStateStore(rules);
     var detector = new OpeningWeakToStrongDetector(rules);
     var auction = new OpeningWeakToStrongQuote(
@@ -895,6 +927,9 @@ Run("Opening signal reporter posts canonical payload to proxy", () =>
             420,
             1,
             2,
+            null,
+            [],
+            "",
             "opening-weak-to-strong.v1",
             "owts-test",
             [],
@@ -957,6 +992,9 @@ Run("Event export includes opening weak-to-strong replay fields", () =>
             420,
             1,
             2,
+            30m,
+            ["tdx_block_candidate"],
+            "tdx_block",
             "opening-weak-to-strong.v1",
             "owts-test",
             [],
@@ -972,6 +1010,7 @@ Run("Event export includes opening weak-to-strong replay fields", () =>
     AssertTrue(lines[1].Contains("4.98"), "jump pct point exported");
     AssertTrue(lines[1].Contains("5000万"), "amount delta exported");
     AssertTrue(lines[1].Contains("128"), "received count exported");
+    AssertTrue(lines[1].Contains("tdx_block"), "previous weak context exported");
     AssertTrue(lines[1].Contains("amount_regressed"), "risk flag exported");
 });
 

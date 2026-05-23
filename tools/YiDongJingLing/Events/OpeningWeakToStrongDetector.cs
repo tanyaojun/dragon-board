@@ -27,7 +27,8 @@ public sealed record OpeningWeakToStrongRules(
     decimal AuctionLateLiftLateAmountDeltaMin,
     decimal AuctionLateLiftFirstWindowMinPct,
     decimal AuctionLateLiftJumpMinPctPoint,
-    decimal AuctionLateHighRetreatPctPoint)
+    decimal AuctionLateHighRetreatPctPoint,
+    decimal PreviousWeakScoreMin)
 {
     public static OpeningWeakToStrongRules FromJson(JsonElement element)
     {
@@ -54,7 +55,8 @@ public sealed record OpeningWeakToStrongRules(
             GetDecimal(element, "auctionLateLiftLateAmountDeltaMin"),
             GetDecimal(element, "auctionLateLiftFirstWindowMinPct"),
             GetDecimal(element, "auctionLateLiftJumpMinPctPoint"),
-            GetDecimal(element, "auctionLateHighRetreatPctPoint"));
+            GetDecimal(element, "auctionLateHighRetreatPctPoint"),
+            GetDecimalOrDefault(element, "previousWeakScoreMin", 30m));
     }
 
     private static string GetString(JsonElement element, string name)
@@ -65,6 +67,13 @@ public sealed record OpeningWeakToStrongRules(
     private static decimal GetDecimal(JsonElement element, string name)
     {
         return element.GetProperty(name).GetDecimal();
+    }
+
+    private static decimal GetDecimalOrDefault(JsonElement element, string name, decimal fallback)
+    {
+        return element.TryGetProperty(name, out var property) && property.ValueKind is JsonValueKind.Number
+            ? property.GetDecimal()
+            : fallback;
     }
 }
 
@@ -85,7 +94,10 @@ public sealed record OpeningWeakToStrongQuote(
     int? ReceivedCount = null,
     int? ElapsedMs = null,
     int? SlowBatches = null,
-    int? TruncatedBatches = null)
+    int? TruncatedBatches = null,
+    decimal? PreviousWeakScore = null,
+    IReadOnlyList<string>? PreviousWeakSignals = null,
+    string PreviousWeakSource = "")
 {
     public static OpeningWeakToStrongQuote FromJson(JsonElement element)
     {
@@ -106,7 +118,10 @@ public sealed record OpeningWeakToStrongQuote(
             GetInt(element, "receivedCount"),
             GetInt(element, "elapsedMs"),
             GetInt(element, "slowBatches"),
-            GetInt(element, "truncatedBatches"));
+            GetInt(element, "truncatedBatches"),
+            GetOptionalDecimal(element, "previousWeakScore"),
+            GetStringArray(element, "previousWeakSignals"),
+            GetString(element, "previousWeakSource"));
     }
 
     private static string GetString(JsonElement element, string name)
@@ -119,6 +134,13 @@ public sealed record OpeningWeakToStrongQuote(
         return element.TryGetProperty(name, out var property) && property.ValueKind is JsonValueKind.Number
             ? property.GetDecimal()
             : 0m;
+    }
+
+    private static decimal? GetOptionalDecimal(JsonElement element, string name)
+    {
+        return element.TryGetProperty(name, out var property) && property.ValueKind is JsonValueKind.Number
+            ? property.GetDecimal()
+            : null;
     }
 
     private static DateTimeOffset? GetDateTimeOffset(JsonElement element, string name)
@@ -139,6 +161,18 @@ public sealed record OpeningWeakToStrongQuote(
         return element.TryGetProperty(name, out var property) && property.ValueKind is JsonValueKind.Number
             ? property.GetInt32()
             : null;
+    }
+
+    private static IReadOnlyList<string> GetStringArray(JsonElement element, string name)
+    {
+        if (!element.TryGetProperty(name, out var property) || property.ValueKind != JsonValueKind.Array)
+            return Array.Empty<string>();
+
+        return property
+            .EnumerateArray()
+            .Select(item => item.GetString()?.Trim() ?? "")
+            .Where(item => !string.IsNullOrWhiteSpace(item))
+            .ToArray();
     }
 }
 
@@ -219,6 +253,9 @@ public sealed record OpeningWeakToStrongResult(
     int? ElapsedMs,
     int? SlowBatches,
     int? TruncatedBatches,
+    decimal? PreviousWeakScore,
+    IReadOnlyList<string> PreviousWeakSignals,
+    string PreviousWeakSource,
     IReadOnlyList<OpeningWeakToStrongFactor> Factors,
     IReadOnlyList<OpeningWeakToStrongRiskFlag> RiskFlags,
     string? InvalidReason,
@@ -258,6 +295,9 @@ public sealed record OpeningWeakToStrongSignal(
     int? ElapsedMs,
     int? SlowBatches,
     int? TruncatedBatches,
+    decimal? PreviousWeakScore,
+    IReadOnlyList<string> PreviousWeakSignals,
+    string PreviousWeakSource,
     string RuleVersion,
     string ConfigHash,
     IReadOnlyList<OpeningWeakToStrongFactor> Factors,
@@ -486,9 +526,12 @@ public sealed class OpeningWeakToStrongDetector
             ? (quote.LimitUpPrice - quote.LastPrice) / quote.LimitUpPrice * 100m
             : (decimal?)null;
         var amountOk = quote.Amount >= _rules.MinCurrentAmount || amountDelta >= _rules.MinAmountDelta;
+        var previousWeakScore = quote.PreviousWeakScore ?? 0m;
+        var previousWeakPrecondition = previousWeakScore >= _rules.PreviousWeakScoreMin;
         var weakPrecondition =
             auctionPct <= _rules.AuctionWeakMaxPct ||
-            (officialOpenPct.HasValue && officialOpenPct.Value <= _rules.AuctionWeakMaxPct);
+            (officialOpenPct.HasValue && officialOpenPct.Value <= _rules.AuctionWeakMaxPct) ||
+            previousWeakPrecondition;
 
         if (!amountOk) return Rejected(quote, baseline, "opening_amount_too_small");
 
@@ -529,7 +572,17 @@ public sealed class OpeningWeakToStrongDetector
         var riskKeys = new List<string>(auctionProfile?.RiskFlags ?? []);
         if (baseline.AuctionAmount <= 0m) riskKeys.Add("auction_amount_missing");
         else if (quote.Amount < baseline.AuctionAmount) riskKeys.Add("amount_regressed");
-        var factors = BuildFactors(variant, jumpPctPoint, firstWindowPct, quote.Amount, amountDelta, limitDistancePct, baseline.Quality, auctionProfile);
+        var factors = BuildFactors(
+            variant,
+            jumpPctPoint,
+            firstWindowPct,
+            quote.Amount,
+            amountDelta,
+            limitDistancePct,
+            baseline.Quality,
+            auctionProfile,
+            previousWeakScore,
+            quote.PreviousWeakSource);
         var riskFlags = riskKeys.Distinct(StringComparer.Ordinal).Select(RiskFlag).ToArray();
         var riskPenalty = riskFlags.Sum(item => Math.Abs(item.Penalty));
         var score = ClampScore(factors.Sum(item => item.Score) - riskPenalty);
@@ -569,6 +622,9 @@ public sealed class OpeningWeakToStrongDetector
             baseline.ElapsedMs,
             baseline.SlowBatches,
             baseline.TruncatedBatches,
+            quote.PreviousWeakScore,
+            quote.PreviousWeakSignals ?? Array.Empty<string>(),
+            quote.PreviousWeakSource,
             factors,
             riskFlags,
             null,
@@ -614,6 +670,9 @@ public sealed class OpeningWeakToStrongDetector
             baseline?.ElapsedMs,
             baseline?.SlowBatches,
             baseline?.TruncatedBatches,
+            quote.PreviousWeakScore,
+            quote.PreviousWeakSignals ?? Array.Empty<string>(),
+            quote.PreviousWeakSource,
             [],
             [RiskFlag(invalidReason)],
             invalidReason,
@@ -629,7 +688,9 @@ public sealed class OpeningWeakToStrongDetector
         decimal amountDelta,
         decimal? limitDistancePct,
         string baselineQuality,
-        OpeningAuctionPriceVolumeProfile? auctionProfile)
+        OpeningAuctionPriceVolumeProfile? auctionProfile,
+        decimal previousWeakScore,
+        string previousWeakSource)
     {
         var factors = new List<OpeningWeakToStrongFactor>();
         if (variant == "auction_late_lift")
@@ -656,6 +717,14 @@ public sealed class OpeningWeakToStrongDetector
 
         factors.Add(new("openingAmount", amount, _rules.MinCurrentAmount, amountDelta >= _rules.MinAmountDelta ? 18m : 12m));
         factors.Add(new("baselineQuality", baselineQuality, null, baselineQuality == "good" ? 10m : 4m));
+        if (previousWeakScore >= _rules.PreviousWeakScoreMin)
+        {
+            factors.Add(new("previousWeakContext", previousWeakScore, _rules.PreviousWeakScoreMin, 12m));
+            if (!string.IsNullOrWhiteSpace(previousWeakSource))
+            {
+                factors.Add(new("previousWeakSource", previousWeakSource, null, 0m));
+            }
+        }
         return factors;
     }
 
@@ -701,6 +770,7 @@ public sealed class OpeningWeakToStrongDetector
             ["minAmountDelta"] = rules.MinAmountDelta,
             ["minCurrentAmount"] = rules.MinCurrentAmount,
             ["nearLimitDistancePct"] = rules.NearLimitDistancePct,
+            ["previousWeakScoreMin"] = rules.PreviousWeakScoreMin,
             ["strongOpenFirstWindowMinPct"] = rules.StrongOpenFirstWindowMinPct,
         };
         var text = "{" + string.Join(",", values.Select(item => $"\"{item.Key}\":{JsonValue(item.Value)}")) + "}";

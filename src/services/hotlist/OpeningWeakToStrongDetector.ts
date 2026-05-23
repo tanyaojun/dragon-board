@@ -123,9 +123,12 @@ export class OpeningWeakToStrongDetector {
       ? (quote.limitUpPrice - quote.lastPrice) / quote.limitUpPrice * 100
       : undefined
     const amountOk = amount >= this.rules.minCurrentAmount || amountDelta >= this.rules.minAmountDelta
+    const previousWeakScore = normalizeNumber(quote.previousWeakScore)
+    const previousWeakPrecondition = previousWeakScore >= this.rules.previousWeakScoreMin
     const weakPrecondition =
       atMost(auctionPct, this.rules.auctionWeakMaxPct) ||
-      (officialOpenPct !== undefined && atMost(officialOpenPct, this.rules.auctionWeakMaxPct))
+      (officialOpenPct !== undefined && atMost(officialOpenPct, this.rules.auctionWeakMaxPct)) ||
+      previousWeakPrecondition
 
     if (!amountOk) return this.rejected(quote, baseline, 'opening_amount_too_small')
 
@@ -177,6 +180,9 @@ export class OpeningWeakToStrongDetector {
       limitDistancePct,
       baselineQuality: baseline.quality,
       auctionProfile,
+      previousWeakScore,
+      previousWeakSignals: quote.previousWeakSignals,
+      previousWeakSource: quote.previousWeakSource,
       rules: this.rules,
     })
     const riskKeys = [...(auctionProfile?.riskFlags || [])]
@@ -221,6 +227,9 @@ export class OpeningWeakToStrongDetector {
       elapsedMs: baseline.elapsedMs,
       slowBatches: baseline.slowBatches,
       truncatedBatches: baseline.truncatedBatches,
+      previousWeakScore: quote.previousWeakScore,
+      previousWeakSignals: quote.previousWeakSignals,
+      previousWeakSource: quote.previousWeakSource,
       factors,
       riskFlags,
       ruleVersion: this.ruleVersion,
@@ -275,6 +284,9 @@ function buildFactors(input: {
   limitDistancePct?: number
   baselineQuality: OpeningBaselineQuality
   auctionProfile?: OpeningAuctionPriceVolumeProfile
+  previousWeakScore: number
+  previousWeakSignals?: string[]
+  previousWeakSource?: string
   rules: OpeningWeakToStrongRules
 }): OpeningWeakToStrongFactor[] {
   const factors: OpeningWeakToStrongFactor[] = []
@@ -349,6 +361,21 @@ function buildFactors(input: {
     value: input.baselineQuality,
     score: input.baselineQuality === 'good' ? 10 : 4,
   })
+  if (input.previousWeakScore >= input.rules.previousWeakScoreMin) {
+    factors.push({
+      key: 'previousWeakContext',
+      value: input.previousWeakScore,
+      threshold: input.rules.previousWeakScoreMin,
+      score: 12,
+    })
+    if (input.previousWeakSource) {
+      factors.push({
+        key: 'previousWeakSource',
+        value: input.previousWeakSource,
+        score: 0,
+      })
+    }
+  }
   return factors
 }
 
