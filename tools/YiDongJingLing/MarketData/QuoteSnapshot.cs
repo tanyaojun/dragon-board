@@ -16,7 +16,15 @@ public sealed record QuoteSnapshot(
     decimal PreClose,
     IReadOnlyList<QuoteLevel> Bids,
     IReadOnlyList<QuoteLevel> Asks,
-    DateTimeOffset SourceTime)
+    DateTimeOffset SourceTime,
+    DateTimeOffset? CapturedAt = null,
+    DateTimeOffset? BridgeTs = null,
+    bool OpeningForcedSample = false,
+    int? RequestedCount = null,
+    int? ReceivedCount = null,
+    int? ElapsedMs = null,
+    int? SlowBatches = null,
+    int? TruncatedBatches = null)
 {
     public decimal Bid1Price => Bids.Count > 0 ? Bids[0].Price : 0m;
     public decimal Bid1Volume => Bids.Count > 0 ? Bids[0].Volume : 0m;

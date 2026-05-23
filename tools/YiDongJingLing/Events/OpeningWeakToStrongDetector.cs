@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 
@@ -78,7 +79,13 @@ public sealed record OpeningWeakToStrongQuote(
     decimal Volume,
     decimal LimitUpPrice,
     DateTimeOffset? CapturedAt,
-    DateTimeOffset? BridgeTs)
+    DateTimeOffset? BridgeTs,
+    bool OpeningForcedSample = false,
+    int? RequestedCount = null,
+    int? ReceivedCount = null,
+    int? ElapsedMs = null,
+    int? SlowBatches = null,
+    int? TruncatedBatches = null)
 {
     public static OpeningWeakToStrongQuote FromJson(JsonElement element)
     {
@@ -93,7 +100,13 @@ public sealed record OpeningWeakToStrongQuote(
             GetDecimal(element, "volume"),
             GetDecimal(element, "limitUpPrice"),
             GetDateTimeOffset(element, "capturedAt"),
-            GetDateTimeOffset(element, "bridgeTs"));
+            GetDateTimeOffset(element, "bridgeTs"),
+            GetBool(element, "openingForcedSample"),
+            GetInt(element, "requestedCount"),
+            GetInt(element, "receivedCount"),
+            GetInt(element, "elapsedMs"),
+            GetInt(element, "slowBatches"),
+            GetInt(element, "truncatedBatches"));
     }
 
     private static string GetString(JsonElement element, string name)
@@ -113,6 +126,20 @@ public sealed record OpeningWeakToStrongQuote(
         var value = GetString(element, name);
         return string.IsNullOrWhiteSpace(value) ? null : DateTimeOffset.Parse(value);
     }
+
+    private static bool GetBool(JsonElement element, string name)
+    {
+        return element.TryGetProperty(name, out var property) &&
+            property.ValueKind is JsonValueKind.True or JsonValueKind.False &&
+            property.GetBoolean();
+    }
+
+    private static int? GetInt(JsonElement element, string name)
+    {
+        return element.TryGetProperty(name, out var property) && property.ValueKind is JsonValueKind.Number
+            ? property.GetInt32()
+            : null;
+    }
 }
 
 public sealed record OpeningWeakToStrongBaseline(
@@ -127,6 +154,12 @@ public sealed record OpeningWeakToStrongBaseline(
     DateTimeOffset? BridgeTs,
     int SampleCount,
     string Quality,
+    bool OpeningForcedSample,
+    int? RequestedCount,
+    int? ReceivedCount,
+    int? ElapsedMs,
+    int? SlowBatches,
+    int? TruncatedBatches,
     OpeningAuctionPriceVolumeProfile? AuctionProfile);
 
 public sealed record OpeningAuctionPriceVolumeProfile(
@@ -174,6 +207,18 @@ public sealed record OpeningWeakToStrongResult(
     decimal? LimitDistancePct,
     DateTimeOffset TriggerAt,
     string BaselineQuality,
+    DateTimeOffset? AuctionCapturedAt,
+    DateTimeOffset? BridgeTs,
+    DateTimeOffset? QuoteCapturedAt,
+    int? AuctionSampleCount,
+    int? QuoteAgeMs,
+    int? LatencyMs,
+    bool OpeningForcedSample,
+    int? RequestedCount,
+    int? ReceivedCount,
+    int? ElapsedMs,
+    int? SlowBatches,
+    int? TruncatedBatches,
     IReadOnlyList<OpeningWeakToStrongFactor> Factors,
     IReadOnlyList<OpeningWeakToStrongRiskFlag> RiskFlags,
     string? InvalidReason,
@@ -201,6 +246,18 @@ public sealed record OpeningWeakToStrongSignal(
     decimal AmountDelta,
     decimal? LimitDistancePct,
     string BaselineQuality,
+    DateTimeOffset? AuctionCapturedAt,
+    DateTimeOffset? BridgeTs,
+    DateTimeOffset? QuoteCapturedAt,
+    int? AuctionSampleCount,
+    int? QuoteAgeMs,
+    int? LatencyMs,
+    bool OpeningForcedSample,
+    int? RequestedCount,
+    int? ReceivedCount,
+    int? ElapsedMs,
+    int? SlowBatches,
+    int? TruncatedBatches,
     string RuleVersion,
     string ConfigHash,
     IReadOnlyList<OpeningWeakToStrongFactor> Factors,
@@ -223,7 +280,9 @@ public sealed class OpeningAuctionStateStore
 
         var tradingDate = TradingDate(quote.At);
         var key = BaselineKey(quote.Code, tradingDate);
-        if (IsInWindow(quote.At, _rules.AuctionTrendStart, _rules.AuctionEnd))
+        List<OpeningWeakToStrongQuote>? samplesForProfile = null;
+        var inTrendWindow = IsInWindow(quote.At, _rules.AuctionTrendStart, _rules.AuctionEnd);
+        if (inTrendWindow)
         {
             if (!_samples.TryGetValue(key, out var samples))
             {
@@ -236,12 +295,35 @@ public sealed class OpeningAuctionStateStore
             {
                 samples.RemoveRange(0, samples.Count - 64);
             }
+            samplesForProfile = samples;
         }
 
-        if (!IsInWindow(quote.At, _rules.AuctionStart, _rules.AuctionEnd)) return;
-
         _baselines.TryGetValue(key, out var previous);
+        var auctionProfile = BuildAuctionProfile(samplesForProfile ?? [quote], _rules);
+        if (!IsInWindow(quote.At, _rules.AuctionStart, _rules.AuctionEnd))
+        {
+            if (previous is not null && inTrendWindow)
+            {
+                _baselines[key] = previous with
+                {
+                    AuctionProfile = auctionProfile,
+                };
+            }
+            return;
+        }
+
         var capturedAt = quote.CapturedAt ?? quote.At;
+        var auctionSampleCount = CountAuctionBaselineSamples(samplesForProfile ?? [quote], _rules);
+        if (previous is not null && CompareQuoteFreshness(capturedAt, previous.CapturedAt) <= 0)
+        {
+            _baselines[key] = previous with
+            {
+                SampleCount = Math.Max(previous.SampleCount, auctionSampleCount),
+                AuctionProfile = auctionProfile,
+            };
+            return;
+        }
+
         var quality = quote.CapturedAt.HasValue || quote.BridgeTs.HasValue ? "good" : "degraded";
         _baselines[key] = new OpeningWeakToStrongBaseline(
             quote.Code,
@@ -253,9 +335,15 @@ public sealed class OpeningAuctionStateStore
             quote.PreClose,
             capturedAt,
             quote.BridgeTs,
-            (previous?.SampleCount ?? 0) + 1,
+            Math.Max(previous?.SampleCount ?? 0, auctionSampleCount),
             quality,
-            BuildAuctionProfile(_samples.TryGetValue(key, out var samplesForProfile) ? samplesForProfile : [quote], _rules));
+            quote.OpeningForcedSample,
+            quote.RequestedCount,
+            quote.ReceivedCount,
+            quote.ElapsedMs,
+            quote.SlowBatches,
+            quote.TruncatedBatches,
+            auctionProfile);
     }
 
     public OpeningWeakToStrongBaseline? GetBaseline(string code, DateTimeOffset timestamp)
@@ -280,6 +368,11 @@ public sealed class OpeningAuctionStateStore
     internal static decimal Pct(decimal price, decimal preClose)
     {
         return (price - preClose) / preClose * 100m;
+    }
+
+    private static long CompareQuoteFreshness(DateTimeOffset quoteCapturedAt, DateTimeOffset baselineCapturedAt)
+    {
+        return quoteCapturedAt.ToUnixTimeMilliseconds() - baselineCapturedAt.ToUnixTimeMilliseconds();
     }
 
     private static decimal Round2(decimal value) => Math.Round(value, 2, MidpointRounding.AwayFromZero);
@@ -309,10 +402,12 @@ public sealed class OpeningAuctionStateStore
         var lateLiftPctPoint = finalPct - lateStartPct;
         var amountDelta = final.Amount - first.Amount;
         var lateAmountDelta = final.Amount - lateStart.Amount;
-        var priceLifted = Meets(totalLiftPctPoint, rules.AuctionLateLiftTotalMinPctPoint) ||
-            Meets(lateLiftPctPoint, rules.AuctionLateLiftLateMinPctPoint);
-        var amountExpanded = Meets(amountDelta, rules.AuctionLateLiftAmountDeltaMin) ||
-            Meets(lateAmountDelta, rules.AuctionLateLiftLateAmountDeltaMin);
+        var totalPriceLifted = Meets(totalLiftPctPoint, rules.AuctionLateLiftTotalMinPctPoint);
+        var latePriceLifted = Meets(lateLiftPctPoint, rules.AuctionLateLiftLateMinPctPoint);
+        var totalAmountExpanded = Meets(amountDelta, rules.AuctionLateLiftAmountDeltaMin);
+        var lateAmountExpanded = Meets(lateAmountDelta, rules.AuctionLateLiftLateAmountDeltaMin);
+        var priceLifted = totalPriceLifted || latePriceLifted;
+        var amountExpanded = totalAmountExpanded || lateAmountExpanded;
         var highRetreated = Meets(highPct - finalPct, rules.AuctionLateHighRetreatPctPoint);
         var riskFlags = new List<string>();
         if (priceLifted && !amountExpanded) riskFlags.Add("price_lift_without_volume");
@@ -329,8 +424,20 @@ public sealed class OpeningAuctionStateStore
             Round2(lateLiftPctPoint),
             amountDelta,
             lateAmountDelta,
-            priceLifted && amountExpanded && !highRetreated && finalPct >= rules.AuctionLateLiftFinalMinPct,
+            totalPriceLifted &&
+                totalAmountExpanded &&
+                latePriceLifted &&
+                lateAmountExpanded &&
+                !highRetreated &&
+                finalPct >= rules.AuctionLateLiftFinalMinPct,
             riskFlags);
+    }
+
+    private static int CountAuctionBaselineSamples(
+        IReadOnlyList<OpeningWeakToStrongQuote> samples,
+        OpeningWeakToStrongRules rules)
+    {
+        return samples.Count(item => IsInWindow(item.At, rules.AuctionStart, rules.AuctionEnd));
     }
 
     private static string TradingDate(DateTimeOffset timestamp)
@@ -419,8 +526,11 @@ public sealed class OpeningWeakToStrongDetector
 
         if (variant is null) return Rejected(quote, baseline, "variant_not_matched");
 
+        var riskKeys = new List<string>(auctionProfile?.RiskFlags ?? []);
+        if (baseline.AuctionAmount <= 0m) riskKeys.Add("auction_amount_missing");
+        else if (quote.Amount < baseline.AuctionAmount) riskKeys.Add("amount_regressed");
         var factors = BuildFactors(variant, jumpPctPoint, firstWindowPct, quote.Amount, amountDelta, limitDistancePct, baseline.Quality, auctionProfile);
-        var riskFlags = (auctionProfile?.RiskFlags ?? []).Select(RiskFlag).ToArray();
+        var riskFlags = riskKeys.Distinct(StringComparer.Ordinal).Select(RiskFlag).ToArray();
         var riskPenalty = riskFlags.Sum(item => Math.Abs(item.Penalty));
         var score = ClampScore(factors.Sum(item => item.Score) - riskPenalty);
         var confidence = riskFlags.Length > 0
@@ -447,6 +557,18 @@ public sealed class OpeningWeakToStrongDetector
             limitDistancePct.HasValue ? Round2(limitDistancePct.Value) : null,
             quote.At,
             baseline.Quality,
+            baseline.CapturedAt,
+            baseline.BridgeTs,
+            quote.CapturedAt ?? quote.BridgeTs ?? quote.At,
+            baseline.SampleCount,
+            AgeMs(quote.CapturedAt ?? quote.BridgeTs ?? quote.At, quote.At),
+            AgeMs(baseline.CapturedAt, quote.At),
+            baseline.OpeningForcedSample,
+            baseline.RequestedCount,
+            baseline.ReceivedCount,
+            baseline.ElapsedMs,
+            baseline.SlowBatches,
+            baseline.TruncatedBatches,
             factors,
             riskFlags,
             null,
@@ -480,6 +602,18 @@ public sealed class OpeningWeakToStrongDetector
             null,
             quote.At,
             baseline?.Quality ?? "missing",
+            baseline?.CapturedAt,
+            baseline?.BridgeTs,
+            quote.CapturedAt ?? quote.BridgeTs ?? quote.At,
+            baseline?.SampleCount,
+            AgeMs(quote.CapturedAt ?? quote.BridgeTs ?? quote.At, quote.At),
+            baseline is null ? null : AgeMs(baseline.CapturedAt, quote.At),
+            baseline?.OpeningForcedSample ?? false,
+            baseline?.RequestedCount,
+            baseline?.ReceivedCount,
+            baseline?.ElapsedMs,
+            baseline?.SlowBatches,
+            baseline?.TruncatedBatches,
             [],
             [RiskFlag(invalidReason)],
             invalidReason,
@@ -530,32 +664,62 @@ public sealed class OpeningWeakToStrongDetector
         return new OpeningWeakToStrongRiskFlag(key, key == "baseline_missing" ? "high" : "medium", key == "baseline_missing" ? -100m : -35m);
     }
 
+    private static int? AgeMs(DateTimeOffset? from, DateTimeOffset to)
+    {
+        if (!from.HasValue) return null;
+        var elapsed = to - from.Value;
+        return Math.Max(0, (int)Math.Round(elapsed.TotalMilliseconds));
+    }
+
     private static bool IsValidPrice(decimal value) => value > 0m;
     private static decimal Round2(decimal value) => Math.Round(value, 2, MidpointRounding.AwayFromZero);
     private static decimal ClampScore(decimal value) => Math.Max(0m, Math.Min(100m, Math.Round(value, 0, MidpointRounding.AwayFromZero)));
 
     private static string ConfigHash(OpeningWeakToStrongRules rules)
     {
-        var text = string.Join("|",
-            rules.AuctionStart,
-            rules.AuctionEnd,
-            rules.DetectStart,
-            rules.DetectEnd,
-            rules.AuctionWeakMaxPct,
-            rules.AuctionGapJumpMinPctPoint,
-            rules.AuctionGapFirstWindowMinPct,
-            rules.LowOpenRedJumpMinPctPoint,
-            rules.LowOpenRedFirstWindowMinPct,
-            rules.StrongOpenFirstWindowMinPct,
-            rules.NearLimitDistancePct,
-            rules.MinCurrentAmount,
-            rules.MinAmountDelta);
+        var values = new SortedDictionary<string, object>(StringComparer.Ordinal)
+        {
+            ["auctionEnd"] = rules.AuctionEnd,
+            ["auctionGapFirstWindowMinPct"] = rules.AuctionGapFirstWindowMinPct,
+            ["auctionGapJumpMinPctPoint"] = rules.AuctionGapJumpMinPctPoint,
+            ["auctionLateHighRetreatPctPoint"] = rules.AuctionLateHighRetreatPctPoint,
+            ["auctionLateLiftAmountDeltaMin"] = rules.AuctionLateLiftAmountDeltaMin,
+            ["auctionLateLiftFinalMinPct"] = rules.AuctionLateLiftFinalMinPct,
+            ["auctionLateLiftFirstWindowMinPct"] = rules.AuctionLateLiftFirstWindowMinPct,
+            ["auctionLateLiftJumpMinPctPoint"] = rules.AuctionLateLiftJumpMinPctPoint,
+            ["auctionLateLiftLateAmountDeltaMin"] = rules.AuctionLateLiftLateAmountDeltaMin,
+            ["auctionLateLiftLateMinPctPoint"] = rules.AuctionLateLiftLateMinPctPoint,
+            ["auctionLateLiftStart"] = rules.AuctionLateLiftStart,
+            ["auctionLateLiftTotalMinPctPoint"] = rules.AuctionLateLiftTotalMinPctPoint,
+            ["auctionStart"] = rules.AuctionStart,
+            ["auctionTrendStart"] = rules.AuctionTrendStart,
+            ["auctionWeakMaxPct"] = rules.AuctionWeakMaxPct,
+            ["detectEnd"] = rules.DetectEnd,
+            ["detectStart"] = rules.DetectStart,
+            ["lowOpenRedFirstWindowMinPct"] = rules.LowOpenRedFirstWindowMinPct,
+            ["lowOpenRedJumpMinPctPoint"] = rules.LowOpenRedJumpMinPctPoint,
+            ["minAmountDelta"] = rules.MinAmountDelta,
+            ["minCurrentAmount"] = rules.MinCurrentAmount,
+            ["nearLimitDistancePct"] = rules.NearLimitDistancePct,
+            ["strongOpenFirstWindowMinPct"] = rules.StrongOpenFirstWindowMinPct,
+        };
+        var text = "{" + string.Join(",", values.Select(item => $"\"{item.Key}\":{JsonValue(item.Value)}")) + "}";
         uint hash = 2166136261;
-        foreach (var value in Encoding.UTF8.GetBytes(text))
+        foreach (var value in text)
         {
             hash ^= value;
             hash *= 16777619;
         }
         return $"owts-{hash:x8}";
+    }
+
+    private static string JsonValue(object value)
+    {
+        return value switch
+        {
+            string text => $"\"{text}\"",
+            decimal number => number.ToString("0.#############################", CultureInfo.InvariantCulture),
+            _ => Convert.ToString(value, CultureInfo.InvariantCulture) ?? "",
+        };
     }
 }

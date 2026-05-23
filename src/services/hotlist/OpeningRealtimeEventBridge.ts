@@ -107,6 +107,12 @@ function toOpeningQuote(quote: QuotePatch): OpeningWeakToStrongQuote | null {
       deriveLimitUpPrice(quote.code, quote.name, Number(quote.preClose) || 0),
     capturedAt: quote.capturedAt,
     bridgeTs: quote.bridgeTs,
+    openingForcedSample: quote.openingForcedSample,
+    requestedCount: quote.requestedCount,
+    receivedCount: quote.receivedCount,
+    elapsedMs: quote.elapsedMs,
+    slowBatches: quote.slowBatches,
+    truncatedBatches: quote.truncatedBatches,
   }
 }
 

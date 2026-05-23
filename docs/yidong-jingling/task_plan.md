@@ -439,3 +439,15 @@ Superpowers 设计规格见：[../superpowers/specs/2026-05-22-opening-weak-to-s
 - [x] `09:15-09:20` 可撤单阶段样本不参与强依据，避免虚高影响 `auction_late_lift`。
 - **验证：** `pnpm exec vitest run src/services/hotlist/__tests__/OpeningWeakToStrongDetector.test.ts src/services/hotlist/__tests__/OpeningRealtimeEventBuffer.test.ts src/services/hotlist/__tests__/OpeningRealtimeEventBridge.test.ts src/services/hotlist/__tests__/OpeningSignalClient.test.ts src/services/hotlist/__tests__/HotStockEventMonitorService.test.ts`；`pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false`；`dotnet run --project tools\YiDongJingLing.Tests\YiDongJingLing.Tests.csproj`。
 - **状态：** complete
+
+## V4 Phase 2：文档审计偏差修复
+
+- [x] Web/C# 信号合同补齐竞价采样时间、行情采样时间、样本数、延迟和 bridge 批次统计字段。
+- [x] C# `TdxBridgeClient` 和 `L1EventEngine` 保留每只股票 payload 的 `capturedAt/bridgeTs`，不再统一覆盖为消息源时间。
+- [x] 检测器对竞价金额缺失和当前成交额低于竞价基线分别标记 `auction_amount_missing`、`amount_regressed`，并降为 `watch`。
+- [x] Dragon Board 主表轮询抽到 `OpeningSignalStore`，`DataTable.vue` 只消费展示状态。
+- [x] 桌面端导出追加弱转强专有复盘字段，覆盖价格口径、跳空、成交额增量、采样统计和风险标记。
+- [ ] dry-run 演练 UI 仍未落地。
+- [ ] 早盘基线覆盖率状态栏/门禁仍需实盘联调补齐。
+- **验证：** `dotnet run --project tools\YiDongJingLing.Tests\YiDongJingLing.Tests.csproj`；`pnpm exec vitest run src/services/hotlist/__tests__/OpeningWeakToStrongDetector.test.ts src/services/hotlist/__tests__/OpeningRealtimeEventBuffer.test.ts src/services/hotlist/__tests__/OpeningRealtimeEventBridge.test.ts src/services/hotlist/__tests__/OpeningSignalClient.test.ts src/services/hotlist/__tests__/HotStockEventMonitorService.test.ts src/services/hotlist/__tests__/HotStockEventSpeechService.test.ts src/components/common/__tests__/DataTable.test.ts`；`node --test proxy-server\__tests__\openingSignals.test.mjs proxy-server\__tests__\docs.test.mjs`；`pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false`；`dotnet build tools\YiDongJingLing\YiDongJingLing.csproj -c Release`；`pnpm build`；`git diff --check`。
+- **状态：** partial

@@ -1393,21 +1393,7 @@ public sealed class MainForm : Form
         if (dialog.ShowDialog(this) != DialogResult.OK) return;
 
         var useCsv = Path.GetExtension(dialog.FileName).Equals(".csv", StringComparison.OrdinalIgnoreCase);
-        var separator = useCsv ? "," : "\t";
-        var lines = new[]
-        {
-            string.Join(separator, ["时间", "异动类型", "股票代码", "股票名称", "涨跌幅", "最新价", "成交量", "成交额", "异动详情"]),
-        }.Concat(_eventRecords.Select(item => string.Join(separator, [
-            EscapeExport(item.Timestamp.LocalDateTime.ToString("yyyy-MM-dd HH:mm:ss"), useCsv),
-            EscapeExport(item.TypeName, useCsv),
-            EscapeExport(item.Code, useCsv),
-            EscapeExport(item.DisplayName, useCsv),
-            EscapeExport($"{item.ChangePct:0.##}%", useCsv),
-            EscapeExport($"{item.Price:0.00}", useCsv),
-            EscapeExport(FormatVolume(item.Volume), useCsv),
-            EscapeExport(FormatMoney(item.Amount), useCsv),
-            EscapeExport(item.Reason, useCsv),
-        ])));
+        var lines = BuildExportLines(_eventRecords, useCsv);
         File.WriteAllLines(dialog.FileName, lines, System.Text.Encoding.UTF8);
         Log($"已导出异动记录: {dialog.FileName}");
     }
@@ -1595,6 +1581,107 @@ public sealed class MainForm : Form
         if (value >= 100_000_000m) return $"{value / 100_000_000m:0.##}亿";
         if (value >= 10_000m) return $"{value / 10_000m:0.##}万";
         return $"{value:0}";
+    }
+
+    public static IReadOnlyList<string> BuildExportLines(IEnumerable<EventRecord> records, bool csv)
+    {
+        var separator = csv ? "," : "\t";
+        var lines = new List<string>
+        {
+            string.Join(separator, ExportHeaders.Select(value => EscapeExport(value, csv))),
+        };
+        lines.AddRange(records.Select(item =>
+            string.Join(separator, BuildExportValues(item).Select(value => EscapeExport(value, csv)))));
+        return lines;
+    }
+
+    private static readonly string[] ExportHeaders =
+    [
+        "时间",
+        "异动类型",
+        "股票代码",
+        "股票名称",
+        "涨跌幅",
+        "最新价",
+        "成交量",
+        "成交额",
+        "异动详情",
+        "弱转强形态",
+        "信号强度",
+        "信号分数",
+        "09:25价",
+        "09:25涨幅",
+        "官方开盘价",
+        "官方开盘涨幅",
+        "09:30价",
+        "09:30涨幅",
+        "跳空百分点",
+        "成交额增量",
+        "距涨停百分点",
+        "基线质量",
+        "竞价采样时间",
+        "行情采样时间",
+        "竞价采样数",
+        "请求数",
+        "返回数",
+        "采样耗时ms",
+        "慢批次",
+        "截断批次",
+        "风险标记",
+    ];
+
+    private static IEnumerable<string> BuildExportValues(EventRecord item)
+    {
+        var signal = item.OpeningSignal;
+        return
+        [
+            item.Timestamp.LocalDateTime.ToString("yyyy-MM-dd HH:mm:ss"),
+            item.TypeName,
+            item.Code,
+            item.DisplayName,
+            $"{item.ChangePct:0.##}%",
+            $"{item.Price:0.00}",
+            FormatVolume(item.Volume),
+            FormatMoney(item.Amount),
+            item.Reason,
+            signal?.Variant ?? "",
+            signal?.Confidence ?? "",
+            FormatNullable(signal?.Score),
+            FormatNullable(signal?.AuctionFinalPrice),
+            FormatNullable(signal?.AuctionPct),
+            FormatNullable(signal?.OfficialOpen),
+            FormatNullable(signal?.OfficialOpenPct),
+            FormatNullable(signal?.FirstWindowPrice),
+            FormatNullable(signal?.FirstWindowPct),
+            FormatNullable(signal?.JumpPctPoint),
+            signal is null ? "" : FormatMoney(signal.AmountDelta),
+            FormatNullable(signal?.LimitDistancePct),
+            signal?.BaselineQuality ?? "",
+            FormatExportTime(signal?.AuctionCapturedAt),
+            FormatExportTime(signal?.QuoteCapturedAt),
+            FormatNullable(signal?.AuctionSampleCount),
+            FormatNullable(signal?.RequestedCount),
+            FormatNullable(signal?.ReceivedCount),
+            FormatNullable(signal?.ElapsedMs),
+            FormatNullable(signal?.SlowBatches),
+            FormatNullable(signal?.TruncatedBatches),
+            signal is null ? "" : string.Join(";", signal.RiskFlags.Select(item => item.Key)),
+        ];
+    }
+
+    private static string FormatNullable(decimal? value)
+    {
+        return value.HasValue ? $"{value.Value:0.##}" : "";
+    }
+
+    private static string FormatNullable(int? value)
+    {
+        return value.HasValue ? $"{value.Value}" : "";
+    }
+
+    private static string FormatExportTime(DateTimeOffset? value)
+    {
+        return value.HasValue ? value.Value.LocalDateTime.ToString("yyyy-MM-dd HH:mm:ss") : "";
     }
 
     private static string EscapeExport(string value, bool csv)

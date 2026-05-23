@@ -13,6 +13,13 @@ import type {
 const SIGNAL_TYPE = 'opening_weak_to_strong' as const
 const DISPLAY_NAME = '竞价弱转强' as const
 const RULE_VERSION = 'opening-weak-to-strong.v1'
+const SHANGHAI_TIME_FORMAT = new Intl.DateTimeFormat('en-GB', {
+  timeZone: 'Asia/Shanghai',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hour12: false,
+})
 
 export class OpeningAuctionStateStore {
   private readonly baselines = new Map<string, OpeningWeakToStrongBaseline>()
@@ -25,18 +32,39 @@ export class OpeningAuctionStateStore {
 
     const tradingDate = getTradingDate(quote.at)
     const key = baselineKey(quote.code, tradingDate)
-    if (isInWindow(quote.at, this.rules.auctionTrendStart, this.rules.auctionEnd)) {
+    const inTrendWindow = isInWindow(quote.at, this.rules.auctionTrendStart, this.rules.auctionEnd)
+    let samplesForProfile = this.samples.get(key)
+    if (inTrendWindow) {
       const samples = this.samples.get(key) || []
       samples.push(quote)
       samples.sort((left, right) => secondsOfDay(left.at) - secondsOfDay(right.at))
-      this.samples.set(key, samples.slice(-64))
+      samplesForProfile = samples.slice(-64)
+      this.samples.set(key, samplesForProfile)
     }
 
-    if (!isInWindow(quote.at, this.rules.auctionStart, this.rules.auctionEnd)) return
-
     const previous = this.baselines.get(key)
-    const sampleCount = (previous?.sampleCount || 0) + 1
+    const auctionProfile = buildAuctionProfile(samplesForProfile || [quote], this.rules)
+    if (!isInWindow(quote.at, this.rules.auctionStart, this.rules.auctionEnd)) {
+      if (previous && inTrendWindow) {
+        this.baselines.set(key, {
+          ...previous,
+          auctionProfile,
+        })
+      }
+      return
+    }
+
     const capturedAt = quote.capturedAt || quote.at
+    const auctionSampleCount = countAuctionBaselineSamples(samplesForProfile || [quote], this.rules)
+    if (previous && compareQuoteFreshness(quote, previous.capturedAt) <= 0) {
+      this.baselines.set(key, {
+        ...previous,
+        sampleCount: Math.max(previous.sampleCount, auctionSampleCount),
+        auctionProfile,
+      })
+      return
+    }
+
     const quality: OpeningBaselineQuality = quote.capturedAt || quote.bridgeTs ? 'good' : 'degraded'
     this.baselines.set(key, {
       code: quote.code,
@@ -48,9 +76,15 @@ export class OpeningAuctionStateStore {
       preClose: quote.preClose,
       capturedAt,
       bridgeTs: quote.bridgeTs,
-      sampleCount,
+      sampleCount: Math.max(previous?.sampleCount || 0, auctionSampleCount),
       quality,
-      auctionProfile: buildAuctionProfile(this.samples.get(key) || [quote], this.rules),
+      openingForcedSample: quote.openingForcedSample,
+      requestedCount: quote.requestedCount,
+      receivedCount: quote.receivedCount,
+      elapsedMs: quote.elapsedMs,
+      slowBatches: quote.slowBatches,
+      truncatedBatches: quote.truncatedBatches,
+      auctionProfile,
     })
   }
 
@@ -90,8 +124,8 @@ export class OpeningWeakToStrongDetector {
       : undefined
     const amountOk = amount >= this.rules.minCurrentAmount || amountDelta >= this.rules.minAmountDelta
     const weakPrecondition =
-      auctionPct <= this.rules.auctionWeakMaxPct ||
-      (officialOpenPct !== undefined && officialOpenPct <= this.rules.auctionWeakMaxPct)
+      atMost(auctionPct, this.rules.auctionWeakMaxPct) ||
+      (officialOpenPct !== undefined && atMost(officialOpenPct, this.rules.auctionWeakMaxPct))
 
     if (!amountOk) return this.rejected(quote, baseline, 'opening_amount_too_small')
 
@@ -117,7 +151,7 @@ export class OpeningWeakToStrongDetector {
     }
     if (
       !variant &&
-      auctionPct <= this.rules.auctionWeakMaxPct &&
+      atMost(auctionPct, this.rules.auctionWeakMaxPct) &&
       jumpPctPoint >= this.rules.auctionGapJumpMinPctPoint &&
       firstWindowPct >= this.rules.auctionGapFirstWindowMinPct
     ) {
@@ -125,7 +159,8 @@ export class OpeningWeakToStrongDetector {
     }
     if (
       !variant &&
-      (auctionPct <= 0 || (officialOpenPct !== undefined && officialOpenPct <= this.rules.auctionWeakMaxPct)) &&
+      (atMost(auctionPct, 0) ||
+        (officialOpenPct !== undefined && atMost(officialOpenPct, this.rules.auctionWeakMaxPct))) &&
       firstWindowPct >= this.rules.lowOpenRedFirstWindowMinPct &&
       jumpPctPoint >= this.rules.lowOpenRedJumpMinPctPoint
     ) {
@@ -144,7 +179,10 @@ export class OpeningWeakToStrongDetector {
       auctionProfile,
       rules: this.rules,
     })
-    const riskFlags = (auctionProfile?.riskFlags || []).map(riskFlag)
+    const riskKeys = [...(auctionProfile?.riskFlags || [])]
+    if (baseline.auctionAmount <= 0) riskKeys.push('auction_amount_missing')
+    else if (amount < baseline.auctionAmount) riskKeys.push('amount_regressed')
+    const riskFlags = uniqueStrings(riskKeys).map(riskFlag)
     const riskPenalty = riskFlags.reduce((sum, item) => sum + Math.abs(item.penalty), 0)
     const score = clampScore(factors.reduce((sum, item) => sum + item.score, 0) - riskPenalty)
     const confidence =
@@ -171,6 +209,18 @@ export class OpeningWeakToStrongDetector {
       limitDistancePct: limitDistancePct === undefined ? undefined : round2(limitDistancePct),
       triggerAt: quote.at,
       baselineQuality: baseline.quality,
+      auctionCapturedAt: baseline.capturedAt,
+      bridgeTs: baseline.bridgeTs,
+      quoteCapturedAt: quote.capturedAt || quote.bridgeTs || quote.at,
+      auctionSampleCount: baseline.sampleCount,
+      quoteAgeMs: ageMs(quote.capturedAt || quote.bridgeTs || quote.at, quote.at),
+      latencyMs: ageMs(baseline.capturedAt, quote.at),
+      openingForcedSample: baseline.openingForcedSample,
+      requestedCount: baseline.requestedCount,
+      receivedCount: baseline.receivedCount,
+      elapsedMs: baseline.elapsedMs,
+      slowBatches: baseline.slowBatches,
+      truncatedBatches: baseline.truncatedBatches,
       factors,
       riskFlags,
       ruleVersion: this.ruleVersion,
@@ -193,6 +243,18 @@ export class OpeningWeakToStrongDetector {
       amount: normalizeNumber(quote.amount),
       triggerAt: quote.at,
       baselineQuality: baseline?.quality || 'missing',
+      auctionCapturedAt: baseline?.capturedAt,
+      bridgeTs: baseline?.bridgeTs,
+      quoteCapturedAt: quote.capturedAt || quote.bridgeTs || quote.at,
+      auctionSampleCount: baseline?.sampleCount,
+      quoteAgeMs: ageMs(quote.capturedAt || quote.bridgeTs || quote.at, quote.at),
+      latencyMs: baseline ? ageMs(baseline.capturedAt, quote.at) : undefined,
+      openingForcedSample: baseline?.openingForcedSample,
+      requestedCount: baseline?.requestedCount,
+      receivedCount: baseline?.receivedCount,
+      elapsedMs: baseline?.elapsedMs,
+      slowBatches: baseline?.slowBatches,
+      truncatedBatches: baseline?.truncatedBatches,
       factors: [],
       riskFlags: [riskFlag(invalidReason)],
       invalidReason,
@@ -324,10 +386,12 @@ function buildAuctionProfile(
   const lateLiftPctPoint = finalPct - lateStartPct
   const amountDelta = normalizeNumber(final.amount) - normalizeNumber(first.amount)
   const lateAmountDelta = normalizeNumber(final.amount) - normalizeNumber(lateStart.amount)
-  const priceLifted = meets(totalLiftPctPoint, rules.auctionLateLiftTotalMinPctPoint) ||
-    meets(lateLiftPctPoint, rules.auctionLateLiftLateMinPctPoint)
-  const amountExpanded = meets(amountDelta, rules.auctionLateLiftAmountDeltaMin) ||
-    meets(lateAmountDelta, rules.auctionLateLiftLateAmountDeltaMin)
+  const totalPriceLifted = meets(totalLiftPctPoint, rules.auctionLateLiftTotalMinPctPoint)
+  const latePriceLifted = meets(lateLiftPctPoint, rules.auctionLateLiftLateMinPctPoint)
+  const totalAmountExpanded = meets(amountDelta, rules.auctionLateLiftAmountDeltaMin)
+  const lateAmountExpanded = meets(lateAmountDelta, rules.auctionLateLiftLateAmountDeltaMin)
+  const priceLifted = totalPriceLifted || latePriceLifted
+  const amountExpanded = totalAmountExpanded || lateAmountExpanded
   const highRetreated = meets(highPct - finalPct, rules.auctionLateHighRetreatPctPoint)
   const riskFlags: string[] = []
   if (priceLifted && !amountExpanded) riskFlags.push('price_lift_without_volume')
@@ -345,16 +409,26 @@ function buildAuctionProfile(
     amountDelta,
     lateAmountDelta,
     lateLiftConfirmed:
-      priceLifted &&
-      amountExpanded &&
+      totalPriceLifted &&
+      totalAmountExpanded &&
+      latePriceLifted &&
+      lateAmountExpanded &&
       !highRetreated &&
       finalPct >= rules.auctionLateLiftFinalMinPct,
     riskFlags,
   }
 }
 
+function countAuctionBaselineSamples(samples: OpeningWeakToStrongQuote[], rules: OpeningWeakToStrongRules): number {
+  return samples.filter(item => isInWindow(item.at, rules.auctionStart, rules.auctionEnd)).length
+}
+
 function meets(value: number, threshold: number): boolean {
   return value + 1e-6 >= threshold
+}
+
+function atMost(value: number, threshold: number): boolean {
+  return value <= threshold + 1e-6
 }
 
 function isValidPrice(value: number): boolean {
@@ -384,10 +458,47 @@ function baselineKey(code: string, tradingDate: string): string {
 }
 
 function secondsOfDay(value: string): number {
+  if (/[zZ]$/.test(value)) {
+    const shanghai = shanghaiTimeParts(value)
+    if (shanghai) return shanghai
+  }
   const match = value.match(/(?:T)?(\d{2}):(\d{2}):(\d{2})/)
   if (match) return Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3])
   const date = new Date(value)
   return date.getHours() * 3600 + date.getMinutes() * 60 + date.getSeconds()
+}
+
+function shanghaiTimeParts(value: string): number | null {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return null
+  const parts = Object.fromEntries(
+    SHANGHAI_TIME_FORMAT.formatToParts(date).map(part => [part.type, part.value]),
+  )
+  return Number(parts.hour) * 3600 + Number(parts.minute) * 60 + Number(parts.second)
+}
+
+function compareQuoteFreshness(quote: OpeningWeakToStrongQuote, baselineCapturedAt: string): number {
+  const quoteTimestamp = parseComparableTimestamp(quote.capturedAt || quote.at)
+  const baselineTimestamp = parseComparableTimestamp(baselineCapturedAt)
+  if (quoteTimestamp !== null && baselineTimestamp !== null) return quoteTimestamp - baselineTimestamp
+  return secondsOfDay(quote.at) - secondsOfDay(baselineCapturedAt)
+}
+
+function parseComparableTimestamp(value: string): number | null {
+  const timestamp = Date.parse(value)
+  return Number.isFinite(timestamp) ? timestamp : null
+}
+
+function ageMs(from: string | undefined, to: string): number | undefined {
+  if (!from) return undefined
+  const fromTs = parseComparableTimestamp(from)
+  const toTs = parseComparableTimestamp(to)
+  if (fromTs === null || toTs === null) return undefined
+  return Math.max(0, toTs - fromTs)
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values)]
 }
 
 function round2(value: number): number {

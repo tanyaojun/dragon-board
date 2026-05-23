@@ -87,4 +87,76 @@ describe('OpeningWeakToStrongDetector', () => {
     expect(result.triggered).toBe(false)
     expect(result.invalidReason).toBe('baseline_missing')
   })
+
+  it('uses delayed auction quotes for profile without rolling back the locked baseline', () => {
+    const fixture = loadFixture()
+    const store = new OpeningAuctionStateStore(fixture.rules)
+    const detector = new OpeningWeakToStrongDetector(fixture.rules)
+    const quote = {
+      code: '002559',
+      name: '乱序基线',
+      preClose: 10,
+      open: 0,
+      volume: 1_000_000,
+      capturedAt: '2026-05-22T09:25:00+08:00',
+      bridgeTs: '2026-05-22T09:25:00+08:00',
+    }
+
+    store.capture({
+      ...quote,
+      at: '2026-05-22T09:25:05+08:00',
+      lastPrice: 10.1,
+      amount: 20_000_000,
+      capturedAt: '2026-05-22T09:25:05+08:00',
+      bridgeTs: '2026-05-22T09:25:05+08:00',
+    })
+    store.capture({
+      ...quote,
+      at: '2026-05-22T09:24:55+08:00',
+      lastPrice: 9.8,
+      amount: 5_000_000,
+      capturedAt: '2026-05-22T09:24:55+08:00',
+      bridgeTs: '2026-05-22T09:24:55+08:00',
+    })
+
+    const open = {
+      ...quote,
+      at: '2026-05-22T09:30:06+08:00',
+      lastPrice: 10.31,
+      open: 10.1,
+      amount: 55_000_000,
+      capturedAt: '2026-05-22T09:30:06+08:00',
+      bridgeTs: '2026-05-22T09:30:06+08:00',
+    }
+    const baseline = store.getBaseline(open.code, open.at)
+    const result = detector.evaluate(open, baseline)
+
+    expect(baseline?.auctionPct).toBeCloseTo(1)
+    expect(result.triggered).toBe(true)
+    expect(result.variant).toBe('auction_late_lift')
+    expect(result.auctionPct).toBeCloseTo(1)
+    expect(result.auctionSampleCount).toBe(2)
+  })
+
+  it('downgrades signals when current amount regresses below auction amount', () => {
+    const fixture = loadFixture()
+    const sample = fixture.cases.find(item => item.caseId === '002552-auction-gap-reversal')
+    expect(sample).toBeTruthy()
+    const store = new OpeningAuctionStateStore(fixture.rules)
+    const detector = new OpeningWeakToStrongDetector(fixture.rules)
+    const [auction, open] = sample!.quotes as OpeningWeakToStrongQuote[]
+
+    store.capture({
+      ...auction,
+      amount: 80_000_000,
+    })
+    const result = detector.evaluate({
+      ...open,
+      amount: 60_000_000,
+    }, store.getBaseline(open.code, open.at))
+
+    expect(result.triggered).toBe(true)
+    expect(result.confidence).toBe('watch')
+    expect(result.riskFlags.map(item => item.key)).toContain('amount_regressed')
+  })
 })

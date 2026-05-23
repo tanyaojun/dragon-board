@@ -45,6 +45,12 @@ describe('OpeningRealtimeEventBridge', () => {
       preClose: quote.preClose,
       capturedAt: quote.capturedAt,
       bridgeTs: quote.bridgeTs,
+      openingForcedSample: true,
+      requestedCount: 132,
+      receivedCount: 128,
+      elapsedMs: 420,
+      slowBatches: 1,
+      truncatedBatches: 2,
       lastPriceSource: 'last',
     })))
     await vi.waitFor(() => expect(postSignal).toHaveBeenCalledTimes(1))
@@ -54,6 +60,17 @@ describe('OpeningRealtimeEventBridge', () => {
       signalType: 'opening_weak_to_strong',
       tradingDate: '2026-05-22',
       variant: 'auction_gap_reversal',
+      auctionCapturedAt: '2026-05-22T09:25:01+08:00',
+      bridgeTs: '2026-05-22T09:25:01+08:00',
+      auctionSampleCount: 1,
+      quoteAgeMs: 0,
+      latencyMs: 305000,
+      openingForcedSample: true,
+      requestedCount: 132,
+      receivedCount: 128,
+      elapsedMs: 420,
+      slowBatches: 1,
+      truncatedBatches: 2,
     }))
     expect(acceptDerivedEvents).toHaveBeenCalledWith([
       expect.objectContaining({
@@ -148,5 +165,47 @@ describe('OpeningRealtimeEventBridge', () => {
       code: '600001',
       variant: 'strong_open_board_attempt',
     }))
+  })
+
+  it('keeps sourceTs UTC instants in local opening windows', async () => {
+    const fixture = loadFixture()
+    const sample = fixture.cases.find(item => item.caseId === 'auction-late-lift-confirmed')
+    expect(sample).toBeTruthy()
+    const localHourSpy = vi.spyOn(Date.prototype, 'getHours').mockReturnValue(1)
+    const postSignal = vi.fn().mockResolvedValue({
+      ok: true,
+      accepted: true,
+      voiceOwner: 'web',
+    })
+    const bridge = new OpeningRealtimeEventBridge({
+      rules: fixture.rules,
+      ruleVersion: fixture.ruleVersion,
+      signalClient: { postSignal } as any,
+      monitorService: { acceptDerivedEvents: vi.fn(), refresh: vi.fn().mockResolvedValue({ ok: true }) } as any,
+    })
+
+    try {
+      bridge.acceptQuotes(sample!.quotes.map(quote => ({
+        code: quote.code,
+        name: quote.name,
+        lastPrice: quote.lastPrice,
+        changePct: 0,
+        volume: quote.volume || 0,
+        amount: quote.amount || 0,
+        open: quote.open,
+        preClose: quote.preClose,
+        sourceTs: Date.parse(quote.at),
+        lastPriceSource: 'last',
+      })))
+      await vi.waitFor(() => expect(postSignal).toHaveBeenCalledTimes(1))
+
+      expect(postSignal).toHaveBeenCalledWith('web', expect.objectContaining({
+        code: '002553',
+        variant: 'auction_late_lift',
+        tradingDate: '2026-05-22',
+      }))
+    } finally {
+      localHourSpy.mockRestore()
+    }
   })
 })

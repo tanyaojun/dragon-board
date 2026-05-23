@@ -253,7 +253,7 @@ import { useUIStore } from '../../stores/ui'
 import { useFavoriteStore } from '../../stores/favorite'
 import { dataLoader } from '../../services/dataLoader'
 import { candidateJournalService } from '@/services/candidate/CandidateJournalService'
-import { openingSignalClient, type OpeningCanonicalSignal } from '@/services/hotlist/OpeningSignalClient'
+import { openingSignalStore } from '@/services/hotlist/OpeningSignalStore'
 import RankTrendPanel from '../../components/panels/RankTrendPanel.vue'
 import {
   buildRankTrendStatusContext,
@@ -339,8 +339,7 @@ const statusTooltip = ref({
   y: 0,
   content: '',
 })
-const openingSignalsByCode = ref<Map<string, OpeningCanonicalSignal>>(new Map())
-let openingSignalRefreshTimer: ReturnType<typeof setInterval> | null = null
+const openingSignalsByCode = openingSignalStore.signalsByCode
 
 // 板块列表状态
 const boardList = ref<Board[]>([])
@@ -446,10 +445,6 @@ const openingSignalTitle = (stock: Stock) => {
   if (!signal) return ''
   const confidence = signal.confidence === 'critical' ? '强' : signal.confidence === 'strong' ? '中' : '观察'
   return `竞价弱转强｜${confidence}｜分数 ${signal.score ?? '--'}`
-}
-
-const refreshOpeningSignals = async () => {
-  openingSignalsByCode.value = await openingSignalClient.fetchTodaySignals()
 }
 
 // ========== 从表格数据获取题材信息 ==========
@@ -1271,10 +1266,7 @@ const handleClickOutside = (e: MouseEvent) => {
 // ========== 生命周期 ==========
 onMounted(() => {
   document.addEventListener('click', handleClickOutside)
-  void refreshOpeningSignals()
-  openingSignalRefreshTimer = setInterval(() => {
-    void refreshOpeningSignals()
-  }, 10_000)
+  openingSignalStore.start()
 
   // 恢复滚动位置
   if (bodyRef.value && uiStore.scrollPosition) {
@@ -1285,10 +1277,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   document.removeEventListener('click', handleClickOutside)
-  if (openingSignalRefreshTimer) {
-    clearInterval(openingSignalRefreshTimer)
-    openingSignalRefreshTimer = null
-  }
+  openingSignalStore.stop()
 })
 
 // 监听 sortedStocks 变化，更新滚动位置（可选）

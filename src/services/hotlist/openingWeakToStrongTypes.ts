@@ -45,6 +45,12 @@ export interface OpeningWeakToStrongQuote {
   limitUpPrice?: number
   capturedAt?: string
   bridgeTs?: string
+  openingForcedSample?: boolean
+  requestedCount?: number
+  receivedCount?: number
+  elapsedMs?: number
+  slowBatches?: number
+  truncatedBatches?: number
 }
 
 export interface OpeningWeakToStrongBaseline {
@@ -59,6 +65,12 @@ export interface OpeningWeakToStrongBaseline {
   bridgeTs?: string
   sampleCount: number
   quality: OpeningBaselineQuality
+  openingForcedSample?: boolean
+  requestedCount?: number
+  receivedCount?: number
+  elapsedMs?: number
+  slowBatches?: number
+  truncatedBatches?: number
   auctionProfile?: OpeningAuctionPriceVolumeProfile
 }
 
@@ -110,6 +122,18 @@ export interface OpeningWeakToStrongSignal {
   limitDistancePct?: number
   triggerAt: string
   baselineQuality: OpeningBaselineQuality
+  auctionCapturedAt?: string
+  bridgeTs?: string
+  quoteCapturedAt?: string
+  auctionSampleCount?: number
+  quoteAgeMs?: number
+  latencyMs?: number
+  openingForcedSample?: boolean
+  requestedCount?: number
+  receivedCount?: number
+  elapsedMs?: number
+  slowBatches?: number
+  truncatedBatches?: number
   factors: OpeningWeakToStrongFactor[]
   riskFlags: OpeningWeakToStrongRiskFlag[]
   invalidReason?: string

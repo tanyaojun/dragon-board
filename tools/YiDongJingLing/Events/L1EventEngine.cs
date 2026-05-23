@@ -260,7 +260,12 @@ public sealed class L1EventEngine
         if (!result.Triggered) return;
 
         state.OpeningWeakToStrongTriggeredDate = tradingDate;
-        var severity = result.Confidence == "critical" ? L1EventSeverity.Critical : L1EventSeverity.Important;
+        var severity = result.Confidence switch
+        {
+            "critical" => L1EventSeverity.Critical,
+            "strong" => L1EventSeverity.Important,
+            _ => L1EventSeverity.Normal,
+        };
         Add(
             events,
             quote,
@@ -390,8 +395,14 @@ public sealed class L1EventEngine
             quote.Amount,
             quote.Volume,
             limitUpPrice ?? 0m,
-            quote.SourceTime,
-            quote.SourceTime);
+            quote.CapturedAt,
+            quote.BridgeTs,
+            quote.OpeningForcedSample,
+            quote.RequestedCount,
+            quote.ReceivedCount,
+            quote.ElapsedMs,
+            quote.SlowBatches,
+            quote.TruncatedBatches);
     }
 
     private static string OpeningReason(OpeningWeakToStrongResult result)
@@ -431,6 +442,18 @@ public sealed class L1EventEngine
             result.AmountDelta ?? 0m,
             result.LimitDistancePct,
             result.BaselineQuality,
+            result.AuctionCapturedAt,
+            result.BridgeTs,
+            result.QuoteCapturedAt,
+            result.AuctionSampleCount,
+            result.QuoteAgeMs,
+            result.LatencyMs,
+            result.OpeningForcedSample,
+            result.RequestedCount,
+            result.ReceivedCount,
+            result.ElapsedMs,
+            result.SlowBatches,
+            result.TruncatedBatches,
             result.RuleVersion,
             result.ConfigHash,
             result.Factors,

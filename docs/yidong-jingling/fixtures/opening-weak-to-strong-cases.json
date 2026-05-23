@@ -555,6 +555,67 @@
         "scoreRange": [80, 100],
         "riskFlags": []
       }
+    },
+    {
+      "caseId": "early-lift-without-late-confirmation-not-late-lift",
+      "description": "09:20-09:24已经抬完但09:24-09:25没有继续抬价放量，不应标记为临门抢筹。",
+      "quotes": [
+        {
+          "code": "002558",
+          "name": "早抬无临门",
+          "at": "2026-05-22T09:20:05+08:00",
+          "lastPrice": 9.7,
+          "preClose": 10,
+          "open": 0,
+          "amount": 2000000,
+          "volume": 200000,
+          "capturedAt": "2026-05-22T09:20:05+08:00",
+          "bridgeTs": "2026-05-22T09:20:05+08:00"
+        },
+        {
+          "code": "002558",
+          "name": "早抬无临门",
+          "at": "2026-05-22T09:24:05+08:00",
+          "lastPrice": 10.04,
+          "preClose": 10,
+          "open": 0,
+          "amount": 13000000,
+          "volume": 1280000,
+          "capturedAt": "2026-05-22T09:24:05+08:00",
+          "bridgeTs": "2026-05-22T09:24:05+08:00"
+        },
+        {
+          "code": "002558",
+          "name": "早抬无临门",
+          "at": "2026-05-22T09:25:00+08:00",
+          "lastPrice": 10.05,
+          "preClose": 10,
+          "open": 0,
+          "amount": 13200000,
+          "volume": 1300000,
+          "capturedAt": "2026-05-22T09:25:00+08:00",
+          "bridgeTs": "2026-05-22T09:25:00+08:00"
+        },
+        {
+          "code": "002558",
+          "name": "早抬无临门",
+          "at": "2026-05-22T09:30:08+08:00",
+          "lastPrice": 10.36,
+          "preClose": 10,
+          "open": 10.15,
+          "amount": 45000000,
+          "volume": 4300000,
+          "capturedAt": "2026-05-22T09:30:08+08:00",
+          "bridgeTs": "2026-05-22T09:30:08+08:00"
+        }
+      ],
+      "expected": {
+        "triggered": true,
+        "variant": "auction_gap_reversal",
+        "confidence": "strong",
+        "scoreRange": [60, 95],
+        "riskFlags": []
+      }
     }
   ]
 }

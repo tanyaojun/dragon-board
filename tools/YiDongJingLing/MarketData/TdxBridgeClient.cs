@@ -222,7 +222,15 @@ public sealed class TdxBridgeClient : IDisposable
             ReadDecimal(item, "preClose"),
             _quotes.TryGetValue(code, out var previous) ? previous.Bids : Array.Empty<QuoteLevel>(),
             _quotes.TryGetValue(code, out previous) ? previous.Asks : Array.Empty<QuoteLevel>(),
-            sourceTime);
+            sourceTime,
+            ReadDateTimeOffset(item, "capturedAt"),
+            ReadDateTimeOffset(item, "bridgeTs"),
+            ReadBool(item, "openingForcedSample"),
+            ReadInt(item, "requestedCount"),
+            ReadInt(item, "receivedCount"),
+            ReadInt(item, "elapsedMs"),
+            ReadInt(item, "slowBatches"),
+            ReadInt(item, "truncatedBatches"));
     }
 
     private QuoteSnapshot MergeDepth(QuoteSnapshot quote)
@@ -280,6 +288,28 @@ public sealed class TdxBridgeClient : IDisposable
         if (value.ValueKind == JsonValueKind.Number && value.TryGetDecimal(out var parsed)) return parsed;
         if (value.ValueKind == JsonValueKind.String && decimal.TryParse(value.GetString(), out parsed)) return parsed;
         return 0m;
+    }
+
+    private static int? ReadInt(JsonElement item, string key)
+    {
+        if (!item.TryGetProperty(key, out var value)) return null;
+        if (value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var parsed)) return parsed;
+        return value.ValueKind == JsonValueKind.String && int.TryParse(value.GetString(), out parsed)
+            ? parsed
+            : null;
+    }
+
+    private static bool ReadBool(JsonElement item, string key)
+    {
+        return item.TryGetProperty(key, out var value) &&
+            value.ValueKind is JsonValueKind.True or JsonValueKind.False &&
+            value.GetBoolean();
+    }
+
+    private static DateTimeOffset? ReadDateTimeOffset(JsonElement item, string key)
+    {
+        var text = ReadString(item, key);
+        return DateTimeOffset.TryParse(text, out var parsed) ? parsed : null;
     }
 
     private void RaiseQuotes(IReadOnlyList<QuoteSnapshot> quotes)

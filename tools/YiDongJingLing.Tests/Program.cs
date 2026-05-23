@@ -211,6 +211,108 @@ Run("Opening weak-to-strong detector matches shared golden fixture cases", () =>
     }
 });
 
+Run("Opening weak-to-strong config hash includes auction price-volume rules", () =>
+{
+    var fixturePath = Path.Combine(
+        ProjectRootLocator.Find(),
+        "docs",
+        "yidong-jingling",
+        "fixtures",
+        "opening-weak-to-strong-cases.json");
+    using var document = JsonDocument.Parse(File.ReadAllText(fixturePath));
+    var baseRules = OpeningWeakToStrongRules.FromJson(document.RootElement.GetProperty("rules"));
+    var changedRules = baseRules with
+    {
+        AuctionLateLiftAmountDeltaMin = baseRules.AuctionLateLiftAmountDeltaMin + 1m
+    };
+    var quote = OpeningWeakToStrongQuote.FromJson(document.RootElement.GetProperty("cases")[0].GetProperty("quotes")[0]);
+
+    var baseHash = new OpeningWeakToStrongDetector(baseRules).Evaluate(quote, null).ConfigHash;
+    var changedHash = new OpeningWeakToStrongDetector(changedRules).Evaluate(quote, null).ConfigHash;
+
+    AssertEqual("owts-ce35ecba", baseHash, "fixture config hash matches web");
+    AssertTrue(baseHash != changedHash, "auction price-volume rule hash changes");
+});
+
+Run("Opening weak-to-strong detector profiles delayed older auction quotes without rolling back baseline", () =>
+{
+    var fixturePath = Path.Combine(
+        ProjectRootLocator.Find(),
+        "docs",
+        "yidong-jingling",
+        "fixtures",
+        "opening-weak-to-strong-cases.json");
+    using var document = JsonDocument.Parse(File.ReadAllText(fixturePath));
+    var rules = OpeningWeakToStrongRules.FromJson(document.RootElement.GetProperty("rules"));
+    var store = new OpeningAuctionStateStore(rules);
+    var detector = new OpeningWeakToStrongDetector(rules);
+    var first = new OpeningWeakToStrongQuote(
+        "002559",
+        "乱序基线",
+        DateTimeOffset.Parse("2026-05-22T09:25:05+08:00"),
+        10.1m,
+        10m,
+        0m,
+        20_000_000m,
+        1_000_000m,
+        0m,
+        DateTimeOffset.Parse("2026-05-22T09:25:05+08:00"),
+        DateTimeOffset.Parse("2026-05-22T09:25:05+08:00"));
+    var delayed = first with
+    {
+        At = DateTimeOffset.Parse("2026-05-22T09:24:55+08:00"),
+        LastPrice = 9.8m,
+        Amount = 5_000_000m,
+        CapturedAt = DateTimeOffset.Parse("2026-05-22T09:24:55+08:00"),
+        BridgeTs = DateTimeOffset.Parse("2026-05-22T09:24:55+08:00"),
+    };
+    var open = first with
+    {
+        At = DateTimeOffset.Parse("2026-05-22T09:30:06+08:00"),
+        LastPrice = 10.31m,
+        Open = 10.1m,
+        Amount = 55_000_000m,
+        CapturedAt = DateTimeOffset.Parse("2026-05-22T09:30:06+08:00"),
+        BridgeTs = DateTimeOffset.Parse("2026-05-22T09:30:06+08:00"),
+    };
+
+    store.Capture(first);
+    store.Capture(delayed);
+    var baseline = store.GetBaseline(open.Code, open.At);
+    var result = detector.Evaluate(open, baseline);
+
+    AssertEqual(1m, baseline?.AuctionPct ?? -1m, "auction pct remains latest baseline");
+    AssertTrue(result.Triggered, "delayed older auction quote can complete auction profile");
+    AssertEqual("auction_late_lift", result.Variant, "delayed older auction profile variant");
+    AssertEqual(2, result.AuctionSampleCount ?? 0, "delayed older auction sample count");
+});
+
+Run("Opening weak-to-strong detector downgrades amount regression", () =>
+{
+    var fixturePath = Path.Combine(
+        ProjectRootLocator.Find(),
+        "docs",
+        "yidong-jingling",
+        "fixtures",
+        "opening-weak-to-strong-cases.json");
+    using var document = JsonDocument.Parse(File.ReadAllText(fixturePath));
+    var rules = OpeningWeakToStrongRules.FromJson(document.RootElement.GetProperty("rules"));
+    var sample = document.RootElement.GetProperty("cases")
+        .EnumerateArray()
+        .First(item => item.GetProperty("caseId").GetString() == "002552-auction-gap-reversal");
+    var auction = OpeningWeakToStrongQuote.FromJson(sample.GetProperty("quotes")[0]) with { Amount = 80_000_000m };
+    var open = OpeningWeakToStrongQuote.FromJson(sample.GetProperty("quotes")[1]) with { Amount = 60_000_000m };
+    var store = new OpeningAuctionStateStore(rules);
+    var detector = new OpeningWeakToStrongDetector(rules);
+
+    store.Capture(auction);
+    var result = detector.Evaluate(open, store.GetBaseline(open.Code, open.At));
+
+    AssertTrue(result.Triggered, "amount regression still records candidate");
+    AssertEqual("watch", result.Confidence, "amount regression confidence");
+    AssertTrue(result.RiskFlags.Any(item => item.Key == "amount_regressed"), "amount regression risk flag");
+});
+
 Run("Event engine emits opening weak-to-strong from auction baseline", () =>
 {
     var engine = new L1EventEngine();
@@ -243,6 +345,56 @@ Run("Event engine emits opening weak-to-strong from auction baseline", () =>
     AssertEqual("opening_weak_to_strong", signal.OpeningSignal!.SignalType, "opening signal type");
     AssertEqual("2026-05-22", signal.OpeningSignal.TradingDate, "opening trading date");
     AssertTrue(signal.OpeningSignal.ConfigHash.StartsWith("owts-", StringComparison.Ordinal), "opening config hash");
+    AssertEqual("degraded", signal.OpeningSignal.BaselineQuality, "missing per-code capture metadata stays degraded");
+    AssertTrue(signal.OpeningSignal.AuctionCapturedAt is not null, "auction fallback timestamp exists for replay");
+    AssertTrue(signal.OpeningSignal.BridgeTs is null, "missing per-code bridgeTs is not forged from source time");
+});
+
+Run("Event engine keeps watch opening weak-to-strong out of strong voice policy", () =>
+{
+    var engine = new L1EventEngine();
+    var first = Quote(
+        "002554",
+        "无量抬价",
+        9.8m,
+        -2m,
+        10m,
+        amount: 5_000_000m,
+        time: DateTimeOffset.Parse("2026-05-22T09:20:05+08:00"));
+    var late = Quote(
+        "002554",
+        "无量抬价",
+        9.95m,
+        -0.5m,
+        10m,
+        amount: 5_200_000m,
+        time: DateTimeOffset.Parse("2026-05-22T09:24:10+08:00"));
+    var auction = Quote(
+        "002554",
+        "无量抬价",
+        10.02m,
+        0.2m,
+        10m,
+        amount: 5_400_000m,
+        time: DateTimeOffset.Parse("2026-05-22T09:25:00+08:00"));
+    var open = Quote(
+        "002554",
+        "无量抬价",
+        10.36m,
+        3.6m,
+        10m,
+        amount: 40_000_000m,
+        time: DateTimeOffset.Parse("2026-05-22T09:30:07+08:00")) with { Open = 10.1m };
+
+    engine.Prime(first);
+    engine.Prime(late);
+    engine.Prime(auction);
+    var events = engine.Evaluate(open, auction, [first, late, auction, open]);
+    var signal = events.Single(item => item.Type == L1EventType.OpeningWeakToStrong);
+
+    AssertEqual("watch", signal.OpeningSignal?.Confidence, "watch confidence");
+    AssertEqual(L1EventSeverity.Normal, signal.Severity, "watch opening severity");
+    AssertEqual(0, EventVoicePolicy.FilterForVoice([signal], VoiceMode.StrongOnly).Count, "watch opening not strong voice");
 });
 
 Run("Opening weak-to-strong detector rejects previous trading day baseline", () =>
@@ -731,6 +883,18 @@ Run("Opening signal reporter posts canonical payload to proxy", () =>
             50_000_000m,
             null,
             "good",
+            DateTimeOffset.Parse("2026-05-22T09:25:01+08:00"),
+            DateTimeOffset.Parse("2026-05-22T09:25:01+08:00"),
+            DateTimeOffset.Parse("2026-05-22T09:30:06+08:00"),
+            1,
+            0,
+            305_000,
+            true,
+            132,
+            128,
+            420,
+            1,
+            2,
             "opening-weak-to-strong.v1",
             "owts-test",
             [],
@@ -750,6 +914,65 @@ Run("Opening signal reporter posts canonical payload to proxy", () =>
     AssertEqual("opening_weak_to_strong", payload.GetProperty("signalType").GetString(), "signal type");
     AssertEqual("002552", payload.GetProperty("code").GetString(), "signal code");
     AssertEqual(82m, payload.GetProperty("score").GetDecimal(), "signal score");
+    AssertEqual(1, payload.GetProperty("auctionSampleCount").GetInt32(), "auction sample count");
+    AssertEqual(128, payload.GetProperty("receivedCount").GetInt32(), "received count");
+    AssertEqual(305000, payload.GetProperty("latencyMs").GetInt32(), "latency ms");
+});
+
+Run("Event export includes opening weak-to-strong replay fields", () =>
+{
+    var timestamp = DateTimeOffset.Parse("2026-05-22T09:30:06+08:00");
+    var item = Event("002552", "宝鼎科技", L1EventType.OpeningWeakToStrong, "竞价弱转强", timestamp) with
+    {
+        OpeningSignal = new OpeningWeakToStrongSignal(
+            "2026-05-22",
+            "002552",
+            "宝鼎科技",
+            "opening_weak_to_strong",
+            "strong",
+            82m,
+            "auction_gap_reversal",
+            timestamp,
+            false,
+            35.68m,
+            -1.44m,
+            36.92m,
+            1.99m,
+            37.48m,
+            3.54m,
+            4.98m,
+            56_000_000m,
+            50_000_000m,
+            6.2m,
+            "good",
+            DateTimeOffset.Parse("2026-05-22T09:25:01+08:00"),
+            DateTimeOffset.Parse("2026-05-22T09:25:01+08:00"),
+            DateTimeOffset.Parse("2026-05-22T09:30:06+08:00"),
+            2,
+            0,
+            305_000,
+            true,
+            132,
+            128,
+            420,
+            1,
+            2,
+            "opening-weak-to-strong.v1",
+            "owts-test",
+            [],
+            [new OpeningWeakToStrongRiskFlag("amount_regressed", "medium", -35m)])
+    };
+
+    var lines = MainForm.BuildExportLines([item], csv: true);
+
+    AssertTrue(lines[0].Contains("弱转强形态"), "opening export header");
+    AssertTrue(lines[1].Contains("auction_gap_reversal"), "opening variant exported");
+    AssertTrue(lines[1].Contains("35.68"), "auction final price exported");
+    AssertTrue(lines[1].Contains("37.48"), "first window price exported");
+    AssertTrue(lines[1].Contains("4.98"), "jump pct point exported");
+    AssertTrue(lines[1].Contains("5000万"), "amount delta exported");
+    AssertTrue(lines[1].Contains("128"), "received count exported");
+    AssertTrue(lines[1].Contains("amount_regressed"), "risk flag exported");
 });
 
 Run("TDX bridge full state merges quote and depth into one snapshot", () =>
@@ -763,7 +986,7 @@ Run("TDX bridge full state merges quote and depth into one snapshot", () =>
           "type": "full_state",
           "serverTs": 1779252000000,
           "quotes": [
-            { "code": "600000", "name": "浦发银行", "lastPrice": 10.5, "changePct": 5, "volume": 1000, "amount": 1050000, "preClose": 10 }
+            { "code": "600000", "name": "浦发银行", "lastPrice": 10.5, "changePct": 5, "volume": 1000, "amount": 1050000, "preClose": 10, "capturedAt": "2026-05-20T09:25:01+08:00", "bridgeTs": "2026-05-20T09:25:02+08:00", "openingForcedSample": true, "requestedCount": 132, "receivedCount": 128, "elapsedMs": 420, "slowBatches": 1, "truncatedBatches": 2 }
           ],
           "depth": [
             { "code": "600000", "bids": [{ "price": 10.5, "volume": 2000 }], "asks": [{ "price": 10.51, "volume": 1500 }] }
@@ -776,6 +999,14 @@ Run("TDX bridge full state merges quote and depth into one snapshot", () =>
     AssertEqual("600000", received[0].Code, "snapshot code");
     AssertEqual(1, received[0].Bids.Count, "bid levels");
     AssertEqual(1, received[0].Asks.Count, "ask levels");
+    AssertEqual(DateTimeOffset.Parse("2026-05-20T09:25:01+08:00"), received[0].CapturedAt, "capturedAt");
+    AssertEqual(DateTimeOffset.Parse("2026-05-20T09:25:02+08:00"), received[0].BridgeTs, "bridgeTs");
+    AssertTrue(received[0].OpeningForcedSample, "opening forced sample");
+    AssertEqual(132, received[0].RequestedCount ?? -1, "requested count");
+    AssertEqual(128, received[0].ReceivedCount ?? -1, "received count");
+    AssertEqual(420, received[0].ElapsedMs ?? -1, "elapsed ms");
+    AssertEqual(1, received[0].SlowBatches ?? -1, "slow batches");
+    AssertEqual(2, received[0].TruncatedBatches ?? -1, "truncated batches");
 });
 
 Run("Speech announcer sends selected voice to VoiceWorker", () =>
