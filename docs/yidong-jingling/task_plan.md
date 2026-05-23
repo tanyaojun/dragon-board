@@ -428,3 +428,14 @@ Superpowers 设计规格见：[../superpowers/specs/2026-05-22-opening-weak-to-s
 - [ ] 验证 bridge 离线、proxy 离线、只开网页、只开桌面、跨日清理和时区边界。
 - **验证：** 基线覆盖率大于 95%，有 per-code `capturedAt/bridgeTs`，信号首次满足后 2 秒内展示，网页板和桌面版不重复刷屏/不重复语音。
 - **状态：** pending
+
+## V4 Phase 1：竞价量价核心补强
+
+- [x] 共享 fixture 增加 `auction_late_lift`、`price_lift_without_volume`、`volume_without_price_lift`、`auction_late_high_retreated`、`09:15-09:20` 虚高忽略样例。
+- [x] Web 端 `OpeningAuctionStateStore` 保存 `09:20:00-09:25:10` 不可撤单阶段样本，并在 `09:25` 基线中附带 `auctionProfile`。
+- [x] 桌面端 C# `OpeningAuctionStateStore` 保存同样的量价序列画像，保持 TS/C# 共用 fixture 口径一致。
+- [x] `auction_late_lift` 升级为正式 variant：必须价格抬升、`09:24-09:25` 临门抬价、成交额同步放大且未出现高位回落。
+- [x] 价格抬升但成交额不动标记 `price_lift_without_volume`，成交额放大但价格压不动标记 `volume_without_price_lift`，高位回落未收回标记 `auction_late_high_retreated`，均降为 `watch`。
+- [x] `09:15-09:20` 可撤单阶段样本不参与强依据，避免虚高影响 `auction_late_lift`。
+- **验证：** `pnpm exec vitest run src/services/hotlist/__tests__/OpeningWeakToStrongDetector.test.ts src/services/hotlist/__tests__/OpeningRealtimeEventBuffer.test.ts src/services/hotlist/__tests__/OpeningRealtimeEventBridge.test.ts src/services/hotlist/__tests__/OpeningSignalClient.test.ts src/services/hotlist/__tests__/HotStockEventMonitorService.test.ts`；`pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false`；`dotnet run --project tools\YiDongJingLing.Tests\YiDongJingLing.Tests.csproj`。
+- **状态：** complete

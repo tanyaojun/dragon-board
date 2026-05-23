@@ -161,6 +161,17 @@
 
 落地方案见 `docs/yidong-jingling/opening-weak-to-strong-plan.md`。
 
+2026-05-23 量价核心复核：
+
+| 项目 | 发现 |
+|------|------|
+| `auction_late_lift` 口径 | 不能只看 `09:25 -> 09:30` 两点跳空，必须保存 `09:20-09:25` 不可撤单阶段序列。V4 已在 TS/C# 两端保存 `auctionProfile`。 |
+| 临门抢筹 | `09:24-09:25` 的价格抬升和成交额增量单独计算，满足后可把 `auction_late_lift` 作为正式 variant，而不是普通增强因子。 |
+| 无量抬价 | 价格抬升但成交额未同步放大时标记 `price_lift_without_volume`，信号降为 `watch`，默认不抢语音。 |
+| 放量不涨 | 成交额放大但价格压不动时标记 `volume_without_price_lift`，视为分歧或抛压，信号降为 `watch`。 |
+| 高位回落 | `09:20` 后出现高点但 `09:25` 未收回时标记 `auction_late_high_retreated`，不算 `auction_late_lift`。 |
+| 可撤单阶段 | `09:15-09:20` 虚高样本不参与强依据，避免把可撤单阶段的虚价作为量价确认。 |
+
 ## 风险与处理
 
 | 风险 | 处理 |

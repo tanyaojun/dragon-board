@@ -491,6 +491,16 @@
 |------|------|------|
 | 2026-05-20 | 按 L1 买一/卖一封单口径新增“即将打开涨停”“即将打开跌停”预警，并接入设置项、去重优先级和语音强信号。 | complete |
 | 2026-05-20 | 修复封单金额少乘 100 的单位问题，并防止行情桥重连时重复启动多个 python-bridge 进程。 | complete |
+| 2026-05-23 | 补齐竞价弱转强量价核心：`09:20-09:25` 序列画像、`auction_late_lift` 正式 variant、无量抬价/放量不涨/高位回落风险降级，并用 TS/C# 共享 fixture 验证。 | complete |
+
+## V4 验证记录
+
+| 验证项 | 命令 | 结果 |
+|--------|------|------|
+| TS 检测器 RED | `pnpm exec vitest run src/services/hotlist/__tests__/OpeningWeakToStrongDetector.test.ts` | 新增 `auction_late_lift` 用例先失败，确认测试覆盖缺口。 |
+| TS opening 链路 | `pnpm exec vitest run src/services/hotlist/__tests__/OpeningWeakToStrongDetector.test.ts src/services/hotlist/__tests__/OpeningRealtimeEventBuffer.test.ts src/services/hotlist/__tests__/OpeningRealtimeEventBridge.test.ts src/services/hotlist/__tests__/OpeningSignalClient.test.ts src/services/hotlist/__tests__/HotStockEventMonitorService.test.ts` | 5 files / 20 tests passed。 |
+| TS 类型检查 | `pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false` | 通过。 |
+| 桌面端测试 | `dotnet run --project tools\YiDongJingLing.Tests\YiDongJingLing.Tests.csproj` | All YiDongJingLing tests passed。 |
 
 ## 5 问恢复检查
 

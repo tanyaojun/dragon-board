@@ -6,6 +6,7 @@ public sealed class L1EventEngine
 {
     private const decimal SharesPerLot = 100m;
     private static readonly OpeningWeakToStrongRules OpeningRules = new(
+        "09:20:00",
         "09:24:50",
         "09:25:10",
         "09:30:00",
@@ -18,7 +19,16 @@ public sealed class L1EventEngine
         3m,
         2m,
         30_000_000m,
-        20_000_000m);
+        20_000_000m,
+        "09:24:00",
+        1m,
+        0.5m,
+        0m,
+        8_000_000m,
+        5_000_000m,
+        2.5m,
+        2m,
+        0.2m);
     private readonly L1EventRules _rules;
     private readonly Dictionary<string, StockState> _states = new(StringComparer.Ordinal);
     private readonly OpeningAuctionStateStore _openingStore = new(OpeningRules);
@@ -388,6 +398,7 @@ public sealed class L1EventEngine
     {
         var variantName = result.Variant switch
         {
+            "auction_late_lift" => "临门抢筹",
             "low_open_red_reversal" => "低开翻红",
             "strong_open_board_attempt" => "冲板抢筹",
             _ => "跳空上移",

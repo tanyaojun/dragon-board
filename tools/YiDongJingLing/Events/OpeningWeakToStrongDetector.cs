@@ -4,6 +4,7 @@ using System.Text.Json;
 namespace YiDongJingLing.Events;
 
 public sealed record OpeningWeakToStrongRules(
+    string AuctionTrendStart,
     string AuctionStart,
     string AuctionEnd,
     string DetectStart,
@@ -16,11 +17,21 @@ public sealed record OpeningWeakToStrongRules(
     decimal StrongOpenFirstWindowMinPct,
     decimal NearLimitDistancePct,
     decimal MinCurrentAmount,
-    decimal MinAmountDelta)
+    decimal MinAmountDelta,
+    string AuctionLateLiftStart,
+    decimal AuctionLateLiftTotalMinPctPoint,
+    decimal AuctionLateLiftLateMinPctPoint,
+    decimal AuctionLateLiftFinalMinPct,
+    decimal AuctionLateLiftAmountDeltaMin,
+    decimal AuctionLateLiftLateAmountDeltaMin,
+    decimal AuctionLateLiftFirstWindowMinPct,
+    decimal AuctionLateLiftJumpMinPctPoint,
+    decimal AuctionLateHighRetreatPctPoint)
 {
     public static OpeningWeakToStrongRules FromJson(JsonElement element)
     {
         return new OpeningWeakToStrongRules(
+            GetString(element, "auctionTrendStart"),
             GetString(element, "auctionStart"),
             GetString(element, "auctionEnd"),
             GetString(element, "detectStart"),
@@ -33,7 +44,16 @@ public sealed record OpeningWeakToStrongRules(
             GetDecimal(element, "strongOpenFirstWindowMinPct"),
             GetDecimal(element, "nearLimitDistancePct"),
             GetDecimal(element, "minCurrentAmount"),
-            GetDecimal(element, "minAmountDelta"));
+            GetDecimal(element, "minAmountDelta"),
+            GetString(element, "auctionLateLiftStart"),
+            GetDecimal(element, "auctionLateLiftTotalMinPctPoint"),
+            GetDecimal(element, "auctionLateLiftLateMinPctPoint"),
+            GetDecimal(element, "auctionLateLiftFinalMinPct"),
+            GetDecimal(element, "auctionLateLiftAmountDeltaMin"),
+            GetDecimal(element, "auctionLateLiftLateAmountDeltaMin"),
+            GetDecimal(element, "auctionLateLiftFirstWindowMinPct"),
+            GetDecimal(element, "auctionLateLiftJumpMinPctPoint"),
+            GetDecimal(element, "auctionLateHighRetreatPctPoint"));
     }
 
     private static string GetString(JsonElement element, string name)
@@ -106,7 +126,21 @@ public sealed record OpeningWeakToStrongBaseline(
     DateTimeOffset CapturedAt,
     DateTimeOffset? BridgeTs,
     int SampleCount,
-    string Quality);
+    string Quality,
+    OpeningAuctionPriceVolumeProfile? AuctionProfile);
+
+public sealed record OpeningAuctionPriceVolumeProfile(
+    int SampleCount,
+    decimal? StartPct,
+    decimal? LateStartPct,
+    decimal? FinalPct,
+    decimal? HighPct,
+    decimal? TotalLiftPctPoint,
+    decimal? LateLiftPctPoint,
+    decimal? AmountDelta,
+    decimal? LateAmountDelta,
+    bool LateLiftConfirmed,
+    IReadOnlyList<string> RiskFlags);
 
 public sealed record OpeningWeakToStrongFactor(
     string Key,
@@ -176,6 +210,7 @@ public sealed class OpeningAuctionStateStore
 {
     private readonly OpeningWeakToStrongRules _rules;
     private readonly Dictionary<string, OpeningWeakToStrongBaseline> _baselines = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, List<OpeningWeakToStrongQuote>> _samples = new(StringComparer.Ordinal);
 
     public OpeningAuctionStateStore(OpeningWeakToStrongRules rules)
     {
@@ -184,11 +219,27 @@ public sealed class OpeningAuctionStateStore
 
     public void Capture(OpeningWeakToStrongQuote quote)
     {
-        if (!IsInWindow(quote.At, _rules.AuctionStart, _rules.AuctionEnd)) return;
         if (!IsValidPrice(quote.LastPrice) || !IsValidPrice(quote.PreClose)) return;
 
         var tradingDate = TradingDate(quote.At);
         var key = BaselineKey(quote.Code, tradingDate);
+        if (IsInWindow(quote.At, _rules.AuctionTrendStart, _rules.AuctionEnd))
+        {
+            if (!_samples.TryGetValue(key, out var samples))
+            {
+                samples = [];
+                _samples[key] = samples;
+            }
+            samples.Add(quote);
+            samples.Sort((left, right) => left.At.CompareTo(right.At));
+            if (samples.Count > 64)
+            {
+                samples.RemoveRange(0, samples.Count - 64);
+            }
+        }
+
+        if (!IsInWindow(quote.At, _rules.AuctionStart, _rules.AuctionEnd)) return;
+
         _baselines.TryGetValue(key, out var previous);
         var capturedAt = quote.CapturedAt ?? quote.At;
         var quality = quote.CapturedAt.HasValue || quote.BridgeTs.HasValue ? "good" : "degraded";
@@ -203,7 +254,8 @@ public sealed class OpeningAuctionStateStore
             capturedAt,
             quote.BridgeTs,
             (previous?.SampleCount ?? 0) + 1,
-            quality);
+            quality,
+            BuildAuctionProfile(_samples.TryGetValue(key, out var samplesForProfile) ? samplesForProfile : [quote], _rules));
     }
 
     public OpeningWeakToStrongBaseline? GetBaseline(string code, DateTimeOffset timestamp)
@@ -211,7 +263,11 @@ public sealed class OpeningAuctionStateStore
         return _baselines.TryGetValue(BaselineKey(code, TradingDate(timestamp)), out var baseline) ? baseline : null;
     }
 
-    public void Clear() => _baselines.Clear();
+    public void Clear()
+    {
+        _baselines.Clear();
+        _samples.Clear();
+    }
 
     private static bool IsValidPrice(decimal value) => value > 0m;
 
@@ -224,6 +280,57 @@ public sealed class OpeningAuctionStateStore
     internal static decimal Pct(decimal price, decimal preClose)
     {
         return (price - preClose) / preClose * 100m;
+    }
+
+    private static decimal Round2(decimal value) => Math.Round(value, 2, MidpointRounding.AwayFromZero);
+
+    private static bool Meets(decimal value, decimal threshold) => value + 0.000001m >= threshold;
+
+    private static OpeningAuctionPriceVolumeProfile? BuildAuctionProfile(
+        IReadOnlyList<OpeningWeakToStrongQuote> samples,
+        OpeningWeakToStrongRules rules)
+    {
+        var trusted = samples
+            .Where(item => IsInWindow(item.At, rules.AuctionTrendStart, rules.AuctionEnd))
+            .Where(item => IsValidPrice(item.LastPrice) && IsValidPrice(item.PreClose))
+            .OrderBy(item => item.At)
+            .ToArray();
+        if (trusted.Length < 2) return null;
+
+        var first = trusted[0];
+        var final = trusted[^1];
+        var lateStartTime = TimeSpan.Parse(rules.AuctionLateLiftStart);
+        var lateStart = trusted.FirstOrDefault(item => item.At.ToLocalTime().TimeOfDay >= lateStartTime) ?? final;
+        var startPct = Pct(first.LastPrice, first.PreClose);
+        var lateStartPct = Pct(lateStart.LastPrice, lateStart.PreClose);
+        var finalPct = Pct(final.LastPrice, final.PreClose);
+        var highPct = trusted.Max(item => Pct(item.LastPrice, item.PreClose));
+        var totalLiftPctPoint = finalPct - startPct;
+        var lateLiftPctPoint = finalPct - lateStartPct;
+        var amountDelta = final.Amount - first.Amount;
+        var lateAmountDelta = final.Amount - lateStart.Amount;
+        var priceLifted = Meets(totalLiftPctPoint, rules.AuctionLateLiftTotalMinPctPoint) ||
+            Meets(lateLiftPctPoint, rules.AuctionLateLiftLateMinPctPoint);
+        var amountExpanded = Meets(amountDelta, rules.AuctionLateLiftAmountDeltaMin) ||
+            Meets(lateAmountDelta, rules.AuctionLateLiftLateAmountDeltaMin);
+        var highRetreated = Meets(highPct - finalPct, rules.AuctionLateHighRetreatPctPoint);
+        var riskFlags = new List<string>();
+        if (priceLifted && !amountExpanded) riskFlags.Add("price_lift_without_volume");
+        if (amountExpanded && !priceLifted) riskFlags.Add("volume_without_price_lift");
+        if (highRetreated) riskFlags.Add("auction_late_high_retreated");
+
+        return new OpeningAuctionPriceVolumeProfile(
+            trusted.Length,
+            Round2(startPct),
+            Round2(lateStartPct),
+            Round2(finalPct),
+            Round2(highPct),
+            Round2(totalLiftPctPoint),
+            Round2(lateLiftPctPoint),
+            amountDelta,
+            lateAmountDelta,
+            priceLifted && amountExpanded && !highRetreated && finalPct >= rules.AuctionLateLiftFinalMinPct,
+            riskFlags);
     }
 
     private static string TradingDate(DateTimeOffset timestamp)
@@ -286,7 +393,14 @@ public sealed class OpeningWeakToStrongDetector
             return Rejected(quote, baseline, "weak_precondition_missing");
 
         string? variant = null;
-        if (strongOpenCandidate && weakPrecondition)
+        var auctionProfile = baseline.AuctionProfile;
+        if (auctionProfile is { LateLiftConfirmed: true } &&
+            firstWindowPct >= _rules.AuctionLateLiftFirstWindowMinPct &&
+            jumpPctPoint >= _rules.AuctionLateLiftJumpMinPctPoint)
+        {
+            variant = "auction_late_lift";
+        }
+        else if (strongOpenCandidate && weakPrecondition)
         {
             variant = "strong_open_board_attempt";
         }
@@ -305,8 +419,13 @@ public sealed class OpeningWeakToStrongDetector
 
         if (variant is null) return Rejected(quote, baseline, "variant_not_matched");
 
-        var factors = BuildFactors(variant, jumpPctPoint, firstWindowPct, quote.Amount, amountDelta, limitDistancePct, baseline.Quality);
-        var score = ClampScore(factors.Sum(item => item.Score));
+        var factors = BuildFactors(variant, jumpPctPoint, firstWindowPct, quote.Amount, amountDelta, limitDistancePct, baseline.Quality, auctionProfile);
+        var riskFlags = (auctionProfile?.RiskFlags ?? []).Select(RiskFlag).ToArray();
+        var riskPenalty = riskFlags.Sum(item => Math.Abs(item.Penalty));
+        var score = ClampScore(factors.Sum(item => item.Score) - riskPenalty);
+        var confidence = riskFlags.Length > 0
+            ? "watch"
+            : score >= 80m ? "critical" : score >= 60m ? "strong" : "watch";
         return new OpeningWeakToStrongResult(
             true,
             SignalType,
@@ -314,7 +433,7 @@ public sealed class OpeningWeakToStrongDetector
             quote.Code,
             string.IsNullOrWhiteSpace(quote.Name) ? baseline.Name : quote.Name,
             variant,
-            score >= 80m ? "critical" : score >= 60m ? "strong" : "watch",
+            confidence,
             score,
             baseline.AuctionFinalPrice,
             Round2(auctionPct),
@@ -329,7 +448,7 @@ public sealed class OpeningWeakToStrongDetector
             quote.At,
             baseline.Quality,
             factors,
-            [],
+            riskFlags,
             null,
             _ruleVersion,
             ConfigHash(_rules));
@@ -375,10 +494,17 @@ public sealed class OpeningWeakToStrongDetector
         decimal amount,
         decimal amountDelta,
         decimal? limitDistancePct,
-        string baselineQuality)
+        string baselineQuality,
+        OpeningAuctionPriceVolumeProfile? auctionProfile)
     {
         var factors = new List<OpeningWeakToStrongFactor>();
-        if (variant == "strong_open_board_attempt")
+        if (variant == "auction_late_lift")
+        {
+            factors.Add(new("auctionLateLift", Round2(auctionProfile?.TotalLiftPctPoint ?? 0m), _rules.AuctionLateLiftTotalMinPctPoint, 24m));
+            factors.Add(new("auctionLateAmount", auctionProfile?.LateAmountDelta ?? 0m, _rules.AuctionLateLiftLateAmountDeltaMin, 18m));
+            factors.Add(new("openStrength", Round2(firstWindowPct), _rules.AuctionLateLiftFirstWindowMinPct, 18m));
+        }
+        else if (variant == "strong_open_board_attempt")
         {
             factors.Add(new("nearLimit", Round2(limitDistancePct ?? 99m), _rules.NearLimitDistancePct, 30m));
             factors.Add(new("openStrength", Round2(firstWindowPct), _rules.StrongOpenFirstWindowMinPct, 25m));
@@ -401,7 +527,7 @@ public sealed class OpeningWeakToStrongDetector
 
     private static OpeningWeakToStrongRiskFlag RiskFlag(string key)
     {
-        return new OpeningWeakToStrongRiskFlag(key, key == "baseline_missing" ? "high" : "medium", -100m);
+        return new OpeningWeakToStrongRiskFlag(key, key == "baseline_missing" ? "high" : "medium", key == "baseline_missing" ? -100m : -35m);
     }
 
     private static bool IsValidPrice(decimal value) => value > 0m;

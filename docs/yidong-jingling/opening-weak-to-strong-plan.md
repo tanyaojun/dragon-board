@@ -260,7 +260,7 @@ riskFlag: { key: "auction_amount_missing", severity: "medium", penalty: -8 }
 
 | 窗口 | 行为 | 第一版处理 |
 |------|------|------------|
-| `09:20:00-09:25:00` | 记录价格抬升序列、成交额变化、可能的买卖盘占优 | 仅保存到 `factors`，不作为硬门槛 |
+| `09:20:00-09:25:00` | 记录价格抬升序列和成交额变化 | V4 已作为 `auction_late_lift` 与量价背离降级的判断依据 |
 | `09:30:00-09:31:00` | 记录最早连续竞价承接，计算是否快速跌回开盘价/昨收 | 作为 `followThrough` 和 `riskFlags` |
 | `09:31:00-09:35:00` | 记录是否继续上攻、逼近涨停或触板 | 用于强信号升级和复盘 |
 
@@ -310,7 +310,7 @@ followThroughPctPoint = currentPct - firstWindowPct
 | `low_open_red_reversal` | `09:25` 或官方开盘仍低开/平开，`09:30-09:35` 快速翻红并放量承接。 | `auctionPct`、`officialOpenPct`、`firstWindowPct`、`followThroughPctPoint`、`amountDelta` | `auctionPct <= 0` 或 `officialOpenPct <= 0.5`，`firstWindowPct >= 1.0`，`jumpPctPoint >= 1.5` |
 | `previous_day_divergence_repair` | 前一日分歧弱，次日竞价/开盘超预期修复。 | V1 可记录 `contextMissing`；后续接昨日烂板、炸板、长上影、尾盘弱等数据 | 第一版不作为硬命中，只作为增强因子或人工复盘字段 |
 | `strong_open_board_attempt` | 有弱转强前置条件的开盘抢筹冲板。 | `firstWindowPct`、`limitDistancePct`、`amountDelta`、`followThroughPctPoint`、弱势前置因子 | `firstWindowPct >= 3.0`，`limitDistancePct <= 2.0` 或触及涨停，放量门槛通过，且至少满足一个弱转强前置条件 |
-| `auction_late_lift` | `09:20` 后竞价价格持续抬升，最后定价从弱转平/强。 | 需要 `09:20-09:25` 连续采样序列 | 后续增强；第一版只保存采样序列，不作为必须命中条件 |
+| `auction_late_lift` | `09:20` 后竞价价格持续抬升，`09:24-09:25` 临门抬价且成交额同步放大。 | `09:20-09:25` 连续采样序列、`amountDelta`、`lateAmountDelta` | V4 已实现；可直接作为强信号模式 |
 
 `strong_open_board_attempt` 的弱转强前置条件至少满足一项：
 
@@ -400,6 +400,9 @@ ST、退市股按设置过滤
 |----------|----------|
 | `thin_liquidity` | 当前成交额和开盘增量都偏低 |
 | `no_volume_confirmation` | 价格满足但成交额增量不足 |
+| `price_lift_without_volume` | `09:20` 后价格抬升但成交额未同步放大，降为 `watch` |
+| `volume_without_price_lift` | `09:20` 后成交额放大但价格压不动，降为 `watch` |
+| `auction_late_high_retreated` | `09:20` 后高位回落且 `09:25` 未收回，不算 `auction_late_lift`，降为 `watch` |
 | `gap_fade` | 触发前后快速跌回官方开盘价或昨收附近 |
 | `overextended_open` | 高开过大且未继续上攻，容易变成兑现 |
 | `context_missing` | 没有昨日分歧、板块强度或热榜上下文，只能按盘口形态判断 |

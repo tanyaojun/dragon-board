@@ -7,6 +7,7 @@
     "volume": "shares"
   },
   "rules": {
+    "auctionTrendStart": "09:20:00",
     "auctionStart": "09:24:50",
     "auctionEnd": "09:25:10",
     "detectStart": "09:30:00",
@@ -19,7 +20,16 @@
     "strongOpenFirstWindowMinPct": 3,
     "nearLimitDistancePct": 2,
     "minCurrentAmount": 30000000,
-    "minAmountDelta": 20000000
+    "minAmountDelta": 20000000,
+    "auctionLateLiftStart": "09:24:00",
+    "auctionLateLiftTotalMinPctPoint": 1,
+    "auctionLateLiftLateMinPctPoint": 0.5,
+    "auctionLateLiftFinalMinPct": 0,
+    "auctionLateLiftAmountDeltaMin": 8000000,
+    "auctionLateLiftLateAmountDeltaMin": 5000000,
+    "auctionLateLiftFirstWindowMinPct": 2.5,
+    "auctionLateLiftJumpMinPctPoint": 2,
+    "auctionLateHighRetreatPctPoint": 0.2
   },
   "cases": [
     {
@@ -227,6 +237,323 @@
         "triggered": false,
         "invalidReason": "outside_detection_window",
         "riskFlags": ["outside_detection_window"]
+      }
+    },
+    {
+      "caseId": "auction-late-lift-confirmed",
+      "description": "09:20后不可撤单阶段持续抬价，09:24-09:25临门抬价且成交额同步放大。",
+      "quotes": [
+        {
+          "code": "002553",
+          "name": "临门抢筹",
+          "at": "2026-05-22T09:20:05+08:00",
+          "lastPrice": 9.86,
+          "preClose": 10,
+          "open": 0,
+          "amount": 2000000,
+          "volume": 200000,
+          "capturedAt": "2026-05-22T09:20:05+08:00",
+          "bridgeTs": "2026-05-22T09:20:05+08:00"
+        },
+        {
+          "code": "002553",
+          "name": "临门抢筹",
+          "at": "2026-05-22T09:24:05+08:00",
+          "lastPrice": 9.95,
+          "preClose": 10,
+          "open": 0,
+          "amount": 5000000,
+          "volume": 500000,
+          "capturedAt": "2026-05-22T09:24:05+08:00",
+          "bridgeTs": "2026-05-22T09:24:05+08:00"
+        },
+        {
+          "code": "002553",
+          "name": "临门抢筹",
+          "at": "2026-05-22T09:25:00+08:00",
+          "lastPrice": 10.08,
+          "preClose": 10,
+          "open": 0,
+          "amount": 13000000,
+          "volume": 1280000,
+          "capturedAt": "2026-05-22T09:25:00+08:00",
+          "bridgeTs": "2026-05-22T09:25:00+08:00"
+        },
+        {
+          "code": "002553",
+          "name": "临门抢筹",
+          "at": "2026-05-22T09:30:08+08:00",
+          "lastPrice": 10.35,
+          "preClose": 10,
+          "open": 10.2,
+          "amount": 45000000,
+          "volume": 4300000,
+          "capturedAt": "2026-05-22T09:30:08+08:00",
+          "bridgeTs": "2026-05-22T09:30:08+08:00"
+        }
+      ],
+      "expected": {
+        "triggered": true,
+        "variant": "auction_late_lift",
+        "confidence": "critical",
+        "scoreRange": [80, 100],
+        "riskFlags": []
+      }
+    },
+    {
+      "caseId": "price-lift-without-volume-downgraded",
+      "description": "价格抬升但竞价成交额不动，只能降级观察，不应强播。",
+      "quotes": [
+        {
+          "code": "002554",
+          "name": "无量抬价",
+          "at": "2026-05-22T09:20:05+08:00",
+          "lastPrice": 9.8,
+          "preClose": 10,
+          "open": 0,
+          "amount": 5000000,
+          "volume": 510000,
+          "capturedAt": "2026-05-22T09:20:05+08:00",
+          "bridgeTs": "2026-05-22T09:20:05+08:00"
+        },
+        {
+          "code": "002554",
+          "name": "无量抬价",
+          "at": "2026-05-22T09:24:10+08:00",
+          "lastPrice": 9.95,
+          "preClose": 10,
+          "open": 0,
+          "amount": 5200000,
+          "volume": 530000,
+          "capturedAt": "2026-05-22T09:24:10+08:00",
+          "bridgeTs": "2026-05-22T09:24:10+08:00"
+        },
+        {
+          "code": "002554",
+          "name": "无量抬价",
+          "at": "2026-05-22T09:25:00+08:00",
+          "lastPrice": 10.02,
+          "preClose": 10,
+          "open": 0,
+          "amount": 5400000,
+          "volume": 550000,
+          "capturedAt": "2026-05-22T09:25:00+08:00",
+          "bridgeTs": "2026-05-22T09:25:00+08:00"
+        },
+        {
+          "code": "002554",
+          "name": "无量抬价",
+          "at": "2026-05-22T09:30:07+08:00",
+          "lastPrice": 10.36,
+          "preClose": 10,
+          "open": 10.1,
+          "amount": 40000000,
+          "volume": 3800000,
+          "capturedAt": "2026-05-22T09:30:07+08:00",
+          "bridgeTs": "2026-05-22T09:30:07+08:00"
+        }
+      ],
+      "expected": {
+        "triggered": true,
+        "variant": "auction_gap_reversal",
+        "confidence": "watch",
+        "scoreRange": [1, 59],
+        "riskFlags": ["price_lift_without_volume"]
+      }
+    },
+    {
+      "caseId": "volume-without-price-lift-downgraded",
+      "description": "竞价成交额明显放大但价格压不动，视为分歧，只能降级观察。",
+      "quotes": [
+        {
+          "code": "002555",
+          "name": "放量不涨",
+          "at": "2026-05-22T09:20:05+08:00",
+          "lastPrice": 9.9,
+          "preClose": 10,
+          "open": 0,
+          "amount": 2000000,
+          "volume": 200000,
+          "capturedAt": "2026-05-22T09:20:05+08:00",
+          "bridgeTs": "2026-05-22T09:20:05+08:00"
+        },
+        {
+          "code": "002555",
+          "name": "放量不涨",
+          "at": "2026-05-22T09:24:20+08:00",
+          "lastPrice": 9.91,
+          "preClose": 10,
+          "open": 0,
+          "amount": 9000000,
+          "volume": 920000,
+          "capturedAt": "2026-05-22T09:24:20+08:00",
+          "bridgeTs": "2026-05-22T09:24:20+08:00"
+        },
+        {
+          "code": "002555",
+          "name": "放量不涨",
+          "at": "2026-05-22T09:25:00+08:00",
+          "lastPrice": 9.92,
+          "preClose": 10,
+          "open": 0,
+          "amount": 14000000,
+          "volume": 1420000,
+          "capturedAt": "2026-05-22T09:25:00+08:00",
+          "bridgeTs": "2026-05-22T09:25:00+08:00"
+        },
+        {
+          "code": "002555",
+          "name": "放量不涨",
+          "at": "2026-05-22T09:30:08+08:00",
+          "lastPrice": 10.28,
+          "preClose": 10,
+          "open": 10.05,
+          "amount": 45000000,
+          "volume": 4400000,
+          "capturedAt": "2026-05-22T09:30:08+08:00",
+          "bridgeTs": "2026-05-22T09:30:08+08:00"
+        }
+      ],
+      "expected": {
+        "triggered": true,
+        "variant": "auction_gap_reversal",
+        "confidence": "watch",
+        "scoreRange": [1, 59],
+        "riskFlags": ["volume_without_price_lift"]
+      }
+    },
+    {
+      "caseId": "late-high-retreated-not-late-lift",
+      "description": "09:20后先冲高后回落，09:25未收回高点，不算auction_late_lift。",
+      "quotes": [
+        {
+          "code": "002556",
+          "name": "冲高回落",
+          "at": "2026-05-22T09:20:05+08:00",
+          "lastPrice": 9.85,
+          "preClose": 10,
+          "open": 0,
+          "amount": 2000000,
+          "volume": 200000,
+          "capturedAt": "2026-05-22T09:20:05+08:00",
+          "bridgeTs": "2026-05-22T09:20:05+08:00"
+        },
+        {
+          "code": "002556",
+          "name": "冲高回落",
+          "at": "2026-05-22T09:24:00+08:00",
+          "lastPrice": 10.2,
+          "preClose": 10,
+          "open": 0,
+          "amount": 8000000,
+          "volume": 780000,
+          "capturedAt": "2026-05-22T09:24:00+08:00",
+          "bridgeTs": "2026-05-22T09:24:00+08:00"
+        },
+        {
+          "code": "002556",
+          "name": "冲高回落",
+          "at": "2026-05-22T09:25:00+08:00",
+          "lastPrice": 9.95,
+          "preClose": 10,
+          "open": 0,
+          "amount": 13000000,
+          "volume": 1300000,
+          "capturedAt": "2026-05-22T09:25:00+08:00",
+          "bridgeTs": "2026-05-22T09:25:00+08:00"
+        },
+        {
+          "code": "002556",
+          "name": "冲高回落",
+          "at": "2026-05-22T09:30:08+08:00",
+          "lastPrice": 10.3,
+          "preClose": 10,
+          "open": 10.1,
+          "amount": 50000000,
+          "volume": 4800000,
+          "capturedAt": "2026-05-22T09:30:08+08:00",
+          "bridgeTs": "2026-05-22T09:30:08+08:00"
+        }
+      ],
+      "expected": {
+        "triggered": true,
+        "variant": "auction_gap_reversal",
+        "confidence": "watch",
+        "scoreRange": [1, 59],
+        "riskFlags": ["auction_late_high_retreated"]
+      }
+    },
+    {
+      "caseId": "pre-0920-virtual-high-ignored",
+      "description": "09:15-09:20可撤单阶段虚高不作为强依据，也不阻断09:20后的有效抬价。",
+      "quotes": [
+        {
+          "code": "002557",
+          "name": "忽略虚高",
+          "at": "2026-05-22T09:18:30+08:00",
+          "lastPrice": 10.5,
+          "preClose": 10,
+          "open": 0,
+          "amount": 1000000,
+          "volume": 100000,
+          "capturedAt": "2026-05-22T09:18:30+08:00",
+          "bridgeTs": "2026-05-22T09:18:30+08:00"
+        },
+        {
+          "code": "002557",
+          "name": "忽略虚高",
+          "at": "2026-05-22T09:20:05+08:00",
+          "lastPrice": 9.8,
+          "preClose": 10,
+          "open": 0,
+          "amount": 2000000,
+          "volume": 200000,
+          "capturedAt": "2026-05-22T09:20:05+08:00",
+          "bridgeTs": "2026-05-22T09:20:05+08:00"
+        },
+        {
+          "code": "002557",
+          "name": "忽略虚高",
+          "at": "2026-05-22T09:24:05+08:00",
+          "lastPrice": 9.95,
+          "preClose": 10,
+          "open": 0,
+          "amount": 5000000,
+          "volume": 500000,
+          "capturedAt": "2026-05-22T09:24:05+08:00",
+          "bridgeTs": "2026-05-22T09:24:05+08:00"
+        },
+        {
+          "code": "002557",
+          "name": "忽略虚高",
+          "at": "2026-05-22T09:25:00+08:00",
+          "lastPrice": 10.05,
+          "preClose": 10,
+          "open": 0,
+          "amount": 12000000,
+          "volume": 1180000,
+          "capturedAt": "2026-05-22T09:25:00+08:00",
+          "bridgeTs": "2026-05-22T09:25:00+08:00"
+        },
+        {
+          "code": "002557",
+          "name": "忽略虚高",
+          "at": "2026-05-22T09:30:08+08:00",
+          "lastPrice": 10.35,
+          "preClose": 10,
+          "open": 10.1,
+          "amount": 50000000,
+          "volume": 4800000,
+          "capturedAt": "2026-05-22T09:30:08+08:00",
+          "bridgeTs": "2026-05-22T09:30:08+08:00"
+        }
+      ],
+      "expected": {
+        "triggered": true,
+        "variant": "auction_late_lift",
+        "confidence": "critical",
+        "scoreRange": [80, 100],
+        "riskFlags": []
       }
     }
   ]

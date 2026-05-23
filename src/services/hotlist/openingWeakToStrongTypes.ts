@@ -2,11 +2,13 @@ export type OpeningWeakToStrongVariant =
   | 'auction_gap_reversal'
   | 'low_open_red_reversal'
   | 'strong_open_board_attempt'
+  | 'auction_late_lift'
 
 export type OpeningWeakToStrongConfidence = 'watch' | 'strong' | 'critical'
 export type OpeningBaselineQuality = 'good' | 'degraded' | 'missing'
 
 export interface OpeningWeakToStrongRules {
+  auctionTrendStart: string
   auctionStart: string
   auctionEnd: string
   detectStart: string
@@ -20,6 +22,15 @@ export interface OpeningWeakToStrongRules {
   nearLimitDistancePct: number
   minCurrentAmount: number
   minAmountDelta: number
+  auctionLateLiftStart: string
+  auctionLateLiftTotalMinPctPoint: number
+  auctionLateLiftLateMinPctPoint: number
+  auctionLateLiftFinalMinPct: number
+  auctionLateLiftAmountDeltaMin: number
+  auctionLateLiftLateAmountDeltaMin: number
+  auctionLateLiftFirstWindowMinPct: number
+  auctionLateLiftJumpMinPctPoint: number
+  auctionLateHighRetreatPctPoint: number
 }
 
 export interface OpeningWeakToStrongQuote {
@@ -48,6 +59,21 @@ export interface OpeningWeakToStrongBaseline {
   bridgeTs?: string
   sampleCount: number
   quality: OpeningBaselineQuality
+  auctionProfile?: OpeningAuctionPriceVolumeProfile
+}
+
+export interface OpeningAuctionPriceVolumeProfile {
+  sampleCount: number
+  startPct?: number
+  lateStartPct?: number
+  finalPct?: number
+  highPct?: number
+  totalLiftPctPoint?: number
+  lateLiftPctPoint?: number
+  amountDelta?: number
+  lateAmountDelta?: number
+  lateLiftConfirmed: boolean
+  riskFlags: string[]
 }
 
 export interface OpeningWeakToStrongFactor {
