@@ -40,7 +40,7 @@ describe('OpeningWeakToStrongDetector', () => {
         expect(result?.triggered, sample.caseId).toBe(true)
         expect(result?.variant, sample.caseId).toBe(sample.expected.variant)
         expect(result?.confidence, sample.caseId).toBe(sample.expected.confidence)
-        expect(result?.configHash, sample.caseId).toMatch(/^owts-[0-9a-f]{8}$/)
+        expect(result?.configHash, sample.caseId).toBe('owts-2be0bbdb')
         expect(result?.score, sample.caseId).toBeGreaterThanOrEqual(sample.expected.scoreRange?.[0] ?? 0)
         expect(result?.score, sample.caseId).toBeLessThanOrEqual(sample.expected.scoreRange?.[1] ?? 100)
       } else {
@@ -50,6 +50,12 @@ describe('OpeningWeakToStrongDetector', () => {
 
       for (const riskFlag of sample.expected.riskFlags || []) {
         expect(result?.riskFlags.map(item => item.key) || [], sample.caseId).toContain(riskFlag)
+      }
+      if (sample.expected.dryRun !== undefined) {
+        expect(result?.dryRun ?? false, sample.caseId).toBe(sample.expected.dryRun)
+      }
+      if (sample.expected.auctionCoverageRatio !== undefined) {
+        expect(result?.auctionCoverageRatio, sample.caseId).toBeCloseTo(sample.expected.auctionCoverageRatio)
       }
     }
   })

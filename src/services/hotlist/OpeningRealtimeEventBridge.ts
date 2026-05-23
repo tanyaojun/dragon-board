@@ -123,12 +123,12 @@ function resolveVoiceOwner(
   signal: OpeningCanonicalSignal,
   response: { ok: boolean; voiceOwner?: 'web' | 'desktop' | 'none' },
 ): 'web' | 'desktop' | 'none' {
+  if (signal.dryRun) return 'none'
   const owner = response.voiceOwner
-  if (!response.ok && (signal.confidence === 'strong' || signal.confidence === 'critical') && !signal.dryRun) {
+  if (!response.ok && (signal.confidence === 'strong' || signal.confidence === 'critical')) {
     return 'web'
   }
   if (owner) return owner
-  if (signal.dryRun) return 'none'
   return signal.confidence === 'strong' || signal.confidence === 'critical' ? 'web' : 'none'
 }
 
@@ -159,7 +159,7 @@ function toOpeningSignalPayload(signal: OpeningWeakToStrongSignal): OpeningCanon
     ...signal,
     tradingDate: signal.triggerAt.slice(0, 10),
     triggerAt: signal.triggerAt,
-    dryRun: false,
+    dryRun: signal.dryRun ?? false,
   }
 }
 

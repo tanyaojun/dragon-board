@@ -12,6 +12,7 @@ namespace YiDongJingLing;
 public sealed class MainForm : Form
 {
     private const int MaxEventRecords = 100;
+    private const decimal MinOpeningCoverageRatio = 0.95m;
     private static readonly Color TerminalBack = Color.FromArgb(12, 16, 22);
     private static readonly Color TerminalPanel = Color.FromArgb(18, 24, 32);
     private static readonly Color TerminalPanelAlt = Color.FromArgb(22, 30, 40);
@@ -54,6 +55,8 @@ public sealed class MainForm : Form
     private DateOnly _todayEventDate = DateOnly.FromDateTime(DateTime.Now);
     private DateTimeOffset _nextReconnectAt = DateTimeOffset.MinValue;
     private DateTimeOffset? _lastQuoteTime;
+    private OpeningCoverageSnapshot? _lastOpeningCoverage;
+    private OpeningWeakToStrongSignal? _lastOpeningSignal;
     private HashSet<string> _watchedCodes = new(StringComparer.Ordinal);
 
     private readonly System.Windows.Forms.Timer _healthTimer = new();
@@ -71,12 +74,23 @@ public sealed class MainForm : Form
     private readonly Label _todayCountLabel = new();
     private readonly Label _lastQuoteLabel = new();
     private readonly Label _sessionLabel = new();
+    private readonly Label _openingCoverageLabel = new();
     private readonly Label _voiceModeLabel = new();
     private readonly Label _eventsTitleLabel = new();
     private readonly Label _eventsSummaryLabel = new();
     private readonly Label _blockSummaryLabel = new();
     private readonly TextBox _bridgeUrlBox = new();
     private readonly ComboBox _poolSourceBox = new();
+
+    private sealed record OpeningCoverageSnapshot(
+        DateTimeOffset CapturedAt,
+        int? RequestedCount,
+        int? ReceivedCount,
+        decimal? CoverageRatio,
+        decimal? RawCoverageRatio,
+        int? ElapsedMs,
+        int? SlowBatches,
+        int? TruncatedBatches);
 
     public MainForm()
     {
@@ -347,6 +361,9 @@ public sealed class MainForm : Form
         _sessionLabel.Text = "交易时段 --";
         StyleStatusLabel(_sessionLabel);
         statusFlow.Controls.Add(_sessionLabel);
+        _openingCoverageLabel.Text = "竞价覆盖 --";
+        StyleStatusLabel(_openingCoverageLabel);
+        statusFlow.Controls.Add(_openingCoverageLabel);
         _voiceModeLabel.Text = "语音 --";
         StyleStatusLabel(_voiceModeLabel);
         statusFlow.Controls.Add(_voiceModeLabel);
@@ -1028,17 +1045,23 @@ public sealed class MainForm : Form
         _quoteStore.Clear();
         _eventEngine.Clear();
         _deduper.Clear();
+        _lastOpeningCoverage = null;
+        _lastOpeningSignal = null;
+        UpdateOpeningCoverageLabel();
     }
 
     private void ClearEventRows()
     {
         _eventRecords.Clear();
         _eventsGrid.Rows.Clear();
+        _lastOpeningCoverage = null;
+        _lastOpeningSignal = null;
         ResetTodayCounterIfNeeded();
         _eventsSummaryLabel.Text = _watchedCodes.Count > 0
             ? $"等待监控池内 {_watchedCodes.Count} 只股票的异动"
             : "等待行情事件";
         UpdateEventCountLabel();
+        UpdateOpeningCoverageLabel();
     }
 
     private async Task AutoConnectOnStartupAsync()
@@ -1164,6 +1187,8 @@ public sealed class MainForm : Form
 
     private void HandleQuotes(IReadOnlyList<QuoteSnapshot> quotes)
     {
+        ResetTodayCounterIfNeeded();
+
         var allEvents = new List<EventRecord>();
         var skippedOutsideSession = 0;
         var primed = 0;
@@ -1179,6 +1204,7 @@ public sealed class MainForm : Form
             }
             acceptedQuotes++;
             _lastQuoteTime = normalizedQuote.SourceTime;
+            UpdateOpeningCoverageFromQuote(normalizedQuote);
             var previous = _quoteStore.Apply(normalizedQuote);
 
             if (previous is null)
@@ -1226,13 +1252,15 @@ public sealed class MainForm : Form
         var openingEvents = emitted
             .Where(item => item.Type == L1EventType.OpeningWeakToStrong)
             .ToArray();
-        var shouldAnnounceOpening = EventVoicePolicy.FilterForVoice(openingEvents, _settings.VoiceMode).Count > 0;
+        var openingVoiceEvents = EventVoicePolicy
+            .FilterForVoice(openingEvents, _settings.VoiceMode)
+            .ToArray();
         var voiceEvents = EventVoicePolicy
             .FilterForVoice(emitted.Where(item => item.Type != L1EventType.OpeningWeakToStrong), _settings.VoiceMode)
             .ToList();
         if (openingEvents.Length > 0)
         {
-            _ = ReportOpeningSignalsAndAnnounceAsync(openingEvents, shouldAnnounceOpening);
+            _ = ReportOpeningSignalsAndAnnounceAsync(openingEvents, openingVoiceEvents);
         }
         if (voiceEvents.Count > 0)
         {
@@ -1274,7 +1302,7 @@ public sealed class MainForm : Form
 
     private async Task ReportOpeningSignalsAndAnnounceAsync(
         IReadOnlyList<EventRecord> events,
-        bool announceWhenOwned)
+        IReadOnlyList<EventRecord> voiceEligibleEvents)
     {
         if (events.Count == 0) return;
 
@@ -1291,7 +1319,7 @@ public sealed class MainForm : Form
             {
                 var result = await _openingSignalReporter.ReportAsync(item, new Uri("http://127.0.0.1:3000"));
                 Log($"竞价弱转强信号已上报: {item.Code} {result.DedupeAction} voiceOwner={result.VoiceOwner}");
-                if (announceWhenOwned && result.VoiceOwner == "desktop")
+                if (voiceEligibleEvents.Contains(item) && result.VoiceOwner == "desktop")
                 {
                     voiceEvents.Add(item);
                 }
@@ -1305,9 +1333,9 @@ public sealed class MainForm : Form
         catch (Exception ex)
         {
             Log($"竞价弱转强信号上报失败，已降级为本地播报: {ex.Message}");
-            if (announceWhenOwned)
+            if (voiceEligibleEvents.Count > 0)
             {
-                _speech.Announce(events);
+                _speech.Announce(voiceEligibleEvents);
             }
         }
     }
@@ -1338,6 +1366,11 @@ public sealed class MainForm : Form
             FormatMoney(item.Amount),
             item.Reason);
         ApplyEventRowStyle(_eventsGrid.Rows[0], item);
+        if (item.OpeningSignal is not null)
+        {
+            _lastOpeningSignal = item.OpeningSignal;
+            UpdateOpeningCoverageLabel();
+        }
         while (_eventRecords.Count > MaxEventRecords)
         {
             _eventRecords.RemoveAt(_eventRecords.Count - 1);
@@ -1472,6 +1505,7 @@ public sealed class MainForm : Form
         UpdateEventCountLabel();
         UpdateLastQuoteLabel();
         UpdateSessionLabel();
+        UpdateOpeningCoverageLabel();
         UpdateVoiceModeLabel();
     }
 
@@ -1521,6 +1555,96 @@ public sealed class MainForm : Form
         _voiceModeLabel.ForeColor = _settings.VoiceMode == VoiceMode.Muted ? TerminalMuted : TerminalText;
     }
 
+    private void UpdateOpeningCoverageLabel()
+    {
+        if (_lastOpeningSignal is not null &&
+            (_lastOpeningCoverage is null || _lastOpeningSignal.TriggerAt >= _lastOpeningCoverage.CapturedAt))
+        {
+            UpdateOpeningCoverageLabel(_lastOpeningSignal);
+            return;
+        }
+        if (_lastOpeningCoverage is not null)
+        {
+            UpdateOpeningCoverageLabel(_lastOpeningCoverage);
+            return;
+        }
+
+        _openingCoverageLabel.Text = "竞价覆盖 --";
+        _openingCoverageLabel.ForeColor = TerminalMuted;
+    }
+
+    private void UpdateOpeningCoverageLabel(OpeningWeakToStrongSignal signal)
+    {
+        var coverage = signal.AuctionCoverageRatio.HasValue
+            ? $"{signal.AuctionCoverageRatio.Value * 100m:0}%"
+            : "--";
+        var requested = signal.RequestedCount?.ToString() ?? "--";
+        var received = signal.ReceivedCount?.ToString() ?? "--";
+        var batchSummary = signal.SlowBatches.GetValueOrDefault() > 0 || signal.TruncatedBatches.GetValueOrDefault() > 0
+            ? $" 慢{signal.SlowBatches.GetValueOrDefault()} 截{signal.TruncatedBatches.GetValueOrDefault()}"
+            : "";
+        var dryRun = signal.DryRun ? " 演练" : "";
+        _openingCoverageLabel.Text = OpeningCoverageStatusText(coverage, received, requested, batchSummary, dryRun);
+        _openingCoverageLabel.ForeColor =
+            signal.DryRun ||
+            signal.AuctionCoverageRatio is < MinOpeningCoverageRatio ||
+            signal.RiskFlags.Any(item => item.Key is "auction_coverage_low" or "quote_time_untrusted" or "auction_time_untrusted")
+                ? WarnAmber
+                : TerminalText;
+    }
+
+    private void UpdateOpeningCoverageLabel(OpeningCoverageSnapshot snapshot)
+    {
+        var coverage = snapshot.CoverageRatio.HasValue ? $"{snapshot.CoverageRatio.Value * 100m:0}%" : "--";
+        var requested = snapshot.RequestedCount?.ToString() ?? "--";
+        var received = snapshot.ReceivedCount?.ToString() ?? "--";
+        var batchSummary = snapshot.SlowBatches.GetValueOrDefault() > 0 || snapshot.TruncatedBatches.GetValueOrDefault() > 0
+            ? $" 慢{snapshot.SlowBatches.GetValueOrDefault()} 截{snapshot.TruncatedBatches.GetValueOrDefault()}"
+            : "";
+        var dryRun = IsOpeningCoverageLow(snapshot.RawCoverageRatio) ? " 演练" : "";
+        _openingCoverageLabel.Text = OpeningCoverageStatusText(coverage, received, requested, batchSummary, dryRun);
+        _openingCoverageLabel.ForeColor = IsOpeningCoverageLow(snapshot.RawCoverageRatio) ? WarnAmber : TerminalText;
+    }
+
+    private void UpdateOpeningCoverageFromQuote(QuoteSnapshot quote)
+    {
+        if (!quote.OpeningForcedSample || !IsOpeningAuctionCoverageWindow(quote.SourceTime)) return;
+        if (!quote.RequestedCount.HasValue && !quote.ReceivedCount.HasValue) return;
+
+        decimal? rawCoverageRatio = null;
+        decimal? coverageRatio = null;
+        if (quote.RequestedCount is > 0 && quote.ReceivedCount.HasValue)
+        {
+            rawCoverageRatio = (decimal)quote.ReceivedCount.Value / quote.RequestedCount.Value;
+            coverageRatio = Math.Round(rawCoverageRatio.Value, 2, MidpointRounding.AwayFromZero);
+        }
+
+        _lastOpeningCoverage = new OpeningCoverageSnapshot(
+            quote.SourceTime,
+            quote.RequestedCount,
+            quote.ReceivedCount,
+            coverageRatio,
+            rawCoverageRatio,
+            quote.ElapsedMs,
+            quote.SlowBatches,
+            quote.TruncatedBatches);
+    }
+
+    public static string OpeningCoverageStatusText(
+        string coverage,
+        string received,
+        string requested,
+        string batchSummary,
+        string dryRun)
+    {
+        return $"竞价覆盖 {coverage} {received}/{requested}{batchSummary}{dryRun}";
+    }
+
+    public static bool IsOpeningCoverageLow(decimal? rawCoverageRatio)
+    {
+        return rawCoverageRatio is < MinOpeningCoverageRatio;
+    }
+
     private void ResetTodayCounterIfNeeded()
     {
         var today = DateOnly.FromDateTime(DateTime.Now);
@@ -1528,6 +1652,8 @@ public sealed class MainForm : Form
 
         _todayEventDate = today;
         _todayEventTotal = 0;
+        _lastOpeningCoverage = null;
+        _lastOpeningSignal = null;
     }
 
     private void HideToTray()
@@ -1623,6 +1749,8 @@ public sealed class MainForm : Form
         "成交额增量",
         "距涨停百分点",
         "基线质量",
+        "竞价覆盖率",
+        "DryRun",
         "竞价采样时间",
         "行情采样时间",
         "竞价采样数",
@@ -1664,6 +1792,8 @@ public sealed class MainForm : Form
             signal is null ? "" : FormatMoney(signal.AmountDelta),
             FormatNullable(signal?.LimitDistancePct),
             signal?.BaselineQuality ?? "",
+            FormatNullable(signal?.AuctionCoverageRatio),
+            signal is null ? "" : signal.DryRun ? "true" : "false",
             FormatExportTime(signal?.AuctionCapturedAt),
             FormatExportTime(signal?.QuoteCapturedAt),
             FormatNullable(signal?.AuctionSampleCount),
@@ -1718,6 +1848,12 @@ public sealed class MainForm : Form
         return Uri.TryCreate(bridgeUrl, UriKind.Absolute, out var uri) && uri.Port > 0
             ? uri.Port
             : 8765;
+    }
+
+    public static bool IsOpeningAuctionCoverageWindow(DateTimeOffset timestamp)
+    {
+        var time = timestamp.ToLocalTime().TimeOfDay;
+        return time >= TimeSpan.Parse("09:24:50") && time <= TimeSpan.Parse("09:25:10");
     }
 
     public static List<string> ResolveSelectedBlockFilesForSave(

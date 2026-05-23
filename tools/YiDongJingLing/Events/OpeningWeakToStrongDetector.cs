@@ -28,7 +28,11 @@ public sealed record OpeningWeakToStrongRules(
     decimal AuctionLateLiftFirstWindowMinPct,
     decimal AuctionLateLiftJumpMinPctPoint,
     decimal AuctionLateHighRetreatPctPoint,
-    decimal PreviousWeakScoreMin)
+    decimal PreviousWeakScoreMin,
+    decimal MinAuctionCoverageRatio,
+    int MaxQuoteAgeMs,
+    decimal MinCurrentVolume,
+    decimal OpeningSupportOpenRatio)
 {
     public static OpeningWeakToStrongRules FromJson(JsonElement element)
     {
@@ -56,7 +60,11 @@ public sealed record OpeningWeakToStrongRules(
             GetDecimal(element, "auctionLateLiftFirstWindowMinPct"),
             GetDecimal(element, "auctionLateLiftJumpMinPctPoint"),
             GetDecimal(element, "auctionLateHighRetreatPctPoint"),
-            GetDecimalOrDefault(element, "previousWeakScoreMin", 30m));
+            GetDecimalOrDefault(element, "previousWeakScoreMin", 30m),
+            GetDecimalOrDefault(element, "minAuctionCoverageRatio", 0.95m),
+            (int)GetDecimalOrDefault(element, "maxQuoteAgeMs", 10_000m),
+            GetDecimalOrDefault(element, "minCurrentVolume", 1_000_000m),
+            GetDecimalOrDefault(element, "openingSupportOpenRatio", 0.995m));
     }
 
     private static string GetString(JsonElement element, string name)
@@ -97,7 +105,8 @@ public sealed record OpeningWeakToStrongQuote(
     int? TruncatedBatches = null,
     decimal? PreviousWeakScore = null,
     IReadOnlyList<string>? PreviousWeakSignals = null,
-    string PreviousWeakSource = "")
+    string PreviousWeakSource = "",
+    bool DryRun = false)
 {
     public static OpeningWeakToStrongQuote FromJson(JsonElement element)
     {
@@ -121,7 +130,8 @@ public sealed record OpeningWeakToStrongQuote(
             GetInt(element, "truncatedBatches"),
             GetOptionalDecimal(element, "previousWeakScore"),
             GetStringArray(element, "previousWeakSignals"),
-            GetString(element, "previousWeakSource"));
+            GetString(element, "previousWeakSource"),
+            GetBool(element, "dryRun"));
     }
 
     private static string GetString(JsonElement element, string name)
@@ -256,6 +266,8 @@ public sealed record OpeningWeakToStrongResult(
     decimal? PreviousWeakScore,
     IReadOnlyList<string> PreviousWeakSignals,
     string PreviousWeakSource,
+    decimal? AuctionCoverageRatio,
+    bool DryRun,
     IReadOnlyList<OpeningWeakToStrongFactor> Factors,
     IReadOnlyList<OpeningWeakToStrongRiskFlag> RiskFlags,
     string? InvalidReason,
@@ -298,6 +310,7 @@ public sealed record OpeningWeakToStrongSignal(
     decimal? PreviousWeakScore,
     IReadOnlyList<string> PreviousWeakSignals,
     string PreviousWeakSource,
+    decimal? AuctionCoverageRatio,
     string RuleVersion,
     string ConfigHash,
     IReadOnlyList<OpeningWeakToStrongFactor> Factors,
@@ -534,6 +547,8 @@ public sealed class OpeningWeakToStrongDetector
             previousWeakPrecondition;
 
         if (!amountOk) return Rejected(quote, baseline, "opening_amount_too_small");
+        if (quote.Open > 0m && quote.LastPrice < Math.Max(quote.PreClose, quote.Open * _rules.OpeningSupportOpenRatio))
+            return Rejected(quote, baseline, "opening_support_lost");
 
         var strongOpenCandidate =
             firstWindowPct >= _rules.StrongOpenFirstWindowMinPct &&
@@ -569,9 +584,12 @@ public sealed class OpeningWeakToStrongDetector
 
         if (variant is null) return Rejected(quote, baseline, "variant_not_matched");
 
+        var quality = OpeningQuality(quote, baseline);
         var riskKeys = new List<string>(auctionProfile?.RiskFlags ?? []);
+        riskKeys.AddRange(quality.RiskKeys);
         if (baseline.AuctionAmount <= 0m) riskKeys.Add("auction_amount_missing");
         else if (quote.Amount < baseline.AuctionAmount) riskKeys.Add("amount_regressed");
+        if (quote.Volume > 0m && quote.Volume < _rules.MinCurrentVolume) riskKeys.Add("low_liquidity_jump");
         var factors = BuildFactors(
             variant,
             jumpPctPoint,
@@ -625,6 +643,8 @@ public sealed class OpeningWeakToStrongDetector
             quote.PreviousWeakScore,
             quote.PreviousWeakSignals ?? Array.Empty<string>(),
             quote.PreviousWeakSource,
+            quality.AuctionCoverageRatio,
+            quote.DryRun || quality.DryRun,
             factors,
             riskFlags,
             null,
@@ -673,6 +693,8 @@ public sealed class OpeningWeakToStrongDetector
             quote.PreviousWeakScore,
             quote.PreviousWeakSignals ?? Array.Empty<string>(),
             quote.PreviousWeakSource,
+            null,
+            quote.DryRun,
             [],
             [RiskFlag(invalidReason)],
             invalidReason,
@@ -733,6 +755,41 @@ public sealed class OpeningWeakToStrongDetector
         return new OpeningWeakToStrongRiskFlag(key, key == "baseline_missing" ? "high" : "medium", key == "baseline_missing" ? -100m : -35m);
     }
 
+    private (IReadOnlyList<string> RiskKeys, decimal? AuctionCoverageRatio, bool DryRun) OpeningQuality(
+        OpeningWeakToStrongQuote quote,
+        OpeningWeakToStrongBaseline baseline)
+    {
+        var riskKeys = new List<string>();
+        decimal? auctionCoverageRatio = null;
+        if (baseline.RequestedCount is > 0 && baseline.ReceivedCount.HasValue)
+        {
+            var rawCoverageRatio = (decimal)baseline.ReceivedCount.Value / baseline.RequestedCount.Value;
+            auctionCoverageRatio = Round2(rawCoverageRatio);
+            if (rawCoverageRatio < _rules.MinAuctionCoverageRatio)
+            {
+                riskKeys.Add("auction_coverage_low");
+            }
+        }
+
+        var quoteAgeMs = AgeMs(quote.CapturedAt ?? quote.BridgeTs ?? quote.At, quote.At);
+        if (quoteAgeMs.HasValue && quoteAgeMs.Value > _rules.MaxQuoteAgeMs)
+        {
+            riskKeys.Add("quote_time_untrusted");
+        }
+        if (!OpeningAuctionStateStore.IsInWindow(baseline.CapturedAt, _rules.AuctionStart, _rules.AuctionEnd))
+        {
+            riskKeys.Add("auction_time_untrusted");
+        }
+
+        var dryRun = riskKeys.Any(IsQualityDryRunRisk);
+        return (riskKeys, auctionCoverageRatio, dryRun);
+    }
+
+    private static bool IsQualityDryRunRisk(string key)
+    {
+        return key is "auction_coverage_low" or "quote_time_untrusted" or "auction_time_untrusted";
+    }
+
     private static int? AgeMs(DateTimeOffset? from, DateTimeOffset to)
     {
         if (!from.HasValue) return null;
@@ -768,8 +825,12 @@ public sealed class OpeningWeakToStrongDetector
             ["lowOpenRedFirstWindowMinPct"] = rules.LowOpenRedFirstWindowMinPct,
             ["lowOpenRedJumpMinPctPoint"] = rules.LowOpenRedJumpMinPctPoint,
             ["minAmountDelta"] = rules.MinAmountDelta,
+            ["maxQuoteAgeMs"] = rules.MaxQuoteAgeMs,
+            ["minAuctionCoverageRatio"] = rules.MinAuctionCoverageRatio,
             ["minCurrentAmount"] = rules.MinCurrentAmount,
+            ["minCurrentVolume"] = rules.MinCurrentVolume,
             ["nearLimitDistancePct"] = rules.NearLimitDistancePct,
+            ["openingSupportOpenRatio"] = rules.OpeningSupportOpenRatio,
             ["previousWeakScoreMin"] = rules.PreviousWeakScoreMin,
             ["strongOpenFirstWindowMinPct"] = rules.StrongOpenFirstWindowMinPct,
         };

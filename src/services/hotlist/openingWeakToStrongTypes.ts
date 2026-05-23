@@ -32,6 +32,10 @@ export interface OpeningWeakToStrongRules {
   auctionLateLiftJumpMinPctPoint: number
   auctionLateHighRetreatPctPoint: number
   previousWeakScoreMin: number
+  minAuctionCoverageRatio: number
+  maxQuoteAgeMs: number
+  minCurrentVolume: number
+  openingSupportOpenRatio: number
 }
 
 export interface OpeningWeakToStrongQuote {
@@ -55,6 +59,7 @@ export interface OpeningWeakToStrongQuote {
   previousWeakScore?: number
   previousWeakSignals?: string[]
   previousWeakSource?: string
+  dryRun?: boolean
 }
 
 export interface OpeningWeakToStrongBaseline {
@@ -141,6 +146,8 @@ export interface OpeningWeakToStrongSignal {
   previousWeakScore?: number
   previousWeakSignals?: string[]
   previousWeakSource?: string
+  auctionCoverageRatio?: number
+  dryRun?: boolean
   factors: OpeningWeakToStrongFactor[]
   riskFlags: OpeningWeakToStrongRiskFlag[]
   invalidReason?: string
@@ -159,6 +166,8 @@ export interface OpeningWeakToStrongFixtureCase {
     scoreRange?: [number, number]
     jumpPctPointRange?: [number, number]
     riskFlags?: string[]
+    dryRun?: boolean
+    auctionCoverageRatio?: number
     invalidReason?: string
   }
 }

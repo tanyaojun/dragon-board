@@ -447,10 +447,17 @@ Superpowers 设计规格见：[../superpowers/specs/2026-05-22-opening-weak-to-s
 - [x] 检测器对竞价金额缺失和当前成交额低于竞价基线分别标记 `auction_amount_missing`、`amount_regressed`，并降为 `watch`。
 - [x] Dragon Board 主表轮询抽到 `OpeningSignalStore`，`DataTable.vue` 只消费展示状态。
 - [x] 桌面端导出追加弱转强专有复盘字段，覆盖价格口径、跳空、成交额增量、采样统计和风险标记。
-- [ ] dry-run 演练 UI 仍未落地。
-- [ ] 早盘基线覆盖率状态栏/门禁仍需实盘联调补齐。
+- [x] dry-run 演练状态提示、语音抑制和主表过滤已落地；设置页显式开关暂不新增。
+- [x] 早盘基线覆盖率状态栏和检测门禁已落地；真实 `09:24:50-09:25:10` 覆盖率仍放入 V3 Phase 6 实盘验证。
+
+### 2026-05-24 续修：覆盖率门禁与边界 fixture
+
+- [x] TS/C# 检测合同新增早盘覆盖率和报价新鲜度风险字段，低覆盖/陈旧报价降为 `watch + dryRun`。
+- [x] 桌面端状态栏显示 `09:25` 强制采样覆盖率、采样数和批次异常摘要，触发信号后继续显示信号级 dry-run 状态。
+- [x] 共享 fixture 补齐 sourceTs/bridgeTs 陈旧、金额缺失/倒退、低流动性跳价、开盘后回落等高风险边界。
+- [x] 同步 TS/C# 测试、类型检查、桌面构建和文档进度。
 - **验证：** `dotnet run --project tools\YiDongJingLing.Tests\YiDongJingLing.Tests.csproj`；`pnpm exec vitest run src/services/hotlist/__tests__/OpeningWeakToStrongDetector.test.ts src/services/hotlist/__tests__/OpeningRealtimeEventBuffer.test.ts src/services/hotlist/__tests__/OpeningRealtimeEventBridge.test.ts src/services/hotlist/__tests__/OpeningSignalClient.test.ts src/services/hotlist/__tests__/HotStockEventMonitorService.test.ts src/services/hotlist/__tests__/HotStockEventSpeechService.test.ts src/components/common/__tests__/DataTable.test.ts`；`node --test proxy-server\__tests__\openingSignals.test.mjs proxy-server\__tests__\docs.test.mjs`；`pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false`；`dotnet build tools\YiDongJingLing\YiDongJingLing.csproj -c Release`；`pnpm build`；`git diff --check`。
-- **状态：** partial
+- **状态：** complete
 
 ## V4 Phase 3：TDX 自选股前日弱势上下文
 

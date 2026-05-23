@@ -495,6 +495,7 @@
 | 2026-05-23 | 补做 V2 提交后 code review，发现桌面端 `ConfigHash` 未纳入新增量价阈值；按 TDD 增加回归测试并修复。 | complete |
 | 2026-05-23 | 按文档审计偏差修复弱转强落地：补 TS/C# 复盘字段透传、金额倒退风险降级、主表轮询服务边界、桌面导出弱转强专有字段。 | complete |
 | 2026-05-23 | 按 Superpowers 规格落地 TDX 自选股前日弱势上下文：`.blk` 候选池注入 `tdx_block` 上下文，`previousWeakScore >= 30` 可作为冲板抢筹弱势前置，并补共享 fixture、桌面导出和 TS/C# 口径。 | complete |
+| 2026-05-24 | 续修竞价弱转强覆盖率门禁：低覆盖/陈旧报价降为 `watch + dryRun`，桌面状态栏显示 09:25 覆盖率，补齐高风险边界 fixture 和 dry-run 语音抑制。 | complete |
 
 ## V4 验证记录
 
@@ -518,6 +519,9 @@
 | TDX 上下文桌面端 | `dotnet run --project tools\YiDongJingLing.Tests\YiDongJingLing.Tests.csproj` | All YiDongJingLing tests passed，包含 TDX 上下文触发 `strong_open_board_attempt` 和导出字段测试。 |
 | TDX 上下文 proxy | `node --test proxy-server\__tests__\openingSignals.test.mjs proxy-server\__tests__\docs.test.mjs` | 8 tests passed。 |
 | TDX 上下文类型与构建 | `pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false`；`dotnet build tools\YiDongJingLing\YiDongJingLing.csproj -c Release`；`pnpm build` | 类型检查通过；桌面端 0 warnings/0 errors；前端生产构建通过。 |
+| 覆盖率门禁 TS/Web | `pnpm exec vitest run src/services/hotlist/__tests__/OpeningWeakToStrongDetector.test.ts src/services/hotlist/__tests__/OpeningRealtimeEventBuffer.test.ts src/services/hotlist/__tests__/OpeningRealtimeEventBridge.test.ts src/services/hotlist/__tests__/OpeningSignalClient.test.ts src/services/hotlist/__tests__/HotStockEventMonitorService.test.ts src/services/hotlist/__tests__/HotStockEventSpeechService.test.ts src/components/common/__tests__/DataTable.test.ts` | 7 files / 37 tests passed。 |
+| 覆盖率门禁桌面端 | `dotnet run --project tools\YiDongJingLing.Tests\YiDongJingLing.Tests.csproj`；`dotnet build tools\YiDongJingLing\YiDongJingLing.csproj -c Release` | All YiDongJingLing tests passed；桌面端 0 warnings/0 errors。 |
+| 覆盖率门禁 proxy/构建 | `node --test proxy-server\__tests__\openingSignals.test.mjs proxy-server\__tests__\docs.test.mjs`；`pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false`；`pnpm build`；`git diff --check` | proxy 8 tests passed；类型检查通过；前端生产构建通过；空白检查通过。 |
 
 ## 5 问恢复检查
 

@@ -132,6 +132,7 @@ const openingSignalBody = {
               confidence: { type: 'string', enum: ['watch', 'strong', 'critical'] },
               score: { type: 'number', minimum: 0, maximum: 100 },
               dryRun: { type: 'boolean' },
+              auctionCoverageRatio: { type: 'number', minimum: 0, maximum: 1 },
               triggerAt: { type: 'string', example: '2026-05-22T09:30:06+08:00' },
             },
           },

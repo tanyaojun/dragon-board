@@ -118,6 +118,7 @@ export class OpeningWeakToStrongDetector {
     const officialOpenPct = officialOpen > 0 ? pct(officialOpen, quote.preClose) : undefined
     const jumpPctPoint = firstWindowPct - auctionPct
     const amount = normalizeNumber(quote.amount)
+    const volume = normalizeNumber(quote.volume)
     const amountDelta = amount - baseline.auctionAmount
     const limitDistancePct = quote.limitUpPrice && quote.limitUpPrice > 0
       ? (quote.limitUpPrice - quote.lastPrice) / quote.limitUpPrice * 100
@@ -131,6 +132,9 @@ export class OpeningWeakToStrongDetector {
       previousWeakPrecondition
 
     if (!amountOk) return this.rejected(quote, baseline, 'opening_amount_too_small')
+    if (officialOpen > 0 && quote.lastPrice < Math.max(quote.preClose, officialOpen * this.rules.openingSupportOpenRatio)) {
+      return this.rejected(quote, baseline, 'opening_support_lost')
+    }
 
     const strongOpenCandidate =
       firstWindowPct >= this.rules.strongOpenFirstWindowMinPct &&
@@ -185,9 +189,11 @@ export class OpeningWeakToStrongDetector {
       previousWeakSource: quote.previousWeakSource,
       rules: this.rules,
     })
-    const riskKeys = [...(auctionProfile?.riskFlags || [])]
+    const quality = openingQuality(quote, baseline, this.rules)
+    const riskKeys = [...(auctionProfile?.riskFlags || []), ...quality.riskKeys]
     if (baseline.auctionAmount <= 0) riskKeys.push('auction_amount_missing')
     else if (amount < baseline.auctionAmount) riskKeys.push('amount_regressed')
+    if (volume > 0 && volume < this.rules.minCurrentVolume) riskKeys.push('low_liquidity_jump')
     const riskFlags = uniqueStrings(riskKeys).map(riskFlag)
     const riskPenalty = riskFlags.reduce((sum, item) => sum + Math.abs(item.penalty), 0)
     const score = clampScore(factors.reduce((sum, item) => sum + item.score, 0) - riskPenalty)
@@ -230,6 +236,8 @@ export class OpeningWeakToStrongDetector {
       previousWeakScore: quote.previousWeakScore,
       previousWeakSignals: quote.previousWeakSignals,
       previousWeakSource: quote.previousWeakSource,
+      auctionCoverageRatio: quality.auctionCoverageRatio,
+      dryRun: quote.dryRun || quality.dryRun,
       factors,
       riskFlags,
       ruleVersion: this.ruleVersion,
@@ -264,6 +272,7 @@ export class OpeningWeakToStrongDetector {
       elapsedMs: baseline?.elapsedMs,
       slowBatches: baseline?.slowBatches,
       truncatedBatches: baseline?.truncatedBatches,
+      dryRun: quote.dryRun,
       factors: [],
       riskFlags: [riskFlag(invalidReason)],
       invalidReason,
@@ -384,11 +393,40 @@ function riskFlag(key: string): OpeningWeakToStrongRiskFlag {
     ? 'high'
     : key === 'price_lift_without_volume' ||
         key === 'volume_without_price_lift' ||
-        key === 'auction_late_high_retreated'
+        key === 'auction_late_high_retreated' ||
+        key === 'auction_coverage_low' ||
+        key === 'quote_time_untrusted' ||
+        key === 'auction_time_untrusted'
       ? 'medium'
       : 'medium'
   const penalty = key === 'baseline_missing' ? -100 : -35
   return { key, severity, penalty }
+}
+
+function openingQuality(
+  quote: OpeningWeakToStrongQuote,
+  baseline: OpeningWeakToStrongBaseline,
+  rules: OpeningWeakToStrongRules,
+): { riskKeys: string[]; auctionCoverageRatio?: number; dryRun: boolean } {
+  const riskKeys: string[] = []
+  const requested = normalizeNumber(baseline.requestedCount)
+  const received = normalizeNumber(baseline.receivedCount)
+  const auctionCoverageRatio = requested > 0 ? received / requested : undefined
+  if (auctionCoverageRatio !== undefined && auctionCoverageRatio < rules.minAuctionCoverageRatio) {
+    riskKeys.push('auction_coverage_low')
+  }
+  const quoteAge = ageMs(quote.capturedAt || quote.bridgeTs || quote.at, quote.at)
+  if (quoteAge !== undefined && quoteAge > rules.maxQuoteAgeMs) riskKeys.push('quote_time_untrusted')
+  if (!isInWindow(baseline.capturedAt, rules.auctionStart, rules.auctionEnd)) {
+    riskKeys.push('auction_time_untrusted')
+  }
+  return {
+    riskKeys,
+    auctionCoverageRatio: auctionCoverageRatio === undefined ? undefined : round2(auctionCoverageRatio),
+    dryRun: riskKeys.includes('auction_coverage_low') ||
+      riskKeys.includes('quote_time_untrusted') ||
+      riskKeys.includes('auction_time_untrusted'),
+  }
 }
 
 function buildAuctionProfile(

@@ -192,6 +192,17 @@
 | 桌面导出复盘 | `YiDongJingLing.exe` 导出记录已追加弱转强专有列，覆盖形态、强度、09:25/09:30 价格、跳空、成交额增量、基线质量、采样统计和风险标记。 |
 | 仍待实盘确认 | dry-run UI、早盘基线覆盖率状态栏/门禁、真实 `09:24:50-09:25:10` 覆盖率和端到端延迟仍未完成，需要在 V3 Phase 6 实盘联调中验收。 |
 
+2026-05-24 覆盖率门禁与边界 fixture 续修：
+
+| 项目 | 发现 |
+|------|------|
+| 覆盖率门禁 | TS/C# 检测器已按 `receivedCount/requestedCount` 计算 `auctionCoverageRatio`，低于 `0.95` 标记 `auction_coverage_low`，降级为 `watch + dryRun`，不再进入语音。 |
+| 报价新鲜度 | 当前报价采样时间超过 `maxQuoteAgeMs=10000` 标记 `quote_time_untrusted`；竞价基线 `capturedAt` 不在 `09:24:50-09:25:10` 标记 `auction_time_untrusted`。 |
+| 低质量演练 | `dryRun` 从 Web/Desktop 信号合同透传到 proxy；Web 主表过滤 dry-run，桌面语音策略在 `VoiceMode.All` 下也不播 dry-run。 |
+| 状态栏可见性 | 桌面状态栏在 09:25 强制采样行情到达时即可显示 `竞价覆盖 xx% received/requested 慢x 截x`，触发弱转强后继续显示信号级 dry-run 状态。 |
+| 共享 fixture | 已补 `auction_coverage_low`、`quote_time_untrusted`、`auction_time_untrusted`、`auction_amount_missing`、`amount_regressed`、`low_liquidity_jump`、`opening_support_lost` 样例，并由 TS/C# 同源测试断言。 |
+| 仍待实盘确认 | 代码门禁和状态栏已完成；真实早盘覆盖率、端到端延迟和 100-300 只候选池下 bridge 稳定性仍归入 V3 Phase 6 盘中验证。 |
+
 2026-05-23 TDX 自选股前日弱势上下文落地：
 
 | 项目 | 发现 |

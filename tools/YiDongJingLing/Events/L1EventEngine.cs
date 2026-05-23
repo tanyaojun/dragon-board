@@ -29,7 +29,11 @@ public sealed class L1EventEngine
         2.5m,
         2m,
         0.2m,
-        30m);
+        30m,
+        0.95m,
+        10_000,
+        1_000_000m,
+        0.995m);
     private readonly L1EventRules _rules;
     private readonly Dictionary<string, StockState> _states = new(StringComparer.Ordinal);
     private readonly OpeningAuctionStateStore _openingStore = new(OpeningRules);
@@ -447,7 +451,7 @@ public sealed class L1EventEngine
             result.Score,
             result.Variant ?? "",
             result.TriggerAt,
-            false,
+            result.DryRun,
             result.AuctionFinalPrice ?? 0m,
             result.AuctionPct ?? 0m,
             result.OfficialOpen,
@@ -474,6 +478,7 @@ public sealed class L1EventEngine
             result.PreviousWeakScore,
             result.PreviousWeakSignals,
             result.PreviousWeakSource,
+            result.AuctionCoverageRatio,
             result.RuleVersion,
             result.ConfigHash,
             result.Factors,

@@ -208,6 +208,16 @@ Run("Opening weak-to-strong detector matches shared golden fixture cases", () =>
             var key = riskFlag.GetString() ?? "";
             AssertTrue(result?.RiskFlags.Any(item => item.Key == key) ?? false, $"{caseId} risk flag {key}");
         }
+        if (expected.TryGetProperty("dryRun", out var dryRun))
+        {
+            AssertEqual(dryRun.GetBoolean(), result?.DryRun ?? false, $"{caseId} dryRun");
+        }
+        if (expected.TryGetProperty("auctionCoverageRatio", out var auctionCoverageRatio))
+        {
+            var actual = result?.AuctionCoverageRatio;
+            if (!actual.HasValue) throw new InvalidOperationException($"{caseId} auction coverage ratio exists");
+            AssertTrue(Math.Abs(actual.Value - auctionCoverageRatio.GetDecimal()) <= 0.01m, $"{caseId} auction coverage ratio");
+        }
     }
 });
 
@@ -230,7 +240,7 @@ Run("Opening weak-to-strong config hash includes auction price-volume rules", ()
     var baseHash = new OpeningWeakToStrongDetector(baseRules).Evaluate(quote, null).ConfigHash;
     var changedHash = new OpeningWeakToStrongDetector(changedRules).Evaluate(quote, null).ConfigHash;
 
-    AssertEqual("owts-feac3a30", baseHash, "fixture config hash matches web");
+    AssertEqual("owts-2be0bbdb", baseHash, "fixture config hash matches web");
     AssertTrue(baseHash != changedHash, "auction price-volume rule hash changes");
 });
 
@@ -454,7 +464,11 @@ Run("Opening weak-to-strong detector rejects previous trading day baseline", () 
         2.5m,
         2m,
         0.2m,
-        30m);
+        30m,
+        0.95m,
+        10_000,
+        1_000_000m,
+        0.995m);
     var store = new OpeningAuctionStateStore(rules);
     var detector = new OpeningWeakToStrongDetector(rules);
     var auction = new OpeningWeakToStrongQuote(
@@ -694,6 +708,18 @@ Run("Voice policy defaults to strong signals and excludes weak pressure events",
     AssertEqual(0, EventVoicePolicy.FilterForVoice([fastRise, bidPressure], VoiceMode.Muted).Count, "muted mode");
 });
 
+Run("Voice policy does not announce dry-run opening signals", () =>
+{
+    var now = DateTimeOffset.Parse("2026-05-22T09:30:06+08:00");
+    var dryRunOpening = Event("002560", "低覆盖", L1EventType.OpeningWeakToStrong, "竞价弱转强", now) with
+    {
+        OpeningSignal = TestOpeningSignal(now, dryRun: true)
+    };
+
+    AssertEqual(0, EventVoicePolicy.FilterForVoice([dryRunOpening], VoiceMode.All).Count, "all mode dry-run muted");
+    AssertEqual(0, EventVoicePolicy.FilterForVoice([dryRunOpening], VoiceMode.StrongOnly).Count, "strong mode dry-run muted");
+});
+
 Run("Stock name resolver reads TDX tnf cache records", () =>
 {
     var tempRoot = Path.Combine(Path.GetTempPath(), "YiDongJingLingTests", Guid.NewGuid().ToString("N"));
@@ -802,6 +828,22 @@ Run("Main form resolves bridge port from configured URL", () =>
     AssertEqual(8765, MainForm.ResolveBridgePort("ws://127.0.0.1:8765/ws/quotes"), "default port");
     AssertEqual(9876, MainForm.ResolveBridgePort("ws://127.0.0.1:9876/ws/quotes"), "custom port");
     AssertEqual(8765, MainForm.ResolveBridgePort("not-a-url"), "fallback port");
+});
+
+Run("Main form formats opening auction coverage status", () =>
+{
+    AssertTrue(
+        MainForm.IsOpeningAuctionCoverageWindow(DateTimeOffset.Parse("2026-05-22T09:25:00+08:00")),
+        "auction coverage window includes 09:25");
+    AssertTrue(
+        !MainForm.IsOpeningAuctionCoverageWindow(DateTimeOffset.Parse("2026-05-22T09:30:00+08:00")),
+        "auction coverage window excludes 09:30");
+    AssertEqual(
+        "竞价覆盖 90% 90/100 慢2 截1 演练",
+        MainForm.OpeningCoverageStatusText("90%", "90", "100", " 慢2 截1", " 演练"),
+        "coverage status text");
+    AssertTrue(MainForm.IsOpeningCoverageLow(189m / 200m), "raw 94.5% coverage is low");
+    AssertTrue(!MainForm.IsOpeningCoverageLow(0.95m), "raw 95% coverage passes");
 });
 
 Run("Main form preserves TDX block selection until list is loaded", () =>
@@ -930,6 +972,7 @@ Run("Opening signal reporter posts canonical payload to proxy", () =>
             null,
             [],
             "",
+            0.97m,
             "opening-weak-to-strong.v1",
             "owts-test",
             [],
@@ -951,6 +994,7 @@ Run("Opening signal reporter posts canonical payload to proxy", () =>
     AssertEqual(82m, payload.GetProperty("score").GetDecimal(), "signal score");
     AssertEqual(1, payload.GetProperty("auctionSampleCount").GetInt32(), "auction sample count");
     AssertEqual(128, payload.GetProperty("receivedCount").GetInt32(), "received count");
+    AssertEqual(0.97m, payload.GetProperty("auctionCoverageRatio").GetDecimal(), "auction coverage ratio");
     AssertEqual(305000, payload.GetProperty("latencyMs").GetInt32(), "latency ms");
 });
 
@@ -995,6 +1039,7 @@ Run("Event export includes opening weak-to-strong replay fields", () =>
             30m,
             ["tdx_block_candidate"],
             "tdx_block",
+            0.97m,
             "opening-weak-to-strong.v1",
             "owts-test",
             [],
@@ -1010,6 +1055,7 @@ Run("Event export includes opening weak-to-strong replay fields", () =>
     AssertTrue(lines[1].Contains("4.98"), "jump pct point exported");
     AssertTrue(lines[1].Contains("5000万"), "amount delta exported");
     AssertTrue(lines[1].Contains("128"), "received count exported");
+    AssertTrue(lines[1].Contains("0.97"), "coverage ratio exported");
     AssertTrue(lines[1].Contains("tdx_block"), "previous weak context exported");
     AssertTrue(lines[1].Contains("amount_regressed"), "risk flag exported");
 });
@@ -1115,6 +1161,51 @@ static EventRecord Event(string code, string name, L1EventType type, string type
         timestamp,
         L1EventSeverity.Important,
         "test");
+}
+
+static OpeningWeakToStrongSignal TestOpeningSignal(DateTimeOffset timestamp, bool dryRun)
+{
+    return new OpeningWeakToStrongSignal(
+        timestamp.ToString("yyyy-MM-dd"),
+        "002560",
+        "低覆盖",
+        "opening_weak_to_strong",
+        "strong",
+        82m,
+        "auction_gap_reversal",
+        timestamp,
+        dryRun,
+        9.9m,
+        -1m,
+        10.1m,
+        1m,
+        10.35m,
+        3.5m,
+        4.5m,
+        50_000_000m,
+        45_000_000m,
+        null,
+        "good",
+        DateTimeOffset.Parse("2026-05-22T09:25:00+08:00"),
+        DateTimeOffset.Parse("2026-05-22T09:25:00+08:00"),
+        timestamp,
+        1,
+        0,
+        306_000,
+        true,
+        100,
+        90,
+        1800,
+        2,
+        1,
+        null,
+        [],
+        "",
+        0.9m,
+        "opening-weak-to-strong.v1",
+        "owts-test",
+        [],
+        [new OpeningWeakToStrongRiskFlag("auction_coverage_low", "medium", -35m)]);
 }
 
 static void InvokeHandleMessage(TdxBridgeClient client, string message)

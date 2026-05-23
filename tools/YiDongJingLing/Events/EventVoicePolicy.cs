@@ -11,9 +11,14 @@ public static class EventVoicePolicy
         return mode switch
         {
             VoiceMode.Muted => [],
-            VoiceMode.All => events.ToArray(),
-            _ => events.Where(IsStrongSignal).ToArray(),
+            VoiceMode.All => events.Where(IsVoiceEligible).ToArray(),
+            _ => events.Where(item => IsVoiceEligible(item) && IsStrongSignal(item)).ToArray(),
         };
+    }
+
+    private static bool IsVoiceEligible(EventRecord item)
+    {
+        return item.OpeningSignal?.DryRun != true;
     }
 
     public static bool IsStrongSignal(EventRecord item)

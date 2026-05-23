@@ -130,6 +130,63 @@ describe('OpeningRealtimeEventBridge', () => {
     expect(refresh).toHaveBeenCalledTimes(1)
   })
 
+  it('never assigns web voice owner to dry-run opening signals', async () => {
+    const fixture = loadFixture()
+    const sample = fixture.cases.find(item => item.caseId === 'auction-coverage-rounded-low-dry-run')
+    expect(sample).toBeTruthy()
+
+    for (const response of [
+      { ok: true, accepted: true, voiceOwner: 'web' },
+      { ok: false, accepted: false, voiceOwner: 'web' },
+    ]) {
+      const postSignal = vi.fn().mockResolvedValue(response)
+      const acceptDerivedEvents = vi.fn()
+      const refresh = vi.fn().mockResolvedValue({ ok: true })
+      const bridge = new OpeningRealtimeEventBridge({
+        rules: fixture.rules,
+        ruleVersion: fixture.ruleVersion,
+        signalClient: { postSignal } as any,
+        monitorService: { acceptDerivedEvents, refresh } as any,
+      })
+
+      bridge.acceptQuotes(sample!.quotes.map(quote => ({
+        code: quote.code,
+        name: quote.name,
+        lastPrice: quote.lastPrice,
+        changePct: 0,
+        volume: quote.volume || 0,
+        amount: quote.amount || 0,
+        open: quote.open,
+        preClose: quote.preClose,
+        capturedAt: quote.capturedAt,
+        bridgeTs: quote.bridgeTs,
+        openingForcedSample: quote.openingForcedSample,
+        requestedCount: quote.requestedCount,
+        receivedCount: quote.receivedCount,
+        elapsedMs: quote.elapsedMs,
+        slowBatches: quote.slowBatches,
+        truncatedBatches: quote.truncatedBatches,
+        lastPriceSource: 'last',
+      })))
+      await vi.waitFor(() => expect(postSignal).toHaveBeenCalledTimes(1))
+
+      expect(postSignal).toHaveBeenCalledWith('web', expect.objectContaining({
+        code: '002567',
+        dryRun: true,
+        auctionCoverageRatio: 0.95,
+      }))
+      expect(acceptDerivedEvents).toHaveBeenCalledWith([
+        expect.objectContaining({
+          code: '002567',
+          raw: expect.objectContaining({
+            voiceOwner: 'none',
+            signal: expect.objectContaining({ dryRun: true }),
+          }),
+        }),
+      ])
+    }
+  })
+
   it('computes limit-up price from quote fields for strong open board attempt', async () => {
     const fixture = loadFixture()
     const sample = fixture.cases.find(item => item.caseId === 'strong-open-board-attempt-with-precondition')
