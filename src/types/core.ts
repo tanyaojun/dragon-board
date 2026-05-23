@@ -195,6 +195,9 @@ export interface QuotePatch {
   elapsedMs?: number
   slowBatches?: number
   truncatedBatches?: number
+  previousWeakScore?: number
+  previousWeakSignals?: string[]
+  previousWeakSource?: string
   sourceTs?: number
   seq?: number
 }

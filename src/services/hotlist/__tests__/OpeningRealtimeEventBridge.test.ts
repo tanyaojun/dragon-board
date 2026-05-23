@@ -167,6 +167,51 @@ describe('OpeningRealtimeEventBridge', () => {
     }))
   })
 
+  it('passes previous weak context from realtime quote patches', async () => {
+    const fixture = loadFixture()
+    const sample = fixture.cases.find(item =>
+      item.caseId === 'strong-open-board-attempt-with-tdx-previous-context'
+    )
+    expect(sample).toBeTruthy()
+    const postSignal = vi.fn().mockResolvedValue({
+      ok: true,
+      accepted: true,
+      voiceOwner: 'web',
+    })
+    const bridge = new OpeningRealtimeEventBridge({
+      rules: fixture.rules,
+      ruleVersion: fixture.ruleVersion,
+      signalClient: { postSignal } as any,
+      monitorService: { acceptDerivedEvents: vi.fn(), refresh: vi.fn().mockResolvedValue({ ok: true }) } as any,
+    })
+
+    bridge.acceptQuotes(sample!.quotes.map(quote => ({
+      code: quote.code,
+      name: quote.name,
+      lastPrice: quote.lastPrice,
+      changePct: 0,
+      volume: quote.volume || 0,
+      amount: quote.amount || 0,
+      open: quote.open,
+      preClose: quote.preClose,
+      capturedAt: quote.capturedAt,
+      bridgeTs: quote.bridgeTs,
+      previousWeakScore: quote.previousWeakScore,
+      previousWeakSignals: quote.previousWeakSignals,
+      previousWeakSource: quote.previousWeakSource,
+      lastPriceSource: 'last',
+    })))
+    await vi.waitFor(() => expect(postSignal).toHaveBeenCalledTimes(1))
+
+    expect(postSignal).toHaveBeenCalledWith('web', expect.objectContaining({
+      code: '600010',
+      variant: 'strong_open_board_attempt',
+      previousWeakScore: 30,
+      previousWeakSignals: ['tdx_block_candidate'],
+      previousWeakSource: 'tdx_block',
+    }))
+  })
+
   it('keeps sourceTs UTC instants in local opening windows', async () => {
     const fixture = loadFixture()
     const sample = fixture.cases.find(item => item.caseId === 'auction-late-lift-confirmed')

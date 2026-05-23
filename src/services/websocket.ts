@@ -89,6 +89,14 @@ function toOptionalNumber(value: unknown): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined
 }
 
+function toStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const items = value
+    .map(item => String(item || '').trim())
+    .filter(Boolean)
+  return items.length ? items : undefined
+}
+
 function buildDefaultUrl(): string {
   const envUrl = (import.meta as any)?.env?.VITE_TDX_L2_WS_URL
   if (typeof envUrl === 'string' && envUrl.trim()) return envUrl.trim()
@@ -136,6 +144,11 @@ function normalizeQuotePatch(item: any): QuotePatch | null {
   const zljzb = toOptionalNumber(item?.zljzb)
   const cddje = toOptionalNumber(item?.cddje)
   const cddjzb = toOptionalNumber(item?.cddjzb)
+  const previousWeakScore = toOptionalNumber(item?.previousWeakScore)
+  const previousWeakSignals = toStringArray(item?.previousWeakSignals)
+  const previousWeakSource = typeof item?.previousWeakSource === 'string'
+    ? item.previousWeakSource.trim()
+    : ''
 
   const patch: QuotePatch = {
     code,
@@ -161,6 +174,9 @@ function normalizeQuotePatch(item: any): QuotePatch | null {
     elapsedMs: toOptionalNumber(item?.elapsedMs),
     slowBatches: toOptionalNumber(item?.slowBatches),
     truncatedBatches: toOptionalNumber(item?.truncatedBatches),
+    previousWeakScore,
+    previousWeakSignals,
+    previousWeakSource: previousWeakSource || undefined,
     sourceTs: toNumber(item?.sourceTs ?? item?.timestamp),
     seq: toNumber(item?.seq),
   }

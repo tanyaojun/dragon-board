@@ -113,6 +113,9 @@ function toOpeningQuote(quote: QuotePatch): OpeningWeakToStrongQuote | null {
     elapsedMs: quote.elapsedMs,
     slowBatches: quote.slowBatches,
     truncatedBatches: quote.truncatedBatches,
+    previousWeakScore: quote.previousWeakScore,
+    previousWeakSignals: quote.previousWeakSignals,
+    previousWeakSource: quote.previousWeakSource,
   }
 }
 
