@@ -31,10 +31,39 @@
     <template v-if="activePage !== 'settings'">
       <div class="section-title">
         <span class="section-name">{{ activePageTitle }}</span>
-        <span class="count-badge">{{ filteredEvents.length }}</span>
+        <span class="count-badge">{{ activePage === 'sector' ? selectedTdxBlockFiles.length : filteredEvents.length }}</span>
       </div>
 
-      <div v-if="showEventSearch" class="event-search-bar">
+      <div v-if="activePage === 'sector'" class="block-file-panel">
+        <div class="block-file-summary">
+          <span>板块文件</span>
+          <span>{{ selectedTdxBlockFiles.length }}/{{ state.tdxBlockFiles.length }} 已勾选</span>
+        </div>
+        <div class="block-file-list">
+          <div v-if="state.loading && !state.tdxBlockFiles.length" class="empty-state">
+            正在读取桌面端监控板块...
+          </div>
+          <div v-else-if="state.error && !state.tdxBlockFiles.length" class="empty-state error">
+            {{ state.error }}
+            <button type="button" @click="refresh">重试</button>
+          </div>
+          <div v-else-if="!state.tdxBlockFiles.length" class="empty-state">暂无板块文件</div>
+          <label v-for="file in state.tdxBlockFiles" :key="blockFileKey(file)" class="block-file-row">
+            <input
+              type="checkbox"
+              :checked="isTdxBlockFileSelected(file)"
+              @change="toggleTdxBlockFile(file, $event)"
+            />
+            <span class="block-file-main">
+              <span class="block-file-name">{{ file.name }}</span>
+              <span class="block-file-path">{{ file.path || state.selectedTdxBlockFiles[0] || '' }}</span>
+            </span>
+            <span class="block-file-count">{{ file.stockCount }}只</span>
+          </label>
+        </div>
+      </div>
+
+      <div v-else-if="showEventSearch" class="event-search-bar">
         <label class="search-box">
           <span class="search-icon" aria-hidden="true">⌕</span>
           <input
@@ -46,7 +75,7 @@
         </label>
       </div>
 
-      <div class="event-list">
+      <div v-if="activePage !== 'sector'" class="event-list">
         <div v-if="state.loading && !state.events.length" class="empty-state">正在加载实时行情与异动事件...</div>
         <div v-else-if="state.error && !state.events.length" class="empty-state error">
           {{ state.error }}
@@ -202,7 +231,7 @@
 
     <div class="event-footer">
       <div class="footer-status">
-        <span>监控 {{ state.watchedCodes.length }} 只热榜股</span>
+        <span>热榜 {{ state.watchedCodes.length }} 只 · TDX {{ state.tdxBlockCodes.length }} 只</span>
         <span>{{ state.lastUpdate ? formatEventTime(state.lastUpdate) : '未更新' }}</span>
       </div>
       <div class="footer-actions">
@@ -278,8 +307,8 @@ const EVENT_TYPE_NAMES: Record<HotStockAbnormalEventType, string> = {
 
 const pages = [
   { id: 'hot', label: '热榜个股', icon: '☷' },
-  { id: 'other', label: '其他个股', icon: '⌁' },
-  { id: 'sector', label: '板块', icon: '◆' },
+  { id: 'other', label: 'TDX自选股', icon: '⌁' },
+  { id: 'sector', label: '监控板块', icon: '◆' },
   { id: 'settings', label: '设置', icon: '⚙' },
 ] as const
 const ALL_EVENT_TYPES: HotStockAbnormalEventType[] = [
@@ -302,6 +331,9 @@ const blankState: HotStockEventMonitorState = {
   latestAdded: [],
   latestHotStockAdded: [],
   watchedCodes: [],
+  tdxBlockCodes: [],
+  tdxBlockFiles: [],
+  selectedTdxBlockFiles: [],
   lastUpdate: null,
   loading: false,
   running: false,
@@ -348,7 +380,6 @@ const eventTypeOptions = computed(() =>
 
 const pageEvents = computed(() => {
   if (activePage.value === 'other') return state.value.otherStockEvents
-  if (activePage.value === 'sector') return state.value.sectorEvents
   return state.value.hotStockEvents
 })
 
@@ -365,16 +396,16 @@ const filteredEvents = computed(() => {
 })
 
 const activePageTitle = computed(() => {
-  if (activePage.value === 'other') return '其他个股异动'
-  if (activePage.value === 'sector') return '板块异动'
+  if (activePage.value === 'other') return 'TDX自选股异动'
+  if (activePage.value === 'sector') return '监控板块'
   return '热榜个股异动'
 })
 
 const emptyText = computed(() => {
-  if (activePage.value === 'other') return '暂无其他个股异动'
-  if (activePage.value === 'sector') return '暂无板块异动'
+  if (activePage.value === 'other') return '暂无TDX自选股异动'
   return '暂无热榜个股异动'
 })
+const selectedTdxBlockFiles = computed(() => state.value.selectedTdxBlockFiles)
 
 const speechModeLabel = computed(() => {
   if (speechMode.value === 'local' && speechEngine.value === 'volcengine') return '火山语音'
@@ -422,6 +453,27 @@ async function refresh() {
     hotStockEventMonitorService.refresh(),
     loadCandidatePoolState(),
   ])
+}
+
+function blockFileKey(file: { path?: string; name: string }) {
+  return file.path || file.name
+}
+
+function isTdxBlockFileSelected(file: { path?: string; name: string; selected?: boolean }) {
+  const key = blockFileKey(file)
+  return selectedTdxBlockFiles.value.includes(key) || Boolean(file.selected)
+}
+
+async function toggleTdxBlockFile(file: { path?: string; name: string }, event: Event) {
+  const checked = Boolean((event.target as HTMLInputElement | null)?.checked)
+  const key = blockFileKey(file)
+  const next = new Set(selectedTdxBlockFiles.value)
+  if (checked) {
+    next.add(key)
+  } else {
+    next.delete(key)
+  }
+  await hotStockEventMonitorService.setSelectedTdxBlockFiles([...next])
 }
 
 function selectStock(event: HotStockAbnormalEvent) {
@@ -1101,6 +1153,104 @@ function speechEligibleEvents(events: HotStockAbnormalEvent[]) {
   border-radius: 999px;
   padding: 1px 6px;
   font-size: 11px;
+}
+
+.block-file-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 0 12px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.block-file-summary {
+  min-height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border: 1px solid rgba(121, 151, 176, 0.2);
+  border-radius: 6px;
+  background: rgba(7, 10, 12, 0.42);
+  color: #9ba8b5;
+  padding: 0 9px;
+}
+
+.block-file-summary span:first-child {
+  color: #edf3f8;
+  font-weight: 600;
+}
+
+.block-file-list {
+  min-height: 190px;
+  max-height: 46vh;
+  overflow-y: auto;
+  border: 1px solid rgba(121, 151, 176, 0.22);
+  border-radius: 7px;
+  background: rgba(9, 12, 15, 0.58);
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  scrollbar-width: thin;
+}
+
+.block-file-row {
+  min-height: 38px;
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.065);
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.03);
+  padding: 6px 8px;
+  cursor: pointer;
+}
+
+.block-file-row:hover,
+.block-file-row:focus-within {
+  border-color: rgba(77, 171, 247, 0.42);
+  background: rgba(77, 171, 247, 0.06);
+}
+
+.block-file-row input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: #7dc6ff;
+}
+
+.block-file-main {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.block-file-name,
+.block-file-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.block-file-name {
+  color: #edf3f8;
+  font-weight: 600;
+  line-height: 16px;
+}
+
+.block-file-path {
+  color: #6e7c88;
+  font-size: 10px;
+  line-height: 13px;
+}
+
+.block-file-count {
+  color: #7dc6ff;
+  font-size: 11px;
+  white-space: nowrap;
 }
 
 .event-list {

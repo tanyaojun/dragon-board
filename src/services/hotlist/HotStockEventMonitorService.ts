@@ -7,17 +7,27 @@ import {
   XuangubaoAbnormalEventFeed,
 } from './XuangubaoAbnormalEventFeed'
 import {
+  tdxBlockPoolService,
+  type TdxBlockPoolRefreshResult,
+  type TdxBlockPoolService,
+} from './TdxBlockPoolService'
+import {
   type HotStockAbnormalEvent,
   type HotStockEventDataLayer,
   type HotStockEventFetcher,
   type HotStockEventMonitorState,
   type HotStockEventRefreshResult,
+  type TdxBlockFileSummary,
   normalizeHotStockCode,
 } from './hotStockEventTypes'
 
 export interface HotStockEventMonitorOptions {
   feed?: HotStockEventFetcher
   dataLayer?: HotStockEventDataLayer
+  tdxBlockPool?: Pick<
+    TdxBlockPoolService,
+    'getCodes' | 'refresh' | 'refreshFiles' | 'setSelectedFiles' | 'clear' | 'applyCodes'
+  >
   notifier?: { sendEvents: (events: HotStockAbnormalEvent[]) => Promise<unknown> }
   intervalMs?: number
   maxEvents?: number
@@ -80,12 +90,12 @@ function dedupeById(events: HotStockAbnormalEvent[]): HotStockAbnormalEvent[] {
   return [...byId.values()]
 }
 
-function splitEvents(events: HotStockAbnormalEvent[], maxEvents: number) {
+function splitEvents(events: HotStockAbnormalEvent[], maxEvents: number, tdxBlockCodeSet: Set<string>) {
   const nextHotStockEvents = events
     .filter(event => event.category === 'stock' && event.matchedHotStock)
     .slice(0, maxEvents)
   const nextOtherStockEvents = events
-    .filter(event => event.category === 'stock' && !event.matchedHotStock)
+    .filter(event => event.category === 'stock' && !event.matchedHotStock && tdxBlockCodeSet.has(event.code))
     .slice(0, maxEvents)
   const nextSectorEvents = events
     .filter(event => event.category === 'sector')
@@ -103,6 +113,10 @@ function splitEvents(events: HotStockAbnormalEvent[], maxEvents: number) {
 export class HotStockEventMonitorService {
   private feed: HotStockEventFetcher
   private readonly dataLayer: HotStockEventDataLayer
+  private readonly tdxBlockPool: Pick<
+    TdxBlockPoolService,
+    'getCodes' | 'refresh' | 'refreshFiles' | 'setSelectedFiles' | 'clear' | 'applyCodes'
+  >
   private readonly notifier: { sendEvents: (events: HotStockAbnormalEvent[]) => Promise<unknown> }
   private readonly intervalMs: number
   private readonly maxEvents: number
@@ -118,10 +132,15 @@ export class HotStockEventMonitorService {
   private latestAdded: HotStockAbnormalEvent[] = []
   private latestHotStockAdded: HotStockAbnormalEvent[] = []
   private watchedCodes: string[] = []
+  private tdxBlockCodes: string[] = []
+  private tdxBlockFiles: TdxBlockFileSummary[] = []
+  private selectedTdxBlockFiles: string[] = []
   private lastUpdate: number | null = null
   private loading = false
   private error: string | null = null
+  private tdxBlockError: string | null = null
   private subscribers = new Set<(state: HotStockEventMonitorState) => void>()
+  private tdxRefreshGeneration = 0
 
   constructor(options: HotStockEventMonitorOptions = {}) {
     this.feed = options.feed || new CompositeHotStockEventFeed([
@@ -129,6 +148,7 @@ export class HotStockEventMonitorService {
       new ThsLimitUpEventFeed(),
     ])
     this.dataLayer = options.dataLayer || dataLayer
+    this.tdxBlockPool = options.tdxBlockPool || tdxBlockPoolService
     this.notifier = options.notifier || eventRadarFeishuNotifier
     this.intervalMs = options.intervalMs || DEFAULT_INTERVAL_MS
     this.maxEvents = options.maxEvents || DEFAULT_MAX_EVENTS
@@ -159,10 +179,13 @@ export class HotStockEventMonitorService {
       latestAdded: [...this.latestAdded],
       latestHotStockAdded: [...this.latestHotStockAdded],
       watchedCodes: [...this.watchedCodes],
+      tdxBlockCodes: [...this.tdxBlockCodes],
+      tdxBlockFiles: this.tdxBlockFiles.map(file => ({ ...file })),
+      selectedTdxBlockFiles: [...this.selectedTdxBlockFiles],
       lastUpdate: this.lastUpdate,
       loading: this.loading,
       running: this.running,
-      error: this.error,
+      error: this.error || this.tdxBlockError,
     }
   }
 
@@ -175,6 +198,12 @@ export class HotStockEventMonitorService {
   async refresh(): Promise<HotStockEventRefreshResult> {
     const watchedCodes = this.getWatchedCodes()
     this.watchedCodes = watchedCodes
+    const tdxBlockSnapshot = await this.refreshTdxBlockCodes(this.tdxRefreshGeneration)
+    const tdxBlockCodes = tdxBlockSnapshot.codes
+    this.tdxBlockCodes = tdxBlockCodes
+    this.tdxBlockFiles = tdxBlockSnapshot.files
+    this.selectedTdxBlockFiles = tdxBlockSnapshot.selectedFiles
+    await this.refreshTdxBlockFiles({ notify: false })
     this.loading = true
     this.error = null
     this.notify()
@@ -182,6 +211,7 @@ export class HotStockEventMonitorService {
     const previousIds = new Set(this.events.map(event => event.id))
     const previousHotStockIds = new Set(this.hotStockEvents.map(event => event.id))
     const watchedCodeSet = new Set(watchedCodes)
+    const tdxBlockCodeSet = new Set(tdxBlockCodes)
     const candidateCodes = getCandidateCodes(this.dataLayer.getDragonReview())
     const today = this.now()
 
@@ -204,7 +234,7 @@ export class HotStockEventMonitorService {
         .sort((a, b) => b.timestamp - a.timestamp)
 
       const { nextEvents, nextHotStockEvents, nextOtherStockEvents, nextSectorEvents } =
-        splitEvents(allTodayEvents, this.maxEvents)
+        splitEvents(allTodayEvents, this.maxEvents, tdxBlockCodeSet)
 
       this.events = nextEvents
       this.hotStockEvents = nextHotStockEvents
@@ -225,6 +255,10 @@ export class HotStockEventMonitorService {
         otherStockEvents: [...this.otherStockEvents],
         sectorEvents: [...this.sectorEvents],
         watchedCodes,
+        tdxBlockCodes,
+        tdxBlockFiles: this.tdxBlockFiles.map(file => ({ ...file })),
+        selectedTdxBlockFiles: [...this.selectedTdxBlockFiles],
+        error: this.tdxBlockError || undefined,
       }
     } catch (error) {
       const derivedTodayEvents = dedupeById([...this.derivedEventsById.values()])
@@ -241,7 +275,7 @@ export class HotStockEventMonitorService {
         }))
         .sort((a, b) => b.timestamp - a.timestamp)
       const { nextEvents, nextHotStockEvents, nextOtherStockEvents, nextSectorEvents } =
-        splitEvents(derivedTodayEvents, this.maxEvents)
+        splitEvents(derivedTodayEvents, this.maxEvents, tdxBlockCodeSet)
 
       if (nextEvents.length > 0) {
         this.events = nextEvents
@@ -264,6 +298,9 @@ export class HotStockEventMonitorService {
         otherStockEvents: [...this.otherStockEvents],
         sectorEvents: [...this.sectorEvents],
         watchedCodes,
+        tdxBlockCodes,
+        tdxBlockFiles: this.tdxBlockFiles.map(file => ({ ...file })),
+        selectedTdxBlockFiles: [...this.selectedTdxBlockFiles],
         error: this.error,
       }
     }
@@ -286,8 +323,42 @@ export class HotStockEventMonitorService {
     if (this.owners.size > 0) return
     if (!this.running) return
     refreshScheduler.stopTask(TASK_ID)
+    this.tdxRefreshGeneration++
+    this.tdxBlockPool.clear()
+    this.tdxBlockCodes = []
+    this.tdxBlockFiles = []
+    this.selectedTdxBlockFiles = []
     this.running = false
     this.notify()
+  }
+
+  async refreshTdxBlockFiles(options: { notify?: boolean } = {}): Promise<HotStockEventMonitorState> {
+    try {
+      const result = await this.tdxBlockPool.refreshFiles()
+      this.tdxBlockFiles = (result.files || []).map(file => ({ ...file }))
+      this.selectedTdxBlockFiles = [...(result.selectedFiles || [])]
+      this.tdxBlockError = null
+    } catch (error) {
+      this.tdxBlockError = getErrorMessage(error)
+    }
+    if (options.notify !== false) this.notify()
+    return this.getState()
+  }
+
+  async setSelectedTdxBlockFiles(files: readonly string[]): Promise<HotStockEventMonitorState> {
+    try {
+      const result = await this.tdxBlockPool.setSelectedFiles(files)
+      this.applyTdxBlockSnapshot(result)
+      const fileSnapshot = await this.tdxBlockPool.refreshFiles()
+      this.tdxBlockFiles = (fileSnapshot.files || []).map(file => ({ ...file }))
+      this.selectedTdxBlockFiles = [...(fileSnapshot.selectedFiles || [])]
+      this.tdxBlockError = null
+    } catch (error) {
+      this.tdxBlockError = getErrorMessage(error)
+    }
+    this.rebuildOtherStockEvents()
+    this.notify()
+    return this.getState()
   }
 
   private getWatchedCodes(): string[] {
@@ -297,6 +368,53 @@ export class HotStockEventMonitorService {
       if (code) codes.add(code)
     }
     return [...codes]
+  }
+
+  private async refreshTdxBlockCodes(generation: number): Promise<TdxBlockPoolRefreshResult> {
+    try {
+      const result = await this.tdxBlockPool.refresh({ apply: false })
+      const codes = [...new Set((result?.codes || []).map(normalizeHotStockCode).filter(Boolean))].sort()
+      if (generation !== this.tdxRefreshGeneration) {
+        return this.emptyTdxBlockSnapshot()
+      }
+      this.tdxBlockPool.applyCodes(codes)
+      return {
+        ...result,
+        codes,
+        files: (result.files || []).map(file => ({ ...file })),
+        selectedFiles: [...(result.selectedFiles || [])],
+      }
+    } catch {
+      return {
+        ...this.emptyTdxBlockSnapshot(),
+        codes: [...new Set((this.tdxBlockPool.getCodes() || []).map(normalizeHotStockCode).filter(Boolean))].sort(),
+      }
+    }
+  }
+
+  private emptyTdxBlockSnapshot(): TdxBlockPoolRefreshResult {
+    return {
+      codes: [],
+      files: [],
+      selectedFiles: [],
+      directory: '',
+      issueCount: 0,
+      lastLoadedAt: null,
+      error: null,
+    }
+  }
+
+  private applyTdxBlockSnapshot(result: TdxBlockPoolRefreshResult) {
+    this.tdxBlockCodes = [...new Set((result.codes || []).map(normalizeHotStockCode).filter(Boolean))].sort()
+    this.tdxBlockFiles = (result.files || []).map(file => ({ ...file }))
+    this.selectedTdxBlockFiles = [...(result.selectedFiles || [])]
+  }
+
+  private rebuildOtherStockEvents() {
+    const tdxBlockCodeSet = new Set(this.tdxBlockCodes)
+    this.otherStockEvents = this.events
+      .filter(event => event.category === 'stock' && !event.matchedHotStock && tdxBlockCodeSet.has(event.code))
+      .slice(0, this.maxEvents)
   }
 
   private notify() {

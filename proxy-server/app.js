@@ -20,6 +20,7 @@ import { registerNotificationRoutes } from './routes/notifications.js'
 import { registerOpeningSignalRoutes } from './routes/openingSignals.js'
 import { registerQuoteRoutes } from './routes/quotes.js'
 import { registerStartupCacheRoutes } from './routes/startupCache.js'
+import { registerTdxBlockRoutes } from './routes/tdxBlocks.js'
 import { registerTdxRoutes } from './routes/tdx.js'
 import { registerXuangubaoRoutes } from './routes/xuangubao.js'
 
@@ -77,6 +78,7 @@ export function createProxyApp(options = {}) {
   registerLocalVoiceRoutes(app, context)
   registerNotificationRoutes(app, context)
   registerOpeningSignalRoutes(app, context)
+  registerTdxBlockRoutes(app, context)
   registerTdxRoutes(app, context)
   registerMarketRoutes(app, context)
   registerXuangubaoRoutes(app, context)

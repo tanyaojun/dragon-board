@@ -1,11 +1,14 @@
 import { AppEvents, type Depth10Book, type QuotePatch, type TickTrade } from '@/types'
 import { EventManager } from '@/utils/eventManager'
 import { dataLayer } from '../DataLayer'
+import { realtimeSubscriptionRegistry } from '../realtime/RealtimeSubscriptionRegistry'
 import { webSocketService } from '../websocket'
 import { toLocalTradingDate } from '../snapshot/identity'
 import { summarizeMoneyFlowTicks } from './MoneyFlowEstimator'
 import { REALTIME_FLUSH_DELAY_MS } from './constants'
 import type { IntradayMoneyFlowStats } from './types'
+
+const REALTIME_OWNER = 'dataLoader.hotlist'
 
 export interface RealtimeQuoteCoordinatorOptions {
   getHotCodes: () => Set<string>
@@ -34,7 +37,7 @@ export class RealtimeQuoteCoordinator {
   }
 
   syncRealtimeSubscription() {
-    webSocketService.setHotPool(this.buildRealtimeSubscriptionCodes())
+    realtimeSubscriptionRegistry.setOwnerCodes(REALTIME_OWNER, this.buildRealtimeSubscriptionCodes())
   }
 
   isRealtimePrimaryHealthy(): boolean {
@@ -55,6 +58,7 @@ export class RealtimeQuoteCoordinator {
     this.intradayMoneyFlowStats.clear()
     this.intradayMoneyFlowTickKeys.clear()
     this.intradayMoneyFlowTickQueues.clear()
+    realtimeSubscriptionRegistry.clearOwner(REALTIME_OWNER)
   }
 
   private setupRealtimeFeed() {

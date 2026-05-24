@@ -26,6 +26,17 @@ function makeEvent(overrides: Partial<HotStockAbnormalEvent>): HotStockAbnormalE
   }
 }
 
+function makeTdxBlockPool(codes: string[] = []) {
+  return {
+    getCodes: vi.fn().mockReturnValue(codes),
+    refresh: vi.fn().mockResolvedValue({ codes }),
+    refreshFiles: vi.fn().mockResolvedValue({ codes, files: [], selectedFiles: [] }),
+    setSelectedFiles: vi.fn().mockResolvedValue({ codes, files: [], selectedFiles: [] }),
+    clear: vi.fn(),
+    applyCodes: vi.fn(),
+  }
+}
+
 describe('HotStockEventMonitorService', () => {
   afterEach(() => {
     refreshScheduler.stopTask('hotStockEvent.monitor')
@@ -65,9 +76,11 @@ describe('HotStockEventMonitorService', () => {
         attentionBoard: [],
       }),
     }
+    const tdxBlockPool = makeTdxBlockPool(['300001'])
     const service = new HotStockEventMonitorService({
       feed,
       dataLayer,
+      tdxBlockPool,
       now: () => Date.parse('2026-05-15T10:05:00+08:00'),
     })
 
@@ -104,6 +117,35 @@ describe('HotStockEventMonitorService', () => {
     expect(service.getState().latestHotStockAdded.map(event => event.id)).toEqual(['b', 'a'])
   })
 
+  it('uses TDX block codes for the second stock page instead of showing all non-hot stocks', async () => {
+    const feed = {
+      fetchEvents: vi.fn().mockResolvedValue([
+        makeEvent({ id: 'hot', code: '600001', timestamp: Date.parse('2026-05-15T09:40:00+08:00') }),
+        makeEvent({ id: 'tdx', code: '300001', timestamp: Date.parse('2026-05-15T10:02:00+08:00') }),
+        makeEvent({ id: 'outside', code: '688001', timestamp: Date.parse('2026-05-15T10:03:00+08:00') }),
+      ]),
+    }
+    const dataLayer = {
+      getStocks: vi.fn().mockReturnValue([{ code: '600001', name: '一号' }]),
+      getDragonReview: vi.fn().mockReturnValue(null),
+    }
+    const tdxBlockPool = makeTdxBlockPool(['300001'])
+    const service = new HotStockEventMonitorService({
+      feed,
+      dataLayer,
+      tdxBlockPool,
+      now: () => Date.parse('2026-05-15T10:05:00+08:00'),
+    })
+
+    const result = await service.refresh()
+
+    expect(result.hotStockEvents.map(event => event.id)).toEqual(['hot'])
+    expect(result.otherStockEvents.map(event => event.id)).toEqual(['tdx'])
+    expect(result.events.map(event => event.id)).toEqual(['outside', 'tdx', 'hot'])
+    expect(result.tdxBlockCodes).toEqual(['300001'])
+    expect(service.getState().tdxBlockCodes).toEqual(['300001'])
+  })
+
   it('preserves previous events when feed fails', async () => {
     const firstFeed = {
       fetchEvents: vi.fn().mockResolvedValue([
@@ -117,6 +159,7 @@ describe('HotStockEventMonitorService', () => {
     const service = new HotStockEventMonitorService({
       feed: firstFeed,
       dataLayer,
+      tdxBlockPool: makeTdxBlockPool(),
       now: () => Date.parse('2026-05-15T10:05:00+08:00'),
     })
 
@@ -161,6 +204,7 @@ describe('HotStockEventMonitorService', () => {
     const service = new HotStockEventMonitorService({
       feed,
       dataLayer,
+      tdxBlockPool: makeTdxBlockPool(),
       notifier,
       now: () => Date.parse('2026-05-15T10:05:00+08:00'),
     })
@@ -195,6 +239,7 @@ describe('HotStockEventMonitorService', () => {
     const service = new HotStockEventMonitorService({
       feed,
       dataLayer,
+      tdxBlockPool: makeTdxBlockPool(),
       notifier,
       now: () => Date.parse('2026-05-15T10:05:00+08:00'),
     })
@@ -222,9 +267,11 @@ describe('HotStockEventMonitorService', () => {
       getStocks: vi.fn().mockReturnValue([{ code: '002552', name: '宝鼎科技' }]),
       getDragonReview: vi.fn().mockReturnValue(null),
     }
+    const tdxBlockPool = makeTdxBlockPool(['600001'])
     const service = new HotStockEventMonitorService({
       feed,
       dataLayer,
+      tdxBlockPool,
       now: () => Date.parse('2026-05-22T09:31:00+08:00'),
     })
 
@@ -261,6 +308,7 @@ describe('HotStockEventMonitorService', () => {
     const service = new HotStockEventMonitorService({
       feed,
       dataLayer,
+      tdxBlockPool: makeTdxBlockPool(),
       now: () => Date.parse('2026-05-22T09:31:00+08:00'),
     })
 
@@ -304,6 +352,7 @@ describe('HotStockEventMonitorService', () => {
     const service = new HotStockEventMonitorService({
       feed,
       dataLayer,
+      tdxBlockPool: makeTdxBlockPool(),
       notifier,
       now: () => Date.parse('2026-05-15T10:05:00+08:00'),
     })
@@ -333,6 +382,7 @@ describe('HotStockEventMonitorService', () => {
     const service = new HotStockEventMonitorService({
       feed,
       dataLayer,
+      tdxBlockPool: makeTdxBlockPool(),
       intervalMs: 1_000,
       now: () => Date.parse('2026-05-15T10:05:00+08:00'),
     })
@@ -374,6 +424,7 @@ describe('HotStockEventMonitorService', () => {
     const service = new HotStockEventMonitorService({
       feed,
       dataLayer,
+      tdxBlockPool: makeTdxBlockPool(),
       intervalMs: 1_000,
       now: () => Date.parse('2026-05-15T10:05:00+08:00'),
     })
@@ -390,6 +441,137 @@ describe('HotStockEventMonitorService', () => {
     expect(feed.fetchEvents).toHaveBeenCalledTimes(1)
   })
 
+  it('clears the TDX block subscription only after the last event radar owner stops', () => {
+    const feed = {
+      fetchEvents: vi.fn().mockResolvedValue([]),
+    }
+    const dataLayer = {
+      getStocks: vi.fn().mockReturnValue([]),
+      getDragonReview: vi.fn().mockReturnValue(null),
+    }
+    const tdxBlockPool = makeTdxBlockPool()
+    const service = new HotStockEventMonitorService({
+      feed,
+      dataLayer,
+      tdxBlockPool,
+      intervalMs: 1_000,
+      now: () => Date.parse('2026-05-15T10:05:00+08:00'),
+    })
+
+    service.start('panel')
+    service.start('feishu')
+    service.stop('panel')
+    expect(tdxBlockPool.clear).not.toHaveBeenCalled()
+
+    service.stop('feishu')
+    expect(tdxBlockPool.clear).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not keep TDX block codes when the panel stops before a refresh completes', async () => {
+    let resolveRefresh: (value: { codes: string[] }) => void = () => {}
+    const refreshPromise = new Promise<{ codes: string[] }>((resolve) => {
+      resolveRefresh = resolve
+    })
+    const feed = {
+      fetchEvents: vi.fn().mockResolvedValue([
+        makeEvent({ id: 'tdx', code: '300001', timestamp: Date.parse('2026-05-15T10:02:00+08:00') }),
+      ]),
+    }
+    const dataLayer = {
+      getStocks: vi.fn().mockReturnValue([]),
+      getDragonReview: vi.fn().mockReturnValue(null),
+    }
+    const tdxBlockPool = {
+      ...makeTdxBlockPool(['300001']),
+      refresh: vi.fn().mockReturnValue(refreshPromise),
+    }
+    const service = new HotStockEventMonitorService({
+      feed,
+      dataLayer,
+      tdxBlockPool,
+      intervalMs: 1_000,
+      now: () => Date.parse('2026-05-15T10:05:00+08:00'),
+    })
+
+    service.start('panel')
+    const runningRefresh = service.refresh()
+    service.stop('panel')
+    resolveRefresh({ codes: ['300001'] })
+    await runningRefresh
+
+    expect(tdxBlockPool.clear).toHaveBeenCalledTimes(1)
+    expect(service.getState().tdxBlockCodes).toEqual([])
+    expect(service.getState().otherStockEvents).toEqual([])
+  })
+
+  it('updates monitor block file selection through the TDX block pool', async () => {
+    const feed = {
+      fetchEvents: vi.fn().mockResolvedValue([]),
+    }
+    const dataLayer = {
+      getStocks: vi.fn().mockReturnValue([]),
+      getDragonReview: vi.fn().mockReturnValue(null),
+    }
+    const tdxBlockPool = {
+      ...makeTdxBlockPool(),
+      setSelectedFiles: vi.fn().mockResolvedValue({
+        codes: ['603072'],
+        files: [{ name: '观察.blk', path: 'D:\\TDX\\观察.blk', stockCount: 1, issueCount: 0, selected: true }],
+        selectedFiles: ['D:\\TDX\\观察.blk'],
+      }),
+      refreshFiles: vi.fn().mockResolvedValue({
+        codes: ['603072'],
+        files: [
+          { name: 'ZB.blk', path: 'D:\\TDX\\ZB.blk', stockCount: 2, issueCount: 0, selected: false },
+          { name: '观察.blk', path: 'D:\\TDX\\观察.blk', stockCount: 1, issueCount: 0, selected: true },
+        ],
+        selectedFiles: ['D:\\TDX\\观察.blk'],
+      }),
+    }
+    const service = new HotStockEventMonitorService({
+      feed,
+      dataLayer,
+      tdxBlockPool,
+      now: () => Date.parse('2026-05-15T10:05:00+08:00'),
+    })
+
+    const state = await service.setSelectedTdxBlockFiles(['D:\\TDX\\观察.blk'])
+
+    expect(tdxBlockPool.setSelectedFiles).toHaveBeenCalledWith(['D:\\TDX\\观察.blk'])
+    expect(tdxBlockPool.refreshFiles).toHaveBeenCalled()
+    expect(state.tdxBlockCodes).toEqual(['603072'])
+    expect(state.selectedTdxBlockFiles).toEqual(['D:\\TDX\\观察.blk'])
+    expect(state.tdxBlockFiles.map(file => ({ name: file.name, selected: file.selected }))).toEqual([
+      { name: 'ZB.blk', selected: false },
+      { name: '观察.blk', selected: true },
+    ])
+  })
+
+  it('keeps the TDX block file loading error after a successful event refresh', async () => {
+    const feed = {
+      fetchEvents: vi.fn().mockResolvedValue([]),
+    }
+    const dataLayer = {
+      getStocks: vi.fn().mockReturnValue([]),
+      getDragonReview: vi.fn().mockReturnValue(null),
+    }
+    const tdxBlockPool = {
+      ...makeTdxBlockPool(),
+      refreshFiles: vi.fn().mockRejectedValue(new Error('tdx block dir missing')),
+    }
+    const service = new HotStockEventMonitorService({
+      feed,
+      dataLayer,
+      tdxBlockPool,
+      now: () => Date.parse('2026-05-15T10:05:00+08:00'),
+    })
+
+    const result = await service.refresh()
+
+    expect(result.ok).toBe(true)
+    expect(service.getState().error).toBe('tdx block dir missing')
+  })
+
   it('keeps feishu event radar polling active when the page is hidden', async () => {
     vi.useFakeTimers()
     vi.stubGlobal('document', { visibilityState: 'hidden' })
@@ -403,6 +585,7 @@ describe('HotStockEventMonitorService', () => {
     const service = new HotStockEventMonitorService({
       feed,
       dataLayer,
+      tdxBlockPool: makeTdxBlockPool(),
       intervalMs: 1_000,
       now: () => Date.parse('2026-05-15T10:05:00+08:00'),
     })

@@ -278,7 +278,9 @@ V4 已把桌面端 `TDX自选股` 接入为前日弱势上下文：当股票池�
 
 不建议第一版全市场高频扫，因为当前 `python-bridge` 是分批 `quotes(symbol=batch)`，全市场会带来延迟、截断和节点压力。用户真正关心的是早盘可操作性，候选池高质量比全市场覆盖更重要。
 
-网页端订阅约束：不要在异动雷达里直接抢占 `webSocketService.setHotPool()`。弱转强候选池必须通过统一订阅 owner 合并，或由 `RealtimeQuoteCoordinator/DataLoaderFacade` 合并主行情池、热榜池和弱转强候选池后统一下发，避免打开异动雷达覆盖主行情订阅。
+网页端订阅约束：不要在异动雷达里直接抢占 `webSocketService.setHotPool()`。网页端已新增统一订阅 owner 合并层：`RealtimeQuoteCoordinator` 使用 `dataLoader.hotlist` owner 注册热榜/主行情池，异动雷达的 `TDX自选股` 使用 `eventRadar.tdxBlock` owner 注册本机 `.blk` 股票池，合并后统一下发给 `python-bridge`，避免打开异动雷达覆盖主行情订阅。
+
+网页端 `TDX自选股` 数据来源：浏览器不直接读取本机文件系统，统一通过 proxy 的 `/api/tdx-blocks` 和 `/api/tdx-blocks/codes` 读取本机 `.blk`。proxy 优先复用桌面版异动精灵 `%APPDATA%\DragonBoard\YiDongJingLing\settings.json` 中的 `BlockDirectory` 和 `SelectedBlockFiles`；`TDX_BLOCK_DIR` 显式配置优先于 settings 目录，未配置时默认尝试 `D:\APP_SOFT\TDX\T0002\blocknew`。`.blk` 解析口径与桌面端一致：支持 7 位通达信代码归一为 6 位 A 股代码，过滤指数/板块/非法行，重复代码去重。异动雷达第二页已从旧的“其他个股”改为“TDX自选股”，只展示命中该 `.blk` 股票池的个股异动；第三页“监控板块”只展示桌面端已扫描到的 `.blk` 文件并允许勾选，勾选变化通过 `/api/tdx-blocks/selection` 写回桌面端 `SelectedBlockFiles`，再刷新 `TDX自选股` 订阅池。
 
 ## 信号定义
 

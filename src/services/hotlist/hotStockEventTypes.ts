@@ -7,6 +7,14 @@ export type HotStockEventCategory = 'stock' | 'sector'
 
 export const OPENING_WEAK_TO_STRONG_EVENT_TYPE = 12001
 
+export interface TdxBlockFileSummary {
+  name: string
+  path?: string
+  stockCount: number
+  issueCount: number
+  selected?: boolean
+}
+
 export type HotStockAbnormalEventType =
   | 10001
   | 10005
@@ -61,6 +69,9 @@ export interface HotStockEventRefreshResult {
   otherStockEvents: HotStockAbnormalEvent[]
   sectorEvents: HotStockAbnormalEvent[]
   watchedCodes: string[]
+  tdxBlockCodes: string[]
+  tdxBlockFiles: TdxBlockFileSummary[]
+  selectedTdxBlockFiles: string[]
   error?: string
 }
 
@@ -72,6 +83,9 @@ export interface HotStockEventMonitorState {
   latestAdded: HotStockAbnormalEvent[]
   latestHotStockAdded: HotStockAbnormalEvent[]
   watchedCodes: string[]
+  tdxBlockCodes: string[]
+  tdxBlockFiles: TdxBlockFileSummary[]
+  selectedTdxBlockFiles: string[]
   lastUpdate: number | null
   loading: boolean
   running: boolean

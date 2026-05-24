@@ -163,6 +163,7 @@ export function buildOpenApiDocument({ port = 3000 } = {}) {
       { name: 'cache', description: '启动快照和代理缓存' },
       { name: 'market', description: '市场情绪和涨停数据' },
       { name: 'tdx', description: '通达信兼容代理' },
+      { name: 'tdx-blocks', description: '本机通达信 .blk 自选股读取' },
       { name: 'opening-signals', description: '开盘竞价弱转强本地信号缓存' },
       { name: 'deprecated', description: '兼容旧接口' },
     ],
@@ -293,6 +294,34 @@ export function buildOpenApiDocument({ port = 3000 } = {}) {
           },
         },
       },
+      '/api/tdx-blocks': operation({
+        method: 'get',
+        tag: 'tdx-blocks',
+        summary: '列出本机通达信 .blk 文件',
+        description: '优先读取桌面版异动精灵 settings.json 中的 BlockDirectory 和 SelectedBlockFiles；TDX_BLOCK_DIR 显式配置优先于 settings 目录，未配置时尝试默认通达信目录。',
+      }),
+      '/api/tdx-blocks/codes': operation({
+        method: 'get',
+        tag: 'tdx-blocks',
+        summary: '读取本机通达信 .blk 股票代码',
+        description: '解析一个或多个 .blk 文件并返回去重后的 6 位 A 股代码；未传 files 时优先读取桌面版 settings.json 的 SelectedBlockFiles，settings 未选择时读取目录内全部 .blk。',
+        parameters: [
+          {
+            name: 'files',
+            in: 'query',
+            required: false,
+            schema: { type: 'string', example: '自选股.blk,观察.blk' },
+            description: '逗号分隔的 .blk 文件名或位于 TDX_BLOCK_DIR 内的绝对路径。',
+          },
+        ],
+      }),
+      '/api/tdx-blocks/selection': operation({
+        method: 'post',
+        tag: 'tdx-blocks',
+        summary: '保存本机通达信 .blk 勾选列表',
+        description: '校验传入文件位于当前 blocknew 目录后，写回桌面版异动精灵 settings.json 的 SelectedBlockFiles，并保留其它设置字段。',
+        requestBody: passthroughBody,
+      }),
       '/api/limitup/10jqka': operation({
         method: 'get',
         tag: 'market',
