@@ -24,6 +24,10 @@ function loadFixture(): OpeningWeakToStrongFixture {
 describe('OpeningWeakToStrongDetector', () => {
   it('matches the shared golden fixture cases', () => {
     const fixture = loadFixture()
+    const expectedHash = new OpeningWeakToStrongDetector(fixture.rules)
+      .evaluate(fixture.cases[0].quotes[0] as OpeningWeakToStrongQuote, null)
+      .configHash
+    expect(expectedHash).toBe('owts-08f44efb')
 
     for (const sample of fixture.cases) {
       const store = new OpeningAuctionStateStore(fixture.rules)
@@ -40,7 +44,7 @@ describe('OpeningWeakToStrongDetector', () => {
         expect(result?.triggered, sample.caseId).toBe(true)
         expect(result?.variant, sample.caseId).toBe(sample.expected.variant)
         expect(result?.confidence, sample.caseId).toBe(sample.expected.confidence)
-        expect(result?.configHash, sample.caseId).toBe('owts-2be0bbdb')
+        expect(result?.configHash, sample.caseId).toBe(expectedHash)
         expect(result?.score, sample.caseId).toBeGreaterThanOrEqual(sample.expected.scoreRange?.[0] ?? 0)
         expect(result?.score, sample.caseId).toBeLessThanOrEqual(sample.expected.scoreRange?.[1] ?? 100)
       } else {
@@ -110,6 +114,14 @@ describe('OpeningWeakToStrongDetector', () => {
 
     store.capture({
       ...quote,
+      at: '2026-05-22T09:20:05+08:00',
+      lastPrice: 9.7,
+      amount: 3_000_000,
+      capturedAt: '2026-05-22T09:20:05+08:00',
+      bridgeTs: '2026-05-22T09:20:05+08:00',
+    })
+    store.capture({
+      ...quote,
       at: '2026-05-22T09:25:05+08:00',
       lastPrice: 10.1,
       amount: 20_000_000,
@@ -142,6 +154,7 @@ describe('OpeningWeakToStrongDetector', () => {
     expect(result.variant).toBe('auction_late_lift')
     expect(result.auctionPct).toBeCloseTo(1)
     expect(result.auctionSampleCount).toBe(2)
+    expect(result.initialBaselineAt).toContain('09:20:05')
   })
 
   it('downgrades signals when current amount regresses below auction amount', () => {
@@ -150,12 +163,15 @@ describe('OpeningWeakToStrongDetector', () => {
     expect(sample).toBeTruthy()
     const store = new OpeningAuctionStateStore(fixture.rules)
     const detector = new OpeningWeakToStrongDetector(fixture.rules)
-    const [auction, open] = sample!.quotes as OpeningWeakToStrongQuote[]
+    const quotes = sample!.quotes as OpeningWeakToStrongQuote[]
+    const open = quotes[quotes.length - 1]
 
-    store.capture({
-      ...auction,
-      amount: 80_000_000,
-    })
+    for (const quote of quotes.slice(0, -1)) {
+      store.capture({
+        ...quote,
+        amount: isAuctionFinalQuote(quote) ? 80_000_000 : quote.amount,
+      })
+    }
     const result = detector.evaluate({
       ...open,
       amount: 60_000_000,
@@ -166,3 +182,7 @@ describe('OpeningWeakToStrongDetector', () => {
     expect(result.riskFlags.map(item => item.key)).toContain('amount_regressed')
   })
 })
+
+function isAuctionFinalQuote(quote: OpeningWeakToStrongQuote): boolean {
+  return quote.at.includes('09:25:')
+}

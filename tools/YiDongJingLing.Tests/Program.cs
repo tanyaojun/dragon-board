@@ -240,7 +240,7 @@ Run("Opening weak-to-strong config hash includes auction price-volume rules", ()
     var baseHash = new OpeningWeakToStrongDetector(baseRules).Evaluate(quote, null).ConfigHash;
     var changedHash = new OpeningWeakToStrongDetector(changedRules).Evaluate(quote, null).ConfigHash;
 
-    AssertEqual("owts-2be0bbdb", baseHash, "fixture config hash matches web");
+    AssertEqual("owts-08f44efb", baseHash, "fixture config hash matches web");
     AssertTrue(baseHash != changedHash, "auction price-volume rule hash changes");
 });
 
@@ -268,6 +268,14 @@ Run("Opening weak-to-strong detector profiles delayed older auction quotes witho
         0m,
         DateTimeOffset.Parse("2026-05-22T09:25:05+08:00"),
         DateTimeOffset.Parse("2026-05-22T09:25:05+08:00"));
+    var initial = first with
+    {
+        At = DateTimeOffset.Parse("2026-05-22T09:20:05+08:00"),
+        LastPrice = 9.7m,
+        Amount = 3_000_000m,
+        CapturedAt = DateTimeOffset.Parse("2026-05-22T09:20:05+08:00"),
+        BridgeTs = DateTimeOffset.Parse("2026-05-22T09:20:05+08:00"),
+    };
     var delayed = first with
     {
         At = DateTimeOffset.Parse("2026-05-22T09:24:55+08:00"),
@@ -286,6 +294,7 @@ Run("Opening weak-to-strong detector profiles delayed older auction quotes witho
         BridgeTs = DateTimeOffset.Parse("2026-05-22T09:30:06+08:00"),
     };
 
+    store.Capture(initial);
     store.Capture(first);
     store.Capture(delayed);
     var baseline = store.GetBaseline(open.Code, open.At);
@@ -295,6 +304,7 @@ Run("Opening weak-to-strong detector profiles delayed older auction quotes witho
     AssertTrue(result.Triggered, "delayed older auction quote can complete auction profile");
     AssertEqual("auction_late_lift", result.Variant, "delayed older auction profile variant");
     AssertEqual(2, result.AuctionSampleCount ?? 0, "delayed older auction sample count");
+    AssertEqual(DateTimeOffset.Parse("2026-05-22T09:20:05+08:00"), result.InitialBaselineAt, "delayed older initial baseline");
 });
 
 Run("Opening weak-to-strong detector downgrades amount regression", () =>
@@ -310,12 +320,18 @@ Run("Opening weak-to-strong detector downgrades amount regression", () =>
     var sample = document.RootElement.GetProperty("cases")
         .EnumerateArray()
         .First(item => item.GetProperty("caseId").GetString() == "002552-auction-gap-reversal");
-    var auction = OpeningWeakToStrongQuote.FromJson(sample.GetProperty("quotes")[0]) with { Amount = 80_000_000m };
-    var open = OpeningWeakToStrongQuote.FromJson(sample.GetProperty("quotes")[1]) with { Amount = 60_000_000m };
+    var quotes = sample.GetProperty("quotes")
+        .EnumerateArray()
+        .Select(OpeningWeakToStrongQuote.FromJson)
+        .ToArray();
+    var open = quotes[^1] with { Amount = 60_000_000m };
     var store = new OpeningAuctionStateStore(rules);
     var detector = new OpeningWeakToStrongDetector(rules);
 
-    store.Capture(auction);
+    foreach (var quote in quotes[..^1])
+    {
+        store.Capture(IsAuctionFinalQuote(quote) ? quote with { Amount = 80_000_000m } : quote);
+    }
     var result = detector.Evaluate(open, store.GetBaseline(open.Code, open.At));
 
     AssertTrue(result.Triggered, "amount regression still records candidate");
@@ -442,6 +458,8 @@ Run("Opening weak-to-strong detector rejects previous trading day baseline", () 
 {
     var rules = new OpeningWeakToStrongRules(
         "09:20:00",
+        "09:20:00",
+        "09:20:30",
         "09:24:50",
         "09:25:10",
         "09:30:00",
@@ -455,9 +473,14 @@ Run("Opening weak-to-strong detector rejects previous trading day baseline", () 
         2m,
         30_000_000m,
         20_000_000m,
+        5_000_000m,
         "09:24:00",
         1m,
         0.5m,
+        0.8m,
+        0.35m,
+        0.3m,
+        0.2m,
         0m,
         8_000_000m,
         5_000_000m,
@@ -974,6 +997,18 @@ Run("Opening signal reporter posts canonical payload to proxy", () =>
             4.98m,
             56_000_000m,
             50_000_000m,
+            DateTimeOffset.Parse("2026-05-22T09:20:05+08:00"),
+            35m,
+            -3.31m,
+            2_000_000m,
+            DateTimeOffset.Parse("2026-05-22T09:25:01+08:00"),
+            35.68m,
+            -1.44m,
+            6_000_000m,
+            1.87m,
+            2.0m,
+            0.07m,
+            true,
             null,
             "good",
             DateTimeOffset.Parse("2026-05-22T09:25:01+08:00"),
@@ -1041,6 +1076,18 @@ Run("Event export includes opening weak-to-strong replay fields", () =>
             4.98m,
             56_000_000m,
             50_000_000m,
+            DateTimeOffset.Parse("2026-05-22T09:20:05+08:00"),
+            35m,
+            -3.31m,
+            2_000_000m,
+            DateTimeOffset.Parse("2026-05-22T09:25:01+08:00"),
+            35.68m,
+            -1.44m,
+            6_000_000m,
+            1.87m,
+            2.0m,
+            0.07m,
+            true,
             6.2m,
             "good",
             DateTimeOffset.Parse("2026-05-22T09:25:01+08:00"),
@@ -1203,6 +1250,18 @@ static OpeningWeakToStrongSignal TestOpeningSignal(DateTimeOffset timestamp, boo
         4.5m,
         50_000_000m,
         45_000_000m,
+        DateTimeOffset.Parse("2026-05-22T09:20:05+08:00"),
+        9.8m,
+        -2m,
+        2_000_000m,
+        DateTimeOffset.Parse("2026-05-22T09:25:00+08:00"),
+        9.9m,
+        -1m,
+        5_000_000m,
+        1m,
+        1.5m,
+        0.2m,
+        true,
         null,
         "good",
         DateTimeOffset.Parse("2026-05-22T09:25:00+08:00"),
@@ -1225,6 +1284,12 @@ static OpeningWeakToStrongSignal TestOpeningSignal(DateTimeOffset timestamp, boo
         "owts-test",
         [],
         [new OpeningWeakToStrongRiskFlag("auction_coverage_low", "medium", -35m)]);
+}
+
+static bool IsAuctionFinalQuote(OpeningWeakToStrongQuote quote)
+{
+    return quote.At.ToLocalTime().TimeOfDay >= TimeSpan.Parse("09:25:00") &&
+        quote.At.ToLocalTime().TimeOfDay < TimeSpan.Parse("09:26:00");
 }
 
 static void InvokeHandleMessage(TdxBridgeClient client, string message)

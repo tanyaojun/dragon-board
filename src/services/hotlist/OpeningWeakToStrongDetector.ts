@@ -123,7 +123,6 @@ export class OpeningWeakToStrongDetector {
     const limitDistancePct = quote.limitUpPrice && quote.limitUpPrice > 0
       ? (quote.limitUpPrice - quote.lastPrice) / quote.limitUpPrice * 100
       : undefined
-    const amountOk = amount >= this.rules.minCurrentAmount || amountDelta >= this.rules.minAmountDelta
     const previousWeakScore = normalizeNumber(quote.previousWeakScore)
     const previousWeakPrecondition = previousWeakScore >= this.rules.previousWeakScoreMin
     const weakPrecondition =
@@ -131,7 +130,9 @@ export class OpeningWeakToStrongDetector {
       (officialOpenPct !== undefined && atMost(officialOpenPct, this.rules.auctionWeakMaxPct)) ||
       previousWeakPrecondition
 
-    if (!amountOk) return this.rejected(quote, baseline, 'opening_amount_too_small')
+    if (amount < this.rules.openingLiquidityMinAmount) {
+      return this.rejected(quote, baseline, 'opening_amount_too_small')
+    }
     if (officialOpen > 0 && quote.lastPrice < Math.max(quote.preClose, officialOpen * this.rules.openingSupportOpenRatio)) {
       return this.rejected(quote, baseline, 'opening_support_lost')
     }
@@ -145,16 +146,20 @@ export class OpeningWeakToStrongDetector {
     }
 
     const auctionProfile = baseline.auctionProfile
+    const hasAuctionProfile = Boolean(auctionProfile?.initialAt && auctionProfile.finalAt)
+    const priceVolumeConfirmed = auctionProfile?.priceVolumeConfirmed === true
+    const canStrongBroadcast = hasAuctionProfile && priceVolumeConfirmed
     let variant: OpeningWeakToStrongVariant | null = null
+    if (strongOpenCandidate && weakPrecondition) {
+      variant = 'strong_open_board_attempt'
+    }
     if (
+      !variant &&
       auctionProfile?.lateLiftConfirmed &&
       firstWindowPct >= this.rules.auctionLateLiftFirstWindowMinPct &&
       jumpPctPoint >= this.rules.auctionLateLiftJumpMinPctPoint
     ) {
       variant = 'auction_late_lift'
-    }
-    if (!variant && strongOpenCandidate && weakPrecondition) {
-      variant = 'strong_open_board_attempt'
     }
     if (
       !variant &&
@@ -174,6 +179,9 @@ export class OpeningWeakToStrongDetector {
       variant = 'low_open_red_reversal'
     }
     if (!variant) return this.rejected(quote, baseline, 'variant_not_matched')
+    if (hasAuctionProfile && !canStrongBroadcast && !hasOpeningCoreEvidence(auctionProfile)) {
+      return this.rejected(quote, baseline, 'auction_price_volume_core_missing')
+    }
 
     const factors = buildFactors({
       variant,
@@ -191,11 +199,18 @@ export class OpeningWeakToStrongDetector {
     })
     const quality = openingQuality(quote, baseline, this.rules)
     const riskKeys = [...(auctionProfile?.riskFlags || []), ...quality.riskKeys]
+    if (!hasAuctionProfile) {
+      if (!auctionProfile) riskKeys.push('auction_profile_missing')
+      else if (!auctionProfile.initialAt) riskKeys.push('auction_initial_baseline_missing')
+      else riskKeys.push('auction_profile_missing')
+    } else if (!priceVolumeConfirmed) {
+      riskKeys.push('auction_price_volume_unverified')
+    }
     if (baseline.auctionAmount <= 0) riskKeys.push('auction_amount_missing')
     else if (amount < baseline.auctionAmount) riskKeys.push('amount_regressed')
     if (volume > 0 && volume < this.rules.minCurrentVolume) riskKeys.push('low_liquidity_jump')
     const riskFlags = uniqueStrings(riskKeys).map(riskFlag)
-    const riskPenalty = riskFlags.reduce((sum, item) => sum + Math.abs(item.penalty), 0)
+    const riskPenalty = totalRiskPenalty(riskFlags)
     const score = clampScore(factors.reduce((sum, item) => sum + item.score, 0) - riskPenalty)
     const confidence =
       riskFlags.length > 0 ? 'watch' : score >= 80 ? 'critical' : score >= 60 ? 'strong' : 'watch'
@@ -218,6 +233,18 @@ export class OpeningWeakToStrongDetector {
       jumpPctPoint: round2(jumpPctPoint),
       amount,
       amountDelta,
+      initialBaselineAt: auctionProfile?.initialAt,
+      initialBaselinePrice: auctionProfile?.initialPrice,
+      initialBaselinePct: auctionProfile?.initialPct,
+      initialBaselineAmount: auctionProfile?.initialAmount,
+      finalBaselineAt: auctionProfile?.finalAt,
+      finalBaselinePrice: auctionProfile?.finalPrice,
+      finalBaselinePct: auctionProfile?.finalPct,
+      finalBaselineAmount: auctionProfile?.finalAmount,
+      auctionPriceLiftPctPoint: auctionProfile?.totalLiftPctPoint,
+      auctionAmountLiftRatio: auctionProfile?.amountLiftRatio,
+      lateAmountLiftRatio: auctionProfile?.lateAmountLiftRatio,
+      priceVolumeConfirmed,
       limitDistancePct: limitDistancePct === undefined ? undefined : round2(limitDistancePct),
       triggerAt: quote.at,
       baselineQuality: baseline.quality,
@@ -303,13 +330,13 @@ function buildFactors(input: {
     factors.push({
       key: 'auctionLateLift',
       value: round2(input.auctionProfile?.totalLiftPctPoint ?? 0),
-      threshold: input.rules.auctionLateLiftTotalMinPctPoint,
+      threshold: input.rules.auctionPriceLiftMinPctPoint,
       score: 24,
     })
     factors.push({
-      key: 'auctionLateAmount',
-      value: input.auctionProfile?.lateAmountDelta ?? 0,
-      threshold: input.rules.auctionLateLiftLateAmountDeltaMin,
+      key: 'auctionAmountLiftRatio',
+      value: round2(input.auctionProfile?.amountLiftRatio ?? 0),
+      threshold: input.rules.auctionAmountLiftMinRatio,
       score: 18,
     })
     factors.push({
@@ -362,8 +389,10 @@ function buildFactors(input: {
   factors.push({
     key: 'openingAmount',
     value: input.amount,
-    threshold: input.rules.minCurrentAmount,
-    score: input.amountDelta >= input.rules.minAmountDelta ? 18 : 12,
+    threshold: input.rules.openingLiquidityMinAmount,
+    score: input.amount >= input.rules.minCurrentAmount || input.amountDelta >= input.rules.minAmountDelta
+      ? 18
+      : 8,
   })
   factors.push({
     key: 'baselineQuality',
@@ -389,18 +418,44 @@ function buildFactors(input: {
 }
 
 function riskFlag(key: string): OpeningWeakToStrongRiskFlag {
-  const severity = key === 'baseline_missing'
+  const severity = key === 'baseline_missing' || key === 'auction_price_volume_core_missing'
     ? 'high'
     : key === 'price_lift_without_volume' ||
         key === 'volume_without_price_lift' ||
         key === 'auction_late_high_retreated' ||
         key === 'auction_coverage_low' ||
         key === 'quote_time_untrusted' ||
-        key === 'auction_time_untrusted'
+        key === 'auction_time_untrusted' ||
+        key === 'auction_profile_missing' ||
+        key === 'auction_initial_baseline_missing' ||
+        key === 'auction_price_volume_unverified' ||
+        key === 'auction_price_volume_desynced'
       ? 'medium'
       : 'medium'
-  const penalty = key === 'baseline_missing' ? -100 : -35
+  const penalty = key === 'baseline_missing' || key === 'auction_price_volume_core_missing' ? -100 : -35
   return { key, severity, penalty }
+}
+
+function totalRiskPenalty(riskFlags: OpeningWeakToStrongRiskFlag[]): number {
+  const groups = new Map<string, number>()
+  for (const flag of riskFlags) {
+    const group = riskPenaltyGroup(flag.key)
+    groups.set(group, Math.max(groups.get(group) || 0, Math.abs(flag.penalty)))
+  }
+  return [...groups.values()].reduce((sum, value) => sum + value, 0)
+}
+
+function riskPenaltyGroup(key: string): string {
+  if (
+    key === 'auction_price_volume_desynced' ||
+    key === 'auction_price_volume_unverified' ||
+    key === 'price_lift_without_volume' ||
+    key === 'volume_without_price_lift' ||
+    key === 'auction_late_high_retreated'
+  ) {
+    return 'auction_price_volume'
+  }
+  return key
 }
 
 function openingQuality(
@@ -439,41 +494,72 @@ function buildAuctionProfile(
     .sort((left, right) => secondsOfDay(left.at) - secondsOfDay(right.at))
   if (trusted.length < 2) return undefined
 
-  const first = trusted[0]
-  const final = trusted[trusted.length - 1]
+  const initial = trusted.find(item => isInWindow(item.at, rules.initialBaselineStart, rules.initialBaselineEnd))
+  const finalSamples = trusted.filter(item => isInWindow(item.at, rules.auctionStart, rules.auctionEnd))
+  const final = finalSamples[finalSamples.length - 1] || trusted[trusted.length - 1]
   const lateSamples = trusted.filter(item => secondsOfDay(item.at) >= secondsOfDay(rules.auctionLateLiftStart))
   const lateStart = lateSamples[0] || final
-  const startPct = pct(first.lastPrice, first.preClose)
+  const startPct = initial ? pct(initial.lastPrice, initial.preClose) : undefined
   const lateStartPct = pct(lateStart.lastPrice, lateStart.preClose)
   const finalPct = pct(final.lastPrice, final.preClose)
   const highPct = Math.max(...trusted.map(item => pct(item.lastPrice, item.preClose)))
-  const totalLiftPctPoint = finalPct - startPct
+  const totalLiftPctPoint = startPct === undefined ? undefined : finalPct - startPct
   const lateLiftPctPoint = finalPct - lateStartPct
-  const amountDelta = normalizeNumber(final.amount) - normalizeNumber(first.amount)
+  const initialAmount = initial ? normalizeNumber(initial.amount) : undefined
+  const finalAmount = normalizeNumber(final.amount)
+  const lateStartAmount = normalizeNumber(lateStart.amount)
+  const amountDelta = initialAmount === undefined ? undefined : finalAmount - initialAmount
   const lateAmountDelta = normalizeNumber(final.amount) - normalizeNumber(lateStart.amount)
-  const totalPriceLifted = meets(totalLiftPctPoint, rules.auctionLateLiftTotalMinPctPoint)
-  const latePriceLifted = meets(lateLiftPctPoint, rules.auctionLateLiftLateMinPctPoint)
-  const totalAmountExpanded = meets(amountDelta, rules.auctionLateLiftAmountDeltaMin)
-  const lateAmountExpanded = meets(lateAmountDelta, rules.auctionLateLiftLateAmountDeltaMin)
+  const amountLiftRatio = ratioFromBase(amountDelta, initialAmount)
+  const lateAmountLiftRatio = ratioFromBase(lateAmountDelta, lateStartAmount)
+  const totalPriceLifted =
+    totalLiftPctPoint !== undefined && meets(totalLiftPctPoint, rules.auctionPriceLiftMinPctPoint)
+  const latePriceLifted = meets(lateLiftPctPoint, rules.auctionLatePriceLiftMinPctPoint)
+  const totalAmountExpanded =
+    amountLiftRatio !== undefined && meets(amountLiftRatio, rules.auctionAmountLiftMinRatio)
+  const lateAmountExpanded =
+    lateAmountLiftRatio !== undefined && meets(lateAmountLiftRatio, rules.auctionLateAmountLiftMinRatio)
   const priceLifted = totalPriceLifted || latePriceLifted
   const amountExpanded = totalAmountExpanded || lateAmountExpanded
   const highRetreated = meets(highPct - finalPct, rules.auctionLateHighRetreatPctPoint)
   const riskFlags: string[] = []
+  if (initial && priceLifted && !amountExpanded) riskFlags.push('auction_price_volume_desynced')
+  if (initial && amountExpanded && !priceLifted) riskFlags.push('auction_price_volume_desynced')
   if (priceLifted && !amountExpanded) riskFlags.push('price_lift_without_volume')
   if (amountExpanded && !priceLifted) riskFlags.push('volume_without_price_lift')
   if (highRetreated) riskFlags.push('auction_late_high_retreated')
 
   return {
     sampleCount: trusted.length,
-    startPct: round2(startPct),
+    initialAt: initial?.at,
+    initialPrice: initial?.lastPrice,
+    initialPct: startPct === undefined ? undefined : round2(startPct),
+    initialAmount,
+    lateAt: lateStart.at,
+    latePrice: lateStart.lastPrice,
+    lateAmount: lateStartAmount,
+    finalAt: final.at,
+    finalPrice: final.lastPrice,
+    finalAmount,
+    startPct: startPct === undefined ? undefined : round2(startPct),
     lateStartPct: round2(lateStartPct),
     finalPct: round2(finalPct),
     highPct: round2(highPct),
-    totalLiftPctPoint: round2(totalLiftPctPoint),
+    totalLiftPctPoint: totalLiftPctPoint === undefined ? undefined : round2(totalLiftPctPoint),
     lateLiftPctPoint: round2(lateLiftPctPoint),
     amountDelta,
     lateAmountDelta,
+    amountLiftRatio: amountLiftRatio === undefined ? undefined : round2(amountLiftRatio),
+    lateAmountLiftRatio: lateAmountLiftRatio === undefined ? undefined : round2(lateAmountLiftRatio),
+    priceVolumeConfirmed:
+      Boolean(initial) &&
+      totalPriceLifted &&
+      totalAmountExpanded &&
+      latePriceLifted &&
+      lateAmountExpanded &&
+      !highRetreated,
     lateLiftConfirmed:
+      Boolean(initial) &&
       totalPriceLifted &&
       totalAmountExpanded &&
       latePriceLifted &&
@@ -482,6 +568,19 @@ function buildAuctionProfile(
       finalPct >= rules.auctionLateLiftFinalMinPct,
     riskFlags,
   }
+}
+
+function hasOpeningCoreEvidence(profile: OpeningAuctionPriceVolumeProfile | undefined): boolean {
+  if (!profile) return false
+  if (!profile.initialAt || !profile.finalAt) return false
+  return profile.priceVolumeConfirmed ||
+    (profile.totalLiftPctPoint ?? 0) >= 0.5 ||
+    (profile.amountLiftRatio ?? 0) >= 0.35
+}
+
+function ratioFromBase(delta: number | undefined, base: number | undefined): number | undefined {
+  if (delta === undefined || base === undefined || base <= 0) return undefined
+  return delta / base
 }
 
 function countAuctionBaselineSamples(samples: OpeningWeakToStrongQuote[], rules: OpeningWeakToStrongRules): number {

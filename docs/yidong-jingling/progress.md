@@ -1,5 +1,46 @@
 # 异动精灵 V1 进度记录
 
+## 2026-05-24 V5 竞价弱转强实现落地
+
+- **目标：** 按 V5 方案把竞价弱转强从固定成交额阈值驱动，改为 `09:20-09:25` 不可撤单阶段双基线和量价协同驱动。
+- **改动：**
+  - 共享 fixture 增加 V5 强播、降级、拒绝样例，并为保留强信号的旧样例补齐 `09:20/09:24/09:25` 量价过程。
+  - TS/C# `OpeningAuctionStateStore` 显式输出 `09:20` 初始基线、`09:24` 临门基线、`09:25` 确定基线。
+  - `minCurrentAmount/minAmountDelta` 不再硬拒绝强播；新增 `openingLiquidityMinAmount=500万` 最低流动性保护，旧阈值保留为评分增强。
+  - `auction_late_lift` 改用相对价格抬升、相对成交额放大和临门确认；新增 `auctionAmountLiftRatio/lateAmountLiftRatio/priceVolumeConfirmed` 等复盘字段。
+  - 缺竞价画像降级为 `watch`，缺 09:20 初始基线标记风险；有完整画像但无量价核心时拒绝为 `auction_price_volume_core_missing`。
+  - V5 规则指纹更新为 `owts-08f44efb`，TS/C# hash 字段集合同步。
+- **验证：**
+  - RED：`pnpm exec vitest run src/services/hotlist/__tests__/OpeningWeakToStrongDetector.test.ts` 先失败于 V5 新口径。
+  - `pnpm exec vitest run src/services/hotlist/__tests__/OpeningWeakToStrongDetector.test.ts src/services/hotlist/__tests__/OpeningRealtimeEventBuffer.test.ts src/services/hotlist/__tests__/OpeningRealtimeEventBridge.test.ts`：3 files / 13 tests passed。
+  - `dotnet run --project tools\YiDongJingLing.Tests\YiDongJingLing.Tests.csproj`：All YiDongJingLing tests passed。
+  - `pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false`：通过。
+  - `dotnet build tools\YiDongJingLing\YiDongJingLing.csproj -c Release`：通过。
+  - `node --test proxy-server\__tests__\openingSignals.test.mjs proxy-server\__tests__\docs.test.mjs`：8 tests passed。
+  - `pnpm build`：通过。
+- **复核修正：**
+  - 只读 code review 发现 `HasOpeningCoreEvidence` 使用绝对值会把下跌/缩量误判为核心证据；已改为只接受正向抬升/放量，并补 `v5-negative-auction-core-rejected`。
+  - 复核发现 `priceVolumeConfirmed` 未强制 `09:24-09:25` 临门确认；已纳入临门价格和相对放量确认，并补 `v5-total-confirmed-without-late-confirmation-downgraded`。
+  - 复核后重跑 TS opening 链路、桌面测试和类型检查均通过。
+
+## 2026-05-24 V5 竞价弱转强交叉评审和计划
+
+- **目标：** 按用户要求，在动代码前安排 Agent 交叉评审 V5 方案和实施计划，重点解决“固定成交额阈值过于保守，强播应更看重 09:20-09:25 量价关系抬升”的规则问题。
+- **使用流程：**
+  - 使用 `planning-with-files` 继续把方案、发现和进度落在 `docs/yidong-jingling/`。
+  - 使用 `superpowers:dispatching-parallel-agents` 安排三个只读 Agent 并行评审：规则口径、实现影响、测试验收。
+  - 暂停生产代码修改，先完成 V5 方案和任务计划沉淀。
+- **评审结论：**
+  - V5 不需要重写检测器，应把现有 `auctionProfile` 升级为显式 `09:20` 初始基线 + `09:25` 确定基线。
+  - `minCurrentAmount=3000万`、`minAmountDelta=2000万`、`auctionLateLiftAmountDeltaMin=800万`、`auctionLateLiftLateAmountDeltaMin=500万` 不再作为强播核心，只做最低流动性保护、风险或评分增强。
+  - 强播核心改为不可撤单阶段量价协同、临门确认、09:25 不明显回落、09:30-09:35 开盘承接。
+  - V5 实现必须先补共享 fixture RED 用例，再同步 TS/C# 检测器、hash、导出和文档。
+- **已更新：**
+  - `docs/yidong-jingling/opening-weak-to-strong-plan.md`
+  - `docs/yidong-jingling/task_plan.md`
+  - `docs/yidong-jingling/findings.md`
+- **验证：** 方案评审和文档阶段，未修改生产代码，未运行测试。
+
 ## 2026-05-24 异动规则文档和设置页注解
 
 - **目标：** 将所有桌面端 L1 异动类型的判断和计算逻辑沉淀为文档，并在设置页“异动类型”列表的事件名后展示简要规则注解。

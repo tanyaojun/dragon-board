@@ -6,6 +6,8 @@ namespace YiDongJingLing.Events;
 
 public sealed record OpeningWeakToStrongRules(
     string AuctionTrendStart,
+    string InitialBaselineStart,
+    string InitialBaselineEnd,
     string AuctionStart,
     string AuctionEnd,
     string DetectStart,
@@ -19,9 +21,14 @@ public sealed record OpeningWeakToStrongRules(
     decimal NearLimitDistancePct,
     decimal MinCurrentAmount,
     decimal MinAmountDelta,
+    decimal OpeningLiquidityMinAmount,
     string AuctionLateLiftStart,
     decimal AuctionLateLiftTotalMinPctPoint,
     decimal AuctionLateLiftLateMinPctPoint,
+    decimal AuctionPriceLiftMinPctPoint,
+    decimal AuctionAmountLiftMinRatio,
+    decimal AuctionLatePriceLiftMinPctPoint,
+    decimal AuctionLateAmountLiftMinRatio,
     decimal AuctionLateLiftFinalMinPct,
     decimal AuctionLateLiftAmountDeltaMin,
     decimal AuctionLateLiftLateAmountDeltaMin,
@@ -38,6 +45,8 @@ public sealed record OpeningWeakToStrongRules(
     {
         return new OpeningWeakToStrongRules(
             GetString(element, "auctionTrendStart"),
+            GetStringOrDefault(element, "initialBaselineStart", "09:20:00"),
+            GetStringOrDefault(element, "initialBaselineEnd", "09:20:30"),
             GetString(element, "auctionStart"),
             GetString(element, "auctionEnd"),
             GetString(element, "detectStart"),
@@ -51,9 +60,14 @@ public sealed record OpeningWeakToStrongRules(
             GetDecimal(element, "nearLimitDistancePct"),
             GetDecimal(element, "minCurrentAmount"),
             GetDecimal(element, "minAmountDelta"),
+            GetDecimalOrDefault(element, "openingLiquidityMinAmount", 5_000_000m),
             GetString(element, "auctionLateLiftStart"),
             GetDecimal(element, "auctionLateLiftTotalMinPctPoint"),
             GetDecimal(element, "auctionLateLiftLateMinPctPoint"),
+            GetDecimalOrDefault(element, "auctionPriceLiftMinPctPoint", 0.8m),
+            GetDecimalOrDefault(element, "auctionAmountLiftMinRatio", 0.35m),
+            GetDecimalOrDefault(element, "auctionLatePriceLiftMinPctPoint", 0.3m),
+            GetDecimalOrDefault(element, "auctionLateAmountLiftMinRatio", 0.2m),
             GetDecimal(element, "auctionLateLiftFinalMinPct"),
             GetDecimal(element, "auctionLateLiftAmountDeltaMin"),
             GetDecimal(element, "auctionLateLiftLateAmountDeltaMin"),
@@ -70,6 +84,11 @@ public sealed record OpeningWeakToStrongRules(
     private static string GetString(JsonElement element, string name)
     {
         return element.GetProperty(name).GetString() ?? "";
+    }
+
+    private static string GetStringOrDefault(JsonElement element, string name, string fallback)
+    {
+        return element.TryGetProperty(name, out var property) ? property.GetString() ?? fallback : fallback;
     }
 
     private static decimal GetDecimal(JsonElement element, string name)
@@ -208,6 +227,16 @@ public sealed record OpeningWeakToStrongBaseline(
 
 public sealed record OpeningAuctionPriceVolumeProfile(
     int SampleCount,
+    DateTimeOffset? InitialAt,
+    decimal? InitialPrice,
+    decimal? InitialPct,
+    decimal? InitialAmount,
+    DateTimeOffset? LateAt,
+    decimal? LatePrice,
+    decimal? LateAmount,
+    DateTimeOffset? FinalAt,
+    decimal? FinalPrice,
+    decimal? FinalAmount,
     decimal? StartPct,
     decimal? LateStartPct,
     decimal? FinalPct,
@@ -216,6 +245,9 @@ public sealed record OpeningAuctionPriceVolumeProfile(
     decimal? LateLiftPctPoint,
     decimal? AmountDelta,
     decimal? LateAmountDelta,
+    decimal? AmountLiftRatio,
+    decimal? LateAmountLiftRatio,
+    bool PriceVolumeConfirmed,
     bool LateLiftConfirmed,
     IReadOnlyList<string> RiskFlags);
 
@@ -248,6 +280,18 @@ public sealed record OpeningWeakToStrongResult(
     decimal? JumpPctPoint,
     decimal Amount,
     decimal? AmountDelta,
+    DateTimeOffset? InitialBaselineAt,
+    decimal? InitialBaselinePrice,
+    decimal? InitialBaselinePct,
+    decimal? InitialBaselineAmount,
+    DateTimeOffset? FinalBaselineAt,
+    decimal? FinalBaselinePrice,
+    decimal? FinalBaselinePct,
+    decimal? FinalBaselineAmount,
+    decimal? AuctionPriceLiftPctPoint,
+    decimal? AuctionAmountLiftRatio,
+    decimal? LateAmountLiftRatio,
+    bool? PriceVolumeConfirmed,
     decimal? LimitDistancePct,
     DateTimeOffset TriggerAt,
     string BaselineQuality,
@@ -293,6 +337,18 @@ public sealed record OpeningWeakToStrongSignal(
     decimal JumpPctPoint,
     decimal Amount,
     decimal AmountDelta,
+    DateTimeOffset? InitialBaselineAt,
+    decimal? InitialBaselinePrice,
+    decimal? InitialBaselinePct,
+    decimal? InitialBaselineAmount,
+    DateTimeOffset? FinalBaselineAt,
+    decimal? FinalBaselinePrice,
+    decimal? FinalBaselinePct,
+    decimal? FinalBaselineAmount,
+    decimal? AuctionPriceLiftPctPoint,
+    decimal? AuctionAmountLiftRatio,
+    decimal? LateAmountLiftRatio,
+    bool? PriceVolumeConfirmed,
     decimal? LimitDistancePct,
     string BaselineQuality,
     DateTimeOffset? AuctionCapturedAt,
@@ -432,6 +488,11 @@ public sealed class OpeningAuctionStateStore
 
     private static bool Meets(decimal value, decimal threshold) => value + 0.000001m >= threshold;
 
+    private static decimal? RatioFromBase(decimal? delta, decimal? baseline)
+    {
+        return delta.HasValue && baseline.HasValue && baseline.Value > 0m ? delta.Value / baseline.Value : null;
+    }
+
     private static OpeningAuctionPriceVolumeProfile? BuildAuctionProfile(
         IReadOnlyList<OpeningWeakToStrongQuote> samples,
         OpeningWeakToStrongRules rules)
@@ -443,41 +504,68 @@ public sealed class OpeningAuctionStateStore
             .ToArray();
         if (trusted.Length < 2) return null;
 
-        var first = trusted[0];
-        var final = trusted[^1];
+        var initial = trusted.FirstOrDefault(item => IsInWindow(item.At, rules.InitialBaselineStart, rules.InitialBaselineEnd));
+        var finalSamples = trusted.Where(item => IsInWindow(item.At, rules.AuctionStart, rules.AuctionEnd)).ToArray();
+        var final = finalSamples.Length > 0 ? finalSamples[^1] : trusted[^1];
         var lateStartTime = TimeSpan.Parse(rules.AuctionLateLiftStart);
         var lateStart = trusted.FirstOrDefault(item => item.At.ToLocalTime().TimeOfDay >= lateStartTime) ?? final;
-        var startPct = Pct(first.LastPrice, first.PreClose);
+        decimal? startPct = initial is null ? null : Pct(initial.LastPrice, initial.PreClose);
         var lateStartPct = Pct(lateStart.LastPrice, lateStart.PreClose);
         var finalPct = Pct(final.LastPrice, final.PreClose);
         var highPct = trusted.Max(item => Pct(item.LastPrice, item.PreClose));
-        var totalLiftPctPoint = finalPct - startPct;
+        decimal? totalLiftPctPoint = startPct.HasValue ? finalPct - startPct.Value : null;
         var lateLiftPctPoint = finalPct - lateStartPct;
-        var amountDelta = final.Amount - first.Amount;
+        decimal? initialAmount = initial?.Amount;
+        var finalAmount = final.Amount;
+        var lateStartAmount = lateStart.Amount;
+        decimal? amountDelta = initialAmount.HasValue ? finalAmount - initialAmount.Value : null;
         var lateAmountDelta = final.Amount - lateStart.Amount;
-        var totalPriceLifted = Meets(totalLiftPctPoint, rules.AuctionLateLiftTotalMinPctPoint);
-        var latePriceLifted = Meets(lateLiftPctPoint, rules.AuctionLateLiftLateMinPctPoint);
-        var totalAmountExpanded = Meets(amountDelta, rules.AuctionLateLiftAmountDeltaMin);
-        var lateAmountExpanded = Meets(lateAmountDelta, rules.AuctionLateLiftLateAmountDeltaMin);
+        var amountLiftRatio = RatioFromBase(amountDelta, initialAmount);
+        var lateAmountLiftRatio = RatioFromBase(lateAmountDelta, lateStartAmount);
+        var totalPriceLifted = totalLiftPctPoint.HasValue && Meets(totalLiftPctPoint.Value, rules.AuctionPriceLiftMinPctPoint);
+        var latePriceLifted = Meets(lateLiftPctPoint, rules.AuctionLatePriceLiftMinPctPoint);
+        var totalAmountExpanded = amountLiftRatio.HasValue && Meets(amountLiftRatio.Value, rules.AuctionAmountLiftMinRatio);
+        var lateAmountExpanded = lateAmountLiftRatio.HasValue && Meets(lateAmountLiftRatio.Value, rules.AuctionLateAmountLiftMinRatio);
         var priceLifted = totalPriceLifted || latePriceLifted;
         var amountExpanded = totalAmountExpanded || lateAmountExpanded;
         var highRetreated = Meets(highPct - finalPct, rules.AuctionLateHighRetreatPctPoint);
         var riskFlags = new List<string>();
+        if (initial is not null && priceLifted && !amountExpanded) riskFlags.Add("auction_price_volume_desynced");
+        if (initial is not null && amountExpanded && !priceLifted) riskFlags.Add("auction_price_volume_desynced");
         if (priceLifted && !amountExpanded) riskFlags.Add("price_lift_without_volume");
         if (amountExpanded && !priceLifted) riskFlags.Add("volume_without_price_lift");
         if (highRetreated) riskFlags.Add("auction_late_high_retreated");
 
         return new OpeningAuctionPriceVolumeProfile(
             trusted.Length,
-            Round2(startPct),
+            initial?.At,
+            initial?.LastPrice,
+            startPct.HasValue ? Round2(startPct.Value) : null,
+            initialAmount,
+            lateStart.At,
+            lateStart.LastPrice,
+            lateStartAmount,
+            final.At,
+            final.LastPrice,
+            finalAmount,
+            startPct.HasValue ? Round2(startPct.Value) : null,
             Round2(lateStartPct),
             Round2(finalPct),
             Round2(highPct),
-            Round2(totalLiftPctPoint),
+            totalLiftPctPoint.HasValue ? Round2(totalLiftPctPoint.Value) : null,
             Round2(lateLiftPctPoint),
             amountDelta,
             lateAmountDelta,
-            totalPriceLifted &&
+            amountLiftRatio.HasValue ? Round2(amountLiftRatio.Value) : null,
+            lateAmountLiftRatio.HasValue ? Round2(lateAmountLiftRatio.Value) : null,
+            initial is not null &&
+                totalPriceLifted &&
+                totalAmountExpanded &&
+                latePriceLifted &&
+                lateAmountExpanded &&
+                !highRetreated,
+            initial is not null &&
+                totalPriceLifted &&
                 totalAmountExpanded &&
                 latePriceLifted &&
                 lateAmountExpanded &&
@@ -538,7 +626,6 @@ public sealed class OpeningWeakToStrongDetector
         var limitDistancePct = quote.LimitUpPrice > 0m
             ? (quote.LimitUpPrice - quote.LastPrice) / quote.LimitUpPrice * 100m
             : (decimal?)null;
-        var amountOk = quote.Amount >= _rules.MinCurrentAmount || amountDelta >= _rules.MinAmountDelta;
         var previousWeakScore = quote.PreviousWeakScore ?? 0m;
         var previousWeakPrecondition = previousWeakScore >= _rules.PreviousWeakScoreMin;
         var weakPrecondition =
@@ -546,7 +633,8 @@ public sealed class OpeningWeakToStrongDetector
             (officialOpenPct.HasValue && officialOpenPct.Value <= _rules.AuctionWeakMaxPct) ||
             previousWeakPrecondition;
 
-        if (!amountOk) return Rejected(quote, baseline, "opening_amount_too_small");
+        if (quote.Amount < _rules.OpeningLiquidityMinAmount)
+            return Rejected(quote, baseline, "opening_amount_too_small");
         if (quote.Open > 0m && quote.LastPrice < Math.Max(quote.PreClose, quote.Open * _rules.OpeningSupportOpenRatio))
             return Rejected(quote, baseline, "opening_support_lost");
 
@@ -559,15 +647,18 @@ public sealed class OpeningWeakToStrongDetector
 
         string? variant = null;
         var auctionProfile = baseline.AuctionProfile;
-        if (auctionProfile is { LateLiftConfirmed: true } &&
+        var hasAuctionProfile = auctionProfile?.InitialAt is not null && auctionProfile.FinalAt is not null;
+        var priceVolumeConfirmed = auctionProfile?.PriceVolumeConfirmed == true;
+        var canStrongBroadcast = hasAuctionProfile && priceVolumeConfirmed;
+        if (strongOpenCandidate && weakPrecondition)
+        {
+            variant = "strong_open_board_attempt";
+        }
+        else if (auctionProfile is { LateLiftConfirmed: true } &&
             firstWindowPct >= _rules.AuctionLateLiftFirstWindowMinPct &&
             jumpPctPoint >= _rules.AuctionLateLiftJumpMinPctPoint)
         {
             variant = "auction_late_lift";
-        }
-        else if (strongOpenCandidate && weakPrecondition)
-        {
-            variant = "strong_open_board_attempt";
         }
         else if (auctionPct <= _rules.AuctionWeakMaxPct &&
             jumpPctPoint >= _rules.AuctionGapJumpMinPctPoint &&
@@ -583,10 +674,22 @@ public sealed class OpeningWeakToStrongDetector
         }
 
         if (variant is null) return Rejected(quote, baseline, "variant_not_matched");
+        if (hasAuctionProfile && !canStrongBroadcast && !HasOpeningCoreEvidence(auctionProfile))
+            return Rejected(quote, baseline, "auction_price_volume_core_missing");
 
         var quality = OpeningQuality(quote, baseline);
         var riskKeys = new List<string>(auctionProfile?.RiskFlags ?? []);
         riskKeys.AddRange(quality.RiskKeys);
+        if (!hasAuctionProfile)
+        {
+            if (auctionProfile is null) riskKeys.Add("auction_profile_missing");
+            else if (auctionProfile.InitialAt is null) riskKeys.Add("auction_initial_baseline_missing");
+            else riskKeys.Add("auction_profile_missing");
+        }
+        else if (!priceVolumeConfirmed)
+        {
+            riskKeys.Add("auction_price_volume_unverified");
+        }
         if (baseline.AuctionAmount <= 0m) riskKeys.Add("auction_amount_missing");
         else if (quote.Amount < baseline.AuctionAmount) riskKeys.Add("amount_regressed");
         if (quote.Volume > 0m && quote.Volume < _rules.MinCurrentVolume) riskKeys.Add("low_liquidity_jump");
@@ -602,7 +705,7 @@ public sealed class OpeningWeakToStrongDetector
             previousWeakScore,
             quote.PreviousWeakSource);
         var riskFlags = riskKeys.Distinct(StringComparer.Ordinal).Select(RiskFlag).ToArray();
-        var riskPenalty = riskFlags.Sum(item => Math.Abs(item.Penalty));
+        var riskPenalty = TotalRiskPenalty(riskFlags);
         var score = ClampScore(factors.Sum(item => item.Score) - riskPenalty);
         var confidence = riskFlags.Length > 0
             ? "watch"
@@ -625,6 +728,18 @@ public sealed class OpeningWeakToStrongDetector
             Round2(jumpPctPoint),
             quote.Amount,
             amountDelta,
+            auctionProfile?.InitialAt,
+            auctionProfile?.InitialPrice,
+            auctionProfile?.InitialPct,
+            auctionProfile?.InitialAmount,
+            auctionProfile?.FinalAt,
+            auctionProfile?.FinalPrice,
+            auctionProfile?.FinalPct,
+            auctionProfile?.FinalAmount,
+            auctionProfile?.TotalLiftPctPoint,
+            auctionProfile?.AmountLiftRatio,
+            auctionProfile?.LateAmountLiftRatio,
+            priceVolumeConfirmed,
             limitDistancePct.HasValue ? Round2(limitDistancePct.Value) : null,
             quote.At,
             baseline.Quality,
@@ -676,6 +791,18 @@ public sealed class OpeningWeakToStrongDetector
             quote.Amount,
             null,
             null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
             quote.At,
             baseline?.Quality ?? "missing",
             baseline?.CapturedAt,
@@ -717,8 +844,8 @@ public sealed class OpeningWeakToStrongDetector
         var factors = new List<OpeningWeakToStrongFactor>();
         if (variant == "auction_late_lift")
         {
-            factors.Add(new("auctionLateLift", Round2(auctionProfile?.TotalLiftPctPoint ?? 0m), _rules.AuctionLateLiftTotalMinPctPoint, 24m));
-            factors.Add(new("auctionLateAmount", auctionProfile?.LateAmountDelta ?? 0m, _rules.AuctionLateLiftLateAmountDeltaMin, 18m));
+            factors.Add(new("auctionLateLift", Round2(auctionProfile?.TotalLiftPctPoint ?? 0m), _rules.AuctionPriceLiftMinPctPoint, 24m));
+            factors.Add(new("auctionAmountLiftRatio", Round2(auctionProfile?.AmountLiftRatio ?? 0m), _rules.AuctionAmountLiftMinRatio, 18m));
             factors.Add(new("openStrength", Round2(firstWindowPct), _rules.AuctionLateLiftFirstWindowMinPct, 18m));
         }
         else if (variant == "strong_open_board_attempt")
@@ -737,7 +864,11 @@ public sealed class OpeningWeakToStrongDetector
             factors.Add(new("turnRed", Round2(firstWindowPct), _rules.LowOpenRedFirstWindowMinPct, 12m));
         }
 
-        factors.Add(new("openingAmount", amount, _rules.MinCurrentAmount, amountDelta >= _rules.MinAmountDelta ? 18m : 12m));
+        factors.Add(new(
+            "openingAmount",
+            amount,
+            _rules.OpeningLiquidityMinAmount,
+            amount >= _rules.MinCurrentAmount || amountDelta >= _rules.MinAmountDelta ? 18m : 8m));
         factors.Add(new("baselineQuality", baselineQuality, null, baselineQuality == "good" ? 10m : 4m));
         if (previousWeakScore >= _rules.PreviousWeakScoreMin)
         {
@@ -752,7 +883,26 @@ public sealed class OpeningWeakToStrongDetector
 
     private static OpeningWeakToStrongRiskFlag RiskFlag(string key)
     {
-        return new OpeningWeakToStrongRiskFlag(key, key == "baseline_missing" ? "high" : "medium", key == "baseline_missing" ? -100m : -35m);
+        var high = key is "baseline_missing" or "auction_price_volume_core_missing";
+        return new OpeningWeakToStrongRiskFlag(key, high ? "high" : "medium", high ? -100m : -35m);
+    }
+
+    private static decimal TotalRiskPenalty(IReadOnlyList<OpeningWeakToStrongRiskFlag> riskFlags)
+    {
+        return riskFlags
+            .GroupBy(item => RiskPenaltyGroup(item.Key), StringComparer.Ordinal)
+            .Sum(group => group.Max(item => Math.Abs(item.Penalty)));
+    }
+
+    private static string RiskPenaltyGroup(string key)
+    {
+        return key is "auction_price_volume_desynced"
+            or "auction_price_volume_unverified"
+            or "price_lift_without_volume"
+            or "volume_without_price_lift"
+            or "auction_late_high_retreated"
+            ? "auction_price_volume"
+            : key;
     }
 
     private (IReadOnlyList<string> RiskKeys, decimal? AuctionCoverageRatio, bool DryRun) OpeningQuality(
@@ -790,6 +940,14 @@ public sealed class OpeningWeakToStrongDetector
         return key is "auction_coverage_low" or "quote_time_untrusted" or "auction_time_untrusted";
     }
 
+    private static bool HasOpeningCoreEvidence(OpeningAuctionPriceVolumeProfile? profile)
+    {
+        if (profile is null || profile.InitialAt is null || profile.FinalAt is null) return false;
+        return profile.PriceVolumeConfirmed ||
+            (profile.TotalLiftPctPoint ?? 0m) >= 0.5m ||
+            (profile.AmountLiftRatio ?? 0m) >= 0.35m;
+    }
+
     private static int? AgeMs(DateTimeOffset? from, DateTimeOffset to)
     {
         if (!from.HasValue) return null;
@@ -808,6 +966,7 @@ public sealed class OpeningWeakToStrongDetector
             ["auctionEnd"] = rules.AuctionEnd,
             ["auctionGapFirstWindowMinPct"] = rules.AuctionGapFirstWindowMinPct,
             ["auctionGapJumpMinPctPoint"] = rules.AuctionGapJumpMinPctPoint,
+            ["auctionAmountLiftMinRatio"] = rules.AuctionAmountLiftMinRatio,
             ["auctionLateHighRetreatPctPoint"] = rules.AuctionLateHighRetreatPctPoint,
             ["auctionLateLiftAmountDeltaMin"] = rules.AuctionLateLiftAmountDeltaMin,
             ["auctionLateLiftFinalMinPct"] = rules.AuctionLateLiftFinalMinPct,
@@ -817,11 +976,16 @@ public sealed class OpeningWeakToStrongDetector
             ["auctionLateLiftLateMinPctPoint"] = rules.AuctionLateLiftLateMinPctPoint,
             ["auctionLateLiftStart"] = rules.AuctionLateLiftStart,
             ["auctionLateLiftTotalMinPctPoint"] = rules.AuctionLateLiftTotalMinPctPoint,
+            ["auctionLateAmountLiftMinRatio"] = rules.AuctionLateAmountLiftMinRatio,
+            ["auctionLatePriceLiftMinPctPoint"] = rules.AuctionLatePriceLiftMinPctPoint,
+            ["auctionPriceLiftMinPctPoint"] = rules.AuctionPriceLiftMinPctPoint,
             ["auctionStart"] = rules.AuctionStart,
             ["auctionTrendStart"] = rules.AuctionTrendStart,
             ["auctionWeakMaxPct"] = rules.AuctionWeakMaxPct,
             ["detectEnd"] = rules.DetectEnd,
             ["detectStart"] = rules.DetectStart,
+            ["initialBaselineEnd"] = rules.InitialBaselineEnd,
+            ["initialBaselineStart"] = rules.InitialBaselineStart,
             ["lowOpenRedFirstWindowMinPct"] = rules.LowOpenRedFirstWindowMinPct,
             ["lowOpenRedJumpMinPctPoint"] = rules.LowOpenRedJumpMinPctPoint,
             ["minAmountDelta"] = rules.MinAmountDelta,
@@ -830,6 +994,7 @@ public sealed class OpeningWeakToStrongDetector
             ["minCurrentAmount"] = rules.MinCurrentAmount,
             ["minCurrentVolume"] = rules.MinCurrentVolume,
             ["nearLimitDistancePct"] = rules.NearLimitDistancePct,
+            ["openingLiquidityMinAmount"] = rules.OpeningLiquidityMinAmount,
             ["openingSupportOpenRatio"] = rules.OpeningSupportOpenRatio,
             ["previousWeakScoreMin"] = rules.PreviousWeakScoreMin,
             ["strongOpenFirstWindowMinPct"] = rules.StrongOpenFirstWindowMinPct,

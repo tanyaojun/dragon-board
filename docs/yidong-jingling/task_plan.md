@@ -479,3 +479,52 @@ Superpowers 设计规格见：[../superpowers/specs/2026-05-22-opening-weak-to-s
 - [x] 共享 fixture 增加“TDX 上下文触发冲板抢筹”样例，并保留“无弱势前置普通冲板拒绝”样例。
 - **验证：** `pnpm exec vitest run src/services/hotlist/__tests__/OpeningWeakToStrongDetector.test.ts src/services/hotlist/__tests__/OpeningRealtimeEventBuffer.test.ts src/services/hotlist/__tests__/OpeningRealtimeEventBridge.test.ts src/services/hotlist/__tests__/OpeningSignalClient.test.ts src/services/hotlist/__tests__/HotStockEventMonitorService.test.ts src/services/hotlist/__tests__/HotStockEventSpeechService.test.ts src/components/common/__tests__/DataTable.test.ts`；`dotnet run --project tools\YiDongJingLing.Tests\YiDongJingLing.Tests.csproj`；`node --test proxy-server\__tests__\openingSignals.test.mjs proxy-server\__tests__\docs.test.mjs`；`pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false`；`dotnet build tools\YiDongJingLing\YiDongJingLing.csproj -c Release`；`pnpm build`；`git diff --check`。
 - **状态：** complete
+
+## V5 Phase 0：双基线量价协同方案交叉评审
+
+- [x] 安排只读 Agent 从规则口径、实现影响、测试验收三个角度交叉评审 V5。
+- [x] 明确 V5 不重写检测器，而是把现有 `auctionProfile` 升级为显式 `09:20` 初始基线 + `09:25` 确定基线。
+- [x] 明确绝对成交额阈值不再作为强播核心；`minCurrentAmount`、`minAmountDelta`、`auctionLateLiftAmountDeltaMin`、`auctionLateLiftLateAmountDeltaMin` 降为最低流动性保护、风险或评分增强。
+- [x] 明确强播核心为 `09:20-09:25` 不可撤单阶段量价协同、`09:24-09:25` 临门确认、`09:25` 不明显回落和 `09:30-09:35` 承接确认。
+- [x] 明确 V5 最小 RED 用例、受影响 fixture、风险标记和验证命令。
+- [x] 更新 `docs/yidong-jingling/opening-weak-to-strong-plan.md` 的 V5 方案。
+- **验证：** 文档评审阶段，未修改生产代码。
+- **状态：** complete
+
+## V5 Phase 1：共享 fixture 和合同 RED
+
+- [x] 扩展 `docs/yidong-jingling/fixtures/opening-weak-to-strong-cases.json`，新增 V5 强播、降级、拒绝和乱序样例。
+- [x] TS/C# 共享测试先 RED，确认当前 `amountOk` 硬拒绝和两点跳空强播不符合 V5。
+- [x] 扩展 `OpeningWeakToStrongRules`，新增 `initialBaselineStart`、`initialBaselineEnd`、相对量价阈值和最低流动性阈值。
+- [x] 扩展 TS/C# `OpeningAuctionPriceVolumeProfile` 和 signal 类型，保留 `auctionFinalPrice/auctionPct` 兼容旧消费方。
+- **验证：** `pnpm exec vitest run src/services/hotlist/__tests__/OpeningWeakToStrongDetector.test.ts` 先失败于 V5 新口径；实现后 4 tests passed。`dotnet run --project tools\YiDongJingLing.Tests\YiDongJingLing.Tests.csproj` 后续共享 fixture 全绿。
+- **状态：** complete
+
+## V5 Phase 2：TS/C# 双基线检测实现
+
+- [x] Web 端 `OpeningAuctionStateStore` 按 `09:20` 初始基线、`09:24` 临门基线、`09:25` 确定基线生成 profile。
+- [x] 桌面端 C# `OpeningAuctionStateStore` 使用同一选样规则，避免 TS/C# 口径漂移。
+- [x] 将 `amountOk` 从强播硬拒绝改为最低流动性硬保护和评分项。
+- [x] `auction_late_lift` 使用 `priceVolumeConfirmed` 和相对放量成立，不再依赖固定 `800万/500万` 金额阈值。
+- [x] `auction_gap_reversal`、`low_open_red_reversal`、`strong_open_board_attempt` 在缺少竞价价量核心时降为 `watch` 或拒绝。
+- [x] 同步 `configHash`、事件详情、桌面导出字段和文档规则口径。
+- **验证：** TS opening 链路 3 files / 13 tests passed；桌面 `YiDongJingLing.Tests` 全部通过。
+- **状态：** complete
+
+## V5 Phase 3：回归和发布前验证
+
+- [x] 跑 TS opening 链路、桌面测试、类型检查、桌面 Release 构建和空白检查。
+- [x] 跑 proxy opening signal 回归，确认 V5 signal 新字段不破坏 proxy 缓存和 Dragon Board 主表展示。
+- [x] 更新 `docs/yidong-jingling/findings.md`、`progress.md` 和最终实现口径。
+- **验证：**
+
+```powershell
+pnpm exec vitest run src/services/hotlist/__tests__/OpeningWeakToStrongDetector.test.ts src/services/hotlist/__tests__/OpeningRealtimeEventBuffer.test.ts src/services/hotlist/__tests__/OpeningRealtimeEventBridge.test.ts
+dotnet run --project tools\YiDongJingLing.Tests\YiDongJingLing.Tests.csproj
+pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false
+dotnet build tools\YiDongJingLing\YiDongJingLing.csproj -c Release
+git diff --check
+```
+
+- **补充验证：** `node --test proxy-server\__tests__\openingSignals.test.mjs proxy-server\__tests__\docs.test.mjs` 8 tests passed；`pnpm build` 通过。
+- **状态：** complete

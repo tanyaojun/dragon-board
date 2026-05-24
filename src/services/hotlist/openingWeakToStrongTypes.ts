@@ -9,6 +9,8 @@ export type OpeningBaselineQuality = 'good' | 'degraded' | 'missing'
 
 export interface OpeningWeakToStrongRules {
   auctionTrendStart: string
+  initialBaselineStart: string
+  initialBaselineEnd: string
   auctionStart: string
   auctionEnd: string
   detectStart: string
@@ -22,9 +24,14 @@ export interface OpeningWeakToStrongRules {
   nearLimitDistancePct: number
   minCurrentAmount: number
   minAmountDelta: number
+  openingLiquidityMinAmount: number
   auctionLateLiftStart: string
   auctionLateLiftTotalMinPctPoint: number
   auctionLateLiftLateMinPctPoint: number
+  auctionPriceLiftMinPctPoint: number
+  auctionAmountLiftMinRatio: number
+  auctionLatePriceLiftMinPctPoint: number
+  auctionLateAmountLiftMinRatio: number
   auctionLateLiftFinalMinPct: number
   auctionLateLiftAmountDeltaMin: number
   auctionLateLiftLateAmountDeltaMin: number
@@ -85,6 +92,16 @@ export interface OpeningWeakToStrongBaseline {
 
 export interface OpeningAuctionPriceVolumeProfile {
   sampleCount: number
+  initialAt?: string
+  initialPrice?: number
+  initialPct?: number
+  initialAmount?: number
+  lateAt?: string
+  latePrice?: number
+  lateAmount?: number
+  finalAt?: string
+  finalPrice?: number
+  finalAmount?: number
   startPct?: number
   lateStartPct?: number
   finalPct?: number
@@ -93,6 +110,9 @@ export interface OpeningAuctionPriceVolumeProfile {
   lateLiftPctPoint?: number
   amountDelta?: number
   lateAmountDelta?: number
+  amountLiftRatio?: number
+  lateAmountLiftRatio?: number
+  priceVolumeConfirmed: boolean
   lateLiftConfirmed: boolean
   riskFlags: string[]
 }
@@ -128,6 +148,18 @@ export interface OpeningWeakToStrongSignal {
   jumpPctPoint?: number
   amount: number
   amountDelta?: number
+  initialBaselineAt?: string
+  initialBaselinePrice?: number
+  initialBaselinePct?: number
+  initialBaselineAmount?: number
+  finalBaselineAt?: string
+  finalBaselinePrice?: number
+  finalBaselinePct?: number
+  finalBaselineAmount?: number
+  auctionPriceLiftPctPoint?: number
+  auctionAmountLiftRatio?: number
+  lateAmountLiftRatio?: number
+  priceVolumeConfirmed?: boolean
   limitDistancePct?: number
   triggerAt: string
   baselineQuality: OpeningBaselineQuality

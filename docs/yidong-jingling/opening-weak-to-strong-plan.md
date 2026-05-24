@@ -1,8 +1,8 @@
 # 异动精灵开盘竞价弱转强落地方案
 
-更新时间：2026-05-22
+更新时间：2026-05-24
 
-实现状态：首版代码链路已落地，覆盖 TS/C# 共享 fixture、python-bridge 强制采样元数据、proxy 本地信号缓存、网页板异动雷达、桌面版上报和 Dragon Board 主表徽标。仍需早盘实盘确认 `09:25` 覆盖率和端到端延迟；dry-run UI 尚未完成，当前仅合同和 proxy 支持 `dryRun` 字段。
+实现状态：首版代码链路已落地，覆盖 TS/C# 共享 fixture、python-bridge 强制采样元数据、proxy 本地信号缓存、网页板异动雷达、桌面版上报和 Dragon Board 主表徽标。V4 已补齐 `09:20-09:25` 序列画像、风险降级和覆盖率门禁；V5 进入“显式双基线 + 量价协同偏强播”方案评审阶段，尚未修改生产代码。
 
 ## 目标
 
@@ -907,6 +907,143 @@ fixture 必须覆盖：
 - `sourceTs/bridgeTs` 陈旧或乱序。
 - `amountDelta < 0` 或金额单位异常。
 - 09:35 后不新增信号。
+
+### V5 交叉评审结论：双基线和量价协同
+
+2026-05-24 安排三个只读 Agent 从规则口径、实现影响和测试验收三条线交叉评审，结论一致：V5 不需要重写检测器，而是把 V4 已有的 `auctionProfile` 从“首尾样本画像”升级为“显式 `09:20` 初始基线 + `09:25` 确定基线”。成交额绝对阈值不应继续作为强播核心，应降级为最低流动性保护、风险标记或评分增强。
+
+V5 目标口径：
+
+```text
+09:20 初始基线偏弱或未强
+  + 09:20-09:25 不可撤单阶段量价协同抬升
+  + 09:24-09:25 临门继续确认或至少不背离
+  + 09:25 确定基线不从高位明显回落
+  + 09:30-09:35 连续竞价承接确认
+= 偏强播竞价弱转强
+```
+
+V5 不是把“成交增量 >= 800 万”换成另一个固定金额。固定金额对大市值票太常见，对小市值票又可能过严；第一版更稳的做法是看相对放大和量价同步。
+
+#### V5 核心规则
+
+| 维度 | V5 口径 |
+|------|---------|
+| 初始基线 | 显式保存 `09:20` 附近第一组有效 L1 样本，字段语义为 `initialBaseline*`；不使用 `09:15-09:19:59` 可撤单阶段作为强依据。 |
+| 确定基线 | 继续使用 `09:24:50-09:25:10` 锁定 `auctionFinalPrice/auctionPct/auctionAmount`，字段语义为 `finalBaseline*`。现有 `auctionFinalPrice` 保留为兼容字段。 |
+| 价格抬升 | `initialPct -> finalPct` 总抬升达标；`09:24 -> 09:25` 临门抬升达标或至少不明显背离。 |
+| 量能确认 | 使用 `auctionAmountLiftRatio`、`lateAmountLiftRatio` 等相对放大指标为核心；绝对成交额只做最低流动性保护。 |
+| 强播条件 | `priceVolumeConfirmed=true`、无中高风险标记、开盘承接未丢失，才允许 `strong/critical`。 |
+| 降级条件 | 价涨量不动、放量价不涨、临门回落、竞价画像缺失、开盘承接丢失、低覆盖或时间不可信，均降为 `watch` 或 `dryRun`。 |
+| 可选增强 | 未来若能稳定拿到流通市值/自由流通股本，可增加 `auctionAmountDelta / cirMV`、`auctionAmount / freeFloatMV`，但 V5 第一版不硬依赖。 |
+
+建议新增或明确的规则参数：
+
+| 参数 | 建议默认 | 说明 |
+|------|----------|------|
+| `initialBaselineStart` | `09:20:00` | 初始基线窗口开始。 |
+| `initialBaselineEnd` | `09:20:30` | 初始基线窗口结束，避免用 09:23 后的样本冒充初始弱态。 |
+| `auctionPriceLiftMinPctPoint` | `0.8` | `09:20 -> 09:25` 价格总抬升下限。 |
+| `auctionAmountLiftMinRatio` | `0.35` | 竞价总成交额相对初始成交额放大比例下限；初始金额过小需做除零保护。 |
+| `auctionLatePriceLiftMinPctPoint` | `0.3` | `09:24 -> 09:25` 临门抬价下限。 |
+| `auctionLateAmountLiftMinRatio` | `0.2` | 临门成交额相对放大下限。 |
+| `openingLiquidityMinAmount` | 低于旧 `minCurrentAmount` | 最低流动性保护，不作为强播核心。 |
+
+保留但降权的旧参数：
+
+| 参数 | V5 处理 |
+|------|---------|
+| `minCurrentAmount = 30_000_000` | 不再作为强播硬前置；可作为 `openingAmount` 加分或低流动性风险参考。 |
+| `minAmountDelta = 20_000_000` | 不再作为强播硬前置；成交增量改看相对放大。 |
+| `auctionLateLiftAmountDeltaMin = 8_000_000` | 不再决定 `auction_late_lift` 是否成立；保留为兼容字段或加分项。 |
+| `auctionLateLiftLateAmountDeltaMin = 5_000_000` | 同上。 |
+
+#### V5 共享合同字段
+
+`OpeningAuctionPriceVolumeProfile` 建议新增：
+
+| 字段 | 含义 |
+|------|------|
+| `initialAt` / `initialPrice` / `initialPct` / `initialAmount` | `09:20` 初始基线。 |
+| `finalAt` / `finalPrice` / `finalPct` / `finalAmount` | `09:25` 确定基线。 |
+| `amountLiftRatio` | `(finalAmount - initialAmount) / initialAmount`，初始金额为 0 时不强行除零。 |
+| `lateAmountLiftRatio` | `(finalAmount - lateStartAmount) / lateStartAmount`。 |
+| `priceVolumeConfirmed` | 总价差、临门价差、相对放量和不回落共同确认。 |
+
+`OpeningWeakToStrongSignal` / 桌面导出建议新增复盘字段：
+
+```text
+initialBaselineAt
+initialBaselinePrice
+initialBaselinePct
+initialBaselineAmount
+finalBaselineAt
+finalBaselinePrice
+finalBaselinePct
+finalBaselineAmount
+auctionPriceLiftPctPoint
+auctionAmountLiftRatio
+priceVolumeConfirmed
+```
+
+`auctionFinalPrice`、`auctionPct` 继续表示 `09:25` 确定基线，避免破坏主表、proxy 和旧导出消费方。
+
+#### V5 风险和拒绝语义
+
+| 风险/原因 | 处理 |
+|-----------|------|
+| `auction_profile_missing` | 缺少 `09:20-09:25` 画像，只能 `watch`，不得强播。 |
+| `auction_price_volume_unverified` | 有跳空但竞价过程量价未确认，降为 `watch`。 |
+| `auction_price_volume_desynced` | 价格与成交额节奏背离，降为 `watch`。 |
+| `late_volume_not_confirmed` | 临门抬价没有临门成交确认，降为 `watch`。 |
+| `auction_price_volume_core_missing` | 完全没有竞价核心量价证据，拒绝，不用开盘大成交额补成弱转强。 |
+| `price_lift_without_volume` / `volume_without_price_lift` / `auction_late_high_retreated` | 沿用 V4 风险语义，默认不播报。 |
+
+#### V5 最小 RED 用例
+
+| caseId | 类型 | 目的 |
+|--------|------|------|
+| `v5-auction-core-confirmed-low-open-amount-strong` | 强播 | 绝对当前成交额低于旧 `minCurrentAmount`、开盘增量低于旧 `minAmountDelta`，但 `09:20 -> 09:25` 量价协同充分，仍应 `strong/critical`。 |
+| `v5-auction-profile-missing-high-open-amount-downgraded` | 降级 | 只有 `09:25 + 09:30`，即使开盘成交额很大，也只能 `watch`。 |
+| `v5-price-volume-desynced-downgraded` | 降级 | 总成交额放大但临门量价节奏背离，不能强播。 |
+| `v5-no-auction-core-even-huge-open-amount-rejected` | 拒绝 | `09:20-09:25` 没有价量核心，只靠 `09:30` 大额跳价，不算竞价弱转强。 |
+| `v5-missing-initial-baseline` | 降级或拒绝 | 缺少 `09:20` 初始基线，不能输出强信号。 |
+| `v5-delayed-initial-quote-after-final` | 稳定性 | 乱序补到的 `09:20` 样本可参与画像，但不能回滚已锁定的 `09:25` 确定基线。 |
+
+现有 fixture 调整原则：
+
+- `auction-late-lift-confirmed` 保留为 V5 强信号基准样例。
+- `002552-auction-gap-reversal`、`low-open-red-reversal`、`strong-open-board-attempt-with-precondition` 若继续保持 `strong/critical`，需要补 `09:20/09:24` 量价协同样本；否则 V5 下应降为 `watch`。
+- `strong-open-board-attempt-with-tdx-previous-context` 中的 TDX 前日弱势上下文只能作为增强因子，不应单独替代 V5 竞价价量核心，除非明确降为观察级。
+- 拒绝类、覆盖率 dry-run、金额倒退、低流动性、`09:15-09:20` 虚高忽略等样例不能放松。
+
+#### V5 实施计划
+
+1. 更新共享 fixture 和 TS/C# 类型，先让 V5 RED 用例失败。
+2. 扩展 `OpeningWeakToStrongRules` 和默认配置，加入初始基线窗口与相对量价阈值。
+3. 将 `OpeningAuctionStateStore.BuildAuctionProfile` 改成显式双基线选样：`09:20` 初始基线、`09:24` 临门基线、`09:25` 确定基线。
+4. 将 `amountOk` 从硬拒绝改为最低流动性风险/评分项；只有完全不满足基础流动性时才拒绝。
+5. 调整 `auction_late_lift` 成立逻辑：基于 `priceVolumeConfirmed`，不是固定 `800万/500万`。
+6. 调整 `auction_gap_reversal`、`low_open_red_reversal`、`strong_open_board_attempt`：没有竞价价量核心时降级为 `watch` 或拒绝，不再直接强播。
+7. 同步 `configHash`、桌面事件详情、导出字段和文档。
+
+V5 必跑验证：
+
+```powershell
+pnpm exec vitest run src/services/hotlist/__tests__/OpeningWeakToStrongDetector.test.ts src/services/hotlist/__tests__/OpeningRealtimeEventBuffer.test.ts src/services/hotlist/__tests__/OpeningRealtimeEventBridge.test.ts
+dotnet run --project tools\YiDongJingLing.Tests\YiDongJingLing.Tests.csproj
+pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false
+dotnet build tools\YiDongJingLing\YiDongJingLing.csproj -c Release
+git diff --check
+```
+
+建议追加验证：
+
+```powershell
+pnpm exec vitest run src/services/hotlist/__tests__/OpeningSignalClient.test.ts src/services/hotlist/__tests__/HotStockEventMonitorService.test.ts src/services/hotlist/__tests__/HotStockEventSpeechService.test.ts src/components/common/__tests__/DataTable.test.ts
+node --test proxy-server\__tests__\openingSignals.test.mjs proxy-server\__tests__\docs.test.mjs
+pnpm build
+```
 
 ## 实施阶段
 

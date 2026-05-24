@@ -80,22 +80,23 @@ describe('OpeningRealtimeEventBuffer', () => {
       rules: fixture.rules,
       ruleVersion: fixture.ruleVersion,
     })
+    const baselineQuotes = sample!.quotes.slice(0, -1)
     const auction = {
-      ...sample!.quotes[0],
+      ...baselineQuotes[baselineQuotes.length - 1],
       amount: 25_000_000,
       capturedAt: undefined,
       bridgeTs: undefined,
     }
     const watch = {
-      ...sample!.quotes[1],
+      ...sample!.quotes[sample!.quotes.length - 1],
       lastPrice: 10.12,
       amount: 31_000_000,
       at: '2026-05-22T09:30:10+08:00',
-      capturedAt: '2026-05-22T09:30:10+08:00',
-      bridgeTs: '2026-05-22T09:30:10+08:00',
+      capturedAt: '2026-05-22T09:29:40+08:00',
+      bridgeTs: '2026-05-22T09:29:40+08:00',
     }
     const strong = {
-      ...sample!.quotes[1],
+      ...sample!.quotes[sample!.quotes.length - 1],
       lastPrice: 10.2,
       amount: 60_000_000,
       at: '2026-05-22T09:31:00+08:00',
@@ -103,7 +104,12 @@ describe('OpeningRealtimeEventBuffer', () => {
       bridgeTs: '2026-05-22T09:31:00+08:00',
     }
 
-    const events = [auction, watch, strong].flatMap(quote => buffer.acceptQuoteWithSignals(quote))
+    const events = [
+      ...baselineQuotes.slice(0, -1),
+      auction,
+      watch,
+      strong,
+    ].flatMap(quote => buffer.acceptQuoteWithSignals(quote))
 
     expect(events).toHaveLength(2)
     expect(events[0].signal.confidence).toBe('watch')

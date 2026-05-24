@@ -222,6 +222,31 @@
 | 成交增量口径 | “成交增量加速”当前实际使用 `Volume` 成交量增量，不是成交额增量；文档和 GUI 注解均按成交量描述。 |
 | GUI 成交额档位 | `L1EventRules` 默认保留 1/3/5/10 亿多档，但 `MainForm.ApplyEventRuleSettings` 会用设置页“成交额 万”覆盖成单一门槛；文档按 GUI 实际行为说明。 |
 
+2026-05-24 V5 竞价弱转强交叉评审：
+
+| 评审域 | 结论 |
+|--------|------|
+| 规则口径 | V5 符合 V3/V4 方向，是对 V4 量价核心的自然收敛：强信号不能只靠 `09:25 -> 09:30` 两点跳空，也不能把 `800万/500万` 固定成交增量作为强播核心。 |
+| 核心定义 | 应显式保存 `09:20` 初始基线和 `09:25` 确定基线，强播核心是不可撤单阶段的量价协同抬升、临门确认、不回落和开盘承接。 |
+| 阈值处理 | `minCurrentAmount=3000万`、`minAmountDelta=2000万`、`auctionLateLiftAmountDeltaMin=800万`、`auctionLateLiftLateAmountDeltaMin=500万` 不应继续作为强播核心；保留为最低流动性保护、风险或评分增强。 |
+| 实现影响 | 最小改动是扩展 `OpeningAuctionPriceVolumeProfile`，增加 `initialBaseline*`、`finalBaseline*`、`amountLiftRatio`、`lateAmountLiftRatio`、`priceVolumeConfirmed` 等字段，并同步 TS/C# 类型、hash 和导出。 |
+| 口径漂移风险 | TS/C# 容易在时间边界、乱序 quote、新鲜度比较、负数四舍五入、config hash、`amountOk` 硬拒绝改造上漂移，必须继续用共享 fixture 锁定。 |
+| 测试策略 | 先新增 V5 RED：相对量价确认但低绝对金额仍强播、缺 profile 只能 watch、量价背离降级、只有开盘巨量跳价拒绝、缺 09:20 初始基线降级或拒绝、乱序初始样本不回滚 09:25 基线。 |
+| 现有样例影响 | `002552-auction-gap-reversal`、`low-open-red-reversal`、`strong-open-board-attempt-with-precondition` 若继续 strong/critical，需要补 `09:20/09:24` 量价协同样本；否则 V5 下应降级为 watch。 |
+
+2026-05-24 V5 竞价弱转强实现复核：
+
+| 项目 | 发现 |
+|------|------|
+| 双基线落地 | TS/C# 均已从“首尾样本画像”改为显式 `initialBaselineStart/End`、`auctionLateLiftStart`、`auctionStart/End` 三段选样；乱序补到的 `09:20` 样本只补画像，不回滚已锁定的 `09:25` 确定基线。 |
+| 成交额阈值 | `minCurrentAmount` 和 `minAmountDelta` 不再作为强播硬前置；新增 `openingLiquidityMinAmount=500万` 作为最低流动性保护，旧阈值只影响 `openingAmount` 评分。 |
+| 量价确认 | 新增 `auctionAmountLiftRatio`、`lateAmountLiftRatio`、`priceVolumeConfirmed`；`auction_late_lift` 依赖相对量价确认，不再依赖固定 `800万/500万` 绝对增量。 |
+| 降级/拒绝 | 缺画像标记 `auction_profile_missing` 并降为 `watch`；缺 09:20 标记 `auction_initial_baseline_missing`；有完整画像但无价量核心时拒绝为 `auction_price_volume_core_missing`。 |
+| 风险扣分 | 量价背离、无量抬价、放量不涨、高位回落属于同一画像风险组，避免同一事实重复扣分到 0。 |
+| 规则指纹 | V5 新 hash 为 `owts-08f44efb`，TS/C# 已同步字段集合和固定断言。 |
+| 代码复核修正 | 复核发现 `HasOpeningCoreEvidence` 不能用绝对值判断，否则下跌/缩量会被误当核心；已改为只接受正向抬升/放量，并新增 `v5-negative-auction-core-rejected`。 |
+| 临门确认修正 | `priceVolumeConfirmed` 已纳入 `09:24-09:25` 临门价格和相对放量确认；总量价抬升但无临门确认的样例降为 `watch`，新增 `v5-total-confirmed-without-late-confirmation-downgraded`。 |
+
 ## 风险与处理
 
 | 风险 | 处理 |
