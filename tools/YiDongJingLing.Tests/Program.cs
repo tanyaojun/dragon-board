@@ -904,6 +904,25 @@ Run("Main form detects ST stock names", () =>
     AssertTrue(!MainForm.IsStStockName("平安银行"), "normal name");
 });
 
+Run("Settings form annotates event type options", () =>
+{
+    var settingsFormType = typeof(MainForm).Assembly.GetType("YiDongJingLing.SettingsForm")
+        ?? throw new InvalidOperationException("SettingsForm type not found");
+    var eventTypeOptions = settingsFormType.GetMethod(
+        "EventTypeOptions",
+        System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)
+        ?? throw new InvalidOperationException("EventTypeOptions method not found");
+    var options = eventTypeOptions.Invoke(null, []) as System.Collections.IEnumerable
+        ?? throw new InvalidOperationException("EventTypeOptions result is not enumerable");
+    var labels = options.Cast<object>().Select(item => item.ToString() ?? "").ToArray();
+
+    AssertTrue(labels.Length > 0, "event options exist");
+    AssertTrue(labels.All(item => item.Contains(" - ", StringComparison.Ordinal)), "all options include rule notes");
+    AssertTrue(labels.Contains("封涨停板 - 涨停价+买一封单"), "limit-up note");
+    AssertTrue(labels.Contains("成交增量加速 - 近30秒成交量放大"), "volume acceleration note");
+    AssertTrue(labels.Contains("买卖价差异常 - 买卖一价差过大"), "spread note");
+});
+
 Run("Event radar message notifier posts compatible payload to proxy", () =>
 {
     var handler = new StubNotificationHandler();

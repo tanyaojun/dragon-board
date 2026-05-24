@@ -302,6 +302,15 @@ dotnet publish tools\YiDongJingLing\YiDongJingLing.csproj -c Release -r win-x64 
 
 - **状态：** complete
 
+## V2 Phase 9：规则口径文档和设置页注解
+
+- [x] 新增 `docs/yidong-jingling/event-rule-logic.md`，沉淀全部 L1 异动类型的判断、计算公式、阈值来源、去重影响和能力边界。
+- [x] 设置页“异动类型”列表在事件名后追加一句规则注解，帮助盘中配置时快速理解触发口径。
+- [x] 注解仅影响显示，不改变 `EnabledEvents` 的 `L1EventType` 存储键，保持旧配置兼容。
+- [x] 补充测试锁定设置页事件项必须带注解。
+- **验证：** `dotnet run --project tools\YiDongJingLing.Tests\YiDongJingLing.Tests.csproj`；`dotnet build tools\YiDongJingLing\YiDongJingLing.csproj -c Release -p:OutputPath=D:\dragon-board\.tmp\YiDongJingLing-build\`；`git diff --check`。
+- **状态：** complete
+
 ---
 
 # 异动精灵 V3 任务计划：开盘竞价弱转强

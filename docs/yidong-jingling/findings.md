@@ -213,6 +213,15 @@
 | 兼容性 | 缺少 `previousWeak*` 字段时保持旧行为；普通无上下文开盘冲板仍返回 `weak_precondition_missing`。 |
 | 复盘字段 | 桌面导出已追加前日弱势分、来源和标签；proxy/Web canonical signal 使用既有 JSON 透传，不需要新增 API。 |
 
+2026-05-24 异动规则文档和设置页注解：
+
+| 项目 | 发现 |
+|------|------|
+| GUI 注解边界 | 设置页“异动类型”列表可以直接在 `EventTypeOption.ToString()` 增加简要规则说明；保存仍通过 `option.Type.ToString()` 写入 `EnabledEvents`，不会破坏旧配置。 |
+| 文档主口径 | 全部桌面端 L1 异动规则集中记录到 `docs/yidong-jingling/event-rule-logic.md`，避免后续只靠截图或口头解释理解规则。 |
+| 成交增量口径 | “成交增量加速”当前实际使用 `Volume` 成交量增量，不是成交额增量；文档和 GUI 注解均按成交量描述。 |
+| GUI 成交额档位 | `L1EventRules` 默认保留 1/3/5/10 亿多档，但 `MainForm.ApplyEventRuleSettings` 会用设置页“成交额 万”覆盖成单一门槛；文档按 GUI 实际行为说明。 |
+
 ## 风险与处理
 
 | 风险 | 处理 |

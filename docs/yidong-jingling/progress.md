@@ -1,5 +1,23 @@
 # 异动精灵 V1 进度记录
 
+## 2026-05-24 异动规则文档和设置页注解
+
+- **目标：** 将所有桌面端 L1 异动类型的判断和计算逻辑沉淀为文档，并在设置页“异动类型”列表的事件名后展示简要规则注解。
+- **使用流程：**
+  - 使用 `planning-with-files` 将产物落在 `docs/yidong-jingling/` 专题目录。
+  - 使用 `superpowers:test-driven-development` 先补 RED 测试，再实现 GUI 注解。
+- **改动：**
+  - 新增 `docs/yidong-jingling/event-rule-logic.md`，覆盖全部 `L1EventType` 的数据字段、公式、阈值来源、去重影响和特殊边界。
+  - 设置页左侧异动类型从纯事件名改为“事件名 - 简要规则”，例如“封涨停板 - 涨停价+买一封单”。
+  - 注解只影响 `ToString()` 显示，配置保存仍按 `L1EventType.ToString()`，不破坏既有设置文件。
+  - 新增测试 `Settings form annotates event type options`，锁定每个设置页事件项都带规则注解。
+- **验证：**
+  - RED：`dotnet run --project tools\YiDongJingLing.Tests\YiDongJingLing.Tests.csproj` 先失败于 `all options include rule notes`。
+  - GREEN：`dotnet run --project tools\YiDongJingLing.Tests\YiDongJingLing.Tests.csproj` 全部通过。
+  - `dotnet build tools\YiDongJingLing\YiDongJingLing.csproj -c Release` 失败：默认 Release 输出被当前运行中的 `YiDongJingLing (19068)` 锁定，未强制结束用户进程。
+  - `dotnet build tools\YiDongJingLing\YiDongJingLing.csproj -c Release -p:OutputPath=D:\dragon-board\.tmp\YiDongJingLing-build\` 通过，0 warnings / 0 errors。
+  - `git diff --check` 通过。
+
 ## 2026-05-22 V3 代码审查修复
 
 - **目标：** 修复竞价弱转强首版实现中的高风险缺口，重点是跨日状态、Web 实时链路可靠性、proxy dry-run 合并和 bridge 采样时间。

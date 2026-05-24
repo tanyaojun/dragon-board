@@ -511,40 +511,40 @@ internal sealed class SettingsForm : Form
     {
         return
         [
-            new EventTypeOption(L1EventType.LimitUpSealed, "封涨停板"),
-            new EventTypeOption(L1EventType.LimitUpOpened, "打开涨停板"),
-            new EventTypeOption(L1EventType.UpcomingLimitUpOpen, "即将打开涨停"),
-            new EventTypeOption(L1EventType.NearLimitUp, "逼近涨停"),
-            new EventTypeOption(L1EventType.LimitDownSealed, "封跌停板"),
-            new EventTypeOption(L1EventType.LimitDownOpened, "打开跌停板"),
-            new EventTypeOption(L1EventType.UpcomingLimitDownOpen, "即将打开跌停"),
-            new EventTypeOption(L1EventType.NearLimitDown, "逼近跌停"),
-            new EventTypeOption(L1EventType.SealOrderIncreased, "封单增强"),
-            new EventTypeOption(L1EventType.SealOrderWeakened, "封单变弱"),
-            new EventTypeOption(L1EventType.BigRiseTier, "大幅拉升"),
-            new EventTypeOption(L1EventType.BigDropTier, "大幅跳水"),
-            new EventTypeOption(L1EventType.FastRise, "快速拉升"),
-            new EventTypeOption(L1EventType.FastDrop, "快速跳水"),
-            new EventTypeOption(L1EventType.OpeningWeakToStrong, "竞价弱转强"),
-            new EventTypeOption(L1EventType.LowOpenLongYang, "低开长阳"),
-            new EventTypeOption(L1EventType.HighOpenLongYin, "高开长阴"),
-            new EventTypeOption(L1EventType.TurnRed, "翻红"),
-            new EventTypeOption(L1EventType.TurnGreen, "翻绿"),
-            new EventTypeOption(L1EventType.IntradayHigh, "创日内新高"),
-            new EventTypeOption(L1EventType.IntradayLow, "创日内新低"),
-            new EventTypeOption(L1EventType.AmountTier, "成交额跨档"),
-            new EventTypeOption(L1EventType.VolumeAcceleration, "成交增量加速"),
-            new EventTypeOption(L1EventType.LargeBidOrder, "出现大买挂盘"),
-            new EventTypeOption(L1EventType.LargeAskOrder, "出现大卖挂盘"),
-            new EventTypeOption(L1EventType.BidPressure, "盘口买压增强"),
-            new EventTypeOption(L1EventType.AskPressure, "盘口卖压增强"),
-            new EventTypeOption(L1EventType.SpreadWidened, "买卖价差异常"),
+            new EventTypeOption(L1EventType.LimitUpSealed, "封涨停板", "涨停价+买一封单"),
+            new EventTypeOption(L1EventType.LimitUpOpened, "打开涨停板", "跌离涨停封单"),
+            new EventTypeOption(L1EventType.UpcomingLimitUpOpen, "即将打开涨停", "买一封单骤降"),
+            new EventTypeOption(L1EventType.NearLimitUp, "逼近涨停", "距涨停1%内"),
+            new EventTypeOption(L1EventType.LimitDownSealed, "封跌停板", "跌停价+卖一封单"),
+            new EventTypeOption(L1EventType.LimitDownOpened, "打开跌停板", "脱离跌停封单"),
+            new EventTypeOption(L1EventType.UpcomingLimitDownOpen, "即将打开跌停", "卖一封单骤降"),
+            new EventTypeOption(L1EventType.NearLimitDown, "逼近跌停", "距跌停1%内"),
+            new EventTypeOption(L1EventType.SealOrderIncreased, "封单增强", "封单较前帧增50%"),
+            new EventTypeOption(L1EventType.SealOrderWeakened, "封单变弱", "封单较前帧减半"),
+            new EventTypeOption(L1EventType.BigRiseTier, "大幅拉升", "当日涨幅破阈值"),
+            new EventTypeOption(L1EventType.BigDropTier, "大幅跳水", "当日跌幅破阈值"),
+            new EventTypeOption(L1EventType.FastRise, "快速拉升", "30/60秒或5分钟急涨"),
+            new EventTypeOption(L1EventType.FastDrop, "快速跳水", "30/60秒或5分钟急跌"),
+            new EventTypeOption(L1EventType.OpeningWeakToStrong, "竞价弱转强", "09:25弱到09:30转强"),
+            new EventTypeOption(L1EventType.LowOpenLongYang, "低开长阳", "低开后大幅拉起"),
+            new EventTypeOption(L1EventType.HighOpenLongYin, "高开长阴", "高开后大幅回落"),
+            new EventTypeOption(L1EventType.TurnRed, "翻红", "涨跌幅由负转正"),
+            new EventTypeOption(L1EventType.TurnGreen, "翻绿", "涨跌幅由正转负"),
+            new EventTypeOption(L1EventType.IntradayHigh, "创日内新高", "刷新启动后高点"),
+            new EventTypeOption(L1EventType.IntradayLow, "创日内新低", "刷新启动后低点"),
+            new EventTypeOption(L1EventType.AmountTier, "成交额跨档", "累计成交额破门槛"),
+            new EventTypeOption(L1EventType.VolumeAcceleration, "成交增量加速", "近30秒成交量放大"),
+            new EventTypeOption(L1EventType.LargeBidOrder, "出现大买挂盘", "买一挂单额过大"),
+            new EventTypeOption(L1EventType.LargeAskOrder, "出现大卖挂盘", "卖一挂单额过大"),
+            new EventTypeOption(L1EventType.BidPressure, "盘口买压增强", "五档买量压卖量"),
+            new EventTypeOption(L1EventType.AskPressure, "盘口卖压增强", "五档卖量压买量"),
+            new EventTypeOption(L1EventType.SpreadWidened, "买卖价差异常", "买卖一价差过大"),
         ];
     }
 
-    private sealed record EventTypeOption(L1EventType Type, string Label)
+    private sealed record EventTypeOption(L1EventType Type, string Label, string Note)
     {
-        public override string ToString() => Label;
+        public override string ToString() => $"{Label} - {Note}";
     }
 
     private sealed record VoiceModeOption(VoiceMode Mode, string Label)
