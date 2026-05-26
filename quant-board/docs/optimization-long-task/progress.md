@@ -345,6 +345,27 @@ Conclusion:
 | 2026-05-21 | 一次性读取 6 个完整回测报告提取信号分布超时 | 1 | 改为给足超时时间并分批读取完整报告，最终取得过滤前后信号分布。 |
 | 2026-05-21 | 第一版跨市场过滤把全零异常帧里的行也按行过滤，归因不够干净 | 1 | 改为跨市场过滤跳过全零帧并记录 skipped，再重跑 v2 checkpoint。 |
 
+## Session: 2026-05-26
+
+### Weekly Checkpoint: `checkpoint_2026-05-26_weekly`
+
+- **Status:** complete
+- Actions taken:
+  - 提交 Phase 13 文档更新（commit `3bd7a06`）。
+  - 执行 `run-longtest-baselines --checkpoint-id checkpoint_2026-05-26_weekly`，复跑 H1/H2/Q1 三条固定基线。
+  - 对比 5/21 → 5/26 绩效、资金流和价格质量变化。
+  - 首次落库 `priceQualityDiagnostics` 诊断字段。
+- Key findings:
+  - H2 totalReturn: -6.37% → -4.04% (+2.33pp)，Sharpe 同步改善。
+  - H1 totalReturn: +4.49% → +3.98% (-0.51pp)，最近一周对乐观入场路径不利。
+  - Q1 totalReturn: -3.27% → -2.10% (+1.17pp)，回撤维持 -11.06%。
+  - 资金流 L2 formal 翻倍：half_hour 4,711 → 10,517，quarter_hour 8,698 → 19,672。
+  - 价格质量诊断：half_hour 无全零帧，跨市场 1003 行/191 快照，局部 A 股零价 297 行。
+- Files created/modified:
+  - `quant-board/docs/optimization-long-task/task_plan.md`
+  - `quant-board/docs/optimization-long-task/progress.md`
+  - `quant-board/data/reports/long_test_runs.jsonl`（追加本次 checkpoint）
+
 ## 5-Question Reboot Check
 
 | Question | Answer |

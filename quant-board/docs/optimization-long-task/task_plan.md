@@ -314,6 +314,39 @@ walk_forward.topTrials = 5
 
 解读：当前 checkpoint 仍不支持写回默认参数。`quarter_hour` 的交易数更高，但回撤更深，说明更细粒度样本没有自动改善保守成交表现。
 
+### Checkpoint `checkpoint_2026-05-26_weekly`
+
+| Baseline | Run ID | totalReturn | realizedReturn | maxDrawdown | Sharpe | winRate | trades | researchGrade |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| H1 `half_hour/current_bar` | `bt_e98bfe15b70f46c3` | `+3.98%` | `+4.14%` | `-2.82%` | `-0.5615` | `33.85%` | `65` | `degraded` |
+| H2 `half_hour/next_bar` | `bt_393b49917ff14962` | `-4.04%` | `-3.77%` | `-9.16%` | `-1.121` | `35.00%` | `80` | `degraded` |
+| Q1 `quarter_hour/next_bar` | `bt_c15400995d16466c` | `-2.10%` | `-2.10%` | `-11.06%` | `-0.5124` | `45.75%` | `153` | `degraded` |
+
+vs 5/21 变化：
+
+| 基线 | totalReturn Δ | Sharpe Δ | trades Δ | 趋势 |
+| --- | ---: | ---: | ---: | --- |
+| H1 | -0.51pp | ↓ | +11 | 最近一周对乐观成交路径不利 |
+| H2 | +2.33pp | ↑ | +16 | 保守成交正式验收持续改善 |
+| Q1 | +1.17pp | ↑ | +27 | 研究口径同步收窄亏损 |
+
+价格质量诊断（首次落库）：
+
+| 诊断项 | H1/H2 (half_hour) | Q1 (quarter_hour) |
+| --- | ---: | ---: |
+| crossMarketZeroPriceRows | 1,003 行 / 191 快照 | 2,070 行 / 393 快照 |
+| allZeroPriceFrames | 0 帧 | 1 帧 |
+| partialAshareZeroPriceRows | 297 行 / 131 快照 | 658 行 / 259 快照 |
+
+资金流 L2 覆盖变化：
+
+| 口径 | formal (5/21) | formal (5/26) | 增长率 |
+| --- | ---: | ---: | ---: |
+| half_hour | 4,711 | 10,517 | +123% |
+| quarter_hour | 8,698 | 19,672 | +126% |
+
+解读：5 个新交易日对 H2 保守成交持续改善（-6.37% → -4.04%），Sharpe 和 winRate 均有小幅提升。资金流 L2 覆盖翻倍。H1 反而回撤，说明最近市场对乐观入场不利。H2 距离参数采用门槛（Sharpe > 0、trade ≥ 30）仍在接近中但尚未达标。继续按周复跑观察。
+
 ## Money-Flow Diagnostics
 
 结论：此前回测报告里的 `formalMoneyFlowCount=0`、`estimatedL1MoneyFlowCount=0`、`missingMoneyFlowSourceCount=全部` 不是 MongoDB 源数据全缺，而是回测质量统计前把股票行简化成 `{"snapshotId": ...}`，把 `capitalFlowSource`、`moneyFlowEstimated` 等字段丢掉了。
