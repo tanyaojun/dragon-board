@@ -103,7 +103,31 @@
         "confidence": "strong",
         "scoreRange": [70, 95],
         "jumpPctPointRange": [4.9, 5.1],
-        "riskFlags": []
+        "riskFlags": [],
+        "liquidityTier": "active",
+        "liquidityTierMode": "review_only",
+        "liquidityTierBasis": "amount=56000000;volume=14950000",
+        "liquidityTierThresholds": "openingLiquidityMinAmount=5000000;minCurrentAmount=30000000;hotAmount=100000000;minCurrentVolume=1000000",
+        "liquidityTierVersion": "liquidity-review.v1",
+        "initialBaselineAt": "2026-05-22T09:20:05+08:00",
+        "initialBaselinePrice": 35,
+        "initialBaselinePct": -3.31,
+        "initialBaselineAmount": 2000000,
+        "lateBaselineAt": "2026-05-22T09:24:05+08:00",
+        "lateBaselinePrice": 35.3,
+        "lateBaselinePct": -2.49,
+        "lateBaselineAmount": 4500000,
+        "finalBaselineAt": "2026-05-22T09:25:00+08:00",
+        "finalBaselinePrice": 35.68,
+        "finalBaselinePct": -1.44,
+        "finalBaselineAmount": 6000000,
+        "auctionPriceLiftPctPoint": 1.88,
+        "latePriceLiftPctPoint": 1.05,
+        "auctionAmountDelta": 4000000,
+        "lateAmountDelta": 1500000,
+        "auctionAmountLiftRatio": 2,
+        "lateAmountLiftRatio": 0.33,
+        "priceVolumeConfirmed": true
       }
     },
     {
@@ -516,7 +540,31 @@
         "variant": "auction_late_lift",
         "confidence": "strong",
         "scoreRange": [60, 95],
-        "riskFlags": []
+        "riskFlags": [],
+        "liquidityTier": "normal",
+        "liquidityTierMode": "review_only",
+        "liquidityTierBasis": "amount=22000000;volume=2200000",
+        "liquidityTierThresholds": "openingLiquidityMinAmount=5000000;minCurrentAmount=30000000;hotAmount=100000000;minCurrentVolume=1000000",
+        "liquidityTierVersion": "liquidity-review.v1",
+        "initialBaselineAt": "2026-05-22T09:20:05+08:00",
+        "initialBaselinePrice": 9.78,
+        "initialBaselinePct": -2.2,
+        "initialBaselineAmount": 3000000,
+        "lateBaselineAt": "2026-05-22T09:24:05+08:00",
+        "lateBaselinePrice": 9.9,
+        "lateBaselinePct": -1,
+        "lateBaselineAmount": 6000000,
+        "finalBaselineAt": "2026-05-22T09:25:00+08:00",
+        "finalBaselinePrice": 10.02,
+        "finalBaselinePct": 0.2,
+        "finalBaselineAmount": 9000000,
+        "auctionPriceLiftPctPoint": 2.4,
+        "latePriceLiftPctPoint": 1.2,
+        "auctionAmountDelta": 6000000,
+        "lateAmountDelta": 3000000,
+        "auctionAmountLiftRatio": 2,
+        "lateAmountLiftRatio": 0.5,
+        "priceVolumeConfirmed": true
       }
     },
     {
@@ -1445,7 +1493,12 @@
         "confidence": "watch",
         "scoreRange": [1, 59],
         "riskFlags": ["low_liquidity_jump"],
-        "dryRun": false
+        "dryRun": false,
+        "liquidityTier": "thin",
+        "liquidityTierMode": "review_only",
+        "liquidityTierBasis": "amount=50000000;volume=500000",
+        "liquidityTierThresholds": "openingLiquidityMinAmount=5000000;minCurrentAmount=30000000;hotAmount=100000000;minCurrentVolume=1000000",
+        "liquidityTierVersion": "liquidity-review.v1"
       }
     },
     {
@@ -1481,6 +1534,166 @@
         "triggered": false,
         "invalidReason": "opening_support_lost",
         "riskFlags": ["opening_support_lost"]
+      }
+    },
+    {
+      "caseId": "v6-intraday-confirmed-strong",
+      "description": "09:30触发后，09:35-10:00继续上攻并站稳，自动写回盘中确认成功。",
+      "quotes": [
+        {
+          "code": "002570",
+          "name": "盘中确认",
+          "at": "2026-05-22T09:20:05+08:00",
+          "lastPrice": 9.78,
+          "preClose": 10,
+          "open": 0,
+          "amount": 3000000,
+          "volume": 307000,
+          "capturedAt": "2026-05-22T09:20:05+08:00",
+          "bridgeTs": "2026-05-22T09:20:05+08:00"
+        },
+        {
+          "code": "002570",
+          "name": "盘中确认",
+          "at": "2026-05-22T09:24:05+08:00",
+          "lastPrice": 9.9,
+          "preClose": 10,
+          "open": 0,
+          "amount": 6000000,
+          "volume": 606000,
+          "capturedAt": "2026-05-22T09:24:05+08:00",
+          "bridgeTs": "2026-05-22T09:24:05+08:00"
+        },
+        {
+          "code": "002570",
+          "name": "盘中确认",
+          "at": "2026-05-22T09:25:00+08:00",
+          "lastPrice": 10.02,
+          "preClose": 10,
+          "open": 0,
+          "amount": 9000000,
+          "volume": 901000,
+          "capturedAt": "2026-05-22T09:25:00+08:00",
+          "bridgeTs": "2026-05-22T09:25:00+08:00"
+        },
+        {
+          "code": "002570",
+          "name": "盘中确认",
+          "at": "2026-05-22T09:30:08+08:00",
+          "lastPrice": 10.28,
+          "preClose": 10,
+          "open": 10.1,
+          "amount": 22000000,
+          "volume": 2200000,
+          "capturedAt": "2026-05-22T09:30:08+08:00",
+          "bridgeTs": "2026-05-22T09:30:08+08:00"
+        },
+        {
+          "code": "002570",
+          "name": "盘中确认",
+          "at": "2026-05-22T09:36:00+08:00",
+          "lastPrice": 10.58,
+          "preClose": 10,
+          "open": 10.1,
+          "amount": 65000000,
+          "volume": 6200000,
+          "capturedAt": "2026-05-22T09:36:00+08:00",
+          "bridgeTs": "2026-05-22T09:36:00+08:00"
+        }
+      ],
+      "expected": {
+        "triggered": true,
+        "variant": "auction_late_lift",
+        "confidence": "strong",
+        "scoreRange": [60, 95],
+        "riskFlags": [],
+        "intradayStatus": "confirmed",
+        "intradayOutcome": "confirmed_strong",
+        "intradayStatusAt": "2026-05-22T09:36:00+08:00",
+        "intradayPrice": 10.58,
+        "intradayPct": 5.8,
+        "intradayAmount": 65000000,
+        "intradayNote": "09:35后继续上攻并站稳，盘中确认成功"
+      }
+    },
+    {
+      "caseId": "v6-intraday-open-dump-failed",
+      "description": "09:30触发后，09:35-10:00跌破开盘/昨收支撑，自动写回盘中失败。",
+      "quotes": [
+        {
+          "code": "002571",
+          "name": "开盘诱多",
+          "at": "2026-05-22T09:20:05+08:00",
+          "lastPrice": 9.78,
+          "preClose": 10,
+          "open": 0,
+          "amount": 3000000,
+          "volume": 307000,
+          "capturedAt": "2026-05-22T09:20:05+08:00",
+          "bridgeTs": "2026-05-22T09:20:05+08:00"
+        },
+        {
+          "code": "002571",
+          "name": "开盘诱多",
+          "at": "2026-05-22T09:24:05+08:00",
+          "lastPrice": 9.9,
+          "preClose": 10,
+          "open": 0,
+          "amount": 6000000,
+          "volume": 606000,
+          "capturedAt": "2026-05-22T09:24:05+08:00",
+          "bridgeTs": "2026-05-22T09:24:05+08:00"
+        },
+        {
+          "code": "002571",
+          "name": "开盘诱多",
+          "at": "2026-05-22T09:25:00+08:00",
+          "lastPrice": 10.02,
+          "preClose": 10,
+          "open": 0,
+          "amount": 9000000,
+          "volume": 901000,
+          "capturedAt": "2026-05-22T09:25:00+08:00",
+          "bridgeTs": "2026-05-22T09:25:00+08:00"
+        },
+        {
+          "code": "002571",
+          "name": "开盘诱多",
+          "at": "2026-05-22T09:30:08+08:00",
+          "lastPrice": 10.28,
+          "preClose": 10,
+          "open": 10.1,
+          "amount": 22000000,
+          "volume": 2200000,
+          "capturedAt": "2026-05-22T09:30:08+08:00",
+          "bridgeTs": "2026-05-22T09:30:08+08:00"
+        },
+        {
+          "code": "002571",
+          "name": "开盘诱多",
+          "at": "2026-05-22T09:42:00+08:00",
+          "lastPrice": 9.95,
+          "preClose": 10,
+          "open": 10.1,
+          "amount": 72000000,
+          "volume": 7000000,
+          "capturedAt": "2026-05-22T09:42:00+08:00",
+          "bridgeTs": "2026-05-22T09:42:00+08:00"
+        }
+      ],
+      "expected": {
+        "triggered": true,
+        "variant": "auction_late_lift",
+        "confidence": "watch",
+        "scoreRange": [1, 59],
+        "riskFlags": ["intraday_open_dump"],
+        "intradayStatus": "failed",
+        "intradayOutcome": "failed_open_dump",
+        "intradayStatusAt": "2026-05-22T09:42:00+08:00",
+        "intradayPrice": 9.95,
+        "intradayPct": -0.5,
+        "intradayAmount": 72000000,
+        "intradayNote": "跌破开盘/昨收支撑，疑似竞价诱多"
       }
     }
   ]

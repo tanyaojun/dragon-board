@@ -68,7 +68,40 @@ describe('OpeningRealtimeEventBuffer', () => {
 
     expect(firstDay).toHaveLength(1)
     expect(secondDay).toHaveLength(1)
-    expect(secondDay[0].id).toBe('opening_weak_to_strong:2026-05-23:002552')
+    expect(secondDay[0].id).toBe('opening_weak_to_strong:2026-05-23:002552:pending')
+  })
+
+  it('emits separate action events for preopen candidate and opening upgrade', () => {
+    const fixture = loadFixture()
+    const sample = fixture.cases.find(item => item.caseId === '002552-auction-gap-reversal')
+    expect(sample).toBeTruthy()
+
+    const buffer = new OpeningRealtimeEventBuffer({
+      rules: fixture.rules,
+      ruleVersion: fixture.ruleVersion,
+    })
+    const quotes = sample!.quotes
+    const finalQuote = quotes[quotes.length - 2]
+    const openQuote = quotes[quotes.length - 1]
+
+    const events = [
+      ...quotes.slice(0, -1),
+      {
+        ...finalQuote,
+        at: '2026-05-22T09:25:12+08:00',
+        capturedAt: '2026-05-22T09:25:12+08:00',
+        bridgeTs: '2026-05-22T09:25:12+08:00',
+      },
+      openQuote,
+    ].flatMap(quote => buffer.acceptQuoteWithSignals(quote))
+
+    expect(events).toHaveLength(2)
+    expect(events.map(item => item.signal.intradayStatus)).toEqual(['preopen_candidate', 'pending'])
+    expect(events.map(item => item.event.id)).toEqual([
+      'opening_weak_to_strong:2026-05-22:002552:preopen_candidate',
+      'opening_weak_to_strong:2026-05-22:002552:pending',
+    ])
+    expect(events.map(item => item.event.typeName)).toEqual(['竞价弱转强候选', '竞价弱转强'])
   })
 
   it('upgrades watch signal to stronger signal inside the same trading day', () => {
@@ -114,5 +147,47 @@ describe('OpeningRealtimeEventBuffer', () => {
     expect(events).toHaveLength(2)
     expect(events[0].signal.confidence).toBe('watch')
     expect(events[1].signal.confidence).toBe('strong')
+  })
+
+  it('emits intraday confirmation and failure updates after the opening trigger', () => {
+    const fixture = loadFixture()
+    const sample = fixture.cases.find(item => item.caseId === '002552-auction-gap-reversal')
+    expect(sample).toBeTruthy()
+
+    const buffer = new OpeningRealtimeEventBuffer({
+      rules: fixture.rules,
+      ruleVersion: fixture.ruleVersion,
+    })
+    const confirm = {
+      ...sample!.quotes[sample!.quotes.length - 1],
+      at: '2026-05-22T09:36:00+08:00',
+      lastPrice: 38.6,
+      amount: 88_000_000,
+      capturedAt: '2026-05-22T09:36:00+08:00',
+      bridgeTs: '2026-05-22T09:36:00+08:00',
+    }
+    const failed = {
+      ...confirm,
+      at: '2026-05-22T09:42:00+08:00',
+      lastPrice: 36.7,
+      amount: 98_000_000,
+      capturedAt: '2026-05-22T09:42:00+08:00',
+      bridgeTs: '2026-05-22T09:42:00+08:00',
+    }
+
+    const events = [
+      ...sample!.quotes,
+      confirm,
+      failed,
+    ].flatMap(quote => buffer.acceptQuoteWithSignals(quote))
+
+    expect(events.map(item => item.signal.intradayStatus)).toEqual([
+      'pending',
+      'confirmed',
+      'failed',
+    ])
+    expect(events[1].signal.intradayOutcome).toBe('confirmed_strong')
+    expect(events[2].signal.intradayOutcome).toBe('failed_open_dump')
+    expect(events[2].signal.riskFlags.map(item => item.key)).toContain('intraday_open_dump')
   })
 })

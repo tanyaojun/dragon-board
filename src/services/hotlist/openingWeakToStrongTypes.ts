@@ -6,6 +6,20 @@ export type OpeningWeakToStrongVariant =
 
 export type OpeningWeakToStrongConfidence = 'watch' | 'strong' | 'critical'
 export type OpeningBaselineQuality = 'good' | 'degraded' | 'missing'
+export type OpeningLiquidityTier = 'unknown' | 'thin' | 'normal' | 'active' | 'hot'
+export type OpeningLiquidityTierMode = 'review_only'
+export type OpeningIntradayStatus =
+  | 'preopen_candidate'
+  | 'pending'
+  | 'confirmed'
+  | 'failed'
+  | 'watch'
+export type OpeningIntradayOutcome =
+  | 'preopen_candidate'
+  | 'pending'
+  | 'confirmed_strong'
+  | 'failed_open_dump'
+  | 'watch_only'
 
 export interface OpeningWeakToStrongRules {
   auctionTrendStart: string
@@ -152,14 +166,26 @@ export interface OpeningWeakToStrongSignal {
   initialBaselinePrice?: number
   initialBaselinePct?: number
   initialBaselineAmount?: number
+  lateBaselineAt?: string
+  lateBaselinePrice?: number
+  lateBaselinePct?: number
+  lateBaselineAmount?: number
   finalBaselineAt?: string
   finalBaselinePrice?: number
   finalBaselinePct?: number
   finalBaselineAmount?: number
   auctionPriceLiftPctPoint?: number
+  latePriceLiftPctPoint?: number
+  auctionAmountDelta?: number
+  lateAmountDelta?: number
   auctionAmountLiftRatio?: number
   lateAmountLiftRatio?: number
   priceVolumeConfirmed?: boolean
+  liquidityTier: OpeningLiquidityTier
+  liquidityTierMode: OpeningLiquidityTierMode
+  liquidityTierBasis: string
+  liquidityTierThresholds: string
+  liquidityTierVersion: string
   limitDistancePct?: number
   triggerAt: string
   baselineQuality: OpeningBaselineQuality
@@ -179,6 +205,13 @@ export interface OpeningWeakToStrongSignal {
   previousWeakSignals?: string[]
   previousWeakSource?: string
   auctionCoverageRatio?: number
+  intradayStatus?: OpeningIntradayStatus
+  intradayOutcome?: OpeningIntradayOutcome
+  intradayStatusAt?: string
+  intradayPrice?: number
+  intradayPct?: number
+  intradayAmount?: number
+  intradayNote?: string
   dryRun?: boolean
   factors: OpeningWeakToStrongFactor[]
   riskFlags: OpeningWeakToStrongRiskFlag[]
@@ -200,6 +233,37 @@ export interface OpeningWeakToStrongFixtureCase {
     riskFlags?: string[]
     dryRun?: boolean
     auctionCoverageRatio?: number
+    liquidityTier?: string
+    liquidityTierMode?: string
+    liquidityTierBasis?: string
+    liquidityTierThresholds?: string
+    liquidityTierVersion?: string
+    initialBaselineAt?: string
+    initialBaselinePrice?: number
+    initialBaselinePct?: number
+    initialBaselineAmount?: number
+    lateBaselineAt?: string
+    lateBaselinePrice?: number
+    lateBaselinePct?: number
+    lateBaselineAmount?: number
+    finalBaselineAt?: string
+    finalBaselinePrice?: number
+    finalBaselinePct?: number
+    finalBaselineAmount?: number
+    auctionPriceLiftPctPoint?: number
+    latePriceLiftPctPoint?: number
+    auctionAmountDelta?: number
+    lateAmountDelta?: number
+    auctionAmountLiftRatio?: number
+    lateAmountLiftRatio?: number
+    priceVolumeConfirmed?: boolean
+    intradayStatus?: OpeningIntradayStatus
+    intradayOutcome?: OpeningIntradayOutcome
+    intradayStatusAt?: string
+    intradayPrice?: number
+    intradayPct?: number
+    intradayAmount?: number
+    intradayNote?: string
     invalidReason?: string
   }
 }

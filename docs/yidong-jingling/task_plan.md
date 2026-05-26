@@ -528,3 +528,61 @@ git diff --check
 
 - **补充验证：** `node --test proxy-server\__tests__\openingSignals.test.mjs proxy-server\__tests__\docs.test.mjs` 8 tests passed；`pnpm build` 通过。
 - **状态：** complete
+
+## V6 Phase 0：复盘闭环方案交叉评审
+
+- [x] 安排只读 Agent 从规则口径、实现影响、测试验收三个角度交叉评审 V6-A。
+- [x] 明确 V6-A 不继续堆强播阈值，第一步只补实时信号复盘字段和流动性分层观测字段。
+- [x] 明确 `liquidityTier` 固定为 `review_only` 语义，不参与触发、评分、语音、高亮和 `configHash`。
+- [x] 明确 `09:35/收盘 outcome 写回` 属于 V6-A2，需要单独复盘记录或存储合同，不纳入 V6-A1 最小实现。
+- [x] 更新 `docs/yidong-jingling/opening-weak-to-strong-plan.md` 的 V6-A 方案。
+- **验证：** 文档评审阶段，未修改生产代码。
+- **状态：** complete
+
+## V6 Phase 1：V6-A1 实时信号复盘字段
+
+- [x] 共享 fixture 增加 `liquidityTier/liquidityTierMode`、分层解释、三段基线、价量增量和量价确认期望字段，先让 TS/C# 测试 RED。
+- [x] TS `OpeningWeakToStrongSignal` 增加临门基线、竞价增量、临门增量和流动性分层观测字段。
+- [x] C# `OpeningWeakToStrongResult`、`OpeningWeakToStrongSignal` 和 `L1EventEngine.ToOpeningSignal` 同步字段。
+- [x] 桌面端 CSV 导出增加 V6-A1 复盘列。
+- [x] 桌面端 proxy 上报测试和 proxy 路由测试验证新字段宽进宽出。
+- **验证：** `pnpm exec vitest run src/services/hotlist/__tests__/OpeningWeakToStrongDetector.test.ts src/services/hotlist/__tests__/OpeningRealtimeEventBuffer.test.ts src/services/hotlist/__tests__/OpeningRealtimeEventBridge.test.ts` 13 tests passed；`dotnet run --project tools\YiDongJingLing.Tests\YiDongJingLing.Tests.csproj` 全部通过；`node --test proxy-server\__tests__\openingSignals.test.mjs proxy-server\__tests__\docs.test.mjs` 8 tests passed；`pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false` 通过；`dotnet build tools\YiDongJingLing\YiDongJingLing.csproj -c Release` 通过；`pnpm build` 通过；`git diff --check` 通过。
+- **状态：** complete
+
+## V6 Phase 2：提交前 code review
+
+- [x] 实现后安排只读 Agent code review，重点检查 TS/C# 字段漂移、`configHash` 未预期变化、proxy 透传、CSV 导出和语音/评分不变。
+- [x] 修复 Important 反馈：TS `OpeningWeakToStrongSignal` 的 `liquidityTier*` 合同改为必填，与 C# 信号合同一致。
+- [x] 补强 Minor 反馈：OpenAPI schema、proxy 透传断言、桌面 payload/CSV 断言覆盖 `liquidityTierBasis/liquidityTierThresholds`。
+- [x] 修复后重跑完整验证。
+- **验证：** `pnpm exec vitest run src/services/hotlist/__tests__/OpeningWeakToStrongDetector.test.ts src/services/hotlist/__tests__/OpeningRealtimeEventBuffer.test.ts src/services/hotlist/__tests__/OpeningRealtimeEventBridge.test.ts src/services/hotlist/__tests__/OpeningSignalClient.test.ts` 15 tests passed；`dotnet run --project tools\YiDongJingLing.Tests\YiDongJingLing.Tests.csproj` 全部通过；`node --test proxy-server\__tests__\openingSignals.test.mjs proxy-server\__tests__\docs.test.mjs` 8 tests passed；`pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false` 通过；`dotnet build tools\YiDongJingLing\YiDongJingLing.csproj -c Release` 0 warning / 0 error；`pnpm build` 通过；`git diff --check` 通过。
+- **状态：** complete
+
+## V6 Phase 3：盘中确认闭环方案纠偏
+
+- [x] 按用户反馈修正 V6 定位：不以收盘后人工复盘为主线，改为 `09:20-10:00` 自动完成候选、触发、确认/失败。
+- [x] 更新 `docs/yidong-jingling/opening-weak-to-strong-plan.md`，新增“竞价弱转强盘中确认闭环”状态机、字段合同、第一版判定和验收条件。
+- [x] 明确 V6-A1 的 `lateBaseline*`、`liquidityTier*` 等字段保留为辅助遥测，不作为 V6 主线目标。
+- **验证：** 文档已更新；生产代码改动进入 Phase 4。
+- **状态：** complete
+
+## V6 Phase 4：盘中状态实现
+
+- [x] 共享 fixture 增加 `v6-intraday-confirmed-strong` 和 `v6-intraday-open-dump-failed`。
+- [x] TS `OpeningWeakToStrongDetector` 增加同股同日 active signal，`09:35:01-10:00:00` 输出 `confirmed/failed` 更新。
+- [x] TS `OpeningRealtimeEventBuffer` 按盘中结果优先级输出更新，避免 `failed/watch` 被早先强信号压住。
+- [x] proxy canonical signal 按盘中结果优先，`failed_open_dump` 可覆盖早先 `strong/pending`，语音仍不重复授权。
+- [x] C# `OpeningWeakToStrongDetector`、`L1EventEngine`、`OpeningWeakToStrongSignal` 同步盘中字段和状态更新；桌面 CSV 导出新增盘中状态列。
+- [x] TS/C# 盘中状态机使用内部常量，不扩展规则对象；`configHash` 保持 V5 规则指纹 `owts-08f44efb`。
+- **验证：** `pnpm exec vitest run src/services/hotlist/__tests__/OpeningWeakToStrongDetector.test.ts src/services/hotlist/__tests__/OpeningRealtimeEventBuffer.test.ts` 8 tests passed；`pnpm exec vitest run src/services/hotlist/__tests__/OpeningWeakToStrongDetector.test.ts src/services/hotlist/__tests__/OpeningRealtimeEventBuffer.test.ts src/services/hotlist/__tests__/OpeningRealtimeEventBridge.test.ts src/services/hotlist/__tests__/OpeningSignalClient.test.ts src/services/hotlist/__tests__/HotStockEventMonitorService.test.ts src/services/hotlist/__tests__/HotStockEventSpeechService.test.ts` 40 tests passed；`node --test proxy-server\__tests__\openingSignals.test.mjs proxy-server\__tests__\docs.test.mjs` 9 tests passed；`dotnet run --project tools\YiDongJingLing.Tests\YiDongJingLing.Tests.csproj` 全部通过；`pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false` 通过；`dotnet build tools\YiDongJingLing\YiDongJingLing.csproj -c Release` 0 warning / 0 error；`pnpm build` 通过；`git diff --check` 通过。
+- **状态：** complete
+
+## V6 Phase 5：盘中闭环提交前 code review
+
+- [x] 复用已存在只读 Agent 完成 code review，重点检查 TS/C# 盘中状态机、proxy canonical/语音仲裁、桌面同股同日状态锁和导出合同。
+- [x] 修复 Important 反馈：proxy 语音授权改为只基于当前 canonical 信号，`failed/watch` 结果不授予语音。
+- [x] 修复 Important 反馈：桌面端 `EventDeduper` 对 `OpeningWeakToStrong` 的盘中状态升级绕过 30 秒冷却，避免 `pending -> confirmed/failed` 被吞掉。
+- [x] 修复 Important 反馈：OpenAPI `opening-signals` schema 补齐 `intradayStatus/intradayOutcome/intraday*` 字段。
+- [x] 补强 review 反馈：`09:25:10` 边界可触发候选、候选不能绕过 `pending` 直接确认、`configHash` 不因 V6 状态机变化而改变；CSV 导出测试按列名断言盘中列和值对齐。
+- **验证：** `node --test proxy-server\__tests__\openingSignals.test.mjs proxy-server\__tests__\docs.test.mjs` 10 tests passed；`dotnet run --project tools\YiDongJingLing.Tests\YiDongJingLing.Tests.csproj` 全部通过；最终全量验证见 `progress.md`。
+- **状态：** complete

@@ -1277,6 +1277,106 @@ docs/yidong-jingling/progress.md
 5. Dragon Board 主行情表对命中股票显示醒目标识。
 6. 本地代理缓存今日信号并去重，便于后续统计冲板概率。
 
+## V6 方案：竞价弱转强盘中确认闭环
+
+V6 主线不再是盘后人工复盘字段，而是服务盘中行动建议。异动精灵和异动雷达的定位是捕捉盘中异动并快速提示“今天这笔资金进攻是否成立”，不是为了挖第二天量化因子。
+
+V6 核心口径：
+
+```text
+09:20-09:25  不可撤单阶段量价齐升，形成候选证据
+09:25-09:30  确定基线后触发严格候选，给开盘前行动窗口
+09:30-09:35  跳空高开、快速上攻或冲板，升级为开盘承接中的竞价弱转强
+09:35-10:00  自动跟踪承接，写回确认/失败/观察结果
+```
+
+`09:15-09:19:59` 仍不作为强依据。`09:20-09:25` 是候选证据窗口；`09:25:10-09:29:59` 是早期行动提醒窗口；`09:30-09:35` 是开盘承接升级窗口；`09:35-10:00` 是盘中定性窗口。10 点前基本完成弱转强当日确定性判断，收盘后人工复盘只用于后续调参，不是使用信号的前置条件。
+
+V6 不新增规则阈值字段，不改变 V5 `configHash`。早期候选开始时间、10 点前收口和盘中确认推进值是状态机常量，只用于盘中提醒分层；规则指纹仍用于标识竞价弱转强原始触发规则。
+
+### 状态机
+
+| 阶段 | 状态 | 触发口径 | 产品动作 |
+|------|------|----------|----------|
+| `09:20-09:25` | 内部候选 | 不可撤单阶段量价齐升、临门确认、不回落 | 只保存证据，不刷屏强播。 |
+| `09:25:10-09:29:59` | `preopen_candidate` | 双基线完整，`priceVolumeConfirmed=true`，无质量/量价风险标记 | 可高亮/播报“竞价弱转强候选”，明确“待开盘验证”。 |
+| `09:30-09:35` | `pending` | 满足 V5 弱转强模式族，跳空高开、快速上攻或冲板 | 可再次高亮/播报，提示“开盘承接确认中”。 |
+| `09:35-10:00` | `confirmed` | 价格继续上攻、站稳开盘/竞价确认价，或逼近/触及涨停 | 更新原信号状态，必要时补一条确认事件。 |
+| `09:35-10:00` | `failed` | 放量跌回开盘价/昨收/竞价确认价下方 | 更新原信号状态，标记疑似竞价诱多。 |
+| `09:35-10:00` | `watch` | 未明显走强也未走坏 | 保留观察，不强行定性成功。 |
+
+第一版不新增独立信号类型，继续使用同一个 `signalType = opening_weak_to_strong` 和同一个 proxy dedupe key。候选、开盘承接和盘中结果通过状态字段区分；网页异动列表的本地事件 id 按阶段追加后缀，避免 `09:25` 早播吃掉 `09:30` 升级播报。
+
+### 字段合同
+
+V6 在现有信号字段上新增盘中状态字段：
+
+| 字段 | 口径 |
+|------|------|
+| `intradayStatus` | `preopen_candidate/pending/confirmed/failed/watch`；`09:25` 严格候选为 `preopen_candidate`，`09:30-09:35` 开盘承接为 `pending`。 |
+| `intradayOutcome` | `preopen_candidate/pending/confirmed_strong/failed_open_dump/watch_only`。 |
+| `intradayStatusAt` | 状态判定时间。候选、开盘承接和盘中更新均等于当前 quote 时间。 |
+| `intradayPrice` | 状态判定时最新价。 |
+| `intradayPct` | 状态判定时相对昨收涨幅，单位为百分点。 |
+| `intradayAmount` | 状态判定时成交额。 |
+| `intradayNote` | 面向盘中用户的简短解释，例如“09:35后继续上攻并站稳”。 |
+
+保留 V6-A1 已实现的 `lateBaseline*`、`auctionAmountDelta`、`lateAmountDelta`、`liquidityTier*` 等字段，但这些字段降级为辅助遥测和导出证据，不再作为 V6 主线目标。
+
+### 第一版判定
+
+早期候选：
+
+```text
+当前时间在 09:25:10-09:29:59
+且 09:20 初始基线、09:24 临门基线、09:25 确定基线完整
+且 priceVolumeConfirmed = true
+且没有 auctionProfile 风险标记、覆盖率/时间戳质量风险
+输出 preopen_candidate，语音文案必须带“候选/待开盘验证”
+```
+
+开盘承接：
+
+```text
+当前时间在 09:30:00-09:35:00
+满足 V5 弱转强模式族
+输出 pending，语音文案提示“开盘承接确认中/等待盘中确认”
+```
+
+确认成功：
+
+```text
+当前时间在 09:35:01-10:00:00
+且此前同股同日已在 09:30-09:35 触发 pending 开盘承接
+且 latestPct >= max(firstWindowPct + 1.0, officialOpenPct, auctionPct)
+且 lastPrice >= max(preClose, officialOpen * 0.995)
+```
+
+失败：
+
+```text
+当前时间在 09:35:01-10:00:00
+且此前同股同日已触发 opening_weak_to_strong
+且 lastPrice < max(preClose, officialOpen * 0.995)
+```
+
+观察：
+
+```text
+到 10:00 前没有继续上攻，也没有跌破关键支撑
+```
+
+第一版先实现 `confirmed` 和 `failed` 的实时更新；`watch_only` 可在后续状态定时器或 10:00 收口任务中补齐。这样不会为了补齐“每天都有最终标签”而引入复杂调度。
+
+### 验收
+
+1. `09:25:10-09:29:59` 严格候选触发的信号包含 `intradayStatus=preopen_candidate`、`intradayOutcome=preopen_candidate`，GUI/语音显示“竞价弱转强候选”。
+2. `09:30-09:35` 开盘承接触发的信号包含 `intradayStatus=pending`、`intradayOutcome=pending`。
+3. `09:35-10:00` 继续上攻时，只有已通过 `pending` 开盘承接的同一 `opening_weak_to_strong` 更新为 `confirmed/confirmed_strong`。
+4. `09:35-10:00` 跌破开盘/昨收支撑时，同一 `opening_weak_to_strong` 更新为 `failed/failed_open_dump`，并带 `intraday_open_dump` 风险标记。
+5. proxy 使用同一 dedupe key 保存盘中更新，`failed` 结果可以覆盖早先 `strong` 首发信号；语音按阶段授权，`preopen_candidate` 和 `pending` 可各播一次，同阶段只播一次。
+6. 桌面端首发后不因同股同日状态锁而压住开盘承接、盘中确认或失败更新。
+
 ## 参考资料
 
 官方规则和行情口径：
