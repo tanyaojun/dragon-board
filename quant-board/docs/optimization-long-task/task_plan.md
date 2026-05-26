@@ -115,12 +115,12 @@ Phase 13 in progress
 
 ### Phase 13: Report-Only Price Quality Diagnostics
 
-- [ ] 新增只读价格质量诊断：`crossMarketZeroPriceRows`、`allZeroPriceFrames`、`partialAshareZeroPriceRows`
-- [ ] 将诊断透传到 `dataQuality.reportOnlyDiagnostics.priceQuality`
-- [ ] 确保默认回测不启用任何价格过滤，不改变 `severity/researchGrade`
-- [ ] 让 long-test 摘要记录该诊断，便于后续 weekly checkpoint 观察
-- [ ] 补充 API/service 与 helper 测试
-- **Status:** in_progress
+- [x] 新增只读价格质量诊断：`crossMarketZeroPriceRows`、`allZeroPriceFrames`、`partialAshareZeroPriceRows`
+- [x] 将诊断透传到 `dataQuality.reportOnlyDiagnostics.priceQuality`
+- [x] 确保默认回测不启用任何价格过滤，不改变 `severity/researchGrade`
+- [x] 让 long-test 摘要记录该诊断，便于后续 weekly checkpoint 观察
+- [x] 补充 API/service 与 helper 测试
+- **Status:** complete
 
 ## Optimization Setup
 

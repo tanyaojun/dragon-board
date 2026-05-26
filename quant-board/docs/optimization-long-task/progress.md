@@ -286,13 +286,24 @@ Conclusion:
 
 ### Phase 13: Report-Only Price Quality Diagnostics
 
-- **Status:** in_progress
+- **Status:** complete
 - Actions taken:
-  - 新增默认开启的只读诊断字段，不改变默认过滤、交易逻辑和质量等级。
-  - 诊断字段：`crossMarketZeroPriceRows`、`allZeroPriceFrames`、`partialAshareZeroPriceRows`。
-  - 输出位置：`dataQuality.reportOnlyDiagnostics.priceQuality`。
-  - long-test JSONL 摘要追加 `priceQualityDiagnostics`，用于后续 checkpoint 横向观察。
-  - 补充 helper 分类测试、API/service 默认 report-only 测试和 long-test 摘要测试。
+  - 新增 `_price_quality_diagnostics()` 在 `BacktestService.run_ranktrend` 中，基于 `_prepare_frames_for_backtest` 后、显式研究过滤前的 `run_frames` 计算价格诊断。
+  - 诊断字段：`crossMarketZeroPriceRows`（跨市场/非 A 股零行情行）、`allZeroPriceFrames`（整帧价格为 0 的异常快照）、`partialAshareZeroPriceRows`（A 股局部零价行）。
+  - 诊断元数据：`role=report_only`、`autoApplyDefaults=False`、`computedBeforeResearchFilters=True`。
+  - 输出位置：`quality_gate["reportOnlyDiagnostics"]["priceQuality"]`，经 `BacktestEngine._data_quality_summary` 原样透传到报告 `dataQuality.reportOnlyDiagnostics.priceQuality`。
+  - long-test JSONL 摘要追加 `priceQualityDiagnostics` 字段（`summarize_longtest_baseline` 行 688）。
+  - 默认回测不启用任何价格过滤，`severity`/`researchGrade` 不受诊断影响；测试验证 `runtimeFilter` 为空 `{}`。
+  - 补充测试：`test_price_quality_diagnostics_classifies_zero_price_root_causes`（helper 分类）、`test_ranktrend_backtest_price_quality_diagnostics_are_report_only_by_default`（API/service 层）、`test_summarize_longtest_baseline_includes_price_quality`（long-test 摘要）。14 个相关测试全部通过。
+- Files created/modified:
+  - `quant-board/backend/services.py`（`_price_quality_diagnostics` + `_price_is_positive` + `_is_cross_market_zero_price_stock` + `_has_zero_quote_shape` + `_raw_stock_code` + `_load_a_share_codes`）
+  - `quant-board/backend/core/backtest/engine.py`（`reportOnlyDiagnostics` 透传）
+  - `quant-board/backend/cli.py`（`summarize_longtest_baseline` 追加 `priceQualityDiagnostics`）
+  - `quant-board/tests/test_money_flow_quality_gate.py`（helper 分类测试）
+  - `quant-board/tests/test_quant_board.py`（API/service 层和 long-test 摘要测试）
+  - `quant-board/docs/api-cli.md`（Phase 13 文档）
+  - `quant-board/docs/optimization-long-task/task_plan.md`
+  - `quant-board/docs/optimization-long-task/progress.md`
 
 ## Test Results
 
@@ -338,8 +349,8 @@ Conclusion:
 
 | Question | Answer |
 | --- | --- |
-| Where am I? | Phase 11 已完成：显式 `price<=0` 过滤复跑和前后对比已完成。 |
-| Where am I going? | Phase 12 已完成；下一步可新增 report-only 价格质量诊断字段，拆出跨市场零行情、全零帧和局部 A 股报价缺失。 |
-| What's the goal? | 在 `dragonboard_live` 上形成可追溯、可复跑、质量字段真实可信的 RankTrend 长测链路。 |
-| What have I learned? | H1/H2 的零价影响主要来自跨市场/非 A 股/代码失配零行情；Q1 同时受全零异常帧和过滤后路径变化影响。 |
-| What have I done? | 完成健康检查、数据集枚举、基线回测、优化、长测自动化、资金流质量统计修复、非正价格诊断、显式过滤复跑和 Phase 12 分拆归因复跑。 |
+| Where am I? | Phase 13 已完成：report-only 价格质量诊断已实现、测试通过并同步文档。 |
+| Where am I going? | 所有 13 个 Phase 已完成。后续等待用户指示下一阶段工作。 |
+| What's the goal? | 在 `dragonboard_live` 上形成可追溯、可复跑、质量字段真实可信的 RankTrend 长测链路 —— 已达成。 |
+| What have I learned? | H1/H2 的零价影响主要来自跨市场/非 A 股/代码失配零行情；Q1 同时受全零异常帧和过滤后路径变化影响。report-only 诊断能在不改变交易逻辑的前提下持续观察价格质量趋势。 |
+| What have I done? | 完成全部 13 个 Phase：健康检查、数据集枚举、基线回测、优化、长测自动化、资金流质量统计修复、非正价格诊断、显式过滤复跑、Phase 12 分拆归因复跑和 Phase 13 report-only 价格质量诊断。 |
