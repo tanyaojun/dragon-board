@@ -338,6 +338,42 @@
                       <span>复盘结论</span>
                       <textarea v-model="reviewForm.reviewNotes" rows="3" />
                     </label>
+                  <div class="execution-record">
+                    <div class="section-header">
+                      <h4>执行记录</h4>
+                      <span>实际成交详情，用于回测对齐</span>
+                    </div>
+                    <div class="form-grid exec-grid">
+                      <label>
+                        <span>买入价</span>
+                        <input v-model.number="execForm.entryPrice" type="number" step="0.01" placeholder="12.50" />
+                      </label>
+                      <label>
+                        <span>买入时间</span>
+                        <input v-model="execForm.entryTime" type="datetime-local" />
+                      </label>
+                      <label>
+                        <span>卖出价</span>
+                        <input v-model.number="execForm.exitPrice" type="number" step="0.01" placeholder="13.20" />
+                      </label>
+                      <label>
+                        <span>卖出时间</span>
+                        <input v-model="execForm.exitTime" type="datetime-local" />
+                      </label>
+                      <label>
+                        <span>止损线</span>
+                        <input v-model.number="execForm.stopLossPrice" type="number" step="0.01" placeholder="11.70" />
+                      </label>
+                      <label>
+                        <span>止盈线</span>
+                        <input v-model.number="execForm.takeProfitPrice" type="number" step="0.01" placeholder="14.50" />
+                      </label>
+                      <label>
+                        <span>仓位占比</span>
+                        <input v-model.number="execForm.positionPct" type="number" step="0.01" min="0" max="1" placeholder="0.20" />
+                      </label>
+                    </div>
+                  </div>
                   </section>
                 </template>
                 <div v-else class="empty detail-empty">选择一条候选股查看分析详情</div>
@@ -444,6 +480,7 @@ import type {
   CandidateStatus,
   CandidateThesisUpdate,
   CandidateWorkbenchReview,
+  TradeExecutionFields,
 } from '@/services/candidate/types'
 import { AppEvents } from '@/types'
 import { EventManager } from '@/utils/eventManager'
@@ -484,6 +521,15 @@ const reviewForm = ref<CandidateReviewUpdate>({
   modelResult: 'unknown',
   executionResult: 'unknown',
   reviewNotes: '',
+})
+const execForm = ref<TradeExecutionFields>({
+  entryPrice: undefined,
+  entryTime: '',
+  exitPrice: undefined,
+  exitTime: '',
+  stopLossPrice: undefined,
+  takeProfitPrice: undefined,
+  positionPct: undefined,
 })
 
 const visibleCandidates = computed(() => {
@@ -646,6 +692,15 @@ function applySelectedEntryToForms(entry: CandidateJournalEntry | null) {
     executionResult: entry?.executionResult || 'unknown',
     reviewNotes: entry?.reviewNotes || '',
   }
+  execForm.value = {
+    entryPrice: entry?.entryPrice ?? undefined,
+    entryTime: entry?.entryTime ?? '',
+    exitPrice: entry?.exitPrice ?? undefined,
+    exitTime: entry?.exitTime ?? '',
+    stopLossPrice: entry?.stopLossPrice ?? undefined,
+    takeProfitPrice: entry?.takeProfitPrice ?? undefined,
+    positionPct: entry?.positionPct ?? undefined,
+  }
 }
 
 function replaceCandidate(updated: CandidateJournalEntry) {
@@ -795,7 +850,10 @@ async function saveReview() {
   savingReview.value = true
   errorMessage.value = ''
   try {
-    const updated = await candidateJournalService.saveCandidateReview(selectedEntry.value.id, reviewForm.value)
+    const updated = await candidateJournalService.saveCandidateReview(selectedEntry.value.id, {
+      ...reviewForm.value,
+      ...execForm.value,
+    })
     replaceCandidate(updated)
   } catch (error) {
     errorMessage.value = `候选复盘保存失败：${error instanceof Error ? error.message : '未知错误'}`
@@ -1820,5 +1878,17 @@ select {
     grid-column: 1;
     grid-row: auto;
   }
+}
+
+.execution-record {
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--candidate-line);
+}
+
+.exec-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
 }
 </style>

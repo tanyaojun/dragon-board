@@ -85,6 +85,13 @@ function normalizeEntry(raw: any): CandidateJournalEntry {
     modelResult: String(raw?.modelResult || raw?.model_result || 'unknown'),
     executionResult: String(raw?.executionResult || raw?.execution_result || 'unknown'),
     reviewNotes: String(raw?.reviewNotes || raw?.review_notes || ''),
+    entryPrice: toSafeNumber(raw?.entryPrice ?? raw?.entry_price),
+    entryTime: String(raw?.entryTime || raw?.entry_time || ''),
+    exitPrice: toSafeNumber(raw?.exitPrice ?? raw?.exit_price),
+    exitTime: String(raw?.exitTime || raw?.exit_time || ''),
+    stopLossPrice: toSafeNumber(raw?.stopLossPrice ?? raw?.stop_loss_price),
+    takeProfitPrice: toSafeNumber(raw?.takeProfitPrice ?? raw?.take_profit_price),
+    positionPct: toSafeNumber(raw?.positionPct ?? raw?.position_pct),
     reviewTags: Array.isArray(raw?.reviewTags || raw?.review_tags)
       ? (raw.reviewTags || raw.review_tags).map((item: unknown) => String(item))
       : [],
@@ -360,6 +367,13 @@ export class CandidateJournalService {
       model_result: update.modelResult,
       execution_result: update.executionResult,
       review_notes: update.reviewNotes,
+      entry_price: update.entryPrice,
+      entry_time: update.entryTime,
+      exit_price: update.exitPrice,
+      exit_time: update.exitTime,
+      stop_loss_price: update.stopLossPrice,
+      take_profit_price: update.takeProfitPrice,
+      position_pct: update.positionPct,
     }
     if (update.reviewOutcome !== 'pending') {
       payload.status = 'reviewed'

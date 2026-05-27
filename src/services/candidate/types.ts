@@ -142,6 +142,13 @@ export interface CandidateJournalEntry {
   reviewNotes: string
   reviewTags: string[]
   signalsSnapshot: Record<string, any> | null
+  entryPrice?: number
+  entryTime?: string
+  exitPrice?: number
+  exitTime?: string
+  stopLossPrice?: number
+  takeProfitPrice?: number
+  positionPct?: number
   createdAt: string
   updatedAt: string
 }
@@ -155,7 +162,17 @@ export interface CandidateThesisUpdate {
   skipReason: string
 }
 
-export interface CandidateReviewUpdate {
+export interface TradeExecutionFields {
+  entryPrice?: number
+  entryTime?: string
+  exitPrice?: number
+  exitTime?: string
+  stopLossPrice?: number
+  takeProfitPrice?: number
+  positionPct?: number
+}
+
+export interface CandidateReviewUpdate extends Partial<TradeExecutionFields> {
   reviewOutcome: string
   modelResult: string
   executionResult: string
