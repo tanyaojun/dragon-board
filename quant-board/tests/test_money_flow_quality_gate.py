@@ -447,3 +447,71 @@ def test_formal_money_flow_gate_passes_broker_l2_rows() -> None:
 
     assert result.passed is True
     assert result.stats["formalMoneyFlowCoverageRatio"] == 1
+
+
+def test_compute_signal_efficacy_detects_random_signals() -> None:
+    from backend.services import compute_signal_efficacy
+
+    signals = [
+        {
+            "snapshotId": "s1", "code": "000001", "price": 10.0,
+            "rankTrend": {"meta": {"sampleQuality": {"tier": "A_MAIN"}}},
+        },
+        {
+            "snapshotId": "s1", "code": "000002", "price": 10.0,
+            "rankTrend": {"meta": {"sampleQuality": {"tier": "A_MAIN"}}},
+        },
+        {
+            "snapshotId": "s1", "code": "000003", "price": 10.0,
+            "rankTrend": {"meta": {"sampleQuality": {"tier": "N_NEUTRAL"}}},
+        },
+    ]
+
+    frames = [
+        {"snapshotId": "s1", "stocks": [
+            {"code": "000001", "price": 10.0},
+            {"code": "000002", "price": 10.0},
+            {"code": "000003", "price": 10.0},
+        ]},
+        {"snapshotId": "s2", "stocks": [
+            {"code": "000001", "price": 10.5},  # up
+            {"code": "000002", "price": 9.5},   # down
+            {"code": "000003", "price": 10.6},  # up
+        ]},
+    ]
+
+    result = compute_signal_efficacy(signals, frames)
+
+    assert result["totalSignals"] == 3
+    assert result["aMainSamples"] == 2
+    assert result["directionAccuracy"] == 0.5  # 1 correct / 2
+    assert result["layer1Status"] == "red"  # 0.5 <= 0.55
+
+
+def test_compute_execution_quality_flags_large_bias() -> None:
+    from backend.services import compute_execution_quality
+
+    h1 = {"totalReturn": 0.05, "tradeCount": 40, "maxDrawdown": -0.03}
+    h2 = {"totalReturn": -0.12, "tradeCount": 55, "maxDrawdown": -0.10}
+
+    result = compute_execution_quality(h1, h2)
+
+    assert abs(result["bias"]) > 0.05  # |5% - (-12%)| = 17pp
+    assert result["biasOk"] is False
+    assert result["drawdownDiff"] > 0.05
+    assert result["drawdownDiffOk"] is False
+    assert result["layer2Status"] == "red"
+
+
+def test_compute_execution_quality_accepts_small_bias() -> None:
+    from backend.services import compute_execution_quality
+
+    h1 = {"totalReturn": 0.04, "tradeCount": 20, "maxDrawdown": -0.03}
+    h2 = {"totalReturn": 0.01, "tradeCount": 22, "maxDrawdown": -0.05}
+
+    result = compute_execution_quality(h1, h2)
+
+    assert abs(result["bias"]) == 0.03
+    assert result["biasOk"] is True  # 3pp < min(|4%|, 15pp) = 4pp
+    assert result["tradeCountDiff"] == 2
+    assert result["tradeCountDiffOk"] is True  # 2 < 20*0.3 = 6
