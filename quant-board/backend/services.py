@@ -781,6 +781,8 @@ class BacktestService:
             frames=run_frames,
         )
         quality_gate["layer1SignalEfficacy"] = layer_1_efficacy
+        if isinstance(result.get("dataQuality"), dict):
+            result["dataQuality"]["layer1SignalEfficacy"] = layer_1_efficacy
 
         run_id = new_id("bt")
         request_meta = {

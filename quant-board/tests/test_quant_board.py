@@ -3740,3 +3740,76 @@ def test_cli_exposes_theme_trend_commands() -> None:
     assert opt_args.dataset_id == "ds_theme"
     assert opt_args.method == "tpe"
     assert opt_args.no_wait is True
+
+
+def test_ranktrend_backtest_includes_layer1_signal_efficacy(tmp_path: Path) -> None:
+    client = TestClient(app)
+    bundle = make_bundle(tmp_path)
+    data = json.loads(bundle.read_text(encoding="utf-8"))
+    bundle.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+    imported = client.post(
+        "/api/datasets/import",
+        json={"sourceType": "json_bundle", "sourcePath": str(bundle), "name": "layer1-test", "snapshotTypes": ["half_hour"]},
+    )
+    assert imported.status_code == 200, imported.text
+    dataset = imported.json()
+
+    response = client.post(
+        "/api/backtests/rank-trend",
+        json={"datasetId": dataset["id"], "snapshotType": "half_hour", "randomSeed": 20260430},
+    )
+    assert response.status_code == 200, response.text
+    run = response.json()
+
+    data_quality = run.get("dataQuality") or {}
+    layer1 = data_quality.get("layer1SignalEfficacy")
+    assert layer1 is not None, "Layer 1 signal efficacy missing from backtest output"
+    assert "tierRatio" in layer1
+    assert "directionAccuracy" in layer1
+    assert "layer1Status" in layer1
+    assert layer1["totalSignals"] > 0
+
+
+def test_longtest_baseline_summary_includes_layer1_layer2() -> None:
+    from backend.cli import summarize_longtest_baseline
+
+    spec = {
+        "label": "H1_half_hour_current_bar",
+        "purpose": "page-compatible optimistic baseline",
+        "payload": {"maxHoldingBars": 40, "tradeConfig": {"executionMode": "current_bar"}},
+    }
+    run = {
+        "runId": "bt_test_layer",
+        "totalReturn": 0.05,
+        "maxDrawdown": -0.03,
+        "sharpe": 0.5,
+        "winRate": 0.4,
+        "tradeCount": 40,
+        "dataQuality": {
+            "severity": "warn",
+            "researchGrade": "degraded",
+            "layer1SignalEfficacy": {
+                "tierRatio": 0.04,
+                "directionAccuracy": 0.6,
+                "tierDiscrimination": 0.08,
+                "layer1Status": "green",
+            },
+            "layer2ExecutionQuality": {
+                "bias": 0.03,
+                "layer2Status": "green",
+            },
+            "qualityGate": {"stats": {}},
+            "reportOnlyDiagnostics": {},
+        },
+    }
+
+    summary = summarize_longtest_baseline(spec, run)
+
+    layer1 = summary.get("layer1SignalEfficacy")
+    assert layer1 is not None, "Layer 1 missing from summary"
+    assert layer1["layer1Status"] == "green"
+
+    layer2 = summary.get("layer2ExecutionQuality")
+    assert layer2 is not None, "Layer 2 missing from summary"
+    assert layer2["layer2Status"] == "green"
