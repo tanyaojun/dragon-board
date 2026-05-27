@@ -337,6 +337,161 @@ def _price_quality_diagnostics(
     }
 
 
+def compute_signal_efficacy(
+    signals: list[dict[str, Any]],
+    frames: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Layer 1: compute signal tier stability, direction accuracy, and tier discrimination."""
+    if not signals:
+        return {
+            "tierRatio": None,
+            "directionAccuracy": None,
+            "tierDiscrimination": None,
+            "diagnostics": "no_signals",
+        }
+
+    total = len(signals)
+    tier_counts: dict[str, int] = {}
+    a_main_prices: list[dict[str, Any]] = []
+    n_neutral_prices: list[dict[str, Any]] = []
+
+    for signal in signals:
+        tier = str((((signal.get("rankTrend") or {}).get("meta") or {}).get("sampleQuality") or {}).get("tier") or "?")
+        tier_counts[tier] = tier_counts.get(tier, 0) + 1
+
+    a_plus_b = tier_counts.get("A_MAIN", 0) + tier_counts.get("B_IGNITION", 0)
+    tier_ratio = round(a_plus_b / total, 4) if total else 0.0
+
+    # Build frame index for next-bar price lookup
+    frame_index: dict[str, int] = {}
+    for idx, frame in enumerate(frames):
+        sid = str(frame.get("snapshotId") or "")
+        frame_index[sid] = idx
+
+    a_correct = 0
+    a_total = 0
+    n_correct = 0
+    n_total = 0
+
+    for signal in signals:
+        tier = str((((signal.get("rankTrend") or {}).get("meta") or {}).get("sampleQuality") or {}).get("tier") or "?")
+        sid = str(signal.get("snapshotId") or "")
+        frame_pos = frame_index.get(sid)
+        if frame_pos is None or frame_pos + 1 >= len(frames):
+            continue
+        next_frame = frames[frame_pos + 1]
+        next_stocks = next_frame.get("stocks") or []
+        next_stock = next((s for s in next_stocks if str(s.get("code") or "") == str(signal.get("code") or "")), None)
+        if next_stock is None:
+            continue
+        try:
+            current_price = float(signal.get("price") or 0)
+            next_price = float(next_stock.get("price") or 0)
+        except (TypeError, ValueError):
+            continue
+        price_up = next_price > current_price
+
+        if tier == "A_MAIN":
+            a_total += 1
+            if price_up:
+                a_correct += 1
+        elif tier == "N_NEUTRAL":
+            n_total += 1
+            if price_up:
+                n_correct += 1
+
+    direction_accuracy = round(a_correct / a_total, 4) if a_total > 0 else None
+    n_accuracy = round(n_correct / n_total, 4) if n_total > 0 else None
+    tier_discrimination = round((direction_accuracy or 0) - (n_accuracy or 0), 4) if direction_accuracy is not None and n_accuracy is not None else None
+
+    # Binomial test p-value for direction accuracy vs random (H0: p = 0.5)
+    import math
+    p_val: float | None = None
+    if a_total >= 5 and direction_accuracy is not None:
+        se = math.sqrt(0.5 * 0.5 / a_total)
+        z = (direction_accuracy - 0.5) / se if se > 0 else 0
+        p_val = round(0.5 * (1 + math.erf(z / math.sqrt(2))), 4)
+        p_val = 1 - p_val  # one-sided: P(Z > z) under H0
+
+    layer1_green = (
+        direction_accuracy is not None and direction_accuracy > 0.55
+        and (p_val is not None and p_val < 0.10)
+        and tier_discrimination is not None and tier_discrimination > 0.05
+        and 0.02 <= tier_ratio <= 0.15
+    )
+
+    return {
+        "tierRatio": tier_ratio,
+        "aPlusBTierCount": a_plus_b,
+        "tierCounts": tier_counts,
+        "totalSignals": total,
+        "directionAccuracy": direction_accuracy,
+        "aMainSamples": a_total,
+        "nNeutralSamples": n_total,
+        "tierDiscrimination": tier_discrimination,
+        "binomialPValue": p_val,
+        "thresholds": {
+            "directionAccuracyMin": 0.55,
+            "binomialPMax": 0.10,
+            "tierDiscriminationMin": 0.05,
+            "tierRatioMin": 0.02,
+            "tierRatioMax": 0.15,
+        },
+        "layer1Status": "green" if layer1_green else "red",
+    }
+
+
+def compute_execution_quality(
+    h1_summary: dict[str, Any],
+    h2_summary: dict[str, Any],
+    history: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Layer 2: compute execution bias between current_bar (H1) and next_bar (H2)."""
+    h1_return = float(h1_summary.get("totalReturn") or 0)
+    h2_return = float(h2_summary.get("totalReturn") or 0)
+    bias = round(h1_return - h2_return, 4)
+    abs_h1 = abs(h1_return)
+    threshold = min(abs_h1, 0.15) if abs_h1 > 0 else 0.15
+
+    h1_trades = int(h1_summary.get("tradeCount") or 0)
+    h2_trades = int(h2_summary.get("tradeCount") or 0)
+    trade_diff = h2_trades - h1_trades
+
+    h1_dd = float(h1_summary.get("maxDrawdown") or 0)
+    h2_dd = float(h2_summary.get("maxDrawdown") or 0)
+    dd_diff = round(abs(h1_dd - h2_dd), 4)
+
+    direction_ratio = 1.0
+    if history:
+        recent = history[-4:]
+        h1_better = sum(
+            1 for h in recent
+            if float((h.get("h1Summary") or {}).get("totalReturn") or 0)
+            >= float((h.get("h2Summary") or {}).get("totalReturn") or 0)
+        )
+        direction_ratio = round(h1_better / len(recent), 2) if recent else 1.0
+
+    bias_ok = abs(bias) <= threshold
+    direction_ok = direction_ratio >= 0.75
+    trade_diff_ok = trade_diff <= h1_trades * 0.3 if h1_trades > 0 else True
+    dd_diff_ok = dd_diff <= 0.05
+
+    all_green = bias_ok and direction_ok and trade_diff_ok and dd_diff_ok
+
+    return {
+        "bias": bias,
+        "biasThreshold": threshold,
+        "biasOk": bias_ok,
+        "directionRatio": direction_ratio,
+        "directionOk": direction_ok,
+        "tradeCountDiff": trade_diff,
+        "tradeCountDiffOk": trade_diff_ok,
+        "drawdownDiff": dd_diff,
+        "drawdownDiffOk": dd_diff_ok,
+        "layer2Status": "green" if all_green else "red",
+    }
+
+
 def _ensure_runtime_filtered_frames_usable(frames: list[dict[str, Any]], quality_gate: dict[str, Any]) -> None:
     stats = quality_gate.get("stats") if isinstance(quality_gate.get("stats"), dict) else {}
     min_snapshot_count = int(stats.get("minSnapshotCount") or 2)
