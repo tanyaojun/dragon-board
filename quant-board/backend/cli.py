@@ -39,7 +39,16 @@ from backend.data.theme_database import ThemeSessionLocal, init_theme_db
 from backend.data.theme_service import ThemeMigrationService
 from backend.operations.schedule import run_after_market_once
 from backend.settings import get_settings
-from backend.services import BacktestService, GoldenService, OptimizationService, compute_alignment, compute_execution_quality
+from backend.services import (
+    BacktestService,
+    GoldenService,
+    OptimizationService,
+    check_layer1_meltdown,
+    check_layer3_trend,
+    compute_alignment,
+    compute_execution_quality,
+    read_checkpoint_history,
+)
 from backend.utils import json_loads
 
 DEFAULT_MOMENTUM_PERIODS = [3, 5, 8, 13, 21]
@@ -760,6 +769,23 @@ def cmd_run_longtest_baselines(args: argparse.Namespace) -> None:
     except Exception as exc:
         print(f"  Layer 3 alignment skipped: {exc}")
         result["layer3Alignment"] = {"status": "skipped", "reason": str(exc)}
+
+    # Cross-period checks
+    jsonl_path = get_settings().reports_dir / "long_test_runs.jsonl"
+    history = read_checkpoint_history(jsonl_path, limit=6)
+
+    l1_meltdown_h1 = check_layer1_meltdown(history, "H1_half_hour_current_bar")
+    if l1_meltdown_h1.get("meltdown"):
+        print(f"  ⚠️  L1 meltdown: {l1_meltdown_h1['consecutiveRedPeriods']} consecutive red periods on H1")
+
+    l3_trend = check_layer3_trend(history)
+    if l3_trend.get("greenLight"):
+        print("  ✅ L3 trend: 2 consecutive sufficient alignments → green light")
+
+    result["crossPeriod"] = {
+        "layer1MeltdownH1": l1_meltdown_h1,
+        "layer3Trend": l3_trend,
+    }
 
     output = Path(args.output) if args.output else get_settings().reports_dir / "long_test_runs.jsonl"
     output.parent.mkdir(parents=True, exist_ok=True)

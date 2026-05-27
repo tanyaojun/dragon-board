@@ -528,3 +528,62 @@ def test_compute_execution_quality_flags_red_when_h2_beats_h1() -> None:
 
     assert result["bias"] < 0  # H1 < H2
     assert result["layer2Status"] == "red"  # next_bar beats current_bar
+
+
+def test_compute_signal_efficacy_empty_signals() -> None:
+    from backend.services import compute_signal_efficacy
+
+    result = compute_signal_efficacy([], [])
+    assert result["diagnostics"] == "no_signals"
+    assert result["directionAccuracy"] is None
+    assert result["tierRatio"] is None
+
+
+def test_compute_signal_efficacy_no_next_frame() -> None:
+    from backend.services import compute_signal_efficacy
+
+    signals = [{
+        "snapshotId": "s_last", "code": "000001", "price": 10.0,
+        "rankTrend": {"meta": {"sampleQuality": {"tier": "A_MAIN"}}},
+    }]
+    frames = [{"snapshotId": "s_last", "stocks": [{"code": "000001", "price": 10.0}]}]
+    result = compute_signal_efficacy(signals, frames)
+    assert result["aMainSamples"] == 0  # no next frame available
+    assert result["directionAccuracy"] is None
+
+
+def test_compute_alignment_unavailable_without_mongodb() -> None:
+    from backend.services import compute_alignment
+
+    class FakeRepo:
+        pass
+
+    result = compute_alignment(FakeRepo(), ["bt_test"])
+    assert result["alignmentStatus"] == "unavailable"
+
+
+def test_compute_alignment_empty_run_ids() -> None:
+    from backend.services import compute_alignment
+
+    class FakeRepo:
+        def list_journal_entries(self, **kw):
+            return []
+
+    result = compute_alignment(FakeRepo(), [])
+    assert result["journalExecutedCount"] == 0
+    assert result["alignmentStatus"] == "insufficient_data"
+
+
+def test_compute_execution_quality_with_history() -> None:
+    from backend.services import compute_execution_quality
+
+    h1 = {"totalReturn": 0.03, "tradeCount": 10, "maxDrawdown": -0.02}
+    h2 = {"totalReturn": 0.01, "tradeCount": 12, "maxDrawdown": -0.03}
+    history = [
+        {"h1Summary": {"totalReturn": 0.04}, "h2Summary": {"totalReturn": 0.02}},
+        {"h1Summary": {"totalReturn": 0.03}, "h2Summary": {"totalReturn": 0.01}},
+        {"h1Summary": {"totalReturn": 0.02}, "h2Summary": {"totalReturn": 0.03}},
+        {"h1Summary": {"totalReturn": 0.05}, "h2Summary": {"totalReturn": 0.01}},
+    ]
+    result = compute_execution_quality(h1, h2, history=history)
+    assert result["directionRatio"] == 0.75  # 3 of last 4: H1 >= H2

@@ -3813,3 +3813,50 @@ def test_longtest_baseline_summary_includes_layer1_layer2() -> None:
     layer2 = summary.get("layer2ExecutionQuality")
     assert layer2 is not None, "Layer 2 missing from summary"
     assert layer2["layer2Status"] == "green"
+
+
+def test_layer1_meltdown_detects_consecutive_red() -> None:
+    from backend.services import check_layer1_meltdown
+
+    history = [
+        {"baselines": [{"label": "H1_half_hour_current_bar", "layer1SignalEfficacy": {"layer1Status": "red"}}]},
+        {"baselines": [{"label": "H1_half_hour_current_bar", "layer1SignalEfficacy": {"layer1Status": "red"}}]},
+        {"baselines": [{"label": "H1_half_hour_current_bar", "layer1SignalEfficacy": {"layer1Status": "red"}}]},
+    ]
+    result = check_layer1_meltdown(history)
+    assert result["meltdown"] is True
+    assert result["consecutiveRedPeriods"] == 3
+    assert result["recommendation"] is not None
+
+
+def test_layer1_meltdown_resets_on_green() -> None:
+    from backend.services import check_layer1_meltdown
+
+    history = [
+        {"baselines": [{"label": "H1_half_hour_current_bar", "layer1SignalEfficacy": {"layer1Status": "red"}}]},
+        {"baselines": [{"label": "H1_half_hour_current_bar", "layer1SignalEfficacy": {"layer1Status": "green"}}]},
+        {"baselines": [{"label": "H1_half_hour_current_bar", "layer1SignalEfficacy": {"layer1Status": "red"}}]},
+    ]
+    result = check_layer1_meltdown(history)
+    assert result["meltdown"] is False
+    assert result["consecutiveRedPeriods"] == 1
+
+
+def test_layer3_trend_detects_consecutive_sufficient() -> None:
+    from backend.services import check_layer3_trend
+
+    history = [
+        {"layer3Alignment": {"alignmentStatus": "sufficient"}},
+        {"layer3Alignment": {"alignmentStatus": "sufficient"}},
+    ]
+    result = check_layer3_trend(history)
+    assert result["greenLight"] is True
+    assert result["recommendation"] is not None
+
+
+def test_layer3_trend_insufficient_history() -> None:
+    from backend.services import check_layer3_trend
+
+    result = check_layer3_trend([])
+    assert result["greenLight"] is False
+    assert result["diagnostics"] == "insufficient_history"

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -585,6 +586,87 @@ def _ensure_runtime_filtered_frames_usable(frames: list[dict[str, Any]], quality
         ],
     }
     raise ValueError({"qualityGate": failed_gate})
+
+
+def read_checkpoint_history(
+    jsonl_path: str | Path,
+    limit: int = 6,
+) -> list[dict[str, Any]]:
+    """Read recent checkpoint records from long_test_runs.jsonl."""
+    path = Path(jsonl_path)
+    if not path.exists():
+        return []
+    records: list[dict[str, Any]] = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            try:
+                record = json_loads(line.strip())
+                if record and record.get("checkpointId"):
+                    records.append(record)
+            except Exception:
+                continue
+    return records[-limit:] if len(records) > limit else records
+
+
+def check_layer1_meltdown(
+    history: list[dict[str, Any]],
+    label_filter: str = "H1_half_hour_current_bar",
+) -> dict[str, Any]:
+    """Check if Layer 1 has been red for 3+ consecutive checkpoints (meltdown)."""
+    if len(history) < 3:
+        return {"meltdown": False, "consecutiveRedPeriods": 0, "diagnostics": "insufficient_history"}
+
+    statuses: list[str] = []
+    for record in history:
+        baselines = record.get("baselines") or []
+        baseline = next((b for b in baselines if b.get("label") == label_filter), None)
+        if not baseline:
+            continue
+        l1 = baseline.get("layer1SignalEfficacy") or {}
+        statuses.append(str(l1.get("layer1Status") or "unknown"))
+
+    consecutive_red = 0
+    for status in reversed(statuses):
+        if status == "red":
+            consecutive_red += 1
+        else:
+            break
+
+    return {
+        "meltdown": consecutive_red >= 3,
+        "consecutiveRedPeriods": consecutive_red,
+        "statuses": statuses[-6:],
+        "recommendation": (
+            "触发策略结构性复审：连续 3 期方向精度不达标，建议检查市场状态归属、信号有效性和执行方式"
+            if consecutive_red >= 3
+            else None
+        ),
+    }
+
+
+def check_layer3_trend(
+    history: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Check Layer 3 alignment trend across recent checkpoints."""
+    if len(history) < 2:
+        return {"greenLight": False, "diagnostics": "insufficient_history"}
+
+    statuses: list[str] = []
+    for record in history[-2:]:
+        l3 = record.get("layer3Alignment") or {}
+        statuses.append(str(l3.get("alignmentStatus") or "unknown"))
+
+    consecutive_sufficient = all(s == "sufficient" for s in statuses)
+
+    return {
+        "greenLight": consecutive_sufficient,
+        "recentStatuses": statuses,
+        "recommendation": (
+            "连续 2 期对齐充足，Layer 3 绿灯"
+            if consecutive_sufficient
+            else None
+        ),
+    }
 
 
 class BacktestService:
