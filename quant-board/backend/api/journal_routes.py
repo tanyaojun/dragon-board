@@ -59,6 +59,14 @@ class CreateJournalEntryRequest(BaseModel):
     entry_prerequisites: str = ""
     invalidation_rules: str = ""
     expected_holding_days: int = 3
+    # Layer 3 execution fields
+    entry_price: float | None = None
+    entry_time: str | None = None
+    exit_price: float | None = None
+    exit_time: str | None = None
+    stop_loss_price: float | None = None
+    take_profit_price: float | None = None
+    position_pct: float | None = None
     human_decision: str = "watch"
     skip_reason: str = ""
     review_outcome: str = "pending"
@@ -90,6 +98,14 @@ class UpdateJournalEntryRequest(BaseModel):
     entry_prerequisites: str | None = None
     invalidation_rules: str | None = None
     expected_holding_days: int | None = None
+    # Layer 3 execution fields
+    entry_price: float | None = None
+    entry_time: str | None = None
+    exit_price: float | None = None
+    exit_time: str | None = None
+    stop_loss_price: float | None = None
+    take_profit_price: float | None = None
+    position_pct: float | None = None
     human_decision: str | None = None
     skip_reason: str | None = None
     review_outcome: str | None = None
@@ -126,6 +142,13 @@ def create_entry(payload: CreateJournalEntryRequest) -> dict[str, Any]:
         entry_prerequisites=payload.entry_prerequisites,
         invalidation_rules=payload.invalidation_rules,
         expected_holding_days=payload.expected_holding_days,
+        entry_price=payload.entry_price,
+        entry_time=payload.entry_time,
+        exit_price=payload.exit_price,
+        exit_time=payload.exit_time,
+        stop_loss_price=payload.stop_loss_price,
+        take_profit_price=payload.take_profit_price,
+        position_pct=payload.position_pct,
         human_decision=payload.human_decision,
         skip_reason=payload.skip_reason,
         review_outcome=payload.review_outcome,
@@ -216,6 +239,13 @@ def update_entry(entry_id: str, payload: UpdateJournalEntryRequest) -> dict[str,
         "entry_prerequisites": "entryPrerequisites",
         "invalidation_rules": "invalidationRules",
         "expected_holding_days": "expectedHoldingDays",
+        "entry_price": "entryPrice",
+        "entry_time": "entryTime",
+        "exit_price": "exitPrice",
+        "exit_time": "exitTime",
+        "stop_loss_price": "stopLossPrice",
+        "take_profit_price": "takeProfitPrice",
+        "position_pct": "positionPct",
         "human_decision": "humanDecision",
         "skip_reason": "skipReason",
         "review_outcome": "reviewOutcome",
