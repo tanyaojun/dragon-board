@@ -648,3 +648,41 @@ Q1 的全零帧为 `quarter_hour:2026-04-03:14:15`。跨市场过滤 v2 跳过�
 - `/api/backtests/alignment` 端点直接 HTTP 测试
 - L1 quarter_hour 对照口径（Phase E）
 - L1 分层异常判定（Phase E）
+
+## Phase A-C Closeout (2026-05-27)
+
+### Implementation
+
+补齐 L1 熔断和 L3 跨期追踪，修复 code review 发现的所有问题。
+
+新增函数 (`services.py`):
+- `read_checkpoint_history(jsonl_path, limit)` — 读 JSONL 历史记录
+- `check_layer1_meltdown(history, label_filter)` — 连续 3 期 red → 熔断
+- `check_layer3_trend(history)` — 连续 2 期 sufficient → 绿灯
+
+CLI 集成 (`cli.py`):
+- `cmd_run_longtest_baselines` 在 Layer 3 对齐后调用跨期检查
+- 结果写入 `result["crossPeriod"]` 字段
+
+### Test Results
+
+| 类型 | 数量 | 状态 |
+|---|---|---|
+| 新增单元测试（边界条件） | 5 | ✅ |
+| 新增集成测试（熔断/追踪） | 4 | ✅ |
+| 回归测试 | 43 | ✅ |
+
+### Spec Compliance Final
+
+| # | 需求 | 状态 |
+|---|------|------|
+| L1 熔断：连续3期方向精度不达标 | ✅ 已实现 |
+| L2 黄灯：乐观偏差 | ✅ 已实现 |
+| L3 跨期追踪：连续2期 ✅ | ✅ 已实现 |
+| L3 模型失配 🚨 | ❌ 待 trade journal 数据积累 |
+| L1 quarter_hour 对照 | ❌ Phase E |
+| L1 分层异常判定 | ❌ Phase E |
+
+### Commit
+
+`c3174e9` — 5 files, +475/-1 lines
