@@ -30,7 +30,9 @@ from backend.data.mongodb_cleanup import plan_mongodb_dataset_cleanup
 from backend.data.mongodb_snapshot_repair import backfill_empty_snapshot_rows
 from backend.data.mongodb_backup import get_mongodb_backup_service
 from backend.data.mongodb_research_repair import repair_mongodb_research_metadata
+from backend.data.json_codec import loads_json_field
 from backend.data.repository import Repository
+from backend.data.repository_factory import create_repository
 from backend.data.schemas import ImportDatasetRequest
 from backend.data.storage_inspector import inspect_storage
 from backend.data.supabase_backup import get_backup_client
@@ -739,6 +741,61 @@ def cmd_run_longtest_baselines(args: argparse.Namespace) -> None:
         "randomSeed": args.seed,
         "baselines": baselines,
     }
+
+    # Layer 3: compute alignment if trade journal data available
+    try:
+        repo = create_repository(None)
+        if hasattr(repo, "list_journal_entries"):
+            journal_entries = repo.list_journal_entries(
+                status="reviewed",
+                date_from=args.start_date if hasattr(args, "start_date") else None,
+                date_to=args.end_date if hasattr(args, "end_date") else None,
+                limit=200,
+            )
+            executed = [
+                e for e in journal_entries
+                if e.get("entryPrice") is not None and float(e.get("entryPrice") or 0) > 0
+            ]
+            signal_codes: set[str] = set()
+            for baseline in baselines:
+                run_id = baseline.get("runId") or baseline.get("id")
+                if not run_id:
+                    continue
+                bt_run = repo.get_backtest_run(run_id)
+                if not bt_run:
+                    continue
+                result_json_data = loads_json_field(getattr(bt_run, "result_json", "{}"), {})
+                signals = result_json_data.get("signals") or []
+                for s in signals:
+                    code = str(s.get("code") or "")
+                    if code:
+                        signal_codes.add(code)
+            journal_codes = {str(e.get("stockCode") or e.get("stock_code", "")) for e in executed}
+            intersection = signal_codes & journal_codes
+            intersection_entries = [e for e in executed if str(e.get("stockCode") or e.get("stock_code", "")) in intersection]
+            intersection_pnl = sum(float(e.get("pnl") or 0) for e in intersection_entries)
+            intersection_pnl_pct = round(sum(float(e.get("pnlPct") or 0) for e in intersection_entries), 4)
+            sufficient = len(executed) >= 10
+            alignment = {
+                "journalExecutedCount": len(executed),
+                "signalCodeCount": len(signal_codes),
+                "intersectionCount": len(intersection),
+                "intersectionPnl": intersection_pnl,
+                "intersectionPnlPct": intersection_pnl_pct,
+                "sufficientSample": sufficient,
+                "alignmentStatus": "sufficient" if sufficient else "insufficient_data",
+            }
+            result["layer3Alignment"] = alignment
+            if sufficient:
+                print(f"  Layer 3 alignment: {alignment['intersectionCount']} overlapping stocks, intersection P&L: {alignment['intersectionPnlPct']:.2%}")
+            else:
+                print(f"  Layer 3 alignment: insufficient data ({alignment['journalExecutedCount']} executed trades, need >= 10)")
+        else:
+            result["layer3Alignment"] = {"status": "unavailable", "reason": "journal requires MongoDB"}
+    except Exception as exc:
+        print(f"  Layer 3 alignment skipped: {exc}")
+        result["layer3Alignment"] = {"status": "skipped", "reason": str(exc)}
+
     output = Path(args.output) if args.output else get_settings().reports_dir / "long_test_runs.jsonl"
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("a", encoding="utf-8") as file:
