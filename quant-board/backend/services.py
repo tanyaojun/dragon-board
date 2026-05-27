@@ -774,6 +774,14 @@ class BacktestService:
             },
         }
         result = BacktestEngine().run(run_frames, options)
+
+        # Layer 1: signal efficacy (computed from backtest signals)
+        layer_1_efficacy = compute_signal_efficacy(
+            signals=result.get("signals") or [],
+            frames=run_frames,
+        )
+        quality_gate["layer1SignalEfficacy"] = layer_1_efficacy
+
         run_id = new_id("bt")
         request_meta = {
             **payload,

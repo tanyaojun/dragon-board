@@ -136,6 +136,8 @@ class BacktestEngine:
             if isinstance(gate.get("reportOnlyDiagnostics"), dict)
             else {}
         )
+        layer_1_efficacy = gate.get("layer1SignalEfficacy") if isinstance(gate.get("layer1SignalEfficacy"), dict) else {}
+        layer_2_quality = gate.get("layer2ExecutionQuality") if isinstance(gate.get("layer2ExecutionQuality"), dict) else {}
         dropped_empty_count = int(runtime_filter.get("droppedEmptyHotlistSnapshots") or 0)
         ok_share = float((sample_diagnostics.get("statusShares") or {}).get("ok") or 0)
         degraded_share = float((sample_diagnostics.get("statusShares") or {}).get("degraded") or 0)
@@ -196,6 +198,8 @@ class BacktestEngine:
             "sampleOkShare": ok_share,
             "sampleDegradedShare": degraded_share,
             "sampleInsufficientShare": float((sample_diagnostics.get("statusShares") or {}).get("insufficient") or 0),
+            "layer1SignalEfficacy": layer_1_efficacy,
+            "layer2ExecutionQuality": layer_2_quality,
             "macdStable": has_stable_macd,
             "macdStableObservationBars": macd_diagnostics.get("stableObservationBars"),
             "warnings": unique_warnings,
