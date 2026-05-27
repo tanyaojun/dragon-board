@@ -38,7 +38,7 @@ from backend.data.theme_database import ThemeSessionLocal, init_theme_db
 from backend.data.theme_service import ThemeMigrationService
 from backend.operations.schedule import run_after_market_once
 from backend.settings import get_settings
-from backend.services import BacktestService, GoldenService, OptimizationService
+from backend.services import BacktestService, GoldenService, OptimizationService, compute_execution_quality
 from backend.utils import json_loads
 
 DEFAULT_MOMENTUM_PERIODS = [3, 5, 8, 13, 21]
@@ -686,6 +686,8 @@ def summarize_longtest_baseline(spec: dict[str, Any], run: dict[str, Any]) -> di
         "crossMarketPriceFilter": (data_quality.get("runtimeFilter") or {}).get("crossMarketPriceFilter") if isinstance(data_quality.get("runtimeFilter"), dict) else None,
         "allZeroPriceFrameFilter": (data_quality.get("runtimeFilter") or {}).get("allZeroPriceFrameFilter") if isinstance(data_quality.get("runtimeFilter"), dict) else None,
         "priceQualityDiagnostics": report_only_diagnostics.get("priceQuality"),
+        "layer1SignalEfficacy": data_quality.get("layer1SignalEfficacy"),
+        "layer2ExecutionQuality": data_quality.get("layer2ExecutionQuality"),
         "blockedByLimit": matching.get("blockedByLimit"),
         "nextBarEntries": matching.get("nextBarEntries"),
         "nextBarExits": matching.get("nextBarExits"),
@@ -715,6 +717,18 @@ def cmd_run_longtest_baselines(args: argparse.Namespace) -> None:
         for spec in specs:
             run = service.run_ranktrend(spec["payload"])
             baselines.append(summarize_longtest_baseline(spec, run))
+
+    # Layer 2: compute execution quality from H1 vs H2
+    h1_baseline = next((b for b in baselines if b.get("label") == "H1_half_hour_current_bar"), None)
+    h2_baseline = next((b for b in baselines if b.get("label") == "H2_half_hour_next_bar"), None)
+    if h1_baseline and h2_baseline:
+        layer_2 = compute_execution_quality(
+            h1_summary=h1_baseline,
+            h2_summary=h2_baseline,
+        )
+        for baseline in baselines:
+            if baseline.get("label") in ("H1_half_hour_current_bar", "H2_half_hour_next_bar"):
+                baseline["layer2ExecutionQuality"] = layer_2
 
     result = {
         "ok": True,
