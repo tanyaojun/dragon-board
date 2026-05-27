@@ -353,8 +353,6 @@ def compute_signal_efficacy(
 
     total = len(signals)
     tier_counts: dict[str, int] = {}
-    a_main_prices: list[dict[str, Any]] = []
-    n_neutral_prices: list[dict[str, Any]] = []
 
     for signal in signals:
         tier = str((((signal.get("rankTrend") or {}).get("meta") or {}).get("sampleQuality") or {}).get("tier") or "?")
@@ -409,7 +407,7 @@ def compute_signal_efficacy(
     p_val: float | None = None
     if a_total >= 5 and direction_accuracy is not None:
         se = math.sqrt(0.5 * 0.5 / a_total)
-        z = (direction_accuracy - 0.5) / se if se > 0 else 0
+        z = (direction_accuracy - 0.5) / se if a_total > 0 else 0
         p_val = round(0.5 * (1 + math.erf(z / math.sqrt(2))), 4)
         p_val = 1 - p_val  # one-sided: P(Z > z) under H0
 
@@ -446,7 +444,12 @@ def compute_execution_quality(
     h2_summary: dict[str, Any],
     history: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Layer 2: compute execution bias between current_bar (H1) and next_bar (H2)."""
+    """Layer 2: compute execution bias between current_bar (H1) and next_bar (H2).
+
+    history, if provided, must be a list of dicts each containing
+    {"h1Summary": {"totalReturn": ...}, "h2Summary": {"totalReturn": ...}}.
+    Only the last 4 entries are used to compute directionRatio.
+    """
     h1_return = float(h1_summary.get("totalReturn") or 0)
     h2_return = float(h2_summary.get("totalReturn") or 0)
     bias = round(h1_return - h2_return, 4)
@@ -534,6 +537,9 @@ def compute_alignment(
             code = str(s.get("code") or "")
             if code:
                 signal_codes.add(code)
+
+    if run_ids and not signal_codes:
+        return {"alignmentStatus": "unavailable", "reason": "no backtest runs found for given run_ids"}
 
     journal_codes = {str(e.get("stockCode") or e.get("stock_code", "")) for e in executed}
 
