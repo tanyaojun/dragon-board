@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -1403,6 +1403,97 @@ def delete_backtest(run_id: str, db: Session | None = Depends(get_db)) -> dict[s
     if not result:
         raise _backtest_not_found(run_id)
     return result
+
+
+@app.get("/api/backtests/alignment")
+def get_alignment(
+    checkpoint_id: str = Query(...),
+    start_date: str | None = Query(None),
+    end_date: str | None = Query(None),
+) -> dict[str, Any]:
+    """Cross-reference trade_journal execution records with backtest signals for a checkpoint period."""
+    repo = create_repository(None)
+    if not hasattr(repo, "list_journal_entries"):
+        return {
+            "checkpointId": checkpoint_id,
+            "journalExecutedCount": 0,
+            "signalCodeCount": 0,
+            "intersectionCount": 0,
+            "sufficientSample": False,
+            "alignmentStatus": "unavailable",
+            "reason": "journal requires MongoDB storage backend",
+        }
+
+    journal_entries = repo.list_journal_entries(
+        status="reviewed",
+        date_from=start_date,
+        date_to=end_date,
+        limit=200,
+    )
+    executed = [
+        e for e in journal_entries
+        if e.get("entryPrice") is not None and float(e.get("entryPrice") or 0) > 0
+    ]
+
+    # Read checkpoint baselines from JSONL
+    jsonl_path = get_settings().reports_dir / "long_test_runs.jsonl"
+    checkpoint_runs: list[dict[str, Any]] = []
+    if jsonl_path.exists():
+        with open(jsonl_path, "r", encoding="utf-8") as f:
+            for line in f:
+                try:
+                    record = json_loads(line.strip())
+                    if record and record.get("checkpointId") == checkpoint_id:
+                        checkpoint_runs = record.get("baselines") or []
+                        break
+                except Exception:
+                    continue
+
+    # Collect signal codes from backtest run results
+    signal_codes: set[str] = set()
+    for baseline in checkpoint_runs:
+        run_id = baseline.get("runId") or baseline.get("id")
+        if not run_id:
+            continue
+        bt_run = repo.get_backtest_run(run_id)
+        if not bt_run:
+            continue
+        result_json = loads_json_field(bt_run.result_json, {})
+        signals = result_json.get("signals") or []
+        for s in signals:
+            code = str(s.get("code") or "")
+            if code:
+                signal_codes.add(code)
+
+    journal_codes = {str(e.get("stockCode") or e.get("stock_code", "")) for e in executed}
+
+    intersection = signal_codes & journal_codes
+    signal_only = signal_codes - journal_codes
+    journal_only = journal_codes - signal_codes
+
+    intersection_entries = [e for e in executed if str(e.get("stockCode") or e.get("stock_code", "")) in intersection]
+    intersection_pnl = sum(float(e.get("pnl") or 0) for e in intersection_entries)
+    intersection_pnl_pct = round(sum(float(e.get("pnlPct") or 0) for e in intersection_entries), 4)
+
+    sufficient_sample = len(executed) >= 10
+
+    return {
+        "checkpointId": checkpoint_id,
+        "journalExecutedCount": len(executed),
+        "signalCodeCount": len(signal_codes),
+        "intersectionCount": len(intersection),
+        "signalOnlyCount": len(signal_only),
+        "journalOnlyCount": len(journal_only),
+        "intersectionCodes": sorted(intersection),
+        "signalOnlyCodes": sorted(signal_only)[:30],
+        "journalOnlyCodes": sorted(journal_only)[:30],
+        "intersectionPnl": intersection_pnl,
+        "intersectionPnlPct": intersection_pnl_pct,
+        "sufficientSample": sufficient_sample,
+        "alignmentStatus": (
+            "sufficient" if sufficient_sample else "insufficient_data"
+        ),
+    }
 
 
 @app.get("/api/backtests/{run_id}")
