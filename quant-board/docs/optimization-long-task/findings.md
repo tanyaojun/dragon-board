@@ -566,3 +566,85 @@ Q1 的全零帧为 `quarter_hour:2026-04-03:14:15`。跨市场过滤 v2 跳过�
 - `quant-board/docs/api-cli.md`
 - `quant-board/backend/services.py`
 - `quant-board/backend/optimization/jobs.py`
+
+## V2 Phase A-C Implementation Review (2026-05-27)
+
+### Scope
+
+完成 V2 四层决策框架 Phase A-C 实现，共 12 个 tasks、6 次提交、20 项测试。
+
+**Phase A**: TradeJournal 执行字段 (7 fields)、API request models、TypeScript types、候选池表单。
+**Phase B**: `compute_signal_efficacy()` + `compute_execution_quality()` Layer 1-2 函数，接入回测管道、CLI 摘要、单元测试。
+**Phase C**: `GET /api/backtests/alignment` 端点，CLI 集成，集成测试。
+
+### Commit Log
+
+| Commit | Scope |
+| --- | --- |
+| `8858b14` | docs: record weekly checkpoint 2026-05-26 |
+| `3bd7a06` | docs: mark Phase 13 report-only price quality diagnostics as complete |
+| `f7a4de5` | fix: persist TDX block monitor selection |
+| `ab091d1` | V5 竞价弱转强落地 |
+| `a416c37` | 异动精灵 事件规则逻辑文档说明 |
+| `6507950` | feat: add 7 execution fields to TradeJournal model |
+| `d1f6dad` | feat: extend journal API request models with execution fields |
+| `eecceae` | feat: add execution record form in CandidatePoolPanel |
+| `7bb4097` | feat: add Layer 1-2 computation functions |
+| `853e92d` | feat: wire Layer 1-2 diagnostics into backtest pipeline |
+| `6f922e8` | feat: add Layer 1-2 fields to long-test baseline summary and CLI |
+| `cd96531` | test: add Layer 1-2 unit tests |
+| `065a15b` | feat: add GET /api/backtests/alignment endpoint for Layer 3 |
+| `573f658` | feat: integrate Layer 3 alignment into run-longtest-baselines |
+| `6cb6786` | test: add Layer 1-2 and Layer 3 integration tests |
+| `9eb329a` | fix: code review fixes — DRY alignment, L2 yellow status, inline import |
+
+### Spec Compliance Review
+
+对照 `2026-05-26-longtest-v2-design.md` 逐条检查：
+
+| # | 层级 | 需求 | 状态 |
+|---|------|------|------|
+| 1 | L1 | 分层比例 (A+B)/total: 2%-15% | ✅ |
+| 2 | L1 | A_MAIN 方向精度 >55% + 二项检验 p<0.10 | ✅ |
+| 3 | L1 | 层级区分度 >5pp | ✅ |
+| 4 | L1 | 熔断：连续 3 期方向精度不达标 → 结构性复审 | ❌ 未实现 |
+| 5 | L1 | quarter_hour 对照口径 | ❌ Phase E 范围 |
+| 6 | L1 | 分层异常 A+B 爆增/暴跌 → 暂停 | ❌ Phase E 范围 |
+| 7 | L2 | 执行偏差 min(\|H1\|, 15pp) | ✅ |
+| 8 | L2 | H1 ≥ H2 近 4 期占比 ≥75% | ✅ |
+| 9 | L2 | 交易数偏差 + 回撤差异 | ✅ |
+| 10 | L2 | H1>H2 偏差超门槛 → 黄灯 | ✅ 已修复 |
+| 11 | L3 | 7 个执行字段 | ✅ |
+| 12 | L3 | 候选池面板执行记录 | ✅ |
+| 13 | L3 | 对齐报告：覆盖/重合/P&L | ✅ |
+| 14 | L3 | 最小 10 笔判停 | ✅ |
+| 15 | L3 | 连续 2 期 ✅ → 绿灯 | ❌ 未实现 |
+| 16 | L3 | 模型失配 🚨 → 暂停优化 | ❌ 未实现 |
+
+**符合 12/16（4 项未实现，其中 2 项属 Phase E）。**
+
+### Code Quality Review
+
+| # | 严重 | 问题 | 修复 |
+|---|------|------|------|
+| 1 | 🔴 | `.main.py` 和 `cli.py` 各 ~50 行对齐逻辑重复 | 提取为 `compute_alignment()` 共享函数 |
+| 2 | 🟡 | `compute_execution_quality` 只返回 red/green，无 yellow | 增加 yellow 状态（乐观偏差） |
+| 3 | 🟡 | L1 熔断未实现 | 留待下个 plan（需跨 checkpoint JSONL 状态机） |
+| 4 | 🟡 | L3 跨期追踪未实现 | 留待下个 plan |
+| 5 | 🟢 | `import math` 在函数体内 | 移到模块顶部 |
+| 6 | 🟢 | cli.py 对齐逻辑 bare `except Exception` | 保留（对齐层非阻塞，诊断用途） |
+| 7 | 🟢 | `/api/backtests/alignment` 无直接 HTTP 测试 | 留待下个 plan |
+
+### Key Design Decisions
+
+1. **对齐端点放 main.py**：项目没有独立 `backtest_routes.py`，所有 backtest 端点已在 main.py 中定义。
+2. **CLI 对齐逻辑用共享函数**：避免 CLI 导入 FastAPI 模块。
+3. **Layer 1 双重注入**：引擎 `_data_quality_summary` 从 `quality_gate` 构建 `dataQuality`；之后还需要单独注入 `result["dataQuality"]` 因为 `_summary_response` 用 result 而非 quality_gate。
+
+### Remaining for Next Plan
+
+- L1 熔断机制（连续 3 期方向精度不达标 → 结构性复审）
+- L3 跨期状态追踪（连续 2 期 ✅ → 绿灯；🚨 → 暂停优化）
+- `/api/backtests/alignment` 端点直接 HTTP 测试
+- L1 quarter_hour 对照口径（Phase E）
+- L1 分层异常判定（Phase E）
