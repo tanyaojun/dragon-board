@@ -500,7 +500,7 @@ def test_compute_execution_quality_flags_large_bias() -> None:
     assert result["biasOk"] is False
     assert result["drawdownDiff"] > 0.05
     assert result["drawdownDiffOk"] is False
-    assert result["layer2Status"] == "red"
+    assert result["layer2Status"] == "yellow"  # H1 > H2 but bias exceeds threshold
 
 
 def test_compute_execution_quality_accepts_small_bias() -> None:
@@ -515,3 +515,16 @@ def test_compute_execution_quality_accepts_small_bias() -> None:
     assert result["biasOk"] is True  # 3pp < min(|4%|, 15pp) = 4pp
     assert result["tradeCountDiff"] == 2
     assert result["tradeCountDiffOk"] is True  # 2 < 20*0.3 = 6
+    assert result["layer2Status"] == "green"
+
+
+def test_compute_execution_quality_flags_red_when_h2_beats_h1() -> None:
+    from backend.services import compute_execution_quality
+
+    h1 = {"totalReturn": -0.02, "tradeCount": 20, "maxDrawdown": -0.10}
+    h2 = {"totalReturn": 0.05, "tradeCount": 18, "maxDrawdown": -0.04}
+
+    result = compute_execution_quality(h1, h2)
+
+    assert result["bias"] < 0  # H1 < H2
+    assert result["layer2Status"] == "red"  # next_bar beats current_bar

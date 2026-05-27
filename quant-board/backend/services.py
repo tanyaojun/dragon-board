@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -405,7 +406,6 @@ def compute_signal_efficacy(
     tier_discrimination = round((direction_accuracy or 0) - (n_accuracy or 0), 4) if direction_accuracy is not None and n_accuracy is not None else None
 
     # Binomial test p-value for direction accuracy vs random (H0: p = 0.5)
-    import math
     p_val: float | None = None
     if a_total >= 5 and direction_accuracy is not None:
         se = math.sqrt(0.5 * 0.5 / a_total)
@@ -477,6 +477,14 @@ def compute_execution_quality(
     dd_diff_ok = dd_diff <= 0.05
 
     all_green = bias_ok and direction_ok and trade_diff_ok and dd_diff_ok
+    if all_green:
+        status = "green"
+    elif h1_return > h2_return and not bias_ok:
+        status = "yellow"  # optimistic bias: H1 > H2 but deviation exceeds threshold
+    elif h1_return < h2_return:
+        status = "red"  # next_bar outperforms current_bar: chasing/front-running
+    else:
+        status = "red"
 
     return {
         "bias": bias,
@@ -488,7 +496,70 @@ def compute_execution_quality(
         "tradeCountDiffOk": trade_diff_ok,
         "drawdownDiff": dd_diff,
         "drawdownDiffOk": dd_diff_ok,
-        "layer2Status": "green" if all_green else "red",
+        "layer2Status": status,
+    }
+
+
+def compute_alignment(
+    repo: Any,
+    run_ids: list[str],
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> dict[str, Any]:
+    """Layer 3: cross-reference trade_journal execution records with backtest signals."""
+    if not hasattr(repo, "list_journal_entries"):
+        return {"alignmentStatus": "unavailable", "reason": "journal requires MongoDB storage backend"}
+
+    journal_entries = repo.list_journal_entries(
+        status="reviewed",
+        date_from=start_date,
+        date_to=end_date,
+        limit=200,
+    )
+    executed = [
+        e for e in journal_entries
+        if e.get("entryPrice") is not None and float(e.get("entryPrice") or 0) > 0
+    ]
+
+    signal_codes: set[str] = set()
+    for run_id in run_ids:
+        if not run_id:
+            continue
+        bt_run = repo.get_backtest_run(run_id)
+        if not bt_run:
+            continue
+        result_json = loads_json_field(getattr(bt_run, "result_json", "{}"), {})
+        signals = result_json.get("signals") or []
+        for s in signals:
+            code = str(s.get("code") or "")
+            if code:
+                signal_codes.add(code)
+
+    journal_codes = {str(e.get("stockCode") or e.get("stock_code", "")) for e in executed}
+
+    intersection = signal_codes & journal_codes
+    signal_only = signal_codes - journal_codes
+    journal_only = journal_codes - signal_codes
+
+    intersection_entries = [e for e in executed if str(e.get("stockCode") or e.get("stock_code", "")) in intersection]
+    intersection_pnl = sum(float(e.get("pnl") or 0) for e in intersection_entries)
+    intersection_pnl_pct = round(sum(float(e.get("pnlPct") or 0) for e in intersection_entries), 4)
+
+    sufficient_sample = len(executed) >= 10
+
+    return {
+        "journalExecutedCount": len(executed),
+        "signalCodeCount": len(signal_codes),
+        "intersectionCount": len(intersection),
+        "signalOnlyCount": len(signal_only),
+        "journalOnlyCount": len(journal_only),
+        "intersectionCodes": sorted(intersection),
+        "signalOnlyCodes": sorted(signal_only)[:30],
+        "journalOnlyCodes": sorted(journal_only)[:30],
+        "intersectionPnl": intersection_pnl,
+        "intersectionPnlPct": intersection_pnl_pct,
+        "sufficientSample": sufficient_sample,
+        "alignmentStatus": "sufficient" if sufficient_sample else "insufficient_data",
     }
 
 

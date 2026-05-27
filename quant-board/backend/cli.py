@@ -30,7 +30,6 @@ from backend.data.mongodb_cleanup import plan_mongodb_dataset_cleanup
 from backend.data.mongodb_snapshot_repair import backfill_empty_snapshot_rows
 from backend.data.mongodb_backup import get_mongodb_backup_service
 from backend.data.mongodb_research_repair import repair_mongodb_research_metadata
-from backend.data.json_codec import loads_json_field
 from backend.data.repository import Repository
 from backend.data.repository_factory import create_repository
 from backend.data.schemas import ImportDatasetRequest
@@ -40,7 +39,7 @@ from backend.data.theme_database import ThemeSessionLocal, init_theme_db
 from backend.data.theme_service import ThemeMigrationService
 from backend.operations.schedule import run_after_market_once
 from backend.settings import get_settings
-from backend.services import BacktestService, GoldenService, OptimizationService, compute_execution_quality
+from backend.services import BacktestService, GoldenService, OptimizationService, compute_alignment, compute_execution_quality
 from backend.utils import json_loads
 
 DEFAULT_MOMENTUM_PERIODS = [3, 5, 8, 13, 21]
@@ -744,54 +743,20 @@ def cmd_run_longtest_baselines(args: argparse.Namespace) -> None:
 
     # Layer 3: compute alignment if trade journal data available
     try:
-        repo = create_repository(None)
-        if hasattr(repo, "list_journal_entries"):
-            journal_entries = repo.list_journal_entries(
-                status="reviewed",
-                date_from=args.start_date if hasattr(args, "start_date") else None,
-                date_to=args.end_date if hasattr(args, "end_date") else None,
-                limit=200,
-            )
-            executed = [
-                e for e in journal_entries
-                if e.get("entryPrice") is not None and float(e.get("entryPrice") or 0) > 0
-            ]
-            signal_codes: set[str] = set()
-            for baseline in baselines:
-                run_id = baseline.get("runId") or baseline.get("id")
-                if not run_id:
-                    continue
-                bt_run = repo.get_backtest_run(run_id)
-                if not bt_run:
-                    continue
-                result_json_data = loads_json_field(getattr(bt_run, "result_json", "{}"), {})
-                signals = result_json_data.get("signals") or []
-                for s in signals:
-                    code = str(s.get("code") or "")
-                    if code:
-                        signal_codes.add(code)
-            journal_codes = {str(e.get("stockCode") or e.get("stock_code", "")) for e in executed}
-            intersection = signal_codes & journal_codes
-            intersection_entries = [e for e in executed if str(e.get("stockCode") or e.get("stock_code", "")) in intersection]
-            intersection_pnl = sum(float(e.get("pnl") or 0) for e in intersection_entries)
-            intersection_pnl_pct = round(sum(float(e.get("pnlPct") or 0) for e in intersection_entries), 4)
-            sufficient = len(executed) >= 10
-            alignment = {
-                "journalExecutedCount": len(executed),
-                "signalCodeCount": len(signal_codes),
-                "intersectionCount": len(intersection),
-                "intersectionPnl": intersection_pnl,
-                "intersectionPnlPct": intersection_pnl_pct,
-                "sufficientSample": sufficient,
-                "alignmentStatus": "sufficient" if sufficient else "insufficient_data",
-            }
-            result["layer3Alignment"] = alignment
-            if sufficient:
-                print(f"  Layer 3 alignment: {alignment['intersectionCount']} overlapping stocks, intersection P&L: {alignment['intersectionPnlPct']:.2%}")
-            else:
-                print(f"  Layer 3 alignment: insufficient data ({alignment['journalExecutedCount']} executed trades, need >= 10)")
+        run_ids = [b.get("runId") or b.get("id", "") for b in baselines]
+        alignment = compute_alignment(
+            repo=create_repository(None),
+            run_ids=[rid for rid in run_ids if rid],
+            start_date=getattr(args, "start_date", None),
+            end_date=getattr(args, "end_date", None),
+        )
+        result["layer3Alignment"] = alignment
+        if alignment.get("sufficientSample"):
+            print(f"  Layer 3 alignment: {alignment['intersectionCount']} overlapping stocks, intersection P&L: {alignment['intersectionPnlPct']:.2%}")
+        elif alignment.get("alignmentStatus") == "unavailable":
+            print(f"  Layer 3 alignment: {alignment.get('reason', 'unavailable')}")
         else:
-            result["layer3Alignment"] = {"status": "unavailable", "reason": "journal requires MongoDB"}
+            print(f"  Layer 3 alignment: insufficient data ({alignment.get('journalExecutedCount', 0)} executed trades, need >= 10)")
     except Exception as exc:
         print(f"  Layer 3 alignment skipped: {exc}")
         result["layer3Alignment"] = {"status": "skipped", "reason": str(exc)}
