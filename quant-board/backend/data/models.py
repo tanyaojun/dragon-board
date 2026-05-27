@@ -547,6 +547,14 @@ class TradeJournal:
     entry_prerequisites: str = ""
     invalidation_rules: str = ""
     expected_holding_days: int = 3
+    # ---- Layer 3 execution fields (V2 long-test plan) ----
+    entry_price: float | None = None
+    entry_time: str | None = None
+    exit_price: float | None = None
+    exit_time: str | None = None
+    stop_loss_price: float | None = None
+    take_profit_price: float | None = None
+    position_pct: float | None = None
     human_decision: str = "watch"
     skip_reason: str = ""
     review_outcome: str = "pending"
@@ -582,6 +590,13 @@ class TradeJournal:
             "entryPrerequisites": self.entry_prerequisites,
             "invalidationRules": self.invalidation_rules,
             "expectedHoldingDays": self.expected_holding_days,
+            "entryPrice": self.entry_price,
+            "entryTime": self.entry_time,
+            "exitPrice": self.exit_price,
+            "exitTime": self.exit_time,
+            "stopLossPrice": self.stop_loss_price,
+            "takeProfitPrice": self.take_profit_price,
+            "positionPct": self.position_pct,
             "humanDecision": self.human_decision,
             "skipReason": self.skip_reason,
             "reviewOutcome": self.review_outcome,
