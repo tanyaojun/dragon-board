@@ -3860,3 +3860,23 @@ def test_layer3_trend_insufficient_history() -> None:
     result = check_layer3_trend([])
     assert result["greenLight"] is False
     assert result["diagnostics"] == "insufficient_history"
+
+
+def test_get_checkpoints_returns_list() -> None:
+    client = TestClient(app)
+    response = client.get("/api/backtests/checkpoints?limit=5")
+    assert response.status_code == 200
+    data = response.json()
+    assert isinstance(data, list)
+    if data:
+        item = data[0]
+        assert "checkpointId" in item
+        assert "h1TotalReturn" in item
+
+
+def test_get_checkpoints_respects_limit() -> None:
+    client = TestClient(app)
+    response = client.get("/api/backtests/checkpoints?limit=2")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) <= 2

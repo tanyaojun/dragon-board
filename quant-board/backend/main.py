@@ -1448,6 +1448,47 @@ def get_alignment(
     return {"checkpointId": checkpoint_id, **alignment}
 
 
+@app.get("/api/backtests/checkpoints")
+def get_checkpoints(limit: int = Query(20, ge=1, le=100)) -> list[dict[str, Any]]:
+    """Return recent long-test checkpoint summaries from JSONL."""
+    jsonl_path = get_settings().reports_dir / "long_test_runs.jsonl"
+    if not jsonl_path.exists():
+        return []
+    records: list[dict[str, Any]] = []
+    with open(jsonl_path, "r", encoding="utf-8") as f:
+        for line in f:
+            try:
+                record = json_loads(line.strip())
+                if not record or not record.get("checkpointId"):
+                    continue
+            except Exception:
+                continue
+            baselines = record.get("baselines") or []
+            h1 = next((b for b in baselines if "H1" in str(b.get("label") or "")), {})
+            h2 = next((b for b in baselines if "H2" in str(b.get("label") or "")), {})
+            q1 = next((b for b in baselines if "Q1" in str(b.get("label") or "")), {})
+            cp = record.get("crossPeriod") or {}
+            records.append({
+                "checkpointId": record.get("checkpointId"),
+                "createdAt": record.get("createdAt"),
+                "h1TotalReturn": h1.get("totalReturn"),
+                "h1Sharpe": h1.get("sharpe"),
+                "h1Trades": h1.get("tradeCount"),
+                "h2TotalReturn": h2.get("totalReturn"),
+                "h2Sharpe": h2.get("sharpe"),
+                "q1TotalReturn": q1.get("totalReturn"),
+                "q1Sharpe": q1.get("sharpe"),
+                "h1Layer1Status": (h1.get("layer1SignalEfficacy") or {}).get("layer1Status"),
+                "h1DirectionAccuracy": (h1.get("layer1SignalEfficacy") or {}).get("directionAccuracy"),
+                "h1Layer2Status": (h1.get("layer2ExecutionQuality") or {}).get("layer2Status"),
+                "h1Layer2Bias": (h1.get("layer2ExecutionQuality") or {}).get("bias"),
+                "meltdown": (cp.get("layer1MeltdownH1") or {}).get("meltdown"),
+                "consecutiveRedPeriods": (cp.get("layer1MeltdownH1") or {}).get("consecutiveRedPeriods"),
+                "l3GreenLight": (cp.get("layer3Trend") or {}).get("greenLight"),
+            })
+    return records[-limit:] if len(records) > limit else records
+
+
 @app.get("/api/backtests/{run_id}")
 def get_backtest(run_id: str, db: Session | None = Depends(get_db)) -> dict[str, Any]:
     result = BacktestService(db).get_run(run_id)
