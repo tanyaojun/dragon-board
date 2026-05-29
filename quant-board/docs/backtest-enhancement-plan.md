@@ -20,10 +20,12 @@
 | Phase 2 | 已完成 | `quality_gate.py` 已增强 NaN、Infinity、负值、覆盖率等质量检查；fatal Infinity 已按审计意见修复 | commit `3af06da` 后续修正 |
 | Phase 3A | 已完成 | 已新增四层策略解释模型并记录 `strategyDecisions`；撮合行为仍由原交易模拟逻辑负责 | commit `428835f` |
 | Phase 4 后端核心 | 已完成 | 已新增 `BacktestTrade`、`BacktestEquityCurve`、`BacktestSignal`、`BacktestQualityReport` 和 `BacktestRun` 增强字段；`BacktestService.run_ranktrend()` 已双写 JSON blob 与归一化表；归一化写入失败会抛错，不再返回伪成功 | commit `1de75da` |
-| Phase 4 文档/API 对外化 | 未完成 | `architecture.md`、`api-cli.md`、`frontend.md` 尚未完整同步归一化表和读取口径；API 仍只有旧的 run/get/report 端点 | 本文后续 Phase 4/5 |
-| Phase 5 | 未完成 | 归一化结果读取 API、回测对比 API、CLI compare/export 尚未实现 | `backend/main.py`、`backend/cli.py` 当前状态 |
-| Phase 6 | 未完成 | QuantBoard 前端报告页尚未消费归一化 API | `frontend/` 当前状态 |
-| Phase 3B | 未开始 | `useStrategyDecisionForExecution` 仍保持可选未来项，不能在 Phase 5/6 顺手打开 | 本文 Phase 3B 约束 |
+| Phase 4 文档/API 对外化 | 已完成 | `architecture.md`、`api-cli.md`、`frontend.md` 已同步归一化表和 V2 框架字段 | commit `aad19ca` 等 |
+| Phase 5 | 已完成 | 归一化结果读取 API (`/trades`、`/equity`、`/signals`、`/quality`、`/compare`)、CLI 已实现 | `backend/main.py` |
+| Phase 6 | 已完成 | QuantBoard 前端报告页已消费归一化 API（交易、信号、质量、对齐） | `frontend/src/App.vue` |
+| Phase 3B | 延后 | `useStrategyDecisionForExecution` 仍保持可选未来项 | — |
+
+> 本计划涉及的基础回测增强已于 2026 年 5 月陆续完成。后续 V2 四层决策框架、长测 checkpoint 系统、数据修复等新能力在独立计划中实施。最新状态以 [optimization-long-task/task_plan.md](optimization-long-task/task_plan.md) 为准。
 
 后续接力优先级：
 

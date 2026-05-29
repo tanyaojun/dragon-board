@@ -12,30 +12,23 @@ QuantBoard 首期导入 dragon-board 的历史快照数据，形成可复现的�
 
 ## 数据来源
 
-当前正式来源已经收敛为 SQLite 主库里的快照事实表。Dragon Board 正式快照通过 `POST /api/snapshots/ingest` 写入 `snapshot_records / snapshot_frames / snapshot_stock_rows / snapshot_sector_rows`，QuantBoard 日常研究数据集再从这些事实表派生。
+当前正式运行主库是 MongoDB（`dragon_board_quant` 数据库）。Dragon Board 正式快照通过 `POST /api/snapshots/ingest` 写入 MongoDB 集合 `snapshot_records / snapshot_frames / snapshot_stock_rows / snapshot_sector_rows`。SQLite/Supabase/Parquet 旧链路仅作为迁移前历史、审计/离线备份参考，或在 Mongo 模式下显式禁用入口。
 
 日常主路径：
 
-1. SQLite 快照库派生
-   - `POST /api/datasets/import` 使用 `sourceType=sqlite_snapshots`。
-   - 源数据集默认 `dragonboard_live`，也可以显式指定历史迁移后的数据集。
-   - 支持按 `snapshotTypes`、日期区间和 `maxSnapshots` 生成新的可复现研究数据集。
+1. MongoDB 快照库直接使用
+   - 源数据集默认 `dragonboard_live`（MongoDB `DragonBoardData` 数据库）。
+   - 回测/优化直接消费 `snapshot_frames` + `snapshot_stock_rows` + `snapshot_sector_rows`，不产生中间派生集。
 
 迁移辅助路径：
 
-2. 快照备份或投影 JSON
-   - 如果已有 `snapshots`、`snapshot_frames`、`snapshot_stock_rows` 结构化导出，可直接映射。
+2. 历史 JSON 迁移
+   - `POST /api/migrations/snapshots/import-json` 导入旧 IndexedDB 导出、Dragon Board v4 bundle。
    - 适合一次性历史迁移。
 
-3. 后端历史迁移 JSON
-   - 通过 `POST /api/migrations/snapshots/import-json` 导入旧 IndexedDB 导出、Dragon Board v4 bundle、结构化 frames/rows 或 SQLite/备份导出。
-   - 适合从“浏览器临时资产”逐步迁移到 SQLite 主库 + Supabase 备份库。
+MongoDB 模式下，`/api/datasets/import` (sourceType=sqlite_snapshots) 返回 410；旧 SQLite/Supabase/Parquet 维护入口已在 [mongodb-migration-plan.md](mongodb-migration-plan.md) 中标记为禁用。
 
-不建议首期直接读浏览器 IndexedDB 文件。浏览器存储结构、锁和 LevelDB 细节会增加不必要复杂度。
-
-IndexedDB 已从正式快照读写链路中移除。它只能作为历史迁移源或显式缓存，不再作为 QuantBoard 日常数据集采集入口；`five_minute` 浏览器本地入口不再保留。
-
-旧 SQLite 单库 `data/warehouse/quant_board.db` 也是历史迁移源。迁移时先运行 `inspect-storage` 记录基线，再用 `migrate-legacy-db --dry-run` 检查将迁入双库的快照和研究表数量，最后显式 `--apply`。迁移过程不会删除旧单库或浏览器 IndexedDB。
+IndexedDB 已从正式快照读写链路中移除。它只能作为历史迁移源或显式缓存。
 
 ## 标准数据集结构
 
@@ -293,3 +286,24 @@ rankTrend 输出应保留样本质量：
 - 门禁失败返回结构化原因。
 - 导入后可以按 `dataset_id + snapshot_type + trading_date` 稳定查询。
 - 查询结果按 `timestamp` 升序，保证回测事件顺序稳定。
+
+## 数据修复：缺失 bar 补齐
+
+当 half_hour 或 quarter_hour 快照帧在某个交易日的某些时点缺失时，可通过 `bar_repair.py` 工具补齐：
+
+```powershell
+.\.venv\Scripts\python.exe -m backend.data.bar_repair
+```
+
+工具会：
+1. 遍历每个交易日，找出缺失的时点
+2. 对每只股票，使用前后相邻 bar 的价格/成交量/成交额做线性插值
+3. 板块数据复制最近邻
+4. 生成帧和行标记为 `captureMode: "synthesized"`、`qualityFlags: ["synthesized"]`
+
+合成数据是估算值，不反映真实市场价格。回测质量门禁接受 `synthesized` 模式不报错。如需回退到纯真实数据，可通过 `captureMode` 过滤排除合成帧。
+
+## 其他 MongoDB 集合
+
+- `trade_journal`：候选池交易日志。V2 Layer 3 实盘对齐使用其中带 `entryPrice` 的记录与回测信号交叉比对
+- `stock_names`：A 股代码表。跨市场零行情过滤使用此表识别非 A 股代码

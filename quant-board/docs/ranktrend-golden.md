@@ -6,15 +6,9 @@ QuantBoard 首期以 dragon-board 的 TypeScript `rankTrend` 为 golden 标准�
 
 Golden 来源：
 
-- `src/type/rankTrendDefaults.ts`
+- `src/types/rankTrendDefaults.ts`
 - `src/services/RankTrendAnalyzer.ts`
-- `src/services/rankTrend/technicalSignalAnalyzer.ts`
-- `src/services/rankTrend/attentionCycleAnalyzer.ts`
-- `src/services/rankTrend/riskSignalAnalyzer.ts`
-- `src/services/rankTrend/resultComposer.ts`
-- `src/services/rankTrend/marketRegimeAnalyzer.ts`
-- `src/services/rankTrend/candidateTierComposer.ts`
-- `src/services/rankTrend/statusClassifier.ts`
+- `src/services/rankTrend/**`（各分析器模块）
 
 QuantBoard golden 只来自 dragon-board TypeScript `rankTrend` 源码。
 
@@ -43,6 +37,8 @@ QuantBoard golden 只来自 dragon-board TypeScript `rankTrend` 源码。
 ```text
 DEFAULT_RANK_TREND_SNAPSHOT_TYPE = half_hour
 ```
+
+> 注意：TypeScript golden 标准使用 `macdFast=13, macdSlow=21, macdSignal=8` 作为 RankTrend 算法层的默认值。QuantBoard 回测引擎的 `DEFAULT_BACKTEST_STRATEGY_CONFIG` 使用 `21/34/13` 作为生产默认值。两者是不同层次的配置 — golden 测试验证的是算法移植正确性，回测默认值反映的是当前实盘参数选择。修改任意一侧时应同时检查另一侧是否需要同步，并在对应文档（`backtest-policy.md`）中记录。
 
 ## 输出合同
 
@@ -290,3 +286,14 @@ Python 移植进入回测前必须满足：
 2. 提升 Python `strategy_version` 或 `ranktrend_version`。
 3. 重新跑 Python golden 测试。
 4. 已有历史回测保持旧版本结果，不覆盖。
+
+## 与 V2 四层框架的关系
+
+`strategy.candidateTier` 是 Golden 输出合同中的关键字段。V2 长测框架的 Layer 1（信号有效性）直接消费此字段——`compute_signal_efficacy()` 从 `candidateTier` 读取 A_MAIN 和 N_NEUTRAL 分层，计算方向精度、二项检验和层级区分度。
+
+如果 RankTrend 算法变更导致 `candidateTier` 输出合同的字段名、值域或语义发生变化，需要同时：
+1. 更新 golden case
+2. 检查 `compute_signal_efficacy()` 是否需要适配
+3. 重新跑长测 checkpoint 建立新的 Layer 1 基线
+
+`sampleQuality` 字段的 `tier` 子字段在较早版本的信号中有使用，但当前代码统一从顶层 `candidateTier` 读取。Golden case 应该继续验证两者的一致性。

@@ -196,12 +196,37 @@ trade_return_cycle_5d
 
 看到 MACD 金叉或死叉时，应理解为辅助观察信息，不应理解为机械买卖依据。
 
+## 研究过滤开关
+
+以下开关默认关闭，只作为显式研究口径：
+
+- `excludeNonPositivePriceRows`：剔除 `price <= 0` 行
+- `excludeCrossMarketZeroPriceRows`：剔除跨市场/非 A 股零行情行
+- `excludeAllZeroPriceFrames`：剔除全帧价格为零的异常快照
+
+开启后过滤统计写入 `dataQuality.runtimeFilter`，并在过滤后重新检查可用帧数量。过滤结果不影响 MongoDB 源数据。
+
+## 合成帧
+
+通过 `bar_repair.py` 补齐的缺失 bar 标记为 `captureMode: "synthesized"`。合成帧的 stock_rows 使用前后相邻 bar 的线性插值（价格、成交量、成交额），sector_rows 直接复制最近邻。合成帧参与回测但不代表真实市场价格，在报告中可通过 `captureMode` 字段识别。
+
+## V2 四层决策框架
+
+回测报告包含 V2 框架的诊断字段（详见 [2026-05-26-longtest-v2-design.md](optimization-long-task/2026-05-26-longtest-v2-design.md)）：
+
+- `dataQuality.layer1SignalEfficacy`：信号有效性（分层比例、方向精度、二项检验）
+- `dataQuality.layer2ExecutionQuality`：执行质量（H1-H2 偏差、回撤差异、yellow/red 警告）
+- `dataQuality.reportOnlyDiagnostics.priceQuality`：只读价格质量诊断
+
+长测 checkpoint 还包含跨期状态（`crossPeriod`）和实盘对齐摘要（`layer3Alignment`）。
+
 ## 当前限制
 
 - 样本期较短时，交易笔数可能很少，收益和 Sharpe 容易受少数交易影响；
 - 当前回测仍是研究平台，已经按可用字段处理涨跌停、盘口价、容量约束和盘中高低价触发，但仍不是逐笔/逐档队列级实盘撮合；
 - Golden 对齐仍以 TypeScript RankTrend 为唯一标准，Python 自基线只能用于临时回归检查；
-- 历史 `bt_xxx` 报告不会因为代码升级自动回填新字段，需要重新运行回测。
+- 历史 `bt_xxx` 报告不会因为代码升级自动回填新字段，需要重新运行回测；
+- 合成帧（`captureMode=synthesized`）的线性插值价格为估算值，不反映真实市场价格。
 
 ## 报告新增诊断
 
