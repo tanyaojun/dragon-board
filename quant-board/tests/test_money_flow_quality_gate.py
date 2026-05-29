@@ -455,15 +455,15 @@ def test_compute_signal_efficacy_detects_random_signals() -> None:
     signals = [
         {
             "snapshotId": "s1", "code": "000001", "price": 10.0,
-            "rankTrend": {"meta": {"sampleQuality": {"tier": "A_MAIN"}}},
+            "candidateTier": "A_MAIN",
         },
         {
             "snapshotId": "s1", "code": "000002", "price": 10.0,
-            "rankTrend": {"meta": {"sampleQuality": {"tier": "A_MAIN"}}},
+            "candidateTier": "A_MAIN",
         },
         {
             "snapshotId": "s1", "code": "000003", "price": 10.0,
-            "rankTrend": {"meta": {"sampleQuality": {"tier": "N_NEUTRAL"}}},
+            "candidateTier": "N_NEUTRAL",
         },
     ]
 
@@ -544,7 +544,7 @@ def test_compute_signal_efficacy_no_next_frame() -> None:
 
     signals = [{
         "snapshotId": "s_last", "code": "000001", "price": 10.0,
-        "rankTrend": {"meta": {"sampleQuality": {"tier": "A_MAIN"}}},
+        "candidateTier": "A_MAIN",
     }]
     frames = [{"snapshotId": "s_last", "stocks": [{"code": "000001", "price": 10.0}]}]
     result = compute_signal_efficacy(signals, frames)

@@ -356,7 +356,7 @@ def compute_signal_efficacy(
     tier_counts: dict[str, int] = {}
 
     for signal in signals:
-        tier = str((((signal.get("rankTrend") or {}).get("meta") or {}).get("sampleQuality") or {}).get("tier") or "?")
+        tier = str(signal.get("candidateTier") or "?")
         tier_counts[tier] = tier_counts.get(tier, 0) + 1
 
     a_plus_b = tier_counts.get("A_MAIN", 0) + tier_counts.get("B_IGNITION", 0)
@@ -374,7 +374,7 @@ def compute_signal_efficacy(
     n_total = 0
 
     for signal in signals:
-        tier = str((((signal.get("rankTrend") or {}).get("meta") or {}).get("sampleQuality") or {}).get("tier") or "?")
+        tier = str(signal.get("candidateTier") or "?")
         sid = str(signal.get("snapshotId") or "")
         frame_pos = frame_index.get(sid)
         if frame_pos is None or frame_pos + 1 >= len(frames):
