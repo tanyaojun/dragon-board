@@ -776,11 +776,11 @@ def cmd_run_longtest_baselines(args: argparse.Namespace) -> None:
 
     l1_meltdown_h1 = check_layer1_meltdown(history, "H1_half_hour_current_bar")
     if l1_meltdown_h1.get("meltdown"):
-        print(f"  ⚠️  L1 meltdown: {l1_meltdown_h1['consecutiveRedPeriods']} consecutive red periods on H1")
+        print(f"  [WARN] L1 meltdown: {l1_meltdown_h1['consecutiveRedPeriods']} consecutive red periods on H1")
 
     l3_trend = check_layer3_trend(history)
     if l3_trend.get("greenLight"):
-        print("  ✅ L3 trend: 2 consecutive sufficient alignments → green light")
+        print("  [OK] L3 trend: 2 consecutive sufficient alignments -> green light")
 
     result["crossPeriod"] = {
         "layer1MeltdownH1": l1_meltdown_h1,
