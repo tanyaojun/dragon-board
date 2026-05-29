@@ -325,6 +325,9 @@ export interface OptimizationRequest {
     takeProfitPct: number[];
     stopLossPct: number[];
     maxPositions: number[];
+    macdFast?: number[];
+    macdSlow?: number[];
+    macdSignal?: number[];
   };
 }
 

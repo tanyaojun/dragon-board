@@ -280,7 +280,10 @@ const gridInputs = reactive({
   momentumPeriods: "3-5-8-13-21;2-4-6-10-16;5-8-13-21-34",
   takeProfitPct: "0.08,0.12,0.16",
   stopLossPct: "0.04,0.06,0.08",
-  maxPositions: "3,5,8"
+  maxPositions: "3,5,8",
+  macdFast: "",
+  macdSlow: "",
+  macdSignal: ""
 });
 
 const selectedDataset = computed(() => {
@@ -1219,6 +1222,13 @@ async function runOptimization(): Promise<void> {
     stopLossPct: parseNumberList(gridInputs.stopLossPct),
     maxPositions: parseNumberList(gridInputs.maxPositions)
   };
+  // Phase 2 strategy params (only include if user provided values)
+  const macdFast = parseNumberList(gridInputs.macdFast);
+  const macdSlow = parseNumberList(gridInputs.macdSlow);
+  const macdSignal = parseNumberList(gridInputs.macdSignal);
+  if (macdFast.length) optimizationForm.parameterGrid.macdFast = macdFast;
+  if (macdSlow.length) optimizationForm.parameterGrid.macdSlow = macdSlow;
+  if (macdSignal.length) optimizationForm.parameterGrid.macdSignal = macdSignal;
 
   const pollToken = ++optimizationPollToken;
   optimizationState.status = "loading";
@@ -2115,6 +2125,18 @@ onMounted(async () => {
               maxPositions / 最大持仓数
               <input v-model="gridInputs.maxPositions" type="text" />
             </label>
+            <label title="Phase 2 (≥60交易日) 正式纳入搜索，留空则跳过">
+              macdFast / MACD快线 <small>(Phase 2)</small>
+              <input v-model="gridInputs.macdFast" type="text" placeholder="留空跳过，如: 19,21,24" />
+            </label>
+            <label title="Phase 2 (≥60交易日) 正式纳入搜索，留空则跳过">
+              macdSlow / MACD慢线 <small>(Phase 2)</small>
+              <input v-model="gridInputs.macdSlow" type="text" placeholder="留空跳过，如: 30,34,38" />
+            </label>
+            <label title="Phase 2 (≥60交易日) 正式纳入搜索，留空则跳过">
+              macdSignal / MACD信号线 <small>(Phase 2)</small>
+              <input v-model="gridInputs.macdSignal" type="text" placeholder="留空跳过，如: 10,13,16" />
+            </label>
           </div>
           <div class="button-row">
             <button
@@ -2638,7 +2660,7 @@ onMounted(async () => {
                   <div><span>全零异常帧</span><b>{{ priceQualityDiagnostics.allZeroPriceFrames?.frameCount ?? 0 }} 帧</b></div>
                   <div><span>A股局部零价</span><b>{{ priceQualityDiagnostics.partialAshareZeroPriceRows?.rowCount ?? 0 }} 行 / {{ priceQualityDiagnostics.partialAshareZeroPriceRows?.snapshotCount ?? 0 }} 快照</b></div>
                 </div>
-                <div class="inline-note">诊断不参与过滤，不改变收益和质量等级。</div>
+                <div class="inline-note">诊断不参与过滤，不改变收益和质量等级。部分快照帧为合成数据（captureMode=synthesized），来自缺失 bar 的线性插值补齐。</div>
               </div>
             </div>
             <div v-else class="empty-explanation"><b>没有质量报告</b><p>兼容报告和归一化 quality 端点都没有返回质量信息。</p></div>
