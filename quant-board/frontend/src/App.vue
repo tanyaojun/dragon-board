@@ -40,7 +40,7 @@ import type {
   StrategyName
 } from "./types";
 
-type TabKey = "golden" | "backtest" | "theme" | "optimization" | "report" | "replay";
+type TabKey = "golden" | "backtest" | "theme" | "optimization" | "report" | "replay" | "trends";
 type ImportMode = "snapshot_store" | "json_file";
 
 const strategyOptions: Array<{ value: StrategyName; label: string; description: string }> = [
@@ -92,7 +92,8 @@ const tabs: Array<{ key: TabKey; label: string }> = [
   { key: "theme", label: "ThemeTrend" },
   { key: "optimization", label: "参数优化" },
   { key: "report", label: "回测报告" },
-  { key: "replay", label: "单票回放" }
+  { key: "replay", label: "单票回放" },
+  { key: "trends", label: "长测趋势" }
 ];
 
 const activeTab = ref<TabKey>("backtest");
@@ -1431,55 +1432,6 @@ onMounted(async () => {
             </dl>
           </div>
           <div v-else class="empty-state">后端返回数据集后会在这里展示元信息。</div>
-        </section>
-
-        <!-- 长测趋势 -->
-        <section class="panel">
-          <div class="panel-header" style="display:flex;justify-content:space-between;align-items:center">
-            <span>长测趋势</span>
-            <button type="button" @click="fetchCheckpoints()" :disabled="checkpointLoading">
-              {{ checkpointLoading ? '加载中...' : '刷新' }}
-            </button>
-          </div>
-          <div v-if="checkpointError" class="inline-note" style="color:#721c24">{{ checkpointError }}</div>
-          <div v-if="checkpointList.length" class="table-wrap compact-table" style="max-height:360px;overflow-y:auto">
-            <table>
-              <thead>
-                <tr>
-                  <th>日期</th>
-                  <th>H1 收益</th>
-                  <th>H1 Sharpe</th>
-                  <th>H2 收益</th>
-                  <th>L1</th>
-                  <th>L2</th>
-                  <th>熔断</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="cp in recentCheckpoints" :key="String(cp.checkpointId)">
-                  <td><small>{{ (String(cp.checkpointId)).replace('checkpoint_', '') }}</small></td>
-                  <td :class="Number(cp.h1TotalReturn) >= 0 ? 'pos' : 'neg'">{{ formatPercent(Number(cp.h1TotalReturn)) }}</td>
-                  <td :class="Number(cp.h1Sharpe) >= 0 ? 'pos' : 'neg'">{{ Number(cp.h1Sharpe || 0).toFixed(2) }}</td>
-                  <td :class="Number(cp.h2TotalReturn) >= 0 ? 'pos' : 'neg'">{{ formatPercent(Number(cp.h2TotalReturn)) }}</td>
-                  <td>
-                    <span :class="['status-badge', cp.h1Layer1Status === 'green' ? 'badge-green' : 'badge-red']" style="font-size:0.6rem;padding:1px 5px">
-                      {{ cp.h1Layer1Status || '-' }}
-                    </span>
-                  </td>
-                  <td>
-                    <span v-if="cp.h1Layer2Status" :class="['status-badge',
-                      cp.h1Layer2Status === 'green' ? 'badge-green' :
-                      cp.h1Layer2Status === 'yellow' ? 'badge-yellow' : 'badge-red']" style="font-size:0.6rem;padding:1px 5px">
-                      {{ cp.h1Layer2Status }}
-                    </span>
-                    <span v-else>-</span>
-                  </td>
-                  <td>{{ cp.meltdown ? '⚠' : '' }}{{ cp.consecutiveRedPeriods || 0 }}期</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          <div v-else-if="!checkpointLoading" class="empty-state">点击刷新加载 checkpoint 列表。</div>
         </section>
 
         <section class="panel">
@@ -2870,6 +2822,93 @@ onMounted(async () => {
             </table>
           </div>
         </section>
+
+        <!-- 长测趋势 -->
+        <section v-if="activeTab === 'trends'" class="tab-panel">
+          <div class="panel-header" style="display:flex;justify-content:space-between;align-items:center">
+            <h2>长测 Checkpoint 趋势</h2>
+            <span style="display:flex;gap:8px;align-items:center">
+              <span v-if="checkpointList.length" style="font-size:0.8rem;color:#666">{{ checkpointList.length }} 期</span>
+              <button type="button" @click="fetchCheckpoints()" :disabled="checkpointLoading">
+                {{ checkpointLoading ? '加载中...' : '刷新' }}
+              </button>
+            </span>
+          </div>
+          <div v-if="checkpointError" class="inline-note" style="color:#721c24;margin-bottom:12px">{{ checkpointError }}</div>
+          <div v-if="recentCheckpoints.length" class="diagnostic-grid compact-diagnostic" style="margin-bottom:16px">
+            <div v-if="recentCheckpoints[0]">
+              <span>最新 H1 收益</span>
+              <b :class="Number(recentCheckpoints[0].h1TotalReturn) >= 0 ? 'pos' : 'neg'">{{ formatPercent(Number(recentCheckpoints[0].h1TotalReturn)) }}</b>
+            </div>
+            <div v-if="recentCheckpoints[0]">
+              <span>最新 H2 收益</span>
+              <b :class="Number(recentCheckpoints[0].h2TotalReturn) >= 0 ? 'pos' : 'neg'">{{ formatPercent(Number(recentCheckpoints[0].h2TotalReturn)) }}</b>
+            </div>
+            <div v-if="recentCheckpoints[0]">
+              <span>最新 L1</span>
+              <b><span :class="['status-badge', recentCheckpoints[0].h1Layer1Status === 'green' ? 'badge-green' : 'badge-red']" style="font-size:0.7rem">{{ recentCheckpoints[0].h1Layer1Status || '?' }}</span></b>
+            </div>
+            <div v-if="recentCheckpoints[0]">
+              <span>最新 L2</span>
+              <b>
+                <span v-if="recentCheckpoints[0].h1Layer2Status" :class="['status-badge',
+                  recentCheckpoints[0].h1Layer2Status === 'green' ? 'badge-green' :
+                  recentCheckpoints[0].h1Layer2Status === 'yellow' ? 'badge-yellow' : 'badge-red']" style="font-size:0.7rem">{{ recentCheckpoints[0].h1Layer2Status }}</span>
+                <span v-else>-</span>
+              </b>
+            </div>
+            <div v-if="recentCheckpoints[0]">
+              <span>熔断</span>
+              <b :style="recentCheckpoints[0].meltdown ? 'color:#721c24' : ''">{{ recentCheckpoints[0].meltdown ? '⚠ 触发' : '正常' }} <small>({{ recentCheckpoints[0].consecutiveRedPeriods || 0 }}期)</small></b>
+            </div>
+            <div><span>总期数</span><b>{{ checkpointList.length }}</b></div>
+          </div>
+          <div v-if="recentCheckpoints.length" class="table-wrap compact-table" style="max-height:70vh;overflow-y:auto">
+            <table>
+              <thead>
+                <tr>
+                  <th>日期</th>
+                  <th>H1 收益</th>
+                  <th>H1 Sharpe</th>
+                  <th>H1 笔</th>
+                  <th>H2 收益</th>
+                  <th>H2 Sharpe</th>
+                  <th>Q1 收益</th>
+                  <th>Q1 Sharpe</th>
+                  <th>L1 精度</th>
+                  <th>L2 偏差</th>
+                  <th>L1</th>
+                  <th>L2</th>
+                  <th>熔断</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="cp in recentCheckpoints" :key="String(cp.checkpointId)">
+                  <td><small>{{ (String(cp.checkpointId)).replace('checkpoint_2026-', '').replace(/_/g, ' ') }}</small></td>
+                  <td :class="Number(cp.h1TotalReturn) >= 0 ? 'pos' : 'neg'">{{ formatPercent(Number(cp.h1TotalReturn)) }}</td>
+                  <td :class="Number(cp.h1Sharpe) >= 0 ? 'pos' : 'neg'">{{ Number(cp.h1Sharpe || 0).toFixed(2) }}</td>
+                  <td>{{ cp.h1Trades ?? '-' }}</td>
+                  <td :class="Number(cp.h2TotalReturn) >= 0 ? 'pos' : 'neg'">{{ formatPercent(Number(cp.h2TotalReturn)) }}</td>
+                  <td :class="Number(cp.h2Sharpe) >= 0 ? 'pos' : 'neg'">{{ Number(cp.h2Sharpe || 0).toFixed(2) }}</td>
+                  <td :class="Number(cp.q1TotalReturn) >= 0 ? 'pos' : 'neg'">{{ formatPercent(Number(cp.q1TotalReturn)) }}</td>
+                  <td :class="Number(cp.q1Sharpe) >= 0 ? 'pos' : 'neg'">{{ Number(cp.q1Sharpe || 0).toFixed(2) }}</td>
+                  <td>{{ cp.h1DirectionAccuracy != null ? formatPercent(Number(cp.h1DirectionAccuracy)) : '-' }}</td>
+                  <td>{{ cp.h1Layer2Bias != null ? formatPercent(Number(cp.h1Layer2Bias)) : '-' }}</td>
+                  <td><span :class="['status-badge', cp.h1Layer1Status === 'green' ? 'badge-green' : 'badge-red']" style="font-size:0.6rem;padding:1px 5px">{{ cp.h1Layer1Status || '-' }}</span></td>
+                  <td>
+                    <span v-if="cp.h1Layer2Status" :class="['status-badge',
+                      cp.h1Layer2Status === 'green' ? 'badge-green' :
+                      cp.h1Layer2Status === 'yellow' ? 'badge-yellow' : 'badge-red']" style="font-size:0.6rem;padding:1px 5px">{{ cp.h1Layer2Status }}</span>
+                    <span v-else>-</span>
+                  </td>
+                  <td><span v-if="cp.meltdown" style="color:#721c24">⚠ {{ cp.consecutiveRedPeriods || 0 }}期</span><span v-else>-</span></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div v-else-if="!checkpointLoading" class="empty-state">点击"刷新"加载长测 checkpoint 列表。<br/><small>数据来源：quant-board/data/reports/long_test_runs.jsonl</small></div>
+        </section>
+
       </section>
     </section>
   </main>
