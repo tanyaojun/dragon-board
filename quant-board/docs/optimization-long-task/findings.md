@@ -732,6 +732,45 @@ turnover_target = 同上
 
 ## 5/29 Checkpoint Cross-Period Analysis
 
+## Frontend 代码调查：前后端实现 vs 文档覆盖 (2026-05-29)
+
+### 方法
+
+逐项对比 `quant-board/docs/frontend.md` 与当前代码实现（`quant-board/frontend/src/App.vue`、`src/components/panels/CandidatePoolPanel.vue`、`quant-board/backend/services.py`、`quant-board/backend/cli.py`）。
+
+### 结果
+
+**代码已实现 + 文档已覆盖 (13 项)：**
+回测表单基础字段、图表、交易列表、Golden 差异、报告诊断基础、错误码、视觉原则、联调约定、验收清单
+
+**代码已实现 + 文档缺失 (11 项)：**
+| 功能 | 代码位置 | 缺失的文档 |
+|---|---|---|
+| 多动量周期参数 | `App.vue:220` `backtestForm.momentumPeriods` | 回测表单未列出 |
+| 多动量周期优化搜索 | `App.vue:244-248` `parameterGrid.momentumPeriods` | 优化页未列出 |
+| MACD 三参数 | `App.vue:221-223` | 表单有但未在默认值外列出 |
+| 候选池执行记录 7 字段 | `CandidatePoolPanel.vue:341-373` | 整个执行记录区域未提及 |
+| 执行模式 `executionMode` | 后端 `services.py:888` | 表单未列出 |
+| 撮合参数（6 项） | `App.vue:210-219` | 表单未列出 |
+| 费率（3 项） | `App.vue` + 后端 | 表单未列出 |
+| Walk-forward 配置 | `App.vue:236-241` | 优化页未细化 |
+| 价格过滤三开关 | `App.vue` + 后端 | 表单未列出 |
+| 止损机制（A/B 双触发） | V2 设计 | 优化页未提及 |
+| 两阶段参数设计 | V2 设计 | 优化页未提及 |
+
+**后端已产出数据 + 前端无展示 (7 项)：**
+- Layer 1 信号诊断（`layer1SignalEfficacy`）
+- Layer 2 执行质量（`layer2ExecutionQuality`）
+- Layer 3 对齐报告（`/api/backtests/alignment`）
+- 跨期状态（`crossPeriod.meltdown` / `crossPeriod.trend`）
+- 价格质量诊断（`reportOnlyDiagnostics.priceQuality`）
+- 合成 bar 标记（`captureMode: "synthesized"`）
+- 长测 checkpoint 趋势比较
+
+### 结论
+
+`frontend.md` 停留在 Phase 9 时期，缺少 Phase 10-17 的全部新增能力文档。多动量周期前后端均已实现但文档完全未提——用户观察正确。文档现已更新补全。
+
 ### Checkpoints in JSONL History
 
 | checkpoint_id | H1 ret | H1 L1 | H2 ret | Q1 ret |
