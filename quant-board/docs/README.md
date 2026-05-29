@@ -32,6 +32,10 @@ QuantBoard 是 `dragon-board` 的量化回测与参数研究子项目。首期�
 | [frontend.md](frontend.md) | 前端页面、交互、结果展示与联调约定 |
 | [development-roadmap.md](development-roadmap.md) | 分阶段落地路线和验收清单 |
 | [AI_COLLABORATION.md](AI_COLLABORATION.md) | AI 协作硬约束和交接规范 |
+| [2026-05-26-longtest-v2-design.md](optimization-long-task/2026-05-26-longtest-v2-design.md) | V2 长测方案：四层决策框架设计文档 |
+| [optimization-long-task/task_plan.md](optimization-long-task/task_plan.md) | 长测优化任务计划、阶段和决策记录 |
+| [optimization-long-task/findings.md](optimization-long-task/findings.md) | 长测优化研究发现和 checkpoint 分析 |
+| [optimization-long-task/progress.md](optimization-long-task/progress.md) | 长测优化会话进度日志 |
 
 ## 推荐实现顺序
 
@@ -50,29 +54,51 @@ quant-board/
   backend/
     main.py
     settings.py
+    cli.py
+    services.py
     data/
       database.py
       models.py
+      repository.py
+      repository_factory.py
+      quality_gate.py
+      bar_repair.py          # 缺 bar 补齐工具
+    api/
+      journal_routes.py       # 候选池 trade_journal API
+    core/
+      backtest/
+        engine.py
+        evaluator.py
+        metrics.py
+        strategy.py
+    analysis/
+      ranktrend/
+    optimization/
   config/
   data/
-    snapshots/
-    staging/
-    warehouse/
     reports/
+      long_test_runs.jsonl    # 长测 checkpoint 记录
   docs/
+    optimization-long-task/   # 长测优化计划和发现
+    superpowers/plans/        # 实施计划文档
+  frontend/
   tests/
+    test_quant_board.py
+    test_money_flow_quality_gate.py
   requirements.txt
 ```
 
-已有后端表模型包括：
+已有后端表模型（MongoDB 集合）包括：
 
 - `datasets`
-- `snapshot_records`
-- `snapshot_frames`
-- `snapshot_stock_rows`
-- `snapshot_sector_rows`
+- `snapshot_frames`（快照帧）
+- `snapshot_stock_rows`（股票行情行）
+- `snapshot_sector_rows`（板块/题材行）
+- `stock_names`（A 股代码表）
+- `trade_journal`（候选池交易日志，含 7 个执行字段）
 - `golden_ranktrend_cases`
 - `backtest_runs`
+- `backtest_trades` / `backtest_equity_curve` / `backtest_signals`（归一化子表）
 - `optimization_runs`
 - `sync_outbox`
 

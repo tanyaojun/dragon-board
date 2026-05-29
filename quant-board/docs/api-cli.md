@@ -688,6 +688,17 @@ Dragon Board 候选池第一版复用 QuantBoard journal 存储，候选记录�
 
 更新记录。候选池当前主要用于推进 `status`，也可更新 `review_tags`、`signals_snapshot`、`trade_hypothesis`、`entry_prerequisites`、`invalidation_rules`、`review_outcome`、`model_result`、`execution_result` 等复盘字段。
 
+V2 Layer 3 新增 7 个执行字段（与回测信号对齐）：
+- `entryPrice` (float)：实际买入价
+- `entryTime` (str, ISO 8601)：实际买入时间
+- `exitPrice` (float)：实际卖出价
+- `exitTime` (str, ISO 8601)：实际卖出时间
+- `stopLossPrice` (float)：止损线
+- `takeProfitPrice` (float)：止盈线
+- `positionPct` (float)：仓位占比
+
+这些字段在 `POST /api/journal/entries` 创建和 `PUT /api/journal/entries/{entry_id}` 更新时均可选传入。
+
 ## 回测接口
 
 ### `POST /api/backtests/rank-trend`
@@ -745,6 +756,33 @@ Dragon Board 候选池第一版复用 QuantBoard journal 存储，候选记录�
 ### `GET /api/backtests/{run_id}/report`
 
 读取回测报告，和 `GET /api/backtests/{run_id}` 同口径，供页面语义化调用。
+
+### `GET /api/backtests/alignment`
+
+Layer 3 实盘对齐端点。交叉比对 `trade_journal` 执行记录与 checkpoint 回测信号。
+
+请求参数：
+- `checkpoint_id` (必填)：长测 checkpoint ID
+- `start_date` (可选)：过滤 trade_journal 日期范围起
+- `end_date` (可选)：过滤 trade_journal 日期范围止
+
+返回：
+```json
+{
+  "checkpointId": "checkpoint_2026-05-29",
+  "journalExecutedCount": 5,
+  "signalCodeCount": 2338,
+  "intersectionCount": 3,
+  "intersectionCodes": ["000001", "600519", "300750"],
+  "intersectionPnl": 1250.0,
+  "intersectionPnlPct": 0.0125,
+  "sufficientSample": false,
+  "alignmentStatus": "insufficient_data"
+}
+```
+
+- `alignmentStatus`: `"sufficient"` (≥10 笔执行记录) / `"insufficient_data"` (<10) / `"unavailable"` (journal 不可用)
+- 依赖 MongoDB `trade_journal` 集合。非 MongoDB 存储返回 `unavailable`
 
 ### `DELETE /api/backtests/{run_id}`
 
@@ -1287,7 +1325,16 @@ win_rate: 0.52
 | `H2_half_hour_next_bar` | `half_hour` | `next_bar` | `40` | 正式保守验收主线 |
 | `Q1_quarter_hour_next_bar` | `quarter_hour` | `next_bar` | `80` | 研究压力测试 |
 
-默认把 checkpoint 摘要以 JSONL 追加到 `data/reports/long_test_runs.jsonl`。每行保留 `checkpointId`、`runId`、`datasetId`、`snapshotType`、`strategyName`、`strategyVersion`、`configHash`、`randomSeed`、核心收益/回撤/交易指标、质量等级、资金流缺失统计，以及显式价格过滤统计。价格统计包括全量非正价格过滤 `priceFilter`、跨市场零行情过滤 `crossMarketPriceFilter`、全零异常帧过滤 `allZeroPriceFrameFilter`，以及默认 report-only 的 `priceQualityDiagnostics`。可用 `--output` 指定单个输出文件，或用 `--dry-run` 只查看将要执行的三条 payload。
+默认把 checkpoint 摘要以 JSONL 追加到 `data/reports/long_test_runs.jsonl`。每行保留 `checkpointId`、`runId`、`datasetId`、`snapshotType`、`strategyName`、`strategyVersion`、`configHash`、`randomSeed`、核心收益/回撤/交易指标、质量等级、资金流缺失统计，以及显式价格过滤统计。价格统计包括全量非正价格过滤 `priceFilter`、跨市场零行情过滤 `crossMarketPriceFilter`、全零异常帧过滤 `allZeroPriceFrameFilter`，以及默认 report-only 的 `priceQualityDiagnostics`。
+
+V2 四层决策框架新增字段（每条 baseline 内）：
+
+- `layer1SignalEfficacy`：信号有效性诊断。包含 `tierRatio`（A+B 占比）、`directionAccuracy`（A_MAIN 下 bar 上涨比例）、`tierDiscrimination`（层级区分度）、`binomialPValue`（二项检验 p 值）、`layer1Status`（green/red）
+- `layer2ExecutionQuality`：执行质量诊断（H1/H2 基线含）。包含 `bias`（H1-H2 收益偏差）、`biasThreshold`（相对阈值）、`drawdownDiff`（回撤差异）、`layer2Status`（green/yellow/red）
+- `layer3Alignment`：实盘对齐摘要（checkpoint 级）。包含 `journalExecutedCount`、`signalCodeCount`、`intersectionCount`、`intersectionPnlPct`、`alignmentStatus`
+- `crossPeriod`：跨期状态追踪。包含 `layer1MeltdownH1`（熔断检测，含 `meltdown`/`consecutiveRedPeriods`）和 `layer3Trend`（对齐趋势，含 `greenLight`/`recentStatuses`）
+
+可用 `--output` 指定单个输出文件，或用 `--dry-run` 只查看将要执行的三条 payload。
 
 ### `optimize-ranktrend`
 

@@ -254,13 +254,54 @@
 - 新 AI 协作者能按 docs 继续实现。
 - 历史回测结果不会被新版本覆盖。
 
+## Phase 10：长测自动化与质量诊断
+
+目标：建立可复现、可追溯的 RankTrend 长测基线链路。
+
+- [x] 新增 `run-longtest-baselines` CLI，固定复跑 H1/H2/Q1 三条基线
+- [x] 资金流质量字段透传，修复 `formalMoneyFlowCount=0` 误报
+- [x] 非正价格诊断：分类为跨市场零行情、全零异常帧、局部 A 股零价
+- [x] 显式研究过滤：`excludeNonPositivePriceRows`、`excludeCrossMarketZeroPriceRows`、`excludeAllZeroPriceFrames`
+- [x] Report-only 价格质量诊断字段
+- **Status:** complete
+
+## Phase 11：V2 四层决策框架
+
+目标：用分层决策取代线性流水线，每层独立判断。
+
+- [x] Layer 1 信号有效性：分层比例、方向精度、二项检验、层级区分度
+- [x] Layer 2 执行质量：H1 vs H2 偏差、相对阈值、黄灯警告
+- [x] Layer 3 实盘对齐：trade_journal 7 个执行字段、`/api/backtests/alignment`
+- [x] Layer 4 参数优化：两阶段设计、双层止损、采用规则
+- [x] 交叉评审 + P0 修正
+- [x] Phase A-C 实施：数据模型、Layer 1-2 计算、Layer 3 API，43 项测试
+- **Status:** complete
+
+## Phase 12：数据质量修复
+
+目标：补齐缺失的 half_hour/quarter_hour bar。
+
+- [x] 缺口分析：half_hour 42 条、quarter_hour 213 条
+- [x] 线性插值补齐：前后双 bar 价格/成交量插值，合成 bar 标记 `captureMode: "synthesized"`
+- [x] `bar_repair.py` 修复工具
+- **Status:** complete
+
+## Phase 13：待启动
+
+目标：满 60 个交易日数据后启动 Layer 4 优化。
+
+- [ ] 交易管理层参数搜索（maxPositions/takeProfit/stopLoss）
+- [ ] 策略层参数敏感度报告
+- [ ] 双触发止损机制
+- [ ] Walk-forward 滚动窗口验证
+- [ ] 市场状态分层标注（Phase E）
+- [ ] 基准比较（Phase E）
+
 ## 当前下一步
 
-文档落地后，建议立即进入：
+Phase 0-12 已全部完成。后续等待数据积累：
 
-1. 按 [database-migration-plan.md](database-migration-plan.md) 收敛 SQLite 主库 + Supabase 备份库合同；
-2. 数据导入 service；
-3. golden case 格式和校验器；
-4. Python defaults/utils 移植。
-
-这些基础完成后，再开始回测引擎，风险最低。
+1. 继续每周 checkpoint 复跑，观察 Layer 1-3 指标趋势
+2. 满 50 个 half_hour 交易日后启动 Phase E（P1 统计/基准）
+3. 满 60 个交易日后启动 Phase 13（Layer 4 参数优化）
+4. 候选池 trade_journal 积累 ≥10 笔执行记录后，Layer 3 对齐报告可产出有意义的结论
