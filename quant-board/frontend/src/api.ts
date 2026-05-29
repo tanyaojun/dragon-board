@@ -6,6 +6,7 @@ import type {
   BacktestRequest,
   BacktestSignal,
   BacktestTrade,
+  CheckpointSummary,
   DatasetDeleteResponse,
   DatasetSummary,
   GoldenValidateRequest,
@@ -121,6 +122,8 @@ export const api = {
     requestApi<BacktestQualityResponse>(`/api/backtests/${encodeURIComponent(id)}/quality`),
   getAlignment: (runIds: string) =>
     requestApi<Record<string, unknown>>(`/api/backtests/alignment?run_ids=${encodeURIComponent(runIds)}`),
+  getCheckpoints: (limit = 20) =>
+    requestApi<CheckpointSummary[]>(`/api/backtests/checkpoints?limit=${limit}`),
   runOptimization: (payload: OptimizationRequest) =>
     requestApi<unknown>("/api/optimizations/rank-trend", {
       method: "POST",

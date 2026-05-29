@@ -135,6 +135,22 @@ const optimizationPollMessage = ref("");
 const replayCode = ref("");
 const goldenAction = ref<"baseline" | "validate" | "">("");
 const copiedBox = ref("");
+const checkpointList = ref<Array<Record<string, unknown>>>([]);
+const checkpointLoading = ref(false);
+const checkpointError = ref("");
+
+async function fetchCheckpoints() {
+  checkpointLoading.value = true;
+  checkpointError.value = "";
+  try {
+    checkpointList.value = (await api.getCheckpoints(20)) as unknown as Array<Record<string, unknown>>;
+  } catch (e: unknown) {
+    checkpointError.value = e instanceof Error ? e.message : String(e);
+  } finally {
+    checkpointLoading.value = false;
+  }
+}
+
 const activeReportTab = ref<BacktestReportTabKey>("trades");
 const signalTierFilter = ref("");
 const signalTypeFilter = ref("");
@@ -1338,6 +1354,7 @@ async function runThemeOptimization(): Promise<void> {
 onMounted(async () => {
   await checkHealth();
   await loadDatasets();
+  fetchCheckpoints();
 });
 </script>
 
@@ -1402,6 +1419,55 @@ onMounted(async () => {
             </dl>
           </div>
           <div v-else class="empty-state">后端返回数据集后会在这里展示元信息。</div>
+        </section>
+
+        <!-- 长测趋势 -->
+        <section class="panel">
+          <div class="panel-header" style="display:flex;justify-content:space-between;align-items:center">
+            <span>长测趋势</span>
+            <button type="button" @click="fetchCheckpoints()" :disabled="checkpointLoading">
+              {{ checkpointLoading ? '加载中...' : '刷新' }}
+            </button>
+          </div>
+          <div v-if="checkpointError" class="inline-note" style="color:#721c24">{{ checkpointError }}</div>
+          <div v-if="checkpointList.length" class="table-wrap compact-table" style="max-height:360px;overflow-y:auto">
+            <table>
+              <thead>
+                <tr>
+                  <th>日期</th>
+                  <th>H1 收益</th>
+                  <th>H1 Sharpe</th>
+                  <th>H2 收益</th>
+                  <th>L1</th>
+                  <th>L2</th>
+                  <th>熔断</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="cp in [...checkpointList].reverse()" :key="String(cp.checkpointId)">
+                  <td><small>{{ (String(cp.checkpointId)).replace('checkpoint_', '') }}</small></td>
+                  <td :class="Number(cp.h1TotalReturn) >= 0 ? 'pos' : 'neg'">{{ formatPercent(Number(cp.h1TotalReturn)) }}</td>
+                  <td :class="Number(cp.h1Sharpe) >= 0 ? 'pos' : 'neg'">{{ Number(cp.h1Sharpe || 0).toFixed(2) }}</td>
+                  <td :class="Number(cp.h2TotalReturn) >= 0 ? 'pos' : 'neg'">{{ formatPercent(Number(cp.h2TotalReturn)) }}</td>
+                  <td>
+                    <span :class="['status-badge', cp.h1Layer1Status === 'green' ? 'badge-green' : 'badge-red']" style="font-size:0.6rem;padding:1px 5px">
+                      {{ cp.h1Layer1Status || '-' }}
+                    </span>
+                  </td>
+                  <td>
+                    <span v-if="cp.h1Layer2Status" :class="['status-badge',
+                      cp.h1Layer2Status === 'green' ? 'badge-green' :
+                      cp.h1Layer2Status === 'yellow' ? 'badge-yellow' : 'badge-red']" style="font-size:0.6rem;padding:1px 5px">
+                      {{ cp.h1Layer2Status }}
+                    </span>
+                    <span v-else>-</span>
+                  </td>
+                  <td>{{ cp.meltdown ? '⚠' : '' }}{{ cp.consecutiveRedPeriods || 0 }}期</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div v-else-if="!checkpointLoading" class="empty-state">点击刷新加载 checkpoint 列表。</div>
         </section>
 
         <section class="panel">
@@ -2248,6 +2314,25 @@ onMounted(async () => {
             <ul v-if="reportVerdict.reasons.length" class="narrative-list">
               <li v-for="reason in reportVerdict.reasons" :key="reason">{{ reason }}</li>
             </ul>
+          </div>
+
+          <!-- 跨期状态指示器 -->
+          <div v-if="layer1SignalEfficacy || layer2ExecutionQuality" style="display:flex;gap:16px;padding:8px 12px;background:#f8f9fa;border-radius:6px;margin-bottom:8px;font-size:0.85rem;flex-wrap:wrap">
+            <span v-if="layer1SignalEfficacy?.layer1Status === 'red'" style="color:#721c24">
+              <b>L1 红灯</b> · {{ layer1SignalEfficacy?.aMainSamples || 0 }} 个 A_MAIN · 方向精度 {{ formatPercent(Number(layer1SignalEfficacy?.directionAccuracy)) }}
+            </span>
+            <span v-else-if="layer1SignalEfficacy?.layer1Status === 'green'" style="color:#155724">
+              <b>L1 绿灯</b> · 信号有效性达标
+            </span>
+            <span v-if="layer2ExecutionQuality?.layer2Status === 'yellow'" style="color:#856404">
+              <b>L2 黄灯</b> · H1-H2 偏差 {{ formatPercent(Number(layer2ExecutionQuality?.bias)) }} &gt; 阈值 {{ formatPercent(Number(layer2ExecutionQuality?.biasThreshold)) }}
+            </span>
+            <span v-else-if="layer2ExecutionQuality?.layer2Status === 'green'" style="color:#155724">
+              <b>L2 绿灯</b> · 执行偏差在阈值内
+            </span>
+            <span v-else-if="layer2ExecutionQuality?.layer2Status === 'red'" style="color:#721c24">
+              <b>L2 红灯</b> · H2 反超 H1（追高/抢跑风险）
+            </span>
           </div>
 
           <div class="report-kpi-groups">

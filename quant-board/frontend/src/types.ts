@@ -447,6 +447,25 @@ export interface PriceQualityDiagnostics {
   };
 }
 
+export interface CheckpointSummary {
+  checkpointId: string;
+  createdAt?: string;
+  h1TotalReturn: number | null;
+  h1Sharpe: number | null;
+  h1Trades: number | null;
+  h2TotalReturn: number | null;
+  h2Sharpe: number | null;
+  q1TotalReturn: number | null;
+  q1Sharpe: number | null;
+  h1Layer1Status: "green" | "red" | null;
+  h1DirectionAccuracy: number | null;
+  h1Layer2Status: "green" | "yellow" | "red" | null;
+  h1Layer2Bias: number | null;
+  meltdown: boolean | null;
+  consecutiveRedPeriods: number | null;
+  l3GreenLight: boolean | null;
+}
+
 export interface AlignmentApiResponse extends Layer3Alignment {
   checkpointId: string;
   signalOnlyCodes: string[];
