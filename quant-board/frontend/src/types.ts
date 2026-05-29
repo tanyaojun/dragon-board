@@ -358,3 +358,96 @@ export interface ReplayStep {
   stage?: string;
   regime?: string;
 }
+
+// ── V2 四层决策框架 ─────────────────────────────
+
+export interface Layer1SignalEfficacy {
+  tierRatio: number | null;
+  aPlusBTierCount: number;
+  tierCounts: Record<string, number>;
+  totalSignals: number;
+  directionAccuracy: number | null;
+  aMainSamples: number;
+  nNeutralSamples: number;
+  tierDiscrimination: number | null;
+  binomialPValue: number | null;
+  thresholds: {
+    directionAccuracyMin: number;
+    binomialPMax: number;
+    tierDiscriminationMin: number;
+    tierRatioMin: number;
+    tierRatioMax: number;
+  };
+  layer1Status: "green" | "red";
+}
+
+export interface Layer2ExecutionQuality {
+  bias: number;
+  biasThreshold: number;
+  biasOk: boolean;
+  directionRatio: number;
+  directionOk: boolean;
+  tradeCountDiff: number;
+  tradeCountDiffOk: boolean;
+  drawdownDiff: number;
+  drawdownDiffOk: boolean;
+  layer2Status: "green" | "yellow" | "red";
+}
+
+export interface Layer3Alignment {
+  checkpointId?: string;
+  journalExecutedCount: number;
+  signalCodeCount: number;
+  intersectionCount: number;
+  signalOnlyCount?: number;
+  journalOnlyCount?: number;
+  intersectionCodes: string[];
+  intersectionPnl: number;
+  intersectionPnlPct: number;
+  sufficientSample: boolean;
+  alignmentStatus: "sufficient" | "insufficient_data" | "unavailable";
+}
+
+export interface CrossPeriodState {
+  layer1MeltdownH1: {
+    meltdown: boolean;
+    consecutiveRedPeriods: number;
+    statuses: string[];
+    recommendation: string | null;
+  };
+  layer3Trend: {
+    greenLight: boolean;
+    recentStatuses: string[];
+    recommendation: string | null;
+  };
+}
+
+export interface PriceQualityDiagnostics {
+  role: "report_only";
+  autoApplyDefaults: boolean;
+  computedBeforeResearchFilters: boolean;
+  crossMarketZeroPriceRows: {
+    rowCount: number;
+    snapshotCount: number;
+    examples: Array<{ snapshotId: string; code: string; name: string }>;
+    aShareUniverseAvailable: boolean;
+    aShareUniverseCodeCount: number;
+    skippedAllZeroPriceFrames: number;
+  };
+  allZeroPriceFrames: {
+    frameCount: number;
+    rowCount: number;
+    snapshotIds: string[];
+  };
+  partialAshareZeroPriceRows: {
+    rowCount: number;
+    snapshotCount: number;
+    examples: Array<{ snapshotId: string; code: string; name: string; price: number }>;
+  };
+}
+
+export interface AlignmentApiResponse extends Layer3Alignment {
+  checkpointId: string;
+  signalOnlyCodes: string[];
+  journalOnlyCodes: string[];
+}
