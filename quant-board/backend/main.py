@@ -1407,29 +1407,37 @@ def delete_backtest(run_id: str, db: Session | None = Depends(get_db)) -> dict[s
 
 @app.get("/api/backtests/alignment")
 def get_alignment(
-    checkpoint_id: str = Query(...),
+    checkpoint_id: str | None = Query(None),
+    run_ids: str | None = Query(None),
     start_date: str | None = Query(None),
     end_date: str | None = Query(None),
 ) -> dict[str, Any]:
-    """Cross-reference trade_journal execution records with backtest signals for a checkpoint period."""
+    """Cross-reference trade_journal execution records with backtest signals.
+
+    Accepts either checkpoint_id (reads run_ids from JSONL) or run_ids (comma-separated).
+    """
     repo = create_repository(None)
 
-    # Read checkpoint baselines from JSONL to extract run_ids
-    jsonl_path = get_settings().reports_dir / "long_test_runs.jsonl"
-    checkpoint_run_ids: list[str] = []
-    if jsonl_path.exists():
-        with open(jsonl_path, "r", encoding="utf-8") as f:
-            for line in f:
-                try:
-                    record = json_loads(line.strip())
-                    if record and record.get("checkpointId") == checkpoint_id:
-                        for baseline in (record.get("baselines") or []):
-                            rid = baseline.get("runId") or baseline.get("id")
-                            if rid:
-                                checkpoint_run_ids.append(rid)
-                        break
-                except Exception:
-                    continue
+    if run_ids:
+        checkpoint_run_ids = [rid.strip() for rid in run_ids.split(",") if rid.strip()]
+    elif checkpoint_id:
+        jsonl_path = get_settings().reports_dir / "long_test_runs.jsonl"
+        checkpoint_run_ids: list[str] = []
+        if jsonl_path.exists():
+            with open(jsonl_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        record = json_loads(line.strip())
+                        if record and record.get("checkpointId") == checkpoint_id:
+                            for baseline in (record.get("baselines") or []):
+                                rid = baseline.get("runId") or baseline.get("id")
+                                if rid:
+                                    checkpoint_run_ids.append(rid)
+                            break
+                    except Exception:
+                        continue
+    else:
+        checkpoint_run_ids = []
 
     alignment = compute_alignment(
         repo=repo,

@@ -275,6 +275,7 @@ export type BacktestReportTabKey =
   | "trades"
   | "signals"
   | "quality"
+  | "alignment"
   | "controls"
   | "matching"
   | "config";

@@ -534,6 +534,32 @@ const priceQualityDiagnostics = computed(() => {
   const rd = dataQuality.value.reportOnlyDiagnostics;
   return rd && typeof rd === "object" ? ((rd as Record<string, unknown>).priceQuality as Record<string, any> | null) : null;
 });
+
+const alignmentResult = ref<Record<string, unknown> | null>(null);
+const alignmentLoading = ref(false);
+const alignmentError = ref("");
+
+async function fetchAlignment(runId: string) {
+  if (!runId) return;
+  alignmentLoading.value = true;
+  alignmentError.value = "";
+  try {
+    alignmentResult.value = await api.getAlignment(runId);
+  } catch (e: unknown) {
+    alignmentError.value = e instanceof Error ? e.message : String(e);
+    alignmentResult.value = null;
+  } finally {
+    alignmentLoading.value = false;
+  }
+}
+
+watch(activeReportTab, (tab) => {
+  if (tab === "alignment" && !alignmentResult.value) {
+    const runId = getRunId(reportSource.value);
+    if (runId) fetchAlignment(runId);
+  }
+});
+
 const dataQualityExamples = computed(() => {
   const rows = dataQuality.value.lowHotlistExamples;
   return Array.isArray(rows) ? rows.slice(0, 6) as Array<Record<string, unknown>> : [];
@@ -582,6 +608,7 @@ const reportTabs: Array<{ key: BacktestReportTabKey; label: string }> = [
   { key: "trades", label: "交易明细" },
   { key: "signals", label: "信号解释" },
   { key: "quality", label: "质量诊断" },
+  { key: "alignment", label: "实盘对齐" },
   { key: "controls", label: "对照组" },
   { key: "matching", label: "撮合诊断" },
   { key: "config", label: "参数快照" }
@@ -2530,6 +2557,36 @@ onMounted(async () => {
               </div>
             </div>
             <div v-else class="empty-explanation"><b>没有质量报告</b><p>兼容报告和归一化 quality 端点都没有返回质量信息。</p></div>
+          </div>
+
+          <div v-if="activeReportTab === 'alignment'" class="report-tab-panel">
+            <div class="section-block quality-block">
+              <h3>V2 Layer 3 — 实盘对齐</h3>
+              <div v-if="alignmentLoading" class="inline-note">加载中...</div>
+              <div v-else-if="alignmentError" class="inline-note" style="color:#721c24">{{ alignmentError }}</div>
+              <div v-else-if="!alignmentResult" class="inline-note">
+                点击"实盘对齐"标签自动加载。需要 MongoDB trade_journal 中有已执行的候选记录（含 entryPrice）。
+              </div>
+              <template v-else>
+                <div class="diagnostic-grid compact-diagnostic">
+                  <div><span>已执行交易</span><b>{{ alignmentResult.journalExecutedCount ?? 0 }}</b></div>
+                  <div><span>回测信号标的</span><b>{{ alignmentResult.signalCodeCount ?? 0 }}</b></div>
+                  <div><span>交集标的</span><b>{{ alignmentResult.intersectionCount ?? 0 }}</b></div>
+                  <div><span>交集 P&L</span><b>{{ Number(alignmentResult.intersectionPnl || 0).toFixed(2) }}</b></div>
+                  <div><span>交集 P&L %</span><b>{{ formatPercent(Number(alignmentResult.intersectionPnlPct)) }}</b></div>
+                  <div><span>对齐状态</span><b>{{ alignmentResult.alignmentStatus }}</b></div>
+                </div>
+                <div v-if="alignmentResult.sufficientSample" class="inline-note" style="color:#155724">
+                  ✓ 样本充足（≥10 笔），对齐报告有效
+                </div>
+                <div v-else class="inline-note">
+                  ⚠ 样本不足（<10 笔），暂不判定对齐质量
+                </div>
+                <div v-if="(alignmentResult.intersectionCodes as any[])?.length" style="margin-top:12px">
+                  <b>交集标的：</b>{{ (alignmentResult.intersectionCodes as string[])?.join(', ') }}
+                </div>
+              </template>
+            </div>
           </div>
 
           <div v-if="activeReportTab === 'controls'" class="report-tab-panel">

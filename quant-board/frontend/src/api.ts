@@ -119,6 +119,8 @@ export const api = {
   },
   getBacktestQuality: (id: string) =>
     requestApi<BacktestQualityResponse>(`/api/backtests/${encodeURIComponent(id)}/quality`),
+  getAlignment: (runIds: string) =>
+    requestApi<Record<string, unknown>>(`/api/backtests/alignment?run_ids=${encodeURIComponent(runIds)}`),
   runOptimization: (payload: OptimizationRequest) =>
     requestApi<unknown>("/api/optimizations/rank-trend", {
       method: "POST",
