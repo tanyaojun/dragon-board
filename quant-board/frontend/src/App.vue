@@ -151,6 +151,8 @@ async function fetchCheckpoints() {
   }
 }
 
+const recentCheckpoints = computed(() => [...checkpointList.value].reverse());
+
 const activeReportTab = ref<BacktestReportTabKey>("trades");
 const signalTierFilter = ref("");
 const signalTypeFilter = ref("");
@@ -1454,7 +1456,7 @@ onMounted(async () => {
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="cp in [...checkpointList].reverse()" :key="String(cp.checkpointId)">
+                <tr v-for="cp in recentCheckpoints" :key="String(cp.checkpointId)">
                   <td><small>{{ (String(cp.checkpointId)).replace('checkpoint_', '') }}</small></td>
                   <td :class="Number(cp.h1TotalReturn) >= 0 ? 'pos' : 'neg'">{{ formatPercent(Number(cp.h1TotalReturn)) }}</td>
                   <td :class="Number(cp.h1Sharpe) >= 0 ? 'pos' : 'neg'">{{ Number(cp.h1Sharpe || 0).toFixed(2) }}</td>
@@ -2347,7 +2349,7 @@ onMounted(async () => {
               <b>L1 绿灯</b> · 信号有效性达标
             </span>
             <span v-if="layer2ExecutionQuality?.layer2Status === 'yellow'" style="color:#856404">
-              <b>L2 黄灯</b> · H1-H2 偏差 {{ formatPercent(Number(layer2ExecutionQuality?.bias)) }} &gt; 阈值 {{ formatPercent(Number(layer2ExecutionQuality?.biasThreshold)) }}
+              <b>L2 黄灯</b> · H1-H2 偏差 {{ formatPercent(Number(layer2ExecutionQuality?.bias)) }} > 阈值 {{ formatPercent(Number(layer2ExecutionQuality?.biasThreshold)) }}
             </span>
             <span v-else-if="layer2ExecutionQuality?.layer2Status === 'green'" style="color:#155724">
               <b>L2 绿灯</b> · 执行偏差在阈值内
