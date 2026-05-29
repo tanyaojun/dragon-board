@@ -6,7 +6,7 @@
 
 ## Current Phase
 
-Phase 13 in progress
+Phase 17 in progress (V2 code review fixes applied; next: Phase D/E data accumulation)
 
 ## Success Criteria
 
@@ -165,11 +165,14 @@ walk_forward.topTrials = 5
 | --- | --- | --- | --- |
 | Optimization | `opt_70e72a69c40143be` | completed | `tpe + stability + 36 trials + auto validation + walk-forward` |
 | Quarter-hour research optimization | `opt_fcf1f30063514bb7` | completed | `grid + stability + 27 trials + next_bar + walk-forward` |
-| Long-test checkpoint | `checkpoint_2026-05-21_initial` | completed | 三条固定基线，摘要追加到 `quant-board/data/reports/long_test_runs.jsonl` |
+| Long-test checkpoint | `checkpoint_2026-05-21_initial` | completed | 三条固定基线，摘要追加到 JSONL |
 | Money-flow diagnostic backtest | `bt_1f012ea44bb44092` | completed | `half_hour/next_bar`，用于验证质量统计修复 |
-| Positive-price filter checkpoint | `checkpoint_2026-05-21_price_filter` | completed | 显式过滤 `price<=0` 行后复跑 H1/H2/Q1 |
-| Cross-market zero-price checkpoint | `checkpoint_2026-05-21_cross_market_zero_filter_v2` | completed | 只过滤跨市场/非 A 股/代码失配零行情行后复跑 H1/H2/Q1；v1 因未隔离全零帧，已被 v2 取代 |
-| All-zero frame checkpoint | `checkpoint_2026-05-21_all_zero_frame_filter` | completed | 只剔除全零价格异常帧后复跑 H1/H2/Q1 |
+| Positive-price filter checkpoint | `checkpoint_2026-05-21_price_filter` | completed | 显式过滤 `price<=0` 行后复跑 |
+| Cross-market zero-price checkpoint | `checkpoint_2026-05-21_cross_market_zero_filter_v2` | completed | 已取代 v1 |
+| All-zero frame checkpoint | `checkpoint_2026-05-21_all_zero_frame_filter` | completed | 只剔除全零价格异常帧 |
+| Weekly checkpoint 5/26 | `checkpoint_2026-05-26_weekly` | completed | 5 日增量，H2 持续改善 |
+| Weekly checkpoint 5/29 (repaired) | `checkpoint_2026-05-29_weekly` | completed | 数据未补齐时的基线 |
+| Interpolated checkpoint 5/29 | `checkpoint_2026-05-29_interpolated` | completed | 补齐后 290 HH + 756 QH，H1 Sharpe +0.60 |
 
 ## First Optimization Result
 
@@ -491,6 +494,85 @@ v1 `checkpoint_2026-05-21_cross_market_zero_filter` 已落库，但因第一版�
 - 全量 `price<=0` 过滤清零信号污染，但它把跨市场行、全零帧和局部 A 股报价缺失合并处理，不适合作为当前默认 formal quality gate。
 
 结论：下一步正式质量诊断可以优先加入 report-only 字段：`crossMarketZeroPriceRows`、`allZeroPriceFrames`、`partialAshareZeroPriceRows`。默认回测口径仍不自动开启任何价格过滤；若要候选默认化，优先考虑“跨市场/非 A 股/代码失配零行情”作为研究过滤，而“全零异常帧”作为更高优先级的数据采集修复/人工审计项。
+
+### Phase 14: V2 四层决策框架设计
+
+- [x] 与用户交叉澄清 5 个痛点
+- [x] 设计 Layer 1-4 四层架构
+- [x] Layer 1 信号有效性（分层比例、方向精度、二项检验、层级区分度）
+- [x] Layer 2 执行质量（H1 vs H2 偏差、相对阈值、方向占比）
+- [x] Layer 3 实盘对齐（trade_journal 7 个执行字段、最小 10 笔判停）
+- [x] Layer 4 参数优化（两阶段、双层止损、采用规则）
+- [x] 第三方 agent 交叉评审，修入 4 个 P0 问题
+- [x] 输出 V2 设计文档 `2026-05-26-longtest-v2-design.md`
+- **Status:** complete
+
+### Phase 15: V2 Phase A-C 实施
+
+- [x] Phase A: TradeJournal 7 个执行字段 (models.py, journal_routes.py)
+- [x] Phase A: TypeScript 类型 + CandidatePoolPanel 执行记录表单
+- [x] Phase B: `compute_signal_efficacy()` + `compute_execution_quality()` 函数
+- [x] Phase B: 接入回测管道 (services.py + engine.py)
+- [x] Phase B: 接入 CLI `summarize_longtest_baseline` + `cmd_run_longtest_baselines`
+- [x] Phase B: Layer 1-2 单元测试 (3 个)
+- [x] Phase C: `GET /api/backtests/alignment` 端点
+- [x] Phase C: CLI 内联对齐逻辑
+- [x] Phase C: 集成测试 (2 个)
+- [x] 修复 `candidateTier` 字段路径错误（`rankTrend.meta.sampleQuality.tier` → 顶层 `candidateTier`）
+- **Status:** complete
+
+### Phase 16: 代码审查与修复
+
+- [x] Spec 合规审查：16 项检查，12 项通过，4 项延后
+- [x] 代码质量审查：7 项发现，修复 4 项
+- [x] 修复 #1: 提取 `compute_alignment()` 共享函数消除 DRY
+- [x] 修复 #2: `compute_execution_quality` 增加 yellow 状态
+- [x] 修复 #5: `import math` 移到模块顶部
+- [x] 修复 #6: 删除死代码 `a_main_prices` / `n_neutral_prices`
+- [x] 修复 #7: 对齐不可用时返回 `unavailable`
+- [x] 修复 #8: 添加 `history` 参数文档
+- **Status:** complete
+
+### Phase 17: Phase A-C 收尾
+
+- [x] `read_checkpoint_history()` 读取 JSONL 历史
+- [x] `check_layer1_meltdown()` 连续 3 期 red → 熔断告警
+- [x] `check_layer3_trend()` 连续 2 期 sufficient → 绿灯
+- [x] 接入 `cmd_run_longtest_baselines`，写入 `crossPeriod` 字段
+- [x] 补测试缺口：空信号、无下帧、不含 MongoDB、空 run_ids、带 history
+- [x] 新增熔断/追踪集成测试 4 个
+- [x] CLI emoji 改文本避免 Windows GBK 编码错误
+- [x] `FORMAL_CAPTURE_MODES` 加入 `"synthesized"`
+- [x] 更新 findings.md 记录收尾结果
+- **Status:** complete
+
+### Phase 18: 数据修复 — 缺失 bar 补齐
+
+- [x] 分析 half_hour（42 条缺失）和 quarter_hour（213 条缺失）
+- [x] v1: 相邻 bar 直接复制（有偏差，已弃用）
+- [x] v2: 前后双 bar 价格/成交量线性插值，标记 `captureMode: "synthesized"`
+- [x] 删除旧复制数据（通过价格指纹匹配识别）
+- [x] 修复 5 个空热榜合成 bar，更新 `stockRowCount`
+- [x] 补齐后 half_hour 290 帧、quarter_hour 756 帧，零缺口
+- **Status:** complete
+
+### Phase 19: Checkpoint 2026-05-29 复跑
+
+- [x] 使用补齐数据跑 `checkpoint_2026-05-29_interpolated`
+- [x] 对比原始数据 vs 补齐数据三条基线
+- [x] 记录 Layer 1-3 指标和跨期状态
+- **Status:** complete
+
+### Phase 20: 待启动（下个 plan）
+
+- [ ] Phase D: Layer 4 参数优化（需 ≥60 个交易日，预计 7 月中）
+- [ ] Phase E: P1 统计与基准扩展（需 ≥50 个交易日）
+- [ ] Phase F: P2 归因与合规（需 ≥70 个交易日）
+- [ ] L1 熔断正式集成（已有函数，需多期 JSONL 历史积累后生效）
+- [ ] L3 模型失配/系统偏差标记（需 trade_journal 数据积累）
+- [ ] `/api/backtests/alignment` 直接 HTTP 测试
+- [ ] 补齐数据影响评估：对比合成帧 vs 真实帧对回测的影响
+- **Status:** pending
 
 ## Phase 13 Implementation Plan
 

@@ -366,12 +366,84 @@ Conclusion:
   - `quant-board/docs/optimization-long-task/progress.md`
   - `quant-board/data/reports/long_test_runs.jsonl`（追加本次 checkpoint）
 
+## Session: 2026-05-27 (V2 Design & Phase A-C Implementation)
+
+### Phase 14: V2 四层框架设计
+
+- **Status:** complete
+- 完成五痛点澄清 → 四层架构设计 → 交叉评审 → P0 修复
+- 输出设计文档：`2026-05-26-longtest-v2-design.md`
+- 4 个 P0 修正：策略层参数分两阶段、双层止损、Layer 2 相对阈值、Layer 1 精度门槛
+
+### Phase 15-16: V2 Phase A-C 实施 + 代码审查
+
+- **Status:** complete
+- 6 次提交，19 项测试通过
+- Phase A: TradeJournal 7 字段 + TypeScript + Vue 表单
+- Phase B: `compute_signal_efficacy()` + `compute_execution_quality()` 接入管线
+- Phase C: `/api/backtests/alignment` + CLI 集成
+- 发现并修复 `candidateTier` 字段路径错误
+- Spec 合规：16 项检查，12 通过，4 延后
+- 代码质量：7 项发现，修复 4 项（DRY、L2 yellow、inline import、死代码）
+
+### Phase 17: Phase A-C 收尾
+
+- **Status:** complete
+- L1 熔断：`check_layer1_meltdown()` 连续 3 期 red 检测
+- L3 跨期追踪：`check_layer3_trend()` 连续 2 期 sufficient 检测
+- JSONL 历史读取：`read_checkpoint_history()`
+- 补测试缺口 9 项（空信号、无下帧、不含 MongoDB、空 run_ids、history 参数、熔断、追踪）
+- 测试从 20 项 → 43 项
+
+### Files created/modified:
+- `quant-board/backend/services.py` — 新增 compute_signal_efficacy, compute_execution_quality, compute_alignment, read_checkpoint_history, check_layer1_meltdown, check_layer3_trend
+- `quant-board/backend/api/journal_routes.py` — 扩展 7 个执行字段
+- `quant-board/backend/data/models.py` — TradeJournal 执行字段
+- `quant-board/backend/core/backtest/engine.py` — Layer 1-2 透传
+- `quant-board/backend/cli.py` — Layer 2 计算、Layer 3 对齐、跨期检查
+- `quant-board/backend/main.py` — alignment 端点
+- `quant-board/backend/data/quality_gate.py` — synthesized captureMode
+- `quant-board/tests/test_money_flow_quality_gate.py` — Layer 1-2 单元测试
+- `quant-board/tests/test_quant_board.py` — 集成测试
+- `quant-board/docs/superpowers/plans/2026-05-26-longtest-v2-phase-a-c.md`
+- `quant-board/docs/superpowers/plans/2026-05-27-phase-a-c-closeout.md`
+- `quant-board/docs/optimization-long-task/findings.md`
+
+## Session: 2026-05-29 (Bar Repair & Checkpoint)
+
+### Phase 18: 数据修复
+
+- **Status:** complete
+- half_hour 248→290 (+42)、quarter_hour 543→756 (+213)
+- v1 直接复制 → v2 前后双 bar 价格/成交量线性插值
+- 删除旧复制数据（价格指纹匹配识别）
+- 合成 bar 标记 `captureMode: "synthesized"` + `qualityFlags: ["synthesized"]`
+- 新建 `backend/data/bar_repair.py` 修复工具
+
+### Phase 19: Checkpoint 复跑
+
+- **Status:** complete
+- 补齐前 checkpoint: `checkpoint_2026-05-29_weekly`
+- 补齐后 checkpoint: `checkpoint_2026-05-29_interpolated`
+- H1 原始 +2.15% → 补齐 +5.45%，Sharpe +0.60 首次转正
+- H2 原始 -6.11% → 补齐 -1.06%
+- Q1 原始 -3.26% → 补齐 -1.94%，Sharpe +0.10 首次转正
+- L1 方向精度 39.81%，仍低于 50% 随机基准，红灯
+- L2 黄灯，偏差 6.51pp > 5.45pp 阈值
+- 连续 3 期 L1 红灯 → 熔断告警
+
+### Files created/modified:
+- `quant-board/backend/data/bar_repair.py` — 修复脚本
+- `quant-board/backend/data/quality_gate.py` — synthesized 捕获模式
+- `quant-board/backend/cli.py` — emoji 修复
+- `quant-board/data/reports/long_test_runs.jsonl` — 追加 checkpoint
+
 ## 5-Question Reboot Check
 
 | Question | Answer |
 | --- | --- |
-| Where am I? | Phase 13 已完成：report-only 价格质量诊断已实现、测试通过并同步文档。 |
-| Where am I going? | 所有 13 个 Phase 已完成。后续等待用户指示下一阶段工作。 |
-| What's the goal? | 在 `dragonboard_live` 上形成可追溯、可复跑、质量字段真实可信的 RankTrend 长测链路 —— 已达成。 |
-| What have I learned? | H1/H2 的零价影响主要来自跨市场/非 A 股/代码失配零行情；Q1 同时受全零异常帧和过滤后路径变化影响。report-only 诊断能在不改变交易逻辑的前提下持续观察价格质量趋势。 |
-| What have I done? | 完成全部 13 个 Phase：健康检查、数据集枚举、基线回测、优化、长测自动化、资金流质量统计修复、非正价格诊断、显式过滤复跑、Phase 12 分拆归因复跑和 Phase 13 report-only 价格质量诊断。 |
+| Where am I? | Phase 17 已完成：V2 Phase A-C 实施、收尾、代码审查。Phase 18-19 已完成：数据修复和 checkpoint 复跑。当前数据状态：half_hour 290 帧（含 46 条合成）、quarter_hour 756 帧（含 228 条合成）。所有日期 bar 完整。 |
+| Where am I going? | 等待 ≥60 个交易日数据启动 Phase D（参数优化）。当前 29 个 half_hour 交易日，还需约 30 个交易日。预计 7 月中。 |
+| What's the goal? | 在补齐后的 `dragonboard_live` 上继续每周 checkpoint，用四层框架评估信号质量和执行偏差。数据满 60 天后启动 Layer 4 优化。 |
+| What have I learned? | 补齐缺失 bar 对回测结果影响显著（H1 +3.3pp），但 L1 方向精度不升反降（39.81%），说明信号本身方向预测能力偏弱。合成数据需标记 `synthesized` 以各口径区分。 |
+| What have I done? | 完成 V2 设计、Phase A-C 实施、代码审查修复、L1 熔断/L3 追踪、bar 补齐（线性插值）、5/29 checkpoint 复跑、planning-with-files 三文件更新。累计 43 项测试，11 次代码提交。 |

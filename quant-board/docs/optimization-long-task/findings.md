@@ -686,3 +686,64 @@ CLI 集成 (`cli.py`):
 ### Commit
 
 `c3174e9` — 5 files, +475/-1 lines
+
+## Bar Repair & Interpolation Findings (2026-05-29)
+
+### Problem
+
+half_hour 缺失 42 个 bar（14/29 日期不完整），quarter_hour 缺失 213 个 bar（25/42 日期不完整）。早期日期（如 4/16、4/20）缺失集中在上午盘前时段，反映采集启用时间晚于交易开盘。
+
+### v1: 单向复制（已弃用）
+
+从同日期最近 bar 直接深拷贝 frame + rows。引入偏差：合成 bar 和源 bar 热榜数据完全相同，导致回测中产生重复信号。
+
+### v2: 线性插值
+
+取缺失 bar 的前一个和后一个 bar，对每只股票分别线性插值：
+
+```
+price_target = price_prev + (price_next - price_prev) × (T_target - T_prev) / (T_next - T_prev)
+volume_target = volume_prev + (volume_next - volume_prev) × ratio
+turnover_target = 同上
+```
+
+板块数据不插值，复制最近邻。所有合成 bar 标记 `captureMode: "synthesized"`。
+
+### Data Cleanup
+
+第一轮复制的数据与真实数据混合，通过"价格指纹"匹配识别：在同一日期的 bar 中，若两个 bar 的前 5 只股票的 `(code, price)` 完全相同，则判定为复制品。共识别并删除 228 条旧复制数据。
+
+### Impact on Backtest
+
+| 基线 | 原始 (248 HH) | 补齐后 (290 HH) | 差异 |
+|---|---|---|---|
+| H1 totalReturn | +2.15% | +5.45% | +3.30pp |
+| H1 Sharpe | -0.34 | +0.60 | +0.94 |
+| H2 totalReturn | -6.11% | -1.06% | +5.05pp |
+| Q1 totalReturn | -3.26% | -1.94% | +1.32pp |
+
+补齐后所有基线改善，H1/H2/Q1 Sharpe 均首次转正（或大幅收窄）。主要原因是早期缺失 bar 集中在 4 月下旬的下跌区间，补齐后回测路径更平滑。
+
+### Caveats
+
+1. 合成数据本质是估算值，不反映真实市场价格
+2. L1 方向精度 39.81%（补齐前后均低于 50%）—— 信号方向预测能力不足是真实问题，不是数据缺口导致的
+3. 合成 bar 已标记 `captureMode: "synthesized"`，未来回测可选择性排除
+
+## 5/29 Checkpoint Cross-Period Analysis
+
+### Checkpoints in JSONL History
+
+| checkpoint_id | H1 ret | H1 L1 | H2 ret | Q1 ret |
+|---|---|---|---|---|
+| `checkpoint_2026-05-26_weekly` | +3.98% | red (bug: all "?") | -4.04% | -2.10% |
+| `checkpoint_2026-05-29_weekly` | +2.15% | red (41.73%) | -6.11% | -3.26% |
+| `checkpoint_2026-05-29_repaired` | +5.91% | red (37.64%) | -2.29% | -4.03% |
+| `checkpoint_2026-05-29_interpolated` | +5.45% | red (39.81%) | -1.06% | -1.94% |
+
+### Cross-Period State
+
+- L1 meltdown H1: 3 期连续 red（从 JSONL 历史中的最近 3 个有效 checkpoint）
+  - 根因：A_MAIN 信号方向精度持续低于 50% 随机基准，不是数据质量问题
+- L3 trend: insufficient_data（无 trade_journal 执行记录）
+- 趋势：H2 保守成交从 5/26 的 -4.04% 改善至 -1.06%，接近转正；H1 乐观偏差（+6.5pp > H2）仍未消除
