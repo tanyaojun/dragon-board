@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
-FORMAL_CAPTURE_MODES = {"real_time", "delayed"}
+FORMAL_CAPTURE_MODES = {"real_time", "delayed", "synthesized"}
 LOW_HOTLIST_THRESHOLD = 20
 FORMAL_MONEY_FLOW_SOURCES = {"broker_l2", "official_l2"}
 
