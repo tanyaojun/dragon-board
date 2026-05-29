@@ -522,6 +522,18 @@ const controlBacktests = computed(() => {
 });
 
 const dataQuality = computed(() => getObjectField(reportSource.value, ["dataQuality"]));
+const layer1SignalEfficacy = computed(() => {
+  const raw = dataQuality.value.layer1SignalEfficacy;
+  return raw && typeof raw === "object" ? (raw as Record<string, unknown>) : null;
+});
+const layer2ExecutionQuality = computed(() => {
+  const raw = dataQuality.value.layer2ExecutionQuality;
+  return raw && typeof raw === "object" ? (raw as Record<string, unknown>) : null;
+});
+const priceQualityDiagnostics = computed(() => {
+  const rd = dataQuality.value.reportOnlyDiagnostics;
+  return rd && typeof rd === "object" ? ((rd as Record<string, unknown>).priceQuality as Record<string, any> | null) : null;
+});
 const dataQualityExamples = computed(() => {
   const rows = dataQuality.value.lowHotlistExamples;
   return Array.isArray(rows) ? rows.slice(0, 6) as Array<Record<string, unknown>> : [];
@@ -2462,6 +2474,59 @@ onMounted(async () => {
                     </tr>
                   </tbody>
                 </table>
+              </div>
+
+              <!-- V2 Layer 1: 信号有效性 -->
+              <div v-if="layer1SignalEfficacy" class="section-block quality-block">
+                <h3>V2 Layer 1 — 信号有效性
+                  <span :class="['status-badge', layer1SignalEfficacy.layer1Status === 'green' ? 'badge-green' : 'badge-red']">
+                    {{ layer1SignalEfficacy.layer1Status }}
+                  </span>
+                </h3>
+                <div class="diagnostic-grid compact-diagnostic">
+                  <div><span>分层比例 (A+B)</span><b>{{ formatPercent(Number(layer1SignalEfficacy.tierRatio)) }} <small>(2%-15%)</small></b></div>
+                  <div><span>方向精度</span><b>{{ formatPercent(Number(layer1SignalEfficacy.directionAccuracy)) }} <small>(>55%)</small></b></div>
+                  <div><span>层级区分度</span><b>{{ formatPercent(Number(layer1SignalEfficacy.tierDiscrimination)) }} <small>(>5pp)</small></b></div>
+                  <div><span>二项检验 p 值</span><b>{{ Number(layer1SignalEfficacy.binomialPValue).toFixed(4) }} <small>(<0.10)</small></b></div>
+                  <div><span>A_MAIN 样本</span><b>{{ layer1SignalEfficacy.aMainSamples }}</b></div>
+                  <div><span>总信号数</span><b>{{ layer1SignalEfficacy.totalSignals }}</b></div>
+                </div>
+                <div class="inline-note">
+                  <b>信号层级分布：</b>
+                  <span v-for="(cnt, tier) in asRecord(layer1SignalEfficacy.tierCounts)" :key="String(tier)" style="margin-right:12px">
+                    {{ tier }}: {{ cnt }}
+                  </span>
+                </div>
+              </div>
+
+              <!-- V2 Layer 2: 执行质量 -->
+              <div v-if="layer2ExecutionQuality" class="section-block quality-block">
+                <h3>V2 Layer 2 — 执行质量 (H1 vs H2)
+                  <span :class="['status-badge',
+                    layer2ExecutionQuality.layer2Status === 'green' ? 'badge-green' :
+                    layer2ExecutionQuality.layer2Status === 'yellow' ? 'badge-yellow' : 'badge-red']">
+                    {{ layer2ExecutionQuality.layer2Status }}
+                  </span>
+                </h3>
+                <div class="diagnostic-grid compact-diagnostic">
+                  <div><span>偏差 (H1-H2)</span><b>{{ formatPercent(Number(layer2ExecutionQuality.bias)) }} <small>(&lt; {{ formatPercent(Number(layer2ExecutionQuality.biasThreshold)) }})</small></b></div>
+                  <div><span>方向占比 (近4期)</span><b>{{ formatPercent(Number(layer2ExecutionQuality.directionRatio)) }} <small>(≥75%)</small></b></div>
+                  <div><span>交易数差异</span><b>{{ layer2ExecutionQuality.tradeCountDiff }}</b></div>
+                  <div><span>回撤差异</span><b>{{ formatPercent(Number(layer2ExecutionQuality.drawdownDiff)) }} <small>(<5pp)</small></b></div>
+                  <div><span>biasOk</span><b>{{ layer2ExecutionQuality.biasOk ? '✓' : '✗' }}</b></div>
+                  <div><span>drawdownOk</span><b>{{ layer2ExecutionQuality.drawdownDiffOk ? '✓' : '✗' }}</b></div>
+                </div>
+              </div>
+
+              <!-- 价格质量诊断 -->
+              <div v-if="priceQualityDiagnostics" class="section-block quality-block">
+                <h3>价格质量诊断 (report-only)</h3>
+                <div class="diagnostic-grid compact-diagnostic">
+                  <div><span>跨市场零行情</span><b>{{ priceQualityDiagnostics.crossMarketZeroPriceRows?.rowCount ?? 0 }} 行 / {{ priceQualityDiagnostics.crossMarketZeroPriceRows?.snapshotCount ?? 0 }} 快照</b></div>
+                  <div><span>全零异常帧</span><b>{{ priceQualityDiagnostics.allZeroPriceFrames?.frameCount ?? 0 }} 帧</b></div>
+                  <div><span>A股局部零价</span><b>{{ priceQualityDiagnostics.partialAshareZeroPriceRows?.rowCount ?? 0 }} 行 / {{ priceQualityDiagnostics.partialAshareZeroPriceRows?.snapshotCount ?? 0 }} 快照</b></div>
+                </div>
+                <div class="inline-note">诊断不参与过滤，不改变收益和质量等级。</div>
               </div>
             </div>
             <div v-else class="empty-explanation"><b>没有质量报告</b><p>兼容报告和归一化 quality 端点都没有返回质量信息。</p></div>
