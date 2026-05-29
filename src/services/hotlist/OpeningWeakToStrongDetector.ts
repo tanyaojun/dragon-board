@@ -1,6 +1,7 @@
 import type {
   OpeningBaselineQuality,
   OpeningAuctionPriceVolumeProfile,
+  OpeningLiquidityTier,
   OpeningWeakToStrongBaseline,
   OpeningWeakToStrongFactor,
   OpeningWeakToStrongQuote,
@@ -13,6 +14,11 @@ import type {
 const SIGNAL_TYPE = 'opening_weak_to_strong' as const
 const DISPLAY_NAME = '竞价弱转强' as const
 const RULE_VERSION = 'opening-weak-to-strong.v1'
+const LIQUIDITY_TIER_VERSION = 'liquidity-review.v1'
+const HOT_AMOUNT = 100_000_000
+const PREOPEN_CANDIDATE_START = '09:25:10'
+const INTRADAY_CONFIRM_END = '10:00:00'
+const INTRADAY_CONFIRM_ADVANCE_PCT_POINT = 1
 const SHANGHAI_TIME_FORMAT = new Intl.DateTimeFormat('en-GB', {
   timeZone: 'Asia/Shanghai',
   hour: '2-digit',
@@ -95,6 +101,8 @@ export class OpeningAuctionStateStore {
 }
 
 export class OpeningWeakToStrongDetector {
+  private readonly activeSignals = new Map<string, OpeningWeakToStrongSignal>()
+
   constructor(
     private readonly rules: OpeningWeakToStrongRules,
     private readonly ruleVersion = RULE_VERSION,
@@ -104,7 +112,22 @@ export class OpeningWeakToStrongDetector {
     quote: OpeningWeakToStrongQuote,
     baseline: OpeningWeakToStrongBaseline | null,
   ): OpeningWeakToStrongSignal | null {
+    const activeKey = baselineKey(quote.code, getTradingDate(quote.at))
+    const activeSignal = this.activeSignals.get(activeKey)
     if (!isInWindow(quote.at, this.rules.detectStart, this.rules.detectEnd)) {
+      if (isInWindow(quote.at, PREOPEN_CANDIDATE_START, beforeWindow(this.rules.detectStart))) {
+        const preopenCandidate = this.evaluatePreopenCandidate(quote, baseline)
+        if (preopenCandidate?.triggered) {
+          this.activeSignals.set(activeKey, preopenCandidate)
+          return preopenCandidate
+        }
+        return preopenCandidate
+      }
+      const update = activeSignal ? this.evaluateIntradayUpdate(quote, activeSignal) : null
+      if (update) {
+        this.activeSignals.set(activeKey, update)
+        return update
+      }
       return this.rejected(quote, baseline, 'outside_detection_window')
     }
     if (!baseline) return this.rejected(quote, null, 'baseline_missing')
@@ -214,8 +237,9 @@ export class OpeningWeakToStrongDetector {
     const score = clampScore(factors.reduce((sum, item) => sum + item.score, 0) - riskPenalty)
     const confidence =
       riskFlags.length > 0 ? 'watch' : score >= 80 ? 'critical' : score >= 60 ? 'strong' : 'watch'
+    const liquidityReview = liquidityReviewFields(amount, volume, this.rules)
 
-    return {
+    const signal: OpeningWeakToStrongSignal = {
       triggered: true,
       signalType: SIGNAL_TYPE,
       displayName: DISPLAY_NAME,
@@ -237,14 +261,26 @@ export class OpeningWeakToStrongDetector {
       initialBaselinePrice: auctionProfile?.initialPrice,
       initialBaselinePct: auctionProfile?.initialPct,
       initialBaselineAmount: auctionProfile?.initialAmount,
+      lateBaselineAt: auctionProfile?.lateAt,
+      lateBaselinePrice: auctionProfile?.latePrice,
+      lateBaselinePct: auctionProfile?.lateStartPct,
+      lateBaselineAmount: auctionProfile?.lateAmount,
       finalBaselineAt: auctionProfile?.finalAt,
       finalBaselinePrice: auctionProfile?.finalPrice,
       finalBaselinePct: auctionProfile?.finalPct,
       finalBaselineAmount: auctionProfile?.finalAmount,
       auctionPriceLiftPctPoint: auctionProfile?.totalLiftPctPoint,
+      latePriceLiftPctPoint: auctionProfile?.lateLiftPctPoint,
+      auctionAmountDelta: auctionProfile?.amountDelta,
+      lateAmountDelta: auctionProfile?.lateAmountDelta,
       auctionAmountLiftRatio: auctionProfile?.amountLiftRatio,
       lateAmountLiftRatio: auctionProfile?.lateAmountLiftRatio,
       priceVolumeConfirmed,
+      liquidityTier: liquidityReview.tier,
+      liquidityTierMode: 'review_only',
+      liquidityTierBasis: liquidityReview.basis,
+      liquidityTierThresholds: liquidityReview.thresholds,
+      liquidityTierVersion: LIQUIDITY_TIER_VERSION,
       limitDistancePct: limitDistancePct === undefined ? undefined : round2(limitDistancePct),
       triggerAt: quote.at,
       baselineQuality: baseline.quality,
@@ -264,12 +300,196 @@ export class OpeningWeakToStrongDetector {
       previousWeakSignals: quote.previousWeakSignals,
       previousWeakSource: quote.previousWeakSource,
       auctionCoverageRatio: quality.auctionCoverageRatio,
+      intradayStatus: 'pending',
+      intradayOutcome: 'pending',
+      intradayStatusAt: quote.at,
+      intradayPrice: quote.lastPrice,
+      intradayPct: round2(firstWindowPct),
+      intradayAmount: amount,
+      intradayNote: '09:30-09:35已触发，等待盘中确认',
       dryRun: quote.dryRun || quality.dryRun,
       factors,
       riskFlags,
       ruleVersion: this.ruleVersion,
       configHash: configHash(this.rules),
     }
+    this.activeSignals.set(activeKey, signal)
+    return signal
+  }
+
+  private evaluatePreopenCandidate(
+    quote: OpeningWeakToStrongQuote,
+    baseline: OpeningWeakToStrongBaseline | null,
+  ): OpeningWeakToStrongSignal {
+    if (!baseline) return this.rejected(quote, null, 'baseline_missing')
+    if (!isValidPrice(quote.lastPrice) || !isValidPrice(quote.preClose)) {
+      return this.rejected(quote, baseline, 'invalid_price')
+    }
+
+    const auctionProfile = baseline.auctionProfile
+    const hasAuctionProfile = Boolean(auctionProfile?.initialAt && auctionProfile.finalAt)
+    if (!hasAuctionProfile || auctionProfile?.priceVolumeConfirmed !== true) {
+      return this.rejected(quote, baseline, 'preopen_candidate_unconfirmed')
+    }
+
+    const quality = openingQuality(quote, baseline, this.rules)
+    const riskKeys = [...auctionProfile.riskFlags, ...quality.riskKeys]
+    if (baseline.auctionAmount <= 0) riskKeys.push('auction_amount_missing')
+    const riskFlags = uniqueStrings(riskKeys).map(riskFlag)
+    if (riskFlags.length > 0) {
+      return this.rejected(quote, baseline, 'preopen_candidate_risk')
+    }
+
+    const auctionPct = baseline.auctionPct
+    const amount = baseline.auctionAmount
+    const volume = normalizeNumber(quote.volume)
+    const auctionAmountDelta = auctionProfile.amountDelta ?? 0
+    const factors = buildFactors({
+      variant: 'auction_late_lift',
+      jumpPctPoint: auctionProfile.totalLiftPctPoint ?? 0,
+      firstWindowPct: auctionPct,
+      amount,
+      amountDelta: auctionAmountDelta,
+      baselineQuality: baseline.quality,
+      auctionProfile,
+      previousWeakScore: normalizeNumber(quote.previousWeakScore),
+      previousWeakSignals: quote.previousWeakSignals,
+      previousWeakSource: quote.previousWeakSource,
+      rules: this.rules,
+    })
+    const score = clampScore(factors.reduce((sum, item) => sum + item.score, 0))
+    const confidence = score >= 80 ? 'critical' : score >= 60 ? 'strong' : 'watch'
+    const liquidityReview = liquidityReviewFields(amount, volume, this.rules)
+
+    return {
+      triggered: true,
+      signalType: SIGNAL_TYPE,
+      displayName: DISPLAY_NAME,
+      code: quote.code,
+      name: quote.name || baseline.name || quote.code,
+      variant: 'auction_late_lift',
+      confidence,
+      score,
+      auctionFinalPrice: baseline.auctionFinalPrice,
+      auctionPct: round2(auctionPct),
+      firstWindowPrice: baseline.auctionFinalPrice,
+      firstWindowPct: round2(auctionPct),
+      jumpPctPoint: round2(auctionProfile.totalLiftPctPoint ?? 0),
+      amount,
+      amountDelta: auctionAmountDelta,
+      initialBaselineAt: auctionProfile.initialAt,
+      initialBaselinePrice: auctionProfile.initialPrice,
+      initialBaselinePct: auctionProfile.initialPct,
+      initialBaselineAmount: auctionProfile.initialAmount,
+      lateBaselineAt: auctionProfile.lateAt,
+      lateBaselinePrice: auctionProfile.latePrice,
+      lateBaselinePct: auctionProfile.lateStartPct,
+      lateBaselineAmount: auctionProfile.lateAmount,
+      finalBaselineAt: auctionProfile.finalAt,
+      finalBaselinePrice: auctionProfile.finalPrice,
+      finalBaselinePct: auctionProfile.finalPct,
+      finalBaselineAmount: auctionProfile.finalAmount,
+      auctionPriceLiftPctPoint: auctionProfile.totalLiftPctPoint,
+      latePriceLiftPctPoint: auctionProfile.lateLiftPctPoint,
+      auctionAmountDelta: auctionProfile.amountDelta,
+      lateAmountDelta: auctionProfile.lateAmountDelta,
+      auctionAmountLiftRatio: auctionProfile.amountLiftRatio,
+      lateAmountLiftRatio: auctionProfile.lateAmountLiftRatio,
+      priceVolumeConfirmed: true,
+      liquidityTier: liquidityReview.tier,
+      liquidityTierMode: 'review_only',
+      liquidityTierBasis: liquidityReview.basis,
+      liquidityTierThresholds: liquidityReview.thresholds,
+      liquidityTierVersion: LIQUIDITY_TIER_VERSION,
+      triggerAt: quote.at,
+      baselineQuality: baseline.quality,
+      auctionCapturedAt: baseline.capturedAt,
+      bridgeTs: baseline.bridgeTs,
+      quoteCapturedAt: quote.capturedAt || quote.bridgeTs || quote.at,
+      auctionSampleCount: baseline.sampleCount,
+      quoteAgeMs: ageMs(quote.capturedAt || quote.bridgeTs || quote.at, quote.at),
+      latencyMs: ageMs(baseline.capturedAt, quote.at),
+      openingForcedSample: baseline.openingForcedSample,
+      requestedCount: baseline.requestedCount,
+      receivedCount: baseline.receivedCount,
+      elapsedMs: baseline.elapsedMs,
+      slowBatches: baseline.slowBatches,
+      truncatedBatches: baseline.truncatedBatches,
+      previousWeakScore: quote.previousWeakScore,
+      previousWeakSignals: quote.previousWeakSignals,
+      previousWeakSource: quote.previousWeakSource,
+      auctionCoverageRatio: quality.auctionCoverageRatio,
+      intradayStatus: 'preopen_candidate',
+      intradayOutcome: 'preopen_candidate',
+      intradayStatusAt: quote.at,
+      intradayPrice: baseline.auctionFinalPrice,
+      intradayPct: round2(auctionPct),
+      intradayAmount: amount,
+      intradayNote: '竞价量价齐升，等待开盘承接验证',
+      dryRun: quote.dryRun || quality.dryRun,
+      factors,
+      riskFlags: [],
+      ruleVersion: this.ruleVersion,
+      configHash: configHash(this.rules),
+    }
+  }
+
+  private evaluateIntradayUpdate(
+    quote: OpeningWeakToStrongQuote,
+    activeSignal: OpeningWeakToStrongSignal,
+  ): OpeningWeakToStrongSignal | null {
+    if (!isInWindow(quote.at, afterWindow(this.rules.detectEnd), INTRADAY_CONFIRM_END)) return null
+    if (!isValidPrice(quote.lastPrice) || !isValidPrice(quote.preClose)) return null
+    if (activeSignal.intradayStatus === 'failed') return null
+
+    const intradayPct = pct(quote.lastPrice, quote.preClose)
+    const officialOpen = normalizeNumber(activeSignal.officialOpen || quote.open)
+    const support = Math.max(
+      quote.preClose,
+      officialOpen > 0 ? officialOpen * this.rules.openingSupportOpenRatio : 0,
+    )
+    const amount = normalizeNumber(quote.amount)
+    if (quote.lastPrice < support) {
+      return {
+        ...activeSignal,
+        confidence: 'watch',
+        score: Math.min(activeSignal.score, 10),
+        firstWindowPrice: activeSignal.firstWindowPrice,
+        firstWindowPct: activeSignal.firstWindowPct,
+        amount,
+        intradayStatus: 'failed',
+        intradayOutcome: 'failed_open_dump',
+        intradayStatusAt: quote.at,
+        intradayPrice: quote.lastPrice,
+        intradayPct: round2(intradayPct),
+        intradayAmount: amount,
+        intradayNote: '跌破开盘/昨收支撑，疑似竞价诱多',
+        riskFlags: mergeRiskFlags(activeSignal.riskFlags, [riskFlag('intraday_open_dump')]),
+      }
+    }
+
+    const confirmPct = Math.max(
+      normalizeNumber(activeSignal.firstWindowPct) + INTRADAY_CONFIRM_ADVANCE_PCT_POINT,
+      normalizeNumber(activeSignal.officialOpenPct),
+      normalizeNumber(activeSignal.auctionPct),
+    )
+    if (activeSignal.intradayStatus === 'pending' && intradayPct >= confirmPct && quote.lastPrice >= support) {
+      return {
+        ...activeSignal,
+        amount,
+        confidence: activeSignal.confidence === 'watch' ? 'strong' : activeSignal.confidence,
+        score: Math.max(activeSignal.score, 60),
+        intradayStatus: 'confirmed',
+        intradayOutcome: 'confirmed_strong',
+        intradayStatusAt: quote.at,
+        intradayPrice: quote.lastPrice,
+        intradayPct: round2(intradayPct),
+        intradayAmount: amount,
+        intradayNote: '09:35后继续上攻并站稳，盘中确认成功',
+      }
+    }
+
+    return null
   }
 
   private rejected(
@@ -277,6 +497,11 @@ export class OpeningWeakToStrongDetector {
     baseline: OpeningWeakToStrongBaseline | null,
     invalidReason: string,
   ): OpeningWeakToStrongSignal {
+    const liquidityReview = liquidityReviewFields(
+      normalizeNumber(quote.amount),
+      normalizeNumber(quote.volume),
+      this.rules,
+    )
     return {
       triggered: false,
       signalType: SIGNAL_TYPE,
@@ -285,6 +510,11 @@ export class OpeningWeakToStrongDetector {
       name: quote.name || baseline?.name || quote.code,
       score: 0,
       amount: normalizeNumber(quote.amount),
+      liquidityTier: liquidityReview.tier,
+      liquidityTierMode: 'review_only',
+      liquidityTierBasis: liquidityReview.basis,
+      liquidityTierThresholds: liquidityReview.thresholds,
+      liquidityTierVersion: LIQUIDITY_TIER_VERSION,
       triggerAt: quote.at,
       baselineQuality: baseline?.quality || 'missing',
       auctionCapturedAt: baseline?.capturedAt,
@@ -436,6 +666,16 @@ function riskFlag(key: string): OpeningWeakToStrongRiskFlag {
   return { key, severity, penalty }
 }
 
+function mergeRiskFlags(
+  existing: OpeningWeakToStrongRiskFlag[],
+  added: OpeningWeakToStrongRiskFlag[],
+): OpeningWeakToStrongRiskFlag[] {
+  const byKey = new Map<string, OpeningWeakToStrongRiskFlag>()
+  for (const flag of existing) byKey.set(flag.key, flag)
+  for (const flag of added) byKey.set(flag.key, flag)
+  return [...byKey.values()]
+}
+
 function totalRiskPenalty(riskFlags: OpeningWeakToStrongRiskFlag[]): number {
   const groups = new Map<string, number>()
   for (const flag of riskFlags) {
@@ -482,6 +722,31 @@ function openingQuality(
       riskKeys.includes('quote_time_untrusted') ||
       riskKeys.includes('auction_time_untrusted'),
   }
+}
+
+function liquidityReviewFields(
+  amount: number,
+  volume: number,
+  rules: OpeningWeakToStrongRules,
+): { tier: OpeningLiquidityTier; basis: string; thresholds: string } {
+  return {
+    tier: liquidityTier(amount, volume, rules),
+    basis: `amount=${amount};volume=${volume}`,
+    thresholds:
+      `openingLiquidityMinAmount=${rules.openingLiquidityMinAmount};` +
+      `minCurrentAmount=${rules.minCurrentAmount};hotAmount=${HOT_AMOUNT};` +
+      `minCurrentVolume=${rules.minCurrentVolume}`,
+  }
+}
+
+function liquidityTier(amount: number, volume: number, rules: OpeningWeakToStrongRules): OpeningLiquidityTier {
+  if (!Number.isFinite(amount) || amount <= 0) return 'unknown'
+  if (amount < rules.openingLiquidityMinAmount || (volume > 0 && volume < rules.minCurrentVolume)) {
+    return 'thin'
+  }
+  if (amount >= HOT_AMOUNT) return 'hot'
+  if (amount >= rules.minCurrentAmount) return 'active'
+  return 'normal'
 }
 
 function buildAuctionProfile(
@@ -630,6 +895,22 @@ function secondsOfDay(value: string): number {
   if (match) return Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3])
   const date = new Date(value)
   return date.getHours() * 3600 + date.getMinutes() * 60 + date.getSeconds()
+}
+
+function afterWindow(value: string): string {
+  const seconds = Math.min(24 * 3600 - 1, secondsOfDay(value) + 1)
+  const hour = Math.floor(seconds / 3600)
+  const minute = Math.floor((seconds % 3600) / 60)
+  const second = seconds % 60
+  return [hour, minute, second].map(item => String(item).padStart(2, '0')).join(':')
+}
+
+function beforeWindow(value: string): string {
+  const seconds = Math.max(0, secondsOfDay(value) - 1)
+  const hour = Math.floor(seconds / 3600)
+  const minute = Math.floor((seconds % 3600) / 60)
+  const second = seconds % 60
+  return [hour, minute, second].map(item => String(item).padStart(2, '0')).join(':')
 }
 
 function shanghaiTimeParts(value: string): number | null {

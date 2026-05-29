@@ -247,6 +247,42 @@
 | 代码复核修正 | 复核发现 `HasOpeningCoreEvidence` 不能用绝对值判断，否则下跌/缩量会被误当核心；已改为只接受正向抬升/放量，并新增 `v5-negative-auction-core-rejected`。 |
 | 临门确认修正 | `priceVolumeConfirmed` 已纳入 `09:24-09:25` 临门价格和相对放量确认；总量价抬升但无临门确认的样例降为 `watch`，新增 `v5-total-confirmed-without-late-confirmation-downgraded`。 |
 
+2026-05-24 V6-A 方案交叉评审：
+
+| 评审域 | 结论 |
+|--------|------|
+| 规则口径 | 有条件通过。V6-A 应先做实盘复盘闭环和流动性分层观测，不应继续堆阈值；`liquidityTier` 必须标记为 `review_only`，不得改变触发、评分、语音或高亮。 |
+| 实现影响 | 有条件通过。最小实现应只扩展 `OpeningWeakToStrongSignal` 输出层，不扩展 `Rules`，不改变 `configHash`；TS/C# 字段必须成对扩展，桌面 CSV 导出和 proxy 上报需要同步验证。 |
+| 测试验收 | 不通过当前材料。原因是文档和 fixture 尚未固化 V6-A 字段合同；实施前必须先补文档和 RED 用例。 |
+| 范围收敛 | V6-A1 只做实时信号复盘字段、流动性分层观测和桌面导出；`09:35/收盘 outcome 写回` 进入 V6-A2，后续另建复盘记录或存储合同。 |
+
+2026-05-25 V6-A1 提交前 code review：
+
+| 评审项 | 结论 |
+|--------|------|
+| Critical | 无。 |
+| TS/C# 合同 | 发现 TS `OpeningWeakToStrongSignal` 的 `liquidityTier*` 可选，而 C# 为必填；已改为 TS 必填，保持信号合同一致。 |
+| positional record | 未发现 C# `OpeningWeakToStrongResult -> OpeningWeakToStrongSignal` 当前构造错位。 |
+| 判定影响 | `liquidityTier` 仍只用于 `review_only` 复盘字段，未进入触发、评分、语音、高亮或 `configHash`。 |
+| 测试补强 | 已补桌面 payload/CSV、proxy 透传和 OpenAPI 文档断言，覆盖 `liquidityTierBasis/liquidityTierThresholds`。 |
+
+2026-05-25 V6 盘中确认闭环转向：
+
+| 项目 | 发现 |
+|------|------|
+| 产品定位 | 用户明确异动精灵/异动雷达不是量化回测因子工具，弱转强信号价值应在 10:00 前完成盘中定性，而不是依赖收盘后人工复盘。 |
+| 方案纠偏 | 旧 V6-A “复盘字段/流动性观测”保留为辅助遥测；V6 主线改为“竞价弱转强盘中确认闭环”。 |
+| 状态口径 | `09:30-09:35` 首发 `pending`；`09:35-10:00` 继续上攻并站稳更新为 `confirmed_strong`；跌破开盘/昨收支撑更新为 `failed_open_dump`。 |
+| 去重口径 | 不新增事件类型，不换 dedupe key；同一 `tradingDate + code + opening_weak_to_strong` 信号允许盘中状态更新。proxy 和 Web buffer 必须按盘中结果优先，而不能只按 `confidence/score` 选强信号。 |
+| 语音口径 | 盘中失败/观察更新不重新抢语音；proxy 仍只对首次强信号授予一次 `voiceOwner`，防止刷屏。 |
+| 桌面状态锁 | C# `L1EventEngine` 旧的同股同日触发锁会压住 09:35 后更新；需改为记录盘中状态优先级，允许 pending -> confirmed -> failed。 |
+| 规则指纹 | `09:25:10` 候选窗口、`10:00` 收口和 `+1.0pct` 盘中确认推进属于 V6 状态机常量，不扩展规则对象，不进入 TS/C# `configHash`；规则指纹保持 `owts-08f44efb`。 |
+| 评审状态 | 已复用既有只读 Agent 完成提交前 code review；Critical 无，Important 反馈已修复。 |
+| proxy 语音仲裁 | 原逻辑存在迟到旧 `strong/pending` 信号在 canonical 仍为 `failed` 时拿到 `voiceOwner` 的风险；已改为只在本次上报成为 canonical 且 canonical 非 `failed/watch` 时授权语音。 |
+| 桌面去重 | `EventDeduper` 原 30 秒冷却可能吞掉 `pending -> confirmed/failed` 的盘中更新；已记录弱转强盘中状态优先级，状态升级可绕过冷却。 |
+| API 合同 | OpenAPI 原未声明 V6 `intraday*` 字段；已补 schema 和 docs 测试，避免 Web/桌面/proxy 合同漂移。 |
+| 测试补强 | 已补 `09:25:10` 边界、候选不能绕过 `pending` 直接确认、`configHash` 保持旧值回归；桌面 CSV 导出已按列名断言盘中列和值对齐。 |
+
 ## 风险与处理
 
 | 风险 | 处理 |

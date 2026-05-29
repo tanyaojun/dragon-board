@@ -3,6 +3,7 @@ namespace YiDongJingLing.Events;
 public sealed class EventDeduper
 {
     private readonly Dictionary<string, DateTimeOffset> _lastEmittedAt = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, int> _lastOpeningIntradayPriority = new(StringComparer.Ordinal);
     private readonly TimeSpan _defaultCooldown;
 
     public EventDeduper(TimeSpan? defaultCooldown = null)
@@ -10,7 +11,11 @@ public sealed class EventDeduper
         _defaultCooldown = defaultCooldown ?? TimeSpan.FromSeconds(180);
     }
 
-    public void Clear() => _lastEmittedAt.Clear();
+    public void Clear()
+    {
+        _lastEmittedAt.Clear();
+        _lastOpeningIntradayPriority.Clear();
+    }
 
     public IReadOnlyList<EventRecord> Filter(IReadOnlyList<EventRecord> events)
     {
@@ -21,6 +26,7 @@ public sealed class EventDeduper
             {
                 if (!CanEmit(item)) continue;
                 _lastEmittedAt[item.DedupeKey] = item.Timestamp;
+                RememberOpeningIntradayPriority(item);
                 result.Add(item);
                 break;
             }
@@ -34,8 +40,47 @@ public sealed class EventDeduper
 
     private bool CanEmit(EventRecord item)
     {
+        if (IsOpeningIntradayUpgrade(item)) return true;
         if (!_lastEmittedAt.TryGetValue(item.DedupeKey, out var last)) return true;
         return item.Timestamp - last >= CooldownFor(item.Type);
+    }
+
+    private bool IsOpeningIntradayUpgrade(EventRecord item)
+    {
+        if (item.Type != L1EventType.OpeningWeakToStrong) return false;
+        var priority = OpeningIntradayPriority(item);
+        if (priority <= 0) return false;
+        return _lastOpeningIntradayPriority.TryGetValue(item.DedupeKey, out var lastPriority) &&
+            priority > lastPriority;
+    }
+
+    private void RememberOpeningIntradayPriority(EventRecord item)
+    {
+        if (item.Type != L1EventType.OpeningWeakToStrong) return;
+        _lastOpeningIntradayPriority[item.DedupeKey] = OpeningIntradayPriority(item);
+    }
+
+    private static int OpeningIntradayPriority(EventRecord item)
+    {
+        var statusPriority = item.OpeningSignal?.IntradayStatus switch
+        {
+            "failed" => 4,
+            "confirmed" => 3,
+            "watch" => 2,
+            "pending" => 1,
+            "preopen_candidate" => 0,
+            _ => 0,
+        };
+        var outcomePriority = item.OpeningSignal?.IntradayOutcome switch
+        {
+            "failed_open_dump" => 4,
+            "confirmed_strong" => 3,
+            "watch_only" => 2,
+            "pending" => 1,
+            "preopen_candidate" => 0,
+            _ => 0,
+        };
+        return Math.Max(statusPriority, outcomePriority);
     }
 
     private TimeSpan CooldownFor(L1EventType type)

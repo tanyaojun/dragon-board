@@ -10,6 +10,20 @@ const CONFIDENCE_PRIORITY = new Map([
   ['strong', 2],
   ['watch', 1],
 ])
+const INTRADAY_OUTCOME_PRIORITY = new Map([
+  ['failed_open_dump', 4],
+  ['confirmed_strong', 3],
+  ['watch_only', 2],
+  ['pending', 1],
+  ['preopen_candidate', 0],
+])
+const INTRADAY_STATUS_PRIORITY = new Map([
+  ['failed', 4],
+  ['confirmed', 3],
+  ['watch', 2],
+  ['pending', 1],
+  ['preopen_candidate', 0],
+])
 
 export function registerOpeningSignalRoutes(app, context = {}) {
   const store = context.openingSignalStore || createOpeningSignalStore()
@@ -51,7 +65,9 @@ export function createOpeningSignalStore() {
       const report = { ...signal, source }
 
       if (!previous) {
-        const voiceOwner = shouldGrantVoice(signal) ? source : 'none'
+        const voiceStage = signalVoiceStage(report)
+        const voiceOwner = shouldGrantVoice(report) ? source : 'none'
+        const voiceGrantedStages = voiceOwner === 'none' ? {} : { [voiceStage]: source }
         const record = {
           dedupeKey: key,
           canonicalSignal: report,
@@ -60,6 +76,7 @@ export function createOpeningSignalStore() {
           firstTriggerAt: signal.triggerAt,
           lastReportedAt: now,
           voiceGrantedTo: voiceOwner === 'none' ? null : source,
+          voiceGrantedStages,
         }
         records.set(key, record)
         return serializeRecord(record, {
@@ -73,7 +90,13 @@ export function createOpeningSignalStore() {
       const sources = mergeSources(previous.sources, source)
       const canonicalSignal = chooseCanonical([...Object.values(reportsBySource)])
       const dedupeAction = canonicalSignal === previous.canonicalSignal ? 'merged' : 'upgraded'
-      const voiceOwner = previous.voiceGrantedTo || !shouldGrantVoice(signal) ? 'none' : source
+      const voiceGrantedStages = { ...(previous.voiceGrantedStages || {}) }
+      const voiceStage = signalVoiceStage(canonicalSignal)
+      const voiceOwner =
+        !voiceGrantedStages[voiceStage] && canonicalSignal === report && shouldGrantVoice(canonicalSignal)
+          ? source
+          : 'none'
+      if (voiceOwner !== 'none') voiceGrantedStages[voiceStage] = source
       const next = {
         ...previous,
         canonicalSignal,
@@ -82,6 +105,7 @@ export function createOpeningSignalStore() {
         firstTriggerAt: earlierIso(previous.firstTriggerAt, signal.triggerAt),
         lastReportedAt: now,
         voiceGrantedTo: previous.voiceGrantedTo || (voiceOwner === 'none' ? null : source),
+        voiceGrantedStages,
       }
       records.set(key, next)
       return serializeRecord(next, {
@@ -109,6 +133,7 @@ function serializeRecord(record, meta) {
     firstTriggerAt: record.firstTriggerAt,
     lastReportedAt: record.lastReportedAt,
     voiceGrantedTo: record.voiceGrantedTo,
+    voiceGrantedStages: record.voiceGrantedStages || {},
   }
 }
 
@@ -172,7 +197,26 @@ function dedupeKey(signal) {
 }
 
 function shouldGrantVoice(signal) {
-  return !signal.dryRun && CONFIDENCE_PRIORITY.get(signal.confidence) >= CONFIDENCE_PRIORITY.get('strong')
+  if (signal.dryRun) return false
+  if (signal.intradayStatus === 'failed' || signal.intradayStatus === 'watch') return false
+  if (signal.intradayOutcome === 'failed_open_dump' || signal.intradayOutcome === 'watch_only') return false
+  return CONFIDENCE_PRIORITY.get(signal.confidence) >= CONFIDENCE_PRIORITY.get('strong')
+}
+
+function signalVoiceStage(signal) {
+  if (signal.intradayStatus === 'preopen_candidate' || signal.intradayOutcome === 'preopen_candidate') {
+    return 'preopen_candidate'
+  }
+  if (signal.intradayStatus === 'confirmed' || signal.intradayOutcome === 'confirmed_strong') {
+    return 'confirmed'
+  }
+  if (signal.intradayStatus === 'failed' || signal.intradayOutcome === 'failed_open_dump') {
+    return 'failed'
+  }
+  if (signal.intradayStatus === 'watch' || signal.intradayOutcome === 'watch_only') {
+    return 'watch'
+  }
+  return 'pending'
 }
 
 function mergeSources(previous, source) {
@@ -188,6 +232,9 @@ function compareSignals(left, right) {
     return left.dryRun ? 1 : -1
   }
 
+  const intradayDiff = intradayPriority(right) - intradayPriority(left)
+  if (intradayDiff !== 0) return intradayDiff
+
   const confidenceDiff =
     (CONFIDENCE_PRIORITY.get(right.confidence) || 0) - (CONFIDENCE_PRIORITY.get(left.confidence) || 0)
   if (confidenceDiff !== 0) return confidenceDiff
@@ -199,6 +246,13 @@ function compareSignals(left, right) {
   if (sourceDiff !== 0) return sourceDiff
 
   return compareIso(left.triggerAt, right.triggerAt)
+}
+
+function intradayPriority(signal) {
+  return Math.max(
+    INTRADAY_STATUS_PRIORITY.get(signal.intradayStatus) || 0,
+    INTRADAY_OUTCOME_PRIORITY.get(signal.intradayOutcome) || 0,
+  )
 }
 
 function earlierIso(left, right) {

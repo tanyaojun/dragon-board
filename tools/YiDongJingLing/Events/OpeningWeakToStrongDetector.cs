@@ -284,14 +284,26 @@ public sealed record OpeningWeakToStrongResult(
     decimal? InitialBaselinePrice,
     decimal? InitialBaselinePct,
     decimal? InitialBaselineAmount,
+    DateTimeOffset? LateBaselineAt,
+    decimal? LateBaselinePrice,
+    decimal? LateBaselinePct,
+    decimal? LateBaselineAmount,
     DateTimeOffset? FinalBaselineAt,
     decimal? FinalBaselinePrice,
     decimal? FinalBaselinePct,
     decimal? FinalBaselineAmount,
     decimal? AuctionPriceLiftPctPoint,
+    decimal? LatePriceLiftPctPoint,
+    decimal? AuctionAmountDelta,
+    decimal? LateAmountDelta,
     decimal? AuctionAmountLiftRatio,
     decimal? LateAmountLiftRatio,
     bool? PriceVolumeConfirmed,
+    string LiquidityTier,
+    string LiquidityTierMode,
+    string LiquidityTierBasis,
+    string LiquidityTierThresholds,
+    string LiquidityTierVersion,
     decimal? LimitDistancePct,
     DateTimeOffset TriggerAt,
     string BaselineQuality,
@@ -311,6 +323,13 @@ public sealed record OpeningWeakToStrongResult(
     IReadOnlyList<string> PreviousWeakSignals,
     string PreviousWeakSource,
     decimal? AuctionCoverageRatio,
+    string? IntradayStatus,
+    string? IntradayOutcome,
+    DateTimeOffset? IntradayStatusAt,
+    decimal? IntradayPrice,
+    decimal? IntradayPct,
+    decimal? IntradayAmount,
+    string? IntradayNote,
     bool DryRun,
     IReadOnlyList<OpeningWeakToStrongFactor> Factors,
     IReadOnlyList<OpeningWeakToStrongRiskFlag> RiskFlags,
@@ -341,14 +360,26 @@ public sealed record OpeningWeakToStrongSignal(
     decimal? InitialBaselinePrice,
     decimal? InitialBaselinePct,
     decimal? InitialBaselineAmount,
+    DateTimeOffset? LateBaselineAt,
+    decimal? LateBaselinePrice,
+    decimal? LateBaselinePct,
+    decimal? LateBaselineAmount,
     DateTimeOffset? FinalBaselineAt,
     decimal? FinalBaselinePrice,
     decimal? FinalBaselinePct,
     decimal? FinalBaselineAmount,
     decimal? AuctionPriceLiftPctPoint,
+    decimal? LatePriceLiftPctPoint,
+    decimal? AuctionAmountDelta,
+    decimal? LateAmountDelta,
     decimal? AuctionAmountLiftRatio,
     decimal? LateAmountLiftRatio,
     bool? PriceVolumeConfirmed,
+    string LiquidityTier,
+    string LiquidityTierMode,
+    string LiquidityTierBasis,
+    string LiquidityTierThresholds,
+    string LiquidityTierVersion,
     decimal? LimitDistancePct,
     string BaselineQuality,
     DateTimeOffset? AuctionCapturedAt,
@@ -367,6 +398,13 @@ public sealed record OpeningWeakToStrongSignal(
     IReadOnlyList<string> PreviousWeakSignals,
     string PreviousWeakSource,
     decimal? AuctionCoverageRatio,
+    string? IntradayStatus,
+    string? IntradayOutcome,
+    DateTimeOffset? IntradayStatusAt,
+    decimal? IntradayPrice,
+    decimal? IntradayPct,
+    decimal? IntradayAmount,
+    string? IntradayNote,
     string RuleVersion,
     string ConfigHash,
     IReadOnlyList<OpeningWeakToStrongFactor> Factors,
@@ -596,8 +634,14 @@ public sealed class OpeningWeakToStrongDetector
 {
     private const string SignalType = "opening_weak_to_strong";
     private const string DisplayName = "竞价弱转强";
+    private const string LiquidityTierVersion = "liquidity-review.v1";
+    private const decimal HotAmount = 100_000_000m;
+    private const string PreopenCandidateStart = "09:25:10";
+    private const string IntradayConfirmEnd = "10:00:00";
+    private const decimal IntradayConfirmAdvancePctPoint = 1m;
     private readonly OpeningWeakToStrongRules _rules;
     private readonly string _ruleVersion;
+    private readonly Dictionary<string, OpeningWeakToStrongResult> _activeSignals = new(StringComparer.Ordinal);
 
     public OpeningWeakToStrongDetector(
         OpeningWeakToStrongRules rules,
@@ -607,12 +651,37 @@ public sealed class OpeningWeakToStrongDetector
         _ruleVersion = ruleVersion;
     }
 
+    public void Clear()
+    {
+        _activeSignals.Clear();
+    }
+
     public OpeningWeakToStrongResult Evaluate(
         OpeningWeakToStrongQuote quote,
         OpeningWeakToStrongBaseline? baseline)
     {
+        var activeKey = BaselineKey(quote.Code, TradingDate(quote.At));
+        _activeSignals.TryGetValue(activeKey, out var activeSignal);
         if (!OpeningAuctionStateStore.IsInWindow(quote.At, _rules.DetectStart, _rules.DetectEnd))
+        {
+            if (OpeningAuctionStateStore.IsInWindow(quote.At, PreopenCandidateStart, BeforeWindow(_rules.DetectStart)))
+            {
+                var preopenCandidate = EvaluatePreopenCandidate(quote, baseline);
+                if (preopenCandidate.Triggered)
+                {
+                    _activeSignals[activeKey] = preopenCandidate;
+                }
+                return preopenCandidate;
+            }
+
+            var update = activeSignal is null ? null : EvaluateIntradayUpdate(quote, activeSignal);
+            if (update is not null)
+            {
+                _activeSignals[activeKey] = update;
+                return update;
+            }
             return Rejected(quote, baseline, "outside_detection_window");
+        }
         if (baseline is null)
             return Rejected(quote, null, "baseline_missing");
         if (!IsValidPrice(quote.LastPrice) || !IsValidPrice(quote.PreClose))
@@ -710,7 +779,8 @@ public sealed class OpeningWeakToStrongDetector
         var confidence = riskFlags.Length > 0
             ? "watch"
             : score >= 80m ? "critical" : score >= 60m ? "strong" : "watch";
-        return new OpeningWeakToStrongResult(
+        var liquidityReview = LiquidityReviewFields(quote.Amount, quote.Volume);
+        var result = new OpeningWeakToStrongResult(
             true,
             SignalType,
             DisplayName,
@@ -732,14 +802,26 @@ public sealed class OpeningWeakToStrongDetector
             auctionProfile?.InitialPrice,
             auctionProfile?.InitialPct,
             auctionProfile?.InitialAmount,
+            auctionProfile?.LateAt,
+            auctionProfile?.LatePrice,
+            auctionProfile?.LateStartPct,
+            auctionProfile?.LateAmount,
             auctionProfile?.FinalAt,
             auctionProfile?.FinalPrice,
             auctionProfile?.FinalPct,
             auctionProfile?.FinalAmount,
             auctionProfile?.TotalLiftPctPoint,
+            auctionProfile?.LateLiftPctPoint,
+            auctionProfile?.AmountDelta,
+            auctionProfile?.LateAmountDelta,
             auctionProfile?.AmountLiftRatio,
             auctionProfile?.LateAmountLiftRatio,
             priceVolumeConfirmed,
+            liquidityReview.Tier,
+            "review_only",
+            liquidityReview.Basis,
+            liquidityReview.Thresholds,
+            LiquidityTierVersion,
             limitDistancePct.HasValue ? Round2(limitDistancePct.Value) : null,
             quote.At,
             baseline.Quality,
@@ -759,12 +841,192 @@ public sealed class OpeningWeakToStrongDetector
             quote.PreviousWeakSignals ?? Array.Empty<string>(),
             quote.PreviousWeakSource,
             quality.AuctionCoverageRatio,
+            "pending",
+            "pending",
+            quote.At,
+            quote.LastPrice,
+            Round2(firstWindowPct),
+            quote.Amount,
+            "09:30-09:35已触发，等待盘中确认",
             quote.DryRun || quality.DryRun,
             factors,
             riskFlags,
             null,
             _ruleVersion,
             ConfigHash(_rules));
+        _activeSignals[activeKey] = result;
+        return result;
+    }
+
+    private OpeningWeakToStrongResult EvaluatePreopenCandidate(
+        OpeningWeakToStrongQuote quote,
+        OpeningWeakToStrongBaseline? baseline)
+    {
+        if (baseline is null)
+            return Rejected(quote, null, "baseline_missing");
+        if (!IsValidPrice(quote.LastPrice) || !IsValidPrice(quote.PreClose))
+            return Rejected(quote, baseline, "invalid_price");
+
+        var auctionProfile = baseline.AuctionProfile;
+        var hasAuctionProfile = auctionProfile?.InitialAt is not null && auctionProfile.FinalAt is not null;
+        if (!hasAuctionProfile || auctionProfile?.PriceVolumeConfirmed != true)
+            return Rejected(quote, baseline, "preopen_candidate_unconfirmed");
+
+        var quality = OpeningQuality(quote, baseline);
+        var riskKeys = new List<string>(auctionProfile.RiskFlags);
+        riskKeys.AddRange(quality.RiskKeys);
+        if (baseline.AuctionAmount <= 0m) riskKeys.Add("auction_amount_missing");
+        var riskFlags = riskKeys.Distinct(StringComparer.Ordinal).Select(RiskFlag).ToArray();
+        if (riskFlags.Length > 0)
+            return Rejected(quote, baseline, "preopen_candidate_risk");
+
+        var auctionPct = baseline.AuctionPct;
+        var amount = baseline.AuctionAmount;
+        var amountDelta = auctionProfile.AmountDelta ?? 0m;
+        var factors = BuildFactors(
+            "auction_late_lift",
+            auctionProfile.TotalLiftPctPoint ?? 0m,
+            auctionPct,
+            amount,
+            amountDelta,
+            null,
+            baseline.Quality,
+            auctionProfile,
+            quote.PreviousWeakScore ?? 0m,
+            quote.PreviousWeakSource);
+        var score = ClampScore(factors.Sum(item => item.Score));
+        var confidence = score >= 80m ? "critical" : score >= 60m ? "strong" : "watch";
+        var liquidityReview = LiquidityReviewFields(amount, quote.Volume);
+
+        return new OpeningWeakToStrongResult(
+            true,
+            SignalType,
+            DisplayName,
+            quote.Code,
+            string.IsNullOrWhiteSpace(quote.Name) ? baseline.Name : quote.Name,
+            "auction_late_lift",
+            confidence,
+            score,
+            baseline.AuctionFinalPrice,
+            Round2(auctionPct),
+            null,
+            null,
+            baseline.AuctionFinalPrice,
+            Round2(auctionPct),
+            Round2(auctionProfile.TotalLiftPctPoint ?? 0m),
+            amount,
+            amountDelta,
+            auctionProfile.InitialAt,
+            auctionProfile.InitialPrice,
+            auctionProfile.InitialPct,
+            auctionProfile.InitialAmount,
+            auctionProfile.LateAt,
+            auctionProfile.LatePrice,
+            auctionProfile.LateStartPct,
+            auctionProfile.LateAmount,
+            auctionProfile.FinalAt,
+            auctionProfile.FinalPrice,
+            auctionProfile.FinalPct,
+            auctionProfile.FinalAmount,
+            auctionProfile.TotalLiftPctPoint,
+            auctionProfile.LateLiftPctPoint,
+            auctionProfile.AmountDelta,
+            auctionProfile.LateAmountDelta,
+            auctionProfile.AmountLiftRatio,
+            auctionProfile.LateAmountLiftRatio,
+            true,
+            liquidityReview.Tier,
+            "review_only",
+            liquidityReview.Basis,
+            liquidityReview.Thresholds,
+            LiquidityTierVersion,
+            null,
+            quote.At,
+            baseline.Quality,
+            baseline.CapturedAt,
+            baseline.BridgeTs,
+            quote.CapturedAt ?? quote.BridgeTs ?? quote.At,
+            baseline.SampleCount,
+            AgeMs(quote.CapturedAt ?? quote.BridgeTs ?? quote.At, quote.At),
+            AgeMs(baseline.CapturedAt, quote.At),
+            baseline.OpeningForcedSample,
+            baseline.RequestedCount,
+            baseline.ReceivedCount,
+            baseline.ElapsedMs,
+            baseline.SlowBatches,
+            baseline.TruncatedBatches,
+            quote.PreviousWeakScore,
+            quote.PreviousWeakSignals ?? Array.Empty<string>(),
+            quote.PreviousWeakSource,
+            quality.AuctionCoverageRatio,
+            "preopen_candidate",
+            "preopen_candidate",
+            quote.At,
+            baseline.AuctionFinalPrice,
+            Round2(auctionPct),
+            amount,
+            "竞价量价齐升，等待开盘承接验证",
+            quote.DryRun || quality.DryRun,
+            factors,
+            [],
+            null,
+            _ruleVersion,
+            ConfigHash(_rules));
+    }
+
+    private OpeningWeakToStrongResult? EvaluateIntradayUpdate(
+        OpeningWeakToStrongQuote quote,
+        OpeningWeakToStrongResult activeSignal)
+    {
+        if (!OpeningAuctionStateStore.IsInWindow(quote.At, AfterWindow(_rules.DetectEnd), IntradayConfirmEnd)) return null;
+        if (!IsValidPrice(quote.LastPrice) || !IsValidPrice(quote.PreClose)) return null;
+        if (activeSignal.IntradayStatus == "failed") return null;
+
+        var intradayPct = OpeningAuctionStateStore.Pct(quote.LastPrice, quote.PreClose);
+        var officialOpen = activeSignal.OfficialOpen.GetValueOrDefault(quote.Open);
+        var support = Math.Max(
+            quote.PreClose,
+            officialOpen > 0m ? officialOpen * _rules.OpeningSupportOpenRatio : 0m);
+
+        if (quote.LastPrice < support)
+        {
+            return activeSignal with
+            {
+                Confidence = "watch",
+                Score = Math.Min(activeSignal.Score, 10m),
+                Amount = quote.Amount,
+                IntradayStatus = "failed",
+                IntradayOutcome = "failed_open_dump",
+                IntradayStatusAt = quote.At,
+                IntradayPrice = quote.LastPrice,
+                IntradayPct = Round2(intradayPct),
+                IntradayAmount = quote.Amount,
+                IntradayNote = "跌破开盘/昨收支撑，疑似竞价诱多",
+                RiskFlags = MergeRiskFlags(activeSignal.RiskFlags, [RiskFlag("intraday_open_dump")]),
+            };
+        }
+
+        var confirmPct = Math.Max(
+            Math.Max(activeSignal.FirstWindowPct.GetValueOrDefault() + IntradayConfirmAdvancePctPoint, activeSignal.OfficialOpenPct.GetValueOrDefault()),
+            activeSignal.AuctionPct.GetValueOrDefault());
+        if (activeSignal.IntradayStatus == "pending" && intradayPct >= confirmPct && quote.LastPrice >= support)
+        {
+            return activeSignal with
+            {
+                Confidence = activeSignal.Confidence == "watch" ? "strong" : activeSignal.Confidence,
+                Score = Math.Max(activeSignal.Score, 60m),
+                Amount = quote.Amount,
+                IntradayStatus = "confirmed",
+                IntradayOutcome = "confirmed_strong",
+                IntradayStatusAt = quote.At,
+                IntradayPrice = quote.LastPrice,
+                IntradayPct = Round2(intradayPct),
+                IntradayAmount = quote.Amount,
+                IntradayNote = "09:35后继续上攻并站稳，盘中确认成功",
+            };
+        }
+
+        return null;
     }
 
     private OpeningWeakToStrongResult Rejected(
@@ -772,6 +1034,7 @@ public sealed class OpeningWeakToStrongDetector
         OpeningWeakToStrongBaseline? baseline,
         string invalidReason)
     {
+        var liquidityReview = LiquidityReviewFields(quote.Amount, quote.Volume);
         return new OpeningWeakToStrongResult(
             false,
             SignalType,
@@ -803,6 +1066,18 @@ public sealed class OpeningWeakToStrongDetector
             null,
             null,
             null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            liquidityReview.Tier,
+            "review_only",
+            liquidityReview.Basis,
+            liquidityReview.Thresholds,
+            LiquidityTierVersion,
+            null,
             quote.At,
             baseline?.Quality ?? "missing",
             baseline?.CapturedAt,
@@ -820,6 +1095,13 @@ public sealed class OpeningWeakToStrongDetector
             quote.PreviousWeakScore,
             quote.PreviousWeakSignals ?? Array.Empty<string>(),
             quote.PreviousWeakSource,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
             null,
             quote.DryRun,
             [],
@@ -887,6 +1169,17 @@ public sealed class OpeningWeakToStrongDetector
         return new OpeningWeakToStrongRiskFlag(key, high ? "high" : "medium", high ? -100m : -35m);
     }
 
+    private static IReadOnlyList<OpeningWeakToStrongRiskFlag> MergeRiskFlags(
+        IReadOnlyList<OpeningWeakToStrongRiskFlag> existing,
+        IReadOnlyList<OpeningWeakToStrongRiskFlag> added)
+    {
+        return existing
+            .Concat(added)
+            .GroupBy(item => item.Key, StringComparer.Ordinal)
+            .Select(group => group.Last())
+            .ToArray();
+    }
+
     private static decimal TotalRiskPenalty(IReadOnlyList<OpeningWeakToStrongRiskFlag> riskFlags)
     {
         return riskFlags
@@ -935,6 +1228,27 @@ public sealed class OpeningWeakToStrongDetector
         return (riskKeys, auctionCoverageRatio, dryRun);
     }
 
+    private (string Tier, string Basis, string Thresholds) LiquidityReviewFields(decimal amount, decimal volume)
+    {
+        return (
+            LiquidityTier(amount, volume),
+            $"amount={DecimalText(amount)};volume={DecimalText(volume)}",
+            $"openingLiquidityMinAmount={DecimalText(_rules.OpeningLiquidityMinAmount)};" +
+            $"minCurrentAmount={DecimalText(_rules.MinCurrentAmount)};hotAmount={DecimalText(HotAmount)};" +
+            $"minCurrentVolume={DecimalText(_rules.MinCurrentVolume)}");
+    }
+
+    private string LiquidityTier(decimal amount, decimal volume)
+    {
+        if (amount <= 0m) return "unknown";
+        if (amount < _rules.OpeningLiquidityMinAmount ||
+            (volume > 0m && volume < _rules.MinCurrentVolume))
+            return "thin";
+        if (amount >= HotAmount) return "hot";
+        if (amount >= _rules.MinCurrentAmount) return "active";
+        return "normal";
+    }
+
     private static bool IsQualityDryRunRisk(string key)
     {
         return key is "auction_coverage_low" or "quote_time_untrusted" or "auction_time_untrusted";
@@ -958,6 +1272,31 @@ public sealed class OpeningWeakToStrongDetector
     private static bool IsValidPrice(decimal value) => value > 0m;
     private static decimal Round2(decimal value) => Math.Round(value, 2, MidpointRounding.AwayFromZero);
     private static decimal ClampScore(decimal value) => Math.Max(0m, Math.Min(100m, Math.Round(value, 0, MidpointRounding.AwayFromZero)));
+    private static string DecimalText(decimal value) => value.ToString("0.#############################", CultureInfo.InvariantCulture);
+
+    private static string AfterWindow(string value)
+    {
+        var time = TimeSpan.Parse(value).Add(TimeSpan.FromSeconds(1));
+        if (time >= TimeSpan.FromDays(1)) time = TimeSpan.FromDays(1).Subtract(TimeSpan.FromSeconds(1));
+        return time.ToString(@"hh\:mm\:ss", CultureInfo.InvariantCulture);
+    }
+
+    private static string BeforeWindow(string value)
+    {
+        var time = TimeSpan.Parse(value).Subtract(TimeSpan.FromSeconds(1));
+        if (time < TimeSpan.Zero) time = TimeSpan.Zero;
+        return time.ToString(@"hh\:mm\:ss", CultureInfo.InvariantCulture);
+    }
+
+    private static string TradingDate(DateTimeOffset timestamp)
+    {
+        return timestamp.ToLocalTime().ToString("yyyy-MM-dd");
+    }
+
+    private static string BaselineKey(string code, string tradingDate)
+    {
+        return $"{tradingDate}:{code}";
+    }
 
     private static string ConfigHash(OpeningWeakToStrongRules rules)
     {

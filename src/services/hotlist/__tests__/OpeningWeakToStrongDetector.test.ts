@@ -61,6 +61,109 @@ describe('OpeningWeakToStrongDetector', () => {
       if (sample.expected.auctionCoverageRatio !== undefined) {
         expect(result?.auctionCoverageRatio, sample.caseId).toBeCloseTo(sample.expected.auctionCoverageRatio)
       }
+      if (sample.expected.liquidityTier !== undefined) {
+        expect(result?.liquidityTier, sample.caseId).toBe(sample.expected.liquidityTier)
+      }
+      if (sample.expected.liquidityTierMode !== undefined) {
+        expect(result?.liquidityTierMode, sample.caseId).toBe(sample.expected.liquidityTierMode)
+      }
+      if (sample.expected.liquidityTierBasis !== undefined) {
+        expect(result?.liquidityTierBasis, sample.caseId).toBe(sample.expected.liquidityTierBasis)
+      }
+      if (sample.expected.liquidityTierThresholds !== undefined) {
+        expect(result?.liquidityTierThresholds, sample.caseId).toBe(
+          sample.expected.liquidityTierThresholds,
+        )
+      }
+      if (sample.expected.liquidityTierVersion !== undefined) {
+        expect(result?.liquidityTierVersion, sample.caseId).toBe(sample.expected.liquidityTierVersion)
+      }
+      if (sample.expected.initialBaselineAt !== undefined) {
+        expect(result?.initialBaselineAt, sample.caseId).toBe(sample.expected.initialBaselineAt)
+      }
+      if (sample.expected.initialBaselinePrice !== undefined) {
+        expect(result?.initialBaselinePrice, sample.caseId).toBe(sample.expected.initialBaselinePrice)
+      }
+      if (sample.expected.initialBaselinePct !== undefined) {
+        expect(result?.initialBaselinePct, sample.caseId).toBeCloseTo(sample.expected.initialBaselinePct)
+      }
+      if (sample.expected.initialBaselineAmount !== undefined) {
+        expect(result?.initialBaselineAmount, sample.caseId).toBe(sample.expected.initialBaselineAmount)
+      }
+      if (sample.expected.lateBaselineAt !== undefined) {
+        expect(result?.lateBaselineAt, sample.caseId).toBe(sample.expected.lateBaselineAt)
+      }
+      if (sample.expected.lateBaselinePrice !== undefined) {
+        expect(result?.lateBaselinePrice, sample.caseId).toBe(sample.expected.lateBaselinePrice)
+      }
+      if (sample.expected.lateBaselinePct !== undefined) {
+        expect(result?.lateBaselinePct, sample.caseId).toBeCloseTo(sample.expected.lateBaselinePct)
+      }
+      if (sample.expected.lateBaselineAmount !== undefined) {
+        expect(result?.lateBaselineAmount, sample.caseId).toBe(sample.expected.lateBaselineAmount)
+      }
+      if (sample.expected.finalBaselineAt !== undefined) {
+        expect(result?.finalBaselineAt, sample.caseId).toBe(sample.expected.finalBaselineAt)
+      }
+      if (sample.expected.finalBaselinePrice !== undefined) {
+        expect(result?.finalBaselinePrice, sample.caseId).toBe(sample.expected.finalBaselinePrice)
+      }
+      if (sample.expected.finalBaselinePct !== undefined) {
+        expect(result?.finalBaselinePct, sample.caseId).toBeCloseTo(sample.expected.finalBaselinePct)
+      }
+      if (sample.expected.finalBaselineAmount !== undefined) {
+        expect(result?.finalBaselineAmount, sample.caseId).toBe(sample.expected.finalBaselineAmount)
+      }
+      if (sample.expected.auctionPriceLiftPctPoint !== undefined) {
+        expect(result?.auctionPriceLiftPctPoint, sample.caseId).toBeCloseTo(
+          sample.expected.auctionPriceLiftPctPoint,
+        )
+      }
+      if (sample.expected.latePriceLiftPctPoint !== undefined) {
+        expect(result?.latePriceLiftPctPoint, sample.caseId).toBeCloseTo(
+          sample.expected.latePriceLiftPctPoint,
+        )
+      }
+      if (sample.expected.auctionAmountDelta !== undefined) {
+        expect(result?.auctionAmountDelta, sample.caseId).toBe(sample.expected.auctionAmountDelta)
+      }
+      if (sample.expected.lateAmountDelta !== undefined) {
+        expect(result?.lateAmountDelta, sample.caseId).toBe(sample.expected.lateAmountDelta)
+      }
+      if (sample.expected.auctionAmountLiftRatio !== undefined) {
+        expect(result?.auctionAmountLiftRatio, sample.caseId).toBeCloseTo(
+          sample.expected.auctionAmountLiftRatio,
+        )
+      }
+      if (sample.expected.lateAmountLiftRatio !== undefined) {
+        expect(result?.lateAmountLiftRatio, sample.caseId).toBeCloseTo(
+          sample.expected.lateAmountLiftRatio,
+        )
+      }
+      if (sample.expected.priceVolumeConfirmed !== undefined) {
+        expect(result?.priceVolumeConfirmed, sample.caseId).toBe(sample.expected.priceVolumeConfirmed)
+      }
+      if (sample.expected.intradayStatus !== undefined) {
+        expect(result?.intradayStatus, sample.caseId).toBe(sample.expected.intradayStatus)
+      }
+      if (sample.expected.intradayOutcome !== undefined) {
+        expect(result?.intradayOutcome, sample.caseId).toBe(sample.expected.intradayOutcome)
+      }
+      if (sample.expected.intradayStatusAt !== undefined) {
+        expect(result?.intradayStatusAt, sample.caseId).toBe(sample.expected.intradayStatusAt)
+      }
+      if (sample.expected.intradayPrice !== undefined) {
+        expect(result?.intradayPrice, sample.caseId).toBe(sample.expected.intradayPrice)
+      }
+      if (sample.expected.intradayPct !== undefined) {
+        expect(result?.intradayPct, sample.caseId).toBeCloseTo(sample.expected.intradayPct)
+      }
+      if (sample.expected.intradayAmount !== undefined) {
+        expect(result?.intradayAmount, sample.caseId).toBe(sample.expected.intradayAmount)
+      }
+      if (sample.expected.intradayNote !== undefined) {
+        expect(result?.intradayNote, sample.caseId).toBe(sample.expected.intradayNote)
+      }
     }
   })
 
@@ -96,6 +199,95 @@ describe('OpeningWeakToStrongDetector', () => {
 
     expect(result.triggered).toBe(false)
     expect(result.invalidReason).toBe('baseline_missing')
+  })
+
+  it('emits a strict preopen candidate after the 09:25 final baseline is locked', () => {
+    const fixture = loadFixture()
+    const sample = fixture.cases.find(item => item.caseId === '002552-auction-gap-reversal')
+    expect(sample).toBeTruthy()
+    const store = new OpeningAuctionStateStore(fixture.rules)
+    const detector = new OpeningWeakToStrongDetector(fixture.rules)
+    const quotes = sample!.quotes as OpeningWeakToStrongQuote[]
+
+    for (const quote of quotes.slice(0, -1)) {
+      store.capture(quote)
+    }
+
+    const finalQuote = quotes[quotes.length - 2]
+    const candidate = detector.evaluate({
+      ...finalQuote,
+      at: '2026-05-22T09:25:12+08:00',
+      capturedAt: '2026-05-22T09:25:12+08:00',
+      bridgeTs: '2026-05-22T09:25:12+08:00',
+    }, store.getBaseline(finalQuote.code, '2026-05-22T09:25:12+08:00'))
+
+    expect(candidate.triggered).toBe(true)
+    expect(candidate.variant).toBe('auction_late_lift')
+    expect(candidate.confidence).toBe('strong')
+    expect(candidate.intradayStatus).toBe('preopen_candidate')
+    expect(candidate.intradayOutcome).toBe('preopen_candidate')
+    expect(candidate.intradayNote).toBe('竞价量价齐升，等待开盘承接验证')
+    expect(candidate.triggerAt).toBe('2026-05-22T09:25:12+08:00')
+    expect(candidate.priceVolumeConfirmed).toBe(true)
+    expect(candidate.riskFlags).toEqual([])
+  })
+
+  it('includes the 09:25:10 boundary in the strict preopen candidate window', () => {
+    const fixture = loadFixture()
+    const sample = fixture.cases.find(item => item.caseId === '002552-auction-gap-reversal')
+    expect(sample).toBeTruthy()
+    const store = new OpeningAuctionStateStore(fixture.rules)
+    const detector = new OpeningWeakToStrongDetector(fixture.rules)
+    const quotes = sample!.quotes as OpeningWeakToStrongQuote[]
+
+    for (const quote of quotes.slice(0, -1)) {
+      store.capture(quote)
+    }
+
+    const finalQuote = quotes[quotes.length - 2]
+    const candidate = detector.evaluate({
+      ...finalQuote,
+      at: '2026-05-22T09:25:10+08:00',
+      capturedAt: '2026-05-22T09:25:10+08:00',
+      bridgeTs: '2026-05-22T09:25:10+08:00',
+    }, store.getBaseline(finalQuote.code, '2026-05-22T09:25:10+08:00'))
+
+    expect(candidate.triggered).toBe(true)
+    expect(candidate.intradayStatus).toBe('preopen_candidate')
+    expect(candidate.intradayOutcome).toBe('preopen_candidate')
+  })
+
+  it('does not confirm a preopen candidate without the 09:30 pending opening check', () => {
+    const fixture = loadFixture()
+    const sample = fixture.cases.find(item => item.caseId === '002552-auction-gap-reversal')
+    expect(sample).toBeTruthy()
+    const store = new OpeningAuctionStateStore(fixture.rules)
+    const detector = new OpeningWeakToStrongDetector(fixture.rules)
+    const quotes = sample!.quotes as OpeningWeakToStrongQuote[]
+
+    for (const quote of quotes.slice(0, -1)) {
+      store.capture(quote)
+    }
+
+    const finalQuote = quotes[quotes.length - 2]
+    const candidate = detector.evaluate({
+      ...finalQuote,
+      at: '2026-05-22T09:25:12+08:00',
+      capturedAt: '2026-05-22T09:25:12+08:00',
+      bridgeTs: '2026-05-22T09:25:12+08:00',
+    }, store.getBaseline(finalQuote.code, '2026-05-22T09:25:12+08:00'))
+    const intraday = detector.evaluate({
+      ...quotes[quotes.length - 1],
+      at: '2026-05-22T09:36:00+08:00',
+      capturedAt: '2026-05-22T09:36:00+08:00',
+      bridgeTs: '2026-05-22T09:36:00+08:00',
+      lastPrice: 38.5,
+      amount: 90_000_000,
+    }, store.getBaseline(finalQuote.code, '2026-05-22T09:36:00+08:00'))
+
+    expect(candidate.intradayStatus).toBe('preopen_candidate')
+    expect(intraday?.intradayStatus).not.toBe('confirmed')
+    expect(intraday?.intradayOutcome).not.toBe('confirmed_strong')
   })
 
   it('uses delayed auction quotes for profile without rolling back the locked baseline', () => {

@@ -52,9 +52,23 @@ export class OpeningRealtimeEventBuffer {
 }
 
 function compareSignalPriority(left: OpeningWeakToStrongSignal, right: OpeningWeakToStrongSignal): number {
+  const outcomeDiff = intradayOutcomePriority(left) - intradayOutcomePriority(right)
+  if (outcomeDiff !== 0) return outcomeDiff
+
   const confidenceDiff = confidencePriority(left.confidence) - confidencePriority(right.confidence)
   if (confidenceDiff !== 0) return confidenceDiff
   return (left.score || 0) - (right.score || 0)
+}
+
+function intradayOutcomePriority(signal: OpeningWeakToStrongSignal): number {
+  if (signal.intradayStatus === 'failed' || signal.intradayOutcome === 'failed_open_dump') return 4
+  if (signal.intradayStatus === 'confirmed' || signal.intradayOutcome === 'confirmed_strong') return 3
+  if (signal.intradayStatus === 'watch' || signal.intradayOutcome === 'watch_only') return 2
+  if (signal.intradayStatus === 'pending' || signal.intradayOutcome === 'pending') return 1
+  if (signal.intradayStatus === 'preopen_candidate' || signal.intradayOutcome === 'preopen_candidate') {
+    return 0
+  }
+  return 0
 }
 
 function confidencePriority(value: OpeningWeakToStrongSignal['confidence']): number {
@@ -66,13 +80,15 @@ function confidencePriority(value: OpeningWeakToStrongSignal['confidence']): num
 
 function toHotStockEvent(signal: OpeningWeakToStrongSignal): HotStockAbnormalEvent {
   const timestamp = Date.parse(signal.triggerAt)
-  const id = `opening_weak_to_strong:${tradingDate(signal.triggerAt)}:${signal.code}`
+  const stage = openingActionStage(signal)
+  const id = `opening_weak_to_strong:${tradingDate(signal.triggerAt)}:${signal.code}:${stage}`
+  const typeName = stage === 'preopen_candidate' ? '竞价弱转强候选' : '竞价弱转强'
   return {
     category: 'stock',
     id,
     eventType: OPENING_WEAK_TO_STRONG_EVENT_TYPE,
     type: OPENING_WEAK_TO_STRONG_EVENT_TYPE,
-    typeName: '竞价弱转强',
+    typeName,
     direction: 'up',
     severity: signal.confidence === 'watch' ? 'normal' : 'important',
     timestamp: Number.isFinite(timestamp) ? timestamp : Date.now(),
@@ -89,6 +105,22 @@ function toHotStockEvent(signal: OpeningWeakToStrongSignal): HotStockAbnormalEve
       signal,
     },
   }
+}
+
+function openingActionStage(signal: OpeningWeakToStrongSignal): string {
+  if (signal.intradayStatus === 'preopen_candidate' || signal.intradayOutcome === 'preopen_candidate') {
+    return 'preopen_candidate'
+  }
+  if (signal.intradayStatus === 'confirmed' || signal.intradayOutcome === 'confirmed_strong') {
+    return 'confirmed'
+  }
+  if (signal.intradayStatus === 'failed' || signal.intradayOutcome === 'failed_open_dump') {
+    return 'failed'
+  }
+  if (signal.intradayStatus === 'watch' || signal.intradayOutcome === 'watch_only') {
+    return 'watch'
+  }
+  return 'pending'
 }
 
 function tradingDate(timestamp: string): string {

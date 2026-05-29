@@ -46,6 +46,32 @@ test('openapi json documents the proxy server routes', async () => {
       body.paths['/api/opening-signals'].post.requestBody.content['application/json'].schema.required,
       ['source', 'signal'],
     )
+    const openingSignalProperties =
+      body.paths['/api/opening-signals'].post.requestBody.content['application/json'].schema.properties.signal.properties
+    assert.deepEqual(openingSignalProperties.liquidityTier.enum, ['unknown', 'thin', 'normal', 'active', 'hot'])
+    assert.equal(openingSignalProperties.liquidityTierMode.const, 'review_only')
+    assert.ok(openingSignalProperties.lateBaselinePrice)
+    assert.ok(openingSignalProperties.auctionAmountDelta)
+    assert.ok(openingSignalProperties.liquidityTierThresholds)
+    assert.deepEqual(openingSignalProperties.intradayStatus.enum, [
+      'preopen_candidate',
+      'pending',
+      'confirmed',
+      'failed',
+      'watch',
+    ])
+    assert.deepEqual(openingSignalProperties.intradayOutcome.enum, [
+      'preopen_candidate',
+      'pending',
+      'confirmed_strong',
+      'failed_open_dump',
+      'watch_only',
+    ])
+    assert.ok(openingSignalProperties.intradayStatusAt)
+    assert.ok(openingSignalProperties.intradayPrice)
+    assert.ok(openingSignalProperties.intradayPct)
+    assert.ok(openingSignalProperties.intradayAmount)
+    assert.ok(openingSignalProperties.intradayNote)
   } finally {
     server.close()
   }
