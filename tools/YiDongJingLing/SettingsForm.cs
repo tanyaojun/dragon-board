@@ -27,6 +27,9 @@ internal sealed class SettingsForm : Form
     private readonly NumericUpDown _largeOrderBox = new();
     private readonly NumericUpDown _openGapBox = new();
     private readonly NumericUpDown _longBodyBox = new();
+    private readonly NumericUpDown _hotlistTopVoiceBox = new();
+    private readonly Label _hotlistTopVoiceLabel = new();
+    private readonly Label _hotlistTopVoiceHint = new();
     private readonly Label _rateValueLabel = new();
     private readonly Label _volumeValueLabel = new();
     private readonly Label _opacityValueLabel = new();
@@ -39,8 +42,8 @@ internal sealed class SettingsForm : Form
 
         Text = "异动精灵设置";
         Width = 860;
-        Height = 820;
-        MinimumSize = new Size(820, 760);
+        Height = 860;
+        MinimumSize = new Size(820, 800);
         StartPosition = FormStartPosition.CenterParent;
         Font = new Font("Microsoft YaHei UI", 9f);
         BackColor = Color.FromArgb(241, 244, 248);
@@ -111,7 +114,7 @@ internal sealed class SettingsForm : Form
             BackColor = BackColor,
         };
         right.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
-        right.RowStyles.Add(new RowStyle(SizeType.Absolute, 236));
+        right.RowStyles.Add(new RowStyle(SizeType.Absolute, 286));
         right.RowStyles.Add(new RowStyle(SizeType.Absolute, 226));
         right.RowStyles.Add(new RowStyle(SizeType.Absolute, 170));
         right.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
@@ -132,7 +135,7 @@ internal sealed class SettingsForm : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 4,
-            RowCount = 5,
+            RowCount = 6,
             Padding = new Padding(14, 18, 14, 10),
         };
         voiceLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 74));
@@ -144,6 +147,7 @@ internal sealed class SettingsForm : Form
         voiceLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
         voiceLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 46));
         voiceLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 46));
+        voiceLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
         voiceGroup.Controls.Add(voiceLayout);
         _voiceEnabledBox.Text = "VoiceWorker 本地语音";
         _voiceEnabledBox.Dock = DockStyle.Fill;
@@ -201,6 +205,26 @@ internal sealed class SettingsForm : Form
         voiceLayout.Controls.Add(_volumeBar, 1, 4);
         voiceLayout.SetColumnSpan(_volumeBar, 2);
         voiceLayout.Controls.Add(ValueLabel(_volumeValueLabel), 3, 4);
+
+        _hotlistTopVoiceLabel.Text = "热榜前N名播报";
+        _hotlistTopVoiceLabel.Dock = DockStyle.Fill;
+        _hotlistTopVoiceLabel.Font = Font;
+        _hotlistTopVoiceLabel.TextAlign = ContentAlignment.MiddleLeft;
+        voiceLayout.Controls.Add(_hotlistTopVoiceLabel, 0, 5);
+        _hotlistTopVoiceBox.Dock = DockStyle.Fill;
+        _hotlistTopVoiceBox.Minimum = 0;
+        _hotlistTopVoiceBox.Maximum = 500;
+        _hotlistTopVoiceBox.Increment = 1;
+        _hotlistTopVoiceBox.Margin = new Padding(0, 3, 8, 0);
+        _hotlistTopVoiceBox.TextAlign = HorizontalAlignment.Right;
+        voiceLayout.Controls.Add(_hotlistTopVoiceBox, 1, 5);
+        voiceLayout.SetColumnSpan(_hotlistTopVoiceBox, 2);
+        _hotlistTopVoiceHint.Text = "0=不限";
+        _hotlistTopVoiceHint.Dock = DockStyle.Fill;
+        _hotlistTopVoiceHint.ForeColor = Color.FromArgb(100, 116, 139);
+        _hotlistTopVoiceHint.TextAlign = ContentAlignment.MiddleLeft;
+        voiceLayout.Controls.Add(_hotlistTopVoiceHint, 3, 5);
+
         right.Controls.Add(voiceGroup, 0, 1);
 
         var appGroup = SectionBox("股票池、窗口与行情桥");
@@ -225,6 +249,7 @@ internal sealed class SettingsForm : Form
         _stockPoolSourceBox.DropDownStyle = ComboBoxStyle.DropDownList;
         _stockPoolSourceBox.Margin = new Padding(0, 3, 8, 0);
         _stockPoolSourceBox.Items.AddRange([StockPoolSourceOption.TdxBlock, StockPoolSourceOption.Hotlist]);
+        _stockPoolSourceBox.SelectedIndexChanged += (_, _) => UpdateHotlistVoiceRowVisibility();
         appLayout.Controls.Add(_stockPoolSourceBox, 1, 0);
         appLayout.SetColumnSpan(_stockPoolSourceBox, 2);
 
@@ -326,6 +351,8 @@ internal sealed class SettingsForm : Form
         _largeOrderBox.Value = ClampDecimal(_settings.LargeOrderThresholdWan, _largeOrderBox);
         _openGapBox.Value = ClampDecimal(_settings.OpenGapPct, _openGapBox);
         _longBodyBox.Value = ClampDecimal(_settings.LongBodyPct, _longBodyBox);
+        _hotlistTopVoiceBox.Value = Math.Clamp(_settings.HotlistTopVoiceCount, 0, 500);
+        UpdateHotlistVoiceRowVisibility();
 
         _voiceBox.Items.Clear();
         _voiceBox.Items.Add("");
@@ -371,6 +398,7 @@ internal sealed class SettingsForm : Form
         _settings.LargeOrderThresholdWan = _largeOrderBox.Value;
         _settings.OpenGapPct = _openGapBox.Value;
         _settings.LongBodyPct = _longBodyBox.Value;
+        _settings.HotlistTopVoiceCount = (int)_hotlistTopVoiceBox.Value;
         _settings.EnabledEvents.Clear();
         for (var i = 0; i < _eventTypeList.Items.Count; i++)
         {
@@ -395,6 +423,14 @@ internal sealed class SettingsForm : Form
         {
             _eventTypeList.SetItemChecked(i, !_eventTypeList.GetItemChecked(i));
         }
+    }
+
+    private void UpdateHotlistVoiceRowVisibility()
+    {
+        var isHotlist = _stockPoolSourceBox.SelectedItem is StockPoolSourceOption { Source: StockPoolSource.Hotlist };
+        _hotlistTopVoiceLabel.Visible = isHotlist;
+        _hotlistTopVoiceBox.Visible = isHotlist;
+        _hotlistTopVoiceHint.Visible = isHotlist;
     }
 
     private void UpdateValueLabels()

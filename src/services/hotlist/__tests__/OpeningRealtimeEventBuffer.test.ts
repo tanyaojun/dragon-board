@@ -122,7 +122,7 @@ describe('OpeningRealtimeEventBuffer', () => {
     }
     const watch = {
       ...sample!.quotes[sample!.quotes.length - 1],
-      lastPrice: 10.12,
+      lastPrice: 37.5,
       amount: 31_000_000,
       at: '2026-05-22T09:30:10+08:00',
       capturedAt: '2026-05-22T09:29:40+08:00',
@@ -130,7 +130,7 @@ describe('OpeningRealtimeEventBuffer', () => {
     }
     const strong = {
       ...sample!.quotes[sample!.quotes.length - 1],
-      lastPrice: 10.2,
+      lastPrice: 37,
       amount: 60_000_000,
       at: '2026-05-22T09:31:00+08:00',
       capturedAt: '2026-05-22T09:31:00+08:00',

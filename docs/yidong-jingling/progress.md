@@ -1,5 +1,41 @@
 # 异动精灵 V1 进度记录
 
+## 2026-05-30 V5 后优化：参数化 + 代码审查修复 + 热榜语音过滤
+
+- **目标：** 基于市场研究校准评分参数，修复 P0/P1 代码问题，新增热榜前 N 名语音过滤。
+- **使用流程：**
+  - 使用 `superpowers:brainstorming` 做诊断和方案设计。
+  - 使用 `planning-with-files:plan-zh` 组织任务规划。
+  - 使用 `/code-review` 做变更审查并修复发现的问题。
+- **市场研究：**
+  - 搜索同花顺、通达信、东方财富、淘股吧、雪球、BigQuant 等平台的集合竞价特征。
+  - 核心发现：量能相对放大 > 绝对金额；高开 2.5%-5% 是黄金区间；跳空是最强信号。
+  - 16 个评分因子全部从硬编码提取为 `OpeningWeakToStrongRules` 可配置字段，默认值基于研究校准。
+- **P0 修复：**
+  - 移除 `AuctionLateLiftAmountDeltaMin` / `AuctionLateLiftLateAmountDeltaMin` 从 ConfigHash，加废弃注释。
+  - `low_open_red_reversal` 硬编码 `auctionPct <= 0` 改为使用 `auctionWeakMaxPct`。
+  - C# `previousWeakSource` factor 只在非空时添加，与 TS 一致。
+- **P1 修复：**
+  - 16 个评分因子参数化，从 fixture JSON 统一加载。
+  - TS 时间解析从 3 层回退简化为单一路径，删除 ~40 行。
+  - `riskFlag` 函数从 12 行 case-by-case 简化为 3 分类。
+  - 画像缺失扣分从 -35 降至 -10。
+  - `riskFlags.Length > 0 ? "watch"` 闸门移除，confidence 纯分数决定。
+- **热榜语音过滤：**
+  - `AppSettings` 新增 `HotlistTopVoiceCount`（默认 0=不限）。
+  - `MainForm` 新增 `_orderedHotlistCodes`，按平台覆盖数降序排列。
+  - `ApplyHotlistTopVoiceFilter` 在语音播报前过滤非前 N 名股票。
+  - 设置页语音播报区域新增输入框，仅在八平台热榜时可见。
+- **代码审查修复（Medium/Low）：**
+  - M1：废弃字段在 TS/C# 双端加 `@deprecated` / `<summary>` 标记。
+  - M2：`secondsOfDay` 对畸形时间戳输出 `console.warn`。
+  - M3：`ApplyHotlistTopVoiceFilter<T>(ref T)` 简化为 `ApplyHotlistTopVoiceFilter(IList<EventRecord>)`。
+  - L1：热榜播报行从 `Enabled=false` 改为整行 `Visible=false`。
+- **文档同步：** 更新 `opening-weak-to-strong-plan.md`、`findings.md`、`progress.md`、`task_plan.md`。
+- **验证：**
+  - C# 53 tests passed。TS 7 files / 48 tests passed。
+  - `vue-tsc` typecheck 通过。`pnpm build` 通过。`dotnet build -c Release` 0 warnings/0 errors。
+
 ## 2026-05-25 V6 竞价弱转强盘中确认闭环
 
 - **目标：** 按用户反馈，把 V6 从“盘后/人工复盘字段”修正为 `09:20-10:00` 盘中确认闭环；异动精灵/异动雷达服务盘中行动提示，不把人工复盘作为信号前置条件。

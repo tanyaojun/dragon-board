@@ -19,14 +19,6 @@ const HOT_AMOUNT = 100_000_000
 const PREOPEN_CANDIDATE_START = '09:25:10'
 const INTRADAY_CONFIRM_END = '10:00:00'
 const INTRADAY_CONFIRM_ADVANCE_PCT_POINT = 1
-const SHANGHAI_TIME_FORMAT = new Intl.DateTimeFormat('en-GB', {
-  timeZone: 'Asia/Shanghai',
-  hour: '2-digit',
-  minute: '2-digit',
-  second: '2-digit',
-  hour12: false,
-})
-
 export class OpeningAuctionStateStore {
   private readonly baselines = new Map<string, OpeningWeakToStrongBaseline>()
   private readonly samples = new Map<string, OpeningWeakToStrongQuote[]>()
@@ -194,7 +186,7 @@ export class OpeningWeakToStrongDetector {
     }
     if (
       !variant &&
-      (atMost(auctionPct, 0) ||
+      (atMost(auctionPct, this.rules.auctionWeakMaxPct) ||
         (officialOpenPct !== undefined && atMost(officialOpenPct, this.rules.auctionWeakMaxPct))) &&
       firstWindowPct >= this.rules.lowOpenRedFirstWindowMinPct &&
       jumpPctPoint >= this.rules.lowOpenRedJumpMinPctPoint
@@ -235,8 +227,7 @@ export class OpeningWeakToStrongDetector {
     const riskFlags = uniqueStrings(riskKeys).map(riskFlag)
     const riskPenalty = totalRiskPenalty(riskFlags)
     const score = clampScore(factors.reduce((sum, item) => sum + item.score, 0) - riskPenalty)
-    const confidence =
-      riskFlags.length > 0 ? 'watch' : score >= 80 ? 'critical' : score >= 60 ? 'strong' : 'watch'
+    const confidence = score >= 80 ? 'critical' : score >= 60 ? 'strong' : 'watch'
     const liquidityReview = liquidityReviewFields(amount, volume, this.rules)
 
     const signal: OpeningWeakToStrongSignal = {
@@ -556,85 +547,86 @@ function buildFactors(input: {
   rules: OpeningWeakToStrongRules
 }): OpeningWeakToStrongFactor[] {
   const factors: OpeningWeakToStrongFactor[] = []
+  const r = input.rules
   if (input.variant === 'auction_late_lift') {
     factors.push({
       key: 'auctionLateLift',
       value: round2(input.auctionProfile?.totalLiftPctPoint ?? 0),
-      threshold: input.rules.auctionPriceLiftMinPctPoint,
-      score: 24,
+      threshold: r.auctionPriceLiftMinPctPoint,
+      score: r.auctionLateLiftCoreScore,
     })
     factors.push({
       key: 'auctionAmountLiftRatio',
       value: round2(input.auctionProfile?.amountLiftRatio ?? 0),
-      threshold: input.rules.auctionAmountLiftMinRatio,
-      score: 18,
+      threshold: r.auctionAmountLiftMinRatio,
+      score: r.auctionLateLiftAmountRatioScore,
     })
     factors.push({
       key: 'openStrength',
       value: round2(input.firstWindowPct),
-      threshold: input.rules.auctionLateLiftFirstWindowMinPct,
-      score: 18,
+      threshold: r.auctionLateLiftFirstWindowMinPct,
+      score: r.auctionLateLiftOpenStrengthScore,
     })
   } else if (input.variant === 'strong_open_board_attempt') {
     factors.push({
       key: 'nearLimit',
       value: round2(input.limitDistancePct ?? 99),
-      threshold: input.rules.nearLimitDistancePct,
-      score: 30,
+      threshold: r.nearLimitDistancePct,
+      score: r.strongOpenNearLimitScore,
     })
     factors.push({
       key: 'openStrength',
       value: round2(input.firstWindowPct),
-      threshold: input.rules.strongOpenFirstWindowMinPct,
-      score: 25,
+      threshold: r.strongOpenFirstWindowMinPct,
+      score: r.strongOpenOpenStrengthScore,
     })
   } else if (input.variant === 'auction_gap_reversal') {
     factors.push({
       key: 'auctionGap',
       value: round2(input.jumpPctPoint),
-      threshold: input.rules.auctionGapJumpMinPctPoint,
-      score: Math.min(35, 20 + input.jumpPctPoint * 3),
+      threshold: r.auctionGapJumpMinPctPoint,
+      score: Math.min(r.auctionGapMaxScore, 20 + input.jumpPctPoint * r.auctionGapScoreSlope),
     })
     factors.push({
       key: 'openStrength',
       value: round2(input.firstWindowPct),
-      threshold: input.rules.auctionGapFirstWindowMinPct,
-      score: 10,
+      threshold: r.auctionGapFirstWindowMinPct,
+      score: r.auctionGapOpenStrengthScore,
     })
   } else {
     factors.push({
       key: 'redReversal',
       value: round2(input.jumpPctPoint),
-      threshold: input.rules.lowOpenRedJumpMinPctPoint,
-      score: 28,
+      threshold: r.lowOpenRedJumpMinPctPoint,
+      score: r.lowOpenRedReversalScore,
     })
     factors.push({
       key: 'turnRed',
       value: round2(input.firstWindowPct),
-      threshold: input.rules.lowOpenRedFirstWindowMinPct,
-      score: 12,
+      threshold: r.lowOpenRedFirstWindowMinPct,
+      score: r.lowOpenTurnRedScore,
     })
   }
 
   factors.push({
     key: 'openingAmount',
     value: input.amount,
-    threshold: input.rules.openingLiquidityMinAmount,
-    score: input.amount >= input.rules.minCurrentAmount || input.amountDelta >= input.rules.minAmountDelta
-      ? 18
-      : 8,
+    threshold: r.openingLiquidityMinAmount,
+    score: input.amount >= r.minCurrentAmount || input.amountDelta >= r.minAmountDelta
+      ? r.auctionGapAmountStrongScore
+      : r.auctionGapAmountWeakScore,
   })
   factors.push({
     key: 'baselineQuality',
     value: input.baselineQuality,
-    score: input.baselineQuality === 'good' ? 10 : 4,
+    score: input.baselineQuality === 'good' ? r.auctionGapQualityGoodScore : r.auctionGapQualityDegradedScore,
   })
-  if (input.previousWeakScore >= input.rules.previousWeakScoreMin) {
+  if (input.previousWeakScore >= r.previousWeakScoreMin) {
     factors.push({
       key: 'previousWeakContext',
       value: input.previousWeakScore,
-      threshold: input.rules.previousWeakScoreMin,
-      score: 12,
+      threshold: r.previousWeakScoreMin,
+      score: r.previousWeakContextScore,
     })
     if (input.previousWeakSource) {
       factors.push({
@@ -650,19 +642,13 @@ function buildFactors(input: {
 function riskFlag(key: string): OpeningWeakToStrongRiskFlag {
   const severity = key === 'baseline_missing' || key === 'auction_price_volume_core_missing'
     ? 'high'
-    : key === 'price_lift_without_volume' ||
-        key === 'volume_without_price_lift' ||
-        key === 'auction_late_high_retreated' ||
-        key === 'auction_coverage_low' ||
-        key === 'quote_time_untrusted' ||
-        key === 'auction_time_untrusted' ||
-        key === 'auction_profile_missing' ||
-        key === 'auction_initial_baseline_missing' ||
-        key === 'auction_price_volume_unverified' ||
-        key === 'auction_price_volume_desynced'
-      ? 'medium'
+    : key === 'auction_profile_missing' || key === 'auction_initial_baseline_missing'
+      ? 'low'
       : 'medium'
-  const penalty = key === 'baseline_missing' || key === 'auction_price_volume_core_missing' ? -100 : -35
+  const penalty =
+    key === 'baseline_missing' || key === 'auction_price_volume_core_missing' ? -100
+    : key === 'auction_profile_missing' || key === 'auction_initial_baseline_missing' ? -10
+    : -35
   return { key, severity, penalty }
 }
 
@@ -887,14 +873,14 @@ function baselineKey(code: string, tradingDate: string): string {
 }
 
 function secondsOfDay(value: string): number {
-  if (/[zZ]$/.test(value)) {
-    const shanghai = shanghaiTimeParts(value)
-    if (shanghai) return shanghai
-  }
   const match = value.match(/(?:T)?(\d{2}):(\d{2}):(\d{2})/)
-  if (match) return Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3])
-  const date = new Date(value)
-  return date.getHours() * 3600 + date.getMinutes() * 60 + date.getSeconds()
+  if (!match) {
+    console.warn(`[OpeningWeakToStrong] unparseable timestamp, defaulting to 00:00:00: "${value}"`)
+    return 0
+  }
+  let hours = Number(match[1])
+  if (/[zZ]$/.test(value)) hours = (hours + 8) % 24
+  return hours * 3600 + Number(match[2]) * 60 + Number(match[3])
 }
 
 function afterWindow(value: string): string {
@@ -913,33 +899,14 @@ function beforeWindow(value: string): string {
   return [hour, minute, second].map(item => String(item).padStart(2, '0')).join(':')
 }
 
-function shanghaiTimeParts(value: string): number | null {
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return null
-  const parts = Object.fromEntries(
-    SHANGHAI_TIME_FORMAT.formatToParts(date).map(part => [part.type, part.value]),
-  )
-  return Number(parts.hour) * 3600 + Number(parts.minute) * 60 + Number(parts.second)
-}
-
 function compareQuoteFreshness(quote: OpeningWeakToStrongQuote, baselineCapturedAt: string): number {
-  const quoteTimestamp = parseComparableTimestamp(quote.capturedAt || quote.at)
-  const baselineTimestamp = parseComparableTimestamp(baselineCapturedAt)
-  if (quoteTimestamp !== null && baselineTimestamp !== null) return quoteTimestamp - baselineTimestamp
-  return secondsOfDay(quote.at) - secondsOfDay(baselineCapturedAt)
-}
-
-function parseComparableTimestamp(value: string): number | null {
-  const timestamp = Date.parse(value)
-  return Number.isFinite(timestamp) ? timestamp : null
+  return Date.parse(quote.capturedAt || quote.at) - Date.parse(baselineCapturedAt)
 }
 
 function ageMs(from: string | undefined, to: string): number | undefined {
   if (!from) return undefined
-  const fromTs = parseComparableTimestamp(from)
-  const toTs = parseComparableTimestamp(to)
-  if (fromTs === null || toTs === null) return undefined
-  return Math.max(0, toTs - fromTs)
+  const elapsed = Date.parse(to) - Date.parse(from)
+  return Number.isFinite(elapsed) ? Math.max(0, elapsed) : undefined
 }
 
 function uniqueStrings(values: string[]): string[] {

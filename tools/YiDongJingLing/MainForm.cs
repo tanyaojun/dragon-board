@@ -58,6 +58,7 @@ public sealed class MainForm : Form
     private OpeningCoverageSnapshot? _lastOpeningCoverage;
     private OpeningWeakToStrongSignal? _lastOpeningSignal;
     private HashSet<string> _watchedCodes = new(StringComparer.Ordinal);
+    private IReadOnlyList<string> _orderedHotlistCodes = Array.Empty<string>();
 
     private readonly System.Windows.Forms.Timer _healthTimer = new();
     private readonly NotifyIcon _trayIcon = new();
@@ -959,6 +960,7 @@ public sealed class MainForm : Form
             return await LoadHotlistCodesAsync();
         }
 
+        _orderedHotlistCodes = Array.Empty<string>();
         if (!_blockListLoadedForTdx)
         {
             LoadBlockFiles();
@@ -1009,19 +1011,24 @@ public sealed class MainForm : Form
             }
         }
 
-        var codes = result.Stocks
-            .Where(stock => !_settings.FilterStStocks || !IsStStockName(_nameResolver.Resolve(stock.Code, stock.Name)))
-            .Select(stock => stock.Code)
+        var platformCounts = result.Stocks
+            .GroupBy(s => s.Code, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal);
+        _orderedHotlistCodes = result.Stocks
+            .Select(s => s.Code)
             .Distinct(StringComparer.Ordinal)
-            .Order(StringComparer.Ordinal)
+            .Where(c => !_settings.FilterStStocks || !IsStStockName(_nameResolver.Resolve(c)))
+            .OrderByDescending(c => platformCounts.GetValueOrDefault(c, 0))
+            .ThenBy(c => c, StringComparer.Ordinal)
             .ToArray();
+        var codes = _orderedHotlistCodes;
         var failedText = result.Errors.Count > 0 ? $"，{result.Errors.Count} 个平台失败" : "";
         if (result.Errors.Count > 0)
         {
             Log("八平台热榜部分来源失败: " + string.Join("; ", result.Errors.Take(3)));
         }
 
-        return new StockPoolLoadResult(codes, $"已加载八平台热榜股票池: {codes.Length} 只股票{failedText}。");
+        return new StockPoolLoadResult(codes, $"已加载八平台热榜股票池: {codes.Count} 只股票{failedText}。");
     }
 
     private void SelectBlockFiles(IEnumerable<string> paths)
@@ -1254,10 +1261,12 @@ public sealed class MainForm : Form
             .ToArray();
         var openingVoiceEvents = EventVoicePolicy
             .FilterForVoice(openingEvents, _settings.VoiceMode)
-            .ToArray();
+            .ToList();
         var voiceEvents = EventVoicePolicy
             .FilterForVoice(emitted.Where(item => item.Type != L1EventType.OpeningWeakToStrong), _settings.VoiceMode)
             .ToList();
+        ApplyHotlistTopVoiceFilter(openingVoiceEvents);
+        ApplyHotlistTopVoiceFilter(voiceEvents);
         if (openingEvents.Length > 0)
         {
             _ = ReportOpeningSignalsAndAnnounceAsync(openingEvents, openingVoiceEvents);
@@ -1553,6 +1562,27 @@ public sealed class MainForm : Form
 
         _voiceModeLabel.Text = $"语音 {EventVoicePolicy.DisplayName(_settings.VoiceMode)}";
         _voiceModeLabel.ForeColor = _settings.VoiceMode == VoiceMode.Muted ? TerminalMuted : TerminalText;
+    }
+
+    private void ApplyHotlistTopVoiceFilter(IList<EventRecord> voiceEvents)
+    {
+        if (voiceEvents.Count == 0 ||
+            _settings.HotlistTopVoiceCount <= 0 ||
+            _settings.StockPoolSource != StockPoolSource.Hotlist)
+        {
+            return;
+        }
+
+        var topCodes = new HashSet<string>(
+            _orderedHotlistCodes.Take(_settings.HotlistTopVoiceCount),
+            StringComparer.Ordinal);
+        for (var i = voiceEvents.Count - 1; i >= 0; i--)
+        {
+            if (!topCodes.Contains(voiceEvents[i].Code))
+            {
+                voiceEvents.RemoveAt(i);
+            }
+        }
     }
 
     private void UpdateOpeningCoverageLabel()

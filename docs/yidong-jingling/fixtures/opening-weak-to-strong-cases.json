@@ -41,7 +41,22 @@
     "minAuctionCoverageRatio": 0.95,
     "maxQuoteAgeMs": 10000,
     "minCurrentVolume": 1000000,
-    "openingSupportOpenRatio": 0.995
+    "openingSupportOpenRatio": 0.995,
+    "auctionGapMaxScore": 40,
+    "auctionGapScoreSlope": 4,
+    "auctionGapOpenStrengthScore": 15,
+    "auctionGapAmountStrongScore": 20,
+    "auctionGapAmountWeakScore": 10,
+    "auctionGapQualityGoodScore": 8,
+    "auctionGapQualityDegradedScore": 3,
+    "auctionLateLiftCoreScore": 25,
+    "auctionLateLiftAmountRatioScore": 18,
+    "auctionLateLiftOpenStrengthScore": 18,
+    "strongOpenNearLimitScore": 25,
+    "strongOpenOpenStrengthScore": 25,
+    "lowOpenRedReversalScore": 22,
+    "lowOpenTurnRedScore": 10,
+    "previousWeakContextScore": 8
   },
   "cases": [
     {
@@ -100,8 +115,8 @@
       "expected": {
         "triggered": true,
         "variant": "auction_gap_reversal",
-        "confidence": "strong",
-        "scoreRange": [70, 95],
+        "confidence": "critical",
+        "scoreRange": [80, 100],
         "jumpPctPointRange": [4.9, 5.1],
         "riskFlags": [],
         "liquidityTier": "active",
@@ -193,7 +208,7 @@
     },
     {
       "caseId": "strong-open-board-attempt-with-precondition",
-      "description": "竞价不强但开盘快速接近涨停，允许作为弱转强冲板形态。",
+      "description": "竞价不强但开盘快速接近涨停，允许作为弱转强冲板形态。nearLimit 权重下调后不再达 critical。",
       "quotes": [
         {
           "code": "600001",
@@ -248,8 +263,8 @@
       "expected": {
         "triggered": true,
         "variant": "strong_open_board_attempt",
-        "confidence": "critical",
-        "scoreRange": [80, 100],
+        "confidence": "strong",
+        "scoreRange": [70, 85],
         "riskFlags": []
       }
     },
@@ -569,7 +584,7 @@
     },
     {
       "caseId": "v5-auction-profile-missing-high-open-amount-downgraded",
-      "description": "只有09:25和09:30大额成交，缺少09:20-09:25量价画像，只能降级观察。",
+      "description": "只有09:25和09:30大额成交，缺少09:20-09:25量价画像。跳空有力、成交额充足，不阻止触发，仅扣分反映画像缺失。",
       "quotes": [
         {
           "code": "002569",
@@ -599,8 +614,8 @@
       "expected": {
         "triggered": true,
         "variant": "auction_gap_reversal",
-        "confidence": "watch",
-        "scoreRange": [1, 59],
+        "confidence": "strong",
+        "scoreRange": [60, 85],
         "riskFlags": ["auction_profile_missing"]
       }
     },
@@ -726,7 +741,7 @@
     },
     {
       "caseId": "v5-missing-initial-baseline-downgraded",
-      "description": "缺少09:20初始基线，即使09:24-09:25临门抬升，也不能输出强信号。",
+      "description": "缺少09:20初始基线，扣分降低(-10)，跳空有力仍可达strong。",
       "quotes": [
         {
           "code": "002572",
@@ -768,8 +783,8 @@
       "expected": {
         "triggered": true,
         "variant": "auction_gap_reversal",
-        "confidence": "watch",
-        "scoreRange": [1, 59],
+        "confidence": "strong",
+        "scoreRange": [60, 85],
         "riskFlags": ["auction_initial_baseline_missing"]
       }
     },

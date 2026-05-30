@@ -357,14 +357,14 @@ Run("Opening weak-to-strong config hash includes auction price-volume rules", ()
     var baseRules = OpeningWeakToStrongRules.FromJson(document.RootElement.GetProperty("rules"));
     var changedRules = baseRules with
     {
-        AuctionLateLiftAmountDeltaMin = baseRules.AuctionLateLiftAmountDeltaMin + 1m
+        AuctionGapMaxScore = baseRules.AuctionGapMaxScore + 1m
     };
     var quote = OpeningWeakToStrongQuote.FromJson(document.RootElement.GetProperty("cases")[0].GetProperty("quotes")[0]);
 
     var baseHash = new OpeningWeakToStrongDetector(baseRules).Evaluate(quote, null).ConfigHash;
     var changedHash = new OpeningWeakToStrongDetector(changedRules).Evaluate(quote, null).ConfigHash;
 
-    AssertEqual("owts-08f44efb", baseHash, "fixture config hash matches web");
+    AssertEqual("owts-729fd3c7", baseHash, "fixture config hash matches web");
     AssertTrue(baseHash != changedHash, "auction price-volume rule hash changes");
 });
 

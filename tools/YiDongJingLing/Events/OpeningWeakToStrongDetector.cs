@@ -30,7 +30,9 @@ public sealed record OpeningWeakToStrongRules(
     decimal AuctionLatePriceLiftMinPctPoint,
     decimal AuctionLateAmountLiftMinRatio,
     decimal AuctionLateLiftFinalMinPct,
+    /// <summary>V5 起不再参与检测逻辑，仅保留兼容旧配置。从 ConfigHash 中排除。</summary>
     decimal AuctionLateLiftAmountDeltaMin,
+    /// <summary>V5 起不再参与检测逻辑，仅保留兼容旧配置。从 ConfigHash 中排除。</summary>
     decimal AuctionLateLiftLateAmountDeltaMin,
     decimal AuctionLateLiftFirstWindowMinPct,
     decimal AuctionLateLiftJumpMinPctPoint,
@@ -39,7 +41,22 @@ public sealed record OpeningWeakToStrongRules(
     decimal MinAuctionCoverageRatio,
     int MaxQuoteAgeMs,
     decimal MinCurrentVolume,
-    decimal OpeningSupportOpenRatio)
+    decimal OpeningSupportOpenRatio,
+    decimal AuctionGapMaxScore = 40m,
+    decimal AuctionGapScoreSlope = 4m,
+    decimal AuctionGapOpenStrengthScore = 15m,
+    decimal AuctionGapAmountStrongScore = 20m,
+    decimal AuctionGapAmountWeakScore = 10m,
+    decimal AuctionGapQualityGoodScore = 8m,
+    decimal AuctionGapQualityDegradedScore = 3m,
+    decimal AuctionLateLiftCoreScore = 25m,
+    decimal AuctionLateLiftAmountRatioScore = 18m,
+    decimal AuctionLateLiftOpenStrengthScore = 18m,
+    decimal StrongOpenNearLimitScore = 25m,
+    decimal StrongOpenOpenStrengthScore = 25m,
+    decimal LowOpenRedReversalScore = 22m,
+    decimal LowOpenTurnRedScore = 10m,
+    decimal PreviousWeakContextScore = 8m)
 {
     public static OpeningWeakToStrongRules FromJson(JsonElement element)
     {
@@ -78,7 +95,22 @@ public sealed record OpeningWeakToStrongRules(
             GetDecimalOrDefault(element, "minAuctionCoverageRatio", 0.95m),
             (int)GetDecimalOrDefault(element, "maxQuoteAgeMs", 10_000m),
             GetDecimalOrDefault(element, "minCurrentVolume", 1_000_000m),
-            GetDecimalOrDefault(element, "openingSupportOpenRatio", 0.995m));
+            GetDecimalOrDefault(element, "openingSupportOpenRatio", 0.995m),
+            AuctionGapMaxScore: GetDecimalOrDefault(element, "auctionGapMaxScore", 40m),
+            AuctionGapScoreSlope: GetDecimalOrDefault(element, "auctionGapScoreSlope", 4m),
+            AuctionGapOpenStrengthScore: GetDecimalOrDefault(element, "auctionGapOpenStrengthScore", 15m),
+            AuctionGapAmountStrongScore: GetDecimalOrDefault(element, "auctionGapAmountStrongScore", 20m),
+            AuctionGapAmountWeakScore: GetDecimalOrDefault(element, "auctionGapAmountWeakScore", 10m),
+            AuctionGapQualityGoodScore: GetDecimalOrDefault(element, "auctionGapQualityGoodScore", 8m),
+            AuctionGapQualityDegradedScore: GetDecimalOrDefault(element, "auctionGapQualityDegradedScore", 3m),
+            AuctionLateLiftCoreScore: GetDecimalOrDefault(element, "auctionLateLiftCoreScore", 25m),
+            AuctionLateLiftAmountRatioScore: GetDecimalOrDefault(element, "auctionLateLiftAmountRatioScore", 18m),
+            AuctionLateLiftOpenStrengthScore: GetDecimalOrDefault(element, "auctionLateLiftOpenStrengthScore", 18m),
+            StrongOpenNearLimitScore: GetDecimalOrDefault(element, "strongOpenNearLimitScore", 25m),
+            StrongOpenOpenStrengthScore: GetDecimalOrDefault(element, "strongOpenOpenStrengthScore", 25m),
+            LowOpenRedReversalScore: GetDecimalOrDefault(element, "lowOpenRedReversalScore", 22m),
+            LowOpenTurnRedScore: GetDecimalOrDefault(element, "lowOpenTurnRedScore", 10m),
+            PreviousWeakContextScore: GetDecimalOrDefault(element, "previousWeakContextScore", 8m));
     }
 
     private static string GetString(JsonElement element, string name)
@@ -735,7 +767,7 @@ public sealed class OpeningWeakToStrongDetector
         {
             variant = "auction_gap_reversal";
         }
-        else if ((auctionPct <= 0m || (officialOpenPct.HasValue && officialOpenPct.Value <= _rules.AuctionWeakMaxPct)) &&
+        else if ((auctionPct <= _rules.AuctionWeakMaxPct || (officialOpenPct.HasValue && officialOpenPct.Value <= _rules.AuctionWeakMaxPct)) &&
             firstWindowPct >= _rules.LowOpenRedFirstWindowMinPct &&
             jumpPctPoint >= _rules.LowOpenRedJumpMinPctPoint)
         {
@@ -776,9 +808,7 @@ public sealed class OpeningWeakToStrongDetector
         var riskFlags = riskKeys.Distinct(StringComparer.Ordinal).Select(RiskFlag).ToArray();
         var riskPenalty = TotalRiskPenalty(riskFlags);
         var score = ClampScore(factors.Sum(item => item.Score) - riskPenalty);
-        var confidence = riskFlags.Length > 0
-            ? "watch"
-            : score >= 80m ? "critical" : score >= 60m ? "strong" : "watch";
+        var confidence = score >= 80m ? "critical" : score >= 60m ? "strong" : "watch";
         var liquidityReview = LiquidityReviewFields(quote.Amount, quote.Volume);
         var result = new OpeningWeakToStrongResult(
             true,
@@ -1126,35 +1156,35 @@ public sealed class OpeningWeakToStrongDetector
         var factors = new List<OpeningWeakToStrongFactor>();
         if (variant == "auction_late_lift")
         {
-            factors.Add(new("auctionLateLift", Round2(auctionProfile?.TotalLiftPctPoint ?? 0m), _rules.AuctionPriceLiftMinPctPoint, 24m));
-            factors.Add(new("auctionAmountLiftRatio", Round2(auctionProfile?.AmountLiftRatio ?? 0m), _rules.AuctionAmountLiftMinRatio, 18m));
-            factors.Add(new("openStrength", Round2(firstWindowPct), _rules.AuctionLateLiftFirstWindowMinPct, 18m));
+            factors.Add(new("auctionLateLift", Round2(auctionProfile?.TotalLiftPctPoint ?? 0m), _rules.AuctionPriceLiftMinPctPoint, _rules.AuctionLateLiftCoreScore));
+            factors.Add(new("auctionAmountLiftRatio", Round2(auctionProfile?.AmountLiftRatio ?? 0m), _rules.AuctionAmountLiftMinRatio, _rules.AuctionLateLiftAmountRatioScore));
+            factors.Add(new("openStrength", Round2(firstWindowPct), _rules.AuctionLateLiftFirstWindowMinPct, _rules.AuctionLateLiftOpenStrengthScore));
         }
         else if (variant == "strong_open_board_attempt")
         {
-            factors.Add(new("nearLimit", Round2(limitDistancePct ?? 99m), _rules.NearLimitDistancePct, 30m));
-            factors.Add(new("openStrength", Round2(firstWindowPct), _rules.StrongOpenFirstWindowMinPct, 25m));
+            factors.Add(new("nearLimit", Round2(limitDistancePct ?? 99m), _rules.NearLimitDistancePct, _rules.StrongOpenNearLimitScore));
+            factors.Add(new("openStrength", Round2(firstWindowPct), _rules.StrongOpenFirstWindowMinPct, _rules.StrongOpenOpenStrengthScore));
         }
         else if (variant == "auction_gap_reversal")
         {
-            factors.Add(new("auctionGap", Round2(jumpPctPoint), _rules.AuctionGapJumpMinPctPoint, Math.Min(35m, 20m + jumpPctPoint * 3m)));
-            factors.Add(new("openStrength", Round2(firstWindowPct), _rules.AuctionGapFirstWindowMinPct, 10m));
+            factors.Add(new("auctionGap", Round2(jumpPctPoint), _rules.AuctionGapJumpMinPctPoint, Math.Min(_rules.AuctionGapMaxScore, 20m + jumpPctPoint * _rules.AuctionGapScoreSlope)));
+            factors.Add(new("openStrength", Round2(firstWindowPct), _rules.AuctionGapFirstWindowMinPct, _rules.AuctionGapOpenStrengthScore));
         }
         else
         {
-            factors.Add(new("redReversal", Round2(jumpPctPoint), _rules.LowOpenRedJumpMinPctPoint, 28m));
-            factors.Add(new("turnRed", Round2(firstWindowPct), _rules.LowOpenRedFirstWindowMinPct, 12m));
+            factors.Add(new("redReversal", Round2(jumpPctPoint), _rules.LowOpenRedJumpMinPctPoint, _rules.LowOpenRedReversalScore));
+            factors.Add(new("turnRed", Round2(firstWindowPct), _rules.LowOpenRedFirstWindowMinPct, _rules.LowOpenTurnRedScore));
         }
 
         factors.Add(new(
             "openingAmount",
             amount,
             _rules.OpeningLiquidityMinAmount,
-            amount >= _rules.MinCurrentAmount || amountDelta >= _rules.MinAmountDelta ? 18m : 8m));
-        factors.Add(new("baselineQuality", baselineQuality, null, baselineQuality == "good" ? 10m : 4m));
+            amount >= _rules.MinCurrentAmount || amountDelta >= _rules.MinAmountDelta ? _rules.AuctionGapAmountStrongScore : _rules.AuctionGapAmountWeakScore));
+        factors.Add(new("baselineQuality", baselineQuality, null, baselineQuality == "good" ? _rules.AuctionGapQualityGoodScore : _rules.AuctionGapQualityDegradedScore));
         if (previousWeakScore >= _rules.PreviousWeakScoreMin)
         {
-            factors.Add(new("previousWeakContext", previousWeakScore, _rules.PreviousWeakScoreMin, 12m));
+            factors.Add(new("previousWeakContext", previousWeakScore, _rules.PreviousWeakScoreMin, _rules.PreviousWeakContextScore));
             if (!string.IsNullOrWhiteSpace(previousWeakSource))
             {
                 factors.Add(new("previousWeakSource", previousWeakSource, null, 0m));
@@ -1166,7 +1196,11 @@ public sealed class OpeningWeakToStrongDetector
     private static OpeningWeakToStrongRiskFlag RiskFlag(string key)
     {
         var high = key is "baseline_missing" or "auction_price_volume_core_missing";
-        return new OpeningWeakToStrongRiskFlag(key, high ? "high" : "medium", high ? -100m : -35m);
+        var isProfileMissing = key is "auction_profile_missing" or "auction_initial_baseline_missing";
+        return new OpeningWeakToStrongRiskFlag(
+            key,
+            high ? "high" : isProfileMissing ? "low" : "medium",
+            high ? -100m : isProfileMissing ? -10m : -35m);
     }
 
     private static IReadOnlyList<OpeningWeakToStrongRiskFlag> MergeRiskFlags(
@@ -1307,12 +1341,9 @@ public sealed class OpeningWeakToStrongDetector
             ["auctionGapJumpMinPctPoint"] = rules.AuctionGapJumpMinPctPoint,
             ["auctionAmountLiftMinRatio"] = rules.AuctionAmountLiftMinRatio,
             ["auctionLateHighRetreatPctPoint"] = rules.AuctionLateHighRetreatPctPoint,
-            ["auctionLateLiftAmountDeltaMin"] = rules.AuctionLateLiftAmountDeltaMin,
             ["auctionLateLiftFinalMinPct"] = rules.AuctionLateLiftFinalMinPct,
             ["auctionLateLiftFirstWindowMinPct"] = rules.AuctionLateLiftFirstWindowMinPct,
             ["auctionLateLiftJumpMinPctPoint"] = rules.AuctionLateLiftJumpMinPctPoint,
-            ["auctionLateLiftLateAmountDeltaMin"] = rules.AuctionLateLiftLateAmountDeltaMin,
-            ["auctionLateLiftLateMinPctPoint"] = rules.AuctionLateLiftLateMinPctPoint,
             ["auctionLateLiftStart"] = rules.AuctionLateLiftStart,
             ["auctionLateLiftTotalMinPctPoint"] = rules.AuctionLateLiftTotalMinPctPoint,
             ["auctionLateAmountLiftMinRatio"] = rules.AuctionLateAmountLiftMinRatio,
@@ -1337,6 +1368,21 @@ public sealed class OpeningWeakToStrongDetector
             ["openingSupportOpenRatio"] = rules.OpeningSupportOpenRatio,
             ["previousWeakScoreMin"] = rules.PreviousWeakScoreMin,
             ["strongOpenFirstWindowMinPct"] = rules.StrongOpenFirstWindowMinPct,
+            ["auctionGapMaxScore"] = rules.AuctionGapMaxScore,
+            ["auctionGapScoreSlope"] = rules.AuctionGapScoreSlope,
+            ["auctionGapOpenStrengthScore"] = rules.AuctionGapOpenStrengthScore,
+            ["auctionGapAmountStrongScore"] = rules.AuctionGapAmountStrongScore,
+            ["auctionGapAmountWeakScore"] = rules.AuctionGapAmountWeakScore,
+            ["auctionGapQualityGoodScore"] = rules.AuctionGapQualityGoodScore,
+            ["auctionGapQualityDegradedScore"] = rules.AuctionGapQualityDegradedScore,
+            ["auctionLateLiftCoreScore"] = rules.AuctionLateLiftCoreScore,
+            ["auctionLateLiftAmountRatioScore"] = rules.AuctionLateLiftAmountRatioScore,
+            ["auctionLateLiftOpenStrengthScore"] = rules.AuctionLateLiftOpenStrengthScore,
+            ["strongOpenNearLimitScore"] = rules.StrongOpenNearLimitScore,
+            ["strongOpenOpenStrengthScore"] = rules.StrongOpenOpenStrengthScore,
+            ["lowOpenRedReversalScore"] = rules.LowOpenRedReversalScore,
+            ["lowOpenTurnRedScore"] = rules.LowOpenTurnRedScore,
+            ["previousWeakContextScore"] = rules.PreviousWeakContextScore,
         };
         var text = "{" + string.Join(",", values.Select(item => $"\"{item.Key}\":{JsonValue(item.Value)}")) + "}";
         uint hash = 2166136261;

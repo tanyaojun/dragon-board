@@ -36,6 +36,7 @@ public sealed class AppSettings
     public int VoiceVolume { get; set; } = 100;
     public string VoiceName { get; set; } = "";
     public VoiceMode VoiceMode { get; set; } = VoiceMode.StrongOnly;
+    public int HotlistTopVoiceCount { get; set; }
     public double Opacity { get; set; } = 1;
     public Dictionary<string, bool> EnabledEvents { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
@@ -67,6 +68,7 @@ public sealed class AppSettings
             VoiceVolume = VoiceVolume,
             VoiceName = VoiceName,
             VoiceMode = VoiceMode,
+            HotlistTopVoiceCount = HotlistTopVoiceCount,
             Opacity = Opacity,
             EnabledEvents = new Dictionary<string, bool>(EnabledEvents, StringComparer.OrdinalIgnoreCase),
         };

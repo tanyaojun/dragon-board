@@ -47,7 +47,9 @@ export interface OpeningWeakToStrongRules {
   auctionLatePriceLiftMinPctPoint: number
   auctionLateAmountLiftMinRatio: number
   auctionLateLiftFinalMinPct: number
+  /** @deprecated V5 起不再参与检测逻辑，仅保留兼容旧配置 */
   auctionLateLiftAmountDeltaMin: number
+  /** @deprecated V5 起不再参与检测逻辑，仅保留兼容旧配置 */
   auctionLateLiftLateAmountDeltaMin: number
   auctionLateLiftFirstWindowMinPct: number
   auctionLateLiftJumpMinPctPoint: number
@@ -57,6 +59,21 @@ export interface OpeningWeakToStrongRules {
   maxQuoteAgeMs: number
   minCurrentVolume: number
   openingSupportOpenRatio: number
+  auctionGapMaxScore: number
+  auctionGapScoreSlope: number
+  auctionGapOpenStrengthScore: number
+  auctionGapAmountStrongScore: number
+  auctionGapAmountWeakScore: number
+  auctionGapQualityGoodScore: number
+  auctionGapQualityDegradedScore: number
+  auctionLateLiftCoreScore: number
+  auctionLateLiftAmountRatioScore: number
+  auctionLateLiftOpenStrengthScore: number
+  strongOpenNearLimitScore: number
+  strongOpenOpenStrengthScore: number
+  lowOpenRedReversalScore: number
+  lowOpenTurnRedScore: number
+  previousWeakContextScore: number
 }
 
 export interface OpeningWeakToStrongQuote {

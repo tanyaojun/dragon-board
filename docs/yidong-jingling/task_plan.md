@@ -529,6 +529,66 @@ git diff --check
 - **补充验证：** `node --test proxy-server\__tests__\openingSignals.test.mjs proxy-server\__tests__\docs.test.mjs` 8 tests passed；`pnpm build` 通过。
 - **状态：** complete
 
+---
+
+## V5 后优化：参数化 + 代码审查修复 + 热榜语音过滤
+
+日期：2026-05-30
+
+### 目标
+
+1. 基于 A 股市场研究校准评分参数默认值
+2. 16 个评分因子从硬编码提取为 `OpeningWeakToStrongRules` 可配置字段
+3. 修复诊断报告中的 P0/P1 代码问题
+4. 新增热榜前 N 名语音过滤功能
+5. 代码审查修复
+
+### Phase O1：市场研究与参数校准
+
+- [x] 搜索同花顺、通达信、东方财富、淘股吧、雪球、BigQuant 集合竞价特征。
+- [x] 整理 16 个评分参数的新默认值，写入共享 fixture。
+- [x] TS/C# `OpeningWeakToStrongRules` 类型增加评分字段。
+- [x] TS/C# `BuildFactors` 改为读取 rules 中的评分参数。
+- [x] C# `FromJson` 和 TS `openingWeakToStrongConfig.ts` 同步默认值。
+- [x] `ConfigHash` 移除废弃字段（`AuctionLateLiftAmountDeltaMin` 等），新增评分字段。
+
+### Phase O2：P0/P1 代码修复
+
+- [x] `low_open_red_reversal` 硬编码 `auctionPct <= 0` 改为 `auctionWeakMaxPct`（C#+TS）。
+- [x] C# `previousWeakSource` factor 只在非空时添加。
+- [x] TS 时间解析简化：删除 `shanghaiTimeParts`、`SHANGHAI_TIME_FORMAT`、`parseComparableTimestamp`。
+- [x] `riskFlag` 函数从 case-by-case 列表简化为 3 分类（high/low/medium）。
+- [x] 画像缺失扣分 -35→-10，`auction_profile_missing` / `auction_initial_baseline_missing` 标记为 low severity。
+- [x] `riskFlags.Length > 0 ? "watch"` 闸门移除，confidence 纯分数决定。
+
+### Phase O3：热榜前 N 名语音过滤
+
+- [x] `AppSettings` 新增 `HotlistTopVoiceCount`（int，默认 0=不限）。
+- [x] `MainForm._orderedHotlistCodes` 按平台覆盖数降序排列。
+- [x] `ApplyHotlistTopVoiceFilter` 在语音播报前过滤非前 N 名股票。
+- [x] 设置页新增 `NumericUpDown`，仅在八平台热榜时可见（`Visible=false` 隐藏整行）。
+- [x] 竞价弱转强和普通异动均受此过滤。
+
+### Phase O4：代码审查修复
+
+- [x] M1：废弃字段加 `@deprecated` / `<summary>` 注释。
+- [x] M2：`secondsOfDay` 对畸形时间戳输出 `console.warn`。
+- [x] M3：`ApplyHotlistTopVoiceFilter<T>(ref T)` 简化为 `ApplyHotlistTopVoiceFilter(IList<EventRecord>)`。
+- [x] L1：热榜播报行从 `Enabled` 改为整行 `Visible`。
+
+### 验证
+
+```powershell
+pnpm exec vitest run src/services/hotlist/__tests__/OpeningWeakToStrongDetector.test.ts src/services/hotlist/__tests__/OpeningRealtimeEventBuffer.test.ts src/services/hotlist/__tests__/OpeningRealtimeEventBridge.test.ts src/services/hotlist/__tests__/OpeningSignalClient.test.ts src/services/hotlist/__tests__/HotStockEventMonitorService.test.ts src/services/hotlist/__tests__/HotStockEventSpeechService.test.ts src/components/common/__tests__/DataTable.test.ts
+dotnet run --project tools\YiDongJingLing.Tests\YiDongJingLing.Tests.csproj
+pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false
+dotnet build tools\YiDongJingLing\YiDongJingLing.csproj -c Release
+pnpm build
+git diff --check
+```
+
+- **状态：** complete
+
 ## V6 Phase 0：复盘闭环方案交叉评审
 
 - [x] 安排只读 Agent 从规则口径、实现影响、测试验收三个角度交叉评审 V6-A。

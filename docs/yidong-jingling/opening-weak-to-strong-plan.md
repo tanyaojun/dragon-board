@@ -1,8 +1,8 @@
 # 异动精灵开盘竞价弱转强落地方案
 
-更新时间：2026-05-24
+更新时间：2026-05-30
 
-实现状态：首版代码链路已落地，覆盖 TS/C# 共享 fixture、python-bridge 强制采样元数据、proxy 本地信号缓存、网页板异动雷达、桌面版上报和 Dragon Board 主表徽标。V4 已补齐 `09:20-09:25` 序列画像、风险降级和覆盖率门禁；V5 进入“显式双基线 + 量价协同偏强播”方案评审阶段，尚未修改生产代码。
+实现状态：V5 双基线量价协同已落地并通过 TS/C# 54+48 项测试。V5 后追加两轮优化：(1) 基于同花顺/通达信/东方财富市场研究的评分参数校准，16 个因子全部从硬编码提取为可配置字段；(2) P0/P1 代码审查修复——移除废弃字段的 hash 影响、统一 low_open_red_reversal 阈值口径、简化 TS 时间解析、画像缺失扣分从 -35 降至 -10。详情见”V5 后优化记录”章节。
 
 ## 目标
 
@@ -1291,6 +1291,93 @@ V6 核心口径：
 ```
 
 `09:15-09:19:59` 仍不作为强依据。`09:20-09:25` 是候选证据窗口；`09:25:10-09:29:59` 是早期行动提醒窗口；`09:30-09:35` 是开盘承接升级窗口；`09:35-10:00` 是盘中定性窗口。10 点前基本完成弱转强当日确定性判断，收盘后人工复盘只用于后续调参，不是使用信号的前置条件。
+
+---
+
+# V5 后优化记录
+
+更新时间：2026-05-30
+
+## 一、基于市场研究的评分参数校准
+
+从同花顺、通达信、东方财富等金融平台的集合竞价实战文档中提取 A 股市场共识，对 V5 评分权重做了系统性校准：
+
+### 研究来源
+
+- 游资/短线社区"弱转强"战法口径（淘股吧、雪球）
+- 通达信/同花顺竞价选股公式源码（CSDN、微信公众号）
+- BigQuant 集合竞价因子量化研究
+- 中信/海通量化研报复现
+
+### 核心发现
+
+1. **量能相对放大 > 绝对金额**：竞板比（竞价量/昨全天量）≥5% 是最小门槛，≥10% 是爆量信号。绝对竞价金额受市值影响大，不应作为核心判断依据。
+2. **高开黄金区间 +2.5% ~ +5%**：弱转强要求"前日弱 + 次日超预期高开"。高开 ≥8% 无量是虚假信号。
+3. **情绪值 = 竞价换手 × 竞价量比** ≥10 时封板率约 3×。
+4. **竞价量能三档**：小盘股 >1000 万活跃、中盘 >3000 万强势、大盘 >1 亿活跃。
+
+### 参数变更对照
+
+| 参数 | 旧默认 | 新默认 | 依据 |
+|------|--------|--------|------|
+| `auctionGapMaxScore` | 35 | **40** | 跳空是弱转强最核心信号 |
+| `auctionGapScoreSlope` | 3 | **4** | 每 1pct 跳空敏感度提升 |
+| `auctionGapOpenStrengthScore` | 10 | **15** | 开盘强度第二确认信号 |
+| `auctionGapAmountStrongScore` | 18 | **20** | 量能确认权重提升 |
+| `auctionGapAmountWeakScore` | 8 | **10** | 弱量也应有些许加分 |
+| `auctionGapQualityGoodScore` | 10 | **8** | 质量好是基础，不应超过信号 |
+| `auctionGapQualityDegradedScore` | 4 | **3** | 同上 |
+| `auctionLateLiftCoreScore` | 24 | **25** | 临门抢筹信号价值高 |
+| `strongOpenNearLimitScore` | 30 | **25** | 不应超过跳空核心因子 |
+| `lowOpenRedReversalScore` | 28 | **22** | 翻红不如跳空可靠 |
+| `lowOpenTurnRedScore` | 12 | **10** | 同上 |
+| `previousWeakContextScore` | 12 | **8** | TDX 自选只是候选证据 |
+
+所有参数从硬编码提取为 `OpeningWeakToStrongRules` 的可配置字段，默认值来自 fixture JSON，运行时可通过配置文件覆盖。
+
+## 二、P0/P1 代码优化
+
+### P0（已修复）
+
+| 问题 | 改法 |
+|------|------|
+| `AuctionLateLiftAmountDeltaMin` / `AuctionLateLiftLateAmountDeltaMin` 死代码 | 从 ConfigHash 移除，加废弃注释 |
+| `low_open_red_reversal` 硬编码 `auctionPct <= 0` | 改为使用 `auctionWeakMaxPct` |
+| `previousWeakSource` factor 添加时机不一致 | 统一为只在非空时添加 |
+
+### P1（已修复）
+
+| 问题 | 改法 |
+|------|------|
+| 16 个评分因子硬编码 | 收入 `OpeningWeakToStrongRules`，从 fixture 加载 |
+| TS 时间解析 3 层回退 | 简化为单一路径，删除 `shanghaiTimeParts` 等 ~40 行 |
+| `riskFlag` 12 行 case-by-case | 简化为 3 分类（high/low/medium） |
+| 画像缺失扣分 -35 | 降至 -10（缺画像不代表信号假） |
+| confidence 闸门 `riskFlags.Length > 0 ? "watch"` | 移除，纯分数决定 confidence |
+
+### TS/C# 一致性改进
+
+- `low_open_red_reversal` 阈值统一使用 `auctionWeakMaxPct`
+- `riskFlag` 严重级别和扣分逻辑统一
+- 废弃字段在两端同步标记
+
+## 三、验证
+
+| 项目 | 结果 |
+|------|------|
+| C# 53 tests | All passed |
+| TS 7 files / 48 tests | All passed |
+| `vue-tsc` typecheck | Passed |
+| `pnpm build` | Passed |
+| `dotnet build -c Release` | 0 warnings, 0 errors |
+| `git diff --check` | Passed |
+
+## 四、待后续处理（P2）
+
+- 检测器文件拆分（StateStore / ProfileBuilder / Scorer / Evaluator）
+- `liquidityTierMode: 'review_only'` 实现自动模式或移除
+- 缺少 watch→strong 盘中确认边界测试
+- TS/C# `configHash` 序列化口径统一
 
 V6 不新增规则阈值字段，不改变 V5 `configHash`。早期候选开始时间、10 点前收口和盘中确认推进值是状态机常量，只用于盘中提醒分层；规则指纹仍用于标识竞价弱转强原始触发规则。
 
