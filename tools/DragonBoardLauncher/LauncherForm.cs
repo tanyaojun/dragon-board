@@ -16,6 +16,8 @@ internal sealed class LauncherForm : Form
     private readonly TextBox _log = new();
     private readonly BoundedLogView _logView = new(MaxLogLines);
     private readonly Button _autoStartButton = new();
+    private readonly NotifyIcon _trayIcon = new();
+    private readonly ContextMenuStrip _trayMenu = new();
 
     private readonly Color _bg = Color.FromArgb(18, 20, 24);
     private readonly Color _cardBg = Color.FromArgb(29, 33, 40);
@@ -28,6 +30,10 @@ internal sealed class LauncherForm : Form
     // Per-service UI elements
     private readonly Dictionary<string, Label> _dots = new();
     private readonly Dictionary<string, Label> _statusLabels = new();
+    private bool _isRefreshingStatuses;
+    private bool _isManagerActionRunning;
+    private bool _allowExit;
+    private bool _trayNoticeShown;
 
     public LauncherForm()
     {
@@ -47,22 +53,57 @@ internal sealed class LauncherForm : Form
         MaximizeBox = false;
 
         BuildUI();
+        BuildTrayIcon();
 
         _timer = new System.Windows.Forms.Timer { Interval = 3000 };
-        _timer.Tick += (_, _) => RefreshStatuses();
+        _timer.Tick += async (_, _) => await RefreshStatusesAsync();
         _timer.Start();
 
-        FormClosing += (_, _) =>
+        Resize += (_, _) =>
         {
+            if (WindowState == FormWindowState.Minimized)
+                HideToTray();
+        };
+        FormClosing += (_, e) =>
+        {
+            if (!_allowExit && e.CloseReason == CloseReason.UserClosing)
+            {
+                e.Cancel = true;
+                HideToTray();
+                return;
+            }
+
             _timer.Stop();
+            _trayIcon.Visible = false;
             _processManager.StopStartedProcesses();
+        };
+        FormClosed += (_, _) =>
+        {
+            _trayIcon.Dispose();
+            _trayMenu.Dispose();
         };
         Shown += (_, _) =>
         {
             Log("启动管理器已就绪。");
             Log($"项目目录: {_root}");
-            RefreshStatuses();
+            _ = RefreshStatusesAsync();
         };
+    }
+
+    private void BuildTrayIcon()
+    {
+        _trayMenu.Items.Add("显示窗口", null, (_, _) => ShowFromTray());
+        _trayMenu.Items.Add("打开看板", null, (_, _) => OpenBoard());
+        _trayMenu.Items.Add("核心启动", null, async (_, _) => await StartAllAsync());
+        _trayMenu.Items.Add("全部停止", null, async (_, _) => await StopAllAsync());
+        _trayMenu.Items.Add(new ToolStripSeparator());
+        _trayMenu.Items.Add("退出", null, (_, _) => ExitApplication());
+
+        _trayIcon.Text = "龙头看板 · 启动管理器";
+        _trayIcon.Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath) ?? SystemIcons.Application;
+        _trayIcon.ContextMenuStrip = _trayMenu;
+        _trayIcon.Visible = true;
+        _trayIcon.DoubleClick += (_, _) => ShowFromTray();
     }
 
     private void BuildUI()
@@ -107,7 +148,7 @@ internal sealed class LauncherForm : Form
             Cursor = Cursors.Hand,
         };
         startAllBtn.FlatAppearance.BorderSize = 0;
-        startAllBtn.Click += (_, _) => StartAll();
+        startAllBtn.Click += async (_, _) => await StartAllAsync();
         Controls.Add(startAllBtn);
 
         var stopAllBtn = new Button
@@ -122,7 +163,7 @@ internal sealed class LauncherForm : Form
             Cursor = Cursors.Hand,
         };
         stopAllBtn.FlatAppearance.BorderSize = 0;
-        stopAllBtn.Click += (_, _) => StopAll();
+        stopAllBtn.Click += async (_, _) => await StopAllAsync();
         Controls.Add(stopAllBtn);
 
         var openAppBtn = new Button
@@ -260,7 +301,7 @@ internal sealed class LauncherForm : Form
             Cursor = Cursors.Hand,
         };
         startBtn.FlatAppearance.BorderSize = 0;
-        startBtn.Click += (_, _) => _processManager.StartService(svc);
+        startBtn.Click += async (_, _) => await RunManagerActionAsync(() => _processManager.StartService(svc));
         p.Controls.Add(startBtn);
 
         var stopBtn = new Button
@@ -275,7 +316,7 @@ internal sealed class LauncherForm : Form
             Cursor = Cursors.Hand,
         };
         stopBtn.FlatAppearance.BorderSize = 0;
-        stopBtn.Click += (_, _) => _processManager.StopService(svc);
+        stopBtn.Click += async (_, _) => await RunManagerActionAsync(() => _processManager.StopService(svc));
         p.Controls.Add(stopBtn);
 
         if (svc.Port is 5173 or 5174 or 3000 or 8000 or 8765 or 27017 or 6379)
@@ -316,26 +357,65 @@ internal sealed class LauncherForm : Form
         return p;
     }
 
-    private void StartAll()
+    private Task StartAllAsync()
     {
-        _processManager.StartAll();
-        RefreshStatuses();
+        return RunManagerActionAsync(_processManager.StartAll);
     }
 
-    private void StopAll()
+    private Task StopAllAsync()
     {
-        _processManager.StopAll();
-        RefreshStatuses();
+        return RunManagerActionAsync(_processManager.StopAll);
     }
 
-    private void RefreshStatuses()
+    private async Task RunManagerActionAsync(Action action)
     {
+        if (_isManagerActionRunning || IsDisposed) return;
+
+        _isManagerActionRunning = true;
+        _timer.Stop();
+        UseWaitCursor = true;
+        try
+        {
+            await Task.Run(action);
+        }
+        finally
+        {
+            _isManagerActionRunning = false;
+            if (!IsDisposed)
+            {
+                UseWaitCursor = false;
+                _timer.Start();
+            }
+        }
+
+        await RefreshStatusesAsync();
+    }
+
+    private async Task RefreshStatusesAsync()
+    {
+        if (_isRefreshingStatuses || IsDisposed) return;
+
+        _isRefreshingStatuses = true;
+        var services = _services.ToArray();
+        Dictionary<string, bool> statuses;
+        try
+        {
+            statuses = await Task.Run(() => services.ToDictionary(
+                kv => kv.Key,
+                kv => LauncherProcessManager.IsServiceRunning(kv.Value)));
+        }
+        finally
+        {
+            _isRefreshingStatuses = false;
+        }
+
+        if (IsDisposed) return;
+
         var running = 0;
-        foreach (var kv in _services)
+        foreach (var kv in statuses)
         {
             var key = kv.Key;
-            var svc = kv.Value;
-            var isRunning = LauncherProcessManager.IsServiceRunning(svc);
+            var isRunning = kv.Value;
 
             if (_dots.TryGetValue(key, out var dot))
             {
@@ -402,6 +482,37 @@ internal sealed class LauncherForm : Form
             Process.Start(new ProcessStartInfo { FileName = url, UseShellExecute = true });
         }
         catch { }
+    }
+
+    private void HideToTray()
+    {
+        Hide();
+        ShowInTaskbar = false;
+        WindowState = FormWindowState.Normal;
+
+        if (_trayNoticeShown) return;
+
+        _trayNoticeShown = true;
+        _trayIcon.ShowBalloonTip(
+            2000,
+            "龙头看板仍在运行",
+            "窗口已最小化到系统托盘。右键托盘图标可退出或停止服务。",
+            ToolTipIcon.Info);
+    }
+
+    private void ShowFromTray()
+    {
+        ShowInTaskbar = true;
+        Show();
+        WindowState = FormWindowState.Normal;
+        Activate();
+        _ = RefreshStatusesAsync();
+    }
+
+    private void ExitApplication()
+    {
+        _allowExit = true;
+        Close();
     }
 
     private void Log(string message)
