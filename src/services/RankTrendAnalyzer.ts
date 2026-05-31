@@ -1,6 +1,8 @@
 import { debugLog } from '@/utils/logger'
 // src/services/RankTrendAnalyzer.ts
 import { EventManager } from '../utils/eventManager'
+import { apiService } from './apiService'
+import { dataLayer } from './DataLayer'
 import {
   buildRankTrendSnapshotPriority,
   cloneDefaultRankTrendRuntimeConfig,
@@ -94,10 +96,6 @@ type ApiServiceApi = {
   getRankTrendRankSeries(options: Record<string, unknown>): Promise<{
     frames?: RankTrendRankSeriesFrame[]
   }>
-}
-
-async function loadRuntimeModule(specifier: string): Promise<Record<string, any>> {
-  return import(/* @vite-ignore */ specifier)
 }
 
 export interface RankTrendResult extends RankTrendAnalysisResult {
@@ -755,17 +753,15 @@ export class RankTrendAnalyzer {
   }
 
   private async getDataLayer(): Promise<DataLayerApi> {
-    const module = await loadRuntimeModule('./DataLayer')
-    return module.dataLayer as DataLayerApi
+    return dataLayer as DataLayerApi
   }
 
   private async getApiService(): Promise<ApiServiceApi> {
-    const module = await loadRuntimeModule('./apiService')
-    return module.apiService as ApiServiceApi
+    return apiService as ApiServiceApi
   }
 
   private async batchUpdateSignals(results: Map<string, RankTrendResult>): Promise<void> {
-    const module = await loadRuntimeModule('./dataLoader')
+    const module = await import('./dataLoader')
     const dataLoader = module.dataLoader as DataLoaderApi
     const signalUpdates = Array.from(results.entries())
       .filter(([, result]) => Boolean(result))

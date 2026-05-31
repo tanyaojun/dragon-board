@@ -11,6 +11,14 @@ export default defineConfig({
     },
   },
   server: {
+    watch: {
+      ignored: [
+        '**/quant-board/data/**',
+        '**/quant-board/.venv/**',
+        '**/tools/**/bin/**',
+        '**/tools/**/obj/**',
+      ],
+    },
     proxy: {
       '/api': {
         target: 'http://localhost:3000',

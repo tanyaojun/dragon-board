@@ -56,9 +56,10 @@ export function createEventRadarBackgroundWorker(options = {}) {
 
   function status() {
     const notifierStatus = notifier.status()
+    const backgroundEnabled = readBoolean(readConfig('FEISHU_EVENT_RADAR_BACKGROUND_ENABLED'))
     return {
       ...notifierStatus,
-      backgroundEnabled: notifierStatus.configured,
+      backgroundEnabled: notifierStatus.configured && backgroundEnabled,
       running,
       initialized,
       intervalMs: readIntervalMs(readConfig),
@@ -122,7 +123,7 @@ export function createEventRadarBackgroundWorker(options = {}) {
 
   function start() {
     if (running) return true
-    if (!notifier.status().configured) return false
+    if (!status().backgroundEnabled) return false
     running = true
     void runOnce()
     timer = setIntervalFn(() => {
@@ -218,6 +219,10 @@ function toArray(value) {
 
 function readIntervalMs(readConfig) {
   return readPositiveInt(readConfig('FEISHU_EVENT_RADAR_BACKGROUND_INTERVAL_MS'), DEFAULT_INTERVAL_MS)
+}
+
+function readBoolean(value) {
+  return ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase())
 }
 
 function readPositiveInt(value, fallback) {

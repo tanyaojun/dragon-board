@@ -97,7 +97,7 @@ internal sealed class LauncherForm : Form
         var btnBarY = y + 8;
         var startAllBtn = new Button
         {
-            Text = "一键启动",
+            Text = "核心启动",
             FlatStyle = FlatStyle.Flat,
             Size = new Size(110, 36),
             Location = new Point(18, btnBarY),
@@ -137,7 +137,7 @@ internal sealed class LauncherForm : Form
             Cursor = Cursors.Hand,
         };
         openAppBtn.FlatAppearance.BorderColor = Color.FromArgb(62, 70, 82);
-        openAppBtn.Click += (_, _) => OpenUrl("http://127.0.0.1:5173");
+        openAppBtn.Click += (_, _) => OpenBoard();
         Controls.Add(openAppBtn);
 
         var openQBtn = new Button
@@ -304,6 +304,8 @@ internal sealed class LauncherForm : Form
             };
             openBtn.Click += (_, _) =>
             {
+                if (svc.Port == 27017)
+                    _processManager.StartMongoExpress();
                 if (svc.Port == 6379)
                     _processManager.StartRedisCommander();
                 OpenUrl(url);
@@ -386,6 +388,11 @@ internal sealed class LauncherForm : Form
         var value = Convert.ToString(key?.GetValue(AutoStartName) ?? "");
         return !string.IsNullOrWhiteSpace(value)
             && value.Contains(Application.ExecutablePath, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void OpenBoard()
+    {
+        OpenUrl("http://127.0.0.1:3000");
     }
 
     private static void OpenUrl(string url)

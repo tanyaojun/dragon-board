@@ -20,6 +20,9 @@ coverage
 *.pdb
 **/bin/
 **/obj/
+/tools/DragonBoardLauncher/DragonBoardLauncher.dll
+/tools/DragonBoardLauncher/DragonBoardLauncher.deps.json
+/tools/DragonBoardLauncher/DragonBoardLauncher.runtimeconfig.json
 
 # Editor directories and files
 .vscode/*

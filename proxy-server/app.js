@@ -1,7 +1,8 @@
 import express from 'express'
 import cors from 'cors'
 import { fileURLToPath } from 'url'
-import { dirname, join } from 'path'
+import { existsSync } from 'fs'
+import { dirname, join, resolve } from 'path'
 
 import {
   createConfigReader,
@@ -18,6 +19,7 @@ import { registerLocalVoiceRoutes } from './routes/localVoice.js'
 import { registerMarketRoutes } from './routes/market.js'
 import { registerNotificationRoutes } from './routes/notifications.js'
 import { registerOpeningSignalRoutes } from './routes/openingSignals.js'
+import { registerQuantBoardProxyRoutes } from './routes/quantBoardProxy.js'
 import { registerQuoteRoutes } from './routes/quotes.js'
 import { registerStartupCacheRoutes } from './routes/startupCache.js'
 import { registerTdxBlockRoutes } from './routes/tdxBlocks.js'
@@ -26,6 +28,8 @@ import { registerXuangubaoRoutes } from './routes/xuangubao.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
+const frontendDistDir = resolve(__dirname, '..', 'dist')
+const frontendIndexHtml = join(frontendDistDir, 'index.html')
 
 export function createProxyApp(options = {}) {
   const app = express()
@@ -82,8 +86,20 @@ export function createProxyApp(options = {}) {
   registerTdxRoutes(app, context)
   registerMarketRoutes(app, context)
   registerXuangubaoRoutes(app, context)
+  registerQuantBoardProxyRoutes(app, context)
 
   app.use('/static', express.static(join(__dirname, 'public')))
+
+  if (existsSync(frontendIndexHtml)) {
+    app.use(express.static(frontendDistDir))
+    app.get('*', (req, res, next) => {
+      if (req.path.startsWith('/api/') || req.path === '/openapi.json' || req.path === '/docs') {
+        next()
+        return
+      }
+      res.sendFile(frontendIndexHtml)
+    })
+  }
 
   app.use((req, res) => {
     res.status(404).json(

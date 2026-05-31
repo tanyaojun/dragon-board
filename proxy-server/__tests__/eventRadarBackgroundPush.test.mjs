@@ -8,6 +8,7 @@ function enabledConfig(name) {
     FEISHU_EVENT_RADAR_ENABLED: 'true',
     FEISHU_EVENT_RADAR_WEBHOOK: 'https://open.feishu.cn/open-apis/bot/v2/hook/test',
     FEISHU_EVENT_RADAR_SECRET: 'secret',
+    FEISHU_EVENT_RADAR_BACKGROUND_ENABLED: 'true',
   }[name] || ''
 }
 
@@ -107,6 +108,7 @@ test('event radar background worker start and stop manage the polling timer', ()
   const worker = createEventRadarBackgroundWorker({
     readConfig: (name) => ({
       ...Object.fromEntries(['FEISHU_EVENT_RADAR_ENABLED', 'FEISHU_EVENT_RADAR_WEBHOOK', 'FEISHU_EVENT_RADAR_SECRET'].map((key) => [key, enabledConfig(key)])),
+      FEISHU_EVENT_RADAR_BACKGROUND_ENABLED: 'true',
       FEISHU_EVENT_RADAR_BACKGROUND_INTERVAL_MS: '15000',
     })[name] || '',
     fetchEvents: async () => [],

@@ -84,6 +84,11 @@ export const SECTOR_CONFIG = {
   SYNC_DEBOUNCE_MS: 500,
 } as const
 
+const SAME_ORIGIN_API_BASE =
+  typeof window !== 'undefined' && window.location?.origin
+    ? window.location.origin
+    : 'http://localhost:3000'
+
 /**
  * API 服务配置 - 与 apiService 深度整合
  */
@@ -92,7 +97,7 @@ export const API_CONFIG = {
   PROXIES: {
     PROXY_3000: 'http://localhost:3000', // 热榜、行情代理（有源码）
     PROXY_5000: 'http://localhost:5000', // 题材数据代理（只有EXE）
-    QUANT_BOARD: 'http://localhost:8000', // QuantBoard 后端（MongoDB 正式数据链路）
+    QUANT_BOARD: SAME_ORIGIN_API_BASE, // 通过 3000/Vite 同源代理访问 QuantBoard 后端
   },
 
   // ===== 请求默认配置 =====
@@ -172,7 +177,7 @@ export const API_CONFIG = {
       priority: 'high' as const,
     },
     QUANT_BOARD: {
-      baseURL: 'http://localhost:8000',
+      baseURL: SAME_ORIGIN_API_BASE,
       timeout: 15000,
       retries: 1,
       cacheTTL: 0,

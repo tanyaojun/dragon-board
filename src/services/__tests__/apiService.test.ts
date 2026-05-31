@@ -266,7 +266,7 @@ describe('ApiService', () => {
     })
 
     const requestedUrl = String(fetchMock.mock.calls[0][0])
-    expect(requestedUrl).toContain('http://localhost:8000/api/snapshots/frames?')
+    expect(requestedUrl).toContain('http://localhost:3000/api/snapshots/frames?')
     expect(requestedUrl).toContain('dataset_id=dragonboard_live')
     expect(requestedUrl).toContain('snapshot_type=half_hour')
     expect(requestedUrl).toContain('trading_date=2026-04-24')
@@ -319,7 +319,7 @@ describe('ApiService', () => {
     })
 
     const requestedUrl = String(fetchMock.mock.calls[0][0])
-    expect(requestedUrl).toContain('http://localhost:8000/api/ranktrend/rank-series?')
+    expect(requestedUrl).toContain('http://localhost:3000/api/ranktrend/rank-series?')
     expect(requestedUrl).toContain('dataset_id=dragonboard_live')
     expect(requestedUrl).toContain('snapshot_type=half_hour')
     expect(requestedUrl).toContain('start_date=2026-04-21')
@@ -348,7 +348,7 @@ describe('ApiService', () => {
 
     const requestedUrl = String(fetchMock.mock.calls[0][0])
     expect(requestedUrl).toContain(
-      'http://localhost:8000/api/snapshots/records/half_hour%3A2026-04-24%3A10%3A00?',
+      'http://localhost:3000/api/snapshots/records/half_hour%3A2026-04-24%3A10%3A00?',
     )
     expect(requestedUrl).toContain('dataset_id=dragonboard_live')
     expect(requestedUrl).toContain('allowed_capture_modes=real_time%2Cdelayed')
@@ -368,7 +368,7 @@ describe('ApiService', () => {
     await api.getMongoThemeMapping()
 
     const requestedUrl = new URL(String(fetchMock.mock.calls[0][0]))
-    expect(requestedUrl.origin).toBe('http://localhost:8000')
+    expect(requestedUrl.origin).toBe('http://localhost:3000')
     expect(requestedUrl.pathname).toBe('/api/themes/mapping')
   })
 
@@ -388,7 +388,7 @@ describe('ApiService', () => {
     })
 
     const requestedUrl = new URL(String(fetchMock.mock.calls[0][0]))
-    expect(requestedUrl.origin).toBe('http://localhost:8000')
+    expect(requestedUrl.origin).toBe('http://localhost:3000')
     expect(requestedUrl.pathname).toBe('/api/research/theme-summary')
     expect(requestedUrl.searchParams.get('dataset_id')).toBe('dragonboard_live')
     expect(requestedUrl.searchParams.get('snapshot_type')).toBe('half_hour')
@@ -408,7 +408,7 @@ describe('ApiService', () => {
     await api.listStockNames()
 
     const requestedUrl = new URL(String(fetchMock.mock.calls[0][0]))
-    expect(requestedUrl.origin).toBe('http://localhost:8000')
+    expect(requestedUrl.origin).toBe('http://localhost:3000')
     expect(requestedUrl.pathname).toBe('/api/stocks/names')
   })
 
@@ -425,7 +425,7 @@ describe('ApiService', () => {
     await api.get('/api/journal/entries?status=candidate')
 
     const requestedUrl = new URL(String(fetchMock.mock.calls[0][0]))
-    expect(requestedUrl.origin).toBe('http://localhost:8000')
+    expect(requestedUrl.origin).toBe('http://localhost:3000')
     expect(requestedUrl.pathname).toBe('/api/journal/entries')
     expect(requestedUrl.searchParams.get('status')).toBe('candidate')
   })

@@ -23,14 +23,8 @@ internal sealed class LauncherProcessManager
 
     public void StartAll()
     {
-        StartService(_services["mongo"]);
-        StartService(_services["redis"]);
-        StartService(_services["proxy"]);
-        StartService(_services[LauncherServices.VoiceServiceKey]);
-        StartService(_services["frontend"]);
-        StartService(_services["bridge"]);
-        StartService(_services["quant-api"]);
-        StartService(_services["quant-ui"]);
+        foreach (var key in LauncherServices.CoreStartupKeys)
+            StartService(_services[key]);
     }
 
     public void StopAll()
@@ -49,11 +43,6 @@ internal sealed class LauncherProcessManager
     {
         try
         {
-            if (service.Port == 27017)
-                StartMongoExpress();
-            if (service.Port == 6379)
-                StartRedisCommander();
-
             if (service.IsVoiceWorker && !IsCurrentVoiceWorkerHealthy(service))
             {
                 _log($"{service.Name} 正在运行旧版本，准备重启。");
@@ -197,6 +186,43 @@ internal sealed class LauncherProcessManager
         }
     }
 
+    public void StartMongoExpress()
+    {
+        if (_mongoExpressProcess is { HasExited: false }) return;
+        if (LauncherPorts.IsPortOpen(8081))
+        {
+            _log("Mongo Express 已在端口 8081 运行。");
+            return;
+        }
+
+        try
+        {
+            var meApp = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "npm",
+                "node_modules",
+                "mongo-express",
+                "app.js");
+            var info = CreateHiddenProcessInfo("node", $"\"{meApp}\"", _root);
+            info.Environment["ME_CONFIG_MONGODB_URL"] = "mongodb://localhost:27017";
+            info.Environment["ME_CONFIG_MONGODB_ENABLE_ADMIN"] = "true";
+            info.Environment["VCAP_APP_HOST"] = "127.0.0.1";
+            info.Environment["ME_CONFIG_SITE_SESSIONSECRET"] = "dragon-board-me";
+
+            _mongoExpressProcess = new Process { StartInfo = info, EnableRaisingEvents = true };
+            _mongoExpressProcess.OutputDataReceived += (_, e) => { if (!string.IsNullOrWhiteSpace(e.Data)) _log($"[Mongo Express] {e.Data}"); };
+            _mongoExpressProcess.ErrorDataReceived += (_, e) => { if (!string.IsNullOrWhiteSpace(e.Data)) _log($"[Mongo Express] {e.Data}"); };
+            _mongoExpressProcess.Start();
+            _mongoExpressProcess.BeginOutputReadLine();
+            _mongoExpressProcess.BeginErrorReadLine();
+            _log("已启动 Mongo Express (8081)，PID=" + _mongoExpressProcess.Id + "。");
+        }
+        catch (Exception ex)
+        {
+            _log($"启动 Mongo Express 失败: {ex.Message}");
+        }
+    }
+
     public static bool IsServiceRunning(ManagedService service)
     {
         if (service.IsVoiceWorker)
@@ -226,37 +252,6 @@ internal sealed class LauncherProcessManager
             StandardOutputEncoding = Encoding.UTF8,
             StandardErrorEncoding = Encoding.UTF8
         };
-    }
-
-    private void StartMongoExpress()
-    {
-        if (_mongoExpressProcess is { HasExited: false }) return;
-        try
-        {
-            var meApp = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "npm",
-                "node_modules",
-                "mongo-express",
-                "app.js");
-            var info = CreateHiddenProcessInfo("node", $"\"{meApp}\"", _root);
-            info.Environment["ME_CONFIG_MONGODB_URL"] = "mongodb://localhost:27017";
-            info.Environment["ME_CONFIG_MONGODB_ENABLE_ADMIN"] = "true";
-            info.Environment["VCAP_APP_HOST"] = "127.0.0.1";
-            info.Environment["ME_CONFIG_SITE_SESSIONSECRET"] = "dragon-board-me";
-
-            _mongoExpressProcess = new Process { StartInfo = info, EnableRaisingEvents = true };
-            _mongoExpressProcess.OutputDataReceived += (_, e) => { if (!string.IsNullOrWhiteSpace(e.Data)) _log($"[Mongo Express] {e.Data}"); };
-            _mongoExpressProcess.ErrorDataReceived += (_, e) => { if (!string.IsNullOrWhiteSpace(e.Data)) _log($"[Mongo Express] {e.Data}"); };
-            _mongoExpressProcess.Start();
-            _mongoExpressProcess.BeginOutputReadLine();
-            _mongoExpressProcess.BeginErrorReadLine();
-            _log("已启动 Mongo Express (8081)，PID=" + _mongoExpressProcess.Id + "。");
-        }
-        catch (Exception ex)
-        {
-            _log($"启动 Mongo Express 失败: {ex.Message}");
-        }
     }
 
     private void LoadVoiceWorkerEnv(ProcessStartInfo info)

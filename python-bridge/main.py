@@ -478,7 +478,7 @@ class BridgeConfig:
         "TDX_SERVER_CANDIDATES",
         "218.6.170.47:7709",
     )
-    l2_enabled: bool = env_bool("TDX_L2_ENABLED", True)
+    l2_enabled: bool = env_bool("TDX_L2_ENABLED", False)
     l2_server_host: str = os.getenv("TDX_L2_SERVER_HOST", "124.71.222.84").strip()
     l2_server_port: int = env_int("TDX_L2_SERVER_PORT", 7719)
     l2_server_candidates: str = os.getenv("TDX_L2_SERVER_CANDIDATES", DEFAULT_L2_SERVER_CANDIDATES)

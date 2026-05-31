@@ -17,6 +17,15 @@ internal static class LauncherServices
         "quant-ui"
     ];
 
+    public static readonly string[] CoreStartupKeys =
+    [
+        "mongo",
+        "redis",
+        "proxy",
+        "quant-api",
+        "bridge"
+    ];
+
     public static Dictionary<string, ManagedService> Create(string root)
     {
         var quantRoot = Path.Combine(root, "quant-board");
@@ -57,8 +66,9 @@ internal static class LauncherServices
                 "龙头看板前端",
                 5173,
                 root,
-                "cmd.exe",
-                "/c node node_modules/vite/bin/vite.js --host 127.0.0.1 --port 5173"),
+                "node",
+                "\"node_modules/vite/bin/vite.js\" --host 127.0.0.1 --port 5173",
+                envVars: NoColorEnv()),
             ["bridge"] = new("通达信行情桥", 8765, root, "python", "python-bridge/main.py"),
             ["quant-api"] = new(
                 "量化后端 API",
@@ -71,8 +81,15 @@ internal static class LauncherServices
                 "量化面板前端",
                 5174,
                 Path.Combine(quantRoot, "frontend"),
-                "cmd.exe",
-                "/c node node_modules/vite/bin/vite.js --host 127.0.0.1 --port 5174")
+                "node",
+                "\"node_modules/vite/bin/vite.js\" --host 127.0.0.1 --port 5174",
+                envVars: NoColorEnv())
         };
     }
+
+    private static Dictionary<string, string> NoColorEnv() => new()
+    {
+        ["NO_COLOR"] = "1",
+        ["FORCE_COLOR"] = "0"
+    };
 }

@@ -44,7 +44,7 @@ describe('ThemeDataService mongo mapping facade', () => {
 
   it('loads formal theme mapping from QuantBoard mongo API without writing IndexedDB', async () => {
     const fetchMock = vi.fn(async (url: string) => {
-      expect(url).toBe('http://localhost:8000/api/themes/mapping')
+      expect(url).toBe('http://localhost:3000/api/themes/mapping')
       return new Response(JSON.stringify(mongoPayload), {
         status: 200,
         headers: { 'content-type': 'application/json' },
