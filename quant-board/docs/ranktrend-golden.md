@@ -135,6 +135,8 @@ Python rankTrend 输出应对齐 `RankTrendAnalysisResult`：
 - `action`
 - `reasons`
 
+> **边界说明：** `ThemeCandidateSupport`（`mainTheme`、`themeHeat`、`themeContribution`、`themeRole`、`themeSupportScore`、`themeRiskFlags`、`themeReasons`）是回测引擎层面的信号富化字段，写入 `backtest_signals`，**不属于 RankTrend golden 输出合同**。Golden 测试不验证题材字段，题材因子不能绕过 RankTrend 独立制造买入信号。
+
 ## Golden case 类型
 
 建议维护三类 case：
@@ -289,11 +291,22 @@ Python 移植进入回测前必须满足：
 
 ## 与 V2 四层框架的关系
 
-`strategy.candidateTier` 是 Golden 输出合同中的关键字段。V2 长测框架的 Layer 1（信号有效性）直接消费此字段——`compute_signal_efficacy()` 从 `candidateTier` 读取 A_MAIN 和 N_NEUTRAL 分层，计算方向精度、二项检验和层级区分度。
+`strategy.candidateTier` 是 Golden 输出合同中的关键字段。V2 长测框架的四层决策链路对 golden 输出的消费关系如下：
+
+| V2 层 | 消费的 Golden 字段 | 用途 |
+|---|---|---|
+| Layer 1（信号有效性） | `strategy.candidateTier` | 分层比例、方向精度、二项检验、层级区分度 |
+| Layer 2（执行质量） | `decision.combinedScore`、`strategy.candidateTier` | H1/H2 偏差诊断，间接反映信号稳定性 |
+| Layer 3（实盘对齐） | 回测信号 + trade_journal | 交叉比对，不直接消费 golden 输出 |
+| Layer 4（参数优化） | Layer 1-3 结论 | 触发条件判定，不直接消费 golden 输出 |
+
+Layer 1 的 `compute_signal_efficacy()` 从 `candidateTier` 读取 `A_MAIN` 和 `N_NEUTRAL` 分层，计算方向精度、二项检验和层级区分度。
+
+Layer 2 的执行偏差诊断通过 H1/H2 绩效对比间接受 `decision.combinedScore` 和 `strategy.candidateTier` 影响——如果这两个字段的算法语义或值域发生变化，同样需要重新建立 Layer 2 基线。
 
 如果 RankTrend 算法变更导致 `candidateTier` 输出合同的字段名、值域或语义发生变化，需要同时：
 1. 更新 golden case
-2. 检查 `compute_signal_efficacy()` 是否需要适配
-3. 重新跑长测 checkpoint 建立新的 Layer 1 基线
+2. 检查 `compute_signal_efficacy()` 和 `compute_execution_quality()` 是否需要适配
+3. 重新跑长测 checkpoint 建立新的 Layer 1 和 Layer 2 基线
 
 `sampleQuality` 字段的 `tier` 子字段在较早版本的信号中有使用，但当前代码统一从顶层 `candidateTier` 读取。Golden case 应该继续验证两者的一致性。
