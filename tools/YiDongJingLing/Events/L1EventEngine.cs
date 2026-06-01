@@ -45,7 +45,6 @@ public sealed class L1EventEngine
     private readonly Dictionary<string, StockState> _states = new(StringComparer.Ordinal);
     private readonly OpeningAuctionStateStore _openingStore = new(OpeningRules);
     private readonly OpeningWeakToStrongDetector _openingDetector = new(OpeningRules);
-    private readonly HashSet<string> _tdxBlockWeakContextCodes = new(StringComparer.Ordinal);
 
     public L1EventEngine(L1EventRules? rules = null)
     {
@@ -57,18 +56,6 @@ public sealed class L1EventEngine
         _states.Clear();
         _openingStore.Clear();
         _openingDetector.Clear();
-    }
-
-    public void ReplaceTdxBlockWeakContext(IEnumerable<string> codes)
-    {
-        _tdxBlockWeakContextCodes.Clear();
-        foreach (var code in codes)
-        {
-            if (!string.IsNullOrWhiteSpace(code))
-            {
-                _tdxBlockWeakContextCodes.Add(code.Trim());
-            }
-        }
     }
 
     public void Prime(QuoteSnapshot quote)
@@ -292,8 +279,7 @@ public sealed class L1EventEngine
         var severity = result.Confidence switch
         {
             "critical" => L1EventSeverity.Critical,
-            "strong" => L1EventSeverity.Important,
-            _ => L1EventSeverity.Normal,
+            _ => L1EventSeverity.Important,
         };
         Add(
             events,
@@ -431,10 +417,7 @@ public sealed class L1EventEngine
             quote.ReceivedCount,
             quote.ElapsedMs,
             quote.SlowBatches,
-            quote.TruncatedBatches,
-            _tdxBlockWeakContextCodes.Contains(quote.Code) ? 30m : null,
-            _tdxBlockWeakContextCodes.Contains(quote.Code) ? ["tdx_block_candidate"] : Array.Empty<string>(),
-            _tdxBlockWeakContextCodes.Contains(quote.Code) ? "tdx_block" : "");
+            quote.TruncatedBatches);
     }
 
     private static string OpeningReason(OpeningWeakToStrongResult result, bool intradayUpdate = false)

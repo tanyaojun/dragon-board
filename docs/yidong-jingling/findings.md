@@ -167,7 +167,7 @@
 |------|------|
 | `auction_late_lift` 口径 | 不能只看 `09:25 -> 09:30` 两点跳空，必须保存 `09:20-09:25` 不可撤单阶段序列。V4 已在 TS/C# 两端保存 `auctionProfile`。 |
 | 临门抢筹 | `09:24-09:25` 的价格抬升和成交额增量单独计算，满足后可把 `auction_late_lift` 作为正式 variant，而不是普通增强因子。 |
-| 无量抬价 | 价格抬升但成交额未同步放大时标记 `price_lift_without_volume`，信号降为 `watch`，默认不抢语音。 |
+| 无量抬价 | 价格抬升但成交额未同步放大时标记 `price_lift_without_volume`，信号降为 `watch`；已触发的竞价弱转强仍作为监听提醒播报，风险项只用于辅助判断。 |
 | 放量不涨 | 成交额放大但价格压不动时标记 `volume_without_price_lift`，视为分歧或抛压，信号降为 `watch`。 |
 | 高位回落 | `09:20` 后出现高点但 `09:25` 未收回时标记 `auction_late_high_retreated`，不算 `auction_late_lift`。 |
 | 可撤单阶段 | `09:15-09:20` 虚高样本不参与强依据，避免把可撤单阶段的虚价作为量价确认。 |
@@ -176,7 +176,7 @@
 
 | 项目 | 发现 |
 |------|------|
-| 桌面端语音降级 | `watch` 级竞价弱转强曾被映射成 `Important`，会进入强信号语音；已改为 `watch -> Normal`，避免无量抬价/放量不涨等风险样例抢播。 |
+| 桌面端语音口径 | 已触发的竞价弱转强不是普通弱盘口风险项，`watch` 也映射为 `Important`，在“只播强信号”模式下按 proxy `voiceOwner` 仲裁后播报；dry-run 和失败/观察收口仍不播。 |
 | Web 时间戳口径 | `sourceTs` 生成的 UTC `Z` 时间曾可能按字符串 `01:xx` 比较而漏掉 09:20-09:25 窗口；已对 `Z` 时间按本地时间转换，保留 `+08:00` 业务时间按交易所时分秒解析。 |
 | 临门抢筹条件 | 原 `auction_late_lift` 用全窗口抬价或临门抬价二选一即可确认，可能把“09:20-09:24 已抬完、09:24-09:25 没继续放量”的样本误判成临门抢筹；已要求全窗口和 09:24 后量价同时满足。 |
 | 规则指纹 | 桌面端 `ConfigHash` 原来只包含旧规则字段，新增量价阈值变化不会反映；已改为与 Web 同字段集合、同 FNV-1a 文本口径，并增加 fixture hash 回归测试。 |
@@ -203,14 +203,14 @@
 | 共享 fixture | 已补 `auction_coverage_low`、`quote_time_untrusted`、`auction_time_untrusted`、`auction_amount_missing`、`amount_regressed`、`low_liquidity_jump`、`opening_support_lost` 样例，并由 TS/C# 同源测试断言。 |
 | 仍待实盘确认 | 代码门禁和状态栏已完成；真实早盘覆盖率、端到端延迟和 100-300 只候选池下 bridge 稳定性仍归入 V3 Phase 6 盘中验证。 |
 
-2026-05-23 TDX 自选股前日弱势上下文落地：
+2026-05-23 TDX 自选股前日弱势上下文落地（后续已废弃自动注入，TDX 自选股仅保留为监控范围）：
 
 | 项目 | 发现 |
 |------|------|
 | 上游边界 | `TDX自选股` 复用现有 `.blk` 监控池，不新增行情源、不新增第二套股池 UI、不做全市场扫描。 |
-| 上下文语义 | 桌面端对 `TDX自选股` 中的候选股注入 `previousWeakScore = 30`、`previousWeakSignals = ["tdx_block_candidate"]`、`previousWeakSource = "tdx_block"`；该分数只代表人工候选证据，不等同于结构化炸板/烂板。 |
+| 上下文语义 | 已废弃 `TDX自选股` 自动注入 `previousWeakScore = 30` 的做法；股票池只代表用户选择的监听范围，前日炸板/烂板等候选由用户维护的 `.blk` 板块表达。 |
 | 检测规则 | `strong_open_board_attempt` 的弱势前置条件已扩展为当日竞价弱、官方开盘弱、或 `previousWeakScore >= previousWeakScoreMin`。默认阈值为 30。 |
-| 兼容性 | 缺少 `previousWeak*` 字段时保持旧行为；普通无上下文开盘冲板仍返回 `weak_precondition_missing`。 |
+| 兼容性 | 缺少 `previousWeak*` 字段时保持监听；普通无上下文开盘冲板可输出观察信号，并以 `weak_precondition_missing` 标记风险。 |
 | 复盘字段 | 桌面导出已追加前日弱势分、来源和标签；proxy/Web canonical signal 使用既有 JSON 透传，不需要新增 API。 |
 
 2026-05-24 异动规则文档和设置页注解：
@@ -241,7 +241,7 @@
 | 双基线落地 | TS/C# 均已从“首尾样本画像”改为显式 `initialBaselineStart/End`、`auctionLateLiftStart`、`auctionStart/End` 三段选样；乱序补到的 `09:20` 样本只补画像，不回滚已锁定的 `09:25` 确定基线。 |
 | 成交额阈值 | `minCurrentAmount` 和 `minAmountDelta` 不再作为强播硬前置；新增 `openingLiquidityMinAmount=500万` 作为最低流动性保护，旧阈值只影响 `openingAmount` 评分。 |
 | 量价确认 | 新增 `auctionAmountLiftRatio`、`lateAmountLiftRatio`、`priceVolumeConfirmed`；`auction_late_lift` 依赖相对量价确认，不再依赖固定 `800万/500万` 绝对增量。 |
-| 降级/拒绝 | 缺画像标记 `auction_profile_missing` 并降为 `watch`；缺 09:20 标记 `auction_initial_baseline_missing`；有完整画像但无价量核心时拒绝为 `auction_price_volume_core_missing`。 |
+| 降级/观察 | 缺画像标记 `auction_profile_missing` 并降为 `watch`；缺 09:20 标记 `auction_initial_baseline_missing`；有完整画像但无价量核心时输出观察信号并标记 `auction_price_volume_core_missing`。 |
 | 风险扣分 | 量价背离、无量抬价、放量不涨、高位回落属于同一画像风险组，避免同一事实重复扣分到 0。 |
 | 规则指纹 | V5 新 hash 为 `owts-08f44efb`，TS/C# 已同步字段集合和固定断言。 |
 | 代码复核修正 | 复核发现 `HasOpeningCoreEvidence` 不能用绝对值判断，否则下跌/缩量会被误当核心；已改为只接受正向抬升/放量，并新增 `v5-negative-auction-core-rejected`。 |

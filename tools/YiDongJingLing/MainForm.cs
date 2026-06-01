@@ -934,8 +934,6 @@ public sealed class MainForm : Form
         var loadResult = await LoadSelectedCodesAsync();
         var codes = loadResult.Codes;
         _watchedCodes = new HashSet<string>(codes, StringComparer.Ordinal);
-        _eventEngine.ReplaceTdxBlockWeakContext(
-            _settings.StockPoolSource == StockPoolSource.TdxBlock ? codes : Array.Empty<string>());
         if (resetRuntimeState)
         {
             ClearRuntimeState();
@@ -1109,8 +1107,6 @@ public sealed class MainForm : Form
         {
             var codes = (await LoadSelectedCodesAsync()).Codes;
             _watchedCodes = new HashSet<string>(codes, StringComparer.Ordinal);
-            _eventEngine.ReplaceTdxBlockWeakContext(
-                _settings.StockPoolSource == StockPoolSource.TdxBlock ? codes : Array.Empty<string>());
             if (codes.Count == 0)
             {
                 _statusLabel.Text = "未选择有效股票";
@@ -1223,8 +1219,19 @@ public sealed class MainForm : Form
 
             if (!TradingSession.IsContinuousAuction(normalizedQuote.SourceTime))
             {
-                _eventEngine.Prime(normalizedQuote);
-                skippedOutsideSession++;
+                if (IsOpeningWeakToStrongPreopenWindow(normalizedQuote.SourceTime))
+                {
+                    _eventEngine.Prime(normalizedQuote);
+                    var preopenHistory = _quoteStore.GetHistory(normalizedQuote.Code);
+                    allEvents.AddRange(_eventEngine
+                        .Evaluate(normalizedQuote, previous, preopenHistory)
+                        .Where(item => item.Type == L1EventType.OpeningWeakToStrong));
+                }
+                else
+                {
+                    _eventEngine.Prime(normalizedQuote);
+                    skippedOutsideSession++;
+                }
                 continue;
             }
 
@@ -1956,6 +1963,12 @@ public sealed class MainForm : Form
     {
         var time = timestamp.ToLocalTime().TimeOfDay;
         return time >= TimeSpan.Parse("09:24:50") && time <= TimeSpan.Parse("09:25:10");
+    }
+
+    public static bool IsOpeningWeakToStrongPreopenWindow(DateTimeOffset timestamp)
+    {
+        var time = timestamp.ToLocalTime().TimeOfDay;
+        return time >= TimeSpan.Parse("09:25:00") && time <= TimeSpan.Parse("09:29:59");
     }
 
     public static List<string> ResolveSelectedBlockFilesForSave(

@@ -546,6 +546,61 @@ Run("Opening weak-to-strong detector includes 09:25:10 in preopen candidate wind
     AssertEqual("preopen_candidate", result.IntradayOutcome, "09:25:10 preopen outcome");
 });
 
+Run("Opening weak-to-strong detector emits preopen candidate from 09:25 final auction quote", () =>
+{
+    var fixturePath = Path.Combine(
+        ProjectRootLocator.Find(),
+        "docs",
+        "yidong-jingling",
+        "fixtures",
+        "opening-weak-to-strong-cases.json");
+    using var document = JsonDocument.Parse(File.ReadAllText(fixturePath));
+    var rules = OpeningWeakToStrongRules.FromJson(document.RootElement.GetProperty("rules"));
+    var store = new OpeningAuctionStateStore(rules);
+    var detector = new OpeningWeakToStrongDetector(rules);
+
+    var q0920 = OpeningQuote(
+        "002579",
+        "中京电子",
+        "2026-06-01T09:20:05+08:00",
+        14.6m,
+        17.15m,
+        2_000_000m,
+        1_000_000m);
+    var q0924 = OpeningQuote(
+        "002579",
+        "中京电子",
+        "2026-06-01T09:24:05+08:00",
+        15m,
+        17.15m,
+        12_000_000m,
+        1_000_000m);
+    var q0925 = OpeningQuote(
+        "002579",
+        "中京电子",
+        "2026-06-01T09:25:00+08:00",
+        15.46m,
+        17.15m,
+        20_650_000m,
+        1_000_000m);
+
+    store.Capture(q0920);
+    store.Capture(q0924);
+    store.Capture(q0925);
+    var result = detector.Evaluate(q0925, store.GetBaseline(q0925.Code, q0925.At));
+
+    AssertTrue(result.Triggered, "09:25 final auction quote triggers preopen candidate");
+    AssertEqual("auction_late_lift", result.Variant, "002579 preopen variant");
+    AssertEqual("preopen_candidate", result.IntradayStatus, "002579 preopen status");
+    AssertTrue(result.PriceVolumeConfirmed == true, "002579 price-volume confirmed");
+    AssertEqual(-9.85m, result.AuctionPct, "002579 auction pct");
+    AssertEqual(5.01m, result.AuctionPriceLiftPctPoint, "002579 auction price lift");
+    AssertEqual(2.68m, result.LatePriceLiftPctPoint, "002579 late price lift");
+    AssertTrue(
+        result.RiskFlags.All(item => item.Key != "auction_late_high_retreated"),
+        "002579 final auction quote is not high-retreated");
+});
+
 Run("Opening weak-to-strong detector does not confirm preopen candidate without pending check", () =>
 {
     var fixturePath = Path.Combine(
@@ -721,10 +776,9 @@ Run("Event engine emits opening weak-to-strong intraday outcome update", () =>
     AssertTrue(update.Reason.Contains("盘中失败"), "intraday failure reason");
 });
 
-Run("Event engine uses TDX block context for opening board attempt", () =>
+Run("Event engine does not inject TDX block context as previous weak evidence", () =>
 {
     var engine = new L1EventEngine();
-    engine.ReplaceTdxBlockWeakContext(["600010"]);
     var auction = Quote(
         "600010",
         "TDX候选",
@@ -744,15 +798,23 @@ Run("Event engine uses TDX block context for opening board attempt", () =>
 
     engine.Prime(auction);
     var events = engine.Evaluate(open, auction, [auction, open]);
-    var signal = events.Single(item => item.Type == L1EventType.OpeningWeakToStrong).OpeningSignal;
 
-    AssertEqual("strong_open_board_attempt", signal?.Variant, "tdx context variant");
-    AssertEqual(30m, signal?.PreviousWeakScore ?? 0m, "tdx context score");
-    AssertEqual("tdx_block", signal?.PreviousWeakSource, "tdx context source");
-    AssertTrue(signal?.Factors.Any(item => item.Key == "previousWeakContext") ?? false, "previous context factor");
+    var signal = events.Single(item => item.Type == L1EventType.OpeningWeakToStrong);
+    AssertTrue(
+        signal.OpeningSignal?.PreviousWeakScore is null,
+        "TDX block selection must not inject previous weak score");
+    AssertTrue(
+        signal.OpeningSignal?.PreviousWeakSignals.Count == 0,
+        "TDX block selection must not inject previous weak signals");
+    AssertTrue(
+        string.IsNullOrWhiteSpace(signal.OpeningSignal?.PreviousWeakSource),
+        "TDX block selection must not inject previous weak source");
+    AssertTrue(
+        signal.OpeningSignal?.RiskFlags.Any(item => item.Key == "weak_precondition_missing") == true,
+        "ordinary strong open is reported as watch risk without injected previous weak evidence");
 });
 
-Run("Event engine keeps watch opening weak-to-strong out of strong voice policy", () =>
+Run("Event engine speaks watch opening weak-to-strong in strong voice policy", () =>
 {
     var engine = new L1EventEngine();
     var first = Quote(
@@ -796,8 +858,8 @@ Run("Event engine keeps watch opening weak-to-strong out of strong voice policy"
     var signal = events.Single(item => item.Type == L1EventType.OpeningWeakToStrong);
 
     AssertEqual("watch", signal.OpeningSignal?.Confidence, "watch confidence");
-    AssertEqual(L1EventSeverity.Normal, signal.Severity, "watch opening severity");
-    AssertEqual(0, EventVoicePolicy.FilterForVoice([signal], VoiceMode.StrongOnly).Count, "watch opening not strong voice");
+    AssertEqual(L1EventSeverity.Important, signal.Severity, "watch opening severity");
+    AssertEqual(1, EventVoicePolicy.FilterForVoice([signal], VoiceMode.StrongOnly).Count, "watch opening strong voice");
     AssertEqual(DateTimeOffset.Parse("2026-05-22T09:20:05+08:00"), signal.OpeningSignal?.InitialBaselineAt, "watch initial baseline at");
     AssertEqual(9.8m, signal.OpeningSignal?.InitialBaselinePrice, "watch initial baseline price");
     AssertEqual(DateTimeOffset.Parse("2026-05-22T09:24:10+08:00"), signal.OpeningSignal?.LateBaselineAt, "watch late baseline at");
@@ -1253,6 +1315,18 @@ Run("Main form formats opening auction coverage status", () =>
     AssertTrue(
         !MainForm.IsOpeningAuctionCoverageWindow(DateTimeOffset.Parse("2026-05-22T09:30:00+08:00")),
         "auction coverage window excludes 09:30");
+    AssertTrue(
+        MainForm.IsOpeningWeakToStrongPreopenWindow(DateTimeOffset.Parse("2026-05-22T09:25:00+08:00")),
+        "preopen weak-to-strong window includes 09:25:00");
+    AssertTrue(
+        MainForm.IsOpeningWeakToStrongPreopenWindow(DateTimeOffset.Parse("2026-05-22T09:25:10+08:00")),
+        "preopen weak-to-strong window includes 09:25:10");
+    AssertTrue(
+        MainForm.IsOpeningWeakToStrongPreopenWindow(DateTimeOffset.Parse("2026-05-22T09:29:59+08:00")),
+        "preopen weak-to-strong window includes 09:29:59");
+    AssertTrue(
+        !MainForm.IsOpeningWeakToStrongPreopenWindow(DateTimeOffset.Parse("2026-05-22T09:30:00+08:00")),
+        "preopen weak-to-strong window excludes 09:30");
     AssertEqual(
         "竞价覆盖 90% 90/100 慢2 截1 演练",
         MainForm.OpeningCoverageStatusText("90%", "90", "100", " 慢2 截1", " 演练"),
@@ -1539,9 +1613,9 @@ Run("Event export includes opening weak-to-strong replay fields", () =>
             420,
             1,
             2,
-            30m,
-            ["tdx_block_candidate"],
-            "tdx_block",
+            null,
+            [],
+            "",
             0.97m,
             "pending",
             "pending",
@@ -1586,7 +1660,6 @@ Run("Event export includes opening weak-to-strong replay fields", () =>
     AssertTrue(lines[1].Contains("5000万"), "amount delta exported");
     AssertTrue(lines[1].Contains("128"), "received count exported");
     AssertTrue(lines[1].Contains("0.97"), "coverage ratio exported");
-    AssertTrue(lines[1].Contains("tdx_block"), "previous weak context exported");
     AssertTrue(lines[1].Contains("amount_regressed"), "risk flag exported");
 });
 
@@ -1676,6 +1749,30 @@ static QuoteSnapshot Quote(
 }
 
 static QuoteLevel Level(decimal price, decimal volume) => new(price, volume);
+
+static OpeningWeakToStrongQuote OpeningQuote(
+    string code,
+    string name,
+    string at,
+    decimal lastPrice,
+    decimal preClose,
+    decimal amount,
+    decimal volume)
+{
+    var timestamp = DateTimeOffset.Parse(at);
+    return new OpeningWeakToStrongQuote(
+        code,
+        name,
+        timestamp,
+        lastPrice,
+        preClose,
+        0m,
+        amount,
+        volume,
+        0m,
+        timestamp,
+        timestamp);
+}
 
 static EventRecord Event(string code, string name, L1EventType type, string typeName, DateTimeOffset timestamp)
 {

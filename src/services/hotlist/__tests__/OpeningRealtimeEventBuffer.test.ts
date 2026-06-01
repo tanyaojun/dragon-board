@@ -28,13 +28,13 @@ describe('OpeningRealtimeEventBuffer', () => {
 
     const events = sample!.quotes.flatMap(quote => buffer.acceptQuote(quote))
 
-    expect(events).toHaveLength(1)
+    expect(events).toHaveLength(2)
     expect(events[0]).toMatchObject({
       category: 'stock',
       code: '002552',
       name: '宝鼎科技',
       type: 12001,
-      typeName: '竞价弱转强',
+      typeName: '竞价弱转强候选',
       direction: 'up',
       severity: 'important',
       matchedHotStock: false,
@@ -43,9 +43,11 @@ describe('OpeningRealtimeEventBuffer', () => {
       source: 'opening_weak_to_strong_v3',
       signal: {
         signalType: 'opening_weak_to_strong',
-        variant: 'auction_gap_reversal',
+        variant: 'auction_late_lift',
+        intradayStatus: 'preopen_candidate',
       },
     })
+    expect(events[1].id).toBe('opening_weak_to_strong:2026-05-22:002552:pending')
   })
 
   it('allows same stock to emit again on the next trading day', () => {
@@ -66,9 +68,10 @@ describe('OpeningRealtimeEventBuffer', () => {
       bridgeTs: quote.bridgeTs?.replace('2026-05-22', '2026-05-23'),
     }))
 
-    expect(firstDay).toHaveLength(1)
-    expect(secondDay).toHaveLength(1)
-    expect(secondDay[0].id).toBe('opening_weak_to_strong:2026-05-23:002552:pending')
+    expect(firstDay).toHaveLength(2)
+    expect(secondDay).toHaveLength(2)
+    expect(secondDay[0].id).toBe('opening_weak_to_strong:2026-05-23:002552:preopen_candidate')
+    expect(secondDay[1].id).toBe('opening_weak_to_strong:2026-05-23:002552:pending')
   })
 
   it('emits separate action events for preopen candidate and opening upgrade', () => {
@@ -144,9 +147,59 @@ describe('OpeningRealtimeEventBuffer', () => {
       strong,
     ].flatMap(quote => buffer.acceptQuoteWithSignals(quote))
 
-    expect(events).toHaveLength(2)
-    expect(events[0].signal.confidence).toBe('watch')
-    expect(events[1].signal.confidence).toBe('strong')
+    expect(events).toHaveLength(3)
+    expect(events[0].signal.intradayStatus).toBe('preopen_candidate')
+    expect(events[1].signal.confidence).toBe('watch')
+    expect(events[1].event.severity).toBe('important')
+    expect(events[2].signal.confidence).toBe('critical')
+  })
+
+  it('emits a 09:25 preopen candidate for deep-water price-volume lift', () => {
+    const fixture = loadFixture()
+    const buffer = new OpeningRealtimeEventBuffer({
+      rules: fixture.rules,
+      ruleVersion: fixture.ruleVersion,
+    })
+    const base = {
+      code: '002579',
+      name: '中京电子',
+      preClose: 17.15,
+      open: 0,
+      volume: 1_000_000,
+    }
+
+    const events = [
+      {
+        ...base,
+        at: '2026-06-01T09:20:05+08:00',
+        lastPrice: 14.6,
+        amount: 2_000_000,
+        capturedAt: '2026-06-01T09:20:05+08:00',
+        bridgeTs: '2026-06-01T09:20:05+08:00',
+      },
+      {
+        ...base,
+        at: '2026-06-01T09:24:05+08:00',
+        lastPrice: 15,
+        amount: 12_000_000,
+        capturedAt: '2026-06-01T09:24:05+08:00',
+        bridgeTs: '2026-06-01T09:24:05+08:00',
+      },
+      {
+        ...base,
+        at: '2026-06-01T09:25:00+08:00',
+        lastPrice: 15.46,
+        amount: 20_650_000,
+        capturedAt: '2026-06-01T09:25:00+08:00',
+        bridgeTs: '2026-06-01T09:25:00+08:00',
+      },
+    ].flatMap(quote => buffer.acceptQuoteWithSignals(quote))
+
+    expect(events).toHaveLength(1)
+    expect(events[0].event.id).toBe('opening_weak_to_strong:2026-06-01:002579:preopen_candidate')
+    expect(events[0].event.severity).toBe('important')
+    expect(events[0].signal.priceVolumeConfirmed).toBe(true)
+    expect(events[0].signal.auctionPct).toBeCloseTo(-9.85)
   })
 
   it('emits intraday confirmation and failure updates after the opening trigger', () => {
@@ -182,12 +235,13 @@ describe('OpeningRealtimeEventBuffer', () => {
     ].flatMap(quote => buffer.acceptQuoteWithSignals(quote))
 
     expect(events.map(item => item.signal.intradayStatus)).toEqual([
+      'preopen_candidate',
       'pending',
       'confirmed',
       'failed',
     ])
-    expect(events[1].signal.intradayOutcome).toBe('confirmed_strong')
-    expect(events[2].signal.intradayOutcome).toBe('failed_open_dump')
-    expect(events[2].signal.riskFlags.map(item => item.key)).toContain('intraday_open_dump')
+    expect(events[2].signal.intradayOutcome).toBe('confirmed_strong')
+    expect(events[3].signal.intradayOutcome).toBe('failed_open_dump')
+    expect(events[3].signal.riskFlags.map(item => item.key)).toContain('intraday_open_dump')
   })
 })

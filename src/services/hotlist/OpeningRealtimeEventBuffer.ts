@@ -90,7 +90,7 @@ function toHotStockEvent(signal: OpeningWeakToStrongSignal): HotStockAbnormalEve
     type: OPENING_WEAK_TO_STRONG_EVENT_TYPE,
     typeName,
     direction: 'up',
-    severity: signal.confidence === 'watch' ? 'normal' : 'important',
+    severity: 'important',
     timestamp: Number.isFinite(timestamp) ? timestamp : Date.now(),
     code: signal.code,
     name: signal.name,

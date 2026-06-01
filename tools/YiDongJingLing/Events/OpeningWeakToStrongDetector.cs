@@ -639,8 +639,7 @@ public sealed class OpeningAuctionStateStore
                 totalAmountExpanded &&
                 latePriceLifted &&
                 lateAmountExpanded &&
-                !highRetreated &&
-                finalPct >= rules.AuctionLateLiftFinalMinPct,
+                !highRetreated,
             riskFlags);
     }
 
@@ -668,7 +667,7 @@ public sealed class OpeningWeakToStrongDetector
     private const string DisplayName = "竞价弱转强";
     private const string LiquidityTierVersion = "liquidity-review.v1";
     private const decimal HotAmount = 100_000_000m;
-    private const string PreopenCandidateStart = "09:25:10";
+    private const string PreopenCandidateStart = "09:25:00";
     private const string IntradayConfirmEnd = "10:00:00";
     private const decimal IntradayConfirmAdvancePctPoint = 1m;
     private readonly OpeningWeakToStrongRules _rules;
@@ -734,24 +733,17 @@ public sealed class OpeningWeakToStrongDetector
             (officialOpenPct.HasValue && officialOpenPct.Value <= _rules.AuctionWeakMaxPct) ||
             previousWeakPrecondition;
 
-        if (quote.Amount < _rules.OpeningLiquidityMinAmount)
-            return Rejected(quote, baseline, "opening_amount_too_small");
-        if (quote.Open > 0m && quote.LastPrice < Math.Max(quote.PreClose, quote.Open * _rules.OpeningSupportOpenRatio))
-            return Rejected(quote, baseline, "opening_support_lost");
-
         var strongOpenCandidate =
             firstWindowPct >= _rules.StrongOpenFirstWindowMinPct &&
             limitDistancePct.HasValue &&
             limitDistancePct.Value <= _rules.NearLimitDistancePct;
-        if (strongOpenCandidate && !weakPrecondition)
-            return Rejected(quote, baseline, "weak_precondition_missing");
 
         string? variant = null;
         var auctionProfile = baseline.AuctionProfile;
         var hasAuctionProfile = auctionProfile?.InitialAt is not null && auctionProfile.FinalAt is not null;
         var priceVolumeConfirmed = auctionProfile?.PriceVolumeConfirmed == true;
         var canStrongBroadcast = hasAuctionProfile && priceVolumeConfirmed;
-        if (strongOpenCandidate && weakPrecondition)
+        if (strongOpenCandidate)
         {
             variant = "strong_open_board_attempt";
         }
@@ -775,12 +767,14 @@ public sealed class OpeningWeakToStrongDetector
         }
 
         if (variant is null) return Rejected(quote, baseline, "variant_not_matched");
-        if (hasAuctionProfile && !canStrongBroadcast && !HasOpeningCoreEvidence(auctionProfile))
-            return Rejected(quote, baseline, "auction_price_volume_core_missing");
 
         var quality = OpeningQuality(quote, baseline);
         var riskKeys = new List<string>(auctionProfile?.RiskFlags ?? []);
         riskKeys.AddRange(quality.RiskKeys);
+        if (quote.Amount < _rules.OpeningLiquidityMinAmount) riskKeys.Add("opening_amount_too_small");
+        if (quote.Open > 0m && quote.LastPrice < Math.Max(quote.PreClose, quote.Open * _rules.OpeningSupportOpenRatio))
+            riskKeys.Add("opening_support_lost");
+        if (strongOpenCandidate && !weakPrecondition) riskKeys.Add("weak_precondition_missing");
         if (!hasAuctionProfile)
         {
             if (auctionProfile is null) riskKeys.Add("auction_profile_missing");
@@ -791,6 +785,8 @@ public sealed class OpeningWeakToStrongDetector
         {
             riskKeys.Add("auction_price_volume_unverified");
         }
+        if (hasAuctionProfile && !canStrongBroadcast && !HasOpeningCoreEvidence(auctionProfile))
+            riskKeys.Add("auction_price_volume_core_missing");
         if (baseline.AuctionAmount <= 0m) riskKeys.Add("auction_amount_missing");
         else if (quote.Amount < baseline.AuctionAmount) riskKeys.Add("amount_regressed");
         if (quote.Volume > 0m && quote.Volume < _rules.MinCurrentVolume) riskKeys.Add("low_liquidity_jump");
@@ -899,16 +895,15 @@ public sealed class OpeningWeakToStrongDetector
 
         var auctionProfile = baseline.AuctionProfile;
         var hasAuctionProfile = auctionProfile?.InitialAt is not null && auctionProfile.FinalAt is not null;
-        if (!hasAuctionProfile || auctionProfile?.PriceVolumeConfirmed != true)
+        if (!hasAuctionProfile || auctionProfile is null)
             return Rejected(quote, baseline, "preopen_candidate_unconfirmed");
 
         var quality = OpeningQuality(quote, baseline);
         var riskKeys = new List<string>(auctionProfile.RiskFlags);
         riskKeys.AddRange(quality.RiskKeys);
+        if (auctionProfile.PriceVolumeConfirmed != true) riskKeys.Add("auction_price_volume_unverified");
         if (baseline.AuctionAmount <= 0m) riskKeys.Add("auction_amount_missing");
         var riskFlags = riskKeys.Distinct(StringComparer.Ordinal).Select(RiskFlag).ToArray();
-        if (riskFlags.Length > 0)
-            return Rejected(quote, baseline, "preopen_candidate_risk");
 
         var auctionPct = baseline.AuctionPct;
         var amount = baseline.AuctionAmount;
@@ -998,7 +993,7 @@ public sealed class OpeningWeakToStrongDetector
             "竞价量价齐升，等待开盘承接验证",
             quote.DryRun || quality.DryRun,
             factors,
-            [],
+            riskFlags,
             null,
             _ruleVersion,
             ConfigHash(_rules));

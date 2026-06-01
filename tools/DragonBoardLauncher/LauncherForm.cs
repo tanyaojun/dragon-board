@@ -7,6 +7,7 @@ internal sealed class LauncherForm : Form
 {
     private const string AutoStartName = "DragonBoardLauncher";
     private const int MaxLogLines = 300;
+    private const int MaxLogLineChars = 600;
 
     private readonly string _root;
     private readonly Dictionary<string, ManagedService> _services;
@@ -518,6 +519,7 @@ internal sealed class LauncherForm : Form
     private void Log(string message)
     {
         if (IsDisposed) return;
+        if (!ShouldShowLog(message)) return;
 
         if (InvokeRequired)
         {
@@ -526,6 +528,33 @@ internal sealed class LauncherForm : Form
             return;
         }
 
-        _logView.Append(_log, $"[{DateTime.Now:HH:mm:ss}] {message}");
+        _logView.Append(_log, $"[{DateTime.Now:HH:mm:ss}] {TrimLogLine(message)}");
+    }
+
+    private static bool ShouldShowLog(string message)
+    {
+        if (string.IsNullOrWhiteSpace(message)) return false;
+
+        var text = message.Trim();
+        return ContainsAny(text,
+            "启动管理器", "项目目录", "自启动",
+            "已启动", "启动 ", "启动失败",
+            "已停止", "停止 ", "停止失败",
+            "已退出", "退出", "重启", "已终止",
+            "失败", "异常", "警告", "错误", "无法", "缺失", "不存在", "仍在运行",
+            "WARNING", "[WARN", " WARN ", "ERROR", "[ERROR", "ERR_", "Exception", "Traceback");
+    }
+
+    private static bool ContainsAny(string text, params string[] needles)
+    {
+        return needles.Any(needle => text.Contains(needle, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string TrimLogLine(string message)
+    {
+        var text = message.Trim();
+        if (text.Length <= MaxLogLineChars) return text;
+
+        return text[..MaxLogLineChars] + "...";
     }
 }

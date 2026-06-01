@@ -114,7 +114,7 @@
       ],
       "expected": {
         "triggered": true,
-        "variant": "auction_gap_reversal",
+        "variant": "auction_late_lift",
         "confidence": "critical",
         "scoreRange": [80, 100],
         "jumpPctPointRange": [4.9, 5.1],
@@ -269,12 +269,12 @@
       }
     },
     {
-      "caseId": "strong-open-board-attempt-with-tdx-previous-context",
-      "description": "当日竞价和官方开盘都不弱，但 TDX 自选股上下文提供前日弱势证据，允许作为弱转强冲板形态。",
+      "caseId": "strong-open-board-attempt-with-explicit-previous-context",
+      "description": "当日竞价和官方开盘都不弱，但上游显式提供前日弱势证据，允许作为弱转强冲板形态。",
       "quotes": [
         {
           "code": "600010",
-          "name": "TDX候选",
+          "name": "前弱候选",
           "at": "2026-05-22T09:20:05+08:00",
           "lastPrice": 9.95,
           "preClose": 10,
@@ -284,12 +284,12 @@
           "capturedAt": "2026-05-22T09:20:05+08:00",
           "bridgeTs": "2026-05-22T09:20:05+08:00",
           "previousWeakScore": 30,
-          "previousWeakSignals": ["tdx_block_candidate"],
-          "previousWeakSource": "tdx_block"
+          "previousWeakSignals": ["manual_previous_weak"],
+          "previousWeakSource": "explicit_previous_weak"
         },
         {
           "code": "600010",
-          "name": "TDX候选",
+          "name": "前弱候选",
           "at": "2026-05-22T09:24:05+08:00",
           "lastPrice": 10.08,
           "preClose": 10,
@@ -299,12 +299,12 @@
           "capturedAt": "2026-05-22T09:24:05+08:00",
           "bridgeTs": "2026-05-22T09:24:05+08:00",
           "previousWeakScore": 30,
-          "previousWeakSignals": ["tdx_block_candidate"],
-          "previousWeakSource": "tdx_block"
+          "previousWeakSignals": ["manual_previous_weak"],
+          "previousWeakSource": "explicit_previous_weak"
         },
         {
           "code": "600010",
-          "name": "TDX候选",
+          "name": "前弱候选",
           "at": "2026-05-22T09:25:00+08:00",
           "lastPrice": 10.18,
           "preClose": 10,
@@ -314,12 +314,12 @@
           "capturedAt": "2026-05-22T09:25:00+08:00",
           "bridgeTs": "2026-05-22T09:25:00+08:00",
           "previousWeakScore": 30,
-          "previousWeakSignals": ["tdx_block_candidate"],
-          "previousWeakSource": "tdx_block"
+          "previousWeakSignals": ["manual_previous_weak"],
+          "previousWeakSource": "explicit_previous_weak"
         },
         {
           "code": "600010",
-          "name": "TDX候选",
+          "name": "前弱候选",
           "at": "2026-05-22T09:30:20+08:00",
           "lastPrice": 10.86,
           "preClose": 10,
@@ -330,8 +330,8 @@
           "capturedAt": "2026-05-22T09:30:20+08:00",
           "bridgeTs": "2026-05-22T09:30:20+08:00",
           "previousWeakScore": 30,
-          "previousWeakSignals": ["tdx_block_candidate"],
-          "previousWeakSource": "tdx_block"
+          "previousWeakSignals": ["manual_previous_weak"],
+          "previousWeakSource": "explicit_previous_weak"
         }
       ],
       "expected": {
@@ -344,7 +344,7 @@
     },
     {
       "caseId": "ordinary-board-attempt-without-weak-precondition",
-      "description": "竞价已经大幅高开，不能伪装成弱转强。",
+      "description": "竞价已经大幅高开，进入观察但标记缺少前弱上下文。",
       "quotes": [
         {
           "code": "600002",
@@ -373,9 +373,11 @@
         }
       ],
       "expected": {
-        "triggered": false,
-        "invalidReason": "weak_precondition_missing",
-        "riskFlags": ["weak_precondition_missing"]
+        "triggered": true,
+        "variant": "strong_open_board_attempt",
+        "confidence": "watch",
+        "scoreRange": [1, 59],
+        "riskFlags": ["weak_precondition_missing", "auction_profile_missing"]
       }
     },
     {
@@ -681,8 +683,8 @@
       }
     },
     {
-      "caseId": "v5-no-auction-core-even-huge-open-amount-rejected",
-      "description": "有09:20-09:25样本但竞价价量核心完全不成立，不能靠09:30巨额成交补成弱转强。",
+      "caseId": "v5-no-auction-core-even-huge-open-amount-watch",
+      "description": "有09:20-09:25样本但竞价价量核心完全不成立，只靠09:30巨额成交时进入观察并标记风险。",
       "quotes": [
         {
           "code": "002571",
@@ -734,8 +736,10 @@
         }
       ],
       "expected": {
-        "triggered": false,
-        "invalidReason": "auction_price_volume_core_missing",
+        "triggered": true,
+        "variant": "auction_gap_reversal",
+        "confidence": "watch",
+        "scoreRange": [0, 59],
         "riskFlags": ["auction_price_volume_core_missing"]
       }
     },
@@ -789,8 +793,8 @@
       }
     },
     {
-      "caseId": "v5-negative-auction-core-rejected",
-      "description": "09:20-09:25价格下行且成交额收缩，即使09:30巨量拉升，也不能把负向变化当作竞价核心。",
+      "caseId": "v5-negative-auction-core-watch",
+      "description": "09:20-09:25价格下行且成交额收缩，即使09:30巨量拉升，也只能观察并标记负向竞价核心。",
       "quotes": [
         {
           "code": "002573",
@@ -842,8 +846,10 @@
         }
       ],
       "expected": {
-        "triggered": false,
-        "invalidReason": "auction_price_volume_core_missing",
+        "triggered": true,
+        "variant": "auction_gap_reversal",
+        "confidence": "watch",
+        "scoreRange": [0, 59],
         "riskFlags": ["auction_price_volume_core_missing"]
       }
     },
@@ -1517,8 +1523,8 @@
       }
     },
     {
-      "caseId": "opening-support-lost-rejected",
-      "description": "开盘后快速跌回开盘/昨收支撑下方时拒绝弱转强信号。",
+      "caseId": "opening-support-lost-watch",
+      "description": "开盘后快速跌回开盘/昨收支撑下方时进入观察并标记支撑跌破。",
       "quotes": [
         {
           "code": "002566",
@@ -1536,7 +1542,7 @@
           "code": "002566",
           "name": "支撑跌破",
           "at": "2026-05-22T09:30:30+08:00",
-          "lastPrice": 10,
+          "lastPrice": 10.11,
           "preClose": 10,
           "open": 10.4,
           "amount": 50000000,
@@ -1546,8 +1552,10 @@
         }
       ],
       "expected": {
-        "triggered": false,
-        "invalidReason": "opening_support_lost",
+        "triggered": true,
+        "variant": "low_open_red_reversal",
+        "confidence": "watch",
+        "scoreRange": [0, 59],
         "riskFlags": ["opening_support_lost"]
       }
     },

@@ -40,7 +40,7 @@
 
 - **目标：** 按用户反馈，把 V6 从“盘后/人工复盘字段”修正为 `09:20-10:00` 盘中确认闭环；异动精灵/异动雷达服务盘中行动提示，不把人工复盘作为信号前置条件。
 - **已实现：**
-  - 文档 V6 主线改为：`09:20-09:25` 保存不可撤单阶段量价证据，`09:25:10-09:29:59` 输出严格候选 `preopen_candidate`，`09:30-09:35` 升级 `pending`，`09:35-10:00` 自动更新 `confirmed/failed`。
+  - 文档 V6 主线改为：`09:20-09:25` 保存不可撤单阶段量价证据，`09:25:00-09:29:59` 输出严格候选 `preopen_candidate`，`09:30-09:35` 升级 `pending`，`09:35-10:00` 自动更新 `confirmed/failed`。
   - TS/C# `OpeningWeakToStrongSignal` 增加 `intradayStatus/intradayOutcome/intradayStatusAt/intradayPrice/intradayPct/intradayAmount/intradayNote`。
   - TS/C# 检测器同一 `opening_weak_to_strong` 信号支持 9:25 早期候选、9:30 开盘承接、盘中确认成功和跌破支撑失败更新；确认成功必须已通过 `09:30-09:35` 的 `pending` 开盘承接，早期候选不能绕过开盘验证直接确认。
   - Web 实时缓冲和 proxy canonical 选择改为盘中结果优先，允许 `failed` 覆盖早先 `strong/pending`；语音改为按行动阶段授权，`preopen_candidate` 和 `pending` 可各播一次，同阶段只播一次。
@@ -81,7 +81,7 @@
   - TS/C# `OpeningAuctionStateStore` 显式输出 `09:20` 初始基线、`09:24` 临门基线、`09:25` 确定基线。
   - `minCurrentAmount/minAmountDelta` 不再硬拒绝强播；新增 `openingLiquidityMinAmount=500万` 最低流动性保护，旧阈值保留为评分增强。
   - `auction_late_lift` 改用相对价格抬升、相对成交额放大和临门确认；新增 `auctionAmountLiftRatio/lateAmountLiftRatio/priceVolumeConfirmed` 等复盘字段。
-  - 缺竞价画像降级为 `watch`，缺 09:20 初始基线标记风险；有完整画像但无量价核心时拒绝为 `auction_price_volume_core_missing`。
+  - 缺竞价画像降级为 `watch`，缺 09:20 初始基线标记风险；有完整画像但无量价核心时输出观察信号并标记 `auction_price_volume_core_missing`。
   - V5 规则指纹更新为 `owts-08f44efb`，TS/C# hash 字段集合同步。
 - **验证：**
   - RED：`pnpm exec vitest run src/services/hotlist/__tests__/OpeningWeakToStrongDetector.test.ts` 先失败于 V5 新口径。
@@ -680,7 +680,7 @@
 | 2026-05-23 | 补齐竞价弱转强量价核心：`09:20-09:25` 序列画像、`auction_late_lift` 正式 variant、无量抬价/放量不涨/高位回落风险降级，并用 TS/C# 共享 fixture 验证。 | complete |
 | 2026-05-23 | 补做 V2 提交后 code review，发现桌面端 `ConfigHash` 未纳入新增量价阈值；按 TDD 增加回归测试并修复。 | complete |
 | 2026-05-23 | 按文档审计偏差修复弱转强落地：补 TS/C# 复盘字段透传、金额倒退风险降级、主表轮询服务边界、桌面导出弱转强专有字段。 | complete |
-| 2026-05-23 | 按 Superpowers 规格落地 TDX 自选股前日弱势上下文：`.blk` 候选池注入 `tdx_block` 上下文，`previousWeakScore >= 30` 可作为冲板抢筹弱势前置，并补共享 fixture、桌面导出和 TS/C# 口径。 | complete |
+| 2026-05-23 | 曾按 Superpowers 规格落地 TDX 自选股前日弱势上下文；后续已废弃 `.blk` 候选池自动注入 `tdx_block`，股票池仅保留为监听范围。 | superseded |
 | 2026-05-24 | 续修竞价弱转强覆盖率门禁：低覆盖/陈旧报价降为 `watch + dryRun`，桌面状态栏显示 09:25 覆盖率，补齐高风险边界 fixture 和 dry-run 语音抑制。 | complete |
 
 ## V4 验证记录

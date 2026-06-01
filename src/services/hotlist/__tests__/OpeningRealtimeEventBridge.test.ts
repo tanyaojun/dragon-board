@@ -53,13 +53,13 @@ describe('OpeningRealtimeEventBridge', () => {
       truncatedBatches: 2,
       lastPriceSource: 'last',
     })))
-    await vi.waitFor(() => expect(postSignal).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(postSignal).toHaveBeenCalledTimes(2))
 
-    expect(postSignal).toHaveBeenCalledWith('web', expect.objectContaining({
+    expect(postSignal).toHaveBeenLastCalledWith('web', expect.objectContaining({
       code: '002552',
       signalType: 'opening_weak_to_strong',
       tradingDate: '2026-05-22',
-      variant: 'auction_gap_reversal',
+      variant: 'auction_late_lift',
       auctionCapturedAt: '2026-05-22T09:25:01+08:00',
       bridgeTs: '2026-05-22T09:25:01+08:00',
       auctionSampleCount: 1,
@@ -72,7 +72,7 @@ describe('OpeningRealtimeEventBridge', () => {
       slowBatches: 1,
       truncatedBatches: 2,
     }))
-    expect(acceptDerivedEvents).toHaveBeenCalledWith([
+    expect(acceptDerivedEvents).toHaveBeenLastCalledWith([
       expect.objectContaining({
         code: '002552',
         typeName: '竞价弱转强',
@@ -81,7 +81,7 @@ describe('OpeningRealtimeEventBridge', () => {
         }),
       }),
     ])
-    expect(refresh).toHaveBeenCalledTimes(1)
+    expect(refresh).toHaveBeenCalledTimes(2)
   })
 
   it('keeps local monitor event when proxy post fails', async () => {
@@ -115,10 +115,10 @@ describe('OpeningRealtimeEventBridge', () => {
       bridgeTs: quote.bridgeTs,
       lastPriceSource: 'last',
     })))
-    await vi.waitFor(() => expect(postSignal).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(postSignal).toHaveBeenCalledTimes(2))
 
-    expect(acceptDerivedEvents).toHaveBeenCalledTimes(1)
-    const [[events]] = acceptDerivedEvents.mock.calls
+    expect(acceptDerivedEvents).toHaveBeenCalledTimes(2)
+    const [[events]] = acceptDerivedEvents.mock.calls.slice(-1)
     expect(events[0]).toMatchObject({
       code: '002552',
       typeName: '竞价弱转强',
@@ -127,7 +127,7 @@ describe('OpeningRealtimeEventBridge', () => {
         openingSignalPost: { ok: false },
       },
     })
-    expect(refresh).toHaveBeenCalledTimes(1)
+    expect(refresh).toHaveBeenCalledTimes(2)
   })
 
   it('never assigns web voice owner to dry-run opening signals', async () => {
@@ -216,18 +216,18 @@ describe('OpeningRealtimeEventBridge', () => {
       bridgeTs: quote.bridgeTs,
       lastPriceSource: 'last',
     })))
-    await vi.waitFor(() => expect(postSignal).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(postSignal).toHaveBeenCalledTimes(2))
 
-    expect(postSignal).toHaveBeenCalledWith('web', expect.objectContaining({
+    expect(postSignal).toHaveBeenLastCalledWith('web', expect.objectContaining({
       code: '600001',
       variant: 'strong_open_board_attempt',
     }))
   })
 
-  it('passes previous weak context from realtime quote patches', async () => {
+  it('passes explicit previous weak context from realtime quote patches', async () => {
     const fixture = loadFixture()
     const sample = fixture.cases.find(item =>
-      item.caseId === 'strong-open-board-attempt-with-tdx-previous-context'
+      item.caseId === 'strong-open-board-attempt-with-explicit-previous-context'
     )
     expect(sample).toBeTruthy()
     const postSignal = vi.fn().mockResolvedValue({
@@ -258,14 +258,14 @@ describe('OpeningRealtimeEventBridge', () => {
       previousWeakSource: quote.previousWeakSource,
       lastPriceSource: 'last',
     })))
-    await vi.waitFor(() => expect(postSignal).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(postSignal).toHaveBeenCalledTimes(2))
 
-    expect(postSignal).toHaveBeenCalledWith('web', expect.objectContaining({
+    expect(postSignal).toHaveBeenLastCalledWith('web', expect.objectContaining({
       code: '600010',
       variant: 'strong_open_board_attempt',
       previousWeakScore: 30,
-      previousWeakSignals: ['tdx_block_candidate'],
-      previousWeakSource: 'tdx_block',
+      previousWeakSignals: ['manual_previous_weak'],
+      previousWeakSource: 'explicit_previous_weak',
     }))
   })
 
@@ -299,9 +299,9 @@ describe('OpeningRealtimeEventBridge', () => {
         sourceTs: Date.parse(quote.at),
         lastPriceSource: 'last',
       })))
-      await vi.waitFor(() => expect(postSignal).toHaveBeenCalledTimes(1))
+      await vi.waitFor(() => expect(postSignal).toHaveBeenCalledTimes(2))
 
-      expect(postSignal).toHaveBeenCalledWith('web', expect.objectContaining({
+      expect(postSignal).toHaveBeenLastCalledWith('web', expect.objectContaining({
         code: '002553',
         variant: 'auction_late_lift',
         tradingDate: '2026-05-22',

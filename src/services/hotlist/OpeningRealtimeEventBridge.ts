@@ -125,11 +125,11 @@ function resolveVoiceOwner(
 ): 'web' | 'desktop' | 'none' {
   if (signal.dryRun) return 'none'
   const owner = response.voiceOwner
-  if (!response.ok && (signal.confidence === 'strong' || signal.confidence === 'critical')) {
+  if (!response.ok) {
     return 'web'
   }
   if (owner) return owner
-  return signal.confidence === 'strong' || signal.confidence === 'critical' ? 'web' : 'none'
+  return 'web'
 }
 
 function deriveLimitUpPrice(code: string, name: string | undefined, preClose: number): number | undefined {

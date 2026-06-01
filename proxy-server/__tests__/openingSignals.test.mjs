@@ -105,13 +105,13 @@ test('opening signal route upgrades canonical signal and preserves reports by so
   try {
     const first = await postSignal(baseUrl, 'web', signal({ confidence: 'watch', score: 52 }))
     assert.equal(first.body.dedupeAction, 'created')
-    assert.equal(first.body.voiceOwner, 'none')
+    assert.equal(first.body.voiceOwner, 'web')
 
     const second = await postSignal(baseUrl, 'desktop', signal({ confidence: 'critical', score: 93 }))
     assert.equal(second.response.status, 200)
     assert.equal(second.body.isNew, false)
     assert.equal(second.body.dedupeAction, 'upgraded')
-    assert.equal(second.body.voiceOwner, 'desktop')
+    assert.equal(second.body.voiceOwner, 'none')
     assert.deepEqual(second.body.sources, ['web', 'desktop'])
     assert.equal(second.body.canonicalSignal.confidence, 'critical')
     assert.equal(second.body.canonicalSignal.score, 93)

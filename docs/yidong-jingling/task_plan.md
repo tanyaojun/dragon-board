@@ -338,7 +338,7 @@ Superpowers 设计规格见：[../superpowers/specs/2026-05-22-opening-weak-to-s
 
 1. `09:24:50-09:25:10` 网页板和桌面版都能对当前监控池锁定 `auctionFinalPrice`。
 2. `09:30:00-09:35:00` 两端都能计算 `auctionPct`、`firstWindowPct` 和 `jumpPctPoint`。
-3. 满足条件时触发 `竞价弱转强` 事件，事件包含 `variant`、`score`、`confidence`、`factors`、`riskFlags`、`baselineQuality`、`ruleVersion`、`configHash`，`confidence >= strong` 时按 proxy `voiceOwner` 仲裁后播报。
+3. 满足条件时触发 `竞价弱转强` 事件，事件包含 `variant`、`score`、`confidence`、`factors`、`riskFlags`、`baselineQuality`、`ruleVersion`、`configHash`；已触发的 `watch/strong/critical` 都按 proxy `voiceOwner` 仲裁后播报，`confidence` 只作为强度和复盘分层。
 4. 异动精灵主表格高亮显示该事件，详情包含 `09:25` 价、`09:30` 价、跳空百分点、成交额和距涨停。
 5. 网页板异动雷达显示同一事件，复用现有去重、列表和语音服务。
 6. Dragon Board 行情主界面展示同一信号徽标或短时行高亮。
@@ -472,8 +472,8 @@ Superpowers 设计规格见：[../superpowers/specs/2026-05-22-opening-weak-to-s
 
 - [x] Superpowers 规格写入 `docs/superpowers/specs/2026-05-23-opening-weak-context-design.md`，并单独提交。
 - [x] TS/C# 共享合同新增 `previousWeakScore`、`previousWeakSignals`、`previousWeakSource` 和规则阈值 `previousWeakScoreMin`。
-- [x] `strong_open_board_attempt` 的弱势前置条件支持 `previousWeakScore >= previousWeakScoreMin`。
-- [x] 桌面端 `L1EventEngine` 支持 `ReplaceTdxBlockWeakContext`，当股票池来源为 `TDX自选股` 时向候选股注入 `tdx_block` 上下文。
+- [x] `strong_open_board_attempt` 的弱势前置条件支持上游显式 `previousWeakScore >= previousWeakScoreMin`，但缺少前弱上下文时只标记观察风险，不再硬拒绝。
+- [x] 已废弃桌面端 `TDX自选股` 自动注入 `tdx_block` 上下文；股票池来源只决定监听范围。
 - [x] 切换到 `八平台热榜` 时不写入 TDX 上下文，避免把热榜池误作前日弱势证据。
 - [x] 桌面端导出增加前日弱势分、来源和标签，便于盘后复盘。
 - [x] 共享 fixture 增加“TDX 上下文触发冲板抢筹”样例，并保留“无弱势前置普通冲板拒绝”样例。

@@ -257,6 +257,59 @@ describe('OpeningWeakToStrongDetector', () => {
     expect(candidate.intradayOutcome).toBe('preopen_candidate')
   })
 
+  it('emits a preopen candidate from the 09:25 final auction quote', () => {
+    const fixture = loadFixture()
+    const store = new OpeningAuctionStateStore(fixture.rules)
+    const detector = new OpeningWeakToStrongDetector(fixture.rules)
+    const base = {
+      code: '002579',
+      name: '中京电子',
+      preClose: 17.15,
+      open: 0,
+      volume: 1_000_000,
+    }
+
+    const quotes = [
+      {
+        ...base,
+        at: '2026-06-01T09:20:05+08:00',
+        lastPrice: 14.6,
+        amount: 2_000_000,
+        capturedAt: '2026-06-01T09:20:05+08:00',
+        bridgeTs: '2026-06-01T09:20:05+08:00',
+      },
+      {
+        ...base,
+        at: '2026-06-01T09:24:05+08:00',
+        lastPrice: 15,
+        amount: 12_000_000,
+        capturedAt: '2026-06-01T09:24:05+08:00',
+        bridgeTs: '2026-06-01T09:24:05+08:00',
+      },
+      {
+        ...base,
+        at: '2026-06-01T09:25:00+08:00',
+        lastPrice: 15.46,
+        amount: 20_650_000,
+        capturedAt: '2026-06-01T09:25:00+08:00',
+        bridgeTs: '2026-06-01T09:25:00+08:00',
+      },
+    ] satisfies OpeningWeakToStrongQuote[]
+
+    for (const quote of quotes) store.capture(quote)
+    const finalQuote = quotes[quotes.length - 1]
+    const candidate = detector.evaluate(finalQuote, store.getBaseline(finalQuote.code, finalQuote.at))
+
+    expect(candidate.triggered).toBe(true)
+    expect(candidate.variant).toBe('auction_late_lift')
+    expect(candidate.intradayStatus).toBe('preopen_candidate')
+    expect(candidate.priceVolumeConfirmed).toBe(true)
+    expect(candidate.auctionPct).toBeCloseTo(-9.85)
+    expect(candidate.auctionPriceLiftPctPoint).toBeCloseTo(5.01)
+    expect(candidate.latePriceLiftPctPoint).toBeCloseTo(2.68)
+    expect(candidate.riskFlags.map(item => item.key)).not.toContain('auction_late_high_retreated')
+  })
+
   it('does not confirm a preopen candidate without the 09:30 pending opening check', () => {
     const fixture = loadFixture()
     const sample = fixture.cases.find(item => item.caseId === '002552-auction-gap-reversal')
