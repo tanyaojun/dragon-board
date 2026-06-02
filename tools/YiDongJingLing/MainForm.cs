@@ -38,6 +38,7 @@ public sealed class MainForm : Form
     private readonly EventRadarMessageNotifier _messageNotifier = new();
     private readonly OpeningSignalReporter _openingSignalReporter = new();
     private readonly OpeningWeakToStrongTelemetryFileSink _openingTelemetry;
+    private readonly OpeningAuctionSampleTelemetryFileSink _openingSampleTelemetry;
     private readonly List<EventRecord> _eventRecords = [];
     private readonly string _root;
     private readonly BridgeProcessManager _bridgeManager;
@@ -99,6 +100,9 @@ public sealed class MainForm : Form
         _root = ProjectRootLocator.Find();
         _openingTelemetry = new OpeningWeakToStrongTelemetryFileSink(
             Path.Combine(_root, "logs", "yidong-jingling", "opening-weak-to-strong"),
+            Log);
+        _openingSampleTelemetry = new OpeningAuctionSampleTelemetryFileSink(
+            Path.Combine(_root, "logs", "yidong-jingling", "opening-auction-samples"),
             Log);
         _eventEngine = new L1EventEngine(_eventRules, _openingTelemetry.Record);
         _bridgeManager = new BridgeProcessManager(_root);
@@ -1212,6 +1216,7 @@ public sealed class MainForm : Form
             acceptedQuotes++;
             _lastQuoteTime = normalizedQuote.SourceTime;
             UpdateOpeningCoverageFromQuote(normalizedQuote);
+            RecordOpeningAuctionSampleTelemetry(normalizedQuote);
             var previous = _quoteStore.Apply(normalizedQuote);
 
             if (previous is null)
@@ -1280,7 +1285,7 @@ public sealed class MainForm : Form
         ApplyHotlistTopVoiceFilter(voiceEvents);
         if (openingEvents.Length > 0)
         {
-            ReportOpeningSignalsAndAnnounceAsync(openingEvents, openingVoiceEvents);
+            _ = ReportOpeningSignalsAndAnnounceAsync(openingEvents, openingVoiceEvents);
         }
         if (voiceEvents.Count > 0)
         {
@@ -1288,7 +1293,8 @@ public sealed class MainForm : Form
         }
         if (_settings.SyncMessages)
         {
-            _ = SyncMessagesAsync(emitted.ToArray());
+            var pushEvents = EventVoicePolicy.FilterForPush(emitted);
+            _ = SyncMessagesAsync(pushEvents);
         }
     }
 
@@ -1320,27 +1326,64 @@ public sealed class MainForm : Form
         }
     }
 
-    private void ReportOpeningSignalsAndAnnounceAsync(
+    private async Task ReportOpeningSignalsAndAnnounceAsync(
         IReadOnlyList<EventRecord> events,
         IReadOnlyList<EventRecord> voiceEligibleEvents)
     {
         if (events.Count == 0) return;
 
-        if (voiceEligibleEvents.Count > 0)
+        if (!BridgeProcessManager.IsPortOpen(3000))
         {
-            _speech.Announce(voiceEligibleEvents);
+            if (voiceEligibleEvents.Count > 0)
+            {
+                _speech.Announce(voiceEligibleEvents);
+            }
+            _ = SyncOpeningSignalsInBackgroundAsync(events);
+            return;
         }
 
-        _ = Task.Run(async () =>
+        try
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromMilliseconds(1500));
+            var voiceEvents = new List<EventRecord>();
+            foreach (var item in events)
+            {
+                var result = await _openingSignalReporter.ReportAsync(
+                    item,
+                    new Uri("http://127.0.0.1:3000"),
+                    timeout.Token);
+                Log($"竞价弱转强信号已上报: {item.Code} {result.DedupeAction} voiceOwner={result.VoiceOwner}");
+                if (voiceEligibleEvents.Contains(item) && result.VoiceOwner == "desktop")
+                {
+                    voiceEvents.Add(item);
+                }
+            }
+
+            if (voiceEvents.Count > 0)
+            {
+                _speech.Announce(voiceEvents);
+            }
+        }
+        catch (Exception ex)
+        {
+            Log($"竞价弱转强信号上报失败，已降级为本地播报: {ex.Message}");
+            if (voiceEligibleEvents.Count > 0)
+            {
+                _speech.Announce(voiceEligibleEvents);
+            }
+        }
+    }
+
+    private Task SyncOpeningSignalsInBackgroundAsync(IReadOnlyList<EventRecord> events)
+    {
+        return Task.Run(async () =>
         {
             if (_closing || IsDisposed) return;
             try
             {
-                if (!BridgeProcessManager.IsPortOpen(3000))
-                {
-                    _proxyManager.StartProxy(Log);
-                    await WaitForProxyPortAsync(3000, "竞价信号同步可能失败");
-                }
+                _proxyManager.StartProxy(Log);
+                await WaitForProxyPortAsync(3000, "竞价信号同步可能失败");
+                if (!BridgeProcessManager.IsPortOpen(3000)) return;
 
                 foreach (var item in events)
                 {
@@ -1352,7 +1395,7 @@ public sealed class MainForm : Form
             catch (Exception ex)
             {
                 if (_closing || IsDisposed) return;
-                Log($"竞价弱转强信号上报失败: {ex.Message}");
+                Log($"竞价弱转强信号后台同步失败: {ex.Message}");
             }
         });
     }
@@ -1642,6 +1685,13 @@ public sealed class MainForm : Form
         var dryRun = IsOpeningCoverageLow(snapshot.RawCoverageRatio) ? " 演练" : "";
         _openingCoverageLabel.Text = OpeningCoverageStatusText(coverage, received, requested, batchSummary, dryRun);
         _openingCoverageLabel.ForeColor = IsOpeningCoverageLow(snapshot.RawCoverageRatio) ? WarnAmber : TerminalText;
+    }
+
+    private void RecordOpeningAuctionSampleTelemetry(QuoteSnapshot quote)
+    {
+        if (!IsOpeningAuctionSampleTelemetryWindow(quote.SourceTime)) return;
+
+        _openingSampleTelemetry.Record(OpeningAuctionSampleTelemetryRecord.FromQuote(quote));
     }
 
     private void UpdateOpeningCoverageFromQuote(QuoteSnapshot quote)
@@ -1964,6 +2014,12 @@ public sealed class MainForm : Form
     {
         var time = timestamp.ToLocalTime().TimeOfDay;
         return time >= TimeSpan.Parse("09:24:50") && time <= TimeSpan.Parse("09:25:10");
+    }
+
+    public static bool IsOpeningAuctionSampleTelemetryWindow(DateTimeOffset timestamp)
+    {
+        var time = timestamp.ToLocalTime().TimeOfDay;
+        return time >= TimeSpan.Parse("09:20:00") && time <= TimeSpan.Parse("09:25:10");
     }
 
     public static bool IsOpeningWeakToStrongPreopenWindow(DateTimeOffset timestamp)

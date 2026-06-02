@@ -35,7 +35,7 @@ export const DEFAULT_OPENING_WEAK_TO_STRONG_RULES: OpeningWeakToStrongRules = {
   auctionLateHighRetreatPctPoint: 0.2,
   previousWeakScoreMin: 30,
   minAuctionCoverageRatio: 0.95,
-  maxQuoteAgeMs: 10_000,
+  maxQuoteAgeMs: 30_000,
   minCurrentVolume: 1_000_000,
   openingSupportOpenRatio: 0.995,
   auctionGapMaxScore: 40,

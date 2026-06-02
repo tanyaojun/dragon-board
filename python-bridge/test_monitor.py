@@ -68,6 +68,12 @@ class BridgeMonitorTest(unittest.TestCase):
 
         self.assertTrue(is_opening_sampling_window(start, end))
 
+    def test_opening_sampling_window_starts_at_initial_baseline(self):
+        start = datetime.fromisoformat("2026-05-22T09:20:00+08:00")
+        end = datetime.fromisoformat("2026-05-22T09:20:01+08:00")
+
+        self.assertTrue(is_opening_sampling_window(start, end))
+
     def test_quote_capture_timestamp_uses_batch_start_time(self):
         quote = normalize_quote_row(
             {

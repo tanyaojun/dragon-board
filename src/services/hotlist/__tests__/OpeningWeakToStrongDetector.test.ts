@@ -27,7 +27,7 @@ describe('OpeningWeakToStrongDetector', () => {
     const expectedHash = new OpeningWeakToStrongDetector(fixture.rules)
       .evaluate(fixture.cases[0].quotes[0] as OpeningWeakToStrongQuote, null)
       .configHash
-    expect(expectedHash).toBe('owts-3dc612c2')
+    expect(expectedHash).toBe('owts-0b14dc39')
 
     for (const sample of fixture.cases) {
       const store = new OpeningAuctionStateStore(fixture.rules)

@@ -7,13 +7,13 @@
   - 语音主链只解决盘中及时提醒，不承载量化研究。
   - 质量信息只做标签（风险字段、日志、导出），不做默认禁播。
   - dryRun 只保留为人工显式演练模式 + 时间戳不可信自动保护。
-  - proxy 降级为跨端去重同步，桌面版本地播报优先。
+  - proxy 降级为跨端去重同步；proxy 在线时先仲裁避免跨端重复，离线/超时时桌面本地兜底播报。
 - **V7 Phase 1：文档和设置口径收敛**
   - `opening-weak-to-strong-plan.md`：新增 V7 产品原则章节，更新 dry-run 口径和离线矩阵。
   - `event-rule-logic.md`：竞价弱转强拆为"硬阻断 / 风险标签 / 语音控制"三层。
   - `usage.md`：明确桌面语音优先本地播报，proxy 只做跨端去重。
 - **V7 Phase 2：桌面端语音链路瘦身**
-  - `MainForm.ReportOpeningSignalsAndAnnounceAsync`：改为本地播报优先（fire-and-forget），proxy 上报异步补充不阻塞。
+  - `MainForm.ReportOpeningSignalsAndAnnounceAsync`：修正为 proxy 在线时先按 `voiceOwner=desktop` 播报，proxy 离线/超时时本地兜底播报，避免网页已播后桌面重复播。
   - `SettingsForm`：热榜语音提示改为"仅过滤语音，不过滤异动列表"。
   - `EventVoicePolicy`：已符合 V7 口径（仅处理语音模式、preopen 候选不播、dryRun 不播），无需修改。
 - **V7 Phase 3：检测器硬阻断复核**
@@ -21,13 +21,16 @@
   - 共享 fixture 新增 3 个 V7 验收用例：低覆盖仍可播、缺画像仍可播、时间错位 dryRun。
   - 受影响 fixture 用例（`auction-coverage-low-dry-run`、`auction-coverage-rounded-low-dry-run`、`auction-amount-missing-downgraded`、`amount-regressed-downgraded`）期望值同步更新。
 - **V7 Phase 4：跨端 proxy 角色降级**
-  - 桌面端不等待 proxy `voiceOwner` 授权（Phase 2 已实现）。
+  - 桌面端在 proxy 在线时尊重 `voiceOwner` 仲裁，proxy 离线/超时时不阻断本地播报。
   - 网页端 `resolveVoiceOwner` 已符合：proxy 在线时尊重仲裁，离线时降级为 `'web'` 本地播报。
   - proxy `shouldGrantVoice` 已正确：dryRun/preopen_candidate/failed 不授权语音。
+- **review 后修复：**
+  - `L1EventEngine` telemetry 跳过 `outside_detection_window`，并按交易日、决策和拒绝原因去重，避免每帧行情同步写 JSONL。
+  - 桌面端新增 telemetry 节流回归测试。
 - **验证：**
-  - TS opening 链路 7 files / 51 tests passed。
-  - C# `YiDongJingLing.Tests` 48 tests passed。
-  - proxy opening signal 11 tests passed。
+  - TS opening 链路定向验证 2 files / 15 tests passed。
+  - C# `YiDongJingLing.Tests` 全部通过。
+  - proxy opening signal 9 tests passed。
   - `vue-tsc` typecheck 通过。
   - `dotnet build -c Release` 0 warning / 0 error。
   - `pnpm build` 通过。

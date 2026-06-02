@@ -351,7 +351,8 @@ export class OpeningWeakToStrongDetector {
       previousWeakSource: quote.previousWeakSource,
       rules: this.rules,
     })
-    const score = clampScore(factors.reduce((sum, item) => sum + item.score, 0))
+    const riskPenalty = totalRiskPenalty(riskFlags)
+    const score = clampScore(factors.reduce((sum, item) => sum + item.score, 0) - riskPenalty)
     const confidence = score >= 80 ? 'critical' : score >= 60 ? 'strong' : 'watch'
     const liquidityReview = liquidityReviewFields(amount, volume, this.rules)
 
@@ -921,7 +922,57 @@ function clampScore(value: number): number {
 }
 
 function configHash(rules: OpeningWeakToStrongRules): string {
-  const json = JSON.stringify(rules, Object.keys(rules).sort())
+  const hashKeys: (keyof OpeningWeakToStrongRules)[] = [
+    'auctionEnd',
+    'auctionGapFirstWindowMinPct',
+    'auctionGapJumpMinPctPoint',
+    'auctionAmountLiftMinRatio',
+    'auctionLateHighRetreatPctPoint',
+    'auctionLateLiftFinalMinPct',
+    'auctionLateLiftFirstWindowMinPct',
+    'auctionLateLiftJumpMinPctPoint',
+    'auctionLateLiftStart',
+    'auctionLateLiftTotalMinPctPoint',
+    'auctionLateAmountLiftMinRatio',
+    'auctionLatePriceLiftMinPctPoint',
+    'auctionPriceLiftMinPctPoint',
+    'auctionStart',
+    'auctionTrendStart',
+    'auctionWeakMaxPct',
+    'detectEnd',
+    'detectStart',
+    'initialBaselineEnd',
+    'initialBaselineStart',
+    'lowOpenRedFirstWindowMinPct',
+    'lowOpenRedJumpMinPctPoint',
+    'minAmountDelta',
+    'maxQuoteAgeMs',
+    'minAuctionCoverageRatio',
+    'minCurrentAmount',
+    'minCurrentVolume',
+    'nearLimitDistancePct',
+    'openingLiquidityMinAmount',
+    'openingSupportOpenRatio',
+    'previousWeakScoreMin',
+    'strongOpenFirstWindowMinPct',
+    'auctionGapMaxScore',
+    'auctionGapScoreSlope',
+    'auctionGapOpenStrengthScore',
+    'auctionGapAmountStrongScore',
+    'auctionGapAmountWeakScore',
+    'auctionGapQualityGoodScore',
+    'auctionGapQualityDegradedScore',
+    'auctionLateLiftCoreScore',
+    'auctionLateLiftAmountRatioScore',
+    'auctionLateLiftOpenStrengthScore',
+    'strongOpenNearLimitScore',
+    'strongOpenOpenStrengthScore',
+    'lowOpenRedReversalScore',
+    'lowOpenTurnRedScore',
+    'previousWeakContextScore',
+  ].sort()
+  const hashRules = Object.fromEntries(hashKeys.map((key) => [key, rules[key]]))
+  const json = JSON.stringify(hashRules)
   let hash = 2166136261
   for (let index = 0; index < json.length; index++) {
     hash ^= json.charCodeAt(index)

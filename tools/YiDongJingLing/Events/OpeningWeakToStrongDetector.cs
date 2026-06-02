@@ -940,8 +940,9 @@ public sealed class OpeningWeakToStrongDetector
             auctionProfile,
             previousWeakScore,
             quote.PreviousWeakSource);
-        var score = ClampScore(factors.Sum(item => item.Score));
-        var confidence = score >= 80m ? "critical" : score >= 60m ? "strong" : "watch";
+        var riskPenalty = TotalRiskPenalty(riskFlags);
+        var score = ClampScore(factors.Sum(item => item.Score) - riskPenalty);
+        var confidence = "watch";
         var liquidityReview = LiquidityReviewFields(amount, quote.Volume);
 
         return new OpeningWeakToStrongResult(
@@ -1036,18 +1037,19 @@ public sealed class OpeningWeakToStrongDetector
 
         if (quote.LastPrice < support)
         {
+            var wasConfirmed = activeSignal.IntradayStatus == "confirmed";
             return activeSignal with
             {
                 Confidence = "watch",
                 Score = Math.Min(activeSignal.Score, 10m),
                 Amount = quote.Amount,
-                IntradayStatus = "failed",
-                IntradayOutcome = "failed_open_dump",
+                IntradayStatus = wasConfirmed ? "confirmed_reversal" : "failed",
+                IntradayOutcome = wasConfirmed ? "confirmed_then_open_dump" : "failed_open_dump",
                 IntradayStatusAt = quote.At,
                 IntradayPrice = quote.LastPrice,
                 IntradayPct = Round2(intradayPct),
                 IntradayAmount = quote.Amount,
-                IntradayNote = "跌破开盘/昨收支撑，疑似竞价诱多",
+                IntradayNote = wasConfirmed ? "确认后跌破开盘/昨收支撑，转弱需复核" : "跌破开盘/昨收支撑，疑似竞价诱多",
                 RiskFlags = MergeRiskFlags(activeSignal.RiskFlags, [RiskFlag("intraday_open_dump")]),
             };
         }

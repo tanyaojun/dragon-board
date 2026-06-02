@@ -65,6 +65,7 @@ public sealed class EventDeduper
         var statusPriority = item.OpeningSignal?.IntradayStatus switch
         {
             "failed" => 4,
+            "confirmed_reversal" => 4,
             "confirmed" => 3,
             "watch" => 2,
             "pending" => 1,
@@ -74,6 +75,7 @@ public sealed class EventDeduper
         var outcomePriority = item.OpeningSignal?.IntradayOutcome switch
         {
             "failed_open_dump" => 4,
+            "confirmed_then_open_dump" => 4,
             "confirmed_strong" => 3,
             "watch_only" => 2,
             "pending" => 1,

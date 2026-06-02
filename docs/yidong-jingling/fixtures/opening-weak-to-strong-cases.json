@@ -39,7 +39,7 @@
     "auctionLateHighRetreatPctPoint": 0.2,
     "previousWeakScoreMin": 30,
     "minAuctionCoverageRatio": 0.95,
-    "maxQuoteAgeMs": 10000,
+    "maxQuoteAgeMs": 30000,
     "minCurrentVolume": 1000000,
     "openingSupportOpenRatio": 0.995,
     "auctionGapMaxScore": 40,
@@ -1349,8 +1349,8 @@
           "open": 10.1,
           "amount": 50000000,
           "volume": 4800000,
-          "capturedAt": "2026-05-22T09:29:40+08:00",
-          "bridgeTs": "2026-05-22T09:29:41+08:00"
+          "capturedAt": "2026-05-22T09:29:20+08:00",
+          "bridgeTs": "2026-05-22T09:29:21+08:00"
         }
       ],
       "expected": {

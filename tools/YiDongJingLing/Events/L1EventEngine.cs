@@ -38,7 +38,7 @@ public sealed class L1EventEngine
         0.2m,
         30m,
         0.95m,
-        10_000,
+        30_000,
         1_000_000m,
         0.995m);
     private readonly L1EventRules _rules;
@@ -275,13 +275,13 @@ public sealed class L1EventEngine
         var result = _openingDetector.Evaluate(openingQuote, _openingStore.GetBaseline(quote.Code, quote.SourceTime));
         if (!result.Triggered)
         {
-            RecordOpeningTelemetry(result, "detector_rejected");
+            RecordOpeningTelemetry(state, tradingDate, result, "detector_rejected");
             return;
         }
         if (state.OpeningWeakToStrongTriggeredDate == tradingDate &&
             IntradayOutcomePriority(result) <= state.OpeningWeakToStrongIntradayPriority)
         {
-            RecordOpeningTelemetry(result, "event_suppressed_duplicate_or_lower_priority");
+            RecordOpeningTelemetry(state, tradingDate, result, "event_suppressed_duplicate_or_lower_priority");
             return;
         }
 
@@ -296,14 +296,21 @@ public sealed class L1EventEngine
             events,
             quote,
             L1EventType.OpeningWeakToStrong,
-            result.IntradayStatus == "preopen_candidate" ? "竞价弱转强候选" : "竞价弱转强",
+            OpeningTypeName(result),
             severity,
-            OpeningReason(result, result.IntradayStatus is "confirmed" or "failed"),
+            OpeningReason(result, result.IntradayStatus is "confirmed" or "failed" or "confirmed_reversal"),
             ToOpeningSignal(result));
     }
 
-    private void RecordOpeningTelemetry(OpeningWeakToStrongResult result, string decision)
+    private void RecordOpeningTelemetry(
+        StockState state,
+        string tradingDate,
+        OpeningWeakToStrongResult result,
+        string decision)
     {
+        if (result.InvalidReason == "outside_detection_window") return;
+        var telemetryKey = $"{tradingDate}:{decision}:{result.InvalidReason ?? result.IntradayStatus ?? result.IntradayOutcome ?? ""}";
+        if (!state.OpeningTelemetryKeys.Add(telemetryKey)) return;
         _openingTelemetry?.Invoke(OpeningWeakToStrongTelemetryRecord.FromResult(result, decision));
     }
 
@@ -446,7 +453,12 @@ public sealed class L1EventEngine
 
         if (intradayUpdate)
         {
-            var status = result.IntradayStatus == "failed" ? "盘中失败" : "盘中确认";
+            var status = result.IntradayStatus switch
+            {
+                "failed" => "盘中失败",
+                "confirmed_reversal" => "确认后转弱",
+                _ => "盘中确认",
+            };
             return $"{status}｜{result.IntradayNote}｜当前 {FormatSignedPct(result.IntradayPct)}，成交额 {FormatMoney(result.IntradayAmount ?? result.Amount)}";
         }
 
@@ -460,6 +472,16 @@ public sealed class L1EventEngine
         var amount = FormatMoney(result.Amount);
         var distance = result.LimitDistancePct.HasValue ? $"，距涨停 {result.LimitDistancePct:0.00}%" : "";
         return $"{variantName}｜分数 {result.Score:0}｜09:25 {FormatSignedPct(result.AuctionPct)} → 09:30 {FormatSignedPct(result.FirstWindowPct)}，跳空 {result.JumpPctPoint:0.00}pct，成交额 {amount}{distance}";
+    }
+
+    private static string OpeningTypeName(OpeningWeakToStrongResult result)
+    {
+        return result.IntradayStatus switch
+        {
+            "preopen_candidate" => "竞价弱转强候选",
+            "confirmed_reversal" => "竞价确认后转弱",
+            _ => "竞价弱转强",
+        };
     }
 
     private static OpeningWeakToStrongSignal ToOpeningSignal(OpeningWeakToStrongResult result)
@@ -543,6 +565,7 @@ public sealed class L1EventEngine
         return result.IntradayStatus switch
         {
             "failed" => 4,
+            "confirmed_reversal" => 4,
             "confirmed" => 3,
             "watch" => 2,
             "pending" => 1,
@@ -665,5 +688,6 @@ public sealed class L1EventEngine
         public bool OpenShapeTriggered { get; set; }
         public string OpeningWeakToStrongTriggeredDate { get; set; } = "";
         public int OpeningWeakToStrongIntradayPriority { get; set; }
+        public HashSet<string> OpeningTelemetryKeys { get; } = new(StringComparer.Ordinal);
     }
 }

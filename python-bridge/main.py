@@ -184,7 +184,7 @@ def is_opening_sampling_window(start: datetime | None = None, end: datetime | No
     if current.weekday() >= 5 and finished.weekday() >= 5:
         return False
 
-    window_start = 9 * 3600 + 24 * 60 + 50
+    window_start = 9 * 3600 + 20 * 60
     window_end = 9 * 3600 + 25 * 60 + 10
     start_seconds = current.hour * 3600 + current.minute * 60 + current.second
     end_seconds = finished.hour * 3600 + finished.minute * 60 + finished.second

@@ -208,11 +208,18 @@ public sealed class TdxBridgeClient : IDisposable
         var code = ReadString(item, "code");
         if (string.IsNullOrWhiteSpace(code)) return null;
 
+        var capturedAt = ReadDateTimeOffset(item, "capturedAt");
+        var bridgeTs = ReadDateTimeOffset(item, "bridgeTs");
+        var quoteSourceTime = capturedAt ?? bridgeTs ?? sourceTime;
+
         return new QuoteSnapshot(
             code,
             ReadString(item, "name"),
             ReadDecimal(item, "lastPrice"),
-            ReadDecimal(item, "changePct"),
+            NormalizeChangePct(
+                ReadDecimal(item, "lastPrice"),
+                ReadDecimal(item, "preClose"),
+                ReadDecimal(item, "changePct")),
             ReadDecimal(item, "changeAmount"),
             ReadDecimal(item, "volume"),
             ReadDecimal(item, "amount"),
@@ -222,15 +229,32 @@ public sealed class TdxBridgeClient : IDisposable
             ReadDecimal(item, "preClose"),
             _quotes.TryGetValue(code, out var previous) ? previous.Bids : Array.Empty<QuoteLevel>(),
             _quotes.TryGetValue(code, out previous) ? previous.Asks : Array.Empty<QuoteLevel>(),
-            sourceTime,
-            ReadDateTimeOffset(item, "capturedAt"),
-            ReadDateTimeOffset(item, "bridgeTs"),
+            quoteSourceTime,
+            capturedAt,
+            bridgeTs,
             ReadBool(item, "openingForcedSample"),
             ReadInt(item, "requestedCount"),
             ReadInt(item, "receivedCount"),
             ReadInt(item, "elapsedMs"),
             ReadInt(item, "slowBatches"),
             ReadInt(item, "truncatedBatches"));
+    }
+
+    public static decimal NormalizeChangePct(decimal lastPrice, decimal preClose, decimal sourceChangePct)
+    {
+        if (lastPrice <= 0m || preClose <= 0m) return sourceChangePct;
+
+        var derived = (lastPrice - preClose) / preClose * 100m;
+        if (sourceChangePct == 0m) return derived;
+        if (Math.Abs(sourceChangePct - derived) <= 0.2m) return sourceChangePct;
+
+        var ratioAsPct = sourceChangePct * 100m;
+        if (Math.Abs(sourceChangePct) <= 1m && Math.Abs(ratioAsPct - derived) <= 0.2m)
+        {
+            return ratioAsPct;
+        }
+
+        return derived;
     }
 
     private QuoteSnapshot MergeDepth(QuoteSnapshot quote)
@@ -253,7 +277,6 @@ public sealed class TdxBridgeClient : IDisposable
         {
             Bids = ReadLevels(item, "bids"),
             Asks = ReadLevels(item, "asks"),
-            SourceTime = sourceTime,
         };
         _quotes[code] = updated;
         return updated;

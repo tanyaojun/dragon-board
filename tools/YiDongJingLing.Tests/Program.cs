@@ -1,5 +1,6 @@
 using YiDongJingLing;
 using YiDongJingLing.Blocks;
+using YiDongJingLing.Diagnostics;
 using YiDongJingLing.Events;
 using YiDongJingLing.MarketData;
 using YiDongJingLing.Notifications;
@@ -364,7 +365,7 @@ Run("Opening weak-to-strong config hash includes auction price-volume rules", ()
     var baseHash = new OpeningWeakToStrongDetector(baseRules).Evaluate(quote, null).ConfigHash;
     var changedHash = new OpeningWeakToStrongDetector(changedRules).Evaluate(quote, null).ConfigHash;
 
-    AssertEqual("owts-729fd3c7", baseHash, "fixture config hash matches web");
+    AssertEqual("owts-0b14dc39", baseHash, "fixture config hash matches web");
     AssertTrue(baseHash != changedHash, "auction price-volume rule hash changes");
 });
 
@@ -499,7 +500,7 @@ Run("Opening weak-to-strong detector emits preopen candidate after final baselin
 
     AssertTrue(result.Triggered, "preopen candidate triggered");
     AssertEqual("auction_late_lift", result.Variant, "preopen candidate variant");
-    AssertEqual("strong", result.Confidence, "preopen candidate confidence");
+    AssertEqual("watch", result.Confidence, "preopen candidate confidence");
     AssertEqual("preopen_candidate", result.IntradayStatus, "preopen candidate status");
     AssertEqual("preopen_candidate", result.IntradayOutcome, "preopen candidate outcome");
     AssertEqual("竞价量价齐升，等待开盘承接验证", result.IntradayNote, "preopen candidate note");
@@ -648,6 +649,8 @@ Run("Opening weak-to-strong detector keeps weak 09:25 baseline as preopen candid
     AssertEqual("auction_gap_reversal", result.Variant, "weak 09:25 preopen variant");
     AssertEqual("preopen_candidate", result.IntradayStatus, "weak 09:25 preopen status");
     AssertTrue(result.PriceVolumeConfirmed == false, "weak 09:25 price-volume unconfirmed");
+    AssertEqual("watch", result.Confidence, "weak 09:25 preopen confidence");
+    AssertTrue(result.Score < 60m, "weak 09:25 preopen risk-adjusted score");
     AssertTrue(
         result.RiskFlags.Any(item => item.Key == "auction_price_volume_unverified"),
         "weak 09:25 candidate keeps price-volume risk");
@@ -780,6 +783,49 @@ Run("Event engine records opening weak-to-strong reject telemetry", () =>
     AssertTrue(record.RiskFlags.Contains("variant_not_matched"), "telemetry risk flag");
 });
 
+Run("Event engine throttles opening weak-to-strong reject telemetry", () =>
+{
+    var telemetry = new List<OpeningWeakToStrongTelemetryRecord>();
+    var engine = new L1EventEngine(openingTelemetry: telemetry.Add);
+    var auction = Quote(
+        "002554",
+        "节流样例",
+        9.9m,
+        -1m,
+        10m,
+        amount: 6_000_000m,
+        time: DateTimeOffset.Parse("2026-05-22T09:25:00+08:00"));
+    var rejected = Quote(
+        "002554",
+        "节流样例",
+        9.92m,
+        -0.8m,
+        10m,
+        volume: 1_200_000m,
+        amount: 8_000_000m,
+        time: DateTimeOffset.Parse("2026-05-22T09:30:06+08:00")) with { Open = 9.9m };
+    var repeated = rejected with
+    {
+        SourceTime = DateTimeOffset.Parse("2026-05-22T09:30:08+08:00"),
+        CapturedAt = DateTimeOffset.Parse("2026-05-22T09:30:08+08:00"),
+        BridgeTs = DateTimeOffset.Parse("2026-05-22T09:30:08+08:00"),
+    };
+    var outside = rejected with
+    {
+        SourceTime = DateTimeOffset.Parse("2026-05-22T10:01:00+08:00"),
+        CapturedAt = DateTimeOffset.Parse("2026-05-22T10:01:00+08:00"),
+        BridgeTs = DateTimeOffset.Parse("2026-05-22T10:01:00+08:00"),
+    };
+
+    engine.Prime(auction);
+    _ = engine.Evaluate(rejected, auction, [auction, rejected]);
+    _ = engine.Evaluate(repeated, rejected, [auction, rejected, repeated]);
+    _ = engine.Evaluate(outside, repeated, [auction, rejected, repeated, outside]);
+
+    AssertEqual(1, telemetry.Count, "only one actionable reject telemetry record");
+    AssertEqual("variant_not_matched", telemetry[0].InvalidReason, "throttled reject reason");
+});
+
 Run("Event engine emits preopen weak-to-strong candidate before continuous auction", () =>
 {
     var engine = new L1EventEngine();
@@ -867,6 +913,54 @@ Run("Event engine emits opening weak-to-strong intraday outcome update", () =>
     AssertTrue(update.Reason.Contains("盘中失败"), "intraday failure reason");
 });
 
+Run("Event engine marks confirmed opening signal reversal without voice", () =>
+{
+    var engine = new L1EventEngine();
+    var auction = Quote(
+        "002552",
+        "宝鼎科技",
+        35.68m,
+        -1.44m,
+        36.2m,
+        amount: 6_000_000m,
+        time: DateTimeOffset.Parse("2026-05-22T09:25:00+08:00"));
+    var open = Quote(
+        "002552",
+        "宝鼎科技",
+        37.48m,
+        3.54m,
+        36.2m,
+        volume: 1_495_000m,
+        amount: 56_000_000m,
+        time: DateTimeOffset.Parse("2026-05-22T09:30:06+08:00")) with { Open = 36.92m };
+    var confirm = open with
+    {
+        LastPrice = 38.2m,
+        ChangePct = 5.52m,
+        Amount = 86_000_000m,
+        SourceTime = DateTimeOffset.Parse("2026-05-22T09:36:00+08:00"),
+    };
+    var reversal = open with
+    {
+        LastPrice = 36.7m,
+        ChangePct = 1.38m,
+        Amount = 128_000_000m,
+        SourceTime = DateTimeOffset.Parse("2026-05-22T09:45:00+08:00"),
+    };
+
+    engine.Prime(auction);
+    _ = engine.Evaluate(open, auction, [auction, open]);
+    _ = engine.Evaluate(confirm, open, [auction, open, confirm]);
+    var updates = engine.Evaluate(reversal, confirm, [auction, open, confirm, reversal]);
+
+    var update = updates.Single(item => item.Type == L1EventType.OpeningWeakToStrong);
+    AssertEqual("竞价确认后转弱", update.TypeName, "confirmed reversal type name");
+    AssertEqual("confirmed_reversal", update.OpeningSignal?.IntradayStatus, "confirmed reversal status");
+    AssertEqual("confirmed_then_open_dump", update.OpeningSignal?.IntradayOutcome, "confirmed reversal outcome");
+    AssertTrue(update.Reason.Contains("确认后转弱"), "confirmed reversal reason");
+    AssertEqual(0, EventVoicePolicy.FilterForVoice([update], VoiceMode.StrongOnly).Count, "confirmed reversal is not voice eligible");
+});
+
 Run("Event engine does not inject TDX block context as previous weak evidence", () =>
 {
     var engine = new L1EventEngine();
@@ -905,7 +999,7 @@ Run("Event engine does not inject TDX block context as previous weak evidence", 
         "ordinary strong open is reported as watch risk without injected previous weak evidence");
 });
 
-Run("Event engine speaks watch opening weak-to-strong in strong voice policy", () =>
+Run("Event engine does not speak watch opening weak-to-strong in strong voice policy", () =>
 {
     var engine = new L1EventEngine();
     var first = Quote(
@@ -950,7 +1044,7 @@ Run("Event engine speaks watch opening weak-to-strong in strong voice policy", (
 
     AssertEqual("watch", signal.OpeningSignal?.Confidence, "watch confidence");
     AssertEqual(L1EventSeverity.Important, signal.Severity, "watch opening severity");
-    AssertEqual(1, EventVoicePolicy.FilterForVoice([signal], VoiceMode.StrongOnly).Count, "watch opening strong voice");
+    AssertEqual(0, EventVoicePolicy.FilterForVoice([signal], VoiceMode.StrongOnly).Count, "watch opening strong voice");
     AssertEqual(DateTimeOffset.Parse("2026-05-22T09:20:05+08:00"), signal.OpeningSignal?.InitialBaselineAt, "watch initial baseline at");
     AssertEqual(9.8m, signal.OpeningSignal?.InitialBaselinePrice, "watch initial baseline price");
     AssertEqual(DateTimeOffset.Parse("2026-05-22T09:24:10+08:00"), signal.OpeningSignal?.LateBaselineAt, "watch late baseline at");
@@ -1276,6 +1370,21 @@ Run("Voice policy defaults to strong signals and excludes weak pressure events",
     AssertEqual(0, EventVoicePolicy.FilterForVoice([fastRise, bidPressure], VoiceMode.Muted).Count, "muted mode");
 });
 
+Run("Push policy sends only strong event radar signals", () =>
+{
+    var now = DateTimeOffset.Parse("2026-05-20T10:00:00+08:00");
+    var fastRise = Event("002445", "中南文化", L1EventType.FastRise, "快速拉升", now);
+    var amountTier = Event("002446", "普通跨档", L1EventType.AmountTier, "成交额跨档", now)
+        with { Severity = L1EventSeverity.Normal };
+    var bidPressure = Event("300001", "特锐德", L1EventType.BidPressure, "盘口买压增强", now)
+        with { Severity = L1EventSeverity.Normal };
+
+    var pushEvents = EventVoicePolicy.FilterForPush([fastRise, amountTier, bidPressure]);
+
+    AssertEqual(1, pushEvents.Count, "push count");
+    AssertEqual(L1EventType.FastRise, pushEvents[0].Type, "push event type");
+});
+
 Run("Voice policy does not announce dry-run opening signals", () =>
 {
     var now = DateTimeOffset.Parse("2026-05-22T09:30:06+08:00");
@@ -1286,6 +1395,89 @@ Run("Voice policy does not announce dry-run opening signals", () =>
 
     AssertEqual(0, EventVoicePolicy.FilterForVoice([dryRunOpening], VoiceMode.All).Count, "all mode dry-run muted");
     AssertEqual(0, EventVoicePolicy.FilterForVoice([dryRunOpening], VoiceMode.StrongOnly).Count, "strong mode dry-run muted");
+});
+
+Run("Voice policy announces only confirmed strong opening signals", () =>
+{
+    var now = DateTimeOffset.Parse("2026-05-22T09:36:06+08:00");
+    var pending = Event("002560", "待确认", L1EventType.OpeningWeakToStrong, "竞价弱转强", now) with
+    {
+        OpeningSignal = TestOpeningSignal(now, dryRun: false)
+    };
+    var failed = Event("002561", "已失败", L1EventType.OpeningWeakToStrong, "竞价弱转强", now) with
+    {
+        OpeningSignal = TestOpeningSignal(now, dryRun: false) with
+        {
+            Confidence = "watch",
+            IntradayStatus = "failed",
+            IntradayOutcome = "failed_open_dump",
+        }
+    };
+    var confirmedWatch = Event("002562", "确认观察", L1EventType.OpeningWeakToStrong, "竞价弱转强", now) with
+    {
+        OpeningSignal = TestOpeningSignal(now, dryRun: false) with
+        {
+            Confidence = "watch",
+            IntradayStatus = "confirmed",
+            IntradayOutcome = "confirmed_strong",
+        }
+    };
+    var confirmedStrong = Event("002563", "确认强", L1EventType.OpeningWeakToStrong, "竞价弱转强", now) with
+    {
+        OpeningSignal = TestOpeningSignal(now, dryRun: false) with
+        {
+            Confidence = "strong",
+            IntradayStatus = "confirmed",
+            IntradayOutcome = "confirmed_strong",
+        }
+    };
+
+    AssertEqual(1, EventVoicePolicy.FilterForVoice([pending, failed, confirmedWatch, confirmedStrong], VoiceMode.All).Count, "all mode opening voice");
+    AssertEqual(1, EventVoicePolicy.FilterForVoice([pending, failed, confirmedWatch, confirmedStrong], VoiceMode.StrongOnly).Count, "strong mode opening voice");
+    AssertEqual("002563", EventVoicePolicy.FilterForVoice([pending, failed, confirmedWatch, confirmedStrong], VoiceMode.StrongOnly)[0].Code, "confirmed strong opening code");
+});
+
+Run("Push policy excludes unconfirmed opening candidates", () =>
+{
+    var now = DateTimeOffset.Parse("2026-05-22T09:36:06+08:00");
+    var pending = Event("002560", "待确认", L1EventType.OpeningWeakToStrong, "竞价弱转强候选", now) with
+    {
+        OpeningSignal = TestOpeningSignal(now, dryRun: false) with
+        {
+            IntradayStatus = "preopen_candidate",
+            IntradayOutcome = "preopen_candidate",
+        }
+    };
+    var confirmedStrong = Event("002563", "确认强", L1EventType.OpeningWeakToStrong, "竞价弱转强", now) with
+    {
+        OpeningSignal = TestOpeningSignal(now, dryRun: false) with
+        {
+            Confidence = "strong",
+            IntradayStatus = "confirmed",
+            IntradayOutcome = "confirmed_strong",
+        }
+    };
+
+    var pushEvents = EventVoicePolicy.FilterForPush([pending, confirmedStrong]);
+
+    AssertEqual(1, pushEvents.Count, "opening push count");
+    AssertEqual("002563", pushEvents[0].Code, "confirmed strong opening push code");
+});
+
+Run("TDX bridge normalizes mismatched source change percent from price and pre-close", () =>
+{
+    AssertEqual(
+        -1.05m,
+        Math.Round(TdxBridgeClient.NormalizeChangePct(9.895m, 10m, -94.74m), 2),
+        "price-like source percent corrected");
+    AssertEqual(
+        -1.67m,
+        Math.Round(TdxBridgeClient.NormalizeChangePct(9.833m, 10m, -0.0167m), 2),
+        "ratio source percent corrected");
+    AssertEqual(
+        1.7m,
+        Math.Round(TdxBridgeClient.NormalizeChangePct(10.17m, 10m, 1.7m), 2),
+        "valid source percent preserved");
 });
 
 Run("Stock name resolver reads TDX tnf cache records", () =>
@@ -1778,6 +1970,7 @@ Run("TDX bridge full state merges quote and depth into one snapshot", () =>
     AssertEqual("600000", received[0].Code, "snapshot code");
     AssertEqual(1, received[0].Bids.Count, "bid levels");
     AssertEqual(1, received[0].Asks.Count, "ask levels");
+    AssertEqual(DateTimeOffset.Parse("2026-05-20T09:25:01+08:00"), received[0].SourceTime, "source time uses quote capturedAt");
     AssertEqual(DateTimeOffset.Parse("2026-05-20T09:25:01+08:00"), received[0].CapturedAt, "capturedAt");
     AssertEqual(DateTimeOffset.Parse("2026-05-20T09:25:02+08:00"), received[0].BridgeTs, "bridgeTs");
     AssertTrue(received[0].OpeningForcedSample, "opening forced sample");
@@ -1786,6 +1979,39 @@ Run("TDX bridge full state merges quote and depth into one snapshot", () =>
     AssertEqual(420, received[0].ElapsedMs ?? -1, "elapsed ms");
     AssertEqual(1, received[0].SlowBatches ?? -1, "slow batches");
     AssertEqual(2, received[0].TruncatedBatches ?? -1, "truncated batches");
+});
+
+Run("Opening auction sample telemetry writes 09:20 baseline sample", () =>
+{
+    var tempRoot = Path.Combine(Path.GetTempPath(), "YiDongJingLingTests", Guid.NewGuid().ToString("N"));
+    var sink = new OpeningAuctionSampleTelemetryFileSink(tempRoot);
+    var timestamp = DateTimeOffset.Parse("2026-06-02T09:20:05+08:00");
+    var quote = Quote(
+        "600000",
+        "浦发银行",
+        9.8m,
+        -2m,
+        10m,
+        time: timestamp,
+        amount: 8_000_000m) with
+    {
+        CapturedAt = timestamp,
+        BridgeTs = timestamp.AddMilliseconds(120),
+        OpeningForcedSample = true,
+        RequestedCount = 100,
+        ReceivedCount = 96,
+        ElapsedMs = 320,
+        SlowBatches = 1,
+        TruncatedBatches = 0,
+    };
+
+    sink.Record(OpeningAuctionSampleTelemetryRecord.FromQuote(quote));
+
+    var path = Path.Combine(tempRoot, "opening-auction-samples-2026-06-02.jsonl");
+    var line = File.ReadAllText(path);
+    AssertTrue(line.Contains("\"inInitialBaselineWindow\":true"), "initial baseline window exported");
+    AssertTrue(line.Contains("\"openingForcedSample\":true"), "forced sample exported");
+    AssertTrue(line.Contains("\"coverageRatio\":0.96"), "coverage ratio exported");
 });
 
 Run("Speech announcer sends selected voice to VoiceWorker", () =>
