@@ -153,7 +153,6 @@ export class OpeningWeakToStrongDetector {
     const auctionProfile = baseline.auctionProfile
     const hasAuctionProfile = Boolean(auctionProfile?.initialAt && auctionProfile.finalAt)
     const priceVolumeConfirmed = auctionProfile?.priceVolumeConfirmed === true
-    const canStrongBroadcast = hasAuctionProfile && priceVolumeConfirmed
     let variant: OpeningWeakToStrongVariant | null = null
     if (strongOpenCandidate) {
       variant = 'strong_open_board_attempt'
@@ -212,9 +211,6 @@ export class OpeningWeakToStrongDetector {
       else riskKeys.push('auction_profile_missing')
     } else if (!priceVolumeConfirmed) {
       riskKeys.push('auction_price_volume_unverified')
-    }
-    if (hasAuctionProfile && !canStrongBroadcast && !hasOpeningCoreEvidence(auctionProfile)) {
-      riskKeys.push('auction_price_volume_core_missing')
     }
     if (baseline.auctionAmount <= 0) riskKeys.push('auction_amount_missing')
     else if (amount < baseline.auctionAmount) riskKeys.push('amount_regressed')
@@ -313,24 +309,38 @@ export class OpeningWeakToStrongDetector {
     }
 
     const auctionProfile = baseline.auctionProfile
-    const hasAuctionProfile = Boolean(auctionProfile?.initialAt && auctionProfile.finalAt)
-    if (!hasAuctionProfile || !auctionProfile) {
+    const hasAuctionFinal = isValidPrice(baseline.auctionFinalPrice)
+    if (!hasAuctionFinal) {
       return this.rejected(quote, baseline, 'preopen_candidate_unconfirmed')
     }
 
     const quality = openingQuality(quote, baseline, this.rules)
-    const riskKeys = [...auctionProfile.riskFlags, ...quality.riskKeys]
-    if (auctionProfile.priceVolumeConfirmed !== true) riskKeys.push('auction_price_volume_unverified')
+    const priceVolumeConfirmed = auctionProfile?.priceVolumeConfirmed === true
+    const previousWeakScore = normalizeNumber(quote.previousWeakScore)
+    const weakAuctionBaseline =
+      atMost(baseline.auctionPct, this.rules.auctionWeakMaxPct) ||
+      previousWeakScore >= this.rules.previousWeakScoreMin
+    const hasPreopenContext =
+      baseline.auctionAmount >= this.rules.openingLiquidityMinAmount ||
+      previousWeakScore >= this.rules.previousWeakScoreMin
+    if (!priceVolumeConfirmed && (!weakAuctionBaseline || !hasPreopenContext)) {
+      return this.rejected(quote, baseline, 'preopen_candidate_unconfirmed')
+    }
+
+    const riskKeys = [...(auctionProfile?.riskFlags ?? []), ...quality.riskKeys]
+    if (!priceVolumeConfirmed) riskKeys.push('auction_price_volume_unverified')
     if (baseline.auctionAmount <= 0) riskKeys.push('auction_amount_missing')
     const riskFlags = uniqueStrings(riskKeys).map(riskFlag)
 
     const auctionPct = baseline.auctionPct
     const amount = baseline.auctionAmount
     const volume = normalizeNumber(quote.volume)
-    const auctionAmountDelta = auctionProfile.amountDelta ?? 0
+    const auctionAmountDelta = auctionProfile?.amountDelta ?? 0
+    const variant: OpeningWeakToStrongVariant = priceVolumeConfirmed ? 'auction_late_lift' : 'auction_gap_reversal'
+    const jumpPctPoint = priceVolumeConfirmed ? auctionProfile?.totalLiftPctPoint ?? 0 : 0
     const factors = buildFactors({
-      variant: 'auction_late_lift',
-      jumpPctPoint: auctionProfile.totalLiftPctPoint ?? 0,
+      variant,
+      jumpPctPoint,
       firstWindowPct: auctionPct,
       amount,
       amountDelta: auctionAmountDelta,
@@ -351,35 +361,35 @@ export class OpeningWeakToStrongDetector {
       displayName: DISPLAY_NAME,
       code: quote.code,
       name: quote.name || baseline.name || quote.code,
-      variant: 'auction_late_lift',
+      variant,
       confidence,
       score,
       auctionFinalPrice: baseline.auctionFinalPrice,
       auctionPct: round2(auctionPct),
       firstWindowPrice: baseline.auctionFinalPrice,
       firstWindowPct: round2(auctionPct),
-      jumpPctPoint: round2(auctionProfile.totalLiftPctPoint ?? 0),
+      jumpPctPoint: round2(jumpPctPoint),
       amount,
       amountDelta: auctionAmountDelta,
-      initialBaselineAt: auctionProfile.initialAt,
-      initialBaselinePrice: auctionProfile.initialPrice,
-      initialBaselinePct: auctionProfile.initialPct,
-      initialBaselineAmount: auctionProfile.initialAmount,
-      lateBaselineAt: auctionProfile.lateAt,
-      lateBaselinePrice: auctionProfile.latePrice,
-      lateBaselinePct: auctionProfile.lateStartPct,
-      lateBaselineAmount: auctionProfile.lateAmount,
-      finalBaselineAt: auctionProfile.finalAt,
-      finalBaselinePrice: auctionProfile.finalPrice,
-      finalBaselinePct: auctionProfile.finalPct,
-      finalBaselineAmount: auctionProfile.finalAmount,
-      auctionPriceLiftPctPoint: auctionProfile.totalLiftPctPoint,
-      latePriceLiftPctPoint: auctionProfile.lateLiftPctPoint,
-      auctionAmountDelta: auctionProfile.amountDelta,
-      lateAmountDelta: auctionProfile.lateAmountDelta,
-      auctionAmountLiftRatio: auctionProfile.amountLiftRatio,
-      lateAmountLiftRatio: auctionProfile.lateAmountLiftRatio,
-      priceVolumeConfirmed: true,
+      initialBaselineAt: auctionProfile?.initialAt,
+      initialBaselinePrice: auctionProfile?.initialPrice,
+      initialBaselinePct: auctionProfile?.initialPct,
+      initialBaselineAmount: auctionProfile?.initialAmount,
+      lateBaselineAt: auctionProfile?.lateAt,
+      lateBaselinePrice: auctionProfile?.latePrice,
+      lateBaselinePct: auctionProfile?.lateStartPct,
+      lateBaselineAmount: auctionProfile?.lateAmount,
+      finalBaselineAt: auctionProfile?.finalAt,
+      finalBaselinePrice: auctionProfile?.finalPrice,
+      finalBaselinePct: auctionProfile?.finalPct,
+      finalBaselineAmount: auctionProfile?.finalAmount,
+      auctionPriceLiftPctPoint: auctionProfile?.totalLiftPctPoint,
+      latePriceLiftPctPoint: auctionProfile?.lateLiftPctPoint,
+      auctionAmountDelta: auctionProfile?.amountDelta,
+      lateAmountDelta: auctionProfile?.lateAmountDelta,
+      auctionAmountLiftRatio: auctionProfile?.amountLiftRatio,
+      lateAmountLiftRatio: auctionProfile?.lateAmountLiftRatio,
+      priceVolumeConfirmed,
       liquidityTier: liquidityReview.tier,
       liquidityTierMode: 'review_only',
       liquidityTierBasis: liquidityReview.basis,
@@ -409,7 +419,9 @@ export class OpeningWeakToStrongDetector {
       intradayPrice: baseline.auctionFinalPrice,
       intradayPct: round2(auctionPct),
       intradayAmount: amount,
-      intradayNote: '竞价量价齐升，等待开盘承接验证',
+      intradayNote: priceVolumeConfirmed
+        ? '竞价量价齐升，等待开盘承接验证'
+        : '09:25基准偏弱，等待09:30强跳变验证',
       dryRun: quote.dryRun || quality.dryRun,
       factors,
       riskFlags,
@@ -633,16 +645,20 @@ function buildFactors(input: {
 }
 
 function riskFlag(key: string): OpeningWeakToStrongRiskFlag {
-  const severity = key === 'baseline_missing' || key === 'auction_price_volume_core_missing'
-    ? 'high'
-    : key === 'auction_profile_missing' || key === 'auction_initial_baseline_missing'
-      ? 'low'
-      : 'medium'
-  const penalty =
-    key === 'baseline_missing' || key === 'auction_price_volume_core_missing' ? -100
-    : key === 'auction_profile_missing' || key === 'auction_initial_baseline_missing' ? -10
-    : -35
-  return { key, severity, penalty }
+  const high = key === 'baseline_missing'
+  const profileRelated =
+    key === 'auction_profile_missing' ||
+    key === 'auction_initial_baseline_missing' ||
+    key === 'auction_price_volume_unverified'
+  const coverageRelated =
+    key === 'auction_coverage_low' ||
+    key === 'auction_amount_missing' ||
+    key === 'amount_regressed'
+  return {
+    key,
+    severity: high ? 'high' : profileRelated || coverageRelated ? 'low' : 'medium',
+    penalty: high ? -100 : profileRelated ? -10 : coverageRelated ? -5 : -35,
+  }
 }
 
 function mergeRiskFlags(
@@ -697,8 +713,7 @@ function openingQuality(
   return {
     riskKeys,
     auctionCoverageRatio: auctionCoverageRatio === undefined ? undefined : round2(auctionCoverageRatio),
-    dryRun: riskKeys.includes('auction_coverage_low') ||
-      riskKeys.includes('quote_time_untrusted') ||
+    dryRun: riskKeys.includes('quote_time_untrusted') ||
       riskKeys.includes('auction_time_untrusted'),
   }
 }
@@ -811,14 +826,6 @@ function buildAuctionProfile(
       !highRetreated,
     riskFlags,
   }
-}
-
-function hasOpeningCoreEvidence(profile: OpeningAuctionPriceVolumeProfile | undefined): boolean {
-  if (!profile) return false
-  if (!profile.initialAt || !profile.finalAt) return false
-  return profile.priceVolumeConfirmed ||
-    (profile.totalLiftPctPoint ?? 0) >= 0.5 ||
-    (profile.amountLiftRatio ?? 0) >= 0.35
 }
 
 function ratioFromBase(delta: number | undefined, base: number | undefined): number | undefined {

@@ -1,8 +1,56 @@
 # 异动精灵开盘竞价弱转强落地方案
 
-更新时间：2026-05-30
+更新时间：2026-06-02
 
 实现状态：V5 双基线量价协同已落地并通过 TS/C# 54+48 项测试。V5 后追加两轮优化：(1) 基于同花顺/通达信/东方财富市场研究的评分参数校准，16 个因子全部从硬编码提取为可配置字段；(2) P0/P1 代码审查修复——移除废弃字段的 hash 影响、统一 low_open_red_reversal 阈值口径、简化 TS 时间解析、画像缺失扣分从 -35 降至 -10。详情见”V5 后优化记录”章节。
+
+V7 已落地：盯盘工具回归本位，语音主链只保留 6 类硬阻断，质量信息降级为风险标签和导出字段，dryRun 仅限人工显式演练或时间戳不可信，proxy 降级为跨端去重同步，桌面版本地播报不再等待 proxy 授权。
+
+## V7 产品原则
+
+异动精灵是盘中实时盯盘工具。竞价弱转强链路的语音主链只解决一件事：**盘中及时提醒**。
+
+### 语音主链硬阻断（仅 6 类）
+
+| 阻断项 | 理由 |
+|--------|------|
+| 事件开关关闭 | 用户明确不想听该类型。 |
+| 语音模式静音 | 用户明确静音。 |
+| 同股同阶段冷却 | 防止重复刷屏。 |
+| 非目标时间窗口 | 防止普通盘中拉升误报成竞价弱转强。 |
+| 缺少有效 09:25 基线 | 没有弱转强的”弱”基准。 |
+| 价格/昨收/时间戳严重无效 | 这是错误行情，不是弱质量。 |
+
+### 质量信息只做标签，不做默认禁播
+
+| 项 | 新定位 |
+|----|--------|
+| `auction_coverage_low` | 风险标签和状态栏提示。 |
+| `auction_profile_missing` | 风险标签，不静音。 |
+| `auction_price_volume_unverified` | 降低强度或分数，不静音。 |
+| 成交额未达固定大额阈值 | 只保留最低流动性保护。 |
+| `baselineQuality=degraded` | 播报文案可提示”基线略弱”，不禁播。 |
+| `confidence=watch/strong/critical` | 控制强弱等级，不作为质量门禁。 |
+| proxy `voiceOwner=none` | 只在跨端重复时生效；proxy 异常不能阻断桌面本地播报。 |
+| 热榜前 N 过滤 | 只在用户显式启用八平台热榜来源时生效，并且界面说明会影响语音。 |
+
+### dryRun 只保留为人工显式演练模式
+
+- 不再由覆盖率略低、画像缺失等数据质量问题自动切入 dryRun。
+- 只有时间错位（`quote_time_untrusted`、`auction_time_untrusted`）才自动 dryRun。
+- 若用户没有打开演练，实时信号默认是真实盯盘提醒。
+
+### proxy 只负责跨端去重和同步
+
+- 桌面版是独立盯盘工具，proxy 失败时必须本地播报。
+- proxy 在线时可避免网页板和桌面版重复播，但不能因为仲裁复杂而牺牲桌面第一时间提醒。
+- 网页板仍尊重 proxy 仲裁（浏览器端延迟容忍度高）。
+
+### 候选和确认分层
+
+- `09:25-09:29` 候选可以显示但不播。
+- `09:30-09:35` 开盘承接触发才是主要语音点。
+- `09:35-10:00` 确认/失败用于更新列表和复盘，是否二次播报应极其克制。
 
 ## 目标
 
@@ -245,7 +293,7 @@ riskFlag: { key: "auction_amount_missing", severity: "medium", penalty: -8 }
 | `capturedAt` / `bridgeTs` | bridge 捕获或广播时间，不宣称为交易所时间 |
 | `quoteAgeMs` | 客户端收到时的报价年龄估计 |
 
-若 `09:25` 窗口覆盖率低于阈值，今日 `opening_weak_to_strong` 默认禁用或降级为 dry-run 记录，不触发强提醒。
+若 `09:25` 窗口覆盖率低于阈值，标记 `auction_coverage_low` 并降低评分；不再默认禁用或 dry-run。只有报价或竞价基线时间戳明显不可信时才进入 dry-run。
 
 ### 采样窗口
 
@@ -253,7 +301,7 @@ riskFlag: { key: "auction_amount_missing", severity: "medium", penalty: -8 }
 |------|------|------|
 | `09:20:00-09:24:49` | 建立基础行情、订阅监控池 | 确认桥在线，避免 09:25 才启动 |
 | `09:24:50-09:25:10` | 高频记录最后可见竞价价格 | 得到 `auctionFinalPrice` |
-| `09:25:00-09:29:59` | 保持订阅，量价齐升时触发 `preopen_candidate`，不触发普通连续竞价异动 | 等待正式开盘 |
+| `09:25:00-09:29:59` | 保持订阅；量价齐升，或 09:25 基准偏弱且有最低流动性/昨日弱势上下文时，触发无声 `preopen_candidate`；不触发普通连续竞价异动 | 等待正式开盘 |
 | `09:30:00-09:35:00` | 计算弱转强并触发信号 | 捕捉目标盘口 |
 | `09:35:01` 之后 | 不再新增弱转强信号 | 防止把普通盘中拉升误报为竞价信号 |
 
@@ -803,6 +851,14 @@ GET /api/opening-signals/today
 
 ## 复盘和日志
 
+2026-06-02 已补桌面端拒绝原因 telemetry：
+
+- `L1EventEngine` 对未触发的 `OpeningWeakToStrongResult` 写入 `detector_rejected` 记录，不再把 `invalidReason` 直接丢弃。
+- 同股同日已触发、但本次盘中状态优先级没有升级时，写入 `event_suppressed_duplicate_or_lower_priority`。
+- 日志路径为 `logs/yidong-jingling/opening-weak-to-strong/opening-weak-to-strong-YYYY-MM-DD.jsonl`，每行一个 JSON 对象；`logs/` 已被 `.gitignore` 忽略。
+- telemetry 字段包含 `code/name/timestamp/decision/invalidReason/auctionPct/officialOpenPct/firstWindowPct/jumpPctPoint/amount/amountDelta/baselineQuality/dryRun/intradayStatus/riskFlags` 等复盘关键项。
+- `variant_not_matched` 这类拒绝会保留 09:25 与 09:30 的关键涨幅和跳变数据，便于盘后区分“规则确实不成立”还是“阈值口径过严”。
+
 第一版建议 `YiDongJingLing` 导出记录时追加弱转强字段：
 
 ```text
@@ -857,19 +913,28 @@ dry-run/播报模式
 
 ## Dry-run 演练模式
 
-为避免早盘首次上线时误报、重复播报或干扰交易，V3 必须支持“开盘扫描演练模式”：
+dryRun 只保留为人工显式演练模式和时间戳不可信的自动保护：
+
+| 触发方式 | 场景 |
+|----------|------|
+| 用户显式打开演练开关 | 早盘首次上线验证基线和误报，所有信号标记 dryRun=true。 |
+| 自动：时间戳不可信 | `quote_time_untrusted` 或 `auction_time_untrusted` 时自动 dryRun，防止用错误时间窗口的行情误判。 |
+
+以下情况不再自动进入 dryRun：
+
+- 竞价覆盖率低于阈值（标记 `auction_coverage_low` 风险标签即可）。
+- 竞价画像缺失（标记 `auction_profile_missing` 风险标签即可）。
+- 竞价价量未确认（标记 `auction_price_volume_unverified` 风险标签即可）。
 
 | 行为 | dry-run |
 |------|---------|
 | 锁定 `09:25` 基线 | 是 |
 | 计算候选和分数 | 是 |
 | 写日志/导出 | 是 |
-| 上报 proxy | 可选，但必须标记 `dryRun=true` |
+| 上报 proxy | 是，标记 `dryRun=true` |
 | 主表强高亮 | 否 |
 | 语音播报 | 否 |
 | 飞书同步 | 否 |
-
-主表默认不展示 dry-run 信号；若需要展示，应使用弱样式并明确标记“演练”。
 
 ## 共享测试夹具
 
@@ -935,8 +1000,8 @@ V5 不是把“成交增量 >= 800 万”换成另一个固定金额。固定金
 | 确定基线 | 继续使用 `09:24:50-09:25:10` 锁定 `auctionFinalPrice/auctionPct/auctionAmount`，字段语义为 `finalBaseline*`。现有 `auctionFinalPrice` 保留为兼容字段。 |
 | 价格抬升 | `initialPct -> finalPct` 总抬升达标；`09:24 -> 09:25` 临门抬升达标或至少不明显背离。 |
 | 量能确认 | 使用 `auctionAmountLiftRatio`、`lateAmountLiftRatio` 等相对放大指标为核心；绝对成交额只做最低流动性保护。 |
-| 强播条件 | `priceVolumeConfirmed=true`、无中高风险标记、开盘承接未丢失，才允许 `strong/critical`。 |
-| 降级条件 | 价涨量不动、放量价不涨、临门回落、竞价画像缺失、开盘承接丢失、低覆盖或时间不可信，均降为 `watch` 或 `dryRun`。 |
+| 强播条件 | `09:25` 基准有效、开盘跳变转强、开盘承接未丢失，允许 `strong/critical`；`priceVolumeConfirmed=true` 只增强 `auction_late_lift` 子形态。 |
+| 降级条件 | 价涨量不动、放量价不涨、临门回落、竞价画像缺失、开盘承接丢失或低覆盖只影响风险/评分；报价或基线时间不可信才进入 `dryRun`。 |
 | 可选增强 | 未来若能稳定拿到流通市值/自由流通股本，可增加 `auctionAmountDelta / cirMV`、`auctionAmount / freeFloatMV`，但 V5 第一版不硬依赖。 |
 
 建议新增或明确的规则参数：
@@ -994,11 +1059,11 @@ priceVolumeConfirmed
 
 | 风险/原因 | 处理 |
 |-----------|------|
-| `auction_profile_missing` | 缺少 `09:20-09:25` 画像，只能 `watch`，作为风险提醒播报，不作为强确认。 |
-| `auction_price_volume_unverified` | 有跳空但竞价过程量价未确认，降为 `watch`。 |
+| `auction_profile_missing` | 缺少 `09:20-09:25` 画像，作为风险提醒和小幅扣分；有可靠 `09:25` 基准和开盘强跳变时仍可强播。 |
+| `auction_price_volume_unverified` | 有跳空但竞价过程量价未确认，作为低风险提示；不阻断弱竞价、强开盘的主信号。 |
 | `auction_price_volume_desynced` | 价格与成交额节奏背离，降为 `watch`。 |
-| `late_volume_not_confirmed` | 临门抬价没有临门成交确认，降为 `watch`。 |
-| `auction_price_volume_core_missing` | 完全没有竞价核心量价证据，标记为观察风险，不用开盘大成交额补成强播。 |
+| `late_volume_not_confirmed` | 临门抬价没有临门成交确认，不标记 `auction_late_lift`；仍可按开盘跳变转强判断。 |
+| `auction_price_volume_core_missing` | 已废弃为主链硬门槛；量价未确认统一使用 `auction_price_volume_unverified`。 |
 | `price_lift_without_volume` / `volume_without_price_lift` / `auction_late_high_retreated` | 沿用 V4 风险语义，默认不播报。 |
 
 #### V5 最小 RED 用例
@@ -1008,7 +1073,7 @@ priceVolumeConfirmed
 | `v5-auction-core-confirmed-low-open-amount-strong` | 强播 | 绝对当前成交额低于旧 `minCurrentAmount`、开盘增量低于旧 `minAmountDelta`，但 `09:20 -> 09:25` 量价协同充分，仍应 `strong/critical`。 |
 | `v5-auction-profile-missing-high-open-amount-downgraded` | 降级 | 只有 `09:25 + 09:30`，即使开盘成交额很大，也只能 `watch`。 |
 | `v5-price-volume-desynced-downgraded` | 降级 | 总成交额放大但临门量价节奏背离，不能强播。 |
-| `v5-no-auction-core-even-huge-open-amount-watch` | 观察 | `09:20-09:25` 没有价量核心，只靠 `09:30` 大额跳价时仍输出观察风险；可提醒，但不作为强确认。 |
+| `weak-auction-strong-open-without-auction-price-volume-core` | 强播 | `09:25` 仍弱、`09:30` 明显跳变转强时，即使 `09:20-09:25` 量价核心未确认，也应触发主信号并仅标记未验证风险。 |
 | `v5-missing-initial-baseline` | 降级或拒绝 | 缺少 `09:20` 初始基线，不能输出强信号。 |
 | `v5-delayed-initial-quote-after-final` | 稳定性 | 乱序补到的 `09:20` 样本可参与画像，但不能回滚已锁定的 `09:25` 确定基线。 |
 
@@ -1017,7 +1082,7 @@ priceVolumeConfirmed
 - `auction-late-lift-confirmed` 保留为 V5 强信号基准样例。
 - `002552-auction-gap-reversal`、`low-open-red-reversal`、`strong-open-board-attempt-with-precondition` 若继续保持 `strong/critical`，需要补 `09:20/09:24` 量价协同样本；否则 V5 下应降为 `watch`。
 - `strong-open-board-attempt-with-explicit-previous-context` 中的前日弱势上下文必须来自上游显式字段，不能由 `TDX自选股` 股票池自动注入。
-- 拒绝类只保留缺少确定基线、时间窗外、无有效价格等基础合同问题；覆盖率 dry-run、金额倒退、低流动性、`09:15-09:20` 虚高忽略等样例只影响风险、评分或强播资格。
+- 拒绝类只保留缺少确定基线、时间窗外、无有效价格等基础合同问题；覆盖率低、金额倒退、低流动性、`09:15-09:20` 虚高忽略等样例只影响风险、评分或强播资格。时间戳不可信仍可进入 dry-run。
 
 #### V5 实施计划
 
@@ -1026,7 +1091,7 @@ priceVolumeConfirmed
 3. 将 `OpeningAuctionStateStore.BuildAuctionProfile` 改成显式双基线选样：`09:20` 初始基线、`09:24` 临门基线、`09:25` 确定基线。
 4. 将 `amountOk` 从硬拒绝改为最低流动性风险/评分项；只有完全不满足基础流动性时才拒绝。
 5. 调整 `auction_late_lift` 成立逻辑：基于 `priceVolumeConfirmed`，不是固定 `800万/500万`。
-6. 调整 `auction_gap_reversal`、`low_open_red_reversal`、`strong_open_board_attempt`：没有竞价价量核心时降级为 `watch` 或拒绝，不再直接强播。
+6. 调整 `auction_gap_reversal`、`low_open_red_reversal`、`strong_open_board_attempt`：竞价价量核心只作为风险/评分和 `auction_late_lift` 子形态证据，不再阻断弱竞价、强开盘主信号。
 7. 同步 `configHash`、桌面事件详情、导出字段和文档。
 
 V5 必跑验证：
@@ -1192,14 +1257,15 @@ pnpm build
 - Dragon Board 主表展示与异动雷达事件一致。
 - bridge 离线、proxy 离线、只开网页、只开桌面都按文档降级，不静默失败。
 
-离线矩阵：
+离线矩阵（V7 口径：桌面本地播报优先，proxy 只做跨端去重）：
 
 | 场景 | 检测 | 本地语音 | 主表信号 | 恢复行为 |
 |------|------|----------|----------|----------|
 | bridge 离线 | 不检测 | 不播报 | 显示行情桥离线 | 恢复后仅未来窗口可用，不补造 `09:25` 基线 |
-| proxy 离线 | 本地可检测 | 桌面可按本地策略播报，网页默认不跨端仲裁 | 主表不可同步，显示 proxy 离线 | 恢复后可补报未过期信号，标记 `proxyPostStatus` |
-| 只开网页 | 网页可检测 | 按 proxy `voiceOwner=web` 播报 | 可显示 | 桌面后开不补造基线 |
-| 只开桌面 | 桌面可检测 | 桌面播报 | proxy 在线时可显示 | 网页后开只消费主表缓存 |
+| proxy 离线 | 本地可检测 | 桌面立即本地播报；网页降级为本地播报 | 主表不可同步，显示 proxy 离线 | 恢复后可补报未过期信号，标记 `proxyPostStatus` |
+| 只开网页 | 网页可检测 | 按 proxy 仲裁播报（web 端等待 proxy 响应） | 可显示 | 桌面后开不补造基线 |
+| 只开桌面 | 桌面可检测 | 桌面立即本地播报，不等待 proxy | proxy 在线时可显示 | 网页后开只消费主表缓存 |
+| 两端同时 | 各自检测 | 桌面先本地播报，网页等 proxy 返回 voiceOwner=web 才播报 | 两端可显示 | proxy 去重避免重复语音 |
 
 ### Phase 7：参数微调和复盘
 
@@ -1386,13 +1452,13 @@ V6 不新增规则阈值字段，不改变 V5 `configHash`。早期候选开始�
 | 阶段 | 状态 | 触发口径 | 产品动作 |
 |------|------|----------|----------|
 | `09:20-09:25` | 内部候选 | 不可撤单阶段量价齐升、临门确认、不回落 | 只保存证据，不刷屏强播。 |
-| `09:25:00-09:29:59` | `preopen_candidate` | 双基线完整，`priceVolumeConfirmed=true`，无质量/量价风险标记；`09:25` 最终涨幅不要求翻红 | 可高亮/播报“竞价弱转强候选”，明确“待开盘验证”。 |
+| `09:25:00-09:29:59` | `preopen_candidate` | 有有效 09:25 基准；`priceVolumeConfirmed=true` 时按 `auction_late_lift` 候选，否则要求 09:25 基准偏弱，并具备最低流动性或昨日弱势上下文，按 `auction_gap_reversal` 观察候选，附带 `auction_price_volume_unverified` 风险。 | 可高亮/展示“竞价弱转强候选”，明确“待开盘验证”，但不语音播报。 |
 | `09:30-09:35` | `pending` | 满足 V5 弱转强模式族，跳空高开、快速上攻或冲板 | 可再次高亮/播报，提示“开盘承接确认中”。 |
 | `09:35-10:00` | `confirmed` | 价格继续上攻、站稳开盘/竞价确认价，或逼近/触及涨停 | 更新原信号状态，必要时补一条确认事件。 |
 | `09:35-10:00` | `failed` | 放量跌回开盘价/昨收/竞价确认价下方 | 更新原信号状态，标记疑似竞价诱多。 |
 | `09:35-10:00` | `watch` | 未明显走强也未走坏 | 保留观察，不强行定性成功。 |
 
-第一版不新增独立信号类型，继续使用同一个 `signalType = opening_weak_to_strong` 和同一个 proxy dedupe key。候选、开盘承接和盘中结果通过状态字段区分；网页异动列表的本地事件 id 按阶段追加后缀，避免 `09:25` 早播吃掉 `09:30` 升级播报。
+第一版不新增独立信号类型，继续使用同一个 `signalType = opening_weak_to_strong` 和同一个 proxy dedupe key。候选、开盘承接和盘中结果通过状态字段区分；网页异动列表的本地事件 id 按阶段追加后缀，避免 `09:25` 候选记录吃掉 `09:30` 升级播报。
 
 ### 字段合同
 
@@ -1419,7 +1485,7 @@ V6 在现有信号字段上新增盘中状态字段：
 且 09:20 初始基线、09:24 临门基线、09:25 确定基线完整
 且 priceVolumeConfirmed = true
 且没有 auctionProfile 风险标记、覆盖率/时间戳质量风险
-输出 preopen_candidate，语音文案必须带“候选/待开盘验证”
+输出 preopen_candidate，展示文案必须带“候选/待开盘验证”，不授予语音
 ```
 
 开盘承接：
@@ -1457,11 +1523,11 @@ V6 在现有信号字段上新增盘中状态字段：
 
 ### 验收
 
-1. `09:25:00-09:29:59` 严格候选触发的信号包含 `intradayStatus=preopen_candidate`、`intradayOutcome=preopen_candidate`，GUI/语音显示“竞价弱转强候选”。
+1. `09:25:00-09:29:59` 严格候选触发的信号包含 `intradayStatus=preopen_candidate`、`intradayOutcome=preopen_candidate`，GUI 显示“竞价弱转强候选”，但不语音播报。
 2. `09:30-09:35` 开盘承接触发的信号包含 `intradayStatus=pending`、`intradayOutcome=pending`。
 3. `09:35-10:00` 继续上攻时，只有已通过 `pending` 开盘承接的同一 `opening_weak_to_strong` 更新为 `confirmed/confirmed_strong`。
 4. `09:35-10:00` 跌破开盘/昨收支撑时，同一 `opening_weak_to_strong` 更新为 `failed/failed_open_dump`，并带 `intraday_open_dump` 风险标记。
-5. proxy 使用同一 dedupe key 保存盘中更新，`failed` 结果可以覆盖早先 `strong` 首发信号；语音按阶段授权，`preopen_candidate` 和 `pending` 可各播一次，同阶段只播一次。
+5. proxy 使用同一 dedupe key 保存盘中更新，`failed` 结果可以覆盖早先 `strong` 首发信号；语音只对 `pending/confirmed` 等已开盘承接阶段授权，`preopen_candidate` 不授权。
 6. 桌面端首发后不因同股同日状态锁而压住开盘承接、盘中确认或失败更新。
 
 ## 参考资料

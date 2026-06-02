@@ -338,7 +338,7 @@ Superpowers 设计规格见：[../superpowers/specs/2026-05-22-opening-weak-to-s
 
 1. `09:24:50-09:25:10` 网页板和桌面版都能对当前监控池锁定 `auctionFinalPrice`。
 2. `09:30:00-09:35:00` 两端都能计算 `auctionPct`、`firstWindowPct` 和 `jumpPctPoint`。
-3. 满足条件时触发 `竞价弱转强` 事件，事件包含 `variant`、`score`、`confidence`、`factors`、`riskFlags`、`baselineQuality`、`ruleVersion`、`configHash`；已触发的 `watch/strong/critical` 都按 proxy `voiceOwner` 仲裁后播报，`confidence` 只作为强度和复盘分层。
+3. 满足条件时触发 `竞价弱转强` 事件，事件包含 `variant`、`score`、`confidence`、`factors`、`riskFlags`、`baselineQuality`、`ruleVersion`、`configHash`；`09:30` 后已触发的 `watch/strong/critical` 都按 proxy `voiceOwner` 仲裁后播报，`preopen_candidate` 只记录不播，`confidence` 只作为强度和复盘分层。
 4. 异动精灵主表格高亮显示该事件，详情包含 `09:25` 价、`09:30` 价、跳空百分点、成交额和距涨停。
 5. 网页板异动雷达显示同一事件，复用现有去重、列表和语音服务。
 6. Dragon Board 行情主界面展示同一信号徽标或短时行高亮。
@@ -461,7 +461,7 @@ Superpowers 设计规格见：[../superpowers/specs/2026-05-22-opening-weak-to-s
 
 ### 2026-05-24 续修：覆盖率门禁与边界 fixture
 
-- [x] TS/C# 检测合同新增早盘覆盖率和报价新鲜度风险字段，低覆盖/陈旧报价降为 `watch + dryRun`。
+- [x] TS/C# 检测合同新增早盘覆盖率和报价新鲜度风险字段；2026-06-02 修正为低覆盖仅标风险，陈旧报价/竞价时间不可信仍为 `dryRun`。
 - [x] 桌面端状态栏显示 `09:25` 强制采样覆盖率、采样数和批次异常摘要，触发信号后继续显示信号级 dry-run 状态。
 - [x] 共享 fixture 补齐 sourceTs/bridgeTs 陈旧、金额缺失/倒退、低流动性跳价、开盘后回落等高风险边界。
 - [x] 同步 TS/C# 测试、类型检查、桌面构建和文档进度。
@@ -644,5 +644,120 @@ git diff --check
 - [x] 修复 Important 反馈：桌面端 `EventDeduper` 对 `OpeningWeakToStrong` 的盘中状态升级绕过 30 秒冷却，避免 `pending -> confirmed/failed` 被吞掉。
 - [x] 修复 Important 反馈：OpenAPI `opening-signals` schema 补齐 `intradayStatus/intradayOutcome/intraday*` 字段。
 - [x] 补强 review 反馈：`09:25:10` 边界可触发候选、候选不能绕过 `pending` 直接确认、`configHash` 不因 V6 状态机变化而改变；CSV 导出测试按列名断言盘中列和值对齐。
+- [x] 2026-06-02 修正：`preopen_candidate` 候选阶段不再授予语音，避免 09:30 开盘承接验证前误播。
+- [x] 2026-06-02 修正：`preopen_candidate` 不再只认竞价量价齐升；09:25 基准偏弱且有最低流动性或昨日弱势上下文时，作为无声 `auction_gap_reversal` 观察候选。
+- [x] 2026-06-02 修正：桌面端新增拒绝原因 telemetry，未触发和状态压制的弱转强评估写入本地 JSONL，保留 `invalidReason`、关键涨幅、跳变、成交额和风险标记。
 - **验证：** `node --test proxy-server\__tests__\openingSignals.test.mjs proxy-server\__tests__\docs.test.mjs` 10 tests passed；`dotnet run --project tools\YiDongJingLing.Tests\YiDongJingLing.Tests.csproj` 全部通过；最终全量验证见 `progress.md`。
 - **状态：** complete
+
+---
+
+## V7 Phase 0：盯盘工具回归本位
+
+### 问题结论
+
+异动精灵是盘中实时盯盘工具，不是量化回测平台。当前竞价弱转强链路从“行情进入监控池”到“语音播报”之间叠加了过多研究型概念：
+
+```text
+监控池 → 建基线 → 竞价窗口采样 → 检测器 triggered
+→ 事件开关 → 去重 → dryRun/语音模式/热榜前N过滤
+→ proxy 语音仲裁 → VoiceWorker
+```
+
+这条链路的问题不在于每一层都错，而在于“可观测/复盘/跨端同步”被放进了语音主路径。结果是：信号已经出现，但可能被 dryRun、质量门禁、跨端仲裁、热榜过滤、状态压制层层静音。对盯盘工具来说，这是本末倒置。
+
+### 新的产品原则
+
+1. **语音主链只解决一件事：盘中及时提醒。**
+   - 触发条件满足、事件开关打开、语音未静音、冷却未命中，就应该尽快播报。
+2. **质量信息只做标签，不做默认禁播。**
+   - 覆盖率低、画像缺失、竞价金额缺失、上下文缺失，只进入风险标记、日志和导出字段。
+   - 只有时间错位、价格无效、昨收无效、窗口错误这类会导致误判的硬错误，才允许阻断。
+3. **dryRun 只保留为人工显式演练模式。**
+   - 不再由覆盖率略低、画像缺失等数据质量问题自动切入 dryRun。
+   - 若用户没有打开演练，实时信号默认是真实盯盘提醒。
+4. **proxy 只负责跨端去重和同步，不应成为桌面语音单点阻断。**
+   - 桌面版是独立盯盘工具，proxy 失败时必须本地播报。
+   - proxy 在线时可避免网页板和桌面版重复播，但不能因为仲裁复杂而牺牲桌面第一时间提醒。
+5. **候选和确认分层服务盘中行动，不服务盘后论文。**
+   - `09:25-09:29` 候选可以显示但不播。
+   - `09:30-09:35` 开盘承接触发才是主要语音点。
+   - `09:35-10:00` 确认/失败用于更新列表和复盘，是否二次播报应极其克制。
+
+### 建议后的语音主链
+
+```text
+行情进入监控池
+→ 09:25 基线存在
+→ 09:30-09:35 弱转强检测命中
+→ 事件开关打开
+→ 同股同阶段冷却未命中
+→ 语音模式允许
+→ 本地 VoiceWorker 播报
+→ 异步上报 proxy / telemetry / 导出字段
+```
+
+主链上只保留 6 类硬阻断：
+
+| 阻断项 | 是否保留 | 理由 |
+|--------|----------|------|
+| 事件开关关闭 | 保留 | 用户明确不想听该类型。 |
+| 语音模式静音 | 保留 | 用户明确静音。 |
+| 同股同阶段冷却 | 保留 | 防止重复刷屏。 |
+| 非目标时间窗口 | 保留 | 防止普通盘中拉升误报成竞价弱转强。 |
+| 缺少有效 `09:25` 基线 | 保留 | 没有弱转强的“弱”基准。 |
+| 价格/昨收/时间戳严重无效 | 保留 | 这是错误行情，不是弱质量。 |
+
+以下内容不再作为默认语音阻断：
+
+| 项 | 新定位 |
+|----|--------|
+| `auction_coverage_low` | 风险标签和状态栏提示。 |
+| `auction_profile_missing` | 风险标签，不静音。 |
+| `auction_price_volume_unverified` | 降低强度或分数，不静音。 |
+| 成交额未达固定大额阈值 | 只保留最低流动性保护。 |
+| `baselineQuality=degraded` | 播报文案可提示“基线略弱”，不禁播。 |
+| `confidence=watch/strong/critical` | 控制强弱等级，不作为质量门禁。 |
+| proxy `voiceOwner=none` | 只在跨端重复时生效；proxy 异常不能阻断桌面本地播报。 |
+| 热榜前 N 过滤 | 只在用户显式启用八平台热榜来源时生效，并且界面要说明会影响语音。 |
+
+### V7 Phase 1：文档和设置口径收敛
+
+- [x] 更新 `opening-weak-to-strong-plan.md`，删除”dry-run 默认实盘验证”的产品口径，改为”显式演练开关”。
+- [x] 更新 `event-rule-logic.md`，把竞价弱转强拆成”硬阻断 / 风险标签 / 语音控制”三类。
+- [x] 更新 `usage.md`，说明桌面语音优先本地播报，proxy 只是跨端去重和同步。
+- **验证：** 文档审查，确认不再把量化回测、质量门禁、盘后复盘写成实时播报前置条件。
+- **状态：** complete
+
+### V7 Phase 2：桌面端语音链路瘦身
+
+- [x] C# `EventVoicePolicy` 只处理语音模式、preopen 候选不播、严重 dryRun 不播，不再承载广义质量门禁。
+- [x] C# `MainForm.ReportOpeningSignalsAndAnnounceAsync` 调整为本地播报优先、proxy 上报异步补充；proxy 失败维持当前本地降级播报。
+- [x] 热榜前 N 过滤保持用户显式设置，但在设置说明中标注”会过滤语音，不过滤列表”。
+- [x] telemetry 继续记录拒绝和压制原因，但不得反向影响播报。
+- **验证：** `dotnet run --project tools\YiDongJingLing.Tests\YiDongJingLing.Tests.csproj`；`dotnet build tools\YiDongJingLing\YiDongJingLing.csproj`。
+- **状态：** complete
+
+### V7 Phase 3：检测器硬阻断复核
+
+- [x] 逐条复核 `OpeningWeakToStrongDetector` 的 `invalidReason` 和 `riskFlags`，只保留真正会误报的硬拒绝。
+- [x] 覆盖率、画像、竞价价量未确认等从硬拒绝/自动 dryRun 收敛为风险字段，罚分从 -35 降至 -5~-10。
+- [x] `preopen_candidate` 继续只展示不播，`pending` 才是弱转强语音主触发点。
+- **验证：** TS/C# fixture 增加”低覆盖但时间可信仍可播””画像缺失仍可播””时间错位禁播”用例，51+48 tests passed。
+- **状态：** complete
+
+### V7 Phase 4：跨端 proxy 角色降级
+
+- [x] proxy `voiceOwner` 只解决网页板和桌面版同时命中时的重复语音。
+- [x] 桌面端单独运行时，不因 proxy 离线或未返回授权而错过本地播报。
+- [x] 网页板仍尊重 proxy 仲裁，避免浏览器和桌面同时说话。
+- **验证：** proxy 离线、只开桌面、只开网页、两端同时命中四个场景逻辑已验证，proxy tests 11 passed。
+- **状态：** complete
+
+### V7 Phase 5：真实盘中验收
+
+- [ ] 选 1-2 个交易日只用 `TDX自选股` 或明确热榜池实盘观察。
+- [ ] 记录每只未播股票的最终阻断点，确认阻断原因只来自硬阻断或用户设置。
+- [ ] 若仍出现“检测命中但无声”，必须在日志中看到唯一明确原因。
+- **验收标准：** `09:30-09:35` 命中 `pending/strong/critical` 的竞价弱转强，在事件开关打开、语音未静音、冷却未命中时必须播报。
+- **状态：** pending

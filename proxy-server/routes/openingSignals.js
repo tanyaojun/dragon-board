@@ -198,6 +198,7 @@ function dedupeKey(signal) {
 
 function shouldGrantVoice(signal) {
   if (signal.dryRun) return false
+  if (signal.intradayStatus === 'preopen_candidate' || signal.intradayOutcome === 'preopen_candidate') return false
   if (signal.intradayStatus === 'failed' || signal.intradayStatus === 'watch') return false
   if (signal.intradayOutcome === 'failed_open_dump' || signal.intradayOutcome === 'watch_only') return false
   return CONFIDENCE_PRIORITY.has(signal.confidence)

@@ -153,7 +153,7 @@ test('opening signal route authorizes voice once for each opening action stage',
       intradayOutcome: 'preopen_candidate',
       intradayNote: '竞价量价齐升，等待开盘承接验证',
     }))
-    assert.equal(preopen.body.voiceOwner, 'web')
+    assert.equal(preopen.body.voiceOwner, 'none')
 
     const pending = await postSignal(baseUrl, 'web', signal({
       confidence: 'strong',
@@ -174,7 +174,7 @@ test('opening signal route authorizes voice once for each opening action stage',
       intradayOutcome: 'pending',
     }))
     assert.equal(duplicatePending.body.voiceOwner, 'none')
-    assert.equal(duplicatePending.body.voiceGrantedStages.preopen_candidate, 'web')
+    assert.equal(duplicatePending.body.voiceGrantedStages.preopen_candidate, undefined)
     assert.equal(duplicatePending.body.voiceGrantedStages.pending, 'web')
   } finally {
     server.close()

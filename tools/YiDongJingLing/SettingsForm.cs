@@ -219,7 +219,7 @@ internal sealed class SettingsForm : Form
         _hotlistTopVoiceBox.TextAlign = HorizontalAlignment.Right;
         voiceLayout.Controls.Add(_hotlistTopVoiceBox, 1, 5);
         voiceLayout.SetColumnSpan(_hotlistTopVoiceBox, 2);
-        _hotlistTopVoiceHint.Text = "0=不限";
+        _hotlistTopVoiceHint.Text = "0=不限；仅过滤语音，不过滤异动列表";
         _hotlistTopVoiceHint.Dock = DockStyle.Fill;
         _hotlistTopVoiceHint.ForeColor = Color.FromArgb(100, 116, 139);
         _hotlistTopVoiceHint.TextAlign = ContentAlignment.MiddleLeft;

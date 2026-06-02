@@ -196,7 +196,7 @@
 
 | 项目 | 发现 |
 |------|------|
-| 覆盖率门禁 | TS/C# 检测器已按 `receivedCount/requestedCount` 计算 `auctionCoverageRatio`，低于 `0.95` 标记 `auction_coverage_low`，降级为 `watch + dryRun`，不再进入语音。 |
+| 覆盖率门禁 | TS/C# 检测器已按 `receivedCount/requestedCount` 计算 `auctionCoverageRatio`，低于 `0.95` 标记 `auction_coverage_low`。2026-06-02 修正后，低覆盖只作为风险扣分，不再自动 dryRun 禁播。 |
 | 报价新鲜度 | 当前报价采样时间超过 `maxQuoteAgeMs=10000` 标记 `quote_time_untrusted`；竞价基线 `capturedAt` 不在 `09:24:50-09:25:10` 标记 `auction_time_untrusted`。 |
 | 低质量演练 | `dryRun` 从 Web/Desktop 信号合同透传到 proxy；Web 主表过滤 dry-run，桌面语音策略在 `VoiceMode.All` 下也不播 dry-run。 |
 | 状态栏可见性 | 桌面状态栏在 09:25 强制采样行情到达时即可显示 `竞价覆盖 xx% received/requested 慢x 截x`，触发弱转强后继续显示信号级 dry-run 状态。 |
@@ -241,11 +241,22 @@
 | 双基线落地 | TS/C# 均已从“首尾样本画像”改为显式 `initialBaselineStart/End`、`auctionLateLiftStart`、`auctionStart/End` 三段选样；乱序补到的 `09:20` 样本只补画像，不回滚已锁定的 `09:25` 确定基线。 |
 | 成交额阈值 | `minCurrentAmount` 和 `minAmountDelta` 不再作为强播硬前置；新增 `openingLiquidityMinAmount=500万` 作为最低流动性保护，旧阈值只影响 `openingAmount` 评分。 |
 | 量价确认 | 新增 `auctionAmountLiftRatio`、`lateAmountLiftRatio`、`priceVolumeConfirmed`；`auction_late_lift` 依赖相对量价确认，不再依赖固定 `800万/500万` 绝对增量。 |
-| 降级/观察 | 缺画像标记 `auction_profile_missing` 并降为 `watch`；缺 09:20 标记 `auction_initial_baseline_missing`；有完整画像但无价量核心时输出观察信号并标记 `auction_price_volume_core_missing`。 |
+| 降级/观察 | 缺画像标记 `auction_profile_missing` 并小幅扣分；缺 09:20 标记 `auction_initial_baseline_missing`；有完整画像但量价未确认时标记 `auction_price_volume_unverified`，不再一票否决开盘弱转强。 |
 | 风险扣分 | 量价背离、无量抬价、放量不涨、高位回落属于同一画像风险组，避免同一事实重复扣分到 0。 |
 | 规则指纹 | V5 新 hash 为 `owts-08f44efb`，TS/C# 已同步字段集合和固定断言。 |
 | 代码复核修正 | 复核发现 `HasOpeningCoreEvidence` 不能用绝对值判断，否则下跌/缩量会被误当核心；已改为只接受正向抬升/放量，并新增 `v5-negative-auction-core-rejected`。 |
-| 临门确认修正 | `priceVolumeConfirmed` 已纳入 `09:24-09:25` 临门价格和相对放量确认；总量价抬升但无临门确认的样例降为 `watch`，新增 `v5-total-confirmed-without-late-confirmation-downgraded`。 |
+| 临门确认修正 | `priceVolumeConfirmed` 已纳入 `09:24-09:25` 临门价格和相对放量确认；该字段只决定是否标记 `auction_late_lift`/临门抢筹，不再阻断 `auction_gap_reversal` 或 `low_open_red_reversal`。 |
+
+2026-06-02 竞价弱转强量价门槛修正：
+
+| 项目 | 结论 |
+|------|------|
+| 根因 | 旧逻辑把 `09:20->09:25` 与 `09:24->09:25` 的量价确认当成强信号核心；`auction_price_volume_core_missing` 是 high/-100，等同于把弱竞价、强开盘的真实弱转强压成不可播。 |
+| 修正 | `auction_price_volume_core_missing` 从主链移除；`auction_price_volume_unverified` 改为低风险、小扣分。竞价量价确认只作为 `auction_late_lift` 子形态和复盘字段，不再作为所有弱转强的入场券。 |
+| 样例 | `weak-auction-strong-open-without-auction-price-volume-core`：09:25 仍弱，09:30 跳变转强，量价核心未确认时仍输出 `auction_gap_reversal` / `strong`，只附带 `auction_price_volume_unverified`。 |
+| 低覆盖修正 | `auction_coverage_low` 不再触发 `dryRun`；只有 `quote_time_untrusted`、`auction_time_untrusted` 这类时间戳不可信问题继续禁播。 |
+| 候选播报修正 | `preopen_candidate` 只作为 09:25-09:29 的候选展示和上报，不再授予桌面/Web/proxy 语音；语音等待 09:30 后开盘承接转强。 |
+| 候选预判修正 | `preopen_candidate` 不再把竞价量价齐升当唯一入口；09:25 基准偏弱且有最低流动性或昨日弱势上下文时，允许作为无声 `auction_gap_reversal` 观察候选，并附带 `auction_price_volume_unverified`。 |
 
 2026-05-24 V6-A 方案交叉评审：
 
@@ -274,7 +285,7 @@
 | 方案纠偏 | 旧 V6-A “复盘字段/流动性观测”保留为辅助遥测；V6 主线改为“竞价弱转强盘中确认闭环”。 |
 | 状态口径 | `09:30-09:35` 首发 `pending`；`09:35-10:00` 继续上攻并站稳更新为 `confirmed_strong`；跌破开盘/昨收支撑更新为 `failed_open_dump`。 |
 | 去重口径 | 不新增事件类型，不换 dedupe key；同一 `tradingDate + code + opening_weak_to_strong` 信号允许盘中状态更新。proxy 和 Web buffer 必须按盘中结果优先，而不能只按 `confidence/score` 选强信号。 |
-| 语音口径 | 盘中失败/观察更新不重新抢语音；proxy 仍只对首次强信号授予一次 `voiceOwner`，防止刷屏。 |
+| 语音口径 | 盘中失败/观察更新不重新抢语音；proxy 仍只对首次有效开盘承接信号授予一次 `voiceOwner`，`preopen_candidate` 候选不授予语音，防止开盘前误播。 |
 | 桌面状态锁 | C# `L1EventEngine` 旧的同股同日触发锁会压住 09:35 后更新；需改为记录盘中状态优先级，允许 pending -> confirmed -> failed。 |
 | 规则指纹 | `09:25:10` 候选窗口、`10:00` 收口和 `+1.0pct` 盘中确认推进属于 V6 状态机常量，不扩展规则对象，不进入 TS/C# `configHash`；规则指纹保持 `owts-08f44efb`。 |
 | 评审状态 | 已复用既有只读 Agent 完成提交前 code review；Critical 无，Important 反馈已修复。 |
@@ -282,6 +293,8 @@
 | 桌面去重 | `EventDeduper` 原 30 秒冷却可能吞掉 `pending -> confirmed/failed` 的盘中更新；已记录弱转强盘中状态优先级，状态升级可绕过冷却。 |
 | API 合同 | OpenAPI 原未声明 V6 `intraday*` 字段；已补 schema 和 docs 测试，避免 Web/桌面/proxy 合同漂移。 |
 | 测试补强 | 已补 `09:25:10` 边界、候选不能绕过 `pending` 直接确认、`configHash` 保持旧值回归；桌面 CSV 导出已按列名断言盘中列和值对齐。 |
+| 拒绝原因 telemetry | 桌面端已把未触发的弱转强检测结果写入 JSONL：`detector_rejected` 保留 `invalidReason`、关键涨幅/跳变/成交额和风险标记；同股同日状态未升级的触发结果记录为 `event_suppressed_duplicate_or_lower_priority`，便于实盘复盘定位“为什么没播”。 |
+| 盯盘工具定位偏移 | 当前弱转强链路把质量门禁、dry-run、跨端仲裁、热榜过滤和复盘字段放进语音主路径，导致“检测命中但可能层层静音”。V7 需把语音主链收敛为实时提醒：只保留用户设置、冷却、时间窗口、有效基线和严重行情错误作为硬阻断，其余降级为风险标签、日志和导出字段。 |
 
 ## 风险与处理
 

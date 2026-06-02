@@ -37,6 +37,7 @@ public sealed class MainForm : Form
     private readonly HotlistPoolLoader _hotlistLoader = new();
     private readonly EventRadarMessageNotifier _messageNotifier = new();
     private readonly OpeningSignalReporter _openingSignalReporter = new();
+    private readonly OpeningWeakToStrongTelemetryFileSink _openingTelemetry;
     private readonly List<EventRecord> _eventRecords = [];
     private readonly string _root;
     private readonly BridgeProcessManager _bridgeManager;
@@ -96,7 +97,10 @@ public sealed class MainForm : Form
     public MainForm()
     {
         _root = ProjectRootLocator.Find();
-        _eventEngine = new L1EventEngine(_eventRules);
+        _openingTelemetry = new OpeningWeakToStrongTelemetryFileSink(
+            Path.Combine(_root, "logs", "yidong-jingling", "opening-weak-to-strong"),
+            Log);
+        _eventEngine = new L1EventEngine(_eventRules, _openingTelemetry.Record);
         _bridgeManager = new BridgeProcessManager(_root);
         _proxyManager = new ProxyProcessManager(_root);
         _speech = new SpeechAnnouncer(_root, Log);
@@ -1276,7 +1280,7 @@ public sealed class MainForm : Form
         ApplyHotlistTopVoiceFilter(voiceEvents);
         if (openingEvents.Length > 0)
         {
-            _ = ReportOpeningSignalsAndAnnounceAsync(openingEvents, openingVoiceEvents);
+            ReportOpeningSignalsAndAnnounceAsync(openingEvents, openingVoiceEvents);
         }
         if (voiceEvents.Count > 0)
         {
@@ -1316,44 +1320,41 @@ public sealed class MainForm : Form
         }
     }
 
-    private async Task ReportOpeningSignalsAndAnnounceAsync(
+    private void ReportOpeningSignalsAndAnnounceAsync(
         IReadOnlyList<EventRecord> events,
         IReadOnlyList<EventRecord> voiceEligibleEvents)
     {
         if (events.Count == 0) return;
 
-        try
+        if (voiceEligibleEvents.Count > 0)
         {
-            if (!BridgeProcessManager.IsPortOpen(3000))
-            {
-                _proxyManager.StartProxy(Log);
-                await WaitForProxyPortAsync(3000, "竞价信号语音仲裁可能失败");
-            }
+            _speech.Announce(voiceEligibleEvents);
+        }
 
-            var voiceEvents = new List<EventRecord>();
-            foreach (var item in events)
+        _ = Task.Run(async () =>
+        {
+            if (_closing || IsDisposed) return;
+            try
             {
-                var result = await _openingSignalReporter.ReportAsync(item, new Uri("http://127.0.0.1:3000"));
-                Log($"竞价弱转强信号已上报: {item.Code} {result.DedupeAction} voiceOwner={result.VoiceOwner}");
-                if (voiceEligibleEvents.Contains(item) && result.VoiceOwner == "desktop")
+                if (!BridgeProcessManager.IsPortOpen(3000))
                 {
-                    voiceEvents.Add(item);
+                    _proxyManager.StartProxy(Log);
+                    await WaitForProxyPortAsync(3000, "竞价信号同步可能失败");
+                }
+
+                foreach (var item in events)
+                {
+                    if (_closing || IsDisposed) return;
+                    var result = await _openingSignalReporter.ReportAsync(item, new Uri("http://127.0.0.1:3000"));
+                    Log($"竞价弱转强信号已上报: {item.Code} {result.DedupeAction} voiceOwner={result.VoiceOwner}");
                 }
             }
-
-            if (voiceEvents.Count > 0)
+            catch (Exception ex)
             {
-                _speech.Announce(voiceEvents);
+                if (_closing || IsDisposed) return;
+                Log($"竞价弱转强信号上报失败: {ex.Message}");
             }
-        }
-        catch (Exception ex)
-        {
-            Log($"竞价弱转强信号上报失败，已降级为本地播报: {ex.Message}");
-            if (voiceEligibleEvents.Count > 0)
-            {
-                _speech.Announce(voiceEligibleEvents);
-            }
-        }
+        });
     }
 
     private QuoteSnapshot WithResolvedName(QuoteSnapshot quote)

@@ -130,7 +130,7 @@ describe('OpeningRealtimeEventBridge', () => {
     expect(refresh).toHaveBeenCalledTimes(2)
   })
 
-  it('never assigns web voice owner to dry-run opening signals', async () => {
+  it('keeps low coverage opening signals live while preserving coverage risk', async () => {
     const fixture = loadFixture()
     const sample = fixture.cases.find(item => item.caseId === 'auction-coverage-rounded-low-dry-run')
     expect(sample).toBeTruthy()
@@ -168,19 +168,18 @@ describe('OpeningRealtimeEventBridge', () => {
         truncatedBatches: quote.truncatedBatches,
         lastPriceSource: 'last',
       })))
-      await vi.waitFor(() => expect(postSignal).toHaveBeenCalledTimes(1))
+      await vi.waitFor(() => expect(postSignal).toHaveBeenCalledTimes(2))
 
       expect(postSignal).toHaveBeenCalledWith('web', expect.objectContaining({
         code: '002567',
-        dryRun: true,
-        auctionCoverageRatio: 0.95,
+        dryRun: false,
       }))
       expect(acceptDerivedEvents).toHaveBeenCalledWith([
         expect.objectContaining({
           code: '002567',
           raw: expect.objectContaining({
-            voiceOwner: 'none',
-            signal: expect.objectContaining({ dryRun: true }),
+            voiceOwner: 'web',
+            signal: expect.objectContaining({ dryRun: false }),
           }),
         }),
       ])

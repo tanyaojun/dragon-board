@@ -683,8 +683,8 @@
       }
     },
     {
-      "caseId": "v5-no-auction-core-even-huge-open-amount-watch",
-      "description": "有09:20-09:25样本但竞价价量核心完全不成立，只靠09:30巨额成交时进入观察并标记风险。",
+      "caseId": "weak-auction-strong-open-without-auction-price-volume-core",
+      "description": "09:25仍弱、09:30明显转强时，集合竞价量价核心未确认只作为风险提示，不再一票否决。",
       "quotes": [
         {
           "code": "002571",
@@ -738,9 +738,10 @@
       "expected": {
         "triggered": true,
         "variant": "auction_gap_reversal",
-        "confidence": "watch",
-        "scoreRange": [0, 59],
-        "riskFlags": ["auction_price_volume_core_missing"]
+        "confidence": "strong",
+        "scoreRange": [60, 95],
+        "riskFlags": ["auction_price_volume_unverified"],
+        "priceVolumeConfirmed": false
       }
     },
     {
@@ -850,12 +851,12 @@
         "variant": "auction_gap_reversal",
         "confidence": "watch",
         "scoreRange": [0, 59],
-        "riskFlags": ["auction_price_volume_core_missing"]
+        "riskFlags": ["auction_late_high_retreated", "auction_price_volume_unverified"]
       }
     },
     {
       "caseId": "v5-total-confirmed-without-late-confirmation-downgraded",
-      "description": "09:20-09:25总量价抬升成立，但09:24-09:25缺少临门确认，只能观察，不能强播。",
+      "description": "09:20-09:25总量价抬升成立，但09:24-09:25缺少临门确认；不标记临门抢筹，仍可按开盘跳变转强播报。",
       "quotes": [
         {
           "code": "002574",
@@ -909,8 +910,8 @@
       "expected": {
         "triggered": true,
         "variant": "auction_gap_reversal",
-        "confidence": "watch",
-        "scoreRange": [1, 59],
+        "confidence": "strong",
+        "scoreRange": [60, 95],
         "riskFlags": ["auction_price_volume_unverified"]
       }
     },
@@ -1172,7 +1173,7 @@
     },
     {
       "caseId": "early-lift-without-late-confirmation-not-late-lift",
-      "description": "09:20-09:24已经抬完但09:24-09:25没有继续抬价放量，不应标记为临门抢筹。",
+      "description": "09:20-09:24已经抬完但09:24-09:25没有继续抬价放量，不应标记为临门抢筹；若开盘继续跳变转强，仍按弱转强播报。",
       "quotes": [
         {
           "code": "002558",
@@ -1226,14 +1227,14 @@
       "expected": {
         "triggered": true,
         "variant": "auction_gap_reversal",
-        "confidence": "watch",
-        "scoreRange": [1, 59],
+        "confidence": "strong",
+        "scoreRange": [60, 95],
         "riskFlags": ["auction_price_volume_unverified"]
       }
     },
     {
       "caseId": "auction-coverage-low-dry-run",
-      "description": "09:25基线覆盖率低于阈值时保留候选但降级为演练观察。",
+      "description": "09:25基线覆盖率低于阈值时保留候选并标记覆盖风险，但不再降级为演练禁播。",
       "quotes": [
         {
           "code": "002560",
@@ -1269,16 +1270,16 @@
       "expected": {
         "triggered": true,
         "variant": "auction_gap_reversal",
-        "confidence": "watch",
-        "scoreRange": [1, 59],
-        "riskFlags": ["auction_coverage_low"],
-        "dryRun": true,
+        "confidence": "strong",
+        "scoreRange": [60, 85],
+        "riskFlags": ["auction_profile_missing", "auction_coverage_low"],
+        "dryRun": false,
         "auctionCoverageRatio": 0.9
       }
     },
     {
       "caseId": "auction-coverage-rounded-low-dry-run",
-      "description": "覆盖率189/200展示四舍五入为95%，但原始0.945仍低于阈值，应降级为演练观察。",
+      "description": "覆盖率189/200展示四舍五入为95%，但原始0.945仍低于阈值，应标记覆盖风险但不禁播。",
       "quotes": [
         {
           "code": "002567",
@@ -1314,10 +1315,10 @@
       "expected": {
         "triggered": true,
         "variant": "auction_gap_reversal",
-        "confidence": "watch",
-        "scoreRange": [1, 59],
-        "riskFlags": ["auction_coverage_low"],
-        "dryRun": true,
+        "confidence": "strong",
+        "scoreRange": [60, 85],
+        "riskFlags": ["auction_profile_missing", "auction_coverage_low"],
+        "dryRun": false,
         "auctionCoverageRatio": 0.95
       }
     },
@@ -1405,7 +1406,7 @@
     },
     {
       "caseId": "auction-amount-missing-downgraded",
-      "description": "竞价金额缺失时不能按正常成交额增量解释，只能降级观察。",
+      "description": "竞价金额缺失时标记为低风险，不阻止强信号触发。",
       "quotes": [
         {
           "code": "002563",
@@ -1435,15 +1436,15 @@
       "expected": {
         "triggered": true,
         "variant": "auction_gap_reversal",
-        "confidence": "watch",
-        "scoreRange": [1, 59],
-        "riskFlags": ["auction_amount_missing"],
+        "confidence": "strong",
+        "scoreRange": [60, 85],
+        "riskFlags": ["auction_profile_missing", "auction_amount_missing"],
         "dryRun": false
       }
     },
     {
       "caseId": "amount-regressed-downgraded",
-      "description": "当前成交额低于竞价基线时标记金额回退风险。",
+      "description": "当前成交额低于竞价基线时标记金额回退风险，轻罚分。",
       "quotes": [
         {
           "code": "002564",
@@ -1473,9 +1474,9 @@
       "expected": {
         "triggered": true,
         "variant": "auction_gap_reversal",
-        "confidence": "watch",
-        "scoreRange": [1, 59],
-        "riskFlags": ["amount_regressed"],
+        "confidence": "strong",
+        "scoreRange": [60, 85],
+        "riskFlags": ["auction_profile_missing", "amount_regressed"],
         "dryRun": false
       }
     },
@@ -1717,6 +1718,170 @@
         "intradayPct": -0.5,
         "intradayAmount": 72000000,
         "intradayNote": "跌破开盘/昨收支撑，疑似竞价诱多"
+      }
+    },
+    {
+      "caseId": "v7-low-coverage-trusted-time",
+      "description": "V7：低竞价覆盖率但时间可信，仍应触发并标记riskFlags，不应dryRun。",
+      "quotes": [
+        {
+          "code": "600001",
+          "name": "低覆盖票",
+          "at": "2026-05-22T09:20:05+08:00",
+          "lastPrice": 9.75,
+          "preClose": 10,
+          "open": 0,
+          "amount": 1000000,
+          "volume": 103000,
+          "capturedAt": "2026-05-22T09:20:05+08:00",
+          "bridgeTs": "2026-05-22T09:20:05+08:00"
+        },
+        {
+          "code": "600001",
+          "name": "低覆盖票",
+          "at": "2026-05-22T09:24:05+08:00",
+          "lastPrice": 9.86,
+          "preClose": 10,
+          "open": 0,
+          "amount": 2500000,
+          "volume": 254000,
+          "capturedAt": "2026-05-22T09:24:05+08:00",
+          "bridgeTs": "2026-05-22T09:24:05+08:00"
+        },
+        {
+          "code": "600001",
+          "name": "低覆盖票",
+          "at": "2026-05-22T09:25:00+08:00",
+          "lastPrice": 9.92,
+          "preClose": 10,
+          "open": 0,
+          "amount": 4000000,
+          "volume": 400000,
+          "requestedCount": 200,
+          "receivedCount": 100,
+          "capturedAt": "2026-05-22T09:25:01+08:00",
+          "bridgeTs": "2026-05-22T09:25:01+08:00"
+        },
+        {
+          "code": "600001",
+          "name": "低覆盖票",
+          "at": "2026-05-22T09:31:10+08:00",
+          "lastPrice": 10.48,
+          "preClose": 10,
+          "open": 10.05,
+          "amount": 32000000,
+          "volume": 3100000,
+          "capturedAt": "2026-05-22T09:31:10+08:00",
+          "bridgeTs": "2026-05-22T09:31:10+08:00"
+        }
+      ],
+      "expected": {
+        "triggered": true,
+        "variant": "auction_late_lift",
+        "confidence": "critical",
+        "scoreRange": [80, 100],
+        "riskFlags": ["auction_coverage_low"],
+        "dryRun": false
+      }
+    },
+    {
+      "caseId": "v7-profile-missing-trusted-time",
+      "description": "V7：竞价画像缺失但时间可信，09:25基线有效且有开盘跳变，仍应触发。",
+      "quotes": [
+        {
+          "code": "600002",
+          "name": "缺画像票",
+          "at": "2026-05-22T09:25:00+08:00",
+          "lastPrice": 9.85,
+          "preClose": 10,
+          "open": 0,
+          "amount": 3000000,
+          "volume": 305000,
+          "capturedAt": "2026-05-22T09:25:01+08:00",
+          "bridgeTs": "2026-05-22T09:25:01+08:00"
+        },
+        {
+          "code": "600002",
+          "name": "缺画像票",
+          "at": "2026-05-22T09:31:15+08:00",
+          "lastPrice": 10.35,
+          "preClose": 10,
+          "open": 10.01,
+          "amount": 25000000,
+          "volume": 2450000,
+          "capturedAt": "2026-05-22T09:31:15+08:00",
+          "bridgeTs": "2026-05-22T09:31:15+08:00"
+        }
+      ],
+      "expected": {
+        "triggered": true,
+        "variant": "auction_gap_reversal",
+        "confidence": "strong",
+        "scoreRange": [60, 85],
+        "riskFlags": ["auction_profile_missing"],
+        "dryRun": false
+      }
+    },
+    {
+      "caseId": "v7-time-untrusted-dryrun",
+      "description": "V7：竞价基线capturedAt在窗口外，应标记auction_time_untrusted并dryRun。",
+      "quotes": [
+        {
+          "code": "600003",
+          "name": "时间错位票",
+          "at": "2026-05-22T09:20:05+08:00",
+          "lastPrice": 9.7,
+          "preClose": 10,
+          "open": 0,
+          "amount": 800000,
+          "volume": 83000,
+          "capturedAt": "2026-05-22T09:20:05+08:00",
+          "bridgeTs": "2026-05-22T09:20:05+08:00"
+        },
+        {
+          "code": "600003",
+          "name": "时间错位票",
+          "at": "2026-05-22T09:24:05+08:00",
+          "lastPrice": 9.75,
+          "preClose": 10,
+          "open": 0,
+          "amount": 1500000,
+          "volume": 154000,
+          "capturedAt": "2026-05-22T09:24:05+08:00",
+          "bridgeTs": "2026-05-22T09:24:05+08:00"
+        },
+        {
+          "code": "600003",
+          "name": "时间错位票",
+          "at": "2026-05-22T09:25:00+08:00",
+          "lastPrice": 9.85,
+          "preClose": 10,
+          "open": 0,
+          "amount": 2000000,
+          "volume": 203000,
+          "capturedAt": "2026-05-22T09:26:00+08:00",
+          "bridgeTs": "2026-05-22T09:26:00+08:00"
+        },
+        {
+          "code": "600003",
+          "name": "时间错位票",
+          "at": "2026-05-22T09:31:20+08:00",
+          "lastPrice": 10.45,
+          "preClose": 10,
+          "open": 10.02,
+          "amount": 28000000,
+          "volume": 2700000,
+          "capturedAt": "2026-05-22T09:31:20+08:00",
+          "bridgeTs": "2026-05-22T09:31:20+08:00"
+        }
+      ],
+      "expected": {
+        "triggered": true,
+        "variant": "auction_late_lift",
+        "confidence": "watch",
+        "scoreRange": [40, 59],
+        "dryRun": true,
+        "riskFlags": ["auction_time_untrusted"]
       }
     }
   ]

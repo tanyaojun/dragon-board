@@ -1,0 +1,38 @@
+using System.Text;
+using System.Text.Json;
+using YiDongJingLing.Events;
+
+namespace YiDongJingLing.Diagnostics;
+
+public sealed class OpeningWeakToStrongTelemetryFileSink
+{
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private readonly string _directory;
+    private readonly Action<string>? _log;
+    private bool _reportedFailure;
+
+    public OpeningWeakToStrongTelemetryFileSink(string directory, Action<string>? log = null)
+    {
+        _directory = directory;
+        _log = log;
+    }
+
+    public string DirectoryPath => _directory;
+
+    public void Record(OpeningWeakToStrongTelemetryRecord record)
+    {
+        try
+        {
+            Directory.CreateDirectory(_directory);
+            var path = Path.Combine(_directory, $"opening-weak-to-strong-{record.TradingDate}.jsonl");
+            var json = JsonSerializer.Serialize(record, JsonOptions);
+            File.AppendAllText(path, json + Environment.NewLine, Encoding.UTF8);
+        }
+        catch (Exception ex)
+        {
+            if (_reportedFailure) return;
+            _reportedFailure = true;
+            _log?.Invoke($"竞价弱转强 telemetry 写入失败: {ex.Message}");
+        }
+    }
+}

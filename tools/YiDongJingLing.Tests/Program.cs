@@ -459,7 +459,7 @@ Run("Opening weak-to-strong detector downgrades amount regression", () =>
     var result = detector.Evaluate(open, store.GetBaseline(open.Code, open.At));
 
     AssertTrue(result.Triggered, "amount regression still records candidate");
-    AssertEqual("watch", result.Confidence, "amount regression confidence");
+    AssertEqual("critical", result.Confidence, "amount regression confidence");
     AssertTrue(result.RiskFlags.Any(item => item.Key == "amount_regressed"), "amount regression risk flag");
 });
 
@@ -601,6 +601,59 @@ Run("Opening weak-to-strong detector emits preopen candidate from 09:25 final au
         "002579 final auction quote is not high-retreated");
 });
 
+Run("Opening weak-to-strong detector keeps weak 09:25 baseline as preopen candidate without price-volume confirmation", () =>
+{
+    var fixturePath = Path.Combine(
+        ProjectRootLocator.Find(),
+        "docs",
+        "yidong-jingling",
+        "fixtures",
+        "opening-weak-to-strong-cases.json");
+    using var document = JsonDocument.Parse(File.ReadAllText(fixturePath));
+    var rules = OpeningWeakToStrongRules.FromJson(document.RootElement.GetProperty("rules"));
+    var store = new OpeningAuctionStateStore(rules);
+    var detector = new OpeningWeakToStrongDetector(rules);
+
+    var q0920 = OpeningQuote(
+        "002580",
+        "弱基准候选",
+        "2026-06-01T09:20:05+08:00",
+        9.95m,
+        10m,
+        2_000_000m,
+        800_000m);
+    var q0924 = OpeningQuote(
+        "002580",
+        "弱基准候选",
+        "2026-06-01T09:24:05+08:00",
+        9.94m,
+        10m,
+        4_000_000m,
+        800_000m);
+    var q0925 = OpeningQuote(
+        "002580",
+        "弱基准候选",
+        "2026-06-01T09:25:00+08:00",
+        9.9m,
+        10m,
+        6_000_000m,
+        800_000m);
+
+    store.Capture(q0920);
+    store.Capture(q0924);
+    store.Capture(q0925);
+    var result = detector.Evaluate(q0925, store.GetBaseline(q0925.Code, q0925.At));
+
+    AssertTrue(result.Triggered, "weak 09:25 baseline triggers silent preopen candidate");
+    AssertEqual("auction_gap_reversal", result.Variant, "weak 09:25 preopen variant");
+    AssertEqual("preopen_candidate", result.IntradayStatus, "weak 09:25 preopen status");
+    AssertTrue(result.PriceVolumeConfirmed == false, "weak 09:25 price-volume unconfirmed");
+    AssertTrue(
+        result.RiskFlags.Any(item => item.Key == "auction_price_volume_unverified"),
+        "weak 09:25 candidate keeps price-volume risk");
+    AssertEqual("09:25基准偏弱，等待09:30强跳变验证", result.IntradayNote, "weak 09:25 candidate note");
+});
+
 Run("Opening weak-to-strong detector does not confirm preopen candidate without pending check", () =>
 {
     var fixturePath = Path.Combine(
@@ -690,6 +743,43 @@ Run("Event engine emits opening weak-to-strong from auction baseline", () =>
     AssertTrue(signal.OpeningSignal.BridgeTs is null, "missing per-code bridgeTs is not forged from source time");
 });
 
+Run("Event engine records opening weak-to-strong reject telemetry", () =>
+{
+    var telemetry = new List<OpeningWeakToStrongTelemetryRecord>();
+    var engine = new L1EventEngine(openingTelemetry: telemetry.Add);
+    var auction = Quote(
+        "002553",
+        "拒绝样例",
+        9.9m,
+        -1m,
+        10m,
+        amount: 6_000_000m,
+        time: DateTimeOffset.Parse("2026-05-22T09:25:00+08:00"));
+    var open = Quote(
+        "002553",
+        "拒绝样例",
+        9.92m,
+        -0.8m,
+        10m,
+        volume: 1_200_000m,
+        amount: 8_000_000m,
+        time: DateTimeOffset.Parse("2026-05-22T09:30:06+08:00")) with { Open = 9.9m };
+
+    engine.Prime(auction);
+    var events = engine.Evaluate(open, auction, [auction, open]);
+
+    AssertEqual(0, events.Count(item => item.Type == L1EventType.OpeningWeakToStrong), "no opening event");
+    var record = telemetry.Single();
+    AssertEqual("detector_rejected", record.Decision, "telemetry decision");
+    AssertEqual("variant_not_matched", record.InvalidReason, "reject reason");
+    AssertEqual("002553", record.Code, "telemetry code");
+    AssertEqual("2026-05-22", record.TradingDate, "telemetry trading date");
+    AssertEqual(-1m, record.AuctionPct, "telemetry auction pct");
+    AssertEqual(-0.8m, record.FirstWindowPct, "telemetry first window pct");
+    AssertEqual(0.2m, record.JumpPctPoint, "telemetry jump pct");
+    AssertTrue(record.RiskFlags.Contains("variant_not_matched"), "telemetry risk flag");
+});
+
 Run("Event engine emits preopen weak-to-strong candidate before continuous auction", () =>
 {
     var engine = new L1EventEngine();
@@ -736,6 +826,7 @@ Run("Event engine emits preopen weak-to-strong candidate before continuous aucti
     AssertEqual("preopen_candidate", signal.OpeningSignal?.IntradayOutcome, "preopen event outcome");
     AssertTrue(signal.Reason.Contains("待开盘验证"), "preopen event reason");
     AssertEqual(L1EventSeverity.Important, signal.Severity, "preopen event severity");
+    AssertEqual(0, EventVoicePolicy.FilterForVoice(events, VoiceMode.StrongOnly).Count, "preopen event is not voice eligible");
 });
 
 Run("Event engine emits opening weak-to-strong intraday outcome update", () =>

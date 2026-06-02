@@ -45,10 +45,14 @@ public sealed class L1EventEngine
     private readonly Dictionary<string, StockState> _states = new(StringComparer.Ordinal);
     private readonly OpeningAuctionStateStore _openingStore = new(OpeningRules);
     private readonly OpeningWeakToStrongDetector _openingDetector = new(OpeningRules);
+    private readonly Action<OpeningWeakToStrongTelemetryRecord>? _openingTelemetry;
 
-    public L1EventEngine(L1EventRules? rules = null)
+    public L1EventEngine(
+        L1EventRules? rules = null,
+        Action<OpeningWeakToStrongTelemetryRecord>? openingTelemetry = null)
     {
         _rules = rules ?? new L1EventRules();
+        _openingTelemetry = openingTelemetry;
     }
 
     public void Clear()
@@ -269,10 +273,17 @@ public sealed class L1EventEngine
 
         var openingQuote = ToOpeningQuote(quote, limitUpPrice);
         var result = _openingDetector.Evaluate(openingQuote, _openingStore.GetBaseline(quote.Code, quote.SourceTime));
-        if (!result.Triggered) return;
+        if (!result.Triggered)
+        {
+            RecordOpeningTelemetry(result, "detector_rejected");
+            return;
+        }
         if (state.OpeningWeakToStrongTriggeredDate == tradingDate &&
             IntradayOutcomePriority(result) <= state.OpeningWeakToStrongIntradayPriority)
+        {
+            RecordOpeningTelemetry(result, "event_suppressed_duplicate_or_lower_priority");
             return;
+        }
 
         state.OpeningWeakToStrongTriggeredDate = tradingDate;
         state.OpeningWeakToStrongIntradayPriority = IntradayOutcomePriority(result);
@@ -289,6 +300,11 @@ public sealed class L1EventEngine
             severity,
             OpeningReason(result, result.IntradayStatus is "confirmed" or "failed"),
             ToOpeningSignal(result));
+    }
+
+    private void RecordOpeningTelemetry(OpeningWeakToStrongResult result, string decision)
+    {
+        _openingTelemetry?.Invoke(OpeningWeakToStrongTelemetryRecord.FromResult(result, decision));
     }
 
     private static void EvaluateDirectionChanges(List<EventRecord> events, QuoteSnapshot quote, QuoteSnapshot? previous)

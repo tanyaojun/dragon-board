@@ -124,6 +124,9 @@ function resolveVoiceOwner(
   response: { ok: boolean; voiceOwner?: 'web' | 'desktop' | 'none' },
 ): 'web' | 'desktop' | 'none' {
   if (signal.dryRun) return 'none'
+  if (signal.intradayStatus === 'preopen_candidate' || signal.intradayOutcome === 'preopen_candidate') {
+    return 'none'
+  }
   const owner = response.voiceOwner
   if (!response.ok) {
     return 'web'

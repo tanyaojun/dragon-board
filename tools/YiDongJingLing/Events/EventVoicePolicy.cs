@@ -18,7 +18,10 @@ public static class EventVoicePolicy
 
     private static bool IsVoiceEligible(EventRecord item)
     {
-        return item.OpeningSignal?.DryRun != true;
+        if (item.OpeningSignal is null) return true;
+        if (item.OpeningSignal.DryRun) return false;
+        return item.OpeningSignal.IntradayStatus != "preopen_candidate" &&
+            item.OpeningSignal.IntradayOutcome != "preopen_candidate";
     }
 
     public static bool IsStrongSignal(EventRecord item)

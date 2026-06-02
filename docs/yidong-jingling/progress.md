@@ -1,5 +1,38 @@
 # 异动精灵 V1 进度记录
 
+## 2026-06-02 V7 盯盘工具回归本位
+
+- **目标：** 竞价弱转强链路从"研究型质量门禁"回归"盯盘提醒工具"，语音主链只保留 6 类硬阻断，质量信息降级为风险标签。
+- **产品原则沉淀：**
+  - 语音主链只解决盘中及时提醒，不承载量化研究。
+  - 质量信息只做标签（风险字段、日志、导出），不做默认禁播。
+  - dryRun 只保留为人工显式演练模式 + 时间戳不可信自动保护。
+  - proxy 降级为跨端去重同步，桌面版本地播报优先。
+- **V7 Phase 1：文档和设置口径收敛**
+  - `opening-weak-to-strong-plan.md`：新增 V7 产品原则章节，更新 dry-run 口径和离线矩阵。
+  - `event-rule-logic.md`：竞价弱转强拆为"硬阻断 / 风险标签 / 语音控制"三层。
+  - `usage.md`：明确桌面语音优先本地播报，proxy 只做跨端去重。
+- **V7 Phase 2：桌面端语音链路瘦身**
+  - `MainForm.ReportOpeningSignalsAndAnnounceAsync`：改为本地播报优先（fire-and-forget），proxy 上报异步补充不阻塞。
+  - `SettingsForm`：热榜语音提示改为"仅过滤语音，不过滤异动列表"。
+  - `EventVoicePolicy`：已符合 V7 口径（仅处理语音模式、preopen 候选不播、dryRun 不播），无需修改。
+- **V7 Phase 3：检测器硬阻断复核**
+  - TS/C# `RiskFlag` 函数：覆盖/画像/金额类风险从 medium/-35 收敛为 low/-5~-10，只保留时间错位类为 medium/-35。
+  - 共享 fixture 新增 3 个 V7 验收用例：低覆盖仍可播、缺画像仍可播、时间错位 dryRun。
+  - 受影响 fixture 用例（`auction-coverage-low-dry-run`、`auction-coverage-rounded-low-dry-run`、`auction-amount-missing-downgraded`、`amount-regressed-downgraded`）期望值同步更新。
+- **V7 Phase 4：跨端 proxy 角色降级**
+  - 桌面端不等待 proxy `voiceOwner` 授权（Phase 2 已实现）。
+  - 网页端 `resolveVoiceOwner` 已符合：proxy 在线时尊重仲裁，离线时降级为 `'web'` 本地播报。
+  - proxy `shouldGrantVoice` 已正确：dryRun/preopen_candidate/failed 不授权语音。
+- **验证：**
+  - TS opening 链路 7 files / 51 tests passed。
+  - C# `YiDongJingLing.Tests` 48 tests passed。
+  - proxy opening signal 11 tests passed。
+  - `vue-tsc` typecheck 通过。
+  - `dotnet build -c Release` 0 warning / 0 error。
+  - `pnpm build` 通过。
+  - `git diff --check` 通过。
+
 ## 2026-05-30 V5 后优化：参数化 + 代码审查修复 + 热榜语音过滤
 
 - **目标：** 基于市场研究校准评分参数，修复 P0/P1 代码问题，新增热榜前 N 名语音过滤。
@@ -43,7 +76,7 @@
   - 文档 V6 主线改为：`09:20-09:25` 保存不可撤单阶段量价证据，`09:25:00-09:29:59` 输出严格候选 `preopen_candidate`，`09:30-09:35` 升级 `pending`，`09:35-10:00` 自动更新 `confirmed/failed`。
   - TS/C# `OpeningWeakToStrongSignal` 增加 `intradayStatus/intradayOutcome/intradayStatusAt/intradayPrice/intradayPct/intradayAmount/intradayNote`。
   - TS/C# 检测器同一 `opening_weak_to_strong` 信号支持 9:25 早期候选、9:30 开盘承接、盘中确认成功和跌破支撑失败更新；确认成功必须已通过 `09:30-09:35` 的 `pending` 开盘承接，早期候选不能绕过开盘验证直接确认。
-  - Web 实时缓冲和 proxy canonical 选择改为盘中结果优先，允许 `failed` 覆盖早先 `strong/pending`；语音改为按行动阶段授权，`preopen_candidate` 和 `pending` 可各播一次，同阶段只播一次。
+  - Web 实时缓冲和 proxy canonical 选择改为盘中结果优先，允许 `failed` 覆盖早先 `strong/pending`；语音按行动阶段授权，但 2026-06-02 已修正为 `preopen_candidate` 只记录不播，`pending/confirmed` 才可获得语音授权。
   - 桌面端 `L1EventEngine` 不再用同股同日首发锁压住盘中确认/失败更新；CSV 导出追加盘中状态列。
   - V6 不新增规则字段；`09:25:10` 候选窗口、`10:00` 收口和 `+1.0pct` 盘中确认推进作为状态机常量，不进入 `configHash`，规则指纹保持 `owts-08f44efb`。
 - **验证：**
@@ -81,7 +114,7 @@
   - TS/C# `OpeningAuctionStateStore` 显式输出 `09:20` 初始基线、`09:24` 临门基线、`09:25` 确定基线。
   - `minCurrentAmount/minAmountDelta` 不再硬拒绝强播；新增 `openingLiquidityMinAmount=500万` 最低流动性保护，旧阈值保留为评分增强。
   - `auction_late_lift` 改用相对价格抬升、相对成交额放大和临门确认；新增 `auctionAmountLiftRatio/lateAmountLiftRatio/priceVolumeConfirmed` 等复盘字段。
-  - 缺竞价画像降级为 `watch`，缺 09:20 初始基线标记风险；有完整画像但无量价核心时输出观察信号并标记 `auction_price_volume_core_missing`。
+  - 缺竞价画像、缺 09:20 初始基线或竞价量价未确认都只作为风险扣分；真实弱竞价、强开盘的 `auction_gap_reversal` / `low_open_red_reversal` 不再被量价核心一票否决。
   - V5 规则指纹更新为 `owts-08f44efb`，TS/C# hash 字段集合同步。
 - **验证：**
   - RED：`pnpm exec vitest run src/services/hotlist/__tests__/OpeningWeakToStrongDetector.test.ts` 先失败于 V5 新口径。
@@ -92,9 +125,25 @@
   - `node --test proxy-server\__tests__\openingSignals.test.mjs proxy-server\__tests__\docs.test.mjs`：8 tests passed。
   - `pnpm build`：通过。
 - **复核修正：**
-  - 只读 code review 发现 `HasOpeningCoreEvidence` 使用绝对值会把下跌/缩量误判为核心证据；已改为只接受正向抬升/放量，并补 `v5-negative-auction-core-rejected`。
-  - 复核发现 `priceVolumeConfirmed` 未强制 `09:24-09:25` 临门确认；已纳入临门价格和相对放量确认，并补 `v5-total-confirmed-without-late-confirmation-downgraded`。
+  - 只读 code review 发现 `HasOpeningCoreEvidence` 使用绝对值会把下跌/缩量误判为核心证据；后续 2026-06-02 已彻底移除该主链硬门槛。
+  - 复核发现 `priceVolumeConfirmed` 未强制 `09:24-09:25` 临门确认；后续 2026-06-02 已调整为仅约束 `auction_late_lift` 子形态，不再阻断开盘跳变转强。
   - 复核后重跑 TS opening 链路、桌面测试和类型检查均通过。
+
+## 2026-06-02 集合竞价量价硬门槛修正
+
+- **目标：** 修正竞价弱转强被 `09:20->09:25`、`09:24->09:25` 量价确认过度卡死的问题。
+- **改动：**
+  - 移除 `auction_price_volume_core_missing` 对主信号的 high/-100 一票否决。
+  - 将 `auction_price_volume_unverified` 调整为低风险小扣分。
+  - 共享 fixture 更新弱竞价、强开盘但竞价量价未确认的样例，预期为 `auction_gap_reversal` / `strong`。
+  - `auction_coverage_low` 不再触发 `dryRun`；覆盖率不足只保留风险提示，时间戳不可信仍保持 dryRun。
+  - `preopen_candidate` 候选阶段不再授予语音；候选仍可展示/上报，真正播报等 `09:30-09:35` 开盘承接转强。
+  - `preopen_candidate` 不再只认竞价量价齐升：若 09:25 基准偏弱，且有最低流动性或昨日弱势上下文，也会作为无声 `auction_gap_reversal` 观察候选，并标记 `auction_price_volume_unverified`。
+  - 桌面端新增拒绝原因 telemetry：`detector_rejected` 和 `event_suppressed_duplicate_or_lower_priority` 写入 `logs/yidong-jingling/opening-weak-to-strong/*.jsonl`，保留 `invalidReason`、关键涨幅、跳变、成交额和风险标记。
+- **验证：**
+  - `pnpm exec vitest run src/services/hotlist/__tests__/OpeningWeakToStrongDetector.test.ts`：9 tests passed。
+  - `dotnet run --project tools\YiDongJingLing.Tests\YiDongJingLing.Tests.csproj`：All YiDongJingLing tests passed，包含拒绝原因 telemetry 用例。
+  - `dotnet build tools\YiDongJingLing\YiDongJingLing.csproj`：0 warnings, 0 errors。
 
 ## 2026-05-24 V6-A 复盘字段方案启动
 
@@ -681,7 +730,8 @@
 | 2026-05-23 | 补做 V2 提交后 code review，发现桌面端 `ConfigHash` 未纳入新增量价阈值；按 TDD 增加回归测试并修复。 | complete |
 | 2026-05-23 | 按文档审计偏差修复弱转强落地：补 TS/C# 复盘字段透传、金额倒退风险降级、主表轮询服务边界、桌面导出弱转强专有字段。 | complete |
 | 2026-05-23 | 曾按 Superpowers 规格落地 TDX 自选股前日弱势上下文；后续已废弃 `.blk` 候选池自动注入 `tdx_block`，股票池仅保留为监听范围。 | superseded |
-| 2026-05-24 | 续修竞价弱转强覆盖率门禁：低覆盖/陈旧报价降为 `watch + dryRun`，桌面状态栏显示 09:25 覆盖率，补齐高风险边界 fixture 和 dry-run 语音抑制。 | complete |
+| 2026-05-24 | 续修竞价弱转强覆盖率门禁：低覆盖/陈旧报价曾降为 `watch + dryRun`；2026-06-02 已修正为低覆盖仅标风险，陈旧报价仍 dry-run。 | complete |
+| 2026-06-02 | 按“异动精灵是盘中盯盘工具，不是量化回测平台”的定位重梳理语音链路，新增 V7 计划：语音主链只保留用户设置、冷却、时间窗口、有效 09:25 基线和严重行情错误；质量门禁、复盘字段、telemetry、proxy 同步降级为旁路能力。 | planned |
 
 ## V4 验证记录
 
