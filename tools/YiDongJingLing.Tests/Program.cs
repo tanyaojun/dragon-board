@@ -913,6 +913,152 @@ Run("Event engine emits opening weak-to-strong intraday outcome update", () =>
     AssertTrue(update.Reason.Contains("盘中失败"), "intraday failure reason");
 });
 
+Run("Event engine lets fresh opening signal replace dry-run pending signal", () =>
+{
+    var engine = new L1EventEngine();
+    var auction = Quote(
+        "002897",
+        "意华股份",
+        82.22m,
+        2.77m,
+        80m,
+        amount: 23_698_240m,
+        time: DateTimeOffset.Parse("2026-06-02T09:25:00+08:00"));
+    var stale = Quote(
+        "002897",
+        "意华股份",
+        86.98m,
+        8.72m,
+        80m,
+        volume: 900_000m,
+        amount: 307_156_640m,
+        time: DateTimeOffset.Parse("2026-06-02T09:32:18+08:00")) with
+    {
+        Open = 82.22m,
+        CapturedAt = DateTimeOffset.Parse("2026-06-02T09:31:30+08:00"),
+    };
+    var fresh = stale with
+    {
+        LastPrice = 88m,
+        ChangePct = 10m,
+        Amount = 489_450_496m,
+        SourceTime = DateTimeOffset.Parse("2026-06-02T09:33:07+08:00"),
+        CapturedAt = DateTimeOffset.Parse("2026-06-02T09:33:04+08:00"),
+    };
+
+    engine.Prime(auction);
+    var staleEvents = engine.Evaluate(stale, auction, [auction, stale]);
+    var freshEvents = engine.Evaluate(fresh, stale, [auction, stale, fresh]);
+
+    var staleOpening = staleEvents.Single(item => item.Type == L1EventType.OpeningWeakToStrong);
+    var freshOpening = freshEvents.Single(item => item.Type == L1EventType.OpeningWeakToStrong);
+    AssertTrue(staleOpening.OpeningSignal?.DryRun == true, "stale pending is dry-run");
+    AssertTrue(freshOpening.OpeningSignal?.DryRun == false, "fresh pending replaces dry-run");
+    AssertEqual("pending", freshOpening.OpeningSignal?.IntradayStatus, "fresh pending status");
+});
+
+Run("Event engine confirms near-limit opening signal after detect window", () =>
+{
+    var engine = new L1EventEngine();
+    var auction = Quote(
+        "002897",
+        "意华股份",
+        82.22m,
+        2.77m,
+        80m,
+        amount: 23_698_240m,
+        time: DateTimeOffset.Parse("2026-06-02T09:25:00+08:00"));
+    var open = Quote(
+        "002897",
+        "意华股份",
+        88m,
+        10m,
+        80m,
+        volume: 900_000m,
+        amount: 489_450_496m,
+        time: DateTimeOffset.Parse("2026-06-02T09:33:07+08:00")) with
+    {
+        Open = 82.22m,
+        CapturedAt = DateTimeOffset.Parse("2026-06-02T09:33:04+08:00"),
+    };
+    var confirm = open with
+    {
+        Amount = 520_759_712m,
+        SourceTime = DateTimeOffset.Parse("2026-06-02T09:36:00+08:00"),
+        CapturedAt = DateTimeOffset.Parse("2026-06-02T09:35:58+08:00"),
+    };
+
+    engine.Prime(auction);
+    _ = engine.Evaluate(open, auction, [auction, open]);
+    var updates = engine.Evaluate(confirm, open, [auction, open, confirm]);
+
+    var update = updates.Single(item => item.Type == L1EventType.OpeningWeakToStrong);
+    AssertEqual("confirmed", update.OpeningSignal?.IntradayStatus, "near-limit pending confirms");
+    AssertEqual("confirmed_strong", update.OpeningSignal?.IntradayOutcome, "near-limit outcome");
+    AssertEqual(1, EventVoicePolicy.FilterForVoice([update], VoiceMode.StrongOnly).Count, "confirmed near-limit voice");
+});
+
+Run("Event engine tracks delayed board after deep auction gap repair", () =>
+{
+    var engine = new L1EventEngine();
+    var t0920 = DateTimeOffset.Parse("2026-06-02T09:20:05+08:00");
+    var t0924 = DateTimeOffset.Parse("2026-06-02T09:24:05+08:00");
+    var t0925 = DateTimeOffset.Parse("2026-06-02T09:25:00+08:00");
+    var q0920 = Quote("002806", "华锋股份", 16.30m, -11.80m, 18.48m, amount: 2_000_000m, time: t0920);
+    var q0924 = Quote("002806", "华锋股份", 16.70m, -9.63m, 18.48m, amount: 8_000_000m, time: t0924);
+    var q0925 = Quote("002806", "华锋股份", 16.95m, -8.28m, 18.48m, amount: 13_530_000m, time: t0925);
+    var open = Quote(
+        "002806",
+        "华锋股份",
+        17.72m,
+        -4.11m,
+        18.48m,
+        volume: 1_200_000m,
+        amount: 22_000_000m,
+        time: DateTimeOffset.Parse("2026-06-02T09:30:08+08:00")) with
+    {
+        Open = 17.68m,
+    };
+    var watchQuote = open with
+    {
+        LastPrice = 18.15m,
+        ChangePct = -1.79m,
+        Amount = 56_000_000m,
+        SourceTime = DateTimeOffset.Parse("2026-06-02T09:36:00+08:00"),
+        CapturedAt = DateTimeOffset.Parse("2026-06-02T09:36:00+08:00"),
+        BridgeTs = DateTimeOffset.Parse("2026-06-02T09:36:00+08:00"),
+    };
+    var boardQuote = open with
+    {
+        LastPrice = 20.33m,
+        ChangePct = 10.01m,
+        Amount = 397_900_000m,
+        SourceTime = DateTimeOffset.Parse("2026-06-02T14:56:00+08:00"),
+        CapturedAt = DateTimeOffset.Parse("2026-06-02T14:56:00+08:00"),
+        BridgeTs = DateTimeOffset.Parse("2026-06-02T14:56:00+08:00"),
+    };
+
+    engine.Prime(q0920);
+    engine.Prime(q0924);
+    engine.Prime(q0925);
+    var pendingEvents = engine.Evaluate(open, q0925, [q0920, q0924, q0925, open]);
+    var watchEvents = engine.Evaluate(watchQuote, open, [q0920, q0924, q0925, open, watchQuote]);
+    var boardEvents = engine.Evaluate(boardQuote, watchQuote, [q0920, q0924, q0925, open, watchQuote, boardQuote]);
+
+    var pending = pendingEvents.Single(item => item.Type == L1EventType.OpeningWeakToStrong);
+    var watch = watchEvents.Single(item => item.Type == L1EventType.OpeningWeakToStrong);
+    var confirmed = boardEvents.Single(item => item.Type == L1EventType.OpeningWeakToStrong);
+    AssertEqual("auction_gap_delayed_board", pending.OpeningSignal?.Variant, "delayed board variant");
+    AssertEqual("pending", pending.OpeningSignal?.IntradayStatus, "delayed board pending");
+    AssertEqual("watch", watch.OpeningSignal?.IntradayStatus, "delayed board watch");
+    AssertEqual("watch_only", watch.OpeningSignal?.IntradayOutcome, "delayed board watch outcome");
+    AssertTrue(watch.Reason.Contains("等待二次拉升或上板确认"), "watch note");
+    AssertEqual("confirmed", confirmed.OpeningSignal?.IntradayStatus, "delayed board confirmed");
+    AssertEqual("confirmed_strong", confirmed.OpeningSignal?.IntradayOutcome, "delayed board confirmed outcome");
+    AssertEqual(1, EventVoicePolicy.FilterForVoice([confirmed], VoiceMode.StrongOnly).Count, "delayed board confirmed voice");
+    AssertEqual(0, EventVoicePolicy.FilterForVoice([watch], VoiceMode.StrongOnly).Count, "delayed board watch no strong voice");
+});
+
 Run("Event engine marks confirmed opening signal reversal without voice", () =>
 {
     var engine = new L1EventEngine();

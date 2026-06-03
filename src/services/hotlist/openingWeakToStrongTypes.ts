@@ -1,5 +1,6 @@
 export type OpeningWeakToStrongVariant =
   | 'auction_gap_reversal'
+  | 'auction_gap_delayed_board'
   | 'low_open_red_reversal'
   | 'strong_open_board_attempt'
   | 'auction_late_lift'

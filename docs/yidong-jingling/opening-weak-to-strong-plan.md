@@ -360,6 +360,7 @@ followThroughPctPoint = currentPct - firstWindowPct
 | variant | 形态 | 第一版可用字段 | 建议门槛 |
 |---------|------|----------------|----------|
 | `auction_gap_reversal` | 竞价尾价偏弱，`09:30` 后明显跳空上移。`002552` 属于这一类。 | `auctionPct`、`firstWindowPct`、`jumpPctPoint`、`amountDelta`、`officialOpen` | `auctionPct <= 0.5`、`jumpPctPoint >= 3.0`、`firstWindowPct >= 1.5`、放量门槛通过 |
+| `auction_gap_delayed_board` | 前一日分歧弱，`09:25` 深水或弱竞价，`09:30` 明显跳空修复但未立即上板，盘中二次拉升或触板。`002806` 属于这一类。 | `auctionPct`、`firstWindowPct`、`jumpPctPoint`、`officialOpen`、`limitDistancePct`、前弱上下文 | `auctionPct <= 0.5`、`jumpPctPoint >= 3.0`、开盘站稳 `officialOpen * 0.995`，并具备前弱上下文或最低竞价流动性；`09:35-10:00` 先转 `watch_only`，10:00 后至收盘前接近涨停或触板才确认 |
 | `low_open_red_reversal` | `09:25` 或官方开盘仍低开/平开，`09:30-09:35` 快速翻红并放量承接。 | `auctionPct`、`officialOpenPct`、`firstWindowPct`、`followThroughPctPoint`、`amountDelta` | `auctionPct <= 0` 或 `officialOpenPct <= 0.5`，`firstWindowPct >= 1.0`，`jumpPctPoint >= 1.5` |
 | `previous_day_divergence_repair` | 前一日分歧弱，次日竞价/开盘超预期修复。 | V1 可记录 `contextMissing`；后续接昨日烂板、炸板、长上影、尾盘弱等数据 | 第一版不作为硬命中，只作为增强因子或人工复盘字段 |
 | `strong_open_board_attempt` | 有弱转强前置条件的开盘抢筹冲板。 | `firstWindowPct`、`limitDistancePct`、`amountDelta`、`followThroughPctPoint`、弱势前置因子 | `firstWindowPct >= 3.0`，`limitDistancePct <= 2.0` 或触及涨停，放量门槛通过，且至少满足一个弱转强前置条件 |

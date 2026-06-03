@@ -393,6 +393,90 @@ describe('OpeningWeakToStrongDetector', () => {
     expect(intraday?.intradayOutcome).not.toBe('confirmed_strong')
   })
 
+  it('tracks a delayed board after a deep auction gap repair', () => {
+    const fixture = loadFixture()
+    const store = new OpeningAuctionStateStore(fixture.rules)
+    const detector = new OpeningWeakToStrongDetector(fixture.rules)
+    const base = {
+      code: '002806',
+      name: '华锋股份',
+      preClose: 18.48,
+      open: 0,
+      volume: 1_200_000,
+      limitUpPrice: 20.33,
+      previousWeakScore: 35,
+      previousWeakSignals: ['yesterday_open_board'],
+      previousWeakSource: 'manual_previous_weak',
+    }
+    const quotes = [
+      {
+        ...base,
+        at: '2026-06-02T09:20:05+08:00',
+        lastPrice: 16.3,
+        amount: 2_000_000,
+        capturedAt: '2026-06-02T09:20:05+08:00',
+        bridgeTs: '2026-06-02T09:20:05+08:00',
+      },
+      {
+        ...base,
+        at: '2026-06-02T09:24:05+08:00',
+        lastPrice: 16.7,
+        amount: 8_000_000,
+        capturedAt: '2026-06-02T09:24:05+08:00',
+        bridgeTs: '2026-06-02T09:24:05+08:00',
+      },
+      {
+        ...base,
+        at: '2026-06-02T09:25:00+08:00',
+        lastPrice: 16.95,
+        amount: 13_530_000,
+        capturedAt: '2026-06-02T09:25:00+08:00',
+        bridgeTs: '2026-06-02T09:25:00+08:00',
+      },
+      {
+        ...base,
+        at: '2026-06-02T09:30:08+08:00',
+        lastPrice: 17.72,
+        open: 17.68,
+        amount: 22_000_000,
+        capturedAt: '2026-06-02T09:30:08+08:00',
+        bridgeTs: '2026-06-02T09:30:08+08:00',
+      },
+    ] satisfies OpeningWeakToStrongQuote[]
+
+    let result = null
+    for (const quote of quotes) {
+      store.capture(quote)
+      result = detector.evaluate(quote, store.getBaseline(quote.code, quote.at))
+    }
+    const watch = detector.evaluate({
+      ...quotes[3],
+      at: '2026-06-02T09:36:00+08:00',
+      lastPrice: 18.15,
+      amount: 56_000_000,
+      capturedAt: '2026-06-02T09:36:00+08:00',
+      bridgeTs: '2026-06-02T09:36:00+08:00',
+    }, store.getBaseline(base.code, '2026-06-02T09:36:00+08:00'))
+    const confirmed = detector.evaluate({
+      ...quotes[3],
+      at: '2026-06-02T14:56:00+08:00',
+      lastPrice: 20.33,
+      amount: 397_900_000,
+      capturedAt: '2026-06-02T14:56:00+08:00',
+      bridgeTs: '2026-06-02T14:56:00+08:00',
+    }, store.getBaseline(base.code, '2026-06-02T14:56:00+08:00'))
+
+    expect(result?.triggered).toBe(true)
+    expect(result?.variant).toBe('auction_gap_delayed_board')
+    expect(result?.intradayStatus).toBe('pending')
+    expect(watch?.intradayStatus).toBe('watch')
+    expect(watch?.intradayOutcome).toBe('watch_only')
+    expect(watch?.intradayNote).toBe('跳空修复后站稳开盘承接，等待二次拉升或上板确认')
+    expect(confirmed?.intradayStatus).toBe('confirmed')
+    expect(confirmed?.intradayOutcome).toBe('confirmed_strong')
+    expect(confirmed?.intradayNote).toBe('跳空修复延迟上板，盘中确认成功')
+  })
+
   it('uses delayed auction quotes for profile without rolling back the locked baseline', () => {
     const fixture = loadFixture()
     const store = new OpeningAuctionStateStore(fixture.rules)

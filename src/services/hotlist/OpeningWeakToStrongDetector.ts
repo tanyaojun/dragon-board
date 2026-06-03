@@ -18,6 +18,7 @@ const LIQUIDITY_TIER_VERSION = 'liquidity-review.v1'
 const HOT_AMOUNT = 100_000_000
 const PREOPEN_CANDIDATE_START = '09:25:00'
 const INTRADAY_CONFIRM_END = '10:00:00'
+const DELAYED_BOARD_CONFIRM_END = '15:00:00'
 const INTRADAY_CONFIRM_ADVANCE_PCT_POINT = 1
 export class OpeningAuctionStateStore {
   private readonly baselines = new Map<string, OpeningWeakToStrongBaseline>()
@@ -175,6 +176,15 @@ export class OpeningWeakToStrongDetector {
     }
     if (
       !variant &&
+      atMost(auctionPct, this.rules.auctionWeakMaxPct) &&
+      jumpPctPoint >= this.rules.auctionGapJumpMinPctPoint &&
+      quote.lastPrice >= openingSupport(quote.preClose, officialOpen, this.rules, true) &&
+      (previousWeakPrecondition || baseline.auctionAmount >= this.rules.openingLiquidityMinAmount)
+    ) {
+      variant = 'auction_gap_delayed_board'
+    }
+    if (
+      !variant &&
       (atMost(auctionPct, this.rules.auctionWeakMaxPct) ||
         (officialOpenPct !== undefined && atMost(officialOpenPct, this.rules.auctionWeakMaxPct))) &&
       firstWindowPct >= this.rules.lowOpenRedFirstWindowMinPct &&
@@ -201,7 +211,12 @@ export class OpeningWeakToStrongDetector {
     const quality = openingQuality(quote, baseline, this.rules)
     const riskKeys = [...(auctionProfile?.riskFlags || []), ...quality.riskKeys]
     if (amount < this.rules.openingLiquidityMinAmount) riskKeys.push('opening_amount_too_small')
-    if (officialOpen > 0 && quote.lastPrice < Math.max(quote.preClose, officialOpen * this.rules.openingSupportOpenRatio)) {
+    if (officialOpen > 0 && quote.lastPrice < openingSupport(
+      quote.preClose,
+      officialOpen,
+      this.rules,
+      variant === 'auction_gap_delayed_board',
+    )) {
       riskKeys.push('opening_support_lost')
     }
     if (strongOpenCandidate && !weakPrecondition) riskKeys.push('weak_precondition_missing')
@@ -435,16 +450,17 @@ export class OpeningWeakToStrongDetector {
     quote: OpeningWeakToStrongQuote,
     activeSignal: OpeningWeakToStrongSignal,
   ): OpeningWeakToStrongSignal | null {
-    if (!isInWindow(quote.at, afterWindow(this.rules.detectEnd), INTRADAY_CONFIRM_END)) return null
+    const delayedBoard = activeSignal.variant === 'auction_gap_delayed_board'
+    const inMorningConfirmWindow = isInWindow(quote.at, afterWindow(this.rules.detectEnd), INTRADAY_CONFIRM_END)
+    const inDelayedBoardWindow =
+      delayedBoard && isInWindow(quote.at, afterWindow(INTRADAY_CONFIRM_END), DELAYED_BOARD_CONFIRM_END)
+    if (!inMorningConfirmWindow && !inDelayedBoardWindow) return null
     if (!isValidPrice(quote.lastPrice) || !isValidPrice(quote.preClose)) return null
     if (activeSignal.intradayStatus === 'failed') return null
 
     const intradayPct = pct(quote.lastPrice, quote.preClose)
     const officialOpen = normalizeNumber(activeSignal.officialOpen || quote.open)
-    const support = Math.max(
-      quote.preClose,
-      officialOpen > 0 ? officialOpen * this.rules.openingSupportOpenRatio : 0,
-    )
+    const support = openingSupport(quote.preClose, officialOpen, this.rules, delayedBoard)
     const amount = normalizeNumber(quote.amount)
     if (quote.lastPrice < support) {
       return {
@@ -470,7 +486,24 @@ export class OpeningWeakToStrongDetector {
       normalizeNumber(activeSignal.officialOpenPct),
       normalizeNumber(activeSignal.auctionPct),
     )
-    if (activeSignal.intradayStatus === 'pending' && intradayPct >= confirmPct && quote.lastPrice >= support) {
+    const nearLimitBoardAttempt =
+      activeSignal.limitDistancePct !== undefined &&
+      activeSignal.limitDistancePct <= this.rules.nearLimitDistancePct
+    const currentLimitDistancePct = quote.limitUpPrice && quote.limitUpPrice > 0
+      ? (quote.limitUpPrice - quote.lastPrice) / quote.limitUpPrice * 100
+      : undefined
+    const currentNearLimit =
+      currentLimitDistancePct !== undefined &&
+      currentLimitDistancePct <= this.rules.nearLimitDistancePct
+    const confirmedPct = delayedBoard
+      ? currentNearLimit || intradayPct >= this.rules.strongOpenFirstWindowMinPct
+      : intradayPct >= confirmPct ||
+        (nearLimitBoardAttempt && round2(intradayPct) >= normalizeNumber(activeSignal.firstWindowPct))
+    if (
+      (activeSignal.intradayStatus === 'pending' || activeSignal.intradayStatus === 'watch') &&
+      confirmedPct &&
+      quote.lastPrice >= support
+    ) {
       return {
         ...activeSignal,
         amount,
@@ -482,7 +515,30 @@ export class OpeningWeakToStrongDetector {
         intradayPrice: quote.lastPrice,
         intradayPct: round2(intradayPct),
         intradayAmount: amount,
-        intradayNote: '09:35后继续上攻并站稳，盘中确认成功',
+        intradayNote: delayedBoard
+          ? '跳空修复延迟上板，盘中确认成功'
+          : '09:35后继续上攻并站稳，盘中确认成功',
+      }
+    }
+
+    if (
+      delayedBoard &&
+      activeSignal.intradayStatus === 'pending' &&
+      inMorningConfirmWindow &&
+      quote.lastPrice >= support
+    ) {
+      return {
+        ...activeSignal,
+        amount,
+        confidence: 'watch',
+        score: Math.max(activeSignal.score, 50),
+        intradayStatus: 'watch',
+        intradayOutcome: 'watch_only',
+        intradayStatusAt: quote.at,
+        intradayPrice: quote.lastPrice,
+        intradayPct: round2(intradayPct),
+        intradayAmount: amount,
+        intradayNote: '跳空修复后站稳开盘承接，等待二次拉升或上板确认',
       }
     }
 
@@ -599,6 +655,19 @@ function buildFactors(input: {
       threshold: r.auctionGapFirstWindowMinPct,
       score: r.auctionGapOpenStrengthScore,
     })
+  } else if (input.variant === 'auction_gap_delayed_board') {
+    factors.push({
+      key: 'auctionGapDelayedBoard',
+      value: round2(input.jumpPctPoint),
+      threshold: r.auctionGapJumpMinPctPoint,
+      score: Math.min(r.auctionGapMaxScore, 16 + input.jumpPctPoint * r.auctionGapScoreSlope),
+    })
+    factors.push({
+      key: 'openRepair',
+      value: round2(input.firstWindowPct),
+      threshold: r.auctionWeakMaxPct,
+      score: r.auctionGapQualityGoodScore,
+    })
   } else {
     factors.push({
       key: 'redReversal',
@@ -643,6 +712,16 @@ function buildFactors(input: {
     }
   }
   return factors
+}
+
+function openingSupport(
+  preClose: number,
+  officialOpen: number,
+  rules: OpeningWeakToStrongRules,
+  allowBelowPreClose: boolean,
+): number {
+  const openSupport = officialOpen > 0 ? officialOpen * rules.openingSupportOpenRatio : 0
+  return allowBelowPreClose ? openSupport : Math.max(preClose, openSupport)
 }
 
 function riskFlag(key: string): OpeningWeakToStrongRiskFlag {
@@ -922,7 +1001,7 @@ function clampScore(value: number): number {
 }
 
 function configHash(rules: OpeningWeakToStrongRules): string {
-  const hashKeys: (keyof OpeningWeakToStrongRules)[] = [
+  const hashKeys = ([
     'auctionEnd',
     'auctionGapFirstWindowMinPct',
     'auctionGapJumpMinPctPoint',
@@ -970,7 +1049,7 @@ function configHash(rules: OpeningWeakToStrongRules): string {
     'lowOpenRedReversalScore',
     'lowOpenTurnRedScore',
     'previousWeakContextScore',
-  ].sort()
+  ] as (keyof OpeningWeakToStrongRules)[]).sort()
   const hashRules = Object.fromEntries(hashKeys.map((key) => [key, rules[key]]))
   const json = JSON.stringify(hashRules)
   let hash = 2166136261

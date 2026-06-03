@@ -130,6 +130,91 @@ describe('OpeningRealtimeEventBridge', () => {
     expect(refresh).toHaveBeenCalledTimes(2)
   })
 
+  it('does not grant local web voice to watch updates when proxy post fails', async () => {
+    const postSignal = vi.fn().mockResolvedValue({
+      ok: false,
+      accepted: false,
+      voiceOwner: 'none',
+    })
+    const acceptDerivedEvents = vi.fn()
+    const refresh = vi.fn().mockResolvedValue({ ok: true })
+    const signal = {
+      triggered: true,
+      signalType: 'opening_weak_to_strong',
+      displayName: '竞价弱转强',
+      code: '002806',
+      name: '华锋股份',
+      variant: 'auction_gap_delayed_board',
+      confidence: 'watch',
+      score: 50,
+      amount: 56_000_000,
+      triggerAt: '2026-06-02T09:36:00+08:00',
+      intradayStatus: 'watch',
+      intradayOutcome: 'watch_only',
+      dryRun: false,
+      factors: [],
+      riskFlags: [],
+      ruleVersion: 'opening-weak-to-strong.v1',
+      configHash: 'owts-test',
+    }
+    const buffer = {
+      acceptQuoteWithSignals: vi.fn(() => [
+        {
+          event: {
+            category: 'stock',
+            id: 'opening_weak_to_strong:2026-06-02:002806:watch',
+            eventType: 12001,
+            type: 12001,
+            typeName: '竞价弱转强',
+            direction: 'up',
+            severity: 'important',
+            timestamp: Date.parse(signal.triggerAt),
+            code: signal.code,
+            name: signal.name,
+            changePct: null,
+            price: null,
+            relatedPlates: [],
+            sectorName: '',
+            matchedHotStock: false,
+            matchedCandidate: false,
+            raw: { source: 'opening_weak_to_strong_v3', signal },
+          },
+          signal,
+        },
+      ]),
+    }
+    const bridge = new OpeningRealtimeEventBridge({
+      signalClient: { postSignal } as any,
+      monitorService: { acceptDerivedEvents, refresh } as any,
+      buffer: buffer as any,
+    })
+
+    bridge.acceptQuotes([{
+      code: '002806',
+      name: '华锋股份',
+      lastPrice: 18.15,
+      changePct: -1.79,
+      volume: 1_200_000,
+      amount: 56_000_000,
+      open: 17.68,
+      preClose: 18.48,
+      capturedAt: '2026-06-02T09:36:00+08:00',
+      bridgeTs: '2026-06-02T09:36:00+08:00',
+      lastPriceSource: 'last',
+    }])
+    await vi.waitFor(() => expect(acceptDerivedEvents).toHaveBeenCalledTimes(1))
+
+    expect(acceptDerivedEvents).toHaveBeenCalledWith([
+      expect.objectContaining({
+        code: '002806',
+        raw: expect.objectContaining({
+          voiceOwner: 'none',
+          openingSignalPost: expect.objectContaining({ ok: false }),
+        }),
+      }),
+    ])
+  })
+
   it('keeps low coverage opening signals live while preserving coverage risk', async () => {
     const fixture = loadFixture()
     const sample = fixture.cases.find(item => item.caseId === 'auction-coverage-rounded-low-dry-run')

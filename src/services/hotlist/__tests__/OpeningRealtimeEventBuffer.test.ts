@@ -109,7 +109,7 @@ describe('OpeningRealtimeEventBuffer', () => {
 
   it('upgrades watch signal to stronger signal inside the same trading day', () => {
     const fixture = loadFixture()
-    const sample = fixture.cases.find(item => item.caseId === 'low-open-red-reversal')
+    const sample = fixture.cases.find(item => item.caseId === '002552-auction-gap-reversal')
     expect(sample).toBeTruthy()
 
     const buffer = new OpeningRealtimeEventBuffer({
@@ -126,15 +126,15 @@ describe('OpeningRealtimeEventBuffer', () => {
     const watch = {
       ...sample!.quotes[sample!.quotes.length - 1],
       lastPrice: 37.5,
-      amount: 31_000_000,
+      amount: 4_000_000,
       at: '2026-05-22T09:30:10+08:00',
       capturedAt: '2026-05-22T09:29:40+08:00',
       bridgeTs: '2026-05-22T09:29:40+08:00',
     }
     const strong = {
       ...sample!.quotes[sample!.quotes.length - 1],
-      lastPrice: 37,
-      amount: 60_000_000,
+      lastPrice: 38.6,
+      amount: 120_000_000,
       at: '2026-05-22T09:31:00+08:00',
       capturedAt: '2026-05-22T09:31:00+08:00',
       bridgeTs: '2026-05-22T09:31:00+08:00',
@@ -243,5 +243,187 @@ describe('OpeningRealtimeEventBuffer', () => {
     expect(events[2].signal.intradayOutcome).toBe('confirmed_strong')
     expect(events[3].signal.intradayOutcome).toBe('failed_open_dump')
     expect(events[3].signal.riskFlags.map(item => item.key)).toContain('intraday_open_dump')
+  })
+
+  it('lets a fresh realtime opening signal replace a dry-run pending signal', () => {
+    const fixture = loadFixture()
+    const sample = fixture.cases.find(item => item.caseId === 'strong-open-board-attempt-with-precondition')
+    expect(sample).toBeTruthy()
+
+    const buffer = new OpeningRealtimeEventBuffer({
+      rules: fixture.rules,
+      ruleVersion: fixture.ruleVersion,
+    })
+    const quotes = sample!.quotes
+    const open = quotes[quotes.length - 1]
+
+    for (const quote of quotes.slice(0, -1)) buffer.acceptQuoteWithSignals(quote)
+    const stale = buffer.acceptQuoteWithSignals({
+      ...open,
+      capturedAt: '2026-05-22T09:29:40+08:00',
+      bridgeTs: '2026-05-22T09:29:40+08:00',
+    })
+    const fresh = buffer.acceptQuoteWithSignals({
+      ...open,
+      capturedAt: open.at,
+      bridgeTs: open.at,
+    })
+
+    expect(stale).toHaveLength(1)
+    expect(stale[0].signal.dryRun).toBe(true)
+    expect(fresh).toHaveLength(1)
+    expect(fresh[0].signal.dryRun).toBe(false)
+    expect(fresh[0].signal.intradayStatus).toBe('pending')
+  })
+
+  it('lets a lower-scored fresh pending signal replace a stale dry-run pending signal', () => {
+    const fixture = loadFixture()
+    const sample = fixture.cases.find(item => item.caseId === '002552-auction-gap-reversal')
+    expect(sample).toBeTruthy()
+
+    const buffer = new OpeningRealtimeEventBuffer({
+      rules: fixture.rules,
+      ruleVersion: fixture.ruleVersion,
+    })
+    const quotes = sample!.quotes
+    const open = quotes[quotes.length - 1]
+
+    for (const quote of quotes.slice(0, -1)) buffer.acceptQuoteWithSignals(quote)
+    const stale = buffer.acceptQuoteWithSignals({
+      ...open,
+      lastPrice: 38.6,
+      amount: 120_000_000,
+      capturedAt: '2026-05-22T09:29:20+08:00',
+      bridgeTs: '2026-05-22T09:29:20+08:00',
+    })
+    const fresh = buffer.acceptQuoteWithSignals({
+      ...open,
+      lastPrice: 37.5,
+      amount: 4_000_000,
+      capturedAt: '2026-05-22T09:31:00+08:00',
+      bridgeTs: '2026-05-22T09:31:00+08:00',
+    })
+
+    expect(stale).toHaveLength(1)
+    expect(stale[0].signal.dryRun).toBe(true)
+    expect(fresh).toHaveLength(1)
+    expect(fresh[0].signal.dryRun).toBe(false)
+    expect(fresh[0].signal.intradayStatus).toBe('pending')
+    expect(fresh[0].signal.score).toBeLessThan(stale[0].signal.score)
+  })
+
+  it('confirms a near-limit opening signal without requiring an impossible extra advance', () => {
+    const fixture = loadFixture()
+    const sample = fixture.cases.find(item => item.caseId === 'strong-open-board-attempt-with-precondition')
+    expect(sample).toBeTruthy()
+
+    const buffer = new OpeningRealtimeEventBuffer({
+      rules: fixture.rules,
+      ruleVersion: fixture.ruleVersion,
+    })
+    const open = sample!.quotes[sample!.quotes.length - 1]
+    const confirm = {
+      ...open,
+      at: '2026-05-22T09:36:00+08:00',
+      capturedAt: '2026-05-22T09:36:00+08:00',
+      bridgeTs: '2026-05-22T09:36:00+08:00',
+      amount: 120_000_000,
+    }
+
+    const events = [...sample!.quotes, confirm].flatMap(quote => buffer.acceptQuoteWithSignals(quote))
+
+    expect(events.map(item => item.signal.intradayStatus)).toEqual([
+      'preopen_candidate',
+      'pending',
+      'confirmed',
+    ])
+    expect(events[2].signal.intradayOutcome).toBe('confirmed_strong')
+  })
+
+  it('emits watch and delayed confirmation events for auction gap repair boards', () => {
+    const fixture = loadFixture()
+    const buffer = new OpeningRealtimeEventBuffer({
+      rules: fixture.rules,
+      ruleVersion: fixture.ruleVersion,
+    })
+    const base = {
+      code: '002806',
+      name: '华锋股份',
+      preClose: 18.48,
+      open: 0,
+      volume: 1_200_000,
+      limitUpPrice: 20.33,
+      previousWeakScore: 35,
+      previousWeakSignals: ['yesterday_open_board'],
+      previousWeakSource: 'manual_previous_weak',
+    }
+    const events = [
+      {
+        ...base,
+        at: '2026-06-02T09:20:05+08:00',
+        lastPrice: 16.3,
+        amount: 2_000_000,
+        capturedAt: '2026-06-02T09:20:05+08:00',
+        bridgeTs: '2026-06-02T09:20:05+08:00',
+      },
+      {
+        ...base,
+        at: '2026-06-02T09:24:05+08:00',
+        lastPrice: 16.7,
+        amount: 8_000_000,
+        capturedAt: '2026-06-02T09:24:05+08:00',
+        bridgeTs: '2026-06-02T09:24:05+08:00',
+      },
+      {
+        ...base,
+        at: '2026-06-02T09:25:00+08:00',
+        lastPrice: 16.95,
+        amount: 13_530_000,
+        capturedAt: '2026-06-02T09:25:00+08:00',
+        bridgeTs: '2026-06-02T09:25:00+08:00',
+      },
+      {
+        ...base,
+        at: '2026-06-02T09:30:08+08:00',
+        lastPrice: 17.72,
+        open: 17.68,
+        amount: 22_000_000,
+        capturedAt: '2026-06-02T09:30:08+08:00',
+        bridgeTs: '2026-06-02T09:30:08+08:00',
+      },
+      {
+        ...base,
+        at: '2026-06-02T09:36:00+08:00',
+        lastPrice: 18.15,
+        open: 17.68,
+        amount: 56_000_000,
+        capturedAt: '2026-06-02T09:36:00+08:00',
+        bridgeTs: '2026-06-02T09:36:00+08:00',
+      },
+      {
+        ...base,
+        at: '2026-06-02T14:56:00+08:00',
+        lastPrice: 20.33,
+        open: 17.68,
+        amount: 397_900_000,
+        capturedAt: '2026-06-02T14:56:00+08:00',
+        bridgeTs: '2026-06-02T14:56:00+08:00',
+      },
+    ].flatMap(quote => buffer.acceptQuoteWithSignals(quote))
+
+    expect(events.map(item => item.signal.intradayStatus)).toEqual([
+      'preopen_candidate',
+      'pending',
+      'watch',
+      'confirmed',
+    ])
+    expect(events[1].signal.variant).toBe('auction_gap_delayed_board')
+    expect(events.map(item => item.event.id)).toEqual([
+      'opening_weak_to_strong:2026-06-02:002806:preopen_candidate',
+      'opening_weak_to_strong:2026-06-02:002806:pending',
+      'opening_weak_to_strong:2026-06-02:002806:watch',
+      'opening_weak_to_strong:2026-06-02:002806:confirmed',
+    ])
+    expect(events[3].signal.intradayOutcome).toBe('confirmed_strong')
   })
 })

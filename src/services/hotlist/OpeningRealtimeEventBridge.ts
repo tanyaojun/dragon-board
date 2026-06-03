@@ -123,16 +123,23 @@ function resolveVoiceOwner(
   signal: OpeningCanonicalSignal,
   response: { ok: boolean; voiceOwner?: 'web' | 'desktop' | 'none' },
 ): 'web' | 'desktop' | 'none' {
-  if (signal.dryRun) return 'none'
-  if (signal.intradayStatus === 'preopen_candidate' || signal.intradayOutcome === 'preopen_candidate') {
-    return 'none'
-  }
+  if (!isVoiceEligibleOpeningSignal(signal)) return 'none'
   const owner = response.voiceOwner
   if (!response.ok) {
     return 'web'
   }
   if (owner) return owner
   return 'web'
+}
+
+function isVoiceEligibleOpeningSignal(signal: OpeningCanonicalSignal): boolean {
+  if (signal.dryRun) return false
+  if (signal.intradayStatus === 'preopen_candidate' || signal.intradayOutcome === 'preopen_candidate') {
+    return false
+  }
+  if (signal.intradayStatus === 'failed' || signal.intradayOutcome === 'failed_open_dump') return false
+  if (signal.intradayStatus === 'watch' || signal.intradayOutcome === 'watch_only') return false
+  return true
 }
 
 function deriveLimitUpPrice(code: string, name: string | undefined, preClose: number): number | undefined {

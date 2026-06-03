@@ -279,7 +279,8 @@ public sealed class L1EventEngine
             return;
         }
         if (state.OpeningWeakToStrongTriggeredDate == tradingDate &&
-            IntradayOutcomePriority(result) <= state.OpeningWeakToStrongIntradayPriority)
+            IntradayOutcomePriority(result) <= state.OpeningWeakToStrongIntradayPriority &&
+            !(state.OpeningWeakToStrongLastDryRun && !result.DryRun))
         {
             RecordOpeningTelemetry(state, tradingDate, result, "event_suppressed_duplicate_or_lower_priority");
             return;
@@ -287,6 +288,7 @@ public sealed class L1EventEngine
 
         state.OpeningWeakToStrongTriggeredDate = tradingDate;
         state.OpeningWeakToStrongIntradayPriority = IntradayOutcomePriority(result);
+        state.OpeningWeakToStrongLastDryRun = result.DryRun;
         var severity = result.Confidence switch
         {
             "critical" => L1EventSeverity.Critical,
@@ -298,7 +300,7 @@ public sealed class L1EventEngine
             L1EventType.OpeningWeakToStrong,
             OpeningTypeName(result),
             severity,
-            OpeningReason(result, result.IntradayStatus is "confirmed" or "failed" or "confirmed_reversal"),
+            OpeningReason(result, result.IntradayStatus is "confirmed" or "failed" or "confirmed_reversal" or "watch"),
             ToOpeningSignal(result));
     }
 
@@ -467,6 +469,7 @@ public sealed class L1EventEngine
             "auction_late_lift" => "临门抢筹",
             "low_open_red_reversal" => "低开翻红",
             "strong_open_board_attempt" => "冲板抢筹",
+            "auction_gap_delayed_board" => "跳空修复延迟上板",
             _ => "跳空上移",
         };
         var amount = FormatMoney(result.Amount);
@@ -688,6 +691,7 @@ public sealed class L1EventEngine
         public bool OpenShapeTriggered { get; set; }
         public string OpeningWeakToStrongTriggeredDate { get; set; } = "";
         public int OpeningWeakToStrongIntradayPriority { get; set; }
+        public bool OpeningWeakToStrongLastDryRun { get; set; }
         public HashSet<string> OpeningTelemetryKeys { get; } = new(StringComparer.Ordinal);
     }
 }

@@ -44,11 +44,22 @@ export class OpeningRealtimeEventBuffer {
 
     const key = `${signal.ruleVersion}:${signal.code}:${tradingDate(signal.triggerAt)}`
     const previous = this.emittedSignals.get(key)
-    if (previous && compareSignalPriority(signal, previous) <= 0) return []
+    const priorityDiff = previous ? compareSignalPriority(signal, previous) : 0
+    if (previous && priorityDiff <= 0 && !canReplaceDryRunWithLiveSignal(signal, previous)) {
+      return []
+    }
     this.emittedSignals.set(key, signal)
 
     return [{ event: toHotStockEvent(signal), signal }]
   }
+}
+
+function canReplaceDryRunWithLiveSignal(
+  signal: OpeningWeakToStrongSignal,
+  previous: OpeningWeakToStrongSignal,
+): boolean {
+  if (!previous.dryRun || signal.dryRun) return false
+  return intradayOutcomePriority(signal) === intradayOutcomePriority(previous)
 }
 
 function compareSignalPriority(left: OpeningWeakToStrongSignal, right: OpeningWeakToStrongSignal): number {

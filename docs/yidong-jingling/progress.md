@@ -36,6 +36,23 @@
   - `pnpm build` 通过。
   - `git diff --check` 通过。
 
+## 2026-06-02 竞价跳空修复延迟上板
+
+- **目标：** 新增 002806 华锋股份这类“昨日弱势/炸板，09:25 深水或弱竞价，09:30 明显跳空修复但未立即上板，午后/尾盘再上板”的弱转强子形态。
+- **口径：**
+  - 新增 `auction_gap_delayed_board` 分型，区别于 `auction_gap_reversal` 的开盘即转强。
+  - 09:30 只要相对 09:25 有明显跳空修复、站稳开盘承接，并具备前弱上下文或最低竞价流动性，即进入异动列表。
+  - 09:35-10:00 若站稳开盘但尚未明显走强，升级为 `watch_only`，不进入强播/推送。
+  - 10:00 后至收盘，若二次拉升到接近涨停或触板，再升级为 `confirmed_strong`，才获得语音和飞书推送资格。
+- **验证：**
+  - TS 检测器新增 002806 风格用例：`pending -> watch_only -> confirmed_strong`。
+  - Web 实时缓冲新增同链路用例，确保前端事件输出 `preopen_candidate/pending/watch/confirmed`。
+  - 桌面端新增事件引擎用例，确保 watch 阶段不强播，确认上板阶段可强播。
+- **review 后修复：**
+  - Web 端 proxy 离线/超时时，`watch_only` 和 `failed_open_dump` 不再降级为本地语音，只保留列表展示。
+  - Web 实时缓冲允许同一盘中阶段的新鲜实盘信号替换 stale dry-run 信号，即使 fresh 信号分数低于 dry-run 信号。
+  - `opening-weak-to-strong-plan.md` 模式族表补齐 `auction_gap_delayed_board` 合同。
+
 ## 2026-05-30 V5 后优化：参数化 + 代码审查修复 + 热榜语音过滤
 
 - **目标：** 基于市场研究校准评分参数，修复 P0/P1 代码问题，新增热榜前 N 名语音过滤。

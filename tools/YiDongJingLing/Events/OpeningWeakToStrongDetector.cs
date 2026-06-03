@@ -669,6 +669,7 @@ public sealed class OpeningWeakToStrongDetector
     private const decimal HotAmount = 100_000_000m;
     private const string PreopenCandidateStart = "09:25:00";
     private const string IntradayConfirmEnd = "10:00:00";
+    private const string DelayedBoardConfirmEnd = "15:00:00";
     private const decimal IntradayConfirmAdvancePctPoint = 1m;
     private readonly OpeningWeakToStrongRules _rules;
     private readonly string _ruleVersion;
@@ -758,6 +759,13 @@ public sealed class OpeningWeakToStrongDetector
         {
             variant = "auction_gap_reversal";
         }
+        else if (auctionPct <= _rules.AuctionWeakMaxPct &&
+            jumpPctPoint >= _rules.AuctionGapJumpMinPctPoint &&
+            quote.LastPrice >= OpeningSupport(quote.PreClose, quote.Open, _rules, allowBelowPreClose: true) &&
+            (previousWeakPrecondition || baseline.AuctionAmount >= _rules.OpeningLiquidityMinAmount))
+        {
+            variant = "auction_gap_delayed_board";
+        }
         else if ((auctionPct <= _rules.AuctionWeakMaxPct || (officialOpenPct.HasValue && officialOpenPct.Value <= _rules.AuctionWeakMaxPct)) &&
             firstWindowPct >= _rules.LowOpenRedFirstWindowMinPct &&
             jumpPctPoint >= _rules.LowOpenRedJumpMinPctPoint)
@@ -782,8 +790,14 @@ public sealed class OpeningWeakToStrongDetector
         var riskKeys = new List<string>(auctionProfile?.RiskFlags ?? []);
         riskKeys.AddRange(quality.RiskKeys);
         if (quote.Amount < _rules.OpeningLiquidityMinAmount) riskKeys.Add("opening_amount_too_small");
-        if (quote.Open > 0m && quote.LastPrice < Math.Max(quote.PreClose, quote.Open * _rules.OpeningSupportOpenRatio))
+        if (quote.Open > 0m && quote.LastPrice < OpeningSupport(
+            quote.PreClose,
+            quote.Open,
+            _rules,
+            allowBelowPreClose: variant == "auction_gap_delayed_board"))
+        {
             riskKeys.Add("opening_support_lost");
+        }
         if (strongOpenCandidate && !weakPrecondition) riskKeys.Add("weak_precondition_missing");
         if (!hasAuctionProfile)
         {
@@ -1025,15 +1039,17 @@ public sealed class OpeningWeakToStrongDetector
         OpeningWeakToStrongQuote quote,
         OpeningWeakToStrongResult activeSignal)
     {
-        if (!OpeningAuctionStateStore.IsInWindow(quote.At, AfterWindow(_rules.DetectEnd), IntradayConfirmEnd)) return null;
+        var delayedBoard = activeSignal.Variant == "auction_gap_delayed_board";
+        var inMorningConfirmWindow = OpeningAuctionStateStore.IsInWindow(quote.At, AfterWindow(_rules.DetectEnd), IntradayConfirmEnd);
+        var inDelayedBoardWindow = delayedBoard &&
+            OpeningAuctionStateStore.IsInWindow(quote.At, AfterWindow(IntradayConfirmEnd), DelayedBoardConfirmEnd);
+        if (!inMorningConfirmWindow && !inDelayedBoardWindow) return null;
         if (!IsValidPrice(quote.LastPrice) || !IsValidPrice(quote.PreClose)) return null;
         if (activeSignal.IntradayStatus == "failed") return null;
 
         var intradayPct = OpeningAuctionStateStore.Pct(quote.LastPrice, quote.PreClose);
         var officialOpen = activeSignal.OfficialOpen.GetValueOrDefault(quote.Open);
-        var support = Math.Max(
-            quote.PreClose,
-            officialOpen > 0m ? officialOpen * _rules.OpeningSupportOpenRatio : 0m);
+        var support = OpeningSupport(quote.PreClose, officialOpen, _rules, delayedBoard);
 
         if (quote.LastPrice < support)
         {
@@ -1057,7 +1073,21 @@ public sealed class OpeningWeakToStrongDetector
         var confirmPct = Math.Max(
             Math.Max(activeSignal.FirstWindowPct.GetValueOrDefault() + IntradayConfirmAdvancePctPoint, activeSignal.OfficialOpenPct.GetValueOrDefault()),
             activeSignal.AuctionPct.GetValueOrDefault());
-        if (activeSignal.IntradayStatus == "pending" && intradayPct >= confirmPct && quote.LastPrice >= support)
+        var nearLimitBoardAttempt = activeSignal.LimitDistancePct.HasValue &&
+            activeSignal.LimitDistancePct.Value <= _rules.NearLimitDistancePct;
+        var currentLimitDistancePct = quote.LimitUpPrice > 0m
+            ? (quote.LimitUpPrice - quote.LastPrice) / quote.LimitUpPrice * 100m
+            : (decimal?)null;
+        var currentNearLimit = currentLimitDistancePct.HasValue &&
+            currentLimitDistancePct.Value <= _rules.NearLimitDistancePct;
+        var confirmedPct = delayedBoard
+            ? currentNearLimit || intradayPct >= _rules.StrongOpenFirstWindowMinPct
+            : intradayPct >= confirmPct ||
+              (nearLimitBoardAttempt &&
+               Math.Round(intradayPct, 2, MidpointRounding.AwayFromZero) >= activeSignal.FirstWindowPct.GetValueOrDefault());
+        if ((activeSignal.IntradayStatus == "pending" || activeSignal.IntradayStatus == "watch") &&
+            confirmedPct &&
+            quote.LastPrice >= support)
         {
             return activeSignal with
             {
@@ -1070,7 +1100,27 @@ public sealed class OpeningWeakToStrongDetector
                 IntradayPrice = quote.LastPrice,
                 IntradayPct = Round2(intradayPct),
                 IntradayAmount = quote.Amount,
-                IntradayNote = "09:35后继续上攻并站稳，盘中确认成功",
+                IntradayNote = delayedBoard ? "跳空修复延迟上板，盘中确认成功" : "09:35后继续上攻并站稳，盘中确认成功",
+            };
+        }
+
+        if (delayedBoard &&
+            activeSignal.IntradayStatus == "pending" &&
+            inMorningConfirmWindow &&
+            quote.LastPrice >= support)
+        {
+            return activeSignal with
+            {
+                Confidence = "watch",
+                Score = Math.Max(activeSignal.Score, 50m),
+                Amount = quote.Amount,
+                IntradayStatus = "watch",
+                IntradayOutcome = "watch_only",
+                IntradayStatusAt = quote.At,
+                IntradayPrice = quote.LastPrice,
+                IntradayPct = Round2(intradayPct),
+                IntradayAmount = quote.Amount,
+                IntradayNote = "跳空修复后站稳开盘承接，等待二次拉升或上板确认",
             };
         }
 
@@ -1192,6 +1242,11 @@ public sealed class OpeningWeakToStrongDetector
         {
             factors.Add(new("auctionGap", Round2(jumpPctPoint), _rules.AuctionGapJumpMinPctPoint, Math.Min(_rules.AuctionGapMaxScore, 20m + jumpPctPoint * _rules.AuctionGapScoreSlope)));
             factors.Add(new("openStrength", Round2(firstWindowPct), _rules.AuctionGapFirstWindowMinPct, _rules.AuctionGapOpenStrengthScore));
+        }
+        else if (variant == "auction_gap_delayed_board")
+        {
+            factors.Add(new("auctionGapDelayedBoard", Round2(jumpPctPoint), _rules.AuctionGapJumpMinPctPoint, Math.Min(_rules.AuctionGapMaxScore, 16m + jumpPctPoint * _rules.AuctionGapScoreSlope)));
+            factors.Add(new("openRepair", Round2(firstWindowPct), _rules.AuctionWeakMaxPct, _rules.AuctionGapQualityGoodScore));
         }
         else
         {
@@ -1327,6 +1382,16 @@ public sealed class OpeningWeakToStrongDetector
     private static decimal Round2(decimal value) => Math.Round(value, 2, MidpointRounding.AwayFromZero);
     private static decimal ClampScore(decimal value) => Math.Max(0m, Math.Min(100m, Math.Round(value, 0, MidpointRounding.AwayFromZero)));
     private static string DecimalText(decimal value) => value.ToString("0.#############################", CultureInfo.InvariantCulture);
+
+    private static decimal OpeningSupport(
+        decimal preClose,
+        decimal officialOpen,
+        OpeningWeakToStrongRules rules,
+        bool allowBelowPreClose)
+    {
+        var openSupport = officialOpen > 0m ? officialOpen * rules.OpeningSupportOpenRatio : 0m;
+        return allowBelowPreClose ? openSupport : Math.Max(preClose, openSupport);
+    }
 
     private static string AfterWindow(string value)
     {
