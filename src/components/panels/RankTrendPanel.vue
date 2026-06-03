@@ -150,6 +150,8 @@
               <div class="tag-row">
                 <span>{{ currentStock.qualityLabel }}</span>
                 <span>{{ currentStock.cycleLabel }}</span>
+                <span>{{ currentStock.displayStatusLabel }}</span>
+                <span>{{ currentStock.riskLabel }}</span>
                 <span>{{ signalText(currentStock.finalSignal) }}</span>
                 <span>{{ regimeText(currentStock.regimeState) }}</span>
               </div>
@@ -332,7 +334,6 @@ import { rankTrendAnalyzer, type RankTrendResult } from '@/services/RankTrendAna
 import {
   buildRankTrendStatusContext,
   getRankTrendDisplayBreakdown,
-  getRankTrendDisplayStatus,
   type RankTrendStatusContext,
 } from '@/services/rankTrend/compat'
 import {
@@ -395,6 +396,8 @@ interface PanelStockView {
   macdCross: string
   statusLabel: string
   statusClass: string
+  displayStatusLabel: string
+  riskLabel: string
   qualityLabel: string
   cycleLabel: string
   tier: string
@@ -658,7 +661,6 @@ function buildPanelStockView(
   const cycle = analysis?.cycle
   const risk = analysis?.risk
   const finalSignal = (analysis?.decision?.final?.signal ?? stock?.finalSignal ?? 'hold') as Signal
-  const status = getRankTrendDisplayStatus(analysis, stock, statusContext)
   const breakdown = getRankTrendDisplayBreakdown(analysis, stock, statusContext)
 
   return {
@@ -688,8 +690,10 @@ function buildPanelStockView(
     sentimentSignal: finalSignal,
     sentimentConfidence: Number(analysis?.decision?.final?.confidence ?? 0),
     macdCross: String(technical?.macd?.cross ?? stock?.macdCross ?? 'none'),
-    statusLabel: status.label,
-    statusClass: status.classKey,
+    statusLabel: breakdown.tierLabel,
+    statusClass: breakdown.classKeys.tier,
+    displayStatusLabel: breakdown.displayStatusLabel,
+    riskLabel: breakdown.riskLabel,
     qualityLabel: breakdown.qualityLabel,
     cycleLabel: breakdown.cycleLabel,
     tier: String(strategy?.candidateTier ?? 'N_NEUTRAL'),
@@ -1253,10 +1257,12 @@ onUnmounted(() => {
   border-left: 4px solid #8f98a8;
 }
 
+.hero-card.tier-candidate-main,
 .hero-card.tier-main_confirmed {
   border-left-color: #ff6b6b;
 }
 
+.hero-card.tier-candidate-ignition,
 .hero-card.tier-ignition_watch {
   border-left-color: #facc15;
 }
@@ -1269,6 +1275,7 @@ onUnmounted(() => {
   border-left-color: #2dd4bf;
 }
 
+.hero-card.tier-candidate-crowded,
 .hero-card.tier-crowded {
   border-left-color: #f8fafc;
 }
@@ -1277,10 +1284,12 @@ onUnmounted(() => {
   border-left-color: #c084fc;
 }
 
+.hero-card.tier-candidate-exit,
 .hero-card.tier-weakening {
   border-left-color: #4db6ac;
 }
 
+.hero-card.tier-candidate-neutral,
 .hero-card.tier-insufficient {
   border-left-color: #9ca3af;
 }

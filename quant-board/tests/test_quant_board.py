@@ -1340,6 +1340,7 @@ def test_snapshot_frames_api_reads_sqlite_frame_bundles() -> None:
     frame = body["frames"][0]
     assert frame["snapshotId"] == snapshot_id
     assert frame["hotlist"][0]["code"] == "600001"
+    assert frame["stocks"] == frame["hotlist"]
     assert frame["sectors"][0]["name"] == "人工智能"
 
 

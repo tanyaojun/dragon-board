@@ -110,6 +110,7 @@ def test_mongo_repository_frame_bundles_return_mongodb_source_rows() -> None:
 
     assert bundles[0]["source"] == "dragon_board_runtime"
     assert bundles[0]["rows"][0]["code"] == "000001"
+    assert bundles[0]["stocks"] == bundles[0]["rows"]
     assert rows["source"] == "mongodb"
     assert rows["rows"][0]["rowId"] == "s1:000001"
 

@@ -598,6 +598,7 @@ class Repository:
             item = self.local_frame_to_bundle_dict(frame)
             item["rows"] = stock_rows_by_snapshot.get(frame.snapshot_id, [])
             item["hotlist"] = item["rows"]
+            item["stocks"] = item["rows"]
             if projection == "ranktrend":
                 item["entities"] = []
                 item["sectors"] = []

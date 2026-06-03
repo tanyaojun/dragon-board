@@ -497,11 +497,13 @@ describe('getRankTrendDisplayBreakdown', () => {
     expect(breakdown.showQualityBadge).toBe(false)
     expect(breakdown.qualityBadgeLabel).toBe('')
     expect(breakdown.cycleLabel).toBe('扩散')
-    expect(breakdown.tierLabel).toBe('主升确认')
+    expect(breakdown.tierLabel).toBe('主升候选')
+    expect(breakdown.displayStatusLabel).toBe('主升确认')
     expect(breakdown.riskLabel).toBe('正常')
     expect(breakdown.classKeys.quality).toBe('quality-ok')
     expect(breakdown.classKeys.cycle).toBe('cycle-expansion')
-    expect(breakdown.classKeys.tier).toBe('main_confirmed')
+    expect(breakdown.classKeys.tier).toBe('candidate-main')
+    expect(breakdown.classKeys.displayStatus).toBe('main_confirmed')
     expect(breakdown.classKeys.risk).toBe('risk-normal')
     expect(breakdown.tooltip).toContain('样本OK')
     expect(breakdown.tooltip).toContain('扩散')
@@ -518,7 +520,8 @@ describe('getRankTrendDisplayBreakdown', () => {
     expect(breakdown.showQualityBadge).toBe(false)
     expect(breakdown.qualityBadgeLabel).toBe('')
     expect(breakdown.cycleLabel).toBe('拥挤')
-    expect(breakdown.tierLabel).toBe('资金背离')
+    expect(breakdown.tierLabel).toBe('主升候选')
+    expect(breakdown.displayStatusLabel).toBe('资金背离')
     expect(breakdown.riskLabel).toBe('资金背离')
     expect(breakdown.classKeys.quality).toBe('quality-degraded')
     expect(breakdown.classKeys.risk).toBe('risk-money_divergence')
@@ -548,8 +551,43 @@ describe('getRankTrendDisplayBreakdown', () => {
       context,
     )
 
-    expect(breakdown.tierLabel).toBe('高位拥挤')
+    expect(breakdown.tierLabel).toBe('主升候选')
+    expect(breakdown.displayStatusLabel).toBe('高位拥挤')
     expect(breakdown.tooltip).toContain('原始分层：A_MAIN')
+  })
+
+  it('A_MAIN 被实时风险覆盖时保留生命周期候选，并把风险独立表达', () => {
+    const target = {
+      change: 10,
+      turnover: 400,
+      volumeRatio: 3.5,
+      turnoverRate: 15,
+      zlje: 1,
+      zljzb: 2,
+    }
+    const context = buildRankTrendStatusContext([
+      { turnover: 10, volumeRatio: 0.6, turnoverRate: 2 },
+      { turnover: 50, volumeRatio: 1, turnoverRate: 4 },
+      { turnover: 100, volumeRatio: 1.4, turnoverRate: 6 },
+      { turnover: 200, volumeRatio: 2, turnoverRate: 8 },
+      target,
+    ])
+
+    const breakdown = getRankTrendDisplayBreakdown(
+      createRankTrend({ tier: 'A_MAIN', sampleStatus: 'ok', stage: 'expansion' }),
+      target,
+      context,
+    )
+
+    expect(breakdown.candidateTierKey).toBe('A_MAIN')
+    expect(breakdown.candidateTierLabel).toContain('主升候选')
+    expect(breakdown.tierLabel).toBe('主升候选')
+    expect(breakdown.riskLabel).toBe('拥挤风险')
+    expect(breakdown.classKeys.tier).toBe('candidate-main')
+    expect(breakdown.classKeys.risk).toBe('risk-crowded')
+    expect(breakdown.tooltip).toContain('展示状态：高位拥挤')
+    expect(breakdown.tooltip).toContain('原始分层：A_MAIN / 主升候选')
+    expect(breakdown.tooltip).toContain('实时风险：拥挤风险')
   })
 
   it('缺少 RankTrend 时三栏投影只标记样本不足，不伪造生命周期', () => {
@@ -560,6 +598,7 @@ describe('getRankTrendDisplayBreakdown', () => {
     expect(breakdown.qualityBadgeLabel).toBe('')
     expect(breakdown.cycleLabel).toBe('-')
     expect(breakdown.tierLabel).toBe('样本不足')
+    expect(breakdown.displayStatusLabel).toBe('样本不足')
     expect(breakdown.riskLabel).toBe('数据不足')
     expect(breakdown.classKeys.quality).toBe('quality-insufficient')
     expect(breakdown.classKeys.cycle).toBe('cycle-empty')

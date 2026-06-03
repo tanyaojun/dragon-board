@@ -156,7 +156,7 @@
                 @mousemove="moveStatusTooltip($event)" @mouseleave="hideStatusTooltip">
                 <span
                   class="strategy-status-label"
-                  :class="`status-${getRankTrendBreakdown(stock).classKeys.tier}`"
+                  :class="`strategy-tier-${getRankTrendBreakdown(stock).classKeys.tier}`"
                 >
                   {{ getRankTrendBreakdown(stock).tierLabel }}
                 </span>
@@ -258,7 +258,6 @@ import RankTrendPanel from '../../components/panels/RankTrendPanel.vue'
 import {
   buildRankTrendStatusContext,
   getRankTrendDisplayBreakdown,
-  getRankTrendDisplayStatus,
 } from '../../services/rankTrend/compat'
 const props = defineProps<{
   loading?: boolean
@@ -826,13 +825,10 @@ const getZeroCrossConfidence = (stock: any) =>
 const getAttentionStage = (stock: any) =>
   getRankTrendAnalysis(stock)?.cycle?.stage
 
-const getRankTrendStatus = (stock: any) =>
-  getRankTrendDisplayStatus(getRankTrendAnalysis(stock), stock, rankTrendStatusContext.value)
-
 const getRankTrendBreakdown = (stock: any) =>
   getRankTrendDisplayBreakdown(getRankTrendAnalysis(stock), stock, rankTrendStatusContext.value)
 
-const formatRankTrendStatus = (stock: any) => getRankTrendStatus(stock).label
+const formatRankTrendStatus = (stock: any) => getRankTrendBreakdown(stock).tierLabel
 
 const getRankTrendStatusTooltip = (stock: any) => getRankTrendBreakdown(stock).tooltip
 
@@ -1001,7 +997,7 @@ const getCellClass = (key: string, stock: any) => {
   }
 
   if (key === 'strategyStatus') {
-    classes.push(`strategy-tier-${getRankTrendStatus(stock).classKey}`)
+    classes.push(`strategy-tier-${getRankTrendBreakdown(stock).classKeys.tier}`)
   }
 
   return classes.join(' ')
@@ -1755,11 +1751,13 @@ defineExpose({
   font-weight: 600;
 }
 
+.strategy-tier-candidate-main,
 .strategy-tier-main_confirmed,
 .status-main_confirmed {
   color: #ff4d4f !important;
 }
 
+.strategy-tier-candidate-ignition,
 .strategy-tier-ignition_watch,
 .status-ignition_watch {
   color: #facc15 !important;
@@ -1775,6 +1773,7 @@ defineExpose({
   color: #2dd4bf !important;
 }
 
+.strategy-tier-candidate-crowded,
 .strategy-tier-crowded,
 .status-crowded {
   color: #f8fafc !important;
@@ -1785,11 +1784,13 @@ defineExpose({
   color: #c084fc !important;
 }
 
+.strategy-tier-candidate-exit,
 .strategy-tier-weakening,
 .status-weakening {
   color: #22c55e !important;
 }
 
+.strategy-tier-candidate-neutral,
 .strategy-tier-insufficient,
 .strategy-tier-empty,
 .status-insufficient,

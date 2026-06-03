@@ -173,6 +173,7 @@ class MongoRepository:
             item = self.local_frame_to_bundle_dict(row)
             item["rows"] = stock_rows_by_snapshot.get(str(row.get("snapshotId")), [])
             item["hotlist"] = item["rows"]
+            item["stocks"] = item["rows"]
             if projection == "ranktrend":
                 item["entities"] = []
                 item["sectors"] = []

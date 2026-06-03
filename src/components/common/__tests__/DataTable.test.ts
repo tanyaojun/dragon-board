@@ -61,4 +61,15 @@ describe('DataTable row detail interactions', () => {
     expect(source).not.toMatch(/fetchTodaySignals/)
     expect(source).not.toMatch(/openingSignalClient\.postSignal/)
   })
+
+  test('renders RankTrend lifecycle tier from the display breakdown contract', () => {
+    const source = dataTableSource()
+
+    expect(source).toMatch(/getRankTrendBreakdown\(stock\)\.tierLabel/)
+    expect(source).toMatch(/`strategy-tier-\$\{getRankTrendBreakdown\(stock\)\.classKeys\.tier\}`/)
+    expect(source).toMatch(/formatRankTrendStatus\s*=\s*\(stock:\s*any\)\s*=>\s*getRankTrendBreakdown\(stock\)\.tierLabel/)
+    expect(source).toMatch(/classes\.push\(`strategy-tier-\$\{getRankTrendBreakdown\(stock\)\.classKeys\.tier\}`\)/)
+    expect(source).not.toMatch(/:class="`status-\$\{getRankTrendBreakdown\(stock\)\.classKeys\.tier\}`"/)
+    expect(source).not.toMatch(/classes\.push\(`strategy-tier-\$\{getRankTrendStatus\(stock\)\.classKey\}`\)/)
+  })
 })

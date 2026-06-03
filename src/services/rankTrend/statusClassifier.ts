@@ -13,6 +13,7 @@ export interface RankTrendDisplayBreakdown {
   showQualityBadge: boolean
   cycleLabel: string
   tierLabel: string
+  displayStatusLabel: string
   candidateTierKey: string
   candidateTierLabel: string
   riskLabel: string
@@ -21,6 +22,7 @@ export interface RankTrendDisplayBreakdown {
     quality: string
     cycle: string
     tier: string
+    displayStatus: string
     risk: string
   }
 }
@@ -73,6 +75,22 @@ const CANDIDATE_TIER_LABELS: Record<string, string> = {
   C_CROWDED: 'C_CROWDED / 拥挤候选',
   D_EXIT_RISK: 'D_EXIT_RISK / 退出风险',
   N_NEUTRAL: 'N_NEUTRAL / 中性观察',
+}
+
+const CANDIDATE_TIER_SHORT_LABELS: Record<string, string> = {
+  A_MAIN: '主升候选',
+  B_IGNITION: '点火候选',
+  C_CROWDED: '拥挤候选',
+  D_EXIT_RISK: '退出风险',
+  N_NEUTRAL: '中性观察',
+}
+
+const CANDIDATE_TIER_CLASS_KEYS: Record<string, string> = {
+  A_MAIN: 'candidate-main',
+  B_IGNITION: 'candidate-ignition',
+  C_CROWDED: 'candidate-crowded',
+  D_EXIT_RISK: 'candidate-exit',
+  N_NEUTRAL: 'candidate-neutral',
 }
 
 const FALLBACK_STATUS_CONTEXT: RankTrendStatusContext = {
@@ -430,6 +448,10 @@ export function getRankTrendDisplayBreakdown(
   const stage = rankTrend?.cycle?.stage ?? ''
   const candidateTierKey = rankTrend?.strategy?.candidateTier ? String(rankTrend.strategy.candidateTier) : ''
   const candidateTierLabel = candidateTierKey ? CANDIDATE_TIER_LABELS[candidateTierKey] ?? candidateTierKey : '-'
+  const tierLabel =
+    candidateTierKey
+      ? CANDIDATE_TIER_SHORT_LABELS[candidateTierKey] ?? candidateTierKey
+      : status.label
   const qualityLabel = SAMPLE_QUALITY_LABELS[sampleStatus] ?? '样本未知'
   const showQualityBadge = false
   const qualityBadgeLabel = ''
@@ -438,9 +460,10 @@ export function getRankTrendDisplayBreakdown(
   const tooltip = [
     `样本：${qualityLabel}`,
     `周期：${cycleLabel}`,
-    `分层：${status.label}`,
+    `生命周期：${tierLabel}`,
     candidateTierKey ? `原始分层：${candidateTierLabel}` : '',
-    `风险：${riskLabel}`,
+    `展示状态：${status.label}`,
+    `实时风险：${riskLabel}`,
     status.tooltip,
   ].filter(Boolean).join('\n')
 
@@ -449,7 +472,8 @@ export function getRankTrendDisplayBreakdown(
     qualityBadgeLabel,
     showQualityBadge,
     cycleLabel,
-    tierLabel: status.label,
+    tierLabel,
+    displayStatusLabel: status.label,
     candidateTierKey,
     candidateTierLabel,
     riskLabel,
@@ -457,7 +481,8 @@ export function getRankTrendDisplayBreakdown(
     classKeys: {
       quality: `quality-${sampleStatus}`,
       cycle: stage ? `cycle-${stage}` : 'cycle-empty',
-      tier: status.classKey,
+      tier: candidateTierKey ? CANDIDATE_TIER_CLASS_KEYS[candidateTierKey] ?? 'candidate-unknown' : status.classKey,
+      displayStatus: status.classKey,
       risk: RISK_CLASS_KEYS[status.classKey] ?? 'risk-normal',
     },
   }
