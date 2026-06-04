@@ -104,7 +104,8 @@ public sealed class MainForm : Form
         _openingSampleTelemetry = new OpeningAuctionSampleTelemetryFileSink(
             Path.Combine(_root, "logs", "yidong-jingling", "opening-auction-samples"),
             Log);
-                var openingRules = new OpeningWeakToStrongRules(
+        _settings = _settingsStore.Load();
+        var openingRules = new OpeningWeakToStrongRules(
             "09:20:00", "09:20:00", "09:20:30", "09:24:00",
             "09:24:50", "09:25:10", "09:30:00", "09:35:00",
             1.2m, 1m, 0.8m, 0.35m, 0.3m, 0.2m,
@@ -113,7 +114,6 @@ public sealed class MainForm : Form
         _bridgeManager = new BridgeProcessManager(_root);
         _proxyManager = new ProxyProcessManager(_root);
         _speech = new SpeechAnnouncer(_root, Log);
-        _settings = _settingsStore.Load();
 
         Text = "异动精灵 V2";
         Width = 1220;
@@ -1236,10 +1236,13 @@ public sealed class MainForm : Form
                 if (IsOpeningWeakToStrongPreopenWindow(normalizedQuote.SourceTime))
                 {
                     _eventEngine.Prime(normalizedQuote);
-                    var preopenHistory = _quoteStore.GetHistory(normalizedQuote.Code);
-                    allEvents.AddRange(_eventEngine
-                        .Evaluate(normalizedQuote, previous, preopenHistory)
-                        .Where(item => item.Type == L1EventType.OpeningWeakToStrong));
+                    if (normalizedQuote.SourceTime.ToLocalTime().TimeOfDay >= TimeSpan.Parse("09:24:50"))
+                    {
+                        var preopenHistory = _quoteStore.GetHistory(normalizedQuote.Code);
+                        allEvents.AddRange(_eventEngine
+                            .Evaluate(normalizedQuote, previous, preopenHistory)
+                            .Where(item => item.Type == L1EventType.OpeningWeakToStrong));
+                    }
                 }
                 else
                 {
@@ -1971,7 +1974,7 @@ public sealed class MainForm : Form
     public static bool IsOpeningWeakToStrongPreopenWindow(DateTimeOffset timestamp)
     {
         var time = timestamp.ToLocalTime().TimeOfDay;
-        return time >= TimeSpan.Parse("09:25:00") && time <= TimeSpan.Parse("09:29:59");
+        return time >= TimeSpan.Parse("09:20:00") && time <= TimeSpan.Parse("09:29:59");
     }
 
     public static List<string> ResolveSelectedBlockFilesForSave(

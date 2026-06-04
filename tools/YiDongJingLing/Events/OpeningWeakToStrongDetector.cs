@@ -464,7 +464,9 @@ public sealed class OpeningWeakToStrongDetector
     private const string FinalAnchorTime = "10:00:00";
     private readonly OpeningWeakToStrongRules _rules;
     private readonly string _ruleVersion;
+    private readonly string _configHash;
     private readonly Dictionary<string, OpeningWeakToStrongResult> _activeSignals = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _strongToday = new(StringComparer.Ordinal);
 
     public OpeningWeakToStrongDetector(
         OpeningWeakToStrongRules rules,
@@ -472,6 +474,7 @@ public sealed class OpeningWeakToStrongDetector
     {
         _rules = rules;
         _ruleVersion = ruleVersion;
+        _configHash = ComputeConfigHash(rules);
     }
 
     public void Clear()
@@ -504,19 +507,29 @@ public sealed class OpeningWeakToStrongDetector
         }
         else if (IsCheckpointWindow(quote.At, FinalAnchorTime, _rules.CheckpointWindowThresholdSeconds))
         {
-            result = CheckpointSignal(
-                quote,
-                baseline,
-                "optionalFinalStatus",
-                false,
-                "10:00仅更新最终状态备注，不影响09:30/09:35播报",
-                firstWindowPrice: quote.LastPrice,
-                firstWindowPct: Round2(OpeningAuctionStateStore.Pct(quote.LastPrice, quote.PreClose)),
-                amount: quote.Amount);
+            var isAlreadyStrong = _strongToday.Contains(activeKey);
+            result = isAlreadyStrong
+                ? Rejected(quote, baseline, "already_strong_at_final")
+                : CheckpointSignal(
+                    quote,
+                    baseline,
+                    "optionalFinalStatus",
+                    false,
+                    "10:00窗口结束未转强，记录失败状态",
+                    firstWindowPrice: quote.LastPrice,
+                    firstWindowPct: Round2(OpeningAuctionStateStore.Pct(quote.LastPrice, quote.PreClose)),
+                    amount: quote.Amount);
         }
 
         if (result is null) return invalid;
-        if (result.Triggered) _activeSignals[activeKey] = result;
+        if (result.Triggered)
+        {
+            _activeSignals[activeKey] = result;
+            if (result.Stage is "gapAlert" or "trendConfirm")
+            {
+                _strongToday.Add(activeKey);
+            }
+        }
         return result;
     }
 
@@ -691,7 +704,7 @@ public sealed class OpeningWeakToStrongDetector
             baseline?.TruncatedBatches,
             null,
             _ruleVersion,
-            ConfigHash(_rules));
+            _configHash);
     }
 
     private OpeningWeakToStrongResult Rejected(
@@ -749,7 +762,7 @@ public sealed class OpeningWeakToStrongDetector
             baseline?.TruncatedBatches,
             invalidReason,
             _ruleVersion,
-            ConfigHash(_rules));
+            _configHash);
     }
 
     private static string TradingDate(DateTimeOffset timestamp)
@@ -781,7 +794,7 @@ public sealed class OpeningWeakToStrongDetector
         return elapsed.TotalMilliseconds < 0 ? 0 : (int)Math.Round(elapsed.TotalMilliseconds);
     }
 
-    private static string ConfigHash(OpeningWeakToStrongRules rules)
+    private static string ComputeConfigHash(OpeningWeakToStrongRules rules)
     {
         var values = new Dictionary<string, object?>
         {
@@ -798,6 +811,8 @@ public sealed class OpeningWeakToStrongDetector
             ["openingSupportAmountMinRatio"] = rules.OpeningSupportAmountMinRatio,
             ["openingSupportImproveMinPctPoint"] = rules.OpeningSupportImproveMinPctPoint,
             ["checkpointWindowThresholdSeconds"] = rules.CheckpointWindowThresholdSeconds,
+            ["detectStart"] = rules.DetectStart,
+            ["detectEnd"] = rules.DetectEnd,
         };
         var json = JsonSerializer.Serialize(values.OrderBy(item => item.Key));
         unchecked

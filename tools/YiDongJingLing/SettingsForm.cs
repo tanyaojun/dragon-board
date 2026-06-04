@@ -134,7 +134,6 @@ private readonly NumericUpDown _openingThresholdBox = new() { Minimum = 0, Maxim
         var voiceGroup = SectionBox("语音播报");
         var voiceLayout = new TableLayoutPanel
         {
-            Dock = DockStyle.Fill,
             ColumnCount = 4,
             RowCount = 6,
             Padding = new Padding(14, 18, 14, 10),
@@ -149,7 +148,7 @@ private readonly NumericUpDown _openingThresholdBox = new() { Minimum = 0, Maxim
         voiceLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 46));
         voiceLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 46));
         voiceLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
-        voiceGroup.Controls.Add(voiceLayout);
+        FillScrollable(voiceGroup, voiceLayout);
         _voiceEnabledBox.Text = "VoiceWorker 本地语音";
         _voiceEnabledBox.Dock = DockStyle.Fill;
         _voiceEnabledBox.AutoSize = true;
@@ -231,7 +230,6 @@ private readonly NumericUpDown _openingThresholdBox = new() { Minimum = 0, Maxim
         var appGroup = SectionBox("股票池、窗口与行情桥");
         var appLayout = new TableLayoutPanel
         {
-            Dock = DockStyle.Fill,
             ColumnCount = 3,
             RowCount = 4,
             Padding = new Padding(14, 18, 14, 10),
@@ -243,7 +241,7 @@ private readonly NumericUpDown _openingThresholdBox = new() { Minimum = 0, Maxim
         appLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 46));
         appLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
         appLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
-        appGroup.Controls.Add(appLayout);
+        FillScrollable(appGroup, appLayout);
 
         appLayout.Controls.Add(FieldLabel("股票池"), 0, 0);
         _stockPoolSourceBox.Dock = DockStyle.Fill;
@@ -291,20 +289,19 @@ private readonly NumericUpDown _openingThresholdBox = new() { Minimum = 0, Maxim
         var ruleGroup = SectionBox("异动参数");
         var ruleLayout = new TableLayoutPanel
         {
-            Dock = DockStyle.Fill,
             ColumnCount = 4,
-            RowCount = 4,
+            RowCount = 5,
             Padding = new Padding(14, 18, 14, 10),
         };
         ruleLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 118));
         ruleLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
         ruleLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 118));
         ruleLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
-        for (var i = 0; i < 4; i++)
+        for (var i = 0; i < 5; i++)
         {
             ruleLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
         }
-        ruleGroup.Controls.Add(ruleLayout);
+        FillScrollable(ruleGroup, ruleLayout);
         AddDecimalField(ruleLayout, "涨幅突破 %", _riseBreakthroughBox, 0, 0, 1, 30, 7);
         AddDecimalField(ruleLayout, "跌幅突破 %", _dropBreakthroughBox, 2, 0, 1, 30, 7);
         AddDecimalField(ruleLayout, "5分钟涨跌 %", _fiveMinuteMoveBox, 0, 1, 1, 30, 5);
@@ -312,6 +309,12 @@ private readonly NumericUpDown _openingThresholdBox = new() { Minimum = 0, Maxim
         AddDecimalField(ruleLayout, "挂单额 万", _largeOrderBox, 0, 2, 100, 1_000_000, 1_000);
         AddDecimalField(ruleLayout, "开盘跳空 %", _openGapBox, 2, 2, 0.1m, 20, 1);
         AddDecimalField(ruleLayout, "长阳长阴 %", _longBodyBox, 0, 3, 0.1m, 30, 4);
+        ruleLayout.Controls.Add(FieldLabel("弱转强窗口阈值(秒)"), 0, 4);
+        _openingThresholdBox.Dock = DockStyle.Fill;
+        _openingThresholdBox.Margin = new Padding(0, 2, 8, 0);
+        _openingThresholdBox.TextAlign = HorizontalAlignment.Right;
+        ruleLayout.Controls.Add(_openingThresholdBox, 1, 4);
+        ruleLayout.SetColumnSpan(_openingThresholdBox, 3);
         right.Controls.Add(ruleGroup, 0, 3);
 
         var footer = new FlowLayoutPanel
@@ -499,20 +502,6 @@ private readonly NumericUpDown _openingThresholdBox = new() { Minimum = 0, Maxim
         return Math.Clamp(value, input.Minimum, input.Maximum);
     }
 
-    private static Label FieldLabel(string text, string suffix = "")
-{
-    var label = new Label
-    {
-        Text = string.IsNullOrEmpty(suffix) ? text : $"{text} ({suffix})",
-        Dock = DockStyle.Fill,
-        Font = new Font("Microsoft YaHei UI", 9f),
-        ForeColor = Color.FromArgb(15, 23, 42),
-        TextAlign = ContentAlignment.MiddleLeft,
-        AutoSize = true,
-    };
-    return label;
-}
-
 private static GroupBox SectionBox(string text)
     {
         return new GroupBox
@@ -524,6 +513,15 @@ private static GroupBox SectionBox(string text)
             Padding = new Padding(8),
             Margin = new Padding(0, 0, 0, 12),
         };
+    }
+
+    private static void FillScrollable(GroupBox group, TableLayoutPanel inner)
+    {
+        inner.AutoSize = true;
+        inner.Dock = DockStyle.Top;
+        var scroll = new Panel { AutoScroll = true, Dock = DockStyle.Fill, BorderStyle = BorderStyle.None };
+        scroll.Controls.Add(inner);
+        group.Controls.Add(scroll);
     }
 
     private static Button PrimaryButton(string text, int width)
