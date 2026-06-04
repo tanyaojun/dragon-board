@@ -29,6 +29,12 @@ internal sealed class SettingsForm : Form
     private readonly NumericUpDown _longBodyBox = new();
     private readonly NumericUpDown _hotlistTopVoiceBox = new();
 private readonly NumericUpDown _openingThresholdBox = new() { Minimum = 0, Maximum = 120, Value = 30 };
+    private readonly NumericUpDown _openingImproveBox = new() { Minimum = 0.1m, Maximum = 10m, Increment = 0.1m, DecimalPlaces = 1, Value = 1.2m };
+    private readonly NumericUpDown _auctionPriceLiftBox = new() { Minimum = 0.1m, Maximum = 10m, Increment = 0.1m, DecimalPlaces = 1, Value = 0.8m };
+    private readonly NumericUpDown _auctionAmountLiftBox = new() { Minimum = 0.05m, Maximum = 20m, Increment = 0.05m, DecimalPlaces = 2, Value = 0.35m };
+    private readonly NumericUpDown _auctionLatePriceLiftBox = new() { Minimum = 0.1m, Maximum = 10m, Increment = 0.1m, DecimalPlaces = 1, Value = 0.3m };
+    private readonly NumericUpDown _auctionLateAmountLiftBox = new() { Minimum = 0.05m, Maximum = 20m, Increment = 0.05m, DecimalPlaces = 2, Value = 0.2m };
+    private readonly NumericUpDown _openingSupportAmountBox = new() { Minimum = 0.05m, Maximum = 20m, Increment = 0.05m, DecimalPlaces = 2, Value = 1m };
     private readonly Label _hotlistTopVoiceLabel = new();
     private readonly Label _hotlistTopVoiceHint = new();
     private readonly Label _rateValueLabel = new();
@@ -43,7 +49,7 @@ private readonly NumericUpDown _openingThresholdBox = new() { Minimum = 0, Maxim
 
         Text = "异动精灵设置";
         Width = 860;
-        Height = 860;
+        Height = 960;
         MinimumSize = new Size(820, 800);
         StartPosition = FormStartPosition.CenterParent;
         Font = new Font("Microsoft YaHei UI", 9f);
@@ -117,7 +123,7 @@ private readonly NumericUpDown _openingThresholdBox = new() { Minimum = 0, Maxim
         right.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
         right.RowStyles.Add(new RowStyle(SizeType.Absolute, 286));
         right.RowStyles.Add(new RowStyle(SizeType.Absolute, 226));
-        right.RowStyles.Add(new RowStyle(SizeType.Absolute, 170));
+        right.RowStyles.Add(new RowStyle(SizeType.Absolute, 280));
         right.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         root.Controls.Add(right, 1, 0);
 
@@ -290,14 +296,14 @@ private readonly NumericUpDown _openingThresholdBox = new() { Minimum = 0, Maxim
         var ruleLayout = new TableLayoutPanel
         {
             ColumnCount = 4,
-            RowCount = 5,
+            RowCount = 8,
             Padding = new Padding(14, 18, 14, 10),
         };
         ruleLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 118));
         ruleLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
         ruleLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 118));
         ruleLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
-        for (var i = 0; i < 5; i++)
+        for (var i = 0; i < 8; i++)
         {
             ruleLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
         }
@@ -309,12 +315,25 @@ private readonly NumericUpDown _openingThresholdBox = new() { Minimum = 0, Maxim
         AddDecimalField(ruleLayout, "挂单额 万", _largeOrderBox, 0, 2, 100, 1_000_000, 1_000);
         AddDecimalField(ruleLayout, "开盘跳空 %", _openGapBox, 2, 2, 0.1m, 20, 1);
         AddDecimalField(ruleLayout, "长阳长阴 %", _longBodyBox, 0, 3, 0.1m, 30, 4);
-        ruleLayout.Controls.Add(FieldLabel("弱转强窗口阈值(秒)"), 0, 4);
+        ruleLayout.Controls.Add(FieldLabel("窗口阈值(秒)"), 0, 4);
         _openingThresholdBox.Dock = DockStyle.Fill;
         _openingThresholdBox.Margin = new Padding(0, 2, 8, 0);
         _openingThresholdBox.TextAlign = HorizontalAlignment.Right;
         ruleLayout.Controls.Add(_openingThresholdBox, 1, 4);
-        ruleLayout.SetColumnSpan(_openingThresholdBox, 3);
+        ruleLayout.Controls.Add(FieldLabel("承接改善%"), 2, 4);
+        _openingImproveBox.Dock = DockStyle.Fill;
+        _openingImproveBox.Margin = new Padding(0, 2, 8, 0);
+        _openingImproveBox.TextAlign = HorizontalAlignment.Right;
+        ruleLayout.Controls.Add(_openingImproveBox, 3, 4);
+        AddDecimalField(ruleLayout, "全段推价 %", _auctionPriceLiftBox, 0, 5, 0.1m, 10, 0.8m);
+        AddDecimalField(ruleLayout, "全段推量比", _auctionAmountLiftBox, 2, 5, 0.05m, 20, 0.35m);
+        AddDecimalField(ruleLayout, "临门推价 %", _auctionLatePriceLiftBox, 0, 6, 0.1m, 10, 0.3m);
+        AddDecimalField(ruleLayout, "临门推量比", _auctionLateAmountLiftBox, 2, 6, 0.05m, 20, 0.2m);
+        ruleLayout.Controls.Add(FieldLabel("开盘承接量比"), 0, 7);
+        _openingSupportAmountBox.Dock = DockStyle.Fill;
+        _openingSupportAmountBox.Margin = new Padding(0, 2, 8, 0);
+        _openingSupportAmountBox.TextAlign = HorizontalAlignment.Right;
+        ruleLayout.Controls.Add(_openingSupportAmountBox, 1, 7);
         right.Controls.Add(ruleGroup, 0, 3);
 
         var footer = new FlowLayoutPanel
@@ -355,7 +374,14 @@ private readonly NumericUpDown _openingThresholdBox = new() { Minimum = 0, Maxim
         _largeOrderBox.Value = ClampDecimal(_settings.LargeOrderThresholdWan, _largeOrderBox);
         _openGapBox.Value = ClampDecimal(_settings.OpenGapPct, _openGapBox);
         _longBodyBox.Value = ClampDecimal(_settings.LongBodyPct, _longBodyBox);
-        _openingThresholdBox.Value = Math.Clamp(_settings.CheckpointWindowThresholdSeconds, 0, 120);_hotlistTopVoiceBox.Value = Math.Clamp(_settings.HotlistTopVoiceCount, 0, 500);
+        _openingThresholdBox.Value = Math.Clamp(_settings.CheckpointWindowThresholdSeconds, 0, 120);
+        _openingImproveBox.Value = ClampDecimal(_settings.OpeningSupportImproveMinPctPoint, _openingImproveBox);
+        _auctionPriceLiftBox.Value = ClampDecimal(_settings.AuctionPriceLiftMinPctPoint, _auctionPriceLiftBox);
+        _auctionAmountLiftBox.Value = ClampDecimal(_settings.AuctionAmountLiftMinRatio, _auctionAmountLiftBox);
+        _auctionLatePriceLiftBox.Value = ClampDecimal(_settings.AuctionLatePriceLiftMinPctPoint, _auctionLatePriceLiftBox);
+        _auctionLateAmountLiftBox.Value = ClampDecimal(_settings.AuctionLateAmountLiftMinRatio, _auctionLateAmountLiftBox);
+        _openingSupportAmountBox.Value = ClampDecimal(_settings.OpeningSupportAmountMinRatio, _openingSupportAmountBox);
+        _hotlistTopVoiceBox.Value = Math.Clamp(_settings.HotlistTopVoiceCount, 0, 500);
         UpdateHotlistVoiceRowVisibility();
 
         _voiceBox.Items.Clear();
@@ -402,7 +428,14 @@ private readonly NumericUpDown _openingThresholdBox = new() { Minimum = 0, Maxim
         _settings.LargeOrderThresholdWan = _largeOrderBox.Value;
         _settings.OpenGapPct = _openGapBox.Value;
         _settings.LongBodyPct = _longBodyBox.Value;
-        _settings.CheckpointWindowThresholdSeconds = (int)_openingThresholdBox.Value;_settings.HotlistTopVoiceCount = (int)_hotlistTopVoiceBox.Value;
+        _settings.CheckpointWindowThresholdSeconds = (int)_openingThresholdBox.Value;
+        _settings.OpeningSupportImproveMinPctPoint = _openingImproveBox.Value;
+        _settings.AuctionPriceLiftMinPctPoint = _auctionPriceLiftBox.Value;
+        _settings.AuctionAmountLiftMinRatio = _auctionAmountLiftBox.Value;
+        _settings.AuctionLatePriceLiftMinPctPoint = _auctionLatePriceLiftBox.Value;
+        _settings.AuctionLateAmountLiftMinRatio = _auctionLateAmountLiftBox.Value;
+        _settings.OpeningSupportAmountMinRatio = _openingSupportAmountBox.Value;
+        _settings.HotlistTopVoiceCount = (int)_hotlistTopVoiceBox.Value;
         _settings.EnabledEvents.Clear();
         for (var i = 0; i < _eventTypeList.Items.Count; i++)
         {

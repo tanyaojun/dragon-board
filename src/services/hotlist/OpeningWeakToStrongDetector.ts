@@ -125,17 +125,9 @@ export class OpeningWeakToStrongDetector {
       return this.checkpointSignal(quote, baseline, 'auctionConditionFailed', false, '缺少09:24临门基线')
     }
 
-    const profile = baseline.auctionProfile
-    const priceLift = normalizeNumber(profile.totalLiftPctPoint)
-    const amountLift = normalizeNumber(profile.amountLiftRatio)
-    const latePriceLift = normalizeNumber(profile.latePriceLiftPctPoint)
-    const lateAmountLift = normalizeNumber(profile.lateAmountLiftRatio)
     const passed =
       isValidPrice(baseline.auctionFinalPrice) &&
-      priceLift >= this.rules.auctionPriceLiftMinPctPoint &&
-      amountLift >= this.rules.auctionAmountLiftMinRatio &&
-      latePriceLift >= this.rules.auctionLatePriceLiftMinPctPoint &&
-      lateAmountLift >= this.rules.auctionLateAmountLiftMinRatio
+      baseline.auctionProfile.priceVolumeConfirmed === true
     if (!passed && !isConfirmBaselineTime(quote.at, this.rules)) {
       return this.rejected(quote, baseline, 'preopen_candidate_unconfirmed')
     }
@@ -363,10 +355,12 @@ function buildAuctionProfile(
     initial !== undefined &&
     totalLiftPctPoint !== undefined &&
     amountLiftRatio !== undefined &&
-    totalLiftPctPoint >= rules.auctionPriceLiftMinPctPoint &&
-    amountLiftRatio >= rules.auctionAmountLiftMinRatio &&
-    latePriceLifted &&
-    lateAmountExpanded
+    lateAmountLiftRatio !== undefined &&
+    (
+      (totalLiftPctPoint >= rules.auctionPriceLiftMinPctPoint &&
+       amountLiftRatio >= rules.auctionAmountLiftMinRatio) ||
+      (latePriceLifted && lateAmountExpanded)
+    )
 
   return {
     sampleCount: trusted.length,

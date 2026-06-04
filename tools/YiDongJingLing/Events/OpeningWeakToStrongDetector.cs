@@ -397,11 +397,13 @@ public sealed class OpeningAuctionStateStore
             initial is not null &&
             totalLiftPctPoint.HasValue &&
             amountLiftRatio.HasValue &&
-            totalLiftPctPoint.Value >= rules.AuctionPriceLiftMinPctPoint &&
-            amountLiftRatio.Value >= rules.AuctionAmountLiftMinRatio &&
-            latePriceLiftPctPoint >= rules.AuctionLatePriceLiftMinPctPoint &&
             lateAmountLiftRatio.HasValue &&
-            lateAmountLiftRatio.Value >= rules.AuctionLateAmountLiftMinRatio;
+            (
+                (totalLiftPctPoint.Value >= rules.AuctionPriceLiftMinPctPoint &&
+                 amountLiftRatio.Value >= rules.AuctionAmountLiftMinRatio) ||
+                (latePriceLiftPctPoint >= rules.AuctionLatePriceLiftMinPctPoint &&
+                 lateAmountLiftRatio.Value >= rules.AuctionLateAmountLiftMinRatio)
+            );
 
         return new OpeningAuctionPriceVolumeProfile(
             trusted.Length,

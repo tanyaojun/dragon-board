@@ -13,4 +13,7 @@
   <ItemGroup>
     <PackageReference Include="System.Text.Encoding.CodePages" Version="8.0.0" />
   </ItemGroup>
+  <ItemGroup>
+    <Compile Remove="YiDongJingLing.Tests\**" />
+  </ItemGroup>
 </Project>

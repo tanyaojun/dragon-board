@@ -203,14 +203,17 @@ describe('OpeningWeakToStrongDetector', () => {
     expect(events[2].voiceEligible).toBe(true)
   })
 
-  it('rejects a 09:25 candidate when the 09:24 late baseline does not lift enough', () => {
+  it('rejects a 09:25 candidate when neither total nor late lift meets thresholds', () => {
+    // preClose=10, 09:20 pct=-3.0%, 09:24 pct=-2.8%, 09:25 pct=-2.6%
+    // totalLift=0.4 < 0.8 ✗, amountRatio=0.15 < 0.35 ✗  → 全段推失败
+    // lateLift=0.2 < 0.3 ✗,   lateAmount=0.127 < 0.2 ✗    → 临门突袭也失败
     const events = runQuotes([
       {
         ...baseQuote,
         at: '2026-06-03T09:20:00+08:00',
         capturedAt: '2026-06-03T09:20:00+08:00',
         bridgeTs: '2026-06-03T09:20:00+08:00',
-        lastPrice: 9.7,
+        lastPrice: 9.70,
         amount: 1_000_000,
         volume: 100_000,
       },
@@ -219,18 +222,18 @@ describe('OpeningWeakToStrongDetector', () => {
         at: '2026-06-03T09:24:00+08:00',
         capturedAt: '2026-06-03T09:24:00+08:00',
         bridgeTs: '2026-06-03T09:24:00+08:00',
-        lastPrice: 9.9,
-        amount: 1_900_000,
-        volume: 170_000,
+        lastPrice: 9.72,
+        amount: 1_020_000,
+        volume: 102_000,
       },
       {
         ...baseQuote,
         at: '2026-06-03T09:25:00+08:00',
         capturedAt: '2026-06-03T09:25:00+08:00',
         bridgeTs: '2026-06-03T09:25:00+08:00',
-        lastPrice: 9.92,
-        amount: 2_000_000,
-        volume: 180_000,
+        lastPrice: 9.74,
+        amount: 1_150_000,
+        volume: 115_000,
       },
     ] as OpeningWeakToStrongQuote[])
 
@@ -327,6 +330,127 @@ describe('OpeningWeakToStrongDetector', () => {
     expect(events.every(event => event.voiceEligible === false)).toBe(true)
   })
 
+  it('gapAlert at 09:30 then trendWeak at 09:35 when price retreats below open', () => {
+    // 全段推竞价通过 → gapAlert → 09:35 跌破开盘价转弱（路径三）
+    const events = runQuotes([
+      {
+        ...baseQuote,
+        at: '2026-06-03T09:20:00+08:00',
+        capturedAt: '2026-06-03T09:20:00+08:00',
+        bridgeTs: '2026-06-03T09:20:00+08:00',
+        lastPrice: 9.70,
+        amount: 1_000_000,
+        volume: 100_000,
+      },
+      {
+        ...baseQuote,
+        at: '2026-06-03T09:24:00+08:00',
+        capturedAt: '2026-06-03T09:24:00+08:00',
+        bridgeTs: '2026-06-03T09:24:00+08:00',
+        lastPrice: 9.90,
+        amount: 1_900_000,
+        volume: 190_000,
+      },
+      {
+        ...baseQuote,
+        at: '2026-06-03T09:25:00+08:00',
+        capturedAt: '2026-06-03T09:25:00+08:00',
+        bridgeTs: '2026-06-03T09:25:00+08:00',
+        lastPrice: 9.92,
+        amount: 2_000_000,
+        volume: 180_000,
+      },
+      {
+        ...baseQuote,
+        at: '2026-06-03T09:30:00+08:00',
+        capturedAt: '2026-06-03T09:30:00+08:00',
+        bridgeTs: '2026-06-03T09:30:00+08:00',
+        lastPrice: 10.35,
+        open: 10.35,
+        amount: 8_000_000,
+        volume: 600_000,
+      },
+      {
+        ...baseQuote,
+        at: '2026-06-03T09:35:00+08:00',
+        capturedAt: '2026-06-03T09:35:00+08:00',
+        bridgeTs: '2026-06-03T09:35:00+08:00',
+        lastPrice: 9.98,
+        open: 10.35,
+        amount: 10_000_000,
+        volume: 800_000,
+      },
+    ] as OpeningWeakToStrongQuote[])
+
+    expect(events.map(e => e.stage)).toEqual([
+      'auctionConditionPassed',
+      'gapAlert',
+      'trendWeak',
+    ])
+    expect(events[2].voiceEligible).toBe(false)
+    expect(events[2].firstWindowPrice!).toBeLessThan(events[2].officialOpen!)
+  })
+
+  it('late lift passes, gapAlert fires, then trendWeak at 09:35 when price retreats', () => {
+    // 临门突袭竞价通过 → gapAlert → 09:35 回落转弱（路径四）
+    const events = runQuotes([
+      {
+        ...baseQuote,
+        at: '2026-06-03T09:20:00+08:00',
+        capturedAt: '2026-06-03T09:20:00+08:00',
+        bridgeTs: '2026-06-03T09:20:00+08:00',
+        lastPrice: 9.70,
+        amount: 1_000_000,
+        volume: 100_000,
+      },
+      {
+        ...baseQuote,
+        at: '2026-06-03T09:24:00+08:00',
+        capturedAt: '2026-06-03T09:24:00+08:00',
+        bridgeTs: '2026-06-03T09:24:00+08:00',
+        lastPrice: 9.70,
+        amount: 1_050_000,
+        volume: 105_000,
+      },
+      {
+        ...baseQuote,
+        at: '2026-06-03T09:25:00+08:00',
+        capturedAt: '2026-06-03T09:25:00+08:00',
+        bridgeTs: '2026-06-03T09:25:00+08:00',
+        lastPrice: 9.76,
+        amount: 1_350_000,
+        volume: 135_000,
+      },
+      {
+        ...baseQuote,
+        at: '2026-06-03T09:30:00+08:00',
+        capturedAt: '2026-06-03T09:30:00+08:00',
+        bridgeTs: '2026-06-03T09:30:00+08:00',
+        lastPrice: 10.15,
+        open: 10.15,
+        amount: 5_000_000,
+        volume: 400_000,
+      },
+      {
+        ...baseQuote,
+        at: '2026-06-03T09:35:00+08:00',
+        capturedAt: '2026-06-03T09:35:00+08:00',
+        bridgeTs: '2026-06-03T09:35:00+08:00',
+        lastPrice: 9.90,
+        open: 10.15,
+        amount: 6_000_000,
+        volume: 500_000,
+      },
+    ] as OpeningWeakToStrongQuote[])
+
+    expect(events.map(e => e.stage)).toEqual([
+      'auctionConditionPassed',
+      'gapAlert',
+      'trendWeak',
+    ])
+    expect(events[2].voiceEligible).toBe(false)
+  })
+
   it('does not emit a 09:30 gap alert without the same-day 09:25 confirmation baseline', () => {
     const events = runQuotes([
       {
@@ -417,6 +541,123 @@ describe('OpeningWeakToStrongDetector', () => {
     expect(finalStatus?.stage).toBe('optionalFinalStatus')
     expect(finalStatus?.voiceEligible).toBe(false)
     expect(afterTen?.triggered ?? false).toBe(false)
+  })
+
+  // ── 形态专项：gapAlert & trendConfirm ──
+
+  it('emits standalone gapAlert at 09:30 when all four opening support conditions are met', () => {
+    // 竞价通过 → 09:30 改善达标 → gapAlert，无 09:35 后续行情
+    const events = runQuotes([
+      {
+        ...baseQuote,
+        at: '2026-06-03T09:20:00+08:00',
+        capturedAt: '2026-06-03T09:20:00+08:00',
+        bridgeTs: '2026-06-03T09:20:00+08:00',
+        lastPrice: 9.70,
+        amount: 1_000_000,
+        volume: 100_000,
+      },
+      {
+        ...baseQuote,
+        at: '2026-06-03T09:24:00+08:00',
+        capturedAt: '2026-06-03T09:24:00+08:00',
+        bridgeTs: '2026-06-03T09:24:00+08:00',
+        lastPrice: 9.90,
+        amount: 1_900_000,
+        volume: 190_000,
+      },
+      {
+        ...baseQuote,
+        at: '2026-06-03T09:25:00+08:00',
+        capturedAt: '2026-06-03T09:25:00+08:00',
+        bridgeTs: '2026-06-03T09:25:00+08:00',
+        lastPrice: 9.92,
+        amount: 2_000_000,
+        volume: 180_000,
+      },
+      {
+        ...baseQuote,
+        at: '2026-06-03T09:30:00+08:00',
+        capturedAt: '2026-06-03T09:30:00+08:00',
+        bridgeTs: '2026-06-03T09:30:00+08:00',
+        lastPrice: 10.35,
+        open: 10.35,
+        amount: 8_000_000,
+        volume: 600_000,
+      },
+    ] as OpeningWeakToStrongQuote[])
+
+    expect(events.map(e => e.stage)).toEqual(['auctionConditionPassed', 'gapAlert'])
+    expect(events[1].voiceEligible).toBe(true)
+    // 四个 gap 条件逐项验证
+    expect(events[1].jumpPctPoint!).toBeGreaterThanOrEqual(1.2)       // 改善幅度 ≥ 1.2%
+    expect(events[1].firstWindowPrice!).toBeGreaterThanOrEqual(events[1].auctionFinalPrice!)  // 现价 ≥ 竞价价
+    expect(events[1].officialOpen!).toBeGreaterThanOrEqual(events[1].auctionFinalPrice!)      // 开盘价 ≥ 竞价价
+  })
+
+  it('verifies trendConfirm fires when price stays above open and improvement is sustained', () => {
+    // 竞价通过 → gapAlert → 09:35 高开高走，四个条件全部满足
+    const events = runQuotes([
+      {
+        ...baseQuote,
+        at: '2026-06-03T09:20:00+08:00',
+        capturedAt: '2026-06-03T09:20:00+08:00',
+        bridgeTs: '2026-06-03T09:20:00+08:00',
+        lastPrice: 9.70,
+        amount: 1_000_000,
+        volume: 100_000,
+      },
+      {
+        ...baseQuote,
+        at: '2026-06-03T09:24:00+08:00',
+        capturedAt: '2026-06-03T09:24:00+08:00',
+        bridgeTs: '2026-06-03T09:24:00+08:00',
+        lastPrice: 9.70,
+        amount: 1_050_000,
+        volume: 105_000,
+      },
+      {
+        ...baseQuote,
+        at: '2026-06-03T09:25:00+08:00',
+        capturedAt: '2026-06-03T09:25:00+08:00',
+        bridgeTs: '2026-06-03T09:25:00+08:00',
+        lastPrice: 9.76,
+        amount: 1_350_000,
+        volume: 135_000,
+      },
+      {
+        ...baseQuote,
+        at: '2026-06-03T09:30:00+08:00',
+        capturedAt: '2026-06-03T09:30:00+08:00',
+        bridgeTs: '2026-06-03T09:30:00+08:00',
+        lastPrice: 10.15,
+        open: 10.15,
+        amount: 5_000_000,
+        volume: 400_000,
+      },
+      {
+        ...baseQuote,
+        at: '2026-06-03T09:35:00+08:00',
+        capturedAt: '2026-06-03T09:35:00+08:00',
+        bridgeTs: '2026-06-03T09:35:00+08:00',
+        lastPrice: 10.20,
+        open: 10.15,
+        amount: 10_000_000,
+        volume: 800_000,
+      },
+    ] as OpeningWeakToStrongQuote[])
+
+    expect(events.map(e => e.stage)).toEqual([
+      'auctionConditionPassed',
+      'gapAlert',
+      'trendConfirm',
+    ])
+    const trend = events[2]
+    expect(trend.voiceEligible).toBe(true)
+    // 四个 trendConfirm 条件逐项验证
+    expect(trend.firstWindowPrice!).toBeGreaterThanOrEqual(trend.officialOpen!)  // 现价 ≥ 开盘价
+    expect(trend.firstWindowPct!).toBeGreaterThanOrEqual(trend.auctionPct!)      // 涨幅 ≥ 竞价涨幅
+    expect(trend.firstWindowPct! - trend.auctionPct!).toBeGreaterThanOrEqual(1.2) // 改善幅度维持
   })
 
   it('ignores non-checkpoint quotes instead of emitting scored strategy signals', () => {

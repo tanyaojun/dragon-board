@@ -32,6 +32,12 @@ public sealed class AppSettings
     public decimal OpenGapPct { get; set; } = 1m;
     public decimal LongBodyPct { get; set; } = 4m;
     public int CheckpointWindowThresholdSeconds { get; set; } = 30;
+    public decimal OpeningSupportImproveMinPctPoint { get; set; } = 1.2m;
+    public decimal AuctionPriceLiftMinPctPoint { get; set; } = 0.8m;
+    public decimal AuctionAmountLiftMinRatio { get; set; } = 0.35m;
+    public decimal AuctionLatePriceLiftMinPctPoint { get; set; } = 0.3m;
+    public decimal AuctionLateAmountLiftMinRatio { get; set; } = 0.2m;
+    public decimal OpeningSupportAmountMinRatio { get; set; } = 1m;
     public bool VoiceEnabled { get; set; } = true;
     public double VoiceRate { get; set; } = 1;
     public int VoiceVolume { get; set; } = 100;
@@ -65,6 +71,12 @@ public sealed class AppSettings
             OpenGapPct = OpenGapPct,
             LongBodyPct = LongBodyPct,
             CheckpointWindowThresholdSeconds = CheckpointWindowThresholdSeconds,
+            OpeningSupportImproveMinPctPoint = OpeningSupportImproveMinPctPoint,
+            AuctionPriceLiftMinPctPoint = AuctionPriceLiftMinPctPoint,
+            AuctionAmountLiftMinRatio = AuctionAmountLiftMinRatio,
+            AuctionLatePriceLiftMinPctPoint = AuctionLatePriceLiftMinPctPoint,
+            AuctionLateAmountLiftMinRatio = AuctionLateAmountLiftMinRatio,
+            OpeningSupportAmountMinRatio = OpeningSupportAmountMinRatio,
             VoiceEnabled = VoiceEnabled,
             VoiceRate = VoiceRate,
             VoiceVolume = VoiceVolume,

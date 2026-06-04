@@ -108,7 +108,12 @@ public sealed class MainForm : Form
         var openingRules = new OpeningWeakToStrongRules(
             "09:20:00", "09:20:00", "09:20:30", "09:24:00",
             "09:24:50", "09:25:10", "09:30:00", "09:35:00",
-            1.2m, 1m, 0.8m, 0.35m, 0.3m, 0.2m,
+            _settings.OpeningSupportImproveMinPctPoint,
+            _settings.OpeningSupportAmountMinRatio,
+            _settings.AuctionPriceLiftMinPctPoint,
+            _settings.AuctionAmountLiftMinRatio,
+            _settings.AuctionLatePriceLiftMinPctPoint,
+            _settings.AuctionLateAmountLiftMinRatio,
             Math.Clamp(_settings.CheckpointWindowThresholdSeconds, 0, 120));
         _eventEngine = new L1EventEngine(_eventRules, _openingTelemetry.Record, openingRules);
         _bridgeManager = new BridgeProcessManager(_root);
