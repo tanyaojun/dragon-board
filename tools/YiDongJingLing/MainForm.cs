@@ -104,7 +104,12 @@ public sealed class MainForm : Form
         _openingSampleTelemetry = new OpeningAuctionSampleTelemetryFileSink(
             Path.Combine(_root, "logs", "yidong-jingling", "opening-auction-samples"),
             Log);
-        _eventEngine = new L1EventEngine(_eventRules, _openingTelemetry.Record);
+                var openingRules = new OpeningWeakToStrongRules(
+            "09:20:00", "09:20:00", "09:20:30", "09:24:00",
+            "09:24:50", "09:25:10", "09:30:00", "09:35:00",
+            1.2m, 1m, 0.8m, 0.35m, 0.3m, 0.2m,
+            Math.Clamp(_settings.CheckpointWindowThresholdSeconds, 0, 120));
+        _eventEngine = new L1EventEngine(_eventRules, _openingTelemetry.Record, openingRules);
         _bridgeManager = new BridgeProcessManager(_root);
         _proxyManager = new ProxyProcessManager(_root);
         _speech = new SpeechAnnouncer(_root, Log);
@@ -1954,13 +1959,13 @@ public sealed class MainForm : Form
     public static bool IsOpeningAuctionCoverageWindow(DateTimeOffset timestamp)
     {
         var time = timestamp.ToLocalTime().TimeOfDay;
-        return time == TimeSpan.Parse("09:25:00");
+        return time >= TimeSpan.Parse("09:24:50") && time <= TimeSpan.Parse("09:25:10");
     }
 
     public static bool IsOpeningAuctionSampleTelemetryWindow(DateTimeOffset timestamp)
     {
         var time = timestamp.ToLocalTime().TimeOfDay;
-        return time >= TimeSpan.Parse("09:20:00") && time <= TimeSpan.Parse("09:25:00");
+        return time >= TimeSpan.Parse("09:20:00") && time <= TimeSpan.Parse("09:25:10");
     }
 
     public static bool IsOpeningWeakToStrongPreopenWindow(DateTimeOffset timestamp)

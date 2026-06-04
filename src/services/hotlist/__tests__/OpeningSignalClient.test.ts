@@ -20,7 +20,7 @@ describe('OpeningSignalClient', () => {
               pct: 3.5,
               amount: 8_000_000,
                 voiceEligible: true,
-              reason: '09:30较09:25出现跳空高开缺口',
+              reason: '09:30较09:25明显改善，开盘承接转强',
             },
           },
         ],
@@ -61,7 +61,7 @@ describe('OpeningSignalClient', () => {
       price: 10.35,
       pct: 3.5,
       amount: 8_000_000,
-      reason: '09:30较09:25出现跳空高开缺口',
+      reason: '09:30较09:25明显改善，开盘承接转强',
     })
 
     expect(fetcher).toHaveBeenCalledWith('/api/opening-signals', {

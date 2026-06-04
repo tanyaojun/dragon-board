@@ -113,8 +113,8 @@ function openingActionTypeName(stage: string): string {
   if (stage === 'auctionConditionPassed' || stage === 'auctionConditionFailed') {
     return '竞价弱转强候选'
   }
-  if (stage === 'gapAlert') return '竞价跳空高开'
-  if (stage === 'trendConfirm') return '快速上板前兆'
+  if (stage === 'gapAlert') return '开盘承接转强'
+  if (stage === 'trendConfirm') return '开盘反攻确认'
   if (stage === 'optionalFinalStatus') return '竞价弱转强复盘'
   return '竞价弱转强'
 }

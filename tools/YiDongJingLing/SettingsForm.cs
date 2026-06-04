@@ -28,6 +28,7 @@ internal sealed class SettingsForm : Form
     private readonly NumericUpDown _openGapBox = new();
     private readonly NumericUpDown _longBodyBox = new();
     private readonly NumericUpDown _hotlistTopVoiceBox = new();
+private readonly NumericUpDown _openingThresholdBox = new() { Minimum = 0, Maximum = 120, Value = 30 };
     private readonly Label _hotlistTopVoiceLabel = new();
     private readonly Label _hotlistTopVoiceHint = new();
     private readonly Label _rateValueLabel = new();
@@ -351,7 +352,7 @@ internal sealed class SettingsForm : Form
         _largeOrderBox.Value = ClampDecimal(_settings.LargeOrderThresholdWan, _largeOrderBox);
         _openGapBox.Value = ClampDecimal(_settings.OpenGapPct, _openGapBox);
         _longBodyBox.Value = ClampDecimal(_settings.LongBodyPct, _longBodyBox);
-        _hotlistTopVoiceBox.Value = Math.Clamp(_settings.HotlistTopVoiceCount, 0, 500);
+        _openingThresholdBox.Value = Math.Clamp(_settings.CheckpointWindowThresholdSeconds, 0, 120);_hotlistTopVoiceBox.Value = Math.Clamp(_settings.HotlistTopVoiceCount, 0, 500);
         UpdateHotlistVoiceRowVisibility();
 
         _voiceBox.Items.Clear();
@@ -398,7 +399,7 @@ internal sealed class SettingsForm : Form
         _settings.LargeOrderThresholdWan = _largeOrderBox.Value;
         _settings.OpenGapPct = _openGapBox.Value;
         _settings.LongBodyPct = _longBodyBox.Value;
-        _settings.HotlistTopVoiceCount = (int)_hotlistTopVoiceBox.Value;
+        _settings.CheckpointWindowThresholdSeconds = (int)_openingThresholdBox.Value;_settings.HotlistTopVoiceCount = (int)_hotlistTopVoiceBox.Value;
         _settings.EnabledEvents.Clear();
         for (var i = 0; i < _eventTypeList.Items.Count; i++)
         {
@@ -498,7 +499,21 @@ internal sealed class SettingsForm : Form
         return Math.Clamp(value, input.Minimum, input.Maximum);
     }
 
-    private static GroupBox SectionBox(string text)
+    private static Label FieldLabel(string text, string suffix = "")
+{
+    var label = new Label
+    {
+        Text = string.IsNullOrEmpty(suffix) ? text : $"{text} ({suffix})",
+        Dock = DockStyle.Fill,
+        Font = new Font("Microsoft YaHei UI", 9f),
+        ForeColor = Color.FromArgb(15, 23, 42),
+        TextAlign = ContentAlignment.MiddleLeft,
+        AutoSize = true,
+    };
+    return label;
+}
+
+private static GroupBox SectionBox(string text)
     {
         return new GroupBox
         {
@@ -615,3 +630,4 @@ internal sealed class SettingsForm : Form
         public override string ToString() => Label;
     }
 }
+

@@ -193,9 +193,8 @@ Run("Opening weak-to-strong detector rejects candidate when 09:24 late baseline 
         result = detector.Evaluate(quote, store.GetBaseline(quote.Code, quote.At));
     }
 
-    AssertEqual("auctionConditionFailed", result?.Stage ?? "", "late baseline failed stage");
-    AssertTrue(result?.Reason.Contains("09:24") == true, "late baseline failed reason");
-    AssertTrue(result?.VoiceEligible == false, "late baseline failed voice");
+    AssertTrue(result?.Triggered == false, "late baseline should not be triggered");
+    AssertEqual("", result?.Stage ?? "missing", "late baseline failed stage should be empty");
 });
 
 Run("Opening weak-to-strong detector accepts candidate when 09:24 late baseline confirms", () =>
@@ -221,6 +220,111 @@ Run("Opening weak-to-strong detector accepts candidate when 09:24 late baseline 
     AssertTrue(result?.VoiceEligible == false, "late baseline passed voice");
 });
 
+Run("Opening weak-to-strong detector treats delayed 09:25 auction sample as confirm baseline", () =>
+{
+    var rules = LoadOpeningRules();
+    var store = new OpeningAuctionStateStore(rules);
+    var detector = new OpeningWeakToStrongDetector(rules);
+    var initial = OpeningCheckpointQuote("2026-06-04", "09:20:00", 9.7m, 10m, 1_000_000m, 100_000m);
+    var late = OpeningCheckpointQuote("2026-06-04", "09:24:00", 9.86m, 10m, 1_500_000m, 150_000m);
+    var delayedFinal = OpeningCheckpointQuote("2026-06-04", "09:25:01", 9.92m, 10m, 2_000_000m, 180_000m);
+    var gap = OpeningCheckpointQuote("2026-06-04", "09:30:00", 10.23m, 10m, 2_800_000m, 230_000m) with
+    {
+        Open = 10.23m,
+    };
+
+    foreach (var quote in new[] { initial, late, delayedFinal })
+    {
+        store.Capture(quote);
+        var candidate = detector.Evaluate(quote, store.GetBaseline(quote.Code, quote.At));
+        if (quote == delayedFinal)
+        {
+            AssertEqual("auctionConditionPassed", candidate.Stage, "delayed 09:25 baseline emits candidate");
+        }
+    }
+
+    var result = detector.Evaluate(gap, store.GetBaseline(gap.Code, gap.At));
+
+    AssertEqual("gapAlert", result.Stage, "delayed 09:25 baseline supports gap alert");
+    AssertTrue(result.VoiceEligible, "delayed 09:25 baseline voice");
+    AssertEqual(null, result.InvalidReason, "delayed 09:25 baseline invalid reason");
+});
+
+Run("Opening weak-to-strong detector alerts water-under auction lift with opening support", () =>
+{
+    var rules = LoadOpeningRules();
+    var store = new OpeningAuctionStateStore(rules);
+    var detector = new OpeningWeakToStrongDetector(rules);
+    var quotes = new[]
+    {
+        OpeningCheckpointQuote("2026-06-04", "09:20:00", 96.5m, 100m, 9_000_000m, 90_000m, "600360", "华微电子"),
+        OpeningCheckpointQuote("2026-06-04", "09:24:50", 97.12m, 100m, 13_310_000m, 133_100m, "600360", "华微电子"),
+        OpeningCheckpointQuote("2026-06-04", "09:24:59", 97.43m, 100m, 17_480_000m, 174_800m, "600360", "华微电子"),
+        OpeningCheckpointQuote("2026-06-04", "09:30:00", 99.8m, 100m, 42_000_000m, 420_000m, "600360", "华微电子") with
+        {
+            Open = 99.6m,
+        },
+        OpeningCheckpointQuote("2026-06-04", "09:35:00", 99.82m, 100m, 68_000_000m, 680_000m, "600360", "华微电子") with
+        {
+            Open = 99.6m,
+        },
+    };
+    var results = new List<OpeningWeakToStrongResult>();
+
+    foreach (var quote in quotes)
+    {
+        store.Capture(quote);
+        var result = detector.Evaluate(quote, store.GetBaseline(quote.Code, quote.At));
+        if (result.Triggered)
+        {
+            results.Add(result);
+        }
+    }
+
+    AssertSequence(
+        ["auctionConditionPassed:False", "gapAlert:True", "trendConfirm:True"],
+        results.Select(item => $"{item.Stage}:{item.VoiceEligible}").ToArray(),
+        "water-under opening support stages");
+    AssertTrue(results[1].Reason.Contains("承接"), "opening support reason");
+});
+
+Run("Opening weak-to-strong detector alerts delayed 600703 opening rebound", () =>
+{
+    var rules = LoadOpeningRules();
+    var store = new OpeningAuctionStateStore(rules);
+    var detector = new OpeningWeakToStrongDetector(rules);
+    var quotes = new[]
+    {
+        OpeningCheckpointQuote("2026-06-04", "09:20:00", 15.32m, 15.51m, 12_000_000m, 780_000m, "600703", "三安光电"),
+        OpeningCheckpointQuote("2026-06-04", "09:24:48", 15.30m, 15.51m, 27_450_000m, 1_794_400m, "600703", "三安光电"),
+        OpeningCheckpointQuote("2026-06-04", "09:25:01", 15.47m, 15.51m, 43_032_900m, 2_782_000m, "600703", "三安光电"),
+        OpeningCheckpointQuote("2026-06-04", "09:30:01", 15.79m, 15.51m, 125_000_000m, 8_018_300m, "600703", "三安光电") with
+        {
+            Open = 15.47m,
+        },
+        OpeningCheckpointQuote("2026-06-04", "09:35:01", 16.01m, 15.51m, 630_600_000m, 39_388_000m, "600703", "三安光电") with
+        {
+            Open = 15.47m,
+        },
+    };
+    var results = new List<OpeningWeakToStrongResult>();
+
+    foreach (var quote in quotes)
+    {
+        store.Capture(quote);
+        var result = detector.Evaluate(quote, store.GetBaseline(quote.Code, quote.At));
+        if (result.Triggered)
+        {
+            results.Add(result);
+        }
+    }
+
+    AssertSequence(
+        ["auctionConditionPassed:False", "gapAlert:True", "trendConfirm:True"],
+        results.Select(item => $"{item.Stage}:{item.VoiceEligible}").ToArray(),
+        "delayed 600703 opening rebound stages");
+});
+
 Run("Event engine emits opening checkpoint events with stage names", () =>
 {
     var engine = new L1EventEngine();
@@ -239,7 +343,7 @@ Run("Event engine emits opening checkpoint events with stage names", () =>
         [candidate.OpeningSignal?.Stage ?? "", gap.OpeningSignal?.Stage ?? "", trend.OpeningSignal?.Stage ?? "", final.OpeningSignal?.Stage ?? ""],
         "event stages");
     AssertSequence(
-        ["竞价弱转强候选", "竞价跳空高开", "快速上板前兆", "竞价弱转强复盘"],
+        ["竞价弱转强候选", "开盘承接转强", "开盘反攻确认", "竞价弱转强复盘"],
         [candidate.TypeName, gap.TypeName, trend.TypeName, final.TypeName],
         "event type names");
     AssertSequence(
@@ -279,7 +383,7 @@ Run("Event deduper allows later opening checkpoint stages inside cooldown", () =
     };
     var gap = candidate with
     {
-        TypeName = "竞价跳空高开",
+        TypeName = "开盘承接转强",
         Timestamp = timestamp.AddMinutes(5),
         OpeningSignal = TestOpeningSignal(timestamp.AddMinutes(5)) with { Stage = "gapAlert", VoiceEligible = true }
     };
@@ -649,8 +753,8 @@ Run("Main form formats opening auction coverage status", () =>
         MainForm.IsOpeningAuctionCoverageWindow(DateTimeOffset.Parse("2026-05-22T09:25:00+08:00")),
         "auction coverage window includes 09:25");
     AssertTrue(
-        !MainForm.IsOpeningAuctionCoverageWindow(DateTimeOffset.Parse("2026-05-22T09:25:10+08:00")),
-        "auction coverage window excludes 09:25:10");
+        MainForm.IsOpeningAuctionCoverageWindow(DateTimeOffset.Parse("2026-05-22T09:25:10+08:00")),
+        "auction coverage window includes 09:25:10");
     AssertTrue(
         !MainForm.IsOpeningAuctionCoverageWindow(DateTimeOffset.Parse("2026-05-22T09:30:00+08:00")),
         "auction coverage window excludes 09:30");
@@ -1018,12 +1122,14 @@ static OpeningWeakToStrongQuote OpeningCheckpointQuote(
     decimal lastPrice,
     decimal preClose,
     decimal amount,
-    decimal volume)
+    decimal volume,
+    string code = "002552",
+    string name = "宝鼎科技")
 {
     var timestamp = DateTimeOffset.Parse($"{tradingDate}T{time}+08:00");
     return new OpeningWeakToStrongQuote(
-        "002552",
-        "宝鼎科技",
+        code,
+        name,
         timestamp,
         lastPrice,
         preClose,
@@ -1103,7 +1209,7 @@ static OpeningWeakToStrongSignal TestOpeningSignal(DateTimeOffset timestamp)
         "gapAlert",
         "gapAlert",
         true,
-        "09:30较09:25出现跳空高开缺口",
+        "09:30较09:25明显改善，开盘承接转强",
         timestamp,
         37.48m,
         4.98m,

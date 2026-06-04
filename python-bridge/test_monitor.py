@@ -1,6 +1,7 @@
 import os
 import sys
 import unittest
+import asyncio
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -89,6 +90,30 @@ class BridgeMonitorTest(unittest.TestCase):
         self.assertIsNotNone(quote)
         self.assertEqual(quote["capturedAt"], "2026-05-22T09:25:00+08:00")
         self.assertEqual(quote["sourceTs"], 1779413100000)
+
+    def test_fetch_quotes_refetches_missing_codes_from_truncated_batch(self):
+        class FakeQuoteClient:
+            def quotes(self, symbol):
+                if len(symbol) > 1:
+                    return [
+                        {"code": code, "price": 10.0, "last_close": 9.5, "amount": 1000, "volume": 100}
+                        for code in symbol[:8]
+                    ]
+                code = symbol[0]
+                return [
+                    {"code": code, "price": 10.0, "last_close": 9.5, "amount": 1000, "volume": 100}
+                ]
+
+        bridge = TdxL2Bridge(BridgeConfig(quote_batch_size=40))
+        bridge.quote_client = FakeQuoteClient()
+        bridge.tdx_connected = True
+        codes = [f"600{i:03d}" for i in range(39)] + ["600360"]
+
+        quotes, _depth, stats = asyncio.run(bridge.fetch_quotes_and_depth(codes))
+
+        self.assertIn("600360", {item["code"] for item in quotes})
+        self.assertEqual(40, stats.received_quotes)
+        self.assertEqual(1, stats.truncated_batches)
 
 
 if __name__ == "__main__":

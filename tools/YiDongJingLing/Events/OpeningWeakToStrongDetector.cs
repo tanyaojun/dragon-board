@@ -14,11 +14,13 @@ public sealed record OpeningWeakToStrongRules(
     string AuctionEnd,
     string DetectStart,
     string DetectEnd,
-    decimal AuctionGapJumpMinPctPoint,
+    decimal OpeningSupportImproveMinPctPoint,
+    decimal OpeningSupportAmountMinRatio,
     decimal AuctionPriceLiftMinPctPoint,
     decimal AuctionAmountLiftMinRatio,
     decimal AuctionLatePriceLiftMinPctPoint,
-    decimal AuctionLateAmountLiftMinRatio)
+    decimal AuctionLateAmountLiftMinRatio,
+    int CheckpointWindowThresholdSeconds = 30)
 {
     public static OpeningWeakToStrongRules FromJson(JsonElement element)
     {
@@ -31,16 +33,25 @@ public sealed record OpeningWeakToStrongRules(
             GetStringOrDefault(element, "auctionEnd", "09:25:10"),
             GetStringOrDefault(element, "detectStart", "09:30:00"),
             GetStringOrDefault(element, "detectEnd", "09:35:00"),
-            GetDecimalOrDefault(element, "auctionGapJumpMinPctPoint", 3m),
+            GetDecimalOrDefault(element, "openingSupportImproveMinPctPoint", 1.2m),
+            GetDecimalOrDefault(element, "openingSupportAmountMinRatio", 1m),
             GetDecimalOrDefault(element, "auctionPriceLiftMinPctPoint", 0.8m),
             GetDecimalOrDefault(element, "auctionAmountLiftMinRatio", 0.35m),
             GetDecimalOrDefault(element, "auctionLatePriceLiftMinPctPoint", 0.3m),
-            GetDecimalOrDefault(element, "auctionLateAmountLiftMinRatio", 0.2m));
+            GetDecimalOrDefault(element, "auctionLateAmountLiftMinRatio", 0.2m),
+            GetIntOrDefault(element, "checkpointWindowThresholdSeconds", 30));
     }
 
     private static string GetStringOrDefault(JsonElement element, string name, string fallback)
     {
         return element.TryGetProperty(name, out var property) ? property.GetString() ?? fallback : fallback;
+    }
+
+    private static int GetIntOrDefault(JsonElement element, string name, int fallback)
+    {
+        return element.TryGetProperty(name, out var property) && property.ValueKind is JsonValueKind.Number
+            ? property.GetInt32()
+            : fallback;
     }
 
     private static decimal GetDecimalOrDefault(JsonElement element, string name, decimal fallback)
@@ -304,7 +315,7 @@ public sealed class OpeningAuctionStateStore
 
         var previous = _baselines.GetValueOrDefault(key);
         var auctionProfile = BuildAuctionProfile(samplesForProfile ?? [quote], _rules);
-        if (!IsCheckpointTime(quote.At, OpeningWeakToStrongDetector.ConfirmBaselineTime))
+        if (!IsConfirmBaselineTime(quote.At))
         {
             if (previous is not null && inTrendWindow)
             {
@@ -325,7 +336,7 @@ public sealed class OpeningAuctionStateStore
             quote.PreClose,
             capturedAt,
             quote.BridgeTs,
-            Math.Max(previous?.SampleCount ?? 0, CountAuctionBaselineSamples(samplesForProfile ?? [quote])),
+            Math.Max(previous?.SampleCount ?? 0, CountAuctionBaselineSamples(samplesForProfile ?? [quote], _rules)),
             quality,
             quote.OpeningForcedSample,
             quote.RequestedCount,
@@ -368,7 +379,7 @@ public sealed class OpeningAuctionStateStore
         if (trusted.Length < 2) return null;
 
         var initial = trusted.FirstOrDefault(item => IsInWindow(item.At, rules.InitialBaselineStart, rules.InitialBaselineEnd));
-        var final = trusted.FirstOrDefault(item => IsCheckpointTime(item.At, OpeningWeakToStrongDetector.ConfirmBaselineTime)) ?? trusted[^1];
+        var final = trusted.LastOrDefault(item => IsConfirmBaselineTime(item.At, rules)) ?? trusted[^1];
         var lateStartTime = TimeSpan.Parse(rules.AuctionLateLiftStart, CultureInfo.InvariantCulture);
         var lateBaseline = trusted.FirstOrDefault(item => item.At.ToLocalTime().TimeOfDay >= lateStartTime) ?? final;
         var startPct = initial is null ? (decimal?)null : Pct(initial.LastPrice, initial.PreClose);
@@ -415,9 +426,11 @@ public sealed class OpeningAuctionStateStore
             priceVolumeConfirmed);
     }
 
-    private static int CountAuctionBaselineSamples(IReadOnlyList<OpeningWeakToStrongQuote> samples)
+    private static int CountAuctionBaselineSamples(
+        IReadOnlyList<OpeningWeakToStrongQuote> samples,
+        OpeningWeakToStrongRules rules)
     {
-        return samples.Count(item => IsCheckpointTime(item.At, OpeningWeakToStrongDetector.ConfirmBaselineTime));
+        return samples.Count(item => IsConfirmBaselineTime(item.At, rules));
     }
 
     private static string TradingDate(DateTimeOffset timestamp)
@@ -429,6 +442,16 @@ public sealed class OpeningAuctionStateStore
     {
         return $"{tradingDate}:{code}";
     }
+
+    private bool IsConfirmBaselineTime(DateTimeOffset timestamp)
+    {
+        return IsConfirmBaselineTime(timestamp, _rules);
+    }
+
+    private static bool IsConfirmBaselineTime(DateTimeOffset timestamp, OpeningWeakToStrongRules rules)
+    {
+        return IsInWindow(timestamp, rules.AuctionStart, rules.AuctionEnd);
+    }
 }
 
 public sealed class OpeningWeakToStrongDetector
@@ -436,16 +459,16 @@ public sealed class OpeningWeakToStrongDetector
     public const string ConfirmBaselineTime = "09:25:00";
     private const string SignalType = "opening_weak_to_strong";
     private const string DisplayName = "竞价弱转强";
-    private const string GapAlertTime = "09:30:00";
-    private const string TrendConfirmTime = "09:35:00";
-    private const string OptionalFinalTime = "10:00:00";
+    private const string GapAnchorTime = "09:30:00";
+    private const string TrendAnchorTime = "09:35:00";
+    private const string FinalAnchorTime = "10:00:00";
     private readonly OpeningWeakToStrongRules _rules;
     private readonly string _ruleVersion;
     private readonly Dictionary<string, OpeningWeakToStrongResult> _activeSignals = new(StringComparer.Ordinal);
 
     public OpeningWeakToStrongDetector(
         OpeningWeakToStrongRules rules,
-        string ruleVersion = "opening-weak-to-strong.v1")
+        string ruleVersion = "opening-weak-to-strong.v2")
     {
         _rules = rules;
         _ruleVersion = ruleVersion;
@@ -467,19 +490,19 @@ public sealed class OpeningWeakToStrongDetector
         _activeSignals.TryGetValue(activeKey, out var activeSignal);
         var time = quote.At.ToLocalTime().TimeOfDay;
         OpeningWeakToStrongResult? result = null;
-        if (time == TimeSpan.Parse(ConfirmBaselineTime, CultureInfo.InvariantCulture))
+        if (OpeningAuctionStateStore.IsInWindow(quote.At, _rules.AuctionStart, _rules.AuctionEnd))
         {
             result = EvaluateAuctionCheckpoint(quote, baseline);
         }
-        else if (time == TimeSpan.Parse(GapAlertTime, CultureInfo.InvariantCulture))
+        else if (IsCheckpointWindow(quote.At, GapAnchorTime, _rules.CheckpointWindowThresholdSeconds))
         {
-            result = EvaluateGapCheckpoint(quote, baseline);
+            result = EvaluateGapCheckpoint(quote, baseline, activeSignal);
         }
-        else if (time == TimeSpan.Parse(TrendConfirmTime, CultureInfo.InvariantCulture))
+        else if (IsCheckpointWindow(quote.At, TrendAnchorTime, _rules.CheckpointWindowThresholdSeconds))
         {
             result = EvaluateTrendCheckpoint(quote, baseline, activeSignal);
         }
-        else if (time == TimeSpan.Parse(OptionalFinalTime, CultureInfo.InvariantCulture))
+        else if (IsCheckpointWindow(quote.At, FinalAnchorTime, _rules.CheckpointWindowThresholdSeconds))
         {
             result = CheckpointSignal(
                 quote,
@@ -503,29 +526,43 @@ public sealed class OpeningWeakToStrongDetector
     {
         if (baseline?.AuctionProfile?.InitialAt is null)
         {
-            return CheckpointSignal(quote, baseline, "auctionConditionFailed", false, "缺少09:20初始基线");
+            return Rejected(quote, baseline, "缺少09:20初始基线");
         }
 
         var profile = baseline.AuctionProfile;
         if (profile.LateBaselineAt is null)
         {
-            return CheckpointSignal(quote, baseline, "auctionConditionFailed", false, "缺少09:24临门基线");
+            return Rejected(quote, baseline, "缺少09:24临门基线");
         }
 
         var passed = IsValidPrice(baseline.AuctionFinalPrice) &&
             profile.PriceVolumeConfirmed;
+        if (!passed && !OpeningAuctionStateStore.IsInWindow(quote.At, _rules.AuctionStart, _rules.AuctionEnd))
+        {
+            return Rejected(quote, baseline, "preopen_candidate_unconfirmed");
+        }
+        // In window: only emit triggered if passed==true
+        // passed==false in window is expected (still building baseline), no triggered event
+        if (!passed) {
+            return Rejected(quote, baseline, "building_baseline");
+        }
         return CheckpointSignal(
             quote,
             baseline,
-            passed ? "auctionConditionPassed" : "auctionConditionFailed",
+            "auctionConditionPassed",
             false,
-            passed ? "09:20总量价与09:24临门量价均通过，列入候选" : "09:20总量价或09:24临门量价不足，候选不成立");
+            "09:20总量价与09:24临门量价均通过，列入候选");
     }
 
     private OpeningWeakToStrongResult EvaluateGapCheckpoint(
         OpeningWeakToStrongQuote quote,
-        OpeningWeakToStrongBaseline? baseline)
+        OpeningWeakToStrongBaseline? baseline,
+        OpeningWeakToStrongResult? activeSignal)
     {
+        if (activeSignal?.Triggered == true && activeSignal?.Stage == "gapAlert")
+        {
+            return Rejected(quote, baseline, "already_gapAlert");
+        }
         if (!HasConfirmBaseline(baseline))
         {
             return Rejected(quote, baseline, "missing_09_25_confirm_baseline");
@@ -533,19 +570,25 @@ public sealed class OpeningWeakToStrongDetector
 
         var open = quote.Open > 0m ? quote.Open : quote.LastPrice;
         var openPct = OpeningAuctionStateStore.Pct(open, quote.PreClose);
-        var gapPctPoint = openPct - baseline!.AuctionPct;
-        var hasGap = gapPctPoint >= _rules.AuctionGapJumpMinPctPoint;
+        var firstWindowPct = OpeningAuctionStateStore.Pct(quote.LastPrice, quote.PreClose);
+        var improvePctPoint = firstWindowPct - baseline!.AuctionPct;
+        var baseAmount = baseline.AuctionAmount;
+        var amountRatio = baseAmount > 0m ? quote.Amount / baseAmount : 0m;
+        var supported = improvePctPoint >= _rules.OpeningSupportImproveMinPctPoint &&
+            quote.LastPrice >= baseline.AuctionFinalPrice &&
+            open >= baseline.AuctionFinalPrice &&
+            (baseAmount <= 0m || amountRatio >= _rules.OpeningSupportAmountMinRatio);
         return CheckpointSignal(
             quote,
             baseline,
-            hasGap ? "gapAlert" : "noGap",
-            hasGap,
-            hasGap ? "09:30较09:25出现跳空高开缺口" : "09:30未出现有效跳空高开缺口",
+            supported ? "gapAlert" : "noGap",
+            supported,
+            supported ? "09:30较09:25明显改善，开盘承接转强" : "09:30未形成有效开盘承接转强",
             officialOpen: open,
             officialOpenPct: Round2(openPct),
             firstWindowPrice: quote.LastPrice,
-            firstWindowPct: Round2(OpeningAuctionStateStore.Pct(quote.LastPrice, quote.PreClose)),
-            jumpPctPoint: Round2(gapPctPoint),
+            firstWindowPct: Round2(firstWindowPct),
+            jumpPctPoint: Round2(improvePctPoint),
             amount: quote.Amount);
     }
 
@@ -563,16 +606,19 @@ public sealed class OpeningWeakToStrongDetector
         var openPct = open > 0m ? OpeningAuctionStateStore.Pct(open, quote.PreClose) : (decimal?)null;
         var currentPct = OpeningAuctionStateStore.Pct(quote.LastPrice, quote.PreClose);
         var baseAmount = baseline?.AuctionAmount ?? 0m;
+        var improvePctPoint = baseline is null ? 0m : currentPct - baseline.AuctionPct;
         var strong = open > 0m &&
             quote.LastPrice >= open &&
-            currentPct >= Math.Max(openPct ?? 0m, activeSignal?.FirstWindowPct ?? 0m) &&
+            baseline is not null &&
+            currentPct >= baseline.AuctionPct &&
+            improvePctPoint >= _rules.OpeningSupportImproveMinPctPoint &&
             (baseAmount <= 0m || quote.Amount >= baseAmount);
         return CheckpointSignal(
             quote,
             baseline,
             strong ? "trendConfirm" : "trendWeak",
             strong,
-            strong ? "09:30到09:35高开高走，出现快速上板前兆" : "09:30到09:35承接不足，趋势转弱",
+            strong ? "09:30到09:35承接延续，开盘反攻确认" : "09:30到09:35承接不足，趋势转弱",
             officialOpen: open > 0m ? open : null,
             officialOpenPct: openPct.HasValue ? Round2(openPct.Value) : null,
             firstWindowPrice: quote.LastPrice,
@@ -711,14 +757,21 @@ public sealed class OpeningWeakToStrongDetector
         return timestamp.ToLocalTime().ToString("yyyy-MM-dd");
     }
 
-    private static bool HasConfirmBaseline(OpeningWeakToStrongBaseline? baseline)
+    private bool HasConfirmBaseline(OpeningWeakToStrongBaseline? baseline)
     {
-        return baseline is not null && IsCheckpointTime(baseline.CapturedAt, ConfirmBaselineTime);
+        return baseline is not null &&
+            OpeningAuctionStateStore.IsInWindow(baseline.CapturedAt, _rules.AuctionStart, _rules.AuctionEnd);
     }
 
     private static string BaselineKey(string code, string tradingDate)
     {
         return $"{tradingDate}:{code}";
+    }
+
+    private static bool IsCheckpointWindow(DateTimeOffset timestamp, string anchor, int thresholdSeconds)
+    {
+        var delta = timestamp.ToLocalTime().TimeOfDay - TimeSpan.Parse(anchor, CultureInfo.InvariantCulture);
+        return delta >= TimeSpan.Zero && delta.TotalSeconds <= thresholdSeconds;
     }
 
     private static int? AgeMs(DateTimeOffset? from, DateTimeOffset to)
@@ -734,7 +787,6 @@ public sealed class OpeningWeakToStrongDetector
         {
             ["auctionAmountLiftMinRatio"] = rules.AuctionAmountLiftMinRatio,
             ["auctionEnd"] = rules.AuctionEnd,
-            ["auctionGapJumpMinPctPoint"] = rules.AuctionGapJumpMinPctPoint,
             ["auctionLateAmountLiftMinRatio"] = rules.AuctionLateAmountLiftMinRatio,
             ["auctionLateLiftStart"] = rules.AuctionLateLiftStart,
             ["auctionLatePriceLiftMinPctPoint"] = rules.AuctionLatePriceLiftMinPctPoint,
@@ -743,6 +795,9 @@ public sealed class OpeningWeakToStrongDetector
             ["auctionTrendStart"] = rules.AuctionTrendStart,
             ["initialBaselineEnd"] = rules.InitialBaselineEnd,
             ["initialBaselineStart"] = rules.InitialBaselineStart,
+            ["openingSupportAmountMinRatio"] = rules.OpeningSupportAmountMinRatio,
+            ["openingSupportImproveMinPctPoint"] = rules.OpeningSupportImproveMinPctPoint,
+            ["checkpointWindowThresholdSeconds"] = rules.CheckpointWindowThresholdSeconds,
         };
         var json = JsonSerializer.Serialize(values.OrderBy(item => item.Key));
         unchecked
@@ -764,8 +819,8 @@ internal static class OpeningWeakToStrongMath
 
     public static bool IsValidPrice(decimal value) => value > 0m;
 
-    public static bool IsCheckpointTime(DateTimeOffset timestamp, string checkpoint)
+    public static bool IsCheckpointTime(DateTimeOffset timestamp, string anchor)
     {
-        return timestamp.ToLocalTime().TimeOfDay == TimeSpan.Parse(checkpoint, CultureInfo.InvariantCulture);
+        return timestamp.ToLocalTime().TimeOfDay == TimeSpan.Parse(anchor, CultureInfo.InvariantCulture);
     }
 }

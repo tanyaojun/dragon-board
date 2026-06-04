@@ -15,7 +15,8 @@
     "auctionEnd": "09:25:10",
     "detectStart": "09:30:00",
     "detectEnd": "09:35:00",
-    "auctionGapJumpMinPctPoint": 3,
+    "openingSupportImproveMinPctPoint": 1.2,
+    "openingSupportAmountMinRatio": 1,
     "auctionPriceLiftMinPctPoint": 0.8,
     "auctionAmountLiftMinRatio": 0.35,
     "auctionLatePriceLiftMinPctPoint": 0.3,
@@ -24,7 +25,7 @@
   "cases": [
     {
       "caseId": "opening-watch-happy-path",
-      "description": "09:25候选不播，09:30跳空播，09:35强确认播，10:00只做状态备注。",
+      "description": "09:25候选不播，09:30开盘承接转强播，09:35强确认播，10:00只做状态备注。",
       "quotes": [
         {
           "code": "002552",

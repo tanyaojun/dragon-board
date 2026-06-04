@@ -110,8 +110,8 @@ describe('OpeningRealtimeEventBuffer', () => {
     ])
     expect(events.map(item => item.event.typeName)).toEqual([
       '竞价弱转强候选',
-      '竞价跳空高开',
-      '快速上板前兆',
+      '开盘承接转强',
+      '开盘反攻确认',
       '竞价弱转强复盘',
     ])
     expect(events.map(item => item.signal.voiceEligible)).toEqual([false, true, true, false])

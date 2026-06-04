@@ -472,3 +472,113 @@ describe('OpeningWeakToStrongDetector', () => {
     }
   })
 })
+
+describe('OpeningWeakToStrongDetector - checkpoint window threshold', () => {
+  it('600703 delayed quotes within checkpoint window trigger gapAlert and trendConfirm', () => {
+    const events = runQuotes([
+      {
+        code: '600703', name: '\u4e09\u5b89\u5149\u7535',
+        at: '2026-06-04T09:20:00+08:00', lastPrice: 15.32, preClose: 15.51,
+        amount: 12_000_000, volume: 783_000,
+        capturedAt: '2026-06-04T09:20:00+08:00',
+      },
+      {
+        code: '600703', name: '\u4e09\u5b89\u5149\u7535',
+        at: '2026-06-04T09:24:48+08:00', lastPrice: 15.30, preClose: 15.51,
+        amount: 27_450_000, volume: 1_794_000,
+        capturedAt: '2026-06-04T09:24:48+08:00',
+      },
+      {
+        code: '600703', name: '\u4e09\u5b89\u5149\u7535',
+        at: '2026-06-04T09:25:01+08:00', lastPrice: 15.47, preClose: 15.51,
+        amount: 43_032_900, volume: 2_781_000,
+        capturedAt: '2026-06-04T09:25:01+08:00',
+      },
+      {
+        code: '600703', name: '\u4e09\u5b89\u5149\u7535',
+        at: '2026-06-04T09:30:18+08:00', lastPrice: 15.79, preClose: 15.51,
+        open: 15.47, amount: 125_000_000, volume: 7_900_000,
+        capturedAt: '2026-06-04T09:30:18+08:00',
+      },
+      {
+        code: '600703', name: '\u4e09\u5b89\u5149\u7535',
+        at: '2026-06-04T09:35:22+08:00', lastPrice: 16.01, preClose: 15.51,
+        open: 15.47, amount: 630_600_000, volume: 39_400_000,
+        capturedAt: '2026-06-04T09:35:22+08:00',
+      },
+    ] as OpeningWeakToStrongQuote[])
+
+    expect(events.map(e => e.stage)).toEqual([
+      'auctionConditionPassed',
+      'gapAlert',
+      'trendConfirm',
+    ])
+  })
+
+  it('noGap upgrades to gapAlert when later quote in same window improves', () => {
+    const events = runQuotes([
+      {
+        code: '002560', name: '\u5347\u7ea7\u6d4b\u8bd5',
+        at: '2026-06-04T09:20:00+08:00', lastPrice: 9.8, preClose: 10,
+        amount: 1_000_000, volume: 100_000,
+        capturedAt: '2026-06-04T09:20:00+08:00',
+      },
+      {
+        code: '002560', name: '\u5347\u7ea7\u6d4b\u8bd5',
+        at: '2026-06-04T09:24:00+08:00', lastPrice: 9.9, preClose: 10,
+        amount: 1_500_000, volume: 150_000,
+        capturedAt: '2026-06-04T09:24:00+08:00',
+      },
+      {
+        code: '002560', name: '\u5347\u7ea7\u6d4b\u8bd5',
+        at: '2026-06-04T09:25:00+08:00', lastPrice: 9.95, preClose: 10,
+        amount: 2_000_000, volume: 180_000,
+        capturedAt: '2026-06-04T09:25:00+08:00',
+      },
+      {
+        code: '002560', name: '\u5347\u7ea7\u6d4b\u8bd5',
+        at: '2026-06-04T09:30:05+08:00', lastPrice: 10.05, preClose: 10,
+        open: 9.95, amount: 5_000_000, volume: 400_000,
+        capturedAt: '2026-06-04T09:30:05+08:00',
+      },
+      {
+        code: '002560', name: '\u5347\u7ea7\u6d4b\u8bd5',
+        at: '2026-06-04T09:30:18+08:00', lastPrice: 10.35, preClose: 10,
+        open: 9.95, amount: 12_000_000, volume: 900_000,
+        capturedAt: '2026-06-04T09:30:18+08:00',
+      },
+    ] as OpeningWeakToStrongQuote[])
+
+    // noGap fires first at 09:30:05, then gapAlert upgrades at 09:30:18
+    // both get emitted, but the last gapAlert is the final active state
+    expect(events.filter(e => e.stage === 'gapAlert').length).toBe(1)
+    expect(events.map(e => e.stage)).toContain('auctionConditionPassed')
+    expect(events.map(e => e.stage)).toContain('gapAlert')
+  })
+
+  it('quote at 09:30:45 outside checkpoint window does not trigger gapAlert', () => {
+    const quotes = [
+      {
+        ...baseQuote,
+        at: '2026-06-03T09:20:00+08:00', lastPrice: 9.8, amount: 1_000_000, volume: 100_000,
+        capturedAt: '2026-06-03T09:20:00+08:00', bridgeTs: '2026-06-03T09:20:00+08:00',
+      },
+      lateBaselineQuote({ at: '2026-06-03T09:24:00+08:00', capturedAt: '2026-06-03T09:24:00+08:00', bridgeTs: '2026-06-03T09:24:00+08:00' }),
+      {
+        ...baseQuote,
+        at: '2026-06-03T09:25:00+08:00', lastPrice: 9.95, amount: 2_000_000, volume: 180_000,
+        capturedAt: '2026-06-03T09:25:00+08:00', bridgeTs: '2026-06-03T09:25:00+08:00',
+      },
+      {
+        ...baseQuote,
+        at: '2026-06-03T09:30:45+08:00', lastPrice: 10.35, open: 9.95,
+        amount: 8_000_000, volume: 600_000,
+        capturedAt: '2026-06-03T09:30:45+08:00', bridgeTs: '2026-06-03T09:30:45+08:00',
+      },
+    ] as OpeningWeakToStrongQuote[]
+    const events = runQuotes(quotes)
+    // only candidate, 09:30:45 outside window
+    expect(events.length).toBe(1)
+    expect(events[0].stage).toBe('auctionConditionPassed')
+  })
+})

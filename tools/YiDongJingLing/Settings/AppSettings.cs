@@ -31,6 +31,7 @@ public sealed class AppSettings
     public decimal LargeOrderThresholdWan { get; set; } = 1_000m;
     public decimal OpenGapPct { get; set; } = 1m;
     public decimal LongBodyPct { get; set; } = 4m;
+    public int CheckpointWindowThresholdSeconds { get; set; } = 30;
     public bool VoiceEnabled { get; set; } = true;
     public double VoiceRate { get; set; } = 1;
     public int VoiceVolume { get; set; } = 100;
@@ -63,6 +64,7 @@ public sealed class AppSettings
             LargeOrderThresholdWan = LargeOrderThresholdWan,
             OpenGapPct = OpenGapPct,
             LongBodyPct = LongBodyPct,
+            CheckpointWindowThresholdSeconds = CheckpointWindowThresholdSeconds,
             VoiceEnabled = VoiceEnabled,
             VoiceRate = VoiceRate,
             VoiceVolume = VoiceVolume,

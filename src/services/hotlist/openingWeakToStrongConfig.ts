@@ -1,6 +1,6 @@
 import type { OpeningWeakToStrongRules } from './openingWeakToStrongTypes'
 
-export const OPENING_WEAK_TO_STRONG_RULE_VERSION = 'opening-weak-to-strong.v1'
+export const OPENING_WEAK_TO_STRONG_RULE_VERSION = 'opening-weak-to-strong.v2'
 
 export const DEFAULT_OPENING_WEAK_TO_STRONG_RULES: OpeningWeakToStrongRules = {
   auctionTrendStart: '09:20:00',
@@ -11,9 +11,11 @@ export const DEFAULT_OPENING_WEAK_TO_STRONG_RULES: OpeningWeakToStrongRules = {
   auctionEnd: '09:25:10',
   detectStart: '09:30:00',
   detectEnd: '09:35:00',
-  auctionGapJumpMinPctPoint: 3,
+  openingSupportImproveMinPctPoint: 1.2,
+  openingSupportAmountMinRatio: 1,
   auctionPriceLiftMinPctPoint: 0.8,
   auctionAmountLiftMinRatio: 0.35,
   auctionLatePriceLiftMinPctPoint: 0.3,
   auctionLateAmountLiftMinRatio: 0.2,
+  checkpointWindowThresholdSeconds: 30,
 }

@@ -185,7 +185,7 @@ def is_opening_sampling_window(start: datetime | None = None, end: datetime | No
         return False
 
     window_start = 9 * 3600 + 20 * 60
-    window_end = 9 * 3600 + 25 * 60 + 10
+    window_end = 9 * 3600 + 36 * 60  # 09:36:00
     start_seconds = current.hour * 3600 + current.minute * 60 + current.second
     end_seconds = finished.hour * 3600 + finished.minute * 60 + finished.second
     return start_seconds <= window_end and end_seconds >= window_start
@@ -1880,6 +1880,19 @@ class TdxL2Bridge:
                             ",".join(missing_codes[:8]) + ("..." if len(missing_codes) > 8 else ""),
                             self.current_quote_batch_size,
                         )
+                        for missing_code in missing_codes:
+                            try:
+                                def _refetch_one(code: str = missing_code):
+                                    assert self.quote_client is not None
+                                    return self.quote_client.quotes(symbol=[code])
+
+                                records.extend(frame_to_records(await asyncio.to_thread(_refetch_one)))
+                            except Exception as error:
+                                logger.warning(
+                                    "quote refetch failed: code=%s error=%s",
+                                    missing_code,
+                                    error,
+                                )
 
                     for row in records:
                         quote_item = normalize_quote_row(row, captured_ms=batch_started)

@@ -5,32 +5,48 @@ namespace YiDongJingLing.Events;
 public sealed class L1EventEngine
 {
     private const decimal SharesPerLot = 100m;
-    private static readonly OpeningWeakToStrongRules OpeningRules = new(
-        "09:20:00",
-        "09:20:00",
-        "09:20:30",
-        "09:24:00",
-        "09:24:50",
-        "09:25:10",
-        "09:30:00",
-        "09:35:00",
-        3m,
-        0.8m,
-        0.35m,
-        0.3m,
-        0.2m);
     private readonly L1EventRules _rules;
     private readonly Dictionary<string, StockState> _states = new(StringComparer.Ordinal);
-    private readonly OpeningAuctionStateStore _openingStore = new(OpeningRules);
-    private readonly OpeningWeakToStrongDetector _openingDetector = new(OpeningRules);
+    private readonly OpeningAuctionStateStore _openingStore;
+    private readonly OpeningWeakToStrongDetector _openingDetector;
     private readonly Action<OpeningWeakToStrongTelemetryRecord>? _openingTelemetry;
 
     public L1EventEngine(
         L1EventRules? rules = null,
-        Action<OpeningWeakToStrongTelemetryRecord>? openingTelemetry = null)
+        Action<OpeningWeakToStrongTelemetryRecord>? openingTelemetry = null,
+        OpeningWeakToStrongRules? openingWeakRules = null)
     {
         _rules = rules ?? new L1EventRules();
         _openingTelemetry = openingTelemetry;
+        var openingRules = openingWeakRules ?? DefaultOpeningRules();
+        _openingStore = new(openingRules);
+        _openingDetector = new(openingRules);
+    }
+
+    public static OpeningWeakToStrongRules DefaultOpeningRules()
+    {
+        return new OpeningWeakToStrongRules(
+            "09:20:00",
+            "09:20:00",
+            "09:20:30",
+            "09:24:00",
+            "09:24:50",
+            "09:25:10",
+            "09:30:00",
+            "09:35:00",
+            1.2m,
+            1m,
+            0.8m,
+            0.35m,
+            0.3m,
+            0.2m,
+            30);
+    }
+
+    public void UpdateOpeningRules(OpeningWeakToStrongRules rules)
+    {
+        _openingStore.Clear();
+        _openingDetector.Clear();
     }
 
     public void Clear()
@@ -257,7 +273,7 @@ public sealed class L1EventEngine
             return;
         }
         if (state.OpeningWeakToStrongTriggeredDate == tradingDate &&
-            OpeningStagePriority(result) <= state.OpeningWeakToStrongIntradayPriority)
+            OpeningStagePriority(result) < state.OpeningWeakToStrongIntradayPriority)
         {
             RecordOpeningTelemetry(state, tradingDate, result, "event_suppressed_duplicate_or_lower_priority");
             return;
@@ -426,8 +442,8 @@ public sealed class L1EventEngine
         return result.Stage switch
         {
             "auctionConditionPassed" or "auctionConditionFailed" => "竞价弱转强候选",
-            "gapAlert" => "竞价跳空高开",
-            "trendConfirm" => "快速上板前兆",
+            "gapAlert" => "开盘承接转强",
+            "trendConfirm" => "开盘反攻确认",
             "optionalFinalStatus" => "竞价弱转强复盘",
             _ => "竞价弱转强",
         };

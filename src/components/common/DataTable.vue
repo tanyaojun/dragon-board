@@ -444,9 +444,9 @@ const openingSignalTitle = (stock: Stock) => {
   if (!signal) return ''
   const stageName =
     signal.stage === 'gapAlert'
-      ? '跳空高开'
+      ? '开盘承接转强'
       : signal.stage === 'trendConfirm'
-        ? '快速上板前兆'
+        ? '开盘反攻确认'
         : signal.stage === 'auctionConditionPassed'
           ? '候选成立'
           : signal.stage === 'auctionConditionFailed'

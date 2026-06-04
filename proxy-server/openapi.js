@@ -153,7 +153,7 @@ const openingSignalBody = {
               pct: { type: 'number', example: 3.5 },
               amount: { type: 'number', example: 8000000 },
               voiceEligible: { type: 'boolean' },
-              reason: { type: 'string', example: '09:30较09:25出现跳空高开缺口' },
+              reason: { type: 'string', example: '09:30较09:25明显改善，开盘承接转强' },
             },
           },
         },

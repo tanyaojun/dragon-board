@@ -9,11 +9,10 @@ import type {
 
 const SIGNAL_TYPE = 'opening_weak_to_strong' as const
 const DISPLAY_NAME = '竞价弱转强' as const
-const RULE_VERSION = 'opening-weak-to-strong.v1'
-const CONFIRM_BASELINE_TIME = '09:25:00'
-const GAP_ALERT_TIME = '09:30:00'
-const TREND_CONFIRM_TIME = '09:35:00'
-const OPTIONAL_FINAL_TIME = '10:00:00'
+const RULE_VERSION = 'opening-weak-to-strong.v2'
+const ANCHOR_GAP = '09:30:00'
+const ANCHOR_TREND = '09:35:00'
+const ANCHOR_FINAL = '10:00:00'
 
 export class OpeningAuctionStateStore {
   private readonly baselines = new Map<string, OpeningWeakToStrongBaseline>()
@@ -38,7 +37,7 @@ export class OpeningAuctionStateStore {
 
     const previous = this.baselines.get(key)
     const auctionProfile = buildAuctionProfile(samplesForProfile || [quote], this.rules)
-    if (!isCheckpointTime(quote.at, CONFIRM_BASELINE_TIME)) {
+    if (!isConfirmBaselineTime(quote.at, this.rules)) {
       if (previous && inTrendWindow) {
         this.baselines.set(key, { ...previous, auctionProfile })
       }
@@ -57,7 +56,7 @@ export class OpeningAuctionStateStore {
       preClose: quote.preClose,
       capturedAt,
       bridgeTs: quote.bridgeTs,
-      sampleCount: Math.max(previous?.sampleCount || 0, countAuctionBaselineSamples(samplesForProfile || [quote])),
+      sampleCount: Math.max(previous?.sampleCount || 0, countAuctionBaselineSamples(samplesForProfile || [quote], this.rules)),
       quality,
       openingForcedSample: quote.openingForcedSample,
       requestedCount: quote.requestedCount,
@@ -93,17 +92,25 @@ export class OpeningWeakToStrongDetector {
     const activeSignal = this.activeSignals.get(activeKey)
     let signal: OpeningWeakToStrongSignal | null = null
 
-    if (isCheckpointTime(quote.at, CONFIRM_BASELINE_TIME)) {
+    if (isConfirmBaselineTime(quote.at, this.rules)) {
       signal = this.evaluateAuctionCheckpoint(quote, baseline)
-    } else if (isCheckpointTime(quote.at, GAP_ALERT_TIME)) {
-      signal = this.evaluateGapCheckpoint(quote, baseline)
-    } else if (isCheckpointTime(quote.at, TREND_CONFIRM_TIME)) {
+    } else if (isCheckpointWindow(quote.at, ANCHOR_GAP, this.rules.checkpointWindowThresholdSeconds ?? 30)) {
+      signal = this.evaluateGapCheckpoint(quote, baseline, activeSignal)
+    } else if (isCheckpointWindow(quote.at, ANCHOR_TREND, this.rules.checkpointWindowThresholdSeconds ?? 30)) {
       signal = this.evaluateTrendCheckpoint(quote, baseline, activeSignal)
-    } else if (isCheckpointTime(quote.at, OPTIONAL_FINAL_TIME)) {
+    } else if (isCheckpointWindow(quote.at, ANCHOR_FINAL, this.rules.checkpointWindowThresholdSeconds ?? 30)) {
       signal = this.evaluateFinalCheckpoint(quote, baseline)
     }
 
-    if (signal?.triggered) this.activeSignals.set(activeKey, signal)
+    if (signal?.triggered) {
+      if (signal.stage !== 'noGap' && signal.stage !== 'trendWeak') {
+        this.activeSignals.set(activeKey, signal)
+      }
+    }
+    // Keep noGap/trendWeak memory so upgrade can reference activeSignal
+    if (signal?.stage === 'noGap' || signal?.stage === 'trendWeak') {
+      this.activeSignals.set(activeKey, signal)
+    }
     return signal
   }
 
@@ -129,6 +136,9 @@ export class OpeningWeakToStrongDetector {
       amountLift >= this.rules.auctionAmountLiftMinRatio &&
       latePriceLift >= this.rules.auctionLatePriceLiftMinPctPoint &&
       lateAmountLift >= this.rules.auctionLateAmountLiftMinRatio
+    if (!passed && !isConfirmBaselineTime(quote.at, this.rules)) {
+      return this.rejected(quote, baseline, 'preopen_candidate_unconfirmed')
+    }
     return this.checkpointSignal(
       quote,
       baseline,
@@ -143,25 +153,38 @@ export class OpeningWeakToStrongDetector {
   private evaluateGapCheckpoint(
     quote: OpeningWeakToStrongQuote,
     baseline: OpeningWeakToStrongBaseline | null,
+    activeSignal: OpeningWeakToStrongSignal | null | undefined,
   ): OpeningWeakToStrongSignal {
-    if (!hasConfirmBaseline(baseline)) return this.rejected(quote, baseline, 'missing_09_25_confirm_baseline')
+    if (activeSignal?.triggered && activeSignal?.stage === 'gapAlert') {
+      return this.rejected(quote, baseline, 'already_gapAlert')
+    }
+    if (!hasConfirmBaseline(baseline, this.rules)) return this.rejected(quote, baseline, 'missing_09_25_confirm_baseline')
 
     const open = normalizeNumber(quote.open) || quote.lastPrice
     const openPct = pct(open, quote.preClose)
-    const gapPctPoint = openPct - baseline.auctionPct
-    const hasGap = gapPctPoint >= this.rules.auctionGapJumpMinPctPoint
+    const firstWindowPct = pct(quote.lastPrice, quote.preClose)
+    const improvePctPoint = firstWindowPct - baseline.auctionPct
+    const amount = normalizeNumber(quote.amount)
+    const baseAmount = normalizeNumber(baseline.auctionAmount)
+    const amountRatio = baseAmount > 0 ? amount / baseAmount : 0
+    const supported =
+      improvePctPoint >= (this.rules.openingSupportImproveMinPctPoint ?? 1.2) &&
+      quote.lastPrice >= baseline.auctionFinalPrice &&
+      open >= baseline.auctionFinalPrice &&
+      (baseAmount <= 0 || amountRatio >= (this.rules.openingSupportAmountMinRatio ?? 1))
     return this.checkpointSignal(
       quote,
       baseline,
-      hasGap ? 'gapAlert' : 'noGap',
-      hasGap,
-      hasGap ? '09:30较09:25出现跳空高开缺口' : '09:30未出现有效跳空高开缺口',
+      supported ? 'gapAlert' : 'noGap',
+      supported,
+      supported ? '09:30较09:25明显改善，开盘承接转强' : '09:30未形成有效开盘承接转强',
       {
         officialOpen: open,
         officialOpenPct: round2(openPct),
         firstWindowPrice: quote.lastPrice,
-        firstWindowPct: round2(pct(quote.lastPrice, quote.preClose)),
-        jumpPctPoint: round2(gapPctPoint),
+        firstWindowPct: round2(firstWindowPct),
+        jumpPctPoint: round2(improvePctPoint),
+        amount,
       },
     )
   }
@@ -171,24 +194,26 @@ export class OpeningWeakToStrongDetector {
     baseline: OpeningWeakToStrongBaseline | null,
     activeSignal: OpeningWeakToStrongSignal | null | undefined,
   ): OpeningWeakToStrongSignal {
-    if (!hasConfirmBaseline(baseline)) return this.rejected(quote, baseline, 'missing_09_25_confirm_baseline')
+    if (!hasConfirmBaseline(baseline, this.rules)) return this.rejected(quote, baseline, 'missing_09_25_confirm_baseline')
 
     const open = normalizeNumber(activeSignal?.officialOpen || quote.open)
     const openPct = open > 0 ? pct(open, quote.preClose) : undefined
     const currentPct = pct(quote.lastPrice, quote.preClose)
     const amount = normalizeNumber(quote.amount)
     const baseAmount = normalizeNumber(baseline.auctionAmount)
+    const improvePctPoint = currentPct - baseline.auctionPct
     const strong =
       open > 0 &&
       quote.lastPrice >= open &&
-      currentPct >= Math.max(normalizeNumber(openPct), normalizeNumber(activeSignal?.firstWindowPct)) &&
+      currentPct >= baseline.auctionPct &&
+      improvePctPoint >= (this.rules.openingSupportImproveMinPctPoint ?? 1.2) &&
       (baseAmount <= 0 || amount >= baseAmount)
     return this.checkpointSignal(
       quote,
       baseline,
       strong ? 'trendConfirm' : 'trendWeak',
       strong,
-      strong ? '09:30到09:35高开高走，出现快速上板前兆' : '09:30到09:35承接不足，趋势转弱',
+      strong ? '09:30到09:35承接延续，开盘反攻确认' : '09:30到09:35承接不足，趋势转弱',
       {
         officialOpen: open || undefined,
         officialOpenPct: openPct === undefined ? undefined : round2(openPct),
@@ -316,7 +341,7 @@ function buildAuctionProfile(
   if (trusted.length < 2) return undefined
 
   const initial = trusted.find(item => isInWindow(item.at, rules.initialBaselineStart, rules.initialBaselineEnd))
-  const final = trusted.find(item => isCheckpointTime(item.at, CONFIRM_BASELINE_TIME)) || trusted[trusted.length - 1]
+  const final = [...trusted].reverse().find(item => isConfirmBaselineTime(item.at, rules)) || trusted[trusted.length - 1]
   const lateBaseline =
     trusted.find(item => secondsOfDay(item.at) >= secondsOfDay(rules.auctionLateLiftStart)) || final
   const startPct = initial ? pct(initial.lastPrice, initial.preClose) : undefined
@@ -372,8 +397,11 @@ function ratioFromBase(delta: number | undefined, base: number | undefined): num
   return delta / base
 }
 
-function countAuctionBaselineSamples(samples: OpeningWeakToStrongQuote[]): number {
-  return samples.filter(item => isCheckpointTime(item.at, CONFIRM_BASELINE_TIME)).length
+function countAuctionBaselineSamples(
+  samples: OpeningWeakToStrongQuote[],
+  rules: OpeningWeakToStrongRules,
+): number {
+  return samples.filter(item => isConfirmBaselineTime(item.at, rules)).length
 }
 
 function isValidPrice(value: number): boolean {
@@ -394,8 +422,17 @@ function isInWindow(timestamp: string, start: string, end: string): boolean {
   return value >= secondsOfDay(start) && value <= secondsOfDay(end)
 }
 
-function isCheckpointTime(timestamp: string, checkpoint: string): boolean {
-  return secondsOfDay(timestamp) === secondsOfDay(checkpoint)
+function isCheckpointTime(timestamp: string, anchor: string): boolean {
+  return isCheckpointWindow(timestamp, anchor, 0)
+}
+
+function isCheckpointWindow(timestamp: string, anchor: string, thresholdSeconds: number): boolean {
+  const delta = secondsOfDay(timestamp) - secondsOfDay(anchor)
+  return delta >= 0 && delta <= thresholdSeconds
+}
+
+function isConfirmBaselineTime(timestamp: string, rules: OpeningWeakToStrongRules): boolean {
+  return isInWindow(timestamp, rules.auctionStart, rules.auctionEnd)
 }
 
 function isOpeningBaseline(
@@ -406,8 +443,10 @@ function isOpeningBaseline(
 
 function hasConfirmBaseline(
   value: OpeningWeakToStrongBaseline | null | undefined,
+  rules?: OpeningWeakToStrongRules,
 ): value is OpeningWeakToStrongBaseline {
-  return isOpeningBaseline(value) && isCheckpointTime(value.capturedAt, CONFIRM_BASELINE_TIME)
+  return isOpeningBaseline(value) &&
+    (rules ? isConfirmBaselineTime(value.capturedAt, rules) : isCheckpointTime(value.capturedAt, ANCHOR_GAP))
 }
 
 function getTradingDate(timestamp: string): string {
@@ -443,7 +482,6 @@ function configHash(rules: OpeningWeakToStrongRules): string {
   const hashKeys = ([
     'auctionAmountLiftMinRatio',
     'auctionEnd',
-    'auctionGapJumpMinPctPoint',
     'auctionLateAmountLiftMinRatio',
     'auctionLateLiftStart',
     'auctionLatePriceLiftMinPctPoint',
@@ -452,6 +490,9 @@ function configHash(rules: OpeningWeakToStrongRules): string {
     'auctionTrendStart',
     'initialBaselineEnd',
     'initialBaselineStart',
+    'openingSupportAmountMinRatio',
+    'openingSupportImproveMinPctPoint',
+    'checkpointWindowThresholdSeconds',
   ] as (keyof OpeningWeakToStrongRules)[]).sort()
   const hashRules = Object.fromEntries(hashKeys.map((key) => [key, rules[key]]))
   const json = JSON.stringify(hashRules)
@@ -462,3 +503,5 @@ function configHash(rules: OpeningWeakToStrongRules): string {
   }
   return `owts-${(hash >>> 0).toString(16).padStart(8, '0')}`
 }
+
+

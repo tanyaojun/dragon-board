@@ -9,7 +9,7 @@
 ```text
 09:20 baselineCaptured
 09:25 auctionConditionPassed / auctionConditionFailed
-09:30 gapAlert / noGap
+09:30 gapAlert / noGap（兼容阶段名，含义为开盘承接转强）
 09:35 trendConfirm / trendWeak
 10:00 optionalFinalStatus
 ```
@@ -30,10 +30,10 @@
 | 时间 | 事件 | 判断 | 产品动作 |
 |------|------|------|----------|
 | `09:20` | `baselineCaptured` | 记录价格、涨幅、成交额/量，作为不可撤单阶段起点。 | 内部基线，不展示为异动，不语音。 |
-| `09:24` | 内部临门基线 | 记录临近集合竞价结束前的价格、涨幅和成交额，用于 `09:25` 量价二次确认。 | 内部基线，不作为独立 checkpoint，不展示为异动，不语音。 |
-| `09:25` | `auctionConditionPassed` / `auctionConditionFailed` | 同时对比 `09:20 -> 09:25` 总量价和 `09:24 -> 09:25` 临门量价，确认是否满足弱转强候选基础条件。 | 可展示“竞价弱转强候选/候选不成立”，不语音。 |
-| `09:30` | `gapAlert` / `noGap` | 对比 `09:25 -> 09:30`，判断是否有跳空高开缺口。 | `gapAlert` 进入语音链路；`noGap` 只记录。 |
-| `09:35` | `trendConfirm` / `trendWeak` | 判断 `09:30 -> 09:35` 是否高开高走、承接强、快速上攻。 | `trendConfirm` 提示“有快速上板前兆”；`trendWeak` 只更新状态。 |
+| `09:24:50-09:25:10` | 内部临门基线 | 覆盖行情桥广播转发延迟，记录临近集合竞价结束前的价格、涨幅和成交额，用于尾段抢筹确认。 | 内部基线，不作为独立 checkpoint，不展示为异动，不语音。 |
+| `09:25` | `auctionConditionPassed` / `auctionConditionFailed` | 同时对比 `09:20 -> 临门基线` 总量价和 `09:24:50 -> 临门基线` 尾段量价，确认是否满足弱转强候选基础条件。 | 可展示“竞价弱转强候选/候选不成立”，不语音。 |
+| `09:30` | `gapAlert` / `noGap` | 对比临门竞价和开盘第一窗口，判断是否相对竞价明显改善、未继续杀破竞价价且成交额承接。`gapAlert` 仅作为兼容阶段名，不再表示必须跳空高开。 | `gapAlert` 进入语音链路；`noGap` 只记录。 |
+| `09:35` | `trendConfirm` / `trendWeak` | 判断 `09:30 -> 09:35` 是否承接延续、站上或守住开盘承接区并继续优于临门竞价涨幅。 | `trendConfirm` 提示“开盘反攻确认”；`trendWeak` 只更新状态。 |
 | `10:00` | `optionalFinalStatus` | 汇总当前价格和状态。 | 只做状态更新/复盘备注，不播报，不阻断。 |
 
 ## 正式信号合同

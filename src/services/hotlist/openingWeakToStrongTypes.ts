@@ -17,11 +17,13 @@ export interface OpeningWeakToStrongRules {
   auctionEnd: string
   detectStart: string
   detectEnd: string
-  auctionGapJumpMinPctPoint: number
+  openingSupportImproveMinPctPoint?: number
+  openingSupportAmountMinRatio?: number
   auctionPriceLiftMinPctPoint: number
   auctionAmountLiftMinRatio: number
   auctionLatePriceLiftMinPctPoint: number
   auctionLateAmountLiftMinRatio: number
+  checkpointWindowThresholdSeconds?: number
 }
 
 export interface OpeningWeakToStrongQuote {
