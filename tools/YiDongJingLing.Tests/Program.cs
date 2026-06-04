@@ -174,6 +174,53 @@ Run("Opening weak-to-strong detector matches five checkpoint PASS/FAIL acceptanc
         "opening checkpoint acceptance");
 });
 
+Run("Opening weak-to-strong detector rejects candidate when 09:24 late baseline does not lift enough", () =>
+{
+    var rules = LoadOpeningRules();
+    var store = new OpeningAuctionStateStore(rules);
+    var detector = new OpeningWeakToStrongDetector(rules);
+    OpeningWeakToStrongResult? result = null;
+    var quotes = new[]
+    {
+        OpeningCheckpointQuote("2026-06-03", "09:20:00", 9.7m, 10m, 1_000_000m, 100_000m),
+        OpeningCheckpointQuote("2026-06-03", "09:24:00", 9.9m, 10m, 1_900_000m, 170_000m),
+        OpeningCheckpointQuote("2026-06-03", "09:25:00", 9.92m, 10m, 2_000_000m, 180_000m),
+    };
+
+    foreach (var quote in quotes)
+    {
+        store.Capture(quote);
+        result = detector.Evaluate(quote, store.GetBaseline(quote.Code, quote.At));
+    }
+
+    AssertEqual("auctionConditionFailed", result?.Stage ?? "", "late baseline failed stage");
+    AssertTrue(result?.Reason.Contains("09:24") == true, "late baseline failed reason");
+    AssertTrue(result?.VoiceEligible == false, "late baseline failed voice");
+});
+
+Run("Opening weak-to-strong detector accepts candidate when 09:24 late baseline confirms", () =>
+{
+    var rules = LoadOpeningRules();
+    var store = new OpeningAuctionStateStore(rules);
+    var detector = new OpeningWeakToStrongDetector(rules);
+    OpeningWeakToStrongResult? result = null;
+    var quotes = new[]
+    {
+        OpeningCheckpointQuote("2026-06-03", "09:20:00", 9.7m, 10m, 1_000_000m, 100_000m),
+        OpeningCheckpointQuote("2026-06-03", "09:24:00", 9.86m, 10m, 1_500_000m, 150_000m),
+        OpeningCheckpointQuote("2026-06-03", "09:25:00", 9.92m, 10m, 2_000_000m, 180_000m),
+    };
+
+    foreach (var quote in quotes)
+    {
+        store.Capture(quote);
+        result = detector.Evaluate(quote, store.GetBaseline(quote.Code, quote.At));
+    }
+
+    AssertEqual("auctionConditionPassed", result?.Stage ?? "", "late baseline passed stage");
+    AssertTrue(result?.VoiceEligible == false, "late baseline passed voice");
+});
+
 Run("Event engine emits opening checkpoint events with stage names", () =>
 {
     var engine = new L1EventEngine();
@@ -181,10 +228,11 @@ Run("Event engine emits opening checkpoint events with stage names", () =>
 
     engine.Prime(quotes[0]);
     engine.Prime(quotes[1]);
-    var candidate = engine.Evaluate(quotes[1], quotes[0], quotes[..2]).Single(item => item.Type == L1EventType.OpeningWeakToStrong);
-    var gap = engine.Evaluate(quotes[2], quotes[1], quotes[..3]).Single(item => item.Type == L1EventType.OpeningWeakToStrong);
-    var trend = engine.Evaluate(quotes[3], quotes[2], quotes[..4]).Single(item => item.Type == L1EventType.OpeningWeakToStrong);
-    var final = engine.Evaluate(quotes[4], quotes[3], quotes).Single(item => item.Type == L1EventType.OpeningWeakToStrong);
+    engine.Prime(quotes[2]);
+    var candidate = engine.Evaluate(quotes[2], quotes[1], quotes[..3]).Single(item => item.Type == L1EventType.OpeningWeakToStrong);
+    var gap = engine.Evaluate(quotes[3], quotes[2], quotes[..4]).Single(item => item.Type == L1EventType.OpeningWeakToStrong);
+    var trend = engine.Evaluate(quotes[4], quotes[3], quotes[..5]).Single(item => item.Type == L1EventType.OpeningWeakToStrong);
+    var final = engine.Evaluate(quotes[5], quotes[4], quotes).Single(item => item.Type == L1EventType.OpeningWeakToStrong);
 
     AssertSequence(
         ["auctionConditionPassed", "gapAlert", "trendConfirm", "optionalFinalStatus"],
@@ -208,11 +256,13 @@ Run("Event engine keeps opening checkpoints scoped to the trading day", () =>
 
     engine.Prime(day1[0]);
     engine.Prime(day1[1]);
-    var day1Candidate = engine.Evaluate(day1[1], day1[0], day1[..2]);
-    var crossDayWithoutBaseline = engine.Evaluate(day2[2], day1[1], [day2[2]]);
+    engine.Prime(day1[2]);
+    var day1Candidate = engine.Evaluate(day1[2], day1[1], day1[..3]);
+    var crossDayWithoutBaseline = engine.Evaluate(day2[3], day1[2], [day2[3]]);
     engine.Prime(day2[0]);
     engine.Prime(day2[1]);
-    var day2Candidate = engine.Evaluate(day2[1], day2[0], day2[..2]);
+    engine.Prime(day2[2]);
+    var day2Candidate = engine.Evaluate(day2[2], day2[1], day2[..3]);
 
     AssertEqual(1, day1Candidate.Count(item => item.Type == L1EventType.OpeningWeakToStrong), "day 1 candidate");
     AssertEqual(0, crossDayWithoutBaseline.Count(item => item.Type == L1EventType.OpeningWeakToStrong), "no cross-day gap without day baseline");
@@ -954,6 +1004,7 @@ static OpeningWeakToStrongQuote[] OpeningCheckpointQuotes(string tradingDate = "
     return
     [
         OpeningCheckpointQuote(tradingDate, "09:20:00", 9.8m, 10m, 1_000_000m, 100_000m),
+        OpeningCheckpointQuote(tradingDate, "09:24:00", 9.9m, 10m, 1_500_000m, 150_000m),
         OpeningCheckpointQuote(tradingDate, "09:25:00", 9.95m, 10m, 2_000_000m, 180_000m),
         OpeningCheckpointQuote(tradingDate, "09:30:00", 10.35m, 10m, 8_000_000m, 600_000m) with { Open = 10.35m },
         OpeningCheckpointQuote(tradingDate, "09:35:00", 10.65m, 10m, 16_000_000m, 1_200_000m) with { Open = 10.35m },
@@ -995,6 +1046,7 @@ static QuoteSnapshot[] OpeningCheckpointSnapshots(string tradingDate = "2026-06-
     return
     [
         OpeningSnapshot(tradingDate, "09:20:00", 9.8m, -2m, 10m, 1_000_000m, 100_000m),
+        OpeningSnapshot(tradingDate, "09:24:00", 9.9m, -1m, 10m, 1_500_000m, 150_000m),
         OpeningSnapshot(tradingDate, "09:25:00", 9.95m, -0.5m, 10m, 2_000_000m, 180_000m),
         OpeningSnapshot(tradingDate, "09:30:00", 10.35m, 3.5m, 10m, 8_000_000m, 600_000m) with { Open = 10.35m },
         OpeningSnapshot(tradingDate, "09:35:00", 10.65m, 6.5m, 10m, 16_000_000m, 1_200_000m) with { Open = 10.35m },

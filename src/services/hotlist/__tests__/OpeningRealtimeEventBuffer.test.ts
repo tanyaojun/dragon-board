@@ -48,6 +48,15 @@ describe('OpeningRealtimeEventBuffer', () => {
       },
       {
         ...base,
+        at: '2026-06-03T09:24:00+08:00',
+        capturedAt: '2026-06-03T09:24:00+08:00',
+        bridgeTs: '2026-06-03T09:24:00+08:00',
+        lastPrice: 9.9,
+        amount: 1_500_000,
+        volume: 150_000,
+      },
+      {
+        ...base,
         at: '2026-06-03T09:25:00+08:00',
         capturedAt: '2026-06-03T09:25:00+08:00',
         bridgeTs: '2026-06-03T09:25:00+08:00',
@@ -120,6 +129,14 @@ describe('OpeningRealtimeEventBuffer', () => {
       volume: 100_000,
     } as OpeningWeakToStrongQuote
     realtime.acceptQuote(quote)
+    realtime.acceptQuote({
+      ...quote,
+      at: '2026-06-03T09:24:00+08:00',
+      capturedAt: '2026-06-03T09:24:00+08:00',
+      bridgeTs: '2026-06-03T09:24:00+08:00',
+      lastPrice: 9.9,
+      amount: 1_500_000,
+    })
 
     const firstDay = realtime.acceptQuote({
       ...quote,
@@ -134,6 +151,14 @@ describe('OpeningRealtimeEventBuffer', () => {
       at: '2026-06-04T09:20:00+08:00',
       capturedAt: '2026-06-04T09:20:00+08:00',
       bridgeTs: '2026-06-04T09:20:00+08:00',
+    })
+    realtime.acceptQuote({
+      ...quote,
+      at: '2026-06-04T09:24:00+08:00',
+      capturedAt: '2026-06-04T09:24:00+08:00',
+      bridgeTs: '2026-06-04T09:24:00+08:00',
+      lastPrice: 9.9,
+      amount: 1_500_000,
     })
     const secondDay = realtime.acceptQuote({
       ...quote,

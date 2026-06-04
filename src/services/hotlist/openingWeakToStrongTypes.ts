@@ -12,6 +12,7 @@ export interface OpeningWeakToStrongRules {
   auctionTrendStart: string
   initialBaselineStart: string
   initialBaselineEnd: string
+  auctionLateLiftStart: string
   auctionStart: string
   auctionEnd: string
   detectStart: string
@@ -19,6 +20,8 @@ export interface OpeningWeakToStrongRules {
   auctionGapJumpMinPctPoint: number
   auctionPriceLiftMinPctPoint: number
   auctionAmountLiftMinRatio: number
+  auctionLatePriceLiftMinPctPoint: number
+  auctionLateAmountLiftMinRatio: number
 }
 
 export interface OpeningWeakToStrongQuote {
@@ -68,14 +71,21 @@ export interface OpeningAuctionPriceVolumeProfile {
   initialPrice?: number
   initialPct?: number
   initialAmount?: number
+  lateBaselineAt?: string
+  lateBaselinePrice?: number
+  lateBaselinePct?: number
+  lateBaselineAmount?: number
   finalAt?: string
   finalPrice?: number
   finalAmount?: number
   startPct?: number
   finalPct?: number
   totalLiftPctPoint?: number
+  latePriceLiftPctPoint?: number
   amountDelta?: number
+  lateAmountDelta?: number
   amountLiftRatio?: number
+  lateAmountLiftRatio?: number
   priceVolumeConfirmed: boolean
 }
 

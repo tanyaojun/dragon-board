@@ -30,7 +30,8 @@
 | 时间 | 事件 | 判断 | 产品动作 |
 |------|------|------|----------|
 | `09:20` | `baselineCaptured` | 记录价格、涨幅、成交额/量，作为不可撤单阶段起点。 | 内部基线，不展示为异动，不语音。 |
-| `09:25` | `auctionConditionPassed` / `auctionConditionFailed` | 对比 `09:20 -> 09:25`，确认量价关系是否满足弱转强候选基础条件。 | 可展示“竞价弱转强候选/候选不成立”，不语音。 |
+| `09:24` | 内部临门基线 | 记录临近集合竞价结束前的价格、涨幅和成交额，用于 `09:25` 量价二次确认。 | 内部基线，不作为独立 checkpoint，不展示为异动，不语音。 |
+| `09:25` | `auctionConditionPassed` / `auctionConditionFailed` | 同时对比 `09:20 -> 09:25` 总量价和 `09:24 -> 09:25` 临门量价，确认是否满足弱转强候选基础条件。 | 可展示“竞价弱转强候选/候选不成立”，不语音。 |
 | `09:30` | `gapAlert` / `noGap` | 对比 `09:25 -> 09:30`，判断是否有跳空高开缺口。 | `gapAlert` 进入语音链路；`noGap` 只记录。 |
 | `09:35` | `trendConfirm` / `trendWeak` | 判断 `09:30 -> 09:35` 是否高开高走、承接强、快速上攻。 | `trendConfirm` 提示“有快速上板前兆”；`trendWeak` 只更新状态。 |
 | `10:00` | `optionalFinalStatus` | 汇总当前价格和状态。 | 只做状态更新/复盘备注，不播报，不阻断。 |
@@ -54,9 +55,9 @@
 
 `variant`、`score`、`confidence`、`factors`、`riskFlags`、`riskPenalty`、`previousWeakScore`、`intradayStatus` 属于旧评分/状态机合同。当前 TS/C# 主链、fixture、proxy OpenAPI 和语音链路不得输出或依赖这些字段；只有历史日志或历史 Git 记录里可能看到。
 
-## 明确废弃
+## 明确保留与废弃
 
-- 不再使用 `09:24` 临门基线作为必要需求点。
+- `09:24` 临门基线恢复为内部量价辅助基线，只参与 `09:25` 候选成立/失败判断；它不是独立 checkpoint，不参与语音仲裁，也不恢复旧状态机。
 - 不再把 `score/confidence/factors/riskPenalty` 作为提醒主链。
 - 不再把 `previousWeakScore` 或用户自选池语义当作量化前置条件。
 - 不再新增或维护 `auction_gap_delayed_board`、收盘/`15:00` 延迟确认这类越界分支。

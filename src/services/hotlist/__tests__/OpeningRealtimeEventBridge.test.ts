@@ -39,6 +39,15 @@ function checkpointQuotes(overrides: Partial<QuotePatchInput> = {}): QuotePatchI
     {
       ...baseQuote,
       ...overrides,
+      capturedAt: '2026-06-03T09:24:00+08:00',
+      bridgeTs: '2026-06-03T09:24:00+08:00',
+      lastPrice: 9.9,
+      amount: 1_500_000,
+      volume: 150_000,
+    },
+    {
+      ...baseQuote,
+      ...overrides,
       capturedAt: '2026-06-03T09:25:00+08:00',
       bridgeTs: '2026-06-03T09:25:00+08:00',
       lastPrice: 9.95,

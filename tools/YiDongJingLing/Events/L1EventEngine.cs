@@ -9,13 +9,16 @@ public sealed class L1EventEngine
         "09:20:00",
         "09:20:00",
         "09:20:30",
-        "09:25:00",
-        "09:25:00",
+        "09:24:00",
+        "09:24:50",
+        "09:25:10",
         "09:30:00",
         "09:35:00",
         3m,
         0.8m,
-        0.35m);
+        0.35m,
+        0.3m,
+        0.2m);
     private readonly L1EventRules _rules;
     private readonly Dictionary<string, StockState> _states = new(StringComparer.Ordinal);
     private readonly OpeningAuctionStateStore _openingStore = new(OpeningRules);

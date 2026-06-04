@@ -70,6 +70,19 @@ const baseQuote = {
   receivedCount: 1,
 } satisfies Partial<OpeningWeakToStrongQuote>
 
+function lateBaselineQuote(overrides: Partial<OpeningWeakToStrongQuote> = {}): OpeningWeakToStrongQuote {
+  return {
+    ...baseQuote,
+    at: '2026-06-03T09:24:00+08:00',
+    capturedAt: '2026-06-03T09:24:00+08:00',
+    bridgeTs: '2026-06-03T09:24:00+08:00',
+    lastPrice: 9.9,
+    amount: 1_500_000,
+    volume: 150_000,
+    ...overrides,
+  } as OpeningWeakToStrongQuote
+}
+
 describe('OpeningWeakToStrongDetector', () => {
   it('emits the required live checkpoints and only voices 09:30 / 09:35 alerts', () => {
     const events = runQuotes([
@@ -82,6 +95,7 @@ describe('OpeningWeakToStrongDetector', () => {
         amount: 1_000_000,
         volume: 100_000,
       },
+      lateBaselineQuote(),
       {
         ...baseQuote,
         at: '2026-06-03T09:25:00+08:00',
@@ -149,6 +163,7 @@ describe('OpeningWeakToStrongDetector', () => {
         amount: 1_000_000,
         volume: 100_000,
       },
+      lateBaselineQuote(),
       {
         ...baseQuote,
         at: '2026-06-03T09:25:00+08:00',
@@ -188,7 +203,7 @@ describe('OpeningWeakToStrongDetector', () => {
     expect(events[2].voiceEligible).toBe(true)
   })
 
-  it('uses only the 09:20 and 09:25 auction baselines without requiring a 09:24 quote', () => {
+  it('rejects a 09:25 candidate when the 09:24 late baseline does not lift enough', () => {
     const events = runQuotes([
       {
         ...baseQuote,
@@ -198,6 +213,52 @@ describe('OpeningWeakToStrongDetector', () => {
         lastPrice: 9.7,
         amount: 1_000_000,
         volume: 100_000,
+      },
+      {
+        ...baseQuote,
+        at: '2026-06-03T09:24:00+08:00',
+        capturedAt: '2026-06-03T09:24:00+08:00',
+        bridgeTs: '2026-06-03T09:24:00+08:00',
+        lastPrice: 9.9,
+        amount: 1_900_000,
+        volume: 170_000,
+      },
+      {
+        ...baseQuote,
+        at: '2026-06-03T09:25:00+08:00',
+        capturedAt: '2026-06-03T09:25:00+08:00',
+        bridgeTs: '2026-06-03T09:25:00+08:00',
+        lastPrice: 9.92,
+        amount: 2_000_000,
+        volume: 180_000,
+      },
+    ] as OpeningWeakToStrongQuote[])
+
+    expect(events).toHaveLength(1)
+    expect(events[0].stage).toBe('auctionConditionFailed')
+    expect(events[0].reason).toContain('09:24')
+    expect(events[0].voiceEligible).toBe(false)
+  })
+
+  it('passes a 09:25 candidate when both 09:20 total and 09:24 late lifts confirm', () => {
+    const events = runQuotes([
+      {
+        ...baseQuote,
+        at: '2026-06-03T09:20:00+08:00',
+        capturedAt: '2026-06-03T09:20:00+08:00',
+        bridgeTs: '2026-06-03T09:20:00+08:00',
+        lastPrice: 9.7,
+        amount: 1_000_000,
+        volume: 100_000,
+      },
+      {
+        ...baseQuote,
+        at: '2026-06-03T09:24:00+08:00',
+        capturedAt: '2026-06-03T09:24:00+08:00',
+        bridgeTs: '2026-06-03T09:24:00+08:00',
+        lastPrice: 9.86,
+        amount: 1_500_000,
+        volume: 150_000,
       },
       {
         ...baseQuote,
@@ -226,6 +287,7 @@ describe('OpeningWeakToStrongDetector', () => {
         amount: 1_000_000,
         volume: 100_000,
       },
+      lateBaselineQuote(),
       {
         ...baseQuote,
         at: '2026-06-03T09:25:00+08:00',
@@ -305,6 +367,7 @@ describe('OpeningWeakToStrongDetector', () => {
         amount: 1_000_000,
         volume: 100_000,
       },
+      lateBaselineQuote(),
       {
         ...baseQuote,
         at: '2026-06-03T09:25:00+08:00',
@@ -342,7 +405,7 @@ describe('OpeningWeakToStrongDetector', () => {
       finalStatus = detector.evaluate(quote, store.getBaseline(quote.code, quote.at))
     }
     const afterTen = detector.evaluate({
-      ...quotes[3],
+      ...quotes[4],
       at: '2026-06-03T14:56:00+08:00',
       capturedAt: '2026-06-03T14:56:00+08:00',
       bridgeTs: '2026-06-03T14:56:00+08:00',
@@ -367,6 +430,7 @@ describe('OpeningWeakToStrongDetector', () => {
         amount: 1_000_000,
         volume: 100_000,
       },
+      lateBaselineQuote(),
       {
         ...baseQuote,
         at: '2026-06-03T09:25:00+08:00',
@@ -395,7 +459,6 @@ describe('OpeningWeakToStrongDetector', () => {
     const fixture = loadFixture()
     const serialized = JSON.stringify(fixture)
 
-    expect(serialized).not.toContain('09:24')
     expect(fixture.cases.every(testCase => Array.isArray(testCase.expected?.checkpoints))).toBe(true)
     expect(fixture.cases.map(testCase => testCase.expected.checkpoints.map(item => item.at))).toEqual(
       fixture.cases.map(() => ['09:20', '09:25', '09:30', '09:35', '10:00']),

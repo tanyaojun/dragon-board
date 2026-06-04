@@ -23,6 +23,11 @@
 - `auctionConditionPassed/auctionConditionFailed` 只展示不播。
 - `noGap/trendWeak/optionalFinalStatus` 只更新状态，不作为硬阻断。
 
+补充口径：
+
+- `09:24` 临门基线恢复为内部量价辅助基线，只参与 `09:25` 候选成立/失败判断。
+- `09:24` 不作为独立 checkpoint、不展示为异动、不进入语音仲裁。
+
 已完成：
 
 - TS 检测器主链收敛为固定检查点输出，不再输出评分、置信度、因子、风险标签或前弱上下文。
@@ -31,10 +36,10 @@
 - TS、C#、proxy/语音链路统一只按 `stage in gapAlert/trendConfirm` 授权语音。
 - 跨交易日检查已补强：没有当日 `09:25` 确认基线时，`09:30` 不会自举产生 gap。
 - 文档入口已清理为当前口径，历史过程记录仅保留废弃说明。
+- TS/C# 已恢复 `09:24 -> 09:25` 临门量价确认，并保留五时间点黑盒验收。
 
 废弃：
 
-- `09:24` 临门基线。
 - `variant/score/confidence/factors/riskFlags/riskPenalty` 评分主链。
 - `previousWeakScore` 前弱前置。
 - `auction_gap_delayed_board` 和 `15:00` 延迟确认。

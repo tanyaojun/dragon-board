@@ -10,13 +10,16 @@
     "auctionTrendStart": "09:20:00",
     "initialBaselineStart": "09:20:00",
     "initialBaselineEnd": "09:20:30",
-    "auctionStart": "09:25:00",
-    "auctionEnd": "09:25:00",
+    "auctionLateLiftStart": "09:24:00",
+    "auctionStart": "09:24:50",
+    "auctionEnd": "09:25:10",
     "detectStart": "09:30:00",
     "detectEnd": "09:35:00",
     "auctionGapJumpMinPctPoint": 3,
     "auctionPriceLiftMinPctPoint": 0.8,
-    "auctionAmountLiftMinRatio": 0.35
+    "auctionAmountLiftMinRatio": 0.35,
+    "auctionLatePriceLiftMinPctPoint": 0.3,
+    "auctionLateAmountLiftMinRatio": 0.2
   },
   "cases": [
     {
@@ -34,6 +37,18 @@
           "volume": 100000,
           "capturedAt": "2026-06-03T09:20:00+08:00",
           "bridgeTs": "2026-06-03T09:20:00+08:00"
+        },
+        {
+          "code": "002552",
+          "name": "宝鼎科技",
+          "at": "2026-06-03T09:24:00+08:00",
+          "lastPrice": 9.9,
+          "preClose": 10,
+          "open": 0,
+          "amount": 1500000,
+          "volume": 150000,
+          "capturedAt": "2026-06-03T09:24:00+08:00",
+          "bridgeTs": "2026-06-03T09:24:00+08:00"
         },
         {
           "code": "002552",
@@ -134,6 +149,18 @@
           "volume": 100000,
           "capturedAt": "2026-06-03T09:20:00+08:00",
           "bridgeTs": "2026-06-03T09:20:00+08:00"
+        },
+        {
+          "code": "002560",
+          "name": "观察样例",
+          "at": "2026-06-03T09:24:00+08:00",
+          "lastPrice": 9.9,
+          "preClose": 10,
+          "open": 0,
+          "amount": 1500000,
+          "volume": 150000,
+          "capturedAt": "2026-06-03T09:24:00+08:00",
+          "bridgeTs": "2026-06-03T09:24:00+08:00"
         },
         {
           "code": "002560",

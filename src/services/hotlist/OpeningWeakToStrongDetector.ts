@@ -114,20 +114,29 @@ export class OpeningWeakToStrongDetector {
     if (!baseline?.auctionProfile?.initialAt) {
       return this.checkpointSignal(quote, baseline, 'auctionConditionFailed', false, '缺少09:20初始基线')
     }
+    if (!baseline.auctionProfile.lateBaselineAt) {
+      return this.checkpointSignal(quote, baseline, 'auctionConditionFailed', false, '缺少09:24临门基线')
+    }
 
     const profile = baseline.auctionProfile
     const priceLift = normalizeNumber(profile.totalLiftPctPoint)
     const amountLift = normalizeNumber(profile.amountLiftRatio)
+    const latePriceLift = normalizeNumber(profile.latePriceLiftPctPoint)
+    const lateAmountLift = normalizeNumber(profile.lateAmountLiftRatio)
     const passed =
       isValidPrice(baseline.auctionFinalPrice) &&
       priceLift >= this.rules.auctionPriceLiftMinPctPoint &&
-      amountLift >= this.rules.auctionAmountLiftMinRatio
+      amountLift >= this.rules.auctionAmountLiftMinRatio &&
+      latePriceLift >= this.rules.auctionLatePriceLiftMinPctPoint &&
+      lateAmountLift >= this.rules.auctionLateAmountLiftMinRatio
     return this.checkpointSignal(
       quote,
       baseline,
       passed ? 'auctionConditionPassed' : 'auctionConditionFailed',
       false,
-      passed ? '09:20到09:25量价关系通过，列入候选' : '09:20到09:25量价关系不足，候选不成立',
+      passed
+        ? '09:20总量价与09:24临门量价均通过，列入候选'
+        : '09:20总量价或09:24临门量价不足，候选不成立',
     )
   }
 
@@ -308,19 +317,31 @@ function buildAuctionProfile(
 
   const initial = trusted.find(item => isInWindow(item.at, rules.initialBaselineStart, rules.initialBaselineEnd))
   const final = trusted.find(item => isCheckpointTime(item.at, CONFIRM_BASELINE_TIME)) || trusted[trusted.length - 1]
+  const lateBaseline =
+    trusted.find(item => secondsOfDay(item.at) >= secondsOfDay(rules.auctionLateLiftStart)) || final
   const startPct = initial ? pct(initial.lastPrice, initial.preClose) : undefined
+  const lateBaselinePct = pct(lateBaseline.lastPrice, lateBaseline.preClose)
   const finalPct = pct(final.lastPrice, final.preClose)
   const initialAmount = initial ? normalizeNumber(initial.amount) : undefined
+  const lateBaselineAmount = normalizeNumber(lateBaseline.amount)
   const finalAmount = normalizeNumber(final.amount)
   const amountDelta = initialAmount === undefined ? undefined : finalAmount - initialAmount
+  const lateAmountDelta = finalAmount - lateBaselineAmount
   const amountLiftRatio = ratioFromBase(amountDelta, initialAmount)
+  const lateAmountLiftRatio = ratioFromBase(lateAmountDelta, lateBaselineAmount)
   const totalLiftPctPoint = startPct === undefined ? undefined : finalPct - startPct
+  const latePriceLiftPctPoint = finalPct - lateBaselinePct
+  const latePriceLifted = latePriceLiftPctPoint >= rules.auctionLatePriceLiftMinPctPoint
+  const lateAmountExpanded =
+    lateAmountLiftRatio !== undefined && lateAmountLiftRatio >= rules.auctionLateAmountLiftMinRatio
   const priceVolumeConfirmed =
     initial !== undefined &&
     totalLiftPctPoint !== undefined &&
     amountLiftRatio !== undefined &&
     totalLiftPctPoint >= rules.auctionPriceLiftMinPctPoint &&
-    amountLiftRatio >= rules.auctionAmountLiftMinRatio
+    amountLiftRatio >= rules.auctionAmountLiftMinRatio &&
+    latePriceLifted &&
+    lateAmountExpanded
 
   return {
     sampleCount: trusted.length,
@@ -328,13 +349,20 @@ function buildAuctionProfile(
     initialPrice: initial?.lastPrice,
     initialPct: startPct === undefined ? undefined : round2(startPct),
     initialAmount,
+    lateBaselineAt: lateBaseline.at,
+    lateBaselinePrice: lateBaseline.lastPrice,
+    lateBaselinePct: round2(lateBaselinePct),
+    lateBaselineAmount,
     finalAt: final.at,
     finalPrice: final.lastPrice,
     finalAmount,
     finalPct: round2(finalPct),
     totalLiftPctPoint: totalLiftPctPoint === undefined ? undefined : round2(totalLiftPctPoint),
+    latePriceLiftPctPoint: round2(latePriceLiftPctPoint),
     amountDelta,
+    lateAmountDelta,
     amountLiftRatio: amountLiftRatio === undefined ? undefined : round2(amountLiftRatio),
+    lateAmountLiftRatio: lateAmountLiftRatio === undefined ? undefined : round2(lateAmountLiftRatio),
     priceVolumeConfirmed,
   }
 }
@@ -416,6 +444,9 @@ function configHash(rules: OpeningWeakToStrongRules): string {
     'auctionAmountLiftMinRatio',
     'auctionEnd',
     'auctionGapJumpMinPctPoint',
+    'auctionLateAmountLiftMinRatio',
+    'auctionLateLiftStart',
+    'auctionLatePriceLiftMinPctPoint',
     'auctionPriceLiftMinPctPoint',
     'auctionStart',
     'auctionTrendStart',
