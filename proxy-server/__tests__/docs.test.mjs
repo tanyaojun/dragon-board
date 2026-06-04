@@ -48,30 +48,38 @@ test('openapi json documents the proxy server routes', async () => {
     )
     const openingSignalProperties =
       body.paths['/api/opening-signals'].post.requestBody.content['application/json'].schema.properties.signal.properties
-    assert.deepEqual(openingSignalProperties.liquidityTier.enum, ['unknown', 'thin', 'normal', 'active', 'hot'])
-    assert.equal(openingSignalProperties.liquidityTierMode.const, 'review_only')
-    assert.ok(openingSignalProperties.lateBaselinePrice)
-    assert.ok(openingSignalProperties.auctionAmountDelta)
-    assert.ok(openingSignalProperties.liquidityTierThresholds)
-    assert.deepEqual(openingSignalProperties.intradayStatus.enum, [
-      'preopen_candidate',
-      'pending',
-      'confirmed',
-      'failed',
-      'watch',
+    assert.deepEqual(
+      body.paths['/api/opening-signals'].post.requestBody.content['application/json'].schema.properties.signal.required,
+      ['stage', 'status', 'code', 'name', 'time', 'price', 'pct', 'amount', 'voiceEligible', 'reason'],
+    )
+    assert.equal(
+      body.paths['/api/opening-signals'].post.requestBody.content['application/json'].schema.properties.signal
+        .additionalProperties,
+      false,
+    )
+    assert.deepEqual(openingSignalProperties.stage.enum, [
+      'auctionConditionPassed',
+      'auctionConditionFailed',
+      'gapAlert',
+      'noGap',
+      'trendConfirm',
+      'trendWeak',
+      'optionalFinalStatus',
     ])
-    assert.deepEqual(openingSignalProperties.intradayOutcome.enum, [
-      'preopen_candidate',
-      'pending',
-      'confirmed_strong',
-      'failed_open_dump',
-      'watch_only',
+    assert.equal(openingSignalProperties.voiceEligible.type, 'boolean')
+    assert.ok(openingSignalProperties.reason)
+    assert.deepEqual(Object.keys(openingSignalProperties).sort(), [
+      'amount',
+      'code',
+      'name',
+      'pct',
+      'price',
+      'reason',
+      'stage',
+      'status',
+      'time',
+      'voiceEligible',
     ])
-    assert.ok(openingSignalProperties.intradayStatusAt)
-    assert.ok(openingSignalProperties.intradayPrice)
-    assert.ok(openingSignalProperties.intradayPct)
-    assert.ok(openingSignalProperties.intradayAmount)
-    assert.ok(openingSignalProperties.intradayNote)
   } finally {
     server.close()
   }

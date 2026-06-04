@@ -1,26 +1,12 @@
-export type OpeningWeakToStrongVariant =
-  | 'auction_gap_reversal'
-  | 'auction_gap_delayed_board'
-  | 'low_open_red_reversal'
-  | 'strong_open_board_attempt'
-  | 'auction_late_lift'
-
-export type OpeningWeakToStrongConfidence = 'watch' | 'strong' | 'critical'
 export type OpeningBaselineQuality = 'good' | 'degraded' | 'missing'
-export type OpeningLiquidityTier = 'unknown' | 'thin' | 'normal' | 'active' | 'hot'
-export type OpeningLiquidityTierMode = 'review_only'
-export type OpeningIntradayStatus =
-  | 'preopen_candidate'
-  | 'pending'
-  | 'confirmed'
-  | 'failed'
-  | 'watch'
-export type OpeningIntradayOutcome =
-  | 'preopen_candidate'
-  | 'pending'
-  | 'confirmed_strong'
-  | 'failed_open_dump'
-  | 'watch_only'
+export type OpeningWatchStage =
+  | 'auctionConditionPassed'
+  | 'auctionConditionFailed'
+  | 'gapAlert'
+  | 'noGap'
+  | 'trendConfirm'
+  | 'trendWeak'
+  | 'optionalFinalStatus'
 
 export interface OpeningWeakToStrongRules {
   auctionTrendStart: string
@@ -30,51 +16,9 @@ export interface OpeningWeakToStrongRules {
   auctionEnd: string
   detectStart: string
   detectEnd: string
-  auctionWeakMaxPct: number
   auctionGapJumpMinPctPoint: number
-  auctionGapFirstWindowMinPct: number
-  lowOpenRedJumpMinPctPoint: number
-  lowOpenRedFirstWindowMinPct: number
-  strongOpenFirstWindowMinPct: number
-  nearLimitDistancePct: number
-  minCurrentAmount: number
-  minAmountDelta: number
-  openingLiquidityMinAmount: number
-  auctionLateLiftStart: string
-  auctionLateLiftTotalMinPctPoint: number
-  auctionLateLiftLateMinPctPoint: number
   auctionPriceLiftMinPctPoint: number
   auctionAmountLiftMinRatio: number
-  auctionLatePriceLiftMinPctPoint: number
-  auctionLateAmountLiftMinRatio: number
-  auctionLateLiftFinalMinPct: number
-  /** @deprecated V5 起不再参与检测逻辑，仅保留兼容旧配置 */
-  auctionLateLiftAmountDeltaMin: number
-  /** @deprecated V5 起不再参与检测逻辑，仅保留兼容旧配置 */
-  auctionLateLiftLateAmountDeltaMin: number
-  auctionLateLiftFirstWindowMinPct: number
-  auctionLateLiftJumpMinPctPoint: number
-  auctionLateHighRetreatPctPoint: number
-  previousWeakScoreMin: number
-  minAuctionCoverageRatio: number
-  maxQuoteAgeMs: number
-  minCurrentVolume: number
-  openingSupportOpenRatio: number
-  auctionGapMaxScore: number
-  auctionGapScoreSlope: number
-  auctionGapOpenStrengthScore: number
-  auctionGapAmountStrongScore: number
-  auctionGapAmountWeakScore: number
-  auctionGapQualityGoodScore: number
-  auctionGapQualityDegradedScore: number
-  auctionLateLiftCoreScore: number
-  auctionLateLiftAmountRatioScore: number
-  auctionLateLiftOpenStrengthScore: number
-  strongOpenNearLimitScore: number
-  strongOpenOpenStrengthScore: number
-  lowOpenRedReversalScore: number
-  lowOpenTurnRedScore: number
-  previousWeakContextScore: number
 }
 
 export interface OpeningWeakToStrongQuote {
@@ -95,10 +39,6 @@ export interface OpeningWeakToStrongQuote {
   elapsedMs?: number
   slowBatches?: number
   truncatedBatches?: number
-  previousWeakScore?: number
-  previousWeakSignals?: string[]
-  previousWeakSource?: string
-  dryRun?: boolean
 }
 
 export interface OpeningWeakToStrongBaseline {
@@ -128,49 +68,34 @@ export interface OpeningAuctionPriceVolumeProfile {
   initialPrice?: number
   initialPct?: number
   initialAmount?: number
-  lateAt?: string
-  latePrice?: number
-  lateAmount?: number
   finalAt?: string
   finalPrice?: number
   finalAmount?: number
   startPct?: number
-  lateStartPct?: number
   finalPct?: number
-  highPct?: number
   totalLiftPctPoint?: number
-  lateLiftPctPoint?: number
   amountDelta?: number
-  lateAmountDelta?: number
   amountLiftRatio?: number
-  lateAmountLiftRatio?: number
   priceVolumeConfirmed: boolean
-  lateLiftConfirmed: boolean
-  riskFlags: string[]
 }
 
-export interface OpeningWeakToStrongFactor {
-  key: string
-  value: number | string | boolean
-  threshold?: number
-  score: number
+export interface OpeningWatchSignal {
+  stage: OpeningWatchStage
+  status: OpeningWatchStage
+  code: string
+  name: string
+  time: string
+  price: number
+  pct: number
+  amount: number
+  voiceEligible: boolean
+  reason: string
 }
 
-export interface OpeningWeakToStrongRiskFlag {
-  key: string
-  severity: 'low' | 'medium' | 'high'
-  penalty: number
-}
-
-export interface OpeningWeakToStrongSignal {
+export interface OpeningWeakToStrongSignal extends OpeningWatchSignal {
   triggered: boolean
   signalType: 'opening_weak_to_strong'
   displayName: '竞价弱转强'
-  code: string
-  name: string
-  variant?: OpeningWeakToStrongVariant
-  confidence?: OpeningWeakToStrongConfidence
-  score: number
   auctionFinalPrice?: number
   auctionPct?: number
   officialOpen?: number
@@ -178,33 +103,19 @@ export interface OpeningWeakToStrongSignal {
   firstWindowPrice?: number
   firstWindowPct?: number
   jumpPctPoint?: number
-  amount: number
   amountDelta?: number
   initialBaselineAt?: string
   initialBaselinePrice?: number
   initialBaselinePct?: number
   initialBaselineAmount?: number
-  lateBaselineAt?: string
-  lateBaselinePrice?: number
-  lateBaselinePct?: number
-  lateBaselineAmount?: number
   finalBaselineAt?: string
   finalBaselinePrice?: number
   finalBaselinePct?: number
   finalBaselineAmount?: number
   auctionPriceLiftPctPoint?: number
-  latePriceLiftPctPoint?: number
   auctionAmountDelta?: number
-  lateAmountDelta?: number
   auctionAmountLiftRatio?: number
-  lateAmountLiftRatio?: number
   priceVolumeConfirmed?: boolean
-  liquidityTier: OpeningLiquidityTier
-  liquidityTierMode: OpeningLiquidityTierMode
-  liquidityTierBasis: string
-  liquidityTierThresholds: string
-  liquidityTierVersion: string
-  limitDistancePct?: number
   triggerAt: string
   baselineQuality: OpeningBaselineQuality
   auctionCapturedAt?: string
@@ -219,20 +130,6 @@ export interface OpeningWeakToStrongSignal {
   elapsedMs?: number
   slowBatches?: number
   truncatedBatches?: number
-  previousWeakScore?: number
-  previousWeakSignals?: string[]
-  previousWeakSource?: string
-  auctionCoverageRatio?: number
-  intradayStatus?: OpeningIntradayStatus
-  intradayOutcome?: OpeningIntradayOutcome
-  intradayStatusAt?: string
-  intradayPrice?: number
-  intradayPct?: number
-  intradayAmount?: number
-  intradayNote?: string
-  dryRun?: boolean
-  factors: OpeningWeakToStrongFactor[]
-  riskFlags: OpeningWeakToStrongRiskFlag[]
   invalidReason?: string
   ruleVersion: string
   configHash: string
@@ -243,46 +140,12 @@ export interface OpeningWeakToStrongFixtureCase {
   description: string
   quotes: OpeningWeakToStrongQuote[]
   expected: {
-    triggered: boolean
-    variant?: OpeningWeakToStrongVariant
-    confidence?: OpeningWeakToStrongConfidence
-    scoreRange?: [number, number]
-    jumpPctPointRange?: [number, number]
-    riskFlags?: string[]
-    dryRun?: boolean
-    auctionCoverageRatio?: number
-    liquidityTier?: string
-    liquidityTierMode?: string
-    liquidityTierBasis?: string
-    liquidityTierThresholds?: string
-    liquidityTierVersion?: string
-    initialBaselineAt?: string
-    initialBaselinePrice?: number
-    initialBaselinePct?: number
-    initialBaselineAmount?: number
-    lateBaselineAt?: string
-    lateBaselinePrice?: number
-    lateBaselinePct?: number
-    lateBaselineAmount?: number
-    finalBaselineAt?: string
-    finalBaselinePrice?: number
-    finalBaselinePct?: number
-    finalBaselineAmount?: number
-    auctionPriceLiftPctPoint?: number
-    latePriceLiftPctPoint?: number
-    auctionAmountDelta?: number
-    lateAmountDelta?: number
-    auctionAmountLiftRatio?: number
-    lateAmountLiftRatio?: number
-    priceVolumeConfirmed?: boolean
-    intradayStatus?: OpeningIntradayStatus
-    intradayOutcome?: OpeningIntradayOutcome
-    intradayStatusAt?: string
-    intradayPrice?: number
-    intradayPct?: number
-    intradayAmount?: number
-    intradayNote?: string
-    invalidReason?: string
+    checkpoints: Array<{
+      at: '09:20' | '09:25' | '09:30' | '09:35' | '10:00'
+      result: 'PASS' | 'FAIL'
+      stage: OpeningWatchStage
+      voiceEligible: boolean
+    }>
   }
 }
 

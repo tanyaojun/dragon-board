@@ -1,369 +1,58 @@
-# 异动精灵 V1 调研发现
+# 异动精灵调研发现
 
-## 需求
+更新时间：2026-06-03
 
-- 做一个独立 Windows GUI 通达信外置工具，名称为“异动精灵”。
-- 不要求启动 Dragon Board 前端，也不依赖选股通 API。
-- 可以选择通达信 `T0002\blocknew` 目录下的 `.blk` 文件作为监控股票池。
-- 尽可能实现通达信 L1 行情能够支持的异动监控和语音播报。
-- 第一版以盘中可用、轻量、可验证为目标，不做与 L1 能力无关的大平台化。
+## 当前有效结论
 
-## 已确认事实
+异动精灵是实盘盯盘提醒工具，不是策略研究平台。“竞价弱转强”只按五个固定实盘时间点验收：
 
-| 项目 | 发现 |
-|------|------|
-| 通达信板块目录 | 本机存在 `D:\APP_SOFT\TDX\T0002\blocknew`。用户口述的 `T002` 应按真实目录修正为 `T0002`。 |
-| `.blk` 样本格式 | 多个 `.blk` 文件是文本格式，一行一个 7 位代码，例如 `0300834`、`0002082`、`1603072`。 |
-| 代码归一 | 7 位代码可先取末 6 位作为股票代码，再结合首位前缀和代码段过滤 A 股。需要过滤指数、板块或空文件。 |
-| 现有行情桥 | `python-bridge` 已提供 `mootdx + WebSocket`，默认 `ws://127.0.0.1:8765/ws/quotes`。 |
-| 行情真实边界 | 当前已跑通的是 `7709 / L1 + 标准五档 + 本地 WebSocket`，不能描述为官方客户端级 L2。 |
-| 语音能力 | `tools/VoiceWorker` 已支持 Windows SAPI/OneCore/火山语音，V1 GUI 应复用它，避免只暴露 Desktop SAPI 声音。 |
-| 现有异动面板 | `HotStockEventMonitorPanel.vue` 当前依赖选股通/同花顺等 API，适合参考文案和去重，不适合作为 V1 数据源。 |
+```text
+09:20 baselineCaptured
+09:25 auctionConditionPassed / auctionConditionFailed
+09:30 gapAlert / noGap
+09:35 trendConfirm / trendWeak
+10:00 optionalFinalStatus
+```
 
-## 截图信息
+语音只认：
 
-用户提供的参考 GUI 截图包含这些功能信号：
+```text
+09:30 gapAlert 可播
+09:35 trendConfirm 可播
+09:25 candidate 不播
+09:35 trendWeak / 10:00 optionalFinalStatus 不作为硬阻断
+```
 
-- Tab：`异动精灵`、`联动`、`设置`、`监控板块`、`金币`。
-- 监控板块页：展示名称、路径，可以添加、删除、保存 `.blk` 板块文件。
-- 设置页：按异动类型勾选启用，包含封涨停板、打开涨停、逼近涨停、即将打开板、封跌停板、逼近跌停、打开跌停、即将打开跌停、新股开板、新股开板回封、大幅拉升、快速跳水。
-- 设置页：支持 VoiceWorker 本地语音、透明度、全部保存、导出记录到 txt。
+## 业务边界
 
-## L1 稳定可做的异动类型
+- `09:20` 只记录初始基线，包括价格、涨幅、成交额/量。
+- `09:25` 只比较 `09:20 -> 09:25` 的量价关系，输出候选成立或失败；候选可展示但不语音。
+- `09:30` 只比较 `09:25 -> 09:30` 是否出现跳空高开缺口；只有 `gapAlert` 可播。
+- `09:35` 只判断 `09:30 -> 09:35` 是否高开高走、承接强、快速上攻；只有 `trendConfirm` 可播。
+- `10:00` 只做可选最终状态和备注，不影响 `09:30/09:35` 已发生播报。
+- 股票池只表示用户选择的监听范围，不自动转译为量化前弱因子。
 
-这些规则只依赖 L1 行情、涨跌幅、成交量/成交额、最高最低价和五档盘口，适合纳入 V1 正式规则。
+## 已废弃历史口径
 
-| 类型 | 触发依据 | 说明 |
-|------|----------|------|
-| 封涨停板 | 最新价接近涨停价，买一价为涨停价且买一量大于 0 | 需要根据股票类型计算 5%、10%、20%、30% 涨跌停。无法识别时用涨幅阈值兜底。 |
-| 打开涨停板 | 之前处于封涨停状态，本轮不再满足封板条件 | L1 可稳定识别状态变化。 |
-| 逼近涨停 | 涨幅接近涨停阈值但尚未封板 | 例如 10% 票达到 8.5% 或 9%。阈值可配置。 |
-| 涨停封单变化 | 封板时买一封单额明显增加或减少 | L1 五档只能看聚合挂单，属于盘口弱确认，但仍可提示。 |
-| 封跌停板 | 最新价接近跌停价，卖一价为跌停价且卖一量大于 0 | 与涨停规则对称。 |
-| 打开跌停板 | 之前处于封跌停状态，本轮不再满足封跌停条件 | L1 可做。 |
-| 逼近跌停 | 跌幅接近跌停阈值但尚未封死 | 适合风险提示。 |
-| 大幅拉升 | 涨幅跨过配置档位，例如 3%、5%、7% | 需要跨档去重，避免同一档反复播报。 |
-| 快速拉升 | 30 秒或 60 秒涨速超过阈值 | 使用本地缓存价格序列计算，不依赖选股通涨速字段。 |
-| 快速跳水 | 30 秒或 60 秒跌速超过阈值 | 与快速拉升对称。 |
-| 翻红 | 涨跌幅从小于等于 0 变为大于 0 | 简单但盘中有用。 |
-| 翻绿 | 涨跌幅从大于等于 0 变为小于 0 | 风险提示。 |
-| 创日内新高 | 本地缓存最高价被最新价刷新 | 只能表示工具启动后的日内新高，除非桥返回当日 high。 |
-| 创日内新低 | 本地缓存最低价被最新价刷新 | 同上。 |
-| 成交额跨档 | 成交额跨过 1 亿、3 亿、5 亿、10 亿等档位 | L1 稳定可做，阈值可配置。 |
-| 成交放量加速 | 单位时间成交量或成交额增量显著放大 | 需要本地滑窗，默认作为中等优先级提示。 |
-| 盘口买压增强 | 五档买量相对卖量明显放大 | 聚合盘口信号，不等于真实主动买盘。 |
-| 盘口卖压增强 | 五档卖量相对买量明显放大 | 聚合盘口信号，不等于真实主动卖盘。 |
-| 买卖价差异常 | 卖一和买一价差扩大 | 适合流动性风险提示，低价股阈值需特殊处理。 |
+下列内容曾出现在早期调研、评审或实现记录中，现在全部废弃，不得作为后续实现依据：
 
-## L1 可做但需写清口径的类型
+- `09:24` 临门基线或 `09:24:50-09:25:10` 作为弱转强必要检查点。
+- `variant/score/confidence/factors/riskFlags/riskPenalty` 模式族评分主链。
+- `previousWeakScore/previousWeakSource/previousWeakSignals` 前弱上下文主链。
+- `auction_gap_delayed_board`、盘后或 `15:00` 延迟确认。
+- `09:35-10:00` 状态机主链、`pending/watch/confirmed/failed/watch_only` 语音优先级。
+- `dryRun`、演练模式、质量门禁、流动性分层 `review_only` 作为播报前置条件。
+- proxy `voiceOwner` 作为桌面端语音授权门槛；桌面端以本地语音策略为准，proxy 只做同步记录。
 
-| 类型 | 原因 |
-|------|------|
-| 即将打开涨停 | 按当前产品决策，直接把 L1 买一价/量作为涨停封单数据使用：买一价为涨停价时，买一量视为封单量；封单金额在 5-10 秒内明显下降或低于阈值时预警。文档需标明这不是真 L2 队列或逐笔口径。 |
-| 即将打开跌停 | 对称使用 L1 卖一价/量：卖一价为跌停价时，卖一量视为封单量；封单金额快速下降或低于阈值时预警。 |
-| 新股开板 | 需要上市日期、连续一字板历史或外部新股名单。L1 单点行情无法可靠判断。V1 可预留但默认关闭。 |
-| 新股开板回封 | 同上，建议二阶段接入基础资料后再正式启用。 |
-| 大单买入/大单卖出 | 没有真实逐笔和订单队列时不能稳定判断。若 `ticks_batch` 可用，也只能作为普通分笔近似，不等同 L2。 |
-| 量比异动 | L1 提供当前成交量，但真实量比需要历史日成交或分时基准。V1 可做“成交增量加速”，不要把它命名为可信量比。 |
+## L1 能力边界
 
-## L1 不应承诺的能力
+- 当前已跑通的是 `7709 / L1 + 标准五档 + 本地 WebSocket`。
+- 即将开板、盘口买卖压等规则只能按 L1 五档聚合盘口估算，不代表真 L2 十档、逐笔委托或完整队列。
+- 真 L2、逐笔、主力资金、主动买卖盘等能力不在异动精灵当前承诺范围内。
 
-- 真 L2 十档。
-- 逐笔委托、逐笔成交的完整还原。
-- 主力资金、超大单净额、主动买卖盘的正式口径。
-- 官方选股通“火箭发射”等事件原文。
-- 板块异动热度排序，除非后续单独接入板块成分和全市场行情。
+## 有效文档入口
 
-## 技术决策
-
-| 决策 | 理由 |
-|------|------|
-| V1 使用 `.NET 8 WinForms` 建 GUI | 仓库已有 `DragonBoardLauncher` WinForms 经验，开发和打包成本低，适合轻量桌面工具。 |
-| V1 不启动 Dragon Board 前端和 proxy-server | 满足用户想摆脱主看板和选股通 API 的目标。 |
-| V1 复用或托管启动 `python-bridge` 获取 L1 行情 | 已跑通，风险低。纯 .NET 重写通达信协议会显著增加第一版风险。 |
-| 复用 `VoiceWorker` | 能统一 SAPI、OneCore 和火山语音能力，避免 GUI 只能看到 `System.Speech` 的 Desktop 声音。 |
-| 异动规则独立成纯逻辑模块 | 便于用单元测试验证封板、开板、急拉、跳水和去重。 |
-| 事件去重和冷却是 V1 必做 | 盘中语音提醒如果不去重会不可用。 |
-| “全市监控”默认关闭 | 全市场轮询会增加行情桥压力，V1 可提供分片扫描能力，但默认以 `.blk` 监控池为主。 |
-
-## V3 开盘竞价弱转强补充
-
-用户明确放弃 QMT L2 和 TDX 真十档需求，当前目标收敛为：使用 `mootdx` L1 实时采样，在 `09:25` 集合竞价结束后保存最后可见撮合价，并在 `09:30-09:35` 捕捉价格大幅上移的“竞价弱转强”股票。
-
-关键发现：
-
-| 项目 | 发现 |
-|------|------|
-| 目标形态 | 不是固定高开 2%，而是 `09:25` 竞价价偏弱到 `09:30` 连续竞价价格显著上移。 |
-| 样例 | `002552 宝鼎科技`：`09:25` 价 35.68、涨幅 -1.44%；通达信第一根分时价 37.48、涨幅 3.54%；跳空约 4.98 个昨收百分点。 |
-| 数据口径 | `quotes().open` 是官方日线开盘价；`mootdx.minute()[0].price` 或 `09:30` 后首次 `quotes().price` 更贴近通达信分时第一条价格。两个口径都应保存。 |
-| 历史限制 | 盘后分钟线通常不能补齐 `09:25` 竞价最后价，必须当天实盘在 `09:24:50-09:25:10` 采样。 |
-| 可行链路 | 现有 `python-bridge` 已能通过 WebSocket 把 L1 行情推给 `YiDongJingLing.exe`，适合做 MVP。 |
-| 性能边界 | 默认不做全市场高频扫描，应先用 `.blk` 强势池或八平台热榜池。 |
-
-2026-05-22 追加确认：
-
-| 项目 | 发现 |
-|------|------|
-| 三端范围 | V3 第一版必须同时覆盖网页板异动雷达、桌面版 `YiDongJingLing.exe`、Dragon Board 主行情表信号，主表展示不是额外项。 |
-| 网页板实现 | TypeScript 侧应基于 `webSocketService` 的 `FULL_STATE` / `QUOTE_PATCH` 做本地检测，进入现有 `HotStockEventMonitorService`、面板和本地语音链路。 |
-| 桌面版实现 | C# 侧独立实现 `OpeningAuctionStateStore` 和 `OpeningWeakToStrongDetector`，接入现有 `EventRecord -> EventDeduper -> EventVoicePolicy -> AddEventRow` 链路。 |
-| 主表展示 | `DataTable.vue` 只消费今日信号并展示徽标/短时高亮，不承载弱转强检测逻辑。 |
-| 跨端去重 | 推荐由 `proxy-server` 提供本地 opening signal 缓存 API，按 `tradingDate + code + signalType` 去重，避免网页板和桌面版重复刷屏。 |
-| 共享合同 | 信号类型固定为 `opening_weak_to_strong`，显示名固定为“竞价弱转强”，字段同时保存 `auctionFinalPrice`、`officialOpen`、`firstWindowPrice` 三种价格口径。 |
-| 文档来源 | Superpowers 设计规格已写入 `docs/superpowers/specs/2026-05-22-opening-weak-to-strong-design.md`。 |
-
-2026-05-22 数据源校正：
-
-| 项目 | 发现 |
-|------|------|
-| 网页板当前事件源 | `HotStockEventMonitorService` 默认组合 `XuangubaoAbnormalEventFeed` 和 `ThsLimitUpEventFeed`，任务注册说明为轮询选股通异动数据。 |
-| 轮询频率 | 代码默认是 `30_000ms`，后台飞书事件雷达默认也是 `30_000ms`；语音服务有 `3_000ms` 批量 flush，但不是行情轮询。用户提到的 3 秒不能当作当前异动雷达默认行情采样频率。 |
-| 选股通事件字段 | `/api/xuangubao/events` 上游返回事件历史，主要字段是 `event_type`、`event_timestamp`、`price`、`pcp`、`mtm`、相关板块。没有 `09:25` 竞价最终价、官方开盘价、逐股成交额增量，也不能按自定义股票池采样。 |
-| 同花顺涨停池字段 | `ThsLimitUpEventFeed` 适合确认封板、炸板、冲板状态，但不提供 `09:25 → 09:30` 弱转强过程。 |
-| 技术结论 | 网页板 `opening_weak_to_strong` 主检测源必须改为 `python-bridge` WebSocket 实时 L1 行情；选股通/同花顺 HTTP feed 只保留为普通异动辅助源。 |
-| 实现边界 | 网页端检测器应直接读取 `webSocketService` 的 `QuotePatch`，不要从当前 DataLayer 实时投影反推 `open/preClose`；`proxy-server` 只做信号缓存和展示同步，不采样行情。 |
-| 文案影响 | `HotStockEventMonitorPanel.vue` 当前写着“选股通数据源”，V3 应改成“实时行情 + 异动事件源”或类似文案。 |
-
-2026-05-22 弱转强规则族复核：
-
-| 项目 | 发现 |
-|------|------|
-| 官方交易边界 | 深交所 2023 交易规则确认：`09:15-09:25` 为开盘集合竞价，`09:30-11:30`、`13:00-14:57` 为连续竞价；`09:20-09:25` 不接受竞价撤销申报；集合竞价按最大成交量等原则确定成交价，所有交易同一价格成交；开盘价通过集合竞价产生，不能产生时由连续竞价产生。 |
-| 行情字段边界 | 深交所开放式集合竞价历史提示说明，开盘参考价、匹配量、未匹配量曾通过买一/卖一字段揭示；若 `mootdx` 实盘字段不能稳定给出匹配量/未匹配量，第一版不得把“未匹配买盘/卖盘”写成硬条件，只能作为可选增强字段。 |
-| 游资语义 | 短线社区常把弱转强定义为“前一日烂板、炸板、放量分歧、长上影或尾盘弱势，次日却超预期高开/快速上攻/封板”，本质是预期差和分歧转一致。 |
-| 量能共识 | 多个短线文章都强调“高开必须带量”，无量高开容易是假强；常见观察包括竞价额、竞价量相对昨日竞价或昨日总量的占比、开盘 1-5 分钟成交额增量。 |
-| 盘口确认 | 社区经验普遍重视 `09:20` 后价格是否稳定上移、买盘是否承接、开盘 1-5 分钟是否站稳开盘价/均价线、是否快速脱离成本区或冲板。 |
-| 风险过滤 | 非核心跟风股、中位股、高位末期、板块不配合、竞价高开但量价背离、开盘后快速回补缺口，都容易是假弱转强。 |
-| 实现结论 | `002552` 样例应归为“竞价内弱、开盘跳空上移”的子形态，而不是全部竞价弱转强。V3 合同应增加 `variant`、`score`、`factors`、`riskFlags`，检测器按模式族评分，避免写死单一公式。 |
-
-2026-05-22 子 Agent 交叉评审：
-
-| 评审域 | 结论 |
-|--------|------|
-| 行情数据可行性 | 有条件通过。现有 L1 字段基础存在，但仅监听 `QUOTE_PATCH` 不能保证 `09:25` 每只票都被确认采样，因为 bridge 差分可能不广播未变化报价；必须增加开盘窗口强制快照/强制采样闭环。 |
-| 规则口径 | 有条件通过。模式族方向正确，但 `strong_open_board_attempt` 会漂成普通开盘冲板；必须要求弱转强前置条件，否则只能 `watch` 且不强播。 |
-| 三端架构 | 有条件通过。三端职责边界整体正确，但 proxy 事后去重无法阻止网页和桌面重复语音；必须让 `/api/opening-signals` 返回语音仲裁结果。 |
-| 测试验收 | 有条件通过。需要统一 TS/C# golden fixture、dry-run 演练模式、早盘分钟级联调表、离线矩阵和可观测字段。 |
-| 必改门禁 | 实施前必须补齐：强制采样、字段口径、基线质量、语音仲裁、canonical/reportsBySource 合并、统一 fixture、dry-run、异常数据和跨日测试。 |
-
-2026-05-22 实现复核：
-
-| 项目 | 发现 |
-|------|------|
-| bridge 强制采样 | `python-bridge` 已在 `09:24:50-09:25:10` 强制广播 quote patch，并把采样统计写入 quote payload；这解决“价格没变化就不发 patch”的主要盲点。 |
-| 当前价口径 | `normalize_quote_row` 不再把 `last_close` 当作 `lastPrice` fallback，新增 `lastPriceSource`，Web 检测桥会忽略非真实当前价。 |
-| Web 实时链路 | `OpeningRealtimeEventBridge` 已监听 `FULL_STATE/QUOTE_PATCH`，直接消费 `QuotePatch`，不从 HTTP 事件源或 DataLayer 反推 `open/preClose`。 |
-| 跨端语音仲裁 | `proxy-server` 的 `/api/opening-signals` 返回 `voiceOwner`；Web 只有 `voiceOwner=web` 才播，桌面只有 `voiceOwner=desktop` 才播。 |
-| 桌面上报 | `YiDongJingLing.exe` 的竞价弱转强上报路径不绑定“同步消息/飞书”开关，普通飞书同步仍走原有事件雷达通道。 |
-| 主表展示 | `DataTable.vue` 只读 `/api/opening-signals/today`，显示“竞强”徽标和行级高亮，不承担检测逻辑。 |
-| 待实盘验证 | 早盘真实覆盖率、端到端延迟、proxy 离线降级和 dry-run UI 仍需盘前/盘中演练。 |
-
-落地方案见 `docs/yidong-jingling/opening-weak-to-strong-plan.md`。
-
-2026-05-23 量价核心复核：
-
-| 项目 | 发现 |
-|------|------|
-| `auction_late_lift` 口径 | 不能只看 `09:25 -> 09:30` 两点跳空，必须保存 `09:20-09:25` 不可撤单阶段序列。V4 已在 TS/C# 两端保存 `auctionProfile`。 |
-| 临门抢筹 | `09:24-09:25` 的价格抬升和成交额增量单独计算，满足后可把 `auction_late_lift` 作为正式 variant，而不是普通增强因子。 |
-| 无量抬价 | 价格抬升但成交额未同步放大时标记 `price_lift_without_volume`，信号降为 `watch`；已触发的竞价弱转强仍作为监听提醒播报，风险项只用于辅助判断。 |
-| 放量不涨 | 成交额放大但价格压不动时标记 `volume_without_price_lift`，视为分歧或抛压，信号降为 `watch`。 |
-| 高位回落 | `09:20` 后出现高点但 `09:25` 未收回时标记 `auction_late_high_retreated`，不算 `auction_late_lift`。 |
-| 可撤单阶段 | `09:15-09:20` 虚高样本不参与强依据，避免把可撤单阶段的虚价作为量价确认。 |
-
-2026-05-23 V4 提交后 code review 复核：
-
-| 项目 | 发现 |
-|------|------|
-| 桌面端语音口径 | 已触发的竞价弱转强不是普通弱盘口风险项，`watch` 也映射为 `Important`，在“只播强信号”模式下按 proxy `voiceOwner` 仲裁后播报；dry-run 和失败/观察收口仍不播。 |
-| Web 时间戳口径 | `sourceTs` 生成的 UTC `Z` 时间曾可能按字符串 `01:xx` 比较而漏掉 09:20-09:25 窗口；已对 `Z` 时间按本地时间转换，保留 `+08:00` 业务时间按交易所时分秒解析。 |
-| 临门抢筹条件 | 原 `auction_late_lift` 用全窗口抬价或临门抬价二选一即可确认，可能把“09:20-09:24 已抬完、09:24-09:25 没继续放量”的样本误判成临门抢筹；已要求全窗口和 09:24 后量价同时满足。 |
-| 规则指纹 | 桌面端 `ConfigHash` 原来只包含旧规则字段，新增量价阈值变化不会反映；已改为与 Web 同字段集合、同 FNV-1a 文本口径，并增加 fixture hash 回归测试。 |
-| 浮点边界 | TS 在 `0.5%` 弱前提边界可能受浮点误差影响，C# decimal 不受影响；已增加 `atMost` 容差，保持 TS/C# 共享 fixture 一致。 |
-
-2026-05-23 文档落地偏差修复复核：
-
-| 项目 | 发现 |
-|------|------|
-| 信号复盘字段 | TS/C# `OpeningWeakToStrongSignal` 已补齐 `auctionCapturedAt`、`quoteCapturedAt`、`auctionSampleCount`、采样统计和延迟字段；bridge 的 per-code `capturedAt/bridgeTs` 不再被桌面端统一 `SourceTime` 覆盖。 |
-| 金额倒退风险 | 开盘检测若当前成交额小于竞价基线成交额，会标记 `amount_regressed` 并降为 `watch`，避免把异常或乱序金额当作强信号。 |
-| 主表职责边界 | `DataTable.vue` 不再直接轮询 `OpeningSignalClient`，改由 `OpeningSignalStore` 管理今日信号同步；主表仍只展示徽标，不承担检测或上报。 |
-| 桌面导出复盘 | `YiDongJingLing.exe` 导出记录已追加弱转强专有列，覆盖形态、强度、09:25/09:30 价格、跳空、成交额增量、基线质量、采样统计和风险标记。 |
-| 仍待实盘确认 | dry-run UI、早盘基线覆盖率状态栏/门禁、真实 `09:24:50-09:25:10` 覆盖率和端到端延迟仍未完成，需要在 V3 Phase 6 实盘联调中验收。 |
-
-2026-05-24 覆盖率门禁与边界 fixture 续修：
-
-| 项目 | 发现 |
-|------|------|
-| 覆盖率门禁 | TS/C# 检测器已按 `receivedCount/requestedCount` 计算 `auctionCoverageRatio`，低于 `0.95` 标记 `auction_coverage_low`。2026-06-02 修正后，低覆盖只作为风险扣分，不再自动 dryRun 禁播。 |
-| 报价新鲜度 | 当前报价采样时间超过 `maxQuoteAgeMs=10000` 标记 `quote_time_untrusted`；竞价基线 `capturedAt` 不在 `09:24:50-09:25:10` 标记 `auction_time_untrusted`。 |
-| 低质量演练 | `dryRun` 从 Web/Desktop 信号合同透传到 proxy；Web 主表过滤 dry-run，桌面语音策略在 `VoiceMode.All` 下也不播 dry-run。 |
-| 状态栏可见性 | 桌面状态栏在 09:25 强制采样行情到达时即可显示 `竞价覆盖 xx% received/requested 慢x 截x`，触发弱转强后继续显示信号级 dry-run 状态。 |
-| 共享 fixture | 已补 `auction_coverage_low`、`quote_time_untrusted`、`auction_time_untrusted`、`auction_amount_missing`、`amount_regressed`、`low_liquidity_jump`、`opening_support_lost` 样例，并由 TS/C# 同源测试断言。 |
-| 仍待实盘确认 | 代码门禁和状态栏已完成；真实早盘覆盖率、端到端延迟和 100-300 只候选池下 bridge 稳定性仍归入 V3 Phase 6 盘中验证。 |
-
-2026-05-23 TDX 自选股前日弱势上下文落地（后续已废弃自动注入，TDX 自选股仅保留为监控范围）：
-
-| 项目 | 发现 |
-|------|------|
-| 上游边界 | `TDX自选股` 复用现有 `.blk` 监控池，不新增行情源、不新增第二套股池 UI、不做全市场扫描。 |
-| 上下文语义 | 已废弃 `TDX自选股` 自动注入 `previousWeakScore = 30` 的做法；股票池只代表用户选择的监听范围，前日炸板/烂板等候选由用户维护的 `.blk` 板块表达。 |
-| 检测规则 | `strong_open_board_attempt` 的弱势前置条件已扩展为当日竞价弱、官方开盘弱、或 `previousWeakScore >= previousWeakScoreMin`。默认阈值为 30。 |
-| 兼容性 | 缺少 `previousWeak*` 字段时保持监听；普通无上下文开盘冲板可输出观察信号，并以 `weak_precondition_missing` 标记风险。 |
-| 复盘字段 | 桌面导出已追加前日弱势分、来源和标签；proxy/Web canonical signal 使用既有 JSON 透传，不需要新增 API。 |
-
-2026-05-24 异动规则文档和设置页注解：
-
-| 项目 | 发现 |
-|------|------|
-| GUI 注解边界 | 设置页“异动类型”列表可以直接在 `EventTypeOption.ToString()` 增加简要规则说明；保存仍通过 `option.Type.ToString()` 写入 `EnabledEvents`，不会破坏旧配置。 |
-| 文档主口径 | 全部桌面端 L1 异动规则集中记录到 `docs/yidong-jingling/event-rule-logic.md`，避免后续只靠截图或口头解释理解规则。 |
-| 成交增量口径 | “成交增量加速”当前实际使用 `Volume` 成交量增量，不是成交额增量；文档和 GUI 注解均按成交量描述。 |
-| GUI 成交额档位 | `L1EventRules` 默认保留 1/3/5/10 亿多档，但 `MainForm.ApplyEventRuleSettings` 会用设置页“成交额 万”覆盖成单一门槛；文档按 GUI 实际行为说明。 |
-
-2026-05-24 V5 竞价弱转强交叉评审：
-
-| 评审域 | 结论 |
-|--------|------|
-| 规则口径 | V5 符合 V3/V4 方向，是对 V4 量价核心的自然收敛：强信号不能只靠 `09:25 -> 09:30` 两点跳空，也不能把 `800万/500万` 固定成交增量作为强播核心。 |
-| 核心定义 | 应显式保存 `09:20` 初始基线和 `09:25` 确定基线，强播核心是不可撤单阶段的量价协同抬升、临门确认、不回落和开盘承接。 |
-| 阈值处理 | `minCurrentAmount=3000万`、`minAmountDelta=2000万`、`auctionLateLiftAmountDeltaMin=800万`、`auctionLateLiftLateAmountDeltaMin=500万` 不应继续作为强播核心；保留为最低流动性保护、风险或评分增强。 |
-| 实现影响 | 最小改动是扩展 `OpeningAuctionPriceVolumeProfile`，增加 `initialBaseline*`、`finalBaseline*`、`amountLiftRatio`、`lateAmountLiftRatio`、`priceVolumeConfirmed` 等字段，并同步 TS/C# 类型、hash 和导出。 |
-| 口径漂移风险 | TS/C# 容易在时间边界、乱序 quote、新鲜度比较、负数四舍五入、config hash、`amountOk` 硬拒绝改造上漂移，必须继续用共享 fixture 锁定。 |
-| 测试策略 | 先新增 V5 RED：相对量价确认但低绝对金额仍强播、缺 profile 只能 watch、量价背离降级、只有开盘巨量跳价拒绝、缺 09:20 初始基线降级或拒绝、乱序初始样本不回滚 09:25 基线。 |
-| 现有样例影响 | `002552-auction-gap-reversal`、`low-open-red-reversal`、`strong-open-board-attempt-with-precondition` 若继续 strong/critical，需要补 `09:20/09:24` 量价协同样本；否则 V5 下应降级为 watch。 |
-
-2026-05-24 V5 竞价弱转强实现复核：
-
-| 项目 | 发现 |
-|------|------|
-| 双基线落地 | TS/C# 均已从“首尾样本画像”改为显式 `initialBaselineStart/End`、`auctionLateLiftStart`、`auctionStart/End` 三段选样；乱序补到的 `09:20` 样本只补画像，不回滚已锁定的 `09:25` 确定基线。 |
-| 成交额阈值 | `minCurrentAmount` 和 `minAmountDelta` 不再作为强播硬前置；新增 `openingLiquidityMinAmount=500万` 作为最低流动性保护，旧阈值只影响 `openingAmount` 评分。 |
-| 量价确认 | 新增 `auctionAmountLiftRatio`、`lateAmountLiftRatio`、`priceVolumeConfirmed`；`auction_late_lift` 依赖相对量价确认，不再依赖固定 `800万/500万` 绝对增量。 |
-| 降级/观察 | 缺画像标记 `auction_profile_missing` 并小幅扣分；缺 09:20 标记 `auction_initial_baseline_missing`；有完整画像但量价未确认时标记 `auction_price_volume_unverified`，不再一票否决开盘弱转强。 |
-| 风险扣分 | 量价背离、无量抬价、放量不涨、高位回落属于同一画像风险组，避免同一事实重复扣分到 0。 |
-| 规则指纹 | V5 新 hash 为 `owts-08f44efb`，TS/C# 已同步字段集合和固定断言。 |
-| 代码复核修正 | 复核发现 `HasOpeningCoreEvidence` 不能用绝对值判断，否则下跌/缩量会被误当核心；已改为只接受正向抬升/放量，并新增 `v5-negative-auction-core-rejected`。 |
-| 临门确认修正 | `priceVolumeConfirmed` 已纳入 `09:24-09:25` 临门价格和相对放量确认；该字段只决定是否标记 `auction_late_lift`/临门抢筹，不再阻断 `auction_gap_reversal` 或 `low_open_red_reversal`。 |
-
-2026-06-02 竞价弱转强量价门槛修正：
-
-| 项目 | 结论 |
-|------|------|
-| 根因 | 旧逻辑把 `09:20->09:25` 与 `09:24->09:25` 的量价确认当成强信号核心；`auction_price_volume_core_missing` 是 high/-100，等同于把弱竞价、强开盘的真实弱转强压成不可播。 |
-| 修正 | `auction_price_volume_core_missing` 从主链移除；`auction_price_volume_unverified` 改为低风险、小扣分。竞价量价确认只作为 `auction_late_lift` 子形态和复盘字段，不再作为所有弱转强的入场券。 |
-| 样例 | `weak-auction-strong-open-without-auction-price-volume-core`：09:25 仍弱，09:30 跳变转强，量价核心未确认时仍输出 `auction_gap_reversal` / `strong`，只附带 `auction_price_volume_unverified`。 |
-| 低覆盖修正 | `auction_coverage_low` 不再触发 `dryRun`；只有 `quote_time_untrusted`、`auction_time_untrusted` 这类时间戳不可信问题继续禁播。 |
-| 候选播报修正 | `preopen_candidate` 只作为 09:25-09:29 的候选展示和上报，不再授予桌面/Web/proxy 语音；语音等待 09:30 后开盘承接转强。 |
-| 候选预判修正 | `preopen_candidate` 不再把竞价量价齐升当唯一入口；09:25 基准偏弱且有最低流动性或昨日弱势上下文时，允许作为无声 `auction_gap_reversal` 观察候选，并附带 `auction_price_volume_unverified`。 |
-
-2026-05-24 V6-A 方案交叉评审：
-
-| 评审域 | 结论 |
-|--------|------|
-| 规则口径 | 有条件通过。V6-A 应先做实盘复盘闭环和流动性分层观测，不应继续堆阈值；`liquidityTier` 必须标记为 `review_only`，不得改变触发、评分、语音或高亮。 |
-| 实现影响 | 有条件通过。最小实现应只扩展 `OpeningWeakToStrongSignal` 输出层，不扩展 `Rules`，不改变 `configHash`；TS/C# 字段必须成对扩展，桌面 CSV 导出和 proxy 上报需要同步验证。 |
-| 测试验收 | 不通过当前材料。原因是文档和 fixture 尚未固化 V6-A 字段合同；实施前必须先补文档和 RED 用例。 |
-| 范围收敛 | V6-A1 只做实时信号复盘字段、流动性分层观测和桌面导出；`09:35/收盘 outcome 写回` 进入 V6-A2，后续另建复盘记录或存储合同。 |
-
-2026-05-25 V6-A1 提交前 code review：
-
-| 评审项 | 结论 |
-|--------|------|
-| Critical | 无。 |
-| TS/C# 合同 | 发现 TS `OpeningWeakToStrongSignal` 的 `liquidityTier*` 可选，而 C# 为必填；已改为 TS 必填，保持信号合同一致。 |
-| positional record | 未发现 C# `OpeningWeakToStrongResult -> OpeningWeakToStrongSignal` 当前构造错位。 |
-| 判定影响 | `liquidityTier` 仍只用于 `review_only` 复盘字段，未进入触发、评分、语音、高亮或 `configHash`。 |
-| 测试补强 | 已补桌面 payload/CSV、proxy 透传和 OpenAPI 文档断言，覆盖 `liquidityTierBasis/liquidityTierThresholds`。 |
-
-2026-05-25 V6 盘中确认闭环转向：
-
-| 项目 | 发现 |
-|------|------|
-| 产品定位 | 用户明确异动精灵/异动雷达不是量化回测因子工具，弱转强信号价值应在 10:00 前完成盘中定性，而不是依赖收盘后人工复盘。 |
-| 方案纠偏 | 旧 V6-A “复盘字段/流动性观测”保留为辅助遥测；V6 主线改为“竞价弱转强盘中确认闭环”。 |
-| 状态口径 | `09:30-09:35` 首发 `pending`；`09:35-10:00` 继续上攻并站稳更新为 `confirmed_strong`；跌破开盘/昨收支撑更新为 `failed_open_dump`。 |
-| 去重口径 | 不新增事件类型，不换 dedupe key；同一 `tradingDate + code + opening_weak_to_strong` 信号允许盘中状态更新。proxy 和 Web buffer 必须按盘中结果优先，而不能只按 `confidence/score` 选强信号。 |
-| 语音口径 | 盘中失败/观察更新不重新抢语音；proxy 仍只对首次有效开盘承接信号授予一次 `voiceOwner`，`preopen_candidate` 候选不授予语音，防止开盘前误播。 |
-| 桌面状态锁 | C# `L1EventEngine` 旧的同股同日触发锁会压住 09:35 后更新；需改为记录盘中状态优先级，允许 pending -> confirmed -> failed。 |
-| 规则指纹 | `09:25:10` 候选窗口、`10:00` 收口和 `+1.0pct` 盘中确认推进属于 V6 状态机常量，不扩展规则对象，不进入 TS/C# `configHash`；规则指纹保持 `owts-08f44efb`。 |
-| 评审状态 | 已复用既有只读 Agent 完成提交前 code review；Critical 无，Important 反馈已修复。 |
-| proxy 语音仲裁 | 原逻辑存在迟到旧 `strong/pending` 信号在 canonical 仍为 `failed` 时拿到 `voiceOwner` 的风险；已改为只在本次上报成为 canonical 且 canonical 非 `failed/watch` 时授权语音。 |
-| 桌面去重 | `EventDeduper` 原 30 秒冷却可能吞掉 `pending -> confirmed/failed` 的盘中更新；已记录弱转强盘中状态优先级，状态升级可绕过冷却。 |
-| API 合同 | OpenAPI 原未声明 V6 `intraday*` 字段；已补 schema 和 docs 测试，避免 Web/桌面/proxy 合同漂移。 |
-| 测试补强 | 已补 `09:25:10` 边界、候选不能绕过 `pending` 直接确认、`configHash` 保持旧值回归；桌面 CSV 导出已按列名断言盘中列和值对齐。 |
-| 拒绝原因 telemetry | 桌面端已把未触发的弱转强检测结果写入 JSONL：`detector_rejected` 保留 `invalidReason`、关键涨幅/跳变/成交额和风险标记；同股同日状态未升级的触发结果记录为 `event_suppressed_duplicate_or_lower_priority`，便于实盘复盘定位“为什么没播”。 |
-| 盯盘工具定位偏移 | 当前弱转强链路把质量门禁、dry-run、跨端仲裁、热榜过滤和复盘字段放进语音主路径，导致“检测命中但可能层层静音”。V7 需把语音主链收敛为实时提醒：只保留用户设置、冷却、时间窗口、有效基线和严重行情错误作为硬阻断，其余降级为风险标签、日志和导出字段。 |
-
-## 风险与处理
-
-| 风险 | 处理 |
-|------|------|
-| `.blk` 文件包含指数、板块或非 A 股代码 | 解析后做代码段过滤，并在 UI 显示过滤数量和原因。 |
-| 通达信桥离线或 Python 环境缺失 | GUI 显示结构化诊断，允许用户只检查 `.blk`，不静默失败。 |
-| 涨跌停价计算存在特殊规则 | 按 5%、10%、20%、30% 分层，不能识别 ST 时用名称或涨幅阈值兜底，并标记规则来源。 |
-| L1 盘口弱信号误报 | “即将打开涨停/跌停”按用户指定口径落地，界面和文档明确其盘口数据来自 L1 买一/卖一，不宣称真 L2 十档或逐笔委托。 |
-| 高频播报打扰交易 | 每个股票每类事件设置冷却，批量事件合并播报，重要事件可插队。 |
-
-## V2 金融风格补充
-
-用户补充：第二版窗体显示风格需要改成金融风格。
-
-设计取向：
-
-- 使用证券终端式高密度布局，信息优先，不做营销式大卡片和装饰背景。
-- 推荐深色低眩光底色，搭配细网格线、紧凑表头和清晰状态栏，减少盘中长时间盯屏疲劳。
-- A 股语义按红涨绿跌处理：涨幅、封板、逼近涨停、买压等偏红；跳水、翻绿、跌停、卖压等偏绿。
-- 关键状态需要终端化表达：行情桥状态、最近行情时间、监控数、记录数、语音状态、交易时段状态。
-- 异动列表优先使用数字对齐、等宽数字、固定列宽和行级强弱色，便于快速扫读。
-- 弱盘口信号不能在视觉上压过封板、开板、快速拉升等强信号。
-- 不使用紫蓝渐变、圆润营销卡片、过多阴影或大面积插画；整体应像盯盘工具，而不是后台管理系统或官网页面。
-
-## 后续需要实测的问题
-
-1. `python-bridge` 对几百只 `.blk` 股票的轮询周期是否稳定在可接受范围。
-2. `mootdx` 返回的五档字段在不同市场和非交易时间是否稳定。
-3. GUI 是否需要自己启动 `python-bridge`，还是只连接用户已启动的 bridge。
-4. 联动通达信定位股票的可靠方式，需要实测通达信命令行、热键或剪贴板方案。
-5. 全市股票列表来源是否取自通达信本地文件，还是先由用户选择多个 `.blk` 近似实现。
-
----
-
-## 2026-05-30 V5 后优化与代码审查
-
-### 市场研究：A 股开盘集合竞价特征
-
-从同花顺、通达信、东方财富、淘股吧、雪球、BigQuant 等平台搜集的 A 股早盘竞价口径：
-
-| 发现 | 来源 | 影响 |
-|------|------|------|
-| 量能相对放大（竞板比≥5%）比绝对金额更有区分度 | 多源一致 | 保留 V5 的 `amountLiftRatio` 方向，加强相对放量权重 |
-| 高开黄金区间 +2.5%~+5%，≥8%无量是虚假信号 | 游资战法 | `auctionGapJumpMinPctPoint=3` 处于下沿，合理 |
-| 竞价金额应分市值三档（小盘>1000万/中盘>3000万/大盘>1亿） | 同花顺/通达信社区 | 当前无市值数据，暂用统一最低流动性保护 |
-| 情绪值=竞价换手×量比≥10 时封板率约 3 倍 | 量化平台 | 无换手数据，暂不采纳 |
-| 跳空是最强弱转强信号，权重应最高 | 多源一致 | `auctionGapMaxScore: 35→40` |
-| nearLimit 不应超过跳空核心因子 | 社区共识 | `strongOpenNearLimitScore: 30→25` |
-
-### 代码审查发现
-
-双端检测器逐行对照 + 共享 fixture 审计结果：
-
-| 类别 | 发现 | 严重度 |
-|------|------|--------|
-| 不一致 | TS `configHash` 全量序列化 vs C# 精选字段，hash 不可跨语言对比 | 低 |
-| 不一致 | `low_open_red_reversal` 阈值 C# 硬编码 `0`、TS 硬编码 `0`，不用 `auctionWeakMaxPct` | **已修复** |
-| 死代码 | `AuctionLateLiftAmountDeltaMin` / `AuctionLateLiftLateAmountDeltaMin` 参与 hash 但不影响检测 | **已修复** |
-| 参数 | 16 个评分因子全部硬编码在 `BuildFactors` 中 | **已修复** |
-| 冗余 | TS 时间解析 3 层回退（`shanghaiTimeParts` → regex → `new Date()`） | **已修复** |
-| 冗余 | `riskFlag` 函数 12 行 case-by-case 判定 severity | **已修复** |
-| 过严 | `riskFlags.Length > 0 ? "watch"` 闸门 + 画像缺失扣 -35 | **已修复** |
-| 可维护性 | 检测器单文件 1361 行（C#）/ 959 行（TS） | P2 待处理 |
-| 可维护性 | `liquidityTierMode: 'review_only'` 只有一种可能值 | P2 待处理 |
-
-### 热榜前 N 名语音过滤
-
-- 按平台覆盖数降序排列热榜股票（出现平台越多排名越前）
-- 设置页语音播报区域新增"热榜前N名播报"输入框，仅在股票池选"八平台热榜"时可见
-- `0=不限`，正值只播报前 N 名股票的异动
-- 竞价弱转强和普通异动均受此过滤
+- 当前弱转强合同：`docs/yidong-jingling/opening-weak-to-strong-plan.md`
+- 桌面异动规则：`docs/yidong-jingling/event-rule-logic.md`
+- 使用说明：`docs/yidong-jingling/usage.md`
+- 黑盒 fixture：`docs/yidong-jingling/fixtures/opening-weak-to-strong-cases.json`

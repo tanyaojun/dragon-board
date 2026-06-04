@@ -1,11 +1,6 @@
-import type { OpeningWeakToStrongSignal } from './openingWeakToStrongTypes'
+import type { OpeningWatchSignal } from './openingWeakToStrongTypes'
 
-export interface OpeningCanonicalSignal extends Partial<OpeningWeakToStrongSignal> {
-  code: string
-  signalType: 'opening_weak_to_strong'
-  tradingDate?: string
-  dryRun?: boolean
-}
+export type OpeningCanonicalSignal = OpeningWatchSignal
 
 export interface OpeningSignalRecord {
   canonicalSignal: OpeningCanonicalSignal
@@ -40,9 +35,7 @@ export class OpeningSignalClient {
     const result = new Map<string, OpeningCanonicalSignal>()
     for (const item of Array.isArray(payload.signals) ? payload.signals : []) {
       const signal = item?.canonicalSignal
-      if (signal?.signalType !== 'opening_weak_to_strong') continue
-      if (signal.dryRun) continue
-      if (/^\d{6}$/.test(signal.code)) result.set(signal.code, signal)
+      if (signal && /^\d{6}$/.test(signal.code)) result.set(signal.code, signal)
     }
     return result
   }

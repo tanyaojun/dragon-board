@@ -1,4 +1,5 @@
 import type { HotStockAbnormalEvent } from './hotStockEventTypes'
+import { OPENING_WEAK_TO_STRONG_EVENT_TYPE } from './hotStockEventTypes'
 
 type SpeechFetcher = typeof fetch
 type SpeechMode = 'local' | 'offline'
@@ -316,6 +317,35 @@ export function resolveSpeechVoiceSelection(
   if (active && voices.some((voice) => voice.name === active)) return active
 
   return undefined
+}
+
+export function isSpeechEligibleHotStockEvent(event: HotStockAbnormalEvent): boolean {
+  if (event.type !== OPENING_WEAK_TO_STRONG_EVENT_TYPE) return true
+
+  const raw = event.raw as {
+    signal?: {
+      stage?: string
+      voiceEligible?: boolean
+    }
+  } | null
+  const signal = raw?.signal
+  return signal?.voiceEligible === true && (signal.stage === 'gapAlert' || signal.stage === 'trendConfirm')
+}
+
+export function selectSpeechEvents(
+  latestAdded: HotStockAbnormalEvent[],
+  latestHotStockAdded: HotStockAbnormalEvent[],
+): HotStockAbnormalEvent[] {
+  const byId = new Map<string, HotStockAbnormalEvent>()
+  for (const event of latestHotStockAdded) {
+    if (isSpeechEligibleHotStockEvent(event)) byId.set(event.id, event)
+  }
+  for (const event of latestAdded) {
+    if (event.type === OPENING_WEAK_TO_STRONG_EVENT_TYPE && isSpeechEligibleHotStockEvent(event)) {
+      byId.set(event.id, event)
+    }
+  }
+  return [...byId.values()]
 }
 
 export const hotStockEventSpeechService = new HotStockEventSpeechService()

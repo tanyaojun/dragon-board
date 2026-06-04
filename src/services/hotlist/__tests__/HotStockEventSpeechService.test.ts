@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { HotStockEventSpeechService, resolveSpeechVoiceSelection } from '../HotStockEventSpeechService'
+import {
+  HotStockEventSpeechService,
+  isSpeechEligibleHotStockEvent,
+  resolveSpeechVoiceSelection,
+  selectSpeechEvents,
+} from '../HotStockEventSpeechService'
 import type { HotStockAbnormalEvent } from '../hotStockEventTypes'
 
 function makeEvent(overrides: Partial<HotStockAbnormalEvent>): HotStockAbnormalEvent {
@@ -188,5 +193,97 @@ describe('HotStockEventSpeechService', () => {
         { name: 'Microsoft Zira Desktop', culture: 'en-US', gender: 'Female' },
       ]),
     ).toBe('Microsoft Huihui Desktop')
+  })
+
+  it('does not use proxy voice owner as opening signal speech gate', () => {
+    expect(
+      isSpeechEligibleHotStockEvent(makeEvent({
+        type: 12001,
+        eventType: 12001,
+        typeName: '竞价弱转强',
+        raw: {
+          voiceOwner: 'desktop',
+          signal: {
+            stage: 'gapAlert',
+            voiceEligible: true,
+          },
+        },
+      })),
+    ).toBe(true)
+
+    expect(
+      isSpeechEligibleHotStockEvent(makeEvent({
+        type: 12001,
+        eventType: 12001,
+        typeName: '竞价弱转强候选',
+        raw: {
+          voiceOwner: 'web',
+          signal: {
+            stage: 'auctionConditionPassed',
+            voiceEligible: false,
+          },
+        },
+      })),
+    ).toBe(false)
+
+    expect(
+      isSpeechEligibleHotStockEvent(makeEvent({
+        type: 12001,
+        eventType: 12001,
+        typeName: '竞价弱转强',
+        raw: {
+          openingSignalPost: { voiceOwner: 'web' },
+          signal: {
+            stage: 'trendWeak',
+            voiceEligible: false,
+          },
+        },
+      })),
+    ).toBe(false)
+  })
+
+  it('only voices 09:30 gap alerts and 09:35 trend confirmations for opening signals', () => {
+    const stageEvent = (stage: string, voiceEligible: boolean) => makeEvent({
+      type: 12001,
+      eventType: 12001,
+      typeName: '竞价弱转强',
+      raw: { signal: { stage, voiceEligible } },
+    })
+
+    expect(isSpeechEligibleHotStockEvent(stageEvent('gapAlert', true))).toBe(true)
+    expect(isSpeechEligibleHotStockEvent(stageEvent('trendConfirm', true))).toBe(true)
+    expect(isSpeechEligibleHotStockEvent(stageEvent('auctionConditionPassed', false))).toBe(false)
+    expect(isSpeechEligibleHotStockEvent(stageEvent('noGap', false))).toBe(false)
+    expect(isSpeechEligibleHotStockEvent(stageEvent('trendWeak', false))).toBe(false)
+    expect(isSpeechEligibleHotStockEvent(stageEvent('optionalFinalStatus', false))).toBe(false)
+  })
+
+  it('includes opening weak-to-strong hits outside the hot-stock page for speech', () => {
+    const hot = makeEvent({ id: 'hot', code: '600001', typeName: '逼近涨停' })
+    const tdxOpening = makeEvent({
+      id: 'opening_weak_to_strong:2026-05-22:002552:pending',
+      code: '002552',
+      type: 12001,
+      eventType: 12001,
+      typeName: '竞价弱转强',
+      matchedHotStock: false,
+      raw: {
+        signal: {
+          stage: 'gapAlert',
+          voiceEligible: true,
+        },
+      },
+    })
+    const tdxOrdinary = makeEvent({
+      id: 'tdx-ordinary',
+      code: '300001',
+      typeName: '大幅拉升',
+      matchedHotStock: false,
+    })
+
+    expect(selectSpeechEvents([tdxOrdinary, tdxOpening, hot], [hot]).map(event => event.id)).toEqual([
+      'hot',
+      'opening_weak_to_strong:2026-05-22:002552:pending',
+    ])
   })
 })

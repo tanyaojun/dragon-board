@@ -161,1181 +161,84 @@ Run("Trading session excludes lunch break snapshots", () =>
     AssertTrue(TradingSession.IsContinuousAuction(afternoon), "afternoon included");
 });
 
-Run("Opening weak-to-strong detector matches shared golden fixture cases", () =>
+Run("Opening weak-to-strong detector matches five checkpoint PASS/FAIL acceptance", () =>
 {
-    var fixturePath = Path.Combine(
-        ProjectRootLocator.Find(),
-        "docs",
-        "yidong-jingling",
-        "fixtures",
-        "opening-weak-to-strong-cases.json");
-    using var document = JsonDocument.Parse(File.ReadAllText(fixturePath));
-    var root = document.RootElement;
-    var rules = OpeningWeakToStrongRules.FromJson(root.GetProperty("rules"));
-    var ruleVersion = root.GetProperty("ruleVersion").GetString() ?? "opening-weak-to-strong.v1";
-
-    foreach (var sample in root.GetProperty("cases").EnumerateArray())
-    {
-        var caseId = sample.GetProperty("caseId").GetString() ?? "";
-        var expected = sample.GetProperty("expected");
-        var store = new OpeningAuctionStateStore(rules);
-        var detector = new OpeningWeakToStrongDetector(rules, ruleVersion);
-        OpeningWeakToStrongResult? result = null;
-
-        foreach (var quoteElement in sample.GetProperty("quotes").EnumerateArray())
-        {
-            var quote = OpeningWeakToStrongQuote.FromJson(quoteElement);
-            store.Capture(quote);
-            result = detector.Evaluate(quote, store.GetBaseline(quote.Code, quote.At));
-        }
-
-        var expectedTriggered = expected.GetProperty("triggered").GetBoolean();
-        if (expectedTriggered)
-        {
-            AssertTrue(result is { Triggered: true }, $"{caseId} triggered");
-            AssertEqual(expected.GetProperty("variant").GetString(), result!.Variant, $"{caseId} variant");
-            AssertEqual(expected.GetProperty("confidence").GetString(), result.Confidence, $"{caseId} confidence");
-            var scoreRange = expected.GetProperty("scoreRange").EnumerateArray().Select(item => item.GetDecimal()).ToArray();
-            AssertTrue(result.Score >= scoreRange[0] && result.Score <= scoreRange[1], $"{caseId} score range");
-        }
-        else
-        {
-            AssertTrue(result is null or { Triggered: false }, $"{caseId} not triggered");
-            AssertEqual(expected.GetProperty("invalidReason").GetString(), result?.InvalidReason, $"{caseId} invalid reason");
-        }
-
-        foreach (var riskFlag in expected.GetProperty("riskFlags").EnumerateArray())
-        {
-            var key = riskFlag.GetString() ?? "";
-            AssertTrue(result?.RiskFlags.Any(item => item.Key == key) ?? false, $"{caseId} risk flag {key}");
-        }
-        if (expected.TryGetProperty("dryRun", out var dryRun))
-        {
-            AssertEqual(dryRun.GetBoolean(), result?.DryRun ?? false, $"{caseId} dryRun");
-        }
-        if (expected.TryGetProperty("auctionCoverageRatio", out var auctionCoverageRatio))
-        {
-            var actual = result?.AuctionCoverageRatio;
-            if (!actual.HasValue) throw new InvalidOperationException($"{caseId} auction coverage ratio exists");
-            AssertTrue(Math.Abs(actual.Value - auctionCoverageRatio.GetDecimal()) <= 0.01m, $"{caseId} auction coverage ratio");
-        }
-        if (expected.TryGetProperty("liquidityTier", out var liquidityTier))
-        {
-            AssertEqual(liquidityTier.GetString(), result?.LiquidityTier, $"{caseId} liquidity tier");
-        }
-        if (expected.TryGetProperty("liquidityTierMode", out var liquidityTierMode))
-        {
-            AssertEqual(liquidityTierMode.GetString(), result?.LiquidityTierMode, $"{caseId} liquidity tier mode");
-        }
-        if (expected.TryGetProperty("liquidityTierBasis", out var liquidityTierBasis))
-        {
-            AssertEqual(liquidityTierBasis.GetString(), result?.LiquidityTierBasis, $"{caseId} liquidity tier basis");
-        }
-        if (expected.TryGetProperty("liquidityTierThresholds", out var liquidityTierThresholds))
-        {
-            AssertEqual(liquidityTierThresholds.GetString(), result?.LiquidityTierThresholds, $"{caseId} liquidity tier thresholds");
-        }
-        if (expected.TryGetProperty("liquidityTierVersion", out var liquidityTierVersion))
-        {
-            AssertEqual(liquidityTierVersion.GetString(), result?.LiquidityTierVersion, $"{caseId} liquidity tier version");
-        }
-        if (expected.TryGetProperty("initialBaselineAt", out var initialBaselineAt))
-        {
-            AssertEqual(DateTimeOffset.Parse(initialBaselineAt.GetString() ?? ""), result?.InitialBaselineAt, $"{caseId} initial baseline at");
-        }
-        if (expected.TryGetProperty("initialBaselinePrice", out var initialBaselinePrice))
-        {
-            AssertEqual(initialBaselinePrice.GetDecimal(), result?.InitialBaselinePrice, $"{caseId} initial baseline price");
-        }
-        if (expected.TryGetProperty("initialBaselinePct", out var initialBaselinePct))
-        {
-            AssertEqual(initialBaselinePct.GetDecimal(), result?.InitialBaselinePct, $"{caseId} initial baseline pct");
-        }
-        if (expected.TryGetProperty("initialBaselineAmount", out var initialBaselineAmount))
-        {
-            AssertEqual(initialBaselineAmount.GetDecimal(), result?.InitialBaselineAmount, $"{caseId} initial baseline amount");
-        }
-        if (expected.TryGetProperty("lateBaselineAt", out var lateBaselineAt))
-        {
-            AssertEqual(DateTimeOffset.Parse(lateBaselineAt.GetString() ?? ""), result?.LateBaselineAt, $"{caseId} late baseline at");
-        }
-        if (expected.TryGetProperty("lateBaselinePrice", out var lateBaselinePrice))
-        {
-            AssertEqual(lateBaselinePrice.GetDecimal(), result?.LateBaselinePrice, $"{caseId} late baseline price");
-        }
-        if (expected.TryGetProperty("lateBaselinePct", out var lateBaselinePct))
-        {
-            AssertEqual(lateBaselinePct.GetDecimal(), result?.LateBaselinePct, $"{caseId} late baseline pct");
-        }
-        if (expected.TryGetProperty("lateBaselineAmount", out var lateBaselineAmount))
-        {
-            AssertEqual(lateBaselineAmount.GetDecimal(), result?.LateBaselineAmount, $"{caseId} late baseline amount");
-        }
-        if (expected.TryGetProperty("finalBaselineAt", out var finalBaselineAt))
-        {
-            AssertEqual(DateTimeOffset.Parse(finalBaselineAt.GetString() ?? ""), result?.FinalBaselineAt, $"{caseId} final baseline at");
-        }
-        if (expected.TryGetProperty("finalBaselinePrice", out var finalBaselinePrice))
-        {
-            AssertEqual(finalBaselinePrice.GetDecimal(), result?.FinalBaselinePrice, $"{caseId} final baseline price");
-        }
-        if (expected.TryGetProperty("finalBaselinePct", out var finalBaselinePct))
-        {
-            AssertEqual(finalBaselinePct.GetDecimal(), result?.FinalBaselinePct, $"{caseId} final baseline pct");
-        }
-        if (expected.TryGetProperty("finalBaselineAmount", out var finalBaselineAmount))
-        {
-            AssertEqual(finalBaselineAmount.GetDecimal(), result?.FinalBaselineAmount, $"{caseId} final baseline amount");
-        }
-        if (expected.TryGetProperty("auctionPriceLiftPctPoint", out var auctionPriceLiftPctPoint))
-        {
-            AssertEqual(auctionPriceLiftPctPoint.GetDecimal(), result?.AuctionPriceLiftPctPoint, $"{caseId} auction price lift");
-        }
-        if (expected.TryGetProperty("latePriceLiftPctPoint", out var latePriceLiftPctPoint))
-        {
-            AssertEqual(latePriceLiftPctPoint.GetDecimal(), result?.LatePriceLiftPctPoint, $"{caseId} late price lift");
-        }
-        if (expected.TryGetProperty("auctionAmountDelta", out var auctionAmountDelta))
-        {
-            AssertEqual(auctionAmountDelta.GetDecimal(), result?.AuctionAmountDelta, $"{caseId} auction amount delta");
-        }
-        if (expected.TryGetProperty("lateAmountDelta", out var lateAmountDelta))
-        {
-            AssertEqual(lateAmountDelta.GetDecimal(), result?.LateAmountDelta, $"{caseId} late amount delta");
-        }
-        if (expected.TryGetProperty("auctionAmountLiftRatio", out var auctionAmountLiftRatio))
-        {
-            AssertEqual(auctionAmountLiftRatio.GetDecimal(), result?.AuctionAmountLiftRatio, $"{caseId} auction amount lift ratio");
-        }
-        if (expected.TryGetProperty("lateAmountLiftRatio", out var lateAmountLiftRatio))
-        {
-            AssertEqual(lateAmountLiftRatio.GetDecimal(), result?.LateAmountLiftRatio, $"{caseId} late amount lift ratio");
-        }
-        if (expected.TryGetProperty("priceVolumeConfirmed", out var priceVolumeConfirmed))
-        {
-            AssertEqual(priceVolumeConfirmed.GetBoolean(), result?.PriceVolumeConfirmed, $"{caseId} price volume confirmed");
-        }
-        if (expected.TryGetProperty("intradayStatus", out var intradayStatus))
-        {
-            AssertEqual(intradayStatus.GetString(), result?.IntradayStatus, $"{caseId} intraday status");
-        }
-        if (expected.TryGetProperty("intradayOutcome", out var intradayOutcome))
-        {
-            AssertEqual(intradayOutcome.GetString(), result?.IntradayOutcome, $"{caseId} intraday outcome");
-        }
-        if (expected.TryGetProperty("intradayStatusAt", out var intradayStatusAt))
-        {
-            AssertEqual(DateTimeOffset.Parse(intradayStatusAt.GetString() ?? ""), result?.IntradayStatusAt, $"{caseId} intraday status at");
-        }
-        if (expected.TryGetProperty("intradayPrice", out var intradayPrice))
-        {
-            AssertEqual(intradayPrice.GetDecimal(), result?.IntradayPrice, $"{caseId} intraday price");
-        }
-        if (expected.TryGetProperty("intradayPct", out var intradayPct))
-        {
-            AssertEqual(intradayPct.GetDecimal(), result?.IntradayPct, $"{caseId} intraday pct");
-        }
-        if (expected.TryGetProperty("intradayAmount", out var intradayAmount))
-        {
-            AssertEqual(intradayAmount.GetDecimal(), result?.IntradayAmount, $"{caseId} intraday amount");
-        }
-        if (expected.TryGetProperty("intradayNote", out var intradayNote))
-        {
-            AssertEqual(intradayNote.GetString(), result?.IntradayNote, $"{caseId} intraday note");
-        }
-    }
-});
-
-Run("Opening weak-to-strong config hash includes auction price-volume rules", () =>
-{
-    var fixturePath = Path.Combine(
-        ProjectRootLocator.Find(),
-        "docs",
-        "yidong-jingling",
-        "fixtures",
-        "opening-weak-to-strong-cases.json");
-    using var document = JsonDocument.Parse(File.ReadAllText(fixturePath));
-    var baseRules = OpeningWeakToStrongRules.FromJson(document.RootElement.GetProperty("rules"));
-    var changedRules = baseRules with
-    {
-        AuctionGapMaxScore = baseRules.AuctionGapMaxScore + 1m
-    };
-    var quote = OpeningWeakToStrongQuote.FromJson(document.RootElement.GetProperty("cases")[0].GetProperty("quotes")[0]);
-
-    var baseHash = new OpeningWeakToStrongDetector(baseRules).Evaluate(quote, null).ConfigHash;
-    var changedHash = new OpeningWeakToStrongDetector(changedRules).Evaluate(quote, null).ConfigHash;
-
-    AssertEqual("owts-0b14dc39", baseHash, "fixture config hash matches web");
-    AssertTrue(baseHash != changedHash, "auction price-volume rule hash changes");
-});
-
-Run("Opening weak-to-strong detector profiles delayed older auction quotes without rolling back baseline", () =>
-{
-    var fixturePath = Path.Combine(
-        ProjectRootLocator.Find(),
-        "docs",
-        "yidong-jingling",
-        "fixtures",
-        "opening-weak-to-strong-cases.json");
-    using var document = JsonDocument.Parse(File.ReadAllText(fixturePath));
-    var rules = OpeningWeakToStrongRules.FromJson(document.RootElement.GetProperty("rules"));
+    var rules = LoadOpeningRules();
     var store = new OpeningAuctionStateStore(rules);
     var detector = new OpeningWeakToStrongDetector(rules);
-    var first = new OpeningWeakToStrongQuote(
-        "002559",
-        "乱序基线",
-        DateTimeOffset.Parse("2026-05-22T09:25:05+08:00"),
-        10.1m,
-        10m,
-        0m,
-        20_000_000m,
-        1_000_000m,
-        0m,
-        DateTimeOffset.Parse("2026-05-22T09:25:05+08:00"),
-        DateTimeOffset.Parse("2026-05-22T09:25:05+08:00"));
-    var initial = first with
-    {
-        At = DateTimeOffset.Parse("2026-05-22T09:20:05+08:00"),
-        LastPrice = 9.7m,
-        Amount = 3_000_000m,
-        CapturedAt = DateTimeOffset.Parse("2026-05-22T09:20:05+08:00"),
-        BridgeTs = DateTimeOffset.Parse("2026-05-22T09:20:05+08:00"),
-    };
-    var delayed = first with
-    {
-        At = DateTimeOffset.Parse("2026-05-22T09:24:55+08:00"),
-        LastPrice = 9.8m,
-        Amount = 5_000_000m,
-        CapturedAt = DateTimeOffset.Parse("2026-05-22T09:24:55+08:00"),
-        BridgeTs = DateTimeOffset.Parse("2026-05-22T09:24:55+08:00"),
-    };
-    var open = first with
-    {
-        At = DateTimeOffset.Parse("2026-05-22T09:30:06+08:00"),
-        LastPrice = 10.31m,
-        Open = 10.1m,
-        Amount = 55_000_000m,
-        CapturedAt = DateTimeOffset.Parse("2026-05-22T09:30:06+08:00"),
-        BridgeTs = DateTimeOffset.Parse("2026-05-22T09:30:06+08:00"),
-    };
+    var results = RunOpeningCheckpointAcceptance(store, detector);
 
-    store.Capture(initial);
-    store.Capture(first);
-    store.Capture(delayed);
-    var baseline = store.GetBaseline(open.Code, open.At);
-    var result = detector.Evaluate(open, baseline);
-
-    AssertEqual(1m, baseline?.AuctionPct ?? -1m, "auction pct remains latest baseline");
-    AssertTrue(result.Triggered, "delayed older auction quote can complete auction profile");
-    AssertEqual("auction_late_lift", result.Variant, "delayed older auction profile variant");
-    AssertEqual(2, result.AuctionSampleCount ?? 0, "delayed older auction sample count");
-    AssertEqual(DateTimeOffset.Parse("2026-05-22T09:20:05+08:00"), result.InitialBaselineAt, "delayed older initial baseline");
+    AssertSequence(
+        ["09:20:PASS:auctionConditionPassed:False", "09:25:PASS:auctionConditionPassed:False", "09:30:PASS:gapAlert:True", "09:35:PASS:trendConfirm:True", "10:00:PASS:optionalFinalStatus:False"],
+        results,
+        "opening checkpoint acceptance");
 });
 
-Run("Opening weak-to-strong detector downgrades amount regression", () =>
-{
-    var fixturePath = Path.Combine(
-        ProjectRootLocator.Find(),
-        "docs",
-        "yidong-jingling",
-        "fixtures",
-        "opening-weak-to-strong-cases.json");
-    using var document = JsonDocument.Parse(File.ReadAllText(fixturePath));
-    var rules = OpeningWeakToStrongRules.FromJson(document.RootElement.GetProperty("rules"));
-    var sample = document.RootElement.GetProperty("cases")
-        .EnumerateArray()
-        .First(item => item.GetProperty("caseId").GetString() == "002552-auction-gap-reversal");
-    var quotes = sample.GetProperty("quotes")
-        .EnumerateArray()
-        .Select(OpeningWeakToStrongQuote.FromJson)
-        .ToArray();
-    var open = quotes[^1] with { Amount = 60_000_000m };
-    var store = new OpeningAuctionStateStore(rules);
-    var detector = new OpeningWeakToStrongDetector(rules);
-
-    foreach (var quote in quotes[..^1])
-    {
-        store.Capture(IsAuctionFinalQuote(quote) ? quote with { Amount = 80_000_000m } : quote);
-    }
-    var result = detector.Evaluate(open, store.GetBaseline(open.Code, open.At));
-
-    AssertTrue(result.Triggered, "amount regression still records candidate");
-    AssertEqual("critical", result.Confidence, "amount regression confidence");
-    AssertTrue(result.RiskFlags.Any(item => item.Key == "amount_regressed"), "amount regression risk flag");
-});
-
-Run("Opening weak-to-strong detector emits preopen candidate after final baseline", () =>
-{
-    var fixturePath = Path.Combine(
-        ProjectRootLocator.Find(),
-        "docs",
-        "yidong-jingling",
-        "fixtures",
-        "opening-weak-to-strong-cases.json");
-    using var document = JsonDocument.Parse(File.ReadAllText(fixturePath));
-    var rules = OpeningWeakToStrongRules.FromJson(document.RootElement.GetProperty("rules"));
-    var sample = document.RootElement.GetProperty("cases")
-        .EnumerateArray()
-        .First(item => item.GetProperty("caseId").GetString() == "002552-auction-gap-reversal");
-    var quotes = sample.GetProperty("quotes")
-        .EnumerateArray()
-        .Select(OpeningWeakToStrongQuote.FromJson)
-        .ToArray();
-    var store = new OpeningAuctionStateStore(rules);
-    var detector = new OpeningWeakToStrongDetector(rules);
-
-    foreach (var quote in quotes[..^1])
-    {
-        store.Capture(quote);
-    }
-
-    var finalQuote = quotes[^2];
-    var candidate = finalQuote with
-    {
-        At = DateTimeOffset.Parse("2026-05-22T09:25:12+08:00"),
-        CapturedAt = DateTimeOffset.Parse("2026-05-22T09:25:12+08:00"),
-        BridgeTs = DateTimeOffset.Parse("2026-05-22T09:25:12+08:00"),
-    };
-    var result = detector.Evaluate(candidate, store.GetBaseline(candidate.Code, candidate.At));
-
-    AssertTrue(result.Triggered, "preopen candidate triggered");
-    AssertEqual("auction_late_lift", result.Variant, "preopen candidate variant");
-    AssertEqual("watch", result.Confidence, "preopen candidate confidence");
-    AssertEqual("preopen_candidate", result.IntradayStatus, "preopen candidate status");
-    AssertEqual("preopen_candidate", result.IntradayOutcome, "preopen candidate outcome");
-    AssertEqual("竞价量价齐升，等待开盘承接验证", result.IntradayNote, "preopen candidate note");
-    AssertTrue(result.PriceVolumeConfirmed == true, "preopen candidate price-volume confirmed");
-    AssertEqual(0, result.RiskFlags.Count, "preopen candidate risk flags");
-});
-
-Run("Opening weak-to-strong detector includes 09:25:10 in preopen candidate window", () =>
-{
-    var fixturePath = Path.Combine(
-        ProjectRootLocator.Find(),
-        "docs",
-        "yidong-jingling",
-        "fixtures",
-        "opening-weak-to-strong-cases.json");
-    using var document = JsonDocument.Parse(File.ReadAllText(fixturePath));
-    var rules = OpeningWeakToStrongRules.FromJson(document.RootElement.GetProperty("rules"));
-    var sample = document.RootElement.GetProperty("cases")
-        .EnumerateArray()
-        .First(item => item.GetProperty("caseId").GetString() == "002552-auction-gap-reversal");
-    var quotes = sample.GetProperty("quotes")
-        .EnumerateArray()
-        .Select(OpeningWeakToStrongQuote.FromJson)
-        .ToArray();
-    var store = new OpeningAuctionStateStore(rules);
-    var detector = new OpeningWeakToStrongDetector(rules);
-
-    foreach (var quote in quotes[..^1])
-    {
-        store.Capture(quote);
-    }
-
-    var finalQuote = quotes[^2];
-    var candidate = finalQuote with
-    {
-        At = DateTimeOffset.Parse("2026-05-22T09:25:10+08:00"),
-        CapturedAt = DateTimeOffset.Parse("2026-05-22T09:25:10+08:00"),
-        BridgeTs = DateTimeOffset.Parse("2026-05-22T09:25:10+08:00"),
-    };
-    var result = detector.Evaluate(candidate, store.GetBaseline(candidate.Code, candidate.At));
-
-    AssertTrue(result.Triggered, "09:25:10 preopen candidate triggered");
-    AssertEqual("preopen_candidate", result.IntradayStatus, "09:25:10 preopen status");
-    AssertEqual("preopen_candidate", result.IntradayOutcome, "09:25:10 preopen outcome");
-});
-
-Run("Opening weak-to-strong detector emits preopen candidate from 09:25 final auction quote", () =>
-{
-    var fixturePath = Path.Combine(
-        ProjectRootLocator.Find(),
-        "docs",
-        "yidong-jingling",
-        "fixtures",
-        "opening-weak-to-strong-cases.json");
-    using var document = JsonDocument.Parse(File.ReadAllText(fixturePath));
-    var rules = OpeningWeakToStrongRules.FromJson(document.RootElement.GetProperty("rules"));
-    var store = new OpeningAuctionStateStore(rules);
-    var detector = new OpeningWeakToStrongDetector(rules);
-
-    var q0920 = OpeningQuote(
-        "002579",
-        "中京电子",
-        "2026-06-01T09:20:05+08:00",
-        14.6m,
-        17.15m,
-        2_000_000m,
-        1_000_000m);
-    var q0924 = OpeningQuote(
-        "002579",
-        "中京电子",
-        "2026-06-01T09:24:05+08:00",
-        15m,
-        17.15m,
-        12_000_000m,
-        1_000_000m);
-    var q0925 = OpeningQuote(
-        "002579",
-        "中京电子",
-        "2026-06-01T09:25:00+08:00",
-        15.46m,
-        17.15m,
-        20_650_000m,
-        1_000_000m);
-
-    store.Capture(q0920);
-    store.Capture(q0924);
-    store.Capture(q0925);
-    var result = detector.Evaluate(q0925, store.GetBaseline(q0925.Code, q0925.At));
-
-    AssertTrue(result.Triggered, "09:25 final auction quote triggers preopen candidate");
-    AssertEqual("auction_late_lift", result.Variant, "002579 preopen variant");
-    AssertEqual("preopen_candidate", result.IntradayStatus, "002579 preopen status");
-    AssertTrue(result.PriceVolumeConfirmed == true, "002579 price-volume confirmed");
-    AssertEqual(-9.85m, result.AuctionPct, "002579 auction pct");
-    AssertEqual(5.01m, result.AuctionPriceLiftPctPoint, "002579 auction price lift");
-    AssertEqual(2.68m, result.LatePriceLiftPctPoint, "002579 late price lift");
-    AssertTrue(
-        result.RiskFlags.All(item => item.Key != "auction_late_high_retreated"),
-        "002579 final auction quote is not high-retreated");
-});
-
-Run("Opening weak-to-strong detector keeps weak 09:25 baseline as preopen candidate without price-volume confirmation", () =>
-{
-    var fixturePath = Path.Combine(
-        ProjectRootLocator.Find(),
-        "docs",
-        "yidong-jingling",
-        "fixtures",
-        "opening-weak-to-strong-cases.json");
-    using var document = JsonDocument.Parse(File.ReadAllText(fixturePath));
-    var rules = OpeningWeakToStrongRules.FromJson(document.RootElement.GetProperty("rules"));
-    var store = new OpeningAuctionStateStore(rules);
-    var detector = new OpeningWeakToStrongDetector(rules);
-
-    var q0920 = OpeningQuote(
-        "002580",
-        "弱基准候选",
-        "2026-06-01T09:20:05+08:00",
-        9.95m,
-        10m,
-        2_000_000m,
-        800_000m);
-    var q0924 = OpeningQuote(
-        "002580",
-        "弱基准候选",
-        "2026-06-01T09:24:05+08:00",
-        9.94m,
-        10m,
-        4_000_000m,
-        800_000m);
-    var q0925 = OpeningQuote(
-        "002580",
-        "弱基准候选",
-        "2026-06-01T09:25:00+08:00",
-        9.9m,
-        10m,
-        6_000_000m,
-        800_000m);
-
-    store.Capture(q0920);
-    store.Capture(q0924);
-    store.Capture(q0925);
-    var result = detector.Evaluate(q0925, store.GetBaseline(q0925.Code, q0925.At));
-
-    AssertTrue(result.Triggered, "weak 09:25 baseline triggers silent preopen candidate");
-    AssertEqual("auction_gap_reversal", result.Variant, "weak 09:25 preopen variant");
-    AssertEqual("preopen_candidate", result.IntradayStatus, "weak 09:25 preopen status");
-    AssertTrue(result.PriceVolumeConfirmed == false, "weak 09:25 price-volume unconfirmed");
-    AssertEqual("watch", result.Confidence, "weak 09:25 preopen confidence");
-    AssertTrue(result.Score < 60m, "weak 09:25 preopen risk-adjusted score");
-    AssertTrue(
-        result.RiskFlags.Any(item => item.Key == "auction_price_volume_unverified"),
-        "weak 09:25 candidate keeps price-volume risk");
-    AssertEqual("09:25基准偏弱，等待09:30强跳变验证", result.IntradayNote, "weak 09:25 candidate note");
-});
-
-Run("Opening weak-to-strong detector does not confirm preopen candidate without pending check", () =>
-{
-    var fixturePath = Path.Combine(
-        ProjectRootLocator.Find(),
-        "docs",
-        "yidong-jingling",
-        "fixtures",
-        "opening-weak-to-strong-cases.json");
-    using var document = JsonDocument.Parse(File.ReadAllText(fixturePath));
-    var rules = OpeningWeakToStrongRules.FromJson(document.RootElement.GetProperty("rules"));
-    var sample = document.RootElement.GetProperty("cases")
-        .EnumerateArray()
-        .First(item => item.GetProperty("caseId").GetString() == "002552-auction-gap-reversal");
-    var quotes = sample.GetProperty("quotes")
-        .EnumerateArray()
-        .Select(OpeningWeakToStrongQuote.FromJson)
-        .ToArray();
-    var store = new OpeningAuctionStateStore(rules);
-    var detector = new OpeningWeakToStrongDetector(rules);
-
-    foreach (var quote in quotes[..^1])
-    {
-        store.Capture(quote);
-    }
-
-    var finalQuote = quotes[^2];
-    var candidateQuote = finalQuote with
-    {
-        At = DateTimeOffset.Parse("2026-05-22T09:25:12+08:00"),
-        CapturedAt = DateTimeOffset.Parse("2026-05-22T09:25:12+08:00"),
-        BridgeTs = DateTimeOffset.Parse("2026-05-22T09:25:12+08:00"),
-    };
-    var candidate = detector.Evaluate(candidateQuote, store.GetBaseline(candidateQuote.Code, candidateQuote.At));
-    var intradayQuote = quotes[^1] with
-    {
-        At = DateTimeOffset.Parse("2026-05-22T09:36:00+08:00"),
-        CapturedAt = DateTimeOffset.Parse("2026-05-22T09:36:00+08:00"),
-        BridgeTs = DateTimeOffset.Parse("2026-05-22T09:36:00+08:00"),
-        LastPrice = 38.5m,
-        Amount = 90_000_000m,
-    };
-    var intraday = detector.Evaluate(intradayQuote, store.GetBaseline(intradayQuote.Code, intradayQuote.At));
-
-    AssertEqual("preopen_candidate", candidate.IntradayStatus, "preopen candidate status");
-    AssertTrue(intraday.IntradayStatus != "confirmed", "preopen candidate is not confirmed directly");
-    AssertTrue(intraday.IntradayOutcome != "confirmed_strong", "preopen candidate outcome is not confirmed directly");
-});
-
-Run("Event engine emits opening weak-to-strong from auction baseline", () =>
+Run("Event engine emits opening checkpoint events with stage names", () =>
 {
     var engine = new L1EventEngine();
-    var auction = Quote(
-        "002552",
-        "宝鼎科技",
-        35.68m,
-        -1.44m,
-        36.2m,
-        amount: 6_000_000m,
-        time: DateTimeOffset.Parse("2026-05-22T09:25:00+08:00"));
-    var open = Quote(
-        "002552",
-        "宝鼎科技",
-        37.48m,
-        3.54m,
-        36.2m,
-        volume: 1_495_000m,
-        amount: 56_000_000m,
-        time: DateTimeOffset.Parse("2026-05-22T09:30:06+08:00")) with { Open = 36.92m };
+    var quotes = OpeningCheckpointSnapshots();
 
-    engine.Prime(auction);
-    var events = engine.Evaluate(open, auction, [auction, open]);
+    engine.Prime(quotes[0]);
+    engine.Prime(quotes[1]);
+    var candidate = engine.Evaluate(quotes[1], quotes[0], quotes[..2]).Single(item => item.Type == L1EventType.OpeningWeakToStrong);
+    var gap = engine.Evaluate(quotes[2], quotes[1], quotes[..3]).Single(item => item.Type == L1EventType.OpeningWeakToStrong);
+    var trend = engine.Evaluate(quotes[3], quotes[2], quotes[..4]).Single(item => item.Type == L1EventType.OpeningWeakToStrong);
+    var final = engine.Evaluate(quotes[4], quotes[3], quotes).Single(item => item.Type == L1EventType.OpeningWeakToStrong);
 
-    AssertTrue(events.Any(item => item.Type == L1EventType.OpeningWeakToStrong), "opening weak-to-strong event");
-    var signal = events.Single(item => item.Type == L1EventType.OpeningWeakToStrong);
-    AssertEqual("竞价弱转强", signal.TypeName, "event type name");
-    AssertTrue(signal.Reason.Contains("09:25 -1.44%"), "auction pct in reason");
-    AssertTrue(signal.Reason.Contains("09:30 +3.54%"), "open pct in reason");
-    AssertTrue(signal.OpeningSignal is not null, "opening canonical signal attached");
-    AssertEqual("opening_weak_to_strong", signal.OpeningSignal!.SignalType, "opening signal type");
-    AssertEqual("2026-05-22", signal.OpeningSignal.TradingDate, "opening trading date");
-    AssertTrue(signal.OpeningSignal.ConfigHash.StartsWith("owts-", StringComparison.Ordinal), "opening config hash");
-    AssertEqual("active", signal.OpeningSignal.LiquidityTier, "opening liquidity tier");
-    AssertEqual("review_only", signal.OpeningSignal.LiquidityTierMode, "opening liquidity tier mode");
-    AssertEqual("liquidity-review.v1", signal.OpeningSignal.LiquidityTierVersion, "opening liquidity tier version");
-    AssertEqual("degraded", signal.OpeningSignal.BaselineQuality, "missing per-code capture metadata stays degraded");
-    AssertTrue(signal.OpeningSignal.AuctionCapturedAt is not null, "auction fallback timestamp exists for replay");
-    AssertTrue(signal.OpeningSignal.BridgeTs is null, "missing per-code bridgeTs is not forged from source time");
+    AssertSequence(
+        ["auctionConditionPassed", "gapAlert", "trendConfirm", "optionalFinalStatus"],
+        [candidate.OpeningSignal?.Stage ?? "", gap.OpeningSignal?.Stage ?? "", trend.OpeningSignal?.Stage ?? "", final.OpeningSignal?.Stage ?? ""],
+        "event stages");
+    AssertSequence(
+        ["竞价弱转强候选", "竞价跳空高开", "快速上板前兆", "竞价弱转强复盘"],
+        [candidate.TypeName, gap.TypeName, trend.TypeName, final.TypeName],
+        "event type names");
+    AssertSequence(
+        ["False", "True", "True", "False"],
+        [candidate.OpeningSignal!.VoiceEligible.ToString(), gap.OpeningSignal!.VoiceEligible.ToString(), trend.OpeningSignal!.VoiceEligible.ToString(), final.OpeningSignal!.VoiceEligible.ToString()],
+        "event voice flags");
 });
 
-Run("Event engine records opening weak-to-strong reject telemetry", () =>
-{
-    var telemetry = new List<OpeningWeakToStrongTelemetryRecord>();
-    var engine = new L1EventEngine(openingTelemetry: telemetry.Add);
-    var auction = Quote(
-        "002553",
-        "拒绝样例",
-        9.9m,
-        -1m,
-        10m,
-        amount: 6_000_000m,
-        time: DateTimeOffset.Parse("2026-05-22T09:25:00+08:00"));
-    var open = Quote(
-        "002553",
-        "拒绝样例",
-        9.92m,
-        -0.8m,
-        10m,
-        volume: 1_200_000m,
-        amount: 8_000_000m,
-        time: DateTimeOffset.Parse("2026-05-22T09:30:06+08:00")) with { Open = 9.9m };
-
-    engine.Prime(auction);
-    var events = engine.Evaluate(open, auction, [auction, open]);
-
-    AssertEqual(0, events.Count(item => item.Type == L1EventType.OpeningWeakToStrong), "no opening event");
-    var record = telemetry.Single();
-    AssertEqual("detector_rejected", record.Decision, "telemetry decision");
-    AssertEqual("variant_not_matched", record.InvalidReason, "reject reason");
-    AssertEqual("002553", record.Code, "telemetry code");
-    AssertEqual("2026-05-22", record.TradingDate, "telemetry trading date");
-    AssertEqual(-1m, record.AuctionPct, "telemetry auction pct");
-    AssertEqual(-0.8m, record.FirstWindowPct, "telemetry first window pct");
-    AssertEqual(0.2m, record.JumpPctPoint, "telemetry jump pct");
-    AssertTrue(record.RiskFlags.Contains("variant_not_matched"), "telemetry risk flag");
-});
-
-Run("Event engine throttles opening weak-to-strong reject telemetry", () =>
-{
-    var telemetry = new List<OpeningWeakToStrongTelemetryRecord>();
-    var engine = new L1EventEngine(openingTelemetry: telemetry.Add);
-    var auction = Quote(
-        "002554",
-        "节流样例",
-        9.9m,
-        -1m,
-        10m,
-        amount: 6_000_000m,
-        time: DateTimeOffset.Parse("2026-05-22T09:25:00+08:00"));
-    var rejected = Quote(
-        "002554",
-        "节流样例",
-        9.92m,
-        -0.8m,
-        10m,
-        volume: 1_200_000m,
-        amount: 8_000_000m,
-        time: DateTimeOffset.Parse("2026-05-22T09:30:06+08:00")) with { Open = 9.9m };
-    var repeated = rejected with
-    {
-        SourceTime = DateTimeOffset.Parse("2026-05-22T09:30:08+08:00"),
-        CapturedAt = DateTimeOffset.Parse("2026-05-22T09:30:08+08:00"),
-        BridgeTs = DateTimeOffset.Parse("2026-05-22T09:30:08+08:00"),
-    };
-    var outside = rejected with
-    {
-        SourceTime = DateTimeOffset.Parse("2026-05-22T10:01:00+08:00"),
-        CapturedAt = DateTimeOffset.Parse("2026-05-22T10:01:00+08:00"),
-        BridgeTs = DateTimeOffset.Parse("2026-05-22T10:01:00+08:00"),
-    };
-
-    engine.Prime(auction);
-    _ = engine.Evaluate(rejected, auction, [auction, rejected]);
-    _ = engine.Evaluate(repeated, rejected, [auction, rejected, repeated]);
-    _ = engine.Evaluate(outside, repeated, [auction, rejected, repeated, outside]);
-
-    AssertEqual(1, telemetry.Count, "only one actionable reject telemetry record");
-    AssertEqual("variant_not_matched", telemetry[0].InvalidReason, "throttled reject reason");
-});
-
-Run("Event engine emits preopen weak-to-strong candidate before continuous auction", () =>
+Run("Event engine keeps opening checkpoints scoped to the trading day", () =>
 {
     var engine = new L1EventEngine();
-    var first = Quote(
-        "002552",
-        "宝鼎科技",
-        35m,
-        -3.31m,
-        36.2m,
-        amount: 2_000_000m,
-        time: DateTimeOffset.Parse("2026-05-22T09:20:05+08:00"));
-    var late = Quote(
-        "002552",
-        "宝鼎科技",
-        35.3m,
-        -2.49m,
-        36.2m,
-        amount: 4_500_000m,
-        time: DateTimeOffset.Parse("2026-05-22T09:24:05+08:00"));
-    var auction = Quote(
-        "002552",
-        "宝鼎科技",
-        35.68m,
-        -1.44m,
-        36.2m,
-        volume: 1_680_000m,
-        amount: 6_000_000m,
-        time: DateTimeOffset.Parse("2026-05-22T09:25:00+08:00"));
-    var candidate = auction with
-    {
-        SourceTime = DateTimeOffset.Parse("2026-05-22T09:25:12+08:00"),
-        CapturedAt = DateTimeOffset.Parse("2026-05-22T09:25:12+08:00"),
-        BridgeTs = DateTimeOffset.Parse("2026-05-22T09:25:12+08:00"),
-    };
+    var day1 = OpeningCheckpointSnapshots("2026-06-03");
+    var day2 = OpeningCheckpointSnapshots("2026-06-04");
 
-    engine.Prime(first);
-    engine.Prime(late);
-    engine.Prime(auction);
-    var events = engine.Evaluate(candidate, auction, [first, late, auction, candidate]);
+    engine.Prime(day1[0]);
+    engine.Prime(day1[1]);
+    var day1Candidate = engine.Evaluate(day1[1], day1[0], day1[..2]);
+    var crossDayWithoutBaseline = engine.Evaluate(day2[2], day1[1], [day2[2]]);
+    engine.Prime(day2[0]);
+    engine.Prime(day2[1]);
+    var day2Candidate = engine.Evaluate(day2[1], day2[0], day2[..2]);
 
-    var signal = events.Single(item => item.Type == L1EventType.OpeningWeakToStrong);
-    AssertEqual("竞价弱转强候选", signal.TypeName, "preopen event type name");
-    AssertEqual("preopen_candidate", signal.OpeningSignal?.IntradayStatus, "preopen event status");
-    AssertEqual("preopen_candidate", signal.OpeningSignal?.IntradayOutcome, "preopen event outcome");
-    AssertTrue(signal.Reason.Contains("待开盘验证"), "preopen event reason");
-    AssertEqual(L1EventSeverity.Important, signal.Severity, "preopen event severity");
-    AssertEqual(0, EventVoicePolicy.FilterForVoice(events, VoiceMode.StrongOnly).Count, "preopen event is not voice eligible");
+    AssertEqual(1, day1Candidate.Count(item => item.Type == L1EventType.OpeningWeakToStrong), "day 1 candidate");
+    AssertEqual(0, crossDayWithoutBaseline.Count(item => item.Type == L1EventType.OpeningWeakToStrong), "no cross-day gap without day baseline");
+    AssertEqual(1, day2Candidate.Count(item => item.Type == L1EventType.OpeningWeakToStrong), "day 2 candidate");
 });
 
-Run("Event engine emits opening weak-to-strong intraday outcome update", () =>
+Run("Event deduper allows later opening checkpoint stages inside cooldown", () =>
 {
-    var engine = new L1EventEngine();
-    var auction = Quote(
-        "002552",
-        "宝鼎科技",
-        35.68m,
-        -1.44m,
-        36.2m,
-        amount: 6_000_000m,
-        time: DateTimeOffset.Parse("2026-05-22T09:25:00+08:00"));
-    var open = Quote(
-        "002552",
-        "宝鼎科技",
-        37.48m,
-        3.54m,
-        36.2m,
-        volume: 1_495_000m,
-        amount: 56_000_000m,
-        time: DateTimeOffset.Parse("2026-05-22T09:30:06+08:00")) with { Open = 36.92m };
-    var failed = open with
+    var deduper = new EventDeduper(TimeSpan.FromMinutes(5));
+    var timestamp = DateTimeOffset.Parse("2026-06-03T09:25:00+08:00");
+    var candidate = Event("002552", "宝鼎科技", L1EventType.OpeningWeakToStrong, "竞价弱转强候选", timestamp) with
     {
-        LastPrice = 36.7m,
-        ChangePct = 1.38m,
-        Amount = 98_000_000m,
-        SourceTime = DateTimeOffset.Parse("2026-05-22T09:42:00+08:00"),
+        OpeningSignal = TestOpeningSignal(timestamp) with { Stage = "auctionConditionPassed", VoiceEligible = false }
+    };
+    var gap = candidate with
+    {
+        TypeName = "竞价跳空高开",
+        Timestamp = timestamp.AddMinutes(5),
+        OpeningSignal = TestOpeningSignal(timestamp.AddMinutes(5)) with { Stage = "gapAlert", VoiceEligible = true }
     };
 
-    engine.Prime(auction);
-    _ = engine.Evaluate(open, auction, [auction, open]);
-    var updates = engine.Evaluate(failed, open, [auction, open, failed]);
+    AssertEqual(1, deduper.Filter([candidate]).Count, "candidate emitted");
+    var upgrade = deduper.Filter([gap]);
 
-    var update = updates.Single(item => item.Type == L1EventType.OpeningWeakToStrong);
-    AssertEqual("failed", update.OpeningSignal?.IntradayStatus, "intraday update status");
-    AssertEqual("failed_open_dump", update.OpeningSignal?.IntradayOutcome, "intraday update outcome");
-    AssertTrue(update.Reason.Contains("盘中失败"), "intraday failure reason");
-});
-
-Run("Event engine lets fresh opening signal replace dry-run pending signal", () =>
-{
-    var engine = new L1EventEngine();
-    var auction = Quote(
-        "002897",
-        "意华股份",
-        82.22m,
-        2.77m,
-        80m,
-        amount: 23_698_240m,
-        time: DateTimeOffset.Parse("2026-06-02T09:25:00+08:00"));
-    var stale = Quote(
-        "002897",
-        "意华股份",
-        86.98m,
-        8.72m,
-        80m,
-        volume: 900_000m,
-        amount: 307_156_640m,
-        time: DateTimeOffset.Parse("2026-06-02T09:32:18+08:00")) with
-    {
-        Open = 82.22m,
-        CapturedAt = DateTimeOffset.Parse("2026-06-02T09:31:30+08:00"),
-    };
-    var fresh = stale with
-    {
-        LastPrice = 88m,
-        ChangePct = 10m,
-        Amount = 489_450_496m,
-        SourceTime = DateTimeOffset.Parse("2026-06-02T09:33:07+08:00"),
-        CapturedAt = DateTimeOffset.Parse("2026-06-02T09:33:04+08:00"),
-    };
-
-    engine.Prime(auction);
-    var staleEvents = engine.Evaluate(stale, auction, [auction, stale]);
-    var freshEvents = engine.Evaluate(fresh, stale, [auction, stale, fresh]);
-
-    var staleOpening = staleEvents.Single(item => item.Type == L1EventType.OpeningWeakToStrong);
-    var freshOpening = freshEvents.Single(item => item.Type == L1EventType.OpeningWeakToStrong);
-    AssertTrue(staleOpening.OpeningSignal?.DryRun == true, "stale pending is dry-run");
-    AssertTrue(freshOpening.OpeningSignal?.DryRun == false, "fresh pending replaces dry-run");
-    AssertEqual("pending", freshOpening.OpeningSignal?.IntradayStatus, "fresh pending status");
-});
-
-Run("Event engine confirms near-limit opening signal after detect window", () =>
-{
-    var engine = new L1EventEngine();
-    var auction = Quote(
-        "002897",
-        "意华股份",
-        82.22m,
-        2.77m,
-        80m,
-        amount: 23_698_240m,
-        time: DateTimeOffset.Parse("2026-06-02T09:25:00+08:00"));
-    var open = Quote(
-        "002897",
-        "意华股份",
-        88m,
-        10m,
-        80m,
-        volume: 900_000m,
-        amount: 489_450_496m,
-        time: DateTimeOffset.Parse("2026-06-02T09:33:07+08:00")) with
-    {
-        Open = 82.22m,
-        CapturedAt = DateTimeOffset.Parse("2026-06-02T09:33:04+08:00"),
-    };
-    var confirm = open with
-    {
-        Amount = 520_759_712m,
-        SourceTime = DateTimeOffset.Parse("2026-06-02T09:36:00+08:00"),
-        CapturedAt = DateTimeOffset.Parse("2026-06-02T09:35:58+08:00"),
-    };
-
-    engine.Prime(auction);
-    _ = engine.Evaluate(open, auction, [auction, open]);
-    var updates = engine.Evaluate(confirm, open, [auction, open, confirm]);
-
-    var update = updates.Single(item => item.Type == L1EventType.OpeningWeakToStrong);
-    AssertEqual("confirmed", update.OpeningSignal?.IntradayStatus, "near-limit pending confirms");
-    AssertEqual("confirmed_strong", update.OpeningSignal?.IntradayOutcome, "near-limit outcome");
-    AssertEqual(1, EventVoicePolicy.FilterForVoice([update], VoiceMode.StrongOnly).Count, "confirmed near-limit voice");
-});
-
-Run("Event engine tracks delayed board after deep auction gap repair", () =>
-{
-    var engine = new L1EventEngine();
-    var t0920 = DateTimeOffset.Parse("2026-06-02T09:20:05+08:00");
-    var t0924 = DateTimeOffset.Parse("2026-06-02T09:24:05+08:00");
-    var t0925 = DateTimeOffset.Parse("2026-06-02T09:25:00+08:00");
-    var q0920 = Quote("002806", "华锋股份", 16.30m, -11.80m, 18.48m, amount: 2_000_000m, time: t0920);
-    var q0924 = Quote("002806", "华锋股份", 16.70m, -9.63m, 18.48m, amount: 8_000_000m, time: t0924);
-    var q0925 = Quote("002806", "华锋股份", 16.95m, -8.28m, 18.48m, amount: 13_530_000m, time: t0925);
-    var open = Quote(
-        "002806",
-        "华锋股份",
-        17.72m,
-        -4.11m,
-        18.48m,
-        volume: 1_200_000m,
-        amount: 22_000_000m,
-        time: DateTimeOffset.Parse("2026-06-02T09:30:08+08:00")) with
-    {
-        Open = 17.68m,
-    };
-    var watchQuote = open with
-    {
-        LastPrice = 18.15m,
-        ChangePct = -1.79m,
-        Amount = 56_000_000m,
-        SourceTime = DateTimeOffset.Parse("2026-06-02T09:36:00+08:00"),
-        CapturedAt = DateTimeOffset.Parse("2026-06-02T09:36:00+08:00"),
-        BridgeTs = DateTimeOffset.Parse("2026-06-02T09:36:00+08:00"),
-    };
-    var boardQuote = open with
-    {
-        LastPrice = 20.33m,
-        ChangePct = 10.01m,
-        Amount = 397_900_000m,
-        SourceTime = DateTimeOffset.Parse("2026-06-02T14:56:00+08:00"),
-        CapturedAt = DateTimeOffset.Parse("2026-06-02T14:56:00+08:00"),
-        BridgeTs = DateTimeOffset.Parse("2026-06-02T14:56:00+08:00"),
-    };
-
-    engine.Prime(q0920);
-    engine.Prime(q0924);
-    engine.Prime(q0925);
-    var pendingEvents = engine.Evaluate(open, q0925, [q0920, q0924, q0925, open]);
-    var watchEvents = engine.Evaluate(watchQuote, open, [q0920, q0924, q0925, open, watchQuote]);
-    var boardEvents = engine.Evaluate(boardQuote, watchQuote, [q0920, q0924, q0925, open, watchQuote, boardQuote]);
-
-    var pending = pendingEvents.Single(item => item.Type == L1EventType.OpeningWeakToStrong);
-    var watch = watchEvents.Single(item => item.Type == L1EventType.OpeningWeakToStrong);
-    var confirmed = boardEvents.Single(item => item.Type == L1EventType.OpeningWeakToStrong);
-    AssertEqual("auction_gap_delayed_board", pending.OpeningSignal?.Variant, "delayed board variant");
-    AssertEqual("pending", pending.OpeningSignal?.IntradayStatus, "delayed board pending");
-    AssertEqual("watch", watch.OpeningSignal?.IntradayStatus, "delayed board watch");
-    AssertEqual("watch_only", watch.OpeningSignal?.IntradayOutcome, "delayed board watch outcome");
-    AssertTrue(watch.Reason.Contains("等待二次拉升或上板确认"), "watch note");
-    AssertEqual("confirmed", confirmed.OpeningSignal?.IntradayStatus, "delayed board confirmed");
-    AssertEqual("confirmed_strong", confirmed.OpeningSignal?.IntradayOutcome, "delayed board confirmed outcome");
-    AssertEqual(1, EventVoicePolicy.FilterForVoice([confirmed], VoiceMode.StrongOnly).Count, "delayed board confirmed voice");
-    AssertEqual(0, EventVoicePolicy.FilterForVoice([watch], VoiceMode.StrongOnly).Count, "delayed board watch no strong voice");
-});
-
-Run("Event engine marks confirmed opening signal reversal without voice", () =>
-{
-    var engine = new L1EventEngine();
-    var auction = Quote(
-        "002552",
-        "宝鼎科技",
-        35.68m,
-        -1.44m,
-        36.2m,
-        amount: 6_000_000m,
-        time: DateTimeOffset.Parse("2026-05-22T09:25:00+08:00"));
-    var open = Quote(
-        "002552",
-        "宝鼎科技",
-        37.48m,
-        3.54m,
-        36.2m,
-        volume: 1_495_000m,
-        amount: 56_000_000m,
-        time: DateTimeOffset.Parse("2026-05-22T09:30:06+08:00")) with { Open = 36.92m };
-    var confirm = open with
-    {
-        LastPrice = 38.2m,
-        ChangePct = 5.52m,
-        Amount = 86_000_000m,
-        SourceTime = DateTimeOffset.Parse("2026-05-22T09:36:00+08:00"),
-    };
-    var reversal = open with
-    {
-        LastPrice = 36.7m,
-        ChangePct = 1.38m,
-        Amount = 128_000_000m,
-        SourceTime = DateTimeOffset.Parse("2026-05-22T09:45:00+08:00"),
-    };
-
-    engine.Prime(auction);
-    _ = engine.Evaluate(open, auction, [auction, open]);
-    _ = engine.Evaluate(confirm, open, [auction, open, confirm]);
-    var updates = engine.Evaluate(reversal, confirm, [auction, open, confirm, reversal]);
-
-    var update = updates.Single(item => item.Type == L1EventType.OpeningWeakToStrong);
-    AssertEqual("竞价确认后转弱", update.TypeName, "confirmed reversal type name");
-    AssertEqual("confirmed_reversal", update.OpeningSignal?.IntradayStatus, "confirmed reversal status");
-    AssertEqual("confirmed_then_open_dump", update.OpeningSignal?.IntradayOutcome, "confirmed reversal outcome");
-    AssertTrue(update.Reason.Contains("确认后转弱"), "confirmed reversal reason");
-    AssertEqual(0, EventVoicePolicy.FilterForVoice([update], VoiceMode.StrongOnly).Count, "confirmed reversal is not voice eligible");
-});
-
-Run("Event engine does not inject TDX block context as previous weak evidence", () =>
-{
-    var engine = new L1EventEngine();
-    var auction = Quote(
-        "600010",
-        "TDX候选",
-        10.18m,
-        1.8m,
-        10m,
-        amount: 12_000_000m,
-        time: DateTimeOffset.Parse("2026-05-22T09:25:00+08:00"));
-    var open = Quote(
-        "600010",
-        "TDX候选",
-        10.86m,
-        8.6m,
-        10m,
-        amount: 86_000_000m,
-        time: DateTimeOffset.Parse("2026-05-22T09:30:20+08:00")) with { Open = 10.2m };
-
-    engine.Prime(auction);
-    var events = engine.Evaluate(open, auction, [auction, open]);
-
-    var signal = events.Single(item => item.Type == L1EventType.OpeningWeakToStrong);
-    AssertTrue(
-        signal.OpeningSignal?.PreviousWeakScore is null,
-        "TDX block selection must not inject previous weak score");
-    AssertTrue(
-        signal.OpeningSignal?.PreviousWeakSignals.Count == 0,
-        "TDX block selection must not inject previous weak signals");
-    AssertTrue(
-        string.IsNullOrWhiteSpace(signal.OpeningSignal?.PreviousWeakSource),
-        "TDX block selection must not inject previous weak source");
-    AssertTrue(
-        signal.OpeningSignal?.RiskFlags.Any(item => item.Key == "weak_precondition_missing") == true,
-        "ordinary strong open is reported as watch risk without injected previous weak evidence");
-});
-
-Run("Event engine does not speak watch opening weak-to-strong in strong voice policy", () =>
-{
-    var engine = new L1EventEngine();
-    var first = Quote(
-        "002554",
-        "无量抬价",
-        9.8m,
-        -2m,
-        10m,
-        amount: 5_000_000m,
-        time: DateTimeOffset.Parse("2026-05-22T09:20:05+08:00"));
-    var late = Quote(
-        "002554",
-        "无量抬价",
-        9.95m,
-        -0.5m,
-        10m,
-        amount: 5_200_000m,
-        time: DateTimeOffset.Parse("2026-05-22T09:24:10+08:00"));
-    var auction = Quote(
-        "002554",
-        "无量抬价",
-        10.02m,
-        0.2m,
-        10m,
-        amount: 5_400_000m,
-        time: DateTimeOffset.Parse("2026-05-22T09:25:00+08:00"));
-    var open = Quote(
-        "002554",
-        "无量抬价",
-        10.36m,
-        3.6m,
-        10m,
-        volume: 4_000_000m,
-        amount: 40_000_000m,
-        time: DateTimeOffset.Parse("2026-05-22T09:30:07+08:00")) with { Open = 10.1m };
-
-    engine.Prime(first);
-    engine.Prime(late);
-    engine.Prime(auction);
-    var events = engine.Evaluate(open, auction, [first, late, auction, open]);
-    var signal = events.Single(item => item.Type == L1EventType.OpeningWeakToStrong);
-
-    AssertEqual("watch", signal.OpeningSignal?.Confidence, "watch confidence");
-    AssertEqual(L1EventSeverity.Important, signal.Severity, "watch opening severity");
-    AssertEqual(0, EventVoicePolicy.FilterForVoice([signal], VoiceMode.StrongOnly).Count, "watch opening strong voice");
-    AssertEqual(DateTimeOffset.Parse("2026-05-22T09:20:05+08:00"), signal.OpeningSignal?.InitialBaselineAt, "watch initial baseline at");
-    AssertEqual(9.8m, signal.OpeningSignal?.InitialBaselinePrice, "watch initial baseline price");
-    AssertEqual(DateTimeOffset.Parse("2026-05-22T09:24:10+08:00"), signal.OpeningSignal?.LateBaselineAt, "watch late baseline at");
-    AssertEqual(9.95m, signal.OpeningSignal?.LateBaselinePrice, "watch late baseline price");
-    AssertEqual(DateTimeOffset.Parse("2026-05-22T09:25:00+08:00"), signal.OpeningSignal?.FinalBaselineAt, "watch final baseline at");
-    AssertEqual(10.02m, signal.OpeningSignal?.FinalBaselinePrice, "watch final baseline price");
-    AssertEqual(2.2m, signal.OpeningSignal?.AuctionPriceLiftPctPoint, "watch auction price lift");
-    AssertEqual(0.7m, signal.OpeningSignal?.LatePriceLiftPctPoint, "watch late price lift");
-    AssertEqual(400_000m, signal.OpeningSignal?.AuctionAmountDelta, "watch auction amount delta");
-    AssertEqual(200_000m, signal.OpeningSignal?.LateAmountDelta, "watch late amount delta");
-    AssertEqual("active", signal.OpeningSignal?.LiquidityTier, "watch liquidity tier");
-    AssertEqual("review_only", signal.OpeningSignal?.LiquidityTierMode, "watch liquidity tier mode");
-    AssertEqual("liquidity-review.v1", signal.OpeningSignal?.LiquidityTierVersion, "watch liquidity tier version");
-});
-
-Run("Opening weak-to-strong detector rejects previous trading day baseline", () =>
-{
-    var rules = new OpeningWeakToStrongRules(
-        "09:20:00",
-        "09:20:00",
-        "09:20:30",
-        "09:24:50",
-        "09:25:10",
-        "09:30:00",
-        "09:35:00",
-        0.5m,
-        3m,
-        1.5m,
-        1.5m,
-        1m,
-        3m,
-        2m,
-        30_000_000m,
-        20_000_000m,
-        5_000_000m,
-        "09:24:00",
-        1m,
-        0.5m,
-        0.8m,
-        0.35m,
-        0.3m,
-        0.2m,
-        0m,
-        8_000_000m,
-        5_000_000m,
-        2.5m,
-        2m,
-        0.2m,
-        30m,
-        0.95m,
-        10_000,
-        1_000_000m,
-        0.995m);
-    var store = new OpeningAuctionStateStore(rules);
-    var detector = new OpeningWeakToStrongDetector(rules);
-    var auction = new OpeningWeakToStrongQuote(
-        "002552",
-        "宝鼎科技",
-        DateTimeOffset.Parse("2026-05-21T09:25:00+08:00"),
-        35.68m,
-        36.2m,
-        0m,
-        6_000_000m,
-        1_680_000m,
-        0m,
-        DateTimeOffset.Parse("2026-05-21T09:25:00+08:00"),
-        DateTimeOffset.Parse("2026-05-21T09:25:00+08:00"));
-    var nextDayOpen = auction with
-    {
-        At = DateTimeOffset.Parse("2026-05-22T09:30:06+08:00"),
-        LastPrice = 37.48m,
-        Open = 36.92m,
-        Amount = 56_000_000m,
-        CapturedAt = DateTimeOffset.Parse("2026-05-22T09:30:06+08:00"),
-        BridgeTs = DateTimeOffset.Parse("2026-05-22T09:30:06+08:00"),
-    };
-
-    store.Capture(auction);
-    var result = detector.Evaluate(nextDayOpen, store.GetBaseline(nextDayOpen.Code, nextDayOpen.At));
-
-    AssertTrue(!result.Triggered, "previous day baseline rejected");
-    AssertEqual("baseline_missing", result.InvalidReason, "previous day invalid reason");
-});
-
-Run("Event engine does not reuse previous trading day opening state", () =>
-{
-    var engine = new L1EventEngine();
-    var auction = Quote(
-        "002552",
-        "宝鼎科技",
-        35.68m,
-        -1.44m,
-        36.2m,
-        amount: 6_000_000m,
-        time: DateTimeOffset.Parse("2026-05-21T09:25:00+08:00"));
-    var nextDayOpen = Quote(
-        "002552",
-        "宝鼎科技",
-        37.48m,
-        3.54m,
-        36.2m,
-        amount: 56_000_000m,
-        time: DateTimeOffset.Parse("2026-05-22T09:30:06+08:00")) with { Open = 36.92m };
-
-    engine.Prime(auction);
-    var events = engine.Evaluate(nextDayOpen, null, [nextDayOpen]);
-
-    AssertEqual(0, events.Count(item => item.Type == L1EventType.OpeningWeakToStrong), "no cross-day opening signal");
-});
-
-Run("Event engine allows opening weak-to-strong again on the next trading day", () =>
-{
-    var engine = new L1EventEngine();
-    var day1Auction = Quote(
-        "002552",
-        "宝鼎科技",
-        35.68m,
-        -1.44m,
-        36.2m,
-        amount: 6_000_000m,
-        time: DateTimeOffset.Parse("2026-05-21T09:25:00+08:00"));
-    var day1Open = Quote(
-        "002552",
-        "宝鼎科技",
-        37.48m,
-        3.54m,
-        36.2m,
-        amount: 56_000_000m,
-        time: DateTimeOffset.Parse("2026-05-21T09:30:06+08:00")) with { Open = 36.92m };
-    var day2Auction = day1Auction with
-    {
-        SourceTime = DateTimeOffset.Parse("2026-05-22T09:25:00+08:00"),
-    };
-    var day2Open = day1Open with
-    {
-        SourceTime = DateTimeOffset.Parse("2026-05-22T09:30:06+08:00"),
-    };
-
-    engine.Prime(day1Auction);
-    var day1Events = engine.Evaluate(day1Open, day1Auction, [day1Auction, day1Open]);
-    engine.Prime(day2Auction);
-    var day2Events = engine.Evaluate(day2Open, day2Auction, [day2Auction, day2Open]);
-
-    AssertTrue(day1Events.Any(item => item.Type == L1EventType.OpeningWeakToStrong), "day 1 opening signal");
-    AssertTrue(day2Events.Any(item => item.Type == L1EventType.OpeningWeakToStrong), "day 2 opening signal");
+    AssertEqual(1, upgrade.Count, "later checkpoint emitted inside cooldown");
+    AssertEqual("gapAlert", upgrade[0].OpeningSignal?.Stage, "later checkpoint stage");
 });
 
 Run("Event engine emits fast rise and fast drop from local history", () =>
@@ -1459,39 +362,6 @@ Run("Event deduper keeps opening weak-to-strong even with same-stock ordinary ev
     AssertTrue(emitted.Any(item => item.Type == L1EventType.FastRise), "ordinary event preserved");
 });
 
-Run("Event deduper emits opening weak-to-strong intraday status upgrades inside cooldown", () =>
-{
-    var deduper = new EventDeduper(TimeSpan.FromSeconds(180));
-    var now = DateTimeOffset.Parse("2026-05-22T09:34:50+08:00");
-    var pending = Event("002552", "宝鼎科技", L1EventType.OpeningWeakToStrong, "竞价弱转强", now) with
-    {
-        OpeningSignal = TestOpeningSignal(now, dryRun: false) with
-        {
-            IntradayStatus = "pending",
-            IntradayOutcome = "pending",
-            IntradayStatusAt = now,
-        }
-    };
-    var failedAt = now.AddSeconds(11);
-    var failed = pending with
-    {
-        Timestamp = failedAt,
-        OpeningSignal = pending.OpeningSignal! with
-        {
-            IntradayStatus = "failed",
-            IntradayOutcome = "failed_open_dump",
-            IntradayStatusAt = failedAt,
-        }
-    };
-
-    AssertEqual(1, deduper.Filter([pending]).Count, "pending emitted");
-    var update = deduper.Filter([failed]);
-
-    AssertEqual(1, update.Count, "status update emitted");
-    AssertEqual("failed", update[0].OpeningSignal?.IntradayStatus, "updated status");
-    AssertEqual("failed_open_dump", update[0].OpeningSignal?.IntradayOutcome, "updated outcome");
-});
-
 Run("Event deduper keeps different stocks in one batch", () =>
 {
     var deduper = new EventDeduper(TimeSpan.FromSeconds(180));
@@ -1531,83 +401,70 @@ Run("Push policy sends only strong event radar signals", () =>
     AssertEqual(L1EventType.FastRise, pushEvents[0].Type, "push event type");
 });
 
-Run("Voice policy does not announce dry-run opening signals", () =>
+Run("Voice policy only announces 09:30 gap and 09:35 trend opening checkpoints", () =>
 {
-    var now = DateTimeOffset.Parse("2026-05-22T09:30:06+08:00");
-    var dryRunOpening = Event("002560", "低覆盖", L1EventType.OpeningWeakToStrong, "竞价弱转强", now) with
+    var timestamp = DateTimeOffset.Parse("2026-06-03T09:30:00+08:00");
+    var candidate = Event("002560", "竞价候选", L1EventType.OpeningWeakToStrong, "竞价弱转强候选", timestamp) with
     {
-        OpeningSignal = TestOpeningSignal(now, dryRun: true)
+        OpeningSignal = TestOpeningSignal(timestamp) with
+        {
+            Stage = "auctionConditionPassed",
+            VoiceEligible = false,
+        }
+    };
+    var gap = candidate with
+    {
+        Code = "002561",
+        OpeningSignal = TestOpeningSignal(timestamp) with
+        {
+            Code = "002561",
+            Stage = "gapAlert",
+            VoiceEligible = true,
+        }
+    };
+    var trend = candidate with
+    {
+        Code = "002562",
+        OpeningSignal = TestOpeningSignal(timestamp.AddMinutes(5)) with
+        {
+            Code = "002562",
+            Stage = "trendConfirm",
+            VoiceEligible = true,
+        }
+    };
+    var final = candidate with
+    {
+        Code = "002563",
+        OpeningSignal = TestOpeningSignal(timestamp.AddMinutes(30)) with
+        {
+            Code = "002563",
+            Stage = "optionalFinalStatus",
+            VoiceEligible = false,
+        }
     };
 
-    AssertEqual(0, EventVoicePolicy.FilterForVoice([dryRunOpening], VoiceMode.All).Count, "all mode dry-run muted");
-    AssertEqual(0, EventVoicePolicy.FilterForVoice([dryRunOpening], VoiceMode.StrongOnly).Count, "strong mode dry-run muted");
+    var voiceEvents = EventVoicePolicy.FilterForVoice([candidate, gap, trend, final], VoiceMode.StrongOnly);
+
+    AssertSequence(["002561", "002562"], voiceEvents.Select(item => item.Code).ToArray(), "stage voice events");
 });
 
-Run("Voice policy announces only confirmed strong opening signals", () =>
+Run("Push policy sends only voiced opening checkpoints", () =>
 {
-    var now = DateTimeOffset.Parse("2026-05-22T09:36:06+08:00");
-    var pending = Event("002560", "待确认", L1EventType.OpeningWeakToStrong, "竞价弱转强", now) with
+    var now = DateTimeOffset.Parse("2026-06-03T09:30:00+08:00");
+    var candidate = Event("002560", "竞价候选", L1EventType.OpeningWeakToStrong, "竞价弱转强候选", now) with
     {
-        OpeningSignal = TestOpeningSignal(now, dryRun: false)
+        OpeningSignal = TestOpeningSignal(now) with { Stage = "auctionConditionPassed", VoiceEligible = false }
     };
-    var failed = Event("002561", "已失败", L1EventType.OpeningWeakToStrong, "竞价弱转强", now) with
+    var gap = candidate with
     {
-        OpeningSignal = TestOpeningSignal(now, dryRun: false) with
-        {
-            Confidence = "watch",
-            IntradayStatus = "failed",
-            IntradayOutcome = "failed_open_dump",
-        }
-    };
-    var confirmedWatch = Event("002562", "确认观察", L1EventType.OpeningWeakToStrong, "竞价弱转强", now) with
-    {
-        OpeningSignal = TestOpeningSignal(now, dryRun: false) with
-        {
-            Confidence = "watch",
-            IntradayStatus = "confirmed",
-            IntradayOutcome = "confirmed_strong",
-        }
-    };
-    var confirmedStrong = Event("002563", "确认强", L1EventType.OpeningWeakToStrong, "竞价弱转强", now) with
-    {
-        OpeningSignal = TestOpeningSignal(now, dryRun: false) with
-        {
-            Confidence = "strong",
-            IntradayStatus = "confirmed",
-            IntradayOutcome = "confirmed_strong",
-        }
+        Code = "002561",
+        OpeningSignal = TestOpeningSignal(now) with { Code = "002561", Stage = "gapAlert", VoiceEligible = true }
     };
 
-    AssertEqual(1, EventVoicePolicy.FilterForVoice([pending, failed, confirmedWatch, confirmedStrong], VoiceMode.All).Count, "all mode opening voice");
-    AssertEqual(1, EventVoicePolicy.FilterForVoice([pending, failed, confirmedWatch, confirmedStrong], VoiceMode.StrongOnly).Count, "strong mode opening voice");
-    AssertEqual("002563", EventVoicePolicy.FilterForVoice([pending, failed, confirmedWatch, confirmedStrong], VoiceMode.StrongOnly)[0].Code, "confirmed strong opening code");
-});
-
-Run("Push policy excludes unconfirmed opening candidates", () =>
-{
-    var now = DateTimeOffset.Parse("2026-05-22T09:36:06+08:00");
-    var pending = Event("002560", "待确认", L1EventType.OpeningWeakToStrong, "竞价弱转强候选", now) with
-    {
-        OpeningSignal = TestOpeningSignal(now, dryRun: false) with
-        {
-            IntradayStatus = "preopen_candidate",
-            IntradayOutcome = "preopen_candidate",
-        }
-    };
-    var confirmedStrong = Event("002563", "确认强", L1EventType.OpeningWeakToStrong, "竞价弱转强", now) with
-    {
-        OpeningSignal = TestOpeningSignal(now, dryRun: false) with
-        {
-            Confidence = "strong",
-            IntradayStatus = "confirmed",
-            IntradayOutcome = "confirmed_strong",
-        }
-    };
-
-    var pushEvents = EventVoicePolicy.FilterForPush([pending, confirmedStrong]);
+    var pushEvents = EventVoicePolicy.FilterForPush([candidate, gap]);
 
     AssertEqual(1, pushEvents.Count, "opening push count");
-    AssertEqual("002563", pushEvents[0].Code, "confirmed strong opening push code");
+    AssertEqual("002561", pushEvents[0].Code, "opening push code");
 });
 
 Run("TDX bridge normalizes mismatched source change percent from price and pre-close", () =>
@@ -1742,6 +599,9 @@ Run("Main form formats opening auction coverage status", () =>
         MainForm.IsOpeningAuctionCoverageWindow(DateTimeOffset.Parse("2026-05-22T09:25:00+08:00")),
         "auction coverage window includes 09:25");
     AssertTrue(
+        !MainForm.IsOpeningAuctionCoverageWindow(DateTimeOffset.Parse("2026-05-22T09:25:10+08:00")),
+        "auction coverage window excludes 09:25:10");
+    AssertTrue(
         !MainForm.IsOpeningAuctionCoverageWindow(DateTimeOffset.Parse("2026-05-22T09:30:00+08:00")),
         "auction coverage window excludes 09:30");
     AssertTrue(
@@ -1757,8 +617,8 @@ Run("Main form formats opening auction coverage status", () =>
         !MainForm.IsOpeningWeakToStrongPreopenWindow(DateTimeOffset.Parse("2026-05-22T09:30:00+08:00")),
         "preopen weak-to-strong window excludes 09:30");
     AssertEqual(
-        "竞价覆盖 90% 90/100 慢2 截1 演练",
-        MainForm.OpeningCoverageStatusText("90%", "90", "100", " 慢2 截1", " 演练"),
+        "竞价覆盖 90% 90/100 慢2 截1",
+        MainForm.OpeningCoverageStatusText("90%", "90", "100", " 慢2 截1"),
         "coverage status text");
     AssertTrue(MainForm.IsOpeningCoverageLow(189m / 200m), "raw 94.5% coverage is low");
     AssertTrue(!MainForm.IsOpeningCoverageLow(0.95m), "raw 95% coverage passes");
@@ -1873,78 +733,7 @@ Run("Opening signal reporter posts canonical payload to proxy", () =>
     var timestamp = DateTimeOffset.Parse("2026-05-22T09:30:06+08:00");
     var item = Event("002552", "宝鼎科技", L1EventType.OpeningWeakToStrong, "竞价弱转强", timestamp) with
     {
-        OpeningSignal = new OpeningWeakToStrongSignal(
-            "2026-05-22",
-            "002552",
-            "宝鼎科技",
-            "opening_weak_to_strong",
-            "strong",
-            82m,
-            "auction_gap_reversal",
-            timestamp,
-            false,
-            35.68m,
-            -1.44m,
-            36.92m,
-            1.99m,
-            37.48m,
-            3.54m,
-            4.98m,
-            56_000_000m,
-            50_000_000m,
-            DateTimeOffset.Parse("2026-05-22T09:20:05+08:00"),
-            35m,
-            -3.31m,
-            2_000_000m,
-            DateTimeOffset.Parse("2026-05-22T09:24:05+08:00"),
-            35.3m,
-            -2.49m,
-            4_500_000m,
-            DateTimeOffset.Parse("2026-05-22T09:25:01+08:00"),
-            35.68m,
-            -1.44m,
-            6_000_000m,
-            1.87m,
-            1.05m,
-            4_000_000m,
-            1_500_000m,
-            2.0m,
-            0.33m,
-            true,
-            "active",
-            "review_only",
-            "amount=56000000;volume=14950000",
-            "openingLiquidityMinAmount=5000000;minCurrentAmount=30000000;hotAmount=100000000;minCurrentVolume=1000000",
-            "liquidity-review.v1",
-            null,
-            "good",
-            DateTimeOffset.Parse("2026-05-22T09:25:01+08:00"),
-            DateTimeOffset.Parse("2026-05-22T09:25:01+08:00"),
-            DateTimeOffset.Parse("2026-05-22T09:30:06+08:00"),
-            1,
-            0,
-            305_000,
-            true,
-            132,
-            128,
-            420,
-            1,
-            2,
-            null,
-            [],
-            "",
-            0.97m,
-            "pending",
-            "pending",
-            timestamp,
-            37.48m,
-            3.54m,
-            56_000_000m,
-            "09:30-09:35已触发，等待盘中确认",
-            "opening-weak-to-strong.v1",
-            "owts-test",
-            [],
-            [])
+        OpeningSignal = TestOpeningSignal(timestamp)
     };
 
     var result = reporter.ReportAsync(item, new Uri("http://127.0.0.1:3000"))
@@ -1957,27 +746,17 @@ Run("Opening signal reporter posts canonical payload to proxy", () =>
     var root = document.RootElement;
     AssertEqual("desktop", root.GetProperty("source").GetString(), "source");
     var payload = root.GetProperty("signal");
-    AssertEqual("opening_weak_to_strong", payload.GetProperty("signalType").GetString(), "signal type");
+    AssertSequence(
+        ["amount", "code", "name", "pct", "price", "reason", "stage", "status", "time", "voiceEligible"],
+        payload.EnumerateObject().Select(item => item.Name).Order(StringComparer.Ordinal).ToArray(),
+        "canonical signal fields");
     AssertEqual("002552", payload.GetProperty("code").GetString(), "signal code");
-    AssertEqual(82m, payload.GetProperty("score").GetDecimal(), "signal score");
-    AssertEqual(1, payload.GetProperty("auctionSampleCount").GetInt32(), "auction sample count");
-    AssertEqual(128, payload.GetProperty("receivedCount").GetInt32(), "received count");
-    AssertEqual(0.97m, payload.GetProperty("auctionCoverageRatio").GetDecimal(), "auction coverage ratio");
-    AssertEqual(305000, payload.GetProperty("latencyMs").GetInt32(), "latency ms");
-    AssertEqual(35.3m, payload.GetProperty("lateBaselinePrice").GetDecimal(), "late baseline price");
-    AssertEqual(35.68m, payload.GetProperty("finalBaselinePrice").GetDecimal(), "final baseline price");
-    AssertEqual(1.05m, payload.GetProperty("latePriceLiftPctPoint").GetDecimal(), "late price lift");
-    AssertEqual(4_000_000m, payload.GetProperty("auctionAmountDelta").GetDecimal(), "auction amount delta");
-    AssertEqual(1_500_000m, payload.GetProperty("lateAmountDelta").GetDecimal(), "late amount delta");
-    AssertTrue(payload.GetProperty("priceVolumeConfirmed").GetBoolean(), "price volume confirmed");
-    AssertEqual("active", payload.GetProperty("liquidityTier").GetString(), "liquidity tier");
-    AssertEqual("review_only", payload.GetProperty("liquidityTierMode").GetString(), "liquidity tier mode");
-    AssertEqual("amount=56000000;volume=14950000", payload.GetProperty("liquidityTierBasis").GetString(), "liquidity tier basis");
-    AssertEqual(
-        "openingLiquidityMinAmount=5000000;minCurrentAmount=30000000;hotAmount=100000000;minCurrentVolume=1000000",
-        payload.GetProperty("liquidityTierThresholds").GetString(),
-        "liquidity tier thresholds");
-    AssertEqual("liquidity-review.v1", payload.GetProperty("liquidityTierVersion").GetString(), "liquidity tier version");
+    AssertEqual("gapAlert", payload.GetProperty("stage").GetString(), "signal stage");
+    AssertEqual(true, payload.GetProperty("voiceEligible").GetBoolean(), "signal voice eligible");
+    AssertEqual("2026-05-22T09:30:06+08:00", payload.GetProperty("time").GetString(), "signal time");
+    AssertEqual(37.48m, payload.GetProperty("price").GetDecimal(), "signal price");
+    AssertEqual(4.98m, payload.GetProperty("pct").GetDecimal(), "signal pct");
+    AssertEqual(50_000_000m, payload.GetProperty("amount").GetDecimal(), "signal amount");
 });
 
 Run("Event export includes opening weak-to-strong replay fields", () =>
@@ -1985,78 +764,7 @@ Run("Event export includes opening weak-to-strong replay fields", () =>
     var timestamp = DateTimeOffset.Parse("2026-05-22T09:30:06+08:00");
     var item = Event("002552", "宝鼎科技", L1EventType.OpeningWeakToStrong, "竞价弱转强", timestamp) with
     {
-        OpeningSignal = new OpeningWeakToStrongSignal(
-            "2026-05-22",
-            "002552",
-            "宝鼎科技",
-            "opening_weak_to_strong",
-            "strong",
-            82m,
-            "auction_gap_reversal",
-            timestamp,
-            false,
-            35.68m,
-            -1.44m,
-            36.92m,
-            1.99m,
-            37.48m,
-            3.54m,
-            4.98m,
-            56_000_000m,
-            50_000_000m,
-            DateTimeOffset.Parse("2026-05-22T09:20:05+08:00"),
-            35m,
-            -3.31m,
-            2_000_000m,
-            DateTimeOffset.Parse("2026-05-22T09:24:05+08:00"),
-            35.3m,
-            -2.49m,
-            4_500_000m,
-            DateTimeOffset.Parse("2026-05-22T09:25:01+08:00"),
-            35.68m,
-            -1.44m,
-            6_000_000m,
-            1.87m,
-            1.05m,
-            4_000_000m,
-            1_500_000m,
-            2.0m,
-            0.33m,
-            true,
-            "active",
-            "review_only",
-            "amount=56000000;volume=14950000",
-            "openingLiquidityMinAmount=5000000;minCurrentAmount=30000000;hotAmount=100000000;minCurrentVolume=1000000",
-            "liquidity-review.v1",
-            6.2m,
-            "good",
-            DateTimeOffset.Parse("2026-05-22T09:25:01+08:00"),
-            DateTimeOffset.Parse("2026-05-22T09:25:01+08:00"),
-            DateTimeOffset.Parse("2026-05-22T09:30:06+08:00"),
-            2,
-            0,
-            305_000,
-            true,
-            132,
-            128,
-            420,
-            1,
-            2,
-            null,
-            [],
-            "",
-            0.97m,
-            "pending",
-            "pending",
-            timestamp,
-            37.48m,
-            3.54m,
-            56_000_000m,
-            "09:30-09:35已触发，等待盘中确认",
-            "opening-weak-to-strong.v1",
-            "owts-test",
-            [],
-            [new OpeningWeakToStrongRiskFlag("amount_regressed", "medium", -35m)])
+        OpeningSignal = TestOpeningSignal(timestamp)
     };
 
     var lines = MainForm.BuildExportLines([item], csv: true);
@@ -2066,30 +774,16 @@ Run("Event export includes opening weak-to-strong replay fields", () =>
         .Select((name, index) => new { name, index })
         .ToDictionary(item => item.name, item => values[item.index], StringComparer.Ordinal);
 
-    AssertTrue(lines[0].Contains("弱转强形态"), "opening export header");
-    AssertTrue(lines[0].Contains("流动性分层"), "liquidity export header");
+    AssertTrue(lines[0].Contains("弱转强阶段"), "opening export header");
+    AssertTrue(!lines[0].Contains("流动性分层"), "liquidity review header removed");
     AssertEqual(header.Length, values.Length, "csv header and value count");
-    AssertEqual("pending", byHeader["盘中状态"], "intraday status column");
-    AssertEqual("pending", byHeader["盘中结果"], "intraday outcome column");
-    AssertEqual("2026-05-22 09:30:06", byHeader["盘中状态时间"], "intraday status time column");
-    AssertEqual("37.48", byHeader["盘中价"], "intraday price column");
-    AssertEqual("3.54", byHeader["盘中涨幅"], "intraday pct column");
-    AssertEqual("5600万", byHeader["盘中成交额"], "intraday amount column");
-    AssertEqual("09:30-09:35已触发，等待盘中确认", byHeader["盘中说明"], "intraday note column");
-    AssertTrue(lines[1].Contains("auction_gap_reversal"), "opening variant exported");
+    AssertEqual("gapAlert", byHeader["弱转强阶段"], "opening stage column");
+    AssertEqual("True", byHeader["可语音"], "voice eligible column");
     AssertTrue(lines[1].Contains("35.68"), "auction final price exported");
-    AssertTrue(lines[1].Contains("35.3"), "late baseline price exported");
     AssertTrue(lines[1].Contains("37.48"), "first window price exported");
     AssertTrue(lines[1].Contains("4.98"), "jump pct point exported");
-    AssertTrue(lines[1].Contains("150万"), "late amount delta exported");
-    AssertTrue(lines[1].Contains("active"), "liquidity tier exported");
-    AssertTrue(lines[1].Contains("review_only"), "liquidity tier mode exported");
-    AssertTrue(lines[1].Contains("amount=56000000;volume=14950000"), "liquidity tier basis exported");
-    AssertTrue(lines[1].Contains("openingLiquidityMinAmount=5000000"), "liquidity tier thresholds exported");
     AssertTrue(lines[1].Contains("5000万"), "amount delta exported");
     AssertTrue(lines[1].Contains("128"), "received count exported");
-    AssertTrue(lines[1].Contains("0.97"), "coverage ratio exported");
-    AssertTrue(lines[1].Contains("amount_regressed"), "risk flag exported");
 });
 
 Run("TDX bridge full state merges quote and depth into one snapshot", () =>
@@ -2210,31 +904,125 @@ static QuoteSnapshot Quote(
         asks ?? [],
         time ?? DateTimeOffset.Parse("2026-05-20T10:00:00+08:00"));
 }
-
 static QuoteLevel Level(decimal price, decimal volume) => new(price, volume);
 
-static OpeningWeakToStrongQuote OpeningQuote(
-    string code,
-    string name,
-    string at,
+static OpeningWeakToStrongRules LoadOpeningRules()
+{
+    var fixturePath = Path.Combine(
+        ProjectRootLocator.Find(),
+        "docs",
+        "yidong-jingling",
+        "fixtures",
+        "opening-weak-to-strong-cases.json");
+    using var document = JsonDocument.Parse(File.ReadAllText(fixturePath));
+    return OpeningWeakToStrongRules.FromJson(document.RootElement.GetProperty("rules"));
+}
+
+static IReadOnlyList<OpeningWeakToStrongResult> RunOpeningCheckpoints(
+    OpeningAuctionStateStore store,
+    OpeningWeakToStrongDetector detector)
+{
+    var results = new List<OpeningWeakToStrongResult>();
+    foreach (var quote in OpeningCheckpointQuotes())
+    {
+        store.Capture(quote);
+        var result = detector.Evaluate(quote, store.GetBaseline(quote.Code, quote.At));
+        if (result.Triggered) results.Add(result);
+    }
+    return results;
+}
+
+static IReadOnlyList<string> RunOpeningCheckpointAcceptance(
+    OpeningAuctionStateStore store,
+    OpeningWeakToStrongDetector detector)
+{
+    var results = RunOpeningCheckpoints(store, detector)
+        .ToDictionary(item => item.Time.ToLocalTime().ToString("HH:mm"), item => item, StringComparer.Ordinal);
+    return new[] { "09:20", "09:25", "09:30", "09:35", "10:00" }
+        .Select(time =>
+        {
+            results.TryGetValue(time, out var result);
+            var stage = result?.Stage ?? "auctionConditionPassed";
+            var passFail = stage is "noGap" or "trendWeak" ? "FAIL" : "PASS";
+            return $"{time}:{passFail}:{stage}:{result?.VoiceEligible.ToString() ?? "False"}";
+        })
+        .ToArray();
+}
+
+static OpeningWeakToStrongQuote[] OpeningCheckpointQuotes(string tradingDate = "2026-06-03")
+{
+    return
+    [
+        OpeningCheckpointQuote(tradingDate, "09:20:00", 9.8m, 10m, 1_000_000m, 100_000m),
+        OpeningCheckpointQuote(tradingDate, "09:25:00", 9.95m, 10m, 2_000_000m, 180_000m),
+        OpeningCheckpointQuote(tradingDate, "09:30:00", 10.35m, 10m, 8_000_000m, 600_000m) with { Open = 10.35m },
+        OpeningCheckpointQuote(tradingDate, "09:35:00", 10.65m, 10m, 16_000_000m, 1_200_000m) with { Open = 10.35m },
+        OpeningCheckpointQuote(tradingDate, "10:00:00", 10.7m, 10m, 25_000_000m, 2_000_000m) with { Open = 10.35m },
+    ];
+}
+
+static OpeningWeakToStrongQuote OpeningCheckpointQuote(
+    string tradingDate,
+    string time,
     decimal lastPrice,
     decimal preClose,
     decimal amount,
     decimal volume)
 {
-    var timestamp = DateTimeOffset.Parse(at);
+    var timestamp = DateTimeOffset.Parse($"{tradingDate}T{time}+08:00");
     return new OpeningWeakToStrongQuote(
-        code,
-        name,
+        "002552",
+        "宝鼎科技",
         timestamp,
         lastPrice,
         preClose,
         0m,
         amount,
         volume,
-        0m,
+        11m,
         timestamp,
-        timestamp);
+        timestamp,
+        true,
+        132,
+        128,
+        420,
+        1,
+        2);
+}
+
+static QuoteSnapshot[] OpeningCheckpointSnapshots(string tradingDate = "2026-06-03")
+{
+    return
+    [
+        OpeningSnapshot(tradingDate, "09:20:00", 9.8m, -2m, 10m, 1_000_000m, 100_000m),
+        OpeningSnapshot(tradingDate, "09:25:00", 9.95m, -0.5m, 10m, 2_000_000m, 180_000m),
+        OpeningSnapshot(tradingDate, "09:30:00", 10.35m, 3.5m, 10m, 8_000_000m, 600_000m) with { Open = 10.35m },
+        OpeningSnapshot(tradingDate, "09:35:00", 10.65m, 6.5m, 10m, 16_000_000m, 1_200_000m) with { Open = 10.35m },
+        OpeningSnapshot(tradingDate, "10:00:00", 10.7m, 7m, 10m, 25_000_000m, 2_000_000m) with { Open = 10.35m },
+    ];
+}
+
+static QuoteSnapshot OpeningSnapshot(
+    string tradingDate,
+    string time,
+    decimal price,
+    decimal changePct,
+    decimal preClose,
+    decimal amount,
+    decimal volume)
+{
+    var timestamp = DateTimeOffset.Parse($"{tradingDate}T{time}+08:00");
+    return Quote("002552", "宝鼎科技", price, changePct, preClose, time: timestamp, volume: volume, amount: amount) with
+    {
+        CapturedAt = timestamp,
+        BridgeTs = timestamp,
+        OpeningForcedSample = true,
+        RequestedCount = 132,
+        ReceivedCount = 128,
+        ElapsedMs = 420,
+        SlowBatches = 1,
+        TruncatedBatches = 2,
+    };
 }
 
 static EventRecord Event(string code, string name, L1EventType type, string typeName, DateTimeOffset timestamp)
@@ -2253,86 +1041,57 @@ static EventRecord Event(string code, string name, L1EventType type, string type
         "test");
 }
 
-static OpeningWeakToStrongSignal TestOpeningSignal(DateTimeOffset timestamp, bool dryRun)
+static OpeningWeakToStrongSignal TestOpeningSignal(DateTimeOffset timestamp)
 {
     return new OpeningWeakToStrongSignal(
         timestamp.ToString("yyyy-MM-dd"),
-        "002560",
-        "低覆盖",
+        "002552",
+        "宝鼎科技",
         "opening_weak_to_strong",
-        "strong",
-        82m,
-        "auction_gap_reversal",
-        timestamp,
-        dryRun,
-        9.9m,
-        -1m,
-        10.1m,
-        1m,
-        10.35m,
-        3.5m,
-        4.5m,
-        50_000_000m,
-        45_000_000m,
-        DateTimeOffset.Parse("2026-05-22T09:20:05+08:00"),
-        9.8m,
-        -2m,
-        2_000_000m,
-        DateTimeOffset.Parse("2026-05-22T09:24:00+08:00"),
-        9.85m,
-        -1.5m,
-        3_000_000m,
-        DateTimeOffset.Parse("2026-05-22T09:25:00+08:00"),
-        9.9m,
-        -1m,
-        5_000_000m,
-        1m,
-        0.5m,
-        3_000_000m,
-        2_000_000m,
-        1.5m,
-        0.2m,
+        "gapAlert",
+        "gapAlert",
         true,
-        "active",
-        "review_only",
-        "amount=50000000;volume=5000000",
-        "openingLiquidityMinAmount=5000000;minCurrentAmount=30000000;hotAmount=100000000;minCurrentVolume=1000000",
-        "liquidity-review.v1",
-        null,
+        "09:30较09:25出现跳空高开缺口",
+        timestamp,
+        37.48m,
+        4.98m,
+        timestamp,
+        35.68m,
+        1.02m,
+        37.48m,
+        4.98m,
+        37.48m,
+        4.98m,
+        3.96m,
+        50_000_000m,
+        50_000_000m,
+        DateTimeOffset.Parse("2026-05-22T09:20:05+08:00"),
+        35.32m,
+        0m,
+        1_000_000m,
+        DateTimeOffset.Parse("2026-05-22T09:25:00+08:00"),
+        35.68m,
+        1.02m,
+        5_000_000m,
+        1.02m,
+        4_000_000m,
+        4m,
+        true,
         "good",
         DateTimeOffset.Parse("2026-05-22T09:25:00+08:00"),
         DateTimeOffset.Parse("2026-05-22T09:25:00+08:00"),
         timestamp,
         1,
         0,
-        306_000,
+        305_000,
         true,
-        100,
-        90,
+        132,
+        128,
         1800,
         2,
         1,
-        null,
-        [],
-        "",
-        0.9m,
-        "pending",
-        "pending",
-        timestamp,
-        10.35m,
-        3.5m,
-        50_000_000m,
-        "09:30-09:35已触发，等待盘中确认",
         "opening-weak-to-strong.v1",
-        "owts-test",
-        [],
-        [new OpeningWeakToStrongRiskFlag("auction_coverage_low", "medium", -35m)]);
-}
-
-static bool IsAuctionFinalQuote(OpeningWeakToStrongQuote quote)
-{
-    return quote.At.ToLocalTime().TimeOfDay >= TimeSpan.Parse("09:25:00") &&
-        quote.At.ToLocalTime().TimeOfDay < TimeSpan.Parse("09:26:00");
+        "owts-test");
 }
 
 static void InvokeHandleMessage(TdxBridgeClient client, string message)

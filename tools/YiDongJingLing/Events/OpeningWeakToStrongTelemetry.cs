@@ -7,10 +7,10 @@ public sealed record OpeningWeakToStrongTelemetryRecord(
     string Name,
     string Decision,
     bool Triggered,
+    string Stage,
+    bool VoiceEligible,
+    string Reason,
     string? InvalidReason,
-    string? Variant,
-    string? Confidence,
-    decimal Score,
     decimal? AuctionPct,
     decimal? OfficialOpenPct,
     decimal? FirstWindowPct,
@@ -18,14 +18,9 @@ public sealed record OpeningWeakToStrongTelemetryRecord(
     decimal Amount,
     decimal? AmountDelta,
     string BaselineQuality,
-    bool DryRun,
-    string? IntradayStatus,
-    string? IntradayOutcome,
     int? AuctionSampleCount,
     int? QuoteAgeMs,
-    int? LatencyMs,
-    decimal? AuctionCoverageRatio,
-    IReadOnlyList<string> RiskFlags)
+    int? LatencyMs)
 {
     public static OpeningWeakToStrongTelemetryRecord FromResult(
         OpeningWeakToStrongResult result,
@@ -38,10 +33,10 @@ public sealed record OpeningWeakToStrongTelemetryRecord(
             result.Name,
             decision,
             result.Triggered,
+            result.Stage,
+            result.VoiceEligible,
+            result.Reason,
             result.InvalidReason,
-            result.Variant,
-            result.Confidence,
-            result.Score,
             result.AuctionPct,
             result.OfficialOpenPct,
             result.FirstWindowPct,
@@ -49,13 +44,8 @@ public sealed record OpeningWeakToStrongTelemetryRecord(
             result.Amount,
             result.AmountDelta,
             result.BaselineQuality,
-            result.DryRun,
-            result.IntradayStatus,
-            result.IntradayOutcome,
             result.AuctionSampleCount,
             result.QuoteAgeMs,
-            result.LatencyMs,
-            result.AuctionCoverageRatio,
-            result.RiskFlags.Select(item => item.Key).ToArray());
+            result.LatencyMs);
     }
 }

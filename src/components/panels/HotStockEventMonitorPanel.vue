@@ -259,6 +259,7 @@ import {
 import {
   hotStockEventSpeechService,
   resolveSpeechVoiceSelection,
+  selectSpeechEvents,
 } from '../../services/hotlist/HotStockEventSpeechService'
 import {
   eventRadarFeishuNotifier,
@@ -639,7 +640,9 @@ watch(
         unsubscribe = hotStockEventMonitorService.subscribe((nextState) => {
           state.value = nextState
           if (speechEnabled.value) {
-            void hotStockEventSpeechService.handleLatestAdded(speechEligibleEvents(nextState.latestHotStockAdded))
+            void hotStockEventSpeechService.handleLatestAdded(
+              selectSpeechEvents(nextState.latestAdded, nextState.latestHotStockAdded),
+            )
           }
         })
       }
@@ -671,13 +674,6 @@ onUnmounted(() => {
   hotStockEventSpeechService.stop()
 })
 
-function speechEligibleEvents(events: HotStockAbnormalEvent[]) {
-  return events.filter((event) => {
-    if (event.type !== OPENING_WEAK_TO_STRONG_EVENT_TYPE) return true
-    const raw = event.raw as { voiceOwner?: string; openingSignalPost?: { voiceOwner?: string } } | null
-    return (raw?.voiceOwner || raw?.openingSignalPost?.voiceOwner) === 'web'
-  })
-}
 </script>
 
 <style scoped>

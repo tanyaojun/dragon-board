@@ -23,7 +23,7 @@ public sealed class OpeningSignalReporter : IDisposable
     {
         if (item.OpeningSignal is null) return new OpeningSignalReportResult(false, "none", "");
 
-        var request = new OpeningSignalRequest("desktop", item.OpeningSignal);
+        var request = new OpeningSignalRequest("desktop", OpeningSignalPayload.FromSignal(item.OpeningSignal));
         var json = JsonSerializer.Serialize(request, JsonOptions);
         using var content = new StringContent(json, Encoding.UTF8, "application/json");
         using var response = await _client.PostAsync(
@@ -79,4 +79,32 @@ public sealed class OpeningSignalReporter : IDisposable
 
 public sealed record OpeningSignalReportResult(bool Accepted, string VoiceOwner, string DedupeAction);
 
-internal sealed record OpeningSignalRequest(string Source, OpeningWeakToStrongSignal Signal);
+internal sealed record OpeningSignalRequest(string Source, OpeningSignalPayload Signal);
+
+internal sealed record OpeningSignalPayload(
+    string Stage,
+    string Status,
+    string Code,
+    string Name,
+    DateTimeOffset Time,
+    decimal Price,
+    decimal Pct,
+    decimal Amount,
+    bool VoiceEligible,
+    string Reason)
+{
+    public static OpeningSignalPayload FromSignal(OpeningWeakToStrongSignal signal)
+    {
+        return new OpeningSignalPayload(
+            signal.Stage,
+            signal.Status,
+            signal.Code,
+            signal.Name,
+            signal.Time,
+            signal.Price,
+            signal.Pct,
+            signal.Amount,
+            signal.VoiceEligible,
+            signal.Reason);
+    }
+}

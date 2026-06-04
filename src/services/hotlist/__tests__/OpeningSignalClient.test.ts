@@ -11,13 +11,16 @@ describe('OpeningSignalClient', () => {
         signals: [
           {
             canonicalSignal: {
-              code: '002552',
-              name: '宝鼎科技',
-              signalType: 'opening_weak_to_strong',
-              confidence: 'critical',
-              score: 93,
-              variant: 'auction_gap_reversal',
-              dryRun: false,
+                code: '002552',
+                name: '宝鼎科技',
+                stage: 'gapAlert',
+                status: 'gapAlert',
+              time: '2026-05-22T09:30:06+08:00',
+              price: 10.35,
+              pct: 3.5,
+              amount: 8_000_000,
+                voiceEligible: true,
+              reason: '09:30较09:25出现跳空高开缺口',
             },
           },
         ],
@@ -30,8 +33,8 @@ describe('OpeningSignalClient', () => {
     expect(fetcher).toHaveBeenCalledWith('/api/opening-signals/today?tradingDate=2026-05-22')
     expect(signals.get('002552')).toMatchObject({
       code: '002552',
-      confidence: 'critical',
-      score: 93,
+      stage: 'gapAlert',
+      voiceEligible: true,
     })
   })
 
@@ -49,15 +52,16 @@ describe('OpeningSignalClient', () => {
     const client = new OpeningSignalClient({ fetcher })
 
     const response = await client.postSignal('web', {
-      tradingDate: '2026-05-22',
       code: '002552',
       name: '宝鼎科技',
-      signalType: 'opening_weak_to_strong',
-      confidence: 'strong',
-      score: 82,
-      variant: 'auction_gap_reversal',
-      triggerAt: '2026-05-22T09:30:06+08:00',
-      dryRun: false,
+      stage: 'gapAlert',
+      status: 'gapAlert',
+      voiceEligible: true,
+      time: '2026-05-22T09:30:06+08:00',
+      price: 10.35,
+      pct: 3.5,
+      amount: 8_000_000,
+      reason: '09:30较09:25出现跳空高开缺口',
     })
 
     expect(fetcher).toHaveBeenCalledWith('/api/opening-signals', {

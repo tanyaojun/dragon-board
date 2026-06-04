@@ -9,38 +9,13 @@ public sealed class L1EventEngine
         "09:20:00",
         "09:20:00",
         "09:20:30",
-        "09:24:50",
-        "09:25:10",
+        "09:25:00",
+        "09:25:00",
         "09:30:00",
         "09:35:00",
-        0.5m,
         3m,
-        1.5m,
-        1.5m,
-        1m,
-        3m,
-        2m,
-        30_000_000m,
-        20_000_000m,
-        5_000_000m,
-        "09:24:00",
-        1m,
-        0.5m,
         0.8m,
-        0.35m,
-        0.3m,
-        0.2m,
-        0m,
-        8_000_000m,
-        5_000_000m,
-        2.5m,
-        2m,
-        0.2m,
-        30m,
-        0.95m,
-        30_000,
-        1_000_000m,
-        0.995m);
+        0.35m);
     private readonly L1EventRules _rules;
     private readonly Dictionary<string, StockState> _states = new(StringComparer.Ordinal);
     private readonly OpeningAuctionStateStore _openingStore = new(OpeningRules);
@@ -279,28 +254,21 @@ public sealed class L1EventEngine
             return;
         }
         if (state.OpeningWeakToStrongTriggeredDate == tradingDate &&
-            IntradayOutcomePriority(result) <= state.OpeningWeakToStrongIntradayPriority &&
-            !(state.OpeningWeakToStrongLastDryRun && !result.DryRun))
+            OpeningStagePriority(result) <= state.OpeningWeakToStrongIntradayPriority)
         {
             RecordOpeningTelemetry(state, tradingDate, result, "event_suppressed_duplicate_or_lower_priority");
             return;
         }
 
         state.OpeningWeakToStrongTriggeredDate = tradingDate;
-        state.OpeningWeakToStrongIntradayPriority = IntradayOutcomePriority(result);
-        state.OpeningWeakToStrongLastDryRun = result.DryRun;
-        var severity = result.Confidence switch
-        {
-            "critical" => L1EventSeverity.Critical,
-            _ => L1EventSeverity.Important,
-        };
+        state.OpeningWeakToStrongIntradayPriority = OpeningStagePriority(result);
         Add(
             events,
             quote,
             L1EventType.OpeningWeakToStrong,
             OpeningTypeName(result),
-            severity,
-            OpeningReason(result, result.IntradayStatus is "confirmed" or "failed" or "confirmed_reversal" or "watch"),
+            L1EventSeverity.Important,
+            OpeningReason(result),
             ToOpeningSignal(result));
     }
 
@@ -311,7 +279,7 @@ public sealed class L1EventEngine
         string decision)
     {
         if (result.InvalidReason == "outside_detection_window") return;
-        var telemetryKey = $"{tradingDate}:{decision}:{result.InvalidReason ?? result.IntradayStatus ?? result.IntradayOutcome ?? ""}";
+        var telemetryKey = $"{tradingDate}:{decision}:{result.InvalidReason ?? result.Stage}";
         if (!state.OpeningTelemetryKeys.Add(telemetryKey)) return;
         _openingTelemetry?.Invoke(OpeningWeakToStrongTelemetryRecord.FromResult(result, decision));
     }
@@ -447,43 +415,30 @@ public sealed class L1EventEngine
 
     private static string OpeningReason(OpeningWeakToStrongResult result, bool intradayUpdate = false)
     {
-        if (result.IntradayStatus == "preopen_candidate")
-        {
-            var candidateAmount = FormatMoney(result.Amount);
-            return $"候选｜待开盘验证｜09:20 {FormatSignedPct(result.InitialBaselinePct)} → 09:25 {FormatSignedPct(result.AuctionPct)}，竞价抬升 {result.AuctionPriceLiftPctPoint:0.00}pct，成交额 {candidateAmount}";
-        }
-
-        if (intradayUpdate)
-        {
-            var status = result.IntradayStatus switch
-            {
-                "failed" => "盘中失败",
-                "confirmed_reversal" => "确认后转弱",
-                _ => "盘中确认",
-            };
-            return $"{status}｜{result.IntradayNote}｜当前 {FormatSignedPct(result.IntradayPct)}，成交额 {FormatMoney(result.IntradayAmount ?? result.Amount)}";
-        }
-
-        var variantName = result.Variant switch
-        {
-            "auction_late_lift" => "临门抢筹",
-            "low_open_red_reversal" => "低开翻红",
-            "strong_open_board_attempt" => "冲板抢筹",
-            "auction_gap_delayed_board" => "跳空修复延迟上板",
-            _ => "跳空上移",
-        };
-        var amount = FormatMoney(result.Amount);
-        var distance = result.LimitDistancePct.HasValue ? $"，距涨停 {result.LimitDistancePct:0.00}%" : "";
-        return $"{variantName}｜分数 {result.Score:0}｜09:25 {FormatSignedPct(result.AuctionPct)} → 09:30 {FormatSignedPct(result.FirstWindowPct)}，跳空 {result.JumpPctPoint:0.00}pct，成交额 {amount}{distance}";
+        return string.IsNullOrWhiteSpace(result.Reason) ? result.Stage : result.Reason;
     }
 
     private static string OpeningTypeName(OpeningWeakToStrongResult result)
     {
-        return result.IntradayStatus switch
+        return result.Stage switch
         {
-            "preopen_candidate" => "竞价弱转强候选",
-            "confirmed_reversal" => "竞价确认后转弱",
+            "auctionConditionPassed" or "auctionConditionFailed" => "竞价弱转强候选",
+            "gapAlert" => "竞价跳空高开",
+            "trendConfirm" => "快速上板前兆",
+            "optionalFinalStatus" => "竞价弱转强复盘",
             _ => "竞价弱转强",
+        };
+    }
+
+    private static int OpeningStagePriority(OpeningWeakToStrongResult result)
+    {
+        return result.Stage switch
+        {
+            "auctionConditionPassed" or "auctionConditionFailed" => 1,
+            "gapAlert" or "noGap" => 2,
+            "trendConfirm" or "trendWeak" => 3,
+            "optionalFinalStatus" => 4,
+            _ => 0,
         };
     }
 
@@ -494,45 +449,35 @@ public sealed class L1EventEngine
             result.Code,
             result.Name,
             result.SignalType,
-            result.Confidence ?? "watch",
-            result.Score,
-            result.Variant ?? "",
+            result.Stage,
+            result.Status,
+            result.VoiceEligible,
+            result.Reason,
+            result.Time,
+            result.Price,
+            result.Pct,
             result.TriggerAt,
-            result.DryRun,
-            result.AuctionFinalPrice ?? 0m,
-            result.AuctionPct ?? 0m,
+            result.AuctionFinalPrice,
+            result.AuctionPct,
             result.OfficialOpen,
             result.OfficialOpenPct,
-            result.FirstWindowPrice ?? 0m,
-            result.FirstWindowPct ?? 0m,
-            result.JumpPctPoint ?? 0m,
+            result.FirstWindowPrice,
+            result.FirstWindowPct,
+            result.JumpPctPoint,
             result.Amount,
-            result.AmountDelta ?? 0m,
+            result.AmountDelta,
             result.InitialBaselineAt,
             result.InitialBaselinePrice,
             result.InitialBaselinePct,
             result.InitialBaselineAmount,
-            result.LateBaselineAt,
-            result.LateBaselinePrice,
-            result.LateBaselinePct,
-            result.LateBaselineAmount,
             result.FinalBaselineAt,
             result.FinalBaselinePrice,
             result.FinalBaselinePct,
             result.FinalBaselineAmount,
             result.AuctionPriceLiftPctPoint,
-            result.LatePriceLiftPctPoint,
             result.AuctionAmountDelta,
-            result.LateAmountDelta,
             result.AuctionAmountLiftRatio,
-            result.LateAmountLiftRatio,
             result.PriceVolumeConfirmed,
-            result.LiquidityTier,
-            result.LiquidityTierMode,
-            result.LiquidityTierBasis,
-            result.LiquidityTierThresholds,
-            result.LiquidityTierVersion,
-            result.LimitDistancePct,
             result.BaselineQuality,
             result.AuctionCapturedAt,
             result.BridgeTs,
@@ -546,35 +491,8 @@ public sealed class L1EventEngine
             result.ElapsedMs,
             result.SlowBatches,
             result.TruncatedBatches,
-            result.PreviousWeakScore,
-            result.PreviousWeakSignals,
-            result.PreviousWeakSource,
-            result.AuctionCoverageRatio,
-            result.IntradayStatus,
-            result.IntradayOutcome,
-            result.IntradayStatusAt,
-            result.IntradayPrice,
-            result.IntradayPct,
-            result.IntradayAmount,
-            result.IntradayNote,
             result.RuleVersion,
-            result.ConfigHash,
-            result.Factors,
-            result.RiskFlags);
-    }
-
-    private static int IntradayOutcomePriority(OpeningWeakToStrongResult result)
-    {
-        return result.IntradayStatus switch
-        {
-            "failed" => 4,
-            "confirmed_reversal" => 4,
-            "confirmed" => 3,
-            "watch" => 2,
-            "pending" => 1,
-            "preopen_candidate" => 0,
-            _ => 0,
-        };
+            result.ConfigHash);
     }
 
     private static string FormatSignedPct(decimal? value)
@@ -691,7 +609,6 @@ public sealed class L1EventEngine
         public bool OpenShapeTriggered { get; set; }
         public string OpeningWeakToStrongTriggeredDate { get; set; } = "";
         public int OpeningWeakToStrongIntradayPriority { get; set; }
-        public bool OpeningWeakToStrongLastDryRun { get; set; }
         public HashSet<string> OpeningTelemetryKeys { get; } = new(StringComparer.Ordinal);
     }
 }

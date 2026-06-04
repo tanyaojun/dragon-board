@@ -45,7 +45,7 @@ export class OpeningRealtimeEventBuffer {
     const key = `${signal.ruleVersion}:${signal.code}:${tradingDate(signal.triggerAt)}`
     const previous = this.emittedSignals.get(key)
     const priorityDiff = previous ? compareSignalPriority(signal, previous) : 0
-    if (previous && priorityDiff <= 0 && !canReplaceDryRunWithLiveSignal(signal, previous)) {
+    if (previous && priorityDiff <= 0) {
       return []
     }
     this.emittedSignals.set(key, signal)
@@ -54,46 +54,33 @@ export class OpeningRealtimeEventBuffer {
   }
 }
 
-function canReplaceDryRunWithLiveSignal(
-  signal: OpeningWeakToStrongSignal,
-  previous: OpeningWeakToStrongSignal,
-): boolean {
-  if (!previous.dryRun || signal.dryRun) return false
-  return intradayOutcomePriority(signal) === intradayOutcomePriority(previous)
-}
-
 function compareSignalPriority(left: OpeningWeakToStrongSignal, right: OpeningWeakToStrongSignal): number {
-  const outcomeDiff = intradayOutcomePriority(left) - intradayOutcomePriority(right)
-  if (outcomeDiff !== 0) return outcomeDiff
-
-  const confidenceDiff = confidencePriority(left.confidence) - confidencePriority(right.confidence)
-  if (confidenceDiff !== 0) return confidenceDiff
-  return (left.score || 0) - (right.score || 0)
+  return stagePriority(left) - stagePriority(right)
 }
 
-function intradayOutcomePriority(signal: OpeningWeakToStrongSignal): number {
-  if (signal.intradayStatus === 'failed' || signal.intradayOutcome === 'failed_open_dump') return 4
-  if (signal.intradayStatus === 'confirmed' || signal.intradayOutcome === 'confirmed_strong') return 3
-  if (signal.intradayStatus === 'watch' || signal.intradayOutcome === 'watch_only') return 2
-  if (signal.intradayStatus === 'pending' || signal.intradayOutcome === 'pending') return 1
-  if (signal.intradayStatus === 'preopen_candidate' || signal.intradayOutcome === 'preopen_candidate') {
-    return 0
+function stagePriority(signal: OpeningWeakToStrongSignal): number {
+  switch (signal.stage) {
+    case 'auctionConditionPassed':
+    case 'auctionConditionFailed':
+      return 1
+    case 'gapAlert':
+    case 'noGap':
+      return 2
+    case 'trendConfirm':
+    case 'trendWeak':
+      return 3
+    case 'optionalFinalStatus':
+      return 4
+    default:
+      return 0
   }
-  return 0
-}
-
-function confidencePriority(value: OpeningWeakToStrongSignal['confidence']): number {
-  if (value === 'critical') return 3
-  if (value === 'strong') return 2
-  if (value === 'watch') return 1
-  return 0
 }
 
 function toHotStockEvent(signal: OpeningWeakToStrongSignal): HotStockAbnormalEvent {
   const timestamp = Date.parse(signal.triggerAt)
   const stage = openingActionStage(signal)
   const id = `opening_weak_to_strong:${tradingDate(signal.triggerAt)}:${signal.code}:${stage}`
-  const typeName = stage === 'preopen_candidate' ? '竞价弱转强候选' : '竞价弱转强'
+  const typeName = openingActionTypeName(stage)
   return {
     category: 'stock',
     id,
@@ -119,19 +106,17 @@ function toHotStockEvent(signal: OpeningWeakToStrongSignal): HotStockAbnormalEve
 }
 
 function openingActionStage(signal: OpeningWeakToStrongSignal): string {
-  if (signal.intradayStatus === 'preopen_candidate' || signal.intradayOutcome === 'preopen_candidate') {
-    return 'preopen_candidate'
+  return signal.stage
+}
+
+function openingActionTypeName(stage: string): string {
+  if (stage === 'auctionConditionPassed' || stage === 'auctionConditionFailed') {
+    return '竞价弱转强候选'
   }
-  if (signal.intradayStatus === 'confirmed' || signal.intradayOutcome === 'confirmed_strong') {
-    return 'confirmed'
-  }
-  if (signal.intradayStatus === 'failed' || signal.intradayOutcome === 'failed_open_dump') {
-    return 'failed'
-  }
-  if (signal.intradayStatus === 'watch' || signal.intradayOutcome === 'watch_only') {
-    return 'watch'
-  }
-  return 'pending'
+  if (stage === 'gapAlert') return '竞价跳空高开'
+  if (stage === 'trendConfirm') return '快速上板前兆'
+  if (stage === 'optionalFinalStatus') return '竞价弱转强复盘'
+  return '竞价弱转强'
 }
 
 function tradingDate(timestamp: string): string {

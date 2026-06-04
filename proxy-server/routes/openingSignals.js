@@ -5,24 +5,26 @@ const SOURCE_PRIORITY = new Map([
   ['desktop', 3],
   ['web', 2],
 ])
-const CONFIDENCE_PRIORITY = new Map([
-  ['critical', 3],
-  ['strong', 2],
-  ['watch', 1],
+const STAGE_PRIORITY = new Map([
+  ['auctionConditionPassed', 1],
+  ['auctionConditionFailed', 1],
+  ['gapAlert', 2],
+  ['noGap', 2],
+  ['trendConfirm', 3],
+  ['trendWeak', 3],
+  ['optionalFinalStatus', 4],
 ])
-const INTRADAY_OUTCOME_PRIORITY = new Map([
-  ['failed_open_dump', 4],
-  ['confirmed_strong', 3],
-  ['watch_only', 2],
-  ['pending', 1],
-  ['preopen_candidate', 0],
-])
-const INTRADAY_STATUS_PRIORITY = new Map([
-  ['failed', 4],
-  ['confirmed', 3],
-  ['watch', 2],
-  ['pending', 1],
-  ['preopen_candidate', 0],
+const SIGNAL_FIELDS = new Set([
+  'stage',
+  'status',
+  'code',
+  'name',
+  'time',
+  'price',
+  'pct',
+  'amount',
+  'voiceEligible',
+  'reason',
 ])
 
 export function registerOpeningSignalRoutes(app, context = {}) {
@@ -73,7 +75,7 @@ export function createOpeningSignalStore() {
           canonicalSignal: report,
           reportsBySource: { [source]: report },
           sources: [source],
-          firstTriggerAt: signal.triggerAt,
+          firstTriggerAt: signal.time,
           lastReportedAt: now,
           voiceGrantedTo: voiceOwner === 'none' ? null : source,
           voiceGrantedStages,
@@ -102,7 +104,7 @@ export function createOpeningSignalStore() {
         canonicalSignal,
         reportsBySource,
         sources,
-        firstTriggerAt: earlierIso(previous.firstTriggerAt, signal.triggerAt),
+        firstTriggerAt: earlierIso(previous.firstTriggerAt, signal.time),
         lastReportedAt: now,
         voiceGrantedTo: previous.voiceGrantedTo || (voiceOwner === 'none' ? null : source),
         voiceGrantedStages,
@@ -116,7 +118,7 @@ export function createOpeningSignalStore() {
     },
     list(tradingDate) {
       return [...records.values()]
-        .filter(record => record.canonicalSignal.tradingDate === tradingDate)
+        .filter(record => signalTradingDate(record.canonicalSignal) === tradingDate)
         .sort((a, b) => compareIso(b.firstTriggerAt, a.firstTriggerAt))
         .map(record => serializeRecord(record, { isNew: false, dedupeAction: 'cached', voiceOwner: 'none' }))
     },
@@ -127,7 +129,7 @@ function serializeRecord(record, meta) {
   return {
     ...meta,
     dedupeKey: record.dedupeKey,
-    canonicalSignal: record.canonicalSignal,
+    canonicalSignal: publicSignal(record.canonicalSignal),
     reportsBySource: record.reportsBySource,
     sources: record.sources,
     firstTriggerAt: record.firstTriggerAt,
@@ -137,6 +139,11 @@ function serializeRecord(record, meta) {
   }
 }
 
+function publicSignal(signal) {
+  const { source, ...rest } = signal
+  return rest
+}
+
 function normalizeSource(value) {
   const source = String(value || '').trim()
   return source === 'web' || source === 'desktop' ? source : ''
@@ -144,21 +151,23 @@ function normalizeSource(value) {
 
 function normalizeSignal(value) {
   if (!value || typeof value !== 'object') return null
-  const tradingDate = normalizeTradingDate(value.tradingDate)
+  if (Object.keys(value).some(key => !SIGNAL_FIELDS.has(key))) return null
   const code = normalizeCode(value.code)
-  const signalType = String(value.signalType || '').trim()
-  if (!tradingDate || !code || signalType !== SIGNAL_TYPE) return null
+  const stage = normalizeStage(value.stage)
+  const time = normalizeIso(value.time)
+  if (!code || !stage || !time) return null
 
   return {
-    ...value,
-    tradingDate,
+    stage,
+    status: normalizeStage(value.status) || stage,
     code,
-    signalType,
     name: normalizeText(value.name, 24) || code,
-    confidence: normalizeConfidence(value.confidence),
-    score: normalizeScore(value.score),
-    triggerAt: normalizeIso(value.triggerAt) || new Date().toISOString(),
-    dryRun: Boolean(value.dryRun),
+    time,
+    price: normalizeFiniteNumber(value.price),
+    pct: normalizeFiniteNumber(value.pct),
+    amount: normalizeFiniteNumber(value.amount),
+    voiceEligible: value.voiceEligible === true,
+    reason: normalizeText(value.reason, 120),
   }
 }
 
@@ -176,15 +185,9 @@ function normalizeText(value, maxLength) {
   return String(value || '').replace(/\s+/g, ' ').trim().slice(0, maxLength)
 }
 
-function normalizeConfidence(value) {
+function normalizeStage(value) {
   const text = String(value || '').trim()
-  return CONFIDENCE_PRIORITY.has(text) ? text : 'watch'
-}
-
-function normalizeScore(value) {
-  const score = Number(value)
-  if (!Number.isFinite(score)) return 0
-  return Math.max(0, Math.min(100, Math.round(score)))
+  return STAGE_PRIORITY.has(text) ? text : ''
 }
 
 function normalizeIso(value) {
@@ -193,31 +196,15 @@ function normalizeIso(value) {
 }
 
 function dedupeKey(signal) {
-  return `${signal.tradingDate}:${signal.code}:${signal.signalType}`
+  return `${signalTradingDate(signal)}:${signal.code}:${SIGNAL_TYPE}`
 }
 
 function shouldGrantVoice(signal) {
-  if (signal.dryRun) return false
-  if (signal.intradayStatus === 'preopen_candidate' || signal.intradayOutcome === 'preopen_candidate') return false
-  if (signal.intradayStatus === 'failed' || signal.intradayStatus === 'watch') return false
-  if (signal.intradayOutcome === 'failed_open_dump' || signal.intradayOutcome === 'watch_only') return false
-  return CONFIDENCE_PRIORITY.has(signal.confidence)
+  return signal.voiceEligible === true && (signal.stage === 'gapAlert' || signal.stage === 'trendConfirm')
 }
 
 function signalVoiceStage(signal) {
-  if (signal.intradayStatus === 'preopen_candidate' || signal.intradayOutcome === 'preopen_candidate') {
-    return 'preopen_candidate'
-  }
-  if (signal.intradayStatus === 'confirmed' || signal.intradayOutcome === 'confirmed_strong') {
-    return 'confirmed'
-  }
-  if (signal.intradayStatus === 'failed' || signal.intradayOutcome === 'failed_open_dump') {
-    return 'failed'
-  }
-  if (signal.intradayStatus === 'watch' || signal.intradayOutcome === 'watch_only') {
-    return 'watch'
-  }
-  return 'pending'
+  return normalizeStage(signal.stage)
 }
 
 function mergeSources(previous, source) {
@@ -229,35 +216,26 @@ function chooseCanonical(reports) {
 }
 
 function compareSignals(left, right) {
-  if (Boolean(left.dryRun) !== Boolean(right.dryRun)) {
-    return left.dryRun ? 1 : -1
-  }
-
-  const intradayDiff = intradayPriority(right) - intradayPriority(left)
-  if (intradayDiff !== 0) return intradayDiff
-
-  const confidenceDiff =
-    (CONFIDENCE_PRIORITY.get(right.confidence) || 0) - (CONFIDENCE_PRIORITY.get(left.confidence) || 0)
-  if (confidenceDiff !== 0) return confidenceDiff
-
-  const scoreDiff = Number(right.score || 0) - Number(left.score || 0)
-  if (scoreDiff !== 0) return scoreDiff
+  const stageDiff = (STAGE_PRIORITY.get(right.stage) || 0) - (STAGE_PRIORITY.get(left.stage) || 0)
+  if (stageDiff !== 0) return stageDiff
 
   const sourceDiff = (SOURCE_PRIORITY.get(right.source) || 0) - (SOURCE_PRIORITY.get(left.source) || 0)
   if (sourceDiff !== 0) return sourceDiff
 
-  return compareIso(left.triggerAt, right.triggerAt)
-}
-
-function intradayPriority(signal) {
-  return Math.max(
-    INTRADAY_STATUS_PRIORITY.get(signal.intradayStatus) || 0,
-    INTRADAY_OUTCOME_PRIORITY.get(signal.intradayOutcome) || 0,
-  )
+  return compareIso(left.time, right.time)
 }
 
 function earlierIso(left, right) {
   return compareIso(left, right) <= 0 ? left : right
+}
+
+function normalizeFiniteNumber(value) {
+  const numberValue = Number(value)
+  return Number.isFinite(numberValue) ? numberValue : 0
+}
+
+function signalTradingDate(signal) {
+  return signal.time.slice(0, 10)
 }
 
 function compareIso(left, right) {

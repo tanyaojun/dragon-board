@@ -62,27 +62,15 @@ public sealed class EventDeduper
 
     private static int OpeningIntradayPriority(EventRecord item)
     {
-        var statusPriority = item.OpeningSignal?.IntradayStatus switch
+        var stagePriority = item.OpeningSignal?.Stage switch
         {
-            "failed" => 4,
-            "confirmed_reversal" => 4,
-            "confirmed" => 3,
-            "watch" => 2,
-            "pending" => 1,
-            "preopen_candidate" => 0,
+            "auctionConditionPassed" or "auctionConditionFailed" => 1,
+            "gapAlert" or "noGap" => 2,
+            "trendConfirm" or "trendWeak" => 3,
+            "optionalFinalStatus" => 4,
             _ => 0,
         };
-        var outcomePriority = item.OpeningSignal?.IntradayOutcome switch
-        {
-            "failed_open_dump" => 4,
-            "confirmed_then_open_dump" => 4,
-            "confirmed_strong" => 3,
-            "watch_only" => 2,
-            "pending" => 1,
-            "preopen_candidate" => 0,
-            _ => 0,
-        };
-        return Math.Max(statusPriority, outcomePriority);
+        return stagePriority;
     }
 
     private TimeSpan CooldownFor(L1EventType type)

@@ -79,6 +79,9 @@ export class OpeningRealtimeEventBridge {
         raw: {
           ...(typeof item.event.raw === 'object' && item.event.raw ? item.event.raw : {}),
           signal,
+          debug: {
+            signal: item.signal,
+          },
           openingSignalPost: response,
           voiceOwner,
         },
@@ -113,9 +116,6 @@ function toOpeningQuote(quote: QuotePatch): OpeningWeakToStrongQuote | null {
     elapsedMs: quote.elapsedMs,
     slowBatches: quote.slowBatches,
     truncatedBatches: quote.truncatedBatches,
-    previousWeakScore: quote.previousWeakScore,
-    previousWeakSignals: quote.previousWeakSignals,
-    previousWeakSource: quote.previousWeakSource,
   }
 }
 
@@ -133,13 +133,7 @@ function resolveVoiceOwner(
 }
 
 function isVoiceEligibleOpeningSignal(signal: OpeningCanonicalSignal): boolean {
-  if (signal.dryRun) return false
-  if (signal.intradayStatus === 'preopen_candidate' || signal.intradayOutcome === 'preopen_candidate') {
-    return false
-  }
-  if (signal.intradayStatus === 'failed' || signal.intradayOutcome === 'failed_open_dump') return false
-  if (signal.intradayStatus === 'watch' || signal.intradayOutcome === 'watch_only') return false
-  return true
+  return signal.voiceEligible === true && (signal.stage === 'gapAlert' || signal.stage === 'trendConfirm')
 }
 
 function deriveLimitUpPrice(code: string, name: string | undefined, preClose: number): number | undefined {
@@ -166,10 +160,16 @@ function timestampFromQuote(quote: QuotePatch): string {
 
 function toOpeningSignalPayload(signal: OpeningWeakToStrongSignal): OpeningCanonicalSignal {
   return {
-    ...signal,
-    tradingDate: signal.triggerAt.slice(0, 10),
-    triggerAt: signal.triggerAt,
-    dryRun: signal.dryRun ?? false,
+    stage: signal.stage,
+    status: signal.status,
+    code: signal.code,
+    name: signal.name,
+    time: signal.time,
+    price: signal.price,
+    pct: signal.pct,
+    amount: signal.amount,
+    voiceEligible: signal.voiceEligible,
+    reason: signal.reason,
   }
 }
 

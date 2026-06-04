@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "ruleVersion": "opening-weak-to-strong.v1",
   "unit": {
     "pct": "percentage points",
@@ -10,1878 +10,213 @@
     "auctionTrendStart": "09:20:00",
     "initialBaselineStart": "09:20:00",
     "initialBaselineEnd": "09:20:30",
-    "auctionStart": "09:24:50",
-    "auctionEnd": "09:25:10",
+    "auctionStart": "09:25:00",
+    "auctionEnd": "09:25:00",
     "detectStart": "09:30:00",
     "detectEnd": "09:35:00",
-    "auctionWeakMaxPct": 0.5,
     "auctionGapJumpMinPctPoint": 3,
-    "auctionGapFirstWindowMinPct": 1.5,
-    "lowOpenRedJumpMinPctPoint": 1.5,
-    "lowOpenRedFirstWindowMinPct": 1,
-    "strongOpenFirstWindowMinPct": 3,
-    "nearLimitDistancePct": 2,
-    "minCurrentAmount": 30000000,
-    "minAmountDelta": 20000000,
-    "openingLiquidityMinAmount": 5000000,
-    "auctionLateLiftStart": "09:24:00",
-    "auctionLateLiftTotalMinPctPoint": 1,
-    "auctionLateLiftLateMinPctPoint": 0.5,
     "auctionPriceLiftMinPctPoint": 0.8,
-    "auctionAmountLiftMinRatio": 0.35,
-    "auctionLatePriceLiftMinPctPoint": 0.3,
-    "auctionLateAmountLiftMinRatio": 0.2,
-    "auctionLateLiftFinalMinPct": 0,
-    "auctionLateLiftAmountDeltaMin": 8000000,
-    "auctionLateLiftLateAmountDeltaMin": 5000000,
-    "auctionLateLiftFirstWindowMinPct": 2.5,
-    "auctionLateLiftJumpMinPctPoint": 2,
-    "auctionLateHighRetreatPctPoint": 0.2,
-    "previousWeakScoreMin": 30,
-    "minAuctionCoverageRatio": 0.95,
-    "maxQuoteAgeMs": 30000,
-    "minCurrentVolume": 1000000,
-    "openingSupportOpenRatio": 0.995,
-    "auctionGapMaxScore": 40,
-    "auctionGapScoreSlope": 4,
-    "auctionGapOpenStrengthScore": 15,
-    "auctionGapAmountStrongScore": 20,
-    "auctionGapAmountWeakScore": 10,
-    "auctionGapQualityGoodScore": 8,
-    "auctionGapQualityDegradedScore": 3,
-    "auctionLateLiftCoreScore": 25,
-    "auctionLateLiftAmountRatioScore": 18,
-    "auctionLateLiftOpenStrengthScore": 18,
-    "strongOpenNearLimitScore": 25,
-    "strongOpenOpenStrengthScore": 25,
-    "lowOpenRedReversalScore": 22,
-    "lowOpenTurnRedScore": 10,
-    "previousWeakContextScore": 8
+    "auctionAmountLiftMinRatio": 0.35
   },
   "cases": [
     {
-      "caseId": "002552-auction-gap-reversal",
-      "description": "宝鼎科技样例：09:25偏弱，09:30后跳空上移。",
+      "caseId": "opening-watch-happy-path",
+      "description": "09:25候选不播，09:30跳空播，09:35强确认播，10:00只做状态备注。",
       "quotes": [
         {
           "code": "002552",
           "name": "宝鼎科技",
-          "at": "2026-05-22T09:20:05+08:00",
-          "lastPrice": 35,
-          "preClose": 36.2,
-          "open": 0,
-          "amount": 2000000,
-          "volume": 570000,
-          "capturedAt": "2026-05-22T09:20:05+08:00",
-          "bridgeTs": "2026-05-22T09:20:05+08:00"
-        },
-        {
-          "code": "002552",
-          "name": "宝鼎科技",
-          "at": "2026-05-22T09:24:05+08:00",
-          "lastPrice": 35.3,
-          "preClose": 36.2,
-          "open": 0,
-          "amount": 4500000,
-          "volume": 1270000,
-          "capturedAt": "2026-05-22T09:24:05+08:00",
-          "bridgeTs": "2026-05-22T09:24:05+08:00"
-        },
-        {
-          "code": "002552",
-          "name": "宝鼎科技",
-          "at": "2026-05-22T09:25:00+08:00",
-          "lastPrice": 35.68,
-          "preClose": 36.2,
-          "open": 0,
-          "amount": 6000000,
-          "volume": 1680000,
-          "capturedAt": "2026-05-22T09:25:01+08:00",
-          "bridgeTs": "2026-05-22T09:25:01+08:00"
-        },
-        {
-          "code": "002552",
-          "name": "宝鼎科技",
-          "at": "2026-05-22T09:30:06+08:00",
-          "lastPrice": 37.48,
-          "preClose": 36.2,
-          "open": 36.92,
-          "amount": 56000000,
-          "volume": 14950000,
-          "capturedAt": "2026-05-22T09:30:06+08:00",
-          "bridgeTs": "2026-05-22T09:30:06+08:00"
-        }
-      ],
-      "expected": {
-        "triggered": true,
-        "variant": "auction_late_lift",
-        "confidence": "critical",
-        "scoreRange": [80, 100],
-        "jumpPctPointRange": [4.9, 5.1],
-        "riskFlags": [],
-        "liquidityTier": "active",
-        "liquidityTierMode": "review_only",
-        "liquidityTierBasis": "amount=56000000;volume=14950000",
-        "liquidityTierThresholds": "openingLiquidityMinAmount=5000000;minCurrentAmount=30000000;hotAmount=100000000;minCurrentVolume=1000000",
-        "liquidityTierVersion": "liquidity-review.v1",
-        "initialBaselineAt": "2026-05-22T09:20:05+08:00",
-        "initialBaselinePrice": 35,
-        "initialBaselinePct": -3.31,
-        "initialBaselineAmount": 2000000,
-        "lateBaselineAt": "2026-05-22T09:24:05+08:00",
-        "lateBaselinePrice": 35.3,
-        "lateBaselinePct": -2.49,
-        "lateBaselineAmount": 4500000,
-        "finalBaselineAt": "2026-05-22T09:25:00+08:00",
-        "finalBaselinePrice": 35.68,
-        "finalBaselinePct": -1.44,
-        "finalBaselineAmount": 6000000,
-        "auctionPriceLiftPctPoint": 1.88,
-        "latePriceLiftPctPoint": 1.05,
-        "auctionAmountDelta": 4000000,
-        "lateAmountDelta": 1500000,
-        "auctionAmountLiftRatio": 2,
-        "lateAmountLiftRatio": 0.33,
-        "priceVolumeConfirmed": true
-      }
-    },
-    {
-      "caseId": "low-open-red-reversal",
-      "description": "低开或平开后快速翻红并带量。",
-      "quotes": [
-        {
-          "code": "300001",
-          "name": "特锐德",
-          "at": "2026-05-22T09:20:05+08:00",
-          "lastPrice": 9.75,
-          "preClose": 10,
-          "open": 0,
-          "amount": 1000000,
-          "volume": 103000,
-          "capturedAt": "2026-05-22T09:20:05+08:00",
-          "bridgeTs": "2026-05-22T09:20:05+08:00"
-        },
-        {
-          "code": "300001",
-          "name": "特锐德",
-          "at": "2026-05-22T09:24:05+08:00",
-          "lastPrice": 9.86,
-          "preClose": 10,
-          "open": 0,
-          "amount": 2500000,
-          "volume": 254000,
-          "capturedAt": "2026-05-22T09:24:05+08:00",
-          "bridgeTs": "2026-05-22T09:24:05+08:00"
-        },
-        {
-          "code": "300001",
-          "name": "特锐德",
-          "at": "2026-05-22T09:25:00+08:00",
-          "lastPrice": 9.92,
-          "preClose": 10,
-          "open": 0,
-          "amount": 4000000,
-          "volume": 400000,
-          "capturedAt": "2026-05-22T09:25:01+08:00",
-          "bridgeTs": "2026-05-22T09:25:01+08:00"
-        },
-        {
-          "code": "300001",
-          "name": "特锐德",
-          "at": "2026-05-22T09:31:10+08:00",
-          "lastPrice": 10.16,
-          "preClose": 10,
-          "open": 9.98,
-          "amount": 39000000,
-          "volume": 3850000,
-          "capturedAt": "2026-05-22T09:31:10+08:00",
-          "bridgeTs": "2026-05-22T09:31:10+08:00"
-        }
-      ],
-      "expected": {
-        "triggered": true,
-        "variant": "low_open_red_reversal",
-        "confidence": "strong",
-        "scoreRange": [60, 88],
-        "riskFlags": []
-      }
-    },
-    {
-      "caseId": "strong-open-board-attempt-with-precondition",
-      "description": "竞价不强但开盘快速接近涨停，允许作为弱转强冲板形态。nearLimit 权重下调后不再达 critical。",
-      "quotes": [
-        {
-          "code": "600001",
-          "name": "样本股份",
-          "at": "2026-05-22T09:20:05+08:00",
+          "at": "2026-06-03T09:20:00+08:00",
           "lastPrice": 9.8,
-          "preClose": 10,
-          "open": 0,
-          "amount": 3000000,
-          "volume": 306000,
-          "capturedAt": "2026-05-22T09:20:05+08:00",
-          "bridgeTs": "2026-05-22T09:20:05+08:00"
-        },
-        {
-          "code": "600001",
-          "name": "样本股份",
-          "at": "2026-05-22T09:24:05+08:00",
-          "lastPrice": 9.95,
-          "preClose": 10,
-          "open": 0,
-          "amount": 6000000,
-          "volume": 603000,
-          "capturedAt": "2026-05-22T09:24:05+08:00",
-          "bridgeTs": "2026-05-22T09:24:05+08:00"
-        },
-        {
-          "code": "600001",
-          "name": "样本股份",
-          "at": "2026-05-22T09:25:00+08:00",
-          "lastPrice": 10.02,
-          "preClose": 10,
-          "open": 0,
-          "amount": 9000000,
-          "volume": 900000,
-          "capturedAt": "2026-05-22T09:25:00+08:00",
-          "bridgeTs": "2026-05-22T09:25:00+08:00"
-        },
-        {
-          "code": "600001",
-          "name": "样本股份",
-          "at": "2026-05-22T09:30:20+08:00",
-          "lastPrice": 10.86,
-          "preClose": 10,
-          "open": 10.05,
-          "amount": 85000000,
-          "volume": 7800000,
-          "limitUpPrice": 11,
-          "capturedAt": "2026-05-22T09:30:20+08:00",
-          "bridgeTs": "2026-05-22T09:30:20+08:00"
-        }
-      ],
-      "expected": {
-        "triggered": true,
-        "variant": "strong_open_board_attempt",
-        "confidence": "strong",
-        "scoreRange": [70, 85],
-        "riskFlags": []
-      }
-    },
-    {
-      "caseId": "strong-open-board-attempt-with-explicit-previous-context",
-      "description": "当日竞价和官方开盘都不弱，但上游显式提供前日弱势证据，允许作为弱转强冲板形态。",
-      "quotes": [
-        {
-          "code": "600010",
-          "name": "前弱候选",
-          "at": "2026-05-22T09:20:05+08:00",
-          "lastPrice": 9.95,
-          "preClose": 10,
-          "open": 0,
-          "amount": 3000000,
-          "volume": 302000,
-          "capturedAt": "2026-05-22T09:20:05+08:00",
-          "bridgeTs": "2026-05-22T09:20:05+08:00",
-          "previousWeakScore": 30,
-          "previousWeakSignals": ["manual_previous_weak"],
-          "previousWeakSource": "explicit_previous_weak"
-        },
-        {
-          "code": "600010",
-          "name": "前弱候选",
-          "at": "2026-05-22T09:24:05+08:00",
-          "lastPrice": 10.08,
-          "preClose": 10,
-          "open": 0,
-          "amount": 4000000,
-          "volume": 398000,
-          "capturedAt": "2026-05-22T09:24:05+08:00",
-          "bridgeTs": "2026-05-22T09:24:05+08:00",
-          "previousWeakScore": 30,
-          "previousWeakSignals": ["manual_previous_weak"],
-          "previousWeakSource": "explicit_previous_weak"
-        },
-        {
-          "code": "600010",
-          "name": "前弱候选",
-          "at": "2026-05-22T09:25:00+08:00",
-          "lastPrice": 10.18,
-          "preClose": 10,
-          "open": 0,
-          "amount": 5000000,
-          "volume": 1180000,
-          "capturedAt": "2026-05-22T09:25:00+08:00",
-          "bridgeTs": "2026-05-22T09:25:00+08:00",
-          "previousWeakScore": 30,
-          "previousWeakSignals": ["manual_previous_weak"],
-          "previousWeakSource": "explicit_previous_weak"
-        },
-        {
-          "code": "600010",
-          "name": "前弱候选",
-          "at": "2026-05-22T09:30:20+08:00",
-          "lastPrice": 10.86,
-          "preClose": 10,
-          "open": 10.2,
-          "amount": 86000000,
-          "volume": 7900000,
-          "limitUpPrice": 11,
-          "capturedAt": "2026-05-22T09:30:20+08:00",
-          "bridgeTs": "2026-05-22T09:30:20+08:00",
-          "previousWeakScore": 30,
-          "previousWeakSignals": ["manual_previous_weak"],
-          "previousWeakSource": "explicit_previous_weak"
-        }
-      ],
-      "expected": {
-        "triggered": true,
-        "variant": "strong_open_board_attempt",
-        "confidence": "critical",
-        "scoreRange": [80, 100],
-        "riskFlags": []
-      }
-    },
-    {
-      "caseId": "ordinary-board-attempt-without-weak-precondition",
-      "description": "竞价已经大幅高开，进入观察但标记缺少前弱上下文。",
-      "quotes": [
-        {
-          "code": "600002",
-          "name": "普通冲板",
-          "at": "2026-05-22T09:25:00+08:00",
-          "lastPrice": 10.6,
-          "preClose": 10,
-          "open": 0,
-          "amount": 30000000,
-          "volume": 2800000,
-          "capturedAt": "2026-05-22T09:25:00+08:00",
-          "bridgeTs": "2026-05-22T09:25:00+08:00"
-        },
-        {
-          "code": "600002",
-          "name": "普通冲板",
-          "at": "2026-05-22T09:30:15+08:00",
-          "lastPrice": 10.88,
-          "preClose": 10,
-          "open": 10.7,
-          "amount": 90000000,
-          "volume": 8200000,
-          "limitUpPrice": 11,
-          "capturedAt": "2026-05-22T09:30:15+08:00",
-          "bridgeTs": "2026-05-22T09:30:15+08:00"
-        }
-      ],
-      "expected": {
-        "triggered": true,
-        "variant": "strong_open_board_attempt",
-        "confidence": "watch",
-        "scoreRange": [1, 59],
-        "riskFlags": ["weak_precondition_missing", "auction_profile_missing"]
-      }
-    },
-    {
-      "caseId": "missing-auction-baseline",
-      "description": "缺少09:25竞价基线时不能触发。",
-      "quotes": [
-        {
-          "code": "002001",
-          "name": "缺基线",
-          "at": "2026-05-22T09:30:10+08:00",
-          "lastPrice": 10.5,
-          "preClose": 10,
-          "open": 10.2,
-          "amount": 50000000,
-          "volume": 4800000,
-          "capturedAt": "2026-05-22T09:30:10+08:00",
-          "bridgeTs": "2026-05-22T09:30:10+08:00"
-        }
-      ],
-      "expected": {
-        "triggered": false,
-        "invalidReason": "baseline_missing",
-        "riskFlags": ["baseline_missing"]
-      }
-    },
-    {
-      "caseId": "after-cutoff-no-trigger",
-      "description": "09:35后不再新增开盘弱转强信号。",
-      "quotes": [
-        {
-          "code": "002002",
-          "name": "超时样例",
-          "at": "2026-05-22T09:25:00+08:00",
-          "lastPrice": 9.9,
-          "preClose": 10,
-          "open": 0,
-          "amount": 5000000,
-          "volume": 500000,
-          "capturedAt": "2026-05-22T09:25:00+08:00",
-          "bridgeTs": "2026-05-22T09:25:00+08:00"
-        },
-        {
-          "code": "002002",
-          "name": "超时样例",
-          "at": "2026-05-22T09:35:01+08:00",
-          "lastPrice": 10.5,
-          "preClose": 10,
-          "open": 10.1,
-          "amount": 70000000,
-          "volume": 6500000,
-          "capturedAt": "2026-05-22T09:35:01+08:00",
-          "bridgeTs": "2026-05-22T09:35:01+08:00"
-        }
-      ],
-      "expected": {
-        "triggered": false,
-        "invalidReason": "outside_detection_window",
-        "riskFlags": ["outside_detection_window"]
-      }
-    },
-    {
-      "caseId": "auction-late-lift-confirmed",
-      "description": "09:20后不可撤单阶段持续抬价，09:24-09:25临门抬价且成交额同步放大。",
-      "quotes": [
-        {
-          "code": "002553",
-          "name": "临门抢筹",
-          "at": "2026-05-22T09:20:05+08:00",
-          "lastPrice": 9.86,
-          "preClose": 10,
-          "open": 0,
-          "amount": 2000000,
-          "volume": 200000,
-          "capturedAt": "2026-05-22T09:20:05+08:00",
-          "bridgeTs": "2026-05-22T09:20:05+08:00"
-        },
-        {
-          "code": "002553",
-          "name": "临门抢筹",
-          "at": "2026-05-22T09:24:05+08:00",
-          "lastPrice": 9.95,
-          "preClose": 10,
-          "open": 0,
-          "amount": 5000000,
-          "volume": 500000,
-          "capturedAt": "2026-05-22T09:24:05+08:00",
-          "bridgeTs": "2026-05-22T09:24:05+08:00"
-        },
-        {
-          "code": "002553",
-          "name": "临门抢筹",
-          "at": "2026-05-22T09:25:00+08:00",
-          "lastPrice": 10.08,
-          "preClose": 10,
-          "open": 0,
-          "amount": 13000000,
-          "volume": 1280000,
-          "capturedAt": "2026-05-22T09:25:00+08:00",
-          "bridgeTs": "2026-05-22T09:25:00+08:00"
-        },
-        {
-          "code": "002553",
-          "name": "临门抢筹",
-          "at": "2026-05-22T09:30:08+08:00",
-          "lastPrice": 10.35,
-          "preClose": 10,
-          "open": 10.2,
-          "amount": 45000000,
-          "volume": 4300000,
-          "capturedAt": "2026-05-22T09:30:08+08:00",
-          "bridgeTs": "2026-05-22T09:30:08+08:00"
-        }
-      ],
-      "expected": {
-        "triggered": true,
-        "variant": "auction_late_lift",
-        "confidence": "critical",
-        "scoreRange": [80, 100],
-        "riskFlags": []
-      }
-    },
-    {
-      "caseId": "v5-auction-core-confirmed-low-open-amount-strong",
-      "description": "开盘绝对成交额和开盘增量低于旧硬阈值，但09:20-09:25量价协同充分，应保留强信号。",
-      "quotes": [
-        {
-          "code": "002568",
-          "name": "量价抬升",
-          "at": "2026-05-22T09:20:05+08:00",
-          "lastPrice": 9.78,
-          "preClose": 10,
-          "open": 0,
-          "amount": 3000000,
-          "volume": 307000,
-          "capturedAt": "2026-05-22T09:20:05+08:00",
-          "bridgeTs": "2026-05-22T09:20:05+08:00"
-        },
-        {
-          "code": "002568",
-          "name": "量价抬升",
-          "at": "2026-05-22T09:24:05+08:00",
-          "lastPrice": 9.9,
-          "preClose": 10,
-          "open": 0,
-          "amount": 6000000,
-          "volume": 606000,
-          "capturedAt": "2026-05-22T09:24:05+08:00",
-          "bridgeTs": "2026-05-22T09:24:05+08:00"
-        },
-        {
-          "code": "002568",
-          "name": "量价抬升",
-          "at": "2026-05-22T09:25:00+08:00",
-          "lastPrice": 10.02,
-          "preClose": 10,
-          "open": 0,
-          "amount": 9000000,
-          "volume": 901000,
-          "capturedAt": "2026-05-22T09:25:00+08:00",
-          "bridgeTs": "2026-05-22T09:25:00+08:00"
-        },
-        {
-          "code": "002568",
-          "name": "量价抬升",
-          "at": "2026-05-22T09:30:08+08:00",
-          "lastPrice": 10.28,
-          "preClose": 10,
-          "open": 10.1,
-          "amount": 22000000,
-          "volume": 2200000,
-          "capturedAt": "2026-05-22T09:30:08+08:00",
-          "bridgeTs": "2026-05-22T09:30:08+08:00"
-        }
-      ],
-      "expected": {
-        "triggered": true,
-        "variant": "auction_late_lift",
-        "confidence": "strong",
-        "scoreRange": [60, 95],
-        "riskFlags": [],
-        "liquidityTier": "normal",
-        "liquidityTierMode": "review_only",
-        "liquidityTierBasis": "amount=22000000;volume=2200000",
-        "liquidityTierThresholds": "openingLiquidityMinAmount=5000000;minCurrentAmount=30000000;hotAmount=100000000;minCurrentVolume=1000000",
-        "liquidityTierVersion": "liquidity-review.v1",
-        "initialBaselineAt": "2026-05-22T09:20:05+08:00",
-        "initialBaselinePrice": 9.78,
-        "initialBaselinePct": -2.2,
-        "initialBaselineAmount": 3000000,
-        "lateBaselineAt": "2026-05-22T09:24:05+08:00",
-        "lateBaselinePrice": 9.9,
-        "lateBaselinePct": -1,
-        "lateBaselineAmount": 6000000,
-        "finalBaselineAt": "2026-05-22T09:25:00+08:00",
-        "finalBaselinePrice": 10.02,
-        "finalBaselinePct": 0.2,
-        "finalBaselineAmount": 9000000,
-        "auctionPriceLiftPctPoint": 2.4,
-        "latePriceLiftPctPoint": 1.2,
-        "auctionAmountDelta": 6000000,
-        "lateAmountDelta": 3000000,
-        "auctionAmountLiftRatio": 2,
-        "lateAmountLiftRatio": 0.5,
-        "priceVolumeConfirmed": true
-      }
-    },
-    {
-      "caseId": "v5-auction-profile-missing-high-open-amount-downgraded",
-      "description": "只有09:25和09:30大额成交，缺少09:20-09:25量价画像。跳空有力、成交额充足，不阻止触发，仅扣分反映画像缺失。",
-      "quotes": [
-        {
-          "code": "002569",
-          "name": "缺画像大额",
-          "at": "2026-05-22T09:25:00+08:00",
-          "lastPrice": 9.9,
-          "preClose": 10,
-          "open": 0,
-          "amount": 10000000,
-          "volume": 1010000,
-          "capturedAt": "2026-05-22T09:25:00+08:00",
-          "bridgeTs": "2026-05-22T09:25:00+08:00"
-        },
-        {
-          "code": "002569",
-          "name": "缺画像大额",
-          "at": "2026-05-22T09:30:06+08:00",
-          "lastPrice": 10.35,
-          "preClose": 10,
-          "open": 10.1,
-          "amount": 150000000,
-          "volume": 14500000,
-          "capturedAt": "2026-05-22T09:30:06+08:00",
-          "bridgeTs": "2026-05-22T09:30:06+08:00"
-        }
-      ],
-      "expected": {
-        "triggered": true,
-        "variant": "auction_gap_reversal",
-        "confidence": "strong",
-        "scoreRange": [60, 85],
-        "riskFlags": ["auction_profile_missing"]
-      }
-    },
-    {
-      "caseId": "v5-price-volume-desync-downgraded",
-      "description": "竞价价格明显抬升但成交额相对放大不足，不能强播。",
-      "quotes": [
-        {
-          "code": "002570",
-          "name": "量价背离",
-          "at": "2026-05-22T09:20:05+08:00",
-          "lastPrice": 9.7,
-          "preClose": 10,
-          "open": 0,
-          "amount": 10000000,
-          "volume": 1030000,
-          "capturedAt": "2026-05-22T09:20:05+08:00",
-          "bridgeTs": "2026-05-22T09:20:05+08:00"
-        },
-        {
-          "code": "002570",
-          "name": "量价背离",
-          "at": "2026-05-22T09:24:05+08:00",
-          "lastPrice": 9.85,
-          "preClose": 10,
-          "open": 0,
-          "amount": 10500000,
-          "volume": 1060000,
-          "capturedAt": "2026-05-22T09:24:05+08:00",
-          "bridgeTs": "2026-05-22T09:24:05+08:00"
-        },
-        {
-          "code": "002570",
-          "name": "量价背离",
-          "at": "2026-05-22T09:25:00+08:00",
-          "lastPrice": 9.98,
-          "preClose": 10,
-          "open": 0,
-          "amount": 10800000,
-          "volume": 1080000,
-          "capturedAt": "2026-05-22T09:25:00+08:00",
-          "bridgeTs": "2026-05-22T09:25:00+08:00"
-        },
-        {
-          "code": "002570",
-          "name": "量价背离",
-          "at": "2026-05-22T09:30:06+08:00",
-          "lastPrice": 10.36,
-          "preClose": 10,
-          "open": 10.1,
-          "amount": 55000000,
-          "volume": 5300000,
-          "capturedAt": "2026-05-22T09:30:06+08:00",
-          "bridgeTs": "2026-05-22T09:30:06+08:00"
-        }
-      ],
-      "expected": {
-        "triggered": true,
-        "variant": "auction_gap_reversal",
-        "confidence": "watch",
-        "scoreRange": [1, 59],
-        "riskFlags": ["auction_price_volume_desynced"]
-      }
-    },
-    {
-      "caseId": "weak-auction-strong-open-without-auction-price-volume-core",
-      "description": "09:25仍弱、09:30明显转强时，集合竞价量价核心未确认只作为风险提示，不再一票否决。",
-      "quotes": [
-        {
-          "code": "002571",
-          "name": "无核心大额",
-          "at": "2026-05-22T09:20:05+08:00",
-          "lastPrice": 9.9,
-          "preClose": 10,
-          "open": 0,
-          "amount": 10000000,
-          "volume": 1010000,
-          "capturedAt": "2026-05-22T09:20:05+08:00",
-          "bridgeTs": "2026-05-22T09:20:05+08:00"
-        },
-        {
-          "code": "002571",
-          "name": "无核心大额",
-          "at": "2026-05-22T09:24:05+08:00",
-          "lastPrice": 9.9,
-          "preClose": 10,
-          "open": 0,
-          "amount": 11000000,
-          "volume": 1110000,
-          "capturedAt": "2026-05-22T09:24:05+08:00",
-          "bridgeTs": "2026-05-22T09:24:05+08:00"
-        },
-        {
-          "code": "002571",
-          "name": "无核心大额",
-          "at": "2026-05-22T09:25:00+08:00",
-          "lastPrice": 9.91,
-          "preClose": 10,
-          "open": 0,
-          "amount": 12000000,
-          "volume": 1210000,
-          "capturedAt": "2026-05-22T09:25:00+08:00",
-          "bridgeTs": "2026-05-22T09:25:00+08:00"
-        },
-        {
-          "code": "002571",
-          "name": "无核心大额",
-          "at": "2026-05-22T09:30:06+08:00",
-          "lastPrice": 10.32,
-          "preClose": 10,
-          "open": 10.1,
-          "amount": 220000000,
-          "volume": 21000000,
-          "capturedAt": "2026-05-22T09:30:06+08:00",
-          "bridgeTs": "2026-05-22T09:30:06+08:00"
-        }
-      ],
-      "expected": {
-        "triggered": true,
-        "variant": "auction_gap_reversal",
-        "confidence": "strong",
-        "scoreRange": [60, 95],
-        "riskFlags": ["auction_price_volume_unverified"],
-        "priceVolumeConfirmed": false
-      }
-    },
-    {
-      "caseId": "v5-missing-initial-baseline-downgraded",
-      "description": "缺少09:20初始基线，扣分降低(-10)，跳空有力仍可达strong。",
-      "quotes": [
-        {
-          "code": "002572",
-          "name": "缺初始",
-          "at": "2026-05-22T09:24:05+08:00",
-          "lastPrice": 9.9,
-          "preClose": 10,
-          "open": 0,
-          "amount": 5000000,
-          "volume": 505000,
-          "capturedAt": "2026-05-22T09:24:05+08:00",
-          "bridgeTs": "2026-05-22T09:24:05+08:00"
-        },
-        {
-          "code": "002572",
-          "name": "缺初始",
-          "at": "2026-05-22T09:25:00+08:00",
-          "lastPrice": 10.05,
-          "preClose": 10,
-          "open": 0,
-          "amount": 12000000,
-          "volume": 1190000,
-          "capturedAt": "2026-05-22T09:25:00+08:00",
-          "bridgeTs": "2026-05-22T09:25:00+08:00"
-        },
-        {
-          "code": "002572",
-          "name": "缺初始",
-          "at": "2026-05-22T09:30:06+08:00",
-          "lastPrice": 10.36,
-          "preClose": 10,
-          "open": 10.12,
-          "amount": 50000000,
-          "volume": 4800000,
-          "capturedAt": "2026-05-22T09:30:06+08:00",
-          "bridgeTs": "2026-05-22T09:30:06+08:00"
-        }
-      ],
-      "expected": {
-        "triggered": true,
-        "variant": "auction_gap_reversal",
-        "confidence": "strong",
-        "scoreRange": [60, 85],
-        "riskFlags": ["auction_initial_baseline_missing"]
-      }
-    },
-    {
-      "caseId": "v5-negative-auction-core-watch",
-      "description": "09:20-09:25价格下行且成交额收缩，即使09:30巨量拉升，也只能观察并标记负向竞价核心。",
-      "quotes": [
-        {
-          "code": "002573",
-          "name": "负向核心",
-          "at": "2026-05-22T09:20:05+08:00",
-          "lastPrice": 10.2,
-          "preClose": 10,
-          "open": 0,
-          "amount": 20000000,
-          "volume": 1960000,
-          "capturedAt": "2026-05-22T09:20:05+08:00",
-          "bridgeTs": "2026-05-22T09:20:05+08:00"
-        },
-        {
-          "code": "002573",
-          "name": "负向核心",
-          "at": "2026-05-22T09:24:05+08:00",
-          "lastPrice": 9.95,
-          "preClose": 10,
-          "open": 0,
-          "amount": 15000000,
-          "volume": 1510000,
-          "capturedAt": "2026-05-22T09:24:05+08:00",
-          "bridgeTs": "2026-05-22T09:24:05+08:00"
-        },
-        {
-          "code": "002573",
-          "name": "负向核心",
-          "at": "2026-05-22T09:25:00+08:00",
-          "lastPrice": 9.9,
-          "preClose": 10,
-          "open": 0,
-          "amount": 12000000,
-          "volume": 1210000,
-          "capturedAt": "2026-05-22T09:25:00+08:00",
-          "bridgeTs": "2026-05-22T09:25:00+08:00"
-        },
-        {
-          "code": "002573",
-          "name": "负向核心",
-          "at": "2026-05-22T09:30:06+08:00",
-          "lastPrice": 10.36,
-          "preClose": 10,
-          "open": 10.1,
-          "amount": 180000000,
-          "volume": 17200000,
-          "capturedAt": "2026-05-22T09:30:06+08:00",
-          "bridgeTs": "2026-05-22T09:30:06+08:00"
-        }
-      ],
-      "expected": {
-        "triggered": true,
-        "variant": "auction_gap_reversal",
-        "confidence": "watch",
-        "scoreRange": [0, 59],
-        "riskFlags": ["auction_late_high_retreated", "auction_price_volume_unverified"]
-      }
-    },
-    {
-      "caseId": "v5-total-confirmed-without-late-confirmation-downgraded",
-      "description": "09:20-09:25总量价抬升成立，但09:24-09:25缺少临门确认；不标记临门抢筹，仍可按开盘跳变转强播报。",
-      "quotes": [
-        {
-          "code": "002574",
-          "name": "无临门确认",
-          "at": "2026-05-22T09:20:05+08:00",
-          "lastPrice": 9.7,
-          "preClose": 10,
-          "open": 0,
-          "amount": 2000000,
-          "volume": 206000,
-          "capturedAt": "2026-05-22T09:20:05+08:00",
-          "bridgeTs": "2026-05-22T09:20:05+08:00"
-        },
-        {
-          "code": "002574",
-          "name": "无临门确认",
-          "at": "2026-05-22T09:24:05+08:00",
-          "lastPrice": 10.03,
-          "preClose": 10,
-          "open": 0,
-          "amount": 12000000,
-          "volume": 1196000,
-          "capturedAt": "2026-05-22T09:24:05+08:00",
-          "bridgeTs": "2026-05-22T09:24:05+08:00"
-        },
-        {
-          "code": "002574",
-          "name": "无临门确认",
-          "at": "2026-05-22T09:25:00+08:00",
-          "lastPrice": 10.04,
-          "preClose": 10,
-          "open": 0,
-          "amount": 12100000,
-          "volume": 1205000,
-          "capturedAt": "2026-05-22T09:25:00+08:00",
-          "bridgeTs": "2026-05-22T09:25:00+08:00"
-        },
-        {
-          "code": "002574",
-          "name": "无临门确认",
-          "at": "2026-05-22T09:30:06+08:00",
-          "lastPrice": 10.35,
-          "preClose": 10,
-          "open": 10.12,
-          "amount": 52000000,
-          "volume": 5000000,
-          "capturedAt": "2026-05-22T09:30:06+08:00",
-          "bridgeTs": "2026-05-22T09:30:06+08:00"
-        }
-      ],
-      "expected": {
-        "triggered": true,
-        "variant": "auction_gap_reversal",
-        "confidence": "strong",
-        "scoreRange": [60, 95],
-        "riskFlags": ["auction_price_volume_unverified"]
-      }
-    },
-    {
-      "caseId": "price-lift-without-volume-downgraded",
-      "description": "价格抬升但竞价成交额不动，只能降级观察，不应强播。",
-      "quotes": [
-        {
-          "code": "002554",
-          "name": "无量抬价",
-          "at": "2026-05-22T09:20:05+08:00",
-          "lastPrice": 9.8,
-          "preClose": 10,
-          "open": 0,
-          "amount": 5000000,
-          "volume": 510000,
-          "capturedAt": "2026-05-22T09:20:05+08:00",
-          "bridgeTs": "2026-05-22T09:20:05+08:00"
-        },
-        {
-          "code": "002554",
-          "name": "无量抬价",
-          "at": "2026-05-22T09:24:10+08:00",
-          "lastPrice": 9.95,
-          "preClose": 10,
-          "open": 0,
-          "amount": 5200000,
-          "volume": 530000,
-          "capturedAt": "2026-05-22T09:24:10+08:00",
-          "bridgeTs": "2026-05-22T09:24:10+08:00"
-        },
-        {
-          "code": "002554",
-          "name": "无量抬价",
-          "at": "2026-05-22T09:25:00+08:00",
-          "lastPrice": 10.02,
-          "preClose": 10,
-          "open": 0,
-          "amount": 5400000,
-          "volume": 550000,
-          "capturedAt": "2026-05-22T09:25:00+08:00",
-          "bridgeTs": "2026-05-22T09:25:00+08:00"
-        },
-        {
-          "code": "002554",
-          "name": "无量抬价",
-          "at": "2026-05-22T09:30:07+08:00",
-          "lastPrice": 10.36,
-          "preClose": 10,
-          "open": 10.1,
-          "amount": 40000000,
-          "volume": 3800000,
-          "capturedAt": "2026-05-22T09:30:07+08:00",
-          "bridgeTs": "2026-05-22T09:30:07+08:00"
-        }
-      ],
-      "expected": {
-        "triggered": true,
-        "variant": "auction_gap_reversal",
-        "confidence": "watch",
-        "scoreRange": [1, 59],
-        "riskFlags": ["price_lift_without_volume"]
-      }
-    },
-    {
-      "caseId": "volume-without-price-lift-downgraded",
-      "description": "竞价成交额明显放大但价格压不动，视为分歧，只能降级观察。",
-      "quotes": [
-        {
-          "code": "002555",
-          "name": "放量不涨",
-          "at": "2026-05-22T09:20:05+08:00",
-          "lastPrice": 9.9,
-          "preClose": 10,
-          "open": 0,
-          "amount": 2000000,
-          "volume": 200000,
-          "capturedAt": "2026-05-22T09:20:05+08:00",
-          "bridgeTs": "2026-05-22T09:20:05+08:00"
-        },
-        {
-          "code": "002555",
-          "name": "放量不涨",
-          "at": "2026-05-22T09:24:20+08:00",
-          "lastPrice": 9.91,
-          "preClose": 10,
-          "open": 0,
-          "amount": 9000000,
-          "volume": 920000,
-          "capturedAt": "2026-05-22T09:24:20+08:00",
-          "bridgeTs": "2026-05-22T09:24:20+08:00"
-        },
-        {
-          "code": "002555",
-          "name": "放量不涨",
-          "at": "2026-05-22T09:25:00+08:00",
-          "lastPrice": 9.92,
-          "preClose": 10,
-          "open": 0,
-          "amount": 14000000,
-          "volume": 1420000,
-          "capturedAt": "2026-05-22T09:25:00+08:00",
-          "bridgeTs": "2026-05-22T09:25:00+08:00"
-        },
-        {
-          "code": "002555",
-          "name": "放量不涨",
-          "at": "2026-05-22T09:30:08+08:00",
-          "lastPrice": 10.28,
-          "preClose": 10,
-          "open": 10.05,
-          "amount": 45000000,
-          "volume": 4400000,
-          "capturedAt": "2026-05-22T09:30:08+08:00",
-          "bridgeTs": "2026-05-22T09:30:08+08:00"
-        }
-      ],
-      "expected": {
-        "triggered": true,
-        "variant": "auction_gap_reversal",
-        "confidence": "watch",
-        "scoreRange": [1, 59],
-        "riskFlags": ["volume_without_price_lift"]
-      }
-    },
-    {
-      "caseId": "late-high-retreated-not-late-lift",
-      "description": "09:20后先冲高后回落，09:25未收回高点，不算auction_late_lift。",
-      "quotes": [
-        {
-          "code": "002556",
-          "name": "冲高回落",
-          "at": "2026-05-22T09:20:05+08:00",
-          "lastPrice": 9.85,
-          "preClose": 10,
-          "open": 0,
-          "amount": 2000000,
-          "volume": 200000,
-          "capturedAt": "2026-05-22T09:20:05+08:00",
-          "bridgeTs": "2026-05-22T09:20:05+08:00"
-        },
-        {
-          "code": "002556",
-          "name": "冲高回落",
-          "at": "2026-05-22T09:24:00+08:00",
-          "lastPrice": 10.2,
-          "preClose": 10,
-          "open": 0,
-          "amount": 8000000,
-          "volume": 780000,
-          "capturedAt": "2026-05-22T09:24:00+08:00",
-          "bridgeTs": "2026-05-22T09:24:00+08:00"
-        },
-        {
-          "code": "002556",
-          "name": "冲高回落",
-          "at": "2026-05-22T09:25:00+08:00",
-          "lastPrice": 9.95,
-          "preClose": 10,
-          "open": 0,
-          "amount": 13000000,
-          "volume": 1300000,
-          "capturedAt": "2026-05-22T09:25:00+08:00",
-          "bridgeTs": "2026-05-22T09:25:00+08:00"
-        },
-        {
-          "code": "002556",
-          "name": "冲高回落",
-          "at": "2026-05-22T09:30:08+08:00",
-          "lastPrice": 10.3,
-          "preClose": 10,
-          "open": 10.1,
-          "amount": 50000000,
-          "volume": 4800000,
-          "capturedAt": "2026-05-22T09:30:08+08:00",
-          "bridgeTs": "2026-05-22T09:30:08+08:00"
-        }
-      ],
-      "expected": {
-        "triggered": true,
-        "variant": "auction_gap_reversal",
-        "confidence": "watch",
-        "scoreRange": [1, 59],
-        "riskFlags": ["auction_late_high_retreated"]
-      }
-    },
-    {
-      "caseId": "pre-0920-virtual-high-ignored",
-      "description": "09:15-09:20可撤单阶段虚高不作为强依据，也不阻断09:20后的有效抬价。",
-      "quotes": [
-        {
-          "code": "002557",
-          "name": "忽略虚高",
-          "at": "2026-05-22T09:18:30+08:00",
-          "lastPrice": 10.5,
           "preClose": 10,
           "open": 0,
           "amount": 1000000,
           "volume": 100000,
-          "capturedAt": "2026-05-22T09:18:30+08:00",
-          "bridgeTs": "2026-05-22T09:18:30+08:00"
+          "capturedAt": "2026-06-03T09:20:00+08:00",
+          "bridgeTs": "2026-06-03T09:20:00+08:00"
         },
         {
-          "code": "002557",
-          "name": "忽略虚高",
-          "at": "2026-05-22T09:20:05+08:00",
+          "code": "002552",
+          "name": "宝鼎科技",
+          "at": "2026-06-03T09:25:00+08:00",
+          "lastPrice": 9.95,
+          "preClose": 10,
+          "open": 0,
+          "amount": 2000000,
+          "volume": 180000,
+          "capturedAt": "2026-06-03T09:25:00+08:00",
+          "bridgeTs": "2026-06-03T09:25:00+08:00"
+        },
+        {
+          "code": "002552",
+          "name": "宝鼎科技",
+          "at": "2026-06-03T09:30:00+08:00",
+          "lastPrice": 10.35,
+          "preClose": 10,
+          "open": 10.35,
+          "amount": 8000000,
+          "volume": 600000,
+          "capturedAt": "2026-06-03T09:30:00+08:00",
+          "bridgeTs": "2026-06-03T09:30:00+08:00"
+        },
+        {
+          "code": "002552",
+          "name": "宝鼎科技",
+          "at": "2026-06-03T09:35:00+08:00",
+          "lastPrice": 10.65,
+          "preClose": 10,
+          "open": 10.35,
+          "amount": 16000000,
+          "volume": 1200000,
+          "capturedAt": "2026-06-03T09:35:00+08:00",
+          "bridgeTs": "2026-06-03T09:35:00+08:00"
+        },
+        {
+          "code": "002552",
+          "name": "宝鼎科技",
+          "at": "2026-06-03T10:00:00+08:00",
+          "lastPrice": 10.7,
+          "preClose": 10,
+          "open": 10.35,
+          "amount": 25000000,
+          "volume": 2000000,
+          "capturedAt": "2026-06-03T10:00:00+08:00",
+          "bridgeTs": "2026-06-03T10:00:00+08:00"
+        }
+      ],
+      "expected": {
+        "checkpoints": [
+          {
+            "at": "09:20",
+            "result": "PASS",
+            "stage": "auctionConditionPassed",
+            "voiceEligible": false
+          },
+          {
+            "at": "09:25",
+            "result": "PASS",
+            "stage": "auctionConditionPassed",
+            "voiceEligible": false
+          },
+          {
+            "at": "09:30",
+            "result": "PASS",
+            "stage": "gapAlert",
+            "voiceEligible": true
+          },
+          {
+            "at": "09:35",
+            "result": "PASS",
+            "stage": "trendConfirm",
+            "voiceEligible": true
+          },
+          {
+            "at": "10:00",
+            "result": "PASS",
+            "stage": "optionalFinalStatus",
+            "voiceEligible": false
+          }
+        ]
+      }
+    },
+    {
+      "caseId": "opening-watch-no-gap-weak-trend",
+      "description": "09:30无跳空不播，09:35承接转弱不播。",
+      "quotes": [
+        {
+          "code": "002560",
+          "name": "观察样例",
+          "at": "2026-06-03T09:20:00+08:00",
           "lastPrice": 9.8,
           "preClose": 10,
           "open": 0,
-          "amount": 2000000,
-          "volume": 200000,
-          "capturedAt": "2026-05-22T09:20:05+08:00",
-          "bridgeTs": "2026-05-22T09:20:05+08:00"
-        },
-        {
-          "code": "002557",
-          "name": "忽略虚高",
-          "at": "2026-05-22T09:24:05+08:00",
-          "lastPrice": 9.95,
-          "preClose": 10,
-          "open": 0,
-          "amount": 5000000,
-          "volume": 500000,
-          "capturedAt": "2026-05-22T09:24:05+08:00",
-          "bridgeTs": "2026-05-22T09:24:05+08:00"
-        },
-        {
-          "code": "002557",
-          "name": "忽略虚高",
-          "at": "2026-05-22T09:25:00+08:00",
-          "lastPrice": 10.05,
-          "preClose": 10,
-          "open": 0,
-          "amount": 12000000,
-          "volume": 1180000,
-          "capturedAt": "2026-05-22T09:25:00+08:00",
-          "bridgeTs": "2026-05-22T09:25:00+08:00"
-        },
-        {
-          "code": "002557",
-          "name": "忽略虚高",
-          "at": "2026-05-22T09:30:08+08:00",
-          "lastPrice": 10.35,
-          "preClose": 10,
-          "open": 10.1,
-          "amount": 50000000,
-          "volume": 4800000,
-          "capturedAt": "2026-05-22T09:30:08+08:00",
-          "bridgeTs": "2026-05-22T09:30:08+08:00"
-        }
-      ],
-      "expected": {
-        "triggered": true,
-        "variant": "auction_late_lift",
-        "confidence": "critical",
-        "scoreRange": [80, 100],
-        "riskFlags": []
-      }
-    },
-    {
-      "caseId": "early-lift-without-late-confirmation-not-late-lift",
-      "description": "09:20-09:24已经抬完但09:24-09:25没有继续抬价放量，不应标记为临门抢筹；若开盘继续跳变转强，仍按弱转强播报。",
-      "quotes": [
-        {
-          "code": "002558",
-          "name": "早抬无临门",
-          "at": "2026-05-22T09:20:05+08:00",
-          "lastPrice": 9.7,
-          "preClose": 10,
-          "open": 0,
-          "amount": 2000000,
-          "volume": 200000,
-          "capturedAt": "2026-05-22T09:20:05+08:00",
-          "bridgeTs": "2026-05-22T09:20:05+08:00"
-        },
-        {
-          "code": "002558",
-          "name": "早抬无临门",
-          "at": "2026-05-22T09:24:05+08:00",
-          "lastPrice": 10.04,
-          "preClose": 10,
-          "open": 0,
-          "amount": 13000000,
-          "volume": 1280000,
-          "capturedAt": "2026-05-22T09:24:05+08:00",
-          "bridgeTs": "2026-05-22T09:24:05+08:00"
-        },
-        {
-          "code": "002558",
-          "name": "早抬无临门",
-          "at": "2026-05-22T09:25:00+08:00",
-          "lastPrice": 10.05,
-          "preClose": 10,
-          "open": 0,
-          "amount": 13200000,
-          "volume": 1300000,
-          "capturedAt": "2026-05-22T09:25:00+08:00",
-          "bridgeTs": "2026-05-22T09:25:00+08:00"
-        },
-        {
-          "code": "002558",
-          "name": "早抬无临门",
-          "at": "2026-05-22T09:30:08+08:00",
-          "lastPrice": 10.36,
-          "preClose": 10,
-          "open": 10.15,
-          "amount": 45000000,
-          "volume": 4300000,
-          "capturedAt": "2026-05-22T09:30:08+08:00",
-          "bridgeTs": "2026-05-22T09:30:08+08:00"
-        }
-      ],
-      "expected": {
-        "triggered": true,
-        "variant": "auction_gap_reversal",
-        "confidence": "strong",
-        "scoreRange": [60, 95],
-        "riskFlags": ["auction_price_volume_unverified"]
-      }
-    },
-    {
-      "caseId": "auction-coverage-low-dry-run",
-      "description": "09:25基线覆盖率低于阈值时保留候选并标记覆盖风险，但不再降级为演练禁播。",
-      "quotes": [
-        {
-          "code": "002560",
-          "name": "低覆盖",
-          "at": "2026-05-22T09:25:00+08:00",
-          "lastPrice": 9.9,
-          "preClose": 10,
-          "open": 0,
-          "amount": 5000000,
-          "volume": 500000,
-          "capturedAt": "2026-05-22T09:25:00+08:00",
-          "bridgeTs": "2026-05-22T09:25:00+08:00",
-          "openingForcedSample": true,
-          "requestedCount": 100,
-          "receivedCount": 90,
-          "elapsedMs": 1800,
-          "slowBatches": 2,
-          "truncatedBatches": 1
-        },
-        {
-          "code": "002560",
-          "name": "低覆盖",
-          "at": "2026-05-22T09:30:06+08:00",
-          "lastPrice": 10.35,
-          "preClose": 10,
-          "open": 10.1,
-          "amount": 50000000,
-          "volume": 4800000,
-          "capturedAt": "2026-05-22T09:30:06+08:00",
-          "bridgeTs": "2026-05-22T09:30:06+08:00"
-        }
-      ],
-      "expected": {
-        "triggered": true,
-        "variant": "auction_gap_reversal",
-        "confidence": "strong",
-        "scoreRange": [60, 85],
-        "riskFlags": ["auction_profile_missing", "auction_coverage_low"],
-        "dryRun": false,
-        "auctionCoverageRatio": 0.9
-      }
-    },
-    {
-      "caseId": "auction-coverage-rounded-low-dry-run",
-      "description": "覆盖率189/200展示四舍五入为95%，但原始0.945仍低于阈值，应标记覆盖风险但不禁播。",
-      "quotes": [
-        {
-          "code": "002567",
-          "name": "边界覆盖",
-          "at": "2026-05-22T09:25:00+08:00",
-          "lastPrice": 9.9,
-          "preClose": 10,
-          "open": 0,
-          "amount": 5000000,
-          "volume": 500000,
-          "capturedAt": "2026-05-22T09:25:00+08:00",
-          "bridgeTs": "2026-05-22T09:25:00+08:00",
-          "openingForcedSample": true,
-          "requestedCount": 200,
-          "receivedCount": 189,
-          "elapsedMs": 1600,
-          "slowBatches": 0,
-          "truncatedBatches": 0
-        },
-        {
-          "code": "002567",
-          "name": "边界覆盖",
-          "at": "2026-05-22T09:30:06+08:00",
-          "lastPrice": 10.35,
-          "preClose": 10,
-          "open": 10.1,
-          "amount": 50000000,
-          "volume": 4800000,
-          "capturedAt": "2026-05-22T09:30:06+08:00",
-          "bridgeTs": "2026-05-22T09:30:06+08:00"
-        }
-      ],
-      "expected": {
-        "triggered": true,
-        "variant": "auction_gap_reversal",
-        "confidence": "strong",
-        "scoreRange": [60, 85],
-        "riskFlags": ["auction_profile_missing", "auction_coverage_low"],
-        "dryRun": false,
-        "auctionCoverageRatio": 0.95
-      }
-    },
-    {
-      "caseId": "quote-time-untrusted-dry-run",
-      "description": "09:30报价采样时间过旧时保留候选但降级为演练观察。",
-      "quotes": [
-        {
-          "code": "002561",
-          "name": "陈旧报价",
-          "at": "2026-05-22T09:25:00+08:00",
-          "lastPrice": 9.9,
-          "preClose": 10,
-          "open": 0,
-          "amount": 5000000,
-          "volume": 500000,
-          "capturedAt": "2026-05-22T09:25:00+08:00",
-          "bridgeTs": "2026-05-22T09:25:00+08:00",
-          "requestedCount": 100,
-          "receivedCount": 98
-        },
-        {
-          "code": "002561",
-          "name": "陈旧报价",
-          "at": "2026-05-22T09:30:06+08:00",
-          "lastPrice": 10.35,
-          "preClose": 10,
-          "open": 10.1,
-          "amount": 50000000,
-          "volume": 4800000,
-          "capturedAt": "2026-05-22T09:29:20+08:00",
-          "bridgeTs": "2026-05-22T09:29:21+08:00"
-        }
-      ],
-      "expected": {
-        "triggered": true,
-        "variant": "auction_gap_reversal",
-        "confidence": "watch",
-        "scoreRange": [1, 59],
-        "riskFlags": ["quote_time_untrusted"],
-        "dryRun": true,
-        "auctionCoverageRatio": 0.98
-      }
-    },
-    {
-      "caseId": "auction-time-untrusted-dry-run",
-      "description": "09:25基线的每股采样时间不在竞价窗口内时降级为演练观察。",
-      "quotes": [
-        {
-          "code": "002562",
-          "name": "基线过旧",
-          "at": "2026-05-22T09:25:00+08:00",
-          "lastPrice": 9.9,
-          "preClose": 10,
-          "open": 0,
-          "amount": 5000000,
-          "volume": 500000,
-          "capturedAt": "2026-05-22T09:24:30+08:00",
-          "bridgeTs": "2026-05-22T09:25:00+08:00",
-          "requestedCount": 100,
-          "receivedCount": 98
-        },
-        {
-          "code": "002562",
-          "name": "基线过旧",
-          "at": "2026-05-22T09:30:06+08:00",
-          "lastPrice": 10.35,
-          "preClose": 10,
-          "open": 10.1,
-          "amount": 50000000,
-          "volume": 4800000,
-          "capturedAt": "2026-05-22T09:30:06+08:00",
-          "bridgeTs": "2026-05-22T09:30:06+08:00"
-        }
-      ],
-      "expected": {
-        "triggered": true,
-        "variant": "auction_gap_reversal",
-        "confidence": "watch",
-        "scoreRange": [1, 59],
-        "riskFlags": ["auction_time_untrusted"],
-        "dryRun": true,
-        "auctionCoverageRatio": 0.98
-      }
-    },
-    {
-      "caseId": "auction-amount-missing-downgraded",
-      "description": "竞价金额缺失时标记为低风险，不阻止强信号触发。",
-      "quotes": [
-        {
-          "code": "002563",
-          "name": "竞价缺额",
-          "at": "2026-05-22T09:25:00+08:00",
-          "lastPrice": 9.9,
-          "preClose": 10,
-          "open": 0,
-          "amount": 0,
-          "volume": 500000,
-          "capturedAt": "2026-05-22T09:25:00+08:00",
-          "bridgeTs": "2026-05-22T09:25:00+08:00"
-        },
-        {
-          "code": "002563",
-          "name": "竞价缺额",
-          "at": "2026-05-22T09:30:06+08:00",
-          "lastPrice": 10.35,
-          "preClose": 10,
-          "open": 10.1,
-          "amount": 50000000,
-          "volume": 4800000,
-          "capturedAt": "2026-05-22T09:30:06+08:00",
-          "bridgeTs": "2026-05-22T09:30:06+08:00"
-        }
-      ],
-      "expected": {
-        "triggered": true,
-        "variant": "auction_gap_reversal",
-        "confidence": "strong",
-        "scoreRange": [60, 85],
-        "riskFlags": ["auction_profile_missing", "auction_amount_missing"],
-        "dryRun": false
-      }
-    },
-    {
-      "caseId": "amount-regressed-downgraded",
-      "description": "当前成交额低于竞价基线时标记金额回退风险，轻罚分。",
-      "quotes": [
-        {
-          "code": "002564",
-          "name": "金额回退",
-          "at": "2026-05-22T09:25:00+08:00",
-          "lastPrice": 9.9,
-          "preClose": 10,
-          "open": 0,
-          "amount": 80000000,
-          "volume": 8000000,
-          "capturedAt": "2026-05-22T09:25:00+08:00",
-          "bridgeTs": "2026-05-22T09:25:00+08:00"
-        },
-        {
-          "code": "002564",
-          "name": "金额回退",
-          "at": "2026-05-22T09:30:06+08:00",
-          "lastPrice": 10.35,
-          "preClose": 10,
-          "open": 10.1,
-          "amount": 60000000,
-          "volume": 6000000,
-          "capturedAt": "2026-05-22T09:30:06+08:00",
-          "bridgeTs": "2026-05-22T09:30:06+08:00"
-        }
-      ],
-      "expected": {
-        "triggered": true,
-        "variant": "auction_gap_reversal",
-        "confidence": "strong",
-        "scoreRange": [60, 85],
-        "riskFlags": ["auction_profile_missing", "amount_regressed"],
-        "dryRun": false
-      }
-    },
-    {
-      "caseId": "low-liquidity-jump-downgraded",
-      "description": "低成交量跳价时标记流动性风险，避免把薄流动性跳价当强信号。",
-      "quotes": [
-        {
-          "code": "002565",
-          "name": "薄量跳价",
-          "at": "2026-05-22T09:25:00+08:00",
-          "lastPrice": 9.9,
-          "preClose": 10,
-          "open": 0,
-          "amount": 5000000,
-          "volume": 500000,
-          "capturedAt": "2026-05-22T09:25:00+08:00",
-          "bridgeTs": "2026-05-22T09:25:00+08:00"
-        },
-        {
-          "code": "002565",
-          "name": "薄量跳价",
-          "at": "2026-05-22T09:30:06+08:00",
-          "lastPrice": 10.35,
-          "preClose": 10,
-          "open": 10.1,
-          "amount": 50000000,
-          "volume": 500000,
-          "capturedAt": "2026-05-22T09:30:06+08:00",
-          "bridgeTs": "2026-05-22T09:30:06+08:00"
-        }
-      ],
-      "expected": {
-        "triggered": true,
-        "variant": "auction_gap_reversal",
-        "confidence": "watch",
-        "scoreRange": [1, 59],
-        "riskFlags": ["low_liquidity_jump"],
-        "dryRun": false,
-        "liquidityTier": "thin",
-        "liquidityTierMode": "review_only",
-        "liquidityTierBasis": "amount=50000000;volume=500000",
-        "liquidityTierThresholds": "openingLiquidityMinAmount=5000000;minCurrentAmount=30000000;hotAmount=100000000;minCurrentVolume=1000000",
-        "liquidityTierVersion": "liquidity-review.v1"
-      }
-    },
-    {
-      "caseId": "opening-support-lost-watch",
-      "description": "开盘后快速跌回开盘/昨收支撑下方时进入观察并标记支撑跌破。",
-      "quotes": [
-        {
-          "code": "002566",
-          "name": "支撑跌破",
-          "at": "2026-05-22T09:25:00+08:00",
-          "lastPrice": 9.9,
-          "preClose": 10,
-          "open": 0,
-          "amount": 5000000,
-          "volume": 500000,
-          "capturedAt": "2026-05-22T09:25:00+08:00",
-          "bridgeTs": "2026-05-22T09:25:00+08:00"
-        },
-        {
-          "code": "002566",
-          "name": "支撑跌破",
-          "at": "2026-05-22T09:30:30+08:00",
-          "lastPrice": 10.11,
-          "preClose": 10,
-          "open": 10.4,
-          "amount": 50000000,
-          "volume": 4800000,
-          "capturedAt": "2026-05-22T09:30:30+08:00",
-          "bridgeTs": "2026-05-22T09:30:30+08:00"
-        }
-      ],
-      "expected": {
-        "triggered": true,
-        "variant": "low_open_red_reversal",
-        "confidence": "watch",
-        "scoreRange": [0, 59],
-        "riskFlags": ["opening_support_lost"]
-      }
-    },
-    {
-      "caseId": "v6-intraday-confirmed-strong",
-      "description": "09:30触发后，09:35-10:00继续上攻并站稳，自动写回盘中确认成功。",
-      "quotes": [
-        {
-          "code": "002570",
-          "name": "盘中确认",
-          "at": "2026-05-22T09:20:05+08:00",
-          "lastPrice": 9.78,
-          "preClose": 10,
-          "open": 0,
-          "amount": 3000000,
-          "volume": 307000,
-          "capturedAt": "2026-05-22T09:20:05+08:00",
-          "bridgeTs": "2026-05-22T09:20:05+08:00"
-        },
-        {
-          "code": "002570",
-          "name": "盘中确认",
-          "at": "2026-05-22T09:24:05+08:00",
-          "lastPrice": 9.9,
-          "preClose": 10,
-          "open": 0,
-          "amount": 6000000,
-          "volume": 606000,
-          "capturedAt": "2026-05-22T09:24:05+08:00",
-          "bridgeTs": "2026-05-22T09:24:05+08:00"
-        },
-        {
-          "code": "002570",
-          "name": "盘中确认",
-          "at": "2026-05-22T09:25:00+08:00",
-          "lastPrice": 10.02,
-          "preClose": 10,
-          "open": 0,
-          "amount": 9000000,
-          "volume": 901000,
-          "capturedAt": "2026-05-22T09:25:00+08:00",
-          "bridgeTs": "2026-05-22T09:25:00+08:00"
-        },
-        {
-          "code": "002570",
-          "name": "盘中确认",
-          "at": "2026-05-22T09:30:08+08:00",
-          "lastPrice": 10.28,
-          "preClose": 10,
-          "open": 10.1,
-          "amount": 22000000,
-          "volume": 2200000,
-          "capturedAt": "2026-05-22T09:30:08+08:00",
-          "bridgeTs": "2026-05-22T09:30:08+08:00"
-        },
-        {
-          "code": "002570",
-          "name": "盘中确认",
-          "at": "2026-05-22T09:36:00+08:00",
-          "lastPrice": 10.58,
-          "preClose": 10,
-          "open": 10.1,
-          "amount": 65000000,
-          "volume": 6200000,
-          "capturedAt": "2026-05-22T09:36:00+08:00",
-          "bridgeTs": "2026-05-22T09:36:00+08:00"
-        }
-      ],
-      "expected": {
-        "triggered": true,
-        "variant": "auction_late_lift",
-        "confidence": "strong",
-        "scoreRange": [60, 95],
-        "riskFlags": [],
-        "intradayStatus": "confirmed",
-        "intradayOutcome": "confirmed_strong",
-        "intradayStatusAt": "2026-05-22T09:36:00+08:00",
-        "intradayPrice": 10.58,
-        "intradayPct": 5.8,
-        "intradayAmount": 65000000,
-        "intradayNote": "09:35后继续上攻并站稳，盘中确认成功"
-      }
-    },
-    {
-      "caseId": "v6-intraday-open-dump-failed",
-      "description": "09:30触发后，09:35-10:00跌破开盘/昨收支撑，自动写回盘中失败。",
-      "quotes": [
-        {
-          "code": "002571",
-          "name": "开盘诱多",
-          "at": "2026-05-22T09:20:05+08:00",
-          "lastPrice": 9.78,
-          "preClose": 10,
-          "open": 0,
-          "amount": 3000000,
-          "volume": 307000,
-          "capturedAt": "2026-05-22T09:20:05+08:00",
-          "bridgeTs": "2026-05-22T09:20:05+08:00"
-        },
-        {
-          "code": "002571",
-          "name": "开盘诱多",
-          "at": "2026-05-22T09:24:05+08:00",
-          "lastPrice": 9.9,
-          "preClose": 10,
-          "open": 0,
-          "amount": 6000000,
-          "volume": 606000,
-          "capturedAt": "2026-05-22T09:24:05+08:00",
-          "bridgeTs": "2026-05-22T09:24:05+08:00"
-        },
-        {
-          "code": "002571",
-          "name": "开盘诱多",
-          "at": "2026-05-22T09:25:00+08:00",
-          "lastPrice": 10.02,
-          "preClose": 10,
-          "open": 0,
-          "amount": 9000000,
-          "volume": 901000,
-          "capturedAt": "2026-05-22T09:25:00+08:00",
-          "bridgeTs": "2026-05-22T09:25:00+08:00"
-        },
-        {
-          "code": "002571",
-          "name": "开盘诱多",
-          "at": "2026-05-22T09:30:08+08:00",
-          "lastPrice": 10.28,
-          "preClose": 10,
-          "open": 10.1,
-          "amount": 22000000,
-          "volume": 2200000,
-          "capturedAt": "2026-05-22T09:30:08+08:00",
-          "bridgeTs": "2026-05-22T09:30:08+08:00"
-        },
-        {
-          "code": "002571",
-          "name": "开盘诱多",
-          "at": "2026-05-22T09:42:00+08:00",
-          "lastPrice": 9.95,
-          "preClose": 10,
-          "open": 10.1,
-          "amount": 72000000,
-          "volume": 7000000,
-          "capturedAt": "2026-05-22T09:42:00+08:00",
-          "bridgeTs": "2026-05-22T09:42:00+08:00"
-        }
-      ],
-      "expected": {
-        "triggered": true,
-        "variant": "auction_late_lift",
-        "confidence": "watch",
-        "scoreRange": [1, 59],
-        "riskFlags": ["intraday_open_dump"],
-        "intradayStatus": "failed",
-        "intradayOutcome": "failed_open_dump",
-        "intradayStatusAt": "2026-05-22T09:42:00+08:00",
-        "intradayPrice": 9.95,
-        "intradayPct": -0.5,
-        "intradayAmount": 72000000,
-        "intradayNote": "跌破开盘/昨收支撑，疑似竞价诱多"
-      }
-    },
-    {
-      "caseId": "v7-low-coverage-trusted-time",
-      "description": "V7：低竞价覆盖率但时间可信，仍应触发并标记riskFlags，不应dryRun。",
-      "quotes": [
-        {
-          "code": "600001",
-          "name": "低覆盖票",
-          "at": "2026-05-22T09:20:05+08:00",
-          "lastPrice": 9.75,
-          "preClose": 10,
-          "open": 0,
           "amount": 1000000,
-          "volume": 103000,
-          "capturedAt": "2026-05-22T09:20:05+08:00",
-          "bridgeTs": "2026-05-22T09:20:05+08:00"
+          "volume": 100000,
+          "capturedAt": "2026-06-03T09:20:00+08:00",
+          "bridgeTs": "2026-06-03T09:20:00+08:00"
         },
         {
-          "code": "600001",
-          "name": "低覆盖票",
-          "at": "2026-05-22T09:24:05+08:00",
-          "lastPrice": 9.86,
+          "code": "002560",
+          "name": "观察样例",
+          "at": "2026-06-03T09:25:00+08:00",
+          "lastPrice": 9.95,
           "preClose": 10,
           "open": 0,
-          "amount": 2500000,
-          "volume": 254000,
-          "capturedAt": "2026-05-22T09:24:05+08:00",
-          "bridgeTs": "2026-05-22T09:24:05+08:00"
+          "amount": 2000000,
+          "volume": 180000,
+          "capturedAt": "2026-06-03T09:25:00+08:00",
+          "bridgeTs": "2026-06-03T09:25:00+08:00"
         },
         {
-          "code": "600001",
-          "name": "低覆盖票",
-          "at": "2026-05-22T09:25:00+08:00",
-          "lastPrice": 9.92,
-          "preClose": 10,
-          "open": 0,
-          "amount": 4000000,
-          "volume": 400000,
-          "requestedCount": 200,
-          "receivedCount": 100,
-          "capturedAt": "2026-05-22T09:25:01+08:00",
-          "bridgeTs": "2026-05-22T09:25:01+08:00"
-        },
-        {
-          "code": "600001",
-          "name": "低覆盖票",
-          "at": "2026-05-22T09:31:10+08:00",
-          "lastPrice": 10.48,
+          "code": "002560",
+          "name": "观察样例",
+          "at": "2026-06-03T09:30:00+08:00",
+          "lastPrice": 10.05,
           "preClose": 10,
           "open": 10.05,
-          "amount": 32000000,
-          "volume": 3100000,
-          "capturedAt": "2026-05-22T09:31:10+08:00",
-          "bridgeTs": "2026-05-22T09:31:10+08:00"
+          "amount": 6000000,
+          "volume": 500000,
+          "capturedAt": "2026-06-03T09:30:00+08:00",
+          "bridgeTs": "2026-06-03T09:30:00+08:00"
+        },
+        {
+          "code": "002560",
+          "name": "观察样例",
+          "at": "2026-06-03T09:35:00+08:00",
+          "lastPrice": 9.98,
+          "preClose": 10,
+          "open": 10.05,
+          "amount": 8000000,
+          "volume": 700000,
+          "capturedAt": "2026-06-03T09:35:00+08:00",
+          "bridgeTs": "2026-06-03T09:35:00+08:00"
+        },
+        {
+          "code": "002560",
+          "name": "观察样例",
+          "at": "2026-06-03T10:00:00+08:00",
+          "lastPrice": 10.02,
+          "preClose": 10,
+          "open": 10.05,
+          "amount": 12000000,
+          "volume": 1000000,
+          "capturedAt": "2026-06-03T10:00:00+08:00",
+          "bridgeTs": "2026-06-03T10:00:00+08:00"
         }
       ],
       "expected": {
-        "triggered": true,
-        "variant": "auction_late_lift",
-        "confidence": "critical",
-        "scoreRange": [80, 100],
-        "riskFlags": ["auction_coverage_low"],
-        "dryRun": false
-      }
-    },
-    {
-      "caseId": "v7-profile-missing-trusted-time",
-      "description": "V7：竞价画像缺失但时间可信，09:25基线有效且有开盘跳变，仍应触发。",
-      "quotes": [
-        {
-          "code": "600002",
-          "name": "缺画像票",
-          "at": "2026-05-22T09:25:00+08:00",
-          "lastPrice": 9.85,
-          "preClose": 10,
-          "open": 0,
-          "amount": 3000000,
-          "volume": 305000,
-          "capturedAt": "2026-05-22T09:25:01+08:00",
-          "bridgeTs": "2026-05-22T09:25:01+08:00"
-        },
-        {
-          "code": "600002",
-          "name": "缺画像票",
-          "at": "2026-05-22T09:31:15+08:00",
-          "lastPrice": 10.35,
-          "preClose": 10,
-          "open": 10.01,
-          "amount": 25000000,
-          "volume": 2450000,
-          "capturedAt": "2026-05-22T09:31:15+08:00",
-          "bridgeTs": "2026-05-22T09:31:15+08:00"
-        }
-      ],
-      "expected": {
-        "triggered": true,
-        "variant": "auction_gap_reversal",
-        "confidence": "strong",
-        "scoreRange": [60, 85],
-        "riskFlags": ["auction_profile_missing"],
-        "dryRun": false
-      }
-    },
-    {
-      "caseId": "v7-time-untrusted-dryrun",
-      "description": "V7：竞价基线capturedAt在窗口外，应标记auction_time_untrusted并dryRun。",
-      "quotes": [
-        {
-          "code": "600003",
-          "name": "时间错位票",
-          "at": "2026-05-22T09:20:05+08:00",
-          "lastPrice": 9.7,
-          "preClose": 10,
-          "open": 0,
-          "amount": 800000,
-          "volume": 83000,
-          "capturedAt": "2026-05-22T09:20:05+08:00",
-          "bridgeTs": "2026-05-22T09:20:05+08:00"
-        },
-        {
-          "code": "600003",
-          "name": "时间错位票",
-          "at": "2026-05-22T09:24:05+08:00",
-          "lastPrice": 9.75,
-          "preClose": 10,
-          "open": 0,
-          "amount": 1500000,
-          "volume": 154000,
-          "capturedAt": "2026-05-22T09:24:05+08:00",
-          "bridgeTs": "2026-05-22T09:24:05+08:00"
-        },
-        {
-          "code": "600003",
-          "name": "时间错位票",
-          "at": "2026-05-22T09:25:00+08:00",
-          "lastPrice": 9.85,
-          "preClose": 10,
-          "open": 0,
-          "amount": 2000000,
-          "volume": 203000,
-          "capturedAt": "2026-05-22T09:26:00+08:00",
-          "bridgeTs": "2026-05-22T09:26:00+08:00"
-        },
-        {
-          "code": "600003",
-          "name": "时间错位票",
-          "at": "2026-05-22T09:31:20+08:00",
-          "lastPrice": 10.45,
-          "preClose": 10,
-          "open": 10.02,
-          "amount": 28000000,
-          "volume": 2700000,
-          "capturedAt": "2026-05-22T09:31:20+08:00",
-          "bridgeTs": "2026-05-22T09:31:20+08:00"
-        }
-      ],
-      "expected": {
-        "triggered": true,
-        "variant": "auction_late_lift",
-        "confidence": "watch",
-        "scoreRange": [40, 59],
-        "dryRun": true,
-        "riskFlags": ["auction_time_untrusted"]
+        "checkpoints": [
+          {
+            "at": "09:20",
+            "result": "PASS",
+            "stage": "auctionConditionPassed",
+            "voiceEligible": false
+          },
+          {
+            "at": "09:25",
+            "result": "PASS",
+            "stage": "auctionConditionPassed",
+            "voiceEligible": false
+          },
+          {
+            "at": "09:30",
+            "result": "FAIL",
+            "stage": "noGap",
+            "voiceEligible": false
+          },
+          {
+            "at": "09:35",
+            "result": "FAIL",
+            "stage": "trendWeak",
+            "voiceEligible": false
+          },
+          {
+            "at": "10:00",
+            "result": "PASS",
+            "stage": "optionalFinalStatus",
+            "voiceEligible": false
+          }
+        ]
       }
     }
   ]

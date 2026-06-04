@@ -442,8 +442,21 @@ const hasOpeningWeakToStrongSignal = (stock: Stock) => openingSignalsByCode.valu
 const openingSignalTitle = (stock: Stock) => {
   const signal = openingSignalsByCode.value.get(stock.code)
   if (!signal) return ''
-  const confidence = signal.confidence === 'critical' ? '强' : signal.confidence === 'strong' ? '中' : '观察'
-  return `竞价弱转强｜${confidence}｜分数 ${signal.score ?? '--'}`
+  const stageName =
+    signal.stage === 'gapAlert'
+      ? '跳空高开'
+      : signal.stage === 'trendConfirm'
+        ? '快速上板前兆'
+        : signal.stage === 'auctionConditionPassed'
+          ? '候选成立'
+          : signal.stage === 'auctionConditionFailed'
+            ? '候选不成立'
+            : signal.stage === 'noGap'
+              ? '无跳空'
+              : signal.stage === 'trendWeak'
+                ? '承接转弱'
+                : '最终状态'
+  return `竞价弱转强｜${stageName}`
 }
 
 // ========== 从表格数据获取题材信息 ==========

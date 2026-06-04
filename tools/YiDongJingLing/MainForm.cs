@@ -1342,10 +1342,14 @@ public sealed class MainForm : Form
             return;
         }
 
+        if (voiceEligibleEvents.Count > 0)
+        {
+            _speech.Announce(voiceEligibleEvents);
+        }
+
         try
         {
             using var timeout = new CancellationTokenSource(TimeSpan.FromMilliseconds(1500));
-            var voiceEvents = new List<EventRecord>();
             foreach (var item in events)
             {
                 var result = await _openingSignalReporter.ReportAsync(
@@ -1353,24 +1357,11 @@ public sealed class MainForm : Form
                     new Uri("http://127.0.0.1:3000"),
                     timeout.Token);
                 Log($"竞价弱转强信号已上报: {item.Code} {result.DedupeAction} voiceOwner={result.VoiceOwner}");
-                if (voiceEligibleEvents.Contains(item) && result.VoiceOwner == "desktop")
-                {
-                    voiceEvents.Add(item);
-                }
-            }
-
-            if (voiceEvents.Count > 0)
-            {
-                _speech.Announce(voiceEvents);
             }
         }
         catch (Exception ex)
         {
-            Log($"竞价弱转强信号上报失败，已降级为本地播报: {ex.Message}");
-            if (voiceEligibleEvents.Count > 0)
-            {
-                _speech.Announce(voiceEligibleEvents);
-            }
+            Log($"竞价弱转强信号同步失败，本地播报不受影响: {ex.Message}");
         }
     }
 
@@ -1656,22 +1647,20 @@ public sealed class MainForm : Form
 
     private void UpdateOpeningCoverageLabel(OpeningWeakToStrongSignal signal)
     {
-        var coverage = signal.AuctionCoverageRatio.HasValue
-            ? $"{signal.AuctionCoverageRatio.Value * 100m:0}%"
+        var requestedCount = signal.RequestedCount.GetValueOrDefault();
+        var ratio = requestedCount > 0
+            ? (decimal?)signal.ReceivedCount.GetValueOrDefault() / requestedCount
+            : null;
+        var coverage = ratio.HasValue
+            ? $"{ratio.Value * 100m:0}%"
             : "--";
         var requested = signal.RequestedCount?.ToString() ?? "--";
         var received = signal.ReceivedCount?.ToString() ?? "--";
         var batchSummary = signal.SlowBatches.GetValueOrDefault() > 0 || signal.TruncatedBatches.GetValueOrDefault() > 0
             ? $" 慢{signal.SlowBatches.GetValueOrDefault()} 截{signal.TruncatedBatches.GetValueOrDefault()}"
             : "";
-        var dryRun = signal.DryRun ? " 演练" : "";
-        _openingCoverageLabel.Text = OpeningCoverageStatusText(coverage, received, requested, batchSummary, dryRun);
-        _openingCoverageLabel.ForeColor =
-            signal.DryRun ||
-            signal.AuctionCoverageRatio is < MinOpeningCoverageRatio ||
-            signal.RiskFlags.Any(item => item.Key is "auction_coverage_low" or "quote_time_untrusted" or "auction_time_untrusted")
-                ? WarnAmber
-                : TerminalText;
+        _openingCoverageLabel.Text = OpeningCoverageStatusText(coverage, received, requested, batchSummary);
+        _openingCoverageLabel.ForeColor = ratio is < MinOpeningCoverageRatio ? WarnAmber : TerminalText;
     }
 
     private void UpdateOpeningCoverageLabel(OpeningCoverageSnapshot snapshot)
@@ -1682,8 +1671,7 @@ public sealed class MainForm : Form
         var batchSummary = snapshot.SlowBatches.GetValueOrDefault() > 0 || snapshot.TruncatedBatches.GetValueOrDefault() > 0
             ? $" 慢{snapshot.SlowBatches.GetValueOrDefault()} 截{snapshot.TruncatedBatches.GetValueOrDefault()}"
             : "";
-        var dryRun = IsOpeningCoverageLow(snapshot.RawCoverageRatio) ? " 演练" : "";
-        _openingCoverageLabel.Text = OpeningCoverageStatusText(coverage, received, requested, batchSummary, dryRun);
+        _openingCoverageLabel.Text = OpeningCoverageStatusText(coverage, received, requested, batchSummary);
         _openingCoverageLabel.ForeColor = IsOpeningCoverageLow(snapshot.RawCoverageRatio) ? WarnAmber : TerminalText;
     }
 
@@ -1722,10 +1710,9 @@ public sealed class MainForm : Form
         string coverage,
         string received,
         string requested,
-        string batchSummary,
-        string dryRun)
+        string batchSummary)
     {
-        return $"竞价覆盖 {coverage} {received}/{requested}{batchSummary}{dryRun}";
+        return $"竞价覆盖 {coverage} {received}/{requested}{batchSummary}";
     }
 
     public static bool IsOpeningCoverageLow(decimal? rawCoverageRatio)
@@ -1824,17 +1811,16 @@ public sealed class MainForm : Form
         "成交量",
         "成交额",
         "异动详情",
-        "弱转强形态",
-        "信号强度",
-        "信号分数",
+        "弱转强阶段",
+        "状态",
+        "可语音",
+        "信号时间",
+        "信号价",
+        "信号涨幅",
         "09:20基线时间",
         "09:20基线价",
         "09:20基线涨幅",
         "09:20基线金额",
-        "09:24基线时间",
-        "09:24基线价",
-        "09:24基线涨幅",
-        "09:24基线金额",
         "09:25最终基线时间",
         "09:25最终基线价",
         "09:25最终基线涨幅",
@@ -1848,28 +1834,10 @@ public sealed class MainForm : Form
         "跳空百分点",
         "成交额增量",
         "竞价抬价百分点",
-        "临门抬价百分点",
         "竞价金额增量",
-        "临门金额增量",
         "竞价金额放大比",
-        "临门金额放大比",
         "量价确认",
-        "流动性分层",
-        "流动性模式",
-        "流动性依据",
-        "流动性阈值",
-        "流动性版本",
-        "距涨停百分点",
         "基线质量",
-        "竞价覆盖率",
-        "盘中状态",
-        "盘中结果",
-        "盘中状态时间",
-        "盘中价",
-        "盘中涨幅",
-        "盘中成交额",
-        "盘中说明",
-        "DryRun",
         "竞价采样时间",
         "行情采样时间",
         "竞价采样数",
@@ -1878,10 +1846,6 @@ public sealed class MainForm : Form
         "采样耗时ms",
         "慢批次",
         "截断批次",
-        "前日弱势分",
-        "前日弱势来源",
-        "前日弱势标签",
-        "风险标记",
     ];
 
     private static IEnumerable<string> BuildExportValues(EventRecord item)
@@ -1898,17 +1862,16 @@ public sealed class MainForm : Form
             FormatVolume(item.Volume),
             FormatMoney(item.Amount),
             item.Reason,
-            signal?.Variant ?? "",
-            signal?.Confidence ?? "",
-            FormatNullable(signal?.Score),
+            signal?.Stage ?? "",
+            signal?.Status ?? "",
+            signal?.VoiceEligible.ToString() ?? "",
+            FormatExportTime(signal?.Time),
+            FormatNullable(signal?.Price),
+            FormatNullable(signal?.Pct),
             FormatExportTime(signal?.InitialBaselineAt),
             FormatNullable(signal?.InitialBaselinePrice),
             FormatNullable(signal?.InitialBaselinePct),
             FormatNullableMoney(signal?.InitialBaselineAmount),
-            FormatExportTime(signal?.LateBaselineAt),
-            FormatNullable(signal?.LateBaselinePrice),
-            FormatNullable(signal?.LateBaselinePct),
-            FormatNullableMoney(signal?.LateBaselineAmount),
             FormatExportTime(signal?.FinalBaselineAt),
             FormatNullable(signal?.FinalBaselinePrice),
             FormatNullable(signal?.FinalBaselinePct),
@@ -1920,30 +1883,12 @@ public sealed class MainForm : Form
             FormatNullable(signal?.FirstWindowPrice),
             FormatNullable(signal?.FirstWindowPct),
             FormatNullable(signal?.JumpPctPoint),
-            signal is null ? "" : FormatMoney(signal.AmountDelta),
+            FormatNullableMoney(signal?.AmountDelta),
             FormatNullable(signal?.AuctionPriceLiftPctPoint),
-            FormatNullable(signal?.LatePriceLiftPctPoint),
             FormatNullableMoney(signal?.AuctionAmountDelta),
-            FormatNullableMoney(signal?.LateAmountDelta),
             FormatNullable(signal?.AuctionAmountLiftRatio),
-            FormatNullable(signal?.LateAmountLiftRatio),
             FormatNullableBool(signal?.PriceVolumeConfirmed),
-            signal?.LiquidityTier ?? "",
-            signal?.LiquidityTierMode ?? "",
-            signal?.LiquidityTierBasis ?? "",
-            signal?.LiquidityTierThresholds ?? "",
-            signal?.LiquidityTierVersion ?? "",
-            FormatNullable(signal?.LimitDistancePct),
             signal?.BaselineQuality ?? "",
-            FormatNullable(signal?.AuctionCoverageRatio),
-            signal?.IntradayStatus ?? "",
-            signal?.IntradayOutcome ?? "",
-            FormatExportTime(signal?.IntradayStatusAt),
-            FormatNullable(signal?.IntradayPrice),
-            FormatNullable(signal?.IntradayPct),
-            FormatNullableMoney(signal?.IntradayAmount),
-            signal?.IntradayNote ?? "",
-            signal is null ? "" : signal.DryRun ? "true" : "false",
             FormatExportTime(signal?.AuctionCapturedAt),
             FormatExportTime(signal?.QuoteCapturedAt),
             FormatNullable(signal?.AuctionSampleCount),
@@ -1952,10 +1897,6 @@ public sealed class MainForm : Form
             FormatNullable(signal?.ElapsedMs),
             FormatNullable(signal?.SlowBatches),
             FormatNullable(signal?.TruncatedBatches),
-            FormatNullable(signal?.PreviousWeakScore),
-            signal?.PreviousWeakSource ?? "",
-            signal is null ? "" : string.Join(";", signal.PreviousWeakSignals),
-            signal is null ? "" : string.Join(";", signal.RiskFlags.Select(item => item.Key)),
         ];
     }
 
@@ -2013,13 +1954,13 @@ public sealed class MainForm : Form
     public static bool IsOpeningAuctionCoverageWindow(DateTimeOffset timestamp)
     {
         var time = timestamp.ToLocalTime().TimeOfDay;
-        return time >= TimeSpan.Parse("09:24:50") && time <= TimeSpan.Parse("09:25:10");
+        return time == TimeSpan.Parse("09:25:00");
     }
 
     public static bool IsOpeningAuctionSampleTelemetryWindow(DateTimeOffset timestamp)
     {
         var time = timestamp.ToLocalTime().TimeOfDay;
-        return time >= TimeSpan.Parse("09:20:00") && time <= TimeSpan.Parse("09:25:10");
+        return time >= TimeSpan.Parse("09:20:00") && time <= TimeSpan.Parse("09:25:00");
     }
 
     public static bool IsOpeningWeakToStrongPreopenWindow(DateTimeOffset timestamp)

@@ -24,23 +24,20 @@ public static class EventVoicePolicy
     private static bool IsVoiceEligible(EventRecord item)
     {
         if (item.OpeningSignal is null) return true;
-        if (item.OpeningSignal.DryRun) return false;
-        return IsConfirmedStrongOpening(item.OpeningSignal);
+        return IsOpeningAlert(item.OpeningSignal);
     }
 
     public static bool IsStrongSignal(EventRecord item)
     {
-        if (item.OpeningSignal is not null) return IsConfirmedStrongOpening(item.OpeningSignal);
+        if (item.OpeningSignal is not null) return IsOpeningAlert(item.OpeningSignal);
         return item.Severity is L1EventSeverity.Critical or L1EventSeverity.Important &&
             item.Type is not L1EventType.BidPressure and not L1EventType.AskPressure and not L1EventType.SpreadWidened
                 and not L1EventType.LargeBidOrder and not L1EventType.LargeAskOrder;
     }
 
-    private static bool IsConfirmedStrongOpening(OpeningWeakToStrongSignal signal)
+    private static bool IsOpeningAlert(OpeningWeakToStrongSignal signal)
     {
-        return signal.IntradayStatus == "confirmed" &&
-            signal.IntradayOutcome == "confirmed_strong" &&
-            signal.Confidence is "strong" or "critical";
+        return signal.VoiceEligible && signal.Stage is "gapAlert" or "trendConfirm";
     }
 
     public static string DisplayName(VoiceMode mode)
