@@ -31,7 +31,6 @@ RESEARCH_SOURCE_COLLECTIONS = (
     "backtest_signals",
     "backtest_quality_reports",
     "optimization_runs",
-    "hotlist_sentiment",
     "theme_factor_frames",
     "theme_stock_exposures",
     "theme_signals",
@@ -41,7 +40,7 @@ RESEARCH_GENERATED_COLLECTIONS = ("backtest_result_chunks",)
 RESEARCH_COLLECTIONS = (*RESEARCH_SOURCE_COLLECTIONS, *RESEARCH_GENERATED_COLLECTIONS)
 
 THEME_COLLECTIONS = ("themes", "theme_stock_mappings", "theme_metadata")
-RUNTIME_COLLECTIONS = ("stock_names", "migration_audit")
+RUNTIME_COLLECTIONS = ("stock_names", "migration_audit", "hotlist_sentiment")
 JOURNAL_COLLECTIONS = ("trade_journal",)
 ALL_COLLECTIONS = (*SNAPSHOT_COLLECTIONS, *RESEARCH_COLLECTIONS, *THEME_COLLECTIONS, *RUNTIME_COLLECTIONS, *JOURNAL_COLLECTIONS)
 
