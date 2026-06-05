@@ -206,6 +206,40 @@ public sealed class OpeningWeakToStrongDetectorTests
         Assert.True(events[2].FirstWindowPrice < events[2].OfficialOpen); // 跌破开盘价
     }
 
+    // ── 缺基线容错：没有 09:20 数据时链路不能断 ──
+
+    [Fact]
+    public void Missing_09_20_baseline_emits_auctionConditionFailed_and_chain_continues()
+    {
+        // 模拟通达信 L1 在 09:25 才推送首条数据的真实场景
+        // 没有 09:20 初始基线 → auctionConditionFailed(triggered=true) → 09:30 gapAlert 仍可触发
+        var events = RunQuotes(
+            Q("09:24:00", 9.90m, 1_900_000m),
+            Q("09:25:00", 9.92m, 2_000_000m),
+            Q("09:30:00", 10.35m, 8_000_000m, open: 10.35m));
+
+        Assert.Equal(
+            new[] { "auctionConditionFailed", "gapAlert" },
+            events.Select(e => e.Stage));
+        Assert.True(events[0].Triggered);  // triggered=true，不能是 Rejected
+        Assert.False(events[0].VoiceEligible);
+        Assert.True(events[1].VoiceEligible); // gapAlert 正常触发
+    }
+
+    [Fact]
+    public void Missing_09_20_baseline_then_noGap_at_09_30()
+    {
+        // 缺 09:20 基线 + 09:30 改善不足 → auctionConditionFailed → noGap
+        var events = RunQuotes(
+            Q("09:24:00", 9.90m, 1_900_000m),
+            Q("09:25:00", 9.92m, 2_000_000m),
+            Q("09:30:00", 9.98m, 4_000_000m, open: 9.98m));
+
+        Assert.Equal(
+            new[] { "auctionConditionFailed", "noGap" },
+            events.Select(e => e.Stage));
+    }
+
     [Fact]
     public void NoGap_then_trendWeak_when_opening_fails_and_trend_also_fails()
     {

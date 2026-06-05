@@ -477,6 +477,61 @@ describe('OpeningWeakToStrongDetector', () => {
     expect(events).toHaveLength(0)
   })
 
+  // ── 缺基线容错：L1 行情 09:25 才到，链路不能断 ──
+
+  it('missing 09:20 baseline emits auctionConditionFailed so gap checkpoint still runs', () => {
+    // 模拟通达信 L1 在 09:25 才推送首条数据的真实场景
+    const events = runQuotes([
+      {
+        ...baseQuote,
+        at: '2026-06-03T09:24:00+08:00', lastPrice: 9.90, preClose: 10,
+        amount: 1_900_000, volume: 190_000,
+        capturedAt: '2026-06-03T09:24:00+08:00', bridgeTs: '2026-06-03T09:24:00+08:00',
+      },
+      {
+        ...baseQuote,
+        at: '2026-06-03T09:25:00+08:00', lastPrice: 9.92, preClose: 10,
+        amount: 2_000_000, volume: 180_000,
+        capturedAt: '2026-06-03T09:25:00+08:00', bridgeTs: '2026-06-03T09:25:00+08:00',
+      },
+      {
+        ...baseQuote,
+        at: '2026-06-03T09:30:00+08:00', lastPrice: 10.35, preClose: 10,
+        open: 10.35, amount: 8_000_000, volume: 600_000,
+        capturedAt: '2026-06-03T09:30:00+08:00', bridgeTs: '2026-06-03T09:30:00+08:00',
+      },
+    ] as OpeningWeakToStrongQuote[])
+
+    expect(events.map(e => e.stage)).toEqual(['auctionConditionFailed', 'gapAlert'])
+    expect(events[0].triggered).toBe(true)   // triggered=true，不能是 rejected
+    expect(events[1].voiceEligible).toBe(true) // gapAlert 正常触发
+  })
+
+  it('missing 09:20 baseline then noGap at 09:30 when opening support insufficient', () => {
+    const events = runQuotes([
+      {
+        ...baseQuote,
+        at: '2026-06-03T09:24:00+08:00', lastPrice: 9.90, preClose: 10,
+        amount: 1_900_000, volume: 190_000,
+        capturedAt: '2026-06-03T09:24:00+08:00', bridgeTs: '2026-06-03T09:24:00+08:00',
+      },
+      {
+        ...baseQuote,
+        at: '2026-06-03T09:25:00+08:00', lastPrice: 9.92, preClose: 10,
+        amount: 2_000_000, volume: 180_000,
+        capturedAt: '2026-06-03T09:25:00+08:00', bridgeTs: '2026-06-03T09:25:00+08:00',
+      },
+      {
+        ...baseQuote,
+        at: '2026-06-03T09:30:00+08:00', lastPrice: 9.98, preClose: 10,
+        open: 9.98, amount: 4_000_000, volume: 400_000,
+        capturedAt: '2026-06-03T09:30:00+08:00', bridgeTs: '2026-06-03T09:30:00+08:00',
+      },
+    ] as OpeningWeakToStrongQuote[])
+
+    expect(events.map(e => e.stage)).toEqual(['auctionConditionFailed', 'noGap'])
+  })
+
   it('does not run any delayed board confirmation after the 10:00 final status update', () => {
     const rules = loadFixture().rules
     const store = new OpeningAuctionStateStore(rules)
