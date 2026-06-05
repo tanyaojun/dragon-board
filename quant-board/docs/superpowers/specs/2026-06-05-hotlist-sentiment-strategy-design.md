@@ -13,8 +13,8 @@
 
 ## 范围
 
-- 新建 MongoDB 集合 `hotlist_sentiment`，按交易日存储热榜情绪数据
-- TypeScript 端改造 `HotListSentimentAnalyzer`：全池覆盖、新增 turnover 进出明细、每日收盘写入 MongoDB
+- 新建 MongoDB 集合 `hotlist_sentiment`，作为 QuantBoard 当前主存储链路的一部分；SQLite/Supabase 不再作为运行主库或备用存储
+- TypeScript 端改造 `HotListSentimentAnalyzer`：全池覆盖、新增 turnover 进出明细，通过 QuantBoard 后端 API 写入 MongoDB
 - Python 端新增读取路径，在 `compose_strategy()` 中用热榜情绪替换 `market_regime()`
 - 历史数据回填 2026-04-16 至今所有交易日
 
@@ -29,11 +29,12 @@
 
 ## 1. 数据模型——MongoDB `hotlist_sentiment`
 
-独立集合，一条文档 = 一个交易日。按 `tradingDate` 查询。
+独立集合，一条文档 = 一个 `datasetId + snapshotType + tradingDate` 的日终热榜情绪结果。按 `datasetId + snapshotType + tradingDate` 查询，并建立唯一索引，避免不同数据集或快照粒度互相覆盖。默认 `snapshotType=half_hour`；`quarter_hour` 只能由用户显式选择。
 
 ```json
 {
-  "_id": "2026-06-05",
+  "_id": "dragonboard_live:half_hour:2026-06-05",
+  "datasetId": "dragonboard_live",
   "tradingDate": "2026-06-05",
   "snapshotType": "half_hour",
   "computedAt": 1717574400,
@@ -89,6 +90,8 @@
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
+| `datasetId` | string | 数据集 ID，默认来自当前回测/快照数据集 |
+| `snapshotType` | string | 快照粒度，默认 half_hour |
 | `stage` | string | 统一五阶段：冰点/启动/发酵/高潮/退潮 |
 | `riskLevel` | string | 低/中/高 |
 | `confidence` | number | 0-100 信心分 |
@@ -124,11 +127,11 @@
 
 ### 2.3 每日收盘触发
 
-新增 `persistToMongoDB(result, tradingDate)` 方法，将分析结果写入 MongoDB `hotlist_sentiment` 集合。触发时机：检测到今日最后一帧 half_hour 快照（≥15:00）到达后自动执行。
+新增 `persistHotListSentiment(result, context)` 方法，将分析结果提交到 QuantBoard 后端 API，由后端写入 MongoDB `hotlist_sentiment` 集合。触发时机以快照帧的 `tradingDate + snapshotType + slotTime/timestamp` 为准，不使用浏览器本地时间；UI 面板只发起公开服务调用，不直接承担日终落库编排。
 
 ### 2.4 历史回填脚本
 
-一次性脚本，遍历 2026-04-16 ~ 今所有交易日的 `snapshot_frames`，取每日最后一帧热榜数据作为输入，逐日计算并写入。
+一次性脚本，遍历 2026-04-16 ~ 今所有交易日的 `snapshot_frames`，取每日最后一帧热榜数据作为输入，逐日计算并写入。回填必须复用与线上落库一致的字段合同和阶段判断口径；不得用临时简化规则生成可参与回测的 `stage/riskLevel`。
 
 ---
 
@@ -168,7 +171,7 @@ class HotListSentimentRepository:
 | 退潮 | 任意 | 退场：只允许 D_EXIT_RISK 卖出，禁止新入场 |
 | 冰点 | 任意 | 冰封：禁止一切入场 |
 
-缺失数据时 `hotlist` 为 `None`，函数内部视为空 `{}`，所有字段取默认值，不影响其他判断分支。
+缺失数据时 `hotlist` 为 `None`，函数必须走中性回退：不调用 `market_regime()`，也不额外压制 A_MAIN/B_IGNITION；返回结果需要在 `reasons` 中标注“热榜情绪缺失，按中性处理”。不得把缺失数据默认成“启动/中风险”，因为这会改变入场权限。
 
 ### 3.3 接入 replay 管线
 

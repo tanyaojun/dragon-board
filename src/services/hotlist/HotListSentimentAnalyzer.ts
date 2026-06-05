@@ -54,9 +54,35 @@ export interface HotListDayMetrics {
   crowdedShare: number
 }
 
-export type HotListLayerKey = 'top20' | 'top50' | 'top100'
+export type HotListLayerKey = 'top20' | 'top50' | 'top100' | 'all'
 
 export type HotListLayerSet = Record<HotListLayerKey, HotListDayMetrics>
+
+export interface TurnoverEntryDetail {
+  code: string
+  name: string
+  rank: number
+  changePct: number
+  entryReason: 'limit_up' | 'strong_money' | 'rank_surge' | 'new_high_volume'
+}
+
+export interface TurnoverExitDetail {
+  code: string
+  name: string
+  rank: number
+  changePct: number
+  exitReason: 'rank_out_of_range' | 'weakening' | 'limit_down'
+}
+
+export interface TurnoverResult {
+  previousPoolSize: number
+  currentPoolSize: number
+  retainedFromYesterday: number
+  newEntries: string[]
+  eliminated: string[]
+  newEntryDetails: TurnoverEntryDetail[]
+  eliminatedDetails: TurnoverExitDetail[]
+}
 
 export interface HotListYesterdayStrongPerformance {
   count: number
@@ -158,6 +184,7 @@ export interface HotListSentimentResult {
   confidence: number
   summary: string
   metrics: HotListSentimentMetrics
+  turnover: TurnoverResult
   signals: string[]
   warnings: string[]
 }
@@ -174,6 +201,12 @@ export interface HotListSentimentInput {
   dayBefore?: HotListSentimentSnapshot | null
   marketData?: DragonBreathMarketDataLike | null
   topN?: number
+}
+
+export interface HotListSentimentPersistContext {
+  datasetId?: string
+  snapshotType?: string
+  tradingDate: string
 }
 
 interface HotListStockLimitSignal {
@@ -234,6 +267,51 @@ function getRows(snapshot?: HotListSentimentSnapshot | null): any[] {
 function getRank(stock: any, fallbackIndex: number): number {
   const rank = toNumber(stock?.compRank ?? stock?.rank)
   return rank > 0 ? rank : fallbackIndex + 1
+}
+
+function classifyEntryReason(stock: any): TurnoverEntryDetail['entryReason'] {
+  if (toNumber(stock?.change) >= 9.8) return 'limit_up'
+  if (toNumber(stock?.zlje) > 0 || toNumber(stock?.zljzb) > 0) return 'strong_money'
+  if (getTrustedVolumeRatio(stock) > 2) return 'new_high_volume'
+  return 'rank_surge'
+}
+
+function classifyExitReason(stock: any): TurnoverExitDetail['exitReason'] {
+  const change = toNumber(stock?.change)
+  if (change <= -9.8) return 'limit_down'
+  if (change < -3) return 'weakening'
+  return 'rank_out_of_range'
+}
+
+export function computeTurnover(todayStocks: any[], yesterdayStocks: any[]): TurnoverResult {
+  const todayRows = sortByRank(todayStocks || [])
+  const yesterdayRows = sortByRank(yesterdayStocks || [])
+  const todayCodes = new Set(todayRows.map(stock => normalizeCode(stock?.code)).filter(Boolean))
+  const yesterdayCodes = new Set(yesterdayRows.map(stock => normalizeCode(stock?.code)).filter(Boolean))
+  const newEntries = todayRows.filter(stock => !yesterdayCodes.has(normalizeCode(stock?.code)))
+  const eliminated = yesterdayRows.filter(stock => !todayCodes.has(normalizeCode(stock?.code)))
+
+  return {
+    previousPoolSize: yesterdayRows.length,
+    currentPoolSize: todayRows.length,
+    retainedFromYesterday: todayRows.filter(stock => yesterdayCodes.has(normalizeCode(stock?.code))).length,
+    newEntries: newEntries.map(stock => normalizeCode(stock?.code)).filter(Boolean),
+    eliminated: eliminated.map(stock => normalizeCode(stock?.code)).filter(Boolean),
+    newEntryDetails: newEntries.map((stock, index) => ({
+      code: normalizeCode(stock?.code),
+      name: normalizeName(stock?.name),
+      rank: getRank(stock, index),
+      changePct: toNumber(stock?.change),
+      entryReason: classifyEntryReason(stock),
+    })),
+    eliminatedDetails: eliminated.map((stock, index) => ({
+      code: normalizeCode(stock?.code),
+      name: normalizeName(stock?.name),
+      rank: getRank(stock, index),
+      changePct: toNumber(stock?.change),
+      exitReason: classifyExitReason(stock),
+    })),
+  }
 }
 
 function parseBoardHeightText(value: unknown): number {
@@ -651,6 +729,7 @@ function buildLayerMetrics(stocks: any[], tradingDate?: string): HotListLayerSet
     top20: buildDayMetricsFromSorted(sorted, { topN: 20, tradingDate }),
     top50: buildDayMetricsFromSorted(sorted, { topN: 50, tradingDate }),
     top100: buildDayMetricsFromSorted(sorted, { topN: 100, tradingDate }),
+    all: buildDayMetricsFromSorted(sorted, { topN: sorted.length, tradingDate }),
   }
 }
 
@@ -1199,6 +1278,7 @@ export class HotListSentimentAnalyzer {
     const limitEvidence = buildLimitEvidence(sortedStocks, yesterdayRows, topN, input.marketData)
     const stageEvidence = resolveStage(comparison, layers, limitEvidence)
     const confidence = calculateConfidence(stageEvidence.stage, stageEvidence.signals, stageEvidence.warnings)
+    const turnover = computeTurnover(sortedStocks, yesterdayRows)
 
     return {
       stage: stageEvidence.stage,
@@ -1211,10 +1291,45 @@ export class HotListSentimentAnalyzer {
         comparison,
         limitEvidence,
       },
+      turnover,
       signals: stageEvidence.signals,
       warnings: stageEvidence.warnings,
     }
   }
+}
+
+export async function persistHotListSentiment(
+  result: HotListSentimentResult,
+  context: HotListSentimentPersistContext,
+): Promise<boolean> {
+  const all = result.metrics.layers.all
+  const response = await fetch('/api/hotlist-sentiment/ingest', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      datasetId: context.datasetId ?? 'dragonboard_live',
+      snapshotType: context.snapshotType ?? 'half_hour',
+      tradingDate: context.tradingDate,
+      stage: result.stage,
+      riskLevel: result.riskLevel,
+      confidence: result.confidence,
+      summary: result.summary,
+      metrics: {
+        poolSize: all.total,
+        allPoolUpRatio: all.upRatio,
+        hotTrin: all.hotTrin,
+        retentionRate1d: result.metrics.comparison.top100RetainRateFromYesterday,
+        retentionRate2d: result.metrics.comparison.top100RetainRateFromDayBefore,
+        limitIntersectionRate: result.metrics.limitEvidence.intersection.top100LimitUpShare,
+        newEntryCount: result.turnover.newEntries.length,
+        eliminatedCount: result.turnover.eliminated.length,
+      },
+      turnover: result.turnover,
+      signals: result.signals,
+      warnings: result.warnings,
+    }),
+  })
+  return response.ok
 }
 
 export const hotListSentimentAnalyzer = new HotListSentimentAnalyzer()

@@ -5,6 +5,9 @@ from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from typing import Any
 
+from backend.data import repository_factory
+from backend.data.hotlist_sentiment_repo import HotListSentimentRepository
+
 
 def clamp(value: float, min_value: float, max_value: float) -> float:
     if not math.isfinite(value):
@@ -679,41 +682,71 @@ def compose_decision(technical: dict[str, Any], cycle: dict[str, Any], risk: dic
     return {"base": {"signal": base, "confidence": confidence, "combinedScore": combined, "scoreMargin": score_margin}, "final": {"signal": final, "confidence": final_conf}}
 
 
-def compose_strategy(technical: dict[str, Any], cycle: dict[str, Any], risk: dict[str, Any], regime: dict[str, Any], config: RankTrendConfig | None = None) -> dict[str, Any]:
+def compose_strategy(
+    technical: dict[str, Any],
+    cycle: dict[str, Any],
+    risk: dict[str, Any],
+    hotlist: dict[str, Any] | None = None,
+    config: RankTrendConfig | None = None,
+) -> dict[str, Any]:
     momentum = technical["momentumProfile"]
     stage = cycle["stage"]
-    weak_market = regime["state"] in ("weak", "retreat")
     trend_buy = technical["signals"]["direction"]["signal"] == "buy" or technical["signals"]["acceleration"]["signal"] == "buy" or technical["macd"]["cross"] == "golden"
     c = config or RankTrendConfig()
+    hotlist_missing = not isinstance(hotlist, dict)
+    hotlist_stage = str((hotlist or {}).get("stage") or "") if not hotlist_missing else ""
+    hotlist_risk = str((hotlist or {}).get("riskLevel") or "") if not hotlist_missing else ""
+    hotlist_state = {
+        "state": "missing" if hotlist_missing else "present",
+        "stage": hotlist_stage or None,
+        "riskLevel": hotlist_risk or None,
+        "confidence": (hotlist or {}).get("confidence") if not hotlist_missing else None,
+    }
     tier = "N_NEUTRAL"
     reasons: list[str] = []
+
+    if hotlist_stage in ("退潮", "冰点"):
+        if momentum["short"] <= c.tierExitRiskShortMomentumMax or momentum["acceleration"] <= c.tierExitRiskAccelMax or risk["pressure"] >= c.tierExitRiskPressureMin:
+            tier = "D_EXIT_RISK"
+            reasons.append(f"热榜{hotlist_stage}期，动量衰减触发退出风险")
+        else:
+            reasons.append(f"热榜{hotlist_stage}期，暂停入场")
+        reasons.append(f"热榜情绪: {hotlist_stage}(风险{hotlist_risk or '未知'})")
+        action = {"D_EXIT_RISK": "exit_watch"}.get(tier, "hold")
+        return {"hotlist": hotlist_state, "momentum": momentum, "candidateTier": tier, "action": action, "reasons": reasons}
+
+    allow_a_main = hotlist_missing or (hotlist_stage in ("高潮", "发酵") and hotlist_risk != "高")
+    allow_b_ignition = hotlist_missing or hotlist_stage in ("高潮", "发酵", "启动")
+
     if stage in ("reversal", "cooling") and (momentum["short"] <= c.tierExitRiskShortMomentumMax or momentum["acceleration"] <= c.tierExitRiskAccelMax or risk["pressure"] >= c.tierExitRiskPressureMin):
         tier = "D_EXIT_RISK"
         reasons.append("生命周期进入反转/冷却，短周期动量或风险压力转弱")
     elif stage == "crowded" or (momentum["long"] >= c.tierCrowdedLongMomentumMin and (momentum["acceleration"] <= c.tierCrowdedAccelMax or risk["pressure"] >= c.tierCrowdedRiskPressureMin)):
         tier = "C_CROWDED"
         reasons.append("长周期热度高位停留，追高性价比下降")
-    elif stage == "expansion" and momentum["mid"] >= c.tierAMainMidMomentumMin and momentum["short"] >= c.tierAMainShortMomentumMin and trend_buy and not weak_market and risk["divergence"]["severity"] < c.tierAMainDivergenceSeverityMax:
+    elif stage == "expansion" and momentum["mid"] >= c.tierAMainMidMomentumMin and momentum["short"] >= c.tierAMainShortMomentumMin and trend_buy and allow_a_main and risk["divergence"]["severity"] < c.tierAMainDivergenceSeverityMax:
         tier = "A_MAIN"
-        reasons.append("扩散阶段中周期动量确认，技术信号保持正向")
-    elif stage == "ignition" and momentum["short"] >= c.tierBIgnitionShortMomentumMin and momentum["acceleration"] >= c.tierBIgnitionAccelMin and regime["state"] != "retreat" and risk["pressure"] < c.tierBIgnitionRiskPressureMax:
+        reasons.append("扩散阶段中周期动量确认，热榜情绪支持A_MAIN入场")
+    elif stage == "ignition" and momentum["short"] >= c.tierBIgnitionShortMomentumMin and momentum["acceleration"] >= c.tierBIgnitionAccelMin and allow_b_ignition and risk["pressure"] < c.tierBIgnitionRiskPressureMax:
         tier = "B_IGNITION"
-        reasons.append("点火阶段短周期冲击增强，仍需继续确认")
-    elif weak_market and trend_buy:
-        reasons.append("弱势/退潮环境下买入信号降级为观察")
+        reasons.append("点火阶段短周期冲击增强，热榜情绪支持B_IGNITION")
+    elif hotlist_stage == "启动" and stage == "expansion" and trend_buy:
+        reasons.append("热榜启动期，A_MAIN暂缓，等待扩散确认")
+    elif hotlist_risk == "高" and trend_buy:
+        reasons.append("热榜情绪高风险，买入信号降级为观察")
     else:
         reasons.append("动量、阶段与风险未形成明确候选池信号")
-    if regime["state"] == "strong":
-        reasons.append("市场环境强，允许跟踪点火/扩散机会")
-    if regime["state"] == "retreat":
-        reasons.append("市场退潮，优先控制回撤风险")
+    if hotlist_missing:
+        reasons.append("热榜情绪缺失，按中性处理")
+    elif hotlist_stage:
+        reasons.append(f"热榜情绪: {hotlist_stage}(风险{hotlist_risk or '未知'})")
     if risk["divergence"]["severity"] >= 0.6:
         reasons.append("注意力与资金存在背离")
     if risk["overheat"]["severity"] >= 0.65:
         reasons.append("过热压力较高")
     reasons.append(f"动量结构 短{momentum['short']:+.1f} 中{momentum['mid']:+.1f} 长{momentum['long']:+.1f} 加速度{momentum['acceleration']:+.1f}")
     action = {"A_MAIN": "focus", "B_IGNITION": "watch", "C_CROWDED": "avoid", "D_EXIT_RISK": "exit_watch"}.get(tier, "hold")
-    return {"regime": regime, "momentum": momentum, "candidateTier": tier, "action": action, "reasons": reasons}
+    return {"hotlist": hotlist_state, "momentum": momentum, "candidateTier": tier, "action": action, "reasons": reasons}
 
 
 class RankTrendPythonEngine:
@@ -722,6 +755,8 @@ class RankTrendPythonEngine:
         self._stock_lookup: list[dict[str, dict[str, Any]]] = []
 
     def replay(self, frames: list[dict[str, Any]], warmup_count: int | None = None, window_size: int = 50, meta: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+        meta = meta or {}
+        self._inject_hotlist_sentiment(frames, meta)
         self._stock_lookup = self._build_stock_lookup(frames)
         min_count = warmup_count or get_technical_min_samples(self.config)
         start = min_count - 1 if len(frames) >= min_count else 0
@@ -761,11 +796,40 @@ class RankTrendPythonEngine:
                     [item[1] for item in series],
                     [item[2] for item in series],
                     regime,
-                    meta or {},
+                    meta,
                 )
                 if signal:
                     signals.append(signal)
         return signals
+
+    def _inject_hotlist_sentiment(self, frames: list[dict[str, Any]], meta: dict[str, Any]) -> None:
+        dataset_id = str(meta.get("datasetId") or meta.get("dataset_id") or "dragonboard_live")
+        default_snapshot_type = str(meta.get("snapshotType") or meta.get("snapshot_type") or "half_hour")
+        dates = sorted({str(frame.get("tradingDate") or "") for frame in frames if frame.get("tradingDate")})
+        if not dates:
+            return
+
+        try:
+            repo = HotListSentimentRepository(repository_factory.get_runtime_mongodb_database())
+            by_key: dict[tuple[str, str], dict] = {}
+            for frame in frames:
+                trading_date = str(frame.get("tradingDate") or "")
+                if not trading_date:
+                    continue
+                snapshot_type = str(frame.get("type") or frame.get("snapshotType") or default_snapshot_type)
+                key = (snapshot_type, trading_date)
+                if key not in by_key:
+                    doc = repo.get_by_date(dataset_id, snapshot_type, trading_date)
+                    if doc:
+                        by_key[key] = doc
+                frame["hotlistSentiment"] = by_key.get(key)
+                frame["hotlistSentimentStatus"] = "ok" if frame.get("hotlistSentiment") else "missing"
+        except Exception as exc:
+            reason = f"MongoDB hotlist sentiment unavailable: {exc}"
+            for frame in frames:
+                frame["hotlistSentiment"] = None
+                frame["hotlistSentimentStatus"] = "missing"
+                frame["hotlistSentimentReason"] = reason
 
     def replay_frame_at(self, frames: list[dict[str, Any]], index: int, window_size: int = 50, meta: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         frame = frames[index]
@@ -814,7 +878,7 @@ class RankTrendPythonEngine:
         cycle = analyze_cycle(ranks, percentiles)
         risk = analyze_risk(current_percentile, technical, cycle, fallback["zlje"], fallback["zljzb"], fallback["volumeRatio"])
         decision = compose_decision(technical, cycle, risk, self.config)
-        strategy = compose_strategy(technical, cycle, risk, regime, config=self.config)
+        strategy = compose_strategy(technical, cycle, risk, frame.get("hotlistSentiment"), config=self.config)
         sample_status = "ok" if len(percentiles) >= get_technical_min_samples(self.config) else "degraded" if len(percentiles) >= 5 else "insufficient"
         rank_trend = {
             "meta": {

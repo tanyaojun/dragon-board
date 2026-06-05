@@ -1,6 +1,9 @@
-import { describe, expect, it } from 'vitest'
-
-import { HotListSentimentAnalyzer } from '../HotListSentimentAnalyzer'
+import { describe, expect, it, vi } from 'vitest'
+import {
+  HotListSentimentAnalyzer,
+  computeTurnover,
+  persistHotListSentiment,
+} from '../HotListSentimentAnalyzer'
 
 function stock(code: string, input: Record<string, any> = {}) {
   return {
@@ -217,6 +220,98 @@ describe('HotListSentimentAnalyzer', () => {
     expect(result.metrics.layers.top100.topN).toBe(100)
     expect(result.metrics.layers.top20.upRatio).toBeGreaterThan(result.metrics.layers.top100.upRatio)
     expect(result.metrics.layers.top20.activeOpportunityCount).toBeGreaterThan(0)
+  })
+
+  it('输出全池 all 分层统计', () => {
+    const analyzer = new HotListSentimentAnalyzer()
+    const current = makeStocks(120, index => ({
+      change: index < 100 ? 1 : -2,
+    }))
+
+    const result = analyzer.analyze({ stocks: current })
+
+    expect(result.metrics.layers.all.topN).toBe(120)
+    expect(result.metrics.layers.all.upCount).toBe(100)
+    expect(result.metrics.layers.all.downCount).toBe(20)
+    expect(result.metrics.layers.all.upRatio).toBeCloseTo(100 / 120)
+  })
+
+  it('统计热榜股票池每日进出明细', () => {
+    const yesterday = [
+      stock('000001', { compRank: 10, change: 5, zlje: 1000, volumeRatio: 1.5 }),
+      stock('000002', { compRank: 50, change: -4, zlje: -500, volumeRatio: 0.8 }),
+    ]
+    const today = [
+      stock('000001', { compRank: 5, change: 9.8, zlje: 5000, volumeRatio: 2.5 }),
+      stock('000003', { compRank: 30, change: 3, zlje: 800, volumeRatio: 1.2 }),
+    ]
+
+    const result = computeTurnover(today, yesterday)
+
+    expect(result.previousPoolSize).toBe(2)
+    expect(result.currentPoolSize).toBe(2)
+    expect(result.retainedFromYesterday).toBe(1)
+    expect(result.newEntries).toEqual(['000003'])
+    expect(result.eliminated).toEqual(['000002'])
+    expect(result.newEntryDetails[0]).toMatchObject({
+      code: '000003',
+      entryReason: 'strong_money',
+    })
+    expect(result.eliminatedDetails[0]).toMatchObject({
+      code: '000002',
+      exitReason: 'weakening',
+    })
+  })
+
+  it('分析结果包含当日 turnover 汇总', () => {
+    const analyzer = new HotListSentimentAnalyzer()
+    const yesterday = [
+      stock('000001', { compRank: 10 }),
+      stock('000002', { compRank: 20 }),
+    ]
+    const current = [
+      stock('000001', { compRank: 5 }),
+      stock('000003', { compRank: 30 }),
+    ]
+
+    const result = analyzer.analyze({
+      stocks: current,
+      yesterday: { tradingDate: '2026-06-04', hotlist: yesterday },
+    })
+
+    expect(result.turnover.newEntries).toEqual(['000003'])
+    expect(result.turnover.eliminated).toEqual(['000002'])
+  })
+
+  it('提交热榜情绪到 QuantBoard 后端 API', async () => {
+    const analyzer = new HotListSentimentAnalyzer()
+    const result = analyzer.analyze({
+      stocks: makeStocks(120, index => ({
+        change: index < 100 ? 1 : -2,
+      })),
+    })
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const ok = await persistHotListSentiment(result, {
+      datasetId: 'dragonboard_live',
+      snapshotType: 'half_hour',
+      tradingDate: '2026-06-05',
+    })
+
+    expect(ok).toBe(true)
+    expect(fetchMock).toHaveBeenCalledWith('/api/hotlist-sentiment/ingest', expect.objectContaining({
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body)
+    expect(body.datasetId).toBe('dragonboard_live')
+    expect(body.snapshotType).toBe('half_hour')
+    expect(body.tradingDate).toBe('2026-06-05')
+    expect(body.metrics.poolSize).toBe(120)
+    expect(body.metrics.allPoolUpRatio).toBeCloseTo(100 / 120)
+    expect(body.turnover).toEqual(result.turnover)
+    vi.unstubAllGlobals()
   })
 
   it('默认使用全热榜池统计主情绪指标', () => {

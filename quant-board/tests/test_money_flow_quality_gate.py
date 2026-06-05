@@ -639,14 +639,14 @@ def test_compose_strategy_uses_config_tier_thresholds() -> None:
     }
     cycle = {"stage": "expansion", "metrics": {}}
     risk = {"divergence": {"severity": 0.3}, "pressure": 0.3, "overheat": {"severity": 0.3}}
-    regime = {"state": "normal"}
+    hotlist = {"stage": "发酵", "riskLevel": "中"}
 
-    result_default = compose_strategy(technical, cycle, risk, regime)
+    result_default = compose_strategy(technical, cycle, risk, hotlist=hotlist)
     assert result_default["candidateTier"] == "A_MAIN"
 
     # Now with a custom config that raises the A_MAIN mid momentum bar to 6.0
     strict_config = RankTrendConfig.from_patch({"tierAMainMidMomentumMin": 6.0})
-    result_strict = compose_strategy(technical, cycle, risk, regime, config=strict_config)
+    result_strict = compose_strategy(technical, cycle, risk, hotlist=hotlist, config=strict_config)
     # mid=4.5 < 6.0 → should fall through to N_NEUTRAL
     assert result_strict["candidateTier"] != "A_MAIN"
 
@@ -667,15 +667,90 @@ def test_compose_strategy_respects_b_ignition_config_thresholds() -> None:
     }
     cycle = {"stage": "ignition", "metrics": {}}
     risk = {"divergence": {"severity": 0.3}, "pressure": 0.3, "overheat": {"severity": 0.3}}
-    regime = {"state": "normal"}
+    hotlist = {"stage": "发酵", "riskLevel": "中"}
 
-    result_default = compose_strategy(technical, cycle, risk, regime)
+    result_default = compose_strategy(technical, cycle, risk, hotlist=hotlist)
     assert result_default["candidateTier"] == "B_IGNITION"
 
     # Strict config: require short momentum >= 5.0
     strict_config = RankTrendConfig.from_patch({"tierBIgnitionShortMomentumMin": 5.0})
-    result_strict = compose_strategy(technical, cycle, risk, regime, config=strict_config)
+    result_strict = compose_strategy(technical, cycle, risk, hotlist=hotlist, config=strict_config)
     assert result_strict["candidateTier"] != "B_IGNITION"
+
+
+def test_compose_strategy_uses_hotlist_stage_instead_of_market_regime() -> None:
+    from backend.analysis.ranktrend import compose_strategy
+
+    technical = {
+        "momentumProfile": {"short": 0.0, "mid": 5.0, "long": 3.0, "acceleration": 1.0},
+        "signals": {
+            "direction": {"signal": "buy"},
+            "acceleration": {"signal": "buy"},
+        },
+        "macd": {"cross": "golden"},
+    }
+    cycle = {"stage": "expansion", "metrics": {}}
+    risk = {"divergence": {"severity": 0.2}, "pressure": 0.2, "overheat": {"severity": 0.2}}
+
+    result = compose_strategy(
+        technical,
+        cycle,
+        risk,
+        hotlist={"stage": "高潮", "riskLevel": "低", "confidence": 80},
+    )
+    assert result["candidateTier"] == "A_MAIN"
+    assert result["hotlist"]["stage"] == "高潮"
+
+    ice_result = compose_strategy(
+        technical,
+        cycle,
+        risk,
+        hotlist={"stage": "冰点", "riskLevel": "高", "confidence": 20},
+    )
+    assert ice_result["candidateTier"] not in ("A_MAIN", "B_IGNITION")
+
+    ignition_result = compose_strategy(
+        {
+            **technical,
+            "momentumProfile": {"short": 4.0, "mid": 1.0, "long": 0.5, "acceleration": 0.8},
+        },
+        {"stage": "ignition", "metrics": {}},
+        risk,
+        hotlist={"stage": "启动", "riskLevel": "中", "confidence": 50},
+    )
+    assert ignition_result["candidateTier"] == "B_IGNITION"
+
+    retreat_result = compose_strategy(
+        {
+            **technical,
+            "momentumProfile": {"short": -3.0, "mid": -2.0, "long": -1.0, "acceleration": -3.0},
+        },
+        {"stage": "reversal", "metrics": {}},
+        risk,
+        hotlist={"stage": "退潮", "riskLevel": "高", "confidence": 30},
+    )
+    assert retreat_result["candidateTier"] == "D_EXIT_RISK"
+
+
+def test_compose_strategy_none_hotlist_is_neutral_fallback() -> None:
+    from backend.analysis.ranktrend import compose_strategy
+
+    technical = {
+        "momentumProfile": {"short": 0.0, "mid": 5.0, "long": 3.0, "acceleration": 1.0},
+        "signals": {
+            "direction": {"signal": "buy"},
+            "acceleration": {"signal": "buy"},
+        },
+        "macd": {"cross": "golden"},
+    }
+    cycle = {"stage": "expansion", "metrics": {}}
+    risk = {"divergence": {"severity": 0.2}, "pressure": 0.2, "overheat": {"severity": 0.2}}
+
+    result = compose_strategy(technical, cycle, risk, hotlist=None)
+
+    assert result["candidateTier"] == "A_MAIN"
+    assert result["hotlist"]["state"] == "missing"
+    assert any("热榜情绪缺失" in reason for reason in result["reasons"])
 
 
 def test_entry_signal_rejects_a_main_without_final_buy() -> None:

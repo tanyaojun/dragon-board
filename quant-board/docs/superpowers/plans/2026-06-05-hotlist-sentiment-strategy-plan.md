@@ -12,6 +12,19 @@
 
 ---
 
+## 执行修正（2026-06-05）
+
+以下修正优先级高于本文后续旧步骤示例：
+
+- MongoDB 是 QuantBoard 当前运行主库，`hotlist_sentiment` 属于 MongoDB 主链集合；SQLite/Supabase 不再作为运行主库或备用链路。
+- `hotlist_sentiment` 必须以 `datasetId + snapshotType + tradingDate` 作为唯一业务键，默认 `snapshotType=half_hour`，避免不同数据集或粒度互相覆盖。
+- `compose_strategy(hotlist=None)` 必须走中性回退：不调用 `market_regime()`，不把缺失数据默认成“启动/中风险”，不额外压制 A_MAIN/B_IGNITION，只在 `reasons` 中标注热榜情绪缺失。
+- 日终落库触发以快照帧字段为准，通过 QuantBoard 后端 API 写入 MongoDB；不得依赖浏览器本地时间，也不得把 MongoDB 写入编排塞进 Vue 面板私有逻辑。
+- 历史回填必须复用线上热榜情绪字段合同和阶段判断口径；不得用“简化版阶段判断”生成参与回测的 `stage/riskLevel`。
+- MongoDB 不可用时，正式写入/读取应结构化失败；策略回测缺少热榜情绪数据时只能显式中性回退并保留原因，不允许 `except Exception: pass` 静默降级。
+
+---
+
 ## Phase 1: Python 后端基础——Repository + API 端点
 
 ### Task 1: 新建 HotListSentimentRepository
