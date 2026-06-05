@@ -515,7 +515,7 @@ class DataLoaderService {
     if (this.isRealtimePrimaryHealthy()) {
       const quoteResult = await refreshResourceLocks.runExclusive(
         'quote-http',
-        () => this.fetchMergedQuotes(allStockCodes, { force: true }),
+        () => this.fetchMergedQuotes(allStockCodes, { force: false }),
         { skipIfLocked: true },
       )
 
@@ -541,7 +541,7 @@ class DataLoaderService {
       const batchCodes = allStockCodes.slice(i, i + batchSize)
       const quoteResult = await refreshResourceLocks.runExclusive(
         'quote-http',
-        () => this.fetchMergedQuotes(batchCodes, { force: true }),
+        () => this.fetchMergedQuotes(batchCodes, { force: false }),
         { skipIfLocked: true },
       )
       if (!quoteResult.executed) return

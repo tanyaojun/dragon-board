@@ -385,7 +385,7 @@ describe('DataLoaderFacade', () => {
     try {
       await (dataLoader as any).runQuoteRefresh(50)
 
-      expect(quoteService.fetchMergedQuotes).toHaveBeenCalledWith(['600584'], { force: true })
+      expect(quoteService.fetchMergedQuotes).toHaveBeenCalledWith(['600584'], { force: false })
       expect(dataLayer.getStock('600584')).toMatchObject({
         code: '600584',
         zlje: -970_465_792,
