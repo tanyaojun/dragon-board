@@ -541,20 +541,20 @@ public sealed class OpeningWeakToStrongDetector
     {
         if (baseline?.AuctionProfile?.InitialAt is null)
         {
-            return Rejected(quote, baseline, "缺少09:20初始基线");
+            return CheckpointSignal(quote, baseline, "auctionConditionFailed", false, "缺少09:20初始基线");
         }
 
         var profile = baseline.AuctionProfile;
         if (profile.LateBaselineAt is null)
         {
-            return Rejected(quote, baseline, "缺少09:24临门基线");
+            return CheckpointSignal(quote, baseline, "auctionConditionFailed", false, "缺少09:24临门基线");
         }
 
         var passed = IsValidPrice(baseline.AuctionFinalPrice) &&
             profile.PriceVolumeConfirmed;
         if (!passed && !OpeningAuctionStateStore.IsInWindow(quote.At, _rules.AuctionStart, _rules.AuctionEnd))
         {
-            return Rejected(quote, baseline, "preopen_candidate_unconfirmed");
+            return CheckpointSignal(quote, baseline, "auctionConditionFailed", false, "竞价量价确认未通过");
         }
         // In window: only emit triggered if passed==true
         // passed==false in window is expected (still building baseline), no triggered event
