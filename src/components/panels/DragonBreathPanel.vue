@@ -580,6 +580,7 @@ import { dataLayer } from '@/services/DataLayer'
 import { dragonBreathAnalyzer } from '@/services/DragonBreathAnalyzer'
 import {
   hotListSentimentAnalyzer,
+  persistHotListSentiment,
   type HotListDayMetrics,
   type HotListSentimentResult,
   type HotListStatusLabel,
@@ -1273,6 +1274,13 @@ async function loadHotListSentiment() {
       dayBefore: historical[1] || null,
       marketData: marketData.value,
     })
+
+    const todayBundle = historicalBundles.find(
+      (b: SnapshotFrameBundle) => b.tradingDate === today && b.slotTime >= '15:00',
+    )
+    if (todayBundle && hotListSentiment.value) {
+      persistHotListSentiment(hotListSentiment.value, today)
+    }
   } catch (err: any) {
     console.warn('[DragonBreathPanel] 热榜情绪分析失败:', err)
     hotListSentimentError.value = err?.message || '热榜情绪分析失败'
