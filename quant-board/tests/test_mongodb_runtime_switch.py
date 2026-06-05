@@ -159,7 +159,7 @@ def test_sqlite_archive_api_is_gone_in_mongodb_mode(monkeypatch, method: str, pa
     assert response.status_code == 410, response.text
 
 
-def test_mongodb_mode_disables_supabase_health_probe_and_after_market_workflow(monkeypatch) -> None:
+def test_mongodb_mode_disables_supabase_health_probe_and_runs_hotlist_after_market(monkeypatch) -> None:
     import backend.main as main
 
     monkeypatch.setattr(main, "storage_source_label", lambda: "mongodb")
@@ -175,6 +175,15 @@ def test_mongodb_mode_disables_supabase_health_probe_and_after_market_workflow(m
     try:
         health = client.get("/api/health", params={"deep": "true"})
         smoke = client.post("/api/sync/smoke-backup")
+        monkeypatch.setattr(
+            main,
+            "run_after_market_once",
+            lambda archive_limit=None, backup_limit=None, dry_run=False: {
+                "ok": True,
+                "steps": ["hotlistSentiment"],
+                "dryRun": dry_run,
+            },
+        )
         after_market = client.post("/api/operations/after-market-once")
     finally:
         main.app.dependency_overrides.clear()
@@ -182,7 +191,8 @@ def test_mongodb_mode_disables_supabase_health_probe_and_after_market_workflow(m
     assert health.status_code == 200, health.text
     assert health.json()["database"]["backup"]["configured"] is False
     assert smoke.status_code == 410, smoke.text
-    assert after_market.status_code == 410, after_market.text
+    assert after_market.status_code == 200, after_market.text
+    assert after_market.json()["steps"] == ["hotlistSentiment"]
 
 
 def test_theme_status_reports_mongodb_connection_failure(monkeypatch) -> None:

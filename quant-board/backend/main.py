@@ -274,8 +274,6 @@ def run_after_market_once_api(
     backup_limit: int | None = None,
     dry_run: bool = False,
 ) -> dict[str, Any]:
-    if storage_source_label() == "mongodb":
-        raise HTTPException(status_code=410, detail="SQLite after-market archive workflow is disabled after MongoDB migration")
     return run_after_market_once(archive_limit=archive_limit, backup_limit=backup_limit, dry_run=dry_run)
 
 

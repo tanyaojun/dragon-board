@@ -39,8 +39,62 @@ MongoDB 模式下：
 - `/api/storage/archive/*` 旧 SQLite/Parquet 归档接口返回 410。
 - `/api/sync/*` 旧 Supabase 同步接口返回 410。
 - `/api/migrations/snapshots/import-json` 返回 410；历史导入只允许走停服迁移脚本。
+- `/api/operations/after-market-once` 在 MongoDB 模式下只执行 `hotlistSentiment` 日终步骤，不执行旧 SQLite archive/prune 链路。
 - CLI 旧 SQLite/Supabase/Parquet 命令拒绝执行；业务回测、优化、查询命令继续通过 MongoDB repository 运行。
 - MongoDB 备份、校验、R2 上传和拉回恢复命令以 [mongodb-migration-plan.md](mongodb-migration-plan.md) 的当前实施状态为准。
+
+## 热榜情绪 API、回填和盘后调度
+
+### `POST /api/hotlist-sentiment/ingest`
+
+写入一个 `datasetId + snapshotType + tradingDate` 的日终热榜情绪结果。MongoDB 是唯一运行主链；MongoDB 不可用时返回 `503`，不会写入 SQLite/Supabase fallback。
+
+```json
+{
+  "datasetId": "dragonboard_live",
+  "snapshotType": "half_hour",
+  "tradingDate": "2026-06-05",
+  "stage": "发酵",
+  "riskLevel": "中",
+  "confidence": 72,
+  "metrics": {},
+  "turnover": {},
+  "signals": [],
+  "warnings": []
+}
+```
+
+### 历史回填脚本
+
+脚本从 MongoDB `snapshot_frames` 选择每个交易日最后一帧，再读取对应 `snapshot_stock_rows` 生成 `hotlist_sentiment`。默认 dry-run；只有显式 `--apply` 才写库。
+
+```powershell
+cd quant-board
+.\.venv\Scripts\python.exe scripts\backfill_hotlist_sentiment.py --dry-run
+.\.venv\Scripts\python.exe scripts\backfill_hotlist_sentiment.py --apply
+```
+
+### `POST /api/operations/after-market-once`
+
+MongoDB 模式下，该入口只执行日终热榜情绪落库：
+
+```json
+{
+  "ok": true,
+  "steps": ["hotlistSentiment"],
+  "results": {
+    "hotlistSentiment": {
+      "ok": true,
+      "datasetId": "dragonboard_live",
+      "snapshotType": "half_hour",
+      "tradingDate": "2026-06-05",
+      "written": 1
+    }
+  }
+}
+```
+
+迁移前 SQLite 模式仍保留旧 `backup-snapshot-day -> archive-auto-once -> push-archive-backup -> prune-backup` 编排；MongoDB 模式不得触碰旧 archive/prune 链路。
 
 ## Parquet 归档与 DuckDB 查询
 
@@ -158,6 +212,8 @@ python -m backend.cli pull-archive-backup --archive-id <archive_id> --apply
 读取口径：`GET /api/snapshots/stock-rows`、`GET /api/snapshots/sector-rows`、`GET /api/backtests/{run_id}/trades`、`/equity`、`/signals` 在 SQLite 明细缺失且存在 verified/uploaded manifest 时，可通过 DuckDB 读取 Parquet，并返回 `source=parquet_archive` 或混合来源。前端不得传入 SQL。
 
 ### `POST /api/operations/after-market-once`
+
+> MongoDB 模式下该入口执行 `hotlistSentiment` 日终步骤；以下为迁移前 SQLite/Parquet 历史合同。
 
 盘后生产编排入口。顺序固定为：
 

@@ -42,6 +42,7 @@ backend/
 2. 分析阶段
    - 输入：按 `dataset_id + snapshot_type + date range` 查询的标准快照序列。
    - 输出：Python rankTrend 结果，结构对齐 golden case。
+   - 热榜情绪：日终热榜情绪写入 MongoDB `hotlist_sentiment`，按 `datasetId + snapshotType + tradingDate` 唯一定位；RankTrend 策略层读取该集合替代全市场 `market_regime()` 作为候选分层情绪输入。
    - V12 目标：ThemeTrend 读取标准快照中的题材/板块行、股票行和 MongoDB 题材基础映射，输出题材强度、扩散、持续性、拥挤、风险和质量报告。ThemeTrend 与 RankTrend 并列，不替代 RankTrend golden 链。
 
 3. 策略阶段
@@ -80,6 +81,7 @@ SQLite/Supabase/Parquet legacy paths -> migration source or disabled endpoints i
 - `POST /api/snapshots/ingest` 是 Dragon Board 正式快照进入 MongoDB 的主入口。
 - `GET /api/snapshots/frames`、`GET /api/snapshots/records`、`GET /api/snapshots/stock-rows`、`GET /api/snapshots/sector-rows` 和 `GET /api/snapshots/counts` 从 MongoDB 读取，响应字段保持既有 camelCase API 合同。
 - `GET /api/themes/mapping`、`GET /api/themes/stocks/{theme_id}`、`GET /api/themes/stocks/by-code/{code}` 和 `GET /api/themes/counts` 从 MongoDB 题材集合读取。
+- `POST /api/hotlist-sentiment/ingest`、历史回填脚本和 MongoDB 模式 `after-market-once` 共同写入 `hotlist_sentiment`；MongoDB 不可用时结构化失败，策略回测只能显式中性回退并保留原因。
 - 旧 SQLite/Supabase/Parquet 同步、归档、清理和历史 JSON 导入入口在 Mongo 模式下返回 410 或 CLI 拒绝执行；不得静默触碰旧主链。
 - MongoDB 不可用时正式接口必须结构化失败，不回退到 Supabase、SQLite、Parquet 或 IndexedDB 并伪装成功。
 
@@ -210,6 +212,10 @@ MongoDB 模式下保存在 `backtest_signals` 集合，保存 RankTrend 信号�
 ### backtest_quality_reports
 
 MongoDB 模式下保存在 `backtest_quality_reports` 集合，保存样本覆盖率、质量门禁和研究等级。质量报告必须显式表达 `passed`、`severity` 和结构化原因，不能用空对象表示通过。
+
+### hotlist_sentiment
+
+MongoDB 模式下保存在 `hotlist_sentiment` 集合，保存每日热榜情绪研究输入。唯一业务键是 `datasetId + snapshotType + tradingDate`，默认 `snapshotType=half_hour`。字段包括 `stage`、`riskLevel`、`confidence`、`metrics`、`turnover`、`signals` 和 `warnings`。历史回填和日终调度都必须复用同一字段合同，不得用临时简化口径生成参与回测的 `stage/riskLevel`。
 
 ### optimization_runs
 

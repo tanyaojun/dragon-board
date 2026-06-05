@@ -29,6 +29,8 @@
 - MongoDB 本地全量备份、校验、R2 上传、R2 拉回到 `restore-staging`、本地备份保留裁剪 CLI 已实现。
 - `cleanup-mongodb-datasets` 已实现：默认 dry-run；`--apply` 只删除非保留 dataset、四个快照子集合、可通过 `datasetId/backtestRunId` 追踪的研究结果，不删除 `dragonboard_live`、`stock_names`、题材主数据或 `migration_audit`。
 - `backfill-empty-mongodb-snapshots` 已实现：默认 dry-run；`--apply` 只处理已知空股票快照，复制同类型最近非空 donor 的股票行，重写 `snapshotId/type/tradingDate/slotTime/timestamp/rowId/id`，更新 frame/dataset 汇总，并写 `migration_audit`。
+- `hotlist_sentiment` 已作为 MongoDB 研究集合接入，唯一业务键为 `datasetId + snapshotType + tradingDate`；历史回填脚本 `scripts/backfill_hotlist_sentiment.py` 默认 dry-run，显式 `--apply` 才会写入。
+- MongoDB 模式下 `/api/operations/after-market-once` 和 CLI `after-market-once` 不再调用旧 archive/prune 链路，只执行 `hotlistSentiment` 日终步骤。
 
 2026-05-12 停服窗口已执行：
 
@@ -246,6 +248,13 @@ MongoDB 正式字段使用 camelCase，保持 Dragon Board 和 QuantBoard API �
 
 - `{ backtestRunId: 1 }`
 
+`hotlist_sentiment`
+
+- unique `{ datasetId: 1, snapshotType: 1, tradingDate: 1 }`
+- `{ datasetId: 1, snapshotType: 1, computedAt: -1 }`
+
+一条文档对应一个数据集、快照粒度和交易日的日终热榜情绪结果。写入来源包括 Dragon Board/QuantBoard API 日终落库、`scripts/backfill_hotlist_sentiment.py --apply` 历史回填，以及 MongoDB 模式下的 `after-market-once` 盘后步骤。该集合是策略研究输入，不进入 SQLite/Supabase 运行 fallback。
+
 `optimization_runs`
 
 - unique `{ id: 1 }`
@@ -449,13 +458,13 @@ Parquet/R2 相关变量可以保留为离线备份能力，但不得再作为 Ra
 | `verify-archive` / `restore-archive` | 只用于旧归档资产核验。若恢复到 MongoDB，必须走显式人工恢复脚本和迁移审计。 |
 | `prune-backup` / `BackupRetentionRunner` | Supabase 灾备清理废止。MongoDB 切换后不得继续清理 Supabase 并把结果视为正式备份状态。 |
 | `sync_outbox` | 不进入新运行主链。迁移后不再登记 SQLite/Supabase outbox。 |
-| Windows `after-market-once` 任务 | 停服前必须禁用；迁移后重建为 MongoDB 备份/健康检查任务，确认不调用旧 archive/prune 命令。 |
+| Windows `after-market-once` 任务 | 停服前必须禁用旧任务；迁移后重建为 MongoDB 盘后任务，当前只执行 `hotlistSentiment` 日终落库，确认不调用旧 archive/prune 命令。 |
 
 已实现的 Mongo 模式行为：
 
 - `/api/sync/push-backup`、`/api/sync/pull-backup`、`/api/sync/push-outbox`、`/api/sync/auto-once`、`/api/sync/prune-backup`、`/api/sync/smoke-backup` 返回 410。
 - `/api/storage/archive/*` 旧 SQLite/Parquet 归档接口返回 410。
-- `/api/operations/after-market-once` 返回 410，避免继续调用旧 archive/prune 盘后链路。
+- `/api/operations/after-market-once` 在 MongoDB 模式下执行 `hotlistSentiment` 步骤，从 `snapshot_frames/snapshot_stock_rows` 读取最新交易日最后一帧并 upsert `hotlist_sentiment`；旧 archive/prune 步骤不执行。
 - `/api/migrations/snapshots/import-json` 返回 410；Mongo 全量切换后历史导入只允许走停服迁移脚本。
 - CLI 旧 SQLite/Supabase/Parquet 命令在 Mongo 模式下直接拒绝；业务回测、优化、查询命令通过 Mongo repository 运行。
 

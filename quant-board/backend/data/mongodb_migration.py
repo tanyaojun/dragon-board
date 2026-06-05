@@ -31,6 +31,7 @@ RESEARCH_SOURCE_COLLECTIONS = (
     "backtest_signals",
     "backtest_quality_reports",
     "optimization_runs",
+    "hotlist_sentiment",
     "theme_factor_frames",
     "theme_stock_exposures",
     "theme_signals",
@@ -160,6 +161,13 @@ def build_mongodb_indexes() -> dict[str, list[dict[str, Any]]]:
             {"keys": [("backtestRunId", 1), ("candidateTier", 1), ("regime", 1), ("sequence", 1)]},
         ],
         "backtest_quality_reports": [{"keys": [("backtestRunId", 1)]}],
+        "hotlist_sentiment": [
+            {
+                "keys": [("datasetId", 1), ("snapshotType", 1), ("tradingDate", 1)],
+                "unique": True,
+            },
+            {"keys": [("datasetId", 1), ("snapshotType", 1), ("computedAt", -1)]},
+        ],
         "optimization_runs": [
             {"keys": [("id", 1)], "unique": True},
             {"keys": [("datasetId", 1), ("strategyName", 1), ("createdAt", -1)]},

@@ -238,3 +238,44 @@ def test_after_market_api_returns_structured_result(monkeypatch: Any) -> None:
     assert response.json()["dryRun"] is True
     assert response.json()["archiveLimit"] == 3
     assert response.json()["backupLimit"] == 2
+
+
+def test_after_market_job_in_mongodb_mode_runs_hotlist_sentiment_only(monkeypatch: Any) -> None:
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        "backend.operations.schedule.get_settings",
+        lambda: type(
+            "Settings",
+            (),
+            {
+                "storage_backend": "mongodb",
+                "archive_auto_dataset_id": "dragonboard_live",
+                "archive_auto_snapshot_types": "half_hour",
+            },
+        )(),
+    )
+    monkeypatch.setattr(
+        "backend.operations.schedule.repository_factory.get_runtime_mongodb_database",
+        lambda: "mongo-db",
+    )
+    monkeypatch.setattr(
+        "backend.operations.schedule.run_hotlist_sentiment_for_latest_day",
+        lambda db, dataset_id, snapshot_type, dry_run=False: calls.append(
+            f"hotlist:{db}:{dataset_id}:{snapshot_type}:{dry_run}"
+        )
+        or {"ok": True, "written": 1, "tradingDate": "2026-06-05"},
+    )
+    monkeypatch.setattr(
+        "backend.operations.schedule.run_archive_auto_once",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("legacy archive must not run")),
+    )
+
+    from backend.operations.schedule import run_after_market_once
+
+    result = run_after_market_once(dry_run=True)
+
+    assert result["ok"] is True
+    assert result["steps"] == ["hotlistSentiment"]
+    assert result["results"]["hotlistSentiment"]["written"] == 1
+    assert calls == ["hotlist:mongo-db:dragonboard_live:half_hour:True"]

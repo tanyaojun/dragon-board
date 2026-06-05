@@ -322,7 +322,6 @@ def cmd_backup_snapshot_day(args: argparse.Namespace) -> None:
 
 
 def cmd_after_market_once(args: argparse.Namespace) -> None:
-    reject_legacy_storage_command_in_mongodb("after-market-once")
     print_json(
         run_after_market_once(
             archive_limit=args.archive_limit,

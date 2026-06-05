@@ -176,6 +176,13 @@ def test_build_mongodb_indexes_contains_snapshot_and_stock_name_unique_keys() ->
     assert indexes["stock_names"][0]["unique"] is True
     assert indexes["migration_audit"][0]["keys"] == [("opType", 1), ("idempotencyKey", 1)]
     assert indexes["migration_audit"][0]["unique"] is True
+    assert "hotlist_sentiment" in ALL_COLLECTIONS
+    assert indexes["hotlist_sentiment"][0]["keys"] == [
+        ("datasetId", 1),
+        ("snapshotType", 1),
+        ("tradingDate", 1),
+    ]
+    assert indexes["hotlist_sentiment"][0]["unique"] is True
 
 
 def test_plan_mongodb_migration_counts_sqlite_sources_and_stock_json(tmp_path: Path) -> None:

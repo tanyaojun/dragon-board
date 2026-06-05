@@ -3,10 +3,12 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from backend.data import repository_factory
 from backend.data.archive.auto_archive import run_archive_auto_once
 from backend.data.archive.service import ArchiveService
 from backend.data.backup_retention import run_backup_retention_once
 from backend.data.database import SessionLocal, init_db
+from backend.operations.hotlist_sentiment import run_hotlist_sentiment_for_latest_day
 from backend.settings import get_settings
 
 
@@ -22,15 +24,33 @@ def run_after_market_once(
 
     settings = get_settings()
     if settings.storage_backend == "mongodb":
+        snapshot_type = _first_snapshot_type(settings.archive_auto_snapshot_types)
+        try:
+            hotlist_result = run_hotlist_sentiment_for_latest_day(
+                repository_factory.get_runtime_mongodb_database(),
+                dataset_id=settings.archive_auto_dataset_id,
+                snapshot_type=snapshot_type,
+                dry_run=dry_run,
+            )
+        except Exception as exc:
+            hotlist_result = {
+                "ok": False,
+                "error": {
+                    "code": "hotlist_sentiment_after_market_failed",
+                    "message": str(exc),
+                },
+                "datasetId": settings.archive_auto_dataset_id,
+                "snapshotType": snapshot_type,
+            }
         return _result(
-            ok=False,
+            ok=bool(hotlist_result.get("ok")),
             started_at=started_at,
-            steps=steps,
-            results={"rejected": {"reason": "mongodb_storage_backend"}},
+            steps=["hotlistSentiment"],
+            results={"hotlistSentiment": hotlist_result},
             archive_limit=archive_limit,
             backup_limit=backup_limit,
             dry_run=dry_run,
-            stopped_at="storageBackend",
+            stopped_at=None if hotlist_result.get("ok") else "hotlistSentiment",
         )
     snapshot_type = _first_snapshot_type(settings.archive_auto_snapshot_types)
     init_db()
