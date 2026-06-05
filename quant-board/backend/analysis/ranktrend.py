@@ -44,15 +44,29 @@ class RankTrendConfig:
     momentumWeights: list[float] = field(default_factory=lambda: [0.15, 0.2, 0.25, 0.25, 0.15])
     buyThresholds: list[float] = field(default_factory=lambda: [5, 8, 12, 15, 20])
     sellThresholds: list[float] = field(default_factory=lambda: [-5, -8, -12, -15, -20])
-    macdFast: int = 13
+    macdFast: int = 12
     macdSlow: int = 21
-    macdSignal: int = 8
+    macdSignal: int = 9
+    requireMacdGoldenCross: bool = True
     directionWeight: float = 0.3
     accelerationWeight: float = 0.25
     crossWeight: float = 0.2
     macdWeight: float = 0.25
     buyScoreThreshold: float = 0.12
     sellScoreThreshold: float = -0.12
+    # compose_strategy tier thresholds (configurable, defaults match legacy hardcoded values)
+    tierAMainMidMomentumMin: float = 4.0
+    tierAMainShortMomentumMin: float = -1.0
+    tierAMainDivergenceSeverityMax: float = 0.7
+    tierBIgnitionShortMomentumMin: float = 3.0
+    tierBIgnitionAccelMin: float = 0.5
+    tierBIgnitionRiskPressureMax: float = 0.65
+    tierCrowdedLongMomentumMin: float = 4.0
+    tierCrowdedAccelMax: float = 0.0
+    tierCrowdedRiskPressureMin: float = 0.45
+    tierExitRiskShortMomentumMax: float = -2.0
+    tierExitRiskAccelMax: float = -2.0
+    tierExitRiskPressureMin: float = 0.55
 
     @classmethod
     def from_patch(cls, patch: dict[str, Any] | None = None) -> "RankTrendConfig":
@@ -643,8 +657,12 @@ def compose_decision(technical: dict[str, Any], cycle: dict[str, Any], risk: dic
     buy_count = len([c for c in components if c["signal"] == "buy"])
     sell_count = len([c for c in components if c["signal"] == "sell"])
     base = "hold"
+    macd_golden = technical["macd"]["cross"] == "golden"
     if combined >= config.buyScoreThreshold and sell_count <= 1 and positive >= negative:
-        base = "buy"
+        if config.requireMacdGoldenCross and not macd_golden:
+            base = "hold"
+        else:
+            base = "buy"
     elif combined <= config.sellScoreThreshold and buy_count <= 1 and negative >= positive:
         base = "sell"
     signed_threshold = config.buyScoreThreshold if base == "buy" else config.sellScoreThreshold if base == "sell" else config.buyScoreThreshold if combined >= 0 else config.sellScoreThreshold
@@ -661,23 +679,24 @@ def compose_decision(technical: dict[str, Any], cycle: dict[str, Any], risk: dic
     return {"base": {"signal": base, "confidence": confidence, "combinedScore": combined, "scoreMargin": score_margin}, "final": {"signal": final, "confidence": final_conf}}
 
 
-def compose_strategy(technical: dict[str, Any], cycle: dict[str, Any], risk: dict[str, Any], regime: dict[str, Any]) -> dict[str, Any]:
+def compose_strategy(technical: dict[str, Any], cycle: dict[str, Any], risk: dict[str, Any], regime: dict[str, Any], config: RankTrendConfig | None = None) -> dict[str, Any]:
     momentum = technical["momentumProfile"]
     stage = cycle["stage"]
     weak_market = regime["state"] in ("weak", "retreat")
     trend_buy = technical["signals"]["direction"]["signal"] == "buy" or technical["signals"]["acceleration"]["signal"] == "buy" or technical["macd"]["cross"] == "golden"
+    c = config or RankTrendConfig()
     tier = "N_NEUTRAL"
     reasons: list[str] = []
-    if stage in ("reversal", "cooling") and (momentum["short"] <= -2 or momentum["acceleration"] <= -2 or risk["pressure"] >= 0.55):
+    if stage in ("reversal", "cooling") and (momentum["short"] <= c.tierExitRiskShortMomentumMax or momentum["acceleration"] <= c.tierExitRiskAccelMax or risk["pressure"] >= c.tierExitRiskPressureMin):
         tier = "D_EXIT_RISK"
         reasons.append("生命周期进入反转/冷却，短周期动量或风险压力转弱")
-    elif stage == "crowded" or (momentum["long"] >= 4 and (momentum["acceleration"] <= 0 or risk["pressure"] >= 0.45)):
+    elif stage == "crowded" or (momentum["long"] >= c.tierCrowdedLongMomentumMin and (momentum["acceleration"] <= c.tierCrowdedAccelMax or risk["pressure"] >= c.tierCrowdedRiskPressureMin)):
         tier = "C_CROWDED"
         reasons.append("长周期热度高位停留，追高性价比下降")
-    elif stage == "expansion" and momentum["mid"] >= 4 and momentum["short"] >= -1 and trend_buy and not weak_market and risk["divergence"]["severity"] < 0.7:
+    elif stage == "expansion" and momentum["mid"] >= c.tierAMainMidMomentumMin and momentum["short"] >= c.tierAMainShortMomentumMin and trend_buy and not weak_market and risk["divergence"]["severity"] < c.tierAMainDivergenceSeverityMax:
         tier = "A_MAIN"
         reasons.append("扩散阶段中周期动量确认，技术信号保持正向")
-    elif stage == "ignition" and momentum["short"] >= 3 and momentum["acceleration"] >= 0.5 and regime["state"] != "retreat" and risk["pressure"] < 0.65:
+    elif stage == "ignition" and momentum["short"] >= c.tierBIgnitionShortMomentumMin and momentum["acceleration"] >= c.tierBIgnitionAccelMin and regime["state"] != "retreat" and risk["pressure"] < c.tierBIgnitionRiskPressureMax:
         tier = "B_IGNITION"
         reasons.append("点火阶段短周期冲击增强，仍需继续确认")
     elif weak_market and trend_buy:
@@ -795,7 +814,7 @@ class RankTrendPythonEngine:
         cycle = analyze_cycle(ranks, percentiles)
         risk = analyze_risk(current_percentile, technical, cycle, fallback["zlje"], fallback["zljzb"], fallback["volumeRatio"])
         decision = compose_decision(technical, cycle, risk, self.config)
-        strategy = compose_strategy(technical, cycle, risk, regime)
+        strategy = compose_strategy(technical, cycle, risk, regime, config=self.config)
         sample_status = "ok" if len(percentiles) >= get_technical_min_samples(self.config) else "degraded" if len(percentiles) >= 5 else "insufficient"
         rank_trend = {
             "meta": {

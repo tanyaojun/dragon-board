@@ -438,12 +438,75 @@ Conclusion:
 - `quant-board/backend/cli.py` — emoji 修复
 - `quant-board/data/reports/long_test_runs.jsonl` — 追加 checkpoint
 
+## Session: 2026-06-05
+
+### Phase 20: Weekly Checkpoint `checkpoint_2026-06-05_weekly`
+
+- **Status:** complete
+- Actions taken:
+  - 执行 `run-longtest-baselines --checkpoint-id checkpoint_2026-06-05_weekly`，复跑 H1/H2/Q1 三条固定基线。
+  - 新增 44 个 half_hour 帧（5 个交易日：6/01~6/05），覆盖 34 个交易日。
+  - 对比 5/29 → 6/05 绩效、四层框架指标和跨期状态变化。
+- Key findings:
+  - H1 totalReturn: +5.45% → +3.78% (-1.67pp)，Sharpe +0.5984 → +0.1602，回撤加深。
+  - H2 totalReturn: -1.06% → -3.94% (-2.88pp)，Sharpe -0.38 → -0.65，回撤 -8.87% → -11.82%。
+  - Q1 totalReturn: -1.94% → -9.25% (-7.31pp)，Sharpe +0.101 → -0.3258，回撤 -12.01% → -17.53%。
+  - 三条基线全面恶化，本周市场对策略极不友好。
+  - L1 方向精度 39.44%（上期 39.81%），仍未突破 50% 随机基准，红灯。
+  - L2 黄灯：偏差 7.72pp 超阈值（3.78pp），交易数差异 +28 笔逼近 30% 门槛。
+  - L1 熔断：连续 4 期方向精度红灯 → 触发策略结构性复审建议。
+  - L3 数据不足：0 笔已执行交易。
+- Files created/modified:
+  - `quant-board/data/reports/long_test_runs.jsonl` — 追加本次 checkpoint
+  - `quant-board/docs/optimization-long-task/progress.md`
+  - `quant-board/docs/optimization-long-task/findings.md`
+
+Checkpoint results:
+
+| Baseline | Run ID | totalReturn | maxDrawdown | Sharpe | winRate | trades |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| `H1_half_hour_current_bar` | `bt_fd27ea809f3f4c42` | `+3.78%` | `-6.91%` | `+0.1602` | `46.15%` | `91` |
+| `H2_half_hour_next_bar` | `bt_6f07661dd79d4962` | `-3.94%` | `-11.82%` | `-0.65` | `36.97%` | `119` |
+| `Q1_quarter_hour_next_bar` | `bt_0d6bd329498441ed` | `-9.25%` | `-17.53%` | `-0.3258` | `46.34%` | `246` |
+
+vs 5/29 interpolated 变化:
+
+| 基线 | totalReturn Δ | maxDrawdown Δ | Sharpe Δ | trades Δ | 趋势 |
+| --- | ---: | ---: | ---: | ---: | --- |
+| H1 | -1.67pp | 恶化 | ↓ | +17 | 本周市场不利 |
+| H2 | -2.88pp | 恶化 | ↓ | +18 | 保守路径亏损加深 |
+| Q1 | -7.31pp | 恶化 | ↓ | +28 | 细粒度路径崩盘 |
+
+四层框架:
+
+| Layer | Status | 关键指标 |
+| --- | --- | --- |
+| L1 信号有效性 | red | dirAcc=39.44%, p=1.0, tierDisc=3.1pp |
+| L2 执行质量 | yellow | bias=7.72pp > 3.78pp 阈值 |
+| L3 实盘对齐 | insufficient_data | 0 executed trades |
+| 跨期 L1 熔断 | **触发** | 连续 4 期 red (unknown→unknown→red→red→red→red) |
+
+价格质量诊断:
+
+| 诊断项 | half_hour | quarter_hour |
+| --- | ---: | ---: |
+| crossMarketZeroPriceRows | 1,676 行 / 300 快照 | 3,715 行 / 658 快照 |
+| allZeroPriceFrames | 0 帧 | 1 帧 |
+| partialAshareZeroPriceRows | 433 行 / 200 快照 | 1,060 行 / 411 快照 |
+
+资金流 L2 覆盖:
+
+| 口径 | formal | estimated_l1 | missing |
+| --- | ---: | ---: | ---: |
+| half_hour | 23,253 | 10,572 | 44,615 |
+| quarter_hour | 45,227 | 19,888 | 128,934 |
+
 ## 5-Question Reboot Check
 
 | Question | Answer |
 | --- | --- |
-| Where am I? | Phase 17 已完成：V2 Phase A-C 实施、收尾、代码审查。Phase 18-19 已完成：数据修复和 checkpoint 复跑。当前数据状态：half_hour 290 帧（含 46 条合成）、quarter_hour 756 帧（含 228 条合成）。所有日期 bar 完整。 |
-| Where am I going? | 等待 ≥60 个交易日数据启动 Phase D（参数优化）。当前 29 个 half_hour 交易日，还需约 30 个交易日。预计 7 月中。 |
-| What's the goal? | 在补齐后的 `dragonboard_live` 上继续每周 checkpoint，用四层框架评估信号质量和执行偏差。数据满 60 天后启动 Layer 4 优化。 |
-| What have I learned? | 补齐缺失 bar 对回测结果影响显著（H1 +3.3pp），但 L1 方向精度不升反降（39.81%），说明信号本身方向预测能力偏弱。合成数据需标记 `synthesized` 以各口径区分。 |
-| What have I done? | 完成 V2 设计、Phase A-C 实施、代码审查修复、L1 熔断/L3 追踪、bar 补齐（线性插值）、5/29 checkpoint 复跑、planning-with-files 三文件更新。累计 43 项测试，11 次代码提交。 |
+| Where am I? | Phase 17 已完成：V2 Phase A-C 实施、收尾、代码审查。Phase 18-19 已完成：数据修复和 checkpoint 复跑。Phase 20 已完成：6/05 周度 checkpoint。当前数据状态：half_hour 292 帧（MongoDB 原始记录）、quarter_hour 622 帧。34 个 half_hour 交易日（4/16~6/05）。 |
+| Where am I going? | 等待 ≥60 个交易日数据启动 Phase D（参数优化）。当前 34 个 half_hour 交易日，还需约 26 个交易日。预计 7 月中。L1 熔断已触发（连续 4 期红灯），需持续监控。 |
+| What's the goal? | 在 `dragonboard_live` 上继续每周 checkpoint，用四层框架评估信号质量和执行偏差。数据满 60 天后启动 Layer 4 优化。L1 方向精度若持续不改善，需排查策略逻辑 vs 市场环境归因。 |
+| What have I learned? | 本周新增 5 个交易日（44 帧）后三条基线全面恶化。L1 方向精度（39.44%）长期低于随机基准（50%），说明 MACD(21,34,13)+多周期动量(3,5,8,13,21) 当前参数下 A_MAIN 信号的上涨预测能力系统性偏弱。这不是单一市场事件的短期波动，而是连续 4 期的持续问题。H1-H2 偏差在扩大（7.72pp），乐观入场优势在收窄。 |
+| What have I done? | 完成 V2 设计、Phase A-C 实施、代码审查修复、L1 熔断/L3 追踪、bar 补齐（线性插值）、5/29 和 6/05 checkpoint 复跑。累计 43 项测试（未新增）。11 次代码提交（未新增）。 |

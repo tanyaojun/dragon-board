@@ -548,9 +548,10 @@ def test_import_backtest_optimize_and_golden(tmp_path: Path) -> None:
     assert derived_dry_run.json()["frame_count"] == 5
 
     golden_default = RankTrendConfig()
-    assert golden_default.macdFast == 13
+    assert golden_default.macdFast == 12
     assert golden_default.macdSlow == 21
-    assert golden_default.macdSignal == 8
+    assert golden_default.macdSignal == 9
+    assert golden_default.requireMacdGoldenCross is True
 
     custom_matching_backtest = client.post(
         "/api/backtests/rank-trend",

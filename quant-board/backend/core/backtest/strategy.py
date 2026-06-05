@@ -292,17 +292,22 @@ class BaseStrategy:
                 self._entry_signal(d, input)
 
     def _entry_signal(self, d: StrategyDecision, input: StrategyInput) -> None:
-        """默认入场规则：A_MAIN + 连续确认 B_IGNITION。"""
+        """默认入场规则：A_MAIN + 连续确认 B_IGNITION，且 compose_decision finalSignal 确认 buy。"""
         if d.regime == "retreat":
             d.signal = "hold"
             d.reasons.append("市场退潮期，暂停入场")
             return
+        final_signal = self._get_final_signal(input, d.code)
+        if final_signal != "buy":
+            d.signal = "hold"
+            d.reasons.append(f"compose_decision finalSignal={final_signal}，不满足 buy 条件")
+            return
         if d.candidate_tier == "A_MAIN" and d.regime != "weak":
             d.signal = "buy"
-            d.reasons.append("A_MAIN 入场信号，regime 非 weak")
+            d.reasons.append("A_MAIN 入场信号，regime 非 weak，finalSignal 确认")
         elif d.candidate_tier == "B_IGNITION" and self._is_confirmed_b(d, input):
             d.signal = "buy"
-            d.reasons.append("B_IGNITION 连续确认入场")
+            d.reasons.append("B_IGNITION 连续确认入场，finalSignal 确认")
         elif d.candidate_tier == "B_IGNITION":
             d.signal = "watch"
             d.reasons.append("B_IGNITION 待连续确认")
@@ -310,8 +315,12 @@ class BaseStrategy:
             d.signal = "hold"
 
     def _exit_signal(self, d: StrategyDecision, input: StrategyInput) -> None:
-        """默认退出规则：D_EXIT_RISK / C_CROWDED 加速转弱 / 排名退出。"""
-        if d.candidate_tier == "D_EXIT_RISK":
+        """默认退出规则：finalSignal sell / D_EXIT_RISK / 排名退出。"""
+        final_signal = self._get_final_signal(input, d.code)
+        if final_signal == "sell":
+            d.signal = "sell"
+            d.reasons.append("compose_decision finalSignal=sell 退出")
+        elif d.candidate_tier == "D_EXIT_RISK":
             d.signal = "sell"
             d.reasons.append("D_EXIT_RISK 退出信号")
         elif d.rank > 50:
@@ -325,6 +334,16 @@ class BaseStrategy:
             return False
         prev = input.signal_by_key.get(f"{input.previous_frame['snapshotId']}:{d.code}")
         return bool(prev and str(prev.get("candidateTier") or "") == "B_IGNITION")
+
+    @staticmethod
+    def _get_final_signal(input: StrategyInput, code: str) -> str:
+        for s in input.frame_signals:
+            if str(s.get("code") or "") == code:
+                rt = s.get("rankTrend") or {}
+                dec = rt.get("decision") or {}
+                fin = dec.get("final") or {}
+                return str(fin.get("signal") or "hold")
+        return "hold"
 
     # Layer 4 ─────────────────────────────────
 

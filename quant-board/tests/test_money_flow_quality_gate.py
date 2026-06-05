@@ -587,3 +587,227 @@ def test_compute_execution_quality_with_history() -> None:
     ]
     result = compute_execution_quality(h1, h2, history=history)
     assert result["directionRatio"] == 0.75  # 3 of last 4: H1 >= H2
+
+
+# ═══════════════════════════════════════════
+# Strategy decision wiring tests (Phase 1-3)
+# ═══════════════════════════════════════════
+
+def test_ranktrend_config_has_tier_threshold_fields_with_defaults() -> None:
+    from backend.analysis.ranktrend import RankTrendConfig
+
+    c = RankTrendConfig()
+    assert c.tierAMainMidMomentumMin == 4.0
+    assert c.tierAMainShortMomentumMin == -1.0
+    assert c.tierAMainDivergenceSeverityMax == 0.7
+    assert c.tierBIgnitionShortMomentumMin == 3.0
+    assert c.tierBIgnitionAccelMin == 0.5
+    assert c.tierBIgnitionRiskPressureMax == 0.65
+    assert c.tierCrowdedLongMomentumMin == 4.0
+    assert c.tierCrowdedAccelMax == 0.0
+    assert c.tierCrowdedRiskPressureMin == 0.45
+    assert c.tierExitRiskShortMomentumMax == -2.0
+    assert c.tierExitRiskAccelMax == -2.0
+    assert c.tierExitRiskPressureMin == 0.55
+
+
+def test_ranktrend_config_from_patch_preserves_tier_fields() -> None:
+    from backend.analysis.ranktrend import RankTrendConfig
+
+    c = RankTrendConfig.from_patch({"tierAMainMidMomentumMin": 5.0, "macdFast": 8})
+    assert c.tierAMainMidMomentumMin == 5.0
+    assert c.macdFast == 8
+    # unpatched fields keep defaults
+    assert c.tierBIgnitionShortMomentumMin == 3.0
+    assert c.tierExitRiskPressureMin == 0.55
+
+
+def test_compose_strategy_uses_config_tier_thresholds() -> None:
+    from backend.analysis.ranktrend import (
+        RankTrendConfig,
+        compose_strategy,
+    )
+
+    # Build inputs that would be A_MAIN under default config (mid momentum >= 4)
+    technical = {
+        "momentumProfile": {"short": 0.0, "mid": 4.5, "long": 2.0, "acceleration": 0.5},
+        "signals": {
+            "direction": {"signal": "buy"},
+            "acceleration": {"signal": "buy"},
+        },
+        "macd": {"cross": "none"},
+    }
+    cycle = {"stage": "expansion", "metrics": {}}
+    risk = {"divergence": {"severity": 0.3}, "pressure": 0.3, "overheat": {"severity": 0.3}}
+    regime = {"state": "normal"}
+
+    result_default = compose_strategy(technical, cycle, risk, regime)
+    assert result_default["candidateTier"] == "A_MAIN"
+
+    # Now with a custom config that raises the A_MAIN mid momentum bar to 6.0
+    strict_config = RankTrendConfig.from_patch({"tierAMainMidMomentumMin": 6.0})
+    result_strict = compose_strategy(technical, cycle, risk, regime, config=strict_config)
+    # mid=4.5 < 6.0 → should fall through to N_NEUTRAL
+    assert result_strict["candidateTier"] != "A_MAIN"
+
+
+def test_compose_strategy_respects_b_ignition_config_thresholds() -> None:
+    from backend.analysis.ranktrend import (
+        RankTrendConfig,
+        compose_strategy,
+    )
+
+    technical = {
+        "momentumProfile": {"short": 3.5, "mid": 2.0, "long": 1.0, "acceleration": 0.6},
+        "signals": {
+            "direction": {"signal": "buy"},
+            "acceleration": {"signal": "buy"},
+        },
+        "macd": {"cross": "none"},
+    }
+    cycle = {"stage": "ignition", "metrics": {}}
+    risk = {"divergence": {"severity": 0.3}, "pressure": 0.3, "overheat": {"severity": 0.3}}
+    regime = {"state": "normal"}
+
+    result_default = compose_strategy(technical, cycle, risk, regime)
+    assert result_default["candidateTier"] == "B_IGNITION"
+
+    # Strict config: require short momentum >= 5.0
+    strict_config = RankTrendConfig.from_patch({"tierBIgnitionShortMomentumMin": 5.0})
+    result_strict = compose_strategy(technical, cycle, risk, regime, config=strict_config)
+    assert result_strict["candidateTier"] != "B_IGNITION"
+
+
+def test_entry_signal_rejects_a_main_without_final_buy() -> None:
+    from backend.core.backtest.strategy import (
+        BaseStrategy,
+        StrategyDecision,
+        StrategyInput,
+    )
+
+    strategy = BaseStrategy()
+    # Build a signal with A_MAIN tier but finalSignal != "buy"
+    decision = StrategyDecision(
+        code="000001",
+        name="test",
+        candidate_tier="A_MAIN",
+        signal="hold",
+        regime="normal",
+    )
+    frame = {"snapshotId": "s1", "timestamp": 1, "tradingDate": "2026-06-01"}
+    input_ctx = StrategyInput(
+        frame=frame,
+        frame_signals=[{
+            "code": "000001", "name": "test", "candidateTier": "A_MAIN",
+            "rankTrend": {"decision": {"final": {"signal": "sell"}}},
+        }],
+        positions={},
+    )
+    strategy._entry_signal(decision, input_ctx)
+    # sell is not buy, so should remain hold
+    assert decision.signal != "buy"
+
+    # Now with finalSignal == "buy" → should be buy
+    input_buy = StrategyInput(
+        frame=frame,
+        frame_signals=[{
+            "code": "000001", "name": "test", "candidateTier": "A_MAIN",
+            "rankTrend": {"decision": {"final": {"signal": "buy"}}},
+        }],
+        positions={},
+    )
+    dec_buy = StrategyDecision(
+        code="000001",
+        name="test",
+        candidate_tier="A_MAIN",
+        signal="hold",
+        regime="normal",
+    )
+    strategy._entry_signal(dec_buy, input_buy)
+    assert dec_buy.signal == "buy"
+
+
+def test_exit_signal_triggers_on_final_sell() -> None:
+    from backend.core.backtest.strategy import (
+        BaseStrategy,
+        StrategyDecision,
+        StrategyInput,
+    )
+
+    strategy = BaseStrategy()
+    # Signal is N_NEUTRAL (not D_EXIT_RISK) but finalSignal is sell → should exit
+    decision = StrategyDecision(
+        code="000001",
+        name="test",
+        candidate_tier="N_NEUTRAL",
+        signal="hold",
+        regime="normal",
+        rank=5,
+    )
+    frame = {"snapshotId": "s1", "timestamp": 1, "tradingDate": "2026-06-01"}
+    input_ctx = StrategyInput(
+        frame=frame,
+        frame_signals=[{
+            "code": "000001", "name": "test", "candidateTier": "N_NEUTRAL", "rank": 5,
+            "rankTrend": {"decision": {"final": {"signal": "sell"}}},
+        }],
+        positions={"000001": {}},
+    )
+    strategy._exit_signal(decision, input_ctx)
+    assert decision.signal == "sell"
+
+    # With finalSignal == "buy" and not D_EXIT_RISK, not rank > 50 → should hold
+    input_hold = StrategyInput(
+        frame=frame,
+        frame_signals=[{
+            "code": "000001", "name": "test", "candidateTier": "A_MAIN", "rank": 5,
+            "rankTrend": {"decision": {"final": {"signal": "buy"}}},
+        }],
+        positions={"000001": {}},
+    )
+    dec_hold = StrategyDecision(
+        code="000001",
+        name="test",
+        candidate_tier="A_MAIN",
+        signal="hold",
+        regime="normal",
+        rank=5,
+    )
+    strategy._exit_signal(dec_hold, input_hold)
+    assert dec_hold.signal == "hold"
+
+
+def test_entry_candidates_requires_final_signal_buy() -> None:
+    from backend.core.backtest.execution import TradeSimulator
+
+    ts = TradeSimulator()
+    signals = [
+        {
+            "code": "000001", "name": "A1", "candidateTier": "A_MAIN", "regime": "normal",
+            "confidence": 80, "rank": 5,
+            "rankTrend": {"decision": {"final": {"signal": "buy"}}},
+        },
+        {
+            "code": "000002", "name": "A2", "candidateTier": "A_MAIN", "regime": "normal",
+            "confidence": 70, "rank": 8,
+            "rankTrend": {"decision": {"final": {"signal": "sell"}}},
+        },
+        {
+            "code": "000003", "name": "B1", "candidateTier": "B_IGNITION", "regime": "normal",
+            "confidence": 60, "rank": 12,
+            "rankTrend": {"decision": {"final": {"signal": "buy"}}},
+        },
+    ]
+    frames = [
+        {"snapshotId": "s1", "timestamp": 1, "tradingDate": "2026-06-01"},
+        {"snapshotId": "s2", "timestamp": 2, "tradingDate": "2026-06-01"},
+    ]
+    # B_IGNITION needs consecutive confirmation; set up previous frame signal
+    by_key = {
+        "s1:000003": {"candidateTier": "B_IGNITION", "code": "000003"},
+    }
+    candidates = ts._entry_candidates(signals, frames, 1, by_key, {}, "rank_trend_candidate")
+    codes = [c["code"] for c in candidates]
+    assert "000001" in codes  # A_MAIN + finalSignal=buy → included
+    assert "000002" not in codes  # A_MAIN but finalSignal=sell → excluded
+    assert "000003" in codes  # B_IGNITION confirmed + finalSignal=buy → included

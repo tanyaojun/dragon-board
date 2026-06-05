@@ -11,7 +11,24 @@ SUPPORTED_METHODS = {"grid", "random", *OPTUNA_METHODS}
 
 
 def default_search_space() -> dict[str, list[Any]]:
+    """RankTrend V2 完整搜索空间 —— 覆盖信号层、分层阈值和交易层。
+
+    compose_decision（MACD/动量合成信号）与 compose_strategy（生命周期分层）
+    已通过 finalSignal 接入交易链路，本空间覆盖两阶段核心参数。
+    """
     return {
+        # ── compose_decision 信号层 ──
+        "macdFast": [8, 13, 21],
+        "macdSlow": [21, 34, 55],
+        "macdSignal": [5, 8, 13],
+        "buyScoreThreshold": [0.06, 0.12, 0.18],
+        # ── compose_strategy 分层阈值（A_MAIN / B_IGNITION 核心入口）──
+        "tierAMainMidMomentumMin": [2.0, 4.0, 6.0],
+        "tierAMainShortMomentumMin": [-2.0, -1.0, 0.0],
+        "tierBIgnitionShortMomentumMin": [1.5, 3.0, 5.0],
+        "tierBIgnitionAccelMin": [0.0, 0.5, 1.0],
+        "tierBIgnitionRiskPressureMax": [0.50, 0.65, 0.80],
+        # ── 交易层 ──
         "maxPositions": [3, 5, 8],
         "takeProfit": [0.08, 0.12, 0.16],
         "stopLoss": [-0.04, -0.06, -0.08],
@@ -153,10 +170,8 @@ def suggest_params(trial: Any, search_space: dict[str, list[Any]]) -> dict[str, 
 
 def to_trade_config(params: dict[str, Any]) -> dict[str, Any]:
     mapped = dict(params)
-    mapped.pop("momentumPeriods", None)
-    mapped.pop("macdFast", None)
-    mapped.pop("macdSlow", None)
-    mapped.pop("macdSignal", None)
+    for key in _STRATEGY_PARAM_KEYS:
+        mapped.pop(key, None)
     if "takeProfitPct" in mapped:
         mapped["takeProfit"] = mapped.pop("takeProfitPct")
     if "stopLossPct" in mapped:
@@ -166,11 +181,35 @@ def to_trade_config(params: dict[str, Any]) -> dict[str, Any]:
     return mapped
 
 
+_STRATEGY_PARAM_KEYS = (
+    "momentumPeriods",
+    "macdFast",
+    "macdSlow",
+    "macdSignal",
+    "buyScoreThreshold",
+    "sellScoreThreshold",
+    "directionWeight",
+    "accelerationWeight",
+    "crossWeight",
+    "macdWeight",
+    "tierAMainMidMomentumMin",
+    "tierAMainShortMomentumMin",
+    "tierAMainDivergenceSeverityMax",
+    "tierBIgnitionShortMomentumMin",
+    "tierBIgnitionAccelMin",
+    "tierBIgnitionRiskPressureMax",
+    "tierCrowdedLongMomentumMin",
+    "tierCrowdedAccelMax",
+    "tierCrowdedRiskPressureMin",
+    "tierExitRiskShortMomentumMax",
+    "tierExitRiskAccelMax",
+    "tierExitRiskPressureMin",
+)
+
+
 def to_strategy_config(params: dict[str, Any]) -> dict[str, Any]:
     mapped: dict[str, Any] = {}
-    if "momentumPeriods" in params:
-        mapped["momentumPeriods"] = params["momentumPeriods"]
-    for key in ("macdFast", "macdSlow", "macdSignal"):
+    for key in _STRATEGY_PARAM_KEYS:
         if key in params:
             mapped[key] = params[key]
     return mapped

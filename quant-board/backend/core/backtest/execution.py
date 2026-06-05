@@ -73,7 +73,8 @@ class TradeSimulator:
                 if config.get("enforceT1", True) and str(frame.get("tradingDate") or "") <= str(pos.get("entryTradingDate") or ""):
                     continue
                 gross_return = (raw_price - pos["entryPrice"]) / pos["entryPrice"]
-                should_exit = signal["candidateTier"] == "D_EXIT_RISK" or (signal["candidateTier"] == "C_CROWDED" and signal["rankTrend"]["strategy"]["momentum"]["acceleration"] <= 0) or signal["rank"] > 50 or pos["holdingBars"] >= config["maxHoldingBars"] or gross_return <= config["stopLoss"] or gross_return >= config["takeProfit"]
+                final_signal = ((((signal.get("rankTrend") or {}).get("decision") or {}).get("final") or {}).get("signal") or "hold")
+                should_exit = (final_signal == "sell" or signal["candidateTier"] == "D_EXIT_RISK" or (signal["candidateTier"] == "C_CROWDED" and signal["rankTrend"]["strategy"]["momentum"]["acceleration"] <= 0) or signal["rank"] > 50 or pos["holdingBars"] >= config["maxHoldingBars"] or gross_return <= config["stopLoss"] or gross_return >= config["takeProfit"])
                 exit_trigger = None
                 trigger_price = raw_price
                 intrabar = self._intrabar_exit_trigger(pos, quote, config)
@@ -235,6 +236,9 @@ class TradeSimulator:
                     result.append(signal)
                 continue
             if signal["regime"] == "retreat":
+                continue
+            final_signal = str((((signal.get("rankTrend") or {}).get("decision") or {}).get("final") or {}).get("signal") or "hold")
+            if final_signal != "buy":
                 continue
             if strategy_key == "leader_theme_confirmation":
                 if signal.get("themeRole") == "leader" and signal["candidateTier"] in {"A_MAIN", "B_IGNITION"}:
@@ -500,6 +504,9 @@ class TradeSimulator:
 
     @staticmethod
     def _exit_reason(signal: dict[str, Any], pos: dict[str, Any], gross_return: float, config: dict[str, Any]) -> str:
+        final_signal = str((((signal.get("rankTrend") or {}).get("decision") or {}).get("final") or {}).get("signal") or "hold")
+        if final_signal == "sell":
+            return "compose_decision 卖出信号"
         if signal["candidateTier"] == "D_EXIT_RISK":
             return "D_EXIT_RISK"
         if signal["rank"] > 50:
@@ -523,13 +530,13 @@ class TradeSimulator:
         if strategy_key == "a_b_combined":
             return "对照组：" + ("A_MAIN 入场" if signal["candidateTier"] == "A_MAIN" else "B_IGNITION 连续确认入场")
         if signal["candidateTier"] == "A_MAIN":
-            return "A_MAIN 入场"
+            return "A_MAIN 入场 (finalSignal 确认)"
         if signal["candidateTier"] == "B_IGNITION":
             previous_frame = frames[(idx or 0) - 1] if frames and idx and idx > 0 else None
             previous_signal = by_key.get(f"{previous_frame['snapshotId']}:{signal['code']}") if previous_frame and by_key else None
             if previous_signal:
-                return "B_IGNITION 连续确认入场"
-            return "B_IGNITION 确认入场"
+                return "B_IGNITION 连续确认入场 (finalSignal 确认)"
+            return "B_IGNITION 确认入场 (finalSignal 确认)"
         return signal["candidateTier"]
 
     @staticmethod

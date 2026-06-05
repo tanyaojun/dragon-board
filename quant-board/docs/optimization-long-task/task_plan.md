@@ -6,7 +6,7 @@
 
 ## Current Phase
 
-Phase 17 in progress (V2 code review fixes applied; next: Phase D/E data accumulation)
+Phase 20 complete (6/05 weekly checkpoint done; L1 meltdown triggered; next: Phase D/E data accumulation, need >= 60 trading days)
 
 ## Success Criteria
 
@@ -173,6 +173,7 @@ walk_forward.topTrials = 5
 | Weekly checkpoint 5/26 | `checkpoint_2026-05-26_weekly` | completed | 5 日增量，H2 持续改善 |
 | Weekly checkpoint 5/29 (repaired) | `checkpoint_2026-05-29_weekly` | completed | 数据未补齐时的基线 |
 | Interpolated checkpoint 5/29 | `checkpoint_2026-05-29_interpolated` | completed | 补齐后 290 HH + 756 QH，H1 Sharpe +0.60 |
+| Weekly checkpoint 6/05 | `checkpoint_2026-06-05_weekly` | completed | 292 HH + 622 QH，三条基线全面恶化，L1 熔断第 4 期 |
 
 ## First Optimization Result
 
@@ -565,14 +566,12 @@ v1 `checkpoint_2026-05-21_cross_market_zero_filter` 已落库，但因第一版�
 
 ### Phase 20: 待启动（下个 plan）
 
-- [ ] Phase D: Layer 4 参数优化（需 ≥60 个交易日，预计 7 月中）
+- [ ] Phase D: Layer 4 参数优化（需 ≥60 个交易日，当前 34 个，预计 7 月中）
 - [ ] Phase E: P1 统计与基准扩展（需 ≥50 个交易日）
 - [ ] Phase F: P2 归因与合规（需 ≥70 个交易日）
-- [ ] L1 熔断正式集成（已有函数，需多期 JSONL 历史积累后生效）
+- [ ] L1 熔断正式应对（已触发连续 4 期红灯，需排查策略逻辑 vs 市场环境归因）
 - [ ] L3 模型失配/系统偏差标记（需 trade_journal 数据积累）
-- [ ] `/api/backtests/alignment` 直接 HTTP 测试
-- [ ] 补齐数据影响评估：对比合成帧 vs 真实帧对回测的影响
-- **Status:** pending
+- [x] Phase 20: 6/05 周度 checkpoint — runId: `bt_fd27ea809f3f4c42`, `bt_6f07661dd79d4962`, `bt_0d6bd329498441ed`
 
 ## Phase 13 Implementation Plan
 
