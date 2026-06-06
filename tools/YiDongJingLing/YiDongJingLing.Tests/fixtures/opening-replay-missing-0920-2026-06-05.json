@@ -1,0 +1,20 @@
+{
+  "source": "tdx-l1-missing-initial-baseline-replay",
+  "notes": [
+    "Models the observed 2026-06-05 condition where first useful opening sample arrived near 09:25.",
+    "The 09:25 checkpoint must still be evaluated instead of being swallowed as first-seen priming only."
+  ],
+  "quotes": [
+    {
+      "code": "600353",
+      "name": "旭光电子",
+      "at": "2026-06-05T09:25:00+08:00",
+      "lastPrice": 9.92,
+      "preClose": 10,
+      "open": 0,
+      "amount": 2000000,
+      "volume": 200000,
+      "openingForcedSample": true
+    }
+  ]
+}

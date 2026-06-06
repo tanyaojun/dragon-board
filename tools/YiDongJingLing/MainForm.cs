@@ -39,6 +39,7 @@ public sealed class MainForm : Form
     private readonly OpeningSignalReporter _openingSignalReporter = new();
     private readonly OpeningWeakToStrongTelemetryFileSink _openingTelemetry;
     private readonly OpeningAuctionSampleTelemetryFileSink _openingSampleTelemetry;
+    private readonly OpeningRawQuoteFileSink _openingRawQuoteSink;
     private readonly List<EventRecord> _eventRecords = [];
     private readonly string _root;
     private readonly BridgeProcessManager _bridgeManager;
@@ -103,6 +104,9 @@ public sealed class MainForm : Form
             Log);
         _openingSampleTelemetry = new OpeningAuctionSampleTelemetryFileSink(
             Path.Combine(_root, "logs", "yidong-jingling", "opening-auction-samples"),
+            Log);
+        _openingRawQuoteSink = new OpeningRawQuoteFileSink(
+            Path.Combine(_root, "logs", "yidong-jingling", "opening-raw-quotes"),
             Log);
         _settings = _settingsStore.Load();
         var openingRules = new OpeningWeakToStrongRules(
@@ -1226,12 +1230,20 @@ public sealed class MainForm : Form
             acceptedQuotes++;
             _lastQuoteTime = normalizedQuote.SourceTime;
             UpdateOpeningCoverageFromQuote(normalizedQuote);
+            RecordOpeningRawQuote(normalizedQuote);
             RecordOpeningAuctionSampleTelemetry(normalizedQuote);
             var previous = _quoteStore.Apply(normalizedQuote);
 
             if (previous is null)
             {
                 _eventEngine.Prime(normalizedQuote);
+                if (ShouldEvaluateOpeningWeakToStrongPreopenQuote(normalizedQuote.SourceTime))
+                {
+                    var preopenHistory = _quoteStore.GetHistory(normalizedQuote.Code);
+                    allEvents.AddRange(_eventEngine
+                        .Evaluate(normalizedQuote, previous, preopenHistory)
+                        .Where(item => item.Type == L1EventType.OpeningWeakToStrong));
+                }
                 primed++;
                 continue;
             }
@@ -1695,6 +1707,13 @@ public sealed class MainForm : Form
         _openingSampleTelemetry.Record(OpeningAuctionSampleTelemetryRecord.FromQuote(quote));
     }
 
+    private void RecordOpeningRawQuote(QuoteSnapshot quote)
+    {
+        if (!IsOpeningRawQuoteTelemetryWindow(quote.SourceTime)) return;
+
+        _openingRawQuoteSink.Record(quote, "yidong-jingling-ws");
+    }
+
     private void UpdateOpeningCoverageFromQuote(QuoteSnapshot quote)
     {
         if (!quote.OpeningForcedSample || !IsOpeningAuctionCoverageWindow(quote.SourceTime)) return;
@@ -1976,10 +1995,22 @@ public sealed class MainForm : Form
         return time >= TimeSpan.Parse("09:20:00") && time <= TimeSpan.Parse("09:25:10");
     }
 
+    public static bool IsOpeningRawQuoteTelemetryWindow(DateTimeOffset timestamp)
+    {
+        var time = timestamp.ToLocalTime().TimeOfDay;
+        return time >= TimeSpan.Parse("09:15:00") && time <= TimeSpan.Parse("09:35:59");
+    }
+
     public static bool IsOpeningWeakToStrongPreopenWindow(DateTimeOffset timestamp)
     {
         var time = timestamp.ToLocalTime().TimeOfDay;
         return time >= TimeSpan.Parse("09:20:00") && time <= TimeSpan.Parse("09:29:59");
+    }
+
+    public static bool ShouldEvaluateOpeningWeakToStrongPreopenQuote(DateTimeOffset timestamp)
+    {
+        return IsOpeningWeakToStrongPreopenWindow(timestamp) &&
+            timestamp.ToLocalTime().TimeOfDay >= TimeSpan.Parse("09:24:50");
     }
 
     public static List<string> ResolveSelectedBlockFilesForSave(

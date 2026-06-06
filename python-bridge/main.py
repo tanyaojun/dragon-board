@@ -184,11 +184,79 @@ def is_opening_sampling_window(start: datetime | None = None, end: datetime | No
     if current.weekday() >= 5 and finished.weekday() >= 5:
         return False
 
-    window_start = 9 * 3600 + 20 * 60
+    window_start = 9 * 3600 + 15 * 60
     window_end = 9 * 3600 + 36 * 60  # 09:36:00
     start_seconds = current.hour * 3600 + current.minute * 60 + current.second
     end_seconds = finished.hour * 3600 + finished.minute * 60 + finished.second
     return start_seconds <= window_end and end_seconds >= window_start
+
+
+class OpeningRawQuoteFileSink:
+    def __init__(self, directory: str) -> None:
+        self.directory = os.path.abspath(directory)
+        self.reported_failure = False
+
+    def record_many(self, quotes: Iterable[dict[str, Any]], source: str) -> None:
+        rows = [self._row(item, source) for item in quotes]
+        rows = [item for item in rows if item]
+        if not rows:
+            return
+
+        try:
+            os.makedirs(self.directory, exist_ok=True)
+            grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+            for row in rows:
+                grouped[str(row["tradingDate"])].append(row)
+            for trading_date, items in grouped.items():
+                path = os.path.join(self.directory, f"opening-raw-quotes-{trading_date}.jsonl")
+                with open(path, "a", encoding="utf-8") as handle:
+                    for item in items:
+                        handle.write(json.dumps(item, ensure_ascii=False, sort_keys=True) + "\n")
+        except Exception as error:
+            if not self.reported_failure:
+                self.reported_failure = True
+                logger.warning("opening raw quote write failed: %s", error)
+
+    def _row(self, item: dict[str, Any], source: str) -> dict[str, Any] | None:
+        captured_at = str(item.get("capturedAt") or item.get("bridgeTs") or "").strip()
+        try:
+            timestamp = datetime.fromisoformat(captured_at)
+        except ValueError:
+            source_ts = to_int(item.get("sourceTs"), 0)
+            if source_ts <= 0:
+                return None
+            timestamp = datetime.fromtimestamp(source_ts / 1000).astimezone()
+            captured_at = timestamp.isoformat(timespec="seconds")
+
+        code = normalize_code(item.get("code"))
+        if not code:
+            return None
+
+        return {
+            "source": source,
+            "tradingDate": timestamp.date().isoformat(),
+            "timestamp": captured_at,
+            "code": code,
+            "name": str(item.get("name") or "").strip(),
+            "lastPrice": to_number(item.get("lastPrice")),
+            "preClose": to_number(item.get("preClose")),
+            "open": to_number(item.get("open")),
+            "high": to_number(item.get("high")),
+            "low": to_number(item.get("low")),
+            "changePct": to_number(item.get("changePct")),
+            "volume": to_number(item.get("volume")),
+            "amount": to_number(item.get("amount")),
+            "sampleKind": str(item.get("sampleKind") or ""),
+            "openingForcedSample": bool(item.get("openingForcedSample")),
+            "requestedCount": item.get("requestedCount"),
+            "receivedCount": item.get("receivedCount"),
+            "elapsedMs": item.get("elapsedMs"),
+            "slowBatches": item.get("slowBatches"),
+            "truncatedBatches": item.get("truncatedBatches"),
+            "sourceTs": item.get("sourceTs"),
+            "capturedAt": item.get("capturedAt"),
+            "bridgeTs": item.get("bridgeTs"),
+        }
 
 
 def is_trading_session_now(now: datetime | None = None) -> bool:
@@ -552,6 +620,9 @@ class TdxL2Bridge:
         self.latest_quote_stats = QuoteFetchStats()
         self.last_quote_cycle_ts = 0
         self.last_quote_error = ""
+        self.opening_raw_quote_sink = OpeningRawQuoteFileSink(
+            os.path.join(default_log_dir(), "opening-raw-quotes")
+        )
         self.last_qmt_l2_poll_ts = 0
         self.cached_qmt_l2_snapshot: tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]] = ([], [], [])
         self.helper_process: asyncio.subprocess.Process | None = None
@@ -2091,6 +2162,8 @@ class TdxL2Bridge:
                     quote_stats,
                     forced_opening_sample,
                 )
+                if forced_opening_sample:
+                    self.opening_raw_quote_sink.record_many(quotes, source="mootdx-bridge")
                 self.latest_quote_stats = quote_stats
                 self.last_quote_cycle_ts = now_ms()
                 self.last_quote_error = ""

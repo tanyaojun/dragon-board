@@ -8,6 +8,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from main import (
     BridgeConfig,
+    OpeningRawQuoteFileSink,
     QuoteFetchStats,
     TdxL2Bridge,
     is_opening_sampling_window,
@@ -74,6 +75,46 @@ class BridgeMonitorTest(unittest.TestCase):
         end = datetime.fromisoformat("2026-05-22T09:20:01+08:00")
 
         self.assertTrue(is_opening_sampling_window(start, end))
+
+    def test_opening_sampling_window_includes_call_auction_start(self):
+        start = datetime.fromisoformat("2026-05-22T09:15:00+08:00")
+        end = datetime.fromisoformat("2026-05-22T09:15:01+08:00")
+
+        self.assertTrue(is_opening_sampling_window(start, end))
+
+    def test_opening_raw_quote_sink_writes_jsonl_rows(self):
+        with self.subTest("bridge raw quote evidence"):
+            import json
+            import tempfile
+
+            with tempfile.TemporaryDirectory() as temp_dir:
+                sink = OpeningRawQuoteFileSink(temp_dir)
+                sink.record_many(
+                    [
+                        {
+                            "code": "002552",
+                            "name": "宝鼎科技",
+                            "capturedAt": "2026-05-22T09:15:00+08:00",
+                            "lastPrice": 9.8,
+                            "preClose": 10,
+                            "amount": 1000000,
+                            "volume": 100000,
+                            "openingForcedSample": True,
+                            "requestedCount": 1,
+                            "receivedCount": 1,
+                        }
+                    ],
+                    source="mootdx-bridge",
+                )
+
+                path = os.path.join(temp_dir, "opening-raw-quotes-2026-05-22.jsonl")
+                with open(path, encoding="utf-8") as handle:
+                    row = json.loads(handle.readline())
+
+                self.assertEqual(row["source"], "mootdx-bridge")
+                self.assertEqual(row["code"], "002552")
+                self.assertEqual(row["lastPrice"], 9.8)
+                self.assertTrue(row["openingForcedSample"])
 
     def test_quote_capture_timestamp_uses_batch_start_time(self):
         quote = normalize_quote_row(

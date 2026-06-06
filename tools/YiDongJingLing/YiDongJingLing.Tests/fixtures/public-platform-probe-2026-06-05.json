@@ -1,0 +1,32 @@
+{
+  "source": "public-platform-probe",
+  "notes": [
+    "Tencent tick probe returned 2026-06-05 09:25 and 09:30 rows for 000021.",
+    "Eastmoney historical 1-minute kline for 2026-06-05 started at 09:31.",
+    "This fixture is intentionally incomplete and must not be used as a full opening auction replay."
+  ],
+  "quotes": [
+    {
+      "code": "000021",
+      "name": "深科技",
+      "at": "2026-06-05T09:25:00+08:00",
+      "lastPrice": 38.68,
+      "preClose": 39.68,
+      "open": 0,
+      "amount": 78330868,
+      "volume": 2025100,
+      "openingForcedSample": true
+    },
+    {
+      "code": "000021",
+      "name": "深科技",
+      "at": "2026-06-05T09:30:00+08:00",
+      "lastPrice": 38.7,
+      "preClose": 39.68,
+      "open": 38.68,
+      "amount": 15049091,
+      "volume": 388700,
+      "openingForcedSample": false
+    }
+  ]
+}

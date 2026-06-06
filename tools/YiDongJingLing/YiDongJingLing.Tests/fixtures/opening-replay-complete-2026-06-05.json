@@ -1,0 +1,64 @@
+{
+  "source": "detector-contract-replay",
+  "notes": [
+    "Complete checkpoint fixture for offline unit replay.",
+    "Not labeled as Eastmoney/THS historical data because public platform probes did not expose 09:20 and 09:24 historical auction rows."
+  ],
+  "quotes": [
+    {
+      "code": "002552",
+      "name": "宝鼎科技",
+      "at": "2026-06-05T09:20:00+08:00",
+      "lastPrice": 9.7,
+      "preClose": 10,
+      "open": 0,
+      "amount": 1000000,
+      "volume": 100000,
+      "openingForcedSample": false
+    },
+    {
+      "code": "002552",
+      "name": "宝鼎科技",
+      "at": "2026-06-05T09:24:00+08:00",
+      "lastPrice": 9.9,
+      "preClose": 10,
+      "open": 0,
+      "amount": 1900000,
+      "volume": 190000,
+      "openingForcedSample": false
+    },
+    {
+      "code": "002552",
+      "name": "宝鼎科技",
+      "at": "2026-06-05T09:25:00+08:00",
+      "lastPrice": 9.92,
+      "preClose": 10,
+      "open": 0,
+      "amount": 2000000,
+      "volume": 200000,
+      "openingForcedSample": true
+    },
+    {
+      "code": "002552",
+      "name": "宝鼎科技",
+      "at": "2026-06-05T09:30:00+08:00",
+      "lastPrice": 10.35,
+      "preClose": 10,
+      "open": 10.35,
+      "amount": 8000000,
+      "volume": 800000,
+      "openingForcedSample": false
+    },
+    {
+      "code": "002552",
+      "name": "宝鼎科技",
+      "at": "2026-06-05T09:35:00+08:00",
+      "lastPrice": 10.65,
+      "preClose": 10,
+      "open": 10.35,
+      "amount": 16000000,
+      "volume": 1600000,
+      "openingForcedSample": false
+    }
+  ]
+}
