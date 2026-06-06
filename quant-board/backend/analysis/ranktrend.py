@@ -51,6 +51,7 @@ class RankTrendConfig:
     macdSlow: int = 21
     macdSignal: int = 9
     requireMacdGoldenCross: bool = True
+    jumpDeltaPct: float = 10.0  # 内生阈值跳跃检测的百分位变化阈值
     directionWeight: float = 0.3
     accelerationWeight: float = 0.25
     crossWeight: float = 0.2
@@ -388,6 +389,98 @@ def fallback_signals(percentiles: list[float], macd: dict[str, Any], fallback: d
         macd,
         clamp((display * 0.45 + price * 0.35 + capital * 0.2) * 100, -100, 100),
     )
+
+
+def detect_rank_jumps(
+    percentiles: list[float],
+    ranks: list[float] | None = None,
+    delta_pct: float = 10.0,
+) -> dict[str, Any]:
+    """内生阈值排名跳跃检测。
+
+    持续追踪累计排名百分位变化，当 |累计变化| > delta 时触发事件。
+    核心原理：波动爆发（来回震荡）的累计变化互相抵消，达不到阈值；
+    只有不可逆的趋势性移动才会触发。
+
+    Args:
+        percentiles: 排序百分位序列 (0-100)
+        ranks: 原始排名序列，用于计算实际排名变化幅度
+        delta_pct: 百分位变化阈值，默认 10 个百分点
+
+    Returns:
+        event: "jump" | "none"
+        direction: "buy" (排名跳跃式上升) | "sell" (排名崩塌式下降) | "hold"
+        confidence: 0-100, 基于幅度、过冲量和持续性
+    """
+    if len(percentiles) < 3:
+        return {
+            "event": "none", "direction": "hold", "signal": "hold",
+            "magnitude": 0, "overshoot": 0, "delta": delta_pct,
+            "sustained": False, "confidence": 50, "eventCount": 0,
+            "surgeCount": 0, "collapseCount": 0, "events": [],
+        }
+
+    ref = percentiles[0]
+    events: list[dict[str, Any]] = []
+
+    for i, p in enumerate(percentiles):
+        cum_change = p - ref
+        if abs(cum_change) > delta_pct:
+            events.append({
+                "index": i,
+                "direction": "surge" if cum_change > 0 else "collapse",
+                "magnitude": round(abs(cum_change), 2),
+                "overshoot": round(abs(cum_change) - delta_pct, 2),
+                "percentile": round(p, 2),
+            })
+            # 重置到近期均价而非当前极值，防止极端值误触反向事件
+            lookback = min(3, i + 1)
+            ref = sum(percentiles[i - lookback + 1 : i + 1]) / lookback
+
+    if not events:
+        cum = percentiles[-1] - percentiles[0]
+        return {
+            "event": "none", "direction": "hold", "signal": "hold",
+            "magnitude": round(abs(cum), 2), "overshoot": 0, "delta": delta_pct,
+            "sustained": False, "confidence": 50, "eventCount": 0,
+            "surgeCount": 0, "collapseCount": 0, "events": [],
+            "cumulativeChange": round(cum, 2),
+        }
+
+    latest = events[-1]
+    surge_count = sum(1 for e in events if e["direction"] == "surge")
+    collapse_count = sum(1 for e in events if e["direction"] == "collapse")
+    sustained = surge_count >= 2 or collapse_count >= 2
+    direction = "buy" if latest["direction"] == "surge" else "sell"
+
+    mag = latest["magnitude"]
+    overshoot = latest["overshoot"]
+    mag_factor = min(1.0, mag / max(delta_pct * 2, 1))
+    overshoot_factor = min(1.0, overshoot / max(delta_pct, 1))
+    sustain_bonus = 0.20 if sustained else 0
+    confidence = clamp(55 + 25 * mag_factor + 15 * overshoot_factor + 20 * sustain_bonus, 50, 95)
+
+    # 排名幅度：如果提供了原始排名，计算实际排名变化
+    rank_magnitude = 0
+    if ranks and len(ranks) >= 2:
+        rank_magnitude = abs(ranks[-1] - ranks[0])
+
+    return {
+        "event": "jump",
+        "direction": direction,
+        "signal": direction,
+        "magnitude": round(mag, 2),
+        "overshoot": round(overshoot, 2),
+        "delta": delta_pct,
+        "sustained": sustained,
+        "confidence": round(confidence, 1),
+        "eventCount": len(events),
+        "surgeCount": surge_count,
+        "collapseCount": collapse_count,
+        "rankMagnitude": rank_magnitude,
+        "events": [{"index": e["index"], "direction": e["direction"],
+                     "magnitude": e["magnitude"]} for e in events],
+    }
 
 
 def analyze_cycle(ranks: list[float], percentiles: list[float]) -> dict[str, Any]:
@@ -875,6 +968,7 @@ class RankTrendPythonEngine:
             "zljzb": float(stock.get("zljzb") or 0),
         }
         technical = analyze_technical(percentiles, self.config, fallback)
+        jump = detect_rank_jumps(percentiles, ranks, delta_pct=self.config.jumpDeltaPct)
         cycle = analyze_cycle(ranks, percentiles)
         risk = analyze_risk(current_percentile, technical, cycle, fallback["zlje"], fallback["zljzb"], fallback["volumeRatio"])
         decision = compose_decision(technical, cycle, risk, self.config)
@@ -901,6 +995,7 @@ class RankTrendPythonEngine:
                 },
             },
             "technical": technical,
+            "jump": jump,
             "cycle": cycle,
             "risk": risk,
             "decision": decision,

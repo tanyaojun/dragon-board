@@ -12,14 +12,25 @@ from typing import Any
 from backend.analysis.ranktrend import RankTrendConfig, RankTrendPythonEngine
 
 
+def _daily_limit_pct(code: str) -> float:
+    """不同板块涨跌幅限制。"""
+    code = str(code or "").strip()
+    if code.startswith("8"):
+        return 30.0  # 北交所
+    if code.startswith("300") or code.startswith("301") or code.startswith("688"):
+        return 20.0  # 创业板 + 科创板
+    return 10.0  # 主板
+
+
 @dataclass
 class SimpleRankTrendConfig:
-    """只搜索动量周期和 MACD 参数。"""
+    """可搜索参数：动量周期、MACD、跳跃阈值。"""
 
     momentum_periods: list[int] | None = None
     macd_fast: int | None = None
     macd_slow: int | None = None
     macd_signal: int | None = None
+    jump_delta_pct: float | None = None
 
 
 def _rank_config(simple: SimpleRankTrendConfig | None = None) -> RankTrendConfig:
@@ -38,35 +49,43 @@ def _rank_config(simple: SimpleRankTrendConfig | None = None) -> RankTrendConfig
         c.macdSlow = simple.macd_slow
     if simple.macd_signal is not None:
         c.macdSignal = simple.macd_signal
+    if simple.jump_delta_pct is not None:
+        c.jumpDeltaPct = simple.jump_delta_pct
     return c
 
 
 def _entry_conditions(signal: dict[str, Any]) -> bool:
-    """四入场条件 AND：仅前50名内排名大幅上升 + 多周期 BUY + MACD 金叉 + 置信度 > 90。"""
+    """入场条件 AND：跳跃检测 + 排名 + 股价确认 + 涨停过滤 + MACD 金叉 + 置信度。"""
     rt = signal.get("rankTrend")
     if not isinstance(rt, dict):
         return False
-    meta = rt.get("meta") or {}
     technical = rt.get("technical") or {}
-    decision = rt.get("decision") or {}
+    jump = rt.get("jump") or {}
 
-    # 排名前 50 且大幅上升（窗口内至少提升 80 位）
-    rank = float(signal.get("rank", 999))
-    if rank > 50:
+    # 1. 内生阈值：排名持续跳跃式上升
+    if jump.get("event") != "jump" or jump.get("direction") != "buy" or not jump.get("sustained"):
         return False
-    if float(meta.get("rawChange") or 0) < 80:
+
+    # 2. 排名前 30
+    if float(signal.get("rank", 999)) > 30:
         return False
-    # 多周期动量 BUY
-    sigs = technical.get("signals") or {}
-    if sigs.get("direction", {}).get("signal") != "buy":
+
+    # 3. 股价同向确认：股价在涨
+    change_pct = float(signal.get("change") or 0)
+    if change_pct <= 0:
         return False
-    if sigs.get("acceleration", {}).get("signal") != "buy":
+
+    # 4. 涨停板过滤：已涨停的票买不进去
+    limit_pct = _daily_limit_pct(str(signal.get("code") or ""))
+    if change_pct >= limit_pct - 0.3:  # 距涨停 0.3% 以内视为封板
         return False
-    # MACD 金叉
+
+    # 5. MACD 金叉
     if (technical.get("macd") or {}).get("cross") != "golden":
         return False
-    # 置信度 > 90
-    if float(((decision.get("final") or {}).get("confidence") or 0)) < 90:
+
+    # 6. 跳跃置信度 > 85
+    if float(jump.get("confidence") or 0) < 85:
         return False
     return True
 
@@ -90,23 +109,23 @@ def _exit_conditions(
         return False, ""
 
     technical = rt.get("technical") or {}
-    meta = rt.get("meta") or {}
-    decision = rt.get("decision") or {}
+    jump = rt.get("jump") or {}
 
-    # 1. 排名大幅下降
-    raw_change = float(meta.get("rawChange") or 0)
-    if raw_change < -50:
-        return True, f"排名大幅下降({raw_change:.0f})"
+    # 1. 内生阈值检测：排名出现崩塌式下降（要求持续=至少两次同向，防止小回撤误杀）
+    if jump.get("event") == "jump" and jump.get("direction") == "sell" and jump.get("sustained"):
+        return True, f"排名持续崩塌(jump={jump.get('magnitude',0):.1f}pct)"
 
-    # 2. 多周期动量转 sell：direction 和 acceleration 同时 sell，置信度 > 70
-    sigs = technical.get("signals") or {}
-    if sigs.get("direction", {}).get("signal") == "sell" and sigs.get("acceleration", {}).get("signal") == "sell":
-        if float(((decision.get("final") or {}).get("confidence") or 0)) >= 70:
-            return True, "多周期动量同时转卖"
+    # 2. 退出热榜池 (already checked above)
 
-    # 4. MACD 死叉
+    # 3. MACD 死叉
     if (technical.get("macd") or {}).get("cross") == "death":
         return True, "MACD 死叉"
+
+    # 4. 排名大幅下降（fallback）
+    meta = rt.get("meta") or {}
+    raw_change = float(meta.get("rawChange") or 0)
+    if raw_change < -80:
+        return True, f"排名大幅下降({raw_change:.0f})"
 
     return False, ""
 
@@ -155,6 +174,17 @@ def run_simple_backtest(
             stock_sig = next((s for s in frame_signals if s.get("code") == code), None)
             should_exit, reason = _exit_conditions(stock_sig, code, stocks_in_frame)
 
+            # 硬止损 -5%
+            if not should_exit:
+                exit_price = _stock_price(frame, code)
+                if exit_price <= 0:
+                    exit_price = _stock_price(frames[idx + 1], code) if idx + 1 < len(frames) else 0
+                if exit_price > 0 and idx > pos["frameIndex"]:
+                    unrealized = (exit_price - pos["entryPrice"]) / pos["entryPrice"]
+                    if unrealized < -0.05:
+                        should_exit = True
+                        reason = f"止损({unrealized:.1%})"
+
             if should_exit and idx > pos["frameIndex"]:
                 exit_price = _stock_price(frame, code)
                 if exit_price <= 0 and idx + 1 < len(frames):
@@ -192,12 +222,10 @@ def run_simple_backtest(
             if not _entry_conditions(sig):
                 continue
 
-            # next_bar：下一个帧该股票的 price
-            entry_price = 0.0
-            if idx + 1 < len(frames):
-                entry_price = _stock_price(frames[idx + 1], code)
+            # 当前帧价格：看到信号就成交，不等 next_bar
+            entry_price = float(sig.get("price") or 0)
             if entry_price <= 0:
-                entry_price = float(sig.get("price") or 0)
+                entry_price = _stock_price(frame, code)
             if entry_price <= 0:
                 continue
 
