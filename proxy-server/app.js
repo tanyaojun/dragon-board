@@ -15,6 +15,7 @@ import { registerBigOrderRoutes } from './routes/bigOrder.js'
 import { registerDeprecatedRoutes } from './routes/deprecated.js'
 import { registerDocsRoutes } from './routes/docs.js'
 import { registerHotlistRoutes } from './routes/hotlists.js'
+import { registerJumpSignalRoutes } from './routes/jumpSignalNotifications.js'
 import { registerLocalVoiceRoutes } from './routes/localVoice.js'
 import { registerMarketRoutes } from './routes/market.js'
 import { registerNotificationRoutes } from './routes/notifications.js'
@@ -81,6 +82,7 @@ export function createProxyApp(options = {}) {
   registerBigOrderRoutes(app, context)
   registerLocalVoiceRoutes(app, context)
   registerNotificationRoutes(app, context)
+  registerJumpSignalRoutes(app, context)
   registerOpeningSignalRoutes(app, context)
   registerTdxBlockRoutes(app, context)
   registerTdxRoutes(app, context)

@@ -9,6 +9,7 @@ let emittedEvents = 0
 vi.mock('../../RankTrendAnalyzer', () => ({
   rankTrendAnalyzer: {
     getRankTrends: vi.fn(),
+    getCachedPercentiles: vi.fn().mockReturnValue(null),
   },
 }))
 

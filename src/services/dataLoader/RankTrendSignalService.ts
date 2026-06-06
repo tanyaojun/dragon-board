@@ -1,7 +1,9 @@
 import { debugLog } from '@/utils/logger'
 import { dataLayer } from '../DataLayer'
 import { rankTrendAnalyzer, type RankTrendPreparedSnapshot } from '../RankTrendAnalyzer'
-import { applyRankTrendAnalysis } from '../rankTrend/compat'
+import { applyJumpSignal, applyRankTrendAnalysis } from '../rankTrend/compat'
+import { evaluateJumpSignal, incrementJumpBar, registerJumpEntry, unregisterJumpPosition } from '../rankTrend/jumpSignalService'
+import { jumpSignalNotifier } from '../rankTrend/JumpSignalNotifier'
 import type { RankTrendAnalysisResult } from '../rankTrend/types'
 import { extraDataProjector } from './ExtraDataProjector'
 import type { StockSignalUpdate } from './types'
@@ -69,7 +71,41 @@ export class RankTrendSignalService {
       logCoverageWarning('[DataLoader] 排名趋势信号使用了不完整快照样本:', coverageWarning)
     }
 
+    // 跳跃检测：在 RankTrend 分析结果上运行入场/出场评估
+    this.applyJumpSignals()
+
     return this.updateStockSignals(updates)
+  }
+
+  private applyJumpSignals(): void {
+    const stocks = dataLayer.getStocks()
+    if (!stocks.length) return
+
+    incrementJumpBar()
+    const stockCodeSet = new Set(stocks.map(s => s.code))
+
+    for (const stock of stocks) {
+      const rankTrend = stock.rankTrend as RankTrendAnalysisResult | undefined
+      if (!rankTrend?.meta?.code) continue
+
+      const percentiles = rankTrendAnalyzer.getCachedPercentiles(stock.code)
+      if (!percentiles) continue
+
+      const result = evaluateJumpSignal(stock, rankTrend, percentiles, stockCodeSet.has(stock.code))
+
+      // 持仓管理
+      if (result.isEntry) {
+        const price = Number(stock.price || stock.lastTradePrice || 0)
+        registerJumpEntry(stock.code, stock.name || '', price, rankTrend.meta?.currentRank ? String(rankTrend.meta.currentRank) : '')
+        jumpSignalNotifier.notifyEntry(stock, result)
+      }
+      if (result.isExit) {
+        unregisterJumpPosition(stock.code)
+        jumpSignalNotifier.notifyExit(stock, result)
+      }
+
+      applyJumpSignal(stock, result)
+    }
   }
 
   async preloadSnapshots(codes: string[]): Promise<RankTrendPreparedSnapshot[]> {
@@ -101,6 +137,31 @@ export class RankTrendSignalService {
     if (coverageWarning) {
       logCoverageWarning('[DataLoader] 综合榜单信号基于不完整快照样本:', coverageWarning)
     }
+
+    // 跳跃检测
+    const stockCodeSet = new Set(merged.map((s: any) => s.code))
+    for (const stock of merged) {
+      const rankTrend = stock.rankTrend as RankTrendAnalysisResult | undefined
+      if (!rankTrend?.meta?.code) continue
+
+      const percentiles = rankTrendAnalyzer.getCachedPercentiles(stock.code)
+      if (!percentiles) continue
+
+      const result = evaluateJumpSignal(stock, rankTrend, percentiles, stockCodeSet.has(stock.code))
+
+      if (result.isEntry) {
+        const price = Number(stock.price || stock.lastTradePrice || 0)
+        registerJumpEntry(stock.code, stock.name || '', price, '')
+        jumpSignalNotifier.notifyEntry(stock, result)
+      }
+      if (result.isExit) {
+        unregisterJumpPosition(stock.code)
+        jumpSignalNotifier.notifyExit(stock, result)
+      }
+
+      applyJumpSignal(stock, result)
+    }
+
     return merged
   }
 
