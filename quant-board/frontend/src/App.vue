@@ -14,6 +14,8 @@ import {
   formatNumber,
   formatPercent,
   formatPrice,
+  formatTradeFill,
+  formatTradeTime,
   getArrayField,
   getEquityCurve,
   getMetric,
@@ -153,6 +155,43 @@ async function fetchCheckpoints() {
 }
 
 const recentCheckpoints = computed(() => [...checkpointList.value].reverse());
+const latestCheckpoint = computed(() => recentCheckpoints.value[0] ?? null);
+
+function checkpointNumber(value: unknown): number | null {
+  if (value == null || value === '') {
+    return null
+  }
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
+}
+
+function formatCheckpointPercent(value: unknown): string {
+  const num = checkpointNumber(value);
+  return num == null ? "-" : formatPercent(num);
+}
+
+function formatCheckpointFixed(value: unknown, digits = 2): string {
+  const num = checkpointNumber(value);
+  return num == null ? "-" : num.toFixed(digits);
+}
+
+function checkpointLabel(value: unknown, fallback: string): string {
+  const label = String(value || "").trim();
+  return label || fallback;
+}
+
+const h1CheckpointLabel = computed(() => checkpointLabel(latestCheckpoint.value?.h1Label, "H1"));
+const h2CheckpointLabel = computed(() => checkpointLabel(latestCheckpoint.value?.h2Label, "H2"));
+const e1CheckpointLabel = computed(() => checkpointLabel(latestCheckpoint.value?.e1Label, "E1"));
+const q1CheckpointLabel = computed(() => checkpointLabel(latestCheckpoint.value?.q1Label, "Q1"));
+const showQ1CheckpointColumns = computed(() => {
+  const cp = latestCheckpoint.value;
+  if (!cp) {
+    return false;
+  }
+  const label = String(cp.q1Label || "").trim();
+  return Boolean(label) || checkpointNumber(cp.q1TotalReturn) != null || checkpointNumber(cp.q1Sharpe) != null;
+});
 
 const activeReportTab = ref<BacktestReportTabKey>("trades");
 const signalTierFilter = ref("");
@@ -189,6 +228,15 @@ const themeOptimizationForm = reactive<import("./types").ThemeOptimizationReques
 const lastThemeBacktestId = ref("");
 const manualThemeBacktestId = ref("");
 const themeVerdict = computed(() => {
+  if (themeState.status === "idle") {
+    return { label: "待运行" };
+  }
+  if (themeState.status === "loading") {
+    return { label: "运行中" };
+  }
+  if (themeState.status === "error") {
+    return { label: "运行失败" };
+  }
   const data = asRecord(themeState.data || themeState.raw);
   const result = asRecord(data?.result);
   const tt = asRecord(data?.themeTrend || result?.themeTrend);
@@ -196,7 +244,7 @@ const themeVerdict = computed(() => {
   const grade = String(quality?.researchGrade || "unknown");
   const signalCount = Number(tt?.signalCount || 0);
   return {
-    label: grade === "research_ready" ? `研究就绪 · ${signalCount} 信号` : `质量降级(${grade}) · ${signalCount} 信号`,
+    label: grade === "research_ready" ? `研究就绪 · ${signalCount} 信号` : `质量降级(${grade}) · ${signalCount} 信号`
   };
 });
 const themeReport = computed(() => asRecord(themeReportState.data));
@@ -284,9 +332,9 @@ const gridInputs = reactive({
   takeProfitPct: "0.08,0.12,0.16",
   stopLossPct: "0.04,0.06,0.08",
   maxPositions: "3,5,8",
-  macdFast: "",
-  macdSlow: "",
-  macdSignal: ""
+  macdFast: "21",
+  macdSlow: "34",
+  macdSignal: "13"
 });
 
 const selectedDataset = computed(() => {
@@ -344,6 +392,7 @@ const reportSource = computed(() => {
     return base;
   }
   const quality = backtestNormalizedState.data.qualityReport;
+  const baseDataQuality = getObjectField(base, ["dataQuality"]);
   return {
     ...base,
     trades: backtestNormalizedState.data.trades,
@@ -356,10 +405,13 @@ const reportSource = computed(() => {
     qualityReport: quality,
     dataQuality: quality
       ? {
+          ...baseDataQuality,
           ...quality,
-          snapshotCount: quality.frameCount,
-          sourceSnapshotCount: quality.frameCount,
-          recommendation: quality.researchGrade === "research_ready" ? "样本质量满足研究报告读取要求" : "样本质量存在降级，请结合 warnings 和覆盖率解释结果"
+          snapshotCount: baseDataQuality.snapshotCount ?? quality.frameCount,
+          sourceSnapshotCount: baseDataQuality.sourceSnapshotCount ?? quality.frameCount,
+          recommendation:
+            baseDataQuality.recommendation ||
+            (quality.researchGrade === "research_ready" ? "样本质量满足研究报告读取要求" : "样本质量存在降级，请结合 warnings 和覆盖率解释结果")
         }
       : base.dataQuality
   };
@@ -423,25 +475,25 @@ const datasetStatusLabel = computed(() => {
     return "刷新中";
   }
   if (datasetsState.status === "error") {
-    return "error";
+    return "刷新失败";
   }
   return `${datasetsState.data?.length || 0} 个`;
 });
 
 const importStatusLabel = computed(() => {
   if (importState.status === "loading" || snapshotCountsState.status === "loading") {
-    return "loading";
+    return "处理中";
   }
   if (importState.status === "error" || snapshotCountsState.status === "error") {
-    return "error";
+    return "失败";
   }
   if (importState.status === "ok") {
-    return "ok";
+    return "已生成";
   }
   if (snapshotCountsState.status === "ok") {
-    return "checked";
+    return "已检查";
   }
-  return "idle";
+  return "待执行";
 });
 
 const importStatusClass = computed(() => {
@@ -550,7 +602,9 @@ const layer1SignalEfficacy = computed(() => {
 });
 const layer2ExecutionQuality = computed(() => {
   const raw = dataQuality.value.layer2ExecutionQuality;
-  return raw && typeof raw === "object" ? (raw as Record<string, unknown>) : null;
+  return raw && typeof raw === "object" && (raw as Record<string, unknown>).layer2Status
+    ? (raw as Record<string, unknown>)
+    : null;
 });
 const priceQualityDiagnostics = computed(() => {
   const rd = dataQuality.value.reportOnlyDiagnostics;
@@ -688,17 +742,19 @@ const optimizationWarnings = computed(() => {
 const optimizationDataQuality = computed(() => getObjectField(optimizationSource.value, ["dataQuality"]));
 const walkForward = computed(() => getObjectField(optimizationSource.value, ["walkForward"]));
 const walkForwardAggregate = computed(() => getObjectField(walkForward.value, ["aggregate"]));
+const optimizationBestTrial = computed(() => getObjectField(optimizationSource.value, ["best", "bestTrial", "best_trial"]));
 
 const healthLabel = computed(() => {
   if (health.status === "ok") {
     const storage = isMongoMode.value ? "MongoDB" : "SQLite";
-    const connection = canUseSnapshotStore.value ? "ok" : "down";
-    return `API ${health.data?.status || "ok"} ${health.data?.version || ""} · ${storage} ${connection}`.trim();
+    const connection = canUseSnapshotStore.value ? "已连接" : "未连接";
+    const version = health.data?.version ? ` · v${health.data.version}` : "";
+    return `后端已连接 · ${storage}${connection}${version}`;
   }
   if (health.status === "error") {
     return `API 异常: ${health.error}`;
   }
-  return health.status === "loading" ? "API 检查中" : "API 未检查";
+  return health.status === "loading" ? "连接检查中" : "尚未检查";
 });
 
 const healthStatusClass = computed(() => {
@@ -756,8 +812,63 @@ function copyLabel(id: string): string {
   return "一键复制";
 }
 
+function statusLabel(
+  status: string,
+  overrides: Partial<Record<string, string>> = {}
+): string {
+  const normalized = String(status || "idle");
+  const defaults: Record<string, string> = {
+    idle: "待执行",
+    loading: "进行中",
+    running: "运行中",
+    ok: "已完成",
+    error: "失败",
+    checked: "已检查"
+  };
+  return overrides[normalized] || defaults[normalized] || normalized;
+}
+
 function statusClass(status: string): string {
   return `status-${status}`;
+}
+
+function signalLightLabel(value: unknown): string {
+  switch (String(value || "").toLowerCase()) {
+    case "green":
+      return "绿灯";
+    case "yellow":
+      return "黄灯";
+    case "red":
+      return "红灯";
+    default:
+      return "-";
+  }
+}
+
+function formatSnapshotTypeLabel(value: unknown): string {
+  switch (String(value || "")) {
+    case "half_hour":
+      return "半小时";
+    case "quarter_hour":
+      return "15分钟";
+    default:
+      return String(value || "-");
+  }
+}
+
+function formatSignalActionLabel(value: unknown): string {
+  switch (String(value || "")) {
+    case "buy":
+      return "买入";
+    case "watch":
+      return "观察";
+    case "hold":
+      return "持有";
+    case "sell":
+      return "卖出";
+    default:
+      return String(value || "-");
+  }
 }
 
 function delay(ms: number): Promise<void> {
@@ -878,10 +989,13 @@ function shortId(value: unknown): string {
 }
 
 function formatTrialParameters(value: unknown): string {
-  if (!value || typeof value !== "object") {
+  const record = asRecord(value);
+  const nested = asRecord(record.parameters || record.params || record.optunaParams);
+  const parameters = Object.keys(nested).length ? nested : record;
+  if (!Object.keys(parameters).length) {
     return "-";
   }
-  return Object.entries(value as Record<string, unknown>)
+  return Object.entries(parameters)
     .map(([key, item]) => `${key}=${Array.isArray(item) ? item.join("-") : String(item)}`)
     .join(" · ");
 }
@@ -1465,10 +1579,10 @@ onMounted(async () => {
             <input v-model="datasetName" type="text" />
           </label>
           <label>
-            snapshotType / 快照类型
+            快照类型
             <select v-model="importSnapshotType">
-              <option value="half_hour">half_hour / 半小时</option>
-              <option value="quarter_hour">quarter_hour / 15分钟</option>
+              <option value="half_hour">半小时</option>
+              <option value="quarter_hour">15分钟</option>
             </select>
           </label>
           <div class="inline-note">
@@ -1497,7 +1611,7 @@ onMounted(async () => {
             </label>
             <label class="check-row">
               <input v-model="dryRunImport" type="checkbox" />
-              dry run / 试运行
+              试运行
             </label>
           </div>
           <div class="button-row">
@@ -1529,15 +1643,15 @@ onMounted(async () => {
           <div v-if="snapshotCountsState.data" class="preview-grid">
             <div>
               <b>{{ snapshotCounts.snapshot_frames ?? 0 }}</b>
-              <span>frames</span>
+              <span>快照帧</span>
             </div>
             <div>
               <b>{{ snapshotCounts.snapshot_stock_rows ?? 0 }}</b>
-              <span>stock rows</span>
+              <span>股票行</span>
             </div>
             <div>
               <b>{{ snapshotCounts.snapshot_sector_rows ?? 0 }}</b>
-              <span>sector rows</span>
+              <span>板块行</span>
             </div>
           </div>
           <div class="button-row dataset-delete-row">
@@ -1579,29 +1693,29 @@ onMounted(async () => {
           <div class="section-heading">
             <h2>Golden 对齐</h2>
             <span class="status-pill" :class="statusClass(goldenState.status)">
-              {{ goldenState.status }}
+              {{ statusLabel(goldenState.status) }}
             </span>
           </div>
           <div class="form-grid compact">
             <label>
-              datasetId / 数据集ID
+              数据集 ID
               <input v-model="goldenForm.datasetId" type="text" />
             </label>
             <label>
-              caseId / 用例ID
+              用例 ID
               <input v-model="goldenForm.caseId" type="text" />
             </label>
             <label>
-              tolerance / 误差容忍
+              误差容忍
               <input v-model.number="goldenForm.tolerance" type="number" step="0.000001" />
             </label>
             <label>
-              sampleLimit / 校验样本数
+              校验样本数
               <input v-model.number="goldenForm.sampleLimit" type="number" min="1" max="5000" />
             </label>
             <label class="check-row">
               <input v-model="goldenForm.strict" type="checkbox" />
-              strict / 严格模式
+              严格模式
             </label>
           </div>
           <div class="button-row">
@@ -1623,7 +1737,7 @@ onMounted(async () => {
           </div>
           <div class="file-row">
             <label>
-              TS golden JSON / TypeScript 基线文件
+              TS Golden JSON / TypeScript 基线文件
               <input type="file" accept="application/json,.json" @change="selectGoldenFile" />
             </label>
             <button
@@ -1669,129 +1783,129 @@ onMounted(async () => {
           <div class="section-heading">
             <h2>RankTrend 回测</h2>
             <span class="status-pill" :class="statusClass(backtestState.status)">
-              {{ backtestState.status }}
+              {{ statusLabel(backtestState.status) }}
             </span>
           </div>
           <div class="form-grid">
             <label>
-              datasetId / 数据集ID
+              数据集 ID
               <input v-model="backtestForm.datasetId" type="text" />
             </label>
             <label>
-              strategy / 策略
+              策略
               <select v-model="backtestForm.strategyName">
                 <option v-for="option in strategyOptions" :key="option.value" :value="option.value">
-                  {{ option.label }} / {{ option.value }}
+                  {{ option.label }}
                 </option>
               </select>
             </label>
             <label>
-              snapshotType / 快照类型
+              快照类型
               <select v-model="backtestForm.snapshotType">
-                <option value="quarter_hour">quarter_hour / 15分钟</option>
-                <option value="half_hour">half_hour / 半小时</option>
+                <option value="quarter_hour">15分钟</option>
+                <option value="half_hour">半小时</option>
               </select>
             </label>
             <label>
-              randomSeed / 随机种子
+              随机种子
               <input v-model.number="backtestForm.randomSeed" type="number" />
             </label>
             <label>
-              initialCash / 初始资金
+              初始资金
               <input v-model.number="backtestForm.initialCash" type="number" />
             </label>
             <label>
-              maxPositions / 最大持仓数
+              最大持仓数
               <input v-model.number="backtestForm.maxPositions" type="number" min="1" />
             </label>
             <label>
-              positionSize / 单票仓位
+              单票仓位
               <input v-model.number="backtestForm.positionSize" type="number" min="0.01" max="1" step="0.01" />
             </label>
             <label>
-              executionMode / 成交时点
+              成交时点
               <select v-model="backtestForm.executionMode">
-                <option value="current_bar">current_bar / 信号同快照成交</option>
-                <option value="next_bar">next_bar / 下一快照成交</option>
+                <option value="current_bar">信号当根快照成交</option>
+                <option value="next_bar">下一根快照成交</option>
               </select>
             </label>
             <label>
-              targetHoldingDays / 目标持仓天数
+              目标持仓天数
               <input v-model.number="backtestForm.targetHoldingDays" type="number" min="1" step="0.5" />
             </label>
             <label>
-              maxHoldingBars / 最大持有快照
+              最大持有快照数
               <input v-model.number="backtestForm.maxHoldingBars" type="number" min="1" />
             </label>
             <label>
-              takeProfitPct / 止盈比例
+              止盈比例
               <input v-model.number="backtestForm.takeProfitPct" type="number" step="0.01" />
             </label>
             <label>
-              stopLossPct / 止损比例
+              止损比例
               <input v-model.number="backtestForm.stopLossPct" type="number" step="0.01" />
             </label>
             <label>
-              feeRate / 手续费率
+              手续费率
               <input v-model.number="backtestForm.feeRate" type="number" min="0" step="0.0001" />
             </label>
             <label>
-              stampTaxRate / 印花税率
+              印花税率
               <input v-model.number="backtestForm.stampTaxRate" type="number" min="0" step="0.0001" />
             </label>
             <label>
-              slippageRate / 滑点率
+              滑点率
               <input v-model.number="backtestForm.slippageRate" type="number" min="0" step="0.0001" />
             </label>
             <label>
-              volumeParticipationRate / 成交量参与率
+              成交量参与率
               <input v-model.number="backtestForm.volumeParticipationRate" type="number" min="0" max="1" step="0.01" />
             </label>
             <label>
-              orderBookParticipationRate / 盘口参与率
+              盘口参与率
               <input v-model.number="backtestForm.orderBookParticipationRate" type="number" min="0" max="1" step="0.01" />
             </label>
             <label>
-              intrabarAmbiguity / 盘中止盈止损优先
+              盘中止盈止损优先
               <select v-model="backtestForm.intrabarAmbiguity">
-                <option value="stop_first">stop_first / 同时触发先止损</option>
-                <option value="take_first">take_first / 同时触发先止盈</option>
+                <option value="stop_first">同时触发先止损</option>
+                <option value="take_first">同时触发先止盈</option>
               </select>
             </label>
             <label class="check-row">
               <input v-model="backtestForm.enforceT1" type="checkbox" />
-              enforceT1 / T+1
+              T+1 约束
             </label>
             <label class="check-row">
               <input v-model="backtestForm.useOrderBookPrice" type="checkbox" />
-              useOrderBookPrice / 盘口价优先
+              盘口价优先
             </label>
             <label class="check-row">
               <input v-model="backtestForm.enforceLimitStatus" type="checkbox" />
-              enforceLimitStatus / 涨跌停约束
+              涨跌停约束
             </label>
             <label class="check-row">
               <input v-model="backtestForm.enforceVolumeLimit" type="checkbox" />
-              enforceVolumeLimit / 成交量容量约束
+              成交量容量约束
             </label>
             <label class="check-row">
               <input v-model="backtestForm.enforceOrderBookQueue" type="checkbox" />
-              enforceOrderBookQueue / 盘口队列约束
+              盘口队列约束
             </label>
             <label class="check-row">
               <input v-model="backtestForm.allowPartialFills" type="checkbox" />
-              allowPartialFills / 允许部分成交
+              允许部分成交
             </label>
             <label class="check-row">
               <input v-model="backtestForm.useIntrabarStops" type="checkbox" />
-              useIntrabarStops / 盘中止盈止损
+              启用盘中止盈止损
             </label>
             <label class="check-row">
               <input v-model="backtestForm.useThemeFactorForExecution" type="checkbox" />
-              useThemeFactorForExecution / 题材因子参与执行
+              题材因子参与执行
             </label>
             <label>
-              momentumPeriods / 动量周期
+              动量周期
               <input
                 :value="backtestForm.momentumPeriods.join(',')"
                 type="text"
@@ -1799,15 +1913,15 @@ onMounted(async () => {
               />
             </label>
             <label>
-              macdFast / MACD 快线
+              MACD 快线
               <input v-model.number="backtestForm.macdFast" type="number" min="1" />
             </label>
             <label>
-              macdSlow / MACD 慢线
+              MACD 慢线
               <input v-model.number="backtestForm.macdSlow" type="number" min="1" />
             </label>
             <label>
-              macdSignal / MACD 信号线
+              MACD 信号线
               <input v-model.number="backtestForm.macdSignal" type="number" min="1" />
             </label>
           </div>
@@ -1861,13 +1975,13 @@ onMounted(async () => {
                   <option value="hotlist_theme_confluence">热榜题材共振</option>
                 </select>
               </label>
-              <label>snapshotType
+              <label>快照类型
                 <select v-model="themeBacktestForm.snapshotType">
-                  <option value="half_hour">half_hour</option>
-                  <option value="quarter_hour">quarter_hour</option>
+                  <option value="half_hour">半小时</option>
+                  <option value="quarter_hour">15分钟</option>
                 </select>
               </label>
-              <label>randomSeed <input v-model.number="themeBacktestForm.randomSeed" type="number" /></label>
+              <label>随机种子 <input v-model.number="themeBacktestForm.randomSeed" type="number" /></label>
               <label>拥挤阻断阈值 <input v-model.number="themeBacktestForm.crowdingBlockThreshold" type="number" /></label>
               <label title="Phase 3 预留：当前只在前端表单展示，不参与后端计算">最大持仓（预留） <input v-model.number="themeBacktestForm.maxPositions" type="number" min="1" /></label>
               <label title="Phase 3 预留：当前只在前端表单展示，不参与后端计算">仓位比例（预留） <input v-model.number="themeBacktestForm.positionSize" type="number" min="0.01" max="1" step="0.01" /></label>
@@ -1886,7 +2000,7 @@ onMounted(async () => {
           <div class="section-block">
             <h3>查看报告</h3>
             <div class="lookup-row">
-              <input v-model="manualThemeBacktestId" type="text" :placeholder="lastThemeBacktestId || '回测 run ID'" />
+              <input v-model="manualThemeBacktestId" type="text" :placeholder="lastThemeBacktestId || '回测运行 ID'" />
               <button type="button" :disabled="themeReportState.status === 'loading'" @click="fetchThemeReport">
                 {{ themeReportState.status === "loading" ? "拉取中..." : "拉取报告" }}
               </button>
@@ -1929,16 +2043,16 @@ onMounted(async () => {
             <div class="form-grid compact">
               <label>搜索方法
                 <select v-model="themeOptimizationForm.method">
-                  <option value="grid">grid</option>
-                  <option value="random">random</option>
+                  <option value="grid">网格搜索</option>
+                  <option value="random">随机搜索</option>
                 </select>
               </label>
-              <label>trials <input v-model.number="themeOptimizationForm.trials" type="number" min="1" /></label>
-              <label>randomSeed <input v-model.number="themeOptimizationForm.randomSeed" type="number" /></label>
+              <label>试验次数 <input v-model.number="themeOptimizationForm.trials" type="number" min="1" /></label>
+              <label>随机种子 <input v-model.number="themeOptimizationForm.randomSeed" type="number" /></label>
               <label>目标
                 <select v-model="themeOptimizationForm.objective">
-                  <option value="stability">stability</option>
-                  <option value="totalReturn">totalReturn</option>
+                  <option value="stability">样本外稳定</option>
+                  <option value="totalReturn">收益率</option>
                 </select>
               </label>
             </div>
@@ -1988,108 +2102,108 @@ onMounted(async () => {
           <div class="section-heading">
             <h2>参数优化</h2>
             <span class="status-pill" :class="statusClass(optimizationState.status)">
-              {{ optimizationState.status }}
+              {{ statusLabel(optimizationState.status, { running: '优化中' }) }}
             </span>
           </div>
           <div class="form-grid">
             <label>
-              datasetId / 数据集ID
+              数据集 ID
               <input v-model="optimizationForm.datasetId" type="text" />
             </label>
             <label>
-              method / 搜索方法
+              搜索方法
               <select v-model="optimizationForm.method">
-                <option value="grid">grid / 网格搜索</option>
-                <option value="random">random / 随机搜索</option>
-                <option value="bayesian">bayesian / 高斯过程贝叶斯搜索</option>
-                <option value="tpe">tpe / TPE 搜索</option>
+                <option value="grid">网格搜索</option>
+                <option value="random">随机搜索</option>
+                <option value="bayesian">高斯过程贝叶斯搜索</option>
+                <option value="tpe">TPE 搜索</option>
               </select>
             </label>
             <label>
-              strategy / 策略
+              策略
               <select v-model="optimizationForm.strategyName">
                 <option v-for="option in strategyOptions" :key="option.value" :value="option.value">
-                  {{ option.label }} / {{ option.value }}
+                  {{ option.label }}
                 </option>
               </select>
             </label>
             <label>
-              objective / 优化目标
+              优化目标
               <select v-model="optimizationForm.objective">
-                <option value="stability">stability / 样本外稳定</option>
-                <option value="risk_adjusted">risk_adjusted / 风险调整</option>
-                <option value="sharpe">sharpe / 夏普比率</option>
-                <option value="return">return / 收益率</option>
-                <option value="max_drawdown">max_drawdown / 最大回撤</option>
-                <option value="win_rate">win_rate / 胜率</option>
+                <option value="stability">样本外稳定</option>
+                <option value="risk_adjusted">风险调整</option>
+                <option value="sharpe">夏普比率</option>
+                <option value="return">收益率</option>
+                <option value="max_drawdown">最大回撤</option>
+                <option value="win_rate">胜率</option>
               </select>
             </label>
             <label>
-              trials / 试验次数
+              试验次数
               <input v-model.number="optimizationForm.trials" type="number" min="1" />
             </label>
             <label>
-              randomSeed / 随机种子
+              随机种子
               <input v-model.number="optimizationForm.randomSeed" type="number" />
             </label>
             <label>
-              validation / 样本外验证
+              样本外验证
               <select v-model="optimizationForm.validationMode">
-                <option value="auto">auto / 按时间后段验证</option>
-                <option value="none">none / 全样本试跑</option>
+                <option value="auto">按时间后段验证</option>
+                <option value="none">全样本试跑</option>
               </select>
             </label>
             <label>
-              validationRatio / 验证比例
+              验证比例
               <input v-model.number="optimizationForm.validationRatio" type="number" min="0.05" max="0.8" step="0.05" />
             </label>
             <label>
-              warmupBars / 验证预热 bars
+              验证预热快照
               <input v-model.number="optimizationForm.validationWarmupBars" type="number" min="0" />
             </label>
             <label class="check-row">
               <input v-model="optimizationForm.walkForward.enabled" type="checkbox" />
-              walk-forward / 滚动验证
+              滚动验证
             </label>
             <label>
-              WF train days
+              滚动训练天数
               <input v-model.number="optimizationForm.walkForward.trainWindowDays" type="number" min="1" />
             </label>
             <label>
-              WF validation days
+              滚动验证天数
               <input v-model.number="optimizationForm.walkForward.validationWindowDays" type="number" min="1" />
             </label>
             <label>
-              WF top trials
+              滚动保留试验数
               <input v-model.number="optimizationForm.walkForward.topTrials" type="number" min="1" />
             </label>
             <label>
-              momentumPeriods / 动量周期组
+              动量周期组
               <input v-model="gridInputs.momentumPeriods" type="text" />
             </label>
             <label>
-              takeProfitPct / 止盈比例
+              止盈比例组
               <input v-model="gridInputs.takeProfitPct" type="text" />
             </label>
             <label>
-              stopLossPct / 止损比例
+              止损比例组
               <input v-model="gridInputs.stopLossPct" type="text" />
             </label>
             <label>
-              maxPositions / 最大持仓数
+              最大持仓数组
               <input v-model="gridInputs.maxPositions" type="text" />
             </label>
-            <label title="Phase 2 (≥60交易日) 正式纳入搜索，留空则跳过">
-              macdFast / MACD快线 <small>(Phase 2)</small>
-              <input v-model="gridInputs.macdFast" type="text" placeholder="留空跳过，如: 19,21,24" />
+            <label title="默认沿用当前回测 MACD；需要不搜索 MACD 时可手动清空">
+              MACD 快线候选
+              <input v-model="gridInputs.macdFast" type="text" placeholder="默认 21；可填 19,21,24" />
             </label>
-            <label title="Phase 2 (≥60交易日) 正式纳入搜索，留空则跳过">
-              macdSlow / MACD慢线 <small>(Phase 2)</small>
-              <input v-model="gridInputs.macdSlow" type="text" placeholder="留空跳过，如: 30,34,38" />
+            <label title="默认沿用当前回测 MACD；需要不搜索 MACD 时可手动清空">
+              MACD 慢线候选
+              <input v-model="gridInputs.macdSlow" type="text" placeholder="默认 34；可填 30,34,38" />
             </label>
-            <label title="Phase 2 (≥60交易日) 正式纳入搜索，留空则跳过">
-              macdSignal / MACD信号线 <small>(Phase 2)</small>
-              <input v-model="gridInputs.macdSignal" type="text" placeholder="留空跳过，如: 10,13,16" />
+            <label title="默认沿用当前回测 MACD；需要不搜索 MACD 时可手动清空">
+              MACD 信号线候选
+              <input v-model="gridInputs.macdSignal" type="text" placeholder="默认 13；可填 10,13,16" />
             </label>
           </div>
           <div class="button-row">
@@ -2106,14 +2220,14 @@ onMounted(async () => {
             </button>
           </div>
           <div v-if="optimizationState.status === 'loading' || optimizationState.status === 'running'" class="inline-note">
-            参数优化会按组合重复执行 train/validation 回测；真实数据集建议先把 trials / 试验次数降到 3-6 做试跑。
+            参数优化会按组合重复执行训练/验证回测；真实数据集建议先把试验次数降到 3-6 做试跑。
             <span v-if="optimizationPollMessage"> {{ optimizationPollMessage }}</span>
           </div>
           <div v-else-if="optimizationPollMessage" class="inline-note">
             {{ optimizationPollMessage }}
           </div>
           <div v-if="optimizationRunId" class="inline-note">
-            <b>优化 run：</b>{{ optimizationRunId }}
+            <b>优化运行：</b>{{ optimizationRunId }}
             <span v-if="optimizationRunStatus">，后端状态 {{ optimizationRunStatus }}</span>
           </div>
           <div v-if="optimizationState.status === 'error'" class="inline-error">
@@ -2141,7 +2255,7 @@ onMounted(async () => {
             </div>
             <div>
               <span>最佳 trial</span>
-              <b>{{ getNestedString(optimizationSource, ["best", "trialId"]) || "-" }}</b>
+              <b>{{ getNestedString(optimizationBestTrial, ["trialId"]) || getNestedString(optimizationBestTrial, ["trial_id"]) || "-" }}</b>
             </div>
             <div>
               <span>WF 分段</span>
@@ -2171,14 +2285,14 @@ onMounted(async () => {
                 <thead>
                   <tr>
                     <th>排名</th>
-                    <th>trial</th>
-                    <th>score</th>
-                    <th>train 收益</th>
-                    <th>validation 收益</th>
-                    <th>validation Sharpe</th>
+                    <th>试验</th>
+                    <th>评分</th>
+                    <th>训练收益</th>
+                    <th>验证收益</th>
+                    <th>验证 Sharpe</th>
                     <th>验证交易</th>
                     <th>风险</th>
-                    <th>回测 run</th>
+                    <th>回测运行</th>
                     <th>参数</th>
                   </tr>
                 </thead>
@@ -2193,10 +2307,10 @@ onMounted(async () => {
                     <td>{{ getNestedNumber(trial, ["validation", "metrics", "tradeCount"]) ?? "-" }}</td>
                     <td>{{ getNestedString(trial, ["scoreDetails", "overfitRisk"]) || getNestedString(trial, ["stability", "overfitRisk"]) || "-" }}</td>
                     <td class="mono-cell">
-                      <div>train {{ shortId(getNestedString(trial, ["train", "runId"])) }}</div>
-                      <div>valid {{ shortId(getNestedString(trial, ["validation", "runId"])) }}</div>
+                      <div>训练 {{ shortId(getNestedString(trial, ["train", "runId"])) }}</div>
+                      <div>验证 {{ shortId(getNestedString(trial, ["validation", "runId"])) }}</div>
                     </td>
-                    <td>{{ formatTrialParameters(trial.parameters) }}</td>
+                    <td>{{ formatTrialParameters(trial.parameters || trial.params || trial.optunaParams) }}</td>
                   </tr>
                 </tbody>
               </table>
@@ -2241,11 +2355,11 @@ onMounted(async () => {
           <div class="section-heading">
             <h2>回测报告</h2>
             <span class="status-pill" :class="statusClass(backtestDetailState.status)">
-              {{ backtestDetailState.status }}
+              {{ statusLabel(backtestDetailState.status, { ok: '已载入' }) }}
             </span>
           </div>
           <div class="lookup-row">
-            <input v-model="manualBacktestId" type="text" placeholder="backtest id" />
+            <input v-model="manualBacktestId" type="text" placeholder="回测运行 ID" />
             <button type="button" :disabled="backtestDetailState.status === 'loading'" @click="fetchBacktest">
               {{ backtestDetailState.status === "loading" ? "拉取中..." : "拉取报告" }}
             </button>
@@ -2285,7 +2399,7 @@ onMounted(async () => {
               <span>{{ reportVerdict.performanceLabel }}</span>
               <span>{{ reportVerdict.tradeLabel }}</span>
               <span>质量 {{ reportVerdict.qualityLabel }}</span>
-              <span v-if="getNestedString(reportSource, ['snapshotType']) === 'quarter_hour'">quarter_hour</span>
+              <span v-if="getNestedString(reportSource, ['snapshotType']) === 'quarter_hour'">15分钟样本</span>
             </div>
             <ul v-if="reportVerdict.reasons.length" class="narrative-list">
               <li v-for="reason in reportVerdict.reasons" :key="reason">{{ reason }}</li>
@@ -2344,12 +2458,12 @@ onMounted(async () => {
             <div class="section-block">
               <h3>可复现信息</h3>
               <div class="diagnostic-grid compact-diagnostic">
-                <div><span>dataset</span><b>{{ getNestedString(reportSource, ["datasetId"]) || "-" }}</b></div>
-                <div><span>snapshot</span><b>{{ getNestedString(reportSource, ["snapshotType"]) || "-" }}</b></div>
-                <div><span>strategy</span><b>{{ getNestedString(reportSource, ["strategyName"]) || "-" }}</b></div>
-                <div><span>version</span><b>{{ getNestedString(reportSource, ["strategyVersion"]) || "-" }}</b></div>
-                <div><span>config</span><b>{{ shortId(getNestedString(reportSource, ["configHash"])) }}</b></div>
-                <div><span>seed</span><b>{{ getNestedString(reportSource, ["randomSeed"]) || "-" }}</b></div>
+                <div><span>数据集</span><b>{{ getNestedString(reportSource, ["datasetId"]) || "-" }}</b></div>
+                <div><span>快照类型</span><b>{{ formatSnapshotTypeLabel(getNestedString(reportSource, ["snapshotType"])) }}</b></div>
+                <div><span>策略</span><b>{{ getNestedString(reportSource, ["strategyName"]) || "-" }}</b></div>
+                <div><span>版本</span><b>{{ getNestedString(reportSource, ["strategyVersion"]) || "-" }}</b></div>
+                <div><span>配置</span><b>{{ shortId(getNestedString(reportSource, ["configHash"])) }}</b></div>
+                <div><span>随机种子</span><b>{{ getNestedString(reportSource, ["randomSeed"]) || "-" }}</b></div>
               </div>
             </div>
           </div>
@@ -2421,7 +2535,7 @@ onMounted(async () => {
                     <th>数量</th>
                     <th>净收益</th>
                     <th>利润</th>
-                    <th>持有 bars</th>
+                    <th>持有快照</th>
                     <th>分层</th>
                     <th>阶段/环境</th>
                     <th>退出原因</th>
@@ -2431,8 +2545,8 @@ onMounted(async () => {
                 <tbody>
                   <tr v-for="trade in (trades as BacktestTrade[]).slice(0, 80)" :key="`${trade.id}-${trade.code}`">
                     <td><b>{{ trade.code || "-" }}</b><br /><small>{{ trade.name || "-" }}</small></td>
-                    <td>{{ trade.entryTradingDate || formatDisplayTime(String(trade.entryTime || "")) }}<br />{{ formatPrice(Number(trade.entryPrice)) }}</td>
-                    <td>{{ trade.exitTradingDate || formatDisplayTime(String(trade.exitTime || "")) }}<br />{{ formatPrice(Number(trade.exitPrice)) }}</td>
+                    <td>{{ formatTradeTime(trade, "entry") }}<br />{{ formatPrice(Number(trade.entryPrice)) }}</td>
+                    <td>{{ formatTradeTime(trade, "exit") }}<br />{{ formatPrice(Number(trade.exitPrice)) }}</td>
                     <td>{{ trade.quantity ?? "-" }}</td>
                     <td>{{ formatPercent(Number(trade.netReturn)) }}</td>
                     <td>{{ formatNumber(Number(trade.profit)) }}</td>
@@ -2440,7 +2554,7 @@ onMounted(async () => {
                     <td>{{ trade.candidateTier || "-" }}</td>
                     <td>{{ trade.stage || "-" }} / {{ trade.regime || "-" }}</td>
                     <td>{{ trade.reason || "-" }}</td>
-                    <td>{{ trade.fillDetail ? Object.keys(trade.fillDetail).slice(0, 3).join(" / ") : "-" }}</td>
+                    <td>{{ formatTradeFill(trade) }}</td>
                   </tr>
                 </tbody>
               </table>
@@ -2457,8 +2571,8 @@ onMounted(async () => {
               <div><span>强候选 A_MAIN</span><b>{{ signalSummary.strongCandidates }}</b></div>
               <div><span>观察 B_IGNITION</span><b>{{ signalSummary.watchCandidates }}</b></div>
               <div><span>剔除/风险候选</span><b>{{ signalSummary.excludedCandidates }}</b></div>
-              <div><span>buy</span><b>{{ signalSummary.signalCounts.buy || 0 }}</b></div>
-              <div><span>watch</span><b>{{ signalSummary.signalCounts.watch || 0 }}</b></div>
+              <div><span>买入信号</span><b>{{ signalSummary.signalCounts.buy || 0 }}</b></div>
+              <div><span>观察信号</span><b>{{ signalSummary.signalCounts.watch || 0 }}</b></div>
             </div>
             <div class="filter-row">
               <select v-model="signalTierFilter">
@@ -2471,10 +2585,10 @@ onMounted(async () => {
               </select>
               <select v-model="signalTypeFilter">
                 <option value="">全部信号</option>
-                <option value="buy">buy</option>
-                <option value="watch">watch</option>
-                <option value="hold">hold</option>
-                <option value="sell">sell</option>
+                <option value="buy">买入</option>
+                <option value="watch">观察</option>
+                <option value="hold">持有</option>
+                <option value="sell">卖出</option>
               </select>
               <select v-model="signalRegimeFilter">
                 <option value="">全部环境</option>
@@ -2509,7 +2623,7 @@ onMounted(async () => {
                     <td>{{ shortId(signal.snapshotId) }}</td>
                     <td><b>{{ signal.code || "-" }}</b><br /><small>{{ signal.name || "-" }}</small></td>
                     <td>{{ signal.candidateTier || "-" }}</td>
-                    <td>{{ signal.signal || "-" }}</td>
+                    <td>{{ formatSignalActionLabel(signal.signal) }}</td>
                     <td>{{ formatNumber(Number(signal.confidence)) }}</td>
                     <td>{{ signal.rank ?? "-" }}</td>
                     <td>{{ signal.stage || "-" }} / {{ signal.regime || "-" }}</td>
@@ -2552,12 +2666,13 @@ onMounted(async () => {
               </ul>
               <div v-if="dataQualityExamples.length" class="table-wrap compact-table">
                 <table>
-                  <thead><tr><th>日期</th><th>时间</th><th>热榜行数</th><th>snapshotId</th></tr></thead>
+                  <thead><tr><th>日期</th><th>时间</th><th>热榜行数</th><th>模式</th><th>snapshotId</th></tr></thead>
                   <tbody>
                     <tr v-for="row in dataQualityExamples" :key="String(row.snapshotId)">
                       <td>{{ row.tradingDate || "-" }}</td>
                       <td>{{ row.slotTime || "-" }}</td>
                       <td>{{ row.stockRowCount ?? "-" }}</td>
+                      <td>{{ row.captureMode || "-" }}</td>
                       <td>{{ row.snapshotId }}</td>
                     </tr>
                   </tbody>
@@ -2568,7 +2683,7 @@ onMounted(async () => {
               <div v-if="layer1SignalEfficacy" class="section-block quality-block">
                 <h3>V2 Layer 1 — 信号有效性
                   <span :class="['status-badge', layer1SignalEfficacy.layer1Status === 'green' ? 'badge-green' : 'badge-red']">
-                    {{ layer1SignalEfficacy.layer1Status }}
+                    {{ signalLightLabel(layer1SignalEfficacy.layer1Status) }}
                   </span>
                 </h3>
                 <div class="diagnostic-grid compact-diagnostic">
@@ -2593,7 +2708,7 @@ onMounted(async () => {
                   <span :class="['status-badge',
                     layer2ExecutionQuality.layer2Status === 'green' ? 'badge-green' :
                     layer2ExecutionQuality.layer2Status === 'yellow' ? 'badge-yellow' : 'badge-red']">
-                    {{ layer2ExecutionQuality.layer2Status }}
+                    {{ signalLightLabel(layer2ExecutionQuality.layer2Status) }}
                   </span>
                 </h3>
                 <div class="diagnostic-grid compact-diagnostic">
@@ -2629,13 +2744,13 @@ onMounted(async () => {
                 点击"实盘对齐"标签自动加载。需要 MongoDB trade_journal 中有已执行的候选记录（含 entryPrice）。
               </div>
               <template v-else>
-                <div class="diagnostic-grid compact-diagnostic">
-                  <div><span>已执行交易</span><b>{{ alignmentResult.journalExecutedCount ?? 0 }}</b></div>
-                  <div><span>回测信号标的</span><b>{{ alignmentResult.signalCodeCount ?? 0 }}</b></div>
-                  <div><span>交集标的</span><b>{{ alignmentResult.intersectionCount ?? 0 }}</b></div>
-                  <div><span>交集 P&L</span><b>{{ Number(alignmentResult.intersectionPnl || 0).toFixed(2) }}</b></div>
-                  <div><span>交集 P&L %</span><b>{{ formatPercent(Number(alignmentResult.intersectionPnlPct)) }}</b></div>
-                  <div><span>对齐状态</span><b>{{ alignmentResult.alignmentStatus }}</b></div>
+              <div class="diagnostic-grid compact-diagnostic">
+                <div><span>已执行交易</span><b>{{ alignmentResult.journalExecutedCount ?? 0 }}</b></div>
+                <div><span>回测信号标的</span><b>{{ alignmentResult.signalCodeCount ?? 0 }}</b></div>
+                <div><span>交集标的</span><b>{{ alignmentResult.intersectionCount ?? 0 }}</b></div>
+                <div><span>交集 P&L</span><b>{{ Number(alignmentResult.intersectionPnl || 0).toFixed(2) }}</b></div>
+                <div><span>交集 P&L %</span><b>{{ formatPercent(Number(alignmentResult.intersectionPnlPct)) }}</b></div>
+                <div><span>对齐状态</span><b>{{ alignmentResult.alignmentStatus }}</b></div>
                 </div>
                 <div v-if="alignmentResult.sufficientSample" class="inline-note" style="color:#155724">
                   ✓ 样本充足（≥10 笔），对齐报告有效
@@ -2748,14 +2863,14 @@ onMounted(async () => {
 
           <div v-if="activeReportTab === 'config'" class="report-tab-panel">
             <div class="diagnostic-grid compact-diagnostic">
-              <div><span>dataset</span><b>{{ getNestedString(reportSource, ["datasetId"]) || "-" }}</b></div>
-              <div><span>snapshot</span><b>{{ getNestedString(reportSource, ["snapshotType"]) || "-" }}</b></div>
-              <div><span>strategy</span><b>{{ getNestedString(reportSource, ["strategyName"]) || "-" }}</b></div>
-              <div><span>version</span><b>{{ getNestedString(reportSource, ["strategyVersion"]) || "-" }}</b></div>
-              <div><span>config</span><b>{{ shortId(getNestedString(reportSource, ["configHash"])) }}</b></div>
-              <div><span>seed</span><b>{{ getNestedString(reportSource, ["randomSeed"]) || "-" }}</b></div>
-              <div><span>start</span><b>{{ getNestedString(reportSource, ["dateStart"]) || "-" }}</b></div>
-              <div><span>end</span><b>{{ getNestedString(reportSource, ["dateEnd"]) || "-" }}</b></div>
+              <div><span>数据集</span><b>{{ getNestedString(reportSource, ["datasetId"]) || "-" }}</b></div>
+              <div><span>快照类型</span><b>{{ formatSnapshotTypeLabel(getNestedString(reportSource, ["snapshotType"])) }}</b></div>
+              <div><span>策略</span><b>{{ getNestedString(reportSource, ["strategyName"]) || "-" }}</b></div>
+              <div><span>版本</span><b>{{ getNestedString(reportSource, ["strategyVersion"]) || "-" }}</b></div>
+              <div><span>配置</span><b>{{ shortId(getNestedString(reportSource, ["configHash"])) }}</b></div>
+              <div><span>随机种子</span><b>{{ getNestedString(reportSource, ["randomSeed"]) || "-" }}</b></div>
+              <div><span>开始日期</span><b>{{ getNestedString(reportSource, ["dateStart"]) || "-" }}</b></div>
+              <div><span>结束日期</span><b>{{ getNestedString(reportSource, ["dateEnd"]) || "-" }}</b></div>
             </div>
             <button type="button" class="secondary-button" @click="showReportJson = !showReportJson">
               {{ showReportJson ? "收起 JSON 原文" : "展开 JSON 原文" }}
@@ -2773,7 +2888,7 @@ onMounted(async () => {
         <section v-if="activeTab === 'replay'" class="tab-panel">
           <div class="section-heading">
             <h2>单票回放解释</h2>
-            <span>{{ replaySteps.length }} steps</span>
+            <span>{{ replaySteps.length }} 条</span>
           </div>
           <div class="lookup-row">
             <input v-model="replayCode" type="text" placeholder="股票代码，可为空" />
@@ -2836,30 +2951,34 @@ onMounted(async () => {
           </div>
           <div v-if="checkpointError" class="inline-note" style="color:#721c24;margin-bottom:12px">{{ checkpointError }}</div>
           <div v-if="recentCheckpoints.length" class="diagnostic-grid compact-diagnostic" style="margin-bottom:16px">
-            <div v-if="recentCheckpoints[0]">
-              <span>最新 H1 收益</span>
-              <b :class="Number(recentCheckpoints[0].h1TotalReturn) >= 0 ? 'pos' : 'neg'">{{ formatPercent(Number(recentCheckpoints[0].h1TotalReturn)) }}</b>
+            <div v-if="latestCheckpoint">
+              <span>最新 {{ h1CheckpointLabel }} 收益</span>
+              <b :class="checkpointNumber(latestCheckpoint.h1TotalReturn) == null ? '' : checkpointNumber(latestCheckpoint.h1TotalReturn)! >= 0 ? 'pos' : 'neg'">{{ formatCheckpointPercent(latestCheckpoint.h1TotalReturn) }}</b>
             </div>
-            <div v-if="recentCheckpoints[0]">
-              <span>最新 H2 收益</span>
-              <b :class="Number(recentCheckpoints[0].h2TotalReturn) >= 0 ? 'pos' : 'neg'">{{ formatPercent(Number(recentCheckpoints[0].h2TotalReturn)) }}</b>
+            <div v-if="latestCheckpoint">
+              <span>最新 {{ h2CheckpointLabel }} 收益</span>
+              <b :class="checkpointNumber(latestCheckpoint.h2TotalReturn) == null ? '' : checkpointNumber(latestCheckpoint.h2TotalReturn)! >= 0 ? 'pos' : 'neg'">{{ formatCheckpointPercent(latestCheckpoint.h2TotalReturn) }}</b>
             </div>
-            <div v-if="recentCheckpoints[0]">
-              <span>最新 L1</span>
-              <b><span :class="['status-badge', recentCheckpoints[0].h1Layer1Status === 'green' ? 'badge-green' : 'badge-red']" style="font-size:0.7rem">{{ recentCheckpoints[0].h1Layer1Status || '?' }}</span></b>
+            <div v-if="latestCheckpoint">
+              <span>最新 {{ e1CheckpointLabel }} 信号数</span>
+              <b>{{ latestCheckpoint.e1SignalCount ?? '-' }}</b>
             </div>
-            <div v-if="recentCheckpoints[0]">
+            <div v-if="latestCheckpoint">
+              <span>最新 {{ e1CheckpointLabel }} A+B占比</span>
+              <b>{{ formatCheckpointPercent(latestCheckpoint.e1TierRatio) }}</b>
+            </div>
+            <div v-if="latestCheckpoint">
               <span>最新 L2</span>
               <b>
-                <span v-if="recentCheckpoints[0].h1Layer2Status" :class="['status-badge',
-                  recentCheckpoints[0].h1Layer2Status === 'green' ? 'badge-green' :
-                  recentCheckpoints[0].h1Layer2Status === 'yellow' ? 'badge-yellow' : 'badge-red']" style="font-size:0.7rem">{{ recentCheckpoints[0].h1Layer2Status }}</span>
+                <span v-if="latestCheckpoint.h1Layer2Status" :class="['status-badge',
+                  latestCheckpoint.h1Layer2Status === 'green' ? 'badge-green' :
+                  latestCheckpoint.h1Layer2Status === 'yellow' ? 'badge-yellow' : 'badge-red']" style="font-size:0.7rem">{{ signalLightLabel(latestCheckpoint.h1Layer2Status) }}</span>
                 <span v-else>-</span>
               </b>
             </div>
-            <div v-if="recentCheckpoints[0]">
+            <div v-if="latestCheckpoint">
               <span>熔断</span>
-              <b :style="recentCheckpoints[0].meltdown ? 'color:#721c24' : ''">{{ recentCheckpoints[0].meltdown ? '⚠ 触发' : '正常' }} <small>({{ recentCheckpoints[0].consecutiveRedPeriods || 0 }}期)</small></b>
+              <b :style="latestCheckpoint.meltdown ? 'color:#721c24' : ''">{{ latestCheckpoint.meltdown ? '⚠ 触发' : '正常' }} <small>({{ latestCheckpoint.consecutiveRedPeriods || 0 }}期)</small></b>
             </div>
             <div><span>总期数</span><b>{{ checkpointList.length }}</b></div>
           </div>
@@ -2868,16 +2987,16 @@ onMounted(async () => {
               <thead>
                 <tr>
                   <th>日期</th>
-                  <th>H1 收益</th>
-                  <th>H1 Sharpe</th>
-                  <th>H1 笔</th>
-                  <th>H2 收益</th>
-                  <th>H2 Sharpe</th>
-                  <th>Q1 收益</th>
-                  <th>Q1 Sharpe</th>
-                  <th>L1 精度</th>
+                  <th>{{ h1CheckpointLabel }} 收益</th>
+                  <th>{{ h1CheckpointLabel }} Sharpe</th>
+                  <th>{{ h1CheckpointLabel }} 笔</th>
+                  <th>{{ h2CheckpointLabel }} 收益</th>
+                  <th>{{ h2CheckpointLabel }} Sharpe</th>
+                  <th v-if="showQ1CheckpointColumns">{{ q1CheckpointLabel }} 收益</th>
+                  <th v-if="showQ1CheckpointColumns">{{ q1CheckpointLabel }} Sharpe</th>
+                  <th>{{ e1CheckpointLabel }} 信号数</th>
+                  <th>{{ e1CheckpointLabel }} A+B占比</th>
                   <th>L2 偏差</th>
-                  <th>L1</th>
                   <th>L2</th>
                   <th>熔断</th>
                 </tr>
@@ -2885,20 +3004,20 @@ onMounted(async () => {
               <tbody>
                 <tr v-for="cp in recentCheckpoints" :key="String(cp.checkpointId)">
                   <td><small>{{ (String(cp.checkpointId)).replace('checkpoint_2026-', '').replace(/_/g, ' ') }}</small></td>
-                  <td :class="Number(cp.h1TotalReturn) >= 0 ? 'pos' : 'neg'">{{ formatPercent(Number(cp.h1TotalReturn)) }}</td>
-                  <td :class="Number(cp.h1Sharpe) >= 0 ? 'pos' : 'neg'">{{ Number(cp.h1Sharpe || 0).toFixed(2) }}</td>
+                  <td :class="checkpointNumber(cp.h1TotalReturn) == null ? '' : checkpointNumber(cp.h1TotalReturn)! >= 0 ? 'pos' : 'neg'">{{ formatCheckpointPercent(cp.h1TotalReturn) }}</td>
+                  <td :class="checkpointNumber(cp.h1Sharpe) == null ? '' : checkpointNumber(cp.h1Sharpe)! >= 0 ? 'pos' : 'neg'">{{ formatCheckpointFixed(cp.h1Sharpe) }}</td>
                   <td>{{ cp.h1Trades ?? '-' }}</td>
-                  <td :class="Number(cp.h2TotalReturn) >= 0 ? 'pos' : 'neg'">{{ formatPercent(Number(cp.h2TotalReturn)) }}</td>
-                  <td :class="Number(cp.h2Sharpe) >= 0 ? 'pos' : 'neg'">{{ Number(cp.h2Sharpe || 0).toFixed(2) }}</td>
-                  <td :class="Number(cp.q1TotalReturn) >= 0 ? 'pos' : 'neg'">{{ formatPercent(Number(cp.q1TotalReturn)) }}</td>
-                  <td :class="Number(cp.q1Sharpe) >= 0 ? 'pos' : 'neg'">{{ Number(cp.q1Sharpe || 0).toFixed(2) }}</td>
-                  <td>{{ cp.h1DirectionAccuracy != null ? formatPercent(Number(cp.h1DirectionAccuracy)) : '-' }}</td>
-                  <td>{{ cp.h1Layer2Bias != null ? formatPercent(Number(cp.h1Layer2Bias)) : '-' }}</td>
-                  <td><span :class="['status-badge', cp.h1Layer1Status === 'green' ? 'badge-green' : 'badge-red']" style="font-size:0.6rem;padding:1px 5px">{{ cp.h1Layer1Status || '-' }}</span></td>
+                  <td :class="checkpointNumber(cp.h2TotalReturn) == null ? '' : checkpointNumber(cp.h2TotalReturn)! >= 0 ? 'pos' : 'neg'">{{ formatCheckpointPercent(cp.h2TotalReturn) }}</td>
+                  <td :class="checkpointNumber(cp.h2Sharpe) == null ? '' : checkpointNumber(cp.h2Sharpe)! >= 0 ? 'pos' : 'neg'">{{ formatCheckpointFixed(cp.h2Sharpe) }}</td>
+                  <td v-if="showQ1CheckpointColumns" :class="checkpointNumber(cp.q1TotalReturn) == null ? '' : checkpointNumber(cp.q1TotalReturn)! >= 0 ? 'pos' : 'neg'">{{ formatCheckpointPercent(cp.q1TotalReturn) }}</td>
+                  <td v-if="showQ1CheckpointColumns" :class="checkpointNumber(cp.q1Sharpe) == null ? '' : checkpointNumber(cp.q1Sharpe)! >= 0 ? 'pos' : 'neg'">{{ formatCheckpointFixed(cp.q1Sharpe) }}</td>
+                  <td>{{ cp.e1SignalCount ?? '-' }}</td>
+                  <td>{{ formatCheckpointPercent(cp.e1TierRatio) }}</td>
+                  <td>{{ checkpointNumber(cp.h1Layer2Bias) != null ? formatPercent(checkpointNumber(cp.h1Layer2Bias)!) : '-' }}</td>
                   <td>
                     <span v-if="cp.h1Layer2Status" :class="['status-badge',
                       cp.h1Layer2Status === 'green' ? 'badge-green' :
-                      cp.h1Layer2Status === 'yellow' ? 'badge-yellow' : 'badge-red']" style="font-size:0.6rem;padding:1px 5px">{{ cp.h1Layer2Status }}</span>
+                      cp.h1Layer2Status === 'yellow' ? 'badge-yellow' : 'badge-red']" style="font-size:0.6rem;padding:1px 5px">{{ signalLightLabel(cp.h1Layer2Status) }}</span>
                     <span v-else>-</span>
                   </td>
                   <td><span v-if="cp.meltdown" style="color:#721c24">⚠ {{ cp.consecutiveRedPeriods || 0 }}期</span><span v-else>-</span></td>

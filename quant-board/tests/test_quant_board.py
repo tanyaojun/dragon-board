@@ -23,6 +23,7 @@ from backend.cli import (
     summarize_longtest_baseline,
 )
 from backend.core.backtest import TradeSimulator
+from backend.core.backtest.strategy import normalize_strategy_name
 from backend.data.database import ResearchSessionLocal, SessionLocal, init_db
 from backend.data.backup_sync import BackupSyncService
 from backend.data.models import (
@@ -39,6 +40,7 @@ from backend.data.models import (
 from backend.data.repository import Repository
 from backend.data.supabase_homomorphic import SupabaseBackupClient, _chunk_rows_by_payload_size
 from backend.main import app
+from backend.settings import get_settings
 from backend.services import DEFAULT_BACKTEST_STRATEGY_CONFIG, BacktestService
 from backend.utils import json_dumps
 
@@ -110,6 +112,18 @@ def make_bundle_with_empty_hotlist(path: Path) -> Path:
     records = data["records"]
     for index in {8, 15, 22}:
         records[index]["payload"]["hotlist"] = []
+    bundle.write_text(json.dumps({"records": records}, ensure_ascii=False), encoding="utf-8")
+    return bundle
+
+
+def make_bundle_with_synthesized_empty_hotlist(path: Path) -> Path:
+    bundle = make_bundle(path)
+    data = json.loads(bundle.read_text(encoding="utf-8"))
+    records = data["records"]
+    for index in {8, 15, 22}:
+        records[index]["payload"]["hotlist"] = []
+        records[index]["captureMode"] = "synthesized"
+        records[index]["payload"]["captureMode"] = "synthesized"
     bundle.write_text(json.dumps({"records": records}, ensure_ascii=False), encoding="utf-8")
     return bundle
 
@@ -423,6 +437,90 @@ def test_ranktrend_cycle_crowded_raw_stage_persists_like_typescript() -> None:
     assert cycle["previousStage"] == "cooling"
 
 
+def test_ranktrend_cycle_outputs_lifecycle_decision_contract() -> None:
+    cycle = analyze_cycle([88, 76, 61, 44], [18, 26, 39, 57])
+
+    assert cycle["decision"]["action"] == "allow"
+    assert cycle["decision"]["confidence"] >= 50
+    assert cycle["decision"]["reasons"]
+    evidence = cycle["decision"]["evidence"]
+    assert evidence["rawStage"] == cycle["rawStage"]
+    assert evidence["stage"] == cycle["stage"]
+    assert evidence["transition"] == cycle["transition"]
+    assert evidence["rankVelocity"] == cycle["metrics"]["rankVelocity"]
+    assert evidence["rankAcceleration"] == cycle["metrics"]["rankAcceleration"]
+    assert evidence["drawdownFromPeak"] == cycle["metrics"]["drawdownFromPeak"]
+    assert evidence["hotZoneStreak"] == cycle["metrics"]["hotZoneStreak"]
+
+
+def test_ranktrend_lifecycle_decision_evidence_accepts_risk_pressure() -> None:
+    from backend.analysis.ranktrend import lifecycle_decision
+
+    decision = lifecycle_decision(
+        "expansion",
+        "expansion",
+        "cooling->expansion",
+        90,
+        {
+            "rankVelocity": 20,
+            "rankAcceleration": 12,
+            "drawdownFromPeak": 0,
+            "hotZoneStreak": 0,
+        },
+        {
+            "pressure": 0.42,
+            "divergence": {"severity": 0.35},
+            "overheat": {"severity": 0.51},
+        },
+    )
+
+    evidence = decision["evidence"]
+    assert evidence["riskPressure"] == 0.42
+    assert evidence["divergenceSeverity"] == 0.35
+    assert evidence["overheatSeverity"] == 0.51
+
+
+def test_ranktrend_lifecycle_decision_vetoes_high_risk_breakout() -> None:
+    from backend.analysis.ranktrend import lifecycle_decision
+
+    decision = lifecycle_decision(
+        "expansion",
+        "expansion",
+        "cooling->expansion",
+        90,
+        {
+            "rankVelocity": 25,
+            "rankAcceleration": 18,
+            "drawdownFromPeak": 0,
+            "hotZoneStreak": 0,
+        },
+        {
+            "pressure": 0.78,
+            "divergence": {"severity": 0.84},
+            "overheat": {"severity": 0.72},
+        },
+    )
+
+    assert decision["action"] == "veto"
+    assert any("风险" in reason for reason in decision["reasons"])
+
+
+def test_ranktrend_lifecycle_decision_outputs_discovery_diagnostic() -> None:
+    cycle = analyze_cycle([120, 96, 72, 55], [28, 41, 53, 64])
+
+    assert cycle["decision"]["action"] == "allow"
+    assert cycle["decision"]["discovery"]["action"] == "research_watch"
+    assert any("漏选" in reason for reason in cycle["decision"]["discovery"]["reasons"])
+
+
+def test_ranktrend_cycle_reversal_vetoes_lifecycle_entry() -> None:
+    cycle = analyze_cycle([18, 8, 4, 6, 9], [82, 93, 97, 94, 89])
+
+    assert cycle["stage"] == "reversal"
+    assert cycle["decision"]["action"] == "veto"
+    assert any("反转" in reason for reason in cycle["decision"]["reasons"])
+
+
 def test_import_backtest_optimize_and_golden(tmp_path: Path) -> None:
     client = TestClient(app)
     bundle = make_bundle(tmp_path)
@@ -642,6 +740,7 @@ def test_import_backtest_optimize_and_golden(tmp_path: Path) -> None:
     quality_report = quality.json()["qualityReport"]
     assert quality_report["severity"] == "warn"
     assert quality_report["researchGrade"] == "degraded"
+    assert quality_report["stockCount"] == dataset["stock_row_count"]
     assert "coverageRatio" in quality_report
 
     compare = client.post(
@@ -934,6 +1033,35 @@ def test_backtest_excludes_empty_hotlist_frames_but_keeps_quality_warning(tmp_pa
     assert data_quality["sourceSnapshotCount"] == dataset["frame_count"]
     assert data_quality["runtimeFilter"]["reason"] == "empty_hotlist_snapshots_excluded"
     assert any("自动剔除 3 个空热榜快照" in item for item in run["warnings"])
+
+
+def test_backtest_omits_empty_layer2_and_explains_synthesized_empty_hotlist(tmp_path: Path) -> None:
+    client = TestClient(app)
+    bundle = make_bundle_with_synthesized_empty_hotlist(tmp_path)
+
+    imported = client.post(
+        "/api/datasets/import",
+        json={"sourceType": "json_bundle", "sourcePath": str(bundle), "name": "synth-empty-hotlist", "snapshotTypes": ["half_hour"]},
+    )
+    assert imported.status_code == 200, imported.text
+    dataset = imported.json()
+
+    response = client.post(
+        "/api/backtests/rank-trend",
+        json={"datasetId": dataset["id"], "snapshotType": "half_hour", "randomSeed": 20260430},
+    )
+    assert response.status_code == 200, response.text
+    run = response.json()
+    data_quality = run["dataQuality"]
+
+    assert "layer2ExecutionQuality" not in data_quality
+    assert data_quality["emptyHotlistCount"] == 3
+    zero_examples = [example for example in data_quality["lowHotlistExamples"] if example["stockRowCount"] == 0]
+    assert zero_examples
+    assert all(example["captureMode"] == "synthesized" for example in zero_examples)
+    assert any("synthesized 补帧" in item for item in run["warnings"])
+    assert any("并非原始热榜抓取为 0 行" in item for item in run["warnings"])
+    assert not any(item.startswith("Empty hotlist snapshot:") for item in run["warnings"])
 
 
 def test_ranktrend_backtest_blocks_when_price_filter_leaves_too_few_usable_frames(tmp_path: Path) -> None:
@@ -2544,6 +2672,8 @@ def test_cli_longtest_baselines_use_fixed_research_contract() -> None:
             "run-longtest-baselines",
             "--dataset-id",
             "dragonboard_live",
+            "--baseline-set",
+            "legacy_lifecycle_v1",
             "--checkpoint-id",
             "checkpoint_test",
             "--dry-run",
@@ -2573,6 +2703,177 @@ def test_cli_longtest_baselines_use_fixed_research_contract() -> None:
     assert all(item["payload"]["excludeNonPositivePriceRows"] is False for item in specs)
     assert all(item["payload"]["excludeCrossMarketZeroPriceRows"] is False for item in specs)
     assert all(item["payload"]["excludeAllZeroPriceFrames"] is False for item in specs)
+
+
+def test_cli_longtest_baselines_default_to_early_big_move_contract() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "run-longtest-baselines",
+            "--dataset-id",
+            "dragonboard_live",
+            "--checkpoint-id",
+            "checkpoint_early_big_move_dry",
+            "--dry-run",
+        ]
+    )
+
+    specs = build_longtest_baseline_payloads(args)
+
+    assert [item["label"] for item in specs] == [
+        "E1_half_hour_signal_forward40",
+        "E2_half_hour_ranked_current_bar",
+        "E3_half_hour_ranked_strict_fill",
+    ]
+    assert all(item["payload"]["strategy_name"] == "ranktrend_early_big_move" for item in specs)
+    assert [item["payload"]["snapshot_type"] for item in specs] == [
+        "half_hour",
+        "half_hour",
+        "half_hour",
+    ]
+    assert [item["payload"]["tradeConfig"]["executionMode"] for item in specs] == [
+        "current_bar",
+        "current_bar",
+        "next_bar",
+    ]
+    assert specs[0]["payload"]["enable_trade_simulation"] is False
+    strict_trade_config = specs[2]["payload"]["tradeConfig"]
+    assert strict_trade_config["fillFallbackMode"] == "strict_fill"
+    assert strict_trade_config["useOrderBookPrice"] is True
+    assert strict_trade_config["enforceLimitStatus"] is True
+    assert strict_trade_config["enforceVolumeLimit"] is True
+    assert strict_trade_config["enforceOrderBookQueue"] is True
+
+
+def test_cli_longtest_baselines_can_explicitly_dry_run_legacy_lifecycle_contract() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "run-longtest-baselines",
+            "--dataset-id",
+            "dragonboard_live",
+            "--baseline-set",
+            "legacy_lifecycle_v1",
+            "--checkpoint-id",
+            "checkpoint_legacy_lifecycle_dry",
+            "--dry-run",
+        ]
+    )
+
+    specs = build_longtest_baseline_payloads(args)
+
+    assert [item["label"] for item in specs] == [
+        "H1_half_hour_current_bar",
+        "H2_half_hour_next_bar",
+        "Q1_quarter_hour_next_bar",
+    ]
+    assert all(item["payload"]["strategy_name"] == "rank_trend_candidate" for item in specs)
+
+
+def test_ranktrend_early_big_move_strategy_name_is_supported() -> None:
+    assert normalize_strategy_name("ranktrend_early_big_move") == "ranktrend_early_big_move"
+
+
+def test_ranktrend_early_big_move_v2_strategy_name_is_supported() -> None:
+    assert normalize_strategy_name("ranktrend_early_big_move_v2") == "ranktrend_early_big_move_v2"
+
+
+def test_ranktrend_early_big_move_v3_strategy_name_is_supported() -> None:
+    assert normalize_strategy_name("ranktrend_early_big_move_v3") == "ranktrend_early_big_move_v3"
+
+
+def test_ranktrend_early_big_move_v3_no_lifecycle_gate_strategy_name_is_supported() -> None:
+    assert (
+        normalize_strategy_name("ranktrend_early_big_move_v3_no_lifecycle_gate")
+        == "ranktrend_early_big_move_v3_no_lifecycle_gate"
+    )
+
+
+def test_ranktrend_early_big_move_v3_context_probe_strategy_name_is_supported() -> None:
+    assert (
+        normalize_strategy_name("ranktrend_early_big_move_v3_context_probe")
+        == "ranktrend_early_big_move_v3_context_probe"
+    )
+
+
+def test_ranktrend_early_big_move_v3_a_main_risk_filter_strategy_name_is_supported() -> None:
+    assert (
+        normalize_strategy_name("ranktrend_early_big_move_v3_a_main_risk_filter")
+        == "ranktrend_early_big_move_v3_a_main_risk_filter"
+    )
+
+
+def test_ranktrend_early_big_move_v3_b_long_filter_strategy_name_is_supported() -> None:
+    assert (
+        normalize_strategy_name("ranktrend_early_big_move_v3_b_long_filter")
+        == "ranktrend_early_big_move_v3_b_long_filter"
+    )
+
+
+def test_cli_longtest_baselines_can_build_early_big_move_v2_contract() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "run-longtest-baselines",
+            "--dataset-id",
+            "dragonboard_live",
+            "--baseline-set",
+            "early_big_move_v2",
+            "--checkpoint-id",
+            "checkpoint_early_big_move_v2_dry",
+            "--dry-run",
+        ]
+    )
+
+    specs = build_longtest_baseline_payloads(args)
+
+    assert [item["label"] for item in specs] == [
+        "V2_E1_half_hour_signal_forward40",
+        "V2_E2_half_hour_ranked_current_bar",
+        "V2_E3_half_hour_ranked_strict_fill",
+    ]
+    assert all(item["payload"]["strategy_name"] == "ranktrend_early_big_move_v2" for item in specs)
+    assert specs[0]["payload"]["enable_trade_simulation"] is False
+    assert [item["payload"]["tradeConfig"]["executionMode"] for item in specs] == [
+        "current_bar",
+        "current_bar",
+        "next_bar",
+    ]
+    strict_trade_config = specs[2]["payload"]["tradeConfig"]
+    assert strict_trade_config["fillFallbackMode"] == "strict_fill"
+    assert specs[1]["payload"]["stopLossPct"] == 0.05
+    assert specs[1]["payload"]["takeProfitPct"] == 9.99
+    assert specs[1]["payload"]["tradeConfig"]["useIntrabarStops"] is True
+
+
+def test_cli_longtest_baselines_can_build_early_big_move_v3_contract() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "run-longtest-baselines",
+            "--dataset-id",
+            "dragonboard_live",
+            "--baseline-set",
+            "early_big_move_v3",
+            "--checkpoint-id",
+            "checkpoint_early_big_move_v3_dry",
+            "--dry-run",
+        ]
+    )
+
+    specs = build_longtest_baseline_payloads(args)
+
+    assert [item["label"] for item in specs] == [
+        "V3_E1_half_hour_signal_forward50",
+        "V3_E2_half_hour_ranked_current_bar",
+        "V3_E3_half_hour_ranked_strict_fill",
+    ]
+    assert all(item["payload"]["strategy_name"] == "ranktrend_early_big_move_v3" for item in specs)
+    assert [item["payload"]["maxHoldingBars"] for item in specs] == [50, 50, 50]
+    assert specs[0]["payload"]["enable_trade_simulation"] is False
+    assert specs[2]["payload"]["tradeConfig"]["fillFallbackMode"] == "strict_fill"
+    assert specs[1]["payload"]["stopLossPct"] == 0.05
+    assert specs[1]["payload"]["takeProfitPct"] == 9.99
 
 
 def test_cli_longtest_baselines_can_enable_positive_price_research_filter() -> None:
@@ -3864,6 +4165,23 @@ def test_layer3_trend_insufficient_history() -> None:
     assert result["diagnostics"] == "insufficient_history"
 
 
+def test_compute_alignment_skips_backtest_signal_scan_when_no_executed_journal() -> None:
+    from backend.services import compute_alignment
+
+    class Repo:
+        def list_journal_entries(self, **_: object) -> list[dict]:
+            return []
+
+        def get_backtest_run(self, run_id: str) -> object:
+            raise AssertionError(f"should not load backtest signals when journal is empty: {run_id}")
+
+    result = compute_alignment(Repo(), ["bt_large_result"])
+
+    assert result["alignmentStatus"] == "insufficient_data"
+    assert result["journalExecutedCount"] == 0
+    assert result["signalCodeCount"] == 0
+
+
 def test_get_checkpoints_returns_list() -> None:
     client = TestClient(app)
     response = client.get("/api/backtests/checkpoints?limit=5")
@@ -3882,3 +4200,70 @@ def test_get_checkpoints_respects_limit() -> None:
     assert response.status_code == 200
     data = response.json()
     assert len(data) <= 2
+
+
+def test_get_checkpoints_maps_early_big_move_baselines(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    reports_dir = tmp_path / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(get_settings(), "reports_dir", reports_dir)
+
+    record = {
+        "checkpointId": "checkpoint_2026-06-07_early_big_move_v3",
+        "createdAt": "2026-06-07T05:19:35.613557+00:00",
+        "baselines": [
+            {
+                "label": "V3_E1_half_hour_signal_forward50",
+                "layer1SignalEfficacy": {
+                    "tierRatio": 0.0843,
+                    "aPlusBTierCount": 6008,
+                    "totalSignals": 71266,
+                    "layer1Status": "red",
+                    "directionAccuracy": 0.3756,
+                },
+            },
+            {
+                "label": "V3_E2_half_hour_ranked_current_bar",
+                "totalReturn": 0.1293,
+                "sharpe": 2.6936,
+                "tradeCount": 31,
+                "maxDrawdown": -0.0366,
+            },
+            {
+                "label": "V3_E3_half_hour_ranked_strict_fill",
+                "totalReturn": 0.0932,
+                "sharpe": 1.9207,
+                "tradeCount": 31,
+                "maxDrawdown": -0.0713,
+            },
+        ],
+        "layer3Alignment": {
+            "alignmentStatus": "insufficient_data",
+        },
+    }
+    (reports_dir / "long_test_runs.jsonl").write_text(
+        json.dumps(record, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+    client = TestClient(app)
+    response = client.get("/api/backtests/checkpoints?limit=5")
+    assert response.status_code == 200
+    data = response.json()
+
+    assert len(data) == 1
+    item = data[0]
+    assert item["checkpointId"] == "checkpoint_2026-06-07_early_big_move_v3"
+    assert item["h1Label"] == "E2"
+    assert item["h2Label"] == "E3"
+    assert item["q1Label"] is None
+    assert item["h1TotalReturn"] == pytest.approx(0.1293)
+    assert item["h2TotalReturn"] == pytest.approx(0.0932)
+    assert item["q1TotalReturn"] is None
+    assert item["e1Label"] == "E1"
+    assert item["e1SignalCount"] == 71266
+    assert item["e1ABTierCount"] == 6008
+    assert item["e1TierRatio"] == pytest.approx(0.0843)
+    assert item["h1Layer1Status"] == "red"
+    assert item["h1DirectionAccuracy"] == pytest.approx(0.3756)
+    assert item["h1Layer2Status"] == "green"
+    assert item["h1Layer2Bias"] == pytest.approx(0.0361)

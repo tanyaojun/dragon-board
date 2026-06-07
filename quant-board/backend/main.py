@@ -41,7 +41,15 @@ from backend.data.mongo_theme_repository import MongoThemeRepository
 from backend.data.theme_repository import ThemeRepository
 from backend.data.theme_service import ThemeMigrationError, ThemeMigrationService
 from backend.operations.schedule import run_after_market_once
-from backend.services import BacktestService, GoldenService, OptimizationService, compute_alignment
+from backend.services import (
+    BacktestService,
+    GoldenService,
+    OptimizationService,
+    compute_alignment,
+    compute_checkpoint_layer2,
+    select_longtest_baseline_slots,
+    summarize_longtest_slot_label,
+)
 from backend.settings import get_settings
 from backend.utils import json_dumps, json_loads, stable_hash
 
@@ -1464,13 +1472,23 @@ def get_checkpoints(limit: int = Query(20, ge=1, le=100)) -> list[dict[str, Any]
             except Exception:
                 continue
             baselines = record.get("baselines") or []
-            h1 = next((b for b in baselines if "H1" in str(b.get("label") or "")), {})
-            h2 = next((b for b in baselines if "H2" in str(b.get("label") or "")), {})
-            q1 = next((b for b in baselines if "Q1" in str(b.get("label") or "")), {})
+            slots = select_longtest_baseline_slots(baselines)
+            h1 = slots.get("h1") or {}
+            h2 = slots.get("h2") or {}
+            q1 = slots.get("q1") or {}
+            l1 = slots.get("l1") or {}
+            layer2 = compute_checkpoint_layer2(baselines) or {}
             cp = record.get("crossPeriod") or {}
             records.append({
                 "checkpointId": record.get("checkpointId"),
                 "createdAt": record.get("createdAt"),
+                "e1Label": summarize_longtest_slot_label(l1),
+                "e1SignalCount": (l1.get("layer1SignalEfficacy") or {}).get("totalSignals"),
+                "e1ABTierCount": (l1.get("layer1SignalEfficacy") or {}).get("aPlusBTierCount"),
+                "e1TierRatio": (l1.get("layer1SignalEfficacy") or {}).get("tierRatio"),
+                "h1Label": summarize_longtest_slot_label(h1),
+                "h2Label": summarize_longtest_slot_label(h2),
+                "q1Label": summarize_longtest_slot_label(q1),
                 "h1TotalReturn": h1.get("totalReturn"),
                 "h1Sharpe": h1.get("sharpe"),
                 "h1Trades": h1.get("tradeCount"),
@@ -1478,10 +1496,10 @@ def get_checkpoints(limit: int = Query(20, ge=1, le=100)) -> list[dict[str, Any]
                 "h2Sharpe": h2.get("sharpe"),
                 "q1TotalReturn": q1.get("totalReturn"),
                 "q1Sharpe": q1.get("sharpe"),
-                "h1Layer1Status": (h1.get("layer1SignalEfficacy") or {}).get("layer1Status"),
-                "h1DirectionAccuracy": (h1.get("layer1SignalEfficacy") or {}).get("directionAccuracy"),
-                "h1Layer2Status": (h1.get("layer2ExecutionQuality") or {}).get("layer2Status"),
-                "h1Layer2Bias": (h1.get("layer2ExecutionQuality") or {}).get("bias"),
+                "h1Layer1Status": (l1.get("layer1SignalEfficacy") or {}).get("layer1Status"),
+                "h1DirectionAccuracy": (l1.get("layer1SignalEfficacy") or {}).get("directionAccuracy"),
+                "h1Layer2Status": layer2.get("layer2Status"),
+                "h1Layer2Bias": layer2.get("bias"),
                 "meltdown": (cp.get("layer1MeltdownH1") or {}).get("meltdown"),
                 "consecutiveRedPeriods": (cp.get("layer1MeltdownH1") or {}).get("consecutiveRedPeriods"),
                 "l3GreenLight": (cp.get("layer3Trend") or {}).get("greenLight"),
@@ -1545,6 +1563,14 @@ def run_theme_confluence_optimization(payload: dict[str, Any], db: Session | Non
         return OptimizationService(db).run_theme_confluence(payload)
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.post("/api/research/ranktrend-jump")
+def run_ranktrend_jump_research(payload: dict[str, Any], db: Session | None = Depends(get_db)) -> dict[str, Any]:
+    try:
+        return OptimizationService(db).run_ranktrend_jump_research(payload)
+    except ValueError as error:
+        raise _structured_bad_request(error) from error
 
 
 @app.get("/api/optimizations/{run_id}")

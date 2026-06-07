@@ -172,6 +172,8 @@ export interface BacktestTrade {
   side?: string;
   entrySnapshotId?: string | null;
   exitSnapshotId?: string | null;
+  entrySignalSnapshotId?: string | null;
+  exitSignalSnapshotId?: string | null;
   entryTime?: number | null;
   exitTime?: number | null;
   entryTradingDate?: string | null;
@@ -189,6 +191,7 @@ export interface BacktestTrade {
   regime?: string | null;
   explanation?: string | null;
   fillDetail?: Record<string, unknown>;
+  fill?: Record<string, unknown>;
 }
 
 export interface BacktestEquityPoint {
@@ -453,6 +456,13 @@ export interface PriceQualityDiagnostics {
 export interface CheckpointSummary {
   checkpointId: string;
   createdAt?: string;
+  e1Label?: string | null;
+  e1SignalCount: number | null;
+  e1ABTierCount: number | null;
+  e1TierRatio: number | null;
+  h1Label?: string | null;
+  h2Label?: string | null;
+  q1Label?: string | null;
   h1TotalReturn: number | null;
   h1Sharpe: number | null;
   h1Trades: number | null;
