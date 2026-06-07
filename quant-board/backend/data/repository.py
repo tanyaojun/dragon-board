@@ -775,6 +775,29 @@ class Repository:
         except SQLAlchemyError:
             return None
 
+    def get_snapshot_frame(
+        self,
+        snapshot_id: str,
+        dataset_id: str | None = None,
+        allowed_capture_modes: list[str] | None = None,
+        exclude_restored: bool = False,
+    ) -> dict[str, Any] | None:
+        if self.session is None:
+            return None
+        query = select(SnapshotFrameModel).where(SnapshotFrameModel.snapshot_id == snapshot_id)
+        if dataset_id:
+            query = query.where(SnapshotFrameModel.dataset_id == dataset_id)
+        if allowed_capture_modes:
+            query = query.where(SnapshotFrameModel.capture_mode.in_(allowed_capture_modes))
+        if exclude_restored:
+            query = query.where(SnapshotFrameModel.capture_mode != "restored")
+        query = query.order_by(SnapshotFrameModel.timestamp.desc())
+        try:
+            row = self.session.scalars(query).first()
+            return self.frame_to_dict(row) if row else None
+        except SQLAlchemyError:
+            return None
+
     def list_snapshot_stock_rows(
         self,
         dataset_id: str,
@@ -1251,8 +1274,8 @@ class Repository:
                 severity=str(data_quality.get("severity") or "pass"),
                 research_grade=str(data_quality.get("researchGrade") or "research_ready"),
                 frame_count=int(data_quality.get("snapshotCount") or 0),
-                stock_count=int(gate.get("stockCount") or 0),
-                sector_count=int(gate.get("sectorCount") or 0),
+                stock_count=int(gate.get("stockCount") or stats.get("stockCount") or 0),
+                sector_count=int(gate.get("sectorCount") or stats.get("sectorCount") or 0),
                 missing_fields_json=dumps_json_field(stats.get("missingFields") or {}),
                 nan_counts_json=dumps_json_field(stats.get("nanCounts") or {}),
                 inf_counts_json=dumps_json_field(stats.get("infCounts") or {}),

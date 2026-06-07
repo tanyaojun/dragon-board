@@ -354,12 +354,31 @@ class MongoRepository:
         query: dict[str, Any] = {"snapshotId": snapshot_id}
         if dataset_id:
             query["datasetId"] = dataset_id
-        if allowed_capture_modes:
-            query["captureMode"] = {"$in": allowed_capture_modes}
-        if exclude_restored:
-            query["captureMode"] = {"$ne": "restored"}
+        self._apply_capture_mode_filters(
+            query,
+            allowed_capture_modes=allowed_capture_modes,
+            exclude_restored=exclude_restored,
+        )
         row = self.db["snapshot_records"].find_one(query)
         return self.record_to_dict(row) if row else None
+
+    def get_snapshot_frame(
+        self,
+        snapshot_id: str,
+        dataset_id: str | None = None,
+        allowed_capture_modes: list[str] | None = None,
+        exclude_restored: bool = False,
+    ) -> dict[str, Any] | None:
+        query: dict[str, Any] = {"snapshotId": snapshot_id}
+        if dataset_id:
+            query["datasetId"] = dataset_id
+        self._apply_capture_mode_filters(
+            query,
+            allowed_capture_modes=allowed_capture_modes,
+            exclude_restored=exclude_restored,
+        )
+        row = self.db["snapshot_frames"].find_one(query)
+        return self.frame_to_dict(row) if row else None
 
     def list_snapshot_sector_rows(
         self,
@@ -557,10 +576,11 @@ class MongoRepository:
     ) -> list[dict[str, Any]]:
         query: dict[str, Any] = {"datasetId": dataset_id, "type": snapshot_type}
         self._apply_date_filters(query, start_date, end_date, before_trading_date)
-        if allowed_capture_modes:
-            query["captureMode"] = {"$in": allowed_capture_modes}
-        if exclude_restored:
-            query["captureMode"] = {"$ne": "restored"}
+        self._apply_capture_mode_filters(
+            query,
+            allowed_capture_modes=allowed_capture_modes,
+            exclude_restored=exclude_restored,
+        )
         direction = 1 if sort == "asc" else -1
         cursor = self.db["snapshot_frames"].find(query).sort([("timestamp", direction)])
         if limit and limit > 0:
@@ -620,11 +640,28 @@ class MongoRepository:
             MongoRepository._apply_date_filters(query, start_date, end_date, before_trading_date)
         if slot_time:
             query["slotTime"] = slot_time
+        MongoRepository._apply_capture_mode_filters(
+            query,
+            allowed_capture_modes=allowed_capture_modes,
+            exclude_restored=exclude_restored,
+        )
+        return query
+
+    @staticmethod
+    def _apply_capture_mode_filters(
+        query: dict[str, Any],
+        *,
+        allowed_capture_modes: list[str] | None,
+        exclude_restored: bool,
+    ) -> None:
         if allowed_capture_modes:
-            query["captureMode"] = {"$in": allowed_capture_modes}
+            capture_filter: dict[str, Any] = {"$in": allowed_capture_modes}
+            if exclude_restored:
+                capture_filter["$ne"] = "restored"
+            query["captureMode"] = capture_filter
+            return
         if exclude_restored:
             query["captureMode"] = {"$ne": "restored"}
-        return query
 
     @staticmethod
     def _apply_date_filters(

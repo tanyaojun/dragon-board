@@ -215,6 +215,8 @@ def evaluate_snapshot_quality(
     stats = {
         "totalFrames": len(frames),
         "targetFrames": len(filtered),
+        "stockCount": len(stock_rows),
+        "sectorCount": 0,
         "minSnapshotCount": min_snapshot_count,
         "minHotlistSize": min_hotlist_size,
         "researchMinHotlistSize": research_min_hotlist_size,
@@ -223,6 +225,8 @@ def evaluate_snapshot_quality(
         "nonMonotonicTimestamp": 0,
         "duplicateSnapshotId": 0,
         "emptyHotlistCount": 0,
+        "rawEmptyHotlistCount": 0,
+        "synthesizedEmptyHotlistCount": 0,
         "lowHotlistCount": 0,
         "missingCoreFieldCount": 0,
         "hotlistCountMin": None,
@@ -275,6 +279,10 @@ def evaluate_snapshot_quality(
         previous_ts = timestamp
         if hotlist_count == 0:
             stats["emptyHotlistCount"] += 1
+            if capture_mode == "synthesized":
+                stats["synthesizedEmptyHotlistCount"] += 1
+            else:
+                stats["rawEmptyHotlistCount"] += 1
         if hotlist_count < min_hotlist_size:
             stats["lowHotlistCount"] += 1
         elif 0 < hotlist_count < research_min_hotlist_size:
@@ -285,6 +293,7 @@ def evaluate_snapshot_quality(
                     "snapshotId": snapshot_id,
                     "tradingDate": frame.get("tradingDate"),
                     "slotTime": frame.get("slotTime"),
+                    "captureMode": capture_mode,
                     "stockRowCount": hotlist_count,
                 }
             )

@@ -489,6 +489,51 @@ def test_backtest_service_runs_on_mongodb_snapshots_without_historical_research(
     assert service.get_quality(run_id)["qualityReport"]["frameCount"] == 3
 
 
+def test_mongo_repository_get_snapshot_frame_combines_capture_mode_filters() -> None:
+    db = FakeMongoDatabase()
+    repo = MongoResearchRepository(db)
+    db["snapshot_frames"].insert_many(
+        [
+            {
+                "datasetId": "ds_1",
+                "snapshotId": "snap_allowed",
+                "type": "half_hour",
+                "tradingDate": "2026-05-12",
+                "slotTime": "10:00",
+                "timestamp": 1,
+                "captureMode": "synthesized",
+            },
+            {
+                "datasetId": "ds_1",
+                "snapshotId": "snap_unexpected",
+                "type": "half_hour",
+                "tradingDate": "2026-05-12",
+                "slotTime": "10:30",
+                "timestamp": 2,
+                "captureMode": "real_time",
+            },
+        ],
+        ordered=False,
+    )
+
+    allowed_frame = repo.get_snapshot_frame(
+        "snap_allowed",
+        dataset_id="ds_1",
+        allowed_capture_modes=["synthesized"],
+        exclude_restored=True,
+    )
+    unexpected_frame = repo.get_snapshot_frame(
+        "snap_unexpected",
+        dataset_id="ds_1",
+        allowed_capture_modes=["synthesized"],
+        exclude_restored=True,
+    )
+
+    assert allowed_frame is not None
+    assert allowed_frame["captureMode"] == "synthesized"
+    assert unexpected_frame is None
+
+
 def _signal(code: str, rank: int, tier: str, regime: str) -> dict[str, Any]:
     return {
         "snapshotId": "snap_1",
