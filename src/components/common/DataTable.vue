@@ -111,6 +111,17 @@
               </div>
             </template>
 
+            <!-- 跳跃信号列 - 入场/出场标记 -->
+            <template v-else-if="col.key === 'jumpSignal'">
+              <div class="jump-signal-cell">
+                <span
+                  class="jump-badge v3-signal-badge"
+                  :class="`v3-signal-${getLiveV3Signal(stock).tone}`"
+                  :title="getLiveV3SignalTitle(stock)"
+                >{{ getLiveV3Signal(stock).label }}</span>
+              </div>
+            </template>
+
             <!-- 置信度列 - 增强显示 -->
             <template v-else-if="col.key === 'confidence'">
               <div class="confidence-cell" @mouseenter="showConfidenceTooltip($event, stock)"
@@ -259,6 +270,7 @@ import {
   buildRankTrendStatusContext,
   getRankTrendDisplayBreakdown,
 } from '../../services/rankTrend/compat'
+import { getLiveV3SignalDecision } from '../../services/rankTrend/liveV3SignalMapper'
 const props = defineProps<{
   loading?: boolean
 }>()
@@ -363,6 +375,7 @@ const columns = [
   { key: 'avgRank', label: '均榜', group: 'comprehensive', always: true },
   { key: 'compRank', label: '综合', group: 'comprehensive', always: true },
   { key: 'rankChange', label: '变化', group: 'comprehensive', always: true },
+  { key: 'jumpSignal', label: '信号', group: 'comprehensive', always: true },
   { key: 'confidence', label: '置信度', group: 'comprehensive', always: true },
   { key: 'strategyStatus', label: '状态', group: 'comprehensive', always: true },
   { key: 'zlje', label: '主力净额', group: 'money', always: true },
@@ -396,6 +409,7 @@ const COLUMN_WIDTHS: Record<string, string> = {
   avgRank: '50px',
   compRank: '50px',
   rankChange: '50px',
+  jumpSignal: '88px',
   confidence: '70px',
   strategyStatus: '82px',
   zlje: '90px',
@@ -798,6 +812,20 @@ const getStockValue = (stock: Stock, key: string) => (stock as unknown as Record
 
 const getRankChange = (stock: any) =>
   Math.round(getRankTrendAnalysis(stock)?.meta?.change ?? stock?.rankChange ?? 0)
+
+const getLiveV3Signal = (stock: any) => getLiveV3SignalDecision(stock)
+
+const getLiveV3SignalTitle = (stock: any) => {
+  const decision = getLiveV3Signal(stock)
+  const lines = [`V3信号：${decision.label}`]
+  if (decision.reasons.length) {
+    lines.push(`规则：${decision.reasons.join('；')}`)
+  }
+  if (decision.degraded) {
+    lines.push(`说明：当前为降级判断，${decision.degradedReason || '存在未接入的上下文条件'}`)
+  }
+  return lines.join('\n')
+}
 
 const getFinalSignal = (stock: any) =>
   getRankTrendAnalysis(stock)?.decision?.final?.signal ?? stock?.finalSignal ?? 'none'
@@ -2233,6 +2261,63 @@ defineExpose({
   line-height: 1.55;
   font-size: 12px;
   pointer-events: none;
+}
+
+/* 跳跃信号标记 */
+.jump-signal-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.jump-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 24px;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.jump-entry {
+  color: #e8a800;
+  background: rgba(232, 168, 0, 0.12);
+  border: 1px solid rgba(232, 168, 0, 0.28);
+}
+
+.jump-exit {
+  color: #4da6ff;
+  background: rgba(77, 166, 255, 0.12);
+  border: 1px solid rgba(77, 166, 255, 0.28);
+}
+
+.v3-signal-buy {
+  color: #ff8c42;
+  background: rgba(255, 140, 66, 0.12);
+  border: 1px solid rgba(255, 140, 66, 0.28);
+}
+
+.v3-signal-sell {
+  color: #3ddc97;
+  background: rgba(61, 220, 151, 0.12);
+  border: 1px solid rgba(61, 220, 151, 0.26);
+}
+
+.v3-signal-watch {
+  color: #d8c27a;
+  background: rgba(216, 194, 122, 0.12);
+  border: 1px solid rgba(216, 194, 122, 0.22);
+}
+
+.v3-signal-neutral {
+  color: #8f99a8;
+  background: rgba(143, 153, 168, 0.1);
+  border: 1px solid rgba(143, 153, 168, 0.18);
 }
 
 .signal-badge {
