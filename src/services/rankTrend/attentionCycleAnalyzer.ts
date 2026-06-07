@@ -300,33 +300,53 @@ function buildLifecycleDecision(input: {
   transition: string
   confidence: number
   metrics: RankTrendAnalysisResult['cycle']['metrics']
+  momentumProfile?: Partial<RankTrendAnalysisResult['technical']['momentumProfile']>
   risk?: {
     pressure?: number
     divergenceSeverity?: number
     overheatSeverity?: number
   }
 }): RankTrendAnalysisResult['cycle']['decision'] {
-  const { rawStage, stage, transition, confidence, metrics, risk } = input
+  const { rawStage, stage, transition, confidence, metrics, momentumProfile, risk } = input
   const reasons: string[] = []
   const discoveryReasons: string[] = []
   let action: RankTrendAnalysisResult['cycle']['decision']['action'] = 'caution'
+  const momentumShort = momentumProfile?.short ?? 0
+  const momentumMid = momentumProfile?.mid ?? 0
+  const momentumLong = momentumProfile?.long ?? 0
+  const momentumAcceleration = momentumProfile?.acceleration ?? 0
   const riskPressure = risk?.pressure ?? 0
   const divergenceSeverity = risk?.divergenceSeverity ?? 0
   const overheatSeverity = risk?.overheatSeverity ?? 0
   const highRiskConflict =
     riskPressure >= 0.75 || (divergenceSeverity >= 0.8 && overheatSeverity >= 0.7)
+  const midLongCommitted = momentumMid >= 15 && momentumLong >= 15 && momentumAcceleration >= 8
   const weakPathCommitment =
     metrics.rankPathCommitment < 0.45 &&
     metrics.rankVelocity > 18 &&
     metrics.rankAcceleration > 12 &&
+    !midLongCommitted &&
     (stage === 'ignition' || stage === 'expansion')
+  const lowVisibilityIgnition =
+    stage === 'ignition' &&
+    transition === 'cooling->ignition' &&
+    metrics.hotZoneStreak === 0 &&
+    metrics.rankPathCommitment < 0.7 &&
+    metrics.rankVelocity > 18 &&
+    metrics.rankAcceleration > 12 &&
+    momentumShort >= 18 &&
+    momentumMid >= 18 &&
+    momentumAcceleration >= 18
 
   if (stage === 'reversal' || rawStage === 'reversal') {
     action = 'veto'
     reasons.push('生命周期进入反转路径，辅助决策一票否决。')
   } else if (weakPathCommitment) {
-    action = 'veto'
-    reasons.push('生命周期B识别到最后一跳过强但整段承接不足，按假突破路径一票否决。')
+    action = 'caution'
+    reasons.push('生命周期B识别到最后一跳过强但整段承接不足，按假突破路径谨慎观察。')
+  } else if (lowVisibilityIgnition) {
+    action = 'caution'
+    reasons.push('生命周期B识别到低可见度首段点火，承接尚未扩散，防止抢占后续高质量仓位。')
   } else if (highRiskConflict && (stage === 'ignition' || stage === 'expansion')) {
     action = 'veto'
     reasons.push('生命周期虽处于点火/扩散，但风险背离与过热证据明确反对，辅助决策一票否决。')
@@ -366,6 +386,10 @@ function buildLifecycleDecision(input: {
       drawdownFromPeak: metrics.drawdownFromPeak,
       hotZoneStreak: metrics.hotZoneStreak,
       rankPathCommitment: metrics.rankPathCommitment,
+      momentumShort,
+      momentumMid,
+      momentumLong,
+      momentumAcceleration,
       riskPressure,
       divergenceSeverity,
       overheatSeverity,
@@ -376,13 +400,14 @@ function buildLifecycleDecision(input: {
 export function analyzeAttentionCycle(input: {
   ranks: number[]
   percentiles: number[]
+  momentumProfile?: Partial<RankTrendAnalysisResult['technical']['momentumProfile']>
   risk?: {
     pressure?: number
     divergenceSeverity?: number
     overheatSeverity?: number
   }
 }): RankTrendAnalysisResult['cycle'] {
-  const { ranks, percentiles, risk } = input
+  const { ranks, percentiles, momentumProfile, risk } = input
   let previousRawStage: AttentionStage | null = null
   let previousStage: AttentionStage | null = null
   let currentRawStage: AttentionStage | null = null
@@ -445,6 +470,14 @@ export function analyzeAttentionCycle(input: {
     confidence,
     metrics,
     entryAdvice: buildEntryAdvice(stage, transition),
-    decision: buildLifecycleDecision({ rawStage, stage, transition, confidence, metrics, risk }),
+    decision: buildLifecycleDecision({
+      rawStage,
+      stage,
+      transition,
+      confidence,
+      metrics,
+      momentumProfile,
+      risk,
+    }),
   }
 }

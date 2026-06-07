@@ -75,7 +75,7 @@ describe('analyzeAttentionCycle', () => {
     expect(cycle.decision.action).toBe('allow')
   })
 
-  it('最后一跳很猛但整段承接不足时生命周期B应否决假突破', () => {
+  it('最后一跳很猛但整段承接不足时生命周期B应标记假突破谨慎而非硬否决', () => {
     const cycle = analyzeAttentionCycle({
       ranks: [132, 134, 133, 132, 131, 130, 72],
       percentiles: [32, 31, 31.5, 32, 33, 34, 69],
@@ -83,8 +83,25 @@ describe('analyzeAttentionCycle', () => {
 
     const evidence = cycle.decision.evidence as Record<string, number>
     expect(evidence.rankPathCommitment).toBeLessThan(0.45)
-    expect(cycle.decision.action).toBe('veto')
+    expect(cycle.decision.action).toBe('caution')
     expect(cycle.decision.reasons.join(' ')).toContain('承接')
+  })
+
+  it('路径承接偏弱但中长动量已建立时不应被承接质量单点误杀', () => {
+    const cycle = analyzeAttentionCycle({
+      ranks: [132, 134, 133, 132, 131, 130, 72],
+      percentiles: [32, 31, 31.5, 32, 33, 34, 69],
+      momentumProfile: {
+        short: 17.03,
+        mid: 16.61,
+        long: 36.07,
+        acceleration: 23.51,
+      },
+    })
+
+    expect(cycle.decision.evidence.rankPathCommitment).toBeLessThan(0.45)
+    expect(cycle.decision.action).not.toBe('veto')
+    expect(cycle.decision.reasons.join(' ')).not.toContain('一票否决')
   })
 
   it('低长周期动量但整段承接连续改善时生命周期B不能误杀', () => {
@@ -97,6 +114,26 @@ describe('analyzeAttentionCycle', () => {
     expect(evidence.rankPathCommitment).toBeGreaterThanOrEqual(0.65)
     expect(cycle.decision.action).not.toBe('veto')
     expect(cycle.decision.reasons.join(' ')).not.toContain('长周期')
+  })
+
+  it('首段点火但注意力承接尚未扩散时生命周期B应标记低可见度抢仓风险', () => {
+    const cycle = analyzeAttentionCycle({
+      ranks: [132, 131, 130, 128, 126, 124, 82],
+      percentiles: [32, 32.5, 33, 34, 35, 36, 60],
+      momentumProfile: {
+        short: 21.83,
+        mid: 28.95,
+        long: 23.83,
+        acceleration: 24.29,
+      },
+    })
+
+    expect(cycle.stage).toBe('ignition')
+    expect(cycle.transition).toBe('cooling->ignition')
+    expect(cycle.metrics.hotZoneStreak).toBe(0)
+    expect(cycle.decision.evidence.rankPathCommitment).toBeLessThan(0.7)
+    expect(cycle.decision.action).toBe('caution')
+    expect(cycle.decision.reasons.join(' ')).toContain('低可见度')
   })
 
   it('高热回撤会识别为 reversal', () => {

@@ -532,6 +532,156 @@ def test_early_big_move_v3_lifecycle_fusion_keeps_discovery_as_research_only() -
     assert candidates == []
 
 
+def test_early_big_move_v3_lifecycle_fusion_ranks_allow_before_caution_without_deleting_caution() -> None:
+    caution = _early_big_move_v2_signal(tier="B_IGNITION", zero_cross="buy", change=5.0)
+    caution["code"] = "000657"
+    caution["rankTrend"]["technical"]["momentumProfile"]["mid"] = 24
+    caution["rankTrend"]["cycle"] = {
+        "stage": "ignition",
+        "transition": "cooling->ignition",
+        "decision": {
+            "action": "caution",
+            "confidence": 80,
+            "reasons": ["生命周期B识别到低可见度首段点火，承接尚未扩散，防止抢占后续高质量仓位。"],
+        },
+    }
+    allow = _early_big_move_v2_signal(tier="B_IGNITION", zero_cross="buy", change=5.0)
+    allow["code"] = "603459"
+    allow["rankTrend"]["technical"]["momentumProfile"]["mid"] = 24
+    allow["rankTrend"]["cycle"] = {
+        "stage": "ignition",
+        "transition": "cooling->ignition",
+        "decision": {
+            "action": "allow",
+            "confidence": 80,
+            "reasons": ["生命周期B支持：点火承接已扩散。"],
+        },
+    }
+
+    candidates = TradeSimulator._entry_candidates(
+        [caution, allow],
+        [{"snapshotId": caution["snapshotId"]}],
+        0,
+        {},
+        {},
+        "ranktrend_early_big_move_v3_lifecycle_fusion",
+    )
+
+    assert [item["code"] for item in candidates] == ["603459", "000657"]
+
+
+def test_early_big_move_v3_lifecycle_fusion_exits_losing_position_when_lifecycle_vetoes() -> None:
+    entry = _early_big_move_v2_signal(tier="A_MAIN", zero_cross="buy", change=4.0)
+    entry["snapshotId"] = "s1"
+    entry["timestamp"] = 1
+    entry["tradingDate"] = "2026-05-21"
+    entry["rankTrend"]["cycle"] = {
+        "stage": "expansion",
+        "transition": "cooling->expansion",
+        "decision": {"action": "allow", "reasons": ["生命周期B支持"]},
+    }
+    exit_signal = _early_big_move_v2_signal(tier="D_EXIT_RISK", zero_cross="hold", change=-1.0)
+    exit_signal["snapshotId"] = "s2"
+    exit_signal["timestamp"] = 2
+    exit_signal["tradingDate"] = "2026-05-22"
+    exit_signal["price"] = 9.9
+    exit_signal["rankTrend"]["cycle"] = {
+        "stage": "reversal",
+        "transition": "expansion->reversal",
+        "decision": {"action": "veto", "reasons": ["生命周期B反对：承接失败"]},
+    }
+
+    result = TradeSimulator().run(
+        [
+            {"snapshotId": "s1", "timestamp": 1, "tradingDate": "2026-05-21", "slotTime": "09:30"},
+            {"snapshotId": "s2", "timestamp": 2, "tradingDate": "2026-05-22", "slotTime": "09:30"},
+        ],
+        [entry, exit_signal],
+        {
+            "entryStrategy": "ranktrend_early_big_move_v3_lifecycle_fusion",
+            "initialCapital": 100000,
+            "positionSize": 0.1,
+            "maxPositions": 1,
+            "maxHoldingBars": 99,
+            "enforceT1": True,
+            "useOrderBookPrice": False,
+            "enforceLimitStatus": False,
+            "enforceOrderBookQueue": False,
+            "enforceVolumeLimit": False,
+            "feeRate": 0,
+            "stampTaxRate": 0,
+            "slippageRate": 0,
+            "stopLoss": -0.5,
+            "takeProfit": 9.99,
+        },
+    )
+
+    assert result["tradeCount"] == 1
+    assert result["roundTripTrades"][0]["reason"] == "生命周期B反对且未盈利"
+
+
+def test_early_big_move_v3_lifecycle_fusion_does_not_exit_profitable_position_on_lifecycle_veto() -> None:
+    entry = _early_big_move_v2_signal(tier="A_MAIN", zero_cross="buy", change=4.0)
+    entry["snapshotId"] = "s1"
+    entry["timestamp"] = 1
+    entry["tradingDate"] = "2026-05-21"
+    entry["rankTrend"]["cycle"] = {
+        "stage": "expansion",
+        "transition": "cooling->expansion",
+        "decision": {"action": "allow", "reasons": ["生命周期B支持"]},
+    }
+    veto_profit = _early_big_move_v2_signal(tier="D_EXIT_RISK", zero_cross="hold", change=1.0)
+    veto_profit["snapshotId"] = "s2"
+    veto_profit["timestamp"] = 2
+    veto_profit["tradingDate"] = "2026-05-22"
+    veto_profit["price"] = 10.5
+    veto_profit["rankTrend"]["cycle"] = {
+        "stage": "reversal",
+        "transition": "expansion->reversal",
+        "decision": {"action": "veto", "reasons": ["生命周期B反对：但价格仍盈利"]},
+    }
+    max_hold_exit = _early_big_move_v2_signal(tier="A_MAIN", zero_cross="hold", change=1.0)
+    max_hold_exit["snapshotId"] = "s3"
+    max_hold_exit["timestamp"] = 3
+    max_hold_exit["tradingDate"] = "2026-05-23"
+    max_hold_exit["price"] = 10.8
+    max_hold_exit["rankTrend"]["cycle"] = {
+        "stage": "expansion",
+        "transition": "expansion",
+        "decision": {"action": "allow", "reasons": ["生命周期B支持"]},
+    }
+
+    result = TradeSimulator().run(
+        [
+            {"snapshotId": "s1", "timestamp": 1, "tradingDate": "2026-05-21", "slotTime": "09:30"},
+            {"snapshotId": "s2", "timestamp": 2, "tradingDate": "2026-05-22", "slotTime": "09:30"},
+            {"snapshotId": "s3", "timestamp": 3, "tradingDate": "2026-05-23", "slotTime": "09:30"},
+        ],
+        [entry, veto_profit, max_hold_exit],
+        {
+            "entryStrategy": "ranktrend_early_big_move_v3_lifecycle_fusion",
+            "initialCapital": 100000,
+            "positionSize": 0.1,
+            "maxPositions": 1,
+            "maxHoldingBars": 2,
+            "enforceT1": True,
+            "useOrderBookPrice": False,
+            "enforceLimitStatus": False,
+            "enforceOrderBookQueue": False,
+            "enforceVolumeLimit": False,
+            "feeRate": 0,
+            "stampTaxRate": 0,
+            "slippageRate": 0,
+            "stopLoss": -0.5,
+            "takeProfit": 9.99,
+        },
+    )
+
+    assert result["tradeCount"] == 1
+    assert result["roundTripTrades"][0]["exitSnapshotId"] == "s3"
+    assert result["roundTripTrades"][0]["reason"] == "到达最大持有快照"
+
+
 def test_early_big_move_v3_a_main_risk_filter_only_blocks_false_strength_a_main() -> None:
     normal_a = _early_big_move_v2_signal(tier="A_MAIN", zero_cross="hold")
     weak_a = _early_big_move_v2_signal(tier="A_MAIN", zero_cross="hold")

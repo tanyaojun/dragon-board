@@ -142,6 +142,10 @@ export interface RankTrendAnalysisResult {
         drawdownFromPeak: number
         hotZoneStreak: number
         rankPathCommitment: number
+        momentumShort: number
+        momentumMid: number
+        momentumLong: number
+        momentumAcceleration: number
         riskPressure: number
         divergenceSeverity: number
         overheatSeverity: number

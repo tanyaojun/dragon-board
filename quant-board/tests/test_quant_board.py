@@ -513,7 +513,7 @@ def test_ranktrend_lifecycle_decision_outputs_discovery_diagnostic() -> None:
     assert any("漏选" in reason for reason in cycle["decision"]["discovery"]["reasons"])
 
 
-def test_ranktrend_lifecycle_decision_vetoes_last_jump_without_path_commitment() -> None:
+def test_ranktrend_lifecycle_decision_cautions_last_jump_without_path_commitment() -> None:
     from backend.analysis.ranktrend import lifecycle_decision
 
     decision = lifecycle_decision(
@@ -536,8 +536,41 @@ def test_ranktrend_lifecycle_decision_vetoes_last_jump_without_path_commitment()
     )
 
     assert decision["evidence"]["rankPathCommitment"] < 0.45
-    assert decision["action"] == "veto"
+    assert decision["action"] == "caution"
     assert any("承接" in reason for reason in decision["reasons"])
+
+
+def test_ranktrend_lifecycle_decision_does_not_veto_weak_path_when_mid_long_commit() -> None:
+    from backend.analysis.ranktrend import lifecycle_decision
+
+    decision = lifecycle_decision(
+        "expansion",
+        "expansion",
+        "cooling->expansion",
+        86,
+        {
+            "rankVelocity": 20.13,
+            "rankAcceleration": 20.13,
+            "drawdownFromPeak": 0,
+            "hotZoneStreak": 0,
+            "rankPathCommitment": 0.373,
+        },
+        {
+            "pressure": 0.05,
+            "divergence": {"severity": 0.0},
+            "overheat": {"severity": 0.08},
+        },
+        {
+            "short": 17.03,
+            "mid": 16.61,
+            "long": 36.07,
+            "acceleration": 23.51,
+        },
+    )
+
+    assert decision["evidence"]["rankPathCommitment"] < 0.45
+    assert decision["action"] != "veto"
+    assert not any("一票否决" in reason for reason in decision["reasons"])
 
 
 def test_ranktrend_lifecycle_decision_preserves_low_long_big_move_when_path_commits() -> None:
@@ -567,7 +600,81 @@ def test_ranktrend_lifecycle_decision_preserves_low_long_big_move_when_path_comm
     assert not any("长周期" in reason for reason in decision["reasons"])
 
 
-def test_ranktrend_compose_strategy_respects_lifecycle_veto_for_candidate_pool() -> None:
+def test_ranktrend_lifecycle_decision_flags_low_visibility_ignition_commitment() -> None:
+    from backend.analysis.ranktrend import lifecycle_decision
+
+    decision = lifecycle_decision(
+        "ignition",
+        "ignition",
+        "cooling->ignition",
+        80,
+        {
+            "rankVelocity": 22.24,
+            "rankAcceleration": 22.11,
+            "drawdownFromPeak": 0,
+            "hotZoneStreak": 0,
+            "rankPathCommitment": 0.66,
+        },
+        {
+            "pressure": 0.18,
+            "divergence": {"severity": 0.1},
+            "overheat": {"severity": 0.22},
+        },
+        {
+            "short": 21.83,
+            "mid": 28.95,
+            "long": 23.83,
+            "acceleration": 24.29,
+        },
+    )
+
+    assert decision["evidence"]["hotZoneStreak"] == 0
+    assert decision["evidence"]["rankPathCommitment"] < 0.7
+    assert decision["action"] == "caution"
+    assert any("低可见度" in reason for reason in decision["reasons"])
+
+
+def test_ranktrend_compose_strategy_keeps_low_visibility_b_ignition_as_caution_candidate() -> None:
+    from backend.analysis.ranktrend import compose_strategy
+
+    technical = {
+        "signals": {
+            "direction": {"signal": "buy"},
+            "acceleration": {"signal": "buy"},
+        },
+        "macd": {"cross": "none"},
+        "momentumProfile": {
+            "short": 21.83,
+            "mid": 28.95,
+            "long": 23.83,
+            "acceleration": 24.29,
+        },
+    }
+    cycle = {
+        "stage": "ignition",
+        "decision": {
+            "action": "caution",
+            "reasons": ["生命周期B识别到低可见度首段点火，承接尚未扩散，防止抢占后续高质量仓位。"],
+        },
+    }
+    risk = {
+        "pressure": 0.18,
+        "divergence": {"severity": 0.1},
+        "overheat": {"severity": 0.22},
+    }
+
+    strategy = compose_strategy(
+        technical,
+        cycle,
+        risk,
+        {"stage": "高潮", "riskLevel": "中", "confidence": 80},
+    )
+
+    assert strategy["candidateTier"] == "B_IGNITION"
+    assert any("低可见度" in reason for reason in strategy["reasons"])
+
+
+def test_ranktrend_compose_strategy_keeps_structural_tier_when_lifecycle_vetoes() -> None:
     from backend.analysis.ranktrend import compose_strategy
 
     technical = {
@@ -577,10 +684,10 @@ def test_ranktrend_compose_strategy_respects_lifecycle_veto_for_candidate_pool()
         },
         "macd": {"cross": "none"},
         "momentumProfile": {
-            "short": 0,
-            "mid": 5,
+            "short": 8,
+            "mid": 6,
             "long": 2,
-            "acceleration": 1,
+            "acceleration": 4,
         },
     }
     cycle = {
@@ -600,7 +707,7 @@ def test_ranktrend_compose_strategy_respects_lifecycle_veto_for_candidate_pool()
         {"stage": "发酵", "riskLevel": "低", "confidence": 80},
     )
 
-    assert strategy["candidateTier"] not in {"A_MAIN", "B_IGNITION"}
+    assert strategy["candidateTier"] == "A_MAIN"
     assert any("生命周期" in reason for reason in strategy["reasons"])
 
 

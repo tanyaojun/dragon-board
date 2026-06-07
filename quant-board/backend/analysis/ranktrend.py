@@ -674,6 +674,7 @@ def lifecycle_decision(
     confidence: float,
     metrics: dict[str, Any],
     risk: dict[str, Any] | None = None,
+    momentum: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     reasons: list[str] = []
     action = "caution"
@@ -686,18 +687,39 @@ def lifecycle_decision(
     discovery_reasons: list[str] = []
     high_risk_conflict = risk_pressure >= 0.75 or (divergence_severity >= 0.8 and overheat_severity >= 0.7)
     rank_path = float(metrics.get("rankPathCommitment", 0.5))
+    momentum = momentum if isinstance(momentum, dict) else {}
+    momentum_short = float(momentum.get("short") or 0)
+    momentum_mid = float(momentum.get("mid") or 0)
+    momentum_long = float(momentum.get("long") or 0)
+    momentum_acceleration = float(momentum.get("acceleration") or 0)
+    mid_long_committed = momentum_mid >= 15 and momentum_long >= 15 and momentum_acceleration >= 8
     weak_path_commitment = (
         rank_path < 0.45
         and float(metrics.get("rankVelocity") or 0) > 18
         and float(metrics.get("rankAcceleration") or 0) > 12
+        and not mid_long_committed
         and stage in ("ignition", "expansion")
+    )
+    low_visibility_ignition = (
+        stage == "ignition"
+        and transition == "cooling->ignition"
+        and int(metrics.get("hotZoneStreak") or 0) == 0
+        and rank_path < 0.7
+        and float(metrics.get("rankVelocity") or 0) > 18
+        and float(metrics.get("rankAcceleration") or 0) > 12
+        and momentum_short >= 18
+        and momentum_mid >= 18
+        and momentum_acceleration >= 18
     )
     if stage == "reversal" or raw == "reversal":
         action = "veto"
         reasons.append("生命周期进入反转路径，辅助决策一票否决。")
     elif weak_path_commitment:
-        action = "veto"
-        reasons.append("生命周期B识别到最后一跳过强但整段承接不足，按假突破路径一票否决。")
+        action = "caution"
+        reasons.append("生命周期B识别到最后一跳过强但整段承接不足，按假突破路径谨慎观察。")
+    elif low_visibility_ignition:
+        action = "caution"
+        reasons.append("生命周期B识别到低可见度首段点火，承接尚未扩散，防止抢占后续高质量仓位。")
     elif high_risk_conflict and stage in ("ignition", "expansion"):
         action = "veto"
         reasons.append("生命周期虽处于点火/扩散，但风险背离与过热证据明确反对，辅助决策一票否决。")
@@ -730,6 +752,10 @@ def lifecycle_decision(
             "drawdownFromPeak": metrics.get("drawdownFromPeak", 0),
             "hotZoneStreak": metrics.get("hotZoneStreak", 0),
             "rankPathCommitment": rank_path,
+            "momentumShort": momentum_short,
+            "momentumMid": momentum_mid,
+            "momentumLong": momentum_long,
+            "momentumAcceleration": momentum_acceleration,
             "riskPressure": risk_pressure,
             "divergenceSeverity": divergence_severity,
             "overheatSeverity": overheat_severity,
@@ -892,7 +918,12 @@ def compose_strategy(
     }
     tier = "N_NEUTRAL"
     reasons: list[str] = []
-    lifecycle_action = str(((cycle.get("decision") or {}).get("action") or ""))
+    lifecycle_decision_data = cycle.get("decision") or {}
+    lifecycle_action = str((lifecycle_decision_data.get("action") or ""))
+    lifecycle_reasons = lifecycle_decision_data.get("reasons") if isinstance(lifecycle_decision_data.get("reasons"), list) else []
+    lifecycle_low_visibility_ignition = lifecycle_action == "caution" and any(
+        "低可见度" in str(reason) for reason in lifecycle_reasons
+    )
 
     if hotlist_stage in ("退潮", "冰点"):
         if momentum["short"] <= c.tierExitRiskShortMomentumMax or momentum["acceleration"] <= c.tierExitRiskAccelMax or risk["pressure"] >= c.tierExitRiskPressureMin:
@@ -909,7 +940,8 @@ def compose_strategy(
 
     if lifecycle_action == "veto":
         reasons.append("生命周期辅助决策一票否决，阻止进入 A/B 候选池")
-    elif stage in ("reversal", "cooling") and (momentum["short"] <= c.tierExitRiskShortMomentumMax or momentum["acceleration"] <= c.tierExitRiskAccelMax or risk["pressure"] >= c.tierExitRiskPressureMin):
+
+    if stage in ("reversal", "cooling") and (momentum["short"] <= c.tierExitRiskShortMomentumMax or momentum["acceleration"] <= c.tierExitRiskAccelMax or risk["pressure"] >= c.tierExitRiskPressureMin):
         tier = "D_EXIT_RISK"
         reasons.append("生命周期进入反转/冷却，短周期动量或风险压力转弱")
     elif stage == "crowded" or (momentum["long"] >= c.tierCrowdedLongMomentumMin and (momentum["acceleration"] <= c.tierCrowdedAccelMax or risk["pressure"] >= c.tierCrowdedRiskPressureMin)):
@@ -921,6 +953,8 @@ def compose_strategy(
     elif stage == "ignition" and momentum["short"] >= c.tierBIgnitionShortMomentumMin and momentum["acceleration"] >= c.tierBIgnitionAccelMin and allow_b_ignition and risk["pressure"] < c.tierBIgnitionRiskPressureMax:
         tier = "B_IGNITION"
         reasons.append("点火阶段短周期冲击增强，热榜情绪支持B_IGNITION")
+        if lifecycle_low_visibility_ignition:
+            reasons.append("生命周期B低可见度点火诊断生效，B_IGNITION保留候选但排序降权")
     elif hotlist_stage == "启动" and stage == "expansion" and trend_buy:
         reasons.append("热榜启动期，A_MAIN暂缓，等待扩散确认")
     elif hotlist_risk == "高" and trend_buy:
@@ -1076,6 +1110,7 @@ class RankTrendPythonEngine:
             cycle["confidence"],
             cycle["metrics"],
             risk,
+            technical.get("momentumProfile"),
         )
         decision = compose_decision(technical, cycle, risk, self.config)
         strategy = compose_strategy(technical, cycle, risk, frame.get("hotlistSentiment"), config=self.config)

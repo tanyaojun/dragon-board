@@ -685,6 +685,7 @@ export class RankTrendAnalyzer {
     let cycle = analyzeAttentionCycle({
       ranks: analysisRanks,
       percentiles: analysisPercentiles,
+      momentumProfile: technical.momentumProfile,
     })
     const risk = analyzeRiskSignals({
       currentPercentile,
@@ -697,6 +698,7 @@ export class RankTrendAnalyzer {
     cycle = analyzeAttentionCycle({
       ranks: analysisRanks,
       percentiles: analysisPercentiles,
+      momentumProfile: technical.momentumProfile,
       risk: {
         pressure: risk.pressure,
         divergenceSeverity: risk.divergence.severity,

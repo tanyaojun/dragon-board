@@ -1230,3 +1230,241 @@ Implementation update 2:
 Next:
 
 - 先做 4 月/5 月 V3 可入场信号层复核，统计新 B veto 是否真正命中亏损假突破，以及是否误杀 `603459` 等大肉；未验证前不跑完整策略复盘、不改默认 V3。
+
+### Phase 33 Signal-Layer Review: 4月/5月 V3 可入场信号
+
+- **Status:** complete
+- Actions taken:
+  - 按 `planning-with-files` 恢复长测计划上下文，确认 Phase 33 当前任务是先做信号层复核，而不是直接复跑。
+  - 读取 `execution.py`、`ranktrend.py`、`services.py` 和 Mongo research repository，确认执行层对比点。
+  - 用本地只读脚本加载 `dragonboard_live / half_hour` 的 4 月、5 月 frames，调用当前 `RankTrendPythonEngine().replay()` 生成 signals。
+  - 用 `TradeSimulator._is_early_big_move_*` 静态判断统计 base early structure、no-lifecycle、current V3、fusion 候选集合。
+  - 用原 V3 run 的 `backtest_trades` 按 `(entrySignalSnapshotId, code)` 回连当前 replay signal，判断新 B 是否会 veto 原交易。
+
+Key results:
+
+| Window | signals | base early structure | base veto | current V3 | fusion |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 4月 | `20237` | `467` | `90` | `40` | `40` |
+| 5月 | `34770` | `968` | `169` | `107` | `107` |
+
+Original V3 trade replay:
+
+| Window | original trades | original winRate | original profit | B veto trades | veto losses | veto wins | kept profit on original path |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 4月 | `10` | `90.0%` | `+31,245.40` | `6` | `1` | `5` | `+18,419.30` |
+| 5月 | `17` | `64.7%` | `+127,369.81` | `4` | `2` | `2` | `+127,716.42` |
+
+Findings:
+
+- 新 B veto 命中 `000070 特发信息`：`rankPathCommitment=0.112`，止损亏损，符合“最后一跳猛但整段承接不足”。
+- 新 B 也命中 5 月 `301526 国际复材`、`001309 德明利` 两个弱/亏损样本。
+- 新 B 没有误杀 5 月重点大肉 `300308`、`300502`、`603459`、`301217`；其中 `603459` 低 long 但路径承接强，保持 `allow`。
+- 但新 B 仍没挡住 5 月核心亏损 `603773`、`301666`、`002281`，三者当前均为 `allow`。
+- 4 月误杀严重：原 V3 10 笔里 B veto 6 笔，其中 5 笔盈利，原路径净移除正利润。
+
+Decision:
+
+- 不复跑完整策略；信号层复核未达“没问题可以复跑”的门槛。
+- 下一步先收窄 `rankPathCommitment` veto：它不能只凭最后一跳占比一票否决，必须叠加更明确的失败确认，避免误杀 4 月盈利票。
+
+### Phase 33 Narrowed rankPathCommitment veto
+
+- **Status:** complete
+- Actions taken:
+  - 按 TDD 新增 TS/Python 失败测试：
+    - 弱承接且无中长承接仍应 veto。
+    - 弱承接但中长动量已建立时，不能只凭路径承接弱一票否决。
+  - TS `cycle.decision.evidence` 增加 `momentumShort/momentumMid/momentumLong/momentumAcceleration`。
+  - TS `RankTrendAnalyzer` 把 `technical.momentumProfile` 传入 `analyzeAttentionCycle()`。
+  - Python `lifecycle_decision()` 增加可选 `momentum` 参数，`RankTrendPythonEngine._build_signal()` 传入 `technical["momentumProfile"]`。
+  - weak path veto 收窄为：路径承接弱 + 最后一跳强 + 加速度强 + 点火/扩散，且中长动量承接未建立。
+  - 复核 4 月/5 月信号层与原 V3 成交路径。
+  - 复跑 4 月/5 月 `ranktrend_early_big_move_v3` 与 `ranktrend_early_big_move_v3_lifecycle_fusion`，口径为 `half_hour / current_bar / maxHoldingBars=30`。
+
+Validation:
+
+| Command | Result |
+| --- | --- |
+| `pnpm exec vitest run src/services/rankTrend/__tests__/attentionCycleAnalyzer.test.ts` | `10 passed` |
+| `pytest tests/test_quant_board.py -k "weak_path_when_mid_long_commit or vetoes_last_jump_without_path_commitment or lifecycle_decision_contract" -q` | `3 passed` |
+| `pnpm test:ranktrend` | `13 files / 140 tests passed` |
+| `pytest tests/test_trade_simulator_round_trips.py tests/test_quant_board.py -k "lifecycle_fusion or lifecycle_decision or lifecycle_entry or early_big_move_v3" -q` | `24 passed` |
+
+Signal-layer effect:
+
+| Window | base veto before | base veto after | 原 V3 被 veto before | 原 V3 被 veto after |
+| --- | ---: | ---: | ---: | ---: |
+| 4月 | `90` | `45` | `6` | `4` |
+| 5月 | `169` | `70` | `4` | `2` |
+
+Rerun results:
+
+| Window | Strategy | Run ID | totalReturn | winRate | trades | maxDrawdown | stops |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |
+| 4月 | current V3 | `bt_aeb105e5cb6c401d` | `+4.33%` | `70.00%` | `10` | `-3.53%` | `0` |
+| 4月 | lifecycle_fusion | `bt_ddbdb8c0424e4279` | `+4.33%` | `70.00%` | `10` | `-3.53%` | `0` |
+| 5月 | current V3 | `bt_6a450032ac644fe0` | `+8.63%` | `62.50%` | `16` | `-4.51%` | `3` |
+| 5月 | lifecycle_fusion | `bt_327565ed14484c70` | `+8.63%` | `62.50%` | `16` | `-4.51%` | `3` |
+
+Findings:
+
+- 收窄后 B veto 更准：5 月原路径 veto 只剩 2 笔，且都是亏损。
+- 但完整复跑仍低于历史 V3：4 月从 `+6.76%/90.00%` 降为 `+4.33%/70.00%`；5 月从 `+14.81%/64.71%` 降为 `+8.63%/62.50%`。
+- current V3 与 lifecycle_fusion 一致，说明 B veto 已在 `compose_strategy/candidateTier` 层提前生效。
+- 收益下降主因是路径替换，不是简单 veto 误杀：5 月删掉亏损后，资金转入 `000657`，该票贡献 `-30,992.56`，并挤掉 `603459` 大肉。
+- `603459` 在信号层仍为 `allow` 且 V3/fusion 可入场，不是被 B 直接否决，而是被前序仓位路径挤掉。
+
+Next:
+
+- 下一轮不要继续扩大 `rankPathCommitment` veto。
+- 聚焦 `B_IGNITION` 低可见度点火/仓位挤占，基于 `000657` vs `603459` 的真实路径写失败测试。
+
+### Phase 33 B_IGNITION low-visibility ignition review
+
+- **Status:** complete
+- Actions taken:
+  - 按 TDD 新增 TS/Python 失败测试，覆盖 `000657 中钨高新` 这类首段点火低可见度抢仓风险。
+  - 将生命周期本体语义收窄为 `caution` 诊断，不把低可见度首段点火直接全局 `veto`。
+  - 在 Python `compose_strategy()` 的 B_IGNITION 融合点消费该 `caution`：若 B 标记“低可见度首段点火”，则暂缓进入 `B_IGNITION` 候选池。
+  - 保持 A_MAIN 与已扩散路径不受该诊断影响，避免把 B 变回独立买卖主策略。
+  - 只读复核 4 月/5 月信号层，并复跑 4 月/5 月 `current_bar / maxHoldingBars=30`。
+
+Validation:
+
+| Command | Result |
+| --- | --- |
+| `pnpm exec vitest run src/services/rankTrend/__tests__/attentionCycleAnalyzer.test.ts` | `11 passed` |
+| `pytest tests/test_quant_board.py -k "low_visibility_ignition_commitment or blocks_low_visibility or weak_path_when_mid_long_commit or vetoes_last_jump_without_path_commitment or lifecycle_decision_contract" -q` | `5 passed` |
+| `pnpm test:ranktrend` | `13 files / 141 tests passed` |
+| `pytest tests/test_trade_simulator_round_trips.py tests/test_quant_board.py -k "lifecycle_fusion or lifecycle_decision or lifecycle_entry or early_big_move_v3" -q` | `25 passed` |
+
+Signal-layer findings:
+
+- `000657@2026-05-13 10:30` 从 `B_IGNITION` 降为 `N_NEUTRAL`，`cycle.decision.action=caution`，原因包含“低可见度首段点火”。
+- 5 月原 V3 路径被 veto 的交易切片为 3 条，其中 2 条亏损、1 条极小盈利，veto 合计约 `-3,444.51`，没有因为低可见度诊断扩大误杀。
+- 4 月原路径仍存在 `rankPathCommitment` 方向的历史误杀问题，说明不能继续扩大承接质量 veto。
+
+Rerun results:
+
+| Window | Strategy | Run ID | totalReturn | winRate | trades | maxDrawdown | stops |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |
+| 4月 | current V3 | `bt_8e495a48dc024110` | `+2.97%` | `60.00%` | `10` | `-3.54%` | `1` |
+| 4月 | lifecycle_fusion | `bt_596abcbebc9c43f6` | `+2.97%` | `60.00%` | `10` | `-3.54%` | `1` |
+| 5月 | current V3 | `bt_c68f244cf33a40fa` | `+7.64%` | `62.50%` | `16` | `-3.75%` | `3` |
+| 5月 | lifecycle_fusion | `bt_ea1d956df3c24758` | `+7.64%` | `62.50%` | `16` | `-3.75%` | `3` |
+
+Findings:
+
+- 低可见度点火诊断命中了 `000657` 这类仓位挤占风险，但完整复跑仍低于历史最佳 V3。
+- 5 月收益从上一轮同代码 `+8.63%` 降到 `+7.64%`，胜率仍为 `62.50%`；这说明拦掉 `000657` 不是充分条件，资金会继续进入其它替代路径。
+- 4 月收益进一步低于历史 V3，说明当前 B 仍有路径替换副作用，不能采用为默认策略。
+- 本轮结论是“诊断方向有效，但交易收益未达标”，不应继续简单扩大 B veto。
+
+Next:
+
+- 暂不再扩大生命周期硬否决。
+- 下一步应分析替代入场路径本身的排序/仓位质量：为什么删除 `000657` 后资金没有等到 `603459`，而是进入其它弱路径。
+- 可优先做“B caution 降权排序”而不是“B caution 硬过滤”，目标是减少抢仓但不触发新的路径替换。
+
+### Phase 33 Sorting boundary and caution rerun
+
+- **Status:** complete
+- Actions taken:
+  - 按 TDD 将低可见度点火从“删除 B_IGNITION 候选”改为“保留候选 + 同等结构排序降权”。
+  - 拆开 `compose_strategy()` 与 execution 职责：候选分层保留 RankTrend 结构 A/B，`ranktrend_early_big_move_v3_lifecycle_fusion` 执行入口继续消费 B veto。
+  - 将 `rankPathCommitment` 承接不足从硬 `veto` 降为 `caution`，避免误杀 4 月盈利路径。
+  - 排序降权只作用于低可见度 caution，不对所有 caution 一刀切降权。
+  - 复跑 4 月/5 月 V3 与 lifecycle_fusion，口径为 `half_hour / current_bar / maxHoldingBars=30`。
+
+Validation:
+
+| Command | Result |
+| --- | --- |
+| `pnpm test:ranktrend` | `13 files / 141 tests passed` |
+| `pytest tests/test_trade_simulator_round_trips.py tests/test_quant_board.py -k "lifecycle_fusion or lifecycle_decision or lifecycle_entry or early_big_move_v3 or low_visibility" -q` | `27 passed` |
+
+Rerun results:
+
+| Window | Strategy | Run ID | totalReturn | winRate | trades | maxDrawdown | stops |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |
+| 4月 | V3 | `bt_5943a9c125484bd3` | `+8.97%` | `90.00%` | 10 | `-2.68%` | 1 |
+| 4月 | lifecycle_fusion | `bt_3874b02c9bc3444a` | `+8.97%` | `90.00%` | 10 | `-2.68%` | 1 |
+| 5月 | V3 | `bt_66a2b8b195914ec7` | `+11.32%` | `58.82%` | 17 | `-4.55%` | 3 |
+| 5月 | lifecycle_fusion | `bt_e4e30e6dbf0b4946` | `+11.32%` | `58.82%` | 17 | `-4.55%` | 3 |
+
+Combined:
+
+- V3：`+20.29%` totalReturn sum，`19/27 = 70.37%` 胜率。
+- lifecycle_fusion：`+20.29%` totalReturn sum，`19/27 = 70.37%` 胜率。
+
+Signal review:
+
+- `603459` 被保留，B action=`allow`，利润 `+49,390.17`。
+- `000657` 未进入实际成交路径。
+- `000070`、`301526`、`001309` 被 B 标记为承接不足 `caution`，但不再硬删。
+- `002281`、`301666` 仍为 B `allow`，不是当前承接不足规则能解决的亏损来源。
+
+Next:
+
+- 当前已达到 `20%+ / 70%+` 目标；后续若继续推进，应优先研究 `002281/301666/603773` 的亏损形态，而不是扩大生命周期硬否决。
+
+### Phase 33 Continuous 4-5月 strict rerun
+
+- **Status:** complete
+- Actions taken:
+  - 用户指出月度 `+8.97% + +11.32%` 不能冒充单次连续资金路径。
+  - 按同一研究口径复跑 `2026-04-01~2026-05-31` 单次连续窗口。
+  - 只跑 `ranktrend_early_big_move_v3_lifecycle_fusion`，不做月度相加。
+
+Rerun result:
+
+| Run ID | Window | totalReturn | realizedReturn | winRate | trades | maxDrawdown | Sharpe | stops | openPositions |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `bt_6bad357f332b4197` | `2026-04-01~2026-05-31` | `+24.68%` | `+21.43%` | `71.43%` | 35 | `-7.41%` | `2.8168` | 7 | 2 |
+
+Notes:
+
+- 该结果是单次连续回测，不是 4 月和 5 月两个 run 的收益相加。
+- 交易路径不同：`603459` 未进入连续路径，`000657` 也未进入连续路径。
+- 关键亏损：`000070` 止损 `-11,908.72`，`001309` 排名大幅下降+MACD死叉 `-4,189.28`，`301666` 止损 `-12,269.11`。
+- 当前连续窗口已通过 `20%+ / 70%+` 目标，但最大回撤 `-7.41%` 和 7 笔止损仍是下一轮优化重点。
+
+### Phase 33 Stop-loss attribution and B-assisted exit
+
+- **Status:** complete
+- Actions taken:
+  - 使用 `roundTripTrades` 口径拆解连续 run `bt_6bad357f332b4197`，确认 7 笔止损合计约 `-85,253.20`。
+  - 回连 `entrySignalSnapshotId + code` 到完整 `result.signals`，读取入场时 `candidateTier`、`cycle.decision`、`rankPathCommitment`、动量、主题和量能字段。
+  - 聚合发现：`weak_commitment caution` 组整体亏损但有盈利反例；`low_visibility caution` 组整体盈利但含最大止损，二者都不适合硬过滤。
+  - 离线 monkey-patch 复跑排序降权，确认单纯扩大 `caution` 或低量能排序惩罚不能改善连续路径。
+  - 离线复核退出规则，确认“B 明确反对且持仓未盈利时退出”能把连续 run 推到 `30%+ / 60%+`，同时保留大肉。
+  - 按 TDD 新增失败测试：fusion 持仓在 B veto 且未盈利时退出；盈利仓遇到 B veto 不提前退出。
+  - 最小实现：只在 `ranktrend_early_big_move_v3_lifecycle_fusion` 的退出决策中消费 `cycle.decision.action in veto/exit_watch`，且仅当 `gross_return <= 0` 时触发。
+  - 正式复跑 `2026-04-01~2026-05-31` 单次连续窗口，生成 `bt_b8c73ecf67e24d78`。
+
+Validation:
+
+| Command | Result |
+| --- | --- |
+| `pytest tests/test_trade_simulator_round_trips.py -k "lifecycle_fusion_exits_losing_position or does_not_exit_profitable_position" -q` | `2 passed` |
+| `pytest tests/test_trade_simulator_round_trips.py tests/test_quant_board.py -k "lifecycle_fusion or lifecycle_decision or lifecycle_entry or early_big_move_v3 or low_visibility" -q` | `29 passed` |
+
+Rerun result:
+
+| Run ID | Window | totalReturn | realizedReturn | winRate | trades | maxDrawdown | Sharpe | stops | B exits | openPositions |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `bt_b8c73ecf67e24d78` | `2026-04-01~2026-05-31` | `+31.00%` | `+27.74%` | `65.79%` | 38 | `-3.19%` | `3.6986` | 4 | 6 | 2 |
+
+Notes:
+
+- 该 run 是正式 `BacktestService.run_ranktrend()` 落库结果，不是月度相加，也不是离线脚本口径。
+- 新规则不改变普通 V3，不改变入场候选池，不让生命周期 B 制造买入。
+- 大肉继续通过“到达最大持有快照”退出；`603256`、`688256`、`301217`、`300394`、`000988` 等头部盈利没有被 B 提前砍掉。
+- 仍需后续研究 `301666` 这类“先大幅浮盈再回撤止损”的利润保护问题，以及 `000070` 这类早期假突破未盈利但未及时触发 B 反对的问题。
+
+Review rerun:
+
+- `bt_b8c73ecf67e24d78` 的 `+31.00% / 65.79%` 已用同窗口、同策略、同成交容量口径复现，新 run 为 `bt_682d3abc164d4177`。
+- 复现口径包含 `volumeParticipationRate=0.1`；若使用 CLI 默认 `0.05`，新 run `bt_7eaaa1f656764be8` 为 `+28.93% / 68.42%`。
+- 两个口径的退出结构一致：止损 `4` 笔、B 辅助退出 `6` 笔；差异来自成交容量约束下的部分成交金额，不是手写报告数字。

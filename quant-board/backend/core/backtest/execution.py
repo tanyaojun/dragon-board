@@ -620,6 +620,10 @@ class TradeSimulator:
         if (technical.get("macd") or {}).get("cross") == "golden":
             score += 5
         score += min(20, max(0, TradeSimulator._early_big_move_value("acceleration", signals, momentum, top_level)))
+        if TradeSimulator._lifecycle_decision_action(signal) == "caution":
+            decision_reasons = (((signal.get("rankTrend") or {}).get("cycle") or {}).get("decision") or {}).get("reasons") or []
+            if any("低可见度" in str(reason) for reason in decision_reasons):
+                score -= 0.01
         return score
 
     @staticmethod
@@ -678,6 +682,12 @@ class TradeSimulator:
             return True, "退出热榜连续3个bar"
         if gross_return <= float(config.get("stopLoss") or -0.05):
             return True, "止损"
+        if (
+            str(config.get("entryStrategy") or "") == "ranktrend_early_big_move_v3_lifecycle_fusion"
+            and gross_return <= 0
+            and TradeSimulator._lifecycle_decision_action(signal) in {"veto", "exit_watch"}
+        ):
+            return True, "生命周期B反对且未盈利"
         rank_trend = signal.get("rankTrend") or {}
         technical = rank_trend.get("technical") or {}
         raw_change = float((rank_trend.get("meta") or {}).get("rawChange") or 0)

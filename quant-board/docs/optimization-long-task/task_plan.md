@@ -721,7 +721,19 @@ v1 `checkpoint_2026-05-21_cross_market_zero_filter` 已落库，但因第一版�
 - [x] 基于已成交亏损/漏选大肉证据完成第一轮 B 语义 TDD：新增 `veto` 反对通道与 `discovery` 研究提示通道，后者不进入交易候选池。
 - [x] 对齐 TS/Python 合同：TS 在 risk 生成后重新生成 `cycle.decision`，避免 live 端 action 和 evidence 漂移。
 - [x] 下一轮 TDD 聚焦 `rankPathCommitment` / 突破承接质量：识别“最后一跳很猛但整段承接不足”的假突破，同时保护低 long 但路径连续改善的大肉形态。
-- [ ] 用 4 月/5 月 V3 可入场信号做信号层复核：统计 `rankPathCommitment` veto 数量、被拦截票、是否命中亏损来源、是否误伤大肉。
+- [x] 用 4 月/5 月 V3 可入场信号做信号层复核：统计 `rankPathCommitment` veto 数量、被拦截票、是否命中亏损来源、是否误伤大肉。
+- [x] 收窄 `rankPathCommitment` veto 语义：引入中长动量承接例外，避免只凭弱路径承接一票否决。
+- [x] 复跑 4 月/5 月 `current_bar / 30 bars`，确认当前 V3 与 fusion 一致，但收益低于历史最佳。
+- [x] 下一轮 TDD 聚焦 `B_IGNITION` 低可见度点火/仓位挤占：`000657` 被标记为低可见度首段点火并降出 `B_IGNITION`，但完整复跑仍低于历史最佳，不能采用为默认策略。
+- [x] 下一轮聚焦排序/仓位路径归因：分析删除 `000657` 后资金进入哪些替代候选，为什么没有等到 `603459`，优先验证 B caution 排序降权而不是继续硬过滤。
+- [x] 拆开候选分层与融合执行职责：`compose_strategy()` 保留 RankTrend 结构分层，B veto 只由 lifecycle fusion 执行入口消费，避免污染 V3 对照。
+- [x] 将 `rankPathCommitment` 承接不足从硬 veto 降为 caution 诊断，只保留反转/高风险冲突作为一票否决来源。
+- [x] 复跑 4 月/5 月 `current_bar / 30 bars`，fusion 达到 `+20.29%` 合计收益、`70.37%` 合并胜率。
+- [x] 复跑 `2026-04-01~2026-05-31` 单次连续回测：`bt_6bad357f332b4197`，`+24.68%`，胜率 `71.43%`，确认不是月度相加口径。
+- [x] 拆解连续 run 的 7 笔止损单，确认单纯 B caution 排序降权无法改善，真正突破口是持仓后 B 明确反对且未盈利时降低卖出门槛。
+- [x] 按 TDD 新增 fusion 专属退出规则：`cycle.decision.action in veto/exit_watch` 且持仓未盈利时提前退出；盈利仓不因 B veto 被提前砍掉。
+- [x] 复跑 `2026-04-01~2026-05-31` 单次连续回测：`bt_b8c73ecf67e24d78`，`+31.00%`，胜率 `65.79%`，最大回撤 `-3.19%`，确认突破 `30%+ / 60%+` 目标。
+- [x] Review 复核：按同一 `volumeParticipationRate=0.1` 口径重跑 `bt_682d3abc164d4177` 复现 `+31.00% / 65.79%`；CLI 默认 `0.05` 口径为 `bt_7eaaa1f656764be8`，`+28.93% / 68.42%`，后续不得混用。
 - **Status:** in_progress
 
 ## Retired Baselines

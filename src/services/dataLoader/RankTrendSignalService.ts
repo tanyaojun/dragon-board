@@ -4,6 +4,7 @@ import { rankTrendAnalyzer, type RankTrendPreparedSnapshot } from '../RankTrendA
 import { applyJumpSignal, applyRankTrendAnalysis } from '../rankTrend/compat'
 import { evaluateJumpSignal, incrementJumpBar, registerJumpEntry, unregisterJumpPosition } from '../rankTrend/jumpSignalService'
 import { jumpSignalNotifier } from '../rankTrend/JumpSignalNotifier'
+import { applyLiveV3SignalDecisions } from '../rankTrend/liveV3SignalMapper'
 import type { RankTrendAnalysisResult } from '../rankTrend/types'
 import { extraDataProjector } from './ExtraDataProjector'
 import type { StockSignalUpdate } from './types'
@@ -71,14 +72,15 @@ export class RankTrendSignalService {
       logCoverageWarning('[DataLoader] 排名趋势信号使用了不完整快照样本:', coverageWarning)
     }
 
-    // 跳跃检测：在 RankTrend 分析结果上运行入场/出场评估
-    this.applyJumpSignals()
+    const mergedStocks = this.updateStockSignals(updates)
+    // 跳跃检测与 V3 实盘信号都应基于本轮最新 rankTrend 结果计算。
+    this.applyJumpSignals(mergedStocks)
+    this.applyLiveV3Signals(mergedStocks)
 
-    return this.updateStockSignals(updates)
+    return mergedStocks
   }
 
-  private applyJumpSignals(): void {
-    const stocks = dataLayer.getStocks()
+  private applyJumpSignals(stocks: any[] = dataLayer.getStocks()): void {
     if (!stocks.length) return
 
     incrementJumpBar()
@@ -106,6 +108,11 @@ export class RankTrendSignalService {
 
       applyJumpSignal(stock, result)
     }
+  }
+
+  private applyLiveV3Signals(stocks: any[]): void {
+    if (!stocks.length) return
+    applyLiveV3SignalDecisions(stocks)
   }
 
   async preloadSnapshots(codes: string[]): Promise<RankTrendPreparedSnapshot[]> {
@@ -139,28 +146,8 @@ export class RankTrendSignalService {
     }
 
     // 跳跃检测
-    const stockCodeSet = new Set(merged.map((s: any) => s.code))
-    for (const stock of merged) {
-      const rankTrend = stock.rankTrend as RankTrendAnalysisResult | undefined
-      if (!rankTrend?.meta?.code) continue
-
-      const percentiles = rankTrendAnalyzer.getCachedPercentiles(stock.code)
-      if (!percentiles) continue
-
-      const result = evaluateJumpSignal(stock, rankTrend, percentiles, stockCodeSet.has(stock.code))
-
-      if (result.isEntry) {
-        const price = Number(stock.price || stock.lastTradePrice || 0)
-        registerJumpEntry(stock.code, stock.name || '', price, '')
-        jumpSignalNotifier.notifyEntry(stock, result)
-      }
-      if (result.isExit) {
-        unregisterJumpPosition(stock.code)
-        jumpSignalNotifier.notifyExit(stock, result)
-      }
-
-      applyJumpSignal(stock, result)
-    }
+    this.applyJumpSignals(merged)
+    this.applyLiveV3Signals(merged)
 
     return merged
   }
