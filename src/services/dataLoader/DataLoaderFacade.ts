@@ -47,6 +47,12 @@ import type { RankTrendPreparedSnapshot } from '../RankTrendAnalyzer'
 export type { MergedQuoteData } from './types'
 
 const REALTIME_VOLUME_RATIO_REFRESH_DELAY_MS = 1000
+const STARTUP_VOLUME_HISTORY_TIMEOUT_MS = 5000
+
+type SignalCalculationResult = {
+  merged: any[]
+  enriched: boolean
+}
 
 /**
  * 业务编排层
@@ -293,6 +299,22 @@ class DataLoaderService {
       return await task()
     } finally {
       this.runTimings[name] = Date.now() - start
+    }
+  }
+
+  private async withTimeout<T>(task: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | null = null
+    try {
+      return await Promise.race([
+        task,
+        new Promise<T>((_, reject) => {
+          timer = setTimeout(() => {
+            reject(new Error(`${label} timeout after ${timeoutMs}ms`))
+          }, timeoutMs)
+        }),
+      ])
+    } finally {
+      if (timer) clearTimeout(timer)
     }
   }
 
@@ -755,7 +777,11 @@ class DataLoaderService {
     const codesArray = Array.from(allCodes)
     this.updateProgress(this.startupProgress.historyStart, '加载历史成交量索引...', 'merge')
     const volumeHistoryMap = await this.measureStartupStep('history', () =>
-      this.buildVolumeHistoryMap(codesArray).catch((error) => {
+      this.withTimeout(
+        this.buildVolumeHistoryMap(codesArray),
+        STARTUP_VOLUME_HISTORY_TIMEOUT_MS,
+        'volume history',
+      ).catch((error) => {
         console.warn('[DataLoader] 历史成交量索引加载失败，继续使用空索引:', error)
         return new Map<string, number[]>()
       }),
@@ -835,11 +861,14 @@ class DataLoaderService {
 
     // 8. 计算信号并回写增强字段
     this.updateProgress(this.startupProgress.signalStart, '计算排名趋势信号...', 'signal')
-    merged = await this.measureStartupStep('signal', () =>
+    const signalResult = await this.measureStartupStep('signal', () =>
       this.calculateSignals(merged, options.rankTrendSnapshotPromise),
     )
-    this.publishStocks(merged, { reason: 'signal-enriched' })
-    this.updateProgress(this.startupProgress.signalEnd, '排名趋势信号完成', 'signal')
+    merged = signalResult.merged
+    if (signalResult.enriched) {
+      this.publishStocks(merged, { reason: 'signal-enriched' })
+      this.updateProgress(this.startupProgress.signalEnd, '排名趋势信号完成', 'signal')
+    }
 
     return merged
   }
@@ -901,7 +930,9 @@ class DataLoaderService {
     snapshotPromise?: Promise<RankTrendPreparedSnapshot[]>,
   ): Promise<void> {
     try {
-      const enriched = await this.calculateSignals(baseMerged, snapshotPromise)
+      const result = await this.calculateSignals(baseMerged, snapshotPromise)
+      if (!result.enriched) return
+      const enriched = result.merged
       if (this.stockPublishVersion !== basePublishVersion) {
         if (this.tryMergeStaleSignalEnrichment(baseMerged, enriched)) return
         debugLog('[DataLoader] 跳过过期的后台排名趋势信号增强')
@@ -1011,13 +1042,16 @@ class DataLoaderService {
   private async calculateSignals(
     merged: any[],
     snapshotPromise?: Promise<RankTrendPreparedSnapshot[]>,
-  ): Promise<any[]> {
+  ): Promise<SignalCalculationResult> {
     try {
       const snapshots = snapshotPromise ? await snapshotPromise : undefined
-      return await rankTrendSignalService.applySignalsToMerged(merged, { snapshots })
+      return {
+        merged: await rankTrendSignalService.applySignalsToMerged(merged, { snapshots }),
+        enriched: true,
+      }
     } catch (error) {
       console.warn('[DataLoader] 排名趋势信号增强失败，保留基础热榜数据:', error)
-      return merged
+      return { merged, enriched: false }
     }
   }
   getLoadingStatus() {

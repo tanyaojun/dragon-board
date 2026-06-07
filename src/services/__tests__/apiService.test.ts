@@ -330,6 +330,45 @@ describe('ApiService', () => {
     expect(requestedUrl).toContain('codes=600001%2C600002')
   })
 
+  it('keeps ranktrend rank series requests alive beyond 15 seconds before timing out', async () => {
+    vi.useFakeTimers()
+    const api = new ApiService()
+    let aborted = false
+
+    const fetchMock = vi.fn((_url: string, init?: RequestInit) => {
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener(
+          'abort',
+          () => {
+            aborted = true
+            reject(new DOMException('signal is aborted without reason', 'AbortError'))
+          },
+          { once: true },
+        )
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const request = api
+      .getRankTrendRankSeries({}, { retries: 0 })
+      .then(
+        () => ({ ok: true as const }),
+        (error) => ({ ok: false as const, error }),
+      )
+
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(aborted).toBe(false)
+
+    await vi.advanceTimersByTimeAsync(60_000)
+    const result = await request
+    expect(result.ok).toBe(false)
+    if (result.ok) {
+      throw new Error('expected ranktrend request to abort after extended timeout')
+    }
+    expect(result.error).toMatchObject({ name: 'AbortError' })
+    expect(aborted).toBe(true)
+  })
+
   it('maps mongo snapshot record detail formal policy params to QuantBoard API', async () => {
     const api = new ApiService()
     const fetchMock = vi.fn().mockResolvedValue(

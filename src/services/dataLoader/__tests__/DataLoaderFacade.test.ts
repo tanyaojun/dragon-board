@@ -30,6 +30,8 @@ let releaseQuoteBatch: (() => void) | null = null
 let realtimePrimaryHealthy = false
 let blockIntradayVolumeHistory = false
 let releaseIntradayVolumeHistory: (() => void) | null = null
+let blockVolumeHistory = false
+let releaseVolumeHistory: (() => void) | null = null
 let startupBundle: any = null
 let startupBundleGetCount = 0
 let startupBundleSaveCount = 0
@@ -134,6 +136,11 @@ vi.mock('../VolumeHistoryService', () => ({
     async buildVolumeHistoryMap() {
       volumeHistoryRequestCount++
       if (volumeHistoryError) throw volumeHistoryError
+      if (blockVolumeHistory) {
+        await new Promise<void>((resolve) => {
+          releaseVolumeHistory = resolve
+        })
+      }
       return volumeHistoryMapResult
     }
     async buildIntradayVolumeHistoryMap() {
@@ -235,6 +242,8 @@ describe('DataLoaderFacade', () => {
     realtimePrimaryHealthy = false
     blockIntradayVolumeHistory = false
     releaseIntradayVolumeHistory = null
+    blockVolumeHistory = false
+    releaseVolumeHistory = null
     startupBundle = null
     startupBundleGetCount = 0
     startupBundleSaveCount = 0
@@ -611,6 +620,36 @@ describe('DataLoaderFacade', () => {
     releaseIntradayVolumeHistory?.()
   })
 
+  it('does not block initial startup on daily volume history loading', async () => {
+    vi.useFakeTimers()
+    blockVolumeHistory = true
+    try {
+      const { dataLoader } = await import('../../dataLoader')
+
+      const summaryPromise = dataLoader.bootstrapInitialData({ force: true })
+      await vi.advanceTimersByTimeAsync(6000)
+      const summary = await summaryPromise
+
+      expect(summary.stockCount).toBe(1)
+      expect(volumeHistoryRequestCount).toBe(1)
+      expect(dataLoader.getLoadingStatus()).toMatchObject({
+        active: false,
+        phase: 'done',
+        progress: 100,
+      })
+      expect(dataLayer.getStocks()).toEqual([
+        expect.objectContaining({
+          code: '000001',
+          name: '平安银行',
+        }),
+      ])
+    } finally {
+      blockVolumeHistory = false
+      releaseVolumeHistory?.()
+      vi.useRealTimers()
+    }
+  })
+
   it('does not write half-enriched startup bundles before RankTrend signals finish', async () => {
     blockSignalCalculation = true
     const { dataLoader } = await import('../../dataLoader')
@@ -625,6 +664,21 @@ describe('DataLoaderFacade', () => {
     await vi.waitFor(() => {
       expect(startupBundleSaveCount).toBe(1)
     })
+  })
+
+  it('does not publish signal-enriched when background RankTrend enhancement falls back to base data', async () => {
+    signalCalculationError = new Error('signal is aborted without reason')
+    signalCalculationError.name = 'AbortError'
+    const { dataLoader } = await import('../../dataLoader')
+
+    await dataLoader.bootstrapInitialData({ force: true })
+
+    expect(EventManager.getHistory(AppEvents.DATA.MERGED)).toEqual([
+      expect.objectContaining({
+        data: expect.objectContaining({ reason: 'base-merge' }),
+      }),
+    ])
+    expect(dataLayer.getStock('000001')?.rankTrend).toBeUndefined()
   })
 
   it('merges deferred RankTrend signals after realtime volume-ratio publish changes the loader version', async () => {

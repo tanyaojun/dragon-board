@@ -110,6 +110,9 @@ type ThemeResearchSummaryQueryOptions = {
   datasetId?: string
   snapshotType?: SnapshotQueryOptions['type']
 }
+
+const QUANT_BOARD_RANKTREND_READ_TIMEOUT_MS = 70000
+
 type StockNameQueryOptions = {
   market?: 'SH' | 'SZ' | 'BJ'
   type?: 'stock' | 'index' | 'etf' | 'bond'
@@ -760,7 +763,7 @@ export class ApiService {
         context: 'quant-board',
         priority: 'high',
         retries: 1,
-        timeout: 15000,
+        timeout: QUANT_BOARD_RANKTREND_READ_TIMEOUT_MS,
         cache: false,
         throwOnHttpError: true,
         ...options,
