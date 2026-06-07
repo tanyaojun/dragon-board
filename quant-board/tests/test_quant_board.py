@@ -513,6 +513,97 @@ def test_ranktrend_lifecycle_decision_outputs_discovery_diagnostic() -> None:
     assert any("漏选" in reason for reason in cycle["decision"]["discovery"]["reasons"])
 
 
+def test_ranktrend_lifecycle_decision_vetoes_last_jump_without_path_commitment() -> None:
+    from backend.analysis.ranktrend import lifecycle_decision
+
+    decision = lifecycle_decision(
+        "expansion",
+        "expansion",
+        "cooling->expansion",
+        86,
+        {
+            "rankVelocity": 35,
+            "rankAcceleration": 34,
+            "drawdownFromPeak": 0,
+            "hotZoneStreak": 0,
+            "rankPathCommitment": 0.28,
+        },
+        {
+            "pressure": 0.22,
+            "divergence": {"severity": 0.18},
+            "overheat": {"severity": 0.24},
+        },
+    )
+
+    assert decision["evidence"]["rankPathCommitment"] < 0.45
+    assert decision["action"] == "veto"
+    assert any("承接" in reason for reason in decision["reasons"])
+
+
+def test_ranktrend_lifecycle_decision_preserves_low_long_big_move_when_path_commits() -> None:
+    from backend.analysis.ranktrend import lifecycle_decision
+
+    decision = lifecycle_decision(
+        "expansion",
+        "expansion",
+        "cooling->expansion",
+        84,
+        {
+            "rankVelocity": 5,
+            "rankAcceleration": 1,
+            "drawdownFromPeak": 0,
+            "hotZoneStreak": 0,
+            "rankPathCommitment": 0.72,
+        },
+        {
+            "pressure": 0.2,
+            "divergence": {"severity": 0.16},
+            "overheat": {"severity": 0.25},
+        },
+    )
+
+    assert decision["evidence"]["rankPathCommitment"] >= 0.65
+    assert decision["action"] != "veto"
+    assert not any("长周期" in reason for reason in decision["reasons"])
+
+
+def test_ranktrend_compose_strategy_respects_lifecycle_veto_for_candidate_pool() -> None:
+    from backend.analysis.ranktrend import compose_strategy
+
+    technical = {
+        "signals": {
+            "direction": {"signal": "buy"},
+            "acceleration": {"signal": "hold"},
+        },
+        "macd": {"cross": "none"},
+        "momentumProfile": {
+            "short": 0,
+            "mid": 5,
+            "long": 2,
+            "acceleration": 1,
+        },
+    }
+    cycle = {
+        "stage": "expansion",
+        "decision": {"action": "veto", "reasons": ["生命周期B否决"]},
+    }
+    risk = {
+        "pressure": 0.1,
+        "divergence": {"severity": 0.1},
+        "overheat": {"severity": 0.1},
+    }
+
+    strategy = compose_strategy(
+        technical,
+        cycle,
+        risk,
+        {"stage": "发酵", "riskLevel": "低", "confidence": 80},
+    )
+
+    assert strategy["candidateTier"] not in {"A_MAIN", "B_IGNITION"}
+    assert any("生命周期" in reason for reason in strategy["reasons"])
+
+
 def test_ranktrend_cycle_reversal_vetoes_lifecycle_entry() -> None:
     cycle = analyze_cycle([18, 8, 4, 6, 9], [82, 93, 97, 94, 89])
 

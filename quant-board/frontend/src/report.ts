@@ -83,7 +83,7 @@ export function getEquityCurve(value: unknown): Array<{ index: number; label: st
 }
 
 export function getTrades(value: unknown): unknown[] {
-  return pickArrayDeep(value, ["tradeEvents", "trade_events", "trades", "orders", "positions"]);
+  return pickArrayDeep(value, ["trades", "roundTripTrades", "round_trip_trades", "positions", "orders", "tradeEvents", "trade_events"]);
 }
 
 export function getArrayField(value: unknown, keys: string[]): unknown[] {
@@ -109,19 +109,30 @@ export function getOptimizationTrials(value: unknown): Array<Record<string, unkn
 }
 
 export function getNestedNumber(value: unknown, path: string[]): number | undefined {
-  let current: unknown = value;
-  for (const key of path) {
-    current = asRecord(current)[key];
+  for (const source of [value, asRecord(value).result]) {
+    let current: unknown = source;
+    for (const key of path) {
+      current = asRecord(current)[key];
+    }
+    const number = getNumber(current);
+    if (number !== undefined) {
+      return number;
+    }
   }
-  return getNumber(current);
+  return undefined;
 }
 
 export function getNestedString(value: unknown, path: string[]): string {
-  let current: unknown = value;
-  for (const key of path) {
-    current = asRecord(current)[key];
+  for (const source of [value, asRecord(value).result]) {
+    let current: unknown = source;
+    for (const key of path) {
+      current = asRecord(current)[key];
+    }
+    if (current !== undefined && current !== null && current !== "") {
+      return String(current);
+    }
   }
-  return current === undefined || current === null ? "" : String(current);
+  return "";
 }
 
 function countBy<T>(rows: T[], keyOf: (row: T) => string | undefined): Record<string, number> {
@@ -171,15 +182,15 @@ export function buildBacktestVerdict(
   } else if (severity === "warn" || researchGrade === "degraded") {
     level = "degraded";
     tone = "warn";
-    label = "低可信";
-    reasons.push("样本质量 degraded/warn，收益和胜率只能作为观察。");
+    label = "质量观察";
+    reasons.push("样本质量 degraded/warn，收益和胜率需要结合质量诊断解读。");
   }
 
   if (!tradeCount) {
     if (level === "usable") {
       level = "degraded";
       tone = "warn";
-      label = "低可信";
+      label = "无成交";
     }
     reasons.push("本次没有真实成交，应优先查看信号解释和撮合诊断。");
   }
@@ -397,6 +408,47 @@ export function formatDisplayTime(value: string): string {
     return `${snapshot[1]} ${snapshot[2]}`;
   }
   return value;
+}
+
+function snapshotTime(value: unknown): string {
+  const snapshot = String(value || "").match(/(?:quarter_hour|half_hour):(\d{4}-\d{2}-\d{2}):(.+)$/);
+  return snapshot ? `${snapshot[1]} ${snapshot[2]}` : "";
+}
+
+export function formatTradeTime(trade: BacktestTrade, side: "entry" | "exit"): string {
+  const snapshotId =
+    side === "entry"
+      ? trade.entrySnapshotId || trade.entrySignalSnapshotId
+      : trade.exitSnapshotId || trade.exitSignalSnapshotId;
+  const fromSnapshot = snapshotTime(snapshotId);
+  if (fromSnapshot) {
+    return fromSnapshot;
+  }
+
+  const rawTime = side === "entry" ? trade.entryTime : trade.exitTime;
+  const fromTime = formatDisplayTime(String(rawTime || ""));
+  if (fromTime !== "-") {
+    return fromTime;
+  }
+
+  const tradingDate = side === "entry" ? trade.entryTradingDate : trade.exitTradingDate;
+  return tradingDate || "-";
+}
+
+export function formatTradeFill(trade: BacktestTrade): string {
+  const fill = asRecord(trade.fillDetail || trade.fill);
+  if (!Object.keys(fill).length) {
+    return "-";
+  }
+  const parts = [
+    fill.priceSource ? `价源:${fill.priceSource}` : "",
+    fill.partial === true ? "部分成交" : "",
+    fill.snapshotPriceFallback === true ? "快照价回退" : "",
+    Array.isArray(fill.capacityReasons) && fill.capacityReasons.length
+      ? `容量:${fill.capacityReasons.slice(0, 2).join("/")}`
+      : ""
+  ].filter(Boolean);
+  return parts.length ? parts.join(" / ") : Object.keys(fill).slice(0, 3).join(" / ");
 }
 
 export function formatPercent(value: number | undefined): string {

@@ -232,6 +232,27 @@ def cycle_rank_shock(percentiles: list[float]) -> float:
     return 0.0 if not math.isfinite(std) or std < 1e-6 else (current - mean) / std
 
 
+def rank_path_commitment(percentiles: list[float]) -> float:
+    if len(percentiles) < 4:
+        return 0.5
+    window = percentiles[-8:]
+    total_improvement = max(0.0, window[-1] - window[0])
+    if total_improvement <= 0:
+        return 0.0
+    steps = [window[index] - window[index - 1] for index in range(1, len(window))]
+    positive_steps = [step for step in steps if step > 0]
+    last_step = max(0.0, steps[-1] if steps else 0.0)
+    pre_breakout_improvement = sum(positive_steps[:-1])
+    positive_step_share = len(positive_steps) / max(1, len(steps))
+    pre_breakout_share = pre_breakout_improvement / max(total_improvement, 1)
+    last_step_dominance = last_step / max(total_improvement, 1)
+    return clamp(
+        positive_step_share * 0.45 + pre_breakout_share * 0.45 + (1 - last_step_dominance) * 0.1,
+        0,
+        1,
+    )
+
+
 def momentum_data(percentiles: list[float], config: RankTrendConfig) -> dict[str, Any] | None:
     if len(percentiles) < max(config.momentumPeriods) + 1:
         return None
@@ -502,14 +523,17 @@ def analyze_cycle(ranks: list[float], percentiles: list[float]) -> dict[str, Any
     stage = current_stage or "cooling"
     raw = current_raw or "cooling"
     transition = stage if not previous_normalized or previous_normalized == stage else f"{previous_normalized}->{stage}"
+    confidence = cycle_confidence(stage, percentiles[-1] if percentiles else 0, metrics)
+    metric_values = metrics or {"rankVelocity": 0, "rankAcceleration": 0, "rankShock": 0, "hotZoneStreak": 0, "bestRecentRank": ranks[-1] if ranks else 999, "drawdownFromPeak": 0, "rankPathCommitment": 0.5}
     return {
         "rawStage": raw,
         "stage": stage,
         "previousStage": previous_normalized,
         "transition": transition,
-        "confidence": cycle_confidence(stage, percentiles[-1] if percentiles else 0, metrics),
-        "metrics": metrics or {"rankVelocity": 0, "rankAcceleration": 0, "rankShock": 0, "hotZoneStreak": 0, "bestRecentRank": ranks[-1] if ranks else 999, "drawdownFromPeak": 0},
+        "confidence": confidence,
+        "metrics": metric_values,
         "entryAdvice": entry_advice(stage, transition),
+        "decision": lifecycle_decision(raw, stage, transition, confidence, metric_values),
     }
 
 
@@ -533,6 +557,7 @@ def cycle_metrics(ranks: list[float], percentiles: list[float]) -> dict[str, Any
         "hotZoneStreak": hot_streak,
         "bestRecentRank": best,
         "drawdownFromPeak": max(0, current_rank - best),
+        "rankPathCommitment": rank_path_commitment(percentiles),
     }
 
 
@@ -640,6 +665,76 @@ def entry_advice(stage: str, transition: str) -> dict[str, Any]:
         "blocked": "处于反转阶段，应优先回避。",
     }
     return {"bias": bias, "allowed": bias == "preferred", "reason": reasons[bias]}
+
+
+def lifecycle_decision(
+    raw: str,
+    stage: str,
+    transition: str,
+    confidence: float,
+    metrics: dict[str, Any],
+    risk: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    reasons: list[str] = []
+    action = "caution"
+    risk = risk or {}
+    divergence = risk.get("divergence") if isinstance(risk.get("divergence"), dict) else {}
+    overheat = risk.get("overheat") if isinstance(risk.get("overheat"), dict) else {}
+    risk_pressure = float(risk.get("pressure") or 0)
+    divergence_severity = float(divergence.get("severity") or 0)
+    overheat_severity = float(overheat.get("severity") or 0)
+    discovery_reasons: list[str] = []
+    high_risk_conflict = risk_pressure >= 0.75 or (divergence_severity >= 0.8 and overheat_severity >= 0.7)
+    rank_path = float(metrics.get("rankPathCommitment", 0.5))
+    weak_path_commitment = (
+        rank_path < 0.45
+        and float(metrics.get("rankVelocity") or 0) > 18
+        and float(metrics.get("rankAcceleration") or 0) > 12
+        and stage in ("ignition", "expansion")
+    )
+    if stage == "reversal" or raw == "reversal":
+        action = "veto"
+        reasons.append("生命周期进入反转路径，辅助决策一票否决。")
+    elif weak_path_commitment:
+        action = "veto"
+        reasons.append("生命周期B识别到最后一跳过强但整段承接不足，按假突破路径一票否决。")
+    elif high_risk_conflict and stage in ("ignition", "expansion"):
+        action = "veto"
+        reasons.append("生命周期虽处于点火/扩散，但风险背离与过热证据明确反对，辅助决策一票否决。")
+    elif stage == "crowded":
+        action = "exit_watch"
+        reasons.append("生命周期进入拥挤路径，持仓后应进入退出观察。")
+    elif stage in ("ignition", "expansion"):
+        action = "allow"
+        reasons.append("生命周期处于点火或扩散路径，允许 RankTrend 主结构继续进入候选评估。")
+    else:
+        reasons.append("生命周期仍在冷却路径，辅助决策保持谨慎。")
+    if "->" in transition:
+        reasons.append(f"阶段路径：{transition}。")
+    if stage in ("ignition", "expansion") and float(metrics.get("rankVelocity") or 0) > 0:
+        discovery_reasons.append("生命周期存在漏选研究价值：点火/扩散路径仍在改善，但不得绕过 RankTrend 主结构直接制造买入。")
+    return {
+        "action": action,
+        "confidence": confidence,
+        "reasons": reasons,
+        "discovery": {
+            "action": "research_watch" if discovery_reasons else "none",
+            "reasons": discovery_reasons,
+        },
+        "evidence": {
+            "rawStage": raw,
+            "stage": stage,
+            "transition": transition,
+            "rankVelocity": metrics.get("rankVelocity", 0),
+            "rankAcceleration": metrics.get("rankAcceleration", 0),
+            "drawdownFromPeak": metrics.get("drawdownFromPeak", 0),
+            "hotZoneStreak": metrics.get("hotZoneStreak", 0),
+            "rankPathCommitment": rank_path,
+            "riskPressure": risk_pressure,
+            "divergenceSeverity": divergence_severity,
+            "overheatSeverity": overheat_severity,
+        },
+    }
 
 
 def analyze_risk(current_percentile: float, technical: dict[str, Any], cycle: dict[str, Any], zlje: float, zljzb: float, volume_ratio: float) -> dict[str, Any]:
@@ -797,6 +892,7 @@ def compose_strategy(
     }
     tier = "N_NEUTRAL"
     reasons: list[str] = []
+    lifecycle_action = str(((cycle.get("decision") or {}).get("action") or ""))
 
     if hotlist_stage in ("退潮", "冰点"):
         if momentum["short"] <= c.tierExitRiskShortMomentumMax or momentum["acceleration"] <= c.tierExitRiskAccelMax or risk["pressure"] >= c.tierExitRiskPressureMin:
@@ -811,7 +907,9 @@ def compose_strategy(
     allow_a_main = hotlist_missing or (hotlist_stage in ("高潮", "发酵") and hotlist_risk != "高")
     allow_b_ignition = hotlist_missing or hotlist_stage in ("高潮", "发酵", "启动")
 
-    if stage in ("reversal", "cooling") and (momentum["short"] <= c.tierExitRiskShortMomentumMax or momentum["acceleration"] <= c.tierExitRiskAccelMax or risk["pressure"] >= c.tierExitRiskPressureMin):
+    if lifecycle_action == "veto":
+        reasons.append("生命周期辅助决策一票否决，阻止进入 A/B 候选池")
+    elif stage in ("reversal", "cooling") and (momentum["short"] <= c.tierExitRiskShortMomentumMax or momentum["acceleration"] <= c.tierExitRiskAccelMax or risk["pressure"] >= c.tierExitRiskPressureMin):
         tier = "D_EXIT_RISK"
         reasons.append("生命周期进入反转/冷却，短周期动量或风险压力转弱")
     elif stage == "crowded" or (momentum["long"] >= c.tierCrowdedLongMomentumMin and (momentum["acceleration"] <= c.tierCrowdedAccelMax or risk["pressure"] >= c.tierCrowdedRiskPressureMin)):
@@ -971,6 +1069,14 @@ class RankTrendPythonEngine:
         jump = detect_rank_jumps(percentiles, ranks, delta_pct=self.config.jumpDeltaPct)
         cycle = analyze_cycle(ranks, percentiles)
         risk = analyze_risk(current_percentile, technical, cycle, fallback["zlje"], fallback["zljzb"], fallback["volumeRatio"])
+        cycle["decision"] = lifecycle_decision(
+            cycle["rawStage"],
+            cycle["stage"],
+            cycle["transition"],
+            cycle["confidence"],
+            cycle["metrics"],
+            risk,
+        )
         decision = compose_decision(technical, cycle, risk, self.config)
         strategy = compose_strategy(technical, cycle, risk, frame.get("hotlistSentiment"), config=self.config)
         sample_status = "ok" if len(percentiles) >= get_technical_min_samples(self.config) else "degraded" if len(percentiles) >= 5 else "insufficient"

@@ -68,6 +68,9 @@ class BacktestEngine:
                 "maxDrawdown": report["tradeSimulation"]["maxDrawdown"],
                 "winRate": report["tradeSimulation"]["winRate"],
                 "tradeCount": report["tradeSimulation"]["tradeCount"],
+                "roundTripTrades": report["tradeSimulation"].get("roundTripTrades") or [],
+                "exitSliceWinRate": report["tradeSimulation"].get("exitSliceWinRate"),
+                "exitSliceCount": report["tradeSimulation"].get("exitSliceCount"),
                 "trades": report["tradeSimulation"]["trades"],
                 "tradeEvents": report["tradeSimulation"]["tradeEvents"],
                 "equityCurve": report["tradeSimulation"]["equityCurve"],
@@ -129,6 +132,8 @@ class BacktestEngine:
 
         low_hotlist_count = int(stats.get("lowHotlistCount") or 0)
         empty_hotlist_count = int(stats.get("emptyHotlistCount") or 0)
+        raw_empty_hotlist_count = int(stats.get("rawEmptyHotlistCount") or 0)
+        synthesized_empty_hotlist_count = int(stats.get("synthesizedEmptyHotlistCount") or 0)
         target_frames = int(stats.get("targetFrames") or sample_diagnostics.get("snapshotCount") or 0)
         runtime_filter = gate.get("runtimeFilter") if isinstance(gate.get("runtimeFilter"), dict) else {}
         report_only_diagnostics = (
@@ -145,11 +150,18 @@ class BacktestEngine:
 
         warnings.extend(gate_issues)
         warnings.extend(sample_warnings)
-        if low_hotlist_count:
+        real_low_hotlist_count = max(0, low_hotlist_count - synthesized_empty_hotlist_count)
+        if real_low_hotlist_count:
             threshold = int(stats.get("researchMinHotlistSize") or 20)
-            warnings.append(f"存在 {low_hotlist_count} 个低热榜快照（低于 {threshold} 行），横截面分位和候选池排序可信度下降。")
-        if empty_hotlist_count:
-            warnings.append(f"存在 {empty_hotlist_count} 个空热榜快照，正式研究应重新导入或剔除。")
+            warnings.append(
+                f"存在 {real_low_hotlist_count} 个低热榜快照（低于 {threshold} 行），横截面分位和候选池排序可信度下降。"
+            )
+        if raw_empty_hotlist_count:
+            warnings.append(f"存在 {raw_empty_hotlist_count} 个空热榜快照，正式研究应重新导入或剔除。")
+        if synthesized_empty_hotlist_count:
+            warnings.append(
+                f"存在 {synthesized_empty_hotlist_count} 个 synthesized 补帧未生成热榜行，相关快照已在回测前剔除，并非原始热榜抓取为 0 行。"
+            )
         if dropped_empty_count:
             warnings.append(f"本次回测已自动剔除 {dropped_empty_count} 个空热榜快照，仅用可交易快照继续运行。")
         if not has_stable_macd:
@@ -177,8 +189,10 @@ class BacktestEngine:
             recommendation = "不建议继续使用该结果验收；请重新导入或剔除空热榜/非法快照后再跑。"
         elif research_grade == "degraded":
             recommendation = "可以用于候选观察，但不要直接据此定参数；优先补齐低热榜快照或扩大样本后复跑。"
+        if synthesized_empty_hotlist_count and not raw_empty_hotlist_count and research_grade != "blocked":
+            recommendation = "可以用于候选观察，但需注意样本内存在 synthesized 补帧缺口；相关空热榜补帧已在回测前剔除。"
 
-        return {
+        result = {
             "severity": severity,
             "researchGrade": research_grade,
             "recommendation": recommendation,
@@ -186,10 +200,11 @@ class BacktestEngine:
             "snapshotCount": int(sample_diagnostics.get("snapshotCount") or 0),
             "sourceSnapshotCount": target_frames,
             "runtimeFilter": runtime_filter,
-            "reportOnlyDiagnostics": report_only_diagnostics,
             "droppedEmptyHotlistSnapshots": dropped_empty_count,
             "lowHotlistCount": low_hotlist_count,
             "emptyHotlistCount": empty_hotlist_count,
+            "rawEmptyHotlistCount": raw_empty_hotlist_count,
+            "synthesizedEmptyHotlistCount": synthesized_empty_hotlist_count,
             "lowHotlistShare": share(low_hotlist_count, target_frames),
             "hotlistCountMin": stats.get("hotlistCountMin"),
             "hotlistCountAvg": stats.get("hotlistCountAvg"),
@@ -198,12 +213,17 @@ class BacktestEngine:
             "sampleOkShare": ok_share,
             "sampleDegradedShare": degraded_share,
             "sampleInsufficientShare": float((sample_diagnostics.get("statusShares") or {}).get("insufficient") or 0),
-            "layer1SignalEfficacy": layer_1_efficacy,
-            "layer2ExecutionQuality": layer_2_quality,
             "macdStable": has_stable_macd,
             "macdStableObservationBars": macd_diagnostics.get("stableObservationBars"),
             "warnings": unique_warnings,
         }
+        if report_only_diagnostics:
+            result["reportOnlyDiagnostics"] = report_only_diagnostics
+        if layer_1_efficacy:
+            result["layer1SignalEfficacy"] = layer_1_efficacy
+        if isinstance(layer_2_quality, dict) and layer_2_quality.get("layer2Status"):
+            result["layer2ExecutionQuality"] = layer_2_quality
+        return result
 
     @staticmethod
     def _macd_diagnostics(config: RankTrendConfig, frames: list[dict[str, Any]]) -> dict[str, Any]:

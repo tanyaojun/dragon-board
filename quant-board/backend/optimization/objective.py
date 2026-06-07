@@ -6,6 +6,16 @@ from backend.core.backtest import _round_or_none
 
 
 def score(result: dict[str, Any], objective: str) -> float:
+    if objective == "ranktrend_jump":
+        total_return = float(result.get("totalReturn") or 0)
+        win_rate = float(result.get("winRate") or 0)
+        drawdown = abs(float(result.get("maxDrawdown") or 0))
+        trade_count = int(result.get("tradeCount") or 0)
+        diagnostics = result.get("matchingDiagnostics") or {}
+        fallback_rate = float(diagnostics.get("snapshotFallbackRate") or 0)
+        low_trade_penalty = max(0, 8 - trade_count) * 0.03
+        fallback_penalty = fallback_rate * 0.12
+        return total_return + win_rate * 0.03 - drawdown * 1.2 - low_trade_penalty - fallback_penalty
     if objective == "max_drawdown":
         return -abs(float(result.get("maxDrawdown") or 0))
     if objective == "sharpe":

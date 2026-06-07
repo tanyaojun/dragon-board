@@ -36,6 +36,9 @@ function createTechnical(
 
 function createCycle(
   stage: RankTrendAnalysisResult['cycle']['stage'],
+  overrides: Partial<{
+    decisionAction: RankTrendAnalysisResult['cycle']['decision']['action']
+  }> = {},
 ): RankTrendAnalysisResult['cycle'] {
   return {
     rawStage: stage,
@@ -50,8 +53,28 @@ function createCycle(
       hotZoneStreak: 0,
       bestRecentRank: 50,
       drawdownFromPeak: 0,
+      rankPathCommitment: 0.5,
     },
     entryAdvice: { bias: 'watch', allowed: false, reason: '' },
+    decision: {
+      action: overrides.decisionAction ?? 'allow',
+      confidence: 50,
+      reasons: [],
+      discovery: { action: 'none', reasons: [] },
+      evidence: {
+        rawStage: stage,
+        stage,
+        transition: stage,
+        rankVelocity: 0,
+        rankAcceleration: 0,
+        drawdownFromPeak: 0,
+        hotZoneStreak: 0,
+        rankPathCommitment: 0.5,
+        riskPressure: 0,
+        divergenceSeverity: 0,
+        overheatSeverity: 0,
+      },
+    },
   }
 }
 
@@ -196,6 +219,32 @@ describe('composeCandidateTier', () => {
 
     expect(aResult.candidateTier).not.toBe('A_MAIN')
     expect(bResult.candidateTier).not.toBe('B_IGNITION')
+  })
+
+  it('生命周期 B 一票否决时不能进入 A/B 候选池', () => {
+    const aResult = composeCandidateTier({
+      technical: createTechnical({
+        directionSignal: 'buy',
+        momentumShort: 0,
+        momentumMid: 5,
+      }),
+      cycle: createCycle('expansion', { decisionAction: 'veto' }),
+      risk: createRisk({ divergenceSeverity: 0.1, pressure: 0.1 }),
+      regime: createRegime('normal'),
+    })
+    const bResult = composeCandidateTier({
+      technical: createTechnical({
+        momentumShort: 4,
+        momentumAcceleration: 1,
+      }),
+      cycle: createCycle('ignition', { decisionAction: 'veto' }),
+      risk: createRisk({ pressure: 0.1 }),
+      regime: createRegime('strong'),
+    })
+
+    expect(aResult.candidateTier).not.toBe('A_MAIN')
+    expect(bResult.candidateTier).not.toBe('B_IGNITION')
+    expect(aResult.reasons.join(' ')).toContain('生命周期')
   })
 
   it('result.reasons 至少包含动量结构摘要', () => {

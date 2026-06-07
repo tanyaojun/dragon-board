@@ -197,6 +197,14 @@ export class RankTrendAnalyzer {
     this.marketRegimeCache = null
   }
 
+  getCachedPercentiles(code: string): number[] | null {
+    const entry = this.rankHistoryCache.get(code)
+    if (!entry || !Array.isArray(entry.percentiles) || entry.percentiles.length === 0) {
+      return null
+    }
+    return [...entry.percentiles]
+  }
+
   private logRuntimeConfigApplied(): void {
     this.runtimeConfigApplyCount += 1
     if (this.runtimeConfigApplyCount <= 3 || this.runtimeConfigApplyCount % 20 === 0) {
@@ -674,7 +682,7 @@ export class RankTrendAnalyzer {
             config: runtimeConfig,
           })
 
-    const cycle = analyzeAttentionCycle({
+    let cycle = analyzeAttentionCycle({
       ranks: analysisRanks,
       percentiles: analysisPercentiles,
     })
@@ -685,6 +693,15 @@ export class RankTrendAnalyzer {
       zlje,
       zljzb,
       volumeRatio,
+    })
+    cycle = analyzeAttentionCycle({
+      ranks: analysisRanks,
+      percentiles: analysisPercentiles,
+      risk: {
+        pressure: risk.pressure,
+        divergenceSeverity: risk.divergence.severity,
+        overheatSeverity: risk.overheat.severity,
+      },
     })
     const decision = composeDecision({
       technical,

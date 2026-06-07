@@ -3,6 +3,8 @@ from __future__ import annotations
 import time
 from typing import Any
 
+HIGH_POSITION_RANK_CUTOFF = 30
+
 
 class HotListSentimentBackfillService:
     def __init__(self, mongo_db: Any) -> None:
@@ -382,7 +384,7 @@ def _fallback_status_label(stock: dict[str, Any]) -> str:
 
     strong_money = zlje > 0 and zljzb >= 8 and (cddje > 0 or cddjzb >= 3)
     money_weak = zlje < 0 or zljzb <= -8 or (cddje < 0 and cddjzb <= -3)
-    high_position = change >= 8 or rank <= 30
+    high_position = change >= 8 or rank <= HIGH_POSITION_RANK_CUTOFF
     overheated = high_position and (volume_ratio >= 1.8 or turnover_rate >= 10)
 
     if money_weak and (rank <= 80 or change > 0):

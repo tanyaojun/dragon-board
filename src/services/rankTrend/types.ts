@@ -12,6 +12,8 @@ export type AttentionStage =
   | 'cooling'
 
 export type CycleEntryBias = 'preferred' | 'watch' | 'avoid' | 'blocked'
+export type LifecycleDecisionAction = 'allow' | 'caution' | 'veto' | 'exit_watch'
+export type LifecycleDiscoveryAction = 'none' | 'research_watch'
 export type MarketRegimeState = 'strong' | 'normal' | 'weak' | 'retreat'
 export type CandidateTier = 'A_MAIN' | 'B_IGNITION' | 'C_CROWDED' | 'D_EXIT_RISK' | 'N_NEUTRAL'
 export type StrategyAction = 'focus' | 'watch' | 'hold' | 'avoid' | 'exit_watch'
@@ -116,11 +118,34 @@ export interface RankTrendAnalysisResult {
       hotZoneStreak: number
       bestRecentRank: number
       drawdownFromPeak: number
+      rankPathCommitment: number
     }
     entryAdvice: {
       bias: CycleEntryBias
       allowed: boolean
       reason: string
+    }
+    decision: {
+      action: LifecycleDecisionAction
+      confidence: number
+      reasons: string[]
+      discovery: {
+        action: LifecycleDiscoveryAction
+        reasons: string[]
+      }
+      evidence: {
+        rawStage: AttentionStage
+        stage: AttentionStage
+        transition: string
+        rankVelocity: number
+        rankAcceleration: number
+        drawdownFromPeak: number
+        hotZoneStreak: number
+        rankPathCommitment: number
+        riskPressure: number
+        divergenceSeverity: number
+        overheatSeverity: number
+      }
     }
   }
   risk: {

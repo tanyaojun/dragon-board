@@ -46,7 +46,7 @@ from backend.services import (
     check_layer1_meltdown,
     check_layer3_trend,
     compute_alignment,
-    compute_execution_quality,
+    compute_checkpoint_layer2,
     read_checkpoint_history,
 )
 from backend.utils import json_loads
@@ -572,7 +572,7 @@ def build_ranktrend_payload(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
-LONGTEST_BASELINES = (
+LEGACY_LIFECYCLE_BASELINES = (
     {
         "label": "H1_half_hour_current_bar",
         "snapshot_type": "half_hour",
@@ -596,25 +596,133 @@ LONGTEST_BASELINES = (
     },
 )
 
+EARLY_BIG_MOVE_BASELINES = (
+    {
+        "label": "E1_half_hour_signal_forward40",
+        "snapshot_type": "half_hour",
+        "execution_mode": "current_bar",
+        "max_holding_bars": 40,
+        "purpose": "early big-move candidate recall without trade simulation",
+        "strategy_name": "ranktrend_early_big_move",
+        "enable_trade_simulation": False,
+    },
+    {
+        "label": "E2_half_hour_ranked_current_bar",
+        "snapshot_type": "half_hour",
+        "execution_mode": "current_bar",
+        "max_holding_bars": 40,
+        "purpose": "ranked early big-move current-frame execution baseline",
+        "strategy_name": "ranktrend_early_big_move",
+    },
+    {
+        "label": "E3_half_hour_ranked_strict_fill",
+        "snapshot_type": "half_hour",
+        "execution_mode": "next_bar",
+        "max_holding_bars": 40,
+        "purpose": "ranked early big-move strict executable baseline",
+        "strategy_name": "ranktrend_early_big_move",
+        "fill_fallback_mode": "strict_fill",
+    },
+)
+
+EARLY_BIG_MOVE_V2_BASELINES = (
+    {
+        "label": "V2_E1_half_hour_signal_forward40",
+        "snapshot_type": "half_hour",
+        "execution_mode": "current_bar",
+        "max_holding_bars": 40,
+        "purpose": "early big-move V2 candidate recall without trade simulation",
+        "strategy_name": "ranktrend_early_big_move_v2",
+        "enable_trade_simulation": False,
+        "take_profit_pct": 9.99,
+        "stop_loss_pct": 0.05,
+    },
+    {
+        "label": "V2_E2_half_hour_ranked_current_bar",
+        "snapshot_type": "half_hour",
+        "execution_mode": "current_bar",
+        "max_holding_bars": 40,
+        "purpose": "ranked early big-move V2 current-frame execution baseline",
+        "strategy_name": "ranktrend_early_big_move_v2",
+        "take_profit_pct": 9.99,
+        "stop_loss_pct": 0.05,
+    },
+    {
+        "label": "V2_E3_half_hour_ranked_strict_fill",
+        "snapshot_type": "half_hour",
+        "execution_mode": "next_bar",
+        "max_holding_bars": 40,
+        "purpose": "ranked early big-move V2 strict executable baseline",
+        "strategy_name": "ranktrend_early_big_move_v2",
+        "fill_fallback_mode": "strict_fill",
+        "take_profit_pct": 9.99,
+        "stop_loss_pct": 0.05,
+    },
+)
+
+EARLY_BIG_MOVE_V3_BASELINES = (
+    {
+        "label": "V3_E1_half_hour_signal_forward50",
+        "snapshot_type": "half_hour",
+        "execution_mode": "current_bar",
+        "max_holding_bars": 50,
+        "purpose": "early big-move V3 candidate recall without trade simulation",
+        "strategy_name": "ranktrend_early_big_move_v3",
+        "enable_trade_simulation": False,
+        "take_profit_pct": 9.99,
+        "stop_loss_pct": 0.05,
+    },
+    {
+        "label": "V3_E2_half_hour_ranked_current_bar",
+        "snapshot_type": "half_hour",
+        "execution_mode": "current_bar",
+        "max_holding_bars": 50,
+        "purpose": "ranked early big-move V3 current-frame execution baseline",
+        "strategy_name": "ranktrend_early_big_move_v3",
+        "take_profit_pct": 9.99,
+        "stop_loss_pct": 0.05,
+    },
+    {
+        "label": "V3_E3_half_hour_ranked_strict_fill",
+        "snapshot_type": "half_hour",
+        "execution_mode": "next_bar",
+        "max_holding_bars": 50,
+        "purpose": "ranked early big-move V3 strict executable baseline",
+        "strategy_name": "ranktrend_early_big_move_v3",
+        "fill_fallback_mode": "strict_fill",
+        "take_profit_pct": 9.99,
+        "stop_loss_pct": 0.05,
+    },
+)
+
+LONGTEST_BASELINE_SETS = {
+    "early_big_move_v1": EARLY_BIG_MOVE_BASELINES,
+    "early_big_move_v2": EARLY_BIG_MOVE_V2_BASELINES,
+    "early_big_move_v3": EARLY_BIG_MOVE_V3_BASELINES,
+    "legacy_lifecycle_v1": LEGACY_LIFECYCLE_BASELINES,
+}
+
 
 def build_longtest_baseline_payloads(args: argparse.Namespace) -> list[dict[str, Any]]:
     payloads: list[dict[str, Any]] = []
-    for baseline in LONGTEST_BASELINES:
+    baseline_set = str(getattr(args, "baseline_set", "early_big_move_v1"))
+    baselines = LONGTEST_BASELINE_SETS[baseline_set]
+    for baseline in baselines:
         ranktrend_args = argparse.Namespace(
             dataset_id=args.dataset_id,
             snapshot_type=baseline["snapshot_type"],
             start_date=args.start_date,
             end_date=args.end_date,
-            strategy_name=args.strategy_name,
+            strategy_name=baseline.get("strategy_name") or args.strategy_name,
             seed=args.seed,
-            no_trade_simulation=False,
+            no_trade_simulation=not bool(baseline.get("enable_trade_simulation", True)),
             initial_cash=args.initial_cash,
             max_positions=args.max_positions,
             position_size=args.position_size,
             target_holding_days=args.target_holding_days,
             max_holding_bars=baseline["max_holding_bars"],
-            take_profit_pct=args.take_profit_pct,
-            stop_loss_pct=args.stop_loss_pct,
+            take_profit_pct=baseline.get("take_profit_pct", args.take_profit_pct),
+            stop_loss_pct=baseline.get("stop_loss_pct", args.stop_loss_pct),
             fee_rate=args.fee_rate,
             stamp_tax_rate=args.stamp_tax_rate,
             slippage_rate=args.slippage_rate,
@@ -639,10 +747,14 @@ def build_longtest_baseline_payloads(args: argparse.Namespace) -> list[dict[str,
             exclude_cross_market_zero_price_rows=args.exclude_cross_market_zero_price_rows,
             exclude_all_zero_price_frames=args.exclude_all_zero_price_frames,
         )
+        payload = build_ranktrend_payload(ranktrend_args)
+        fill_fallback_mode = baseline.get("fill_fallback_mode")
+        if fill_fallback_mode:
+            payload["tradeConfig"]["fillFallbackMode"] = fill_fallback_mode
         payloads.append({
             "label": baseline["label"],
             "purpose": baseline["purpose"],
-            "payload": build_ranktrend_payload(ranktrend_args),
+            "payload": payload,
         })
     return payloads
 
@@ -727,16 +839,12 @@ def cmd_run_longtest_baselines(args: argparse.Namespace) -> None:
             run = service.run_ranktrend(spec["payload"])
             baselines.append(summarize_longtest_baseline(spec, run))
 
-    # Layer 2: compute execution quality from H1 vs H2
-    h1_baseline = next((b for b in baselines if b.get("label") == "H1_half_hour_current_bar"), None)
-    h2_baseline = next((b for b in baselines if b.get("label") == "H2_half_hour_next_bar"), None)
-    if h1_baseline and h2_baseline:
-        layer_2 = compute_execution_quality(
-            h1_summary=h1_baseline,
-            h2_summary=h2_baseline,
-        )
+    # Layer 2: compute execution quality from the active optimistic vs strict-fill execution pair
+    layer_2 = compute_checkpoint_layer2(baselines)
+    if layer_2 is not None:
         for baseline in baselines:
-            if baseline.get("label") in ("H1_half_hour_current_bar", "H2_half_hour_next_bar"):
+            label = str(baseline.get("label") or "")
+            if label in ("H1_half_hour_current_bar", "H2_half_hour_next_bar") or "E2_" in label or "E3_" in label:
                 baseline["layer2ExecutionQuality"] = layer_2
 
     result = {
@@ -744,6 +852,7 @@ def cmd_run_longtest_baselines(args: argparse.Namespace) -> None:
         "checkpointId": checkpoint_id,
         "createdAt": created_at,
         "datasetId": args.dataset_id,
+        "baselineSet": args.baseline_set,
         "strategyName": args.strategy_name,
         "randomSeed": args.seed,
         "baselines": baselines,
@@ -910,6 +1019,22 @@ def cmd_optimize_ranktrend(args: argparse.Namespace) -> None:
             },
         }
         print_json(OptimizationService(session).run_ranktrend(payload, wait=not args.no_wait))
+
+
+def cmd_research_ranktrend_jump(args: argparse.Namespace) -> None:
+    with runtime_session() as session:
+        payload = {
+            "dataset_id": args.dataset_id,
+            "snapshot_type": args.snapshot_type,
+            "random_seed": args.seed,
+            "trials": args.trials,
+            "fillFallbackMode": args.fill_fallback_mode,
+            "validationRatio": args.validation_ratio,
+            "walkForwardTrainDays": args.walk_forward_train_days,
+            "walkForwardValidationDays": args.walk_forward_validation_days,
+            "walkForwardStepDays": args.walk_forward_step_days,
+        }
+        print_json(OptimizationService(session).run_ranktrend_jump_research(payload))
 
 
 def cmd_validate_golden(args: argparse.Namespace) -> None:
@@ -1187,6 +1312,7 @@ def build_parser() -> argparse.ArgumentParser:
     longtest_cmd.add_argument("--dataset-id", default="dragonboard_live")
     longtest_cmd.add_argument("--start-date", default=None)
     longtest_cmd.add_argument("--end-date", default=None)
+    longtest_cmd.add_argument("--baseline-set", choices=sorted(LONGTEST_BASELINE_SETS), default="early_big_move_v1")
     longtest_cmd.add_argument("--strategy-name", default="rank_trend_candidate")
     longtest_cmd.add_argument("--seed", type=int, default=20260430)
     longtest_cmd.add_argument("--initial-cash", type=float, default=1000000)
@@ -1260,6 +1386,18 @@ def build_parser() -> argparse.ArgumentParser:
     opt_cmd.add_argument("--walk-forward-top-trials", type=int, default=5)
     opt_cmd.add_argument("--no-wait", action="store_true")
     opt_cmd.set_defaults(func=cmd_optimize_ranktrend)
+
+    jump_research_cmd = sub.add_parser("research-ranktrend-jump", help="Run RankTrend Jump TPE research")
+    jump_research_cmd.add_argument("--dataset-id", required=True)
+    jump_research_cmd.add_argument("--snapshot-type", default="half_hour")
+    jump_research_cmd.add_argument("--seed", type=int, default=20260430)
+    jump_research_cmd.add_argument("--trials", type=int, default=24)
+    jump_research_cmd.add_argument("--fill-fallback-mode", choices=["strict_fill", "fallback_penalized", "blocked_fill"], default="fallback_penalized")
+    jump_research_cmd.add_argument("--validation-ratio", type=float, default=0.3)
+    jump_research_cmd.add_argument("--walk-forward-train-days", type=int, default=8)
+    jump_research_cmd.add_argument("--walk-forward-validation-days", type=int, default=2)
+    jump_research_cmd.add_argument("--walk-forward-step-days", type=int, default=2)
+    jump_research_cmd.set_defaults(func=cmd_research_ranktrend_jump)
 
     theme_opt_cmd = sub.add_parser("optimize-theme-trend", help="Run ThemeTrend optimization")
     theme_opt_cmd.add_argument("--dataset-id", required=True)

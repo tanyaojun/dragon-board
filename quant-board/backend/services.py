@@ -7,6 +7,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from backend.analysis.ranktrend import RankTrendConfig, RankTrendPythonEngine
+from backend.analysis.ranktrend_jump_research import build_jump_research_request, summarize_jump_research
 from backend.analysis.theme_trend import ThemeTrendConfig, ThemeTrendPythonEngine
 from backend.core.backtest import BacktestEngine, TradeSimulator, normalize_strategy_name
 from backend.data.models import BacktestRun, GoldenRankTrendCase, OptimizationRun
@@ -524,6 +525,21 @@ def compute_alignment(
         e for e in journal_entries
         if e.get("entryPrice") is not None and float(e.get("entryPrice") or 0) > 0
     ]
+    if not executed:
+        return {
+            "journalExecutedCount": 0,
+            "signalCodeCount": 0,
+            "intersectionCount": 0,
+            "signalOnlyCount": 0,
+            "journalOnlyCount": 0,
+            "intersectionCodes": [],
+            "signalOnlyCodes": [],
+            "journalOnlyCodes": [],
+            "intersectionPnl": 0,
+            "intersectionPnlPct": 0,
+            "sufficientSample": False,
+            "alignmentStatus": "insufficient_data",
+        }
 
     signal_codes: set[str] = set()
     for run_id in run_ids:
@@ -608,6 +624,121 @@ def read_checkpoint_history(
     return records[-limit:] if len(records) > limit else records
 
 
+def select_longtest_baseline_slots(
+    baselines: list[dict[str, Any]],
+) -> dict[str, dict[str, Any] | None]:
+    """Map legacy/new long-test baselines into trend-page slots."""
+
+    def pick(predicate: Any) -> dict[str, Any] | None:
+        for baseline in baselines:
+            if predicate(baseline):
+                return baseline
+        return None
+
+    def label_of(baseline: dict[str, Any]) -> str:
+        return str(baseline.get("label") or "")
+
+    def lower_label_of(baseline: dict[str, Any]) -> str:
+        return label_of(baseline).lower()
+
+    def snapshot_type_of(baseline: dict[str, Any]) -> str:
+        return str(baseline.get("snapshotType") or "").lower()
+
+    def execution_mode_of(baseline: dict[str, Any]) -> str:
+        return str(baseline.get("executionMode") or "").lower()
+
+    def has_trade_metrics(baseline: dict[str, Any]) -> bool:
+        return baseline.get("totalReturn") is not None or baseline.get("tradeCount") is not None
+
+    h1 = pick(lambda baseline: label_of(baseline) == "H1_half_hour_current_bar")
+    if h1 is None:
+        h1 = pick(
+            lambda baseline: ("_E2_" in label_of(baseline) or label_of(baseline).startswith("E2_"))
+            and "strict_fill" not in lower_label_of(baseline)
+        )
+    if h1 is None:
+        h1 = pick(
+            lambda baseline: execution_mode_of(baseline) == "current_bar"
+            and snapshot_type_of(baseline) == "half_hour"
+            and "signal_forward" not in lower_label_of(baseline)
+            and has_trade_metrics(baseline)
+        )
+
+    h2 = pick(lambda baseline: label_of(baseline) == "H2_half_hour_next_bar")
+    if h2 is None:
+        h2 = pick(lambda baseline: "_E3_" in label_of(baseline) or label_of(baseline).startswith("E3_"))
+    if h2 is None:
+        h2 = pick(lambda baseline: "strict_fill" in lower_label_of(baseline))
+    if h2 is None:
+        h2 = pick(
+            lambda baseline: execution_mode_of(baseline) == "next_bar"
+            and snapshot_type_of(baseline) == "half_hour"
+            and has_trade_metrics(baseline)
+        )
+
+    q1 = pick(lambda baseline: label_of(baseline) == "Q1_quarter_hour_next_bar")
+    if q1 is None:
+        q1 = pick(lambda baseline: snapshot_type_of(baseline) == "quarter_hour")
+
+    l1 = pick(
+        lambda baseline: "signal_forward" in lower_label_of(baseline)
+        and isinstance(baseline.get("layer1SignalEfficacy"), dict)
+    )
+    if l1 is None:
+        l1 = pick(
+            lambda baseline: ("_E1_" in label_of(baseline) or label_of(baseline).startswith("E1_"))
+            and isinstance(baseline.get("layer1SignalEfficacy"), dict)
+        )
+    if l1 is None:
+        l1 = pick(lambda baseline: isinstance(baseline.get("layer1SignalEfficacy"), dict))
+    if l1 is None:
+        l1 = h1
+
+    return {
+        "h1": h1,
+        "h2": h2,
+        "q1": q1,
+        "l1": l1,
+    }
+
+
+def compute_checkpoint_layer2(baselines: list[dict[str, Any]]) -> dict[str, Any] | None:
+    slots = select_longtest_baseline_slots(baselines)
+    h1 = slots.get("h1")
+    h2 = slots.get("h2")
+    for baseline in (h1, h2):
+        if isinstance(baseline, dict):
+            layer2 = baseline.get("layer2ExecutionQuality")
+            if isinstance(layer2, dict) and layer2.get("layer2Status"):
+                return layer2
+    if not isinstance(h1, dict) or not isinstance(h2, dict):
+        return None
+    if h1.get("totalReturn") is None or h2.get("totalReturn") is None:
+        return None
+    return compute_execution_quality(h1_summary=h1, h2_summary=h2)
+
+
+def summarize_longtest_slot_label(baseline: dict[str, Any] | None) -> str | None:
+    if not isinstance(baseline, dict):
+        return None
+    label = str(baseline.get("label") or "")
+    if not label:
+        return None
+    if label.startswith("H1_"):
+        return "H1"
+    if label.startswith("H2_"):
+        return "H2"
+    if label.startswith("Q1_"):
+        return "Q1"
+    if "_E1_" in label or label.startswith("E1_"):
+        return "E1"
+    if "_E2_" in label or label.startswith("E2_"):
+        return "E2"
+    if "_E3_" in label or label.startswith("E3_"):
+        return "E3"
+    return label
+
+
 def check_layer1_meltdown(
     history: list[dict[str, Any]],
     label_filter: str = "H1_half_hour_current_bar",
@@ -620,6 +751,8 @@ def check_layer1_meltdown(
     for record in history:
         baselines = record.get("baselines") or []
         baseline = next((b for b in baselines if b.get("label") == label_filter), None)
+        if baseline is None:
+            baseline = select_longtest_baseline_slots(baselines).get("l1")
         if not baseline:
             continue
         l1 = baseline.get("layer1SignalEfficacy") or {}
@@ -673,6 +806,107 @@ class BacktestService:
     def __init__(self, session: Session | None):
         self.repo = create_repository(session)
 
+    def _augment_low_hotlist_examples(
+        self,
+        dataset_id: str,
+        examples: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        output: list[dict[str, Any]] = []
+        for raw in examples:
+            item = dict(raw)
+            if item.get("snapshotId") and not item.get("captureMode"):
+                frame = self.repo.get_snapshot_frame(str(item["snapshotId"]), dataset_id=dataset_id)
+                if isinstance(frame, dict) and frame.get("captureMode"):
+                    item["captureMode"] = frame.get("captureMode")
+            output.append(item)
+        return output
+
+    @staticmethod
+    def _normalize_quality_warnings(
+        warnings: list[str],
+        *,
+        synthesized_empty_hotlist_count: int,
+        raw_empty_hotlist_count: int,
+        real_low_hotlist_count: int,
+    ) -> list[str]:
+        normalized: list[str] = []
+        for warning in warnings:
+            if (
+                synthesized_empty_hotlist_count
+                and raw_empty_hotlist_count == 0
+                and (
+                    warning.startswith("Empty hotlist snapshot:")
+                    or ("个空热榜快照" in warning and "重新导入或剔除" in warning)
+                )
+            ):
+                continue
+            if (
+                synthesized_empty_hotlist_count
+                and real_low_hotlist_count == 0
+                and "个低热榜快照" in warning
+            ):
+                continue
+            normalized.append(warning)
+
+        if synthesized_empty_hotlist_count:
+            normalized.append(
+                f"存在 {synthesized_empty_hotlist_count} 个 synthesized 补帧未生成热榜行，相关快照已在回测前剔除，并非原始热榜抓取为 0 行。"
+            )
+
+        return list(dict.fromkeys(normalized))
+
+    def _normalize_data_quality(
+        self,
+        dataset_id: str,
+        data_quality: dict[str, Any],
+    ) -> dict[str, Any]:
+        normalized = dict(data_quality)
+        raw_layer2 = normalized.get("layer2ExecutionQuality")
+        if not (isinstance(raw_layer2, dict) and raw_layer2.get("layer2Status")):
+            normalized.pop("layer2ExecutionQuality", None)
+
+        examples = normalized.get("lowHotlistExamples")
+        if isinstance(examples, list):
+            normalized_examples = self._augment_low_hotlist_examples(
+                dataset_id,
+                [item for item in examples if isinstance(item, dict)],
+            )
+            normalized["lowHotlistExamples"] = normalized_examples
+            synthesized_count = sum(
+                1
+                for item in normalized_examples
+                if item.get("stockRowCount") == 0 and item.get("captureMode") == "synthesized"
+            )
+            normalized.setdefault("synthesizedEmptyHotlistCount", synthesized_count)
+            normalized.setdefault(
+                "rawEmptyHotlistCount",
+                max(0, int(normalized.get("emptyHotlistCount") or 0) - synthesized_count),
+            )
+
+        synthesized_empty_hotlist_count = int(normalized.get("synthesizedEmptyHotlistCount") or 0)
+        raw_empty_hotlist_count = int(normalized.get("rawEmptyHotlistCount") or 0)
+        real_low_hotlist_count = max(
+            0,
+            int(normalized.get("lowHotlistCount") or 0) - synthesized_empty_hotlist_count,
+        )
+        warnings = normalized.get("warnings")
+        if isinstance(warnings, list):
+            normalized["warnings"] = self._normalize_quality_warnings(
+                [str(item) for item in warnings],
+                synthesized_empty_hotlist_count=synthesized_empty_hotlist_count,
+                raw_empty_hotlist_count=raw_empty_hotlist_count,
+                real_low_hotlist_count=real_low_hotlist_count,
+            )
+        if (
+            synthesized_empty_hotlist_count
+            and raw_empty_hotlist_count == 0
+            and str(normalized.get("recommendation") or "").startswith("可以用于候选观察")
+        ):
+            normalized["recommendation"] = (
+                "可以用于候选观察，但需注意样本内存在 synthesized 补帧缺口；相关空热榜补帧已在回测前剔除。"
+            )
+        return normalized
+
     @staticmethod
     def _summary_response(run_id: str, result: dict[str, Any], metadata: dict[str, Any] | None = None) -> dict[str, Any]:
         signals = result.get("signals") or []
@@ -697,6 +931,7 @@ class BacktestService:
                 "signals",
                 "strategyDecisions",
                 "tradeSimulation",
+                "roundTripTrades",
                 "trades",
                 "tradeEvents",
                 "equityCurve",
@@ -713,7 +948,7 @@ class BacktestService:
         compact["signalPreviewCount"] = len(compact["signals"])
         compact["signalCount"] = signal_count
 
-        for key in ("trades", "tradeEvents", "equityCurve", "openPositions"):
+        for key in ("roundTripTrades", "trades", "tradeEvents", "equityCurve", "openPositions"):
             values = result.get(key)
             if isinstance(values, list):
                 compact[key] = values[:120]
@@ -778,9 +1013,9 @@ class BacktestService:
         compact = {
             key: value
             for key, value in simulation.items()
-            if key not in {"trades", "tradeEvents", "equityHistory", "equityCurve", "openPositions"}
+            if key not in {"roundTripTrades", "trades", "tradeEvents", "equityHistory", "equityCurve", "openPositions"}
         }
-        for key in ("trades", "tradeEvents", "equityHistory", "equityCurve", "openPositions"):
+        for key in ("roundTripTrades", "trades", "tradeEvents", "equityHistory", "equityCurve", "openPositions"):
             values = simulation.get(key)
             if isinstance(values, list):
                 compact[key] = values[:120]
@@ -942,6 +1177,8 @@ class BacktestService:
         quality_gate["layer1SignalEfficacy"] = layer_1_efficacy
         if isinstance(result.get("dataQuality"), dict):
             result["dataQuality"]["layer1SignalEfficacy"] = layer_1_efficacy
+            result["dataQuality"] = self._normalize_data_quality(dataset_id, result["dataQuality"])
+            result["warnings"] = list(result["dataQuality"].get("warnings") or [])
 
         run_id = new_id("bt")
         request_meta = {
@@ -1296,6 +1533,9 @@ class BacktestService:
         if not run:
             return None
         result = loads_json_field(run.result_json, {})
+        data_quality = result.get("dataQuality")
+        if isinstance(data_quality, dict):
+            result["dataQuality"] = self._normalize_data_quality(run.dataset_id, data_quality)
         compact = self._summary_response(run.id, result)
         return {
             **compact,
@@ -1390,12 +1630,27 @@ class BacktestService:
         }
 
     def get_quality(self, run_id: str) -> dict[str, Any] | None:
-        if not self.repo.get_backtest_run(run_id):
+        run = self.repo.get_backtest_run(run_id)
+        if not run:
             return None
         quality = self.repo.get_backtest_quality_report(run_id)
         if quality is None:
             return {"runId": run_id, "qualityReport": None}
-        return {"runId": run_id, "qualityReport": quality}
+        result = loads_json_field(run.result_json, {})
+        data_quality = result.get("dataQuality") if isinstance(result.get("dataQuality"), dict) else {}
+        normalized_quality = dict(quality)
+        if data_quality:
+            normalized_data_quality = self._normalize_data_quality(run.dataset_id, data_quality)
+            warnings = normalized_data_quality.get("warnings")
+            if isinstance(warnings, list):
+                normalized_quality["warnings"] = warnings
+        dataset = self.repo.get_dataset(run.dataset_id)
+        if dataset is not None:
+            if not int(normalized_quality.get("stockCount") or 0):
+                normalized_quality["stockCount"] = int(dataset.stock_row_count or 0)
+            if not int(normalized_quality.get("sectorCount") or 0):
+                normalized_quality["sectorCount"] = int(dataset.sector_row_count or 0)
+        return {"runId": run_id, "qualityReport": normalized_quality}
 
     def delete_run(self, run_id: str) -> dict[str, Any] | None:
         return self.repo.delete_backtest_run(run_id, checkpoint=True)
@@ -1836,6 +2091,66 @@ class OptimizationService:
         result["strategyName"] = str(request["strategyName"])
         result["searchProfile"] = "theme_confluence"
         return result
+
+    def run_ranktrend_jump_research(self, payload: dict[str, Any]) -> dict[str, Any]:
+        research_payload = build_jump_research_request(payload)
+        dataset_id, snapshot_type, strategy_name, run_frames, request, payload_for_request_json = self._build_request(research_payload)
+        if ((request.get("quality_gate") or {}).get("researchGrade")) == "blocked":
+            raise ValueError({"qualityGate": request.get("quality_gate"), "reason": "data quality blocked jump research"})
+        run_id = str(request["optimization_run_id"])
+        config_hash = stable_hash({key: value for key, value in request.items() if key != "optimization_run_id"})
+        result = OptimizationRunner().run(run_frames, request)
+        summary = summarize_jump_research(
+            result,
+            fill_fallback_mode=str((research_payload.get("backtest") or {}).get("trade_config", {}).get("fillFallbackMode") or "fallback_penalized"),
+        )
+        backtest_artifacts = result.pop("backtestArtifacts", []) or []
+        for artifact in backtest_artifacts:
+            artifact_request = {
+                **(artifact.get("request") or {}),
+                "artifact_type": "ranktrend_jump_research_trial",
+                "artifactType": "ranktrend_jump_research_trial",
+            }
+            self.repo.save_backtest_run(
+                BacktestRun(
+                    id=str(artifact.get("runId")),
+                    dataset_id=dataset_id,
+                    strategy_name=strategy_name,
+                    snapshot_type=snapshot_type,
+                    random_seed=request["random_seed"],
+                    status="completed",
+                    config_hash=str(artifact.get("configHash") or stable_hash(artifact_request)),
+                    request_json=dumps_json_field(artifact_request),
+                    result_json=dumps_json_field(artifact.get("result") or {}),
+                )
+            )
+        result["researchSummary"] = summary
+        run = OptimizationRun(
+            id=run_id,
+            dataset_id=dataset_id,
+            strategy_name=strategy_name,
+            method=request["method"],
+            random_seed=request["random_seed"],
+            status="completed",
+            config_hash=config_hash,
+            request_json=dumps_json_field(payload_for_request_json),
+            result_json=dumps_json_field(result),
+        )
+        self.repo.save_optimization_run(run)
+        return {
+            "id": run_id,
+            "runId": run_id,
+            "run_id": run_id,
+            "status": "completed",
+            "analysisMode": "ranktrend_jump_research",
+            "strategyName": strategy_name,
+            "method": request["method"],
+            "randomSeed": request["random_seed"],
+            "configHash": config_hash,
+            "summary": summary,
+            "result": result,
+            **result,
+        }
 
     def _build_request(self, payload: dict[str, Any]) -> tuple[str, str, str, list[dict[str, Any]], dict[str, Any], dict[str, Any]]:
         dataset_id = str(camel_get(payload, "dataset_id", "datasetId", ""))

@@ -56,8 +56,30 @@ class TradeSimulator:
                 pos["holdingBars"] += 1
                 signal = execution_signal_by_code.get(code)
                 if not signal:
-                    matching_stats["missingPriceRows"] += 1
-                    continue
+                    if strategy_key in {
+                        "ranktrend_early_big_move_v2",
+                        "ranktrend_early_big_move_v3",
+                        "ranktrend_early_big_move_v3_no_lifecycle_gate",
+                        "ranktrend_early_big_move_v3_context_probe",
+                        "ranktrend_early_big_move_v3_lifecycle_fusion",
+                        "ranktrend_early_big_move_v3_a_main_risk_filter",
+                        "ranktrend_early_big_move_v3_b_long_filter",
+                    }:
+                        pos["hotlistMissingBars"] = int(pos.get("hotlistMissingBars") or 0) + 1
+                    signal = self._position_price_signal(frame, code, pos)
+                    if not signal:
+                        matching_stats["missingPriceRows"] += 1
+                        continue
+                elif strategy_key in {
+                    "ranktrend_early_big_move_v2",
+                    "ranktrend_early_big_move_v3",
+                    "ranktrend_early_big_move_v3_no_lifecycle_gate",
+                    "ranktrend_early_big_move_v3_context_probe",
+                    "ranktrend_early_big_move_v3_lifecycle_fusion",
+                    "ranktrend_early_big_move_v3_a_main_risk_filter",
+                    "ranktrend_early_big_move_v3_b_long_filter",
+                }:
+                    pos["hotlistMissingBars"] = 0
                 fill_signal = self._merge_execution_signal(signal, signal_by_code.get(code), frame, execution_mode)
                 quote = self._quote(fill_signal)
                 raw_price = float(quote.get("lastPrice") or fill_signal.get("price") or 0)
@@ -73,8 +95,22 @@ class TradeSimulator:
                 if config.get("enforceT1", True) and str(frame.get("tradingDate") or "") <= str(pos.get("entryTradingDate") or ""):
                     continue
                 gross_return = (raw_price - pos["entryPrice"]) / pos["entryPrice"]
-                final_signal = ((((signal.get("rankTrend") or {}).get("decision") or {}).get("final") or {}).get("signal") or "hold")
-                should_exit = (final_signal == "sell" or signal["candidateTier"] == "D_EXIT_RISK" or (signal["candidateTier"] == "C_CROWDED" and signal["rankTrend"]["strategy"]["momentum"]["acceleration"] <= 0) or signal["rank"] > 50 or pos["holdingBars"] >= config["maxHoldingBars"] or gross_return <= config["stopLoss"] or gross_return >= config["takeProfit"])
+                strategy_exit_reason = None
+                if strategy_key == "ranktrend_jump":
+                    should_exit, strategy_exit_reason = self._ranktrend_jump_exit_decision(signal, pos, gross_return, config)
+                elif strategy_key in {
+                    "ranktrend_early_big_move_v2",
+                    "ranktrend_early_big_move_v3",
+                    "ranktrend_early_big_move_v3_no_lifecycle_gate",
+                    "ranktrend_early_big_move_v3_context_probe",
+                    "ranktrend_early_big_move_v3_lifecycle_fusion",
+                    "ranktrend_early_big_move_v3_a_main_risk_filter",
+                    "ranktrend_early_big_move_v3_b_long_filter",
+                }:
+                    should_exit, strategy_exit_reason = self._ranktrend_early_big_move_v2_exit_decision(signal, pos, gross_return, config)
+                else:
+                    final_signal = ((((signal.get("rankTrend") or {}).get("decision") or {}).get("final") or {}).get("signal") or "hold")
+                    should_exit = (final_signal == "sell" or signal["candidateTier"] == "D_EXIT_RISK" or (signal["candidateTier"] == "C_CROWDED" and signal["rankTrend"]["strategy"]["momentum"]["acceleration"] <= 0) or signal["rank"] > 50 or pos["holdingBars"] >= config["maxHoldingBars"] or gross_return <= config["stopLoss"] or gross_return >= config["takeProfit"])
                 exit_trigger = None
                 trigger_price = raw_price
                 intrabar = self._intrabar_exit_trigger(pos, quote, config)
@@ -101,10 +137,10 @@ class TradeSimulator:
                 cash += gross_amount - exit_cost
                 entry_cost_basis = (float(pos["entryCost"]) / int(pos["quantity"])) * quantity if pos["quantity"] else 0
                 profit = gross_amount - exit_cost - entry_cost_basis
-                reason = exit_trigger or self._exit_reason(signal, pos, gross_return, config)
+                reason = exit_trigger or strategy_exit_reason or self._exit_reason(signal, pos, gross_return, config)
                 net_return = profit / entry_cost_basis if entry_cost_basis else 0
                 explanation = self._signal_explanation(signal, f"卖出：{reason}", pos)
-                trade = {"code": code, "name": pos["name"], "entrySnapshotId": pos["entrySnapshotId"], "entrySignalSnapshotId": pos.get("entrySignalSnapshotId") or pos["entrySnapshotId"], "exitSnapshotId": frame["snapshotId"], "exitSignalSnapshotId": signal.get("snapshotId"), "entryTime": pos["entryTime"], "exitTime": frame["timestamp"], "entryTradingDate": pos.get("entryTradingDate"), "exitTradingDate": frame.get("tradingDate"), "entryPrice": pos["entryPrice"], "exitPrice": exit_price, "quantity": quantity, "holdingBars": pos["holdingBars"], "grossReturn": round((exit_price - pos["entryPrice"]) / pos["entryPrice"], 4) if pos["entryPrice"] else 0, "netReturn": round(net_return, 4), "profit": round(profit, 2), "reason": reason, "explanation": explanation, "action": "sell", "price": exit_price, "rank": signal["rank"], "candidateTier": signal.get("candidateTier"), "stage": signal.get("stage"), "regime": signal.get("regime"), "executionMode": execution_mode, "fill": self._public_fill(fill)}
+                trade = {"code": code, "name": pos["name"], "entrySnapshotId": pos["entrySnapshotId"], "entrySignalSnapshotId": pos.get("entrySignalSnapshotId") or pos["entrySnapshotId"], "exitSnapshotId": frame["snapshotId"], "exitSignalSnapshotId": signal.get("snapshotId"), "entryTime": pos["entryTime"], "exitTime": frame["timestamp"], "entryTradingDate": pos.get("entryTradingDate"), "exitTradingDate": frame.get("tradingDate"), "entryPrice": pos["entryPrice"], "exitPrice": exit_price, "quantity": quantity, "holdingBars": pos["holdingBars"], "grossReturn": round((exit_price - pos["entryPrice"]) / pos["entryPrice"], 4) if pos["entryPrice"] else 0, "netReturn": round(net_return, 4), "entryCostBasis": round(entry_cost_basis, 2), "profit": round(profit, 2), "reason": reason, "explanation": explanation, "action": "sell", "price": exit_price, "rank": signal["rank"], "candidateTier": signal.get("candidateTier"), "stage": signal.get("stage"), "regime": signal.get("regime"), "executionMode": execution_mode, "fill": self._public_fill(fill)}
                 trades.append(trade)
                 trade_events.append({"snapshotId": frame["snapshotId"], "timestamp": frame["timestamp"], "tradingDate": frame.get("tradingDate"), "slotTime": frame.get("slotTime"), "signalSnapshotId": signal.get("snapshotId"), "code": code, "name": pos["name"], "action": "sell", "executionMode": execution_mode, "price": exit_price, "quantity": quantity, "rank": signal["rank"], "reason": reason, "explanation": explanation, "profit": round(profit, 2), "netReturn": trade["netReturn"], "holdingBars": pos["holdingBars"], "candidateTier": signal.get("candidateTier"), "stage": signal.get("stage"), "regime": signal.get("regime"), "confidence": signal.get("confidence"), "fill": self._public_fill(fill)})
                 if quantity >= int(pos["quantity"]):
@@ -157,8 +193,10 @@ class TradeSimulator:
             market_value = sum(pos["quantity"] * float((signal_by_code.get(code) or {}).get("price") or pos.get("lastPrice") or pos["entryPrice"]) for code, pos in positions.items())
             equity.append({"snapshotId": frame["snapshotId"], "timestamp": frame["timestamp"], "tradingDate": frame.get("tradingDate"), "slotTime": frame.get("slotTime"), "equity": round(cash + market_value, 2), "cash": round(cash, 2), "marketValue": round(market_value, 2), "positionCount": len(positions)})
         final_equity = equity[-1]["equity"] if equity else config["initialCapital"]
-        wins = [trade for trade in trades if trade["netReturn"] > 0]
-        sharpe_metrics = short_cycle_sharpe(trades, target_holding_days=float(config.get("targetHoldingDays") or 5.0))
+        exit_slice_wins = [trade for trade in trades if trade["netReturn"] > 0]
+        round_trip_trades = self._round_trip_trades(trades, config)
+        round_trip_wins = [trade for trade in round_trip_trades if trade["netReturn"] > 0]
+        sharpe_metrics = short_cycle_sharpe(round_trip_trades, target_holding_days=float(config.get("targetHoldingDays") or 5.0))
         open_positions = [self._open_position_snapshot(pos, config) for pos in positions.values()]
         realized_profit = round(sum(float(trade.get("profit") or 0) for trade in trades), 2)
         unrealized_mark_profit = round(sum(float(pos.get("unrealizedMarkProfit") or 0) for pos in open_positions), 2)
@@ -169,7 +207,52 @@ class TradeSimulator:
         notes = ["交易模拟已启用 A 股 T+1、100 股手数、手续费、印花税、滑点、涨跌停可成交检查、盘口价格优先和容量约束；缺少盘口/成交量字段时会在 matchingDiagnostics 中降级说明。", "totalReturn 含未平仓市值；unrealizedProfit 为预估平仓后浮动盈亏，已扣预估卖出手续费和印花税。"]
         if execution_mode == "next_bar":
             notes.insert(0, "executionMode=next_bar：信号按下一快照成交，成交价和可成交性使用下一快照行情。")
-        return {"enabled": True, "entryStrategy": strategy_key, "executionMode": execution_mode, "config": config, "totalReturn": round((final_equity - config["initialCapital"]) / config["initialCapital"], 4), "realizedReturn": round(realized_profit / config["initialCapital"], 4), "realizedProfit": realized_profit, "unrealizedMarkProfit": unrealized_mark_profit, "unrealizedExitCost": unrealized_exit_cost, "unrealizedProfit": unrealized_profit, "openPositionCount": len(open_positions), "openPositions": open_positions, **sharpe_metrics, "sharpeMethod": f"trade_return_cycle_{target_days:g}d", "maxDrawdown": max_drawdown(equity), "winRate": share(len(wins), len(trades)), "tradeCount": len(trades), "eventCount": len(trade_events), "skippedOrderCount": len(skipped_orders), "skippedOrders": skipped_orders[:200], "matchingDiagnostics": matching_diagnostics, "trades": trades, "tradeEvents": trade_events, "equityHistory": equity, "equityCurve": equity, "notes": notes}
+        return {"enabled": True, "entryStrategy": strategy_key, "executionMode": execution_mode, "config": config, "totalReturn": round((final_equity - config["initialCapital"]) / config["initialCapital"], 4), "realizedReturn": round(realized_profit / config["initialCapital"], 4), "realizedProfit": realized_profit, "unrealizedMarkProfit": unrealized_mark_profit, "unrealizedExitCost": unrealized_exit_cost, "unrealizedProfit": unrealized_profit, "openPositionCount": len(open_positions), "openPositions": open_positions, **sharpe_metrics, "sharpeMethod": f"trade_return_cycle_{target_days:g}d", "maxDrawdown": max_drawdown(equity), "winRate": share(len(round_trip_wins), len(round_trip_trades)), "tradeCount": len(round_trip_trades), "roundTripTrades": round_trip_trades, "exitSliceWinRate": share(len(exit_slice_wins), len(trades)), "exitSliceCount": len(trades), "eventCount": len(trade_events), "skippedOrderCount": len(skipped_orders), "skippedOrders": skipped_orders[:200], "matchingDiagnostics": matching_diagnostics, "trades": trades, "tradeEvents": trade_events, "equityHistory": equity, "equityCurve": equity, "notes": notes}
+
+    @staticmethod
+    def _round_trip_trades(trades: list[dict[str, Any]], config: dict[str, Any]) -> list[dict[str, Any]]:
+        groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        for trade in trades:
+            key = (str(trade.get("entrySignalSnapshotId") or trade.get("entrySnapshotId") or ""), str(trade.get("code") or ""))
+            groups.setdefault(key, []).append(trade)
+
+        result: list[dict[str, Any]] = []
+        for rows in groups.values():
+            first = rows[0]
+            last = rows[-1]
+            quantity = sum(int(row.get("quantity") or 0) for row in rows)
+            profit = round(sum(float(row.get("profit") or 0) for row in rows), 2)
+            entry_cost = sum(float(row.get("entryCostBasis") or 0) for row in rows)
+            exit_amount = sum(float(row.get("exitPrice") or 0) * int(row.get("quantity") or 0) for row in rows)
+            net_return = profit / entry_cost if entry_cost else 0
+            exit_price = exit_amount / quantity if quantity else float(last.get("exitPrice") or 0)
+            result.append({
+                **first,
+                "exitSnapshotId": last.get("exitSnapshotId"),
+                "exitSignalSnapshotId": last.get("exitSignalSnapshotId"),
+                "exitTime": last.get("exitTime"),
+                "exitTradingDate": last.get("exitTradingDate"),
+                "exitPrice": round(exit_price, 4),
+                "quantity": quantity,
+                "holdingBars": max(int(row.get("holdingBars") or 0) for row in rows),
+                "grossReturn": round((exit_price - float(first.get("entryPrice") or 0)) / float(first.get("entryPrice") or 1), 4),
+                "netReturn": round(net_return, 4),
+                "entryCostBasis": round(entry_cost, 2),
+                "profit": profit,
+                "reason": last.get("reason"),
+                "explanation": f"按入场回合归并：{len(rows)} 个卖出片段",
+                "price": round(exit_price, 4),
+                "rank": last.get("rank"),
+                "candidateTier": last.get("candidateTier"),
+                "stage": last.get("stage"),
+                "regime": last.get("regime"),
+                "executionMode": last.get("executionMode"),
+                "fill": last.get("fill"),
+                "exitSliceCount": len(rows),
+                "exitSliceProfits": [row.get("profit") for row in rows],
+                "exitSliceNetReturns": [row.get("netReturn") for row in rows],
+            })
+        return result
 
     @staticmethod
     def _normalize_execution_mode(value: Any) -> str:
@@ -225,11 +308,73 @@ class TradeSimulator:
         return merged
 
     @staticmethod
+    def _position_price_signal(frame: dict[str, Any], code: str, pos: dict[str, Any]) -> dict[str, Any] | None:
+        for stock in frame.get("stocks") or []:
+            if str(stock.get("code") or "") != str(code):
+                continue
+            price = _first_number(stock, "lastTradePrice", "lastPrice", "price", "close", "closePrice")
+            if not price or price <= 0:
+                return None
+            return {
+                **stock,
+                "snapshotId": frame.get("snapshotId"),
+                "timestamp": frame.get("timestamp"),
+                "tradingDate": frame.get("tradingDate"),
+                "slotTime": frame.get("slotTime"),
+                "code": code,
+                "name": stock.get("name") or pos.get("name") or "",
+                "rank": pos.get("lastRank") or pos.get("entryRank") or 999,
+                "candidateTier": pos.get("entryCandidateTier"),
+                "stage": (pos.get("lastSignal") or {}).get("stage"),
+                "regime": (pos.get("lastSignal") or {}).get("regime"),
+                "confidence": pos.get("entryConfidence"),
+                "rankTrend": {},
+                "price": price,
+            }
+        return None
+
+    @staticmethod
     def _entry_candidates(frame_signals: list[dict[str, Any]], frames: list[dict[str, Any]], idx: int, by_key: dict[str, dict[str, Any]], positions: dict[str, Any], strategy_key: str = "rank_trend_candidate") -> list[dict[str, Any]]:
         result = []
         previous_frame = frames[idx - 1] if idx > 0 else None
         for signal in frame_signals:
             if signal["code"] in positions:
+                continue
+            if strategy_key == "ranktrend_early_big_move_v3_a_main_risk_filter":
+                if TradeSimulator._is_early_big_move_v3_a_main_risk_filter_entry_signal(signal):
+                    result.append(signal)
+                continue
+            if strategy_key == "ranktrend_early_big_move_v3_b_long_filter":
+                if TradeSimulator._is_early_big_move_v3_b_long_filter_entry_signal(signal):
+                    result.append(signal)
+                continue
+            if strategy_key == "ranktrend_early_big_move_v3_no_lifecycle_gate":
+                if TradeSimulator._is_early_big_move_v3_no_lifecycle_gate_entry_signal(signal):
+                    result.append(signal)
+                continue
+            if strategy_key == "ranktrend_early_big_move_v3_context_probe":
+                if TradeSimulator._is_early_big_move_v3_context_probe_entry_signal(signal):
+                    result.append(signal)
+                continue
+            if strategy_key == "ranktrend_early_big_move_v3_lifecycle_fusion":
+                if TradeSimulator._is_early_big_move_v3_lifecycle_fusion_entry_signal(signal):
+                    result.append(signal)
+                continue
+            if strategy_key == "ranktrend_early_big_move_v3":
+                if TradeSimulator._is_early_big_move_v3_entry_signal(signal):
+                    result.append(signal)
+                continue
+            if strategy_key == "ranktrend_early_big_move_v2":
+                if TradeSimulator._is_early_big_move_v2_entry_signal(signal):
+                    result.append(signal)
+                continue
+            if strategy_key == "ranktrend_early_big_move":
+                if TradeSimulator._is_early_big_move_entry_signal(signal):
+                    result.append(signal)
+                continue
+            if strategy_key == "ranktrend_jump":
+                if TradeSimulator._is_jump_entry_signal(signal):
+                    result.append(signal)
                 continue
             if strategy_key == "hot_top10":
                 if signal.get("rank", 999) <= 10 and signal["regime"] != "retreat":
@@ -260,7 +405,287 @@ class TradeSimulator:
                 result.append(signal)
             elif signal["candidateTier"] == "B_IGNITION" and strategy_key in ("rank_trend_candidate", "a_b_combined") and TradeSimulator._is_confirmed_b_ignition(signal, previous_frame, by_key):
                 result.append(signal)
+        if strategy_key in {
+            "ranktrend_early_big_move",
+            "ranktrend_early_big_move_v2",
+            "ranktrend_early_big_move_v3",
+            "ranktrend_early_big_move_v3_no_lifecycle_gate",
+            "ranktrend_early_big_move_v3_context_probe",
+            "ranktrend_early_big_move_v3_lifecycle_fusion",
+            "ranktrend_early_big_move_v3_a_main_risk_filter",
+            "ranktrend_early_big_move_v3_b_long_filter",
+        }:
+            return sorted(result, key=TradeSimulator._early_big_move_score, reverse=True)
         return sorted(result, key=lambda item: item.get("confidence", 0), reverse=True)
+
+    @staticmethod
+    def _signal_value(container: dict[str, Any], key: str) -> float:
+        value = container.get(key)
+        if isinstance(value, dict):
+            value = value.get("value") or value.get("score") or value.get("signalValue")
+        try:
+            return float(value or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    @staticmethod
+    def _early_big_move_value(key: str, *containers: dict[str, Any]) -> float:
+        for container in containers:
+            if not isinstance(container, dict) or key not in container:
+                continue
+            value = container.get(key)
+            if isinstance(value, dict):
+                value = value.get("value") if "value" in value else value.get("signalValue")
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                continue
+        return 0.0
+
+    @staticmethod
+    def _early_big_move_momentum(signal: dict[str, Any], rank_trend: dict[str, Any], technical: dict[str, Any]) -> dict[str, Any]:
+        momentum = technical.get("momentumProfile")
+        if isinstance(momentum, dict):
+            return momentum
+        strategy_momentum = ((rank_trend.get("strategy") or {}).get("momentum") or {})
+        if isinstance(strategy_momentum, dict):
+            return strategy_momentum
+        signal_momentum = signal.get("momentum")
+        return signal_momentum if isinstance(signal_momentum, dict) else {}
+
+    @staticmethod
+    def _is_early_big_move_entry_signal(signal: dict[str, Any]) -> bool:
+        rank_trend = signal.get("rankTrend") or {}
+        jump = rank_trend.get("jump") or {}
+        technical = rank_trend.get("technical") or {}
+        signals = technical.get("signals") or {}
+        momentum = TradeSimulator._early_big_move_momentum(signal, rank_trend, technical)
+        top_level = {
+            "short": signal.get("short"),
+            "mid": signal.get("mid"),
+            "long": signal.get("long"),
+            "acceleration": signal.get("acceleration"),
+            "accDelta": signal.get("accDelta"),
+        }
+        if jump.get("direction") != "buy":
+            return False
+        if float(jump.get("confidence") or 0) < 90:
+            return False
+        if TradeSimulator._early_big_move_value("short", signals, momentum, top_level) <= 0:
+            return False
+        if TradeSimulator._early_big_move_value("mid", signals, momentum, top_level) <= 0:
+            return False
+        if TradeSimulator._early_big_move_value("long", signals, momentum, top_level) <= 0:
+            return False
+        acceleration = TradeSimulator._early_big_move_value("acceleration", signals, momentum, top_level)
+        acc_delta = TradeSimulator._early_big_move_value("accDelta", signals, momentum, top_level)
+        if acceleration < 10 and acc_delta < 8:
+            return False
+        if TradeSimulator._limit_state(signal, TradeSimulator._quote(signal))["atLimitUp"]:
+            return False
+        return True
+
+    @staticmethod
+    def _is_early_big_move_v2_entry_signal(signal: dict[str, Any]) -> bool:
+        if not TradeSimulator._is_early_big_move_entry_signal(signal):
+            return False
+        if signal.get("candidateTier") not in {"A_MAIN", "B_IGNITION"}:
+            return False
+        try:
+            change = float(signal.get("change") or 0)
+        except (TypeError, ValueError):
+            change = 0.0
+        return change < 6
+
+    @staticmethod
+    def _is_early_big_move_v3_no_lifecycle_gate_entry_signal(signal: dict[str, Any]) -> bool:
+        if not TradeSimulator._is_early_big_move_entry_signal(signal):
+            return False
+        try:
+            change = float(signal.get("change") or 0)
+        except (TypeError, ValueError):
+            change = 0.0
+        return change < 6
+
+    @staticmethod
+    def _is_early_big_move_v3_context_probe_entry_signal(signal: dict[str, Any]) -> bool:
+        if TradeSimulator._is_early_big_move_v3_entry_signal(signal):
+            return True
+        if not TradeSimulator._is_early_big_move_v3_no_lifecycle_gate_entry_signal(signal):
+            return False
+        if signal.get("candidateTier") in {"A_MAIN", "B_IGNITION"}:
+            return False
+        cycle = (signal.get("rankTrend") or {}).get("cycle") or {}
+        entry_advice = cycle.get("entryAdvice") or {}
+        if not bool(entry_advice.get("allowed")):
+            return False
+        if str(entry_advice.get("bias") or "") != "preferred":
+            return False
+        if str(cycle.get("stage") or signal.get("stage") or "") != "ignition":
+            return False
+        if str(cycle.get("transition") or "") != "cooling->ignition":
+            return False
+        rank_trend = signal.get("rankTrend") or {}
+        technical = rank_trend.get("technical") or {}
+        signals = technical.get("signals") or {}
+        momentum = TradeSimulator._early_big_move_momentum(signal, rank_trend, technical)
+        mid = TradeSimulator._early_big_move_value("mid", signals, momentum, {"mid": signal.get("mid")})
+        long_value = TradeSimulator._early_big_move_value("long", signals, momentum, {"long": signal.get("long")})
+        zero_cross = (signals.get("zeroCross") or {}).get("signal")
+        return mid >= 18 and long_value >= 8 and zero_cross == "buy"
+
+    @staticmethod
+    def _is_early_big_move_v3_entry_signal(signal: dict[str, Any]) -> bool:
+        if not TradeSimulator._is_early_big_move_v2_entry_signal(signal):
+            return False
+        if signal.get("candidateTier") == "A_MAIN":
+            return True
+        rank_trend = signal.get("rankTrend") or {}
+        technical = rank_trend.get("technical") or {}
+        signals = technical.get("signals") or {}
+        momentum = TradeSimulator._early_big_move_momentum(signal, rank_trend, technical)
+        mid = TradeSimulator._early_big_move_value("mid", signals, momentum, {"mid": signal.get("mid")})
+        zero_cross = (signals.get("zeroCross") or {}).get("signal")
+        return mid >= 20 and zero_cross == "buy"
+
+    @staticmethod
+    def _lifecycle_decision_action(signal: dict[str, Any]) -> str:
+        cycle = (signal.get("rankTrend") or {}).get("cycle") or {}
+        decision = cycle.get("decision") or {}
+        return str(decision.get("action") or "")
+
+    @staticmethod
+    def _is_early_big_move_v3_lifecycle_fusion_entry_signal(signal: dict[str, Any]) -> bool:
+        if not TradeSimulator._is_early_big_move_v3_entry_signal(signal):
+            return False
+        return TradeSimulator._lifecycle_decision_action(signal) != "veto"
+
+    @staticmethod
+    def _is_early_big_move_v3_a_main_risk_filter_entry_signal(signal: dict[str, Any]) -> bool:
+        if not TradeSimulator._is_early_big_move_v3_entry_signal(signal):
+            return False
+        if signal.get("candidateTier") != "A_MAIN":
+            return True
+        rank_trend = signal.get("rankTrend") or {}
+        technical = rank_trend.get("technical") or {}
+        signals = technical.get("signals") or {}
+        momentum = TradeSimulator._early_big_move_momentum(signal, rank_trend, technical)
+        long_value = TradeSimulator._early_big_move_value("long", signals, momentum, {"long": signal.get("long")})
+        try:
+            change = float(signal.get("change") or 0)
+        except (TypeError, ValueError):
+            change = 0.0
+        if signal.get("regime") == "weak" and long_value < 10:
+            return False
+        if change < 0:
+            return False
+        return True
+
+    @staticmethod
+    def _is_early_big_move_v3_b_long_filter_entry_signal(signal: dict[str, Any]) -> bool:
+        if not TradeSimulator._is_early_big_move_v3_entry_signal(signal):
+            return False
+        if signal.get("candidateTier") != "B_IGNITION":
+            return True
+        rank_trend = signal.get("rankTrend") or {}
+        technical = rank_trend.get("technical") or {}
+        signals = technical.get("signals") or {}
+        momentum = TradeSimulator._early_big_move_momentum(signal, rank_trend, technical)
+        long_value = TradeSimulator._early_big_move_value("long", signals, momentum, {"long": signal.get("long")})
+        return long_value >= 10
+
+    @staticmethod
+    def _early_big_move_score(signal: dict[str, Any]) -> float:
+        rank_trend = signal.get("rankTrend") or {}
+        jump = rank_trend.get("jump") or {}
+        technical = rank_trend.get("technical") or {}
+        signals = technical.get("signals") or {}
+        momentum = TradeSimulator._early_big_move_momentum(signal, rank_trend, technical)
+        top_level = {
+            "acceleration": signal.get("acceleration"),
+            "accDelta": signal.get("accDelta"),
+        }
+        score = float(jump.get("confidence") or 0)
+        if signal.get("stage") in {"expansion", "ignition"}:
+            score += 30
+        if signal.get("candidateTier") in {"A_MAIN", "B_IGNITION"}:
+            score += 25
+        change = float(signal.get("change") or 0)
+        if 3 <= change <= 8.5:
+            score += 20
+        if (signals.get("direction") or {}).get("signal") == "buy":
+            score += 10
+        if (signals.get("zeroCross") or {}).get("signal") == "buy":
+            score += 5
+        if (technical.get("macd") or {}).get("cross") == "golden":
+            score += 5
+        score += min(20, max(0, TradeSimulator._early_big_move_value("acceleration", signals, momentum, top_level)))
+        return score
+
+    @staticmethod
+    def _is_jump_entry_signal(signal: dict[str, Any]) -> bool:
+        rank_trend = signal.get("rankTrend") or {}
+        jump = rank_trend.get("jump") or {}
+        technical = rank_trend.get("technical") or {}
+        signals = technical.get("signals") or {}
+        if jump.get("event") != "jump" or jump.get("direction") != "buy" or not jump.get("sustained"):
+            return False
+        if (signals.get("direction") or {}).get("signal") != "buy":
+            return False
+        if (signals.get("acceleration") or {}).get("signal") != "buy":
+            return False
+        if float(signal.get("change") or 0) <= 0:
+            return False
+        if TradeSimulator._limit_state(signal, TradeSimulator._quote(signal))["atLimitUp"]:
+            return False
+        if (technical.get("macd") or {}).get("cross") != "golden":
+            return False
+        return float(jump.get("confidence") or 0) >= 85
+
+    @staticmethod
+    def _ranktrend_jump_exit_decision(
+        signal: dict[str, Any],
+        pos: dict[str, Any],
+        gross_return: float,
+        config: dict[str, Any],
+    ) -> tuple[bool, str | None]:
+        rank_trend = signal.get("rankTrend") or {}
+        jump = rank_trend.get("jump") or {}
+        technical = rank_trend.get("technical") or {}
+        if jump.get("event") == "jump" and jump.get("direction") == "sell" and jump.get("sustained"):
+            return True, f"排名持续崩塌(jump={float(jump.get('magnitude') or 0):.1f}pct)"
+        if (technical.get("macd") or {}).get("cross") == "death":
+            return True, "MACD 死叉"
+        raw_change = float((rank_trend.get("meta") or {}).get("rawChange") or 0)
+        if raw_change < -80:
+            return True, f"排名大幅下降({raw_change:.0f})"
+        if pos["holdingBars"] >= config["maxHoldingBars"]:
+            return True, "到达最大持有快照"
+        if gross_return <= config["stopLoss"]:
+            return True, "止损"
+        if gross_return >= config["takeProfit"]:
+            return True, "止盈"
+        return False, None
+
+    @staticmethod
+    def _ranktrend_early_big_move_v2_exit_decision(
+        signal: dict[str, Any],
+        pos: dict[str, Any],
+        gross_return: float,
+        config: dict[str, Any],
+    ) -> tuple[bool, str | None]:
+        if int(pos.get("hotlistMissingBars") or 0) >= 3:
+            return True, "退出热榜连续3个bar"
+        if gross_return <= float(config.get("stopLoss") or -0.05):
+            return True, "止损"
+        rank_trend = signal.get("rankTrend") or {}
+        technical = rank_trend.get("technical") or {}
+        raw_change = float((rank_trend.get("meta") or {}).get("rawChange") or 0)
+        if raw_change < -50 and (technical.get("macd") or {}).get("cross") == "death":
+            return True, "排名大幅下降+MACD死叉"
+        if int(pos.get("holdingBars") or 0) >= int(config.get("maxHoldingBars") or 40):
+            return True, "到达最大持有快照"
+        return False, None
 
     @staticmethod
     def _is_confirmed_b_ignition(signal: dict[str, Any], previous_frame: dict[str, Any] | None, by_key: dict[str, dict[str, Any]]) -> bool:
@@ -312,8 +737,19 @@ class TradeSimulator:
             elif side == "sell" and quote.get("bid1Price"):
                 price_source = "bid1"
             else:
+                if str(config.get("fillFallbackMode") or "fallback_penalized") in {"blocked_fill", "strict_fill"}:
+                    return {
+                        "filled": False,
+                        "reason": "missing_order_book_quote",
+                        "quantity": 0,
+                        "requestedQuantity": requested_quantity,
+                        "limitState": limit_state,
+                    }
                 snapshot_fallback = True
-        fill_price = raw_price * (1 + float(config.get("slippageRate") or 0)) if side == "buy" else raw_price * (1 - float(config.get("slippageRate") or 0))
+        slippage = float(config.get("slippageRate") or 0)
+        if snapshot_fallback and str(config.get("fillFallbackMode") or "fallback_penalized") == "fallback_penalized":
+            slippage += float(config.get("fallbackSlippageRate") or 0)
+        fill_price = raw_price * (1 + slippage) if side == "buy" else raw_price * (1 - slippage)
 
         capacity = requested_quantity
         capacity_reasons: list[str] = []
@@ -529,6 +965,28 @@ class TradeSimulator:
             return "对照组：B_IGNITION 连续确认入场"
         if strategy_key == "a_b_combined":
             return "对照组：" + ("A_MAIN 入场" if signal["candidateTier"] == "A_MAIN" else "B_IGNITION 连续确认入场")
+        if strategy_key == "ranktrend_early_big_move_v3_a_main_risk_filter":
+            if signal.get("candidateTier") == "B_IGNITION":
+                return "早期大肉V3 A_MAIN风险过滤研究：B_IGNITION 沿用V3二次确认"
+            return "早期大肉V3 A_MAIN风险过滤研究：A_MAIN 通过假主升过滤"
+        if strategy_key == "ranktrend_early_big_move_v3_b_long_filter":
+            if signal.get("candidateTier") == "B_IGNITION":
+                return "早期大肉V3 B_IGNITION长周期过滤研究：B_IGNITION 长周期动量确认"
+            return "早期大肉V3 B_IGNITION长周期过滤研究：A_MAIN 沿用V3"
+        if strategy_key == "ranktrend_early_big_move_v3_no_lifecycle_gate":
+            return "早期大肉V3无生命周期硬门槛研究：高置信jump + 多周期动量同步 + 加速度抬升"
+        if strategy_key == "ranktrend_early_big_move_v3_context_probe":
+            if signal.get("candidateTier") in {"A_MAIN", "B_IGNITION"}:
+                return f"早期大肉V3路径探针：沿用V3主干 {signal.get('candidateTier')}"
+            return "早期大肉V3路径探针：preferred 非A/B 早期结构候选"
+        if strategy_key == "ranktrend_early_big_move_v3_lifecycle_fusion":
+            return f"早期大肉V3生命周期融合：{signal.get('candidateTier')} 通过A结构且B未否决"
+        if strategy_key == "ranktrend_early_big_move_v3":
+            if signal.get("candidateTier") == "B_IGNITION":
+                return "早期大肉V3入场：B_IGNITION + 高置信jump + 中周期动量确认 + 零轴同步转正"
+            return f"早期大肉V3入场：{signal.get('candidateTier')} + 高置信jump + 多周期动量同步"
+        if strategy_key == "ranktrend_early_big_move_v2":
+            return f"早期大肉V2入场：{signal.get('candidateTier')} + 高置信jump + 多周期动量同步"
         if signal["candidateTier"] == "A_MAIN":
             return "A_MAIN 入场 (finalSignal 确认)"
         if signal["candidateTier"] == "B_IGNITION":

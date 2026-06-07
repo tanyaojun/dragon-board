@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import itertools
+import itertools as _itertools
 import math
 import random
 from typing import Any
@@ -8,6 +8,13 @@ from typing import Any
 
 OPTUNA_METHODS = {"bayesian", "tpe", "optuna_tpe"}
 SUPPORTED_METHODS = {"grid", "random", *OPTUNA_METHODS}
+
+
+class _ItertoolsProxy:
+    product = staticmethod(_itertools.product)
+
+
+itertools = _ItertoolsProxy()
 
 
 def default_search_space() -> dict[str, list[Any]]:
@@ -99,15 +106,31 @@ def theme_parameter_groups(profile: str = "theme_trend") -> list[str]:
     return groups
 
 
-def normalize_search_space(space: dict[str, Any]) -> dict[str, list[Any]]:
+def normalize_search_space(space: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(space, dict):
         raise ValueError("search_space must be an object")
     normalized: dict[str, list[Any]] = {}
     for key, values in space.items():
         if isinstance(values, dict):
             choices = values.get("choices") or values.get("values")
+            range_type = str(values.get("type") or "").strip().lower()
+            if range_type in {"float", "int"}:
+                if "low" not in values or "high" not in values:
+                    raise ValueError(f"search_space.{key} range spec must include low and high")
+                low = float(values["low"])
+                high = float(values["high"])
+                if not math.isfinite(low) or not math.isfinite(high) or high < low:
+                    raise ValueError(f"search_space.{key} range spec has invalid low/high")
+                normalized[str(key)] = {
+                    "type": range_type,
+                    "low": int(low) if range_type == "int" else low,
+                    "high": int(high) if range_type == "int" else high,
+                    "step": values.get("step"),
+                    "log": bool(values.get("log", False)),
+                }
+                continue
             if not isinstance(choices, list):
-                raise ValueError(f"search_space.{key} range specs are not supported yet; use a choices list")
+                raise ValueError(f"search_space.{key} range specs must use type=float/int or a choices list")
             values = choices
         if not isinstance(values, list) or not values:
             raise ValueError(f"search_space.{key} must be a non-empty list")
@@ -117,16 +140,28 @@ def normalize_search_space(space: dict[str, Any]) -> dict[str, list[Any]]:
     return normalized
 
 
-def candidate_count(space: dict[str, list[Any]]) -> int:
+def _discrete_values(values: Any) -> list[Any]:
+    if isinstance(values, list):
+        return values
+    if not isinstance(values, dict):
+        return [values]
+    low = values.get("low")
+    high = values.get("high")
+    if values.get("type") == "int":
+        return [int(low), int(high)] if int(low) != int(high) else [int(low)]
+    return [float(low), float(high)] if float(low) != float(high) else [float(low)]
+
+
+def candidate_count(space: dict[str, Any]) -> int:
     total = 1
     for values in space.values():
-        total *= len(values)
+        total *= len(_discrete_values(values))
     return total
 
 
-def candidate_at_index(space: dict[str, list[Any]], index: int) -> dict[str, Any]:
+def candidate_at_index(space: dict[str, Any], index: int) -> dict[str, Any]:
     keys = list(space.keys())
-    values = [space[key] for key in keys]
+    values = [_discrete_values(space[key]) for key in keys]
     if not keys:
         return {}
 
@@ -141,7 +176,7 @@ def candidate_at_index(space: dict[str, list[Any]], index: int) -> dict[str, Any
     return dict(zip(keys, selected))
 
 
-def select_candidates(space: dict[str, list[Any]], max_count: int, method: str = "random", random_seed: int = 0) -> list[dict[str, Any]]:
+def select_candidates(space: dict[str, Any], max_count: int, method: str = "random", random_seed: int = 0) -> list[dict[str, Any]]:
     total = candidate_count(space)
     if total <= 0:
         return []
@@ -154,15 +189,33 @@ def select_candidates(space: dict[str, list[Any]], max_count: int, method: str =
     return [candidate_at_index(space, idx) for idx in indices]
 
 
-def candidates(space: dict[str, list[Any]]) -> list[dict[str, Any]]:
+def candidates(space: dict[str, Any]) -> list[dict[str, Any]]:
     keys = list(space.keys())
-    values = [space[key] for key in keys]
+    values = [_discrete_values(space[key]) for key in keys]
     return [dict(zip(keys, combo)) for combo in itertools.product(*values)]
 
 
-def suggest_params(trial: Any, search_space: dict[str, list[Any]]) -> dict[str, Any]:
+def search_space_mode(space: dict[str, Any]) -> str:
+    return "continuous" if any(isinstance(values, dict) for values in space.values()) else "discrete"
+
+
+def suggest_params(trial: Any, search_space: dict[str, Any]) -> dict[str, Any]:
     params: dict[str, Any] = {}
     for key, values in search_space.items():
+        if isinstance(values, dict):
+            if values.get("type") == "float":
+                params[key] = trial.suggest_float(
+                    key,
+                    float(values["low"]),
+                    float(values["high"]),
+                    step=values.get("step"),
+                    log=bool(values.get("log", False)),
+                )
+                continue
+            if values.get("type") == "int":
+                step = int(values["step"]) if values.get("step") else 1
+                params[key] = trial.suggest_int(key, int(values["low"]), int(values["high"]), step=step)
+                continue
         index = trial.suggest_int(f"{key}__idx", 0, len(values) - 1)
         params[key] = values[index]
     return params
@@ -186,6 +239,7 @@ _STRATEGY_PARAM_KEYS = (
     "macdFast",
     "macdSlow",
     "macdSignal",
+    "jumpDeltaPct",
     "buyScoreThreshold",
     "sellScoreThreshold",
     "directionWeight",

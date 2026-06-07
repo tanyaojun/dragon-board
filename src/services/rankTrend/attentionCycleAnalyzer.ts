@@ -23,6 +23,32 @@ function calculateCycleRankShock(percentiles: number[]): number {
   return (current - mean) / std
 }
 
+function calculateRankPathCommitment(percentiles: number[]): number {
+  if (percentiles.length < 4) return 0.5
+  const window = percentiles.slice(-8)
+  const totalImprovement = Math.max(0, (window[window.length - 1] ?? 0) - (window[0] ?? 0))
+  if (totalImprovement <= 0) return 0
+
+  const steps: number[] = []
+  for (let index = 1; index < window.length; index++) {
+    steps.push((window[index] ?? 0) - (window[index - 1] ?? 0))
+  }
+  const positiveSteps = steps.filter((step) => step > 0)
+  const lastStep = Math.max(0, steps[steps.length - 1] ?? 0)
+  const preBreakoutImprovement = positiveSteps
+    .slice(0, -1)
+    .reduce((sum, step) => sum + step, 0)
+  const positiveStepShare = positiveSteps.length / Math.max(1, steps.length)
+  const preBreakoutShare = preBreakoutImprovement / Math.max(totalImprovement, 1)
+  const lastStepDominance = lastStep / Math.max(totalImprovement, 1)
+
+  return clamp(
+    positiveStepShare * 0.45 + preBreakoutShare * 0.45 + (1 - lastStepDominance) * 0.1,
+    0,
+    1,
+  )
+}
+
 function buildAttentionTrajectoryMetrics(
   ranks: number[],
   percentiles: number[],
@@ -63,6 +89,7 @@ function buildAttentionTrajectoryMetrics(
     hotZoneStreak,
     bestRecentRank,
     drawdownFromPeak: Math.max(0, currentRank - bestRecentRank),
+    rankPathCommitment: calculateRankPathCommitment(recentPercentiles),
   }
 }
 
@@ -267,11 +294,95 @@ function buildEntryAdvice(
   }
 }
 
+function buildLifecycleDecision(input: {
+  rawStage: AttentionStage
+  stage: AttentionStage
+  transition: string
+  confidence: number
+  metrics: RankTrendAnalysisResult['cycle']['metrics']
+  risk?: {
+    pressure?: number
+    divergenceSeverity?: number
+    overheatSeverity?: number
+  }
+}): RankTrendAnalysisResult['cycle']['decision'] {
+  const { rawStage, stage, transition, confidence, metrics, risk } = input
+  const reasons: string[] = []
+  const discoveryReasons: string[] = []
+  let action: RankTrendAnalysisResult['cycle']['decision']['action'] = 'caution'
+  const riskPressure = risk?.pressure ?? 0
+  const divergenceSeverity = risk?.divergenceSeverity ?? 0
+  const overheatSeverity = risk?.overheatSeverity ?? 0
+  const highRiskConflict =
+    riskPressure >= 0.75 || (divergenceSeverity >= 0.8 && overheatSeverity >= 0.7)
+  const weakPathCommitment =
+    metrics.rankPathCommitment < 0.45 &&
+    metrics.rankVelocity > 18 &&
+    metrics.rankAcceleration > 12 &&
+    (stage === 'ignition' || stage === 'expansion')
+
+  if (stage === 'reversal' || rawStage === 'reversal') {
+    action = 'veto'
+    reasons.push('生命周期进入反转路径，辅助决策一票否决。')
+  } else if (weakPathCommitment) {
+    action = 'veto'
+    reasons.push('生命周期B识别到最后一跳过强但整段承接不足，按假突破路径一票否决。')
+  } else if (highRiskConflict && (stage === 'ignition' || stage === 'expansion')) {
+    action = 'veto'
+    reasons.push('生命周期虽处于点火/扩散，但风险背离与过热证据明确反对，辅助决策一票否决。')
+  } else if (stage === 'crowded') {
+    action = 'exit_watch'
+    reasons.push('生命周期进入拥挤路径，持仓后应进入退出观察。')
+  } else if (stage === 'ignition' || stage === 'expansion') {
+    action = 'allow'
+    reasons.push('生命周期处于点火或扩散路径，允许 RankTrend 主结构继续进入候选评估。')
+  } else {
+    action = 'caution'
+    reasons.push('生命周期仍在冷却路径，辅助决策保持谨慎。')
+  }
+
+  if (transition.includes('->')) {
+    reasons.push(`阶段路径：${transition}。`)
+  }
+
+  if ((stage === 'ignition' || stage === 'expansion') && metrics.rankVelocity > 0) {
+    discoveryReasons.push('生命周期存在漏选研究价值：点火/扩散路径仍在改善，但不得绕过 RankTrend 主结构直接制造买入。')
+  }
+
+  return {
+    action,
+    confidence,
+    reasons,
+    discovery: {
+      action: discoveryReasons.length > 0 ? 'research_watch' : 'none',
+      reasons: discoveryReasons,
+    },
+    evidence: {
+      rawStage,
+      stage,
+      transition,
+      rankVelocity: metrics.rankVelocity,
+      rankAcceleration: metrics.rankAcceleration,
+      drawdownFromPeak: metrics.drawdownFromPeak,
+      hotZoneStreak: metrics.hotZoneStreak,
+      rankPathCommitment: metrics.rankPathCommitment,
+      riskPressure,
+      divergenceSeverity,
+      overheatSeverity,
+    },
+  }
+}
+
 export function analyzeAttentionCycle(input: {
   ranks: number[]
   percentiles: number[]
+  risk?: {
+    pressure?: number
+    divergenceSeverity?: number
+    overheatSeverity?: number
+  }
 }): RankTrendAnalysisResult['cycle'] {
-  const { ranks, percentiles } = input
+  const { ranks, percentiles, risk } = input
   let previousRawStage: AttentionStage | null = null
   let previousStage: AttentionStage | null = null
   let currentRawStage: AttentionStage | null = null
@@ -320,17 +431,20 @@ export function analyzeAttentionCycle(input: {
       hotZoneStreak: 0,
       bestRecentRank: ranks[ranks.length - 1] ?? 999,
       drawdownFromPeak: 0,
+      rankPathCommitment: 0.5,
     }
   const currentPercentile = percentiles[percentiles.length - 1] ?? 0
   const transition = buildTransition(previousStage, stage)
+  const confidence = calculateCycleConfidence(stage, currentPercentile, metrics)
 
   return {
     rawStage,
     stage,
     previousStage,
     transition,
-    confidence: calculateCycleConfidence(stage, currentPercentile, metrics),
+    confidence,
     metrics,
     entryAdvice: buildEntryAdvice(stage, transition),
+    decision: buildLifecycleDecision({ rawStage, stage, transition, confidence, metrics, risk }),
   }
 }

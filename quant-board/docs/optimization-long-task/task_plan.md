@@ -6,7 +6,7 @@
 
 ## Current Phase
 
-Phase 20 complete (6/05 weekly checkpoint done; L1 meltdown triggered; next: Phase D/E data accumulation, need >= 60 trading days)
+Phase 33 in progress; lifecycle must be redefined as auxiliary decision system B, not an independent buy/sell strategy and not a loose report-only tag. The A+B fusion contract is now implemented behind a research-only strategy: RankTrend A finds the early-big-move structure, lifecycle B gives allow/caution/veto/exit_watch, and B veto prevents entry before execution.
 
 ## Success Criteria
 
@@ -573,6 +573,405 @@ v1 `checkpoint_2026-05-21_cross_market_zero_filter` 已落库，但因第一版�
 - [ ] L3 模型失配/系统偏差标记（需 trade_journal 数据积累）
 - [x] Phase 20: 6/05 周度 checkpoint — runId: `bt_fd27ea809f3f4c42`, `bt_6f07661dd79d4962`, `bt_0d6bd329498441ed`
 
+### Phase 21: Early Big Move V1 长测基线切换
+
+- [x] 旧 `H1/H2/Q1` 生命周期分层长测基线标记为 retired。
+- [x] 新增 baseline set：`early_big_move_v1`。
+- [x] 新增研究策略名：`ranktrend_early_big_move`。
+- [x] 新三线默认替代旧三线：
+  - `E1_half_hour_signal_forward40`
+  - `E2_half_hour_ranked_current_bar`
+  - `E3_half_hour_ranked_strict_fill`
+- [x] 旧三线仅保留为显式 `--baseline-set legacy_lifecycle_v1` 历史复跑入口。
+- [x] 清空本地旧长测 JSONL 记录：`quant-board/data/reports/long_test_runs.jsonl`。
+- [x] 修复 Python replay 字段兼容：`ranktrend_early_big_move` 入场读取 `technical.momentumProfile`，避免交易模拟 0 候选。
+- [x] 正式启动 `checkpoint_2026-06-07_early_big_move_v1`。
+- **Status:** complete
+
+### Phase 22: Early Big Move V1 交易归因与 V2 方向
+
+- [x] 读取 `E2_half_hour_ranked_current_bar` run：`bt_d4732abbb1c5486e`。
+- [x] 读取 `E3_half_hour_ranked_strict_fill` run：`bt_2e3959f3ddb34ace`。
+- [x] 用 `entrySignalSnapshotId + code` 匹配入场时 raw replay signal。
+- [x] 修正字段口径：多周期动量加速度必须取 `rankTrend.technical.momentumProfile.acceleration`，不能误用 `technical.signals.acceleration.score`。
+- [x] 拆分 winners / losers，按 `candidateTier`、`stage`、当前涨幅区间、样本状态、`zeroCross/MACD/finalSignal`、退出原因做归因。
+- [x] 形成 V2 初步方向：收窄二级入场池，优先 `A_MAIN/B_IGNITION`，控制追高，重做 early big move 专属退出规则。
+- **Status:** complete
+
+### Phase 23: Early Big Move V2 实现与复跑
+
+- [x] 新增研究策略名：`ranktrend_early_big_move_v2`，保留 V1 不覆盖。
+- [x] 新增 baseline set：`early_big_move_v2`。
+- [x] V2 入场：沿用第一层 early big move 结构，但默认只交易 `A_MAIN/B_IGNITION`，并要求当前涨幅 `< 6%`。
+- [x] V2 入场不要求 `finalSignal=buy`、MACD 金叉或 `zeroCross=buy`。
+- [x] V2 出场：退出热榜连续 3 个 half-hour bar、止损 5%、`rawChange < -50 + MACD death`、40 bars 上限；不设固定止盈。
+- [x] 修复 Layer 3 对齐在实盘 journal 为空时仍解压扫描大回测结果导致 CLI 卡住的问题。
+- [x] 执行 `checkpoint_2026-06-07_early_big_move_v2`，三条 run 已落库。
+- **Status:** complete
+
+### Phase 24: Early Big Move V2 亏损单归因
+
+- [x] 以 `V2_E3_half_hour_ranked_strict_fill` run `bt_f34a868872404e17` 为主线。
+- [x] 使用 `roundTripTrades` 口径，而不是 `backtest_trades` 卖出切片口径。
+- [x] 用 `entrySignalSnapshotId + code` 回连 `result.signals`，读取完整 RankTrend 入场特征。
+- [x] 列出 17 笔亏损单，记录收益、出场原因、候选层、市场状态、涨幅、多周期动量、zeroCross、MACD、finalSignal、风险信号。
+- [x] 对照 21 笔盈利单，确认亏损集中在 `B_IGNITION`，`A_MAIN` 在本轮 4 笔全部盈利。
+- **Status:** complete
+
+### Phase 25: Early Big Move V3 二次确认验证
+
+- [x] 离线枚举 V2 已成交完整回合上的候选二次确认条件。
+- [x] 确认第一条 V3 候选：`A_MAIN` 原样保留；`B_IGNITION` 必须满足 `momentumProfile.mid >= 20` 且 `zeroCross=buy`。
+- [x] TDD 增加 V3 入场规则测试。
+- [x] 新增 `ranktrend_early_big_move_v3` 和 `early_big_move_v3` baseline set。
+- [x] 按用户要求把 V3 baseline 的持仓上限改为 `50 bars`。
+- [x] 复跑 `checkpoint_2026-06-07_early_big_move_v3`。
+- [x] 对比 V2/V3 的收益、胜率、止损数、交易数和大肉持有结果。
+- **Status:** complete
+
+### Phase 26: V3 30 bars 月度窗口回测
+
+- [x] 固定 `ranktrend_early_big_move_v3 / half_hour / maxHoldingBars=30`
+- [x] 跑 4 月 current-bar / 30 bars：`bt_a80a2e51db204882`
+- [x] 跑 5 月 current-bar / 30 bars：`bt_24bce043660b48ec`
+- [x] 跑 4 月 strict-fill / 30 bars：`bt_b1be9464a58a483b`
+- [x] 跑 5 月 strict-fill / 30 bars：`bt_38dcde4453c2447c`
+- [x] 确认 current-bar / 30 bars 两个月均满足收益与胜率目标
+- **Status:** complete
+
+### Phase 27: Current-bar / 30 bars 止损单归因
+
+- [x] 固定主线为 `ranktrend_early_big_move_v3 / half_hour / current_bar / maxHoldingBars=30`
+- [x] 读取 4 月 run `bt_a80a2e51db204882` 与 5 月 run `bt_24bce043660b48ec`
+- [x] 用 `roundTripTrades` 口径复核胜率，避免卖出切片误算
+- [x] 用 `(entrySignalSnapshotId, code)` 回连 `result.signals`，提取入场 RankTrend 特征
+- [x] 拉取止损票入场前后 1-4 个 half-hour bar 的信号变化
+- [x] 检查 `skippedOrders` 和 Mongo 原始盘口，确认跌停不可卖导致的超额止损
+- **Status:** complete
+
+### Phase 28: A_MAIN 假主升过滤真实复跑
+
+- [x] 新增窄作用域研究策略 `ranktrend_early_big_move_v3_a_main_risk_filter`
+- [x] 保持 B_IGNITION 完全沿用 V3：`mid >= 20` 且 `zeroCross=buy`
+- [x] 只验证 A_MAIN 假主升过滤：`A_MAIN + weak + long < 10` 或 `A_MAIN + change < 0`
+- [x] 修复研究策略必须沿用 early big move 专属出场规则，避免回退到旧 `finalSignal/D_EXIT_RISK/rank>50/止盈` 出场
+- [x] 复跑 4 月 current-bar / 30 bars：`bt_ef248f9bbe884b63`
+- [x] 复跑 5 月 current-bar / 30 bars：`bt_6880bb325d604045`
+- [x] 用 `(entrySignalSnapshotId, code)` 回连完整入场 signal，区分入场分层与退出分层
+- [x] 排查假主升进入 A_MAIN 的源码链路
+- **Status:** complete
+
+### Phase 29: 生命周期路径归因
+
+- [x] 固定主线为 `ranktrend_early_big_move_v3 / current_bar / 30 bars`
+- [x] 读取 4 月 run `bt_a80a2e51db204882` 与 5 月 run `bt_24bce043660b48ec`
+- [x] 对照读取 A_MAIN 风险过滤 run `bt_ef248f9bbe884b63` 与 `bt_6880bb325d604045`
+- [x] 用 `roundTripTrades` + `(entrySignalSnapshotId, code)` 回连完整 `result.signals`
+- [x] 抽取入场前 3 bars、入场 bar、入场后 2 bars 的 `cycle.transition/stage/candidateTier/momentumProfile`
+- [x] 对比盈利/亏损交易的生命周期路径、长周期动量和退出原因
+- **Status:** complete
+
+### Phase 30: B_IGNITION 长周期过滤真实复跑
+
+- [x] 新增窄作用域研究策略 `ranktrend_early_big_move_v3_b_long_filter`
+- [x] 只过滤 `B_IGNITION + momentumProfile.long < 10`
+- [x] `A_MAIN` 完全沿用 V3，不加 A_MAIN 硬过滤
+- [x] 出场沿用 early big move 专属规则，不恢复旧生命周期/最终信号退出
+- [x] 复跑 4 月 current-bar / 30 bars：`bt_3a6339356fe44ef2`
+- [x] 复跑 5 月 current-bar / 30 bars：`bt_1d12cc19e20d492e`
+- [x] 对比 V3 原始、A_MAIN 风险过滤与 B_LONG 过滤的交易路径差异
+- [x] 确认 B_LONG 硬过滤真实复跑不通过，不能写入 V3 默认
+- **Status:** complete
+
+### Phase 31: 生命周期实现审计
+
+- [x] 审计 TS 生命周期实现：`attentionCycleAnalyzer.ts`、`candidateTierComposer.ts`
+- [x] 审计 Python 回测主链：`ranktrend.py`、`execution.py`、`strategy.py`
+- [x] 检查现有生命周期测试覆盖，确认缺少真实路径级 TS/Python 对齐
+- [x] 读取 V3 原始 4 月/5 月与研究过滤 run，按 `rawStage/stage/transition/entryAdvice` 聚合盈亏
+- [x] 确认生命周期不能作为硬买卖标签，只能作为路径上下文、排序降权和报告诊断
+- [x] 产出审计文档：`2026-06-07-lifecycle-implementation-audit.md`
+- **Status:** complete
+
+### Phase 32: 无生命周期硬门槛对照复跑
+
+- [x] 新增 research-only 策略 `ranktrend_early_big_move_v3_no_lifecycle_gate`
+- [x] 保持默认 V3 不变，只把入场硬门槛回退到早期大肉结构本身
+- [x] 跑 4 月 current-bar / 30 bars：`bt_efe08f9fb3954988`
+- [x] 跑 5 月 current-bar / 30 bars：`bt_9c00f69c9b09426c`
+- [x] 归因失败来源，确认大量 `N_NEUTRAL + watch/avoid` 候选挤占交易路径
+- [x] 新增更窄 research-only 策略 `ranktrend_early_big_move_v3_context_probe`
+- [x] 跑 4 月 current-bar / 30 bars：`bt_69232223f3024f02`
+- [x] 跑 5 月 current-bar / 30 bars：`bt_a23990ecc8084021`
+- [x] 确认 context probe 仍未优于现有 V3 主线
+- **Status:** complete
+
+### Phase 33: 生命周期 A+B 融合设计审计
+
+- [x] 重新确认用户决策：生命周期不是主策略，也不是松散辅助门槛，而是 RankTrend A 之后的辅助决策系统 B。
+- [x] 审计当前生命周期字段从 TS/Python 生成、进入 `candidateTier`、进入执行层的完整路径。
+- [x] 检索外部金融研究和国内论坛语义，提炼“动量延续、注意力拥挤、假突破/假主升”的可用融合原则。
+- [x] 输出短设计：A+B 融合合同、生命周期 B 语义定义、当前代码需要拆开的点、TDD 测试清单。
+- [x] 等用户确认设计后，再进入 TDD：先写失败测试，再改 TS/Python 输出合同和 QuantBoard 执行入口。
+- [x] 新增 TS/Python `cycle.decision` 合同，保留 `entryAdvice` 为兼容展示字段。
+- [x] 新增 research-only 策略 `ranktrend_early_big_move_v3_lifecycle_fusion`，只在 A 结构通过后消费 B veto，不让 B 独立制造买入。
+- [x] 复跑 4 月/5 月 `current-bar / 30 bars`，确认首版 fusion 与同版本 V3 交易集合完全一致，尚未发挥 B 拦截能力。
+- [x] 修复 `cycle.decision.evidence` 合同：TS/Python 均写入真实 `riskPressure/divergenceSeverity/overheatSeverity`，不再保留 0 占位。
+- [x] 重新审视生命周期本体逻辑：确认首版 B 失败根因是 `stage=ignition/expansion -> allow` 的直译过浅，没有识别“该阻止的假突破”和“RankTrend 漏选但生命周期结构有效”的双向问题。
+- [x] 基于已成交亏损/漏选大肉证据完成第一轮 B 语义 TDD：新增 `veto` 反对通道与 `discovery` 研究提示通道，后者不进入交易候选池。
+- [x] 对齐 TS/Python 合同：TS 在 risk 生成后重新生成 `cycle.decision`，避免 live 端 action 和 evidence 漂移。
+- [x] 下一轮 TDD 聚焦 `rankPathCommitment` / 突破承接质量：识别“最后一跳很猛但整段承接不足”的假突破，同时保护低 long 但路径连续改善的大肉形态。
+- [ ] 用 4 月/5 月 V3 可入场信号做信号层复核：统计 `rankPathCommitment` veto 数量、被拦截票、是否命中亏损来源、是否误伤大肉。
+- **Status:** in_progress
+
+## Retired Baselines
+
+旧生命周期分层策略已被证伪，不再作为默认长测基线：
+
+| Label | Status | Reason |
+| --- | --- | --- |
+| `H1_half_hour_current_bar` | retired | 单靠生命周期分层买卖不能稳定产生收益 |
+| `H2_half_hour_next_bar` | retired | 单靠生命周期分层买卖不能稳定产生收益 |
+| `Q1_quarter_hour_next_bar` | retired | 新策略主证据来自 `half_hour`，quarter_hour 只保留为后续压力测试 |
+
+## Active Baselines
+
+当前默认 baseline set：
+
+```text
+early_big_move_v1
+```
+
+| Label | Snapshot | Execution | Purpose |
+| --- | --- | --- | --- |
+| `E1_half_hour_signal_forward40` | `half_hour` | signal-only | 验证第一层早期大肉候选召回 |
+| `E2_half_hour_ranked_current_bar` | `half_hour` | `current_bar` | 验证排序后实盘即时处理的乐观上限 |
+| `E3_half_hour_ranked_strict_fill` | `half_hour` | `next_bar` + strict fill | 验证 E2 的成交乐观偏差 |
+
+显式 V2 对照 baseline set：
+
+```text
+early_big_move_v2
+```
+
+| Label | Snapshot | Execution | Purpose |
+| --- | --- | --- | --- |
+| `V2_E1_half_hour_signal_forward40` | `half_hour` | signal-only | 验证 V2 第一层候选召回 |
+| `V2_E2_half_hour_ranked_current_bar` | `half_hour` | `current_bar` | 验证 V2 即时处理上限 |
+| `V2_E3_half_hour_ranked_strict_fill` | `half_hour` | `next_bar` + strict fill | 验证 V2 保守可执行性 |
+
+显式 V3 对照 baseline set：
+
+```text
+early_big_move_v3
+```
+
+| Label | Snapshot | Execution | Purpose |
+| --- | --- | --- | --- |
+| `V3_E1_half_hour_signal_forward50` | `half_hour` | signal-only | 验证 V3 第一层候选召回，持有观察窗口 50 bars |
+| `V3_E2_half_hour_ranked_current_bar` | `half_hour` | `current_bar` | 验证 V3 即时处理上限 |
+| `V3_E3_half_hour_ranked_strict_fill` | `half_hour` | `next_bar` + strict fill | 验证 V3 保守可执行性 |
+
+## Phase 21 Checkpoint
+
+Checkpoint: `checkpoint_2026-06-07_early_big_move_v1`
+
+| Label | Run ID | totalReturn | maxDrawdown | Sharpe | winRate | trades | buyFilled |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `E1_half_hour_signal_forward40` | `bt_359fe12a4c9c487f` | n/a | n/a | n/a | n/a | n/a | n/a |
+| `E2_half_hour_ranked_current_bar` | `bt_d4732abbb1c5486e` | `-7.43%` | `-16.08%` | `-0.4157` | `48.15%` | `108` | `112` |
+| `E3_half_hour_ranked_strict_fill` | `bt_2e3959f3ddb34ace` | `-5.31%` | `-15.08%` | `-0.6243` | `38.00%` | `100` | `105` |
+
+结论：第一层候选能进入交易模拟，但当前二级排序、卖出和风险控制不能直接产生正收益。下一阶段应优化排序/过滤，不回退到旧 `final=buy` 或生命周期分层基线。
+
+## Phase 22 Attribution
+
+本阶段只做归因，不改代码、不重跑策略。
+
+### 字段口径修正
+
+`rankTrend_early_big_move` 的核心加速度是：
+
+```text
+rankTrend.technical.momentumProfile.acceleration
+```
+
+不是：
+
+```text
+rankTrend.technical.signals.acceleration.score
+```
+
+后者是 0~1 的技术信号分数，只能表示 acceleration signal 的强弱，不能代表多周期动量加速度。后续排序、过滤和分析必须统一使用 `momentumProfile`。
+
+### E2 当前 bar 归因
+
+Run: `bt_d4732abbb1c5486e`
+
+| 条件 | 交易数 | 胜率 | 平均收益 | 收益合计 |
+| --- | ---: | ---: | ---: | ---: |
+| 全部 E2 | 108 | 48.15% | -0.31% | -32.97% |
+| 剔除 `N_NEUTRAL` | 63 | 55.56% | +0.50% | +31.24% |
+| `A_MAIN/B_IGNITION` 且涨幅 `< 6%` | 43 | 62.79% | +1.20% | +51.71% |
+| `A_MAIN/B_IGNITION` 且加速度 `>=20` 且涨幅 `< 6%` | 32 | 62.50% | +1.33% | +42.43% |
+| `A_MAIN/B_IGNITION` 且加速度 `>=30` 且涨幅 `< 8.5%` | 33 | 63.64% | +1.14% | +37.57% |
+| 仅 `B_IGNITION` | 42 | 59.52% | +0.69% | +29.13% |
+| 仅 `N_NEUTRAL` | 45 | 37.78% | -1.43% | -64.21% |
+
+E2 结论：
+
+- `N_NEUTRAL` 是主要拖累源：45 笔贡献 `-64.21%` 的单笔收益合计。
+- `A_MAIN/B_IGNITION + 涨幅不过热` 已经接近高胜率目标，其中涨幅 `< 6%` 达到 `62.79%`。
+- 继续硬等 `finalSignal=buy` 或 MACD 金叉没有帮助；E2 中 `final=buy` / MACD 金叉样本胜率反而低于整体。
+
+### E3 strict fill 归因
+
+Run: `bt_2e3959f3ddb34ace`
+
+| 条件 | 交易数 | 胜率 | 平均收益 | 收益合计 |
+| --- | ---: | ---: | ---: | ---: |
+| 全部 E3 | 100 | 38.00% | -0.46% | -46.36% |
+| 剔除 `N_NEUTRAL` | 58 | 43.10% | -0.18% | -10.41% |
+| `A_MAIN/B_IGNITION` 且涨幅 `< 6%` | 43 | 48.84% | +0.75% | +32.19% |
+| `A_MAIN/B_IGNITION` 且加速度 `>=20` 且涨幅 `< 6%` | 37 | 45.95% | +0.67% | +24.91% |
+| 仅 `A_MAIN` | 17 | 58.82% | +0.94% | +15.91% |
+| 仅 `B_IGNITION` | 41 | 36.59% | -0.64% | -26.32% |
+| 仅 `N_NEUTRAL` | 42 | 30.95% | -0.86% | -35.95% |
+| `zeroCross=hold` | 41 | 48.78% | +1.24% | +50.91% |
+| `zeroCross=buy` | 59 | 30.51% | -1.65% | -97.27% |
+
+E3 结论：
+
+- 严格成交后，`A_MAIN` 明显强于 `B_IGNITION` 和 `N_NEUTRAL`。
+- `zeroCross=buy` 在本轮 strict fill 中是负贡献，不应作为硬确认条件；它可能代表信号已经进入更拥挤、更容易隔日兑现的阶段。
+- `A_MAIN/B_IGNITION + 涨幅 < 6%` 能把 E3 从负收益拉到正收益，但胜率仍不足 60%，说明还需要独立出场和持有逻辑。
+
+### 退出规则归因
+
+当前 `ranktrend_early_big_move` 仍沿用默认退出逻辑，主要退出原因包括：
+
+| 退出原因 | 问题 |
+| --- | --- |
+| `compose_decision 卖出信号` | 旧生命周期/最终信号退出，和 early big move 捕捉大肉目标冲突最大；E2/E3 亏损主要集中在这里。 |
+| `D_EXIT_RISK` | 并非纯坏信号，很多盈利单最终在 D_EXIT_RISK 退出，适合保留为风险提示。 |
+| `排名跌出前50` | 属于死排名退出，和 RankTrend 动态结构目标冲突；后续应改成“退出热榜 3 个 half_hour bar”或“排名大幅下降 + MACD 死叉”。 |
+| `止盈` | 当前不适合做固定止盈；大肉策略需要让利润奔跑。 |
+
+### V2 初步规则方向
+
+V2 不应继续扩大第一层候选，而应把第二层变成“高胜率候选排序/过滤”：
+
+1. 第一层仍保留：`jump buy 高置信 + short/mid/long 同步转正 + momentumProfile.acceleration 抬升 + 可成交`。
+2. 第二层优先交易：
+   - `candidateTier in A_MAIN/B_IGNITION`；
+   - 当前涨幅优先 `< 6%`，`6%-8.5%` 只作为次优观察；
+   - `N_NEUTRAL` 不删除出候选池，但默认不进自动交易模拟，除非后续能找到额外共振条件。
+3. 辅助信号只排序，不硬门禁：
+   - `finalSignal=buy` 不作为入场前置；
+   - MACD 金叉不作为入场前置；
+   - `zeroCross=buy` 不作为入场前置，strict fill 下反而需要谨慎。
+4. 出场从默认生命周期逻辑改为 early big move 专属逻辑：
+   - 退出热榜连续 3 个 half_hour bar；
+   - 止损 5%；
+   - 排名大幅下降沿用 `rawChange < -50`，但必须叠加 MACD 死叉；
+   - 不设固定止盈。
+
+下一轮应实现 `early_big_move_v2` 或通过显式配置复跑上述规则，目标不是增加交易次数，而是先验证：
+
+```text
+胜率 >= 60%
+总收益转正
+交易数可少，但必须解释清楚每一笔入场理由和退出理由
+```
+
+## Phase 23 Checkpoint
+
+Checkpoint: `checkpoint_2026-06-07_early_big_move_v2`
+
+| Label | Run ID | totalReturn | realizedReturn | maxDrawdown | Sharpe | winRate | trades | buyFilled |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `V2_E1_half_hour_signal_forward40` | `bt_627db7e6c69446ca` | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| `V2_E2_half_hour_ranked_current_bar` | `bt_0d3233550bb54280` | `+5.31%` | `+5.22%` | `-6.81%` | `+1.6033` | `42.42%` | `33` | `37` |
+| `V2_E3_half_hour_ranked_strict_fill` | `bt_f34a868872404e17` | `+9.72%` | `+8.99%` | `-9.00%` | `+2.3456` | `55.26%` | `38` | `41` |
+
+结论：
+
+- V2 明显修复了 V1 负收益问题：E3 strict fill 从 `-5.31%` 提升到 `+9.72%`，接近 `10%` 收益目标。
+- 胜率仍未达到 `60%`：E3 为 `55.26%`，下一步重点不是扩大交易次数，而是减少低质量止损单。
+- `current_bar` 的收益低于 strict fill，说明 V2 下“更严格成交 + 更少噪声入场”反而更接近目标。
+- 这轮不能误读 `controlBacktests`：run 结果开头包含热榜 Top10 等对照组，轻量脚本如果只抓第一个 `totalReturn` 会读到对照组负收益，不是 V2 主策略收益。
+- `run-longtest-baselines` 第一轮真实执行时三条 run 已落库，但 CLI 在 Layer 3 对齐阶段因实盘 journal 为空仍扫描大 signals 结果而超时；已补早退测试和修复，后续 dry-run 正常。
+
+下一步方向：
+
+1. 对 V2 的亏损单做归因，重点看止损单的入场形态、涨幅区间、`A_MAIN/B_IGNITION` 差异和是否隔日兑现。
+2. 不恢复固定止盈；先研究移动退出或风险降级退出是否能把 E3 胜率推到 `60%`。
+3. 暂不扩大入场池，除非能证明新增条件不会牺牲 E3 strict fill 的收益和回撤。
+
+## Phase 24 Loss Attribution
+
+主线 run：`bt_f34a868872404e17`（`V2_E3_half_hour_ranked_strict_fill`）。
+
+读取口径：
+
+- `roundTripTrades`：38 笔完整交易回合，21 赢 / 17 输，胜率 `55.26%`。
+- `trades`：56 条卖出切片，只能做退出原因辅助统计，不能直接算胜率。
+- 入场特征来源：`result.signals`，按 `(entrySignalSnapshotId, code)` 匹配；Mongo `backtest_signals` 只保留压缩解释字段，不包含完整 `rankTrend.technical.momentumProfile`。
+
+核心结论：
+
+- 17 笔亏损单全部来自 `B_IGNITION`；`A_MAIN` 4 笔全部盈利，合计 `+77,468.75`。
+- 最大亏损来源是 `止损`：7 笔，合计 `-81,819.44`，平均单笔约 `-6.35%`。
+- `退出热榜连续3个bar` 不是坏退出：全体 12 笔中 9 赢 3 输，合计 `+74,197.35`。
+- `到达最大持有快照` 也不是坏退出：全体 12 笔中 10 赢 2 输，合计 `+110,014.74`。
+- 本轮 `zeroCross=buy` 不再是负反馈，E3 V2 中 23 笔胜率 `73.9%`；亏损更多集中在 `B_IGNITION + zeroCross=hold` 的弱确认段。
+- `divergence=hold` 是明显坏样本：3 笔全亏，合计 `-23,467.87`；`divergence=buy` 胜率 `72.2%`。
+- 简单观察口径中，`mid >= 20` 可把胜率推到 `60.7%` 且保留 `+103,315.44` 利润；`long >= 10` 可到 `60.0%`，但会损失部分大肉。下一轮只能作为候选验证，不直接写成默认规则。
+
+## Phase 25 V3 Candidate
+
+离线枚举 V2 已成交完整回合后，下一轮 V3 只验证一个最窄规则：
+
+```text
+A_MAIN: 保持 V2 入场，不额外加确认
+B_IGNITION: 仍满足 V2 基础 early big move 条件，同时要求：
+  - momentumProfile.mid >= 20
+  - technical.signals.zeroCross.signal == buy
+```
+
+选择原因：
+
+- E3 strict-fill：交易 20 笔，胜率 `80.0%`，利润 `+154,203.89`，止损 `0`。
+- E2 current-bar：交易 18 笔，胜率 `61.1%`，利润 `+80,089.44`，仍过 60%。
+- 比 `A only` 更不容易漏掉 B 点火大肉；比单独 `mid>=20` 更能过滤弱确认亏损；比 `mid>=20 and long>=10` 更稳过 E2 胜率线。
+
+V3 不改变：
+
+- 不加固定排名门槛。
+- 不恢复固定止盈。
+- 不把 MACD 金叉或 finalSignal 作为入场硬门槛。
+- 出场沿用 V2：退出热榜连续 3 bars、止损 5%、`rawChange < -50 + MACD death`。
+- 按用户要求验证“大肉需要长留”，V3 baseline 的持仓上限从 `40 bars` 调整为 `50 bars`。
+
+## Phase 25 Checkpoint
+
+Checkpoint: `checkpoint_2026-06-07_early_big_move_v3`
+
+| Label | Run ID | totalReturn | realizedReturn | maxDrawdown | Sharpe | winRate | trades | buyFilled |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `V3_E1_half_hour_signal_forward50` | `bt_4c7f44f34ab448fe` | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| `V3_E2_half_hour_ranked_current_bar` | `bt_5681c2735de646a1` | `+12.93%` | `+10.36%` | `-3.66%` | `+2.6936` | `58.06%` | `31` | `34` |
+| `V3_E3_half_hour_ranked_strict_fill` | `bt_b8061da4f92c4462` | `+9.32%` | `+8.73%` | `-7.13%` | `+1.9207` | `54.84%` | `31` | `33` |
+
+结论：
+
+- V3 current-bar 收益达到 `+12.93%`，但胜率 `58.06%`，仍未达到 `60%`。
+- V3 strict-fill 收益 `+9.32%`，接近 V2 strict-fill 的 `+9.72%`，但胜率 `54.84%`，也未达标。
+- 离线过滤在 V2 已成交样本上看起来很强，但真实复跑后会改变排序、资金占用、跳过成交、T+1 和持仓路径，不能把离线结果直接当成策略结果。
+- `50 bars` 对放大利润有效：V3 E3 中“到达最大持有快照”8 笔全胜，合计约 `+141,258.94`。
+- 未达标的主要原因不是大肉拿不住，而是止损单仍重：V3 E3 止损 9 笔，合计约 `-95,119.38`。
+- 下一轮不应继续盲目加硬过滤，应优先拆 V3 E3 的止损单和 A_MAIN 质量漂移。
+
 ## Phase 13 Implementation Plan
 
 Phase 13 只做报告诊断，不做过滤：
@@ -589,3 +988,5 @@ Phase 13 只做报告诊断，不做过滤：
 | --- | --- | --- |
 | CLI 回测完整 JSON 输出过大导致 shell 超时 | 1 | run 已落库；改用小脚本读取 `bt_1f012ea44bb44092` 的质量字段完成验证。 |
 | 一次性读取 6 个完整回测报告提取信号分布超时 | 1 | 改为按 run 分批读取完整报告，最终取得 H1/H2/Q1 过滤前后信号分布。 |
+| V2 checkpoint 三条 run 已 completed，但 CLI 在 Layer 3 对齐阶段超时 | 1 | 根因是实盘 journal 为空时仍解压扫描大 backtest signals；已新增早退修复，后续 dry-run 正常。 |
+| 轻量读取 V2 指标时误抓到 `controlBacktests` 对照组字段 | 1 | 改为只扫描顶层主策略字段和 `tradeSimulation` 摘要，确认 V2 主策略 E2/E3 均为正收益。 |

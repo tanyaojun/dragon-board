@@ -55,19 +55,22 @@ def _rank_config(simple: SimpleRankTrendConfig | None = None) -> RankTrendConfig
 
 
 def _entry_conditions(signal: dict[str, Any]) -> bool:
-    """入场条件 AND：跳跃检测 + 排名 + 股价确认 + 涨停过滤 + MACD 金叉 + 置信度。"""
+    """入场条件 AND：跳跃检测 + 动量/加速度共振 + 股价确认 + 涨停过滤 + MACD 金叉 + 置信度。"""
     rt = signal.get("rankTrend")
     if not isinstance(rt, dict):
         return False
     technical = rt.get("technical") or {}
+    signals = technical.get("signals") or {}
     jump = rt.get("jump") or {}
 
     # 1. 内生阈值：排名持续跳跃式上升
     if jump.get("event") != "jump" or jump.get("direction") != "buy" or not jump.get("sustained"):
         return False
 
-    # 2. 排名前 30
-    if float(signal.get("rank", 999)) > 30:
+    # 2. 多周期动量和加速度共振
+    if (signals.get("direction") or {}).get("signal") != "buy":
+        return False
+    if (signals.get("acceleration") or {}).get("signal") != "buy":
         return False
 
     # 3. 股价同向确认：股价在涨

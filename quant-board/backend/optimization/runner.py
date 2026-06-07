@@ -14,6 +14,7 @@ from backend.optimization.search_space import (
     default_search_space,
     normalize_search_space,
     score_value,
+    search_space_mode,
 )
 from backend.optimization.stability import parameter_stability
 from backend.optimization.trial import TrialExecutor
@@ -41,6 +42,7 @@ class OptimizationRunner:
             raise ValueError(f"unsupported optimization method: {method}")
 
         search_space = normalize_search_space(request.get("search_space") or default_search_space())
+        search_mode = search_space_mode(search_space)
         candidate_rows = candidates(search_space)
         total_candidate_count = len(candidate_rows)
         max_trials = max(1, int(request.get("max_trials") or request.get("trials") or 12))
@@ -125,6 +127,8 @@ class OptimizationRunner:
             "method": method,
             "optimizer": optimizer_meta["name"],
             "optimizerMeta": optimizer_meta,
+            "searchSpaceMode": search_mode,
+            "search_space_mode": search_mode,
             "strategyName": strategy_name,
             "strategy_name": strategy_name,
             "objective": objective,

@@ -33,6 +33,54 @@ STRATEGY_DEFINITIONS: list[dict[str, Any]] = [
     },
 ]
 
+RESEARCH_STRATEGY_DEFINITIONS: list[dict[str, Any]] = [
+    {
+        "key": "ranktrend_jump",
+        "label": "RankTrend Jump 研究策略",
+        "description": "只用于 Jump 内生阈值研究复跑，不作为默认实盘策略。",
+    },
+    {
+        "key": "ranktrend_early_big_move",
+        "label": "RankTrend 早期大肉研究策略",
+        "description": "用于早期大肉候选召回、排序和长测基线，不作为自动买入策略。",
+    },
+    {
+        "key": "ranktrend_early_big_move_v2",
+        "label": "RankTrend 早期大肉 V2 研究策略",
+        "description": "在 V1 召回上收窄二级交易池，并使用 early big move 专属退出规则。",
+    },
+    {
+        "key": "ranktrend_early_big_move_v3",
+        "label": "RankTrend 早期大肉 V3 研究策略",
+        "description": "在 V2 基础上保留 A_MAIN，并要求 B_IGNITION 具备中周期动量与零轴同步确认。",
+    },
+    {
+        "key": "ranktrend_early_big_move_v3_no_lifecycle_gate",
+        "label": "RankTrend 早期大肉 V3 无生命周期硬门槛研究策略",
+        "description": "入场回到早期大肉结构本身，生命周期只保留为排序上下文和诊断输出，不再作为硬门槛。",
+    },
+    {
+        "key": "ranktrend_early_big_move_v3_context_probe",
+        "label": "RankTrend 早期大肉 V3 路径探针对照策略",
+        "description": "保留 V3 主干，只额外探测极少数 entryAdvice=preferred 的非 A/B 早期结构候选。",
+    },
+    {
+        "key": "ranktrend_early_big_move_v3_lifecycle_fusion",
+        "label": "RankTrend 早期大肉 V3 生命周期融合研究",
+        "description": "研究 A+B 融合合同：RankTrend 主结构先通过，生命周期辅助决策 veto 一票否决。",
+    },
+    {
+        "key": "ranktrend_early_big_move_v3_a_main_risk_filter",
+        "label": "RankTrend 早期大肉 V3 A_MAIN 风险过滤研究",
+        "description": "只验证 A_MAIN 假主升过滤；B_IGNITION 仍沿用 V3 二次确认。",
+    },
+    {
+        "key": "ranktrend_early_big_move_v3_b_long_filter",
+        "label": "RankTrend 早期大肉 V3 B_IGNITION 长周期过滤研究",
+        "description": "只验证 B_IGNITION 长周期动量不足过滤；A_MAIN 仍沿用 V3。",
+    },
+]
+
 THEME_STRATEGY_DEFINITIONS: list[dict[str, Any]] = [
     {
         "key": "theme_rotation",
@@ -54,6 +102,7 @@ THEME_STRATEGY_DEFINITIONS: list[dict[str, Any]] = [
 THEME_STRATEGY_NAMES = {definition["key"] for definition in THEME_STRATEGY_DEFINITIONS}
 
 SUPPORTED_STRATEGY_NAMES = {definition["key"] for definition in STRATEGY_DEFINITIONS}
+SUPPORTED_STRATEGY_NAMES |= {definition["key"] for definition in RESEARCH_STRATEGY_DEFINITIONS}
 SUPPORTED_STRATEGY_NAMES |= THEME_STRATEGY_NAMES
 
 CONTROL_STRATEGIES = [
@@ -454,12 +503,75 @@ class ABCombinedStrategy(BaseStrategy):
             d.signal = "hold"
 
 
+class RankTrendJumpResearchStrategy(BaseStrategy):
+    key = "ranktrend_jump"
+    label = "RankTrend Jump 研究策略"
+    description = "只用于 Jump 内生阈值研究复跑，不作为默认实盘策略。"
+
+
+class RankTrendEarlyBigMoveStrategy(BaseStrategy):
+    key = "ranktrend_early_big_move"
+    label = "RankTrend 早期大肉研究策略"
+    description = "用于早期大肉候选召回、排序和长测基线，不作为自动买入策略。"
+
+
+class RankTrendEarlyBigMoveV2Strategy(BaseStrategy):
+    key = "ranktrend_early_big_move_v2"
+    label = "RankTrend 早期大肉 V2 研究策略"
+    description = "在 V1 召回上收窄二级交易池，并使用 early big move 专属退出规则。"
+
+
+class RankTrendEarlyBigMoveV3Strategy(BaseStrategy):
+    key = "ranktrend_early_big_move_v3"
+    label = "RankTrend 早期大肉 V3 研究策略"
+    description = "在 V2 基础上保留 A_MAIN，并要求 B_IGNITION 具备中周期动量与零轴同步确认。"
+
+
+class RankTrendEarlyBigMoveV3NoLifecycleGateStrategy(BaseStrategy):
+    key = "ranktrend_early_big_move_v3_no_lifecycle_gate"
+    label = "RankTrend 早期大肉 V3 无生命周期硬门槛研究策略"
+    description = "入场回到早期大肉结构本身，生命周期只保留为排序上下文和诊断输出，不再作为硬门槛。"
+
+
+class RankTrendEarlyBigMoveV3ContextProbeStrategy(BaseStrategy):
+    key = "ranktrend_early_big_move_v3_context_probe"
+    label = "RankTrend 早期大肉 V3 路径探针对照策略"
+    description = "保留 V3 主干，只额外探测极少数 entryAdvice=preferred 的非 A/B 早期结构候选。"
+
+
+class RankTrendEarlyBigMoveV3LifecycleFusionStrategy(BaseStrategy):
+    key = "ranktrend_early_big_move_v3_lifecycle_fusion"
+    label = "RankTrend 早期大肉 V3 生命周期融合研究"
+    description = "研究 A+B 融合合同：RankTrend 主结构先通过，生命周期辅助决策 veto 一票否决。"
+
+
+class RankTrendEarlyBigMoveV3AMainRiskFilterStrategy(BaseStrategy):
+    key = "ranktrend_early_big_move_v3_a_main_risk_filter"
+    label = "RankTrend 早期大肉 V3 A_MAIN 风险过滤研究"
+    description = "只验证 A_MAIN 假主升过滤；B_IGNITION 仍沿用 V3 二次确认。"
+
+
+class RankTrendEarlyBigMoveV3BLongFilterStrategy(BaseStrategy):
+    key = "ranktrend_early_big_move_v3_b_long_filter"
+    label = "RankTrend 早期大肉 V3 B_IGNITION 长周期过滤研究"
+    description = "只验证 B_IGNITION 长周期动量不足过滤；A_MAIN 仍沿用 V3。"
+
+
 STRATEGY_REGISTRY: dict[str, type[BaseStrategy]] = {
     "rank_trend_candidate": RankTrendCandidateStrategy,
     "hot_top10": HotTop10Strategy,
     "a_main_only": AMainOnlyStrategy,
     "b_ignition_only": BIgnitionOnlyStrategy,
     "a_b_combined": ABCombinedStrategy,
+    "ranktrend_jump": RankTrendJumpResearchStrategy,
+    "ranktrend_early_big_move": RankTrendEarlyBigMoveStrategy,
+    "ranktrend_early_big_move_v2": RankTrendEarlyBigMoveV2Strategy,
+    "ranktrend_early_big_move_v3": RankTrendEarlyBigMoveV3Strategy,
+    "ranktrend_early_big_move_v3_no_lifecycle_gate": RankTrendEarlyBigMoveV3NoLifecycleGateStrategy,
+    "ranktrend_early_big_move_v3_context_probe": RankTrendEarlyBigMoveV3ContextProbeStrategy,
+    "ranktrend_early_big_move_v3_lifecycle_fusion": RankTrendEarlyBigMoveV3LifecycleFusionStrategy,
+    "ranktrend_early_big_move_v3_a_main_risk_filter": RankTrendEarlyBigMoveV3AMainRiskFilterStrategy,
+    "ranktrend_early_big_move_v3_b_long_filter": RankTrendEarlyBigMoveV3BLongFilterStrategy,
 }
 
 

@@ -1175,6 +1175,58 @@ openPositionCount
 
 `status` 只能是 `running`、`completed` 或 `failed`。`failed` 必须返回结构化错误，不能用空 `trials` 或空 `best` 表示失败。
 
+### `POST /api/research/ranktrend-jump`
+
+运行 RankTrend Jump 内生阈值研究复跑。该入口是轻量研究工具，不自动写回默认参数，也不代表自动下单能力。
+
+```json
+{
+  "datasetId": "dragonboard_live",
+  "snapshotType": "half_hour",
+  "randomSeed": 20260430,
+  "trials": 24,
+  "fillFallbackMode": "fallback_penalized",
+  "validationRatio": 0.3,
+  "walkForwardTrainDays": 8,
+  "walkForwardValidationDays": 2,
+  "walkForwardStepDays": 2
+}
+```
+
+口径：
+
+- `method=tpe`，使用 Optuna `TPESampler`。
+- `jumpDeltaPct` 默认连续搜索范围为 `8.0 ~ 22.0`；`delta=15` 只作为候选区间内的研究值，不写回默认。
+- `strategyName=ranktrend_jump`，`objective=ranktrend_jump`。
+- 固定保留 `dataset_id`、`snapshot_type`、`strategy_version`、`config_hash`、`random_seed`。
+- 交易模拟使用当前 bar 信号成交、A 股 T+1、`maxHoldingBars=40`、真实权益曲线、涨跌停可成交检查、盘口对手价、成交量/盘口参与率约束。
+- `fillFallbackMode=strict_fill|blocked_fill|fallback_penalized`。前两者缺买一/卖一直接不成交；`fallback_penalized` 允许快照价回退，但增加额外滑点，并在 `researchSummary` 中报告回退占比。
+
+返回包含 `summary` / `researchSummary`：
+
+```json
+{
+  "runId": "opt_xxx",
+  "status": "completed",
+  "analysisMode": "ranktrend_jump_research",
+  "strategyName": "ranktrend_jump",
+  "method": "tpe",
+  "randomSeed": 20260430,
+  "configHash": "abc123",
+  "summary": {
+    "bestDeltaPct": 13.62,
+    "riskLevel": "medium",
+    "snapshotFallbackRate": 0.0421,
+    "walkForward": {
+      "enabled": true,
+      "segmentCount": 4,
+      "positiveReturnSegmentRate": 0.25
+    },
+    "conclusion": "该结果只作为 RankTrend Jump 实盘验证候选，不自动写回默认参数。"
+  }
+}
+```
+
 ### V12 ThemeTrend 优化接口
 
 以下接口是 V12 已落地的 ThemeTrend 优化合同。优化结果只生成候选参数，不自动写回 Python、TypeScript、API、CLI、前端表单或文档默认值。

@@ -43,10 +43,13 @@ export function composeCandidateTier(input: {
     technical.signals.direction.signal === 'buy' ||
     technical.signals.acceleration.signal === 'buy' ||
     technical.macd.cross === 'golden'
+  const lifecycleDecision = cycle.decision
 
   let candidateTier: CandidateTier = 'N_NEUTRAL'
 
-  if (
+  if (lifecycleDecision.action === 'veto') {
+    reasons.push('生命周期辅助决策一票否决，阻止进入 A/B 候选池')
+  } else if (
     (stage === 'reversal' || stage === 'cooling') &&
     (momentum.short <= -2 || momentum.acceleration <= -2 || pressure >= 0.55)
   ) {
