@@ -5,15 +5,23 @@
   },
   "include": [
     "env.d.ts",
-    "src/types/rankTrendDefaults.ts",
-    "src/utils/eventManager.ts",
-    "src/utils/logger.ts",
-    "src/services/RankTrendAnalyzer.ts",
-    "src/services/rankTrend/**/*.ts"
+    "src/**/*"
   ],
   "exclude": [
     "src/**/__tests__/*",
+    "src/devtools/**",
     "src/流程图/**/*",
-    "src/utils/dataQualityChecker.ts"
+    "src/utils/dataQualityChecker.ts",
+    "src/constants/dataLoader.ts",
+    "src/services/AlgorithmManager.ts",
+    "src/services/dragon/BusinessRules.ts",
+    "src/services/dragon/BusinessValidator.ts",
+    "src/services/dragon/ContextBuilder.ts",
+    "src/**/*-bak.ts",
+    "src/**/*0310.ts",
+    "src/**/*0305.ts",
+    "src/**/*0304.ts",
+    "src/**/*0306.ts",
+    "src/**/*—bak.vue"
   ]
 }
