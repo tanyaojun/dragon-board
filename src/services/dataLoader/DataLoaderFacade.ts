@@ -160,18 +160,21 @@ class DataLoaderService {
     }
   }
 
-  private async maybeRefreshPlatformCache() {
+  private async maybeRefreshPlatformCache(): Promise<boolean> {
     if (!platformHotlistService.shouldRefresh(this.PLATFORM_REFRESH_INTERVAL)) {
-      return
+      return false
     }
 
     if (!platformHotlistService.hasFreshCache()) {
       await this.loadAllPlatforms(true)
       await this.loadLimitUpData(true)
       await themeFacade.refreshRuntime({ source: 'dataLoader', syncStocks: true })
+      platformHotlistService.markRefreshed()
+      return true
     }
 
     platformHotlistService.markRefreshed()
+    return false
   }
 
   // ========== 加载状态管理 ==========
@@ -554,7 +557,10 @@ class DataLoaderService {
       }
 
       await this.updateVolumeRatios(allStockCodes)
-      await this.maybeRefreshPlatformCache()
+      const platformRefreshed = await this.maybeRefreshPlatformCache()
+      if (!platformRefreshed) {
+        await this.refreshRankTrendSignals()
+      }
       return
     }
 
@@ -589,7 +595,10 @@ class DataLoaderService {
       await this.updateVolumeRatios(allStockCodes)
     }
 
-    await this.maybeRefreshPlatformCache()
+    const platformRefreshed = await this.maybeRefreshPlatformCache()
+    if (!platformRefreshed) {
+      await this.refreshRankTrendSignals()
+    }
 
     debugLog('[DataLoader] 行情刷新完成')
   }

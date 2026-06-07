@@ -199,7 +199,14 @@ vi.mock('../RankTrendSignalService', () => ({
           releaseSignalCalculation = resolve
         })
       }
-      return [{ code: '000001', name: '平安银行', rankTrendCoverageWarning: 'refreshed' }]
+      const currentStocks = dataLayer.getStocks()
+      if (!currentStocks.length) {
+        return [{ code: '000001', name: '平安银行', rankTrendCoverageWarning: 'refreshed' }]
+      }
+      return currentStocks.map((stock: any) => ({
+        ...stock,
+        rankTrendCoverageWarning: 'refreshed',
+      }))
     }),
   },
 }))
@@ -878,6 +885,29 @@ describe('DataLoaderFacade', () => {
       dataLoader.stopQuoteAutoRefresh()
       vi.useRealTimers()
     }
+  })
+
+  it('recalculates RankTrend signals during trading-time quote refresh', async () => {
+    const { dataLoader } = await import('../../dataLoader')
+    const { rankTrendSignalService } = await import('../RankTrendSignalService')
+
+    dataLayer.setMergedStocks([{ code: '000001', name: '平安银行' } as any])
+
+    await (dataLoader as any).runQuoteRefresh(50)
+
+    expect(rankTrendSignalService.refreshRankTrendSignals).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not recalculate RankTrend signals outside trading time quote refresh', async () => {
+    timeState.tradingTime = false
+    const { dataLoader } = await import('../../dataLoader')
+    const { rankTrendSignalService } = await import('../RankTrendSignalService')
+
+    dataLayer.setMergedStocks([{ code: '000001', name: '平安银行' } as any])
+
+    await (dataLoader as any).runQuoteRefresh(50)
+
+    expect(rankTrendSignalService.refreshRankTrendSignals).not.toHaveBeenCalled()
   })
 
   it('skips quote fallback while a full refresh owns the quote HTTP resource', async () => {
