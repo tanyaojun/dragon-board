@@ -1,4 +1,5 @@
 import { candidateJournalService } from '@/services/candidate/CandidateJournalService'
+import { isTradingTime } from '@/utils/time'
 import type { JumpSignalResult } from './jumpSignalService'
 
 const FEISHU_ENDPOINT = '/api/notifications/jump-signal'
@@ -45,10 +46,6 @@ export class JumpSignalNotifier {
       }
     })
 
-    // 飞书推送：冷却控制
-    if (this.isCoolingDown(code, 'entry')) return
-    this.markNotified(code, 'entry')
-
     this.sendFeishu({
       code,
       name: String(stock?.name || ''),
@@ -89,10 +86,6 @@ export class JumpSignalNotifier {
       }
     })
 
-    // 飞书推送：冷却控制
-    if (this.isCoolingDown(code, 'exit')) return
-    this.markNotified(code, 'exit')
-
     this.sendFeishu({
       code,
       name: String(stock?.name || ''),
@@ -116,6 +109,9 @@ export class JumpSignalNotifier {
   }
 
   private sendFeishu(event: NotifyEvent): void {
+    if (!isTradingTime()) return
+    if (this.isCoolingDown(event.code, event.signalType)) return
+    this.markNotified(event.code, event.signalType)
     if (typeof globalThis.fetch !== 'function') return
 
     globalThis.fetch(FEISHU_ENDPOINT, {
