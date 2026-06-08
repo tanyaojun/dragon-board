@@ -30,6 +30,38 @@ describe('StockMergeCoordinator', () => {
     expect(stock.volumeRatioMeta).toBeUndefined()
   })
 
+  it('keeps quote-provided volume ratio during stock merge', async () => {
+    const [stock] = await new StockMergeCoordinator().merge({
+      platformData: {
+        eastmoney: [{ code: '000001', name: '样本股', rank: 1 }],
+      },
+      latestQuotes: new Map([
+        [
+          '000001',
+          {
+            code: '000001',
+            name: '样本股',
+            volume: 120000,
+            volumeRatio: 1.88,
+          },
+        ],
+      ]),
+      volumeHistoryMap: new Map(),
+      intradayVolumeHistoryMap: new Map(),
+      existingMap: new Map(),
+    })
+
+    expect(stock).toMatchObject({
+      volume: 120000,
+      volumeRatio: 1.88,
+      volumeRatioMeta: expect.objectContaining({
+        status: 'fresh',
+        source: 'daily_snapshot',
+        reason: 'quote_feed',
+      }),
+    })
+  })
+
   it('lets explicit zero money-flow fields clear existing values', async () => {
     const [stock] = await new StockMergeCoordinator().merge({
       platformData: {

@@ -119,6 +119,7 @@ export class StockMergeCoordinator {
       tdxSellVolume: quote.tdxSellVolume ?? stock.tdxSellVolume,
       tdxCurrentVolume: quote.tdxCurrentVolume ?? stock.tdxCurrentVolume,
     })
+    this.applyQuoteVolumeRatio(stock, quote)
 
     let stockName = ''
 
@@ -137,6 +138,22 @@ export class StockMergeCoordinator {
 
     if (stockName) {
       stock.name = stockName
+    }
+  }
+
+  private applyQuoteVolumeRatio(stock: any, quote: any): void {
+    const volumeRatio = Number(quote?.volumeRatio)
+    if (!Number.isFinite(volumeRatio) || volumeRatio <= 0) return
+
+    stock.volumeRatio = Number(volumeRatio.toFixed(2))
+    stock.volumeRatioMeta = {
+      status: 'fresh',
+      source: 'daily_snapshot',
+      calculatedAt: Date.now(),
+      currentVolume: Number(stock.volume) || 0,
+      rawRatio: stock.volumeRatio,
+      capped: false,
+      reason: 'quote_feed',
     }
   }
 

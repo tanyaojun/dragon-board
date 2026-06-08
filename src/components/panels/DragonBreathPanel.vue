@@ -1279,7 +1279,9 @@ async function loadHotListSentiment() {
       (b: SnapshotFrameBundle) => b.tradingDate === today && b.slotTime >= '15:00',
     )
     if (todayBundle && hotListSentiment.value) {
-      persistHotListSentiment(hotListSentiment.value, today)
+      void persistHotListSentiment(hotListSentiment.value, {
+        tradingDate: todayBundle.tradingDate,
+      })
     }
   } catch (err: any) {
     console.warn('[DragonBreathPanel] 热榜情绪分析失败:', err)

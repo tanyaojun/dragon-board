@@ -158,31 +158,8 @@
               </div>
             </template>
 
-            <template v-else-if="col.key === 'strategyStatus'">
-              <div
-                class="strategy-status-cell"
-                :class="[
-                  `cycle-marker-${getRankTrendBreakdown(stock).classKeys.cycle}`,
-                ]"
-                @mouseenter="showStatusTooltip($event, stock)"
-                @mousemove="moveStatusTooltip($event)" @mouseleave="hideStatusTooltip">
-                <span
-                  class="strategy-status-label"
-                  :class="`strategy-tier-${getRankTrendBreakdown(stock).classKeys.tier}`"
-                >
-                  {{ getRankTrendBreakdown(stock).tierLabel }}
-                </span>
-              </div>
-            </template>
-
-            <template v-else-if="col.key === 'zlje' || col.key === 'cddje'">
-              <span
-                :title="
-                  stock.moneyFlowEstimated === true || stock.capitalFlowSource === 'estimated_l1'
-                    ? 'L1估算资金流'
-                    : undefined
-                "
-              >{{ formatCell(col.key, stock) }}</span>
+            <template v-else-if="col.key === 'zlje' || col.key === 'zljzb'">
+              <span :title="getMoneyFlowTitle(col.key, stock)">{{ formatCell(col.key, stock) }}</span>
             </template>
 
             <template v-else-if="col.key === 'volumeRatio'">
@@ -243,10 +220,6 @@
       :style="{ left: `${confidenceTooltip.x}px`, top: `${confidenceTooltip.y}px` }">
       {{ confidenceTooltip.content }}
     </div>
-    <div v-if="statusTooltip.visible" class="status-tooltip"
-      :style="{ left: `${statusTooltip.x}px`, top: `${statusTooltip.y}px` }">
-      {{ statusTooltip.content }}
-    </div>
     <div v-if="rowTooltip.visible" class="row-tooltip" :style="{ left: `${rowTooltip.x}px`, top: `${rowTooltip.y}px` }">
       {{ rowTooltip.content }}
     </div>
@@ -267,10 +240,6 @@ import { dataLoader } from '../../services/dataLoader'
 import { candidateJournalService } from '@/services/candidate/CandidateJournalService'
 import { openingSignalStore } from '@/services/hotlist/OpeningSignalStore'
 import RankTrendPanel from '../../components/panels/RankTrendPanel.vue'
-import {
-  buildRankTrendStatusContext,
-  getRankTrendDisplayBreakdown,
-} from '../../services/rankTrend/compat'
 const props = defineProps<{
   loading?: boolean
 }>()
@@ -283,7 +252,6 @@ const emit = defineEmits<{
 const uiStore = useUIStore()
 const favoriteStore = useFavoriteStore()
 const { sortedStocks } = storeToRefs(uiStore)
-const rankTrendStatusContext = computed(() => buildRankTrendStatusContext(sortedStocks.value))
 
 // ========== 加载状态 ==========
 const isLoading = computed(() => {
@@ -344,12 +312,6 @@ const rowTooltip = ref({
   y: 0,
   content: '',
 })
-const statusTooltip = ref({
-  visible: false,
-  x: 0,
-  y: 0,
-  content: '',
-})
 const openingSignalsByCode = openingSignalStore.signalsByCode
 
 // 板块列表状态
@@ -377,11 +339,8 @@ const columns = [
   { key: 'rankChange', label: '变化', group: 'comprehensive', always: true },
   { key: 'jumpSignal', label: '候选池', group: 'comprehensive', always: true },
   { key: 'confidence', label: '置信度', group: 'comprehensive', always: true },
-  { key: 'strategyStatus', label: '状态', group: 'comprehensive', always: true },
   { key: 'zlje', label: '主力净额', group: 'money', always: true },
   { key: 'zljzb', label: '主力%', group: 'money', always: true },
-  { key: 'cddje', label: '超大单', group: 'money', always: true },
-  { key: 'cddjzb', label: '超大%', group: 'money', always: true },
   { key: 'volume', label: '成交量', group: 'quote', always: true },
   { key: 'volumeRatio', label: '量比', group: 'quote', always: true },
   { key: 'turnover', label: '成交额', group: 'quote', always: true },
@@ -411,11 +370,8 @@ const COLUMN_WIDTHS: Record<string, string> = {
   rankChange: '50px',
   jumpSignal: '88px',
   confidence: '70px',
-  strategyStatus: '82px',
   zlje: '90px',
   zljzb: '90px',
-  cddje: '90px',
-  cddjzb: '90px',
   volume: '80px',
   volumeRatio: '70px',
   turnover: '80px',
@@ -811,7 +767,12 @@ const getRankTrendAnalysis = (stock: any) => stock?.rankTrend
 const getStockValue = (stock: Stock, key: string) => (stock as unknown as Record<string, unknown>)[key]
 
 const getRankChange = (stock: any) =>
-  Math.round(getRankTrendAnalysis(stock)?.meta?.change ?? stock?.rankChange ?? 0)
+  Math.round(
+    getRankTrendAnalysis(stock)?.meta?.change ??
+      getRankTrendAnalysis(stock)?.change ??
+      stock?.rankChange ??
+      0,
+  )
 
 const candidatePoolStateLabels: Record<string, string> = {
   idle: '未触发',
@@ -887,10 +848,16 @@ const openCandidatePoolFromCell = (stock: Stock) => {
 }
 
 const getFinalSignal = (stock: any) =>
-  getRankTrendAnalysis(stock)?.decision?.final?.signal ?? stock?.finalSignal ?? 'none'
+  getRankTrendAnalysis(stock)?.decision?.final?.signal ??
+  getRankTrendAnalysis(stock)?.finalSignal ??
+  stock?.finalSignal ??
+  'none'
 
 const getFinalConfidence = (stock: any) =>
-  getRankTrendAnalysis(stock)?.decision?.final?.confidence ?? stock?.finalConfidence ?? 0
+  getRankTrendAnalysis(stock)?.decision?.final?.confidence ??
+  getRankTrendAnalysis(stock)?.finalConfidence ??
+  stock?.finalConfidence ??
+  0
 
 const getMacdCross = (stock: any) =>
   getRankTrendAnalysis(stock)?.technical?.macd?.cross ?? stock?.macdCross ?? 'none'
@@ -925,36 +892,6 @@ const getZeroCrossConfidence = (stock: any) =>
 const getAttentionStage = (stock: any) =>
   getRankTrendAnalysis(stock)?.cycle?.stage
 
-const getRankTrendBreakdown = (stock: any) =>
-  getRankTrendDisplayBreakdown(getRankTrendAnalysis(stock), stock, rankTrendStatusContext.value)
-
-const formatRankTrendStatus = (stock: any) => getRankTrendBreakdown(stock).tierLabel
-
-const getRankTrendStatusTooltip = (stock: any) => getRankTrendBreakdown(stock).tooltip
-
-const showStatusTooltip = (event: MouseEvent, stock: any) => {
-  hideRowTooltip()
-  hideConfidenceTooltip()
-  const content = getRankTrendStatusTooltip(stock)
-  if (!content) return
-  statusTooltip.value = {
-    visible: true,
-    x: event.clientX + 16,
-    y: event.clientY + 16,
-    content,
-  }
-}
-
-const moveStatusTooltip = (event: MouseEvent) => {
-  if (!statusTooltip.value.visible) return
-  statusTooltip.value.x = event.clientX + 16
-  statusTooltip.value.y = event.clientY + 16
-}
-
-const hideStatusTooltip = () => {
-  statusTooltip.value.visible = false
-}
-
 const getOverheatRiskSignal = (stock: any) =>
   getRankTrendAnalysis(stock)?.risk?.overheat?.signal ?? 'none'
 
@@ -988,7 +925,7 @@ const hasMoneyFlowSource = (stock: any) =>
   Boolean(stock.capitalFlowSource)
 
 const shouldDisplayMoneyFlow = (key: string, stock: any) => {
-  if (!['zlje', 'zljzb', 'cddje', 'cddjzb'].includes(key)) return false
+  if (!['zlje', 'zljzb'].includes(key)) return false
   const value = Number(stock[key])
   return Number.isFinite(value) && (value !== 0 || hasMoneyFlowSource(stock))
 }
@@ -996,10 +933,21 @@ const shouldDisplayMoneyFlow = (key: string, stock: any) => {
 const formatMoneyFlowCell = (key: string, stock: any): string => {
   if (!shouldDisplayMoneyFlow(key, stock)) return '-'
   const value = Number(stock[key])
-  if (key === 'zljzb' || key === 'cddjzb') {
+  if (key === 'zljzb') {
     return `${value > 0 ? '+' : ''}${value.toFixed(2)}%`
   }
   return formatMoney(value)
+}
+
+const getMoneyFlowTitle = (key: string, stock: any): string | undefined => {
+  if (stock.capitalFlowSource === 'sina_money_flow' || stock.moneyFlowSource === 'sina') {
+    return key === 'zljzb' ? '按成交额估算：主力净额 / 成交额' : '新浪资金流备用源'
+  }
+  if (stock.capitalFlowSource === 'estimated_l1' || stock.moneyFlowSource === 'tdx_estimate') {
+    return 'L1估算资金流'
+  }
+  if (stock.moneyFlowSource === 'eastmoney') return '东财资金流'
+  return undefined
 }
 
 const formatVolume = (volume: number): string => {
@@ -1011,8 +959,6 @@ const formatVolume = (volume: number): string => {
 }
 
 const formatCell = (key: string, stock: any) => {
-  if (key === 'strategyStatus') return formatRankTrendStatus(stock)
-
   const value = key === 'rankChange' ? getRankChange(stock) : stock[key]
   if (value === undefined || value === null) return '-'
 
@@ -1026,7 +972,7 @@ const formatCell = (key: string, stock: any) => {
     return `${speed > 0 ? '+' : ''}${speed.toFixed(2)}%`
   }
 
-  if (['zlje', 'zljzb', 'cddje', 'cddjzb'].includes(key)) {
+  if (['zlje', 'zljzb'].includes(key)) {
     return formatMoneyFlowCell(key, stock)
   }
 
@@ -1062,7 +1008,6 @@ const getCellClass = (key: string, stock: any) => {
   if (key === 'code') classes.push('code-cell')
   else if (key === 'name') classes.push('name-cell')
   else if (key === 'themes') classes.push('sector-cell')
-  else if (key === 'strategyStatus') classes.push('strategy-cell')
   else classes.push('number-cell')
 
   if (key === 'change' || key === 'speed') {
@@ -1082,7 +1027,7 @@ const getCellClass = (key: string, stock: any) => {
     else if (ratio && ratio < 0.8) classes.push('volume-ratio-low')
   }
 
-  if (key === 'zlje' || key === 'cddje') {
+  if (key === 'zlje') {
     const value = stock[key]
     if (value > 0) classes.push('money-positive')
     else if (value < 0) classes.push('money-negative')
@@ -1094,10 +1039,6 @@ const getCellClass = (key: string, stock: any) => {
     const change = getRankChange(stock)
     if (change > 0) classes.push('rank-up')
     else if (change < 0) classes.push('rank-down')
-  }
-
-  if (key === 'strategyStatus') {
-    classes.push(`strategy-tier-${getRankTrendBreakdown(stock).classKeys.tier}`)
   }
 
   return classes.join(' ')
@@ -1319,7 +1260,6 @@ const openStockDetail = (stock: Stock, triggerRect: DOMRect, source: string) => 
     type: 'info',
   })
   hideConfidenceTooltip()
-  hideStatusTooltip()
   hideRowTooltip()
 }
 
@@ -1808,132 +1748,6 @@ defineExpose({
 /* 无变化 */
 .trend-steady {
   color: var(--text-secondary);
-}
-
-.strategy-cell {
-  text-align: center;
-  font-weight: 500;
-  color: var(--text-secondary);
-}
-
-.strategy-status-cell {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  min-width: 70px;
-  height: 22px;
-  padding: 0 7px 0 10px;
-  border-radius: 6px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  background: rgba(255, 255, 255, 0.04);
-  line-height: 1;
-  overflow: hidden;
-}
-
-.strategy-status-cell::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 3px;
-  bottom: 3px;
-  width: 3px;
-  border-radius: 3px;
-  background: rgba(148, 163, 184, 0.7);
-}
-
-.strategy-status-label {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 11px;
-  font-weight: 600;
-}
-
-.strategy-tier-candidate-main,
-.strategy-tier-main_confirmed,
-.status-main_confirmed {
-  color: #ff4d4f !important;
-}
-
-.strategy-tier-candidate-ignition,
-.strategy-tier-ignition_watch,
-.status-ignition_watch {
-  color: #facc15 !important;
-}
-
-.strategy-tier-strong_money,
-.status-strong_money {
-  color: #38bdf8 !important;
-}
-
-.strategy-tier-new_watch,
-.status-new_watch {
-  color: #2dd4bf !important;
-}
-
-.strategy-tier-candidate-crowded,
-.strategy-tier-crowded,
-.status-crowded {
-  color: #f8fafc !important;
-}
-
-.strategy-tier-money_divergence,
-.status-money_divergence {
-  color: #c084fc !important;
-}
-
-.strategy-tier-candidate-exit,
-.strategy-tier-weakening,
-.status-weakening {
-  color: #22c55e !important;
-}
-
-.strategy-tier-candidate-neutral,
-.strategy-tier-insufficient,
-.strategy-tier-empty,
-.status-insufficient,
-.status-quality-insufficient,
-.status-cycle-empty {
-  color: #9ca3af !important;
-}
-
-.status-quality-degraded {
-  color: #facc15 !important;
-}
-
-.cycle-marker-cycle-ignition::before {
-  background: #facc15;
-}
-
-.cycle-marker-cycle-expansion::before {
-  background: #ff8a80;
-}
-
-.cycle-marker-cycle-crowded::before {
-  background: #e5e7eb;
-}
-
-.cycle-marker-cycle-reversal::before,
-.cycle-marker-cycle-cooling::before {
-  background: #22c55e;
-}
-
-.status-tooltip {
-  position: fixed;
-  z-index: 10000;
-  max-width: 280px;
-  padding: 8px 10px;
-  color: #f3f5f8;
-  font-size: 12px;
-  line-height: 1.6;
-  white-space: pre-line;
-  pointer-events: none;
-  background: rgba(25, 28, 34, 0.96);
-  border: 1px solid rgba(150, 160, 180, 0.28);
-  border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
 }
 
 /* 趋势强度标记 */

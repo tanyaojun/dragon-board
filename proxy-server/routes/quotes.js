@@ -15,9 +15,9 @@ import {
 import { sendBadRequest, sendDegraded } from '../helpers/response.js'
 
 const EMPTY_QUOTES = { rc: 0, data: { diff: [] } }
-const EASTMONEY_QUOTE_FIELDS = 'f2,f3,f5,f6,f8,f9,f12,f14,f20,f21,f23,f62,f66,f69,f184'
+const EASTMONEY_QUOTE_FIELDS = 'f2,f3,f5,f6,f8,f9,f10,f12,f14,f20,f21,f23,f62,f66,f69,f184'
 const EASTMONEY_FLOW_FIELDS =
-  'f12,f14,f2,f3,f5,f6,f8,f9,f20,f21,f23,f62,f66,f69,f72,f75,f78,f81,f84,f87,f184'
+  'f12,f14,f2,f3,f5,f6,f8,f9,f10,f20,f21,f23,f62,f66,f69,f72,f75,f78,f81,f84,f87,f184'
 const EASTMONEY_FLOW_FS = 'm:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23'
 const EASTMONEY_HIST_FLOW_FIELDS1 = 'f1,f2,f3,f7'
 const EASTMONEY_HIST_FLOW_FIELDS2 = 'f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63,f64,f65'
@@ -25,6 +25,8 @@ const EASTMONEY_HIST_FLOW_CONCURRENCY = 4
 const EASTMONEY_HIST_FLOW_RETRIES = 2
 const EASTMONEY_ULIST_HIST_FLOW_LIMIT = 20
 const EASTMONEY_FUND_FLOW_FIELDS = new Set(['f62', 'f66', 'f69', 'f184'])
+const SINA_MONEY_FLOW_CONCURRENCY = 1
+const SINA_MONEY_FLOW_DELAY_MS = 300
 
 function hasProxyConfig(proxyConfig = {}) {
   return Boolean(proxyConfig && typeof proxyConfig === 'object' && proxyConfig.proxy)
@@ -122,6 +124,7 @@ function normalizeEastmoneyQuoteRow(row) {
     f6: Number(row?.f6) || 0,
     f8: Number(row?.f8) || 0,
     f9: Number(row?.f9) || 0,
+    f10: Number(row?.f10) || 0,
     f20: Number(row?.f20) || 0,
     f21: Number(row?.f21) || 0,
     f23: Number(row?.f23) || 0,
@@ -304,6 +307,182 @@ function normalizeEastmoneyHistFlowResponse(data, code) {
   })
 }
 
+function parseSinaMoneyFlowResponse(data, code) {
+  const clean = cleanCode(code)
+  if (!data || typeof data !== 'object') return null
+  return normalizeEastmoneyQuoteRow({
+    f12: clean,
+    f14: data.name || '',
+    f2: data.trade,
+    f62: data.netamount,
+  })
+}
+
+async function fetchSinaMoneyFlowQuote(plainClient, code, fetchImpl = globalThis.fetch) {
+  void plainClient
+  const clean = cleanCode(code)
+  const marketCode = clean.startsWith('6') ? `sh${clean}` : `sz${clean}`
+  if (typeof fetchImpl !== 'function') {
+    throw new Error('native fetch unavailable')
+  }
+
+  const response = await fetchImpl(
+    `https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/MoneyFlow.ssi_ssfx_flzjtj?daima=${marketCode}`,
+    {
+      headers: {
+        ...DEFAULT_BROWSER_HEADERS,
+        Referer: 'https://finance.sina.com.cn',
+      },
+    },
+  )
+  if (!response?.ok) {
+    throw new Error(`native fetch failed with HTTP ${response?.status || 'unknown'}`)
+  }
+
+  return parseSinaMoneyFlowResponse(await response.json(), clean)
+}
+
+function buildSinaMoneyFlowRowCacheKey(code) {
+  return `quotes:sina-money-flow:row:v1:${cleanCode(code)}`
+}
+
+async function getCachedSinaMoneyFlowQuote(cache, code, options = {}) {
+  if (!cache) return null
+  const cached = await cache.get(buildSinaMoneyFlowRowCacheKey(code), options)
+  return cached?.value || null
+}
+
+function isSinaRateLimitError(error) {
+  return String(error?.message || error?.code || '').includes('HTTP 456')
+}
+
+async function fetchSinaMoneyFlowQuoteWithCache(
+  plainClient,
+  code,
+  cache = null,
+  fetchImpl = globalThis.fetch,
+) {
+  const cacheKey = buildSinaMoneyFlowRowCacheKey(code)
+  const ttlSeconds = PROXY_CACHE_TTLS.quotes.sinaMoneyFlow
+  const staleTtlSeconds = PROXY_CACHE_TTLS.quotes.sinaMoneyFlowStale
+
+  if (cache) {
+    const cached = await getCachedSinaMoneyFlowQuote(cache, code)
+    if (cached) {
+      return { row: cached, cached: true, stale: false, upstreamFailed: false }
+    }
+  }
+
+  try {
+    const row = await fetchSinaMoneyFlowQuote(plainClient, code, fetchImpl)
+    if (row && cache) {
+      await cache.set(cacheKey, row, {
+        ttlSeconds,
+        staleTtlSeconds,
+      })
+    }
+    return { row, cached: false, stale: false, upstreamFailed: false }
+  } catch (error) {
+    const stale = await getCachedSinaMoneyFlowQuote(cache, code, { allowStale: true })
+    if (stale) {
+      return {
+        row: stale,
+        cached: true,
+        stale: true,
+        upstreamFailed: true,
+        error,
+      }
+    }
+    throw error
+  }
+}
+
+async function fetchSinaMoneyFlowQuotes(
+  plainClient,
+  codeList,
+  cache = null,
+  fetchImpl = globalThis.fetch,
+) {
+  const rows = []
+  const failures = []
+  let cachedCount = 0
+  let staleCount = 0
+  let upstreamFailed = 0
+  let upstreamCalled = false
+  let rateLimited = false
+  const queue = codeList.map(cleanCode).filter(Boolean)
+  const workerCount = Math.max(1, Math.min(SINA_MONEY_FLOW_CONCURRENCY, queue.length))
+  let cursor = 0
+
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (cursor < queue.length) {
+        const code = queue[cursor]
+        cursor += 1
+        if (rateLimited) {
+          const staleRow = await getCachedSinaMoneyFlowQuote(cache, code, { allowStale: true })
+          if (staleRow) {
+            rows.push(staleRow)
+            cachedCount += 1
+            staleCount += 1
+            upstreamFailed += 1
+          } else {
+            failures.push({
+              code,
+              error: 'skipped after HTTP 456',
+            })
+          }
+          continue
+        }
+        try {
+          const result = await fetchSinaMoneyFlowQuoteWithCache(plainClient, code, cache, fetchImpl)
+          if (!result.cached) upstreamCalled = true
+          if (result.cached) cachedCount += 1
+          if (result.stale) staleCount += 1
+          if (result.upstreamFailed) upstreamFailed += 1
+          if (result.row) rows.push(result.row)
+          if (result.upstreamFailed && isSinaRateLimitError(result.error)) {
+            rateLimited = true
+          }
+        } catch (error) {
+          upstreamCalled = true
+          upstreamFailed += 1
+          failures.push({
+            code,
+            error: error?.code || error?.message || 'unknown',
+          })
+          if (isSinaRateLimitError(error)) {
+            rateLimited = true
+          }
+        }
+        if (cursor < queue.length) {
+          await new Promise((resolve) => setTimeout(resolve, SINA_MONEY_FLOW_DELAY_MS))
+        }
+      }
+    }),
+  )
+
+  if (failures.length) {
+    console.warn('[新浪资金] partial failures:', failures.slice(0, 10))
+  }
+
+  return {
+    rc: 0,
+    data: { diff: rows },
+    dragonMeta: {
+      source: 'sina-money-flow',
+      requested: queue.length,
+      returned: rows.length,
+      failed: failures.length,
+      cachedCount,
+      staleCount,
+      upstreamCalled,
+      upstreamFailed,
+      failures: failures.slice(0, 20),
+    },
+  }
+}
+
 async function fetchEastmoneyHistFlowQuote(
   plainClient,
   code,
@@ -406,6 +585,7 @@ export const __quoteRouteInternals = {
   EASTMONEY_ULIST_HIST_FLOW_LIMIT,
   normalizeEastmoneyResponse,
   normalizeEastmoneyHistFlowResponse,
+  parseSinaMoneyFlowResponse,
   mergeEastmoneyRows,
   missingEastmoneyCodes,
   codesMissingFundFlow,
@@ -413,6 +593,8 @@ export const __quoteRouteInternals = {
   buildEastmoneyUlistUrl,
   buildEastmoneyClistUrl,
   buildEastmoneyHistFlowUrl,
+  fetchSinaMoneyFlowQuotes,
+  parseTencentQuotePayload,
 }
 
 function parseTencentQuotePayload(rawData) {
@@ -436,6 +618,7 @@ function parseTencentQuotePayload(rawData) {
       f5: (parseFloat(parts[3]) || 0) * (parseFloat(parts[6]) || 0) * 100,
       f8: parseFloat(parts[38]) || 0,
       f9: parseFloat(parts[39]) || 0,
+      f10: parseFloat(parts[49]) || 0,
       f20: (parseFloat(parts[45]) || 0) * 10000,
       f21: (parseFloat(parts[44]) || 0) * 10000,
       f23: parseFloat(parts[46]) || 0,
@@ -795,6 +978,32 @@ export function registerQuoteRoutes(app, { plainClient, readConfig, cache, fetch
     } catch (error) {
       console.error('[新浪行情] 失败:', error.message)
       sendDegraded(res, { source: 'quotes-sina', error, fallbackData: EMPTY_QUOTES })
+    }
+  })
+
+  app.get('/api/quotes/sina-money-flow', async (req, res) => {
+    const codeList = requireCodes(req, res)
+    if (!codeList) return
+    const ttlSeconds = PROXY_CACHE_TTLS.quotes.sinaMoneyFlow
+
+    try {
+      const payload = await fetchSinaMoneyFlowQuotes(plainClient, codeList, cache, fetchImpl)
+      sendCachedQuoteResponse(
+        res,
+        payload,
+        {
+          hit:
+            payload.dragonMeta?.requested > 0 &&
+            payload.dragonMeta?.cachedCount === payload.dragonMeta?.requested,
+          stale: payload.dragonMeta?.staleCount > 0,
+          upstreamCalled: Boolean(payload.dragonMeta?.upstreamCalled),
+          ttlSeconds,
+        },
+        codeList,
+      )
+    } catch (error) {
+      console.error('[新浪资金] 失败:', error.message)
+      sendDegraded(res, { source: 'quotes-sina-money-flow', error, fallbackData: EMPTY_QUOTES })
     }
   })
 

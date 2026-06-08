@@ -493,4 +493,44 @@ describe('DataLayer realtime merge arbitration', () => {
       dataLayer.reset()
     }
   })
+
+  test('applies quote-provided volume ratio from realtime quote batch', () => {
+    dataLayer.reset()
+
+    try {
+      dataLayer.setMergedStocks([
+        {
+          code: '000001',
+          name: '平安银行',
+          price: 10,
+          change: 1,
+          volume: 1000,
+          turnover: 10000,
+          turnoverRate: 2,
+        },
+      ])
+
+      dataLayer.applyRealtimeQuoteBatch([
+        {
+          code: '000001',
+          price: 10.8,
+          volume: 1800,
+          volumeRatio: 1.88,
+        },
+      ])
+
+      expect(dataLayer.getStock('000001')).toMatchObject({
+        volume: 1800,
+        volumeRatio: 1.88,
+        volumeRatioMeta: expect.objectContaining({
+          status: 'fresh',
+          source: 'daily_snapshot',
+          reason: 'quote_feed',
+          currentVolume: 1800,
+        }),
+      })
+    } finally {
+      dataLayer.reset()
+    }
+  })
 })

@@ -84,6 +84,33 @@ describe('ApiService', () => {
     )
   })
 
+  it('caches sina money-flow quote requests briefly unless forced', async () => {
+    const api = new ApiService()
+    const fetchMock = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          rc: 0,
+          data: {
+            diff: [{ f12: '603773', f62: 197969013.5 }],
+          },
+        }),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        },
+      ),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await api.getQuotes(['603773'], { source: 'sinaMoneyFlow', retries: 0 })
+    await api.getQuotes(['603773'], { source: 'sinaMoneyFlow', retries: 0 })
+    await api.getQuotes(['603773'], { source: 'sinaMoneyFlow', retries: 0, force: true })
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(String(fetchMock.mock.calls[0][0])).toContain('/api/quotes/sina-money-flow?codes=603773')
+    expect(String(fetchMock.mock.calls[1][0])).toContain('_t=')
+  })
+
   it('cancels a queued request before its fetch begins', async () => {
     const api = new ApiService()
 

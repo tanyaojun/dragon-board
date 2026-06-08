@@ -227,6 +227,464 @@ describe('QuoteService', () => {
     })
   })
 
+  it('merges Sina main money flow fallback with Tencent turnover and estimates main ratio', async () => {
+    const service = new QuoteService({
+      now: () => 1000,
+      isRealtimePrimaryHealthy: () => false,
+      webSocketService: { getQuotesBatch: () => new Map() },
+      dataLayer: {
+        getQuote: () => null,
+        getStock: () => null,
+        updateQuote: vi.fn(),
+      },
+      feed: {
+        fetchBasicData: vi.fn().mockResolvedValue(
+          new Map([
+            [
+              '600522',
+              {
+                ...httpQuote({
+                  source: 'tencent',
+                  price: 49.53,
+                  turnover: 25_205_130_127,
+                }),
+                source: 'tencent',
+              },
+            ],
+          ]),
+        ),
+        fetchFullData: vi.fn().mockResolvedValue(
+          new Map([
+            [
+              '600522',
+              {
+                ...httpQuote({
+                  source: 'sina',
+                  price: 0,
+                  turnover: 0,
+                  zlje: 5_450_857_714.71,
+                  zljzb: 0,
+                  moneyFlowSource: 'sina',
+                  moneyFlowEstimated: true,
+                  capitalFlowSource: 'sina_money_flow',
+                  capitalFlowConfidence: 'low',
+                }),
+                source: 'sina',
+              },
+            ],
+          ]),
+        ),
+      },
+    })
+
+    const result = await service.fetchMergedQuotes(['600522'], { force: true })
+    const quote = result.get('600522')
+
+    expect(quote).toMatchObject({
+      price: 49.53,
+      turnover: 25_205_130_127,
+      zlje: 5_450_857_714.71,
+      zljzb: 21.63,
+      moneyFlowSource: 'sina',
+      moneyFlowEstimated: true,
+      capitalFlowSource: 'sina_money_flow',
+      capitalFlowConfidence: 'low',
+    })
+  })
+
+  it('returns basic quotes before lazy money-flow enrichment when force is false', async () => {
+    let releaseFullData: (() => void) | null = null
+    const updateQuote = vi.fn()
+    const service = new QuoteService({
+      now: () => 1000,
+      isRealtimePrimaryHealthy: () => false,
+      webSocketService: { getQuotesBatch: () => new Map() },
+      dataLayer: {
+        getQuote: () => null,
+        getStock: () => null,
+        updateQuote,
+      },
+      feed: {
+        fetchBasicData: vi.fn().mockResolvedValue(
+          new Map([
+            [
+              '600522',
+              {
+                ...httpQuote({
+                  source: 'tencent',
+                  price: 49.53,
+                  turnover: 25_205_130_127,
+                }),
+                source: 'tencent',
+              },
+            ],
+          ]),
+        ),
+        fetchFullData: vi.fn(
+          () =>
+            new Promise((resolve) => {
+              releaseFullData = () =>
+                resolve(
+                  new Map([
+                    [
+                      '600522',
+                      {
+                        ...httpQuote({
+                          source: 'sina',
+                          price: 0,
+                          turnover: 0,
+                          zlje: 5_450_857_714.71,
+                          zljzb: 0,
+                          moneyFlowSource: 'sina',
+                          moneyFlowEstimated: true,
+                          capitalFlowSource: 'sina_money_flow',
+                          capitalFlowConfidence: 'low',
+                        }),
+                        source: 'sina',
+                      },
+                    ],
+                  ]),
+                )
+            }),
+        ),
+      },
+    })
+
+    const pendingMarker = Symbol('pending')
+    const request = service.fetchMergedQuotes(['600522'], { force: false })
+    const immediate = await Promise.race([
+      request,
+      new Promise((resolve) => setTimeout(() => resolve(pendingMarker), 20)),
+    ])
+
+    expect(immediate).not.toBe(pendingMarker)
+    expect((immediate as Map<string, MergedQuoteData>).get('600522')).toMatchObject({
+      price: 49.53,
+      zlje: 0,
+    })
+
+    releaseFullData?.()
+    await vi.waitFor(() => {
+      expect(updateQuote).toHaveBeenCalledWith(
+        '600522',
+        expect.objectContaining({
+          zlje: 5_450_857_714.71,
+          zljzb: 21.63,
+          moneyFlowSource: 'sina',
+        }),
+      )
+    })
+  })
+
+  it('publishes lazy money-flow enrichment through realtime batch updates when available', async () => {
+    let releaseFullData: (() => void) | null = null
+    const updateQuote = vi.fn()
+    const applyRealtimeQuoteBatch = vi.fn()
+    const service = new QuoteService({
+      now: () => 1000,
+      isRealtimePrimaryHealthy: () => false,
+      webSocketService: { getQuotesBatch: () => new Map() },
+      dataLayer: {
+        getQuote: () => null,
+        getStock: () => null,
+        updateQuote,
+        applyRealtimeQuoteBatch,
+      },
+      feed: {
+        fetchBasicData: vi.fn().mockResolvedValue(
+          new Map([
+            [
+              '603773',
+              {
+                ...httpQuote({
+                  source: 'tencent',
+                  price: 31.04,
+                  turnover: 5_155_443_060,
+                }),
+                source: 'tencent',
+              },
+            ],
+          ]),
+        ),
+        fetchFullData: vi.fn(
+          () =>
+            new Promise((resolve) => {
+              releaseFullData = () =>
+                resolve(
+                  new Map([
+                    [
+                      '603773',
+                      {
+                        ...httpQuote({
+                          source: 'sina',
+                          price: 0,
+                          turnover: 0,
+                          zlje: 197_969_013.5,
+                          zljzb: 0,
+                          moneyFlowSource: 'sina',
+                          moneyFlowEstimated: true,
+                          capitalFlowSource: 'sina_money_flow',
+                          capitalFlowConfidence: 'low',
+                        }),
+                        source: 'sina',
+                      },
+                    ],
+                  ]),
+                )
+            }),
+        ),
+      },
+    })
+
+    const result = await service.fetchMergedQuotes(['603773'], { force: false })
+    expect(result.get('603773')).toMatchObject({
+      price: 31.04,
+      zlje: 0,
+    })
+
+    releaseFullData?.()
+    await vi.waitFor(() => {
+      expect(applyRealtimeQuoteBatch).toHaveBeenCalledWith([
+        expect.objectContaining({
+          code: '603773',
+          zlje: 197_969_013.5,
+          zljzb: 3.84,
+          moneyFlowSource: 'sina',
+        }),
+      ])
+    })
+    expect(updateQuote).not.toHaveBeenCalled()
+  })
+
+  it('publishes each lazy money-flow batch without waiting for later batches', async () => {
+    const codes = Array.from({ length: 21 }, (_, index) => String(600522 + index))
+    let releaseSecondBatch: (() => void) | null = null
+    const applyRealtimeQuoteBatch = vi.fn()
+    const service = new QuoteService({
+      now: () => 1000,
+      isRealtimePrimaryHealthy: () => false,
+      webSocketService: { getQuotesBatch: () => new Map() },
+      dataLayer: {
+        getQuote: () => null,
+        getStock: () => null,
+        updateQuote: vi.fn(),
+        applyRealtimeQuoteBatch,
+      },
+      feed: {
+        fetchBasicData: vi.fn().mockResolvedValue(
+          new Map(
+            codes.map((code) => [
+              code,
+              {
+                ...httpQuote({
+                  source: 'tencent',
+                  turnover: 10_000,
+                }),
+                source: 'tencent',
+              },
+            ]),
+          ),
+        ),
+        fetchFullData: vi.fn((requestedCodes: string[]) => {
+          if (requestedCodes.length === 20) {
+            return Promise.resolve(
+              new Map([
+                [
+                  requestedCodes[0],
+                  {
+                    ...httpQuote({
+                      source: 'sina',
+                      price: 0,
+                      turnover: 0,
+                      zlje: 1_000,
+                      zljzb: 0,
+                      moneyFlowSource: 'sina',
+                      moneyFlowEstimated: true,
+                      capitalFlowSource: 'sina_money_flow',
+                      capitalFlowConfidence: 'low',
+                    }),
+                    source: 'sina',
+                  },
+                ],
+              ]),
+            )
+          }
+
+          return new Promise((resolve) => {
+            releaseSecondBatch = () => resolve(new Map())
+          })
+        }),
+      },
+    })
+
+    await service.fetchMergedQuotes(codes, { force: false })
+
+    await vi.waitFor(
+      () => {
+        expect(applyRealtimeQuoteBatch).toHaveBeenCalledWith([
+          expect.objectContaining({
+            code: '600522',
+            zlje: 1_000,
+            zljzb: 10,
+            moneyFlowSource: 'sina',
+          }),
+        ])
+      },
+      { timeout: 100 },
+    )
+
+    releaseSecondBatch?.()
+  })
+
+  it('uses Sina money-flow directly for lazy background enrichment when available', async () => {
+    const applyRealtimeQuoteBatch = vi.fn()
+    const fetchFullData = vi.fn()
+    const fetchFromSinaMoneyFlow = vi.fn().mockResolvedValue(
+      new Map([
+        [
+          '603773',
+          {
+            ...httpQuote({
+              source: 'sina',
+              price: 0,
+              turnover: 0,
+              zlje: 197_969_013.5,
+              zljzb: 0,
+              moneyFlowSource: 'sina',
+              moneyFlowEstimated: true,
+              capitalFlowSource: 'sina_money_flow',
+              capitalFlowConfidence: 'low',
+            }),
+            source: 'sina',
+          },
+        ],
+      ]),
+    )
+    const service = new QuoteService({
+      now: () => 1000,
+      isRealtimePrimaryHealthy: () => false,
+      webSocketService: { getQuotesBatch: () => new Map() },
+      dataLayer: {
+        getQuote: () => null,
+        getStock: () => null,
+        updateQuote: vi.fn(),
+        applyRealtimeQuoteBatch,
+      },
+      feed: {
+        fetchBasicData: vi.fn().mockResolvedValue(
+          new Map([
+            [
+              '603773',
+              {
+                ...httpQuote({
+                  source: 'tencent',
+                  price: 136.5,
+                  turnover: 5_178_221_056,
+                }),
+                source: 'tencent',
+              },
+            ],
+          ]),
+        ),
+        fetchFullData,
+        fetchFromSinaMoneyFlow,
+      },
+    })
+
+    await service.fetchMergedQuotes(['603773'], { force: false })
+
+    await vi.waitFor(() => {
+      expect(applyRealtimeQuoteBatch).toHaveBeenCalledWith([
+        expect.objectContaining({
+          code: '603773',
+          zlje: 197_969_013.5,
+          zljzb: 3.82,
+          moneyFlowSource: 'sina',
+        }),
+      ])
+    })
+    expect(fetchFromSinaMoneyFlow).toHaveBeenCalledWith(['603773'], false)
+    expect(fetchFullData).not.toHaveBeenCalled()
+  })
+
+  it('starts later lazy money-flow batches without waiting for earlier batches to finish', async () => {
+    const codes = Array.from({ length: 41 }, (_, index) => String(600522 + index))
+    const applyRealtimeQuoteBatch = vi.fn()
+    const fetchFromSinaMoneyFlow = vi.fn((requestedCodes: string[]) => {
+      if (requestedCodes.includes('600522')) {
+        return new Promise<Map<string, MergedQuoteData>>(() => undefined)
+      }
+
+      return Promise.resolve(
+        new Map([
+          [
+            requestedCodes[0],
+            {
+              ...httpQuote({
+                source: 'sina',
+                price: 0,
+                turnover: 0,
+                zlje: 2_000,
+                zljzb: 0,
+                moneyFlowSource: 'sina',
+                moneyFlowEstimated: true,
+                capitalFlowSource: 'sina_money_flow',
+                capitalFlowConfidence: 'low',
+              }),
+              source: 'sina',
+            },
+          ],
+        ]),
+      )
+    })
+    const service = new QuoteService({
+      now: () => 1000,
+      isRealtimePrimaryHealthy: () => false,
+      webSocketService: { getQuotesBatch: () => new Map() },
+      dataLayer: {
+        getQuote: () => null,
+        getStock: () => null,
+        updateQuote: vi.fn(),
+        applyRealtimeQuoteBatch,
+      },
+      feed: {
+        fetchBasicData: vi.fn().mockResolvedValue(
+          new Map(
+            codes.map((code) => [
+              code,
+              {
+                ...httpQuote({
+                  source: 'tencent',
+                  turnover: 10_000,
+                }),
+                source: 'tencent',
+              },
+            ]),
+          ),
+        ),
+        fetchFullData: vi.fn(),
+        fetchFromSinaMoneyFlow,
+      },
+    })
+
+    await service.fetchMergedQuotes(codes, { force: false })
+
+    await vi.waitFor(
+      () => {
+        expect(fetchFromSinaMoneyFlow).toHaveBeenCalledWith(codes.slice(20, 40), false)
+        expect(applyRealtimeQuoteBatch).toHaveBeenCalledWith([
+          expect.objectContaining({
+            code: codes[20],
+            zlje: 2_000,
+            zljzb: 20,
+            moneyFlowSource: 'sina',
+          }),
+        ])
+      },
+      { timeout: 100 },
+    )
+  })
+
   it('does not label basic-source fund flow as EastMoney when EastMoney has no fund flow', async () => {
     const service = new QuoteService({
       now: () => 1000,

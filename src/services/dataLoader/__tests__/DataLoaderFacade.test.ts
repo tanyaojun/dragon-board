@@ -277,6 +277,7 @@ describe('DataLoaderFacade', () => {
 
   it('bootstrapInitialData publishes base hotlist rows and returns a structured summary', async () => {
     const { dataLoader } = await import('../../dataLoader')
+    const { quoteService } = await import('../QuoteService')
 
     const summary = await dataLoader.bootstrapInitialData({ force: true })
 
@@ -289,6 +290,11 @@ describe('DataLoaderFacade', () => {
     )
     expect(summary.elapsedMs).toBeGreaterThanOrEqual(0)
     expect(platformLoadCount).toBe(1)
+    expect(quoteService.getQuoteBatch).toHaveBeenCalledWith(
+      ['000001'],
+      false,
+      expect.objectContaining({ onProgress: expect.any(Function) }),
+    )
     expect(signalApplyCount).toBe(1)
     expect(dataLoader.getLoadingStatus().active).toBe(false)
     expect(dataLayer.getStocks()).toEqual([
@@ -1219,9 +1225,10 @@ describe('DataLoaderFacade', () => {
       await vi.advanceTimersByTimeAsync(1000)
 
       expect(dataLayer.getStock('000001')).toMatchObject({
+        volumeRatio: 1,
         volumeRatioMeta: expect.objectContaining({
-          status: 'unavailable',
-          reason: 'insufficient_history',
+          status: 'stale',
+          reason: 'history_unavailable_preserved_previous',
         }),
       })
       expect(dataLoader.getMerged()).toEqual([expect.objectContaining({ code: '000001' })])

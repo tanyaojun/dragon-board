@@ -665,6 +665,7 @@ class DataLayer {
       const previousVolume = Number(stock.volume) || 0
       stock.volume = Number(change.volume ?? stock.volume) || 0
       this.markVolumeRatioStaleIfVolumeChanged(stock, previousVolume)
+      this.applyQuoteVolumeRatio(stock, change)
       stock.turnover = Number(change.turnover ?? change.amount ?? stock.turnover) || 0
       stock.turnoverRate = Number(change.turnoverRate ?? stock.turnoverRate) || 0
       stock.pe = this.pickQuoteNumber(change.pe, stock.pe)
@@ -1186,6 +1187,7 @@ class DataLayer {
       const previousVolume = Number(next.volume) || 0
       next.volume = this.pickQuoteNumber(quote.volume, next.volume)
       this.markVolumeRatioStaleIfVolumeChanged(next, previousVolume)
+      this.applyQuoteVolumeRatio(next, quote)
       next.turnover = this.pickQuoteNumber(quote.turnover ?? quote.amount, next.turnover)
       next.turnoverRate = this.pickQuoteNumber(quote.turnoverRate, next.turnoverRate)
       next.pe = this.pickQuoteNumber(quote.pe, next.pe)
@@ -1239,6 +1241,22 @@ class DataLayer {
       status: 'stale',
       currentVolume: nextVolume,
       reason: 'volume_changed_after_ratio_calculated',
+    }
+  }
+
+  private applyQuoteVolumeRatio(stock: MergedStock, quote: any): void {
+    const volumeRatio = Number(quote?.volumeRatio)
+    if (!Number.isFinite(volumeRatio) || volumeRatio <= 0) return
+
+    stock.volumeRatio = Number(volumeRatio.toFixed(2))
+    stock.volumeRatioMeta = {
+      status: 'fresh',
+      source: 'daily_snapshot',
+      calculatedAt: Date.now(),
+      currentVolume: Number(stock.volume) || 0,
+      rawRatio: stock.volumeRatio,
+      capped: false,
+      reason: 'quote_feed',
     }
   }
 

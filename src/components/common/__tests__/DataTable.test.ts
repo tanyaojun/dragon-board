@@ -78,14 +78,42 @@ describe('DataTable row detail interactions', () => {
     expect(source).not.toMatch(/openingSignalClient\.postSignal/)
   })
 
-  test('renders RankTrend lifecycle tier from the display breakdown contract', () => {
+  test('does not render the redundant RankTrend lifecycle status column', () => {
     const source = dataTableSource()
 
-    expect(source).toMatch(/getRankTrendBreakdown\(stock\)\.tierLabel/)
-    expect(source).toMatch(/`strategy-tier-\$\{getRankTrendBreakdown\(stock\)\.classKeys\.tier\}`/)
-    expect(source).toMatch(/formatRankTrendStatus\s*=\s*\(stock:\s*any\)\s*=>\s*getRankTrendBreakdown\(stock\)\.tierLabel/)
-    expect(source).toMatch(/classes\.push\(`strategy-tier-\$\{getRankTrendBreakdown\(stock\)\.classKeys\.tier\}`\)/)
+    expect(source).not.toContain("{ key: 'strategyStatus'")
+    expect(source).not.toContain("col.key === 'strategyStatus'")
+    expect(source).not.toContain('strategy-status-cell')
     expect(source).not.toMatch(/:class="`status-\$\{getRankTrendBreakdown\(stock\)\.classKeys\.tier\}`"/)
     expect(source).not.toMatch(/classes\.push\(`strategy-tier-\$\{getRankTrendStatus\(stock\)\.classKey\}`\)/)
+  })
+
+  test('keeps RankTrend change and confidence visible after removing the status column', () => {
+    const source = dataTableSource()
+
+    expect(source).toContain('getRankTrendAnalysis(stock)?.change')
+    expect(source).toContain('getRankTrendAnalysis(stock)?.finalSignal')
+    expect(source).toContain('getRankTrendAnalysis(stock)?.finalConfidence')
+    expect(source).toMatch(/const\s+getRankChange\s*=\s*\(stock:\s*any\)\s*=>/)
+    expect(source).toMatch(/const\s+getFinalSignal\s*=\s*\(stock:\s*any\)\s*=>/)
+    expect(source).toMatch(/const\s+getFinalConfidence\s*=\s*\(stock:\s*any\)\s*=>/)
+  })
+
+  test('does not render rarely used super-large money flow columns', () => {
+    const source = dataTableSource()
+
+    expect(source).not.toContain("{ key: 'cddje'")
+    expect(source).not.toContain("{ key: 'cddjzb'")
+    expect(source).not.toContain("case 'cddje'")
+    expect(source).not.toContain("case 'cddjzb'")
+  })
+
+  test('labels sina money flow fallback without calling it L1 estimated flow', () => {
+    const source = dataTableSource()
+
+    expect(source).toContain('getMoneyFlowTitle')
+    expect(source).toContain('新浪资金流备用源')
+    expect(source).toContain('按成交额估算：主力净额 / 成交额')
+    expect(source).toContain("stock.capitalFlowSource === 'estimated_l1'")
   })
 })

@@ -14,6 +14,11 @@ type VolumeRatioHistoryReader = {
   buildIntradayVolumeHistoryMap: (codes: string[], date?: Date) => Promise<Map<string, number[]>>
 }
 
+type ResolvedVolumeRatio = {
+  value?: number
+  meta: VolumeRatioMeta
+}
+
 export interface VolumeRatioUpdateSummary {
   requested: number
   updated: number
@@ -62,13 +67,14 @@ export class VolumeRatioUpdateService {
       if (!stock) continue
 
       const result = this.calculateForStock(stock, volumeHistoryMap, intradayVolumeHistoryMap, date)
-      if (result.status === 'unavailable') summary.unavailable++
-      if (result.status === 'suspicious') summary.suspicious++
+      const resolved = this.resolveResult(stock, result)
+      if (resolved.meta.status === 'unavailable') summary.unavailable++
+      if (resolved.meta.status === 'suspicious') summary.suspicious++
 
       updates.push({
         code,
-        volumeRatio: result.value,
-        volumeRatioMeta: this.toMeta(result),
+        volumeRatio: resolved.value,
+        volumeRatioMeta: resolved.meta,
       })
     }
 
@@ -80,7 +86,14 @@ export class VolumeRatioUpdateService {
     return summary
   }
 
-  enrichStocks<T extends { code: string; volume?: unknown }>(
+  enrichStocks<
+    T extends {
+      code: string
+      volume?: unknown
+      volumeRatio?: unknown
+      volumeRatioMeta?: VolumeRatioMeta | null
+    },
+  >(
     stocks: T[],
     volumeHistoryMap: Map<string, number[]>,
     intradayVolumeHistoryMap: Map<string, number[]> = new Map(),
@@ -88,10 +101,11 @@ export class VolumeRatioUpdateService {
   ): Array<T & { volumeRatio?: number; volumeRatioMeta: VolumeRatioMeta }> {
     return stocks.map((stock) => {
       const result = this.calculateForStock(stock, volumeHistoryMap, intradayVolumeHistoryMap, date)
+      const resolved = this.resolveResult(stock, result)
       return {
         ...stock,
-        volumeRatio: result.value,
-        volumeRatioMeta: this.toMeta(result),
+        volumeRatio: resolved.value,
+        volumeRatioMeta: resolved.meta,
       }
     })
   }
@@ -116,6 +130,44 @@ export class VolumeRatioUpdateService {
       rawRatio: result.rawRatio,
       capped: result.capped,
       reason: result.reason,
+    }
+  }
+
+  private resolveResult(
+    stock: { volumeRatio?: unknown; volumeRatioMeta?: VolumeRatioMeta | null },
+    result: VolumeRatioResult,
+  ): ResolvedVolumeRatio {
+    const preserved = this.preserveExistingRatio(stock, result)
+    if (preserved) return preserved
+
+    return {
+      value: result.value,
+      meta: this.toMeta(result),
+    }
+  }
+
+  private preserveExistingRatio(
+    stock: { volumeRatio?: unknown; volumeRatioMeta?: VolumeRatioMeta | null },
+    result: VolumeRatioResult,
+  ): ResolvedVolumeRatio | null {
+    if (result.status !== 'unavailable' || result.reason !== 'insufficient_history') return null
+
+    const previousValue = Number(stock.volumeRatio)
+    if (!Number.isFinite(previousValue) || previousValue <= 0) return null
+    if (stock.volumeRatioMeta?.status === 'unavailable') return null
+
+    const previousMeta = stock.volumeRatioMeta ?? null
+    return {
+      value: previousValue,
+      meta: {
+        ...(previousMeta || {}),
+        status: 'stale',
+        source: previousMeta?.source || 'unavailable',
+        calculatedAt: result.calculatedAt,
+        currentVolume: result.currentVolume,
+        historyVolumes: result.historyVolumes,
+        reason: 'history_unavailable_preserved_previous',
+      },
     }
   }
 }

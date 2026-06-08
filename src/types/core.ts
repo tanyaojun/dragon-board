@@ -175,6 +175,7 @@ export interface QuotePatch {
   changeAmount?: number
   speed?: number
   volume: number
+  volumeRatio?: number
   amount: number
   turnoverRate?: number
   tdxBuyVolume?: number

@@ -736,7 +736,7 @@ class DataLoaderService {
       this.updateProgress(this.startupProgress.quoteStart, `加载行情数据 ${codesArray.length} 只...`, 'quote')
       const quoteResult = await refreshResourceLocks.runExclusive(
         'quote-http',
-        () => this.getQuoteBatch(codesArray, true, {
+        () => this.getQuoteBatch(codesArray, force, {
           onProgress: (progress) => this.reportQuoteProgress(progress),
         }),
       )
@@ -813,7 +813,7 @@ class DataLoaderService {
         const quoteResult = await this.measureStartupStep('quote', () =>
           refreshResourceLocks.runExclusive(
             'quote-http',
-            () => this.getQuoteBatch(codesArray, true, {
+            () => this.getQuoteBatch(codesArray, false, {
               onProgress: (progress) => this.reportQuoteProgress(progress),
             }),
           ),

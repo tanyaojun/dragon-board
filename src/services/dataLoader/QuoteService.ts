@@ -21,17 +21,23 @@ type QuoteFeed = {
     force?: boolean,
     options?: { onProgress?: (progress: QuoteBatchProgress) => void },
   ) => Promise<Map<string, any>>
+  fetchFromSinaMoneyFlow?: (codes: string[], force?: boolean) => Promise<Map<string, any>>
 }
 
 type QuoteDataLayer = {
   getQuote: (code: string) => any
   getStock: (code: string) => any
   updateQuote: (code: string, quote: MergedQuoteData) => void
+  applyRealtimeQuoteBatch?: (changes: any[]) => void
 }
 
 type QuoteWebSocketService = {
   getQuotesBatch: (codes: string[]) => Map<string, QuotePatch>
 }
+
+const BACKGROUND_FULL_QUOTE_BATCH_SIZE = 20
+const BACKGROUND_FULL_QUOTE_BATCH_DELAY_MS = 120
+const BACKGROUND_FULL_QUOTE_CONCURRENCY = 3
 
 type PendingBatchRequest = {
   codes: string[]
@@ -239,6 +245,25 @@ export class QuoteService {
     onProgress?: (progress: QuoteBatchProgress) => void,
   ): Promise<Map<string, MergedQuoteData>> {
     const httpResult = new Map<string, MergedQuoteData>()
+    if (!force) {
+      const basicResult = onProgress
+        ? await this.feed.fetchBasicData(codes, { onProgress })
+        : await this.feed.fetchBasicData(codes)
+      if (basicResult.size > 0) {
+        basicResult.forEach((quote, code) => {
+          httpResult.set(code, {
+            ...quote,
+            timestamp: this.now(),
+            sources: [quote.source],
+            confidence: quote.source === 'eastmoney' ? 95 : 70,
+          } as MergedQuoteData)
+        })
+      }
+
+      void this.enrichFullQuotesInBackground(codes, httpResult)
+      return httpResult
+    }
+
     const progressReporter = onProgress ? createHttpQuoteProgressReporter(codes.length, onProgress) : null
     const basicOptions = progressReporter
       ? { onProgress: (progress: QuoteBatchProgress) => progressReporter.report('basic', progress) }
@@ -297,6 +322,83 @@ export class QuoteService {
     return httpResult
   }
 
+  private async enrichFullQuotesInBackground(
+    codes: string[],
+    baseQuotes: Map<string, MergedQuoteData>,
+  ): Promise<void> {
+    const batches: string[][] = []
+    for (let i = 0; i < codes.length; i += BACKGROUND_FULL_QUOTE_BATCH_SIZE) {
+      batches.push(codes.slice(i, i + BACKGROUND_FULL_QUOTE_BATCH_SIZE))
+    }
+
+    const concurrency = Math.min(BACKGROUND_FULL_QUOTE_CONCURRENCY, batches.length)
+    await Promise.all(
+      Array.from({ length: concurrency }, async (_, workerIndex) => {
+        await this.runBackgroundFullQuoteWorker(batches, workerIndex, concurrency, baseQuotes)
+      }),
+    )
+  }
+
+  private async runBackgroundFullQuoteWorker(
+    batches: string[][],
+    workerIndex: number,
+    concurrency: number,
+    baseQuotes: Map<string, MergedQuoteData>,
+  ): Promise<void> {
+    for (let index = workerIndex; index < batches.length; index += concurrency) {
+      const batch = batches[index]
+      try {
+        const fullRows = await this.fetchBackgroundFullQuoteRows(batch)
+        this.publishFullQuoteRows(fullRows, baseQuotes)
+      } catch (error) {
+        console.warn('[DataLoader] 后台资金流懒加载批次失败，继续后续批次:', error)
+      }
+
+      if (index + concurrency < batches.length) {
+        await delay(BACKGROUND_FULL_QUOTE_BATCH_DELAY_MS)
+      }
+    }
+  }
+
+  private async fetchBackgroundFullQuoteRows(
+    codes: string[],
+  ): Promise<Map<string, MergedQuoteData & { source?: string }>> {
+    if (this.feed.fetchFromSinaMoneyFlow) {
+      return await this.feed.fetchFromSinaMoneyFlow(codes, false)
+    }
+    return await this.feed.fetchFullData(codes, false)
+  }
+
+  private publishFullQuoteRows(
+    fullRows: Map<string, MergedQuoteData & { source?: string }>,
+    baseQuotes: Map<string, MergedQuoteData>,
+  ): void {
+    if (fullRows.size === 0) return
+
+    const patches: Array<MergedQuoteData & { code: string }> = []
+    fullRows.forEach((fullQuote, code) => {
+      const existing = baseQuotes.get(code) || this.dataLayer.getQuote(code)
+      const merged = existing
+        ? mergeHttpQuoteSources(existing, fullQuote, this.now())
+        : ({
+            ...fullQuote,
+            timestamp: this.now(),
+            sources: [fullQuote.source],
+            confidence: 95,
+          } as MergedQuoteData)
+      patches.push({ code, ...merged })
+    })
+
+    if (this.dataLayer.applyRealtimeQuoteBatch) {
+      this.dataLayer.applyRealtimeQuoteBatch(patches)
+      return
+    }
+
+    patches.forEach(({ code, ...quote }) => {
+      this.dataLayer.updateQuote(code, quote)
+    })
+  }
+
   private buildRealtimeMergedQuoteData(code: string, quote: QuotePatch): MergedQuoteData {
     const existingQuote = this.dataLayer.getQuote(code) || {}
     const stock = this.dataLayer.getStock(code)
@@ -316,6 +418,7 @@ export class QuoteService {
       volume: Number(quote.volume ?? stock?.volume ?? existingQuote?.volume) || 0,
       turnover: Number(quote.amount ?? stock?.turnover ?? existingQuote?.turnover) || 0,
       turnoverRate: pickPositiveNumber(quote.turnoverRate, stock?.turnoverRate, existingQuote?.turnoverRate),
+      volumeRatio: pickPositiveNumber(quote.volumeRatio, stock?.volumeRatio, existingQuote?.volumeRatio),
       pe: pickNonZeroNumber(stock?.pe, existingQuote?.pe),
       totalMV: pickPositiveNumber(stock?.totalMV, existingQuote?.totalMV),
       cirMV: pickPositiveNumber(stock?.cirMV, existingQuote?.cirMV),
@@ -364,7 +467,12 @@ export class QuoteService {
 
   private hasFundFlowData(quote: Partial<MergedQuoteData> | null | undefined): boolean {
     if (!quote) return false
-    if (quote.moneyFlowEstimated === true || quote.capitalFlowSource === 'estimated_l1') return false
+    if (
+      (quote.moneyFlowEstimated === true || quote.capitalFlowSource === 'estimated_l1') &&
+      quote.moneyFlowSource !== 'sina'
+    ) {
+      return false
+    }
     return ['zlje', 'zljzb', 'cddje', 'cddjzb'].some((key) => {
       const value = Number((quote as unknown as Record<string, unknown>)[key])
       return Number.isFinite(value) && value !== 0
@@ -389,8 +497,7 @@ export class QuoteService {
   ): MergedQuoteData {
     const preferHttpSupplement = this.hasQuoteSupplementData(httpQuote)
     const preferHttpFundFlow =
-      httpQuote.moneyFlowSource === 'eastmoney' &&
-      httpQuote.moneyFlowEstimated !== true &&
+      (httpQuote.moneyFlowSource === 'eastmoney' || httpQuote.moneyFlowSource === 'sina') &&
       this.hasFundFlowData(httpQuote) &&
       shouldApplyMoneyFlowUpdate(realtimeQuote, httpQuote)
 
@@ -401,6 +508,7 @@ export class QuoteService {
       change: pickFinite(realtimeQuote.change, httpQuote.change),
       volume: pickFinite(realtimeQuote.volume, httpQuote.volume, true),
       turnover: pickFinite(realtimeQuote.turnover, httpQuote.turnover, true),
+      volumeRatio: pickFinite(realtimeQuote.volumeRatio, httpQuote.volumeRatio, true),
       turnoverRate: preferHttpSupplement
         ? pickFinite(httpQuote.turnoverRate, realtimeQuote.turnoverRate, true)
         : pickFinite(realtimeQuote.turnoverRate, httpQuote.turnoverRate, true),
@@ -467,13 +575,15 @@ function mergeHttpQuoteSources(
   fullQuote: MergedQuoteData & { source?: string },
   timestamp: number,
 ): MergedQuoteData {
+  const hasFullQuoteMoneyFlow = ['zlje', 'zljzb', 'cddje', 'cddjzb'].some((key) => {
+    const value = Number((fullQuote as unknown as Record<string, unknown>)[key])
+    return Number.isFinite(value) && value !== 0
+  })
   const useFullQuoteMoneyFlow =
-    fullQuote.moneyFlowEstimated === false &&
     Boolean(fullQuote.moneyFlowSource) &&
-    ['zlje', 'zljzb', 'cddje', 'cddjzb'].some((key) => {
-      const value = Number((fullQuote as unknown as Record<string, unknown>)[key])
-      return Number.isFinite(value) && value !== 0
-    })
+    hasFullQuoteMoneyFlow &&
+    (fullQuote.moneyFlowEstimated === false || fullQuote.moneyFlowSource === 'sina')
+  const fullQuoteMainRatio = estimateMainMoneyRatio(fullQuote.zlje, existing.turnover)
 
   return {
     ...existing,
@@ -481,13 +591,16 @@ function mergeHttpQuoteSources(
     change: pickFinite(fullQuote.change, existing.change),
     volume: pickFinite(fullQuote.volume, existing.volume, true),
     turnover: pickFinite(fullQuote.turnover, existing.turnover, true),
+    volumeRatio: pickFinite(fullQuote.volumeRatio, existing.volumeRatio, true),
     turnoverRate: pickFinite(fullQuote.turnoverRate, existing.turnoverRate, true),
     pe: pickNonZeroNumber(fullQuote.pe, existing.pe),
     totalMV: pickFinite(fullQuote.totalMV, existing.totalMV, true),
     cirMV: pickFinite(fullQuote.cirMV, existing.cirMV, true),
     pb: pickFinite(fullQuote.pb, existing.pb, true),
     zlje: useFullQuoteMoneyFlow ? pickMoneyFlowNumber(fullQuote.zlje) : existing.zlje,
-    zljzb: useFullQuoteMoneyFlow ? pickMoneyFlowNumber(fullQuote.zljzb) : existing.zljzb,
+    zljzb: useFullQuoteMoneyFlow
+      ? pickNonZeroNumber(fullQuote.zljzb, fullQuoteMainRatio)
+      : existing.zljzb,
     cddje: useFullQuoteMoneyFlow ? pickMoneyFlowNumber(fullQuote.cddje) : existing.cddje,
     cddjzb: useFullQuoteMoneyFlow ? pickMoneyFlowNumber(fullQuote.cddjzb) : existing.cddjzb,
     moneyFlowSource: useFullQuoteMoneyFlow ? fullQuote.moneyFlowSource : existing.moneyFlowSource,
@@ -505,6 +618,17 @@ function mergeHttpQuoteSources(
     confidence: 95,
     timestamp,
   }
+}
+
+function estimateMainMoneyRatio(mainNet: unknown, turnover: unknown): number {
+  const main = Number(mainNet)
+  const amount = Number(turnover)
+  if (!Number.isFinite(main) || !Number.isFinite(amount) || amount <= 0) return 0
+  return Number(((main / amount) * 100).toFixed(2))
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 function createHttpQuoteProgressReporter(

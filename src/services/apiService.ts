@@ -112,6 +112,7 @@ type ThemeResearchSummaryQueryOptions = {
 }
 
 const QUANT_BOARD_RANKTREND_READ_TIMEOUT_MS = 70000
+const SINA_MONEY_FLOW_CLIENT_CACHE_TTL_MS = 60000
 
 type StockNameQueryOptions = {
   market?: 'SH' | 'SZ' | 'BJ'
@@ -538,7 +539,7 @@ export class ApiService {
    */
   async getQuotes(
     codes: string[],
-    options?: RequestConfig & { source?: 'tencent' | 'eastmoney' | 'sina' },
+    options?: RequestConfig & { source?: 'tencent' | 'eastmoney' | 'sina' | 'sinaMoneyFlow' },
   ): Promise<any> {
     const source = options?.source || 'tencent'
 
@@ -551,15 +552,23 @@ export class ApiService {
       case 'sina':
         url = `/api/quotes/sina?codes=${codes.join(',')}`
         break
+      case 'sinaMoneyFlow':
+        url = `/api/quotes/sina-money-flow?codes=${codes.join(',')}`
+        break
       case 'tencent':
       default:
         url = `/api/quotes/tencent?codes=${codes.join(',')}`
         break
     }
 
+    const cacheDefaults =
+      source === 'sinaMoneyFlow'
+        ? { cache: true, cacheTTL: SINA_MONEY_FLOW_CLIENT_CACHE_TTL_MS }
+        : { cache: false }
+
     return this.get(url, {
       context: 'quote',
-      cache: false,
+      ...cacheDefaults,
       priority: 'high',
       ...options,
     })

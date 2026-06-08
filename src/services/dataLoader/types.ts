@@ -36,7 +36,7 @@ export interface PlatformLoadProgress {
 }
 
 export interface QuoteBatchProgress {
-  source: 'tencent' | 'sina' | 'eastmoney'
+  source: 'tencent' | 'sina' | 'eastmoney' | 'sinaMoneyFlow'
   completedBatches: number
   totalBatches: number
   completedCodes: number
@@ -90,6 +90,7 @@ export interface MergedQuoteData {
   volume: number
   turnover: number
   turnoverRate: number
+  volumeRatio?: number
   pe: number
   totalMV: number
   cirMV: number

@@ -5,6 +5,7 @@ import { __quoteRouteInternals } from './quotes.js'
 const {
   EASTMONEY_ULIST_HIST_FLOW_LIMIT,
   buildEastmoneyClistUrl,
+  buildEastmoneyUlistUrl,
   buildEastmoneyHistFlowUrl,
   mergeEastmoneyRows,
   missingEastmoneyCodes,
@@ -12,6 +13,9 @@ const {
   mergeEastmoneyFundFlowRows,
   normalizeEastmoneyHistFlowResponse,
   normalizeEastmoneyResponse,
+  parseSinaMoneyFlowResponse,
+  fetchSinaMoneyFlowQuotes,
+  parseTencentQuotePayload,
 } =
   __quoteRouteInternals
 
@@ -26,6 +30,7 @@ const normalized = normalizeEastmoneyResponse(
           f12: 'SZ002081',
           f14: '金螳螂',
           f2: '6.8',
+          f10: '1.88',
           f62: '12000000',
           f184: '3.4',
           f66: '5000000',
@@ -48,6 +53,7 @@ assert.deepEqual(normalized.data.diff, [
     f6: 0,
     f8: 0,
     f9: 0,
+    f10: 1.88,
     f20: 0,
     f21: 0,
     f23: 0,
@@ -110,8 +116,177 @@ assert.deepEqual(
   ],
 )
 assert.match(buildEastmoneyClistUrl(['002081']), /api\/qt\/clist\/get/)
+assert.match(buildEastmoneyUlistUrl(['002081']), /fields=.*f10/)
 assert.match(buildEastmoneyClistUrl(['002081']), /fields=.*f62/)
 assert.match(buildEastmoneyHistFlowUrl('002580'), /stock\/fflow\/daykline\/get/)
+
+assert.deepEqual(
+  parseSinaMoneyFlowResponse(
+    {
+      netamount: '5450857714.7100',
+      name: '中天科技',
+      trade: '49.5200',
+    },
+    '600522',
+  ),
+  {
+    f12: '600522',
+    f14: '中天科技',
+    f2: 49.52,
+    f3: 0,
+    f5: 0,
+    f6: 0,
+    f8: 0,
+    f9: 0,
+    f10: 0,
+    f20: 0,
+    f21: 0,
+    f23: 0,
+    f62: 5450857714.71,
+    f66: 0,
+    f69: 0,
+    f184: 0,
+  },
+)
+
+const sinaMoneyFlowCacheWrites = []
+const sinaMoneyFlowSuccess = await fetchSinaMoneyFlowQuotes(
+  null,
+  ['603773'],
+  {
+    get: async () => null,
+    set: async (key, value, options) => {
+      sinaMoneyFlowCacheWrites.push({ key, value, options })
+      return true
+    },
+  },
+  async () => ({
+    ok: true,
+    json: async () => ({
+      netamount: '197969013.5',
+      name: '沃格光电',
+      trade: '136.52',
+    }),
+  }),
+)
+
+assert.equal(sinaMoneyFlowSuccess.data.diff[0].f12, '603773')
+assert.equal(sinaMoneyFlowSuccess.data.diff[0].f62, 197969013.5)
+assert.equal(sinaMoneyFlowSuccess.dragonMeta.returned, 1)
+assert.equal(sinaMoneyFlowCacheWrites.length, 1)
+assert.equal(sinaMoneyFlowCacheWrites[0].key, 'quotes:sina-money-flow:row:v1:603773')
+assert.equal(sinaMoneyFlowCacheWrites[0].options.ttlSeconds, 60)
+assert.equal(sinaMoneyFlowCacheWrites[0].options.staleTtlSeconds, 1800)
+
+const staleSinaMoneyFlow = await fetchSinaMoneyFlowQuotes(
+  null,
+  ['603773'],
+  {
+    get: async (_key, options = {}) =>
+      options.allowStale
+        ? {
+            value: {
+              f12: '603773',
+              f14: '沃格光电',
+              f2: 136.52,
+              f3: 0,
+              f5: 0,
+              f6: 0,
+              f8: 0,
+              f9: 0,
+              f10: 0,
+              f20: 0,
+              f21: 0,
+              f23: 0,
+              f62: 197969013.5,
+              f66: 0,
+              f69: 0,
+              f184: 0,
+            },
+          }
+        : null,
+    set: async () => true,
+  },
+  async () => ({
+    ok: false,
+    status: 456,
+  }),
+)
+
+assert.equal(staleSinaMoneyFlow.data.diff[0].f12, '603773')
+assert.equal(staleSinaMoneyFlow.data.diff[0].f62, 197969013.5)
+assert.equal(staleSinaMoneyFlow.dragonMeta.returned, 1)
+assert.equal(staleSinaMoneyFlow.dragonMeta.failed, 0)
+assert.equal(staleSinaMoneyFlow.dragonMeta.staleCount, 1)
+assert.equal(staleSinaMoneyFlow.dragonMeta.upstreamFailed, 1)
+
+const missingSinaMoneyFlow = await fetchSinaMoneyFlowQuotes(
+  null,
+  ['603773'],
+  {
+    get: async () => null,
+    set: async () => true,
+  },
+  async () => ({
+    ok: false,
+    status: 456,
+  }),
+)
+
+assert.deepEqual(missingSinaMoneyFlow.data.diff, [])
+assert.equal(missingSinaMoneyFlow.dragonMeta.failed, 1)
+assert.equal(missingSinaMoneyFlow.dragonMeta.upstreamFailed, 1)
+
+const rateLimitedFetchCalls = []
+const rateLimitedSinaMoneyFlow = await fetchSinaMoneyFlowQuotes(
+  null,
+  ['603773', '600522'],
+  {
+    get: async (key, options = {}) =>
+      options.allowStale && key.endsWith(':600522')
+        ? {
+            value: {
+              f12: '600522',
+              f14: '中天科技',
+              f2: 49.52,
+              f3: 0,
+              f5: 0,
+              f6: 0,
+              f8: 0,
+              f9: 0,
+              f10: 0,
+              f20: 0,
+              f21: 0,
+              f23: 0,
+              f62: 5450857714.71,
+              f66: 0,
+              f69: 0,
+              f184: 0,
+            },
+          }
+        : null,
+    set: async () => true,
+  },
+  async () => {
+    rateLimitedFetchCalls.push(1)
+    return {
+      ok: false,
+      status: 456,
+    }
+  },
+)
+
+assert.equal(rateLimitedFetchCalls.length, 1)
+assert.equal(rateLimitedSinaMoneyFlow.data.diff.length, 1)
+assert.equal(rateLimitedSinaMoneyFlow.data.diff[0].f12, '600522')
+assert.equal(rateLimitedSinaMoneyFlow.dragonMeta.failed, 1)
+assert.equal(rateLimitedSinaMoneyFlow.dragonMeta.staleCount, 1)
+
+const tencentPayload = Buffer.from(
+  'v_sh600522="1~ZTTX~600522~49.53~46.07~44.00~5131565~2570197~2561369~49.52~17975~49.51~1472~49.50~1839~49.49~176~49.48~543~49.53~2019~49.54~702~49.55~2167~49.56~240~49.57~103~~20260608161401~3.46~7.51~50.68~44.00~49.53/5131565/25205130127~5131565~2520513~15.04~52.93~~50.68~44.00~14.50~1690.43~1690.43~4.45~50.68~41.46~1.40~16774~49.12~45.99~58.24~~~1.75~2520513.0127~0.0000~0~ ";',
+)
+
+assert.equal(parseTencentQuotePayload(tencentPayload).data.diff[0].f10, 1.4)
 
 assert.deepEqual(
   normalizeEastmoneyHistFlowResponse(
@@ -135,6 +310,7 @@ assert.deepEqual(
     f6: 0,
     f8: 0,
     f9: 0,
+    f10: 0,
     f20: 0,
     f21: 0,
     f23: 0,
