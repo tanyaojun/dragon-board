@@ -3,15 +3,8 @@ import {
   normalizeRankTrendRuntimeConfig,
   type RTConfigPatch,
 } from '@/types/rankTrendDefaults'
-import { analyzeAttentionCycle } from '@/services/rankTrend/attentionCycleAnalyzer'
-import { composeCandidateTier } from '@/services/rankTrend/candidateTierComposer'
 import { analyzeMarketRegime } from '@/services/rankTrend/marketRegimeAnalyzer'
-import { composeDecision } from '@/services/rankTrend/resultComposer'
-import { analyzeRiskSignals } from '@/services/rankTrend/riskSignalAnalyzer'
-import {
-  analyzeFallbackTechnicalSignals,
-  analyzeTechnicalSignals,
-} from '@/services/rankTrend/technicalSignalAnalyzer'
+import { runRankTrendAnalysisPipeline } from '@/services/rankTrend/runRankTrendAnalysisPipeline'
 import type { RankTrendAnalysisResult } from '@/services/rankTrend/types'
 import { getTechnicalMinSamples } from '@/services/rankTrend/utils'
 import type {
@@ -135,41 +128,17 @@ export class RankTrendGoldenReplayEngine {
     const zlje = toNumber(stock.zlje)
     const zljzb = toNumber(stock.zljzb)
 
-    const technical =
-      percentiles.length >= getTechnicalMinSamples(this.config)
-        ? analyzeTechnicalSignals(percentiles, this.config)
-        : analyzeFallbackTechnicalSignals({
-            percentiles,
-            displayChange,
-            stockChange,
-            volumeRatio,
-            zlje,
-            zljzb,
-            config: this.config,
-          })
-    const cycle = analyzeAttentionCycle({
+    const { technical, cycle, risk, decision, strategy } = runRankTrendAnalysisPipeline({
       ranks,
       percentiles,
-    })
-    const risk = analyzeRiskSignals({
       currentPercentile,
-      technical,
-      cycle,
+      displayChange,
+      stockChange,
+      volumeRatio,
       zlje,
       zljzb,
-      volumeRatio,
-    })
-    const decision = composeDecision({
-      technical,
-      cycle,
-      risk,
-      config: this.config,
-    })
-    const strategy = composeCandidateTier({
-      technical,
-      cycle,
-      risk,
       regime,
+      config: this.config,
     })
 
     const rankTrend: RankTrendAnalysisResult = {

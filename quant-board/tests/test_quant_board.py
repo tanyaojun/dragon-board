@@ -1161,6 +1161,15 @@ def test_import_backtest_optimize_and_golden(tmp_path: Path) -> None:
     assert validated_golden.json()["checked"] == len(golden_signals)
     assert validated_golden.json()["passed"] is True
     assert "expectedPreview" in validated_golden.json()
+    assert "cycle" in validated_golden.json()["expectedPreview"][0]
+    assert "decision" in validated_golden.json()["expectedPreview"][0]
+    assert "transition" in validated_golden.json()["expectedPreview"][0]["cycle"]
+    assert "final" in validated_golden.json()["expectedPreview"][0]["decision"]
+    assert "actualPreview" in validated_golden.json()
+    assert "cycle" in validated_golden.json()["actualPreview"][0]
+    assert "decision" in validated_golden.json()["actualPreview"][0]
+    assert "transition" in validated_golden.json()["actualPreview"][0]["cycle"]
+    assert "final" in validated_golden.json()["actualPreview"][0]["decision"]
 
     limited_golden = client.post(
         "/api/golden/validate",

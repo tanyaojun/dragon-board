@@ -2424,23 +2424,38 @@ class GoldenService:
 
     @staticmethod
     def _normalize_signals(signals: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        return [
-            {
-                "snapshotId": signal.get("snapshotId"),
-                "code": signal.get("code"),
-                "candidateTier": signal.get("candidateTier"),
-                "action": signal.get("action"),
-                "stage": signal.get("stage"),
-                "regime": signal.get("regime"),
-                "rank": signal.get("rank"),
-                "confidence": signal.get("confidence"),
-                "finalSignal": ((signal.get("rankTrend") or {}).get("decision") or {}).get("final", {}).get("signal"),
-                "technicalSignals": ((signal.get("rankTrend") or {}).get("technical") or {}).get("signals"),
-                "momentumProfile": ((signal.get("rankTrend") or {}).get("technical") or {}).get("momentumProfile"),
-                "risk": (signal.get("rankTrend") or {}).get("risk"),
-            }
-            for signal in signals
-        ]
+        normalized: list[dict[str, Any]] = []
+        for signal in signals:
+            rank_trend = signal.get("rankTrend") or {}
+            technical = rank_trend.get("technical") or {}
+            cycle = rank_trend.get("cycle") or {}
+            decision = rank_trend.get("decision") or {}
+            normalized.append(
+                {
+                    "snapshotId": signal.get("snapshotId"),
+                    "code": signal.get("code"),
+                    "candidateTier": signal.get("candidateTier"),
+                    "action": signal.get("action"),
+                    "stage": signal.get("stage"),
+                    "regime": signal.get("regime"),
+                    "rank": signal.get("rank"),
+                    "confidence": signal.get("confidence"),
+                    "finalSignal": (decision.get("final") or {}).get("signal"),
+                    "technicalSignals": technical.get("signals"),
+                    "momentumProfile": technical.get("momentumProfile"),
+                    "risk": rank_trend.get("risk"),
+                    "cycle": {
+                        "transition": cycle.get("transition"),
+                        "entryAdvice": cycle.get("entryAdvice"),
+                        "decision": cycle.get("decision"),
+                    },
+                    "decision": {
+                        "base": decision.get("base"),
+                        "final": decision.get("final"),
+                    },
+                }
+            )
+        return normalized
 
     @classmethod
     def _normalize_expected_payload(cls, value: Any) -> list[dict[str, Any]]:
@@ -2464,6 +2479,7 @@ class GoldenService:
         for item in rows:
             rank_trend = item.get("rankTrend") or {}
             technical = rank_trend.get("technical") or {}
+            cycle = rank_trend.get("cycle") or {}
             decision = rank_trend.get("decision") or {}
             normalized.append(
                 {
@@ -2479,6 +2495,17 @@ class GoldenService:
                     "technicalSignals": item.get("technicalSignals") or technical.get("signals"),
                     "momentumProfile": item.get("momentumProfile") or technical.get("momentumProfile"),
                     "risk": item.get("risk") or rank_trend.get("risk"),
+                    "cycle": item.get("cycle")
+                    or {
+                        "transition": cycle.get("transition"),
+                        "entryAdvice": cycle.get("entryAdvice"),
+                        "decision": cycle.get("decision"),
+                    },
+                    "decision": item.get("decision")
+                    or {
+                        "base": decision.get("base"),
+                        "final": decision.get("final"),
+                    },
                 }
             )
         return normalized

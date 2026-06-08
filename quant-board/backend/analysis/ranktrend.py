@@ -5,10 +5,6 @@ from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from typing import Any
 
-from backend.data import repository_factory
-from backend.data.hotlist_sentiment_repo import HotListSentimentRepository
-
-
 def clamp(value: float, min_value: float, max_value: float) -> float:
     if not math.isfinite(value):
         return min_value
@@ -974,6 +970,102 @@ def compose_strategy(
     return {"hotlist": hotlist_state, "momentum": momentum, "candidateTier": tier, "action": action, "reasons": reasons}
 
 
+def analyze_cycle_with_risk(
+    cycle: dict[str, Any],
+    risk: dict[str, Any],
+    momentum: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    updated_cycle = dict(cycle)
+    updated_cycle["decision"] = lifecycle_decision(
+        str(cycle.get("rawStage") or cycle.get("stage") or "cooling"),
+        str(cycle.get("stage") or "cooling"),
+        str(cycle.get("transition") or cycle.get("stage") or "cooling"),
+        float(cycle.get("confidence") or 50),
+        cycle.get("metrics") if isinstance(cycle.get("metrics"), dict) else {},
+        risk,
+        momentum,
+    )
+    return updated_cycle
+
+
+def compose_analysis_candidate_tier(
+    technical: dict[str, Any],
+    cycle: dict[str, Any],
+    risk: dict[str, Any],
+    regime: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    momentum = technical["momentumProfile"]
+    stage = cycle["stage"]
+    reasons: list[str] = []
+    money_risk = risk["divergence"]["severity"]
+    pressure = risk["pressure"]
+    regime_data = regime or {"state": "normal", "score": 0, "reasons": []}
+    weak_market = regime_data["state"] in ("weak", "retreat")
+    trend_buy = (
+        technical["signals"]["direction"]["signal"] == "buy"
+        or technical["signals"]["acceleration"]["signal"] == "buy"
+        or technical["macd"]["cross"] == "golden"
+    )
+    tier = "N_NEUTRAL"
+    lifecycle_decision_data = cycle.get("decision") or {}
+
+    if lifecycle_decision_data.get("action") == "veto":
+        reasons.append("生命周期辅助决策一票否决，阻止进入 A/B 候选池")
+    elif stage in ("reversal", "cooling") and (
+        momentum["short"] <= -2 or momentum["acceleration"] <= -2 or pressure >= 0.55
+    ):
+        tier = "D_EXIT_RISK"
+        reasons.append("生命周期进入反转/冷却，短周期动量或风险压力转弱")
+    elif stage == "crowded" or (
+        momentum["long"] >= 4 and (momentum["acceleration"] <= 0 or pressure >= 0.45)
+    ):
+        tier = "C_CROWDED"
+        reasons.append("长周期热度高位停留，追高性价比下降")
+    elif (
+        stage == "expansion"
+        and momentum["mid"] >= 4
+        and momentum["short"] >= -1
+        and trend_buy
+        and not weak_market
+        and money_risk < 0.7
+    ):
+        tier = "A_MAIN"
+        reasons.append("扩散阶段中周期动量确认，技术信号保持正向")
+    elif (
+        stage == "ignition"
+        and momentum["short"] >= 3
+        and momentum["acceleration"] >= 0.5
+        and regime_data["state"] != "retreat"
+        and pressure < 0.65
+    ):
+        tier = "B_IGNITION"
+        reasons.append("点火阶段短周期冲击增强，仍需继续确认")
+    elif weak_market and trend_buy:
+        reasons.append("弱势/退潮环境下买入信号降级为观察")
+    else:
+        reasons.append("动量、阶段与风险未形成明确候选池信号")
+
+    if regime_data["state"] == "strong":
+        reasons.append("市场环境强，允许跟踪点火/扩散机会")
+    if regime_data["state"] == "retreat":
+        reasons.append("市场退潮，优先控制回撤风险")
+    if risk["divergence"]["severity"] >= 0.6:
+        reasons.append("注意力与资金存在背离")
+    if risk["overheat"]["severity"] >= 0.65:
+        reasons.append("过热压力较高")
+    reasons.append(
+        f"动量结构 短{momentum['short']:+.1f} 中{momentum['mid']:+.1f} 长{momentum['long']:+.1f} 加速度{momentum['acceleration']:+.1f}"
+    )
+    action = {"A_MAIN": "focus", "B_IGNITION": "watch", "C_CROWDED": "avoid", "D_EXIT_RISK": "exit_watch"}.get(tier, "hold")
+    return {
+        "regime": regime_data,
+        "momentum": momentum,
+        "candidateTier": tier,
+        "action": action,
+        "reasons": reasons,
+    }
+
+
 class RankTrendPythonEngine:
     def __init__(self, config: RankTrendConfig | None = None):
         self.config = config or RankTrendConfig()
@@ -981,7 +1073,6 @@ class RankTrendPythonEngine:
 
     def replay(self, frames: list[dict[str, Any]], warmup_count: int | None = None, window_size: int = 50, meta: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         meta = meta or {}
-        self._inject_hotlist_sentiment(frames, meta)
         self._stock_lookup = self._build_stock_lookup(frames)
         min_count = warmup_count or get_technical_min_samples(self.config)
         start = min_count - 1 if len(frames) >= min_count else 0
@@ -1027,35 +1118,6 @@ class RankTrendPythonEngine:
                     signals.append(signal)
         return signals
 
-    def _inject_hotlist_sentiment(self, frames: list[dict[str, Any]], meta: dict[str, Any]) -> None:
-        dataset_id = str(meta.get("datasetId") or meta.get("dataset_id") or "dragonboard_live")
-        default_snapshot_type = str(meta.get("snapshotType") or meta.get("snapshot_type") or "half_hour")
-        dates = sorted({str(frame.get("tradingDate") or "") for frame in frames if frame.get("tradingDate")})
-        if not dates:
-            return
-
-        try:
-            repo = HotListSentimentRepository(repository_factory.get_runtime_mongodb_database())
-            by_key: dict[tuple[str, str], dict] = {}
-            for frame in frames:
-                trading_date = str(frame.get("tradingDate") or "")
-                if not trading_date:
-                    continue
-                snapshot_type = str(frame.get("type") or frame.get("snapshotType") or default_snapshot_type)
-                key = (snapshot_type, trading_date)
-                if key not in by_key:
-                    doc = repo.get_by_date(dataset_id, snapshot_type, trading_date)
-                    if doc:
-                        by_key[key] = doc
-                frame["hotlistSentiment"] = by_key.get(key)
-                frame["hotlistSentimentStatus"] = "ok" if frame.get("hotlistSentiment") else "missing"
-        except Exception as exc:
-            reason = f"MongoDB hotlist sentiment unavailable: {exc}"
-            for frame in frames:
-                frame["hotlistSentiment"] = None
-                frame["hotlistSentimentStatus"] = "missing"
-                frame["hotlistSentimentReason"] = reason
-
     def replay_frame_at(self, frames: list[dict[str, Any]], index: int, window_size: int = 50, meta: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         frame = frames[index]
         history_start = max(0, index - window_size + 1)
@@ -1100,20 +1162,12 @@ class RankTrendPythonEngine:
             "zljzb": float(stock.get("zljzb") or 0),
         }
         technical = analyze_technical(percentiles, self.config, fallback)
-        jump = detect_rank_jumps(percentiles, ranks, delta_pct=self.config.jumpDeltaPct)
         cycle = analyze_cycle(ranks, percentiles)
         risk = analyze_risk(current_percentile, technical, cycle, fallback["zlje"], fallback["zljzb"], fallback["volumeRatio"])
-        cycle["decision"] = lifecycle_decision(
-            cycle["rawStage"],
-            cycle["stage"],
-            cycle["transition"],
-            cycle["confidence"],
-            cycle["metrics"],
-            risk,
-            technical.get("momentumProfile"),
-        )
+        cycle = analyze_cycle_with_risk(cycle, risk, technical.get("momentumProfile"))
         decision = compose_decision(technical, cycle, risk, self.config)
-        strategy = compose_strategy(technical, cycle, risk, frame.get("hotlistSentiment"), config=self.config)
+        strategy = compose_analysis_candidate_tier(technical, cycle, risk, regime)
+        jump = detect_rank_jumps(percentiles, ranks, delta_pct=self.config.jumpDeltaPct)
         sample_status = "ok" if len(percentiles) >= get_technical_min_samples(self.config) else "degraded" if len(percentiles) >= 5 else "insufficient"
         rank_trend = {
             "meta": {

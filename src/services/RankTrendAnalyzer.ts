@@ -11,15 +11,8 @@ import {
   normalizeRankTrendRuntimeConfig,
   type RTConfigPatch,
 } from '../types/rankTrendDefaults'
-import { analyzeAttentionCycle } from './rankTrend/attentionCycleAnalyzer'
-import { composeCandidateTier } from './rankTrend/candidateTierComposer'
 import { analyzeMarketRegime } from './rankTrend/marketRegimeAnalyzer'
-import { composeDecision } from './rankTrend/resultComposer'
-import { analyzeRiskSignals } from './rankTrend/riskSignalAnalyzer'
-import {
-  analyzeFallbackTechnicalSignals,
-  analyzeTechnicalSignals,
-} from './rankTrend/technicalSignalAnalyzer'
+import { runRankTrendAnalysisPipeline } from './rankTrend/runRankTrendAnalysisPipeline'
 import { getTrustedVolumeRatio } from './dataLoader/VolumeRatioTrust'
 import {
   summarizeRankTrendStrategyDistribution,
@@ -668,55 +661,20 @@ export class RankTrendAnalyzer {
     const zlje = Number(stock?.zlje ?? 0) || 0
     const zljzb = Number(stock?.zljzb ?? 0) || 0
     const requiredSamples = stockSampleQuality.requiredSampleCount
+    const regime = this.resolveMarketRegime(snapshotSignature, dataLayer)
 
-    const technical =
-      analysisPercentiles.length >= requiredSamples
-        ? analyzeTechnicalSignals(analysisPercentiles, runtimeConfig)
-        : analyzeFallbackTechnicalSignals({
-            percentiles: analysisPercentiles,
-            displayChange,
-            stockChange,
-            volumeRatio,
-            zlje,
-            zljzb,
-            config: runtimeConfig,
-          })
-
-    let cycle = analyzeAttentionCycle({
+    const { technical, cycle, risk, decision, strategy } = runRankTrendAnalysisPipeline({
       ranks: analysisRanks,
       percentiles: analysisPercentiles,
-      momentumProfile: technical.momentumProfile,
-    })
-    const risk = analyzeRiskSignals({
       currentPercentile,
-      technical,
-      cycle,
+      displayChange,
+      stockChange,
+      volumeRatio,
       zlje,
       zljzb,
-      volumeRatio,
-    })
-    cycle = analyzeAttentionCycle({
-      ranks: analysisRanks,
-      percentiles: analysisPercentiles,
-      momentumProfile: technical.momentumProfile,
-      risk: {
-        pressure: risk.pressure,
-        divergenceSeverity: risk.divergence.severity,
-        overheatSeverity: risk.overheat.severity,
-      },
-    })
-    const decision = composeDecision({
-      technical,
-      cycle,
-      risk,
-      config: runtimeConfig,
-    })
-    const regime = this.resolveMarketRegime(snapshotSignature, dataLayer)
-    const strategy = composeCandidateTier({
-      technical,
-      cycle,
-      risk,
       regime,
+      config: runtimeConfig,
+      requiredSamples,
     })
 
     const updateTime = Date.now()

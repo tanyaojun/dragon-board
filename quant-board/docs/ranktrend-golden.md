@@ -8,9 +8,26 @@ Golden 来源：
 
 - `src/types/rankTrendDefaults.ts`
 - `src/services/RankTrendAnalyzer.ts`
+- `src/services/rankTrend/runRankTrendAnalysisPipeline.ts`
 - `src/services/rankTrend/**`（各分析器模块）
 
 QuantBoard golden 只来自 dragon-board TypeScript `rankTrend` 源码。
+
+## 当前 TS 真相源
+
+当前 RankTrend Golden 的共享分析顺序以以下文件为准：
+
+- `src/services/RankTrendAnalyzer.ts`
+- `src/services/rankTrend/runRankTrendAnalysisPipeline.ts`
+- `src/services/rankTrend/**`
+
+其中 `src/services/quantBoardGolden/RankTrendGoldenReplayEngine.ts` 必须复用同一条 `runRankTrendAnalysisPipeline()`，不能再维护平行的分析顺序。当前正式顺序是：
+
+```text
+technical -> cycle -> risk -> cycle(with risk) -> decision -> strategy
+```
+
+Python Golden replay 也必须对齐这条纯分析链，不再消费 `hotlistSentiment` 注入口径。
 
 ## 默认配置
 
@@ -191,6 +208,32 @@ golden_ranktrend_cases
 - 排名、计数、枚举、布尔值必须完全一致。
 - 百分位、分数、置信度默认容差 `1e-6`，如 Python 与 JS 浮点差异明显，可放宽到 `1e-4`，但必须记录原因。
 - `reasons` 文案首期建议完全一致；如果 Python 文案后续本地化调整，至少要保证 reason code 一致。
+
+## 当前比较摘要
+
+Golden validate 走归一化摘要比较时，当前至少覆盖以下字段：
+
+- `candidateTier`
+- `action`
+- `stage`
+- `regime`
+- `rank`
+- `confidence`
+- `finalSignal`
+- `technicalSignals`
+- `momentumProfile`
+- `risk`
+- `cycle.transition`
+- `cycle.entryAdvice`
+- `cycle.decision`
+- `decision.base`
+- `decision.final`
+
+其中 `cycle` 与 `decision` 的嵌套摘要同时进入：
+
+- `POST /api/golden/import` 的 expected 标准化
+- `POST /api/golden/validate` 的 actual 标准化
+- `expectedPreview / actualPreview` 页面预览
 
 ## 生成流程
 
