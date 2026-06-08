@@ -115,10 +115,11 @@
             <template v-else-if="col.key === 'jumpSignal'">
               <div class="jump-signal-cell">
                 <span
-                  class="jump-badge v3-signal-badge"
-                  :class="`v3-signal-${getLiveV3Signal(stock).tone}`"
-                  :title="getLiveV3SignalTitle(stock)"
-                >{{ getLiveV3Signal(stock).label }}</span>
+                  class="jump-badge candidate-pool-badge"
+                  :class="`candidate-pool-${stock.candidatePoolStatus || 'none'}`"
+                  :title="getCandidatePoolTitle(stock)"
+                  @click.stop="openCandidatePoolFromCell(stock)"
+                >{{ stock.candidatePoolLabel || '未入池' }}</span>
               </div>
             </template>
 
@@ -270,7 +271,6 @@ import {
   buildRankTrendStatusContext,
   getRankTrendDisplayBreakdown,
 } from '../../services/rankTrend/compat'
-import { getLiveV3SignalDecision } from '../../services/rankTrend/liveV3SignalMapper'
 const props = defineProps<{
   loading?: boolean
 }>()
@@ -375,7 +375,7 @@ const columns = [
   { key: 'avgRank', label: '均榜', group: 'comprehensive', always: true },
   { key: 'compRank', label: '综合', group: 'comprehensive', always: true },
   { key: 'rankChange', label: '变化', group: 'comprehensive', always: true },
-  { key: 'jumpSignal', label: '信号', group: 'comprehensive', always: true },
+  { key: 'jumpSignal', label: '候选池', group: 'comprehensive', always: true },
   { key: 'confidence', label: '置信度', group: 'comprehensive', always: true },
   { key: 'strategyStatus', label: '状态', group: 'comprehensive', always: true },
   { key: 'zlje', label: '主力净额', group: 'money', always: true },
@@ -813,18 +813,25 @@ const getStockValue = (stock: Stock, key: string) => (stock as unknown as Record
 const getRankChange = (stock: any) =>
   Math.round(getRankTrendAnalysis(stock)?.meta?.change ?? stock?.rankChange ?? 0)
 
-const getLiveV3Signal = (stock: any) => getLiveV3SignalDecision(stock)
-
-const getLiveV3SignalTitle = (stock: any) => {
-  const decision = getLiveV3Signal(stock)
-  const lines = [`V3信号：${decision.label}`]
-  if (decision.reasons.length) {
-    lines.push(`规则：${decision.reasons.join('；')}`)
+const getCandidatePoolTitle = (stock: any) => {
+  const lines = [`候选池：${stock.candidatePoolLabel || '未入池'}`]
+  if (stock?.candidatePoolSource) {
+    lines.push(`来源：${stock.candidatePoolSource}`)
   }
-  if (decision.degraded) {
-    lines.push(`说明：当前为降级判断，${decision.degradedReason || '存在未接入的上下文条件'}`)
+  if (stock?.candidatePoolUpdatedAt) {
+    lines.push(`更新时间：${stock.candidatePoolUpdatedAt}`)
+  }
+  if (stock?.candidatePoolEntryId) {
+    lines.push(`候选ID：${stock.candidatePoolEntryId}`)
   }
   return lines.join('\n')
+}
+
+const openCandidatePoolFromCell = (stock: Stock) => {
+  EventManager.emit('candidate-pool:open', {
+    stockCode: stock.code,
+    candidateId: stock.candidatePoolEntryId || undefined,
+  })
 }
 
 const getFinalSignal = (stock: any) =>
@@ -2296,25 +2303,32 @@ defineExpose({
   border: 1px solid rgba(77, 166, 255, 0.28);
 }
 
-.v3-signal-buy {
+.candidate-pool-triggered {
   color: #ff8c42;
   background: rgba(255, 140, 66, 0.12);
   border: 1px solid rgba(255, 140, 66, 0.28);
 }
 
-.v3-signal-sell {
+.candidate-pool-tracking {
   color: #3ddc97;
   background: rgba(61, 220, 151, 0.12);
   border: 1px solid rgba(61, 220, 151, 0.26);
 }
 
-.v3-signal-watch {
+.candidate-pool-candidate {
   color: #d8c27a;
   background: rgba(216, 194, 122, 0.12);
   border: 1px solid rgba(216, 194, 122, 0.22);
 }
 
-.v3-signal-neutral {
+.candidate-pool-observe {
+  color: #7ab8ff;
+  background: rgba(122, 184, 255, 0.12);
+  border: 1px solid rgba(122, 184, 255, 0.24);
+}
+
+.candidate-pool-reviewed,
+.candidate-pool-none {
   color: #8f99a8;
   background: rgba(143, 153, 168, 0.1);
   border: 1px solid rgba(143, 153, 168, 0.18);

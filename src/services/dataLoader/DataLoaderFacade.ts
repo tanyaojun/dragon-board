@@ -26,7 +26,6 @@ import { rankTrendSignalService } from './RankTrendSignalService'
 import { RealtimeQuoteCoordinator } from './RealtimeQuoteCoordinator'
 import { refreshResourceLocks } from '../refresh/RefreshResourceLocks'
 import { refreshScheduler } from '../refresh/RefreshTaskRuntime'
-import { resetLiveV3SignalState } from '../rankTrend/liveV3SignalMapper'
 import { startupBundleService } from './StartupBundleService'
 import { stockHotnessService } from './StockHotnessService'
 import { stockMergeCoordinator } from './StockMergeCoordinator'
@@ -974,6 +973,11 @@ class DataLoaderService {
         ...stock,
         rankTrend: signalStock.rankTrend,
         rankTrendCoverageWarning: signalStock.rankTrendCoverageWarning,
+        candidatePoolStatus: signalStock.candidatePoolStatus,
+        candidatePoolLabel: signalStock.candidatePoolLabel,
+        candidatePoolEntryId: signalStock.candidatePoolEntryId,
+        candidatePoolSource: signalStock.candidatePoolSource,
+        candidatePoolUpdatedAt: signalStock.candidatePoolUpdatedAt,
       }
     })
 
@@ -1083,7 +1087,6 @@ class DataLoaderService {
     }
     this.pendingVolumeRatioCodes.clear()
     this.volumeRatioRefreshRunning = false
-    resetLiveV3SignalState()
     platformHotlistService.clearCache()
     quoteService.clearPending()
     this.realtimeCoordinator.destroy()

@@ -1,10 +1,11 @@
 import { debugLog } from '@/utils/logger'
+import { applyCandidatePoolStatus } from '../candidate/CandidatePoolStatusProjector'
 import { dataLayer } from '../DataLayer'
 import { rankTrendAnalyzer, type RankTrendPreparedSnapshot } from '../RankTrendAnalyzer'
 import { applyJumpSignal, applyRankTrendAnalysis } from '../rankTrend/compat'
 import { evaluateJumpSignal, incrementJumpBar, registerJumpEntry, unregisterJumpPosition } from '../rankTrend/jumpSignalService'
+import { fusionCandidateNotifier } from '../rankTrend/FusionCandidateNotifier'
 import { jumpSignalNotifier } from '../rankTrend/JumpSignalNotifier'
-import { applyLiveV3SignalDecisions } from '../rankTrend/liveV3SignalMapper'
 import type { RankTrendAnalysisResult } from '../rankTrend/types'
 import { extraDataProjector } from './ExtraDataProjector'
 import type { StockSignalUpdate } from './types'
@@ -75,7 +76,7 @@ export class RankTrendSignalService {
     const mergedStocks = this.updateStockSignals(updates)
     // 跳跃检测与 V3 实盘信号都应基于本轮最新 rankTrend 结果计算。
     this.applyJumpSignals(mergedStocks)
-    this.applyLiveV3Signals(mergedStocks)
+    await this.syncCandidatePoolSignals(mergedStocks)
 
     return mergedStocks
   }
@@ -110,11 +111,6 @@ export class RankTrendSignalService {
     }
   }
 
-  private applyLiveV3Signals(stocks: any[]): void {
-    if (!stocks.length) return
-    applyLiveV3SignalDecisions(stocks)
-  }
-
   async preloadSnapshots(codes: string[]): Promise<RankTrendPreparedSnapshot[]> {
     return rankTrendAnalyzer.preloadSnapshots({ codes })
   }
@@ -147,9 +143,31 @@ export class RankTrendSignalService {
 
     // 跳跃检测
     this.applyJumpSignals(merged)
-    this.applyLiveV3Signals(merged)
+    await this.syncCandidatePoolSignals(merged)
 
     return merged
+  }
+
+  private async syncCandidatePoolSignals(stocks: any[]): Promise<void> {
+    if (!stocks.length) return
+
+    try {
+      await fusionCandidateNotifier.process(stocks)
+    } catch (error) {
+      console.warn(
+        '[RankTrendSignalService] fusion 自动入池失败，保留本地 RankTrend 刷新结果:',
+        error instanceof Error ? error.message : String(error),
+      )
+    }
+
+    try {
+      await applyCandidatePoolStatus(stocks)
+    } catch (error) {
+      console.warn(
+        '[RankTrendSignalService] 候选池状态投影失败，保留本地 RankTrend 刷新结果:',
+        error instanceof Error ? error.message : String(error),
+      )
+    }
   }
 
   extractRankTrendCoverageWarning(

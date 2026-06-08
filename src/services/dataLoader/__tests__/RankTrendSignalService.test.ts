@@ -3,7 +3,6 @@ import { createPinia, setActivePinia } from 'pinia'
 
 import { dataLayer } from '../../DataLayer'
 import { RankTrendSignalService } from '../RankTrendSignalService'
-import { resetLiveV3SignalState } from '../../rankTrend/liveV3SignalMapper'
 
 let emittedEvents = 0
 
@@ -12,6 +11,16 @@ vi.mock('../../RankTrendAnalyzer', () => ({
     getRankTrends: vi.fn(),
     getCachedPercentiles: vi.fn().mockReturnValue(null),
   },
+}))
+
+vi.mock('../../rankTrend/FusionCandidateNotifier', () => ({
+  fusionCandidateNotifier: {
+    process: vi.fn(),
+  },
+}))
+
+vi.mock('../../candidate/CandidatePoolStatusProjector', () => ({
+  applyCandidatePoolStatus: vi.fn(async (stocks: any[]) => stocks),
 }))
 
 vi.mock('@/utils/eventManager', () => ({
@@ -26,7 +35,6 @@ describe('RankTrendSignalService', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     dataLayer.reset()
-    resetLiveV3SignalState()
     emittedEvents = 0
     vi.restoreAllMocks()
   })
@@ -293,9 +301,58 @@ describe('RankTrendSignalService', () => {
     const service = new RankTrendSignalService()
     const result = await service.refreshRankTrendSignals()
 
-    expect(result[0].liveV3SignalDecision).toMatchObject({
-      label: 'A主升买点',
-      tone: 'buy',
-    })
+    const { fusionCandidateNotifier } = await import('../../rankTrend/FusionCandidateNotifier')
+    const { applyCandidatePoolStatus } = await import('../../candidate/CandidatePoolStatusProjector')
+
+    expect(fusionCandidateNotifier.process).toHaveBeenCalledWith(result)
+    expect(applyCandidatePoolStatus).toHaveBeenCalledWith(result)
+    expect(result[0].liveV3SignalDecision).toBeUndefined()
+  })
+
+  it('keeps RankTrend refresh usable when fusion auto-candidate creation fails', async () => {
+    const { rankTrendAnalyzer } = await import('../../RankTrendAnalyzer')
+    const { fusionCandidateNotifier } = await import('../../rankTrend/FusionCandidateNotifier')
+    const { applyCandidatePoolStatus } = await import('../../candidate/CandidatePoolStatusProjector')
+
+    vi.mocked(rankTrendAnalyzer.getRankTrends).mockResolvedValue(
+      new Map([
+        [
+          '000001',
+          {
+            meta: {
+              code: '000001',
+              currentRank: 1,
+              currentPercentile: 99,
+              change: 12,
+              rawChange: 12,
+              updateTime: 1,
+              sampleQuality: {
+                snapshotType: 'half_hour',
+                sampleCount: 30,
+                requiredSampleCount: 30,
+                status: 'ok',
+                delayedCount: 0,
+                restoredCount: 0,
+                latestTradingDate: '2026-06-08',
+                latestSlotTime: '10:00',
+              },
+            },
+            technical: {},
+            cycle: {},
+            risk: {},
+            decision: {},
+          } as any,
+        ],
+      ]),
+    )
+    vi.mocked(fusionCandidateNotifier.process).mockRejectedValueOnce(new Error('journal down'))
+
+    dataLayer.setMergedStocks([{ code: '000001', name: '平安银行', price: 12.34 } as any])
+
+    const service = new RankTrendSignalService()
+    const result = await service.refreshRankTrendSignals()
+
+    expect(result[0].rankTrend?.meta?.code).toBe('000001')
+    expect(applyCandidatePoolStatus).toHaveBeenCalledWith(result)
   })
 })

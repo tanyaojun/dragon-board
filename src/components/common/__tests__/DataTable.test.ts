@@ -48,6 +48,16 @@ describe('DataTable row detail interactions', () => {
     expect(source).not.toMatch(/trade_hypothesis/)
   })
 
+  test('renders candidate pool status instead of legacy live signal labels', () => {
+    const source = dataTableSource()
+
+    expect(source).toContain("{ key: 'jumpSignal', label: '候选池'")
+    expect(source).toContain('candidatePoolLabel')
+    expect(source).toContain('candidate-pool-badge')
+    expect(source).not.toContain('getLiveV3Signal(')
+    expect(source).not.toContain('getLiveV3SignalDecision')
+  })
+
   test('renders compact opening weak-to-strong badge in the stock name cell', () => {
     const source = dataTableSource()
 

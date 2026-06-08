@@ -87,6 +87,11 @@ export interface Stock {
   themeHeat?: number
   themeLevel?: string
   rankChange?: number
+  candidatePoolStatus?: 'observe' | 'candidate' | 'triggered' | 'tracking' | 'reviewed' | 'none'
+  candidatePoolLabel?: string
+  candidatePoolEntryId?: string
+  candidatePoolSource?: string
+  candidatePoolUpdatedAt?: string
 
   // 信号字段
   directionSignal?: 'buy' | 'sell' | 'hold' | 'none'

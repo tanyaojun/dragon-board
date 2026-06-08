@@ -190,6 +190,11 @@ vi.mock('../RankTrendSignalService', () => ({
           risk: {},
           decision: {},
         },
+        candidatePoolStatus: 'triggered',
+        candidatePoolLabel: '已触发',
+        candidatePoolEntryId: 'entry-1',
+        candidatePoolSource: 'ranktrend_early_big_move_v3_lifecycle_fusion',
+        candidatePoolUpdatedAt: '2026-06-08T10:00:00.000Z',
       }))
     }),
     updateStockSignals: vi.fn(),
@@ -716,6 +721,13 @@ describe('DataLoaderFacade', () => {
 
     await vi.waitFor(() => {
       expect(dataLayer.getStock('000001')?.rankTrend?.meta?.change).toBe(12)
+    })
+    expect(dataLayer.getStock('000001')).toMatchObject({
+      candidatePoolStatus: 'triggered',
+      candidatePoolLabel: '已触发',
+      candidatePoolEntryId: 'entry-1',
+      candidatePoolSource: 'ranktrend_early_big_move_v3_lifecycle_fusion',
+      candidatePoolUpdatedAt: '2026-06-08T10:00:00.000Z',
     })
     expect(EventManager.getHistory(AppEvents.DATA.MERGED)).toEqual([
       expect.objectContaining({ data: expect.objectContaining({ reason: 'base-merge' }) }),
