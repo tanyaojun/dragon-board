@@ -122,4 +122,13 @@ assert.equal(holidaySkipped.skipped, 1)
 assert.equal(holidaySkipped.reason, 'outside-trading-time')
 assert.equal(fetchCalls.length, 0)
 
+const ignoredLegacySource = await client.sendEvents([entryEvent], {
+  source: 'rank-trend-jump',
+})
+assert.equal(ignoredLegacySource.ok, true)
+assert.equal(ignoredLegacySource.sent, 0)
+assert.equal(ignoredLegacySource.skipped, 1)
+assert.equal(ignoredLegacySource.reason, 'legacy-source-disabled')
+assert.equal(fetchCalls.length, 0)
+
 console.log('jump signal notification route internals ok')

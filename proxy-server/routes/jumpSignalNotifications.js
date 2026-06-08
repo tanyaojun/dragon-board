@@ -9,6 +9,7 @@ export function registerJumpSignalRoutes(app, context = {}) {
   const client = createJumpSignalNotifierClient(context)
 
   app.post('/api/notifications/jump-signal', async (req, res) => {
+    const source = String(req.body?.source || '')
     const events = Array.isArray(req.body?.events) ? req.body.events : []
     if (!events.length) {
       res.status(400).json({ ok: false, message: 'jump signal events empty' })
@@ -16,7 +17,7 @@ export function registerJumpSignalRoutes(app, context = {}) {
     }
 
     try {
-      const result = await client.sendEvents(events)
+      const result = await client.sendEvents(events, { source })
       res.json(result)
     } catch (error) {
       res.status(503).json({ ok: false, message: error.message || 'feishu send failed' })
@@ -39,7 +40,12 @@ export function createJumpSignalNotifierClient(options = {}) {
   if (cleanupTimer.unref) cleanupTimer.unref()
 
   return {
-    async sendEvents(events) {
+    async sendEvents(events, options = {}) {
+      const source = String(options.source || '')
+      if (source === 'rank-trend-jump') {
+        return { ok: true, sent: 0, skipped: events.length, reason: 'legacy-source-disabled' }
+      }
+
       const enabled = readConfig('FEISHU_EVENT_RADAR_ENABLED')
       const webhook = readConfig('FEISHU_EVENT_RADAR_WEBHOOK')
       const secret = readConfig('FEISHU_EVENT_RADAR_SECRET')
