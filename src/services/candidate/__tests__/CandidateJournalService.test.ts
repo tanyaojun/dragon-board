@@ -606,4 +606,158 @@ describe('CandidateJournalService', () => {
     expect(result).toBe(true)
     expect(addToFavorites).toHaveBeenCalledWith('600584')
   })
+
+  it('builds execution overlay from journal execution fields without changing strategy state semantics', () => {
+    const { service } = createService()
+
+    const overlay = service.toExecutionOverlay({
+      ...existingCandidate,
+      entryPrice: 12.5,
+      entryTime: '2026-06-08T10:30:00+08:00',
+      exitPrice: 13.1,
+      exitTime: '2026-06-08T14:00:00+08:00',
+      positionPct: 0.2,
+      stopLossPrice: 11.8,
+      takeProfitPrice: 13.8,
+      executionResult: 'good',
+      reviewNotes: '按计划执行',
+    })
+
+    expect(overlay).toEqual({
+      executed: true,
+      entryId: 'tj_existing',
+      entryPrice: 12.5,
+      entryTime: '2026-06-08T10:30:00+08:00',
+      exitPrice: 13.1,
+      exitTime: '2026-06-08T14:00:00+08:00',
+      positionPct: 0.2,
+      stopLossPrice: 11.8,
+      takeProfitPrice: 13.8,
+      reviewOutcome: 'pending',
+      executionResult: 'good',
+      reviewNotes: '按计划执行',
+    })
+  })
+
+  it('returns latest execution overlay by stock code for projection attachment only', async () => {
+    const { service, api } = createService()
+    api.get.mockResolvedValue({
+      entries: [
+        {
+          ...existingCandidate,
+          id: 'tj_old',
+          stockCode: '600584',
+          updatedAt: '2026-06-08T10:00:00+08:00',
+          entryPrice: 12.1,
+        },
+        {
+          ...existingCandidate,
+          id: 'tj_new',
+          stockCode: 'sh600584',
+          updatedAt: '2026-06-08T14:00:00+08:00',
+          entryPrice: 12.8,
+          entryTime: '2026-06-08T13:30:00+08:00',
+        },
+      ],
+      total: 2,
+    })
+
+    const result = await service.getExecutionOverlayMap(['600584', '000001'])
+
+    expect(result).toEqual({
+      '000001': null,
+      '600584': {
+        executed: true,
+        entryId: 'tj_new',
+        entryPrice: 12.8,
+        entryTime: '2026-06-08T13:30:00+08:00',
+        exitPrice: undefined,
+        stopLossPrice: undefined,
+        takeProfitPrice: undefined,
+        positionPct: undefined,
+        reviewOutcome: 'pending',
+        executionResult: 'unknown',
+        reviewNotes: undefined,
+      },
+    })
+  })
+
+  it('does not mark overlay as executed when journal entry only has empty execution fields', async () => {
+    const { service, api } = createService()
+    api.get.mockResolvedValue({
+      entries: [
+        {
+          ...existingCandidate,
+          id: 'tj_blank',
+          stockCode: '600584',
+          updatedAt: '2026-06-08T14:00:00+08:00',
+        },
+      ],
+      total: 1,
+    })
+
+    const result = await service.getExecutionOverlayMap(['600584'])
+
+    expect(result).toEqual({
+      '600584': {
+        executed: false,
+        entryId: 'tj_blank',
+        entryPrice: undefined,
+        entryTime: undefined,
+        exitPrice: undefined,
+        exitTime: undefined,
+        stopLossPrice: undefined,
+        takeProfitPrice: undefined,
+        positionPct: undefined,
+        reviewOutcome: 'pending',
+        executionResult: 'unknown',
+        reviewNotes: undefined,
+      },
+    })
+  })
+
+  it('prefers the latest open candidate over newer reviewed records when building execution overlay map', async () => {
+    const { service, api } = createService()
+    api.get.mockResolvedValue({
+      entries: [
+        {
+          ...existingCandidate,
+          id: 'tj_open',
+          stockCode: '600584',
+          status: 'triggered',
+          updatedAt: '2026-06-08T10:00:00+08:00',
+          entryTime: '2026-06-08T10:00:00+08:00',
+        },
+        {
+          ...existingCandidate,
+          id: 'tj_reviewed',
+          stockCode: '600584',
+          status: 'reviewed',
+          updatedAt: '2026-06-08T14:00:00+08:00',
+          reviewNotes: '旧复盘记录',
+          entryTime: '2026-06-07T10:00:00+08:00',
+        },
+      ],
+      total: 2,
+    })
+
+    const result = await service.getExecutionOverlayMap(['600584'])
+
+    expect(result).toEqual({
+      '600584': {
+        executed: true,
+        entryId: 'tj_open',
+        entryPrice: undefined,
+        entryTime: '2026-06-08T10:00:00+08:00',
+        exitPrice: undefined,
+        exitTime: undefined,
+        stopLossPrice: undefined,
+        takeProfitPrice: undefined,
+        positionPct: undefined,
+        reviewOutcome: 'pending',
+        executionResult: 'unknown',
+        reviewNotes: undefined,
+      },
+    })
+  })
 })

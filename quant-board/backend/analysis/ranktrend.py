@@ -41,12 +41,12 @@ def weighted_share(scores: list[float], weights: list[float], predicate) -> floa
 class RankTrendConfig:
     momentumPeriods: list[int] = field(default_factory=lambda: [3, 5, 8, 13, 21])
     momentumWeights: list[float] = field(default_factory=lambda: [0.15, 0.2, 0.25, 0.25, 0.15])
-    buyThresholds: list[float] = field(default_factory=lambda: [5, 8, 12, 15, 20])
-    sellThresholds: list[float] = field(default_factory=lambda: [-5, -8, -12, -15, -20])
-    macdFast: int = 12
+    buyThresholds: list[float] = field(default_factory=lambda: [5, 8, 13, 21, 34])
+    sellThresholds: list[float] = field(default_factory=lambda: [-5, -8, -13, -21, -34])
+    macdFast: int = 13
     macdSlow: int = 21
-    macdSignal: int = 9
-    requireMacdGoldenCross: bool = True
+    macdSignal: int = 8
+    requireMacdGoldenCross: bool = False
     jumpDeltaPct: float = 10.0  # 内生阈值跳跃检测的百分位变化阈值
     directionWeight: float = 0.3
     accelerationWeight: float = 0.25

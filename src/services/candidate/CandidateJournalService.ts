@@ -11,6 +11,7 @@ import { analyzeCandidateStock } from './CandidateAnalysisService'
 import type {
   CandidateAnalysisContext,
   CandidateAnalysisResult,
+  CandidateExecutionOverlayByCode,
   CandidateJournalEntry,
   CandidateReviewUpdate,
   CandidateRuleEvidence,
@@ -23,6 +24,7 @@ import type {
   CandidateThesisUpdate,
   CandidateWorkbenchReview,
 } from './types'
+import type { FusionExecutionOverlay } from '@/types/fusionStrategyProjection'
 
 interface CandidateApi {
   get<T = any>(url: string, options?: any): Promise<T>
@@ -70,6 +72,18 @@ function toSafeNumber(value: unknown, fallback = 0): number {
   return Number.isFinite(numeric) ? numeric : fallback
 }
 
+function toOptionalNumber(value: unknown): number | undefined {
+  if (value == null) return undefined
+  if (typeof value === 'string' && value.trim() === '') return undefined
+  const numeric = Number(value)
+  return Number.isFinite(numeric) ? numeric : undefined
+}
+
+function getEntryTimestamp(entry: CandidateJournalEntry): number {
+  const updated = Date.parse(entry.updatedAt || entry.createdAt || '')
+  return Number.isFinite(updated) ? updated : 0
+}
+
 function normalizeEntry(raw: any): CandidateJournalEntry {
   return {
     id: String(raw?.id || ''),
@@ -87,13 +101,13 @@ function normalizeEntry(raw: any): CandidateJournalEntry {
     modelResult: String(raw?.modelResult || raw?.model_result || 'unknown'),
     executionResult: String(raw?.executionResult || raw?.execution_result || 'unknown'),
     reviewNotes: String(raw?.reviewNotes || raw?.review_notes || ''),
-    entryPrice: toSafeNumber(raw?.entryPrice ?? raw?.entry_price),
+    entryPrice: toOptionalNumber(raw?.entryPrice ?? raw?.entry_price),
     entryTime: String(raw?.entryTime || raw?.entry_time || ''),
-    exitPrice: toSafeNumber(raw?.exitPrice ?? raw?.exit_price),
+    exitPrice: toOptionalNumber(raw?.exitPrice ?? raw?.exit_price),
     exitTime: String(raw?.exitTime || raw?.exit_time || ''),
-    stopLossPrice: toSafeNumber(raw?.stopLossPrice ?? raw?.stop_loss_price),
-    takeProfitPrice: toSafeNumber(raw?.takeProfitPrice ?? raw?.take_profit_price),
-    positionPct: toSafeNumber(raw?.positionPct ?? raw?.position_pct),
+    stopLossPrice: toOptionalNumber(raw?.stopLossPrice ?? raw?.stop_loss_price),
+    takeProfitPrice: toOptionalNumber(raw?.takeProfitPrice ?? raw?.take_profit_price),
+    positionPct: toOptionalNumber(raw?.positionPct ?? raw?.position_pct),
     reviewTags: Array.isArray(raw?.reviewTags || raw?.review_tags)
       ? (raw.reviewTags || raw.review_tags).map((item: unknown) => String(item))
       : [],
@@ -413,6 +427,61 @@ export class CandidateJournalService {
     const normalizedCode = normalizeCode(stockCode)
     if (!normalizedCode) return null
     return this.findOpenCandidate(normalizedCode)
+  }
+
+  toExecutionOverlay(entry: CandidateJournalEntry | null | undefined): FusionExecutionOverlay | null {
+    if (!entry) return null
+
+    const hasExecution =
+      !!entry.entryTime ||
+      !!entry.exitTime ||
+      Number(entry.entryPrice) > 0 ||
+      Number(entry.exitPrice) > 0
+
+    return {
+      executed: hasExecution,
+      entryId: entry.id || undefined,
+      entryPrice: entry.entryPrice,
+      entryTime: entry.entryTime || undefined,
+      exitPrice: entry.exitPrice,
+      exitTime: entry.exitTime || undefined,
+      stopLossPrice: entry.stopLossPrice,
+      takeProfitPrice: entry.takeProfitPrice,
+      positionPct: entry.positionPct,
+      reviewOutcome: entry.reviewOutcome || undefined,
+      executionResult: entry.executionResult || undefined,
+      reviewNotes: entry.reviewNotes || undefined,
+    }
+  }
+
+  async getExecutionOverlayMap(codes: string[]): Promise<CandidateExecutionOverlayByCode> {
+    const normalizedCodes = Array.from(new Set(codes.map(normalizeCode).filter(Boolean)))
+    if (!normalizedCodes.length) return {}
+
+    const entries = await this.listCandidates({ limit: 1000 })
+    const entryByCode = new Map<string, CandidateJournalEntry>()
+
+    for (const entry of entries) {
+      const code = normalizeCode(entry.stockCode)
+      if (!normalizedCodes.includes(code)) continue
+      const current = entryByCode.get(code)
+      const entryIsOpen = OPEN_STATUSES.includes(entry.status)
+      const currentIsOpen = current ? OPEN_STATUSES.includes(current.status) : false
+      if (
+        !current ||
+        (entryIsOpen && !currentIsOpen) ||
+        (entryIsOpen === currentIsOpen && getEntryTimestamp(entry) >= getEntryTimestamp(current))
+      ) {
+        entryByCode.set(code, entry)
+      }
+    }
+
+    const overlayByCode: CandidateExecutionOverlayByCode = {}
+    for (const code of normalizedCodes) {
+      overlayByCode[code] = this.toExecutionOverlay(entryByCode.get(code))
+    }
+
+    return overlayByCode
   }
 
   reanalyzeCandidate(entry: CandidateJournalEntry): CandidateWorkbenchReview {

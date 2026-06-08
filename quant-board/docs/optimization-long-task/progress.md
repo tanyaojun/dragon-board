@@ -1468,3 +1468,102 @@ Review rerun:
 - `bt_b8c73ecf67e24d78` 的 `+31.00% / 65.79%` 已用同窗口、同策略、同成交容量口径复现，新 run 为 `bt_682d3abc164d4177`。
 - 复现口径包含 `volumeParticipationRate=0.1`；若使用 CLI 默认 `0.05`，新 run `bt_7eaaa1f656764be8` 为 `+28.93% / 68.42%`。
 - 两个口径的退出结构一致：止损 `4` 笔、B 辅助退出 `6` 笔；差异来自成交容量约束下的部分成交金额，不是手写报告数字。
+
+### Phase 34 Remaining stop-loss and open-profit attribution
+
+- **Status:** complete
+- Actions taken:
+  - 使用复现 run `bt_682d3abc164d4177` 作为主口径，解析本地复跑 JSON 获取交易收益结构。
+  - 直接解压 Mongo `backtest_result_chunks` 的完整 `result`，筛选 `000070/301666/603115/002149/600759/603618` 的完整 signals 路径。
+  - 计算 4 笔止损和 2 个未平仓浮盈的入场层级、生命周期 action、`rankPathCommitment`、MFE/MAE、首次 B 反对与退出状态。
+  - 计算利润集中度，验证结果不是单票偶然大肉。
+
+Key numbers:
+
+- `realizedProfit=277,426.33`，`unrealizedProfit=32,350.45`，最终利润约 `309,776.78`。
+- 最大单票 `603256` 贡献 `52,859.93`，占最终利润约 `17.1%`；剔除最大 1 笔后仍约 `+25.69%`，剔除最大 3 笔后仍约 `+17.51%`。
+- 最大持有退出 `26` 笔，胜率 `92.31%`，利润 `+320,528.51`。
+- 4 笔止损合计 `-28,094.53`；6 笔 B 辅助退出合计 `-11,844.91`，后者主要价值是缩亏。
+
+Stop-loss findings:
+
+- `000070`：`A_MAIN + caution`，`rankPathCommitment=0.112`，最大浮盈仅 `+0.97%`，次日已转 `D_EXIT_RISK` 但 B 未升级为 veto/exit_watch，最终止损。
+- `301666`：入场后最大浮盈 `+12.28%`，首次 B veto 时仍盈利 `+7.35%`，所以未触发未盈利退出；这是利润保护问题，不是入场过滤问题。
+- `603115`：入场后几乎无浮盈，次日最低到 `-15.27%`，B 全程 caution，属于承接失败但 B 反对不足。
+- `002149`：最大浮盈 `+3.43%` 后回落止损，偏短线兑现失败/小幅浮盈回撤保护问题。
+
+Open-position findings:
+
+- `600759`：未平仓浮盈 `+1,798.55`，占比很小；B veto 首次出现时已盈利，不触发未盈利退出。
+- `603618`：未平仓浮盈 `+30,551.90`，占最终利润约 `9.9%`；同样因 B veto 出现时已盈利而保留，说明 `B_IGNITION + caution` 不能硬杀。
+
+Errors:
+
+- 首次用 `BacktestService.export_report()` 读取完整报告超时；改用本地复跑 JSON 做交易层摘要，并直接解压 Mongo result chunks 获取完整 signals。
+- 首次用 `get_signals(limit=5000)` 超过分页上限；改用 Mongo `backtest_signals`/`backtest_result_chunks` 直查目标代码。
+- 首次调用 `get_mongodb_database()` 未传 uri/database；改为从 `get_settings()` 读取连接参数。
+
+### Phase 35 Max holding bars 40 rerun
+
+- **Status:** complete
+- Actions taken:
+  - 按用户要求保持当前 `ranktrend_early_big_move_v3_lifecycle_fusion` 策略不变，只把 `maxHoldingBars` 从 `30` 临时改为 `40`。
+  - 固定同一连续窗口 `2026-04-01~2026-05-31`、`half_hour/current_bar`、`stopLossPct=0.05`、`takeProfitPct=9.99`、`volumeParticipationRate=0.1`。
+  - 新鲜复跑生成 `bt_7f4b3d2472d64629`，并用 Mongo 正式仓储入口读取完整 `tradeSimulation`。
+
+Result:
+
+| Run ID | maxHoldingBars | totalReturn | realizedReturn | winRate | trades | maxDrawdown | stops | B exits | openPositions |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `bt_682d3abc164d4177` | 30 | `+31.00%` | `+27.74%` | `65.79%` | 38 | `-3.19%` | 4 | 6 | 2 |
+| `bt_7f4b3d2472d64629` | 40 | `+11.87%` | `+12.47%` | `53.85%` | 26 | `-4.32%` | 4 | 5 | 5 |
+
+Notes:
+
+- 40 bars 与旧对照 `bt_6f2909499d3e4865` 完全复现，说明不是偶然 run。
+- 主要问题是资金和仓位路径被拉长后，交易数减少并错过 30 bars 路径里的多只大肉；同时引入 `603993 洛阳钼业` 大止损和未平仓浮亏。
+- 当前不采用全局 40 bars。后续如果要让利润奔跑，应研究盈利仓条件式延长或利润保护，而不是把所有仓位统一拉长。
+
+### Phase 36 Max holding bars 25 rerun
+
+- **Status:** complete
+- Actions taken:
+  - 按用户要求保持当前 `ranktrend_early_big_move_v3_lifecycle_fusion` 策略不变，只把 `maxHoldingBars` 从 `30` 临时改为 `25`。
+  - 固定同一连续窗口 `2026-04-01~2026-05-31`、`half_hour/current_bar`、`stopLossPct=0.05`、`takeProfitPct=9.99`、`volumeParticipationRate=0.1`。
+  - 新鲜复跑生成 `bt_1f4d5b6492b44ee7`，并用 Mongo 正式仓储入口读取完整 `tradeSimulation`。
+
+Result:
+
+| Run ID | maxHoldingBars | totalReturn | realizedReturn | winRate | trades | maxDrawdown | stops | B exits | openPositions |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `bt_1f4d5b6492b44ee7` | 25 | `+26.22%` | `+25.07%` | `60.47%` | 43 | `-4.01%` | 8 | 6 | 2 |
+| `bt_682d3abc164d4177` | 30 | `+31.00%` | `+27.74%` | `65.79%` | 38 | `-3.19%` | 4 | 6 | 2 |
+
+Notes:
+
+- 25 bars 过了 `60%` 胜率底线，也明显优于 40 bars，但收益、胜率、回撤和止损数量都不如 30 bars。
+- 25 bars 的交易数更多，说明它提高换仓频率，但新增路径里出现 `002929`、`301217` 二次亏损、`600884` 等止损拖累。
+- 当前不采用全局 25 bars；30 bars 仍是主线。
+
+### Phase 37 Max holding bars 32/35/28 rerun
+
+- **Status:** complete
+- Actions taken:
+  - 按用户要求保持当前 `ranktrend_early_big_move_v3_lifecycle_fusion` 策略不变，分别复跑 `maxHoldingBars=32/35/28`。
+  - 固定同一连续窗口 `2026-04-01~2026-05-31`、`half_hour/current_bar`、`stopLossPct=0.05`、`takeProfitPct=9.99`、`volumeParticipationRate=0.1`。
+  - 三条 run 均已正式落库，并用 Mongo 正式仓储入口读取完整 `tradeSimulation`。
+
+Result:
+
+| Run ID | maxHoldingBars | totalReturn | realizedReturn | winRate | trades | maxDrawdown | stops | B exits | openPositions |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `bt_eb657d60cbeb4b17` | 28 | `+21.15%` | `+21.15%` | `58.97%` | 39 | `-3.55%` | 5 | 5 | 0 |
+| `bt_682d3abc164d4177` | 30 | `+31.00%` | `+27.74%` | `65.79%` | 38 | `-3.19%` | 4 | 6 | 2 |
+| `bt_d896884168dc4081` | 32 | `+25.33%` | `+23.25%` | `64.86%` | 37 | `-3.35%` | 3 | 6 | 2 |
+| `bt_ce6d1767f5fa4f0a` | 35 | `+21.29%` | `+19.48%` | `54.05%` | 37 | `-5.74%` | 6 | 7 | 4 |
+
+Notes:
+
+- 32 bars 是三者里最接近 30 bars 的口径，但收益少 `5.67pp`，仍未超过主线。
+- 35 bars 和 28 bars 均跌破 `60%` 胜率线，不适合作为当前目标口径。
+- 当前参数证据支持：不要继续盲扫固定 bars，30 bars 仍是最稳主线；下一步应回到利润保护和亏损路径识别。

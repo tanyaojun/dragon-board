@@ -19,6 +19,16 @@ vi.mock('../../rankTrend/FusionCandidateNotifier', () => ({
   },
 }))
 
+vi.mock('../../rankTrend/FusionStrategyProjector', () => ({
+  buildFusionStrategyProjections: vi.fn(() => []),
+}))
+
+vi.mock('../../candidate/CandidateJournalService', () => ({
+  candidateJournalService: {
+    getExecutionOverlayMap: vi.fn(async () => ({})),
+  },
+}))
+
 vi.mock('../../rankTrend/JumpSignalNotifier', () => ({
   jumpSignalNotifier: {
     notifyEntry: vi.fn(),
@@ -40,7 +50,7 @@ vi.mock('../../rankTrend/jumpSignalService', async () => {
 })
 
 vi.mock('../../candidate/CandidatePoolStatusProjector', () => ({
-  applyCandidatePoolStatus: vi.fn(async (stocks: any[]) => stocks),
+  applyCandidatePoolProjections: vi.fn((stocks: any[], _projections: any[]) => stocks),
 }))
 
 vi.mock('@/utils/eventManager', () => ({
@@ -200,7 +210,7 @@ describe('RankTrendSignalService', () => {
     ])
   })
 
-  it('refreshRankTrendSignals uses fresh rankTrend results to compute live V3 signals', async () => {
+  it('refreshRankTrendSignals builds fusion projections after auto candidate processing', async () => {
     const { rankTrendAnalyzer } = await import('../../RankTrendAnalyzer')
     vi.mocked(rankTrendAnalyzer.getRankTrends).mockResolvedValue(
       new Map([
@@ -322,10 +332,12 @@ describe('RankTrendSignalService', () => {
     const result = await service.refreshRankTrendSignals()
 
     const { fusionCandidateNotifier } = await import('../../rankTrend/FusionCandidateNotifier')
-    const { applyCandidatePoolStatus } = await import('../../candidate/CandidatePoolStatusProjector')
+    const { buildFusionStrategyProjections } = await import('../../rankTrend/FusionStrategyProjector')
+    const { applyCandidatePoolProjections } = await import('../../candidate/CandidatePoolStatusProjector')
 
     expect(fusionCandidateNotifier.process).toHaveBeenCalledWith(result)
-    expect(applyCandidatePoolStatus).toHaveBeenCalledWith(result)
+    expect(buildFusionStrategyProjections).toHaveBeenCalledWith(result, expect.any(Object))
+    expect(applyCandidatePoolProjections).toHaveBeenCalledWith(result, expect.any(Array))
     expect(result[0].liveV3SignalDecision).toBeUndefined()
   })
 
@@ -378,7 +390,8 @@ describe('RankTrendSignalService', () => {
   it('keeps RankTrend refresh usable when fusion auto-candidate creation fails', async () => {
     const { rankTrendAnalyzer } = await import('../../RankTrendAnalyzer')
     const { fusionCandidateNotifier } = await import('../../rankTrend/FusionCandidateNotifier')
-    const { applyCandidatePoolStatus } = await import('../../candidate/CandidatePoolStatusProjector')
+    const { buildFusionStrategyProjections } = await import('../../rankTrend/FusionStrategyProjector')
+    const { applyCandidatePoolProjections } = await import('../../candidate/CandidatePoolStatusProjector')
 
     vi.mocked(rankTrendAnalyzer.getRankTrends).mockResolvedValue(
       new Map([
@@ -419,6 +432,7 @@ describe('RankTrendSignalService', () => {
     const result = await service.refreshRankTrendSignals()
 
     expect(result[0].rankTrend?.meta?.code).toBe('000001')
-    expect(applyCandidatePoolStatus).toHaveBeenCalledWith(result)
+    expect(buildFusionStrategyProjections).toHaveBeenCalledWith(result, expect.any(Object))
+    expect(applyCandidatePoolProjections).toHaveBeenCalledWith(result, expect.any(Array))
   })
 })

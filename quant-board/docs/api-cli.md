@@ -931,6 +931,81 @@ Layer 3 实盘对齐端点。交叉比对 `trade_journal` 执行记录与 checkp
 }
 ```
 
+### `GET /api/backtests/{run_id}/fusion-projections`
+
+读取 fusion 候选池历史投影，当前策略锚点固定为 `ranktrend_early_big_move_v3_lifecycle_fusion`。
+
+用途：
+
+- 给 Dragon Board / QuantBoard 候选池历史视图提供统一的 `FusionStrategyProjection` rows。
+- 用 `backtest signals + tradeSimulation.roundTripTrades/trades + tradeEvents/openPositions` 还原策略生命周期。
+- `trade_journal` 不参与主状态判定；它只能作为前端后续拼接的 execution overlay 来源。
+
+硬约束：
+
+- 不能按股票代码把整次回测粗暴折叠成一条 trade。
+- 同一股票的多段独立入场/退出必须保留为独立 lifecycle segment。
+- `snapshotType` 合同支持 `half_hour | quarter_hour`；当 run 元数据缺失时默认回落 `half_hour`。
+- 对于仍处于 `active_holding / exit_signaled` 的 row，`strategyExitAt / strategyExitPrice / strategyReturnPct / exitReason` 必须保持 `null`，不能提前泄露未来 closed 事实。
+- 同一 entry 若 `openPositions` 仍然存在，后端必须以 open 策略事实为准，不能让旧 closed trade 覆盖后续状态。
+
+错误：
+
+- 非 fusion run 返回 `409`，`detail.code=unsupported_strategy`，并带 `expectedStrategyName=ranktrend_early_big_move_v3_lifecycle_fusion`。
+
+返回：
+
+```json
+{
+  "ok": true,
+  "runId": "bt_xxx",
+  "datasetId": "ds_xxx",
+  "snapshotType": "half_hour",
+  "strategyName": "ranktrend_early_big_move_v3_lifecycle_fusion",
+  "strategyVersion": "0.1.0",
+  "configHash": "abc123",
+  "randomSeed": 20260430,
+  "count": 3,
+  "rows": [
+    {
+      "stockCode": "600001",
+      "stockName": "示例股",
+      "strategyName": "ranktrend_early_big_move_v3_lifecycle_fusion",
+      "snapshotType": "half_hour",
+      "tradingDate": "2026-06-03",
+      "snapshotId": "half_hour:2026-06-03:10:00",
+      "frameTime": "2026-06-03T10:00:00+08:00",
+      "projectionSource": "backtest",
+      "strategyState": "active_holding",
+      "candidateTier": "A_MAIN",
+      "lifecycleAction": "allow",
+      "triggerAt": "2026-06-03T10:00:00+08:00",
+      "strategyEntryAt": "2026-06-03T10:00:00+08:00",
+      "strategyExitAt": null,
+      "holdingBars": 0,
+      "slotIndex": null,
+      "maxPositions": 5,
+      "tPlusOneUnlocked": false,
+      "entryReason": "A_MAIN 入场",
+      "exitReason": null,
+      "strategyEntryPrice": 10.0,
+      "strategyExitPrice": null,
+      "strategyReturnPct": null,
+      "executionOverlay": null
+    }
+  ]
+}
+```
+
+状态语义：
+
+- `triggered_wait_entry`：候选已触发，但回测事实尚未确认进入策略持有。
+- `active_holding`：回测路径确认当前仍在持有。
+- `exit_signaled`：回测路径确认进入退出观察，但该段持有尚未关闭。
+- `closed`：回测路径确认该段持有已经关闭。
+
+这个端点优先读取 `BacktestRun.result_json` 中的原始时间序列，以便保留 `lifecycleAction`、`finalSignal` 和 `tradeEvents`。只有在历史 run 缺失这些字段时，后端才允许回退归一化集合读取；回退也不能重新引入按 `code` 聚合 lifecycle 的错误口径。
+
 ### `GET /api/backtests/{run_id}/quality`
 
 读取归一化质量报告，数据源为 MongoDB `backtest_quality_reports` 集合。

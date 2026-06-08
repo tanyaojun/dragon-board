@@ -269,9 +269,16 @@ Phase 6 起，报告页读取顺序固定为：
 2. 再调用 `GET /api/backtests/{run_id}/trades` 分页读取交易列表，字段来源是 `backtest_trades`。
 3. 调用 `GET /api/backtests/{run_id}/equity` 读取权益曲线，字段来源是 `backtest_equity_curve`。
 4. 调用 `GET /api/backtests/{run_id}/signals?tier=...&regime=...&limit=...&offset=...` 读取信号诊断，字段来源是 `backtest_signals`。
-5. 调用 `GET /api/backtests/{run_id}/quality` 读取质量报告，字段来源是 `backtest_quality_reports`。
+5. 候选池历史视图调用 `GET /api/backtests/{run_id}/fusion-projections`，字段来源是原始 `signals + tradeSimulation.roundTripTrades/trades + tradeEvents/openPositions` 的统一投影。
+6. 调用 `GET /api/backtests/{run_id}/quality` 读取质量报告，字段来源是 `backtest_quality_reports`。
 
 交易列表和信号诊断必须分开展示：交易列表只展示真实成交和持仓生命周期，不能用 `signals` 伪造成交；信号表用于解释候选分层、市场状态、过滤原因和风险。权益图只消费后端 API 数据，前端不得重算核心收益指标。
+
+候选池历史视图必须只读 `fusion-projections`：
+
+- 主状态来自 `strategyState`，不能从 `trade_journal.status`、`entryTime` 或 `exitTime` 反推。
+- `snapshotType` 默认展示 `half_hour`；只有用户显式切到 `quarter_hour` 时才请求对应 run。
+- `trade_journal` 只作为 execution overlay；即使有人工买卖记录，也不能覆盖回测投影里的 `active_holding / exit_signaled / closed`。
 
 归一化回测结果是 QuantBoard 后端 research SQLite 的 `local-only` 数据。前端只调用 QuantBoard API，不直连 SQLite 或 Supabase；Supabase 不作为报告页读取源，也不承担回测报告 failover。若新归一化端点返回 404 或结构化错误，页面应展示错误原因，并可保留旧报告摘要，但不得把缺失明细渲染成空成功状态。
 
@@ -481,6 +488,12 @@ parameterGrid: {
 | `positionPct` | float | 仓位占比 |
 
 这些字段在复盘卡片内以"执行记录"区域展示，通过 `POST/PUT /api/journal/entries` 持久化到 MongoDB `trade_journal` 集合。
+
+这里的执行记录只属于 execution overlay：
+
+- 可以补充人工实际买卖时间、价格、仓位和复盘备注。
+- 不能反推 fusion 主状态。
+- 候选池主状态必须来自 `GET /api/backtests/{run_id}/fusion-projections` 或对应 live projection。
 
 ## 视觉原则
 

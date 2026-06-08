@@ -116,10 +116,10 @@
               <div class="jump-signal-cell">
                 <span
                   class="jump-badge candidate-pool-badge"
-                  :class="`candidate-pool-${stock.candidatePoolStatus || 'none'}`"
+                  :class="`candidate-pool-state-${getCandidatePoolStrategyState(stock)}`"
                   :title="getCandidatePoolTitle(stock)"
                   @click.stop="openCandidatePoolFromCell(stock)"
-                >{{ stock.candidatePoolLabel || '未入池' }}</span>
+                >{{ formatCandidatePoolStateLabel(stock) }}</span>
               </div>
             </template>
 
@@ -813,8 +813,57 @@ const getStockValue = (stock: Stock, key: string) => (stock as unknown as Record
 const getRankChange = (stock: any) =>
   Math.round(getRankTrendAnalysis(stock)?.meta?.change ?? stock?.rankChange ?? 0)
 
+const candidatePoolStateLabels: Record<string, string> = {
+  idle: '未触发',
+  triggered_wait_entry: '待入场',
+  active_holding: '策略持有中',
+  exit_signaled: '策略退出观察',
+  closed: '策略已关闭',
+}
+
+const getCandidatePoolProjection = (stock: any) => stock?.candidatePoolProjection || null
+
+const getCandidatePoolStrategyState = (stock: any) =>
+  getCandidatePoolProjection(stock)?.strategyState || stock?.candidatePoolStatus || 'idle'
+
+const formatCandidatePoolStateLabel = (stock: any) =>
+  getCandidatePoolProjection(stock)?.strategyState
+    ? candidatePoolStateLabels[getCandidatePoolProjection(stock).strategyState] ||
+      stock?.candidatePoolLabel ||
+      '未触发'
+    : stock?.candidatePoolLabel || '未触发'
+
 const getCandidatePoolTitle = (stock: any) => {
-  const lines = [`候选池：${stock.candidatePoolLabel || '未入池'}`]
+  const projection = getCandidatePoolProjection(stock)
+  const lines = [`候选池：${formatCandidatePoolStateLabel(stock)}`]
+
+  if (projection?.strategyState) {
+    lines.push(`策略态：${projection.strategyState}`)
+  }
+  if (projection?.candidateTier) {
+    lines.push(`候选层级：${projection.candidateTier}`)
+  }
+  if (projection?.lifecycleAction) {
+    lines.push(`生命周期动作：${projection.lifecycleAction}`)
+  }
+  if (projection?.holdingBars !== undefined) {
+    lines.push(`持有 Bars：${projection.holdingBars}`)
+  }
+  if (projection?.exitReason) {
+    lines.push(`退出原因：${projection.exitReason}`)
+  }
+  if (projection?.strategyEntryAt) {
+    lines.push(`策略入场：${projection.strategyEntryAt}`)
+  }
+  if (projection?.strategyExitAt) {
+    lines.push(`策略退出：${projection.strategyExitAt}`)
+  }
+  if (projection?.executionOverlay?.entryTime) {
+    lines.push(`人工入场：${projection.executionOverlay.entryTime}`)
+  }
+  if (projection?.executionOverlay?.exitTime) {
+    lines.push(`人工离场：${projection.executionOverlay.exitTime}`)
+  }
   if (stock?.candidatePoolSource) {
     lines.push(`来源：${stock.candidatePoolSource}`)
   }
@@ -830,7 +879,10 @@ const getCandidatePoolTitle = (stock: any) => {
 const openCandidatePoolFromCell = (stock: Stock) => {
   EventManager.emit('candidate-pool:open', {
     stockCode: stock.code,
-    candidateId: stock.candidatePoolEntryId || undefined,
+    candidateId:
+      stock.candidatePoolEntryId ||
+      getCandidatePoolProjection(stock)?.executionOverlay?.entryId ||
+      undefined,
   })
 }
 
@@ -2303,32 +2355,31 @@ defineExpose({
   border: 1px solid rgba(77, 166, 255, 0.28);
 }
 
-.candidate-pool-triggered {
+.candidate-pool-state-triggered_wait_entry {
   color: #ff8c42;
   background: rgba(255, 140, 66, 0.12);
   border: 1px solid rgba(255, 140, 66, 0.28);
 }
 
-.candidate-pool-tracking {
+.candidate-pool-state-active_holding {
   color: #3ddc97;
   background: rgba(61, 220, 151, 0.12);
   border: 1px solid rgba(61, 220, 151, 0.26);
 }
 
-.candidate-pool-candidate {
+.candidate-pool-state-exit_signaled {
+  color: #4da6ff;
+  background: rgba(77, 166, 255, 0.12);
+  border: 1px solid rgba(77, 166, 255, 0.24);
+}
+
+.candidate-pool-state-closed {
   color: #d8c27a;
   background: rgba(216, 194, 122, 0.12);
   border: 1px solid rgba(216, 194, 122, 0.22);
 }
 
-.candidate-pool-observe {
-  color: #7ab8ff;
-  background: rgba(122, 184, 255, 0.12);
-  border: 1px solid rgba(122, 184, 255, 0.24);
-}
-
-.candidate-pool-reviewed,
-.candidate-pool-none {
+.candidate-pool-state-idle {
   color: #8f99a8;
   background: rgba(143, 153, 168, 0.1);
   border: 1px solid rgba(143, 153, 168, 0.18);

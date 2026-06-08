@@ -1,31 +1,21 @@
-import { candidateJournalService } from './CandidateJournalService'
-import type { CandidateJournalEntry, CandidateStatus } from './types'
+import type { FusionStrategyProjection, FusionStrategyState } from '@/types/fusionStrategyProjection'
 
-type CandidatePoolProjectedStatus = CandidateStatus | 'none'
 type CandidatePoolStockFields = {
-  candidatePoolStatus?: CandidatePoolProjectedStatus
+  code: string
+  candidatePoolStatus?: FusionStrategyState
   candidatePoolLabel?: string
+  candidatePoolProjection?: FusionStrategyProjection | null
   candidatePoolEntryId?: string
   candidatePoolSource?: string
   candidatePoolUpdatedAt?: string
 }
 
-const STATUS_LABELS: Record<CandidatePoolProjectedStatus, string> = {
-  none: '未入池',
-  observe: '观察',
-  candidate: '候选',
-  triggered: '已触发',
-  tracking: '跟踪中',
-  reviewed: '已复盘',
-}
-
-const STATUS_PRIORITY: Record<CandidatePoolProjectedStatus, number> = {
-  none: 0,
-  reviewed: 1,
-  observe: 2,
-  candidate: 3,
-  triggered: 4,
-  tracking: 5,
+const STRATEGY_STATE_LABELS: Record<FusionStrategyState, string> = {
+  idle: '未触发',
+  triggered_wait_entry: '待入场',
+  active_holding: '策略持有中',
+  exit_signaled: '策略退出观察',
+  closed: '策略已关闭',
 }
 
 function normalizeCode(code: unknown): string {
@@ -33,62 +23,40 @@ function normalizeCode(code: unknown): string {
   return digits ? digits.padStart(6, '0').slice(-6) : ''
 }
 
-function getEntryPriority(entry: CandidateJournalEntry): number {
-  return STATUS_PRIORITY[entry.status] || 0
-}
-
-function getEntryTimestamp(entry: CandidateJournalEntry): number {
-  const updated = Date.parse(entry.updatedAt || entry.createdAt || '')
-  return Number.isFinite(updated) ? updated : 0
-}
-
-function selectPreferredEntry(
-  current: CandidateJournalEntry | undefined,
-  next: CandidateJournalEntry,
-): CandidateJournalEntry {
-  if (!current) return next
-  const priorityDelta = getEntryPriority(next) - getEntryPriority(current)
-  if (priorityDelta !== 0) {
-    return priorityDelta > 0 ? next : current
-  }
-  return getEntryTimestamp(next) >= getEntryTimestamp(current) ? next : current
-}
-
-function getEntrySource(entry: CandidateJournalEntry | undefined): string {
-  if (!entry) return ''
-  const triggerSource = entry?.signalsSnapshot?.triggerMeta?.source
-  if (triggerSource) return String(triggerSource)
-  const reviewSource = entry?.reviewNotes?.trim()
-  return reviewSource || 'manual'
-}
-
-export function projectCandidatePoolStatus<T extends Record<string, any>>(
-  stocks: Array<T & CandidatePoolStockFields>,
-  entries: CandidateJournalEntry[],
-): Array<T & CandidatePoolStockFields> {
-  const entryByCode = new Map<string, CandidateJournalEntry>()
-  for (const entry of entries) {
-    const code = normalizeCode(entry.stockCode)
+function buildProjectionMap(projections: FusionStrategyProjection[]): Map<string, FusionStrategyProjection> {
+  const map = new Map<string, FusionStrategyProjection>()
+  for (const projection of projections) {
+    const code = normalizeCode(projection.stockCode)
     if (!code) continue
-    entryByCode.set(code, selectPreferredEntry(entryByCode.get(code), entry))
+    map.set(code, projection)
   }
+  return map
+}
+
+export function projectCandidatePoolStatus<T extends CandidatePoolStockFields>(
+  stocks: T[],
+  projections: FusionStrategyProjection[],
+): T[] {
+  const projectionByCode = buildProjectionMap(projections)
 
   for (const stock of stocks) {
-    const entry = entryByCode.get(normalizeCode(stock.code))
-    const status: CandidatePoolProjectedStatus = entry?.status || 'none'
-    stock.candidatePoolStatus = status
-    stock.candidatePoolLabel = STATUS_LABELS[status]
-    stock.candidatePoolEntryId = entry?.id || ''
-    stock.candidatePoolSource = getEntrySource(entry)
-    stock.candidatePoolUpdatedAt = entry?.updatedAt || entry?.createdAt || ''
+    const projection = projectionByCode.get(normalizeCode(stock.code)) || null
+    const strategyState = projection?.strategyState || 'idle'
+
+    stock.candidatePoolStatus = strategyState
+    stock.candidatePoolLabel = STRATEGY_STATE_LABELS[strategyState]
+    stock.candidatePoolProjection = projection
+    stock.candidatePoolEntryId = projection?.executionOverlay?.entryId || ''
+    stock.candidatePoolSource = projection?.strategyName || ''
+    stock.candidatePoolUpdatedAt = projection?.frameTime || ''
   }
 
   return stocks
 }
 
-export async function applyCandidatePoolStatus<T extends Record<string, any>>(
-  stocks: Array<T & CandidatePoolStockFields>,
-): Promise<Array<T & CandidatePoolStockFields>> {
-  const entries = await candidateJournalService.listCandidates({ limit: 1000 })
-  return projectCandidatePoolStatus(stocks, entries)
+export function applyCandidatePoolProjections<T extends CandidatePoolStockFields>(
+  stocks: T[],
+  projections: FusionStrategyProjection[],
+): T[] {
+  return projectCandidatePoolStatus(stocks, projections)
 }

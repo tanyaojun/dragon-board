@@ -76,6 +76,7 @@ export class FusionCandidateNotifier {
 
     const rankTrend = stock.rankTrend
     const candidateTier = String(rankTrend?.strategy?.candidateTier || '').trim()
+    const lifecycleAction = String(rankTrend?.cycle?.decision?.action || '').trim()
     const reason = candidateTier ? `${candidateTier} 命中，已自动写入候选池` : 'fusion 策略命中，已自动写入候选池'
 
     await globalThis.fetch(FEISHU_ENDPOINT, {
@@ -88,11 +89,13 @@ export class FusionCandidateNotifier {
           {
             code: normalizeCode(stock?.code),
             name: String(stock?.name || ''),
-            signalType: 'entry',
-            signalLabel: '候选池触发',
+            signalType: 'strategy_candidate',
+            signalLabel: 'Fusion 候选池触发',
             price: Number(stock?.price || stock?.lastTradePrice || 0),
             changePct: Number(stock?.change || 0),
             reason,
+            candidateTier,
+            lifecycleAction,
             confidence: Number(rankTrend?.jump?.confidence ?? 0),
             timestamp: this.now().getTime(),
           },

@@ -48,12 +48,18 @@ describe('DataTable row detail interactions', () => {
     expect(source).not.toMatch(/trade_hypothesis/)
   })
 
-  test('renders candidate pool status instead of legacy live signal labels', () => {
+  test('renders candidate pool status from fusion projection instead of legacy workflow labels', () => {
     const source = dataTableSource()
 
     expect(source).toContain("{ key: 'jumpSignal', label: '候选池'")
-    expect(source).toContain('candidatePoolLabel')
+    expect(source).toContain('candidatePoolProjection')
     expect(source).toContain('candidate-pool-badge')
+    expect(source).toContain('formatCandidatePoolStateLabel')
+    expect(source).toContain('strategyState')
+    expect(source).toContain('holdingBars')
+    expect(source).toContain('candidateTier')
+    expect(source).toContain('lifecycleAction')
+    expect(source).toContain('exitReason')
     expect(source).not.toContain('getLiveV3Signal(')
     expect(source).not.toContain('getLiveV3SignalDecision')
   })

@@ -191,6 +191,49 @@ def test_build_signal_runs_risk_aware_analysis_order(monkeypatch) -> None:
     assert order.index("risk") < order.index("cycle_with_risk") < order.index("decision") < order.index("strategy")
 
 
+def test_compose_decision_does_not_add_implicit_macd_buy_gate() -> None:
+    config = RankTrendConfig.from_patch(
+        {
+            "momentumPeriods": [3, 5, 8, 13, 21],
+            "momentumWeights": [0.15, 0.2, 0.25, 0.25, 0.15],
+            "buyThresholds": [5, 8, 13, 21, 34],
+            "sellThresholds": [-5, -8, -13, -21, -34],
+            "macdFast": 13,
+            "macdSlow": 21,
+            "macdSignal": 8,
+            "directionWeight": 0.3,
+            "accelerationWeight": 0.25,
+            "crossWeight": 0.2,
+            "macdWeight": 0.25,
+            "buyScoreThreshold": 0.12,
+            "sellScoreThreshold": -0.12,
+        }
+    )
+
+    decision = ranktrend.compose_decision(
+        technical={
+            "signals": {
+                "direction": {"signal": "buy", "score": 0.5719578382696798},
+                "acceleration": {"signal": "buy", "score": 0.4179498301302663},
+                "zeroCross": {"signal": "hold", "score": 0},
+            },
+            "macd": {"cross": "none", "rawScore": 0},
+        },
+        cycle={"stage": "crowded"},
+        risk={
+            "pressure": 0,
+            "divergence": {"severity": 0},
+            "overheat": {"severity": 0},
+            "synergy": 0,
+        },
+        config=config,
+    )
+
+    assert config.requireMacdGoldenCross is False
+    assert decision["base"]["signal"] == "buy"
+    assert decision["final"]["signal"] == "buy"
+
+
 def test_compose_analysis_candidate_tier_keeps_ts_veto_and_regime_contract() -> None:
     strategy = ranktrend.compose_analysis_candidate_tier(
         technical={

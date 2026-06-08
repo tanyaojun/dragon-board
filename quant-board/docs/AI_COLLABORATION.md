@@ -13,6 +13,7 @@
 - Dragon Board 根项目只提供实时看板、快照数据和 TypeScript golden 导出。
 - 默认快照：`snapshot_type=half_hour`。
 - 可选快照：`quarter_hour` 可用于细颗粒度研究，但必须显式选择，不能替代默认口径。
+- Fusion 候选池历史语义：`GET /api/backtests/{run_id}/fusion-projections` 以 `ranktrend_early_big_move_v3_lifecycle_fusion` 为唯一策略锚点，必须基于 `signals + trades + tradeEvents/openPositions` 构建 projection rows；不得按股票代码把整次回测粗暴折叠成一条。
 - 存储主链：当前运行主库是 MongoDB。SQLite/Supabase/Parquet 旧链路只保留为迁移前历史说明、审计/离线备份资产或 Mongo 模式下显式禁用的维护入口；实施状态、备份恢复和禁用清单以 [mongodb-migration-plan.md](mongodb-migration-plan.md) 为准。
 - 当前同步批次：MongoDB 模式不再登记 SQLite/Supabase `sync_outbox`，不再运行 Supabase 自动同步、`push-backup`、`prune-backup` 或 SQLite 90 天明细归档作为生产链路；旧 API/CLI 在 Mongo 模式下应返回 410 或拒绝执行。
 - MongoDB 替换 IndexedDB/SQLite 的当前切口：Dragon Board 正式写入和读取仍只通过 QuantBoard 后端 API；`POST /api/snapshots/ingest` 写入 MongoDB，`GET /api/snapshots/frames`、`/api/snapshots/records`、`/api/snapshots/stock-rows`、`/api/snapshots/sector-rows` 从 MongoDB 读取并保持 camelCase 字段合同。IndexedDB 和历史 JSON 只作为迁移前来源，不再作为正式 fallback。
@@ -73,6 +74,7 @@
 22. 新增 ThemeTrend API/CLI 合同时必须保留 `dataset_id`、`snapshot_type`、`strategy_version`、`config_hash`、`random_seed`，默认 `snapshot_type=half_hour`，`quarter_hour` 只能显式传入。
 23. 文档或实现涉及 ThemeTrend 时，必须区分“已完成能力”和“V12 目标/拟新增合同/首批落地”，不得把计划中的接口描述成已上线事实。
 24. 资金流策略正式回测不得默认消费 L1 估算主力资金；如显式允许 `estimated_l1`，报告必须标注实验口径和高风险。
+25. `trade_journal` 在 fusion 候选池语义中只能作为 execution overlay，不得反推 `triggered_wait_entry`、`active_holding`、`exit_signaled` 或 `closed`。
 
 ## 推荐执行流程
 

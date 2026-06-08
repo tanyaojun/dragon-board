@@ -57,7 +57,7 @@ describe('FusionCandidateNotifier', () => {
     addCandidateFromStock.mockResolvedValue({ created: true, entry: null })
   })
 
-  it('只为 fusion 命中且无 open candidate 的股票创建 triggered 候选并推送候选池消息', async () => {
+  it('只为 fusion 命中且无 open candidate 的股票创建 triggered 候选并推送 fusion 候选池消息', async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true })
     vi.stubGlobal('fetch', fetchMock)
     const notifier = new FusionCandidateNotifier({
@@ -140,8 +140,10 @@ describe('FusionCandidateNotifier', () => {
         expect.objectContaining({
           code: '000001',
           name: '平安银行',
-          signalType: 'entry',
-          signalLabel: '候选池触发',
+          signalType: 'strategy_candidate',
+          signalLabel: 'Fusion 候选池触发',
+          candidateTier: 'A_MAIN',
+          lifecycleAction: 'allow',
           timestamp: Date.parse('2026-06-08T10:00:00.000Z'),
         }),
       ],

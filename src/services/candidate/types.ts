@@ -1,5 +1,9 @@
+import type { FusionExecutionOverlay } from '../../types/fusionStrategyProjection'
+
 export type CandidateGrade = 'A' | 'B' | 'C' | 'D'
 export type CandidateStatus = 'observe' | 'candidate' | 'triggered' | 'tracking' | 'reviewed'
+
+export type CandidateExecutionOverlayByCode = Record<string, FusionExecutionOverlay | null>
 
 export type CandidateStockLike = {
   code: string

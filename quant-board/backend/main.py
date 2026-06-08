@@ -10,6 +10,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 
+from backend.api.fusion_strategy_projection_routes import router as fusion_strategy_projection_router
 from backend.api.hotlist_routes import router as hotlist_router
 from backend.api.journal_routes import router as journal_router
 from backend.data.auto_sync import auto_sync_runner, run_outbox_auto_sync_once
@@ -69,6 +70,7 @@ app.add_middleware(
 
 app.include_router(journal_router)
 app.include_router(hotlist_router)
+app.include_router(fusion_strategy_projection_router)
 
 @app.on_event("startup")
 def on_startup() -> None:

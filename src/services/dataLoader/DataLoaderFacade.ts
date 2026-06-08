@@ -975,6 +975,7 @@ class DataLoaderService {
         rankTrendCoverageWarning: signalStock.rankTrendCoverageWarning,
         candidatePoolStatus: signalStock.candidatePoolStatus,
         candidatePoolLabel: signalStock.candidatePoolLabel,
+        candidatePoolProjection: signalStock.candidatePoolProjection,
         candidatePoolEntryId: signalStock.candidatePoolEntryId,
         candidatePoolSource: signalStock.candidatePoolSource,
         candidatePoolUpdatedAt: signalStock.candidatePoolUpdatedAt,

@@ -1,6 +1,7 @@
 // src/types/core.ts
 // 核心基础类型定义
 import type { ThresholdMultiplier } from './emotion'
+import type { FusionStrategyProjection, FusionStrategyState } from './fusionStrategyProjection'
 
 // ========== 基础股票类型 ==========
 export interface Stock {
@@ -87,8 +88,9 @@ export interface Stock {
   themeHeat?: number
   themeLevel?: string
   rankChange?: number
-  candidatePoolStatus?: 'observe' | 'candidate' | 'triggered' | 'tracking' | 'reviewed' | 'none'
+  candidatePoolStatus?: FusionStrategyState
   candidatePoolLabel?: string
+  candidatePoolProjection?: FusionStrategyProjection | null
   candidatePoolEntryId?: string
   candidatePoolSource?: string
   candidatePoolUpdatedAt?: string

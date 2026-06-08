@@ -1,10 +1,12 @@
 import { debugLog } from '@/utils/logger'
-import { applyCandidatePoolStatus } from '../candidate/CandidatePoolStatusProjector'
+import { candidateJournalService } from '../candidate/CandidateJournalService'
+import { applyCandidatePoolProjections } from '../candidate/CandidatePoolStatusProjector'
 import { dataLayer } from '../DataLayer'
 import { rankTrendAnalyzer, type RankTrendPreparedSnapshot } from '../RankTrendAnalyzer'
 import { applyJumpSignal, applyRankTrendAnalysis } from '../rankTrend/compat'
 import { evaluateJumpSignal, incrementJumpBar, registerJumpEntry, unregisterJumpPosition } from '../rankTrend/jumpSignalService'
 import { fusionCandidateNotifier } from '../rankTrend/FusionCandidateNotifier'
+import { buildFusionStrategyProjections } from '../rankTrend/FusionStrategyProjector'
 import type { RankTrendAnalysisResult } from '../rankTrend/types'
 import { extraDataProjector } from './ExtraDataProjector'
 import type { StockSignalUpdate } from './types'
@@ -158,12 +160,18 @@ export class RankTrendSignalService {
     }
 
     try {
-      await applyCandidatePoolStatus(stocks)
+      const executionOverlayByCode = await candidateJournalService.getExecutionOverlayMap(
+        stocks.map((stock) => stock.code),
+      )
+      const projections = buildFusionStrategyProjections(stocks, { executionOverlayByCode })
+      applyCandidatePoolProjections(stocks, projections)
     } catch (error) {
       console.warn(
-        '[RankTrendSignalService] 候选池状态投影失败，保留本地 RankTrend 刷新结果:',
+        '[RankTrendSignalService] 候选池 execution overlay 读取失败，使用无 overlay 投影:',
         error instanceof Error ? error.message : String(error),
       )
+      const projections = buildFusionStrategyProjections(stocks, { executionOverlayByCode: {} })
+      applyCandidatePoolProjections(stocks, projections)
     }
   }
 
