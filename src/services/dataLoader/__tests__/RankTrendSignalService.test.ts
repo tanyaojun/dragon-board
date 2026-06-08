@@ -19,6 +19,26 @@ vi.mock('../../rankTrend/FusionCandidateNotifier', () => ({
   },
 }))
 
+vi.mock('../../rankTrend/JumpSignalNotifier', () => ({
+  jumpSignalNotifier: {
+    notifyEntry: vi.fn(),
+    notifyExit: vi.fn(),
+  },
+}))
+
+vi.mock('../../rankTrend/jumpSignalService', async () => {
+  const actual = await vi.importActual<any>('../../rankTrend/jumpSignalService')
+  return {
+    ...actual,
+    evaluateJumpSignal: vi.fn(() => ({
+      jump: { event: 'jump', direction: 'buy', confidence: 92, sustained: true, magnitude: 20 },
+      isEntry: true,
+      isExit: false,
+      exitReason: '',
+    })),
+  }
+})
+
 vi.mock('../../candidate/CandidatePoolStatusProjector', () => ({
   applyCandidatePoolStatus: vi.fn(async (stocks: any[]) => stocks),
 }))
@@ -307,6 +327,52 @@ describe('RankTrendSignalService', () => {
     expect(fusionCandidateNotifier.process).toHaveBeenCalledWith(result)
     expect(applyCandidatePoolStatus).toHaveBeenCalledWith(result)
     expect(result[0].liveV3SignalDecision).toBeUndefined()
+  })
+
+  it('refreshRankTrendSignals no longer invokes legacy jump notifier side effects', async () => {
+    const { rankTrendAnalyzer } = await import('../../RankTrendAnalyzer')
+    const { jumpSignalNotifier } = await import('../../rankTrend/JumpSignalNotifier')
+
+    vi.mocked(rankTrendAnalyzer.getCachedPercentiles).mockReturnValueOnce({ latest: 1 } as any)
+    vi.mocked(rankTrendAnalyzer.getRankTrends).mockResolvedValue(
+      new Map([
+        [
+          '000001',
+          {
+            meta: {
+              code: '000001',
+              currentRank: 1,
+              currentPercentile: 99,
+              change: 12,
+              rawChange: 12,
+              updateTime: 1,
+              sampleQuality: {
+                snapshotType: 'half_hour',
+                sampleCount: 30,
+                requiredSampleCount: 30,
+                status: 'ok',
+                delayedCount: 0,
+                restoredCount: 0,
+                latestTradingDate: '2026-06-08',
+                latestSlotTime: '10:00',
+              },
+            },
+            technical: {},
+            cycle: {},
+            risk: {},
+            decision: {},
+          } as any,
+        ],
+      ]),
+    )
+
+    dataLayer.setMergedStocks([{ code: '000001', name: '平安银行', price: 12.34 } as any])
+
+    const service = new RankTrendSignalService()
+    await service.refreshRankTrendSignals()
+
+    expect(jumpSignalNotifier.notifyEntry).not.toHaveBeenCalled()
+    expect(jumpSignalNotifier.notifyExit).not.toHaveBeenCalled()
   })
 
   it('keeps RankTrend refresh usable when fusion auto-candidate creation fails', async () => {

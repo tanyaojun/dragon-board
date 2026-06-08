@@ -52,11 +52,14 @@ describe('FusionCandidateNotifier', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.unstubAllGlobals()
     getOpenCandidateForStock.mockResolvedValue(null)
     addCandidateFromStock.mockResolvedValue({ created: true, entry: null })
   })
 
-  it('只为 fusion 命中且无 open candidate 的股票创建 triggered 候选', async () => {
+  it('只为 fusion 命中且无 open candidate 的股票创建 triggered 候选并推送候选池消息', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true })
+    vi.stubGlobal('fetch', fetchMock)
     const notifier = new FusionCandidateNotifier({
       candidateJournal: {
         getOpenCandidateForStock,
@@ -122,9 +125,32 @@ describe('FusionCandidateNotifier', () => {
         },
       },
     )
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/notifications/jump-signal',
+      expect.objectContaining({
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+    const [, request] = fetchMock.mock.calls[0]
+    expect(JSON.parse(String(request?.body))).toEqual({
+      source: 'ranktrend-fusion-candidate-pool',
+      events: [
+        expect.objectContaining({
+          code: '000001',
+          name: '平安银行',
+          signalType: 'entry',
+          signalLabel: '候选池触发',
+          timestamp: Date.parse('2026-06-08T10:00:00.000Z'),
+        }),
+      ],
+    })
   })
 
   it('遇到已有 open candidate 时跳过重复创建', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true })
+    vi.stubGlobal('fetch', fetchMock)
     getOpenCandidateForStock.mockResolvedValue({
       id: 'existing',
       stockCode: '000001',
@@ -143,5 +169,53 @@ describe('FusionCandidateNotifier', () => {
 
     expect(getOpenCandidateForStock).toHaveBeenCalledWith('000001')
     expect(addCandidateFromStock).not.toHaveBeenCalled()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('入池服务返回 created=false 时不推送候选池消息', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true })
+    vi.stubGlobal('fetch', fetchMock)
+    addCandidateFromStock.mockResolvedValue({
+      created: false,
+      entry: {
+        id: 'existing',
+        stockCode: '000001',
+        status: 'triggered',
+      },
+    })
+
+    const notifier = new FusionCandidateNotifier({
+      candidateJournal: {
+        getOpenCandidateForStock,
+        addCandidateFromStock,
+      },
+      now,
+    })
+
+    await notifier.process([createStock()])
+
+    expect(addCandidateFromStock).toHaveBeenCalledTimes(1)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('飞书推送阻塞时不拖慢候选池主流程', async () => {
+    const fetchMock = vi.fn(() => new Promise(() => {}))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const notifier = new FusionCandidateNotifier({
+      candidateJournal: {
+        getOpenCandidateForStock,
+        addCandidateFromStock,
+      },
+      now,
+    })
+
+    const outcome = await Promise.race([
+      notifier.process([createStock()]).then(() => 'resolved'),
+      new Promise((resolve) => setTimeout(() => resolve('timeout'), 0)),
+    ])
+
+    expect(outcome).toBe('resolved')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 })

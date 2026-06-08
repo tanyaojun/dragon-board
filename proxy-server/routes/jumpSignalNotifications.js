@@ -89,7 +89,7 @@ export function formatJumpSignalEventRadarMessage(events, options = {}) {
   const groups = new Map()
 
   for (const event of events) {
-    const label = SIGNAL_LABELS[event.signalType] || event.signalType || '未知'
+    const label = String(event.signalLabel || SIGNAL_LABELS[event.signalType] || event.signalType || '未知')
     const group = groups.get(label) || []
     group.push(event)
     groups.set(label, group)

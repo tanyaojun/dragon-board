@@ -5,7 +5,6 @@ import { rankTrendAnalyzer, type RankTrendPreparedSnapshot } from '../RankTrendA
 import { applyJumpSignal, applyRankTrendAnalysis } from '../rankTrend/compat'
 import { evaluateJumpSignal, incrementJumpBar, registerJumpEntry, unregisterJumpPosition } from '../rankTrend/jumpSignalService'
 import { fusionCandidateNotifier } from '../rankTrend/FusionCandidateNotifier'
-import { jumpSignalNotifier } from '../rankTrend/JumpSignalNotifier'
 import type { RankTrendAnalysisResult } from '../rankTrend/types'
 import { extraDataProjector } from './ExtraDataProjector'
 import type { StockSignalUpdate } from './types'
@@ -100,11 +99,9 @@ export class RankTrendSignalService {
       if (result.isEntry) {
         const price = Number(stock.price || stock.lastTradePrice || 0)
         registerJumpEntry(stock.code, stock.name || '', price, rankTrend.meta?.currentRank ? String(rankTrend.meta.currentRank) : '')
-        jumpSignalNotifier.notifyEntry(stock, result)
       }
       if (result.isExit) {
         unregisterJumpPosition(stock.code)
-        jumpSignalNotifier.notifyExit(stock, result)
       }
 
       applyJumpSignal(stock, result)

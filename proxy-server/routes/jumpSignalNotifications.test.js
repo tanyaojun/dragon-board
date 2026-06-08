@@ -29,6 +29,12 @@ const exitEvent = {
   timestamp: Date.parse('2026-06-07T14:37:00+08:00'),
 }
 
+const candidatePoolEvent = {
+  ...entryEvent,
+  signalLabel: '候选池触发',
+  reason: 'fusion 策略命中，已自动写入候选池',
+}
+
 const message = formatJumpSignalEventRadarMessage([entryEvent, exitEvent], {
   now: () => Date.parse('2026-06-07T14:38:00+08:00'),
 })
@@ -45,6 +51,19 @@ assert.deepEqual(
     '【排名趋势卖出】1条',
     '1. 淳中科技 603516  -2.40%',
     '   原因：MACD 死叉',
+  ],
+)
+
+const candidateMessage = formatJumpSignalEventRadarMessage([candidatePoolEvent], {
+  now: () => Date.parse('2026-06-07T14:38:00+08:00'),
+})
+
+assert.deepEqual(
+  candidateMessage.content.post.zh_cn.content.map((line) => line.map((part) => part.text).join('')),
+  [
+    '【候选池触发】1条',
+    '1. 宝鼎科技 002552  +3.50%',
+    '   原因：fusion 策略命中，已自动写入候选池',
   ],
 )
 
