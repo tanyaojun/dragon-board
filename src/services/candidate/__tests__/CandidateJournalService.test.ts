@@ -206,6 +206,63 @@ describe('CandidateJournalService', () => {
     )
   })
 
+  it('supports fusion auto-add payload overrides without breaking the base candidate snapshot', async () => {
+    const { service, api } = createService()
+    api.get.mockResolvedValue({ entries: [], total: 0 })
+    api.post.mockResolvedValue({
+      id: 'tj_fusion',
+      stockCode: '600584',
+      stockName: '长电科技',
+      status: 'triggered',
+      tradeType: 'thesis',
+      entryReason: analysis.entryReason,
+      tradeHypothesis: analysis.tradeHypothesis,
+      entryPrerequisites: analysis.entryPrerequisites,
+      invalidationRules: analysis.invalidationRules,
+      humanDecision: 'watch',
+      reviewOutcome: 'pending',
+      modelResult: 'unknown',
+      executionResult: 'unknown',
+      reviewNotes: '[自动入池] ranktrend-v3-lifecycle-fusion',
+      reviewTags: analysis.tags,
+      signalsSnapshot: {
+        ...analysis.signalsSnapshot,
+        triggerMeta: {
+          source: 'ranktrend_early_big_move_v3_lifecycle_fusion',
+          triggerType: 'auto',
+        },
+      },
+      createdAt: '2026-05-17T10:00:00+08:00',
+      updatedAt: '2026-05-17T10:00:00+08:00',
+    })
+
+    await service.addCandidateFromStock(stock, {
+      source: 'ranktrend-v3-lifecycle-fusion',
+      statusOverride: 'triggered',
+      signalsSnapshotPatch: {
+        triggerMeta: {
+          source: 'ranktrend_early_big_move_v3_lifecycle_fusion',
+          triggerType: 'auto',
+        },
+      },
+    })
+
+    expect(api.post).toHaveBeenCalledWith(
+      '/api/journal/entries',
+      expect.objectContaining({
+        status: 'triggered',
+        review_notes: expect.stringContaining('ranktrend-v3-lifecycle-fusion'),
+        signals_snapshot: expect.objectContaining({
+          triggerMeta: expect.objectContaining({
+            source: 'ranktrend_early_big_move_v3_lifecycle_fusion',
+            triggerType: 'auto',
+          }),
+        }),
+      }),
+      expect.objectContaining({ context: 'quant-board', throwOnHttpError: true }),
+    )
+  })
+
   it('returns an existing open candidate instead of creating duplicates', async () => {
     const { service, api, analyze } = createService()
     api.get.mockResolvedValue({

@@ -34,6 +34,8 @@ interface CandidateApi {
 interface AddCandidateOptions {
   addToFavorites?: boolean
   source?: string
+  statusOverride?: CandidateStatus
+  signalsSnapshotPatch?: Record<string, any>
 }
 
 interface AddCandidateResult {
@@ -295,7 +297,7 @@ export class CandidateJournalService {
 
     const context = this.buildAnalysisContext({ ...stock, code: stockCode })
     const analysis = this.analyze(context)
-    const payload = this.buildCreatePayload(context.stock, analysis)
+    const payload = this.buildCreatePayload(context.stock, analysis, options)
     const created = await this.api.post('/api/journal/entries', payload, {
       context: 'quant-board',
       cache: false,
@@ -453,7 +455,16 @@ export class CandidateJournalService {
     }
   }
 
-  private buildCreatePayload(stock: CandidateStockLike, analysis: CandidateAnalysisResult) {
+  private buildCreatePayload(
+    stock: CandidateStockLike,
+    analysis: CandidateAnalysisResult,
+    options: AddCandidateOptions,
+  ) {
+    const signalsSnapshot = {
+      ...analysis.signalsSnapshot,
+      ...(options.signalsSnapshotPatch || {}),
+    }
+
     return {
       stock_code: normalizeCode(stock.code),
       stock_name: stock.name || normalizeCode(stock.code),
@@ -461,12 +472,12 @@ export class CandidateJournalService {
       trade_type: 'thesis',
       price: Number(stock.price || 0),
       volume: 0,
-      signals_snapshot: analysis.signalsSnapshot,
+      signals_snapshot: signalsSnapshot,
       notes: '',
-      status: analysis.suggestedStatus,
-      market_phase: String(analysis.signalsSnapshot?.sentiment?.phaseName || ''),
-      theme_role: String(analysis.signalsSnapshot?.theme?.exposures?.[0]?.role || ''),
-      stock_role: String(analysis.signalsSnapshot?.dragon?.primaryRole || ''),
+      status: options.statusOverride || analysis.suggestedStatus,
+      market_phase: String(signalsSnapshot?.sentiment?.phaseName || ''),
+      theme_role: String(signalsSnapshot?.theme?.exposures?.[0]?.role || ''),
+      stock_role: String(signalsSnapshot?.dragon?.primaryRole || ''),
       entry_reason: analysis.entryReason,
       trade_hypothesis: analysis.tradeHypothesis,
       entry_prerequisites: analysis.entryPrerequisites,
@@ -477,7 +488,7 @@ export class CandidateJournalService {
       review_outcome: 'pending',
       model_result: 'unknown',
       execution_result: 'unknown',
-      review_notes: '',
+      review_notes: options.source ? `[自动入池] ${options.source}` : '',
       review_tags: analysis.tags,
     }
   }
