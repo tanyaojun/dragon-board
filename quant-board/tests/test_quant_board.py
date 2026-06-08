@@ -13,7 +13,14 @@ from fastapi.testclient import TestClient
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy import func, select
 
-from backend.analysis.ranktrend import RankTrendConfig, analyze_cycle, analyze_momentum_signals, analyze_risk, analyze_technical
+from backend.analysis.ranktrend import (
+    RankTrendConfig,
+    RankTrendPythonEngine,
+    analyze_cycle,
+    analyze_momentum_signals,
+    analyze_risk,
+    analyze_technical,
+)
 from backend.cli import (
     build_longtest_baseline_payloads,
     build_parser,
@@ -1133,10 +1140,12 @@ def test_import_backtest_optimize_and_golden(tmp_path: Path) -> None:
     assert golden.status_code == 200
     assert golden.json()["passed"] is False
 
-    golden_signals = run["signals"][:5]
-    assert golden_signals
     with SessionLocal() as session:
         golden_frames = Repository(session).load_frames(dataset["id"], snapshot_type="half_hour", include_payload=False)
+    golden_signals = RankTrendPythonEngine(
+        RankTrendConfig.from_patch(DEFAULT_BACKTEST_STRATEGY_CONFIG)
+    ).replay(golden_frames, meta={"sampleQuality": "ok", "warnings": []})[:5]
+    assert golden_signals
     imported_golden = client.post(
         "/api/golden/import",
         json={

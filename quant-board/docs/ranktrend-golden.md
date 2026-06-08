@@ -37,11 +37,12 @@ Python Golden replay 也必须对齐这条纯分析链，不再消费 `hotlistSe
 | --- | --- |
 | `momentumPeriods` | `[3, 5, 8, 13, 21]` |
 | `momentumWeights` | `[0.15, 0.2, 0.25, 0.25, 0.15]` |
-| `buyThresholds` | `[5, 8, 12, 15, 20]` |
-| `sellThresholds` | `[-5, -8, -12, -15, -20]` |
+| `buyThresholds` | `[5, 8, 13, 21, 34]` |
+| `sellThresholds` | `[-5, -8, -13, -21, -34]` |
 | `macdFast` | `13` |
 | `macdSlow` | `21` |
 | `macdSignal` | `8` |
+| `requireMacdGoldenCross` | `false`（TS 默认配置无此隐式买入门） |
 | `directionWeight` | `0.3` |
 | `accelerationWeight` | `0.25` |
 | `crossWeight` | `0.2` |
