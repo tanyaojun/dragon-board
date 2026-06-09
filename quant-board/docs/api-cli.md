@@ -1551,6 +1551,66 @@ V2 四层决策框架新增字段（每条 baseline 内）：
   --no-wait
 ```
 
+### `audit-ranktrend-live-gates`
+
+对 live gate 做 research-only shadow audit。该命令只用于研究和审计 shadow variant 与 baseline 的差异，不会改 live 自动入池，不会把排序结果当成正式交易信号，也不会写回默认 gate。
+
+```powershell
+.\.venv\Scripts\python.exe -m backend.cli audit-ranktrend-live-gates `
+  --dataset-id dragonboard_live `
+  --snapshot-type half_hour `
+  --start-date 2026-05-26 `
+  --end-date 2026-06-06 `
+  --focus-code 600186 `
+  --focus-code 002156 `
+  --anchor-file quant-board\data\research\hotlist-anchor-samples.json `
+  --confidence-thresholds 70,75,80,85,90,95 `
+  --research-all-frames `
+  --output quant-board\data\reports\ranktrend-live-gates-audit.json
+```
+
+参数口径：
+
+- `--dataset-id`：研究样本数据集，默认仍应显式传入，常见为 `dragonboard_live`
+- `--snapshot-type`：默认研究口径是 `half_hour`；`quarter_hour` 只能显式传入
+- `--start-date` / `--end-date`：审计窗口，建议覆盖连续交易日
+- `--focus-code`：可重复传入多个股票代码；默认 `focusCodes=["600186", "002156"]` 只是近期漏票样本的临时默认值，不是长期正式观察池
+- `--anchor-file`：可选 JSON 锚点文件，文件内容必须是数组；每条样本按 `code`、`tradingDate`、`slotTime`、`snapshotType`、`label`、`evidence`、`annotator`、`status` 读取，`status` 支持 `confirmed`、`borderline`、`exclude`
+- `--confidence-thresholds`：逗号分隔的 jump confidence 扫描阈值，默认 `70,75,80,85,90,95`；只影响审计输出里的阈值扫描，不改 live gate 默认参数
+- `--research-all-frames`：默认只围绕 `focus-code` 产出扩展研究样本；开启后会扫描当前 `dragonboard_live` 热榜覆盖窗口内的全部快照帧
+- `--output`：把完整审计结果写到用户指定的单个 JSON 文件
+
+输出结构至少包含：
+
+- `meta`
+- `focusFindings`
+- `dailySummaries`
+- `rankingSuggestions`
+- `anchorFindings`
+- `extendedHotlistFindings`
+- `confidenceThresholdScan`
+- `jumpDefinitionReplaySummary`
+- `fusionGateMissSummary`
+
+输出说明：
+
+- `meta.accDeltaPolicy` 会解释当前 live 数据里 `accDelta` 缺失，因此 acceleration gate 目前主要依赖 `acceleration`
+- `meta.anchorSampleStatusCounts` 会统计锚点文件中的 `confirmed` / `borderline` / `exclude` 数量；`borderline` 样本可见但不进入首批主统计
+- `meta.outcomeLabelPolicy` 会说明后续涨停型/短线爆发型只从外部或人工后验标签读取；没有后验标签时，不自动用收益推断正样本
+- `focusFindings` 会按关注股票展示 `baseline` 与各个 shadow variant 的对比，并且同时给出 `jump` / `fusion` 两层结果
+- `dailySummaries` 用于汇总每个交易日的 baseline 命中、shadow 命中、差异原因和临时观察结论
+- `rankingSuggestions` 只是排序建议，用于后续研究排查优先级，不是正式交易信号，也不会直接驱动 live 自动入池
+- `anchorFindings` 只包含锚点文件中 `status=confirmed` 且在研究范围内命中的样本，用于人工标注样本回放
+- `extendedHotlistFindings` 是 `dragonboard_live` 热榜覆盖样本中被审计规则识别出的扩展热榜样本，不是全市场股票池扫描
+- `confidenceThresholdScan` 会按 `--confidence-thresholds` 回放不同 jump confidence 阈值下的锚点召回、正样本召回和噪声情况
+- `jumpDefinitionReplaySummary` 汇总 jump 定义 shadow replay 的命中差异，用于比较阈值放宽是否带来召回改善
+- `fusionGateMissSummary` 汇总 fusion gate 未命中的首个原因，帮助区分 jump 召回不足、fusion 二次过滤或样本质量问题
+
+边界说明：
+
+- 该命令是 research-only 工具；新增锚点、扩展热榜样本和 confidence 扫描都只写入本次 CLI 输出，不会修改 live 自动入池逻辑、不会写回 RankTrend 默认参数，也不会改变 Dragon Board 实时看板候选池。
+- `extendedHotlistFindings` 的“扩展样本”来自 `dragonboard_live` 数据集中已有热榜覆盖快照帧；它不是全市场复盘，不会加载未进入 Dragon Board 热榜覆盖范围的股票。
+
 ### V12 ThemeTrend CLI
 
 这些命令已作为 V12 ThemeTrend 研究主链入口落地。命令必须复用后端服务层，不直连 repository，不在 Dragon Board 根项目实现回测。

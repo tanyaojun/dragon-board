@@ -1,0 +1,52 @@
+[
+  {
+    "code": "600186",
+    "tradingDate": "2026-06-09",
+    "slotTime": "10:00",
+    "snapshotType": "half_hour",
+    "label": "lotus_1000",
+    "evidence": "盘中热榜启动买点",
+    "annotator": "user",
+    "status": "confirmed"
+  },
+  {
+    "code": "600186",
+    "tradingDate": "2026-06-09",
+    "slotTime": "10:30",
+    "snapshotType": "half_hour",
+    "label": "lotus_1030",
+    "evidence": "技术三买共振，盘中热榜买点",
+    "annotator": "user",
+    "status": "confirmed"
+  },
+  {
+    "code": "600183",
+    "tradingDate": "2026-06-09",
+    "slotTime": "10:00",
+    "snapshotType": "half_hour",
+    "label": "shengyi_1000",
+    "evidence": "跳升启动买点",
+    "annotator": "user",
+    "status": "confirmed"
+  },
+  {
+    "code": "600183",
+    "tradingDate": "2026-06-09",
+    "slotTime": "10:30",
+    "snapshotType": "half_hour",
+    "label": "shengyi_1030",
+    "evidence": "加速确认买点",
+    "annotator": "user",
+    "status": "confirmed"
+  },
+  {
+    "code": "002156",
+    "tradingDate": "2026-06-09",
+    "slotTime": "",
+    "snapshotType": "half_hour",
+    "label": "tfwd_pending",
+    "evidence": "用户确认是盘中较好买点，但具体 bar 待补",
+    "annotator": "user",
+    "status": "borderline"
+  }
+]

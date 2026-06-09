@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 
@@ -64,6 +66,218 @@ def _to_float(value: Any, default: float = 0.0) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def load_hotlist_anchor_samples(path: str | Path) -> list[dict[str, str]]:
+    rows = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(rows, list):
+        raise ValueError("anchor sample file must contain a JSON array")
+    output: list[dict[str, str]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            raise ValueError("anchor sample row must be an object")
+        status = str(row.get("status") or "confirmed").strip()
+        if status not in {"confirmed", "borderline", "exclude"}:
+            raise ValueError(f"unsupported anchor sample status: {status}")
+        output.append(
+            {
+                "code": str(row.get("code") or "").strip(),
+                "tradingDate": str(row.get("tradingDate") or "").strip(),
+                "slotTime": str(row.get("slotTime") or "").strip(),
+                "snapshotType": str(row.get("snapshotType") or "half_hour").strip(),
+                "label": str(row.get("label") or "").strip(),
+                "evidence": str(row.get("evidence") or "").strip(),
+                "annotator": str(row.get("annotator") or "").strip(),
+                "status": status,
+            }
+        )
+    return output
+
+
+def classify_hotlist_buy_pattern(signal: dict[str, Any]) -> list[str]:
+    technical = _nested_get(signal, "rankTrend", "technical") or {}
+    tech_signals = technical.get("signals") or {}
+    momentum = technical.get("momentumProfile") or {}
+    jump = _nested_get(signal, "rankTrend", "jump") or {}
+    cycle_stage = str(_nested_get(signal, "rankTrend", "cycle", "stage") or "")
+    tags: list[str] = []
+
+    buy_votes = [
+        _nested_get(tech_signals, "direction", "signal") == "buy",
+        _nested_get(tech_signals, "acceleration", "signal") == "buy",
+        _nested_get(tech_signals, "zeroCross", "signal") == "buy",
+        _nested_get(technical, "macd", "cross") == "golden",
+    ]
+    if sum(1 for vote in buy_votes if vote) >= 3:
+        tags.append("technical_buy_alignment")
+    if (
+        jump.get("direction") == "buy"
+        and jump.get("sustained") is True
+        and _to_float(jump.get("confidence")) >= 70
+    ):
+        tags.append("progressive_rank_lift")
+    if (
+        _to_float(momentum.get("short")) > 0
+        and _to_float(momentum.get("mid")) > 0
+        and _to_float(momentum.get("long")) > 0
+        and _to_float(momentum.get("acceleration")) < 10
+    ):
+        tags.append("non_explosive_but_valid")
+    if cycle_stage == "ignition":
+        tags.append("early_hotlist_ignition")
+    return tags
+
+
+def scan_jump_confidence_thresholds(
+    findings: list[dict[str, Any]],
+    thresholds: list[float],
+) -> list[dict[str, Any]]:
+    anchor_total = sum(1 for item in findings if item.get("isAnchor"))
+    positive_total = sum(1 for item in findings if item.get("isPositiveOutcome"))
+    rows: list[dict[str, Any]] = []
+    for raw_threshold in thresholds:
+        threshold = float(raw_threshold)
+        anchor_recall = 0
+        positive_recall = 0
+        recalled_total = 0
+        noise_count = 0
+        jump_confidences: list[float] = []
+        for item in findings:
+            jump = _nested_get(item, "baselineSignal", "rankTrend", "jump") or {}
+            confidence = _to_float(jump.get("confidence"))
+            recalled = (
+                jump.get("event") == "jump"
+                and jump.get("direction") == "buy"
+                and jump.get("sustained") is True
+                and confidence >= threshold
+            )
+            if not recalled:
+                continue
+            recalled_total += 1
+            jump_confidences.append(confidence)
+            if item.get("isAnchor"):
+                anchor_recall += 1
+            if item.get("isPositiveOutcome"):
+                positive_recall += 1
+            if (
+                not item.get("isAnchor")
+                and not item.get("isPositiveOutcome")
+                and "technical_buy_alignment" not in (item.get("hotlistBuyTags") or [])
+            ):
+                noise_count += 1
+        rows.append(
+            {
+                "threshold": threshold,
+                "anchorTotalCount": anchor_total,
+                "anchorRecallCount": anchor_recall,
+                "anchorRecallRate": round(anchor_recall / anchor_total, 4) if anchor_total else 0.0,
+                "positiveTotalCount": positive_total,
+                "positiveRecallCount": positive_recall,
+                "positiveRecallRate": round(positive_recall / positive_total, 4) if positive_total else 0.0,
+                "recalledCount": recalled_total,
+                "noiseCount": noise_count,
+                "jumpConfidenceDistribution": {
+                    "min": min(jump_confidences) if jump_confidences else None,
+                    "max": max(jump_confidences) if jump_confidences else None,
+                    "count": len(jump_confidences),
+                },
+                "derivedBy": "rule",
+            }
+        )
+    return rows
+
+
+def _fusion_miss_reason_type(check: dict[str, Any]) -> str:
+    explicit = check.get("reasonType")
+    if explicit in {
+        "true_gate_block",
+        "field_missing",
+        "replay_missing",
+        "candidate_tier_side_effect",
+        "sample_quality_side_effect",
+    }:
+        return str(explicit)
+    name = str(check.get("name") or "")
+    if check.get("missing"):
+        return "field_missing"
+    if name in {"signal_missing_in_baseline_replay", "fusion_replay_missing"}:
+        return "replay_missing"
+    if name == "tier_gate":
+        return "candidate_tier_side_effect"
+    if name == "sample_quality_ok":
+        return "sample_quality_side_effect"
+    return "true_gate_block"
+
+
+def summarize_fusion_gate_misses(findings: list[dict[str, Any]]) -> dict[str, Any]:
+    anchor_counts: dict[str, int] = {}
+    extended_counts: dict[str, int] = {}
+    reason_counts: dict[str, int] = {}
+    confounders: dict[str, dict[str, int]] = {
+        "candidateTier": {},
+        "cycleStage": {},
+        "cycleDecisionAction": {},
+        "sampleQualityStatus": {},
+    }
+    for item in findings:
+        checks = (((item.get("variantResults") or {}).get("baseline") or {}).get("fusion") or {}).get("checks")
+        if not checks:
+            checks = [{"name": "fusion_replay_missing", "passed": False, "reasonType": "replay_missing"}]
+        failed = [check for check in checks if not check.get("passed")]
+        if failed:
+            failed = failed[:1]
+        for check in failed:
+            name = str(check.get("name") or "")
+            if not name:
+                continue
+            target = anchor_counts if item.get("isAnchor") else extended_counts
+            target[name] = int(target.get(name) or 0) + 1
+            reason_type = _fusion_miss_reason_type(check)
+            reason_counts[reason_type] = int(reason_counts.get(reason_type) or 0) + 1
+            for source_key, output_key in [
+                ("candidateTier", "candidateTier"),
+                ("cycleStage", "cycleStage"),
+                ("cycleDecisionAction", "cycleDecisionAction"),
+                ("sampleQualityStatus", "sampleQualityStatus"),
+            ]:
+                value = str(item.get(source_key) or "unknown")
+                bucket = confounders[output_key]
+                bucket[value] = int(bucket.get(value) or 0) + 1
+    return {
+        "anchorMissCounts": anchor_counts,
+        "extendedMissCounts": extended_counts,
+        "reasonTypeCounts": reason_counts,
+        "confounderBreakdowns": confounders,
+    }
+
+
+def summarize_jump_definition_replays(findings: list[dict[str, Any]]) -> dict[str, Any]:
+    summary: dict[str, dict[str, Any]] = {}
+    for variant in DEFAULT_SHADOW_VARIANTS:
+        if not variant.requires_separate_replay:
+            continue
+        row = summary.setdefault(
+            variant.key,
+            {
+                "variant": variant.key,
+                "jumpDeltaPct": variant.jump_delta_pct,
+                "triggeredCount": 0,
+                "missingReplayCount": 0,
+                "directionCounts": {},
+                "derivedBy": "rule",
+            },
+        )
+        for item in findings:
+            result = (item.get("variantResults") or {}).get(variant.key) or {}
+            if result.get("missingSignal"):
+                row["missingReplayCount"] += 1
+                continue
+            if result.get("triggered"):
+                row["triggeredCount"] += 1
+            direction = str(_nested_get(result, "jump", "signal", "direction") or "unknown")
+            counts = row["directionCounts"]
+            counts[direction] = int(counts.get(direction) or 0) + 1
+    return summary
 
 
 def _build_check(name: str, passed: bool) -> dict[str, Any]:

@@ -37,12 +37,14 @@ from backend.data.storage_inspector import inspect_storage
 from backend.data.supabase_backup import get_backup_client
 from backend.data.theme_database import ThemeSessionLocal, init_theme_db
 from backend.data.theme_service import ThemeMigrationService
+from backend.analysis.ranktrend_live_gate_shadow_audit import load_hotlist_anchor_samples
 from backend.operations.schedule import run_after_market_once
 from backend.settings import get_settings
 from backend.services import (
     BacktestService,
     GoldenService,
     OptimizationService,
+    RankTrendLiveGateAuditService,
     check_layer1_meltdown,
     check_layer3_trend,
     compute_alignment,
@@ -53,6 +55,8 @@ from backend.utils import json_loads
 
 DEFAULT_MOMENTUM_PERIODS = [3, 5, 8, 13, 21]
 DEFAULT_HORIZONS = [1, 3, 5, 10]
+DEFAULT_LIVE_GATE_AUDIT_FOCUS_CODES = ["600186", "002156"]
+DEFAULT_LIVE_GATE_AUDIT_CONFIDENCE_THRESHOLDS = [70, 75, 80, 85, 90, 95]
 
 
 def print_json(payload: Any) -> None:
@@ -78,6 +82,16 @@ def parse_int_list(value: str) -> list[int]:
 
 def parse_csv_list(value: str | None) -> list[str]:
     return [item.strip() for item in (value or "").split(",") if item.strip()]
+
+
+def parse_float_list(value: str) -> list[float]:
+    items = [item.strip() for item in value.split(",") if item.strip()]
+    if not items:
+        raise argparse.ArgumentTypeError("expected at least one number")
+    try:
+        return [float(item) for item in items]
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"invalid number list: {value}") from exc
 
 
 def reject_legacy_storage_command_in_mongodb(command: str) -> None:
@@ -1047,6 +1061,26 @@ def cmd_show_report(args: argparse.Namespace) -> None:
         print_json(BacktestService(session).get_run(args.run_id) or {"error": "run not found"})
 
 
+def cmd_audit_ranktrend_live_gates(args: argparse.Namespace) -> None:
+    payload = {
+        "dataset_id": args.dataset_id,
+        "snapshot_type": args.snapshot_type,
+        "start_date": args.start_date,
+        "end_date": args.end_date,
+        "focus_codes": args.focus_code or DEFAULT_LIVE_GATE_AUDIT_FOCUS_CODES,
+        "anchor_samples": load_hotlist_anchor_samples(args.anchor_file) if args.anchor_file else [],
+        "confidence_thresholds": args.confidence_thresholds,
+        "research_all_frames": args.research_all_frames,
+    }
+    with runtime_session() as session:
+        result = RankTrendLiveGateAuditService(session).run(payload)
+    if args.output:
+        output = Path(args.output)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    print_json(result)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="quant-board", description="QuantBoard CLI")
     sub = parser.add_subparsers(required=True)
@@ -1267,6 +1301,22 @@ def build_parser() -> argparse.ArgumentParser:
     cleanup_research_cmd.add_argument("--apply", action="store_true")
     cleanup_research_cmd.add_argument("--vacuum", action="store_true")
     cleanup_research_cmd.set_defaults(func=cmd_cleanup_research)
+
+    audit_live_gates_cmd = sub.add_parser("audit-ranktrend-live-gates", help="Audit RankTrend live gate shadow variants")
+    audit_live_gates_cmd.add_argument("--dataset-id", required=True)
+    audit_live_gates_cmd.add_argument("--snapshot-type", choices=["quarter_hour", "half_hour"], default="half_hour")
+    audit_live_gates_cmd.add_argument("--start-date", default=None)
+    audit_live_gates_cmd.add_argument("--end-date", default=None)
+    audit_live_gates_cmd.add_argument("--focus-code", action="append", default=[])
+    audit_live_gates_cmd.add_argument("--anchor-file", default=None)
+    audit_live_gates_cmd.add_argument(
+        "--confidence-thresholds",
+        type=parse_float_list,
+        default=DEFAULT_LIVE_GATE_AUDIT_CONFIDENCE_THRESHOLDS,
+    )
+    audit_live_gates_cmd.add_argument("--research-all-frames", action="store_true")
+    audit_live_gates_cmd.add_argument("--output", default=None)
+    audit_live_gates_cmd.set_defaults(func=cmd_audit_ranktrend_live_gates)
 
     run_cmd = sub.add_parser("run-ranktrend", help="Run RankTrend backtest")
     run_cmd.add_argument("--dataset-id", required=True)

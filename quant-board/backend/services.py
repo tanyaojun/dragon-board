@@ -10,10 +10,15 @@ from sqlalchemy.orm import Session
 from backend.analysis.ranktrend import RankTrendConfig, RankTrendPythonEngine
 from backend.analysis.ranktrend_live_gate_shadow_audit import (
     DEFAULT_SHADOW_VARIANTS,
+    _nested_get,
     build_audit_meta,
+    classify_hotlist_buy_pattern,
     evaluate_shadow_variants,
     rank_shadow_candidate,
+    scan_jump_confidence_thresholds,
+    summarize_fusion_gate_misses,
     summarize_first_failure,
+    summarize_jump_definition_replays,
 )
 from backend.analysis.ranktrend_jump_research import build_jump_research_request, summarize_jump_research
 from backend.analysis.theme_trend import ThemeTrendConfig, ThemeTrendPythonEngine
@@ -2301,6 +2306,16 @@ class RankTrendLiveGateAuditService:
         if not dataset_id:
             raise ValueError("dataset_id is required")
         snapshot_type = str(payload.get("snapshot_type") or payload.get("snapshotType") or "half_hour")
+        anchor_samples = payload.get("anchor_samples") or payload.get("anchorSamples") or []
+        confidence_thresholds = payload.get("confidence_thresholds") or payload.get("confidenceThresholds") or [
+            70,
+            75,
+            80,
+            85,
+            90,
+            95,
+        ]
+        research_all_frames = bool(payload.get("research_all_frames") or payload.get("researchAllFrames"))
         focus_codes = {
             str(code).strip()
             for code in (payload.get("focus_codes") or payload.get("focusCodes") or [])
@@ -2324,6 +2339,8 @@ class RankTrendLiveGateAuditService:
 
         baseline_signal_maps = self._replay_frame_signals_by_snapshot(merged_frames)
         variant_signal_maps_by_snapshot = self._replay_variant_signal_maps_by_snapshot(merged_frames)
+        anchor_index = self._build_anchor_index(anchor_samples, default_snapshot_type=snapshot_type)
+        all_findings: list[dict[str, Any]] = []
         focus_findings: list[dict[str, Any]] = []
         ranking_candidates: list[dict[str, Any]] = []
 
@@ -2337,6 +2354,7 @@ class RankTrendLiveGateAuditService:
             frame_codes = set(baseline_signal_map)
             for signal_map in variant_signal_maps.values():
                 frame_codes.update(signal_map)
+            frame_codes.update(self._requested_frame_codes(frame=frame, focus_codes=focus_codes, anchor_index=anchor_index))
             for code in sorted(frame_codes):
                 baseline_signal = baseline_signal_map.get(code)
                 display_signal = baseline_signal or self._select_display_signal(
@@ -2349,21 +2367,43 @@ class RankTrendLiveGateAuditService:
                     variant_signal_maps=variant_signal_maps,
                 )
                 signal = display_signal
+                anchor = anchor_index.get(
+                    (
+                        code,
+                        str(frame.get("tradingDate") or ""),
+                        str(frame.get("slotTime") or ""),
+                        str(frame.get("type") or snapshot_type or "half_hour"),
+                    )
+                )
+                hotlist_buy_tags = classify_hotlist_buy_pattern(signal)
+                baseline = variant_results.get("baseline") or {}
+                finding = {
+                    "snapshotId": snapshot_id,
+                    "tradingDate": frame.get("tradingDate"),
+                    "slotTime": frame.get("slotTime"),
+                    "code": code,
+                    "name": signal.get("name"),
+                    "baselineTriggered": baseline.get("triggered"),
+                    "baselineJumpTriggered": ((baseline.get("jump") or {}).get("triggered")),
+                    "baselineFusionTriggered": ((baseline.get("fusion") or {}).get("triggered")),
+                    "firstJumpFailure": summarize_first_failure((baseline.get("jump") or {}).get("checks") or []),
+                    "firstFusionFailure": summarize_first_failure((baseline.get("fusion") or {}).get("checks") or []),
+                    "variantResults": variant_results,
+                    "baselineSignal": baseline_signal,
+                    "displaySignal": display_signal if display_signal else None,
+                    "hotlistBuyTags": hotlist_buy_tags,
+                    "isAnchor": anchor is not None,
+                    "anchorLabel": anchor.get("label") if anchor else None,
+                    "anchorEvidence": anchor.get("evidence") if anchor else None,
+                    "anchorStatus": anchor.get("status") if anchor else None,
+                    "isPositiveOutcome": self._is_positive_outcome(signal),
+                    "candidateTier": _nested_get(signal, "rankTrend", "strategy", "candidateTier"),
+                    "cycleStage": _nested_get(signal, "rankTrend", "cycle", "stage"),
+                    "cycleDecisionAction": _nested_get(signal, "rankTrend", "cycle", "decision", "action"),
+                    "sampleQualityStatus": _nested_get(signal, "rankTrend", "meta", "sampleQuality", "status"),
+                }
+                all_findings.append(finding)
                 if not focus_codes or code in focus_codes:
-                    baseline = variant_results.get("baseline") or {}
-                    finding = {
-                        "snapshotId": snapshot_id,
-                        "tradingDate": frame.get("tradingDate"),
-                        "slotTime": frame.get("slotTime"),
-                        "code": code,
-                        "name": signal.get("name"),
-                        "baselineTriggered": baseline.get("triggered"),
-                        "baselineJumpTriggered": ((baseline.get("jump") or {}).get("triggered")),
-                        "baselineFusionTriggered": ((baseline.get("fusion") or {}).get("triggered")),
-                        "firstJumpFailure": summarize_first_failure((baseline.get("jump") or {}).get("checks") or []),
-                        "firstFusionFailure": summarize_first_failure((baseline.get("fusion") or {}).get("checks") or []),
-                        "variantResults": variant_results,
-                    }
                     focus_findings.append(finding)
                 ranking_candidates.append(
                     {
@@ -2375,6 +2415,7 @@ class RankTrendLiveGateAuditService:
                     }
                 )
 
+        all_findings.sort(key=lambda item: (str(item.get("snapshotId") or ""), str(item.get("code") or "")))
         focus_findings.sort(key=lambda item: (str(item.get("snapshotId") or ""), str(item.get("code") or "")))
         ranking_suggestions = sorted(
             ranking_candidates,
@@ -2382,6 +2423,18 @@ class RankTrendLiveGateAuditService:
         )
         daily_summaries = self._build_daily_summaries(focus_findings)
         acc_delta_present_ratio = self._compute_acc_delta_present_ratio(stock_rows)
+        research_findings = all_findings if research_all_frames else focus_findings
+        anchor_findings = [
+            item
+            for item in research_findings
+            if item.get("isAnchor") and item.get("anchorStatus") == "confirmed"
+        ]
+        extended_hotlist_findings = [
+            item
+            for item in research_findings
+            if not item.get("isAnchor") and item.get("hotlistBuyTags")
+        ]
+        research_summary_findings = anchor_findings + extended_hotlist_findings
 
         return {
             "meta": {
@@ -2389,12 +2442,92 @@ class RankTrendLiveGateAuditService:
                 "snapshotType": snapshot_type,
                 "recordCount": len(records),
                 "frameCount": len(merged_frames),
+                "anchorSampleStatusCounts": self._count_anchor_statuses(anchor_samples),
                 **build_audit_meta(acc_delta_present_ratio=acc_delta_present_ratio),
+                "outcomeLabelPolicy": (
+                    "后续涨停型/短线爆发型当前只从 signal.isPositiveOutcome 或外部 outcomeLabels/"
+                    "resultLabels 读取；未提供后验标签时 positiveRecall 统计保持 0，不自动用收益推断。"
+                ),
             },
             "focusFindings": focus_findings,
             "dailySummaries": daily_summaries,
             "rankingSuggestions": ranking_suggestions,
+            "anchorFindings": anchor_findings,
+            "extendedHotlistFindings": extended_hotlist_findings,
+            "confidenceThresholdScan": scan_jump_confidence_thresholds(
+                research_summary_findings,
+                [float(value) for value in confidence_thresholds],
+            ),
+            "jumpDefinitionReplaySummary": summarize_jump_definition_replays(research_findings),
+            "fusionGateMissSummary": summarize_fusion_gate_misses(research_summary_findings),
         }
+
+    @staticmethod
+    def _build_anchor_index(
+        anchor_samples: list[dict[str, Any]],
+        *,
+        default_snapshot_type: str,
+    ) -> dict[tuple[str, str, str, str], dict[str, Any]]:
+        index: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+        for item in anchor_samples:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("status") or "confirmed") == "exclude":
+                continue
+            key = (
+                str(item.get("code") or "").strip(),
+                str(item.get("tradingDate") or "").strip(),
+                str(item.get("slotTime") or "").strip(),
+                str(item.get("snapshotType") or default_snapshot_type or "half_hour").strip(),
+            )
+            if all(key):
+                index[key] = item
+        return index
+
+    @staticmethod
+    def _count_anchor_statuses(anchor_samples: list[dict[str, Any]]) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for item in anchor_samples:
+            if not isinstance(item, dict):
+                continue
+            status = str(item.get("status") or "confirmed")
+            counts[status] = int(counts.get(status) or 0) + 1
+        return counts
+
+    @staticmethod
+    def _requested_frame_codes(
+        *,
+        frame: dict[str, Any],
+        focus_codes: set[str],
+        anchor_index: dict[tuple[str, str, str, str], dict[str, Any]],
+    ) -> set[str]:
+        trading_date = str(frame.get("tradingDate") or "")
+        slot_time = str(frame.get("slotTime") or "")
+        snapshot_type = str(frame.get("type") or "half_hour")
+        stock_codes = {
+            str(row.get("code") or "").strip()
+            for row in (frame.get("stocks") or [])
+            if str(row.get("code") or "").strip()
+        }
+        requested = {code for code in focus_codes if code in stock_codes}
+        for code, anchor_date, anchor_slot, anchor_snapshot_type in anchor_index:
+            if (
+                anchor_date == trading_date
+                and anchor_slot == slot_time
+                and anchor_snapshot_type == snapshot_type
+                and code in stock_codes
+            ):
+                requested.add(code)
+        return requested
+
+    @staticmethod
+    def _is_positive_outcome(signal: dict[str, Any]) -> bool:
+        if signal.get("isPositiveOutcome") is not None:
+            return bool(signal.get("isPositiveOutcome"))
+        labels = signal.get("outcomeLabels") or signal.get("resultLabels") or []
+        if not isinstance(labels, list):
+            return False
+        return bool({"limit_up_1_4_bars", "short_burst_gain_ge_6"} & {str(label) for label in labels})
 
     def _resolve_date_window(
         self,

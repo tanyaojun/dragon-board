@@ -4,12 +4,17 @@ import json
 from contextlib import nullcontext
 from copy import deepcopy
 from datetime import date
+from pathlib import Path
 
 from backend.analysis.ranktrend_live_gate_shadow_audit import (
     DEFAULT_SHADOW_VARIANTS,
     build_audit_meta,
+    classify_hotlist_buy_pattern,
     evaluate_shadow_variants,
+    load_hotlist_anchor_samples,
     rank_shadow_candidate,
+    scan_jump_confidence_thresholds,
+    summarize_fusion_gate_misses,
     summarize_first_failure,
 )
 from backend.services import RankTrendLiveGateAuditService
@@ -452,6 +457,225 @@ def test_rank_shadow_candidate_prioritizes_a_main_and_confirmed_b_ignition() -> 
     assert "b_ignition_mid>=20_zeroCross:buy" in confirmed_b["reasons"]
 
 
+def test_load_hotlist_anchor_samples_reads_minimal_contract(tmp_path) -> None:
+    path = tmp_path / "anchors.json"
+    path.write_text(
+        """
+        [
+          {
+            "code": "600186",
+            "tradingDate": "2026-06-09",
+            "slotTime": "10:30",
+            "snapshotType": "half_hour",
+            "label": "lotus_1030",
+            "evidence": "技术三买共振，盘中热榜买点",
+            "annotator": "user",
+            "status": "confirmed"
+          }
+        ]
+        """.strip(),
+        encoding="utf-8",
+    )
+
+    anchors = load_hotlist_anchor_samples(path)
+
+    assert anchors == [
+        {
+            "code": "600186",
+            "tradingDate": "2026-06-09",
+            "slotTime": "10:30",
+            "snapshotType": "half_hour",
+            "label": "lotus_1030",
+            "evidence": "技术三买共振，盘中热榜买点",
+            "annotator": "user",
+            "status": "confirmed",
+        }
+    ]
+
+
+def test_hotlist_anchor_fixture_keeps_tfwd_borderline_until_bar_is_confirmed() -> None:
+    fixture_path = Path(__file__).parent / "fixtures" / "ranktrend_hotlist_anchor_samples.json"
+
+    anchors = load_hotlist_anchor_samples(fixture_path)
+    tfwd = next(item for item in anchors if item["code"] == "002156")
+
+    assert tfwd["status"] == "borderline"
+    assert tfwd["slotTime"] == ""
+
+
+def test_classify_hotlist_buy_pattern_marks_progressive_non_explosive_setup() -> None:
+    tags = classify_hotlist_buy_pattern(
+        {
+            "change": 5.2,
+            "rankTrend": {
+                "jump": {"direction": "buy", "confidence": 78, "sustained": True},
+                "technical": {
+                    "macd": {"cross": "golden"},
+                    "signals": {
+                        "direction": {"signal": "buy"},
+                        "acceleration": {"signal": "buy"},
+                        "zeroCross": {"signal": "buy"},
+                    },
+                    "momentumProfile": {
+                        "short": 7.3,
+                        "mid": 24.9,
+                        "long": 28.6,
+                        "acceleration": 4.3,
+                    },
+                },
+                "cycle": {"stage": "expansion"},
+            },
+        }
+    )
+
+    assert "technical_buy_alignment" in tags
+    assert "progressive_rank_lift" in tags
+    assert "non_explosive_but_valid" in tags
+    assert "early_hotlist_ignition" not in tags
+
+
+def test_classify_hotlist_buy_pattern_handles_missing_ranktrend_fields() -> None:
+    tags = classify_hotlist_buy_pattern({"code": "000001"})
+
+    assert tags == []
+
+
+def test_scan_jump_confidence_thresholds_returns_interval_rows() -> None:
+    findings = [
+        {
+            "code": "600186",
+            "isAnchor": True,
+            "isPositiveOutcome": True,
+            "baselineSignal": {
+                "rankTrend": {
+                    "jump": {
+                        "confidence": 79.8,
+                        "direction": "buy",
+                        "event": "jump",
+                        "sustained": True,
+                    }
+                }
+            },
+            "hotlistBuyTags": ["technical_buy_alignment"],
+        },
+        {
+            "code": "300433",
+            "isAnchor": False,
+            "isPositiveOutcome": True,
+            "baselineSignal": {
+                "rankTrend": {
+                    "jump": {
+                        "confidence": 77.9,
+                        "direction": "buy",
+                        "event": "jump",
+                        "sustained": True,
+                    }
+                }
+            },
+            "hotlistBuyTags": ["technical_buy_alignment"],
+        },
+        {
+            "code": "000001",
+            "isAnchor": False,
+            "isPositiveOutcome": False,
+            "baselineSignal": {
+                "rankTrend": {
+                    "jump": {
+                        "confidence": 81.0,
+                        "direction": "buy",
+                        "event": "jump",
+                        "sustained": True,
+                    }
+                }
+            },
+            "hotlistBuyTags": [],
+        },
+    ]
+
+    rows = scan_jump_confidence_thresholds(findings, thresholds=[75, 80, 85, 90])
+
+    assert [row["threshold"] for row in rows] == [75.0, 80.0, 85.0, 90.0]
+    assert rows[0]["anchorRecallCount"] == 1
+    assert rows[1]["anchorRecallCount"] == 0
+    assert rows[0]["positiveRecallCount"] == 2
+    assert rows[0]["noiseCount"] == 1
+    assert rows[0]["derivedBy"] == "rule"
+
+
+def test_summarize_fusion_gate_misses_separates_anchor_extended_and_reason_types() -> None:
+    findings = [
+        {
+            "isAnchor": True,
+            "hotlistBuyTags": ["technical_buy_alignment"],
+            "candidateTier": "N_NEUTRAL",
+            "cycleStage": "ignition",
+            "cycleDecisionAction": "allow",
+            "sampleQualityStatus": "ok",
+            "variantResults": {
+                "baseline": {
+                    "fusion": {
+                        "checks": [
+                            {"name": "short_mid_long_positive", "passed": True},
+                            {"name": "acceleration_ge_10_or_accdelta_ge_8", "passed": False},
+                            {"name": "tier_gate", "passed": False},
+                        ]
+                    }
+                }
+            },
+        },
+        {
+            "isAnchor": False,
+            "hotlistBuyTags": ["technical_buy_alignment", "non_explosive_but_valid"],
+            "candidateTier": "B_IGNITION",
+            "cycleStage": "expansion",
+            "cycleDecisionAction": "allow",
+            "sampleQualityStatus": "ok",
+            "variantResults": {
+                "baseline": {
+                    "fusion": {
+                        "checks": [
+                            {"name": "short_mid_long_positive", "passed": True},
+                            {"name": "tier_gate", "passed": False},
+                        ]
+                    }
+                }
+            },
+        },
+    ]
+
+    summary = summarize_fusion_gate_misses(findings)
+
+    assert summary["anchorMissCounts"]["acceleration_ge_10_or_accdelta_ge_8"] == 1
+    assert "tier_gate" not in summary["anchorMissCounts"]
+    assert summary["extendedMissCounts"]["tier_gate"] == 1
+    assert summary["reasonTypeCounts"]["true_gate_block"] == 1
+    assert summary["reasonTypeCounts"]["candidate_tier_side_effect"] == 1
+    assert summary["confounderBreakdowns"]["candidateTier"]["B_IGNITION"] == 1
+
+
+def test_summarize_fusion_gate_misses_marks_baseline_missing_as_replay_missing() -> None:
+    summary = summarize_fusion_gate_misses(
+        [
+            {
+                "isAnchor": True,
+                "variantResults": {
+                    "baseline": {
+                        "fusion": {
+                            "checks": [
+                                {"name": "signal_missing_in_baseline_replay", "passed": False}
+                            ]
+                        }
+                    }
+                },
+            }
+        ]
+    )
+
+    assert summary["anchorMissCounts"]["signal_missing_in_baseline_replay"] == 1
+    assert summary["reasonTypeCounts"]["replay_missing"] == 1
+    assert "true_gate_block" not in summary["reasonTypeCounts"]
+
+
 class StubAuditRepo:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
@@ -613,6 +837,24 @@ class StubVariantOnlyRecallAuditService(StubRankTrendLiveGateAuditService):
                 },
             )
         return baseline_only
+
+
+class StubNoReplaySignalAuditService(StubRankTrendLiveGateAuditService):
+    def _replay_frame_signals(
+        self,
+        frames: list[dict[str, object]],
+        *,
+        jump_delta_pct: float = 15.0,
+    ) -> dict[str, dict[str, object]]:
+        snapshot_id = str(frames[-1]["snapshotId"])
+        self.replay_calls.append(
+            {
+                "snapshot_id": snapshot_id,
+                "frame_count": len(frames),
+                "jump_delta_pct": jump_delta_pct,
+            }
+        )
+        return {}
 
 
 class StubAccDeltaRatioAuditRepo(StubAuditRepo):
@@ -783,6 +1025,129 @@ def test_live_gate_audit_service_keeps_variant_only_recall_codes() -> None:
     assert any(item["code"] == "300001" for item in result["rankingSuggestions"])
 
 
+def test_live_gate_audit_service_emits_hotlist_recall_research_sections() -> None:
+    service = StubRankTrendLiveGateAuditService()
+
+    result = service.run(
+        {
+            "dataset_id": "ds_live_gate",
+            "anchor_samples": [
+                {
+                    "code": "600186",
+                    "tradingDate": "2026-06-03",
+                    "slotTime": "09:30",
+                    "snapshotType": "half_hour",
+                    "label": "lotus_0930",
+                    "evidence": "盘中热榜买点",
+                    "annotator": "user",
+                    "status": "confirmed",
+                }
+            ],
+            "confidence_thresholds": [75, 80, 85, 90],
+            "research_all_frames": True,
+        }
+    )
+
+    assert set(result) >= {
+        "anchorFindings",
+        "extendedHotlistFindings",
+        "confidenceThresholdScan",
+        "jumpDefinitionReplaySummary",
+        "fusionGateMissSummary",
+    }
+    assert result["anchorFindings"][0]["isAnchor"] is True
+    assert result["anchorFindings"][0]["anchorLabel"] == "lotus_0930"
+    assert result["confidenceThresholdScan"][0]["threshold"] == 75.0
+    assert "delta_10" in result["jumpDefinitionReplaySummary"]
+    assert "anchorMissCounts" in result["fusionGateMissSummary"]
+
+
+def test_live_gate_audit_service_marks_focus_findings_with_anchor_and_hotlist_tags() -> None:
+    service = StubRankTrendLiveGateAuditService()
+
+    result = service.run(
+        {
+            "dataset_id": "ds_live_gate",
+            "focus_codes": ["600186"],
+            "anchor_samples": [
+                {
+                    "code": "600186",
+                    "tradingDate": "2026-06-03",
+                    "slotTime": "10:00",
+                    "snapshotType": "half_hour",
+                    "label": "lotus_1000",
+                    "evidence": "技术三买共振，盘中热榜买点",
+                    "annotator": "user",
+                    "status": "confirmed",
+                }
+            ],
+        }
+    )
+
+    finding = next(item for item in result["focusFindings"] if item["snapshotId"] == "s2")
+
+    assert finding["isAnchor"] is True
+    assert finding["anchorLabel"] == "lotus_1000"
+    assert "hotlistBuyTags" in finding
+    assert finding["baselineSignal"] is not None
+    assert finding["displaySignal"] is not None
+
+
+def test_live_gate_audit_service_keeps_baseline_signal_separate_from_variant_display_signal() -> None:
+    service = StubVariantOnlyRecallAuditService()
+
+    result = service.run({"dataset_id": "ds_live_gate", "research_all_frames": True})
+
+    finding = next(item for item in result["extendedHotlistFindings"] if item["code"] == "300001")
+
+    assert finding["baselineSignal"] is None
+    assert finding["displaySignal"] is not None
+    assert finding["variantResults"]["delta_10"]["triggered"] is True
+
+
+def test_live_gate_audit_service_reports_focus_code_when_all_replays_are_missing() -> None:
+    service = StubNoReplaySignalAuditService()
+
+    result = service.run(
+        {
+            "dataset_id": "ds_live_gate",
+            "focus_codes": ["600186"],
+            "anchor_samples": [
+                {
+                    "code": "600186",
+                    "tradingDate": "2026-06-03",
+                    "slotTime": "09:30",
+                    "snapshotType": "half_hour",
+                    "label": "lotus_missing",
+                    "evidence": "热榜行存在但 replay 无信号",
+                    "annotator": "user",
+                    "status": "confirmed",
+                },
+                {
+                    "code": "002156",
+                    "tradingDate": "2026-06-09",
+                    "slotTime": "",
+                    "snapshotType": "half_hour",
+                    "label": "tfwd_pending",
+                    "evidence": "具体 bar 待补",
+                    "annotator": "user",
+                    "status": "borderline",
+                },
+            ],
+        }
+    )
+
+    finding = next(item for item in result["focusFindings"] if item["code"] == "600186")
+
+    assert finding["baselineSignal"] is None
+    assert finding["displaySignal"] is None
+    assert finding["isAnchor"] is True
+    assert finding["firstJumpFailure"] == "signal_missing_in_baseline_replay"
+    assert finding["firstFusionFailure"] == "signal_missing_in_baseline_replay"
+    assert result["meta"]["anchorSampleStatusCounts"] == {"confirmed": 1, "borderline": 1}
+    assert result["fusionGateMissSummary"]["reasonTypeCounts"]["replay_missing"] >= 1
+
+
 def test_live_gate_audit_service_allows_snapshot_type_override() -> None:
     service = StubRankTrendLiveGateAuditService()
 
@@ -849,6 +1214,11 @@ def test_cli_audit_ranktrend_live_gates_parses_parameters() -> None:
             "600186",
             "--focus-code",
             "002156",
+            "--anchor-file",
+            "fixtures/anchors.json",
+            "--confidence-thresholds",
+            "75,80,85,90",
+            "--research-all-frames",
             "--output",
             "tmp/audit.json",
         ]
@@ -860,6 +1230,9 @@ def test_cli_audit_ranktrend_live_gates_parses_parameters() -> None:
     assert args.start_date == "2026-06-01"
     assert args.end_date == "2026-06-09"
     assert args.focus_code == ["600186", "002156"]
+    assert args.anchor_file == "fixtures/anchors.json"
+    assert args.confidence_thresholds == [75.0, 80.0, 85.0, 90.0]
+    assert args.research_all_frames is True
     assert args.output == "tmp/audit.json"
 
 
@@ -906,7 +1279,82 @@ def test_cli_audit_ranktrend_live_gates_uses_default_focus_codes_and_writes_outp
         "start_date": None,
         "end_date": None,
         "focus_codes": ["600186", "002156"],
+        "anchor_samples": [],
+        "confidence_thresholds": [70.0, 75.0, 80.0, 85.0, 90.0, 95.0],
+        "research_all_frames": False,
     }
     assert output.parent.is_dir()
     assert json.loads(output.read_text(encoding="utf-8")) == result
     assert printed == [result]
+
+
+def test_cli_audit_ranktrend_live_gates_loads_anchor_file_and_confidence_thresholds(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    import backend.cli as cli
+
+    captured: dict[str, object] = {}
+    anchor_file = tmp_path / "anchors.json"
+    anchor_file.write_text(
+        '[{"code":"600186","tradingDate":"2026-06-09","slotTime":"10:30","snapshotType":"half_hour","label":"lotus_1030","evidence":"盘中热榜买点","annotator":"user","status":"confirmed"}]',
+        encoding="utf-8",
+    )
+
+    class StubCliAuditService:
+        def __init__(self, session) -> None:
+            captured["session"] = session
+
+        def run(self, payload: dict[str, object]) -> dict[str, object]:
+            captured["payload"] = payload
+            return {
+                "meta": {"datasetId": "dragonboard_live"},
+                "anchorFindings": [],
+                "extendedHotlistFindings": [],
+                "confidenceThresholdScan": [],
+                "jumpDefinitionReplaySummary": {},
+                "fusionGateMissSummary": {},
+            }
+
+    monkeypatch.setattr(cli, "runtime_session", lambda: nullcontext("cli-session"))
+    monkeypatch.setattr(cli, "RankTrendLiveGateAuditService", StubCliAuditService)
+    monkeypatch.setattr(cli, "print_json", lambda payload: None)
+
+    args = cli.build_parser().parse_args(
+        [
+            "audit-ranktrend-live-gates",
+            "--dataset-id",
+            "dragonboard_live",
+            "--snapshot-type",
+            "half_hour",
+            "--anchor-file",
+            str(anchor_file),
+            "--confidence-thresholds",
+            "75,80,85,90",
+            "--research-all-frames",
+        ]
+    )
+
+    cli.cmd_audit_ranktrend_live_gates(args)
+
+    assert captured["payload"] == {
+        "dataset_id": "dragonboard_live",
+        "snapshot_type": "half_hour",
+        "start_date": None,
+        "end_date": None,
+        "focus_codes": ["600186", "002156"],
+        "anchor_samples": [
+            {
+                "code": "600186",
+                "tradingDate": "2026-06-09",
+                "slotTime": "10:30",
+                "snapshotType": "half_hour",
+                "label": "lotus_1030",
+                "evidence": "盘中热榜买点",
+                "annotator": "user",
+                "status": "confirmed",
+            }
+        ],
+        "confidence_thresholds": [75.0, 80.0, 85.0, 90.0],
+        "research_all_frames": True,
+    }
