@@ -1,5 +1,6 @@
 from backend.analysis import ranktrend
 from backend.analysis.ranktrend import RankTrendConfig, RankTrendPythonEngine
+from backend.core.backtest.engine import BacktestEngine
 from backend.services import GoldenService
 
 
@@ -88,6 +89,45 @@ def test_golden_replay_ignores_preexisting_hotlist_sentiment_payload() -> None:
     assert all(frame.get("hotlistSentiment", {}).get("stage") == "冰点" for frame in frames)
     assert all("hotlistSentimentStatus" not in frame for frame in frames)
     assert all("hotlistSentimentReason" not in frame for frame in frames)
+
+
+def test_execution_replay_uses_hotlist_strategy_tier_when_requested() -> None:
+    engine = RankTrendPythonEngine(RankTrendConfig.from_patch({"minSampleCount": 3}))
+    frames = _make_frames(include_hotlist_sentiment=True)
+
+    signals = engine.replay(
+        frames,
+        meta={"sampleQuality": "ok", "candidateTierMode": "execution"},
+    )
+
+    assert signals
+    strategy = signals[-1]["rankTrend"]["strategy"]
+    assert strategy["hotlist"]["stage"] == "冰点"
+    assert all("hotlistSentimentStatus" not in frame for frame in frames)
+    assert signals[-1]["candidateTier"] not in {"A_MAIN", "B_IGNITION"}
+    assert any("热榜冰点期" in reason or "暂停入场" in reason for reason in strategy["reasons"])
+
+
+def test_backtest_engine_requests_execution_candidate_tier(monkeypatch) -> None:
+    captured: dict[str, dict] = {}
+
+    def fake_replay(self, frames, warmup_count=None, window_size=50, meta=None):
+        captured["meta"] = meta or {}
+        return []
+
+    monkeypatch.setattr(ranktrend.RankTrendPythonEngine, "replay", fake_replay)
+
+    BacktestEngine().run(
+        [{"snapshotId": "s1", "stocks": [], "tradingDate": "2026-06-05", "slotTime": "10:00"}],
+        {
+            "strategy_config": {},
+            "strategy_name": "ranktrend_early_big_move_v3_lifecycle_fusion",
+            "enable_trade_simulation": False,
+            "quality_gate": {},
+        },
+    )
+
+    assert captured["meta"]["candidateTierMode"] == "execution"
 
 
 def test_build_signal_runs_risk_aware_analysis_order(monkeypatch) -> None:

@@ -13,8 +13,18 @@ from backend.core.backtest.strategy import DEFAULT_STRATEGY_NAME, FrameStrategyR
 class BacktestEngine:
     def run(self, frames: list[dict[str, Any]], options: dict[str, Any]) -> dict[str, Any]:
         config = RankTrendConfig.from_patch(options.get("strategy_config") or {})
-        signals = RankTrendPythonEngine(config).replay(frames, meta={"sampleQuality": "ok", "warnings": []})
         strategy_name = normalize_strategy_name(options.get("strategy_name") or (options.get("trade_config") or {}).get("entryStrategy"))
+        signals = RankTrendPythonEngine(config).replay(
+            frames,
+            meta={
+                "sampleQuality": "ok",
+                "warnings": [],
+                "candidateTierMode": "execution",
+                "datasetId": options.get("dataset_id") or options.get("datasetId"),
+                "snapshotType": options.get("snapshot_type") or options.get("snapshotType"),
+                "strategyName": strategy_name,
+            },
+        )
         evaluator = OutcomeEvaluator()
         distribution = evaluator.distribution(signals)
         forward = evaluator.evaluate(frames, signals, options.get("horizons") or [1, 3, 5, 10])

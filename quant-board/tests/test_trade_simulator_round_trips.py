@@ -310,7 +310,7 @@ def test_early_big_move_v3_no_lifecycle_gate_allows_strong_structure_without_a_b
         change=5.2,
     )
     weak_a_main["code"] = "002601"
-    weak_a_main["rankTrend"]["jump"]["confidence"] = 88.5
+    weak_a_main["rankTrend"]["jump"]["confidence"] = 77.0
 
     candidates = TradeSimulator._entry_candidates(
         [neutral, weak_a_main],
@@ -492,6 +492,99 @@ def test_early_big_move_v3_lifecycle_fusion_does_not_let_lifecycle_allow_create_
     )
 
     assert candidates == []
+
+
+def test_early_big_move_v3_lifecycle_fusion_rejects_79_8_jump_confidence_by_default() -> None:
+    candidate = _early_big_move_v2_signal(tier="A_MAIN", zero_cross="buy", change=5.0)
+    candidate["rankTrend"]["jump"]["confidence"] = 79.8
+    candidate["rankTrend"]["cycle"] = {
+        "stage": "expansion",
+        "transition": "ignition->expansion",
+        "decision": {
+            "action": "allow",
+            "confidence": 82,
+            "reasons": ["生命周期B支持"],
+        },
+    }
+
+    candidates = TradeSimulator._entry_candidates(
+        [candidate],
+        [{"snapshotId": candidate["snapshotId"]}],
+        0,
+        {},
+        {},
+        "ranktrend_early_big_move_v3_lifecycle_fusion",
+    )
+
+    assert candidates == []
+
+
+def test_early_big_move_v3_lifecycle_fusion_accepts_79_8_jump_confidence_when_explicitly_lowered() -> None:
+    candidate = _early_big_move_v2_signal(tier="A_MAIN", zero_cross="buy", change=5.0)
+    candidate["rankTrend"]["jump"]["confidence"] = 79.8
+    candidate["rankTrend"]["cycle"] = {
+        "stage": "expansion",
+        "transition": "ignition->expansion",
+        "decision": {
+            "action": "allow",
+            "confidence": 82,
+            "reasons": ["生命周期B支持"],
+        },
+    }
+
+    candidates = TradeSimulator._entry_candidates(
+        [candidate],
+        [{"snapshotId": candidate["snapshotId"]}],
+        0,
+        {},
+        {},
+        "ranktrend_early_big_move_v3_lifecycle_fusion",
+        {"minJumpConfidence": 77.5},
+    )
+
+    assert [item["code"] for item in candidates] == ["002552"]
+
+
+def test_early_big_move_v3_lifecycle_fusion_allows_overriding_min_jump_confidence() -> None:
+    candidate = _early_big_move_v2_signal(tier="A_MAIN", zero_cross="buy", change=5.0)
+    candidate["rankTrend"]["jump"]["confidence"] = 79.8
+    candidate["rankTrend"]["cycle"] = {
+        "stage": "expansion",
+        "transition": "ignition->expansion",
+        "decision": {
+            "action": "allow",
+            "confidence": 82,
+            "reasons": ["生命周期B支持"],
+        },
+    }
+
+    result = TradeSimulator().run(
+        [
+            {"snapshotId": candidate["snapshotId"], "timestamp": candidate["timestamp"], "tradingDate": candidate["tradingDate"], "slotTime": candidate["slotTime"]},
+        ],
+        [candidate],
+        {
+            "entryStrategy": "ranktrend_early_big_move_v3_lifecycle_fusion",
+            "minJumpConfidence": 80.0,
+            "initialCapital": 100000,
+            "positionSize": 0.1,
+            "maxPositions": 1,
+            "maxHoldingBars": 1,
+            "enforceT1": False,
+            "useOrderBookPrice": False,
+            "enforceLimitStatus": False,
+            "enforceOrderBookQueue": False,
+            "enforceVolumeLimit": False,
+            "feeRate": 0,
+            "stampTaxRate": 0,
+            "slippageRate": 0,
+            "stopLoss": -0.5,
+            "takeProfit": 9.99,
+        },
+    )
+
+    assert result["config"]["minJumpConfidence"] == 80.0
+    assert result["tradeEvents"] == []
 
 
 def test_early_big_move_v3_lifecycle_fusion_keeps_discovery_as_research_only() -> None:

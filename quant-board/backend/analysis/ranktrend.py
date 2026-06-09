@@ -5,6 +5,9 @@ from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from typing import Any
 
+from backend.data import repository_factory
+from backend.data.hotlist_sentiment_repo import HotListSentimentRepository
+
 def clamp(value: float, min_value: float, max_value: float) -> float:
     if not math.isfinite(value):
         return min_value
@@ -1073,6 +1076,8 @@ class RankTrendPythonEngine:
 
     def replay(self, frames: list[dict[str, Any]], warmup_count: int | None = None, window_size: int = 50, meta: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         meta = meta or {}
+        if self._candidate_tier_mode(meta) == "execution":
+            self._ensure_hotlist_sentiment(frames, meta)
         self._stock_lookup = self._build_stock_lookup(frames)
         min_count = warmup_count or get_technical_min_samples(self.config)
         start = min_count - 1 if len(frames) >= min_count else 0
@@ -1117,6 +1122,39 @@ class RankTrendPythonEngine:
                 if signal:
                     signals.append(signal)
         return signals
+
+    @staticmethod
+    def _candidate_tier_mode(meta: dict[str, Any]) -> str:
+        return str(meta.get("candidateTierMode") or meta.get("candidate_tier_mode") or "analysis")
+
+    def _ensure_hotlist_sentiment(self, frames: list[dict[str, Any]], meta: dict[str, Any]) -> None:
+        missing_frames = [frame for frame in frames if "hotlistSentiment" not in frame]
+        if not missing_frames:
+            return
+
+        dataset_id = str(meta.get("datasetId") or meta.get("dataset_id") or "dragonboard_live")
+        default_snapshot_type = str(meta.get("snapshotType") or meta.get("snapshot_type") or "half_hour")
+        try:
+            repo = HotListSentimentRepository(repository_factory.get_runtime_mongodb_database())
+            by_key: dict[tuple[str, str], dict] = {}
+            for frame in missing_frames:
+                trading_date = str(frame.get("tradingDate") or "")
+                if not trading_date:
+                    continue
+                snapshot_type = str(frame.get("type") or frame.get("snapshotType") or default_snapshot_type)
+                key = (snapshot_type, trading_date)
+                if key not in by_key:
+                    doc = repo.get_by_date(dataset_id, snapshot_type, trading_date)
+                    if doc:
+                        by_key[key] = doc
+                frame["hotlistSentiment"] = by_key.get(key)
+                frame["hotlistSentimentStatus"] = "ok" if frame.get("hotlistSentiment") else "missing"
+        except Exception as exc:
+            reason = f"MongoDB hotlist sentiment unavailable: {exc}"
+            for frame in missing_frames:
+                frame["hotlistSentiment"] = None
+                frame["hotlistSentimentStatus"] = "missing"
+                frame["hotlistSentimentReason"] = reason
 
     def replay_frame_at(self, frames: list[dict[str, Any]], index: int, window_size: int = 50, meta: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         frame = frames[index]
@@ -1166,7 +1204,10 @@ class RankTrendPythonEngine:
         risk = analyze_risk(current_percentile, technical, cycle, fallback["zlje"], fallback["zljzb"], fallback["volumeRatio"])
         cycle = analyze_cycle_with_risk(cycle, risk, technical.get("momentumProfile"))
         decision = compose_decision(technical, cycle, risk, self.config)
-        strategy = compose_analysis_candidate_tier(technical, cycle, risk, regime)
+        if self._candidate_tier_mode(meta) == "execution":
+            strategy = compose_strategy(technical, cycle, risk, frame.get("hotlistSentiment"), config=self.config)
+        else:
+            strategy = compose_analysis_candidate_tier(technical, cycle, risk, regime)
         jump = detect_rank_jumps(percentiles, ranks, delta_pct=self.config.jumpDeltaPct)
         sample_status = "ok" if len(percentiles) >= get_technical_min_samples(self.config) else "degraded" if len(percentiles) >= 5 else "insufficient"
         rank_trend = {

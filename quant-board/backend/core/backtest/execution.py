@@ -153,7 +153,7 @@ class TradeSimulator:
                     pos["entryCost"] = float(pos["entryCost"]) * remaining_ratio
             signal_idx = idx if execution_mode == "current_bar" else idx - 1
             candidate_signals = frame_signals if execution_mode == "current_bar" else list(execution_signal_by_code.values())
-            candidates = self._entry_candidates(candidate_signals, frames, signal_idx, signal_by_snapshot_code, positions, strategy_key)
+            candidates = self._entry_candidates(candidate_signals, frames, signal_idx, signal_by_snapshot_code, positions, strategy_key, config)
             for signal in candidates:
                 if len(positions) >= int(config["maxPositions"]):
                     break
@@ -334,42 +334,51 @@ class TradeSimulator:
         return None
 
     @staticmethod
-    def _entry_candidates(frame_signals: list[dict[str, Any]], frames: list[dict[str, Any]], idx: int, by_key: dict[str, dict[str, Any]], positions: dict[str, Any], strategy_key: str = "rank_trend_candidate") -> list[dict[str, Any]]:
+    def _entry_candidates(
+        frame_signals: list[dict[str, Any]],
+        frames: list[dict[str, Any]],
+        idx: int,
+        by_key: dict[str, dict[str, Any]],
+        positions: dict[str, Any],
+        strategy_key: str = "rank_trend_candidate",
+        trade_config: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
         result = []
         previous_frame = frames[idx - 1] if idx > 0 else None
+        min_jump_confidence = TradeSimulator._trade_min_jump_confidence(trade_config)
         for signal in frame_signals:
             if signal["code"] in positions:
                 continue
             if strategy_key == "ranktrend_early_big_move_v3_a_main_risk_filter":
-                if TradeSimulator._is_early_big_move_v3_a_main_risk_filter_entry_signal(signal):
+                if TradeSimulator._is_early_big_move_v3_a_main_risk_filter_entry_signal(signal, min_jump_confidence):
                     result.append(signal)
                 continue
             if strategy_key == "ranktrend_early_big_move_v3_b_long_filter":
-                if TradeSimulator._is_early_big_move_v3_b_long_filter_entry_signal(signal):
+                if TradeSimulator._is_early_big_move_v3_b_long_filter_entry_signal(signal, min_jump_confidence):
                     result.append(signal)
                 continue
             if strategy_key == "ranktrend_early_big_move_v3_no_lifecycle_gate":
-                if TradeSimulator._is_early_big_move_v3_no_lifecycle_gate_entry_signal(signal):
+                if TradeSimulator._is_early_big_move_v3_no_lifecycle_gate_entry_signal(signal, min_jump_confidence):
                     result.append(signal)
                 continue
             if strategy_key == "ranktrend_early_big_move_v3_context_probe":
-                if TradeSimulator._is_early_big_move_v3_context_probe_entry_signal(signal):
+                if TradeSimulator._is_early_big_move_v3_context_probe_entry_signal(signal, min_jump_confidence):
                     result.append(signal)
                 continue
             if strategy_key == "ranktrend_early_big_move_v3_lifecycle_fusion":
-                if TradeSimulator._is_early_big_move_v3_lifecycle_fusion_entry_signal(signal):
+                if TradeSimulator._is_early_big_move_v3_lifecycle_fusion_entry_signal(signal, min_jump_confidence):
                     result.append(signal)
                 continue
             if strategy_key == "ranktrend_early_big_move_v3":
-                if TradeSimulator._is_early_big_move_v3_entry_signal(signal):
+                if TradeSimulator._is_early_big_move_v3_entry_signal(signal, min_jump_confidence):
                     result.append(signal)
                 continue
             if strategy_key == "ranktrend_early_big_move_v2":
-                if TradeSimulator._is_early_big_move_v2_entry_signal(signal):
+                if TradeSimulator._is_early_big_move_v2_entry_signal(signal, min_jump_confidence):
                     result.append(signal)
                 continue
             if strategy_key == "ranktrend_early_big_move":
-                if TradeSimulator._is_early_big_move_entry_signal(signal):
+                if TradeSimulator._is_early_big_move_entry_signal(signal, min_jump_confidence):
                     result.append(signal)
                 continue
             if strategy_key == "ranktrend_jump":
@@ -382,8 +391,8 @@ class TradeSimulator:
                 continue
             if signal["regime"] == "retreat":
                 continue
-            final_signal = str((((signal.get("rankTrend") or {}).get("decision") or {}).get("final") or {}).get("signal") or "hold")
-            if final_signal != "buy":
+            final_signal = str((((signal.get("rankTrend") or {}).get("decision") or {}).get("final") or {}).get("signal") or "").strip()
+            if final_signal and final_signal != "buy":
                 continue
             if strategy_key == "leader_theme_confirmation":
                 if signal.get("themeRole") == "leader" and signal["candidateTier"] in {"A_MAIN", "B_IGNITION"}:
@@ -429,6 +438,14 @@ class TradeSimulator:
             return 0.0
 
     @staticmethod
+    def _trade_min_jump_confidence(trade_config: dict[str, Any] | None) -> float:
+        value = (trade_config or {}).get("minJumpConfidence", DEFAULT_TRADE_CONFIG["minJumpConfidence"])
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return float(DEFAULT_TRADE_CONFIG["minJumpConfidence"])
+
+    @staticmethod
     def _early_big_move_value(key: str, *containers: dict[str, Any]) -> float:
         for container in containers:
             if not isinstance(container, dict) or key not in container:
@@ -454,7 +471,7 @@ class TradeSimulator:
         return signal_momentum if isinstance(signal_momentum, dict) else {}
 
     @staticmethod
-    def _is_early_big_move_entry_signal(signal: dict[str, Any]) -> bool:
+    def _is_early_big_move_entry_signal(signal: dict[str, Any], min_jump_confidence: float) -> bool:
         rank_trend = signal.get("rankTrend") or {}
         jump = rank_trend.get("jump") or {}
         technical = rank_trend.get("technical") or {}
@@ -469,7 +486,7 @@ class TradeSimulator:
         }
         if jump.get("direction") != "buy":
             return False
-        if float(jump.get("confidence") or 0) < 90:
+        if float(jump.get("confidence") or 0) < min_jump_confidence:
             return False
         if TradeSimulator._early_big_move_value("short", signals, momentum, top_level) <= 0:
             return False
@@ -486,8 +503,8 @@ class TradeSimulator:
         return True
 
     @staticmethod
-    def _is_early_big_move_v2_entry_signal(signal: dict[str, Any]) -> bool:
-        if not TradeSimulator._is_early_big_move_entry_signal(signal):
+    def _is_early_big_move_v2_entry_signal(signal: dict[str, Any], min_jump_confidence: float) -> bool:
+        if not TradeSimulator._is_early_big_move_entry_signal(signal, min_jump_confidence):
             return False
         if signal.get("candidateTier") not in {"A_MAIN", "B_IGNITION"}:
             return False
@@ -498,8 +515,8 @@ class TradeSimulator:
         return change < 6
 
     @staticmethod
-    def _is_early_big_move_v3_no_lifecycle_gate_entry_signal(signal: dict[str, Any]) -> bool:
-        if not TradeSimulator._is_early_big_move_entry_signal(signal):
+    def _is_early_big_move_v3_no_lifecycle_gate_entry_signal(signal: dict[str, Any], min_jump_confidence: float) -> bool:
+        if not TradeSimulator._is_early_big_move_entry_signal(signal, min_jump_confidence):
             return False
         try:
             change = float(signal.get("change") or 0)
@@ -508,10 +525,10 @@ class TradeSimulator:
         return change < 6
 
     @staticmethod
-    def _is_early_big_move_v3_context_probe_entry_signal(signal: dict[str, Any]) -> bool:
-        if TradeSimulator._is_early_big_move_v3_entry_signal(signal):
+    def _is_early_big_move_v3_context_probe_entry_signal(signal: dict[str, Any], min_jump_confidence: float) -> bool:
+        if TradeSimulator._is_early_big_move_v3_entry_signal(signal, min_jump_confidence):
             return True
-        if not TradeSimulator._is_early_big_move_v3_no_lifecycle_gate_entry_signal(signal):
+        if not TradeSimulator._is_early_big_move_v3_no_lifecycle_gate_entry_signal(signal, min_jump_confidence):
             return False
         if signal.get("candidateTier") in {"A_MAIN", "B_IGNITION"}:
             return False
@@ -535,8 +552,8 @@ class TradeSimulator:
         return mid >= 18 and long_value >= 8 and zero_cross == "buy"
 
     @staticmethod
-    def _is_early_big_move_v3_entry_signal(signal: dict[str, Any]) -> bool:
-        if not TradeSimulator._is_early_big_move_v2_entry_signal(signal):
+    def _is_early_big_move_v3_entry_signal(signal: dict[str, Any], min_jump_confidence: float) -> bool:
+        if not TradeSimulator._is_early_big_move_v2_entry_signal(signal, min_jump_confidence):
             return False
         if signal.get("candidateTier") == "A_MAIN":
             return True
@@ -555,14 +572,14 @@ class TradeSimulator:
         return str(decision.get("action") or "")
 
     @staticmethod
-    def _is_early_big_move_v3_lifecycle_fusion_entry_signal(signal: dict[str, Any]) -> bool:
-        if not TradeSimulator._is_early_big_move_v3_entry_signal(signal):
+    def _is_early_big_move_v3_lifecycle_fusion_entry_signal(signal: dict[str, Any], min_jump_confidence: float) -> bool:
+        if not TradeSimulator._is_early_big_move_v3_entry_signal(signal, min_jump_confidence):
             return False
         return TradeSimulator._lifecycle_decision_action(signal) != "veto"
 
     @staticmethod
-    def _is_early_big_move_v3_a_main_risk_filter_entry_signal(signal: dict[str, Any]) -> bool:
-        if not TradeSimulator._is_early_big_move_v3_entry_signal(signal):
+    def _is_early_big_move_v3_a_main_risk_filter_entry_signal(signal: dict[str, Any], min_jump_confidence: float) -> bool:
+        if not TradeSimulator._is_early_big_move_v3_entry_signal(signal, min_jump_confidence):
             return False
         if signal.get("candidateTier") != "A_MAIN":
             return True
@@ -582,8 +599,8 @@ class TradeSimulator:
         return True
 
     @staticmethod
-    def _is_early_big_move_v3_b_long_filter_entry_signal(signal: dict[str, Any]) -> bool:
-        if not TradeSimulator._is_early_big_move_v3_entry_signal(signal):
+    def _is_early_big_move_v3_b_long_filter_entry_signal(signal: dict[str, Any], min_jump_confidence: float) -> bool:
+        if not TradeSimulator._is_early_big_move_v3_entry_signal(signal, min_jump_confidence):
             return False
         if signal.get("candidateTier") != "B_IGNITION":
             return True

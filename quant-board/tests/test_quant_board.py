@@ -873,6 +873,7 @@ def test_import_backtest_optimize_and_golden(tmp_path: Path) -> None:
             "volumeParticipationRate": 0.02,
             "orderBookParticipationRate": 0.25,
             "intrabarAmbiguity": "take_first",
+            "minJumpConfidence": 78.5,
         },
     )
     assert custom_matching_backtest.status_code == 200, custom_matching_backtest.text
@@ -887,6 +888,7 @@ def test_import_backtest_optimize_and_golden(tmp_path: Path) -> None:
     assert custom_config["volumeParticipationRate"] == 0.02
     assert custom_config["orderBookParticipationRate"] == 0.25
     assert custom_config["intrabarAmbiguity"] == "take_first"
+    assert custom_config["minJumpConfidence"] == 78.5
 
     fetched = client.get(f"/api/backtests/{run['runId']}")
     assert fetched.status_code == 200
@@ -1022,6 +1024,7 @@ def test_import_backtest_optimize_and_golden(tmp_path: Path) -> None:
                 "takeProfitPct": [0.12],
                 "stopLossPct": [0.06],
                 "maxPositions": [5],
+                "minJumpConfidence": [77.5],
             },
         },
     )
@@ -1038,6 +1041,7 @@ def test_import_backtest_optimize_and_golden(tmp_path: Path) -> None:
     assert opt_body["overfitRisk"]["level"] in {"low", "medium", "high"}
     assert opt_body["results"][0]["metrics"]["entryStrategy"] == "a_main_only"
     assert opt_body["results"][0]["parameters"]["momentumPeriods"]
+    assert opt_body["results"][0]["parameters"]["minJumpConfidence"] == 77.5
     assert opt_body["results"][0]["configHash"]
     assert opt_body["results"][0]["train"]["runId"]
     assert opt_body["results"][0]["validation"]["runId"]
@@ -2774,6 +2778,39 @@ def test_trade_simulator_realistic_matching_constraints() -> None:
     assert missing_next_bar_quote["eventCount"] == 0
     assert missing_next_bar_quote["matchingDiagnostics"]["nextBarEntries"] == 0
     assert missing_next_bar_quote["matchingDiagnostics"]["missingPriceRows"] >= 1
+
+
+def test_trade_simulator_allows_a_main_entries_without_explicit_final_signal() -> None:
+    signal = {
+        "snapshotId": "s1",
+        "timestamp": 1,
+        "tradingDate": "2026-04-01",
+        "slotTime": "10:00",
+        "code": "600001",
+        "name": "样本A",
+        "rank": 1,
+        "price": 10,
+        "ask1Price": 10.05,
+        "ask1Volume": 500,
+        "bid1Price": 9.95,
+        "bid1Volume": 500,
+        "volume": 1000,
+        "candidateTier": "A_MAIN",
+        "stage": "mainline",
+        "regime": "strong",
+        "confidence": 80,
+        "rankTrend": {"strategy": {"momentum": {"acceleration": 1}}, "technical": {}, "risk": {}, "decision": {}},
+    }
+
+    result = TradeSimulator().run(
+        [{"snapshotId": "s1", "timestamp": 1, "tradingDate": "2026-04-01", "slotTime": "10:00"}],
+        [signal],
+        {"initialCapital": 100000, "positionSize": 1, "maxPositions": 1, "slippageRate": 0},
+    )
+
+    assert result["matchingDiagnostics"]["buyAttempts"] == 1
+    assert result["eventCount"] == 1
+    assert result["tradeEvents"][0]["action"] == "buy"
 
 
 def test_cli_run_ranktrend_exposes_ui_backtest_parameters() -> None:
