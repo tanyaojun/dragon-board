@@ -1,12 +1,20 @@
 from __future__ import annotations
 
 import math
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
 from sqlalchemy.orm import Session
 
 from backend.analysis.ranktrend import RankTrendConfig, RankTrendPythonEngine
+from backend.analysis.ranktrend_live_gate_shadow_audit import (
+    DEFAULT_SHADOW_VARIANTS,
+    build_audit_meta,
+    evaluate_shadow_variants,
+    rank_shadow_candidate,
+    summarize_first_failure,
+)
 from backend.analysis.ranktrend_jump_research import build_jump_research_request, summarize_jump_research
 from backend.analysis.theme_trend import ThemeTrendConfig, ThemeTrendPythonEngine
 from backend.core.backtest import BacktestEngine, TradeSimulator, normalize_strategy_name
@@ -2282,6 +2290,321 @@ class OptimizationService:
             "result": result,
             **result,
         }
+
+
+class RankTrendLiveGateAuditService:
+    def __init__(self, session: Session | None = None):
+        self.repo = create_repository(session)
+
+    def run(self, payload: dict[str, Any]) -> dict[str, Any]:
+        dataset_id = str(payload.get("dataset_id") or payload.get("datasetId") or "")
+        if not dataset_id:
+            raise ValueError("dataset_id is required")
+        snapshot_type = str(payload.get("snapshot_type") or payload.get("snapshotType") or "half_hour")
+        focus_codes = {
+            str(code).strip()
+            for code in (payload.get("focus_codes") or payload.get("focusCodes") or [])
+            if str(code).strip()
+        }
+        start_date, end_date = self._resolve_date_window(
+            start_date=payload.get("start_date") or payload.get("startDate"),
+            end_date=payload.get("end_date") or payload.get("endDate"),
+        )
+        max_snapshots = payload.get("max_snapshots") or payload.get("maxSnapshots")
+        records, frames, stock_rows, _sector_rows = self.repo.load_dataset_bundle_slice(
+            dataset_id,
+            snapshot_types=[snapshot_type],
+            start_date=start_date,
+            end_date=end_date,
+            max_snapshots=max_snapshots,
+        )
+        merged_frames = self._merge_frames(frames, stock_rows)
+        if not merged_frames:
+            raise ValueError(f"dataset has no frames for {snapshot_type}: {dataset_id}")
+
+        baseline_signal_maps = self._replay_frame_signals_by_snapshot(merged_frames)
+        variant_signal_maps_by_snapshot = self._replay_variant_signal_maps_by_snapshot(merged_frames)
+        focus_findings: list[dict[str, Any]] = []
+        ranking_candidates: list[dict[str, Any]] = []
+
+        for frame_index, frame in enumerate(merged_frames):
+            snapshot_id = str(frame.get("snapshotId") or "")
+            baseline_signal_map = baseline_signal_maps.get(snapshot_id) or {}
+            variant_signal_maps = {
+                variant_key: signal_maps.get(snapshot_id) or {}
+                for variant_key, signal_maps in variant_signal_maps_by_snapshot.items()
+            }
+            frame_codes = set(baseline_signal_map)
+            for signal_map in variant_signal_maps.values():
+                frame_codes.update(signal_map)
+            for code in sorted(frame_codes):
+                baseline_signal = baseline_signal_map.get(code)
+                display_signal = baseline_signal or self._select_display_signal(
+                    code=code,
+                    variant_signal_maps=variant_signal_maps,
+                )
+                variant_results = self._resolve_variant_results(
+                    baseline_signal=baseline_signal,
+                    code=code,
+                    variant_signal_maps=variant_signal_maps,
+                )
+                signal = display_signal
+                if not focus_codes or code in focus_codes:
+                    baseline = variant_results.get("baseline") or {}
+                    finding = {
+                        "snapshotId": snapshot_id,
+                        "tradingDate": frame.get("tradingDate"),
+                        "slotTime": frame.get("slotTime"),
+                        "code": code,
+                        "name": signal.get("name"),
+                        "baselineTriggered": baseline.get("triggered"),
+                        "baselineJumpTriggered": ((baseline.get("jump") or {}).get("triggered")),
+                        "baselineFusionTriggered": ((baseline.get("fusion") or {}).get("triggered")),
+                        "firstJumpFailure": summarize_first_failure((baseline.get("jump") or {}).get("checks") or []),
+                        "firstFusionFailure": summarize_first_failure((baseline.get("fusion") or {}).get("checks") or []),
+                        "variantResults": variant_results,
+                    }
+                    focus_findings.append(finding)
+                ranking_candidates.append(
+                    {
+                        **rank_shadow_candidate(signal),
+                        "snapshotId": snapshot_id,
+                        "tradingDate": frame.get("tradingDate"),
+                        "slotTime": frame.get("slotTime"),
+                        "frameIndex": frame_index,
+                    }
+                )
+
+        focus_findings.sort(key=lambda item: (str(item.get("snapshotId") or ""), str(item.get("code") or "")))
+        ranking_suggestions = sorted(
+            ranking_candidates,
+            key=lambda item: (-int(item.get("score") or 0), str(item.get("code") or "")),
+        )
+        daily_summaries = self._build_daily_summaries(focus_findings)
+        acc_delta_present_ratio = self._compute_acc_delta_present_ratio(stock_rows)
+
+        return {
+            "meta": {
+                "datasetId": dataset_id,
+                "snapshotType": snapshot_type,
+                "recordCount": len(records),
+                "frameCount": len(merged_frames),
+                **build_audit_meta(acc_delta_present_ratio=acc_delta_present_ratio),
+            },
+            "focusFindings": focus_findings,
+            "dailySummaries": daily_summaries,
+            "rankingSuggestions": ranking_suggestions,
+        }
+
+    def _resolve_date_window(
+        self,
+        *,
+        start_date: str | None,
+        end_date: str | None,
+    ) -> tuple[str | None, str | None]:
+        if start_date or end_date:
+            return start_date, end_date
+        today = self._today()
+        return ((today - timedelta(days=6)).isoformat(), today.isoformat())
+
+    def _today(self) -> date:
+        return date.today()
+
+    @staticmethod
+    def _merge_frames(
+        frames: list[dict[str, Any]],
+        stock_rows: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        stock_rows_by_snapshot: dict[str, list[dict[str, Any]]] = {}
+        for row in stock_rows:
+            snapshot_id = str(row.get("snapshotId") or "")
+            stock_rows_by_snapshot.setdefault(snapshot_id, []).append(row)
+        merged: list[dict[str, Any]] = []
+        for frame in sorted(frames, key=lambda item: (int(item.get("timestamp") or 0), str(item.get("snapshotId") or ""))):
+            snapshot_id = str(frame.get("snapshotId") or "")
+            merged.append({**frame, "stocks": stock_rows_by_snapshot.get(snapshot_id, [])})
+        return merged
+
+    def _replay_frame_signals_by_snapshot(
+        self,
+        merged_frames: list[dict[str, Any]],
+        *,
+        jump_delta_pct: float = 15.0,
+    ) -> dict[str, dict[str, dict[str, Any]]]:
+        output: dict[str, dict[str, dict[str, Any]]] = {}
+        for index in range(len(merged_frames)):
+            frame_slice = merged_frames[: index + 1]
+            snapshot_id = str(merged_frames[index].get("snapshotId") or "")
+            output[snapshot_id] = self._replay_frame_signals(frame_slice, jump_delta_pct=jump_delta_pct)
+        return output
+
+    def _replay_frame_signals(
+        self,
+        frames: list[dict[str, Any]],
+        *,
+        jump_delta_pct: float = 15.0,
+    ) -> dict[str, dict[str, Any]]:
+        config = RankTrendConfig.from_patch({"jumpDeltaPct": jump_delta_pct})
+        signals = RankTrendPythonEngine(config).replay(frames, meta={"sampleQuality": "ok", "warnings": []})
+        current_snapshot_id = str(frames[-1].get("snapshotId") or "")
+        output: dict[str, dict[str, Any]] = {}
+        for signal in signals:
+            if str(signal.get("snapshotId") or "") != current_snapshot_id:
+                continue
+            code = str(signal.get("code") or "")
+            if code:
+                output[code] = signal
+        return output
+
+    def _resolve_variant_results(
+        self,
+        *,
+        baseline_signal: dict[str, Any] | None,
+        code: str,
+        variant_signal_maps: dict[str, dict[str, dict[str, Any]]],
+    ) -> dict[str, dict[str, Any]]:
+        if baseline_signal is None:
+            baseline_results = self._build_missing_baseline_results(code=code)
+        else:
+            baseline_results = evaluate_shadow_variants(baseline_signal, variants=DEFAULT_SHADOW_VARIANTS)
+        resolved: dict[str, dict[str, Any]] = {}
+        for variant in DEFAULT_SHADOW_VARIANTS:
+            current = dict((baseline_results.get(variant.key) or {}))
+            if not variant.requires_separate_replay:
+                resolved[variant.key] = current
+                continue
+            signal_map = variant_signal_maps.get(variant.key) or {}
+            replay_signal = signal_map.get(code)
+            if replay_signal is None:
+                resolved[variant.key] = {
+                    **current,
+                    "triggered": False,
+                    "liveGateTriggered": False,
+                    "missingSignal": True,
+                    "failureReason": "signal_missing_in_replay",
+                    "requiresReplayConfirmation": False,
+                    "evaluationMode": "replay_missing",
+                    "jump": {
+                        "triggered": False,
+                        "missing": True,
+                        "checks": [],
+                    },
+                    "fusion": {
+                        "triggered": False,
+                        "missing": True,
+                        "checks": [],
+                    },
+                }
+                continue
+            replay_result = evaluate_shadow_variants(replay_signal, variants=(variant,)).get(variant.key) or {}
+            replay_result["triggered"] = replay_result.get("liveGateTriggered")
+            replay_result["requiresReplayConfirmation"] = False
+            replay_result["evaluationMode"] = "separate_replay"
+            resolved[variant.key] = replay_result
+        return resolved
+
+    @staticmethod
+    def _build_missing_baseline_results(code: str) -> dict[str, dict[str, Any]]:
+        baseline_result = {
+            "variant": "baseline",
+            "requiresSeparateReplay": False,
+            "triggered": False,
+            "liveGateTriggered": False,
+            "missingSignal": True,
+            "failureReason": "signal_missing_in_baseline_replay",
+            "requiresReplayConfirmation": False,
+            "evaluationMode": "baseline_missing",
+            "jump": {
+                "triggered": False,
+                "missing": True,
+                "signal": {"code": code},
+                "checks": [
+                    {
+                        "name": "signal_missing_in_baseline_replay",
+                        "passed": False,
+                    }
+                ],
+            },
+            "fusion": {
+                "triggered": False,
+                "missing": True,
+                "checks": [
+                    {
+                        "name": "signal_missing_in_baseline_replay",
+                        "passed": False,
+                    }
+                ],
+            },
+        }
+        return {variant.key: dict(baseline_result, variant=variant.key) for variant in DEFAULT_SHADOW_VARIANTS}
+
+    @staticmethod
+    def _select_display_signal(
+        *,
+        code: str,
+        variant_signal_maps: dict[str, dict[str, dict[str, Any]]],
+    ) -> dict[str, Any]:
+        for variant in DEFAULT_SHADOW_VARIANTS:
+            signal_map = variant_signal_maps.get(variant.key) or {}
+            signal = signal_map.get(code)
+            if isinstance(signal, dict) and signal:
+                return signal
+        return {}
+
+    def _replay_variant_signal_maps_by_snapshot(
+        self,
+        merged_frames: list[dict[str, Any]],
+    ) -> dict[str, dict[str, dict[str, dict[str, Any]]]]:
+        replay_maps_by_delta: dict[float, dict[str, dict[str, dict[str, Any]]]] = {}
+        for variant in DEFAULT_SHADOW_VARIANTS:
+            if not variant.requires_separate_replay:
+                continue
+            if variant.jump_delta_pct not in replay_maps_by_delta:
+                replay_maps_by_delta[variant.jump_delta_pct] = self._replay_frame_signals_by_snapshot(
+                    merged_frames,
+                    jump_delta_pct=variant.jump_delta_pct,
+                )
+        maps: dict[str, dict[str, dict[str, dict[str, Any]]]] = {}
+        for variant in DEFAULT_SHADOW_VARIANTS:
+            if not variant.requires_separate_replay:
+                continue
+            maps[variant.key] = replay_maps_by_delta[variant.jump_delta_pct]
+        return maps
+
+    @staticmethod
+    def _build_daily_summaries(focus_findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        by_date: dict[str, dict[str, Any]] = {}
+        for item in focus_findings:
+            trading_date = str(item.get("tradingDate") or "")
+            summary = by_date.setdefault(
+                trading_date,
+                {
+                    "tradingDate": trading_date,
+                    "focusFrameCount": 0,
+                    "baselineTriggeredCount": 0,
+                    "variantTriggeredCounts": {},
+                },
+            )
+            summary["focusFrameCount"] += 1
+            if item.get("baselineTriggered"):
+                summary["baselineTriggeredCount"] += 1
+            for variant_key, variant_result in (item.get("variantResults") or {}).items():
+                if variant_result.get("triggered"):
+                    counts = summary["variantTriggeredCounts"]
+                    counts[variant_key] = int(counts.get(variant_key) or 0) + 1
+        return [by_date[key] for key in sorted(by_date)]
+
+    @staticmethod
+    def _compute_acc_delta_present_ratio(stock_rows: list[dict[str, Any]]) -> float:
+        total = 0
+        present = 0
+        for row in stock_rows:
+            total += 1
+            if row.get("accDelta") not in (None, ""):
+                present += 1
+        if total <= 0:
+            return 0.0
+        return round(present / total, 4)
 
 
 class GoldenService:
