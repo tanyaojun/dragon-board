@@ -53,6 +53,8 @@ __screenshots__/
 
 test-results/
 playwright-report/
+.playwright-cli/
+output/
 
 # QuantBoard local runtime state
 quant-board/.venv/
