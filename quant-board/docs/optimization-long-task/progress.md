@@ -1567,3 +1567,52 @@ Notes:
 - 32 bars 是三者里最接近 30 bars 的口径，但收益少 `5.67pp`，仍未超过主线。
 - 35 bars 和 28 bars 均跌破 `60%` 胜率线，不适合作为当前目标口径。
 - 当前参数证据支持：不要继续盲扫固定 bars，30 bars 仍是最稳主线；下一步应回到利润保护和亏损路径识别。
+
+### Phase 38 RankTrend execution/golden candidate tier regression
+
+- **Status:** complete
+- Actions taken:
+  - 按用户要求创建隔离 worktree：`D:\dragon-board-worktrees\ranktrend-head-rerun-20260609`。
+  - 在 `5fa5ec6` 干净 HEAD 复跑 30 bars，发现同 configHash 仅 `+4.71% / 53.12%`，不是当前脏工作区导致。
+  - 回退到 `17d9fef` 与 `964f214` 均复现 `+31.00% / 65.79%`；切到 `c428302` 后立刻掉到 `+4.71% / 53.12%`，锁定回归提交。
+  - 根因：`c428302` 为 golden 对齐把 Python replay 的执行候选层改成 `compose_analysis_candidate_tier(... market_regime ...)`，并移除 hotlistSentiment 注入，导致回测不再使用原 fusion 主线的热榜情绪融合候选层。
+  - TDD 修复：新增 execution/golden 双模式；Golden 默认仍用 analysis tier，BacktestEngine 显式传 `candidateTierMode=execution`，执行层恢复 `compose_strategy(... hotlistSentiment ...)`。
+
+Validation:
+
+| Check | Result |
+| --- | --- |
+| `tests/test_ranktrend_golden_alignment.py` | `10 passed` |
+| `tests/test_trade_simulator_round_trips.py -k "lifecycle_fusion or early_big_move_v3"` | `15 passed` |
+| `tests/test_quant_board.py -k "cli_run_ranktrend_exposes_ui_backtest_parameters or trade_simulator_allows_a_main_entries_without_explicit_final_signal or compose_strategy"` | `4 passed` |
+| 当前工作区默认 `minJumpConfidence=77.5` 复跑 | `bt_1ecffe03df1e4162`，`+29.93% / 61.54%` |
+| 旧主线等价 `minJumpConfidence=90` 复跑 | `bt_7497b298467c4419`，`+31.00% / 65.79%` |
+
+Notes:
+
+- `minJumpConfidence=77.5` 是当前工作区未提交实验改动，会多放低置信 jump 候选，收益略低于旧主线；这不是本次 hotlist/golden 回归修复本身。
+- 后续继续优化时必须把 `candidateTierMode=analysis` 和 `candidateTierMode=execution` 分开，否则 golden 对齐会再次误伤交易路径。
+
+### Phase 39 Set V5 long-test baseline
+
+- **Status:** complete
+- Actions taken:
+  - 将 `run-longtest-baselines` 默认 baseline set 从早期 V1 调整为 `early_big_move_v5`。
+  - V5 固定为 `ranktrend_early_big_move_v3_lifecycle_fusion / half_hour / current_bar / maxHoldingBars=30 / volumeParticipationRate=0.1 / stopLossPct=0.05 / takeProfitPct=9.99`。
+  - V5 只登记长测基线，不改 RankTrend 算法本体，不让生命周期 B 独立制造买入。
+  - 保留 `early_big_move_v1`、`early_big_move_v2`、`early_big_move_v3`、`legacy_lifecycle_v1` 为显式对照 baseline set。
+
+Evidence:
+
+| Run ID | Window | totalReturn | realizedReturn | winRate | trades | maxDrawdown | Notes |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| `bt_682d3abc164d4177` | `2026-04-01~2026-05-31` | `+31.00%` | `+27.74%` | `65.79%` | 38 | `-3.19%` | 同 `volumeParticipationRate=0.1` 复现主证据 |
+| `bt_01d35aac6fcf4d6c` | `2026-04-01~2026-05-31` | `+31.00%` | `+27.74%` | `65.79%` | 38 | `-3.19%` | 主工作区再次复跑验证 |
+| `bt_c78fb2ad8df84946` | `2026-04-01~2026-05-31` | `+31.00%` | `+27.74%` | `65.79%` | 38 | `-3.19%` | V5 checkpoint `checkpoint_2026-06-09_early_big_move_v5_vpr01` |
+
+Notes:
+
+- `volumeParticipationRate=0.05` 的对照 run 为 `bt_7eaaa1f656764be8`，结果 `+28.93% / 68.42%`，是不同成交容量口径，不再和 V5 默认混用。
+- V5 的命名表达“长测基线版本”，不是新增独立策略名；执行策略仍是 `ranktrend_early_big_move_v3_lifecycle_fusion`。
+- 趋势页读取 `quant-board/data/reports/long_test_runs.jsonl`，不是读取 CLI 默认配置；因此需要写入 V5 checkpoint 后页面才会出现 V5。
+- 已补 `/api/backtests/checkpoints` 标签映射，V5 checkpoint 在后端重启后显示为 `V5 E1` / `V5 E2`，不再压缩成旧的 `E1` / `E2`。

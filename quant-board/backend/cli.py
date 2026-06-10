@@ -57,6 +57,7 @@ DEFAULT_MOMENTUM_PERIODS = [3, 5, 8, 13, 21]
 DEFAULT_HORIZONS = [1, 3, 5, 10]
 DEFAULT_LIVE_GATE_AUDIT_FOCUS_CODES = ["600186", "002156"]
 DEFAULT_LIVE_GATE_AUDIT_CONFIDENCE_THRESHOLDS = [70, 75, 80, 85, 90, 95]
+DEFAULT_LONGTEST_BASELINE_SET = "early_big_move_v5"
 
 
 def print_json(payload: Any) -> None:
@@ -709,17 +710,44 @@ EARLY_BIG_MOVE_V3_BASELINES = (
     },
 )
 
+EARLY_BIG_MOVE_V5_BASELINES = (
+    {
+        "label": "V5_E1_half_hour_fusion_signal_forward30",
+        "snapshot_type": "half_hour",
+        "execution_mode": "current_bar",
+        "max_holding_bars": 30,
+        "purpose": "V5 fusion candidate recall without trade simulation",
+        "strategy_name": "ranktrend_early_big_move_v3_lifecycle_fusion",
+        "enable_trade_simulation": False,
+        "take_profit_pct": 9.99,
+        "stop_loss_pct": 0.05,
+        "volume_participation_rate": 0.1,
+    },
+    {
+        "label": "V5_E2_half_hour_fusion_current_bar",
+        "snapshot_type": "half_hour",
+        "execution_mode": "current_bar",
+        "max_holding_bars": 30,
+        "purpose": "V5 lifecycle-fusion current-frame execution baseline",
+        "strategy_name": "ranktrend_early_big_move_v3_lifecycle_fusion",
+        "take_profit_pct": 9.99,
+        "stop_loss_pct": 0.05,
+        "volume_participation_rate": 0.1,
+    },
+)
+
 LONGTEST_BASELINE_SETS = {
     "early_big_move_v1": EARLY_BIG_MOVE_BASELINES,
     "early_big_move_v2": EARLY_BIG_MOVE_V2_BASELINES,
     "early_big_move_v3": EARLY_BIG_MOVE_V3_BASELINES,
+    "early_big_move_v5": EARLY_BIG_MOVE_V5_BASELINES,
     "legacy_lifecycle_v1": LEGACY_LIFECYCLE_BASELINES,
 }
 
 
 def build_longtest_baseline_payloads(args: argparse.Namespace) -> list[dict[str, Any]]:
     payloads: list[dict[str, Any]] = []
-    baseline_set = str(getattr(args, "baseline_set", "early_big_move_v1"))
+    baseline_set = str(getattr(args, "baseline_set", DEFAULT_LONGTEST_BASELINE_SET))
     baselines = LONGTEST_BASELINE_SETS[baseline_set]
     for baseline in baselines:
         ranktrend_args = argparse.Namespace(
@@ -752,8 +780,8 @@ def build_longtest_baseline_payloads(args: argparse.Namespace) -> list[dict[str,
             no_volume_limit=False,
             no_order_book_queue=False,
             no_partial_fills=False,
-            volume_participation_rate=args.volume_participation_rate,
-            order_book_participation_rate=args.order_book_participation_rate,
+            volume_participation_rate=baseline.get("volume_participation_rate", args.volume_participation_rate),
+            order_book_participation_rate=baseline.get("order_book_participation_rate", args.order_book_participation_rate),
             no_intrabar_stops=False,
             intrabar_ambiguity=args.intrabar_ambiguity,
             use_theme_factor_for_execution=False,
@@ -799,6 +827,7 @@ def summarize_longtest_baseline(spec: dict[str, Any], run: dict[str, Any]) -> di
         "executionMode": trade_config.get("executionMode"),
         "maxHoldingBars": payload.get("maxHoldingBars"),
         "targetHoldingDays": payload.get("targetHoldingDays"),
+        "volumeParticipationRate": trade_config.get("volumeParticipationRate"),
         "totalReturn": run.get("totalReturn"),
         "realizedReturn": run.get("realizedReturn"),
         "maxDrawdown": run.get("maxDrawdown"),
@@ -1362,7 +1391,7 @@ def build_parser() -> argparse.ArgumentParser:
     longtest_cmd.add_argument("--dataset-id", default="dragonboard_live")
     longtest_cmd.add_argument("--start-date", default=None)
     longtest_cmd.add_argument("--end-date", default=None)
-    longtest_cmd.add_argument("--baseline-set", choices=sorted(LONGTEST_BASELINE_SETS), default="early_big_move_v1")
+    longtest_cmd.add_argument("--baseline-set", choices=sorted(LONGTEST_BASELINE_SETS), default=DEFAULT_LONGTEST_BASELINE_SET)
     longtest_cmd.add_argument("--strategy-name", default="rank_trend_candidate")
     longtest_cmd.add_argument("--seed", type=int, default=20260430)
     longtest_cmd.add_argument("--initial-cash", type=float, default=1000000)

@@ -2960,7 +2960,7 @@ def test_cli_longtest_baselines_use_fixed_research_contract() -> None:
     assert all(item["payload"]["excludeAllZeroPriceFrames"] is False for item in specs)
 
 
-def test_cli_longtest_baselines_default_to_early_big_move_contract() -> None:
+def test_cli_longtest_baselines_default_to_v5_lifecycle_fusion_contract() -> None:
     parser = build_parser()
     args = parser.parse_args(
         [
@@ -2976,28 +2976,51 @@ def test_cli_longtest_baselines_default_to_early_big_move_contract() -> None:
     specs = build_longtest_baseline_payloads(args)
 
     assert [item["label"] for item in specs] == [
-        "E1_half_hour_signal_forward40",
-        "E2_half_hour_ranked_current_bar",
-        "E3_half_hour_ranked_strict_fill",
+        "V5_E1_half_hour_fusion_signal_forward30",
+        "V5_E2_half_hour_fusion_current_bar",
     ]
-    assert all(item["payload"]["strategy_name"] == "ranktrend_early_big_move" for item in specs)
+    assert all(item["payload"]["strategy_name"] == "ranktrend_early_big_move_v3_lifecycle_fusion" for item in specs)
     assert [item["payload"]["snapshot_type"] for item in specs] == [
-        "half_hour",
         "half_hour",
         "half_hour",
     ]
     assert [item["payload"]["tradeConfig"]["executionMode"] for item in specs] == [
         "current_bar",
         "current_bar",
-        "next_bar",
     ]
     assert specs[0]["payload"]["enable_trade_simulation"] is False
-    strict_trade_config = specs[2]["payload"]["tradeConfig"]
-    assert strict_trade_config["fillFallbackMode"] == "strict_fill"
-    assert strict_trade_config["useOrderBookPrice"] is True
-    assert strict_trade_config["enforceLimitStatus"] is True
-    assert strict_trade_config["enforceVolumeLimit"] is True
-    assert strict_trade_config["enforceOrderBookQueue"] is True
+    assert [item["payload"]["maxHoldingBars"] for item in specs] == [30, 30]
+    assert specs[1]["payload"]["stopLossPct"] == 0.05
+    assert specs[1]["payload"]["takeProfitPct"] == 9.99
+    assert specs[1]["payload"]["tradeConfig"]["volumeParticipationRate"] == 0.1
+    assert specs[1]["payload"]["tradeConfig"]["useIntrabarStops"] is True
+
+
+def test_cli_longtest_baselines_can_build_early_big_move_v1_contract() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "run-longtest-baselines",
+            "--dataset-id",
+            "dragonboard_live",
+            "--baseline-set",
+            "early_big_move_v1",
+            "--checkpoint-id",
+            "checkpoint_early_big_move_dry",
+            "--dry-run",
+        ]
+    )
+
+    specs = build_longtest_baseline_payloads(args)
+
+    assert [item["label"] for item in specs] == [
+        "E1_half_hour_signal_forward40",
+        "E2_half_hour_ranked_current_bar",
+        "E3_half_hour_ranked_strict_fill",
+    ]
+    assert all(item["payload"]["strategy_name"] == "ranktrend_early_big_move" for item in specs)
+    assert specs[0]["payload"]["enable_trade_simulation"] is False
+    assert specs[2]["payload"]["tradeConfig"]["fillFallbackMode"] == "strict_fill"
 
 
 def test_cli_longtest_baselines_can_explicitly_dry_run_legacy_lifecycle_contract() -> None:
@@ -3179,7 +3202,7 @@ def test_longtest_baseline_summary_extracts_metrics_and_quality() -> None:
             "random_seed": 20260430,
             "maxHoldingBars": 40,
             "targetHoldingDays": 5,
-            "tradeConfig": {"executionMode": "next_bar"},
+            "tradeConfig": {"executionMode": "next_bar", "volumeParticipationRate": 0.1},
         },
     }
     run = {
@@ -3252,6 +3275,7 @@ def test_longtest_baseline_summary_extracts_metrics_and_quality() -> None:
     assert summary["runId"] == "bt_test"
     assert summary["executionMode"] == "next_bar"
     assert summary["maxHoldingBars"] == 40
+    assert summary["volumeParticipationRate"] == 0.1
     assert summary["totalReturn"] == -0.01
     assert summary["researchGrade"] == "degraded"
     assert summary["missingMoneyFlowSourceCount"] == 12
@@ -4522,3 +4546,53 @@ def test_get_checkpoints_maps_early_big_move_baselines(monkeypatch: pytest.Monke
     assert item["h1DirectionAccuracy"] == pytest.approx(0.3756)
     assert item["h1Layer2Status"] == "green"
     assert item["h1Layer2Bias"] == pytest.approx(0.0361)
+
+
+def test_get_checkpoints_preserves_v5_baseline_labels(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    reports_dir = tmp_path / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(get_settings(), "reports_dir", reports_dir)
+
+    record = {
+        "checkpointId": "checkpoint_2026-06-09_early_big_move_v5",
+        "createdAt": "2026-06-09T15:30:00+00:00",
+        "baselineSet": "early_big_move_v5",
+        "baselines": [
+            {
+                "label": "V5_E1_half_hour_fusion_signal_forward30",
+                "layer1SignalEfficacy": {
+                    "tierRatio": 0.0481,
+                    "aPlusBTierCount": 3427,
+                    "totalSignals": 71266,
+                    "layer1Status": "red",
+                    "directionAccuracy": 0.3756,
+                },
+            },
+            {
+                "label": "V5_E2_half_hour_fusion_current_bar",
+                "totalReturn": 0.31,
+                "realizedReturn": 0.2774,
+                "sharpe": 3.6986,
+                "tradeCount": 38,
+                "maxDrawdown": -0.0319,
+            },
+        ],
+    }
+    (reports_dir / "long_test_runs.jsonl").write_text(
+        json.dumps(record, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+    client = TestClient(app)
+    response = client.get("/api/backtests/checkpoints?limit=5")
+    assert response.status_code == 200
+    data = response.json()
+
+    assert len(data) == 1
+    item = data[0]
+    assert item["checkpointId"] == "checkpoint_2026-06-09_early_big_move_v5"
+    assert item["e1Label"] == "V5 E1"
+    assert item["h1Label"] == "V5 E2"
+    assert item["h2Label"] is None
+    assert item["h1TotalReturn"] == pytest.approx(0.31)
+    assert item["h1Trades"] == 38

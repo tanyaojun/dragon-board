@@ -1481,7 +1481,7 @@ win_rate: 0.52
 
 ### `run-longtest-baselines`
 
-一键复跑长测固定基线集合。该命令只编排现有 RankTrend 回测服务，不改变默认参数、不启动优化、不写回任何候选参数。
+一键复跑长测固定基线集合。该命令只编排现有 RankTrend 回测服务，不启动优化、不写回任何候选参数。
 
 ```powershell
 .\.venv\Scripts\python.exe -m backend.cli run-longtest-baselines `
@@ -1500,15 +1500,16 @@ win_rate: 0.52
   --exclude-all-zero-price-frames
 ```
 
-固定执行三条基线：
+默认 baseline set 为 `early_big_move_v5`，固定执行两条基线：
 
-| Label | snapshot_type | execution_mode | max_holding_bars | 用途 |
-| --- | --- | --- | ---: | --- |
-| `H1_half_hour_current_bar` | `half_hour` | `current_bar` | `40` | 页面兼容/乐观上限 |
-| `H2_half_hour_next_bar` | `half_hour` | `next_bar` | `40` | 正式保守验收主线 |
-| `Q1_quarter_hour_next_bar` | `quarter_hour` | `next_bar` | `80` | 研究压力测试 |
+| Label | strategy_name | snapshot_type | execution_mode | max_holding_bars | volume_participation_rate | 用途 |
+| --- | --- | --- | --- | ---: | ---: | --- |
+| `V5_E1_half_hour_fusion_signal_forward30` | `ranktrend_early_big_move_v3_lifecycle_fusion` | `half_hour` | `current_bar` | `30` | `0.1` | V5 fusion 候选召回，不执行交易模拟 |
+| `V5_E2_half_hour_fusion_current_bar` | `ranktrend_early_big_move_v3_lifecycle_fusion` | `half_hour` | `current_bar` | `30` | `0.1` | V5 主长测基线 |
 
-默认把 checkpoint 摘要以 JSONL 追加到 `data/reports/long_test_runs.jsonl`。每行保留 `checkpointId`、`runId`、`datasetId`、`snapshotType`、`strategyName`、`strategyVersion`、`configHash`、`randomSeed`、核心收益/回撤/交易指标、质量等级、资金流缺失统计，以及显式价格过滤统计。价格统计包括全量非正价格过滤 `priceFilter`、跨市场零行情过滤 `crossMarketPriceFilter`、全零异常帧过滤 `allZeroPriceFrameFilter`，以及默认 report-only 的 `priceQualityDiagnostics`。
+历史对照可通过 `--baseline-set` 显式选择：`early_big_move_v1`、`early_big_move_v2`、`early_big_move_v3`、`legacy_lifecycle_v1`。
+
+默认把 checkpoint 摘要以 JSONL 追加到 `data/reports/long_test_runs.jsonl`。每行保留 `checkpointId`、`runId`、`datasetId`、`snapshotType`、`strategyName`、`strategyVersion`、`configHash`、`randomSeed`、核心收益/回撤/交易指标、`maxHoldingBars`、`volumeParticipationRate`、质量等级、资金流缺失统计，以及显式价格过滤统计。价格统计包括全量非正价格过滤 `priceFilter`、跨市场零行情过滤 `crossMarketPriceFilter`、全零异常帧过滤 `allZeroPriceFrameFilter`，以及默认 report-only 的 `priceQualityDiagnostics`。
 
 V2 四层决策框架新增字段（每条 baseline 内）：
 

@@ -737,6 +737,12 @@ def summarize_longtest_slot_label(baseline: dict[str, Any] | None) -> str | None
     label = str(baseline.get("label") or "")
     if not label:
         return None
+    if label.startswith("V5_E1_"):
+        return "V5 E1"
+    if label.startswith("V5_E2_"):
+        return "V5 E2"
+    if label.startswith("V5_E3_"):
+        return "V5 E3"
     if label.startswith("H1_"):
         return "H1"
     if label.startswith("H2_"):

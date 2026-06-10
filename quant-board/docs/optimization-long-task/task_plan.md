@@ -738,6 +738,10 @@ v1 `checkpoint_2026-05-21_cross_market_zero_filter` 已落库，但因第一版�
 - [x] 按用户要求将 `maxHoldingBars` 临时调为 `40` 复跑当前策略：`bt_6f2909499d3e4865` 仅 `+11.87% / 53.85%`，新鲜复跑 `bt_7f4b3d2472d64629` 复现同结果，明显弱于 30 bars，暂不采用。
 - [x] 按用户要求将 `maxHoldingBars` 临时调为 `25` 复跑当前策略：`bt_1f4d5b6492b44ee7` 为 `+26.22% / 60.47%`，优于 40 bars 但弱于 30 bars，暂不替换主线。
 - [x] 按用户要求分别复跑 `32/35/28 bars`：`32 bars` 为 `bt_d896884168dc4081`，`+25.33% / 64.86%`；`35 bars` 为 `bt_ce6d1767f5fa4f0a`，`+21.29% / 54.05%`；`28 bars` 为 `bt_eb657d60cbeb4b17`，`+21.15% / 58.97%`。三者均弱于 30 bars。
+- [x] 回归定位：`c428302 fix: realign ranktrend golden analysis contract` 把回测执行候选层从 `compose_strategy(... hotlistSentiment ...)` 切到 golden-only `compose_analysis_candidate_tier(... market_regime ...)`，导致 30 bars 从 `+31.00% / 65.79%` 掉到 `+4.71% / 53.12%`。
+- [x] 修复执行/Golden 双模式：Golden replay 默认保持 analysis tier；BacktestEngine 显式使用 execution tier，恢复 hotlistSentiment 融合候选层。验证：`bt_7497b298467c4419` 在旧主线 `minJumpConfidence=90` 下复现 `+31.00% / 65.79%`。
+- [x] 将已复现的 fusion 口径登记为 V5 长测默认基线：`early_big_move_v5`，固定 `half_hour/current_bar/maxHoldingBars=30/volumeParticipationRate=0.1/stopLossPct=0.05/takeProfitPct=9.99`。
+- [x] 写入 V5 趋势页 checkpoint：`checkpoint_2026-06-09_early_big_move_v5_vpr01`，执行 run `bt_c78fb2ad8df84946` 复现 `+31.00% / 65.79%`；并修复 checkpoint API 标签显示为 `V5 E1` / `V5 E2`。
 - **Status:** in_progress
 
 ## Retired Baselines
@@ -753,6 +757,17 @@ v1 `checkpoint_2026-05-21_cross_market_zero_filter` 已落库，但因第一版�
 ## Active Baselines
 
 当前默认 baseline set：
+
+```text
+early_big_move_v5
+```
+
+| Label | Snapshot | Execution | Max bars | Volume cap | Purpose |
+| --- | --- | --- | ---: | ---: | --- |
+| `V5_E1_half_hour_fusion_signal_forward30` | `half_hour` | signal-only | `30` | `0.1` | 验证 V5 fusion 候选召回，不执行交易模拟 |
+| `V5_E2_half_hour_fusion_current_bar` | `half_hour` | `current_bar` | `30` | `0.1` | V5 主长测基线：RankTrend A + 生命周期 B 辅助决策 |
+
+显式 V1 对照 baseline set：
 
 ```text
 early_big_move_v1

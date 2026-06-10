@@ -2070,6 +2070,15 @@ TDD 覆盖：
 - 用 CLI 默认 `volumeParticipationRate=0.05` 重跑得到 `bt_7eaaa1f656764be8`，结果为 `+28.93% / 68.42%`；该差异来自成交容量约束，不应混用口径。
 - 因 `totalReturn` 含 2 个未平仓浮盈，后续报告应同时列出 `realizedReturn=+27.74%`，避免把浮盈当成完全落袋利润。
 
+V5 基线决策：
+
+- 默认长测 baseline set 调整为 `early_big_move_v5`。
+- V5 主口径固定为 `ranktrend_early_big_move_v3_lifecycle_fusion / half_hour / current_bar / maxHoldingBars=30 / volumeParticipationRate=0.1 / stopLossPct=0.05 / takeProfitPct=9.99`。
+- 采用原因是该口径已被 `bt_b8c73ecf67e24d78`、`bt_682d3abc164d4177`、`bt_01d35aac6fcf4d6c` 多次复现到 `+31.00% / 65.79%`，并且 25/28/32/35/40 bars 对照均未超过 30 bars。
+- V5 不是恢复生命周期独立买卖策略；生命周期 B 只作为 RankTrend A 之后的辅助决策系统，可以 veto 入场和在未盈利时触发提前退出，但不能独立制造买入。
+- 页面趋势数据来自 `long_test_runs.jsonl`，不是来自 CLI 默认 baseline set；已补正式 checkpoint `checkpoint_2026-06-09_early_big_move_v5_vpr01`，run `bt_c78fb2ad8df84946` 为 `+31.00% / 65.79%`。
+- `/api/backtests/checkpoints` 已保留 V5 标签，趋势页在后端重启后显示 `V5 E1` / `V5 E2`。
+
 ### Phase 34 Remaining stops and open-profit attribution
 
 结论先行：`bt_682d3abc164d4177` 的 `+31.00%` 不是单票偶然大肉撑出来的，但也不是均匀小胜堆出来的。它主要来自“多只大肉簇 + 最大持有退出”贡献：最大单票 `603256 宏和科技` 占最终利润约 `17.1%`，剔除最大 1 笔后仍约 `+25.69%`，剔除最大 3 笔后仍约 `+17.51%`。因此方向可靠性强于单票奇迹，但要冲更高收益，必须继续保护大肉簇并减少剩余止损。
