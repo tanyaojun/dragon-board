@@ -544,7 +544,7 @@ def cmd_cleanup_research(args: argparse.Namespace) -> None:
 
 
 def build_ranktrend_payload(args: argparse.Namespace) -> dict[str, Any]:
-    return {
+    payload = {
         "dataset_id": args.dataset_id,
         "snapshot_type": args.snapshot_type,
         "start_date": args.start_date,
@@ -554,10 +554,7 @@ def build_ranktrend_payload(args: argparse.Namespace) -> dict[str, Any]:
         "enable_trade_simulation": not args.no_trade_simulation,
         "initialCash": args.initial_cash,
         "maxPositions": args.max_positions,
-        "maxHoldingBars": args.max_holding_bars,
         "targetHoldingDays": args.target_holding_days,
-        "takeProfitPct": args.take_profit_pct,
-        "stopLossPct": args.stop_loss_pct,
         "macdFast": args.macd_fast,
         "macdSlow": args.macd_slow,
         "macdSignal": args.macd_signal,
@@ -575,7 +572,6 @@ def build_ranktrend_payload(args: argparse.Namespace) -> dict[str, Any]:
             "enforceVolumeLimit": not args.no_volume_limit,
             "enforceOrderBookQueue": not args.no_order_book_queue,
             "allowPartialFills": not args.no_partial_fills,
-            "volumeParticipationRate": args.volume_participation_rate,
             "orderBookParticipationRate": args.order_book_participation_rate,
             "useIntrabarStops": not args.no_intrabar_stops,
             "intrabarAmbiguity": args.intrabar_ambiguity,
@@ -585,6 +581,15 @@ def build_ranktrend_payload(args: argparse.Namespace) -> dict[str, Any]:
         "excludeCrossMarketZeroPriceRows": args.exclude_cross_market_zero_price_rows,
         "excludeAllZeroPriceFrames": args.exclude_all_zero_price_frames,
     }
+    if args.max_holding_bars is not None:
+        payload["maxHoldingBars"] = args.max_holding_bars
+    if args.take_profit_pct is not None:
+        payload["takeProfitPct"] = args.take_profit_pct
+    if args.stop_loss_pct is not None:
+        payload["stopLossPct"] = args.stop_loss_pct
+    if args.volume_participation_rate is not None:
+        payload["tradeConfig"]["volumeParticipationRate"] = args.volume_participation_rate
+    return payload
 
 
 LEGACY_LIFECYCLE_BASELINES = (
@@ -1359,9 +1364,9 @@ def build_parser() -> argparse.ArgumentParser:
     run_cmd.add_argument("--max-positions", type=int, default=5)
     run_cmd.add_argument("--position-size", type=float, default=0.2)
     run_cmd.add_argument("--target-holding-days", type=float, default=5)
-    run_cmd.add_argument("--max-holding-bars", type=int, default=40)
-    run_cmd.add_argument("--take-profit-pct", type=float, default=0.12)
-    run_cmd.add_argument("--stop-loss-pct", type=float, default=0.06)
+    run_cmd.add_argument("--max-holding-bars", type=int, default=None)
+    run_cmd.add_argument("--take-profit-pct", type=float, default=None)
+    run_cmd.add_argument("--stop-loss-pct", type=float, default=None)
     run_cmd.add_argument("--fee-rate", type=float, default=0.0003)
     run_cmd.add_argument("--stamp-tax-rate", type=float, default=0.0005)
     run_cmd.add_argument("--slippage-rate", type=float, default=0.001)
@@ -1377,7 +1382,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_cmd.add_argument("--no-volume-limit", action="store_true")
     run_cmd.add_argument("--no-order-book-queue", action="store_true")
     run_cmd.add_argument("--no-partial-fills", action="store_true")
-    run_cmd.add_argument("--volume-participation-rate", type=float, default=0.05)
+    run_cmd.add_argument("--volume-participation-rate", type=float, default=None)
     run_cmd.add_argument("--order-book-participation-rate", type=float, default=0.3)
     run_cmd.add_argument("--no-intrabar-stops", action="store_true")
     run_cmd.add_argument("--intrabar-ambiguity", choices=["stop_first", "take_first"], default="stop_first")

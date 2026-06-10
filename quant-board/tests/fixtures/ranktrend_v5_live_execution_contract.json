@@ -1,0 +1,643 @@
+{
+  "strategyName": "ranktrend_early_big_move_v3_lifecycle_fusion",
+  "defaultMinJumpConfidence": 90,
+  "cases": [
+    {
+      "name": "a_main_accepts_even_when_final_confidence_is_display_only",
+      "expectedEntry": true,
+      "signal": {
+        "snapshotId": "half_hour:2026-06-10:10:00",
+        "timestamp": "2026-06-10T10:00:00+08:00",
+        "tradingDate": "2026-06-10",
+        "slotTime": "10:00",
+        "code": "002552",
+        "name": "宝鼎科技",
+        "rank": 18,
+        "price": 10,
+        "change": 5,
+        "accDelta": 8,
+        "volume": 20000,
+        "candidateTier": "A_MAIN",
+        "stage": "expansion",
+        "regime": "strong",
+        "confidence": 51,
+        "rankTrend": {
+          "meta": {
+            "code": "002552",
+            "sampleQuality": {
+              "snapshotType": "half_hour",
+              "sampleCount": 30,
+              "requiredSampleCount": 30,
+              "status": "ok",
+              "delayedCount": 0,
+              "restoredCount": 0
+            }
+          },
+          "jump": {
+            "event": "jump",
+            "direction": "buy",
+            "confidence": 92
+          },
+          "technical": {
+            "momentumProfile": {
+              "short": 18.7,
+              "mid": 12.8,
+              "long": 14.3,
+              "acceleration": 32,
+              "shock": 2,
+              "composite": 75
+            },
+            "signals": {
+              "direction": {
+                "signal": "hold"
+              },
+              "acceleration": {
+                "signal": "hold",
+                "score": -0.01
+              },
+              "zeroCross": {
+                "signal": "hold"
+              }
+            },
+            "macd": {
+              "cross": "none"
+            }
+          },
+          "cycle": {
+            "stage": "expansion",
+            "transition": "ignition->expansion",
+            "decision": {
+              "action": "allow",
+              "confidence": 82,
+              "reasons": [
+                "生命周期B支持"
+              ]
+            }
+          },
+          "decision": {
+            "final": {
+              "signal": "hold",
+              "confidence": 12
+            }
+          },
+          "strategy": {
+            "candidateTier": "A_MAIN",
+            "momentum": {
+              "short": 18.7,
+              "mid": 12.8,
+              "long": 14.3,
+              "acceleration": 32,
+              "shock": 2,
+              "composite": 75
+            }
+          },
+          "executionStrategy": {
+            "candidateTier": "A_MAIN",
+            "momentum": {
+              "short": 18.7,
+              "mid": 12.8,
+              "long": 14.3,
+              "acceleration": 32,
+              "shock": 2,
+              "composite": 75
+            },
+            "reasons": [
+              "fixture execution tier mirrors Python top-level candidateTier"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "low_jump_confidence_rejected_by_default",
+      "expectedEntry": false,
+      "signal": {
+        "snapshotId": "half_hour:2026-06-10:10:30",
+        "timestamp": "2026-06-10T10:30:00+08:00",
+        "tradingDate": "2026-06-10",
+        "slotTime": "10:30",
+        "code": "002553",
+        "name": "低置信跳跃",
+        "rank": 19,
+        "price": 10,
+        "change": 5,
+        "accDelta": 8,
+        "volume": 20000,
+        "candidateTier": "A_MAIN",
+        "stage": "expansion",
+        "regime": "strong",
+        "confidence": 88,
+        "rankTrend": {
+          "meta": {
+            "code": "002553",
+            "sampleQuality": {
+              "snapshotType": "half_hour",
+              "sampleCount": 30,
+              "requiredSampleCount": 30,
+              "status": "ok",
+              "delayedCount": 0,
+              "restoredCount": 0
+            }
+          },
+          "jump": {
+            "event": "jump",
+            "direction": "buy",
+            "confidence": 79.8
+          },
+          "technical": {
+            "momentumProfile": {
+              "short": 18.7,
+              "mid": 12.8,
+              "long": 14.3,
+              "acceleration": 32,
+              "shock": 2,
+              "composite": 75
+            },
+            "signals": {
+              "direction": {
+                "signal": "hold"
+              },
+              "acceleration": {
+                "signal": "hold",
+                "score": -0.01
+              },
+              "zeroCross": {
+                "signal": "hold"
+              }
+            },
+            "macd": {
+              "cross": "none"
+            }
+          },
+          "cycle": {
+            "stage": "expansion",
+            "transition": "ignition->expansion",
+            "decision": {
+              "action": "allow",
+              "confidence": 82,
+              "reasons": [
+                "生命周期B支持"
+              ]
+            }
+          },
+          "decision": {
+            "final": {
+              "signal": "buy",
+              "confidence": 95
+            }
+          },
+          "strategy": {
+            "candidateTier": "A_MAIN",
+            "momentum": {
+              "short": 18.7,
+              "mid": 12.8,
+              "long": 14.3,
+              "acceleration": 32,
+              "shock": 2,
+              "composite": 75
+            }
+          },
+          "executionStrategy": {
+            "candidateTier": "A_MAIN",
+            "momentum": {
+              "short": 18.7,
+              "mid": 12.8,
+              "long": 14.3,
+              "acceleration": 32,
+              "shock": 2,
+              "composite": 75
+            },
+            "reasons": [
+              "fixture execution tier mirrors Python top-level candidateTier"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "lifecycle_veto_rejected_even_when_ranktrend_is_strong",
+      "expectedEntry": false,
+      "signal": {
+        "snapshotId": "half_hour:2026-06-10:11:00",
+        "timestamp": "2026-06-10T11:00:00+08:00",
+        "tradingDate": "2026-06-10",
+        "slotTime": "11:00",
+        "code": "002554",
+        "name": "生命周期否决",
+        "rank": 16,
+        "price": 10,
+        "change": 5,
+        "accDelta": 8,
+        "volume": 20000,
+        "candidateTier": "N_NEUTRAL",
+        "stage": "expansion",
+        "regime": "strong",
+        "confidence": 88,
+        "rankTrend": {
+          "meta": {
+            "code": "002554",
+            "sampleQuality": {
+              "snapshotType": "half_hour",
+              "sampleCount": 30,
+              "requiredSampleCount": 30,
+              "status": "ok",
+              "delayedCount": 0,
+              "restoredCount": 0
+            }
+          },
+          "jump": {
+            "event": "jump",
+            "direction": "buy",
+            "confidence": 98
+          },
+          "technical": {
+            "momentumProfile": {
+              "short": 18.7,
+              "mid": 12.8,
+              "long": 14.3,
+              "acceleration": 32,
+              "shock": 2,
+              "composite": 75
+            },
+            "signals": {
+              "direction": {
+                "signal": "buy"
+              },
+              "acceleration": {
+                "signal": "buy",
+                "score": 0.5
+              },
+              "zeroCross": {
+                "signal": "buy"
+              }
+            },
+            "macd": {
+              "cross": "golden"
+            }
+          },
+          "cycle": {
+            "stage": "expansion",
+            "transition": "ignition->expansion",
+            "decision": {
+              "action": "veto",
+              "confidence": 90,
+              "reasons": [
+                "假突破承接不足"
+              ]
+            }
+          },
+          "decision": {
+            "final": {
+              "signal": "buy",
+              "confidence": 95
+            }
+          },
+          "strategy": {
+            "candidateTier": "A_MAIN",
+            "momentum": {
+              "short": 18.7,
+              "mid": 12.8,
+              "long": 14.3,
+              "acceleration": 32,
+              "shock": 2,
+              "composite": 75
+            }
+          },
+          "executionStrategy": {
+            "candidateTier": "N_NEUTRAL",
+            "momentum": {
+              "short": 18.7,
+              "mid": 12.8,
+              "long": 14.3,
+              "acceleration": 32,
+              "shock": 2,
+              "composite": 75
+            },
+            "reasons": [
+              "fixture execution tier mirrors Python top-level candidateTier"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "b_ignition_requires_mid_and_zero_cross",
+      "expectedEntry": true,
+      "signal": {
+        "snapshotId": "half_hour:2026-06-10:11:30",
+        "timestamp": "2026-06-10T11:30:00+08:00",
+        "tradingDate": "2026-06-10",
+        "slotTime": "11:30",
+        "code": "002555",
+        "name": "点火确认",
+        "rank": 20,
+        "price": 10,
+        "change": 5,
+        "accDelta": 8,
+        "volume": 20000,
+        "candidateTier": "B_IGNITION",
+        "stage": "ignition",
+        "regime": "strong",
+        "confidence": 88,
+        "rankTrend": {
+          "meta": {
+            "code": "002555",
+            "sampleQuality": {
+              "snapshotType": "half_hour",
+              "sampleCount": 30,
+              "requiredSampleCount": 30,
+              "status": "ok",
+              "delayedCount": 0,
+              "restoredCount": 0
+            }
+          },
+          "jump": {
+            "event": "jump",
+            "direction": "buy",
+            "confidence": 94.2
+          },
+          "technical": {
+            "momentumProfile": {
+              "short": 18.7,
+              "mid": 22,
+              "long": 14.3,
+              "acceleration": 32,
+              "shock": 2,
+              "composite": 75
+            },
+            "signals": {
+              "direction": {
+                "signal": "hold"
+              },
+              "acceleration": {
+                "signal": "hold",
+                "score": -0.01
+              },
+              "zeroCross": {
+                "signal": "buy"
+              }
+            },
+            "macd": {
+              "cross": "none"
+            }
+          },
+          "cycle": {
+            "stage": "ignition",
+            "transition": "cooling->ignition",
+            "decision": {
+              "action": "caution",
+              "confidence": 70,
+              "reasons": [
+                "低可见度点火"
+              ]
+            }
+          },
+          "decision": {
+            "final": {
+              "signal": "hold",
+              "confidence": 50
+            }
+          },
+          "strategy": {
+            "candidateTier": "B_IGNITION",
+            "momentum": {
+              "short": 18.7,
+              "mid": 22,
+              "long": 14.3,
+              "acceleration": 32,
+              "shock": 2,
+              "composite": 75
+            }
+          },
+          "executionStrategy": {
+            "candidateTier": "B_IGNITION",
+            "momentum": {
+              "short": 18.7,
+              "mid": 22,
+              "long": 14.3,
+              "acceleration": 32,
+              "shock": 2,
+              "composite": 75
+            },
+            "reasons": [
+              "fixture execution tier mirrors Python top-level candidateTier"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "b_ignition_without_zero_cross_rejected",
+      "expectedEntry": false,
+      "signal": {
+        "snapshotId": "half_hour:2026-06-10:13:00",
+        "timestamp": "2026-06-10T13:00:00+08:00",
+        "tradingDate": "2026-06-10",
+        "slotTime": "13:00",
+        "code": "002556",
+        "name": "点火未确认",
+        "rank": 21,
+        "price": 10,
+        "change": 5,
+        "accDelta": 8,
+        "volume": 20000,
+        "candidateTier": "B_IGNITION",
+        "stage": "ignition",
+        "regime": "strong",
+        "confidence": 88,
+        "rankTrend": {
+          "meta": {
+            "code": "002556",
+            "sampleQuality": {
+              "snapshotType": "half_hour",
+              "sampleCount": 30,
+              "requiredSampleCount": 30,
+              "status": "ok",
+              "delayedCount": 0,
+              "restoredCount": 0
+            }
+          },
+          "jump": {
+            "event": "jump",
+            "direction": "buy",
+            "confidence": 94.2
+          },
+          "technical": {
+            "momentumProfile": {
+              "short": 18.7,
+              "mid": 22,
+              "long": 14.3,
+              "acceleration": 32,
+              "shock": 2,
+              "composite": 75
+            },
+            "signals": {
+              "direction": {
+                "signal": "hold"
+              },
+              "acceleration": {
+                "signal": "hold",
+                "score": -0.01
+              },
+              "zeroCross": {
+                "signal": "hold"
+              }
+            },
+            "macd": {
+              "cross": "none"
+            }
+          },
+          "cycle": {
+            "stage": "ignition",
+            "transition": "cooling->ignition",
+            "decision": {
+              "action": "allow",
+              "confidence": 82,
+              "reasons": [
+                "生命周期B支持"
+              ]
+            }
+          },
+          "decision": {
+            "final": {
+              "signal": "buy",
+              "confidence": 95
+            }
+          },
+          "strategy": {
+            "candidateTier": "B_IGNITION",
+            "momentum": {
+              "short": 18.7,
+              "mid": 22,
+              "long": 14.3,
+              "acceleration": 32,
+              "shock": 2,
+              "composite": 75
+            }
+          },
+          "executionStrategy": {
+            "candidateTier": "B_IGNITION",
+            "momentum": {
+              "short": 18.7,
+              "mid": 22,
+              "long": 14.3,
+              "acceleration": 32,
+              "shock": 2,
+              "composite": 75
+            },
+            "reasons": [
+              "fixture execution tier mirrors Python top-level candidateTier"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "degraded_sample_quality_does_not_hard_block_v5_entry",
+      "expectedEntry": true,
+      "signal": {
+        "snapshotId": "half_hour:2026-06-10:13:30",
+        "timestamp": "2026-06-10T13:30:00+08:00",
+        "tradingDate": "2026-06-10",
+        "slotTime": "13:30",
+        "code": "002557",
+        "name": "样本降级可观察",
+        "rank": 22,
+        "price": 10,
+        "change": 5,
+        "accDelta": 8,
+        "volume": 20000,
+        "candidateTier": "A_MAIN",
+        "stage": "expansion",
+        "regime": "strong",
+        "confidence": 88,
+        "rankTrend": {
+          "meta": {
+            "code": "002557",
+            "sampleQuality": {
+              "snapshotType": "half_hour",
+              "sampleCount": 12,
+              "requiredSampleCount": 30,
+              "status": "degraded",
+              "coverageWarning": "样本降级但仍可用于候选观察",
+              "delayedCount": 0,
+              "restoredCount": 0
+            }
+          },
+          "jump": {
+            "event": "jump",
+            "direction": "buy",
+            "confidence": 94.2
+          },
+          "technical": {
+            "momentumProfile": {
+              "short": 18.7,
+              "mid": 12.8,
+              "long": 14.3,
+              "acceleration": 32,
+              "shock": 2,
+              "composite": 75
+            },
+            "signals": {
+              "direction": {
+                "signal": "hold"
+              },
+              "acceleration": {
+                "signal": "hold",
+                "score": -0.01
+              },
+              "zeroCross": {
+                "signal": "hold"
+              }
+            },
+            "macd": {
+              "cross": "none"
+            }
+          },
+          "cycle": {
+            "stage": "expansion",
+            "transition": "ignition->expansion",
+            "decision": {
+              "action": "allow",
+              "confidence": 82,
+              "reasons": [
+                "生命周期B支持"
+              ]
+            }
+          },
+          "decision": {
+            "final": {
+              "signal": "hold",
+              "confidence": 50
+            }
+          },
+          "strategy": {
+            "candidateTier": "A_MAIN",
+            "momentum": {
+              "short": 18.7,
+              "mid": 12.8,
+              "long": 14.3,
+              "acceleration": 32,
+              "shock": 2,
+              "composite": 75
+            }
+          },
+          "executionStrategy": {
+            "candidateTier": "A_MAIN",
+            "momentum": {
+              "short": 18.7,
+              "mid": 12.8,
+              "long": 14.3,
+              "acceleration": 32,
+              "shock": 2,
+              "composite": 75
+            },
+            "reasons": [
+              "fixture execution tier mirrors Python top-level candidateTier"
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

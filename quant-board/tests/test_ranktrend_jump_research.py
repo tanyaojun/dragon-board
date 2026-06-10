@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from backend.core.backtest import TradeSimulator, normalize_strategy_name
-from backend.optimization.search_space import normalize_search_space, suggest_params
+from backend.core.backtest.config import DEFAULT_TRADE_CONFIG
+from backend.optimization.search_space import default_search_space, normalize_search_space, suggest_params
 
 
 class FakeTrial:
@@ -32,6 +33,12 @@ def test_continuous_float_search_space_uses_optuna_float_suggestion() -> None:
     assert params["jumpDeltaPct"] == 15.5
     assert params["maxPositions"] == 3
     assert search_space_mode(space) == "continuous"
+
+
+def test_default_search_space_uses_single_shared_min_jump_confidence_default() -> None:
+    space = default_search_space()
+
+    assert space["minJumpConfidence"] == [DEFAULT_TRADE_CONFIG["minJumpConfidence"]]
 
 
 def test_ranktrend_jump_strategy_is_registered_for_research_runs() -> None:

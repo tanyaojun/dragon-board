@@ -40,6 +40,9 @@ function createStock(overrides: Record<string, unknown> = {}) {
       strategy: {
         candidateTier: 'A_MAIN',
       },
+      executionStrategy: {
+        candidateTier: 'A_MAIN',
+      },
     },
     ...overrides,
   }
@@ -119,8 +122,14 @@ describe('FusionCandidateNotifier', () => {
         signalsSnapshotPatch: {
           triggerMeta: {
             source: 'ranktrend_early_big_move_v3_lifecycle_fusion',
+            baseline: 'early_big_move_v5',
             triggerType: 'auto',
             triggeredAt: '2026-06-08T10:00:00.000Z',
+            executionCandidateTier: 'A_MAIN',
+            lifecycleAction: 'allow',
+            jumpConfidence: 92,
+            minJumpConfidence: 90,
+            blockedReasons: [],
           },
         },
       },
@@ -148,6 +157,129 @@ describe('FusionCandidateNotifier', () => {
         }),
       ],
     })
+  })
+
+  it('自动入池和推送记录 executionStrategy 分层，不使用展示分层', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true })
+    vi.stubGlobal('fetch', fetchMock)
+    const notifier = new FusionCandidateNotifier({
+      candidateJournal: {
+        getOpenCandidateForStock,
+        addCandidateFromStock,
+      },
+      now,
+    })
+
+    await notifier.process([
+      createStock({
+        rankTrend: {
+          ...createStock().rankTrend,
+          strategy: {
+            candidateTier: 'N_NEUTRAL',
+          },
+          executionStrategy: {
+            candidateTier: 'A_MAIN',
+          },
+        },
+      }),
+    ])
+
+    expect(addCandidateFromStock).toHaveBeenCalledWith(
+      expect.objectContaining({ code: '000001' }),
+      expect.objectContaining({
+        signalsSnapshotPatch: {
+          triggerMeta: expect.objectContaining({
+            executionCandidateTier: 'A_MAIN',
+          }),
+        },
+      }),
+    )
+    const [, request] = fetchMock.mock.calls[0]
+    expect(JSON.parse(String(request?.body))).toEqual({
+      source: 'ranktrend-fusion-candidate-pool',
+      events: [
+        expect.objectContaining({
+          candidateTier: 'A_MAIN',
+          reason: 'A_MAIN 命中，已自动写入候选池',
+        }),
+      ],
+    })
+  })
+
+  it('executionStrategy 非 A/B 时即使展示分层 A_MAIN 也不会自动入池', async () => {
+    const notifier = new FusionCandidateNotifier({
+      candidateJournal: {
+        getOpenCandidateForStock,
+        addCandidateFromStock,
+      },
+      now,
+    })
+
+    await notifier.process([
+      createStock({
+        rankTrend: {
+          ...createStock().rankTrend,
+          strategy: {
+            candidateTier: 'A_MAIN',
+          },
+          executionStrategy: {
+            candidateTier: 'N_NEUTRAL',
+          },
+        },
+      }),
+    ])
+
+    expect(getOpenCandidateForStock).not.toHaveBeenCalled()
+    expect(addCandidateFromStock).not.toHaveBeenCalled()
+  })
+
+  it('V5 默认 JumpConfidence 低于 90 时不会自动写入候选池', async () => {
+    const notifier = new FusionCandidateNotifier({
+      candidateJournal: {
+        getOpenCandidateForStock,
+        addCandidateFromStock,
+      },
+      now,
+    })
+
+    await notifier.process([
+      createStock({
+        rankTrend: {
+          ...createStock().rankTrend,
+          jump: { direction: 'buy', confidence: 79.8 },
+        },
+      }),
+    ])
+
+    expect(getOpenCandidateForStock).not.toHaveBeenCalled()
+    expect(addCandidateFromStock).not.toHaveBeenCalled()
+  })
+
+  it('lifecycle veto 时即使 RankTrend 和 Jump 很强也不会自动写入候选池', async () => {
+    const notifier = new FusionCandidateNotifier({
+      candidateJournal: {
+        getOpenCandidateForStock,
+        addCandidateFromStock,
+      },
+      now,
+    })
+
+    await notifier.process([
+      createStock({
+        rankTrend: {
+          ...createStock().rankTrend,
+          jump: { direction: 'buy', confidence: 98 },
+          cycle: {
+            decision: {
+              action: 'veto',
+            },
+          },
+        },
+      }),
+    ])
+
+    expect(getOpenCandidateForStock).not.toHaveBeenCalled()
+    expect(addCandidateFromStock).not.toHaveBeenCalled()
   })
 
   it('遇到已有 open candidate 时跳过重复创建', async () => {

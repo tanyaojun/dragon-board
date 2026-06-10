@@ -939,8 +939,7 @@ def compose_strategy(
 
     if lifecycle_action == "veto":
         reasons.append("生命周期辅助决策一票否决，阻止进入 A/B 候选池")
-
-    if stage in ("reversal", "cooling") and (momentum["short"] <= c.tierExitRiskShortMomentumMax or momentum["acceleration"] <= c.tierExitRiskAccelMax or risk["pressure"] >= c.tierExitRiskPressureMin):
+    elif stage in ("reversal", "cooling") and (momentum["short"] <= c.tierExitRiskShortMomentumMax or momentum["acceleration"] <= c.tierExitRiskAccelMax or risk["pressure"] >= c.tierExitRiskPressureMin):
         tier = "D_EXIT_RISK"
         reasons.append("生命周期进入反转/冷却，短周期动量或风险压力转弱")
     elif stage == "crowded" or (momentum["long"] >= c.tierCrowdedLongMomentumMin and (momentum["acceleration"] <= c.tierCrowdedAccelMax or risk["pressure"] >= c.tierCrowdedRiskPressureMin)):

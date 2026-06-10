@@ -52,6 +52,11 @@ const strategyOptions: Array<{ value: StrategyName; label: string; description: 
     description: "A_MAIN + 连续确认 B_IGNITION，当前正式策略"
   },
   {
+    value: "ranktrend_early_big_move_v3_lifecycle_fusion",
+    label: "V5 生命周期融合",
+    description: "V5 回测基线：execution tier + Jump 90 + 生命周期一票否决"
+  },
+  {
     value: "hot_top10",
     label: "热榜 Top10",
     description: "只按热榜前 10 入场"
@@ -202,7 +207,8 @@ const showReportJson = ref(false);
 const deleteBacktestMessage = ref("");
 const deleteDatasetMessage = ref("");
 let optimizationPollToken = 0;
-const DEFAULT_PLATFORM_MIN_JUMP_CONFIDENCE = 77.5;
+const DEFAULT_PLATFORM_MIN_JUMP_CONFIDENCE = 90;
+const V5_LIFECYCLE_FUSION_STRATEGY = "ranktrend_early_big_move_v3_lifecycle_fusion";
 
 // ── ThemeTrend 状态 ──
 const themeState = reactive<RequestResult>({ status: "idle" });
@@ -260,7 +266,7 @@ const themeCrowdingRiskDecay = computed(() => asRecord(themeReport.value.crowdin
 
 const backtestForm = reactive<BacktestRequest>({
   datasetId: "",
-  strategyName: "rank_trend_candidate",
+  strategyName: V5_LIFECYCLE_FUSION_STRATEGY,
   snapshotType: "half_hour",
   randomSeed: 20260430,
   initialCash: 1000000,
@@ -268,10 +274,10 @@ const backtestForm = reactive<BacktestRequest>({
   positionSize: 0.2,
   minJumpConfidence: DEFAULT_PLATFORM_MIN_JUMP_CONFIDENCE,
   executionMode: "current_bar",
-  maxHoldingBars: 40,
+  maxHoldingBars: 30,
   targetHoldingDays: 5,
-  takeProfitPct: 0.12,
-  stopLossPct: 0.06,
+  takeProfitPct: 9.99,
+  stopLossPct: 0.05,
   feeRate: 0.0003,
   stampTaxRate: 0.0005,
   slippageRate: 0.001,
@@ -281,7 +287,7 @@ const backtestForm = reactive<BacktestRequest>({
   enforceVolumeLimit: true,
   enforceOrderBookQueue: true,
   allowPartialFills: true,
-  volumeParticipationRate: 0.05,
+  volumeParticipationRate: 0.1,
   orderBookParticipationRate: 0.3,
   useIntrabarStops: true,
   useThemeFactorForExecution: false,
@@ -294,7 +300,7 @@ const backtestForm = reactive<BacktestRequest>({
 
 const optimizationForm = reactive<OptimizationRequest>({
   datasetId: "",
-  strategyName: "rank_trend_candidate",
+  strategyName: V5_LIFECYCLE_FUSION_STRATEGY,
   method: "grid",
   randomSeed: 20260430,
   objective: "stability",
@@ -315,7 +321,7 @@ const optimizationForm = reactive<OptimizationRequest>({
       [2, 4, 6, 10, 16],
       [5, 8, 13, 21, 34]
     ],
-    minJumpConfidence: [DEFAULT_PLATFORM_MIN_JUMP_CONFIDENCE, 80, 85, 90],
+    minJumpConfidence: [DEFAULT_PLATFORM_MIN_JUMP_CONFIDENCE],
     takeProfitPct: [0.08, 0.12, 0.16],
     stopLossPct: [0.04, 0.06, 0.08],
     maxPositions: [3, 5, 8]
@@ -332,7 +338,7 @@ const goldenForm = reactive<GoldenValidateRequest>({
 
 const gridInputs = reactive({
   momentumPeriods: "3-5-8-13-21;2-4-6-10-16;5-8-13-21-34",
-  minJumpConfidence: "77.5,80,85,90",
+  minJumpConfidence: "90",
   takeProfitPct: "0.08,0.12,0.16",
   stopLossPct: "0.04,0.06,0.08",
   maxPositions: "3,5,8",

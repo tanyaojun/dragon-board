@@ -1937,8 +1937,8 @@ TDD 覆盖：
 
 关键改法：
 
-- `compose_strategy()` 只保留 RankTrend 结构分层，不再提前替执行层删除 A/B 候选。
-- `ranktrend_early_big_move_v3_lifecycle_fusion` 执行入口继续消费 B veto，保证 A+B 合同仍成立。
+- TS `rankTrend.strategy` 只保留展示/结构分层，不再代替 V5 执行分层。
+- Python `compose_strategy(... hotlist ...)` 是 V5 execution tier 来源；当 B 明确 veto 时不再输出 A/B，Dragon Board live 通过 `rankTrend.executionStrategy` 消费同一口径。
 - `rankPathCommitment` 承接不足从 `veto` 降为 `caution`，作为假突破诊断而不是硬删候选。
 - 低可见度首段点火仍为 `caution`，候选保留，只在同等结构排序时轻微降权。
 

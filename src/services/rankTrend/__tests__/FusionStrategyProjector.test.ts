@@ -22,6 +22,9 @@ function createFusionStock(code: string) {
       strategy: {
         candidateTier: 'A_MAIN',
       },
+      executionStrategy: {
+        candidateTier: 'A_MAIN',
+      },
     },
   }
 }
@@ -77,5 +80,125 @@ describe('FusionStrategyProjector', () => {
 
     expect(projection.strategyState).toBe('active_holding')
     expect(projection.snapshotType).toBe('quarter_hour')
+  })
+
+  it('maps V5 holding and exit lifecycle fields without deriving them from manual overlay', () => {
+    const projection = buildFusionStrategyProjection({
+      stock: createFusionStock('600001'),
+      snapshotType: 'half_hour',
+      tradingDate: '2026-06-08',
+      snapshotId: 'snap-exit',
+      frameTime: '2026-06-08T14:30:00+08:00',
+      strategyLifecycle: {
+        triggered: true,
+        hasOpenPosition: true,
+        exitWatch: true,
+        triggerAt: '2026-06-08T10:00:00+08:00',
+        entryAt: '2026-06-08T10:30:00+08:00',
+        exitAt: '2026-06-08T14:30:00+08:00',
+        holdingBars: 8,
+        slotIndex: 7,
+        maxPositions: 5,
+        tPlusOneUnlocked: false,
+        entryReason: 'V5 execution A_MAIN 入场',
+        exitReason: '生命周期B反对且持仓未盈利',
+        strategyEntryPrice: 12.5,
+        strategyExitPrice: 11.9,
+        strategyReturnPct: -0.048,
+      },
+      executionOverlay: {
+        executed: true,
+        entryTime: '2026-06-08T10:30:00+08:00',
+        entryPrice: 12.5,
+        exitTime: '2026-06-08T14:00:00+08:00',
+        exitPrice: 12.1,
+      },
+    })
+
+    expect(projection).toMatchObject({
+      strategyState: 'exit_signaled',
+      triggerAt: '2026-06-08T10:00:00+08:00',
+      strategyEntryAt: '2026-06-08T10:30:00+08:00',
+      strategyExitAt: '2026-06-08T14:30:00+08:00',
+      holdingBars: 8,
+      slotIndex: 7,
+      maxPositions: 5,
+      tPlusOneUnlocked: false,
+      entryReason: 'V5 execution A_MAIN 入场',
+      exitReason: '生命周期B反对且持仓未盈利',
+      strategyEntryPrice: 12.5,
+      strategyExitPrice: 11.9,
+      strategyReturnPct: -0.048,
+      executionOverlay: {
+        executed: true,
+        entryTime: '2026-06-08T10:30:00+08:00',
+        exitTime: '2026-06-08T14:00:00+08:00',
+      },
+    })
+  })
+
+  it('uses executionStrategy candidate tier for live projection when it differs from display strategy', () => {
+    const stock = createFusionStock('600001')
+    stock.rankTrend.strategy = {
+      candidateTier: 'N_NEUTRAL',
+    }
+    ;(stock.rankTrend as any).executionStrategy = {
+      candidateTier: 'A_MAIN',
+    }
+
+    const projection = buildFusionStrategyProjection({
+      stock,
+      snapshotType: 'half_hour',
+      tradingDate: '2026-06-08',
+      snapshotId: 'snap-3',
+      frameTime: '2026-06-08T10:00:00+08:00',
+      strategyLifecycle: {
+        triggered: true,
+      },
+    })
+
+    expect(projection.candidateTier).toBe('A_MAIN')
+  })
+
+  it('does not fall back to display strategy when executionStrategy is missing', () => {
+    const stock = createFusionStock('600001')
+    delete (stock.rankTrend as any).executionStrategy
+    stock.rankTrend.strategy = {
+      candidateTier: 'A_MAIN',
+    }
+
+    const projection = buildFusionStrategyProjection({
+      stock,
+      snapshotType: 'half_hour',
+      tradingDate: '2026-06-08',
+      snapshotId: 'snap-4',
+      frameTime: '2026-06-08T10:00:00+08:00',
+      strategyLifecycle: {
+        triggered: true,
+      },
+    })
+
+    expect(projection.candidateTier).toBe('N_NEUTRAL')
+  })
+
+  it('marks triggered_wait_entry from the V5 execution contract when lifecycle is absent', () => {
+    const stock = createFusionStock('600001')
+    stock.rankTrend.strategy = {
+      candidateTier: 'N_NEUTRAL',
+    }
+    ;(stock.rankTrend as any).executionStrategy = {
+      candidateTier: 'A_MAIN',
+    }
+
+    const projection = buildFusionStrategyProjection({
+      stock,
+      snapshotType: 'half_hour',
+      tradingDate: '2026-06-08',
+      snapshotId: 'snap-5',
+      frameTime: '2026-06-08T10:00:00+08:00',
+    })
+
+    expect(projection.strategyState).toBe('triggered_wait_entry')
+    expect(projection.candidateTier).toBe('A_MAIN')
   })
 })

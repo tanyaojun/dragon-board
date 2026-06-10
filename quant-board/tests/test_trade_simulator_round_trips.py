@@ -494,7 +494,7 @@ def test_early_big_move_v3_lifecycle_fusion_does_not_let_lifecycle_allow_create_
     assert candidates == []
 
 
-def test_early_big_move_v3_lifecycle_fusion_accepts_79_8_jump_confidence_by_default() -> None:
+def test_early_big_move_v3_lifecycle_fusion_rejects_79_8_jump_confidence_by_default() -> None:
     candidate = _early_big_move_v2_signal(tier="A_MAIN", zero_cross="buy", change=5.0)
     candidate["rankTrend"]["jump"]["confidence"] = 79.8
     candidate["rankTrend"]["cycle"] = {
@@ -516,7 +516,7 @@ def test_early_big_move_v3_lifecycle_fusion_accepts_79_8_jump_confidence_by_defa
         "ranktrend_early_big_move_v3_lifecycle_fusion",
     )
 
-    assert [item["code"] for item in candidates] == ["002552"]
+    assert candidates == []
 
 
 def test_early_big_move_v3_lifecycle_fusion_accepts_79_8_jump_confidence_when_explicitly_lowered() -> None:

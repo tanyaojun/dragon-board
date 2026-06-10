@@ -128,7 +128,8 @@ export class RankTrendGoldenReplayEngine {
     const zlje = toNumber(stock.zlje)
     const zljzb = toNumber(stock.zljzb)
 
-    const { technical, cycle, risk, decision, strategy } = runRankTrendAnalysisPipeline({
+    const { technical, cycle, risk, decision, strategy, executionStrategy } =
+      runRankTrendAnalysisPipeline({
       ranks,
       percentiles,
       currentPercentile,
@@ -138,6 +139,7 @@ export class RankTrendGoldenReplayEngine {
       zlje,
       zljzb,
       regime,
+      hotlistSentiment: frame.marketContext.sentiment || null,
       config: this.config,
     })
 
@@ -174,6 +176,7 @@ export class RankTrendGoldenReplayEngine {
       risk,
       decision,
       strategy,
+      executionStrategy,
     }
 
     return {

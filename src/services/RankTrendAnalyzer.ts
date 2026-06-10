@@ -663,7 +663,7 @@ export class RankTrendAnalyzer {
     const requiredSamples = stockSampleQuality.requiredSampleCount
     const regime = this.resolveMarketRegime(snapshotSignature, dataLayer)
 
-    const { technical, cycle, risk, decision, strategy } = runRankTrendAnalysisPipeline({
+    const { technical, cycle, risk, decision, strategy, executionStrategy } = runRankTrendAnalysisPipeline({
       ranks: analysisRanks,
       percentiles: analysisPercentiles,
       currentPercentile,
@@ -673,6 +673,7 @@ export class RankTrendAnalyzer {
       zlje,
       zljzb,
       regime,
+      hotlistSentiment: typeof dataLayer.getBreathData === 'function' ? dataLayer.getBreathData() : null,
       config: runtimeConfig,
       requiredSamples,
     })
@@ -694,6 +695,7 @@ export class RankTrendAnalyzer {
       risk,
       decision,
       strategy,
+      executionStrategy,
     }
 
     const result: RankTrendResult = Object.assign(rankTrend, {

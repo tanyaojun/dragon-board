@@ -679,6 +679,11 @@ const getConfidenceTitle = (stock: any) => {
   title += '─'.repeat(30) + '\n'
 
   if (rankTrend) {
+    const jumpConfidence = getJumpConfidence(stock)
+    if (jumpConfidence > 0) {
+      title += `🚀 Jump跃迁置信: ${formatTooltipNumber(jumpConfidence, 1)}%\n`
+    }
+
     // 排名变化
     const rankChange = getRankChange(stock)
     if (rankChange !== 0) {
@@ -857,6 +862,12 @@ const getFinalConfidence = (stock: any) =>
   getRankTrendAnalysis(stock)?.decision?.final?.confidence ??
   getRankTrendAnalysis(stock)?.finalConfidence ??
   stock?.finalConfidence ??
+  0
+
+const getJumpConfidence = (stock: any) =>
+  getRankTrendAnalysis(stock)?.jump?.confidence ??
+  stock?.rankTrend?.jump?.confidence ??
+  stock?.jumpConfidence ??
   0
 
 const getMacdCross = (stock: any) =>

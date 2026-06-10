@@ -209,12 +209,32 @@ const strategyResult = {
   reasons: ['refined-cycle'],
 }
 
+const hotlistSentiment = {
+  phaseName: '发酵',
+  riskLevel: '中',
+  confidence: 82,
+}
+
+const executionStrategyResult = {
+  ...strategyResult,
+  hotlist: {
+    state: 'present' as const,
+    stage: '发酵',
+    riskLevel: '中',
+    confidence: 82,
+  },
+  candidateTier: 'A_MAIN' as const,
+  action: 'focus' as const,
+  reasons: ['execution-tier'],
+}
+
 const technicalCalls = vi.fn()
 const fallbackTechnicalCalls = vi.fn()
 const cycleCalls = vi.fn()
 const riskCalls = vi.fn()
 const decisionCalls = vi.fn()
 const strategyCalls = vi.fn()
+const executionStrategyCalls = vi.fn()
 const minSamplesCalls = vi.fn()
 const marketRegimeCalls = vi.fn()
 
@@ -257,6 +277,13 @@ vi.mock('@/services/rankTrend/candidateTierComposer', () => ({
   }),
 }))
 
+vi.mock('@/services/rankTrend/executionCandidateTierComposer', () => ({
+  composeExecutionCandidateTier: vi.fn((input: unknown) => {
+    executionStrategyCalls(input)
+    return executionStrategyResult
+  }),
+}))
+
 vi.mock('@/services/rankTrend/marketRegimeAnalyzer', () => ({
   analyzeMarketRegime: vi.fn((input: unknown) => {
     marketRegimeCalls(input)
@@ -283,6 +310,7 @@ describe('runRankTrendAnalysisPipeline', () => {
     riskCalls.mockClear()
     decisionCalls.mockClear()
     strategyCalls.mockClear()
+    executionStrategyCalls.mockClear()
     minSamplesCalls.mockClear()
     marketRegimeCalls.mockClear()
   })
@@ -300,6 +328,7 @@ describe('runRankTrendAnalysisPipeline', () => {
       zlje: 12000000,
       zljzb: 14.2,
       regime: strategyResult.regime,
+      hotlistSentiment,
       config: {
         momentumPeriods: [5, 10, 20],
         momentumWeights: [0.5, 0.3, 0.2],
@@ -324,6 +353,7 @@ describe('runRankTrendAnalysisPipeline', () => {
     expect(riskCalls).toHaveBeenCalledTimes(1)
     expect(decisionCalls).toHaveBeenCalledTimes(1)
     expect(strategyCalls).toHaveBeenCalledTimes(1)
+    expect(executionStrategyCalls).toHaveBeenCalledTimes(1)
 
     expect(cycleCalls.mock.calls[0]?.[0]).toMatchObject({
       ranks: [35, 21, 12],
@@ -359,6 +389,13 @@ describe('runRankTrendAnalysisPipeline', () => {
       risk: riskResult,
       regime: strategyResult.regime,
     })
+    expect(executionStrategyCalls.mock.calls[0]?.[0]).toMatchObject({
+      technical: technicalResult,
+      cycle: refinedCycle,
+      risk: riskResult,
+      regime: strategyResult.regime,
+      hotlistSentiment,
+    })
 
     expect(result).toEqual({
       technical: technicalResult,
@@ -366,6 +403,7 @@ describe('runRankTrendAnalysisPipeline', () => {
       risk: riskResult,
       decision: decisionResult,
       strategy: strategyResult,
+      executionStrategy: executionStrategyResult,
     })
   })
 
@@ -479,6 +517,11 @@ describe('shared pipeline consumers', () => {
         candidateTier: 'D_EXIT_RISK' as const,
         action: 'avoid' as const,
       },
+      executionStrategy: {
+        ...executionStrategyResult,
+        candidateTier: 'A_MAIN' as const,
+        action: 'focus' as const,
+      },
     }))
 
     vi.doMock('@/services/rankTrend/runRankTrendAnalysisPipeline', () => ({
@@ -514,6 +557,12 @@ describe('shared pipeline consumers', () => {
       currentPercentile: 68,
       requiredSamples: 5,
       regime: strategyResult.regime,
+      hotlistSentiment: {
+        overall: 58,
+        marketData: { ztCount: 52, dtCount: 3, upCount: 3100, downCount: 1800, totalAmo: 1.1e12 },
+        passRate: { to2: 42 },
+        timestamp: 1,
+      },
     })
     expect(marketRegimeCalls).toHaveBeenCalled()
     expect(results.get('600001')).toMatchObject({
@@ -526,6 +575,10 @@ describe('shared pipeline consumers', () => {
       strategy: {
         candidateTier: 'D_EXIT_RISK',
         action: 'avoid',
+      },
+      executionStrategy: {
+        candidateTier: 'A_MAIN',
+        action: 'focus',
       },
     })
 
@@ -554,6 +607,11 @@ describe('shared pipeline consumers', () => {
         candidateTier: 'C_CROWDED' as const,
         action: 'hold' as const,
       },
+      executionStrategy: {
+        ...executionStrategyResult,
+        candidateTier: 'A_MAIN' as const,
+        action: 'focus' as const,
+      },
     }))
 
     vi.doMock('@/services/rankTrend/runRankTrendAnalysisPipeline', () => ({
@@ -574,7 +632,7 @@ describe('shared pipeline consumers', () => {
           payload: {},
           marketStats: {},
           limitSummary: {},
-          sentiment: {},
+          sentiment: { phaseName: '发酵', riskLevel: '中', confidence: 82 },
           moneyFlow: {},
           indices: {},
           rotationSummary: {},
@@ -591,7 +649,7 @@ describe('shared pipeline consumers', () => {
           payload: {},
           marketStats: {},
           limitSummary: {},
-          sentiment: {},
+          sentiment: { phaseName: '高潮', riskLevel: '中', confidence: 88 },
           moneyFlow: {},
           indices: {},
           rotationSummary: {},
@@ -617,6 +675,7 @@ describe('shared pipeline consumers', () => {
       percentiles: [23, 68],
       currentPercentile: 68,
       regime: strategyResult.regime,
+      hotlistSentiment: { phaseName: '高潮', riskLevel: '中', confidence: 88 },
     })
     expect(marketRegimeCalls).toHaveBeenCalled()
     const targetSignal = signals.find((signal) => signal.code === '600001')
@@ -628,6 +687,9 @@ describe('shared pipeline consumers', () => {
       rankTrend: {
         strategy: {
           candidateTier: 'C_CROWDED',
+        },
+        executionStrategy: {
+          candidateTier: 'A_MAIN',
         },
         decision: {
           final: {

@@ -29,7 +29,7 @@ from backend.cli import (
     cmd_verify_themes,
     summarize_longtest_baseline,
 )
-from backend.core.backtest import TradeSimulator
+from backend.core.backtest import DEFAULT_TRADE_CONFIG, TradeSimulator
 from backend.core.backtest.strategy import normalize_strategy_name
 from backend.data.database import ResearchSessionLocal, SessionLocal, init_db
 from backend.data.backup_sync import BackupSyncService
@@ -121,6 +121,30 @@ def make_bundle_with_empty_hotlist(path: Path) -> Path:
         records[index]["payload"]["hotlist"] = []
     bundle.write_text(json.dumps({"records": records}, ensure_ascii=False), encoding="utf-8")
     return bundle
+
+
+def test_theme_trade_config_uses_v5_lifecycle_fusion_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(DEFAULT_TRADE_CONFIG, "minJumpConfidence", 91.5)
+
+    config = BacktestService._theme_trade_config({}, "ranktrend_early_big_move_v3_lifecycle_fusion")
+
+    assert config["minJumpConfidence"] == 90.0
+    assert config["maxHoldingBars"] == 30
+    assert config["stopLoss"] == -0.05
+    assert config["takeProfit"] == 9.99
+    assert config["volumeParticipationRate"] == 0.1
+
+
+def test_theme_trade_config_keeps_non_v5_platform_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(DEFAULT_TRADE_CONFIG, "minJumpConfidence", 91.5)
+
+    config = BacktestService._theme_trade_config({}, "rank_trend_candidate")
+
+    assert config["minJumpConfidence"] == 91.5
+    assert config["maxHoldingBars"] == 40
+    assert config["stopLoss"] == -0.06
+    assert config["takeProfit"] == 0.12
+    assert config["volumeParticipationRate"] == 0.05
 
 
 def make_bundle_with_synthesized_empty_hotlist(path: Path) -> Path:
@@ -681,7 +705,7 @@ def test_ranktrend_compose_strategy_keeps_low_visibility_b_ignition_as_caution_c
     assert any("低可见度" in reason for reason in strategy["reasons"])
 
 
-def test_ranktrend_compose_strategy_keeps_structural_tier_when_lifecycle_vetoes() -> None:
+def test_ranktrend_compose_strategy_blocks_execution_tier_when_lifecycle_vetoes() -> None:
     from backend.analysis.ranktrend import compose_strategy
 
     technical = {
@@ -714,7 +738,7 @@ def test_ranktrend_compose_strategy_keeps_structural_tier_when_lifecycle_vetoes(
         {"stage": "发酵", "riskLevel": "低", "confidence": 80},
     )
 
-    assert strategy["candidateTier"] == "A_MAIN"
+    assert strategy["candidateTier"] == "N_NEUTRAL"
     assert any("生命周期" in reason for reason in strategy["reasons"])
 
 
@@ -762,7 +786,7 @@ def test_import_backtest_optimize_and_golden(tmp_path: Path) -> None:
     assert "sharpe" in run
     assert run["strategyName"] == "rank_trend_candidate"
     assert run["tradeSimulation"]["entryStrategy"] == "rank_trend_candidate"
-    assert run["tradeSimulation"]["config"]["minJumpConfidence"] == 77.5
+    assert run["tradeSimulation"]["config"]["minJumpConfidence"] == 90.0
     assert "controlBacktests" in run
     assert {row["key"] for row in run["controlBacktests"]} >= {"hot_top10", "a_main_only", "b_ignition_only", "a_b_combined"}
     assert "sampleDiagnostics" in run
@@ -2919,6 +2943,26 @@ def test_cli_run_ranktrend_exposes_ui_backtest_parameters() -> None:
     assert payload["excludeNonPositivePriceRows"] is True
     assert payload["excludeCrossMarketZeroPriceRows"] is True
     assert payload["excludeAllZeroPriceFrames"] is True
+
+
+def test_cli_ranktrend_payload_omits_optional_trade_defaults_when_not_explicit() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "run-ranktrend",
+            "--dataset-id",
+            "ds_cli",
+            "--strategy-name",
+            "ranktrend_early_big_move_v3_lifecycle_fusion",
+        ]
+    )
+
+    payload = build_ranktrend_payload(args)
+
+    assert "maxHoldingBars" not in payload
+    assert "takeProfitPct" not in payload
+    assert "stopLossPct" not in payload
+    assert "volumeParticipationRate" not in payload["tradeConfig"]
 
 
 def test_cli_longtest_baselines_use_fixed_research_contract() -> None:

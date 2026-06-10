@@ -22,7 +22,13 @@ from backend.analysis.ranktrend_live_gate_shadow_audit import (
 )
 from backend.analysis.ranktrend_jump_research import build_jump_research_request, summarize_jump_research
 from backend.analysis.theme_trend import ThemeTrendConfig, ThemeTrendPythonEngine
-from backend.core.backtest import BacktestEngine, TradeSimulator, normalize_strategy_name
+from backend.core.backtest import (
+    DEFAULT_TRADE_CONFIG,
+    V5_LIFECYCLE_FUSION_TRADE_DEFAULTS,
+    BacktestEngine,
+    TradeSimulator,
+    normalize_strategy_name,
+)
 from backend.data.models import BacktestRun, GoldenRankTrendCase, OptimizationRun
 from backend.data.quality_gate import evaluate_snapshot_quality
 from backend.data.json_codec import dumps_json_field, loads_json_field
@@ -41,6 +47,15 @@ DEFAULT_BACKTEST_STRATEGY_CONFIG = {
     "macdSlow": 34,
     "macdSignal": 13,
 }
+
+V5_LIFECYCLE_FUSION_STRATEGY = "ranktrend_early_big_move_v3_lifecycle_fusion"
+
+
+def trade_defaults_for_strategy(strategy_name: str) -> dict[str, Any]:
+    defaults = dict(DEFAULT_TRADE_CONFIG)
+    if strategy_name == V5_LIFECYCLE_FUSION_STRATEGY:
+        defaults.update(V5_LIFECYCLE_FUSION_TRADE_DEFAULTS)
+    return defaults
 
 BACKTEST_COMPARE_METRICS = {
     "totalReturn",
@@ -1135,29 +1150,35 @@ class BacktestService:
         if exclude_all_zero_price_frames or exclude_cross_market_zero_price_rows or exclude_non_positive_price_rows:
             _ensure_runtime_filtered_frames_usable(run_frames, quality_gate)
 
+        trade_defaults = trade_defaults_for_strategy(strategy_name)
         trade_config = {
-            "initialCapital": camel_get(payload, "initial_cash", "initialCash", 1000000),
-            "maxPositions": camel_get(payload, "max_positions", "maxPositions", 5),
-            "positionSize": camel_get(payload, "position_size", "positionSize", 0.2),
-            "minJumpConfidence": camel_get(payload, "min_jump_confidence", "minJumpConfidence", 77.5),
-            "takeProfit": camel_get(payload, "take_profit_pct", "takeProfitPct", 0.12),
-            "stopLoss": -abs(float(camel_get(payload, "stop_loss_pct", "stopLossPct", 0.06))),
-            "maxHoldingBars": camel_get(payload, "max_holding_bars", "maxHoldingBars", 40),
-            "targetHoldingDays": camel_get(payload, "target_holding_days", "targetHoldingDays", 5),
-            "enforceT1": camel_get(payload, "enforce_t1", "enforceT1", True),
-            "executionMode": camel_get(payload, "execution_mode", "executionMode", "current_bar"),
-            "feeRate": camel_get(payload, "fee_rate", "feeRate", 0.0003),
-            "stampTaxRate": camel_get(payload, "stamp_tax_rate", "stampTaxRate", 0.0005),
-            "slippageRate": camel_get(payload, "slippage_rate", "slippageRate", 0.001),
-            "useOrderBookPrice": camel_get(payload, "use_order_book_price", "useOrderBookPrice", True),
-            "enforceLimitStatus": camel_get(payload, "enforce_limit_status", "enforceLimitStatus", True),
-            "enforceVolumeLimit": camel_get(payload, "enforce_volume_limit", "enforceVolumeLimit", True),
-            "enforceOrderBookQueue": camel_get(payload, "enforce_order_book_queue", "enforceOrderBookQueue", True),
-            "allowPartialFills": camel_get(payload, "allow_partial_fills", "allowPartialFills", True),
-            "volumeParticipationRate": camel_get(payload, "volume_participation_rate", "volumeParticipationRate", 0.05),
-            "orderBookParticipationRate": camel_get(payload, "order_book_participation_rate", "orderBookParticipationRate", 0.3),
-            "useIntrabarStops": camel_get(payload, "use_intrabar_stops", "useIntrabarStops", True),
-            "intrabarAmbiguity": camel_get(payload, "intrabar_ambiguity", "intrabarAmbiguity", "stop_first"),
+            "initialCapital": camel_get(payload, "initial_cash", "initialCash", trade_defaults["initialCapital"]),
+            "maxPositions": camel_get(payload, "max_positions", "maxPositions", trade_defaults["maxPositions"]),
+            "positionSize": camel_get(payload, "position_size", "positionSize", trade_defaults["positionSize"]),
+            "minJumpConfidence": camel_get(
+                payload,
+                "min_jump_confidence",
+                "minJumpConfidence",
+                trade_defaults["minJumpConfidence"],
+            ),
+            "takeProfit": camel_get(payload, "take_profit_pct", "takeProfitPct", trade_defaults["takeProfit"]),
+            "stopLoss": -abs(float(camel_get(payload, "stop_loss_pct", "stopLossPct", abs(trade_defaults["stopLoss"])))),
+            "maxHoldingBars": camel_get(payload, "max_holding_bars", "maxHoldingBars", trade_defaults["maxHoldingBars"]),
+            "targetHoldingDays": camel_get(payload, "target_holding_days", "targetHoldingDays", trade_defaults["targetHoldingDays"]),
+            "enforceT1": camel_get(payload, "enforce_t1", "enforceT1", trade_defaults["enforceT1"]),
+            "executionMode": camel_get(payload, "execution_mode", "executionMode", trade_defaults["executionMode"]),
+            "feeRate": camel_get(payload, "fee_rate", "feeRate", trade_defaults["feeRate"]),
+            "stampTaxRate": camel_get(payload, "stamp_tax_rate", "stampTaxRate", trade_defaults["stampTaxRate"]),
+            "slippageRate": camel_get(payload, "slippage_rate", "slippageRate", trade_defaults["slippageRate"]),
+            "useOrderBookPrice": camel_get(payload, "use_order_book_price", "useOrderBookPrice", trade_defaults["useOrderBookPrice"]),
+            "enforceLimitStatus": camel_get(payload, "enforce_limit_status", "enforceLimitStatus", trade_defaults["enforceLimitStatus"]),
+            "enforceVolumeLimit": camel_get(payload, "enforce_volume_limit", "enforceVolumeLimit", trade_defaults["enforceVolumeLimit"]),
+            "enforceOrderBookQueue": camel_get(payload, "enforce_order_book_queue", "enforceOrderBookQueue", trade_defaults["enforceOrderBookQueue"]),
+            "allowPartialFills": camel_get(payload, "allow_partial_fills", "allowPartialFills", trade_defaults["allowPartialFills"]),
+            "volumeParticipationRate": camel_get(payload, "volume_participation_rate", "volumeParticipationRate", trade_defaults["volumeParticipationRate"]),
+            "orderBookParticipationRate": camel_get(payload, "order_book_participation_rate", "orderBookParticipationRate", trade_defaults["orderBookParticipationRate"]),
+            "useIntrabarStops": camel_get(payload, "use_intrabar_stops", "useIntrabarStops", trade_defaults["useIntrabarStops"]),
+            "intrabarAmbiguity": camel_get(payload, "intrabar_ambiguity", "intrabarAmbiguity", trade_defaults["intrabarAmbiguity"]),
             "entryStrategy": strategy_name,
         }
         trade_config.update(trade_config_patch)
@@ -1704,30 +1725,36 @@ class BacktestService:
     @staticmethod
     def _theme_trade_config(payload: dict[str, Any], strategy_name: str) -> dict[str, Any]:
         patch = camel_get(payload, "trade_config", "tradeConfig", {}) or {}
+        trade_defaults = trade_defaults_for_strategy(strategy_name)
         config = {
-            "initialCapital": camel_get(payload, "initial_cash", "initialCash", 1000000),
-            "maxPositions": camel_get(payload, "max_positions", "maxPositions", 5),
-            "positionSize": camel_get(payload, "position_size", "positionSize", 0.2),
-            "minJumpConfidence": camel_get(payload, "min_jump_confidence", "minJumpConfidence", 77.5),
-            "takeProfit": camel_get(payload, "take_profit_pct", "takeProfitPct", 0.12),
-            "stopLoss": -abs(float(camel_get(payload, "stop_loss_pct", "stopLossPct", 0.06))),
-            "maxHoldingBars": camel_get(payload, "max_holding_bars", "maxHoldingBars", 40),
-            "targetHoldingDays": camel_get(payload, "target_holding_days", "targetHoldingDays", 5),
+            "initialCapital": camel_get(payload, "initial_cash", "initialCash", trade_defaults["initialCapital"]),
+            "maxPositions": camel_get(payload, "max_positions", "maxPositions", trade_defaults["maxPositions"]),
+            "positionSize": camel_get(payload, "position_size", "positionSize", trade_defaults["positionSize"]),
+            "minJumpConfidence": camel_get(
+                payload,
+                "min_jump_confidence",
+                "minJumpConfidence",
+                trade_defaults["minJumpConfidence"],
+            ),
+            "takeProfit": camel_get(payload, "take_profit_pct", "takeProfitPct", trade_defaults["takeProfit"]),
+            "stopLoss": -abs(float(camel_get(payload, "stop_loss_pct", "stopLossPct", abs(trade_defaults["stopLoss"])))),
+            "maxHoldingBars": camel_get(payload, "max_holding_bars", "maxHoldingBars", trade_defaults["maxHoldingBars"]),
+            "targetHoldingDays": camel_get(payload, "target_holding_days", "targetHoldingDays", trade_defaults["targetHoldingDays"]),
             "maxThemeExposure": camel_get(payload, "max_theme_exposure", "maxThemeExposure", 0.45),
-            "enforceT1": camel_get(payload, "enforce_t1", "enforceT1", True),
-            "executionMode": camel_get(payload, "execution_mode", "executionMode", "current_bar"),
-            "feeRate": camel_get(payload, "fee_rate", "feeRate", 0.0003),
-            "stampTaxRate": camel_get(payload, "stamp_tax_rate", "stampTaxRate", 0.0005),
-            "slippageRate": camel_get(payload, "slippage_rate", "slippageRate", 0.001),
-            "useOrderBookPrice": camel_get(payload, "use_order_book_price", "useOrderBookPrice", True),
-            "enforceLimitStatus": camel_get(payload, "enforce_limit_status", "enforceLimitStatus", True),
-            "enforceVolumeLimit": camel_get(payload, "enforce_volume_limit", "enforceVolumeLimit", True),
-            "enforceOrderBookQueue": camel_get(payload, "enforce_order_book_queue", "enforceOrderBookQueue", True),
-            "allowPartialFills": camel_get(payload, "allow_partial_fills", "allowPartialFills", True),
-            "volumeParticipationRate": camel_get(payload, "volume_participation_rate", "volumeParticipationRate", 0.05),
-            "orderBookParticipationRate": camel_get(payload, "order_book_participation_rate", "orderBookParticipationRate", 0.3),
-            "useIntrabarStops": camel_get(payload, "use_intrabar_stops", "useIntrabarStops", True),
-            "intrabarAmbiguity": camel_get(payload, "intrabar_ambiguity", "intrabarAmbiguity", "stop_first"),
+            "enforceT1": camel_get(payload, "enforce_t1", "enforceT1", trade_defaults["enforceT1"]),
+            "executionMode": camel_get(payload, "execution_mode", "executionMode", trade_defaults["executionMode"]),
+            "feeRate": camel_get(payload, "fee_rate", "feeRate", trade_defaults["feeRate"]),
+            "stampTaxRate": camel_get(payload, "stamp_tax_rate", "stampTaxRate", trade_defaults["stampTaxRate"]),
+            "slippageRate": camel_get(payload, "slippage_rate", "slippageRate", trade_defaults["slippageRate"]),
+            "useOrderBookPrice": camel_get(payload, "use_order_book_price", "useOrderBookPrice", trade_defaults["useOrderBookPrice"]),
+            "enforceLimitStatus": camel_get(payload, "enforce_limit_status", "enforceLimitStatus", trade_defaults["enforceLimitStatus"]),
+            "enforceVolumeLimit": camel_get(payload, "enforce_volume_limit", "enforceVolumeLimit", trade_defaults["enforceVolumeLimit"]),
+            "enforceOrderBookQueue": camel_get(payload, "enforce_order_book_queue", "enforceOrderBookQueue", trade_defaults["enforceOrderBookQueue"]),
+            "allowPartialFills": camel_get(payload, "allow_partial_fills", "allowPartialFills", trade_defaults["allowPartialFills"]),
+            "volumeParticipationRate": camel_get(payload, "volume_participation_rate", "volumeParticipationRate", trade_defaults["volumeParticipationRate"]),
+            "orderBookParticipationRate": camel_get(payload, "order_book_participation_rate", "orderBookParticipationRate", trade_defaults["orderBookParticipationRate"]),
+            "useIntrabarStops": camel_get(payload, "use_intrabar_stops", "useIntrabarStops", trade_defaults["useIntrabarStops"]),
+            "intrabarAmbiguity": camel_get(payload, "intrabar_ambiguity", "intrabarAmbiguity", trade_defaults["intrabarAmbiguity"]),
             "entryStrategy": strategy_name,
         }
         config.update(patch)

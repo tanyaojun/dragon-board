@@ -35,6 +35,12 @@ export interface MarketRegimeAnalysis {
 
 export interface RankTrendStrategyResult {
   regime: MarketRegimeAnalysis
+  hotlist?: {
+    state: 'missing' | 'present'
+    stage?: string | null
+    riskLevel?: string | null
+    confidence?: unknown
+  }
   momentum: RankTrendMomentumProfile
   candidateTier: CandidateTier
   action: StrategyAction
@@ -180,6 +186,8 @@ export interface RankTrendAnalysisResult {
   }
   // 策略层结果是消费侧扩展，不属于 rankTrend 核心分析合同。
   strategy?: RankTrendStrategyResult
+  // V5 执行层分层，镜像 Python candidateTierMode=execution 的热榜情绪融合语义。
+  executionStrategy?: RankTrendStrategyResult
 }
 
 export const ATTENTION_STAGE_SEQUENCE: AttentionStage[] = [

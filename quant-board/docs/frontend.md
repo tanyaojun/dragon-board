@@ -128,7 +128,7 @@ half_hour
 - 最大持仓数 (`maxPositions`)，默认 5
 - 目标持仓天数 (`targetHoldingDays`)，默认 5
 - 最大持有 bars (`maxHoldingBars`)，half_hour 默认 40
-- Jump 置信度门槛 (`minJumpConfidence`)，默认 77.5
+- Jump 置信度门槛 (`minJumpConfidence`)，V5 默认 90
 
 **策略层参数：**
 - MACD 快线 (`macdFast`)，默认 21
@@ -137,7 +137,7 @@ half_hour
 - 动量周期组 (`momentumPeriods`)，默认 `[3, 5, 8, 13, 21]`
 
 **交易管理层参数（V2 Phase 1 优化搜索空间）：**
-- Jump 置信度门槛 (`minJumpConfidence`)，默认 77.5
+- Jump 置信度门槛 (`minJumpConfidence`)，V5 默认 90
 - 止盈比例 (`takeProfit` / `takeProfitPct`)，默认 0.12
 - 止损比例 (`stopLoss` / `stopLossPct`)，默认 0.06
 
@@ -167,7 +167,7 @@ half_hour
 ```text
 targetHoldingDays = 5
 maxHoldingBars = 40
-minJumpConfidence = 77.5
+minJumpConfidence = 90
 macdFast/macdSlow/macdSignal = 21/34/13
 momentumPeriods = [3, 5, 8, 13, 21]
 ```
@@ -307,7 +307,7 @@ Phase 6 起，报告页读取顺序固定为：
 | 参数 | 搜索范围 | 说明 |
 |---|---|---|
 | `maxPositions` | 3, 5, 8 | 最大持仓数 |
-| `minJumpConfidence` | 77.5, 80, 85, 90 | Jump 置信度门槛 |
+| `minJumpConfidence` | 90 | V5 Jump 置信度默认门槛；低于 90 的值只可手动输入做研究对照，不作为默认基线 |
 | `takeProfit` | 0.08, 0.12, 0.16 | 止盈比例 |
 | `stopLoss` | -0.04, -0.06, -0.08 | 止损比例 |
 
@@ -320,7 +320,7 @@ Phase 6 起，报告页读取顺序固定为：
 ```typescript
 parameterGrid: {
   momentumPeriods: [[3,5,8,13,21], [2,4,6,10,16], [5,8,13,21,34]],
-  minJumpConfidence: [77.5, 80, 85, 90],
+  minJumpConfidence: [90],
   takeProfitPct: [0.08, 0.12, 0.16],
   stopLossPct: [0.04, 0.06, 0.08],
   maxPositions: [3, 5, 8],

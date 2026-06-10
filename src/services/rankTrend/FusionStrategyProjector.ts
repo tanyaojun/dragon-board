@@ -5,7 +5,7 @@ import type {
   FusionStrategyState,
 } from '@/types/fusionStrategyProjection'
 import type { CandidateTier, LifecycleDecisionAction } from './types'
-import { isFusionEntryCandidate } from './fusionStrategy'
+import { evaluateV5FusionEntry, type V5FusionEntryResult } from './v5FusionExecutionContract'
 
 type StrategyLifecycleInput = {
   triggered?: boolean
@@ -47,8 +47,8 @@ function normalizeCode(code: unknown): string {
   return digits ? digits.padStart(6, '0').slice(-6) : ''
 }
 
-function normalizeCandidateTier(stock: Record<string, any>): CandidateTier {
-  const tier = String(stock?.rankTrend?.strategy?.candidateTier || '')
+function normalizeCandidateTier(entry: V5FusionEntryResult): CandidateTier {
+  const tier = entry.candidateTier
   if (
     tier === 'A_MAIN' ||
     tier === 'B_IGNITION' ||
@@ -96,10 +96,10 @@ function buildSnapshotId(
 }
 
 function resolveStrategyState(
-  stock: Record<string, any>,
+  entry: V5FusionEntryResult,
   lifecycle: StrategyLifecycleInput | null | undefined,
 ): FusionStrategyState {
-  const triggered = lifecycle?.triggered ?? isFusionEntryCandidate(stock)
+  const triggered = lifecycle?.triggered ?? entry.accepted
 
   let strategyState: FusionStrategyState = 'idle'
   if (triggered) strategyState = 'triggered_wait_entry'
@@ -112,7 +112,8 @@ function resolveStrategyState(
 export function buildFusionStrategyProjection(input: BuildProjectionInput): FusionStrategyProjection {
   const lifecycle = input.strategyLifecycle
   const stockCode = normalizeCode(input.stock.code)
-  const strategyState = resolveStrategyState(input.stock, lifecycle)
+  const entry = evaluateV5FusionEntry(input.stock)
+  const strategyState = resolveStrategyState(entry, lifecycle)
 
   return {
     stockCode,
@@ -124,7 +125,7 @@ export function buildFusionStrategyProjection(input: BuildProjectionInput): Fusi
     frameTime: input.frameTime,
     projectionSource: input.projectionSource || 'live',
     strategyState,
-    candidateTier: normalizeCandidateTier(input.stock),
+    candidateTier: normalizeCandidateTier(entry),
     lifecycleAction: normalizeLifecycleAction(input.stock),
     triggerAt: strategyState !== 'idle' ? lifecycle?.triggerAt || input.frameTime : undefined,
     strategyEntryAt: lifecycle?.entryAt,

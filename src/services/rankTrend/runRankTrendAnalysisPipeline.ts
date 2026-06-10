@@ -1,4 +1,8 @@
 import { composeCandidateTier } from '@/services/rankTrend/candidateTierComposer'
+import {
+  composeExecutionCandidateTier,
+  type HotlistSentimentLike,
+} from '@/services/rankTrend/executionCandidateTierComposer'
 import { analyzeAttentionCycle } from '@/services/rankTrend/attentionCycleAnalyzer'
 import { composeDecision } from '@/services/rankTrend/resultComposer'
 import { analyzeRiskSignals } from '@/services/rankTrend/riskSignalAnalyzer'
@@ -19,6 +23,7 @@ type RankTrendAnalysisPipelineResult = {
   risk: RankTrendAnalysisResult['risk']
   decision: RankTrendAnalysisResult['decision']
   strategy: NonNullable<RankTrendAnalysisResult['strategy']>
+  executionStrategy: NonNullable<RankTrendAnalysisResult['executionStrategy']>
 }
 
 type RunRankTrendAnalysisPipelineInput = {
@@ -31,6 +36,7 @@ type RunRankTrendAnalysisPipelineInput = {
   zlje: number
   zljzb: number
   regime: MarketRegimeAnalysis
+  hotlistSentiment?: HotlistSentimentLike
   config: RankTrendRuntimeConfig
   requiredSamples?: number
 }
@@ -48,6 +54,7 @@ export function runRankTrendAnalysisPipeline(
     zlje,
     zljzb,
     regime,
+    hotlistSentiment,
     config,
   } = input
   const requiredSamples = input.requiredSamples ?? getTechnicalMinSamples(config)
@@ -100,6 +107,13 @@ export function runRankTrendAnalysisPipeline(
     risk,
     regime,
   })
+  const executionStrategy = composeExecutionCandidateTier({
+    technical,
+    cycle,
+    risk,
+    regime,
+    hotlistSentiment,
+  })
 
   return {
     technical,
@@ -107,5 +121,6 @@ export function runRankTrendAnalysisPipeline(
     risk,
     decision,
     strategy,
+    executionStrategy,
   }
 }

@@ -99,6 +99,19 @@ describe('DataTable row detail interactions', () => {
     expect(source).toMatch(/const\s+getFinalConfidence\s*=\s*\(stock:\s*any\)\s*=>/)
   })
 
+  test('keeps displayed confidence bound to decision final confidence, not V5 JumpConfidence', () => {
+    const source = dataTableSource()
+
+    expect(source).toContain('getRankTrendAnalysis(stock)?.decision?.final?.confidence')
+    expect(source).toContain('getRankTrendAnalysis(stock)?.finalConfidence')
+    expect(source).toMatch(/Math\.round\(getFinalConfidence\(stock\) \|\| 0\)/)
+    expect(source).toContain('getJumpConfidence')
+    expect(source).toContain('getRankTrendAnalysis(stock)?.jump?.confidence')
+    expect(source).toContain('Jump跃迁置信')
+    expect(source).not.toMatch(/Math\.round\(getJumpConfidence\(stock\)/)
+    expect(source).not.toContain('minJumpConfidence')
+  })
+
   test('does not render rarely used super-large money flow columns', () => {
     const source = dataTableSource()
 

@@ -2,7 +2,7 @@
 # 所有历史 from backend.core.backtest import ... 继续可用
 from __future__ import annotations
 
-from backend.core.backtest.config import DEFAULT_TRADE_CONFIG
+from backend.core.backtest.config import DEFAULT_TRADE_CONFIG, V5_LIFECYCLE_FUSION_TRADE_DEFAULTS
 from backend.core.backtest.engine import BacktestEngine, Optimizer
 from backend.core.backtest.evaluator import (
     OutcomeEvaluator,
@@ -39,6 +39,7 @@ from backend.core.backtest.strategy import (
 
 __all__ = [
     "DEFAULT_TRADE_CONFIG",
+    "V5_LIFECYCLE_FUSION_TRADE_DEFAULTS",
     "DEFAULT_STRATEGY_NAME",
     "STRATEGY_DEFINITIONS",
     "SUPPORTED_STRATEGY_NAMES",

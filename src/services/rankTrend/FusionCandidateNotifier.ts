@@ -1,6 +1,6 @@
 import { candidateJournalService } from '@/services/candidate/CandidateJournalService'
 import type { CandidateJournalEntry, CandidateStatus, CandidateStockLike } from '@/services/candidate/types'
-import { isFusionEntryCandidate } from './fusionStrategy'
+import { evaluateV5FusionEntry, V5_FUSION_DEFAULTS } from './v5FusionExecutionContract'
 
 const FUSION_STRATEGY_SOURCE = 'ranktrend_early_big_move_v3_lifecycle_fusion'
 const FEISHU_ENDPOINT = '/api/notifications/jump-signal'
@@ -44,7 +44,8 @@ export class FusionCandidateNotifier {
 
   async process(stocks: CandidateStockLike[]): Promise<void> {
     for (const stock of stocks) {
-      if (!isFusionEntryCandidate(stock)) continue
+      const entry = evaluateV5FusionEntry(stock)
+      if (!entry.accepted) continue
 
       const code = normalizeCode(stock?.code)
       if (!code) continue
@@ -59,8 +60,14 @@ export class FusionCandidateNotifier {
         signalsSnapshotPatch: {
           triggerMeta: {
             source: FUSION_STRATEGY_SOURCE,
+            baseline: 'early_big_move_v5',
             triggerType: 'auto',
             triggeredAt: this.now().toISOString(),
+            executionCandidateTier: entry.candidateTier,
+            lifecycleAction: entry.lifecycleAction,
+            jumpConfidence: entry.jumpConfidence,
+            minJumpConfidence: V5_FUSION_DEFAULTS.minJumpConfidence,
+            blockedReasons: entry.blockedReasons,
           },
         },
       })
@@ -75,7 +82,7 @@ export class FusionCandidateNotifier {
     if (typeof globalThis.fetch !== 'function') return
 
     const rankTrend = stock.rankTrend
-    const candidateTier = String(rankTrend?.strategy?.candidateTier || '').trim()
+    const candidateTier = evaluateV5FusionEntry(stock).candidateTier
     const lifecycleAction = String(rankTrend?.cycle?.decision?.action || '').trim()
     const reason = candidateTier ? `${candidateTier} 命中，已自动写入候选池` : 'fusion 策略命中，已自动写入候选池'
 

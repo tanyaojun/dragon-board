@@ -726,7 +726,7 @@ v1 `checkpoint_2026-05-21_cross_market_zero_filter` 已落库，但因第一版�
 - [x] 复跑 4 月/5 月 `current_bar / 30 bars`，确认当前 V3 与 fusion 一致，但收益低于历史最佳。
 - [x] 下一轮 TDD 聚焦 `B_IGNITION` 低可见度点火/仓位挤占：`000657` 被标记为低可见度首段点火并降出 `B_IGNITION`，但完整复跑仍低于历史最佳，不能采用为默认策略。
 - [x] 下一轮聚焦排序/仓位路径归因：分析删除 `000657` 后资金进入哪些替代候选，为什么没有等到 `603459`，优先验证 B caution 排序降权而不是继续硬过滤。
-- [x] 拆开候选分层与融合执行职责：`compose_strategy()` 保留 RankTrend 结构分层，B veto 只由 lifecycle fusion 执行入口消费，避免污染 V3 对照。
+- [x] 拆开展示分层与 V5 执行分层：TS `strategy` 保留 RankTrend 展示/结构分层；Python `compose_strategy(... hotlist ...)` 在 execution 口径下输出执行分层并尊重 B veto；Dragon Board live gate 消费 `executionStrategy`，不再用展示分层代替执行分层。
 - [x] 将 `rankPathCommitment` 承接不足从硬 veto 降为 caution 诊断，只保留反转/高风险冲突作为一票否决来源。
 - [x] 复跑 4 月/5 月 `current_bar / 30 bars`，fusion 达到 `+20.29%` 合计收益、`70.37%` 合并胜率。
 - [x] 复跑 `2026-04-01~2026-05-31` 单次连续回测：`bt_6bad357f332b4197`，`+24.68%`，胜率 `71.43%`，确认不是月度相加口径。

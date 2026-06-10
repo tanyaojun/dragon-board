@@ -6,7 +6,7 @@ DEFAULT_TRADE_CONFIG: dict[str, Any] = {
     "initialCapital": 1000000,
     "maxPositions": 5,
     "positionSize": 0.2,
-    "minJumpConfidence": 77.5,
+    "minJumpConfidence": 90.0,
     "feeRate": 0.0003,
     "stampTaxRate": 0.0005,
     "slippageRate": 0.001,
@@ -25,4 +25,12 @@ DEFAULT_TRADE_CONFIG: dict[str, Any] = {
     "orderBookParticipationRate": 0.3,
     "useIntrabarStops": True,
     "intrabarAmbiguity": "stop_first",
+}
+
+V5_LIFECYCLE_FUSION_TRADE_DEFAULTS: dict[str, Any] = {
+    "minJumpConfidence": 90.0,
+    "maxHoldingBars": 30,
+    "stopLoss": -0.05,
+    "takeProfit": 9.99,
+    "volumeParticipationRate": 0.1,
 }
