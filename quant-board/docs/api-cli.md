@@ -1177,6 +1177,7 @@ openPositionCount
   },
   "parameterGrid": {
     "momentumPeriods": [[3, 5, 8, 13, 21]],
+    "minJumpConfidence": [77.5, 80.0, 85.0, 90.0],
     "takeProfitPct": [0.08, 0.12, 0.16],
     "stopLossPct": [0.04, 0.06, 0.08],
     "maxPositions": [3, 5, 8]

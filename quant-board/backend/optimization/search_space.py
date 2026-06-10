@@ -37,6 +37,7 @@ def default_search_space() -> dict[str, list[Any]]:
         "tierBIgnitionRiskPressureMax": [0.50, 0.65, 0.80],
         # ── 交易层 ──
         "maxPositions": [3, 5, 8],
+        "minJumpConfidence": [77.5, 80.0, 85.0, 90.0],
         "takeProfit": [0.08, 0.12, 0.16],
         "stopLoss": [-0.04, -0.06, -0.08],
     }

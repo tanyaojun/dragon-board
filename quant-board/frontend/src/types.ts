@@ -139,6 +139,7 @@ export interface BacktestRequest {
   initialCash: number;
   maxPositions: number;
   positionSize: number;
+  minJumpConfidence: number;
   executionMode: "current_bar" | "next_bar";
   maxHoldingBars: number;
   targetHoldingDays: number;
@@ -325,6 +326,7 @@ export interface OptimizationRequest {
   };
   parameterGrid: {
     momentumPeriods: number[][];
+    minJumpConfidence?: number[];
     takeProfitPct: number[];
     stopLossPct: number[];
     maxPositions: number[];

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { isFusionEntryCandidate } from '../fusionStrategy'
 import type { RankTrendAnalysisResult } from '../types'
+import { DEFAULT_RANK_TREND_FUSION_MIN_JUMP_CONFIDENCE } from '@/types/rankTrendDefaults'
 
 function createRankTrend(overrides: Partial<RankTrendAnalysisResult> = {}): RankTrendAnalysisResult {
   return {
@@ -149,8 +150,23 @@ function createStock(overrides: Record<string, unknown> = {}) {
 }
 
 describe('isFusionEntryCandidate', () => {
+  it('使用 rankTrendDefaults 中的 fusion jump 默认阈值', () => {
+    expect(DEFAULT_RANK_TREND_FUSION_MIN_JUMP_CONFIDENCE).toBe(77.5)
+  })
+
   it('A_MAIN 满足基础门槛且 lifecycle 未 veto 时返回 true', () => {
     const stock = createStock()
+
+    expect(isFusionEntryCandidate(stock)).toBe(true)
+  })
+
+  it('jump confidence 为 79.8 时仍允许通过基础 fusion 门槛', () => {
+    const stock = createStock({
+      rankTrend: {
+        ...createRankTrend(),
+        jump: { direction: 'buy', confidence: 79.8 },
+      },
+    })
 
     expect(isFusionEntryCandidate(stock)).toBe(true)
   })

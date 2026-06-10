@@ -1,3 +1,5 @@
+import { DEFAULT_RANK_TREND_FUSION_MIN_JUMP_CONFIDENCE } from '@/types/rankTrendDefaults'
+
 import type { CandidateTier, RankTrendAnalysisResult } from './types'
 
 type RankTrendLike = RankTrendAnalysisResult & {
@@ -48,7 +50,7 @@ function hasBaseFusionGate(stock: any, rankTrend: RankTrendLike): boolean {
 
   return (
     jumpDirection === 'buy' &&
-    jumpConfidence >= 90 &&
+    jumpConfidence >= DEFAULT_RANK_TREND_FUSION_MIN_JUMP_CONFIDENCE &&
     short > 0 &&
     mid > 0 &&
     long > 0 &&

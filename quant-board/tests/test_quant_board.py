@@ -762,6 +762,7 @@ def test_import_backtest_optimize_and_golden(tmp_path: Path) -> None:
     assert "sharpe" in run
     assert run["strategyName"] == "rank_trend_candidate"
     assert run["tradeSimulation"]["entryStrategy"] == "rank_trend_candidate"
+    assert run["tradeSimulation"]["config"]["minJumpConfidence"] == 77.5
     assert "controlBacktests" in run
     assert {row["key"] for row in run["controlBacktests"]} >= {"hot_top10", "a_main_only", "b_ignition_only", "a_b_combined"}
     assert "sampleDiagnostics" in run

@@ -6,7 +6,7 @@ DEFAULT_TRADE_CONFIG: dict[str, Any] = {
     "initialCapital": 1000000,
     "maxPositions": 5,
     "positionSize": 0.2,
-    "minJumpConfidence": 90.0,
+    "minJumpConfidence": 77.5,
     "feeRate": 0.0003,
     "stampTaxRate": 0.0005,
     "slippageRate": 0.001,

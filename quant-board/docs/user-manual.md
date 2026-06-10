@@ -238,6 +238,7 @@ cd d:\dragon-board\quant-board
    - `maxPositions`: `5`
    - `targetHoldingDays`: `5`
    - `maxHoldingBars`: `40`
+   - `minJumpConfidence`: `77.5`
    - `executionMode`: `current_bar`
    - `takeProfitPct`: `0.12`
    - `stopLossPct`: `0.06`
@@ -383,7 +384,8 @@ cd d:\dragon-board\quant-board
 6. 可勾选 `walk-forward` 做按交易日滚动验证。它会在 Top trials 中逐段重选，并输出分段 validation 表现。
 7. 设置 `trials`，首次建议 `12` 到 `36`。
 8. 参数列表用英文逗号分隔，例如：
-   - `momentumWindow`: `6,8,10`
+   - `momentumPeriods`: `3-5-8-13-21;2-4-6-10-16;5-8-13-21-34`
+   - `minJumpConfidence`: `77.5,80,85,90`
    - `takeProfitPct`: `0.08,0.12,0.16`
    - `stopLossPct`: `0.04,0.06,0.08`
    - `maxPositions`: `3,5,8`

@@ -202,6 +202,7 @@ const showReportJson = ref(false);
 const deleteBacktestMessage = ref("");
 const deleteDatasetMessage = ref("");
 let optimizationPollToken = 0;
+const DEFAULT_PLATFORM_MIN_JUMP_CONFIDENCE = 77.5;
 
 // ── ThemeTrend 状态 ──
 const themeState = reactive<RequestResult>({ status: "idle" });
@@ -265,6 +266,7 @@ const backtestForm = reactive<BacktestRequest>({
   initialCash: 1000000,
   maxPositions: 5,
   positionSize: 0.2,
+  minJumpConfidence: DEFAULT_PLATFORM_MIN_JUMP_CONFIDENCE,
   executionMode: "current_bar",
   maxHoldingBars: 40,
   targetHoldingDays: 5,
@@ -313,6 +315,7 @@ const optimizationForm = reactive<OptimizationRequest>({
       [2, 4, 6, 10, 16],
       [5, 8, 13, 21, 34]
     ],
+    minJumpConfidence: [DEFAULT_PLATFORM_MIN_JUMP_CONFIDENCE, 80, 85, 90],
     takeProfitPct: [0.08, 0.12, 0.16],
     stopLossPct: [0.04, 0.06, 0.08],
     maxPositions: [3, 5, 8]
@@ -329,6 +332,7 @@ const goldenForm = reactive<GoldenValidateRequest>({
 
 const gridInputs = reactive({
   momentumPeriods: "3-5-8-13-21;2-4-6-10-16;5-8-13-21-34",
+  minJumpConfidence: "77.5,80,85,90",
   takeProfitPct: "0.08,0.12,0.16",
   stopLossPct: "0.04,0.06,0.08",
   maxPositions: "3,5,8",
@@ -1335,6 +1339,7 @@ async function deleteCurrentBacktest(): Promise<void> {
 async function runOptimization(): Promise<void> {
   optimizationForm.parameterGrid = {
     momentumPeriods: parsePeriodGrid(gridInputs.momentumPeriods),
+    minJumpConfidence: parseNumberList(gridInputs.minJumpConfidence),
     takeProfitPct: parseNumberList(gridInputs.takeProfitPct),
     stopLossPct: parseNumberList(gridInputs.stopLossPct),
     maxPositions: parseNumberList(gridInputs.maxPositions)
@@ -1823,6 +1828,10 @@ onMounted(async () => {
               <input v-model.number="backtestForm.positionSize" type="number" min="0.01" max="1" step="0.01" />
             </label>
             <label>
+              Jump 置信度门槛
+              <input v-model.number="backtestForm.minJumpConfidence" type="number" min="0" max="100" step="0.1" />
+            </label>
+            <label>
               成交时点
               <select v-model="backtestForm.executionMode">
                 <option value="current_bar">信号当根快照成交</option>
@@ -2180,6 +2189,10 @@ onMounted(async () => {
             <label>
               动量周期组
               <input v-model="gridInputs.momentumPeriods" type="text" />
+            </label>
+            <label>
+              Jump 置信度组
+              <input v-model="gridInputs.minJumpConfidence" type="text" />
             </label>
             <label>
               止盈比例组
