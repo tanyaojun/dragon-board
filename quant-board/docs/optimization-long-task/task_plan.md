@@ -744,6 +744,15 @@ v1 `checkpoint_2026-05-21_cross_market_zero_filter` 已落库，但因第一版�
 - [x] 写入 V5 趋势页 checkpoint：`checkpoint_2026-06-09_early_big_move_v5_vpr01`，执行 run `bt_c78fb2ad8df84946` 复现 `+31.00% / 65.79%`；并修复 checkpoint API 标签显示为 `V5 E1` / `V5 E2`。
 - **Status:** in_progress
 
+### Phase 40: V5 live execution contract 接入闭环
+
+- [x] 明确 `rankTrend.strategy.candidateTier` 只作为 TS golden / 展示分析分层，不能继续作为 V5 实盘入池事实源。
+- [x] 明确 `rankTrend.executionStrategy.candidateTier` 承接 Python `candidateTierMode=execution` / `compose_strategy(... hotlistSentiment ...)` 口径，Dragon Board live gate 和自动入池必须消费该执行分层。
+- [x] 明确 DataTable “置信度”仍为 `rankTrend.decision.final.confidence`；V5 入场门槛使用 `rankTrend.jump.confidence`，两者不混用。
+- [x] 明确旧 `jumpSignalService.ts` 只保留 legacy jump 展示状态，不作为 V5 持仓/退出事实源。
+- [x] 在 `2026-06-08-ranktrend-fusion-candidate-pool-unified-semantics-implementation-plan.md` 补 scope note：该计划只覆盖 candidate pool projection / execution overlay，不等同于 V5 live execution contract。
+- **Status:** complete
+
 ## Retired Baselines
 
 旧生命周期分层策略已被证伪，不再作为默认长测基线：

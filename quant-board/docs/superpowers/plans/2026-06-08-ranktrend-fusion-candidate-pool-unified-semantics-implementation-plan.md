@@ -4,6 +4,8 @@
 
 > **Status note (2026-06-08):** 本计划已根据审查意见重写。旧版计划中“用 `trade_journal` 反推策略持有状态”“按股票代码把历史 trade 折叠成单条 projection”“把 `snapshotType` 写死为 `half_hour`”等步骤已废弃，不应继续作为执行依据。
 
+> **Scope note (2026-06-10):** 本计划只解决候选池 projection / execution overlay 语义，不等同于 V5 回测执行合同完整接入。V5 live execution contract 以 `2026-06-10-ranktrend-v5-live-execution-contract-implementation-plan.md` 为准。
+
 **Goal:** 以 `ranktrend_early_big_move_v3_lifecycle_fusion` 作为候选池语义层唯一策略锚点，重建 Dragon Board 主表【候选池】和候选池面板的统一语义，让两者都只展示“策略生命周期事实 + execution overlay”，不再以 `trade_journal.status`、`CandidateAnalysisService` 或 `CandidateDiscoveryService` 充当主状态真相。
 
 **Architecture:** 先新增 `FusionStrategyProjection` 合同与 live projector，让主表【候选池】从“journal 工作流态”切换为“策略态投影”。随后把候选池面板从“通用候选研究台”重构为“fusion 主线策略生命周期工作台”，保留 `trade_journal` 仅作为执行和复盘 overlay。最后在 QuantBoard 补历史 projection 能力，但必须基于时间序列 / lifecycle segment 构建，不能按股票代码把整次回测 trade 折叠成一条。

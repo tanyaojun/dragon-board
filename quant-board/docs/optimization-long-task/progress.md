@@ -1616,3 +1616,16 @@ Notes:
 - V5 的命名表达“长测基线版本”，不是新增独立策略名；执行策略仍是 `ranktrend_early_big_move_v3_lifecycle_fusion`。
 - 趋势页读取 `quant-board/data/reports/long_test_runs.jsonl`，不是读取 CLI 默认配置；因此需要写入 V5 checkpoint 后页面才会出现 V5。
 - 已补 `/api/backtests/checkpoints` 标签映射，V5 checkpoint 在后端重启后显示为 `V5 E1` / `V5 E2`，不再压缩成旧的 `E1` / `E2`。
+
+### Phase 40 V5 live execution contract integration
+
+- **Status:** complete
+- Decisions:
+  - 保留 `rankTrend.decision.final.confidence` 为 DataTable 综合展示置信度。
+  - V5 策略门槛使用 `rankTrend.jump.confidence`。
+  - V5 主线默认继续使用已复现证据口径 `minJumpConfidence=90`。
+  - 不为 `77.5` 建立冗余策略分支；若后续采纳，只改同一个配置入口并重新验证。
+  - Dragon Board live gate / 自动入池消费 `rankTrend.executionStrategy.candidateTier`，不再用 `rankTrend.strategy.candidateTier` 替代 Python execution tier。
+  - `jumpSignalService.ts` 标注为 legacy display only；V5 持仓/退出事实源是 `v5FusionExecutionContract.ts` 和 `FusionStrategyProjector.ts`。
+- Implementation source:
+  - `quant-board/docs/superpowers/plans/2026-06-10-ranktrend-v5-live-execution-contract-implementation-plan.md`

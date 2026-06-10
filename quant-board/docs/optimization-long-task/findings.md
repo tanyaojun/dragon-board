@@ -1977,6 +1977,17 @@ TDD 覆盖：
 
 结论：当前阶段不继续扩大生命周期硬 veto。B 的正确融合方式是：少数明确反转/高风险冲突才一票否决；承接不足、低可见度首段点火作为 caution 诊断和排序依据。这样既保留 `603459` 等大肉，又避免删除候选后引发新的仓位路径替换。
 
+### V5 live execution contract boundary
+
+结论先行：V5 实盘入池必须消费执行合同，不再把 TS 展示分层当交易事实源。
+
+- DataTable 的“置信度”列仍是 `rankTrend.decision.final.confidence`，只做综合技术展示。
+- V5 策略门槛使用 `rankTrend.jump.confidence`，不是 DataTable 综合置信度。
+- V5 只有一套 execution contract；`minJumpConfidence` 是该合同的配置值，不允许复制出 `77.5` / `90` 两套策略实现。
+- 当前已复现的 V5 长测证据口径使用 `minJumpConfidence=90`；如果后续改用 `77.5`，必须更新同一个配置入口并重新长测验证。
+- Dragon Board live 自动入池必须消费 `rankTrend.executionStrategy`，不能继续用 `rankTrend.strategy` 的 TS golden 展示分层代替 Python execution tier。
+- `jumpSignalService.ts` 只保留 legacy jump 展示状态；V5 持仓/退出事实源是 `v5FusionExecutionContract.ts` 和 `FusionStrategyProjector.ts`。
+
 ### Phase 33 Continuous 4-5月 rerun
 
 结论先行：单次连续窗口复核通过，而且强于简单月度相加口径。`2026-04-01~2026-05-31` 连续回测 run `bt_6bad357f332b4197` 达到 `+24.68%`，胜率 `71.43%`。这是真正同一个回测窗口内的连续资金路径，不是 `4月 + 5月` 两个 run 的收益相加。

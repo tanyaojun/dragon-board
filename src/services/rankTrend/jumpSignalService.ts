@@ -36,6 +36,10 @@ interface TrackedPosition {
 const activePositions = new Map<string, TrackedPosition>()
 let globalBarCount = 0
 
+// Legacy jump display state only. V5 fusion holding/exit semantics live in
+// v5FusionExecutionContract and FusionStrategyProjector; do not use this map
+// as V5 strategy state.
+
 export function registerJumpEntry(code: string, name: string, entryPrice: number, entryDate: string): void {
   if (!activePositions.has(code)) {
     activePositions.set(code, { code, name, entryPrice, entryDate, entryBar: globalBarCount })
