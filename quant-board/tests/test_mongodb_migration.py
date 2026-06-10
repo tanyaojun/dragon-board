@@ -185,6 +185,14 @@ def test_build_mongodb_indexes_contains_snapshot_and_stock_name_unique_keys() ->
     assert indexes["hotlist_sentiment"][0]["unique"] is True
 
 
+def test_build_mongodb_indexes_contains_backtest_sequence_indexes() -> None:
+    indexes = build_mongodb_indexes()
+
+    assert {"keys": [("backtestRunId", 1), ("sequence", 1)]} in indexes["backtest_trades"]
+    assert {"keys": [("backtestRunId", 1), ("sequence", 1)]} in indexes["backtest_equity_curve"]
+    assert {"keys": [("backtestRunId", 1), ("sequence", 1)]} in indexes["backtest_signals"]
+
+
 def test_plan_mongodb_migration_counts_sqlite_sources_and_stock_json(tmp_path: Path) -> None:
     snapshot_db = tmp_path / "snapshots.db"
     research_db = tmp_path / "research.db"

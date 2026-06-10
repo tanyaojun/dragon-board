@@ -227,11 +227,13 @@ MongoDB 正式字段使用 camelCase，保持 Dragon Board 和 QuantBoard API �
 
 `backtest_trades`
 
+- `{ backtestRunId: 1, sequence: 1 }`
 - `{ backtestRunId: 1, code: 1 }`
 - `{ backtestRunId: 1, entryTime: 1 }`
 
 `backtest_equity_curve`
 
+- `{ backtestRunId: 1, sequence: 1 }`
 - `{ backtestRunId: 1, timestamp: 1 }`
 
 `backtest_signals`
@@ -243,6 +245,8 @@ MongoDB 正式字段使用 camelCase，保持 Dragon Board 和 QuantBoard API �
 - `{ backtestRunId: 1, candidateTier: 1, regime: 1, sequence: 1 }`
 
 迁移时保留 SQLite 自增 `id` 为 `sequence` 或 `legacyId`，用于延续旧分页顺序和稳定排序。
+
+大型报告导出和回测报告页面明细读取优先走 `backtest_trades`、`backtest_equity_curve`、`backtest_signals`、`backtest_quality_reports` 这些归一化集合。`backtest_runs.resultCompressed` 与 `backtest_result_chunks` 只保留兼容完整结果追溯，不再作为常规导出主路径。导出热路径应命中 `{ backtestRunId: 1, sequence: 1 }`，避免大规模 in-memory sort。
 
 `backtest_quality_reports`
 

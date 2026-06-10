@@ -148,10 +148,14 @@ def build_mongodb_indexes() -> dict[str, list[dict[str, Any]]]:
             {"keys": [("backtestRunId", 1), ("sequence", 1)], "unique": True},
         ],
         "backtest_trades": [
+            {"keys": [("backtestRunId", 1), ("sequence", 1)]},
             {"keys": [("backtestRunId", 1), ("code", 1)]},
             {"keys": [("backtestRunId", 1), ("entryTime", 1)]},
         ],
-        "backtest_equity_curve": [{"keys": [("backtestRunId", 1), ("timestamp", 1)]}],
+        "backtest_equity_curve": [
+            {"keys": [("backtestRunId", 1), ("sequence", 1)]},
+            {"keys": [("backtestRunId", 1), ("timestamp", 1)]},
+        ],
         "backtest_signals": [
             {"keys": [("backtestRunId", 1), ("snapshotId", 1)]},
             {"keys": [("backtestRunId", 1), ("code", 1)]},

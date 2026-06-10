@@ -197,17 +197,19 @@ MongoDB 模式下保存在 `backtest_runs` 集合，保存单次回测请求和�
 
 MongoDB 模式下保存在 `backtest_result_chunks` 集合，保存压缩后仍过大的 `backtest_runs.resultCompressed` 分块。每行包含 `backtestRunId`、`sequence` 和 `payload`，并通过 `(backtestRunId, sequence)` 唯一索引保证顺序与幂等。该集合只服务兼容完整结果追溯；页面明细仍优先读取归一化的交易、权益、信号和质量集合。
 
+常规报告导出与页面展示不再以 `backtest_runs.resultCompressed` 或 `backtest_result_chunks` 作为首选明细源。默认路径应直接迭代 `backtest_trades`、`backtest_equity_curve`、`backtest_signals` 和 `backtest_quality_reports`，并在需要落盘时输出 `jsonl-bundle` 或流式 `json.gz`。兼容完整结果追溯时才回退到 `resultCompressed/resultChunked`。
+
 ### backtest_trades
 
-MongoDB 模式下保存在 `backtest_trades` 集合，保存单次回测的成交和持仓生命周期明细。它是回测报告交易列表的主数据源，不进入 Supabase、`sync_outbox`、push/pull 或 failover 链路。
+MongoDB 模式下保存在 `backtest_trades` 集合，保存单次回测的成交和持仓生命周期明细。它是回测报告交易列表的主数据源，不进入 Supabase、`sync_outbox`、push/pull 或 failover 链路。导出热路径按 `backtestRunId + sequence` 升序迭代读取。
 
 ### backtest_equity_curve
 
-MongoDB 模式下保存在 `backtest_equity_curve` 集合，保存单次回测权益曲线，按时间升序供图表读取。它不进入 Supabase。
+MongoDB 模式下保存在 `backtest_equity_curve` 集合，保存单次回测权益曲线，按时间升序供图表读取。它不进入 Supabase。导出热路径按 `backtestRunId + sequence` 升序迭代读取。
 
 ### backtest_signals
 
-MongoDB 模式下保存在 `backtest_signals` 集合，保存 RankTrend 信号诊断、候选分层和市场状态。信号诊断不能当作真实成交列表使用，交易列表必须读取 `backtest_trades`。
+MongoDB 模式下保存在 `backtest_signals` 集合，保存 RankTrend 信号诊断、候选分层和市场状态。信号诊断不能当作真实成交列表使用，交易列表必须读取 `backtest_trades`。大报告导出默认按 `backtestRunId + sequence` 升序流式读取，不再先聚合成单个超大 Python dict。
 
 ### backtest_quality_reports
 

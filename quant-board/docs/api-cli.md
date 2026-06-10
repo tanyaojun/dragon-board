@@ -1447,30 +1447,34 @@ win_rate: 0.52
 
 ### `export-report`
 
-导出完整回测报告 JSON：
+默认导出目录型 `jsonl-bundle`，用于大型回测报告：
 
 ```powershell
-.\.venv\Scripts\python.exe -m backend.cli export-report --run-id bt_001 --output quant-board\data\reports\bt_001.json
+.\.venv\Scripts\python.exe -m backend.cli export-report --run-id bt_001 --output quant-board\data\reports\bt_001
 ```
 
-导出字段至少包括 `request`、`metrics`、`trades`、`equityCurve`、`signals`、`qualityReport`。`--output` 必须是用户显式传入的单个文件路径；如文件已存在，可以覆盖该明确文件，但不得批量清理或覆盖目录，并必须打印 `output` 路径。
+- `manifest.json`：run 元信息、metrics、文件清单和行数。
+- `signals.jsonl`：按 `sequence` 升序的信号明细。
+- `trades.jsonl`：按 `sequence` 升序的交易明细。
+- `equity_curve.jsonl`：按 `sequence` 升序的权益曲线。
+- `quality_report.json`：质量门禁和样本质量报告。
+- `result_summary.json`：轻量结果摘要。
+
+如需单文件导出，可显式选择：
+
+```powershell
+.\.venv\Scripts\python.exe -m backend.cli export-report --run-id bt_001 --output quant-board\data\reports\bt_001.json.gz --format json.gz
+.\.venv\Scripts\python.exe -m backend.cli export-report --run-id bt_001 --output quant-board\data\reports\bt_001.json --format legacy-json
+```
+
+`legacy-json` 保留旧单文件 JSON 语义，但大型数据集不推荐使用。常规页面与导出主路径优先使用归一化集合 + `jsonl-bundle`，避免一次性组装超大报告对象。
 
 ```json
 {
+  "ok": true,
+  "format": "jsonl-bundle",
   "runId": "bt_001",
-  "datasetId": "ds_001",
-  "snapshotType": "half_hour",
-  "strategyName": "rank_trend_candidate",
-  "strategyVersion": "0.1.0",
-  "configHash": "abc123",
-  "randomSeed": 20260430,
-  "request": {},
-  "metrics": {},
-  "trades": [],
-  "equityCurve": [],
-  "signals": [],
-  "qualityReport": {},
-  "exportedAt": "2026-05-04T00:00:00Z"
+  "output": "quant-board\\data\\reports\\bt_001"
 }
 ```
 

@@ -1033,14 +1033,28 @@ def cmd_compare_backtests(args: argparse.Namespace) -> None:
 
 def cmd_export_report(args: argparse.Namespace) -> None:
     with runtime_session() as session:
-        report = BacktestService(session).export_report(args.run_id)
+        service = BacktestService(session)
+        output = Path(args.output)
+        if args.format == "jsonl-bundle":
+            result = service.export_report_bundle(args.run_id, output)
+            print_json({**result, "output": str(output)})
+            if not result.get("ok"):
+                sys.exit(1)
+            return
+        if args.format == "json.gz":
+            result = service.export_report_gzip(args.run_id, output)
+            print_json({**result, "output": str(output)})
+            if not result.get("ok"):
+                sys.exit(1)
+            return
+
+        report = service.export_report(args.run_id)
         if report is None:
             print_json({"ok": False, "error": {"code": "backtest_run_not_found", "runId": args.run_id}})
             sys.exit(1)
-        output = Path(args.output)
         report = {**report, "exportedAt": datetime.now(timezone.utc).isoformat()}
         output.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-        print_json({"ok": True, "runId": args.run_id, "output": str(output)})
+        print_json({"ok": True, "runId": args.run_id, "format": "legacy-json", "output": str(output)})
 
 
 def cmd_optimize_ranktrend(args: argparse.Namespace) -> None:
@@ -1520,9 +1534,15 @@ def build_parser() -> argparse.ArgumentParser:
     compare_cmd.add_argument("--metrics", default="totalReturn,sharpe,maxDrawdown,winRate")
     compare_cmd.set_defaults(func=cmd_compare_backtests)
 
-    export_cmd = sub.add_parser("export-report", help="Export a full backtest report JSON")
+    export_cmd = sub.add_parser("export-report", help="Export a backtest report")
     export_cmd.add_argument("--run-id", required=True)
     export_cmd.add_argument("--output", required=True)
+    export_cmd.add_argument(
+        "--format",
+        choices=("jsonl-bundle", "json.gz", "legacy-json"),
+        default="jsonl-bundle",
+        help="Report export format. Defaults to jsonl-bundle for large backtests.",
+    )
     export_cmd.set_defaults(func=cmd_export_report)
     return parser
 

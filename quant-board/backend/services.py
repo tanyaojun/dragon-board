@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import gzip
 import math
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from sqlalchemy.orm import Session
 
@@ -38,7 +39,7 @@ from backend.data.repository_factory import create_repository, storage_source_la
 from backend.optimization.jobs import submit_optimization_job
 from backend.optimization.runner import OptimizationRunner
 from backend.optimization.search_space import candidate_count, select_candidates
-from backend.utils import json_loads, new_id, read_json_file, stable_hash
+from backend.utils import json_dumps, json_loads, new_id, read_json_file, stable_hash
 
 
 DEFAULT_BACKTEST_STRATEGY_CONFIG = {
@@ -1251,9 +1252,9 @@ class BacktestService:
 
         # 归一化结果双写
         simulation = result.get("tradeSimulation") or {}
-        self.repo.save_backtest_trades(run_id, simulation.get("trades") or [])
-        self.repo.save_backtest_equity_curve(run_id, simulation.get("equityCurve") or [])
-        self.repo.save_backtest_signals(run_id, result.get("strategyDecisions") or {})
+        self.repo.save_backtest_trades(run_id, simulation.get("trades") or [], append=False)
+        self.repo.save_backtest_equity_curve(run_id, simulation.get("equityCurve") or [], append=False)
+        self.repo.save_backtest_signals(run_id, result.get("strategyDecisions") or {}, append=False)
         self.repo.save_backtest_quality_report(run_id, result.get("dataQuality") or {}, quality_gate)
 
         return self._summary_response(
@@ -1392,10 +1393,10 @@ class BacktestService:
                 }
                 for s in signals
             ]
-            self.repo.save_backtest_signal_rows(run_id, signal_rows)
+            self.repo.save_backtest_signal_rows(run_id, signal_rows, append=False)
 
-        self.repo.save_backtest_trades(run_id, trade_simulation.get("trades") or [])
-        self.repo.save_backtest_equity_curve(run_id, trade_simulation.get("equityCurve") or [])
+        self.repo.save_backtest_trades(run_id, trade_simulation.get("trades") or [], append=False)
+        self.repo.save_backtest_equity_curve(run_id, trade_simulation.get("equityCurve") or [], append=False)
         self.repo.save_backtest_quality_report(
             run_id, result.get("dataQuality", {}), quality_report,
         )
@@ -1551,9 +1552,9 @@ class BacktestService:
                 }
                 for s in signals
             ]
-            self.repo.save_backtest_signal_rows(run_id, signal_rows)
-        self.repo.save_backtest_trades(run_id, trade_simulation.get("trades") or [])
-        self.repo.save_backtest_equity_curve(run_id, trade_simulation.get("equityCurve") or [])
+            self.repo.save_backtest_signal_rows(run_id, signal_rows, append=False)
+        self.repo.save_backtest_trades(run_id, trade_simulation.get("trades") or [], append=False)
+        self.repo.save_backtest_equity_curve(run_id, trade_simulation.get("equityCurve") or [], append=False)
         self.repo.save_backtest_quality_report(
             run_id, result.get("dataQuality", {}), quality_report,
         )
@@ -1949,6 +1950,112 @@ class BacktestService:
             "qualityReport": self.repo.get_backtest_quality_report(run_id),
             "result": result,
         }
+
+    @staticmethod
+    def _write_jsonl(path: Path, rows: Iterable[dict[str, Any]]) -> int:
+        count = 0
+        with path.open("w", encoding="utf-8") as handle:
+            for row in rows:
+                handle.write(json_dumps(row))
+                handle.write("\n")
+                count += 1
+        return count
+
+    @staticmethod
+    def _write_json_array(handle: Any, rows: Iterable[dict[str, Any]]) -> int:
+        count = 0
+        handle.write("[")
+        for row in rows:
+            if count:
+                handle.write(",")
+            handle.write(json_dumps(row))
+            count += 1
+        handle.write("]")
+        return count
+
+    def export_report_bundle(self, run_id: str, output: Path) -> dict[str, Any]:
+        run = self.repo.get_backtest_run(run_id)
+        if not run:
+            return {"ok": False, "error": {"code": "backtest_run_not_found", "runId": run_id}}
+
+        tmp_output = output.with_name(f"{output.name}.tmp")
+        tmp_output.mkdir(parents=True, exist_ok=True)
+        result = loads_json_field(run.result_json, {})
+        request = loads_json_field(run.request_json, {})
+
+        signals_count = self._write_jsonl(tmp_output / "signals.jsonl", self.repo.iter_backtest_signals(run_id))
+        trades_count = self._write_jsonl(tmp_output / "trades.jsonl", self.repo.iter_backtest_trades(run_id))
+        equity_count = self._write_jsonl(tmp_output / "equity_curve.jsonl", self.repo.iter_backtest_equity_curve(run_id))
+        quality_report = self.repo.get_backtest_quality_report(run_id)
+        (tmp_output / "quality_report.json").write_text(json_dumps(quality_report or {}), encoding="utf-8")
+
+        summary = {
+            "runId": run.id,
+            "datasetId": run.dataset_id,
+            "snapshotType": run.snapshot_type,
+            "strategyName": run.strategy_name,
+            "strategyVersion": run.strategy_version,
+            "configHash": run.config_hash,
+            "randomSeed": run.random_seed,
+            "metrics": {metric: self._metric_value(result, metric) for metric in sorted(BACKTEST_COMPARE_METRICS)},
+            "request": request,
+        }
+        (tmp_output / "result_summary.json").write_text(json_dumps(summary), encoding="utf-8")
+
+        manifest = {
+            "ok": True,
+            "format": "jsonl-bundle",
+            "runId": run.id,
+            "exportedAt": datetime.now(timezone.utc).isoformat(),
+            "files": {
+                "manifest": {"path": "manifest.json"},
+                "resultSummary": {"path": "result_summary.json"},
+                "qualityReport": {"path": "quality_report.json", "present": quality_report is not None},
+                "signals": {"path": "signals.jsonl", "rows": signals_count},
+                "trades": {"path": "trades.jsonl", "rows": trades_count},
+                "equityCurve": {"path": "equity_curve.jsonl", "rows": equity_count},
+            },
+        }
+
+        output.mkdir(parents=True, exist_ok=True)
+        for name in ("signals.jsonl", "trades.jsonl", "equity_curve.jsonl", "quality_report.json", "result_summary.json"):
+            (tmp_output / name).replace(output / name)
+        (tmp_output / "manifest.json").write_text(json_dumps(manifest), encoding="utf-8")
+        (tmp_output / "manifest.json").replace(output / "manifest.json")
+        return manifest
+
+    def export_report_gzip(self, run_id: str, output: Path) -> dict[str, Any]:
+        run = self.repo.get_backtest_run(run_id)
+        if not run:
+            return {"ok": False, "error": {"code": "backtest_run_not_found", "runId": run_id}}
+
+        output.parent.mkdir(parents=True, exist_ok=True)
+        tmp_output = output.with_name(f"{output.name}.tmp")
+        result = loads_json_field(run.result_json, {})
+        request = loads_json_field(run.request_json, {})
+        metrics = {metric: self._metric_value(result, metric) for metric in sorted(BACKTEST_COMPARE_METRICS)}
+        quality_report = self.repo.get_backtest_quality_report(run_id) or {}
+        with gzip.open(tmp_output, "wt", encoding="utf-8") as handle:
+            handle.write("{")
+            handle.write(f'"runId":{json_dumps(run.id)}')
+            handle.write(f',"datasetId":{json_dumps(run.dataset_id)}')
+            handle.write(f',"snapshotType":{json_dumps(run.snapshot_type)}')
+            handle.write(f',"strategyName":{json_dumps(run.strategy_name)}')
+            handle.write(f',"strategyVersion":{json_dumps(run.strategy_version)}')
+            handle.write(f',"configHash":{json_dumps(run.config_hash)}')
+            handle.write(f',"randomSeed":{json_dumps(run.random_seed)}')
+            handle.write(f',"request":{json_dumps(request)}')
+            handle.write(f',"metrics":{json_dumps(metrics)}')
+            handle.write(f',"qualityReport":{json_dumps(quality_report)}')
+            handle.write(',"trades":')
+            self._write_json_array(handle, self.repo.iter_backtest_trades(run_id))
+            handle.write(',"equityCurve":')
+            self._write_json_array(handle, self.repo.iter_backtest_equity_curve(run_id))
+            handle.write(',"signals":')
+            self._write_json_array(handle, self.repo.iter_backtest_signals(run_id))
+            handle.write("}")
+        tmp_output.replace(output)
+        return {"ok": True, "format": "json.gz", "runId": run.id}
 
     @staticmethod
     def _validate_pagination(limit: int, offset: int) -> None:

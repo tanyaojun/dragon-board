@@ -1025,7 +1025,7 @@ class Repository:
 
     # ── 归一化结果存取 ─────────────────────────────
 
-    def save_backtest_trades(self, run_id: str, trades: list[dict[str, Any]]) -> int:
+    def save_backtest_trades(self, run_id: str, trades: list[dict[str, Any]], append: bool = True) -> int:
         count = 0
         try:
             for t in trades:
@@ -1074,6 +1074,9 @@ class Repository:
         except SQLAlchemyError:
             return []
 
+    def iter_backtest_trades(self, run_id: str, batch_size: int = 1000):
+        yield from self.get_backtest_trades(run_id)
+
     def count_backtest_trades(self, run_id: str) -> int:
         try:
             return int(
@@ -1085,7 +1088,7 @@ class Repository:
         except SQLAlchemyError:
             return 0
 
-    def save_backtest_equity_curve(self, run_id: str, curve: list[dict[str, Any]]) -> int:
+    def save_backtest_equity_curve(self, run_id: str, curve: list[dict[str, Any]], append: bool = True) -> int:
         count = 0
         try:
             for pt in curve:
@@ -1139,7 +1142,15 @@ class Repository:
         except SQLAlchemyError:
             return []
 
-    def save_backtest_signals(self, run_id: str, strategy_decisions: dict[str, Any]) -> int:
+    def iter_backtest_equity_curve(self, run_id: str, batch_size: int = 1000):
+        yield from self.get_backtest_equity_curve(run_id)
+
+    def save_backtest_signals(
+        self,
+        run_id: str,
+        strategy_decisions: dict[str, Any],
+        append: bool = True,
+    ) -> int:
         count = 0
         try:
             for fr in strategy_decisions.get("frameResults") or []:
@@ -1163,7 +1174,7 @@ class Repository:
             raise RuntimeError("failed to save normalized backtest signals") from exc
         return count
 
-    def save_backtest_signal_rows(self, run_id: str, rows: list[dict[str, Any]]) -> int:
+    def save_backtest_signal_rows(self, run_id: str, rows: list[dict[str, Any]], append: bool = True) -> int:
         count = 0
         try:
             for item in rows:
@@ -1241,6 +1252,9 @@ class Repository:
             return [self._signal_to_dict(r) for r in rows]
         except SQLAlchemyError:
             return []
+
+    def iter_backtest_signals(self, run_id: str, batch_size: int = 1000):
+        yield from self.get_backtest_signals(run_id)
 
     def count_backtest_signals(self, run_id: str, tier: str | None = None, regime: str | None = None) -> int:
         try:

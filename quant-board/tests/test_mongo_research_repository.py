@@ -11,8 +11,9 @@ from backend.utils import json_dumps
 
 
 class FakeCursor:
-    def __init__(self, rows: list[dict[str, Any]]) -> None:
+    def __init__(self, rows: list[dict[str, Any]], collection: "FakeCollection" | None = None) -> None:
         self.rows = rows
+        self.collection = collection
 
     def sort(self, keys) -> "FakeCursor":
         sort_keys = list(keys if isinstance(keys, list) else [keys])
@@ -28,6 +29,11 @@ class FakeCursor:
     def skip(self, count: int) -> "FakeCursor":
         if count and count > 0:
             self.rows = self.rows[count:]
+        return self
+
+    def batch_size(self, count: int) -> "FakeCursor":
+        if self.collection is not None:
+            self.collection.batch_sizes.append(count)
         return self
 
     def __iter__(self):
@@ -47,8 +53,14 @@ class FakeUpdateResult:
 class FakeCollection:
     def __init__(self) -> None:
         self.rows: list[dict[str, Any]] = []
+        self.batch_sizes: list[int] = []
+        self.count_documents_calls: list[dict[str, Any]] = []
+        self.raise_on_count_documents = False
 
     def count_documents(self, query: dict[str, Any]) -> int:
+        self.count_documents_calls.append(dict(query))
+        if self.raise_on_count_documents:
+            raise AssertionError("count_documents should not be called")
         return len(list(self.find(query)))
 
     def delete_many(self, query: dict[str, Any]) -> FakeDeleteResult:
@@ -80,7 +92,7 @@ class FakeCollection:
         return next(iter(self.find(query)), None)
 
     def find(self, query: dict[str, Any] | None = None) -> FakeCursor:
-        return FakeCursor([dict(row) for row in self.rows if _matches(row, query or {})])
+        return FakeCursor([dict(row) for row in self.rows if _matches(row, query or {})], self)
 
 
 class FakeMongoDatabase(dict):
@@ -253,6 +265,152 @@ def test_backtest_signals_keep_sequence_order_and_support_tier_regime_filters() 
     assert [row["code"] for row in repo.get_backtest_signals("bt_1", tier="buy")] == ["000001", "000002"]
     assert [row["code"] for row in repo.get_backtest_signals("bt_1", regime="weak")] == ["000003", "000002"]
     assert repo.count_backtest_signals("bt_1", tier="buy", regime="weak") == 1
+
+
+def test_iter_backtest_details_keep_sequence_order() -> None:
+    repo = MongoResearchRepository(FakeMongoDatabase())
+
+    repo.save_backtest_signal_rows(
+        "bt_iter",
+        [
+            _signal("000003", 3, "watch", "weak"),
+            _signal("000001", 1, "buy", "strong"),
+            _signal("000002", 2, "buy", "weak"),
+        ],
+    )
+    repo.save_backtest_trades("bt_iter", [{"code": "000001"}, {"code": "000002"}])
+    repo.save_backtest_equity_curve("bt_iter", [{"timestamp": "t1"}, {"timestamp": "t2"}])
+
+    assert [row["code"] for row in repo.iter_backtest_signals("bt_iter", batch_size=2)] == [
+        "000003",
+        "000001",
+        "000002",
+    ]
+    assert [row["sequence"] for row in repo.iter_backtest_signals("bt_iter", batch_size=2)] == [1, 2, 3]
+    assert [row["sequence"] for row in repo.iter_backtest_trades("bt_iter", batch_size=2)] == [1, 2]
+    assert [row["sequence"] for row in repo.iter_backtest_equity_curve("bt_iter", batch_size=2)] == [1, 2]
+    assert repo.db["backtest_signals"].batch_sizes == [2, 2]
+    assert repo.db["backtest_trades"].batch_sizes == [2]
+    assert repo.db["backtest_equity_curve"].batch_sizes == [2]
+
+
+def test_append_false_starts_from_sequence_one_without_count_query() -> None:
+    repo = MongoResearchRepository(FakeMongoDatabase())
+
+    repo.save_backtest_signal_rows("bt_new", [{"code": "000001"}, {"code": "000002"}], append=False)
+    repo.save_backtest_trades("bt_new", [{"code": "000001"}, {"code": "000002"}], append=False)
+    repo.save_backtest_equity_curve("bt_new", [{"timestamp": "t1"}, {"timestamp": "t2"}], append=False)
+
+    assert [row["sequence"] for row in repo.get_backtest_signals("bt_new")] == [1, 2]
+    assert [row["sequence"] for row in repo.get_backtest_trades("bt_new")] == [1, 2]
+    assert [row["sequence"] for row in repo.get_backtest_equity_curve("bt_new")] == [1, 2]
+
+    repo.db["backtest_signals"].raise_on_count_documents = True
+    repo.save_backtest_signal_rows("bt_no_count", [{"code": "000001"}], append=False)
+    assert repo.db["backtest_signals"].count_documents_calls == []
+
+
+def test_iter_backtest_trades_orders_by_sequence_and_sets_batch_size() -> None:
+    db = FakeMongoDatabase()
+    repo = MongoResearchRepository(db)
+    db["backtest_trades"].insert_many(
+        [
+            {"backtestRunId": "bt_1", "sequence": 3, "code": "000003"},
+            {"backtestRunId": "bt_1", "sequence": 1, "code": "000001"},
+            {"backtestRunId": "bt_1", "sequence": 2, "code": "000002"},
+        ],
+        ordered=False,
+    )
+
+    rows = list(repo.iter_backtest_trades("bt_1", batch_size=2))
+
+    assert [row["sequence"] for row in rows] == [1, 2, 3]
+    assert [row["code"] for row in rows] == ["000001", "000002", "000003"]
+    assert db["backtest_trades"].batch_sizes == [2]
+
+
+def test_iter_backtest_equity_curve_orders_by_sequence_and_sets_batch_size() -> None:
+    db = FakeMongoDatabase()
+    repo = MongoResearchRepository(db)
+    db["backtest_equity_curve"].insert_many(
+        [
+            {"backtestRunId": "bt_1", "sequence": 2, "snapshotId": "s2"},
+            {"backtestRunId": "bt_1", "sequence": 1, "snapshotId": "s1"},
+        ],
+        ordered=False,
+    )
+
+    rows = list(repo.iter_backtest_equity_curve("bt_1", batch_size=4))
+
+    assert [row["sequence"] for row in rows] == [1, 2]
+    assert [row["snapshotId"] for row in rows] == ["s1", "s2"]
+    assert db["backtest_equity_curve"].batch_sizes == [4]
+
+
+def test_iter_backtest_signals_orders_by_sequence_and_sets_batch_size() -> None:
+    db = FakeMongoDatabase()
+    repo = MongoResearchRepository(db)
+    db["backtest_signals"].insert_many(
+        [
+            {"backtestRunId": "bt_1", "sequence": 2, "code": "000002"},
+            {"backtestRunId": "bt_1", "sequence": 1, "code": "000001"},
+        ],
+        ordered=False,
+    )
+
+    rows = list(repo.iter_backtest_signals("bt_1", batch_size=3))
+
+    assert [row["sequence"] for row in rows] == [1, 2]
+    assert [row["code"] for row in rows] == ["000001", "000002"]
+    assert db["backtest_signals"].batch_sizes == [3]
+
+
+def test_append_false_starts_sequences_from_one_without_count_documents() -> None:
+    db = FakeMongoDatabase()
+    repo = MongoResearchRepository(db)
+    db["backtest_signals"].raise_on_count_documents = True
+    db["backtest_trades"].raise_on_count_documents = True
+    db["backtest_equity_curve"].raise_on_count_documents = True
+
+    signal_row_count = repo.save_backtest_signal_rows(
+        "bt_signal_rows",
+        [_signal("000001", 1, "buy", "strong"), _signal("000002", 2, "watch", "weak")],
+        append=False,
+    )
+    signal_count = repo.save_backtest_signals(
+        "bt_signals",
+        {
+            "frameResults": [
+                {
+                    "snapshotId": "snap_1",
+                    "tradingDate": "2026-05-12",
+                    "buyCandidates": [_signal("000003", 3, "buy", "strong")],
+                    "watchCandidates": [],
+                    "excludedCandidates": [],
+                }
+            ]
+        },
+        append=False,
+    )
+    trade_count = repo.save_backtest_trades(
+        "bt_trades",
+        [{"code": "000001"}, {"code": "000002"}],
+        append=False,
+    )
+    equity_count = repo.save_backtest_equity_curve(
+        "bt_equity",
+        [{"snapshotId": "s1"}, {"snapshotId": "s2"}],
+        append=False,
+    )
+
+    assert signal_row_count == 2
+    assert signal_count == 1
+    assert trade_count == 2
+    assert equity_count == 2
+    assert [row["sequence"] for row in db["backtest_signals"].rows if row["backtestRunId"] == "bt_signal_rows"] == [1, 2]
+    assert [row["sequence"] for row in db["backtest_signals"].rows if row["backtestRunId"] == "bt_signals"] == [1]
+    assert [row["sequence"] for row in db["backtest_trades"].rows if row["backtestRunId"] == "bt_trades"] == [1, 2]
+    assert [row["sequence"] for row in db["backtest_equity_curve"].rows if row["backtestRunId"] == "bt_equity"] == [1, 2]
 
 
 def test_optimization_run_roundtrips_structured_request_and_result() -> None:

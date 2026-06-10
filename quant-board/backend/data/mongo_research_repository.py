@@ -26,16 +26,21 @@ class MongoResearchRepository(MongoRepository):
         row = self.db["backtest_runs"].find_one({"id": run_id})
         return self._backtest_run_from_doc(row) if row else None
 
-    def save_backtest_signal_rows(self, run_id: str, rows: list[dict[str, Any]]) -> int:
+    def save_backtest_signal_rows(self, run_id: str, rows: list[dict[str, Any]], append: bool = True) -> int:
         if not rows:
             return 0
-        existing = self.db["backtest_signals"].count_documents({"backtestRunId": run_id})
+        existing = self.db["backtest_signals"].count_documents({"backtestRunId": run_id}) if append else 0
         docs = [
             self._backtest_signal_doc(run_id, item, sequence=existing + index + 1)
             for index, item in enumerate(rows)
         ]
         self.db["backtest_signals"].insert_many(docs, ordered=False)
         return len(docs)
+
+    def iter_backtest_signals(self, run_id: str, batch_size: int = 1000):
+        cursor = self.db["backtest_signals"].find({"backtestRunId": run_id}).sort([("sequence", 1)]).batch_size(batch_size)
+        for row in cursor:
+            yield self._drop_mongo_id(row)
 
     def get_backtest_signals(
         self,
@@ -64,16 +69,21 @@ class MongoResearchRepository(MongoRepository):
             self._backtest_signal_query(run_id, tier=tier, regime=regime)
         ))
 
-    def save_backtest_trades(self, run_id: str, trades: list[dict[str, Any]]) -> int:
+    def save_backtest_trades(self, run_id: str, trades: list[dict[str, Any]], append: bool = True) -> int:
         if not trades:
             return 0
-        existing = self.db["backtest_trades"].count_documents({"backtestRunId": run_id})
+        existing = self.db["backtest_trades"].count_documents({"backtestRunId": run_id}) if append else 0
         docs = [
             {"backtestRunId": run_id, "sequence": existing + index + 1, **dict(item)}
             for index, item in enumerate(trades)
         ]
         self.db["backtest_trades"].insert_many(docs, ordered=False)
         return len(docs)
+
+    def iter_backtest_trades(self, run_id: str, batch_size: int = 1000):
+        cursor = self.db["backtest_trades"].find({"backtestRunId": run_id}).sort([("sequence", 1)]).batch_size(batch_size)
+        for row in cursor:
+            yield self._drop_mongo_id(row)
 
     def get_backtest_trades(
         self,
@@ -91,10 +101,10 @@ class MongoResearchRepository(MongoRepository):
     def count_backtest_trades(self, run_id: str) -> int:
         return int(self.db["backtest_trades"].count_documents({"backtestRunId": run_id}))
 
-    def save_backtest_equity_curve(self, run_id: str, curve: list[dict[str, Any]]) -> int:
+    def save_backtest_equity_curve(self, run_id: str, curve: list[dict[str, Any]], append: bool = True) -> int:
         if not curve:
             return 0
-        existing = self.db["backtest_equity_curve"].count_documents({"backtestRunId": run_id})
+        existing = self.db["backtest_equity_curve"].count_documents({"backtestRunId": run_id}) if append else 0
         docs = [
             {"backtestRunId": run_id, "sequence": existing + index + 1, **dict(item)}
             for index, item in enumerate(curve)
@@ -105,11 +115,16 @@ class MongoResearchRepository(MongoRepository):
     def save_backtest_equity_rows(self, run_id: str, rows: list[dict[str, Any]]) -> int:
         return self.save_backtest_equity_curve(run_id, rows)
 
+    def iter_backtest_equity_curve(self, run_id: str, batch_size: int = 1000):
+        cursor = self.db["backtest_equity_curve"].find({"backtestRunId": run_id}).sort([("sequence", 1)]).batch_size(batch_size)
+        for row in cursor:
+            yield self._drop_mongo_id(row)
+
     def get_backtest_equity_curve(self, run_id: str) -> list[dict[str, Any]]:
         cursor = self.db["backtest_equity_curve"].find({"backtestRunId": run_id}).sort([("sequence", 1)])
         return [self._drop_mongo_id(row) for row in cursor]
 
-    def save_backtest_signals(self, run_id: str, strategy_decisions: dict[str, Any]) -> int:
+    def save_backtest_signals(self, run_id: str, strategy_decisions: dict[str, Any], append: bool = True) -> int:
         rows: list[dict[str, Any]] = []
         for frame in strategy_decisions.get("frameResults") or []:
             snapshot_id = str(frame.get("snapshotId") or "")
@@ -118,7 +133,7 @@ class MongoResearchRepository(MongoRepository):
                 for item in frame.get(key) or []:
                     if isinstance(item, dict):
                         rows.append({**item, "snapshotId": snapshot_id, "tradingDate": trading_date})
-        return self.save_backtest_signal_rows(run_id, rows)
+        return self.save_backtest_signal_rows(run_id, rows, append=append)
 
     def save_backtest_quality_report(
         self,
