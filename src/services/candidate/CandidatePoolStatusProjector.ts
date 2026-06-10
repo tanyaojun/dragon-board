@@ -44,7 +44,7 @@ export function projectCandidatePoolStatus<T extends CandidatePoolStockFields>(
     const strategyState = projection?.strategyState || 'idle'
 
     stock.candidatePoolStatus = strategyState
-    stock.candidatePoolLabel = STRATEGY_STATE_LABELS[strategyState]
+    stock.candidatePoolLabel = projection?.entryDecision?.label || STRATEGY_STATE_LABELS[strategyState]
     stock.candidatePoolProjection = projection
     stock.candidatePoolEntryId = projection?.executionOverlay?.entryId || ''
     stock.candidatePoolSource = projection?.strategyName || ''

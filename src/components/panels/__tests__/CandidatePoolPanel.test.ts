@@ -60,12 +60,40 @@ describe('CandidatePoolPanel source contract', () => {
   test('clears status filters before opening a candidate from the quote table', () => {
     const source = panelSource()
 
-    expect(source).toMatch(/async function openCandidate\(target: \{ candidateId\?: string; stockCode\?: string \} = \{\}\)/)
-    expect(source).toMatch(/const hasTarget = !!\(target\.candidateId \|\| target\.stockCode\)/)
+    expect(source).toMatch(/async function openCandidate\(target: CandidatePoolOpenPayload = \{\}\)/)
+    expect(source).toMatch(/const hasTarget = !!\(target\.candidateId \|\| target\.stockCode \|\| target\.liveProjection\)/)
     expect(source).toMatch(/statusFilter\.value = ''/)
     expect(source).toMatch(/keyword\.value = ''/)
     expect(source).toMatch(/await loadCandidates\(\)/)
+    expect(source).toContain('target.liveProjection')
+    expect(source).toContain('transientRow')
+    expect(source).toContain('selectedLiveDetail')
     expect(source).toMatch(/if \(hasTarget && !matched\)/)
+  })
+
+  test('shows live strategy workbench for explainable candidate diagnostics', () => {
+    const source = panelSource()
+
+    expect(source).toContain('待生效策略模式')
+    expect(source).toContain('策略模式')
+    expect(source).toContain('参数快照')
+    expect(source).toContain('规则矩阵')
+    expect(source).toContain('硬阻断')
+    expect(source).toContain('selectedEntryDecision')
+    expect(source).toContain('selectedConfigSnapshot')
+    expect(source).toContain('selectedGateChecks')
+    expect(source).toContain('isTransientLiveDetail')
+    expect(source).toMatch(/v-if="!isTransientLiveDetail"[\s\S]*删除候选/)
+    expect(source).toMatch(/v-if="!isTransientLiveDetail" class="execution-card"/)
+  })
+
+  test('clears transient live projection overrides when reloading candidates', () => {
+    const source = panelSource()
+
+    expect(source).toContain('clearLiveProjectionOverrides')
+    expect(source).toMatch(/function clearLiveProjectionOverrides\(\)/)
+    expect(source).toMatch(/liveProjectionOverrides\.value = \{\}/)
+    expect(source).toMatch(/async function loadCandidates\(\)[\s\S]*clearLiveProjectionOverrides\(\)/)
   })
 
   test('keeps candidate operations and lifecycle list controls', () => {

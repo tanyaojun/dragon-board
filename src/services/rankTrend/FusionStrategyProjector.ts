@@ -140,6 +140,7 @@ export function buildFusionStrategyProjection(input: BuildProjectionInput): Fusi
     strategyExitPrice: lifecycle?.strategyExitPrice,
     strategyReturnPct: lifecycle?.strategyReturnPct,
     executionOverlay: input.executionOverlay || null,
+    entryDecision: entry.entryDecision,
   }
 }
 

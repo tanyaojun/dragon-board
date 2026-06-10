@@ -1,6 +1,6 @@
 import { candidateJournalService } from '@/services/candidate/CandidateJournalService'
 import type { CandidateJournalEntry, CandidateStatus, CandidateStockLike } from '@/services/candidate/types'
-import { evaluateV5FusionEntry, V5_FUSION_DEFAULTS } from './v5FusionExecutionContract'
+import { evaluateV5FusionEntry } from './v5FusionExecutionContract'
 
 const FUSION_STRATEGY_SOURCE = 'ranktrend_early_big_move_v3_lifecycle_fusion'
 const FEISHU_ENDPOINT = '/api/notifications/jump-signal'
@@ -45,7 +45,7 @@ export class FusionCandidateNotifier {
   async process(stocks: CandidateStockLike[]): Promise<void> {
     for (const stock of stocks) {
       const entry = evaluateV5FusionEntry(stock)
-      if (!entry.accepted) continue
+      if (entry.entryDecision.decisionState !== 'auto_add' || !entry.entryDecision.accepted) continue
 
       const code = normalizeCode(stock?.code)
       if (!code) continue
@@ -66,8 +66,9 @@ export class FusionCandidateNotifier {
             executionCandidateTier: entry.candidateTier,
             lifecycleAction: entry.lifecycleAction,
             jumpConfidence: entry.jumpConfidence,
-            minJumpConfidence: V5_FUSION_DEFAULTS.minJumpConfidence,
+            minJumpConfidence: entry.configSnapshot.minJumpConfidence,
             blockedReasons: entry.blockedReasons,
+            decisionState: entry.decisionState,
           },
         },
       })

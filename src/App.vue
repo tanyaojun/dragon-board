@@ -198,6 +198,7 @@ import SearchBox from './components/common/SearchBox.vue'
 import DataTable from './components/common/DataTable.vue'
 import DataFreshness from './components/common/DataFreshness.vue'
 import RankTrendPanel from './components/panels/RankTrendPanel.vue'
+import type { CandidatePoolOpenPayload } from './types/candidatePoolOpenPayload'
 
 // 面板组件体积较大，按需异步加载，降低首屏 chunk 体积。
 const SettingsPanel = defineAsyncComponent(() => import('./components/panels/SettingsPanel.vue'))
@@ -293,7 +294,7 @@ const dropdownRef = ref<HTMLElement | null>(null)
 const themeRiskBtnRef = ref<HTMLElement>()
 const eventMonitorBtnRef = ref<HTMLElement>()
 const candidatePoolPanelRef = ref<{
-  openCandidate: (data?: { candidateId?: string; stockCode?: string }) => Promise<void>
+  openCandidate: (data?: CandidatePoolOpenPayload) => Promise<void>
 } | null>(null)
 
 // 导航标签
@@ -387,7 +388,7 @@ const openStockDetail = (data: { code?: string; name?: string; triggerRect?: DOM
   panels.value.stockDetail = true
 }
 
-const openCandidatePool = async (data: { candidateId?: string; stockCode?: string } = {}) => {
+const openCandidatePool = async (data: CandidatePoolOpenPayload = {}) => {
   panels.value.candidatePool = true
   await nextTick()
   await candidatePoolPanelRef.value?.openCandidate(data)

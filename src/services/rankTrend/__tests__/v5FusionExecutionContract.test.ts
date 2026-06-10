@@ -83,6 +83,84 @@ describe('evaluateV5FusionEntry', () => {
     expect(result.accepted).toBe(false)
     expect(result.blockedReasons).toContain('生命周期辅助决策一票否决')
   })
+
+  it('treats change >= 6 as watch candidate in default balanced mode', () => {
+    const result = evaluateV5FusionEntry(createStock({ change: 6.5 }))
+
+    expect(result.accepted).toBe(false)
+    expect(result.decisionState).toBe('watch_candidate')
+    expect(result.blockedReasons).not.toContain('涨幅过高，阻断早期入场')
+    expect(result.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: 'change_position',
+          status: 'warn',
+          hardBlock: false,
+        }),
+      ]),
+    )
+  })
+
+  it('blocks change >= 6 only in strict execution mode', () => {
+    const result = evaluateV5FusionEntry(createStock({ change: 6.5 }), {
+      mode: 'strict_execution',
+    })
+
+    expect(result.accepted).toBe(false)
+    expect(result.decisionState).toBe('blocked_candidate')
+    expect(result.firstBlockingCheck).toMatchObject({
+      key: 'change_position',
+      status: 'fail',
+      hardBlock: true,
+    })
+  })
+
+  it('blocks degraded sample quality in strict execution mode', () => {
+    const stock = createStock({
+      rankTrend: {
+        ...(createStock().rankTrend as Record<string, unknown>),
+        meta: {
+          sampleQuality: {
+            status: 'degraded',
+            snapshotType: 'half_hour',
+          },
+        },
+      },
+    })
+
+    const result = evaluateV5FusionEntry(stock, { mode: 'strict_execution' })
+
+    expect(result.decisionState).toBe('blocked_candidate')
+    expect(result.firstBlockingCheck).toMatchObject({
+      key: 'sample_quality',
+      status: 'fail',
+    })
+  })
+
+  it('keeps non A/B execution tiers as watch candidates in balanced mode', () => {
+    const stock = createStock({
+      rankTrend: {
+        ...(createStock().rankTrend as Record<string, unknown>),
+        executionStrategy: {
+          candidateTier: 'N_NEUTRAL',
+        },
+      },
+    })
+
+    const result = evaluateV5FusionEntry(stock)
+
+    expect(result.decisionState).toBe('watch_candidate')
+    expect(result.accepted).toBe(false)
+    expect(result.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: 'candidate_tier',
+          status: 'warn',
+          hardBlock: false,
+        }),
+      ]),
+    )
+  })
 })
 
 describe('evaluateV5FusionExit', () => {

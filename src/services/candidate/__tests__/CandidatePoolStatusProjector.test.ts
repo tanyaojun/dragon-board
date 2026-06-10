@@ -108,4 +108,53 @@ describe('CandidatePoolStatusProjector', () => {
       candidatePoolProjection: null,
     })
   })
+
+  it('uses entry decision label and summary for live watch candidates', () => {
+    const stocks = [{ code: '000970', name: '中科三环' }]
+    const projections: FusionStrategyProjection[] = [
+      {
+        stockCode: '000970',
+        stockName: '中科三环',
+        strategyName: 'ranktrend_early_big_move_v3_lifecycle_fusion',
+        snapshotType: 'half_hour',
+        tradingDate: '2026-06-10',
+        snapshotId: 'snap-watch',
+        frameTime: '2026-06-10T10:00:00+08:00',
+        projectionSource: 'live',
+        strategyState: 'idle',
+        candidateTier: 'A_MAIN',
+        lifecycleAction: 'allow',
+        executionOverlay: null,
+        entryDecision: {
+          accepted: false,
+          decisionState: 'watch_candidate',
+          label: '观察候选',
+          summary: '涨幅偏高，进入观察候选',
+          checks: [],
+          configSnapshot: {
+            version: 'live-v5.1.0',
+            mode: 'balanced',
+            minJumpConfidence: 85,
+            allowDegradedSample: true,
+            requireCandidateTier: false,
+            allowedCandidateTiers: ['A_MAIN', 'B_IGNITION', 'N_NEUTRAL'],
+            requireTierBMidAndZeroCross: false,
+            tierBMidMin: 20,
+            accelerationMin: 10,
+            accDeltaMin: 8,
+            changeGate: { mode: 'warn', maxEntryChangePct: 6 },
+            limitUpPolicy: 'quote_first',
+          },
+        },
+      },
+    ]
+
+    const result = projectCandidatePoolStatus(stocks as any[], projections)
+
+    expect(result[0]).toMatchObject({
+      candidatePoolStatus: 'idle',
+      candidatePoolLabel: '观察候选',
+      candidatePoolProjection: projections[0],
+    })
+  })
 })

@@ -128,8 +128,9 @@ describe('FusionCandidateNotifier', () => {
             executionCandidateTier: 'A_MAIN',
             lifecycleAction: 'allow',
             jumpConfidence: 92,
-            minJumpConfidence: 90,
+            minJumpConfidence: 85,
             blockedReasons: [],
+            decisionState: 'auto_add',
           },
         },
       },
@@ -248,6 +249,42 @@ describe('FusionCandidateNotifier', () => {
           ...createStock().rankTrend,
           jump: { direction: 'buy', confidence: 79.8 },
         },
+      }),
+    ])
+
+    expect(getOpenCandidateForStock).not.toHaveBeenCalled()
+    expect(addCandidateFromStock).not.toHaveBeenCalled()
+  })
+
+  it('balanced 下 change >= 6 只进入观察候选，不自动写入候选池', async () => {
+    const notifier = new FusionCandidateNotifier({
+      candidateJournal: {
+        getOpenCandidateForStock,
+        addCandidateFromStock,
+      },
+      now,
+    })
+
+    await notifier.process([createStock({ change: 6.5 })])
+
+    expect(getOpenCandidateForStock).not.toHaveBeenCalled()
+    expect(addCandidateFromStock).not.toHaveBeenCalled()
+  })
+
+  it('quote-first 判断为涨停时不自动写入候选池', async () => {
+    const notifier = new FusionCandidateNotifier({
+      candidateJournal: {
+        getOpenCandidateForStock,
+        addCandidateFromStock,
+      },
+      now,
+    })
+
+    await notifier.process([
+      createStock({
+        change: 3.2,
+        price: 12.34,
+        limitUpPrice: 12.34,
       }),
     ])
 

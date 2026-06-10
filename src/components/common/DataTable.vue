@@ -232,6 +232,7 @@ import { debugLog } from '@/utils/logger'
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import type { Stock, Board } from '../../types'
+import type { CandidatePoolOpenPayload } from '@/types/candidatePoolOpenPayload'
 import { EventManager } from '../../utils/eventManager'
 import { AppEvents } from '../../types'
 import { useUIStore } from '../../stores/ui'
@@ -787,17 +788,32 @@ const candidatePoolStateLabels: Record<string, string> = {
   closed: '策略已关闭',
 }
 
+const liveDecisionStateClasses: Record<string, string> = {
+  auto_add: 'auto-add',
+  watch_candidate: 'watch-candidate',
+  blocked_candidate: 'blocked-candidate',
+  not_candidate: 'not-candidate',
+}
+
 const getCandidatePoolProjection = (stock: any) => stock?.candidatePoolProjection || null
 
-const getCandidatePoolStrategyState = (stock: any) =>
-  getCandidatePoolProjection(stock)?.strategyState || stock?.candidatePoolStatus || 'idle'
+const getCandidatePoolEntryDecision = (stock: any) =>
+  getCandidatePoolProjection(stock)?.entryDecision || null
+
+const getCandidatePoolStrategyState = (stock: any) => {
+  const decisionState = getCandidatePoolEntryDecision(stock)?.decisionState
+  if (decisionState) return liveDecisionStateClasses[decisionState] || decisionState
+  return getCandidatePoolProjection(stock)?.strategyState || stock?.candidatePoolStatus || 'idle'
+}
 
 const formatCandidatePoolStateLabel = (stock: any) =>
-  getCandidatePoolProjection(stock)?.strategyState
+  getCandidatePoolEntryDecision(stock)?.label ||
+  (getCandidatePoolProjection(stock)?.strategyState
     ? candidatePoolStateLabels[getCandidatePoolProjection(stock).strategyState] ||
       stock?.candidatePoolLabel ||
       '未触发'
     : stock?.candidatePoolLabel || '未触发'
+  )
 
 const getCandidatePoolTitle = (stock: any) => {
   const projection = getCandidatePoolProjection(stock)
@@ -843,13 +859,16 @@ const getCandidatePoolTitle = (stock: any) => {
 }
 
 const openCandidatePoolFromCell = (stock: Stock) => {
-  EventManager.emit('candidate-pool:open', {
+  const projection = getCandidatePoolProjection(stock)
+  const payload: CandidatePoolOpenPayload = {
     stockCode: stock.code,
     candidateId:
       stock.candidatePoolEntryId ||
-      getCandidatePoolProjection(stock)?.executionOverlay?.entryId ||
+      projection?.executionOverlay?.entryId ||
       undefined,
-  })
+    liveProjection: projection || undefined,
+  }
+  EventManager.emit('candidate-pool:open', payload)
 }
 
 const getFinalSignal = (stock: any) =>
@@ -2205,6 +2224,30 @@ defineExpose({
 }
 
 .candidate-pool-state-idle {
+  color: #8f99a8;
+  background: rgba(143, 153, 168, 0.1);
+  border: 1px solid rgba(143, 153, 168, 0.18);
+}
+
+.candidate-pool-state-auto-add {
+  color: #bfffe0;
+  background: rgba(61, 220, 151, 0.14);
+  border: 1px solid rgba(61, 220, 151, 0.3);
+}
+
+.candidate-pool-state-watch-candidate {
+  color: #ffe3a1;
+  background: rgba(255, 177, 59, 0.14);
+  border: 1px solid rgba(255, 177, 59, 0.34);
+}
+
+.candidate-pool-state-blocked-candidate {
+  color: #ffb2bf;
+  background: rgba(255, 92, 115, 0.14);
+  border: 1px solid rgba(255, 92, 115, 0.32);
+}
+
+.candidate-pool-state-not-candidate {
   color: #8f99a8;
   background: rgba(143, 153, 168, 0.1);
   border: 1px solid rgba(143, 153, 168, 0.18);

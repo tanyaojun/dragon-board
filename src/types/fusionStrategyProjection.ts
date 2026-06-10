@@ -1,4 +1,5 @@
 import type { CandidateTier, LifecycleDecisionAction } from '@/services/rankTrend/types'
+import type { RankTrendLiveEntryDecision } from '@/types/rankTrendLiveStrategy'
 
 export type FusionSnapshotType = 'half_hour' | 'quarter_hour'
 
@@ -49,4 +50,5 @@ export interface FusionStrategyProjection {
   strategyExitPrice?: number
   strategyReturnPct?: number
   executionOverlay?: FusionExecutionOverlay | null
+  entryDecision?: RankTrendLiveEntryDecision
 }

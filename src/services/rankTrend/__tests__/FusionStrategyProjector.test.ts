@@ -201,4 +201,33 @@ describe('FusionStrategyProjector', () => {
     expect(projection.strategyState).toBe('triggered_wait_entry')
     expect(projection.candidateTier).toBe('A_MAIN')
   })
+
+  it('projects structured live entry decision for watch candidates', () => {
+    const stock = createFusionStock('000970')
+    stock.change = 6.5
+
+    const projection = buildFusionStrategyProjection({
+      stock,
+      snapshotType: 'half_hour',
+      tradingDate: '2026-06-10',
+      snapshotId: 'snap-watch',
+      frameTime: '2026-06-10T10:00:00+08:00',
+    })
+
+    expect(projection.strategyState).toBe('idle')
+    expect(projection.entryDecision).toMatchObject({
+      decisionState: 'watch_candidate',
+      label: '观察候选',
+      summary: '涨幅偏高，进入观察候选',
+    })
+    expect(projection.entryDecision?.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: 'change_position',
+          status: 'warn',
+          hardBlock: false,
+        }),
+      ]),
+    )
+  })
 })

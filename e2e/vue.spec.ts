@@ -96,6 +96,19 @@ const stockRows = [
     turnoverRate: 5.1,
     turnover: 620_000_000,
   },
+  {
+    code: '000970',
+    name: '中科三环',
+    price: 14.2,
+    change: 6.5,
+    zlje: 180_000_000,
+    zljzb: 5.8,
+    cddje: 48_000_000,
+    cddjzb: 1.9,
+    volumeRatio: 1.6,
+    turnoverRate: 4.8,
+    turnover: 580_000_000,
+  },
 ]
 
 function createRankTrend(code: string, rank: number, tier = 'A_MAIN') {
@@ -608,6 +621,73 @@ async function seedRuntime(page: Page) {
       leadTimes: stock.code === '600584' ? 2 : 0,
       rankTrend: stock.rankTrend,
       themes: stock.code === '600584' ? [{ id: 'chip', name: '国产芯片' }] : [],
+      candidatePoolLabel: stock.code === '000970' ? '观察候选' : undefined,
+      candidatePoolProjection:
+        stock.code === '000970'
+          ? {
+              stockCode: '000970',
+              stockName: '中科三环',
+              strategyName: 'ranktrend_early_big_move_v3_lifecycle_fusion',
+              snapshotType: 'half_hour',
+              tradingDate: '2026-05-17',
+              snapshotId: 'half_hour:2026-05-17:10:00',
+              frameTime: '2026-05-17T10:00:00+08:00',
+              projectionSource: 'live',
+              strategyState: 'idle',
+              candidateTier: 'A_MAIN',
+              lifecycleAction: 'allow',
+              executionOverlay: null,
+              entryDecision: {
+                accepted: false,
+                decisionState: 'watch_candidate',
+                label: '观察候选',
+                summary: '涨幅偏高，进入观察候选',
+                checks: [
+                  {
+                    key: 'ranktrend_present',
+                    label: 'RankTrend',
+                    status: 'pass',
+                    hardBlock: false,
+                    actual: true,
+                    expected: '存在 RankTrend 诊断',
+                    message: '存在 RankTrend 诊断',
+                  },
+                  {
+                    key: 'change_position',
+                    label: '涨幅位置',
+                    status: 'warn',
+                    hardBlock: false,
+                    actual: 6.5,
+                    expected: '< 6 或观察',
+                    message: '涨幅偏高，进入观察候选',
+                  },
+                  {
+                    key: 'limit_up',
+                    label: '涨停状态',
+                    status: 'pass',
+                    hardBlock: false,
+                    actual: 'board_fallback',
+                    expected: '未涨停',
+                    message: '未处于涨停阻断状态',
+                  },
+                ],
+                configSnapshot: {
+                  version: 'live-v5.1.0',
+                  mode: 'balanced',
+                  minJumpConfidence: 85,
+                  allowDegradedSample: true,
+                  requireCandidateTier: false,
+                  allowedCandidateTiers: ['A_MAIN', 'B_IGNITION'],
+                  requireTierBMidAndZeroCross: false,
+                  tierBMidMin: 20,
+                  accelerationMin: 10,
+                  accDeltaMin: 8,
+                  changeGate: { mode: 'warn', maxEntryChangePct: 6 },
+                  limitUpPolicy: 'quote_first',
+                },
+              },
+            }
+          : undefined,
     }))
 
     const runtime = window as any
@@ -785,5 +865,32 @@ test.describe('候选池 Phase 14 回归', () => {
     await page.getByText('删除候选', { exact: true }).click()
     await expect.poll(() => state.deleteIds).toContain('thesis_created_1')
     await expect(page.locator('.candidate-detail')).not.toContainText('长电科技')
+  })
+
+  test('从既有候选池列打开未持久化 live projection 规则矩阵', async ({ page }, testInfo) => {
+    await setupCandidateRoutes(page)
+    await page.goto('/')
+    await expect(page.locator('.data-row[data-code="600584"]')).toBeVisible({ timeout: 20_000 })
+    await seedRuntime(page)
+
+    const row = page.locator('.data-row[data-code="000970"]')
+    await expect(row).toBeVisible()
+    await expect(row.locator('.candidate-pool-badge')).toContainText('观察候选')
+    await row.locator('.candidate-pool-badge').click()
+
+    await expect(page.getByRole('heading', { name: '候选池' })).toBeVisible()
+    const detail = page.locator('.candidate-detail')
+    await expect(detail).toContainText('中科三环')
+    await expect(detail).toContainText('规则矩阵')
+    await expect(detail).toContainText('涨幅位置')
+    await expect(detail).toContainText('观察')
+    await expect(detail).toContainText('参数快照')
+    await expect(detail).not.toContainText('删除候选')
+    await expect(detail).not.toContainText('保存执行记录')
+
+    await page.screenshot({
+      path: testInfo.outputPath('candidate-pool-transient-live-projection.png'),
+      fullPage: true,
+    })
   })
 })

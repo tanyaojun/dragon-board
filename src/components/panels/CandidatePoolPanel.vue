@@ -24,6 +24,12 @@
             <option value="trigger-desc">排序方式：按触发时间</option>
             <option value="holding-desc">排序方式：按持有 bars</option>
           </select>
+          <select v-model="pendingStrategyMode" title="待生效策略模式">
+            <option value="balanced">待生效：均衡盯盘</option>
+            <option value="recall_first">待生效：召回优先</option>
+            <option value="strict_execution">待生效：严格执行</option>
+          </select>
+          <span class="mode-note">当前详情以参数快照为准，待生效设置刷新信号后应用</span>
           <input v-model.trim="keyword" class="keyword-filter" placeholder="代码 / 名称" />
           <button class="text-btn" @click="loadCandidates">刷新</button>
           <span class="summary">共 {{ visibleRows.length }} / {{ strategyRows.length }} 条</span>
@@ -53,8 +59,11 @@
                       <strong>{{ row.entry.stockName || row.entry.stockCode }}</strong>
                       <span>{{ row.entry.stockCode }}</span>
                     </span>
-                    <span class="strategy-state-pill" :data-state="row.projection.strategyState">
-                      {{ strategyStateLabel(row.projection.strategyState) }}
+                    <span
+                      class="strategy-state-pill"
+                      :data-state="row.projection.entryDecision?.decisionState || row.projection.strategyState"
+                    >
+                      {{ row.projection.entryDecision?.label || strategyStateLabel(row.projection.strategyState) }}
                     </span>
                   </span>
                   <span class="candidate-item-meta">
@@ -71,17 +80,29 @@
           </aside>
 
           <main class="candidate-detail">
-            <template v-if="selectedRow">
+            <template v-if="selectedLiveDetail">
               <div class="detail-title">
                 <div>
-                  <h3>{{ selectedRow.entry.stockName || selectedRow.entry.stockCode }}</h3>
-                  <span>{{ selectedRow.entry.stockCode }} · {{ strategyStateLabel(selectedRow.projection.strategyState) }}</span>
+                  <h3>{{ selectedLiveDetail.entry.stockName || selectedLiveDetail.entry.stockCode }}</h3>
+                  <span>
+                    {{ selectedLiveDetail.entry.stockCode }} ·
+                    {{
+                      selectedLiveDetail.projection.entryDecision?.label ||
+                      strategyStateLabel(selectedLiveDetail.projection.strategyState)
+                    }}
+                  </span>
                 </div>
                 <div class="quick-actions">
                   <button type="button" @click="addToFavorites">加入自选</button>
                   <button type="button" @click="openStockDetail">股票详情</button>
                   <button type="button" @click="openRankTrend">排名趋势</button>
-                  <button type="button" class="danger-btn" :disabled="deletingCandidate" @click="deleteCandidate">
+                  <button
+                    v-if="!isTransientLiveDetail"
+                    type="button"
+                    class="danger-btn"
+                    :disabled="deletingCandidate"
+                    @click="deleteCandidate"
+                  >
                     删除候选
                   </button>
                 </div>
@@ -90,60 +111,129 @@
               <section class="strategy-card">
                 <div class="section-header">
                   <h4>策略事实</h4>
-                  <span>{{ selectedRow.projection.strategyName }}</span>
+                  <span>{{ selectedLiveDetail.projection.strategyName }}</span>
                 </div>
                 <div class="fact-grid">
                   <div class="fact-item">
                     <span>当前策略状态</span>
-                    <strong class="strategy-state-pill" :data-state="selectedRow.projection.strategyState">
-                      {{ strategyStateLabel(selectedRow.projection.strategyState) }}
+                    <strong
+                      class="strategy-state-pill"
+                      :data-state="
+                        selectedLiveDetail.projection.entryDecision?.decisionState ||
+                        selectedLiveDetail.projection.strategyState
+                      "
+                    >
+                      {{
+                        selectedLiveDetail.projection.entryDecision?.label ||
+                        strategyStateLabel(selectedLiveDetail.projection.strategyState)
+                      }}
                     </strong>
                   </div>
                   <div class="fact-item">
                     <span>首次触发时间</span>
-                    <strong>{{ formatDateTime(selectedRow.projection.triggerAt) }}</strong>
+                    <strong>{{ formatDateTime(selectedLiveDetail.projection.triggerAt) }}</strong>
                   </div>
                   <div class="fact-item">
                     <span>策略入场时间</span>
-                    <strong>{{ formatDateTime(selectedRow.projection.strategyEntryAt) }}</strong>
+                    <strong>{{ formatDateTime(selectedLiveDetail.projection.strategyEntryAt) }}</strong>
                   </div>
                   <div class="fact-item">
                     <span>策略退出时间</span>
-                    <strong>{{ formatDateTime(selectedRow.projection.strategyExitAt) }}</strong>
+                    <strong>{{ formatDateTime(selectedLiveDetail.projection.strategyExitAt) }}</strong>
                   </div>
                   <div class="fact-item">
                     <span>策略持有 bars</span>
-                    <strong>{{ formatHoldingBars(selectedRow.projection.holdingBars) }}</strong>
+                    <strong>{{ formatHoldingBars(selectedLiveDetail.projection.holdingBars) }}</strong>
                   </div>
                   <div class="fact-item">
                     <span>候选层级</span>
-                    <strong>{{ selectedRow.projection.candidateTier }}</strong>
+                    <strong>{{ selectedLiveDetail.projection.candidateTier }}</strong>
                   </div>
                   <div class="fact-item">
                     <span>生命周期动作</span>
-                    <strong>{{ lifecycleActionLabel(selectedRow.projection.lifecycleAction) }}</strong>
+                    <strong>{{ lifecycleActionLabel(selectedLiveDetail.projection.lifecycleAction) }}</strong>
                   </div>
                   <div class="fact-item">
                     <span>退出原因</span>
-                    <strong>{{ selectedRow.projection.exitReason || '未触发退出原因' }}</strong>
+                    <strong>{{ selectedLiveDetail.projection.exitReason || '未触发退出原因' }}</strong>
                   </div>
                   <div class="fact-item">
                     <span>仓位槽位 / 最大持仓</span>
-                    <strong>{{ formatSlotSummary(selectedRow.projection) }}</strong>
+                    <strong>{{ formatSlotSummary(selectedLiveDetail.projection) }}</strong>
                   </div>
                   <div class="fact-item">
                     <span>快照口径</span>
-                    <strong>{{ selectedRow.projection.snapshotType }}</strong>
+                    <strong>{{ selectedLiveDetail.projection.snapshotType }}</strong>
+                  </div>
+                </div>
+                <div v-if="selectedConfigSnapshot" class="snapshot-note">
+                  当前诊断：{{ strategyModeLabel(selectedConfigSnapshot.mode) }} · {{ selectedConfigSnapshot.version }}
+                </div>
+                <div v-if="selectedConfigSnapshot" class="config-strip">
+                  <div>
+                    <span>策略模式</span>
+                    <strong>{{ strategyModeLabel(selectedConfigSnapshot.mode) }}</strong>
+                  </div>
+                  <div>
+                    <span>参数快照</span>
+                    <strong>{{ selectedConfigSnapshot.version }}</strong>
+                  </div>
+                  <div>
+                    <span>Jump阈值</span>
+                    <strong>{{ selectedConfigSnapshot.minJumpConfidence }}</strong>
+                  </div>
+                  <div>
+                    <span>涨幅规则</span>
+                    <strong>{{ selectedConfigSnapshot.changeGate.mode }} / {{ selectedConfigSnapshot.changeGate.maxEntryChangePct ?? '不限' }}</strong>
+                  </div>
+                  <div>
+                    <span>加速度阈值</span>
+                    <strong>{{ selectedConfigSnapshot.accelerationMin }} / {{ selectedConfigSnapshot.accDeltaMin }}</strong>
+                  </div>
+                  <div>
+                    <span>允许层级</span>
+                    <strong>{{ formatTierList(selectedConfigSnapshot.allowedCandidateTiers) }}</strong>
+                  </div>
+                  <div>
+                    <span>B档确认</span>
+                    <strong>{{ selectedConfigSnapshot.requireTierBMidAndZeroCross ? '硬确认' : '观察降级' }}</strong>
+                  </div>
+                </div>
+                <div v-if="selectedGateChecks.length" class="gate-matrix">
+                  <div class="section-header compact">
+                    <h4>规则矩阵</h4>
+                    <span>{{ selectedEntryDecision?.summary || '无阻断' }}</span>
+                  </div>
+                  <div class="gate-table">
+                    <div class="gate-row gate-head">
+                      <span>规则</span>
+                      <span>结果</span>
+                      <span>硬阻断</span>
+                      <span>当前值</span>
+                      <span>要求</span>
+                    </div>
+                    <div
+                      v-for="check in selectedGateChecks"
+                      :key="check.key"
+                      class="gate-row"
+                      :data-status="check.status"
+                    >
+                      <span>{{ check.label }}</span>
+                      <strong>{{ gateStatusLabel(check.status) }}</strong>
+                      <span>{{ check.hardBlock ? '是' : '否' }}</span>
+                      <span>{{ formatGateActual(check.actual) }}</span>
+                      <span>{{ check.expected }}</span>
+                    </div>
                   </div>
                 </div>
                 <ul class="fact-notes">
-                  <li>入池理由：{{ thesisForm.entryReason || selectedRow.entry.entryReason || '未填写' }}</li>
-                  <li>交易假设：{{ thesisForm.tradeHypothesis || selectedRow.entry.tradeHypothesis || '未填写' }}</li>
-                  <li>失效条件：{{ thesisForm.invalidationRules || selectedRow.entry.invalidationRules || '未填写' }}</li>
+                  <li>入池理由：{{ thesisForm.entryReason || selectedLiveDetail.entry.entryReason || '未填写' }}</li>
+                  <li>交易假设：{{ thesisForm.tradeHypothesis || selectedLiveDetail.entry.tradeHypothesis || '未填写' }}</li>
+                  <li>失效条件：{{ thesisForm.invalidationRules || selectedLiveDetail.entry.invalidationRules || '未填写' }}</li>
                 </ul>
               </section>
 
-              <section class="execution-card">
+              <section v-if="!isTransientLiveDetail" class="execution-card">
                 <div class="section-header">
                   <h4>执行事实</h4>
                   <button class="text-btn" :disabled="savingExecution" @click="saveExecution">保存执行记录</button>
@@ -152,11 +242,11 @@
                 <div class="fact-grid compact-facts">
                   <div class="fact-item">
                     <span>执行记录</span>
-                    <strong>{{ selectedRow.projection.executionOverlay?.executed ? '已记录' : '未记录' }}</strong>
+                    <strong>{{ selectedLiveDetail.projection.executionOverlay?.executed ? '已记录' : '未记录' }}</strong>
                   </div>
                   <div class="fact-item">
                     <span>执行偏差</span>
-                    <strong>{{ executionDriftLabel(selectedRow.projection) }}</strong>
+                    <strong>{{ executionDriftLabel(selectedLiveDetail.projection) }}</strong>
                   </div>
                 </div>
                 <div class="form-grid exec-grid">
@@ -191,7 +281,7 @@
                 </div>
               </section>
 
-              <section class="editor-card">
+              <section v-if="!isTransientLiveDetail" class="editor-card">
                 <div class="section-header">
                   <h4>假设编辑</h4>
                   <button class="text-btn" :disabled="savingThesis" @click="saveThesis">保存假设</button>
@@ -230,7 +320,7 @@
                 </div>
               </section>
 
-              <section class="review-card">
+              <section v-if="!isTransientLiveDetail" class="review-card">
                 <div class="section-header">
                   <h4>对齐复盘</h4>
                   <button class="text-btn" :disabled="savingReview" @click="saveReview">保存复盘</button>
@@ -290,7 +380,13 @@ import { candidateJournalService } from '@/services/candidate/CandidateJournalSe
 import type { CandidateJournalEntry, CandidateReviewUpdate, CandidateThesisUpdate } from '@/services/candidate/types'
 import { buildFusionStrategyProjection } from '@/services/rankTrend/FusionStrategyProjector'
 import type { FusionSnapshotType, FusionStrategyProjection, FusionStrategyState } from '@/types/fusionStrategyProjection'
+import {
+  RANK_TREND_LIVE_STRATEGY_CONFIG_STORAGE_KEY,
+  normalizeRankTrendLiveStrategyConfig,
+} from '@/config/rankTrendLiveStrategyConfig'
 import { AppEvents } from '@/types'
+import type { CandidatePoolOpenPayload } from '@/types/candidatePoolOpenPayload'
+import type { RankTrendLiveStrategyMode } from '@/types/rankTrendLiveStrategy'
 import { EventManager } from '@/utils/eventManager'
 
 interface CandidatePoolRow {
@@ -334,6 +430,9 @@ const selectedId = ref('')
 const statusFilter = ref('')
 const sortMode = ref<'state-priority' | 'trigger-desc' | 'holding-desc'>('state-priority')
 const keyword = ref('')
+const pendingStrategyMode = ref<RankTrendLiveStrategyMode>('balanced')
+const transientRow = ref<CandidatePoolRow | null>(null)
+const liveProjectionOverrides = ref<Record<string, FusionStrategyProjection>>({})
 
 const thesisForm = ref<CandidateThesisUpdate>({
   entryReason: '',
@@ -380,6 +479,28 @@ function buildFrameTime(tradingDate: string, slotTime: string, fallback: string)
 
 function strategyStateLabel(state: FusionStrategyState): string {
   return STRATEGY_STATE_LABELS[state]
+}
+
+function gateStatusLabel(status: string): string {
+  if (status === 'pass') return '通过'
+  if (status === 'warn') return '观察'
+  if (status === 'fail') return '阻断'
+  return '关闭'
+}
+
+function strategyModeLabel(mode: string): string {
+  if (mode === 'recall_first') return '召回优先'
+  if (mode === 'strict_execution') return '严格执行'
+  return '均衡盯盘'
+}
+
+function formatGateActual(value: unknown): string {
+  if (value === null || value === undefined || value === '') return '-'
+  return String(value)
+}
+
+function formatTierList(value: unknown): string {
+  return Array.isArray(value) && value.length ? value.join('/') : '-'
 }
 
 function lifecycleActionLabel(action: FusionStrategyProjection['lifecycleAction']): string {
@@ -460,6 +581,36 @@ function buildProjection(entry: CandidateJournalEntry): FusionStrategyProjection
   })
 }
 
+function buildTransientEntry(projection: FusionStrategyProjection): CandidateJournalEntry {
+  const stockCode = normalizeCode(projection.stockCode)
+  const now = projection.frameTime || new Date().toISOString()
+  return {
+    id: `transient:${stockCode}`,
+    stockCode,
+    stockName: projection.stockName || stockCode,
+    status: 'observe',
+    tradeType: 'watch',
+    entryReason: projection.entryDecision?.summary || '',
+    tradeHypothesis: '',
+    entryPrerequisites: '',
+    invalidationRules: '',
+    humanDecision: 'watch',
+    skipReason: '',
+    reviewOutcome: 'pending',
+    modelResult: 'unknown',
+    executionResult: 'unknown',
+    reviewNotes: '',
+    reviewTags: [],
+    signalsSnapshot: null,
+    createdAt: now,
+    updatedAt: now,
+  }
+}
+
+function clearLiveProjectionOverrides() {
+  liveProjectionOverrides.value = {}
+}
+
 function syncSelection() {
   if (!visibleRows.value.length) {
     selectedId.value = ''
@@ -471,12 +622,16 @@ function syncSelection() {
   }
 }
 
-const strategyRows = computed<CandidatePoolRow[]>(() =>
-  candidates.value.map((entry) => ({
+const strategyRows = computed<CandidatePoolRow[]>(() => {
+  const rows = candidates.value.map((entry) => ({
     entry,
-    projection: buildProjection(entry),
-  })),
-)
+    projection:
+      liveProjectionOverrides.value[entry.id] ||
+      liveProjectionOverrides.value[normalizeCode(entry.stockCode)] ||
+      buildProjection(entry),
+  }))
+  return transientRow.value ? [transientRow.value, ...rows] : rows
+})
 
 const visibleRows = computed<CandidatePoolRow[]>(() => {
   const normalizedKeyword = keyword.value.trim().toLowerCase()
@@ -513,6 +668,13 @@ const groupedRows = computed(() =>
 )
 
 const selectedRow = computed(() => visibleRows.value.find((row) => row.entry.id === selectedId.value) || null)
+const selectedLiveDetail = computed(() => selectedRow.value)
+const isTransientLiveDetail = computed(() => selectedLiveDetail.value?.entry.id.startsWith('transient:') || false)
+const selectedEntryDecision = computed(
+  () => selectedLiveDetail.value?.projection?.entryDecision || null,
+)
+const selectedGateChecks = computed(() => selectedEntryDecision.value?.checks || [])
+const selectedConfigSnapshot = computed(() => selectedEntryDecision.value?.configSnapshot || null)
 
 function applySelectedEntryToForms(entry: CandidateJournalEntry | null) {
   thesisForm.value = {
@@ -543,6 +705,7 @@ function applySelectedEntryToForms(entry: CandidateJournalEntry | null) {
 async function loadCandidates() {
   loading.value = true
   errorMessage.value = ''
+  clearLiveProjectionOverrides()
   try {
     candidates.value = await candidateJournalService.listCandidates({ limit: 200 })
     syncSelection()
@@ -675,8 +838,8 @@ function close() {
   emit('close')
 }
 
-async function openCandidate(target: { candidateId?: string; stockCode?: string } = {}) {
-  const hasTarget = !!(target.candidateId || target.stockCode)
+async function openCandidate(target: CandidatePoolOpenPayload = {}) {
+  const hasTarget = !!(target.candidateId || target.stockCode || target.liveProjection)
   statusFilter.value = ''
   keyword.value = ''
   await loadCandidates()
@@ -686,7 +849,25 @@ async function openCandidate(target: { candidateId?: string; stockCode?: string 
       normalizeCode(row.entry.stockCode) === normalizeCode(target.stockCode),
   )
   if (matched) {
+    if (target.liveProjection) {
+      liveProjectionOverrides.value = {
+        ...liveProjectionOverrides.value,
+        [matched.entry.id]: target.liveProjection,
+      }
+    }
     selectedId.value = matched.entry.id
+    transientRow.value = null
+    return
+  }
+  if (target.liveProjection) {
+    const row = {
+      entry: buildTransientEntry(target.liveProjection),
+      projection: target.liveProjection,
+    }
+    transientRow.value = row
+    selectedId.value = row.entry.id
+    errorMessage.value = ''
+    return
   }
   if (hasTarget && !matched) {
     errorMessage.value = '未找到对应候选，已打开候选池列表。'
@@ -694,9 +875,24 @@ async function openCandidate(target: { candidateId?: string; stockCode?: string 
 }
 
 onMounted(() => {
+  const raw = localStorage.getItem(RANK_TREND_LIVE_STRATEGY_CONFIG_STORAGE_KEY)
+  if (raw) {
+    try {
+      pendingStrategyMode.value = normalizeRankTrendLiveStrategyConfig(JSON.parse(raw)).mode
+    } catch {
+      pendingStrategyMode.value = 'balanced'
+    }
+  }
   if (props.visible) {
     void loadCandidates()
   }
+})
+
+watch(pendingStrategyMode, (mode) => {
+  localStorage.setItem(
+    RANK_TREND_LIVE_STRATEGY_CONFIG_STORAGE_KEY,
+    JSON.stringify(normalizeRankTrendLiveStrategyConfig({ mode })),
+  )
 })
 
 watch(
@@ -888,6 +1084,12 @@ textarea:focus-visible {
   flex: 0 0 180px;
 }
 
+.mode-note {
+  flex: 1 1 260px;
+  color: var(--candidate-muted);
+  font-size: 12px;
+}
+
 .keyword-filter {
   flex: 0 0 180px;
 }
@@ -1043,6 +1245,30 @@ textarea:focus-visible {
   border-color: rgba(115, 128, 147, 0.34);
 }
 
+.strategy-state-pill[data-state='auto_add'] {
+  color: #d9ffe8;
+  background: rgba(41, 209, 125, 0.14);
+  border-color: rgba(41, 209, 125, 0.32);
+}
+
+.strategy-state-pill[data-state='watch_candidate'] {
+  color: #ffe8ae;
+  background: rgba(255, 177, 59, 0.14);
+  border-color: rgba(255, 177, 59, 0.32);
+}
+
+.strategy-state-pill[data-state='blocked_candidate'] {
+  color: #ffd0d8;
+  background: rgba(255, 92, 115, 0.14);
+  border-color: rgba(255, 92, 115, 0.28);
+}
+
+.strategy-state-pill[data-state='not_candidate'] {
+  color: #dde6f7;
+  background: rgba(115, 128, 147, 0.18);
+  border-color: rgba(115, 128, 147, 0.34);
+}
+
 .candidate-detail {
   overflow-y: auto;
   padding: 18px 22px 24px;
@@ -1139,6 +1365,98 @@ textarea:focus-visible {
   color: var(--candidate-muted);
   font-size: 13px;
   line-height: 1.65;
+}
+
+.snapshot-note {
+  margin-top: 12px;
+  color: var(--candidate-muted);
+  font-size: 12px;
+}
+
+.config-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.config-strip div {
+  min-width: 0;
+  padding: 8px 10px;
+  background: rgba(13, 17, 24, 0.62);
+  border: 1px solid var(--candidate-line);
+  border-radius: 7px;
+}
+
+.config-strip span {
+  display: block;
+  color: var(--candidate-muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.config-strip strong {
+  display: block;
+  margin-top: 3px;
+  overflow: hidden;
+  color: var(--candidate-text);
+  font-family: var(--candidate-font-data);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gate-matrix {
+  margin-top: 12px;
+}
+
+.section-header.compact {
+  margin-bottom: 8px;
+}
+
+.gate-table {
+  display: grid;
+  gap: 4px;
+}
+
+.gate-row {
+  display: grid;
+  grid-template-columns: 1.15fr 0.55fr 0.55fr 1.15fr 1.15fr;
+  gap: 8px;
+  align-items: center;
+  min-height: 30px;
+  padding: 6px 8px;
+  color: var(--candidate-muted);
+  background: rgba(13, 17, 24, 0.58);
+  border: 1px solid rgba(90, 104, 124, 0.26);
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.gate-head {
+  color: #c7d3e6;
+  background: rgba(94, 182, 255, 0.08);
+  font-weight: 800;
+}
+
+.gate-row strong {
+  font-size: 12px;
+}
+
+.gate-row[data-status='pass'] strong {
+  color: #7ee0a3;
+}
+
+.gate-row[data-status='warn'] strong {
+  color: #ffd36a;
+}
+
+.gate-row[data-status='fail'] strong {
+  color: #ff8f9f;
+}
+
+.gate-row[data-status='disabled'] strong {
+  color: #8f99a8;
 }
 
 .form-grid {
@@ -1264,9 +1582,14 @@ input::placeholder {
   }
 
   .fact-grid,
+  .config-strip,
   .exec-grid,
   .thesis-grid,
   .review-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .gate-row {
     grid-template-columns: 1fr;
   }
 }

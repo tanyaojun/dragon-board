@@ -12,6 +12,10 @@
 
 ## 0. Locked Decisions
 
+> Correction note (2026-06-10): live 盯盘体验优先级已提升为 V5 live contract 的一等目标。`change < 6` 不再作为默认 live 自动入池硬阻断；默认 `balanced` 模式把涨幅位置作为观察降级/排序因素。只有显式选择 `strict_execution` 模式时，才恢复与历史回测执行合同一致的 `change < 6` 硬门槛。
+>
+> DataTable 不新增“阻断原因/策略模式/入池原因”等额外列。所有 live gate 解释压缩在既有“候选池”列和 CandidatePoolPanel 详情中，避免分散盯盘注意力。
+
 1. V5 主线口径保持已验证基线：
    - `strategyName=ranktrend_early_big_move_v3_lifecycle_fusion`
    - `snapshotType=half_hour`
