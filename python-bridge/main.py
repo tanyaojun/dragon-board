@@ -1808,6 +1808,79 @@ class TdxL2Bridge:
             ]
             return PlainTextResponse("\n".join(lines) + "\n")
 
+        @app.get("/api/quotes/snapshot", summary="行情快照")
+        async def quote_snapshot(codes: str = "") -> JSONResponse:
+            parsed_codes = [normalize_code(code) for code in codes.split(",") if code.strip()]
+            parsed_codes = [code for code in parsed_codes if code]
+            if not parsed_codes:
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": "missing codes parameter",
+                        "source": "python_bridge",
+                        "serverTs": now_ms(),
+                        "subscribedCount": 0,
+                        "quotes": [],
+                        "depth": [],
+                        "ticks": [],
+                        "moneyFlow": [],
+                        "quoteStats": {},
+                        "l2": self.l2_state,
+                    }
+                )
+            try:
+                quotes, depth, stats = await self.fetch_quotes_and_depth(parsed_codes)
+
+                if not quotes and stats.failed_batches > 0:
+                    return JSONResponse(
+                        {
+                            "ok": False,
+                            "error": f"quote fetch failed: {stats.failed_batches}/{stats.batches} batches failed",
+                            "source": "python_bridge",
+                            "serverTs": now_ms(),
+                            "subscribedCount": len(parsed_codes),
+                            "quotes": [],
+                            "depth": [],
+                            "ticks": [],
+                            "moneyFlow": [],
+                            "quoteStats": stats.to_payload(),
+                            "l2": self.l2_state,
+                        }
+                    )
+
+                qmt_depth, qmt_ticks, money_flow = await self.fetch_qmt_l2_snapshot(parsed_codes)
+
+                return JSONResponse(
+                    {
+                        "ok": True,
+                        "source": "python_bridge",
+                        "serverTs": now_ms(),
+                        "subscribedCount": len(parsed_codes),
+                        "quotes": quotes,
+                        "depth": depth,
+                        "ticks": qmt_ticks,
+                        "moneyFlow": money_flow,
+                        "quoteStats": stats.to_payload(),
+                        "l2": self.l2_state,
+                    }
+                )
+            except Exception as error:
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": str(error),
+                        "source": "python_bridge",
+                        "serverTs": now_ms(),
+                        "subscribedCount": len(parsed_codes),
+                        "quotes": [],
+                        "depth": [],
+                        "ticks": [],
+                        "moneyFlow": [],
+                        "quoteStats": {},
+                        "l2": self.l2_state,
+                    }
+                )
+
         @app.websocket(self.config.path)
         async def quotes_socket(websocket: WebSocket) -> None:
             await websocket.accept()
