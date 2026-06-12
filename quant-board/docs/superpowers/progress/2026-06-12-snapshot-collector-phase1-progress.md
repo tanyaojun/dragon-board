@@ -1,6 +1,6 @@
-# 后端快照采集器 Phase 1-2 实施进度
+# 后端快照采集器 Phase 1-3 实施进度
 
-> 2026-06-12 · 分支 `quantboard-backend-snapshot-collector` · 32 文件 · +10800 行
+> 2026-06-12 · 分支 `quantboard-backend-snapshot-collector` · 35 文件 · +11500 行
 
 ## 已完成
 
@@ -45,13 +45,18 @@
 
 ### Phase 2 — Bridge 订阅池和行情稳定性增强 ✅ （已完成）
 
-### Phase 3 — 四类快照自动 scheduler
+### Phase 3 — 四类快照自动 scheduler ✅ （已完成）
 
-- 启动自动 asyncio 后台任务，按槽位表定时触发采集
-- 支持交易日判断、午休、15:00 close grace window
-- 并发保护：同 slot 不重复采集
-- 运行记录写入 `snapshot_collector_runs`
-- 新测试文件：`tests/test_snapshot_collector_scheduler.py`
+- [x] **trading_calendar.py** — `is_trading_day()` 和 `trading_date_from_ts()`，周末+2026节假日硬编码检测，25 个测试
+- [x] **scheduler.py** — `SnapshotCollectorScheduler` 后台 asyncio runner，遵循现有 runner 模式（start/stop/_run_loop/status）
+- [x] 轮询间隔默认 1s，无初始延迟（槽位时间敏感）
+- [x] 非 MongoDB 模式自动禁用
+- [x] Fire-and-forget 采集任务 + `_in_flight_slots` 并发保护
+- [x] 双层去重：内存 in_flight + repo snapshot_exists
+- [x] CLI 命令 `snapshot-collector-scheduler-status` + 测试
+- [x] FastAPI 集成：startup/shutdown 生命周期 + 健康检查包含 scheduler 状态
+- [x] API 端点 `GET /api/snapshot-collector/scheduler/status`
+- [x] 文档更新：architecture.md、api-cli.md
 
 ### Phase 4 — Shadow vs Live 对比
 
@@ -118,7 +123,15 @@ quant-board/tests/test_snapshot_collector_mongo_integration.py
 quant-board/tests/test_snapshot_collector_api.py
 quant-board/tests/test_snapshot_collector_cli.py
 quant-board/tests/test_snapshot_collector_bridge_provider.py
+quant-board/tests/test_snapshot_collector_scheduler.py
 python-bridge/test_quote_snapshot_api.py
+```
+
+### Phase 3 新增（2 个）
+
+```
+quant-board/backend/snapshot_collector/trading_calendar.py
+quant-board/backend/snapshot_collector/scheduler.py
 ```
 
 ### 修改（8 个）

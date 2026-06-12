@@ -388,6 +388,35 @@ Invoke-RestMethod 'http://127.0.0.1:8000/api/snapshot-collector/runs?status=bloc
 }
 ```
 
+### `GET /api/snapshot-collector/scheduler/status`
+
+返回调度器运行状态，包括启用/禁用、运行中、轮询间隔、最近采集的 slot、采集计数和错误计数。
+
+响应示例：
+
+```json
+{
+  "ok": true,
+  "status": "completed",
+  "data": {
+    "enabled": true,
+    "running": true,
+    "dataset_id": "dragonboard_backend_shadow",
+    "snapshot_types": ["half_hour", "daily"],
+    "poll_seconds": 1.0,
+    "grace_minutes": 5,
+    "last_run_at": "2026-06-15T10:00:01+08:00",
+    "last_slot_collected": "half_hour:2026-06-15:10:00",
+    "last_error": null,
+    "collection_count": 3,
+    "error_count": 0,
+    "in_flight_slots": []
+  }
+}
+```
+
+调度器状态同样包含在 `GET /api/health` 响应的 `snapshotCollector` 字段中。
+
 ## 热榜情绪 API、回填和盘后调度
 
 ### `POST /api/hotlist-sentiment/ingest`
@@ -2172,6 +2201,33 @@ max_drawdown: -0.08
     "half_hour:2026-06-12:11:00",
     "half_hour:2026-06-12:11:30"
   ]
+}
+```
+
+### `snapshot-collector-scheduler-status`
+
+打印调度器运行状态，包括启用/禁用、运行中、轮询配置、最近采集的 slot 和错误计数。
+
+```powershell
+.\.venv\Scripts\python.exe -m backend.cli snapshot-collector-scheduler-status
+```
+
+输出示例：
+
+```json
+{
+  "enabled": true,
+  "running": true,
+  "dataset_id": "dragonboard_backend_shadow",
+  "snapshot_types": ["half_hour", "daily"],
+  "poll_seconds": 1.0,
+  "grace_minutes": 5,
+  "last_run_at": "2026-06-15T10:00:01+08:00",
+  "last_slot_collected": "half_hour:2026-06-15:10:00",
+  "last_error": null,
+  "collection_count": 3,
+  "error_count": 0,
+  "in_flight_slots": []
 }
 ```
 

@@ -43,6 +43,7 @@ backend/
 backend/snapshot_collector/
   models.py           # SnapshotSlot, MarketDataContext, QualityResult, CollectorRunRequest/Result, SourceHealth
   slots.py            # SLOT_TIMES, generate_slots(), is_slot_eligible()
+  trading_calendar.py # is_trading_day(), trading_date_from_ts()
   providers.py        # ProxyHotlistProvider, BridgeQuoteProvider, ThemeMappingProvider
   builder.py          # build_ingest_payload()
   quality_gate.py     # evaluate_quality()
@@ -50,6 +51,7 @@ backend/snapshot_collector/
   repository_port.py  # SnapshotRepository Protocol
   service.py          # SnapshotCollectorService (run_once, backfill_slots, audit 等)
   service_factory.py  # create_snapshot_collector_repository()
+  scheduler.py        # SnapshotCollectorScheduler 后台 asyncio 轮询 runner
 ```
 
 当前状态和边界：
@@ -60,6 +62,7 @@ backend/snapshot_collector/
 - Shadow-only：该采集器产出仅用于平行对照和验收，不得作为生产快照来源或 Dragon Board 正式读源。
 - 质量门禁在前：quality_gate 在写入前检查数据源健康、股票行数量和时间窗口，被阻止的运行写入 `snapshot_collector_runs`（状态 `blocked`）并保留审计轨迹。
 - API 路由 `/api/snapshot-collector/*` 和 CLI 命令 `snapshot-collector-*` 只服务实验运维和审计。
+- 自动调度器（Phase 3）：`SnapshotCollectorScheduler` 是独立的 `asyncio` 后台 runner（模块级单例），在 FastAPI `startup` 时注册到事件循环。轮询间隔由 `QUANT_BOARD_SNAPSHOT_COLLECTOR_POLL_MS`（默认 1000ms）控制，每个 tick 检查交易日、槽位表和时间窗口，为符合条件的 slot 启动 fire-and-forget 采集任务。调度器在非 MongoDB 模式或 `QUANT_BOARD_SNAPSHOT_COLLECTOR_ENABLED=0` 时自动禁用。采集任务的并发保护通过内存中的 `_in_flight_slots` 集合实现，确保同一 slot 不会重复采集。
 - 正式切换要求：shadow 采集器必须通过完整审计（覆盖率、质量门禁、数据一致性）后才能讨论 live cutover。
 
 API 路由：
@@ -69,6 +72,7 @@ API 路由：
 - `POST /api/snapshot-collector/backfill-slots`：按日期区间回填槽位
 - `GET /api/snapshot-collector/runs`：历史运行记录
 - `POST /api/snapshot-collector/audit`：快照覆盖率审计
+- `GET /api/snapshot-collector/scheduler/status`：调度器运行状态
 
 CLI 命令：
 
@@ -76,6 +80,7 @@ CLI 命令：
 - `snapshot-collector-run-once`：执行单次采集并输出 JSON 结果
 - `snapshot-collector-backfill`：按日期区间批量采集
 - `snapshot-collector-audit`：审计覆盖率并输出结构化 JSON
+- `snapshot-collector-scheduler-status`：打印调度器运行状态
 
 响应信封格式：所有 `/api/snapshot-collector/*` 接口使用统一的 `{"ok": true/false, "status": "...", "data": {...}}` 信封。这与现有 API 的混合格式不同，仅用于采集器实验路由。
 

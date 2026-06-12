@@ -18,6 +18,7 @@ from backend.data.repository_factory import get_runtime_mongodb_database
 from backend.settings import get_settings
 
 from .repository_port import SnapshotRepository
+from .service import SnapshotCollectorService
 
 
 class _MongoSnapshotCollectorRepository:
@@ -159,6 +160,19 @@ def create_snapshot_collector_repository() -> SnapshotRepository:
     return _MongoSnapshotCollectorRepository(
         mongo_repository.MongoRepository(db), db
     )
+
+
+def create_snapshot_collector_service(
+    repo: SnapshotRepository | None = None,
+) -> SnapshotCollectorService:
+    """Create and return a ``SnapshotCollectorService``.
+
+    When *repo* is not supplied a default repository is created via
+    ``create_snapshot_collector_repository()``.
+    """
+    if repo is None:
+        repo = create_snapshot_collector_repository()
+    return SnapshotCollectorService(repo=repo)
 
 
 # ── helpers ────────────────────────────────────────────────────────────────
