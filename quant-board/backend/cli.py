@@ -4,7 +4,7 @@ import argparse
 import json
 import sys
 from contextlib import nullcontext
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -52,6 +52,10 @@ from backend.services import (
     read_checkpoint_history,
 )
 from backend.utils import json_loads
+from backend.snapshot_collector.models import CollectorRunRequest
+from backend.snapshot_collector.service import SnapshotCollectorService
+from backend.snapshot_collector.service_factory import create_snapshot_collector_repository
+from backend.snapshot_collector.slots import generate_slots
 
 DEFAULT_MOMENTUM_PERIODS = [3, 5, 8, 13, 21]
 DEFAULT_HORIZONS = [1, 3, 5, 10]
@@ -1129,6 +1133,146 @@ def cmd_audit_ranktrend_live_gates(args: argparse.Namespace) -> None:
     print_json(result)
 
 
+# ── Snapshot Collector CLI handlers ────────────────────────────────────────────
+
+
+class _BackfillRequest:
+    """Simple namespace for the backfill_slots service call."""
+
+    __slots__ = ("dataset_id", "snapshot_type", "slots", "dry_run", "force")
+
+    def __init__(
+        self,
+        dataset_id: str,
+        snapshot_type: str,
+        slots: list[dict[str, str]],
+        dry_run: bool,
+        force: bool,
+    ) -> None:
+        self.dataset_id = dataset_id
+        self.snapshot_type = snapshot_type
+        self.slots = slots
+        self.dry_run = dry_run
+        self.force = force
+
+
+def _result_to_output(result: Any) -> dict[str, Any]:
+    """Convert a CollectorRunResult to a JSON-safe output dict."""
+    output: dict[str, Any] = {
+        "status": result.status,
+        "snapshotId": result.snapshot_id,
+        "runId": result.run_id,
+        "dryRun": result.dry_run,
+        "deduped": result.deduped,
+        "message": result.message,
+    }
+    if result.details:
+        output["details"] = result.details
+    if result.quality is not None:
+        output["quality"] = {
+            "ok": result.quality.ok,
+            "blockingIssues": result.quality.blocking_issues,
+            "warnings": result.quality.warnings,
+            "sourceCounts": result.quality.source_counts,
+        }
+    return output
+
+
+def _generate_backfill_slots(
+    snapshot_type: str,
+    start_date: str,
+    end_date: str,
+) -> list[dict[str, str]]:
+    """Generate slot dicts for every trading date in [start_date, end_date]."""
+    start = datetime.strptime(start_date, "%Y-%m-%d")
+    end = datetime.strptime(end_date, "%Y-%m-%d")
+    if start > end:
+        raise ValueError(
+            f"startDate ({start_date}) must not be after endDate ({end_date})"
+        )
+
+    slot_dicts: list[dict[str, str]] = []
+    current = start
+    while current <= end:
+        date_str = current.strftime("%Y-%m-%d")
+        slots = generate_slots(date_str, [snapshot_type])
+        for slot in slots:
+            slot_dicts.append(
+                {"trading_date": slot.trading_date, "slot_time": slot.slot_time}
+            )
+        current += timedelta(days=1)
+    return slot_dicts
+
+
+def cmd_snapshot_collector_status(_: argparse.Namespace) -> None:
+    """Print collector operational state as JSON."""
+    repo = create_snapshot_collector_repository()
+    service = SnapshotCollectorService(repo=repo)
+    print_json(service.get_status())
+
+
+def cmd_snapshot_collector_run_once(args: argparse.Namespace) -> None:
+    """Execute a single snapshot collection run and print JSON result."""
+    request = CollectorRunRequest(
+        dataset_id=args.dataset_id,
+        snapshot_type=args.snapshot_type,
+        trading_date=args.trading_date,
+        slot_time=args.slot_time,
+        dry_run=bool(args.dry_run),
+        force=bool(args.force),
+    )
+    repo = create_snapshot_collector_repository()
+    service = SnapshotCollectorService(repo=repo)
+    result = service.run_once(request)
+    print_json(_result_to_output(result))
+
+
+def cmd_snapshot_collector_backfill(args: argparse.Namespace) -> None:
+    """Run collection for multiple slots across a date range and print JSON result."""
+    # Generate all slots for the date range
+    slot_dicts = _generate_backfill_slots(
+        args.snapshot_type,
+        args.start_date,
+        args.end_date,
+    )
+
+    if not slot_dicts:
+        print_json({
+            "total": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "blocked": 0,
+            "deduped": 0,
+            "details": [],
+        })
+        return
+
+    backfill_request = _BackfillRequest(
+        dataset_id=args.dataset_id,
+        snapshot_type=args.snapshot_type,
+        slots=slot_dicts,
+        dry_run=bool(args.dry_run),
+        force=bool(args.force),
+    )
+
+    repo = create_snapshot_collector_repository()
+    service = SnapshotCollectorService(repo=repo)
+    result = service.backfill_slots(backfill_request)
+    print_json(result)
+
+
+def cmd_snapshot_collector_audit(args: argparse.Namespace) -> None:
+    """Audit snapshot coverage and print structured JSON result."""
+    repo = create_snapshot_collector_repository()
+    service = SnapshotCollectorService(repo=repo)
+    result = service.audit(
+        args.dataset_id,
+        args.snapshot_type,
+        trading_date=getattr(args, "trading_date", None),
+    )
+    print_json(result)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="quant-board", description="QuantBoard CLI")
     sub = parser.add_subparsers(required=True)
@@ -1544,6 +1688,36 @@ def build_parser() -> argparse.ArgumentParser:
         help="Report export format. Defaults to jsonl-bundle for large backtests.",
     )
     export_cmd.set_defaults(func=cmd_export_report)
+
+    # ── Snapshot Collector commands ─────────────────────────────────────────
+
+    collector_status_cmd = sub.add_parser("snapshot-collector-status", help="Show snapshot collector operational state")
+    collector_status_cmd.set_defaults(func=cmd_snapshot_collector_status)
+
+    collector_run_cmd = sub.add_parser("snapshot-collector-run-once", help="Execute a single snapshot collection run")
+    collector_run_cmd.add_argument("--dataset-id", required=True)
+    collector_run_cmd.add_argument("--snapshot-type", choices=["quarter_hour", "half_hour", "hourly", "daily"], required=True)
+    collector_run_cmd.add_argument("--trading-date", required=True)
+    collector_run_cmd.add_argument("--slot-time", required=True)
+    collector_run_cmd.add_argument("--dry-run", action="store_true")
+    collector_run_cmd.add_argument("--force", action="store_true")
+    collector_run_cmd.set_defaults(func=cmd_snapshot_collector_run_once)
+
+    collector_backfill_cmd = sub.add_parser("snapshot-collector-backfill", help="Run collection for all slots across a date range")
+    collector_backfill_cmd.add_argument("--dataset-id", required=True)
+    collector_backfill_cmd.add_argument("--snapshot-type", choices=["quarter_hour", "half_hour", "hourly", "daily"], required=True)
+    collector_backfill_cmd.add_argument("--start-date", required=True)
+    collector_backfill_cmd.add_argument("--end-date", required=True)
+    collector_backfill_cmd.add_argument("--dry-run", action="store_true", default=True)
+    collector_backfill_cmd.add_argument("--force", action="store_true")
+    collector_backfill_cmd.set_defaults(func=cmd_snapshot_collector_backfill)
+
+    collector_audit_cmd = sub.add_parser("snapshot-collector-audit", help="Audit snapshot coverage for a dataset/type")
+    collector_audit_cmd.add_argument("--dataset-id", required=True)
+    collector_audit_cmd.add_argument("--snapshot-type", choices=["quarter_hour", "half_hour", "hourly", "daily"], required=True)
+    collector_audit_cmd.add_argument("--trading-date", default=None)
+    collector_audit_cmd.set_defaults(func=cmd_snapshot_collector_audit)
+
     return parser
 
 
