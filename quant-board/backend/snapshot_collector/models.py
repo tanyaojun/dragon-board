@@ -93,3 +93,42 @@ class MarketDataContext:
     sectors: list[dict[str, Any]] = field(default_factory=list)
     source_health: list[SourceHealth] = field(default_factory=list)
     market_meta: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class CollectorRunRequest:
+    """Single-collect request parameters.
+
+    Fields:
+    * dataset_id    — target dataset (e.g. ``dragonboard_backend_shadow``)
+    * snapshot_type — ``quarter_hour`` | ``half_hour`` | ``hourly`` | ``daily``
+    * trading_date  — ``YYYY-MM-DD`` in Asia/Shanghai calendar
+    * slot_time     — ``HH:MM`` (24h)
+    * dry_run       — when True, go through the full pipeline except the fact write
+    * force         — when True, skip dedup check and re-save
+    """
+
+    dataset_id: str
+    snapshot_type: str
+    trading_date: str
+    slot_time: str
+    dry_run: bool = False
+    force: bool = False
+
+
+@dataclass
+class CollectorRunResult:
+    """Result of a single ``run_once`` call.
+
+    *status* is one of ``"completed"``, ``"dry_run"``, ``"deduped"``, ``"blocked"``.
+    *details* carries extra diagnostic information (quality, run state, etc.).
+    """
+
+    status: str
+    snapshot_id: str
+    deduped: bool = False
+    dry_run: bool = False
+    quality: QualityResult | None = None
+    run_id: str = ""
+    message: str = ""
+    details: dict[str, Any] = field(default_factory=dict)

@@ -1,0 +1,455 @@
+"""Snapshot collector service orchestration.
+
+``SnapshotCollectorService.run_once`` is the central entry point that
+coordinates the full pipeline: provider collection, payload building,
+normalization, quality evaluation, and repository persistence.
+
+Design
+------
+All external dependencies (collect, normalize, quality) are injectable
+at construction time so that unit tests can supply fake implementations
+without mocking imports.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import time
+import uuid
+from datetime import datetime, timezone
+from typing import Any, Callable
+
+from . import builder as builder_module
+from . import providers as providers_module
+from . import quality_gate as quality_gate_module
+from .models import (
+    CollectorRunRequest,
+    CollectorRunResult,
+    MarketDataContext,
+    QualityResult,
+    SnapshotSlot,
+)
+from .state import record_run as _record_run
+
+# ── helpers ───────────────────────────────────────────────────────────────────
+
+
+def _slot_timestamp_ms(snapshot_type: str, trading_date: str, slot_time: str) -> int:
+    """Compute the epoch-millisecond timestamp for a snapshot slot.
+
+    The result represents the slot instant in Asia/Shanghai (UTC+8).
+    """
+    try:
+        dt_str = f"{trading_date}T{slot_time}:00+08:00"
+        dt = datetime.fromisoformat(dt_str)
+        return int(dt.timestamp() * 1000)
+    except (ValueError, OverflowError):
+        return 0
+
+
+def _generate_run_id() -> str:
+    """Generate a short, unique run identifier."""
+    raw = f"run-{uuid.uuid4().hex[:12]}-{int(time.time())}"
+    return f"sc-{hashlib.sha1(raw.encode()).hexdigest()[:12]}"
+
+
+def _actual_timestamp_ms() -> int:
+    """Current wall-clock time in epoch milliseconds (UTC)."""
+    return int(time.time() * 1000)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SnapshotCollectorService
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class SnapshotCollectorService:
+    """Orchestrates the snapshot collection pipeline.
+
+    Constructor parameters:
+
+    *repo*:
+        A ``SnapshotRepository`` implementation (real Mongo or fake).
+    *settings*:
+        Optional settings object.  Used for dataset_id, grace_minutes, and
+        other defaults when the request does not supply them.
+    *collect_fn*, *normalize_fn*, *quality_fn*:
+        Injectable callables for testing.  When absent, the real module-level
+        functions are used.
+    """
+
+    def __init__(
+        self,
+        repo: Any,
+        settings: Any = None,
+        *,
+        collect_fn: Callable[..., MarketDataContext] | None = None,
+        normalize_fn: Callable[..., tuple] | None = None,
+        quality_fn: Callable[..., QualityResult] | None = None,
+    ) -> None:
+        from backend.data.schemas import SnapshotIngestRequest
+
+        self._repo = repo
+        self._settings = settings
+        self._collect_fn = collect_fn or providers_module.collect_market_context
+        self._quality_fn = quality_fn or quality_gate_module.evaluate_quality
+
+        if normalize_fn is not None:
+            self._normalize_fn = normalize_fn
+        else:
+            from backend.data.snapshot_ingest_normalizer import normalize_snapshot_ingest
+
+            self._normalize_fn = normalize_snapshot_ingest  # type: ignore[assignment]
+
+        self._SnapshotIngestRequest = SnapshotIngestRequest
+
+    # ── run_once ──────────────────────────────────────────────────────────
+
+    def run_once(self, request: CollectorRunRequest) -> CollectorRunResult:
+        """Execute a single collection run.
+
+        Pipeline order:
+        1. Create ``SnapshotSlot`` from request parameters
+        2. If not dry_run and not force, check dedup via repository
+        3. Collect provider data into ``MarketDataContext``
+        4. Build ingest payload dict
+        5. Normalize payload through normalizer
+        6. Evaluate quality gate
+        7. Record and return blocked when blocked
+        8. Record and return dry-run when dry_run
+        9. Save through repository
+        10. Record and return completed
+        """
+        run_id = _generate_run_id()
+        dataset_id = request.dataset_id
+        snapshot_type = request.snapshot_type
+        trading_date = request.trading_date
+        slot_time = request.slot_time
+
+        # 1 — Create SnapshotSlot
+        slot_timestamp = _slot_timestamp_ms(snapshot_type, trading_date, slot_time)
+        slot = SnapshotSlot(
+            snapshot_type=snapshot_type,
+            trading_date=trading_date,
+            slot_time=slot_time,
+            timestamp_ms=slot_timestamp,
+        )
+        snapshot_id = slot.snapshot_id
+
+        # 2 — Dedup check (skip when dry_run or force)
+        if not request.dry_run and not request.force:
+            if self._repo.snapshot_exists(dataset_id, snapshot_id):
+                run_doc = {
+                    "runId": run_id,
+                    "datasetId": dataset_id,
+                    "snapshotId": snapshot_id,
+                    "snapshotType": snapshot_type,
+                    "tradingDate": trading_date,
+                    "slotTime": slot_time,
+                    "status": "deduped",
+                    "deduped": True,
+                    "dryRun": False,
+                }
+                _record_run(self._repo, run_doc)
+                return CollectorRunResult(
+                    status="deduped",
+                    snapshot_id=snapshot_id,
+                    deduped=True,
+                    run_id=run_id,
+                    message="Snapshot already exists",
+                )
+
+        # 3 — Collect providers
+        providers_list = self._create_providers()
+        codes: list[str] = []
+        timeout_ms = self._provider_timeout_ms()
+        market_context = self._collect_fn(providers_list, codes, timeout_ms=timeout_ms)
+
+        # 4 — Build ingest payload
+        bundle = builder_module.build_ingest_payload(
+            slot,
+            market_context,
+            dataset_id=dataset_id,
+            source="quantboard_backend_collector",
+            capture_mode="real_time",
+        )
+
+        # 5 — Normalize
+        norm_request = self._SnapshotIngestRequest(
+            dataset_id=dataset_id,
+            bundle=bundle,
+            source="quantboard_backend_collector",
+        )
+        try:
+            normalized = self._normalize_fn(norm_request)
+        except Exception as exc:
+            # Normalization failure is recorded as blocked
+            run_doc = {
+                "runId": run_id,
+                "datasetId": dataset_id,
+                "snapshotId": snapshot_id,
+                "snapshotType": snapshot_type,
+                "tradingDate": trading_date,
+                "slotTime": slot_time,
+                "status": "blocked",
+                "deduped": False,
+                "dryRun": request.dry_run,
+                "error": str(exc),
+                "blockingIssues": ["normalization_failed"],
+            }
+            _record_run(self._repo, run_doc)
+            quality = QualityResult(
+                ok=False,
+                blocking_issues=["normalization_failed"],
+                warnings=[],
+                source_counts={"ok": 0, "failed": 0},
+            )
+            return CollectorRunResult(
+                status="blocked",
+                snapshot_id=snapshot_id,
+                run_id=run_id,
+                quality=quality,
+                message=f"Normalization failed: {exc}",
+            )
+
+        dataset_model, records, frames, stock_rows, sector_rows, idempotency_key = normalized
+
+        # 6 — Evaluate quality
+        source_health = [
+            {
+                "source": sh.source,
+                "ok": sh.ok,
+                "latency_ms": sh.latency_ms,
+                "row_count": sh.row_count,
+                "error": sh.error,
+                "captured_at": sh.captured_at,
+            }
+            for sh in market_context.source_health
+        ]
+        actual_ts = _actual_timestamp_ms()
+        grace_minutes = self._close_grace_minutes()
+        allow_live = self._allow_live_dataset()
+
+        quality = self._quality_fn(
+            stock_rows=stock_rows,
+            frames=frames,
+            source_health=source_health,
+            dataset_id=dataset_id,
+            allow_live_dataset=allow_live,
+            snapshot_type=snapshot_type,
+            trading_date=trading_date,
+            slot_time=slot_time,
+            slot_timestamp_ms=slot_timestamp,
+            actual_timestamp_ms=actual_ts,
+            grace_minutes=grace_minutes,
+        )
+
+        # 7 — Blocked
+        if not quality.ok:
+            run_doc = {
+                "runId": run_id,
+                "datasetId": dataset_id,
+                "snapshotId": snapshot_id,
+                "snapshotType": snapshot_type,
+                "tradingDate": trading_date,
+                "slotTime": slot_time,
+                "status": "blocked",
+                "deduped": False,
+                "dryRun": request.dry_run,
+                "blockingIssues": quality.blocking_issues,
+                "warnings": quality.warnings,
+            }
+            _record_run(self._repo, run_doc)
+            return CollectorRunResult(
+                status="blocked",
+                snapshot_id=snapshot_id,
+                run_id=run_id,
+                quality=quality,
+                message=f"Quality gate blocked: {quality.blocking_issues}",
+            )
+
+        # 8 — Dry run
+        if request.dry_run:
+            run_doc = {
+                "runId": run_id,
+                "datasetId": dataset_id,
+                "snapshotId": snapshot_id,
+                "snapshotType": snapshot_type,
+                "tradingDate": trading_date,
+                "slotTime": slot_time,
+                "status": "dry_run",
+                "deduped": False,
+                "dryRun": True,
+                "warnings": quality.warnings,
+            }
+            _record_run(self._repo, run_doc)
+            return CollectorRunResult(
+                status="dry_run",
+                snapshot_id=snapshot_id,
+                dry_run=True,
+                run_id=run_id,
+                quality=quality,
+                message="Dry-run completed successfully",
+            )
+
+        # 9 — Save through repository
+        dataset_dict = {
+            "id": dataset_id,
+            "name": dataset_id,
+            "source_type": "dragon_board_runtime",
+        }
+        save_result = self._repo.save_snapshot_ingest(
+            dataset_dict,
+            records,
+            frames,
+            stock_rows,
+            sector_rows,
+            idempotency_key=idempotency_key,
+        )
+
+        # 10 — Record and return
+        deduped = bool(save_result.get("deduped", False))
+        if deduped:
+            run_status = "deduped"
+        else:
+            run_status = "completed"
+
+        run_doc = {
+            "runId": run_id,
+            "datasetId": dataset_id,
+            "snapshotId": snapshot_id,
+            "snapshotType": snapshot_type,
+            "tradingDate": trading_date,
+            "slotTime": slot_time,
+            "status": run_status,
+            "deduped": deduped,
+            "dryRun": False,
+            "warnings": quality.warnings,
+        }
+        _record_run(self._repo, run_doc)
+
+        return CollectorRunResult(
+            status=run_status,
+            snapshot_id=snapshot_id,
+            deduped=deduped,
+            run_id=run_id,
+            quality=quality,
+            message=save_result.get("status", ""),
+            details={
+                "stockRowCount": len(stock_rows),
+                "frameCount": len(frames),
+                "sectorRowCount": len(sector_rows),
+                "idempotencyKey": idempotency_key,
+            },
+        )
+
+    # ── backfill_slots ────────────────────────────────────────────────────
+
+    def backfill_slots(self, request: Any) -> dict[str, Any]:
+        """Run multiple slot collections (backfill).
+
+        Returns a summary dict with total, succeeded, failed, blocked,
+        and deduped counts.
+        """
+        slots = getattr(request, "slots", [])
+        if not slots:
+            return {
+                "total": 0,
+                "succeeded": 0,
+                "failed": 0,
+                "blocked": 0,
+                "deduped": 0,
+                "details": [],
+            }
+
+        summary = {"total": 0, "succeeded": 0, "failed": 0, "blocked": 0, "deduped": 0, "details": []}
+        for slot_item in slots:
+            sub_req = CollectorRunRequest(
+                dataset_id=getattr(request, "dataset_id", ""),
+                snapshot_type=getattr(request, "snapshot_type", ""),
+                trading_date=slot_item.get("trading_date", ""),
+                slot_time=slot_item.get("slot_time", ""),
+                dry_run=getattr(request, "dry_run", False),
+                force=getattr(request, "force", False),
+            )
+            try:
+                result = self.run_once(sub_req)
+                summary["total"] += 1
+                summary[result.status] = summary.get(result.status, 0) + 1
+                summary["details"].append(
+                    {
+                        "snapshotId": result.snapshot_id,
+                        "status": result.status,
+                        "message": result.message,
+                    }
+                )
+            except Exception as exc:
+                summary["total"] += 1
+                summary["failed"] += 1
+                summary["details"].append(
+                    {
+                        "snapshotId": f"{sub_req.snapshot_type}:{sub_req.trading_date}:{sub_req.slot_time}",
+                        "status": "failed",
+                        "message": str(exc),
+                    }
+                )
+        return summary
+
+    # ── get_status / get_runs / audit ─────────────────────────────────────
+
+    def get_status(self) -> dict[str, Any]:
+        """Return the current collector state."""
+        from .state import get_status as _get_status
+
+        return _get_status(self._repo)
+
+    def get_runs(self, filters: dict[str, Any]) -> dict[str, Any]:
+        """Return run records matching *filters*."""
+        return self._repo.list_runs(filters)
+
+    def audit(
+        self,
+        dataset_id: str,
+        snapshot_type: str,
+        trading_date: str | None = None,
+    ) -> dict[str, Any]:
+        """Audit snapshot coverage for a dataset/type/date."""
+        return self._repo.audit_dataset(dataset_id, snapshot_type, trading_date)
+
+    # ── internal helpers ──────────────────────────────────────────────────
+
+    def _create_providers(self) -> list[Any]:
+        """Create data-source providers from settings."""
+        from .providers import BridgeQuoteProvider, ProxyHotlistProvider
+
+        proxy_url = self._proxy_base_url()
+        bridge_url = self._bridge_base_url()
+        return [
+            ProxyHotlistProvider(base_url=proxy_url),
+            BridgeQuoteProvider(base_url=bridge_url),
+        ]
+
+    def _proxy_base_url(self) -> str:
+        if self._settings and hasattr(self._settings, "snapshot_collector_proxy_base_url"):
+            return self._settings.snapshot_collector_proxy_base_url
+        return "http://127.0.0.1:3000"
+
+    def _bridge_base_url(self) -> str:
+        if self._settings and hasattr(self._settings, "snapshot_collector_bridge_base_url"):
+            return self._settings.snapshot_collector_bridge_base_url
+        return "http://127.0.0.1:8765"
+
+    def _provider_timeout_ms(self) -> int:
+        if self._settings and hasattr(self._settings, "snapshot_collector_provider_timeout_ms"):
+            return self._settings.snapshot_collector_provider_timeout_ms
+        return 5000
+
+    def _close_grace_minutes(self) -> int:
+        if self._settings and hasattr(self._settings, "snapshot_collector_close_grace_minutes"):
+            return self._settings.snapshot_collector_close_grace_minutes
+        return 5
+
+    def _allow_live_dataset(self) -> bool:
+        if self._settings and hasattr(self._settings, "snapshot_collector_allow_live_dataset"):
+            return self._settings.snapshot_collector_allow_live_dataset
+        return False

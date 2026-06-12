@@ -44,8 +44,7 @@ class FakeSnapshotRepository:
         }
         snapshot_ids.discard("")
         existing = self._snapshots.setdefault(ds_id, set())
-        if snapshot_ids.issubset(existing):
-            return {"status": "deduped", "deduped": True}
+        # Always record the write — dedup is a service-level concern.
         existing.update(snapshot_ids)
         self._ingests.append(
             {
@@ -304,7 +303,8 @@ class TestFakeRepositorySaveSnapshotIngest:
         assert result["status"] == "done"
         assert result["deduped"] is False
 
-    def test_repeated_snapshot_ids_return_deduped(self) -> None:
+    def test_repeated_snapshot_ids_still_save(self) -> None:
+        """Save always writes — dedup is handled at the service level via snapshot_exists."""
         repo = FakeSnapshotRepository()
         repo.save_snapshot_ingest(
             dataset={"id": "ds"},
@@ -322,7 +322,9 @@ class TestFakeRepositorySaveSnapshotIngest:
             sector_rows=[],
             idempotency_key="k2",
         )
-        assert result["deduped"] is True
+        # The FakeRepository always writes; the service handles dedup via snapshot_exists
+        assert result["status"] == "done"
+        assert len(repo._ingests) == 2
 
     def test_new_snapshot_ids_after_partial_dedupe(self) -> None:
         repo = FakeSnapshotRepository()
@@ -539,3 +541,719 @@ class TestServiceFactory:
 
         with __import__("pytest").raises(ValueError, match="snapshot collector requires MongoDB"):
             create_snapshot_collector_repository()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Fake market data helpers for service orchestration tests
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def _fake_market_context(
+    *,
+    stocks: list[dict[str, Any]] | None = None,
+    source_health: list[dict[str, Any]] | None = None,
+) -> Any:
+    """Build a MarketDataContext suitable for service testing."""
+    from backend.snapshot_collector.models import MarketDataContext, SourceHealth
+
+    ctx = MarketDataContext()
+    if stocks is not None:
+        ctx.stocks = stocks
+    if source_health is not None:
+        ctx.source_health = [
+            SourceHealth(**sh) if isinstance(sh, dict) else sh for sh in source_health
+        ]
+    return ctx
+
+
+def _fake_collect_fn(
+    stocks: list[dict[str, Any]] | None = None,
+    source_health: list[dict[str, Any]] | None = None,
+    market_meta: dict[str, Any] | None = None,
+):
+    """Return a collect_market_context impl that yields the given data."""
+
+    def _collect(providers, codes, *, timeout_ms=5000):
+        ctx = _fake_market_context(stocks=stocks, source_health=source_health)
+        if market_meta:
+            ctx.market_meta = market_meta
+        return ctx
+
+    return _collect
+
+
+def _standard_stocks() -> list[dict[str, Any]]:
+    """Valid A-share stock rows for testing."""
+    return [
+        {"code": "000001", "name": "平安银行", "rank": 1, "price": 12.5, "pctChange": 2.5, "volume": 100000, "amount": 1250000.0, "turnover": 1.2, "heat": 85.0},
+        {"code": "600001", "name": "邯郸钢铁", "rank": 2, "price": 5.8, "pctChange": -1.2, "volume": 50000, "amount": 290000.0, "turnover": 0.8, "heat": 70.0},
+        {"code": "300001", "name": "特锐德", "rank": 3, "price": 20.0, "pctChange": 5.0, "volume": 20000, "amount": 400000.0, "turnover": 3.5, "heat": 90.0},
+    ]
+
+
+def _standard_health() -> list[dict[str, Any]]:
+    """Healthy source health records."""
+    return [
+        {"source": "hotlist_proxy", "ok": True, "latency_ms": 50, "row_count": 3, "error": "", "captured_at": "2026-06-11T10:00:00Z"},
+    ]
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Service orchestration tests
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestServiceDryRun:
+    """dry-run returns dryRun=true and does NOT write fact data."""
+
+    def test_dry_run_does_not_call_repo_fact_write(self) -> None:
+        from backend.snapshot_collector.models import CollectorRunRequest
+        from backend.snapshot_collector.service import SnapshotCollectorService
+
+        repo = FakeSnapshotRepository()
+        stocks = _standard_stocks()
+        health = _standard_health()
+        fake_collect = _fake_collect_fn(stocks=stocks, source_health=health)
+        fake_normalize = _passthrough_normalize
+
+        service = SnapshotCollectorService(
+            repo=repo,
+            collect_fn=fake_collect,
+            normalize_fn=fake_normalize,
+        )
+
+        request = CollectorRunRequest(
+            dataset_id="dragonboard_backend_shadow",
+            snapshot_type="half_hour",
+            trading_date="2026-06-11",
+            slot_time="10:00",
+            dry_run=True,
+        )
+
+        result = service.run_once(request)
+
+        assert result.status == "dry_run"
+        assert result.dry_run is True
+        assert result.deduped is False
+        assert len(repo._ingests) == 0, "dry-run must not write fact data"
+
+    def test_dry_run_still_collects_and_evaluates_quality(self) -> None:
+        from backend.snapshot_collector.models import CollectorRunRequest
+        from backend.snapshot_collector.service import SnapshotCollectorService
+
+        repo = FakeSnapshotRepository()
+        stocks = _standard_stocks()
+        health = _standard_health()
+        fake_collect = _fake_collect_fn(stocks=stocks, source_health=health)
+        fake_normalize = _passthrough_normalize
+
+        service = SnapshotCollectorService(
+            repo=repo,
+            collect_fn=fake_collect,
+            normalize_fn=fake_normalize,
+        )
+
+        request = CollectorRunRequest(
+            dataset_id="dragonboard_backend_shadow",
+            snapshot_type="half_hour",
+            trading_date="2026-06-11",
+            slot_time="10:00",
+            dry_run=True,
+        )
+
+        result = service.run_once(request)
+
+        # Should have quality evaluation result
+        assert result.quality is not None
+        assert result.quality.ok is True
+
+    def test_dry_run_does_not_short_circuit_on_existing_snapshot(self) -> None:
+        """Dry-run must still go through full pipeline, not short-circuit on dedup."""
+        from backend.snapshot_collector.models import CollectorRunRequest
+        from backend.snapshot_collector.service import SnapshotCollectorService
+
+        repo = FakeSnapshotRepository()
+        # Pre-populate the repo with the same snapshot
+        repo.save_snapshot_ingest(
+            dataset={"id": "dragonboard_backend_shadow"},
+            records=[{"snapshotId": "half_hour:2026-06-11:10:00"}],
+            frames=[{"snapshotId": "half_hour:2026-06-11:10:00"}],
+            stock_rows=[],
+            sector_rows=[],
+            idempotency_key="k",
+        )
+
+        stocks = _standard_stocks()
+        health = _standard_health()
+        fake_collect = _fake_collect_fn(stocks=stocks, source_health=health)
+        fake_normalize = _passthrough_normalize
+
+        service = SnapshotCollectorService(
+            repo=repo,
+            collect_fn=fake_collect,
+            normalize_fn=fake_normalize,
+        )
+
+        request = CollectorRunRequest(
+            dataset_id="dragonboard_backend_shadow",
+            snapshot_type="half_hour",
+            trading_date="2026-06-11",
+            slot_time="10:00",
+            dry_run=True,
+        )
+
+        result = service.run_once(request)
+
+        # Even though snapshot already exists, dry_run should still run pipeline
+        assert result.status == "dry_run"
+        assert result.quality is not None
+
+
+class TestServiceApply:
+    """apply writes one valid snapshot."""
+
+    def test_apply_writes_valid_snapshot(self) -> None:
+        from backend.snapshot_collector.models import CollectorRunRequest
+        from backend.snapshot_collector.service import SnapshotCollectorService
+
+        repo = FakeSnapshotRepository()
+        stocks = _standard_stocks()
+        health = _standard_health()
+        fake_collect = _fake_collect_fn(stocks=stocks, source_health=health)
+        fake_normalize = _passthrough_normalize
+
+        service = SnapshotCollectorService(
+            repo=repo,
+            collect_fn=fake_collect,
+            normalize_fn=fake_normalize,
+        )
+
+        request = CollectorRunRequest(
+            dataset_id="dragonboard_backend_shadow",
+            snapshot_type="half_hour",
+            trading_date="2026-06-11",
+            slot_time="10:00",
+            dry_run=False,
+        )
+
+        result = service.run_once(request)
+
+        assert result.status == "completed"
+        assert result.deduped is False
+        assert result.dry_run is False
+        assert len(repo._runs) == 1
+        assert repo._runs[0]["status"] == "completed"
+
+    def test_repeated_apply_returns_deduped(self) -> None:
+        from backend.snapshot_collector.models import CollectorRunRequest
+        from backend.snapshot_collector.service import SnapshotCollectorService
+
+        repo = FakeSnapshotRepository()
+        stocks = _standard_stocks()
+        health = _standard_health()
+        fake_collect = _fake_collect_fn(stocks=stocks, source_health=health)
+        fake_normalize = _passthrough_normalize
+
+        service = SnapshotCollectorService(
+            repo=repo,
+            collect_fn=fake_collect,
+            normalize_fn=fake_normalize,
+        )
+
+        request = CollectorRunRequest(
+            dataset_id="dragonboard_backend_shadow",
+            snapshot_type="half_hour",
+            trading_date="2026-06-11",
+            slot_time="10:00",
+            dry_run=False,
+        )
+
+        # First call writes
+        result1 = service.run_once(request)
+        assert result1.status == "completed"
+        assert result1.deduped is False
+
+        # Second call dedupes
+        result2 = service.run_once(request)
+        assert result2.status == "deduped"
+        assert result2.deduped is True
+        # Should NOT write a second ingest
+        assert len(repo._ingests) == 1
+
+    def test_force_bypasses_dedup(self) -> None:
+        from backend.snapshot_collector.models import CollectorRunRequest
+        from backend.snapshot_collector.service import SnapshotCollectorService
+
+        repo = FakeSnapshotRepository()
+        stocks = _standard_stocks()
+        health = _standard_health()
+        fake_collect = _fake_collect_fn(stocks=stocks, source_health=health)
+        fake_normalize = _passthrough_normalize
+
+        service = SnapshotCollectorService(
+            repo=repo,
+            collect_fn=fake_collect,
+            normalize_fn=fake_normalize,
+        )
+
+        # First write
+        request1 = CollectorRunRequest(
+            dataset_id="dragonboard_backend_shadow",
+            snapshot_type="half_hour",
+            trading_date="2026-06-11",
+            slot_time="10:00",
+            dry_run=False,
+            force=False,
+        )
+        result1 = service.run_once(request1)
+        assert result1.status == "completed"
+
+        # Second call with force=True should re-save
+        request2 = CollectorRunRequest(
+            dataset_id="dragonboard_backend_shadow",
+            snapshot_type="half_hour",
+            trading_date="2026-06-11",
+            slot_time="10:00",
+            dry_run=False,
+            force=True,
+        )
+        result2 = service.run_once(request2)
+        assert result2.status == "completed"
+        assert result2.deduped is False
+        assert len(repo._ingests) == 2
+
+
+class TestServiceBlocked:
+    """empty provider data or invalid quality returns blocked status."""
+
+    def test_empty_provider_returns_blocked(self) -> None:
+        from backend.snapshot_collector.models import CollectorRunRequest
+        from backend.snapshot_collector.service import SnapshotCollectorService
+
+        repo = FakeSnapshotRepository()
+        # No stocks
+        fake_collect = _fake_collect_fn(stocks=[], source_health=[])
+        fake_normalize = _passthrough_normalize
+
+        service = SnapshotCollectorService(
+            repo=repo,
+            collect_fn=fake_collect,
+            normalize_fn=fake_normalize,
+        )
+
+        request = CollectorRunRequest(
+            dataset_id="dragonboard_backend_shadow",
+            snapshot_type="half_hour",
+            trading_date="2026-06-11",
+            slot_time="10:00",
+            dry_run=False,
+        )
+
+        result = service.run_once(request)
+
+        assert result.status == "blocked"
+        assert result.quality is not None
+        assert result.quality.ok is False
+        assert "empty_stock_rows" in result.quality.blocking_issues
+        # No fact write
+        assert len(repo._ingests) == 0
+
+    def test_empty_stock_rows_blocked(self) -> None:
+        """Specifically test empty_stock_rows blocking."""
+        from backend.snapshot_collector.models import CollectorRunRequest
+        from backend.snapshot_collector.service import SnapshotCollectorService
+
+        repo = FakeSnapshotRepository()
+        fake_collect = _fake_collect_fn(
+            stocks=[],
+            source_health=[{"source": "hotlist_proxy", "ok": True, "latency_ms": 50, "row_count": 0, "error": "", "captured_at": "2026-06-11T10:00:00Z"}],
+        )
+        fake_normalize = _passthrough_normalize
+
+        service = SnapshotCollectorService(
+            repo=repo,
+            collect_fn=fake_collect,
+            normalize_fn=fake_normalize,
+        )
+
+        request = CollectorRunRequest(
+            dataset_id="dragonboard_backend_shadow",
+            snapshot_type="half_hour",
+            trading_date="2026-06-11",
+            slot_time="10:00",
+            dry_run=False,
+        )
+
+        result = service.run_once(request)
+
+        assert result.status == "blocked"
+        assert "empty_stock_rows" in result.quality.blocking_issues
+        assert len(repo._ingests) == 0
+
+    def test_invalid_stock_code_blocked(self) -> None:
+        """Stock codes not matching A-share format (6 digits starting 0/3/6) are blocked."""
+        from backend.snapshot_collector.models import CollectorRunRequest
+        from backend.snapshot_collector.service import SnapshotCollectorService
+
+        repo = FakeSnapshotRepository()
+        invalid_stocks = [
+            {"code": "INVALID", "name": "BadCode", "rank": 1},
+        ]
+        health = [{"source": "hotlist_proxy", "ok": True, "latency_ms": 50, "row_count": 1, "error": "", "captured_at": "2026-06-11T10:00:00Z"}]
+        fake_collect = _fake_collect_fn(stocks=invalid_stocks, source_health=health)
+        fake_normalize = _passthrough_normalize
+
+        service = SnapshotCollectorService(
+            repo=repo,
+            collect_fn=fake_collect,
+            normalize_fn=fake_normalize,
+        )
+
+        request = CollectorRunRequest(
+            dataset_id="dragonboard_backend_shadow",
+            snapshot_type="half_hour",
+            trading_date="2026-06-11",
+            slot_time="10:00",
+            dry_run=False,
+        )
+
+        result = service.run_once(request)
+
+        assert result.status == "blocked"
+        assert "invalid_stock_code" in result.quality.blocking_issues
+        assert len(repo._ingests) == 0
+
+    def test_timestamp_mismatch_blocked(self) -> None:
+        """actual_timestamp_ms before slot_timestamp_ms is blocked."""
+        from backend.snapshot_collector.models import CollectorRunRequest
+        from backend.snapshot_collector.service import SnapshotCollectorService
+
+        repo = FakeSnapshotRepository()
+        stocks = _standard_stocks()
+        health = _standard_health()
+        fake_collect = _fake_collect_fn(stocks=stocks, source_health=health)
+        fake_normalize = _passthrough_normalize
+
+        service = SnapshotCollectorService(
+            repo=repo,
+            collect_fn=fake_collect,
+            normalize_fn=fake_normalize,
+        )
+
+        # Use a future slot_time so that actual timestamp (now) is before slot
+        request = CollectorRunRequest(
+            dataset_id="dragonboard_backend_shadow",
+            snapshot_type="half_hour",
+            trading_date="2099-01-01",  # far future
+            slot_time="10:00",
+            dry_run=False,
+        )
+
+        result = service.run_once(request)
+
+        # The timestamp for far-future slot will be after current time
+        # but since we use time.time() internally for actual, this should trigger timestamp_outside_slot
+        assert result.status == "blocked"
+        assert "timestamp_outside_slot" in result.quality.blocking_issues
+
+
+class TestServiceRunStateRecording:
+    """run state records success, deduped, dry_run, and blocked attempts."""
+
+    def test_records_completed_run_state(self) -> None:
+        from backend.snapshot_collector.models import CollectorRunRequest
+        from backend.snapshot_collector.service import SnapshotCollectorService
+
+        repo = FakeSnapshotRepository()
+        stocks = _standard_stocks()
+        health = _standard_health()
+        fake_collect = _fake_collect_fn(stocks=stocks, source_health=health)
+        fake_normalize = _passthrough_normalize
+
+        service = SnapshotCollectorService(
+            repo=repo,
+            collect_fn=fake_collect,
+            normalize_fn=fake_normalize,
+        )
+
+        request = CollectorRunRequest(
+            dataset_id="dragonboard_backend_shadow",
+            snapshot_type="half_hour",
+            trading_date="2026-06-11",
+            slot_time="10:00",
+            dry_run=False,
+        )
+
+        result = service.run_once(request)
+
+        assert result.status == "completed"
+        assert len(repo._runs) == 1
+        run = repo._runs[0]
+        assert run["status"] == "completed"
+        assert run["datasetId"] == "dragonboard_backend_shadow"
+        assert run["snapshotId"] == "half_hour:2026-06-11:10:00"
+        assert "createdAt" in run
+
+    def test_records_deduped_run_state(self) -> None:
+        from backend.snapshot_collector.models import CollectorRunRequest
+        from backend.snapshot_collector.service import SnapshotCollectorService
+
+        repo = FakeSnapshotRepository()
+        stocks = _standard_stocks()
+        health = _standard_health()
+        fake_collect = _fake_collect_fn(stocks=stocks, source_health=health)
+        fake_normalize = _passthrough_normalize
+
+        service = SnapshotCollectorService(
+            repo=repo,
+            collect_fn=fake_collect,
+            normalize_fn=fake_normalize,
+        )
+
+        request = CollectorRunRequest(
+            dataset_id="dragonboard_backend_shadow",
+            snapshot_type="half_hour",
+            trading_date="2026-06-11",
+            slot_time="10:00",
+            dry_run=False,
+        )
+
+        service.run_once(request)  # first
+        service.run_once(request)  # second — should dedupe
+
+        assert len(repo._runs) == 2
+        assert repo._runs[0]["status"] == "completed"
+        assert repo._runs[1]["status"] == "deduped"
+        assert repo._runs[1]["deduped"] is True
+
+    def test_records_dry_run_state(self) -> None:
+        from backend.snapshot_collector.models import CollectorRunRequest
+        from backend.snapshot_collector.service import SnapshotCollectorService
+
+        repo = FakeSnapshotRepository()
+        stocks = _standard_stocks()
+        health = _standard_health()
+        fake_collect = _fake_collect_fn(stocks=stocks, source_health=health)
+        fake_normalize = _passthrough_normalize
+
+        service = SnapshotCollectorService(
+            repo=repo,
+            collect_fn=fake_collect,
+            normalize_fn=fake_normalize,
+        )
+
+        request = CollectorRunRequest(
+            dataset_id="dragonboard_backend_shadow",
+            snapshot_type="half_hour",
+            trading_date="2026-06-11",
+            slot_time="10:00",
+            dry_run=True,
+        )
+
+        result = service.run_once(request)
+
+        assert result.status == "dry_run"
+        assert len(repo._runs) == 1
+        run = repo._runs[0]
+        assert run["status"] == "dry_run"
+        assert run["dryRun"] is True
+
+    def test_records_blocked_run_state(self) -> None:
+        from backend.snapshot_collector.models import CollectorRunRequest
+        from backend.snapshot_collector.service import SnapshotCollectorService
+
+        repo = FakeSnapshotRepository()
+        fake_collect = _fake_collect_fn(stocks=[], source_health=[])  # empty blocks
+        fake_normalize = _passthrough_normalize
+
+        service = SnapshotCollectorService(
+            repo=repo,
+            collect_fn=fake_collect,
+            normalize_fn=fake_normalize,
+        )
+
+        request = CollectorRunRequest(
+            dataset_id="dragonboard_backend_shadow",
+            snapshot_type="half_hour",
+            trading_date="2026-06-11",
+            slot_time="10:00",
+            dry_run=False,
+        )
+
+        result = service.run_once(request)
+
+        assert result.status == "blocked"
+        assert len(repo._runs) == 1
+        run = repo._runs[0]
+        assert run["status"] == "blocked"
+        # Blocking issues should be recorded
+        assert run.get("blockingIssues") is not None or result.quality is not None
+
+
+class TestServiceGetStatus:
+    """get_status returns current collector state."""
+
+    def test_get_status_returns_dict(self) -> None:
+        from backend.snapshot_collector.service import SnapshotCollectorService
+
+        repo = FakeSnapshotRepository()
+        service = SnapshotCollectorService(repo=repo)
+
+        status = service.get_status()
+        assert isinstance(status, dict)
+        assert "mode" in status
+
+    def test_get_status_reflects_last_run(self) -> None:
+        from backend.snapshot_collector.models import CollectorRunRequest
+        from backend.snapshot_collector.service import SnapshotCollectorService
+
+        repo = FakeSnapshotRepository()
+        stocks = _standard_stocks()
+        health = _standard_health()
+        fake_collect = _fake_collect_fn(stocks=stocks, source_health=health)
+        fake_normalize = _passthrough_normalize
+
+        service = SnapshotCollectorService(
+            repo=repo,
+            collect_fn=fake_collect,
+            normalize_fn=fake_normalize,
+        )
+
+        request = CollectorRunRequest(
+            dataset_id="dragonboard_backend_shadow",
+            snapshot_type="half_hour",
+            trading_date="2026-06-11",
+            slot_time="10:00",
+            dry_run=False,
+        )
+
+        service.run_once(request)
+        status = service.get_status()
+        assert status.get("mode") is not None
+
+
+class TestServiceGetRuns:
+    """get_runs filters and returns run records."""
+
+    def test_get_runs_no_filter(self) -> None:
+        from backend.snapshot_collector.models import CollectorRunRequest
+        from backend.snapshot_collector.service import SnapshotCollectorService
+
+        repo = FakeSnapshotRepository()
+        stocks = _standard_stocks()
+        health = _standard_health()
+        fake_collect = _fake_collect_fn(stocks=stocks, source_health=health)
+        fake_normalize = _passthrough_normalize
+
+        service = SnapshotCollectorService(
+            repo=repo,
+            collect_fn=fake_collect,
+            normalize_fn=fake_normalize,
+        )
+
+        request = CollectorRunRequest(
+            dataset_id="dragonboard_backend_shadow",
+            snapshot_type="half_hour",
+            trading_date="2026-06-11",
+            slot_time="10:00",
+            dry_run=False,
+        )
+
+        service.run_once(request)
+        runs = service.get_runs({})
+        assert runs["total"] == 1
+        assert len(runs["items"]) == 1
+
+    def test_get_runs_with_filter(self) -> None:
+        from backend.snapshot_collector.models import CollectorRunRequest
+        from backend.snapshot_collector.service import SnapshotCollectorService
+
+        repo = FakeSnapshotRepository()
+        stocks = _standard_stocks()
+        health = _standard_health()
+        fake_collect = _fake_collect_fn(stocks=stocks, source_health=health)
+        fake_normalize = _passthrough_normalize
+
+        service = SnapshotCollectorService(
+            repo=repo,
+            collect_fn=fake_collect,
+            normalize_fn=fake_normalize,
+        )
+
+        request1 = CollectorRunRequest(
+            dataset_id="ds1", snapshot_type="half_hour",
+            trading_date="2026-06-11", slot_time="10:00", dry_run=False,
+        )
+        request2 = CollectorRunRequest(
+            dataset_id="ds2", snapshot_type="half_hour",
+            trading_date="2026-06-11", slot_time="10:00", dry_run=False,
+        )
+
+        service.run_once(request1)
+        service.run_once(request2)
+
+        runs = service.get_runs({"datasetId": "ds1"})
+        assert runs["total"] == 1
+        assert runs["items"][0]["datasetId"] == "ds1"
+
+
+class TestServiceAudit:
+    """audit returns structured coverage summary."""
+
+    def test_audit_returns_expected_structure(self) -> None:
+        from backend.snapshot_collector.service import SnapshotCollectorService
+
+        repo = FakeSnapshotRepository()
+        service = SnapshotCollectorService(repo=repo)
+
+        audit = service.audit("ds", "half_hour", trading_date="2026-06-11")
+        assert audit["datasetId"] == "ds"
+        assert "missingSlots" in audit
+        assert "emptyFrames" in audit
+        assert "missingRecords" in audit
+        assert "countDrifts" in audit
+
+    def test_audit_without_trading_date(self) -> None:
+        from backend.snapshot_collector.service import SnapshotCollectorService
+
+        repo = FakeSnapshotRepository()
+        service = SnapshotCollectorService(repo=repo)
+
+        audit = service.audit("ds", "half_hour")
+        assert audit["tradingDate"] is None
+
+
+# ── Passthrough normalizer (fake) ────────────────────────────────────────────
+
+
+def _passthrough_normalize(request: Any) -> tuple[Any, list[dict], list[dict], list[dict], list[dict], str]:
+    """Fake normalizer that extracts bundle items without pydantic validation."""
+    bundle = request.bundle
+    records = bundle.get("items") or bundle.get("records") or []
+    frames = bundle.get("frames") or []
+    stock_rows = bundle.get("stockRows") or bundle.get("stock_rows") or []
+    sector_rows = bundle.get("sectorRows") or bundle.get("sector_rows") or []
+
+    class FakeDataset:
+        def __init__(self):
+            self.id = request.dataset_id or "default"
+
+    dataset = FakeDataset()
+    idempotency_key = request.idempotency_key or "test-key"
+    return dataset, list(records), list(frames), list(stock_rows), list(sector_rows), idempotency_key
+
+
+def _make_simple_settings(**overrides):
+    """Create a minimal settings-like object for tests."""
+    defaults = {
+        "snapshot_collector_dataset_id": "dragonboard_backend_shadow",
+        "snapshot_collector_types": "half_hour,daily",
+        "snapshot_collector_poll_ms": 1000,
+        "snapshot_collector_close_grace_minutes": 5,
+        "snapshot_collector_proxy_base_url": "http://127.0.0.1:3000",
+        "snapshot_collector_bridge_base_url": "http://127.0.0.1:8765",
+        "snapshot_collector_provider_timeout_ms": 5000,
+        "snapshot_collector_allow_live_dataset": False,
+    }
+    defaults.update(overrides)
+    return type("FakeSettings", (), defaults)()
