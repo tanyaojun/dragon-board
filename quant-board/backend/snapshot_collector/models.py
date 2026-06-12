@@ -6,7 +6,8 @@ import Dragon Board frontend runtime objects.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -57,3 +58,38 @@ class QualityResult:
     blocking_issues: list[str]
     warnings: list[str]
     source_counts: dict[str, int]
+
+
+@dataclass
+class SourceHealth:
+    """Health record for a single data-source provider.
+
+    Each provider writes a health snapshot into the ``MarketDataContext``
+    so the builder and quality gate can decide whether to proceed, warn,
+    or block.
+    """
+
+    source: str
+    ok: bool
+    latency_ms: int = 0
+    row_count: int = 0
+    error: str = ""
+    captured_at: str = ""
+
+
+@dataclass
+class MarketDataContext:
+    """Backend-side snapshot build context.
+
+    Holds the raw material collected from providers.  Does NOT import
+    Dragon Board frontend runtime objects — this is a Python-native
+    dataclass that mirrors the shape the builder needs.
+    """
+
+    stocks: list[dict[str, Any]] = field(default_factory=list)
+    quotes: list[dict[str, Any]] = field(default_factory=list)
+    depth: list[dict[str, Any]] = field(default_factory=list)
+    themes: dict[str, list[str]] = field(default_factory=dict)
+    sectors: list[dict[str, Any]] = field(default_factory=list)
+    source_health: list[SourceHealth] = field(default_factory=list)
+    market_meta: dict[str, Any] = field(default_factory=dict)
