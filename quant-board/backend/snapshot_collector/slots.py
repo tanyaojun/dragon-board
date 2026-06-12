@@ -7,11 +7,10 @@ for which HH:MM times belong to each snapshot type.
 from __future__ import annotations
 
 import datetime
-from zoneinfo import ZoneInfo
+
+from .trading_calendar import TZ_SHANGHAI  # noqa: F401 — re-export for callers
 
 from .models import SnapshotSlot
-
-TZ_SHANGHAI = ZoneInfo("Asia/Shanghai")
 
 # ── Slot table ───────────────────────────────────────────────────────────────
 #

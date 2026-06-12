@@ -12,10 +12,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import datetime
 import time
 from typing import Any
 
 from backend.settings import get_settings
+from backend.snapshot_collector.trading_calendar import TZ_SHANGHAI
 
 
 class SnapshotCollectorScheduler:
@@ -161,11 +163,12 @@ class SnapshotCollectorScheduler:
             )
             # Offload blocking MongoDB I/O to a thread
             result = await asyncio.to_thread(service.run_once, request)
-            self._last_run_at = time.strftime("%Y-%m-%dT%H:%M:%S+08:00")
+            self._last_run_at = datetime.datetime.now(TZ_SHANGHAI).isoformat()
             if result.status not in ("deduped",):
                 self._collection_count += 1
             self._last_slot_collected = slot.snapshot_id
-        except Exception:
+        except Exception as exc:
+            self._last_error = str(exc)
             self._error_count += 1
         finally:
             self._in_flight_slots.discard(slot.snapshot_id)

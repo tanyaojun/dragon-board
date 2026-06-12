@@ -158,11 +158,10 @@ def _patch_service_factory_repo(monkeypatch: pytest.MonkeyPatch, fake_repo: Fake
 
 
 def _patch_service_factory_service(fake_service: FakeService) -> None:
-    """Inject create_snapshot_collector_service onto the service_factory module.
+    """Inject a fake ``create_snapshot_collector_service``.
 
-    Uses direct module attribute assignment because this function does not
-    exist yet in service_factory.py — monkeypatch.setattr requires the
-    attribute to already exist.
+    Direct attribute assignment avoids monkeypatch validation of the
+    existing function signature while keeping the patch target clear.
     """
     import backend.snapshot_collector.service_factory as sf
     sf.create_snapshot_collector_service = lambda repo: fake_service
@@ -650,6 +649,8 @@ class TestSnapshotCollectorScheduler:
         await s._collect_slot(slot)
 
         assert s._error_count == 1
+        assert s._last_error is not None
+        assert "Simulated MongoDB error" in s._last_error
         # Finally block always cleans up in_flight_slots
         assert slot.snapshot_id not in s._in_flight_slots
 

@@ -288,6 +288,18 @@ class TestCollectorCLIParser:
         ])
         assert args.dry_run is True
 
+    def test_backfill_apply_switches_dry_run_off(self) -> None:
+        """--apply is the explicit write-mode switch for backfill."""
+        args = self.parser.parse_args([
+            "snapshot-collector-backfill",
+            "--dataset-id", "dragonboard_backend_shadow",
+            "--snapshot-type", "half_hour",
+            "--start-date", "2026-06-11",
+            "--end-date", "2026-06-11",
+            "--apply",
+        ])
+        assert args.dry_run is False
+
     def test_backfill_subcommand_registered(self) -> None:
         """snapshot-collector-backfill subparser exists."""
         args = self.parser.parse_args([
@@ -356,7 +368,7 @@ class TestCollectorCLIHandlers:
                 return_value=_fake_repo(),
             ),
             "SnapshotCollectorService": patch(
-                "backend.cli.SnapshotCollectorService",
+                "backend.cli._create_snapshot_collector_service",
                 return_value=fake_service,
             ),
         }

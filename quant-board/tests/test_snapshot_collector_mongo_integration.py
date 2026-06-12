@@ -620,6 +620,62 @@ class TestMongoIntegrationAudit:
         audit = service.audit("test_audit_detect", "half_hour", trading_date="2026-06-11")
         assert audit["totalFrames"] >= 1
 
+    def test_audit_count_drifts_compare_stock_rows_not_records(self) -> None:
+        """One snapshot record with two stock rows must not look like a drift."""
+        from backend.snapshot_collector.service import SnapshotCollectorService
+
+        db = FakeMongoDatabase()
+        mongo = _mongo_repo(db)
+        from backend.snapshot_collector.service_factory import _MongoSnapshotCollectorRepository
+
+        repo = _MongoSnapshotCollectorRepository(mongo, db)
+        snapshot_id = "half_hour:2026-06-11:10:00"
+        db["snapshot_frames"].insert_many(
+            [
+                {
+                    "datasetId": "test_audit_stock_rows",
+                    "snapshotId": snapshot_id,
+                    "type": "half_hour",
+                    "tradingDate": "2026-06-11",
+                    "timestamp": 1781143200000,
+                    "stockRowCount": 2,
+                }
+            ],
+            ordered=False,
+        )
+        db["snapshot_records"].insert_many(
+            [
+                {
+                    "datasetId": "test_audit_stock_rows",
+                    "snapshotId": snapshot_id,
+                }
+            ],
+            ordered=False,
+        )
+        db["snapshot_stock_rows"].insert_many(
+            [
+                {
+                    "datasetId": "test_audit_stock_rows",
+                    "snapshotId": snapshot_id,
+                    "code": "000001",
+                },
+                {
+                    "datasetId": "test_audit_stock_rows",
+                    "snapshotId": snapshot_id,
+                    "code": "600001",
+                },
+            ],
+            ordered=False,
+        )
+
+        audit = SnapshotCollectorService(repo=repo).audit(
+            "test_audit_stock_rows",
+            "half_hour",
+            trading_date="2026-06-11",
+        )
+
+        assert audit["countDrifts"] == []
+
     def test_audit_reports_empty_state_for_empty_dataset(self) -> None:
         """Audit on a dataset with no data returns zeros."""
         from backend.snapshot_collector.service import SnapshotCollectorService

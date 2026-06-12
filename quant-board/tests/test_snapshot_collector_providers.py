@@ -677,6 +677,27 @@ class TestCollectMarketContext:
         assert ctx.market_meta["totalVolume"] == 500000000000
         assert ctx.market_meta["upCount"] == 2500
 
+    def test_derives_bridge_and_theme_codes_from_hotlist_when_codes_empty(self) -> None:
+        """Service wiring passes no initial codes; providers must use hotlist codes."""
+        hotlist = ProxyHotlistProvider(base_url=PROXY_BASE_URL)
+        bridge = BridgeQuoteProvider(base_url=BRIDGE_BASE_URL)
+        theme = ThemeMappingProvider(FakeThemeRepo(THEME_MAP))
+        captured_urls: list[str] = []
+
+        def record_urlopen(req: urllib.request.Request, timeout: float = 0) -> MagicMock:
+            captured_urls.append(req.full_url if hasattr(req, "full_url") else str(req))
+            if len(captured_urls) == 1:
+                return _fake_urlopen_response(EASTMONEY_HOTLIST_RESPONSE)
+            return _fake_urlopen_response(BRIDGE_SNAPSHOT_RESPONSE)
+
+        with patch.object(urllib.request, "urlopen", side_effect=record_urlopen):
+            ctx = collect_market_context([hotlist, bridge, theme], [], timeout_ms=5000)
+
+        assert len(ctx.stocks) == 3
+        assert len(ctx.quotes) == 3
+        assert ctx.themes["000001"] == ["银行", "深圳"]
+        assert any("codes=000001%2C600000%2C300001" in url for url in captured_urls)
+
     def test_partial_provider_failure_still_assembles_healthy_data(self) -> None:
         """When one provider fails, healthy providers still contribute."""
         hotlist = ProxyHotlistProvider(base_url=PROXY_BASE_URL)

@@ -147,6 +147,8 @@ class FakeCollectorService:
 
 def _setup_client(monkeypatch: Any, service_cls: type | None = None) -> tuple[TestClient, FakeSnapshotRepository]:
     """Set up TestClient with mocked dependencies."""
+    import backend.api.snapshot_collector_routes as routes
+
     fake_repo = FakeSnapshotRepository()
     monkeypatch.setattr(
         "backend.api.snapshot_collector_routes.create_snapshot_collector_repository",
@@ -156,6 +158,11 @@ def _setup_client(monkeypatch: Any, service_cls: type | None = None) -> tuple[Te
     monkeypatch.setattr(
         "backend.api.snapshot_collector_routes.SnapshotCollectorService",
         cls,
+    )
+    monkeypatch.setattr(
+        "backend.api.snapshot_collector_routes._create_service",
+        lambda repo: routes.SnapshotCollectorService(repo=repo),
+        raising=False,
     )
     return TestClient(app), fake_repo
 
@@ -167,6 +174,25 @@ def _setup_client(monkeypatch: Any, service_cls: type | None = None) -> tuple[Te
 
 class TestGetStatus:
     """Tests for GET /api/snapshot-collector/status."""
+
+    def test_uses_service_factory(self, monkeypatch: Any) -> None:
+        """Routes must use the shared service factory wiring."""
+        import backend.api.snapshot_collector_routes as routes
+
+        fake_repo = FakeSnapshotRepository()
+        created_with: list[Any] = []
+        monkeypatch.setattr(routes, "create_snapshot_collector_repository", lambda: fake_repo)
+        monkeypatch.setattr(
+            routes,
+            "create_snapshot_collector_service",
+            lambda repo: created_with.append(repo) or FakeCollectorService(repo=repo),
+            raising=False,
+        )
+
+        response = TestClient(app).get("/api/snapshot-collector/status")
+
+        assert response.status_code == 200
+        assert created_with == [fake_repo]
 
     def test_returns_ok_and_data(self, monkeypatch: Any) -> None:
         client, _ = _setup_client(monkeypatch)
@@ -1101,6 +1127,25 @@ class TestGetRuns:
         assert len(captured_filters) == 1
         assert captured_filters[0].get("datasetId") == "dragonboard_backend_shadow"
         assert captured_filters[0].get("status") == "completed"
+
+    def test_runs_passes_pagination_to_service(self, monkeypatch: Any) -> None:
+        client, _ = _setup_client(monkeypatch)
+        captured_filters: list[dict[str, Any]] = []
+
+        class Svc(FakeCollectorService):
+            def get_runs(self, filters: dict[str, Any]) -> dict[str, Any]:
+                captured_filters.append(dict(filters))
+                return {"items": [], "total": 0}
+
+        monkeypatch.setattr(
+            "backend.api.snapshot_collector_routes.SnapshotCollectorService", Svc
+        )
+
+        response = client.get("/api/snapshot-collector/runs?limit=10&offset=20")
+
+        assert response.status_code == 200
+        assert captured_filters[0]["limit"] == 10
+        assert captured_filters[0]["offset"] == 20
 
     def test_runs_default_limit_and_offset(self, monkeypatch: Any) -> None:
         client, _ = _setup_client(monkeypatch)

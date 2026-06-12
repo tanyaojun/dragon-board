@@ -16,7 +16,10 @@ from fastapi import APIRouter, HTTPException
 
 from backend.snapshot_collector.models import CollectorRunRequest
 from backend.snapshot_collector.service import SnapshotCollectorService
-from backend.snapshot_collector.service_factory import create_snapshot_collector_repository
+from backend.snapshot_collector.service_factory import (
+    create_snapshot_collector_repository,
+    create_snapshot_collector_service,
+)
 from backend.snapshot_collector.slots import generate_slots
 
 router = APIRouter(prefix="/api/snapshot-collector")
@@ -87,6 +90,11 @@ def _quality_to_dict(quality: Any) -> dict[str, Any] | None:
     }
 
 
+def _create_service(repo: Any) -> SnapshotCollectorService:
+    """Create the collector service through the shared dependency factory."""
+    return create_snapshot_collector_service(repo)
+
+
 # ── GET /api/snapshot-collector/status ────────────────────────────────────────
 
 
@@ -94,7 +102,7 @@ def _quality_to_dict(quality: Any) -> dict[str, Any] | None:
 def get_collector_status() -> dict[str, Any]:
     """Return the current snapshot collector operational state."""
     repo = create_snapshot_collector_repository()
-    service = SnapshotCollectorService(repo=repo)
+    service = _create_service(repo)
     status = service.get_status()
     return _build_envelope(ok=True, status="completed", data=status)
 
@@ -144,7 +152,7 @@ def run_collector_once(payload: dict[str, Any]) -> dict[str, Any]:
     )
 
     repo = create_snapshot_collector_repository()
-    service = SnapshotCollectorService(repo=repo)
+    service = _create_service(repo)
     result = service.run_once(request)
 
     envelope = _build_envelope(
@@ -275,7 +283,7 @@ def backfill_collector_slots(payload: dict[str, Any]) -> dict[str, Any]:
     )
 
     repo = create_snapshot_collector_repository()
-    service = SnapshotCollectorService(repo=repo)
+    service = _create_service(repo)
     result = service.backfill_slots(backfill_request)
 
     ok = result.get("failed", 0) == 0 and result.get("blocked", 0) == 0
@@ -301,9 +309,11 @@ def list_collector_runs(
         filters["status"] = status
     if snapshotType:
         filters["snapshotType"] = snapshotType
+    filters["limit"] = limit
+    filters["offset"] = offset
 
     repo = create_snapshot_collector_repository()
-    service = SnapshotCollectorService(repo=repo)
+    service = _create_service(repo)
     runs = service.get_runs(filters)
 
     return _build_envelope(
@@ -350,7 +360,7 @@ def audit_collector_snapshots(payload: dict[str, Any]) -> dict[str, Any]:
         _validate_date_format(trading_date, "tradingDate")
 
     repo = create_snapshot_collector_repository()
-    service = SnapshotCollectorService(repo=repo)
+    service = _create_service(repo)
     result = service.audit(dataset_id, snapshot_type, trading_date=trading_date)
 
     return _build_envelope(ok=True, status="completed", data=result)

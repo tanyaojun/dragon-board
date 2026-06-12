@@ -37,12 +37,13 @@ from .state import record_run as _record_run
 def _slot_timestamp_ms(snapshot_type: str, trading_date: str, slot_time: str) -> int:
     """Compute the epoch-millisecond timestamp for a snapshot slot.
 
-    The result represents the slot instant in Asia/Shanghai (UTC+8).
+    Delegates to ``slots._make_timestamp_ms`` which is the canonical
+    implementation used by the slot generator and eligibility checker.
     """
+    from .slots import _make_timestamp_ms
+
     try:
-        dt_str = f"{trading_date}T{slot_time}:00+08:00"
-        dt = datetime.fromisoformat(dt_str)
-        return int(dt.timestamp() * 1000)
+        return _make_timestamp_ms(trading_date, slot_time)
     except (ValueError, OverflowError):
         return 0
 
@@ -375,7 +376,9 @@ class SnapshotCollectorService:
             try:
                 result = self.run_once(sub_req)
                 summary["total"] += 1
-                summary[result.status] = summary.get(result.status, 0) + 1
+                # Map run_once statuses to backfill counters
+                status_key = "succeeded" if result.status == "completed" else result.status
+                summary[status_key] = summary.get(status_key, 0) + 1
                 summary["details"].append(
                     {
                         "snapshotId": result.snapshot_id,

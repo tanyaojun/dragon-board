@@ -182,6 +182,14 @@ class TestGenerateSlots:
         ids = [s.snapshot_id for s in slots]
         assert len(ids) == len(set(ids))
 
+    def test_generate_slots_deterministic(self):
+        """generate_slots produces the same slots on repeated calls."""
+        slots_a = generate_slots("2026-06-11", ["half_hour"])
+        slots_b = generate_slots("2026-06-11", ["half_hour"])
+        assert len(slots_a) == len(slots_b)
+        for a, b in zip(slots_a, slots_b):
+            assert a.snapshot_id == b.snapshot_id
+
     def test_grace_minutes_accepted_but_does_not_affect_generation(self):
         """grace_minutes is a scheduler concern; generate_slots accepts it."""
         slots_default = generate_slots("2026-06-11", ["half_hour"])

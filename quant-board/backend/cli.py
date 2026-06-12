@@ -54,7 +54,10 @@ from backend.services import (
 from backend.utils import json_loads
 from backend.snapshot_collector.models import CollectorRunRequest
 from backend.snapshot_collector.service import SnapshotCollectorService
-from backend.snapshot_collector.service_factory import create_snapshot_collector_repository
+from backend.snapshot_collector.service_factory import (
+    create_snapshot_collector_repository,
+    create_snapshot_collector_service,
+)
 from backend.snapshot_collector.slots import generate_slots
 
 DEFAULT_MOMENTUM_PERIODS = [3, 5, 8, 13, 21]
@@ -1204,10 +1207,15 @@ def _generate_backfill_slots(
     return slot_dicts
 
 
+def _create_snapshot_collector_service(repo: Any) -> SnapshotCollectorService:
+    """Create the collector service through the shared dependency factory."""
+    return create_snapshot_collector_service(repo)
+
+
 def cmd_snapshot_collector_status(_: argparse.Namespace) -> None:
     """Print collector operational state as JSON."""
     repo = create_snapshot_collector_repository()
-    service = SnapshotCollectorService(repo=repo)
+    service = _create_snapshot_collector_service(repo)
     print_json(service.get_status())
 
 
@@ -1222,7 +1230,7 @@ def cmd_snapshot_collector_run_once(args: argparse.Namespace) -> None:
         force=bool(args.force),
     )
     repo = create_snapshot_collector_repository()
-    service = SnapshotCollectorService(repo=repo)
+    service = _create_snapshot_collector_service(repo)
     result = service.run_once(request)
     print_json(_result_to_output(result))
 
@@ -1256,7 +1264,7 @@ def cmd_snapshot_collector_backfill(args: argparse.Namespace) -> None:
     )
 
     repo = create_snapshot_collector_repository()
-    service = SnapshotCollectorService(repo=repo)
+    service = _create_snapshot_collector_service(repo)
     result = service.backfill_slots(backfill_request)
     print_json(result)
 
@@ -1264,7 +1272,7 @@ def cmd_snapshot_collector_backfill(args: argparse.Namespace) -> None:
 def cmd_snapshot_collector_audit(args: argparse.Namespace) -> None:
     """Audit snapshot coverage and print structured JSON result."""
     repo = create_snapshot_collector_repository()
-    service = SnapshotCollectorService(repo=repo)
+    service = _create_snapshot_collector_service(repo)
     result = service.audit(
         args.dataset_id,
         args.snapshot_type,
@@ -1715,9 +1723,10 @@ def build_parser() -> argparse.ArgumentParser:
     collector_backfill_cmd.add_argument("--snapshot-type", choices=["quarter_hour", "half_hour", "hourly", "daily"], required=True)
     collector_backfill_cmd.add_argument("--start-date", required=True)
     collector_backfill_cmd.add_argument("--end-date", required=True)
-    collector_backfill_cmd.add_argument("--dry-run", action="store_true", default=True)
+    collector_backfill_cmd.add_argument("--dry-run", dest="dry_run", action="store_true")
+    collector_backfill_cmd.add_argument("--apply", dest="dry_run", action="store_false")
     collector_backfill_cmd.add_argument("--force", action="store_true")
-    collector_backfill_cmd.set_defaults(func=cmd_snapshot_collector_backfill)
+    collector_backfill_cmd.set_defaults(func=cmd_snapshot_collector_backfill, dry_run=True)
 
     collector_audit_cmd = sub.add_parser("snapshot-collector-audit", help="Audit snapshot coverage for a dataset/type")
     collector_audit_cmd.add_argument("--dataset-id", required=True)

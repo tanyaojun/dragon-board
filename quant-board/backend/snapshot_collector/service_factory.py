@@ -74,11 +74,15 @@ class _MongoSnapshotCollectorRepository:
         self._db["snapshot_collector_runs"].insert_many([doc], ordered=False)
 
     def list_runs(self, filters: dict[str, Any]) -> dict[str, Any]:
-        cursor = self._db["snapshot_collector_runs"].find(filters).sort(
+        query = dict(filters)
+        limit = int(query.pop("limit", 50) or 50)
+        offset = int(query.pop("offset", 0) or 0)
+        cursor = self._db["snapshot_collector_runs"].find(query).sort(
             [("createdAt", -1)]
         )
         items = list(cursor)
-        return {"items": items, "total": len(items)}
+        total = len(items)
+        return {"items": items[offset:offset + limit], "total": total}
 
     def collector_status(self) -> dict[str, Any]:
         row = self._db["snapshot_collector_state"].find_one({"key": "collector"})
@@ -114,6 +118,15 @@ class _MongoSnapshotCollectorRepository:
             if snapshot_ids
             else []
         )
+        stock_rows = (
+            list(
+                self._db["snapshot_stock_rows"].find(
+                    {"datasetId": dataset_id, "snapshotId": {"$in": snapshot_ids}}
+                )
+            )
+            if snapshot_ids
+            else []
+        )
         record_ids = {str(r.get("snapshotId")) for r in records}
 
         missing_records = sorted(set(snapshot_ids) - record_ids)
@@ -134,7 +147,7 @@ class _MongoSnapshotCollectorRepository:
             "missingSlots": [],
             "emptyFrames": empty_frames,
             "missingRecords": missing_records,
-            "countDrifts": _detect_count_drifts(frames, records),
+            "countDrifts": _detect_count_drifts(frames, stock_rows),
         }
 
 
@@ -170,9 +183,10 @@ def create_snapshot_collector_service(
     When *repo* is not supplied a default repository is created via
     ``create_snapshot_collector_repository()``.
     """
+    settings = get_settings()
     if repo is None:
         repo = create_snapshot_collector_repository()
-    return SnapshotCollectorService(repo=repo)
+    return SnapshotCollectorService(repo=repo, settings=settings)
 
 
 # ── helpers ────────────────────────────────────────────────────────────────
@@ -228,25 +242,25 @@ def _fallback_idempotency_key(
 
 def _detect_count_drifts(
     frames: list[dict[str, Any]],
-    records: list[dict[str, Any]],
+    stock_rows: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Compare frame stockRowCount with actual record counts per snapshot."""
+    """Compare frame stockRowCount with actual stock row counts per snapshot."""
     frame_counts: dict[str, int] = {}
     for row in frames:
         sid = str(row.get("snapshotId") or "")
         if sid and row.get("stockRowCount"):
             frame_counts[sid] = int(row["stockRowCount"])
 
-    record_counts: dict[str, int] = {}
-    for row in records:
+    stock_row_counts: dict[str, int] = {}
+    for row in stock_rows:
         sid = str(row.get("snapshotId") or "")
         if sid:
-            record_counts[sid] = record_counts.get(sid, 0) + 1
+            stock_row_counts[sid] = stock_row_counts.get(sid, 0) + 1
 
     drifts: list[dict[str, Any]] = []
-    for sid in sorted(set(frame_counts) & set(record_counts)):
+    for sid in sorted(set(frame_counts) & set(stock_row_counts)):
         fc = frame_counts[sid]
-        rc = record_counts[sid]  # records with the same snapshotId
+        rc = stock_row_counts[sid]
         if fc != rc:
             drifts.append(
                 {"snapshotId": sid, "frameCount": fc, "recordCount": rc}

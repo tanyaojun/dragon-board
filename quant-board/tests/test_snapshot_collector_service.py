@@ -526,6 +526,24 @@ class TestServiceFactory:
             repo, SnapshotRepository
         ), "Factory must return an instance that satisfies SnapshotRepository"
 
+    def test_service_factory_injects_current_settings(self, monkeypatch: Any) -> None:
+        """API and CLI service instances must honor QUANT_BOARD_* settings."""
+        import backend.snapshot_collector.service_factory as sf
+
+        fake_settings = _make_simple_settings(
+            snapshot_collector_proxy_base_url="http://proxy.example",
+            snapshot_collector_bridge_base_url="http://bridge.example",
+            snapshot_collector_allow_live_dataset=True,
+        )
+        monkeypatch.setattr(sf, "get_settings", lambda: fake_settings)
+
+        service = sf.create_snapshot_collector_service(FakeSnapshotRepository())
+
+        assert service._settings is fake_settings
+        assert service._proxy_base_url() == "http://proxy.example"
+        assert service._bridge_base_url() == "http://bridge.example"
+        assert service._allow_live_dataset() is True
+
     def test_factory_raises_for_sqlite_backend(self, monkeypatch: Any) -> None:
         """SQLite backend is not supported for snapshot collector."""
         import backend.snapshot_collector.service_factory as sf

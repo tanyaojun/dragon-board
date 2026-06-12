@@ -566,6 +566,7 @@ def collect_market_context(
     Unknown provider types are silently ignored.
     """
     ctx = MarketDataContext()
+    active_codes = [str(code).strip() for code in codes if str(code).strip()]
 
     for provider in providers:
         try:
@@ -573,9 +574,15 @@ def collect_market_context(
                 rows, health = provider.collect(timeout_ms=timeout_ms)
                 ctx.stocks.extend(rows)
                 ctx.source_health.append(health)
+                if not active_codes:
+                    active_codes = [
+                        str(row.get("code") or "").strip()
+                        for row in rows
+                        if isinstance(row, dict) and str(row.get("code") or "").strip()
+                    ]
 
             elif isinstance(provider, BridgeQuoteProvider):
-                data, health = provider.collect(codes, timeout_ms=timeout_ms)
+                data, health = provider.collect(active_codes, timeout_ms=timeout_ms)
                 if isinstance(data, dict):
                     ctx.quotes.extend(data.get("quotes") or [])
                     ctx.depth.extend(data.get("depth") or [])
@@ -584,7 +591,7 @@ def collect_market_context(
                 ctx.source_health.append(health)
 
             elif isinstance(provider, ThemeMappingProvider):
-                themes, health = provider.collect(codes, timeout_ms=timeout_ms)
+                themes, health = provider.collect(active_codes, timeout_ms=timeout_ms)
                 if isinstance(themes, dict):
                     ctx.themes.update(themes)
                 ctx.source_health.append(health)
