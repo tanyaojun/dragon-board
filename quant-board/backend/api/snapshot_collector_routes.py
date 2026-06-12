@@ -354,3 +354,12 @@ def audit_collector_snapshots(payload: dict[str, Any]) -> dict[str, Any]:
     result = service.audit(dataset_id, snapshot_type, trading_date=trading_date)
 
     return _build_envelope(ok=True, status="completed", data=result)
+
+
+@router.get("/scheduler/status")
+def get_scheduler_status() -> dict[str, Any]:
+    """Return the current collector scheduler operational state."""
+    from backend.snapshot_collector.scheduler import snapshot_collector_scheduler
+
+    status_data = snapshot_collector_scheduler.status()
+    return _build_envelope(ok=True, status="completed", data=status_data)

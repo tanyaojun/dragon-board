@@ -18,6 +18,7 @@ from backend.data.archive.auto_archive import archive_auto_runner, run_archive_a
 from backend.data.archive.object_store import get_object_backup_store
 from backend.data.archive.service import ArchiveService
 from backend.data.backup_retention import backup_retention_runner, run_backup_retention_once
+from backend.snapshot_collector.scheduler import snapshot_collector_scheduler
 from backend.data.backup_sync import BackupSyncService
 from backend.data.database import ResearchSessionLocal, get_db, init_db, primary_status
 from backend.data.dataset_service import DatasetService
@@ -76,22 +77,22 @@ app.include_router(snapshot_collector_router)
 
 @app.on_event("startup")
 def on_startup() -> None:
-    if get_settings().storage_backend == "mongodb":
-        return
-    init_db()
-    init_theme_db()
-    auto_sync_runner.start()
-    archive_auto_runner.start()
-    backup_retention_runner.start()
+    if get_settings().storage_backend != "mongodb":
+        init_db()
+        init_theme_db()
+        auto_sync_runner.start()
+        archive_auto_runner.start()
+        backup_retention_runner.start()
+    snapshot_collector_scheduler.start()
 
 
 @app.on_event("shutdown")
 async def on_shutdown() -> None:
-    if get_settings().storage_backend == "mongodb":
-        return
-    await auto_sync_runner.stop()
-    await archive_auto_runner.stop()
-    await backup_retention_runner.stop()
+    if get_settings().storage_backend != "mongodb":
+        await auto_sync_runner.stop()
+        await archive_auto_runner.stop()
+        await backup_retention_runner.stop()
+    await snapshot_collector_scheduler.stop()
 
 
 @app.get("/api/health")
@@ -125,6 +126,7 @@ def health_check(deep: bool = False, db: Session | None = Depends(get_db)) -> di
                 "provider": "r2",
             },
         },
+        "snapshotCollector": snapshot_collector_scheduler.status(),
     }
 
 
