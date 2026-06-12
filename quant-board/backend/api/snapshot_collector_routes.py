@@ -17,7 +17,7 @@ from fastapi import APIRouter, HTTPException
 from backend.snapshot_collector.models import CollectorRunRequest
 from backend.snapshot_collector.service import SnapshotCollectorService
 from backend.snapshot_collector.service_factory import create_snapshot_collector_repository
-from backend.snapshot_collector.slots import generate_slots, SLOT_TIMES
+from backend.snapshot_collector.slots import generate_slots
 
 router = APIRouter(prefix="/api/snapshot-collector")
 
