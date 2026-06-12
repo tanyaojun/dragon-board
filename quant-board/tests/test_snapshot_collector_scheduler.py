@@ -149,6 +149,35 @@ def make_test_slot(
     return SnapshotSlot(snapshot_type, trading_date, slot_time, timestamp_ms)
 
 
+def _patch_service_factory_repo(monkeypatch: pytest.MonkeyPatch, fake_repo: FakeRepo) -> None:
+    """Patch create_snapshot_collector_repository in the service_factory module."""
+    monkeypatch.setattr(
+        "backend.snapshot_collector.service_factory.create_snapshot_collector_repository",
+        lambda: fake_repo,
+    )
+
+
+def _patch_service_factory_service(fake_service: FakeService) -> None:
+    """Inject create_snapshot_collector_service onto the service_factory module.
+
+    Uses direct module attribute assignment because this function does not
+    exist yet in service_factory.py — monkeypatch.setattr requires the
+    attribute to already exist.
+    """
+    import backend.snapshot_collector.service_factory as sf
+    sf.create_snapshot_collector_service = lambda repo: fake_service
+
+
+def _patch_collect_slot_imports(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_repo: FakeRepo,
+    fake_service: FakeService,
+) -> None:
+    """Patch all lazy imports used by _collect_slot."""
+    _patch_service_factory_repo(monkeypatch, fake_repo)
+    _patch_service_factory_service(fake_service)
+
+
 def _make_settings(**overrides: Any):
     """Create a Settings instance with MongoDB backend and collector enabled by default.
 
@@ -418,14 +447,7 @@ class TestSnapshotCollectorScheduler:
         fake_repo = FakeRepo()
         fake_service = FakeService()
 
-        monkeypatch.setattr(
-            "backend.snapshot_collector.service_factory.create_snapshot_collector_repository",
-            lambda: fake_repo,
-        )
-        monkeypatch.setattr(
-            "backend.snapshot_collector.service_factory.create_snapshot_collector_service",
-            lambda repo: fake_service,
-        )
+        _patch_collect_slot_imports(monkeypatch, fake_repo, fake_service)
 
         await s._poll_once()
 
@@ -501,15 +523,9 @@ class TestSnapshotCollectorScheduler:
             lambda now_ts, slot_, grace_minutes=5: True,
         )
 
+        fake_repo = FakeRepo()
         fake_service = FakeService()
-        monkeypatch.setattr(
-            "backend.snapshot_collector.service_factory.create_snapshot_collector_repository",
-            lambda: FakeRepo(),
-        )
-        monkeypatch.setattr(
-            "backend.snapshot_collector.service_factory.create_snapshot_collector_service",
-            lambda repo: fake_service,
-        )
+        _patch_collect_slot_imports(monkeypatch, fake_repo, fake_service)
 
         await s._poll_once()
         await asyncio.sleep(0.1)
@@ -545,15 +561,9 @@ class TestSnapshotCollectorScheduler:
             lambda now_ts, slot_, grace_minutes=5: False,
         )
 
+        fake_repo = FakeRepo()
         fake_service = FakeService()
-        monkeypatch.setattr(
-            "backend.snapshot_collector.service_factory.create_snapshot_collector_repository",
-            lambda: FakeRepo(),
-        )
-        monkeypatch.setattr(
-            "backend.snapshot_collector.service_factory.create_snapshot_collector_service",
-            lambda repo: fake_service,
-        )
+        _patch_collect_slot_imports(monkeypatch, fake_repo, fake_service)
 
         await s._poll_once()
         await asyncio.sleep(0.1)
@@ -581,14 +591,7 @@ class TestSnapshotCollectorScheduler:
         fake_repo = FakeRepo()
         fake_service = FakeService(_result_status="completed")
 
-        monkeypatch.setattr(
-            "backend.snapshot_collector.service_factory.create_snapshot_collector_repository",
-            lambda: fake_repo,
-        )
-        monkeypatch.setattr(
-            "backend.snapshot_collector.service_factory.create_snapshot_collector_service",
-            lambda repo: fake_service,
-        )
+        _patch_collect_slot_imports(monkeypatch, fake_repo, fake_service)
 
         await s._collect_slot(slot)
 
@@ -615,14 +618,7 @@ class TestSnapshotCollectorScheduler:
         fake_repo = FakeRepo(existing_snapshots={slot.snapshot_id})
         fake_service = FakeService()
 
-        monkeypatch.setattr(
-            "backend.snapshot_collector.service_factory.create_snapshot_collector_repository",
-            lambda: fake_repo,
-        )
-        monkeypatch.setattr(
-            "backend.snapshot_collector.service_factory.create_snapshot_collector_service",
-            lambda repo: fake_service,
-        )
+        _patch_collect_slot_imports(monkeypatch, fake_repo, fake_service)
 
         await s._collect_slot(slot)
 
@@ -675,14 +671,7 @@ class TestSnapshotCollectorScheduler:
         fake_repo = FakeRepo()
         fake_service = FakeService(_result_status="deduped")
 
-        monkeypatch.setattr(
-            "backend.snapshot_collector.service_factory.create_snapshot_collector_repository",
-            lambda: fake_repo,
-        )
-        monkeypatch.setattr(
-            "backend.snapshot_collector.service_factory.create_snapshot_collector_service",
-            lambda repo: fake_service,
-        )
+        _patch_collect_slot_imports(monkeypatch, fake_repo, fake_service)
 
         await s._collect_slot(slot)
 
@@ -723,14 +712,7 @@ class TestSnapshotCollectorScheduler:
 
         fake_repo = FakeRepo()
         fake_service = FakeService()
-        monkeypatch.setattr(
-            "backend.snapshot_collector.service_factory.create_snapshot_collector_repository",
-            lambda: fake_repo,
-        )
-        monkeypatch.setattr(
-            "backend.snapshot_collector.service_factory.create_snapshot_collector_service",
-            lambda repo: fake_service,
-        )
+        _patch_collect_slot_imports(monkeypatch, fake_repo, fake_service)
 
         await s._poll_once()
         await asyncio.sleep(0.1)
@@ -766,15 +748,9 @@ class TestSnapshotCollectorScheduler:
             lambda now_ts, slot_, grace_minutes=5: True,
         )
 
+        fake_repo = FakeRepo()
         fake_service = FakeService()
-        monkeypatch.setattr(
-            "backend.snapshot_collector.service_factory.create_snapshot_collector_repository",
-            lambda: FakeRepo(),
-        )
-        monkeypatch.setattr(
-            "backend.snapshot_collector.service_factory.create_snapshot_collector_service",
-            lambda repo: fake_service,
-        )
+        _patch_collect_slot_imports(monkeypatch, fake_repo, fake_service)
 
         # First poll dispatches the slot
         await s._poll_once()
