@@ -52,9 +52,14 @@ SLOT_TIMES: dict[str, list[str]] = {
 
 def _make_timestamp_ms(trading_date: str, slot_time: str) -> int:
     """Return the epoch-ms instant of *trading_date* + *slot_time* in TZ_SHANGHAI."""
-    dt = datetime.datetime.strptime(
-        f"{trading_date} {slot_time}", "%Y-%m-%d %H:%M"
-    )
+    try:
+        dt = datetime.datetime.strptime(
+            f"{trading_date} {slot_time}", "%Y-%m-%d %H:%M"
+        )
+    except ValueError as exc:
+        raise ValueError(
+            f"Invalid slot datetime: trading_date={trading_date!r}, slot_time={slot_time!r}"
+        ) from exc
     dt = dt.replace(tzinfo=TZ_SHANGHAI)
     return int(dt.timestamp() * 1000)
 

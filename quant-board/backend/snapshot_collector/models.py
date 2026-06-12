@@ -27,6 +27,15 @@ class SnapshotSlot:
     slot_time: str
     timestamp_ms: int
 
+    _VALID_TYPES: frozenset[str] = frozenset({"quarter_hour", "half_hour", "hourly", "daily"})
+
+    def __post_init__(self) -> None:
+        if self.snapshot_type not in self._VALID_TYPES:
+            raise ValueError(
+                f"Unknown snapshot_type={self.snapshot_type!r}, "
+                f"expected one of {sorted(self._VALID_TYPES)}"
+            )
+
     @property
     def snapshot_id(self) -> str:
         """Canonical snapshot identifier: ``<type>:<date>:<time>``."""

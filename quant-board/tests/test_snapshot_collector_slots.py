@@ -114,6 +114,12 @@ class TestSnapshotSlot:
         slot = SnapshotSlot("half_hour", "2026-06-11", "15:00", ts)
         assert slot.timestamp_ms > 1_000_000_000_000
 
+    def test_invalid_snapshot_type_raises_valueerror(self):
+        """Constructing a SnapshotSlot with an unknown type must raise."""
+        ts = _make_ts("2026-06-11", "15:00")
+        with pytest.raises(ValueError, match="Unknown snapshot_type"):
+            SnapshotSlot("five_minute", "2026-06-11", "15:00", ts)
+
     def test_equality_by_value(self):
         """Two slots with same fields should be equal."""
         ts = _make_ts("2026-06-11", "15:00")
