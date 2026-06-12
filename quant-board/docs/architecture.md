@@ -79,6 +79,17 @@ CLI 命令：
 
 响应信封格式：所有 `/api/snapshot-collector/*` 接口使用统一的 `{"ok": true/false, "status": "...", "data": {...}}` 信封。这与现有 API 的混合格式不同，仅用于采集器实验路由。
 
+python-bridge 采集接口（Phase 2）：
+
+为支持后端独立采集（不依赖浏览器 WebSocket 订阅），`python-bridge` 新增以下 HTTP 接口：
+
+- `POST /api/quotes/subscriptions` — 设置后端采集订阅池，body `{"codes": ["000001", "600000"]}`，立即 fetch 行情并缓存
+- `GET /api/quotes/snapshot` — 不带 `codes` 参数时回退到订阅池缓存，返回 `{"pooled": true, "poolRefreshedAt": ...}` 标记；带 `?codes=...` 时保持 Phase 1 按需抓取行为
+
+BridgeQuoteProvider（`backend/snapshot_collector/providers.py`）已适配：
+- `set_pool(codes)` — 注册采样池到 bridge
+- `collect(use_pool=True)` — 使用池缓存抓取，含 `poolStalenessMs`（默认 30s）陈旧检测
+
 ## 数据流
 
 1. 导入阶段

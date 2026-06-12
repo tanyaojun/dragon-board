@@ -43,6 +43,60 @@ MongoDB 模式下：
 - CLI 旧 SQLite/Supabase/Parquet 命令拒绝执行；业务回测、优化、查询命令继续通过 MongoDB repository 运行。
 - MongoDB 备份、校验、R2 上传和拉回恢复命令以 [mongodb-migration-plan.md](mongodb-migration-plan.md) 的当前实施状态为准。
 
+## python-bridge 后端采集接口（Phase 2）
+
+为支持 QuantBoard 后端独立采集（不依赖浏览器 WebSocket 订阅），`python-bridge` 新增以下 HTTP 接口：
+
+### `POST /api/quotes/subscriptions`
+
+设置后端采集订阅池。接收代码列表，立即 fetch 行情并缓存到 bridge 内存。后续 `GET /api/quotes/snapshot` 不带 `codes` 参数时可回退到此缓存。
+
+请求：
+
+```json
+{"codes": ["000001", "600000", "300750"]}
+```
+
+响应：
+
+```json
+{
+  "ok": true,
+  "codes": ["000001", "300750", "600000"],
+  "count": 3,
+  "setAt": 1781170800000
+}
+```
+
+### `GET /api/quotes/snapshot`（池模式）
+
+不带 `codes` 参数时使用订阅池缓存。池为空时返回 `ok=false` 和 `"missing codes parameter and backend pool is empty"`。
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8765/api/quotes/snapshot
+```
+
+响应（池模式）：
+
+```json
+{
+  "ok": true,
+  "source": "python_bridge",
+  "serverTs": 1781170800000,
+  "subscribedCount": 3,
+  "quotes": [],
+  "depth": [],
+  "ticks": [],
+  "moneyFlow": [],
+  "quoteStats": {},
+  "l2": {},
+  "pooled": true,
+  "poolRefreshedAt": 1781170800000
+}
+```
+
+带 `?codes=...` 参数时保持 Phase 1 按需抓取行为，此时响应中不包含 `pooled` / `poolRefreshedAt` 字段。
+
 ## 实验性后端快照采集器 API
 
 以下接口属于 `backend/snapshot_collector/` 实验模块。当前默认禁用（`QUANT_BOARD_SNAPSHOT_COLLECTOR_ENABLED=false`），写目标限定为 `dragonboard_backend_shadow` 数据集，不进入 `dragonboard_live` 正式快照主库。所有响应使用统一的 `{"ok": true/false, "status": "...", "data": {...}}` 信封格式。

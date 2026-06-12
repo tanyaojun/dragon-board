@@ -1,37 +1,34 @@
-# 后端快照采集器 Phase 1 实施进度
+# 后端快照采集器 Phase 1-2 实施进度
 
-> 2026-06-12 · 分支 `quantboard-backend-snapshot-collector` · 30 文件 · +10065 行
+> 2026-06-12 · 分支 `quantboard-backend-snapshot-collector` · 32 文件 · +10800 行
 
 ## 已完成
 
-### 基础设施
+### Phase 1 — 最小闭环
 
-- [x] **Task 0** — 隔离工作区 `D:\dragon-board-worktrees\quantboard-backend-snapshot-collector`，基线测试通过
-- [x] **Task 1** — 从 `backend/main.py` 提取 `normalize_snapshot_ingest()` 到 `backend/data/snapshot_ingest_normalizer.py`，解除循环导入
-- [x] **Task 3** — 9 个 `QUANT_BOARD_SNAPSHOT_COLLECTOR_*` 环境变量（默认关闭 + shadow-only）、`SnapshotRepository` Protocol、`service_factory`
+- [x] **Task 0** — 隔离工作区 + 基线测试
+- [x] **Task 1** — 提取 `normalize_snapshot_ingest()` 到 `backend/data/snapshot_ingest_normalizer.py`
+- [x] **Task 2** — `SnapshotSlot` 冻结数据类 + 四类槽位表 + 交易日历
+- [x] **Task 3** — 9 个 `QUANT_BOARD_SNAPSHOT_COLLECTOR_*` 环境变量 + `SnapshotRepository` Protocol + `service_factory`
+- [x] **Task 4** — 质量门禁：6 项硬阻断 + 5 项软告警
+- [x] **Task 5** — `python-bridge` 新增 `GET /api/quotes/snapshot?codes=...` HTTP 端点
+- [x] **Task 6** — `build_ingest_payload()` 构建 normalizer 接受的 ingest dict
+- [x] **Task 7** — 三个 transitional Provider + provider → builder → normalizer 全链路合约测试
+- [x] **Task 8** — `SnapshotCollectorService` 完整编排
+- [x] **Task 9** — 5 个 FastAPI 路由
+- [x] **Task 10** — 4 个 CLI 命令
+- [x] **Task 11** — 更新 4 篇正式文档
+- [x] **Task 12** — 307 collector + 20 bridge + 21 MongoDB 回归测试通过
 
-### 核心模块
+### Phase 2 — Bridge 订阅池和行情稳定性增强
 
-- [x] **Task 2** — `SnapshotSlot` 冻结数据类 + 四类槽位表（quarter_hour/half_hour/hourly/daily，与前段 `schedule.ts` 对齐）+ 交易日历和 grace window 逻辑
-- [x] **Task 4** — 质量门禁：6 项硬阻断（空股票行、缺失标识、热榜全败、无效代码、时间戳越界、非法 live dataset）+ 5 项软告警（行情缺失、depth 缺失、L1 资金流、题材缺失、延迟采集）
-- [x] **Task 5** — `python-bridge` 新增 `GET /api/quotes/snapshot?codes=...` 只读 HTTP 端点，不依赖浏览器 WebSocket 订阅
-- [x] **Task 6** — `build_ingest_payload()` 将 `MarketDataContext` 转为 normalizer 接受的 ingest dict，覆盖 RankTrend 必需的稳定字段
-- [x] **Task 7** — 三个 transitional Provider（`ProxyHotlistProvider`、`BridgeQuoteProvider`、`ThemeMappingProvider`）+ provider → builder → normalizer 全链路合约测试
-
-### 服务与接口
-
-- [x] **Task 8** — `SnapshotCollectorService` 完整编排（run_once / backfill_slots / get_status / get_runs / audit），含 dry-run、dedup、质量阻断全流程
-- [x] **Task 9** — 5 个 FastAPI 路由：`GET /api/snapshot-collector/status`、`POST run-once`、`POST backfill-slots`、`GET runs`、`POST audit`
-- [x] **Task 10** — 4 个 CLI 命令：`snapshot-collector-status`、`snapshot-collector-run-once`、`snapshot-collector-backfill`、`snapshot-collector-audit`
-
-### 文档
-
-- [x] **Task 11** — 更新 `architecture.md`、`api-cli.md`、`mongodb-migration-plan.md`、`AI_COLLABORATION.md`
-
-### 验证
-
-- [x] **Task 12** — 307 个 collector 测试通过、20 个 bridge 测试通过、21 个 MongoDB 回归测试通过
-- [ ] 手动 dry-run：跳过（非交易日 2026-06-12 + 基础设施未运行，测试已通过 mocked provider 覆盖）
+- [x] **Bridge 后端订阅池** — `POST /api/quotes/subscriptions` 端点，后端可设置持久采样代码池
+- [x] **池缓存刷新** — 订阅池设置时立即 fetch 行情存入缓存，`GET /api/quotes/snapshot` 无 `codes` 参数时回退到池缓存
+- [x] **BridgeQuoteProvider 增强** — `set_pool()` 方法 + `collect(use_pool=True)` 模式，使用池缓存而非每次传 codes
+- [x] **行情陈旧检测** — `poolStalenessMs` 阈值（默认 30s），超时写入 `SourceHealth.error` 中 `quote_stale` 标记
+- [x] **测试** — 8 个新 bridge 池测试 + 21 个新 provider 池测试，全量 28 bridge / 59 provider 通过
+- [x] bridge 原 WebSocket 行为完全不变
+- [x] `GET /api/quotes/snapshot?codes=...` 显式 codes 模式依然可用
 
 ### 安全基线
 
@@ -46,12 +43,7 @@
 
 ## 未完成（后续 Phase）
 
-### Phase 2 — Bridge 订阅池和行情稳定性增强
-
-- QuantBoard 后端维护采样股票池，替代每次 `?codes=` 临时传入
-- bridge 行情缺失时结构化错误，不写空快照
-- bridge 原 WebSocket 行为保持不变
-- 新测试文件：`tests/test_snapshot_collector_bridge_provider.py`
+### Phase 2 — Bridge 订阅池和行情稳定性增强 ✅ （已完成）
 
 ### Phase 3 — 四类快照自动 scheduler
 
@@ -125,6 +117,7 @@ quant-board/tests/test_snapshot_collector_service.py
 quant-board/tests/test_snapshot_collector_mongo_integration.py
 quant-board/tests/test_snapshot_collector_api.py
 quant-board/tests/test_snapshot_collector_cli.py
+quant-board/tests/test_snapshot_collector_bridge_provider.py
 python-bridge/test_quote_snapshot_api.py
 ```
 
