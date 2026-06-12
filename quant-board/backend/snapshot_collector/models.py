@@ -40,3 +40,20 @@ class SnapshotSlot:
     def snapshot_id(self) -> str:
         """Canonical snapshot identifier: ``<type>:<date>:<time>``."""
         return f"{self.snapshot_type}:{self.trading_date}:{self.slot_time}"
+
+
+@dataclass(frozen=True)
+class QualityResult:
+    """Structured quality gate outcome.
+
+    *ok* is ``True`` when no hard blockers were found.  Warnings do NOT
+    flip *ok* to ``False`` — they are informational only.
+
+    *source_counts* maps ``"ok"`` and ``"failed"`` to integer tallies
+    derived from the ``source_health`` list.
+    """
+
+    ok: bool
+    blocking_issues: list[str]
+    warnings: list[str]
+    source_counts: dict[str, int]
