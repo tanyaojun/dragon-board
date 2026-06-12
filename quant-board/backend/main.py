@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from backend.api.fusion_strategy_projection_routes import router as fusion_strategy_projection_router
 from backend.api.hotlist_routes import router as hotlist_router
 from backend.api.journal_routes import router as journal_router
+from backend.api.snapshot_collector_routes import router as snapshot_collector_router
 from backend.data.auto_sync import auto_sync_runner, run_outbox_auto_sync_once
 from backend.data.archive.auto_archive import archive_auto_runner, run_archive_auto_once
 from backend.data.archive.object_store import get_object_backup_store
@@ -71,6 +72,7 @@ app.add_middleware(
 app.include_router(journal_router)
 app.include_router(hotlist_router)
 app.include_router(fusion_strategy_projection_router)
+app.include_router(snapshot_collector_router)
 
 @app.on_event("startup")
 def on_startup() -> None:
