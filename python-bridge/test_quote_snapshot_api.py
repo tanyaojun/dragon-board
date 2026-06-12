@@ -295,5 +295,164 @@ class QuoteSnapshotApiTest(unittest.TestCase):
         self.assertIn("elapsedMs", stats)
 
 
+    # ── Phase 2: backend subscription pool ──────────────────────────────
+
+    def test_set_subscriptions_pool_returns_ok(self):
+        """POST /api/quotes/subscriptions sets pool and returns ok=true with codes."""
+        response = self.client.post(
+            "/api/quotes/subscriptions",
+            json={"codes": ["000001", "600000", "300001"]},
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["count"], 3)
+        self.assertEqual(payload["codes"], ["000001", "600000", "300001"])
+        self.assertGreater(payload["setAt"], 0)
+
+    def test_set_subscriptions_pool_normalizes_codes(self):
+        """POST /api/quotes/subscriptions normalizes malformed codes."""
+        response = self.client.post(
+            "/api/quotes/subscriptions",
+            json={"codes": ["000001.SZ", "sh600000", "", "  "]},
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["count"], 2)
+        self.assertEqual(payload["codes"], ["000001", "600000"])
+
+    def test_set_subscriptions_pool_empty_clears_pool(self):
+        """POST /api/quotes/subscriptions with empty codes clears the pool."""
+        # First set a pool
+        self.client.post(
+            "/api/quotes/subscriptions",
+            json={"codes": ["000001"]},
+        )
+        # Then clear it
+        response = self.client.post(
+            "/api/quotes/subscriptions",
+            json={"codes": []},
+        )
+        payload = response.json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["count"], 0)
+        self.assertEqual(payload["codes"], [])
+
+    def test_snapshot_uses_pool_when_no_codes_param(self):
+        """GET /api/quotes/snapshot without codes param returns pooled data."""
+
+        class FakeQuoteClient:
+            def quotes(self, symbol):
+                return [
+                    {
+                        "code": code,
+                        "price": 10.0,
+                        "last_close": 9.5,
+                        "amount": 1000000,
+                        "volume": 100000,
+                    }
+                    for code in symbol
+                ]
+
+        self.bridge.quote_client = FakeQuoteClient()
+        self.bridge.tdx_connected = True
+
+        # Set pool first
+        self.client.post(
+            "/api/quotes/subscriptions",
+            json={"codes": ["000001", "600000"]},
+        )
+
+        # Now request snapshot without codes param
+        response = self.client.get("/api/quotes/snapshot")
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["subscribedCount"], 2)
+        self.assertGreater(len(payload["quotes"]), 0)
+        # Should have pooled metadata
+        self.assertTrue(payload.get("pooled"), "Expected pooled=True")
+        self.assertGreater(payload.get("poolRefreshedAt", 0), 0)
+
+    def test_snapshot_without_codes_and_empty_pool_returns_error(self):
+        """GET /api/quotes/snapshot without codes and empty pool returns ok=false."""
+        # Ensure pool is empty (default state)
+        response = self.client.get("/api/quotes/snapshot")
+        payload = response.json()
+        self.assertFalse(payload["ok"])
+        self.assertIn("pool is empty", payload.get("error", ""))
+
+    def test_pool_codes_survive_multiple_snapshot_requests(self):
+        """Pool codes persist across multiple snapshot requests."""
+
+        class FakeQuoteClient:
+            def quotes(self, symbol):
+                return [
+                    {
+                        "code": code,
+                        "price": 10.0 + len(symbol),
+                        "last_close": 9.5,
+                        "amount": 1000000,
+                        "volume": 100000,
+                    }
+                    for code in symbol
+                ]
+
+        self.bridge.quote_client = FakeQuoteClient()
+        self.bridge.tdx_connected = True
+
+        # Set pool
+        self.client.post(
+            "/api/quotes/subscriptions",
+            json={"codes": ["000001", "600000"]},
+        )
+
+        # First snapshot
+        r1 = self.client.get("/api/quotes/snapshot")
+        p1 = r1.json()
+        self.assertTrue(p1["ok"])
+        self.assertEqual(p1["subscribedCount"], 2)
+
+        # Second snapshot — pool should still be active
+        r2 = self.client.get("/api/quotes/snapshot")
+        p2 = r2.json()
+        self.assertTrue(p2["ok"])
+        self.assertEqual(p2["subscribedCount"], 2)
+
+    def test_snapshot_with_explicit_codes_ignores_pool(self):
+        """When codes param is provided, pool is not used."""
+        # Set pool first
+        self.client.post(
+            "/api/quotes/subscriptions",
+            json={"codes": ["000001", "600000"]},
+        )
+
+        # Request with explicit codes parameter
+        response = self.client.get("/api/quotes/snapshot?codes=300001")
+        payload = response.json()
+        # If this returns ok=false it's because there's no quote_client,
+        # but the key point is that the subscribedCount should be 1 (from
+        # the explicit codes), not 2 (from the pool).
+        self.assertEqual(
+            payload["subscribedCount"],
+            1,
+            f"Expected subscribedCount=1 (explicit codes), got {payload['subscribedCount']}",
+        )
+        # pooled should NOT appear when explicit codes are provided
+        self.assertNotIn("pooled", payload)
+
+    def test_subscription_endpoint_missing_codes_key(self):
+        """POST /api/quotes/subscriptions with missing codes key treats as empty."""
+        response = self.client.post(
+            "/api/quotes/subscriptions",
+            json={"other": "data"},
+        )
+        payload = response.json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["count"], 0)
+        self.assertEqual(payload["codes"], [])
+
+
 if __name__ == "__main__":
     unittest.main()

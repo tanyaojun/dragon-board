@@ -176,22 +176,70 @@ def _extract_items(body: Any) -> list[Any]:
 class BridgeQuoteProvider:
     """Fetch real-time quote snapshot from the python-bridge.
 
-    Calls ``GET /api/quotes/snapshot?codes=...`` and returns a dict
-    containing ``quotes``, ``depth``, ``money_flow``, and ``market_meta``.
+    Calls ``GET /api/quotes/snapshot?codes=...`` (direct mode) or
+    ``GET /api/quotes/snapshot`` (pool mode, after ``set_pool()`` was
+    called) and returns a dict containing ``quotes``, ``depth``,
+    ``money_flow``, and ``market_meta``.
+
+    Phase 2 adds a backend subscription pool so the collector can maintain
+    a persistent set of stocks on the bridge without passing codes on every
+    request.
     """
 
-    def __init__(self, base_url: str = _DEFAULT_BRIDGE_BASE_URL) -> None:
+    # SourceHealth error attribute key for staleness warnings.
+    STALE_KEY = "quote_stale"
+
+    def __init__(
+        self,
+        base_url: str = _DEFAULT_BRIDGE_BASE_URL,
+        *,
+        pool_staleness_ms: int = 30000,
+    ) -> None:
         self._base_url = base_url.rstrip("/")
+        self._pool_staleness_ms = pool_staleness_ms
 
     # ── public API ──────────────────────────────────────────────────────
 
-    def collect(
+    def set_pool(
         self,
         codes: list[str],
         *,
         timeout_ms: int = _DEFAULT_TIMEOUT_MS,
+    ) -> dict[str, Any]:
+        """Register *codes* as the backend subscription pool on the bridge.
+
+        Calls ``POST /api/quotes/subscriptions``.  Returns a dict with
+        ``ok``, ``count``, and any error information.
+        """
+        try:
+            url = f"{self._base_url}/api/quotes/subscriptions"
+            payload = json.dumps({"codes": codes}).encode("utf-8")
+            timeout_s = timeout_ms / 1000.0
+            req = urllib.request.Request(
+                url,
+                data=payload,
+                method="POST",
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+                body = json.loads(resp.read().decode("utf-8"))
+            return {
+                "ok": body.get("ok", False),
+                "count": body.get("count", 0),
+                "codes": body.get("codes", []),
+                "setAt": body.get("setAt", 0),
+            }
+        except Exception as exc:
+            return {"ok": False, "count": 0, "error": str(exc)}
+
+    def collect(
+        self,
+        codes: list[str] | None = None,
+        *,
+        timeout_ms: int = _DEFAULT_TIMEOUT_MS,
+        use_pool: bool = False,
     ) -> tuple[dict[str, Any], SourceHealth]:
-        """Fetch bridge snapshot for *codes*.
+        """Fetch bridge snapshot for *codes* (or the pool when *use_pool*).
 
         Returns ``(data, health)`` where *data* is::
 
@@ -202,10 +250,18 @@ class BridgeQuoteProvider:
                 "market_meta": {...},
             }
 
+        When *use_pool* is True the *codes* parameter is ignored and the
+        request is sent without a ``codes`` query parameter, letting the
+        bridge return cached pool data.
+
+        When the bridge response includes ``"pooled": true`` and the
+        ``poolRefreshedAt`` timestamp is older than *pool_staleness_ms*,
+        a ``quote_stale`` warning key is added to ``SourceHealth.error``.
+
         Never raises — errors are captured in the returned ``SourceHealth``.
         """
         start = time.monotonic()
-        if not codes:
+        if not use_pool and not codes:
             latency_ms = int((time.monotonic() - start) * 1000)
             health = SourceHealth(
                 source="quote_bridge",
@@ -217,11 +273,18 @@ class BridgeQuoteProvider:
             return {"quotes": [], "depth": [], "money_flow": [], "market_meta": {}}, health
 
         try:
-            codes_param = ",".join(str(c).strip() for c in codes if str(c).strip())
-            if not codes_param:
-                raise ValueError("no valid codes after filtering")
+            if use_pool:
+                # Pool mode: no codes param, bridge returns cached pool data
+                url = f"{self._base_url}/api/quotes/snapshot"
+            else:
+                codes_param = ",".join(str(c).strip() for c in codes if str(c).strip())
+                if not codes_param:
+                    raise ValueError("no valid codes after filtering")
+                url = (
+                    f"{self._base_url}/api/quotes/snapshot"
+                    f"?codes={urllib.request.quote(codes_param, safe='')}"
+                )
 
-            url = f"{self._base_url}/api/quotes/snapshot?codes={urllib.request.quote(codes_param, safe='')}"
             timeout_s = timeout_ms / 1000.0
             body = _http_get_json(url, timeout_s)
 
@@ -247,11 +310,25 @@ class BridgeQuoteProvider:
 
             latency_ms = int((time.monotonic() - start) * 1000)
             row_count = max(len(quotes), len(depth), len(money_flow))
+
+            # Phase 2: staleness detection for pool-based responses
+            error_msg = ""
+            if use_pool and body.get("pooled") is True:
+                pool_refreshed_at = body.get("poolRefreshedAt", 0)
+                now = int(time.time() * 1000)
+                if pool_refreshed_at and (now - pool_refreshed_at) > self._pool_staleness_ms:
+                    age_ms = now - pool_refreshed_at
+                    error_msg = (
+                        f"{self.STALE_KEY}: pool data {age_ms}ms old "
+                        f"(refreshedAt={pool_refreshed_at}, staleThresholdMs={self._pool_staleness_ms})"
+                    )
+
             health = SourceHealth(
                 source="quote_bridge",
                 ok=True,
                 latency_ms=latency_ms,
                 row_count=row_count,
+                error=error_msg,
                 captured_at=_iso_now(),
             )
             data = {
