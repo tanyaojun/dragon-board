@@ -43,6 +43,297 @@ MongoDB 模式下：
 - CLI 旧 SQLite/Supabase/Parquet 命令拒绝执行；业务回测、优化、查询命令继续通过 MongoDB repository 运行。
 - MongoDB 备份、校验、R2 上传和拉回恢复命令以 [mongodb-migration-plan.md](mongodb-migration-plan.md) 的当前实施状态为准。
 
+## 实验性后端快照采集器 API
+
+以下接口属于 `backend/snapshot_collector/` 实验模块。当前默认禁用（`QUANT_BOARD_SNAPSHOT_COLLECTOR_ENABLED=false`），写目标限定为 `dragonboard_backend_shadow` 数据集，不进入 `dragonboard_live` 正式快照主库。所有响应使用统一的 `{"ok": true/false, "status": "...", "data": {...}}` 信封格式。
+
+### `GET /api/snapshot-collector/status`
+
+返回采集器当前运行状态，包括最近一次运行、统计摘要和数据源健康信息。
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/api/snapshot-collector/status
+```
+
+响应示例：
+
+```json
+{
+  "ok": true,
+  "status": "completed",
+  "data": {
+    "lastRunId": "sc-a1b2c3d4e5f6",
+    "lastRunAt": "2026-06-12T10:30:00Z",
+    "lastStatus": "completed",
+    "totalRuns": 42,
+    "completedRuns": 38,
+    "dedupedRuns": 2,
+    "blockedRuns": 2,
+    "datasetIds": ["dragonboard_backend_shadow"]
+  }
+}
+```
+
+### `POST /api/snapshot-collector/run-once`
+
+执行单次快照采集运行。采集流水线依次执行：创建 SnapshotSlot -> 判重 -> 采集数据源 -> 组装 payload -> 规范化 -> 质量门禁 -> 落库。
+
+```json
+{
+  "datasetId": "dragonboard_backend_shadow",
+  "snapshotType": "half_hour",
+  "tradingDate": "2026-06-12",
+  "slotTime": "10:30",
+  "dryRun": false,
+  "force": false
+}
+```
+
+请求字段：
+
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `datasetId` | 是 | 目标数据集 ID，默认应为 `dragonboard_backend_shadow` |
+| `snapshotType` | 是 | `quarter_hour` / `half_hour` / `hourly` / `daily` |
+| `tradingDate` | 是 | `YYYY-MM-DD` 格式交易日 |
+| `slotTime` | 是 | `HH:MM` 格式槽位时间 |
+| `dryRun` | 否 | 默认 `false`；为 `true` 时走完整流水线但不写库 |
+| `force` | 否 | 默认 `false`；为 `true` 时跳过判重强制重写 |
+
+成功响应（`status=completed`）：
+
+```json
+{
+  "ok": true,
+  "status": "completed",
+  "data": {
+    "runId": "sc-a1b2c3d4e5f6",
+    "snapshotId": "half_hour:2026-06-12:10:30",
+    "deduped": false,
+    "dryRun": false,
+    "message": "done",
+    "details": {
+      "stockRowCount": 224,
+      "frameCount": 1,
+      "sectorRowCount": 12,
+      "idempotencyKey": "dragonboard_backend_shadow:half_hour:2026-06-12:10:30:..."
+    }
+  },
+  "quality": {
+    "ok": true,
+    "blockingIssues": [],
+    "warnings": [],
+    "sourceCounts": {"ok": 2, "failed": 0}
+  }
+}
+```
+
+去重响应（`status=deduped`，`ok=true`）：
+
+```json
+{
+  "ok": true,
+  "status": "deduped",
+  "data": {
+    "runId": "sc-b2c3d4e5f6a1",
+    "snapshotId": "half_hour:2026-06-12:10:30",
+    "deduped": true,
+    "dryRun": false,
+    "message": "Snapshot already exists"
+  }
+}
+```
+
+质量门禁阻止（`status=blocked`，`ok=false`）：
+
+```json
+{
+  "ok": false,
+  "status": "blocked",
+  "data": {
+    "runId": "sc-c3d4e5f6a1b2",
+    "snapshotId": "half_hour:2026-06-12:15:05",
+    "deduped": false,
+    "dryRun": false,
+    "message": "Quality gate blocked: ['no_stock_rows']"
+  },
+  "quality": {
+    "ok": false,
+    "blockingIssues": ["no_stock_rows"],
+    "warnings": [],
+    "sourceCounts": {"ok": 2, "failed": 0}
+  }
+}
+```
+
+dry-run 响应（`status=dry_run`，`ok=true`）：
+
+```json
+{
+  "ok": true,
+  "status": "dry_run",
+  "data": {
+    "runId": "sc-d4e5f6a1b2c3",
+    "snapshotId": "half_hour:2026-06-12:10:30",
+    "deduped": false,
+    "dryRun": true,
+    "message": "Dry-run completed successfully"
+  },
+  "quality": {
+    "ok": true,
+    "blockingIssues": [],
+    "warnings": [],
+    "sourceCounts": {"ok": 2, "failed": 0}
+  }
+}
+```
+
+### `POST /api/snapshot-collector/backfill-slots`
+
+按日期区间批量执行采集。自动为区间内每个交易日生成所有符合条件的槽位时间，逐个调用 `run_once`。
+
+```json
+{
+  "datasetId": "dragonboard_backend_shadow",
+  "snapshotType": "half_hour",
+  "startDate": "2026-06-10",
+  "endDate": "2026-06-12",
+  "dryRun": true,
+  "force": false
+}
+```
+
+请求字段：
+
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `datasetId` | 是 | 目标数据集 ID |
+| `snapshotType` | 是 | `quarter_hour` / `half_hour` / `hourly` / `daily` |
+| `endDate` | 是 | `YYYY-MM-DD` 格式截止交易日 |
+| `startDate` | 否 | 默认等于 `endDate`；区间起止含两端 |
+| `dryRun` | 否 | 默认 `true`（backfill 默认不写库） |
+| `force` | 否 | 默认 `false`；为 `true` 时跳过判重 |
+
+响应示例：
+
+```json
+{
+  "ok": true,
+  "status": "completed",
+  "data": {
+    "total": 32,
+    "succeeded": 28,
+    "failed": 0,
+    "blocked": 2,
+    "deduped": 2,
+    "details": [
+      {"snapshotId": "half_hour:2026-06-10:09:30", "status": "completed", "message": "done"},
+      {"snapshotId": "half_hour:2026-06-10:10:00", "status": "blocked", "message": "Quality gate blocked: ['no_stock_rows']"}
+    ]
+  }
+}
+```
+
+`ok` 为 `false` 当且仅当存在 `failed` 或 `blocked` 时。
+
+### `GET /api/snapshot-collector/runs`
+
+列出历史采集运行记录，支持按数据集、状态和快照类型过滤。
+
+```powershell
+Invoke-RestMethod 'http://127.0.0.1:8000/api/snapshot-collector/runs?status=blocked&limit=20'
+```
+
+查询参数：
+
+| 参数 | 默认 | 说明 |
+| --- | --- | --- |
+| `datasetId` | 空 | 按数据集 ID 过滤 |
+| `status` | 空 | 按状态过滤：`completed` / `dry_run` / `deduped` / `blocked` |
+| `snapshotType` | 空 | 按快照类型过滤 |
+| `limit` | `50` | 每页条数 |
+| `offset` | `0` | 起始偏移 |
+
+响应示例：
+
+```json
+{
+  "ok": true,
+  "status": "completed",
+  "data": {
+    "items": [
+      {
+        "runId": "sc-a1b2c3d4e5f6",
+        "datasetId": "dragonboard_backend_shadow",
+        "snapshotId": "half_hour:2026-06-12:10:30",
+        "snapshotType": "half_hour",
+        "tradingDate": "2026-06-12",
+        "slotTime": "10:30",
+        "status": "completed",
+        "deduped": false,
+        "dryRun": false,
+        "createdAt": "2026-06-12T10:30:05Z"
+      }
+    ],
+    "total": 42,
+    "limit": 50,
+    "offset": 0
+  }
+}
+```
+
+### `POST /api/snapshot-collector/audit`
+
+审计指定数据集和快照类型的覆盖率。检查每个交易日每个槽位的采集状态、行数和质量。
+
+```json
+{
+  "datasetId": "dragonboard_backend_shadow",
+  "snapshotType": "half_hour",
+  "tradingDate": "2026-06-12"
+}
+```
+
+请求字段：
+
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `datasetId` | 是 | 目标数据集 ID |
+| `snapshotType` | 是 | `quarter_hour` / `half_hour` / `hourly` / `daily` |
+| `tradingDate` | 否 | 可选单日过滤；不传时审计数据集全范围 |
+
+响应示例：
+
+```json
+{
+  "ok": true,
+  "status": "completed",
+  "data": {
+    "datasetId": "dragonboard_backend_shadow",
+    "snapshotType": "half_hour",
+    "totalSlots": 16,
+    "coveredSlots": 14,
+    "missingSlots": 2,
+    "missingSlotIds": [
+      "half_hour:2026-06-12:11:00",
+      "half_hour:2026-06-12:11:30"
+    ],
+    "qualitySummary": {
+      "blockedRuns": 0,
+      "warningRuns": 3
+    },
+    "slotDetails": [
+      {
+        "snapshotId": "half_hour:2026-06-12:10:00",
+        "status": "covered",
+        "stockRowCount": 224,
+        "lastRunStatus": "completed"
+      }
+    ]
+  }
+}
+```
+
 ## 热榜情绪 API、回填和盘后调度
 
 ### `POST /api/hotlist-sentiment/ingest`
@@ -1685,6 +1976,149 @@ theme_coverage: 0.82
 sample_count: 120
 total_return: 0.123
 max_drawdown: -0.08
+```
+
+### 实验性后端快照采集器 CLI
+
+以下命令属于 `backend/snapshot_collector/` 实验模块。当前默认禁用，写目标限定为 `dragonboard_backend_shadow` 数据集。命令直接输出 JSON，不做富文本格式化。
+
+### `snapshot-collector-status`
+
+输出采集器当前运行状态 JSON。
+
+```powershell
+.\.venv\Scripts\python.exe -m backend.cli snapshot-collector-status
+```
+
+输出示例：
+
+```json
+{
+  "lastRunId": "sc-a1b2c3d4e5f6",
+  "lastRunAt": "2026-06-12T10:30:00Z",
+  "lastStatus": "completed",
+  "totalRuns": 42,
+  "completedRuns": 38,
+  "dedupedRuns": 2,
+  "blockedRuns": 2
+}
+```
+
+### `snapshot-collector-run-once`
+
+执行单次快照采集并输出 JSON 结果。
+
+```powershell
+.\.venv\Scripts\python.exe -m backend.cli snapshot-collector-run-once `
+  --dataset-id dragonboard_backend_shadow `
+  --snapshot-type half_hour `
+  --trading-date 2026-06-12 `
+  --slot-time 10:30 `
+  --dry-run
+```
+
+参数：
+
+| 参数 | 必填 | 说明 |
+| --- | --- | --- |
+| `--dataset-id` | 是 | 目标数据集 ID |
+| `--snapshot-type` | 是 | `quarter_hour` / `half_hour` / `hourly` / `daily` |
+| `--trading-date` | 是 | `YYYY-MM-DD` 格式交易日 |
+| `--slot-time` | 是 | `HH:MM` 格式槽位时间 |
+| `--dry-run` | 否 | 存在即为 true；走完整流水线但不写库 |
+| `--force` | 否 | 存在即为 true；跳过判重强制重写 |
+
+输出示例（成功）：
+
+```json
+{
+  "runId": "sc-a1b2c3d4e5f6",
+  "snapshotId": "half_hour:2026-06-12:10:30",
+  "status": "completed",
+  "deduped": false,
+  "dryRun": false,
+  "message": "done",
+  "details": {
+    "stockRowCount": 224,
+    "frameCount": 1,
+    "sectorRowCount": 12
+  }
+}
+```
+
+### `snapshot-collector-backfill`
+
+按日期区间批量采集，输出汇总 JSON。
+
+```powershell
+.\.venv\Scripts\python.exe -m backend.cli snapshot-collector-backfill `
+  --dataset-id dragonboard_backend_shadow `
+  --snapshot-type half_hour `
+  --start-date 2026-06-10 `
+  --end-date 2026-06-12 `
+  --dry-run
+```
+
+参数：
+
+| 参数 | 必填 | 说明 |
+| --- | --- | --- |
+| `--dataset-id` | 是 | 目标数据集 ID |
+| `--snapshot-type` | 是 | `quarter_hour` / `half_hour` / `hourly` / `daily` |
+| `--end-date` | 是 | `YYYY-MM-DD` 格式截止交易日 |
+| `--start-date` | 否 | 默认等于 `end_date`；区间起止含两端 |
+| `--dry-run` | 否 | 存在即为 true（backfill 默认 dry-run） |
+| `--force` | 否 | 存在即为 true；跳过判重 |
+
+输出示例：
+
+```json
+{
+  "total": 32,
+  "succeeded": 28,
+  "failed": 0,
+  "blocked": 2,
+  "deduped": 2,
+  "details": [
+    {"snapshotId": "half_hour:2026-06-10:09:30", "status": "completed", "message": "done"},
+    {"snapshotId": "half_hour:2026-06-10:10:00", "status": "blocked", "message": "Quality gate blocked: ['no_stock_rows']"}
+  ]
+}
+```
+
+### `snapshot-collector-audit`
+
+审计覆盖率并输出结构化 JSON。
+
+```powershell
+.\.venv\Scripts\python.exe -m backend.cli snapshot-collector-audit `
+  --dataset-id dragonboard_backend_shadow `
+  --snapshot-type half_hour `
+  --trading-date 2026-06-12
+```
+
+参数：
+
+| 参数 | 必填 | 说明 |
+| --- | --- | --- |
+| `--dataset-id` | 是 | 目标数据集 ID |
+| `--snapshot-type` | 是 | `quarter_hour` / `half_hour` / `hourly` / `daily` |
+| `--trading-date` | 否 | 可选单日过滤；不传时审计数据集全范围 |
+
+输出示例：
+
+```json
+{
+  "datasetId": "dragonboard_backend_shadow",
+  "snapshotType": "half_hour",
+  "totalSlots": 16,
+  "coveredSlots": 14,
+  "missingSlots": 2,
+  "missingSlotIds": [
+    "half_hour:2026-06-12:11:00",
+    "half_hour:2026-06-12:11:30"
+  ]
+}
 ```
 
 ### `validate-golden`

@@ -43,6 +43,57 @@
 - 已执行污染清理：`/api/datasets` 当前仅返回 `dragonboard_live`；`inspect-mongodb` 显示正式快照仍保留 519 records/frames、109936 stock rows、8353 sector rows。
 - 已执行空股票快照补齐：`dragonboard_live` 当前仍为 519 records/frames，`snapshot_stock_rows` 从 109936 增至 110940，`snapshot_sector_rows` 仍为 8353。
 
+## 实验性后端快照采集器（shadow 模式）
+
+`backend/snapshot_collector/` 是一个实验性的后端快照采集器，当前处于 shadow-only 阶段。该模块从 proxy-server 和 python-bridge 实时拉取热榜与行情数据，在 QuantBoard 后端独立完成快照组装、规范化和质量门禁，不依赖 Dragon Board 前端运行时。
+
+### `dragonboard_backend_shadow` 数据集
+
+采集器写入一个独立的 shadow 数据集，不与 `dragonboard_live` 正式主库混写：
+
+- 数据集 ID：`dragonboard_backend_shadow`（由 `QUANT_BOARD_SNAPSHOT_COLLECTOR_DATASET_ID` 控制）。
+- 用途：平行对照和验收。该数据集只保存后端采集器的快照事实，用于与 Dragon Board 前端提交的 `dragonboard_live` 快照做覆盖率对比、质量审计和一致性校验。
+- 隔离规则：`QUANT_BOARD_SNAPSHOT_COLLECTOR_ALLOW_LIVE_DATASET` 默认 `false`，禁止采集器写入 `dragonboard_live` 或其他正式数据集。
+- 该数据集不参与正式回测、优化或 RankTrend 研究作为默认数据源；仅用于 shadow 验收。
+
+### 运维集合
+
+采集器引入两个新的 MongoDB 运维集合：
+
+`snapshot_collector_runs`
+
+- 记录每次采集运行的完整审计轨迹。每条文档对应一次 `run_once` 调用。
+- 字段：`runId`、`datasetId`、`snapshotId`、`snapshotType`、`tradingDate`、`slotTime`、`status`（`completed` / `dry_run` / `deduped` / `blocked`）、`deduped`、`dryRun`、`blockingIssues`、`warnings`、`createdAt`。
+- 索引：`{ runId: 1 }` unique、`{ datasetId: 1, createdAt: -1 }`、`{ status: 1, createdAt: -1 }`。
+
+`snapshot_collector_state`
+
+- 保存采集器的轻量运行状态，供状态查询和健康检查使用。
+- 字段：`lastRunId`、`lastRunAt`、`lastStatus`、`totalRuns`、`completedRuns`、`dedupedRuns`、`blockedRuns`。
+- 该集合只保留最新一条状态文档，不累积历史。
+
+### 质量门禁
+
+采集器在写入快照事实前执行质量门禁（`quality_gate.evaluate_quality()`）：
+
+- 检查数据源健康（proxy-server 和 python-bridge 均可达）。
+- 检查股票行数量（至少 1 条非空股票行）。
+- 检查时间窗口（当前时间在交易时段或收盘后 grace 窗口内）。
+- 质量门禁失败时运行状态标记为 `blocked`，写入 `snapshot_collector_runs` 保留审计轨迹，不写入快照事实集合。
+- 质量门禁只做阻塞判断，不修改上游数据源内容。
+
+### 审计要求（shadow 验收）
+
+shadow 采集器必须通过以下验收后才能讨论 live cutover：
+
+- 覆盖率审计：通过 `POST /api/snapshot-collector/audit` 或 CLI `snapshot-collector-audit` 对比 shadow 数据集与 live 数据集的槽位覆盖率和股票行数。
+- 质量门禁通过率：`blocked` 运行占比应可解释（如非交易时段、数据源短暂不可用），不得存在系统性静默丢弃。
+- 数据一致性：shadow 快照的关键字段（价格、排名、热榜组成）应与同槽位 Dragon Board 前端快照可比。
+- 审计轨迹完整：`snapshot_collector_runs` 中每次运行都有明确状态和阻塞原因，不得存在状态缺失的运行记录。
+- 验收命令：`verify-mongodb-migration --dataset-id dragonboard_backend_shadow --snapshot-type half_hour` 应通过。
+
+shadow 验收不通过时，不得提升采集器为正式快照来源，也不得将 `dragonboard_backend_shadow` 数据集用于生产回测或策略决策。
+
 ## 非目标
 
 - 不在交易时间修改快照写入链路。

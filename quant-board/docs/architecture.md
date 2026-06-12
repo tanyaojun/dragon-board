@@ -19,18 +19,65 @@ V12 目标新增一条与 RankTrend 并列的 ThemeTrend 研究链：
 ```text
 backend/
   data/                 # 数据库、快照导入、质量门禁、数据查询
+  snapshot_collector/   # [实验] 后端快照采集器（shadow 模式），含 models/slots/providers/builder/quality_gate/state/repository_port/service/service_factory
   ranktrend/            # Python 版 rankTrend 分析链
   core/
     strategy/           # 策略接口和 rankTrend 候选策略
     engine/             # 回测事件循环、撮合、绩效统计
     portfolio/          # 现金、持仓、交易成本、风控
   optimization/         # 独立参数优化模块：搜索方法、目标函数、任务状态、实验记录
-  api/                  # FastAPI 路由
-  cli/                  # 命令行入口
+  api/                  # FastAPI 路由（含 `/api/snapshot-collector/*` 实验路由）
+  cli/                  # 命令行入口（含 `snapshot-collector-*` 实验命令）
   reports/              # 报告导出辅助
 ```
 
 当前仓库已有 `backend/main.py`、`backend/settings.py`、`backend/data/database.py`、`backend/data/models.py`，后续实现应在这些骨架上增量补齐。
+
+### 实验性后端快照采集器（shadow 模式）
+
+`backend/snapshot_collector/` 是一个实验性的后端快照采集器，当前处于 shadow-only 阶段。该模块从 proxy-server 和 python-bridge 实时拉取热榜与行情数据，在 QuantBoard 后端独立完成快照组装、规范化和质量门禁，不依赖 Dragon Board 前端运行时。
+
+模块结构：
+
+```text
+backend/snapshot_collector/
+  models.py           # SnapshotSlot, MarketDataContext, QualityResult, CollectorRunRequest/Result, SourceHealth
+  slots.py            # SLOT_TIMES, generate_slots(), is_slot_eligible()
+  providers.py        # ProxyHotlistProvider, BridgeQuoteProvider, ThemeMappingProvider
+  builder.py          # build_ingest_payload()
+  quality_gate.py     # evaluate_quality()
+  state.py            # record_run(), get_status()
+  repository_port.py  # SnapshotRepository Protocol
+  service.py          # SnapshotCollectorService (run_once, backfill_slots, audit 等)
+  service_factory.py  # create_snapshot_collector_repository()
+```
+
+当前状态和边界：
+
+- 默认禁用：通过 `QUANT_BOARD_SNAPSHOT_COLLECTOR_ENABLED=false` 关闭所有采集行为。
+- 写目标独立：只写入 `dragonboard_backend_shadow` 数据集（由 `QUANT_BOARD_SNAPSHOT_COLLECTOR_DATASET_ID` 控制），不得写入 `dragonboard_live` 正式主库。
+- 禁止写入 live 数据集：`QUANT_BOARD_SNAPSHOT_COLLECTOR_ALLOW_LIVE_DATASET` 默认 `false`，防止实验采集污染正式快照事实。
+- Shadow-only：该采集器产出仅用于平行对照和验收，不得作为生产快照来源或 Dragon Board 正式读源。
+- 质量门禁在前：quality_gate 在写入前检查数据源健康、股票行数量和时间窗口，被阻止的运行写入 `snapshot_collector_runs`（状态 `blocked`）并保留审计轨迹。
+- API 路由 `/api/snapshot-collector/*` 和 CLI 命令 `snapshot-collector-*` 只服务实验运维和审计。
+- 正式切换要求：shadow 采集器必须通过完整审计（覆盖率、质量门禁、数据一致性）后才能讨论 live cutover。
+
+API 路由：
+
+- `GET /api/snapshot-collector/status`：采集器运行状态
+- `POST /api/snapshot-collector/run-once`：单次采集运行
+- `POST /api/snapshot-collector/backfill-slots`：按日期区间回填槽位
+- `GET /api/snapshot-collector/runs`：历史运行记录
+- `POST /api/snapshot-collector/audit`：快照覆盖率审计
+
+CLI 命令：
+
+- `snapshot-collector-status`：打印采集器运行状态
+- `snapshot-collector-run-once`：执行单次采集并输出 JSON 结果
+- `snapshot-collector-backfill`：按日期区间批量采集
+- `snapshot-collector-audit`：审计覆盖率并输出结构化 JSON
+
+响应信封格式：所有 `/api/snapshot-collector/*` 接口使用统一的 `{"ok": true/false, "status": "...", "data": {...}}` 信封。这与现有 API 的混合格式不同，仅用于采集器实验路由。
 
 ## 数据流
 
@@ -308,6 +355,15 @@ V12 后续 Phase 中，ThemeTrend 和 Theme Confluence 回测/优化仍复用现
 | `QUANT_BOARD_AUTO_SYNC_INTERVAL_SECONDS` | 自动同步间隔，默认 60 秒 |
 | `QUANT_BOARD_AUTO_SYNC_INITIAL_DELAY_SECONDS` | API 启动后首次同步延迟，默认 10 秒 |
 | `QUANT_BOARD_AUTO_SYNC_BATCH_SIZE` | 单轮自动同步批量，默认 50 |
+| `QUANT_BOARD_SNAPSHOT_COLLECTOR_ENABLED` | 是否启用后端快照采集器，默认 `false` |
+| `QUANT_BOARD_SNAPSHOT_COLLECTOR_DATASET_ID` | 采集器写入目标数据集 ID，默认 `dragonboard_backend_shadow` |
+| `QUANT_BOARD_SNAPSHOT_COLLECTOR_TYPES` | 采集器覆盖的快照类型，逗号分隔，默认 `half_hour,daily` |
+| `QUANT_BOARD_SNAPSHOT_COLLECTOR_POLL_MS` | 采集轮询间隔（毫秒），默认 1000 |
+| `QUANT_BOARD_SNAPSHOT_COLLECTOR_CLOSE_GRACE_MINUTES` | 收盘后宽限采集分钟数，默认 5 |
+| `QUANT_BOARD_SNAPSHOT_COLLECTOR_PROXY_BASE_URL` | proxy-server 基础 URL，默认 `http://127.0.0.1:3000` |
+| `QUANT_BOARD_SNAPSHOT_COLLECTOR_BRIDGE_BASE_URL` | python-bridge 基础 URL，默认 `http://127.0.0.1:8765` |
+| `QUANT_BOARD_SNAPSHOT_COLLECTOR_PROVIDER_TIMEOUT_MS` | 数据源请求超时（毫秒），默认 5000 |
+| `QUANT_BOARD_SNAPSHOT_COLLECTOR_ALLOW_LIVE_DATASET` | 是否允许写入 live 数据集，默认 `false` |
 
 存储和同步配置的语义变更属于 API/运维合同变更，必须同批更新 [database-migration-plan.md](database-migration-plan.md)、[api-cli.md](api-cli.md) 和 [AI_COLLABORATION.md](AI_COLLABORATION.md)。
 
