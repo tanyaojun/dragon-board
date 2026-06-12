@@ -332,8 +332,15 @@ class TestCollectorCLIParser:
         ])
         assert args.trading_date == "2026-06-11"
 
+    # ── scheduler-status ────────────────────────────────────────────────────
 
-# ═══════════════════════════════════════════════════════════════════════════════
+    def test_scheduler_status_subcommand_registered(self) -> None:
+        """`snapshot-collector-scheduler-status` is a recognised subcommand."""
+        from backend.cli import build_parser
+
+        parser = build_parser()
+        args = parser.parse_args(["snapshot-collector-scheduler-status"])
+        assert args.func is not None
 # Handler-level tests
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -712,3 +719,35 @@ class TestCollectorCLIHandlers:
         assert len(output["countDrifts"]) == 1
         assert output["totalFrames"] == 8
         assert output["totalRecords"] == 80
+
+    # ── scheduler-status ────────────────────────────────────────────────────
+
+    def test_scheduler_status_output(self, monkeypatch: Any) -> None:
+        """Scheduler status handler prints JSON with scheduler state keys."""
+        fake_status = {
+            "enabled": True,
+            "running": True,
+            "dataset_id": "dragonboard_backend_shadow",
+            "snapshot_types": ["half_hour", "daily"],
+            "poll_seconds": 1.0,
+            "grace_minutes": 5,
+            "last_run_at": "2026-06-15T10:00:01+08:00",
+            "last_slot_collected": "half_hour:2026-06-15:10:00",
+            "last_error": None,
+            "collection_count": 3,
+            "error_count": 0,
+            "in_flight_slots": [],
+        }
+        monkeypatch.setattr(
+            "backend.snapshot_collector.scheduler.snapshot_collector_scheduler.status",
+            lambda: fake_status,
+        )
+        from backend.cli import cmd_snapshot_collector_scheduler_status
+
+        output = _capture_json_output(cmd_snapshot_collector_scheduler_status, _make_args())
+        assert output["enabled"] is True
+        assert output["running"] is True
+        assert output["dataset_id"] == "dragonboard_backend_shadow"
+        assert output["snapshot_types"] == ["half_hour", "daily"]
+        assert output["collection_count"] == 3
+        assert output["error_count"] == 0

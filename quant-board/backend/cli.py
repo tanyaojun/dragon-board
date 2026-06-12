@@ -1273,6 +1273,13 @@ def cmd_snapshot_collector_audit(args: argparse.Namespace) -> None:
     print_json(result)
 
 
+def cmd_snapshot_collector_scheduler_status(_: argparse.Namespace) -> None:
+    """Print scheduler operational state as JSON."""
+    from backend.snapshot_collector.scheduler import snapshot_collector_scheduler
+
+    print_json(snapshot_collector_scheduler.status())
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="quant-board", description="QuantBoard CLI")
     sub = parser.add_subparsers(required=True)
@@ -1717,6 +1724,12 @@ def build_parser() -> argparse.ArgumentParser:
     collector_audit_cmd.add_argument("--snapshot-type", choices=["quarter_hour", "half_hour", "hourly", "daily"], required=True)
     collector_audit_cmd.add_argument("--trading-date", default=None)
     collector_audit_cmd.set_defaults(func=cmd_snapshot_collector_audit)
+
+    scheduler_status_cmd = sub.add_parser(
+        "snapshot-collector-scheduler-status",
+        help="Show snapshot collector scheduler operational state",
+    )
+    scheduler_status_cmd.set_defaults(func=cmd_snapshot_collector_scheduler_status)
 
     return parser
 
