@@ -64,8 +64,7 @@
           },
         ]" :style="gridTemplateStyle" @click="onRowClick($event, stock.code)"
           @dblclick="openStockDetailFromRow($event, stock)"
-          @contextmenu.prevent="showContextMenu($event, stock)" @mouseenter="showRowTooltip($event, stock)"
-          @mousemove="moveRowTooltip($event)" @mouseleave="hideRowTooltip">
+          @contextmenu.prevent="showContextMenu($event, stock)">
 
           <!-- 动态渲染所有列，保持和表头一致 -->
           <div v-for="col in visibleColumns" :key="col.key" class="cell" :class="getCellClass(col.key, stock)"
@@ -75,7 +74,9 @@
               <div class="themes-cell">
                 <span v-if="getStockThemes(stock).length > 0" class="themes-badge"
                   :class="getThemeBadgeClass(getStockThemes(stock))" :style="getThemeStyle(stock)"
-                  :title="getThemesTitle(getStockThemes(stock))">
+                  @mouseenter="showThemeTooltip($event, stock)"
+                  @mousemove="moveRowTooltip($event)"
+                  @mouseleave="hideRowTooltip">
                   {{ getThemeDisplay(getStockThemes(stock)) }}
                 </span>
                 <span v-else class="themes-empty">-</span>
@@ -117,7 +118,9 @@
                 <span
                   class="jump-badge candidate-pool-badge"
                   :class="`candidate-pool-state-${getCandidatePoolStrategyState(stock)}`"
-                  :title="getCandidatePoolTitle(stock)"
+                  @mouseenter="showCandidatePoolTooltip($event, stock)"
+                  @mousemove="moveConfidenceTooltip($event)"
+                  @mouseleave="hideConfidenceTooltip"
                   @click.stop="openCandidatePoolFromCell(stock)"
                 >{{ formatCandidatePoolStateLabel(stock) }}</span>
               </div>
@@ -129,7 +132,7 @@
                 @mousemove="moveConfidenceTooltip($event)" @mouseleave="hideConfidenceTooltip">
                 <!-- 买入信号 -->
                 <div v-if="getFinalSignal(stock) === 'buy'" class="signal-badge buy-badge">
-                  <span class="signal-percent">{{ Math.round(getFinalConfidence(stock) || 0) }}%</span>
+                  <span class="signal-percent">{{ Math.round(getJumpConfidence(stock) || 0) }}%</span>
                   <!-- ✅ 只在收盘前显示金叉死叉标记 -->
                   <span v-if="shouldShowMacdSignal(stock) && getMacdCross(stock) === 'golden'" class="macd-badge golden"
                     title="MACD金叉">▲</span>
@@ -138,7 +141,7 @@
                 </div>
                 <!-- 卖出信号 -->
                 <div v-else-if="getFinalSignal(stock) === 'sell'" class="signal-badge sell-badge">
-                  <span class="signal-percent">{{ Math.round(getFinalConfidence(stock) || 0) }}%</span>
+                  <span class="signal-percent">{{ Math.round(getJumpConfidence(stock) || 0) }}%</span>
                   <!-- ✅ 只在收盘前显示金叉死叉标记 -->
                   <span v-if="shouldShowMacdSignal(stock) && getMacdCross(stock) === 'golden'" class="macd-badge golden"
                     title="MACD金叉">▲</span>
@@ -147,7 +150,7 @@
                 </div>
                 <!-- 持有信号 -->
                 <div v-else-if="getFinalSignal(stock) === 'hold'" class="signal-badge hold-badge">
-                  <span class="signal-percent">{{ Math.round(getFinalConfidence(stock) || 0) }}%</span>
+                  <span class="signal-percent">{{ Math.round(getJumpConfidence(stock) || 0) }}%</span>
                   <!-- ✅ 只在收盘前显示金叉死叉标记 -->
                   <span v-if="shouldShowMacdSignal(stock) && getMacdCross(stock) === 'golden'" class="macd-badge golden"
                     title="MACD金叉">▲</span>
@@ -339,7 +342,7 @@ const columns = [
   { key: 'compRank', label: '综合', group: 'comprehensive', always: true },
   { key: 'rankChange', label: '变化', group: 'comprehensive', always: true },
   { key: 'jumpSignal', label: '候选池', group: 'comprehensive', always: true },
-  { key: 'confidence', label: '置信度', group: 'comprehensive', always: true },
+  { key: 'confidence', label: '跃迁置信度', group: 'comprehensive', always: true },
   { key: 'zlje', label: '主力净额', group: 'money', always: true },
   { key: 'zljzb', label: '主力%', group: 'money', always: true },
   { key: 'volume', label: '成交量', group: 'quote', always: true },
@@ -585,11 +588,16 @@ const removeDuplicateThemes = (themes: any[]): any[] => {
   return [...Array.from(themeMap.values()), ...Array.from(tagMap.values())]
 }
 
-// 行悬浮提示
-const getRowTitle = (stock: Stock) => {
+// 题材悬浮提示：合并原题材 title 与行详情，避免同一行出现两套 tooltip。
+const getMergedThemeTooltipTitle = (stock: Stock) => {
   let title = ''
+  const themesTitle = getThemesTitle(getStockThemes(stock))
 
   title += `${stock.name} (${stock.code})`
+
+  if (themesTitle) {
+    title += `\n📌 题材: ${themesTitle}\n`
+  }
 
   // 标签
   if (stock.tags && stock.tags.length > 0) {
@@ -626,13 +634,6 @@ const getRowTitle = (stock: Stock) => {
     title += `\n📈 连板: ${lianbanStr}\n`
   }
 
-  // 排名变化
-  const rankChange = getRankChange(stock)
-  if (rankChange !== 0) {
-    const change = Math.abs(rankChange)
-    title += `\n📊 排名变化: ${rankChange > 0 ? '↑' : '↓'}${change}%\n`
-  }
-
   return title
 }
 
@@ -656,6 +657,21 @@ const getAttentionStageDisplayText = (value?: string | null) => {
 const formatTooltipNumber = (value?: number | null, digits = 1) => {
   if (!Number.isFinite(Number(value))) return '--'
   return Number(value).toFixed(digits)
+}
+
+const getDecisionStateText = (value?: string | null) => {
+  if (value === 'auto_add') return '自动入池'
+  if (value === 'watch_candidate') return '观察候选'
+  if (value === 'blocked_candidate') return '被拒 / 阻断'
+  if (value === 'not_candidate') return '未入池'
+  return value || '未触发'
+}
+
+const getGateCheckStatusText = (status?: string | null) => {
+  if (status === 'pass') return '通过'
+  if (status === 'warn') return '观察'
+  if (status === 'fail') return '阻断'
+  return '关闭'
 }
 
 // 置信度悬浮提示
@@ -747,8 +763,9 @@ const hideConfidenceTooltip = () => {
   confidenceTooltip.value.visible = false
 }
 
-const showRowTooltip = (event: MouseEvent, stock: Stock) => {
-  const content = getRowTitle(stock)
+const showThemeTooltip = (event: MouseEvent, stock: Stock) => {
+  hideConfidenceTooltip()
+  const content = getMergedThemeTooltipTitle(stock)
   if (!content) return
   rowTooltip.value = {
     visible: true,
@@ -815,47 +832,90 @@ const formatCandidatePoolStateLabel = (stock: any) =>
     : stock?.candidatePoolLabel || '未触发'
   )
 
-const getCandidatePoolTitle = (stock: any) => {
+const getCandidatePoolTooltipTitle = (stock: any) => {
   const projection = getCandidatePoolProjection(stock)
-  const lines = [`候选池：${formatCandidatePoolStateLabel(stock)}`]
+  const decision = projection?.entryDecision
+  const failedChecks = (decision?.checks || []).filter((check: any) => check.status === 'fail')
+  const hardFailedChecks = failedChecks.filter((check: any) => check.hardBlock)
+  const warnChecks = (decision?.checks || []).filter((check: any) => check.status === 'warn')
+  const lines = [`📌 ${stock.name || '-'} (${stock.code || '-'})`]
+
+  lines.push(`🎯 入池判断: ${decision?.label || formatCandidatePoolStateLabel(stock)}`)
+  lines.push(`📍 所处分层: ${projection?.candidateTier || '未识别'}`)
 
   if (projection?.strategyState) {
-    lines.push(`策略态：${projection.strategyState}`)
-  }
-  if (projection?.candidateTier) {
-    lines.push(`候选层级：${projection.candidateTier}`)
+    lines.push(`🧭 策略状态: ${candidatePoolStateLabels[projection.strategyState] || projection.strategyState}`)
   }
   if (projection?.lifecycleAction) {
-    lines.push(`生命周期动作：${projection.lifecycleAction}`)
+    lines.push(`🔁 生命周期: ${projection.lifecycleAction}`)
   }
   if (projection?.holdingBars !== undefined) {
-    lines.push(`持有 Bars：${projection.holdingBars}`)
+    lines.push(`⏳ 持有Bars: ${projection.holdingBars}`)
   }
+  if (decision?.decisionState) {
+    lines.push(`🚦 Live状态: ${getDecisionStateText(decision.decisionState)}`)
+  }
+  if (decision?.summary) {
+    lines.push(`📝 摘要: ${decision.summary}`)
+  }
+
+  lines.push('─'.repeat(30))
+  if (hardFailedChecks.length) {
+    lines.push(`⛔ 被拒原因: ${hardFailedChecks.map((check: any) => check.message || check.label).join('；')}`)
+  } else if (failedChecks.length) {
+    lines.push(`⚠️ 观察原因: ${failedChecks.map((check: any) => check.message || check.label).join('；')}`)
+  } else if (decision?.accepted) {
+    lines.push('✅ 入池原因: 核心硬规则已通过，可自动入池')
+  } else {
+    lines.push(`👀 入池原因: ${warnChecks[0]?.message || '暂未触发硬阻断，继续观察信号强度'}`)
+  }
+
+  const importantChecks = [
+    ...hardFailedChecks,
+    ...warnChecks,
+    ...(decision?.checks || []).filter((check: any) =>
+      ['candidate_tier', 'jump_confidence', 'momentum', 'acceleration', 'change_gate'].includes(check.key),
+    ),
+  ].filter((check: any, index: number, list: any[]) =>
+    check?.key && list.findIndex((item: any) => item.key === check.key) === index,
+  )
+  if (importantChecks.length) {
+    lines.push('\n📋 规则矩阵关键项:')
+    importantChecks.slice(0, 5).forEach((check: any) => {
+      lines.push(
+        `   ${check.label}: ${getGateCheckStatusText(check.status)} · 当前 ${formatGateActualForTooltip(check.actual)} / 要求 ${check.expected}`,
+      )
+    })
+  }
+
   if (projection?.exitReason) {
-    lines.push(`退出原因：${projection.exitReason}`)
+    lines.push(`\n🚪 退出原因: ${projection.exitReason}`)
   }
   if (projection?.strategyEntryAt) {
-    lines.push(`策略入场：${projection.strategyEntryAt}`)
+    lines.push(`⏱️ 策略入场: ${projection.strategyEntryAt}`)
   }
-  if (projection?.strategyExitAt) {
-    lines.push(`策略退出：${projection.strategyExitAt}`)
-  }
-  if (projection?.executionOverlay?.entryTime) {
-    lines.push(`人工入场：${projection.executionOverlay.entryTime}`)
-  }
-  if (projection?.executionOverlay?.exitTime) {
-    lines.push(`人工离场：${projection.executionOverlay.exitTime}`)
+  if (projection?.triggerAt) {
+    lines.push(`⏱️ 首次触发: ${projection.triggerAt}`)
   }
   if (stock?.candidatePoolSource) {
-    lines.push(`来源：${stock.candidatePoolSource}`)
-  }
-  if (stock?.candidatePoolUpdatedAt) {
-    lines.push(`更新时间：${stock.candidatePoolUpdatedAt}`)
-  }
-  if (stock?.candidatePoolEntryId) {
-    lines.push(`候选ID：${stock.candidatePoolEntryId}`)
+    lines.push(`📎 来源: ${stock.candidatePoolSource}`)
   }
   return lines.join('\n')
+}
+
+const formatGateActualForTooltip = (value: unknown) => {
+  if (value === null || value === undefined || value === '') return '-'
+  return String(value)
+}
+
+const showCandidatePoolTooltip = (event: MouseEvent, stock: any) => {
+  hideRowTooltip()
+  confidenceTooltip.value = {
+    visible: true,
+    x: event.clientX + 16,
+    y: event.clientY + 16,
+    content: getCandidatePoolTooltipTitle(stock),
+  }
 }
 
 const openCandidatePoolFromCell = (stock: Stock) => {

@@ -64,7 +64,7 @@ describe('RefreshTaskRegistry', () => {
       visibilityPolicy: 'pause',
     })
     expect(registry.getTask('snapshot.sweep')).toMatchObject({
-      tradingTimeOnly: true,
+      tradingTimeOnly: false,
       visibilityPolicy: 'run',
     })
     expect(registry.getTask('snapshot.backupSync')).toMatchObject({

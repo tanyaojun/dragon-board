@@ -5,7 +5,13 @@ import type { CandidateAnalysisResult, CandidateJournalEntry, CandidateStockLike
 const stock: CandidateStockLike = {
   code: '600584',
   name: '长电科技',
+  price: 39.67,
+  change: 3.88,
+  compRank: 25,
+  rankChange: 7,
   zlje: 10,
+  zljzb: 2.3,
+  volumeRatio: 1.8,
 }
 
 const analysis: CandidateAnalysisResult = {
@@ -200,7 +206,71 @@ describe('CandidateJournalService', () => {
         entry_prerequisites: analysis.entryPrerequisites,
         invalidation_rules: analysis.invalidationRules,
         review_tags: analysis.tags,
-        signals_snapshot: analysis.signalsSnapshot,
+        signals_snapshot: expect.objectContaining({
+          ...analysis.signalsSnapshot,
+          entrySnapshot: expect.objectContaining({
+            price: 39.67,
+            change: 3.88,
+            compRank: 25,
+            rankChange: 7,
+            zlje: 10,
+            zljzb: 2.3,
+            volumeRatio: 1.8,
+          }),
+        }),
+      }),
+      expect.objectContaining({ context: 'quant-board', throwOnHttpError: true }),
+    )
+  })
+
+  it('freezes auto-entry price and ranking facts in the signals snapshot', async () => {
+    const { service, api } = createService()
+    api.get.mockResolvedValue({ entries: [], total: 0 })
+    api.post.mockResolvedValue({
+      id: 'tj_auto_entry_snapshot',
+      stockCode: '600584',
+      stockName: '长电科技',
+      status: 'triggered',
+      tradeType: 'thesis',
+      entryReason: analysis.entryReason,
+      tradeHypothesis: analysis.tradeHypothesis,
+      entryPrerequisites: analysis.entryPrerequisites,
+      invalidationRules: analysis.invalidationRules,
+      humanDecision: 'watch',
+      reviewOutcome: 'pending',
+      modelResult: 'unknown',
+      executionResult: 'unknown',
+      reviewTags: analysis.tags,
+      signalsSnapshot: analysis.signalsSnapshot,
+      createdAt: '2026-05-17T10:00:00+08:00',
+      updatedAt: '2026-05-17T10:00:00+08:00',
+    })
+
+    await service.addCandidateFromStock(stock, {
+      source: 'ranktrend_early_big_move_v3_lifecycle_fusion',
+      statusOverride: 'triggered',
+      signalsSnapshotPatch: {
+        triggerMeta: {
+          triggerType: 'auto',
+          triggeredAt: '2026-06-12T15:00:00+08:00',
+        },
+      },
+    })
+
+    expect(api.post).toHaveBeenCalledWith(
+      '/api/journal/entries',
+      expect.objectContaining({
+        price: 39.67,
+        signals_snapshot: expect.objectContaining({
+          entrySnapshot: expect.objectContaining({
+            stockCode: '600584',
+            stockName: '长电科技',
+            price: 39.67,
+            change: 3.88,
+            compRank: 25,
+            rankChange: 7,
+          }),
+        }),
       }),
       expect.objectContaining({ context: 'quant-board', throwOnHttpError: true }),
     )

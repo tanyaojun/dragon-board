@@ -79,7 +79,7 @@ export const REFRESH_TASK_DEFINITIONS: RefreshTaskDefinition[] = [
     category: 'storage',
     owner: 'SnapshotRuntime',
     intervalMs: 1_000,
-    tradingTimeOnly: true,
+    tradingTimeOnly: false,
     visibilityPolicy: 'run',
   },
   {

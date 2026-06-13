@@ -63,7 +63,7 @@
         </div>
       </div>
 
-      <div v-else-if="showEventSearch" class="event-search-bar">
+      <div v-if="showEventSearch" class="event-search-bar">
         <label class="search-box">
           <span class="search-icon" aria-hidden="true">⌕</span>
           <input

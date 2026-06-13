@@ -99,17 +99,39 @@ describe('DataTable row detail interactions', () => {
     expect(source).toMatch(/const\s+getFinalConfidence\s*=\s*\(stock:\s*any\)\s*=>/)
   })
 
-  test('keeps displayed confidence bound to decision final confidence, not V5 JumpConfidence', () => {
+  test('shows jump confidence in the confidence column', () => {
     const source = dataTableSource()
 
-    expect(source).toContain('getRankTrendAnalysis(stock)?.decision?.final?.confidence')
-    expect(source).toContain('getRankTrendAnalysis(stock)?.finalConfidence')
-    expect(source).toMatch(/Math\.round\(getFinalConfidence\(stock\) \|\| 0\)/)
+    expect(source).toContain("{ key: 'confidence', label: '跃迁置信度'")
     expect(source).toContain('getJumpConfidence')
     expect(source).toContain('getRankTrendAnalysis(stock)?.jump?.confidence')
+    expect(source).toMatch(/Math\.round\(getJumpConfidence\(stock\) \|\| 0\)/)
     expect(source).toContain('Jump跃迁置信')
-    expect(source).not.toMatch(/Math\.round\(getJumpConfidence\(stock\)/)
+    expect(source).not.toMatch(/<span class="signal-percent">\{\{ Math\.round\(getFinalConfidence\(stock\) \|\| 0\) \}\}%<\/span>/)
     expect(source).not.toContain('minJumpConfidence')
+  })
+
+  test('uses one row-style tooltip for theme detail and removes rank-change noise', () => {
+    const source = dataTableSource()
+
+    expect(source).not.toMatch(/class="data-row"[\s\S]*@mouseenter="showRowTooltip\(\$event,\s*stock\)"/)
+    expect(source).not.toContain(':title="getThemesTitle(getStockThemes(stock))"')
+    expect(source).toContain('@mouseenter="showThemeTooltip($event, stock)"')
+    expect(source).toContain('getMergedThemeTooltipTitle')
+    expect(source).toContain('📋 关联原因')
+    expect(source).not.toMatch(/const\s+getRowTitle[\s\S]*排名变化/)
+  })
+
+  test('explains candidate pool status with the same tooltip surface as jump confidence', () => {
+    const source = dataTableSource()
+
+    expect(source).toContain('@mouseenter="showCandidatePoolTooltip($event, stock)"')
+    expect(source).toContain('getCandidatePoolTooltipTitle')
+    expect(source).toContain('入池判断')
+    expect(source).toContain('被拒原因')
+    expect(source).toContain('所处分层')
+    expect(source).toContain('规则矩阵')
+    expect(source).toMatch(/showCandidatePoolTooltip[\s\S]*confidenceTooltip\.value/)
   })
 
   test('does not render rarely used super-large money flow columns', () => {

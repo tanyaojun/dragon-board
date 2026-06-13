@@ -460,6 +460,34 @@ describe('SnapshotRuntime', () => {
     runtime.stop()
   })
 
+  it('keeps scheduled snapshot sweep running during the 15:00 close backfill window', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-04-21T15:05:00+08:00'))
+    vi.stubGlobal('window', {
+      setTimeout,
+      clearTimeout,
+      setInterval,
+      clearInterval,
+    })
+    const runtime = createRuntime()
+    const scheduleSnapshotSweep = vi.spyOn(runtime as any, 'scheduleSnapshotSweep').mockImplementation(() => {})
+
+    runtime.startTimer()
+    await vi.advanceTimersByTimeAsync(1_000)
+
+    expect(scheduleSnapshotSweep).toHaveBeenCalledTimes(1)
+    expect(refreshTaskRegistry.getTask('snapshot.sweep')).toMatchObject({
+      running: false,
+      lastRunAt: expect.any(Number),
+      lastSuccessAt: expect.any(Number),
+      lastError: null,
+      successCount: 1,
+      source: 'scheduler',
+    })
+
+    runtime.stop()
+  })
+
   it('does not collect scheduled snapshot slots on 2026 Labor Day market holiday', async () => {
     const runtime = createRuntime()
 

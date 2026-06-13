@@ -79,6 +79,23 @@ function toOptionalNumber(value: unknown): number | undefined {
   return Number.isFinite(numeric) ? numeric : undefined
 }
 
+function buildEntrySnapshot(stock: CandidateStockLike): Record<string, unknown> {
+  return {
+    stockCode: normalizeCode(stock.code),
+    stockName: stock.name || normalizeCode(stock.code),
+    price: toOptionalNumber(stock.price ?? stock.lastTradePrice),
+    change: toOptionalNumber(stock.change),
+    speed: toOptionalNumber(stock.speed),
+    compRank: toOptionalNumber(stock.compRank),
+    avgRank: toOptionalNumber(stock.avgRank),
+    rankChange: toOptionalNumber(stock.rankTrend?.meta?.change ?? stock.rankChange),
+    zlje: toOptionalNumber(stock.zlje),
+    zljzb: toOptionalNumber(stock.zljzb),
+    volumeRatio: toOptionalNumber(stock.volumeRatio),
+    turnoverRate: toOptionalNumber(stock.turnoverRate),
+  }
+}
+
 function getEntryTimestamp(entry: CandidateJournalEntry): number {
   const updated = Date.parse(entry.updatedAt || entry.createdAt || '')
   return Number.isFinite(updated) ? updated : 0
@@ -529,8 +546,9 @@ export class CandidateJournalService {
     analysis: CandidateAnalysisResult,
     options: AddCandidateOptions,
   ) {
-    const signalsSnapshot = {
+    const signalsSnapshot: Record<string, any> = {
       ...analysis.signalsSnapshot,
+      entrySnapshot: buildEntrySnapshot(stock),
       ...(options.signalsSnapshotPatch || {}),
     }
 

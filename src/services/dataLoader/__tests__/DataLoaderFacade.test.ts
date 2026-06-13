@@ -1263,6 +1263,8 @@ describe('DataLoaderFacade', () => {
   })
 
   it('writes structured volume ratio metadata during startup merge', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-05-08T15:01:00+08:00'))
     quoteBatchResult = new Map([
       [
         '000001',
@@ -1276,18 +1278,22 @@ describe('DataLoaderFacade', () => {
       ],
     ])
     volumeHistoryMapResult = new Map([['000001', [100, 100, 100]]])
-    const { dataLoader } = await import('../../dataLoader')
+    try {
+      const { dataLoader } = await import('../../dataLoader')
 
-    await dataLoader.loadAllPlatforms(true)
+      await dataLoader.loadAllPlatforms(true)
 
-    expect(dataLayer.getStock('000001')).toMatchObject({
-      volume: 200,
-      volumeRatio: 2,
-      volumeRatioMeta: expect.objectContaining({
-        status: 'fresh',
-        source: 'daily_snapshot',
-        currentVolume: 200,
-      }),
-    })
+      expect(dataLayer.getStock('000001')).toMatchObject({
+        volume: 200,
+        volumeRatio: 2,
+        volumeRatioMeta: expect.objectContaining({
+          status: 'fresh',
+          source: 'daily_snapshot',
+          currentVolume: 200,
+        }),
+      })
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

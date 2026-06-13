@@ -87,6 +87,26 @@ describe('CandidatePoolPanel source contract', () => {
     expect(source).toMatch(/v-if="!isTransientLiveDetail" class="execution-card"/)
   })
 
+  test('freezes auto-added entry diagnostics to the saved rankTrend snapshot', () => {
+    const source = panelSource()
+
+    expect(source).toContain('resolveFrozenRankTrendSnapshot')
+    expect(source).toContain('entry.signalsSnapshot?.rankTrend')
+    expect(source).toContain("triggerMeta.triggerType === 'auto'")
+    expect(source).toContain('rankTrend: frozenRankTrend || liveStock.rankTrend || null')
+  })
+
+  test('surfaces saved auto-entry quote and ranking facts in strategy facts', () => {
+    const source = panelSource()
+
+    expect(source).toContain('resolveEntrySnapshot')
+    expect(source).toContain('selectedEntrySnapshot')
+    expect(source).toContain('入池价格')
+    expect(source).toContain('入池综合排名')
+    expect(source).toContain('entry.signalsSnapshot?.entrySnapshot')
+    expect(source).toContain('formatOptionalNumber')
+  })
+
   test('clears transient live projection overrides when reloading candidates', () => {
     const source = panelSource()
 

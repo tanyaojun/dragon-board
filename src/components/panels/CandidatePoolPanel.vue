@@ -134,6 +134,25 @@
                     <strong>{{ formatDateTime(selectedLiveDetail.projection.triggerAt) }}</strong>
                   </div>
                   <div class="fact-item">
+                    <span>入池价格</span>
+                    <strong>{{ formatOptionalNumber(selectedEntrySnapshot?.price, 2) }}</strong>
+                  </div>
+                  <div class="fact-item">
+                    <span>入池综合排名</span>
+                    <strong>{{ formatOptionalNumber(selectedEntrySnapshot?.compRank, 0) }}</strong>
+                  </div>
+                  <div class="fact-item">
+                    <span>入池涨幅 / 量比</span>
+                    <strong>
+                      {{ formatOptionalNumber(selectedEntrySnapshot?.change, 2) }}% /
+                      {{ formatOptionalNumber(selectedEntrySnapshot?.volumeRatio, 2) }}
+                    </strong>
+                  </div>
+                  <div class="fact-item">
+                    <span>入池主力净额</span>
+                    <strong>{{ formatOptionalNumber(selectedEntrySnapshot?.zlje, 2) }}</strong>
+                  </div>
+                  <div class="fact-item">
                     <span>策略入场时间</span>
                     <strong>{{ formatDateTime(selectedLiveDetail.projection.strategyEntryAt) }}</strong>
                   </div>
@@ -499,6 +518,12 @@ function formatGateActual(value: unknown): string {
   return String(value)
 }
 
+function formatOptionalNumber(value: unknown, digits = 2): string {
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) return '未记录'
+  return numeric.toFixed(digits)
+}
+
 function formatTierList(value: unknown): string {
   return Array.isArray(value) && value.length ? value.join('/') : '-'
 }
@@ -546,17 +571,28 @@ function replaceCandidate(updated: CandidateJournalEntry) {
   candidates.value.splice(index, 1, updated)
 }
 
+function resolveFrozenRankTrendSnapshot(entry: CandidateJournalEntry): Record<string, any> | null {
+  const triggerMeta = (entry.signalsSnapshot?.triggerMeta as Record<string, any> | undefined) || {}
+  const snapshotRankTrend = (entry.signalsSnapshot?.rankTrend as Record<string, any> | undefined) || null
+  return triggerMeta.triggerType === 'auto' && snapshotRankTrend ? snapshotRankTrend : null
+}
+
+function resolveEntrySnapshot(entry: CandidateJournalEntry): Record<string, any> | null {
+  return (entry.signalsSnapshot?.entrySnapshot as Record<string, any> | undefined) || null
+}
+
 function buildProjection(entry: CandidateJournalEntry): FusionStrategyProjection {
   const stockCode = normalizeCode(entry.stockCode)
   const liveStock = (dataLayer.getStock(stockCode) as Record<string, any> | undefined) || {}
   const snapshotQuote = (entry.signalsSnapshot?.quote as Record<string, any> | undefined) || {}
   const snapshotRankTrend = (entry.signalsSnapshot?.rankTrend as Record<string, any> | undefined) || {}
+  const frozenRankTrend = resolveFrozenRankTrendSnapshot(entry)
   const stock = {
     ...snapshotQuote,
     ...liveStock,
     code: stockCode,
     name: entry.stockName || stockCode,
-    rankTrend: liveStock.rankTrend || snapshotRankTrend || null,
+    rankTrend: frozenRankTrend || liveStock.rankTrend || null,
   }
   const sampleQuality = stock.rankTrend?.meta?.sampleQuality || {}
   const snapshotType = normalizeSnapshotType(sampleQuality.snapshotType)
@@ -675,6 +711,9 @@ const selectedEntryDecision = computed(
 )
 const selectedGateChecks = computed(() => selectedEntryDecision.value?.checks || [])
 const selectedConfigSnapshot = computed(() => selectedEntryDecision.value?.configSnapshot || null)
+const selectedEntrySnapshot = computed(() =>
+  selectedLiveDetail.value ? resolveEntrySnapshot(selectedLiveDetail.value.entry) : null,
+)
 
 function applySelectedEntryToForms(entry: CandidateJournalEntry | null) {
   thesisForm.value = {
