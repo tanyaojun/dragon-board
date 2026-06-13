@@ -64,6 +64,49 @@ describe('RefreshCoordinator service registry', () => {
     })
   })
 
+  it('passes the normalized refresh request into service runUpdate', async () => {
+    ;(refreshCoordinator as any).reset()
+    ;(refreshCoordinator as any).pendingRequests.clear()
+    ;(refreshCoordinator as any).services.clear()
+
+    const runUpdate = vi.fn(async () => 'loaded')
+    refreshCoordinator.registerService('dataLoader', { runUpdate })
+
+    await refreshCoordinator.executeRequest({
+      kind: 'full',
+      source: 'app',
+      trigger: 'manual',
+      force: true,
+    })
+
+    expect(runUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: 'full',
+        source: 'app',
+        trigger: 'manual',
+        force: true,
+      }),
+    )
+  })
+
+  it('marks the legacy manualRefresh helper as a manual request', async () => {
+    ;(refreshCoordinator as any).reset()
+    ;(refreshCoordinator as any).pendingRequests.clear()
+    ;(refreshCoordinator as any).services.clear()
+
+    const runUpdate = vi.fn(async () => 'loaded')
+    refreshCoordinator.registerService('dataLoader', { runUpdate })
+
+    await refreshCoordinator.manualRefresh()
+
+    expect(runUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: 'manual',
+        trigger: 'manual',
+      }),
+    )
+  })
+
   it('returns busy when a normalized request overlaps an active execution', async () => {
     ;(refreshCoordinator as any).reset()
     ;(refreshCoordinator as any).pendingRequests.clear()

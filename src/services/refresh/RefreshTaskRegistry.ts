@@ -32,10 +32,10 @@ export const REFRESH_TASK_DEFINITIONS: RefreshTaskDefinition[] = [
     label: 'RankTrend 信号刷新',
     category: 'derived',
     owner: 'DataLoaderFacade',
-    intervalMs: 1_000,
+    intervalMs: 1_800_000,
     tradingTimeOnly: false,
     visibilityPolicy: 'run',
-    description: '14:45 每日一次 RankTrend 信号检查',
+    description: '30 分钟刷新 RankTrend 信号与 fusion 候选池投影',
   },
   {
     id: 'theme.runtime',

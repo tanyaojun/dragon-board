@@ -858,17 +858,19 @@ describe('DataLoaderFacade', () => {
     expect(dataLayer.getStocks()).toEqual([])
   })
 
-  it('runs scheduled RankTrend refresh from DataLoader instead of DataTable', async () => {
+  it('runs scheduled RankTrend refresh every 30 minutes from DataLoader instead of DataTable', async () => {
     vi.useFakeTimers()
-    vi.setSystemTime(new Date('2026-05-08T14:44:59+08:00'))
     try {
       const { dataLoader } = await import('../../dataLoader')
       const { rankTrendSignalService } = await import('../RankTrendSignalService')
 
       dataLoader.stopSignalAutoRefresh()
-      ;(dataLoader as any).lastSignalRefreshDate = null
-      dataLoader.startSignalAutoRefresh(1000)
-      await vi.advanceTimersByTimeAsync(1000)
+      dataLoader.startSignalAutoRefresh()
+      await vi.advanceTimersByTimeAsync(29 * 60 * 1000)
+
+      expect(rankTrendSignalService.refreshRankTrendSignals).not.toHaveBeenCalled()
+
+      await vi.advanceTimersByTimeAsync(60 * 1000)
 
       expect(rankTrendSignalService.refreshRankTrendSignals).toHaveBeenCalledTimes(1)
     } finally {
@@ -959,18 +961,16 @@ describe('DataLoaderFacade', () => {
     }
   })
 
-  it('records scheduled RankTrend checks through the shared refresh scheduler', async () => {
+  it('records scheduled RankTrend refreshes through the shared refresh scheduler', async () => {
     vi.useFakeTimers()
-    vi.setSystemTime(new Date('2026-05-08T14:44:59+08:00'))
     try {
       const { dataLoader } = await import('../../dataLoader')
       const { refreshTaskRegistry } = await import('../../refresh/RefreshTaskRuntime')
 
       dataLoader.stopSignalAutoRefresh()
-      ;(dataLoader as any).lastSignalRefreshDate = null
-      dataLoader.startSignalAutoRefresh(1000)
+      dataLoader.startSignalAutoRefresh()
 
-      await vi.advanceTimersByTimeAsync(1000)
+      await vi.advanceTimersByTimeAsync(30 * 60 * 1000)
 
       expect(refreshTaskRegistry.getTask('dataLoader.ranktrendSignal')).toMatchObject({
         running: false,
@@ -1052,31 +1052,51 @@ describe('DataLoaderFacade', () => {
     ])
   })
 
-  it('runs scheduled RankTrend refresh once per local date', async () => {
+  it('keeps scheduled RankTrend refresh running on every 30 minute slot', async () => {
     vi.useFakeTimers()
-    vi.setSystemTime(new Date('2026-05-08T14:44:59+08:00'))
     try {
       const { dataLoader } = await import('../../dataLoader')
       const { rankTrendSignalService } = await import('../RankTrendSignalService')
 
       dataLoader.stopSignalAutoRefresh()
-      ;(dataLoader as any).lastSignalRefreshDate = null
-      dataLoader.startSignalAutoRefresh(1000)
-      await vi.advanceTimersByTimeAsync(1000)
+      dataLoader.startSignalAutoRefresh()
+      await vi.advanceTimersByTimeAsync(30 * 60 * 1000)
       expect(rankTrendSignalService.refreshRankTrendSignals).toHaveBeenCalledTimes(1)
 
-      vi.setSystemTime(new Date('2026-05-08T14:45:30+08:00'))
-      await vi.advanceTimersByTimeAsync(1000)
-      expect(rankTrendSignalService.refreshRankTrendSignals).toHaveBeenCalledTimes(1)
-
-      vi.setSystemTime(new Date('2026-05-09T14:44:59+08:00'))
-      await vi.advanceTimersByTimeAsync(1000)
+      await vi.advanceTimersByTimeAsync(30 * 60 * 1000)
       expect(rankTrendSignalService.refreshRankTrendSignals).toHaveBeenCalledTimes(2)
     } finally {
       const { dataLoader } = await import('../../dataLoader')
       dataLoader.stopSignalAutoRefresh()
       vi.useRealTimers()
     }
+  })
+
+  it('uses the refresh request trigger when running DataLoader through the unified refresh path', async () => {
+    const { dataLoader } = await import('../../dataLoader')
+
+    const summary = await dataLoader.runUpdate({
+      kind: 'full',
+      source: 'app',
+      trigger: 'manual',
+      force: true,
+    } as any)
+
+    expect(summary).toEqual(expect.objectContaining({ stockCount: 1 }))
+    expect(signalApplyCount).toBe(1)
+    expect(EventManager.getHistory(AppEvents.DATA.MERGED)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          data: expect.objectContaining({ reason: 'signal-enriched' }),
+        }),
+      ]),
+    )
+    expect(dataLayer.getStocks()).toEqual([
+      expect.objectContaining({
+        candidatePoolStatus: 'triggered',
+        candidatePoolLabel: '已触发',
+      }),
+    ])
   })
 
   it('keeps hotlist stocks visible even when quote enrichment returns empty', async () => {

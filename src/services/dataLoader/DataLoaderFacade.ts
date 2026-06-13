@@ -26,6 +26,7 @@ import { rankTrendSignalService } from './RankTrendSignalService'
 import { RealtimeQuoteCoordinator } from './RealtimeQuoteCoordinator'
 import { refreshResourceLocks } from '../refresh/RefreshResourceLocks'
 import { refreshScheduler } from '../refresh/RefreshTaskRuntime'
+import type { RefreshRequest } from '../refresh/types'
 import { startupBundleService } from './StartupBundleService'
 import { stockHotnessService } from './StockHotnessService'
 import { stockMergeCoordinator } from './StockMergeCoordinator'
@@ -59,7 +60,6 @@ type SignalCalculationResult = {
  * 职责：协调数据加载、合并计算、缓存策略、行情获取
  */
 class DataLoaderService {
-  private lastSignalRefreshDate: string | null = null
   private state = ref<LoaderState>({
     initialized: false,
     platforms: [...DEFAULT_PLATFORMS],
@@ -503,9 +503,10 @@ class DataLoaderService {
   }
 
   // ========== RefreshManager/Coordinator 接口 ==========
-  async runUpdate(): Promise<void> {
+  async runUpdate(request?: RefreshRequest): Promise<DataLoaderRunSummary | void> {
     if (this.destroyed) return
-    await this.refreshAll({ force: true, source: 'timer' })
+    const source = request?.trigger === 'manual' ? 'manual' : 'timer'
+    return this.refreshAll({ force: request?.force ?? true, source })
   }
 
   async runMaintenance(): Promise<void> {
@@ -627,29 +628,9 @@ class DataLoaderService {
     refreshScheduler.stopTask('dataLoader.quote')
   }
 
-  startSignalAutoRefresh(interval: number = 1000): void {
-    refreshScheduler.registerRunner('dataLoader.ranktrendSignal', () => this.runSignalRefreshCheck())
+  startSignalAutoRefresh(interval: number = PLATFORM_REFRESH_INTERVAL_MS): void {
+    refreshScheduler.registerRunner('dataLoader.ranktrendSignal', () => this.refreshRankTrendSignals())
     refreshScheduler.startTask('dataLoader.ranktrendSignal', interval)
-  }
-
-  private async runSignalRefreshCheck(): Promise<void> {
-    const now = new Date()
-    const hour = now.getHours()
-    const minute = now.getMinutes()
-    const today = this.getLocalDateKey(now)
-
-    if (hour === 14 && minute === 45 && this.lastSignalRefreshDate !== today) {
-      this.lastSignalRefreshDate = today
-      debugLog('[DataLoader] 14:45 触发排名趋势信号刷新')
-      await this.refreshRankTrendSignals()
-    }
-  }
-
-  private getLocalDateKey(date: Date): string {
-    const year = date.getFullYear()
-    const month = String(date.getMonth() + 1).padStart(2, '0')
-    const day = String(date.getDate()).padStart(2, '0')
-    return `${year}-${month}-${day}`
   }
 
   stopSignalAutoRefresh(): void {

@@ -154,7 +154,7 @@ class RefreshCoordinator {
     try {
       let result: any = null
       if (fullMethod && typeof instance?.[fullMethod] === 'function') {
-        result = await instance[fullMethod]()
+        result = await instance[fullMethod](this.currentContext.request)
       }
 
       if (syncMethod && typeof instance?.[syncMethod] === 'function') {
@@ -313,6 +313,7 @@ class RefreshCoordinator {
   async manualRefresh(): Promise<boolean> {
     return this.executeRefresh('full', {
       source: 'manual',
+      trigger: 'manual',
       timestamp: Date.now(),
     })
   }
