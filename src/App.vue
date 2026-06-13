@@ -496,20 +496,13 @@ const handleSelectStock = (code: string) => {
 
 // ========== 手动刷新 ==========
 const handleRefresh = async () => {
-  showToast('⏳ 正在刷新全部数据...', 'info')
+  showToast('⏳ 正在刷新行情列表...', 'info')
 
   try {
-    const result = await RefreshManager.requestRefresh({
-      kind: 'full',
-      source: 'app',
-      trigger: 'manual',
-      force: true,
-    })
-    if (!result.success) {
-      showToast(result.busy ? '⏳ 刷新进行中' : '❌ 刷新失败', result.busy ? 'info' : 'error')
-    }
+    await dataLoader.refreshMarketList({ force: true, source: 'manual' })
   } catch (error) {
-    showToast('❌ 刷新失败', 'error')
+    console.error('[App] 手动刷新行情列表失败:', error)
+    showToast('❌ 行情列表刷新失败', 'error')
   }
 }
 

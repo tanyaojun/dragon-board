@@ -502,6 +502,22 @@ class DataLoaderService {
     }
   }
 
+  async refreshMarketList(options: DataLoaderRefreshOptions = {}): Promise<DataLoaderRunSummary> {
+    this.quoteProgressCompletedCodes = 0
+    this.setLoading(true, '刷新行情列表...', this.startupProgress.platformStart, 'platform')
+    try {
+      const summary = await this.loadPlatformAndMerge(options.force ?? false, {
+        includeLimitUpData: true,
+        allowWhileLoading: true,
+      })
+      await themeFacade.refreshRuntime({ source: 'market-list', syncStocks: true })
+      this.updateProgress(100, '完成', 'done')
+      return summary
+    } finally {
+      this.setLoading(false, '', 100, 'done')
+    }
+  }
+
   // ========== RefreshManager/Coordinator 接口 ==========
   async runUpdate(request?: RefreshRequest): Promise<DataLoaderRunSummary | void> {
     if (this.destroyed) return

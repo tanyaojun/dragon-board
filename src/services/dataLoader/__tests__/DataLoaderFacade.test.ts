@@ -826,6 +826,38 @@ describe('DataLoaderFacade', () => {
     expect(dataLoader.getLoadingStatus().active).toBe(false)
   })
 
+  it('refreshMarketList refreshes the table data scope and syncs themes', async () => {
+    const { dataLoader } = await import('../../dataLoader')
+    const { loadLimitUpData, loadThsLimitUpPoolData } = await import('../LimitUpFeed')
+    const { themeFacade } = await import('../../theme/ThemeFacade')
+
+    const summary = await dataLoader.refreshMarketList({ force: true, source: 'manual' })
+
+    expect(summary).toEqual(
+      expect.objectContaining({
+        stockCount: 1,
+        platformCount: 1,
+        fromCache: false,
+      }),
+    )
+    expect(loadLimitUpData).toHaveBeenCalledTimes(1)
+    expect(loadThsLimitUpPoolData).toHaveBeenCalledTimes(1)
+    expect(platformLoadCount).toBe(1)
+    expect(signalApplyCount).toBe(1)
+    expect(themeFacade.refreshRuntime).toHaveBeenCalledWith({
+      source: 'market-list',
+      syncStocks: true,
+    })
+    expect(dataLayer.getStocks()).toEqual([
+      expect.objectContaining({
+        code: '000001',
+        candidatePoolStatus: 'triggered',
+        candidatePoolLabel: '已触发',
+      }),
+    ])
+    expect(dataLoader.getLoadingStatus().active).toBe(false)
+  })
+
   it('does not double-increment UI data version when DATA.MERGED is subscribed', async () => {
     const { dataLoader } = await import('../../dataLoader')
     const { useUIStore } = await import('../../../stores/ui')
