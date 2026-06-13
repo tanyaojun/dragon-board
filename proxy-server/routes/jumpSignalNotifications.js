@@ -109,8 +109,14 @@ export function formatJumpSignalEventRadarMessage(events, options = {}) {
     groupEvents.forEach((event, i) => {
       const line = formatJumpLine(i + 1, event)
       content.push([{ tag: 'text', text: line }])
+      for (const detail of formatCandidatePoolSummaryDetails(event)) {
+        content.push([{ tag: 'text', text: detail }])
+      }
       if (event.reason) {
         content.push([{ tag: 'text', text: `   原因：${String(event.reason).slice(0, 60)}` }])
+      }
+      for (const detail of formatCandidatePoolRuleDetails(event)) {
+        content.push([{ tag: 'text', text: detail }])
       }
     })
     groupIndex++
@@ -127,6 +133,75 @@ export function formatJumpSignalEventRadarMessage(events, options = {}) {
       },
     },
   }
+}
+
+function formatCandidatePoolSummaryDetails(event) {
+  const lines = []
+  if (event.decisionLabel) {
+    lines.push(`   入池判断：${String(event.decisionLabel)}`)
+  }
+  if (event.candidateTier) {
+    lines.push(`   所处分层：${String(event.candidateTier)}`)
+  }
+  if (event.strategyState) {
+    lines.push(`   策略状态：${formatCandidatePoolState(event.strategyState)}`)
+  }
+  if (event.lifecycleAction) {
+    lines.push(`   生命周期：${String(event.lifecycleAction)}`)
+  }
+  if (event.decisionState) {
+    lines.push(`   Live状态：${formatDecisionState(event.decisionState)}`)
+  }
+  if (event.decisionSummary) {
+    lines.push(`   摘要：${String(event.decisionSummary).slice(0, 80)}`)
+  }
+  return lines
+}
+
+function formatCandidatePoolRuleDetails(event) {
+  const lines = []
+  const checks = Array.isArray(event.checks) ? event.checks : []
+  if (checks.length) {
+    lines.push('   规则矩阵关键项：')
+    for (const check of checks.slice(0, 5)) {
+      lines.push(
+        `      ${check.label || check.key || '规则'}：${formatGateCheckStatus(check.status)} · 当前 ${formatValue(check.actual)} / 要求 ${formatValue(check.expected)}`,
+      )
+    }
+  }
+  if (event.source) {
+    lines.push(`   来源：${String(event.source)}`)
+  }
+  return lines
+}
+
+function formatDecisionState(value) {
+  if (value === 'auto_add') return '自动入池'
+  if (value === 'watch_candidate') return '观察候选'
+  if (value === 'blocked_candidate') return '被拒 / 阻断'
+  if (value === 'not_candidate') return '未入池'
+  return String(value || '未触发')
+}
+
+function formatCandidatePoolState(value) {
+  if (value === 'idle') return '未触发'
+  if (value === 'triggered_wait_entry') return '待入场'
+  if (value === 'active_holding') return '策略持有中'
+  if (value === 'exit_signaled') return '策略退出观察'
+  if (value === 'closed') return '策略已关闭'
+  return String(value || '未触发')
+}
+
+function formatGateCheckStatus(value) {
+  if (value === 'pass') return '通过'
+  if (value === 'warn') return '观察'
+  if (value === 'fail') return '阻断'
+  return '关闭'
+}
+
+function formatValue(value) {
+  if (value === null || value === undefined || value === '') return '-'
+  return String(value)
 }
 
 function formatJumpLine(index, event) {

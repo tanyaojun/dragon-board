@@ -33,6 +33,28 @@ const candidatePoolEvent = {
   ...entryEvent,
   signalLabel: '候选池触发',
   reason: 'fusion 策略命中，已自动写入候选池',
+  candidateTier: 'A_MAIN',
+  lifecycleAction: 'allow',
+  decisionState: 'auto_add',
+  decisionLabel: '自动入池',
+  decisionSummary: '满足当前 live 自动入池规则',
+  source: 'ranktrend_early_big_move_v3_lifecycle_fusion',
+  checks: [
+    {
+      key: 'candidate_tier',
+      label: '候选分层',
+      status: 'pass',
+      actual: 'A_MAIN',
+      expected: 'A_MAIN/B_IGNITION',
+    },
+    {
+      key: 'jump_confidence',
+      label: 'Jump置信度',
+      status: 'pass',
+      actual: 92,
+      expected: '>= 85',
+    },
+  ],
 }
 
 const message = formatJumpSignalEventRadarMessage([entryEvent, exitEvent], {
@@ -63,7 +85,16 @@ assert.deepEqual(
   [
     '【候选池触发】1条',
     '1. 宝鼎科技 002552  +3.50%',
+    '   入池判断：自动入池',
+    '   所处分层：A_MAIN',
+    '   生命周期：allow',
+    '   Live状态：自动入池',
+    '   摘要：满足当前 live 自动入池规则',
     '   原因：fusion 策略命中，已自动写入候选池',
+    '   规则矩阵关键项：',
+    '      候选分层：通过 · 当前 A_MAIN / 要求 A_MAIN/B_IGNITION',
+    '      Jump置信度：通过 · 当前 92 / 要求 >= 85',
+    '   来源：ranktrend_early_big_move_v3_lifecycle_fusion',
   ],
 )
 

@@ -1,6 +1,6 @@
 import { candidateJournalService } from '@/services/candidate/CandidateJournalService'
 import type { CandidateJournalEntry, CandidateStatus, CandidateStockLike } from '@/services/candidate/types'
-import { evaluateV5FusionEntry } from './v5FusionExecutionContract'
+import { evaluateV5FusionEntry, type V5FusionEntryResult } from './v5FusionExecutionContract'
 
 const FUSION_STRATEGY_SOURCE = 'ranktrend_early_big_move_v3_lifecycle_fusion'
 const FEISHU_ENDPOINT = '/api/notifications/jump-signal'
@@ -31,6 +31,34 @@ interface FusionCandidateNotifierDeps {
 
 function normalizeCode(code: unknown): string {
   return String(code ?? '').trim()
+}
+
+function createFeishuTimeoutSignal(): AbortSignal | undefined {
+  if (typeof AbortSignal?.timeout === 'function') {
+    return AbortSignal.timeout(FEISHU_TIMEOUT_MS)
+  }
+  return undefined
+}
+
+function getFeishuChecks(entry: V5FusionEntryResult) {
+  const importantKeys = [
+    'execution_strategy',
+    'jump_confidence',
+    'momentum_positive',
+    'acceleration',
+    'change_position',
+  ]
+  return entry.checks
+    .filter((check) => importantKeys.includes(check.key))
+    .slice(0, 5)
+    .map((check) => ({
+      key: check.key,
+      label: check.label,
+      status: check.status,
+      actual: check.actual,
+      expected: check.expected,
+      message: check.message,
+    }))
 }
 
 export class FusionCandidateNotifier {
@@ -75,46 +103,53 @@ export class FusionCandidateNotifier {
 
       if (!result.created) continue
 
-      void this.pushFeishuEvent(stock)
+      void this.pushFeishuEvent(stock, entry)
     }
   }
 
-  private async pushFeishuEvent(stock: CandidateStockLike): Promise<void> {
+  private async pushFeishuEvent(stock: CandidateStockLike, entry: V5FusionEntryResult): Promise<void> {
     if (typeof globalThis.fetch !== 'function') return
 
     const rankTrend = stock.rankTrend
-    const candidateTier = evaluateV5FusionEntry(stock).candidateTier
+    const candidateTier = entry.candidateTier
     const lifecycleAction = String(rankTrend?.cycle?.decision?.action || '').trim()
     const reason = candidateTier ? `${candidateTier} 命中，已自动写入候选池` : 'fusion 策略命中，已自动写入候选池'
 
-    await globalThis.fetch(FEISHU_ENDPOINT, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      signal: AbortSignal.timeout(FEISHU_TIMEOUT_MS),
-      body: JSON.stringify({
-        source: FEISHU_SOURCE,
-        events: [
-          {
-            code: normalizeCode(stock?.code),
-            name: String(stock?.name || ''),
-            signalType: 'strategy_candidate',
-            signalLabel: 'Fusion 候选池触发',
-            price: Number(stock?.price || stock?.lastTradePrice || 0),
-            changePct: Number(stock?.change || 0),
-            reason,
-            candidateTier,
-            lifecycleAction,
-            confidence: Number(rankTrend?.jump?.confidence ?? 0),
-            timestamp: this.now().getTime(),
-          },
-        ],
-      }),
-    }).catch((error) => {
+    try {
+      await globalThis.fetch(FEISHU_ENDPOINT, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        signal: createFeishuTimeoutSignal(),
+        body: JSON.stringify({
+          source: FEISHU_SOURCE,
+          events: [
+            {
+              code: normalizeCode(stock?.code),
+              name: String(stock?.name || ''),
+              signalType: 'strategy_candidate',
+              signalLabel: 'Fusion 候选池触发',
+              price: Number(stock?.price || stock?.lastTradePrice || 0),
+              changePct: Number(stock?.change || 0),
+              reason,
+              candidateTier,
+              lifecycleAction,
+              decisionState: entry.decisionState,
+              decisionLabel: entry.label,
+              decisionSummary: entry.summary,
+              source: FUSION_STRATEGY_SOURCE,
+              checks: getFeishuChecks(entry),
+              confidence: Number(rankTrend?.jump?.confidence ?? 0),
+              timestamp: this.now().getTime(),
+            },
+          ],
+        }),
+      })
+    } catch (error) {
       console.warn(
         '[FusionCandidateNotifier] 飞书推送失败:',
         error instanceof Error ? error.message : String(error),
       )
-    })
+    }
   }
 }
 

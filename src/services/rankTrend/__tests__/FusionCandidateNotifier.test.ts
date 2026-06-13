@@ -144,7 +144,8 @@ describe('FusionCandidateNotifier', () => {
       }),
     )
     const [, request] = fetchMock.mock.calls[0]
-    expect(JSON.parse(String(request?.body))).toEqual({
+    const body = JSON.parse(String(request?.body))
+    expect(body).toEqual({
       source: 'ranktrend-fusion-candidate-pool',
       events: [
         expect.objectContaining({
@@ -154,10 +155,31 @@ describe('FusionCandidateNotifier', () => {
           signalLabel: 'Fusion 候选池触发',
           candidateTier: 'A_MAIN',
           lifecycleAction: 'allow',
+          decisionState: 'auto_add',
+          decisionLabel: '自动入池',
+          decisionSummary: '满足当前 live 自动入池规则',
+          source: 'ranktrend_early_big_move_v3_lifecycle_fusion',
+          checks: expect.arrayContaining([
+            expect.objectContaining({
+              key: 'jump_confidence',
+              label: 'Jump置信度',
+              status: 'pass',
+              actual: 92,
+              expected: '>= 85',
+            }),
+            expect.objectContaining({
+              key: 'acceleration',
+              label: '加速度',
+              status: 'pass',
+              actual: '12/8',
+              expected: 'acceleration >= 10 或 accDelta >= 8',
+            }),
+          ]),
           timestamp: Date.parse('2026-06-08T10:00:00.000Z'),
         }),
       ],
     })
+    expect(body.events[0].checks).toHaveLength(5)
   })
 
   it('自动入池和推送记录 executionStrategy 分层，不使用展示分层', async () => {
@@ -388,5 +410,31 @@ describe('FusionCandidateNotifier', () => {
 
     expect(outcome).toBe('resolved')
     expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('AbortSignal.timeout 不可用时自动入池后仍推送飞书消息', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true })
+    vi.stubGlobal('fetch', fetchMock)
+    const originalTimeout = AbortSignal.timeout
+    ;(AbortSignal as any).timeout = undefined
+
+    try {
+      const notifier = new FusionCandidateNotifier({
+        candidateJournal: {
+          getOpenCandidateForStock,
+          addCandidateFromStock,
+        },
+        now,
+      })
+
+      await notifier.process([createStock()])
+      await Promise.resolve()
+
+      expect(addCandidateFromStock).toHaveBeenCalledTimes(1)
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      expect(fetchMock.mock.calls[0][0]).toBe('/api/notifications/jump-signal')
+    } finally {
+      ;(AbortSignal as any).timeout = originalTimeout
+    }
   })
 })
