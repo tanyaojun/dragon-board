@@ -90,6 +90,8 @@ export interface Stock {
   rankChange?: number
   candidatePoolStatus?: FusionStrategyState
   candidatePoolLabel?: string
+  candidatePoolLiveDecisionLabel?: string
+  candidatePoolLiveDecisionSummary?: string
   candidatePoolProjection?: FusionStrategyProjection | null
   candidatePoolEntryId?: string
   candidatePoolSource?: string

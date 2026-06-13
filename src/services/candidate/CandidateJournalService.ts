@@ -446,6 +446,26 @@ export class CandidateJournalService {
     return this.findOpenCandidate(normalizedCode)
   }
 
+  async getOpenCandidateMap(codes: string[]): Promise<Record<string, CandidateJournalEntry | null>> {
+    const normalizedCodes = Array.from(new Set(codes.map(normalizeCode).filter(Boolean)))
+    if (!normalizedCodes.length) return {}
+
+    const entries = await this.listCandidates({ limit: 200 })
+    const entryByCode = new Map<string, CandidateJournalEntry>()
+
+    for (const entry of entries) {
+      const code = normalizeCode(entry.stockCode)
+      if (!normalizedCodes.includes(code)) continue
+      if (!OPEN_STATUSES.includes(entry.status)) continue
+      const current = entryByCode.get(code)
+      if (!current || getEntryTimestamp(entry) >= getEntryTimestamp(current)) {
+        entryByCode.set(code, entry)
+      }
+    }
+
+    return Object.fromEntries(normalizedCodes.map((code) => [code, entryByCode.get(code) || null]))
+  }
+
   toExecutionOverlay(entry: CandidateJournalEntry | null | undefined): FusionExecutionOverlay | null {
     if (!entry) return null
 
@@ -475,7 +495,7 @@ export class CandidateJournalService {
     const normalizedCodes = Array.from(new Set(codes.map(normalizeCode).filter(Boolean)))
     if (!normalizedCodes.length) return {}
 
-    const entries = await this.listCandidates({ limit: 1000 })
+    const entries = await this.listCandidates({ limit: 200 })
     const entryByCode = new Map<string, CandidateJournalEntry>()
 
     for (const entry of entries) {

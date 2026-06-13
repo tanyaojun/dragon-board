@@ -20,12 +20,43 @@ vi.mock('../../rankTrend/FusionCandidateNotifier', () => ({
 }))
 
 vi.mock('../../rankTrend/FusionStrategyProjector', () => ({
+  buildFusionStrategyProjection: vi.fn((input: any) => ({
+    stockCode: input.stock.code,
+    stockName: input.stock.name || input.stock.code,
+    strategyName: 'ranktrend_early_big_move_v3_lifecycle_fusion',
+    snapshotType: input.snapshotType,
+    tradingDate: input.tradingDate,
+    snapshotId: input.snapshotId,
+    frameTime: input.frameTime,
+    projectionSource: 'live',
+    strategyState: input.strategyLifecycle?.hasOpenPosition ? 'active_holding' : 'idle',
+    candidateTier: 'A_MAIN',
+    lifecycleAction: 'allow',
+    executionOverlay: input.executionOverlay || null,
+    entryDecision: {
+      decisionState: 'blocked_candidate',
+      label: '被阻断',
+      summary: '当前实时门禁阻断',
+      checks: [],
+      configSnapshot: {},
+    },
+  })),
   buildFusionStrategyProjections: vi.fn(() => []),
 }))
 
 vi.mock('../../candidate/CandidateJournalService', () => ({
   candidateJournalService: {
     getExecutionOverlayMap: vi.fn(async () => ({})),
+    getOpenCandidateMap: vi.fn(async () => ({})),
+    toExecutionOverlay: vi.fn((entry: any) =>
+      entry
+        ? {
+            executed: !!entry.entryTime,
+            entryId: entry.id,
+            entryTime: entry.entryTime || undefined,
+          }
+        : null,
+    ),
   },
 }))
 
@@ -339,6 +370,85 @@ describe('RankTrendSignalService', () => {
     expect(buildFusionStrategyProjections).toHaveBeenCalledWith(result, expect.any(Object))
     expect(applyCandidatePoolProjections).toHaveBeenCalledWith(result, expect.any(Array))
     expect(result[0].liveV3SignalDecision).toBeUndefined()
+  })
+
+  it('syncs quote table candidate pool state from the persisted open candidate lifecycle', async () => {
+    const { rankTrendAnalyzer } = await import('../../RankTrendAnalyzer')
+    const { buildFusionStrategyProjections } = await import('../../rankTrend/FusionStrategyProjector')
+    const { candidateJournalService } = await import('../../candidate/CandidateJournalService')
+    const { applyCandidatePoolProjections } = await import('../../candidate/CandidatePoolStatusProjector')
+
+    vi.mocked(rankTrendAnalyzer.getRankTrends).mockResolvedValue(new Map())
+    vi.mocked(buildFusionStrategyProjections).mockReturnValue([
+      {
+        stockCode: '002129',
+        stockName: 'TCL中环',
+        strategyName: 'ranktrend_early_big_move_v3_lifecycle_fusion',
+        snapshotType: 'half_hour',
+        tradingDate: '2026-06-13',
+        snapshotId: 'live:002129',
+        frameTime: '2026-06-13T16:30:00+08:00',
+        projectionSource: 'live',
+        strategyState: 'idle',
+        candidateTier: 'D_EXIT_RISK',
+        lifecycleAction: 'veto',
+        executionOverlay: null,
+        entryDecision: {
+          accepted: false,
+          decisionState: 'blocked_candidate',
+          label: '被阻断',
+          summary: '当前实时门禁阻断',
+          checks: [],
+          configSnapshot: {} as any,
+        },
+      },
+    ])
+    vi.mocked(candidateJournalService.getOpenCandidateMap).mockResolvedValue({
+      '002129': {
+        id: 'tj_002129',
+        stockCode: '002129',
+        stockName: 'TCL中环',
+        status: 'tracking',
+        tradeType: 'thesis',
+        entryReason: '',
+        tradeHypothesis: '',
+        entryPrerequisites: '',
+        invalidationRules: '',
+        humanDecision: 'watch',
+        skipReason: '',
+        reviewOutcome: 'pending',
+        modelResult: 'unknown',
+        executionResult: 'unknown',
+        reviewNotes: '',
+        reviewTags: [],
+        signalsSnapshot: {
+          rankTrend: {
+            strategyLifecycle: {
+              triggered: true,
+              hasOpenPosition: true,
+              triggerAt: '2026-06-12T15:00:00+08:00',
+              entryAt: '2026-06-13T09:30:00+08:00',
+            },
+          },
+        },
+        entryTime: '2026-06-13T09:30:00+08:00',
+        createdAt: '2026-06-12T15:00:00+08:00',
+        updatedAt: '2026-06-13T09:30:00+08:00',
+      },
+    } as any)
+
+    const service = new RankTrendSignalService()
+    await service.applySignalsToMerged([{ code: '002129', name: 'TCL中环' }])
+
+    expect(applyCandidatePoolProjections).toHaveBeenCalledWith(
+      expect.any(Array),
+      expect.arrayContaining([
+        expect.objectContaining({
+          stockCode: '002129',
+          strategyState: 'active_holding',
+        }),
+      ]),
+    )
   })
 
   it('refreshRankTrendSignals no longer invokes legacy jump notifier side effects', async () => {

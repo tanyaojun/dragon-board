@@ -800,37 +800,24 @@ const getRankChange = (stock: any) =>
 const candidatePoolStateLabels: Record<string, string> = {
   idle: '未触发',
   triggered_wait_entry: '待入场',
-  active_holding: '策略持有中',
+  active_holding: '已入场',
   exit_signaled: '策略退出观察',
   closed: '策略已关闭',
 }
 
-const liveDecisionStateClasses: Record<string, string> = {
-  auto_add: 'auto-add',
-  watch_candidate: 'watch-candidate',
-  blocked_candidate: 'blocked-candidate',
-  not_candidate: 'not-candidate',
-}
-
 const getCandidatePoolProjection = (stock: any) => stock?.candidatePoolProjection || null
 
-const getCandidatePoolEntryDecision = (stock: any) =>
-  getCandidatePoolProjection(stock)?.entryDecision || null
+const getCandidatePoolStrategyState = (stock: any) =>
+  getCandidatePoolProjection(stock)?.strategyState || stock?.candidatePoolStatus || 'idle'
 
-const getCandidatePoolStrategyState = (stock: any) => {
-  const decisionState = getCandidatePoolEntryDecision(stock)?.decisionState
-  if (decisionState) return liveDecisionStateClasses[decisionState] || decisionState
-  return getCandidatePoolProjection(stock)?.strategyState || stock?.candidatePoolStatus || 'idle'
+const hasCandidatePoolEntry = (stock: any) =>
+  !!stock?.candidatePoolEntryId || !!getCandidatePoolProjection(stock)?.executionOverlay?.entryId
+
+const formatCandidatePoolStateLabel = (stock: any) => {
+  const state = getCandidatePoolStrategyState(stock)
+  if (state === 'idle' && hasCandidatePoolEntry(stock)) return '观察中'
+  return candidatePoolStateLabels[state] || stock?.candidatePoolLabel || '未触发'
 }
-
-const formatCandidatePoolStateLabel = (stock: any) =>
-  getCandidatePoolEntryDecision(stock)?.label ||
-  (getCandidatePoolProjection(stock)?.strategyState
-    ? candidatePoolStateLabels[getCandidatePoolProjection(stock).strategyState] ||
-      stock?.candidatePoolLabel ||
-      '未触发'
-    : stock?.candidatePoolLabel || '未触发'
-  )
 
 const getCandidatePoolTooltipTitle = (stock: any) => {
   const projection = getCandidatePoolProjection(stock)
@@ -840,12 +827,9 @@ const getCandidatePoolTooltipTitle = (stock: any) => {
   const warnChecks = (decision?.checks || []).filter((check: any) => check.status === 'warn')
   const lines = [`📌 ${stock.name || '-'} (${stock.code || '-'})`]
 
-  lines.push(`🎯 入池判断: ${decision?.label || formatCandidatePoolStateLabel(stock)}`)
+  lines.push(`🧭 策略状态: ${formatCandidatePoolStateLabel(stock)}`)
   lines.push(`📍 所处分层: ${projection?.candidateTier || '未识别'}`)
 
-  if (projection?.strategyState) {
-    lines.push(`🧭 策略状态: ${candidatePoolStateLabels[projection.strategyState] || projection.strategyState}`)
-  }
   if (projection?.lifecycleAction) {
     lines.push(`🔁 生命周期: ${projection.lifecycleAction}`)
   }
@@ -853,7 +837,7 @@ const getCandidatePoolTooltipTitle = (stock: any) => {
     lines.push(`⏳ 持有Bars: ${projection.holdingBars}`)
   }
   if (decision?.decisionState) {
-    lines.push(`🚦 Live状态: ${getDecisionStateText(decision.decisionState)}`)
+    lines.push(`🚦 当前入池诊断: ${decision.label || getDecisionStateText(decision.decisionState)}`)
   }
   if (decision?.summary) {
     lines.push(`📝 摘要: ${decision.summary}`)
@@ -2284,30 +2268,6 @@ defineExpose({
 }
 
 .candidate-pool-state-idle {
-  color: #8f99a8;
-  background: rgba(143, 153, 168, 0.1);
-  border: 1px solid rgba(143, 153, 168, 0.18);
-}
-
-.candidate-pool-state-auto-add {
-  color: #bfffe0;
-  background: rgba(61, 220, 151, 0.14);
-  border: 1px solid rgba(61, 220, 151, 0.3);
-}
-
-.candidate-pool-state-watch-candidate {
-  color: #ffe3a1;
-  background: rgba(255, 177, 59, 0.14);
-  border: 1px solid rgba(255, 177, 59, 0.34);
-}
-
-.candidate-pool-state-blocked-candidate {
-  color: #ffb2bf;
-  background: rgba(255, 92, 115, 0.14);
-  border: 1px solid rgba(255, 92, 115, 0.32);
-}
-
-.candidate-pool-state-not-candidate {
   color: #8f99a8;
   background: rgba(143, 153, 168, 0.1);
   border: 1px solid rgba(143, 153, 168, 0.18);

@@ -127,11 +127,23 @@ describe('DataTable row detail interactions', () => {
 
     expect(source).toContain('@mouseenter="showCandidatePoolTooltip($event, stock)"')
     expect(source).toContain('getCandidatePoolTooltipTitle')
-    expect(source).toContain('入池判断')
+    expect(source).toContain('策略状态')
+    expect(source).toContain('当前入池诊断')
     expect(source).toContain('被拒原因')
     expect(source).toContain('所处分层')
     expect(source).toContain('规则矩阵')
     expect(source).toMatch(/showCandidatePoolTooltip[\s\S]*confidenceTooltip\.value/)
+  })
+
+  test('keeps candidate pool badge sourced from lifecycle strategy state, not live gate decision', () => {
+    const source = dataTableSource()
+
+    expect(source).toMatch(
+      /const getCandidatePoolStrategyState = \(stock: any\) =>\s*getCandidatePoolProjection\(stock\)\?\.strategyState \|\| stock\?\.candidatePoolStatus \|\| 'idle'/,
+    )
+    expect(source).not.toContain('liveDecisionStateClasses')
+    expect(source).not.toMatch(/formatCandidatePoolStateLabel[\s\S]*entryDecision\?\.label/)
+    expect(source).not.toContain('.candidate-pool-state-blocked-candidate')
   })
 
   test('does not render rarely used super-large money flow columns', () => {

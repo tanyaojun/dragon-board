@@ -4,6 +4,8 @@ type CandidatePoolStockFields = {
   code: string
   candidatePoolStatus?: FusionStrategyState
   candidatePoolLabel?: string
+  candidatePoolLiveDecisionLabel?: string
+  candidatePoolLiveDecisionSummary?: string
   candidatePoolProjection?: FusionStrategyProjection | null
   candidatePoolEntryId?: string
   candidatePoolSource?: string
@@ -13,9 +15,14 @@ type CandidatePoolStockFields = {
 const STRATEGY_STATE_LABELS: Record<FusionStrategyState, string> = {
   idle: '未触发',
   triggered_wait_entry: '待入场',
-  active_holding: '策略持有中',
+  active_holding: '已入场',
   exit_signaled: '策略退出观察',
   closed: '策略已关闭',
+}
+
+function formatStrategyStateLabel(state: FusionStrategyState, hasCandidateEntry: boolean): string {
+  if (state === 'idle' && hasCandidateEntry) return '观察中'
+  return STRATEGY_STATE_LABELS[state]
 }
 
 function normalizeCode(code: unknown): string {
@@ -42,9 +49,12 @@ export function projectCandidatePoolStatus<T extends CandidatePoolStockFields>(
   for (const stock of stocks) {
     const projection = projectionByCode.get(normalizeCode(stock.code)) || null
     const strategyState = projection?.strategyState || 'idle'
+    const hasCandidateEntry = !!projection?.executionOverlay?.entryId
 
     stock.candidatePoolStatus = strategyState
-    stock.candidatePoolLabel = projection?.entryDecision?.label || STRATEGY_STATE_LABELS[strategyState]
+    stock.candidatePoolLabel = formatStrategyStateLabel(strategyState, hasCandidateEntry)
+    stock.candidatePoolLiveDecisionLabel = projection?.entryDecision?.label || ''
+    stock.candidatePoolLiveDecisionSummary = projection?.entryDecision?.summary || ''
     stock.candidatePoolProjection = projection
     stock.candidatePoolEntryId = projection?.executionOverlay?.entryId || ''
     stock.candidatePoolSource = projection?.strategyName || ''

@@ -14,7 +14,7 @@
           <select v-model="statusFilter" title="策略状态">
             <option value="">全部策略状态</option>
             <option value="triggered_wait_entry">待入场</option>
-            <option value="active_holding">持有中</option>
+            <option value="active_holding">已入场</option>
             <option value="exit_signaled">已退出待复盘</option>
             <option value="closed">已完成</option>
             <option value="idle">观察中</option>
@@ -61,9 +61,9 @@
                     </span>
                     <span
                       class="strategy-state-pill"
-                      :data-state="row.projection.entryDecision?.decisionState || row.projection.strategyState"
+                      :data-state="row.projection.strategyState"
                     >
-                      {{ row.projection.entryDecision?.label || strategyStateLabel(row.projection.strategyState) }}
+                      {{ strategyStateLabel(row.projection.strategyState) }}
                     </span>
                   </span>
                   <span class="candidate-item-meta">
@@ -86,10 +86,7 @@
                   <h3>{{ selectedLiveDetail.entry.stockName || selectedLiveDetail.entry.stockCode }}</h3>
                   <span>
                     {{ selectedLiveDetail.entry.stockCode }} ·
-                    {{
-                      selectedLiveDetail.projection.entryDecision?.label ||
-                      strategyStateLabel(selectedLiveDetail.projection.strategyState)
-                    }}
+                    {{ strategyStateLabel(selectedLiveDetail.projection.strategyState) }}
                   </span>
                 </div>
                 <div class="quick-actions">
@@ -118,15 +115,18 @@
                     <span>当前策略状态</span>
                     <strong
                       class="strategy-state-pill"
-                      :data-state="
-                        selectedLiveDetail.projection.entryDecision?.decisionState ||
-                        selectedLiveDetail.projection.strategyState
-                      "
+                      :data-state="selectedLiveDetail.projection.strategyState"
                     >
-                      {{
-                        selectedLiveDetail.projection.entryDecision?.label ||
-                        strategyStateLabel(selectedLiveDetail.projection.strategyState)
-                      }}
+                      {{ strategyStateLabel(selectedLiveDetail.projection.strategyState) }}
+                    </strong>
+                  </div>
+                  <div class="fact-item">
+                    <span>当前入池诊断</span>
+                    <strong
+                      class="strategy-state-pill"
+                      :data-state="selectedEntryDecision?.decisionState || 'not_candidate'"
+                    >
+                      {{ currentEntryDecisionLabel }}
                     </strong>
                   </div>
                   <div class="fact-item">
@@ -394,11 +394,10 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 
-import { dataLayer } from '@/services/DataLayer'
+import { buildCandidateJournalProjection } from '@/services/candidate/CandidateProjectionBuilder'
 import { candidateJournalService } from '@/services/candidate/CandidateJournalService'
 import type { CandidateJournalEntry, CandidateReviewUpdate, CandidateThesisUpdate } from '@/services/candidate/types'
-import { buildFusionStrategyProjection } from '@/services/rankTrend/FusionStrategyProjector'
-import type { FusionSnapshotType, FusionStrategyProjection, FusionStrategyState } from '@/types/fusionStrategyProjection'
+import type { FusionStrategyProjection, FusionStrategyState } from '@/types/fusionStrategyProjection'
 import {
   RANK_TREND_LIVE_STRATEGY_CONFIG_STORAGE_KEY,
   normalizeRankTrendLiveStrategyConfig,
@@ -411,6 +410,7 @@ import { EventManager } from '@/utils/eventManager'
 interface CandidatePoolRow {
   entry: CandidateJournalEntry
   projection: FusionStrategyProjection
+  liveDecisionProjection?: FusionStrategyProjection | null
 }
 
 const props = defineProps<{
@@ -425,7 +425,7 @@ const emit = defineEmits<{
 const STRATEGY_STATE_LABELS: Record<FusionStrategyState, string> = {
   idle: '观察中',
   triggered_wait_entry: '待入场',
-  active_holding: '持有中',
+  active_holding: '已入场',
   exit_signaled: '已退出待复盘',
   closed: '已完成',
 }
@@ -451,7 +451,7 @@ const sortMode = ref<'state-priority' | 'trigger-desc' | 'holding-desc'>('state-
 const keyword = ref('')
 const pendingStrategyMode = ref<RankTrendLiveStrategyMode>('balanced')
 const transientRow = ref<CandidatePoolRow | null>(null)
-const liveProjectionOverrides = ref<Record<string, FusionStrategyProjection>>({})
+const liveDecisionOverrides = ref<Record<string, FusionStrategyProjection>>({})
 
 const thesisForm = ref<CandidateThesisUpdate>({
   entryReason: '',
@@ -485,15 +485,6 @@ const execForm = ref<Pick<
 function normalizeCode(code: unknown): string {
   const digits = String(code || '').replace(/\D/g, '')
   return digits ? digits.padStart(6, '0').slice(-6) : ''
-}
-
-function normalizeSnapshotType(value: unknown): FusionSnapshotType {
-  return value === 'quarter_hour' ? 'quarter_hour' : 'half_hour'
-}
-
-function buildFrameTime(tradingDate: string, slotTime: string, fallback: string): string {
-  if (tradingDate && slotTime) return `${tradingDate}T${slotTime}:00+08:00`
-  return fallback
 }
 
 function strategyStateLabel(state: FusionStrategyState): string {
@@ -571,50 +562,8 @@ function replaceCandidate(updated: CandidateJournalEntry) {
   candidates.value.splice(index, 1, updated)
 }
 
-function resolveFrozenRankTrendSnapshot(entry: CandidateJournalEntry): Record<string, any> | null {
-  const triggerMeta = (entry.signalsSnapshot?.triggerMeta as Record<string, any> | undefined) || {}
-  const snapshotRankTrend = (entry.signalsSnapshot?.rankTrend as Record<string, any> | undefined) || null
-  return triggerMeta.triggerType === 'auto' && snapshotRankTrend ? snapshotRankTrend : null
-}
-
 function resolveEntrySnapshot(entry: CandidateJournalEntry): Record<string, any> | null {
   return (entry.signalsSnapshot?.entrySnapshot as Record<string, any> | undefined) || null
-}
-
-function buildProjection(entry: CandidateJournalEntry): FusionStrategyProjection {
-  const stockCode = normalizeCode(entry.stockCode)
-  const liveStock = (dataLayer.getStock(stockCode) as Record<string, any> | undefined) || {}
-  const snapshotQuote = (entry.signalsSnapshot?.quote as Record<string, any> | undefined) || {}
-  const snapshotRankTrend = (entry.signalsSnapshot?.rankTrend as Record<string, any> | undefined) || {}
-  const frozenRankTrend = resolveFrozenRankTrendSnapshot(entry)
-  const stock = {
-    ...snapshotQuote,
-    ...liveStock,
-    code: stockCode,
-    name: entry.stockName || stockCode,
-    rankTrend: frozenRankTrend || liveStock.rankTrend || null,
-  }
-  const sampleQuality = stock.rankTrend?.meta?.sampleQuality || {}
-  const snapshotType = normalizeSnapshotType(sampleQuality.snapshotType)
-  const tradingDate = String(sampleQuality.latestTradingDate || '')
-  const slotTime = String(sampleQuality.latestSlotTime || '')
-  const frameTime = buildFrameTime(tradingDate, slotTime, entry.updatedAt || entry.createdAt || '')
-  const strategyLifecycle =
-    stock.rankTrend?.strategyLifecycle ||
-    stock.rankTrend?.lifecycle ||
-    snapshotRankTrend.strategyLifecycle ||
-    snapshotRankTrend.lifecycle ||
-    null
-
-  return buildFusionStrategyProjection({
-    stock,
-    snapshotType,
-    tradingDate,
-    snapshotId: tradingDate && slotTime ? `${snapshotType}:${tradingDate}:${slotTime}` : `${snapshotType}:${entry.id}`,
-    frameTime,
-    strategyLifecycle,
-    executionOverlay: candidateJournalService.toExecutionOverlay(entry),
-  })
 }
 
 function buildTransientEntry(projection: FusionStrategyProjection): CandidateJournalEntry {
@@ -643,8 +592,8 @@ function buildTransientEntry(projection: FusionStrategyProjection): CandidateJou
   }
 }
 
-function clearLiveProjectionOverrides() {
-  liveProjectionOverrides.value = {}
+function clearLiveDecisionOverrides() {
+  liveDecisionOverrides.value = {}
 }
 
 function syncSelection() {
@@ -661,10 +610,11 @@ function syncSelection() {
 const strategyRows = computed<CandidatePoolRow[]>(() => {
   const rows = candidates.value.map((entry) => ({
     entry,
-    projection:
-      liveProjectionOverrides.value[entry.id] ||
-      liveProjectionOverrides.value[normalizeCode(entry.stockCode)] ||
-      buildProjection(entry),
+    projection: buildCandidateJournalProjection(entry),
+    liveDecisionProjection:
+      liveDecisionOverrides.value[entry.id] ||
+      liveDecisionOverrides.value[normalizeCode(entry.stockCode)] ||
+      null,
   }))
   return transientRow.value ? [transientRow.value, ...rows] : rows
 })
@@ -707,8 +657,12 @@ const selectedRow = computed(() => visibleRows.value.find((row) => row.entry.id 
 const selectedLiveDetail = computed(() => selectedRow.value)
 const isTransientLiveDetail = computed(() => selectedLiveDetail.value?.entry.id.startsWith('transient:') || false)
 const selectedEntryDecision = computed(
-  () => selectedLiveDetail.value?.projection?.entryDecision || null,
+  () =>
+    selectedLiveDetail.value?.liveDecisionProjection?.entryDecision ||
+    selectedLiveDetail.value?.projection?.entryDecision ||
+    null,
 )
+const currentEntryDecisionLabel = computed(() => selectedEntryDecision.value?.label || '未触发')
 const selectedGateChecks = computed(() => selectedEntryDecision.value?.checks || [])
 const selectedConfigSnapshot = computed(() => selectedEntryDecision.value?.configSnapshot || null)
 const selectedEntrySnapshot = computed(() =>
@@ -744,7 +698,7 @@ function applySelectedEntryToForms(entry: CandidateJournalEntry | null) {
 async function loadCandidates() {
   loading.value = true
   errorMessage.value = ''
-  clearLiveProjectionOverrides()
+  clearLiveDecisionOverrides()
   try {
     candidates.value = await candidateJournalService.listCandidates({ limit: 200 })
     syncSelection()
@@ -889,9 +843,10 @@ async function openCandidate(target: CandidatePoolOpenPayload = {}) {
   )
   if (matched) {
     if (target.liveProjection) {
-      liveProjectionOverrides.value = {
-        ...liveProjectionOverrides.value,
-        [matched.entry.id]: target.liveProjection,
+      const decisionKey = matched.entry.id
+      liveDecisionOverrides.value = {
+        ...liveDecisionOverrides.value,
+        [decisionKey]: target.liveProjection,
       }
     }
     selectedId.value = matched.entry.id
@@ -902,6 +857,7 @@ async function openCandidate(target: CandidatePoolOpenPayload = {}) {
     const row = {
       entry: buildTransientEntry(target.liveProjection),
       projection: target.liveProjection,
+      liveDecisionProjection: target.liveProjection,
     }
     transientRow.value = row
     selectedId.value = row.entry.id

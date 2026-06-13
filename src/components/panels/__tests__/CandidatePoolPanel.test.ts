@@ -28,9 +28,7 @@ describe('CandidatePoolPanel source contract', () => {
     expect(source).toMatch(/candidateJournalService\.listCandidates/)
     expect(source).toMatch(/candidateJournalService\.updateCandidateThesis/)
     expect(source).toMatch(/candidateJournalService\.saveCandidateReview/)
-    expect(source).toMatch(/candidateJournalService\.toExecutionOverlay/)
-    expect(source).toMatch(/buildFusionStrategyProjection|buildFusionStrategyProjections/)
-    expect(source).toMatch(/snapshotRankTrend\.lifecycle/)
+    expect(source).toMatch(/buildCandidateJournalProjection/)
     expect(source).toMatch(/const\s+strategyRows\s*=\s*computed/)
     expect(source).toMatch(/const\s+selectedRow\s*=\s*computed/)
     expect(source).toMatch(/const\s+thesisForm\s*=\s*ref/)
@@ -83,17 +81,28 @@ describe('CandidatePoolPanel source contract', () => {
     expect(source).toContain('selectedConfigSnapshot')
     expect(source).toContain('selectedGateChecks')
     expect(source).toContain('isTransientLiveDetail')
+    expect(source).toContain('当前入池诊断')
+    expect(source).toContain('currentEntryDecisionLabel')
+    expect(source).toMatch(/当前策略状态[\s\S]*strategyStateLabel\(selectedLiveDetail\.projection\.strategyState\)/)
     expect(source).toMatch(/v-if="!isTransientLiveDetail"[\s\S]*删除候选/)
     expect(source).toMatch(/v-if="!isTransientLiveDetail" class="execution-card"/)
   })
 
-  test('freezes auto-added entry diagnostics to the saved rankTrend snapshot', () => {
+  test('does not replace persisted candidate lifecycle state with clicked live projection diagnostics', () => {
     const source = panelSource()
 
-    expect(source).toContain('resolveFrozenRankTrendSnapshot')
-    expect(source).toContain('entry.signalsSnapshot?.rankTrend')
-    expect(source).toContain("triggerMeta.triggerType === 'auto'")
-    expect(source).toContain('rankTrend: frozenRankTrend || liveStock.rankTrend || null')
+    expect(source).toContain('liveDecisionOverrides')
+    expect(source).not.toContain('liveProjectionOverrides')
+    expect(source).not.toMatch(/\[matched\.entry\.id\]: target\.liveProjection/)
+    expect(source).toMatch(/projection:\s*buildCandidateJournalProjection\(entry\)/)
+  })
+
+  test('delegates persisted lifecycle projection construction to the candidate service', () => {
+    const source = panelSource()
+
+    expect(source).toContain('buildCandidateJournalProjection')
+    expect(source).not.toContain('resolveFrozenRankTrendSnapshot')
+    expect(source).not.toContain('function buildProjection')
   })
 
   test('surfaces saved auto-entry quote and ranking facts in strategy facts', () => {
@@ -107,13 +116,13 @@ describe('CandidatePoolPanel source contract', () => {
     expect(source).toContain('formatOptionalNumber')
   })
 
-  test('clears transient live projection overrides when reloading candidates', () => {
+  test('clears transient live decision overrides when reloading candidates', () => {
     const source = panelSource()
 
-    expect(source).toContain('clearLiveProjectionOverrides')
-    expect(source).toMatch(/function clearLiveProjectionOverrides\(\)/)
-    expect(source).toMatch(/liveProjectionOverrides\.value = \{\}/)
-    expect(source).toMatch(/async function loadCandidates\(\)[\s\S]*clearLiveProjectionOverrides\(\)/)
+    expect(source).toContain('clearLiveDecisionOverrides')
+    expect(source).toMatch(/function clearLiveDecisionOverrides\(\)/)
+    expect(source).toMatch(/liveDecisionOverrides\.value = \{\}/)
+    expect(source).toMatch(/async function loadCandidates\(\)[\s\S]*clearLiveDecisionOverrides\(\)/)
   })
 
   test('keeps candidate operations and lifecycle list controls', () => {

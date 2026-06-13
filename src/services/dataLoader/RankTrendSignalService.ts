@@ -1,4 +1,5 @@
 import { debugLog } from '@/utils/logger'
+import { buildCandidateJournalProjection } from '../candidate/CandidateProjectionBuilder'
 import { candidateJournalService } from '../candidate/CandidateJournalService'
 import { applyCandidatePoolProjections } from '../candidate/CandidatePoolStatusProjector'
 import { dataLayer } from '../DataLayer'
@@ -30,6 +31,24 @@ function logCoverageWarning(message: string, coverageWarning: string) {
   }
 
   console.warn(message, coverageWarning)
+}
+
+function normalizeCode(code: unknown): string {
+  const digits = String(code || '').replace(/\D/g, '')
+  return digits ? digits.padStart(6, '0').slice(-6) : ''
+}
+
+function mergeCandidatePoolProjections(
+  liveProjections: ReturnType<typeof buildFusionStrategyProjections>,
+  journalProjections: ReturnType<typeof buildFusionStrategyProjections>,
+) {
+  const projectionByCode = new Map(liveProjections.map((projection) => [normalizeCode(projection.stockCode), projection]))
+  for (const projection of journalProjections) {
+    const code = normalizeCode(projection.stockCode)
+    if (!code) continue
+    projectionByCode.set(code, projection)
+  }
+  return Array.from(projectionByCode.values())
 }
 
 export class RankTrendSignalService {
@@ -160,11 +179,22 @@ export class RankTrendSignalService {
     }
 
     try {
-      const executionOverlayByCode = await candidateJournalService.getExecutionOverlayMap(
-        stocks.map((stock) => stock.code),
+      const codes = stocks.map((stock) => stock.code)
+      const openCandidateByCode = await candidateJournalService.getOpenCandidateMap(codes)
+      const executionOverlayByCode = Object.fromEntries(
+        Object.entries(openCandidateByCode).map(([code, entry]) => [
+          code,
+          candidateJournalService.toExecutionOverlay(entry),
+        ]),
       )
       const projections = buildFusionStrategyProjections(stocks, { executionOverlayByCode })
-      applyCandidatePoolProjections(stocks, projections)
+      const journalProjections = stocks
+        .map((stock) => {
+          const entry = openCandidateByCode[normalizeCode(stock.code)]
+          return entry ? buildCandidateJournalProjection(entry, stock) : null
+        })
+        .filter(Boolean) as typeof projections
+      applyCandidatePoolProjections(stocks, mergeCandidatePoolProjections(projections, journalProjections))
     } catch (error) {
       console.warn(
         '[RankTrendSignalService] 候选池 execution overlay 读取失败，使用无 overlay 投影:',

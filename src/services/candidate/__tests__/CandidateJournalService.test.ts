@@ -752,6 +752,45 @@ describe('CandidateJournalService', () => {
     })
   })
 
+  it('returns latest open candidate by stock code for lifecycle projection sync', async () => {
+    const { service, api } = createService()
+    api.get.mockResolvedValue({
+      entries: [
+        {
+          ...existingCandidate,
+          id: 'tj_open_old',
+          stockCode: '600584',
+          status: 'triggered',
+          updatedAt: '2026-06-08T10:00:00+08:00',
+        },
+        {
+          ...existingCandidate,
+          id: 'tj_reviewed_newer',
+          stockCode: '600584',
+          status: 'reviewed',
+          updatedAt: '2026-06-08T14:00:00+08:00',
+        },
+        {
+          ...existingCandidate,
+          id: 'tj_open_new',
+          stockCode: 'sh600584',
+          status: 'tracking',
+          updatedAt: '2026-06-08T13:00:00+08:00',
+        },
+      ],
+      total: 3,
+    })
+
+    const result = await service.getOpenCandidateMap(['600584', '000001'])
+
+    expect(result['600584']?.id).toBe('tj_open_new')
+    expect(result['000001']).toBeNull()
+    expect(api.get).toHaveBeenCalledWith(
+      '/api/journal/entries?limit=200&trade_type=thesis',
+      expect.any(Object),
+    )
+  })
+
   it('does not mark overlay as executed when journal entry only has empty execution fields', async () => {
     const { service, api } = createService()
     api.get.mockResolvedValue({

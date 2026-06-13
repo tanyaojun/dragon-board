@@ -76,7 +76,7 @@ describe('CandidatePoolStatusProjector', () => {
 
     expect(result[0]).toMatchObject({
       candidatePoolStatus: 'active_holding',
-      candidatePoolLabel: '策略持有中',
+      candidatePoolLabel: '已入场',
       candidatePoolProjection: expect.objectContaining({
         strategyState: 'active_holding',
         executionOverlay: expect.objectContaining({
@@ -109,7 +109,7 @@ describe('CandidatePoolStatusProjector', () => {
     })
   })
 
-  it('uses entry decision label and summary for live watch candidates', () => {
+  it('keeps table label on strategy lifecycle when live entry decision is blocked', () => {
     const stocks = [{ code: '000970', name: '中科三环' }]
     const projections: FusionStrategyProjection[] = [
       {
@@ -121,15 +121,16 @@ describe('CandidatePoolStatusProjector', () => {
         snapshotId: 'snap-watch',
         frameTime: '2026-06-10T10:00:00+08:00',
         projectionSource: 'live',
-        strategyState: 'idle',
+        strategyState: 'triggered_wait_entry',
         candidateTier: 'A_MAIN',
-        lifecycleAction: 'allow',
+        lifecycleAction: 'veto',
+        triggerAt: '2026-06-12T15:00:00+08:00',
         executionOverlay: null,
         entryDecision: {
           accepted: false,
-          decisionState: 'watch_candidate',
-          label: '观察候选',
-          summary: '涨幅偏高，进入观察候选',
+          decisionState: 'blocked_candidate',
+          label: '被阻断',
+          summary: '生命周期辅助决策一票否决',
           checks: [],
           configSnapshot: {
             version: 'live-v5.1.0',
@@ -152,8 +153,9 @@ describe('CandidatePoolStatusProjector', () => {
     const result = projectCandidatePoolStatus(stocks as any[], projections)
 
     expect(result[0]).toMatchObject({
-      candidatePoolStatus: 'idle',
-      candidatePoolLabel: '观察候选',
+      candidatePoolStatus: 'triggered_wait_entry',
+      candidatePoolLabel: '待入场',
+      candidatePoolLiveDecisionLabel: '被阻断',
       candidatePoolProjection: projections[0],
     })
   })
