@@ -273,17 +273,32 @@ export class RankTrendAnalyzer {
       codes: options?.codes,
     })
 
+    const hasSeriesData = this.hasRankSeriesData(response, options?.codes)
     const snapshots = this.normalizeRankSeriesResponse(response, type, options?.codes)
 
     if (options?.minRequired && snapshots.length < options.minRequired) {
       return []
     }
 
-    if (options?.limit && options.limit > 0 && snapshots.length > options.limit) {
+    if (!hasSeriesData && options?.limit && options.limit > 0 && snapshots.length > options.limit) {
       return snapshots.slice(-options.limit)
     }
 
     return snapshots
+  }
+
+  private hasRankSeriesData(
+    response: {
+      series?: Record<string, { bars?: RankTrendRankSeriesFrame['bars'] }>
+    },
+    codes?: string[],
+  ): boolean {
+    const series = response.series || {}
+    const matchedCodes = Array.isArray(codes) && codes.length ? codes : Object.keys(series)
+    return matchedCodes.some((code) => {
+      const entry = series[code]
+      return Array.isArray(entry?.bars) && entry.bars.length > 0
+    })
   }
 
   private normalizeRankSeriesResponse(
@@ -297,12 +312,8 @@ export class RankTrendAnalyzer {
     const series = response.series || {}
     const frames = response.frames || []
 
-    // Fallback: if series has no matching codes, use frames directly
-    const matchedCodes = Array.isArray(codes) && codes.length ? codes : Object.keys(series)
-    const hasSeriesData = matchedCodes.some((code) => {
-      const entry = series[code]
-      return Array.isArray(entry?.bars) && entry.bars.length > 0
-    })
+    // Fallback: if series has no matching codes, use frames directly.
+    const hasSeriesData = this.hasRankSeriesData(response, codes)
     if (!hasSeriesData && frames.length > 0) {
       return this.normalizeFramesToSnapshots(frames, preferredType)
     }
@@ -364,7 +375,6 @@ export class RankTrendAnalyzer {
 
     return Array.from(snapshotsBySignature.values())
       .sort((left, right) => left.timestamp - right.timestamp)
-      .slice(-50)
   }
 
   private normalizeFramesToSnapshots(
@@ -409,7 +419,6 @@ export class RankTrendAnalyzer {
       })
       .filter((item): item is NonNullable<typeof item> => item !== null)
       .sort((left, right) => left.timestamp - right.timestamp)
-      .slice(-50)
   }
 
   async getRankTrends(
@@ -555,7 +564,6 @@ export class RankTrendAnalyzer {
         }
       })
       .sort((left, right) => left.timestamp - right.timestamp)
-      .slice(-50)
   }
 
   private deriveTimestampFromDate(date: string, fallbackIndex: number): number {

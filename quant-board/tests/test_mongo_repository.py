@@ -29,6 +29,7 @@ class FakeCursor:
 class FakeCollection:
     def __init__(self) -> None:
         self.rows: list[dict[str, Any]] = []
+        self.find_queries: list[dict[str, Any]] = []
 
     def count_documents(self, query: dict[str, Any]) -> int:
         return len(list(self.find(query)))
@@ -54,7 +55,9 @@ class FakeCollection:
         return next(iter(self.find(query)), None)
 
     def find(self, query: dict[str, Any] | None = None) -> FakeCursor:
-        return FakeCursor([dict(row) for row in self.rows if _matches(row, query or {})])
+        normalized_query = dict(query or {})
+        self.find_queries.append(normalized_query)
+        return FakeCursor([dict(row) for row in self.rows if _matches(row, normalized_query)])
 
 
 class FakeMongoDatabase(dict):
@@ -104,6 +107,53 @@ def test_mongo_repository_ingests_and_reads_rank_series() -> None:
     )
     assert [bar["rank"] for bar in desc_rank_series["series"]["000001"]["bars"]] == [3]
     assert desc_rank_series["series"]["000001"]["totalCount"] == 2
+
+
+def test_mongo_repository_rank_series_uses_per_code_window_for_large_code_batches() -> None:
+    repo = MongoRepository(FakeMongoDatabase())
+    dataset = _dataset()
+    codes = [f"60{index:04d}" for index in range(60)]
+    special_code = codes[-1]
+    frames = [_frame(f"s{index}", index) for index in range(8)]
+    stock_rows = []
+    for frame_index, frame in enumerate(frames):
+        for code_index, code in enumerate(codes):
+            if code == special_code and frame_index >= 5:
+                continue
+            stock_rows.append(
+                {
+                    **_stock(str(frame["snapshotId"]), code, code_index + 1 + frame_index),
+                    "timestamp": frame["timestamp"],
+                    "slotTime": frame["slotTime"],
+                }
+            )
+
+    repo.save_snapshot_ingest(
+        dataset,
+        records=[_record(str(frame["snapshotId"])) for frame in frames],
+        frames=frames,
+        stock_rows=stock_rows,
+        sector_rows=[],
+        idempotency_key="ingest-large-rank-series",
+        trading_date="2026-05-12",
+    )
+    repo.db["snapshot_stock_rows"].find_queries.clear()
+
+    rank_series = repo.load_rank_series(
+        "dragonboard_live",
+        snapshot_type="half_hour",
+        codes=codes,
+        sort="desc",
+        limit=2,
+        window_bars=2,
+    )
+
+    stock_queries = repo.db["snapshot_stock_rows"].find_queries
+    assert any(query.get("code") == special_code for query in stock_queries)
+    assert not any("snapshotId" in query and "code" in query for query in stock_queries)
+    assert set(rank_series["series"]) == set(codes)
+    assert all(len(item["bars"]) == 2 for item in rank_series["series"].values())
+    assert [bar["snapshotId"] for bar in rank_series["series"][special_code]["bars"]] == ["s3", "s4"]
 
 
 def test_mongo_repository_frame_bundles_return_mongodb_source_rows() -> None:

@@ -371,4 +371,64 @@ describe('RankTrendAnalyzer', () => {
     expect(result?.technical).toBeTruthy()
     expect(result?.meta.sampleQuality?.status).not.toBe('min_samples_not_met')
   })
+
+  it('keeps each code window when another code has newer rank-series bars', async () => {
+    const { apiService } = await import('../apiService')
+    const earlyBars = Array.from({ length: 30 }, (_, index) => ({
+      snapshotId: `half_hour:600601:${String(index).padStart(2, '0')}`,
+      timestamp: Date.parse('2026-04-27T09:30:00') + index * 30 * 60 * 1000,
+      code: '600601',
+      rank: 90 - index,
+      totalCount: 304,
+      tradingDate: '2026-04-27',
+      slotTime: `09:${String(index).padStart(2, '0')}`,
+    }))
+    const newerBars = Array.from({ length: 50 }, (_, index) => ({
+      snapshotId: `half_hour:600001:${String(index).padStart(2, '0')}`,
+      timestamp: Date.parse('2026-04-28T09:30:00') + index * 30 * 60 * 1000,
+      code: '600001',
+      rank: 80 - index,
+      totalCount: 304,
+      tradingDate: '2026-04-28',
+      slotTime: `09:${String(index).padStart(2, '0')}`,
+    }))
+    vi.mocked(apiService.getRankTrendRankSeries).mockResolvedValue({
+      ok: true,
+      datasetId: 'dragonboard_live',
+      snapshotType: 'half_hour',
+      source: 'mongodb',
+      count: 50,
+      frames: [],
+      series: {
+        '600601': {
+          code: '600601',
+          bars: earlyBars,
+          totalCount: 189,
+          latestSnapshotId: 'half_hour:600601:29',
+          latestTradingDate: '2026-04-27',
+          latestSlotTime: '09:29',
+        },
+        '600001': {
+          code: '600001',
+          bars: newerBars,
+          totalCount: 50,
+          latestSnapshotId: 'half_hour:600001:49',
+          latestTradingDate: '2026-04-28',
+          latestSlotTime: '09:49',
+        },
+      },
+    })
+
+    const { rankTrendAnalyzer } = await import('../RankTrendAnalyzer')
+    const results = await rankTrendAnalyzer.getRankTrends(
+      new Map([
+        ['600601', 45],
+        ['600001', 33],
+      ]),
+      { updateSignalStore: false },
+    )
+
+    expect(results.get('600601')?.meta.sampleQuality?.sampleCount).toBeGreaterThanOrEqual(30)
+    expect(results.get('600601')?.technical.macd.dif).not.toBe(0)
+  })
 })

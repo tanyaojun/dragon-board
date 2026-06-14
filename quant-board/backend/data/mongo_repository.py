@@ -249,34 +249,53 @@ class MongoRepository:
             allowed_capture_modes=allowed_capture_modes,
             exclude_restored=exclude_restored,
         )
-        if codes:
-            query["code"] = {"$in": codes}
-
-        direction = 1 if sort == "asc" else -1
-        rows = list(self.db["snapshot_stock_rows"].find(query).sort([("timestamp", direction), ("rank", 1)]))
-
         effective_window = window_bars or limit or 50
-
         total_count_by_code: dict[str, int] = defaultdict(int)
-        for row in rows:
-            code_key = str(row.get("code") or "")
-            if code_key:
-                total_count_by_code[code_key] += 1
-
-        rows_for_window = sorted(
-            rows,
-            key=lambda row: (int(row.get("timestamp") or 0), int(row.get("rank") or 0)),
-        )
-
-        # Per-code picking: keep the most recent bars per code
         picked_by_code: dict[str, list[dict[str, Any]]] = defaultdict(list)
-        for row in reversed(rows_for_window):
-            code_key = str(row.get("code") or "")
-            if not code_key or len(picked_by_code[code_key]) >= effective_window:
-                continue
-            picked_by_code[code_key].append(row)
-        for code_key in picked_by_code:
-            picked_by_code[code_key].reverse()
+
+        if codes:
+            for code in codes:
+                code_query = {**query, "code": code}
+                total_count_by_code[code] = int(self.db["snapshot_stock_rows"].count_documents(code_query))
+                if total_count_by_code[code] <= 0:
+                    continue
+                code_rows = list(
+                    self.db["snapshot_stock_rows"]
+                    .find(code_query)
+                    .sort([("timestamp", -1), ("snapshotId", -1), ("rank", 1)])
+                    .limit(effective_window)
+                )
+                picked_by_code[code] = sorted(
+                    code_rows,
+                    key=lambda row: (
+                        int(row.get("timestamp") or 0),
+                        str(row.get("snapshotId") or ""),
+                        int(row.get("rank") or 0),
+                    ),
+                )
+        else:
+            direction = 1 if sort == "asc" else -1
+            rows = list(
+                self.db["snapshot_stock_rows"].find(query).sort([("timestamp", direction), ("rank", 1)])
+            )
+            for row in rows:
+                code_key = str(row.get("code") or "")
+                if code_key:
+                    total_count_by_code[code_key] += 1
+
+            rows_for_window = sorted(
+                rows,
+                key=lambda row: (int(row.get("timestamp") or 0), int(row.get("rank") or 0)),
+            )
+
+            # Per-code picking: keep the most recent bars per code.
+            for row in reversed(rows_for_window):
+                code_key = str(row.get("code") or "")
+                if not code_key or len(picked_by_code[code_key]) >= effective_window:
+                    continue
+                picked_by_code[code_key].append(row)
+            for code_key in picked_by_code:
+                picked_by_code[code_key].reverse()
 
         all_code_keys = sorted(picked_by_code.keys())
         picked_rows: list[dict[str, Any]] = []
