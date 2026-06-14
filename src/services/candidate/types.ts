@@ -134,6 +134,7 @@ export interface CandidateJournalEntry {
   stockName: string
   status: CandidateStatus
   tradeType: string
+  candidateEntryId?: string
   entryReason: string
   tradeHypothesis: string
   entryPrerequisites: string
@@ -164,6 +165,27 @@ export interface CandidateThesisUpdate {
   invalidationRules: string
   humanDecision: string
   skipReason: string
+}
+
+export interface TradingPoolSignalSnapshotPayload {
+  version: string
+  code?: string
+  name?: string
+  status: TradingPoolStatus
+  decision: TradingPoolDecision
+  reasons: string[]
+  signalSnapshot?: TradingPoolSignalSnapshot
+  dataQuality?: TradingPoolSignalSnapshot['dataQuality']
+  lastRecomputedAt?: string
+}
+
+export interface TradingPoolEntryUpdate {
+  code?: string
+  name?: string
+  status: TradingPoolStatus
+  decision: TradingPoolDecision
+  reasons: string[]
+  signalSnapshot?: TradingPoolSignalSnapshot
 }
 
 export interface TradeExecutionFields {

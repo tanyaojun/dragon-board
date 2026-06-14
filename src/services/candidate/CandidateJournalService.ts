@@ -22,6 +22,9 @@ import type {
   CandidateStructuredRisk,
   CandidateStructuredThesis,
   CandidateThesisUpdate,
+  TradingPoolAnalysisRow,
+  TradingPoolEntryUpdate,
+  TradingPoolSignalSnapshotPayload,
   CandidateWorkbenchReview,
 } from './types'
 import type { FusionExecutionOverlay } from '@/types/fusionStrategyProjection'
@@ -108,6 +111,7 @@ function normalizeEntry(raw: any): CandidateJournalEntry {
     stockName: String(raw?.stockName || raw?.stock_name || ''),
     status: String(raw?.status || 'observe') as CandidateStatus,
     tradeType: String(raw?.tradeType || raw?.trade_type || 'thesis'),
+    candidateEntryId: raw?.candidateEntryId || raw?.candidate_entry_id ? String(raw?.candidateEntryId || raw?.candidate_entry_id) : undefined,
     entryReason: String(raw?.entryReason || raw?.entry_reason || ''),
     tradeHypothesis: String(raw?.tradeHypothesis || raw?.trade_hypothesis || ''),
     entryPrerequisites: String(raw?.entryPrerequisites || raw?.entry_prerequisites || ''),
@@ -174,6 +178,24 @@ function normalizeSavedAnalysis(snapshot: Record<string, any> | null | undefined
     },
     generatedAt: toSafeNumber(analysis.generatedAt) || undefined,
   }
+}
+
+function buildTradingPoolSnapshot(update: TradingPoolEntryUpdate): TradingPoolSignalSnapshotPayload {
+  return {
+    version: 'v2',
+    code: update.code,
+    name: update.name,
+    status: update.status,
+    decision: update.decision,
+    reasons: update.reasons,
+    signalSnapshot: update.signalSnapshot,
+    dataQuality: update.signalSnapshot?.dataQuality,
+    lastRecomputedAt: new Date().toISOString(),
+  }
+}
+
+function resolveTradingPoolJournalStatus(status: TradingPoolEntryUpdate['status']): string {
+  return status === '已退出' || status === '已完成' ? 'closed' : 'active'
 }
 
 function normalizeEvidenceList(value: unknown): CandidateRuleEvidence[] {
@@ -310,6 +332,66 @@ export class CandidateJournalService {
     return Array.isArray(data?.entries)
       ? data.entries.map(normalizeEntry).filter((entry: CandidateJournalEntry) => entry.tradeType === 'thesis')
       : []
+  }
+
+  async listTradingPoolEntries(params: { candidateEntryId?: string; limit?: number } = {}): Promise<CandidateJournalEntry[]> {
+    const search = new URLSearchParams({
+      limit: String(params.limit || 200),
+      trade_type: 'trading_pool',
+    })
+    if (params.candidateEntryId) search.set('candidate_entry_id', params.candidateEntryId)
+    const data = await this.api.get(`/api/journal/entries?${search.toString()}`, {
+      context: 'quant-board',
+      cache: false,
+      silent: true,
+      throwOnHttpError: true,
+    })
+    return Array.isArray(data?.entries)
+      ? data.entries.map(normalizeEntry).filter((entry: CandidateJournalEntry) => entry.tradeType === 'trading_pool')
+      : []
+  }
+
+  async createTradingPoolEntry(
+    candidate: CandidateJournalEntry,
+    row: TradingPoolAnalysisRow,
+  ): Promise<CandidateJournalEntry> {
+    const tradingPoolSnapshot = buildTradingPoolSnapshot({
+      ...row,
+      code: row.code || normalizeCode(candidate.stockCode),
+      name: row.name || candidate.stockName,
+    })
+    const created = await this.api.post('/api/journal/entries', {
+      stock_code: normalizeCode(candidate.stockCode),
+      stock_name: candidate.stockName || candidate.stockCode,
+      trade_type: 'trading_pool',
+      candidate_entry_id: candidate.id,
+      status: resolveTradingPoolJournalStatus(row.status),
+      signals_snapshot: {
+        tradingPool: tradingPoolSnapshot,
+      },
+    }, {
+      context: 'quant-board',
+      cache: false,
+      silent: true,
+      throwOnHttpError: true,
+    })
+    return normalizeEntry(created)
+  }
+
+  async updateTradingPoolEntry(id: string, update: TradingPoolEntryUpdate): Promise<CandidateJournalEntry> {
+    const tradingPoolSnapshot = buildTradingPoolSnapshot(update)
+    const updated = await this.api.put(`/api/journal/entries/${id}`, {
+      status: resolveTradingPoolJournalStatus(update.status),
+      signals_snapshot: {
+        tradingPool: tradingPoolSnapshot,
+      },
+    }, {
+      context: 'quant-board',
+      cache: false,
+      silent: true,
+      throwOnHttpError: true,
+    })
+    return normalizeEntry(updated)
   }
 
   async addCandidateFromStock(

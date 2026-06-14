@@ -532,6 +532,7 @@ class TradeJournal:
     volume: int = 0
     trade_time: str = ""  # ISO 8601
     linked_entry_id: str | None = None
+    candidate_entry_id: str | None = None
     signals_snapshot: dict[str, Any] | None = field(default_factory=dict)
     notes: str = ""
     screenshot_paths: list[str] = field(default_factory=list)
@@ -575,6 +576,7 @@ class TradeJournal:
             "volume": self.volume,
             "tradeTime": self.trade_time,
             "linkedEntryId": self.linked_entry_id,
+            "candidateEntryId": self.candidate_entry_id,
             "signalsSnapshot": self.signals_snapshot,
             "notes": self.notes,
             "screenshotPaths": self.screenshot_paths,
@@ -619,6 +621,7 @@ class TradeJournal:
             volume=int(data.get("volume") or 0),
             trade_time=str(data.get("tradeTime") or ""),
             linked_entry_id=data.get("linkedEntryId"),
+            candidate_entry_id=data.get("candidateEntryId"),
             signals_snapshot=data.get("signalsSnapshot") or {},
             notes=str(data.get("notes") or ""),
             screenshot_paths=list(data.get("screenshotPaths") or []),

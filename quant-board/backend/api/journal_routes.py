@@ -47,6 +47,7 @@ class CreateJournalEntryRequest(BaseModel):
     volume: int = 0
     trade_time: str = ""  # ISO 8601
     linked_entry_id: str | None = None
+    candidate_entry_id: str | None = None
     signals_snapshot: dict[str, Any] | None = None
     notes: str = ""
     review_tags: list[str] | None = None
@@ -84,6 +85,7 @@ class UpdateJournalEntryRequest(BaseModel):
     volume: int | None = None
     trade_time: str | None = None
     linked_entry_id: str | None = None
+    candidate_entry_id: str | None = None
     signals_snapshot: dict[str, Any] | None = None
     notes: str | None = None
     review_tags: list[str] | None = None
@@ -130,6 +132,7 @@ def create_entry(payload: CreateJournalEntryRequest) -> dict[str, Any]:
         volume=payload.volume,
         trade_time=payload.trade_time or now,
         linked_entry_id=payload.linked_entry_id,
+        candidate_entry_id=payload.candidate_entry_id,
         signals_snapshot=payload.signals_snapshot,
         notes=payload.notes,
         review_tags=payload.review_tags or [],
@@ -168,6 +171,7 @@ def list_entries(
     trade_type: str | None = Query(None),
     direction: str | None = Query(None),
     status: str | None = Query(None),
+    candidate_entry_id: str | None = Query(None),
     date_from: str | None = Query(None),
     date_to: str | None = Query(None),
     review_tags: str | None = Query(None),  # comma-separated
@@ -181,6 +185,7 @@ def list_entries(
         trade_type=trade_type,
         direction=direction,
         status=status,
+        candidate_entry_id=candidate_entry_id,
         date_from=date_from,
         date_to=date_to,
         review_tags=tags_list,
@@ -192,6 +197,7 @@ def list_entries(
         trade_type=trade_type,
         direction=direction,
         status=status,
+        candidate_entry_id=candidate_entry_id,
         date_from=date_from,
         date_to=date_to,
         review_tags=tags_list,
@@ -225,6 +231,7 @@ def update_entry(entry_id: str, payload: UpdateJournalEntryRequest) -> dict[str,
         "volume": "volume",
         "trade_time": "tradeTime",
         "linked_entry_id": "linkedEntryId",
+        "candidate_entry_id": "candidateEntryId",
         "signals_snapshot": "signalsSnapshot",
         "notes": "notes",
         "review_tags": "reviewTags",

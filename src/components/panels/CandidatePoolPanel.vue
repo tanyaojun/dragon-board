@@ -474,6 +474,13 @@ import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { buildCandidateJournalProjection } from '@/services/candidate/CandidateProjectionBuilder'
 import { candidateJournalService } from '@/services/candidate/CandidateJournalService'
 import { analyzeTradingPoolCandidate } from '@/services/candidate/TradingPoolAnalysisService'
+import {
+  buildTradingPoolPersistencePlan,
+  getTradingPoolEntryCandidate,
+  getTradingPoolEntryForCandidate,
+  isTradingPoolSnapshotEqual,
+  readTradingPoolSnapshot,
+} from './candidatePoolTradingPool'
 import type {
   CandidateJournalEntry,
   CandidateReviewUpdate,
@@ -539,6 +546,7 @@ const pendingStrategyMode = ref<RankTrendLiveStrategyMode>('balanced')
 const transientRow = ref<CandidatePoolRow | null>(null)
 const liveDecisionOverrides = ref<Record<string, FusionStrategyProjection>>({})
 const previousTradingPoolRows = ref<TradingPoolAnalysisRow[]>(loadPreviousTradingPoolRows())
+const persistedTradingPoolEntries = ref<CandidateJournalEntry[]>([])
 const tradingPoolRefreshTick = ref(0)
 
 const thesisForm = ref<CandidateThesisUpdate>({
@@ -659,6 +667,66 @@ function savePreviousTradingPoolRows(rows: TradingPoolAnalysisRow[]): void {
   sessionStorage.setItem(TRADING_POOL_PREVIOUS_ROWS_KEY, JSON.stringify(rows))
 }
 
+function candidateForTradingPoolRow(row: TradingPoolAnalysisRow): CandidateJournalEntry | null {
+  return getTradingPoolEntryCandidate(candidates.value, row)
+}
+
+function tradingPoolEntryForCandidate(candidate: CandidateJournalEntry | null): CandidateJournalEntry | null {
+  if (!candidate) return null
+  return getTradingPoolEntryForCandidate(persistedTradingPoolEntries.value, candidate)
+}
+
+async function loadPersistedTradingPoolEntries() {
+  try {
+    persistedTradingPoolEntries.value = await candidateJournalService.listTradingPoolEntries({ limit: 200 })
+    const persistedRows = persistedTradingPoolEntries.value
+      .map((entry) => readTradingPoolSnapshot({
+        ...(entry.signalsSnapshot || {}),
+        quote: {
+          code: entry.stockCode,
+          name: entry.stockName,
+        },
+      }))
+      .filter((row): row is TradingPoolAnalysisRow => !!row)
+    if (persistedRows.length) {
+      previousTradingPoolRows.value = persistedRows
+      savePreviousTradingPoolRows(persistedRows)
+    }
+  } catch (error) {
+    EventManager.emit(AppEvents.UI.TOAST, {
+      message: `交易池持久化记录加载失败：${error instanceof Error ? error.message : '未知错误'}`,
+      duration: 1800,
+      type: 'warning',
+    })
+  }
+}
+
+async function persistTradingPoolRow(
+  row: TradingPoolAnalysisRow,
+  options: { candidate?: CandidateJournalEntry; existing?: CandidateJournalEntry | null } = {},
+): Promise<void> {
+  const candidate = options.candidate || candidateForTradingPoolRow(row)
+  const existing = options.existing ?? tradingPoolEntryForCandidate(candidate)
+  if (existing) {
+    if (isTradingPoolSnapshotEqual(existing.signalsSnapshot?.tradingPool, row)) return
+    const updated = await candidateJournalService.updateTradingPoolEntry(existing.id, {
+      code: row.code,
+      name: row.name,
+      status: row.status,
+      decision: row.decision,
+      reasons: row.reasons,
+      signalSnapshot: row.signalSnapshot,
+    })
+    persistedTradingPoolEntries.value = persistedTradingPoolEntries.value.map((entry) =>
+      entry.id === updated.id ? updated : entry,
+    )
+    return
+  }
+  if (!candidate) return
+  const created = await candidateJournalService.createTradingPoolEntry(candidate, row)
+  persistedTradingPoolEntries.value = [created, ...persistedTradingPoolEntries.value]
+}
+
 function tradingPoolDecisionLabel(decision: TradingPoolDecision): string {
   if (decision === 'enter') return '观察买点'
   if (decision === 'downgrade') return '降级观察'
@@ -685,6 +753,7 @@ function switchToTradingPool() {
   if (activePoolTab.value !== 'trading') {
     activePoolTab.value = 'trading'
   }
+  void loadPersistedTradingPoolEntries()
   refreshTradingPool()
 }
 
@@ -694,6 +763,23 @@ async function persistTradingPoolRowsAfterRefresh() {
   const rows = tradingPoolRows.value
   previousTradingPoolRows.value = rows
   savePreviousTradingPoolRows(rows)
+  try {
+    const plan = buildTradingPoolPersistencePlan(rows, candidates.value, persistedTradingPoolEntries.value)
+    await Promise.all(
+      plan.updates.map(({ entry, row }) =>
+        persistTradingPoolRow(row, { existing: entry }),
+      ),
+    )
+    for (const { candidate, row } of plan.creates) {
+      await persistTradingPoolRow(row, { candidate, existing: null })
+    }
+  } catch (error) {
+    EventManager.emit(AppEvents.UI.TOAST, {
+      message: `交易池持久化失败：${error instanceof Error ? error.message : '未知错误'}`,
+      duration: 1800,
+      type: 'warning',
+    })
+  }
 }
 
 function replaceCandidate(updated: CandidateJournalEntry) {
@@ -868,6 +954,9 @@ async function loadCandidates() {
   clearLiveDecisionOverrides()
   try {
     candidates.value = await candidateJournalService.listCandidates({ limit: 200 })
+    if (activePoolTab.value === 'trading') {
+      await loadPersistedTradingPoolEntries()
+    }
     syncSelection()
   } catch (error) {
     errorMessage.value = `候选加载失败：${error instanceof Error ? error.message : '未知错误'}`
@@ -971,16 +1060,31 @@ function openRankTrend() {
   })
 }
 
-function markTradingPoolIntervened(row: TradingPoolAnalysisRow) {
-  previousTradingPoolRows.value = tradingPoolRows.value.map((item) =>
-    item.code === row.code ? { ...item, status: '已介入', decision: 'watch', reasons: ['manual_intervened'] } : item,
-  )
-  savePreviousTradingPoolRows(previousTradingPoolRows.value)
-  EventManager.emit(AppEvents.UI.TOAST, {
-    message: `交易池已标记介入：${row.name || row.code}`,
-    duration: 1400,
-    type: 'success',
-  })
+async function markTradingPoolIntervened(row: TradingPoolAnalysisRow) {
+  const intervenedRow: TradingPoolAnalysisRow = {
+    ...row,
+    status: '已介入',
+    decision: 'watch',
+    reasons: ['manual_intervened'],
+  }
+  try {
+    await persistTradingPoolRow(intervenedRow)
+    previousTradingPoolRows.value = tradingPoolRows.value.map((item) =>
+      item.code === row.code ? intervenedRow : item,
+    )
+    savePreviousTradingPoolRows(previousTradingPoolRows.value)
+    EventManager.emit(AppEvents.UI.TOAST, {
+      message: `交易池已标记介入：${row.name || row.code}`,
+      duration: 1400,
+      type: 'success',
+    })
+  } catch (error) {
+    EventManager.emit(AppEvents.UI.TOAST, {
+      message: `交易池介入状态持久化失败：${error instanceof Error ? error.message : '未知错误'}`,
+      duration: 1800,
+      type: 'warning',
+    })
+  }
   // TODO: 持仓观察需要真实持仓/成交数据后再接入，不在 V1 前端投影层处理。
 }
 

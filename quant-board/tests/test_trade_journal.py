@@ -18,14 +18,26 @@ class FakeJournalRepo:
     def get_journal_entry(self, entry_id: str):
         return self.rows.get(entry_id)
 
-    def list_journal_entries(self, status=None, limit=50, offset=0, **_kwargs):
+    def list_journal_entries(self, status=None, trade_type=None, candidate_entry_id=None, limit=50, offset=0, **_kwargs):
         rows = list(self.rows.values())
         if status:
             rows = [row for row in rows if row.get("status") == status]
+        if trade_type:
+            rows = [row for row in rows if row.get("tradeType") == trade_type]
+        if candidate_entry_id:
+            rows = [row for row in rows if row.get("candidateEntryId") == candidate_entry_id]
         return rows[offset : offset + limit]
 
-    def count_journal_entries(self, status=None, **_kwargs):
-        return len(self.list_journal_entries(status=status, limit=10_000, offset=0))
+    def count_journal_entries(self, status=None, trade_type=None, candidate_entry_id=None, **_kwargs):
+        return len(
+            self.list_journal_entries(
+                status=status,
+                trade_type=trade_type,
+                candidate_entry_id=candidate_entry_id,
+                limit=10_000,
+                offset=0,
+            )
+        )
 
     def update_journal_entry(self, entry_id: str, updates: dict):
         self.rows[entry_id].update(updates)
@@ -115,6 +127,47 @@ def test_list_candidate_entries_can_filter_by_status(monkeypatch) -> None:
     data = response.json()
     assert data["total"] == 1
     assert data["entries"][0]["status"] == "candidate"
+
+
+def test_trading_pool_entry_persists_candidate_link_and_snapshot(monkeypatch) -> None:
+    repo = FakeJournalRepo()
+    monkeypatch.setattr(journal_routes, "create_repository", lambda *_args, **_kwargs: repo)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/journal/entries",
+        json={
+            "stock_code": "601208",
+            "stock_name": "东材科技",
+            "trade_type": "trading_pool",
+            "candidate_entry_id": "tj_thesis_1",
+            "status": "观察买点",
+            "signals_snapshot": {
+                "tradingPool": {
+                    "version": "v2",
+                    "decision": "enter",
+                    "status": "观察买点",
+                    "reasons": ["signal_resonance"],
+                    "dataQuality": "fresh",
+                }
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    created = response.json()
+    assert created["tradeType"] == "trading_pool"
+    assert created["candidateEntryId"] == "tj_thesis_1"
+    assert created["signalsSnapshot"]["tradingPool"]["decision"] == "enter"
+
+    list_response = client.get(
+        "/api/journal/entries?trade_type=trading_pool&candidate_entry_id=tj_thesis_1"
+    )
+
+    assert list_response.status_code == 200
+    data = list_response.json()
+    assert data["total"] == 1
+    assert data["entries"][0]["id"] == created["id"]
 
 
 def test_journal_routes_report_structured_error_when_storage_is_not_mongodb(monkeypatch) -> None:

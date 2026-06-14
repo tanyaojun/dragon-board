@@ -386,6 +386,139 @@ describe('CandidateJournalService', () => {
     )
   })
 
+  it('lists persisted trading-pool rows without reading historical entry or exit logs', async () => {
+    const { service, api } = createService()
+    api.get.mockResolvedValue({
+      entries: [
+        {
+          id: 'tj_pool_1',
+          stockCode: '600584',
+          stockName: '长电科技',
+          tradeType: 'trading_pool',
+          candidateEntryId: 'tj_existing',
+          status: '观察买点',
+          signalsSnapshot: {
+            tradingPool: {
+              version: 'v2',
+              decision: 'enter',
+              reasons: ['signal_resonance'],
+            },
+          },
+        },
+        {
+          id: 'tj_entry_1',
+          stockCode: '600584',
+          stockName: '长电科技',
+          tradeType: 'entry',
+          candidateEntryId: 'tj_existing',
+          status: 'filled',
+          signalsSnapshot: {},
+        },
+      ],
+      total: 2,
+    })
+
+    const result = await service.listTradingPoolEntries({ candidateEntryId: 'tj_existing' })
+
+    expect(api.get).toHaveBeenCalledWith(
+      '/api/journal/entries?limit=200&trade_type=trading_pool&candidate_entry_id=tj_existing',
+      expect.objectContaining({ context: 'quant-board', throwOnHttpError: true }),
+    )
+    expect(result.map((entry) => entry.id)).toEqual(['tj_pool_1'])
+    expect(result[0].candidateEntryId).toBe('tj_existing')
+    expect(result[0].signalsSnapshot?.tradingPool.decision).toBe('enter')
+  })
+
+  it('creates a persisted trading-pool row linked to its candidate thesis', async () => {
+    const { service, api } = createService()
+    api.post.mockResolvedValue({
+      id: 'tj_pool_1',
+      stockCode: '600584',
+      stockName: '长电科技',
+      tradeType: 'trading_pool',
+      candidateEntryId: 'tj_existing',
+      status: '观察买点',
+      signalsSnapshot: { tradingPool: { version: 'v2', decision: 'enter' } },
+      createdAt: '2026-06-14T10:00:00+08:00',
+      updatedAt: '2026-06-14T10:00:00+08:00',
+    })
+
+    const result = await service.createTradingPoolEntry(existingCandidate, {
+      status: '观察买点',
+      decision: 'enter',
+      reasons: ['signal_resonance'],
+      signalSnapshot: {
+        directionSignal: 'buy',
+        jumpConfidence: 0.88,
+        macdCross: 'golden',
+        accelerationSignal: 'buy',
+        zeroCrossSignal: 'buy',
+        momentumSyncBroken: false,
+        lifecycleAction: null,
+        dataQuality: 'fresh',
+      },
+    })
+
+    expect(api.post).toHaveBeenCalledWith(
+      '/api/journal/entries',
+      expect.objectContaining({
+        stock_code: '600584',
+        stock_name: '长电科技',
+        trade_type: 'trading_pool',
+        candidate_entry_id: 'tj_existing',
+        status: 'active',
+        signals_snapshot: {
+          tradingPool: expect.objectContaining({
+            version: 'v2',
+            decision: 'enter',
+            status: '观察买点',
+            reasons: ['signal_resonance'],
+            dataQuality: 'fresh',
+          }),
+        },
+      }),
+      expect.objectContaining({ context: 'quant-board', throwOnHttpError: true }),
+    )
+    expect(result.tradeType).toBe('trading_pool')
+    expect(result.candidateEntryId).toBe('tj_existing')
+  })
+
+  it('updates a persisted trading-pool row without creating a real trade entry', async () => {
+    const { service, api } = createService()
+    api.put.mockResolvedValue({
+      id: 'tj_pool_1',
+      stockCode: '600584',
+      stockName: '长电科技',
+      tradeType: 'trading_pool',
+      candidateEntryId: 'tj_existing',
+      status: '已介入',
+      signalsSnapshot: { tradingPool: { version: 'v2', decision: 'watch', status: '已介入' } },
+    })
+
+    const result = await service.updateTradingPoolEntry('tj_pool_1', {
+      status: '已介入',
+      decision: 'watch',
+      reasons: ['manual_intervened'],
+    })
+
+    expect(api.put).toHaveBeenCalledWith(
+      '/api/journal/entries/tj_pool_1',
+      {
+        status: 'active',
+        signals_snapshot: {
+          tradingPool: expect.objectContaining({
+            version: 'v2',
+            decision: 'watch',
+            status: '已介入',
+            reasons: ['manual_intervened'],
+          }),
+        },
+      },
+      expect.objectContaining({ context: 'quant-board', throwOnHttpError: true }),
+    )
+    expect(result.tradeType).toBe('trading_pool')
+  })
+
   it('reanalyzes an existing candidate from the latest stock context without mutating the saved snapshot', async () => {
     const { service, analyze } = createService()
 
