@@ -2071,6 +2071,134 @@ def test_ranktrend_rank_series_api_filters_codes() -> None:
     assert frame["totalCount"] == 3
 
 
+def test_ranktrend_rank_series_api_uses_per_code_window_not_global_frame_window() -> None:
+    client = TestClient(app)
+    suffix = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
+    dataset_id = f"dragonboard_rank_series_code_window_{suffix}"
+    frames = []
+    items = []
+    stock_rows = []
+
+    for index in range(8):
+        slot = f"10:{index:02d}"
+        snapshot_id = f"half_hour:2026-04-21:{slot}:{suffix}"
+        timestamp = 1776746400000 + index * 30 * 60 * 1000
+        items.append(
+            {
+                "id": snapshot_id,
+                "type": "half_hour",
+                "tradingDate": "2026-04-21",
+                "slotTime": slot,
+                "timestamp": timestamp,
+                "displayKey": f"[半小时快照] 2026-04-21 {slot}",
+                "captureMode": "real_time",
+                "source": "browser_runtime",
+                "payload": {"hotlist": []},
+            }
+        )
+        frames.append(
+            {
+                "id": snapshot_id,
+                "snapshotId": snapshot_id,
+                "type": "half_hour",
+                "tradingDate": "2026-04-21",
+                "slotTime": slot,
+                "timestamp": timestamp,
+                "captureMode": "real_time",
+                "source": "browser_runtime",
+                "stockRowCount": 200,
+            }
+        )
+        stock_rows.append(
+            {
+                "id": f"{snapshot_id}:600001",
+                "snapshotId": snapshot_id,
+                "type": "half_hour",
+                "tradingDate": "2026-04-21",
+                "slotTime": slot,
+                "timestamp": timestamp,
+                "captureMode": "real_time",
+                "code": "600001",
+                "name": "连续样本",
+                "rank": 100 - index,
+            }
+        )
+        if index >= 5:
+            stock_rows.append(
+                {
+                    "id": f"{snapshot_id}:600601",
+                    "snapshotId": snapshot_id,
+                    "type": "half_hour",
+                    "tradingDate": "2026-04-21",
+                    "slotTime": slot,
+                    "timestamp": timestamp,
+                    "captureMode": "real_time",
+                    "code": "600601",
+                    "name": "方正科技",
+                    "rank": 80 - index,
+                }
+            )
+
+    ingest = client.post(
+        "/api/snapshots/ingest",
+        json={
+            "datasetId": dataset_id,
+            "idempotencyKey": f"rank-series-code-window-key-{suffix}",
+            "tradingDate": "2026-04-21",
+            "bundle": {
+                "version": "v4",
+                "tradingDate": "2026-04-21",
+                "items": items,
+                "frames": frames,
+                "stockRows": stock_rows,
+                "sectorRows": [],
+            },
+        },
+    )
+    assert ingest.status_code == 200, ingest.text
+
+    response = client.get(
+        "/api/ranktrend/rank-series",
+        params={
+            "dataset_id": dataset_id,
+            "snapshot_type": "half_hour",
+            "trading_date": "2026-04-21",
+            "codes": "600001,600601",
+            "sort": "asc",
+            "limit": 5,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    frames_by_code = body["series"]
+    assert [bar["rank"] for bar in frames_by_code["600001"]["bars"]] == [97, 96, 95, 94, 93]
+    assert [bar["rank"] for bar in frames_by_code["600601"]["bars"]] == [75, 74, 73]
+    assert frames_by_code["600001"]["totalCount"] == 8
+    assert frames_by_code["600601"]["totalCount"] == 3
+    assert body["frames"][-1]["ranks"]["600001"] == 93
+    assert body["frames"][-1]["ranks"]["600601"] == 73
+    # per-code bars carry totalCount from the frame
+    for bar in frames_by_code["600001"]["bars"]:
+        assert bar.get("totalCount") == 200
+
+    desc_response = client.get(
+        "/api/ranktrend/rank-series",
+        params={
+            "dataset_id": dataset_id,
+            "snapshot_type": "half_hour",
+            "trading_date": "2026-04-21",
+            "codes": "600001",
+            "sort": "desc",
+            "limit": 5,
+        },
+    )
+
+    assert desc_response.status_code == 200, desc_response.text
+    desc_series = desc_response.json()["series"]
+    assert [bar["rank"] for bar in desc_series["600001"]["bars"]] == [97, 96, 95, 94, 93]
+    assert desc_series["600001"]["totalCount"] == 8
+
 def test_snapshot_frames_api_uses_snapshot_cache(monkeypatch: pytest.MonkeyPatch) -> None:
     from backend.data import snapshot_cache
 

@@ -18,7 +18,7 @@ import {
   summarizeRankTrendStrategyDistribution,
   type RankTrendStrategyValidationReport,
 } from './rankTrend/strategyValidation'
-import { getTechnicalMinSamples } from './rankTrend/utils'
+import { getMaxStableBars, getTechnicalMinSamples } from './rankTrend/utils'
 import type {
   RankTrendAnalysisResult,
   RankTrendRuntimeConfig as RankTrendRuntimeConfigModel,
@@ -37,6 +37,16 @@ type RankTrendRankSeriesFrame = {
   captureMode?: SnapshotCaptureMode
   totalCount: number
   ranks: Record<string, number>
+  bars?: Array<{
+    code?: string
+    rank?: number
+    snapshotId?: string
+    timestamp?: number
+    tradingDate?: string
+    slotTime?: string
+    captureMode?: SnapshotCaptureMode
+    totalCount?: number
+  }>
 }
 
 const FORMAL_SNAPSHOT_READ_POLICY = {
@@ -88,6 +98,7 @@ type DataLoaderApi = {
 type ApiServiceApi = {
   getRankTrendRankSeries(options: Record<string, unknown>): Promise<{
     frames?: RankTrendRankSeriesFrame[]
+    series?: Record<string, { code?: string; bars?: RankTrendRankSeriesFrame['bars']; snapshotType?: SupportedSnapshotType }>
   }>
 }
 
@@ -249,7 +260,7 @@ export class RankTrendAnalyzer {
     },
   ): Promise<RankTrendAnalysisSnapshot[]> {
     const apiService = await this.getApiService()
-    const readLimit = options?.limit ? Math.max(options.limit * 3, options.minRequired ?? 0) : undefined
+    const readLimit = options?.limit ? Math.max(options.limit, options.minRequired ?? 0) : options?.minRequired
     const response = await apiService.getRankTrendRankSeries({
       type,
       startDate: toTradingDateString(options?.fromDate),
@@ -258,11 +269,110 @@ export class RankTrendAnalyzer {
       excludeRestored: FORMAL_SNAPSHOT_READ_POLICY.excludeRestored,
       sort: 'desc',
       limit: readLimit,
+      windowBars: getMaxStableBars(),
       codes: options?.codes,
     })
 
-    const snapshots = (response.frames || [])
-      .map((frame: RankTrendRankSeriesFrame): RankTrendAnalysisSnapshot | null => {
+    const snapshots = this.normalizeRankSeriesResponse(response, type, options?.codes)
+
+    if (options?.minRequired && snapshots.length < options.minRequired) {
+      return []
+    }
+
+    if (options?.limit && options.limit > 0 && snapshots.length > options.limit) {
+      return snapshots.slice(-options.limit)
+    }
+
+    return snapshots
+  }
+
+  private normalizeRankSeriesResponse(
+    response: {
+      frames?: RankTrendRankSeriesFrame[]
+      series?: Record<string, { code?: string; bars?: RankTrendRankSeriesFrame['bars']; snapshotType?: SupportedSnapshotType; totalCount?: number }>
+    },
+    preferredType: SupportedSnapshotType,
+    codes?: string[],
+  ): RankTrendAnalysisSnapshot[] {
+    const series = response.series || {}
+    const frames = response.frames || []
+
+    // Fallback: if series has no matching codes, use frames directly
+    const matchedCodes = Array.isArray(codes) && codes.length ? codes : Object.keys(series)
+    const hasSeriesData = matchedCodes.some((code) => {
+      const entry = series[code]
+      return Array.isArray(entry?.bars) && entry.bars.length > 0
+    })
+    if (!hasSeriesData && frames.length > 0) {
+      return this.normalizeFramesToSnapshots(frames, preferredType)
+    }
+    // Build frame totalCount lookup for accurate percentile calculations
+    const frameTotalCounts = new Map<string, number>()
+    for (const frame of frames) {
+      if (frame.snapshotId && frame.totalCount > 0) {
+        frameTotalCounts.set(frame.snapshotId, frame.totalCount)
+      }
+    }
+    const defaultTotalCount = 200
+
+    const preferredCodes = Array.isArray(codes) && codes.length ? codes : Object.keys(series)
+    const snapshotsBySignature = new Map<string, RankTrendAnalysisSnapshot>()
+
+    for (const code of preferredCodes) {
+      const entry = series[code]
+      const bars = Array.isArray(entry?.bars) ? entry.bars : []
+      for (const bar of bars) {
+        const snapshotId = String(bar?.snapshotId || '')
+        const timestamp = Number(bar?.timestamp || 0)
+        if (!snapshotId || !Number.isFinite(timestamp)) continue
+        const date = `${bar.tradingDate || ''} ${bar.slotTime || ''}`.trim() || snapshotId
+        const existing = snapshotsBySignature.get(snapshotId)
+        const hotlist = existing?.snapshot?.hotlist ? [...existing.snapshot.hotlist] : []
+        const rank = Number(bar?.rank || 0)
+        if (bar.code && rank > 0 && !hotlist.some((item: any) => item.code === bar.code)) {
+          hotlist.push({ code: bar.code, rank })
+        }
+        const barTotalCount = Number(bar?.totalCount || 0)
+        const totalCount = (barTotalCount > 0 ? barTotalCount : frameTotalCounts.get(snapshotId)) || Math.max(hotlist.length, defaultTotalCount)
+        snapshotsBySignature.set(snapshotId, {
+          date,
+          timestamp,
+          type: (bar?.captureMode ? preferredType : preferredType) as SupportedSnapshotType,
+          tradingDate: bar.tradingDate,
+          slotTime: bar.slotTime,
+          captureMode: bar.captureMode,
+          snapshot: {
+            date,
+            type: preferredType,
+            timestamp,
+            tradingDate: bar.tradingDate,
+            slotTime: bar.slotTime,
+            captureMode: bar.captureMode,
+            hotlist,
+            totalCount,
+            sectors: [],
+            marketStats: {},
+            sentiment: {},
+            moneyFlow: {},
+            indices: {},
+            limitSummary: {},
+            rotationSummary: {},
+          },
+        })
+      }
+    }
+
+    return Array.from(snapshotsBySignature.values())
+      .sort((left, right) => left.timestamp - right.timestamp)
+      .slice(-50)
+  }
+
+  private normalizeFramesToSnapshots(
+    frames: RankTrendRankSeriesFrame[],
+    preferredType: SupportedSnapshotType,
+  ): RankTrendAnalysisSnapshot[] {
+    return frames
+      .map((frame): RankTrendAnalysisSnapshot | null => {
         const ranks = frame.ranks && typeof frame.ranks === 'object' ? frame.ranks : {}
         const hotlist = Object.entries(ranks)
           .map(([code, rank]) => ({ code, rank: Number(rank) }))
@@ -274,13 +384,13 @@ export class RankTrendAnalyzer {
         return {
           date,
           timestamp: Number(frame.timestamp),
-          type: frame.type,
+          type: preferredType,
           tradingDate: frame.tradingDate,
           slotTime: frame.slotTime,
           captureMode: frame.captureMode,
           snapshot: {
             date,
-            type: frame.type,
+            type: preferredType,
             timestamp: Number(frame.timestamp),
             tradingDate: frame.tradingDate,
             slotTime: frame.slotTime,
@@ -299,16 +409,7 @@ export class RankTrendAnalyzer {
       })
       .filter((item): item is NonNullable<typeof item> => item !== null)
       .sort((left, right) => left.timestamp - right.timestamp)
-
-    if (options?.minRequired && snapshots.length < options.minRequired) {
-      return []
-    }
-
-    if (options?.limit && options.limit > 0 && snapshots.length > options.limit) {
-      return snapshots.slice(-options.limit)
-    }
-
-    return snapshots
+      .slice(-50)
   }
 
   async getRankTrends(

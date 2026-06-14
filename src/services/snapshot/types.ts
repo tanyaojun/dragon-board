@@ -310,6 +310,7 @@ export interface RankTrendRankSeriesQueryOptions {
   codes?: string[]
   sort?: 'asc' | 'desc'
   limit?: number
+  windowBars?: number
 }
 
 export interface RankTrendRankSeriesFrame {
@@ -324,11 +325,31 @@ export interface RankTrendRankSeriesFrame {
   ranks: Record<string, number>
 }
 
+export interface RankTrendRankSeriesBar {
+  snapshotId: string
+  timestamp: number
+  rank: number
+  tradingDate: string
+  slotTime: string
+  code?: string
+  totalCount?: number
+}
+
+export interface RankTrendRankSeriesCodeWindow {
+  code: string
+  bars: RankTrendRankSeriesBar[]
+  totalCount: number
+  latestSnapshotId: string
+  latestTradingDate: string
+  latestSlotTime: string
+}
+
 export interface RankTrendRankSeriesResponse {
   ok: boolean
   datasetId: string
   snapshotType: Exclude<SnapshotType, 'five_minute'>
   frames: RankTrendRankSeriesFrame[]
+  series?: Record<string, RankTrendRankSeriesCodeWindow>
   count: number
   source: string
   cache?: { hit: boolean; store: string }

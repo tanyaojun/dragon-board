@@ -152,7 +152,8 @@ describe('RankTrendAnalyzer', () => {
       allowedCaptureModes: ['real_time', 'delayed'],
       excludeRestored: true,
       sort: 'desc',
-      limit: 150,
+      limit: 50,
+      windowBars: 50,
       codes: ['600001'],
     })
     expect(snapshotFacade.listSnapshotFrameBundles).not.toHaveBeenCalled()
@@ -217,7 +218,7 @@ describe('RankTrendAnalyzer', () => {
       frames: Array.from({ length: 50 }, (_, index) => {
         const rank = index === 49 ? 90 : Math.max(1, 100 - index)
         return {
-          snapshotId: `half_hour:2026-04-27:${index}`,
+          snapshotId: `half_hour:2026-04-27:${String(index).padStart(2, '0')}`,
           displayKey: `[半小时快照] 2026-04-27 ${index}`,
           timestamp: Date.parse('2026-04-27T09:30:00') + index * 30 * 60 * 1000,
           type: 'half_hour',
@@ -230,6 +231,23 @@ describe('RankTrendAnalyzer', () => {
           },
         }
       }),
+      series: {
+        '600001': {
+          code: '600001',
+          bars: Array.from({ length: 50 }, (_, index) => ({
+            snapshotId: `half_hour:2026-04-27:${String(index).padStart(2, '0')}`,
+            timestamp: Date.parse('2026-04-27T09:30:00') + index * 30 * 60 * 1000,
+            code: '600001',
+            rank: index === 49 ? 90 : Math.max(1, 100 - index),
+            tradingDate: '2026-04-27',
+            slotTime: '09:30',
+          })),
+          totalCount: 50,
+          latestSnapshotId: 'half_hour:2026-04-27:49',
+          latestTradingDate: '2026-04-27',
+          latestSlotTime: '09:30',
+        },
+      },
     })
 
     const { rankTrendAnalyzer } = await import('../RankTrendAnalyzer')
@@ -291,5 +309,66 @@ describe('RankTrendAnalyzer', () => {
     expect(suspiciousResults.get('600001')?.risk.divergence.score).toBeLessThan(
       trustedResults.get('600001')?.risk.divergence.score || 0,
     )
+  })
+
+  it('uses per-code series bars for rank history when series is available instead of scanning frames', async () => {
+    const { apiService } = await import('../apiService')
+    // Build per-code series with 30 bars for 600001
+    const seriesBars = Array.from({ length: 30 }, (_, i) => ({
+      snapshotId: `half_hour:2026-04-27:${String(i).padStart(2, '0')}`,
+      timestamp: Date.parse('2026-04-27T09:30:00') + i * 30 * 60 * 1000,
+      code: '600001',
+      rank: 80 - i,
+      totalCount: 200,
+      tradingDate: '2026-04-27',
+      slotTime: `09:${String(i).padStart(2, '0')}`,
+    }))
+    const seriesData = {
+      '600001': {
+        code: '600001',
+        bars: seriesBars,
+        totalCount: 30,
+        latestSnapshotId: 'half_hour:2026-04-27:29',
+        latestTradingDate: '2026-04-27',
+        latestSlotTime: '09:29',
+      },
+    }
+    // Frames: 600001 only appears in the last 3 frames
+    vi.mocked(apiService.getRankTrendRankSeries).mockResolvedValue({
+      ok: true,
+      datasetId: 'dragonboard_live',
+      snapshotType: 'half_hour',
+      source: 'mongodb',
+      count: 50,
+      frames: Array.from({ length: 50 }, (_, index) => ({
+        snapshotId: `half_hour:2026-04-27:${String(index).padStart(2, '0')}`,
+        displayKey: `[半小时快照] 2026-04-27 ${index}`,
+        timestamp: Date.parse('2026-04-27T09:30:00') + index * 30 * 60 * 1000,
+        type: 'half_hour',
+        tradingDate: '2026-04-27',
+        slotTime: '09:30',
+        captureMode: 'real_time',
+        totalCount: 100,
+        ranks: {
+          ...(index >= 47 ? { '600001': 80 - (30 - (index - 47 + 1)) } : {}),
+          ...Object.fromEntries(
+            Array.from({ length: 99 }, (_, j) => [`FILL${String(j + 1).padStart(3, '0')}`, j + 1]),
+          ),
+        },
+      })),
+      series: seriesData,
+    })
+
+    const { rankTrendAnalyzer } = await import('../RankTrendAnalyzer')
+    const results = await rankTrendAnalyzer.getRankTrends(new Map([['600001', 33]]), {
+      updateSignalStore: false,
+    })
+
+    const result = results.get('600001')
+    expect(result).toBeTruthy()
+    // With 30 bars from series, should produce technical signals
+    // (frame scanning would only give 3 data points, which is below min samples)
+    expect(result?.technical).toBeTruthy()
+    expect(result?.meta.sampleQuality?.status).not.toBe('min_samples_not_met')
   })
 })

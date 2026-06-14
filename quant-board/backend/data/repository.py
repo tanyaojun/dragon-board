@@ -641,76 +641,124 @@ class Repository:
         codes: list[str] | None = None,
         limit: int | None = 50,
         sort: str = "asc",
-    ) -> list[dict[str, Any]]:
+        window_bars: int | None = None,
+    ) -> dict[str, Any]:
         if self.session is None:
-            return []
+            return {"frames": [], "series": {}}
 
-        query = select(SnapshotFrameModel).where(
-            SnapshotFrameModel.dataset_id == dataset_id,
-            SnapshotFrameModel.type == snapshot_type,
+        query = select(SnapshotStockRowModel).where(
+            SnapshotStockRowModel.dataset_id == dataset_id,
+            SnapshotStockRowModel.type == snapshot_type,
         )
         if start_date:
-            query = query.where(SnapshotFrameModel.trading_date >= start_date)
+            query = query.where(SnapshotStockRowModel.trading_date >= start_date)
         if end_date:
-            query = query.where(SnapshotFrameModel.trading_date <= end_date)
+            query = query.where(SnapshotStockRowModel.trading_date <= end_date)
         if before_trading_date:
-            query = query.where(SnapshotFrameModel.trading_date < before_trading_date)
+            query = query.where(SnapshotStockRowModel.trading_date < before_trading_date)
         if allowed_capture_modes:
-            query = query.where(SnapshotFrameModel.capture_mode.in_(allowed_capture_modes))
+            query = query.where(SnapshotStockRowModel.capture_mode.in_(allowed_capture_modes))
         if exclude_restored:
-            query = query.where(SnapshotFrameModel.capture_mode != "restored")
+            query = query.where(SnapshotStockRowModel.capture_mode != "restored")
+        if codes:
+            query = query.where(SnapshotStockRowModel.code.in_(codes))
 
-        order = SnapshotFrameModel.timestamp.desc() if sort == "desc" else SnapshotFrameModel.timestamp.asc()
-        if limit and limit > 0:
-            query = query.limit(limit)
-
+        order = SnapshotStockRowModel.timestamp.desc() if sort == "desc" else SnapshotStockRowModel.timestamp.asc()
         try:
-            frame_models = list(self.session.scalars(query.order_by(order)))
+            row_models = list(self.session.scalars(query.order_by(order, SnapshotStockRowModel.rank.asc())))
         except SQLAlchemyError:
-            return []
+            return {"frames": [], "series": {}}
 
-        snapshot_ids = [frame.snapshot_id for frame in frame_models]
-        ranks_by_snapshot: dict[str, dict[str, int]] = defaultdict(dict)
+        effective_window = window_bars or limit or 50
+
+        total_count_by_code: dict[str, int] = defaultdict(int)
+        for row in row_models:
+            code_key = str(row.code or "")
+            if code_key:
+                total_count_by_code[code_key] += 1
+
+        rows_for_window = sorted(
+            row_models,
+            key=lambda row: (int(row.timestamp or 0), int(row.rank or 0)),
+        )
+
+        # Per-code picking: keep the most recent bars per code
+        picked_by_code: dict[str, list[SnapshotStockRowModel]] = defaultdict(list)
+        for row in reversed(rows_for_window):
+            code_key = str(row.code or "")
+            if not code_key or len(picked_by_code[code_key]) >= effective_window:
+                continue
+            picked_by_code[code_key].append(row)
+        # Reverse back to chronological order (ascending)
+        for code_key in picked_by_code:
+            picked_by_code[code_key].reverse()
+
+        all_code_keys = sorted(picked_by_code.keys())
+        picked_rows: list[SnapshotStockRowModel] = []
+        for code_key in all_code_keys:
+            picked_rows.extend(picked_by_code[code_key])
+
+        # Build frames from picked rows
+        snapshot_ids = list(dict.fromkeys(str(row.snapshot_id) for row in picked_rows if row.snapshot_id))
+        frames_by_id: dict[str, SnapshotFrameModel] = {}
         if snapshot_ids:
             try:
-                stock_query = select(
-                    SnapshotStockRowModel.snapshot_id,
-                    SnapshotStockRowModel.code,
-                    SnapshotStockRowModel.rank,
-                ).where(
-                    SnapshotStockRowModel.dataset_id == dataset_id,
-                    SnapshotStockRowModel.snapshot_id.in_(snapshot_ids),
+                frame_rows = self.session.scalars(
+                    select(SnapshotFrameModel).where(
+                        SnapshotFrameModel.dataset_id == dataset_id,
+                        SnapshotFrameModel.snapshot_id.in_(snapshot_ids),
+                    )
                 )
-                if codes:
-                    stock_query = stock_query.where(SnapshotStockRowModel.code.in_(codes))
-                stock_query = stock_query.order_by(
-                    SnapshotStockRowModel.timestamp.asc(),
-                    SnapshotStockRowModel.rank.asc(),
-                )
-                for snapshot_id, code, rank in self.session.execute(stock_query):
-                    if code and rank:
-                        ranks_by_snapshot[str(snapshot_id)][str(code)] = int(rank)
+                frames_by_id = {str(frame.snapshot_id): frame for frame in frame_rows}
             except SQLAlchemyError:
-                return []
+                frames_by_id = {}
 
-        frames: list[dict[str, Any]] = []
-        for frame in frame_models:
-            ranks = ranks_by_snapshot.get(frame.snapshot_id, {})
-            total_count = int(frame.stock_row_count or 0) or len(ranks)
-            frames.append(
-                {
-                    "snapshotId": frame.snapshot_id,
-                    "displayKey": frame.display_key,
-                    "timestamp": frame.timestamp,
-                    "type": frame.type,
-                    "tradingDate": frame.trading_date,
-                    "slotTime": frame.slot_time,
-                    "captureMode": frame.capture_mode,
-                    "totalCount": total_count,
-                    "ranks": ranks,
+        frames_by_snapshot: dict[str, dict[str, Any]] = {}
+        for row in picked_rows:
+            snapshot_id = str(row.snapshot_id)
+            if snapshot_id not in frames_by_snapshot:
+                frame = frames_by_id.get(snapshot_id)
+                frames_by_snapshot[snapshot_id] = {
+                    "snapshotId": snapshot_id,
+                    "displayKey": frame.display_key if frame else None,
+                    "timestamp": row.timestamp,
+                    "type": row.type,
+                    "tradingDate": row.trading_date,
+                    "slotTime": row.slot_time,
+                    "captureMode": row.capture_mode,
+                    "totalCount": int(frame.stock_row_count or 0) if frame else 0,
+                    "bars": [],
+                    "ranks": {},
                 }
-            )
-        return frames
+            frame_item = frames_by_snapshot[snapshot_id]
+            frame_item["bars"].append(self.local_stock_to_bundle_dict(row))
+            if row.code and row.rank:
+                frame_item["ranks"][str(row.code)] = int(row.rank)
+
+        frames = list(frames_by_snapshot.values())
+        for frame in frames:
+            if not frame["totalCount"]:
+                frame["totalCount"] = len(frame["ranks"])
+
+        # Build per-code series
+        series: dict[str, dict[str, Any]] = {}
+        for code_key, rows in picked_by_code.items():
+            bars = [self.local_stock_to_bundle_dict(row) for row in rows]
+            for bar in bars:
+                sid = bar.get("snapshotId") or ""
+                frame = frames_by_id.get(sid)
+                bar["totalCount"] = int(frame.stock_row_count or 0) if frame else 0
+            last_bar = bars[-1] if bars else {}
+            series[code_key] = {
+                "code": code_key,
+                "bars": bars,
+                "totalCount": total_count_by_code.get(code_key, len(bars)),
+                "latestSnapshotId": last_bar.get("snapshotId") or "",
+                "latestTradingDate": last_bar.get("tradingDate") or "",
+                "latestSlotTime": last_bar.get("slotTime") or "",
+            }
+
+        return {"frames": frames, "series": series}
 
     def list_snapshot_records(
         self,

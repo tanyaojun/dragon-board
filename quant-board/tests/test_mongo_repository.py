@@ -86,10 +86,24 @@ def test_mongo_repository_ingests_and_reads_rank_series() -> None:
     assert result["deduped"] is False
 
     rank_series = repo.load_rank_series("dragonboard_live", snapshot_type="half_hour")
+    frames = rank_series["frames"]
+    series = rank_series["series"]
 
-    assert [frame["snapshotId"] for frame in rank_series] == ["s1", "s2"]
-    assert rank_series[0]["ranks"] == {"000001": 1, "000002": 2}
-    assert rank_series[1]["ranks"] == {"000001": 3}
+    assert [frame["snapshotId"] for frame in frames] == ["s1", "s2"]
+    assert frames[0]["ranks"] == {"000001": 1, "000002": 2}
+    assert frames[1]["ranks"] == {"000001": 3}
+    assert [bar["rank"] for bar in series["000001"]["bars"]] == [1, 3]
+    assert series["000001"]["totalCount"] == 2
+
+    desc_rank_series = repo.load_rank_series(
+        "dragonboard_live",
+        snapshot_type="half_hour",
+        codes=["000001"],
+        sort="desc",
+        limit=1,
+    )
+    assert [bar["rank"] for bar in desc_rank_series["series"]["000001"]["bars"]] == [3]
+    assert desc_rank_series["series"]["000001"]["totalCount"] == 2
 
 
 def test_mongo_repository_frame_bundles_return_mongodb_source_rows() -> None:

@@ -234,42 +234,109 @@ class MongoRepository:
         codes: list[str] | None = None,
         limit: int | None = 50,
         sort: str = "asc",
-    ) -> list[dict[str, Any]]:
-        frame_rows = self._find_frames(
+        window_bars: int | None = None,
+    ) -> dict[str, Any]:
+        query = self._snapshot_row_query(
             dataset_id,
-            snapshot_type,
+            snapshot_id=None,
+            snapshot_type=snapshot_type,
+            snapshot_types=None,
+            trading_date=None,
             start_date=start_date,
             end_date=end_date,
             before_trading_date=before_trading_date,
+            slot_time=None,
             allowed_capture_modes=allowed_capture_modes,
             exclude_restored=exclude_restored,
-            limit=limit,
-            sort=sort,
         )
-        snapshot_ids = [str(row.get("snapshotId")) for row in frame_rows if row.get("snapshotId")]
-        query: dict[str, Any] = {"datasetId": dataset_id, "snapshotId": {"$in": snapshot_ids}}
         if codes:
             query["code"] = {"$in": codes}
-        ranks_by_snapshot: dict[str, dict[str, int]] = defaultdict(dict)
-        for row in self.db["snapshot_stock_rows"].find(query).sort([("timestamp", 1), ("rank", 1)]):
+
+        direction = 1 if sort == "asc" else -1
+        rows = list(self.db["snapshot_stock_rows"].find(query).sort([("timestamp", direction), ("rank", 1)]))
+
+        effective_window = window_bars or limit or 50
+
+        total_count_by_code: dict[str, int] = defaultdict(int)
+        for row in rows:
+            code_key = str(row.get("code") or "")
+            if code_key:
+                total_count_by_code[code_key] += 1
+
+        rows_for_window = sorted(
+            rows,
+            key=lambda row: (int(row.get("timestamp") or 0), int(row.get("rank") or 0)),
+        )
+
+        # Per-code picking: keep the most recent bars per code
+        picked_by_code: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for row in reversed(rows_for_window):
+            code_key = str(row.get("code") or "")
+            if not code_key or len(picked_by_code[code_key]) >= effective_window:
+                continue
+            picked_by_code[code_key].append(row)
+        for code_key in picked_by_code:
+            picked_by_code[code_key].reverse()
+
+        all_code_keys = sorted(picked_by_code.keys())
+        picked_rows: list[dict[str, Any]] = []
+        for code_key in all_code_keys:
+            picked_rows.extend(picked_by_code[code_key])
+
+        snapshot_ids = list(dict.fromkeys(str(row.get("snapshotId")) for row in picked_rows if row.get("snapshotId")))
+        frame_rows = {
+            str(row.get("snapshotId")): row
+            for row in self.db["snapshot_frames"].find({"datasetId": dataset_id, "snapshotId": {"$in": snapshot_ids}})
+        }
+        frames_by_snapshot: dict[str, dict[str, Any]] = {}
+        for row in picked_rows:
+            snapshot_id = str(row.get("snapshotId") or "")
+            if not snapshot_id:
+                continue
+            frame = frame_rows.get(snapshot_id) or {}
+            if snapshot_id not in frames_by_snapshot:
+                frames_by_snapshot[snapshot_id] = {
+                    "snapshotId": snapshot_id,
+                    "displayKey": frame.get("displayKey"),
+                    "timestamp": row.get("timestamp"),
+                    "type": row.get("type"),
+                    "tradingDate": row.get("tradingDate"),
+                    "slotTime": row.get("slotTime"),
+                    "captureMode": row.get("captureMode"),
+                    "totalCount": int(frame.get("stockRowCount") or 0),
+                    "bars": [],
+                    "ranks": {},
+                }
+            frames_by_snapshot[snapshot_id]["bars"].append(self.local_stock_to_bundle_dict(row))
             code = str(row.get("code") or "")
             rank = row.get("rank")
             if code and rank:
-                ranks_by_snapshot[str(row.get("snapshotId"))][code] = int(rank)
-        return [
-            {
-                "snapshotId": row.get("snapshotId"),
-                "displayKey": row.get("displayKey"),
-                "timestamp": row.get("timestamp"),
-                "type": row.get("type"),
-                "tradingDate": row.get("tradingDate"),
-                "slotTime": row.get("slotTime"),
-                "captureMode": row.get("captureMode"),
-                "totalCount": int(row.get("stockRowCount") or len(ranks_by_snapshot.get(str(row.get("snapshotId")), {}))),
-                "ranks": ranks_by_snapshot.get(str(row.get("snapshotId")), {}),
+                frames_by_snapshot[snapshot_id]["ranks"][code] = int(rank)
+
+        frames = list(frames_by_snapshot.values())
+        for frame in frames:
+            if not frame["totalCount"]:
+                frame["totalCount"] = len(frame["ranks"])
+
+        # Build per-code series
+        series: dict[str, dict[str, Any]] = {}
+        for code_key, code_rows in picked_by_code.items():
+            bars = [self.local_stock_to_bundle_dict(row) for row in code_rows]
+            for bar in bars:
+                sid = bar.get("snapshotId") or ""
+                frame_doc = frame_rows.get(sid) or {}
+                bar["totalCount"] = int(frame_doc.get("stockRowCount") or 0)
+            last_bar = bars[-1] if bars else {}
+            series[code_key] = {
+                "code": code_key,
+                "bars": bars,
+                "totalCount": total_count_by_code.get(code_key, len(bars)),
+                "latestSnapshotId": last_bar.get("snapshotId") or "",
+                "latestTradingDate": last_bar.get("tradingDate") or "",
+                "latestSlotTime": last_bar.get("slotTime") or "",
             }
-            for row in frame_rows
-        ]
+
+        return {"frames": frames, "series": series}
 
     def list_snapshot_stock_rows(
         self,

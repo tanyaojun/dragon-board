@@ -431,6 +431,76 @@ Dragon Board `snapshotFacade.listSnapshots/getSnapshotById/listSnapshotFrames/li
 均通过这些 MongoDB 明细读口实现。列表读口返回 `cache` 诊断字段，单条 `records/{snapshot_id}` 仍直接读取 MongoDB。`getStockVolumeHistory` 固定读取 `daily` 的
 `snapshot_stock_rows`，不再扫描浏览器 IndexedDB 原始快照。
 
+### `GET /api/ranktrend/rank-series`
+
+RankTrend 专用排名时序读口，按 `code + snapshotType` 读取单票历史窗口，避免被最近全局快照帧截断。
+
+**查询参数：**
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `dataset_id` | string | 默认数据集 | 数据集 ID |
+| `snapshot_type` | string | `half_hour` | 快照类型（`quarter_hour`、`half_hour`、`hourly`、`daily`） |
+| `codes` | string | — | 股票代码，逗号分隔 |
+| `trading_date` | string | — | 交易日过滤（同 start_date 和 end_date） |
+| `start_date` | string | — | 起始交易日 |
+| `end_date` | string | — | 结束交易日 |
+| `before_trading_date` | string | — | 严格早于指定交易日 |
+| `allowed_capture_modes` | string | — | capture mode 过滤，逗号分隔 |
+| `exclude_restored` | bool | `false` | 排除 restored 快照 |
+| `sort` | string | `asc` | 排序方向 |
+| `limit` | int | `50` | 返回帧数量上限 |
+| `window_bars` | int | — | 单票 bar 数量上限（新增，独立于 limit） |
+
+**响应结构：**
+
+```json
+{
+  "ok": true,
+  "dataset": { ... },
+  "datasetId": "...",
+  "snapshotType": "half_hour",
+  "frames": [
+    {
+      "snapshotId": "half_hour:2026-04-21:10:00:xxx",
+      "displayKey": "[半小时快照] 2026-04-21 10:00",
+      "timestamp": 1776746400000,
+      "type": "half_hour",
+      "tradingDate": "2026-04-21",
+      "slotTime": "10:00",
+      "captureMode": "real_time",
+      "totalCount": 200,
+      "ranks": { "600001": 5, "600002": 8 }
+    }
+  ],
+  "series": {
+    "600001": {
+      "code": "600001",
+      "bars": [
+        {
+          "snapshotId": "half_hour:2026-04-21:10:00:xxx",
+          "timestamp": 1776746400000,
+          "rank": 5,
+          "tradingDate": "2026-04-21",
+          "slotTime": "10:00"
+        }
+      ],
+      "totalCount": 120,
+      "latestSnapshotId": "half_hour:2026-06-14:14:30:xxx",
+      "latestTradingDate": "2026-06-14",
+      "latestSlotTime": "14:30"
+    }
+  },
+  "count": 8,
+  "source": "mongodb"
+}
+```
+
+- `frames` 保持向后兼容，每帧含 `ranks` 映射（code → rank）
+- `series` 为新增 per-code 窗口，以 code 为主键，`bars` 按时间升序排列
+- `window_bars` 控制单票取 bar 数量上限，未指定时使用 `limit` 值
+- 当 `series` 中无匹配 codes 数据时，前端自动回退到 `frames` 扫描路径
+
 ### `GET /api/datasets`
 
 返回数据集列表。

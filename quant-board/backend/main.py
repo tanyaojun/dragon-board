@@ -556,6 +556,7 @@ def get_ranktrend_rank_series(
     codes: str | None = None,
     sort: str = "asc",
     limit: int | None = 50,
+    window_bars: int | None = None,
     db: Session | None = Depends(get_db),
 ) -> dict[str, Any]:
     if db is None and storage_source_label() != "mongodb":
@@ -572,7 +573,7 @@ def get_ranktrend_rank_series(
     snapshot_ids: list[str] = []
 
     def load_response() -> dict[str, Any]:
-        frames = repo.load_rank_series(
+        result = repo.load_rank_series(
             resolved_dataset_id,
             snapshot_type=snapshot_type,
             start_date=start,
@@ -583,15 +584,23 @@ def get_ranktrend_rank_series(
             codes=stock_codes,
             limit=limit,
             sort=sort,
+            window_bars=window_bars,
         )
+        frames = result["frames"]
+        series = result["series"]
         snapshot_ids.extend(str(frame.get("snapshotId") or "") for frame in frames if frame.get("snapshotId"))
+        public_frames = [
+            {key: value for key, value in frame.items() if key != "bars"}
+            for frame in frames
+        ]
         return {
             "ok": True,
             "dataset": repo.dataset_to_dict(dataset),
             "datasetId": resolved_dataset_id,
             "snapshotType": snapshot_type,
-            "frames": frames,
-            "count": len(frames),
+            "frames": public_frames,
+            "series": series,
+            "count": len(public_frames),
             "source": storage_source_label(),
         }
 
@@ -608,6 +617,7 @@ def get_ranktrend_rank_series(
             "codes": ",".join(stock_codes),
             "sort": sort,
             "limit": limit,
+            "window_bars": window_bars,
         },
         snapshot_type=snapshot_type,
         trading_date=start if start == end else None,

@@ -57,3 +57,14 @@ export function getTechnicalMinSamples(config: {
       : 0
   return Math.max(getMacdMinSamples(config), maxMomentumPeriod + 1, 30)
 }
+
+/** 各特征的最小稳定观察窗口（minComputableBars ≤ stableBars） */
+export const STABLE_BARS = {
+  macd: 30,
+  momentum: 50,
+  zeroCross: 8,
+} as const
+
+export function getMaxStableBars(): number {
+  return Math.max(STABLE_BARS.macd, STABLE_BARS.momentum, STABLE_BARS.zeroCross)
+}

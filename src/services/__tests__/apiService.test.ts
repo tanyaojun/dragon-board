@@ -357,6 +357,54 @@ describe('ApiService', () => {
     expect(requestedUrl).toContain('codes=600001%2C600002')
   })
 
+  it('serializes windowBars for ranktrend rank series', async () => {
+    const api = new ApiService()
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, frames: [], series: {} }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await api.getRankTrendRankSeries({
+      datasetId: 'dragonboard_live',
+      type: 'half_hour',
+      windowBars: 50,
+    })
+
+    const requestedUrl = String(fetchMock.mock.calls[0][0])
+    expect(requestedUrl).toContain('window_bars=50')
+  })
+
+  it('parses series field from ranktrend rank series response', async () => {
+    const api = new ApiService()
+    const seriesData = {
+      '600001': {
+        code: '600001',
+        bars: [{ snapshotId: 's1', timestamp: 1, rank: 5, tradingDate: '2026-01-01', slotTime: '10:00' }],
+        totalCount: 1,
+        latestSnapshotId: 's1',
+        latestTradingDate: '2026-01-01',
+        latestSlotTime: '10:00',
+      },
+    }
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, frames: [], series: seriesData }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const response = await api.getRankTrendRankSeries()
+
+    expect(response.series).toBeDefined()
+    expect(response.series['600001'].bars).toHaveLength(1)
+    expect(response.series['600001'].bars[0].rank).toBe(5)
+    expect(response.series['600001'].totalCount).toBe(1)
+  })
+
   it('keeps ranktrend rank series requests alive beyond 15 seconds before timing out', async () => {
     vi.useFakeTimers()
     const api = new ApiService()
