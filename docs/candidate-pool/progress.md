@@ -286,13 +286,36 @@
   - `HotStockEventMonitorPanel.vue` 标题、关闭提示、分类 aria 统一为“异动雷达”，顶栏入口和刷新任务描述同步改名。
   - 异动卡片保留龙头复盘候选标识为“龙头复盘”，新增正式候选池标识“已入候选池”，后者只来自 `CandidateJournalService.listCandidates({ limit: 200 })` 的开放 thesis 记录。
   - 个股异动卡片新增“加入候选池 / 查看候选”动作，创建成功后通过 `candidate-pool:open` 打开候选池并定位候选；失败时 toast 提示，不影响异动雷达刷新。
+
+## 2026-06-14 Phase 17 交易池 V1 前端投影层
+
+- **Status:** complete
+- Actions taken:
+  - 读取 `docs/candidate-pool/` 下候选池工作台、双池设计和 Trading Pool V1 实施计划，确认 V1 只做前端投影，不触碰后端/API/库表和真实历史交易日志。
+  - 使用 TDD 先补 `TradingPoolAnalysisService` 失败测试，锁定状态词、真实 RankTrend 嵌套路径、买点共振、自动出池、降级、信号过期和恢复规则。
+  - 新增 `TradingPoolAnalysisService`，输出交易池 rows、staleCount、exitedCount，并显式读取 direction、jumpConfidence、MACD、acceleration、zeroCross、momentumSyncBroken、lifecycleAction。
+  - 在 `CandidatePoolPanel.vue` 增加“候选池 / 交易池”标签页；交易池视图只消费已加载的 `trade_type=thesis` 候选记录生成只读投影。
+  - 使用 `dragon-board:trading-pool:v1:previous-rows` 保存 session 级上一轮交易池 rows，支持信号过期保留上一状态和本会话内“已介入”UI 状态。
+  - 补充候选池面板源码契约测试，锁定交易池 tab、sessionStorage、只读投影和状态展示文案。
 - Files created/modified:
-  - `src/App.vue`
+  - `src/services/candidate/types.ts`
+  - `src/services/candidate/TradingPoolAnalysisService.ts`
+  - `src/services/candidate/__tests__/TradingPoolAnalysisService.test.ts`
+  - `src/components/panels/CandidatePoolPanel.vue`
+  - `src/components/panels/__tests__/CandidatePoolPanel.test.ts`
   - `docs/candidate-pool/task_plan.md`
   - `docs/candidate-pool/progress.md`
-  - `src/components/panels/HotStockEventMonitorPanel.vue`
-  - `src/components/panels/__tests__/HotStockEventMonitorPanel.test.ts`
-  - `src/services/refresh/RefreshTaskRegistry.ts`
+
+### Phase 17 Review Fixes
+
+- Actions taken:
+  - 修正 `rankTrend: undefined` 的数据质量边界，避免误判为 fresh。
+  - 为交易池增加手动刷新入口，并在切换到交易池标签时触发一次重算。
+  - 将交易池重算限制在交易池激活态，避免候选池标签页空耗重算。
+  - 将交易池 sessionStorage 写入从候选池 deep watch 改为交易池激活态和刷新触发。
+  - 补充空候选、无效代码、兼容字段 fallback、非激活态和刷新门控的定向测试。
+  - 将交易池面板契约测试从内部变量名扫描收敛为 UI 文案、thesis 数据边界和历史交易日志隔离断言。
+  - 运行 `pnpm exec vitest run src/services/candidate/__tests__/TradingPoolAnalysisService.test.ts src/components/panels/__tests__/CandidatePoolPanel.test.ts --reporter=dot`，29 项通过。
 
 ## Test Results
 
@@ -367,6 +390,14 @@
 | Phase 16 候选池完整定向测试 | `pnpm exec vitest run src/services/candidate/__tests__/CandidateAnalysisService.test.ts src/services/candidate/__tests__/CandidateJournalService.test.ts src/services/candidate/__tests__/CandidateQualityStatsService.test.ts src/services/candidate/__tests__/CandidateDiscoveryService.test.ts src/components/common/__tests__/DataTable.test.ts src/components/panels/__tests__/CandidatePoolPanel.test.ts src/components/panels/__tests__/TradeJournalPanel.test.ts src/components/panels/__tests__/HotStockEventMonitorPanel.test.ts src/services/refresh/__tests__/RefreshTaskRegistry.test.ts --reporter=dot` | 49 tests passed | 9 files / 49 tests passed | 通过 |
 | Phase 16 类型检查 | `pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false` | exit 0 | exit 0 | 通过 |
 | Phase 16 浏览器冒烟 | Playwright + 系统 Chrome 打开 `http://127.0.0.1:5173` 并点击“异动雷达” | 面板标题、Tab、空态或候选动作区域可渲染，无框架错误覆盖 | 面板可见，标题“异动雷达”，Tab 完整，截图 `C:\Users\Think\AppData\Local\Temp\dragon-phase16-event-radar.png`；真实启动层仍卡在平台数据加载 15%，属 Phase 15 数据链路风险 | 通过 |
+| Phase 17 RED 验证 | `pnpm exec vitest run src/services/candidate/__tests__/TradingPoolAnalysisService.test.ts --reporter=dot` | 缺少 `TradingPoolAnalysisService` 时失败 | Failed to load url `../TradingPoolAnalysisService` | 通过 |
+| Phase 17 服务规则测试 | `pnpm exec vitest run src/services/candidate/__tests__/TradingPoolAnalysisService.test.ts --reporter=dot` | 9 tests passed | 9 tests passed | 通过 |
+| Phase 17 面板 RED 验证 | `pnpm exec vitest run src/components/panels/__tests__/CandidatePoolPanel.test.ts --reporter=dot` | 新增交易池契约测试失败 | 1 failed / 14 passed，失败点为缺少“交易池”视图与 session 投影 | 通过 |
+| Phase 17 服务/面板聚焦测试 | `pnpm exec vitest run src/services/candidate/__tests__/TradingPoolAnalysisService.test.ts src/components/panels/__tests__/CandidatePoolPanel.test.ts --reporter=dot` | 24 tests passed | 2 files / 24 tests passed | 通过 |
+| Phase 17 类型检查 | `pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false` | exit 0 | exit 0 | 通过 |
+| Phase 17 前端构建 | `pnpm build` | exit 0 | exit 0，保留既有 `dataLoader.ts` 动静态混用 warning | 通过 |
+| Phase 17 diff 检查 | `git diff --check` | exit 0 | exit 0 | 通过 |
+| Phase 17 浏览器验收 | Playwright + 系统 Chrome 打开 `http://127.0.0.1:5173`，进入候选池并切换“交易池” | 渲染交易池视图，展示观察买点、已退出、信号过期三类状态 | 交易池表格展示 3 只样本：长电科技=观察买点，ST洲际=已退出，再升科技=信号过期；截图 `output/playwright/candidate-pool-trading-browser.png` | 通过 |
 
 ## Error Log
 
@@ -398,13 +429,14 @@
 | 2026-05-17 | Phase 15 空行情样本第二次发现会被冷却逻辑覆盖为 `cooldown` | 追加 RED 测试复现 | 空样本判断前置到冷却复用之前，保证面板能区分无数据和冷却复用 |
 | 2026-05-17 | Node Playwright 托管 Chromium 缺失，无法直接启动浏览器冒烟 | 读取 launch 错误 | 复用系统 Chrome `C:\Program Files\Google\Chrome\Application\chrome.exe` 完成 Phase 16 冒烟 |
 | 2026-05-17 | 浏览器冒烟时真实页面停在启动层“加载平台数据 15%”，顶栏按钮被 `v-show` 隐藏 | 检查 DOM、样式和控制台 | 记录为 Phase 15 真实数据链路风险；Phase 16 仅临时显示主 App 验证面板渲染和交互入口 |
+| 2026-06-14 | Phase 17 交易池手动“已介入”状态会被实时重算覆盖 | 自审 `tradingPoolRows` 和 `previousTradingPoolRows` 数据流 | 面板层保留 session 中上一状态为“已介入”的 UI 投影，不写后端 |
 
 ## 5-Question Reboot Check
 
 | Question | Answer |
 |----------|--------|
-| Where am I? | Phase 16 异动雷达与候选池桥接已完成；Phase 15 真实使用联调仍有未完成项 |
-| Where am I going? | 回到 Phase 15，继续复核真实行情和真实 journal 后端链路，校准自动推荐质量和异常提示 |
+| Where am I? | Phase 17 交易池 V1 前端投影层已完成；Phase 15 真实使用联调仍有未完成项 |
+| Where am I going? | 完成 Phase 17 构建和浏览器验收后，回到 Phase 15 真实行情与真实 journal 后端链路稳定性收口 |
 | What's the goal? | 将手工候选/交易假设升级为候选池工作台 |
 | What have I learned? | 见 `findings.md` |
-| What have I done? | 已实现并验证右键入池、规则分析、候选池面板、状态推进、journal 标签入库契约、统计概览、当前重分析、已入池识别、候选详情定位、假设编辑、分析写回、复盘保存、基础复盘统计、Phase 8 端到端交互、Phase 9 历史交易日志入口收敛、Phase 10 候选删除/快捷操作/筛选排序、Phase 11 候选漏斗/质量拆解/命中率/失效率/平均跟踪，Phase 12 结构化证据、扣分项、条件组、风险和变化归因，Phase 13 自动建议入池、重复候选识别、人工确认入池和推荐冷却控制，Phase 14 Playwright E2E、历史交易隔离、失败/重复/删除/截图回归，Phase 15 首个稳定性修复：候选发现冷却缓存按行情集合和推荐参数隔离，以及 Phase 16 异动雷达命名收敛、候选池开放候选标识和一键加入/查看候选桥接 |
+| What have I done? | 已实现并验证右键入池、规则分析、候选池面板、状态推进、journal 标签入库契约、统计概览、当前重分析、已入池识别、候选详情定位、假设编辑、分析写回、复盘保存、基础复盘统计、Phase 8 端到端交互、Phase 9 历史交易日志入口收敛、Phase 10 候选删除/快捷操作/筛选排序、Phase 11 候选漏斗/质量拆解/命中率/失效率/平均跟踪，Phase 12 结构化证据、扣分项、条件组、风险和变化归因，Phase 13 自动建议入池、重复候选识别、人工确认入池和推荐冷却控制，Phase 14 Playwright E2E、历史交易隔离、失败/重复/删除/截图回归，Phase 15 首个稳定性修复：候选发现冷却缓存按行情集合和推荐参数隔离，Phase 16 异动雷达命名收敛、候选池开放候选标识和一键加入/查看候选桥接，以及 Phase 17 交易池 V1 前端投影、自动出池/降级/信号过期规则和候选池面板交易池标签页 |

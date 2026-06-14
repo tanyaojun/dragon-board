@@ -208,3 +208,40 @@ export interface CandidateDiscoveryResult {
   recommendations: CandidateDiscoveryRecommendation[]
   skippedReason?: 'cooldown' | 'empty'
 }
+
+export type TradingPoolStatus =
+  | '观察买点'
+  | '准备介入'
+  | '已介入'
+  | '持仓观察'
+  | '观察中'
+  | '已退出'
+  | '已完成'
+
+export type TradingPoolDecision = 'enter' | 'watch' | 'downgrade' | 'exit' | 'stale'
+
+export interface TradingPoolSignalSnapshot {
+  directionSignal: string | null
+  jumpConfidence: number | null
+  macdCross: string | null
+  accelerationSignal: string | null
+  zeroCrossSignal: string | null
+  momentumSyncBroken: boolean
+  lifecycleAction: string | null
+  dataQuality: 'fresh' | 'stale' | 'missing'
+}
+
+export interface TradingPoolAnalysisRow {
+  code: string
+  name?: string
+  status: TradingPoolStatus
+  decision: TradingPoolDecision
+  reasons: string[]
+  signalSnapshot: TradingPoolSignalSnapshot
+}
+
+export interface TradingPoolAnalysisResult {
+  rows: TradingPoolAnalysisRow[]
+  staleCount: number
+  exitedCount: number
+}

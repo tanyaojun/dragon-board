@@ -6,7 +6,7 @@
 
 ## Current Phase
 
-Phase 16 complete; Phase 15 production validation remains in progress
+Phase 17 Trading Pool V1 front-end projection complete; Phase 15 production validation remains in progress
 
 ## Phases
 
@@ -143,6 +143,16 @@ Phase 16 complete; Phase 15 production validation remains in progress
 - [x] 补充单元测试、类型检查和 diff 检查，固化异动雷达到候选池的入口合同
 - **Status:** complete
 
+### Phase 17: 交易池 V1 前端投影层
+
+- [x] 新增 `TradingPoolAnalysisService`，从真实 RankTrend 嵌套信号路径读取方向、Jump、MACD、动量加速度、零线交叉和生命周期动作
+- [x] 固化交易池 V1 状态词、入池共振、自动出池、降级、过期信号和恢复规则
+- [x] 在 `CandidatePoolPanel.vue` 内新增“交易池”标签页，保留候选池主工作台和历史交易日志边界
+- [x] 交易池 V1 只从 `trade_type=thesis` 候选记录生成前端投影，不新增后端表、不写 journal、不写 `favorite_data`
+- [x] 用 sessionStorage 保存上一轮交易池投影，支持信号过期时保留上一状态和本会话内“已介入”UI 状态
+- [x] 运行交易池服务测试、候选池面板契约测试、类型检查、构建、diff 检查和浏览器验收
+- **Status:** complete
+
 ## Key Questions
 
 1. 候选池是否替代自选股？
@@ -175,6 +185,7 @@ Phase 16 complete; Phase 15 production validation remains in progress
 | Phase 14 候选池列表可能混入历史交易日志 | 1 | `CandidateJournalService.listCandidates()` 查询固定带 `trade_type=thesis`，并防御性过滤非 thesis 记录 |
 | Phase 15 候选发现冷却缓存未区分行情集合和推荐参数 | 1 | 增加缓存 key，按股票代码集合、`limit`、`minScore` 隔离缓存；重复候选标记继续允许冷却期即时刷新 |
 | Phase 16 异动提醒、龙头复盘候选、候选池三者语义混在一起 | 1 | 将 `HotStockEventMonitorPanel.vue` 收敛为“异动雷达”，正式候选池状态改由 journal 开放候选驱动 |
+| Phase 17 交易池手动“已介入”状态会被实时重算覆盖 | 1 | 在面板层读取 session 上一轮投影，若上一状态为“已介入”则仅保留本会话 UI 状态，不写 journal |
 
 ## Notes
 

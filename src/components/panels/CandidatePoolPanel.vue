@@ -10,6 +10,26 @@
           <button class="icon-btn" title="关闭" aria-label="关闭候选池" @click="close">×</button>
         </header>
 
+        <div class="candidate-tabs">
+          <button
+            type="button"
+            class="candidate-tab"
+            :class="{ active: activePoolTab === 'candidate' }"
+            @click="activePoolTab = 'candidate'"
+          >
+            候选池
+          </button>
+          <button
+            type="button"
+            class="candidate-tab"
+            data-testid="candidate-pool-tab-trading"
+            :class="{ active: activePoolTab === 'trading' }"
+            @click="switchToTradingPool"
+          >
+            交易池
+          </button>
+        </div>
+
         <div class="candidate-toolbar">
           <select v-model="statusFilter" title="策略状态">
             <option value="">全部策略状态</option>
@@ -80,7 +100,64 @@
           </aside>
 
           <main class="candidate-detail">
-            <template v-if="selectedLiveDetail">
+            <template v-if="activePoolTab === 'trading'">
+              <section class="trading-pool-card">
+                <div class="section-header">
+                  <div>
+                    <h4>交易池视图</h4>
+                    <p class="section-copy">候选池 thesis 记录的买点复筛投影，不写入历史交易日志。</p>
+                  </div>
+                  <span class="trading-pool-summary">
+                    {{ tradingPoolRows.length }} 只 · 退出 {{ tradingPoolEvaluation.exitedCount }} · 过期 {{ tradingPoolEvaluation.staleCount }}
+                  </span>
+                  <button type="button" class="text-btn compact-btn" @click="refreshTradingPool">
+                    刷新交易池
+                  </button>
+                </div>
+                <div v-if="!tradingPoolRows.length" class="empty">暂无交易池投影</div>
+                <div v-else class="trading-pool-table">
+                  <div class="trading-pool-row trading-pool-head">
+                    <span>股票</span>
+                    <span>状态</span>
+                    <span>决策</span>
+                    <span>Jump</span>
+                    <span>方向</span>
+                    <span>MACD</span>
+                    <span>原因</span>
+                    <span>操作</span>
+                  </div>
+                  <div
+                    v-for="row in tradingPoolRows"
+                    :key="row.code"
+                    class="trading-pool-row"
+                    :data-decision="row.decision"
+                  >
+                    <span>
+                      <strong>{{ row.name || row.code }}</strong>
+                      <small>{{ row.code }}</small>
+                    </span>
+                    <span class="trading-status-badge" :data-status="row.decision">
+                      {{ tradingPoolStatusLabel(row) }}
+                    </span>
+                    <span>{{ tradingPoolDecisionLabel(row.decision) }}</span>
+                    <span>{{ formatTradingPoolValue(row.signalSnapshot.jumpConfidence, 2) }}</span>
+                    <span>{{ row.signalSnapshot.directionSignal || '-' }}</span>
+                    <span>{{ row.signalSnapshot.macdCross || '-' }}</span>
+                    <span>{{ row.reasons.join(' / ') }}</span>
+                    <span>
+                      <button
+                        type="button"
+                        class="text-btn compact-btn"
+                        @click="markTradingPoolIntervened(row)"
+                      >
+                        已介入
+                      </button>
+                    </span>
+                  </div>
+                </div>
+              </section>
+            </template>
+            <template v-else-if="selectedLiveDetail">
               <div class="detail-title">
                 <div>
                   <h3>{{ selectedLiveDetail.entry.stockName || selectedLiveDetail.entry.stockCode }}</h3>
@@ -392,11 +469,18 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 
 import { buildCandidateJournalProjection } from '@/services/candidate/CandidateProjectionBuilder'
 import { candidateJournalService } from '@/services/candidate/CandidateJournalService'
-import type { CandidateJournalEntry, CandidateReviewUpdate, CandidateThesisUpdate } from '@/services/candidate/types'
+import { analyzeTradingPoolCandidate } from '@/services/candidate/TradingPoolAnalysisService'
+import type {
+  CandidateJournalEntry,
+  CandidateReviewUpdate,
+  CandidateThesisUpdate,
+  TradingPoolAnalysisRow,
+  TradingPoolDecision,
+} from '@/services/candidate/types'
 import type { FusionStrategyProjection, FusionStrategyState } from '@/types/fusionStrategyProjection'
 import {
   RANK_TREND_LIVE_STRATEGY_CONFIG_STORAGE_KEY,
@@ -437,6 +521,7 @@ const STRATEGY_STATE_ORDER: FusionStrategyState[] = [
   'closed',
   'idle',
 ]
+const TRADING_POOL_PREVIOUS_ROWS_KEY = 'dragon-board:trading-pool:v1:previous-rows'
 
 const loading = ref(false)
 const savingThesis = ref(false)
@@ -446,12 +531,15 @@ const deletingCandidate = ref(false)
 const errorMessage = ref('')
 const candidates = ref<CandidateJournalEntry[]>([])
 const selectedId = ref('')
+const activePoolTab = ref<'candidate' | 'trading'>('candidate')
 const statusFilter = ref('')
 const sortMode = ref<'state-priority' | 'trigger-desc' | 'holding-desc'>('state-priority')
 const keyword = ref('')
 const pendingStrategyMode = ref<RankTrendLiveStrategyMode>('balanced')
 const transientRow = ref<CandidatePoolRow | null>(null)
 const liveDecisionOverrides = ref<Record<string, FusionStrategyProjection>>({})
+const previousTradingPoolRows = ref<TradingPoolAnalysisRow[]>(loadPreviousTradingPoolRows())
+const tradingPoolRefreshTick = ref(0)
 
 const thesisForm = ref<CandidateThesisUpdate>({
   entryReason: '',
@@ -554,6 +642,58 @@ function executionDriftLabel(projection: FusionStrategyProjection): string {
   if (!overlay?.executed) return '未执行'
   if (!projection.strategyEntryAt || !overlay.entryTime) return '已执行，待对齐'
   return projection.strategyEntryAt === overlay.entryTime ? '按策略执行' : '存在时点偏差'
+}
+
+function loadPreviousTradingPoolRows(): TradingPoolAnalysisRow[] {
+  if (typeof sessionStorage === 'undefined') return []
+  try {
+    const raw = sessionStorage.getItem(TRADING_POOL_PREVIOUS_ROWS_KEY)
+    return raw ? JSON.parse(raw) : []
+  } catch {
+    return []
+  }
+}
+
+function savePreviousTradingPoolRows(rows: TradingPoolAnalysisRow[]): void {
+  if (typeof sessionStorage === 'undefined') return
+  sessionStorage.setItem(TRADING_POOL_PREVIOUS_ROWS_KEY, JSON.stringify(rows))
+}
+
+function tradingPoolDecisionLabel(decision: TradingPoolDecision): string {
+  if (decision === 'enter') return '观察买点'
+  if (decision === 'downgrade') return '降级观察'
+  if (decision === 'exit') return '自动出池'
+  if (decision === 'stale') return '信号过期'
+  return '继续观察'
+}
+
+function tradingPoolStatusLabel(row: TradingPoolAnalysisRow): string {
+  return row.decision === 'stale' ? '信号过期' : row.status
+}
+
+function formatTradingPoolValue(value: unknown, digits = 2): string {
+  const numeric = Number(value)
+  return Number.isFinite(numeric) ? numeric.toFixed(digits) : '-'
+}
+
+function refreshTradingPool() {
+  tradingPoolRefreshTick.value += 1
+  void persistTradingPoolRowsAfterRefresh()
+}
+
+function switchToTradingPool() {
+  if (activePoolTab.value !== 'trading') {
+    activePoolTab.value = 'trading'
+  }
+  refreshTradingPool()
+}
+
+async function persistTradingPoolRowsAfterRefresh() {
+  await nextTick()
+  if (activePoolTab.value !== 'trading') return
+  const rows = tradingPoolRows.value
+  previousTradingPoolRows.value = rows
+  savePreviousTradingPoolRows(rows)
 }
 
 function replaceCandidate(updated: CandidateJournalEntry) {
@@ -667,6 +807,33 @@ const selectedGateChecks = computed(() => selectedEntryDecision.value?.checks ||
 const selectedConfigSnapshot = computed(() => selectedEntryDecision.value?.configSnapshot || null)
 const selectedEntrySnapshot = computed(() =>
   selectedLiveDetail.value ? resolveEntrySnapshot(selectedLiveDetail.value.entry) : null,
+)
+const tradingPoolEvaluation = computed(() => {
+  tradingPoolRefreshTick.value
+  if (activePoolTab.value !== 'trading') {
+    return { rows: [], staleCount: 0, exitedCount: 0 }
+  }
+
+  return analyzeTradingPoolCandidate({
+    candidates: candidates.value.filter((entry) => entry.tradeType === 'thesis').map((entry) => {
+      const review = candidateJournalService.reanalyzeCandidate(entry)
+      return {
+        ...review.currentAnalysis.signalsSnapshot?.quote,
+        code: entry.stockCode,
+        name: entry.stockName,
+        rankTrend: review.currentAnalysis.signalsSnapshot?.rankTrend ?? null,
+      }
+    }),
+    previousRows: previousTradingPoolRows.value,
+  })
+})
+const tradingPoolRows = computed(() =>
+  tradingPoolEvaluation.value.rows.map((row) => {
+    const previous = previousTradingPoolRows.value.find((item) => item.code === row.code)
+    return previous?.status === '已介入'
+      ? { ...row, status: '已介入' as const, decision: 'watch' as const, reasons: ['manual_intervened'] }
+      : row
+  }),
 )
 
 function applySelectedEntryToForms(entry: CandidateJournalEntry | null) {
@@ -802,6 +969,19 @@ function openRankTrend() {
   EventManager.emit('rank-trend:open', {
     stockCode: row.entry.stockCode,
   })
+}
+
+function markTradingPoolIntervened(row: TradingPoolAnalysisRow) {
+  previousTradingPoolRows.value = tradingPoolRows.value.map((item) =>
+    item.code === row.code ? { ...item, status: '已介入', decision: 'watch', reasons: ['manual_intervened'] } : item,
+  )
+  savePreviousTradingPoolRows(previousTradingPoolRows.value)
+  EventManager.emit(AppEvents.UI.TOAST, {
+    message: `交易池已标记介入：${row.name || row.code}`,
+    duration: 1400,
+    type: 'success',
+  })
+  // TODO: 持仓观察需要真实持仓/成交数据后再接入，不在 V1 前端投影层处理。
 }
 
 async function deleteCandidate() {
@@ -963,6 +1143,7 @@ defineExpose({
 }
 
 .candidate-header,
+.candidate-tabs,
 .candidate-toolbar,
 .detail-title,
 .quick-actions,
@@ -1056,6 +1237,28 @@ textarea:focus-visible {
   height: 36px;
   font-size: 18px;
   line-height: 1;
+}
+
+.candidate-tabs {
+  gap: 8px;
+  padding: 10px 24px 0;
+  background: rgba(13, 17, 24, 0.72);
+}
+
+.candidate-tab {
+  min-height: 32px;
+  padding: 0 14px;
+  color: var(--candidate-muted);
+  background: rgba(27, 32, 40, 0.72);
+  border: 1px solid var(--candidate-line);
+  border-radius: 6px 6px 0 0;
+  cursor: pointer;
+}
+
+.candidate-tab.active {
+  color: var(--candidate-text);
+  background: rgba(255, 177, 59, 0.16);
+  border-color: rgba(255, 177, 59, 0.38);
 }
 
 .candidate-toolbar {
@@ -1452,6 +1655,93 @@ textarea:focus-visible {
 
 .gate-row[data-status='disabled'] strong {
   color: #8f99a8;
+}
+
+.trading-pool-card {
+  min-height: 100%;
+}
+
+.trading-pool-summary {
+  color: var(--candidate-muted);
+  font-family: var(--candidate-font-data);
+  font-size: 12px;
+}
+
+.trading-pool-table {
+  display: grid;
+  gap: 6px;
+}
+
+.trading-pool-row {
+  display: grid;
+  grid-template-columns: 1.2fr 0.9fr 0.75fr 0.55fr 0.6fr 0.6fr minmax(140px, 1.5fr) 0.65fr;
+  gap: 8px;
+  align-items: center;
+  min-height: 38px;
+  padding: 8px 10px;
+  color: var(--candidate-muted);
+  background: rgba(13, 17, 24, 0.6);
+  border: 1px solid rgba(90, 104, 124, 0.28);
+  border-radius: 7px;
+  font-size: 12px;
+}
+
+.trading-pool-head {
+  color: #dce6f6;
+  background: rgba(94, 182, 255, 0.08);
+  font-weight: 800;
+}
+
+.trading-pool-row strong,
+.trading-pool-row small {
+  display: block;
+}
+
+.trading-pool-row strong {
+  color: var(--candidate-text);
+}
+
+.trading-pool-row small {
+  margin-top: 2px;
+  color: var(--candidate-faint);
+  font-family: var(--candidate-font-data);
+}
+
+.trading-status-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 24px;
+  width: fit-content;
+  padding: 0 9px;
+  color: #ffe8ae;
+  background: rgba(255, 177, 59, 0.14);
+  border: 1px solid rgba(255, 177, 59, 0.32);
+  border-radius: 999px;
+  font-weight: 800;
+}
+
+.trading-status-badge[data-status='exit'] {
+  color: #ffd0d8;
+  background: rgba(255, 92, 115, 0.14);
+  border-color: rgba(255, 92, 115, 0.34);
+}
+
+.trading-status-badge[data-status='stale'],
+.trading-status-badge[data-status='watch'],
+.trading-status-badge[data-status='downgrade'] {
+  color: #dde6f7;
+  background: rgba(115, 128, 147, 0.18);
+  border-color: rgba(115, 128, 147, 0.34);
+}
+
+.trading-pool-row[data-decision='stale'] {
+  opacity: 0.72;
+}
+
+.compact-btn {
+  min-height: 28px;
+  padding: 0 8px;
 }
 
 .form-grid {
