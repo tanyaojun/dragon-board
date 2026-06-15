@@ -65,6 +65,20 @@ backend/snapshot_collector/
 - 自动调度器（Phase 3）：`SnapshotCollectorScheduler` 是独立的 `asyncio` 后台 runner（模块级单例），在 FastAPI `startup` 时注册到事件循环。轮询间隔由 `QUANT_BOARD_SNAPSHOT_COLLECTOR_POLL_MS`（默认 1000ms）控制，每个 tick 检查交易日、槽位表和时间窗口，为符合条件的 slot 启动 fire-and-forget 采集任务。调度器在非 MongoDB 模式或 `QUANT_BOARD_SNAPSHOT_COLLECTOR_ENABLED=0` 时自动禁用。采集任务的并发保护通过内存中的 `_in_flight_slots` 集合实现，确保同一 slot 不会重复采集。
 - 正式切换要求：shadow 采集器必须通过完整审计（覆盖率、质量门禁、数据一致性）后才能讨论 live cutover。
 
+**生产口径尚未完成的接入（截至 Phase 4）：**
+
+以下数据源在生产级快照中是必需的，但后端 collector 尚未接入或仅通过过渡方案覆盖：
+
+1. **Depth（盘口深度）**：当前未接入任何来源。`ProxyQuoteProvider` 的 `depth` 恒为空列表，`BridgeQuoteProvider` 虽然能通过 python-bridge 读取五档盘口，但未被挂载为默认 provider。这意味着所有后端 shadow 快照的 `depth` 字段始终为空，与前端 live 快照的盘口数据存在结构性差距。
+
+2. **Bridge 行情接管**：`BridgeQuoteProvider`（python-bridge WebSocket pool 模式）已实现但未启用。当前默认链路走 `ProxyQuoteProvider → proxy-server → EastMoney HTTP`，这是一个通过公共 HTTP 接口抓取的过渡路径，不经过本地 TDX 行情桥。生产口径应将 `BridgeQuoteProvider` 作为主 quote 源，`ProxyQuoteProvider` 仅作为 bridge 离线时的 fallback。
+
+3. **Theme 数据源**：`ThemeMappingProvider`（MongoDB 题材映射读取）已实现，但题材因子、题材强度、题材轮动等运行时数据没有独立 provider，当前依赖 stock rows 中携带的静态 themes 字段。与前端 live 快照相比，后端 collector 不产出 `themeFactorFrames` 或等价的题材运行时上下文。
+
+4. **市场情绪 / 涨停池 / 轮动摘要**：这些前端快照中存在的数据域在后端 collector 中无对应 provider，也未纳入 `MarketDataContext`。
+
+这些缺口意味着截至 Phase 4，后端 shadow 快照在 depth、题材运行时和市场辅助数据三个维度上仍弱于前端 live 快照，不具备直接切换为生产主链的条件。Phase 5+ 必须逐项补齐后才能进入 live cutover 讨论。
+
 API 路由：
 
 - `GET /api/snapshot-collector/status`：采集器运行状态
@@ -95,15 +109,29 @@ BridgeQuoteProvider（`backend/snapshot_collector/providers.py`）已适配：
 - `set_pool(codes)` — 注册采样池到 bridge
 - `collect(use_pool=True)` — 使用池缓存抓取，含 `poolStalenessMs`（默认 30s）陈旧检测
 
-ProxyQuoteProvider — 当前默认 quote 数据源：
+ProxyQuoteProvider — 当前默认 quote 数据源（过渡方案）：
 
-`service_factory.py` 的 `_create_providers` 实际使用 `ProxyQuoteProvider` 而非 `BridgeQuoteProvider` 作为当前默认行情采集器。它直接调用 proxy-server 的 EastMoney 端点获取实时行情和资金流数据：
+**这是临时过渡安排，不是生产口径。** `service_factory.py` 的 `_create_providers` 当前硬编码 `ProxyQuoteProvider` 为唯一 quote 源，`BridgeQuoteProvider` 虽然已实现但未被挂载。
+
+`ProxyQuoteProvider` 直接调用 proxy-server 的 EastMoney HTTP 端点获取实时行情和资金流数据：
 
 - `GET /api/quotes/eastmoney?codes=...` — proxy-server 的 EastMoney 行情端点，返回 f12(代码)、f2(价格)、f3(涨跌幅)、f5(成交额)、f6(成交量)、f8(换手率)、f9(市盈率)、f20(总市值) 以及 f62/f66/f69/f184(资金流) 字段
 - `ProxyQuoteProvider.collect(codes)` — 接收代码列表，返回 `{quotes, depth: [], money_flow, market_meta}` 结构，与 `BridgeQuoteProvider` 兼容，可在 `collect_market_context` 中互换路由
 - `collect_market_context` 将 `ProxyQuoteProvider` 返回的 `money_flow` 写入 `MarketDataContext.money_flow`，由 builder 的 `_enrich_stock_rows_from_quotes()` 同步填充到 stock rows 的 `moneyFlow`（结构化 dict）、`pe` 和 `totalMarketValue` 字段
 
-注意：`ProxyQuoteProvider` 的 `depth` 固定为空列表（proxy-server 不提供盘口数据）。`BridgeQuoteProvider` 保留用于需要 python-bridge WebSocket pool 模式的场景。
+过渡方案的两个硬性缺口：
+
+- `depth` 固定为空列表。proxy-server 没有盘口端点，EastMoney 公开接口也不提供五档/十档数据。这意味着当前所有后端 shadow 快照的 `depth` 字段始终为空。
+- 数据链路不经过本地 TDX 行情桥。当前路径是 `QuantBoard → proxy-server → EastMoney HTTP`，与前端 live 链路（`DataLayer → python-bridge WebSocket → TDX`）是完全不同的数据源，不可直接对比。
+
+生产口径的预期终态：
+
+1. `BridgeQuoteProvider` 作为主 quote 源，通过 python-bridge 的 WebSocket pool 模式获取 TDX 实时行情和五档盘口。
+2. `ProxyQuoteProvider` 降级为 bridge 离线或超时时的 fallback。
+3. `depth` 字段在正常运行时非空，质量门禁应报告 depth 覆盖率。
+4. `service_factory.py` 的 `_create_providers` 应同时挂载 `BridgeQuoteProvider` 和 `ProxyQuoteProvider`，由 `collect_market_context` 按优先级路由。当前只挂载 `ProxyQuoteProvider` 是 Phase 4 验证阶段的临时配置。
+
+**在 bridge 正式接管之前，后端 shadow 快照不具备与前端 live 快照进行深度质量对比的条件。**
 
 ## 数据流
 

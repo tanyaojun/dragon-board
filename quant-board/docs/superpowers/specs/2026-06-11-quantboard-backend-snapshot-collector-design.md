@@ -185,7 +185,7 @@ daily:        15:00
 短期 Provider：
 
 - `ProxyHotlistProvider`: 调用 `proxy-server` 热榜接口，复用现有八平台热榜能力。
-- `ProxyQuoteProvider` (当前默认): 调用 `proxy-server` EastMoney 行情端点 `GET /api/quotes/eastmoney?codes=...`，获取实时行情和资金流数据。返回 `{quotes, depth: [], money_flow, market_meta}`，其中 money_flow 的 `mediumNetInflow` 由 EastMoney 字段推导。depth 固定为空（proxy-server 无盘口端点）。
+- `ProxyQuoteProvider` (当前默认，**过渡方案**): 调用 `proxy-server` EastMoney 行情端点 `GET /api/quotes/eastmoney?codes=...`，获取实时行情和资金流数据。返回 `{quotes, depth: [], money_flow, market_meta}`，其中 money_flow 的 `mediumNetInflow` 由 EastMoney 字段推导。depth 固定为空（proxy-server 无盘口端点）。**这是临时过渡配置：生产口径应使用 `BridgeQuoteProvider` 作为主 quote 源（通过 python-bridge 获取 TDX 实时行情和五档盘口），`ProxyQuoteProvider` 仅作为 bridge 离线时的 fallback。**`service_factory.py` 当前只挂载 `ProxyQuoteProvider`，不挂载 `BridgeQuoteProvider`，是 Phase 4 验证阶段的临时安排。
 - `BridgeQuoteProvider`: 调用 `python-bridge` 新增或既有接口获取当前行情、depth、tick、money flow。保留用于需要 bridge WebSocket pool 模式的场景。
 - `ThemeMappingProvider`: 直接通过 QuantBoard MongoDB 题材集合读取题材映射。
 - `StockNameProvider`: 读取 MongoDB `stock_names`，补充名称和基础状态。
@@ -498,7 +498,8 @@ cd quant-board
 - 在 Phase 1 的 `GET /api/quotes/snapshot?codes=...` 基础上增加后端维护的采样池。
 - 支持批量 codes、缓存状态、失败降级和行情陈旧标记。
 - QuantBoard `BridgeQuoteProvider` 使用稳定订阅池而不是每次临时拼接。
-- QuantBoard `ProxyQuoteProvider` 已落地，通过 proxy-server EastMoney 端点获取实时行情和资金流数据，写入 `MarketDataContext.money_flow`，由 builder 的 `_enrich_stock_rows_from_quotes()` 充实 stock rows。
+- QuantBoard `BridgeQuoteProvider` 使用稳定订阅池而不是每次临时拼接。
+- QuantBoard `ProxyQuoteProvider` 已落地，通过 proxy-server EastMoney 端点获取实时行情和资金流数据，写入 `MarketDataContext.money_flow`，由 builder 的 `_enrich_stock_rows_from_quotes()` 充实 stock rows。**这是过渡方案，不是生产口径。**生产口径应挂载 `BridgeQuoteProvider` 作为主 quote 源（具备 depth 和 TDX 实时行情），`ProxyQuoteProvider` 降级为 fallback。截至 Phase 4，`service_factory.py` 仍只挂载 `ProxyQuoteProvider`，depth 恒为空。
 
 验收：
 
@@ -567,6 +568,11 @@ cd quant-board
 - 连续至少 2 个完整交易日 shadow 无缺槽、无空帧、无 record 缺失、无计数漂移。
 - 15:00 `half_hour` 和 `daily` 稳定完整。
 - shadow 的关键字段缺失率有结构化报告。
+
+已知限制（Phase 4 范围外，待 BridgeQuoteProvider 挂载后解决）：
+
+- `depth` 字段缺失率为 100%（`ProxyQuoteProvider` 恒返回空列表）。这会导致 shadow vs live 的 depth 对比无意义，审计报告必须显式标注此口径差异。
+- 题材运行时、市场情绪、涨停池等辅助数据域在后端 collector 中无对应 provider，shadow 快照在这些维度上弱于前端 live 快照。这些缺口不影响 Phase 4 的槽位完整性验收，但在讨论 live cutover 之前必须补齐。
 
 ### Phase 5: Dragon Board 前端生产职责退役
 
