@@ -6,7 +6,7 @@
 
 ## Current Phase
 
-Phase 17 Trading Pool V1 front-end projection complete; Phase 15 production validation remains in progress
+Phase 19 交易池强共振自动入池 complete; Phase 15 production validation remains in progress
 
 ## Phases
 
@@ -153,6 +153,25 @@ Phase 17 Trading Pool V1 front-end projection complete; Phase 15 production vali
 - [x] 运行交易池服务测试、候选池面板契约测试、类型检查、构建、diff 检查和浏览器验收
 - **Status:** complete
 
+### Phase 18: 交易池 V2 journal 持久化层
+
+- [x] QuantBoard journal API 支持 `trade_type=trading_pool` 记录的顶层 `candidateEntryId` / `candidate_entry_id`
+- [x] MongoDB `trade_journal` repository 支持按 `tradeType=trading_pool` 和 `candidateEntryId` 过滤
+- [x] Dragon Board `CandidateJournalService` 新增交易池持久化记录的 list/create/update helper
+- [x] 候选池面板交易池 tab 读取持久化交易池记录，刷新和“已介入”会写回 `signalsSnapshot.tradingPool`
+- [x] 保持交易池、候选池 thesis、真实历史 `entry/exit` 交易日志三者隔离
+- **Status:** complete
+
+### Phase 19: 交易池强共振自动入池
+
+- [x] 扩展交易池类型（TradingPoolSource、TradingPoolRiskFlag）和信号快照（TradingPoolSignalSnapshot）包含 finalConfidence、buyVotes、riskFlags、source
+- [x] 实现交易池自动入池状态机：强共振召回、准备介入、降级、出池、双风险检查
+- [x] 保护候选池严格合同：三种策略模式的 Jump 阈值硬阻断测试锁定
+- [x] 补完交易池面板字段：来源、综合置信度、Jump 置信度、BuyVotes、风险标签、原因
+- [x] 收敛 DataTable 置信度 tooltip：拆分综合判断、Jump 阈值、共振评级、候选池结果、交易池动作
+- [x] 设计文档、任务计划和进度记录同步
+- **Status:** complete
+
 ## Key Questions
 
 1. 候选池是否替代自选股？
@@ -186,6 +205,7 @@ Phase 17 Trading Pool V1 front-end projection complete; Phase 15 production vali
 | Phase 15 候选发现冷却缓存未区分行情集合和推荐参数 | 1 | 增加缓存 key，按股票代码集合、`limit`、`minScore` 隔离缓存；重复候选标记继续允许冷却期即时刷新 |
 | Phase 16 异动提醒、龙头复盘候选、候选池三者语义混在一起 | 1 | 将 `HotStockEventMonitorPanel.vue` 收敛为“异动雷达”，正式候选池状态改由 journal 开放候选驱动 |
 | Phase 17 交易池手动“已介入”状态会被实时重算覆盖 | 1 | 在面板层读取 session 上一轮投影，若上一状态为“已介入”则仅保留本会话 UI 状态，不写 journal |
+| Phase 18 交易池跨会话状态丢失 | 1 | 使用 MongoDB `trade_journal` 的 `tradeType=trading_pool` 记录和 `candidateEntryId` 关联 thesis，session 仅作为临时兜底 |
 
 ## Notes
 

@@ -1489,15 +1489,19 @@ def get_checkpoints(limit: int = Query(20, ge=1, le=100)) -> list[dict[str, Any]
             h2 = slots.get("h2") or {}
             q1 = slots.get("q1") or {}
             l1 = slots.get("l1") or {}
+            signal_pool_l1 = l1.get("layer1SignalEfficacy") or {}
+            execution_l1 = h1.get("executionLayer1Efficacy") or {}
             layer2 = compute_checkpoint_layer2(baselines) or {}
             cp = record.get("crossPeriod") or {}
+            signal_pool_meltdown = cp.get("layer1MeltdownSignalPool") or cp.get("layer1MeltdownH1") or {}
+            execution_meltdown = cp.get("layer1MeltdownV5Execution") or {}
             records.append({
                 "checkpointId": record.get("checkpointId"),
                 "createdAt": record.get("createdAt"),
                 "e1Label": summarize_longtest_slot_label(l1),
-                "e1SignalCount": (l1.get("layer1SignalEfficacy") or {}).get("totalSignals"),
-                "e1ABTierCount": (l1.get("layer1SignalEfficacy") or {}).get("aPlusBTierCount"),
-                "e1TierRatio": (l1.get("layer1SignalEfficacy") or {}).get("tierRatio"),
+                "e1SignalCount": signal_pool_l1.get("totalSignals"),
+                "e1ABTierCount": signal_pool_l1.get("aPlusBTierCount"),
+                "e1TierRatio": signal_pool_l1.get("tierRatio"),
                 "h1Label": summarize_longtest_slot_label(h1),
                 "h2Label": summarize_longtest_slot_label(h2),
                 "q1Label": summarize_longtest_slot_label(q1),
@@ -1508,15 +1512,32 @@ def get_checkpoints(limit: int = Query(20, ge=1, le=100)) -> list[dict[str, Any]
                 "h2Sharpe": h2.get("sharpe"),
                 "q1TotalReturn": q1.get("totalReturn"),
                 "q1Sharpe": q1.get("sharpe"),
-                "h1Layer1Status": (l1.get("layer1SignalEfficacy") or {}).get("layer1Status"),
-                "h1DirectionAccuracy": (l1.get("layer1SignalEfficacy") or {}).get("directionAccuracy"),
+                "h1Layer1Status": signal_pool_l1.get("layer1Status"),
+                "h1DirectionAccuracy": signal_pool_l1.get("directionAccuracy"),
+                "signalPoolLayer1Label": summarize_longtest_slot_label(l1),
+                "signalPoolLayer1Status": signal_pool_l1.get("layer1Status"),
+                "signalPoolDirectionAccuracy": signal_pool_l1.get("directionAccuracy"),
+                "executionLayer1Label": summarize_longtest_slot_label(h1),
+                "executionLayer1Status": execution_l1.get("layer1Status"),
+                "executionDirectionAccuracy": execution_l1.get("directionAccuracy"),
+                "executionEntryCount": execution_l1.get("entryEventCount") or execution_l1.get("totalSignals"),
+                "executionABTierCount": execution_l1.get("aPlusBTierCount"),
                 "h1Layer2Status": layer2.get("layer2Status"),
                 "h1Layer2Bias": layer2.get("bias"),
-                "meltdown": (cp.get("layer1MeltdownH1") or {}).get("meltdown"),
-                "consecutiveRedPeriods": (cp.get("layer1MeltdownH1") or {}).get("consecutiveRedPeriods"),
+                "meltdown": signal_pool_meltdown.get("meltdown"),
+                "consecutiveRedPeriods": signal_pool_meltdown.get("consecutiveRedPeriods"),
+                "meltdownLabel": signal_pool_meltdown.get("selectedLabel"),
+                "meltdownMetricKey": signal_pool_meltdown.get("metricKey"),
+                "executionMeltdown": execution_meltdown.get("meltdown"),
+                "executionConsecutiveRedPeriods": execution_meltdown.get("consecutiveRedPeriods"),
                 "l3GreenLight": (cp.get("layer3Trend") or {}).get("greenLight"),
             })
     return records[-limit:] if len(records) > limit else records
+
+
+@app.get("/api/backtests")
+def list_backtests(limit: int = Query(50, ge=1, le=200), db: Session | None = Depends(get_db)) -> dict[str, Any]:
+    return BacktestService(db).list_runs(limit=limit)
 
 
 @app.get("/api/backtests/{run_id}")

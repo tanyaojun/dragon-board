@@ -322,7 +322,8 @@ pre {
   margin-bottom: 12px;
 }
 
-.lookup-row input {
+.lookup-row input,
+.lookup-row select {
   max-width: 420px;
 }
 

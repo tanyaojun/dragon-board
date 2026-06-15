@@ -563,6 +563,41 @@ def test_mongo_research_repository_filters_journal_entries_by_status() -> None:
     assert [row["id"] for row in rows] == ["tj_1"]
 
 
+def test_mongo_research_repository_filters_trading_pool_by_candidate_entry() -> None:
+    db = FakeMongoDatabase()
+    repo = MongoResearchRepository(db)
+    repo.save_journal_entry(
+        TradeJournal(
+            id="tj_pool_1",
+            stock_code="601208",
+            stock_name="东材科技",
+            trade_type="trading_pool",
+            candidate_entry_id="tj_thesis_1",
+            status="观察买点",
+            signals_snapshot={"tradingPool": {"version": "v2", "decision": "enter"}},
+        )
+    )
+    repo.save_journal_entry(
+        TradeJournal(
+            id="tj_pool_2",
+            stock_code="300433",
+            stock_name="蓝思科技",
+            trade_type="trading_pool",
+            candidate_entry_id="tj_thesis_2",
+            status="观察中",
+        )
+    )
+
+    rows = repo.list_journal_entries(
+        trade_type="trading_pool",
+        candidate_entry_id="tj_thesis_1",
+    )
+
+    assert [row["id"] for row in rows] == ["tj_pool_1"]
+    assert rows[0]["candidateEntryId"] == "tj_thesis_1"
+    assert rows[0]["signalsSnapshot"]["tradingPool"]["decision"] == "enter"
+
+
 def test_mongo_research_repository_updates_review_result_separately_from_execution() -> None:
     db = FakeMongoDatabase()
     repo = MongoResearchRepository(db)

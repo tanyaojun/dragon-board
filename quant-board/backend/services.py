@@ -470,6 +470,31 @@ def compute_signal_efficacy(
     }
 
 
+def compute_execution_entry_layer1_efficacy(
+    trade_events: list[dict[str, Any]],
+    frames: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Layer 1 execution path: only evaluate actually filled entry events."""
+    entry_events = [
+        event
+        for event in trade_events
+        if isinstance(event, dict) and str(event.get("action") or "").lower() == "buy"
+    ]
+    signals = [
+        {
+            "snapshotId": event.get("signalSnapshotId") or event.get("snapshotId"),
+            "code": event.get("code"),
+            "price": event.get("price"),
+            "candidateTier": event.get("candidateTier"),
+        }
+        for event in entry_events
+    ]
+    result = compute_signal_efficacy(signals=signals, frames=frames)
+    result["sampleScope"] = "execution_entry"
+    result["entryEventCount"] = len(entry_events)
+    return result
+
+
 def compute_execution_quality(
     h1_summary: dict[str, Any],
     h2_summary: dict[str, Any],
@@ -777,20 +802,34 @@ def summarize_longtest_slot_label(baseline: dict[str, Any] | None) -> str | None
 def check_layer1_meltdown(
     history: list[dict[str, Any]],
     label_filter: str = "H1_half_hour_current_bar",
+    metric_key: str = "layer1SignalEfficacy",
 ) -> dict[str, Any]:
     """Check if Layer 1 has been red for 3+ consecutive checkpoints (meltdown)."""
     if len(history) < 3:
-        return {"meltdown": False, "consecutiveRedPeriods": 0, "diagnostics": "insufficient_history"}
+        return {
+            "meltdown": False,
+            "consecutiveRedPeriods": 0,
+            "diagnostics": "insufficient_history",
+            "metricKey": metric_key,
+        }
 
     statuses: list[str] = []
+    selected_label: str | None = None
+    selected_slot: str | None = None
     for record in history:
         baselines = record.get("baselines") or []
         baseline = next((b for b in baselines if b.get("label") == label_filter), None)
-        if baseline is None:
+        slot = "label"
+        if baseline is None and metric_key == "layer1SignalEfficacy":
             baseline = select_longtest_baseline_slots(baselines).get("l1")
+            slot = "l1"
         if not baseline:
             continue
-        l1 = baseline.get("layer1SignalEfficacy") or {}
+        l1 = baseline.get(metric_key) or {}
+        if not isinstance(l1, dict):
+            continue
+        selected_label = str(baseline.get("label") or "") or selected_label
+        selected_slot = slot
         statuses.append(str(l1.get("layer1Status") or "unknown"))
 
     consecutive_red = 0
@@ -804,6 +843,9 @@ def check_layer1_meltdown(
         "meltdown": consecutive_red >= 3,
         "consecutiveRedPeriods": consecutive_red,
         "statuses": statuses[-6:],
+        "selectedLabel": selected_label,
+        "selectedSlot": selected_slot,
+        "metricKey": metric_key,
         "recommendation": (
             "触发策略结构性复审：连续 3 期方向精度不达标，建议检查市场状态归属、信号有效性和执行方式"
             if consecutive_red >= 3
@@ -1217,9 +1259,15 @@ class BacktestService:
             signals=result.get("signals") or [],
             frames=run_frames,
         )
+        execution_layer_1_efficacy = compute_execution_entry_layer1_efficacy(
+            trade_events=result.get("tradeEvents") or [],
+            frames=run_frames,
+        )
         quality_gate["layer1SignalEfficacy"] = layer_1_efficacy
+        quality_gate["executionLayer1Efficacy"] = execution_layer_1_efficacy
         if isinstance(result.get("dataQuality"), dict):
             result["dataQuality"]["layer1SignalEfficacy"] = layer_1_efficacy
+            result["dataQuality"]["executionLayer1Efficacy"] = execution_layer_1_efficacy
             result["dataQuality"] = self._normalize_data_quality(dataset_id, result["dataQuality"])
             result["warnings"] = list(result["dataQuality"].get("warnings") or [])
 
@@ -1591,6 +1639,34 @@ class BacktestService:
             "randomSeed": run.random_seed,
             "configHash": run.config_hash,
             "createdAt": run.created_at.isoformat(),
+        }
+
+    def list_runs(self, *, limit: int = 50) -> dict[str, Any]:
+        rows, total = self.repo.list_backtest_runs(limit=limit)
+        return {
+            "items": [self._run_option(row) for row in rows],
+            "limit": max(1, min(int(limit), 200)),
+            "total": total,
+        }
+
+    @staticmethod
+    def _run_option(run: BacktestRun) -> dict[str, Any]:
+        return {
+            "id": run.id,
+            "runId": run.id,
+            "datasetId": run.dataset_id,
+            "dataset_id": run.dataset_id,
+            "strategyName": run.strategy_name,
+            "strategyVersion": run.strategy_version,
+            "snapshotType": run.snapshot_type,
+            "configHash": run.config_hash,
+            "randomSeed": run.random_seed,
+            "status": run.status,
+            "dateStart": run.date_start,
+            "dateEnd": run.date_end,
+            "errorReason": run.error_reason,
+            "createdAt": run.created_at.isoformat() if run.created_at else None,
+            "finishedAt": run.finished_at.isoformat() if run.finished_at else None,
         }
 
     def get_trades(self, run_id: str, limit: int = 100, offset: int = 0) -> dict[str, Any] | None:

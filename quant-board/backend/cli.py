@@ -856,6 +856,7 @@ def summarize_longtest_baseline(spec: dict[str, Any], run: dict[str, Any]) -> di
         "allZeroPriceFrameFilter": (data_quality.get("runtimeFilter") or {}).get("allZeroPriceFrameFilter") if isinstance(data_quality.get("runtimeFilter"), dict) else None,
         "priceQualityDiagnostics": report_only_diagnostics.get("priceQuality"),
         "layer1SignalEfficacy": data_quality.get("layer1SignalEfficacy"),
+        "executionLayer1Efficacy": data_quality.get("executionLayer1Efficacy"),
         "layer2ExecutionQuality": data_quality.get("layer2ExecutionQuality"),
         "blockedByLimit": matching.get("blockedByLimit"),
         "nextBarEntries": matching.get("nextBarEntries"),
@@ -930,9 +931,21 @@ def cmd_run_longtest_baselines(args: argparse.Namespace) -> None:
     jsonl_path = get_settings().reports_dir / "long_test_runs.jsonl"
     history = read_checkpoint_history(jsonl_path, limit=6)
 
-    l1_meltdown_h1 = check_layer1_meltdown(history, "H1_half_hour_current_bar")
+    l1_meltdown_signal_pool = check_layer1_meltdown(history, metric_key="layer1SignalEfficacy")
+    l1_meltdown_execution_v5 = check_layer1_meltdown(
+        history,
+        "V5_E2_half_hour_fusion_current_bar",
+        metric_key="executionLayer1Efficacy",
+    )
+    l1_meltdown_h1 = l1_meltdown_signal_pool
     if l1_meltdown_h1.get("meltdown"):
-        print(f"  [WARN] L1 meltdown: {l1_meltdown_h1['consecutiveRedPeriods']} consecutive red periods on H1")
+        label = l1_meltdown_h1.get("selectedLabel") or "signal-pool Layer1"
+        print(f"  [WARN] L1 meltdown: {l1_meltdown_h1['consecutiveRedPeriods']} consecutive red periods on {label}")
+    if l1_meltdown_execution_v5.get("meltdown"):
+        print(
+            "  [WARN] V5 execution-entry L1 meltdown: "
+            f"{l1_meltdown_execution_v5['consecutiveRedPeriods']} consecutive red periods"
+        )
 
     l3_trend = check_layer3_trend(history)
     if l3_trend.get("greenLight"):
@@ -940,6 +953,8 @@ def cmd_run_longtest_baselines(args: argparse.Namespace) -> None:
 
     result["crossPeriod"] = {
         "layer1MeltdownH1": l1_meltdown_h1,
+        "layer1MeltdownSignalPool": l1_meltdown_signal_pool,
+        "layer1MeltdownV5Execution": l1_meltdown_execution_v5,
         "layer3Trend": l3_trend,
     }
 
@@ -1284,7 +1299,7 @@ def build_parser() -> argparse.ArgumentParser:
     cleanup_mongodb_cmd.add_argument("--apply", action="store_true")
     cleanup_mongodb_cmd.set_defaults(func=cmd_cleanup_mongodb_datasets)
 
-    backfill_mongodb_cmd = sub.add_parser("backfill-empty-mongodb-snapshots", help="Preview or backfill known empty MongoDB snapshot rows from nearest same-type frames")
+    backfill_mongodb_cmd = sub.add_parser("backfill-empty-mongodb-snapshots", help="Preview or repair MongoDB formal snapshots: empty rows, missing records, count drift, missing slots, and missing indexes")
     backfill_mongodb_cmd.add_argument("--dataset-id", default="dragonboard_live")
     backfill_mongodb_cmd.add_argument("--snapshot-id", action="append", default=None)
     backfill_mongodb_cmd.add_argument("--apply", action="store_true")

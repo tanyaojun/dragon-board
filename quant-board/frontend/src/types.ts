@@ -264,6 +264,30 @@ export interface BacktestQualityResponse {
   qualityReport: BacktestQualityReport | null;
 }
 
+export interface BacktestRunSummary {
+  id: string;
+  runId: string;
+  datasetId?: string;
+  dataset_id?: string;
+  strategyName?: string;
+  strategyVersion?: string;
+  snapshotType?: string;
+  configHash?: string;
+  randomSeed?: number;
+  status?: string;
+  dateStart?: string | null;
+  dateEnd?: string | null;
+  errorReason?: string | null;
+  createdAt?: string | null;
+  finishedAt?: string | null;
+}
+
+export interface BacktestRunListResponse {
+  items: BacktestRunSummary[];
+  limit: number;
+  total: number;
+}
+
 export interface BacktestDeleteResponse {
   ok: boolean;
   runId: string;
@@ -372,10 +396,12 @@ export interface ReplayStep {
 // ── V2 四层决策框架 ─────────────────────────────
 
 export interface Layer1SignalEfficacy {
+  sampleScope?: "signal_pool" | "execution_entry" | string;
   tierRatio: number | null;
   aPlusBTierCount: number;
   tierCounts: Record<string, number>;
   totalSignals: number;
+  entryEventCount?: number;
   directionAccuracy: number | null;
   aMainSamples: number;
   nNeutralSamples: number;
@@ -475,10 +501,22 @@ export interface CheckpointSummary {
   q1Sharpe: number | null;
   h1Layer1Status: "green" | "red" | null;
   h1DirectionAccuracy: number | null;
+  signalPoolLayer1Label?: string | null;
+  signalPoolLayer1Status?: "green" | "red" | null;
+  signalPoolDirectionAccuracy?: number | null;
+  executionLayer1Label?: string | null;
+  executionLayer1Status?: "green" | "red" | null;
+  executionDirectionAccuracy?: number | null;
+  executionEntryCount?: number | null;
+  executionABTierCount?: number | null;
   h1Layer2Status: "green" | "yellow" | "red" | null;
   h1Layer2Bias: number | null;
   meltdown: boolean | null;
   consecutiveRedPeriods: number | null;
+  meltdownLabel?: string | null;
+  meltdownMetricKey?: string | null;
+  executionMeltdown?: boolean | null;
+  executionConsecutiveRedPeriods?: number | null;
   l3GreenLight: boolean | null;
 }
 

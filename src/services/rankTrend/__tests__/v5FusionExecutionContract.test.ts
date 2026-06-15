@@ -161,6 +161,96 @@ describe('evaluateV5FusionEntry', () => {
       ]),
     )
   })
+
+  it('keeps jump confidence as a hard block even when RankTrend consensus is strong', () => {
+    const stock = createStock({
+      rankTrend: {
+        ...(createStock().rankTrend as Record<string, unknown>),
+        jump: { direction: 'buy', confidence: 87.9 },
+        decision: { final: { signal: 'buy', confidence: 91 } },
+        technical: {
+          momentumProfile: { short: 12, mid: 22, long: 6, acceleration: 12 },
+          macd: { cross: 'golden' },
+          signals: {
+            direction: { signal: 'buy', confidence: 90 },
+            acceleration: { signal: 'buy', confidence: 90 },
+            zeroCross: { signal: 'buy', confidence: 90 },
+          },
+        },
+      },
+    })
+
+    const result = evaluateV5FusionEntry(stock, {
+      mode: 'strict_execution',
+      minJumpConfidence: 90,
+    })
+
+    expect(result.accepted).toBe(false)
+    expect(result.checks.find((check) => check.key === 'jump_confidence')).toMatchObject({
+      status: 'fail',
+      hardBlock: true,
+    })
+  })
+
+  it('keeps jump confidence as a hard block in balanced mode', () => {
+    const stock = createStock({
+      rankTrend: {
+        ...(createStock().rankTrend as Record<string, unknown>),
+        jump: { direction: 'buy', confidence: 82.9 },
+        decision: { final: { signal: 'buy', confidence: 91 } },
+        technical: {
+          momentumProfile: { short: 12, mid: 22, long: 6, acceleration: 12 },
+          macd: { cross: 'golden' },
+          signals: {
+            direction: { signal: 'buy', confidence: 90 },
+            acceleration: { signal: 'buy', confidence: 90 },
+            zeroCross: { signal: 'buy', confidence: 90 },
+          },
+        },
+      },
+    })
+
+    const result = evaluateV5FusionEntry(stock, {
+      mode: 'balanced',
+      minJumpConfidence: 85,
+    })
+
+    expect(result.accepted).toBe(false)
+    expect(result.checks.find((check) => check.key === 'jump_confidence')).toMatchObject({
+      status: 'fail',
+      hardBlock: true,
+    })
+  })
+
+  it('keeps jump confidence as a hard block in recall-first mode', () => {
+    const stock = createStock({
+      rankTrend: {
+        ...(createStock().rankTrend as Record<string, unknown>),
+        jump: { direction: 'buy', confidence: 78 },
+        decision: { final: { signal: 'buy', confidence: 91 } },
+        technical: {
+          momentumProfile: { short: 12, mid: 22, long: 6, acceleration: 12 },
+          macd: { cross: 'golden' },
+          signals: {
+            direction: { signal: 'buy', confidence: 90 },
+            acceleration: { signal: 'buy', confidence: 90 },
+            zeroCross: { signal: 'buy', confidence: 90 },
+          },
+        },
+      },
+    })
+
+    const result = evaluateV5FusionEntry(stock, {
+      mode: 'recall_first',
+      minJumpConfidence: 80,
+    })
+
+    expect(result.accepted).toBe(false)
+    expect(result.checks.find((check) => check.key === 'jump_confidence')).toMatchObject({
+      status: 'fail',
+      hardBlock: true,
+    })
+  })
 })
 
 describe('evaluateV5FusionExit', () => {

@@ -31,6 +31,7 @@ import type {
   BacktestQualityReport,
   BacktestRequest,
   BacktestReportTabKey,
+  BacktestRunSummary,
   BacktestSignal,
   BacktestTrade,
   DatasetSummary,
@@ -110,6 +111,10 @@ const importState = reactive<RequestResult>({ status: "idle" });
 const goldenState = reactive<RequestResult>({ status: "idle" });
 const backtestState = reactive<RequestResult>({ status: "idle" });
 const backtestDetailState = reactive<RequestResult>({ status: "idle" });
+const backtestHistoryState = reactive<RequestResult<{ items: BacktestRunSummary[]; total: number }>>({
+  status: "idle",
+  data: { items: [], total: 0 }
+});
 const backtestNormalizedState = reactive<RequestResult<{
   trades: BacktestTrade[];
   equityCurve: BacktestEquityPoint[];
@@ -189,6 +194,7 @@ const h1CheckpointLabel = computed(() => checkpointLabel(latestCheckpoint.value?
 const h2CheckpointLabel = computed(() => checkpointLabel(latestCheckpoint.value?.h2Label, "H2"));
 const e1CheckpointLabel = computed(() => checkpointLabel(latestCheckpoint.value?.e1Label, "E1"));
 const q1CheckpointLabel = computed(() => checkpointLabel(latestCheckpoint.value?.q1Label, "Q1"));
+const executionLayer1CheckpointLabel = computed(() => checkpointLabel(latestCheckpoint.value?.executionLayer1Label, h1CheckpointLabel.value));
 const showQ1CheckpointColumns = computed(() => {
   const cp = latestCheckpoint.value;
   if (!cp) {
@@ -393,6 +399,26 @@ const snapshotSourceOptions = computed(() => {
   add("dragonboard_live", "dragonboard_live / 正式快照主库");
   for (const dataset of datasetsState.data || []) {
     add(dataset.id, datasetDisplayName(dataset));
+  }
+  return options;
+});
+const backtestHistoryOptions = computed(() => {
+  const seen = new Set<string>();
+  const options: BacktestRunSummary[] = [];
+  const addRun = (run: BacktestRunSummary) => {
+    const id = String(run.runId || run.id || "");
+    if (!id || seen.has(id)) {
+      return;
+    }
+    seen.add(id);
+    options.push(run);
+  };
+  for (const run of backtestHistoryState.data?.items || []) {
+    addRun(run);
+  }
+  const fallbackId = manualBacktestId.value.trim() || lastBacktestId.value.trim();
+  if (fallbackId) {
+    addRun({ id: fallbackId, runId: fallbackId });
   }
   return options;
 });
@@ -998,6 +1024,15 @@ function shortId(value: unknown): string {
   return text ? text.slice(0, 12) : "-";
 }
 
+function formatBacktestRunOption(run: BacktestRunSummary): string {
+  const id = run.runId || run.id;
+  const range = run.dateStart && run.dateEnd ? `${run.dateStart}~${run.dateEnd}` : "无区间";
+  const dataset = run.datasetId || run.dataset_id || "未知数据集";
+  const snapshot = formatSnapshotTypeLabel(run.snapshotType);
+  const created = run.createdAt ? formatDisplayTime(run.createdAt) : "";
+  return [shortId(id), dataset, range, snapshot, created].filter(Boolean).join(" · ");
+}
+
 function formatTrialParameters(value: unknown): string {
   const record = asRecord(value);
   const nested = asRecord(record.parameters || record.params || record.optunaParams);
@@ -1053,6 +1088,25 @@ async function runRequest<T>(
     state.status = "error";
     state.error = formatApiError(error);
     state.raw = apiErrorRaw(error, state.error);
+  }
+}
+
+async function loadBacktestHistory(): Promise<void> {
+  backtestHistoryState.status = "loading";
+  backtestHistoryState.error = undefined;
+  try {
+    const data = await api.listBacktests(80);
+    backtestHistoryState.status = "ok";
+    backtestHistoryState.data = {
+      items: data.items,
+      total: data.total
+    };
+    backtestHistoryState.raw = data;
+  } catch (error) {
+    backtestHistoryState.status = "error";
+    backtestHistoryState.error = formatApiError(error);
+    backtestHistoryState.raw = apiErrorRaw(error, backtestHistoryState.error);
+    backtestHistoryState.data = { items: [], total: 0 };
   }
 }
 
@@ -1252,6 +1306,7 @@ async function runBacktest(): Promise<void> {
         backtestNormalizedState.status = "idle";
         backtestNormalizedState.data = undefined;
         backtestNormalizedState.error = undefined;
+        void loadBacktestHistory();
       }
     }
   );
@@ -1335,6 +1390,7 @@ async function deleteCurrentBacktest(): Promise<void> {
     if (lastBacktestId.value === id) {
       lastBacktestId.value = "";
     }
+    await loadBacktestHistory();
   } catch (error) {
     backtestDetailState.status = "error";
     backtestDetailState.error = formatApiError(error);
@@ -1459,6 +1515,12 @@ watch(isMongoMode, (enabled) => {
   }
 });
 
+watch(activeTab, (tab) => {
+  if (tab === "report") {
+    void loadBacktestHistory();
+  }
+});
+
 // ── ThemeTrend handlers ──
 async function runThemeBacktest(): Promise<void> {
   await runRequest(themeState, () => api.runThemeTrend({ ...themeBacktestForm, datasetId: selectedDatasetId.value || themeBacktestForm.datasetId }), (data) => {
@@ -1492,6 +1554,7 @@ async function runThemeOptimization(): Promise<void> {
 onMounted(async () => {
   await checkHealth();
   await loadDatasets();
+  await loadBacktestHistory();
   fetchCheckpoints();
 });
 </script>
@@ -2378,7 +2441,21 @@ onMounted(async () => {
             </span>
           </div>
           <div class="lookup-row">
-            <input v-model="manualBacktestId" type="text" placeholder="回测运行 ID" />
+            <select v-model="manualBacktestId" :disabled="backtestHistoryState.status === 'loading'">
+              <option value="">
+                {{ backtestHistoryState.status === "loading" ? "正在加载历史回测..." : "选择历史回测 ID" }}
+              </option>
+              <option v-for="run in backtestHistoryOptions" :key="run.runId || run.id" :value="run.runId || run.id">
+                {{ formatBacktestRunOption(run) }}
+              </option>
+            </select>
+            <button
+              type="button"
+              :disabled="backtestHistoryState.status === 'loading'"
+              @click="loadBacktestHistory"
+            >
+              {{ backtestHistoryState.status === "loading" ? "刷新中" : "刷新历史" }}
+            </button>
             <button type="button" :disabled="backtestDetailState.status === 'loading'" @click="fetchBacktest">
               {{ backtestDetailState.status === "loading" ? "拉取中..." : "拉取报告" }}
             </button>
@@ -2390,6 +2467,9 @@ onMounted(async () => {
             >
               删除本次回测
             </button>
+          </div>
+          <div v-if="backtestHistoryState.status === 'error'" class="inline-error">
+            历史回测列表读取失败：{{ backtestHistoryState.error }}
           </div>
           <div v-if="deleteBacktestMessage" class="inline-note">{{ deleteBacktestMessage }}</div>
           <div v-if="backtestDetailState.status === 'loading'" class="inline-note">
@@ -2987,6 +3067,17 @@ onMounted(async () => {
               <b>{{ formatCheckpointPercent(latestCheckpoint.e1TierRatio) }}</b>
             </div>
             <div v-if="latestCheckpoint">
+              <span>最新 {{ executionLayer1CheckpointLabel }} 入场L1</span>
+              <b>
+                <span v-if="latestCheckpoint.executionLayer1Status" :class="['status-badge',
+                  latestCheckpoint.executionLayer1Status === 'green' ? 'badge-green' : 'badge-red']" style="font-size:0.7rem">{{ signalLightLabel(latestCheckpoint.executionLayer1Status) }}</span>
+                <span v-else>-</span>
+                <small v-if="checkpointNumber(latestCheckpoint.executionDirectionAccuracy) != null">
+                  {{ formatCheckpointPercent(latestCheckpoint.executionDirectionAccuracy) }}
+                </small>
+              </b>
+            </div>
+            <div v-if="latestCheckpoint">
               <span>最新 L2</span>
               <b>
                 <span v-if="latestCheckpoint.h1Layer2Status" :class="['status-badge',
@@ -2996,8 +3087,12 @@ onMounted(async () => {
               </b>
             </div>
             <div v-if="latestCheckpoint">
-              <span>熔断</span>
-              <b :style="latestCheckpoint.meltdown ? 'color:#721c24' : ''">{{ latestCheckpoint.meltdown ? '⚠ 触发' : '正常' }} <small>({{ latestCheckpoint.consecutiveRedPeriods || 0 }}期)</small></b>
+              <span>信号池熔断</span>
+              <b :style="latestCheckpoint.meltdown ? 'color:#721c24' : ''">{{ latestCheckpoint.meltdown ? '触发' : '正常' }} <small>({{ latestCheckpoint.consecutiveRedPeriods || 0 }}期)</small></b>
+            </div>
+            <div v-if="latestCheckpoint">
+              <span>入场熔断</span>
+              <b :style="latestCheckpoint.executionMeltdown ? 'color:#721c24' : ''">{{ latestCheckpoint.executionMeltdown ? '触发' : '正常' }} <small>({{ latestCheckpoint.executionConsecutiveRedPeriods || 0 }}期)</small></b>
             </div>
             <div><span>总期数</span><b>{{ checkpointList.length }}</b></div>
           </div>
@@ -3015,9 +3110,13 @@ onMounted(async () => {
                   <th v-if="showQ1CheckpointColumns">{{ q1CheckpointLabel }} Sharpe</th>
                   <th>{{ e1CheckpointLabel }} 信号数</th>
                   <th>{{ e1CheckpointLabel }} A+B占比</th>
+                  <th>{{ executionLayer1CheckpointLabel }} 入场L1</th>
+                  <th>入场方向</th>
+                  <th>入场数</th>
                   <th>L2 偏差</th>
                   <th>L2</th>
-                  <th>熔断</th>
+                  <th>信号池熔断</th>
+                  <th>入场熔断</th>
                 </tr>
               </thead>
               <tbody>
@@ -3032,6 +3131,13 @@ onMounted(async () => {
                   <td v-if="showQ1CheckpointColumns" :class="checkpointNumber(cp.q1Sharpe) == null ? '' : checkpointNumber(cp.q1Sharpe)! >= 0 ? 'pos' : 'neg'">{{ formatCheckpointFixed(cp.q1Sharpe) }}</td>
                   <td>{{ cp.e1SignalCount ?? '-' }}</td>
                   <td>{{ formatCheckpointPercent(cp.e1TierRatio) }}</td>
+                  <td>
+                    <span v-if="cp.executionLayer1Status" :class="['status-badge',
+                      cp.executionLayer1Status === 'green' ? 'badge-green' : 'badge-red']" style="font-size:0.6rem;padding:1px 5px">{{ signalLightLabel(cp.executionLayer1Status) }}</span>
+                    <span v-else>-</span>
+                  </td>
+                  <td>{{ formatCheckpointPercent(cp.executionDirectionAccuracy) }}</td>
+                  <td>{{ cp.executionEntryCount ?? '-' }}</td>
                   <td>{{ checkpointNumber(cp.h1Layer2Bias) != null ? formatPercent(checkpointNumber(cp.h1Layer2Bias)!) : '-' }}</td>
                   <td>
                     <span v-if="cp.h1Layer2Status" :class="['status-badge',
@@ -3039,7 +3145,8 @@ onMounted(async () => {
                       cp.h1Layer2Status === 'yellow' ? 'badge-yellow' : 'badge-red']" style="font-size:0.6rem;padding:1px 5px">{{ signalLightLabel(cp.h1Layer2Status) }}</span>
                     <span v-else>-</span>
                   </td>
-                  <td><span v-if="cp.meltdown" style="color:#721c24">⚠ {{ cp.consecutiveRedPeriods || 0 }}期</span><span v-else>-</span></td>
+                  <td><span v-if="cp.meltdown" style="color:#721c24">{{ cp.consecutiveRedPeriods || 0 }}期</span><span v-else>-</span></td>
+                  <td><span v-if="cp.executionMeltdown" style="color:#721c24">{{ cp.executionConsecutiveRedPeriods || 0 }}期</span><span v-else>-</span></td>
                 </tr>
               </tbody>
             </table>

@@ -242,6 +242,7 @@ import { useUIStore } from '../../stores/ui'
 import { useFavoriteStore } from '../../stores/favorite'
 import { dataLoader } from '../../services/dataLoader'
 import { candidateJournalService } from '@/services/candidate/CandidateJournalService'
+import { analyzeTradingPoolCandidate } from '@/services/candidate/TradingPoolAnalysisService'
 import { openingSignalStore } from '@/services/hotlist/OpeningSignalStore'
 import RankTrendPanel from '../../components/panels/RankTrendPanel.vue'
 const props = defineProps<{
@@ -342,7 +343,7 @@ const columns = [
   { key: 'compRank', label: '综合', group: 'comprehensive', always: true },
   { key: 'rankChange', label: '变化', group: 'comprehensive', always: true },
   { key: 'jumpSignal', label: '候选池', group: 'comprehensive', always: true },
-  { key: 'confidence', label: '跃迁置信度', group: 'comprehensive', always: true },
+  { key: 'confidence', label: 'Jump置信', group: 'comprehensive', always: true },
   { key: 'zlje', label: '主力净额', group: 'money', always: true },
   { key: 'zljzb', label: '主力%', group: 'money', always: true },
   { key: 'volume', label: '成交量', group: 'quote', always: true },
@@ -411,7 +412,13 @@ const gridTemplateStyle = computed(() => {
 })
 const candidateMenuLabel = computed(() => (openCandidateId.value ? '查看候选详情' : '加入候选池'))
 
-const hasOpeningWeakToStrongSignal = (stock: Stock) => openingSignalsByCode.value.has(stock.code)
+const isOpeningWeakToStrongHighlightStage = (stage?: string) =>
+  stage === 'auctionConditionPassed' || stage === 'gapAlert' || stage === 'trendConfirm'
+
+const hasOpeningWeakToStrongSignal = (stock: Stock) => {
+  const signal = openingSignalsByCode.value.get(stock.code)
+  return isOpeningWeakToStrongHighlightStage(signal?.stage)
+}
 
 const openingSignalTitle = (stock: Stock) => {
   const signal = openingSignalsByCode.value.get(stock.code)
@@ -674,6 +681,59 @@ const getGateCheckStatusText = (status?: string | null) => {
   return '关闭'
 }
 
+const countTradingPoolBuyVotes = (stock: any) => {
+  return [
+    getDirectionSignal(stock) === 'buy',
+    getAccelerationSignal(stock) === 'buy',
+    getZeroCrossSignal(stock) === 'buy',
+    getMacdCross(stock) === 'golden',
+  ].filter(Boolean).length
+}
+
+const getCandidateJumpThreshold = (stock: any) => {
+  const projection = getCandidatePoolProjection(stock)
+  return projection?.entryDecision?.configSnapshot?.minJumpConfidence ?? null
+}
+
+const getCandidatePoolReasonPreview = (stock: any) => {
+  const projection = getCandidatePoolProjection(stock)
+  const decision = projection?.entryDecision
+  if (!decision) return '未触发'
+  const jumpCheck = decision.checks?.find((check: any) => check.key === 'jump_confidence')
+  if (jumpCheck?.status === 'fail') return 'Jump阈值阻断'
+  if (decision.accepted) return '严格通过'
+  return decision.label || getDecisionStateText(decision.decisionState)
+}
+
+const getTradingPoolActionPreview = (stock: any) => {
+  const projection = getCandidatePoolProjection(stock)
+  const result = analyzeTradingPoolCandidate({
+    candidates: [
+      {
+        ...stock,
+        candidateEntryDecision: projection?.entryDecision,
+        rankTrend: getRankTrendAnalysis(stock),
+      },
+    ],
+  })
+  const row = result.rows[0] || null
+  const buyVotes = row?.signalSnapshot.buyVotes ?? countTradingPoolBuyVotes(stock)
+  const actionLabel = row ? tradingPoolDecisionPreviewLabel(row.status, row.decision) : '未触发'
+  return {
+    buyVotes,
+    actionLabel,
+    resonanceLabel: buyVotes >= 3 ? '强共振' : buyVotes === 2 ? '中等共振' : '弱共振',
+  }
+}
+
+const tradingPoolDecisionPreviewLabel = (status: string, decision: string) => {
+  if (decision === 'enter') return status
+  if (decision === 'downgrade') return '降级观察'
+  if (decision === 'exit') return '自动出池'
+  if (decision === 'stale') return '信号过期'
+  return '继续观察'
+}
+
 // 置信度悬浮提示
 const getConfidenceTitle = (stock: any) => {
   let title = ''
@@ -688,19 +748,27 @@ const getConfidenceTitle = (stock: any) => {
   const directionText = getSignalDisplayText(getDirectionSignal(stock), '无')
   const accelerationText = getSignalDisplayText(getAccelerationSignal(stock), '无')
   const crossText = getSignalDisplayText(getZeroCrossSignal(stock), '无')
+  const jumpConfidence = getJumpConfidence(stock)
+  const candidateJumpThreshold = getCandidateJumpThreshold(stock)
+  const candidateJumpPassed =
+    candidateJumpThreshold == null ? null : jumpConfidence >= Number(candidateJumpThreshold)
+  const tradingPoolAction = getTradingPoolActionPreview(stock)
 
   title = `📌 ${stock.name || '-'} (${stock.code || '-'})\n`
   title += hasFinalSignal
     ? `🎯 综合判断: ${signalText} (置信度: ${confidence}%)\n`
     : '🎯 综合判断: 暂无信号\n'
+  title += `🚀 Jump跃迁: ${formatTooltipNumber(jumpConfidence, 1)}%`
+  if (candidateJumpThreshold != null) {
+    title += ` (候选池阈值: ${candidateJumpThreshold} / ${candidateJumpPassed ? '已过' : '未过'})`
+  }
+  title += '\n'
+  title += `🧩 共振评级: ${tradingPoolAction.resonanceLabel} (BuyVotes: ${tradingPoolAction.buyVotes}/4)\n`
+  title += `🧭 候选池: ${getCandidatePoolReasonPreview(stock)}\n`
+  title += `📌 交易池: ${tradingPoolAction.actionLabel}\n`
   title += '─'.repeat(30) + '\n'
 
   if (rankTrend) {
-    const jumpConfidence = getJumpConfidence(stock)
-    if (jumpConfidence > 0) {
-      title += `🚀 Jump跃迁置信: ${formatTooltipNumber(jumpConfidence, 1)}%\n`
-    }
-
     // 排名变化
     const rankChange = getRankChange(stock)
     if (rankChange !== 0) {
@@ -1090,15 +1158,8 @@ const getCellClass = (key: string, stock: any) => {
     else if (value < 0) classes.push('color-down')
   }
 
-  // ✅ 量比颜色样式：大于1.2显示暖色，小于0.8显示冷色
   if (key === 'volumeRatio') {
-    const ratio = stock.volumeRatio
-    const status = stock.volumeRatioMeta?.status
-    if (status === 'stale') classes.push('volume-ratio-stale')
-    else if (status === 'suspicious') classes.push('volume-ratio-suspicious')
-    else if (status === 'unavailable') classes.push('volume-ratio-unavailable')
-    else if (ratio && ratio > 1.2) classes.push('volume-ratio-high')
-    else if (ratio && ratio < 0.8) classes.push('volume-ratio-low')
+    classes.push('volume-ratio-cell')
   }
 
   if (key === 'zlje') {
@@ -1123,8 +1184,6 @@ const formatVolumeRatioCell = (stock: any) => {
   const status = stock.volumeRatioMeta?.status
   if (status === 'unavailable') return '-'
   if (!Number.isFinite(ratio) || ratio <= 0) return '-'
-  if (status === 'stale') return `${ratio.toFixed(2)}*`
-  if (status === 'suspicious') return `!${ratio.toFixed(2)}`
   return ratio.toFixed(2)
 }
 
@@ -2324,30 +2383,10 @@ defineExpose({
   text-shadow: 0 0 2px rgba(127, 140, 141, 0.5);
 }
 
-/* 量比颜色样式 */
-.volume-ratio-high {
-  color: #ffa502 !important;
+/* 量比保持稳定显示，数据状态留在悬浮说明中 */
+.volume-ratio-cell {
+  color: var(--text-primary);
   font-weight: 600;
-}
-
-.volume-ratio-low {
-  color: #4a90e2 !important;
-  font-weight: 500;
-}
-
-.volume-ratio-stale {
-  color: var(--text-secondary) !important;
-  font-weight: 500;
-}
-
-.volume-ratio-suspicious {
-  color: #ff6b6b !important;
-  font-weight: 700;
-}
-
-.volume-ratio-unavailable {
-  color: var(--text-muted) !important;
-  font-weight: 400;
 }
 
 /* 八平台排名前三样式 */

@@ -242,12 +242,40 @@ export type TradingPoolStatus =
 
 export type TradingPoolDecision = 'enter' | 'watch' | 'downgrade' | 'exit' | 'stale'
 
+export type TradingPoolSource =
+  | 'candidate_auto_add'
+  | 'candidate_watch'
+  | 'jump_blocked_resonance'
+  | 'manual'
+  | 'persisted'
+  | 'unknown'
+
+export type TradingPoolRiskFlag =
+  | 'lifecycle_veto'
+  | 'macd_death_cross'
+  | 'overheat_sell'
+  | 'capital_divergence_sell'
+  | 'momentum_sync_broken'
+  | 'jump_confidence_low'
+  | 'final_confidence_low'
+  | 'candidate_hard_blocked'
+  | 'data_stale'
+
 export interface TradingPoolSignalSnapshot {
+  finalSignal: string | null
+  finalConfidence: number | null
+  jumpDirection: string | null
   directionSignal: string | null
+  directionConfidence: number | null
   jumpConfidence: number | null
   macdCross: string | null
   accelerationSignal: string | null
+  accelerationConfidence: number | null
   zeroCrossSignal: string | null
+  zeroCrossConfidence: number | null
+  buyVotes: number
+  riskFlags: TradingPoolRiskFlag[]
+  source: TradingPoolSource
   momentumSyncBroken: boolean
   lifecycleAction: string | null
   dataQuality: 'fresh' | 'stale' | 'missing'

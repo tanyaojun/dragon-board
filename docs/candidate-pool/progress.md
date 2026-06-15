@@ -317,6 +317,32 @@
   - 将交易池面板契约测试从内部变量名扫描收敛为 UI 文案、thesis 数据边界和历史交易日志隔离断言。
   - 运行 `pnpm exec vitest run src/services/candidate/__tests__/TradingPoolAnalysisService.test.ts src/components/panels/__tests__/CandidatePoolPanel.test.ts --reporter=dot`，29 项通过。
 
+## 2026-06-14 Phase 18 交易池 V2 journal 持久化层
+
+- **Status:** complete
+- Actions taken:
+  - 新增 `docs/candidate-pool/trading-pool-persistence-v2-plan.md`，冻结 V2 最小落地范围：复用 MongoDB `trade_journal`，不新增集合，不写 `favorite_data`，不污染历史 `entry/exit`。
+  - QuantBoard journal API 和 `TradeJournal` 模型支持顶层 `candidateEntryId` / `candidate_entry_id`，Mongo repository 支持按 `candidateEntryId` 过滤。
+  - `CandidateJournalService` 新增 `listTradingPoolEntries()`、`createTradingPoolEntry()`、`updateTradingPoolEntry()`，统一写入 `trade_type=trading_pool` 与 `signalsSnapshot.tradingPool`。
+  - `CandidatePoolPanel.vue` 交易池 tab 读取持久化 trading-pool 记录；刷新交易池和标记“已介入”会 upsert 对应 journal 记录，sessionStorage 仅保留为前端临时兜底。
+  - 同步 `candidate-pool-trading-pool-design.md` 与 QuantBoard `api-cli.md` 的 V2 数据合同说明。
+- Files created/modified:
+  - `docs/candidate-pool/trading-pool-persistence-v2-plan.md`
+  - `docs/candidate-pool/candidate-pool-trading-pool-design.md`
+  - `docs/candidate-pool/task_plan.md`
+  - `docs/candidate-pool/progress.md`
+  - `quant-board/backend/api/journal_routes.py`
+  - `quant-board/backend/data/models.py`
+  - `quant-board/backend/data/mongo_research_repository.py`
+  - `quant-board/tests/test_trade_journal.py`
+  - `quant-board/tests/test_mongo_research_repository.py`
+  - `quant-board/docs/api-cli.md`
+  - `src/services/candidate/types.ts`
+  - `src/services/candidate/CandidateJournalService.ts`
+  - `src/services/candidate/__tests__/CandidateJournalService.test.ts`
+  - `src/components/panels/CandidatePoolPanel.vue`
+  - `src/components/panels/__tests__/CandidatePoolPanel.test.ts`
+
 ## Test Results
 
 | Test | Input | Expected | Actual | Status |
@@ -398,6 +424,17 @@
 | Phase 17 前端构建 | `pnpm build` | exit 0 | exit 0，保留既有 `dataLoader.ts` 动静态混用 warning | 通过 |
 | Phase 17 diff 检查 | `git diff --check` | exit 0 | exit 0 | 通过 |
 | Phase 17 浏览器验收 | Playwright + 系统 Chrome 打开 `http://127.0.0.1:5173`，进入候选池并切换“交易池” | 渲染交易池视图，展示观察买点、已退出、信号过期三类状态 | 交易池表格展示 3 只样本：长电科技=观察买点，ST洲际=已退出，再升科技=信号过期；截图 `output/playwright/candidate-pool-trading-browser.png` | 通过 |
+| Phase 18 后端 journal 契约 | `cd quant-board; .\.venv\Scripts\python.exe -m pytest tests/test_trade_journal.py tests/test_mongo_research_repository.py -q` | exit 0 | 27 passed，保留既有 FastAPI on_event warning | 通过 |
+| Phase 18 前端 service/panel 测试 | `pnpm exec vitest run src/services/candidate/__tests__/CandidateJournalService.test.ts src/components/panels/__tests__/CandidatePoolPanel.test.ts --reporter=dot` | exit 0 | 2 files / 39 tests passed | 通过 |
+| Phase 18 类型检查 | `pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false` | exit 0 | exit 0 | 通过 |
+| Phase 19 强共振召回 RED 验证 | `pnpm exec vitest run src/services/candidate/__tests__/TradingPoolAnalysisService.test.ts --reporter=dot` | 新增楚江新材型、泰晶科技型、高 Jump 弱共振、双风险测试失败 | 4 failed / 14 passed，失败点为缺少 finalConfidence、buyVotes、source、riskFlags 和状态分层 | 通过 |
+| Phase 19 交易池强共振定向测试 | `pnpm exec vitest run src/services/candidate/__tests__/TradingPoolAnalysisService.test.ts src/components/panels/__tests__/candidatePoolTradingPool.test.ts src/components/panels/__tests__/CandidatePoolPanel.test.ts src/components/common/__tests__/DataTable.test.ts src/services/rankTrend/__tests__/v5FusionExecutionContract.test.ts --reporter=dot` | exit 0 | 5 files / 59 tests passed | 通过 |
+| Phase 19 RankTrend 回归 | `pnpm test:ranktrend` | exit 0 | 21 files / 219 tests passed | 通过 |
+| Phase 19 RankTrend 类型检查 | `pnpm typecheck:ranktrend` | exit 0 | exit 0 | 通过 |
+| Phase 19 应用类型检查 | `pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false` | exit 0 | exit 0 | 通过 |
+| Phase 19 浏览器验收 | Playwright CLI 打开 `http://127.0.0.1:5173`，检查主表与候选池交易池 tab | 主表表头显示 `Jump置信`，交易池 tab 显示统计、筛选和空态 | 表头已显示 `Jump置信`；交易池 tab 渲染 `总数/观察/准备/介入/退出/过期`、决策筛选与空态；当前本地 journal 无 thesis，未出现交易池行；保留既有行情/情绪 abort warning | 通过 |
+| Phase 19 Code Review 修正 | `pnpm exec vitest run src/services/candidate/__tests__/TradingPoolAnalysisService.test.ts src/components/panels/__tests__/candidatePoolTradingPool.test.ts src/components/panels/__tests__/CandidatePoolPanel.test.ts src/components/common/__tests__/DataTable.test.ts src/services/rankTrend/__tests__/v5FusionExecutionContract.test.ts --reporter=dot`; `pnpm test:ranktrend`; `pnpm typecheck:ranktrend`; `pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false`; `git diff --check` | exit 0 | 5 files / 64 tests passed；RankTrend 21 files / 221 tests passed；类型检查和 diff 检查 exit 0 | 通过 |
+| Phase 19 000988 Jump 兜底修正 | `pnpm exec vitest run src/services/candidate/__tests__/TradingPoolAnalysisService.test.ts --reporter=dot`; `pnpm exec vitest run src/services/candidate/__tests__/TradingPoolAnalysisService.test.ts src/components/common/__tests__/DataTable.test.ts src/components/panels/__tests__/CandidatePoolPanel.test.ts src/components/panels/__tests__/candidatePoolTradingPool.test.ts src/services/rankTrend/__tests__/v5FusionExecutionContract.test.ts --reporter=dot` | RED: 候选池矩阵 Jump 已过但 RankTrend 路径缺失时误判 `已退出/exit` | GREEN: 服务单测 22 tests passed；定向回归 5 files / 65 tests passed | 通过 |
 
 ## Error Log
 
@@ -430,13 +467,14 @@
 | 2026-05-17 | Node Playwright 托管 Chromium 缺失，无法直接启动浏览器冒烟 | 读取 launch 错误 | 复用系统 Chrome `C:\Program Files\Google\Chrome\Application\chrome.exe` 完成 Phase 16 冒烟 |
 | 2026-05-17 | 浏览器冒烟时真实页面停在启动层“加载平台数据 15%”，顶栏按钮被 `v-show` 隐藏 | 检查 DOM、样式和控制台 | 记录为 Phase 15 真实数据链路风险；Phase 16 仅临时显示主 App 验证面板渲染和交互入口 |
 | 2026-06-14 | Phase 17 交易池手动“已介入”状态会被实时重算覆盖 | 自审 `tradingPoolRows` 和 `previousTradingPoolRows` 数据流 | 面板层保留 session 中上一状态为“已介入”的 UI 投影，不写后端 |
+| 2026-06-15 | 000988 华工科技候选池严格通过，但 tooltip 显示交易池“自动出池” | RED 用例复现 `jump_confidence.actual=95` 未被交易池读取，缺失 Jump 被 `?? 0` 当成低 Jump | 交易池读取候选池规则矩阵 Jump 当前值作为兜底；强制出池只在 Jump 确有数值且低于 75 时触发 |
 
 ## 5-Question Reboot Check
 
 | Question | Answer |
 |----------|--------|
-| Where am I? | Phase 17 交易池 V1 前端投影层已完成；Phase 15 真实使用联调仍有未完成项 |
-| Where am I going? | 完成 Phase 17 构建和浏览器验收后，回到 Phase 15 真实行情与真实 journal 后端链路稳定性收口 |
+| Where am I? | Phase 19 交易池强共振自动入池已完成；Phase 15 真实使用联调仍有未完成项 |
+| Where am I going? | 回到 Phase 15 真实行情与真实 journal 后端链路稳定性收口 |
 | What's the goal? | 将手工候选/交易假设升级为候选池工作台 |
 | What have I learned? | 见 `findings.md` |
-| What have I done? | 已实现并验证右键入池、规则分析、候选池面板、状态推进、journal 标签入库契约、统计概览、当前重分析、已入池识别、候选详情定位、假设编辑、分析写回、复盘保存、基础复盘统计、Phase 8 端到端交互、Phase 9 历史交易日志入口收敛、Phase 10 候选删除/快捷操作/筛选排序、Phase 11 候选漏斗/质量拆解/命中率/失效率/平均跟踪，Phase 12 结构化证据、扣分项、条件组、风险和变化归因，Phase 13 自动建议入池、重复候选识别、人工确认入池和推荐冷却控制，Phase 14 Playwright E2E、历史交易隔离、失败/重复/删除/截图回归，Phase 15 首个稳定性修复：候选发现冷却缓存按行情集合和推荐参数隔离，Phase 16 异动雷达命名收敛、候选池开放候选标识和一键加入/查看候选桥接，以及 Phase 17 交易池 V1 前端投影、自动出池/降级/信号过期规则和候选池面板交易池标签页 |
+| What have I done? | 已实现并验证右键入池、规则分析、候选池面板、状态推进、journal 标签入库契约、统计概览、当前重分析、已入池识别、候选详情定位、假设编辑、分析写回、复盘保存、基础复盘统计、Phase 8 端到端交互、Phase 9 历史交易日志入口收敛、Phase 10 候选删除/快捷操作/筛选排序、Phase 11 候选漏斗/质量拆解/命中率/失效率/平均跟踪，Phase 12 结构化证据、扣分项、条件组、风险和变化归因，Phase 13 自动建议入池、重复候选识别、人工确认入池和推荐冷却控制，Phase 14 Playwright E2E、历史交易隔离、失败/重复/删除/截图回归，Phase 15 首个稳定性修复：候选发现冷却缓存按行情集合和推荐参数隔离，Phase 16 异动雷达命名收敛、候选池开放候选标识和一键加入/查看候选桥接，Phase 17 交易池 V1 前端投影、自动出池/降级/信号过期规则和候选池面板交易池标签页，Phase 18 交易池 V2 journal 持久化层，Phase 19 交易池强共振自动入池、最终置信度、买入票数、风险标签和来源识别 |

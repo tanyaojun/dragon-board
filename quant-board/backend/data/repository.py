@@ -1419,6 +1419,12 @@ class Repository:
             self.research_session.rollback()
             raise RuntimeError("failed to delete backtest run") from exc
 
+    def list_backtest_runs(self, *, limit: int = 50) -> tuple[list[BacktestRun], int]:
+        bounded_limit = max(1, min(int(limit), 200))
+        total = int(self.research_session.scalar(select(func.count()).select_from(BacktestRun)) or 0)
+        query = select(BacktestRun).order_by(BacktestRun.created_at.desc()).limit(bounded_limit)
+        return list(self.research_session.scalars(query).all()), total
+
     def cleanup_research_backtests(
         self,
         *,

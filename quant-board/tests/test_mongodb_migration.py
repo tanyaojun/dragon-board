@@ -193,6 +193,13 @@ def test_build_mongodb_indexes_contains_backtest_sequence_indexes() -> None:
     assert {"keys": [("backtestRunId", 1), ("sequence", 1)]} in indexes["backtest_signals"]
 
 
+def test_build_mongodb_indexes_contains_trading_pool_candidate_entry_indexes() -> None:
+    indexes = build_mongodb_indexes()
+
+    assert {"keys": [("candidateEntryId", 1)]} in indexes["trade_journal"]
+    assert {"keys": [("tradeType", 1), ("candidateEntryId", 1)]} in indexes["trade_journal"]
+
+
 def test_plan_mongodb_migration_counts_sqlite_sources_and_stock_json(tmp_path: Path) -> None:
     snapshot_db = tmp_path / "snapshots.db"
     research_db = tmp_path / "research.db"
@@ -318,6 +325,144 @@ def test_apply_mongodb_migration_writes_structured_documents_and_indexes(tmp_pat
     assert not any(key.endswith("_json") for key in fake_db["snapshot_frames"].rows[0])
     assert fake_db["stock_names"].rows[0]["code"] == "000001"
     assert fake_db["snapshot_frames"].indexes
+
+
+def test_verify_mongodb_migration_detects_missing_half_hour_close_slot_without_daily_donor() -> None:
+    fake_db = FakeMongoDatabase(
+        {
+            "snapshot_frames": FakeCollection(
+                [
+                    {
+                        "datasetId": "dragonboard_live",
+                        "snapshotId": "half_hour:2026-06-10:09:30",
+                        "type": "half_hour",
+                        "tradingDate": "2026-06-10",
+                        "slotTime": "09:30",
+                        "timestamp": 1,
+                        "stockRowCount": 1,
+                        "sectorRowCount": 0,
+                    },
+                    {
+                        "datasetId": "dragonboard_live",
+                        "snapshotId": "half_hour:2026-06-10:10:00",
+                        "type": "half_hour",
+                        "tradingDate": "2026-06-10",
+                        "slotTime": "10:00",
+                        "timestamp": 2,
+                        "stockRowCount": 1,
+                        "sectorRowCount": 0,
+                    },
+                    {
+                        "datasetId": "dragonboard_live",
+                        "snapshotId": "half_hour:2026-06-10:10:30",
+                        "type": "half_hour",
+                        "tradingDate": "2026-06-10",
+                        "slotTime": "10:30",
+                        "timestamp": 3,
+                        "stockRowCount": 1,
+                        "sectorRowCount": 0,
+                    },
+                    {
+                        "datasetId": "dragonboard_live",
+                        "snapshotId": "half_hour:2026-06-10:11:00",
+                        "type": "half_hour",
+                        "tradingDate": "2026-06-10",
+                        "slotTime": "11:00",
+                        "timestamp": 4,
+                        "stockRowCount": 1,
+                        "sectorRowCount": 0,
+                    },
+                    {
+                        "datasetId": "dragonboard_live",
+                        "snapshotId": "half_hour:2026-06-10:11:30",
+                        "type": "half_hour",
+                        "tradingDate": "2026-06-10",
+                        "slotTime": "11:30",
+                        "timestamp": 5,
+                        "stockRowCount": 1,
+                        "sectorRowCount": 0,
+                    },
+                    {
+                        "datasetId": "dragonboard_live",
+                        "snapshotId": "half_hour:2026-06-10:13:00",
+                        "type": "half_hour",
+                        "tradingDate": "2026-06-10",
+                        "slotTime": "13:00",
+                        "timestamp": 6,
+                        "stockRowCount": 1,
+                        "sectorRowCount": 0,
+                    },
+                    {
+                        "datasetId": "dragonboard_live",
+                        "snapshotId": "half_hour:2026-06-10:13:30",
+                        "type": "half_hour",
+                        "tradingDate": "2026-06-10",
+                        "slotTime": "13:30",
+                        "timestamp": 7,
+                        "stockRowCount": 1,
+                        "sectorRowCount": 0,
+                    },
+                    {
+                        "datasetId": "dragonboard_live",
+                        "snapshotId": "half_hour:2026-06-10:14:00",
+                        "type": "half_hour",
+                        "tradingDate": "2026-06-10",
+                        "slotTime": "14:00",
+                        "timestamp": 8,
+                        "stockRowCount": 1,
+                        "sectorRowCount": 0,
+                    },
+                    {
+                        "datasetId": "dragonboard_live",
+                        "snapshotId": "half_hour:2026-06-10:14:30",
+                        "type": "half_hour",
+                        "tradingDate": "2026-06-10",
+                        "slotTime": "14:30",
+                        "timestamp": 9,
+                        "stockRowCount": 1,
+                        "sectorRowCount": 0,
+                    },
+                ]
+            ),
+            "snapshot_records": FakeCollection(
+                [
+                    {
+                        "datasetId": "dragonboard_live",
+                        "snapshotId": f"half_hour:2026-06-10:{slot}",
+                    }
+                    for slot in ["09:30", "10:00", "10:30", "11:00", "11:30", "13:00", "13:30", "14:00", "14:30"]
+                ]
+            ),
+            "snapshot_stock_rows": FakeCollection(
+                [
+                    {
+                        "datasetId": "dragonboard_live",
+                        "snapshotId": f"half_hour:2026-06-10:{slot}",
+                        "rowId": f"half_hour:2026-06-10:{slot}:000001",
+                        "code": "000001",
+                    }
+                    for slot in ["09:30", "10:00", "10:30", "11:00", "11:30", "13:00", "13:30", "14:00", "14:30"]
+                ]
+            ),
+            "snapshot_sector_rows": FakeCollection([]),
+        }
+    )
+    for name, expected_indexes in build_mongodb_indexes().items():
+        for item in expected_indexes:
+            fake_db[name].create_index(item["keys"], unique=bool(item.get("unique", False)))
+
+    result = verify_mongodb_migration(fake_db, dataset_id="dragonboard_live", snapshot_type="half_hour")
+
+    assert result["ok"] is False
+    assert result["continuity"]["missingSlots"] == [
+        {
+            "snapshotId": "half_hour:2026-06-10:15:00",
+            "type": "half_hour",
+            "tradingDate": "2026-06-10",
+            "slotTime": "15:00",
+            "actualSlots": ["09:30", "10:00", "10:30", "11:00", "11:30", "13:00", "13:30", "14:00", "14:30"],
+        }
+    ]
 
 
 def test_apply_mongodb_migration_deduplicates_stock_names_and_audits_duplicates(tmp_path: Path) -> None:
@@ -457,6 +602,7 @@ def test_verify_mongodb_migration_reports_counts_indexes_and_continuity() -> Non
                 "tradingDate": "2026-05-11",
                 "timestamp": 1,
                 "stockRowCount": 1,
+                "sectorRowCount": 1,
             },
             {
                 "datasetId": "dragonboard_live",
@@ -465,6 +611,25 @@ def test_verify_mongodb_migration_reports_counts_indexes_and_continuity() -> Non
                 "tradingDate": "2026-05-12",
                 "timestamp": 2,
                 "stockRowCount": 1,
+                "sectorRowCount": 1,
+            },
+        ]
+    )
+    fake_db["snapshot_records"].rows.extend(
+        [
+            {
+                "datasetId": "dragonboard_live",
+                "snapshotId": "s1",
+                "type": "half_hour",
+                "tradingDate": "2026-05-11",
+                "timestamp": 1,
+            },
+            {
+                "datasetId": "dragonboard_live",
+                "snapshotId": "s2",
+                "type": "half_hour",
+                "tradingDate": "2026-05-12",
+                "timestamp": 2,
             },
         ]
     )
@@ -523,6 +688,72 @@ def test_verify_mongodb_migration_fails_on_missing_rows_and_indexes() -> None:
     assert result["indexes"]["missing"]
     assert result["continuity"]["emptyFrames"][0]["snapshotId"] == "empty"
     assert result["rankSeries"]["000001"]["missingSnapshots"] == ["empty"]
+
+
+def test_verify_mongodb_migration_reports_missing_records_and_count_mismatches() -> None:
+    fake_db = FakeMongoDatabase()
+    for name in ALL_COLLECTIONS:
+        fake_db[name]
+    fake_db["datasets"].rows.append({"id": "dragonboard_live"})
+    fake_db["snapshot_frames"].rows.append(
+        {
+            "datasetId": "dragonboard_live",
+            "snapshotId": "half_hour:2026-04-16:10:00",
+            "type": "half_hour",
+            "tradingDate": "2026-04-16",
+            "slotTime": "10:00",
+            "timestamp": 500,
+            "stockRowCount": 237,
+            "sectorRowCount": 75,
+        }
+    )
+    fake_db["snapshot_stock_rows"].rows.extend(
+        [
+            {
+                "datasetId": "dragonboard_live",
+                "snapshotId": "half_hour:2026-04-16:10:00",
+                "code": "000001",
+                "rank": 1,
+            },
+            {
+                "datasetId": "dragonboard_live",
+                "snapshotId": "half_hour:2026-04-16:10:00",
+                "code": "000002",
+                "rank": 2,
+            },
+        ]
+    )
+    for name, indexes in build_mongodb_indexes().items():
+        fake_db[name].indexes.extend(indexes)
+
+    result = verify_mongodb_migration(
+        fake_db,
+        dataset_id="dragonboard_live",
+        snapshot_type="half_hour",
+        codes=["000001"],
+    )
+
+    assert result["ok"] is False
+    assert result["continuity"]["missingRecords"] == [
+        {
+            "snapshotId": "half_hour:2026-04-16:10:00",
+            "tradingDate": "2026-04-16",
+            "slotTime": "10:00",
+            "type": "half_hour",
+        }
+    ]
+    assert result["continuity"]["countMismatches"] == [
+        {
+            "snapshotId": "half_hour:2026-04-16:10:00",
+            "tradingDate": "2026-04-16",
+            "slotTime": "10:00",
+            "type": "half_hour",
+            "declaredStockRowCount": 237,
+            "actualStockRowCount": 2,
+            "declaredSectorRowCount": 75,
+            "actualSectorRowCount": 0,
+        }
+    ]
 
 
 def _create_minimal_sources(tmp_path: Path) -> tuple[Path, Path, Path, Path]:

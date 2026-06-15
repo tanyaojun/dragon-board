@@ -44,6 +44,19 @@ RUNTIME_COLLECTIONS = ("stock_names", "migration_audit", "hotlist_sentiment")
 JOURNAL_COLLECTIONS = ("trade_journal",)
 ALL_COLLECTIONS = (*SNAPSHOT_COLLECTIONS, *RESEARCH_COLLECTIONS, *THEME_COLLECTIONS, *RUNTIME_COLLECTIONS, *JOURNAL_COLLECTIONS)
 
+EXPECTED_SNAPSHOT_SLOTS: dict[str, list[str]] = {
+    "quarter_hour": [
+        "09:30", "09:45", "10:00", "10:15", "10:30", "10:45",
+        "11:00", "11:15", "11:30",
+        "13:00", "13:15", "13:30", "13:45",
+        "14:00", "14:15", "14:30", "14:45",
+        "15:00",
+    ],
+    "half_hour": ["09:30", "10:00", "10:30", "11:00", "11:30", "13:00", "13:30", "14:00", "14:30", "15:00"],
+    "hourly": ["10:00", "11:00", "13:00", "14:00", "15:00"],
+    "daily": ["15:00"],
+}
+
 JSON_FIELD_DEFAULTS: dict[str, tuple[str, Any]] = {
     "quality_flags_json": ("qualityFlags", []),
     "metadata_json": ("metadata", {}),
@@ -232,6 +245,8 @@ def build_mongodb_indexes() -> dict[str, list[dict[str, Any]]]:
             {"keys": [("id", 1)], "unique": True},
             {"keys": [("stockCode", 1), ("tradeTime", -1)]},
             {"keys": [("tradeType", 1), ("createdAt", -1)]},
+            {"keys": [("candidateEntryId", 1)]},
+            {"keys": [("tradeType", 1), ("candidateEntryId", 1)]},
             {"keys": [("linkedEntryId", 1)]},
             {"keys": [("status", 1), ("createdAt", -1)]},
             {"keys": [("stockCode", 1), ("status", 1), ("createdAt", -1)]},
@@ -422,8 +437,18 @@ def verify_mongodb_migration(
     frames.sort(key=lambda row: (str(row.get("tradingDate") or ""), int(row.get("timestamp") or 0), str(row.get("snapshotId") or "")))
     snapshot_ids = [str(row.get("snapshotId") or "") for row in frames if row.get("snapshotId")]
     empty_frames = _find_empty_snapshot_frames(database, dataset_id, frames)
+    missing_records = _find_missing_snapshot_records(database, dataset_id, frames)
+    count_mismatches = _find_count_mismatches(database, dataset_id, frames)
+    missing_slots = _find_missing_slot_frames(frames, snapshot_type=snapshot_type)
     rank_series = _verify_rank_series(database, dataset_id, snapshot_ids, codes or [])
-    ok = not indexes["missing"] and not empty_frames and all(not item["missingSnapshots"] for item in rank_series.values())
+    ok = (
+        not indexes["missing"]
+        and not empty_frames
+        and not missing_records
+        and not count_mismatches
+        and not missing_slots
+        and all(not item["missingSnapshots"] for item in rank_series.values())
+    )
     return {
         "ok": ok,
         "datasetId": dataset_id,
@@ -433,6 +458,9 @@ def verify_mongodb_migration(
         "continuity": {
             "frameCount": len(frames),
             "emptyFrames": empty_frames,
+            "missingRecords": missing_records,
+            "countMismatches": count_mismatches,
+            "missingSlots": missing_slots,
             "firstTradingDate": frames[0].get("tradingDate") if frames else None,
             "lastTradingDate": frames[-1].get("tradingDate") if frames else None,
         },
@@ -626,6 +654,115 @@ def _find_empty_snapshot_frames(database: Any, dataset_id: str, frames: list[dic
                 }
             )
     return empty
+
+
+def _find_missing_snapshot_records(database: Any, dataset_id: str, frames: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    existing_snapshot_ids = {
+        str(row.get("snapshotId") or "")
+        for row in database["snapshot_records"].find({"datasetId": dataset_id})
+        if row.get("snapshotId")
+    }
+    missing: list[dict[str, Any]] = []
+    for frame in frames:
+        snapshot_id = str(frame.get("snapshotId") or "")
+        if not snapshot_id or snapshot_id in existing_snapshot_ids:
+            continue
+        missing.append(
+            {
+                "snapshotId": snapshot_id,
+                "tradingDate": frame.get("tradingDate"),
+                "slotTime": frame.get("slotTime"),
+                "type": frame.get("type"),
+            }
+        )
+    return missing
+
+
+def _find_count_mismatches(database: Any, dataset_id: str, frames: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    stock_counts: dict[str, int] = {}
+    for row in database["snapshot_stock_rows"].find({"datasetId": dataset_id}):
+        snapshot_id = str(row.get("snapshotId") or "")
+        if snapshot_id:
+            stock_counts[snapshot_id] = stock_counts.get(snapshot_id, 0) + 1
+    sector_counts: dict[str, int] = {}
+    for row in database["snapshot_sector_rows"].find({"datasetId": dataset_id}):
+        snapshot_id = str(row.get("snapshotId") or "")
+        if snapshot_id:
+            sector_counts[snapshot_id] = sector_counts.get(snapshot_id, 0) + 1
+
+    mismatches: list[dict[str, Any]] = []
+    for frame in frames:
+        snapshot_id = str(frame.get("snapshotId") or "")
+        if not snapshot_id:
+            continue
+        declared_stock = int(frame.get("stockRowCount") or 0)
+        actual_stock = int(stock_counts.get(snapshot_id, 0))
+        declared_sector = int(frame.get("sectorRowCount") or 0)
+        actual_sector = int(sector_counts.get(snapshot_id, 0))
+        if declared_stock == actual_stock and declared_sector == actual_sector:
+            continue
+        mismatches.append(
+            {
+                "snapshotId": snapshot_id,
+                "tradingDate": frame.get("tradingDate"),
+                "slotTime": frame.get("slotTime"),
+                "type": frame.get("type"),
+                "declaredStockRowCount": declared_stock,
+                "actualStockRowCount": actual_stock,
+                "declaredSectorRowCount": declared_sector,
+                "actualSectorRowCount": actual_sector,
+            }
+        )
+    return mismatches
+
+
+def _find_missing_slot_frames(
+    frames: list[dict[str, Any]],
+    *,
+    snapshot_type: str,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    expected_slots = EXPECTED_SNAPSHOT_SLOTS.get(snapshot_type)
+    if not expected_slots:
+        return []
+    close_slot = expected_slots[-1]
+
+    current = now or datetime.now()
+    today = current.strftime("%Y-%m-%d")
+    current_minutes = current.hour * 60 + current.minute
+    grouped: dict[str, set[str]] = {}
+    for frame in frames:
+        trading_date = str(frame.get("tradingDate") or "")
+        slot_time = str(frame.get("slotTime") or "")
+        if not trading_date or not slot_time:
+            continue
+        grouped.setdefault(trading_date, set()).add(slot_time)
+
+    missing: list[dict[str, Any]] = []
+    for trading_date, actual_slots in sorted(grouped.items()):
+        should_expect_close = trading_date < today or _slot_time_to_minutes(close_slot) <= current_minutes
+        if not should_expect_close or close_slot in actual_slots:
+            continue
+        if not any(slot in actual_slots for slot in expected_slots[:-1]):
+            continue
+        missing.append(
+            {
+                "snapshotId": f"{snapshot_type}:{trading_date}:{close_slot}",
+                "type": snapshot_type,
+                "tradingDate": trading_date,
+                "slotTime": close_slot,
+                "actualSlots": [slot for slot in expected_slots if slot in actual_slots],
+            }
+        )
+    return missing
+
+
+def _slot_time_to_minutes(slot_time: str) -> int:
+    try:
+        hours, minutes = slot_time.split(":")
+        return int(hours) * 60 + int(minutes)
+    except (TypeError, ValueError):
+        return -1
 
 
 def _verify_rank_series(

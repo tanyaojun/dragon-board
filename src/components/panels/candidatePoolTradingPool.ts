@@ -2,7 +2,9 @@ import type {
   CandidateJournalEntry,
   TradingPoolAnalysisRow,
   TradingPoolDecision,
+  TradingPoolRiskFlag,
   TradingPoolSignalSnapshot,
+  TradingPoolSource,
   TradingPoolStatus,
 } from '@/services/candidate/types'
 
@@ -23,6 +25,25 @@ const TRADING_POOL_DECISIONS = new Set<TradingPoolDecision>([
   'exit',
   'stale',
 ])
+const TRADING_POOL_RISK_FLAGS = new Set<TradingPoolRiskFlag>([
+  'lifecycle_veto',
+  'macd_death_cross',
+  'overheat_sell',
+  'capital_divergence_sell',
+  'momentum_sync_broken',
+  'jump_confidence_low',
+  'final_confidence_low',
+  'candidate_hard_blocked',
+  'data_stale',
+])
+const TRADING_POOL_SOURCES = new Set<TradingPoolSource>([
+  'candidate_auto_add',
+  'candidate_watch',
+  'jump_blocked_resonance',
+  'manual',
+  'persisted',
+  'unknown',
+])
 
 function normalizeCode(code: unknown): string {
   const digits = String(code || '').replace(/\D/g, '')
@@ -35,6 +56,17 @@ function normalizeText(value: unknown): string {
 
 function normalizeStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.map((item: unknown) => normalizeText(item)) : []
+}
+
+function normalizeRiskFlags(value: unknown): TradingPoolRiskFlag[] {
+  return normalizeStringArray(value).filter((item): item is TradingPoolRiskFlag =>
+    TRADING_POOL_RISK_FLAGS.has(item as TradingPoolRiskFlag),
+  )
+}
+
+function normalizeTradingPoolSource(value: unknown): TradingPoolSource {
+  const source = normalizeText(value) as TradingPoolSource
+  return TRADING_POOL_SOURCES.has(source) ? source : 'unknown'
 }
 
 function normalizeNumber(value: unknown): number | null {
@@ -85,19 +117,25 @@ function buildComparableTradingPoolSnapshot(row: TradingPoolAnalysisRow) {
     decision: normalizeTradingPoolDecision(row.decision),
     reasons: normalizeStringArray(row.reasons),
     signalSnapshot: {
+      finalSignal: row.signalSnapshot.finalSignal ?? null,
+      finalConfidence: normalizeNumber(row.signalSnapshot.finalConfidence),
+      jumpDirection: row.signalSnapshot.jumpDirection ?? null,
       directionSignal: row.signalSnapshot.directionSignal ?? null,
+      directionConfidence: normalizeNumber(row.signalSnapshot.directionConfidence),
       jumpConfidence: normalizeNumber(row.signalSnapshot.jumpConfidence),
       macdCross: row.signalSnapshot.macdCross ?? null,
       accelerationSignal: row.signalSnapshot.accelerationSignal ?? null,
+      accelerationConfidence: normalizeNumber(row.signalSnapshot.accelerationConfidence),
       zeroCrossSignal: row.signalSnapshot.zeroCrossSignal ?? null,
+      zeroCrossConfidence: normalizeNumber(row.signalSnapshot.zeroCrossConfidence),
+      buyVotes: normalizeNumber(row.signalSnapshot.buyVotes) ?? 0,
+      riskFlags: normalizeRiskFlags(row.signalSnapshot.riskFlags),
+      source: normalizeTradingPoolSource(row.signalSnapshot.source),
       momentumSyncBroken: normalizeBoolean(row.signalSnapshot.momentumSyncBroken),
       lifecycleAction: row.signalSnapshot.lifecycleAction ?? null,
-      dataQuality: normalizeDataQuality(
-        row.signalSnapshot.dataQuality,
-        row.signalSnapshot.dataQuality,
-      ),
+      dataQuality: normalizeDataQuality(row.signalSnapshot.dataQuality, null),
     },
-    dataQuality: normalizeDataQuality(row.signalSnapshot.dataQuality, row.signalSnapshot.dataQuality),
+    dataQuality: normalizeDataQuality(row.signalSnapshot.dataQuality, null),
   }
 }
 
@@ -111,11 +149,20 @@ function buildComparableTradingPoolSnapshotFromEntry(entry: Record<string, any>)
     decision: normalizeTradingPoolDecision(entry.decision),
     reasons: normalizeStringArray(entry.reasons),
     signalSnapshot: {
+      finalSignal: signalSnapshot?.finalSignal ?? null,
+      finalConfidence: normalizeNumber(signalSnapshot?.finalConfidence),
+      jumpDirection: signalSnapshot?.jumpDirection ?? null,
       directionSignal: signalSnapshot?.directionSignal ?? null,
+      directionConfidence: normalizeNumber(signalSnapshot?.directionConfidence),
       jumpConfidence: normalizeNumber(signalSnapshot?.jumpConfidence),
       macdCross: signalSnapshot?.macdCross ?? null,
       accelerationSignal: signalSnapshot?.accelerationSignal ?? null,
+      accelerationConfidence: normalizeNumber(signalSnapshot?.accelerationConfidence),
       zeroCrossSignal: signalSnapshot?.zeroCrossSignal ?? null,
+      zeroCrossConfidence: normalizeNumber(signalSnapshot?.zeroCrossConfidence),
+      buyVotes: normalizeNumber(signalSnapshot?.buyVotes) ?? 0,
+      riskFlags: normalizeRiskFlags(signalSnapshot?.riskFlags),
+      source: normalizeTradingPoolSource(signalSnapshot?.source),
       momentumSyncBroken: normalizeBoolean(signalSnapshot?.momentumSyncBroken),
       lifecycleAction: signalSnapshot?.lifecycleAction ?? null,
       dataQuality: normalizeDataQuality(entry.dataQuality, signalSnapshot?.dataQuality),
@@ -167,11 +214,20 @@ export function readTradingPoolSnapshot(
     decision: normalizeTradingPoolDecision(tradingPool?.decision),
     reasons: normalizeStringArray(tradingPool?.reasons),
     signalSnapshot: {
+      finalSignal: signalSnapshotSource?.finalSignal ?? null,
+      finalConfidence: normalizeNumber(signalSnapshotSource?.finalConfidence),
+      jumpDirection: signalSnapshotSource?.jumpDirection ?? null,
       directionSignal: signalSnapshotSource?.directionSignal ?? null,
+      directionConfidence: normalizeNumber(signalSnapshotSource?.directionConfidence),
       jumpConfidence: normalizeNumber(signalSnapshotSource?.jumpConfidence),
       macdCross: signalSnapshotSource?.macdCross ?? null,
       accelerationSignal: signalSnapshotSource?.accelerationSignal ?? null,
       zeroCrossSignal: signalSnapshotSource?.zeroCrossSignal ?? null,
+      accelerationConfidence: normalizeNumber(signalSnapshotSource?.accelerationConfidence),
+      zeroCrossConfidence: normalizeNumber(signalSnapshotSource?.zeroCrossConfidence),
+      buyVotes: normalizeNumber(signalSnapshotSource?.buyVotes) ?? 0,
+      riskFlags: normalizeRiskFlags(signalSnapshotSource?.riskFlags),
+      source: normalizeTradingPoolSource(signalSnapshotSource?.source || 'persisted'),
       momentumSyncBroken: normalizeBoolean(signalSnapshotSource?.momentumSyncBroken),
       lifecycleAction: signalSnapshotSource?.lifecycleAction ?? null,
       dataQuality: normalizeDataQuality(tradingPool?.dataQuality, signalSnapshotSource?.dataQuality),

@@ -78,6 +78,16 @@ describe('DataTable row detail interactions', () => {
     expect(source).not.toMatch(/openingSignalClient\.postSignal/)
   })
 
+  test('only highlights positive opening weak-to-strong stages', () => {
+    const source = dataTableSource()
+
+    expect(source).toContain('isOpeningWeakToStrongHighlightStage')
+    expect(source).toMatch(/hasOpeningWeakToStrongSignal[\s\S]*isOpeningWeakToStrongHighlightStage/)
+    expect(source).toContain("stage === 'auctionConditionPassed'")
+    expect(source).toContain("stage === 'gapAlert'")
+    expect(source).toContain("stage === 'trendConfirm'")
+  })
+
   test('does not render the redundant RankTrend lifecycle status column', () => {
     const source = dataTableSource()
 
@@ -102,13 +112,16 @@ describe('DataTable row detail interactions', () => {
   test('shows jump confidence in the confidence column', () => {
     const source = dataTableSource()
 
-    expect(source).toContain("{ key: 'confidence', label: '跃迁置信度'")
+    expect(source).toContain("{ key: 'confidence', label: 'Jump置信'")
+    expect(source).toContain('analyzeTradingPoolCandidate')
+    expect(source).toContain('getTradingPoolActionPreview')
     expect(source).toContain('getJumpConfidence')
     expect(source).toContain('getRankTrendAnalysis(stock)?.jump?.confidence')
     expect(source).toMatch(/Math\.round\(getJumpConfidence\(stock\) \|\| 0\)/)
-    expect(source).toContain('Jump跃迁置信')
+    expect(source).toContain('Jump跃迁')
+    expect(source).toContain('共振评级')
+    expect(source).toContain('交易池')
     expect(source).not.toMatch(/<span class="signal-percent">\{\{ Math\.round\(getFinalConfidence\(stock\) \|\| 0\) \}\}%<\/span>/)
-    expect(source).not.toContain('minJumpConfidence')
   })
 
   test('uses one row-style tooltip for theme detail and removes rank-change noise', () => {
@@ -162,5 +175,18 @@ describe('DataTable row detail interactions', () => {
     expect(source).toContain('新浪资金流备用源')
     expect(source).toContain('按成交额估算：主力净额 / 成交额')
     expect(source).toContain("stock.capitalFlowSource === 'estimated_l1'")
+  })
+
+  test('keeps volume ratio display visually stable across data states', () => {
+    const source = dataTableSource()
+
+    expect(source).toMatch(/if \(key === 'volumeRatio'\)[\s\S]*classes\.push\('volume-ratio-cell'\)/)
+    expect(source).not.toContain('volume-ratio-stale')
+    expect(source).not.toContain('volume-ratio-suspicious')
+    expect(source).not.toContain('volume-ratio-unavailable')
+    expect(source).not.toContain('volume-ratio-high')
+    expect(source).not.toContain('volume-ratio-low')
+    expect(source).not.toContain("return `${ratio.toFixed(2)}*`")
+    expect(source).not.toContain("return `!${ratio.toFixed(2)}`")
   })
 })

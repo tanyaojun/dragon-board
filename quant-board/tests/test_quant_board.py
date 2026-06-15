@@ -2199,6 +2199,7 @@ def test_ranktrend_rank_series_api_uses_per_code_window_not_global_frame_window(
     assert [bar["rank"] for bar in desc_series["600001"]["bars"]] == [97, 96, 95, 94, 93]
     assert desc_series["600001"]["totalCount"] == 8
 
+
 def test_snapshot_frames_api_uses_snapshot_cache(monkeypatch: pytest.MonkeyPatch) -> None:
     from backend.data import snapshot_cache
 
@@ -4061,6 +4062,88 @@ def test_delete_backtest_run_removes_normalized_children() -> None:
         )
 
 
+def test_list_backtest_runs_returns_recent_lightweight_history() -> None:
+    init_db()
+    client = TestClient(app)
+    now = datetime.utcnow()
+    suffix = now.strftime("%Y%m%d%H%M%S%f")
+    runs = [
+        BacktestRun(
+            id=f"bt_history_old_{suffix}",
+            dataset_id="ds_history",
+            strategy_name="rank_trend_candidate",
+            strategy_version="0.1.0",
+            snapshot_type="half_hour",
+            config_hash="cfg_old",
+            random_seed=20260430,
+            status="completed",
+            date_start="2026-06-01",
+            date_end="2026-06-05",
+            result_json='{"totalReturn": 0.01}',
+            created_at=now - timedelta(minutes=2),
+        ),
+        BacktestRun(
+            id=f"bt_history_mid_{suffix}",
+            dataset_id="ds_history",
+            strategy_name="rank_trend_candidate",
+            strategy_version="0.1.0",
+            snapshot_type="half_hour",
+            config_hash="cfg_mid",
+            random_seed=20260430,
+            status="completed",
+            date_start="2026-06-01",
+            date_end="2026-06-06",
+            result_json='{"totalReturn": 0.02}',
+            created_at=now - timedelta(minutes=1),
+        ),
+        BacktestRun(
+            id=f"bt_history_new_{suffix}",
+            dataset_id="ds_history",
+            strategy_name="rank_trend_candidate",
+            strategy_version="0.1.0",
+            snapshot_type="half_hour",
+            config_hash="cfg_new",
+            random_seed=20260430,
+            status="completed",
+            date_start="2026-06-01",
+            date_end="2026-06-07",
+            result_json='{"totalReturn": 0.03}',
+            created_at=now,
+        ),
+    ]
+    with SessionLocal() as session:
+        repo = Repository(session, enable_backup=False)
+        for run in runs:
+            repo.save_backtest_run(run)
+
+    response = client.get("/api/backtests?limit=100")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    our_ids = {run.id for run in runs}
+    response_ids = [item["runId"] for item in body["items"]]
+    assert our_ids.issubset(set(response_ids)), f"Missing runs in response: {our_ids - set(response_ids)}"
+    # Our newest run should appear before the oldest
+    new_idx = response_ids.index(runs[2].id)
+    old_idx = response_ids.index(runs[0].id)
+    assert new_idx < old_idx, f"Newest run {runs[2].id} at {new_idx} should be before oldest {runs[0].id} at {old_idx}"
+    for item in body["items"]:
+        if item["runId"] == runs[2].id:
+            assert item["datasetId"] == "ds_history"
+            assert item["snapshotType"] == "half_hour"
+            assert item["dateEnd"] == "2026-06-07"
+            assert "result_json" not in item
+            assert "result" not in item
+            break
+    else:
+        pytest.fail(f"Newest run {runs[2].id} not found in response")
+
+    # Cleanup: remove test runs to avoid polluting other tests that share this DB
+    with SessionLocal() as session:
+        repo = Repository(session, enable_backup=False)
+        for run in runs:
+            repo.delete_backtest_run(run.id)
+
+
 class ExportReportRepo:
     def __init__(
         self,
@@ -4817,6 +4900,119 @@ def test_layer1_meltdown_resets_on_green() -> None:
     result = check_layer1_meltdown(history)
     assert result["meltdown"] is False
     assert result["consecutiveRedPeriods"] == 1
+
+
+def test_layer1_meltdown_reports_selected_v5_slot() -> None:
+    from backend.services import check_layer1_meltdown
+
+    history = [
+        {
+            "baselines": [
+                {
+                    "label": "V5_E1_half_hour_fusion_signal_forward30",
+                    "layer1SignalEfficacy": {"layer1Status": "red"},
+                },
+                {
+                    "label": "V5_E2_half_hour_fusion_current_bar",
+                    "executionLayer1Efficacy": {"layer1Status": "green"},
+                },
+            ]
+        },
+        {
+            "baselines": [
+                {
+                    "label": "V5_E1_half_hour_fusion_signal_forward30",
+                    "layer1SignalEfficacy": {"layer1Status": "red"},
+                },
+                {
+                    "label": "V5_E2_half_hour_fusion_current_bar",
+                    "executionLayer1Efficacy": {"layer1Status": "green"},
+                },
+            ]
+        },
+        {
+            "baselines": [
+                {
+                    "label": "V5_E1_half_hour_fusion_signal_forward30",
+                    "layer1SignalEfficacy": {"layer1Status": "red"},
+                },
+                {
+                    "label": "V5_E2_half_hour_fusion_current_bar",
+                    "executionLayer1Efficacy": {"layer1Status": "green"},
+                },
+            ]
+        },
+    ]
+
+    signal_pool = check_layer1_meltdown(history, metric_key="layer1SignalEfficacy")
+    execution_entry = check_layer1_meltdown(
+        history,
+        label_filter="V5_E2_half_hour_fusion_current_bar",
+        metric_key="executionLayer1Efficacy",
+    )
+
+    assert signal_pool["meltdown"] is True
+    assert signal_pool["selectedLabel"] == "V5_E1_half_hour_fusion_signal_forward30"
+    assert signal_pool["selectedSlot"] == "l1"
+    assert signal_pool["metricKey"] == "layer1SignalEfficacy"
+
+    assert execution_entry["meltdown"] is False
+    assert execution_entry["consecutiveRedPeriods"] == 0
+    assert execution_entry["selectedLabel"] == "V5_E2_half_hour_fusion_current_bar"
+    assert execution_entry["metricKey"] == "executionLayer1Efficacy"
+
+
+def test_compute_execution_entry_layer1_efficacy_uses_actual_buy_events() -> None:
+    from backend.services import compute_execution_entry_layer1_efficacy
+
+    trade_events = [
+        {
+            "action": "buy",
+            "signalSnapshotId": "s1",
+            "code": "000001",
+            "price": 10,
+            "candidateTier": "A_MAIN",
+        },
+        {
+            "action": "buy",
+            "signalSnapshotId": "s1",
+            "code": "000002",
+            "price": 20,
+            "candidateTier": "B_IGNITION",
+        },
+        {
+            "action": "sell",
+            "signalSnapshotId": "s1",
+            "code": "000003",
+            "price": 30,
+            "candidateTier": "A_MAIN",
+        },
+    ]
+    frames = [
+        {
+            "snapshotId": "s1",
+            "stocks": [
+                {"code": "000001", "price": 10},
+                {"code": "000002", "price": 20},
+            ],
+        },
+        {
+            "snapshotId": "s2",
+            "stocks": [
+                {"code": "000001", "price": 11},
+                {"code": "000002", "price": 19},
+            ],
+        },
+    ]
+
+    result = compute_execution_entry_layer1_efficacy(trade_events=trade_events, frames=frames)
+
+    assert result["sampleScope"] == "execution_entry"
+    assert result["totalSignals"] == 2
+    assert result["aPlusBTierCount"] == 2
+    assert result["directionAccuracy"] == pytest.approx(1.0)
+    assert result["aMainSamples"] == 1
+    assert result["tierCounts"] == {"A_MAIN": 1, "B_IGNITION": 1}
 
 
 def test_layer3_trend_detects_consecutive_sufficient() -> None:

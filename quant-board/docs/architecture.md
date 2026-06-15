@@ -82,6 +82,7 @@ SQLite/Supabase/Parquet legacy paths -> migration source or disabled endpoints i
 - `GET /api/snapshots/frames`、`GET /api/snapshots/records`、`GET /api/snapshots/stock-rows`、`GET /api/snapshots/sector-rows` 和 `GET /api/snapshots/counts` 从 MongoDB 读取，响应字段保持既有 camelCase API 合同。
 - `GET /api/themes/mapping`、`GET /api/themes/stocks/{theme_id}`、`GET /api/themes/stocks/by-code/{code}` 和 `GET /api/themes/counts` 从 MongoDB 题材集合读取。
 - `POST /api/hotlist-sentiment/ingest`、历史回填脚本和 MongoDB 模式 `after-market-once` 共同写入 `hotlist_sentiment`；MongoDB 不可用时结构化失败，策略回测只能显式中性回退并保留原因。
+- 正式主库的历史残缺修复通过 `backfill-empty-mongodb-snapshots` 统一处理，允许补空快照、补 `snapshot_record`、修 frame 计数、补缺失的 `15:00` formal close slot，以及补运行库缺失索引；补槽位优先同粒度最近 donor，必要时允许显式跨粒度 donor；修复动作必须写 `migration_audit(opType=mongodb_snapshot_repair)`。
 - 旧 SQLite/Supabase/Parquet 同步、归档、清理和历史 JSON 导入入口在 Mongo 模式下返回 410 或 CLI 拒绝执行；不得静默触碰旧主链。
 - MongoDB 不可用时正式接口必须结构化失败，不回退到 Supabase、SQLite、Parquet 或 IndexedDB 并伪装成功。
 
@@ -161,6 +162,12 @@ Dragon Board 题材基础映射由 `ThemeDataService` 通过 `GET /api/themes/ma
 
 一条标准快照一行，保存市场摘要和统计上下文。
 
+MongoDB 模式下 `snapshot_frames` 还承担 formal snapshot 修复对账基线：
+
+- `stockRowCount/sectorRowCount` 必须与对应子集合真实行数一致。
+- 历史修复产生的 donor 信息写入 `metadata.backfill`。
+- 跨粒度补槽位会把 `captureMode` 标记为 `synthesized`，并把 `source` 标记为 `cross_type_backfill`。
+
 ### snapshot_stock_rows
 
 一条快照内的一只股票一行，是 rankTrend、回测、前端列表的主要事实表。
@@ -218,6 +225,16 @@ MongoDB 模式下保存在 `backtest_quality_reports` 集合，保存样本覆�
 ### hotlist_sentiment
 
 MongoDB 模式下保存在 `hotlist_sentiment` 集合，保存每日热榜情绪研究输入。唯一业务键是 `datasetId + snapshotType + tradingDate`，默认 `snapshotType=half_hour`。字段包括 `stage`、`riskLevel`、`confidence`、`metrics`、`turnover`、`signals` 和 `warnings`。历史回填和日终调度都必须复用同一字段合同，不得用临时简化口径生成参与回测的 `stage/riskLevel`。
+
+### trade_journal
+
+MongoDB 模式下保存在 `trade_journal` 集合，承载候选池、交易池和真实历史交易日志三类语义：
+
+- `tradeType=thesis`：候选池 thesis 记录，是交易池二次筛选的来源。
+- `tradeType=trading_pool`：交易池 V2 持久化记录，通过顶层 `candidateEntryId` 指向来源 thesis，并在 `signalsSnapshot.tradingPool` 保存当前状态、决策、原因、信号快照和 `lastRecomputedAt`。
+- `tradeType=entry/exit`：真实历史交易日志，只表示实际买卖。
+
+交易池记录不得反向改写候选池 lifecycle，也不得创建真实 `entry` 交易记录；`已介入` 只是交易池工作台确认态。
 
 ### optimization_runs
 

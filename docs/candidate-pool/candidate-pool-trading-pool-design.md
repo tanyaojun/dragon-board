@@ -293,7 +293,7 @@
 - 出池快照
 - 出池原因
 
-后续如果需要持久化交易池，建议使用新的 `trade_type=trading_pool`，并通过 `candidateEntryId` 指向候选池 `thesis` 记录。真实历史交易继续使用 `trade_type=entry/exit`，不与交易池混用。
+V2 已开始复用同一 MongoDB `trade_journal` 集合作为持久化载体：`trade_type=trading_pool`，并通过顶层 `candidateEntryId` 指向候选池 `thesis` 记录。真实历史交易继续使用 `trade_type=entry/exit`，不与交易池混用。
 
 ## 13. 缺失事项
 
@@ -320,21 +320,21 @@
 
 ### 14.2 数据契约
 
-第二版建议新增或正式启用如下契约：
+第二版正式启用如下契约：
 
 - `trade_type = trading_pool`
 - `candidateEntryId`：交易池 journal 记录的顶层字段，指向候选池中对应的 `thesis` 记录
 - `signalsSnapshot.tradingPool`：保存交易池专用快照
 
-其中 `signalsSnapshot.tradingPool` 建议包含：
+其中 `signalsSnapshot.tradingPool` 当前包含：
 
 - `version`
-- `entryDecision`
-- `entryChecks`
-- `entrySnapshot`
-- `exitDecision`
-- `exitChecks`
-- `exitSnapshot`
+- `code`
+- `name`
+- `status`
+- `decision`
+- `reasons`
+- `signalSnapshot`
 - `lastRecomputedAt`
 - `dataQuality`
 
@@ -347,8 +347,8 @@
 
 ### 14.4 持久化触发
 
-- 交易池记录可在用户确认后落库
-- 若后续支持自动持久化，也必须保留“仅前端投影”的入口
+- 交易池记录在交易池标签刷新或用户标记“已介入”时落库
+- V1 session 级投影仍作为前端临时兜底；V2 MongoDB 记录优先恢复跨会话状态
 - 已存在的候选池记录不需要强制迁移成交易池记录
 
 ### 14.5 文档和接口影响
@@ -391,3 +391,21 @@
 
 本方案的核心是把“初筛”和“买点复筛”拆开。
 候选池负责“筛进来”，交易池负责“筛成买点并持续判断是否还能留在池里”。
+
+## 18. 强共振召回补充
+
+2026-06-15 补充口径：候选池严格入池不放宽 Jump hardBlock；`ranktrend_early_big_move_v3_lifecycle_fusion` 仍按当前策略模式执行 Jump 阈值、样本质量、生命周期、候选分层等硬规则。
+
+交易池新增 `jump_blocked_resonance` 来源，用于承接“候选池主要被 Jump 阈值阻断，但 RankTrend 综合判断和四维信号强共振”的买点观察对象。最小召回条件为：
+
+- `final.signal === 'buy'`
+- 综合置信度 `final.confidence >= 85`
+- BuyVotes 至少 3/4
+- Jump 方向为 `buy` 且 Jump 置信度 `>= 80`
+- 生命周期不是 veto
+- MACD 不是 death
+- 不存在非 Jump 类候选池硬阻断
+
+交易池状态仍分层处理：满足更强条件时进入“准备介入”，一般强共振进入“观察买点”，双风险或信号走弱降为“观察中”，明确卖出、veto 或死叉叠加转弱才“已退出”。`已介入` 仍是人工确认的交易池状态，不自动生成真实历史 `entry/exit`。
+
+Phase 18 V2 已存在的 `tradeType=trading_pool` 记录可能缺少 `buyVotes`、`riskFlags`、`source`、`finalConfidence` 等字段。加载旧记录时，若实时 RankTrend 可用则以当前规则重新计算；不可重算时保留旧状态并标记 `dataQuality=stale`，不因字段缺失自动降级或出池。

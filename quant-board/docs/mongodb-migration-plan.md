@@ -1,6 +1,6 @@
 # MongoDB 全量主库迁移方案
 
-本文是 QuantBoard 从 SQLite 主链切换到 MongoDB 的设计方案和实施记录。2026-05-12 停服窗口已完成真实数据迁移、`.env.local` 切换、MongoDB 本地全库备份、Cloudflare R2 上传和 R2 拉回到 `restore-staging` 校验。
+本文是 QuantBoard 从 SQLite 主链切换到 MongoDB 的设计方案和实施记录。2026-05-12 停服窗口已完成真实数据迁移、`.env.local` 切换、MongoDB 本地全库备份、Cloudflare R2 上传和 R2 拉回到 `restore-staging` 校验。2026-06-11 已完成一轮正式快照质量修复，详见 [mongodb-snapshot-audit-2026-06-11.md](mongodb-snapshot-audit-2026-06-11.md) 和 [mongodb-snapshot-repair-log-2026-06-11.md](mongodb-snapshot-repair-log-2026-06-11.md)。
 
 ## 目标结论
 
@@ -28,7 +28,7 @@
 - 旧 SQLite/Supabase/Parquet 运行维护入口在 Mongo 模式下显式 410 或 CLI 拒绝，不再静默触碰旧主链。
 - MongoDB 本地全量备份、校验、R2 上传、R2 拉回到 `restore-staging`、本地备份保留裁剪 CLI 已实现。
 - `cleanup-mongodb-datasets` 已实现：默认 dry-run；`--apply` 只删除非保留 dataset、四个快照子集合、可通过 `datasetId/backtestRunId` 追踪的研究结果，不删除 `dragonboard_live`、`stock_names`、题材主数据或 `migration_audit`。
-- `backfill-empty-mongodb-snapshots` 已实现：默认 dry-run；`--apply` 只处理已知空股票快照，复制同类型最近非空 donor 的股票行，重写 `snapshotId/type/tradingDate/slotTime/timestamp/rowId/id`，更新 frame/dataset 汇总，并写 `migration_audit`。
+- `backfill-empty-mongodb-snapshots` 已扩展为 MongoDB 正式快照修复入口：默认 dry-run；`--apply` 可同时处理空快照补齐、`snapshot_record` 缺失补造、frame 计数字段漂移、缺失 `15:00` close slot 补造，以及运行库缺失索引补回，并写 `migration_audit(opType=mongodb_snapshot_repair)`。补槽位优先同粒度最近 donor，必要时允许显式跨粒度 donor。
 - `hotlist_sentiment` 已作为 MongoDB 研究集合接入，唯一业务键为 `datasetId + snapshotType + tradingDate`；历史回填脚本 `scripts/backfill_hotlist_sentiment.py` 默认 dry-run，显式 `--apply` 才会写入。
 - MongoDB 模式下 `/api/operations/after-market-once` 和 CLI `after-market-once` 不再调用旧 archive/prune 链路，只执行 `hotlistSentiment` 日终步骤。
 
@@ -258,6 +258,15 @@ MongoDB 正式字段使用 camelCase，保持 Dragon Board 和 QuantBoard API �
 - `{ datasetId: 1, snapshotType: 1, computedAt: -1 }`
 
 一条文档对应一个数据集、快照粒度和交易日的日终热榜情绪结果。写入来源包括 Dragon Board/QuantBoard API 日终落库、`scripts/backfill_hotlist_sentiment.py --apply` 历史回填，以及 MongoDB 模式下的 `after-market-once` 盘后步骤。该集合是策略研究输入，不进入 SQLite/Supabase 运行 fallback。
+
+`trade_journal`
+
+- unique `{ id: 1 }`
+- `{ tradeType: 1, createdAt: -1 }`
+- `{ tradeType: 1, candidateEntryId: 1 }`
+- `{ stockCode: 1, tradeType: 1, tradeTime: -1 }`
+
+交易池 V2 复用该集合，不新增独立集合。`tradeType=trading_pool` 记录必须包含顶层 `candidateEntryId` 指向来源 `tradeType=thesis` 记录，并把交易池状态写入 `signalsSnapshot.tradingPool`。真实历史成交仍使用 `tradeType=entry/exit`，不得被交易池查询或状态流转污染。
 
 `optimization_runs`
 
@@ -703,6 +712,50 @@ MongoDB 迁移后的“归档”定义改为长期备份和审计导出，不再
 - 快照 counts、stock rows、sector rows、RankTrend rank-series、题材 counts、股票基础库和股票搜索接口均返回 `source=mongodb`。
 - MongoDB 本地备份 `20260512T111904Z` 已 `verified=true`。
 - R2 上传和拉回均成功；`restore-staging/backup_id=20260512T111904Z` 中 22 个 `sha256sums.txt` 记录文件校验通过。
+
+## 2026-06-11 快照质量修复补充
+
+修复前基线：
+
+- `snapshot_records=1241`
+- `snapshot_frames=1496`
+- `snapshot_stock_rows=325232`
+- `snapshot_sector_rows=14894`
+- `half_hour` 空 formal snapshot 4 个
+- `snapshot_record` 缺失 255 个（`half_hour=42`，`quarter_hour=213`）
+- frame 计数漂移已确认 3 个对象
+- runtime MongoDB 缺失索引 2 个
+
+执行顺序：
+
+```powershell
+cd quant-board
+.\.venv\Scripts\python.exe -m backend.cli backup-mongodb --full
+.\.venv\Scripts\python.exe -m backend.cli backfill-empty-mongodb-snapshots --dataset-id dragonboard_live --apply
+.\.venv\Scripts\python.exe -m backend.cli verify-mongodb-migration --dataset-id dragonboard_live --snapshot-type half_hour
+.\.venv\Scripts\python.exe -m backend.cli verify-mongodb-migration --dataset-id dragonboard_live --snapshot-type quarter_hour
+```
+
+执行结果：
+
+- 备份 ID：`20260611T090329Z`
+- 实际修复：
+  - 空快照/缺槽位：5 个
+  - frame 计数修复：3 个
+  - `snapshot_record` 补造：255 个
+  - 索引补回：2 个
+- 修复后：
+  - `snapshot_records=1497`
+  - `snapshot_frames=1497`
+  - `snapshot_stock_rows=326376`
+  - `snapshot_sector_rows=14947`
+  - `verify-mongodb-migration --snapshot-type half_hour` 返回 `ok=true`
+  - `verify-mongodb-migration --snapshot-type quarter_hour` 返回 `ok=true`
+
+说明：
+
+- 2026-05-12 的“主库迁移已完成”结论只代表切换完成，不代表之后不会出现历史快照残缺。
+- 2026-06-11 的修复是正式主库质量追补，不改变 MongoDB 作为当前运行主库的事实。
 
 ## 回滚边界
 

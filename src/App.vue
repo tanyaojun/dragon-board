@@ -92,7 +92,7 @@
               <span class="item-icon">🎯</span>候选池
             </div>
             <div class="dropdown-item" @click.stop="panels.journal = true">
-              <span class="item-icon">📓</span>历史交易日志
+              <span class="item-icon">🎯</span>交易池
             </div>
           </div>
         </div>

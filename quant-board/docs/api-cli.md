@@ -43,6 +43,33 @@ MongoDB 模式下：
 - CLI 旧 SQLite/Supabase/Parquet 命令拒绝执行；业务回测、优化、查询命令继续通过 MongoDB repository 运行。
 - MongoDB 备份、校验、R2 上传和拉回恢复命令以 [mongodb-migration-plan.md](mongodb-migration-plan.md) 的当前实施状态为准。
 
+### MongoDB 快照修复 CLI
+
+正式快照质量修复统一使用：
+
+```powershell
+cd quant-board
+.\.venv\Scripts\python.exe -m backend.cli backfill-empty-mongodb-snapshots --dataset-id dragonboard_live
+.\.venv\Scripts\python.exe -m backend.cli backfill-empty-mongodb-snapshots --dataset-id dragonboard_live --apply
+```
+
+当前命令职责不再局限于“补空快照”，而是同时处理：
+
+- 空 formal snapshot 补行
+- `snapshot_record` 缺失补造
+- frame `stockRowCount/sectorRowCount` 漂移修正
+- 缺失 `15:00` formal close slot 补造，优先同粒度最近 donor，必要时允许显式跨粒度 donor（如 `half_hour:15:00 <- daily:15:00`）
+- runtime MongoDB 缺失索引补回
+
+验收命令：
+
+```powershell
+.\.venv\Scripts\python.exe -m backend.cli verify-mongodb-migration --dataset-id dragonboard_live --snapshot-type half_hour
+.\.venv\Scripts\python.exe -m backend.cli verify-mongodb-migration --dataset-id dragonboard_live --snapshot-type quarter_hour
+```
+
+2026-06-11 已执行一次正式修复，结果见 [mongodb-snapshot-audit-2026-06-11.md](mongodb-snapshot-audit-2026-06-11.md)。
+
 ## 热榜情绪 API、回填和盘后调度
 
 ### `POST /api/hotlist-sentiment/ingest`
@@ -772,7 +799,7 @@ CLI 输出与 `POST /api/migrations/themes/verify-json` 一致。
 
 ## 交易日记与候选池接口
 
-Dragon Board 候选池第一版复用 QuantBoard journal 存储，候选记录使用 `trade_type=thesis`，不新增前端本地持久化双轨。
+Dragon Board 候选池复用 QuantBoard journal 存储。候选记录使用 `trade_type=thesis`；交易池 V2 使用同一 MongoDB `trade_journal` 集合中的 `trade_type=trading_pool` 记录，并通过顶层 `candidate_entry_id` / `candidateEntryId` 指向来源候选 thesis。真实历史交易继续只使用 `trade_type=entry` 和 `trade_type=exit`。
 
 ### `POST /api/journal/entries`
 
@@ -806,13 +833,41 @@ Dragon Board 候选池第一版复用 QuantBoard journal 存储，候选记录�
 
 响应仍返回 camelCase 字段，例如 `stockCode`、`signalsSnapshot`、`tradeHypothesis`、`reviewTags`。创建候选时 `review_tags` 必须入库，后续候选过滤和复盘统计会依赖这些标签。
 
+创建交易池 V2 记录时至少提交：
+
+```json
+{
+  "stock_code": "601208",
+  "stock_name": "东材科技",
+  "direction": "buy",
+  "trade_type": "trading_pool",
+  "candidate_entry_id": "tj_thesis_1",
+  "status": "观察买点",
+  "signals_snapshot": {
+    "tradingPool": {
+      "version": "v2",
+      "code": "601208",
+      "name": "东材科技",
+      "status": "观察买点",
+      "decision": "enter",
+      "reasons": ["signal_resonance"],
+      "signalSnapshot": {},
+      "dataQuality": "fresh",
+      "lastRecomputedAt": "2026-06-14T12:00:00.000Z"
+    }
+  }
+}
+```
+
+`trading_pool` 不是历史成交；`status=已介入` 只表示交易池工作台内的人工确认，不会生成真实 `entry` 记录。
+
 ### `GET /api/journal/entries`
 
-读取 journal 记录，支持 `stock_code`、`trade_type`、`direction`、`status`、`date_from/date_to`、`review_tags`、`limit`、`offset`。候选池面板默认按 `status` 过滤并读取 `limit=100`。
+读取 journal 记录，支持 `stock_code`、`trade_type`、`direction`、`status`、`candidate_entry_id`、`date_from/date_to`、`review_tags`、`limit`、`offset`。候选池面板固定读取 `trade_type=thesis`；交易池面板固定读取 `trade_type=trading_pool`，可附加 `candidate_entry_id` 精确定位，不读取 `entry/exit` 历史交易。
 
 ### `PUT /api/journal/entries/{entry_id}`
 
-更新记录。候选池当前主要用于推进 `status`，也可更新 `review_tags`、`signals_snapshot`、`trade_hypothesis`、`entry_prerequisites`、`invalidation_rules`、`review_outcome`、`model_result`、`execution_result` 等复盘字段。
+更新记录。候选池当前主要用于推进 `status`，也可更新 `review_tags`、`signals_snapshot`、`trade_hypothesis`、`entry_prerequisites`、`invalidation_rules`、`review_outcome`、`model_result`、`execution_result` 等复盘字段。交易池 V2 更新只写 `trade_type=trading_pool` 记录的 `status` 与 `signals_snapshot.tradingPool`，不得修改真实历史 `entry/exit` 记录。
 
 V2 Layer 3 新增 7 个执行字段（与回测信号对齐）：
 - `entryPrice` (float)：实际买入价

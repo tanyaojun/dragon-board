@@ -26,6 +26,48 @@ class MongoResearchRepository(MongoRepository):
         row = self.db["backtest_runs"].find_one({"id": run_id})
         return self._backtest_run_from_doc(row) if row else None
 
+    def list_backtest_runs(self, *, limit: int = 50) -> tuple[list[BacktestRun], int]:
+        bounded_limit = max(1, min(int(limit), 200))
+        total = int(self.db["backtest_runs"].count_documents({}))
+        rows = self.db["backtest_runs"].find(
+            {},
+            {
+                "id": 1,
+                "datasetId": 1,
+                "strategyName": 1,
+                "strategyVersion": 1,
+                "snapshotType": 1,
+                "configHash": 1,
+                "randomSeed": 1,
+                "status": 1,
+                "dateStart": 1,
+                "dateEnd": 1,
+                "errorReason": 1,
+                "createdAt": 1,
+                "finishedAt": 1,
+            },
+        ).sort([("createdAt", -1), ("id", -1)]).limit(bounded_limit)
+        return [
+            BacktestRun(
+                id=str(row.get("id") or ""),
+                dataset_id=str(row.get("datasetId") or ""),
+                strategy_name=str(row.get("strategyName") or "rank_trend_candidate"),
+                strategy_version=str(row.get("strategyVersion") or "0.1.0"),
+                snapshot_type=str(row.get("snapshotType") or "half_hour"),
+                config_hash=str(row.get("configHash") or ""),
+                random_seed=int(row.get("randomSeed") or 0),
+                status=str(row.get("status") or "completed"),
+                date_start=row.get("dateStart"),
+                date_end=row.get("dateEnd"),
+                error_reason=row.get("errorReason"),
+                request_json="{}",
+                result_json="{}",
+                created_at=_datetime_or_now(row.get("createdAt")),
+                finished_at=_datetime_or_none(row.get("finishedAt")),
+            )
+            for row in rows
+        ], total
+
     def save_backtest_signal_rows(self, run_id: str, rows: list[dict[str, Any]], append: bool = True) -> int:
         if not rows:
             return 0
@@ -350,6 +392,7 @@ class MongoResearchRepository(MongoRepository):
         trade_type: str | None = None,
         direction: str | None = None,
         status: str | None = None,
+        candidate_entry_id: str | None = None,
         date_from: str | None = None,
         date_to: str | None = None,
         review_tags: list[str] | None = None,
@@ -361,6 +404,7 @@ class MongoResearchRepository(MongoRepository):
             trade_type=trade_type,
             direction=direction,
             status=status,
+            candidate_entry_id=candidate_entry_id,
             date_from=date_from,
             date_to=date_to,
             review_tags=review_tags,
@@ -374,6 +418,7 @@ class MongoResearchRepository(MongoRepository):
         trade_type: str | None = None,
         direction: str | None = None,
         status: str | None = None,
+        candidate_entry_id: str | None = None,
         date_from: str | None = None,
         date_to: str | None = None,
         review_tags: list[str] | None = None,
@@ -383,6 +428,7 @@ class MongoResearchRepository(MongoRepository):
             trade_type=trade_type,
             direction=direction,
             status=status,
+            candidate_entry_id=candidate_entry_id,
             date_from=date_from,
             date_to=date_to,
             review_tags=review_tags,
@@ -432,6 +478,7 @@ class MongoResearchRepository(MongoRepository):
         trade_type: str | None = None,
         direction: str | None = None,
         status: str | None = None,
+        candidate_entry_id: str | None = None,
         date_from: str | None = None,
         date_to: str | None = None,
         review_tags: list[str] | None = None,
@@ -445,6 +492,8 @@ class MongoResearchRepository(MongoRepository):
             query["direction"] = direction
         if status:
             query["status"] = status
+        if candidate_entry_id:
+            query["candidateEntryId"] = candidate_entry_id
         if date_from or date_to:
             time_filter: dict[str, Any] = {}
             if date_from:

@@ -4,6 +4,7 @@ import type {
   BacktestDeleteResponse,
   BacktestQualityResponse,
   BacktestRequest,
+  BacktestRunListResponse,
   BacktestSignal,
   BacktestTrade,
   CheckpointSummary,
@@ -92,6 +93,8 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload)
     }),
+  listBacktests: (limit = 50) =>
+    requestApi<BacktestRunListResponse>(`/api/backtests?limit=${limit}`),
   getBacktest: (id: string) => requestApi<unknown>(`/api/backtests/${encodeURIComponent(id)}`),
   deleteBacktest: (id: string) =>
     requestApi<BacktestDeleteResponse>(`/api/backtests/${encodeURIComponent(id)}`, {
