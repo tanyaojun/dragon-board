@@ -185,8 +185,8 @@ daily:        15:00
 短期 Provider：
 
 - `ProxyHotlistProvider`: 调用 `proxy-server` 热榜接口，复用现有八平台热榜能力。
-- `ProxyMarketProvider`: 调用 `proxy-server` 市场概览、情绪、涨停池、资金流等接口。
-- `BridgeQuoteProvider`: 调用 `python-bridge` 新增或既有接口获取当前行情、depth、tick、money flow。
+- `ProxyQuoteProvider` (当前默认): 调用 `proxy-server` EastMoney 行情端点 `GET /api/quotes/eastmoney?codes=...`，获取实时行情和资金流数据。返回 `{quotes, depth: [], money_flow, market_meta}`，其中 money_flow 的 `mediumNetInflow` 由 EastMoney 字段推导。depth 固定为空（proxy-server 无盘口端点）。
+- `BridgeQuoteProvider`: 调用 `python-bridge` 新增或既有接口获取当前行情、depth、tick、money flow。保留用于需要 bridge WebSocket pool 模式的场景。
 - `ThemeMappingProvider`: 直接通过 QuantBoard MongoDB 题材集合读取题材映射。
 - `StockNameProvider`: 读取 MongoDB `stock_names`，补充名称和基础状态。
 
@@ -498,6 +498,7 @@ cd quant-board
 - 在 Phase 1 的 `GET /api/quotes/snapshot?codes=...` 基础上增加后端维护的采样池。
 - 支持批量 codes、缓存状态、失败降级和行情陈旧标记。
 - QuantBoard `BridgeQuoteProvider` 使用稳定订阅池而不是每次临时拼接。
+- QuantBoard `ProxyQuoteProvider` 已落地，通过 proxy-server EastMoney 端点获取实时行情和资金流数据，写入 `MarketDataContext.money_flow`，由 builder 的 `_enrich_stock_rows_from_quotes()` 充实 stock rows。
 
 验收：
 

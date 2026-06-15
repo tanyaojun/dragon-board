@@ -44,7 +44,7 @@ backend/snapshot_collector/
   models.py           # SnapshotSlot, MarketDataContext, QualityResult, CollectorRunRequest/Result, SourceHealth
   slots.py            # SLOT_TIMES, generate_slots(), is_slot_eligible()
   trading_calendar.py # is_trading_day(), trading_date_from_ts()
-  providers.py        # ProxyHotlistProvider, BridgeQuoteProvider, ThemeMappingProvider
+  providers.py        # ProxyHotlistProvider, ProxyQuoteProvider, BridgeQuoteProvider, ThemeMappingProvider
   builder.py          # build_ingest_payload()
   quality_gate.py     # evaluate_quality()
   state.py            # record_run(), get_status()
@@ -94,6 +94,16 @@ python-bridge 采集接口（Phase 2）：
 BridgeQuoteProvider（`backend/snapshot_collector/providers.py`）已适配：
 - `set_pool(codes)` — 注册采样池到 bridge
 - `collect(use_pool=True)` — 使用池缓存抓取，含 `poolStalenessMs`（默认 30s）陈旧检测
+
+ProxyQuoteProvider — 当前默认 quote 数据源：
+
+`service_factory.py` 的 `_create_providers` 实际使用 `ProxyQuoteProvider` 而非 `BridgeQuoteProvider` 作为当前默认行情采集器。它直接调用 proxy-server 的 EastMoney 端点获取实时行情和资金流数据：
+
+- `GET /api/quotes/eastmoney?codes=...` — proxy-server 的 EastMoney 行情端点，返回 f12(代码)、f2(价格)、f3(涨跌幅)、f5(成交额)、f6(成交量)、f8(换手率)、f9(市盈率)、f20(总市值) 以及 f62/f66/f69/f184(资金流) 字段
+- `ProxyQuoteProvider.collect(codes)` — 接收代码列表，返回 `{quotes, depth: [], money_flow, market_meta}` 结构，与 `BridgeQuoteProvider` 兼容，可在 `collect_market_context` 中互换路由
+- `collect_market_context` 将 `ProxyQuoteProvider` 返回的 `money_flow` 写入 `MarketDataContext.money_flow`，由 builder 的 `_enrich_stock_rows_from_quotes()` 同步填充到 stock rows 的 `moneyFlow`（结构化 dict）、`pe` 和 `totalMarketValue` 字段
+
+注意：`ProxyQuoteProvider` 的 `depth` 固定为空列表（proxy-server 不提供盘口数据）。`BridgeQuoteProvider` 保留用于需要 python-bridge WebSocket pool 模式的场景。
 
 ## 数据流
 
