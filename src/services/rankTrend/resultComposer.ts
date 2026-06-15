@@ -50,19 +50,19 @@ export function composeDecision(input: {
   )
   const explicitBuyCount = components.filter((component) => component.signal === 'buy').length
   const explicitSellCount = components.filter((component) => component.signal === 'sell').length
+  const hasBuyConsensus =
+    explicitBuyCount >= 2 &&
+    explicitSellCount <= 1 &&
+    combinedScore >= config.buyScoreThreshold
+  const hasSellConsensus =
+    explicitSellCount >= 2 &&
+    explicitBuyCount <= 1 &&
+    combinedScore <= config.sellScoreThreshold
 
   let baseSignal: RankSignalDirection = 'hold'
-  if (
-    combinedScore >= config.buyScoreThreshold &&
-    explicitSellCount <= 1 &&
-    positiveWeight >= negativeWeight
-  ) {
+  if (hasBuyConsensus) {
     baseSignal = 'buy'
-  } else if (
-    combinedScore <= config.sellScoreThreshold &&
-    explicitBuyCount <= 1 &&
-    negativeWeight >= positiveWeight
-  ) {
+  } else if (hasSellConsensus) {
     baseSignal = 'sell'
   }
 
@@ -75,10 +75,12 @@ export function composeDecision(input: {
           ? config.buyScoreThreshold
           : config.sellScoreThreshold
   const thresholdScale = Math.max(0.05, Math.abs(signedThreshold))
-  const scoreMargin =
-    combinedScore >= 0
-      ? combinedScore - config.buyScoreThreshold
-      : Math.abs(combinedScore) - Math.abs(config.sellScoreThreshold)
+  let scoreMargin = 0
+  if (baseSignal === 'buy') {
+    scoreMargin = combinedScore - config.buyScoreThreshold
+  } else if (baseSignal === 'sell') {
+    scoreMargin = Math.abs(combinedScore) - Math.abs(config.sellScoreThreshold)
+  }
   const margin = Math.abs(combinedScore - signedThreshold)
   const opposingWeight =
     baseSignal === 'buy'

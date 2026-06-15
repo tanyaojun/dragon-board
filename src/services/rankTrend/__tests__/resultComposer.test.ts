@@ -108,6 +108,236 @@ describe('resultComposer', () => {
     expect(result.base.combinedScore).toBeLessThan(0)
   })
 
+  it('单个强买入信号不能越过共识门槛直接给买入', () => {
+    const result = composeDecision({
+      technical: createTechnical({
+        directionSignal: 'hold',
+        directionScore: 0.05,
+        accelerationSignal: 'buy',
+        accelerationScore: 0.9,
+        zeroCrossSignal: 'hold',
+        zeroCrossScore: 0,
+        macdCross: 'none',
+        macdRawScore: 0,
+      }),
+      cycle: createCycle('expansion'),
+      risk: createRisk(),
+      config: cloneDefaultRankTrendRuntimeConfig(),
+    })
+
+    expect(result.base.combinedScore).toBeGreaterThan(0.12)
+    expect(result.final.signal).toBe('hold')
+  })
+
+  it('共识失败保持观望时 scoreMargin 为 0', () => {
+    const result = composeDecision({
+      technical: createTechnical({
+        directionSignal: 'hold',
+        directionScore: 0.05,
+        accelerationSignal: 'buy',
+        accelerationScore: 0.9,
+        zeroCrossSignal: 'hold',
+        zeroCrossScore: 0,
+        macdCross: 'none',
+        macdRawScore: 0,
+      }),
+      cycle: createCycle('expansion'),
+      risk: createRisk(),
+      config: cloneDefaultRankTrendRuntimeConfig(),
+    })
+
+    expect(result.base.signal).toBe('hold')
+    expect(result.base.combinedScore).toBeGreaterThan(0.12)
+    expect(result.base.scoreMargin).toBe(0)
+  })
+
+  it('一买一卖两观望时综合判断为观望', () => {
+    const result = composeDecision({
+      technical: createTechnical({
+        directionSignal: 'buy',
+        directionScore: 0.88,
+        accelerationSignal: 'sell',
+        accelerationScore: -0.46,
+        zeroCrossSignal: 'hold',
+        zeroCrossScore: 0,
+        macdCross: 'none',
+        macdRawScore: 0,
+      }),
+      cycle: createCycle('expansion'),
+      risk: createRisk(),
+      config: cloneDefaultRankTrendRuntimeConfig(),
+    })
+
+    expect(result.base.combinedScore).toBeGreaterThan(0.12)
+    expect(result.final.signal).toBe('hold')
+  })
+
+  it('单个强卖出信号不能越过共识门槛直接给卖出', () => {
+    const result = composeDecision({
+      technical: createTechnical({
+        directionSignal: 'sell',
+        directionScore: -0.85,
+        accelerationSignal: 'hold',
+        accelerationScore: 0,
+        zeroCrossSignal: 'hold',
+        zeroCrossScore: 0,
+        macdCross: 'none',
+        macdRawScore: 0,
+      }),
+      cycle: createCycle('cooling'),
+      risk: createRisk(),
+      config: cloneDefaultRankTrendRuntimeConfig(),
+    })
+
+    expect(result.base.combinedScore).toBeLessThan(-0.12)
+    expect(result.final.signal).toBe('hold')
+  })
+
+  it('四个排名趋势信号全部买入时综合判断为买入', () => {
+    const result = composeDecision({
+      technical: createTechnical({
+        directionSignal: 'buy',
+        directionScore: 0.72,
+        accelerationSignal: 'buy',
+        accelerationScore: 0.82,
+        zeroCrossSignal: 'buy',
+        zeroCrossScore: 0.65,
+        macdCross: 'golden',
+        macdRawScore: 0.7,
+      }),
+      cycle: createCycle('expansion'),
+      risk: createRisk(),
+      config: cloneDefaultRankTrendRuntimeConfig(),
+    })
+
+    expect(result.final.signal).toBe('buy')
+  })
+
+  it('四个排名趋势信号全部卖出时综合判断为卖出', () => {
+    const result = composeDecision({
+      technical: createTechnical({
+        directionSignal: 'sell',
+        directionScore: -0.82,
+        accelerationSignal: 'sell',
+        accelerationScore: -0.8,
+        zeroCrossSignal: 'sell',
+        zeroCrossScore: -0.72,
+        macdCross: 'death',
+        macdRawScore: -0.7,
+      }),
+      cycle: createCycle('cooling'),
+      risk: createRisk(),
+      config: cloneDefaultRankTrendRuntimeConfig(),
+    })
+
+    expect(result.final.signal).toBe('sell')
+  })
+
+  it('两项卖出两项观望且加权分数过阈值时综合判断为卖出', () => {
+    const result = composeDecision({
+      technical: createTechnical({
+        directionSignal: 'hold',
+        directionScore: -0.08,
+        accelerationSignal: 'sell',
+        accelerationScore: -0.88,
+        zeroCrossSignal: 'hold',
+        zeroCrossScore: 0,
+        macdCross: 'death',
+        macdRawScore: -0.7,
+      }),
+      cycle: createCycle('cooling'),
+      risk: createRisk(),
+      config: cloneDefaultRankTrendRuntimeConfig(),
+    })
+
+    expect(result.base.combinedScore).toBeLessThan(-0.12)
+    expect(result.final.signal).toBe('sell')
+  })
+
+  it('买入票数够但加权分数未过阈值时仍为观望', () => {
+    const result = composeDecision({
+      technical: createTechnical({
+        directionSignal: 'buy',
+        directionScore: 0.1,
+        accelerationSignal: 'buy',
+        accelerationScore: 0.1,
+        zeroCrossSignal: 'hold',
+        zeroCrossScore: 0,
+        macdCross: 'none',
+        macdRawScore: 0,
+      }),
+      cycle: createCycle('expansion'),
+      risk: createRisk(),
+      config: cloneDefaultRankTrendRuntimeConfig(),
+    })
+
+    expect(result.base.combinedScore).toBeLessThan(0.12)
+    expect(result.final.signal).toBe('hold')
+  })
+
+  it('两买一卖且加权分数过阈值时允许买入', () => {
+    const result = composeDecision({
+      technical: createTechnical({
+        directionSignal: 'buy',
+        directionScore: 0.8,
+        accelerationSignal: 'buy',
+        accelerationScore: 0.65,
+        zeroCrossSignal: 'sell',
+        zeroCrossScore: -0.2,
+        macdCross: 'none',
+        macdRawScore: 0,
+      }),
+      cycle: createCycle('expansion'),
+      risk: createRisk(),
+      config: cloneDefaultRankTrendRuntimeConfig(),
+    })
+
+    expect(result.base.combinedScore).toBeGreaterThan(0.12)
+    expect(result.final.signal).toBe('buy')
+  })
+
+  it('两卖一买且加权分数过阈值时允许卖出', () => {
+    const result = composeDecision({
+      technical: createTechnical({
+        directionSignal: 'sell',
+        directionScore: -0.8,
+        accelerationSignal: 'sell',
+        accelerationScore: -0.65,
+        zeroCrossSignal: 'buy',
+        zeroCrossScore: 0.2,
+        macdCross: 'none',
+        macdRawScore: 0,
+      }),
+      cycle: createCycle('cooling'),
+      risk: createRisk(),
+      config: cloneDefaultRankTrendRuntimeConfig(),
+    })
+
+    expect(result.base.combinedScore).toBeLessThan(-0.12)
+    expect(result.final.signal).toBe('sell')
+  })
+
+  it('未知 MACD cross 值按观望票处理', () => {
+    const result = composeDecision({
+      technical: createTechnical({
+        directionSignal: 'hold',
+        directionScore: 0,
+        accelerationSignal: 'buy',
+        accelerationScore: 0.9,
+        zeroCrossSignal: 'hold',
+        zeroCrossScore: 0,
+        macdCross: 'mystery' as any,
+        macdRawScore: 0.9,
+      }),
+      cycle: createCycle('expansion'),
+      risk: createRisk(),
+      config: cloneDefaultRankTrendRuntimeConfig(),
+    })
+
+    expect(result.base.combinedScore).toBeGreaterThan(0.12)
+    expect(result.final.signal).toBe('hold')
+  })
+
   it('方向买加速卖拉锯时 combinedScore 落在阈值区间内则为 hold', () => {
     const technical = createTechnical({
       directionSignal: 'sell', directionScore: -0.1,
