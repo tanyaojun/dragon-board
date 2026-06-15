@@ -1027,6 +1027,37 @@ class TestBackfillSlotsSlotGeneration:
         assert len(captured[0]) == 1
         assert captured[0][0]["slot_time"] == "15:00"
 
+    def test_backfill_skips_weekend_dates(self, monkeypatch: Any) -> None:
+        client, _ = _setup_client(monkeypatch)
+        captured: list[list[dict[str, str]]] = []
+
+        class Svc(FakeCollectorService):
+            def backfill_slots(self, request: Any) -> dict[str, Any]:
+                captured.append(list(request.slots))
+                return {
+                    "total": len(request.slots),
+                    "succeeded": len(request.slots),
+                    "failed": 0, "blocked": 0, "deduped": 0,
+                    "details": [],
+                }
+
+        monkeypatch.setattr(
+            "backend.api.snapshot_collector_routes.SnapshotCollectorService", Svc
+        )
+
+        response = client.post(
+            "/api/snapshot-collector/backfill-slots",
+            json={
+                "datasetId": "dragonboard_backend_shadow",
+                "snapshotType": "daily",
+                "startDate": "2026-06-12",
+                "endDate": "2026-06-15",
+            },
+        )
+
+        assert response.status_code == 200
+        assert [s["trading_date"] for s in captured[0]] == ["2026-06-12", "2026-06-15"]
+
 
 class TestBackfillSlotsValidation:
     """Validation errors for backfill-slots endpoint."""

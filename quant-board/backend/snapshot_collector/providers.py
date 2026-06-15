@@ -247,6 +247,17 @@ class ProxyQuoteProvider:
             )
             timeout_s = timeout_ms / 1000.0
             body = _http_get_json(url, timeout_s)
+            degraded_error = _proxy_degraded_error(body)
+            if degraded_error:
+                latency_ms = int((time.monotonic() - start) * 1000)
+                health = SourceHealth(
+                    source="quote_proxy",
+                    ok=False,
+                    latency_ms=latency_ms,
+                    error=degraded_error,
+                    captured_at=_iso_now(),
+                )
+                return {"quotes": [], "depth": [], "money_flow": [], "market_meta": {}}, health
 
             rows = _extract_eastmoney_diff(body)
             quotes = _eastmoney_rows_to_quotes(rows)
@@ -278,6 +289,20 @@ class ProxyQuoteProvider:
                 captured_at=_iso_now(),
             )
             return {"quotes": [], "depth": [], "money_flow": [], "market_meta": {}}, health
+
+
+def _proxy_degraded_error(body: Any) -> str:
+    """Return a proxy degraded/error message, or empty string for healthy bodies."""
+    if not isinstance(body, dict):
+        return ""
+    if body.get("ok") is False or body.get("degraded") is True:
+        return str(
+            body.get("error")
+            or body.get("message")
+            or body.get("source")
+            or "proxy returned degraded response"
+        )
+    return ""
 
 
 def _extract_eastmoney_diff(body: Any) -> list[dict[str, Any]]:

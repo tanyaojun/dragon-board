@@ -684,6 +684,39 @@ class TestCollectorCLIHandlers:
         assert output["blocked"] == 1
         assert output["succeeded"] == 7
 
+    def test_backfill_skips_weekend_dates(self) -> None:
+        """Backfill slot generation only includes trading dates."""
+        captured: list[Any] = []
+
+        class _CapturingService(_FakeService):
+            def backfill_slots(self, request: Any) -> dict[str, Any]:
+                captured.append(request)
+                return {
+                    "total": len(request.slots),
+                    "succeeded": len(request.slots),
+                    "failed": 0,
+                    "blocked": 0,
+                    "deduped": 0,
+                    "details": [],
+                }
+
+        fake_svc = _CapturingService()
+        patches = self._patch_service(fake_svc)
+        with patches["create_snapshot_collector_repository"], patches["SnapshotCollectorService"]:
+            from backend.cli import cmd_snapshot_collector_backfill
+
+            _capture_json_output(
+                cmd_snapshot_collector_backfill,
+                _make_args(
+                    snapshot_type="daily",
+                    start_date="2026-06-12",
+                    end_date="2026-06-15",
+                    dry_run=True,
+                ),
+            )
+
+        assert [s["trading_date"] for s in captured[0].slots] == ["2026-06-12", "2026-06-15"]
+
     # ── audit ───────────────────────────────────────────────────────────────
 
     def test_audit_output(self) -> None:

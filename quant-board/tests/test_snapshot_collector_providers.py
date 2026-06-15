@@ -1022,6 +1022,26 @@ class TestProxyQuoteProviderNormalization:
 class TestProxyQuoteProviderErrors:
     """ProxyQuoteProvider error handling."""
 
+    def test_degraded_proxy_envelope_returns_failing_health(self) -> None:
+        provider = ProxyQuoteProvider(base_url=PROXY_BASE_URL)
+        degraded_body = {
+            "ok": False,
+            "degraded": True,
+            "source": "quotes-eastmoney",
+            "message": "fallback",
+            "error": "upstream unavailable",
+            "data": {"diff": []},
+        }
+        mock_resp = _fake_urlopen_response(degraded_body)
+        with patch.object(urllib.request, "urlopen", return_value=mock_resp):
+            data, health = provider.collect(TEST_CODES, timeout_ms=5000)
+
+        assert health.ok is False
+        assert health.source == "quote_proxy"
+        assert "upstream unavailable" in health.error
+        assert data["quotes"] == []
+        assert data["money_flow"] == []
+
     def test_http_error_returns_failing_health(self) -> None:
         provider = ProxyQuoteProvider(base_url=PROXY_BASE_URL)
         mock_resp = _fake_urlopen_raise(urllib.error.URLError("connection refused"))

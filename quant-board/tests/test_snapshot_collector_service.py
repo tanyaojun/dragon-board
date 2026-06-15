@@ -993,6 +993,81 @@ class TestServiceApply:
         assert len(repo._runs) == 1
         assert repo._runs[0]["status"] == "completed"
 
+    def test_delayed_capture_marks_payload_and_run(self, monkeypatch: Any) -> None:
+        from backend.snapshot_collector.models import CollectorRunRequest
+        from backend.snapshot_collector.service import SnapshotCollectorService
+        from backend.snapshot_collector.slots import _make_timestamp_ms
+
+        repo = FakeSnapshotRepository()
+        stocks = _standard_stocks()
+        health = _standard_health()
+        fake_collect = _fake_collect_fn(stocks=stocks, source_health=health)
+        fake_normalize = _passthrough_normalize
+        slot_ts = _make_timestamp_ms("2026-06-11", "10:00")
+        delayed_ts = slot_ts + 6 * 60 * 1000
+
+        monkeypatch.setattr(
+            "backend.snapshot_collector.service._actual_timestamp_ms",
+            lambda: delayed_ts,
+        )
+
+        service = SnapshotCollectorService(
+            repo=repo,
+            collect_fn=fake_collect,
+            normalize_fn=fake_normalize,
+        )
+
+        request = CollectorRunRequest(
+            dataset_id="dragonboard_backend_shadow",
+            snapshot_type="half_hour",
+            trading_date="2026-06-11",
+            slot_time="10:00",
+            dry_run=False,
+        )
+
+        result = service.run_once(request)
+
+        assert result.status == "completed"
+        assert repo._frames[0]["captureMode"] == "delayed"
+        assert repo._records[0]["captureMode"] == "delayed"
+        assert repo._stock_rows[0]["captureMode"] == "delayed"
+        assert repo._runs[0]["captureMode"] == "delayed"
+
+    def test_completed_run_records_source_health_and_counts(self) -> None:
+        from backend.snapshot_collector.models import CollectorRunRequest
+        from backend.snapshot_collector.service import SnapshotCollectorService
+
+        repo = FakeSnapshotRepository()
+        stocks = _standard_stocks()
+        health = _standard_health()
+        fake_collect = _fake_collect_fn(stocks=stocks, source_health=health)
+        fake_normalize = _passthrough_normalize
+
+        service = SnapshotCollectorService(
+            repo=repo,
+            collect_fn=fake_collect,
+            normalize_fn=fake_normalize,
+        )
+
+        request = CollectorRunRequest(
+            dataset_id="dragonboard_backend_shadow",
+            snapshot_type="half_hour",
+            trading_date="2026-06-11",
+            slot_time="10:00",
+            dry_run=False,
+        )
+
+        result = service.run_once(request)
+
+        assert result.status == "completed"
+        run = repo._runs[0]
+        assert run["sourceHealth"] == health
+        assert run["stockRowCount"] == 3
+        assert run["frameCount"] == 1
+        assert run["sectorRowCount"] == 0
+        assert run["startedAt"]
+        assert run["finishedAt"]
+
     def test_repeated_apply_returns_deduped(self) -> None:
         from backend.snapshot_collector.models import CollectorRunRequest
         from backend.snapshot_collector.service import SnapshotCollectorService

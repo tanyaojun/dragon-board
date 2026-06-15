@@ -275,7 +275,9 @@ class TestBridgeQuoteProviderStaleness:
     def test_non_stale_pool_has_no_stale_warning(self) -> None:
         """Data refreshed 5 s ago is not stale (default threshold is 30 s)."""
         provider = BridgeQuoteProvider(base_url=BASE_URL, pool_staleness_ms=30000)
-        mock_resp = _fake_urlopen_response(BRIDGE_POOL_SNAPSHOT)
+        body = dict(BRIDGE_POOL_SNAPSHOT)
+        body["poolRefreshedAt"] = int(time.time() * 1000) - 5000
+        mock_resp = _fake_urlopen_response(body)
         with patch.object(urllib.request, "urlopen", return_value=mock_resp):
             _, health = provider.collect(use_pool=True, timeout_ms=5000)
 

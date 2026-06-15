@@ -60,9 +60,9 @@ backend/snapshot_collector/
 - 写目标独立：只写入 `dragonboard_backend_shadow` 数据集（由 `QUANT_BOARD_SNAPSHOT_COLLECTOR_DATASET_ID` 控制），不得写入 `dragonboard_live` 正式主库。
 - 禁止写入 live 数据集：`QUANT_BOARD_SNAPSHOT_COLLECTOR_ALLOW_LIVE_DATASET` 默认 `false`，防止实验采集污染正式快照事实。
 - Shadow-only：该采集器产出仅用于平行对照和验收，不得作为生产快照来源或 Dragon Board 正式读源。
-- 质量门禁在前：quality_gate 在写入前检查数据源健康、股票行数量和时间窗口，被阻止的运行写入 `snapshot_collector_runs`（状态 `blocked`）并保留审计轨迹。
+- 质量门禁在前：quality_gate 在写入前检查数据源健康、股票行数量和时间窗口，被阻止的运行写入 `snapshot_collector_runs`（状态 `blocked`）并保留审计轨迹。运行记录会保存 `sourceHealth`、`captureMode`、核心行数和完成时间，方便 Phase 4 shadow/live 对比审计。
 - API 路由 `/api/snapshot-collector/*` 和 CLI 命令 `snapshot-collector-*` 只服务实验运维和审计。
-- 自动调度器（Phase 3）：`SnapshotCollectorScheduler` 是独立的 `asyncio` 后台 runner（模块级单例），在 FastAPI `startup` 时注册到事件循环。轮询间隔由 `QUANT_BOARD_SNAPSHOT_COLLECTOR_POLL_MS`（默认 1000ms）控制，每个 tick 检查交易日、槽位表和时间窗口，为符合条件的 slot 启动 fire-and-forget 采集任务。调度器在非 MongoDB 模式或 `QUANT_BOARD_SNAPSHOT_COLLECTOR_ENABLED=0` 时自动禁用。采集任务的并发保护通过内存中的 `_in_flight_slots` 集合实现，确保同一 slot 不会重复采集。
+- 自动调度器（Phase 3）：`SnapshotCollectorScheduler` 是独立的 `asyncio` 后台 runner（模块级单例），在 FastAPI `startup` 时注册到事件循环。轮询间隔由 `QUANT_BOARD_SNAPSHOT_COLLECTOR_POLL_MS`（默认 1000ms）控制，每个 tick 检查交易日、槽位表、时间窗口和 MongoDB 中的 `datasetId + snapshotId` 是否已存在，只为真正缺失且符合条件的 slot 启动 fire-and-forget 采集任务。调度器在非 MongoDB 模式或 `QUANT_BOARD_SNAPSHOT_COLLECTOR_ENABLED=0` 时自动禁用。采集任务的并发保护通过内存中的 `_in_flight_slots` 集合实现，确保同一 slot 不会重复采集。
 - 正式切换要求：shadow 采集器必须通过完整审计（覆盖率、质量门禁、数据一致性）后才能讨论 live cutover。
 
 **生产口径尚未完成的接入（截至 Phase 4）：**
@@ -117,6 +117,7 @@ ProxyQuoteProvider — 当前默认 quote 数据源（过渡方案）：
 
 - `GET /api/quotes/eastmoney?codes=...` — proxy-server 的 EastMoney 行情端点，返回 f12(代码)、f2(价格)、f3(涨跌幅)、f5(成交额)、f6(成交量)、f8(换手率)、f9(市盈率)、f20(总市值) 以及 f62/f66/f69/f184(资金流) 字段
 - `ProxyQuoteProvider.collect(codes)` — 接收代码列表，返回 `{quotes, depth: [], money_flow, market_meta}` 结构，与 `BridgeQuoteProvider` 兼容，可在 `collect_market_context` 中互换路由
+- 当 proxy-server 返回 `ok=false` 或 `degraded=true` 的降级信封时，`ProxyQuoteProvider` 会把本次 quote 源标记为 `SourceHealth(ok=false)`，不把 HTTP 200 的降级响应当成健康行情。
 - `collect_market_context` 将 `ProxyQuoteProvider` 返回的 `money_flow` 写入 `MarketDataContext.money_flow`，由 builder 的 `_enrich_stock_rows_from_quotes()` 同步填充到 stock rows 的 `moneyFlow`（结构化 dict）、`pe` 和 `totalMarketValue` 字段
 
 过渡方案的两个硬性缺口：

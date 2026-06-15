@@ -59,6 +59,55 @@ def _actual_timestamp_ms() -> int:
     return int(time.time() * 1000)
 
 
+def _capture_mode_for_slot(
+    *,
+    slot_timestamp_ms: int,
+    actual_timestamp_ms: int,
+    grace_minutes: int,
+) -> str:
+    """Classify a capture as real-time or delayed using the quality grace window."""
+    grace_ms = grace_minutes * 60 * 1000
+    if slot_timestamp_ms > 0 and actual_timestamp_ms > slot_timestamp_ms + grace_ms:
+        return "delayed"
+    return "real_time"
+
+
+def _source_health_dicts(market_context: MarketDataContext) -> list[dict[str, Any]]:
+    """Convert SourceHealth objects to JSON-safe run/audit dictionaries."""
+    return [
+        {
+            "source": sh.source,
+            "ok": sh.ok,
+            "latency_ms": sh.latency_ms,
+            "row_count": sh.row_count,
+            "error": sh.error,
+            "captured_at": sh.captured_at,
+        }
+        for sh in market_context.source_health
+    ]
+
+
+def _run_audit_fields(
+    *,
+    source_health: list[dict[str, Any]],
+    capture_mode: str,
+    started_at: str,
+    stock_rows: list[dict[str, Any]] | None = None,
+    frames: list[dict[str, Any]] | None = None,
+    sector_rows: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Build common run audit fields for collector run records."""
+    return {
+        "sourceHealth": source_health,
+        "captureMode": capture_mode,
+        "stockRowCount": len(stock_rows or []),
+        "frameCount": len(frames or []),
+        "sectorRowCount": len(sector_rows or []),
+        "startedAt": started_at,
+        "finishedAt": datetime.now(timezone.utc).isoformat(),
+    }
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # SnapshotCollectorService
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -126,6 +175,7 @@ class SnapshotCollectorService:
         snapshot_type = request.snapshot_type
         trading_date = request.trading_date
         slot_time = request.slot_time
+        started_at = datetime.now(timezone.utc).isoformat()
 
         # 1 — Create SnapshotSlot
         slot_timestamp = _slot_timestamp_ms(snapshot_type, trading_date, slot_time)
@@ -165,6 +215,14 @@ class SnapshotCollectorService:
         codes: list[str] = []
         timeout_ms = self._provider_timeout_ms()
         market_context = self._collect_fn(providers_list, codes, timeout_ms=timeout_ms)
+        source_health = _source_health_dicts(market_context)
+        actual_ts = _actual_timestamp_ms()
+        grace_minutes = self._close_grace_minutes()
+        capture_mode = _capture_mode_for_slot(
+            slot_timestamp_ms=slot_timestamp,
+            actual_timestamp_ms=actual_ts,
+            grace_minutes=grace_minutes,
+        )
 
         # 4 — Build ingest payload
         bundle = builder_module.build_ingest_payload(
@@ -172,7 +230,7 @@ class SnapshotCollectorService:
             market_context,
             dataset_id=dataset_id,
             source="quantboard_backend_collector",
-            capture_mode="real_time",
+            capture_mode=capture_mode,
         )
 
         # 5 — Normalize
@@ -197,6 +255,11 @@ class SnapshotCollectorService:
                 "dryRun": request.dry_run,
                 "error": str(exc),
                 "blockingIssues": ["normalization_failed"],
+                **_run_audit_fields(
+                    source_health=source_health,
+                    capture_mode=capture_mode,
+                    started_at=started_at,
+                ),
             }
             _record_run(self._repo, run_doc)
             quality = QualityResult(
@@ -216,19 +279,6 @@ class SnapshotCollectorService:
         dataset_model, records, frames, stock_rows, sector_rows, idempotency_key = normalized
 
         # 6 — Evaluate quality
-        source_health = [
-            {
-                "source": sh.source,
-                "ok": sh.ok,
-                "latency_ms": sh.latency_ms,
-                "row_count": sh.row_count,
-                "error": sh.error,
-                "captured_at": sh.captured_at,
-            }
-            for sh in market_context.source_health
-        ]
-        actual_ts = _actual_timestamp_ms()
-        grace_minutes = self._close_grace_minutes()
         allow_live = self._allow_live_dataset()
 
         quality = self._quality_fn(
@@ -259,6 +309,14 @@ class SnapshotCollectorService:
                 "dryRun": request.dry_run,
                 "blockingIssues": quality.blocking_issues,
                 "warnings": quality.warnings,
+                **_run_audit_fields(
+                    source_health=source_health,
+                    capture_mode=capture_mode,
+                    started_at=started_at,
+                    stock_rows=stock_rows,
+                    frames=frames,
+                    sector_rows=sector_rows,
+                ),
             }
             _record_run(self._repo, run_doc)
             return CollectorRunResult(
@@ -282,6 +340,14 @@ class SnapshotCollectorService:
                 "deduped": False,
                 "dryRun": True,
                 "warnings": quality.warnings,
+                **_run_audit_fields(
+                    source_health=source_health,
+                    capture_mode=capture_mode,
+                    started_at=started_at,
+                    stock_rows=stock_rows,
+                    frames=frames,
+                    sector_rows=sector_rows,
+                ),
             }
             _record_run(self._repo, run_doc)
             return CollectorRunResult(
@@ -326,6 +392,14 @@ class SnapshotCollectorService:
             "deduped": deduped,
             "dryRun": False,
             "warnings": quality.warnings,
+            **_run_audit_fields(
+                source_health=source_health,
+                capture_mode=capture_mode,
+                started_at=started_at,
+                stock_rows=stock_rows,
+                frames=frames,
+                sector_rows=sector_rows,
+            ),
         }
         _record_run(self._repo, run_doc)
 
@@ -341,6 +415,7 @@ class SnapshotCollectorService:
                 "frameCount": len(frames),
                 "sectorRowCount": len(sector_rows),
                 "idempotencyKey": idempotency_key,
+                "captureMode": capture_mode,
             },
         )
 

@@ -244,7 +244,7 @@ dry-run 响应（`status=dry_run`，`ok=true`）：
 
 ### `POST /api/snapshot-collector/backfill-slots`
 
-按日期区间批量执行采集。自动为区间内每个交易日生成所有符合条件的槽位时间，逐个调用 `run_once`。
+按日期区间批量执行采集。自动为区间内每个交易日生成所有符合条件的槽位时间，逐个调用 `run_once`；周末和已知节假日不会生成 backfill slot。
 
 ```json
 {
@@ -263,8 +263,8 @@ dry-run 响应（`status=dry_run`，`ok=true`）：
 | --- | --- | --- |
 | `datasetId` | 是 | 目标数据集 ID |
 | `snapshotType` | 是 | `quarter_hour` / `half_hour` / `hourly` / `daily` |
-| `endDate` | 是 | `YYYY-MM-DD` 格式截止交易日 |
-| `startDate` | 否 | 默认等于 `endDate`；区间起止含两端 |
+| `endDate` | 是 | `YYYY-MM-DD` 格式截止日期；非交易日会被跳过 |
+| `startDate` | 否 | 默认等于 `endDate`；区间起止含两端，非交易日会被跳过 |
 | `dryRun` | 否 | 默认 `true`（backfill 默认不写库） |
 | `force` | 否 | 默认 `false`；为 `true` 时跳过判重 |
 
@@ -2131,7 +2131,7 @@ max_drawdown: -0.08
 
 ### `snapshot-collector-backfill`
 
-按日期区间批量采集，输出汇总 JSON。
+按日期区间批量采集，输出汇总 JSON。区间内只生成交易日 slot，周末和已知节假日会被跳过。
 
 ```powershell
 .\.venv\Scripts\python.exe -m backend.cli snapshot-collector-backfill `
@@ -2148,8 +2148,8 @@ max_drawdown: -0.08
 | --- | --- | --- |
 | `--dataset-id` | 是 | 目标数据集 ID |
 | `--snapshot-type` | 是 | `quarter_hour` / `half_hour` / `hourly` / `daily` |
-| `--end-date` | 是 | `YYYY-MM-DD` 格式截止交易日 |
-| `--start-date` | 否 | 默认等于 `end_date`；区间起止含两端 |
+| `--end-date` | 是 | `YYYY-MM-DD` 格式截止日期；非交易日会被跳过 |
+| `--start-date` | 否 | 默认等于 `end_date`；区间起止含两端，非交易日会被跳过 |
 | `--dry-run` | 否 | 存在即为 true（backfill 默认 dry-run） |
 | `--force` | 否 | 存在即为 true；跳过判重 |
 

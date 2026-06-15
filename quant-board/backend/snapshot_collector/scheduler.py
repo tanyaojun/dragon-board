@@ -111,6 +111,7 @@ class SnapshotCollectorScheduler:
     async def _poll_once(self) -> None:
         """Scan for eligible slots and launch fire-and-forget collection tasks."""
         from backend.snapshot_collector.slots import generate_slots, is_slot_eligible
+        from backend.snapshot_collector.service_factory import create_snapshot_collector_repository
         from backend.snapshot_collector.trading_calendar import trading_date_from_ts
 
         now_ts = int(time.time() * 1000)
@@ -120,14 +121,17 @@ class SnapshotCollectorScheduler:
 
         # Generate ALL slots for today across all configured types
         all_slots = generate_slots(trading_date, self.snapshot_types)
+        repo = create_snapshot_collector_repository()
 
         for slot in all_slots:
             if not is_slot_eligible(now_ts, slot, grace_minutes=self.grace_minutes):
                 continue
             if slot.snapshot_id in self._in_flight_slots:
                 continue
+            if repo.snapshot_exists(self.dataset_id, slot.snapshot_id):
+                continue
 
-            # Fire and forget — dedup is double-checked inside _collect_slot
+            # Fire and forget — dedup is double-checked inside _collect_slot.
             self._in_flight_slots.add(slot.snapshot_id)
             asyncio.create_task(self._collect_slot(slot))
 

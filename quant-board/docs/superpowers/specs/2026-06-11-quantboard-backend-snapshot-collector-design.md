@@ -152,7 +152,7 @@ daily:        15:00
 - 根据槽位表生成待采集 slot。
 - 支持 `quarter_hour`、`half_hour`、`hourly`、`daily`。
 - 支持交易日判断、午休、节假日、15:00 close slot grace window。
-- 每次触发前先查询 MongoDB 是否已有 `datasetId + snapshotId`。
+- 每次触发前先查询 MongoDB 是否已有 `datasetId + snapshotId`；已存在 slot 不创建后台采集任务。
 - 防止同一 slot 并发采集。
 - 支持影子 dataset 和正式 dataset 分离。
 - 维护最近运行状态，供 API 查询。
@@ -185,7 +185,7 @@ daily:        15:00
 短期 Provider：
 
 - `ProxyHotlistProvider`: 调用 `proxy-server` 热榜接口，复用现有八平台热榜能力。
-- `ProxyQuoteProvider` (当前默认，**过渡方案**): 调用 `proxy-server` EastMoney 行情端点 `GET /api/quotes/eastmoney?codes=...`，获取实时行情和资金流数据。返回 `{quotes, depth: [], money_flow, market_meta}`，其中 money_flow 的 `mediumNetInflow` 由 EastMoney 字段推导。depth 固定为空（proxy-server 无盘口端点）。**这是临时过渡配置：生产口径应使用 `BridgeQuoteProvider` 作为主 quote 源（通过 python-bridge 获取 TDX 实时行情和五档盘口），`ProxyQuoteProvider` 仅作为 bridge 离线时的 fallback。**`service_factory.py` 当前只挂载 `ProxyQuoteProvider`，不挂载 `BridgeQuoteProvider`，是 Phase 4 验证阶段的临时安排。
+- `ProxyQuoteProvider` (当前默认，**过渡方案**): 调用 `proxy-server` EastMoney 行情端点 `GET /api/quotes/eastmoney?codes=...`，获取实时行情和资金流数据。返回 `{quotes, depth: [], money_flow, market_meta}`，其中 money_flow 的 `mediumNetInflow` 由 EastMoney 字段推导。depth 固定为空（proxy-server 无盘口端点）。proxy-server 返回 `ok=false` 或 `degraded=true` 的降级信封时，本 provider 必须返回 `SourceHealth(ok=false)`，避免把降级 HTTP 200 误判为健康行情。**这是临时过渡配置：生产口径应使用 `BridgeQuoteProvider` 作为主 quote 源（通过 python-bridge 获取 TDX 实时行情和五档盘口），`ProxyQuoteProvider` 仅作为 bridge 离线时的 fallback。**`service_factory.py` 当前只挂载 `ProxyQuoteProvider`，不挂载 `BridgeQuoteProvider`，是 Phase 4 验证阶段的临时安排。
 - `BridgeQuoteProvider`: 调用 `python-bridge` 新增或既有接口获取当前行情、depth、tick、money flow。保留用于需要 bridge WebSocket pool 模式的场景。
 - `ThemeMappingProvider`: 直接通过 QuantBoard MongoDB 题材集合读取题材映射。
 - `StockNameProvider`: 读取 MongoDB `stock_names`，补充名称和基础状态。
@@ -336,6 +336,10 @@ GET /api/quotes/snapshot
   "deduped": false,
   "source": "quantboard_backend_collector",
   "sourceHealth": [],
+  "captureMode": "real_time",
+  "stockRowCount": 120,
+  "frameCount": 1,
+  "sectorRowCount": 4,
   "quality": {},
   "startedAt": "2026-06-11T15:00:01+08:00",
   "finishedAt": "2026-06-11T15:00:04+08:00",
@@ -398,7 +402,7 @@ POST /api/snapshot-collector/audit
 - 默认 dry-run。
 - 可传日期范围、类型、目标 dataset。
 - 不替代现有 `backfill-empty-mongodb-snapshots`，后者仍是 MongoDB 事实层修复工具。
-- 日期范围按 `startDate` 和 `endDate` 闭区间生成目标 slot，不允许隐式扩大范围。
+- 日期范围按 `startDate` 和 `endDate` 闭区间生成目标 slot，不允许隐式扩大范围；周末和已知节假日会被跳过。
 - `force=false` 时已有 slot 必须跳过并返回 `deduped` 或 `skipped_existing`。
 - `dryRun=true` 必须完整执行 slot 生成、provider 读取、builder、normalizer 和质量门禁，但不得写事实集合。
 - `apply` 模式只写缺失且通过质量门禁的 slot。

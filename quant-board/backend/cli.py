@@ -59,6 +59,7 @@ from backend.snapshot_collector.service_factory import (
     create_snapshot_collector_service,
 )
 from backend.snapshot_collector.slots import generate_slots
+from backend.snapshot_collector.trading_calendar import is_trading_day
 
 DEFAULT_MOMENTUM_PERIODS = [3, 5, 8, 13, 21]
 DEFAULT_HORIZONS = [1, 3, 5, 10]
@@ -1197,6 +1198,9 @@ def _generate_backfill_slots(
     slot_dicts: list[dict[str, str]] = []
     current = start
     while current <= end:
+        if not is_trading_day(current.date()):
+            current += timedelta(days=1)
+            continue
         date_str = current.strftime("%Y-%m-%d")
         slots = generate_slots(date_str, [snapshot_type])
         for slot in slots:
