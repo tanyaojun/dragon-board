@@ -63,6 +63,20 @@ def _http_get_json(url: str, timeout_s: float) -> Any:
     return json.loads(body.decode("utf-8"))
 
 
+def _http_post_json(url: str, timeout_s: float, payload: Any = None) -> Any:
+    """Perform a POST request and return the parsed JSON body.
+
+    When *payload* is provided it is sent as a JSON-encoded body.
+    Raises ``urllib.error.URLError`` or ``ValueError`` on failure.
+    """
+    data = json.dumps(payload).encode("utf-8") if payload is not None else None
+    headers = {"Content-Type": "application/json"} if data else {}
+    req = urllib.request.Request(url, data=data, method="POST", headers=headers)
+    with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+        body = resp.read()
+    return json.loads(body.decode("utf-8"))
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # ProxyHotlistProvider
 # ═════════════════════════════════════════════════════════════════════════════
@@ -99,7 +113,8 @@ class ProxyHotlistProvider:
         try:
             url = f"{self._base_url}/api/{self._platform}/hot"
             timeout_s = timeout_ms / 1000.0
-            body = _http_get_json(url, timeout_s)
+            # Eastmoney endpoint uses POST
+            body = _http_post_json(url, timeout_s)
             rows = self._normalize(body)
             latency_ms = int((time.monotonic() - start) * 1000)
             health = SourceHealth(
@@ -124,25 +139,33 @@ class ProxyHotlistProvider:
     # ── internal ────────────────────────────────────────────────────────
 
     def _normalize(self, body: Any) -> list[dict[str, Any]]:
-        """Convert raw proxy response to a list of stock row dicts."""
+        """Convert raw proxy response to a list of stock row dicts.
+
+        Supports both legacy field names (c, r, n, p, zdf, etc.) and
+        eastmoney native field names (sc, rk).
+        """
         items = _extract_items(body)
         rows: list[dict[str, Any]] = []
         for item in items:
             if not isinstance(item, dict):
                 continue
-            code = str(item.get("c") or "").strip()
+            # Eastmoney uses "sc", legacy format uses "c"/"code"
+            code = str(item.get("sc") or item.get("c") or item.get("code") or "").strip()
+            # Strip exchange prefix: SZ000630 → 000630, SH603993 → 603993
+            if len(code) >= 8 and code[:2] in ("SZ", "SH", "BJ"):
+                code = code[2:]
             if not code:
                 continue
             row: dict[str, Any] = {
                 "code": code,
-                "name": str(item.get("n") or code),
-                "rank": _safe_int(item.get("r"), len(rows) + 1),
-                "price": _safe_float(item.get("p")),
-                "pctChange": _safe_float(item.get("zdf")),
-                "volume": _safe_int(item.get("cjl")),
-                "amount": _safe_float(item.get("cje")),
-                "turnover": _safe_float(item.get("hsl")),
-                "heat": _safe_float(item.get("hot")),
+                "name": str(item.get("n") or item.get("name") or code),
+                "rank": _safe_int(item.get("rk") or item.get("r") or item.get("rank"), len(rows) + 1),
+                "price": _safe_float(item.get("p") or item.get("price")),
+                "pctChange": _safe_float(item.get("zdf") or item.get("pctChange")),
+                "volume": _safe_int(item.get("cjl") or item.get("volume")),
+                "amount": _safe_float(item.get("cje") or item.get("amount")),
+                "turnover": _safe_float(item.get("hsl") or item.get("turnover")),
+                "heat": _safe_float(item.get("hot") or item.get("heat")),
             }
             rows.append(row)
         return rows
