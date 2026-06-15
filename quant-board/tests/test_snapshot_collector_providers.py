@@ -18,7 +18,11 @@ from backend.snapshot_collector.models import MarketDataContext, SourceHealth
 from backend.snapshot_collector.providers import (
     BridgeQuoteProvider,
     ProxyHotlistProvider,
+    ProxyQuoteProvider,
     ThemeMappingProvider,
+    _eastmoney_rows_to_money_flow,
+    _eastmoney_rows_to_quotes,
+    _extract_eastmoney_diff,
     collect_market_context,
 )
 
@@ -769,3 +773,407 @@ class TestCollectMarketContext:
             _, health = hotlist.collect()
 
         assert health.ok is True
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ProxyQuoteProvider
+# ═════════════════════════════════════════════════════════════════════════════
+
+EASTMONEY_QUOTE_RESPONSE = {
+    "rc": 0,
+    "data": {
+        "diff": [
+            {
+                "f12": "000001",
+                "f14": "平安银行",
+                "f2": 12.50,
+                "f3": 2.35,
+                "f5": 1875000000.0,
+                "f6": 150000000,
+                "f8": 5.5,
+                "f9": 8.5,
+                "f10": 12.22,
+                "f20": 350000000000.0,
+                "f21": 345000000000.0,
+                "f23": 0.85,
+                "f62": 50000000.0,
+                "f66": 20000000.0,
+                "f69": 15000000.0,
+                "f184": 10000000.0,
+            },
+            {
+                "f12": "600000",
+                "f14": "浦发银行",
+                "f2": 9.80,
+                "f3": -0.51,
+                "f5": 784000000.0,
+                "f6": 80000000,
+                "f8": 2.1,
+                "f9": 5.2,
+                "f10": 9.85,
+                "f20": 180000000000.0,
+                "f21": 178000000000.0,
+                "f23": 0.72,
+                "f62": -10000000.0,
+                "f66": -5000000.0,
+                "f69": -3000000.0,
+                "f184": -2000000.0,
+            },
+            {
+                "f12": "300001",
+                "f14": "特锐德",
+                "f2": 25.30,
+                "f3": 5.20,
+                "f5": 320000000.0,
+                "f6": 12000000,
+                "f8": 8.3,
+                "f9": 35.0,
+                "f10": 24.05,
+                "f20": 80000000000.0,
+                "f21": 78000000000.0,
+                "f23": 1.15,
+                "f62": 30000000.0,
+                "f66": 15000000.0,
+                "f69": 10000000.0,
+                "f184": 3000000.0,
+            },
+        ]
+    },
+}
+
+
+class TestEastmoneyExtractDiff:
+    """Unit tests for _extract_eastmoney_diff helper."""
+
+    def test_extracts_diff_from_valid_body(self) -> None:
+        result = _extract_eastmoney_diff(EASTMONEY_QUOTE_RESPONSE)
+        assert len(result) == 3
+
+    def test_returns_empty_when_body_is_none(self) -> None:
+        assert _extract_eastmoney_diff(None) == []
+
+    def test_returns_empty_when_body_is_list(self) -> None:
+        assert _extract_eastmoney_diff([{"f12": "000001"}]) == []
+
+    def test_returns_empty_when_no_data_key(self) -> None:
+        assert _extract_eastmoney_diff({"rc": 0}) == []
+
+    def test_returns_empty_when_data_is_not_dict(self) -> None:
+        assert _extract_eastmoney_diff({"data": []}) == []
+
+    def test_returns_empty_when_diff_is_not_list(self) -> None:
+        assert _extract_eastmoney_diff({"data": {"diff": "not_list"}}) == []
+
+
+class TestEastmoneyRowsToQuotes:
+    """Unit tests for _eastmoney_rows_to_quotes field mapping."""
+
+    def test_maps_all_expected_fields(self) -> None:
+        rows = EASTMONEY_QUOTE_RESPONSE["data"]["diff"]
+        quotes = _eastmoney_rows_to_quotes(rows)
+        assert len(quotes) == 3
+
+        q0 = quotes[0]
+        assert q0["code"] == "000001"
+        assert q0["price"] == 12.50
+        assert q0["pctChange"] == 2.35
+        assert q0["volume"] == 150000000
+        assert q0["amount"] == 1875000000.0
+        assert q0["turnover"] == 5.5
+        assert q0["pe"] == 8.5
+        assert q0["totalMarketValue"] == 350000000000.0
+
+    def test_skips_rows_with_missing_code(self) -> None:
+        quotes = _eastmoney_rows_to_quotes([{"f2": 12.50, "f14": "NoCode"}])
+        assert quotes == []
+
+    def test_skips_rows_with_blank_code(self) -> None:
+        quotes = _eastmoney_rows_to_quotes([{"f12": "", "f2": 12.50}])
+        assert quotes == []
+
+    def test_handles_empty_list(self) -> None:
+        assert _eastmoney_rows_to_quotes([]) == []
+
+    def test_handles_non_dict_items(self) -> None:
+        quotes = _eastmoney_rows_to_quotes(["not_a_dict", {"f12": "000001", "f2": 10.0}])
+        assert len(quotes) == 1
+        assert quotes[0]["code"] == "000001"
+
+    def test_missing_numeric_fields_default_to_zero(self) -> None:
+        quotes = _eastmoney_rows_to_quotes([{"f12": "000001"}])
+        q = quotes[0]
+        assert q["price"] == 0.0
+        assert q["pctChange"] == 0.0
+        assert q["volume"] == 0
+        assert q["amount"] == 0.0
+        assert q["turnover"] == 0.0
+        assert q["pe"] == 0.0
+        assert q["totalMarketValue"] == 0.0
+
+
+class TestEastmoneyRowsToMoneyFlow:
+    """Unit tests for _eastmoney_rows_to_money_flow derivation."""
+
+    def test_maps_all_money_flow_fields(self) -> None:
+        rows = EASTMONEY_QUOTE_RESPONSE["data"]["diff"]
+        flows = _eastmoney_rows_to_money_flow(rows)
+        assert len(flows) == 3
+
+        f0 = flows[0]
+        assert f0["code"] == "000001"
+        assert f0["mainNetInflow"] == 50000000.0
+        assert f0["superLargeNetInflow"] == 20000000.0
+        assert f0["largeNetInflow"] == 15000000.0
+        assert f0["smallNetInflow"] == 10000000.0
+
+    def test_medium_net_inflow_is_derived(self) -> None:
+        """mediumNetInflow = main - superLarge - large - small"""
+        rows = EASTMONEY_QUOTE_RESPONSE["data"]["diff"]
+        flows = _eastmoney_rows_to_money_flow(rows)
+
+        # 000001: 50000000 - 20000000 - 15000000 - 10000000 = 5000000
+        assert flows[0]["mediumNetInflow"] == 5000000.0
+
+        # 600000: -10000000 - (-5000000) - (-3000000) - (-2000000) = 0
+        assert flows[1]["mediumNetInflow"] == 0.0
+
+        # 300001: 30000000 - 15000000 - 10000000 - 3000000 = 2000000
+        assert flows[2]["mediumNetInflow"] == 2000000.0
+
+    def test_skips_rows_with_missing_code(self) -> None:
+        flows = _eastmoney_rows_to_money_flow([{"f62": 100.0}])
+        assert flows == []
+
+    def test_handles_empty_list(self) -> None:
+        assert _eastmoney_rows_to_money_flow([]) == []
+
+    def test_missing_fields_default_to_zero(self) -> None:
+        flows = _eastmoney_rows_to_money_flow([{"f12": "000001"}])
+        f = flows[0]
+        assert f["mainNetInflow"] == 0.0
+        assert f["superLargeNetInflow"] == 0.0
+        assert f["largeNetInflow"] == 0.0
+        assert f["mediumNetInflow"] == 0.0
+        assert f["smallNetInflow"] == 0.0
+
+
+class TestProxyQuoteProviderNormalization:
+    """ProxyQuoteProvider happy-path tests."""
+
+    def test_collect_returns_quotes_and_money_flow(self) -> None:
+        provider = ProxyQuoteProvider(base_url=PROXY_BASE_URL)
+        mock_resp = _fake_urlopen_response(EASTMONEY_QUOTE_RESPONSE)
+        with patch.object(urllib.request, "urlopen", return_value=mock_resp):
+            data, health = provider.collect(TEST_CODES, timeout_ms=5000)
+
+        assert health.ok is True
+        assert health.source == "quote_proxy"
+        assert health.row_count == 3
+
+        quotes = data["quotes"]
+        assert len(quotes) == 3
+        assert quotes[0]["code"] == "000001"
+        assert quotes[0]["price"] == 12.50
+
+        money_flow = data["money_flow"]
+        assert len(money_flow) == 3
+        assert money_flow[0]["code"] == "000001"
+        assert money_flow[0]["mainNetInflow"] == 50000000.0
+
+        assert data["depth"] == []
+        assert data["market_meta"] == {}
+
+    def test_empty_codes_returns_empty_success(self) -> None:
+        provider = ProxyQuoteProvider(base_url=PROXY_BASE_URL)
+        data, health = provider.collect([], timeout_ms=5000)
+
+        assert health.ok is True
+        assert health.row_count == 0
+        assert data["quotes"] == []
+        assert data["money_flow"] == []
+
+    def test_none_codes_returns_empty_success(self) -> None:
+        provider = ProxyQuoteProvider(base_url=PROXY_BASE_URL)
+        data, health = provider.collect(None, timeout_ms=5000)
+
+        assert health.ok is True
+        assert data["quotes"] == []
+
+    def test_empty_diff_returns_empty_lists(self) -> None:
+        provider = ProxyQuoteProvider(base_url=PROXY_BASE_URL)
+        mock_resp = _fake_urlopen_response({"rc": 0, "data": {"diff": []}})
+        with patch.object(urllib.request, "urlopen", return_value=mock_resp):
+            data, health = provider.collect(TEST_CODES, timeout_ms=5000)
+
+        assert health.ok is True
+        assert data["quotes"] == []
+        assert data["money_flow"] == []
+
+    def test_health_contains_latency(self) -> None:
+        provider = ProxyQuoteProvider(base_url=PROXY_BASE_URL)
+        mock_resp = _fake_urlopen_response(EASTMONEY_QUOTE_RESPONSE)
+        with patch.object(urllib.request, "urlopen", return_value=mock_resp):
+            _, health = provider.collect(TEST_CODES, timeout_ms=5000)
+
+        assert health.latency_ms >= 0
+        assert health.captured_at != ""
+
+
+class TestProxyQuoteProviderErrors:
+    """ProxyQuoteProvider error handling."""
+
+    def test_http_error_returns_failing_health(self) -> None:
+        provider = ProxyQuoteProvider(base_url=PROXY_BASE_URL)
+        mock_resp = _fake_urlopen_raise(urllib.error.URLError("connection refused"))
+        with patch.object(urllib.request, "urlopen", return_value=mock_resp):
+            data, health = provider.collect(TEST_CODES, timeout_ms=5000)
+
+        assert health.ok is False
+        assert health.source == "quote_proxy"
+        assert "connection refused" in health.error.lower()
+        assert data["quotes"] == []
+
+    def test_timeout_returns_failing_health(self) -> None:
+        provider = ProxyQuoteProvider(base_url=PROXY_BASE_URL)
+        mock_resp = _fake_urlopen_raise(TimeoutError("timed out"))
+        with patch.object(urllib.request, "urlopen", return_value=mock_resp):
+            data, health = provider.collect(TEST_CODES, timeout_ms=5000)
+
+        assert health.ok is False
+        assert "timed out" in health.error.lower()
+
+    def test_timeout_does_not_raise(self) -> None:
+        provider = ProxyQuoteProvider(base_url=PROXY_BASE_URL)
+        mock_resp = _fake_urlopen_raise(TimeoutError("timed out"))
+        with patch.object(urllib.request, "urlopen", return_value=mock_resp):
+            data, health = provider.collect(TEST_CODES, timeout_ms=5000)
+
+        assert health.ok is False
+
+    def test_invalid_json_returns_failing_health(self) -> None:
+        provider = ProxyQuoteProvider(base_url=PROXY_BASE_URL)
+        mock_resp = MagicMock()
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_resp.read.return_value = b"not json"
+        with patch.object(urllib.request, "urlopen", return_value=mock_resp):
+            data, health = provider.collect(TEST_CODES, timeout_ms=5000)
+
+        assert health.ok is False
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# collect_market_context with ProxyQuoteProvider
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+class TestCollectMarketContextWithProxyQuoteProvider:
+    """collect_market_context routes ProxyQuoteProvider identically to BridgeQuoteProvider."""
+
+    def test_proxy_quote_provider_populates_quotes(self) -> None:
+        hotlist = ProxyHotlistProvider(base_url=PROXY_BASE_URL)
+        quote = ProxyQuoteProvider(base_url=PROXY_BASE_URL)
+        theme = ThemeMappingProvider(FakeThemeRepo(THEME_MAP))
+
+        with patch.object(
+            urllib.request, "urlopen",
+            side_effect=[
+                _fake_urlopen_response(EASTMONEY_HOTLIST_RESPONSE),
+                _fake_urlopen_response(EASTMONEY_QUOTE_RESPONSE),
+            ],
+        ):
+            ctx = collect_market_context(
+                [hotlist, quote, theme], TEST_CODES, timeout_ms=5000
+            )
+
+        assert len(ctx.quotes) == 3
+        assert ctx.quotes[0]["code"] == "000001"
+        assert ctx.money_flow[0]["code"] == "000001"
+        assert ctx.depth == []
+        assert ctx.market_meta == {}
+
+    def test_proxy_quote_provider_populates_money_flow(self) -> None:
+        hotlist = ProxyHotlistProvider(base_url=PROXY_BASE_URL)
+        quote = ProxyQuoteProvider(base_url=PROXY_BASE_URL)
+        theme = ThemeMappingProvider(FakeThemeRepo(THEME_MAP))
+
+        with patch.object(
+            urllib.request, "urlopen",
+            side_effect=[
+                _fake_urlopen_response(EASTMONEY_HOTLIST_RESPONSE),
+                _fake_urlopen_response(EASTMONEY_QUOTE_RESPONSE),
+            ],
+        ):
+            ctx = collect_market_context(
+                [hotlist, quote, theme], TEST_CODES, timeout_ms=5000
+            )
+
+        assert len(ctx.money_flow) == 3
+        assert ctx.money_flow[0]["mainNetInflow"] == 50000000.0
+        assert ctx.money_flow[0]["mediumNetInflow"] == 5000000.0
+        assert ctx.money_flow[1]["mainNetInflow"] == -10000000.0
+
+    def test_derives_quote_codes_from_hotlist_when_codes_empty(self) -> None:
+        hotlist = ProxyHotlistProvider(base_url=PROXY_BASE_URL)
+        quote = ProxyQuoteProvider(base_url=PROXY_BASE_URL)
+        theme = ThemeMappingProvider(FakeThemeRepo(THEME_MAP))
+        captured_urls: list[str] = []
+
+        def record_urlopen(req: urllib.request.Request, timeout: float = 0) -> MagicMock:
+            captured_urls.append(req.full_url if hasattr(req, "full_url") else str(req))
+            if len(captured_urls) == 1:
+                return _fake_urlopen_response(EASTMONEY_HOTLIST_RESPONSE)
+            return _fake_urlopen_response(EASTMONEY_QUOTE_RESPONSE)
+
+        with patch.object(urllib.request, "urlopen", side_effect=record_urlopen):
+            ctx = collect_market_context([hotlist, quote, theme], [], timeout_ms=5000)
+
+        assert len(ctx.stocks) == 3
+        assert len(ctx.quotes) == 3
+        assert len(ctx.money_flow) == 3
+
+    def test_quote_failure_still_assembles_healthy_data(self) -> None:
+        hotlist = ProxyHotlistProvider(base_url=PROXY_BASE_URL)
+        quote = ProxyQuoteProvider(base_url=PROXY_BASE_URL)
+        theme = ThemeMappingProvider(FakeThemeRepo(THEME_MAP))
+
+        with patch.object(
+            urllib.request, "urlopen",
+            side_effect=[
+                _fake_urlopen_response(EASTMONEY_HOTLIST_RESPONSE),
+                _fake_urlopen_raise(urllib.error.URLError("offline")),
+            ],
+        ):
+            ctx = collect_market_context(
+                [hotlist, quote, theme], TEST_CODES, timeout_ms=5000
+            )
+
+        assert len(ctx.stocks) == 3
+        assert ctx.quotes == []
+        assert ctx.money_flow == []
+        assert ctx.themes["000001"] == ["银行", "深圳"]
+
+        health_sources = {h.source: h.ok for h in ctx.source_health}
+        assert health_sources["hotlist_proxy"] is True
+        assert health_sources["quote_proxy"] is False
+        assert health_sources["theme_mapping"] is True
+
+    def test_aggregates_source_health_with_proxy_quote(self) -> None:
+        hotlist = ProxyHotlistProvider(base_url=PROXY_BASE_URL)
+        quote = ProxyQuoteProvider(base_url=PROXY_BASE_URL)
+        theme = ThemeMappingProvider(FakeThemeRepo(THEME_MAP))
+
+        with patch.object(
+            urllib.request, "urlopen",
+            side_effect=[
+                _fake_urlopen_response(EASTMONEY_HOTLIST_RESPONSE),
+                _fake_urlopen_response(EASTMONEY_QUOTE_RESPONSE),
+            ],
+        ):
+            ctx = collect_market_context(
+                [hotlist, quote, theme], TEST_CODES, timeout_ms=5000
+            )
+
+        assert len(ctx.source_health) == 3
+        sources = {h.source for h in ctx.source_health}
+        assert sources == {"hotlist_proxy", "quote_proxy", "theme_mapping"}

@@ -439,13 +439,12 @@ class SnapshotCollectorService:
 
     def _create_providers(self) -> list[Any]:
         """Create data-source providers from settings."""
-        from .providers import BridgeQuoteProvider, ProxyHotlistProvider
+        from .providers import ProxyHotlistProvider, ProxyQuoteProvider
 
         proxy_url = self._proxy_base_url()
-        bridge_url = self._bridge_base_url()
         return [
             ProxyHotlistProvider(base_url=proxy_url),
-            BridgeQuoteProvider(base_url=bridge_url),
+            ProxyQuoteProvider(base_url=proxy_url),
         ]
 
     def _proxy_base_url(self) -> str:

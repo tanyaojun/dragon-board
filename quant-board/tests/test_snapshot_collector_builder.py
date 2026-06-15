@@ -11,7 +11,10 @@ from backend.snapshot_collector.models import (
     SnapshotSlot,
     SourceHealth,
 )
-from backend.snapshot_collector.builder import build_ingest_payload
+from backend.snapshot_collector.builder import (
+    _enrich_stock_rows_from_quotes,
+    build_ingest_payload,
+)
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -415,3 +418,163 @@ class TestBuilderEdgeCases:
             assert result["snapshotId"] == f"{st}:2026-06-11:15:00"
             assert result["items"][0]["type"] == st
             assert result["frames"][0]["type"] == st
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Quote and money-flow enrichment tests
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+class TestEnrichStockRowsFromQuotes:
+    """Unit tests for _enrich_stock_rows_from_quotes."""
+
+    def test_ignores_empty_quotes_and_money_flow(self) -> None:
+        rows = [{"code": "000001", "name": "平安银行", "rank": 1}]
+        _enrich_stock_rows_from_quotes(rows, [], [])
+        assert "pe" not in rows[0]
+        assert "moneyFlow" not in rows[0]
+
+    def test_fills_missing_price_from_quote(self) -> None:
+        rows = [{"code": "000001", "name": "平安银行", "rank": 1}]
+        quotes = [{"code": "000001", "price": 12.50, "pctChange": 2.35}]
+        _enrich_stock_rows_from_quotes(rows, quotes, [])
+        assert rows[0]["price"] == 12.50
+        assert rows[0]["pctChange"] == 2.35
+
+    def test_fills_zero_price_from_quote(self) -> None:
+        rows = [{"code": "000001", "name": "平安银行", "rank": 1, "price": 0}]
+        quotes = [{"code": "000001", "price": 12.50}]
+        _enrich_stock_rows_from_quotes(rows, quotes, [])
+        assert rows[0]["price"] == 12.50
+
+    def test_does_not_overwrite_existing_non_zero_price(self) -> None:
+        rows = [{"code": "000001", "name": "平安银行", "rank": 1, "price": 13.00}]
+        quotes = [{"code": "000001", "price": 12.50}]
+        _enrich_stock_rows_from_quotes(rows, quotes, [])
+        assert rows[0]["price"] == 13.00
+
+    def test_adds_pe_and_total_market_value(self) -> None:
+        rows = [{"code": "000001", "name": "平安银行", "rank": 1}]
+        quotes = [{"code": "000001", "pe": 8.5, "totalMarketValue": 350000000000.0}]
+        _enrich_stock_rows_from_quotes(rows, quotes, [])
+        assert rows[0]["pe"] == 8.5
+        assert rows[0]["totalMarketValue"] == 350000000000.0
+
+    def test_skips_pe_when_none(self) -> None:
+        rows = [{"code": "000001", "name": "平安银行", "rank": 1}]
+        quotes = [{"code": "000001"}]
+        _enrich_stock_rows_from_quotes(rows, quotes, [])
+        assert "pe" not in rows[0]
+
+    def test_adds_money_flow_as_structured_dict(self) -> None:
+        rows = [{"code": "000001", "name": "平安银行", "rank": 1}]
+        money_flow = [
+            {
+                "code": "000001",
+                "mainNetInflow": 50000000.0,
+                "superLargeNetInflow": 20000000.0,
+                "largeNetInflow": 15000000.0,
+                "mediumNetInflow": 5000000.0,
+                "smallNetInflow": 10000000.0,
+            }
+        ]
+        _enrich_stock_rows_from_quotes(rows, [], money_flow)
+        assert rows[0]["moneyFlow"] == {
+            "mainNetInflow": 50000000.0,
+            "superLargeNetInflow": 20000000.0,
+            "largeNetInflow": 15000000.0,
+            "mediumNetInflow": 5000000.0,
+            "smallNetInflow": 10000000.0,
+        }
+
+    def test_code_mismatch_does_not_cross_assign(self) -> None:
+        rows = [
+            {"code": "000001", "name": "平安银行", "rank": 1},
+            {"code": "600000", "name": "浦发银行", "rank": 2},
+        ]
+        quotes = [{"code": "000001", "price": 12.50}]
+        _enrich_stock_rows_from_quotes(rows, quotes, [])
+        assert rows[0]["price"] == 12.50
+        assert "price" not in rows[1]
+
+    def test_skips_row_without_code(self) -> None:
+        rows = [{"name": "NoCode", "rank": 1}]
+        quotes = [{"code": "000001", "price": 12.50}]
+        _enrich_stock_rows_from_quotes(rows, quotes, [])
+        assert "price" not in rows[0]
+
+    def test_quotes_and_money_flow_together(self) -> None:
+        rows = [{"code": "000001", "name": "平安银行", "rank": 1}]
+        quotes = [{"code": "000001", "price": 12.50, "pe": 8.5, "totalMarketValue": 350000000000.0}]
+        money_flow = [{"code": "000001", "mainNetInflow": 50000000.0}]
+        _enrich_stock_rows_from_quotes(rows, quotes, money_flow)
+        assert rows[0]["price"] == 12.50
+        assert rows[0]["pe"] == 8.5
+        assert rows[0]["totalMarketValue"] == 350000000000.0
+        assert rows[0]["moneyFlow"] is not None
+
+
+class TestBuilderWithEnrichment:
+    """Integration: build_ingest_payload with quotes and money_flow in the context."""
+
+    def test_enrichment_applied_in_full_pipeline(self) -> None:
+        """Verify that quotes and money_flow enrich the stock rows in build_ingest_payload."""
+        slot = make_slot_1500()
+        ctx = make_fake_context()
+
+        # Add money_flow to the context (not present in make_fake_context)
+        ctx.money_flow = [
+            {
+                "code": "000001",
+                "mainNetInflow": 50000000.0,
+                "superLargeNetInflow": 20000000.0,
+                "largeNetInflow": 15000000.0,
+                "mediumNetInflow": 5000000.0,
+                "smallNetInflow": 10000000.0,
+            },
+            {
+                "code": "600000",
+                "mainNetInflow": -10000000.0,
+                "superLargeNetInflow": -5000000.0,
+                "largeNetInflow": -3000000.0,
+                "mediumNetInflow": 0.0,
+                "smallNetInflow": -2000000.0,
+            },
+        ]
+
+        # Add pe and totalMarketValue to the quotes
+        ctx.quotes = [
+            {"code": "000001", "price": 12.50, "pctChange": 2.35, "volume": 150000000,
+             "pe": 8.5, "totalMarketValue": 350000000000.0},
+            {"code": "600000", "price": 9.80, "pctChange": -0.51, "volume": 80000000,
+             "pe": 5.2, "totalMarketValue": 180000000000.0},
+        ]
+
+        result = build_ingest_payload(slot, ctx)
+        stock_rows = result["stockRows"]
+
+        # Row 0 should have enrichment
+        row0 = stock_rows[0]
+        assert row0["code"] == "000001"
+        assert row0["pe"] == 8.5
+        assert row0["totalMarketValue"] == 350000000000.0
+        assert row0["moneyFlow"]["mainNetInflow"] == 50000000.0
+
+        # Row 1 should have enrichment
+        row1 = stock_rows[1]
+        assert row1["code"] == "600000"
+        assert row1["pe"] == 5.2
+        assert row1["totalMarketValue"] == 180000000000.0
+        assert row1["moneyFlow"]["mainNetInflow"] == -10000000.0
+
+    def test_quote_fills_missing_price_in_stock_row(self) -> None:
+        """When hotlist has zero price, quote should fill it."""
+        slot = make_slot_1500()
+        ctx = make_fake_context()
+        # Make one stock have zero price
+        ctx.stocks[0]["price"] = 0
+        ctx.quotes = [{"code": "000001", "price": 12.50}]
+
+        result = build_ingest_payload(slot, ctx)
+        row0 = result["stockRows"][0]
+        assert row0["price"] == 12.50

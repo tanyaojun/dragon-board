@@ -11,6 +11,62 @@ from typing import Any
 from .models import MarketDataContext, SnapshotSlot
 
 
+def _enrich_stock_rows_from_quotes(
+    stock_rows: list[dict[str, Any]],
+    quotes: list[dict[str, Any]],
+    money_flow: list[dict[str, Any]],
+) -> None:
+    """Merge quote and money-flow data into stock rows in-place.
+
+    Only fields that are missing or zero in the stock row are filled from
+    the quote.  New fields (totalMarketValue, moneyFlow) are always added
+    when available.
+    """
+    if not quotes and not money_flow:
+        return
+
+    quote_by_code: dict[str, dict[str, Any]] = {}
+    for q in quotes:
+        code = str(q.get("code") or "").strip()
+        if code:
+            quote_by_code[code] = q
+
+    flow_by_code: dict[str, dict[str, Any]] = {}
+    for mf in money_flow:
+        code = str(mf.get("code") or "").strip()
+        if code:
+            flow_by_code[code] = mf
+
+    for row in stock_rows:
+        code = str(row.get("code") or "").strip()
+        if not code:
+            continue
+
+        q = quote_by_code.get(code)
+        if q:
+            # Override hotlist values with more accurate quote values when
+            # the hotlist value is missing or zero.
+            for field in ("price", "pctChange", "volume", "amount", "turnover"):
+                if not row.get(field):
+                    val = q.get(field)
+                    if val:
+                        row[field] = val
+
+            # Fields not provided by the hotlist at all
+            # PE ratio
+            pe = q.get("pe")
+            if pe is not None:
+                row["pe"] = pe
+            # Total market value (from EastMoney f20)
+            tmv = q.get("totalMarketValue")
+            if tmv is not None:
+                row["totalMarketValue"] = tmv
+
+        mf = flow_by_code.get(code)
+        if mf:
+            row["moneyFlow"] = {k: v for k, v in mf.items() if k != "code"}
+
+
 def build_ingest_payload(
     slot: SnapshotSlot,
     market_context: MarketDataContext,
@@ -118,6 +174,9 @@ def build_ingest_payload(
             row["themes"] = stock["themes"]
 
         stock_rows.append(row)
+
+    # Enrich stock rows with quote-derived fields
+    _enrich_stock_rows_from_quotes(stock_rows, market_context.quotes, market_context.money_flow)
 
     stock_rows.sort(key=lambda r: int(r.get("rank") or 999999))
 

@@ -89,6 +89,7 @@ class MarketDataContext:
     stocks: list[dict[str, Any]] = field(default_factory=list)
     quotes: list[dict[str, Any]] = field(default_factory=list)
     depth: list[dict[str, Any]] = field(default_factory=list)
+    money_flow: list[dict[str, Any]] = field(default_factory=list)
     themes: dict[str, list[str]] = field(default_factory=dict)
     sectors: list[dict[str, Any]] = field(default_factory=list)
     source_health: list[SourceHealth] = field(default_factory=list)
