@@ -156,6 +156,26 @@ class _FakeService:
                 "countDrifts": [],
             },
         )
+        self._compare_return = kwargs.get(
+            "compare_return",
+            {
+                "ok": True,
+                "datasetA": "dragonboard_live",
+                "datasetB": "dragonboard_backend_shadow",
+                "snapshotType": "half_hour",
+                "tradingDates": ["2026-06-11"],
+                "perDate": [],
+                "summary": {
+                    "totalSlotsCompared": 0,
+                    "slotsInBoth": 0,
+                    "slotsOnlyInA": 0,
+                    "slotsOnlyInB": 0,
+                    "avgStockRowDiff": 0.0,
+                    "emptyFramesA": 0,
+                    "emptyFramesB": 0,
+                },
+            },
+        )
 
     def run_once(self, request: Any) -> _FakeRunResult:
         if self._run_once_return is not None:
@@ -182,6 +202,9 @@ class _FakeService:
 
     def audit(self, dataset_id: str, snapshot_type: str, trading_date: str | None = None) -> dict[str, Any]:
         return self._audit_return
+
+    def compare(self, dataset_id_a: str, dataset_id_b: str, snapshot_type: str, trading_date: str | None = None) -> dict[str, Any]:
+        return self._compare_return
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -339,6 +362,31 @@ class TestCollectorCLIParser:
         args = self.parser.parse_args([
             "snapshot-collector-audit",
             "--dataset-id", "dragonboard_backend_shadow",
+            "--snapshot-type", "half_hour",
+            "--trading-date", "2026-06-11",
+        ])
+        assert args.trading_date == "2026-06-11"
+
+    # ── snapshot-collector-compare ───────────────────────────────────────────
+
+    def test_compare_subcommand_registered(self) -> None:
+        """snapshot-collector-compare subparser exists."""
+        args = self.parser.parse_args([
+            "snapshot-collector-compare",
+            "--dataset-id-a", "dragonboard_live",
+            "--dataset-id-b", "dragonboard_backend_shadow",
+            "--snapshot-type", "half_hour",
+        ])
+        assert args.func is not None
+        assert args.dataset_id_a == "dragonboard_live"
+        assert args.dataset_id_b == "dragonboard_backend_shadow"
+
+    def test_compare_optional_trading_date(self) -> None:
+        """--trading-date is optional for compare."""
+        args = self.parser.parse_args([
+            "snapshot-collector-compare",
+            "--dataset-id-a", "dragonboard_live",
+            "--dataset-id-b", "dragonboard_backend_shadow",
             "--snapshot-type", "half_hour",
             "--trading-date", "2026-06-11",
         ])
@@ -731,6 +779,81 @@ class TestCollectorCLIHandlers:
         assert len(output["countDrifts"]) == 1
         assert output["totalFrames"] == 8
         assert output["totalRecords"] == 80
+
+    # ── snapshot-collector-compare ────────────────────────────────────────────
+
+    def test_compare_output(self) -> None:
+        """Compare handler prints JSON with datasetA, datasetB, summary."""
+        fake_result = {
+            "ok": True,
+            "datasetA": "dragonboard_live",
+            "datasetB": "dragonboard_backend_shadow",
+            "snapshotType": "half_hour",
+            "tradingDates": ["2026-06-11"],
+            "perDate": [
+                {
+                    "tradingDate": "2026-06-11",
+                    "totalExpectedSlots": 10,
+                    "slotsInBoth": ["half_hour:2026-06-11:10:00", "half_hour:2026-06-11:10:30"],
+                    "slotsOnlyInA": ["half_hour:2026-06-11:11:00"],
+                    "slotsOnlyInB": [],
+                    "slotDetails": [],
+                }
+            ],
+            "summary": {
+                "totalSlotsCompared": 2,
+                "slotsInBoth": 2,
+                "slotsOnlyInA": 1,
+                "slotsOnlyInB": 0,
+                "avgStockRowDiff": 5.0,
+                "emptyFramesA": 0,
+                "emptyFramesB": 0,
+            },
+        }
+        fake_svc = _FakeService(compare_return=fake_result)
+        patches = self._patch_service(fake_svc)
+        with patches["create_snapshot_collector_repository"], patches["SnapshotCollectorService"]:
+            from backend.cli import cmd_snapshot_collector_compare
+
+            output = _capture_json_output(
+                cmd_snapshot_collector_compare,
+                _make_args(dataset_id_a="dragonboard_live", dataset_id_b="dragonboard_backend_shadow"),
+            )
+
+        assert output["ok"] is True
+        assert output["datasetA"] == "dragonboard_live"
+        assert output["datasetB"] == "dragonboard_backend_shadow"
+        assert output["summary"]["slotsInBoth"] == 2
+        assert output["summary"]["slotsOnlyInA"] == 1
+        assert output["summary"]["avgStockRowDiff"] == 5.0
+        assert len(output["perDate"]) == 1
+
+    def test_compare_with_trading_date(self) -> None:
+        """Compare handler passes trading_date through to service."""
+        fake_result = {
+            "ok": True,
+            "datasetA": "dragonboard_live",
+            "datasetB": "dragonboard_backend_shadow",
+            "snapshotType": "half_hour",
+            "tradingDates": ["2026-06-11"],
+            "perDate": [],
+            "summary": {"totalSlotsCompared": 0},
+        }
+        fake_svc = _FakeService(compare_return=fake_result)
+        patches = self._patch_service(fake_svc)
+        with patches["create_snapshot_collector_repository"], patches["SnapshotCollectorService"]:
+            from backend.cli import cmd_snapshot_collector_compare
+
+            output = _capture_json_output(
+                cmd_snapshot_collector_compare,
+                _make_args(
+                    dataset_id_a="dragonboard_live",
+                    dataset_id_b="dragonboard_backend_shadow",
+                    trading_date="2026-06-11",
+                ),
+            )
+
+        assert output["tradingDates"] == ["2026-06-11"]
 
     # ── scheduler-status ────────────────────────────────────────────────────
 

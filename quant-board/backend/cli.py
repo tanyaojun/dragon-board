@@ -1281,6 +1281,19 @@ def cmd_snapshot_collector_audit(args: argparse.Namespace) -> None:
     print_json(result)
 
 
+def cmd_snapshot_collector_compare(args: argparse.Namespace) -> None:
+    """Compare snapshot data between two datasets and print structured diff."""
+    repo = create_snapshot_collector_repository()
+    service = _create_snapshot_collector_service(repo)
+    result = service.compare(
+        args.dataset_id_a,
+        args.dataset_id_b,
+        args.snapshot_type,
+        trading_date=getattr(args, "trading_date", None),
+    )
+    print_json(result)
+
+
 def cmd_snapshot_collector_scheduler_status(_: argparse.Namespace) -> None:
     """Print scheduler operational state as JSON."""
     from backend.snapshot_collector.scheduler import snapshot_collector_scheduler
@@ -1733,6 +1746,16 @@ def build_parser() -> argparse.ArgumentParser:
     collector_audit_cmd.add_argument("--snapshot-type", choices=["quarter_hour", "half_hour", "hourly", "daily"], required=True)
     collector_audit_cmd.add_argument("--trading-date", default=None)
     collector_audit_cmd.set_defaults(func=cmd_snapshot_collector_audit)
+
+    collector_compare_cmd = sub.add_parser(
+        "snapshot-collector-compare",
+        help="Compare snapshot data between two datasets (e.g. shadow vs live)",
+    )
+    collector_compare_cmd.add_argument("--dataset-id-a", required=True, help="First dataset ID (e.g. dragonboard_live)")
+    collector_compare_cmd.add_argument("--dataset-id-b", required=True, help="Second dataset ID (e.g. dragonboard_backend_shadow)")
+    collector_compare_cmd.add_argument("--snapshot-type", choices=["quarter_hour", "half_hour", "hourly", "daily"], required=True)
+    collector_compare_cmd.add_argument("--trading-date", default=None, help="Optional single date to compare")
+    collector_compare_cmd.set_defaults(func=cmd_snapshot_collector_compare)
 
     scheduler_status_cmd = sub.add_parser(
         "snapshot-collector-scheduler-status",

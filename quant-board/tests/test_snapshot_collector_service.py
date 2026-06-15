@@ -23,6 +23,65 @@ class FakeSnapshotRepository:
         self._ingests: list[dict[str, Any]] = []
         self._runs: list[dict[str, Any]] = []
         self._state: dict[str, Any] = {"mode": "idle", "lastRunAt": None}
+        # Store typed documents for audit/compare tests
+        self._frames: list[dict[str, Any]] = []
+        self._records: list[dict[str, Any]] = []
+        self._stock_rows: list[dict[str, Any]] = []
+        self._sector_rows: list[dict[str, Any]] = []
+
+    def _add_frame(
+        self,
+        dataset_id: str,
+        snapshot_id: str,
+        snapshot_type: str = "half_hour",
+        trading_date: str = "2026-06-11",
+        slot_time: str = "10:00",
+        stock_row_count: int = 100,
+        sector_row_count: int = 20,
+        **extra: Any,
+    ) -> None:
+        self._frames.append(
+            {
+                "datasetId": dataset_id,
+                "snapshotId": snapshot_id,
+                "type": snapshot_type,
+                "tradingDate": trading_date,
+                "slotTime": slot_time,
+                "stockRowCount": stock_row_count,
+                "sectorRowCount": sector_row_count,
+                **extra,
+            }
+        )
+
+    def _add_stock_row(
+        self,
+        dataset_id: str,
+        snapshot_id: str,
+        code: str = "000001",
+        **extra: Any,
+    ) -> None:
+        row: dict[str, Any] = {
+            "datasetId": dataset_id,
+            "snapshotId": snapshot_id,
+            "code": code,
+            "name": f"Stock_{code}",
+            "price": 10.5,
+            "changePct": 2.5,
+            "volume": 1000000,
+            "turnover": 10500000.0,
+            "turnoverRate": 1.2,
+            "volumeRatio": 1.1,
+            "hotness": 0.85,
+            "rank": 1,
+            "depth10": [],
+            "limitUpPool": [],
+            "sectorLabel": "银行",
+            "moneyFlow": {"l1": 500000},
+            "amplitude": 3.2,
+            "totalMarketValue": 1000000000.0,
+            **extra,
+        }
+        self._stock_rows.append(row)
 
     def snapshot_exists(self, dataset_id: str, snapshot_id: str) -> bool:
         return snapshot_id in self._snapshots.get(dataset_id, set())
@@ -44,7 +103,6 @@ class FakeSnapshotRepository:
         }
         snapshot_ids.discard("")
         existing = self._snapshots.setdefault(ds_id, set())
-        # Always record the write — dedup is a service-level concern.
         existing.update(snapshot_ids)
         self._ingests.append(
             {
@@ -53,6 +111,10 @@ class FakeSnapshotRepository:
                 "idempotencyKey": idempotency_key,
             }
         )
+        self._frames.extend(frames)
+        self._records.extend(records)
+        self._stock_rows.extend(stock_rows)
+        self._sector_rows.extend(sector_rows)
         return {"status": "done", "deduped": False}
 
     def insert_run(self, run: dict[str, Any]) -> None:
@@ -75,14 +137,182 @@ class FakeSnapshotRepository:
         snapshot_type: str,
         trading_date: str | None = None,
     ) -> dict[str, Any]:
+        frames = [
+            r for r in self._frames
+            if r.get("datasetId") == dataset_id and r.get("type") == snapshot_type
+        ]
+        if trading_date:
+            frames = [r for r in frames if r.get("tradingDate") == trading_date]
+
+        snapshot_ids = list({str(r.get("snapshotId")) for r in frames if r.get("snapshotId")})
+        records = [
+            r for r in self._records
+            if r.get("datasetId") == dataset_id and r.get("snapshotId") in snapshot_ids
+        ]
+        stock_rows = [
+            r for r in self._stock_rows
+            if r.get("datasetId") == dataset_id and r.get("snapshotId") in snapshot_ids
+        ]
+        sector_rows = [
+            r for r in self._sector_rows
+            if r.get("datasetId") == dataset_id and r.get("snapshotId") in snapshot_ids
+        ]
+
+        from backend.snapshot_collector.service_factory import (
+            _STOCK_ROW_AUDIT_FIELDS,
+            _compute_field_missing_rates,
+            _compute_missing_slots,
+            _detect_count_drifts,
+        )
+
         return {
             "datasetId": dataset_id,
             "snapshotType": snapshot_type,
             "tradingDate": trading_date,
-            "missingSlots": [],
-            "emptyFrames": [],
-            "missingRecords": [],
-            "countDrifts": [],
+            "totalFrames": len(frames),
+            "totalRecords": len(records),
+            "totalStockRows": len(stock_rows),
+            "totalSectorRows": len(sector_rows),
+            "missingSlots": _compute_missing_slots(snapshot_type, frames, trading_date),
+            "emptyFrames": sorted(
+                sid for sid in snapshot_ids
+                if not any(
+                    r.get("snapshotId") == sid and r.get("stockRowCount", 0) > 0
+                    for r in frames
+                )
+            ),
+            "missingRecords": sorted(
+                set(snapshot_ids) - {str(r.get("snapshotId")) for r in records}
+            ),
+            "countDrifts": _detect_count_drifts(frames, stock_rows),
+            "fieldMissingRates": _compute_field_missing_rates(
+                stock_rows, _STOCK_ROW_AUDIT_FIELDS
+            ),
+        }
+
+    def compare_datasets(
+        self,
+        dataset_id_a: str,
+        dataset_id_b: str,
+        snapshot_type: str,
+        trading_date: str | None = None,
+    ) -> dict[str, Any]:
+        from backend.snapshot_collector.service_factory import (
+            _STOCK_ROW_AUDIT_FIELDS,
+            _compute_field_missing_rates,
+        )
+        from backend.snapshot_collector.slots import SLOT_TIMES
+
+        if snapshot_type not in SLOT_TIMES:
+            return {
+                "ok": False,
+                "error": f"Unknown snapshot_type: {snapshot_type!r}",
+                "datasetA": dataset_id_a,
+                "datasetB": dataset_id_b,
+                "snapshotType": snapshot_type,
+            }
+
+        frames_a = [r for r in self._frames if r.get("datasetId") == dataset_id_a and r.get("type") == snapshot_type]
+        frames_b = [r for r in self._frames if r.get("datasetId") == dataset_id_b and r.get("type") == snapshot_type]
+
+        td_set_a = {str(r.get("tradingDate") or "") for r in frames_a}
+        td_set_b = {str(r.get("tradingDate") or "") for r in frames_b}
+        td_set_a.discard("")
+        td_set_b.discard("")
+
+        if trading_date:
+            trading_dates = {trading_date}
+        else:
+            trading_dates = td_set_a | td_set_b
+
+        expected_times = SLOT_TIMES[snapshot_type]
+        per_date: list[dict[str, Any]] = []
+        slots_in_both = 0
+        slots_only_in_a = 0
+        slots_only_in_b = 0
+        total_compared = 0
+        empty_frames_a = 0
+        empty_frames_b = 0
+        all_diffs: list[int] = []
+
+        for td in sorted(trading_dates):
+            if not td:
+                continue
+            expected_set = {f"{snapshot_type}:{td}:{t}" for t in expected_times}
+            f_a = [r for r in frames_a if r.get("tradingDate") == td]
+            f_b = [r for r in frames_b if r.get("tradingDate") == td]
+            sid_a = {str(r.get("snapshotId") or "") for r in f_a}
+            sid_b = {str(r.get("snapshotId") or "") for r in f_b}
+            sid_a.discard("")
+            sid_b.discard("")
+
+            sid_a_exp = sid_a & expected_set
+            sid_b_exp = sid_b & expected_set
+
+            slots_in_both += len(sid_a_exp & sid_b_exp)
+            slots_only_in_a += len(sid_a_exp - sid_b_exp)
+            slots_only_in_b += len(sid_b_exp - sid_a_exp)
+
+            slot_details: list[dict[str, Any]] = []
+            for sid in sorted(sid_a_exp | sid_b_exp):
+                total_compared += 1
+                in_a = sid in sid_a
+                in_b = sid in sid_b
+                detail: dict[str, Any] = {"snapshotId": sid, "inA": in_a, "inB": in_b}
+                if in_a:
+                    fa = next((r for r in f_a if r.get("snapshotId") == sid), {})
+                    detail["stockRowCountA"] = fa.get("stockRowCount", 0) or 0
+                    detail["sectorRowCountA"] = fa.get("sectorRowCount", 0) or 0
+                    if detail["stockRowCountA"] == 0:
+                        empty_frames_a += 1
+                if in_b:
+                    fb = next((r for r in f_b if r.get("snapshotId") == sid), {})
+                    detail["stockRowCountB"] = fb.get("stockRowCount", 0) or 0
+                    detail["sectorRowCountB"] = fb.get("sectorRowCount", 0) or 0
+                    if detail["stockRowCountB"] == 0:
+                        empty_frames_b += 1
+                if in_a and in_b:
+                    all_diffs.append(abs(detail.get("stockRowCountA", 0) - detail.get("stockRowCountB", 0)))
+                # Per-slot field missing rates
+                if in_a:
+                    srows_a = [r for r in self._stock_rows if r.get("datasetId") == dataset_id_a and r.get("snapshotId") == sid]
+                    detail["fieldMissingRatesA"] = _compute_field_missing_rates(
+                        srows_a, _STOCK_ROW_AUDIT_FIELDS
+                    )
+                if in_b:
+                    srows_b = [r for r in self._stock_rows if r.get("datasetId") == dataset_id_b and r.get("snapshotId") == sid]
+                    detail["fieldMissingRatesB"] = _compute_field_missing_rates(
+                        srows_b, _STOCK_ROW_AUDIT_FIELDS
+                    )
+                slot_details.append(detail)
+
+            per_date.append({
+                "tradingDate": td,
+                "totalExpectedSlots": len(expected_times),
+                "slotsInBoth": sorted(sid_a_exp & sid_b_exp),
+                "slotsOnlyInA": sorted(sid_a_exp - sid_b_exp),
+                "slotsOnlyInB": sorted(sid_b_exp - sid_a_exp),
+                "slotDetails": slot_details,
+            })
+
+        avg_diff = round(sum(all_diffs) / len(all_diffs), 2) if all_diffs else 0.0
+
+        return {
+            "ok": True,
+            "datasetA": dataset_id_a,
+            "datasetB": dataset_id_b,
+            "snapshotType": snapshot_type,
+            "tradingDates": sorted(trading_dates),
+            "perDate": per_date,
+            "summary": {
+                "totalSlotsCompared": total_compared,
+                "slotsInBoth": slots_in_both,
+                "slotsOnlyInA": slots_only_in_a,
+                "slotsOnlyInB": slots_only_in_b,
+                "avgStockRowDiff": avg_diff,
+                "emptyFramesA": empty_frames_a,
+                "emptyFramesB": empty_frames_b,
+            },
         }
 
 
@@ -239,6 +469,7 @@ class TestRepositoryPortProtocol:
             "list_runs",
             "collector_status",
             "audit_dataset",
+            "compare_datasets",
         }
         missing = expected - members
         assert not missing, f"Protocol is missing methods: {missing}"
@@ -1239,6 +1470,177 @@ class TestServiceAudit:
 
         audit = service.audit("ds", "half_hour")
         assert audit["tradingDate"] is None
+
+    def test_audit_includes_field_missing_rates(self) -> None:
+        repo = FakeSnapshotRepository()
+        repo._add_frame("ds", "half_hour:2026-06-11:10:00")
+        repo._add_stock_row("ds", "half_hour:2026-06-11:10:00", code="000001")
+        repo._add_stock_row("ds", "half_hour:2026-06-11:10:00", code="000002",
+                            price=None, changePct=None)  # missing fields
+
+        audit = repo.audit_dataset("ds", "half_hour", trading_date="2026-06-11")
+        assert "fieldMissingRates" in audit
+        rates = audit["fieldMissingRates"]
+        assert "price" in rates
+        # One of two rows has price=None
+        assert rates["price"]["missing"] >= 1
+
+    def test_audit_detects_missing_slots(self) -> None:
+        repo = FakeSnapshotRepository()
+        # Only add 10:00 frame, not 09:30
+        repo._add_frame("ds", "half_hour:2026-06-11:10:00")
+
+        audit = repo.audit_dataset("ds", "half_hour", trading_date="2026-06-11")
+        missing = audit["missingSlots"]
+        # half_hour has 10 slots, we added 1, so 9 missing
+        assert len(missing) >= 1
+        assert any("09:30" in m for m in missing)
+
+    def test_audit_total_counts(self) -> None:
+        repo = FakeSnapshotRepository()
+        repo._add_frame("ds", "half_hour:2026-06-11:10:00", stock_row_count=2)
+        repo._add_frame("ds", "half_hour:2026-06-11:10:30", stock_row_count=1)
+        repo._add_stock_row("ds", "half_hour:2026-06-11:10:00", code="000001")
+        repo._add_stock_row("ds", "half_hour:2026-06-11:10:00", code="000002")
+        repo._add_stock_row("ds", "half_hour:2026-06-11:10:30", code="000003")
+        repo._records.append({"datasetId": "ds", "snapshotId": "half_hour:2026-06-11:10:00"})
+
+        audit = repo.audit_dataset("ds", "half_hour", trading_date="2026-06-11")
+        assert audit["totalFrames"] == 2
+        assert audit["totalStockRows"] == 3
+        assert audit["totalRecords"] == 1
+        assert "half_hour:2026-06-11:10:30" in audit["missingRecords"]
+
+
+# ── Compare tests (Fake repository) ──────────────────────────────────────────
+
+
+class TestFakeRepositoryCompareDatasets:
+    """compare_datasets returns structured cross-dataset diff."""
+
+    def test_compare_returns_expected_keys(self) -> None:
+        repo = FakeSnapshotRepository()
+        result = repo.compare_datasets("live", "shadow", "half_hour", trading_date="2026-06-11")
+        assert result["ok"] is True
+        assert result["datasetA"] == "live"
+        assert result["datasetB"] == "shadow"
+        assert "perDate" in result
+        assert "summary" in result
+        assert "tradingDates" in result
+
+    def test_compare_both_have_same_slot(self) -> None:
+        repo = FakeSnapshotRepository()
+        repo._add_frame("live", "half_hour:2026-06-11:10:00", trading_date="2026-06-11", slot_time="10:00", stock_row_count=100)
+        repo._add_frame("shadow", "half_hour:2026-06-11:10:00", trading_date="2026-06-11", slot_time="10:00", stock_row_count=95)
+
+        result = repo.compare_datasets("live", "shadow", "half_hour", trading_date="2026-06-11")
+        assert result["summary"]["slotsInBoth"] >= 1
+        assert result["summary"]["slotsOnlyInA"] == 0
+        assert result["summary"]["slotsOnlyInB"] == 0
+
+    def test_compare_slot_only_in_one_dataset(self) -> None:
+        repo = FakeSnapshotRepository()
+        repo._add_frame("live", "half_hour:2026-06-11:10:00", trading_date="2026-06-11", slot_time="10:00")
+        # shadow has no frame for 10:00
+
+        result = repo.compare_datasets("live", "shadow", "half_hour", trading_date="2026-06-11")
+        assert result["summary"]["slotsOnlyInA"] >= 1
+        assert result["summary"]["slotsInBoth"] == 0
+
+    def test_compare_reports_empty_frames(self) -> None:
+        repo = FakeSnapshotRepository()
+        repo._add_frame("live", "half_hour:2026-06-11:10:00", trading_date="2026-06-11", slot_time="10:00", stock_row_count=0)
+        repo._add_frame("shadow", "half_hour:2026-06-11:10:00", trading_date="2026-06-11", slot_time="10:00", stock_row_count=100)
+
+        result = repo.compare_datasets("live", "shadow", "half_hour", trading_date="2026-06-11")
+        assert result["summary"]["emptyFramesA"] >= 1
+        assert result["summary"]["emptyFramesB"] == 0
+
+    def test_compare_reports_stock_row_diff(self) -> None:
+        repo = FakeSnapshotRepository()
+        repo._add_frame("live", "half_hour:2026-06-11:10:00", trading_date="2026-06-11", slot_time="10:00", stock_row_count=200)
+        repo._add_frame("shadow", "half_hour:2026-06-11:10:00", trading_date="2026-06-11", slot_time="10:00", stock_row_count=100)
+
+        result = repo.compare_datasets("live", "shadow", "half_hour", trading_date="2026-06-11")
+        assert result["summary"]["avgStockRowDiff"] == 100.0
+
+    def test_compare_detects_count_drift(self) -> None:
+        repo = FakeSnapshotRepository()
+        repo._add_frame("live", "half_hour:2026-06-11:10:00", trading_date="2026-06-11", slot_time="10:00", stock_row_count=150)
+        repo._add_frame("shadow", "half_hour:2026-06-11:10:00", trading_date="2026-06-11", slot_time="10:00", stock_row_count=150)
+
+        result = repo.compare_datasets("live", "shadow", "half_hour", trading_date="2026-06-11")
+        assert result["summary"]["avgStockRowDiff"] == 0.0
+        assert result["summary"]["slotsInBoth"] >= 1
+
+    def test_compare_per_date_structure(self) -> None:
+        repo = FakeSnapshotRepository()
+        repo._add_frame("live", "half_hour:2026-06-11:10:00", trading_date="2026-06-11", slot_time="10:00")
+        repo._add_frame("shadow", "half_hour:2026-06-11:10:00", trading_date="2026-06-11", slot_time="10:00")
+
+        result = repo.compare_datasets("live", "shadow", "half_hour", trading_date="2026-06-11")
+        assert len(result["perDate"]) == 1
+        pd_entry = result["perDate"][0]
+        assert pd_entry["tradingDate"] == "2026-06-11"
+        assert "slotDetails" in pd_entry
+        for sd in pd_entry["slotDetails"]:
+            assert "snapshotId" in sd
+            assert "inA" in sd
+            assert "inB" in sd
+
+    def test_compare_unknown_snapshot_type(self) -> None:
+        repo = FakeSnapshotRepository()
+        result = repo.compare_datasets("live", "shadow", "unknown_type")
+        assert result["ok"] is False
+        assert "error" in result
+
+    def test_compare_empty_datasets(self) -> None:
+        repo = FakeSnapshotRepository()
+        result = repo.compare_datasets("live", "shadow", "half_hour")
+        assert result["ok"] is True
+        assert result["summary"]["totalSlotsCompared"] == 0
+
+    def test_compare_without_trading_date_discovers_dates(self) -> None:
+        repo = FakeSnapshotRepository()
+        repo._add_frame("live", "half_hour:2026-06-11:10:00", trading_date="2026-06-11", slot_time="10:00")
+        repo._add_frame("live", "half_hour:2026-06-12:10:00", trading_date="2026-06-12", slot_time="10:00")
+        repo._add_frame("shadow", "half_hour:2026-06-11:10:00", trading_date="2026-06-11", slot_time="10:00")
+
+        result = repo.compare_datasets("live", "shadow", "half_hour")
+        assert len(result["tradingDates"]) >= 2
+        assert "2026-06-11" in result["tradingDates"]
+        assert "2026-06-12" in result["tradingDates"]
+
+
+class TestServiceCompare:
+    """SnapshotCollectorService.compare() delegates to repository."""
+
+    def test_compare_delegates_to_repo(self) -> None:
+        from backend.snapshot_collector.service import SnapshotCollectorService
+
+        repo = FakeSnapshotRepository()
+        repo._add_frame("live", "half_hour:2026-06-11:10:00", trading_date="2026-06-11", slot_time="10:00")
+        repo._add_frame("shadow", "half_hour:2026-06-11:10:00", trading_date="2026-06-11", slot_time="10:00")
+
+        service = SnapshotCollectorService(repo=repo)
+        result = service.compare("live", "shadow", "half_hour", trading_date="2026-06-11")
+
+        assert result["ok"] is True
+        assert result["datasetA"] == "live"
+        assert result["datasetB"] == "shadow"
+        assert "summary" in result
+
+    def test_compare_returns_service_level_structure(self) -> None:
+        from backend.snapshot_collector.service import SnapshotCollectorService
+
+        repo = FakeSnapshotRepository()
+        service = SnapshotCollectorService(repo=repo)
+        result = service.compare("live", "shadow", "half_hour", trading_date="2026-06-11")
+
+        assert result["ok"] is True
+        assert isinstance(result["summary"], dict)
+        assert "totalSlotsCompared" in result["summary"]
+        assert isinstance(result["perDate"], list)
 
 
 # ── Passthrough normalizer (fake) ────────────────────────────────────────────

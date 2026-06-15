@@ -57,3 +57,13 @@ class SnapshotRepository(Protocol):
     ) -> dict[str, Any]:
         """Audit snapshot coverage and return structured summary."""
         ...
+
+    def compare_datasets(
+        self,
+        dataset_id_a: str,
+        dataset_id_b: str,
+        snapshot_type: str,
+        trading_date: str | None = None,
+    ) -> dict[str, Any]:
+        """Compare snapshot data between two datasets and return structured diff."""
+        ...

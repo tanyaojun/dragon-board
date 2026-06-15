@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from datetime import datetime
 from typing import Any
 
@@ -127,6 +128,15 @@ class _MongoSnapshotCollectorRepository:
             if snapshot_ids
             else []
         )
+        sector_rows = (
+            list(
+                self._db["snapshot_sector_rows"].find(
+                    {"datasetId": dataset_id, "snapshotId": {"$in": snapshot_ids}}
+                )
+            )
+            if snapshot_ids
+            else []
+        )
         record_ids = {str(r.get("snapshotId")) for r in records}
 
         missing_records = sorted(set(snapshot_ids) - record_ids)
@@ -138,18 +148,222 @@ class _MongoSnapshotCollectorRepository:
             )
         )
 
+        # Compute missingSlots by comparing expected slots against actual frames
+        missing_slots = _compute_missing_slots(
+            snapshot_type, frames, trading_date
+        )
+
         return {
             "datasetId": dataset_id,
             "snapshotType": snapshot_type,
             "tradingDate": trading_date,
             "totalFrames": len(frames),
             "totalRecords": len(records),
-            "missingSlots": [],
+            "totalStockRows": len(stock_rows),
+            "totalSectorRows": len(sector_rows),
+            "missingSlots": missing_slots,
             "emptyFrames": empty_frames,
             "missingRecords": missing_records,
             "countDrifts": _detect_count_drifts(frames, stock_rows),
+            "fieldMissingRates": _compute_field_missing_rates(
+                stock_rows, _STOCK_ROW_AUDIT_FIELDS
+            ),
         }
 
+    def compare_datasets(
+        self,
+        dataset_id_a: str,
+        dataset_id_b: str,
+        snapshot_type: str,
+        trading_date: str | None = None,
+    ) -> dict[str, Any]:
+        """Compare snapshot coverage and field completeness across two datasets.
+
+        Returns a structured diff suitable for shadow-vs-live auditing.
+        """
+        from .slots import SLOT_TIMES
+
+        if snapshot_type not in SLOT_TIMES:
+            return {
+                "ok": False,
+                "error": f"Unknown snapshot_type: {snapshot_type!r}",
+                "datasetA": dataset_id_a,
+                "datasetB": dataset_id_b,
+                "snapshotType": snapshot_type,
+            }
+
+        expected_times = SLOT_TIMES[snapshot_type]
+
+        # Determine the set of trading dates to compare
+        if trading_date:
+            trading_dates: set[str] = {trading_date}
+        else:
+            dates_a = set(
+                str(r.get("tradingDate") or "")
+                for r in self._db["snapshot_frames"].find(
+                    {"datasetId": dataset_id_a, "type": snapshot_type},
+                    {"tradingDate": 1},
+                )
+            )
+            dates_b = set(
+                str(r.get("tradingDate") or "")
+                for r in self._db["snapshot_frames"].find(
+                    {"datasetId": dataset_id_b, "type": snapshot_type},
+                    {"tradingDate": 1},
+                )
+            )
+            trading_dates = dates_a | dates_b
+
+        if not trading_dates or trading_dates == {""}:
+            return {
+                "ok": True,
+                "datasetA": dataset_id_a,
+                "datasetB": dataset_id_b,
+                "snapshotType": snapshot_type,
+                "tradingDates": [],
+                "perDate": [],
+                "summary": {"totalSlotsCompared": 0},
+            }
+
+        per_date: list[dict[str, Any]] = []
+        slots_in_both = 0
+        slots_only_in_a = 0
+        slots_only_in_b = 0
+        total_compared = 0
+        empty_frames_a = 0
+        empty_frames_b = 0
+        all_stock_row_diffs: list[int] = []
+
+        for td in sorted(trading_dates):
+            if not td:
+                continue
+
+            # Generate all expected slots for this date
+            expected_set = {f"{snapshot_type}:{td}:{t}" for t in expected_times}
+
+            # Query frames for both datasets in one batch per dataset
+            frames_a = list(
+                self._db["snapshot_frames"].find(
+                    {
+                        "datasetId": dataset_id_a,
+                        "type": snapshot_type,
+                        "tradingDate": td,
+                    }
+                )
+            )
+            frames_b = list(
+                self._db["snapshot_frames"].find(
+                    {
+                        "datasetId": dataset_id_b,
+                        "type": snapshot_type,
+                        "tradingDate": td,
+                    }
+                )
+            )
+
+            sid_a = {str(r.get("snapshotId") or "") for r in frames_a}
+            sid_b = {str(r.get("snapshotId") or "") for r in frames_b}
+            sid_a.discard("")
+            sid_b.discard("")
+
+            # Only count expected slots so summary and slotDetails stay aligned
+            sid_a_exp = sid_a & expected_set
+            sid_b_exp = sid_b & expected_set
+
+            slots_in_both += len(sid_a_exp & sid_b_exp)
+            slots_only_in_a += len(sid_a_exp - sid_b_exp)
+            slots_only_in_b += len(sid_b_exp - sid_a_exp)
+
+            all_sids = sorted(sid_a_exp | sid_b_exp)
+            slot_details: list[dict[str, Any]] = []
+
+            for sid in all_sids:
+                total_compared += 1
+
+                in_a = sid in sid_a
+                in_b = sid in sid_b
+
+                detail: dict[str, Any] = {
+                    "snapshotId": sid,
+                    "inA": in_a,
+                    "inB": in_b,
+                }
+
+                # Row counts
+                if in_a:
+                    fa = next((r for r in frames_a if r.get("snapshotId") == sid), {})
+                    detail["stockRowCountA"] = fa.get("stockRowCount", 0) or 0
+                    detail["sectorRowCountA"] = fa.get("sectorRowCount", 0) or 0
+                    if detail["stockRowCountA"] == 0:
+                        empty_frames_a += 1
+
+                if in_b:
+                    fb = next((r for r in frames_b if r.get("snapshotId") == sid), {})
+                    detail["stockRowCountB"] = fb.get("stockRowCount", 0) or 0
+                    detail["sectorRowCountB"] = fb.get("sectorRowCount", 0) or 0
+                    if detail["stockRowCountB"] == 0:
+                        empty_frames_b += 1
+
+                if in_a and in_b:
+                    diff = abs(detail.get("stockRowCountA", 0) - detail.get("stockRowCountB", 0))
+                    all_stock_row_diffs.append(diff)
+
+                # Field missing rates for common slots (query stock rows)
+                if in_a:
+                    srows_a = list(
+                        self._db["snapshot_stock_rows"].find(
+                            {"datasetId": dataset_id_a, "snapshotId": sid}
+                        )
+                    )
+                    detail["fieldMissingRatesA"] = _compute_field_missing_rates(
+                        srows_a, _STOCK_ROW_AUDIT_FIELDS
+                    )
+                if in_b:
+                    srows_b = list(
+                        self._db["snapshot_stock_rows"].find(
+                            {"datasetId": dataset_id_b, "snapshotId": sid}
+                        )
+                    )
+                    detail["fieldMissingRatesB"] = _compute_field_missing_rates(
+                        srows_b, _STOCK_ROW_AUDIT_FIELDS
+                    )
+
+                slot_details.append(detail)
+
+            per_date.append(
+                {
+                    "tradingDate": td,
+                    "totalExpectedSlots": len(expected_times),
+                    "slotsInBoth": sorted(sid_a_exp & sid_b_exp),
+                    "slotsOnlyInA": sorted(sid_a_exp - sid_b_exp),
+                    "slotsOnlyInB": sorted(sid_b_exp - sid_a_exp),
+                    "slotDetails": slot_details,
+                }
+            )
+
+        avg_diff = (
+            round(sum(all_stock_row_diffs) / len(all_stock_row_diffs), 2)
+            if all_stock_row_diffs
+            else 0.0
+        )
+
+        return {
+            "ok": True,
+            "datasetA": dataset_id_a,
+            "datasetB": dataset_id_b,
+            "snapshotType": snapshot_type,
+            "tradingDates": sorted(trading_dates),
+            "perDate": per_date,
+            "summary": {
+                "totalSlotsCompared": total_compared,
+                "slotsInBoth": slots_in_both,
+                "slotsOnlyInA": slots_only_in_a,
+                "slotsOnlyInB": slots_only_in_b,
+                "avgStockRowDiff": avg_diff,
+                "emptyFramesA": empty_frames_a,
+                "emptyFramesB": empty_frames_b,
+            },
+        }
 
 # ── factory ────────────────────────────────────────────────────────────────
 
@@ -266,3 +480,103 @@ def _detect_count_drifts(
                 {"snapshotId": sid, "frameCount": fc, "recordCount": rc}
             )
     return drifts
+
+
+# ── audit helpers ────────────────────────────────────────────────────────────
+
+_STOCK_ROW_AUDIT_FIELDS = [
+    "code",
+    "name",
+    "price",
+    "changePct",
+    "volume",
+    "turnover",
+    "turnoverRate",
+    "volumeRatio",
+    "hotness",
+    "rank",
+    "depth10",
+    "limitUpPool",
+    "sectorLabel",
+    "moneyFlow",
+    "amplitude",
+    "totalMarketValue",
+]
+
+
+def _compute_missing_slots(
+    snapshot_type: str,
+    frames: list[dict[str, Any]],
+    trading_date: str | None,
+) -> list[str]:
+    """Compare expected slot table against actual frames.
+
+    Returns sorted list of ``snapshotId`` strings that should exist per the
+    slot table but have no matching frame in *frames*.
+    """
+    from .slots import SLOT_TIMES
+
+    if snapshot_type not in SLOT_TIMES:
+        return []
+
+    existing_ids: set[str] = set()
+    trading_dates: set[str] = set()
+    for row in frames:
+        sid = str(row.get("snapshotId") or "")
+        if sid:
+            existing_ids.add(sid)
+        td = str(row.get("tradingDate") or "")
+        if td:
+            trading_dates.add(td)
+
+    if trading_date:
+        trading_dates = {trading_date}
+
+    if not trading_dates:
+        return []
+
+    expected_times = SLOT_TIMES[snapshot_type]
+    missing: list[str] = []
+    for td in sorted(trading_dates):
+        for t in expected_times:
+            sid = f"{snapshot_type}:{td}:{t}"
+            if sid not in existing_ids:
+                missing.append(sid)
+
+    return sorted(missing)
+
+
+def _compute_field_missing_rates(
+    rows: list[dict[str, Any]],
+    fields: list[str],
+) -> dict[str, dict[str, Any]]:
+    """Calculate per-field missing rates across *rows*.
+
+    Returns ``{field: {"present": N, "missing": N, "rate": float}}``.
+    """
+    total = len(rows)
+    if total == 0:
+        return {}
+
+    counts: dict[str, int] = {f: 0 for f in fields}
+    for row in rows:
+        for f in fields:
+            val = row.get(f)
+            if val is not None and val != "" and val != []:
+                # NaN check
+                if isinstance(val, float):
+                    if math.isfinite(val):
+                        counts[f] += 1
+                else:
+                    counts[f] += 1
+
+    result: dict[str, dict[str, Any]] = {}
+    for f in fields:
+        present = counts[f]
+        missing = total - present
+        result[f] = {
+            "present": present,
+            "missing": missing,
+            "rate": round(missing / total, 4) if total > 0 else 0.0,
+        }
+    return result

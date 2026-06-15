@@ -419,6 +419,22 @@ class SnapshotCollectorService:
         """Audit snapshot coverage for a dataset/type/date."""
         return self._repo.audit_dataset(dataset_id, snapshot_type, trading_date)
 
+    def compare(
+        self,
+        dataset_id_a: str,
+        dataset_id_b: str,
+        snapshot_type: str,
+        trading_date: str | None = None,
+    ) -> dict[str, Any]:
+        """Compare snapshot data between two datasets.
+
+        Returns a structured diff including slot completeness, row counts,
+        and field-level missing rates for each trading date and slot.
+        """
+        return self._repo.compare_datasets(
+            dataset_id_a, dataset_id_b, snapshot_type, trading_date
+        )
+
     # ── internal helpers ──────────────────────────────────────────────────
 
     def _create_providers(self) -> list[Any]:
