@@ -65,8 +65,23 @@ export interface ContinuousWeights {
 export interface TradingPoolThresholds {
   /** @deprecated 迁移到 scoring 体系中，下个版本移除 */
   recallJumpMin: number
-  // ... 其余旧字段同样标记 ...
-  
+  /** @deprecated */
+  readyJumpMin: number
+  /** @deprecated */
+  observeFinalMin: number
+  /** @deprecated */
+  readyFinalMin: number
+  /** @deprecated */
+  buyVotesMin: number
+  /** @deprecated */
+  downgradeJumpMin: number
+  /** @deprecated */
+  downgradeFinalMin: number
+  /** @deprecated */
+  exitFinalSell: number
+  /** @deprecated 方向E的功能已由评分体系中 Jump hold=0 vs buy=+2 替代 */
+  jumpHoldMinConfidence: number
+
   scoring: ScoringThresholds
   weights: ContinuousWeights
 }
@@ -164,6 +179,11 @@ describe('computeResonanceScore', () => {
 
 ```ts
 // TradingPoolScoringService.ts
+import type { ContinuousWeights } from '@/types/rankTrendLiveStrategy'
+import { DEFAULT_RANK_TREND_LIVE_STRATEGY_CONFIG } from '@/config/rankTrendLiveStrategyConfig'
+
+const DEFAULT_WEIGHTS: ContinuousWeights = DEFAULT_RANK_TREND_LIVE_STRATEGY_CONFIG.tradingPool.weights
+
 export interface DiscreteScoreInput {
   macdCross: 'golden' | 'none' | 'death' | null
   jumpDirection: 'buy' | 'hold' | 'sell' | null
@@ -178,8 +198,6 @@ export interface ContinuousScoreInput {
   zeroCrossConfidence: number | null
 }
 
-// 权重目前为常量，后续可迁移到配置的 weights 字段
-const W = { jumpConfidence: 2.0, finalConfidence: 1.5, directionConfidence: 1.0, accelerationConfidence: 1.0, zeroCrossConfidence: 0.5 }
 const SCALE = 5
 
 export interface ScoringBreakdown {
@@ -198,6 +216,7 @@ export interface ResonanceScoreResult {
 export function computeResonanceScore(
   discrete: DiscreteScoreInput,
   continuous: ContinuousScoreInput,
+  weights: ContinuousWeights = DEFAULT_WEIGHTS,
 ): ResonanceScoreResult {
   if (discrete.lifecycleAction === 'veto') {
     return { totalScore: 0, veto: true, breakdown: { discrete: 0, continuous: 0, discreteDetail: { macd: 0, jumpDir: 0 }, continuousDetail: { jumpConf: 0, finalConf: 0, direction: 0, acceleration: 0, zeroCross: 0 } } }
@@ -209,11 +228,12 @@ export function computeResonanceScore(
   const discreteScore = macd + jumpDir
 
   // 连续
-  const jumpConf = ((continuous.jumpConfidence ?? 0) / 100) * W.jumpConfidence * SCALE
-  const finalConf = ((continuous.finalConfidence ?? 0) / 100) * W.finalConfidence * SCALE
-  const direction = ((continuous.directionConfidence ?? 0) / 100) * W.directionConfidence * SCALE
-  const acceleration = ((continuous.accelerationConfidence ?? 0) / 100) * W.accelerationConfidence * SCALE
-  const zeroCross = ((continuous.zeroCrossConfidence ?? 0) / 100) * W.zeroCrossConfidence * SCALE
+  const w = weights
+  const jumpConf = ((continuous.jumpConfidence ?? 0) / 100) * w.jumpConfidence * SCALE
+  const finalConf = ((continuous.finalConfidence ?? 0) / 100) * w.finalConfidence * SCALE
+  const direction = ((continuous.directionConfidence ?? 0) / 100) * w.directionConfidence * SCALE
+  const acceleration = ((continuous.accelerationConfidence ?? 0) / 100) * w.accelerationConfidence * SCALE
+  const zeroCross = ((continuous.zeroCrossConfidence ?? 0) / 100) * w.zeroCrossConfidence * SCALE
   const continuousScore = jumpConf + finalConf + direction + acceleration + zeroCross
 
   return {
@@ -237,7 +257,7 @@ pnpm exec vitest run src/services/candidate/__tests__/TradingPoolScoringService.
 
 ---
 
-## Task 3: 重写 decideTradingPoolStatus 为评分驱动
+## Task 4: 重写 decideTradingPoolStatus 为评分驱动
 
 **Files:**
 - Modify: `src/services/candidate/TradingPoolAnalysisService.ts`
@@ -362,10 +382,26 @@ export function analyzeTradingPoolCandidate(input: TradingPoolInput): TradingPoo
 
 ---
 
-## Task 4: 涨停过滤改为标记
+## Task 3: 涨停过滤改为标记（含类型准备）
+
+> **依赖说明：** 本 Task 在 Task 4 (`decideTradingPoolStatus`) 之前执行，因为 Task 4 的 `signals.limitUp` 字段需在此 Task 中先添加到类型系统和数据流。
 
 **Files:**
+- Modify: `src/services/candidate/types.ts` — `TradingPoolSignalSnapshot` 新增 `limitUp`，`TradingPoolStatus` 新增 `'涨停观察'`，`TradingPoolRiskFlag` 新增 `'limit_up'`
 - Modify: `src/services/rankTrend/jumpSignalService.ts`
+
+- [ ] **Step 0: 类型准备 — types.ts 新增字段**
+
+```ts
+// TradingPoolSignalSnapshot 新增
+limitUp: boolean
+
+// TradingPoolStatus 新增
+| '涨停观察'
+
+// TradingPoolRiskFlag 新增
+| 'limit_up'
+```
 
 - [ ] **Step 1: checkEntryConditions 条件 4 改为标记**
 
@@ -394,7 +430,11 @@ function readTradingSignals(stock: TradingPoolCandidateLike, t: TradingPoolThres
 }
 ```
 
-- [ ] **Step 3: TradingPoolSignalSnapshot 新增 limitUp 字段**
+- [ ] **Step 3: 运行 jumpSignalService 测试确认类型正确**
+
+> **延后说明：** 开板重算（spec §3.3：changePct < 9% 时自动触发重算）不在本计划中实现。涨停观察状态下，用户可通过面板手动刷新交易池来触发重算。自动开板检测的定时/事件机制后续单独出计划。
+
+- [ ] **Step 4: 类型检查**
 
 ---
 

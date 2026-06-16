@@ -61,7 +61,7 @@ const CONTINUOUS_WEIGHTS = {
 
 function scoreContinuous(input: ContinuousScoreInput): number {
   let score = 0
-  const maxScore = 5 // 归一化系数
+  const maxScore = 5 // 缩放系数（乘以此值使各维度得分有区分度，总分上限约 30）
 
   score += (input.jumpConfidence ?? 0) / 100 * CONTINUOUS_WEIGHTS.jumpConfidence * maxScore
   score += (input.finalConfidence ?? 0) / 100 * CONTINUOUS_WEIGHTS.finalConfidence * maxScore
@@ -90,27 +90,39 @@ function computeResonanceScore(
 
 理论区间：离散 -3 ~ +5，连续 0 ~ 30。总分 -3 ~ 35。
 
-### 2.4 状态判定
+### 2.4 评分驱动状态判定
 
-| 状态 | 条件 |
-|------|------|
-| 已退出 | lifecycle=veto 或 总分 < 8 |
-| 观察中 | 总分 ≥ 8 |
-| 观察买点 | 总分 ≥ 15 |
-| 准备介入 | 总分 ≥ 20 + MACD=golden + Jump 置信度 ≥ 80% |
+评分体系负责四个"自动判定"状态。其余三个状态由人工操作触发：
+
+| 状态 | 触发方式 | 条件 |
+|------|---------|------|
+| 已退出 | 自动 | lifecycle=veto 或 总分 < `exitMax` |
+| 观察中 | 自动 | 总分 ≥ `observeMin` 且不满足更高状态 |
+| 观察买点 | 自动 | 总分 ≥ `buyPointMin` 且不满足准备介入 |
+| 准备介入 | 自动 | 总分 ≥ `readyMin` + MACD=`readyMacdRequired` + Jump 置信度 ≥ `readyJumpMin` |
+| 已介入 | 人工 | 用户在面板点击"已介入"按钮 |
+| 持仓观察 | 人工 | 已介入状态下用户标记为持仓观察 |
+| 已完成 | 人工 | 用户手动关闭交易记录 |
+| 涨停观察 | 自动 | 见 §3（优先级低于 lifecycle veto，高于评分判定） |
+
+**判定优先级：** lifecycle veto > 涨停观察 > 信号过期 > 已介入保持 > 评分判定
 
 ```ts
 type ScoringThresholds = {
-  exitMax: number           // < 8 → exit
-  observeMin: number        // ≥ 8 → observe
-  buyPointMin: number       // ≥ 15 → 观察买点
-  readyMin: number          // ≥ 20 → 准备介入 (需同时满足 macdGolden + jumpHigh)
+  exitMax: number           // 总分低于此值 → 已退出
+  observeMin: number        // 总分 ≥ 此值 → 观察中
+  buyPointMin: number       // 总分 ≥ 此值 → 观察买点
+  readyMin: number          // 总分 ≥ 此值 + macdGolden + jumpHigh → 准备介入
   readyMacdRequired: 'golden'
-  readyJumpMin: number      // 准备介入额外要求 Jump ≥ 80%
+  readyJumpMin: number      // 准备介入额外要求 Jump 置信度 ≥ 此值
 }
 ```
 
-### 2.5 阈值预设
+### 2.5 与方向 E（Jump hold 降权）的关系
+
+本评分体系替代了方向 E 的 `jumpHoldMinConfidence` 机制。Jump=hold 在离散维度中得 0 分（对比 buy 的 +2），已在评分中体现降权语义。旧的 `jumpHoldMinConfidence` 字段标记 deprecated。
+
+### 2.6 阈值预设
 
 | 参数 | recall_first | balanced | strict_execution |
 |------|-------------|----------|-----------------|
@@ -120,7 +132,15 @@ type ScoringThresholds = {
 | scoring.readyMin | 16 | 20 | 24 |
 | scoring.readyJumpMin | 75 | 80 | 85 |
 
-依旧三个策略模式，每个模式一份阈值。`jumpHoldMinConfidence`（方向 E）在评分体系下不再需要——Jump=hold 在离散维度中得 0 分（而非 buy 的 +2），已经通过评分表达了降权语义，不需要额外的方向门禁。
+依旧三个策略模式，每个模式一份阈值。
+
+### 2.7 测试迁移说明
+
+实施本 spec 后以下旧逻辑将移除，对应测试需同步更新：
+- `strongConsensus` 8 条件 AND → 测试预期改为评分驱动阈值
+- `TradingPoolConsensusBreakdown` → 替换为 `TradingPoolScoringBreakdown`
+- `readRiskFlags` 中 `jump_confidence_low` / `final_confidence_low` / `momentum_sync_broken` → 从测试中移除这些 flag 的断言
+- `jumpHoldMinConfidence` → 不再使用，`strongConsensus` 中 Jump hold 的判定改为评分体系内处理
 
 ## 3. 涨停观察子轨道
 
