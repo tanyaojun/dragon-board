@@ -19,6 +19,7 @@ const TRADING_POOL_RECALL_FIRST: TradingPoolThresholds = {
   downgradeJumpMin: 70,
   downgradeFinalMin: 70,
   exitFinalSell: 80,
+  jumpHoldMinConfidence: 50,
 }
 
 const TRADING_POOL_BALANCED: TradingPoolThresholds = {
@@ -30,6 +31,7 @@ const TRADING_POOL_BALANCED: TradingPoolThresholds = {
   downgradeJumpMin: 75,
   downgradeFinalMin: 75,
   exitFinalSell: 80,
+  jumpHoldMinConfidence: 60,
 }
 
 const TRADING_POOL_STRICT: TradingPoolThresholds = {
@@ -41,6 +43,7 @@ const TRADING_POOL_STRICT: TradingPoolThresholds = {
   downgradeJumpMin: 80,
   downgradeFinalMin: 80,
   exitFinalSell: 75,
+  jumpHoldMinConfidence: 70,
 }
 
 export const RANK_TREND_LIVE_STRATEGY_PRESETS: Record<
@@ -137,6 +140,12 @@ function normalizeTradingPool(
     downgradeJumpMin: normalizeNumber(patch?.downgradeJumpMin, base.downgradeJumpMin, 0, 100),
     downgradeFinalMin: normalizeNumber(patch?.downgradeFinalMin, base.downgradeFinalMin, 0, 100),
     exitFinalSell: normalizeNumber(patch?.exitFinalSell, base.exitFinalSell, 0, 100),
+    jumpHoldMinConfidence: normalizeNumber(
+      patch?.jumpHoldMinConfidence,
+      base.jumpHoldMinConfidence,
+      0,
+      100,
+    ),
   }
 }
 

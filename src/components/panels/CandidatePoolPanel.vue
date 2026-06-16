@@ -190,6 +190,22 @@
                   </p>
                   <p>风险：{{ formatRiskFlags(selectedTradingPoolRow.signalSnapshot.riskFlags) }}</p>
                   <p>原因：{{ formatTradingPoolReasons(selectedTradingPoolRow.reasons) }}</p>
+                  <div v-if="selectedTradingPoolRow.consensusBreakdown" class="consensus-matrix">
+                    <p class="consensus-title">
+                      强共振条件：
+                      {{ selectedTradingPoolRow.consensusBreakdown.passedCount }}/8 通过
+                    </p>
+                    <div class="consensus-checks">
+                      <span :class="selectedTradingPoolRow.consensusBreakdown.finalSignalPass ? 'pass' : 'fail'">综合买入</span>
+                      <span :class="selectedTradingPoolRow.consensusBreakdown.finalConfidencePass ? 'pass' : 'fail'">综合≥阈值</span>
+                      <span :class="selectedTradingPoolRow.consensusBreakdown.buyVotesPass ? 'pass' : 'fail'">票数≥阈值</span>
+                      <span :class="selectedTradingPoolRow.consensusBreakdown.jumpDirectionPass ? 'pass' : 'fail'">Jump方向</span>
+                      <span :class="selectedTradingPoolRow.consensusBreakdown.jumpConfidencePass ? 'pass' : 'fail'">Jump≥阈值</span>
+                      <span :class="selectedTradingPoolRow.consensusBreakdown.trendBuyCountPass ? 'pass' : 'fail'">趋势≥2买</span>
+                      <span :class="selectedTradingPoolRow.consensusBreakdown.noHardBlock ? 'pass' : 'fail'">无硬阻断</span>
+                      <span :class="selectedTradingPoolRow.consensusBreakdown.noMacdDeath ? 'pass' : 'fail'">非死叉</span>
+                    </div>
+                  </div>
                 </section>
               </section>
             </template>
@@ -2002,6 +2018,37 @@ textarea:focus-visible {
 .trading-pool-detail p {
   margin: 4px 0;
   line-height: 1.55;
+}
+
+.consensus-title {
+  margin: 10px 0 6px !important;
+  font-weight: 600;
+  color: var(--candidate-accent, #ffb13b);
+}
+
+.consensus-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+}
+
+.consensus-checks span {
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.consensus-checks span.pass {
+  background: rgba(34, 197, 94, 0.15);
+  color: #22c55e;
+  border: 1px solid rgba(34, 197, 94, 0.3);
+}
+
+.consensus-checks span.fail {
+  background: rgba(239, 68, 68, 0.12);
+  color: #ef4444;
+  border: 1px solid rgba(239, 68, 68, 0.25);
 }
 
 .compact-btn {

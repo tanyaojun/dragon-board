@@ -719,10 +719,16 @@ const getTradingPoolActionPreview = (stock: any) => {
   const row = result.rows[0] || null
   const buyVotes = row?.signalSnapshot.buyVotes ?? countTradingPoolBuyVotes(stock)
   const actionLabel = row ? tradingPoolDecisionPreviewLabel(row.status, row.decision) : '未触发'
+  const resonanceLabel =
+    row?.status === '观察买点' || row?.status === '准备介入'
+      ? '强共振'
+      : row?.status === '观察中'
+        ? '待确认'
+        : '—'
   return {
     buyVotes,
     actionLabel,
-    resonanceLabel: buyVotes >= 3 ? '强共振' : buyVotes === 2 ? '中等共振' : '弱共振',
+    resonanceLabel,
   }
 }
 
@@ -758,7 +764,9 @@ const getConfidenceTitle = (stock: any) => {
   title += hasFinalSignal
     ? `🎯 综合判断: ${signalText} (置信度: ${confidence}%)\n`
     : '🎯 综合判断: 暂无信号\n'
-  title += `🚀 Jump跃迁: ${formatTooltipNumber(jumpConfidence, 1)}%`
+  const jumpDir = getJumpDirection(stock)
+  const jumpDirLabel = jumpDir === 'buy' ? '买入' : jumpDir === 'sell' ? '卖出' : jumpDir === 'hold' ? '观望' : '—'
+  title += `🚀 Jump跃迁: ${jumpDirLabel} ${formatTooltipNumber(jumpConfidence, 1)}%`
   if (candidateJumpThreshold != null) {
     title += ` (候选池阈值: ${candidateJumpThreshold} / ${candidateJumpPassed ? '已过' : '未过'})`
   }
@@ -1000,6 +1008,12 @@ const getJumpConfidence = (stock: any) =>
   stock?.rankTrend?.jump?.confidence ??
   stock?.jumpConfidence ??
   0
+
+const getJumpDirection = (stock: any) =>
+  getRankTrendAnalysis(stock)?.jump?.direction ??
+  stock?.rankTrend?.jump?.direction ??
+  stock?.jumpDirection ??
+  null
 
 const getMacdCross = (stock: any) =>
   getRankTrendAnalysis(stock)?.technical?.macd?.cross ?? stock?.macdCross ?? 'none'

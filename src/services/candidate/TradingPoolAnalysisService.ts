@@ -248,7 +248,10 @@ function decideTradingPoolStatus(
   const finalConfidencePass = hasFinalInput
     ? (signals.finalConfidence ?? 0) >= t.observeFinalMin
     : true
-  const jumpDirectionPass = signals.jumpDirection == null || signals.jumpDirection === 'buy'
+  const jumpDirectionPass =
+    signals.jumpDirection == null ||
+    signals.jumpDirection === 'buy' ||
+    (signals.jumpDirection === 'hold' && (signals.jumpConfidence ?? 0) >= t.jumpHoldMinConfidence)
   const strongConsensus =
     finalSignalPass &&
     finalConfidencePass &&
@@ -346,6 +349,39 @@ export function analyzeTradingPoolCandidate(input: TradingPoolInput): TradingPoo
       dataQuality:
         decisionResult.decision === 'stale' ? 'stale' : signals.dataQuality,
     } as TradingPoolSignalSnapshot
+    const trendBuyCount = [
+      signals.directionSignal,
+      signals.accelerationSignal,
+      signals.zeroCrossSignal,
+    ].filter((item) => item === 'buy').length
+    const hasFinalInput = signals.finalSignal != null
+    const consensusBreakdown = {
+      finalSignalPass: hasFinalInput ? signals.finalSignal === 'buy' : true,
+      finalConfidencePass: hasFinalInput
+        ? (signals.finalConfidence ?? 0) >= t.observeFinalMin
+        : true,
+      buyVotesPass: signals.buyVotes >= t.buyVotesMin,
+      jumpDirectionPass:
+        signals.jumpDirection == null ||
+        signals.jumpDirection === 'buy' ||
+        (signals.jumpDirection === 'hold' && (signals.jumpConfidence ?? 0) >= t.jumpHoldMinConfidence),
+      jumpConfidencePass: (signals.jumpConfidence ?? 0) >= t.recallJumpMin,
+      trendBuyCountPass: trendBuyCount >= 2,
+      noHardBlock: !signals.riskFlags.includes('candidate_hard_blocked'),
+      noMacdDeath: signals.macdCross !== 'death',
+      passedCount: 0,
+    }
+    consensusBreakdown.passedCount = [
+      consensusBreakdown.finalSignalPass,
+      consensusBreakdown.finalConfidencePass,
+      consensusBreakdown.buyVotesPass,
+      consensusBreakdown.jumpDirectionPass,
+      consensusBreakdown.jumpConfidencePass,
+      consensusBreakdown.trendBuyCountPass,
+      consensusBreakdown.noHardBlock,
+      consensusBreakdown.noMacdDeath,
+    ].filter(Boolean).length
+
     const row: TradingPoolAnalysisRow = {
       code,
       name: candidate.name ? String(candidate.name) : undefined,
@@ -353,6 +389,7 @@ export function analyzeTradingPoolCandidate(input: TradingPoolInput): TradingPoo
       decision: decisionResult.decision,
       reasons: [...decisionResult.reasons, ...sourceReason],
       signalSnapshot: resolvedSignals,
+      consensusBreakdown,
     }
 
     rows.push(row)

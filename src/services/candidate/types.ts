@@ -282,6 +282,18 @@ export interface TradingPoolSignalSnapshot {
   dataQuality: 'fresh' | 'stale' | 'missing'
 }
 
+export interface TradingPoolConsensusBreakdown {
+  finalSignalPass: boolean
+  finalConfidencePass: boolean
+  buyVotesPass: boolean
+  jumpDirectionPass: boolean
+  jumpConfidencePass: boolean
+  trendBuyCountPass: boolean
+  noHardBlock: boolean
+  noMacdDeath: boolean
+  passedCount: number
+}
+
 export interface TradingPoolAnalysisRow {
   code: string
   name?: string
@@ -289,6 +301,7 @@ export interface TradingPoolAnalysisRow {
   decision: TradingPoolDecision
   reasons: string[]
   signalSnapshot: TradingPoolSignalSnapshot
+  consensusBreakdown?: TradingPoolConsensusBreakdown
 }
 
 export interface TradingPoolAnalysisResult {

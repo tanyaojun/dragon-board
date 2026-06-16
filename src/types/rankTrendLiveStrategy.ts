@@ -26,6 +26,8 @@ export interface TradingPoolThresholds {
   downgradeJumpMin: number
   downgradeFinalMin: number
   exitFinalSell: number
+  /** Jump 方向为 hold 时，替代 jumpDirection=buy 的最低置信度补偿阈值 */
+  jumpHoldMinConfidence: number
 }
 
 export interface RankTrendLiveStrategyConfig {

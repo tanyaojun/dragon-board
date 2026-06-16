@@ -922,6 +922,90 @@ describe('TradingPoolAnalysisService — config unification', () => {
   })
 })
 
+describe('TradingPoolAnalysisService — jump hold relaxation (方向E)', () => {
+  it('allows jumpDirection=hold into strongConsensus when confidence meets hold threshold', () => {
+    const result = analyzeTradingPoolCandidate({
+      candidates: [
+        {
+          code: '601208',
+          rankTrend: {
+            decision: { final: { signal: 'buy', confidence: 88 } },
+            jump: { direction: 'hold', confidence: 65 },
+            technical: {
+              macd: { cross: 'golden' },
+              signals: {
+                direction: { signal: 'buy' },
+                acceleration: { signal: 'buy' },
+                zeroCross: { signal: 'buy' },
+              },
+            },
+            cycle: { decision: { action: 'allow' } },
+          },
+        },
+      ],
+    })
+
+    // jumpDirection=hold + conf 65 >= 60 (jumpHoldMinConfidence in balanced)
+    // finalConf 88 >= 85, buyVotes 4 >= 3, jumpConf 65 < recallJumpMin 80
+    // → direction gate passes, but confidence gate fails → 观察中
+    expect(result.rows[0].signalSnapshot.buyVotes).toBe(4)
+    expect(result.rows[0].status).toBe('观察中')
+    expect(result.rows[0].reasons).toContain('jump_confidence_low')
+  })
+
+  it('blocks jumpDirection=sell regardless of confidence', () => {
+    const result = analyzeTradingPoolCandidate({
+      candidates: [
+        {
+          code: '601208',
+          rankTrend: {
+            decision: { final: { signal: 'buy', confidence: 90 } },
+            jump: { direction: 'sell', confidence: 95 },
+            technical: {
+              macd: { cross: 'golden' },
+              signals: {
+                direction: { signal: 'buy' },
+                acceleration: { signal: 'buy' },
+                zeroCross: { signal: 'buy' },
+              },
+            },
+            cycle: { decision: { action: 'allow' } },
+          },
+        },
+      ],
+    })
+
+    expect(result.rows[0].status).toBe('观察中')
+  })
+
+  it('blocks jumpDirection=hold when confidence below hold threshold', () => {
+    const result = analyzeTradingPoolCandidate({
+      candidates: [
+        {
+          code: '000001',
+          rankTrend: {
+            decision: { final: { signal: 'buy', confidence: 88 } },
+            jump: { direction: 'hold', confidence: 45 },
+            technical: {
+              macd: { cross: 'golden' },
+              signals: {
+                direction: { signal: 'buy' },
+                acceleration: { signal: 'buy' },
+                zeroCross: { signal: 'buy' },
+              },
+            },
+            cycle: { decision: { action: 'allow' } },
+          },
+        },
+      ],
+    })
+
+    // jumpDirection=hold + conf 45 < 60 → caught by pre-filter jump_confidence_low
+    expect(result.rows[0].status).toBe('观察中')
+    expect(result.rows[0].reasons).toContain('jump_confidence_low')
+  })
+})
+
 describe('TradingPoolThresholds presets contract', () => {
   it('provides three distinct strategy modes with meaningful threshold gradients', () => {
     const recall = RANK_TREND_LIVE_STRATEGY_PRESETS.recall_first.tradingPool
