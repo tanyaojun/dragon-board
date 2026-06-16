@@ -4,6 +4,7 @@
 **状态**: 已确认，待实施
 **依赖**: [2026-06-16 共振入池诊断报告](./2026-06-16-trading-pool-resonance-diagnosis.md)
 **关联**: [2026-06-15 强共振自动入池规格](./2026-06-15-trading-pool-resonance-auto-entry-spec.md)
+**⚠️ 优先级声明:** 本文的 §2.4（状态判定）、§3.2（涨停处理优先级）、§4.1（判定顺序）、§6.3（tooltip 展示）已被 [统一合同](./2026-06-16-trading-pool-unified-contract.md) 的第 3-5 节覆盖。实施时以统一合同为准。
 
 ## 1. 目标
 
