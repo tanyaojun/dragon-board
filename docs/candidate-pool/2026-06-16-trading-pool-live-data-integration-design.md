@@ -4,6 +4,7 @@
 **状态**: 已实施（2026-06-16）
 **依赖**: [2026-06-15 交易池强共振自动入池规格](./2026-06-15-trading-pool-resonance-auto-entry-spec.md)
 **关联**: [RankTrend Jump 跳跃检测实盘接入计划](../../quant-board/docs/superpowers/plans/2026-06-06-ranktrend-jump-signal-live-integration-plan.md)
+**当前口径:** 来源边界、评分状态机、tooltip 语义、阈值真源和 limitUp 契约以 [交易池统一合同](./2026-06-16-trading-pool-unified-contract.md) 为准；本文保留实时投影接入背景与实现方案。
 
 ## 1. 问题诊断
 
@@ -36,17 +37,23 @@ RankTrendSignalService.refreshRankTrendSignals()
 
 **核心矛盾**：`RankTrendSignalService` 已将完整 Jump + 四维信号写入 DataLayer 的 200+ 只热榜股票，但交易池分析函数 `analyzeTradingPoolCandidate` 的输入管道只接了候选日记 thesis 条目。规格 7.1 明确写了第三来源（实时投影），但代码未实现。
 
-### 1.2 三层 AND 过滤叠加
+### 1.2 三层 AND 过滤叠加（历史问题）
 
 即便某只票通过了 Jump 6条件 AND（sustained surge + 动量共振 + 股价涨 + 非涨停 + MACD金叉 + 置信度≥85），还得再过交易池 8条件 AND（strongConsensus），再加上候选池 V5/Fusion 入口过滤。三层叠加在强情绪市场中也难有票通过。
 
-### 1.3 涨停过滤自伤
+> 当前实现已由统一合同改为交易池评分驱动，不再使用交易池 8 条件 AND 作为决策路径。
+
+### 1.3 涨停过滤自伤（历史问题）
 
 `checkEntryConditions`（jumpSignalService.ts:108）条件 4 `changePct >= limitPct - 0.3` 直接排除涨停票。在 150+ 涨停的市场中，最强势的票被入口规则系统性排除。而 DataLayer 覆盖的八平台热榜 200+ 只票恰恰是这些最活跃、最可能满足共振条件的标的。
 
+> 当前实现已将该条件改为 `limitUp` 标记，由交易池输出 `涨停观察`，不再作为 Jump 硬排除。
+
 ## 2. 设计目标
 
-**核心原则：不改阈值、不做自适应、不改 AND 门逻辑。纯粹补全规格中定义了但未实现的部分。**
+**原始核心原则：不改阈值、不做自适应、不改 AND 门逻辑。纯粹补全规格中定义了但未实现的部分。**
+
+后续 B+D 统一合同已进一步收敛为评分驱动 + 涨停分轨；本文以下阶段设计中与状态判定、tooltip 和 source 枚举冲突的片段均以统一合同为准。
 
 1. 打通 DataLayer 热榜实时数据 → 交易池分析管道（规格 7.1 来源 3）
 2. 补全 DataTable tooltip 信息分层（规格 9）
@@ -57,8 +64,8 @@ RankTrendSignalService.refreshRankTrendSignals()
 
 ## 3. 非目标
 
-- 不改 `checkEntryConditions` 6条件（含涨停过滤）
-- 不改 `strongConsensus` 8条件 AND 门
+- 不改 `checkEntryConditions` 6条件（含涨停过滤）【已被统一合同取代：涨停改为 limitUp 标记】
+- 不改 `strongConsensus` 8条件 AND 门【已被统一合同取代：交易池状态改为评分驱动】
 - 不改任何阈值数值
 - 不引入市场情绪自适应
 - 不改 QuantBoard 回测主链
@@ -161,14 +168,15 @@ return analyzeTradingPoolCandidate({
 `TradingPoolSource` 新增：
 ```ts
 type TradingPoolSource =
-  | 'candidate_auto_add'
-  | 'candidate_watch'
+  | 'thesis'
   | 'jump_blocked_resonance'
   | 'live_projection'     // 新增
   | 'manual'
   | 'persisted'
   | 'unknown'
 ```
+
+当前输出 source 仅使用 `thesis`、`live_projection`、`manual`、`persisted`、`unknown`；`jump_blocked_resonance` 只保留类型兼容，不再由 `resolveTradingPoolSource` 产出。旧输入 `candidate_auto_add` / `jump_blocked_resonance` 兼容归并为 `thesis`。
 
 ### 阶段 2：补全 UI 信息层
 
@@ -181,7 +189,7 @@ type TradingPoolSource =
 ```
 综合判断: 买入 (置信度: 87%)
 Jump跃迁: 82.9%
-共振评级: 强共振 (BuyVotes: 3/4)
+共振评分: 21.9 分 (MACD金叉+3, Jump持有0, 连续+18.9)
 交易池动作: 观察买点
 ```
 
@@ -220,23 +228,19 @@ Jump跃迁: 82.9%
 - **Jump 置信度回退**：实时投影行没有 `candidateEntryDecision`，无法走 `readGateCheckNumber` 回退路径。如果 `rankTrend.jump.confidence` 缺失，Jump 置信度为 null，交易池状态机将其视为缺少召回质量门槛，自动降为观察/过期链路，不会强制出池（符合规格 7.5）。
 - **持久化策略**：实时投影行不持久化。面板关闭后，下次打开时根据当前 DataLayer 热榜数据重新生成。只有 thesis 来源和手工加入的交易池行才走 `CandidateJournalService` 持久化。
 
-### 阶段 3：配置统一化（规格 7.0）
+### 阶段 3：配置统一化（规格 7.0，已被统一合同收敛）
 
 **文件**：`src/services/candidate/TradingPoolAnalysisService.ts` + `src/config/rankTrendLiveStrategyConfig.ts`
 
-将当前硬编码的 8 个 `TRADING_POOL_*` 常量迁移到 `rankTrendLiveStrategyConfig` 预设中，每个策略模式一份默认值。
+当前实现已将交易池评分阈值和连续权重放入 `rankTrendLiveStrategyConfig`。`analyzeTradingPoolCandidate` 只读默认配置的 `tradingPool.scoring` / `tradingPool.weights`，不接受 per-call 覆盖。旧单体字段保留兼容但不参与决策。
 
 ```ts
-// 每个策略模式的交易池阈值预设
 tradingPool: {
+  scoring: { exitMax: 8, observeMin: 8, buyPointMin: 15, readyMin: 20, readyJumpMin: 80 },
+  weights: { jumpConfidence: 2.0, finalConfidence: 1.5, directionConfidence: 1.0, accelerationConfidence: 1.0, zeroCrossConfidence: 0.5 },
+  // deprecated compatibility fields
   recallJumpMin: 80,
   readyJumpMin: 85,
-  observeFinalMin: 85,
-  readyFinalMin: 88,
-  buyVotesMin: 3,
-  downgradeJumpMin: 75,
-  downgradeFinalMin: 75,
-  exitFinalSell: 80,
 }
 ```
 

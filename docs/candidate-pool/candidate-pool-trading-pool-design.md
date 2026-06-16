@@ -394,9 +394,11 @@ V2 已开始复用同一 MongoDB `trade_journal` 集合作为持久化载体：`
 
 ## 18. 强共振召回补充
 
+> **2026-06-16 统一合同覆盖:** 本节的 `jump_blocked_resonance` 独立来源口径已废止。当前交易池接受 `thesis`、`live_projection`、`persisted`、`manual` 四轨道输入；`jump_blocked_resonance` 仅保留类型兼容，不再作为输出 source。状态机已改为评分驱动，详见 [交易池统一合同](./2026-06-16-trading-pool-unified-contract.md)。
+
 2026-06-15 补充口径：候选池严格入池不放宽 Jump hardBlock；`ranktrend_early_big_move_v3_lifecycle_fusion` 仍按当前策略模式执行 Jump 阈值、样本质量、生命周期、候选分层等硬规则。
 
-交易池新增 `jump_blocked_resonance` 来源，用于承接“候选池主要被 Jump 阈值阻断，但 RankTrend 综合判断和四维信号强共振”的买点观察对象。最小召回条件为：
+历史口径曾计划新增 `jump_blocked_resonance` 来源，用于承接“候选池主要被 Jump 阈值阻断，但 RankTrend 综合判断和四维信号强共振”的买点观察对象。该来源已被统一合同归并为 `thesis` + 评分体系，以下条件仅保留为历史背景：
 
 - `final.signal === 'buy'`
 - 综合置信度 `final.confidence >= 85`

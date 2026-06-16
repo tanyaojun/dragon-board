@@ -8,6 +8,8 @@
 
 **Tech Stack:** Vue 3 + TypeScript + Vite, Vitest, Playwright CLI, existing RankTrend services, `CandidateJournalService`, `TradingPoolAnalysisService`, `CandidatePoolPanel.vue`, `DataTable.vue`.
 
+**2026-06-16 统一合同同步:** 本计划中的 `candidate_auto_add`、`candidate_watch`、`jump_blocked_resonance` 输出来源为历史口径。当前交易池输出 source 只使用 `thesis`、`live_projection`、`persisted`、`manual`、`unknown`；旧 `candidate_auto_add` / `jump_blocked_resonance` 输入归并为 `thesis`。状态机、tooltip、limitUp 和阈值真源以 [交易池统一合同](./2026-06-16-trading-pool-unified-contract.md) 为准。
+
 ---
 
 ## Guardrails

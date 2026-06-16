@@ -10,6 +10,8 @@
 
 **实施状态:** 已完成（2026-06-16）
 
+**统一合同同步:** 本计划完成后，交易池 source 与状态机又被 [交易池统一合同](./2026-06-16-trading-pool-unified-contract.md) 收敛。当前输出 source 仅使用 `thesis`、`live_projection`、`manual`、`persisted`、`unknown`；`candidate_auto_add` / `jump_blocked_resonance` 旧输入归并为 `thesis`，但不再作为输出。tooltip 展示“共振评分”，不再展示 BuyVotes 共振评级。
+
 | Task | 状态 | 备注 |
 |------|------|------|
 | Task 1: 扩展 TradingPoolInput + types + 合并逻辑 | ✅ | `liveStocks` 可选字段，thesis 优先去重 |
@@ -27,7 +29,7 @@
 ## Guardrails
 
 - 不放宽任何阈值数值。
-- 不改 `checkEntryConditions` 6条件、`strongConsensus` 8条件 AND 门。
+- 不改 `checkEntryConditions` 6条件、`strongConsensus` 8条件 AND 门。【后续统一合同已取代：交易池状态改为评分驱动，涨停改为 limitUp 标记】
 - 不改 V5/Fusion 候选池严格合同。
 - 不改 QuantBoard 回测主链。
 - 不引入新依赖。
@@ -65,14 +67,15 @@
 ```ts
 // types.ts — TradingPoolSource 联合类型新增成员
 export type TradingPoolSource =
-  | 'candidate_auto_add'
-  | 'candidate_watch'
+  | 'thesis'
   | 'jump_blocked_resonance'
   | 'live_projection'  // 新增：来自 DataLayer 热榜实时投影
   | 'manual'
   | 'persisted'
   | 'unknown'
 ```
+
+当前输出 source 合同：`thesis` / `live_projection` / `manual` / `persisted` / `unknown`。`jump_blocked_resonance` 只保留输入兼容，不再输出。
 
 - [ ] **Step 2: 扩展 `TradingPoolInput` 接口，新增 `liveStocks` 可选字段**
 
@@ -130,10 +133,10 @@ function resolveTradingPoolSource(stock: TradingPoolCandidateLike): TradingPoolS
   if (stock.tradingPoolSource === 'manual') return 'manual'
   if (stock.tradingPoolSource === 'persisted') return 'persisted'
   if (stock.tradingPoolSource === 'live_projection') return 'live_projection'  // 新增
-  const decision = getEntryDecision(stock)
-  if (decision?.accepted) return 'candidate_auto_add'
-  if (isJumpBlockedOnly(stock)) return 'jump_blocked_resonance'
-  if (decision) return 'candidate_watch'
+  if (stock.tradingPoolSource === 'thesis') return 'thesis'
+  if (stock.tradingPoolSource === 'jump_blocked_resonance') return 'thesis'
+  if (stock.tradingPoolSource === 'candidate_auto_add') return 'thesis'
+  if (getEntryDecision(stock)) return 'thesis'
   return 'unknown'
 }
 ```
@@ -247,10 +250,10 @@ it('deduplicates live projection when thesis candidate exists for same code', ()
     ],
   })
 
-  // 只应有一行，且使用 thesis 来源（jump_blocked_resonance，不是 live_projection）
+  // 只应有一行，且使用 thesis 来源（不是 live_projection）
   expect(result.rows).toHaveLength(1)
   expect(result.rows[0].name).toBe('泰晶科技-thesis')
-  expect(result.rows[0].signalSnapshot.source).toBe('jump_blocked_resonance')
+  expect(result.rows[0].signalSnapshot.source).toBe('thesis')
 })
 ```
 
@@ -328,7 +331,7 @@ it('processes mixed thesis and live projection inputs correctly', () => {
   expect(result.rows).toHaveLength(2)
   const chuJiang = result.rows.find((r) => r.code === '002171')
   const taiJing = result.rows.find((r) => r.code === '603738')
-  expect(chuJiang!.signalSnapshot.source).toBe('jump_blocked_resonance')
+  expect(chuJiang!.signalSnapshot.source).toBe('thesis')
   expect(taiJing!.signalSnapshot.source).toBe('live_projection')
   expect(taiJing!.status).toBe('准备介入')
 })
@@ -403,9 +406,7 @@ const tradingPoolEvaluation = computed(() => {
 ```ts
 function tradingPoolSourceLabel(source: string): string {
   switch (source) {
-    case 'candidate_auto_add': return '候选池通过'
-    case 'candidate_watch': return '候选池观察'
-    case 'jump_blocked_resonance': return 'Jump阻断强共振'
+    case 'thesis': return '候选池'
     case 'live_projection': return '热榜实时'
     case 'manual': return '手工加入'
     case 'persisted': return '历史恢复'
@@ -718,7 +719,7 @@ function buildConfidenceTooltip(stock: any): string {
   const lines = [
     `综合判断: ${finalSignalLabel} (置信度: ${typeof finalConf === 'number' ? finalConf.toFixed(1) : finalConf}%)`,
     `Jump跃迁: ${typeof jumpConf === 'number' ? jumpConf.toFixed(1) : jumpConf}%`,
-    `共振评级: ${buyVotes >= 3 ? '强共振' : buyVotes >= 2 ? '中' : '弱'} (BuyVotes: ${buyVotes}/4)`,
+    `共振评分: ${preview?.score ?? '—'} 分`,
     `交易池动作: ${preview?.label ?? '—'}`,
   ]
 
@@ -958,7 +959,7 @@ console.log('Tooltip:', tooltip);
 验收项：
 - tooltip 包含"综合判断"
 - tooltip 包含"Jump跃迁"
-- tooltip 包含"共振评级"
+- tooltip 包含"共振评分"
 - tooltip 包含"交易池动作"
 - `confidence` 列表头显示"Jump置信"
 

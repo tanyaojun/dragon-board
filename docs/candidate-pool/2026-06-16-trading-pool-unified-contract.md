@@ -2,6 +2,7 @@
 
 **日期**: 2026-06-16
 **状态**: 权威版本，覆盖并取代此前各文档中冲突的局部口径
+**实现同步**: 已按核心实现更新至 `analyzeTradingPoolCandidate` 只读默认配置真源；不支持 per-call scoring/thresholds 覆盖。
 **取代**: `candidate-pool-trading-pool-design.md:378`, `2026-06-16-trading-pool-live-data-integration-design.md:69-117`, `2026-06-16-trading-pool-resonance-diagnosis.md:399-411`, `2026-06-16-trading-pool-scoring-limitup-spec.md:2.4/3.2/4.1/6.3`
 
 ---
@@ -46,6 +47,11 @@
 - ~~"交易池只显示候选池通过后的对象"~~（`candidate-pool-trading-pool-design.md:378`）→ 废止。交易池接受四个轨道。
 - ~~`jump_blocked_resonance` 作为独立来源轨道~~ → 废止。Jump 阻断强共振票通过评分体系自然进入，不再需要独立来源标签。`TradingPoolSource.jump_blocked_resonance` 保留在类型中不删除（向后兼容），但不再被 `resolveTradingPoolSource` 产出。
 
+**输出 source 合同：**
+- 正常输出只使用 `thesis`、`live_projection`、`persisted`、`manual`、`unknown`。
+- 旧输入 `jump_blocked_resonance` 与 `candidate_auto_add` 兼容归并为 `thesis` 输出。
+- 未识别来源不再静默归为 `thesis`，最终兜底为 `unknown`，用于暴露未来新增来源未接入的情况。
+
 ## 2. Tooltip / 共振展示语义：最终合同
 
 经过 A+C+E 和 B+D 两轮迭代后，DataTable 的 confidence 列 tooltip 展示格式如下：
@@ -83,7 +89,7 @@
 
 2. signals.limitUp === true
    → status: '涨停观察', decision: 'watch', reasons: ['limit_up']
-   （涨停票不进入评分体系，不自动入场）
+   （涨停票不进入评分判定，不自动入场；展示用评分拆解可复用同一组信号计算）
 
 3. signals.dataQuality !== 'fresh'（信号过期）
    → status: previous?.status || '观察中', decision: 'stale'
@@ -113,14 +119,27 @@
 
 ## 4. 阈值真源：运行时唯一读取路径
 
-**运行时真源：** `DEFAULT_RANK_TREND_LIVE_STRATEGY_CONFIG.tradingPool.scoring`
+**运行时真源：**
+- `DEFAULT_RANK_TREND_LIVE_STRATEGY_CONFIG.tradingPool.scoring`
+- `DEFAULT_RANK_TREND_LIVE_STRATEGY_CONFIG.tradingPool.weights`
 
 ```ts
 // TradingPoolAnalysisService.ts
 export function analyzeTradingPoolCandidate(input: TradingPoolInput): TradingPoolAnalysisResult {
-  const thresholds = input.thresholds ?? DEFAULT_RANK_TREND_LIVE_STRATEGY_CONFIG.tradingPool
-  const scoring = thresholds.scoring  // ← 唯一运行时真源
+  const tradingPoolConfig = DEFAULT_RANK_TREND_LIVE_STRATEGY_CONFIG.tradingPool
+  const scoring = tradingPoolConfig.scoring
+  const weights = tradingPoolConfig.weights
   // ...
+}
+```
+
+`TradingPoolInput` 只承载候选输入、上一轮行状态和实时投影股票：
+
+```ts
+interface TradingPoolInput {
+  candidates: TradingPoolCandidateLike[]
+  previousRows?: Array<Partial<TradingPoolAnalysisRow> & { code: string }>
+  liveStocks?: TradingPoolCandidateLike[]
 }
 ```
 
@@ -129,13 +148,14 @@ export function analyzeTradingPoolCandidate(input: TradingPoolInput): TradingPoo
 | 字段 | 处理方式 |
 |------|---------|
 | `recallJumpMin`, `readyJumpMin`, `observeFinalMin`, `readyFinalMin`, `buyVotesMin`, `downgradeJumpMin`, `downgradeFinalMin`, `exitFinalSell`, `jumpHoldMinConfidence` | 保留在类型中，标记 `@deprecated`，**不再参与任何判定逻辑** |
-| `scoring` | 新评分体系的唯一真源 |
-| `weights` | 连续维度权重，`computeResonanceScore` 通过参数接收，默认从 `DEFAULT_CONFIG.tradingPool.weights` 读取 |
+| `scoring` | 新评分体系阈值真源，只从默认配置读取 |
+| `weights` | 连续维度权重真源，只从默认配置读取 |
+| `TradingPoolInput.thresholds` / `TradingPoolInput.scoring` | 不再作为输入合同存在；调用方传入不会被设计为生效 |
 
 **保证"配置改了就生效"的链路：**
-1. 用户/代码修改 `input.thresholds` → 直接生效（传入覆盖）
-2. 用户修改 `RANK_TREND_LIVE_STRATEGY_PRESETS` → 重启后生效（默认值变更）
-3. 用户通过 UI 切换策略模式 → `normalizeRankTrendLiveStrategyConfig` 重新计算 `tradingPool.scoring` → 下次 `analyzeTradingPoolCandidate` 调用时生效
+1. 用户修改 `RANK_TREND_LIVE_STRATEGY_PRESETS` / 默认策略配置 → 重启或重新装载配置后生效。
+2. 用户通过 UI 切换策略模式 → `normalizeRankTrendLiveStrategyConfig` 重新计算 `tradingPool.scoring` / `weights` 后生效。
+3. `analyzeTradingPoolCandidate` 本身不接受临时阈值覆盖，避免同一交易池在不同调用方出现多套判定口径。
 
 ## 5. limitUp 数据契约：生产者、传播路径、回退
 
@@ -181,7 +201,7 @@ jumpSignalService.checkEntryConditions()
 | `stock.rankTrend.jump` 不存在 | `limitUp = false`（默认非涨停） |
 | `stock.rankTrend.jump.limitUp` 为 `undefined` | `limitUp = false` |
 | `stock.rankTrend.jump` 存在但 `limitUp` 字段缺失（旧数据兼容） | `limitUp = false` |
-| Jump 信号过期（dataQuality !== 'fresh'）| `limitUp` 保留上一值，不重新判定 |
+| Jump 信号过期或 `rankTrend` 缺失 | 交易池层不自行重判；没有 `rankTrend.jump.limitUp` 时按 `false` 处理，上一状态由 stale 分支保留 |
 
 **禁止：** 交易池层不根据 `changePct` 或其他行情字段自行推断 `limitUp`。唯一真源是 `stock.rankTrend.jump.limitUp`。
 

@@ -8,13 +8,16 @@
 
 **Tech Stack:** Vue 3 + TypeScript + Vite, Vitest
 
+**实施状态:** 核心服务已完成（2026-06-16）。最终落地与原计划有两点收敛：评分函数就近保留在 `TradingPoolAnalysisService.ts`，未新增独立 `TradingPoolScoringService.ts`；`analyzeTradingPoolCandidate` 只读 `DEFAULT_RANK_TREND_LIVE_STRATEGY_CONFIG.tradingPool.scoring/weights`，不接受 per-call `thresholds` / `scoring` 覆盖。
+
 ---
 
 ## Guardrails
 
 - 不改候选池 V5/Fusion 合同和 `checkEntryConditions` 其余 5 条
 - 不改 QuantBoard 回测主链
-- 不动旧的 `TradingPoolThresholds` 单体字段（标记 deprecated，暂不删除）
+- 不动旧的 `TradingPoolThresholds` 单体字段（标记 deprecated，暂不删除；不参与决策）
+- 不支持 per-call `thresholds` / `scoring` 覆盖，交易池判定只读默认策略配置
 - 不引入新依赖
 
 ## File Map
@@ -25,7 +28,7 @@
 - **Modify:** `src/services/candidate/TradingPoolAnalysisService.ts` — 新增评分函数，重写 `decideTradingPoolStatus`，更新 `readRiskFlags`
 - **Modify:** `src/services/rankTrend/jumpSignalService.ts` — `checkEntryConditions` 条件 4 改为标记
 - **Modify:** `src/components/panels/CandidatePoolPanel.vue` — 评分矩阵替换共识矩阵，新增涨停观察状态渲染
-- **Create (New Test):** `src/services/candidate/__tests__/TradingPoolScoringService.test.ts` — 评分体系独立测试
+- **No New File:** 评分函数最终就近保留在 `src/services/candidate/TradingPoolAnalysisService.ts`
 - **Modify:** `src/services/candidate/__tests__/TradingPoolAnalysisService.test.ts` — 更新已有测试匹配新评分体系
 - **Modify:** `src/components/panels/__tests__/CandidatePoolPanel.test.ts` — 锁定 涨停观察/评分矩阵
 
@@ -115,61 +118,21 @@ pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false
 
 ## Task 2: 实现混合评分函数
 
+> **实施同步:** 原计划曾考虑新增独立 `TradingPoolScoringService.ts`。最终为保持改动最小、贴合现有服务边界，`computeResonanceScore()` 就近实现于 `TradingPoolAnalysisService.ts`，通过 `TradingPoolAnalysisService.test.ts` 覆盖评分驱动状态与 `scoringBreakdown` 输出。
+
 **Files:**
-- Create: `src/services/candidate/TradingPoolScoringService.ts`（新文件，评分逻辑独立）
-- Create: `src/services/candidate/__tests__/TradingPoolScoringService.test.ts`
+- Modify: `src/services/candidate/TradingPoolAnalysisService.ts`
+- Modify: `src/services/candidate/__tests__/TradingPoolAnalysisService.test.ts`
 
 - [ ] **Step 1: 先写 RED 测试**
 
+在 `TradingPoolAnalysisService.test.ts` 中通过公开 `analyzeTradingPoolCandidate()` 锁定评分行为，不导出私有评分函数：
+
 ```ts
-// TradingPoolScoringService.test.ts
-import { describe, expect, it } from 'vitest'
-import { computeResonanceScore } from '../TradingPoolScoringService'
-
-describe('computeResonanceScore', () => {
-  it('returns veto=true when lifecycle=veto', () => {
-    const result = computeResonanceScore(
-      { macdCross: 'golden', jumpDirection: 'buy', lifecycleAction: 'veto' },
-      { jumpConfidence: 90, finalConfidence: 90, directionConfidence: 90, accelerationConfidence: 90, zeroCrossConfidence: 90 },
-    )
-    expect(result.veto).toBe(true)
-    expect(result.totalScore).toBe(0)
-  })
-
-  it('scores MACD golden +3, none 0, death -3', () => {
-    const baseDisc = { jumpDirection: 'buy' as const, lifecycleAction: 'allow' as const }
-    const baseCont = { jumpConfidence: 50, finalConfidence: 50, directionConfidence: 50, accelerationConfidence: 50, zeroCrossConfidence: 50 }
-
-    const golden = computeResonanceScore({ ...baseDisc, macdCross: 'golden' }, baseCont)
-    const none = computeResonanceScore({ ...baseDisc, macdCross: 'none' }, baseCont)
-    const death = computeResonanceScore({ ...baseDisc, macdCross: 'death' }, baseCont)
-
-    expect(golden.totalScore).toBeGreaterThan(none.totalScore)
-    expect(none.totalScore).toBeGreaterThan(death.totalScore)
-  })
-
-  it('scores Jump direction buy +2, hold 0, sell -2', () => {
-    const baseCont = { jumpConfidence: 50, finalConfidence: 50, directionConfidence: 50, accelerationConfidence: 50, zeroCrossConfidence: 50 }
-    const baseDisc = { macdCross: 'none' as const, lifecycleAction: 'allow' as const }
-
-    const buy = computeResonanceScore({ ...baseDisc, jumpDirection: 'buy' }, baseCont)
-    const hold = computeResonanceScore({ ...baseDisc, jumpDirection: 'hold' }, baseCont)
-    const sell = computeResonanceScore({ ...baseDisc, jumpDirection: 'sell' }, baseCont)
-
-    expect(buy.totalScore).toBeGreaterThan(hold.totalScore)
-    expect(hold.totalScore).toBeGreaterThan(sell.totalScore)
-  })
-
-  it('scores 华天科技 as 观察买点 (totalScore ≈ 21.93)', () => {
-    const result = computeResonanceScore(
-      { macdCross: 'golden', jumpDirection: 'hold', lifecycleAction: 'allow' },
-      { jumpConfidence: 50, finalConfidence: 80, directionConfidence: 69.6, accelerationConfidence: 64.05, zeroCrossConfidence: 50 },
-    )
-    expect(result.totalScore).toBeGreaterThan(20)
-    expect(result.totalScore).toBeLessThan(23)
-    expect(result.breakdown.discrete).toBe(3) // MACD golden +3, Jump hold 0
-    expect(result.breakdown.continuous).toBeGreaterThan(18) // 5个连续维度
-  })
+it('uses score rather than buyVotes as the DataTable-facing contract', () => {
+  const result = analyzeTradingPoolCandidate({ candidates: [/* rankTrend mock */] })
+  expect(result.rows[0].scoringBreakdown!.totalScore).toBeGreaterThanOrEqual(15)
+  expect(result.rows[0].status).toBe('观察买点')
 })
 ```
 
@@ -177,82 +140,23 @@ describe('computeResonanceScore', () => {
 
 - [ ] **Step 3: 实现 computeResonanceScore**
 
+`computeResonanceScore()` 就近放在 `TradingPoolAnalysisService.ts`，接收 `TradingPoolSignalSnapshot` 中的 MACD、Jump 方向和五个连续置信度，返回 `TradingPoolScoringBreakdown`：
+
 ```ts
-// TradingPoolScoringService.ts
-import type { ContinuousWeights } from '@/types/rankTrendLiveStrategy'
-import { DEFAULT_RANK_TREND_LIVE_STRATEGY_CONFIG } from '@/config/rankTrendLiveStrategyConfig'
-
-const DEFAULT_WEIGHTS: ContinuousWeights = DEFAULT_RANK_TREND_LIVE_STRATEGY_CONFIG.tradingPool.weights
-
-export interface DiscreteScoreInput {
-  macdCross: 'golden' | 'none' | 'death' | null
-  jumpDirection: 'buy' | 'hold' | 'sell' | null
-  lifecycleAction: string | null
-}
-
-export interface ContinuousScoreInput {
-  jumpConfidence: number | null
-  finalConfidence: number | null
-  directionConfidence: number | null
-  accelerationConfidence: number | null
-  zeroCrossConfidence: number | null
-}
-
-const SCALE = 5
-
-export interface ScoringBreakdown {
-  discrete: number
-  continuous: number
-  discreteDetail: { macd: number; jumpDir: number }
-  continuousDetail: { jumpConf: number; finalConf: number; direction: number; acceleration: number; zeroCross: number }
-}
-
-export interface ResonanceScoreResult {
-  totalScore: number
-  veto: boolean
-  breakdown: ScoringBreakdown
-}
-
-export function computeResonanceScore(
-  discrete: DiscreteScoreInput,
-  continuous: ContinuousScoreInput,
-  weights: ContinuousWeights = DEFAULT_WEIGHTS,
-): ResonanceScoreResult {
-  if (discrete.lifecycleAction === 'veto') {
-    return { totalScore: 0, veto: true, breakdown: { discrete: 0, continuous: 0, discreteDetail: { macd: 0, jumpDir: 0 }, continuousDetail: { jumpConf: 0, finalConf: 0, direction: 0, acceleration: 0, zeroCross: 0 } } }
-  }
-
-  // 离散
-  const macd = discrete.macdCross === 'golden' ? 3 : discrete.macdCross === 'death' ? -3 : 0
-  const jumpDir = discrete.jumpDirection === 'buy' ? 2 : discrete.jumpDirection === 'sell' ? -2 : 0
-  const discreteScore = macd + jumpDir
-
-  // 连续
-  const w = weights
-  const jumpConf = ((continuous.jumpConfidence ?? 0) / 100) * w.jumpConfidence * SCALE
-  const finalConf = ((continuous.finalConfidence ?? 0) / 100) * w.finalConfidence * SCALE
-  const direction = ((continuous.directionConfidence ?? 0) / 100) * w.directionConfidence * SCALE
-  const acceleration = ((continuous.accelerationConfidence ?? 0) / 100) * w.accelerationConfidence * SCALE
-  const zeroCross = ((continuous.zeroCrossConfidence ?? 0) / 100) * w.zeroCrossConfidence * SCALE
-  const continuousScore = jumpConf + finalConf + direction + acceleration + zeroCross
-
-  return {
-    totalScore: discreteScore + continuousScore,
-    veto: false,
-    breakdown: {
-      discrete: discreteScore,
-      continuous: continuousScore,
-      discreteDetail: { macd, jumpDir },
-      continuousDetail: { jumpConf, finalConf, direction, acceleration, zeroCross },
-    },
-  }
+function computeResonanceScore(signals, weights): TradingPoolScoringBreakdown {
+  const macdCrossScore = signals.macdCross === 'golden' ? 3 : signals.macdCross === 'death' ? -3 : 0
+  const jumpDirectionScore = signals.jumpDirection === 'buy' ? 2 : signals.jumpDirection === 'sell' ? -2 : 0
+  const continuousScore = /* five confidence dimensions * DEFAULT weights * 5 */
+  return { totalScore, discreteScore, continuousScore, discreteDetail, continuousDetail }
 }
 ```
+
+`decideTradingPoolStatus()` 内只计算一次，并将 `scoringBreakdown` 随结果返回给 row 构建复用。
 
 - [ ] **Step 4: 运行确认 GREEN**
 
 ```powershell
-pnpm exec vitest run src/services/candidate/__tests__/TradingPoolScoringService.test.ts --reporter=dot
+pnpm exec vitest run src/services/candidate/__tests__/TradingPoolAnalysisService.test.ts --reporter=dot
 ```
 
 ---
@@ -366,14 +270,15 @@ function readRiskFlags(/* ... */): TradingPoolRiskFlag[] {
 
 - [ ] **Step 3: 更新 analyzeTradingPoolCandidate**
 
-`TradingPoolInput` 的 `thresholds` 参数改为读取 `thresholds.scoring`：
+`TradingPoolInput` 不再暴露 `thresholds` / `scoring` 覆盖参数。运行时只读取默认策略配置：
 
 ```ts
 export function analyzeTradingPoolCandidate(input: TradingPoolInput): TradingPoolAnalysisResult {
-  const thresholds = input.thresholds ?? DEFAULT_RANK_TREND_LIVE_STRATEGY_CONFIG.tradingPool
-  const s = thresholds.scoring
+  const tradingPoolConfig = DEFAULT_RANK_TREND_LIVE_STRATEGY_CONFIG.tradingPool
+  const scoring = tradingPoolConfig.scoring
+  const weights = tradingPoolConfig.weights
   // ... 合并逻辑不变 ...
-  const decisionResult = decideTradingPoolStatus(signals, previous, s)
+  const decisionResult = decideTradingPoolStatus(signals, previous, scoring, weights)
   // ...
 }
 ```
@@ -529,10 +434,10 @@ tooltip 中移除 `共振评级` 行（该信息已在交易池详情区展示�
 
 ## Task 7: 验收
 
-- [ ] **Step 1: 评分服务测试**
+- [ ] **Step 1: 交易池分析与 Jump 涨停传播测试**
 
 ```powershell
-pnpm exec vitest run src/services/candidate/__tests__/TradingPoolScoringService.test.ts --reporter=dot
+pnpm exec vitest run src/services/candidate/__tests__/TradingPoolAnalysisService.test.ts src/services/rankTrend/__tests__/jumpSignalService.test.ts --reporter=dot
 ```
 
 - [ ] **Step 2: 交易池分析测试**
@@ -559,8 +464,8 @@ pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false
 
 ## Task 8: 自审清单
 
-- [ ] 权重常量（`W = { ... }`）后续可从 `DEFAULT_RANK_TREND_LIVE_STRATEGY_CONFIG.tradingPool.weights` 动态读取
-- [ ] 旧的 8 个 `TradingPoolThresholds` 单体字段已标记 deprecated 但未删除（向后兼容）
+- [x] 权重从 `DEFAULT_RANK_TREND_LIVE_STRATEGY_CONFIG.tradingPool.weights` 读取
+- [x] 旧的 `TradingPoolThresholds` 单体字段已标记 deprecated 但未删除（向后兼容），且不参与决策
 - [ ] `jumpHoldMinConfidence`（方向 E 新增）在评分体系下不再需要，调度到 deprecated
 - [ ] DataTable tooltip 的 `getTradingPoolActionPreview` 同步适配评分体系
 - [ ] 候选池 V5/Fusion 未改动

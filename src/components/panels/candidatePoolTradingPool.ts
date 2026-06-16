@@ -11,6 +11,7 @@ import type {
 const TRADING_POOL_STATUSES = new Set<TradingPoolStatus>([
   '观察买点',
   '准备介入',
+  '涨停观察',
   '已介入',
   '持仓观察',
   '观察中',
@@ -34,12 +35,13 @@ const TRADING_POOL_RISK_FLAGS = new Set<TradingPoolRiskFlag>([
   'jump_confidence_low',
   'final_confidence_low',
   'candidate_hard_blocked',
+  'limit_up',
   'data_stale',
 ])
 const TRADING_POOL_SOURCES = new Set<TradingPoolSource>([
-  'candidate_auto_add',
-  'candidate_watch',
+  'thesis',
   'jump_blocked_resonance',
+  'live_projection',
   'manual',
   'persisted',
   'unknown',
@@ -77,7 +79,9 @@ function normalizeNumber(value: unknown): number | null {
 
 function normalizeBoolean(value: unknown): boolean {
   if (value === true || value === 'true') return true
+  if (value === 1 || value === '1') return true
   if (value === false || value === 'false') return false
+  if (value === 0 || value === '0') return false
   return Boolean(value)
 }
 
@@ -131,6 +135,7 @@ function buildComparableTradingPoolSnapshot(row: TradingPoolAnalysisRow) {
       buyVotes: normalizeNumber(row.signalSnapshot.buyVotes) ?? 0,
       riskFlags: normalizeRiskFlags(row.signalSnapshot.riskFlags),
       source: normalizeTradingPoolSource(row.signalSnapshot.source),
+      limitUp: normalizeBoolean(row.signalSnapshot.limitUp),
       momentumSyncBroken: normalizeBoolean(row.signalSnapshot.momentumSyncBroken),
       lifecycleAction: row.signalSnapshot.lifecycleAction ?? null,
       dataQuality: normalizeDataQuality(row.signalSnapshot.dataQuality, null),
@@ -163,6 +168,7 @@ function buildComparableTradingPoolSnapshotFromEntry(entry: Record<string, any>)
       buyVotes: normalizeNumber(signalSnapshot?.buyVotes) ?? 0,
       riskFlags: normalizeRiskFlags(signalSnapshot?.riskFlags),
       source: normalizeTradingPoolSource(signalSnapshot?.source),
+      limitUp: normalizeBoolean(signalSnapshot?.limitUp),
       momentumSyncBroken: normalizeBoolean(signalSnapshot?.momentumSyncBroken),
       lifecycleAction: signalSnapshot?.lifecycleAction ?? null,
       dataQuality: normalizeDataQuality(entry.dataQuality, signalSnapshot?.dataQuality),
@@ -228,6 +234,7 @@ export function readTradingPoolSnapshot(
       buyVotes: normalizeNumber(signalSnapshotSource?.buyVotes) ?? 0,
       riskFlags: normalizeRiskFlags(signalSnapshotSource?.riskFlags),
       source: normalizeTradingPoolSource(signalSnapshotSource?.source || 'persisted'),
+      limitUp: normalizeBoolean(signalSnapshotSource?.limitUp),
       momentumSyncBroken: normalizeBoolean(signalSnapshotSource?.momentumSyncBroken),
       lifecycleAction: signalSnapshotSource?.lifecycleAction ?? null,
       dataQuality: normalizeDataQuality(tradingPool?.dataQuality, signalSnapshotSource?.dataQuality),

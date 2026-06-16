@@ -43,6 +43,13 @@
 - `analyzeTradingPoolCandidate` 的 `resolvedSignals` 会在 `decision === 'stale'` 时强制覆盖 `dataQuality` 为 `'stale'`，因此无信号的实时投影行最终 dataQuality 为 `'stale'` 而非 `'missing'`，这是已有逻辑链的预期行为。
 - 配置统一化（spec 7.0 / design Phase 3）涉及 `rankTrendLiveStrategyConfig` 预设中新增 `tradingPool` 阈值节，需要与现有 V5/Fusion 策略配置文件对齐，本次延后单独出计划。
 
+## Phase 21 Findings (2026-06-16)
+
+- 交易池统一合同已将 DataTable tooltip 口径从 BuyVotes “共振评级”收敛为“共振评分”，避免 UI 标签与评分状态机产生双轨语义。
+- `analyzeTradingPoolCandidate` 不再接受 per-call `thresholds` / `scoring` 覆盖；评分阈值和权重只从 `DEFAULT_RANK_TREND_LIVE_STRATEGY_CONFIG.tradingPool.scoring/weights` 读取。
+- `jump_blocked_resonance` 只保留类型兼容，不再作为输出 source。旧 `jump_blocked_resonance` / `candidate_auto_add` 输入归并为 `thesis`；未知来源兜底为 `unknown`。
+- `decideTradingPoolStatus` 内部只计算一次 `scoringBreakdown` 并复用到输出 row，避免状态判定和展示分数重复计算。
+
 ## Issues Encountered
 
 | Issue | Resolution |

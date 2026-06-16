@@ -168,8 +168,18 @@ Phase 19 交易池强共振自动入池 complete; Phase 15 production validation
 - [x] 实现交易池自动入池状态机：强共振召回、准备介入、降级、出池、双风险检查
 - [x] 保护候选池严格合同：三种策略模式的 Jump 阈值硬阻断测试锁定
 - [x] 补完交易池面板字段：来源、综合置信度、Jump 置信度、BuyVotes、风险标签、原因
-- [x] 收敛 DataTable 置信度 tooltip：拆分综合判断、Jump 阈值、共振评级、候选池结果、交易池动作
+- [x] 收敛 DataTable 置信度 tooltip：拆分综合判断、Jump 阈值、共振评分、候选池结果、交易池动作
 - [x] 设计文档、任务计划和进度记录同步
+- **Status:** complete
+
+### Phase 21: 交易池统一合同与 B+D 混合评分
+
+- [x] 统一 source 输出：`thesis` / `live_projection` / `persisted` / `manual` / `unknown`
+- [x] 保留 `jump_blocked_resonance` 类型兼容，但不再作为输出 source
+- [x] 将状态机收敛为 lifecycle veto > limitUp > stale > 已介入保持/退出 > score-based status
+- [x] 将评分阈值和权重真源固定为 `DEFAULT_RANK_TREND_LIVE_STRATEGY_CONFIG.tradingPool.scoring/weights`
+- [x] `limitUp` 由 `jumpSignalService` 产出并沿 `rankTrend.jump.limitUp` 传播
+- [x] 同步核心测试与 `docs/candidate-pool` 文档
 - **Status:** complete
 
 ## Key Questions

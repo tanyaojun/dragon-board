@@ -1,10 +1,10 @@
 # 交易池混合评分 + 涨停分轨——规格
 
 **日期**: 2026-06-16
-**状态**: 已确认，待实施
+**状态**: 已实施（核心服务与测试已落地）
 **依赖**: [2026-06-16 共振入池诊断报告](./2026-06-16-trading-pool-resonance-diagnosis.md)
 **关联**: [2026-06-15 强共振自动入池规格](./2026-06-15-trading-pool-resonance-auto-entry-spec.md)
-**⚠️ 优先级声明:** 本文的 §2.4（状态判定）、§3.2（涨停处理优先级）、§4.1（判定顺序）、§6.3（tooltip 展示）已被 [统一合同](./2026-06-16-trading-pool-unified-contract.md) 的第 3-5 节覆盖。实施时以统一合同为准。
+**⚠️ 优先级声明:** 本文的 §2.4（状态判定）、§3.2（涨停处理优先级）、§4.1（判定顺序）、§4.4（配置读取）、§6.3（tooltip 展示）已被 [统一合同](./2026-06-16-trading-pool-unified-contract.md) 覆盖。实施时以统一合同为准。
 
 ## 1. 目标
 
@@ -100,7 +100,7 @@ function computeResonanceScore(
 | 已退出 | 自动 | lifecycle=veto 或 总分 < `exitMax` |
 | 观察中 | 自动 | 总分 ≥ `observeMin` 且不满足更高状态 |
 | 观察买点 | 自动 | 总分 ≥ `buyPointMin` 且不满足准备介入 |
-| 准备介入 | 自动 | 总分 ≥ `readyMin` + MACD=`readyMacdRequired` + Jump 置信度 ≥ `readyJumpMin` |
+| 准备介入 | 自动 | 总分 ≥ `readyMin` + MACD=`golden` + Jump 置信度 ≥ `readyJumpMin` |
 | 已介入 | 人工 | 用户在面板点击"已介入"按钮 |
 | 持仓观察 | 人工 | 已介入状态下用户标记为持仓观察 |
 | 已完成 | 人工 | 用户手动关闭交易记录 |
@@ -114,7 +114,6 @@ type ScoringThresholds = {
   observeMin: number        // 总分 ≥ 此值 → 观察中
   buyPointMin: number       // 总分 ≥ 此值 → 观察买点
   readyMin: number          // 总分 ≥ 此值 + macdGolden + jumpHigh → 准备介入
-  readyMacdRequired: 'golden'
   readyJumpMin: number      // 准备介入额外要求 Jump 置信度 ≥ 此值
 }
 ```
@@ -227,7 +226,17 @@ export type TradingPoolRiskFlag =
 
 ### 4.4 配置统一
 
-`TradingPoolThresholds` 中新增 `scoring` 字段，替代旧的单体阈值（`recallJumpMin`、`observeFinalMin` 等）。旧字段保留但标记 deprecated，下个版本移除。
+`TradingPoolThresholds` 中新增 `scoring` 与 `weights` 字段，替代旧的单体阈值（`recallJumpMin`、`observeFinalMin` 等）进入决策路径。旧字段保留但标记 deprecated，不再参与交易池状态判定。
+
+运行时读取口径以统一合同为准：
+
+```ts
+const tradingPoolConfig = DEFAULT_RANK_TREND_LIVE_STRATEGY_CONFIG.tradingPool
+const scoring = tradingPoolConfig.scoring
+const weights = tradingPoolConfig.weights
+```
+
+`analyzeTradingPoolCandidate` 不接受 per-call `thresholds` / `scoring` 覆盖，避免同一交易池由不同调用方产生不同判定。
 
 ## 5. 非目标
 
@@ -240,11 +249,8 @@ export type TradingPoolRiskFlag =
 ## 6. 验收标准
 
 ```powershell
-# 混合评分服务测试
-pnpm exec vitest run src/services/candidate/__tests__/TradingPoolScoringService.test.ts --reporter=dot
-
-# 涨停观察轨道测试
-pnpm exec vitest run src/services/candidate/__tests__/TradingPoolAnalysisService.test.ts --reporter=dot
+# 混合评分 + 涨停观察轨道测试
+pnpm exec vitest run src/services/candidate/__tests__/TradingPoolAnalysisService.test.ts src/services/rankTrend/__tests__/jumpSignalService.test.ts --reporter=dot
 
 # 面板测试
 pnpm exec vitest run src/components/panels/__tests__/CandidatePoolPanel.test.ts --reporter=dot

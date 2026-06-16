@@ -29,10 +29,11 @@ export function getRankTrendAnalysis(target: any): RankTrendAnalysisResult | nul
 
 export function applyJumpSignal(target: any, signal: JumpSignalResult): void {
   if (!target?.rankTrend) return
-  target.rankTrend.jump = signal.jump
+  target.rankTrend.jump = { ...signal.jump, limitUp: signal.limitUp }
   target.rankTrend._jumpEntry = signal.isEntry
   target.rankTrend._jumpExit = signal.isExit
   target.rankTrend._jumpExitReason = signal.exitReason
+  target.rankTrend._jumpLimitUp = signal.limitUp
 }
 
 export function getJumpResult(target: any): JumpResult | null {

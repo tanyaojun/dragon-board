@@ -231,9 +231,27 @@ export interface CandidateDiscoveryResult {
   skippedReason?: 'cooldown' | 'empty'
 }
 
+export interface TradingPoolScoringBreakdown {
+  totalScore: number
+  discreteScore: number
+  continuousScore: number
+  discreteDetail: {
+    macdCross: number
+    jumpDirection: number
+  }
+  continuousDetail: {
+    jumpConfidence: number
+    finalConfidence: number
+    directionConfidence: number
+    accelerationConfidence: number
+    zeroCrossConfidence: number
+  }
+}
+
 export type TradingPoolStatus =
   | '观察买点'
   | '准备介入'
+  | '涨停观察'
   | '已介入'
   | '持仓观察'
   | '观察中'
@@ -243,8 +261,7 @@ export type TradingPoolStatus =
 export type TradingPoolDecision = 'enter' | 'watch' | 'downgrade' | 'exit' | 'stale'
 
 export type TradingPoolSource =
-  | 'candidate_auto_add'
-  | 'candidate_watch'
+  | 'thesis'
   | 'jump_blocked_resonance'
   | 'live_projection'
   | 'manual'
@@ -260,6 +277,7 @@ export type TradingPoolRiskFlag =
   | 'jump_confidence_low'
   | 'final_confidence_low'
   | 'candidate_hard_blocked'
+  | 'limit_up'
   | 'data_stale'
 
 export interface TradingPoolSignalSnapshot {
@@ -277,21 +295,10 @@ export interface TradingPoolSignalSnapshot {
   buyVotes: number
   riskFlags: TradingPoolRiskFlag[]
   source: TradingPoolSource
+  limitUp: boolean
   momentumSyncBroken: boolean
   lifecycleAction: string | null
   dataQuality: 'fresh' | 'stale' | 'missing'
-}
-
-export interface TradingPoolConsensusBreakdown {
-  finalSignalPass: boolean
-  finalConfidencePass: boolean
-  buyVotesPass: boolean
-  jumpDirectionPass: boolean
-  jumpConfidencePass: boolean
-  trendBuyCountPass: boolean
-  noHardBlock: boolean
-  noMacdDeath: boolean
-  passedCount: number
 }
 
 export interface TradingPoolAnalysisRow {
@@ -301,7 +308,7 @@ export interface TradingPoolAnalysisRow {
   decision: TradingPoolDecision
   reasons: string[]
   signalSnapshot: TradingPoolSignalSnapshot
-  consensusBreakdown?: TradingPoolConsensusBreakdown
+  scoringBreakdown?: TradingPoolScoringBreakdown
 }
 
 export interface TradingPoolAnalysisResult {

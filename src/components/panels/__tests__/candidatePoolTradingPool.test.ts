@@ -54,6 +54,23 @@ describe('candidatePoolTradingPool helpers', () => {
     })
   })
 
+  it('normalizes legacy limitUp boolean strings without treating "0" as true', () => {
+    const row = readTradingPoolSnapshot({
+      quote: {
+        code: '601208',
+        name: '东材科技',
+      },
+      tradingPool: {
+        signalSnapshot: {
+          limitUp: '0',
+          dataQuality: 'fresh',
+        },
+      },
+    })
+
+    expect(row?.signalSnapshot.limitUp).toBe(false)
+  })
+
   it('treats stable trading-pool snapshots as unchanged even if recompute time differs', () => {
     const row = {
       code: '601208',

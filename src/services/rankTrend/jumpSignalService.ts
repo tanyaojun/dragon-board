@@ -92,28 +92,28 @@ export function checkEntryConditions(
   stock: any,
   rankTrend: RankTrendAnalysisResult,
   jump: JumpResult,
-): boolean {
+): { passed: boolean; limitUp: boolean } {
   // 1. 内生阈值：排名持续跳跃式上升
-  if (jump.event !== 'jump' || jump.direction !== 'buy' || !jump.sustained) return false
+  if (jump.event !== 'jump' || jump.direction !== 'buy' || !jump.sustained) return { passed: false, limitUp: false }
 
   // 2. 多周期动量和加速度共振
-  if (!hasMomentumConfirmation(rankTrend)) return false
+  if (!hasMomentumConfirmation(rankTrend)) return { passed: false, limitUp: false }
 
   // 3. 股价同向确认：股价在涨
   const changePct = Number(stock?.change ?? 0)
-  if (changePct <= 0) return false
+  if (changePct <= 0) return { passed: false, limitUp: false }
 
   // 4. 涨停板过滤
   const limitPct = dailyLimitPct(String(stock?.code ?? ''))
-  if (changePct >= limitPct - 0.3) return false
+  const limitUp = changePct >= limitPct - 0.3
 
   // 5. MACD 金叉
-  if (rankTrend.technical?.macd?.cross !== 'golden') return false
+  if (rankTrend.technical?.macd?.cross !== 'golden') return { passed: false, limitUp }
 
   // 6. 跳跃置信度 > 85
-  if (Number(jump.confidence ?? 0) < 85) return false
+  if (Number(jump.confidence ?? 0) < 85) return { passed: false, limitUp }
 
-  return true
+  return { passed: true, limitUp }
 }
 
 // ── 出场条件 OR（七条件，含持仓管理）──
@@ -177,13 +177,13 @@ export function evaluateJumpSignal(
   isInFrame: boolean,
 ): JumpSignalResult {
   const jump = detectRankJumps(percentiles, undefined, 15)
-  const isEntry = checkEntryConditions(stock, rankTrend, jump)
+  const entryCheck = checkEntryConditions(stock, rankTrend, jump)
   const currentPrice = Number(stock?.price ?? stock?.lastTradePrice ?? 0)
-  const [isExit, exitReason] = isEntry
+  const [isExit, exitReason] = entryCheck.passed
     ? [false, '']
     : checkExitConditions(stock, rankTrend, jump, isInFrame, currentPrice)
 
-  return { jump, isEntry, isExit, exitReason }
+  return { jump, isEntry: entryCheck.passed, isExit, exitReason, limitUp: entryCheck.limitUp }
 }
 
 export interface JumpSignalResult {
@@ -191,4 +191,5 @@ export interface JumpSignalResult {
   isEntry: boolean
   isExit: boolean
   exitReason: string
+  limitUp: boolean
 }

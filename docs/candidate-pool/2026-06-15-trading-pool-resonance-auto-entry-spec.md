@@ -1,9 +1,10 @@
 # 交易池强共振自动入池规格
 
 **日期**: 2026-06-15  
-**状态**: 待实现规格  
+**状态**: 历史规格，已被 2026-06-16 统一合同部分取代
 **范围**: RankTrend 候选池、交易池、DataTable 置信度 tooltip、CandidatePoolPanel 交易池面板  
 **背景样本**: `002171 楚江新材`、`603738 泰晶科技`，以及同类“综合共振强但 Jump 未过严格候选池阈值”的股票
+**覆盖说明**: 交易池 source 轨道、评分状态机、tooltip 语义、阈值真源和 limitUp 契约以 [交易池统一合同](./2026-06-16-trading-pool-unified-contract.md) 为准。本文中的 `candidate_auto_add`、`candidate_watch`、`jump_blocked_resonance` 独立输出来源为历史口径；当前输出归并为 `thesis` / `live_projection` / `persisted` / `manual` / `unknown`。
 
 ## 1. 结论
 
@@ -106,6 +107,8 @@ RiskFlags 至少包含：
 - `jump_blocked_resonance`: 候选池主要被 Jump 阈值阻断，但强共振召回。
 - `manual`: 用户手工加入。
 - `persisted`: 历史交易池记录恢复。
+
+> 2026-06-16 统一合同更新：当前输出 source 不再使用 `candidate_auto_add`、`candidate_watch`、`jump_blocked_resonance`。旧输入 `candidate_auto_add` / `jump_blocked_resonance` 兼容归并为 `thesis`，未知来源兜底为 `unknown`。
 
 ## 6. 候选池规则
 
@@ -392,7 +395,8 @@ interface TradingPoolSignalSnapshot {
 
 - 候选池严格入池可以继续被 Jump 阈值阻断。
 - 交易池不得忽略。
-- 交易池状态为 `观察买点` 或因风险降为 `观察中`，原因必须含 `jump_blocked_resonance`。
+- 历史口径：交易池状态为 `观察买点` 或因风险降为 `观察中`，原因必须含 `jump_blocked_resonance`。
+- 当前口径：`jump_blocked_resonance` 不再作为输出 source 或 reason；强共振票通过评分体系自然进入 `观察买点` / `准备介入`。
 
 ### 11.2 泰晶科技型
 

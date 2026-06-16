@@ -75,3 +75,61 @@ describe('UIStore data version', () => {
     }
   })
 })
+
+describe('UIStore table sorting', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    dataLayer.reset()
+  })
+
+  it('sorts Jump confidence by the displayed rankTrend jump confidence', () => {
+    const uiStore = useUIStore()
+    dataLayer.setMergedStocks([
+      { code: '000001', name: '低置信', rankTrend: { jump: { confidence: 50 } } },
+      { code: '000002', name: '高置信', rankTrend: { jump: { confidence: 84 } } },
+      { code: '000003', name: '中置信', rankTrend: { jump: { confidence: 76 } } },
+    ])
+
+    uiStore.toggleSort('confidence')
+
+    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000001', '000003', '000002'])
+
+    uiStore.toggleSort('confidence')
+
+    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000002', '000003', '000001'])
+  })
+
+  it('sorts rank change by the displayed rankTrend change value', () => {
+    const uiStore = useUIStore()
+    dataLayer.setMergedStocks([
+      { code: '000001', name: '弱变化', rankTrend: { meta: { change: 1 } } },
+      { code: '000002', name: '强变化', rankTrend: { change: 6 } },
+      { code: '000003', name: '负变化', rankChange: -2 },
+    ])
+
+    uiStore.toggleSort('rankChange')
+
+    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000003', '000001', '000002'])
+  })
+
+  it('sorts candidate pool column by the displayed strategy state source', () => {
+    const uiStore = useUIStore()
+    dataLayer.setMergedStocks([
+      { code: '000001', name: '未触发', candidatePoolStatus: 'idle' },
+      {
+        code: '000002',
+        name: '已入场',
+        candidatePoolProjection: { strategyState: 'active_holding' },
+      },
+      {
+        code: '000003',
+        name: '待入场',
+        candidatePoolProjection: { strategyState: 'triggered_wait_entry' },
+      },
+    ])
+
+    uiStore.toggleSort('jumpSignal')
+
+    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000001', '000003', '000002'])
+  })
+})

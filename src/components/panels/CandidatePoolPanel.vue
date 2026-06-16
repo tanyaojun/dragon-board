@@ -127,6 +127,7 @@
                     <option value="">全部跟踪状态</option>
                     <option value="观察买点">观察买点</option>
                     <option value="准备介入">准备介入</option>
+                    <option value="涨停观察">涨停观察</option>
                     <option value="观察中">观察中</option>
                     <option value="已介入">已介入</option>
                     <option value="已退出">已退出</option>
@@ -138,6 +139,7 @@
                     <span>股票</span>
                     <span>来源</span>
                     <span>状态</span>
+                    <span>评分</span>
                     <span>综合</span>
                     <span>Jump</span>
                     <span>票数</span>
@@ -162,6 +164,7 @@
                     <span class="trading-status-badge" :data-status="row.decision">
                       {{ tradingPoolStatusLabel(row) }}
                     </span>
+                    <span>{{ formatTradingPoolValue(row.scoringBreakdown?.totalScore, 1) }}</span>
                     <span>综合 {{ formatTradingPoolValue(row.signalSnapshot.finalConfidence, 0) }}</span>
                     <span>Jump {{ formatTradingPoolValue(row.signalSnapshot.jumpConfidence, 1) }}</span>
                     <span>{{ row.signalSnapshot.buyVotes }}/4</span>
@@ -184,26 +187,26 @@
                   <p>候选池结果：{{ tradingPoolSourceLabel(selectedTradingPoolRow.signalSnapshot.source) }}</p>
                   <p>交易池判定：{{ selectedTradingPoolRow.status }} / {{ tradingPoolDecisionLabel(selectedTradingPoolRow.decision) }}</p>
                   <p>
-                    信号矩阵：综合 {{ formatTradingPoolValue(selectedTradingPoolRow.signalSnapshot.finalConfidence, 0) }}，
+                    评分拆解：总分 {{ formatTradingPoolValue(selectedTradingPoolRow.scoringBreakdown?.totalScore, 1) }}，
+                    综合 {{ formatTradingPoolValue(selectedTradingPoolRow.signalSnapshot.finalConfidence, 0) }}，
                     Jump {{ formatTradingPoolValue(selectedTradingPoolRow.signalSnapshot.jumpConfidence, 1) }}，
                     买入票 {{ selectedTradingPoolRow.signalSnapshot.buyVotes }}/4
                   </p>
+                  <p>交易池动作：{{ tradingPoolDecisionLabel(selectedTradingPoolRow.decision) }}</p>
                   <p>风险：{{ formatRiskFlags(selectedTradingPoolRow.signalSnapshot.riskFlags) }}</p>
                   <p>原因：{{ formatTradingPoolReasons(selectedTradingPoolRow.reasons) }}</p>
-                  <div v-if="selectedTradingPoolRow.consensusBreakdown" class="consensus-matrix">
-                    <p class="consensus-title">
-                      强共振条件：
-                      {{ selectedTradingPoolRow.consensusBreakdown.passedCount }}/8 通过
+                  <div v-if="selectedTradingPoolRow.scoringBreakdown" class="scoring-breakdown">
+                    <p class="scoring-title">
+                      评分合计：
+                      {{ formatTradingPoolValue(selectedTradingPoolRow.scoringBreakdown.totalScore, 1) }} 分
                     </p>
-                    <div class="consensus-checks">
-                      <span :class="selectedTradingPoolRow.consensusBreakdown.finalSignalPass ? 'pass' : 'fail'">综合买入</span>
-                      <span :class="selectedTradingPoolRow.consensusBreakdown.finalConfidencePass ? 'pass' : 'fail'">综合≥阈值</span>
-                      <span :class="selectedTradingPoolRow.consensusBreakdown.buyVotesPass ? 'pass' : 'fail'">票数≥阈值</span>
-                      <span :class="selectedTradingPoolRow.consensusBreakdown.jumpDirectionPass ? 'pass' : 'fail'">Jump方向</span>
-                      <span :class="selectedTradingPoolRow.consensusBreakdown.jumpConfidencePass ? 'pass' : 'fail'">Jump≥阈值</span>
-                      <span :class="selectedTradingPoolRow.consensusBreakdown.trendBuyCountPass ? 'pass' : 'fail'">趋势≥2买</span>
-                      <span :class="selectedTradingPoolRow.consensusBreakdown.noHardBlock ? 'pass' : 'fail'">无硬阻断</span>
-                      <span :class="selectedTradingPoolRow.consensusBreakdown.noMacdDeath ? 'pass' : 'fail'">非死叉</span>
+                    <div class="scoring-pills">
+                      <span>离散 {{ formatTradingPoolValue(selectedTradingPoolRow.scoringBreakdown.discreteScore, 1) }}</span>
+                      <span>连续 {{ formatTradingPoolValue(selectedTradingPoolRow.scoringBreakdown.continuousScore, 1) }}</span>
+                      <span>MACD {{ formatTradingPoolValue(selectedTradingPoolRow.scoringBreakdown.discreteDetail.macdCross, 1) }}</span>
+                      <span>Jump方向 {{ formatTradingPoolValue(selectedTradingPoolRow.scoringBreakdown.discreteDetail.jumpDirection, 1) }}</span>
+                      <span>Jump置信 {{ formatTradingPoolValue(selectedTradingPoolRow.scoringBreakdown.continuousDetail.jumpConfidence, 1) }}</span>
+                      <span>最终置信 {{ formatTradingPoolValue(selectedTradingPoolRow.scoringBreakdown.continuousDetail.finalConfidence, 1) }}</span>
                     </div>
                   </div>
                 </section>
@@ -796,9 +799,8 @@ function tradingPoolStatusLabel(row: TradingPoolAnalysisRow): string {
 }
 
 function tradingPoolSourceLabel(source?: string | null): string {
-  if (source === 'candidate_auto_add') return '候选严格通过'
-  if (source === 'candidate_watch') return '候选观察'
-  if (source === 'jump_blocked_resonance') return 'Jump阻断强共振'
+  if (source === 'thesis') return '候选 thesis'
+  if (source === 'jump_blocked_resonance') return 'Jump阈值阻断'
   if (source === 'live_projection') return '热榜实时'
   if (source === 'manual') return '手工加入'
   if (source === 'persisted') return '持久化恢复'
@@ -821,6 +823,7 @@ function formatRiskFlags(flags: readonly string[] | undefined): string {
     jump_confidence_low: 'Jump低',
     final_confidence_low: '综合低',
     candidate_hard_blocked: '候选硬阻断',
+    limit_up: '涨停观察',
     data_stale: '数据过期',
   }
   return flags.map((flag) => labels[flag] || flag).join(' / ')
@@ -829,12 +832,15 @@ function formatRiskFlags(flags: readonly string[] | undefined): string {
 function formatTradingPoolReasons(reasons: readonly string[] | undefined): string {
   if (!reasons?.length) return '-'
   const labels: Record<string, string> = {
-    strong_consensus: '强共振',
+    strong_consensus: '评分达标',
     macd_golden_cross: 'MACD金叉',
-    jump_blocked_resonance: 'Jump阻断强共振',
-    consensus_not_enough: '共振不足',
+    jump_blocked_resonance: 'Jump阈值阻断',
+    consensus_not_enough: '评分不足',
+    consensus_moderate: '评分观察',
+    score_below_exit: '评分低于出池线',
     double_risk: '双风险',
     signal_stale: '信号过期',
+    limit_up: '涨停观察',
     jump_confidence_low: 'Jump偏低',
     momentum_sync_broken: '动量同步破坏',
     lifecycle_veto: '生命周期否决',
@@ -842,7 +848,7 @@ function formatTradingPoolReasons(reasons: readonly string[] | undefined): strin
     final_sell_signal: '综合卖出',
     low_votes_and_jump: '票数和Jump双弱',
     manual_intervened: '人工已介入',
-    signal_resonance: '信号共振',
+    signal_resonance: '信号同步',
   }
   return reasons.map((reason) => labels[reason] || reason).join(' / ')
 }
@@ -1935,7 +1941,7 @@ textarea:focus-visible {
 
 .trading-pool-row {
   display: grid;
-  grid-template-columns: 1.1fr 0.8fr 0.75fr 0.65fr 0.65fr 0.45fr 0.55fr 0.9fr minmax(120px, 1.15fr) 0.6fr;
+  grid-template-columns: 1.1fr 0.8fr 0.75fr 0.55fr 0.65fr 0.65fr 0.45fr 0.55fr 0.9fr minmax(120px, 1.15fr) 0.6fr;
   gap: 8px;
   align-items: center;
   min-height: 38px;
@@ -2020,35 +2026,26 @@ textarea:focus-visible {
   line-height: 1.55;
 }
 
-.consensus-title {
+.scoring-title {
   margin: 10px 0 6px !important;
   font-weight: 600;
   color: var(--candidate-accent, #ffb13b);
 }
 
-.consensus-checks {
+.scoring-pills {
   display: flex;
   flex-wrap: wrap;
   gap: 4px 8px;
 }
 
-.consensus-checks span {
+.scoring-pills span {
   padding: 2px 8px;
   border-radius: 4px;
   font-size: 12px;
   line-height: 1.6;
-}
-
-.consensus-checks span.pass {
   background: rgba(34, 197, 94, 0.15);
   color: #22c55e;
   border: 1px solid rgba(34, 197, 94, 0.3);
-}
-
-.consensus-checks span.fail {
-  background: rgba(239, 68, 68, 0.12);
-  color: #ef4444;
-  border: 1px solid rgba(239, 68, 68, 0.25);
 }
 
 .compact-btn {

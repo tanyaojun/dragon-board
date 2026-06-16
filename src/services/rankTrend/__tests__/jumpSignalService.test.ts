@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { checkEntryConditions } from '../jumpSignalService'
+import { checkEntryConditions, evaluateJumpSignal } from '../jumpSignalService'
+import { applyJumpSignal } from '../compat'
 import type { JumpResult } from '../jumpDetector'
 import type { RankTrendAnalysisResult } from '../types'
 
@@ -38,7 +39,7 @@ describe('checkEntryConditions', () => {
         rankTrendWithSignals('buy', 'buy'),
         baseJump,
       ),
-    ).toBe(true)
+    ).toEqual({ passed: true, limitUp: false })
   })
 
   it('缺少多周期动量和加速度共振时不触发入场', () => {
@@ -48,6 +49,46 @@ describe('checkEntryConditions', () => {
         rankTrendWithSignals('buy', 'hold'),
         baseJump,
       ),
-    ).toBe(false)
+    ).toEqual({ passed: false, limitUp: false })
+  })
+
+  it('涨停只标记 limitUp，不再阻断入场条件结果', () => {
+    expect(
+      checkEntryConditions(
+        { code: '600001', change: 9.8 },
+        rankTrendWithSignals('buy', 'buy'),
+        baseJump,
+      ),
+    ).toEqual({ passed: true, limitUp: true })
+  })
+})
+
+describe('evaluateJumpSignal', () => {
+  it('将 checkEntryConditions 产出的 limitUp 透传到聚合结果', () => {
+    const result = evaluateJumpSignal(
+      { code: '600001', change: 9.8 },
+      rankTrendWithSignals('buy', 'buy'),
+      [10, 35, 55, 80],
+      true,
+    )
+
+    expect(result.limitUp).toBe(true)
+  })
+})
+
+describe('applyJumpSignal', () => {
+  it('将 limitUp 写入 rankTrend.jump 和兼容字段', () => {
+    const stock = { rankTrend: {} }
+
+    applyJumpSignal(stock, {
+      jump: baseJump,
+      isEntry: true,
+      isExit: false,
+      exitReason: '',
+      limitUp: true,
+    })
+
+    expect(stock.rankTrend.jump.limitUp).toBe(true)
+    expect(stock.rankTrend._jumpLimitUp).toBe(true)
   })
 })

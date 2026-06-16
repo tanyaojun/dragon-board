@@ -1,14 +1,15 @@
+import { DEFAULT_RANK_TREND_LIVE_STRATEGY_CONFIG } from '@/config/rankTrendLiveStrategyConfig'
+import type { TradingPoolThresholds } from '@/types/rankTrendLiveStrategy'
 import type {
   TradingPoolAnalysisResult,
   TradingPoolAnalysisRow,
   TradingPoolDecision,
   TradingPoolRiskFlag,
+  TradingPoolScoringBreakdown,
   TradingPoolSignalSnapshot,
   TradingPoolSource,
   TradingPoolStatus,
 } from './types'
-import type { TradingPoolThresholds } from '@/types/rankTrendLiveStrategy'
-import { DEFAULT_RANK_TREND_LIVE_STRATEGY_CONFIG } from '@/config/rankTrendLiveStrategyConfig'
 
 type TradingPoolCandidateLike = Record<string, any>
 
@@ -16,13 +17,13 @@ interface TradingPoolInput {
   candidates: TradingPoolCandidateLike[]
   previousRows?: Array<Partial<TradingPoolAnalysisRow> & { code: string }>
   liveStocks?: TradingPoolCandidateLike[]
-  thresholds?: TradingPoolThresholds
 }
 
 interface TradingPoolDecisionResult {
   status: TradingPoolStatus
   decision: TradingPoolDecision
   reasons: string[]
+  scoringBreakdown: TradingPoolScoringBreakdown
 }
 
 function normalizeCode(code: unknown): string {
@@ -58,13 +59,6 @@ function countBuyVotes(signals: Pick<
   ].filter(Boolean).length
 }
 
-function hasDoubleRisk(signals: TradingPoolSignalSnapshot): boolean {
-  return (
-    signals.riskFlags.includes('overheat_sell') &&
-    signals.riskFlags.includes('capital_divergence_sell')
-  )
-}
-
 function getEntryDecision(stock: TradingPoolCandidateLike): Record<string, any> | null {
   if (stock.tradingPoolSource === 'live_projection') return null
   return stock.candidateEntryDecision || stock.entryDecision || null
@@ -73,12 +67,6 @@ function getEntryDecision(stock: TradingPoolCandidateLike): Record<string, any> 
 function readGateCheckNumber(stock: TradingPoolCandidateLike, key: string): number | null {
   const check = (getEntryDecision(stock)?.checks || []).find((item: any) => item?.key === key)
   return normalizeConfidence(check?.actual)
-}
-
-function isJumpBlockedOnly(stock: TradingPoolCandidateLike): boolean {
-  const checks = getEntryDecision(stock)?.checks || []
-  const hardBlocks = checks.filter((check: any) => check?.hardBlock && check?.status === 'fail')
-  return hardBlocks.length > 0 && hardBlocks.every((check: any) => check.key === 'jump_confidence')
 }
 
 function hasNonJumpHardBlock(stock: TradingPoolCandidateLike): boolean {
@@ -92,10 +80,10 @@ function resolveTradingPoolSource(stock: TradingPoolCandidateLike): TradingPoolS
   if (stock.tradingPoolSource === 'manual') return 'manual'
   if (stock.tradingPoolSource === 'persisted') return 'persisted'
   if (stock.tradingPoolSource === 'live_projection') return 'live_projection'
-  const decision = getEntryDecision(stock)
-  if (decision?.accepted) return 'candidate_auto_add'
-  if (isJumpBlockedOnly(stock)) return 'jump_blocked_resonance'
-  if (decision) return 'candidate_watch'
+  if (stock.tradingPoolSource === 'thesis') return 'thesis'
+  if (stock.tradingPoolSource === 'jump_blocked_resonance') return 'thesis'
+  if (stock.tradingPoolSource === 'candidate_auto_add') return 'thesis'
+  if (getEntryDecision(stock)) return 'thesis'
   return 'unknown'
 }
 
@@ -103,7 +91,6 @@ function readRiskFlags(
   rankTrend: any,
   stock: TradingPoolCandidateLike,
   signals: TradingPoolSignalSnapshot,
-  t: TradingPoolThresholds,
 ): TradingPoolRiskFlag[] {
   const flags: TradingPoolRiskFlag[] = []
 
@@ -123,18 +110,64 @@ function readRiskFlags(
   ) {
     flags.push('capital_divergence_sell')
   }
-  if (signals.momentumSyncBroken) flags.push('momentum_sync_broken')
-  if ((signals.jumpConfidence ?? 100) < t.downgradeJumpMin) flags.push('jump_confidence_low')
-  if ((signals.finalConfidence ?? 100) < t.downgradeFinalMin) flags.push('final_confidence_low')
   if (hasNonJumpHardBlock(stock)) flags.push('candidate_hard_blocked')
+  if (signals.limitUp) flags.push('limit_up')
   if (signals.dataQuality !== 'fresh') flags.push('data_stale')
 
   return flags
 }
 
-function readTradingSignals(stock: TradingPoolCandidateLike, t: TradingPoolThresholds): TradingPoolSignalSnapshot {
+function computeResonanceScore(
+  signals: Pick<
+    TradingPoolSignalSnapshot,
+    | 'macdCross'
+    | 'jumpDirection'
+    | 'jumpConfidence'
+    | 'finalConfidence'
+    | 'directionConfidence'
+    | 'accelerationConfidence'
+    | 'zeroCrossConfidence'
+  > & { lifecycleAction: string | null },
+  weights = DEFAULT_RANK_TREND_LIVE_STRATEGY_CONFIG.tradingPool.weights,
+): TradingPoolScoringBreakdown {
+  const macdCrossScore = signals.macdCross === 'golden' ? 3 : signals.macdCross === 'death' ? -3 : 0
+  const jumpDirectionScore = signals.jumpDirection === 'buy' ? 2 : signals.jumpDirection === 'sell' ? -2 : 0
+  const discreteScore = macdCrossScore + jumpDirectionScore
+
+  const jumpConfidenceScore = ((signals.jumpConfidence ?? 0) / 100) * weights.jumpConfidence * 5
+  const finalConfidenceScore = ((signals.finalConfidence ?? 0) / 100) * weights.finalConfidence * 5
+  const directionConfidenceScore = ((signals.directionConfidence ?? 0) / 100) * weights.directionConfidence * 5
+  const accelerationConfidenceScore = ((signals.accelerationConfidence ?? 0) / 100) * weights.accelerationConfidence * 5
+  const zeroCrossConfidenceScore = ((signals.zeroCrossConfidence ?? 0) / 100) * weights.zeroCrossConfidence * 5
+  const continuousScore =
+    jumpConfidenceScore +
+    finalConfidenceScore +
+    directionConfidenceScore +
+    accelerationConfidenceScore +
+    zeroCrossConfidenceScore
+
+  return {
+    totalScore: Math.round((discreteScore + continuousScore) * 100) / 100,
+    discreteScore: Math.round(discreteScore * 100) / 100,
+    continuousScore: Math.round(continuousScore * 100) / 100,
+    discreteDetail: {
+      macdCross: macdCrossScore,
+      jumpDirection: jumpDirectionScore,
+    },
+    continuousDetail: {
+      jumpConfidence: Math.round(jumpConfidenceScore * 100) / 100,
+      finalConfidence: Math.round(finalConfidenceScore * 100) / 100,
+      directionConfidence: Math.round(directionConfidenceScore * 100) / 100,
+      accelerationConfidence: Math.round(accelerationConfidenceScore * 100) / 100,
+      zeroCrossConfidence: Math.round(zeroCrossConfidenceScore * 100) / 100,
+    },
+  }
+}
+
+function readTradingSignals(stock: TradingPoolCandidateLike): TradingPoolSignalSnapshot {
   const hasRankTrend = hasOwnValue(stock, 'rankTrend')
   const rankTrend = hasRankTrend ? stock.rankTrend : null
+  const limitUp = Boolean(rankTrend?.jump?.limitUp ?? rankTrend?._jumpLimitUp ?? false)
   const snapshot: TradingPoolSignalSnapshot = {
     finalSignal: rankTrend?.decision?.final?.signal ?? stock.finalSignal ?? null,
     finalConfidence: normalizeConfidence(rankTrend?.decision?.final?.confidence ?? stock.finalConfidence),
@@ -143,7 +176,8 @@ function readTradingSignals(stock: TradingPoolCandidateLike, t: TradingPoolThres
     directionConfidence: normalizeConfidence(
       rankTrend?.technical?.signals?.direction?.confidence ?? stock.directionConfidence,
     ),
-    jumpConfidence: normalizeConfidence(rankTrend?.jump?.confidence ?? stock.jumpConfidence) ??
+    jumpConfidence:
+      normalizeConfidence(rankTrend?.jump?.confidence ?? stock.jumpConfidence) ??
       readGateCheckNumber(stock, 'jump_confidence'),
     macdCross: rankTrend?.technical?.macd?.cross ?? stock.macdCross ?? null,
     accelerationSignal:
@@ -158,12 +192,13 @@ function readTradingSignals(stock: TradingPoolCandidateLike, t: TradingPoolThres
     buyVotes: 0,
     riskFlags: [],
     source: resolveTradingPoolSource(stock),
+    limitUp,
     momentumSyncBroken: Boolean(rankTrend?.technical?.momentumProfile?.syncBroken),
     lifecycleAction: rankTrend?.cycle?.decision?.action ?? stock.lifecycleAction ?? null,
     dataQuality: hasRankTrend ? (rankTrend != null ? 'fresh' : 'stale') : 'missing',
   }
   snapshot.buyVotes = countBuyVotes(snapshot)
-  snapshot.riskFlags = readRiskFlags(rankTrend, stock, snapshot, t)
+  snapshot.riskFlags = readRiskFlags(rankTrend, stock, snapshot)
   return snapshot
 }
 
@@ -174,127 +209,73 @@ function hasFreshSignals(signals: TradingPoolSignalSnapshot): boolean {
 function decideTradingPoolStatus(
   signals: TradingPoolSignalSnapshot,
   previous: Partial<TradingPoolAnalysisRow> | null | undefined,
-  t: TradingPoolThresholds,
+  scoring: TradingPoolThresholds['scoring'],
+  weights: TradingPoolThresholds['weights'],
 ): TradingPoolDecisionResult {
+  const scoringBreakdown = computeResonanceScore(signals, weights)
+
+  if (signals.lifecycleAction === 'veto') {
+    return { status: '已退出', decision: 'exit', reasons: ['lifecycle_veto'], scoringBreakdown }
+  }
+
+  if (signals.limitUp) {
+    return { status: '涨停观察', decision: 'watch', reasons: ['limit_up'], scoringBreakdown }
+  }
+
   if (!hasFreshSignals(signals)) {
     return {
       status: (previous?.status as TradingPoolStatus) || '观察中',
       decision: 'stale',
       reasons: ['signal_stale'],
+      scoringBreakdown,
     }
   }
 
-  if (signals.lifecycleAction === 'veto') {
-    return { status: '已退出', decision: 'exit', reasons: ['lifecycle_veto'] }
-  }
-
-  if (signals.macdCross === 'death' && (signals.directionSignal !== 'buy' || signals.zeroCrossSignal === 'sell')) {
-    const reasons = ['macd_death_cross']
-    if (signals.directionSignal !== 'buy') reasons.push('direction_weak')
-    if (signals.zeroCrossSignal === 'sell') reasons.push('zero_cross_sell')
-    return { status: '已退出', decision: 'exit', reasons }
-  }
-
-  if (signals.finalSignal === 'sell' && (signals.finalConfidence ?? 0) >= t.exitFinalSell) {
-    return { status: '已退出', decision: 'exit', reasons: ['final_sell_signal'] }
-  }
-
-  const wasIntervened = previous?.status === '已介入'
-  if (wasIntervened) {
-    if (signals.finalSignal === 'hold' && (signals.finalConfidence ?? 0) < t.observeFinalMin) {
-      return { status: '观察中', decision: 'downgrade', reasons: ['intervened_consensus_weakened'] }
-    }
-    if (
-      signals.buyVotes <= 1 &&
-      signals.jumpConfidence != null &&
-      signals.jumpConfidence < t.downgradeJumpMin
-    ) {
-      return { status: '观察中', decision: 'downgrade', reasons: ['intervened_votes_and_jump_low'] }
+  if (previous?.status === '已介入') {
+    if (scoringBreakdown.totalScore < scoring.exitMax) {
+      return { status: '已退出', decision: 'exit', reasons: ['score_below_exit'], scoringBreakdown }
     }
     return {
       status: '已介入',
       decision: 'stale',
       reasons: signals.riskFlags.length ? ['intervened_keep_with_risk'] : ['intervened_keep'],
+      scoringBreakdown,
     }
   }
 
+  if (scoringBreakdown.totalScore < scoring.exitMax) {
+    return { status: '已退出', decision: 'exit', reasons: ['score_below_exit'], scoringBreakdown }
+  }
+
   if (
-    signals.buyVotes <= 1 &&
-    signals.jumpConfidence != null &&
-    signals.jumpConfidence < t.downgradeJumpMin
+    scoringBreakdown.totalScore >= scoring.readyMin &&
+    signals.macdCross === 'golden' &&
+    (signals.jumpConfidence ?? 0) >= scoring.readyJumpMin
   ) {
-    return { status: '已退出', decision: 'exit', reasons: ['low_votes_and_jump'] }
-  }
-
-  if ((signals.finalConfidence ?? 100) < t.downgradeFinalMin) {
-    return { status: '观察中', decision: 'downgrade', reasons: ['consensus_not_enough'] }
-  }
-
-  if ((signals.jumpConfidence ?? 100) < t.recallJumpMin) {
-    return { status: '观察中', decision: 'downgrade', reasons: ['jump_confidence_low'] }
-  }
-
-  if (signals.momentumSyncBroken) {
-    return { status: '观察中', decision: 'downgrade', reasons: ['momentum_sync_broken'] }
-  }
-
-  const trendBuyCount = [
-    signals.directionSignal,
-    signals.accelerationSignal,
-    signals.zeroCrossSignal,
-  ].filter((item) => item === 'buy').length
-  const hasFinalInput = signals.finalSignal != null
-  const finalSignalPass = hasFinalInput ? signals.finalSignal === 'buy' : true
-  const finalConfidencePass = hasFinalInput
-    ? (signals.finalConfidence ?? 0) >= t.observeFinalMin
-    : true
-  const jumpDirectionPass =
-    signals.jumpDirection == null ||
-    signals.jumpDirection === 'buy' ||
-    (signals.jumpDirection === 'hold' && (signals.jumpConfidence ?? 0) >= t.jumpHoldMinConfidence)
-  const strongConsensus =
-    finalSignalPass &&
-    finalConfidencePass &&
-    signals.buyVotes >= t.buyVotesMin &&
-    jumpDirectionPass &&
-    (signals.jumpConfidence ?? 0) >= t.recallJumpMin &&
-    trendBuyCount >= 2 &&
-    !signals.riskFlags.includes('candidate_hard_blocked') &&
-    signals.macdCross !== 'death'
-
-  if (!strongConsensus) {
-    return { status: '观察中', decision: 'watch', reasons: ['consensus_not_enough'] }
-  }
-
-  if (hasDoubleRisk(signals)) {
-    return { status: '观察中', decision: 'downgrade', reasons: ['double_risk'] }
-  }
-
-  const ready =
-    (signals.finalConfidence ?? 0) >= t.readyFinalMin &&
-    (signals.jumpConfidence ?? 0) >= t.readyJumpMin &&
-    (signals.macdCross === 'golden' || (signals.zeroCrossSignal === 'buy' && signals.directionSignal === 'buy'))
-
-  if (ready) {
     return {
       status: '准备介入',
       decision: 'enter',
-      reasons: signals.macdCross === 'golden'
-        ? ['strong_consensus', 'macd_golden_cross']
-        : ['strong_consensus'],
+      reasons: ['strong_consensus', 'macd_golden_cross'],
+      scoringBreakdown,
     }
   }
 
-  if (
-    signals.directionSignal === 'buy' &&
-    signals.macdCross === 'golden' &&
-    signals.accelerationSignal === 'buy' &&
-    signals.zeroCrossSignal === 'buy'
-  ) {
-    return { status: '观察买点', decision: 'enter', reasons: ['strong_consensus', 'signal_resonance'] }
+  if (scoringBreakdown.totalScore >= scoring.buyPointMin) {
+    const resonance =
+      signals.directionSignal === 'buy' &&
+      signals.macdCross === 'golden' &&
+      signals.accelerationSignal === 'buy' &&
+      signals.zeroCrossSignal === 'buy'
+        ? ['strong_consensus', 'signal_resonance']
+        : ['strong_consensus']
+    return { status: '观察买点', decision: 'enter', reasons: resonance, scoringBreakdown }
   }
 
-  return { status: '观察买点', decision: 'enter', reasons: ['strong_consensus'] }
+  if (scoringBreakdown.totalScore >= scoring.observeMin) {
+    return { status: '观察中', decision: 'watch', reasons: ['consensus_moderate'], scoringBreakdown }
+  }
+
+  return { status: '观察中', decision: 'watch', reasons: ['consensus_moderate'], scoringBreakdown }
 }
 
 function buildPreviousRowMap(previousRows: TradingPoolInput['previousRows']) {
@@ -308,7 +289,9 @@ function buildPreviousRowMap(previousRows: TradingPoolInput['previousRows']) {
 }
 
 export function analyzeTradingPoolCandidate(input: TradingPoolInput): TradingPoolAnalysisResult {
-  const t = input.thresholds ?? DEFAULT_RANK_TREND_LIVE_STRATEGY_CONFIG.tradingPool
+  const tradingPoolConfig = DEFAULT_RANK_TREND_LIVE_STRATEGY_CONFIG.tradingPool
+  const scoring = tradingPoolConfig.scoring
+  const weights = tradingPoolConfig.weights
   const previousRows = buildPreviousRowMap(input.previousRows)
 
   const thesisCodes = new Set<string>()
@@ -321,15 +304,13 @@ export function analyzeTradingPoolCandidate(input: TradingPoolInput): TradingPoo
     mergedCandidates.push(candidate)
   }
 
-  if (input.liveStocks) {
-    for (const stock of input.liveStocks) {
-      const code = normalizeCode(stock.code)
-      if (!code || thesisCodes.has(code)) continue
-      mergedCandidates.push({
-        ...stock,
-        tradingPoolSource: 'live_projection' as TradingPoolSource,
-      })
-    }
+  for (const stock of input.liveStocks || []) {
+    const code = normalizeCode(stock.code)
+    if (!code || thesisCodes.has(code)) continue
+    mergedCandidates.push({
+      ...stock,
+      tradingPoolSource: stock.tradingPoolSource || 'live_projection',
+    })
   }
 
   const rows: TradingPoolAnalysisRow[] = []
@@ -340,56 +321,23 @@ export function analyzeTradingPoolCandidate(input: TradingPoolInput): TradingPoo
     const code = normalizeCode(candidate.code)
     if (!code) continue
 
-    const signals = readTradingSignals(candidate, t)
+    const signals = readTradingSignals(candidate)
     const previous = previousRows.get(code) || null
-    const decisionResult = decideTradingPoolStatus(signals, previous, t)
-    const sourceReason = signals.source === 'jump_blocked_resonance' ? ['jump_blocked_resonance'] : []
+    const decisionResult = decideTradingPoolStatus(signals, previous, scoring, weights)
+
     const resolvedSignals = {
       ...signals,
-      dataQuality:
-        decisionResult.decision === 'stale' ? 'stale' : signals.dataQuality,
+      dataQuality: decisionResult.decision === 'stale' ? 'stale' : signals.dataQuality,
     } as TradingPoolSignalSnapshot
-    const trendBuyCount = [
-      signals.directionSignal,
-      signals.accelerationSignal,
-      signals.zeroCrossSignal,
-    ].filter((item) => item === 'buy').length
-    const hasFinalInput = signals.finalSignal != null
-    const consensusBreakdown = {
-      finalSignalPass: hasFinalInput ? signals.finalSignal === 'buy' : true,
-      finalConfidencePass: hasFinalInput
-        ? (signals.finalConfidence ?? 0) >= t.observeFinalMin
-        : true,
-      buyVotesPass: signals.buyVotes >= t.buyVotesMin,
-      jumpDirectionPass:
-        signals.jumpDirection == null ||
-        signals.jumpDirection === 'buy' ||
-        (signals.jumpDirection === 'hold' && (signals.jumpConfidence ?? 0) >= t.jumpHoldMinConfidence),
-      jumpConfidencePass: (signals.jumpConfidence ?? 0) >= t.recallJumpMin,
-      trendBuyCountPass: trendBuyCount >= 2,
-      noHardBlock: !signals.riskFlags.includes('candidate_hard_blocked'),
-      noMacdDeath: signals.macdCross !== 'death',
-      passedCount: 0,
-    }
-    consensusBreakdown.passedCount = [
-      consensusBreakdown.finalSignalPass,
-      consensusBreakdown.finalConfidencePass,
-      consensusBreakdown.buyVotesPass,
-      consensusBreakdown.jumpDirectionPass,
-      consensusBreakdown.jumpConfidencePass,
-      consensusBreakdown.trendBuyCountPass,
-      consensusBreakdown.noHardBlock,
-      consensusBreakdown.noMacdDeath,
-    ].filter(Boolean).length
 
     const row: TradingPoolAnalysisRow = {
       code,
       name: candidate.name ? String(candidate.name) : undefined,
       status: decisionResult.status,
       decision: decisionResult.decision,
-      reasons: [...decisionResult.reasons, ...sourceReason],
+      reasons: decisionResult.reasons.slice(),
       signalSnapshot: resolvedSignals,
-      consensusBreakdown,
+      scoringBreakdown: decisionResult.scoringBreakdown,
     }
 
     rows.push(row)

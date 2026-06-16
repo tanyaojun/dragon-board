@@ -1,9 +1,10 @@
 # 交易池共振入池——全链路诊断与优化方向
 
 **日期**: 2026-06-16
-**状态**: A+C+E 已实施，B+D 待讨论
+**状态**: 历史诊断；B+D 已按统一合同落地
 **关联**: [2026-06-15 交易池强共振自动入池规格](./2026-06-15-trading-pool-resonance-auto-entry-spec.md)
 **关联**: [2026-06-16 交易池实时投影接入设计方案](./2026-06-16-trading-pool-live-data-integration-design.md)
+**当前口径**: 本文中的 `strongConsensus` AND 门、BuyVotes “共振评级”和涨停硬过滤均为当时诊断对象；当前实现以 [交易池统一合同](./2026-06-16-trading-pool-unified-contract.md) 的评分状态机、`共振评分` tooltip 和 `limitUp` 分轨为准。
 
 ## 1. 诊断过程
 
