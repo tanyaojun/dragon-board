@@ -11,6 +11,14 @@ export const RANK_TREND_LIVE_STRATEGY_CONFIG_STORAGE_KEY =
 export const RANK_TREND_LIVE_STRATEGY_CONFIG_VERSION = 'live-v5.1.0'
 
 const TRADING_POOL_RECALL_FIRST: TradingPoolThresholds = {
+  scoring: { exitMax: 6, observeMin: 6, buyPointMin: 12, readyMin: 16, readyJumpMin: 75, readyMacdRequired: 'golden' as const },
+  weights: {
+    jumpConfidence: 2,
+    finalConfidence: 1.5,
+    directionConfidence: 1,
+    accelerationConfidence: 1,
+    zeroCrossConfidence: 0.5,
+  },
   recallJumpMin: 75,
   readyJumpMin: 80,
   observeFinalMin: 80,
@@ -23,6 +31,14 @@ const TRADING_POOL_RECALL_FIRST: TradingPoolThresholds = {
 }
 
 const TRADING_POOL_BALANCED: TradingPoolThresholds = {
+  scoring: { exitMax: 8, observeMin: 8, buyPointMin: 15, readyMin: 20, readyJumpMin: 80, readyMacdRequired: 'golden' as const },
+  weights: {
+    jumpConfidence: 2,
+    finalConfidence: 1.5,
+    directionConfidence: 1,
+    accelerationConfidence: 1,
+    zeroCrossConfidence: 0.5,
+  },
   recallJumpMin: 80,
   readyJumpMin: 85,
   observeFinalMin: 85,
@@ -35,6 +51,14 @@ const TRADING_POOL_BALANCED: TradingPoolThresholds = {
 }
 
 const TRADING_POOL_STRICT: TradingPoolThresholds = {
+  scoring: { exitMax: 10, observeMin: 10, buyPointMin: 18, readyMin: 24, readyJumpMin: 85, readyMacdRequired: 'golden' as const },
+  weights: {
+    jumpConfidence: 2,
+    finalConfidence: 1.5,
+    directionConfidence: 1,
+    accelerationConfidence: 1,
+    zeroCrossConfidence: 0.5,
+  },
   recallJumpMin: 85,
   readyJumpMin: 90,
   observeFinalMin: 88,
@@ -131,7 +155,38 @@ function normalizeTradingPool(
   patch: Partial<TradingPoolThresholds> | undefined,
   base: TradingPoolThresholds,
 ): TradingPoolThresholds {
+  const weights = patch?.weights || base.weights
   return {
+    scoring: {
+      exitMax: normalizeNumber(patch?.scoring?.exitMax, base.scoring.exitMax, 0, 100),
+      observeMin: normalizeNumber(patch?.scoring?.observeMin, base.scoring.observeMin, 0, 100),
+      buyPointMin: normalizeNumber(patch?.scoring?.buyPointMin, base.scoring.buyPointMin, 0, 100),
+      readyMin: normalizeNumber(patch?.scoring?.readyMin, base.scoring.readyMin, 0, 100),
+      readyJumpMin: normalizeNumber(patch?.scoring?.readyJumpMin, base.scoring.readyJumpMin, 0, 100),
+      readyMacdRequired: 'golden' as const,
+    },
+    weights: {
+      jumpConfidence: normalizeNumber(weights.jumpConfidence, base.weights.jumpConfidence, 0, 10),
+      finalConfidence: normalizeNumber(weights.finalConfidence, base.weights.finalConfidence, 0, 10),
+      directionConfidence: normalizeNumber(
+        weights.directionConfidence,
+        base.weights.directionConfidence,
+        0,
+        10,
+      ),
+      accelerationConfidence: normalizeNumber(
+        weights.accelerationConfidence,
+        base.weights.accelerationConfidence,
+        0,
+        10,
+      ),
+      zeroCrossConfidence: normalizeNumber(
+        weights.zeroCrossConfidence,
+        base.weights.zeroCrossConfidence,
+        0,
+        10,
+      ),
+    },
     recallJumpMin: normalizeNumber(patch?.recallJumpMin, base.recallJumpMin, 0, 100),
     readyJumpMin: normalizeNumber(patch?.readyJumpMin, base.readyJumpMin, 0, 100),
     observeFinalMin: normalizeNumber(patch?.observeFinalMin, base.observeFinalMin, 0, 100),

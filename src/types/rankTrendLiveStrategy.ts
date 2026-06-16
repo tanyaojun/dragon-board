@@ -17,16 +17,44 @@ export interface RankTrendLiveChangeGateConfig {
   maxEntryChangePct: number | null
 }
 
-export interface TradingPoolThresholds {
-  recallJumpMin: number
+export interface ScoringThresholds {
+  exitMax: number
+  observeMin: number
+  buyPointMin: number
+  readyMin: number
   readyJumpMin: number
+  readonly readyMacdRequired: 'golden'
+}
+
+export interface ContinuousWeights {
+  jumpConfidence: number
+  finalConfidence: number
+  directionConfidence: number
+  accelerationConfidence: number
+  zeroCrossConfidence: number
+}
+
+export interface TradingPoolThresholds {
+  scoring: ScoringThresholds
+  weights: ContinuousWeights
+  /** @deprecated retained for compatibility only */
+  recallJumpMin: number
+  /** @deprecated retained for compatibility only */
+  readyJumpMin: number
+  /** @deprecated retained for compatibility only */
   observeFinalMin: number
+  /** @deprecated retained for compatibility only */
   readyFinalMin: number
+  /** @deprecated retained for compatibility only */
   buyVotesMin: number
+  /** @deprecated retained for compatibility only */
   downgradeJumpMin: number
+  /** @deprecated retained for compatibility only */
   downgradeFinalMin: number
+  /** @deprecated retained for compatibility only */
   exitFinalSell: number
   /** Jump 方向为 hold 时，替代 jumpDirection=buy 的最低置信度补偿阈值 */
+  /** @deprecated retained for compatibility only */
   jumpHoldMinConfidence: number
 }
 

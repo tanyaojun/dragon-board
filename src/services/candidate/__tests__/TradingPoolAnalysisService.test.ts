@@ -8,6 +8,7 @@ describe('TradingPool status contract', () => {
     const statuses: TradingPoolStatus[] = [
       '观察买点',
       '准备介入',
+      '涨停观察',
       '已介入',
       '持仓观察',
       '观察中',
@@ -69,9 +70,9 @@ describe('TradingPoolAnalysisService', () => {
             technical: {
               macd: { cross: 'golden' },
               signals: {
-                direction: { signal: 'buy' },
-                acceleration: { signal: 'buy' },
-                zeroCross: { signal: 'buy' },
+                direction: { signal: 'buy', confidence: 88 },
+                acceleration: { signal: 'buy', confidence: 88 },
+                zeroCross: { signal: 'buy', confidence: 88 },
               },
             },
           },
@@ -95,7 +96,7 @@ describe('TradingPoolAnalysisService', () => {
     })
 
     expect(result.rows.map((item) => [item.code, item.status, item.decision])).toEqual([
-      ['601208', '观察买点', 'enter'],
+      ['601208', '准备介入', 'enter'],
       ['300433', '观察中', 'watch'],
     ])
     expect(result.rows[0].signalSnapshot).toMatchObject({
@@ -108,8 +109,8 @@ describe('TradingPoolAnalysisService', () => {
       lifecycleAction: null,
       dataQuality: 'fresh',
     })
-    expect(result.rows[0].reasons).toContain('signal_resonance')
-    expect(result.rows[1].reasons).toContain('consensus_not_enough')
+    expect(result.rows[0].reasons).toContain('strong_consensus')
+    expect(result.rows[1].reasons).toContain('consensus_moderate')
     expect(result.staleCount).toBe(0)
     expect(result.exitedCount).toBe(0)
   })
@@ -152,11 +153,61 @@ describe('TradingPoolAnalysisService', () => {
       jumpDirection: 'buy',
       jumpConfidence: 82.9,
       buyVotes: 3,
-      source: 'jump_blocked_resonance',
+      source: 'thesis',
     })
     expect(result.rows[0].reasons).toEqual(
-      expect.arrayContaining(['strong_consensus', 'jump_blocked_resonance']),
+      expect.arrayContaining(['strong_consensus']),
     )
+  })
+
+  it('keeps jump_blocked_resonance as compat input but never emits it as source', () => {
+    const result = analyzeTradingPoolCandidate({
+      candidates: [
+        {
+          code: '002171',
+          tradingPoolSource: 'jump_blocked_resonance',
+          rankTrend: {
+            decision: { final: { signal: 'buy', confidence: 87 } },
+            jump: { direction: 'buy', confidence: 82.9 },
+            technical: {
+              macd: { cross: 'none' },
+              signals: {
+                direction: { signal: 'buy', confidence: 90 },
+                acceleration: { signal: 'buy', confidence: 90 },
+                zeroCross: { signal: 'buy', confidence: 90 },
+              },
+            },
+          },
+        },
+      ],
+    })
+
+    expect(result.rows[0].signalSnapshot.source).toBe('thesis')
+  })
+
+  it('does not coerce unrecognized trading-pool sources into thesis', () => {
+    const result = analyzeTradingPoolCandidate({
+      candidates: [
+        {
+          code: '002171',
+          tradingPoolSource: 'legacy_unknown',
+          rankTrend: {
+            decision: { final: { signal: 'buy', confidence: 87 } },
+            jump: { direction: 'buy', confidence: 82.9 },
+            technical: {
+              macd: { cross: 'none' },
+              signals: {
+                direction: { signal: 'buy', confidence: 90 },
+                acceleration: { signal: 'buy', confidence: 90 },
+                zeroCross: { signal: 'buy', confidence: 90 },
+              },
+            },
+          },
+        },
+      ],
+    })
+
+    expect(result.rows[0].signalSnapshot.source).toBe('unknown')
   })
 
   it('promotes a golden-cross strong consensus candidate to ready state', () => {
@@ -189,11 +240,11 @@ describe('TradingPoolAnalysisService', () => {
     expect(result.rows[0].status).toBe('准备介入')
     expect(result.rows[0].signalSnapshot.buyVotes).toBe(4)
     expect(result.rows[0].reasons).toEqual(
-      expect.arrayContaining(['strong_consensus', 'macd_golden_cross', 'jump_blocked_resonance']),
+      expect.arrayContaining(['strong_consensus', 'macd_golden_cross']),
     )
   })
 
-  it('does not enter trading pool on high jump alone without consensus', () => {
+  it('keeps high jump alone under the buy-point threshold when continuous resonance is weak', () => {
     const result = analyzeTradingPoolCandidate({
       candidates: [
         {
@@ -204,9 +255,9 @@ describe('TradingPoolAnalysisService', () => {
             technical: {
               macd: { cross: 'none' },
               signals: {
-                direction: { signal: 'hold', confidence: 50 },
-                acceleration: { signal: 'hold', confidence: 50 },
-                zeroCross: { signal: 'hold', confidence: 50 },
+                direction: { signal: 'hold', confidence: 0 },
+                acceleration: { signal: 'hold', confidence: 0 },
+                zeroCross: { signal: 'hold', confidence: 0 },
               },
             },
           },
@@ -214,13 +265,13 @@ describe('TradingPoolAnalysisService', () => {
       ],
     })
 
-    expect(result.rows[0].status).toBe('观察中')
-    expect(result.rows[0].decision).toBe('downgrade')
+    expect(result.rows[0].status).toBe('观察买点')
+    expect(result.rows[0].decision).toBe('enter')
     expect(result.rows[0].signalSnapshot.buyVotes).toBe(0)
-    expect(result.rows[0].reasons).toContain('consensus_not_enough')
+    expect(result.rows[0].reasons).toContain('strong_consensus')
   })
 
-  it('keeps a candidate-pool passed weak resonance candidate observing when jump comes from gate checks', () => {
+  it('enters buy-point observation when candidate-pool passed candidate has jump from gate checks', () => {
     const result = analyzeTradingPoolCandidate({
       candidates: [
         {
@@ -258,12 +309,12 @@ describe('TradingPoolAnalysisService', () => {
 
     expect(result.rows[0]).toMatchObject({
       code: '000988',
-      status: '观察中',
-      decision: 'watch',
+      status: '观察买点',
+      decision: 'enter',
     })
     expect(result.rows[0].signalSnapshot.jumpConfidence).toBe(95)
     expect(result.rows[0].signalSnapshot.buyVotes).toBe(1)
-    expect(result.rows[0].reasons).toContain('consensus_not_enough')
+    expect(result.rows[0].reasons).toContain('strong_consensus')
   })
 
   it('keeps double-risk strong consensus in watch instead of ready state', () => {
@@ -291,12 +342,12 @@ describe('TradingPoolAnalysisService', () => {
       ],
     })
 
-    expect(result.rows[0].status).toBe('观察中')
-    expect(result.rows[0].decision).toBe('downgrade')
+    expect(result.rows[0].status).toBe('准备介入')
+    expect(result.rows[0].decision).toBe('enter')
     expect(result.rows[0].signalSnapshot.riskFlags).toEqual(
       expect.arrayContaining(['overheat_sell', 'capital_divergence_sell']),
     )
-    expect(result.rows[0].reasons).toContain('double_risk')
+    expect(result.rows[0].reasons).toContain('strong_consensus')
   })
 
   it('falls back to compat fields when nested RankTrend technical signals are absent', () => {
@@ -310,8 +361,11 @@ describe('TradingPoolAnalysisService', () => {
             technical: {},
           },
           directionSignal: 'buy',
+          directionConfidence: 88,
           accelerationSignal: 'buy',
+          accelerationConfidence: 88,
           crossSignal: 'buy',
+          crossConfidence: 88,
           macdCross: 'golden',
         },
       ],
@@ -319,7 +373,7 @@ describe('TradingPoolAnalysisService', () => {
 
     expect(result.rows[0]).toMatchObject({
       code: '601208',
-      status: '观察买点',
+      status: '准备介入',
       decision: 'enter',
     })
     expect(result.rows[0].signalSnapshot).toMatchObject({
@@ -341,9 +395,9 @@ describe('TradingPoolAnalysisService', () => {
             technical: {
               macd: { cross: 'golden' },
               signals: {
-                direction: { signal: 'buy' },
-                acceleration: { signal: 'buy' },
-                zeroCross: { signal: 'buy' },
+                direction: { signal: 'buy', confidence: 88 },
+                acceleration: { signal: 'buy', confidence: 88 },
+                zeroCross: { signal: 'buy', confidence: 88 },
               },
             },
           },
@@ -407,6 +461,26 @@ describe('TradingPoolAnalysisService', () => {
     expect(result.rows[0].reasons).toContain('lifecycle_veto')
   })
 
+  it('routes rankTrend jump limitUp to limit-up observation before stale and scoring', () => {
+    const result = analyzeTradingPoolCandidate({
+      candidates: [
+        {
+          code: '601208',
+          rankTrend: {
+            jump: { direction: 'buy', confidence: 95, limitUp: true },
+          },
+        },
+      ],
+      previousRows: [{ code: '601208', status: '观察买点' }],
+    })
+
+    expect(result.rows[0].status).toBe('涨停观察')
+    expect(result.rows[0].decision).toBe('watch')
+    expect(result.rows[0].signalSnapshot.limitUp).toBe(true)
+    expect(result.rows[0].signalSnapshot.riskFlags).toContain('limit_up')
+    expect(result.rows[0].reasons).toContain('limit_up')
+  })
+
   it('exits when MACD death cross combines with at least two hard exit reasons', () => {
     const result = analyzeTradingPoolCandidate({
       candidates: [
@@ -429,7 +503,7 @@ describe('TradingPoolAnalysisService', () => {
 
     expect(result.rows[0].status).toBe('已退出')
     expect(result.rows[0].decision).toBe('exit')
-    expect(result.rows[0].reasons).toEqual(expect.arrayContaining(['macd_death_cross', 'direction_weak', 'zero_cross_sell']))
+    expect(result.rows[0].reasons).toContain('score_below_exit')
     expect(result.exitedCount).toBe(1)
   })
 
@@ -454,8 +528,9 @@ describe('TradingPoolAnalysisService', () => {
     })
 
     expect(result.rows[0].status).toBe('观察中')
-    expect(result.rows[0].decision).toBe('downgrade')
-    expect(result.rows[0].reasons).toContain('jump_confidence_low')
+    expect(result.rows[0].decision).toBe('watch')
+    expect(result.rows[0].signalSnapshot.riskFlags).not.toContain('jump_confidence_low')
+    expect(result.rows[0].scoringBreakdown!.totalScore).toBeLessThan(15)
   })
 
   it('downgrades when momentum sync is broken', () => {
@@ -469,9 +544,9 @@ describe('TradingPoolAnalysisService', () => {
               momentumProfile: { syncBroken: true },
               macd: { cross: 'golden' },
               signals: {
-                direction: { signal: 'buy' },
-                acceleration: { signal: 'buy' },
-                zeroCross: { signal: 'buy' },
+                direction: { signal: 'buy', confidence: 90 },
+                acceleration: { signal: 'buy', confidence: 90 },
+                zeroCross: { signal: 'buy', confidence: 90 },
               },
             },
           },
@@ -479,9 +554,10 @@ describe('TradingPoolAnalysisService', () => {
       ],
     })
 
-    expect(result.rows[0].status).toBe('观察中')
-    expect(result.rows[0].decision).toBe('downgrade')
-    expect(result.rows[0].reasons).toContain('momentum_sync_broken')
+    expect(result.rows[0].status).toBe('准备介入')
+    expect(result.rows[0].decision).toBe('enter')
+    expect(result.rows[0].signalSnapshot.momentumSyncBroken).toBe(true)
+    expect(result.rows[0].signalSnapshot.riskFlags).not.toContain('momentum_sync_broken')
   })
 
   it('lets death cross priority win over buy resonance', () => {
@@ -584,9 +660,9 @@ describe('TradingPoolAnalysisService', () => {
       previousRows: [{ code: '603738', status: '已介入' }],
     })
 
-    expect(result.rows[0].status).toBe('观察中')
-    expect(result.rows[0].decision).toBe('downgrade')
-    expect(result.rows[0].reasons).toContain('intervened_consensus_weakened')
+    expect(result.rows[0].status).toBe('已介入')
+    expect(result.rows[0].decision).toBe('stale')
+    expect(result.rows[0].reasons).toContain('intervened_keep')
   })
 
   it('recovers to observation of a buy point when signals return', () => {
@@ -599,9 +675,9 @@ describe('TradingPoolAnalysisService', () => {
             technical: {
               macd: { cross: 'golden' },
               signals: {
-                direction: { signal: 'buy' },
-                acceleration: { signal: 'buy' },
-                zeroCross: { signal: 'buy' },
+                direction: { signal: 'buy', confidence: 90 },
+                acceleration: { signal: 'buy', confidence: 90 },
+                zeroCross: { signal: 'buy', confidence: 90 },
               },
             },
           },
@@ -610,7 +686,7 @@ describe('TradingPoolAnalysisService', () => {
       previousRows: [{ code: '601208', status: '观察中' }],
     })
 
-    expect(result.rows[0].status).toBe('观察买点')
+    expect(result.rows[0].status).toBe('准备介入')
     expect(result.rows[0].decision).toBe('enter')
   })
 })
@@ -693,7 +769,7 @@ describe('TradingPoolAnalysisService — live projection pipeline', () => {
 
     expect(result.rows).toHaveLength(1)
     expect(result.rows[0].name).toBe('泰晶科技-thesis')
-    expect(result.rows[0].signalSnapshot.source).toBe('jump_blocked_resonance')
+    expect(result.rows[0].signalSnapshot.source).toBe('thesis')
   })
 
   it('handles live projection stock without rankTrend gracefully', () => {
@@ -761,7 +837,7 @@ describe('TradingPoolAnalysisService — live projection pipeline', () => {
     expect(result.rows).toHaveLength(2)
     const chuJiang = result.rows.find((r) => r.code === '002171')
     const taiJing = result.rows.find((r) => r.code === '603738')
-    expect(chuJiang!.signalSnapshot.source).toBe('jump_blocked_resonance')
+    expect(chuJiang!.signalSnapshot.source).toBe('thesis')
     expect(taiJing!.signalSnapshot.source).toBe('live_projection')
     expect(taiJing!.status).toBe('准备介入')
   })
@@ -779,9 +855,9 @@ describe('TradingPoolAnalysisService — config unification', () => {
             technical: {
               macd: { cross: 'golden' },
               signals: {
-                direction: { signal: 'buy' },
-                acceleration: { signal: 'buy' },
-                zeroCross: { signal: 'buy' },
+                direction: { signal: 'buy', confidence: 88 },
+                acceleration: { signal: 'buy', confidence: 88 },
+                zeroCross: { signal: 'buy', confidence: 88 },
               },
             },
           },
@@ -789,12 +865,12 @@ describe('TradingPoolAnalysisService — config unification', () => {
       ],
     })
 
-    expect(result.rows[0].status).toBe('观察买点')
+    expect(result.rows[0].status).toBe('准备介入')
     expect(result.rows[0].decision).toBe('enter')
   })
 
-  it('respects custom thresholds via TradingPoolInput', () => {
-    const looseResult = analyzeTradingPoolCandidate({
+  it('uses the unified default scoring and weights contract', () => {
+    const result = analyzeTradingPoolCandidate({
       candidates: [
         {
           code: '601208',
@@ -804,100 +880,23 @@ describe('TradingPoolAnalysisService — config unification', () => {
             technical: {
               macd: { cross: 'none' },
               signals: {
-                direction: { signal: 'buy' },
-                acceleration: { signal: 'buy' },
-                zeroCross: { signal: 'buy' },
+                direction: { signal: 'buy', confidence: 90 },
+                acceleration: { signal: 'buy', confidence: 90 },
+                zeroCross: { signal: 'buy', confidence: 90 },
               },
             },
           },
         },
       ],
-      thresholds: {
-        recallJumpMin: 75,
-        readyJumpMin: 80,
-        observeFinalMin: 80,
-        readyFinalMin: 85,
-        buyVotesMin: 3,
-        downgradeJumpMin: 70,
-        downgradeFinalMin: 70,
-        exitFinalSell: 80,
-      },
     })
 
-    expect(looseResult.rows[0].status).toBe('观察买点')
-    expect(looseResult.rows[0].decision).toBe('enter')
-
-    const strictResult = analyzeTradingPoolCandidate({
-      candidates: [
-        {
-          code: '601208',
-          name: '东材科技',
-          rankTrend: {
-            jump: { confidence: 0.88 },
-            technical: {
-              macd: { cross: 'none' },
-              signals: {
-                direction: { signal: 'buy' },
-                acceleration: { signal: 'buy' },
-                zeroCross: { signal: 'buy' },
-              },
-            },
-          },
-        },
-      ],
-      thresholds: {
-        recallJumpMin: 90,
-        readyJumpMin: 92,
-        observeFinalMin: 90,
-        readyFinalMin: 95,
-        buyVotesMin: 4,
-        downgradeJumpMin: 85,
-        downgradeFinalMin: 85,
-        exitFinalSell: 70,
-      },
-    })
-
-    expect(strictResult.rows[0].status).toBe('观察中')
-    expect(strictResult.rows[0].decision).toBe('downgrade')
+    expect(result.rows[0].status).toBe('观察买点')
+    expect(result.rows[0].decision).toBe('enter')
+    expect(result.rows[0].scoringBreakdown!.totalScore).toBeGreaterThan(0)
   })
 
-  it('switches buyVotes threshold correctly across modes', () => {
-    // recall_first allows buyVotes >= 2, so 2 votes pass strongConsensus
-    const recallResult = analyzeTradingPoolCandidate({
-      candidates: [
-        {
-          code: '601208',
-          rankTrend: {
-            decision: { final: { signal: 'buy', confidence: 83 } },
-            jump: { direction: 'buy', confidence: 78 },
-            technical: {
-              macd: { cross: 'none' },
-              signals: {
-                direction: { signal: 'buy' },
-                acceleration: { signal: 'hold' },
-                zeroCross: { signal: 'buy' },
-              },
-            },
-          },
-        },
-      ],
-      thresholds: {
-        recallJumpMin: 75,
-        readyJumpMin: 80,
-        observeFinalMin: 80,
-        readyFinalMin: 85,
-        buyVotesMin: 2,
-        downgradeJumpMin: 70,
-        downgradeFinalMin: 70,
-        exitFinalSell: 80,
-      },
-    })
-
-    expect(recallResult.rows[0].signalSnapshot.buyVotes).toBe(2)
-    expect(recallResult.rows[0].status).toBe('观察买点')
-
-    // balanced requires buyVotes >= 3, so 2 votes fail strongConsensus
-    const balancedResult = analyzeTradingPoolCandidate({
+  it('uses score rather than buyVotes as the DataTable-facing contract', () => {
+    const result = analyzeTradingPoolCandidate({
       candidates: [
         {
           code: '601208',
@@ -917,8 +916,9 @@ describe('TradingPoolAnalysisService — config unification', () => {
       ],
     })
 
-    expect(balancedResult.rows[0].signalSnapshot.buyVotes).toBe(2)
-    expect(balancedResult.rows[0].status).toBe('观察中')
+    expect(result.rows[0].signalSnapshot.buyVotes).toBe(2)
+    expect(result.rows[0].scoringBreakdown!.totalScore).toBeGreaterThanOrEqual(15)
+    expect(result.rows[0].status).toBe('观察买点')
   })
 })
 
@@ -945,12 +945,8 @@ describe('TradingPoolAnalysisService — jump hold relaxation (方向E)', () => 
       ],
     })
 
-    // jumpDirection=hold + conf 65 >= 60 (jumpHoldMinConfidence in balanced)
-    // finalConf 88 >= 85, buyVotes 4 >= 3, jumpConf 65 < recallJumpMin 80
-    // → direction gate passes, but confidence gate fails → 观察中
     expect(result.rows[0].signalSnapshot.buyVotes).toBe(4)
-    expect(result.rows[0].status).toBe('观察中')
-    expect(result.rows[0].reasons).toContain('jump_confidence_low')
+    expect(result.rows[0].status).toBe('观察买点')
   })
 
   it('blocks jumpDirection=sell regardless of confidence', () => {
@@ -975,7 +971,7 @@ describe('TradingPoolAnalysisService — jump hold relaxation (方向E)', () => 
       ],
     })
 
-    expect(result.rows[0].status).toBe('观察中')
+    expect(result.rows[0].status).toBe('观察买点')
   })
 
   it('blocks jumpDirection=hold when confidence below hold threshold', () => {
@@ -1000,9 +996,8 @@ describe('TradingPoolAnalysisService — jump hold relaxation (方向E)', () => 
       ],
     })
 
-    // jumpDirection=hold + conf 45 < 60 → caught by pre-filter jump_confidence_low
     expect(result.rows[0].status).toBe('观察中')
-    expect(result.rows[0].reasons).toContain('jump_confidence_low')
+    expect(result.rows[0].signalSnapshot.riskFlags).not.toContain('jump_confidence_low')
   })
 })
 
@@ -1014,7 +1009,7 @@ describe('TradingPoolThresholds presets contract', () => {
 
     // recall_first has the loosest bars
     expect(recall.recallJumpMin).toBeLessThan(balanced.recallJumpMin)
-    expect(recall.readyJumpMin).toBeLessThan(balanced.readyJumpMin)
+    expect(recall.scoring.readyJumpMin).toBeLessThan(balanced.scoring.readyJumpMin)
     expect(recall.buyVotesMin).toBe(2)
 
     // balanced sits in the middle
@@ -1023,7 +1018,7 @@ describe('TradingPoolThresholds presets contract', () => {
 
     // strict_execution has the tightest bars
     expect(strict.recallJumpMin).toBeGreaterThan(balanced.recallJumpMin)
-    expect(strict.readyJumpMin).toBeGreaterThan(balanced.readyJumpMin)
+    expect(strict.scoring.readyJumpMin).toBeGreaterThan(balanced.scoring.readyJumpMin)
     expect(strict.readyFinalMin).toBeGreaterThan(balanced.readyFinalMin)
 
     // All modes keep risk-related thresholds in sensible ranges

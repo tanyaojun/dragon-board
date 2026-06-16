@@ -119,8 +119,9 @@ describe('DataTable row detail interactions', () => {
     expect(source).toContain('getRankTrendAnalysis(stock)?.jump?.confidence')
     expect(source).toMatch(/Math\.round\(getJumpConfidence\(stock\) \|\| 0\)/)
     expect(source).toContain('Jump跃迁')
-    expect(source).toContain('共振评级')
+    expect(source).toContain('共振评分')
     expect(source).toContain('交易池')
+    expect(source).not.toContain('共振评级')
     expect(source).not.toMatch(/<span class="signal-percent">\{\{ Math\.round\(getFinalConfidence\(stock\) \|\| 0\) \}\}%<\/span>/)
   })
 

@@ -719,16 +719,11 @@ const getTradingPoolActionPreview = (stock: any) => {
   const row = result.rows[0] || null
   const buyVotes = row?.signalSnapshot.buyVotes ?? countTradingPoolBuyVotes(stock)
   const actionLabel = row ? tradingPoolDecisionPreviewLabel(row.status, row.decision) : '未触发'
-  const resonanceLabel =
-    row?.status === '观察买点' || row?.status === '准备介入'
-      ? '强共振'
-      : row?.status === '观察中'
-        ? '待确认'
-        : '—'
+  const breakdown = row?.scoringBreakdown ?? null
   return {
     buyVotes,
     actionLabel,
-    resonanceLabel,
+    breakdown,
   }
 }
 
@@ -771,7 +766,12 @@ const getConfidenceTitle = (stock: any) => {
     title += ` (候选池阈值: ${candidateJumpThreshold} / ${candidateJumpPassed ? '已过' : '未过'})`
   }
   title += '\n'
-  title += `🧩 共振评级: ${tradingPoolAction.resonanceLabel} (BuyVotes: ${tradingPoolAction.buyVotes}/4)\n`
+  if (tradingPoolAction.breakdown != null) {
+    const b = tradingPoolAction.breakdown
+    const macdLabel = b.discreteDetail.macdCross > 0 ? `MACD金叉+${b.discreteDetail.macdCross}` : b.discreteDetail.macdCross < 0 ? `MACD死叉${b.discreteDetail.macdCross}` : `MACD无`
+    const jumpLabel = b.discreteDetail.jumpDirection > 0 ? `Jump买+${b.discreteDetail.jumpDirection}` : b.discreteDetail.jumpDirection < 0 ? `Jump卖${b.discreteDetail.jumpDirection}` : 'Jump持0'
+    title += `📊 共振评分: ${formatTooltipNumber(b.totalScore, 1)} 分 (${macdLabel}, ${jumpLabel}, 连续+${formatTooltipNumber(b.continuousScore, 1)})\n`
+  }
   title += `🧭 候选池: ${getCandidatePoolReasonPreview(stock)}\n`
   title += `📌 交易池: ${tradingPoolAction.actionLabel}\n`
   title += '─'.repeat(30) + '\n'
