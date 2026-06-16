@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { analyzeTradingPoolCandidate } from '../TradingPoolAnalysisService'
 import type { TradingPoolStatus } from '../types'
+import { RANK_TREND_LIVE_STRATEGY_PRESETS } from '@/config/rankTrendLiveStrategyConfig'
 
 describe('TradingPool status contract', () => {
   it('keeps the V1 status vocabulary explicit', () => {
@@ -763,5 +764,189 @@ describe('TradingPoolAnalysisService — live projection pipeline', () => {
     expect(chuJiang!.signalSnapshot.source).toBe('jump_blocked_resonance')
     expect(taiJing!.signalSnapshot.source).toBe('live_projection')
     expect(taiJing!.status).toBe('准备介入')
+  })
+})
+
+describe('TradingPoolAnalysisService — config unification', () => {
+  it('uses balanced defaults when no thresholds provided', () => {
+    const result = analyzeTradingPoolCandidate({
+      candidates: [
+        {
+          code: '601208',
+          name: '东材科技',
+          rankTrend: {
+            jump: { confidence: 0.88 },
+            technical: {
+              macd: { cross: 'golden' },
+              signals: {
+                direction: { signal: 'buy' },
+                acceleration: { signal: 'buy' },
+                zeroCross: { signal: 'buy' },
+              },
+            },
+          },
+        },
+      ],
+    })
+
+    expect(result.rows[0].status).toBe('观察买点')
+    expect(result.rows[0].decision).toBe('enter')
+  })
+
+  it('respects custom thresholds via TradingPoolInput', () => {
+    const looseResult = analyzeTradingPoolCandidate({
+      candidates: [
+        {
+          code: '601208',
+          name: '东材科技',
+          rankTrend: {
+            jump: { confidence: 0.78 },
+            technical: {
+              macd: { cross: 'none' },
+              signals: {
+                direction: { signal: 'buy' },
+                acceleration: { signal: 'buy' },
+                zeroCross: { signal: 'buy' },
+              },
+            },
+          },
+        },
+      ],
+      thresholds: {
+        recallJumpMin: 75,
+        readyJumpMin: 80,
+        observeFinalMin: 80,
+        readyFinalMin: 85,
+        buyVotesMin: 3,
+        downgradeJumpMin: 70,
+        downgradeFinalMin: 70,
+        exitFinalSell: 80,
+      },
+    })
+
+    expect(looseResult.rows[0].status).toBe('观察买点')
+    expect(looseResult.rows[0].decision).toBe('enter')
+
+    const strictResult = analyzeTradingPoolCandidate({
+      candidates: [
+        {
+          code: '601208',
+          name: '东材科技',
+          rankTrend: {
+            jump: { confidence: 0.88 },
+            technical: {
+              macd: { cross: 'none' },
+              signals: {
+                direction: { signal: 'buy' },
+                acceleration: { signal: 'buy' },
+                zeroCross: { signal: 'buy' },
+              },
+            },
+          },
+        },
+      ],
+      thresholds: {
+        recallJumpMin: 90,
+        readyJumpMin: 92,
+        observeFinalMin: 90,
+        readyFinalMin: 95,
+        buyVotesMin: 4,
+        downgradeJumpMin: 85,
+        downgradeFinalMin: 85,
+        exitFinalSell: 70,
+      },
+    })
+
+    expect(strictResult.rows[0].status).toBe('观察中')
+    expect(strictResult.rows[0].decision).toBe('downgrade')
+  })
+
+  it('switches buyVotes threshold correctly across modes', () => {
+    // recall_first allows buyVotes >= 2, so 2 votes pass strongConsensus
+    const recallResult = analyzeTradingPoolCandidate({
+      candidates: [
+        {
+          code: '601208',
+          rankTrend: {
+            decision: { final: { signal: 'buy', confidence: 83 } },
+            jump: { direction: 'buy', confidence: 78 },
+            technical: {
+              macd: { cross: 'none' },
+              signals: {
+                direction: { signal: 'buy' },
+                acceleration: { signal: 'hold' },
+                zeroCross: { signal: 'buy' },
+              },
+            },
+          },
+        },
+      ],
+      thresholds: {
+        recallJumpMin: 75,
+        readyJumpMin: 80,
+        observeFinalMin: 80,
+        readyFinalMin: 85,
+        buyVotesMin: 2,
+        downgradeJumpMin: 70,
+        downgradeFinalMin: 70,
+        exitFinalSell: 80,
+      },
+    })
+
+    expect(recallResult.rows[0].signalSnapshot.buyVotes).toBe(2)
+    expect(recallResult.rows[0].status).toBe('观察买点')
+
+    // balanced requires buyVotes >= 3, so 2 votes fail strongConsensus
+    const balancedResult = analyzeTradingPoolCandidate({
+      candidates: [
+        {
+          code: '601208',
+          rankTrend: {
+            decision: { final: { signal: 'buy', confidence: 83 } },
+            jump: { direction: 'buy', confidence: 78 },
+            technical: {
+              macd: { cross: 'none' },
+              signals: {
+                direction: { signal: 'buy' },
+                acceleration: { signal: 'hold' },
+                zeroCross: { signal: 'buy' },
+              },
+            },
+          },
+        },
+      ],
+    })
+
+    expect(balancedResult.rows[0].signalSnapshot.buyVotes).toBe(2)
+    expect(balancedResult.rows[0].status).toBe('观察中')
+  })
+})
+
+describe('TradingPoolThresholds presets contract', () => {
+  it('provides three distinct strategy modes with meaningful threshold gradients', () => {
+    const recall = RANK_TREND_LIVE_STRATEGY_PRESETS.recall_first.tradingPool
+    const balanced = RANK_TREND_LIVE_STRATEGY_PRESETS.balanced.tradingPool
+    const strict = RANK_TREND_LIVE_STRATEGY_PRESETS.strict_execution.tradingPool
+
+    // recall_first has the loosest bars
+    expect(recall.recallJumpMin).toBeLessThan(balanced.recallJumpMin)
+    expect(recall.readyJumpMin).toBeLessThan(balanced.readyJumpMin)
+    expect(recall.buyVotesMin).toBe(2)
+
+    // balanced sits in the middle
+    expect(balanced.buyVotesMin).toBe(3)
+    expect(balanced.recallJumpMin).toBe(80)
+
+    // strict_execution has the tightest bars
+    expect(strict.recallJumpMin).toBeGreaterThan(balanced.recallJumpMin)
+    expect(strict.readyJumpMin).toBeGreaterThan(balanced.readyJumpMin)
+    expect(strict.readyFinalMin).toBeGreaterThan(balanced.readyFinalMin)
+
+    // All modes keep risk-related thresholds in sensible ranges
+    for (const t of [recall, balanced, strict]) {
+      expect(t.exitFinalSell).toBeGreaterThanOrEqual(70)
+      expect(t.exitFinalSell).toBeLessThanOrEqual(85)
+      expect(t.downgradeJumpMin).toBeLessThan(t.recallJumpMin)
+    }
   })
 })

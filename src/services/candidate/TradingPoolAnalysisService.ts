@@ -7,6 +7,8 @@ import type {
   TradingPoolSource,
   TradingPoolStatus,
 } from './types'
+import type { TradingPoolThresholds } from '@/types/rankTrendLiveStrategy'
+import { DEFAULT_RANK_TREND_LIVE_STRATEGY_CONFIG } from '@/config/rankTrendLiveStrategyConfig'
 
 type TradingPoolCandidateLike = Record<string, any>
 
@@ -14,6 +16,7 @@ interface TradingPoolInput {
   candidates: TradingPoolCandidateLike[]
   previousRows?: Array<Partial<TradingPoolAnalysisRow> & { code: string }>
   liveStocks?: TradingPoolCandidateLike[]
+  thresholds?: TradingPoolThresholds
 }
 
 interface TradingPoolDecisionResult {
@@ -21,15 +24,6 @@ interface TradingPoolDecisionResult {
   decision: TradingPoolDecision
   reasons: string[]
 }
-
-const TRADING_POOL_RECALL_JUMP_MIN = 80
-const TRADING_POOL_READY_JUMP_MIN = 85
-const TRADING_POOL_OBSERVE_FINAL_MIN = 85
-const TRADING_POOL_READY_FINAL_MIN = 88
-const TRADING_POOL_BUY_VOTES_MIN = 3
-const TRADING_POOL_DOWNGRADE_JUMP_MIN = 75
-const TRADING_POOL_DOWNGRADE_FINAL_MIN = 75
-const TRADING_POOL_EXIT_FINAL_SELL = 80
 
 function normalizeCode(code: unknown): string {
   const digits = String(code || '').replace(/\D/g, '')
@@ -109,12 +103,12 @@ function readRiskFlags(
   rankTrend: any,
   stock: TradingPoolCandidateLike,
   signals: TradingPoolSignalSnapshot,
+  t: TradingPoolThresholds,
 ): TradingPoolRiskFlag[] {
   const flags: TradingPoolRiskFlag[] = []
 
   if (signals.lifecycleAction === 'veto') flags.push('lifecycle_veto')
   if (signals.macdCross === 'death') flags.push('macd_death_cross')
-  // New RankTrend risk fields and legacy flat fields are treated as OR-compatible sources.
   if (
     rankTrend?.risk?.overheatReversal?.signal === 'sell' ||
     rankTrend?.risk?.overheat?.signal === 'sell' ||
@@ -130,15 +124,15 @@ function readRiskFlags(
     flags.push('capital_divergence_sell')
   }
   if (signals.momentumSyncBroken) flags.push('momentum_sync_broken')
-  if ((signals.jumpConfidence ?? 100) < TRADING_POOL_DOWNGRADE_JUMP_MIN) flags.push('jump_confidence_low')
-  if ((signals.finalConfidence ?? 100) < TRADING_POOL_DOWNGRADE_FINAL_MIN) flags.push('final_confidence_low')
+  if ((signals.jumpConfidence ?? 100) < t.downgradeJumpMin) flags.push('jump_confidence_low')
+  if ((signals.finalConfidence ?? 100) < t.downgradeFinalMin) flags.push('final_confidence_low')
   if (hasNonJumpHardBlock(stock)) flags.push('candidate_hard_blocked')
   if (signals.dataQuality !== 'fresh') flags.push('data_stale')
 
   return flags
 }
 
-function readTradingSignals(stock: TradingPoolCandidateLike): TradingPoolSignalSnapshot {
+function readTradingSignals(stock: TradingPoolCandidateLike, t: TradingPoolThresholds): TradingPoolSignalSnapshot {
   const hasRankTrend = hasOwnValue(stock, 'rankTrend')
   const rankTrend = hasRankTrend ? stock.rankTrend : null
   const snapshot: TradingPoolSignalSnapshot = {
@@ -169,7 +163,7 @@ function readTradingSignals(stock: TradingPoolCandidateLike): TradingPoolSignalS
     dataQuality: hasRankTrend ? (rankTrend != null ? 'fresh' : 'stale') : 'missing',
   }
   snapshot.buyVotes = countBuyVotes(snapshot)
-  snapshot.riskFlags = readRiskFlags(rankTrend, stock, snapshot)
+  snapshot.riskFlags = readRiskFlags(rankTrend, stock, snapshot, t)
   return snapshot
 }
 
@@ -179,7 +173,8 @@ function hasFreshSignals(signals: TradingPoolSignalSnapshot): boolean {
 
 function decideTradingPoolStatus(
   signals: TradingPoolSignalSnapshot,
-  previous?: Partial<TradingPoolAnalysisRow> | null,
+  previous: Partial<TradingPoolAnalysisRow> | null | undefined,
+  t: TradingPoolThresholds,
 ): TradingPoolDecisionResult {
   if (!hasFreshSignals(signals)) {
     return {
@@ -200,19 +195,19 @@ function decideTradingPoolStatus(
     return { status: '已退出', decision: 'exit', reasons }
   }
 
-  if (signals.finalSignal === 'sell' && (signals.finalConfidence ?? 0) >= TRADING_POOL_EXIT_FINAL_SELL) {
+  if (signals.finalSignal === 'sell' && (signals.finalConfidence ?? 0) >= t.exitFinalSell) {
     return { status: '已退出', decision: 'exit', reasons: ['final_sell_signal'] }
   }
 
   const wasIntervened = previous?.status === '已介入'
   if (wasIntervened) {
-    if (signals.finalSignal === 'hold' && (signals.finalConfidence ?? 0) < TRADING_POOL_OBSERVE_FINAL_MIN) {
+    if (signals.finalSignal === 'hold' && (signals.finalConfidence ?? 0) < t.observeFinalMin) {
       return { status: '观察中', decision: 'downgrade', reasons: ['intervened_consensus_weakened'] }
     }
     if (
       signals.buyVotes <= 1 &&
       signals.jumpConfidence != null &&
-      signals.jumpConfidence < TRADING_POOL_DOWNGRADE_JUMP_MIN
+      signals.jumpConfidence < t.downgradeJumpMin
     ) {
       return { status: '观察中', decision: 'downgrade', reasons: ['intervened_votes_and_jump_low'] }
     }
@@ -226,16 +221,16 @@ function decideTradingPoolStatus(
   if (
     signals.buyVotes <= 1 &&
     signals.jumpConfidence != null &&
-    signals.jumpConfidence < TRADING_POOL_DOWNGRADE_JUMP_MIN
+    signals.jumpConfidence < t.downgradeJumpMin
   ) {
     return { status: '已退出', decision: 'exit', reasons: ['low_votes_and_jump'] }
   }
 
-  if ((signals.finalConfidence ?? 100) < TRADING_POOL_DOWNGRADE_FINAL_MIN) {
+  if ((signals.finalConfidence ?? 100) < t.downgradeFinalMin) {
     return { status: '观察中', decision: 'downgrade', reasons: ['consensus_not_enough'] }
   }
 
-  if ((signals.jumpConfidence ?? 100) < TRADING_POOL_RECALL_JUMP_MIN) {
+  if ((signals.jumpConfidence ?? 100) < t.recallJumpMin) {
     return { status: '观察中', decision: 'downgrade', reasons: ['jump_confidence_low'] }
   }
 
@@ -251,15 +246,15 @@ function decideTradingPoolStatus(
   const hasFinalInput = signals.finalSignal != null
   const finalSignalPass = hasFinalInput ? signals.finalSignal === 'buy' : true
   const finalConfidencePass = hasFinalInput
-    ? (signals.finalConfidence ?? 0) >= TRADING_POOL_OBSERVE_FINAL_MIN
+    ? (signals.finalConfidence ?? 0) >= t.observeFinalMin
     : true
   const jumpDirectionPass = signals.jumpDirection == null || signals.jumpDirection === 'buy'
   const strongConsensus =
     finalSignalPass &&
     finalConfidencePass &&
-    signals.buyVotes >= TRADING_POOL_BUY_VOTES_MIN &&
+    signals.buyVotes >= t.buyVotesMin &&
     jumpDirectionPass &&
-    (signals.jumpConfidence ?? 0) >= TRADING_POOL_RECALL_JUMP_MIN &&
+    (signals.jumpConfidence ?? 0) >= t.recallJumpMin &&
     trendBuyCount >= 2 &&
     !signals.riskFlags.includes('candidate_hard_blocked') &&
     signals.macdCross !== 'death'
@@ -273,8 +268,8 @@ function decideTradingPoolStatus(
   }
 
   const ready =
-    (signals.finalConfidence ?? 0) >= TRADING_POOL_READY_FINAL_MIN &&
-    (signals.jumpConfidence ?? 0) >= TRADING_POOL_READY_JUMP_MIN &&
+    (signals.finalConfidence ?? 0) >= t.readyFinalMin &&
+    (signals.jumpConfidence ?? 0) >= t.readyJumpMin &&
     (signals.macdCross === 'golden' || (signals.zeroCrossSignal === 'buy' && signals.directionSignal === 'buy'))
 
   if (ready) {
@@ -310,6 +305,7 @@ function buildPreviousRowMap(previousRows: TradingPoolInput['previousRows']) {
 }
 
 export function analyzeTradingPoolCandidate(input: TradingPoolInput): TradingPoolAnalysisResult {
+  const t = input.thresholds ?? DEFAULT_RANK_TREND_LIVE_STRATEGY_CONFIG.tradingPool
   const previousRows = buildPreviousRowMap(input.previousRows)
 
   const thesisCodes = new Set<string>()
@@ -341,9 +337,9 @@ export function analyzeTradingPoolCandidate(input: TradingPoolInput): TradingPoo
     const code = normalizeCode(candidate.code)
     if (!code) continue
 
-    const signals = readTradingSignals(candidate)
+    const signals = readTradingSignals(candidate, t)
     const previous = previousRows.get(code) || null
-    const decisionResult = decideTradingPoolStatus(signals, previous)
+    const decisionResult = decideTradingPoolStatus(signals, previous, t)
     const sourceReason = signals.source === 'jump_blocked_resonance' ? ['jump_blocked_resonance'] : []
     const resolvedSignals = {
       ...signals,

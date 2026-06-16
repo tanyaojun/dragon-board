@@ -2,12 +2,46 @@ import type {
   RankTrendLiveChangeGateConfig,
   RankTrendLiveStrategyConfig,
   RankTrendLiveStrategyMode,
+  TradingPoolThresholds,
 } from '@/types/rankTrendLiveStrategy'
 
 export const RANK_TREND_LIVE_STRATEGY_CONFIG_STORAGE_KEY =
   'dragon-board.rankTrend.liveStrategyConfig.v1'
 
 export const RANK_TREND_LIVE_STRATEGY_CONFIG_VERSION = 'live-v5.1.0'
+
+const TRADING_POOL_RECALL_FIRST: TradingPoolThresholds = {
+  recallJumpMin: 75,
+  readyJumpMin: 80,
+  observeFinalMin: 80,
+  readyFinalMin: 85,
+  buyVotesMin: 2,
+  downgradeJumpMin: 70,
+  downgradeFinalMin: 70,
+  exitFinalSell: 80,
+}
+
+const TRADING_POOL_BALANCED: TradingPoolThresholds = {
+  recallJumpMin: 80,
+  readyJumpMin: 85,
+  observeFinalMin: 85,
+  readyFinalMin: 88,
+  buyVotesMin: 3,
+  downgradeJumpMin: 75,
+  downgradeFinalMin: 75,
+  exitFinalSell: 80,
+}
+
+const TRADING_POOL_STRICT: TradingPoolThresholds = {
+  recallJumpMin: 85,
+  readyJumpMin: 90,
+  observeFinalMin: 88,
+  readyFinalMin: 92,
+  buyVotesMin: 3,
+  downgradeJumpMin: 80,
+  downgradeFinalMin: 80,
+  exitFinalSell: 75,
+}
 
 export const RANK_TREND_LIVE_STRATEGY_PRESETS: Record<
   RankTrendLiveStrategyMode,
@@ -26,6 +60,7 @@ export const RANK_TREND_LIVE_STRATEGY_PRESETS: Record<
     accDeltaMin: 8,
     changeGate: { mode: 'warn', maxEntryChangePct: 6 },
     limitUpPolicy: 'quote_first',
+    tradingPool: TRADING_POOL_RECALL_FIRST,
   },
   balanced: {
     version: RANK_TREND_LIVE_STRATEGY_CONFIG_VERSION,
@@ -40,6 +75,7 @@ export const RANK_TREND_LIVE_STRATEGY_PRESETS: Record<
     accDeltaMin: 8,
     changeGate: { mode: 'warn', maxEntryChangePct: 6 },
     limitUpPolicy: 'quote_first',
+    tradingPool: TRADING_POOL_BALANCED,
   },
   strict_execution: {
     version: RANK_TREND_LIVE_STRATEGY_CONFIG_VERSION,
@@ -54,6 +90,7 @@ export const RANK_TREND_LIVE_STRATEGY_PRESETS: Record<
     accDeltaMin: 8,
     changeGate: { mode: 'block', maxEntryChangePct: 6 },
     limitUpPolicy: 'quote_first',
+    tradingPool: TRADING_POOL_STRICT,
   },
 }
 
@@ -85,6 +122,22 @@ function normalizeCandidateTiers(
       typeof tier === 'string' && allowed.has(tier),
   )
   return tiers.length ? tiers : [...fallback]
+}
+
+function normalizeTradingPool(
+  patch: Partial<TradingPoolThresholds> | undefined,
+  base: TradingPoolThresholds,
+): TradingPoolThresholds {
+  return {
+    recallJumpMin: normalizeNumber(patch?.recallJumpMin, base.recallJumpMin, 0, 100),
+    readyJumpMin: normalizeNumber(patch?.readyJumpMin, base.readyJumpMin, 0, 100),
+    observeFinalMin: normalizeNumber(patch?.observeFinalMin, base.observeFinalMin, 0, 100),
+    readyFinalMin: normalizeNumber(patch?.readyFinalMin, base.readyFinalMin, 0, 100),
+    buyVotesMin: normalizeNumber(patch?.buyVotesMin, base.buyVotesMin, 0, 4),
+    downgradeJumpMin: normalizeNumber(patch?.downgradeJumpMin, base.downgradeJumpMin, 0, 100),
+    downgradeFinalMin: normalizeNumber(patch?.downgradeFinalMin, base.downgradeFinalMin, 0, 100),
+    exitFinalSell: normalizeNumber(patch?.exitFinalSell, base.exitFinalSell, 0, 100),
+  }
 }
 
 export function normalizeRankTrendLiveStrategyConfig(
@@ -129,5 +182,6 @@ export function normalizeRankTrendLiveStrategyConfig(
             ),
     },
     limitUpPolicy: 'quote_first',
+    tradingPool: normalizeTradingPool(patch.tradingPool, base.tradingPool),
   }
 }

@@ -17,6 +17,17 @@ export interface RankTrendLiveChangeGateConfig {
   maxEntryChangePct: number | null
 }
 
+export interface TradingPoolThresholds {
+  recallJumpMin: number
+  readyJumpMin: number
+  observeFinalMin: number
+  readyFinalMin: number
+  buyVotesMin: number
+  downgradeJumpMin: number
+  downgradeFinalMin: number
+  exitFinalSell: number
+}
+
 export interface RankTrendLiveStrategyConfig {
   version: string
   mode: RankTrendLiveStrategyMode
@@ -30,6 +41,7 @@ export interface RankTrendLiveStrategyConfig {
   accDeltaMin: number
   changeGate: RankTrendLiveChangeGateConfig
   limitUpPolicy: 'quote_first'
+  tradingPool: TradingPoolThresholds
 }
 
 export interface RankTrendLiveGateCheck {
