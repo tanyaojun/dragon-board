@@ -613,3 +613,155 @@ describe('TradingPoolAnalysisService', () => {
     expect(result.rows[0].decision).toBe('enter')
   })
 })
+
+describe('TradingPoolAnalysisService — live projection pipeline', () => {
+  it('marks DataLayer live projection stocks with live_projection source', () => {
+    const result = analyzeTradingPoolCandidate({
+      candidates: [],
+      liveStocks: [
+        {
+          code: '002171',
+          name: '楚江新材',
+          rankTrend: {
+            decision: { final: { signal: 'buy', confidence: 87 } },
+            jump: { direction: 'buy', confidence: 82.9 },
+            technical: {
+              macd: { cross: 'none' },
+              signals: {
+                direction: { signal: 'buy', confidence: 90 },
+                acceleration: { signal: 'buy', confidence: 90 },
+                zeroCross: { signal: 'buy', confidence: 90 },
+              },
+            },
+            cycle: { decision: { action: 'allow' } },
+          },
+        },
+      ],
+    })
+
+    expect(result.rows).toHaveLength(1)
+    expect(result.rows[0].code).toBe('002171')
+    expect(result.rows[0].signalSnapshot.source).toBe('live_projection')
+  })
+
+  it('deduplicates live projection when thesis candidate exists for same code', () => {
+    const result = analyzeTradingPoolCandidate({
+      candidates: [
+        {
+          code: '603738',
+          name: '泰晶科技-thesis',
+          rankTrend: {
+            decision: { final: { signal: 'buy', confidence: 91 } },
+            jump: { direction: 'buy', confidence: 87.9 },
+            technical: {
+              macd: { cross: 'golden' },
+              signals: {
+                direction: { signal: 'buy', confidence: 88 },
+                acceleration: { signal: 'buy', confidence: 90 },
+                zeroCross: { signal: 'buy', confidence: 90 },
+              },
+            },
+            cycle: { decision: { action: 'allow' } },
+          },
+          candidateEntryDecision: {
+            accepted: false,
+            checks: [{ key: 'jump_confidence', status: 'fail', hardBlock: true }],
+          },
+        },
+      ],
+      liveStocks: [
+        {
+          code: '603738',
+          name: '泰晶科技-live',
+          rankTrend: {
+            decision: { final: { signal: 'buy', confidence: 88 } },
+            jump: { direction: 'buy', confidence: 84 },
+            technical: {
+              macd: { cross: 'none' },
+              signals: {
+                direction: { signal: 'buy', confidence: 80 },
+                acceleration: { signal: 'buy', confidence: 80 },
+                zeroCross: { signal: 'buy', confidence: 80 },
+              },
+            },
+            cycle: { decision: { action: 'allow' } },
+          },
+        },
+      ],
+    })
+
+    expect(result.rows).toHaveLength(1)
+    expect(result.rows[0].name).toBe('泰晶科技-thesis')
+    expect(result.rows[0].signalSnapshot.source).toBe('jump_blocked_resonance')
+  })
+
+  it('handles live projection stock without rankTrend gracefully', () => {
+    const result = analyzeTradingPoolCandidate({
+      candidates: [],
+      liveStocks: [
+        {
+          code: '000001',
+          name: '无信号票',
+        },
+      ],
+    })
+
+    expect(result.rows).toHaveLength(1)
+    expect(result.rows[0].signalSnapshot.dataQuality).toBe('stale')
+    expect(result.rows[0].status).toBe('观察中')
+  })
+
+  it('processes mixed thesis and live projection inputs correctly', () => {
+    const result = analyzeTradingPoolCandidate({
+      candidates: [
+        {
+          code: '002171',
+          name: '楚江-thesis',
+          rankTrend: {
+            decision: { final: { signal: 'buy', confidence: 87 } },
+            jump: { direction: 'buy', confidence: 82.9 },
+            technical: {
+              macd: { cross: 'none' },
+              signals: {
+                direction: { signal: 'buy', confidence: 90 },
+                acceleration: { signal: 'buy', confidence: 90 },
+                zeroCross: { signal: 'buy', confidence: 90 },
+              },
+            },
+            cycle: { decision: { action: 'allow' } },
+          },
+          candidateEntryDecision: {
+            accepted: false,
+            checks: [{ key: 'jump_confidence', status: 'fail', hardBlock: true }],
+          },
+        },
+      ],
+      liveStocks: [
+        {
+          code: '603738',
+          name: '泰晶-live',
+          rankTrend: {
+            decision: { final: { signal: 'buy', confidence: 91 } },
+            jump: { direction: 'buy', confidence: 87.9 },
+            technical: {
+              macd: { cross: 'golden' },
+              signals: {
+                direction: { signal: 'buy', confidence: 88 },
+                acceleration: { signal: 'buy', confidence: 90 },
+                zeroCross: { signal: 'buy', confidence: 90 },
+              },
+            },
+            cycle: { decision: { action: 'allow' } },
+          },
+        },
+      ],
+    })
+
+    expect(result.rows).toHaveLength(2)
+    const chuJiang = result.rows.find((r) => r.code === '002171')
+    const taiJing = result.rows.find((r) => r.code === '603738')
+    expect(chuJiang!.signalSnapshot.source).toBe('jump_blocked_resonance')
+    expect(taiJing!.signalSnapshot.source).toBe('live_projection')
+    expect(taiJing!.status).toBe('准备介入')
+  })
+})

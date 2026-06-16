@@ -246,6 +246,7 @@ export type TradingPoolSource =
   | 'candidate_auto_add'
   | 'candidate_watch'
   | 'jump_blocked_resonance'
+  | 'live_projection'
   | 'manual'
   | 'persisted'
   | 'unknown'

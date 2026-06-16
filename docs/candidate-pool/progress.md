@@ -436,6 +436,33 @@
 | Phase 19 Code Review 修正 | `pnpm exec vitest run src/services/candidate/__tests__/TradingPoolAnalysisService.test.ts src/components/panels/__tests__/candidatePoolTradingPool.test.ts src/components/panels/__tests__/CandidatePoolPanel.test.ts src/components/common/__tests__/DataTable.test.ts src/services/rankTrend/__tests__/v5FusionExecutionContract.test.ts --reporter=dot`; `pnpm test:ranktrend`; `pnpm typecheck:ranktrend`; `pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false`; `git diff --check` | exit 0 | 5 files / 64 tests passed；RankTrend 21 files / 221 tests passed；类型检查和 diff 检查 exit 0 | 通过 |
 | Phase 19 000988 Jump 兜底修正 | `pnpm exec vitest run src/services/candidate/__tests__/TradingPoolAnalysisService.test.ts --reporter=dot`; `pnpm exec vitest run src/services/candidate/__tests__/TradingPoolAnalysisService.test.ts src/components/common/__tests__/DataTable.test.ts src/components/panels/__tests__/CandidatePoolPanel.test.ts src/components/panels/__tests__/candidatePoolTradingPool.test.ts src/services/rankTrend/__tests__/v5FusionExecutionContract.test.ts --reporter=dot` | RED: 候选池矩阵 Jump 已过但 RankTrend 路径缺失时误判 `已退出/exit` | GREEN: 服务单测 22 tests passed；定向回归 5 files / 65 tests passed | 通过 |
 
+## 2026-06-16 Phase 20 交易池实时投影接入
+
+- **Status:** complete
+- **Started:** 2026-06-16
+- **Actions taken:**
+  - 根因诊断：6月15日强情绪日零票入池，数据管道只走 thesis 日记，不走 DataLayer 八平台热榜 200+ 只实时投影。
+  - 编写设计方案与实施计划，经 subagent 交叉评审修复全部 Critical 问题。
+  - TDD：先写 4 个实时投影管道测试（RED），再实现 types + TradingPoolInput 扩展与合并逻辑（GREEN）。
+  - `TradingPoolSource` 新增 `'live_projection'`；`TradingPoolInput` 新增 `liveStocks` 可选字段；thesis 候选优先去重。
+  - `CandidatePoolPanel.vue` 导入 `dataLayer`，`tradingPoolEvaluation` 传入 `dataLayer.getStocks()` 中带 `rankTrend` 的热榜股票。
+  - 新增 `isResonanceObserve()` 9条件判定函数，含 7 个边界测试。
+  - `tradingPoolSourceLabel` 新增 `'live_projection' → '热榜实时'` 映射。
+  - DataTable tooltip 四层结构（综合判断/Jump/共振/交易池）和交易池面板字段此前已实现，本次确认无需改动。
+- **Files created/modified:**
+  - `docs/candidate-pool/2026-06-16-trading-pool-live-data-integration-design.md`
+  - `docs/candidate-pool/2026-06-16-trading-pool-live-data-integration-plan.md`
+  - `src/services/candidate/types.ts`
+  - `src/services/candidate/TradingPoolAnalysisService.ts`
+  - `src/services/candidate/__tests__/TradingPoolAnalysisService.test.ts`
+  - `src/services/candidate/CandidatePoolStatusProjector.ts`
+  - `src/services/candidate/__tests__/CandidatePoolStatusProjector.test.ts`
+  - `src/components/panels/CandidatePoolPanel.vue`
+  - `src/components/panels/__tests__/CandidatePoolPanel.test.ts`
+- **Verification:** `pnpm test` 104 files / 783 tests passed；`pnpm test:ranktrend` 21 files / 221 tests passed；`pnpm typecheck:ranktrend` exit 0；`vue-tsc --noEmit` exit 0。
+- **Deferred:** 配置统一化（spec 7.0 / design Phase 3），后续单独出计划。
+- **Deferred:** 配置统一化（spec 7.0 / design Phase 3），后续单独出计划。
+
 ## Error Log
 
 | Timestamp | Error | Attempt | Resolution |
@@ -473,8 +500,8 @@
 
 | Question | Answer |
 |----------|--------|
-| Where am I? | Phase 19 交易池强共振自动入池已完成；Phase 15 真实使用联调仍有未完成项 |
-| Where am I going? | 回到 Phase 15 真实行情与真实 journal 后端链路稳定性收口 |
-| What's the goal? | 将手工候选/交易假设升级为候选池工作台 |
+| Where am I? | Phase 20 交易池实时投影接入已完成，数据管道从 DataLayer 八平台热榜 200+ 只票直通交易池分析 |
+| Where am I going? | 配置统一化（spec 7.0 / design Phase 3）或真实浏览器验证 |
+| What's the goal? | 将手工候选/交易假设升级为候选池工作台，打通热榜实时数据到交易池管道 |
 | What have I learned? | 见 `findings.md` |
-| What have I done? | 已实现并验证右键入池、规则分析、候选池面板、状态推进、journal 标签入库契约、统计概览、当前重分析、已入池识别、候选详情定位、假设编辑、分析写回、复盘保存、基础复盘统计、Phase 8 端到端交互、Phase 9 历史交易日志入口收敛、Phase 10 候选删除/快捷操作/筛选排序、Phase 11 候选漏斗/质量拆解/命中率/失效率/平均跟踪，Phase 12 结构化证据、扣分项、条件组、风险和变化归因，Phase 13 自动建议入池、重复候选识别、人工确认入池和推荐冷却控制，Phase 14 Playwright E2E、历史交易隔离、失败/重复/删除/截图回归，Phase 15 首个稳定性修复：候选发现冷却缓存按行情集合和推荐参数隔离，Phase 16 异动雷达命名收敛、候选池开放候选标识和一键加入/查看候选桥接，Phase 17 交易池 V1 前端投影、自动出池/降级/信号过期规则和候选池面板交易池标签页，Phase 18 交易池 V2 journal 持久化层，Phase 19 交易池强共振自动入池、最终置信度、买入票数、风险标签和来源识别 |
+| What have I done? | Phase 1-20 全部完成：右键入池、规则分析、候选池面板、状态推进、journal 标签入库、统计概览、当前重分析、已入池识别、候选详情定位、假设编辑、分析写回、复盘保存、Phase 8 端到端交互、Phase 9 历史交易日志收敛、Phase 10 候选删除/快捷操作/筛选排序、Phase 11 候选漏斗/质量拆解/命中率/失效率/平均跟踪、Phase 12 结构化证据/扣分项/条件组/风险/变化归因、Phase 13 自动建议入池/重复候选识别/人工确认/冷却控制、Phase 14 Playwright E2E/历史交易隔离、Phase 15 候选发现冷却缓存隔离、Phase 16 异动雷达命名收敛/候选池桥接、Phase 17 交易池 V1 前端投影、Phase 18 交易池 V2 journal 持久化、Phase 19 交易池强共振自动入池/最终置信度/买入票数/风险标签/来源识别、Phase 20 交易池实时投影接入/DataLayer 管道打通/强共振观察分类 |

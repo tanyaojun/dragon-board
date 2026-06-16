@@ -13,6 +13,7 @@ type TradingPoolCandidateLike = Record<string, any>
 interface TradingPoolInput {
   candidates: TradingPoolCandidateLike[]
   previousRows?: Array<Partial<TradingPoolAnalysisRow> & { code: string }>
+  liveStocks?: TradingPoolCandidateLike[]
 }
 
 interface TradingPoolDecisionResult {
@@ -71,6 +72,7 @@ function hasDoubleRisk(signals: TradingPoolSignalSnapshot): boolean {
 }
 
 function getEntryDecision(stock: TradingPoolCandidateLike): Record<string, any> | null {
+  if (stock.tradingPoolSource === 'live_projection') return null
   return stock.candidateEntryDecision || stock.entryDecision || null
 }
 
@@ -95,6 +97,7 @@ function hasNonJumpHardBlock(stock: TradingPoolCandidateLike): boolean {
 function resolveTradingPoolSource(stock: TradingPoolCandidateLike): TradingPoolSource {
   if (stock.tradingPoolSource === 'manual') return 'manual'
   if (stock.tradingPoolSource === 'persisted') return 'persisted'
+  if (stock.tradingPoolSource === 'live_projection') return 'live_projection'
   const decision = getEntryDecision(stock)
   if (decision?.accepted) return 'candidate_auto_add'
   if (isJumpBlockedOnly(stock)) return 'jump_blocked_resonance'
@@ -308,11 +311,33 @@ function buildPreviousRowMap(previousRows: TradingPoolInput['previousRows']) {
 
 export function analyzeTradingPoolCandidate(input: TradingPoolInput): TradingPoolAnalysisResult {
   const previousRows = buildPreviousRowMap(input.previousRows)
+
+  const thesisCodes = new Set<string>()
+  const mergedCandidates: TradingPoolCandidateLike[] = []
+
+  for (const candidate of input.candidates || []) {
+    const code = normalizeCode(candidate.code)
+    if (!code) continue
+    thesisCodes.add(code)
+    mergedCandidates.push(candidate)
+  }
+
+  if (input.liveStocks) {
+    for (const stock of input.liveStocks) {
+      const code = normalizeCode(stock.code)
+      if (!code || thesisCodes.has(code)) continue
+      mergedCandidates.push({
+        ...stock,
+        tradingPoolSource: 'live_projection' as TradingPoolSource,
+      })
+    }
+  }
+
   const rows: TradingPoolAnalysisRow[] = []
   let staleCount = 0
   let exitedCount = 0
 
-  for (const candidate of input.candidates || []) {
+  for (const candidate of mergedCandidates) {
     const code = normalizeCode(candidate.code)
     if (!code) continue
 

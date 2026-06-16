@@ -34,6 +34,15 @@
 | 右键菜单调用候选服务而不是直接写 API payload | 保持 DataTable 只负责交互入口，业务分析集中到服务层 |
 | 第一版不自动批量扫描全市场入池 | 控制范围，先解决“发现后快速入池 + 自动分析” |
 
+## Phase 20 Findings (2026-06-16)
+
+- DataTable `confidence` 列 tooltip 此前已实现四层结构（综合判断/Jump跃迁/共振评级/交易池动作），`getTradingPoolActionPreview` 和 `getConfidenceTitle` 已覆盖规格 9 的全部要求，本次无需改动。
+- 交易池面板字段（来源/状态/综合/Jump/票数/MACD/风险/原因/操作）和筛选控件（决策/状态下拉）此前已在 Phase 17-19 中实现，本次无需改动。
+- `tradingPoolSourceLabel` 此前对未识别来源默认返回 `'实时投影'`，本次新增明确的 `'live_projection' → '热榜实时'` 映射。
+- 实时投影行没有 `candidateEntryDecision`，`getEntryDecision` 对 `live_projection` 来源返回 null，`isJumpBlockedOnly` 和 `hasNonJumpHardBlock` 自然返回 false，不会误阻断。
+- `analyzeTradingPoolCandidate` 的 `resolvedSignals` 会在 `decision === 'stale'` 时强制覆盖 `dataQuality` 为 `'stale'`，因此无信号的实时投影行最终 dataQuality 为 `'stale'` 而非 `'missing'`，这是已有逻辑链的预期行为。
+- 配置统一化（spec 7.0 / design Phase 3）涉及 `rankTrendLiveStrategyConfig` 预设中新增 `tradingPool` 阈值节，需要与现有 V5/Fusion 策略配置文件对齐，本次延后单独出计划。
+
 ## Issues Encountered
 
 | Issue | Resolution |

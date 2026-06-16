@@ -510,6 +510,7 @@ import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { buildCandidateJournalProjection } from '@/services/candidate/CandidateProjectionBuilder'
 import { candidateJournalService } from '@/services/candidate/CandidateJournalService'
 import { analyzeTradingPoolCandidate } from '@/services/candidate/TradingPoolAnalysisService'
+import { dataLayer } from '@/services/DataLayer'
 import {
   buildTradingPoolPersistencePlan,
   getTradingPoolEntryCandidate,
@@ -782,6 +783,7 @@ function tradingPoolSourceLabel(source?: string | null): string {
   if (source === 'candidate_auto_add') return '候选严格通过'
   if (source === 'candidate_watch') return '候选观察'
   if (source === 'jump_blocked_resonance') return 'Jump阻断强共振'
+  if (source === 'live_projection') return '热榜实时'
   if (source === 'manual') return '手工加入'
   if (source === 'persisted') return '持久化恢复'
   return '实时投影'
@@ -985,8 +987,9 @@ const tradingPoolEvaluation = computed(() => {
     return { rows: [], staleCount: 0, exitedCount: 0 }
   }
 
-  return analyzeTradingPoolCandidate({
-    candidates: candidates.value.filter((entry) => entry.tradeType === 'thesis').map((entry) => {
+  const thesisCandidates = candidates.value
+    .filter((entry) => entry.tradeType === 'thesis')
+    .map((entry) => {
       const review = candidateJournalService.reanalyzeCandidate(entry)
       return {
         ...review.currentAnalysis.signalsSnapshot?.quote,
@@ -994,7 +997,21 @@ const tradingPoolEvaluation = computed(() => {
         name: entry.stockName,
         rankTrend: review.currentAnalysis.signalsSnapshot?.rankTrend ?? null,
       }
-    }),
+    })
+
+  // 实时投影行不持久化：面板关闭后下次打开根据当前 DataLayer 热榜数据重新生成。
+  // 只有 thesis 来源和手工加入的交易池行才走 CandidateJournalService 持久化。
+  const liveStocks = (dataLayer.getStocks() || [])
+    .filter((stock) => stock.rankTrend)
+    .map((stock) => ({
+      code: stock.code,
+      name: stock.name,
+      rankTrend: stock.rankTrend,
+    }))
+
+  return analyzeTradingPoolCandidate({
+    candidates: thesisCandidates,
+    liveStocks,
     previousRows: previousTradingPoolRows.value,
   })
 })

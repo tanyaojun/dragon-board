@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import type { FusionStrategyProjection } from '@/types/fusionStrategyProjection'
-import { projectCandidatePoolStatus } from '../CandidatePoolStatusProjector'
+import { isResonanceObserve, projectCandidatePoolStatus } from '../CandidatePoolStatusProjector'
 
 describe('CandidatePoolStatusProjector', () => {
   it('maps fusion strategy projections back to table-friendly candidate pool fields', () => {
@@ -158,5 +158,241 @@ describe('CandidatePoolStatusProjector', () => {
       candidatePoolLiveDecisionLabel: '被阻断',
       candidatePoolProjection: projections[0],
     })
+  })
+
+  it('marks strong resonance observe when signals pass but entry not accepted', () => {
+    const stocks = [{
+      code: '603738',
+      name: '泰晶科技',
+      rankTrend: {
+        decision: { final: { signal: 'buy', confidence: 91 } },
+        jump: { direction: 'buy', confidence: 87.9 },
+        technical: {
+          macd: { cross: 'golden' },
+          signals: {
+            direction: { signal: 'buy', confidence: 88.83 },
+            acceleration: { signal: 'buy', confidence: 90 },
+            zeroCross: { signal: 'buy', confidence: 90 },
+          },
+        },
+        cycle: { decision: { action: 'allow' } },
+      },
+    }]
+
+    const projections: FusionStrategyProjection[] = [
+      {
+        stockCode: '603738',
+        stockName: '泰晶科技',
+        strategyName: 'ranktrend_early_big_move_v3_lifecycle_fusion',
+        snapshotType: 'half_hour',
+        tradingDate: '2026-06-16',
+        snapshotId: 'snap-resonance',
+        frameTime: '2026-06-16T10:00:00+08:00',
+        projectionSource: 'live',
+        strategyState: 'triggered_wait_entry' as const,
+        candidateTier: 'A_MAIN',
+        lifecycleAction: 'allow',
+        triggerAt: '2026-06-16T10:00:00+08:00',
+        executionOverlay: null,
+        entryDecision: {
+          accepted: false,
+          decisionState: 'blocked_candidate',
+          label: '被阻断',
+          summary: 'Jump置信度未达候选池严格阈值',
+          checks: [{
+            key: 'jump_confidence',
+            label: 'Jump置信度',
+            status: 'fail' as const,
+            hardBlock: true,
+            actual: 87.9,
+            expected: '>= 90',
+            message: 'Jump置信度未达候选池严格阈值',
+          }],
+          configSnapshot: {
+            version: 'live-v5.1.0',
+            mode: 'balanced',
+            minJumpConfidence: 90,
+            allowDegradedSample: true,
+            requireCandidateTier: false,
+            allowedCandidateTiers: ['A_MAIN', 'B_IGNITION', 'N_NEUTRAL'],
+            requireTierBMidAndZeroCross: false,
+            tierBMidMin: 20,
+            accelerationMin: 10,
+            accDeltaMin: 8,
+            changeGate: { mode: 'warn', maxEntryChangePct: 6 },
+            limitUpPolicy: 'quote_first',
+          },
+        },
+      },
+    ]
+
+    const result = projectCandidatePoolStatus(stocks as any[], projections)
+
+    expect(result[0].candidatePoolStatus).toBe('triggered_wait_entry')
+    expect((result[0] as any).candidateResonanceObserve).toBe(true)
+  })
+
+  it('does not mark resonance observe when entry was already accepted', () => {
+    const stocks = [{
+      code: '600001',
+      name: '已通过候选',
+      rankTrend: {
+        decision: { final: { signal: 'buy', confidence: 93 } },
+        jump: { direction: 'buy', confidence: 92 },
+        technical: {
+          macd: { cross: 'golden' },
+          signals: {
+            direction: { signal: 'buy', confidence: 90 },
+            acceleration: { signal: 'buy', confidence: 90 },
+            zeroCross: { signal: 'buy', confidence: 90 },
+          },
+        },
+        cycle: { decision: { action: 'allow' } },
+      },
+    }]
+
+    const projections: FusionStrategyProjection[] = [
+      {
+        stockCode: '600001',
+        stockName: '已通过候选',
+        strategyName: 'ranktrend_early_big_move_v3_lifecycle_fusion',
+        snapshotType: 'half_hour',
+        tradingDate: '2026-06-16',
+        snapshotId: 'snap-accepted',
+        frameTime: '2026-06-16T10:00:00+08:00',
+        projectionSource: 'live',
+        strategyState: 'active_holding' as const,
+        candidateTier: 'A_MAIN',
+        lifecycleAction: 'allow',
+        triggerAt: '2026-06-16T09:30:00+08:00',
+        strategyEntryAt: '2026-06-16T10:00:00+08:00',
+        holdingBars: 2,
+        executionOverlay: {
+          executed: true,
+          entryTime: '2026-06-16T10:05:00+08:00',
+          entryPrice: 15.8,
+          entryId: 'entry-001',
+        },
+        entryDecision: {
+          accepted: true,
+          decisionState: 'candidate_active' as const,
+          label: '已入场',
+          summary: '候选已通过并入场',
+          checks: [],
+          configSnapshot: {
+            version: 'live-v5.1.0',
+            mode: 'balanced',
+            minJumpConfidence: 85,
+            allowDegradedSample: true,
+            requireCandidateTier: false,
+            allowedCandidateTiers: ['A_MAIN', 'B_IGNITION', 'N_NEUTRAL'],
+            requireTierBMidAndZeroCross: false,
+            tierBMidMin: 20,
+            accelerationMin: 10,
+            accDeltaMin: 8,
+            changeGate: { mode: 'warn', maxEntryChangePct: 6 },
+            limitUpPolicy: 'quote_first',
+          },
+        },
+      },
+    ]
+
+    const result = projectCandidatePoolStatus(stocks as any[], projections)
+
+    expect(result[0].candidatePoolStatus).toBe('active_holding')
+    expect((result[0] as any).candidateResonanceObserve).toBeUndefined()
+  })
+})
+
+describe('isResonanceObserve', () => {
+  it('returns true for full resonance with jump blocked', () => {
+    expect(isResonanceObserve({
+      finalSignal: 'buy',
+      finalConfidence: 87,
+      buyVotes: 3,
+      jumpDirection: 'buy',
+      jumpConfidence: 82.9,
+      macdCross: 'none',
+      lifecycleAction: 'allow',
+      hasOverheatAndDivergenceSell: false,
+    })).toBe(true)
+  })
+
+  it('returns false when final signal is not buy', () => {
+    expect(isResonanceObserve({
+      finalSignal: 'hold',
+      finalConfidence: 90,
+      buyVotes: 4,
+      jumpDirection: 'buy',
+      jumpConfidence: 85,
+      macdCross: 'golden',
+      lifecycleAction: 'allow',
+      hasOverheatAndDivergenceSell: false,
+    })).toBe(false)
+  })
+
+  it('returns false when buyVotes < 3', () => {
+    expect(isResonanceObserve({
+      finalSignal: 'buy',
+      finalConfidence: 86,
+      buyVotes: 2,
+      jumpDirection: 'buy',
+      jumpConfidence: 82,
+      macdCross: 'none',
+      lifecycleAction: 'allow',
+      hasOverheatAndDivergenceSell: false,
+    })).toBe(false)
+  })
+
+  it('returns false when jump confidence < 80', () => {
+    expect(isResonanceObserve({
+      finalSignal: 'buy',
+      finalConfidence: 86,
+      buyVotes: 3,
+      jumpDirection: 'buy',
+      jumpConfidence: 75,
+      macdCross: 'none',
+      lifecycleAction: 'allow',
+      hasOverheatAndDivergenceSell: false,
+    })).toBe(false)
+  })
+
+  it('returns false with lifecycle veto', () => {
+    expect(isResonanceObserve({
+      finalSignal: 'buy',
+      finalConfidence: 90,
+      buyVotes: 4,
+      jumpDirection: 'buy',
+      jumpConfidence: 88,
+      macdCross: 'golden',
+      lifecycleAction: 'veto',
+      hasOverheatAndDivergenceSell: false,
+    })).toBe(false)
+  })
+
+  it('returns false with MACD death cross', () => {
+    expect(isResonanceObserve({
+      finalSignal: 'buy',
+      finalConfidence: 86,
+      buyVotes: 3,
+      jumpDirection: 'buy',
+      jumpConfidence: 82,
+      macdCross: 'death',
+      lifecycleAction: 'allow',
+      hasOverheatAndDivergenceSell: false,
+    })).toBe(false)
+  })
+
+  it('returns false with double risk (overheat + capital divergence)', () => {
+    expect(isResonanceObserve({
+      finalSignal: 'buy',
+      finalConfidence: 90,
+      buyVotes: 4,
+      jumpDirection: 'buy',
+      jumpConfidence: 88,
+      macdCross: 'golden',
+      lifecycleAction: 'allow',
+      hasOverheatAndDivergenceSell: true,
+    })).toBe(false)
   })
 })
