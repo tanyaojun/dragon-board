@@ -1,0 +1,528 @@
+# 交易池混合评分 + 涨停分轨——实施计划
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** 将 `strongConsensus` 从 8 条件 AND 改为离散+连续混合评分，将涨停过滤从硬排除改为观察轨道标记，消除 Jump 单点否决和涨停夹杀导致的系统性空集。
+
+**Architecture:** `TradingPoolAnalysisService` 新增 `computeResonanceScore()` 评分函数，`decideTradingPoolStatus` 改为评分驱动；`checkEntryConditions` 第 4 条改为标记而非排除；配置层新增 `scoring` 阈值节。
+
+**Tech Stack:** Vue 3 + TypeScript + Vite, Vitest
+
+---
+
+## Guardrails
+
+- 不改候选池 V5/Fusion 合同和 `checkEntryConditions` 其余 5 条
+- 不改 QuantBoard 回测主链
+- 不动旧的 `TradingPoolThresholds` 单体字段（标记 deprecated，暂不删除）
+- 不引入新依赖
+
+## File Map
+
+- **Modify:** `src/types/rankTrendLiveStrategy.ts` — 新增 `ScoringThresholds`，`TradingPoolThresholds` 新增 `scoring`
+- **Modify:** `src/config/rankTrendLiveStrategyConfig.ts` — 预设新增 `scoring` 节
+- **Modify:** `src/services/candidate/types.ts` — 移除 `TradingPoolConsensusBreakdown`，新增 `TradingPoolScoringBreakdown`，`TradingPoolStatus` 新增 `'涨停观察'`，`TradingPoolRiskFlag` 新增 `'limit_up'`
+- **Modify:** `src/services/candidate/TradingPoolAnalysisService.ts` — 新增评分函数，重写 `decideTradingPoolStatus`，更新 `readRiskFlags`
+- **Modify:** `src/services/rankTrend/jumpSignalService.ts` — `checkEntryConditions` 条件 4 改为标记
+- **Modify:** `src/components/panels/CandidatePoolPanel.vue` — 评分矩阵替换共识矩阵，新增涨停观察状态渲染
+- **Create (New Test):** `src/services/candidate/__tests__/TradingPoolScoringService.test.ts` — 评分体系独立测试
+- **Modify:** `src/services/candidate/__tests__/TradingPoolAnalysisService.test.ts` — 更新已有测试匹配新评分体系
+- **Modify:** `src/components/panels/__tests__/CandidatePoolPanel.test.ts` — 锁定 涨停观察/评分矩阵
+
+---
+
+## Task 1: 扩展类型和配置
+
+**Files:**
+- Modify: `src/types/rankTrendLiveStrategy.ts`
+- Modify: `src/config/rankTrendLiveStrategyConfig.ts`
+
+- [ ] **Step 1: 新增 ScoringThresholds 类型**
+
+```ts
+// src/types/rankTrendLiveStrategy.ts
+
+export interface ScoringThresholds {
+  exitMax: number          // 总分低于此值 → 已退出
+  observeMin: number       // 总分 ≥ 此值 → 观察中
+  buyPointMin: number      // 总分 ≥ 此值 → 观察买点
+  readyMin: number         // 总分 ≥ 此值 + macdGolden + jumpHigh → 准备介入
+  readyJumpMin: number     // 准备介入额外要求的 Jump 置信度
+}
+
+export interface ContinuousWeights {
+  jumpConfidence: number
+  finalConfidence: number
+  directionConfidence: number
+  accelerationConfidence: number
+  zeroCrossConfidence: number
+}
+```
+
+- [ ] **Step 2: TradingPoolThresholds 新增 scoring 字段，旧字段标记 deprecated**
+
+```ts
+export interface TradingPoolThresholds {
+  /** @deprecated 迁移到 scoring 体系中，下个版本移除 */
+  recallJumpMin: number
+  // ... 其余旧字段同样标记 ...
+  
+  scoring: ScoringThresholds
+  weights: ContinuousWeights
+}
+```
+
+- [ ] **Step 3: 三个预设新增 scoring + weights 节**
+
+```ts
+// recall_first
+scoring: { exitMax: 6, observeMin: 6, buyPointMin: 12, readyMin: 16, readyJumpMin: 75 },
+weights: { jumpConfidence: 2.0, finalConfidence: 1.5, directionConfidence: 1.0, accelerationConfidence: 1.0, zeroCrossConfidence: 0.5 },
+
+// balanced
+scoring: { exitMax: 8, observeMin: 8, buyPointMin: 15, readyMin: 20, readyJumpMin: 80 },
+weights: { jumpConfidence: 2.0, finalConfidence: 1.5, directionConfidence: 1.0, accelerationConfidence: 1.0, zeroCrossConfidence: 0.5 },
+
+// strict_execution
+scoring: { exitMax: 10, observeMin: 10, buyPointMin: 18, readyMin: 24, readyJumpMin: 85 },
+weights: { jumpConfidence: 2.0, finalConfidence: 1.5, directionConfidence: 1.0, accelerationConfidence: 1.0, zeroCrossConfidence: 0.5 },
+```
+
+- [ ] **Step 4: 更新 normalizeTradingPool 处理 scoring 和 weights**
+
+- [ ] **Step 5: 类型检查**
+
+```powershell
+pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false
+```
+
+---
+
+## Task 2: 实现混合评分函数
+
+**Files:**
+- Create: `src/services/candidate/TradingPoolScoringService.ts`（新文件，评分逻辑独立）
+- Create: `src/services/candidate/__tests__/TradingPoolScoringService.test.ts`
+
+- [ ] **Step 1: 先写 RED 测试**
+
+```ts
+// TradingPoolScoringService.test.ts
+import { describe, expect, it } from 'vitest'
+import { computeResonanceScore } from '../TradingPoolScoringService'
+
+describe('computeResonanceScore', () => {
+  it('returns veto=true when lifecycle=veto', () => {
+    const result = computeResonanceScore(
+      { macdCross: 'golden', jumpDirection: 'buy', lifecycleAction: 'veto' },
+      { jumpConfidence: 90, finalConfidence: 90, directionConfidence: 90, accelerationConfidence: 90, zeroCrossConfidence: 90 },
+    )
+    expect(result.veto).toBe(true)
+    expect(result.totalScore).toBe(0)
+  })
+
+  it('scores MACD golden +3, none 0, death -3', () => {
+    const baseDisc = { jumpDirection: 'buy' as const, lifecycleAction: 'allow' as const }
+    const baseCont = { jumpConfidence: 50, finalConfidence: 50, directionConfidence: 50, accelerationConfidence: 50, zeroCrossConfidence: 50 }
+
+    const golden = computeResonanceScore({ ...baseDisc, macdCross: 'golden' }, baseCont)
+    const none = computeResonanceScore({ ...baseDisc, macdCross: 'none' }, baseCont)
+    const death = computeResonanceScore({ ...baseDisc, macdCross: 'death' }, baseCont)
+
+    expect(golden.totalScore).toBeGreaterThan(none.totalScore)
+    expect(none.totalScore).toBeGreaterThan(death.totalScore)
+  })
+
+  it('scores Jump direction buy +2, hold 0, sell -2', () => {
+    const baseCont = { jumpConfidence: 50, finalConfidence: 50, directionConfidence: 50, accelerationConfidence: 50, zeroCrossConfidence: 50 }
+    const baseDisc = { macdCross: 'none' as const, lifecycleAction: 'allow' as const }
+
+    const buy = computeResonanceScore({ ...baseDisc, jumpDirection: 'buy' }, baseCont)
+    const hold = computeResonanceScore({ ...baseDisc, jumpDirection: 'hold' }, baseCont)
+    const sell = computeResonanceScore({ ...baseDisc, jumpDirection: 'sell' }, baseCont)
+
+    expect(buy.totalScore).toBeGreaterThan(hold.totalScore)
+    expect(hold.totalScore).toBeGreaterThan(sell.totalScore)
+  })
+
+  it('scores 华天科技 as 观察买点 (totalScore ≈ 21.93)', () => {
+    const result = computeResonanceScore(
+      { macdCross: 'golden', jumpDirection: 'hold', lifecycleAction: 'allow' },
+      { jumpConfidence: 50, finalConfidence: 80, directionConfidence: 69.6, accelerationConfidence: 64.05, zeroCrossConfidence: 50 },
+    )
+    expect(result.totalScore).toBeGreaterThan(20)
+    expect(result.totalScore).toBeLessThan(23)
+    expect(result.breakdown.discrete).toBe(3) // MACD golden +3, Jump hold 0
+    expect(result.breakdown.continuous).toBeGreaterThan(18) // 5个连续维度
+  })
+})
+```
+
+- [ ] **Step 2: 运行确认 RED**
+
+- [ ] **Step 3: 实现 computeResonanceScore**
+
+```ts
+// TradingPoolScoringService.ts
+export interface DiscreteScoreInput {
+  macdCross: 'golden' | 'none' | 'death' | null
+  jumpDirection: 'buy' | 'hold' | 'sell' | null
+  lifecycleAction: string | null
+}
+
+export interface ContinuousScoreInput {
+  jumpConfidence: number | null
+  finalConfidence: number | null
+  directionConfidence: number | null
+  accelerationConfidence: number | null
+  zeroCrossConfidence: number | null
+}
+
+// 权重目前为常量，后续可迁移到配置的 weights 字段
+const W = { jumpConfidence: 2.0, finalConfidence: 1.5, directionConfidence: 1.0, accelerationConfidence: 1.0, zeroCrossConfidence: 0.5 }
+const SCALE = 5
+
+export interface ScoringBreakdown {
+  discrete: number
+  continuous: number
+  discreteDetail: { macd: number; jumpDir: number }
+  continuousDetail: { jumpConf: number; finalConf: number; direction: number; acceleration: number; zeroCross: number }
+}
+
+export interface ResonanceScoreResult {
+  totalScore: number
+  veto: boolean
+  breakdown: ScoringBreakdown
+}
+
+export function computeResonanceScore(
+  discrete: DiscreteScoreInput,
+  continuous: ContinuousScoreInput,
+): ResonanceScoreResult {
+  if (discrete.lifecycleAction === 'veto') {
+    return { totalScore: 0, veto: true, breakdown: { discrete: 0, continuous: 0, discreteDetail: { macd: 0, jumpDir: 0 }, continuousDetail: { jumpConf: 0, finalConf: 0, direction: 0, acceleration: 0, zeroCross: 0 } } }
+  }
+
+  // 离散
+  const macd = discrete.macdCross === 'golden' ? 3 : discrete.macdCross === 'death' ? -3 : 0
+  const jumpDir = discrete.jumpDirection === 'buy' ? 2 : discrete.jumpDirection === 'sell' ? -2 : 0
+  const discreteScore = macd + jumpDir
+
+  // 连续
+  const jumpConf = ((continuous.jumpConfidence ?? 0) / 100) * W.jumpConfidence * SCALE
+  const finalConf = ((continuous.finalConfidence ?? 0) / 100) * W.finalConfidence * SCALE
+  const direction = ((continuous.directionConfidence ?? 0) / 100) * W.directionConfidence * SCALE
+  const acceleration = ((continuous.accelerationConfidence ?? 0) / 100) * W.accelerationConfidence * SCALE
+  const zeroCross = ((continuous.zeroCrossConfidence ?? 0) / 100) * W.zeroCrossConfidence * SCALE
+  const continuousScore = jumpConf + finalConf + direction + acceleration + zeroCross
+
+  return {
+    totalScore: discreteScore + continuousScore,
+    veto: false,
+    breakdown: {
+      discrete: discreteScore,
+      continuous: continuousScore,
+      discreteDetail: { macd, jumpDir },
+      continuousDetail: { jumpConf, finalConf, direction, acceleration, zeroCross },
+    },
+  }
+}
+```
+
+- [ ] **Step 4: 运行确认 GREEN**
+
+```powershell
+pnpm exec vitest run src/services/candidate/__tests__/TradingPoolScoringService.test.ts --reporter=dot
+```
+
+---
+
+## Task 3: 重写 decideTradingPoolStatus 为评分驱动
+
+**Files:**
+- Modify: `src/services/candidate/TradingPoolAnalysisService.ts`
+
+- [ ] **Step 1: 用评分逻辑替代 8 条件 AND**
+
+```ts
+function decideTradingPoolStatus(
+  signals: TradingPoolSignalSnapshot,
+  previous: Partial<TradingPoolAnalysisRow> | null | undefined,
+  s: ScoringThresholds,
+): TradingPoolDecisionResult {
+  // 生命周期否决
+  if (signals.lifecycleAction === 'veto') {
+    return { status: '已退出', decision: 'exit', reasons: ['lifecycle_veto'] }
+  }
+
+  // 涨停观察
+  if (signals.limitUp) {
+    return { status: '涨停观察', decision: 'watch', reasons: ['limit_up'] }
+  }
+
+  // 信号过期
+  if (signals.dataQuality !== 'fresh') {
+    return {
+      status: (previous?.status as TradingPoolStatus) || '观察中',
+      decision: 'stale',
+      reasons: ['signal_stale'],
+    }
+  }
+
+  // 计算评分
+  const score = computeResonanceScore(
+    {
+      macdCross: signals.macdCross as 'golden' | 'none' | 'death' | null,
+      jumpDirection: signals.jumpDirection as 'buy' | 'hold' | 'sell' | null,
+      lifecycleAction: signals.lifecycleAction,
+    },
+    {
+      jumpConfidence: signals.jumpConfidence,
+      finalConfidence: signals.finalConfidence,
+      directionConfidence: signals.directionConfidence,
+      accelerationConfidence: signals.accelerationConfidence,
+      zeroCrossConfidence: signals.zeroCrossConfidence,
+    },
+  )
+
+  if (score.veto) {
+    return { status: '已退出', decision: 'exit', reasons: ['lifecycle_veto'] }
+  }
+
+  const total = score.totalScore
+
+  // 已介入状态保持
+  if (previous?.status === '已介入') {
+    if (total < s.exitMax) {
+      return { status: '已退出', decision: 'exit', reasons: ['score_below_exit'] }
+    }
+    return {
+      status: '已介入',
+      decision: 'stale',
+      reasons: signals.riskFlags.length ? ['intervened_keep_with_risk'] : ['intervened_keep'],
+    }
+  }
+
+  // 状态判定
+  if (total < s.exitMax) {
+    return { status: '已退出', decision: 'exit', reasons: ['score_below_exit'] }
+  }
+
+  if (total >= s.readyMin && signals.macdCross === 'golden' && (signals.jumpConfidence ?? 0) >= s.readyJumpMin) {
+    return {
+      status: '准备介入',
+      decision: 'enter',
+      reasons: ['strong_consensus', 'macd_golden_cross'],
+    }
+  }
+
+  if (total >= s.buyPointMin) {
+    return { status: '观察买点', decision: 'enter', reasons: ['strong_consensus'] }
+  }
+
+  if (total >= s.observeMin) {
+    return { status: '观察中', decision: 'watch', reasons: ['consensus_moderate'] }
+  }
+
+  return { status: '观察中', decision: 'watch', reasons: ['consensus_moderate'] }
+}
+```
+
+- [ ] **Step 2: 更新 readRiskFlags**
+
+移除 `jump_confidence_low`、`final_confidence_low` 标签（评分中已体现），新增 `limit_up`：
+
+```ts
+function readRiskFlags(/* ... */): TradingPoolRiskFlag[] {
+  const flags: TradingPoolRiskFlag[] = []
+  if (signals.lifecycleAction === 'veto') flags.push('lifecycle_veto')
+  if (signals.macdCross === 'death') flags.push('macd_death_cross')
+  // 过热、背离、hardBlock、dataStale 保持不变
+  if (signals.limitUp) flags.push('limit_up')
+  // 移除: jump_confidence_low, final_confidence_low, momentum_sync_broken
+  return flags
+}
+```
+
+- [ ] **Step 3: 更新 analyzeTradingPoolCandidate**
+
+`TradingPoolInput` 的 `thresholds` 参数改为读取 `thresholds.scoring`：
+
+```ts
+export function analyzeTradingPoolCandidate(input: TradingPoolInput): TradingPoolAnalysisResult {
+  const thresholds = input.thresholds ?? DEFAULT_RANK_TREND_LIVE_STRATEGY_CONFIG.tradingPool
+  const s = thresholds.scoring
+  // ... 合并逻辑不变 ...
+  const decisionResult = decideTradingPoolStatus(signals, previous, s)
+  // ...
+}
+```
+
+- [ ] **Step 4: 类型检查**
+
+---
+
+## Task 4: 涨停过滤改为标记
+
+**Files:**
+- Modify: `src/services/rankTrend/jumpSignalService.ts`
+
+- [ ] **Step 1: checkEntryConditions 条件 4 改为标记**
+
+```ts
+// 旧代码
+if (changePct >= limitPct - 0.3) {
+  return { passed: false, reasons: ['limit_up_blocked'] }
+}
+
+// 新代码
+const isLimitUp = changePct >= (limitPct - 0.3)
+// 不再 return false
+// isLimitUp 通过返回值传递给下游
+```
+
+在 `evaluateJumpSignal` 的返回值中新增 `limitUp: boolean`。
+
+- [ ] **Step 2: readTradingSignals 读取 limitUp**
+
+```ts
+function readTradingSignals(stock: TradingPoolCandidateLike, t: TradingPoolThresholds): TradingPoolSignalSnapshot {
+  const snapshot: TradingPoolSignalSnapshot = {
+    // ... 现有字段 ...
+    limitUp: stock.rankTrend?.jump?.limitUp ?? false,
+  }
+}
+```
+
+- [ ] **Step 3: TradingPoolSignalSnapshot 新增 limitUp 字段**
+
+---
+
+## Task 5: 更新现有测试匹配新评分体系
+
+**Files:**
+- Modify: `src/services/candidate/__tests__/TradingPoolAnalysisService.test.ts`
+
+- [ ] **Step 1: 运行现有 33 个测试确认哪些失败**
+
+评分体系下状态判定逻辑完全不同，多数旧测试的预期状态需要更新。
+
+- [ ] **Step 2: 逐一修复旧测试**
+
+按新的评分阈值重新计算每项测试的预期值，更新断言。保持用例结构不变，只改预期值。
+
+- [ ] **Step 3: 新增评分体系回归测试**
+
+```ts
+it('华天科技型: Jump=hold + MACD金叉 + 3/4 buyVotes → 观察买点', () => {
+  const result = analyzeTradingPoolCandidate({
+    candidates: [{
+      code: '002185', name: '华天科技',
+      rankTrend: {
+        decision: { final: { signal: 'buy', confidence: 80 } },
+        jump: { direction: 'hold', confidence: 50 },
+        technical: {
+          macd: { cross: 'golden' },
+          signals: {
+            direction: { signal: 'buy', confidence: 69.6 },
+            acceleration: { signal: 'buy', confidence: 64.05 },
+            zeroCross: { signal: 'hold', confidence: 50 },
+          },
+        },
+        cycle: { decision: { action: 'allow' } },
+      },
+    }],
+  })
+  expect(result.rows[0].status).toBe('观察买点')
+})
+```
+
+- [ ] **Step 4: 新增涨停观察测试**
+
+```ts
+it('routes limit-up stocks to 涨停观察 instead of scoring', () => {
+  const result = analyzeTradingPoolCandidate({
+    candidates: [{
+      code: '000001', rankTrend: {
+        jump: { direction: 'buy', confidence: 95, limitUp: true },
+        decision: { final: { signal: 'buy', confidence: 95 } },
+        technical: { macd: { cross: 'golden' }, signals: { /* ... */ } },
+        cycle: { decision: { action: 'allow' } },
+      },
+    }],
+  })
+  expect(result.rows[0].status).toBe('涨停观察')
+  expect(result.rows[0].decision).toBe('watch')
+  expect(result.rows[0].signalSnapshot.riskFlags).toContain('limit_up')
+})
+```
+
+---
+
+## Task 6: 面板适配
+
+**Files:**
+- Modify: `src/components/panels/CandidatePoolPanel.vue`
+- Modify: `src/components/panels/__tests__/CandidatePoolPanel.test.ts`
+
+- [ ] **Step 1: 评分矩阵替换共识矩阵**
+
+交易池详情区现有 `consensusBreakdown` 8 条件展示 → 替换为 `scoringBreakdown` 评分拆解：
+
+```
+离散分: +3 (MACD金叉+3, Jump持有0)
+连续分: +18.93 (Jump5.00 + final6.00 + 方向3.48 + 加速度3.20 + 零线1.25)
+总分: 21.93 → 观察买点
+```
+
+- [ ] **Step 2: 涨停观察状态渲染**
+
+- `tradingStatusFilter` 下拉新增 `涨停观察` 选项
+- 状态 badge 新增 `data-status="limit_up"` 样式
+- 显示 `limit_up` 风险标签
+
+- [ ] **Step 3: DataTable tooltip 更新**
+
+tooltip 中移除 `共振评级` 行（该信息已在交易池详情区展示），改为展示评分总分。
+
+---
+
+## Task 7: 验收
+
+- [ ] **Step 1: 评分服务测试**
+
+```powershell
+pnpm exec vitest run src/services/candidate/__tests__/TradingPoolScoringService.test.ts --reporter=dot
+```
+
+- [ ] **Step 2: 交易池分析测试**
+
+```powershell
+pnpm exec vitest run src/services/candidate/__tests__/TradingPoolAnalysisService.test.ts --reporter=dot
+```
+
+- [ ] **Step 3: 面板测试**
+
+```powershell
+pnpm exec vitest run src/components/panels/__tests__/CandidatePoolPanel.test.ts --reporter=dot
+```
+
+- [ ] **Step 4: 全量回归**
+
+```powershell
+pnpm test
+pnpm test:ranktrend
+pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false
+```
+
+---
+
+## Task 8: 自审清单
+
+- [ ] 权重常量（`W = { ... }`）后续可从 `DEFAULT_RANK_TREND_LIVE_STRATEGY_CONFIG.tradingPool.weights` 动态读取
+- [ ] 旧的 8 个 `TradingPoolThresholds` 单体字段已标记 deprecated 但未删除（向后兼容）
+- [ ] `jumpHoldMinConfidence`（方向 E 新增）在评分体系下不再需要，调度到 deprecated
+- [ ] DataTable tooltip 的 `getTradingPoolActionPreview` 同步适配评分体系
+- [ ] 候选池 V5/Fusion 未改动
+- [ ] `checkEntryConditions` 其余 5 条未改动
+- [ ] 无新阈值数值来源未解释
