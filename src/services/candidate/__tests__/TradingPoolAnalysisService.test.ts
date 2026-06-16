@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { analyzeTradingPoolCandidate } from '../TradingPoolAnalysisService'
+import { analyzeTradingPoolCandidate, normalizeResonanceIntensity } from '../TradingPoolAnalysisService'
 import type { TradingPoolStatus } from '../types'
 import { RANK_TREND_LIVE_STRATEGY_PRESETS } from '@/config/rankTrendLiveStrategyConfig'
 
@@ -66,7 +66,8 @@ describe('TradingPoolAnalysisService', () => {
           code: '601208',
           name: '东材科技',
           rankTrend: {
-            jump: { confidence: 0.88 },
+            decision: { final: { signal: 'buy', confidence: 88 } },
+            jump: { direction: 'buy', confidence: 0.88 },
             technical: {
               macd: { cross: 'golden' },
               signals: {
@@ -81,7 +82,8 @@ describe('TradingPoolAnalysisService', () => {
           code: '300433',
           name: '蓝思科技',
           rankTrend: {
-            jump: { confidence: 0.95 },
+            decision: { final: { signal: 'buy', confidence: 78 } },
+            jump: { direction: 'hold', confidence: 0.95 },
             technical: {
               macd: { cross: 'golden' },
               signals: {
@@ -265,10 +267,10 @@ describe('TradingPoolAnalysisService', () => {
       ],
     })
 
-    expect(result.rows[0].status).toBe('观察买点')
-    expect(result.rows[0].decision).toBe('enter')
+    expect(result.rows[0].status).toBe('观察中')
+    expect(result.rows[0].decision).toBe('watch')
     expect(result.rows[0].signalSnapshot.buyVotes).toBe(0)
-    expect(result.rows[0].reasons).toContain('strong_consensus')
+    expect(result.rows[0].reasons).toContain('consensus_moderate')
   })
 
   it('enters buy-point observation when candidate-pool passed candidate has jump from gate checks', () => {
@@ -278,7 +280,8 @@ describe('TradingPoolAnalysisService', () => {
           code: '000988',
           name: '华工科技',
           rankTrend: {
-            decision: { final: { signal: 'hold', confidence: 78 } },
+            decision: { final: { signal: 'buy', confidence: 78 } },
+            jump: { direction: 'buy' },
             technical: {
               macd: { cross: 'none' },
               signals: {
@@ -357,9 +360,11 @@ describe('TradingPoolAnalysisService', () => {
           code: '601208',
           name: '东材科技',
           rankTrend: {
-            jump: { confidence: 0.88 },
+            jump: { direction: 'buy', confidence: 0.88 },
             technical: {},
           },
+          finalSignal: 'buy',
+          finalConfidence: 88,
           directionSignal: 'buy',
           directionConfidence: 88,
           accelerationSignal: 'buy',
@@ -392,6 +397,7 @@ describe('TradingPoolAnalysisService', () => {
         {
           code: '601208',
           rankTrend: {
+            decision: { final: { signal: 'buy', confidence: 88 } },
             technical: {
               macd: { cross: 'golden' },
               signals: {
@@ -401,6 +407,7 @@ describe('TradingPoolAnalysisService', () => {
               },
             },
           },
+          jumpDirection: 'buy',
           jumpConfidence: 0.86,
         },
       ],
@@ -513,7 +520,7 @@ describe('TradingPoolAnalysisService', () => {
         {
           code: '601208',
           rankTrend: {
-            jump: { confidence: 0.62 },
+            jump: { direction: 'buy', confidence: 0.62 },
             technical: {
               macd: { cross: 'golden' },
               signals: {
@@ -539,7 +546,8 @@ describe('TradingPoolAnalysisService', () => {
         {
           code: '601208',
           rankTrend: {
-            jump: { confidence: 0.91 },
+            decision: { final: { signal: 'buy', confidence: 91 } },
+            jump: { direction: 'buy', confidence: 0.91 },
             technical: {
               momentumProfile: { syncBroken: true },
               macd: { cross: 'golden' },
@@ -671,7 +679,8 @@ describe('TradingPoolAnalysisService', () => {
         {
           code: '601208',
           rankTrend: {
-            jump: { confidence: 0.9 },
+            decision: { final: { signal: 'buy', confidence: 90 } },
+            jump: { direction: 'buy', confidence: 0.9 },
             technical: {
               macd: { cross: 'golden' },
               signals: {
@@ -851,7 +860,8 @@ describe('TradingPoolAnalysisService — config unification', () => {
           code: '601208',
           name: '东材科技',
           rankTrend: {
-            jump: { confidence: 0.88 },
+            decision: { final: { signal: 'buy', confidence: 88 } },
+            jump: { direction: 'buy', confidence: 0.88 },
             technical: {
               macd: { cross: 'golden' },
               signals: {
@@ -876,7 +886,8 @@ describe('TradingPoolAnalysisService — config unification', () => {
           code: '601208',
           name: '东材科技',
           rankTrend: {
-            jump: { confidence: 0.78 },
+            decision: { final: { signal: 'buy', confidence: 78 } },
+            jump: { direction: 'buy', confidence: 0.78 },
             technical: {
               macd: { cross: 'none' },
               signals: {
@@ -934,9 +945,9 @@ describe('TradingPoolAnalysisService — jump hold relaxation (方向E)', () => 
             technical: {
               macd: { cross: 'golden' },
               signals: {
-                direction: { signal: 'buy' },
-                acceleration: { signal: 'buy' },
-                zeroCross: { signal: 'buy' },
+                direction: { signal: 'buy', confidence: 85 },
+                acceleration: { signal: 'buy', confidence: 85 },
+                zeroCross: { signal: 'buy', confidence: 85 },
               },
             },
             cycle: { decision: { action: 'allow' } },
@@ -971,7 +982,7 @@ describe('TradingPoolAnalysisService — jump hold relaxation (方向E)', () => 
       ],
     })
 
-    expect(result.rows[0].status).toBe('观察买点')
+    expect(result.rows[0].status).toBe('已退出')
   })
 
   it('blocks jumpDirection=hold when confidence below hold threshold', () => {
@@ -1027,5 +1038,205 @@ describe('TradingPoolThresholds presets contract', () => {
       expect(t.exitFinalSell).toBeLessThanOrEqual(85)
       expect(t.downgradeJumpMin).toBeLessThan(t.recallJumpMin)
     }
+  })
+})
+
+describe('TradingPoolAnalysisService — 方向感知连续评分', () => {
+  it('太辰光型：final卖出+方向卖出+加速度卖出，置信度高也应得低分/负分，不能观察买点', () => {
+    const result = analyzeTradingPoolCandidate({
+      candidates: [
+        {
+          code: '300570',
+          name: '太辰光',
+          rankTrend: {
+            decision: { final: { signal: 'sell', confidence: 74 } },
+            jump: { direction: 'buy', confidence: 78 },
+            technical: {
+              macd: { cross: 'none' },
+              signals: {
+                direction: { signal: 'sell', confidence: 62.93 },
+                acceleration: { signal: 'sell', confidence: 70.26 },
+                zeroCross: { signal: 'hold', confidence: 50 },
+              },
+            },
+            cycle: { decision: { action: 'allow' } },
+          },
+        },
+      ],
+    })
+
+    const b = result.rows[0].scoringBreakdown!
+    // final卖出 应贡献负连续分
+    expect(b.continuousDetail.finalConfidence).toBeLessThan(0)
+    // 方向卖出 应贡献负连续分
+    expect(b.continuousDetail.directionConfidence).toBeLessThan(0)
+    // 加速度卖出 应贡献负连续分
+    expect(b.continuousDetail.accelerationConfidence).toBeLessThan(0)
+    // 零线观望 贡献接近 0
+    expect(Math.abs(b.continuousDetail.zeroCrossConfidence)).toBeLessThan(0.01)
+    // 总分不应达到观察买点 (≥15)
+    expect(b.totalScore).toBeLessThan(15)
+    expect(result.rows[0].status).not.toBe('观察买点')
+  })
+
+  it('圣泉集团型：MACD死叉+五路全空，高分连续置信度也不应入池', () => {
+    const result = analyzeTradingPoolCandidate({
+      candidates: [
+        {
+          code: '605589',
+          name: '圣泉集团',
+          rankTrend: {
+            decision: { final: { signal: 'sell', confidence: 81 } },
+            jump: { direction: 'buy', confidence: 73.6 },
+            technical: {
+              macd: { cross: 'death' },
+              signals: {
+                direction: { signal: 'sell', confidence: 63.92 },
+                acceleration: { signal: 'sell', confidence: 63.27 },
+                zeroCross: { signal: 'sell', confidence: 80.78 },
+              },
+            },
+            cycle: { decision: { action: 'allow' } },
+          },
+        },
+      ],
+    })
+
+    const b = result.rows[0].scoringBreakdown!
+    // 离散分应为负（MACD死叉-3 + Jump买+2 = -1）
+    expect(b.discreteScore).toBe(-1)
+    // 连续分应为负（四路卖出+一路买入）
+    expect(b.continuousScore).toBeLessThan(0)
+    // 总分应为负
+    expect(b.totalScore).toBeLessThan(0)
+    // 状态必须为已退出
+    expect(result.rows[0].status).toBe('已退出')
+  })
+
+  it('Jump卖出高置信度拉低总分，而非加分', () => {
+    const result = analyzeTradingPoolCandidate({
+      candidates: [
+        {
+          code: '002709',
+          name: '天赐材料',
+          rankTrend: {
+            decision: { final: { signal: 'buy', confidence: 84 } },
+            jump: { direction: 'sell', confidence: 89 },
+            technical: {
+              macd: { cross: 'golden' },
+              signals: {
+                direction: { signal: 'buy', confidence: 90 },
+                acceleration: { signal: 'buy', confidence: 90 },
+                zeroCross: { signal: 'hold', confidence: 50 },
+              },
+            },
+            cycle: { decision: { action: 'allow' } },
+          },
+        },
+      ],
+    })
+
+    const b = result.rows[0].scoringBreakdown!
+    // Jump置信连续分应为负（方向=sell，89%置信度）
+    expect(b.continuousDetail.jumpConfidence).toBeLessThan(0)
+    // MACD金叉+3 与 Jump卖-2 相抵，离散分=1
+    expect(b.discreteScore).toBe(1)
+    // 连续分：Jump卖负 + final买正 + 方向买正 + 加速度买正 + 零线0，应互有抵消
+    // 总分不应达到准备介入（≥20）
+    expect(b.totalScore).toBeLessThan(20)
+  })
+
+  it('全买信号高置信度依然拿高分，不受方向感知负向影响', () => {
+    const result = analyzeTradingPoolCandidate({
+      candidates: [
+        {
+          code: '601208',
+          name: '东材科技',
+          rankTrend: {
+            decision: { final: { signal: 'buy', confidence: 88 } },
+            jump: { direction: 'buy', confidence: 88 },
+            technical: {
+              macd: { cross: 'golden' },
+              signals: {
+                direction: { signal: 'buy', confidence: 88 },
+                acceleration: { signal: 'buy', confidence: 88 },
+                zeroCross: { signal: 'buy', confidence: 88 },
+              },
+            },
+            cycle: { decision: { action: 'allow' } },
+          },
+        },
+      ],
+    })
+
+    const b = result.rows[0].scoringBreakdown!
+    expect(b.totalScore).toBeGreaterThan(20)
+    expect(b.continuousScore).toBeGreaterThan(15)
+    expect(b.continuousDetail.jumpConfidence).toBeGreaterThan(0)
+    expect(b.continuousDetail.finalConfidence).toBeGreaterThan(0)
+    expect(b.continuousDetail.directionConfidence).toBeGreaterThan(0)
+    expect(b.continuousDetail.accelerationConfidence).toBeGreaterThan(0)
+    expect(b.continuousDetail.zeroCrossConfidence).toBeGreaterThan(0)
+    expect(result.rows[0].status).toBe('准备介入')
+  })
+})
+
+describe('normalizeResonanceIntensity', () => {
+  it('maps ≥27 to 非常强 (≥90%)', () => {
+    expect(normalizeResonanceIntensity(27).label).toBe('非常强')
+    expect(normalizeResonanceIntensity(27).pct).toBe(90)
+    expect(normalizeResonanceIntensity(30).pct).toBe(100)
+    expect(normalizeResonanceIntensity(35).pct).toBe(100) // 封顶
+  })
+
+  it('maps 20-26 to 强 (67-89%)', () => {
+    expect(normalizeResonanceIntensity(20).label).toBe('强')
+    expect(normalizeResonanceIntensity(20).pct).toBe(67)
+    expect(normalizeResonanceIntensity(26).label).toBe('强')
+    expect(normalizeResonanceIntensity(26).pct).toBe(87)
+  })
+
+  it('maps 15-19 to 中等 (50-66%)', () => {
+    expect(normalizeResonanceIntensity(15).label).toBe('中等')
+    expect(normalizeResonanceIntensity(15).pct).toBe(50)
+    expect(normalizeResonanceIntensity(19).label).toBe('中等')
+    expect(normalizeResonanceIntensity(19).pct).toBe(63)
+  })
+
+  it('maps 8-14 to 较弱 (27-49%)', () => {
+    expect(normalizeResonanceIntensity(8).label).toBe('较弱')
+    expect(normalizeResonanceIntensity(8).pct).toBe(27)
+    expect(normalizeResonanceIntensity(14).label).toBe('较弱')
+    expect(normalizeResonanceIntensity(14).pct).toBe(47)
+  })
+
+  it('maps <8 to 非常弱 (<27%)', () => {
+    expect(normalizeResonanceIntensity(7).label).toBe('非常弱')
+    expect(normalizeResonanceIntensity(7).pct).toBe(23)
+    expect(normalizeResonanceIntensity(0).label).toBe('非常弱')
+    expect(normalizeResonanceIntensity(0).pct).toBe(0)
+  })
+
+  it('clamps negative scores to 0%', () => {
+    expect(normalizeResonanceIntensity(-10).pct).toBe(0)
+    expect(normalizeResonanceIntensity(-10).label).toBe('非常弱')
+  })
+
+  it('华天科技型 ~22 分 → 强 73%', () => {
+    const r = normalizeResonanceIntensity(22)
+    expect(r.label).toBe('强')
+    expect(r.pct).toBe(73)
+  })
+
+  it('天赐材料型 7.4 分 → 非常弱 25%', () => {
+    const r = normalizeResonanceIntensity(7.4)
+    expect(r.label).toBe('非常弱')
+    expect(r.pct).toBe(25)
+  })
+
+  it('太辰光型 -2.4 分 → 非常弱 0%', () => {
+    const r = normalizeResonanceIntensity(-2.4)
+    expect(r.label).toBe('非常弱')
+    expect(r.pct).toBe(0)
   })
 })

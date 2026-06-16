@@ -197,8 +197,9 @@
                   <p>原因：{{ formatTradingPoolReasons(selectedTradingPoolRow.reasons) }}</p>
                   <div v-if="selectedTradingPoolRow.scoringBreakdown" class="scoring-breakdown">
                     <p class="scoring-title">
-                      评分合计：
-                      {{ formatTradingPoolValue(selectedTradingPoolRow.scoringBreakdown.totalScore, 1) }} 分
+                      共振强度：{{ selectedResonanceIntensity.label }}
+                      ({{ selectedResonanceIntensity.pct }}%)
+                      · {{ formatTradingPoolValue(selectedTradingPoolRow.scoringBreakdown.totalScore, 1) }} 分
                     </p>
                     <div class="scoring-pills">
                       <span>离散 {{ formatTradingPoolValue(selectedTradingPoolRow.scoringBreakdown.discreteScore, 1) }}</span>
@@ -528,7 +529,7 @@ import { computed, nextTick, onMounted, ref, watch } from 'vue'
 
 import { buildCandidateJournalProjection } from '@/services/candidate/CandidateProjectionBuilder'
 import { candidateJournalService } from '@/services/candidate/CandidateJournalService'
-import { analyzeTradingPoolCandidate } from '@/services/candidate/TradingPoolAnalysisService'
+import { analyzeTradingPoolCandidate, normalizeResonanceIntensity } from '@/services/candidate/TradingPoolAnalysisService'
 import { dataLayer } from '@/services/DataLayer'
 import {
   buildTradingPoolPersistencePlan,
@@ -1073,6 +1074,12 @@ const selectedTradingPoolRow = computed(() =>
   visibleTradingPoolRows.value[0] ||
   null,
 )
+
+const selectedResonanceIntensity = computed(() => {
+  const score = selectedTradingPoolRow.value?.scoringBreakdown?.totalScore
+  if (score == null) return { label: '', pct: 0 }
+  return normalizeResonanceIntensity(score)
+})
 
 function applySelectedEntryToForms(entry: CandidateJournalEntry | null) {
   thesisForm.value = {

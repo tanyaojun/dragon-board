@@ -54,13 +54,13 @@
 
 ## 2. Tooltip / 共振展示语义：最终合同
 
-经过 A+C+E 和 B+D 两轮迭代后，DataTable 的 confidence 列 tooltip 展示格式如下：
+经过 A+C+E、B+D 和方向感知+归一化迭代后，DataTable 的 confidence 列 tooltip 展示格式如下：
 
 ```
 📌 华天科技 (002185)
 🎯 综合判断: 买入 (置信度: 80%)
 🚀 Jump跃迁: 观望 50.0%
-📊 共振评分: 21.9 分 (MACD金叉+3, Jump持有0, 连续+18.9)
+📊 共振强度: 强 (73%) · 22.0 分 (MACD金叉+3, Jump持有0, 连续+18.9)
 📌 交易池: 观察买点
 ──────────────────────────────
 📈 MACD信号: 金叉 ✅
@@ -71,12 +71,13 @@
 ```
 
 **关键变更：**
-- 移除"共振评级: 强共振/中/弱"（纯 BuyVotes 计数 → 与系统判定不一致）
-- 新增"共振评分: N 分"（展示总分 + 离散/连续拆解）
+- "共振评分" → "共振强度"，归一化为百分比 + 五级标签
+- 连续分维度已方向感知化（卖出方向置信度贡献负分，买入方向正分，hold=0）
 - "交易池"行继续从 `getTradingPoolActionPreview` 的状态派生
 
 **废止的口径：**
 - ~~"共振评级: 强共振 (BuyVotes: 3/4)"~~ → 废止。改为评分总分。
+- ~~"共振评分"裸数字~~ → 废止。改为归一化百分比+标签。
 - ~~spec 6.3 "移除共振评级行"~~ → 废止。保留该行但内容从标签改为评分。
 
 ## 3. 状态机优先级：唯一判定顺序
@@ -157,6 +158,49 @@ interface TradingPoolInput {
 2. 用户通过 UI 切换策略模式 → `normalizeRankTrendLiveStrategyConfig` 重新计算 `tradingPool.scoring` / `weights` 后生效。
 3. `analyzeTradingPoolCandidate` 本身不接受临时阈值覆盖，避免同一交易池在不同调用方出现多套判定口径。
 
+### 4.1 评分公式与方向感知
+
+`computeResonanceScore` 是模块私有的评分函数，实现离散+连续混合评分：
+
+**离散维度（二值/三值，不做连续映射）：**
+
+| 维度 | buy 态 | neutral 态 | sell 态 |
+|------|--------|-----------|---------|
+| MACD cross | golden → **+3** | none → **0** | death → **-3** |
+| Jump 方向 | buy → **+2** | hold → **0** | sell → **-2** |
+
+**连续维度（0~100 置信度 × 方向符号 × 权重 × 5）：**
+
+| 维度 | 权重 | 方向来源 |
+|------|------|---------|
+| Jump 置信度 | 2.0 | `directionSign(jumpDirection)` |
+| 综合 final 置信度 | 2.0 | `directionSign(finalSignal)` |
+| 方向一致性置信度 | 2.0 | `directionSign(directionSignal)` |
+| 动量加速度置信度 | 2.0 | `directionSign(accelerationSignal)` |
+| 零线交叉置信度 | 2.0 | `directionSign(zeroCrossSignal)` |
+
+`directionSign(buy)=+1, directionSign(sell)=-1, 其他=0`。卖出信号高置信度→负连续分→拉低总分，消除"卖信号高分入池"缺陷。
+
+### 4.2 共振强度归一化
+
+`normalizeResonanceIntensity(totalScore)` 是公开导出函数，将原始总分映射为百分比+五级标签：
+
+```
+pct = clamp(round(totalScore / RESONANCE_NORMALIZATION_CEILING × 100), 0, 100)
+```
+
+天花板 30（五维全买100%置信理论最大约55分，30覆盖全部决策阈值区间并保留强信号余量）：
+
+| 归一化 | 原始分 | 标签 | 锚定决策层 |
+|--------|--------|------|-----------|
+| ≥ 90% | ≥ 27 | 非常强 | 远超 readyMin(20) |
+| 67-89% | 20-26 | 强 | 准备介入 |
+| 50-66% | 15-19 | 中等 | 观察买点 |
+| 27-49% | 8-14 | 较弱 | 观察中 |
+| < 27% | < 8 | 非常弱 | 已退出 |
+
+层级边界与评分阈值(exitMax=8, buyPointMin=15, readyMin=20)对齐，不按纯数学等分。
+
 ## 5. limitUp 数据契约：生产者、传播路径、回退
 
 ### 5.1 唯一生产者
@@ -216,4 +260,4 @@ jumpSignalService.checkEntryConditions()
 | `2026-06-16-trading-pool-resonance-diagnosis.md` | L399-411 | jump_blocked_resonance 不再作为独立来源 |
 | `2026-06-16-trading-pool-scoring-limitup-spec.md` | §2.4, §3.2, §4.1, §6.3 | 状态优先级/展示语义/tooltip 以此文为准 |
 
-**不取代的部分：** 评分公式（离散+连续维度、权重、阈值预设）、涨停观察子轨道的 UI 展示、配置文件的 `scoring` + `weights` 结构——这些继续以 `scoring-limitup-spec.md` 和 `scoring-limitup-plan.md` 为准。
+**不取代的部分：** 涨停观察子轨道的 UI 展示——以 `scoring-limitup-spec.md` 和 `scoring-limitup-plan.md` 为准。评分公式、方向感知、归一化均已由本文 §4.1-§4.2 收敛，不再引外部文档。

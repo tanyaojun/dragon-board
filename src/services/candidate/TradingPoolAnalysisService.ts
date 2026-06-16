@@ -117,28 +117,43 @@ function readRiskFlags(
   return flags
 }
 
+function directionSign(signal: string | null | undefined): number {
+  if (signal === 'buy') return 1
+  if (signal === 'sell') return -1
+  return 0
+}
+
 function computeResonanceScore(
   signals: Pick<
     TradingPoolSignalSnapshot,
     | 'macdCross'
     | 'jumpDirection'
     | 'jumpConfidence'
+    | 'finalSignal'
     | 'finalConfidence'
+    | 'directionSignal'
     | 'directionConfidence'
+    | 'accelerationSignal'
     | 'accelerationConfidence'
+    | 'zeroCrossSignal'
     | 'zeroCrossConfidence'
-  > & { lifecycleAction: string | null },
+  >,
   weights = DEFAULT_RANK_TREND_LIVE_STRATEGY_CONFIG.tradingPool.weights,
 ): TradingPoolScoringBreakdown {
   const macdCrossScore = signals.macdCross === 'golden' ? 3 : signals.macdCross === 'death' ? -3 : 0
   const jumpDirectionScore = signals.jumpDirection === 'buy' ? 2 : signals.jumpDirection === 'sell' ? -2 : 0
   const discreteScore = macdCrossScore + jumpDirectionScore
 
-  const jumpConfidenceScore = ((signals.jumpConfidence ?? 0) / 100) * weights.jumpConfidence * 5
-  const finalConfidenceScore = ((signals.finalConfidence ?? 0) / 100) * weights.finalConfidence * 5
-  const directionConfidenceScore = ((signals.directionConfidence ?? 0) / 100) * weights.directionConfidence * 5
-  const accelerationConfidenceScore = ((signals.accelerationConfidence ?? 0) / 100) * weights.accelerationConfidence * 5
-  const zeroCrossConfidenceScore = ((signals.zeroCrossConfidence ?? 0) / 100) * weights.zeroCrossConfidence * 5
+  const jumpConfidenceScore =
+    ((signals.jumpConfidence ?? 0) / 100) * weights.jumpConfidence * 5 * directionSign(signals.jumpDirection)
+  const finalConfidenceScore =
+    ((signals.finalConfidence ?? 0) / 100) * weights.finalConfidence * 5 * directionSign(signals.finalSignal)
+  const directionConfidenceScore =
+    ((signals.directionConfidence ?? 0) / 100) * weights.directionConfidence * 5 * directionSign(signals.directionSignal)
+  const accelerationConfidenceScore =
+    ((signals.accelerationConfidence ?? 0) / 100) * weights.accelerationConfidence * 5 * directionSign(signals.accelerationSignal)
+  const zeroCrossConfidenceScore =
+    ((signals.zeroCrossConfidence ?? 0) / 100) * weights.zeroCrossConfidence * 5 * directionSign(signals.zeroCrossSignal)
   const continuousScore =
     jumpConfidenceScore +
     finalConfidenceScore +
@@ -346,4 +361,18 @@ export function analyzeTradingPoolCandidate(input: TradingPoolInput): TradingPoo
   }
 
   return { rows, staleCount, exitedCount }
+}
+
+/** 归一化天花板：五维连续全买100%置信理论约55分，30覆盖全部决策阈值(exitMax=8→readyMin=20)并保留强信号余量 */
+const RESONANCE_NORMALIZATION_CEILING = 30
+
+export function normalizeResonanceIntensity(totalScore: number): { pct: number; label: string } {
+  const pct = Math.max(0, Math.min(100, Math.round((totalScore / RESONANCE_NORMALIZATION_CEILING) * 100)))
+  let label: string
+  if (pct >= 90) label = '非常强'
+  else if (pct >= 67) label = '强'
+  else if (pct >= 50) label = '中等'
+  else if (pct >= 27) label = '较弱'
+  else label = '非常弱'
+  return { pct, label }
 }

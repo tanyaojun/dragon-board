@@ -242,7 +242,7 @@ import { useUIStore } from '../../stores/ui'
 import { useFavoriteStore } from '../../stores/favorite'
 import { dataLoader } from '../../services/dataLoader'
 import { candidateJournalService } from '@/services/candidate/CandidateJournalService'
-import { analyzeTradingPoolCandidate } from '@/services/candidate/TradingPoolAnalysisService'
+import { analyzeTradingPoolCandidate, normalizeResonanceIntensity } from '@/services/candidate/TradingPoolAnalysisService'
 import { openingSignalStore } from '@/services/hotlist/OpeningSignalStore'
 import RankTrendPanel from '../../components/panels/RankTrendPanel.vue'
 const props = defineProps<{
@@ -770,7 +770,10 @@ const getConfidenceTitle = (stock: any) => {
     const b = tradingPoolAction.breakdown
     const macdLabel = b.discreteDetail.macdCross > 0 ? `MACD金叉+${b.discreteDetail.macdCross}` : b.discreteDetail.macdCross < 0 ? `MACD死叉${b.discreteDetail.macdCross}` : `MACD无`
     const jumpLabel = b.discreteDetail.jumpDirection > 0 ? `Jump买+${b.discreteDetail.jumpDirection}` : b.discreteDetail.jumpDirection < 0 ? `Jump卖${b.discreteDetail.jumpDirection}` : 'Jump持0'
-    title += `📊 共振评分: ${formatTooltipNumber(b.totalScore, 1)} 分 (${macdLabel}, ${jumpLabel}, 连续+${formatTooltipNumber(b.continuousScore, 1)})\n`
+    const contScore = formatTooltipNumber(b.continuousScore, 1)
+    const contLabel = b.continuousScore > 0 ? `连续+${contScore}` : `连续${contScore}`
+    const intensity = normalizeResonanceIntensity(b.totalScore)
+    title += `📊 共振强度: ${intensity.label} (${intensity.pct}%) · ${formatTooltipNumber(b.totalScore, 1)} 分 (${macdLabel}, ${jumpLabel}, ${contLabel})\n`
   }
   title += `🧭 候选池: ${getCandidatePoolReasonPreview(stock)}\n`
   title += `📌 交易池: ${tradingPoolAction.actionLabel}\n`
