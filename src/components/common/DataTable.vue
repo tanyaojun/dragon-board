@@ -112,51 +112,27 @@
               </div>
             </template>
 
-            <!-- 跳跃信号列 - 入场/出场标记 -->
-            <template v-else-if="col.key === 'jumpSignal'">
-              <div class="jump-signal-cell">
-                <span
-                  class="jump-badge candidate-pool-badge"
-                  :class="`candidate-pool-state-${getCandidatePoolStrategyState(stock)}`"
-                  @mouseenter="showCandidatePoolTooltip($event, stock)"
-                  @mousemove="moveConfidenceTooltip($event)"
-                  @mouseleave="hideConfidenceTooltip"
-                  @click.stop="openCandidatePoolFromCell(stock)"
-                >{{ formatCandidatePoolStateLabel(stock) }}</span>
-              </div>
-            </template>
-
-            <!-- 置信度列 - 增强显示 -->
+            <!-- 跃迁度列 - 增强显示 -->
             <template v-else-if="col.key === 'confidence'">
               <div class="confidence-cell" @mouseenter="showConfidenceTooltip($event, stock)"
                 @mousemove="moveConfidenceTooltip($event)" @mouseleave="hideConfidenceTooltip">
-                <!-- 买入信号 -->
-                <div v-if="getFinalSignal(stock) === 'buy'" class="signal-badge buy-badge">
+                <div v-if="getJumpSignalBadgeClass(stock)" :class="getJumpSignalBadgeClass(stock)">
                   <span class="signal-percent">{{ Math.round(getJumpConfidence(stock) || 0) }}%</span>
-                  <!-- ✅ 只在收盘前显示金叉死叉标记 -->
                   <span v-if="shouldShowMacdSignal(stock) && getMacdCross(stock) === 'golden'" class="macd-badge golden"
                     title="MACD金叉">▲</span>
                   <span v-if="shouldShowMacdSignal(stock) && getMacdCross(stock) === 'death'" class="macd-badge death"
                     title="MACD死叉">▼</span>
                 </div>
-                <!-- 卖出信号 -->
-                <div v-else-if="getFinalSignal(stock) === 'sell'" class="signal-badge sell-badge">
-                  <span class="signal-percent">{{ Math.round(getJumpConfidence(stock) || 0) }}%</span>
-                  <!-- ✅ 只在收盘前显示金叉死叉标记 -->
-                  <span v-if="shouldShowMacdSignal(stock) && getMacdCross(stock) === 'golden'" class="macd-badge golden"
-                    title="MACD金叉">▲</span>
-                  <span v-if="shouldShowMacdSignal(stock) && getMacdCross(stock) === 'death'" class="macd-badge death"
-                    title="MACD死叉">▼</span>
-                </div>
-                <!-- 持有信号 -->
-                <div v-else-if="getFinalSignal(stock) === 'hold'" class="signal-badge hold-badge">
-                  <span class="signal-percent">{{ Math.round(getJumpConfidence(stock) || 0) }}%</span>
-                  <!-- ✅ 只在收盘前显示金叉死叉标记 -->
-                  <span v-if="shouldShowMacdSignal(stock) && getMacdCross(stock) === 'golden'" class="macd-badge golden"
-                    title="MACD金叉">▲</span>
-                  <span v-if="shouldShowMacdSignal(stock) && getMacdCross(stock) === 'death'" class="macd-badge death"
-                    title="MACD死叉">▼</span>
-                </div>
+                <span v-else class="trend-steady">-</span>
+              </div>
+            </template>
+
+            <!-- 共振强度列 -->
+            <template v-else-if="col.key === 'resonanceIntensity'">
+              <div class="resonance-cell">
+                <span v-if="getResonanceCellValue(stock) != null" :class="getResonanceCellClass(stock)">
+                  {{ getResonanceCellValue(stock) }}%
+                </span>
                 <span v-else class="trend-steady">-</span>
               </div>
             </template>
@@ -235,7 +211,6 @@ import { debugLog } from '@/utils/logger'
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import type { Stock, Board } from '../../types'
-import type { CandidatePoolOpenPayload } from '@/types/candidatePoolOpenPayload'
 import { EventManager } from '../../utils/eventManager'
 import { AppEvents } from '../../types'
 import { useUIStore } from '../../stores/ui'
@@ -342,8 +317,8 @@ const columns = [
   { key: 'avgRank', label: '均榜', group: 'comprehensive', always: true },
   { key: 'compRank', label: '综合', group: 'comprehensive', always: true },
   { key: 'rankChange', label: '变化', group: 'comprehensive', always: true },
-  { key: 'jumpSignal', label: '候选池', group: 'comprehensive', always: true },
-  { key: 'confidence', label: 'Jump置信', group: 'comprehensive', always: true },
+  { key: 'confidence', label: '跃迁度', group: 'comprehensive', always: true },
+  { key: 'resonanceIntensity', label: '共振强度', group: 'comprehensive', always: true },
   { key: 'zlje', label: '主力净额', group: 'money', always: true },
   { key: 'zljzb', label: '主力%', group: 'money', always: true },
   { key: 'volume', label: '成交量', group: 'quote', always: true },
@@ -373,8 +348,8 @@ const COLUMN_WIDTHS: Record<string, string> = {
   avgRank: '50px',
   compRank: '50px',
   rankChange: '50px',
-  jumpSignal: '88px',
   confidence: '70px',
+  resonanceIntensity: '80px',
   zlje: '90px',
   zljzb: '90px',
   volume: '80px',
@@ -886,14 +861,11 @@ const candidatePoolStateLabels: Record<string, string> = {
 
 const getCandidatePoolProjection = (stock: any) => stock?.candidatePoolProjection || null
 
-const getCandidatePoolStrategyState = (stock: any) =>
-  getCandidatePoolProjection(stock)?.strategyState || stock?.candidatePoolStatus || 'idle'
-
 const hasCandidatePoolEntry = (stock: any) =>
   !!stock?.candidatePoolEntryId || !!getCandidatePoolProjection(stock)?.executionOverlay?.entryId
 
 const formatCandidatePoolStateLabel = (stock: any) => {
-  const state = getCandidatePoolStrategyState(stock)
+  const state = getCandidatePoolProjection(stock)?.strategyState || stock?.candidatePoolStatus || 'idle'
   if (state === 'idle' && hasCandidatePoolEntry(stock)) return '观察中'
   return candidatePoolStateLabels[state] || stock?.candidatePoolLabel || '未触发'
 }
@@ -971,28 +943,6 @@ const formatGateActualForTooltip = (value: unknown) => {
   return String(value)
 }
 
-const showCandidatePoolTooltip = (event: MouseEvent, stock: any) => {
-  hideRowTooltip()
-  confidenceTooltip.value = {
-    visible: true,
-    x: event.clientX + 16,
-    y: event.clientY + 16,
-    content: getCandidatePoolTooltipTitle(stock),
-  }
-}
-
-const openCandidatePoolFromCell = (stock: Stock) => {
-  const projection = getCandidatePoolProjection(stock)
-  const payload: CandidatePoolOpenPayload = {
-    stockCode: stock.code,
-    candidateId:
-      stock.candidatePoolEntryId ||
-      projection?.executionOverlay?.entryId ||
-      undefined,
-    liveProjection: projection || undefined,
-  }
-  EventManager.emit('candidate-pool:open', payload)
-}
 
 const getFinalSignal = (stock: any) =>
   getRankTrendAnalysis(stock)?.decision?.final?.signal ??
@@ -1017,6 +967,39 @@ const getJumpDirection = (stock: any) =>
   stock?.rankTrend?.jump?.direction ??
   stock?.jumpDirection ??
   null
+
+const getJumpSignalBadgeClass = (stock: any) => {
+  const jumpDirection = getJumpDirection(stock)
+  if (jumpDirection === 'buy') return 'signal-badge buy-badge'
+  if (jumpDirection === 'sell') return 'signal-badge sell-badge'
+  if (jumpDirection === 'hold') return 'signal-badge hold-badge'
+  return ''
+}
+
+function getResonanceRawScore(stock: any): number | null {
+  const preview = getTradingPoolActionPreview(stock)
+  return preview.breakdown?.totalScore ?? null
+}
+
+function getResonanceCellValue(stock: any): number | null {
+  const score = getResonanceRawScore(stock)
+  if (score == null) return null
+  return normalizeResonanceIntensity(score).pct
+}
+
+function getResonanceCellClass(stock: any): string {
+  const score = getResonanceRawScore(stock)
+  if (score == null) return ''
+  const { label } = normalizeResonanceIntensity(score)
+  switch (label) {
+    case '非常强': return 'resonance-very-strong'
+    case '强':     return 'resonance-strong'
+    case '中等':   return 'resonance-medium'
+    case '较弱':   return 'resonance-weak'
+    case '非常弱': return 'resonance-very-weak'
+  }
+  return ''
+}
 
 const getMacdCross = (stock: any) =>
   getRankTrendAnalysis(stock)?.technical?.macd?.cross ?? stock?.macdCross ?? 'none'
@@ -2398,6 +2381,32 @@ defineExpose({
 .macd-badge.death {
   color: #7f8c8d;
   text-shadow: 0 0 2px rgba(127, 140, 141, 0.5);
+}
+
+/* 共振强度颜色 */
+.resonance-cell {
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.resonance-very-strong {
+  color: #ff4757;
+}
+
+.resonance-strong {
+  color: #f1c40f;
+}
+
+.resonance-medium {
+  color: #3498db;
+}
+
+.resonance-weak {
+  color: #2ed573;
+}
+
+.resonance-very-weak {
+  color: #95a5a6;
 }
 
 /* 量比保持稳定显示，数据状态留在悬浮说明中 */

@@ -48,22 +48,6 @@ describe('DataTable row detail interactions', () => {
     expect(source).not.toMatch(/trade_hypothesis/)
   })
 
-  test('renders candidate pool status from fusion projection instead of legacy workflow labels', () => {
-    const source = dataTableSource()
-
-    expect(source).toContain("{ key: 'jumpSignal', label: '候选池'")
-    expect(source).toContain('candidatePoolProjection')
-    expect(source).toContain('candidate-pool-badge')
-    expect(source).toContain('formatCandidatePoolStateLabel')
-    expect(source).toContain('strategyState')
-    expect(source).toContain('holdingBars')
-    expect(source).toContain('candidateTier')
-    expect(source).toContain('lifecycleAction')
-    expect(source).toContain('exitReason')
-    expect(source).not.toContain('getLiveV3Signal(')
-    expect(source).not.toContain('getLiveV3SignalDecision')
-  })
-
   test('renders compact opening weak-to-strong badge in the stock name cell', () => {
     const source = dataTableSource()
 
@@ -112,7 +96,7 @@ describe('DataTable row detail interactions', () => {
   test('shows jump confidence in the confidence column', () => {
     const source = dataTableSource()
 
-    expect(source).toContain("{ key: 'confidence', label: 'Jump置信'")
+    expect(source).toContain("{ key: 'confidence', label: '跃迁度'")
     expect(source).toContain('analyzeTradingPoolCandidate')
     expect(source).toContain('getTradingPoolActionPreview')
     expect(source).toContain('getJumpConfidence')
@@ -125,6 +109,36 @@ describe('DataTable row detail interactions', () => {
     expect(source).not.toMatch(/<span class="signal-percent">\{\{ Math\.round\(getFinalConfidence\(stock\) \|\| 0\) \}\}%<\/span>/)
   })
 
+  test('shows resonance intensity column with color classes', () => {
+    const source = dataTableSource()
+
+    expect(source).toContain("{ key: 'resonanceIntensity', label: '共振强度'")
+    expect(source).toContain('resonanceIntensity: \'80px\'')
+    expect(source).toContain("col.key === 'resonanceIntensity'")
+    expect(source).toContain('getResonanceCellValue')
+    expect(source).toContain('getResonanceCellClass')
+    expect(source).toContain('normalizeResonanceIntensity')
+    expect(source).toContain('resonance-very-strong')
+    expect(source).toContain('resonance-strong')
+    expect(source).toContain('resonance-medium')
+    expect(source).toContain('resonance-weak')
+    expect(source).toContain('resonance-very-weak')
+  })
+
+  test('colors jump confidence by jump direction instead of final signal', () => {
+    const source = dataTableSource()
+
+    expect(source).toContain('const getJumpSignalBadgeClass = (stock: any) => {')
+    expect(source).toContain("const jumpDirection = getJumpDirection(stock)")
+    expect(source).toContain("if (jumpDirection === 'buy') return 'signal-badge buy-badge'")
+    expect(source).toContain("if (jumpDirection === 'sell') return 'signal-badge sell-badge'")
+    expect(source).toContain("if (jumpDirection === 'hold') return 'signal-badge hold-badge'")
+    expect(source).toContain(':class="getJumpSignalBadgeClass(stock)"')
+    expect(source).not.toContain("v-if=\"getFinalSignal(stock) === 'buy'\"")
+    expect(source).not.toContain("v-else-if=\"getFinalSignal(stock) === 'sell'\"")
+    expect(source).not.toContain("v-else-if=\"getFinalSignal(stock) === 'hold'\"")
+  })
+
   test('uses one row-style tooltip for theme detail and removes rank-change noise', () => {
     const source = dataTableSource()
 
@@ -134,30 +148,6 @@ describe('DataTable row detail interactions', () => {
     expect(source).toContain('getMergedThemeTooltipTitle')
     expect(source).toContain('📋 关联原因')
     expect(source).not.toMatch(/const\s+getRowTitle[\s\S]*排名变化/)
-  })
-
-  test('explains candidate pool status with the same tooltip surface as jump confidence', () => {
-    const source = dataTableSource()
-
-    expect(source).toContain('@mouseenter="showCandidatePoolTooltip($event, stock)"')
-    expect(source).toContain('getCandidatePoolTooltipTitle')
-    expect(source).toContain('策略状态')
-    expect(source).toContain('当前入池诊断')
-    expect(source).toContain('被拒原因')
-    expect(source).toContain('所处分层')
-    expect(source).toContain('规则矩阵')
-    expect(source).toMatch(/showCandidatePoolTooltip[\s\S]*confidenceTooltip\.value/)
-  })
-
-  test('keeps candidate pool badge sourced from lifecycle strategy state, not live gate decision', () => {
-    const source = dataTableSource()
-
-    expect(source).toMatch(
-      /const getCandidatePoolStrategyState = \(stock: any\) =>\s*getCandidatePoolProjection\(stock\)\?\.strategyState \|\| stock\?\.candidatePoolStatus \|\| 'idle'/,
-    )
-    expect(source).not.toContain('liveDecisionStateClasses')
-    expect(source).not.toMatch(/formatCandidatePoolStateLabel[\s\S]*entryDecision\?\.label/)
-    expect(source).not.toContain('.candidate-pool-state-blocked-candidate')
   })
 
   test('does not render rarely used super-large money flow columns', () => {

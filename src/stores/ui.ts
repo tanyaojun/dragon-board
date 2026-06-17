@@ -6,20 +6,13 @@ import type { Stock } from '../types'
 import { EventManager } from '../utils/eventManager'
 import { AppEvents } from '../types'
 import { dataLayer } from '../services/DataLayer'
+import { analyzeTradingPoolCandidate, normalizeResonanceIntensity } from '@/services/candidate/TradingPoolAnalysisService'
 
 type SortField = string
 
 interface SortConfig {
   field: SortField
   order: 'asc' | 'desc'
-}
-
-const candidatePoolStateOrder: Record<string, number> = {
-  idle: 0,
-  triggered_wait_entry: 1,
-  active_holding: 2,
-  exit_signaled: 3,
-  closed: 4,
 }
 
 function toFiniteNumber(value: unknown): number | null {
@@ -48,18 +41,27 @@ function getJumpConfidenceSortValue(stock: any) {
   )
 }
 
-function getCandidatePoolSortValue(stock: any) {
-  const state =
-    stock?.candidatePoolProjection?.strategyState ||
-    stock?.candidatePoolStatus ||
-    'idle'
-  return candidatePoolStateOrder[state] ?? Number.MAX_SAFE_INTEGER
+function getResonanceIntensitySortValue(stock: any) {
+  const projection = stock?.candidatePoolProjection
+  if (!projection) return 0
+  const result = analyzeTradingPoolCandidate({
+    candidates: [
+      {
+        ...stock,
+        candidateEntryDecision: projection?.entryDecision,
+        rankTrend: getRankTrendAnalysis(stock),
+      },
+    ],
+  })
+  const totalScore = result.rows[0]?.scoringBreakdown?.totalScore
+  if (totalScore == null) return 0
+  return normalizeResonanceIntensity(totalScore).pct
 }
 
 function getStockSortValue(stock: Stock, field: SortField): string | number {
   if (field === 'confidence') return getJumpConfidenceSortValue(stock)
   if (field === 'rankChange') return getRankChangeSortValue(stock)
-  if (field === 'jumpSignal') return getCandidatePoolSortValue(stock)
+  if (field === 'resonanceIntensity') return getResonanceIntensitySortValue(stock)
   if (field === 'avgRank') {
     return (
       toFiniteNumber((stock as any).avgRankNum) ??

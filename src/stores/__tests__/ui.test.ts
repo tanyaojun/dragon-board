@@ -112,24 +112,4 @@ describe('UIStore table sorting', () => {
     expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000003', '000001', '000002'])
   })
 
-  it('sorts candidate pool column by the displayed strategy state source', () => {
-    const uiStore = useUIStore()
-    dataLayer.setMergedStocks([
-      { code: '000001', name: '未触发', candidatePoolStatus: 'idle' },
-      {
-        code: '000002',
-        name: '已入场',
-        candidatePoolProjection: { strategyState: 'active_holding' },
-      },
-      {
-        code: '000003',
-        name: '待入场',
-        candidatePoolProjection: { strategyState: 'triggered_wait_entry' },
-      },
-    ])
-
-    uiStore.toggleSort('jumpSignal')
-
-    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000001', '000003', '000002'])
-  })
 })
