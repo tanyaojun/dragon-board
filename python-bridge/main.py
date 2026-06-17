@@ -526,7 +526,7 @@ class BridgeConfig:
     heartbeat_interval_ms: int = env_int("TDX_HEARTBEAT_INTERVAL_MS", 5000)
     trading_heartbeat_interval_ms: int = env_int("TDX_TRADING_HEARTBEAT_INTERVAL_MS", 1000)
     timeout_seconds: int = env_int("TDX_TIMEOUT_SECONDS", 15)
-    use_bestip: bool = env_bool("TDX_USE_BESTIP", False)
+    use_bestip: bool = env_bool("TDX_USE_BESTIP", True)
     quote_batch_size: int = env_int("TDX_QUOTE_BATCH_SIZE", 40)
     quote_batch_min_size: int = env_int("TDX_QUOTE_BATCH_MIN_SIZE", 20)
     quote_batch_max_size: int = env_int("TDX_QUOTE_BATCH_MAX_SIZE", 50)
@@ -542,10 +542,7 @@ class BridgeConfig:
     speed_history_max_ms: int = env_int("TDX_SPEED_HISTORY_MAX_MS", 180000)
     server_host: str | None = os.getenv("TDX_SERVER_HOST") or None
     server_port: int | None = env_int("TDX_SERVER_PORT", 0) or None
-    server_candidates: str = os.getenv(
-        "TDX_SERVER_CANDIDATES",
-        "218.6.170.47:7709",
-    )
+    server_candidates: str = os.getenv("TDX_SERVER_CANDIDATES", "")
     l2_enabled: bool = env_bool("TDX_L2_ENABLED", False)
     l2_server_host: str = os.getenv("TDX_L2_SERVER_HOST", "124.71.222.84").strip()
     l2_server_port: int = env_int("TDX_L2_SERVER_PORT", 7719)
