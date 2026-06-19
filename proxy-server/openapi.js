@@ -243,6 +243,20 @@ export function buildOpenApiDocument({ port = 3000 } = {}) {
         summary: '腾讯行情',
         parameters: codesQuery,
       }),
+      '/api/quotes/tencent/minute': operation({
+        method: 'get',
+        tag: 'quotes',
+        summary: '腾讯个股分钟分时',
+        description: '返回结构化分钟价格、累计成交量和累计成交额。',
+        parameters: [
+          {
+            name: 'code',
+            in: 'query',
+            required: true,
+            schema: { type: 'string', pattern: '^\\d{6}$', example: '002297' },
+          },
+        ],
+      }),
       '/api/quotes/eastmoney': operation({
         method: 'get',
         tag: 'quotes',

@@ -114,6 +114,39 @@ function requireCodes(req, res) {
   return codes
 }
 
+function normalizeSingleCode(value) {
+  const code = String(value || '').trim()
+  return /^\d{6}$/.test(code) ? code : ''
+}
+
+function parseTencentMinutePayload(payload, stockCode, fetchedAt) {
+  if (Number(payload?.code) !== 0) throw new Error(payload?.msg || 'tencent minute error')
+  const marketCode = `${stockCode.startsWith('6') ? 'sh' : 'sz'}${stockCode}`
+  const source = payload?.data?.[marketCode]?.data
+  if (!source || !Array.isArray(source.data) || !/^\d{8}$/.test(String(source.date || ''))) {
+    throw new Error('invalid tencent minute payload')
+  }
+  const points = source.data.map((row) => {
+    const [time, price, cumulativeVolume, cumulativeAmount] = String(row).trim().split(/\s+/)
+    const point = {
+      time,
+      price: Number(price),
+      cumulativeVolume: Number(cumulativeVolume),
+      cumulativeAmount: Number(cumulativeAmount),
+    }
+    if (
+      !/^\d{4}$/.test(time) ||
+      !Number.isFinite(point.price) ||
+      !Number.isFinite(point.cumulativeVolume) ||
+      !Number.isFinite(point.cumulativeAmount)
+    ) {
+      throw new Error('invalid tencent minute row')
+    }
+    return point
+  })
+  return { fetchedAt, date: String(source.date), points }
+}
+
 function normalizeEastmoneyQuoteRow(row) {
   return {
     f12: cleanCode(row?.f12),
@@ -805,7 +838,7 @@ async function loadEastmoneyQuoteFallbackPayload(
   }
 }
 
-export function registerQuoteRoutes(app, { plainClient, readConfig, cache, fetchImpl = globalThis.fetch }) {
+export function registerQuoteRoutes(app, { plainClient, readConfig, cache, runtimeCache, now = () => Date.now(), fetchImpl = globalThis.fetch }) {
   app.get('/api/quotes/eastmoney', async (req, res) => {
     const codeList = requireCodes(req, res)
     if (!codeList) return
@@ -933,6 +966,40 @@ export function registerQuoteRoutes(app, { plainClient, readConfig, cache, fetch
     } catch (error) {
       console.error('[腾讯行情] 失败:', error.message)
       sendDegraded(res, { source: 'quotes-tencent', error, fallbackData: EMPTY_QUOTES })
+    }
+  })
+
+  app.get('/api/quotes/tencent/minute', async (req, res) => {
+    const stockCode = normalizeSingleCode(req.query.code)
+    if (!stockCode) return sendBadRequest(res, 'invalid_stock_code', 'code 必须是六位数字')
+
+    const ttlSeconds = PROXY_CACHE_TTLS.quotes.tencentMinute
+    try {
+      const result = await runtimeCache.remember(
+        `quotes:tencent-minute:v1:${stockCode}`,
+        { ttlSeconds, staleTtlSeconds: ttlSeconds * 6 },
+        async () => {
+          const marketCode = `${stockCode.startsWith('6') ? 'sh' : 'sz'}${stockCode}`
+          const response = await plainClient.get(
+            `https://web.ifzq.gtimg.cn/appstock/app/minute/query?code=${marketCode}`,
+            { timeout: 5000, headers: DEFAULT_BROWSER_HEADERS },
+          )
+          return parseTencentMinutePayload(response.data, stockCode, now())
+        },
+      )
+      res.json({
+        ok: true,
+        source: 'quotes-tencent-minute',
+        stockCode,
+        fetchedAt: result.value.fetchedAt,
+        servedAt: now(),
+        data: attachCacheMeta(
+          { date: result.value.date, points: result.value.points },
+          { ...result.cache, store: 'memory', ttlSeconds },
+        ),
+      })
+    } catch (error) {
+      sendDegraded(res, { source: 'quotes-tencent-minute', error, fallbackData: null })
     }
   })
 

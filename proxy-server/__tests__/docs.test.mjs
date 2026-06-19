@@ -24,6 +24,8 @@ test('openapi json documents the proxy server routes', async () => {
     assert.equal(body.servers[0].url, 'http://localhost:3000')
     assert.ok(body.paths['/api/eastmoney/hot'].post)
     assert.ok(body.paths['/api/quotes/eastmoney'].get)
+    assert.ok(body.paths['/api/quotes/tencent/minute'].get)
+    assert.equal(body.paths['/api/quotes/tencent/minute'].get.parameters[0].name, 'code')
     assert.ok(body.paths['/api/cache/startup-bundle'].get)
     assert.ok(body.paths['/api/cache/startup-bundle'].post)
     assert.equal(

@@ -16,6 +16,7 @@ const formalRoutes = [
   'GET  /api/tgb/hot',
   'GET  /api/dzh/hot',
   'GET  /api/quotes/tencent',
+  'GET  /api/quotes/tencent/minute',
   'GET  /api/quotes/eastmoney',
   'GET  /api/quotes/sina',
   'GET  /api/quotes/tencent/spk',
