@@ -44,8 +44,8 @@ THSBigOrder 只访问 `http://127.0.0.1:3000`。每次刷新并行请求三条�
    - 提供：`title`、`list`、`pricechange`。
    - 用途：大单明细、名称、现价、涨幅、主买、主卖和分时涨幅。
 2. `GET /api/quotes/tencent?codes=xxxxxx`
-   - 提供：换手率 `f8`、量比 `f10`、成交量及基础行情兜底。
-   - 成交额按用户确认口径计算：`成交量（手） × 100 × 现价`。
+   - 提供：代理标准化的估算成交额 `f5`、成交量（手）`f6`、换手率 `f8`、量比 `f10` 及基础行情兜底。
+   - `f5` 不是腾讯原始字段名语义，而是现有代理按用户确认口径生成：`f6 × 100 × f2（现价）`；桌面端直接读取，缺失或非有限值时显示 `-`。
 3. `GET /api/limitup/10jqka`
    - 提供：封单额、封单量、开板次数、首次/最后涨停时间、连板高度、封板成功率、涨停类型和原因。
    - 无当前股票记录表示“非涨停池”，不是错误。
@@ -55,12 +55,13 @@ THSBigOrder 只访问 `http://127.0.0.1:3000`。每次刷新并行请求三条�
 在现有大单路由模块中新增 `/api/big-order/ths-detail`，不替换旧路由。路由职责：
 
 - 校验 `stockCode` 为六位数字。
-- 使用浏览器兼容请求头访问同花顺。
+- 以 GET 请求访问 `https://vaserviece.10jqka.com.cn/Level2/index.php?op=mainMonitorDetail&stockcode={stockCode}`，并使用固定的浏览器 User-Agent、Referer 和 JSON Accept 请求头。
 - 校验上游 `errorcode`、`title` 和 `list` 基本结构。
-- 按股票代码做短 TTL read-through 缓存，并允许短时间 stale fallback。
-- 返回结构化来源和缓存元信息；上游失败时返回统一 degraded envelope。
+- 按股票代码使用进程内短 TTL read-through 缓存，并允许短时间 stale fallback；此能力不依赖 Redis，代理重启后缓存自然清空。
+- 缓存 value 保存真实 `fetchedAt`，每次响应另写 `servedAt`；客户端陈旧提示必须使用 `fetchedAt`。
+- 返回结构化来源和缓存元信息；上游失败且无 stale 时返回 HTTP 200 degraded envelope（`ok=false/degraded=true/errorCode/data`）。
 
-`/api/limitup/10jqka` 增加短 TTL 缓存，但保持现有响应主体兼容。腾讯行情继续复用已有缓存。
+`/api/limitup/10jqka` 使用同一进程内短 TTL 缓存，但保持现有响应主体兼容。腾讯行情继续复用已有缓存。
 
 ### 4.2 客户端读模型
 
@@ -84,13 +85,14 @@ THSBigOrder 只访问 `http://127.0.0.1:3000`。每次刷新并行请求三条�
 ## 5. 刷新、缓存和错误状态
 
 - 默认每 6 秒刷新一次，手工刷新沿用同一流程。
-- 同一时刻只允许一个刷新任务；慢请求未完成时跳过下一次定时触发。
+- 同一时刻只允许一个刷新任务；同股票的定时重入直接跳过。切换股票时取消旧请求、递增请求代次并排队刷新最新代码，旧响应到达后必须因代码或代次不匹配而丢弃。
 - 三路请求并行执行，分别记录成功、陈旧、缺失和失败状态。
 - 同花顺大单失败时保留最后一次成功快照，并在界面显示“数据陈旧”和最后更新时间。
 - 腾讯失败时换手、量比和成交额显示 `-`，不阻断大单列表。
 - 涨停池成功但无代码时显示“非涨停池”；请求失败时显示“涨停数据不可用”。
 - `proxy-server` 不在线时显示“代理服务未启动”，不回退为桌面端直连上游。
 - 切换股票代码后不得显示上一只股票的缓存；只有代码一致的 stale 快照可以回退。
+- 客户端先解析统一 proxy envelope，再解析业务数据；HTTP 200 degraded、合法空列表和网络连接失败是三个不同状态。
 
 ## 6. 界面设计
 
@@ -105,6 +107,8 @@ THSBigOrder 只访问 `http://127.0.0.1:3000`。每次刷新并行请求三条�
 - 涨停上下文：封单额、开板次数、连板高度、封板成功率和涨停原因摘要。
 
 保留现有股票代码输入、通达信跟随、锁定、置顶、自动刷新、语音和分析入口。
+
+程序图标只使用项目内 `icon.ico`，不再从外部网站下载；除本地代理外，THSBigOrder 不发起其它 HTTP 请求。
 
 ### 6.2 左侧图表区
 
@@ -127,9 +131,9 @@ THSBigOrder 只访问 `http://127.0.0.1:3000`。每次刷新并行请求三条�
 
 ### 6.4 响应式桌面布局
 
-- 默认左侧图表约占 72%，右侧明细约占 28%。
-- 窗口缩小时优先保证明细列可读，隐藏次要顶部文字而非压缩到不可读。
-- 兼容 Windows 高 DPI；字体、线宽和控件尺寸按 DPI 缩放。
+- 默认 1280×800，左侧图表约占 72%，右侧明细约占 28%，最小窗口为 960×640。
+- 宽度低于 1100 时隐藏完整涨停原因，只保留“查看原因”提示；低于 1020 时再隐藏封板成功率和最后涨停时间。窗口恢复后字段自动恢复。
+- 使用 net48 应用 manifest 声明 PerMonitorV2/PerMonitor DPI awareness；字体、线宽和控件尺寸按 DPI 缩放，并验证运行中跨显示器切换。
 
 ## 7. 测试与验收
 
@@ -146,18 +150,22 @@ THSBigOrder 只访问 `http://127.0.0.1:3000`。每次刷新并行请求三条�
 - 四类成交性质映射。
 - 手数、金额、百分比、逗号价格和日期时间解析。
 - 三路数据合并及字段优先级。
+- proxy HTTP 200 degraded、代理 stale 元数据和真实 `fetchedAt`。
 - 非涨停池与涨停接口失败的区别。
 - 陈旧快照只能回退相同股票代码。
+- 刷新期间切股时旧响应不得覆盖新代码。
 - 分钟柱、累计净额和阈值热力聚合。
 - 既有点火、砸盘、买活跃和承接好逻辑回归。
+- 金额/买卖/特殊标记组合筛选、语音跨股去重、跟随/锁定、自动刷新和分析窗输入。
 
 ### 7.3 构建与真实运行
 
 - 运行受影响的 proxy-server Node 测试。
 - Release 构建 `tools/THSBigOrder/THSBigOrder.csproj`。
-- 在 `proxy-server` 在线时验证 002297、普通非涨停股和无效代码。
+- 在 `proxy-server` 在线时用固定 fixture 验证 002297 历史合同；实时 UI 验收从当日涨停池动态选择一只股票，并另选普通非涨停股和无效代码。
 - 停止代理后验证明确错误状态，再恢复代理验证自动恢复。
 - 检查 100%、125%、150% DPI 下的布局、文本截断、图表闪烁和窗口缩放。
+- 记录实际 `DeviceDpi`、窗口尺寸和跨屏切换结果。
 - 截图核对顶部信息、主图、底部聚合和右侧明细；确认没有控制台或未处理异常。
 
 ## 8. 影响范围
@@ -166,10 +174,13 @@ THSBigOrder 只访问 `http://127.0.0.1:3000`。每次刷新并行请求三条�
 
 - `proxy-server/routes/bigOrder.js`
 - `proxy-server/routes/market.js`
+- `proxy-server/helpers/proxyCache.js`
+- `proxy-server/app.js`
 - `proxy-server/server.js`
 - `proxy-server/openapi.js`
 - 邻近 proxy-server 测试
 - `tools/KPLViewer/**` 到 `tools/THSBigOrder/**` 的迁移与升级
+- `tools/THSBigOrder/app.manifest`、本地图标、过滤/刷新协调与邻近测试
 - `docs/kpl-viewer/**` 正式设计和实施记录
 
 不修改 RankTrend、QuantBoard、快照合同、DataLayer、python-bridge 或 TdxL2Helper。
