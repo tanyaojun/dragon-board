@@ -826,11 +826,397 @@ git commit -m "fix: finish THSBigOrder integration"
 
 ---
 
+## 2026-06-19 分时坐标与八段成交统计增量计划
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use `executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking。用户已明确本轮不启用 subagent。
+
+**Goal:** 为 THSBigOrder 补齐左右价格/涨幅轴、四小时主图竖格、八个 30 分钟底部竖格，并用腾讯个股分钟累计成交额与同花顺大单逐笔生成双层金额统计。
+
+**Architecture:** `proxy-server` 新增腾讯个股分钟分时规范化路由，桌面端继续只访问本地代理。`MarketSnapshot` 保存分钟累计成交额，纯 `BigOrderSeriesBuilder` 负责差分和八段聚合，`BigOrderChartControl` 只负责布局与绘制，避免把数据口径塞进 UI。
+
+**Tech Stack:** Node.js ES modules、Express、`node:test`、C# net48 WinForms、Newtonsoft.Json、现有控制台测试入口。
+
+### Task 10: 新增腾讯个股分钟分时代理
+
+**Files:**
+- Modify: `proxy-server/routes/quotes.js`
+- Modify: `proxy-server/helpers/proxyCache.js`
+- Create: `proxy-server/__tests__/tencentMinute.test.mjs`
+- Modify: `proxy-server/__tests__/docs.test.mjs`
+- Modify: `proxy-server/openapi.js`
+- Modify: `proxy-server/server.js`
+
+- [ ] **Step 1: 写腾讯分钟路由失败测试**
+
+在 `tencentMinute.test.mjs` 构造包含 `date` 和累计值的真实结构 fixture，断言六位代码校验、沪深市场前缀、结构化分钟点和缓存元信息：
+
+```js
+test('tencent minute route normalizes cumulative turnover rows', async () => {
+  let upstreamUrl = ''
+  const app = createProxyApp({
+    logRequests: false,
+    runtimeCache: new ProcessMemoryCache(),
+    clients: {
+      client: {},
+      plainClient: { get: async (url) => {
+        upstreamUrl = String(url)
+        return { data: { code: 0, data: { sz002297: { data: {
+          date: '20260618',
+          data: ['0930 25.70 11848 30449360.00', '0931 26.25 71011 184435426.43'],
+        } } } } }
+      } },
+    },
+  })
+  const { server, baseUrl } = await listen(app)
+  try {
+    const response = await fetch(`${baseUrl}/api/quotes/tencent/minute?code=002297`)
+    const body = await response.json()
+    assert.equal(response.status, 200)
+    assert.match(upstreamUrl, /code=sz002297/)
+    assert.equal(body.ok, true)
+    assert.equal(body.data.date, '20260618')
+    assert.deepEqual(body.data.points[1], {
+      time: '0931', price: 26.25, cumulativeVolume: 71011, cumulativeAmount: 184435426.43,
+    })
+  } finally { server.close() }
+})
+```
+
+另写 `code=abc` 返回 400、上游 `code!=0` 返回 degraded、重复请求只调用一次上游、TTL 后上游失败返回 stale 的测试。
+
+- [ ] **Step 2: 运行代理测试确认 RED**
+
+Run: `node --test proxy-server/__tests__/tencentMinute.test.mjs`
+
+Expected: FAIL，`/api/quotes/tencent/minute` 返回 404。
+
+- [ ] **Step 3: 实现最小规范化路由**
+
+在 `quotes.js` 增加并由 `registerQuoteRoutes` 注册：
+
+```js
+function normalizeSingleCode(value) {
+  const code = cleanCode(value)
+  return /^\d{6}$/.test(code) ? code : ''
+}
+
+function parseTencentMinutePayload(payload, stockCode) {
+  if (Number(payload?.code) !== 0) throw new Error(payload?.msg || 'tencent minute error')
+  const marketCode = `${stockCode.startsWith('6') ? 'sh' : 'sz'}${stockCode}`
+  const source = payload?.data?.[marketCode]?.data
+  if (!source || !Array.isArray(source.data)) throw new Error('invalid tencent minute payload')
+  const points = source.data.map((row) => {
+    const [time, price, cumulativeVolume, cumulativeAmount] = String(row).trim().split(/\s+/)
+    const point = {
+      time,
+      price: Number(price),
+      cumulativeVolume: Number(cumulativeVolume),
+      cumulativeAmount: Number(cumulativeAmount),
+    }
+    if (!/^\d{4}$/.test(time) || !Number.isFinite(point.price) ||
+        !Number.isFinite(point.cumulativeVolume) || !Number.isFinite(point.cumulativeAmount)) {
+      throw new Error('invalid tencent minute row')
+    }
+    return point
+  })
+  return { date: String(source.date || ''), points }
+}
+```
+
+路由使用 `runtimeCache.remember('quotes:tencent-minute:v1:' + code, { ttlSeconds, staleTtlSeconds: ttlSeconds * 6 }, loader)`，成功返回 `ok/source/stockCode/fetchedAt/servedAt/data`，失败使用 `sendDegraded`。在 `PROXY_CACHE_TTLS.quotes` 增加 `tencentMinute: 5`。
+
+- [ ] **Step 4: 运行路由测试确认 GREEN**
+
+Run: `node --test proxy-server/__tests__/tencentMinute.test.mjs`
+
+Expected: 全部 PASS，0 failed。
+
+- [ ] **Step 5: 补齐路由清单和 OpenAPI 合同**
+
+在 `server.js` 增加 `GET  /api/quotes/tencent/minute`；在 `openapi.js` 声明必填 query 参数 `code`；在 `docs.test.mjs` 断言：
+
+```js
+assert.ok(body.paths['/api/quotes/tencent/minute'].get)
+assert.equal(body.paths['/api/quotes/tencent/minute'].get.parameters[0].name, 'code')
+```
+
+- [ ] **Step 6: 运行代理完整测试并提交**
+
+Run: `node --test proxy-server/__tests__`
+
+Expected: 全部 PASS，0 failed。
+
+```powershell
+git add -- proxy-server/routes/quotes.js proxy-server/helpers/proxyCache.js proxy-server/__tests__/tencentMinute.test.mjs proxy-server/__tests__/docs.test.mjs proxy-server/openapi.js proxy-server/server.js
+git commit -m "feat(proxy): add Tencent minute turnover route"
+```
+
+### Task 11: 把分钟累计成交额合并进桌面快照
+
+**Files:**
+- Modify: `tools/THSBigOrder/Models/MarketSnapshot.cs`
+- Modify: `tools/THSBigOrder/Parsing/ThsPayloadParser.cs`
+- Modify: `tools/THSBigOrder/THSBigOrderDataProvider.cs`
+- Modify: `tools/THSBigOrder.Tests/Program.cs`
+
+- [ ] **Step 1: 写四路并行和分钟解析失败测试**
+
+扩展 `FixtureHandler` 返回：
+
+```json
+{"ok":true,"data":{"date":"20260618","points":[
+  {"time":"0930","price":25.70,"cumulativeVolume":11848,"cumulativeAmount":30449360.00},
+  {"time":"0931","price":26.25,"cumulativeVolume":71011,"cumulativeAmount":184435426.43}
+]}}
+```
+
+断言请求路径包含 `/api/quotes/tencent/minute?code=002297`、`PeakPending=4`、日期和累计额正确；再覆盖 degraded、非法时间、负累计额和非有限值不会进入快照。
+
+- [ ] **Step 2: 运行 C# 测试确认 RED**
+
+Run: `dotnet run --project tools/THSBigOrder.Tests/THSBigOrder.Tests.csproj -c Release`
+
+Expected: FAIL，当前 provider 只有三路请求且 `MarketSnapshot` 没有分钟成交额。
+
+- [ ] **Step 3: 增加分钟模型并保持构造调用显式**
+
+在 `MarketSnapshot.cs` 增加：
+
+```csharp
+public sealed class MinuteTurnoverPoint
+{
+    public DateTime Time { get; set; }
+    public double Price { get; set; }
+    public double CumulativeVolume { get; set; }
+    public double CumulativeAmount { get; set; }
+}
+```
+
+`MarketSnapshot` 构造函数增加 `IReadOnlyList<MinuteTurnoverPoint> minuteTurnover` 和 `DataFreshness minuteTurnoverFreshness`，并新增同名只读属性。所有构造点明确传入值，不增加隐藏默认行为。
+
+- [ ] **Step 4: 实现分钟 envelope 解析和四路并行**
+
+在 parser 增加 `ParseMinuteTurnover(JObject envelope, List<string> issues)`：使用 `data.date` 的 `yyyyMMdd` 日期与 `HHmm` 拼接 `DateTime`，只保留交易时间、非负且单调不减的累计成交额。provider 增加：
+
+```csharp
+var minuteTask = TryGetJsonAsync("/api/quotes/tencent/minute?code=" + stockCode, cancellationToken);
+await Task.WhenAll((Task)bigTask, quoteTask, minuteTask, limitTask).ConfigureAwait(false);
+```
+
+分钟接口是可选源：失败不阻断大单；同股 stale 回退保留缓存分钟序列，但 freshness 必须为 `Stale`，跨股不得复用。
+
+- [ ] **Step 5: 运行 C# 测试确认 GREEN 并提交**
+
+Run: `dotnet run --project tools/THSBigOrder.Tests/THSBigOrder.Tests.csproj -c Release`
+
+Expected: 全部 PASS，0 failed。
+
+```powershell
+git add -- tools/THSBigOrder/Models/MarketSnapshot.cs tools/THSBigOrder/Parsing/ThsPayloadParser.cs tools/THSBigOrder/THSBigOrderDataProvider.cs tools/THSBigOrder.Tests/Program.cs
+git commit -m "feat(tools): load Tencent minute turnover"
+```
+
+### Task 12: 生成八个 30 分钟双层金额序列
+
+**Files:**
+- Modify: `tools/THSBigOrder/Analytics/BigOrderSeriesBuilder.cs`
+- Modify: `tools/THSBigOrder/MainForm.cs`
+- Modify: `tools/THSBigOrder.Tests/Program.cs`
+
+- [ ] **Step 1: 写边界、午休和差分失败测试**
+
+新增测试数据覆盖 `09:30`、`09:59`、`10:00`、`11:30`、`13:00`、`14:30`、`15:00`，断言：
+
+```csharp
+AssertEqual(8, series.HalfHours.Count, "eight half-hours");
+AssertEqual(184435426.43d, series.HalfHours[0].TotalAmount, "first cumulative amount");
+AssertEqual(1800000d, series.HalfHours[0].BigOrderAmount, "first big-order total");
+AssertEqual(0d, series.HalfHours[4].TotalAmount, "13:00 unchanged cumulative");
+AssertEqual("14:30-15:00", series.HalfHours[7].Label, "last label");
+```
+
+边界规则固定为左闭右开，最后一格包含 `15:00`；大单额固定为 `BuyAmount + SellAmount`，不使用净额。
+
+- [ ] **Step 2: 运行测试确认 RED**
+
+Run: `dotnet run --project tools/THSBigOrder.Tests/THSBigOrder.Tests.csproj -c Release`
+
+Expected: FAIL，`HalfHours` 尚不存在。
+
+- [ ] **Step 3: 实现纯聚合器**
+
+增加：
+
+```csharp
+public sealed class HalfHourAmount
+{
+    public string Label { get; set; }
+    public double? TotalAmount { get; set; }
+    public double BigOrderAmount { get; set; }
+}
+```
+
+增加 `Build(IEnumerable<BigOrderItem> source, IEnumerable<MinuteTurnoverPoint> turnover, DataFreshness turnoverFreshness)`；保留现有单参数重载并转发为 Missing 分钟源，避免破坏已有分析测试。先按时间排序累计点，以当前累计额减上一有效累计额得到分钟成交额，再映射到固定八段；大单逐笔按同一边界直接求 `Amount` 总和。`turnoverFreshness` 为 Missing/Failed 时八段 `TotalAmount=null`；Fresh/Stale 的合法空源保持 `0`。
+
+- [ ] **Step 4: 更新绑定并运行测试确认 GREEN**
+
+`MainForm.BindSnapshot` 调用：
+
+```csharp
+bigOrderChart.SetSnapshot(snapshot,
+    new BigOrderSeriesBuilder().Build(
+        snapshot.Orders,
+        snapshot.MinuteTurnover,
+        snapshot.MinuteTurnoverFreshness));
+```
+
+Run: `dotnet run --project tools/THSBigOrder.Tests/THSBigOrder.Tests.csproj -c Release`
+
+Expected: 全部 PASS，0 failed。
+
+- [ ] **Step 5: 提交聚合改动**
+
+```powershell
+git add -- tools/THSBigOrder/Analytics/BigOrderSeriesBuilder.cs tools/THSBigOrder/MainForm.cs tools/THSBigOrder.Tests/Program.cs
+git commit -m "feat(tools): aggregate half-hour turnover bands"
+```
+
+### Task 13: 绘制双轴、四小时网格和八段双层底栏
+
+**Files:**
+- Modify: `tools/THSBigOrder/Controls/BigOrderChartControl.cs`
+- Modify: `tools/THSBigOrder.Tests/Program.cs`
+
+- [ ] **Step 1: 写布局和绘图合同失败测试**
+
+为控件增加只读布局合同，测试只验证几何与刻度，不做脆弱像素比对：
+
+```csharp
+control.Size = new Size(1000, 650);
+control.SetSnapshot(snapshot, series);
+AssertTrue(control.LayoutBands[0].Left >= 52, "left price axis margin");
+AssertTrue(control.ClientSize.Width - control.LayoutBands[0].Right >= 48, "right pct axis margin");
+AssertEqual(5, control.HourGridXs.Count, "four hour cells");
+AssertEqual(9, control.HalfHourGridXs.Count, "eight half-hour cells");
+AssertEqual(2, control.HalfHourRows.Count, "turnover and big-order rows");
+using (var bitmap = new Bitmap(1000, 650))
+    control.DrawToBitmap(bitmap, control.ClientRectangle);
+```
+
+- [ ] **Step 2: 运行测试确认 RED**
+
+Run: `dotnet run --project tools/THSBigOrder.Tests/THSBigOrder.Tests.csproj -c Release`
+
+Expected: FAIL，轴边距和网格合同不存在。
+
+- [ ] **Step 3: 调整布局与统一纵轴映射**
+
+`RebuildLayout` 使用左轴约 52px、右轴约 48px；价格主图、分钟柱和底部统计共用同一个交易时间绘图区。纵轴范围包含 `0%` 与全部有效涨幅，上下各留 5% 余量，范围不足 2% 时扩展至 2%。昨收价计算固定为：
+
+```csharp
+var previousClose = stock.Price.HasValue && stock.ChangePercent.HasValue
+    ? stock.Price.Value / (1d + stock.ChangePercent.Value / 100d)
+    : (double?)null;
+var price = previousClose.HasValue ? previousClose.Value * (1d + percent / 100d) : (double?)null;
+```
+
+左轴按价格显示两位小数，右轴显示带符号百分比；无昨收时左轴显示 `-`。
+
+- [ ] **Step 4: 绘制四小时和八个 30 分钟竖格**
+
+主图区边界对应交易分钟 `0/60/120/180/240`；底部边界对应 `0/30/60/90/120/150/180/210/240`。午休通过现有 `TimeX` 压缩，不额外占宽。主图时间标签显示 `09:30`、`10:30`、`11:30/13:00`、`14:00`、`15:00`。
+
+- [ ] **Step 5: 完全替换阈值热力绘制**
+
+删除 `DrawThresholds` 调用和阈值色块绘制，新增 `DrawHalfHourAmounts`。每格上层绘制 `TotalAmount`，下层绘制 `BigOrderAmount`；统一使用 `万/亿` 紧凑格式，缺失总成交额显示 `-`，其余显示 `0`。两行分别使用中性灰蓝和红色强调，但保持暗色交易终端对比度。
+
+- [ ] **Step 6: 运行测试与 Release 构建确认 GREEN**
+
+Run: `dotnet run --project tools/THSBigOrder.Tests/THSBigOrder.Tests.csproj -c Release`
+
+Expected: 全部 PASS，0 failed。
+
+Run: `dotnet build tools/THSBigOrder/THSBigOrder.csproj -c Release`
+
+Expected: Build succeeded，0 errors；记录实际 warning 数量。
+
+- [ ] **Step 7: 提交图表改动**
+
+```powershell
+git add -- tools/THSBigOrder/Controls/BigOrderChartControl.cs tools/THSBigOrder.Tests/Program.cs
+git commit -m "feat(tools): draw intraday axes and turnover bands"
+```
+
+### Task 14: 集成、真实窗口与视觉验收
+
+**Files:**
+- Modify only if verification reveals a scoped defect in the files listed in Tasks 10-13.
+- Update: `docs/kpl-viewer/2026-06-19-ths-big-order-implementation.md`
+
+- [ ] **Step 1: 运行完整自动化验证**
+
+Run: `node --test proxy-server/__tests__`
+
+Expected: 全部 PASS，0 failed。
+
+Run: `dotnet run --project tools/THSBigOrder.Tests/THSBigOrder.Tests.csproj -c Release`
+
+Expected: 所有测试输出 `PASS`，退出码 0。
+
+Run: `dotnet build tools/THSBigOrder/THSBigOrder.csproj -c Release`
+
+Expected: Build succeeded，0 errors。
+
+- [ ] **Step 2: 使用独立端口做实时接口冒烟**
+
+在 `proxy-server` 目录以 `PORT=3011` 启动当前源码，避免影响用户正在运行的 3000 端口代理。请求：
+
+```powershell
+Invoke-RestMethod 'http://127.0.0.1:3011/api/quotes/tencent/minute?code=002297'
+Invoke-RestMethod 'http://127.0.0.1:3011/api/big-order/ths-detail?stockCode=002297'
+```
+
+Expected: 分钟响应包含 `date`、241 个以内的有效点及单调累计成交额；大单响应可用于八段聚合。
+
+- [ ] **Step 3: 启动真实 WinForms 并截图验收**
+
+运行 `tools/THSBigOrder/bin/Release/net48/THSBigOrder.exe`，检查：
+
+- 左侧价格标签可读且不覆盖曲线。
+- 右侧涨幅标签与同一水平网格对齐。
+- 主图恰好四个交易小时竖格，午休不占宽。
+- 底部恰好八格、两行，原阈值热力不再出现。
+- 第一行总和与腾讯当日累计成交额末值一致；第二行总和与同花顺大单 `Amount` 总和一致。
+- 1280×800 和最小 960×640 下无裁切、负宽度或文字严重重叠。
+
+- [ ] **Step 4: 审计 diff 和文档状态**
+
+Run: `git status --short`
+
+Expected: 不包含用户已有 `tools/TdxL2Helper/**`、`tools/tdx_l2_reader.py` 或其它无关改动。
+
+Run: `git diff --check HEAD~4..HEAD`
+
+Expected: 无空白错误。
+
+- [ ] **Step 5: 仅在验收产生修复时提交**
+
+```powershell
+git add -- proxy-server/routes/quotes.js proxy-server/helpers/proxyCache.js proxy-server/__tests__/tencentMinute.test.mjs proxy-server/__tests__/docs.test.mjs proxy-server/openapi.js proxy-server/server.js tools/THSBigOrder/Models/MarketSnapshot.cs tools/THSBigOrder/Parsing/ThsPayloadParser.cs tools/THSBigOrder/THSBigOrderDataProvider.cs tools/THSBigOrder/Analytics/BigOrderSeriesBuilder.cs tools/THSBigOrder/MainForm.cs tools/THSBigOrder/Controls/BigOrderChartControl.cs tools/THSBigOrder.Tests/Program.cs docs/kpl-viewer/2026-06-19-ths-big-order-implementation.md
+git commit -m "fix: finish THSBigOrder intraday chart upgrade"
+```
+
+若没有验收修复，不创建空提交。
+
+---
+
 ## 完成判定
 
 - 新 THS 路由、涨停缓存和旧 KPL 路由兼容测试全部通过。
 - THSBigOrder 测试入口全部通过，Release 构建成功。
 - 002297 固定 fixture 合同、当日动态涨停股、普通非涨停股、非法代码及代理离线/恢复路径完成验收。
 - 界面在三档 DPI 下无关键遮挡或未处理异常。
+- 分时主图显示左价格轴、右涨幅轴和四个交易小时竖格；底部显示八个 30 分钟格及成交总额/大单总额两层数据。
+- 八段成交总额来自腾讯个股分钟累计成交额差分，八段大单总额来自同花顺大单逐笔金额求和；两者均不使用东财。
 - 竞价、真实 L2 和私有指标没有被误实现或误描述。
 - 最终提交不包含用户已有 TdxL2Helper 改动、`.superpowers/`、构建产物或过程文件。
