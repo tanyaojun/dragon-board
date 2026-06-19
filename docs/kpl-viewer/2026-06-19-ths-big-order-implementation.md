@@ -1035,7 +1035,7 @@ AssertEqual(0d, series.HalfHours[4].TotalAmount, "13:00 unchanged cumulative");
 AssertEqual("14:30-15:00", series.HalfHours[7].Label, "last label");
 ```
 
-边界规则固定为左闭右开，最后一格包含 `15:00`；大单额固定为 `BuyAmount + SellAmount`，不使用净额。
+边界规则固定为左闭右开，上午收盘点 `11:30` 计入第四格、全天收盘点 `15:00` 计入第八格；大单额固定为 `BuyAmount + SellAmount`，不使用净额。
 
 - [ ] **Step 2: 运行测试确认 RED**
 

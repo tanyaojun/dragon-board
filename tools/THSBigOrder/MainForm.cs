@@ -512,7 +512,12 @@ namespace THSBigOrder
             UpdateStatistics();
             UpdateStockInfo();
             BindSnapshotLabels(snapshot);
-            bigOrderChart.SetSnapshot(snapshot, new BigOrderSeriesBuilder().Build(snapshot.Orders));
+            bigOrderChart.SetSnapshot(
+                snapshot,
+                new BigOrderSeriesBuilder().Build(
+                    snapshot.Orders,
+                    snapshot.MinuteTurnover,
+                    snapshot.MinuteTurnoverFreshness));
             CheckAndAnnounce();
             lblStatus.Text = string.Format("共 {0} 条", _filteredData.Count);
             lblStatus.ForeColor = snapshot.BigOrderFreshness == DataFreshness.Fresh ? Color.LightGreen : Color.Orange;

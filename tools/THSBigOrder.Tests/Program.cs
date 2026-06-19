@@ -35,6 +35,7 @@ internal static class Program
         Run("Provider stale fallback is isolated by stock code", () => TestProviderStaleIsolation().GetAwaiter().GetResult());
         Run("Provider preserves optional degraded and stale states", () => TestProviderOptionalStates().GetAwaiter().GetResult());
         Run("Series builder aggregates minute flow and thresholds", TestSeriesBuilder);
+        Run("Series builder aggregates eight half-hour turnover bands", TestHalfHourSeries);
         Run("Legacy marker thresholds remain stable", TestLegacyMarkers);
         Run("Chart control binds three layout bands and draws empty data", TestChartControl);
         Run("Order filter composes amount, side and marker", TestOrderFilter);
@@ -224,6 +225,44 @@ internal static class Program
         }
         AssertEqual("点火", ignite[1].FundMarker, "ignite marker");
         AssertEqual("砸盘", smash[1].FundMarker, "smash marker");
+    }
+
+    private static void TestHalfHourSeries()
+    {
+        var day = new DateTime(2026, 6, 18);
+        var orders = new[]
+        {
+            new BigOrderItem { Type = 2, Amount = 1000000, Time = day.AddHours(9).AddMinutes(30) },
+            new BigOrderItem { Type = 4, Amount = 800000, Time = day.AddHours(9).AddMinutes(59) },
+            new BigOrderItem { Type = 2, Amount = 2000000, Time = day.AddHours(10) },
+            new BigOrderItem { Type = 4, Amount = 3000000, Time = day.AddHours(11).AddMinutes(30) },
+            new BigOrderItem { Type = 2, Amount = 4000000, Time = day.AddHours(15) },
+        };
+        var turnover = new[]
+        {
+            new MinuteTurnoverPoint { Time = day.AddHours(9).AddMinutes(30), CumulativeAmount = 100 },
+            new MinuteTurnoverPoint { Time = day.AddHours(9).AddMinutes(59), CumulativeAmount = 300 },
+            new MinuteTurnoverPoint { Time = day.AddHours(10), CumulativeAmount = 500 },
+            new MinuteTurnoverPoint { Time = day.AddHours(11).AddMinutes(30), CumulativeAmount = 900 },
+            new MinuteTurnoverPoint { Time = day.AddHours(13), CumulativeAmount = 900 },
+            new MinuteTurnoverPoint { Time = day.AddHours(14).AddMinutes(30), CumulativeAmount = 1000 },
+            new MinuteTurnoverPoint { Time = day.AddHours(15), CumulativeAmount = 1300 },
+        };
+
+        var series = new BigOrderSeriesBuilder().Build(orders, turnover, DataFreshness.Fresh);
+
+        AssertEqual(8, series.HalfHours.Count, "eight half-hours");
+        AssertEqual(300d, series.HalfHours[0].TotalAmount.Value, "first total amount");
+        AssertEqual(1800000d, series.HalfHours[0].BigOrderAmount, "first big-order total");
+        AssertEqual(200d, series.HalfHours[1].TotalAmount.Value, "10:00 boundary");
+        AssertEqual(400d, series.HalfHours[3].TotalAmount.Value, "11:30 close boundary");
+        AssertEqual(0d, series.HalfHours[4].TotalAmount.Value, "13:00 unchanged cumulative");
+        AssertEqual(400d, series.HalfHours[7].TotalAmount.Value, "15:00 close boundary");
+        AssertEqual(4000000d, series.HalfHours[7].BigOrderAmount, "last big-order total");
+        AssertEqual("14:30-15:00", series.HalfHours[7].Label, "last label");
+
+        var missing = new BigOrderSeriesBuilder().Build(orders, new MinuteTurnoverPoint[0], DataFreshness.Failed);
+        AssertTrue(missing.HalfHours.All(value => !value.TotalAmount.HasValue), "failed turnover is missing");
     }
 
     private static void TestChartControl()
