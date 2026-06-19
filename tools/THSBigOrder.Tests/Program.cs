@@ -29,8 +29,9 @@ internal static class Program
         });
         Run("THS order parser maps four natures and formatted values", TestOrderParsing);
         Run("THS snapshot parser merges title, quote, limit-up and price points", TestSnapshotParsing);
+        Run("THS snapshot parser reads Tencent minute turnover", TestMinuteTurnoverParsing);
         Run("Proxy envelope maps degraded, stale and fresh empty states", TestEnvelopeStates);
-        Run("Provider loads three proxy routes in parallel", () => TestProviderParallelLoad().GetAwaiter().GetResult());
+        Run("Provider loads four proxy routes in parallel", () => TestProviderParallelLoad().GetAwaiter().GetResult());
         Run("Provider stale fallback is isolated by stock code", () => TestProviderStaleIsolation().GetAwaiter().GetResult());
         Run("Provider preserves optional degraded and stale states", () => TestProviderOptionalStates().GetAwaiter().GetResult());
         Run("Series builder aggregates minute flow and thresholds", TestSeriesBuilder);
@@ -113,6 +114,29 @@ internal static class Program
         AssertEqual(DataFreshness.Fresh, parser.ParseSnapshot("002297", fresh, new JObject(), new JObject(), DateTime.Now).BigOrderFreshness, "fresh empty");
     }
 
+    private static void TestMinuteTurnoverParsing()
+    {
+        var parser = new ThsPayloadParser();
+        var ths = JObject.Parse("{'ok':true,'data':{'title':{},'list':[],'pricechange':[]}}");
+        var minute = JObject.Parse(@"{
+          'ok':true,'data':{'date':'20260618','points':[
+            {'time':'0930','price':25.70,'cumulativeVolume':11848,'cumulativeAmount':30449360.00},
+            {'time':'0931','price':26.25,'cumulativeVolume':71011,'cumulativeAmount':184435426.43},
+            {'time':'0932','price':26.20,'cumulativeVolume':70000,'cumulativeAmount':180000000.00},
+            {'time':'bad','price':26.20,'cumulativeVolume':72000,'cumulativeAmount':185000000.00}
+          ]}}");
+
+        var snapshot = parser.ParseSnapshot(
+            "002297", ths, new JObject(), minute, new JObject(),
+            DateTime.Parse("2026-06-18 10:00:00"));
+
+        AssertEqual(2, snapshot.MinuteTurnover.Count, "valid minute points");
+        AssertEqual(new DateTime(2026, 6, 18, 9, 30, 0), snapshot.MinuteTurnover[0].Time, "minute time");
+        AssertEqual(184435426.43d, snapshot.MinuteTurnover[1].CumulativeAmount, "minute cumulative amount");
+        AssertEqual(DataFreshness.Fresh, snapshot.MinuteTurnoverFreshness, "minute freshness");
+        AssertTrue(snapshot.Issues.Count >= 2, "invalid minute points reported");
+    }
+
     private static async Task TestProviderParallelLoad()
     {
         var handler = new FixtureHandler(true);
@@ -122,9 +146,10 @@ internal static class Program
             AssertSequence(new[] {
                 "/api/big-order/ths-detail?stockCode=002297",
                 "/api/limitup/10jqka",
+                "/api/quotes/tencent/minute?code=002297",
                 "/api/quotes/tencent?codes=002297"
             }, handler.Paths.OrderBy(value => value).ToArray(), "paths");
-            AssertEqual(3, handler.PeakPending, "parallel requests");
+            AssertEqual(4, handler.PeakPending, "parallel requests");
             AssertEqual("002297", snapshot.StockCode, "stock code");
             AssertEqual("博云新材", snapshot.Stock.Name, "provider name");
         }
@@ -344,7 +369,7 @@ internal static class Program
                 PeakPending = Math.Max(PeakPending, _pending);
                 if (_pending >= 3) _release.TrySetResult(true);
             }
-            if (_barrier) await _release.Task;
+            if (_barrier) await Task.Delay(50, cancellationToken);
             lock (Paths) { _pending--; }
 
             if (path.StartsWith("/api/big-order/") && FailBigOrder)
@@ -353,6 +378,8 @@ internal static class Program
             string json;
             if (path.StartsWith("/api/big-order/"))
                 json = "{'ok':true,'fetchedAt':1781746200000,'data':{'title':{'stockname':'博云新材','price':28.36},'list':[{'nature':'主力主买','volume':'10手','avgprice':'28.36','money':28360,'otime':'2026-06-18 09:30:01'}],'pricechange':[]}}";
+            else if (path.StartsWith("/api/quotes/tencent/minute"))
+                json = "{'ok':true,'data':{'date':'20260618','points':[{'time':'0930','price':25.70,'cumulativeVolume':11848,'cumulativeAmount':30449360.00}]}}";
             else if (path.StartsWith("/api/quotes/"))
                 json = QuoteDegraded
                     ? "{'ok':false,'degraded':true,'data':null}"

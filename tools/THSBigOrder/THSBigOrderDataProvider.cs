@@ -33,10 +33,11 @@ namespace THSBigOrder
 
             var bigTask = GetJsonAsync("/api/big-order/ths-detail?stockCode=" + stockCode, cancellationToken);
             var quoteTask = TryGetJsonAsync("/api/quotes/tencent?codes=" + stockCode, cancellationToken);
+            var minuteTask = TryGetJsonAsync("/api/quotes/tencent/minute?code=" + stockCode, cancellationToken);
             var limitTask = TryGetJsonAsync("/api/limitup/10jqka", cancellationToken);
             try
             {
-                await Task.WhenAll((Task)bigTask, quoteTask, limitTask).ConfigureAwait(false);
+                await Task.WhenAll((Task)bigTask, quoteTask, minuteTask, limitTask).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -58,8 +59,8 @@ namespace THSBigOrder
             {
                 MarketSnapshot cached;
                 if (_lastGood.TryGetValue(stockCode, out cached))
-                    return BuildStaleSnapshot(cached, quoteTask.Result, limitTask.Result);
-                return FailedSnapshot(stockCode, quoteTask.Result, limitTask.Result);
+                    return BuildStaleSnapshot(cached, quoteTask.Result, minuteTask.Result, limitTask.Result);
+                return FailedSnapshot(stockCode, quoteTask.Result, minuteTask.Result, limitTask.Result);
             }
 
             var quote = quoteTask.Result;
@@ -68,11 +69,13 @@ namespace THSBigOrder
                 stockCode,
                 bigOrder,
                 quote.Data ?? new JObject(),
+                minuteTask.Result.Data ?? new JObject(),
                 limitUp.Data ?? new JObject(),
                 DateTime.Now);
             snapshot = WithOptionalFreshness(
                 snapshot,
                 ResolveOptionalFreshness(quote, snapshot.QuoteFreshness),
+                ResolveOptionalFreshness(minuteTask.Result, snapshot.MinuteTurnoverFreshness),
                 ResolveOptionalFreshness(limitUp, snapshot.LimitUpFreshness));
             _lastGood[stockCode] = snapshot;
             return snapshot;
@@ -121,32 +124,53 @@ namespace THSBigOrder
             catch (Exception error) { return new RequestResult { Error = error }; }
         }
 
-        private MarketSnapshot FailedSnapshot(string stockCode, RequestResult quote, RequestResult limitUp)
+        private MarketSnapshot FailedSnapshot(
+            string stockCode,
+            RequestResult quote,
+            RequestResult minute,
+            RequestResult limitUp)
         {
             var degraded = JObject.Parse("{\"ok\":false,\"degraded\":true,\"data\":null}");
             var snapshot = _parser.ParseSnapshot(
-                stockCode, degraded, quote.Data ?? new JObject(), limitUp.Data ?? new JObject(), DateTime.Now);
+                stockCode, degraded, quote.Data ?? new JObject(), minute.Data ?? new JObject(),
+                limitUp.Data ?? new JObject(), DateTime.Now);
             return WithOptionalFreshness(
                 snapshot,
                 ResolveOptionalFreshness(quote, snapshot.QuoteFreshness),
+                ResolveOptionalFreshness(minute, snapshot.MinuteTurnoverFreshness),
                 ResolveOptionalFreshness(limitUp, snapshot.LimitUpFreshness));
         }
 
-        private MarketSnapshot BuildStaleSnapshot(MarketSnapshot cached, RequestResult quote, RequestResult limitUp)
+        private MarketSnapshot BuildStaleSnapshot(
+            MarketSnapshot cached,
+            RequestResult quote,
+            RequestResult minute,
+            RequestResult limitUp)
         {
-            var current = FailedSnapshot(cached.StockCode, quote, limitUp);
+            var current = FailedSnapshot(cached.StockCode, quote, minute, limitUp);
             if (string.IsNullOrWhiteSpace(current.Stock.Name)) current.Stock.Name = cached.Stock.Name;
+            var currentMinuteUsable = current.MinuteTurnoverFreshness == DataFreshness.Fresh ||
+                                      current.MinuteTurnoverFreshness == DataFreshness.Stale;
+            var minuteTurnover = currentMinuteUsable ? current.MinuteTurnover : cached.MinuteTurnover;
+            var minuteFreshness = currentMinuteUsable
+                ? current.MinuteTurnoverFreshness
+                : cached.MinuteTurnover.Count > 0 ? DataFreshness.Stale : current.MinuteTurnoverFreshness;
             return new MarketSnapshot(
                 cached.StockCode, current.Stock, cached.MainFunds, current.LimitUp, cached.Orders, cached.Prices,
-                DataFreshness.Stale, current.QuoteFreshness, current.LimitUpFreshness,
+                minuteTurnover, DataFreshness.Stale, current.QuoteFreshness, minuteFreshness,
+                current.LimitUpFreshness,
                 cached.BigOrderFetchedAt, DateTime.Now, cached.Issues);
         }
 
-        private static MarketSnapshot WithOptionalFreshness(MarketSnapshot source, DataFreshness quote, DataFreshness limitUp)
+        private static MarketSnapshot WithOptionalFreshness(
+            MarketSnapshot source,
+            DataFreshness quote,
+            DataFreshness minute,
+            DataFreshness limitUp)
         {
             return new MarketSnapshot(
                 source.StockCode, source.Stock, source.MainFunds, source.LimitUp, source.Orders, source.Prices,
-                source.BigOrderFreshness, quote, limitUp,
+                source.MinuteTurnover, source.BigOrderFreshness, quote, minute, limitUp,
                 source.BigOrderFetchedAt, source.RefreshedAt, source.Issues);
         }
 

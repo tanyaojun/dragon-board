@@ -54,13 +54,27 @@ namespace THSBigOrder.Parsing
             JObject limitUpPayload,
             DateTime refreshedAt)
         {
+            return ParseSnapshot(
+                stockCode, bigOrderEnvelope, quotePayload, new JObject(), limitUpPayload, refreshedAt);
+        }
+
+        public MarketSnapshot ParseSnapshot(
+            string stockCode,
+            JObject bigOrderEnvelope,
+            JObject quotePayload,
+            JObject minuteEnvelope,
+            JObject limitUpPayload,
+            DateTime refreshedAt)
+        {
             var issues = new List<string>();
             var orders = new List<BigOrderItem>();
             var prices = new List<PricePoint>();
+            var minuteTurnover = new List<MinuteTurnoverPoint>();
             var stock = ParseQuote(stockCode, quotePayload, issues);
             var limitUp = ParseLimitUp(stockCode, limitUpPayload, issues);
             var quoteFreshness = HasQuote(stockCode, quotePayload) ? DataFreshness.Fresh : DataFreshness.Missing;
             var limitFreshness = HasLimitUp(stockCode, limitUpPayload) ? DataFreshness.Fresh : DataFreshness.Missing;
+            var minuteFreshness = ParseMinuteTurnover(minuteEnvelope, minuteTurnover, issues);
             var bigFreshness = DataFreshness.Failed;
             var fetchedAt = refreshedAt;
             var mainFunds = new MainFundSummary();
@@ -97,8 +111,71 @@ namespace THSBigOrder.Parsing
             mainFunds.OrderCount = orders.Count;
 
             return new MarketSnapshot(
-                stockCode, stock, mainFunds, limitUp, orders, prices,
-                bigFreshness, quoteFreshness, limitFreshness, fetchedAt, refreshedAt, issues);
+                stockCode, stock, mainFunds, limitUp, orders, prices, minuteTurnover,
+                bigFreshness, quoteFreshness, minuteFreshness, limitFreshness,
+                fetchedAt, refreshedAt, issues);
+        }
+
+        private static DataFreshness ParseMinuteTurnover(
+            JObject envelope,
+            IList<MinuteTurnoverPoint> output,
+            IList<string> issues)
+        {
+            if (envelope == null || !envelope.HasValues) return DataFreshness.Missing;
+            if (envelope.Value<bool?>("ok") != true) return DataFreshness.Failed;
+            var data = envelope["data"] as JObject;
+            DateTime date;
+            if (data == null || !DateTime.TryParseExact(
+                (string)data["date"], "yyyyMMdd", CultureInfo.InvariantCulture,
+                DateTimeStyles.None, out date))
+            {
+                issues.Add("invalid minute turnover date");
+                return DataFreshness.Failed;
+            }
+
+            DateTime? previousTime = null;
+            double previousVolume = 0;
+            double previousAmount = 0;
+            foreach (var row in (data["points"] as JArray)?.OfType<JObject>() ?? Enumerable.Empty<JObject>())
+            {
+                DateTime time;
+                var volume = FiniteNumber(row["cumulativeVolume"]);
+                var amount = FiniteNumber(row["cumulativeAmount"]);
+                var price = FiniteNumber(row["price"]);
+                if (!DateTime.TryParseExact(
+                        date.ToString("yyyyMMdd", CultureInfo.InvariantCulture) + (string)row["time"],
+                        "yyyyMMddHHmm", CultureInfo.InvariantCulture, DateTimeStyles.None, out time) ||
+                    !price.HasValue || !volume.HasValue || !amount.HasValue ||
+                    volume.Value < 0 || amount.Value < 0 ||
+                    (previousTime.HasValue && (time <= previousTime.Value ||
+                                               volume.Value < previousVolume ||
+                                               amount.Value < previousAmount)) ||
+                    !IsTradingTime(time))
+                {
+                    issues.Add("invalid minute turnover point");
+                    continue;
+                }
+                output.Add(new MinuteTurnoverPoint
+                {
+                    Time = time,
+                    Price = price.Value,
+                    CumulativeVolume = volume.Value,
+                    CumulativeAmount = amount.Value,
+                });
+                previousTime = time;
+                previousVolume = volume.Value;
+                previousAmount = amount.Value;
+            }
+            return data.SelectToken("dragonMeta.cache.stale")?.Value<bool>() == true
+                ? DataFreshness.Stale
+                : DataFreshness.Fresh;
+        }
+
+        private static bool IsTradingTime(DateTime value)
+        {
+            var time = value.TimeOfDay;
+            return (time >= new TimeSpan(9, 30, 0) && time <= new TimeSpan(11, 30, 0)) ||
+                   (time >= new TimeSpan(13, 0, 0) && time <= new TimeSpan(15, 0, 0));
         }
 
         private static StockSummary ParseQuote(string stockCode, JObject payload, IList<string> issues)
