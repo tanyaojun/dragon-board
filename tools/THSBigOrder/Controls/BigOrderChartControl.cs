@@ -68,6 +68,7 @@ namespace THSBigOrder.Controls
                 return;
             }
             DrawLines(e.Graphics);
+            DrawSignals(e.Graphics);
             DrawVolumes(e.Graphics);
             DrawThresholds(e.Graphics);
             if (_snapshot.BigOrderFreshness == DataFreshness.Stale)
@@ -97,20 +98,50 @@ namespace THSBigOrder.Controls
 
         private void DrawLines(Graphics graphics)
         {
-            DrawScaledLine(graphics, _snapshot.Prices.Select(point => point.ChangePercent).ToArray(), _layoutBands[0], Color.FromArgb(225, 241, 64), 2);
-            DrawScaledLine(graphics, (_series?.NetFlow ?? new NetFlowPoint[0]).Select(point => point.Value).ToArray(), _layoutBands[0], Color.FromArgb(229, 235, 246), 1);
+            DrawScaledLine(graphics, _snapshot.Prices.Select(point => new TimedValue(point.Time, point.ChangePercent)).ToArray(), _layoutBands[0], Color.FromArgb(225, 241, 64), 2);
+            DrawScaledLine(graphics, (_series?.NetFlow ?? new NetFlowPoint[0]).Select(point => new TimedValue(point.Time, point.Value)).ToArray(), _layoutBands[0], Color.FromArgb(229, 235, 246), 1);
         }
 
-        private static void DrawScaledLine(Graphics graphics, double[] values, Rectangle bounds, Color color, float width)
+        private static void DrawScaledLine(Graphics graphics, TimedValue[] values, Rectangle bounds, Color color, float width)
         {
             if (values.Length < 2) return;
-            var min = values.Min();
-            var max = values.Max();
+            var min = values.Min(item => item.Value);
+            var max = values.Max(item => item.Value);
             var range = Math.Max(0.0001, max - min);
-            var points = values.Select((value, index) => new PointF(
-                bounds.Left + bounds.Width * index / (float)(values.Length - 1),
-                bounds.Bottom - 4 - (float)((value - min) / range) * (bounds.Height - 8))).ToArray();
+            var points = values.Select(item => new PointF(
+                TimeX(item.Time, bounds),
+                bounds.Bottom - 4 - (float)((item.Value - min) / range) * (bounds.Height - 8))).ToArray();
             using (var pen = new Pen(color, width)) graphics.DrawLines(pen, points);
+        }
+
+        private void DrawSignals(Graphics graphics)
+        {
+            if (_snapshot?.Orders == null) return;
+            foreach (var order in _snapshot.Orders.Where(item => !string.IsNullOrEmpty(item.FundMarker) || !string.IsNullOrEmpty(item.BuyMarker)))
+            {
+                var color = order.FundMarker == "点火" || order.BuyMarker == "买活跃"
+                    ? Color.FromArgb(255, 91, 111)
+                    : Color.FromArgb(35, 218, 154);
+                var y = order.IsBuy ? _layoutBands[0].Top + 18 : _layoutBands[0].Bottom - 18;
+                using (var brush = new SolidBrush(color))
+                    graphics.FillEllipse(brush, TimeX(order.Time, _layoutBands[0]) - 4, y - 4, 8, 8);
+            }
+        }
+
+        private static float TimeX(DateTime time, Rectangle bounds)
+        {
+            var minutes = time.Hour < 13
+                ? (time.Hour * 60 + time.Minute) - (9 * 60 + 30)
+                : 120 + (time.Hour * 60 + time.Minute) - 13 * 60;
+            minutes = Math.Max(0, Math.Min(240, minutes));
+            return bounds.Left + bounds.Width * minutes / 240f;
+        }
+
+        private struct TimedValue
+        {
+            public TimedValue(DateTime time, double value) { Time = time; Value = value; }
+            public DateTime Time;
+            public double Value;
         }
 
         private void DrawVolumes(Graphics graphics)
@@ -124,7 +155,7 @@ namespace THSBigOrder.Controls
             {
                 for (var index = 0; index < minutes.Count; index++)
                 {
-                    var x = _layoutBands[1].Left + index * width;
+                    var x = TimeX(minutes[index].Minute, _layoutBands[1]);
                     var buyHeight = (float)(minutes[index].BuyAmount / max * _layoutBands[1].Height);
                     var sellHeight = (float)(minutes[index].SellAmount / max * _layoutBands[1].Height);
                     graphics.FillRectangle(buy, x, _layoutBands[1].Bottom - buyHeight, width / 2, buyHeight);

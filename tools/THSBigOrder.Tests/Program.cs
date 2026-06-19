@@ -32,12 +32,14 @@ internal static class Program
         Run("Proxy envelope maps degraded, stale and fresh empty states", TestEnvelopeStates);
         Run("Provider loads three proxy routes in parallel", () => TestProviderParallelLoad().GetAwaiter().GetResult());
         Run("Provider stale fallback is isolated by stock code", () => TestProviderStaleIsolation().GetAwaiter().GetResult());
+        Run("Provider preserves optional degraded and stale states", () => TestProviderOptionalStates().GetAwaiter().GetResult());
         Run("Series builder aggregates minute flow and thresholds", TestSeriesBuilder);
         Run("Legacy marker thresholds remain stable", TestLegacyMarkers);
         Run("Chart control binds three layout bands and draws empty data", TestChartControl);
         Run("Order filter composes amount, side and marker", TestOrderFilter);
         Run("Refresh coordinator cancels superseded code and blocks reentry", TestRefreshCoordinator);
         Run("Main form exposes 72/28 chart and order tabs", TestMainFormLayout);
+        Run("Main form ignores superseded refresh completion", () => TestMainFormRefreshRace().GetAwaiter().GetResult());
         return Environment.ExitCode;
     }
 
@@ -46,7 +48,7 @@ internal static class Program
         var parser = new ThsPayloadParser();
         var item = parser.ParseOrder(JObject.Parse(@"{
           'nature':'主力主买','volume':'5,000手','avgprice':'1,215.00',
-          'money':607500000,'otime':'2026-06-18 11:29:50'
+          'money':'60750万','otime':'2026-06-18 11:29:50'
         }"));
         AssertEqual(2, item.Type, "active buy type");
         AssertEqual(5000d, item.Volume, "volume");
@@ -134,6 +136,7 @@ internal static class Program
         using (var provider = new THSBigOrderDataProvider(new HttpClient(handler), "http://127.0.0.1:3000"))
         {
             var fresh = await provider.LoadSnapshotAsync("002297", CancellationToken.None);
+            handler.QuotePrice = 30;
             handler.FailBigOrder = true;
             var stale = await provider.LoadSnapshotAsync("002297", CancellationToken.None);
             var other = await provider.LoadSnapshotAsync("600519", CancellationToken.None);
@@ -142,8 +145,20 @@ internal static class Program
             AssertEqual(DataFreshness.Stale, stale.BigOrderFreshness, "same-code stale");
             AssertEqual("002297", stale.StockCode, "stale code");
             AssertTrue(stale.Orders.Count > 0, "stale orders retained");
+            AssertEqual(30d, stale.Stock.Price.Value, "stale refresh keeps current quote");
             AssertEqual(DataFreshness.Failed, other.BigOrderFreshness, "other failed");
             AssertTrue(other.Orders.Count == 0, "no cross-code stale orders");
+        }
+    }
+
+    private static async Task TestProviderOptionalStates()
+    {
+        var handler = new FixtureHandler(false) { QuoteDegraded = true, LimitStale = true };
+        using (var provider = new THSBigOrderDataProvider(new HttpClient(handler), "http://127.0.0.1:3000"))
+        {
+            var snapshot = await provider.LoadSnapshotAsync("002297", CancellationToken.None);
+            AssertEqual(DataFreshness.Failed, snapshot.QuoteFreshness, "quote degraded");
+            AssertEqual(DataFreshness.Stale, snapshot.LimitUpFreshness, "limit stale");
         }
     }
 
@@ -235,6 +250,27 @@ internal static class Program
             AssertEqual("全部", form.OrderTabs.TabPages[0].Text, "all tab");
             AssertEqual("买盘", form.OrderTabs.TabPages[1].Text, "buy tab");
             AssertEqual("卖盘", form.OrderTabs.TabPages[2].Text, "sell tab");
+            form.ClientSize = new Size(1080, 800);
+            AssertTrue(!form.ShowsLimitUpReason && form.ShowsSealRate, "1080 responsive band");
+            form.ClientSize = new Size(980, 800);
+            AssertTrue(!form.ShowsSealRate && !form.ShowsLastLimitTime, "980 responsive band");
+            form.ClientSize = new Size(1280, 800);
+            AssertTrue(form.ShowsLimitUpReason && form.ShowsSealRate && form.ShowsLastLimitTime, "responsive recovery");
+        }
+    }
+
+    private static async Task TestMainFormRefreshRace()
+    {
+        var provider = new ControlledProvider();
+        using (var form = new MainForm(provider, false))
+        {
+            var oldRequest = form.RefreshStockAsync("002297", true);
+            var latestRequest = form.RefreshStockAsync("600519", true);
+            provider.Complete("600519");
+            await latestRequest;
+            provider.Complete("002297");
+            await oldRequest;
+            AssertEqual("600519", form.BoundStockCode, "latest stock remains bound");
         }
     }
 
@@ -293,6 +329,9 @@ internal static class Program
         public FixtureHandler(bool barrier) { _barrier = barrier; }
         public List<string> Paths { get; } = new List<string>();
         public bool FailBigOrder { get; set; }
+        public bool QuoteDegraded { get; set; }
+        public bool LimitStale { get; set; }
+        public double QuotePrice { get; set; } = 28.36;
         public int PeakPending { get; private set; }
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
@@ -315,9 +354,11 @@ internal static class Program
             if (path.StartsWith("/api/big-order/"))
                 json = "{'ok':true,'fetchedAt':1781746200000,'data':{'title':{'stockname':'博云新材','price':28.36},'list':[{'nature':'主力主买','volume':'10手','avgprice':'28.36','money':28360,'otime':'2026-06-18 09:30:01'}],'pricechange':[]}}";
             else if (path.StartsWith("/api/quotes/"))
-                json = "{'data':{'diff':[{'f12':'" + Code(path) + "','f14':'博云新材','f2':28.36,'f5':1000000,'f6':100,'f8':1.2,'f10':0.8}]}}";
+                json = QuoteDegraded
+                    ? "{'ok':false,'degraded':true,'data':null}"
+                    : "{'data':{'diff':[{'f12':'" + Code(path) + "','f14':'博云新材','f2':" + QuotePrice.ToString(System.Globalization.CultureInfo.InvariantCulture) + ",'f5':1000000,'f6':100,'f8':1.2,'f10':0.8}]}}";
             else
-                json = "{'data':{'info':[{'code':'" + Code(path) + "','order_amount':45049860,'high_days':'首板'}]}}";
+                json = "{'data':{'info':[{'code':'" + Code(path) + "','order_amount':45049860,'high_days':'首板'}]}" + (LimitStale ? ",'dragonMeta':{'cache':{'stale':true}}" : "") + "}";
             return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(json, Encoding.UTF8, "application/json") };
         }
 
@@ -326,6 +367,37 @@ internal static class Program
             var marker = path.Contains("codes=") ? "codes=" : "stockCode=";
             var index = path.IndexOf(marker, StringComparison.Ordinal);
             return index < 0 ? "002297" : path.Substring(index + marker.Length, 6);
+        }
+    }
+
+    private sealed class ControlledProvider : IMarketSnapshotProvider
+    {
+        private readonly Dictionary<string, TaskCompletionSource<MarketSnapshot>> _pending =
+            new Dictionary<string, TaskCompletionSource<MarketSnapshot>>();
+
+        public Task<MarketSnapshot> LoadSnapshotAsync(string stockCode, CancellationToken cancellationToken)
+        {
+            var source = new TaskCompletionSource<MarketSnapshot>();
+            _pending[stockCode] = source;
+            return source.Task;
+        }
+
+        public void CalculateMarkers(List<BigOrderItem> data) { }
+
+        public void Complete(string stockCode)
+        {
+            _pending[stockCode].SetResult(new MarketSnapshot(
+                stockCode,
+                new StockSummary { Code = stockCode, Name = stockCode, Price = 10 },
+                new MainFundSummary(),
+                new LimitUpContext(),
+                new List<BigOrderItem>(),
+                new List<PricePoint>(),
+                DataFreshness.Fresh,
+                DataFreshness.Fresh,
+                DataFreshness.Missing,
+                DateTime.Now,
+                DateTime.Now));
         }
     }
 }

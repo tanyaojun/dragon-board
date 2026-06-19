@@ -56,11 +56,22 @@ function extractPoolTotal(payload, items) {
   return Number(data.page_info?.total ?? data.page?.total ?? payload?.page_info?.total ?? payload?.page?.total) || items.length
 }
 
+function validateThsLimitUpPayload(payload) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw new Error('invalid ths limit-up payload')
+  }
+  if (payload?.data?.info !== undefined && !Array.isArray(payload.data.info)) {
+    throw new Error('invalid ths limit-up info')
+  }
+  if (!Array.isArray(payload?.data?.info)) throw new Error('missing ths limit-up info')
+  return payload
+}
+
 export function registerMarketRoutes(app, { plainClient, port, runtimeCache }) {
   app.get('/api/limitup/10jqka', async (req, res) => {
     try {
       const { date } = req.query
-      const dateStr = date || currentDateString()
+      const dateStr = normalizeDate(date)
       const url = `https://data.10jqka.com.cn/dataapi/limit_up/limit_up_pool?page=1&limit=200&field=199112,10,9001,330323,330324,330325,9002,330329,133971,133970,1968584,3475914,9003,9004,continue_day,continue_day_cnt,high_days,reason_type&filter=HS,GEM2STAR&order_field=330324&order_type=0&date=${dateStr}`
       const ttlSeconds = PROXY_CACHE_TTLS.market.thsLimitUp
       const result = await runtimeCache.remember(
@@ -68,7 +79,7 @@ export function registerMarketRoutes(app, { plainClient, port, runtimeCache }) {
         { ttlSeconds, staleTtlSeconds: ttlSeconds * 6 },
         async () => {
           const response = await plainClient.get(url, { timeout: 8000 })
-          return response.data
+          return validateThsLimitUpPayload(response.data)
         },
       )
       res.json(

@@ -10,7 +10,7 @@ using THSBigOrder.Parsing;
 
 namespace THSBigOrder
 {
-    public class THSBigOrderDataProvider : IDisposable
+    public class THSBigOrderDataProvider : IMarketSnapshotProvider, IDisposable
     {
         private readonly HttpClient _httpClient;
         private readonly bool _ownsHttpClient;
@@ -57,7 +57,8 @@ namespace THSBigOrder
             catch (Exception) when (!cancellationToken.IsCancellationRequested)
             {
                 MarketSnapshot cached;
-                if (_lastGood.TryGetValue(stockCode, out cached)) return WithBigOrderFreshness(cached, DataFreshness.Stale);
+                if (_lastGood.TryGetValue(stockCode, out cached))
+                    return BuildStaleSnapshot(cached, quoteTask.Result, limitTask.Result);
                 return FailedSnapshot(stockCode, quoteTask.Result, limitTask.Result);
             }
 
@@ -71,8 +72,8 @@ namespace THSBigOrder
                 DateTime.Now);
             snapshot = WithOptionalFreshness(
                 snapshot,
-                quote.Error == null ? snapshot.QuoteFreshness : DataFreshness.Failed,
-                limitUp.Error == null ? snapshot.LimitUpFreshness : DataFreshness.Failed);
+                ResolveOptionalFreshness(quote, snapshot.QuoteFreshness),
+                ResolveOptionalFreshness(limitUp, snapshot.LimitUpFreshness));
             _lastGood[stockCode] = snapshot;
             return snapshot;
         }
@@ -127,16 +128,18 @@ namespace THSBigOrder
                 stockCode, degraded, quote.Data ?? new JObject(), limitUp.Data ?? new JObject(), DateTime.Now);
             return WithOptionalFreshness(
                 snapshot,
-                quote.Error == null ? snapshot.QuoteFreshness : DataFreshness.Failed,
-                limitUp.Error == null ? snapshot.LimitUpFreshness : DataFreshness.Failed);
+                ResolveOptionalFreshness(quote, snapshot.QuoteFreshness),
+                ResolveOptionalFreshness(limitUp, snapshot.LimitUpFreshness));
         }
 
-        private static MarketSnapshot WithBigOrderFreshness(MarketSnapshot source, DataFreshness freshness)
+        private MarketSnapshot BuildStaleSnapshot(MarketSnapshot cached, RequestResult quote, RequestResult limitUp)
         {
+            var current = FailedSnapshot(cached.StockCode, quote, limitUp);
+            if (string.IsNullOrWhiteSpace(current.Stock.Name)) current.Stock.Name = cached.Stock.Name;
             return new MarketSnapshot(
-                source.StockCode, source.Stock, source.MainFunds, source.LimitUp, source.Orders, source.Prices,
-                freshness, source.QuoteFreshness, source.LimitUpFreshness,
-                source.BigOrderFetchedAt, DateTime.Now, source.Issues);
+                cached.StockCode, current.Stock, cached.MainFunds, current.LimitUp, cached.Orders, cached.Prices,
+                DataFreshness.Stale, current.QuoteFreshness, current.LimitUpFreshness,
+                cached.BigOrderFetchedAt, DateTime.Now, cached.Issues);
         }
 
         private static MarketSnapshot WithOptionalFreshness(MarketSnapshot source, DataFreshness quote, DataFreshness limitUp)
@@ -145,6 +148,16 @@ namespace THSBigOrder
                 source.StockCode, source.Stock, source.MainFunds, source.LimitUp, source.Orders, source.Prices,
                 source.BigOrderFreshness, quote, limitUp,
                 source.BigOrderFetchedAt, source.RefreshedAt, source.Issues);
+        }
+
+        private static DataFreshness ResolveOptionalFreshness(RequestResult result, DataFreshness parsed)
+        {
+            if (result.Error != null) return DataFreshness.Failed;
+            if (result.Data?.Value<bool?>("ok") == false && result.Data.Value<bool?>("degraded") == true)
+                return DataFreshness.Failed;
+            if (result.Data?.SelectToken("dragonMeta.cache.stale")?.Value<bool>() == true)
+                return DataFreshness.Stale;
+            return parsed;
         }
 
         public void CalculateMarkers(List<BigOrderItem> data)

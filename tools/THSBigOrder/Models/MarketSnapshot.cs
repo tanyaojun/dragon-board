@@ -43,6 +43,8 @@ namespace THSBigOrder.Models
         public string HighDays { get; set; }
         public double? SuccessRate { get; set; }
         public string ReasonType { get; set; }
+        public string FirstLimitTime { get; set; }
+        public string LastLimitTime { get; set; }
     }
 
     public sealed class PricePoint

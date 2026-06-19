@@ -41,7 +41,7 @@ namespace THSBigOrder.Parsing
             {
                 Type = type,
                 Volume = RequiredNumber(value["volume"], "volume"),
-                Amount = RequiredNumber(value["money"] ?? value["value"], "money"),
+                Amount = RequiredAmount(value["money"], value["value"]),
                 Price = RequiredNumber(value["avgprice"], "avgprice"),
                 Time = time,
             };
@@ -128,6 +128,8 @@ namespace THSBigOrder.Parsing
                 HighDays = (string)row?["high_days"],
                 SuccessRate = FiniteNumber(row?["limit_up_suc_rate"]),
                 ReasonType = (string)row?["reason_type"],
+                FirstLimitTime = (string)row?["first_limit_up_time"],
+                LastLimitTime = (string)row?["last_limit_up_time"],
             };
         }
 
@@ -174,6 +176,13 @@ namespace THSBigOrder.Parsing
         {
             var value = FiniteNumber(token);
             if (!value.HasValue) throw new PayloadParseException("invalid " + field);
+            return value.Value;
+        }
+
+        private static double RequiredAmount(JToken money, JToken displayValue)
+        {
+            var value = ChineseAmount(money) ?? ChineseAmount(displayValue);
+            if (!value.HasValue) throw new PayloadParseException("invalid money");
             return value.Value;
         }
 

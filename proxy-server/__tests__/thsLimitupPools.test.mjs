@@ -69,6 +69,32 @@ test('legacy THS limitup list uses process cache and preserves data.info', async
   }
 })
 
+test('legacy THS limitup rejects malformed payloads instead of caching them', async () => {
+  let upstreamCalls = 0
+  const app = createProxyApp({
+    logRequests: false,
+    clients: {
+      client: {},
+      plainClient: {
+        get: async () => {
+          upstreamCalls += 1
+          return { data: '<html>blocked</html>' }
+        },
+      },
+    },
+  })
+  const { server, baseUrl } = await listen(app)
+  try {
+    const first = await fetch(`${baseUrl}/api/limitup/10jqka?date=bad-date`)
+    const second = await fetch(`${baseUrl}/api/limitup/10jqka?date=bad-date`)
+    assert.equal((await first.json()).degraded, true)
+    assert.equal((await second.json()).degraded, true)
+    assert.equal(upstreamCalls, 2)
+  } finally {
+    server.close()
+  }
+})
+
 test('ths limitup pools aggregates all pool requests with stable keys', async () => {
   const requestedUrls = []
   const plainClient = {

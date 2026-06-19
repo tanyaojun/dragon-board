@@ -36,13 +36,16 @@ namespace THSBigOrder
         private const int TDX_BASE_OFFSET = 0x160A64;
 
         // 数据提供器
-        private THSBigOrderDataProvider _dataProvider;
+        private IMarketSnapshotProvider _dataProvider;
         private List<BigOrderItem> _allData = new List<BigOrderItem>();
         private List<BigOrderItem> _filteredData = new List<BigOrderItem>();
         private StockInfo _stockInfo;
         private MarketSnapshot _snapshot;
         private readonly RefreshCoordinator _refreshCoordinator = new RefreshCoordinator();
         private OrderSide _orderSide = OrderSide.All;
+        private readonly Font _gridBoldFont;
+        private readonly Font _filterBoldFont;
+        private readonly Font _filterUnderlineFont;
 
         // 当前状态
         private string _currentStockCode = "002963";
@@ -82,15 +85,29 @@ namespace THSBigOrder
         {
         }
 
-        internal MainForm(THSBigOrderDataProvider dataProvider, bool initializeRuntime)
+        internal MainForm(IMarketSnapshotProvider dataProvider, bool initializeRuntime)
         {
             InitializeComponent();
+            _gridBoldFont = new Font("微软雅黑", 9f, FontStyle.Bold);
+            _filterBoldFont = new Font("Microsoft YaHei", 9f, FontStyle.Bold);
+            _filterUnderlineFont = new Font("Microsoft YaHei", 9f, FontStyle.Bold | FontStyle.Underline);
             if (initializeRuntime) InitializeCustomComponents();
             else _dataProvider = dataProvider;
         }
 
         internal SplitContainer MainSplit => mainSplit;
         internal TabControl OrderTabs => orderTabs;
+        internal bool ShowsLimitUpReason => ClientSize.Width >= 1100;
+        internal bool ShowsSealRate => ClientSize.Width >= 1020;
+        internal bool ShowsLastLimitTime => ClientSize.Width >= 1020;
+        internal string BoundStockCode => _snapshot?.StockCode;
+
+        internal Task RefreshStockAsync(string stockCode, bool forceForCodeChange)
+        {
+            _currentStockCode = stockCode;
+            if (txtStockCode != null) txtStockCode.Text = stockCode;
+            return RefreshDataAsync(forceForCodeChange);
+        }
 
         private void InitializeCustomComponents()
         {
@@ -437,7 +454,7 @@ namespace THSBigOrder
             // 设置粗体（点火和砸盘）
             if (isBold)
             {
-                e.CellStyle.Font = new Font("微软雅黑", 9f, FontStyle.Bold);
+                e.CellStyle.Font = _gridBoldFont;
             }
         }
 
@@ -512,6 +529,7 @@ namespace THSBigOrder
             lblHighDays.Text = "连板 " + (snapshot.LimitUp.HighDays ?? "-");
             lblSealRate.Text = "封板率 " + (snapshot.LimitUp.SuccessRate.HasValue ? (snapshot.LimitUp.SuccessRate.Value * 100).ToString("F1") + "%" : "-");
             lblLimitUpReason.Text = snapshot.LimitUpFreshness == DataFreshness.Failed ? "涨停数据不可用" : snapshot.LimitUpFreshness == DataFreshness.Missing ? "非涨停池" : "涨停原因 " + (snapshot.LimitUp.ReasonType ?? "-");
+            lblLastLimitTime.Text = "末封 " + (snapshot.LimitUp.LastLimitTime ?? "-");
             lblFreshness.Text = snapshot.BigOrderFreshness == DataFreshness.Fresh ? "数据实时" : snapshot.BigOrderFreshness == DataFreshness.Stale ? "数据陈旧" : "代理不可用";
             lblFreshness.ForeColor = snapshot.BigOrderFreshness == DataFreshness.Fresh ? Color.LightGreen : Color.Orange;
         }
@@ -898,9 +916,8 @@ namespace THSBigOrder
         {
             var stockCode = txtStockCode.Text.Trim();
             var changed = stockCode != _currentStockCode;
-            _currentStockCode = stockCode;
             _specialFilter = "";
-            await RefreshDataAsync(changed);
+            await RefreshStockAsync(stockCode, changed);
         }
 
         private void OrderTabs_SelectedIndexChanged(object sender, EventArgs e)
@@ -919,6 +936,8 @@ namespace THSBigOrder
             if (desired > 0) mainSplit.SplitterDistance = desired;
             if (lblLimitUpReason != null) lblLimitUpReason.Visible = ClientSize.Width >= 1100;
             if (lblSealRate != null) lblSealRate.Visible = ClientSize.Width >= 1020;
+            if (lblLastLimitTime != null) lblLastLimitTime.Visible = ClientSize.Width >= 1020;
+            if (lblReasonHint != null) lblReasonHint.Visible = ClientSize.Width < 1100;
         }
 
         private void btnAnalysis_Click(object sender, EventArgs e)
@@ -1000,13 +1019,13 @@ namespace THSBigOrder
             if (_specialFilter == "点火")
             {
                 _specialFilter = "";
-                lblIgniteCount.Font = new Font(lblIgniteCount.Font, FontStyle.Bold);
+                lblIgniteCount.Font = _filterBoldFont;
             }
             else
             {
                 _specialFilter = "点火";
                 ResetSpecialFilterLabels();
-                lblIgniteCount.Font = new Font(lblIgniteCount.Font, FontStyle.Bold | FontStyle.Underline);
+                lblIgniteCount.Font = _filterUnderlineFont;
             }
             ApplyFilterAndRefreshUI();
         }
@@ -1016,13 +1035,13 @@ namespace THSBigOrder
             if (_specialFilter == "砸盘")
             {
                 _specialFilter = "";
-                lblSmashCount.Font = new Font(lblSmashCount.Font, FontStyle.Bold);
+                lblSmashCount.Font = _filterBoldFont;
             }
             else
             {
                 _specialFilter = "砸盘";
                 ResetSpecialFilterLabels();
-                lblSmashCount.Font = new Font(lblSmashCount.Font, FontStyle.Bold | FontStyle.Underline);
+                lblSmashCount.Font = _filterUnderlineFont;
             }
             ApplyFilterAndRefreshUI();
         }
@@ -1032,13 +1051,13 @@ namespace THSBigOrder
             if (_specialFilter == "买活跃")
             {
                 _specialFilter = "";
-                lblBuyActive.Font = new Font(lblBuyActive.Font, FontStyle.Bold);
+                lblBuyActive.Font = _filterBoldFont;
             }
             else
             {
                 _specialFilter = "买活跃";
                 ResetSpecialFilterLabels();
-                lblBuyActive.Font = new Font(lblBuyActive.Font, FontStyle.Bold | FontStyle.Underline);
+                lblBuyActive.Font = _filterUnderlineFont;
             }
             ApplyFilterAndRefreshUI();
         }
@@ -1048,23 +1067,23 @@ namespace THSBigOrder
             if (_specialFilter == "承接好")
             {
                 _specialFilter = "";
-                lblSellActive.Font = new Font(lblSellActive.Font, FontStyle.Bold);
+                lblSellActive.Font = _filterBoldFont;
             }
             else
             {
                 _specialFilter = "承接好";
                 ResetSpecialFilterLabels();
-                lblSellActive.Font = new Font(lblSellActive.Font, FontStyle.Bold | FontStyle.Underline);
+                lblSellActive.Font = _filterUnderlineFont;
             }
             ApplyFilterAndRefreshUI();
         }
 
         private void ResetSpecialFilterLabels()
         {
-            lblIgniteCount.Font = new Font(lblIgniteCount.Font.FontFamily, 9f, FontStyle.Bold);
-            lblSmashCount.Font = new Font(lblSmashCount.Font.FontFamily, 9f, FontStyle.Bold);
-            lblBuyActive.Font = new Font(lblBuyActive.Font.FontFamily, 9f, FontStyle.Bold);
-            lblSellActive.Font = new Font(lblSellActive.Font.FontFamily, 9f, FontStyle.Bold);
+            lblIgniteCount.Font = _filterBoldFont;
+            lblSmashCount.Font = _filterBoldFont;
+            lblBuyActive.Font = _filterBoldFont;
+            lblSellActive.Font = _filterBoldFont;
         }
 
         private void ApplyFilterAndRefreshUI()
@@ -1110,9 +1129,13 @@ namespace THSBigOrder
             if (_titleTimer != null) { _titleTimer.Stop(); _titleTimer.Dispose(); }
             if (_tdxTimer != null) { _tdxTimer.Stop(); _tdxTimer.Dispose(); }
             if (_clockTimer != null) { _clockTimer.Stop(); _clockTimer.Dispose(); }
-            if (_dataProvider != null) { _dataProvider.Dispose(); }
+            var disposableProvider = _dataProvider as IDisposable;
+            if (disposableProvider != null) { disposableProvider.Dispose(); }
             if (_voiceService != null) { _voiceService.Dispose(); }
             _refreshCoordinator.Dispose();
+            _gridBoldFont.Dispose();
+            _filterBoldFont.Dispose();
+            _filterUnderlineFont.Dispose();
             base.OnFormClosing(e);
         }
     }

@@ -24,7 +24,7 @@ function normalizeStockCode(value) {
 
 function validateThsPayload(payload, now) {
   if (Number(payload?.errorcode) !== 0) throw new Error(payload?.msg || 'ths error response')
-  if (!payload?.title || !Array.isArray(payload?.list)) {
+  if (!payload?.title || typeof payload.title !== 'object' || Array.isArray(payload.title) || !Array.isArray(payload?.list)) {
     throw new Error('invalid ths big-order payload')
   }
   return {

@@ -71,6 +71,7 @@ test('THS big-order detail validates stock code and returns source payload', asy
     assert.equal(body.data.title.stockname, '博云新材')
     assert.equal(body.data.list[0].nature, '主力主买')
     assert.equal(body.data.dragonMeta.cache.hit, false)
+    assert.equal(body.data.dragonMeta.cache.upstreamCalled, true)
     assert.equal(calls.length, 1)
 
     const upstream = new URL(calls[0].url)
@@ -80,6 +81,32 @@ test('THS big-order detail validates stock code and returns source payload', asy
     assert.match(calls[0].config.headers['User-Agent'], /Mozilla\/5\.0/)
     assert.equal(calls[0].config.headers.Referer, 'https://vaserviece.10jqka.com.cn/')
     assert.equal(calls[0].config.headers.Accept, 'application/json,text/plain,*/*')
+  } finally {
+    server.close()
+  }
+})
+
+test('THS big-order detail rejects malformed upstream structures', async () => {
+  let calls = 0
+  const app = createProxyApp({
+    logRequests: false,
+    clients: {
+      client: {},
+      plainClient: {
+        get: async () => {
+          calls += 1
+          return { data: { errorcode: 0, title: 'invalid', list: [] } }
+        },
+      },
+    },
+  })
+  const { server, baseUrl } = await listen(app)
+  try {
+    const first = await fetch(`${baseUrl}/api/big-order/ths-detail?stockCode=002297`)
+    const second = await fetch(`${baseUrl}/api/big-order/ths-detail?stockCode=002297`)
+    assert.equal((await first.json()).degraded, true)
+    assert.equal((await second.json()).degraded, true)
+    assert.equal(calls, 2)
   } finally {
     server.close()
   }
@@ -127,6 +154,16 @@ test('process memory cache hits, coalesces misses, and returns stale on loader f
     }),
     /still unavailable/,
   )
+})
+
+test('process memory cache evicts oldest entries at its capacity limit', async () => {
+  const cache = new ProcessMemoryCache({ maxEntries: 2 })
+  await cache.set('a', 1, { ttlSeconds: 30 })
+  await cache.set('b', 2, { ttlSeconds: 30 })
+  await cache.set('c', 3, { ttlSeconds: 30 })
+  assert.equal(await cache.get('a'), null)
+  assert.equal((await cache.get('b')).value, 2)
+  assert.equal((await cache.get('c')).value, 3)
 })
 
 test('THS big-order detail serves cached and stale data before degrading', async () => {

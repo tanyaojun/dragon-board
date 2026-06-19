@@ -125,6 +125,13 @@ namespace THSBigOrder
             var fontTitle = new Font("Microsoft YaHei", 11, FontStyle.Bold);
             var fontNormal = new Font("Microsoft YaHei", 9, FontStyle.Bold);
             var fontSmall = new Font("Microsoft YaHei", 8);
+            var buyBrush = new SolidBrush(ColorBuy);
+            var sellBrush = new SolidBrush(ColorSell);
+            var netBrush = new SolidBrush(_netBuy >= 0 ? ColorBuy : ColorSell);
+            var igniteBrush = new SolidBrush(ColorIgnite);
+            var smashBrush = new SolidBrush(ColorSmash);
+            var buyActiveBrush = new SolidBrush(ColorBuyActive);
+            var sellActiveBrush = new SolidBrush(ColorSellActive);
 
             int y = 5;
             int col1 = 8, col2 = 140, col3 = 280;
@@ -136,26 +143,32 @@ namespace THSBigOrder
 
             y += 22;
             // 第二行：买入、卖出、净买
-            g.DrawString(string.Format("买入: {0}", FormatAmount(_buyAmount)), fontNormal, new SolidBrush(ColorBuy), col1, y);
-            g.DrawString(string.Format("卖出: {0}", FormatAmount(_sellAmount)), fontNormal, new SolidBrush(ColorSell), col2, y);
-            var netColor = _netBuy >= 0 ? ColorBuy : ColorSell;
-            g.DrawString(string.Format("净买: {0}", FormatAmount(_netBuy)), fontNormal, new SolidBrush(netColor), col3, y);
+            g.DrawString(string.Format("买入: {0}", FormatAmount(_buyAmount)), fontNormal, buyBrush, col1, y);
+            g.DrawString(string.Format("卖出: {0}", FormatAmount(_sellAmount)), fontNormal, sellBrush, col2, y);
+            g.DrawString(string.Format("净买: {0}", FormatAmount(_netBuy)), fontNormal, netBrush, col3, y);
 
             y += 22;
             // 第三行：主动买、主动卖（与原始版本一致）
-            g.DrawString(string.Format("主动买: {0}", FormatAmount(_mainBuyAmount)), fontNormal, new SolidBrush(ColorBuy), col1, y);
-            g.DrawString(string.Format("主动卖: {0}", FormatAmount(_mainSellAmount)), fontNormal, new SolidBrush(ColorSell), col2, y);
+            g.DrawString(string.Format("主动买: {0}", FormatAmount(_mainBuyAmount)), fontNormal, buyBrush, col1, y);
+            g.DrawString(string.Format("主动卖: {0}", FormatAmount(_mainSellAmount)), fontNormal, sellBrush, col2, y);
 
             y += 22;
             // 第四行：点火、砸盘、买活跃、承接好
-            g.DrawString(string.Format("点火: {0}", _igniteCount), fontNormal, new SolidBrush(ColorIgnite), col1, y);
-            g.DrawString(string.Format("砸盘: {0}", _smashCount), fontNormal, new SolidBrush(ColorSmash), col1 + 70, y);
-            g.DrawString(string.Format("买活跃: {0}", _buyActiveCount), fontNormal, new SolidBrush(ColorBuyActive), col2, y);
-            g.DrawString(string.Format("承接好: {0}", _sellActiveCount), fontNormal, new SolidBrush(ColorSellActive), col3, y);
+            g.DrawString(string.Format("点火: {0}", _igniteCount), fontNormal, igniteBrush, col1, y);
+            g.DrawString(string.Format("砸盘: {0}", _smashCount), fontNormal, smashBrush, col1 + 70, y);
+            g.DrawString(string.Format("买活跃: {0}", _buyActiveCount), fontNormal, buyActiveBrush, col2, y);
+            g.DrawString(string.Format("承接好: {0}", _sellActiveCount), fontNormal, sellActiveBrush, col3, y);
 
             fontTitle.Dispose();
             fontNormal.Dispose();
             fontSmall.Dispose();
+            buyBrush.Dispose();
+            sellBrush.Dispose();
+            netBrush.Dispose();
+            igniteBrush.Dispose();
+            smashBrush.Dispose();
+            buyActiveBrush.Dispose();
+            sellActiveBrush.Dispose();
         }
 
         private void PanelChart_Paint(object sender, PaintEventArgs e)
@@ -171,6 +184,14 @@ namespace THSBigOrder
             int y = 8;
 
             var fontSmall = new Font("Microsoft YaHei", 8);
+            var buyBrush = new SolidBrush(ColorBuy);
+            var sellBrush = new SolidBrush(ColorSell);
+            var mainBuyBrush = new SolidBrush(Color.FromArgb(200, 60, 60));
+            var mainSellBrush = new SolidBrush(Color.FromArgb(60, 160, 60));
+            var igniteBrush = new SolidBrush(ColorIgnite);
+            var smashBrush = new SolidBrush(ColorSmash);
+            var buyActiveBrush = new SolidBrush(ColorBuyActive);
+            var sellActiveBrush = new SolidBrush(ColorSellActive);
 
             // 买卖对比条
             double total = _buyAmount + _sellAmount;
@@ -180,8 +201,8 @@ namespace THSBigOrder
                 int sellWidth = maxWidth - buyWidth;
 
                 g.DrawString("买卖比", fontSmall, Brushes.Gray, margin, y);
-                g.FillRectangle(new SolidBrush(ColorBuy), margin + 45, y, buyWidth, barHeight);
-                g.FillRectangle(new SolidBrush(ColorSell), margin + 45 + buyWidth, y, sellWidth, barHeight);
+                g.FillRectangle(buyBrush, margin + 45, y, buyWidth, barHeight);
+                g.FillRectangle(sellBrush, margin + 45 + buyWidth, y, sellWidth, barHeight);
                 
                 double buyPct = _buyAmount / total * 100;
                 g.DrawString(string.Format("{0:F0}%", buyPct), fontSmall, Brushes.White, margin + 45 + buyWidth / 2 - 12, y + 2);
@@ -197,8 +218,8 @@ namespace THSBigOrder
                 int mainSellWidth = maxWidth - mainBuyWidth;
 
                 g.DrawString("主动比", fontSmall, Brushes.Gray, margin, y);
-                g.FillRectangle(new SolidBrush(Color.FromArgb(200, 60, 60)), margin + 45, y, mainBuyWidth, barHeight);
-                g.FillRectangle(new SolidBrush(Color.FromArgb(60, 160, 60)), margin + 45 + mainBuyWidth, y, mainSellWidth, barHeight);
+                g.FillRectangle(mainBuyBrush, margin + 45, y, mainBuyWidth, barHeight);
+                g.FillRectangle(mainSellBrush, margin + 45 + mainBuyWidth, y, mainSellWidth, barHeight);
                 
                 double mainBuyPct = _mainBuyAmount / mainTotal * 100;
                 g.DrawString(string.Format("{0:F0}%", mainBuyPct), fontSmall, Brushes.White, margin + 45 + mainBuyWidth / 2 - 12, y + 2);
@@ -214,8 +235,8 @@ namespace THSBigOrder
                 int smashWidth = maxWidth - igniteWidth;
 
                 g.DrawString("资金动", fontSmall, Brushes.Gray, margin, y);
-                g.FillRectangle(new SolidBrush(ColorIgnite), margin + 45, y, igniteWidth, barHeight);
-                g.FillRectangle(new SolidBrush(ColorSmash), margin + 45 + igniteWidth, y, smashWidth, barHeight);
+                g.FillRectangle(igniteBrush, margin + 45, y, igniteWidth, barHeight);
+                g.FillRectangle(smashBrush, margin + 45 + igniteWidth, y, smashWidth, barHeight);
                 
                 g.DrawString(string.Format("{0}", _igniteCount), fontSmall, Brushes.Black, margin + 45 + igniteWidth / 2 - 8, y + 2);
             }
@@ -230,13 +251,21 @@ namespace THSBigOrder
                 int sellActWidth = maxWidth - buyActWidth;
 
                 g.DrawString("活跃度", fontSmall, Brushes.Gray, margin, y);
-                g.FillRectangle(new SolidBrush(ColorBuyActive), margin + 45, y, buyActWidth, barHeight);
-                g.FillRectangle(new SolidBrush(ColorSellActive), margin + 45 + buyActWidth, y, sellActWidth, barHeight);
+                g.FillRectangle(buyActiveBrush, margin + 45, y, buyActWidth, barHeight);
+                g.FillRectangle(sellActiveBrush, margin + 45 + buyActWidth, y, sellActWidth, barHeight);
                 
                 g.DrawString(string.Format("{0}", _buyActiveCount), fontSmall, Brushes.White, margin + 45 + buyActWidth / 2 - 8, y + 2);
             }
 
             fontSmall.Dispose();
+            buyBrush.Dispose();
+            sellBrush.Dispose();
+            mainBuyBrush.Dispose();
+            mainSellBrush.Dispose();
+            igniteBrush.Dispose();
+            smashBrush.Dispose();
+            buyActiveBrush.Dispose();
+            sellActiveBrush.Dispose();
         }
 
         private DataGridView CreateDataGridView()

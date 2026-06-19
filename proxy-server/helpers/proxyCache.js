@@ -181,8 +181,9 @@ export class ProxyRedisCache {
 }
 
 export class ProcessMemoryCache {
-  constructor({ now = () => Date.now() } = {}) {
+  constructor({ now = () => Date.now(), maxEntries = 500 } = {}) {
     this.now = now
+    this.maxEntries = Math.max(1, Number(maxEntries) || 500)
     this.store = new Map()
     this.pending = new Map()
   }
@@ -209,6 +210,12 @@ export class ProcessMemoryCache {
     const ttl = Math.max(1, Number(ttlSeconds) || 1)
     const staleTtl = Math.max(ttl, Number(staleTtlSeconds) || ttl * 3)
     const now = this.now()
+    for (const [entryKey, entry] of this.store) {
+      if (entry.staleUntil <= now) this.store.delete(entryKey)
+    }
+    if (!this.store.has(key) && this.store.size >= this.maxEntries) {
+      this.store.delete(this.store.keys().next().value)
+    }
     this.store.set(key, {
       value,
       ttlSeconds: ttl,
@@ -235,7 +242,7 @@ export class ProcessMemoryCache {
         await this.set(key, value, options)
         return {
           value,
-          cache: { hit: false, stale: false, ttlSeconds: options?.ttlSeconds },
+          cache: { hit: false, stale: false, upstreamCalled: true, ttlSeconds: options?.ttlSeconds },
         }
       })
       .catch(async (error) => {

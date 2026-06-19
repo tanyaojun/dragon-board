@@ -351,6 +351,7 @@ export function buildOpenApiDocument({ port = 3000 } = {}) {
         method: 'get',
         tag: 'market',
         summary: '同花顺大单明细',
+        description: '代理同花顺 Level2 mainMonitorDetail；使用进程内短缓存并支持 stale 回退。上游不可用且无 stale 数据时仍返回 HTTP 200 degraded envelope。',
         parameters: [
           {
             name: 'stockCode',

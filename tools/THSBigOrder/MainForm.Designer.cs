@@ -39,6 +39,8 @@ namespace THSBigOrder
         this.lblHighDays = new System.Windows.Forms.Label();
         this.lblSealRate = new System.Windows.Forms.Label();
         this.lblLimitUpReason = new System.Windows.Forms.Label();
+        this.lblReasonHint = new System.Windows.Forms.Label();
+        this.lblLastLimitTime = new System.Windows.Forms.Label();
         this.lblFreshness = new System.Windows.Forms.Label();
 
         // 股票信息控件
@@ -103,8 +105,8 @@ namespace THSBigOrder
         this.metricsFlow.Padding = new System.Windows.Forms.Padding(6, 5, 0, 0);
         this.metricsFlow.WrapContents = false;
         this.metricsFlow.BackColor = System.Drawing.Color.FromArgb(14, 20, 32);
-        var metricLabels = new[] { this.lblPrice, this.lblMainBuy, this.lblMainSell, this.lblMainNet, this.lblSealAmount, this.lblOpenCount, this.lblHighDays, this.lblSealRate, this.lblLimitUpReason, this.lblFreshness };
-        var metricTexts = new[] { "现价 -", "主买 -", "主卖 -", "主净 -", "封单 -", "开板 -", "连板 -", "封板率 -", "涨停原因 -", "数据等待" };
+        var metricLabels = new[] { this.lblPrice, this.lblMainBuy, this.lblMainSell, this.lblMainNet, this.lblSealAmount, this.lblOpenCount, this.lblHighDays, this.lblSealRate, this.lblLastLimitTime, this.lblLimitUpReason, this.lblReasonHint, this.lblFreshness };
+        var metricTexts = new[] { "现价 -", "主买 -", "主卖 -", "主净 -", "封单 -", "开板 -", "连板 -", "封板率 -", "末封 -", "涨停原因 -", "原因…", "数据等待" };
         for (int metricIndex = 0; metricIndex < metricLabels.Length; metricIndex++)
         {
             metricLabels[metricIndex].AutoSize = true;
@@ -114,6 +116,7 @@ namespace THSBigOrder
             metricLabels[metricIndex].Text = metricTexts[metricIndex];
             this.metricsFlow.Controls.Add(metricLabels[metricIndex]);
         }
+        this.lblReasonHint.Visible = false;
 
         // === 三列布局（与表格宽度对齐）===
         // 表格列宽: 58+55+55+50+50+45+50 ≈ 363px
@@ -525,6 +528,8 @@ namespace THSBigOrder
     private System.Windows.Forms.Label lblHighDays;
     private System.Windows.Forms.Label lblSealRate;
     private System.Windows.Forms.Label lblLimitUpReason;
+    private System.Windows.Forms.Label lblReasonHint;
+    private System.Windows.Forms.Label lblLastLimitTime;
     private System.Windows.Forms.Label lblFreshness;
 
     // 股票信息
