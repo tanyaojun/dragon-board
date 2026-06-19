@@ -259,9 +259,27 @@ class OpeningRawQuoteFileSink:
         }
 
 
+A_SHARE_MARKET_HOLIDAY_RANGES = [
+    ("2026-01-01", "2026-01-03"),  # 元旦
+    ("2026-02-15", "2026-02-23"),  # 春节
+    ("2026-04-04", "2026-04-06"),  # 清明节
+    ("2026-05-01", "2026-05-05"),  # 劳动节
+    ("2026-06-19", "2026-06-21"),  # 端午节
+    ("2026-09-25", "2026-09-27"),  # 中秋节
+    ("2026-10-01", "2026-10-07"),  # 国庆节
+]
+
+
+def _is_ashare_holiday(date: datetime) -> bool:
+    key = date.strftime("%Y-%m-%d")
+    return any(start <= key <= end for start, end in A_SHARE_MARKET_HOLIDAY_RANGES)
+
+
 def is_trading_session_now(now: datetime | None = None) -> bool:
     current = now or datetime.now()
     if current.weekday() >= 5:
+        return False
+    if _is_ashare_holiday(current):
         return False
 
     hhmm = current.hour * 100 + current.minute

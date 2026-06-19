@@ -2,6 +2,7 @@ import { debugLog } from '@/utils/logger'
 // src/services/big-order/BigOrderMarker.ts
 import type { BigOrderItem } from '@/types/big-order'
 import { MARKER_THRESHOLDS, TIME_WINDOWS } from '@/config/constants'
+import { isTradingTime as checkTradingTime } from '@/utils/time'
 
 export class BigOrderMarker {
   private static instance: BigOrderMarker
@@ -46,7 +47,7 @@ export class BigOrderMarker {
       order.buyMarker = ''
 
       // 只计算交易时间内的数据
-      if (!this.isTradingTime(currentTime)) {
+      if (!checkTradingTime(currentTime)) {
         continue
       }
 
@@ -80,27 +81,6 @@ export class BigOrderMarker {
     }
 
     return sortedOrders
-  }
-
-  /**
-   * 判断是否为交易时间
-   */
-  private isTradingTime(time: Date): boolean {
-    const hours = time.getHours()
-    const minutes = time.getMinutes()
-    const timeValue = hours * 60 + minutes
-
-    // 上午：9:30-11:30
-    const morningStart = 9 * 60 + 30
-    const morningEnd = 11 * 60 + 30
-    // 下午：13:00-15:00
-    const afternoonStart = 13 * 60
-    const afternoonEnd = 15 * 60
-
-    return (
-      (timeValue >= morningStart && timeValue <= morningEnd) ||
-      (timeValue >= afternoonStart && timeValue <= afternoonEnd)
-    )
   }
 
   /**

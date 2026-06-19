@@ -1,31 +1,22 @@
 <!-- src/components/common/TradingStatus.vue -->
 <template>
-  <div class="trading-status" :class="{ active: isTradingTime }">
+  <div class="trading-status" :class="{ active: status === 'trading' }">
     <span class="status-dot"></span>
-    <span class="status-text">{{ isTradingTime ? '交易中' : '已收盘' }}</span>
+    <span class="status-text">{{ statusLabel }}</span>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import { getTradingStatus, TRADING_STATUS_LABEL } from '@/utils/time'
+import type { TradingStatus } from '@/utils/time'
 
 const props = defineProps<{
   time?: Date
 }>()
 
-const isTradingTime = computed(() => {
-  const now = props.time || new Date()
-  const day = now.getDay()
-  const hour = now.getHours()
-  const minute = now.getMinutes()
-  const time = hour * 100 + minute
-  
-  // 周末休市
-  if (day === 0 || day === 6) return false
-  
-  // 交易时间：9:30-11:30, 13:00-15:00
-  return (time >= 930 && time <= 1130) || (time >= 1300 && time <= 1500)
-})
+const status = computed<TradingStatus>(() => getTradingStatus(props.time || new Date()))
+const statusLabel = computed(() => TRADING_STATUS_LABEL[status.value])
 </script>
 
 <style scoped>

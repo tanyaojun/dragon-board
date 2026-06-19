@@ -44,6 +44,37 @@ export const isTradingTime = (date: Date = new Date()): boolean => {
   return false
 }
 
+export type TradingStatus = 'non_trading_day' | 'pre_market' | 'trading' | 'lunch_break' | 'closed'
+
+export const TRADING_STATUS_LABEL: Record<TradingStatus, string> = {
+  non_trading_day: '非交易日',
+  pre_market: '未开盘',
+  trading: '交易中',
+  lunch_break: '午间休市',
+  closed: '已收盘',
+}
+
+export const getTradingStatus = (date: Date = new Date()): TradingStatus => {
+  if (!isAshareTradingDay(date)) return 'non_trading_day'
+
+  const minutes = date.getHours() * 60 + date.getMinutes()
+
+  // 未开盘：交易日 9:30 之前
+  if (minutes < 9 * 60 + 30) return 'pre_market'
+
+  // 早盘连续竞价：9:30-11:30
+  if (minutes >= 9 * 60 + 30 && minutes <= 11 * 60 + 30) return 'trading'
+
+  // 午间休市：11:30-13:00
+  if (minutes > 11 * 60 + 30 && minutes < 13 * 60) return 'lunch_break'
+
+  // 下午连续竞价：13:00-15:00
+  if (minutes >= 13 * 60 && minutes <= 15 * 60) return 'trading'
+
+  // 已收盘：交易日 15:00 之后
+  return 'closed'
+}
+
 /**
  * 判断是否为法定节假日
  */
