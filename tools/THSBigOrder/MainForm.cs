@@ -1011,6 +1011,20 @@ namespace THSBigOrder
             ApplyFilterAndRefreshUI();
         }
 
+        private void btn500W_Click(object sender, EventArgs e)
+        {
+            _currentMoney = 5000000;
+            UpdateFilterButtons((Button)sender);
+            ApplyFilterAndRefreshUI();
+        }
+
+        private void btn700W_Click(object sender, EventArgs e)
+        {
+            _currentMoney = 7000000;
+            UpdateFilterButtons((Button)sender);
+            ApplyFilterAndRefreshUI();
+        }
+
         // 特殊筛选类型
         private string _specialFilter = "";
 
@@ -1101,7 +1115,7 @@ namespace THSBigOrder
             _specialFilter = "";
             ResetSpecialFilterLabels();
 
-            var filterButtons = new Button[] { btn30W, btn50W, btn100W, btn300W, btn1000W };
+            var filterButtons = new Button[] { btn30W, btn50W, btn100W, btn300W, btn500W, btn700W, btn1000W };
             foreach (var btn in filterButtons)
             {
                 if (btn == activeBtn)

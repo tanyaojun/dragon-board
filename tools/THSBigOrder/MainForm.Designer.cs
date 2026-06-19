@@ -77,6 +77,8 @@ namespace THSBigOrder
         this.btn50W = new System.Windows.Forms.Button();
         this.btn100W = new System.Windows.Forms.Button();
         this.btn300W = new System.Windows.Forms.Button();
+        this.btn500W = new System.Windows.Forms.Button();
+        this.btn700W = new System.Windows.Forms.Button();
         this.btn1000W = new System.Windows.Forms.Button();
 
         // 初始化
@@ -316,7 +318,7 @@ namespace THSBigOrder
         // === 筛选按钮 ===
 
         int btnY = 12;
-        int btnW = 55;
+        int btnW = 39;
         int btnH = 26;
         int btnGap = 3;
 
@@ -352,7 +354,7 @@ namespace THSBigOrder
         this.btn100W.ForeColor = System.Drawing.Color.Silver;
         this.btn100W.Location = new System.Drawing.Point(5 + (btnW + btnGap) * 2, btnY);
         this.btn100W.Size = new System.Drawing.Size(btnW, btnH);
-        this.btn100W.Text = "100万";
+        this.btn100W.Text = "100";
         this.btn100W.Cursor = System.Windows.Forms.Cursors.Hand;
         this.btn100W.Click += new System.EventHandler(this.btn100W_Click);
 
@@ -364,9 +366,33 @@ namespace THSBigOrder
         this.btn300W.ForeColor = System.Drawing.Color.Silver;
         this.btn300W.Location = new System.Drawing.Point(5 + (btnW + btnGap) * 3, btnY);
         this.btn300W.Size = new System.Drawing.Size(btnW, btnH);
-        this.btn300W.Text = "300万";
+        this.btn300W.Text = "300";
         this.btn300W.Cursor = System.Windows.Forms.Cursors.Hand;
         this.btn300W.Click += new System.EventHandler(this.btn300W_Click);
+
+        // btn500W
+        this.btn500W.BackColor = System.Drawing.Color.FromArgb(35, 35, 40);
+        this.btn500W.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
+        this.btn500W.FlatAppearance.BorderSize = 0;
+        this.btn500W.Font = new System.Drawing.Font("Microsoft YaHei", 9F);
+        this.btn500W.ForeColor = System.Drawing.Color.Silver;
+        this.btn500W.Location = new System.Drawing.Point(5 + (btnW + btnGap) * 4, btnY);
+        this.btn500W.Size = new System.Drawing.Size(btnW, btnH);
+        this.btn500W.Text = "500";
+        this.btn500W.Cursor = System.Windows.Forms.Cursors.Hand;
+        this.btn500W.Click += new System.EventHandler(this.btn500W_Click);
+
+        // btn700W
+        this.btn700W.BackColor = System.Drawing.Color.FromArgb(35, 35, 40);
+        this.btn700W.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
+        this.btn700W.FlatAppearance.BorderSize = 0;
+        this.btn700W.Font = new System.Drawing.Font("Microsoft YaHei", 9F);
+        this.btn700W.ForeColor = System.Drawing.Color.Silver;
+        this.btn700W.Location = new System.Drawing.Point(5 + (btnW + btnGap) * 5, btnY);
+        this.btn700W.Size = new System.Drawing.Size(btnW, btnH);
+        this.btn700W.Text = "700";
+        this.btn700W.Cursor = System.Windows.Forms.Cursors.Hand;
+        this.btn700W.Click += new System.EventHandler(this.btn700W_Click);
 
         // btn1000W
         this.btn1000W.BackColor = System.Drawing.Color.FromArgb(35, 35, 40);
@@ -374,9 +400,9 @@ namespace THSBigOrder
         this.btn1000W.FlatAppearance.BorderSize = 0;
         this.btn1000W.Font = new System.Drawing.Font("Microsoft YaHei", 9F);
         this.btn1000W.ForeColor = System.Drawing.Color.Silver;
-        this.btn1000W.Location = new System.Drawing.Point(5 + (btnW + btnGap) * 4, btnY);
-        this.btn1000W.Size = new System.Drawing.Size(btnW + 5, btnH);
-        this.btn1000W.Text = "1000万";
+        this.btn1000W.Location = new System.Drawing.Point(5 + (btnW + btnGap) * 6, btnY);
+        this.btn1000W.Size = new System.Drawing.Size(btnW, btnH);
+        this.btn1000W.Text = "1000";
         this.btn1000W.Cursor = System.Windows.Forms.Cursors.Hand;
         this.btn1000W.Click += new System.EventHandler(this.btn1000W_Click);
 
@@ -455,6 +481,8 @@ namespace THSBigOrder
         this.panelFilter.Controls.Add(this.btn50W);
         this.panelFilter.Controls.Add(this.btn100W);
         this.panelFilter.Controls.Add(this.btn300W);
+        this.panelFilter.Controls.Add(this.btn500W);
+        this.panelFilter.Controls.Add(this.btn700W);
         this.panelFilter.Controls.Add(this.btn1000W);
         this.panelFilter.Controls.Add(this.lblStatus);
 
@@ -572,6 +600,8 @@ namespace THSBigOrder
     private System.Windows.Forms.Button btn50W;
     private System.Windows.Forms.Button btn100W;
     private System.Windows.Forms.Button btn300W;
+    private System.Windows.Forms.Button btn500W;
+    private System.Windows.Forms.Button btn700W;
     private System.Windows.Forms.Button btn1000W;
     }
 }
