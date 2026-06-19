@@ -462,6 +462,7 @@ namespace THSBigOrder
         {
             // 恢复窗口大小
             WindowSettings.ApplyWindowSize(this, "MainForm");
+            ApplyResponsiveLayout();
             
             txtStockCode.Text = _currentStockCode;
             UpdateStatusLabel("正在加载数据...");
@@ -931,13 +932,25 @@ namespace THSBigOrder
         protected override void OnClientSizeChanged(EventArgs e)
         {
             base.OnClientSizeChanged(e);
-            if (mainSplit == null || ClientSize.Width <= 0) return;
-            var desired = Math.Max(mainSplit.Panel1MinSize, Math.Min((int)(ClientSize.Width * 0.72), ClientSize.Width - mainSplit.Panel2MinSize - mainSplit.SplitterWidth));
+            ApplyResponsiveLayout();
+        }
+
+        private void ApplyResponsiveLayout()
+        {
+            if (mainSplit == null || mainSplit.ClientSize.Width <= 0) return;
+            var availableWidth = mainSplit.ClientSize.Width;
+            var desired = Math.Max(mainSplit.Panel1MinSize, Math.Min((int)(availableWidth * 0.72), availableWidth - mainSplit.Panel2MinSize - mainSplit.SplitterWidth));
             if (desired > 0) mainSplit.SplitterDistance = desired;
             if (lblLimitUpReason != null) lblLimitUpReason.Visible = ClientSize.Width >= 1100;
             if (lblSealRate != null) lblSealRate.Visible = ClientSize.Width >= 1020;
             if (lblLastLimitTime != null) lblLastLimitTime.Visible = ClientSize.Width >= 1020;
             if (lblReasonHint != null) lblReasonHint.Visible = ClientSize.Width < 1100;
+        }
+
+        protected override void OnShown(EventArgs e)
+        {
+            base.OnShown(e);
+            ApplyResponsiveLayout();
         }
 
         private void btnAnalysis_Click(object sender, EventArgs e)

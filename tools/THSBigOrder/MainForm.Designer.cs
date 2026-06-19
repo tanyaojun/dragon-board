@@ -318,15 +318,15 @@ namespace THSBigOrder
         // === 筛选按钮 ===
 
         int btnY = 12;
-        int btnW = 39;
+        int btnW = 41;
         int btnH = 26;
-        int btnGap = 3;
+        int btnGap = 1;
 
         // btn30W (默认选中)
         this.btn30W.BackColor = System.Drawing.Color.FromArgb(50, 90, 140);
         this.btn30W.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
         this.btn30W.FlatAppearance.BorderSize = 0;
-        this.btn30W.Font = new System.Drawing.Font("Microsoft YaHei", 9F);
+        this.btn30W.Font = new System.Drawing.Font("Microsoft YaHei", 8F);
         this.btn30W.ForeColor = System.Drawing.Color.White;
         this.btn30W.Location = new System.Drawing.Point(5, btnY);
         this.btn30W.Size = new System.Drawing.Size(btnW, btnH);
@@ -338,7 +338,7 @@ namespace THSBigOrder
         this.btn50W.BackColor = System.Drawing.Color.FromArgb(35, 35, 40);
         this.btn50W.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
         this.btn50W.FlatAppearance.BorderSize = 0;
-        this.btn50W.Font = new System.Drawing.Font("Microsoft YaHei", 9F);
+        this.btn50W.Font = new System.Drawing.Font("Microsoft YaHei", 8F);
         this.btn50W.ForeColor = System.Drawing.Color.Silver;
         this.btn50W.Location = new System.Drawing.Point(5 + (btnW + btnGap) * 1, btnY);
         this.btn50W.Size = new System.Drawing.Size(btnW, btnH);
@@ -350,7 +350,7 @@ namespace THSBigOrder
         this.btn100W.BackColor = System.Drawing.Color.FromArgb(35, 35, 40);
         this.btn100W.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
         this.btn100W.FlatAppearance.BorderSize = 0;
-        this.btn100W.Font = new System.Drawing.Font("Microsoft YaHei", 9F);
+        this.btn100W.Font = new System.Drawing.Font("Microsoft YaHei", 8F);
         this.btn100W.ForeColor = System.Drawing.Color.Silver;
         this.btn100W.Location = new System.Drawing.Point(5 + (btnW + btnGap) * 2, btnY);
         this.btn100W.Size = new System.Drawing.Size(btnW, btnH);
@@ -362,7 +362,7 @@ namespace THSBigOrder
         this.btn300W.BackColor = System.Drawing.Color.FromArgb(35, 35, 40);
         this.btn300W.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
         this.btn300W.FlatAppearance.BorderSize = 0;
-        this.btn300W.Font = new System.Drawing.Font("Microsoft YaHei", 9F);
+        this.btn300W.Font = new System.Drawing.Font("Microsoft YaHei", 8F);
         this.btn300W.ForeColor = System.Drawing.Color.Silver;
         this.btn300W.Location = new System.Drawing.Point(5 + (btnW + btnGap) * 3, btnY);
         this.btn300W.Size = new System.Drawing.Size(btnW, btnH);
@@ -374,7 +374,7 @@ namespace THSBigOrder
         this.btn500W.BackColor = System.Drawing.Color.FromArgb(35, 35, 40);
         this.btn500W.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
         this.btn500W.FlatAppearance.BorderSize = 0;
-        this.btn500W.Font = new System.Drawing.Font("Microsoft YaHei", 9F);
+        this.btn500W.Font = new System.Drawing.Font("Microsoft YaHei", 8F);
         this.btn500W.ForeColor = System.Drawing.Color.Silver;
         this.btn500W.Location = new System.Drawing.Point(5 + (btnW + btnGap) * 4, btnY);
         this.btn500W.Size = new System.Drawing.Size(btnW, btnH);
@@ -386,7 +386,7 @@ namespace THSBigOrder
         this.btn700W.BackColor = System.Drawing.Color.FromArgb(35, 35, 40);
         this.btn700W.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
         this.btn700W.FlatAppearance.BorderSize = 0;
-        this.btn700W.Font = new System.Drawing.Font("Microsoft YaHei", 9F);
+        this.btn700W.Font = new System.Drawing.Font("Microsoft YaHei", 8F);
         this.btn700W.ForeColor = System.Drawing.Color.Silver;
         this.btn700W.Location = new System.Drawing.Point(5 + (btnW + btnGap) * 5, btnY);
         this.btn700W.Size = new System.Drawing.Size(btnW, btnH);
@@ -398,11 +398,11 @@ namespace THSBigOrder
         this.btn1000W.BackColor = System.Drawing.Color.FromArgb(35, 35, 40);
         this.btn1000W.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
         this.btn1000W.FlatAppearance.BorderSize = 0;
-        this.btn1000W.Font = new System.Drawing.Font("Microsoft YaHei", 9F);
+        this.btn1000W.Font = new System.Drawing.Font("Microsoft YaHei", 8F);
         this.btn1000W.ForeColor = System.Drawing.Color.Silver;
         this.btn1000W.Location = new System.Drawing.Point(5 + (btnW + btnGap) * 6, btnY);
         this.btn1000W.Size = new System.Drawing.Size(btnW, btnH);
-        this.btn1000W.Text = "1000";
+        this.btn1000W.Text = "1k";
         this.btn1000W.Cursor = System.Windows.Forms.Cursors.Hand;
         this.btn1000W.Click += new System.EventHandler(this.btn1000W_Click);
 
