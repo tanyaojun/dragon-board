@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Drawing;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -11,6 +12,7 @@ using THSBigOrder;
 using THSBigOrder.Models;
 using THSBigOrder.Parsing;
 using THSBigOrder.Analytics;
+using THSBigOrder.Controls;
 
 internal static class Program
 {
@@ -29,6 +31,7 @@ internal static class Program
         Run("Provider stale fallback is isolated by stock code", () => TestProviderStaleIsolation().GetAwaiter().GetResult());
         Run("Series builder aggregates minute flow and thresholds", TestSeriesBuilder);
         Run("Legacy marker thresholds remain stable", TestLegacyMarkers);
+        Run("Chart control binds three layout bands and draws empty data", TestChartControl);
         return Environment.ExitCode;
     }
 
@@ -175,6 +178,18 @@ internal static class Program
         }
         AssertEqual("点火", ignite[1].FundMarker, "ignite marker");
         AssertEqual("砸盘", smash[1].FundMarker, "smash marker");
+    }
+
+    private static void TestChartControl()
+    {
+        using (var control = new BigOrderChartControl())
+        {
+            control.Size = new Size(1000, 650);
+            control.SetSnapshot(null, new BigOrderSeriesBuilder().Build(new BigOrderItem[0]));
+            AssertEqual(3, control.LayoutBands.Count, "price/volume/heat bands");
+            using (var bitmap = new Bitmap(1000, 650))
+                control.DrawToBitmap(bitmap, control.ClientRectangle);
+        }
     }
 
     private static void Run(string name, Action test)
