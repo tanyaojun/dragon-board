@@ -7,12 +7,15 @@ using System.Net.Http;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Windows.Forms;
 using Newtonsoft.Json.Linq;
 using THSBigOrder;
 using THSBigOrder.Models;
 using THSBigOrder.Parsing;
 using THSBigOrder.Analytics;
 using THSBigOrder.Controls;
+using THSBigOrder.Filtering;
+using THSBigOrder.Refresh;
 
 internal static class Program
 {
@@ -32,6 +35,9 @@ internal static class Program
         Run("Series builder aggregates minute flow and thresholds", TestSeriesBuilder);
         Run("Legacy marker thresholds remain stable", TestLegacyMarkers);
         Run("Chart control binds three layout bands and draws empty data", TestChartControl);
+        Run("Order filter composes amount, side and marker", TestOrderFilter);
+        Run("Refresh coordinator cancels superseded code and blocks reentry", TestRefreshCoordinator);
+        Run("Main form exposes 72/28 chart and order tabs", TestMainFormLayout);
         return Environment.ExitCode;
     }
 
@@ -189,6 +195,46 @@ internal static class Program
             AssertEqual(3, control.LayoutBands.Count, "price/volume/heat bands");
             using (var bitmap = new Bitmap(1000, 650))
                 control.DrawToBitmap(bitmap, control.ClientRectangle);
+        }
+    }
+
+    private static void TestOrderFilter()
+    {
+        var rows = new[]
+        {
+            new BigOrderItem { Type = 2, Amount = 3000000, FundMarker = "点火" },
+            new BigOrderItem { Type = 4, Amount = 4000000, FundMarker = "砸盘" },
+            new BigOrderItem { Type = 3, Amount = 200000, FundMarker = "点火" },
+        };
+        var result = OrderFilter.Apply(rows, 1000000, OrderSide.Buy, "点火");
+        AssertEqual(1, result.Count, "composed filter count");
+        AssertEqual(2, result[0].Type, "composed filter type");
+    }
+
+    private static void TestRefreshCoordinator()
+    {
+        using (var coordinator = new RefreshCoordinator())
+        {
+            var first = coordinator.Begin("002297", false);
+            var duplicate = coordinator.Begin("002297", false);
+            var changed = coordinator.Begin("600519", true);
+            AssertTrue(first.ShouldRun, "first refresh runs");
+            AssertTrue(!duplicate.ShouldRun, "same code does not reenter");
+            AssertTrue(first.CancellationToken.IsCancellationRequested, "old code cancelled");
+            AssertTrue(coordinator.IsLatest(changed.Generation, "600519"), "latest generation");
+        }
+    }
+
+    private static void TestMainFormLayout()
+    {
+        using (var form = new MainForm(null, false))
+        {
+            form.ClientSize = new Size(1280, 800);
+            AssertEqual(Orientation.Vertical, form.MainSplit.Orientation, "split orientation");
+            AssertTrue(form.MainSplit.SplitterDistance >= form.ClientSize.Width * 0.65, "left chart share");
+            AssertEqual("全部", form.OrderTabs.TabPages[0].Text, "all tab");
+            AssertEqual("买盘", form.OrderTabs.TabPages[1].Text, "buy tab");
+            AssertEqual("卖盘", form.OrderTabs.TabPages[2].Text, "sell tab");
         }
     }
 

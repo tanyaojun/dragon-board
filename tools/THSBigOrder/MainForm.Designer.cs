@@ -23,6 +23,23 @@ namespace THSBigOrder
         this.panelStats = new System.Windows.Forms.Panel();
         this.panelFilter = new System.Windows.Forms.Panel();
         this.dataGridView1 = new System.Windows.Forms.DataGridView();
+        this.mainSplit = new System.Windows.Forms.SplitContainer();
+        this.orderTabs = new System.Windows.Forms.TabControl();
+        this.tabAll = new System.Windows.Forms.TabPage("全部");
+        this.tabBuy = new System.Windows.Forms.TabPage("买盘");
+        this.tabSell = new System.Windows.Forms.TabPage("卖盘");
+        this.bigOrderChart = new THSBigOrder.Controls.BigOrderChartControl();
+        this.metricsFlow = new System.Windows.Forms.FlowLayoutPanel();
+        this.lblPrice = new System.Windows.Forms.Label();
+        this.lblMainBuy = new System.Windows.Forms.Label();
+        this.lblMainSell = new System.Windows.Forms.Label();
+        this.lblMainNet = new System.Windows.Forms.Label();
+        this.lblSealAmount = new System.Windows.Forms.Label();
+        this.lblOpenCount = new System.Windows.Forms.Label();
+        this.lblHighDays = new System.Windows.Forms.Label();
+        this.lblSealRate = new System.Windows.Forms.Label();
+        this.lblLimitUpReason = new System.Windows.Forms.Label();
+        this.lblFreshness = new System.Windows.Forms.Label();
 
         // 股票信息控件
         this.lblStockName = new System.Windows.Forms.Label();
@@ -69,7 +86,7 @@ namespace THSBigOrder
         // panelTop - 顶部信息区（增加高度确保按钮显示）
         this.panelTop.BackColor = System.Drawing.Color.Black;  // 纯黑背景，颜色更鲜明
         this.panelTop.Dock = System.Windows.Forms.DockStyle.Top;
-        this.panelTop.Height = 78;
+        this.panelTop.Height = 108;
 
         // panelStats - 统计区（与表格宽度对齐 363px）
         this.panelStats.BackColor = System.Drawing.Color.Black;  // 纯黑背景
@@ -80,6 +97,23 @@ namespace THSBigOrder
         this.panelFilter.BackColor = System.Drawing.Color.Black;  // 纯黑背景
         this.panelFilter.Dock = System.Windows.Forms.DockStyle.Top;
         this.panelFilter.Height = 50;
+
+        this.metricsFlow.Dock = System.Windows.Forms.DockStyle.Bottom;
+        this.metricsFlow.Height = 30;
+        this.metricsFlow.Padding = new System.Windows.Forms.Padding(6, 5, 0, 0);
+        this.metricsFlow.WrapContents = false;
+        this.metricsFlow.BackColor = System.Drawing.Color.FromArgb(14, 20, 32);
+        var metricLabels = new[] { this.lblPrice, this.lblMainBuy, this.lblMainSell, this.lblMainNet, this.lblSealAmount, this.lblOpenCount, this.lblHighDays, this.lblSealRate, this.lblLimitUpReason, this.lblFreshness };
+        var metricTexts = new[] { "现价 -", "主买 -", "主卖 -", "主净 -", "封单 -", "开板 -", "连板 -", "封板率 -", "涨停原因 -", "数据等待" };
+        for (int metricIndex = 0; metricIndex < metricLabels.Length; metricIndex++)
+        {
+            metricLabels[metricIndex].AutoSize = true;
+            metricLabels[metricIndex].Font = new System.Drawing.Font("Microsoft YaHei UI", 9F, System.Drawing.FontStyle.Bold);
+            metricLabels[metricIndex].ForeColor = metricIndex == 2 ? System.Drawing.Color.FromArgb(40, 210, 145) : System.Drawing.Color.FromArgb(224, 231, 242);
+            metricLabels[metricIndex].Margin = new System.Windows.Forms.Padding(0, 0, 18, 0);
+            metricLabels[metricIndex].Text = metricTexts[metricIndex];
+            this.metricsFlow.Controls.Add(metricLabels[metricIndex]);
+        }
 
         // === 三列布局（与表格宽度对齐）===
         // 表格列宽: 58+55+55+50+50+45+50 ≈ 363px
@@ -402,6 +436,7 @@ namespace THSBigOrder
         this.panelTop.Controls.Add(this.chkFollowTdx);
         this.panelTop.Controls.Add(this.chkLockCode);
         this.panelTop.Controls.Add(this.chkTopMost);
+        this.panelTop.Controls.Add(this.metricsFlow);
 
         // panelStats 控件
         this.panelStats.Controls.Add(this.lblBuyTotal);
@@ -420,18 +455,39 @@ namespace THSBigOrder
         this.panelFilter.Controls.Add(this.btn1000W);
         this.panelFilter.Controls.Add(this.lblStatus);
 
+        // === 主体分栏 ===
+        this.mainSplit.Dock = System.Windows.Forms.DockStyle.Fill;
+        this.mainSplit.Orientation = System.Windows.Forms.Orientation.Vertical;
+        this.mainSplit.SplitterWidth = 5;
+        this.mainSplit.SplitterDistance = 900;
+        this.mainSplit.BackColor = System.Drawing.Color.FromArgb(31, 43, 60);
+        this.bigOrderChart.Dock = System.Windows.Forms.DockStyle.Fill;
+        this.mainSplit.Panel1.Controls.Add(this.bigOrderChart);
+
+        this.orderTabs.Dock = System.Windows.Forms.DockStyle.Fill;
+        this.orderTabs.Font = new System.Drawing.Font("Microsoft YaHei UI", 9F, System.Drawing.FontStyle.Bold);
+        this.orderTabs.Controls.Add(this.tabAll);
+        this.orderTabs.Controls.Add(this.tabBuy);
+        this.orderTabs.Controls.Add(this.tabSell);
+        this.orderTabs.SelectedIndexChanged += new System.EventHandler(this.OrderTabs_SelectedIndexChanged);
+        this.tabAll.BackColor = System.Drawing.Color.FromArgb(9, 13, 22);
+        this.tabBuy.BackColor = System.Drawing.Color.FromArgb(9, 13, 22);
+        this.tabSell.BackColor = System.Drawing.Color.FromArgb(9, 13, 22);
+        this.tabAll.Controls.Add(this.dataGridView1);
+        this.mainSplit.Panel2.Controls.Add(this.orderTabs);
+        this.mainSplit.Panel2.Controls.Add(this.panelFilter);
+        this.mainSplit.Panel2.Controls.Add(this.panelStats);
+
         // === Form 配置 ===
         // 表格列宽: 58+55+55+50+50+45+50 = 363px，加边距约400px
         this.AutoScaleDimensions = new System.Drawing.SizeF(7F, 15F);
         this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
-        this.BackColor = System.Drawing.Color.Black;  // 纯黑背景
-        this.ClientSize = new System.Drawing.Size(400, 550);
-        this.MinimumSize = new System.Drawing.Size(400, 400);
+        this.BackColor = System.Drawing.Color.FromArgb(9, 13, 22);
+        this.ClientSize = new System.Drawing.Size(1280, 800);
+        this.MinimumSize = new System.Drawing.Size(960, 640);
 
         // 添加控件到窗体（注意顺序：后添加的在下面）
-        this.Controls.Add(this.dataGridView1);
-        this.Controls.Add(this.panelFilter);
-        this.Controls.Add(this.panelStats);
+        this.Controls.Add(this.mainSplit);
         this.Controls.Add(this.panelTop);
         this.Controls.Add(this.statusStrip1);
 
@@ -453,6 +509,23 @@ namespace THSBigOrder
     private System.Windows.Forms.Panel panelStats;
     private System.Windows.Forms.Panel panelFilter;
     private System.Windows.Forms.DataGridView dataGridView1;
+    private System.Windows.Forms.SplitContainer mainSplit;
+    private System.Windows.Forms.TabControl orderTabs;
+    private System.Windows.Forms.TabPage tabAll;
+    private System.Windows.Forms.TabPage tabBuy;
+    private System.Windows.Forms.TabPage tabSell;
+    private THSBigOrder.Controls.BigOrderChartControl bigOrderChart;
+    private System.Windows.Forms.FlowLayoutPanel metricsFlow;
+    private System.Windows.Forms.Label lblPrice;
+    private System.Windows.Forms.Label lblMainBuy;
+    private System.Windows.Forms.Label lblMainSell;
+    private System.Windows.Forms.Label lblMainNet;
+    private System.Windows.Forms.Label lblSealAmount;
+    private System.Windows.Forms.Label lblOpenCount;
+    private System.Windows.Forms.Label lblHighDays;
+    private System.Windows.Forms.Label lblSealRate;
+    private System.Windows.Forms.Label lblLimitUpReason;
+    private System.Windows.Forms.Label lblFreshness;
 
     // 股票信息
     private System.Windows.Forms.Label lblStockName;

@@ -5,8 +5,13 @@ using System.Drawing;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using THSBigOrder.Analytics;
+using THSBigOrder.Filtering;
+using THSBigOrder.Models;
+using THSBigOrder.Refresh;
 
 namespace THSBigOrder
 {
@@ -35,6 +40,9 @@ namespace THSBigOrder
         private List<BigOrderItem> _allData = new List<BigOrderItem>();
         private List<BigOrderItem> _filteredData = new List<BigOrderItem>();
         private StockInfo _stockInfo;
+        private MarketSnapshot _snapshot;
+        private readonly RefreshCoordinator _refreshCoordinator = new RefreshCoordinator();
+        private OrderSide _orderSide = OrderSide.All;
 
         // 当前状态
         private string _currentStockCode = "002963";
@@ -70,11 +78,19 @@ namespace THSBigOrder
         private readonly Color ColorBuyActive = Color.Violet;      // 买活跃统计显示 → 紫色（与点火同色系）
         private readonly Color ColorSellActive = Color.LightGreen; // 承接好统计显示 → 浅绿色（与砸盘同色系）
 
-        public MainForm()
+        public MainForm() : this(null, true)
+        {
+        }
+
+        internal MainForm(THSBigOrderDataProvider dataProvider, bool initializeRuntime)
         {
             InitializeComponent();
-            InitializeCustomComponents();
+            if (initializeRuntime) InitializeCustomComponents();
+            else _dataProvider = dataProvider;
         }
+
+        internal SplitContainer MainSplit => mainSplit;
+        internal TabControl OrderTabs => orderTabs;
 
         private void InitializeCustomComponents()
         {
@@ -436,78 +452,80 @@ namespace THSBigOrder
             _titleTimer.Start();
         }
         
-        private async Task RefreshDataAsync()
+        private async Task RefreshDataAsync(bool forceForCodeChange = false)
         {
+            var request = _refreshCoordinator.Begin(_currentStockCode, forceForCodeChange);
+            if (!request.ShouldRun) return;
             try
             {
                 lblStatus.Text = "刷新中...";
                 lblStatus.ForeColor = Color.Yellow;
-
-                var stockInfoTask = _dataProvider.GetStockInfoAsync(_currentStockCode);
-                var dataTask = _dataProvider.GetAllDayDataAsync(_currentStockCode, 0);
-
-                await Task.WhenAll(stockInfoTask, dataTask);
-
-                _stockInfo = stockInfoTask.Result;
-                _allData = dataTask.Result;
-
-                _dataProvider.CalculateMarkers(_allData);
-                _allData = _allData.OrderByDescending(x => x.Time).ToList();
-
-                ApplyFilter();
-                UpdateDataGrid();
-                UpdateStatistics();
-                UpdateStockInfo();
-                UpdateScrollText();
-                CheckAndAnnounce();  // 语音播报
-
-                lblStatus.Text = string.Format("共 {0} 条", _filteredData.Count);
-                lblStatus.ForeColor = Color.LightGreen;
-
-                if (_filteredData.Count > 0)
-                {
-                    var latestTime = _filteredData.Max(x => x.Time);
-                    toolStripStatusLabel2.Text = string.Format("数据日期: {0:yyyy-MM-dd}", latestTime);
-                }
+                var snapshot = await _dataProvider.LoadSnapshotAsync(request.StockCode, request.CancellationToken);
+                if (!_refreshCoordinator.IsLatest(request.Generation, snapshot.StockCode)) return;
+                BindSnapshot(snapshot);
             }
+            catch (OperationCanceledException) when (request.CancellationToken.IsCancellationRequested) { }
             catch (Exception ex)
             {
                 lblStatus.Text = "错误: " + ex.Message;
                 lblStatus.ForeColor = Color.Red;
             }
+            finally { _refreshCoordinator.Complete(request.Generation); }
+        }
+
+        private void BindSnapshot(MarketSnapshot snapshot)
+        {
+            _snapshot = snapshot;
+            _stockInfo = new StockInfo
+            {
+                Code = snapshot.StockCode,
+                Name = snapshot.Stock.Name,
+                Price = snapshot.Stock.Price ?? 0,
+                Change = snapshot.Stock.ChangePercent ?? 0,
+                TurnoverRate = snapshot.Stock.TurnoverRate ?? 0,
+                VolumeRatio = snapshot.Stock.VolumeRatio ?? 0,
+                TotalAmount = snapshot.Stock.TotalAmount ?? 0,
+            };
+            _allData = snapshot.Orders.ToList();
+            _dataProvider.CalculateMarkers(_allData);
+            _allData = _allData.OrderByDescending(item => item.Time).ToList();
+            ApplyFilter();
+            UpdateDataGrid();
+            UpdateStatistics();
+            UpdateStockInfo();
+            BindSnapshotLabels(snapshot);
+            bigOrderChart.SetSnapshot(snapshot, new BigOrderSeriesBuilder().Build(snapshot.Orders));
+            CheckAndAnnounce();
+            lblStatus.Text = string.Format("共 {0} 条", _filteredData.Count);
+            lblStatus.ForeColor = snapshot.BigOrderFreshness == DataFreshness.Fresh ? Color.LightGreen : Color.Orange;
+            toolStripStatusLabel2.Text = "数据时间: " + snapshot.BigOrderFetchedAt.ToString("yyyy-MM-dd HH:mm:ss");
+        }
+
+        private void BindSnapshotLabels(MarketSnapshot snapshot)
+        {
+            lblPrice.Text = "现价 " + FormatNullable(snapshot.Stock.Price, "F2");
+            lblMainBuy.Text = "主买 " + FormatAmount(snapshot.MainFunds.MainBuy);
+            lblMainSell.Text = "主卖 " + FormatAmount(snapshot.MainFunds.MainSell);
+            lblMainNet.Text = "主净 " + FormatAmount(snapshot.MainFunds.NetAmount);
+            lblSealAmount.Text = "封单 " + FormatAmount(snapshot.LimitUp.SealAmount);
+            lblOpenCount.Text = "开板 " + (snapshot.LimitUp.OpenCount.HasValue ? snapshot.LimitUp.OpenCount.Value.ToString() : "-");
+            lblHighDays.Text = "连板 " + (snapshot.LimitUp.HighDays ?? "-");
+            lblSealRate.Text = "封板率 " + (snapshot.LimitUp.SuccessRate.HasValue ? (snapshot.LimitUp.SuccessRate.Value * 100).ToString("F1") + "%" : "-");
+            lblLimitUpReason.Text = snapshot.LimitUpFreshness == DataFreshness.Failed ? "涨停数据不可用" : snapshot.LimitUpFreshness == DataFreshness.Missing ? "非涨停池" : "涨停原因 " + (snapshot.LimitUp.ReasonType ?? "-");
+            lblFreshness.Text = snapshot.BigOrderFreshness == DataFreshness.Fresh ? "数据实时" : snapshot.BigOrderFreshness == DataFreshness.Stale ? "数据陈旧" : "代理不可用";
+            lblFreshness.ForeColor = snapshot.BigOrderFreshness == DataFreshness.Fresh ? Color.LightGreen : Color.Orange;
+        }
+
+        private static string FormatNullable(double? value, string format) => value.HasValue ? value.Value.ToString(format) : "-";
+        private static string FormatAmount(double? value)
+        {
+            if (!value.HasValue) return "-";
+            return Math.Abs(value.Value) >= 100000000 ? (value.Value / 100000000).ToString("F2") + "亿" : (value.Value / 10000).ToString("F0") + "万";
         }
 
         private void ApplyFilter()
         {
-            // 先按金额筛选
-            if (_currentMoney <= 0)
-            {
-                _filteredData = _allData.ToList();
-            }
-            else
-            {
-                _filteredData = _allData.Where(x => x.Amount >= _currentMoney).ToList();
-            }
-
-            // 再按特殊类型筛选
-            if (!string.IsNullOrEmpty(_specialFilter))
-            {
-                switch (_specialFilter)
-                {
-                    case "点火":
-                        _filteredData = _filteredData.Where(x => x.FundMarker == "点火").ToList();
-                        break;
-                    case "砸盘":
-                        _filteredData = _filteredData.Where(x => x.FundMarker == "砸盘").ToList();
-                        break;
-                    case "买活跃":
-                        _filteredData = _filteredData.Where(x => x.BuyMarker == "买活跃").ToList();
-                        break;
-                    case "承接好":
-                        _filteredData = _filteredData.Where(x => x.BuyMarker == "承接好").ToList();
-                        break;
-                }
-            }
+            _filteredData = OrderFilter.Apply(_allData, _currentMoney, _orderSide, _specialFilter);
         }
 
         private void UpdateDataGrid()
@@ -575,7 +593,7 @@ namespace THSBigOrder
 
         private void UpdateStockInfo()
         {
-            if (_stockInfo == null)
+            if (_stockInfo == null || _snapshot == null)
             {
                 lblStockName.Text = _currentStockCode;
                 lblChange.Text = "涨幅: --";
@@ -587,6 +605,15 @@ namespace THSBigOrder
 
             // 第一行：股票名称 + 涨幅 + 量比
             lblStockName.Text = _stockInfo.Name;
+
+            if (_snapshot.QuoteFreshness == DataFreshness.Failed || _snapshot.QuoteFreshness == DataFreshness.Missing)
+            {
+                lblChange.Text = "涨幅: -";
+                lblTurnover.Text = "换手: -";
+                lblVolumeRatio.Text = "量比: -";
+                lblTotalAmount.Text = "成交: -";
+                return;
+            }
 
             lblChange.Text = string.Format("涨幅: {0:F1}%", _stockInfo.Change);
             lblChange.ForeColor = _stockInfo.Change >= 0 ? ColorMainBuy : ColorMainSell;
@@ -614,7 +641,7 @@ namespace THSBigOrder
             foreach (var item in recentData)
             {
                 // 用时间+金额作为唯一标识，避免重复播报
-                string key = item.Time.ToString("HHmmss") + "_" + item.Amount.ToString("F0");
+                string key = _currentStockCode + "_" + item.Time.ToString("HHmmss") + "_" + item.Type + "_" + item.Amount.ToString("F0");
                 if (_announcedItems.Contains(key)) continue;
 
                 _announcedItems.Add(key);
@@ -869,8 +896,29 @@ namespace THSBigOrder
 
         private async void btnRefresh_Click(object sender, EventArgs e)
         {
-            _currentStockCode = txtStockCode.Text.Trim();
-            await RefreshDataAsync();
+            var stockCode = txtStockCode.Text.Trim();
+            var changed = stockCode != _currentStockCode;
+            _currentStockCode = stockCode;
+            _specialFilter = "";
+            await RefreshDataAsync(changed);
+        }
+
+        private void OrderTabs_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            _orderSide = orderTabs.SelectedIndex == 1 ? OrderSide.Buy : orderTabs.SelectedIndex == 2 ? OrderSide.Sell : OrderSide.All;
+            var page = orderTabs.SelectedTab;
+            if (page != null && dataGridView1.Parent != page) page.Controls.Add(dataGridView1);
+            ApplyFilterAndRefreshUI();
+        }
+
+        protected override void OnClientSizeChanged(EventArgs e)
+        {
+            base.OnClientSizeChanged(e);
+            if (mainSplit == null || ClientSize.Width <= 0) return;
+            var desired = Math.Max(mainSplit.Panel1MinSize, Math.Min((int)(ClientSize.Width * 0.72), ClientSize.Width - mainSplit.Panel2MinSize - mainSplit.SplitterWidth));
+            if (desired > 0) mainSplit.SplitterDistance = desired;
+            if (lblLimitUpReason != null) lblLimitUpReason.Visible = ClientSize.Width >= 1100;
+            if (lblSealRate != null) lblSealRate.Visible = ClientSize.Width >= 1020;
         }
 
         private void btnAnalysis_Click(object sender, EventArgs e)
@@ -1064,6 +1112,7 @@ namespace THSBigOrder
             if (_clockTimer != null) { _clockTimer.Stop(); _clockTimer.Dispose(); }
             if (_dataProvider != null) { _dataProvider.Dispose(); }
             if (_voiceService != null) { _voiceService.Dispose(); }
+            _refreshCoordinator.Dispose();
             base.OnFormClosing(e);
         }
     }
