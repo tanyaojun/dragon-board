@@ -10,6 +10,7 @@ using Newtonsoft.Json.Linq;
 using THSBigOrder;
 using THSBigOrder.Models;
 using THSBigOrder.Parsing;
+using THSBigOrder.Analytics;
 
 internal static class Program
 {
@@ -26,6 +27,8 @@ internal static class Program
         Run("Proxy envelope maps degraded, stale and fresh empty states", TestEnvelopeStates);
         Run("Provider loads three proxy routes in parallel", () => TestProviderParallelLoad().GetAwaiter().GetResult());
         Run("Provider stale fallback is isolated by stock code", () => TestProviderStaleIsolation().GetAwaiter().GetResult());
+        Run("Series builder aggregates minute flow and thresholds", TestSeriesBuilder);
+        Run("Legacy marker thresholds remain stable", TestLegacyMarkers);
         return Environment.ExitCode;
     }
 
@@ -133,6 +136,45 @@ internal static class Program
             AssertEqual(DataFreshness.Failed, other.BigOrderFreshness, "other failed");
             AssertTrue(other.Orders.Count == 0, "no cross-code stale orders");
         }
+    }
+
+    private static void TestSeriesBuilder()
+    {
+        var day = new DateTime(2026, 6, 18);
+        var orders = new[]
+        {
+            new BigOrderItem { Type = 2, Amount = 1000000, Time = day.AddHours(9).AddMinutes(30) },
+            new BigOrderItem { Type = 3, Amount = 500000, Time = day.AddHours(9).AddMinutes(30).AddSeconds(10) },
+            new BigOrderItem { Type = 4, Amount = 300000, Time = day.AddHours(9).AddMinutes(30).AddSeconds(20) },
+            new BigOrderItem { Type = 1, Amount = 200000, Time = day.AddHours(9).AddMinutes(31) },
+        };
+        var series = new BigOrderSeriesBuilder().Build(orders);
+        AssertEqual(1500000d, series.Minutes[0].BuyAmount, "09:30 buy");
+        AssertEqual(300000d, series.Minutes[0].SellAmount, "09:30 sell");
+        AssertEqual(1200000d, series.NetFlow[0].Value, "09:30 net");
+        AssertEqual(1000000d, series.Thresholds.Single(value => value.Amount == 1000000).BuyAmount, "100w buy");
+    }
+
+    private static void TestLegacyMarkers()
+    {
+        var day = new DateTime(2026, 6, 18, 9, 30, 0);
+        var ignite = new List<BigOrderItem>
+        {
+            new BigOrderItem { Type = 2, Amount = 100000, Time = day },
+            new BigOrderItem { Type = 2, Amount = 4000000, Time = day.AddSeconds(10) },
+        };
+        var smash = new List<BigOrderItem>
+        {
+            new BigOrderItem { Type = 4, Amount = 100000, Time = day },
+            new BigOrderItem { Type = 4, Amount = 4000000, Time = day.AddSeconds(10) },
+        };
+        using (var provider = new THSBigOrderDataProvider())
+        {
+            provider.CalculateMarkers(ignite);
+            provider.CalculateMarkers(smash);
+        }
+        AssertEqual("点火", ignite[1].FundMarker, "ignite marker");
+        AssertEqual("砸盘", smash[1].FundMarker, "smash marker");
     }
 
     private static void Run(string name, Action test)
