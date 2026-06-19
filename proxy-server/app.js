@@ -9,7 +9,7 @@ import {
   createHttpClients,
   loadEnvFile,
 } from './helpers/http.js'
-import { ProxyRedisCache } from './helpers/proxyCache.js'
+import { ProcessMemoryCache, ProxyRedisCache } from './helpers/proxyCache.js'
 import { buildBadRequestEnvelope } from './helpers/response.js'
 import { registerBigOrderRoutes } from './routes/bigOrder.js'
 import { registerDeprecatedRoutes } from './routes/deprecated.js'
@@ -39,11 +39,14 @@ export function createProxyApp(options = {}) {
   const readConfig = options.readConfig || createConfigReader(localEnv)
   const clients = options.clients || createHttpClients()
   const cache = options.cache || new ProxyRedisCache()
+  const runtimeCache = options.runtimeCache || new ProcessMemoryCache({ now: options.now })
   const context = {
     client: clients.client,
     plainClient: clients.plainClient,
     readConfig,
     cache,
+    runtimeCache,
+    now: options.now || (() => Date.now()),
     port,
     localVoice: options.localVoice,
     feishuEventRadar: options.feishuEventRadar,

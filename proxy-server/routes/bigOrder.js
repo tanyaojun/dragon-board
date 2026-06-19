@@ -1,5 +1,39 @@
 import { delay } from '../helpers/http.js'
+import { attachCacheMeta, PROXY_CACHE_TTLS } from '../helpers/proxyCache.js'
 import { sendBadRequest, sendDegraded } from '../helpers/response.js'
+
+const THS_BIG_ORDER_BASE = 'https://vaserviece.10jqka.com.cn/Level2/index.php'
+
+const THS_BIG_ORDER_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+  Referer: 'https://vaserviece.10jqka.com.cn/',
+  Accept: 'application/json,text/plain,*/*',
+}
+
+function buildThsBigOrderUrl(stockCode) {
+  const url = new URL(THS_BIG_ORDER_BASE)
+  url.searchParams.set('op', 'mainMonitorDetail')
+  url.searchParams.set('stockcode', stockCode)
+  return url
+}
+
+function normalizeStockCode(value) {
+  const code = String(value || '').trim()
+  return /^\d{6}$/.test(code) ? code : ''
+}
+
+function validateThsPayload(payload, now) {
+  if (Number(payload?.errorcode) !== 0) throw new Error(payload?.msg || 'ths error response')
+  if (!payload?.title || !Array.isArray(payload?.list)) {
+    throw new Error('invalid ths big-order payload')
+  }
+  return {
+    fetchedAt: now(),
+    title: payload.title,
+    list: payload.list,
+    pricechange: Array.isArray(payload.pricechange) ? payload.pricechange : [],
+  }
+}
 
 function generateDeviceId() {
   const input = Date.now() + Math.random().toString(36)
@@ -33,7 +67,49 @@ const BIG_ORDER_HEADERS = {
   'User-Agent': 'Dalvik/2.1.0 (Linux; U; Android 9; MI 8 MIUI/V11.0.5.0.PEACNXM)',
 }
 
-export function registerBigOrderRoutes(app, { plainClient }) {
+export function registerBigOrderRoutes(app, { plainClient, runtimeCache, now = () => Date.now() }) {
+  app.get('/api/big-order/ths-detail', async (req, res) => {
+    const stockCode = normalizeStockCode(req.query.stockCode)
+    if (!stockCode) {
+      return sendBadRequest(res, 'invalid_stock_code', 'stockCode 必须是六位数字')
+    }
+
+    const ttlSeconds = PROXY_CACHE_TTLS.bigOrder.thsDetail
+    try {
+      const result = await runtimeCache.remember(
+        `big-order:ths-detail:v1:${stockCode}`,
+        { ttlSeconds, staleTtlSeconds: ttlSeconds * 6 },
+        async () => {
+          const response = await plainClient.get(buildThsBigOrderUrl(stockCode).toString(), {
+            timeout: 15000,
+            headers: THS_BIG_ORDER_HEADERS,
+          })
+          return validateThsPayload(response.data, now)
+        },
+      )
+
+      return res.json({
+        ok: true,
+        source: 'ths-big-order-detail',
+        stockCode,
+        fetchedAt: result.value.fetchedAt,
+        servedAt: now(),
+        data: attachCacheMeta(result.value, {
+          ...result.cache,
+          store: 'memory',
+          ttlSeconds,
+        }),
+      })
+    } catch (error) {
+      console.error('[同花顺大单] 失败:', error.message)
+      return sendDegraded(res, {
+        source: 'ths-big-order-detail',
+        error,
+        fallbackData: null,
+      })
+    }
+  })
+
   app.get('/api/big-order/main-monitor', async (req, res) => {
     try {
       const { stockCode, limit = 100, money = 0, index = 0 } = req.query

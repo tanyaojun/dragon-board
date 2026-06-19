@@ -21,6 +21,9 @@ export const PROXY_CACHE_TTLS = {
     default: 300,
     stale: 1800,
   },
+  bigOrder: {
+    thsDetail: 30,
+  },
 }
 
 export function normalizeCodeCacheKey(codes) {
@@ -169,6 +172,84 @@ export class ProxyRedisCache {
       .finally(() => {
         this.pending.delete(key)
       })
+    this.pending.set(key, pending)
+    return pending
+  }
+}
+
+export class ProcessMemoryCache {
+  constructor({ now = () => Date.now() } = {}) {
+    this.now = now
+    this.store = new Map()
+    this.pending = new Map()
+  }
+
+  enabled() {
+    return true
+  }
+
+  async get(key, { allowStale = false } = {}) {
+    const entry = this.store.get(key)
+    if (!entry) return null
+    const now = this.now()
+    if (entry.expiresAt > now) {
+      return { value: entry.value, stale: false, meta: { ttlSeconds: entry.ttlSeconds } }
+    }
+    if (allowStale && entry.staleUntil > now) {
+      return { value: entry.value, stale: true, meta: { ttlSeconds: entry.ttlSeconds } }
+    }
+    if (entry.staleUntil <= now) this.store.delete(key)
+    return null
+  }
+
+  async set(key, value, { ttlSeconds, staleTtlSeconds, stale = false } = {}) {
+    const ttl = Math.max(1, Number(ttlSeconds) || 1)
+    const staleTtl = Math.max(ttl, Number(staleTtlSeconds) || ttl * 3)
+    const now = this.now()
+    this.store.set(key, {
+      value,
+      ttlSeconds: ttl,
+      expiresAt: stale ? now - 1 : now + ttl * 1000,
+      staleUntil: now + staleTtl * 1000,
+    })
+    return true
+  }
+
+  async remember(key, options, loader) {
+    const cached = await this.get(key)
+    if (cached) {
+      return {
+        value: cached.value,
+        cache: { hit: true, stale: false, ttlSeconds: cached.meta?.ttlSeconds },
+      }
+    }
+
+    if (this.pending.has(key)) return this.pending.get(key)
+
+    const pending = Promise.resolve()
+      .then(loader)
+      .then(async (value) => {
+        await this.set(key, value, options)
+        return {
+          value,
+          cache: { hit: false, stale: false, ttlSeconds: options?.ttlSeconds },
+        }
+      })
+      .catch(async (error) => {
+        const stale = await this.get(key, { allowStale: true })
+        if (!stale) throw error
+        return {
+          value: stale.value,
+          cache: {
+            hit: true,
+            stale: true,
+            upstreamCalled: true,
+            ttlSeconds: stale.meta?.ttlSeconds || options?.ttlSeconds,
+          },
+        }
+      })
+      .finally(() => this.pending.delete(key))
+
     this.pending.set(key, pending)
     return pending
   }
