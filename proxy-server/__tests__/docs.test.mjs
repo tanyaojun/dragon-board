@@ -36,6 +36,8 @@ test('openapi json documents the proxy server routes', async () => {
       ['key', 'bundle'],
     )
     assert.ok(body.paths['/api/market/overview'].get)
+    assert.ok(body.paths['/api/big-order/ths-detail'].get)
+    assert.equal(body.paths['/api/big-order/ths-detail'].get.parameters[0].name, 'stockCode')
     assert.ok(body.paths['/api/tdx/{entry}'].post)
     assert.ok(body.paths['/api/tdx-blocks'].get)
     assert.ok(body.paths['/api/tdx-blocks/codes'].get)

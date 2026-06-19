@@ -1,3 +1,4 @@
+import { attachCacheMeta, PROXY_CACHE_TTLS } from '../helpers/proxyCache.js'
 import { classifyUpstreamError, sendDegraded } from '../helpers/response.js'
 
 const THS_LIMIT_UP_POOLS = [
@@ -55,15 +56,28 @@ function extractPoolTotal(payload, items) {
   return Number(data.page_info?.total ?? data.page?.total ?? payload?.page_info?.total ?? payload?.page?.total) || items.length
 }
 
-export function registerMarketRoutes(app, { plainClient, port }) {
+export function registerMarketRoutes(app, { plainClient, port, runtimeCache }) {
   app.get('/api/limitup/10jqka', async (req, res) => {
     try {
       const { date } = req.query
       const dateStr = date || currentDateString()
       const url = `https://data.10jqka.com.cn/dataapi/limit_up/limit_up_pool?page=1&limit=200&field=199112,10,9001,330323,330324,330325,9002,330329,133971,133970,1968584,3475914,9003,9004,continue_day,continue_day_cnt,high_days,reason_type&filter=HS,GEM2STAR&order_field=330324&order_type=0&date=${dateStr}`
-
-      const response = await plainClient.get(url, { timeout: 8000 })
-      res.json(response.data)
+      const ttlSeconds = PROXY_CACHE_TTLS.market.thsLimitUp
+      const result = await runtimeCache.remember(
+        `market:ths-limitup:v1:${dateStr}`,
+        { ttlSeconds, staleTtlSeconds: ttlSeconds * 6 },
+        async () => {
+          const response = await plainClient.get(url, { timeout: 8000 })
+          return response.data
+        },
+      )
+      res.json(
+        attachCacheMeta(result.value, {
+          ...result.cache,
+          store: 'memory',
+          ttlSeconds,
+        }),
+      )
     } catch (error) {
       sendDegraded(res, {
         source: 'limitup-10jqka',

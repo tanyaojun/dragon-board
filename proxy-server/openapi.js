@@ -347,6 +347,20 @@ export function buildOpenApiDocument({ port = 3000 } = {}) {
         tag: 'market',
         summary: '同花顺涨停列表',
       }),
+      '/api/big-order/ths-detail': operation({
+        method: 'get',
+        tag: 'market',
+        summary: '同花顺大单明细',
+        parameters: [
+          {
+            name: 'stockCode',
+            in: 'query',
+            required: true,
+            schema: { type: 'string', pattern: '^\\d{6}$', example: '002297' },
+            description: '六位 A 股股票代码',
+          },
+        ],
+      }),
       '/api/limitup/detail': operation({
         method: 'get',
         tag: 'deprecated',

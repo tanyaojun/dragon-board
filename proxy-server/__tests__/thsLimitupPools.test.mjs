@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test, { mock } from 'node:test'
 
 import { createProxyApp } from '../app.js'
+import { ProcessMemoryCache } from '../helpers/proxyCache.js'
 
 function listen(app) {
   return new Promise((resolve) => {
@@ -11,6 +12,62 @@ function listen(app) {
     })
   })
 }
+
+test('legacy THS limitup list uses process cache and preserves data.info', async () => {
+  let now = 1_750_000_000_000
+  let upstreamCalls = 0
+  let fail = false
+  const app = createProxyApp({
+    logRequests: false,
+    now: () => now,
+    runtimeCache: new ProcessMemoryCache({ now: () => now }),
+    clients: {
+      client: {},
+      plainClient: {
+        get: async () => {
+          upstreamCalls += 1
+          if (fail) throw new Error('limitup blocked')
+          return {
+            data: {
+              data: {
+                info: [{ code: '002297', order_amount: 45049860 }],
+              },
+            },
+          }
+        },
+      },
+    },
+  })
+  const { server, baseUrl } = await listen(app)
+  try {
+    const url = `${baseUrl}/api/limitup/10jqka?date=20260618`
+    const firstBody = await (await fetch(url)).json()
+    const secondBody = await (await fetch(url)).json()
+
+    assert.equal(upstreamCalls, 1)
+    assert.equal(firstBody.data.info[0].code, '002297')
+    assert.equal(secondBody.data.info[0].order_amount, 45049860)
+    assert.equal(firstBody.dragonMeta.cache.hit, false)
+    assert.equal(secondBody.dragonMeta.cache.hit, true)
+
+    now += 31_000
+    fail = true
+    const staleResponse = await fetch(url)
+    const staleBody = await staleResponse.json()
+    assert.equal(staleResponse.status, 200)
+    assert.equal(staleBody.data.info[0].code, '002297')
+    assert.equal(staleBody.dragonMeta.cache.stale, true)
+
+    now += 180_000
+    const degradedResponse = await fetch(url)
+    const degradedBody = await degradedResponse.json()
+    assert.equal(degradedResponse.status, 200)
+    assert.equal(degradedBody.degraded, true)
+    assert.deepEqual(degradedBody.data, { data: { info: [] } })
+  } finally {
+    server.close()
+  }
+})
 
 test('ths limitup pools aggregates all pool requests with stable keys', async () => {
   const requestedUrls = []

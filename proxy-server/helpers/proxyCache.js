@@ -24,6 +24,9 @@ export const PROXY_CACHE_TTLS = {
   bigOrder: {
     thsDetail: 30,
   },
+  market: {
+    thsLimitUp: 30,
+  },
 }
 
 export function normalizeCodeCacheKey(codes) {
