@@ -1,5 +1,11 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
+using System.Net;
+using System.Net.Http;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 using Newtonsoft.Json.Linq;
 using THSBigOrder;
 using THSBigOrder.Models;
@@ -18,6 +24,8 @@ internal static class Program
         Run("THS order parser maps four natures and formatted values", TestOrderParsing);
         Run("THS snapshot parser merges title, quote, limit-up and price points", TestSnapshotParsing);
         Run("Proxy envelope maps degraded, stale and fresh empty states", TestEnvelopeStates);
+        Run("Provider loads three proxy routes in parallel", () => TestProviderParallelLoad().GetAwaiter().GetResult());
+        Run("Provider stale fallback is isolated by stock code", () => TestProviderStaleIsolation().GetAwaiter().GetResult());
         return Environment.ExitCode;
     }
 
@@ -91,6 +99,42 @@ internal static class Program
         AssertEqual(DataFreshness.Fresh, parser.ParseSnapshot("002297", fresh, new JObject(), new JObject(), DateTime.Now).BigOrderFreshness, "fresh empty");
     }
 
+    private static async Task TestProviderParallelLoad()
+    {
+        var handler = new FixtureHandler(true);
+        using (var provider = new THSBigOrderDataProvider(new HttpClient(handler), "http://127.0.0.1:3000"))
+        {
+            var snapshot = await provider.LoadSnapshotAsync("002297", CancellationToken.None);
+            AssertSequence(new[] {
+                "/api/big-order/ths-detail?stockCode=002297",
+                "/api/limitup/10jqka",
+                "/api/quotes/tencent?codes=002297"
+            }, handler.Paths.OrderBy(value => value).ToArray(), "paths");
+            AssertEqual(3, handler.PeakPending, "parallel requests");
+            AssertEqual("002297", snapshot.StockCode, "stock code");
+            AssertEqual("博云新材", snapshot.Stock.Name, "provider name");
+        }
+    }
+
+    private static async Task TestProviderStaleIsolation()
+    {
+        var handler = new FixtureHandler(false);
+        using (var provider = new THSBigOrderDataProvider(new HttpClient(handler), "http://127.0.0.1:3000"))
+        {
+            var fresh = await provider.LoadSnapshotAsync("002297", CancellationToken.None);
+            handler.FailBigOrder = true;
+            var stale = await provider.LoadSnapshotAsync("002297", CancellationToken.None);
+            var other = await provider.LoadSnapshotAsync("600519", CancellationToken.None);
+
+            AssertEqual(DataFreshness.Fresh, fresh.BigOrderFreshness, "initial fresh");
+            AssertEqual(DataFreshness.Stale, stale.BigOrderFreshness, "same-code stale");
+            AssertEqual("002297", stale.StockCode, "stale code");
+            AssertTrue(stale.Orders.Count > 0, "stale orders retained");
+            AssertEqual(DataFreshness.Failed, other.BigOrderFreshness, "other failed");
+            AssertTrue(other.Orders.Count == 0, "no cross-code stale orders");
+        }
+    }
+
     private static void Run(string name, Action test)
     {
         try
@@ -124,5 +168,61 @@ internal static class Program
             return;
         }
         throw new InvalidOperationException(label + " expected " + typeof(T).Name);
+    }
+
+    private static void AssertTrue(bool value, string label)
+    {
+        if (!value) throw new InvalidOperationException(label);
+    }
+
+    private static void AssertSequence<T>(IEnumerable<T> expected, IEnumerable<T> actual, string label)
+    {
+        if (!expected.SequenceEqual(actual))
+            throw new InvalidOperationException(label + " sequence mismatch");
+    }
+
+    private sealed class FixtureHandler : HttpMessageHandler
+    {
+        private readonly bool _barrier;
+        private readonly TaskCompletionSource<bool> _release = new TaskCompletionSource<bool>();
+        private int _pending;
+
+        public FixtureHandler(bool barrier) { _barrier = barrier; }
+        public List<string> Paths { get; } = new List<string>();
+        public bool FailBigOrder { get; set; }
+        public int PeakPending { get; private set; }
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var path = request.RequestUri.PathAndQuery;
+            lock (Paths)
+            {
+                Paths.Add(path);
+                _pending++;
+                PeakPending = Math.Max(PeakPending, _pending);
+                if (_pending >= 3) _release.TrySetResult(true);
+            }
+            if (_barrier) await _release.Task;
+            lock (Paths) { _pending--; }
+
+            if (path.StartsWith("/api/big-order/") && FailBigOrder)
+                throw new HttpRequestException("big order blocked");
+
+            string json;
+            if (path.StartsWith("/api/big-order/"))
+                json = "{'ok':true,'fetchedAt':1781746200000,'data':{'title':{'stockname':'博云新材','price':28.36},'list':[{'nature':'主力主买','volume':'10手','avgprice':'28.36','money':28360,'otime':'2026-06-18 09:30:01'}],'pricechange':[]}}";
+            else if (path.StartsWith("/api/quotes/"))
+                json = "{'data':{'diff':[{'f12':'" + Code(path) + "','f14':'博云新材','f2':28.36,'f5':1000000,'f6':100,'f8':1.2,'f10':0.8}]}}";
+            else
+                json = "{'data':{'info':[{'code':'" + Code(path) + "','order_amount':45049860,'high_days':'首板'}]}}";
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(json, Encoding.UTF8, "application/json") };
+        }
+
+        private static string Code(string path)
+        {
+            var marker = path.Contains("codes=") ? "codes=" : "stockCode=";
+            var index = path.IndexOf(marker, StringComparison.Ordinal);
+            return index < 0 ? "002297" : path.Substring(index + marker.Length, 6);
+        }
     }
 }
