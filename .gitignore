@@ -65,6 +65,7 @@ quant-board/data/staging/
 quant-board/data/reports/
 # Superpowers plugin artifact
 .superpowers/
+.worktrees/
 
 # Added by code-review-graph
 .code-review-graph/
