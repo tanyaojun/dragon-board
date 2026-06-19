@@ -38,6 +38,7 @@ internal static class Program
         Run("Series builder aggregates eight half-hour turnover bands", TestHalfHourSeries);
         Run("Legacy marker thresholds remain stable", TestLegacyMarkers);
         Run("Chart control binds three layout bands and draws empty data", TestChartControl);
+        Run("Chart control exposes paired axes and intraday grids", TestIntradayChartLayout);
         Run("Order filter composes amount, side and marker", TestOrderFilter);
         Run("Refresh coordinator cancels superseded code and blocks reentry", TestRefreshCoordinator);
         Run("Main form exposes 72/28 chart and order tabs", TestMainFormLayout);
@@ -288,6 +289,49 @@ internal static class Program
         var result = OrderFilter.Apply(rows, 1000000, OrderSide.Buy, "点火");
         AssertEqual(1, result.Count, "composed filter count");
         AssertEqual(2, result[0].Type, "composed filter type");
+    }
+
+    private static void TestIntradayChartLayout()
+    {
+        var day = new DateTime(2026, 6, 18);
+        var snapshot = new MarketSnapshot(
+            "002297",
+            new StockSummary { Code = "002297", Price = 28.36, ChangePercent = 10.0 },
+            new MainFundSummary(),
+            new LimitUpContext(),
+            new BigOrderItem[0],
+            new[]
+            {
+                new PricePoint { Time = day.AddHours(9).AddMinutes(30), ChangePercent = 0 },
+                new PricePoint { Time = day.AddHours(10).AddMinutes(30), ChangePercent = 10 },
+            },
+            new[]
+            {
+                new MinuteTurnoverPoint { Time = day.AddHours(9).AddMinutes(30), CumulativeAmount = 100 },
+            },
+            DataFreshness.Fresh,
+            DataFreshness.Fresh,
+            DataFreshness.Fresh,
+            DataFreshness.Missing,
+            day.AddHours(10).AddMinutes(30),
+            day.AddHours(10).AddMinutes(30));
+        var series = new BigOrderSeriesBuilder().Build(
+            snapshot.Orders, snapshot.MinuteTurnover, snapshot.MinuteTurnoverFreshness);
+
+        using (var control = new BigOrderChartControl())
+        {
+            control.Size = new Size(1000, 650);
+            control.SetSnapshot(snapshot, series);
+            AssertTrue(control.LayoutBands[0].Left >= 52, "left price axis margin");
+            AssertTrue(control.ClientSize.Width - control.LayoutBands[0].Right >= 48, "right pct axis margin");
+            AssertEqual(5, control.HourGridXs.Count, "four hour cells");
+            AssertEqual(9, control.HalfHourGridXs.Count, "eight half-hour cells");
+            AssertEqual(2, control.HalfHourRows.Count, "turnover and big-order rows");
+            AssertEqual(5, control.AxisTicks.Count, "paired axis ticks");
+            AssertTrue(control.AxisTicks.All(value => value.Price.HasValue), "price ticks available");
+            using (var bitmap = new Bitmap(1000, 650))
+                control.DrawToBitmap(bitmap, control.ClientRectangle);
+        }
     }
 
     private static void TestRefreshCoordinator()
