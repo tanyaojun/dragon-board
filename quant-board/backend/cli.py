@@ -30,6 +30,7 @@ from backend.data.mongodb_cleanup import plan_mongodb_dataset_cleanup
 from backend.data.mongodb_snapshot_repair import backfill_empty_snapshot_rows
 from backend.data.mongodb_backup import get_mongodb_backup_service
 from backend.data.mongodb_research_repair import repair_mongodb_research_metadata
+from backend.data.jump_backfill import backfill_jump_fields
 from backend.data.repository import Repository
 from backend.data.repository_factory import create_repository
 from backend.data.schemas import ImportDatasetRequest
@@ -432,9 +433,18 @@ def cmd_repair_mongodb_research_metadata(args: argparse.Namespace) -> None:
     )
 
 
+def cmd_backfill_jump_fields(args: argparse.Namespace) -> None:
+    print_json(
+        backfill_jump_fields(
+            _runtime_mongodb_database(),
+            dataset_id=args.dataset_id,
+            trading_dates=args.trading_date or None,
+            dry_run=not bool(args.apply),
+        )
+    )
+
+
 def cmd_backup_mongodb(args: argparse.Namespace) -> None:
-    if not args.full:
-        raise SystemExit("only --full MongoDB backup is supported")
     settings = get_settings()
     db = get_mongodb_database(
         settings.mongodb_uri,
@@ -443,7 +453,12 @@ def cmd_backup_mongodb(args: argparse.Namespace) -> None:
         server_selection_timeout_ms=settings.mongodb_server_selection_timeout_ms,
     )
     service = get_mongodb_backup_service()
-    result = service.create_full_backup(db)
+    if args.light:
+        result = service.create_light_backup(db)
+    elif args.full:
+        result = service.create_full_backup(db)
+    else:
+        raise SystemExit("use --full or --light")
     if result.get("ok"):
         result["verify"] = service.verify_backup(result["backupId"])
     print_json(result)
@@ -1305,12 +1320,19 @@ def build_parser() -> argparse.ArgumentParser:
     backfill_mongodb_cmd.add_argument("--apply", action="store_true")
     backfill_mongodb_cmd.set_defaults(func=cmd_backfill_empty_mongodb_snapshots)
 
+    backfill_jump_cmd = sub.add_parser("backfill-jump-fields", help="Backfill jumpDirection/jumpConfidence in snapshot_stock_rows from compRank history")
+    backfill_jump_cmd.add_argument("--dataset-id", default="dragonboard_live")
+    backfill_jump_cmd.add_argument("--trading-date", action="append", default=[])
+    backfill_jump_cmd.add_argument("--apply", action="store_true")
+    backfill_jump_cmd.set_defaults(func=cmd_backfill_jump_fields)
+
     repair_mongodb_research_cmd = sub.add_parser("repair-mongodb-research-metadata", help="Preview or repair MongoDB research metadata and test theme pollution")
     repair_mongodb_research_cmd.add_argument("--apply", action="store_true")
     repair_mongodb_research_cmd.set_defaults(func=cmd_repair_mongodb_research_metadata)
 
-    backup_mongodb_cmd = sub.add_parser("backup-mongodb", help="Create a full local MongoDB backup")
-    backup_mongodb_cmd.add_argument("--full", action="store_true", required=True)
+    backup_mongodb_cmd = sub.add_parser("backup-mongodb", help="Create a full or light local MongoDB backup")
+    backup_mongodb_cmd.add_argument("--full", action="store_true")
+    backup_mongodb_cmd.add_argument("--light", action="store_true")
     backup_mongodb_cmd.set_defaults(func=cmd_backup_mongodb)
 
     verify_mongodb_backup_cmd = sub.add_parser("verify-mongodb-backup", help="Verify a local MongoDB backup")

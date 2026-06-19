@@ -1,6 +1,10 @@
 import { getRankTrendAnalysis } from '../rankTrend/compat'
 import { resolveSnapshotFeatureCoverage } from './snapshotQualityGate'
 import { StockUtils } from '../../utils/common'
+import {
+  computeResonanceScore,
+  normalizeResonanceIntensity,
+} from '../candidate/TradingPoolAnalysisService'
 import type { Depth10Book, DepthLevel, L2Summary, TickTrade } from '../../types'
 import type {
   SnapshotFrameRow,
@@ -61,6 +65,8 @@ function getMergedStockRankTrendView(stock: any) {
     crossConfidence: rankTrend?.technical.signals.zeroCross.confidence ?? 0,
     finalSignal: rankTrend?.decision.final.signal ?? 'none',
     finalConfidence: rankTrend?.decision.final.confidence ?? 0,
+    jumpDirection: rankTrend?.jump?.direction ?? 'none',
+    jumpConfidence: rankTrend?.jump?.confidence ?? 0,
     rankChange: rankTrend ? Math.round(rankTrend.meta.change) : 0,
   }
 }
@@ -186,10 +192,39 @@ function getRawSignalValue(item: any, key: 'direction' | 'acceleration' | 'cross
   }
 }
 
+function computeResonanceFromSignals(signals: {
+  macdCross: string
+  jumpDirection: string
+  jumpConfidence: number
+  finalSignal: string
+  finalConfidence: number
+  directionSignal: string
+  directionConfidence: number
+  accelerationSignal: string
+  accelerationConfidence: number
+  crossSignal: string
+  crossConfidence: number
+}): number {
+  const score = computeResonanceScore({
+    macdCross: signals.macdCross as 'golden' | 'death' | null,
+    jumpDirection: signals.jumpDirection as 'buy' | 'sell' | null,
+    jumpConfidence: signals.jumpConfidence,
+    finalSignal: signals.finalSignal as string | null,
+    finalConfidence: signals.finalConfidence,
+    directionSignal: signals.directionSignal as string | null,
+    directionConfidence: signals.directionConfidence,
+    accelerationSignal: signals.accelerationSignal as string | null,
+    accelerationConfidence: signals.accelerationConfidence,
+    zeroCrossSignal: signals.crossSignal as string | null,
+    zeroCrossConfidence: signals.crossConfidence,
+  })
+  return normalizeResonanceIntensity(score.totalScore).pct
+}
+
 function getCompactSignalColumns(item: any, sourceStock?: any) {
   if (sourceStock) {
     const rankTrendView = getMergedStockRankTrendView(sourceStock)
-    return {
+    const signals = {
       rankChange: Number(rankTrendView.rankChange) || 0,
       directionSignal: rankTrendView.directionSignal || 'none',
       directionConfidence: Number(rankTrendView.directionConfidence) || 0,
@@ -199,7 +234,11 @@ function getCompactSignalColumns(item: any, sourceStock?: any) {
       crossConfidence: Number(rankTrendView.crossConfidence) || 0,
       finalSignal: rankTrendView.finalSignal || 'none',
       finalConfidence: Number(rankTrendView.finalConfidence) || 0,
+      jumpDirection: rankTrendView.jumpDirection || 'none',
+      jumpConfidence: Number(rankTrendView.jumpConfidence) || 0,
+      macdCross: rankTrendView.macdCross || 'none',
     }
+    return { ...signals, resonanceIntensity: computeResonanceFromSignals(signals) }
   }
 
   const direction = getRawSignalValue(item, 'direction')
@@ -207,7 +246,11 @@ function getCompactSignalColumns(item: any, sourceStock?: any) {
   const cross = getRawSignalValue(item, 'cross')
   const final = getRawSignalValue(item, 'final')
 
-  return {
+  const jumpDirection = typeof item?.jumpDirection === 'string' ? item.jumpDirection : 'none'
+  const jumpConfidence = Number.isFinite(Number(item?.jumpConfidence)) ? Number(item.jumpConfidence) : 0
+  const macdCross = typeof item?.macdCross === 'string' ? item.macdCross : 'none'
+
+  const signals = {
     rankChange: Number(item?.rankChange) || 0,
     directionSignal: direction.signal,
     directionConfidence: direction.confidence,
@@ -217,7 +260,11 @@ function getCompactSignalColumns(item: any, sourceStock?: any) {
     crossConfidence: cross.confidence,
     finalSignal: final.signal,
     finalConfidence: final.confidence,
+    jumpDirection,
+    jumpConfidence,
+    macdCross,
   }
+  return { ...signals, resonanceIntensity: computeResonanceFromSignals(signals) }
 }
 
 function buildRotationSummary(rotationAnalysis: any): Record<string, any> | null {

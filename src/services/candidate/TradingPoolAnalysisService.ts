@@ -123,7 +123,7 @@ function directionSign(signal: string | null | undefined): number {
   return 0
 }
 
-function computeResonanceScore(
+export function computeResonanceScore(
   signals: Pick<
     TradingPoolSignalSnapshot,
     | 'macdCross'

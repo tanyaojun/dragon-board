@@ -2095,6 +2095,10 @@ class Repository:
             "crossConfidence": model.cross_confidence,
             "finalSignal": model.final_signal,
             "finalConfidence": model.final_confidence,
+            "jumpDirection": model.jump_direction,
+            "jumpConfidence": model.jump_confidence,
+            "macdCross": model.macd_cross,
+            "resonanceIntensity": model.resonance_intensity,
         }
         return {key: value for key, value in item.items() if value is not None}
 
@@ -2301,6 +2305,10 @@ class Repository:
             cross_confidence=_maybe_float(item.get("crossConfidence")),
             final_signal=item.get("finalSignal"),
             final_confidence=_maybe_float(item.get("finalConfidence")),
+            jump_direction=item.get("jumpDirection"),
+            jump_confidence=_maybe_float(item.get("jumpConfidence")),
+            macd_cross=item.get("macdCross"),
+            resonance_intensity=_maybe_float(item.get("resonanceIntensity")),
         )
 
     @staticmethod

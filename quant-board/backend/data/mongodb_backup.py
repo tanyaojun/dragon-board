@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import hashlib
 import json
 import os
@@ -66,6 +67,21 @@ def _safe_relative_key(prefix: str, key: str) -> Path | None:
     return path
 
 
+# 轻量备份集合：仅当日新增的快照四表。
+# 历史快照已由全量备份覆盖，回测结果可重现不需每日备份。
+LIGHT_BACKUP_COLLECTIONS: tuple[str, ...] = (
+    "snapshot_records",
+    "snapshot_frames",
+    "snapshot_stock_rows",
+    "snapshot_sector_rows",
+)
+
+# 静态集合：极少变化，仅全量备份覆盖
+STATIC_COLLECTIONS: tuple[str, ...] = tuple(
+    c for c in ALL_COLLECTIONS if c not in LIGHT_BACKUP_COLLECTIONS
+)
+
+
 class MongoBackupService:
     def __init__(
         self,
@@ -82,8 +98,31 @@ class MongoBackupService:
         self.object_store = object_store
         self.retention_days = max(1, int(retention_days or 30))
 
+    def create_light_backup(self, db: Any, *, backup_id: str | None = None) -> dict[str, Any]:
+        """轻量备份：仅 dump 每日变化的 snapshot/backtest 集合，跳过静态数据。"""
+        return self._create_backup(
+            db,
+            backup_id=backup_id or _default_backup_id(),
+            collections=LIGHT_BACKUP_COLLECTIONS,
+            strategy="light_dump",
+        )
+
     def create_full_backup(self, db: Any, *, backup_id: str | None = None) -> dict[str, Any]:
-        backup_id = backup_id or _default_backup_id()
+        return self._create_backup(
+            db,
+            backup_id=backup_id or _default_backup_id(),
+            collections=self.collections,
+            strategy="full_dump",
+        )
+
+    def _create_backup(
+        self,
+        db: Any,
+        *,
+        backup_id: str,
+        collections: Iterable[str],
+        strategy: str,
+    ) -> dict[str, Any]:
         local_dir = self.full_backup_dir(backup_id)
         if local_dir.exists():
             return {
@@ -94,9 +133,9 @@ class MongoBackupService:
         dump_dir = local_dir / "dump"
         dump_dir.mkdir(parents=True)
 
-        collections: dict[str, dict[str, Any]] = {}
+        result_collections: dict[str, dict[str, Any]] = {}
         doc_counts: dict[str, int] = {}
-        for name in self.collections:
+        for name in collections:
             collection = db[name]
             doc_count = (
                 int(collection.count_documents({}))
@@ -108,8 +147,8 @@ class MongoBackupService:
                 if hasattr(collection, "index_information")
                 else {}
             )
-            dump_path = dump_dir / f"{name}.jsonl"
-            with dump_path.open("w", encoding="utf-8", newline="\n") as handle:
+            dump_path = dump_dir / f"{name}.jsonl.gz"
+            with gzip.open(dump_path, "wt", encoding="utf-8", compresslevel=6, newline="\n") as handle:
                 cursor = collection.find({}) if hasattr(collection, "find") else []
                 for document in cursor:
                     handle.write(
@@ -124,7 +163,7 @@ class MongoBackupService:
             file_hash = sha256_file(dump_path)
             byte_size = dump_path.stat().st_size
             doc_counts[name] = doc_count
-            collections[name] = {
+            result_collections[name] = {
                 "docCount": doc_count,
                 "indexHash": sha256_bytes(_stable_json_bytes(index_info)),
                 "file": f"dump/{dump_path.name}",
@@ -139,7 +178,7 @@ class MongoBackupService:
             "createdAt": _utc_now(),
             "gitCommit": "",
             "sourceMongoUriRedacted": "",
-            "strategy": "full_dump",
+            "strategy": strategy,
             "objectKey": f"full/backup_id={backup_id}/",
             "objectStore": "cloudflare_r2",
             "bucket": getattr(self.object_store, "bucket", ""),
@@ -147,7 +186,7 @@ class MongoBackupService:
             "verified": False,
             "lastError": None,
             "docCounts": doc_counts,
-            "collections": collections,
+            "collections": result_collections,
         }
         self._write_manifest(local_dir, manifest)
         self._write_sha256sums(local_dir, manifest)
@@ -443,7 +482,10 @@ class MongoBackupService:
         ]
         dump_dir = local_dir / "dump"
         if dump_dir.is_dir():
-            files.extend(path for path in sorted(dump_dir.iterdir()) if path.is_file())
+            files.extend(
+                path for path in sorted(dump_dir.iterdir())
+                if path.is_file() and path.suffix in (".jsonl", ".gz")
+            )
         return [path for path in files if path.is_file()]
 
     def _read_manifest(self, local_dir: Path) -> dict[str, Any]:
@@ -546,6 +588,13 @@ def _remove_tree(path: Path) -> None:
     path.rmdir()
 
 
+def _open_backup_file(path: Path):
+    """打开备份文件，自动处理 gzip 压缩。"""
+    if path.suffix == ".gz":
+        return gzip.open(path, "rt", encoding="utf-8")
+    return path.open("r", encoding="utf-8")
+
+
 def _count_jsonl_rows(path: Path) -> int:
-    with path.open("r", encoding="utf-8") as handle:
+    with _open_backup_file(path) as handle:
         return sum(1 for line in handle if line.strip())

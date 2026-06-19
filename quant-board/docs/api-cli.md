@@ -70,6 +70,28 @@ cd quant-board
 
 2026-06-11 已执行一次正式修复，结果见 [mongodb-snapshot-audit-2026-06-11.md](mongodb-snapshot-audit-2026-06-11.md)。
 
+### MongoDB 跃迁字段回填 CLI
+
+回填历史快照中缺失的 `jumpDirection` 和 `jumpConfidence`。从 `snapshot_stock_rows` 的 `compRank` 跨帧序列重建百分位时间线，运行与前端 `detectRankJumps` 等价的跳变检测算法。
+
+```powershell
+cd quant-board
+.\.venv\Scripts\python.exe -m backend.cli backfill-jump-fields --dataset-id dragonboard_live
+.\.venv\Scripts\python.exe -m backend.cli backfill-jump-fields --dataset-id dragonboard_live --apply
+.\.venv\Scripts\python.exe -m backend.cli backfill-jump-fields --trading-date 2026-06-19 --apply
+```
+
+回填字段：
+
+| 字段 | 来源 | 不回填 |
+|------|------|--------|
+| `jumpDirection` | compRank 百分位序列 + 跳变检测 | — |
+| `jumpConfidence` | 同上 | — |
+| `macdCross` | MACD DIF/DEA 原始值未存储 | 不可回填 |
+| `resonanceIntensity` | 依赖 macdCross，偏差 ±10% | 不可回填 |
+
+2026-06-19 已执行一次全量回填：56 个交易日，362,718 行，0 错误。
+
 ## 热榜情绪 API、回填和盘后调度
 
 ### `POST /api/hotlist-sentiment/ingest`
@@ -1864,16 +1886,54 @@ max_drawdown: -0.08
 
 ### 备份同步 CLI
 
-CLI 与 API 复用同一服务层：
+以下是 SQLite/Supabase 迁移前的旧备份命令，MongoDB 模式下已禁用：
 
 ```powershell
-cd d:\dragon-board\quant-board
-.\.venv\Scripts\python.exe -m backend.cli smoke-backup
-.\.venv\Scripts\python.exe -m backend.cli push-outbox --limit 50
-.\.venv\Scripts\python.exe -m backend.cli push-backup
-.\.venv\Scripts\python.exe -m backend.cli push-backup --full-history
-.\.venv\Scripts\python.exe -m backend.cli prune-backup --dry-run
-.\.venv\Scripts\python.exe -m backend.cli pull-backup
+.\.venv\Scripts\python.exe -m backend.cli push-backup        # 已禁用
+.\.venv\Scripts\python.exe -m backend.cli pull-backup        # 已禁用
+```
+
+#### MongoDB 备份
+
+**手动备份：**
+
+```powershell
+# 轻量备份（仅 snapshot/backtest/trade 集合，~1.2GB，约30秒）
+.\.venv\Scripts\python.exe -m backend.cli backup-mongodb --light
+
+# 全量备份（所有集合，~1.7GB，约60秒）
+.\.venv\Scripts\python.exe -m backend.cli backup-mongodb --full
+
+# 查看备份列表
+.\.venv\Scripts\python.exe -m backend.cli list-mongodb-backups
+
+# 校验备份
+.\.venv\Scripts\python.exe -m backend.cli verify-mongodb-backup --backup-id 20260619T063348Z
+
+# 清理过期备份（默认保留30天）
+.\.venv\Scripts\python.exe -m backend.cli prune-mongodb-backups --dry-run
+.\.venv\Scripts\python.exe -m backend.cli prune-mongodb-backups
+```
+
+**自动备份（Windows 计划任务）：**
+
+| 任务名 | 频率 | 时间 | 类型 |
+|--------|------|------|------|
+| `QuantBoard-LightBackup` | 周一至周五 | 15:30 | 轻量（13个集合） |
+| `QuantBoard-FullBackup` | 周五 | 16:00 | 全量（25个集合）+ 上传 R2 |
+
+脚本 `scripts/scheduled_backup.py` 内置交易日历判断，非交易日自动跳过。周五全量备份执行后自动上传到 R2 云存储并清理本地过期备份。
+
+```powershell
+# 手动运行（自动判断类型）
+.venv\Scripts\python.exe scripts\scheduled_backup.py
+
+# 强制指定类型
+.venv\Scripts\python.exe scripts\scheduled_backup.py --light
+.venv\Scripts\python.exe scripts\scheduled_backup.py --full
+
+# 查看备份日志
+type data\backups\mongodb\scheduled_backup.log
 ```
 
 ### 存储收敛 CLI

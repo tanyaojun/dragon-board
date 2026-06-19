@@ -173,6 +173,8 @@ MongoDB 模式下 `snapshot_frames` 还承担 formal snapshot 修复对账基线
 一条快照内的一只股票一行，是 rankTrend、回测、前端列表的主要事实表。
 涨停池增强字段随股票行保存，包括 `reason`、`firstZtTime`、`lastZtTime`、`boardHeight`、`highDays`、`fengdan` 等；MongoDB 模式保持 camelCase 字段，SQLite/Supabase 历史同构表使用对应 snake_case 列。
 
+RankTrend 信号列随股票行保存：`directionSignal/Confidence`、`accelerationSignal/Confidence`、`crossSignal/Confidence`（零轴穿越）、`finalSignal/Confidence`、`jumpDirection`（跃迁方向）、`jumpConfidence`（跃迁度）、`macdCross`（MACD 金叉死叉）、`resonanceIntensity`（共振强度，由上述信号加权派生）。
+
 ### snapshot_sector_rows
 
 一条快照内的板块、题材、主线实体一行。首期可先导入，策略使用可后置。

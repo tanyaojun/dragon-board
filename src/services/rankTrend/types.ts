@@ -184,6 +184,11 @@ export interface RankTrendAnalysisResult {
       confidence: number
     }
   }
+  jump?: {
+    direction: 'buy' | 'sell' | 'hold'
+    confidence: number
+    limitUp?: boolean
+  }
   // 策略层结果是消费侧扩展，不属于 rankTrend 核心分析合同。
   strategy?: RankTrendStrategyResult
   // V5 执行层分层，镜像 Python candidateTierMode=execution 的热榜情绪融合语义。

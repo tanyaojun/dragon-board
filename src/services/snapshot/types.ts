@@ -157,6 +157,10 @@ export interface SnapshotStockRow {
   crossConfidence?: number
   finalSignal?: string
   finalConfidence?: number
+  jumpDirection?: string
+  jumpConfidence?: number
+  macdCross?: string
+  resonanceIntensity?: number
 }
 
 export type SnapshotSectorEntityType = 'sector' | 'hot_theme' | 'rotation_main_line'

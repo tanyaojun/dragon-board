@@ -161,6 +161,10 @@ class SnapshotStockRowModel(Base):
     cross_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     final_signal: Mapped[str | None] = mapped_column(String(32), nullable=True)
     final_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    jump_direction: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    jump_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    macd_cross: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    resonance_intensity: Mapped[float | None] = mapped_column(Float, nullable=True)
 
 
 class SnapshotSectorRowModel(Base):

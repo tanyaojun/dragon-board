@@ -160,6 +160,10 @@ create table snapshot_stock_rows (
   cross_confidence double precision,
   final_signal varchar(32),
   final_confidence double precision,
+  jump_direction varchar(32),
+  jump_confidence double precision,
+  macd_cross varchar(32),
+  resonance_intensity double precision,
   unique (dataset_id, row_id)
 );
 
