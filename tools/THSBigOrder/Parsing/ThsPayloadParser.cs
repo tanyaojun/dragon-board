@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Linq;
 using Newtonsoft.Json.Linq;
 using THSBigOrder.Models;
+using THSBigOrder.DataSources;
 
 namespace THSBigOrder.Parsing
 {
@@ -14,6 +15,98 @@ namespace THSBigOrder.Parsing
 
     public sealed class ThsPayloadParser
     {
+        public BigOrderSourceData ParseBigOrderSource(string stockCode, JObject payload)
+        {
+            if (payload == null || payload.Value<int?>("errorcode") != 0 ||
+                !(payload["title"] is JObject title) || !(payload["list"] is JArray list))
+                throw new PayloadParseException("invalid THS big-order payload");
+
+            var issues = new List<string>();
+            var orders = new List<BigOrderItem>();
+            foreach (var token in list.OfType<JObject>())
+            {
+                try { orders.Add(ParseOrder(token)); }
+                catch (Exception error) { issues.Add(error.Message); }
+            }
+            var prices = new List<PricePoint>();
+            ParsePrices(payload["pricechange"] as JArray, prices, issues);
+            var buy = ChineseAmount(title["mainbuy"]);
+            var sell = ChineseAmount(title["mainsell"]);
+            return new BigOrderSourceData
+            {
+                StockFallback = new StockSummary
+                {
+                    Code = stockCode,
+                    Name = (string)title["stockname"] ?? "",
+                    Price = FiniteNumber(title["price"]),
+                },
+                MainFunds = new MainFundSummary
+                {
+                    MainBuy = buy,
+                    MainSell = sell,
+                    NetAmount = buy.HasValue && sell.HasValue ? (double?)(buy.Value - sell.Value) : null,
+                    OrderCount = orders.Count,
+                },
+                Orders = orders,
+                Prices = prices,
+            };
+        }
+
+        public StockSummary ParseSinaQuote(string stockCode, byte[] payload)
+        {
+            var text = System.Text.Encoding.GetEncoding(936).GetString(payload ?? new byte[0]);
+            var marker = "hq_str_" + (stockCode.StartsWith("6") ? "sh" : "sz") + stockCode + "=\"";
+            var start = text.IndexOf(marker, StringComparison.Ordinal);
+            var end = start < 0 ? -1 : text.IndexOf('"', start + marker.Length);
+            if (start < 0 || end < 0) throw new PayloadParseException("invalid Sina quote payload");
+            var parts = text.Substring(start + marker.Length, end - start - marker.Length).Split(',');
+            if (parts.Length < 10) throw new PayloadParseException("invalid Sina quote fields");
+            var previousClose = FiniteNumber(parts[2]);
+            var price = FiniteNumber(parts[3]);
+            var volume = FiniteNumber(parts[8]);
+            var amount = FiniteNumber(parts[9]);
+            if (!amount.HasValue && volume.HasValue && price.HasValue) amount = volume.Value * price.Value;
+            return new StockSummary
+            {
+                Code = stockCode,
+                Name = parts[0],
+                Price = price,
+                ChangePercent = previousClose > 0 && price.HasValue
+                    ? (double?)((price.Value - previousClose.Value) / previousClose.Value * 100d)
+                    : null,
+                Volume = volume,
+                TotalAmount = amount,
+            };
+        }
+
+        public StockSummary ParseNormalizedQuote(string stockCode, JObject payload)
+        {
+            return ParseQuote(stockCode, payload, new List<string>());
+        }
+
+        public IReadOnlyList<MinuteTurnoverPoint> ParseTencentMinute(string stockCode, JObject payload)
+        {
+            if (payload == null || payload.Value<int?>("code") != 0)
+                throw new PayloadParseException((string)payload?["msg"] ?? "Tencent minute error");
+            var marketCode = (stockCode.StartsWith("6") ? "sh" : "sz") + stockCode;
+            var source = payload.SelectToken("data." + marketCode + ".data") as JObject;
+            if (source == null) throw new PayloadParseException("invalid Tencent minute payload");
+            return ParseMinuteData(source);
+        }
+
+        public IReadOnlyList<MinuteTurnoverPoint> ParseNormalizedMinute(JObject payload)
+        {
+            return ParseMinuteData(payload);
+        }
+
+        public LimitUpSourceData ParseLimitUpSource(string stockCode, JObject payload)
+        {
+            var rows = payload?.SelectToken("data.info") as JArray;
+            if (rows == null) throw new PayloadParseException("invalid THS limit-up payload");
+            var row = FindRow(rows, stockCode);
+            return new LimitUpSourceData { Found = row != null, Context = ParseLimitUpRow(row) };
+        }
+
         public BigOrderItem ParseOrder(JObject value)
         {
             var nature = (string)value["nature"] ?? "";
@@ -171,6 +264,57 @@ namespace THSBigOrder.Parsing
                 : DataFreshness.Fresh;
         }
 
+        private static IReadOnlyList<MinuteTurnoverPoint> ParseMinuteData(JObject data)
+        {
+            DateTime date;
+            if (data == null || !DateTime.TryParseExact((string)data["date"], "yyyyMMdd",
+                CultureInfo.InvariantCulture, DateTimeStyles.None, out date) || !(data["points"] is JArray))
+            {
+                var rawRows = data?["data"] as JArray;
+                if (data == null || !DateTime.TryParseExact((string)data["date"], "yyyyMMdd",
+                    CultureInfo.InvariantCulture, DateTimeStyles.None, out date) || rawRows == null)
+                    throw new PayloadParseException("invalid Tencent minute payload");
+                var normalized = new JArray(rawRows.Select(value =>
+                {
+                    var parts = value.ToString().Trim().Split((char[])null, StringSplitOptions.RemoveEmptyEntries);
+                    if (parts.Length != 4) throw new PayloadParseException("invalid Tencent minute row");
+                    return new JObject
+                    {
+                        ["time"] = parts[0], ["price"] = parts[1],
+                        ["cumulativeVolume"] = parts[2], ["cumulativeAmount"] = parts[3],
+                    };
+                }));
+                data = new JObject { ["date"] = date.ToString("yyyyMMdd"), ["points"] = normalized };
+            }
+
+            var output = new List<MinuteTurnoverPoint>();
+            DateTime? previous = null;
+            double previousVolume = 0;
+            double previousAmount = 0;
+            foreach (var row in ((JArray)data["points"]).OfType<JObject>())
+            {
+                DateTime time;
+                var price = FiniteNumber(row["price"]);
+                var volume = FiniteNumber(row["cumulativeVolume"]);
+                var amount = FiniteNumber(row["cumulativeAmount"]);
+                if (!DateTime.TryParseExact(date.ToString("yyyyMMdd") + (string)row["time"],
+                        "yyyyMMddHHmm", CultureInfo.InvariantCulture, DateTimeStyles.None, out time) ||
+                    !price.HasValue || !volume.HasValue || !amount.HasValue ||
+                    price <= 0 || volume < 0 || amount < 0 || !IsTradingTime(time) ||
+                    previous.HasValue && (time <= previous || volume < previousVolume || amount < previousAmount))
+                    throw new PayloadParseException("invalid Tencent minute row");
+                output.Add(new MinuteTurnoverPoint
+                {
+                    Time = time, Price = price.Value, CumulativeVolume = volume.Value,
+                    CumulativeAmount = amount.Value,
+                });
+                previous = time;
+                previousVolume = volume.Value;
+                previousAmount = amount.Value;
+            }
+            return output;
+        }
+
         private static bool IsTradingTime(DateTime value)
         {
             var time = value.TimeOfDay;
@@ -197,6 +341,11 @@ namespace THSBigOrder.Parsing
         private static LimitUpContext ParseLimitUp(string stockCode, JObject payload, IList<string> issues)
         {
             var row = FindRow(payload?.SelectToken("data.info") as JArray, stockCode);
+            return ParseLimitUpRow(row);
+        }
+
+        private static LimitUpContext ParseLimitUpRow(JObject row)
+        {
             return new LimitUpContext
             {
                 SealAmount = FiniteNumber(row?["order_amount"]),

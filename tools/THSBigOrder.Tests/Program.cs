@@ -14,6 +14,7 @@ using THSBigOrder.Models;
 using THSBigOrder.Parsing;
 using THSBigOrder.Analytics;
 using THSBigOrder.Controls;
+using THSBigOrder.DataSources;
 using THSBigOrder.Filtering;
 using THSBigOrder.Refresh;
 
@@ -30,6 +31,9 @@ internal static class Program
         Run("THS order parser maps four natures and formatted values", TestOrderParsing);
         Run("THS snapshot parser merges title, quote, limit-up and price points", TestSnapshotParsing);
         Run("THS snapshot parser reads Tencent minute turnover", TestMinuteTurnoverParsing);
+        Run("Direct Sina quote parser decodes GBK fields", TestDirectSinaQuoteParsing);
+        Run("Direct Tencent minute parser validates nested rows", TestDirectTencentMinuteParsing);
+        Run("Direct THS payload parsers distinguish empty limit-up", TestDirectThsParsing);
         Run("Proxy envelope maps degraded, stale and fresh empty states", TestEnvelopeStates);
         Run("Provider loads four proxy routes in parallel", () => TestProviderParallelLoad().GetAwaiter().GetResult());
         Run("Provider stale fallback is isolated by stock code", () => TestProviderStaleIsolation().GetAwaiter().GetResult());
@@ -143,6 +147,64 @@ internal static class Program
         AssertEqual(184435426.43d, snapshot.MinuteTurnover[1].CumulativeAmount, "minute cumulative amount");
         AssertEqual(DataFreshness.Fresh, snapshot.MinuteTurnoverFreshness, "minute freshness");
         AssertTrue(snapshot.Issues.Count >= 2, "invalid minute points reported");
+    }
+
+    private static void TestDirectSinaQuoteParsing()
+    {
+        var bytes = Encoding.GetEncoding(936).GetBytes(
+            "var hq_str_sz002297=\"博云新材,25.70,25.76,28.36,28.36,25.69,0,0,117850000,3342254360,0\";");
+        var quote = new ThsPayloadParser().ParseSinaQuote("002297", bytes);
+        AssertEqual("博云新材", quote.Name, "sina name");
+        AssertNear(28.36d, quote.Price.Value, 0.0001d, "sina price");
+        AssertNear(10.0932d, quote.ChangePercent.Value, 0.001d, "sina change");
+        AssertEqual(117850000d, quote.Volume.Value, "sina volume shares");
+        AssertEqual(3342254360d, quote.TotalAmount.Value, "sina amount");
+        AssertEqual<double?>(null, quote.TurnoverRate, "sina turnover unavailable");
+        AssertEqual<double?>(null, quote.VolumeRatio, "sina ratio unavailable");
+    }
+
+    private static void TestDirectTencentMinuteParsing()
+    {
+        var payload = JObject.Parse(@"{
+          'code':0,
+          'data':{'sz002297':{'data':{'date':'20260618','data':[
+            '0930 25.70 11848 30449360.00',
+            '0931 25.98 71011 184435426.43'
+          ]}}}
+        }");
+        var points = new ThsPayloadParser().ParseTencentMinute("002297", payload);
+        AssertEqual(2, points.Count, "direct minute count");
+        AssertEqual(new DateTime(2026, 6, 18, 9, 30, 0), points[0].Time, "direct minute time");
+        AssertEqual(184435426.43d, points[1].CumulativeAmount, "direct minute amount");
+
+        AssertThrows<PayloadParseException>(() =>
+            new ThsPayloadParser().ParseTencentMinute("002297", JObject.Parse("{'code':1,'msg':'blocked'}")),
+            "tencent error code");
+        AssertThrows<PayloadParseException>(() =>
+            new ThsPayloadParser().ParseTencentMinute("002297", JObject.Parse(
+                "{'code':0,'data':{'sz002297':{'data':{'date':'bad','data':[]}}}}")),
+            "tencent invalid date");
+    }
+
+    private static void TestDirectThsParsing()
+    {
+        var parser = new ThsPayloadParser();
+        var big = parser.ParseBigOrderSource("002297", JObject.Parse(@"{
+          'errorcode':0,
+          'title':{'stockname':'博云新材','price':28.36,'mainbuy':'100万','mainsell':'40万'},
+          'list':[{'nature':'主力主买','volume':'10手','avgprice':'28.36','money':28360,'otime':'2026-06-18 09:30:01'}],
+          'pricechange':[]
+        }"));
+        AssertEqual("博云新材", big.StockFallback.Name, "direct THS name");
+        AssertEqual(1, big.Orders.Count, "direct THS orders");
+        AssertEqual(600000d, big.MainFunds.NetAmount.Value, "direct THS net");
+
+        var empty = parser.ParseLimitUpSource("002297", JObject.Parse("{'data':{'info':[]}}"));
+        AssertTrue(!empty.Found, "empty limit-up is valid");
+        AssertEqual<double?>(null, empty.Context.SealAmount, "empty limit-up context");
+        AssertThrows<PayloadParseException>(() =>
+            parser.ParseBigOrderSource("002297", JObject.Parse("{'errorcode':1,'msg':'blocked'}")),
+            "THS error code");
     }
 
     private static async Task TestProviderParallelLoad()

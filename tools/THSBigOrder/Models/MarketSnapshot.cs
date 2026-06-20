@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using THSBigOrder.DataSources;
 
 namespace THSBigOrder.Models
 {
@@ -75,11 +76,12 @@ namespace THSBigOrder.Models
             DataFreshness limitUpFreshness,
             DateTime bigOrderFetchedAt,
             DateTime refreshedAt,
-            IReadOnlyList<string> issues = null)
+            IReadOnlyList<string> issues = null,
+            MarketSourceTransports transports = null)
             : this(
                 stockCode, stock, mainFunds, limitUp, orders, prices,
                 new MinuteTurnoverPoint[0], bigOrderFreshness, quoteFreshness,
-                DataFreshness.Missing, limitUpFreshness, bigOrderFetchedAt, refreshedAt, issues)
+                DataFreshness.Missing, limitUpFreshness, bigOrderFetchedAt, refreshedAt, issues, transports)
         {
         }
 
@@ -97,7 +99,8 @@ namespace THSBigOrder.Models
             DataFreshness limitUpFreshness,
             DateTime bigOrderFetchedAt,
             DateTime refreshedAt,
-            IReadOnlyList<string> issues = null)
+            IReadOnlyList<string> issues = null,
+            MarketSourceTransports transports = null)
         {
             StockCode = stockCode;
             Stock = stock;
@@ -113,6 +116,13 @@ namespace THSBigOrder.Models
             BigOrderFetchedAt = bigOrderFetchedAt;
             RefreshedAt = refreshedAt;
             Issues = issues ?? new string[0];
+            Transports = transports ?? new MarketSourceTransports
+            {
+                BigOrder = DefaultTransport(bigOrderFreshness),
+                Quote = DefaultTransport(quoteFreshness),
+                Minute = DefaultTransport(minuteTurnoverFreshness),
+                LimitUp = DefaultTransport(limitUpFreshness),
+            };
         }
 
         public string StockCode { get; private set; }
@@ -129,5 +139,14 @@ namespace THSBigOrder.Models
         public DateTime BigOrderFetchedAt { get; private set; }
         public DateTime RefreshedAt { get; private set; }
         public IReadOnlyList<string> Issues { get; private set; }
+        public MarketSourceTransports Transports { get; private set; }
+
+        private static DataTransport DefaultTransport(DataFreshness freshness)
+        {
+            if (freshness == DataFreshness.Failed) return DataTransport.Failed;
+            if (freshness == DataFreshness.Missing) return DataTransport.Missing;
+            if (freshness == DataFreshness.Stale) return DataTransport.Stale;
+            return DataTransport.Direct;
+        }
     }
 }
