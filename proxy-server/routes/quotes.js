@@ -310,11 +310,27 @@ function normalizeEastmoneyHistFlowResponse(data, code) {
 function parseSinaMoneyFlowResponse(data, code) {
   const clean = cleanCode(code)
   if (!data || typeof data !== 'object') return null
+
+  const r0In = parseFloat(data.r0_in) || 0
+  const r0Out = parseFloat(data.r0_out) || 0
+  const r1In = parseFloat(data.r1_in) || 0
+  const r1Out = parseFloat(data.r1_out) || 0
+
+  // 主力净额 = (超大单买入 + 大单买入) - (超大单卖出 + 大单卖出)
+  const zlje = r0In + r1In - r0Out - r1Out
+  // 超大单净额
+  const cddje = r0In - r0Out
+
+  // 分档数据缺失时，回退到 netamount（全口径净额，标记为低置信度）
+  const hasCategoryData = r0In !== 0 || r0Out !== 0 || r1In !== 0 || r1Out !== 0
+  const fallbackZlje = parseFloat(data.netamount) || 0
+
   return normalizeEastmoneyQuoteRow({
     f12: clean,
     f14: data.name || '',
     f2: data.trade,
-    f62: data.netamount,
+    f62: hasCategoryData ? zlje : fallbackZlje,
+    f66: hasCategoryData ? cddje : 0,
   })
 }
 
