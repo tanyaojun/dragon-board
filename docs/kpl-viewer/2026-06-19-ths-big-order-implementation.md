@@ -1035,7 +1035,7 @@ AssertEqual(0d, series.HalfHours[4].TotalAmount, "13:00 unchanged cumulative");
 AssertEqual("14:30-15:00", series.HalfHours[7].Label, "last label");
 ```
 
-边界规则固定为左闭右开，最后一格包含 `15:00`；大单额固定为 `BuyAmount + SellAmount`，不使用净额。
+边界规则固定为左闭右开，上午收盘点 `11:30` 计入第四格、全天收盘点 `15:00` 计入第八格；大单额固定为 `BuyAmount + SellAmount`，不使用净额。
 
 - [ ] **Step 2: 运行测试确认 RED**
 
@@ -1176,7 +1176,7 @@ Invoke-RestMethod 'http://127.0.0.1:3011/api/quotes/tencent/minute?code=002297'
 Invoke-RestMethod 'http://127.0.0.1:3011/api/big-order/ths-detail?stockCode=002297'
 ```
 
-Expected: 分钟响应包含 `date`、241 个以内的有效点及单调累计成交额；大单响应可用于八段聚合。
+Expected: 分钟响应包含 `date`、242 个以内的有效点及单调累计成交额（腾讯同时返回 `11:30` 和 `13:00` 两个午间边界点）；大单响应可用于八段聚合。
 
 - [ ] **Step 3: 启动真实 WinForms 并截图验收**
 
@@ -1208,6 +1208,429 @@ git commit -m "fix: finish THSBigOrder intraday chart upgrade"
 
 若没有验收修复，不创建空提交。
 
+### 增量执行结果
+
+- 代理测试：68/68 PASS，0 failed。
+- THSBigOrder 测试：17/17 PASS，退出码 0。
+- Release 构建：0 warnings，0 errors。
+- 实时腾讯分钟接口：`002297` 返回交易日 `20260618`、242 个分钟点、末值累计成交额 `3292498651.54` 元。
+- 实时同花顺大单接口：`002297` 返回 1263 条大单、241 个分时涨幅点。
+- 真实 WinForms：已检查 1113×679 与最小 960×640；左价格轴、右涨幅轴、四个交易小时格、八个 30 分钟格和两层金额均可读，右侧原有金额筛选按钮保留。
+- 金额对账：八段第一层合计对应腾讯末值累计成交额；八段第二层合计对应同花顺主买与主卖金额之和。
+- 验收截图只保存在忽略的 `.tmp/` 中，不纳入提交。
+
+---
+
+## 2026-06-20 均价线与双层热力增量计划
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use `executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking。用户已明确本轮采用 Inline Execution，暂不启用 subagent。
+
+**Goal:** 保持基础行情与完整分时都走腾讯代理，把主图改为共轴的“腾讯全成交累计均价（黄线）+ 同花顺大单累计成交均价（白线）”，并为底部两层八段金额增加各自独立归一化的热力填充。
+
+**Architecture:** 不修改代理合同和 `python-bridge`。`BigOrderSeriesBuilder` 从现有腾讯分钟累计量额与同花顺大单价格/手数生成两个价格量纲的纯序列；`BigOrderChartControl` 只用这两个序列建立统一价格/涨幅轴并绘制。底部热力比例在控件中按行独立计算，缺失值与零值保持不同展示语义。
+
+**Tech Stack:** C#、.NET Framework 4.8、WinForms、System.Drawing、现有无框架控制台测试入口。
+
+### 文件职责
+
+- Modify `tools/THSBigOrder/Analytics/BigOrderSeriesBuilder.cs`：新增市场累计均价和大单累计加权均价两个纯序列；保留既有 `NetFlow` 数据供分析逻辑使用，但主图不再消费它。
+- Modify `tools/THSBigOrder/Controls/BigOrderChartControl.cs`：两条均价线共轴绘制、腾讯价格缺失时使用 THS 涨幅兜底、双层热力比例与填充。
+- Modify `tools/THSBigOrder.Tests/Program.cs`：均价公式、异常点、统一轴、兜底和双层独立归一化合同测试。
+- Update `docs/kpl-viewer/2026-06-19-ths-big-order-implementation.md`：记录本轮验证结果和仍未覆盖的真实环境项。
+
+### Task 15: 用纯聚合器生成两条累计成交均价
+
+**Files:**
+- Modify: `tools/THSBigOrder/Analytics/BigOrderSeriesBuilder.cs`
+- Modify: `tools/THSBigOrder.Tests/Program.cs`
+
+- [x] **Step 1: 写腾讯全成交累计均价失败测试**
+
+在测试入口注册 `Run("Series builder computes Tencent market VWAP", TestMarketAveragePrices)`，fixture 使用腾讯字段的真实单位：累计成交量为“手”，累计成交额为“元”。核心断言：
+
+```csharp
+var day = new DateTime(2026, 6, 20);
+var turnover = new[]
+{
+    new MinuteTurnoverPoint
+    {
+        Time = day.AddHours(9).AddMinutes(30),
+        CumulativeVolume = 11848,
+        CumulativeAmount = 30449360,
+    },
+    new MinuteTurnoverPoint
+    {
+        Time = day.AddHours(9).AddMinutes(31),
+        CumulativeVolume = 71011,
+        CumulativeAmount = 184435426.43,
+    },
+};
+var series = new BigOrderSeriesBuilder().Build(
+    new BigOrderItem[0], turnover, DataFreshness.Fresh);
+AssertNear(25.70d, series.MarketAveragePrices[0].Price, 0.001d, "09:30 market VWAP");
+AssertNear(25.9728d, series.MarketAveragePrices[1].Price, 0.001d, "09:31 market VWAP");
+```
+
+再加入累计手数为 `0`、累计额为负数、`NaN`、`Infinity` 和乱序输入；断言无效点被跳过，有效结果按时间升序，且午休前后仍直接使用各时点累计值，不做二次差分。
+
+测试入口现有断言工具没有浮点误差比较；本步骤同时增加：
+
+```csharp
+private static void AssertNear(double expected, double actual, double tolerance, string label)
+{
+    if (Math.Abs(expected - actual) > tolerance)
+        throw new InvalidOperationException(
+            label + ": expected " + expected + ", actual " + actual);
+}
+```
+
+- [x] **Step 2: 运行 C# 测试确认 RED**
+
+Run: `dotnet run --project tools/THSBigOrder.Tests/THSBigOrder.Tests.csproj -c Release`
+
+Expected: FAIL，`BigOrderSeries` 尚无 `MarketAveragePrices`。
+
+- [x] **Step 3: 写同花顺大单累计加权均价失败测试**
+
+注册 `Run("Series builder computes cumulative big-order average price", TestBigOrderAveragePrices)`；使用价格与手数差异明显的三笔订单，证明不是简单算术平均，也不是用界面四舍五入后的金额反推：
+
+```csharp
+var orders = new[]
+{
+    new BigOrderItem { Time = day.AddHours(9).AddMinutes(30), Price = 10, Volume = 100, Amount = 99999, Type = 2 },
+    new BigOrderItem { Time = day.AddHours(9).AddMinutes(31), Price = 20, Volume = 300, Amount = 1, Type = 3 },
+    new BigOrderItem { Time = day.AddHours(9).AddMinutes(32), Price = 30, Volume = 100, Amount = 1, Type = 4 },
+};
+var series = new BigOrderSeriesBuilder().Build(orders);
+AssertNear(10d, series.BigOrderAveragePrices[0].Price, 0.0001d, "first big-order average");
+AssertNear(17.5d, series.BigOrderAveragePrices[1].Price, 0.0001d, "weighted big-order average");
+AssertNear(20d, series.BigOrderAveragePrices[2].Price, 0.0001d, "cumulative big-order average");
+```
+
+补充 `Price <= 0`、`Volume <= 0`、`NaN` 和 `Infinity` 输入；这些订单仍可留在其它既有统计口径中，但不得进入累计均价的分子或分母。
+
+- [x] **Step 4: 实现最小价格序列模型和公式**
+
+在 `BigOrderSeriesBuilder.cs` 增加：
+
+```csharp
+public sealed class AveragePricePoint
+{
+    public DateTime Time { get; set; }
+    public double Price { get; set; }
+}
+```
+
+`BigOrderSeries` 增加：
+
+```csharp
+public IReadOnlyList<AveragePricePoint> MarketAveragePrices { get; set; }
+public IReadOnlyList<AveragePricePoint> BigOrderAveragePrices { get; set; }
+```
+
+腾讯市场均价只在 `turnoverFreshness` 为 `Fresh/Stale` 时生成，并且只接受有限且 `CumulativeVolume > 0`、`CumulativeAmount >= 0` 的点：
+
+```csharp
+var marketAveragePrices = hasTurnover
+    ? (turnover ?? Enumerable.Empty<MinuteTurnoverPoint>())
+        .Where(point => IsFinite(point.CumulativeVolume) &&
+                        IsFinite(point.CumulativeAmount) &&
+                        point.CumulativeVolume > 0 &&
+                        point.CumulativeAmount >= 0)
+        .OrderBy(point => point.Time)
+        .Select(point => new AveragePricePoint
+        {
+            Time = point.Time,
+            Price = point.CumulativeAmount / (point.CumulativeVolume * 100d),
+        })
+        .Where(point => IsFinite(point.Price) && point.Price > 0)
+        .ToList()
+    : new List<AveragePricePoint>();
+```
+
+同花顺大单均价按时间累加 `Price * Volume` 与 `Volume`，每个有效订单生成一个点：
+
+```csharp
+double weightedPrice = 0;
+double cumulativeVolume = 0;
+var bigOrderAveragePrices = new List<AveragePricePoint>();
+foreach (var order in orders.Where(IsValidPriceVolume))
+{
+    weightedPrice += order.Price * order.Volume;
+    cumulativeVolume += order.Volume;
+    bigOrderAveragePrices.Add(new AveragePricePoint
+    {
+        Time = order.Time,
+        Price = weightedPrice / cumulativeVolume,
+    });
+}
+```
+
+增加局部 `IsFinite`/`IsValidPriceVolume` 私有方法，不引入新工具类或依赖。把两个序列写入 `BigOrderSeries` 返回值；不删除 `NetFlow` 和 `Thresholds`，避免扩大本轮影响面。
+
+- [x] **Step 5: 运行测试确认 GREEN 并提交**
+
+Run: `dotnet run --project tools/THSBigOrder.Tests/THSBigOrder.Tests.csproj -c Release`
+
+Expected: 所有测试输出 `PASS`，退出码 0。
+
+```powershell
+git add -- tools/THSBigOrder/Analytics/BigOrderSeriesBuilder.cs tools/THSBigOrder.Tests/Program.cs
+git commit -m "feat(tools): compute intraday average price series"
+```
+
+### Task 16: 两条均价线共用价格/涨幅轴
+
+**Files:**
+- Modify: `tools/THSBigOrder/Controls/BigOrderChartControl.cs`
+- Modify: `tools/THSBigOrder.Tests/Program.cs`
+
+- [x] **Step 1: 写统一轴和线数据合同失败测试**
+
+给 `BigOrderChartControl.cs` 增加公开只读合同类型；它表示最终交给主图的涨幅坐标，不暴露 GDI 对象：
+
+```csharp
+public sealed class ChartLinePoint
+{
+    public DateTime Time { get; set; }
+    public double Value { get; set; }
+}
+```
+
+控件公开 `IReadOnlyList<ChartLinePoint> MarketLinePercents` 和 `BigOrderLinePercents`。构造 `StockSummary.Price=11`、`ChangePercent=10`（反推昨收 `10`）、市场均价 `10.5/11`、大单均价 `10.2/10.8`，断言：
+
+```csharp
+AssertNear(5d, control.MarketLinePercents[0].Value, 0.0001d, "market line shared percent");
+AssertNear(10d, control.MarketLinePercents[1].Value, 0.0001d, "market line second percent");
+AssertNear(2d, control.BigOrderLinePercents[0].Value, 0.0001d, "big-order line shared percent");
+AssertNear(8d, control.BigOrderLinePercents[1].Value, 0.0001d, "big-order line second percent");
+AssertTrue(control.AxisTicks.First().Percent <= 0, "axis contains zero percent");
+AssertTrue(control.AxisTicks.Last().Percent >= 10, "axis contains both lines");
+```
+
+再构造腾讯市场均价空、`snapshot.Prices` 有值的情况，断言黄线回退到 THS 涨幅；腾讯均价一旦存在就不得混入 THS 点。白线只来自 `BigOrderAveragePrices`，不读取 `NetFlow`。
+
+- [x] **Step 2: 运行测试确认 RED**
+
+Run: `dotnet run --project tools/THSBigOrder.Tests/THSBigOrder.Tests.csproj -c Release`
+
+Expected: FAIL，控件仍把 THS `pricechange` 画为黄线，并把 `NetFlow` 独立缩放为白线。
+
+- [x] **Step 3: 建立昨收与价格转涨幅的单一映射**
+
+在控件中缓存 `_previousClose`，计算优先级固定为：
+
+```csharp
+var denominator = 1d + _snapshot.Stock.ChangePercent.GetValueOrDefault() / 100d;
+_previousClose = _snapshot.Stock.Price.HasValue &&
+                 _snapshot.Stock.ChangePercent.HasValue &&
+                 Math.Abs(denominator) > 0.000001
+    ? (double?)(_snapshot.Stock.Price.Value / denominator)
+    : null;
+```
+
+当昨收有效时，两个价格序列统一转换：
+
+```csharp
+var percent = (price / _previousClose.Value - 1d) * 100d;
+```
+
+黄线数据选择规则：优先 `MarketAveragePrices`；只有它为空时才使用 `_snapshot.Prices` 的 THS 涨幅。白线只使用 `BigOrderAveragePrices`。过滤所有非有限值，不把无效点传给 GDI。
+
+- [x] **Step 4: 用两条最终线数据重建同一纵轴**
+
+`RebuildAxisTicks` 的范围来源改为 `MarketLinePercents + BigOrderLinePercents`，继续满足现有合同：包含 `0%`；有效跨度不足 `2%` 时至少展开到 `2%`；上下增加 5% 余量。左轴价格由同一个 `_previousClose` 与 tick percent 反算，右轴显示对应涨跌幅。
+
+当昨收不可用时，市场/大单价格不能可靠转成涨幅：主图只允许使用已有 THS 涨幅兜底绘制黄线，右轴按该涨幅读取；左轴显示 `-`。若 THS 涨幅也为空，则两条线不绘制，避免把价格值错误当成百分比。
+
+- [x] **Step 5: 替换绘制调用并删除本轮产生的孤儿方法**
+
+`DrawLines` 固定为：
+
+```csharp
+DrawPercentLine(graphics, _marketLinePercents.ToArray(),
+    _layoutBands[0], Color.FromArgb(225, 241, 64), 2);
+DrawPercentLine(graphics, _bigOrderLinePercents.ToArray(),
+    _layoutBands[0], Color.FromArgb(229, 235, 246), 1);
+```
+
+删除不再被任何生产代码调用的 `DrawScaledLine`。不删除 `BigOrderSeries.NetFlow`，因为它不是本轮新增且仍可能被既有分析逻辑消费。
+
+- [x] **Step 6: 运行测试和 Release 构建确认 GREEN**
+
+Run: `dotnet run --project tools/THSBigOrder.Tests/THSBigOrder.Tests.csproj -c Release`
+
+Expected: 所有测试输出 `PASS`，退出码 0。
+
+Run: `dotnet build tools/THSBigOrder/THSBigOrder.csproj -c Release`
+
+Expected: Build succeeded，0 errors；记录实际 warning 数量。
+
+- [x] **Step 7: 提交共轴绘制改动**
+
+```powershell
+git add -- tools/THSBigOrder/Controls/BigOrderChartControl.cs tools/THSBigOrder.Tests/Program.cs
+git commit -m "fix(tools): align intraday average price lines"
+```
+
+### Task 17: 为底部两层金额增加独立热力
+
+**Files:**
+- Modify: `tools/THSBigOrder/Controls/BigOrderChartControl.cs`
+- Modify: `tools/THSBigOrder.Tests/Program.cs`
+
+- [x] **Step 1: 写双层独立归一化失败测试**
+
+给控件增加只读合同 `TotalHeatRatios`（`double?`，缺失保持 `null`）和 `BigOrderHeatRatios`（`double`）。测试使用两个数量级完全不同的序列：
+
+```csharp
+var halfHours = new[]
+{
+    new HalfHourAmount { TotalAmount = 100000000, BigOrderAmount = 1000000 },
+    new HalfHourAmount { TotalAmount = 50000000, BigOrderAmount = 4000000 },
+    new HalfHourAmount { TotalAmount = 0, BigOrderAmount = 0 },
+    new HalfHourAmount { TotalAmount = null, BigOrderAmount = 2000000 },
+};
+control.SetSnapshot(snapshot, new BigOrderSeries
+{
+    Minutes = new MinuteFlow[0],
+    NetFlow = new NetFlowPoint[0],
+    Thresholds = new ThresholdFlow[0],
+    HalfHours = halfHours,
+    MarketAveragePrices = new AveragePricePoint[0],
+    BigOrderAveragePrices = new AveragePricePoint[0],
+});
+AssertNear(1d, control.TotalHeatRatios[0].Value, 0.0001d, "total row max");
+AssertNear(0.5d, control.TotalHeatRatios[1].Value, 0.0001d, "total row half");
+AssertNear(0d, control.TotalHeatRatios[2].Value, 0.0001d, "zero has no heat");
+AssertTrue(!control.TotalHeatRatios[3].HasValue, "missing has no ratio");
+AssertNear(0.25d, control.BigOrderHeatRatios[0], 0.0001d, "big row independent scale");
+AssertNear(1d, control.BigOrderHeatRatios[1], 0.0001d, "big row max");
+AssertNear(0.5d, control.BigOrderHeatRatios[3], 0.0001d, "big row half");
+```
+
+补充全零一行，断言所有比例为 `0` 且不发生除零；不足八格时缺位补为 `null/0`，不得越界。
+
+- [x] **Step 2: 运行测试确认 RED**
+
+Run: `dotnet run --project tools/THSBigOrder.Tests/THSBigOrder.Tests.csproj -c Release`
+
+Expected: FAIL，控件尚未生成热力比例。
+
+- [x] **Step 3: 实现两行独立比例计算**
+
+在 `SetSnapshot` 中调用 `RebuildHeatRatios()`。总成交额最大值只取 `TotalAmount.HasValue && TotalAmount.Value > 0`；大单最大值只取 `BigOrderAmount > 0`。分别按本行最大值计算并限制到 `[0, 1]`：
+
+```csharp
+ratio = max > 0 ? Math.Max(0, Math.Min(1, value / max)) : 0;
+```
+
+总成交额 `null` 保持 `null`，用于区分“数据缺失 `-`”与“有效零值 `0`”。两行不共享最大值，不读取右侧金额筛选阈值。
+
+- [x] **Step 4: 绘制暗底、从左到右填充和亮度层级**
+
+`DrawHalfHourAmounts` 每格先绘制原有暗底，再按本格比例绘制 `cellWidth * ratio` 的前景矩形。第一层颜色以深红到亮红插值，第二层以灰白到粉红插值；`ratio == 0` 或 `null` 不绘制前景。金额文本最后绘制并继续居中，保证不被色块覆盖：
+
+```csharp
+var heatWidth = Math.Max(0, (cellWidth - 2) * (float)ratio);
+if (heatWidth > 0)
+    graphics.FillRectangle(heatBrush, x + 1, row.Top + 1, heatWidth, row.Height - 2);
+```
+
+颜色插值保持现有高密度暗色终端风格，不增加渐变依赖、动画、图例或配置项。
+
+- [x] **Step 5: 运行测试和 Release 构建确认 GREEN**
+
+Run: `dotnet run --project tools/THSBigOrder.Tests/THSBigOrder.Tests.csproj -c Release`
+
+Expected: 所有测试输出 `PASS`，退出码 0。
+
+Run: `dotnet build tools/THSBigOrder/THSBigOrder.csproj -c Release`
+
+Expected: Build succeeded，0 errors。
+
+- [x] **Step 6: 提交热力改动**
+
+```powershell
+git add -- tools/THSBigOrder/Controls/BigOrderChartControl.cs tools/THSBigOrder.Tests/Program.cs
+git commit -m "feat(tools): add half-hour turnover heat bands"
+```
+
+### Task 18: 集成、真实数据和 WinForms 视觉验收
+
+**Files:**
+- Modify only if verification reveals a scoped defect in Tasks 15-17 files.
+- Update: `docs/kpl-viewer/2026-06-19-ths-big-order-implementation.md`
+
+- [x] **Step 1: 运行完整 C# 自动化验证**
+
+Run: `dotnet run --project tools/THSBigOrder.Tests/THSBigOrder.Tests.csproj -c Release`
+
+Expected: 所有测试输出 `PASS`，退出码 0；新增测试明确覆盖两条均价公式、无效值、共轴范围、THS 兜底、独立热力和缺失/零值区别。
+
+Run: `dotnet build tools/THSBigOrder/THSBigOrder.csproj -c Release`
+
+Expected: Build succeeded，0 errors；记录 warning 数量。本轮不改 proxy-server，因此无需把 Node 全量测试作为代码正确性的阻塞门禁。
+
+- [x] **Step 2: 确认数据入口没有漂移**
+
+Run: `rg -n "python-bridge|ws/quotes|eastmoney|DrawScaledLine" tools/THSBigOrder tools/THSBigOrder.Tests`
+
+Expected: 不新增 python-bridge、东方财富或 WebSocket 行情依赖；`DrawScaledLine` 无匹配。基础行情仍由 `/api/quotes/tencent`，分钟仍由 `/api/quotes/tencent/minute`，同花顺只承担大单明细与涨停上下文。
+
+- [x] **Step 3: 用独立代理端口做真实值抽样对账**
+
+若 3011 端口已有本任务启动的旧代理，先只定位并终止该端口对应进程，不影响用户的 3000 端口。以当前 worktree 的 `proxy-server` 在 `PORT=3011` 启动，抽取一只当日有大单的股票并核对：
+
+```text
+腾讯黄线末值 = 最后一分钟累计成交额 / (最后一分钟累计成交量 × 100)
+同花顺白线末值 = Σ(有效大单价格 × 有效大单手数) / Σ(有效大单手数)
+```
+
+Expected: 程序聚合结果与独立手算误差不超过 `0.001` 元；两值都处于当日有效成交价区间，不再出现把资金净额缩放成价格线的现象。
+
+- [x] **Step 4: 启动真实 WinForms 做桌面视觉验收**
+
+运行 Release 程序，在 1280×800 和最小 960×640 下分别检查并截图：
+
+- 黄线是腾讯全成交累计均价，白线是同花顺大单累计成交均价；二者使用同一左价格轴和右涨幅轴，纵向高低可直接比较。
+- 黄白线没有因各自最小/最大值被单独拉满主图，白线不再表示累计净流入。
+- 底部第一层与第二层各自都有从左到右的热力填充，且各自最强区间达到本行最亮/最满；大额总成交行不会压暗大单行。
+- 金额文本保持居中可读；`0` 只有暗底，缺失显示 `-` 且无热力。
+- 既有左右轴、四小时网格、八个 30 分钟格、信号点、分钟柱和右侧筛选没有退化。
+
+这是 WinForms 桌面控件，不适用网页 Playwright；必须以真实进程、窗口尺寸和截图作为视觉证据。
+
+- [x] **Step 5: 审计 diff、更新结果并做最终验证**
+
+Run: `git status --short`
+
+Expected: 只包含 `BigOrderSeriesBuilder.cs`、`BigOrderChartControl.cs`、`THSBigOrder.Tests/Program.cs` 和本实施文档；不包含主工作区已有 TdxL2Helper、构建产物或临时截图。
+
+Run: `git diff --check`
+
+Expected: 无空白错误。
+
+把自动化测试数量、构建 warning/error、真实股票代码、两条末值对账和两档窗口视觉结果写入本节下方“增量执行结果”，再按 `verification-before-completion` 重新运行最终测试与构建；不得用本计划编写前的旧结果代替。
+
+- [x] **Step 6: 仅提交本轮明确文件**
+
+```powershell
+git add -- tools/THSBigOrder/Analytics/BigOrderSeriesBuilder.cs tools/THSBigOrder/Controls/BigOrderChartControl.cs tools/THSBigOrder.Tests/Program.cs docs/kpl-viewer/2026-06-19-ths-big-order-implementation.md
+git commit -m "feat(tools): refine THSBigOrder intraday chart"
+```
+
+### 2026-06-20 增量执行结果
+
+- THSBigOrder 测试：23/23 PASS，退出码 0。新增覆盖腾讯累计成交均价、同花顺大单手数加权均价、无效数值过滤、共轴映射、THS 涨幅兜底、双层独立归一化以及最大热力文字对比度。
+- Release 构建：0 warnings，0 errors。
+- 数据入口审计：基础行情仍为 `/api/quotes/tencent`，完整分时仍为 `/api/quotes/tencent/minute`，大单明细仍为 `/api/big-order/ths-detail`；未引入 `python-bridge`、东方财富或 WebSocket 行情依赖，`DrawScaledLine` 已无生产匹配。
+- 实时对账股票 `002297`（交易日 `20260618`）：腾讯 242 个分钟点，黄线末值 `27.937808`；同花顺 1263 笔有效大单，白线末值 `28.119292`，有效大单价格区间 `25.69-28.36`。两值均由独立脚本按设计公式复算。
+- 真实 WinForms：已检查 1280×800 与最小 960×640。黄白线共用左右轴且纵向关系与真实价格一致；两层八段热力各自独立达到满格，`0`/缺失语义保留；右侧明细、四小时网格、分钟柱和信号点未见退化。
+- 视觉验收发现第二层亮粉底色与粉色金额文字对比不足；已追加失败合同并将最大热力颜色压深、文字改为近白，最终对比度测试不少于 4.5:1，复拍通过。
+- 验收环境说明：用户当前 3000 端口运行的是旧代理实例，缺少腾讯分钟路由；本轮使用当前 worktree 在 3011 临时启动代理完成验收，并已停止准确 PID。实际使用新版本时需重启 3000 端口代理。
+- 验收启动器、构建产物和截图只存在忽略的 `.tmp/`，不纳入提交。
+
 ---
 
 ## 完成判定
@@ -1217,6 +1640,8 @@ git commit -m "fix: finish THSBigOrder intraday chart upgrade"
 - 002297 固定 fixture 合同、当日动态涨停股、普通非涨停股、非法代码及代理离线/恢复路径完成验收。
 - 界面在三档 DPI 下无关键遮挡或未处理异常。
 - 分时主图显示左价格轴、右涨幅轴和四个交易小时竖格；底部显示八个 30 分钟格及成交总额/大单总额两层数据。
+- 分时主图黄线为腾讯全成交累计均价，白线为同花顺大单累计成交均价；两条线共用价格/涨幅轴，不再把累计大单净额独立缩放到价格主图。
+- 底部成交总额和大单总额各自在八段内独立归一化绘制热力，`0` 与缺失状态可区分。
 - 八段成交总额来自腾讯个股分钟累计成交额差分，八段大单总额来自同花顺大单逐笔金额求和；两者均不使用东财。
 - 竞价、真实 L2 和私有指标没有被误实现或误描述。
 - 最终提交不包含用户已有 TdxL2Helper 改动、`.superpowers/`、构建产物或过程文件。

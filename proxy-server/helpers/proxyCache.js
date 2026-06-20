@@ -12,6 +12,7 @@ export const PROXY_CACHE_TTLS = {
     eastmoneyResponse: 35,
     eastmoneyHistFlow: 300,
     tencentResponse: 5,
+    tencentMinute: 5,
     sinaResponse: 5,
     sinaMoneyFlow: 60,
     sinaMoneyFlowStale: 1800,

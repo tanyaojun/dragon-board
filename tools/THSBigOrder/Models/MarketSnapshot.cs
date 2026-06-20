@@ -53,6 +53,14 @@ namespace THSBigOrder.Models
         public double ChangePercent { get; set; }
     }
 
+    public sealed class MinuteTurnoverPoint
+    {
+        public DateTime Time { get; set; }
+        public double Price { get; set; }
+        public double CumulativeVolume { get; set; }
+        public double CumulativeAmount { get; set; }
+    }
+
     public sealed class MarketSnapshot
     {
         public MarketSnapshot(
@@ -68,6 +76,28 @@ namespace THSBigOrder.Models
             DateTime bigOrderFetchedAt,
             DateTime refreshedAt,
             IReadOnlyList<string> issues = null)
+            : this(
+                stockCode, stock, mainFunds, limitUp, orders, prices,
+                new MinuteTurnoverPoint[0], bigOrderFreshness, quoteFreshness,
+                DataFreshness.Missing, limitUpFreshness, bigOrderFetchedAt, refreshedAt, issues)
+        {
+        }
+
+        public MarketSnapshot(
+            string stockCode,
+            StockSummary stock,
+            MainFundSummary mainFunds,
+            LimitUpContext limitUp,
+            IReadOnlyList<BigOrderItem> orders,
+            IReadOnlyList<PricePoint> prices,
+            IReadOnlyList<MinuteTurnoverPoint> minuteTurnover,
+            DataFreshness bigOrderFreshness,
+            DataFreshness quoteFreshness,
+            DataFreshness minuteTurnoverFreshness,
+            DataFreshness limitUpFreshness,
+            DateTime bigOrderFetchedAt,
+            DateTime refreshedAt,
+            IReadOnlyList<string> issues = null)
         {
             StockCode = stockCode;
             Stock = stock;
@@ -75,8 +105,10 @@ namespace THSBigOrder.Models
             LimitUp = limitUp;
             Orders = orders;
             Prices = prices;
+            MinuteTurnover = minuteTurnover ?? new MinuteTurnoverPoint[0];
             BigOrderFreshness = bigOrderFreshness;
             QuoteFreshness = quoteFreshness;
+            MinuteTurnoverFreshness = minuteTurnoverFreshness;
             LimitUpFreshness = limitUpFreshness;
             BigOrderFetchedAt = bigOrderFetchedAt;
             RefreshedAt = refreshedAt;
@@ -89,8 +121,10 @@ namespace THSBigOrder.Models
         public LimitUpContext LimitUp { get; private set; }
         public IReadOnlyList<BigOrderItem> Orders { get; private set; }
         public IReadOnlyList<PricePoint> Prices { get; private set; }
+        public IReadOnlyList<MinuteTurnoverPoint> MinuteTurnover { get; private set; }
         public DataFreshness BigOrderFreshness { get; private set; }
         public DataFreshness QuoteFreshness { get; private set; }
+        public DataFreshness MinuteTurnoverFreshness { get; private set; }
         public DataFreshness LimitUpFreshness { get; private set; }
         public DateTime BigOrderFetchedAt { get; private set; }
         public DateTime RefreshedAt { get; private set; }
