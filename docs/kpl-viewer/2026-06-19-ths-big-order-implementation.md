@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 把 `tools/KPLViewer` 迁移为依赖本地代理的 `tools/THSBigOrder`，接入同花顺大单、腾讯行情和同花顺涨停池，并实现参考图风格的高密度大单监控界面。
+**Goal:** 在已经完成升级的 `tools/THSBigOrder` 上，实现新浪/腾讯/同花顺直连优先、逐来源代理降级，并让金额与买卖筛选驱动白色大单均线上的逐笔主动买卖圆点，同时清理旧顶部/底部红绿圆点。
 
-**Architecture:** `proxy-server` 新增来源明确且带缓存的同花顺大单路由，并为现有同花顺涨停池补缓存；旧 KPL 路由保持兼容。WinForms 客户端并行读取三路代理数据，解析为不可变刷新快照，再由纯聚合器生成图表序列，UI 只负责渲染和交互。
+**Architecture:** WinForms 保持 `IMarketSnapshotProvider` 门面，四个轻量来源适配器分别加载同花顺大单、新浪基础行情、腾讯分时和同花顺涨停池；每路先直连，失败时只降级到匹配的既有代理路由，双失败后仅允许同股票 stale。纯聚合器为每笔有效大单生成带累计均价的事件点，图表按金额/买卖状态过滤并绘制到白线上，UI 只同步筛选状态与渲染。
 
 **Tech Stack:** Node.js 20、Express、Node test runner、C#、.NET Framework 4.8、WinForms、Newtonsoft.Json、System.Drawing。
 
@@ -12,12 +12,13 @@
 
 ## 执行前门禁
 
-- 使用 `using-git-worktrees` 创建隔离工作区；当前主工作区包含用户的 TdxL2Helper 改动，执行时不得纳入提交。
-- 设计与实施计划必须在创建 worktree 前提交；worktree 从包含这两份文档的 commit 创建，并先验证两份路径均存在。
-- 原 `D:\dragon-board\tools\KPLViewer` 整体未被 Git 跟踪，不会自动进入 worktree。迁移任务必须先把下文列出的 9 个文件逐一复制到隔离工作区，再确认目标 `tools/THSBigOrder` 不存在。
-- 禁止批量删除。目录迁移使用同一 PowerShell 会话内经过路径校验的 `Move-Item -LiteralPath`；若目标已存在，停止并报告。
-- 每个生产行为先写失败测试并确认 RED，再写最小实现。
-- 每次提交只暂存任务列出的明确路径。
+> 当前执行入口仅为下方 **Task 19-24**。Task 1-18 是前期升级历史，不重复执行。
+
+- 用户明确要求直接在 `main` 主工作区修改，不创建 worktree；每次只暂存 Task 19-24 列出的明确文件。
+- 主工作区已有 TdxL2Helper 和过程文档改动，均视为用户内容，不读取后改写、不暂存、不提交。
+- Task 19-24 按 TDD 的 RED → GREEN 推进；直连链路与圆点链路分别提交，避免一次提交混合两个故障域。
+
+- Task 1-18 中出现的 worktree、KPLViewer 迁移和 proxy-server 新路由步骤均为历史记录；当前执行者跳过这些步骤，不据此移动目录或修改代理。
 
 ## 文件职责
 
@@ -1633,6 +1634,600 @@ git commit -m "feat(tools): refine THSBigOrder intraday chart"
 
 ---
 
+## 2026-06-20 直连降级与白线逐笔圆点增量计划
+
+### 当前增量文件职责
+
+- Create `tools/THSBigOrder/DataSources/MarketSourceContracts.cs`：定义四路 typed payload、`DataTransport`、`SourceLoadResult<T>` 和来源客户端接口。
+- Create `tools/THSBigOrder/DataSources/ThsBigOrderSourceClient.cs`：同花顺大单直连与匹配代理路由。
+- Create `tools/THSBigOrder/DataSources/SinaQuoteSourceClient.cs`：新浪基础行情直连与匹配代理路由。
+- Create `tools/THSBigOrder/DataSources/TencentMinuteSourceClient.cs`：腾讯分时直连与匹配代理路由。
+- Create `tools/THSBigOrder/DataSources/ThsLimitUpSourceClient.cs`：同花顺涨停池直连与匹配代理路由。
+- Modify `tools/THSBigOrder/Parsing/ThsPayloadParser.cs`：把现有 envelope 解析拆成可复用的四路纯解析方法；旧 `ParseSnapshot` 仅作为兼容组合入口。
+- Modify `tools/THSBigOrder/Models/MarketSnapshot.cs`：在不破坏现有构造调用的前提下增加四路 transport 状态。
+- Modify `tools/THSBigOrder/THSBigOrderDataProvider.cs`：并行执行四路“直连 → 对应代理”并合并；双失败时执行同股票逐路 stale。
+- Modify `tools/THSBigOrder/Analytics/BigOrderSeriesBuilder.cs`：为每笔有效大单生成累计均价事件点。
+- Modify `tools/THSBigOrder/Controls/BigOrderChartControl.cs`：按金额/买卖状态过滤事件点、秒级定位、在白线后绘制红绿圆点，并删除旧 `DrawSignals`。
+- Modify `tools/THSBigOrder/MainForm.cs`：把金额按钮和买卖页签状态同步给图表，显示“直连/代理降级/数据陈旧/数据不可用”。
+- Modify `tools/THSBigOrder.Tests/Program.cs`：覆盖解析、独立降级、合法空结果、stale、圆点过滤、秒级坐标和 MainForm 联动。
+- Update `docs/kpl-viewer/2026-06-19-ths-big-order-implementation.md`：记录执行证据。
+
+### Task 19: 建立四路 typed 来源合同和纯解析器
+
+**Files:**
+- Create: `tools/THSBigOrder/DataSources/MarketSourceContracts.cs`
+- Modify: `tools/THSBigOrder/Models/MarketSnapshot.cs`
+- Modify: `tools/THSBigOrder/Parsing/ThsPayloadParser.cs`
+- Modify: `tools/THSBigOrder.Tests/Program.cs`
+
+- [ ] **Step 1: 写新浪、腾讯、同花顺四路纯解析失败测试**
+
+在测试入口注册：
+
+```csharp
+Run("Direct Sina quote parser decodes GBK fields", TestDirectSinaQuoteParsing);
+Run("Direct Tencent minute parser validates nested rows", TestDirectTencentMinuteParsing);
+Run("Direct THS payload parsers distinguish empty limit-up", TestDirectThsParsing);
+```
+
+新浪 fixture 用 `Encoding.GetEncoding(936)` 生成字节，断言名称、现价、昨收推导涨幅、成交量（股）和成交额；换手、量比必须为 `null`：
+
+```csharp
+var bytes = Encoding.GetEncoding(936).GetBytes(
+    "var hq_str_sz002297=\"博云新材,25.70,25.76,28.36,28.36,25.69,0,0,117850000,3342254360,0\";");
+var quote = new ThsPayloadParser().ParseSinaQuote("002297", bytes);
+AssertEqual("博云新材", quote.Name, "sina name");
+AssertNear(28.36d, quote.Price.Value, 0.0001d, "sina price");
+AssertNear(10.0932d, quote.ChangePercent.Value, 0.001d, "sina change");
+AssertEqual(117850000d, quote.Volume.Value, "sina volume shares");
+AssertEqual(3342254360d, quote.TotalAmount.Value, "sina amount");
+AssertEqual<double?>(null, quote.TurnoverRate, "sina turnover unavailable");
+AssertEqual<double?>(null, quote.VolumeRatio, "sina ratio unavailable");
+```
+
+腾讯 fixture 使用真实嵌套结构 `code → data.sz002297.data.date/data`，断言两行被解析；`code != 0`、日期错误、非数字累计额和时间倒序均抛 `PayloadParseException`。同花顺大单直接传原始 `{errorcode,title,list,pricechange}`；涨停池空 `data.info=[]` 返回 `Found=false` 而不是异常。
+
+- [ ] **Step 2: 运行测试确认 RED**
+
+Run: `dotnet run --project tools/THSBigOrder.Tests/THSBigOrder.Tests.csproj -c Release`
+
+Expected: FAIL，缺少 `ParseSinaQuote`、`ParseTencentMinute`、`ParseBigOrderSource`、`ParseLimitUpSource` 和 typed 来源合同。
+
+- [ ] **Step 3: 定义最小 typed 来源合同**
+
+创建 `MarketSourceContracts.cs`：
+
+```csharp
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
+using THSBigOrder;
+using THSBigOrder.Models;
+
+namespace THSBigOrder.DataSources
+{
+    public enum DataTransport { Direct, ProxyFallback, Stale, Missing, Failed }
+
+    public sealed class SourceLoadResult<T>
+    {
+        public T Data { get; set; }
+        public DataFreshness Freshness { get; set; }
+        public DataTransport Transport { get; set; }
+        public DateTime FetchedAt { get; set; }
+        public string Error { get; set; }
+    }
+
+    public sealed class BigOrderSourceData
+    {
+        public StockSummary StockFallback { get; set; }
+        public MainFundSummary MainFunds { get; set; }
+        public IReadOnlyList<BigOrderItem> Orders { get; set; }
+        public IReadOnlyList<PricePoint> Prices { get; set; }
+    }
+
+    public sealed class LimitUpSourceData
+    {
+        public bool Found { get; set; }
+        public LimitUpContext Context { get; set; }
+    }
+
+    public sealed class MarketSourceTransports
+    {
+        public DataTransport BigOrder { get; set; }
+        public DataTransport Quote { get; set; }
+        public DataTransport Minute { get; set; }
+        public DataTransport LimitUp { get; set; }
+        public string Summary => SourceStatusFormatter.Format(this);
+    }
+
+    internal static class SourceStatusFormatter
+    {
+        public static string Format(MarketSourceTransports value)
+        {
+            var rows = new[]
+            {
+                new { Name = "大单", Value = value.BigOrder },
+                new { Name = "行情", Value = value.Quote },
+                new { Name = "分时", Value = value.Minute },
+                new { Name = "涨停", Value = value.LimitUp },
+            };
+            var failed = rows.Where(x => x.Value == DataTransport.Failed || x.Value == DataTransport.Missing)
+                .Select(x => x.Name).ToArray();
+            if (failed.Length > 0) return "数据不可用: " + string.Join("/", failed);
+            var stale = rows.Where(x => x.Value == DataTransport.Stale).Select(x => x.Name).ToArray();
+            if (stale.Length > 0) return "数据陈旧: " + string.Join("/", stale);
+            var proxy = rows.Where(x => x.Value == DataTransport.ProxyFallback).Select(x => x.Name).ToArray();
+            return proxy.Length > 0 ? "代理降级: " + string.Join("/", proxy) : "直连";
+        }
+    }
+
+    internal interface IMarketSourceClient<T>
+    {
+        Task<SourceLoadResult<T>> LoadDirectAsync(string stockCode, CancellationToken cancellationToken);
+        Task<SourceLoadResult<T>> LoadProxyAsync(string stockCode, CancellationToken cancellationToken);
+    }
+}
+```
+
+在 `MarketSnapshot.cs` 增加 `MarketSourceTransports`，四个属性分别对应大单、基础行情、分时、涨停；现有构造函数末尾增加可选参数 `MarketSourceTransports transports = null`，默认按 freshness 映射为 `Direct/Missing/Failed`，保证现有测试与调用无需批量改写。
+
+- [ ] **Step 4: 把 envelope 解析拆为四路纯方法**
+
+在 `ThsPayloadParser` 增加并由旧 `ParseSnapshot` 复用：
+
+```csharp
+public BigOrderSourceData ParseBigOrderSource(string stockCode, JObject payload);
+public StockSummary ParseSinaQuote(string stockCode, byte[] gbkPayload);
+public StockSummary ParseNormalizedQuote(string stockCode, JObject payload);
+public IReadOnlyList<MinuteTurnoverPoint> ParseTencentMinute(string stockCode, JObject payload);
+public IReadOnlyList<MinuteTurnoverPoint> ParseNormalizedMinute(JObject payload);
+public LimitUpSourceData ParseLimitUpSource(string stockCode, JObject payload);
+```
+
+具体合同固定如下：
+
+```csharp
+// 新浪：parts[8] 是股，parts[9] 是元；成交额缺失时才使用 volume * price。
+var volume = FiniteNumber(parts[8]);
+var amount = FiniteNumber(parts[9]);
+if (!amount.HasValue && volume.HasValue && price.HasValue)
+    amount = volume.Value * price.Value;
+
+// 腾讯：上午和下午都保留累计口径，按 date + HHmm 生成 DateTime。
+var source = payload.SelectToken("data." + marketCode + ".data") as JObject;
+if (payload.Value<int?>("code") != 0 || !(source?["data"] is JArray rows))
+    throw new PayloadParseException("invalid tencent minute payload");
+
+// 涨停：合法空数组不是错误。
+var row = FindRow(payload.SelectToken("data.info") as JArray, stockCode);
+return new LimitUpSourceData { Found = row != null, Context = ParseLimitUpRow(row) };
+```
+
+未知合同、错误码、缺失必需节点必须抛 `PayloadParseException`，让 provider 触发对应代理；合法空涨停池必须正常返回。
+
+- [ ] **Step 5: 运行测试确认 GREEN 并提交**
+
+Run: `dotnet run --project tools/THSBigOrder.Tests/THSBigOrder.Tests.csproj -c Release`
+
+Expected: 新增解析测试 PASS，既有测试全部 PASS，退出码 0。
+
+```powershell
+git add tools/THSBigOrder/DataSources/MarketSourceContracts.cs tools/THSBigOrder/Models/MarketSnapshot.cs tools/THSBigOrder/Parsing/ThsPayloadParser.cs tools/THSBigOrder.Tests/Program.cs
+git commit -m "refactor(tools): define typed THSBigOrder source contracts"
+```
+
+### Task 20: 实现四路直连客户端与对应代理降级入口
+
+**Files:**
+- Create: `tools/THSBigOrder/DataSources/ThsBigOrderSourceClient.cs`
+- Create: `tools/THSBigOrder/DataSources/SinaQuoteSourceClient.cs`
+- Create: `tools/THSBigOrder/DataSources/TencentMinuteSourceClient.cs`
+- Create: `tools/THSBigOrder/DataSources/ThsLimitUpSourceClient.cs`
+- Modify: `tools/THSBigOrder.Tests/Program.cs`
+
+- [ ] **Step 1: 写 URL、请求头、代理路径和合法空结果测试**
+
+扩展测试 `FixtureHandler`，按 `request.RequestUri.Host`、`AbsolutePath` 记录调用，并可逐 host/path 抛异常。分别断言：
+
+```csharp
+AssertEqual("vaserviece.10jqka.com.cn", bigDirect.Host, "big-order direct host");
+AssertTrue(bigDirect.Query.Contains("op=mainMonitorDetail"), "big-order op");
+AssertTrue(bigDirect.Query.Contains("stockcode=002297"), "big-order code");
+AssertEqual("hq.sinajs.cn", quoteDirect.Host, "sina host");
+AssertEqual("web.ifzq.gtimg.cn", minuteDirect.Host, "tencent host");
+AssertEqual("data.10jqka.com.cn", limitDirect.Host, "limit-up host");
+AssertTrue(handler.Paths.Contains("/api/quotes/sina?codes=002297"), "sina proxy path");
+```
+
+同花顺大单请求必须带 User-Agent、Referer、Accept；新浪必须带 `Referer: http://finance.sina.com.cn`；腾讯必须带浏览器 User-Agent。涨停池直连合法返回 `data.info=[]` 时，客户端返回 `Fresh + Direct + Found=false`。
+
+- [ ] **Step 2: 运行测试确认 RED**
+
+Run: `dotnet run --project tools/THSBigOrder.Tests/THSBigOrder.Tests.csproj -c Release`
+
+Expected: FAIL，四个来源客户端尚不存在。
+
+- [ ] **Step 3: 实现四个聚焦客户端**
+
+四个文件各放一个 sealed 类，均实现 `IMarketSourceClient<T>`：
+
+```csharp
+internal sealed class ThsBigOrderSourceClient : IMarketSourceClient<BigOrderSourceData> { }
+internal sealed class SinaQuoteSourceClient : IMarketSourceClient<StockSummary> { }
+internal sealed class TencentMinuteSourceClient : IMarketSourceClient<IReadOnlyList<MinuteTurnoverPoint>> { }
+internal sealed class ThsLimitUpSourceClient : IMarketSourceClient<LimitUpSourceData> { }
+```
+
+固定直连 URL/代理路径：
+
+```text
+https://vaserviece.10jqka.com.cn/Level2/index.php?op=mainMonitorDetail&stockcode={code}
+http://hq.sinajs.cn/list={sh|sz}{code}
+https://web.ifzq.gtimg.cn/appstock/app/minute/query?code={sh|sz}{code}
+https://data.10jqka.com.cn/dataapi/limit_up/limit_up_pool?...&date={yyyyMMdd}
+
+/api/big-order/ths-detail?stockCode={code}
+/api/quotes/sina?codes={code}
+/api/quotes/tencent/minute?code={code}
+/api/limitup/10jqka
+```
+
+每个 `LoadDirectAsync` 只负责请求、合同校验和调用 Task 19 的纯解析。代理大单先提取 envelope 的 `data` 再调用 `ParseBigOrderSource`；新浪代理调用 `ParseNormalizedQuote`；腾讯代理提取 `data` 后调用 `ParseNormalizedMinute`；涨停代理主体直接调用 `ParseLimitUpSource`。每个成功代理结果返回 `ProxyFallback`。直连超时使用独立 `CancellationTokenSource.CreateLinkedTokenSource` + 5 秒 `CancelAfter`，不得修改共享 `HttpClient.Timeout`。取消源若来自调用方则继续抛出，只有来源自身超时才允许 provider 降级。
+
+- [ ] **Step 4: 运行客户端测试确认 GREEN 并提交**
+
+Run: `dotnet run --project tools/THSBigOrder.Tests/THSBigOrder.Tests.csproj -c Release`
+
+Expected: 所有来源 URL、headers、编码和合法空结果测试 PASS。
+
+```powershell
+git add tools/THSBigOrder/DataSources/ThsBigOrderSourceClient.cs tools/THSBigOrder/DataSources/SinaQuoteSourceClient.cs tools/THSBigOrder/DataSources/TencentMinuteSourceClient.cs tools/THSBigOrder/DataSources/ThsLimitUpSourceClient.cs tools/THSBigOrder.Tests/Program.cs
+git commit -m "feat(tools): add direct THSBigOrder market clients"
+```
+
+### Task 21: 编排逐来源独立降级和同股票 stale
+
+**Files:**
+- Modify: `tools/THSBigOrder/THSBigOrderDataProvider.cs`
+- Modify: `tools/THSBigOrder/Models/MarketSnapshot.cs`
+- Modify: `tools/THSBigOrder.Tests/Program.cs`
+
+- [ ] **Step 1: 写直连成功不碰代理和单路失败测试**
+
+替换旧“loads four proxy routes”断言，注册以下用例：
+
+```csharp
+Run("Provider direct success does not call proxy", () => TestDirectSuccess().GetAwaiter().GetResult());
+Run("Provider falls back only the failed source", () => TestIndependentProxyFallback().GetAwaiter().GetResult());
+Run("Provider does not fallback valid empty limit-up", () => TestValidEmptyLimitUp().GetAwaiter().GetResult());
+Run("Provider uses same-stock stale only after both attempts fail", () => TestPerSourceStale().GetAwaiter().GetResult());
+```
+
+四路直连成功时断言代理调用数为 0、四个 transport 均为 `Direct`。仅腾讯直连失败时，断言只出现 `/api/quotes/tencent/minute`，其 transport 为 `ProxyFallback`，其它三路仍为 `Direct`。空涨停池断言 `LimitUpFreshness=Missing` 但 transport 仍为 `Direct`，且不访问代理。
+
+- [ ] **Step 2: 运行测试确认 RED**
+
+Run: `dotnet run --project tools/THSBigOrder.Tests/THSBigOrder.Tests.csproj -c Release`
+
+Expected: FAIL，provider 仍只访问四条代理路由。
+
+- [ ] **Step 3: 用统一 helper 执行 direct-first**
+
+在 provider 增加唯一的降级 helper：
+
+```csharp
+private static async Task<SourceLoadResult<T>> LoadDirectFirstAsync<T>(
+    IMarketSourceClient<T> client,
+    string stockCode,
+    CancellationToken cancellationToken)
+{
+    try { return await client.LoadDirectAsync(stockCode, cancellationToken).ConfigureAwait(false); }
+    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+    catch (Exception directError)
+    {
+        try { return await client.LoadProxyAsync(stockCode, cancellationToken).ConfigureAwait(false); }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (Exception proxyError)
+        {
+            return new SourceLoadResult<T>
+            {
+                Freshness = DataFreshness.Failed,
+                Transport = DataTransport.Failed,
+                Error = directError.Message + " | " + proxyError.Message,
+            };
+        }
+    }
+}
+```
+
+`LoadSnapshotAsync` 同时启动四个 `LoadDirectFirstAsync` 并 `Task.WhenAll`；不要因其中一路失败切换其它来源。保留公开构造函数，并增加 internal 可注入四个 client 的构造函数供测试使用。
+
+- [ ] **Step 4: 逐路合并并实现同股票 stale**
+
+合并优先级固定为：新浪基础行情为主；名称或现价缺失时才用同花顺 title fallback。某路 `Failed` 且 `_lastGood[stockCode]` 有对应有效数据时，仅该路换成缓存并标记 `Stale`；无缓存则保留 `Failed/Missing`。禁止从其它股票读取。
+
+状态摘要固定为：存在 `Failed` → `数据不可用: 来源`；否则存在 `Stale` → `数据陈旧: 来源`；否则存在 `ProxyFallback` → `代理降级: 来源`；否则 `直连`。来源短名固定为“大单/行情/分时/涨停”，顺序固定，便于测试和界面扫描。
+
+- [ ] **Step 5: 运行 provider 测试和构建确认 GREEN**
+
+Run: `dotnet run --project tools/THSBigOrder.Tests/THSBigOrder.Tests.csproj -c Release`
+
+Expected: 全部 PASS；独立降级、合法空结果、同股票 stale 和跨股票隔离均有断言。
+
+Run: `dotnet build tools/THSBigOrder/THSBigOrder.csproj -c Release`
+
+Expected: Build succeeded，0 errors。
+
+- [ ] **Step 6: 提交 provider 编排**
+
+```powershell
+git add tools/THSBigOrder/THSBigOrderDataProvider.cs tools/THSBigOrder/Models/MarketSnapshot.cs tools/THSBigOrder.Tests/Program.cs
+git commit -m "feat(tools): use independent direct-first market fallbacks"
+```
+
+### Task 22: 为每笔有效大单建立白线事件点
+
+**Files:**
+- Modify: `tools/THSBigOrder/Analytics/BigOrderSeriesBuilder.cs`
+- Modify: `tools/THSBigOrder.Tests/Program.cs`
+
+- [ ] **Step 1: 写事件点累计均价和逐笔保留失败测试**
+
+在 `TestBigOrderAveragePrices` 邻近增加：
+
+```csharp
+var events = series.BigOrderEvents;
+AssertEqual(4, events.Count, "one event per valid order");
+AssertEqual(day.AddHours(9).AddMinutes(30).AddSeconds(1), events[0].Time, "second retained");
+AssertNear(series.BigOrderAveragePrices[0].Price, events[0].AveragePrice, 0.0001d, "event lies on white line");
+AssertEqual(2, events[0].Type, "active buy retained");
+AssertEqual(4, events[1].Type, "active sell retained");
+AssertEqual(3, events[2].Type, "passive type retained for cumulative sequence");
+```
+
+加入同秒两笔，断言 `Count` 不减少且原始稳定顺序不变；加入价格/手数为零、NaN、Infinity 的订单，断言不生成均线点或事件点。
+
+- [ ] **Step 2: 运行测试确认 RED**
+
+Run: `dotnet run --project tools/THSBigOrder.Tests/THSBigOrder.Tests.csproj -c Release`
+
+Expected: FAIL，`BigOrderSeries.BigOrderEvents` 尚不存在。
+
+- [ ] **Step 3: 在现有累计循环中同步生成事件点**
+
+增加模型：
+
+```csharp
+public sealed class BigOrderEventPoint
+{
+    public DateTime Time { get; set; }
+    public double AveragePrice { get; set; }
+    public double Amount { get; set; }
+    public int Type { get; set; }
+}
+```
+
+在生成 `BigOrderAveragePrices` 的同一个循环中追加：
+
+```csharp
+var average = weightedPrice / cumulativeVolume;
+bigOrderAveragePrices.Add(new AveragePricePoint { Time = order.Time, Price = average });
+bigOrderEvents.Add(new BigOrderEventPoint
+{
+    Time = order.Time,
+    AveragePrice = average,
+    Amount = order.Amount,
+    Type = order.Type,
+});
+```
+
+不得做按秒、价格或像素去重；累计均价继续包含四类有效大单，显示过滤留给图表。
+
+- [ ] **Step 4: 运行测试确认 GREEN 并提交**
+
+Run: `dotnet run --project tools/THSBigOrder.Tests/THSBigOrder.Tests.csproj -c Release`
+
+Expected: 所有事件点和既有均线测试 PASS。
+
+```powershell
+git add tools/THSBigOrder/Analytics/BigOrderSeriesBuilder.cs tools/THSBigOrder.Tests/Program.cs
+git commit -m "feat(tools): build per-order average-price events"
+```
+
+### Task 23: 过滤并绘制白线主动买卖圆点，删除旧信号点
+
+**Files:**
+- Modify: `tools/THSBigOrder/Controls/BigOrderChartControl.cs`
+- Modify: `tools/THSBigOrder/MainForm.cs`
+- Modify: `tools/THSBigOrder.Tests/Program.cs`
+
+- [ ] **Step 1: 写金额/买卖矩阵和秒级坐标失败测试**
+
+控件暴露只读合同 `VisibleOrderEvents`，测试序列包含主动买、主动卖、被动买、被动卖和同秒两笔。断言：
+
+```csharp
+control.SetSnapshot(snapshot, series);
+control.SetOrderMarkerFilter(1000000, OrderSide.All);
+AssertEqual(2, control.VisibleOrderEvents.Count, "all active events above threshold");
+AssertTrue(control.VisibleOrderEvents.All(x => x.Type == 2 || x.Type == 4), "passive hidden");
+
+control.SetOrderMarkerFilter(1000000, OrderSide.Buy);
+AssertTrue(control.VisibleOrderEvents.All(x => x.Type == 2), "buy tab red only");
+control.SetOrderMarkerFilter(1000000, OrderSide.Sell);
+AssertTrue(control.VisibleOrderEvents.All(x => x.Type == 4), "sell tab green only");
+```
+
+金额采用与 `OrderFilter` 相同的 `Amount >= minimumAmount`。用 `09:30:00` 和 `09:30:30` 调用 internal `TimeX`，断言后者位于前者与 `09:31:00` 正中；午休仍压缩为连续 240 分钟。
+
+- [ ] **Step 2: 写旧绘制入口清理合同并确认 RED**
+
+测试文件增加 `using System.Reflection;`，通过反射断言旧私有方法必须消失，并通过 Bitmap 调用 `DrawToBitmap`，在已知事件点附近检查主动买像素含红色、主动卖像素含绿色、无白色事件圆点：
+
+```csharp
+var legacy = typeof(BigOrderChartControl).GetMethod(
+    "DrawSignals", BindingFlags.Instance | BindingFlags.NonPublic);
+AssertEqual<MethodInfo>(null, legacy, "legacy chart signals removed");
+```
+
+首次运行应因旧 `DrawSignals` 仍存在而失败。
+
+- [ ] **Step 3: 实现纯过滤状态和秒级时间轴**
+
+控件增加：
+
+```csharp
+public IReadOnlyList<BigOrderEventPoint> VisibleOrderEvents => _visibleOrderEvents;
+
+public void SetOrderMarkerFilter(double minimumAmount, OrderSide side)
+{
+    _minimumOrderAmount = minimumAmount;
+    _orderSide = side;
+    _visibleOrderEvents = (_series?.BigOrderEvents ?? new BigOrderEventPoint[0])
+        .Where(item => item.Amount >= minimumAmount)
+        .Where(item => item.Type == 2 || item.Type == 4)
+        .Where(item => side == OrderSide.All ||
+                       side == OrderSide.Buy && item.Type == 2 ||
+                       side == OrderSide.Sell && item.Type == 4)
+        .ToList();
+    Invalidate();
+}
+```
+
+`SetSnapshot` 必须使用当前已保存的 filter 重建 `_visibleOrderEvents`。`TimeX` 改用 `time.Second / 60d`，上午/下午映射和午休压缩规则不变。
+
+- [ ] **Step 4: 绘制新圆点并彻底删除旧 DrawSignals**
+
+`OnPaint` 顺序固定为 `DrawLines → DrawOrderEvents → DrawVolumes → DrawHalfHourAmounts`。`DrawOrderEvents` 把 `AveragePrice` 用与白线相同 `_previousClose` 转为 percent，再用同一 `_axisMinimum/_axisMaximum` 求 y；无昨收或超出有效轴时跳过。
+
+```csharp
+var color = item.Type == 2
+    ? Color.FromArgb(255, 77, 90)
+    : Color.FromArgb(38, 218, 154);
+using (var brush = new SolidBrush(color))
+using (var outline = new Pen(Color.FromArgb(12, 17, 27), 1f))
+{
+    var bounds = new RectangleF(x - 4, y - 4, 8, 8);
+    graphics.FillEllipse(brush, bounds);
+    graphics.DrawEllipse(outline, bounds.X, bounds.Y, bounds.Width, bounds.Height);
+}
+```
+
+删除 `DrawSignals` 方法和调用，不删除 `FundMarker`、`BuyMarker`、`CalculateMarkers`、右侧统计、特殊筛选或语音逻辑。
+
+- [ ] **Step 5: 让 MainForm 同步金额与买卖状态**
+
+`BindSnapshot` 在 `SetSnapshot` 后调用：
+
+```csharp
+bigOrderChart.SetOrderMarkerFilter(_currentMoney, _orderSide);
+```
+
+`ApplyFilterAndRefreshUI` 每次都调用同一方法。特殊筛选也会经过这里，但图表方法不接收 `_specialFilter`，因此点火/砸盘/买活跃/承接好不会改变圆点。
+
+增加测试可读属性：
+
+```csharp
+internal IReadOnlyList<BigOrderEventPoint> VisibleChartOrderEvents =>
+    bigOrderChart.VisibleOrderEvents;
+```
+
+通过 `Controls.Find("btn100W", true)[0]`、`OrderTabs.SelectedIndex` 验证 100/300 万和全部/买盘/卖盘切换后，列表与圆点数量同步。
+
+- [ ] **Step 6: 更新来源状态文案**
+
+`BindSnapshotLabels` 使用 Task 21 的状态摘要替代“代理不可用”。测试至少覆盖：全直连→`直连`；单路代理→`代理降级: 分时`；同股票缓存→`数据陈旧: 大单`；双失败无缓存→`数据不可用: 大单`。
+
+- [ ] **Step 7: 运行测试和构建确认 GREEN**
+
+Run: `dotnet run --project tools/THSBigOrder.Tests/THSBigOrder.Tests.csproj -c Release`
+
+Expected: 全部 PASS；旧 `DrawSignals` 无源码匹配，圆点矩阵、颜色、秒级位置和 MainForm 联动均有证据。
+
+Run: `dotnet build tools/THSBigOrder/THSBigOrder.csproj -c Release`
+
+Expected: Build succeeded，0 errors。
+
+- [ ] **Step 8: 提交图表与筛选联动**
+
+```powershell
+git add tools/THSBigOrder/Controls/BigOrderChartControl.cs tools/THSBigOrder/MainForm.cs tools/THSBigOrder.Tests/Program.cs
+git commit -m "feat(tools): mark filtered active orders on average line"
+```
+
+### Task 24: 联合回归、真实接口与 WinForms 视觉验收
+
+**Files:**
+- Modify only if verification reveals a scoped defect in Task 19-23 files.
+- Update: `docs/kpl-viewer/2026-06-19-ths-big-order-implementation.md`
+
+- [ ] **Step 1: 运行完整自动化测试与 Release 构建**
+
+Run: `dotnet run --project tools/THSBigOrder.Tests/THSBigOrder.Tests.csproj -c Release`
+
+Expected: 0 failed，退出码 0；记录实际通过数量。
+
+Run: `dotnet build tools/THSBigOrder/THSBigOrder.csproj -c Release`
+
+Expected: Build succeeded，0 errors；记录 warning 数量。
+
+- [ ] **Step 2: 静态审计数据源和旧圆点**
+
+Run: `rg -n "eastmoney|python-bridge|ws/quotes|DrawSignals|代理不可用" tools/THSBigOrder tools/THSBigOrder.Tests`
+
+Expected: 无生产匹配；测试名称或负向断言若匹配，逐条确认不是生产依赖。
+
+Run: `rg -n "vaserviece\.10jqka|hq\.sinajs|web\.ifzq\.gtimg|data\.10jqka|/api/big-order/ths-detail|/api/quotes/sina|/api/quotes/tencent/minute|/api/limitup/10jqka" tools/THSBigOrder`
+
+Expected: 四条直连和四条匹配代理路由均存在，且无东方财富或 python-bridge。
+
+- [ ] **Step 3: 在 proxy-server 停止时验证直连**
+
+确认 3000 端口无本任务代理后启动 Release 程序，选择一只当日有大单股票。核对名称/现价、腾讯黄线、同花顺白线、大单列表和涨停上下文；状态应为 `直连`，不能显示“代理不可用”。不得为了通过此步骤临时启动代理。
+
+- [ ] **Step 4: 验证单路代理降级和双失败状态**
+
+用测试 handler 自动化证据作为主门禁；手工验收只选择一个可控来源制造直连失败，并启动当前 `proxy-server`，确认仅该来源显示 `代理降级`。随后停止代理，确认同股票已有成功快照时显示对应 `数据陈旧`，新股票无缓存时显示 `数据不可用`，其它成功来源继续更新。
+
+- [ ] **Step 5: 验证圆点和右侧明细逐笔一致**
+
+在 1280×800 与 960×640 各检查一次：
+
+- 100 万“全部”：白线上每笔 `Type=2` 红点、`Type=4` 绿点与右侧符合阈值的主动单逐笔对应。
+- 100 万“买盘”：只剩红点；100 万“卖盘”：只剩绿点。
+- 300 万重复上述切换，圆点与右侧同步减少。
+- 同秒多笔不被业务去重；因像素重叠不可肉眼分离时，以自动化 `VisibleOrderEvents.Count` 为准。
+- 主图顶部/底部不再存在旧信号点；点火/砸盘/买活跃/承接好仍可在右侧筛选、统计与语音逻辑中使用。
+- 白线先绘制、圆点后绘制；黄线、分钟柱、双层热力、左右轴和四小时网格无回归。
+
+这是 WinForms，不使用网页 Playwright；记录窗口尺寸、股票代码和截图路径，但截图只放 `.tmp/`，不提交。
+
+- [ ] **Step 6: 更新执行结果并做最终 diff 审计**
+
+把测试数量、构建 warning/error、真实股票、直连/降级结果、两档窗口和各筛选圆点结果写入本计划末尾“本轮执行结果”。
+
+Run: `git diff --check`
+
+Expected: 无空白错误。
+
+Run: `git status --short`
+
+Expected: 本任务文件之外只保留用户原有 TdxL2Helper 与过程文档；这些文件不得被暂存。
+
+- [ ] **Step 7: 提交验收记录**
+
+```powershell
+git add docs/kpl-viewer/2026-06-19-ths-big-order-implementation.md
+git commit -m "docs: record THSBigOrder direct and marker verification"
+```
+
+### 本轮执行结果
+
+执行 Task 19-24 时填写；计划阶段不预填测试数量或视觉结论。
+
+---
+
 ## 完成判定
 
 - 新 THS 路由、涨停缓存和旧 KPL 路由兼容测试全部通过。
@@ -1642,6 +2237,9 @@ git commit -m "feat(tools): refine THSBigOrder intraday chart"
 - 分时主图显示左价格轴、右涨幅轴和四个交易小时竖格；底部显示八个 30 分钟格及成交总额/大单总额两层数据。
 - 分时主图黄线为腾讯全成交累计均价，白线为同花顺大单累计成交均价；两条线共用价格/涨幅轴，不再把累计大单净额独立缩放到价格主图。
 - 底部成交总额和大单总额各自在八段内独立归一化绘制热力，`0` 与缺失状态可区分。
+- 四路来源各自直连优先，只有失败来源访问匹配代理；合法空涨停池不触发代理，proxy-server 停止时成功直连仍可运行。
+- 白线只显示符合当前金额阈值和买卖页签的逐笔主动买红点、主动卖绿点；无被动单圆点、白色圆点或旧顶部/底部红绿信号点。
+- 每个圆点使用该笔纳入后的大单累计成交均价作为纵坐标，并保留秒级时间；同秒多笔不做业务去重。
 - 八段成交总额来自腾讯个股分钟累计成交额差分，八段大单总额来自同花顺大单逐笔金额求和；两者均不使用东财。
 - 竞价、真实 L2 和私有指标没有被误实现或误描述。
 - 最终提交不包含用户已有 TdxL2Helper 改动、`.superpowers/`、构建产物或过程文件。
