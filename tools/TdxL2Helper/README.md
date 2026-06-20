@@ -63,6 +63,25 @@ tools\TdxL2Helper\bin\Release\net8.0-windows\win-x86\publish\TdxL2Helper.exe pro
 tools\TdxL2Helper\bin\Release\net8.0-windows\win-x86\publish\TdxL2Helper.exe host-runtime --tdx-root D:\APP_SOFT\TDX --event-stream --probe-login-state --login-profile auto
 ```
 
+执行实验性只读内存扫描，查找正在运行的 `tdxw.exe` 中疑似十档深度结构：
+
+```powershell
+tools\TdxL2Helper\bin\Release\net8.0-windows\win-x86\publish\TdxL2Helper.exe read-l2-depth --tdx-root D:\APP_SOFT\TDX --scan
+```
+
+持续读取已扫描到的候选地址：
+
+```powershell
+tools\TdxL2Helper\bin\Release\net8.0-windows\win-x86\publish\TdxL2Helper.exe read-l2-depth --tdx-root D:\APP_SOFT\TDX --monitor --interval-ms 500 --output l2-depth.jsonl
+```
+
+说明：
+
+- `read-l2-depth` 是隔离只读探针，只读取运行中 `tdxw.exe` 的进程内存，不注入、不写入目标进程。
+- 扫描结果是“疑似深度结构候选”，需要人工和官方客户端画面对照验证。
+- 该入口不代表 `7719 / 官方 L2 十档 / 官方逐笔` 已经接入，也不能直接接入 `python-bridge/main.py` 的生产默认路径。
+- 地址缓存写在 helper 运行目录下的 `.tdx_l2_cache/`，属于本地探针状态，不提交。
+
 如需显式尝试 `TdxDeep_StartInit` 探针，再额外加：
 
 ```powershell

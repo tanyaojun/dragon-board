@@ -78,6 +78,12 @@ internal static partial class Program
                 return RunSelfHostEventStream(options);
             }
 
+            if (options.Command == "read-l2-depth")
+            {
+                RunReadL2Depth(options);
+                return 0;
+            }
+
             object report = options.Command switch
             {
                 "inspect" => BuildInspectReport(options),
@@ -90,6 +96,7 @@ internal static partial class Program
                 "host-runtime" => BuildSelfHostRuntimeReport(options),
                 _ => throw new ArgumentException($"unsupported command: {options.Command}"),
             };
+
             var json = JsonSerializer.Serialize(report, JsonOptions.Default);
             Console.WriteLine(json);
             return ResolveExitCode(report);
@@ -108,6 +115,83 @@ internal static partial class Program
             Console.WriteLine(payload);
             return 1;
         }
+    }
+
+    private static void RunReadL2Depth(CliOptions options)
+    {
+        var tdxRoot = Path.GetFullPath(options.TdxRoot);
+        var process = L2DepthReader.FindTdxProcess(tdxRoot);
+        if (process is null)
+        {
+            Console.Error.WriteLine("[错误] 未找到运行中的 tdxw.exe 进程。请先启动通达信客户端。");
+            Environment.Exit(1);
+        }
+
+        var pid = process.Id;
+        Console.Error.WriteLine($"[进程] tdxw.exe PID={pid}");
+
+        // 加载缓存或扫描
+        var addresses = options.L2ForceScan ? null : L2DepthReader.LoadAddressCache(tdxRoot);
+
+        if (addresses is null || addresses.Count == 0)
+        {
+            Console.Error.WriteLine("[扫描] 正在搜索 L2 深度数据内存地址...");
+            var report = L2DepthReader.Scan(pid);
+
+            if (!report.Ok)
+            {
+                Console.Error.WriteLine($"[错误] {report.Error}");
+                Environment.Exit(2);
+            }
+
+            Console.Error.WriteLine($"[结果] 扫描 {report.RegionsScanned} 个区域，找到 {report.Candidates.Count} 个候选:");
+            foreach (var candidate in report.Candidates.Take(15))
+            {
+                Console.Error.WriteLine(
+                    $"  {candidate.Address} score={candidate.Score,3}  "
+                    + $"bid1={candidate.BidPrices.FirstOrDefault():F2}  "
+                    + $"ask1={candidate.AskPrices.FirstOrDefault():F2}  "
+                    + $"bids={candidate.BidPrices.Count} asks={candidate.AskPrices.Count}");
+            }
+
+            addresses = report.Candidates
+                .Where(c => c.Score >= Math.Max(report.Candidates[0].Score * 0.6, 15))
+                .Select(c => L2DepthReader.ParseHex(c.Address))
+                .ToList();
+
+            if (addresses.Count > 0)
+            {
+                L2DepthReader.SaveAddressCache(tdxRoot, addresses);
+                Console.Error.WriteLine($"[缓存] 已保存 {addresses.Count} 个地址");
+            }
+        }
+        else
+        {
+            Console.Error.WriteLine($"[缓存] 已加载 {addresses.Count} 个地址");
+        }
+
+        // 监控模式
+        if (options.L2Monitor)
+        {
+            Console.Error.WriteLine($"[监控] 间隔 {options.L2IntervalMs}ms, 按 Ctrl+C 退出");
+            L2DepthReader.Monitor(pid, addresses, options.L2IntervalMs, options.L2Output);
+        }
+        else
+        {
+            // 单次读取
+            using var reader = new L2DepthReader.ProcessMemoryReader(pid);
+            foreach (var addr in addresses.Take(10))
+            {
+                var snapshot = L2DepthReader.ReadDepth(reader, addr);
+                if (snapshot is not null)
+                {
+                    var json = JsonSerializer.Serialize(snapshot, JsonOptions.Default);
+                    Console.WriteLine(json);
+                }
+            }
+        }
+
+        process.Dispose();
     }
 
     private static int ResolveExitCode(object report)
@@ -3223,6 +3307,11 @@ internal sealed class CliOptions
 
     public IReadOnlyList<int> UnsafeDeepFuncCodes => unsafeDeepFuncCodes;
 
+    public bool L2Monitor { get; private set; }
+    public bool L2ForceScan { get; private set; }
+    public int L2IntervalMs { get; private set; } = 500;
+    public string? L2Output { get; private set; }
+
     public bool HasSetL2Args =>
         !string.IsNullOrEmpty(SetL2Arg1)
         || !string.IsNullOrEmpty(SetL2Arg2)
@@ -3294,6 +3383,8 @@ internal sealed class CliOptions
                                  [--setl2-arg1 <text>] [--setl2-arg2 <text>] [--setl2-arg3 <text>]
                                  [--sample-count <n>] [--heartbeat-interval-ms <n>]
                                  [--duration-ms <n>] [--event-stream]
+        TdxL2Helper read-l2-depth [--tdx-root <path>] [--scan] [--monitor]
+                                   [--interval-ms <n>] [--output <jsonl-path>]
 
         Current command:
           inspect   Load tc.dll and TDXDeep.dll from an x86 process and resolve target exports.
@@ -3338,6 +3429,10 @@ internal sealed class CliOptions
                     Use --unsafe-deep-func-probe only in an isolated process; empty-context TdxDeep_Func calls can block.
                     Use --unsafe-deep-func-codes to isolate function codes, for example 2 or 11,12,13.
                     Use --event-stream for NDJSON stdout events that an outer bridge can consume.
+          read-l2-depth
+                    Experimental read-only process-memory scanner for candidate depth-book
+                    structures in a running tdxw.exe. This is an isolated probe, not a
+                    production L2 feed and not proof that 7719 / official L2 is implemented.
         """;
 
     public static CliOptions Parse(IReadOnlyList<string> args)
@@ -3361,6 +3456,7 @@ internal sealed class CliOptions
                 case "probe-tc-setl2":
                 case "probe-tc-setl2-matrix":
                 case "host-runtime":
+                case "read-l2-depth":
                     options.Command = arg;
                     break;
                 case "--tdx-root":
@@ -3430,6 +3526,18 @@ internal sealed class CliOptions
                     break;
                 case "--stable-loginret-surface":
                     options.StableLoginRetSurface = true;
+                    break;
+                case "--monitor":
+                    options.L2Monitor = true;
+                    break;
+                case "--scan":
+                    options.L2ForceScan = true;
+                    break;
+                case "--interval-ms":
+                    options.L2IntervalMs = int.Parse(RequireValue(args, ref index, arg));
+                    break;
+                case "--output":
+                    options.L2Output = RequireValue(args, ref index, arg);
                     break;
                 case "--disable-process-error-mode":
                     options.DisableProcessErrorMode = true;
@@ -4811,6 +4919,26 @@ internal static partial class NativeMethods
     [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool DestroyWindow(IntPtr hWnd);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    internal static extern int VirtualQueryEx(
+        IntPtr hProcess,
+        IntPtr lpAddress,
+        ref MEMORY_BASIC_INFORMATION lpBuffer,
+        int dwLength);
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct MEMORY_BASIC_INFORMATION
+    {
+        public IntPtr BaseAddress;
+        public IntPtr AllocationBase;
+        public uint AllocationProtect;
+        public ushort PartitionId;
+        public UIntPtr RegionSize;
+        public uint State;
+        public uint Protect;
+        public uint Type;
+    }
 
     [DllImport("user32.dll", SetLastError = true)]
     internal static extern int GetMessageW(out Message lpMsg, IntPtr hWnd, uint wMsgFilterMin, uint wMsgFilterMax);

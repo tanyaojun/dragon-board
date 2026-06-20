@@ -55,6 +55,8 @@ test-results/
 playwright-report/
 .playwright-cli/
 output/
+.tdx_l2_cache/
+**/.tdx_l2_cache/
 
 # QuantBoard local runtime state
 quant-board/.venv/
