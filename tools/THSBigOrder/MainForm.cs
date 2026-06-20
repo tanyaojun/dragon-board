@@ -49,7 +49,7 @@ namespace THSBigOrder
 
         // 当前状态
         private string _currentStockCode = "002963";
-        private int _currentMoney = 300000;
+        private int _currentMoney = 3000000;
 
         // 定时器
         private System.Windows.Forms.Timer _refreshTimer;
@@ -102,14 +102,19 @@ namespace THSBigOrder
         internal SplitContainer MainSplit => mainSplit;
         internal TabControl OrderTabs => orderTabs;
         internal bool ShowsLimitUpReason => ClientSize.Width >= 1100;
-        internal bool ShowsSealRate => ClientSize.Width >= 1020;
-        internal bool ShowsLastLimitTime => ClientSize.Width >= 1020;
         internal string BoundStockCode => _snapshot?.StockCode;
         internal IReadOnlyList<BigOrderEventPoint> VisibleChartOrderEvents => bigOrderChart.VisibleOrderEvents;
         internal string FreshnessText => lblFreshness.Text;
         internal string StatusText => lblStatus.Text;
         internal string TurnoverText => lblTurnover.Text;
         internal string VolumeRatioText => lblVolumeRatio.Text;
+        internal string SealAmountText => lblSealAmount.Text;
+        internal string OpenCountText => lblOpenCount.Text;
+        internal string HighDaysText => lblHighDays.Text;
+        internal IReadOnlyList<string> MetricTexts => metricsFlow.Controls
+            .OfType<Label>()
+            .Select(label => label.Text)
+            .ToList();
 
         internal Task RefreshStockAsync(string stockCode, bool forceForCodeChange)
         {
@@ -360,11 +365,8 @@ namespace THSBigOrder
                     int newIndex = (int)(ratio * maxScroll);
                     newIndex = Math.Max(0, Math.Min(newIndex, maxScroll));
 
-                    if (newIndex != dataGridView1.FirstDisplayedScrollingRowIndex)
-                    {
-                        dataGridView1.FirstDisplayedScrollingRowIndex = newIndex;
+                    if (SetFirstDisplayedRow(newIndex))
                         UpdateScrollThumb();
-                    }
                 }
             }
         }
@@ -393,9 +395,19 @@ namespace THSBigOrder
                 int newIndex = (int)(ratio * maxScroll);
                 newIndex = Math.Max(0, Math.Min(newIndex, maxScroll));
 
-                dataGridView1.FirstDisplayedScrollingRowIndex = newIndex;
-                UpdateScrollThumb();
+                if (SetFirstDisplayedRow(newIndex)) UpdateScrollThumb();
             }
+        }
+
+        private bool SetFirstDisplayedRow(int requestedIndex)
+        {
+            if (dataGridView1.Rows.Count == 0) return false;
+            var visibleRows = Math.Max(1, dataGridView1.DisplayedRowCount(false));
+            var maxIndex = Math.Max(0, dataGridView1.Rows.Count - visibleRows);
+            var newIndex = Math.Max(0, Math.Min(requestedIndex, maxIndex));
+            if (newIndex == dataGridView1.FirstDisplayedScrollingRowIndex) return false;
+            dataGridView1.FirstDisplayedScrollingRowIndex = newIndex;
+            return true;
         }
 
         /// <summary>
@@ -494,6 +506,7 @@ namespace THSBigOrder
             catch (OperationCanceledException) when (request.CancellationToken.IsCancellationRequested) { }
             catch (Exception ex)
             {
+                if (!_refreshCoordinator.IsLatest(request.Generation, request.StockCode)) return;
                 lblStatus.Text = "错误: " + ex.Message;
                 lblStatus.ForeColor = Color.Red;
             }
@@ -543,14 +556,19 @@ namespace THSBigOrder
             lblSealAmount.Text = "封单 " + FormatAmount(snapshot.LimitUp.SealAmount);
             lblOpenCount.Text = "开板 " + (snapshot.LimitUp.OpenCount.HasValue ? snapshot.LimitUp.OpenCount.Value.ToString() : "-");
             lblHighDays.Text = "连板 " + (snapshot.LimitUp.HighDays ?? "-");
-            lblSealRate.Text = "封板率 " + (snapshot.LimitUp.SuccessRate.HasValue ? (snapshot.LimitUp.SuccessRate.Value * 100).ToString("F1") + "%" : "-");
             lblLimitUpReason.Text = snapshot.LimitUpFreshness == DataFreshness.Failed ? "涨停数据不可用" : snapshot.LimitUpFreshness == DataFreshness.Missing ? "非涨停池" : "涨停原因 " + (snapshot.LimitUp.ReasonType ?? "-");
-            lblLastLimitTime.Text = "末封 " + (snapshot.LimitUp.LastLimitTime ?? "-");
             lblFreshness.Text = snapshot.Transports.Summary;
             lblFreshness.ForeColor = snapshot.Transports.Summary == "直连" ? Color.LightGreen : Color.Orange;
         }
 
         private static string FormatNullable(double? value, string format) => value.HasValue ? value.Value.ToString(format) : "-";
+        private static string FormatPercent(double? value)
+        {
+            if (!value.HasValue) return "-";
+            var percent = Math.Abs(value.Value) <= 1 ? value.Value * 100d : value.Value;
+            return percent.ToString("F1") + "%";
+        }
+
         private static string FormatAmount(double? value)
         {
             if (!value.HasValue) return "-";
@@ -898,15 +916,12 @@ namespace THSBigOrder
             if (e.Delta > 0)
             {
                 // 向上滚动
-                if (dataGridView1.FirstDisplayedScrollingRowIndex - 2 < 0)
-                    dataGridView1.FirstDisplayedScrollingRowIndex = 0;
-                else
-                    dataGridView1.FirstDisplayedScrollingRowIndex -= 2;
+                SetFirstDisplayedRow(dataGridView1.FirstDisplayedScrollingRowIndex - 2);
             }
             else
             {
                 // 向下滚动
-                dataGridView1.FirstDisplayedScrollingRowIndex += 2;
+                SetFirstDisplayedRow(dataGridView1.FirstDisplayedScrollingRowIndex + 2);
             }
             
             // 同步更新自定义滚动条
@@ -961,8 +976,6 @@ namespace THSBigOrder
             var desired = Math.Max(mainSplit.Panel1MinSize, Math.Min((int)(availableWidth * 0.72), availableWidth - mainSplit.Panel2MinSize - mainSplit.SplitterWidth));
             if (desired > 0) mainSplit.SplitterDistance = desired;
             if (lblLimitUpReason != null) lblLimitUpReason.Visible = ClientSize.Width >= 1100;
-            if (lblSealRate != null) lblSealRate.Visible = ClientSize.Width >= 1020;
-            if (lblLastLimitTime != null) lblLastLimitTime.Visible = ClientSize.Width >= 1020;
             if (lblReasonHint != null) lblReasonHint.Visible = ClientSize.Width < 1100;
         }
 

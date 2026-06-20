@@ -43,6 +43,7 @@ namespace THSBigOrder.Models
         public int? OpenCount { get; set; }
         public string HighDays { get; set; }
         public double? SuccessRate { get; set; }
+        public double? TurnoverRate { get; set; }
         public string ReasonType { get; set; }
         public string FirstLimitTime { get; set; }
         public string LastLimitTime { get; set; }

@@ -34,6 +34,7 @@ namespace THSBigOrder.Controls
         private readonly List<Rectangle> _halfHourRows = new List<Rectangle>();
         private readonly List<ChartAxisTick> _axisTicks = new List<ChartAxisTick>();
         private readonly List<ChartLinePoint> _marketLinePercents = new List<ChartLinePoint>();
+        private readonly List<ChartLinePoint> _minutePriceLinePercents = new List<ChartLinePoint>();
         private readonly List<ChartLinePoint> _bigOrderLinePercents = new List<ChartLinePoint>();
         private readonly List<double?> _totalHeatRatios = new List<double?>();
         private readonly List<double> _bigOrderHeatRatios = new List<double>();
@@ -61,6 +62,7 @@ namespace THSBigOrder.Controls
         public IReadOnlyList<Rectangle> HalfHourRows => _halfHourRows;
         public IReadOnlyList<ChartAxisTick> AxisTicks => _axisTicks;
         public IReadOnlyList<ChartLinePoint> MarketLinePercents => _marketLinePercents;
+        public IReadOnlyList<ChartLinePoint> MinutePriceLinePercents => _minutePriceLinePercents;
         public IReadOnlyList<ChartLinePoint> BigOrderLinePercents => _bigOrderLinePercents;
         public IReadOnlyList<double?> TotalHeatRatios => _totalHeatRatios;
         public IReadOnlyList<double> BigOrderHeatRatios => _bigOrderHeatRatios;
@@ -144,6 +146,7 @@ namespace THSBigOrder.Controls
         private void RebuildAxisTicks()
         {
             var values = _marketLinePercents
+                .Concat(_minutePriceLinePercents)
                 .Concat(_bigOrderLinePercents)
                 .Select(point => point.Value)
                 .ToList();
@@ -178,6 +181,7 @@ namespace THSBigOrder.Controls
         private void RebuildLinePercents()
         {
             _marketLinePercents.Clear();
+            _minutePriceLinePercents.Clear();
             _bigOrderLinePercents.Clear();
             _previousClose = null;
 
@@ -215,6 +219,17 @@ namespace THSBigOrder.Controls
 
             if (_previousClose.HasValue)
             {
+                _minutePriceLinePercents.AddRange(
+                    (_series?.MinutePrices ?? new AveragePricePoint[0])
+                        .Where(point => IsFinite(point.Price) && point.Price > 0)
+                        .OrderBy(point => point.Time)
+                        .Select(point => new ChartLinePoint
+                        {
+                            Time = point.Time,
+                            Value = (point.Price / _previousClose.Value - 1d) * 100d,
+                        })
+                        .Where(point => IsFinite(point.Value)));
+
                 _bigOrderLinePercents.AddRange(
                     (_series?.BigOrderAveragePrices ?? new AveragePricePoint[0])
                         .Where(point => IsFinite(point.Price) && point.Price > 0)
@@ -351,8 +366,11 @@ namespace THSBigOrder.Controls
                 graphics, _marketLinePercents.ToArray(),
                 _layoutBands[0], Color.FromArgb(225, 241, 64), 2);
             DrawPercentLine(
+                graphics, _minutePriceLinePercents.ToArray(),
+                _layoutBands[0], Color.FromArgb(235, 241, 252), 1.5f);
+            DrawPercentLine(
                 graphics, _bigOrderLinePercents.ToArray(),
-                _layoutBands[0], Color.FromArgb(229, 235, 246), 1);
+                _layoutBands[0], Color.FromArgb(70, 155, 255), 1);
         }
 
         private void DrawPercentLine(
@@ -372,12 +390,14 @@ namespace THSBigOrder.Controls
             var range = Math.Max(0.0001, _axisMaximum - _axisMinimum);
             foreach (var item in _visibleOrderEvents)
             {
-                if (!IsFinite(item.AveragePrice) || item.AveragePrice <= 0) continue;
-                var percent = (item.AveragePrice / _previousClose.Value - 1d) * 100d;
-                if (!IsFinite(percent)) continue;
+                var percent = MinutePercentAt(item.Time);
+                if (!percent.HasValue && IsFinite(item.AveragePrice) && item.AveragePrice > 0)
+                    percent = (item.AveragePrice / _previousClose.Value - 1d) * 100d;
+                if (!percent.HasValue) continue;
+                if (!IsFinite(percent.Value)) continue;
                 var x = TimeX(item.Time, _layoutBands[0]);
                 var y = _layoutBands[0].Bottom -
-                        (float)((percent - _axisMinimum) / range) * _layoutBands[0].Height;
+                        (float)((percent.Value - _axisMinimum) / range) * _layoutBands[0].Height;
                 var color = item.Type == 2
                     ? Color.FromArgb(255, 77, 90)
                     : Color.FromArgb(38, 218, 154);
@@ -388,6 +408,16 @@ namespace THSBigOrder.Controls
                     graphics.DrawEllipse(outline, x - 4, y - 4, 8, 8);
                 }
             }
+        }
+
+        private double? MinutePercentAt(DateTime time)
+        {
+            if (_minutePriceLinePercents.Count == 0) return null;
+            var nearest = _minutePriceLinePercents
+                .OrderBy(point => Math.Abs((point.Time - time).TotalSeconds))
+                .FirstOrDefault();
+            if (nearest == null || Math.Abs((nearest.Time - time).TotalSeconds) > 90) return null;
+            return nearest.Value;
         }
 
         internal static float TimeX(DateTime time, Rectangle bounds)

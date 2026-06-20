@@ -24,14 +24,14 @@ namespace THSBigOrder.DataSources
         public async Task<SourceLoadResult<StockSummary>> LoadDirectAsync(string stockCode, CancellationToken cancellationToken)
         {
             var marketCode = (stockCode.StartsWith("6") ? "sh" : "sz") + stockCode;
-            using (var request = new HttpRequestMessage(HttpMethod.Get, "http://hq.sinajs.cn/list=" + marketCode))
+            using (var request = new HttpRequestMessage(HttpMethod.Get, "http://qt.gtimg.cn/q=" + marketCode))
             {
-                request.Headers.Referrer = new Uri("http://finance.sina.com.cn/");
+                request.Headers.Referrer = new Uri("http://stockapp.finance.qq.com/");
                 using (var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false))
                 {
                     var bytes = await response.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
                     response.EnsureSuccessStatusCode();
-                    return Success(_parser.ParseSinaQuote(stockCode, bytes), DataTransport.Direct, DataFreshness.Fresh);
+                    return Success(_parser.ParseTencentQuote(stockCode, bytes), DataTransport.Direct, DataFreshness.Fresh);
                 }
             }
         }
@@ -39,7 +39,7 @@ namespace THSBigOrder.DataSources
         public async Task<SourceLoadResult<StockSummary>> LoadProxyAsync(string stockCode, CancellationToken cancellationToken)
         {
             using (var response = await _http.GetAsync(
-                _proxyBase + "/api/quotes/sina?codes=" + stockCode, cancellationToken).ConfigureAwait(false))
+                _proxyBase + "/api/quotes/tencent?codes=" + stockCode, cancellationToken).ConfigureAwait(false))
             {
                 var payload = JObject.Parse(await response.Content.ReadAsStringAsync().ConfigureAwait(false));
                 response.EnsureSuccessStatusCode();

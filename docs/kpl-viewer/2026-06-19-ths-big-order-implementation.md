@@ -698,9 +698,9 @@ Expected: FAIL，旧窗口仍是 400px 单表格布局。
 
 使用顶层 `TableLayoutPanel`：顶部信息区固定高度、主体 `SplitContainer` 填充、底部状态栏固定。左侧放 `BigOrderChartControl`，右侧放 tab + DataGridView；默认窗口 1280×800，最小窗口 960×640，仍允许保存/恢复窗口尺寸。
 
-顶部新增只读标签：`lblPrice`、`lblMainBuy`、`lblMainSell`、`lblMainNet`、`lblSealAmount`、`lblOpenCount`、`lblHighDays`、`lblSealRate`、`lblLimitUpReason`、`lblFreshness`。
+顶部只读标签保留：`lblPrice`、`lblMainBuy`、`lblMainSell`、`lblMainNet`、`lblSealAmount`、`lblOpenCount`、`lblHighDays`、`lblLimitUpReason`、`lblFreshness`；封板率和末封/未封不再展示。
 
-在 `OnClientSizeChanged` 应用固定宽度档位：宽度 `<1100` 隐藏完整 `lblLimitUpReason` 并显示短提示；宽度 `<1020` 再隐藏 `lblSealRate` 和最后涨停时间；恢复宽度后全部恢复。布局测试依次设置 1280、1080、980、1280 宽度并断言 Visible 状态可逆。
+在 `OnClientSizeChanged` 应用固定宽度档位：宽度 `<1100` 隐藏完整 `lblLimitUpReason` 并显示短提示；恢复宽度后自动恢复。布局测试依次设置 1280、1080、980、1280 宽度并断言 Visible 状态可逆。
 
 - [ ] **Step 4: 把 RefreshDataAsync 改为快照绑定**
 
@@ -2231,7 +2231,7 @@ git commit -m "docs: record THSBigOrder direct and marker verification"
 - 1280×800 真实 WinForms：顶部状态为“直连”，主图红绿圆点落在白色大单累计均价线上，旧顶部/底部信号点已消失；黄线、左右轴、四小时网格、分钟柱和双层热力正常。
 - 100 万 + 买盘：100 按钮高亮，白线上只显示主动买红点，右侧买盘列表同步过滤。
 - 300 万 + 卖盘、960×640：300 按钮高亮，白线上只显示主动卖绿点，右侧卖盘列表同步过滤；主图、坐标、分钟柱和双层热力完整。右侧顶部高密度统计末尾在最小宽度仍有少量截断，属于既有布局现象，本轮未扩大为布局重构。
-- 换手率和量比在新浪无可靠字段时显示 `-`，不再显示伪造的 `0.0% / 0.00`。
+- 基础行情已改用腾讯行情字段：量比来自 `f10`，换手率优先来自腾讯 `f8`，涨停池 `turnover_rate` 作为补充来源；无可靠字段时仍显示 `-`。
 - 验收截图和一次性 live probe 只保存在忽略的 `.tmp/`，未纳入提交；我启动的 THSBigOrder 验收进程已按准确 PID 关闭。
 
 ---

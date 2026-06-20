@@ -36,6 +36,8 @@ internal static class Program
         Run("Direct Tencent minute parser validates nested rows", TestDirectTencentMinuteParsing);
         Run("Direct THS payload parsers distinguish empty limit-up", TestDirectThsParsing);
         Run("Direct source clients use upstream and matching proxy contracts", () => TestDirectSourceClients().GetAwaiter().GetResult());
+        Run("Limit-up source falls back to latest recent trading date", () => TestLimitUpDateFallback().GetAwaiter().GetResult());
+        Run("Limit-up source keeps scanning when recent pool misses stock", () => TestLimitUpFallbackSkipsNonMatchingPool().GetAwaiter().GetResult());
         Run("Proxy envelope maps degraded, stale and fresh empty states", TestEnvelopeStates);
         Run("Provider stale fallback is isolated by stock code", () => TestProviderStaleIsolation().GetAwaiter().GetResult());
         Run("Provider direct success does not call proxy", () => TestDirectSuccess().GetAwaiter().GetResult());
@@ -43,24 +45,32 @@ internal static class Program
         Run("Provider does not fallback valid empty limit-up", () => TestValidEmptyLimitUp().GetAwaiter().GetResult());
         Run("Provider uses same-stock stale only after both attempts fail", () => TestPerSourceStale().GetAwaiter().GetResult());
         Run("Provider never creates stale from an initially failed source", () => TestNoSyntheticStale().GetAwaiter().GetResult());
+        Run("Provider fills quote metrics from Tencent and limit-up context", () => TestProviderMetricBackfill().GetAwaiter().GetResult());
         Run("Series builder aggregates minute flow and thresholds", TestSeriesBuilder);
         Run("Series builder computes Tencent market VWAP", TestMarketAveragePrices);
+        Run("Series builder exposes Tencent minute price line", TestMinutePriceLine);
         Run("Series builder computes cumulative big-order average price", TestBigOrderAveragePrices);
         Run("Series builder aggregates eight half-hour turnover bands", TestHalfHourSeries);
+        Run("Series builder does not overcount truncated minute turnover", TestHalfHourTruncatedTurnover);
         Run("Legacy marker thresholds remain stable", TestLegacyMarkers);
         Run("Chart control binds three layout bands and draws empty data", TestChartControl);
         Run("Chart control exposes paired axes and intraday grids", TestIntradayChartLayout);
         Run("Chart control maps both average prices to one axis", TestAveragePriceAxis);
+        Run("Chart control draws minute price white and big-order average blue", TestMinutePriceChartLine);
         Run("Chart control falls back to THS percent only for market line", TestThsPriceFallback);
         Run("Chart control normalizes half-hour heat rows independently", TestHalfHourHeatRatios);
         Run("Chart heat text stays readable at maximum intensity", TestHeatTextContrast);
         Run("Chart filters active order events by amount and side", TestChartOrderEventFilter);
-        Run("Chart removes legacy signals and keeps second precision", TestChartOrderEventRenderingContract);
+        Run("Chart removes legacy signals and anchors events to minute price", TestChartOrderEventRenderingContract);
         Run("Order filter composes amount, side and marker", TestOrderFilter);
         Run("Refresh coordinator cancels superseded code and blocks reentry", TestRefreshCoordinator);
         Run("Main form exposes 72/28 chart and order tabs", TestMainFormLayout);
+        Run("Main form defaults amount filter to 300w", TestMainFormDefaultAmountFilter);
         Run("Main form ignores superseded refresh completion", () => TestMainFormRefreshRace().GetAwaiter().GetResult());
+        Run("Main form ignores superseded refresh failure", () => TestMainFormRefreshFailureRace().GetAwaiter().GetResult());
+        Run("Main form clamps grid mouse wheel at bottom", TestMainFormGridWheelClamp);
         Run("Main form keeps chart markers aligned with amount and side filters", () => TestMainFormMarkerFilter().GetAwaiter().GetResult());
+        Run("Main form displays quote and limit-up metrics", () => TestMainFormMetricLabels().GetAwaiter().GetResult());
         Run("Main form displays direct-first source status", () => TestMainFormSourceStatus().GetAwaiter().GetResult());
         return Environment.ExitCode;
     }
@@ -240,19 +250,56 @@ internal static class Program
             await limit.LoadProxyAsync("002297", CancellationToken.None);
 
             AssertTrue(handler.Records.Any(x => x.Uri.Host == "vaserviece.10jqka.com.cn" && x.Uri.Query.Contains("op=mainMonitorDetail") && x.Uri.Query.Contains("stockcode=002297")), "big direct url");
-            AssertTrue(handler.Records.Any(x => x.Uri.Host == "hq.sinajs.cn" && x.Uri.AbsoluteUri.Contains("sz002297")), "sina direct url");
+            AssertTrue(handler.Records.Any(x => x.Uri.Host == "qt.gtimg.cn" && x.Uri.AbsoluteUri.Contains("sz002297")), "tencent quote direct url");
             AssertTrue(handler.Records.Any(x => x.Uri.Host == "web.ifzq.gtimg.cn" && x.Uri.Query.Contains("sz002297")), "tencent direct url");
             AssertTrue(handler.Records.Any(x => x.Uri.Host == "data.10jqka.com.cn" && x.Uri.AbsolutePath.Contains("limit_up_pool")), "limit direct url");
             AssertTrue(handler.Records.Any(x => x.Uri.PathAndQuery == "/api/big-order/ths-detail?stockCode=002297"), "big proxy path");
-            AssertTrue(handler.Records.Any(x => x.Uri.PathAndQuery == "/api/quotes/sina?codes=002297"), "sina proxy path");
+            AssertTrue(handler.Records.Any(x => x.Uri.PathAndQuery == "/api/quotes/tencent?codes=002297"), "tencent quote proxy path");
             AssertTrue(handler.Records.Any(x => x.Uri.PathAndQuery == "/api/quotes/tencent/minute?code=002297"), "minute proxy path");
-            AssertTrue(handler.Records.Any(x => x.Uri.PathAndQuery == "/api/limitup/10jqka"), "limit proxy path");
+            AssertTrue(handler.Records.Any(x =>
+                x.Uri.AbsolutePath == "/api/limitup/10jqka" && x.Uri.Query.Contains("date=")), "limit proxy path");
 
             var bigRecord = handler.Records.First(x => x.Uri.Host == "vaserviece.10jqka.com.cn");
             AssertTrue(!string.IsNullOrEmpty(bigRecord.UserAgent), "THS user agent");
             AssertTrue(bigRecord.Referer.Contains("10jqka"), "THS referer");
-            var sinaRecord = handler.Records.First(x => x.Uri.Host == "hq.sinajs.cn");
-            AssertTrue(sinaRecord.Referer.Contains("finance.sina.com.cn"), "Sina referer");
+            var tencentQuoteRecord = handler.Records.First(x => x.Uri.Host == "qt.gtimg.cn");
+            AssertTrue(tencentQuoteRecord.Referer.Contains("qq.com"), "Tencent quote referer");
+        }
+    }
+
+    private static async Task TestLimitUpDateFallback()
+    {
+        var handler = new LimitUpDateFallbackHandler();
+        using (var http = new HttpClient(handler))
+        {
+            var client = new ThsLimitUpSourceClient(http, "http://127.0.0.1:3000", new ThsPayloadParser());
+            var result = await client.LoadDirectAsync("002297", CancellationToken.None);
+
+            AssertEqual(DataTransport.Direct, result.Transport, "fallback transport");
+            AssertEqual(DataFreshness.Fresh, result.Freshness, "fallback freshness");
+            AssertTrue(result.Data.Found, "fallback stock found");
+            AssertEqual(45049860d, result.Data.Context.SealAmount.Value, "fallback seal amount");
+            AssertEqual(20, result.Data.Context.OpenCount.Value, "fallback open count");
+            AssertEqual("首板", result.Data.Context.HighDays, "fallback high days");
+            AssertNear(0.5882352941176471d, result.Data.Context.SuccessRate.Value, 0.000001d, "fallback seal rate");
+            AssertEqual(3, handler.Dates.Count, "today, previous calendar day and latest fixture date requested");
+            AssertEqual(DateTime.Today.ToString("yyyyMMdd"), handler.Dates[0], "first request today");
+            AssertEqual("20260618", handler.Dates[2], "fallback request latest fixture date");
+        }
+    }
+
+    private static async Task TestLimitUpFallbackSkipsNonMatchingPool()
+    {
+        var handler = new LimitUpDateFallbackHandler { IncludeNonMatchingRecentPool = true };
+        using (var http = new HttpClient(handler))
+        {
+            var client = new ThsLimitUpSourceClient(http, "http://127.0.0.1:3000", new ThsPayloadParser());
+            var result = await client.LoadDirectAsync("002297", CancellationToken.None);
+
+            AssertTrue(result.Data.Found, "fallback scans past non-matching pool");
+            AssertEqual(45049860d, result.Data.Context.SealAmount.Value, "fallback seal amount after miss");
+            AssertTrue(handler.Dates.Count >= 3, "continued past non-matching date");
+            AssertEqual("20260618", handler.Dates[2], "scanned latest matching fixture date");
         }
     }
 
@@ -358,6 +405,58 @@ internal static class Program
         }
     }
 
+    private static async Task TestProviderMetricBackfill()
+    {
+        var sources = CreateSourceStubs();
+        sources.Quote.Direct = _ => Task.FromResult(new SourceLoadResult<StockSummary>
+        {
+            Data = new StockSummary
+            {
+                Code = "002297",
+                Name = "博云新材",
+                Price = 28.36,
+                ChangePercent = 10.09,
+                TotalAmount = 3342254360,
+                VolumeRatio = 0.82,
+            },
+            Freshness = DataFreshness.Fresh,
+            Transport = DataTransport.Direct,
+            FetchedAt = DateTime.Now,
+        });
+        sources.Limit.Direct = _ => Task.FromResult(new SourceLoadResult<LimitUpSourceData>
+        {
+            Data = new LimitUpSourceData
+            {
+                Found = true,
+                Context = new LimitUpContext
+                {
+                    SealAmount = 45049860,
+                    SealVolume = 1588500,
+                    OpenCount = 20,
+                    HighDays = "首板",
+                    SuccessRate = 0.5882,
+                    TurnoverRate = 20.56,
+                    ReasonType = "军工",
+                    LastLimitTime = "14:55:00",
+                },
+            },
+            Freshness = DataFreshness.Fresh,
+            Transport = DataTransport.Direct,
+            FetchedAt = DateTime.Now,
+        });
+
+        using (var provider = CreateProvider(sources))
+        {
+            var snapshot = await provider.LoadSnapshotAsync("002297", CancellationToken.None);
+            AssertNear(0.82d, snapshot.Stock.VolumeRatio.Value, 0.0001d, "volume ratio from Tencent quote");
+            AssertNear(20.56d, snapshot.Stock.TurnoverRate.Value, 0.0001d, "turnover from limit-up context");
+            AssertEqual(20, snapshot.LimitUp.OpenCount.Value, "open count retained");
+            AssertEqual("首板", snapshot.LimitUp.HighDays, "high days retained");
+            AssertNear(0.5882d, snapshot.LimitUp.SuccessRate.Value, 0.0001d, "success rate retained");
+            AssertEqual("14:55:00", snapshot.LimitUp.LastLimitTime, "last limit time retained");
+        }
+    }
+
     private static void TestSeriesBuilder()
     {
         var day = new DateTime(2026, 6, 18);
@@ -423,6 +522,28 @@ internal static class Program
         var unavailable = new BigOrderSeriesBuilder().Build(
             new BigOrderItem[0], turnover, DataFreshness.Failed);
         AssertEqual(0, unavailable.MarketAveragePrices.Count, "failed turnover has no market VWAP");
+    }
+
+    private static void TestMinutePriceLine()
+    {
+        var day = new DateTime(2026, 6, 20);
+        var turnover = new[]
+        {
+            new MinuteTurnoverPoint { Time = day.AddHours(9).AddMinutes(31), Price = 25.98, CumulativeVolume = 71011, CumulativeAmount = 184435426.43 },
+            new MinuteTurnoverPoint { Time = day.AddHours(9).AddMinutes(30), Price = 25.70, CumulativeVolume = 11848, CumulativeAmount = 30449360 },
+            new MinuteTurnoverPoint { Time = day.AddHours(9).AddMinutes(32), Price = 0, CumulativeVolume = 72000, CumulativeAmount = 190000000 },
+            new MinuteTurnoverPoint { Time = day.AddHours(9).AddMinutes(33), Price = double.NaN, CumulativeVolume = 73000, CumulativeAmount = 191000000 },
+        };
+
+        var series = new BigOrderSeriesBuilder().Build(new BigOrderItem[0], turnover, DataFreshness.Fresh);
+
+        AssertEqual(2, series.MinutePrices.Count, "valid minute price count");
+        AssertEqual(day.AddHours(9).AddMinutes(30), series.MinutePrices[0].Time, "minute price order");
+        AssertNear(25.70d, series.MinutePrices[0].Price, 0.0001d, "first minute price");
+        AssertNear(25.98d, series.MinutePrices[1].Price, 0.0001d, "second minute price");
+
+        var unavailable = new BigOrderSeriesBuilder().Build(new BigOrderItem[0], turnover, DataFreshness.Failed);
+        AssertEqual(0, unavailable.MinutePrices.Count, "failed turnover has no minute price line");
     }
 
     private static void TestBigOrderAveragePrices()
@@ -516,6 +637,23 @@ internal static class Program
         AssertTrue(missing.HalfHours.All(value => !value.TotalAmount.HasValue), "failed turnover is missing");
     }
 
+    private static void TestHalfHourTruncatedTurnover()
+    {
+        var day = new DateTime(2026, 6, 18);
+        var turnover = new[]
+        {
+            new MinuteTurnoverPoint { Time = day.AddHours(10), CumulativeAmount = 500 },
+            new MinuteTurnoverPoint { Time = day.AddHours(10).AddMinutes(1), CumulativeAmount = 700 },
+            new MinuteTurnoverPoint { Time = day.AddHours(10).AddMinutes(30), CumulativeAmount = 900 },
+        };
+
+        var series = new BigOrderSeriesBuilder().Build(new BigOrderItem[0], turnover, DataFreshness.Fresh);
+
+        AssertEqual(0d, series.HalfHours[0].TotalAmount.Value, "missing 09:30 baseline is not backfilled");
+        AssertEqual(200d, series.HalfHours[1].TotalAmount.Value, "first truncated point is baseline only");
+        AssertEqual(200d, series.HalfHours[2].TotalAmount.Value, "next boundary receives following delta");
+    }
+
     private static void TestChartControl()
     {
         using (var control = new BigOrderChartControl())
@@ -604,6 +742,7 @@ internal static class Program
                 new AveragePricePoint { Time = day.AddHours(9).AddMinutes(30), Price = 10.2 },
                 new AveragePricePoint { Time = day.AddHours(9).AddMinutes(31), Price = 10.8 },
             },
+            MinutePrices = new AveragePricePoint[0],
         };
 
         using (var control = new BigOrderChartControl())
@@ -616,6 +755,46 @@ internal static class Program
             AssertNear(8d, control.BigOrderLinePercents[1].Value, 0.0001d, "big-order line second percent");
             AssertTrue(control.AxisTicks.First().Percent <= 0, "axis contains zero percent");
             AssertTrue(control.AxisTicks.Last().Percent >= 10, "axis contains both lines");
+        }
+    }
+
+    private static void TestMinutePriceChartLine()
+    {
+        var day = new DateTime(2026, 6, 20);
+        var series = new BigOrderSeries
+        {
+            Minutes = new MinuteFlow[0],
+            NetFlow = new NetFlowPoint[0],
+            Thresholds = new ThresholdFlow[0],
+            HalfHours = new HalfHourAmount[0],
+            MarketAveragePrices = new[]
+            {
+                new AveragePricePoint { Time = day.AddHours(9).AddMinutes(30), Price = 10.1 },
+                new AveragePricePoint { Time = day.AddHours(9).AddMinutes(31), Price = 10.2 },
+            },
+            BigOrderAveragePrices = new[]
+            {
+                new AveragePricePoint { Time = day.AddHours(9).AddMinutes(30), Price = 10.2 },
+                new AveragePricePoint { Time = day.AddHours(9).AddMinutes(31), Price = 10.4 },
+            },
+            MinutePrices = new[]
+            {
+                new AveragePricePoint { Time = day.AddHours(9).AddMinutes(30), Price = 10.5 },
+                new AveragePricePoint { Time = day.AddHours(9).AddMinutes(31), Price = 11 },
+            },
+        };
+
+        using (var control = new BigOrderChartControl())
+        using (var bitmap = new Bitmap(1000, 650))
+        {
+            control.Size = new Size(1000, 650);
+            control.SetSnapshot(CreateChartSnapshot(day, new PricePoint[0]), series);
+            AssertEqual(2, control.MinutePriceLinePercents.Count, "minute line percent count");
+            AssertNear(5d, control.MinutePriceLinePercents[0].Value, 0.0001d, "minute line first percent");
+            AssertNear(10d, control.MinutePriceLinePercents[1].Value, 0.0001d, "minute line second percent");
+            control.DrawToBitmap(bitmap, new Rectangle(0, 0, bitmap.Width, bitmap.Height));
+            AssertTrue(HasWhitePixel(bitmap, control.LayoutBands[0]), "white minute price line rendered");
+            AssertTrue(HasBluePixel(bitmap, control.LayoutBands[0]), "blue big-order average line rendered");
         }
     }
 
@@ -715,6 +894,28 @@ internal static class Program
             "big-order heat text contrast");
     }
 
+    private static bool HasBluePixel(Bitmap bitmap, Rectangle area)
+    {
+        for (var y = Math.Max(0, area.Top); y < Math.Min(bitmap.Height, area.Bottom); y++)
+        for (var x = Math.Max(0, area.Left); x < Math.Min(bitmap.Width, area.Right); x++)
+        {
+            var color = bitmap.GetPixel(x, y);
+            if (color.B > 180 && color.G > 100 && color.R < 140) return true;
+        }
+        return false;
+    }
+
+    private static bool HasWhitePixel(Bitmap bitmap, Rectangle area)
+    {
+        for (var y = Math.Max(0, area.Top); y < Math.Min(bitmap.Height, area.Bottom); y++)
+        for (var x = Math.Max(0, area.Left); x < Math.Min(bitmap.Width, area.Right); x++)
+        {
+            var color = bitmap.GetPixel(x, y);
+            if (color.R > 210 && color.G > 210 && color.B > 210) return true;
+        }
+        return false;
+    }
+
     private static void TestChartOrderEventFilter()
     {
         var day = new DateTime(2026, 6, 20);
@@ -760,15 +961,24 @@ internal static class Program
             control.DrawToBitmap(bitmap, new Rectangle(0, 0, bitmap.Width, bitmap.Height));
             var hasRed = false;
             var hasGreen = false;
+            var redY = -1;
             for (var y = 0; y < bitmap.Height && !(hasRed && hasGreen); y++)
             for (var x = 0; x < bitmap.Width; x++)
             {
                 var color = bitmap.GetPixel(x, y);
-                hasRed |= color.R > 200 && color.G < 130 && color.B < 150;
+                if (color.R > 200 && color.G < 130 && color.B < 150)
+                {
+                    hasRed = true;
+                    redY = redY < 0 ? y : redY;
+                }
                 hasGreen |= color.G > 170 && color.R < 100 && color.B < 190;
             }
             AssertTrue(hasRed, "active buy red marker rendered");
             AssertTrue(hasGreen, "active sell green marker rendered");
+            var minuteLineY = ChartPercentY(control, 1d);
+            var bigOrderLineY = ChartPercentY(control, 2d);
+            AssertTrue(Math.Abs(redY - minuteLineY) <= 5, "red marker anchored to minute price");
+            AssertTrue(Math.Abs(redY - bigOrderLineY) > 8, "red marker not anchored to big-order average");
         }
     }
 
@@ -786,6 +996,11 @@ internal static class Program
                 new AveragePricePoint { Time = day.AddHours(9).AddMinutes(31), Price = 10.2 },
                 new AveragePricePoint { Time = day.AddHours(9).AddMinutes(32), Price = 10.3 },
             },
+            MinutePrices = new[]
+            {
+                new AveragePricePoint { Time = day.AddHours(9).AddMinutes(31), Price = 10.1 },
+                new AveragePricePoint { Time = day.AddHours(9).AddMinutes(32), Price = 10.1 },
+            },
             BigOrderEvents = new[]
             {
                 new BigOrderEventPoint { Time = day.AddHours(9).AddMinutes(31).AddSeconds(10), AveragePrice = 10.2, Amount = 1500000, Type = 2 },
@@ -795,6 +1010,15 @@ internal static class Program
                 new BigOrderEventPoint { Time = day.AddHours(9).AddMinutes(35), AveragePrice = 10.25, Amount = 500000, Type = 2 },
             },
         };
+    }
+
+    private static double ChartPercentY(BigOrderChartControl control, double percent)
+    {
+        var bottom = control.LayoutBands[0].Bottom;
+        var height = control.LayoutBands[0].Height;
+        var minimum = control.AxisTicks.First().Percent;
+        var maximum = control.AxisTicks.Last().Percent;
+        return bottom - (percent - minimum) / (maximum - minimum) * height;
     }
 
     private static double ContrastRatio(Color first, Color second)
@@ -844,11 +1068,24 @@ internal static class Program
             AssertEqual("买盘", form.OrderTabs.TabPages[1].Text, "buy tab");
             AssertEqual("卖盘", form.OrderTabs.TabPages[2].Text, "sell tab");
             form.ClientSize = new Size(1080, 800);
-            AssertTrue(!form.ShowsLimitUpReason && form.ShowsSealRate, "1080 responsive band");
+            AssertTrue(!form.ShowsLimitUpReason, "1080 responsive band");
             form.ClientSize = new Size(980, 800);
-            AssertTrue(!form.ShowsSealRate && !form.ShowsLastLimitTime, "980 responsive band");
+            AssertTrue(!form.ShowsLimitUpReason, "980 responsive band");
             form.ClientSize = new Size(1280, 800);
-            AssertTrue(form.ShowsLimitUpReason && form.ShowsSealRate && form.ShowsLastLimitTime, "responsive recovery");
+            AssertTrue(form.ShowsLimitUpReason, "responsive recovery");
+        }
+    }
+
+    private static void TestMainFormDefaultAmountFilter()
+    {
+        using (var form = new MainForm(null, false))
+        {
+            var currentMoney = (int)typeof(MainForm)
+                .GetField("_currentMoney", BindingFlags.Instance | BindingFlags.NonPublic)
+                .GetValue(form);
+            AssertEqual(3000000, currentMoney, "default money filter");
+            AssertEqual(Color.White, FindButton(form, "300").ForeColor, "300w button highlighted");
+            AssertEqual(Color.Silver, FindButton(form, "30").ForeColor, "30w button not highlighted");
         }
     }
 
@@ -864,6 +1101,36 @@ internal static class Program
             provider.Complete("002297");
             await oldRequest;
             AssertEqual("600519", form.BoundStockCode, "latest stock remains bound");
+        }
+    }
+
+    private static async Task TestMainFormRefreshFailureRace()
+    {
+        var provider = new ControlledProvider();
+        using (var form = new MainForm(provider, false))
+        {
+            var oldRequest = form.RefreshStockAsync("002297", true);
+            var latestRequest = form.RefreshStockAsync("600519", true);
+            provider.Complete("600519");
+            await latestRequest;
+            provider.Fail("002297", new InvalidOperationException("old boom"));
+            await oldRequest;
+            AssertEqual("600519", form.BoundStockCode, "latest stock remains bound after old failure");
+            AssertTrue(!form.StatusText.Contains("old boom"), "old failure does not overwrite latest status");
+        }
+    }
+
+    private static void TestMainFormGridWheelClamp()
+    {
+        using (var form = new MainForm(null, false))
+        {
+            var grid = OrdersGrid(form);
+            for (var i = 0; i < 30; i++) grid.Rows.Add("09:30:00", "10.00", "1000", "100", "买");
+            form.ClientSize = new Size(900, 500);
+            grid.Size = new Size(600, 180);
+            grid.FirstDisplayedScrollingRowIndex = grid.Rows.Count - 1;
+            InvokeGridMouseWheel(form, -120);
+            AssertTrue(grid.FirstDisplayedScrollingRowIndex <= grid.Rows.Count - 1, "mouse wheel bottom remains valid");
         }
     }
 
@@ -900,8 +1167,8 @@ internal static class Program
                 .GetField("_minimumOrderAmount", BindingFlags.Instance | BindingFlags.NonPublic)
                 .GetValue(chart);
             AssertEqual(4, boundSeries.BigOrderEvents.Count, "bound chart events");
-            AssertEqual(300000d, boundMinimum, "bound chart minimum");
-            AssertEqual(3, form.VisibleChartOrderEvents.Count, "30w initial markers");
+            AssertEqual(3000000d, boundMinimum, "bound chart minimum");
+            AssertEqual(1, form.VisibleChartOrderEvents.Count, "300w initial markers");
             InvokeClick(form, "btn100W_Click", FindButton(form, "100"));
             AssertEqual(2, form.VisibleChartOrderEvents.Count, "100w all markers");
             form.OrderTabs.SelectedIndex = 1;
@@ -915,6 +1182,51 @@ internal static class Program
             form.OrderTabs.SelectedIndex = 2;
             InvokeTabChanged(form);
             AssertEqual(1, form.VisibleChartOrderEvents.Count, "300w sell markers");
+        }
+    }
+
+    private static async Task TestMainFormMetricLabels()
+    {
+        var snapshot = new MarketSnapshot(
+            "002297",
+            new StockSummary
+            {
+                Code = "002297",
+                Name = "博云新材",
+                Price = 28.36,
+                ChangePercent = 10.09,
+                TotalAmount = 3342254360,
+                TurnoverRate = 20.56,
+                VolumeRatio = 0.82,
+            },
+            new MainFundSummary { MainBuy = 592820000, MainSell = 155870000, NetAmount = 436950000 },
+            new LimitUpContext
+            {
+                SealAmount = 45049860,
+                OpenCount = 20,
+                HighDays = "首板",
+                SuccessRate = 58.82,
+                ReasonType = "军工",
+                LastLimitTime = "14:55:00",
+            },
+            new BigOrderItem[0],
+            new PricePoint[0],
+            DataFreshness.Fresh,
+            DataFreshness.Fresh,
+            DataFreshness.Fresh,
+            DateTime.Now,
+            DateTime.Now);
+
+        using (var form = new MainForm(new ImmediateProvider(snapshot), false))
+        {
+            await form.RefreshStockAsync("002297", true);
+            AssertEqual("换手: 20.6%", form.TurnoverText, "turnover label");
+            AssertEqual("量比: 0.82", form.VolumeRatioText, "volume ratio label");
+            AssertEqual("封单 4505万", form.SealAmountText, "seal amount label");
+            AssertEqual("开板 20", form.OpenCountText, "open count label");
+            AssertEqual("连板 首板", form.HighDaysText, "high days label");
+            AssertTrue(!form.MetricTexts.Any(text => text.StartsWith("封板率")), "seal rate hidden");
+            AssertTrue(!form.MetricTexts.Any(text => text.StartsWith("末封") || text.StartsWith("未封")), "last/unsealed hidden");
         }
     }
 
@@ -940,6 +1252,19 @@ internal static class Program
     {
         typeof(MainForm).GetMethod("OrderTabs_SelectedIndexChanged", BindingFlags.Instance | BindingFlags.NonPublic)
             .Invoke(form, new object[] { form.OrderTabs, EventArgs.Empty });
+    }
+
+    private static void InvokeGridMouseWheel(MainForm form, int delta)
+    {
+        typeof(MainForm).GetMethod("dataGridView1_MouseWheel", BindingFlags.Instance | BindingFlags.NonPublic)
+            .Invoke(form, new object[] { OrdersGrid(form), new MouseEventArgs(MouseButtons.None, 0, 0, 0, delta) });
+    }
+
+    private static DataGridView OrdersGrid(MainForm form)
+    {
+        return (DataGridView)typeof(MainForm)
+            .GetField("dataGridView1", BindingFlags.Instance | BindingFlags.NonPublic)
+            .GetValue(form);
     }
 
     private static Button FindButtonOrNull(Control root, string text)
@@ -1128,6 +1453,31 @@ internal static class Program
         public string Referer { get; set; }
     }
 
+    private sealed class LimitUpDateFallbackHandler : HttpMessageHandler
+    {
+        public List<string> Dates { get; } = new List<string>();
+        public bool IncludeNonMatchingRecentPool { get; set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var query = request.RequestUri.Query.TrimStart('?')
+                .Split('&')
+                .Select(part => part.Split('='))
+                .FirstOrDefault(parts => parts.Length == 2 && parts[0] == "date");
+            var date = query == null ? "" : query[1];
+            Dates.Add(date);
+            var json = date == "20260618"
+                ? "{'data':{'info':[{'code':'002297','order_amount':45049860,'order_volume':1588500,'open_num':20,'high_days':'首板','limit_up_suc_rate':0.5882352941176471,'turnover_rate':20.5636,'reason_type':'硬质合金'}]}}"
+                : IncludeNonMatchingRecentPool && Dates.Count == 2
+                    ? "{'data':{'info':[{'code':'600519','order_amount':1000}]}}"
+                : "{'data':{'info':[]}}";
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(json, Encoding.UTF8, "application/json"),
+            });
+        }
+    }
+
     private sealed class SourceClientHandler : HttpMessageHandler
     {
         public List<SourceRequestRecord> Records { get; } = new List<SourceRequestRecord>();
@@ -1149,6 +1499,11 @@ internal static class Program
                 content = new ByteArrayContent(Encoding.GetEncoding(936).GetBytes(
                     "var hq_str_sz002297=\"博云新材,25.70,25.76,28.36,28.36,25.69,0,0,117850000,3342254360,0\";"));
             }
+            else if (host == "qt.gtimg.cn")
+            {
+                content = new ByteArrayContent(Encoding.GetEncoding(936).GetBytes(
+                    "v_sz002297=\"1~博云新材~002297~28.36~25.76~25.70~1178500~~~~~~~~~~~~~~~~~~~~~~~~~~2.60~10.09~~~~~20.56~0~~0~~~0~334225.4360~0~0~0.82~ \";"));
+            }
             else
             {
                 string json;
@@ -1160,8 +1515,8 @@ internal static class Program
                     json = "{'data':{'info':[]}}";
                 else if (path == "/api/big-order/ths-detail")
                     json = "{'ok':true,'fetchedAt':1781746200000,'data':{'title':{'stockname':'博云新材','price':28.36},'list':[],'pricechange':[]}}";
-                else if (path == "/api/quotes/sina")
-                    json = "{'data':{'diff':[{'f12':'002297','f14':'博云新材','f2':28.36,'f3':10.09,'f5':3342254360,'f6':117850000}]}}";
+                else if (path == "/api/quotes/tencent")
+                    json = "{'data':{'diff':[{'f12':'002297','f14':'博云新材','f2':28.36,'f3':10.09,'f5':3342254360,'f6':1178500,'f8':20.56,'f10':0.82}]}}";
                 else if (path == "/api/quotes/tencent/minute")
                     json = "{'ok':true,'data':{'date':'20260618','points':[{'time':'0930','price':25.70,'cumulativeVolume':11848,'cumulativeAmount':30449360}]}}";
                 else
@@ -1263,6 +1618,11 @@ internal static class Program
                 DataFreshness.Missing,
                 DateTime.Now,
                 DateTime.Now));
+        }
+
+        public void Fail(string stockCode, Exception error)
+        {
+            _pending[stockCode].SetException(error);
         }
     }
 }

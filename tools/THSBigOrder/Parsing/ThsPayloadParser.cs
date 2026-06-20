@@ -80,6 +80,30 @@ namespace THSBigOrder.Parsing
             };
         }
 
+        public StockSummary ParseTencentQuote(string stockCode, byte[] payload)
+        {
+            var text = System.Text.Encoding.GetEncoding(936).GetString(payload ?? new byte[0]);
+            var marker = "v_" + (stockCode.StartsWith("6") ? "sh" : "sz") + stockCode + "=\"";
+            var start = text.IndexOf(marker, StringComparison.Ordinal);
+            var end = start < 0 ? -1 : text.IndexOf('"', start + marker.Length);
+            if (start < 0 || end < 0) throw new PayloadParseException("invalid Tencent quote payload");
+            var parts = text.Substring(start + marker.Length, end - start - marker.Length).Split('~');
+            if (parts.Length < 50) throw new PayloadParseException("invalid Tencent quote fields");
+            var price = FiniteNumber(parts[3]);
+            var volume = FiniteNumber(parts[6]);
+            return new StockSummary
+            {
+                Code = stockCode,
+                Name = parts[1],
+                Price = price,
+                ChangePercent = FiniteNumber(parts[32]),
+                Volume = volume,
+                TotalAmount = price.HasValue && volume.HasValue ? (double?)(price.Value * volume.Value * 100d) : null,
+                TurnoverRate = FiniteNumber(parts[38]),
+                VolumeRatio = FiniteNumber(parts[49]),
+            };
+        }
+
         public StockSummary ParseNormalizedQuote(string stockCode, JObject payload)
         {
             return ParseQuote(stockCode, payload, new List<string>());
@@ -354,6 +378,7 @@ namespace THSBigOrder.Parsing
                 OpenCount = FiniteNumber(row?["open_num"]).HasValue ? (int?)FiniteNumber(row["open_num"]).Value : null,
                 HighDays = (string)row?["high_days"],
                 SuccessRate = FiniteNumber(row?["limit_up_suc_rate"]),
+                TurnoverRate = FiniteNumber(row?["turnover_rate"]),
                 ReasonType = (string)row?["reason_type"],
                 FirstLimitTime = (string)row?["first_limit_up_time"],
                 LastLimitTime = (string)row?["last_limit_up_time"],

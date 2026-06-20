@@ -37,10 +37,8 @@ namespace THSBigOrder
         this.lblSealAmount = new System.Windows.Forms.Label();
         this.lblOpenCount = new System.Windows.Forms.Label();
         this.lblHighDays = new System.Windows.Forms.Label();
-        this.lblSealRate = new System.Windows.Forms.Label();
         this.lblLimitUpReason = new System.Windows.Forms.Label();
         this.lblReasonHint = new System.Windows.Forms.Label();
-        this.lblLastLimitTime = new System.Windows.Forms.Label();
         this.lblFreshness = new System.Windows.Forms.Label();
 
         // 股票信息控件
@@ -107,8 +105,8 @@ namespace THSBigOrder
         this.metricsFlow.Padding = new System.Windows.Forms.Padding(6, 5, 0, 0);
         this.metricsFlow.WrapContents = false;
         this.metricsFlow.BackColor = System.Drawing.Color.FromArgb(14, 20, 32);
-        var metricLabels = new[] { this.lblPrice, this.lblMainBuy, this.lblMainSell, this.lblMainNet, this.lblSealAmount, this.lblOpenCount, this.lblHighDays, this.lblSealRate, this.lblLastLimitTime, this.lblLimitUpReason, this.lblReasonHint, this.lblFreshness };
-        var metricTexts = new[] { "现价 -", "主买 -", "主卖 -", "主净 -", "封单 -", "开板 -", "连板 -", "封板率 -", "末封 -", "涨停原因 -", "原因…", "数据等待" };
+        var metricLabels = new[] { this.lblPrice, this.lblMainBuy, this.lblMainSell, this.lblMainNet, this.lblSealAmount, this.lblOpenCount, this.lblHighDays, this.lblLimitUpReason, this.lblReasonHint, this.lblFreshness };
+        var metricTexts = new[] { "现价 -", "主买 -", "主卖 -", "主净 -", "封单 -", "开板 -", "连板 -", "涨停原因 -", "原因…", "数据等待" };
         for (int metricIndex = 0; metricIndex < metricLabels.Length; metricIndex++)
         {
             metricLabels[metricIndex].AutoSize = true;
@@ -322,12 +320,12 @@ namespace THSBigOrder
         int btnH = 26;
         int btnGap = 1;
 
-        // btn30W (默认选中)
-        this.btn30W.BackColor = System.Drawing.Color.FromArgb(50, 90, 140);
+        // btn30W
+        this.btn30W.BackColor = System.Drawing.Color.FromArgb(35, 35, 40);
         this.btn30W.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
         this.btn30W.FlatAppearance.BorderSize = 0;
         this.btn30W.Font = new System.Drawing.Font("Microsoft YaHei", 8F);
-        this.btn30W.ForeColor = System.Drawing.Color.White;
+        this.btn30W.ForeColor = System.Drawing.Color.Silver;
         this.btn30W.Location = new System.Drawing.Point(5, btnY);
         this.btn30W.Size = new System.Drawing.Size(btnW, btnH);
         this.btn30W.Text = "30";
@@ -359,11 +357,11 @@ namespace THSBigOrder
         this.btn100W.Click += new System.EventHandler(this.btn100W_Click);
 
         // btn300W
-        this.btn300W.BackColor = System.Drawing.Color.FromArgb(35, 35, 40);
+        this.btn300W.BackColor = System.Drawing.Color.FromArgb(50, 90, 140);
         this.btn300W.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
         this.btn300W.FlatAppearance.BorderSize = 0;
         this.btn300W.Font = new System.Drawing.Font("Microsoft YaHei", 8F);
-        this.btn300W.ForeColor = System.Drawing.Color.Silver;
+        this.btn300W.ForeColor = System.Drawing.Color.White;
         this.btn300W.Location = new System.Drawing.Point(5 + (btnW + btnGap) * 3, btnY);
         this.btn300W.Size = new System.Drawing.Size(btnW, btnH);
         this.btn300W.Text = "300";
@@ -554,10 +552,8 @@ namespace THSBigOrder
     private System.Windows.Forms.Label lblSealAmount;
     private System.Windows.Forms.Label lblOpenCount;
     private System.Windows.Forms.Label lblHighDays;
-    private System.Windows.Forms.Label lblSealRate;
     private System.Windows.Forms.Label lblLimitUpReason;
     private System.Windows.Forms.Label lblReasonHint;
-    private System.Windows.Forms.Label lblLastLimitTime;
     private System.Windows.Forms.Label lblFreshness;
 
     // 股票信息

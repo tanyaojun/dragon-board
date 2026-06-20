@@ -66,13 +66,15 @@ namespace THSBigOrder
 
             var bigData = big.Data ?? new BigOrderSourceData();
             var stock = quote.Data ?? new StockSummary { Code = stockCode };
+            var limitContext = limit.Data?.Context ?? new LimitUpContext();
             if (string.IsNullOrWhiteSpace(stock.Name)) stock.Name = bigData.StockFallback?.Name ?? "";
             if (!stock.Price.HasValue) stock.Price = bigData.StockFallback?.Price;
+            if (!stock.TurnoverRate.HasValue) stock.TurnoverRate = limitContext.TurnoverRate;
             var snapshot = new MarketSnapshot(
                 stockCode,
                 stock,
                 bigData.MainFunds ?? new MainFundSummary(),
-                limit.Data?.Context ?? new LimitUpContext(),
+                limitContext,
                 bigData.Orders ?? new BigOrderItem[0],
                 bigData.Prices ?? new PricePoint[0],
                 minute.Data ?? new MinuteTurnoverPoint[0],

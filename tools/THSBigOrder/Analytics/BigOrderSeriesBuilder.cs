@@ -47,6 +47,7 @@ namespace THSBigOrder.Analytics
         public IReadOnlyList<ThresholdFlow> Thresholds { get; set; }
         public IReadOnlyList<HalfHourAmount> HalfHours { get; set; }
         public IReadOnlyList<AveragePricePoint> MarketAveragePrices { get; set; }
+        public IReadOnlyList<AveragePricePoint> MinutePrices { get; set; }
         public IReadOnlyList<AveragePricePoint> BigOrderAveragePrices { get; set; }
         public IReadOnlyList<BigOrderEventPoint> BigOrderEvents { get; set; }
     }
@@ -119,6 +120,14 @@ namespace THSBigOrder.Analytics
                     .ToList()
                 : new List<AveragePricePoint>();
 
+            var minutePrices = hasTurnover
+                ? (turnover ?? Enumerable.Empty<MinuteTurnoverPoint>())
+                    .Where(point => IsFinite(point.Price) && point.Price > 0)
+                    .OrderBy(point => point.Time)
+                    .Select(point => new AveragePricePoint { Time = point.Time, Price = point.Price })
+                    .ToList()
+                : new List<AveragePricePoint>();
+
             double weightedPrice = 0;
             double cumulativeVolume = 0;
             var bigOrderAveragePrices = new List<AveragePricePoint>();
@@ -151,12 +160,14 @@ namespace THSBigOrder.Analytics
 
             if (hasTurnover)
             {
-                double previousAmount = 0;
+                double? previousAmount = null;
                 foreach (var point in (turnover ?? Enumerable.Empty<MinuteTurnoverPoint>())
                     .OrderBy(value => value.Time))
                 {
                     var index = HalfHourIndex(point.Time);
-                    var delta = point.CumulativeAmount - previousAmount;
+                    var delta = previousAmount.HasValue
+                        ? point.CumulativeAmount - previousAmount.Value
+                        : IsMarketOpen(point.Time) ? point.CumulativeAmount : 0;
                     if (index >= 0 && delta >= 0)
                         halfHours[index].TotalAmount = halfHours[index].TotalAmount.GetValueOrDefault() + delta;
                     previousAmount = point.CumulativeAmount;
@@ -170,6 +181,7 @@ namespace THSBigOrder.Analytics
                 Thresholds = thresholds,
                 HalfHours = halfHours,
                 MarketAveragePrices = marketAveragePrices,
+                MinutePrices = minutePrices,
                 BigOrderAveragePrices = bigOrderAveragePrices,
                 BigOrderEvents = bigOrderEvents,
             };
@@ -212,6 +224,11 @@ namespace THSBigOrder.Analytics
             if (minutes >= afternoonStart && minutes <= afternoonEnd)
                 return minutes == afternoonEnd ? 7 : 4 + (minutes - afternoonStart) / 30;
             return -1;
+        }
+
+        private static bool IsMarketOpen(DateTime time)
+        {
+            return time.Hour == 9 && time.Minute == 30;
         }
     }
 }
