@@ -150,7 +150,7 @@ namespace THSBigOrder
             SourceLoadResult<LimitUpSourceData> limit)
         {
             if (cached == null) return;
-            if (big.Transport == DataTransport.Failed && cached.Orders.Count > 0)
+            if (big.Transport == DataTransport.Failed && IsUsable(cached.Transports.BigOrder))
             {
                 big.Data = new BigOrderSourceData
                 {
@@ -163,19 +163,19 @@ namespace THSBigOrder
                 big.Transport = DataTransport.Stale;
                 big.FetchedAt = cached.BigOrderFetchedAt;
             }
-            if (quote.Transport == DataTransport.Failed && cached.Stock != null)
+            if (quote.Transport == DataTransport.Failed && IsUsable(cached.Transports.Quote))
             {
                 quote.Data = cached.Stock;
                 quote.Freshness = DataFreshness.Stale;
                 quote.Transport = DataTransport.Stale;
             }
-            if (minute.Transport == DataTransport.Failed && cached.MinuteTurnover.Count > 0)
+            if (minute.Transport == DataTransport.Failed && IsUsable(cached.Transports.Minute))
             {
                 minute.Data = cached.MinuteTurnover;
                 minute.Freshness = DataFreshness.Stale;
                 minute.Transport = DataTransport.Stale;
             }
-            if (limit.Transport == DataTransport.Failed && cached.LimitUp != null)
+            if (limit.Transport == DataTransport.Failed && IsUsable(cached.Transports.LimitUp))
             {
                 limit.Data = new LimitUpSourceData
                 {
@@ -185,6 +185,13 @@ namespace THSBigOrder
                 limit.Freshness = DataFreshness.Stale;
                 limit.Transport = DataTransport.Stale;
             }
+        }
+
+        private static bool IsUsable(DataTransport transport)
+        {
+            return transport == DataTransport.Direct ||
+                   transport == DataTransport.ProxyFallback ||
+                   transport == DataTransport.Stale;
         }
 
         public void CalculateMarkers(List<BigOrderItem> data)

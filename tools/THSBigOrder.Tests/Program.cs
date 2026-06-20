@@ -42,6 +42,7 @@ internal static class Program
         Run("Provider falls back only the failed source", () => TestIndependentProxyFallback().GetAwaiter().GetResult());
         Run("Provider does not fallback valid empty limit-up", () => TestValidEmptyLimitUp().GetAwaiter().GetResult());
         Run("Provider uses same-stock stale only after both attempts fail", () => TestPerSourceStale().GetAwaiter().GetResult());
+        Run("Provider never creates stale from an initially failed source", () => TestNoSyntheticStale().GetAwaiter().GetResult());
         Run("Series builder aggregates minute flow and thresholds", TestSeriesBuilder);
         Run("Series builder computes Tencent market VWAP", TestMarketAveragePrices);
         Run("Series builder computes cumulative big-order average price", TestBigOrderAveragePrices);
@@ -338,6 +339,22 @@ internal static class Program
             AssertEqual(DataFreshness.Stale, stale.BigOrderFreshness, "big stale freshness");
             AssertEqual(DataTransport.Stale, stale.Transports.BigOrder, "big stale transport");
             AssertEqual(DataTransport.Direct, stale.Transports.Quote, "quote keeps direct");
+        }
+    }
+
+    private static async Task TestNoSyntheticStale()
+    {
+        var sources = CreateSourceStubs();
+        sources.Quote.Direct = _ => throw new HttpRequestException("direct blocked");
+        sources.Quote.Proxy = _ => throw new HttpRequestException("proxy stopped");
+        using (var provider = CreateProvider(sources))
+        {
+            var first = await provider.LoadSnapshotAsync("002297", CancellationToken.None);
+            var second = await provider.LoadSnapshotAsync("002297", CancellationToken.None);
+            AssertEqual(DataFreshness.Failed, first.QuoteFreshness, "initial quote failed");
+            AssertEqual(DataTransport.Failed, first.Transports.Quote, "initial quote transport");
+            AssertEqual(DataFreshness.Failed, second.QuoteFreshness, "repeat quote remains failed");
+            AssertEqual(DataTransport.Failed, second.Transports.Quote, "no synthetic stale transport");
         }
     }
 
