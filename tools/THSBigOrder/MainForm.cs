@@ -108,6 +108,8 @@ namespace THSBigOrder
         internal IReadOnlyList<BigOrderEventPoint> VisibleChartOrderEvents => bigOrderChart.VisibleOrderEvents;
         internal string FreshnessText => lblFreshness.Text;
         internal string StatusText => lblStatus.Text;
+        internal string TurnoverText => lblTurnover.Text;
+        internal string VolumeRatioText => lblVolumeRatio.Text;
 
         internal Task RefreshStockAsync(string stockCode, bool forceForCodeChange)
         {
@@ -650,10 +652,14 @@ namespace THSBigOrder
             lblChange.Text = string.Format("涨幅: {0:F1}%", _stockInfo.Change);
             lblChange.ForeColor = _stockInfo.Change >= 0 ? ColorMainBuy : ColorMainSell;
 
-            lblVolumeRatio.Text = string.Format("量比: {0:F2}", _stockInfo.VolumeRatio);
+            lblVolumeRatio.Text = _snapshot.Stock.VolumeRatio.HasValue
+                ? string.Format("量比: {0:F2}", _snapshot.Stock.VolumeRatio.Value)
+                : "量比: -";
 
             // 第二行：股票代码 + 换手 + 成交
-            lblTurnover.Text = string.Format("换手: {0:F1}%", _stockInfo.TurnoverRate);
+            lblTurnover.Text = _snapshot.Stock.TurnoverRate.HasValue
+                ? string.Format("换手: {0:F1}%", _snapshot.Stock.TurnoverRate.Value)
+                : "换手: -";
 
             double totalAmount = _stockInfo.TotalAmount;
             string amountStr = totalAmount >= 100000000

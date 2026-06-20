@@ -972,6 +972,8 @@ internal static class Program
         {
             await form.RefreshStockAsync("002297", true);
             AssertEqual("代理降级: 分时", form.FreshnessText, "source status text");
+            AssertEqual("换手: -", form.TurnoverText, "missing turnover text");
+            AssertEqual("量比: -", form.VolumeRatioText, "missing volume ratio text");
         }
     }
 
