@@ -35,10 +35,16 @@ internal static class Program
         Run("Provider stale fallback is isolated by stock code", () => TestProviderStaleIsolation().GetAwaiter().GetResult());
         Run("Provider preserves optional degraded and stale states", () => TestProviderOptionalStates().GetAwaiter().GetResult());
         Run("Series builder aggregates minute flow and thresholds", TestSeriesBuilder);
+        Run("Series builder computes Tencent market VWAP", TestMarketAveragePrices);
+        Run("Series builder computes cumulative big-order average price", TestBigOrderAveragePrices);
         Run("Series builder aggregates eight half-hour turnover bands", TestHalfHourSeries);
         Run("Legacy marker thresholds remain stable", TestLegacyMarkers);
         Run("Chart control binds three layout bands and draws empty data", TestChartControl);
         Run("Chart control exposes paired axes and intraday grids", TestIntradayChartLayout);
+        Run("Chart control maps both average prices to one axis", TestAveragePriceAxis);
+        Run("Chart control falls back to THS percent only for market line", TestThsPriceFallback);
+        Run("Chart control normalizes half-hour heat rows independently", TestHalfHourHeatRatios);
+        Run("Chart heat text stays readable at maximum intensity", TestHeatTextContrast);
         Run("Order filter composes amount, side and marker", TestOrderFilter);
         Run("Refresh coordinator cancels superseded code and blocks reentry", TestRefreshCoordinator);
         Run("Main form exposes 72/28 chart and order tabs", TestMainFormLayout);
@@ -206,6 +212,78 @@ internal static class Program
         AssertEqual(1000000d, series.Thresholds.Single(value => value.Amount == 1000000).BuyAmount, "100w buy");
     }
 
+    private static void TestMarketAveragePrices()
+    {
+        var day = new DateTime(2026, 6, 20);
+        var turnover = new[]
+        {
+            new MinuteTurnoverPoint
+            {
+                Time = day.AddHours(9).AddMinutes(31),
+                CumulativeVolume = 71011,
+                CumulativeAmount = 184435426.43,
+            },
+            new MinuteTurnoverPoint
+            {
+                Time = day.AddHours(9).AddMinutes(30),
+                CumulativeVolume = 11848,
+                CumulativeAmount = 30449360,
+            },
+            new MinuteTurnoverPoint
+            {
+                Time = day.AddHours(9).AddMinutes(32),
+                CumulativeVolume = 0,
+                CumulativeAmount = 200000000,
+            },
+            new MinuteTurnoverPoint
+            {
+                Time = day.AddHours(9).AddMinutes(33),
+                CumulativeVolume = double.NaN,
+                CumulativeAmount = double.PositiveInfinity,
+            },
+            new MinuteTurnoverPoint
+            {
+                Time = day.AddHours(13),
+                CumulativeVolume = 71011,
+                CumulativeAmount = -1,
+            },
+        };
+
+        var series = new BigOrderSeriesBuilder().Build(
+            new BigOrderItem[0], turnover, DataFreshness.Fresh);
+
+        AssertEqual(2, series.MarketAveragePrices.Count, "valid market VWAP count");
+        AssertEqual(day.AddHours(9).AddMinutes(30), series.MarketAveragePrices[0].Time, "market VWAP order");
+        AssertNear(25.70d, series.MarketAveragePrices[0].Price, 0.001d, "09:30 market VWAP");
+        AssertNear(25.9728d, series.MarketAveragePrices[1].Price, 0.001d, "09:31 market VWAP");
+
+        var unavailable = new BigOrderSeriesBuilder().Build(
+            new BigOrderItem[0], turnover, DataFreshness.Failed);
+        AssertEqual(0, unavailable.MarketAveragePrices.Count, "failed turnover has no market VWAP");
+    }
+
+    private static void TestBigOrderAveragePrices()
+    {
+        var day = new DateTime(2026, 6, 20);
+        var orders = new[]
+        {
+            new BigOrderItem { Time = day.AddHours(9).AddMinutes(31), Price = 20, Volume = 300, Amount = 1, Type = 3 },
+            new BigOrderItem { Time = day.AddHours(9).AddMinutes(30), Price = 10, Volume = 100, Amount = 99999, Type = 2 },
+            new BigOrderItem { Time = day.AddHours(9).AddMinutes(32), Price = 30, Volume = 100, Amount = 1, Type = 4 },
+            new BigOrderItem { Time = day.AddHours(9).AddMinutes(33), Price = 0, Volume = 100, Amount = 1, Type = 2 },
+            new BigOrderItem { Time = day.AddHours(9).AddMinutes(34), Price = 40, Volume = 0, Amount = 1, Type = 2 },
+            new BigOrderItem { Time = day.AddHours(9).AddMinutes(35), Price = double.NaN, Volume = 10, Amount = 1, Type = 2 },
+            new BigOrderItem { Time = day.AddHours(9).AddMinutes(36), Price = 50, Volume = double.PositiveInfinity, Amount = 1, Type = 2 },
+        };
+
+        var series = new BigOrderSeriesBuilder().Build(orders);
+
+        AssertEqual(3, series.BigOrderAveragePrices.Count, "valid big-order average count");
+        AssertNear(10d, series.BigOrderAveragePrices[0].Price, 0.0001d, "first big-order average");
+        AssertNear(17.5d, series.BigOrderAveragePrices[1].Price, 0.0001d, "weighted big-order average");
+        AssertNear(20d, series.BigOrderAveragePrices[2].Price, 0.0001d, "cumulative big-order average");
+    }
+
     private static void TestLegacyMarkers()
     {
         var day = new DateTime(2026, 6, 18, 9, 30, 0);
@@ -334,6 +412,159 @@ internal static class Program
         }
     }
 
+    private static void TestAveragePriceAxis()
+    {
+        var day = new DateTime(2026, 6, 20);
+        var snapshot = CreateChartSnapshot(day, new PricePoint[0]);
+        var series = new BigOrderSeries
+        {
+            Minutes = new MinuteFlow[0],
+            NetFlow = new NetFlowPoint[0],
+            Thresholds = new ThresholdFlow[0],
+            HalfHours = new HalfHourAmount[0],
+            MarketAveragePrices = new[]
+            {
+                new AveragePricePoint { Time = day.AddHours(9).AddMinutes(30), Price = 10.5 },
+                new AveragePricePoint { Time = day.AddHours(9).AddMinutes(31), Price = 11 },
+            },
+            BigOrderAveragePrices = new[]
+            {
+                new AveragePricePoint { Time = day.AddHours(9).AddMinutes(30), Price = 10.2 },
+                new AveragePricePoint { Time = day.AddHours(9).AddMinutes(31), Price = 10.8 },
+            },
+        };
+
+        using (var control = new BigOrderChartControl())
+        {
+            control.Size = new Size(1000, 650);
+            control.SetSnapshot(snapshot, series);
+            AssertNear(5d, control.MarketLinePercents[0].Value, 0.0001d, "market line shared percent");
+            AssertNear(10d, control.MarketLinePercents[1].Value, 0.0001d, "market line second percent");
+            AssertNear(2d, control.BigOrderLinePercents[0].Value, 0.0001d, "big-order line shared percent");
+            AssertNear(8d, control.BigOrderLinePercents[1].Value, 0.0001d, "big-order line second percent");
+            AssertTrue(control.AxisTicks.First().Percent <= 0, "axis contains zero percent");
+            AssertTrue(control.AxisTicks.Last().Percent >= 10, "axis contains both lines");
+        }
+    }
+
+    private static void TestThsPriceFallback()
+    {
+        var day = new DateTime(2026, 6, 20);
+        var thsPrices = new[]
+        {
+            new PricePoint { Time = day.AddHours(9).AddMinutes(30), ChangePercent = 1.25 },
+            new PricePoint { Time = day.AddHours(9).AddMinutes(31), ChangePercent = 2.5 },
+        };
+        var snapshot = CreateChartSnapshot(day, thsPrices);
+        var series = new BigOrderSeriesBuilder().Build(new BigOrderItem[0]);
+
+        using (var control = new BigOrderChartControl())
+        {
+            control.SetSnapshot(snapshot, series);
+            AssertEqual(2, control.MarketLinePercents.Count, "THS market fallback count");
+            AssertNear(1.25d, control.MarketLinePercents[0].Value, 0.0001d, "THS market fallback value");
+            AssertEqual(0, control.BigOrderLinePercents.Count, "net flow is not a price line");
+        }
+    }
+
+    private static MarketSnapshot CreateChartSnapshot(
+        DateTime day, IReadOnlyList<PricePoint> prices)
+    {
+        return new MarketSnapshot(
+            "002297",
+            new StockSummary { Code = "002297", Price = 11, ChangePercent = 10 },
+            new MainFundSummary(),
+            new LimitUpContext(),
+            new BigOrderItem[0],
+            prices,
+            DataFreshness.Fresh,
+            DataFreshness.Fresh,
+            DataFreshness.Missing,
+            day.AddHours(10),
+            day.AddHours(10));
+    }
+
+    private static void TestHalfHourHeatRatios()
+    {
+        var day = new DateTime(2026, 6, 20);
+        var halfHours = new[]
+        {
+            new HalfHourAmount { TotalAmount = 100000000, BigOrderAmount = 1000000 },
+            new HalfHourAmount { TotalAmount = 50000000, BigOrderAmount = 4000000 },
+            new HalfHourAmount { TotalAmount = 0, BigOrderAmount = 0 },
+            new HalfHourAmount { TotalAmount = null, BigOrderAmount = 2000000 },
+        };
+        var series = new BigOrderSeries
+        {
+            Minutes = new MinuteFlow[0],
+            NetFlow = new NetFlowPoint[0],
+            Thresholds = new ThresholdFlow[0],
+            HalfHours = halfHours,
+            MarketAveragePrices = new AveragePricePoint[0],
+            BigOrderAveragePrices = new AveragePricePoint[0],
+        };
+
+        using (var control = new BigOrderChartControl())
+        {
+            control.SetSnapshot(CreateChartSnapshot(day, new PricePoint[0]), series);
+            AssertEqual(8, control.TotalHeatRatios.Count, "total heat cell count");
+            AssertEqual(8, control.BigOrderHeatRatios.Count, "big-order heat cell count");
+            AssertNear(1d, control.TotalHeatRatios[0].Value, 0.0001d, "total row max");
+            AssertNear(0.5d, control.TotalHeatRatios[1].Value, 0.0001d, "total row half");
+            AssertNear(0d, control.TotalHeatRatios[2].Value, 0.0001d, "zero has no heat");
+            AssertTrue(!control.TotalHeatRatios[3].HasValue, "missing has no ratio");
+            AssertNear(0.25d, control.BigOrderHeatRatios[0], 0.0001d, "big row independent scale");
+            AssertNear(1d, control.BigOrderHeatRatios[1], 0.0001d, "big row max");
+            AssertNear(0.5d, control.BigOrderHeatRatios[3], 0.0001d, "big row half");
+            AssertTrue(control.TotalHeatRatios.Skip(4).All(value => !value.HasValue), "missing total cells padded");
+            AssertTrue(control.BigOrderHeatRatios.Skip(4).All(value => value == 0), "missing big cells padded");
+        }
+
+        var zeroSeries = new BigOrderSeries
+        {
+            HalfHours = Enumerable.Range(0, 8)
+                .Select(_ => new HalfHourAmount { TotalAmount = 0, BigOrderAmount = 0 })
+                .ToArray(),
+        };
+        using (var control = new BigOrderChartControl())
+        {
+            control.SetSnapshot(CreateChartSnapshot(day, new PricePoint[0]), zeroSeries);
+            AssertTrue(control.TotalHeatRatios.All(value => value.GetValueOrDefault() == 0), "all-zero total row");
+            AssertTrue(control.BigOrderHeatRatios.All(value => value == 0), "all-zero big row");
+        }
+    }
+
+    private static void TestHeatTextContrast()
+    {
+        AssertTrue(
+            ContrastRatio(
+                BigOrderChartControl.BigOrderHeatTextColor,
+                BigOrderChartControl.BigOrderHeatHighColor) >= 4.5,
+            "big-order heat text contrast");
+    }
+
+    private static double ContrastRatio(Color first, Color second)
+    {
+        var firstLuminance = RelativeLuminance(first);
+        var secondLuminance = RelativeLuminance(second);
+        return (Math.Max(firstLuminance, secondLuminance) + 0.05) /
+               (Math.Min(firstLuminance, secondLuminance) + 0.05);
+    }
+
+    private static double RelativeLuminance(Color color)
+    {
+        Func<int, double> channel = value =>
+        {
+            var normalized = value / 255d;
+            return normalized <= 0.03928
+                ? normalized / 12.92
+                : Math.Pow((normalized + 0.055) / 1.055, 2.4);
+        };
+        return 0.2126 * channel(color.R) +
+               0.7152 * channel(color.G) +
+               0.0722 * channel(color.B);
+    }
+
     private static void TestRefreshCoordinator()
     {
         using (var coordinator = new RefreshCoordinator())
@@ -401,6 +632,15 @@ internal static class Program
         if (!Equals(expected, actual))
         {
             throw new InvalidOperationException(label + " expected " + expected + ", actual " + actual);
+        }
+    }
+
+    private static void AssertNear(double expected, double actual, double tolerance, string label)
+    {
+        if (Math.Abs(expected - actual) > tolerance)
+        {
+            throw new InvalidOperationException(
+                label + ": expected " + expected + ", actual " + actual);
         }
     }
 

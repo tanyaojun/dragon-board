@@ -18,6 +18,12 @@ namespace THSBigOrder.Analytics
         public double Value { get; set; }
     }
 
+    public sealed class AveragePricePoint
+    {
+        public DateTime Time { get; set; }
+        public double Price { get; set; }
+    }
+
     public sealed class ThresholdFlow
     {
         public double Amount { get; set; }
@@ -32,6 +38,8 @@ namespace THSBigOrder.Analytics
         public IReadOnlyList<NetFlowPoint> NetFlow { get; set; }
         public IReadOnlyList<ThresholdFlow> Thresholds { get; set; }
         public IReadOnlyList<HalfHourAmount> HalfHours { get; set; }
+        public IReadOnlyList<AveragePricePoint> MarketAveragePrices { get; set; }
+        public IReadOnlyList<AveragePricePoint> BigOrderAveragePrices { get; set; }
     }
 
     public sealed class HalfHourAmount
@@ -86,6 +94,36 @@ namespace THSBigOrder.Analytics
 
             var hasTurnover = turnoverFreshness == DataFreshness.Fresh ||
                               turnoverFreshness == DataFreshness.Stale;
+            var marketAveragePrices = hasTurnover
+                ? (turnover ?? Enumerable.Empty<MinuteTurnoverPoint>())
+                    .Where(point => IsFinite(point.CumulativeVolume) &&
+                                    IsFinite(point.CumulativeAmount) &&
+                                    point.CumulativeVolume > 0 &&
+                                    point.CumulativeAmount >= 0)
+                    .OrderBy(point => point.Time)
+                    .Select(point => new AveragePricePoint
+                    {
+                        Time = point.Time,
+                        Price = point.CumulativeAmount / (point.CumulativeVolume * 100d),
+                    })
+                    .Where(point => IsFinite(point.Price) && point.Price > 0)
+                    .ToList()
+                : new List<AveragePricePoint>();
+
+            double weightedPrice = 0;
+            double cumulativeVolume = 0;
+            var bigOrderAveragePrices = new List<AveragePricePoint>();
+            foreach (var order in orders.Where(IsValidPriceVolume))
+            {
+                weightedPrice += order.Price * order.Volume;
+                cumulativeVolume += order.Volume;
+                bigOrderAveragePrices.Add(new AveragePricePoint
+                {
+                    Time = order.Time,
+                    Price = weightedPrice / cumulativeVolume,
+                });
+            }
+
             var halfHours = CreateHalfHours(hasTurnover);
             foreach (var order in orders)
             {
@@ -113,7 +151,20 @@ namespace THSBigOrder.Analytics
                 NetFlow = netFlow,
                 Thresholds = thresholds,
                 HalfHours = halfHours,
+                MarketAveragePrices = marketAveragePrices,
+                BigOrderAveragePrices = bigOrderAveragePrices,
             };
+        }
+
+        private static bool IsValidPriceVolume(BigOrderItem item)
+        {
+            return IsFinite(item.Price) && item.Price > 0 &&
+                   IsFinite(item.Volume) && item.Volume > 0;
+        }
+
+        private static bool IsFinite(double value)
+        {
+            return !double.IsNaN(value) && !double.IsInfinity(value);
         }
 
         private static List<HalfHourAmount> CreateHalfHours(bool hasTurnover)

@@ -14,8 +14,17 @@ namespace THSBigOrder.Controls
         public double? Price { get; set; }
     }
 
+    public sealed class ChartLinePoint
+    {
+        public DateTime Time { get; set; }
+        public double Value { get; set; }
+    }
+
     public sealed class BigOrderChartControl : Control
     {
+        internal static readonly Color BigOrderHeatHighColor = Color.FromArgb(173, 48, 78);
+        internal static readonly Color BigOrderHeatTextColor = Color.FromArgb(250, 245, 248);
+
         private MarketSnapshot _snapshot;
         private BigOrderSeries _series;
         private readonly List<Rectangle> _layoutBands = new List<Rectangle>();
@@ -23,8 +32,13 @@ namespace THSBigOrder.Controls
         private readonly List<float> _halfHourGridXs = new List<float>();
         private readonly List<Rectangle> _halfHourRows = new List<Rectangle>();
         private readonly List<ChartAxisTick> _axisTicks = new List<ChartAxisTick>();
+        private readonly List<ChartLinePoint> _marketLinePercents = new List<ChartLinePoint>();
+        private readonly List<ChartLinePoint> _bigOrderLinePercents = new List<ChartLinePoint>();
+        private readonly List<double?> _totalHeatRatios = new List<double?>();
+        private readonly List<double> _bigOrderHeatRatios = new List<double>();
         private double _axisMinimum = -1;
         private double _axisMaximum = 1;
+        private double? _previousClose;
 
         public BigOrderChartControl()
         {
@@ -42,13 +56,19 @@ namespace THSBigOrder.Controls
         public IReadOnlyList<float> HalfHourGridXs => _halfHourGridXs;
         public IReadOnlyList<Rectangle> HalfHourRows => _halfHourRows;
         public IReadOnlyList<ChartAxisTick> AxisTicks => _axisTicks;
+        public IReadOnlyList<ChartLinePoint> MarketLinePercents => _marketLinePercents;
+        public IReadOnlyList<ChartLinePoint> BigOrderLinePercents => _bigOrderLinePercents;
+        public IReadOnlyList<double?> TotalHeatRatios => _totalHeatRatios;
+        public IReadOnlyList<double> BigOrderHeatRatios => _bigOrderHeatRatios;
 
         public void SetSnapshot(MarketSnapshot snapshot, BigOrderSeries series)
         {
             _snapshot = snapshot;
             _series = series;
             RebuildLayout();
+            RebuildLinePercents();
             RebuildAxisTicks();
+            RebuildHeatRatios();
             Invalidate();
         }
 
@@ -98,9 +118,9 @@ namespace THSBigOrder.Controls
 
         private void RebuildAxisTicks()
         {
-            var values = (_snapshot?.Prices ?? new PricePoint[0])
-                .Select(point => point.ChangePercent)
-                .Where(value => !double.IsNaN(value) && !double.IsInfinity(value))
+            var values = _marketLinePercents
+                .Concat(_bigOrderLinePercents)
+                .Select(point => point.Value)
                 .ToList();
             var minimum = Math.Min(0, values.Count == 0 ? 0 : values.Min());
             var maximum = Math.Max(0, values.Count == 0 ? 0 : values.Max());
@@ -116,14 +136,6 @@ namespace THSBigOrder.Controls
             _axisMinimum = minimum - padding;
             _axisMaximum = maximum + padding;
 
-            double? previousClose = null;
-            if (_snapshot?.Stock?.Price != null && _snapshot.Stock.ChangePercent.HasValue)
-            {
-                var denominator = 1d + _snapshot.Stock.ChangePercent.Value / 100d;
-                if (Math.Abs(denominator) > 0.000001)
-                    previousClose = _snapshot.Stock.Price.Value / denominator;
-            }
-
             _axisTicks.Clear();
             for (var index = 0; index < 5; index++)
             {
@@ -131,11 +143,106 @@ namespace THSBigOrder.Controls
                 _axisTicks.Add(new ChartAxisTick
                 {
                     Percent = percent,
-                    Price = previousClose.HasValue
-                        ? (double?)(previousClose.Value * (1d + percent / 100d))
+                    Price = _previousClose.HasValue
+                        ? (double?)(_previousClose.Value * (1d + percent / 100d))
                         : null,
                 });
             }
+        }
+
+        private void RebuildLinePercents()
+        {
+            _marketLinePercents.Clear();
+            _bigOrderLinePercents.Clear();
+            _previousClose = null;
+
+            if (_snapshot?.Stock?.Price != null && _snapshot.Stock.ChangePercent.HasValue)
+            {
+                var denominator = 1d + _snapshot.Stock.ChangePercent.Value / 100d;
+                if (Math.Abs(denominator) > 0.000001)
+                    _previousClose = _snapshot.Stock.Price.Value / denominator;
+            }
+
+            var marketPrices = _series?.MarketAveragePrices ?? new AveragePricePoint[0];
+            if (_previousClose.HasValue && marketPrices.Count > 0)
+            {
+                _marketLinePercents.AddRange(marketPrices
+                    .Where(point => IsFinite(point.Price) && point.Price > 0)
+                    .OrderBy(point => point.Time)
+                    .Select(point => new ChartLinePoint
+                    {
+                        Time = point.Time,
+                        Value = (point.Price / _previousClose.Value - 1d) * 100d,
+                    })
+                    .Where(point => IsFinite(point.Value)));
+            }
+            else
+            {
+                _marketLinePercents.AddRange((_snapshot?.Prices ?? new PricePoint[0])
+                    .Where(point => IsFinite(point.ChangePercent))
+                    .OrderBy(point => point.Time)
+                    .Select(point => new ChartLinePoint
+                    {
+                        Time = point.Time,
+                        Value = point.ChangePercent,
+                    }));
+            }
+
+            if (_previousClose.HasValue)
+            {
+                _bigOrderLinePercents.AddRange(
+                    (_series?.BigOrderAveragePrices ?? new AveragePricePoint[0])
+                        .Where(point => IsFinite(point.Price) && point.Price > 0)
+                        .OrderBy(point => point.Time)
+                        .Select(point => new ChartLinePoint
+                        {
+                            Time = point.Time,
+                            Value = (point.Price / _previousClose.Value - 1d) * 100d,
+                        })
+                        .Where(point => IsFinite(point.Value)));
+            }
+        }
+
+        private void RebuildHeatRatios()
+        {
+            var values = _series?.HalfHours ?? new HalfHourAmount[0];
+            var totalMaximum = values
+                .Where(value => value.TotalAmount.HasValue &&
+                                IsFinite(value.TotalAmount.Value) &&
+                                value.TotalAmount.Value > 0)
+                .Select(value => value.TotalAmount.Value)
+                .DefaultIfEmpty(0)
+                .Max();
+            var bigOrderMaximum = values
+                .Where(value => IsFinite(value.BigOrderAmount) && value.BigOrderAmount > 0)
+                .Select(value => value.BigOrderAmount)
+                .DefaultIfEmpty(0)
+                .Max();
+
+            _totalHeatRatios.Clear();
+            _bigOrderHeatRatios.Clear();
+            for (var index = 0; index < 8; index++)
+            {
+                if (index >= values.Count)
+                {
+                    _totalHeatRatios.Add(null);
+                    _bigOrderHeatRatios.Add(0);
+                    continue;
+                }
+
+                var total = values[index].TotalAmount;
+                _totalHeatRatios.Add(total.HasValue && IsFinite(total.Value)
+                    ? (double?)NormalizeHeat(total.Value, totalMaximum)
+                    : null);
+                _bigOrderHeatRatios.Add(
+                    NormalizeHeat(values[index].BigOrderAmount, bigOrderMaximum));
+            }
+        }
+
+        private static double NormalizeHeat(double value, double maximum)
+        {
+            if (!IsFinite(value) || value <= 0 || maximum <= 0) return 0;
+            return Math.Max(0, Math.Min(1, value / maximum));
         }
 
         protected override void OnPaint(PaintEventArgs e)
@@ -145,7 +252,9 @@ namespace THSBigOrder.Controls
             e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
             DrawGrid(e.Graphics);
             DrawAxes(e.Graphics);
-            if (_snapshot == null || (_snapshot.Prices.Count == 0 && (_series?.Minutes.Count ?? 0) == 0))
+            if (_snapshot == null ||
+                (_marketLinePercents.Count == 0 && _bigOrderLinePercents.Count == 0 &&
+                 (_series?.Minutes.Count ?? 0) == 0))
             {
                 using (var font = new Font("Microsoft YaHei UI", 12, FontStyle.Regular))
                 using (var brush = new SolidBrush(Color.FromArgb(105, 120, 145)))
@@ -214,37 +323,21 @@ namespace THSBigOrder.Controls
         private void DrawLines(Graphics graphics)
         {
             DrawPercentLine(
-                graphics,
-                _snapshot.Prices.Select(point => new TimedValue(point.Time, point.ChangePercent)).ToArray(),
+                graphics, _marketLinePercents.ToArray(),
                 _layoutBands[0], Color.FromArgb(225, 241, 64), 2);
-            DrawScaledLine(
-                graphics,
-                (_series?.NetFlow ?? new NetFlowPoint[0])
-                    .Select(point => new TimedValue(point.Time, point.Value)).ToArray(),
+            DrawPercentLine(
+                graphics, _bigOrderLinePercents.ToArray(),
                 _layoutBands[0], Color.FromArgb(229, 235, 246), 1);
         }
 
         private void DrawPercentLine(
-            Graphics graphics, TimedValue[] values, Rectangle bounds, Color color, float width)
+            Graphics graphics, ChartLinePoint[] values, Rectangle bounds, Color color, float width)
         {
             if (values.Length < 2) return;
             var range = Math.Max(0.0001, _axisMaximum - _axisMinimum);
             var points = values.Select(item => new PointF(
                 TimeX(item.Time, bounds),
                 bounds.Bottom - (float)((item.Value - _axisMinimum) / range) * bounds.Height)).ToArray();
-            using (var pen = new Pen(color, width)) graphics.DrawLines(pen, points);
-        }
-
-        private static void DrawScaledLine(
-            Graphics graphics, TimedValue[] values, Rectangle bounds, Color color, float width)
-        {
-            if (values.Length < 2) return;
-            var min = values.Min(item => item.Value);
-            var max = values.Max(item => item.Value);
-            var range = Math.Max(0.0001, max - min);
-            var points = values.Select(item => new PointF(
-                TimeX(item.Time, bounds),
-                bounds.Bottom - 4 - (float)((item.Value - min) / range) * (bounds.Height - 8))).ToArray();
             using (var pen = new Pen(color, width)) graphics.DrawLines(pen, points);
         }
 
@@ -271,12 +364,9 @@ namespace THSBigOrder.Controls
             minutes = Math.Max(0, Math.Min(240, minutes));
             return bounds.Left + bounds.Width * minutes / 240f;
         }
-
-        private struct TimedValue
+        private static bool IsFinite(double value)
         {
-            public TimedValue(DateTime time, double value) { Time = time; Value = value; }
-            public DateTime Time;
-            public double Value;
+            return !double.IsNaN(value) && !double.IsInfinity(value);
         }
 
         private void DrawVolumes(Graphics graphics)
@@ -306,7 +396,7 @@ namespace THSBigOrder.Controls
             var cellWidth = _layoutBands[2].Width / 8f;
             using (var font = new Font("Consolas", 8, FontStyle.Bold))
             using (var totalBrush = new SolidBrush(Color.FromArgb(205, 216, 232)))
-            using (var bigBrush = new SolidBrush(Color.FromArgb(255, 105, 125)))
+            using (var bigBrush = new SolidBrush(BigOrderHeatTextColor))
             using (var totalFill = new SolidBrush(Color.FromArgb(24, 34, 50)))
             using (var bigFill = new SolidBrush(Color.FromArgb(52, 24, 34)))
             {
@@ -315,6 +405,20 @@ namespace THSBigOrder.Controls
                     var x = _layoutBands[2].Left + index * cellWidth;
                     graphics.FillRectangle(totalFill, x + 1, _halfHourRows[0].Top + 1, cellWidth - 2, _halfHourRows[0].Height - 2);
                     graphics.FillRectangle(bigFill, x + 1, _halfHourRows[1].Top + 1, cellWidth - 2, _halfHourRows[1].Height - 2);
+
+                    var totalRatio = _totalHeatRatios.Count > index
+                        ? _totalHeatRatios[index].GetValueOrDefault()
+                        : 0;
+                    var bigOrderRatio = _bigOrderHeatRatios.Count > index
+                        ? _bigOrderHeatRatios[index]
+                        : 0;
+                    DrawHeatFill(
+                        graphics, x, cellWidth, _halfHourRows[0], totalRatio,
+                        Color.FromArgb(88, 20, 34), Color.FromArgb(225, 47, 68));
+                    DrawHeatFill(
+                        graphics, x, cellWidth, _halfHourRows[1], bigOrderRatio,
+                        Color.FromArgb(74, 48, 62), BigOrderHeatHighColor);
+
                     DrawCentered(
                         graphics,
                         values[index].TotalAmount.HasValue ? FormatAmount(values[index].TotalAmount.Value) : "-",
@@ -325,6 +429,31 @@ namespace THSBigOrder.Controls
                         new RectangleF(x, _halfHourRows[1].Top, cellWidth, _halfHourRows[1].Height));
                 }
             }
+        }
+
+        private static void DrawHeatFill(
+            Graphics graphics,
+            float x,
+            float cellWidth,
+            Rectangle row,
+            double ratio,
+            Color low,
+            Color high)
+        {
+            if (ratio <= 0) return;
+            var heatWidth = Math.Max(0, (cellWidth - 2) * (float)ratio);
+            if (heatWidth <= 0) return;
+            using (var brush = new SolidBrush(InterpolateColor(low, high, ratio)))
+                graphics.FillRectangle(brush, x + 1, row.Top + 1, heatWidth, row.Height - 2);
+        }
+
+        private static Color InterpolateColor(Color low, Color high, double ratio)
+        {
+            var value = Math.Max(0, Math.Min(1, ratio));
+            return Color.FromArgb(
+                low.R + (int)((high.R - low.R) * value),
+                low.G + (int)((high.G - low.G) * value),
+                low.B + (int)((high.B - low.B) * value));
         }
 
         private static void DrawCentered(
