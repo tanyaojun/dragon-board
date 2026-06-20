@@ -24,6 +24,14 @@ namespace THSBigOrder.Analytics
         public double Price { get; set; }
     }
 
+    public sealed class BigOrderEventPoint
+    {
+        public DateTime Time { get; set; }
+        public double AveragePrice { get; set; }
+        public double Amount { get; set; }
+        public int Type { get; set; }
+    }
+
     public sealed class ThresholdFlow
     {
         public double Amount { get; set; }
@@ -40,6 +48,7 @@ namespace THSBigOrder.Analytics
         public IReadOnlyList<HalfHourAmount> HalfHours { get; set; }
         public IReadOnlyList<AveragePricePoint> MarketAveragePrices { get; set; }
         public IReadOnlyList<AveragePricePoint> BigOrderAveragePrices { get; set; }
+        public IReadOnlyList<BigOrderEventPoint> BigOrderEvents { get; set; }
     }
 
     public sealed class HalfHourAmount
@@ -113,14 +122,23 @@ namespace THSBigOrder.Analytics
             double weightedPrice = 0;
             double cumulativeVolume = 0;
             var bigOrderAveragePrices = new List<AveragePricePoint>();
+            var bigOrderEvents = new List<BigOrderEventPoint>();
             foreach (var order in orders.Where(IsValidPriceVolume))
             {
                 weightedPrice += order.Price * order.Volume;
                 cumulativeVolume += order.Volume;
+                var average = weightedPrice / cumulativeVolume;
                 bigOrderAveragePrices.Add(new AveragePricePoint
                 {
                     Time = order.Time,
-                    Price = weightedPrice / cumulativeVolume,
+                    Price = average,
+                });
+                bigOrderEvents.Add(new BigOrderEventPoint
+                {
+                    Time = order.Time,
+                    AveragePrice = average,
+                    Amount = order.Amount,
+                    Type = order.Type,
                 });
             }
 
@@ -153,6 +171,7 @@ namespace THSBigOrder.Analytics
                 HalfHours = halfHours,
                 MarketAveragePrices = marketAveragePrices,
                 BigOrderAveragePrices = bigOrderAveragePrices,
+                BigOrderEvents = bigOrderEvents,
             };
         }
 

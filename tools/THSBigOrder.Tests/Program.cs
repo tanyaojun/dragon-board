@@ -408,9 +408,10 @@ internal static class Program
         var day = new DateTime(2026, 6, 20);
         var orders = new[]
         {
-            new BigOrderItem { Time = day.AddHours(9).AddMinutes(31), Price = 20, Volume = 300, Amount = 1, Type = 3 },
-            new BigOrderItem { Time = day.AddHours(9).AddMinutes(30), Price = 10, Volume = 100, Amount = 99999, Type = 2 },
-            new BigOrderItem { Time = day.AddHours(9).AddMinutes(32), Price = 30, Volume = 100, Amount = 1, Type = 4 },
+            new BigOrderItem { Time = day.AddHours(9).AddMinutes(31).AddSeconds(2), Price = 20, Volume = 300, Amount = 1, Type = 3 },
+            new BigOrderItem { Time = day.AddHours(9).AddMinutes(30).AddSeconds(1), Price = 10, Volume = 100, Amount = 99999, Type = 2 },
+            new BigOrderItem { Time = day.AddHours(9).AddMinutes(32).AddSeconds(3), Price = 30, Volume = 100, Amount = 1, Type = 4 },
+            new BigOrderItem { Time = day.AddHours(9).AddMinutes(32).AddSeconds(3), Price = 40, Volume = 100, Amount = 2, Type = 2 },
             new BigOrderItem { Time = day.AddHours(9).AddMinutes(33), Price = 0, Volume = 100, Amount = 1, Type = 2 },
             new BigOrderItem { Time = day.AddHours(9).AddMinutes(34), Price = 40, Volume = 0, Amount = 1, Type = 2 },
             new BigOrderItem { Time = day.AddHours(9).AddMinutes(35), Price = double.NaN, Volume = 10, Amount = 1, Type = 2 },
@@ -419,10 +420,18 @@ internal static class Program
 
         var series = new BigOrderSeriesBuilder().Build(orders);
 
-        AssertEqual(3, series.BigOrderAveragePrices.Count, "valid big-order average count");
+        AssertEqual(4, series.BigOrderAveragePrices.Count, "valid big-order average count");
         AssertNear(10d, series.BigOrderAveragePrices[0].Price, 0.0001d, "first big-order average");
         AssertNear(17.5d, series.BigOrderAveragePrices[1].Price, 0.0001d, "weighted big-order average");
         AssertNear(20d, series.BigOrderAveragePrices[2].Price, 0.0001d, "cumulative big-order average");
+        AssertNear(23.333333d, series.BigOrderAveragePrices[3].Price, 0.0001d, "same-second average");
+        AssertEqual(4, series.BigOrderEvents.Count, "one event per valid order");
+        AssertEqual(day.AddHours(9).AddMinutes(30).AddSeconds(1), series.BigOrderEvents[0].Time, "seconds retained");
+        AssertNear(series.BigOrderAveragePrices[0].Price, series.BigOrderEvents[0].AveragePrice, 0.0001d, "event lies on white line");
+        AssertEqual(2, series.BigOrderEvents[0].Type, "active buy retained");
+        AssertEqual(3, series.BigOrderEvents[1].Type, "passive type retained");
+        AssertEqual(4, series.BigOrderEvents[2].Type, "active sell retained");
+        AssertEqual(series.BigOrderEvents[2].Time, series.BigOrderEvents[3].Time, "same-second orders preserved");
     }
 
     private static void TestLegacyMarkers()
