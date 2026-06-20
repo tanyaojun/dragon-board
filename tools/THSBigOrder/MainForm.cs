@@ -111,6 +111,10 @@ namespace THSBigOrder
         internal string SealAmountText => lblSealAmount.Text;
         internal string OpenCountText => lblOpenCount.Text;
         internal string HighDaysText => lblHighDays.Text;
+        internal Color MainBuyColor => lblMainBuy.ForeColor;
+        internal Color MainSellColor => lblMainSell.ForeColor;
+        internal Color MainNetColor => lblMainNet.ForeColor;
+        internal Color SealAmountColor => lblSealAmount.ForeColor;
         internal IReadOnlyList<string> MetricTexts => metricsFlow.Controls
             .OfType<Label>()
             .Select(label => label.Text)
@@ -551,9 +555,13 @@ namespace THSBigOrder
         {
             lblPrice.Text = "现价 " + FormatNullable(snapshot.Stock.Price, "F2");
             lblMainBuy.Text = "主买 " + FormatAmount(snapshot.MainFunds.MainBuy);
+            lblMainBuy.ForeColor = ColorMainBuy;
             lblMainSell.Text = "主卖 " + FormatAmount(snapshot.MainFunds.MainSell);
+            lblMainSell.ForeColor = ColorMainSell;
             lblMainNet.Text = "主净 " + FormatAmount(snapshot.MainFunds.NetAmount);
+            lblMainNet.ForeColor = snapshot.MainFunds.NetAmount.GetValueOrDefault() >= 0 ? ColorMainBuy : ColorMainSell;
             lblSealAmount.Text = "封单 " + FormatAmount(snapshot.LimitUp.SealAmount);
+            lblSealAmount.ForeColor = Color.Gold;
             lblOpenCount.Text = "开板 " + (snapshot.LimitUp.OpenCount.HasValue ? snapshot.LimitUp.OpenCount.Value.ToString() : "-");
             lblHighDays.Text = "连板 " + (snapshot.LimitUp.HighDays ?? "-");
             lblLimitUpReason.Text = snapshot.LimitUpFreshness == DataFreshness.Failed ? "涨停数据不可用" : snapshot.LimitUpFreshness == DataFreshness.Missing ? "非涨停池" : "涨停原因 " + (snapshot.LimitUp.ReasonType ?? "-");

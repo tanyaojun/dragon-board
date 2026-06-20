@@ -59,6 +59,7 @@ internal static class Program
         Run("Chart control draws minute price white and big-order average blue", TestMinutePriceChartLine);
         Run("Chart control falls back to THS percent only for market line", TestThsPriceFallback);
         Run("Chart control normalizes half-hour heat rows independently", TestHalfHourHeatRatios);
+        Run("Chart heat colors distinguish net buy and net sell", TestHalfHourHeatColors);
         Run("Chart heat text stays readable at maximum intensity", TestHeatTextContrast);
         Run("Chart filters active order events by amount and side", TestChartOrderEventFilter);
         Run("Chart removes legacy signals and anchors events to minute price", TestChartOrderEventRenderingContract);
@@ -71,6 +72,7 @@ internal static class Program
         Run("Main form clamps grid mouse wheel at bottom", TestMainFormGridWheelClamp);
         Run("Main form keeps chart markers aligned with amount and side filters", () => TestMainFormMarkerFilter().GetAwaiter().GetResult());
         Run("Main form displays quote and limit-up metrics", () => TestMainFormMetricLabels().GetAwaiter().GetResult());
+        Run("Main form colors top metrics by money direction", () => TestMainFormMetricColors().GetAwaiter().GetResult());
         Run("Main form displays direct-first source status", () => TestMainFormSourceStatus().GetAwaiter().GetResult());
         return Environment.ExitCode;
     }
@@ -894,6 +896,12 @@ internal static class Program
             "big-order heat text contrast");
     }
 
+    private static void TestHalfHourHeatColors()
+    {
+        AssertTrue(IsRed(BigOrderChartControl.NetBuyHeatHighColor), "net buy heat is red");
+        AssertTrue(IsGreen(BigOrderChartControl.NetSellHeatHighColor), "net sell heat is green");
+    }
+
     private static bool HasBluePixel(Bitmap bitmap, Rectangle area)
     {
         for (var y = Math.Max(0, area.Top); y < Math.Min(bitmap.Height, area.Bottom); y++)
@@ -915,6 +923,10 @@ internal static class Program
         }
         return false;
     }
+
+    private static bool IsRed(Color color) => color.R > color.G && color.R > color.B;
+
+    private static bool IsGreen(Color color) => color.G > color.R && color.G > color.B;
 
     private static void TestChartOrderEventFilter()
     {
@@ -1227,6 +1239,31 @@ internal static class Program
             AssertEqual("连板 首板", form.HighDaysText, "high days label");
             AssertTrue(!form.MetricTexts.Any(text => text.StartsWith("封板率")), "seal rate hidden");
             AssertTrue(!form.MetricTexts.Any(text => text.StartsWith("末封") || text.StartsWith("未封")), "last/unsealed hidden");
+        }
+    }
+
+    private static async Task TestMainFormMetricColors()
+    {
+        var snapshot = new MarketSnapshot(
+            "002297",
+            new StockSummary { Code = "002297", Name = "博云新材" },
+            new MainFundSummary { MainBuy = 1000000, MainSell = 2000000, NetAmount = -1000000 },
+            new LimitUpContext { SealAmount = 45049860 },
+            new BigOrderItem[0],
+            new PricePoint[0],
+            DataFreshness.Fresh,
+            DataFreshness.Fresh,
+            DataFreshness.Missing,
+            DateTime.Now,
+            DateTime.Now);
+
+        using (var form = new MainForm(new ImmediateProvider(snapshot), false))
+        {
+            await form.RefreshStockAsync("002297", true);
+            AssertTrue(IsRed(form.MainBuyColor), "main buy metric red");
+            AssertTrue(IsGreen(form.MainSellColor), "main sell metric green");
+            AssertTrue(IsGreen(form.MainNetColor), "negative main net metric green");
+            AssertEqual(Color.Gold, form.SealAmountColor, "seal amount metric gold");
         }
     }
 

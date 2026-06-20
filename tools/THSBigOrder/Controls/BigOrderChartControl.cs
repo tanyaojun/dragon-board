@@ -25,6 +25,8 @@ namespace THSBigOrder.Controls
     {
         internal static readonly Color BigOrderHeatHighColor = Color.FromArgb(173, 48, 78);
         internal static readonly Color BigOrderHeatTextColor = Color.FromArgb(250, 245, 248);
+        internal static readonly Color NetBuyHeatHighColor = Color.FromArgb(225, 47, 68);
+        internal static readonly Color NetSellHeatHighColor = Color.FromArgb(25, 205, 145);
 
         private MarketSnapshot _snapshot;
         private BigOrderSeries _series;
@@ -480,9 +482,15 @@ namespace THSBigOrder.Controls
                     DrawHeatFill(
                         graphics, x, cellWidth, _halfHourRows[0], totalRatio,
                         Color.FromArgb(88, 20, 34), Color.FromArgb(225, 47, 68));
+                    var bigOrderLow = values[index].NetAmount >= 0
+                        ? Color.FromArgb(74, 32, 42)
+                        : Color.FromArgb(23, 58, 48);
+                    var bigOrderHigh = values[index].NetAmount >= 0
+                        ? NetBuyHeatHighColor
+                        : NetSellHeatHighColor;
                     DrawHeatFill(
                         graphics, x, cellWidth, _halfHourRows[1], bigOrderRatio,
-                        Color.FromArgb(74, 48, 62), BigOrderHeatHighColor);
+                        bigOrderLow, bigOrderHigh);
 
                     DrawCentered(
                         graphics,

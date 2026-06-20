@@ -57,6 +57,9 @@ namespace THSBigOrder.Analytics
         public string Label { get; set; }
         public double? TotalAmount { get; set; }
         public double BigOrderAmount { get; set; }
+        public double BuyAmount { get; set; }
+        public double SellAmount { get; set; }
+        public double NetAmount => BuyAmount - SellAmount;
     }
 
     public sealed class BigOrderSeriesBuilder
@@ -155,7 +158,12 @@ namespace THSBigOrder.Analytics
             foreach (var order in orders)
             {
                 var index = HalfHourIndex(order.Time);
-                if (index >= 0) halfHours[index].BigOrderAmount += order.Amount;
+                if (index >= 0)
+                {
+                    halfHours[index].BigOrderAmount += order.Amount;
+                    if (order.IsBuy) halfHours[index].BuyAmount += order.Amount;
+                    if (order.IsSell) halfHours[index].SellAmount += order.Amount;
+                }
             }
 
             if (hasTurnover)
