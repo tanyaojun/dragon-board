@@ -46,6 +46,7 @@ namespace THSBigOrder
         private readonly Font _gridBoldFont;
         private readonly Font _filterBoldFont;
         private readonly Font _filterUnderlineFont;
+        private bool _syncingStockCodeText;
 
         // 当前状态
         private string _currentStockCode = "002963";
@@ -115,6 +116,12 @@ namespace THSBigOrder
         internal Color MainSellColor => lblMainSell.ForeColor;
         internal Color MainNetColor => lblMainNet.ForeColor;
         internal Color SealAmountColor => lblSealAmount.ForeColor;
+        internal bool FollowTdxChecked => chkFollowTdx.Checked;
+        internal string InputStockCodeText
+        {
+            get => txtStockCode.Text;
+            set => txtStockCode.Text = value;
+        }
         internal IReadOnlyList<string> MetricTexts => metricsFlow.Controls
             .OfType<Label>()
             .Select(label => label.Text)
@@ -123,7 +130,7 @@ namespace THSBigOrder
         internal Task RefreshStockAsync(string stockCode, bool forceForCodeChange)
         {
             _currentStockCode = stockCode;
-            if (txtStockCode != null) txtStockCode.Text = stockCode;
+            SetStockCodeText(stockCode);
             return RefreshDataAsync(forceForCodeChange);
         }
 
@@ -489,7 +496,7 @@ namespace THSBigOrder
             WindowSettings.ApplyWindowSize(this, "MainForm");
             ApplyResponsiveLayout();
             
-            txtStockCode.Text = _currentStockCode;
+            SetStockCodeText(_currentStockCode);
             UpdateStatusLabel("正在加载数据...");
             await RefreshDataAsync();
             _titleTimer.Start();
@@ -785,7 +792,7 @@ namespace THSBigOrder
                     if (stockCode != _currentStockCode)
                     {
                         _currentStockCode = stockCode;
-                        txtStockCode.Text = stockCode;
+                        SetStockCodeText(stockCode);
                         var _ = RefreshDataAsync();
                     }
                     return;
@@ -802,7 +809,7 @@ namespace THSBigOrder
                         if (clipText != _currentStockCode)
                         {
                             _currentStockCode = clipText;
-                            txtStockCode.Text = clipText;
+                            SetStockCodeText(clipText);
                             var _ = RefreshDataAsync();
                         }
                     }
@@ -961,6 +968,25 @@ namespace THSBigOrder
             var changed = stockCode != _currentStockCode;
             _specialFilter = "";
             await RefreshStockAsync(stockCode, changed);
+        }
+
+        private void SetStockCodeText(string stockCode)
+        {
+            if (txtStockCode == null) return;
+            _syncingStockCodeText = true;
+            try { txtStockCode.Text = stockCode; }
+            finally { _syncingStockCodeText = false; }
+        }
+
+        private void txtStockCode_TextChanged(object sender, EventArgs e)
+        {
+            if (_syncingStockCodeText) return;
+            var stockCode = txtStockCode.Text.Trim();
+            if (stockCode.Length != 6 || !stockCode.All(char.IsDigit)) return;
+            if (stockCode == _currentStockCode) return;
+            if (chkFollowTdx.Checked) chkFollowTdx.Checked = false;
+            _specialFilter = "";
+            var _ = RefreshStockAsync(stockCode, true);
         }
 
         private void OrderTabs_SelectedIndexChanged(object sender, EventArgs e)

@@ -147,6 +147,7 @@ namespace THSBigOrder
         this.txtStockCode.Location = new System.Drawing.Point(col1, row2 + 8);
         this.txtStockCode.Size = new System.Drawing.Size(75, 25);
         this.txtStockCode.TextAlign = System.Windows.Forms.HorizontalAlignment.Center;
+        this.txtStockCode.TextChanged += new System.EventHandler(this.txtStockCode_TextChanged);
         this.txtStockCode.KeyPress += new System.Windows.Forms.KeyPressEventHandler(this.txtStockCode_KeyPress);
 
         // === 第二列：数据信息 + 操作按钮 ===

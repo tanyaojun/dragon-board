@@ -69,6 +69,7 @@ internal static class Program
         Run("Main form defaults amount filter to 300w", TestMainFormDefaultAmountFilter);
         Run("Main form ignores superseded refresh completion", () => TestMainFormRefreshRace().GetAwaiter().GetResult());
         Run("Main form ignores superseded refresh failure", () => TestMainFormRefreshFailureRace().GetAwaiter().GetResult());
+        Run("Main form refreshes when user types a complete stock code", () => TestMainFormManualCodeInput().GetAwaiter().GetResult());
         Run("Main form clamps grid mouse wheel at bottom", TestMainFormGridWheelClamp);
         Run("Main form keeps chart markers aligned with amount and side filters", () => TestMainFormMarkerFilter().GetAwaiter().GetResult());
         Run("Main form displays quote and limit-up metrics", () => TestMainFormMetricLabels().GetAwaiter().GetResult());
@@ -1132,6 +1133,19 @@ internal static class Program
         }
     }
 
+    private static async Task TestMainFormManualCodeInput()
+    {
+        var provider = new RecordingProvider();
+        using (var form = new MainForm(provider, false))
+        {
+            await form.RefreshStockAsync("600057", true);
+            form.InputStockCodeText = "600667";
+            await WaitUntil(() => form.BoundStockCode == "600667", "manual code input refresh");
+            AssertSequence(new[] { "600057", "600667" }, provider.RequestedCodes, "manual input requests");
+            AssertTrue(!form.FollowTdxChecked, "manual code input disables TDX follow");
+        }
+    }
+
     private static void TestMainFormGridWheelClamp()
     {
         using (var form = new MainForm(null, false))
@@ -1394,6 +1408,16 @@ internal static class Program
             throw new InvalidOperationException(label + " sequence mismatch");
     }
 
+    private static async Task WaitUntil(Func<bool> condition, string label)
+    {
+        for (var attempt = 0; attempt < 40; attempt++)
+        {
+            if (condition()) return;
+            await Task.Delay(25);
+        }
+        throw new InvalidOperationException(label + " timed out");
+    }
+
     private static SourceStubs CreateSourceStubs()
     {
         var day = new DateTime(2026, 6, 18);
@@ -1624,6 +1648,31 @@ internal static class Program
         {
             return Task.FromResult(_snapshot);
         }
+        public void CalculateMarkers(List<BigOrderItem> data) { }
+    }
+
+    private sealed class RecordingProvider : IMarketSnapshotProvider
+    {
+        private readonly List<string> _requestedCodes = new List<string>();
+        public IReadOnlyList<string> RequestedCodes => _requestedCodes;
+
+        public Task<MarketSnapshot> LoadSnapshotAsync(string stockCode, CancellationToken cancellationToken)
+        {
+            _requestedCodes.Add(stockCode);
+            return Task.FromResult(new MarketSnapshot(
+                stockCode,
+                new StockSummary { Code = stockCode, Name = stockCode, Price = 10 },
+                new MainFundSummary(),
+                new LimitUpContext(),
+                new BigOrderItem[0],
+                new PricePoint[0],
+                DataFreshness.Fresh,
+                DataFreshness.Fresh,
+                DataFreshness.Missing,
+                DateTime.Now,
+                DateTime.Now));
+        }
+
         public void CalculateMarkers(List<BigOrderItem> data) { }
     }
 
