@@ -36,9 +36,11 @@ internal static class Program
         Run("Direct THS payload parsers distinguish empty limit-up", TestDirectThsParsing);
         Run("Direct source clients use upstream and matching proxy contracts", () => TestDirectSourceClients().GetAwaiter().GetResult());
         Run("Proxy envelope maps degraded, stale and fresh empty states", TestEnvelopeStates);
-        Run("Provider loads four proxy routes in parallel", () => TestProviderParallelLoad().GetAwaiter().GetResult());
         Run("Provider stale fallback is isolated by stock code", () => TestProviderStaleIsolation().GetAwaiter().GetResult());
-        Run("Provider preserves optional degraded and stale states", () => TestProviderOptionalStates().GetAwaiter().GetResult());
+        Run("Provider direct success does not call proxy", () => TestDirectSuccess().GetAwaiter().GetResult());
+        Run("Provider falls back only the failed source", () => TestIndependentProxyFallback().GetAwaiter().GetResult());
+        Run("Provider does not fallback valid empty limit-up", () => TestValidEmptyLimitUp().GetAwaiter().GetResult());
+        Run("Provider uses same-stock stale only after both attempts fail", () => TestPerSourceStale().GetAwaiter().GetResult());
         Run("Series builder aggregates minute flow and thresholds", TestSeriesBuilder);
         Run("Series builder computes Tencent market VWAP", TestMarketAveragePrices);
         Run("Series builder computes cumulative big-order average price", TestBigOrderAveragePrices);
@@ -248,24 +250,6 @@ internal static class Program
         }
     }
 
-    private static async Task TestProviderParallelLoad()
-    {
-        var handler = new FixtureHandler(true);
-        using (var provider = new THSBigOrderDataProvider(new HttpClient(handler), "http://127.0.0.1:3000"))
-        {
-            var snapshot = await provider.LoadSnapshotAsync("002297", CancellationToken.None);
-            AssertSequence(new[] {
-                "/api/big-order/ths-detail?stockCode=002297",
-                "/api/limitup/10jqka",
-                "/api/quotes/tencent/minute?code=002297",
-                "/api/quotes/tencent?codes=002297"
-            }, handler.Paths.OrderBy(value => value).ToArray(), "paths");
-            AssertEqual(4, handler.PeakPending, "parallel requests");
-            AssertEqual("002297", snapshot.StockCode, "stock code");
-            AssertEqual("博云新材", snapshot.Stock.Name, "provider name");
-        }
-    }
-
     private static async Task TestProviderStaleIsolation()
     {
         var handler = new FixtureHandler(false);
@@ -287,14 +271,68 @@ internal static class Program
         }
     }
 
-    private static async Task TestProviderOptionalStates()
+    private static async Task TestDirectSuccess()
     {
-        var handler = new FixtureHandler(false) { QuoteDegraded = true, LimitStale = true };
-        using (var provider = new THSBigOrderDataProvider(new HttpClient(handler), "http://127.0.0.1:3000"))
+        var sources = CreateSourceStubs();
+        using (var provider = CreateProvider(sources))
         {
             var snapshot = await provider.LoadSnapshotAsync("002297", CancellationToken.None);
-            AssertEqual(DataFreshness.Failed, snapshot.QuoteFreshness, "quote degraded");
-            AssertEqual(DataFreshness.Stale, snapshot.LimitUpFreshness, "limit stale");
+            AssertEqual(DataTransport.Direct, snapshot.Transports.BigOrder, "big direct transport");
+            AssertEqual(DataTransport.Direct, snapshot.Transports.Quote, "quote direct transport");
+            AssertEqual(DataTransport.Direct, snapshot.Transports.Minute, "minute direct transport");
+            AssertEqual(DataTransport.Direct, snapshot.Transports.LimitUp, "limit direct transport");
+            AssertEqual(0, sources.Big.ProxyCalls + sources.Quote.ProxyCalls + sources.Minute.ProxyCalls + sources.Limit.ProxyCalls, "no proxy calls");
+        }
+    }
+
+    private static async Task TestIndependentProxyFallback()
+    {
+        var sources = CreateSourceStubs();
+        sources.Minute.Direct = _ => throw new HttpRequestException("Tencent direct blocked");
+        sources.Minute.Proxy = _ => Task.FromResult(new SourceLoadResult<IReadOnlyList<MinuteTurnoverPoint>>
+        {
+            Data = new[] { MinutePoint() }, Freshness = DataFreshness.Fresh,
+            Transport = DataTransport.ProxyFallback, FetchedAt = DateTime.Now,
+        });
+        using (var provider = CreateProvider(sources))
+        {
+            var snapshot = await provider.LoadSnapshotAsync("002297", CancellationToken.None);
+            AssertEqual(DataTransport.ProxyFallback, snapshot.Transports.Minute, "minute proxy transport");
+            AssertEqual(1, sources.Minute.ProxyCalls, "minute proxy called once");
+            AssertEqual(0, sources.Big.ProxyCalls + sources.Quote.ProxyCalls + sources.Limit.ProxyCalls, "other proxies untouched");
+        }
+    }
+
+    private static async Task TestValidEmptyLimitUp()
+    {
+        var sources = CreateSourceStubs();
+        sources.Limit.Direct = _ => Task.FromResult(new SourceLoadResult<LimitUpSourceData>
+        {
+            Data = new LimitUpSourceData { Found = false, Context = new LimitUpContext() },
+            Freshness = DataFreshness.Missing, Transport = DataTransport.Direct, FetchedAt = DateTime.Now,
+        });
+        using (var provider = CreateProvider(sources))
+        {
+            var snapshot = await provider.LoadSnapshotAsync("002297", CancellationToken.None);
+            AssertEqual(DataFreshness.Missing, snapshot.LimitUpFreshness, "valid empty freshness");
+            AssertEqual(DataTransport.Direct, snapshot.Transports.LimitUp, "valid empty transport");
+            AssertEqual(0, sources.Limit.ProxyCalls, "valid empty skips proxy");
+        }
+    }
+
+    private static async Task TestPerSourceStale()
+    {
+        var sources = CreateSourceStubs();
+        using (var provider = CreateProvider(sources))
+        {
+            var fresh = await provider.LoadSnapshotAsync("002297", CancellationToken.None);
+            sources.Big.Direct = _ => throw new HttpRequestException("direct blocked");
+            sources.Big.Proxy = _ => throw new HttpRequestException("proxy stopped");
+            var stale = await provider.LoadSnapshotAsync("002297", CancellationToken.None);
+            AssertEqual(fresh.Orders.Count, stale.Orders.Count, "same-stock big orders retained");
+            AssertEqual(DataFreshness.Stale, stale.BigOrderFreshness, "big stale freshness");
+            AssertEqual(DataTransport.Stale, stale.Transports.BigOrder, "big stale transport");
+            AssertEqual(DataTransport.Direct, stale.Transports.Quote, "quote keeps direct");
         }
     }
 
@@ -769,6 +807,95 @@ internal static class Program
     {
         if (!expected.SequenceEqual(actual))
             throw new InvalidOperationException(label + " sequence mismatch");
+    }
+
+    private static SourceStubs CreateSourceStubs()
+    {
+        var day = new DateTime(2026, 6, 18);
+        return new SourceStubs
+        {
+            Big = new StubSourceClient<BigOrderSourceData>
+            {
+                Direct = _ => Task.FromResult(new SourceLoadResult<BigOrderSourceData>
+                {
+                    Data = new BigOrderSourceData
+                    {
+                        StockFallback = new StockSummary { Code = "002297", Name = "博云新材", Price = 28.36 },
+                        MainFunds = new MainFundSummary { MainBuy = 1000000, MainSell = 400000, NetAmount = 600000, OrderCount = 1 },
+                        Orders = new[] { new BigOrderItem { Time = day.AddHours(9).AddMinutes(30), Price = 28.36, Volume = 10, Amount = 28360, Type = 2 } },
+                        Prices = new PricePoint[0],
+                    },
+                    Freshness = DataFreshness.Fresh, Transport = DataTransport.Direct, FetchedAt = DateTime.Now,
+                }),
+            },
+            Quote = new StubSourceClient<StockSummary>
+            {
+                Direct = _ => Task.FromResult(new SourceLoadResult<StockSummary>
+                {
+                    Data = new StockSummary { Code = "002297", Name = "博云新材", Price = 28.36, ChangePercent = 10.09, TotalAmount = 3342254360 },
+                    Freshness = DataFreshness.Fresh, Transport = DataTransport.Direct, FetchedAt = DateTime.Now,
+                }),
+            },
+            Minute = new StubSourceClient<IReadOnlyList<MinuteTurnoverPoint>>
+            {
+                Direct = _ => Task.FromResult(new SourceLoadResult<IReadOnlyList<MinuteTurnoverPoint>>
+                {
+                    Data = new[] { MinutePoint() }, Freshness = DataFreshness.Fresh,
+                    Transport = DataTransport.Direct, FetchedAt = DateTime.Now,
+                }),
+            },
+            Limit = new StubSourceClient<LimitUpSourceData>
+            {
+                Direct = _ => Task.FromResult(new SourceLoadResult<LimitUpSourceData>
+                {
+                    Data = new LimitUpSourceData { Found = true, Context = new LimitUpContext { SealAmount = 45049860 } },
+                    Freshness = DataFreshness.Fresh, Transport = DataTransport.Direct, FetchedAt = DateTime.Now,
+                }),
+            },
+        };
+    }
+
+    private static MinuteTurnoverPoint MinutePoint()
+    {
+        return new MinuteTurnoverPoint
+        {
+            Time = new DateTime(2026, 6, 18, 9, 30, 0), Price = 25.70,
+            CumulativeVolume = 11848, CumulativeAmount = 30449360,
+        };
+    }
+
+    private static THSBigOrderDataProvider CreateProvider(SourceStubs value)
+    {
+        return new THSBigOrderDataProvider(value.Big, value.Quote, value.Minute, value.Limit);
+    }
+
+    private sealed class SourceStubs
+    {
+        public StubSourceClient<BigOrderSourceData> Big { get; set; }
+        public StubSourceClient<StockSummary> Quote { get; set; }
+        public StubSourceClient<IReadOnlyList<MinuteTurnoverPoint>> Minute { get; set; }
+        public StubSourceClient<LimitUpSourceData> Limit { get; set; }
+    }
+
+    private sealed class StubSourceClient<T> : IMarketSourceClient<T>
+    {
+        public Func<CancellationToken, Task<SourceLoadResult<T>>> Direct { get; set; }
+        public Func<CancellationToken, Task<SourceLoadResult<T>>> Proxy { get; set; }
+        public int DirectCalls { get; private set; }
+        public int ProxyCalls { get; private set; }
+
+        public Task<SourceLoadResult<T>> LoadDirectAsync(string stockCode, CancellationToken cancellationToken)
+        {
+            DirectCalls++;
+            return Direct(cancellationToken);
+        }
+
+        public Task<SourceLoadResult<T>> LoadProxyAsync(string stockCode, CancellationToken cancellationToken)
+        {
+            ProxyCalls++;
+            if (Proxy == null) throw new InvalidOperationException("unexpected proxy call");
+            return Proxy(cancellationToken);
+        }
     }
 
     private sealed class SourceRequestRecord

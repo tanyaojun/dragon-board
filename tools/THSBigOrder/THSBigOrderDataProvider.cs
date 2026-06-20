@@ -4,9 +4,9 @@ using System.Linq;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
-using Newtonsoft.Json.Linq;
 using THSBigOrder.Models;
 using THSBigOrder.Parsing;
+using THSBigOrder.DataSources;
 
 namespace THSBigOrder
 {
@@ -14,8 +14,10 @@ namespace THSBigOrder
     {
         private readonly HttpClient _httpClient;
         private readonly bool _ownsHttpClient;
-        private readonly string _baseUrl;
-        private readonly ThsPayloadParser _parser = new ThsPayloadParser();
+        private readonly IMarketSourceClient<BigOrderSourceData> _bigOrderSource;
+        private readonly IMarketSourceClient<StockSummary> _quoteSource;
+        private readonly IMarketSourceClient<IReadOnlyList<MinuteTurnoverPoint>> _minuteSource;
+        private readonly IMarketSourceClient<LimitUpSourceData> _limitUpSource;
         private readonly Dictionary<string, MarketSnapshot> _lastGood = new Dictionary<string, MarketSnapshot>();
 
         public THSBigOrderDataProvider(HttpClient httpClient = null, string baseUrl = "http://127.0.0.1:3000")
@@ -23,7 +25,24 @@ namespace THSBigOrder
             _ownsHttpClient = httpClient == null;
             _httpClient = httpClient ?? new HttpClient();
             _httpClient.Timeout = TimeSpan.FromSeconds(15);
-            _baseUrl = (baseUrl ?? "").TrimEnd('/');
+            var proxyBase = (baseUrl ?? "").TrimEnd('/');
+            var parser = new ThsPayloadParser();
+            _bigOrderSource = new ThsBigOrderSourceClient(_httpClient, proxyBase, parser);
+            _quoteSource = new SinaQuoteSourceClient(_httpClient, proxyBase, parser);
+            _minuteSource = new TencentMinuteSourceClient(_httpClient, proxyBase, parser);
+            _limitUpSource = new ThsLimitUpSourceClient(_httpClient, proxyBase, parser);
+        }
+
+        internal THSBigOrderDataProvider(
+            IMarketSourceClient<BigOrderSourceData> bigOrderSource,
+            IMarketSourceClient<StockSummary> quoteSource,
+            IMarketSourceClient<IReadOnlyList<MinuteTurnoverPoint>> minuteSource,
+            IMarketSourceClient<LimitUpSourceData> limitUpSource)
+        {
+            _bigOrderSource = bigOrderSource;
+            _quoteSource = quoteSource;
+            _minuteSource = minuteSource;
+            _limitUpSource = limitUpSource;
         }
 
         public async Task<MarketSnapshot> LoadSnapshotAsync(string stockCode, CancellationToken cancellationToken)
@@ -31,52 +50,47 @@ namespace THSBigOrder
             if (string.IsNullOrWhiteSpace(stockCode) || stockCode.Length != 6 || !stockCode.All(char.IsDigit))
                 throw new ArgumentException("stockCode 必须是六位数字", nameof(stockCode));
 
-            var bigTask = GetJsonAsync("/api/big-order/ths-detail?stockCode=" + stockCode, cancellationToken);
-            var quoteTask = TryGetJsonAsync("/api/quotes/tencent?codes=" + stockCode, cancellationToken);
-            var minuteTask = TryGetJsonAsync("/api/quotes/tencent/minute?code=" + stockCode, cancellationToken);
-            var limitTask = TryGetJsonAsync("/api/limitup/10jqka", cancellationToken);
-            try
-            {
-                await Task.WhenAll((Task)bigTask, quoteTask, minuteTask, limitTask).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch
-            {
-                // 主数据错误在下方按股票代码执行 stale 回退；可选请求已各自封装错误。
-            }
+            var bigTask = LoadDirectFirstAsync(_bigOrderSource, stockCode, cancellationToken);
+            var quoteTask = LoadDirectFirstAsync(_quoteSource, stockCode, cancellationToken);
+            var minuteTask = LoadDirectFirstAsync(_minuteSource, stockCode, cancellationToken);
+            var limitTask = LoadDirectFirstAsync(_limitUpSource, stockCode, cancellationToken);
+            await Task.WhenAll((Task)bigTask, quoteTask, minuteTask, limitTask).ConfigureAwait(false);
 
-            JObject bigOrder;
-            try
-            {
-                bigOrder = await bigTask.ConfigureAwait(false);
-                if (bigOrder.Value<bool?>("ok") != true)
-                    throw new HttpRequestException((string)bigOrder["errorCode"] ?? "big-order degraded");
-            }
-            catch (Exception) when (!cancellationToken.IsCancellationRequested)
-            {
-                MarketSnapshot cached;
-                if (_lastGood.TryGetValue(stockCode, out cached))
-                    return BuildStaleSnapshot(cached, quoteTask.Result, minuteTask.Result, limitTask.Result);
-                return FailedSnapshot(stockCode, quoteTask.Result, minuteTask.Result, limitTask.Result);
-            }
-
+            var big = bigTask.Result;
             var quote = quoteTask.Result;
-            var limitUp = limitTask.Result;
-            var snapshot = _parser.ParseSnapshot(
+            var minute = minuteTask.Result;
+            var limit = limitTask.Result;
+            MarketSnapshot cached;
+            _lastGood.TryGetValue(stockCode, out cached);
+            ApplyStaleFallback(cached, big, quote, minute, limit);
+
+            var bigData = big.Data ?? new BigOrderSourceData();
+            var stock = quote.Data ?? new StockSummary { Code = stockCode };
+            if (string.IsNullOrWhiteSpace(stock.Name)) stock.Name = bigData.StockFallback?.Name ?? "";
+            if (!stock.Price.HasValue) stock.Price = bigData.StockFallback?.Price;
+            var snapshot = new MarketSnapshot(
                 stockCode,
-                bigOrder,
-                quote.Data ?? new JObject(),
-                minuteTask.Result.Data ?? new JObject(),
-                limitUp.Data ?? new JObject(),
-                DateTime.Now);
-            snapshot = WithOptionalFreshness(
-                snapshot,
-                ResolveOptionalFreshness(quote, snapshot.QuoteFreshness),
-                ResolveOptionalFreshness(minuteTask.Result, snapshot.MinuteTurnoverFreshness),
-                ResolveOptionalFreshness(limitUp, snapshot.LimitUpFreshness));
+                stock,
+                bigData.MainFunds ?? new MainFundSummary(),
+                limit.Data?.Context ?? new LimitUpContext(),
+                bigData.Orders ?? new BigOrderItem[0],
+                bigData.Prices ?? new PricePoint[0],
+                minute.Data ?? new MinuteTurnoverPoint[0],
+                big.Freshness,
+                quote.Freshness,
+                minute.Freshness,
+                limit.Freshness,
+                big.FetchedAt == default(DateTime) ? DateTime.Now : big.FetchedAt,
+                DateTime.Now,
+                new[] { big.Error, quote.Error, minute.Error, limit.Error }
+                    .Where(value => !string.IsNullOrWhiteSpace(value)).ToArray(),
+                new MarketSourceTransports
+                {
+                    BigOrder = big.Transport,
+                    Quote = quote.Transport,
+                    Minute = minute.Transport,
+                    LimitUp = limit.Transport,
+                });
             _lastGood[stockCode] = snapshot;
             return snapshot;
         }
@@ -107,81 +121,70 @@ namespace THSBigOrder
             };
         }
 
-        private async Task<JObject> GetJsonAsync(string path, CancellationToken cancellationToken)
+        private static async Task<SourceLoadResult<T>> LoadDirectFirstAsync<T>(
+            IMarketSourceClient<T> source, string stockCode, CancellationToken cancellationToken)
         {
-            using (var response = await _httpClient.GetAsync(_baseUrl + path, cancellationToken).ConfigureAwait(false))
+            try { return await source.LoadDirectAsync(stockCode, cancellationToken).ConfigureAwait(false); }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+            catch (Exception directError)
             {
-                var json = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-                response.EnsureSuccessStatusCode();
-                return JObject.Parse(json);
+                try { return await source.LoadProxyAsync(stockCode, cancellationToken).ConfigureAwait(false); }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+                catch (Exception proxyError)
+                {
+                    return new SourceLoadResult<T>
+                    {
+                        Freshness = DataFreshness.Failed,
+                        Transport = DataTransport.Failed,
+                        Error = directError.Message + " | " + proxyError.Message,
+                    };
+                }
             }
         }
 
-        private async Task<RequestResult> TryGetJsonAsync(string path, CancellationToken cancellationToken)
-        {
-            try { return new RequestResult { Data = await GetJsonAsync(path, cancellationToken).ConfigureAwait(false) }; }
-            catch (OperationCanceledException) { throw; }
-            catch (Exception error) { return new RequestResult { Error = error }; }
-        }
-
-        private MarketSnapshot FailedSnapshot(
-            string stockCode,
-            RequestResult quote,
-            RequestResult minute,
-            RequestResult limitUp)
-        {
-            var degraded = JObject.Parse("{\"ok\":false,\"degraded\":true,\"data\":null}");
-            var snapshot = _parser.ParseSnapshot(
-                stockCode, degraded, quote.Data ?? new JObject(), minute.Data ?? new JObject(),
-                limitUp.Data ?? new JObject(), DateTime.Now);
-            return WithOptionalFreshness(
-                snapshot,
-                ResolveOptionalFreshness(quote, snapshot.QuoteFreshness),
-                ResolveOptionalFreshness(minute, snapshot.MinuteTurnoverFreshness),
-                ResolveOptionalFreshness(limitUp, snapshot.LimitUpFreshness));
-        }
-
-        private MarketSnapshot BuildStaleSnapshot(
+        private static void ApplyStaleFallback(
             MarketSnapshot cached,
-            RequestResult quote,
-            RequestResult minute,
-            RequestResult limitUp)
+            SourceLoadResult<BigOrderSourceData> big,
+            SourceLoadResult<StockSummary> quote,
+            SourceLoadResult<IReadOnlyList<MinuteTurnoverPoint>> minute,
+            SourceLoadResult<LimitUpSourceData> limit)
         {
-            var current = FailedSnapshot(cached.StockCode, quote, minute, limitUp);
-            if (string.IsNullOrWhiteSpace(current.Stock.Name)) current.Stock.Name = cached.Stock.Name;
-            var currentMinuteUsable = current.MinuteTurnoverFreshness == DataFreshness.Fresh ||
-                                      current.MinuteTurnoverFreshness == DataFreshness.Stale;
-            var minuteTurnover = currentMinuteUsable ? current.MinuteTurnover : cached.MinuteTurnover;
-            var minuteFreshness = currentMinuteUsable
-                ? current.MinuteTurnoverFreshness
-                : cached.MinuteTurnover.Count > 0 ? DataFreshness.Stale : current.MinuteTurnoverFreshness;
-            return new MarketSnapshot(
-                cached.StockCode, current.Stock, cached.MainFunds, current.LimitUp, cached.Orders, cached.Prices,
-                minuteTurnover, DataFreshness.Stale, current.QuoteFreshness, minuteFreshness,
-                current.LimitUpFreshness,
-                cached.BigOrderFetchedAt, DateTime.Now, cached.Issues);
-        }
-
-        private static MarketSnapshot WithOptionalFreshness(
-            MarketSnapshot source,
-            DataFreshness quote,
-            DataFreshness minute,
-            DataFreshness limitUp)
-        {
-            return new MarketSnapshot(
-                source.StockCode, source.Stock, source.MainFunds, source.LimitUp, source.Orders, source.Prices,
-                source.MinuteTurnover, source.BigOrderFreshness, quote, minute, limitUp,
-                source.BigOrderFetchedAt, source.RefreshedAt, source.Issues);
-        }
-
-        private static DataFreshness ResolveOptionalFreshness(RequestResult result, DataFreshness parsed)
-        {
-            if (result.Error != null) return DataFreshness.Failed;
-            if (result.Data?.Value<bool?>("ok") == false && result.Data.Value<bool?>("degraded") == true)
-                return DataFreshness.Failed;
-            if (result.Data?.SelectToken("dragonMeta.cache.stale")?.Value<bool>() == true)
-                return DataFreshness.Stale;
-            return parsed;
+            if (cached == null) return;
+            if (big.Transport == DataTransport.Failed && cached.Orders.Count > 0)
+            {
+                big.Data = new BigOrderSourceData
+                {
+                    StockFallback = cached.Stock,
+                    MainFunds = cached.MainFunds,
+                    Orders = cached.Orders,
+                    Prices = cached.Prices,
+                };
+                big.Freshness = DataFreshness.Stale;
+                big.Transport = DataTransport.Stale;
+                big.FetchedAt = cached.BigOrderFetchedAt;
+            }
+            if (quote.Transport == DataTransport.Failed && cached.Stock != null)
+            {
+                quote.Data = cached.Stock;
+                quote.Freshness = DataFreshness.Stale;
+                quote.Transport = DataTransport.Stale;
+            }
+            if (minute.Transport == DataTransport.Failed && cached.MinuteTurnover.Count > 0)
+            {
+                minute.Data = cached.MinuteTurnover;
+                minute.Freshness = DataFreshness.Stale;
+                minute.Transport = DataTransport.Stale;
+            }
+            if (limit.Transport == DataTransport.Failed && cached.LimitUp != null)
+            {
+                limit.Data = new LimitUpSourceData
+                {
+                    Found = cached.LimitUpFreshness != DataFreshness.Missing,
+                    Context = cached.LimitUp,
+                };
+                limit.Freshness = DataFreshness.Stale;
+                limit.Transport = DataTransport.Stale;
+            }
         }
 
         public void CalculateMarkers(List<BigOrderItem> data)
@@ -230,11 +233,6 @@ namespace THSBigOrder
             if (_ownsHttpClient) _httpClient.Dispose();
         }
 
-        private sealed class RequestResult
-        {
-            public JObject Data { get; set; }
-            public Exception Error { get; set; }
-        }
     }
 
     public class BigOrderItem
