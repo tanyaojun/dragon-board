@@ -17,7 +17,8 @@ namespace THSBigOrder.Parsing
     {
         public BigOrderSourceData ParseBigOrderSource(string stockCode, JObject payload)
         {
-            if (payload == null || payload.Value<int?>("errorcode") != 0 ||
+            var errorCode = payload?.Value<int?>("errorcode");
+            if (payload == null || errorCode.HasValue && errorCode.Value != 0 ||
                 !(payload["title"] is JObject title) || !(payload["list"] is JArray list))
                 throw new PayloadParseException("invalid THS big-order payload");
 

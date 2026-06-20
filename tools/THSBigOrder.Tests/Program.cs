@@ -34,6 +34,7 @@ internal static class Program
         Run("Direct Sina quote parser decodes GBK fields", TestDirectSinaQuoteParsing);
         Run("Direct Tencent minute parser validates nested rows", TestDirectTencentMinuteParsing);
         Run("Direct THS payload parsers distinguish empty limit-up", TestDirectThsParsing);
+        Run("Direct source clients use upstream and matching proxy contracts", () => TestDirectSourceClients().GetAwaiter().GetResult());
         Run("Proxy envelope maps degraded, stale and fresh empty states", TestEnvelopeStates);
         Run("Provider loads four proxy routes in parallel", () => TestProviderParallelLoad().GetAwaiter().GetResult());
         Run("Provider stale fallback is isolated by stock code", () => TestProviderStaleIsolation().GetAwaiter().GetResult());
@@ -205,6 +206,46 @@ internal static class Program
         AssertThrows<PayloadParseException>(() =>
             parser.ParseBigOrderSource("002297", JObject.Parse("{'errorcode':1,'msg':'blocked'}")),
             "THS error code");
+    }
+
+    private static async Task TestDirectSourceClients()
+    {
+        var handler = new SourceClientHandler();
+        using (var http = new HttpClient(handler))
+        {
+            var parser = new ThsPayloadParser();
+            var big = new ThsBigOrderSourceClient(http, "http://127.0.0.1:3000", parser);
+            var quote = new SinaQuoteSourceClient(http, "http://127.0.0.1:3000", parser);
+            var minute = new TencentMinuteSourceClient(http, "http://127.0.0.1:3000", parser);
+            var limit = new ThsLimitUpSourceClient(http, "http://127.0.0.1:3000", parser);
+
+            AssertEqual(DataTransport.Direct, (await big.LoadDirectAsync("002297", CancellationToken.None)).Transport, "big direct");
+            AssertEqual(DataTransport.Direct, (await quote.LoadDirectAsync("002297", CancellationToken.None)).Transport, "quote direct");
+            AssertEqual(DataTransport.Direct, (await minute.LoadDirectAsync("002297", CancellationToken.None)).Transport, "minute direct");
+            var empty = await limit.LoadDirectAsync("002297", CancellationToken.None);
+            AssertEqual(DataTransport.Direct, empty.Transport, "limit direct");
+            AssertTrue(!empty.Data.Found, "valid empty limit-up");
+
+            await big.LoadProxyAsync("002297", CancellationToken.None);
+            await quote.LoadProxyAsync("002297", CancellationToken.None);
+            await minute.LoadProxyAsync("002297", CancellationToken.None);
+            await limit.LoadProxyAsync("002297", CancellationToken.None);
+
+            AssertTrue(handler.Records.Any(x => x.Uri.Host == "vaserviece.10jqka.com.cn" && x.Uri.Query.Contains("op=mainMonitorDetail") && x.Uri.Query.Contains("stockcode=002297")), "big direct url");
+            AssertTrue(handler.Records.Any(x => x.Uri.Host == "hq.sinajs.cn" && x.Uri.AbsoluteUri.Contains("sz002297")), "sina direct url");
+            AssertTrue(handler.Records.Any(x => x.Uri.Host == "web.ifzq.gtimg.cn" && x.Uri.Query.Contains("sz002297")), "tencent direct url");
+            AssertTrue(handler.Records.Any(x => x.Uri.Host == "data.10jqka.com.cn" && x.Uri.AbsolutePath.Contains("limit_up_pool")), "limit direct url");
+            AssertTrue(handler.Records.Any(x => x.Uri.PathAndQuery == "/api/big-order/ths-detail?stockCode=002297"), "big proxy path");
+            AssertTrue(handler.Records.Any(x => x.Uri.PathAndQuery == "/api/quotes/sina?codes=002297"), "sina proxy path");
+            AssertTrue(handler.Records.Any(x => x.Uri.PathAndQuery == "/api/quotes/tencent/minute?code=002297"), "minute proxy path");
+            AssertTrue(handler.Records.Any(x => x.Uri.PathAndQuery == "/api/limitup/10jqka"), "limit proxy path");
+
+            var bigRecord = handler.Records.First(x => x.Uri.Host == "vaserviece.10jqka.com.cn");
+            AssertTrue(!string.IsNullOrEmpty(bigRecord.UserAgent), "THS user agent");
+            AssertTrue(bigRecord.Referer.Contains("10jqka"), "THS referer");
+            var sinaRecord = handler.Records.First(x => x.Uri.Host == "hq.sinajs.cn");
+            AssertTrue(sinaRecord.Referer.Contains("finance.sina.com.cn"), "Sina referer");
+        }
     }
 
     private static async Task TestProviderParallelLoad()
@@ -728,6 +769,57 @@ internal static class Program
     {
         if (!expected.SequenceEqual(actual))
             throw new InvalidOperationException(label + " sequence mismatch");
+    }
+
+    private sealed class SourceRequestRecord
+    {
+        public Uri Uri { get; set; }
+        public string UserAgent { get; set; }
+        public string Referer { get; set; }
+    }
+
+    private sealed class SourceClientHandler : HttpMessageHandler
+    {
+        public List<SourceRequestRecord> Records { get; } = new List<SourceRequestRecord>();
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Records.Add(new SourceRequestRecord
+            {
+                Uri = request.RequestUri,
+                UserAgent = request.Headers.UserAgent.ToString(),
+                Referer = request.Headers.Referrer?.ToString() ?? "",
+            });
+
+            HttpContent content;
+            var host = request.RequestUri.Host;
+            var path = request.RequestUri.AbsolutePath;
+            if (host == "hq.sinajs.cn")
+            {
+                content = new ByteArrayContent(Encoding.GetEncoding(936).GetBytes(
+                    "var hq_str_sz002297=\"博云新材,25.70,25.76,28.36,28.36,25.69,0,0,117850000,3342254360,0\";"));
+            }
+            else
+            {
+                string json;
+                if (host == "vaserviece.10jqka.com.cn")
+                    json = "{'errorcode':0,'title':{'stockname':'博云新材','price':28.36},'list':[],'pricechange':[]}";
+                else if (host == "web.ifzq.gtimg.cn")
+                    json = "{'code':0,'data':{'sz002297':{'data':{'date':'20260618','data':['0930 25.70 11848 30449360']}}}}";
+                else if (host == "data.10jqka.com.cn")
+                    json = "{'data':{'info':[]}}";
+                else if (path == "/api/big-order/ths-detail")
+                    json = "{'ok':true,'fetchedAt':1781746200000,'data':{'title':{'stockname':'博云新材','price':28.36},'list':[],'pricechange':[]}}";
+                else if (path == "/api/quotes/sina")
+                    json = "{'data':{'diff':[{'f12':'002297','f14':'博云新材','f2':28.36,'f3':10.09,'f5':3342254360,'f6':117850000}]}}";
+                else if (path == "/api/quotes/tencent/minute")
+                    json = "{'ok':true,'data':{'date':'20260618','points':[{'time':'0930','price':25.70,'cumulativeVolume':11848,'cumulativeAmount':30449360}]}}";
+                else
+                    json = "{'data':{'info':[]}}";
+                content = new StringContent(json, Encoding.UTF8, "application/json");
+            }
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = content });
+        }
     }
 
     private sealed class FixtureHandler : HttpMessageHandler
