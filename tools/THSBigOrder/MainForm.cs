@@ -92,7 +92,11 @@ namespace THSBigOrder
             _filterBoldFont = new Font("Microsoft YaHei", 9f, FontStyle.Bold);
             _filterUnderlineFont = new Font("Microsoft YaHei", 9f, FontStyle.Bold | FontStyle.Underline);
             if (initializeRuntime) InitializeCustomComponents();
-            else _dataProvider = dataProvider;
+            else
+            {
+                _dataProvider = dataProvider;
+                SetupDataGridStyle();
+            }
         }
 
         internal SplitContainer MainSplit => mainSplit;
@@ -101,6 +105,9 @@ namespace THSBigOrder
         internal bool ShowsSealRate => ClientSize.Width >= 1020;
         internal bool ShowsLastLimitTime => ClientSize.Width >= 1020;
         internal string BoundStockCode => _snapshot?.StockCode;
+        internal IReadOnlyList<BigOrderEventPoint> VisibleChartOrderEvents => bigOrderChart.VisibleOrderEvents;
+        internal string FreshnessText => lblFreshness.Text;
+        internal string StatusText => lblStatus.Text;
 
         internal Task RefreshStockAsync(string stockCode, bool forceForCodeChange)
         {
@@ -518,6 +525,7 @@ namespace THSBigOrder
                     snapshot.Orders,
                     snapshot.MinuteTurnover,
                     snapshot.MinuteTurnoverFreshness));
+            bigOrderChart.SetOrderMarkerFilter(_currentMoney, _orderSide);
             CheckAndAnnounce();
             lblStatus.Text = string.Format("共 {0} 条", _filteredData.Count);
             lblStatus.ForeColor = snapshot.BigOrderFreshness == DataFreshness.Fresh ? Color.LightGreen : Color.Orange;
@@ -536,8 +544,8 @@ namespace THSBigOrder
             lblSealRate.Text = "封板率 " + (snapshot.LimitUp.SuccessRate.HasValue ? (snapshot.LimitUp.SuccessRate.Value * 100).ToString("F1") + "%" : "-");
             lblLimitUpReason.Text = snapshot.LimitUpFreshness == DataFreshness.Failed ? "涨停数据不可用" : snapshot.LimitUpFreshness == DataFreshness.Missing ? "非涨停池" : "涨停原因 " + (snapshot.LimitUp.ReasonType ?? "-");
             lblLastLimitTime.Text = "末封 " + (snapshot.LimitUp.LastLimitTime ?? "-");
-            lblFreshness.Text = snapshot.BigOrderFreshness == DataFreshness.Fresh ? "数据实时" : snapshot.BigOrderFreshness == DataFreshness.Stale ? "数据陈旧" : "代理不可用";
-            lblFreshness.ForeColor = snapshot.BigOrderFreshness == DataFreshness.Fresh ? Color.LightGreen : Color.Orange;
+            lblFreshness.Text = snapshot.Transports.Summary;
+            lblFreshness.ForeColor = snapshot.Transports.Summary == "直连" ? Color.LightGreen : Color.Orange;
         }
 
         private static string FormatNullable(double? value, string format) => value.HasValue ? value.Value.ToString(format) : "-";
@@ -1124,6 +1132,7 @@ namespace THSBigOrder
             UpdateDataGrid();
             UpdateStatistics();
             UpdateScrollText();
+            bigOrderChart.SetOrderMarkerFilter(_currentMoney, _orderSide);
             lblStatus.Text = string.Format("共 {0} 条", _filteredData.Count);
         }
 

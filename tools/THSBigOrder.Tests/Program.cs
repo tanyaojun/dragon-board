@@ -4,6 +4,7 @@ using System.Drawing;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Reflection;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -52,10 +53,14 @@ internal static class Program
         Run("Chart control falls back to THS percent only for market line", TestThsPriceFallback);
         Run("Chart control normalizes half-hour heat rows independently", TestHalfHourHeatRatios);
         Run("Chart heat text stays readable at maximum intensity", TestHeatTextContrast);
+        Run("Chart filters active order events by amount and side", TestChartOrderEventFilter);
+        Run("Chart removes legacy signals and keeps second precision", TestChartOrderEventRenderingContract);
         Run("Order filter composes amount, side and marker", TestOrderFilter);
         Run("Refresh coordinator cancels superseded code and blocks reentry", TestRefreshCoordinator);
         Run("Main form exposes 72/28 chart and order tabs", TestMainFormLayout);
         Run("Main form ignores superseded refresh completion", () => TestMainFormRefreshRace().GetAwaiter().GetResult());
+        Run("Main form keeps chart markers aligned with amount and side filters", () => TestMainFormMarkerFilter().GetAwaiter().GetResult());
+        Run("Main form displays direct-first source status", () => TestMainFormSourceStatus().GetAwaiter().GetResult());
         return Environment.ExitCode;
     }
 
@@ -693,6 +698,88 @@ internal static class Program
             "big-order heat text contrast");
     }
 
+    private static void TestChartOrderEventFilter()
+    {
+        var day = new DateTime(2026, 6, 20);
+        var series = CreateOrderEventSeries(day);
+        using (var control = new BigOrderChartControl { Size = new Size(800, 600) })
+        {
+            control.SetSnapshot(CreateChartSnapshot(day, new PricePoint[0]), series);
+            control.SetOrderMarkerFilter(1000000, OrderSide.All);
+            AssertEqual(2, control.VisibleOrderEvents.Count, "all active events above threshold");
+            AssertTrue(control.VisibleOrderEvents.All(x => x.Type == 2 || x.Type == 4), "passive events hidden");
+            control.SetOrderMarkerFilter(1000000, OrderSide.Buy);
+            AssertEqual(1, control.VisibleOrderEvents.Count, "buy event count");
+            AssertTrue(control.VisibleOrderEvents.All(x => x.Type == 2), "buy tab red only");
+            control.SetOrderMarkerFilter(1000000, OrderSide.Sell);
+            AssertEqual(1, control.VisibleOrderEvents.Count, "sell event count");
+            AssertTrue(control.VisibleOrderEvents.All(x => x.Type == 4), "sell tab green only");
+        }
+    }
+
+    private static void TestChartOrderEventRenderingContract()
+    {
+        var legacy = typeof(BigOrderChartControl).GetMethod(
+            "DrawSignals", BindingFlags.Instance | BindingFlags.NonPublic);
+        AssertEqual<MethodInfo>(null, legacy, "legacy chart signals removed");
+
+        var day = new DateTime(2026, 6, 20);
+        var bounds = new Rectangle(58, 12, 688, 360);
+        var start = BigOrderChartControl.TimeX(day.AddHours(9).AddMinutes(30), bounds);
+        var half = BigOrderChartControl.TimeX(day.AddHours(9).AddMinutes(30).AddSeconds(30), bounds);
+        var minute = BigOrderChartControl.TimeX(day.AddHours(9).AddMinutes(31), bounds);
+        AssertNear((start + minute) / 2d, half, 0.001d, "second precision midpoint");
+        AssertNear(
+            BigOrderChartControl.TimeX(day.AddHours(11).AddMinutes(30), bounds),
+            BigOrderChartControl.TimeX(day.AddHours(13), bounds),
+            0.001d,
+            "lunch break compressed");
+
+        using (var control = new BigOrderChartControl { Size = new Size(800, 600) })
+        using (var bitmap = new Bitmap(800, 600))
+        {
+            control.SetSnapshot(CreateChartSnapshot(day, new PricePoint[0]), CreateOrderEventSeries(day));
+            control.SetOrderMarkerFilter(1000000, OrderSide.All);
+            control.DrawToBitmap(bitmap, new Rectangle(0, 0, bitmap.Width, bitmap.Height));
+            var hasRed = false;
+            var hasGreen = false;
+            for (var y = 0; y < bitmap.Height && !(hasRed && hasGreen); y++)
+            for (var x = 0; x < bitmap.Width; x++)
+            {
+                var color = bitmap.GetPixel(x, y);
+                hasRed |= color.R > 200 && color.G < 130 && color.B < 150;
+                hasGreen |= color.G > 170 && color.R < 100 && color.B < 190;
+            }
+            AssertTrue(hasRed, "active buy red marker rendered");
+            AssertTrue(hasGreen, "active sell green marker rendered");
+        }
+    }
+
+    private static BigOrderSeries CreateOrderEventSeries(DateTime day)
+    {
+        return new BigOrderSeries
+        {
+            Minutes = new MinuteFlow[0],
+            NetFlow = new NetFlowPoint[0],
+            Thresholds = new ThresholdFlow[0],
+            HalfHours = new HalfHourAmount[0],
+            MarketAveragePrices = new AveragePricePoint[0],
+            BigOrderAveragePrices = new[]
+            {
+                new AveragePricePoint { Time = day.AddHours(9).AddMinutes(31), Price = 10.2 },
+                new AveragePricePoint { Time = day.AddHours(9).AddMinutes(32), Price = 10.3 },
+            },
+            BigOrderEvents = new[]
+            {
+                new BigOrderEventPoint { Time = day.AddHours(9).AddMinutes(31).AddSeconds(10), AveragePrice = 10.2, Amount = 1500000, Type = 2 },
+                new BigOrderEventPoint { Time = day.AddHours(9).AddMinutes(32).AddSeconds(20), AveragePrice = 10.3, Amount = 1600000, Type = 4 },
+                new BigOrderEventPoint { Time = day.AddHours(9).AddMinutes(33), AveragePrice = 10.25, Amount = 1700000, Type = 3 },
+                new BigOrderEventPoint { Time = day.AddHours(9).AddMinutes(34), AveragePrice = 10.25, Amount = 1800000, Type = 1 },
+                new BigOrderEventPoint { Time = day.AddHours(9).AddMinutes(35), AveragePrice = 10.25, Amount = 500000, Type = 2 },
+            },
+        };
+    }
+
     private static double ContrastRatio(Color first, Color second)
     {
         var firstLuminance = RelativeLuminance(first);
@@ -760,6 +847,114 @@ internal static class Program
             provider.Complete("002297");
             await oldRequest;
             AssertEqual("600519", form.BoundStockCode, "latest stock remains bound");
+        }
+    }
+
+    private static async Task TestMainFormMarkerFilter()
+    {
+        var day = new DateTime(2026, 6, 20);
+        var snapshot = new MarketSnapshot(
+            "002297",
+            new StockSummary { Code = "002297", Name = "博云新材", Price = 11, ChangePercent = 10 },
+            new MainFundSummary(),
+            new LimitUpContext(),
+            new[]
+            {
+                new BigOrderItem { Time = day.AddHours(9).AddMinutes(31), Price = 10.2, Volume = 100, Amount = 1500000, Type = 2 },
+                new BigOrderItem { Time = day.AddHours(9).AddMinutes(32), Price = 10.3, Volume = 100, Amount = 3500000, Type = 4 },
+                new BigOrderItem { Time = day.AddHours(9).AddMinutes(33), Price = 10.25, Volume = 100, Amount = 4000000, Type = 3 },
+                new BigOrderItem { Time = day.AddHours(9).AddMinutes(34), Price = 10.25, Volume = 100, Amount = 500000, Type = 2 },
+            },
+            new PricePoint[0],
+            DataFreshness.Fresh, DataFreshness.Fresh, DataFreshness.Missing,
+            DateTime.Now, DateTime.Now);
+        using (var form = new MainForm(new ImmediateProvider(snapshot), false))
+        {
+            AssertEqual(4, snapshot.Orders.Count, "fixture orders");
+            AssertEqual(4, new BigOrderSeriesBuilder().Build(snapshot.Orders).BigOrderEvents.Count, "fixture events");
+            await form.RefreshStockAsync("002297", true);
+            AssertTrue(!form.StatusText.StartsWith("错误:"), "marker bind succeeds: " + form.StatusText);
+            AssertEqual("002297", form.BoundStockCode, "marker snapshot bound");
+            var chart = form.MainSplit.Panel1.Controls.OfType<BigOrderChartControl>().Single();
+            var boundSeries = (BigOrderSeries)typeof(BigOrderChartControl)
+                .GetField("_series", BindingFlags.Instance | BindingFlags.NonPublic)
+                .GetValue(chart);
+            var boundMinimum = (double)typeof(BigOrderChartControl)
+                .GetField("_minimumOrderAmount", BindingFlags.Instance | BindingFlags.NonPublic)
+                .GetValue(chart);
+            AssertEqual(4, boundSeries.BigOrderEvents.Count, "bound chart events");
+            AssertEqual(300000d, boundMinimum, "bound chart minimum");
+            AssertEqual(3, form.VisibleChartOrderEvents.Count, "30w initial markers");
+            InvokeClick(form, "btn100W_Click", FindButton(form, "100"));
+            AssertEqual(2, form.VisibleChartOrderEvents.Count, "100w all markers");
+            form.OrderTabs.SelectedIndex = 1;
+            InvokeTabChanged(form);
+            AssertEqual(1, form.VisibleChartOrderEvents.Count, "100w buy markers");
+            InvokeClick(form, "btn300W_Click", FindButton(form, "300"));
+            AssertEqual(0, form.VisibleChartOrderEvents.Count, "300w buy markers");
+            form.OrderTabs.SelectedIndex = 0;
+            InvokeTabChanged(form);
+            AssertEqual(1, form.VisibleChartOrderEvents.Count, "300w all markers");
+            form.OrderTabs.SelectedIndex = 2;
+            InvokeTabChanged(form);
+            AssertEqual(1, form.VisibleChartOrderEvents.Count, "300w sell markers");
+        }
+    }
+
+    private static Button FindButton(Control root, string text)
+    {
+        foreach (Control child in root.Controls)
+        {
+            var button = child as Button;
+            if (button != null && button.Text == text) return button;
+            var nested = FindButtonOrNull(child, text);
+            if (nested != null) return nested;
+        }
+        throw new InvalidOperationException("button not found: " + text);
+    }
+
+    private static void InvokeClick(MainForm form, string methodName, Button button)
+    {
+        typeof(MainForm).GetMethod(methodName, BindingFlags.Instance | BindingFlags.NonPublic)
+            .Invoke(form, new object[] { button, EventArgs.Empty });
+    }
+
+    private static void InvokeTabChanged(MainForm form)
+    {
+        typeof(MainForm).GetMethod("OrderTabs_SelectedIndexChanged", BindingFlags.Instance | BindingFlags.NonPublic)
+            .Invoke(form, new object[] { form.OrderTabs, EventArgs.Empty });
+    }
+
+    private static Button FindButtonOrNull(Control root, string text)
+    {
+        foreach (Control child in root.Controls)
+        {
+            var button = child as Button;
+            if (button != null && button.Text == text) return button;
+            var nested = FindButtonOrNull(child, text);
+            if (nested != null) return nested;
+        }
+        return null;
+    }
+
+    private static async Task TestMainFormSourceStatus()
+    {
+        var transports = new MarketSourceTransports
+        {
+            BigOrder = DataTransport.Direct,
+            Quote = DataTransport.Direct,
+            Minute = DataTransport.ProxyFallback,
+            LimitUp = DataTransport.Direct,
+        };
+        var snapshot = new MarketSnapshot(
+            "002297", new StockSummary { Code = "002297", Name = "博云新材", Price = 10 },
+            new MainFundSummary(), new LimitUpContext(), new BigOrderItem[0], new PricePoint[0],
+            DataFreshness.Fresh, DataFreshness.Fresh, DataFreshness.Missing,
+            DateTime.Now, DateTime.Now, null, transports);
+        using (var form = new MainForm(new ImmediateProvider(snapshot), false))
+        {
+            await form.RefreshStockAsync("002297", true);
+            AssertEqual("代理降级: 分时", form.FreshnessText, "source status text");
         }
     }
 
@@ -1008,6 +1203,17 @@ internal static class Program
             var index = path.IndexOf(marker, StringComparison.Ordinal);
             return index < 0 ? "002297" : path.Substring(index + marker.Length, 6);
         }
+    }
+
+    private sealed class ImmediateProvider : IMarketSnapshotProvider
+    {
+        private readonly MarketSnapshot _snapshot;
+        public ImmediateProvider(MarketSnapshot snapshot) { _snapshot = snapshot; }
+        public Task<MarketSnapshot> LoadSnapshotAsync(string stockCode, CancellationToken cancellationToken)
+        {
+            return Task.FromResult(_snapshot);
+        }
+        public void CalculateMarkers(List<BigOrderItem> data) { }
     }
 
     private sealed class ControlledProvider : IMarketSnapshotProvider

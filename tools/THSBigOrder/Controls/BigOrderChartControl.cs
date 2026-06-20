@@ -5,6 +5,7 @@ using System.Linq;
 using System.Windows.Forms;
 using THSBigOrder.Analytics;
 using THSBigOrder.Models;
+using THSBigOrder.Filtering;
 
 namespace THSBigOrder.Controls
 {
@@ -36,6 +37,9 @@ namespace THSBigOrder.Controls
         private readonly List<ChartLinePoint> _bigOrderLinePercents = new List<ChartLinePoint>();
         private readonly List<double?> _totalHeatRatios = new List<double?>();
         private readonly List<double> _bigOrderHeatRatios = new List<double>();
+        private List<BigOrderEventPoint> _visibleOrderEvents = new List<BigOrderEventPoint>();
+        private double _minimumOrderAmount;
+        private OrderSide _orderSide = OrderSide.All;
         private double _axisMinimum = -1;
         private double _axisMaximum = 1;
         private double? _previousClose;
@@ -60,6 +64,7 @@ namespace THSBigOrder.Controls
         public IReadOnlyList<ChartLinePoint> BigOrderLinePercents => _bigOrderLinePercents;
         public IReadOnlyList<double?> TotalHeatRatios => _totalHeatRatios;
         public IReadOnlyList<double> BigOrderHeatRatios => _bigOrderHeatRatios;
+        public IReadOnlyList<BigOrderEventPoint> VisibleOrderEvents => _visibleOrderEvents;
 
         public void SetSnapshot(MarketSnapshot snapshot, BigOrderSeries series)
         {
@@ -69,7 +74,27 @@ namespace THSBigOrder.Controls
             RebuildLinePercents();
             RebuildAxisTicks();
             RebuildHeatRatios();
+            RebuildVisibleOrderEvents();
             Invalidate();
+        }
+
+        public void SetOrderMarkerFilter(double minimumAmount, OrderSide side)
+        {
+            _minimumOrderAmount = minimumAmount;
+            _orderSide = side;
+            RebuildVisibleOrderEvents();
+            Invalidate();
+        }
+
+        private void RebuildVisibleOrderEvents()
+        {
+            _visibleOrderEvents = (_series?.BigOrderEvents ?? new BigOrderEventPoint[0])
+                .Where(item => item.Amount >= _minimumOrderAmount)
+                .Where(item => item.Type == 2 || item.Type == 4)
+                .Where(item => _orderSide == OrderSide.All ||
+                               _orderSide == OrderSide.Buy && item.Type == 2 ||
+                               _orderSide == OrderSide.Sell && item.Type == 4)
+                .ToList();
         }
 
         protected override void OnResize(EventArgs e)
@@ -262,7 +287,7 @@ namespace THSBigOrder.Controls
                 return;
             }
             DrawLines(e.Graphics);
-            DrawSignals(e.Graphics);
+            DrawOrderEvents(e.Graphics);
             DrawVolumes(e.Graphics);
             DrawHalfHourAmounts(e.Graphics);
             if (_snapshot.BigOrderFreshness == DataFreshness.Stale)
@@ -341,28 +366,38 @@ namespace THSBigOrder.Controls
             using (var pen = new Pen(color, width)) graphics.DrawLines(pen, points);
         }
 
-        private void DrawSignals(Graphics graphics)
+        private void DrawOrderEvents(Graphics graphics)
         {
-            if (_snapshot?.Orders == null) return;
-            foreach (var order in _snapshot.Orders.Where(item =>
-                !string.IsNullOrEmpty(item.FundMarker) || !string.IsNullOrEmpty(item.BuyMarker)))
+            if (!_previousClose.HasValue || _visibleOrderEvents.Count == 0) return;
+            var range = Math.Max(0.0001, _axisMaximum - _axisMinimum);
+            foreach (var item in _visibleOrderEvents)
             {
-                var color = order.FundMarker == "点火" || order.BuyMarker == "买活跃"
-                    ? Color.FromArgb(255, 91, 111)
-                    : Color.FromArgb(35, 218, 154);
-                var y = order.IsBuy ? _layoutBands[0].Top + 18 : _layoutBands[0].Bottom - 18;
+                if (!IsFinite(item.AveragePrice) || item.AveragePrice <= 0) continue;
+                var percent = (item.AveragePrice / _previousClose.Value - 1d) * 100d;
+                if (!IsFinite(percent)) continue;
+                var x = TimeX(item.Time, _layoutBands[0]);
+                var y = _layoutBands[0].Bottom -
+                        (float)((percent - _axisMinimum) / range) * _layoutBands[0].Height;
+                var color = item.Type == 2
+                    ? Color.FromArgb(255, 77, 90)
+                    : Color.FromArgb(38, 218, 154);
                 using (var brush = new SolidBrush(color))
-                    graphics.FillEllipse(brush, TimeX(order.Time, _layoutBands[0]) - 4, y - 4, 8, 8);
+                using (var outline = new Pen(Color.FromArgb(12, 17, 27), 1f))
+                {
+                    graphics.FillEllipse(brush, x - 4, y - 4, 8, 8);
+                    graphics.DrawEllipse(outline, x - 4, y - 4, 8, 8);
+                }
             }
         }
 
-        private static float TimeX(DateTime time, Rectangle bounds)
+        internal static float TimeX(DateTime time, Rectangle bounds)
         {
+            var clockMinutes = time.Hour * 60 + time.Minute + time.Second / 60d;
             var minutes = time.Hour < 13
-                ? (time.Hour * 60 + time.Minute) - (9 * 60 + 30)
-                : 120 + (time.Hour * 60 + time.Minute) - 13 * 60;
+                ? clockMinutes - (9 * 60 + 30)
+                : 120d + clockMinutes - 13 * 60;
             minutes = Math.Max(0, Math.Min(240, minutes));
-            return bounds.Left + bounds.Width * minutes / 240f;
+            return bounds.Left + bounds.Width * (float)(minutes / 240d);
         }
         private static bool IsFinite(double value)
         {
