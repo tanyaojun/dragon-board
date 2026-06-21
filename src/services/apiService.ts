@@ -864,6 +864,42 @@ export class ApiService {
     })
   }
 
+  async getThemeHeat(params: { force?: boolean } = {}, options?: RequestConfig) {
+    const query = params.force ? '?force=true' : ''
+    return this.get<any>(
+      `/api/themes/heat${query}`,
+      Object.assign(
+        {
+          context: 'quant-board' as const,
+          priority: 'high' as const,
+          retries: 0,
+          timeout: 180000,
+          cache: false,
+          throwOnHttpError: true,
+        },
+        options,
+      ),
+    )
+  }
+
+  async getThemeHeatStocks(
+    themeId: string,
+    params: { offset?: number; limit?: number } = {},
+  ) {
+    const query = new URLSearchParams()
+    if (params.offset !== undefined) query.set('offset', String(params.offset))
+    if (params.limit !== undefined) query.set('limit', String(params.limit))
+    const suffix = query.toString() ? `?${query.toString()}` : ''
+    return this.get<any>(`/api/themes/heat/${encodeURIComponent(themeId)}/stocks${suffix}`, {
+      context: 'quant-board',
+      priority: 'high',
+      retries: 1,
+      timeout: 15000,
+      cache: false,
+      throwOnHttpError: true,
+    })
+  }
+
   /** 从 QuantBoard MongoDB stock_names 集合读取正式股票名称表 */
   async listStockNames(params: StockNameQueryOptions = {}, options?: RequestConfig) {
     const query = new URLSearchParams()

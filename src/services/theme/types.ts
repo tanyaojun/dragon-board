@@ -7,10 +7,16 @@ export type ThemeRotationState = 'mainline' | 'inflow' | 'outflow' | 'quick' | '
 export type ThemeQualityFlagCode =
   | 'empty_theme'
   | 'low_sample'
-  | 'jxbk_missing'
   | 'mapping_missing'
   | 'invalid_number'
   | 'time_disorder'
+  | 'quote_coverage_partial'
+  | 'theme_quote_coverage_low'
+  | 'quote_stale'
+  | 'fund_flow_partial'
+  | 'fund_flow_unavailable'
+  | 'source_time_skew'
+  | 'persistence_history_insufficient'
 
 export interface ThemeQualityFlag {
   code: ThemeQualityFlagCode
@@ -26,16 +32,19 @@ export interface ThemeBaseLike {
 }
 
 export interface ThemeFactorComponents {
-  baseScore: number
-  jxbkScore: number
-  stockScore: number
+  breadthScore: number
+  fundScore: number | null
+  leadershipScore: number
+  correlationScore: number
   riskPenalty: number
 }
+
+export type ThemeFactorSource = 'static' | 'mixed' | 'market_aggregate'
 
 export interface ThemeFactorSnapshot {
   themeId: string
   themeName: string
-  source: 'static' | 'jxbk' | 'mixed'
+  source: ThemeFactorSource
   snapshotId?: string
   timestamp: number
   heatScore: number
@@ -60,6 +69,60 @@ export interface ThemeFactorSnapshot {
 }
 
 export type ThemeStockRole = 'leader' | 'core' | 'follower' | 'independent' | 'noise'
+
+export interface ThemeHeatApiFactor
+  extends Omit<ThemeFactorSnapshot, 'heatScore' | 'fundScore' | 'netInflow'> {
+  heatScore: number | null
+  fundScore: number | null
+  netInflow: number | null
+  rankEligible: boolean
+  degraded: boolean
+  metadata: Record<string, unknown>
+}
+
+export interface ThemeHeatStock {
+  code: string
+  name: string
+  change: number
+  price: number
+  volumeRatio: number | null
+  mainNetInflow: number | null
+  turnoverRate: number | null
+  rank: number
+  role: ThemeStockRole
+  qualityFlags: ThemeQualityFlag[]
+}
+
+export interface ThemePanelSummary {
+  id: string
+  name: string
+  rank: number
+  heatScore: number
+  momentumScore: number
+  breadthScore: number
+  fundScore: number | null
+  leadershipScore: number
+  correlationScore: number
+  crowdingRisk: number
+  stockCount: number
+  ztCount: number
+  leaderCount: number
+  mainNetInflow: number | null
+  volumeRatio: number | null
+  lastUpdate: number
+  qualityFlags: ThemeQualityFlag[]
+  degraded: boolean
+}
+
+export interface ThemeHeatApiSnapshot {
+  computedAt: number
+  cacheBucket: string
+  factorVersion: string
+  mappingVersion: string
+  factors: ThemeHeatApiFactor[]
+  quality: Record<string, unknown>
+  sources: Record<string, unknown>
+}
 
 export interface ThemeStockExposure {
   code: string

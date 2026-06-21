@@ -84,6 +84,41 @@ describe('ApiService', () => {
     )
   })
 
+  it('routes full-market theme heat through QuantBoard proxy', async () => {
+    const api = new ApiService()
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ ok: true, data: { factors: [] } }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await api.getThemeHeat({ force: true })
+
+    const url = new URL(String(fetchMock.mock.calls[0][0]))
+    expect(url.pathname).toBe('/api/themes/heat')
+    expect(url.searchParams.get('force')).toBe('true')
+  })
+
+  it('routes theme stock details with paging parameters', async () => {
+    const api = new ApiService()
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ ok: true, data: { stocks: [] } }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await api.getThemeHeatStocks('AI/算力', { offset: 20, limit: 40 })
+
+    const url = new URL(String(fetchMock.mock.calls[0][0]))
+    expect(url.pathname).toBe('/api/themes/heat/AI%2F%E7%AE%97%E5%8A%9B/stocks')
+    expect(url.searchParams.get('offset')).toBe('20')
+    expect(url.searchParams.get('limit')).toBe('40')
+  })
+
   it('caches sina money-flow quote requests briefly unless forced', async () => {
     const api = new ApiService()
     const fetchMock = vi.fn(async () =>
