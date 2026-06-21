@@ -107,6 +107,27 @@ def test_mongo_theme_repository_matches_theme_contract_without_json_fields() -> 
     assert "stock_tags_json" not in raw_mapping
 
 
+def test_get_market_universe_returns_both_indexes() -> None:
+    repo = MongoThemeRepository(FakeMongoDatabase())
+    repo.upsert_theme("AI", "人工智能", "BK0800")
+    repo.replace_theme_mappings(
+        "AI",
+        [{"stockCode": "000001"}, {"stockCode": "000002"}],
+    )
+    repo.set_metadata("theme-v8-test", "2026-05-05T09:30:00Z")
+
+    universe = repo.get_market_universe()
+
+    assert universe == {
+        "version": "theme-v8-test",
+        "lastUpdate": "2026-05-05T09:30:00Z",
+        "themes": [{"id": "AI", "name": "人工智能", "zsCode": "BK0800"}],
+        "themeStocks": {"AI": ["000001", "000002"]},
+        "stockThemes": {"000001": ["AI"], "000002": ["AI"]},
+        "stockCodes": ["000001", "000002"],
+    }
+
+
 def test_theme_migration_service_uses_mongo_repository_in_mongodb_mode(monkeypatch) -> None:
     db = FakeMongoDatabase()
     import backend.data.theme_service as theme_service

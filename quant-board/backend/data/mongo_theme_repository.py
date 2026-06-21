@@ -84,6 +84,39 @@ class MongoThemeRepository:
             ],
         }
 
+    def get_market_universe(self) -> dict[str, Any]:
+        themes = list(self.db["themes"].find({}).sort([("id", 1)]))
+        rows = list(
+            self.db["theme_stock_mappings"].find({}).sort(
+                [("themeId", 1), ("stockCode", 1)]
+            )
+        )
+        theme_stocks: dict[str, list[str]] = {}
+        stock_themes: dict[str, list[str]] = {}
+        for row in rows:
+            theme_id = str(row.get("themeId") or "")
+            stock_code = str(row.get("stockCode") or "")
+            if not theme_id or not stock_code:
+                continue
+            theme_stocks.setdefault(theme_id, []).append(stock_code)
+            stock_themes.setdefault(stock_code, []).append(theme_id)
+
+        return {
+            "version": self.get_metadata("version", "unknown"),
+            "lastUpdate": self.get_metadata("lastUpdate", ""),
+            "themes": [
+                {
+                    "id": str(theme.get("id") or ""),
+                    "name": str(theme.get("name") or ""),
+                    "zsCode": str(theme.get("zsCode") or ""),
+                }
+                for theme in themes
+            ],
+            "themeStocks": theme_stocks,
+            "stockThemes": stock_themes,
+            "stockCodes": sorted(stock_themes),
+        }
+
     def get_theme_stocks(self, theme_id: str) -> dict[str, Any]:
         theme = self.db["themes"].find_one({"id": theme_id})
         if not theme:
