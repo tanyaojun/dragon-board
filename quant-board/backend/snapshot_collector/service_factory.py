@@ -67,6 +67,30 @@ class _MongoSnapshotCollectorRepository:
             source="quantboard_backend_collector",
         )
 
+    def replace_snapshot_ingest(
+        self,
+        dataset: dict[str, Any],
+        records: list[dict[str, Any]],
+        frames: list[dict[str, Any]],
+        stock_rows: list[dict[str, Any]],
+        sector_rows: list[dict[str, Any]],
+        idempotency_key: str | None,
+    ) -> dict[str, Any]:
+        dataset_model = _dict_to_dataset(dataset)
+        key = idempotency_key or _fallback_idempotency_key(
+            dataset.get("id", ""), records, frames, stock_rows, sector_rows
+        )
+        return self._mongo.save_snapshot_ingest(
+            dataset_model,
+            records,
+            frames,
+            stock_rows,
+            sector_rows,
+            idempotency_key=key,
+            source="quantboard_backend_collector",
+            replace_existing=True,
+        )
+
     # ── operational collections (writes to snapshot_collector_runs / state) ──
 
     def insert_run(self, run: dict[str, Any]) -> None:
@@ -214,7 +238,9 @@ class _MongoSnapshotCollectorRepository:
             )
             trading_dates = dates_a | dates_b
 
-        if not trading_dates or trading_dates == {""}:
+        trading_dates.discard("")
+
+        if not trading_dates:
             return {
                 "ok": True,
                 "datasetA": dataset_id_a,
@@ -222,7 +248,16 @@ class _MongoSnapshotCollectorRepository:
                 "snapshotType": snapshot_type,
                 "tradingDates": [],
                 "perDate": [],
-                "summary": {"totalSlotsCompared": 0},
+                "summary": {
+                    "totalSlotsCompared": 0,
+                    "slotsInBoth": 0,
+                    "slotsOnlyInA": 0,
+                    "slotsOnlyInB": 0,
+                    "slotsMissingInBoth": 0,
+                    "avgStockRowDiff": 0.0,
+                    "emptyFramesA": 0,
+                    "emptyFramesB": 0,
+                },
             }
 
         per_date: list[dict[str, Any]] = []
@@ -230,6 +265,7 @@ class _MongoSnapshotCollectorRepository:
         slots_only_in_a = 0
         slots_only_in_b = 0
         total_compared = 0
+        slots_missing_in_both = 0
         empty_frames_a = 0
         empty_frames_b = 0
         all_stock_row_diffs: list[int] = []
@@ -273,13 +309,14 @@ class _MongoSnapshotCollectorRepository:
             slots_in_both += len(sid_a_exp & sid_b_exp)
             slots_only_in_a += len(sid_a_exp - sid_b_exp)
             slots_only_in_b += len(sid_b_exp - sid_a_exp)
+            missing_in_both = expected_set - sid_a_exp - sid_b_exp
+            slots_missing_in_both += len(missing_in_both)
+            total_compared += len(expected_set)
 
             all_sids = sorted(sid_a_exp | sid_b_exp)
             slot_details: list[dict[str, Any]] = []
 
             for sid in all_sids:
-                total_compared += 1
-
                 in_a = sid in sid_a
                 in_b = sid in sid_b
 
@@ -337,6 +374,7 @@ class _MongoSnapshotCollectorRepository:
                     "slotsInBoth": sorted(sid_a_exp & sid_b_exp),
                     "slotsOnlyInA": sorted(sid_a_exp - sid_b_exp),
                     "slotsOnlyInB": sorted(sid_b_exp - sid_a_exp),
+                    "slotsMissingInBoth": sorted(missing_in_both),
                     "slotDetails": slot_details,
                 }
             )
@@ -359,6 +397,7 @@ class _MongoSnapshotCollectorRepository:
                 "slotsInBoth": slots_in_both,
                 "slotsOnlyInA": slots_only_in_a,
                 "slotsOnlyInB": slots_only_in_b,
+                "slotsMissingInBoth": slots_missing_in_both,
                 "avgStockRowDiff": avg_diff,
                 "emptyFramesA": empty_frames_a,
                 "emptyFramesB": empty_frames_b,
@@ -462,8 +501,8 @@ def _detect_count_drifts(
     frame_counts: dict[str, int] = {}
     for row in frames:
         sid = str(row.get("snapshotId") or "")
-        if sid and row.get("stockRowCount"):
-            frame_counts[sid] = int(row["stockRowCount"])
+        if sid:
+            frame_counts[sid] = int(row.get("stockRowCount") or 0)
 
     stock_row_counts: dict[str, int] = {}
     for row in stock_rows:
@@ -472,9 +511,9 @@ def _detect_count_drifts(
             stock_row_counts[sid] = stock_row_counts.get(sid, 0) + 1
 
     drifts: list[dict[str, Any]] = []
-    for sid in sorted(set(frame_counts) & set(stock_row_counts)):
-        fc = frame_counts[sid]
-        rc = stock_row_counts[sid]
+    for sid in sorted(set(frame_counts) | set(stock_row_counts)):
+        fc = frame_counts.get(sid, 0)
+        rc = stock_row_counts.get(sid, 0)
         if fc != rc:
             drifts.append(
                 {"snapshotId": sid, "frameCount": fc, "recordCount": rc}
@@ -488,7 +527,7 @@ _STOCK_ROW_AUDIT_FIELDS = [
     "code",
     "name",
     "price",
-    "changePct",
+    "change",
     "volume",
     "turnover",
     "turnoverRate",
@@ -500,7 +539,7 @@ _STOCK_ROW_AUDIT_FIELDS = [
     "sectorLabel",
     "moneyFlow",
     "amplitude",
-    "totalMarketValue",
+    "totalMV",
 ]
 
 

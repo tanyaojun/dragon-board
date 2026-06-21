@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 import unittest
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -452,6 +453,33 @@ class QuoteSnapshotApiTest(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["count"], 0)
         self.assertEqual(payload["codes"], [])
+
+    def test_pool_snapshot_refreshes_pool_timestamp(self):
+        """A fresh pool fetch must not be reported with the pool creation timestamp."""
+
+        class FakeQuoteClient:
+            def quotes(self, symbol):
+                return [
+                    {
+                        "code": code,
+                        "price": 10.0,
+                        "last_close": 9.5,
+                        "amount": 1000000,
+                        "volume": 100000,
+                    }
+                    for code in symbol
+                ]
+
+        self.bridge.quote_client = FakeQuoteClient()
+        self.bridge.tdx_connected = True
+        created = self.client.post(
+            "/api/quotes/subscriptions", json={"codes": ["000001"]}
+        ).json()["setAt"]
+        time.sleep(0.01)
+
+        payload = self.client.get("/api/quotes/snapshot").json()
+
+        self.assertGreater(payload["poolRefreshedAt"], created)
 
 
 if __name__ == "__main__":

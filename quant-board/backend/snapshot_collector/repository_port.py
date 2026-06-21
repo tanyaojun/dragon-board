@@ -37,6 +37,18 @@ class SnapshotRepository(Protocol):
         """Persist snapshot data and return status dict with ``status`` and ``deduped``."""
         ...
 
+    def replace_snapshot_ingest(
+        self,
+        dataset: dict[str, Any],
+        records: list[dict[str, Any]],
+        frames: list[dict[str, Any]],
+        stock_rows: list[dict[str, Any]],
+        sector_rows: list[dict[str, Any]],
+        idempotency_key: str | None,
+    ) -> dict[str, Any]:
+        """Replace existing snapshot facts for an explicit force run."""
+        ...
+
     def insert_run(self, run: dict[str, Any]) -> None:
         """Write a collector run record to the operational log."""
         ...

@@ -416,6 +416,31 @@ class TestSnapshotCollectorScheduler:
         assert status["collection_count"] == 0
         assert status["error_count"] == 0
 
+    @pytest.mark.asyncio
+    async def test_finished_task_is_not_reported_running_and_can_restart(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A dead poll loop must not leave the scheduler permanently stuck."""
+        from backend.snapshot_collector.scheduler import SnapshotCollectorScheduler
+
+        fake_settings = _make_settings()
+        monkeypatch.setattr(
+            "backend.snapshot_collector.scheduler.get_settings",
+            lambda: fake_settings,
+        )
+
+        scheduler = SnapshotCollectorScheduler()
+        scheduler._task = asyncio.create_task(asyncio.sleep(0))
+        await scheduler._task
+
+        assert scheduler.status()["running"] is False
+
+        scheduler.start()
+        assert scheduler._task is not None
+        assert scheduler._task.done() is False
+        await scheduler.stop()
+
     # ── _poll_once dispatch ──────────────────────────────────────────────
 
     @pytest.mark.asyncio

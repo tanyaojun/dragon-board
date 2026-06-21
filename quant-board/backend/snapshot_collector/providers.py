@@ -362,6 +362,9 @@ def _eastmoney_rows_to_money_flow(rows: list[dict[str, Any]]) -> list[dict[str, 
             "largeNetInflow": large,
             "mediumNetInflow": medium,
             "smallNetInflow": small,
+            "moneyFlowSource": "estimated_l1",
+            "moneyFlowEstimated": True,
+            "capitalFlowConfidence": "low",
         })
     return flows
 

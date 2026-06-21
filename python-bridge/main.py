@@ -1868,6 +1868,15 @@ class TdxL2Bridge:
 
                 qmt_depth, qmt_ticks, money_flow = await self.fetch_qmt_l2_snapshot(parsed_codes)
 
+                if using_pool:
+                    async with self._backend_pool_lock:
+                        if parsed_codes == self._backend_pool_codes:
+                            self._backend_cached_quotes = quotes
+                            self._backend_cached_depth = depth
+                            self._backend_cached_stats = stats
+                            self._backend_pool_ts = now_ms()
+                            pool_ts = self._backend_pool_ts
+
                 response_payload = {
                     "ok": True,
                     "source": "python_bridge",

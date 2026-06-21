@@ -172,7 +172,8 @@ class TestBuilderOutput:
         assert row0["pctChange"] == 2.35
         assert row0["volume"] == 150000000
         assert row0["amount"] == pytest.approx(1875000000.0)
-        assert row0["turnover"] == 5.5
+        assert row0["turnover"] == pytest.approx(1875000000.0)
+        assert row0["turnoverRate"] == 5.5
         assert row0["heat"] == 92.0
         assert row0["themes"] == ["银行", "深圳"]
 
@@ -578,3 +579,44 @@ class TestBuilderWithEnrichment:
         result = build_ingest_payload(slot, ctx)
         row0 = result["stockRows"][0]
         assert row0["price"] == 12.50
+
+
+class TestCanonicalSnapshotStockRowContract:
+    def test_builder_emits_canonical_live_contract_aliases(self) -> None:
+        from backend.snapshot_collector.builder import build_ingest_payload
+        from backend.snapshot_collector.models import MarketDataContext, SnapshotSlot
+
+        slot = SnapshotSlot("half_hour", "2026-06-11", "10:00", 1781143200000)
+        context = MarketDataContext(
+            stocks=[
+                {
+                    "code": "000001",
+                    "name": "平安银行",
+                    "rank": 1,
+                    "pctChange": 2.5,
+                    "amount": 125000000.0,
+                    "turnover": 3.2,
+                    "heat": 88.0,
+                }
+            ],
+            quotes=[{"code": "000001", "totalMarketValue": 350000000000.0}],
+            money_flow=[
+                {
+                    "code": "000001",
+                    "mainNetInflow": 50000000.0,
+                    "moneyFlowSource": "estimated_l1",
+                    "moneyFlowEstimated": True,
+                }
+            ],
+        )
+
+        row = build_ingest_payload(slot, context)["stockRows"][0]
+
+        assert row["change"] == 2.5
+        assert row["turnover"] == 125000000.0
+        assert row["turnoverRate"] == 3.2
+        assert row["hotness"] == 88.0
+        assert row["totalMV"] == 350000000000.0
+        assert row["zlje"] == 50000000.0
+        assert row["moneyFlowSource"] == "estimated_l1"
+        assert row["moneyFlowEstimated"] is True

@@ -55,11 +55,16 @@ class SnapshotCollectorScheduler:
 
     # ── lifecycle ──────────────────────────────────────────────────────────
 
+    def _discard_finished_task(self) -> None:
+        if self._task is not None and self._task.done():
+            self._task = None
+
     def start(self) -> None:
         """Schedule the background poll loop on the current event loop.
 
         Safe to call multiple times — no-op when already running or disabled.
         """
+        self._discard_finished_task()
         if not self.enabled or self._task is not None:
             return
         try:
@@ -80,6 +85,7 @@ class SnapshotCollectorScheduler:
 
     def status(self) -> dict[str, Any]:
         """Return a snapshot of the scheduler's current state."""
+        self._discard_finished_task()
         return {
             "enabled": self.enabled,
             "running": self._task is not None,

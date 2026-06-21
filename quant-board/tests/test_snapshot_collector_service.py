@@ -120,6 +120,24 @@ class FakeSnapshotRepository:
     def insert_run(self, run: dict[str, Any]) -> None:
         self._runs.append(dict(run))
 
+    def replace_snapshot_ingest(
+        self,
+        dataset: dict[str, Any],
+        records: list[dict[str, Any]],
+        frames: list[dict[str, Any]],
+        stock_rows: list[dict[str, Any]],
+        sector_rows: list[dict[str, Any]],
+        idempotency_key: str | None,
+    ) -> dict[str, Any]:
+        return self.save_snapshot_ingest(
+            dataset,
+            records,
+            frames,
+            stock_rows,
+            sector_rows,
+            idempotency_key,
+        )
+
     def list_runs(self, filters: dict[str, Any]) -> dict[str, Any]:
         items = [
             run
@@ -322,7 +340,8 @@ class FakeSnapshotRepository:
 class TestSettingsDefaults:
     """Verify snapshot collector settings fields match the contract."""
 
-    def test_collector_disabled_by_default(self) -> None:
+    def test_collector_disabled_by_default(self, monkeypatch: Any) -> None:
+        monkeypatch.delenv("QUANT_BOARD_SNAPSHOT_COLLECTOR_ENABLED", raising=False)
         settings = Settings()
         assert settings.snapshot_collector_enabled is False
 
@@ -358,6 +377,34 @@ class TestSettingsDefaults:
         settings = Settings()
         assert settings.snapshot_collector_allow_live_dataset is False
 
+
+class TestCollectorAuditHelpers:
+    def test_count_drift_detects_frame_zero_with_actual_rows(self) -> None:
+        from backend.snapshot_collector.service_factory import _detect_count_drifts
+
+        frames = [{"snapshotId": "half_hour:2026-06-11:10:00", "stockRowCount": 0}]
+        rows = [{"snapshotId": "half_hour:2026-06-11:10:00", "code": "000001"}]
+
+        assert _detect_count_drifts(frames, rows) == [
+            {
+                "snapshotId": "half_hour:2026-06-11:10:00",
+                "frameCount": 0,
+                "recordCount": 1,
+            }
+        ]
+
+    def test_count_drift_detects_frame_rows_missing(self) -> None:
+        from backend.snapshot_collector.service_factory import _detect_count_drifts
+
+        frames = [{"snapshotId": "half_hour:2026-06-11:10:00", "stockRowCount": 2}]
+
+        assert _detect_count_drifts(frames, []) == [
+            {
+                "snapshotId": "half_hour:2026-06-11:10:00",
+                "frameCount": 2,
+                "recordCount": 0,
+            }
+        ]
 
 class TestSettingsEnvOverrides:
     """Verify env var overrides work for snapshot collector settings."""

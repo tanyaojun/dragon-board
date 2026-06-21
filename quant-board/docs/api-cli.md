@@ -101,6 +101,8 @@ Invoke-RestMethod http://127.0.0.1:8765/api/quotes/snapshot
 
 以下接口属于 `backend/snapshot_collector/` 实验模块。当前默认禁用（`QUANT_BOARD_SNAPSHOT_COLLECTOR_ENABLED=false`），写目标限定为 `dragonboard_backend_shadow` 数据集，不进入 `dragonboard_live` 正式快照主库。所有响应使用统一的 `{"ok": true/false, "status": "...", "data": {...}}` 信封格式。
 
+本机自动 shadow 观察使用独立 collector API 端口 `8001`，与日常 QuantBoard API 的 `8000` 并存。计划任务启动的守护进程会分别执行 MongoDB `ping`、proxy-server/python-bridge 结构化 `/health` 检查，并只在 collector 状态确认 `enabled=true`、`running=true` 且数据集为 `dragonboard_backend_shadow` 时判定健康。守护进程自己启动的异常服务会自动重启；未知占端口进程只标记阻塞。文档中的通用接口示例仍使用 `8000`；观察独立实例时将端口替换为 `8001`。
+
 ### `GET /api/snapshot-collector/status`
 
 返回采集器当前运行状态，包括最近一次运行、统计摘要和数据源健康信息。
@@ -152,7 +154,7 @@ Invoke-RestMethod http://127.0.0.1:8000/api/snapshot-collector/status
 | `tradingDate` | 是 | `YYYY-MM-DD` 格式交易日 |
 | `slotTime` | 是 | `HH:MM` 格式槽位时间 |
 | `dryRun` | 否 | 默认 `false`；为 `true` 时走完整流水线但不写库 |
-| `force` | 否 | 默认 `false`；为 `true` 时跳过判重强制重写 |
+| `force` | 否 | 默认 `false`；为 `true` 时跳过判重强制重写；写入失败时恢复替换前事实 |
 
 成功响应（`status=completed`）：
 
@@ -384,6 +386,77 @@ Invoke-RestMethod 'http://127.0.0.1:8000/api/snapshot-collector/runs?status=bloc
         "lastRunStatus": "completed"
       }
     ]
+  }
+}
+```
+
+### `POST /api/snapshot-collector/compare`
+
+对比两个数据集的快照覆盖率和字段完整性（shadow vs live 审计）。
+
+```json
+{
+  "datasetIdA": "dragonboard_live",
+  "datasetIdB": "dragonboard_backend_shadow",
+  "snapshotType": "half_hour",
+  "tradingDate": "2026-06-12"
+}
+```
+
+请求字段：
+
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `datasetIdA` | 是 | 基准数据集 ID（通常为 `dragonboard_live`） |
+| `datasetIdB` | 是 | 对比数据集 ID（通常为 `dragonboard_backend_shadow`） |
+| `snapshotType` | 是 | `quarter_hour` / `half_hour` / `hourly` / `daily` |
+| `tradingDate` | 否 | 可选单日对比；不传时对比所有共同交易日 |
+
+响应示例：
+
+```json
+{
+  "ok": true,
+  "status": "completed",
+  "data": {
+    "ok": true,
+    "datasetA": "dragonboard_live",
+    "datasetB": "dragonboard_backend_shadow",
+    "snapshotType": "half_hour",
+    "tradingDates": ["2026-06-11", "2026-06-12"],
+    "perDate": [
+      {
+        "tradingDate": "2026-06-12",
+        "totalExpectedSlots": 10,
+        "slotsInBoth": ["half_hour:2026-06-12:10:00"],
+        "slotsOnlyInA": [],
+        "slotsOnlyInB": ["half_hour:2026-06-12:09:30"],
+        "slotsMissingInBoth": [],
+        "slotDetails": [
+          {
+            "snapshotId": "half_hour:2026-06-12:10:00",
+            "inA": true,
+            "inB": true,
+            "stockRowCountA": 224,
+            "stockRowCountB": 210,
+            "sectorRowCountA": 35,
+            "sectorRowCountB": 0,
+            "fieldMissingRatesA": {},
+            "fieldMissingRatesB": {"depth10": {"present": 0, "missing": 210, "rate": 1.0}}
+          }
+        ]
+      }
+    ],
+    "summary": {
+      "totalSlotsCompared": 20,
+      "slotsInBoth": 18,
+      "slotsOnlyInA": 1,
+      "slotsOnlyInB": 1,
+      "slotsMissingInBoth": 0,
+      "avgStockRowDiff": 14.0,
+      "emptyFramesA": 0,
+      "emptyFramesB": 1
+    }
   }
 }
 ```
@@ -2201,6 +2274,70 @@ max_drawdown: -0.08
     "half_hour:2026-06-12:11:00",
     "half_hour:2026-06-12:11:30"
   ]
+}
+```
+
+### `snapshot-collector-compare`
+
+对比两个数据集的快照覆盖率和字段完整性（shadow vs live 审计）。
+
+```powershell
+.\.venv\Scripts\python.exe -m backend.cli snapshot-collector-compare `
+  --dataset-id-a dragonboard_live `
+  --dataset-id-b dragonboard_backend_shadow `
+  --snapshot-type half_hour `
+  --trading-date 2026-06-12
+```
+
+参数：
+
+| 参数 | 必填 | 说明 |
+| --- | --- | --- |
+| `--dataset-id-a` | 是 | 基准数据集 ID（通常为 `dragonboard_live`） |
+| `--dataset-id-b` | 是 | 对比数据集 ID（通常为 `dragonboard_backend_shadow`） |
+| `--snapshot-type` | 是 | `quarter_hour` / `half_hour` / `hourly` / `daily` |
+| `--trading-date` | 否 | 可选单日对比；不传时对比所有共同交易日 |
+
+输出示例：
+
+```json
+{
+  "ok": true,
+  "datasetA": "dragonboard_live",
+  "datasetB": "dragonboard_backend_shadow",
+  "snapshotType": "half_hour",
+  "tradingDates": ["2026-06-12"],
+  "perDate": [
+    {
+      "tradingDate": "2026-06-12",
+      "totalExpectedSlots": 10,
+      "slotsInBoth": ["half_hour:2026-06-12:10:00"],
+      "slotsOnlyInA": [],
+      "slotsOnlyInB": ["half_hour:2026-06-12:09:30"],
+      "slotsMissingInBoth": [],
+      "slotDetails": [
+        {
+          "snapshotId": "half_hour:2026-06-12:10:00",
+          "inA": true,
+          "inB": true,
+          "stockRowCountA": 224,
+          "stockRowCountB": 210,
+          "fieldMissingRatesA": {},
+          "fieldMissingRatesB": {"depth10": {"present": 0, "missing": 210, "rate": 1.0}}
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "totalSlotsCompared": 10,
+    "slotsInBoth": 8,
+    "slotsOnlyInA": 1,
+    "slotsOnlyInB": 1,
+    "slotsMissingInBoth": 0,
+    "avgStockRowDiff": 14.0,
+    "emptyFramesA": 0,
+    "emptyFramesB": 1
+  }
 }
 ```
 

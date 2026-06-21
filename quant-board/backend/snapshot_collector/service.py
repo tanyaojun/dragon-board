@@ -365,7 +365,14 @@ class SnapshotCollectorService:
             "name": dataset_id,
             "source_type": "dragon_board_runtime",
         }
-        save_result = self._repo.save_snapshot_ingest(
+        save_method = (
+            self._repo.replace_snapshot_ingest
+            if request.force
+            else self._repo.save_snapshot_ingest
+        )
+        if request.force:
+            idempotency_key = f"{idempotency_key}:force:{run_id}"
+        save_result = save_method(
             dataset_dict,
             records,
             frames,

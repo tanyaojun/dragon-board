@@ -141,6 +141,31 @@ class FakeCollectorService:
             "countDrifts": [],
         }
 
+    def compare(
+        self,
+        dataset_id_a: str,
+        dataset_id_b: str,
+        snapshot_type: str,
+        trading_date: str | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "ok": True,
+            "datasetA": dataset_id_a,
+            "datasetB": dataset_id_b,
+            "snapshotType": snapshot_type,
+            "tradingDates": [trading_date] if trading_date else [],
+            "perDate": [],
+            "summary": {
+                "totalSlotsCompared": 0,
+                "slotsInBoth": 0,
+                "slotsOnlyInA": 0,
+                "slotsOnlyInB": 0,
+                "avgStockRowDiff": 0.0,
+                "emptyFramesA": 0,
+                "emptyFramesB": 0,
+            },
+        }
+
 
 # ── Test helpers ───────────────────────────────────────────────────────────
 
@@ -1400,3 +1425,302 @@ class TestPostAudit:
         body = response.json()
         assert body["ok"] is True
         assert len(body["data"]["missingRecords"]) == 1
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# POST /api/snapshot-collector/compare
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestPostCompare:
+    """Tests for POST /api/snapshot-collector/compare."""
+
+    def test_compare_returns_ok_and_summary(self, monkeypatch: Any) -> None:
+        client, _ = _setup_client(monkeypatch)
+
+        class Svc(FakeCollectorService):
+            def compare(
+                self,
+                dataset_id_a: str,
+                dataset_id_b: str,
+                snapshot_type: str,
+                trading_date: str | None = None,
+            ) -> dict[str, Any]:
+                return {
+                    "ok": True,
+                    "datasetA": dataset_id_a,
+                    "datasetB": dataset_id_b,
+                    "snapshotType": snapshot_type,
+                    "tradingDates": ["2026-06-11"],
+                    "perDate": [
+                        {
+                            "tradingDate": "2026-06-11",
+                            "totalExpectedSlots": 10,
+                            "slotsInBoth": ["half_hour:2026-06-11:15:00"],
+                            "slotsOnlyInA": [],
+                            "slotsOnlyInB": [],
+                            "slotDetails": [],
+                        }
+                    ],
+                    "summary": {
+                        "totalSlotsCompared": 10,
+                        "slotsInBoth": 8,
+                        "slotsOnlyInA": 1,
+                        "slotsOnlyInB": 1,
+                        "avgStockRowDiff": 3.2,
+                        "emptyFramesA": 0,
+                        "emptyFramesB": 1,
+                    },
+                }
+
+        monkeypatch.setattr(
+            "backend.api.snapshot_collector_routes.SnapshotCollectorService", Svc
+        )
+
+        response = client.post(
+            "/api/snapshot-collector/compare",
+            json={
+                "datasetIdA": "dragonboard_live",
+                "datasetIdB": "dragonboard_backend_shadow",
+                "snapshotType": "half_hour",
+                "tradingDate": "2026-06-11",
+            },
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["ok"] is True
+        assert body["status"] == "completed"
+        data = body["data"]
+        assert data["datasetA"] == "dragonboard_live"
+        assert data["datasetB"] == "dragonboard_backend_shadow"
+        assert data["snapshotType"] == "half_hour"
+        assert "summary" in data
+        assert data["summary"]["totalSlotsCompared"] == 10
+        assert "perDate" in data
+
+    def test_compare_without_trading_date(self, monkeypatch: Any) -> None:
+        client, _ = _setup_client(monkeypatch)
+
+        class Svc(FakeCollectorService):
+            def compare(
+                self,
+                dataset_id_a: str,
+                dataset_id_b: str,
+                snapshot_type: str,
+                trading_date: str | None = None,
+            ) -> dict[str, Any]:
+                return {
+                    "ok": True,
+                    "datasetA": dataset_id_a,
+                    "datasetB": dataset_id_b,
+                    "snapshotType": snapshot_type,
+                    "tradingDates": ["2026-06-10", "2026-06-11"],
+                    "perDate": [],
+                    "summary": {"totalSlotsCompared": 20, "slotsInBoth": 18},
+                }
+
+        monkeypatch.setattr(
+            "backend.api.snapshot_collector_routes.SnapshotCollectorService", Svc
+        )
+
+        response = client.post(
+            "/api/snapshot-collector/compare",
+            json={
+                "datasetIdA": "dragonboard_live",
+                "datasetIdB": "dragonboard_backend_shadow",
+                "snapshotType": "half_hour",
+            },
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["ok"] is True
+        # tradingDates should contain all dates when tradingDate is absent
+        assert len(body["data"]["tradingDates"]) == 2
+
+    def test_compare_invalid_snapshot_type_returns_4xx(self, monkeypatch: Any) -> None:
+        client, _ = _setup_client(monkeypatch)
+
+        response = client.post(
+            "/api/snapshot-collector/compare",
+            json={
+                "datasetIdA": "dragonboard_live",
+                "datasetIdB": "dragonboard_backend_shadow",
+                "snapshotType": "INVALID",
+            },
+        )
+
+        assert 400 <= response.status_code < 500
+        body = response.json()
+        detail = body.get("detail", body)
+        assert detail["ok"] is False
+        assert detail["status"] == "error"
+
+    def test_compare_missing_dataset_id_a_returns_4xx(self, monkeypatch: Any) -> None:
+        client, _ = _setup_client(monkeypatch)
+
+        response = client.post(
+            "/api/snapshot-collector/compare",
+            json={
+                "datasetIdB": "dragonboard_backend_shadow",
+                "snapshotType": "half_hour",
+            },
+        )
+
+        assert 400 <= response.status_code < 500
+
+    def test_compare_missing_dataset_id_b_returns_4xx(self, monkeypatch: Any) -> None:
+        client, _ = _setup_client(monkeypatch)
+
+        response = client.post(
+            "/api/snapshot-collector/compare",
+            json={
+                "datasetIdA": "dragonboard_live",
+                "snapshotType": "half_hour",
+            },
+        )
+
+        assert 400 <= response.status_code < 500
+
+    def test_compare_missing_snapshot_type_returns_4xx(self, monkeypatch: Any) -> None:
+        client, _ = _setup_client(monkeypatch)
+
+        response = client.post(
+            "/api/snapshot-collector/compare",
+            json={
+                "datasetIdA": "dragonboard_live",
+                "datasetIdB": "dragonboard_backend_shadow",
+            },
+        )
+
+        assert 400 <= response.status_code < 500
+
+    def test_compare_returns_per_date_slots(self, monkeypatch: Any) -> None:
+        client, _ = _setup_client(monkeypatch)
+
+        class Svc(FakeCollectorService):
+            def compare(
+                self,
+                dataset_id_a: str,
+                dataset_id_b: str,
+                snapshot_type: str,
+                trading_date: str | None = None,
+            ) -> dict[str, Any]:
+                return {
+                    "ok": True,
+                    "datasetA": dataset_id_a,
+                    "datasetB": dataset_id_b,
+                    "snapshotType": snapshot_type,
+                    "tradingDates": ["2026-06-11"],
+                    "perDate": [
+                        {
+                            "tradingDate": "2026-06-11",
+                            "totalExpectedSlots": 10,
+                            "slotsInBoth": ["half_hour:2026-06-11:15:00"],
+                            "slotsOnlyInA": ["half_hour:2026-06-11:09:30"],
+                            "slotsOnlyInB": ["half_hour:2026-06-11:14:30"],
+                            "slotDetails": [
+                                {
+                                    "snapshotId": "half_hour:2026-06-11:15:00",
+                                    "inA": True,
+                                    "inB": True,
+                                    "stockRowCountA": 200,
+                                    "stockRowCountB": 195,
+                                    "fieldMissingRatesA": {},
+                                    "fieldMissingRatesB": {},
+                                }
+                            ],
+                        }
+                    ],
+                    "summary": {
+                        "totalSlotsCompared": 10,
+                        "slotsInBoth": 8,
+                        "slotsOnlyInA": 1,
+                        "slotsOnlyInB": 1,
+                        "avgStockRowDiff": 5.0,
+                        "emptyFramesA": 0,
+                        "emptyFramesB": 0,
+                    },
+                }
+
+        monkeypatch.setattr(
+            "backend.api.snapshot_collector_routes.SnapshotCollectorService", Svc
+        )
+
+        response = client.post(
+            "/api/snapshot-collector/compare",
+            json={
+                "datasetIdA": "dragonboard_live",
+                "datasetIdB": "dragonboard_backend_shadow",
+                "snapshotType": "half_hour",
+                "tradingDate": "2026-06-11",
+            },
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        data = body["data"]
+        assert len(data["perDate"]) == 1
+        per_date = data["perDate"][0]
+        assert per_date["totalExpectedSlots"] == 10
+        assert len(per_date["slotsInBoth"]) == 1
+        assert len(per_date["slotsOnlyInA"]) == 1
+        assert len(per_date["slotsOnlyInB"]) == 1
+        assert len(per_date["slotDetails"]) == 1
+        detail = per_date["slotDetails"][0]
+        assert detail["stockRowCountA"] == 200
+        assert detail["stockRowCountB"] == 195
+
+    def test_compare_has_all_summary_fields(self, monkeypatch: Any) -> None:
+        client, _ = _setup_client(monkeypatch)
+
+        class Svc(FakeCollectorService):
+            def compare(
+                self,
+                dataset_id_a: str,
+                dataset_id_b: str,
+                snapshot_type: str,
+                trading_date: str | None = None,
+            ) -> dict[str, Any]:
+                return {
+                    "ok": True,
+                    "datasetA": dataset_id_a,
+                    "datasetB": dataset_id_b,
+                    "snapshotType": snapshot_type,
+                    "tradingDates": [],
+                    "perDate": [],
+                    "summary": {
+                        "totalSlotsCompared": 0,
+                        "slotsInBoth": 0,
+                        "slotsOnlyInA": 0,
+                        "slotsOnlyInB": 0,
+                        "avgStockRowDiff": 0.0,
+                        "emptyFramesA": 0,
+                        "emptyFramesB": 0,
+                    },
+                }
+
+        monkeypatch.setattr(
+            "backend.api.snapshot_collector_routes.SnapshotCollectorService", Svc
+        )
+
+        response = client.post(
+            "/api/snapshot-collector/compare",
+            json={
+                "datasetIdA": "dragonboard_live",
+                "datasetIdB": "dragonboard_backend_shadow",
+                "snapshotType": "half_hour",
+            },
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        summary = body["data"]["summary"]
+        assert "totalSlotsCompared" in summary
+        assert "slotsInBoth" in summary
+        assert "slotsOnlyInA" in summary
+        assert "slotsOnlyInB" in summary
+        assert "avgStockRowDiff" in summary
+        assert "emptyFramesA" in summary
+        assert "emptyFramesB" in summary

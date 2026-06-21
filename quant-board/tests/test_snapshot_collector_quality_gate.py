@@ -675,3 +675,28 @@ class TestMultipleBlockers:
         assert "all_hotlist_sources_failed" in result.blocking_issues
         # Warnings should still be populated
         assert "delayed_capture" in result.warnings
+
+
+def test_estimated_l1_stock_rows_emit_money_flow_warning() -> None:
+    from backend.snapshot_collector.quality_gate import evaluate_quality
+
+    result = evaluate_quality(
+        stock_rows=[
+            {
+                "code": "000001",
+                "moneyFlowSource": "estimated_l1",
+                "moneyFlowEstimated": True,
+            }
+        ],
+        frames=[{"snapshotId": "half_hour:2026-06-11:10:00"}],
+        source_health=[{"source": "hotlist_proxy", "ok": True}],
+        dataset_id="dragonboard_backend_shadow",
+        snapshot_type="half_hour",
+        trading_date="2026-06-11",
+        slot_time="10:00",
+        slot_timestamp_ms=1781143200000,
+        actual_timestamp_ms=1781143200000,
+    )
+
+    assert result.ok is True
+    assert "money_flow_estimated_l1" in result.warnings

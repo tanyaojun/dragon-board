@@ -86,11 +86,14 @@
 
 shadow 采集器必须通过以下验收后才能讨论 live cutover：
 
+- shadow/live 对比必须显式报告 `slotsMissingInBoth`，不能因两侧同时缺失而把预期槽位排除在统计之外。
 - 覆盖率审计：通过 `POST /api/snapshot-collector/audit` 或 CLI `snapshot-collector-audit` 对比 shadow 数据集与 live 数据集的槽位覆盖率和股票行数。
 - 质量门禁通过率：`blocked` 运行占比应可解释（如非交易时段、数据源短暂不可用），不得存在系统性静默丢弃。
 - 数据一致性：shadow 快照的关键字段（价格、排名、热榜组成）应与同槽位 Dragon Board 前端快照可比。
+- 强制重采替换同一 `snapshotId` 前保留旧事实；任一集合写入失败时恢复替换前 records、frames、stock rows、sector rows 和 dataset 摘要，不得留下半写快照。
 - 审计轨迹完整：`snapshot_collector_runs` 中每次运行都有明确状态和阻塞原因，不得存在状态缺失的运行记录。
 - 验收命令：`verify-mongodb-migration --dataset-id dragonboard_backend_shadow --snapshot-type half_hour` 应通过。
+- 2026-06-22 起重新开始连续观察，至少采集两个完整交易日后再复评阶段 5。当前板块 API 端口不可用，允许 `sector_rows=0` 作为已知缺口单独记录，但股票行、records、frames、槽位覆盖和时间质量必须完整通过。
 
 shadow 验收不通过时，不得提升采集器为正式快照来源，也不得将 `dragonboard_backend_shadow` 数据集用于生产回测或策略决策。
 

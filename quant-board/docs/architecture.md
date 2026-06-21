@@ -52,6 +52,7 @@ backend/snapshot_collector/
   service.py          # SnapshotCollectorService (run_once, backfill_slots, audit 等)
   service_factory.py  # create_snapshot_collector_repository()
   scheduler.py        # SnapshotCollectorScheduler 后台 asyncio 轮询 runner
+  supervisor.py       # Windows shadow 采集守护进程，复用依赖并在独立 8001 端口启动 collector API
 ```
 
 当前状态和边界：
@@ -63,6 +64,8 @@ backend/snapshot_collector/
 - 质量门禁在前：quality_gate 在写入前检查数据源健康、股票行数量和时间窗口，被阻止的运行写入 `snapshot_collector_runs`（状态 `blocked`）并保留审计轨迹。运行记录会保存 `sourceHealth`、`captureMode`、核心行数和完成时间，方便 Phase 4 shadow/live 对比审计。
 - API 路由 `/api/snapshot-collector/*` 和 CLI 命令 `snapshot-collector-*` 只服务实验运维和审计。
 - 自动调度器（Phase 3）：`SnapshotCollectorScheduler` 是独立的 `asyncio` 后台 runner（模块级单例），在 FastAPI `startup` 时注册到事件循环。轮询间隔由 `QUANT_BOARD_SNAPSHOT_COLLECTOR_POLL_MS`（默认 1000ms）控制，每个 tick 检查交易日、槽位表、时间窗口和 MongoDB 中的 `datasetId + snapshotId` 是否已存在，只为真正缺失且符合条件的 slot 启动 fire-and-forget 采集任务。调度器在非 MongoDB 模式或 `QUANT_BOARD_SNAPSHOT_COLLECTOR_ENABLED=0` 时自动禁用。采集任务的并发保护通过内存中的 `_in_flight_slots` 集合实现，确保同一 slot 不会重复采集。
+- 本机 shadow 守护：`supervisor.py` 只负责实验采集运行环境，不改变采集业务合同。它复用健康的 MongoDB、proxy-server 和 python-bridge，只在依赖缺失时隐藏启动对应进程，并使用 `8001` 运行目标工作区 collector API，避免替换主工作区 `8000` API。MongoDB 通过 `ping` 检查，proxy-server/python-bridge 校验结构化 `/health` 服务身份；collector 必须同时满足 scheduler `enabled=true`、`running=true` 和 `dataset_id=dragonboard_backend_shadow`。守护进程自己启动的服务如仍占端口但健康检查失败，会被终止并重启；未知外部进程只标记 `blocked`，不会误杀。
+- 当前 `sector_rows=0` 属于板块 API 端口不可用的已知外部限制，shadow 观察期内允许为零；这不放宽 stock rows、records、frames、时间窗口、数据源健康和 MongoDB 写入质量门禁，也不代表板块采集能力已经完成。
 - 正式切换要求：shadow 采集器必须通过完整审计（覆盖率、质量门禁、数据一致性）后才能讨论 live cutover。
 
 **生产口径尚未完成的接入（截至 Phase 4）：**
@@ -86,6 +89,7 @@ API 路由：
 - `POST /api/snapshot-collector/backfill-slots`：按日期区间回填槽位
 - `GET /api/snapshot-collector/runs`：历史运行记录
 - `POST /api/snapshot-collector/audit`：快照覆盖率审计
+- `POST /api/snapshot-collector/compare`：两数据集快照对比（shadow vs live），同时报告仅单侧存在和两侧共同缺失的预期槽位
 - `GET /api/snapshot-collector/scheduler/status`：调度器运行状态
 
 CLI 命令：
@@ -94,6 +98,7 @@ CLI 命令：
 - `snapshot-collector-run-once`：执行单次采集并输出 JSON 结果
 - `snapshot-collector-backfill`：按日期区间批量采集
 - `snapshot-collector-audit`：审计覆盖率并输出结构化 JSON
+- `snapshot-collector-compare`：对比两个数据集的快照覆盖率和字段完整性
 - `snapshot-collector-scheduler-status`：打印调度器运行状态
 
 响应信封格式：所有 `/api/snapshot-collector/*` 接口使用统一的 `{"ok": true/false, "status": "...", "data": {...}}` 信封。这与现有 API 的混合格式不同，仅用于采集器实验路由。

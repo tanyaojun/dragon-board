@@ -61,10 +61,20 @@ def _enrich_stock_rows_from_quotes(
             tmv = q.get("totalMarketValue")
             if tmv is not None:
                 row["totalMarketValue"] = tmv
+                row["totalMV"] = tmv
 
         mf = flow_by_code.get(code)
         if mf:
             row["moneyFlow"] = {k: v for k, v in mf.items() if k != "code"}
+            row["zlje"] = mf.get("mainNetInflow", 0)
+            source = str(mf.get("moneyFlowSource") or "unknown")
+            estimated = bool(mf.get("moneyFlowEstimated", source == "estimated_l1"))
+            row["moneyFlowSource"] = source
+            row["moneyFlowEstimated"] = estimated
+            row["capitalFlowSource"] = source
+            row["capitalFlowConfidence"] = str(
+                mf.get("capitalFlowConfidence") or ("low" if estimated else "unknown")
+            )
 
 
 def build_ingest_payload(
@@ -165,6 +175,15 @@ def build_ingest_payload(
         for field in ("price", "pctChange", "volume", "amount", "turnover", "heat"):
             if field in stock:
                 row[field] = stock[field]
+
+        if "pctChange" in row:
+            row["change"] = row["pctChange"]
+        if "amount" in row:
+            row["turnover"] = row["amount"]
+        if "turnover" in stock:
+            row["turnoverRate"] = stock["turnover"]
+        if "heat" in row:
+            row["hotness"] = row["heat"]
 
         # Themes from the market_context.themes dict keyed by code
         themes = market_context.themes.get(code)

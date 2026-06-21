@@ -370,6 +370,48 @@ def audit_collector_snapshots(payload: dict[str, Any]) -> dict[str, Any]:
     return _build_envelope(ok=True, status="completed", data=result)
 
 
+@router.post("/compare")
+def compare_collector_snapshots(payload: dict[str, Any]) -> dict[str, Any]:
+    """Compare snapshot coverage and field completeness across two datasets."""
+    dataset_id_a = payload.get("datasetIdA", "")
+    dataset_id_b = payload.get("datasetIdB", "")
+    snapshot_type = payload.get("snapshotType", "")
+
+    for field_name, value in (
+        ("datasetIdA", dataset_id_a),
+        ("datasetIdB", dataset_id_b),
+        ("snapshotType", snapshot_type),
+    ):
+        if not value:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "ok": False,
+                    "status": "error",
+                    "error": f"{field_name} is required",
+                },
+            )
+
+    _validate_snapshot_type(snapshot_type)
+    trading_date = payload.get("tradingDate")
+    if trading_date:
+        _validate_date_format(trading_date, "tradingDate")
+
+    repo = create_snapshot_collector_repository()
+    service = _create_service(repo)
+    result = service.compare(
+        dataset_id_a,
+        dataset_id_b,
+        snapshot_type,
+        trading_date=trading_date,
+    )
+    return _build_envelope(
+        ok=bool(result.get("ok", False)),
+        status="completed" if result.get("ok") else "error",
+        data=result,
+    )
+
+
 @router.get("/scheduler/status")
 def get_scheduler_status() -> dict[str, Any]:
     """Return the current collector scheduler operational state."""

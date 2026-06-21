@@ -690,3 +690,185 @@ class TestMongoIntegrationAudit:
         audit = service.audit("empty_ds", "half_hour", trading_date="2026-06-11")
         assert audit["totalFrames"] == 0
         assert audit["totalRecords"] == 0
+
+
+class TestMongoCollectorCompareContract:
+    def test_compare_counts_all_expected_slots_and_missing_both(self) -> None:
+        from backend.snapshot_collector.service_factory import _MongoSnapshotCollectorRepository
+
+        db = FakeMongoDatabase()
+        db["snapshot_frames"].insert_many(
+            [
+                {
+                    "datasetId": "live",
+                    "snapshotId": "half_hour:2026-06-11:10:00",
+                    "type": "half_hour",
+                    "tradingDate": "2026-06-11",
+                    "stockRowCount": 10,
+                },
+                {
+                    "datasetId": "shadow",
+                    "snapshotId": "half_hour:2026-06-11:10:00",
+                    "type": "half_hour",
+                    "tradingDate": "2026-06-11",
+                    "stockRowCount": 9,
+                },
+            ],
+            ordered=False,
+        )
+        repo = _MongoSnapshotCollectorRepository(_mongo_repo(db), db)
+
+        result = repo.compare_datasets(
+            "live", "shadow", "half_hour", trading_date="2026-06-11"
+        )
+
+        assert result["summary"]["totalSlotsCompared"] == 10
+        assert result["summary"]["slotsMissingInBoth"] == 9
+        assert len(result["perDate"][0]["slotsMissingInBoth"]) == 9
+
+    def test_compare_uses_canonical_stock_fields(self) -> None:
+        from backend.snapshot_collector.service_factory import _MongoSnapshotCollectorRepository
+
+        db = FakeMongoDatabase()
+        sid = "half_hour:2026-06-11:10:00"
+        for dataset_id in ("live", "shadow"):
+            db["snapshot_frames"].insert_many(
+                [
+                    {
+                        "datasetId": dataset_id,
+                        "snapshotId": sid,
+                        "type": "half_hour",
+                        "tradingDate": "2026-06-11",
+                        "stockRowCount": 1,
+                    }
+                ],
+                ordered=False,
+            )
+            db["snapshot_stock_rows"].insert_many(
+                [
+                    {
+                        "datasetId": dataset_id,
+                        "snapshotId": sid,
+                        "code": "000001",
+                        "name": "平安银行",
+                        "price": 10.0,
+                        "change": 1.2,
+                        "volume": 100,
+                        "turnover": 1000.0,
+                        "turnoverRate": 2.0,
+                        "hotness": 80.0,
+                        "rank": 1,
+                        "totalMV": 100000.0,
+                    }
+                ],
+                ordered=False,
+            )
+        repo = _MongoSnapshotCollectorRepository(_mongo_repo(db), db)
+
+        result = repo.compare_datasets(
+            "live", "shadow", "half_hour", trading_date="2026-06-11"
+        )
+        rates = result["perDate"][0]["slotDetails"][0]["fieldMissingRatesA"]
+
+        assert rates["change"]["rate"] == 0.0
+        assert rates["totalMV"]["rate"] == 0.0
+
+    def test_force_replace_overwrites_existing_snapshot(self) -> None:
+        from backend.snapshot_collector.service_factory import _MongoSnapshotCollectorRepository
+
+        db = FakeMongoDatabase()
+        repo = _MongoSnapshotCollectorRepository(_mongo_repo(db), db)
+        sid = "half_hour:2026-06-11:10:00"
+        dataset = {"id": "shadow", "name": "shadow"}
+        records = [{"snapshotId": sid, "id": sid, "tradingDate": "2026-06-11"}]
+        frames = [
+            {
+                "snapshotId": sid,
+                "id": sid,
+                "type": "half_hour",
+                "tradingDate": "2026-06-11",
+                "stockRowCount": 1,
+            }
+        ]
+
+        repo.save_snapshot_ingest(
+            dataset,
+            records,
+            frames,
+            [{"snapshotId": sid, "code": "000001", "price": 10.0}],
+            [],
+            idempotency_key="first",
+        )
+        repo.replace_snapshot_ingest(
+            dataset,
+            records,
+            frames,
+            [{"snapshotId": sid, "code": "000001", "price": 20.0}],
+            [],
+            idempotency_key="force-second",
+        )
+
+        rows = list(
+            db["snapshot_stock_rows"].find(
+                {"datasetId": "shadow", "snapshotId": sid}
+            )
+        )
+        assert len(rows) == 1
+        assert rows[0]["price"] == 20.0
+
+    def test_force_replace_restores_existing_snapshot_when_insert_fails(self) -> None:
+        from backend.snapshot_collector.service_factory import _MongoSnapshotCollectorRepository
+
+        db = FakeMongoDatabase()
+        repo = _MongoSnapshotCollectorRepository(_mongo_repo(db), db)
+        sid = "half_hour:2026-06-11:10:00"
+        dataset = {"id": "shadow", "name": "shadow"}
+        records = [{"snapshotId": sid, "id": sid, "tradingDate": "2026-06-11"}]
+        frames = [
+            {
+                "snapshotId": sid,
+                "id": sid,
+                "type": "half_hour",
+                "tradingDate": "2026-06-11",
+                "stockRowCount": 1,
+            }
+        ]
+        repo.save_snapshot_ingest(
+            dataset,
+            records,
+            frames,
+            [{"snapshotId": sid, "code": "000001", "price": 10.0}],
+            [],
+            idempotency_key="first",
+        )
+
+        frame_collection = db["snapshot_frames"]
+        original_insert = frame_collection.insert_many
+
+        def fail_once(rows: list[dict[str, Any]], ordered: bool = False) -> None:
+            frame_collection.insert_many = original_insert
+            raise RuntimeError("simulated insert failure")
+
+        frame_collection.insert_many = fail_once
+
+        with pytest.raises(RuntimeError, match="simulated insert failure"):
+            repo.replace_snapshot_ingest(
+                dataset,
+                records,
+                frames,
+                [{"snapshotId": sid, "code": "000001", "price": 20.0}],
+                [],
+                idempotency_key="force-second",
+            )
+
+        restored_frames = list(
+            db["snapshot_frames"].find({"datasetId": "shadow", "snapshotId": sid})
+        )
+        restored_rows = list(
+            db["snapshot_stock_rows"].find(
+                {"datasetId": "shadow", "snapshotId": sid}
+            )
+        )
+        assert len(restored_frames) == 1
+        assert len(restored_rows) == 1
+        assert restored_rows[0]["price"] == 10.0

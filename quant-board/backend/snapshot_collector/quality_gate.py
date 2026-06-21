@@ -113,7 +113,11 @@ def evaluate_quality(
         warnings.append("depth_provider_missing")
 
     # money_flow_estimated_l1
-    if _money_flow_l1_detected(source_health):
+    if _money_flow_l1_detected(source_health) or any(
+        row.get("moneyFlowEstimated") is True
+        or str(row.get("moneyFlowSource") or "").lower() == "estimated_l1"
+        for row in stock_rows
+    ):
         warnings.append("money_flow_estimated_l1")
 
     # theme_mapping_partial

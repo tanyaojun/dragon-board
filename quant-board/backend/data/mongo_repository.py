@@ -75,9 +75,10 @@ class MongoRepository:
         idempotency_key: str,
         trading_date: str | None = None,
         source: str = "dragon_board_runtime",
+        replace_existing: bool = False,
     ) -> dict[str, Any]:
         existing = self.db["migration_audit"].find_one({"idempotencyKey": idempotency_key, "opType": "snapshot_ingest"})
-        if existing:
+        if existing and not replace_existing:
             saved_dataset = self.get_dataset(dataset.id) or dataset
             return {
                 "dataset": self.dataset_to_dict(saved_dataset),
@@ -95,7 +96,11 @@ class MongoRepository:
             }
         )
         existing_snapshot_ids = self.existing_snapshot_ids(dataset.id, snapshot_ids)
-        if existing_snapshot_ids and len(existing_snapshot_ids) == len(snapshot_ids):
+        if (
+            existing_snapshot_ids
+            and len(existing_snapshot_ids) == len(snapshot_ids)
+            and not replace_existing
+        ):
             saved_dataset = self.get_dataset(dataset.id) or dataset
             return {
                 "dataset": self.dataset_to_dict(saved_dataset),
@@ -103,7 +108,7 @@ class MongoRepository:
                 "outbox": None,
                 "deduped": True,
             }
-        if existing_snapshot_ids:
+        if existing_snapshot_ids and not replace_existing:
             missing_snapshot_ids = set(snapshot_ids) - existing_snapshot_ids
             records = self._filter_snapshot_payloads(records, missing_snapshot_ids)
             frames = self._filter_snapshot_payloads(frames, missing_snapshot_ids)
@@ -111,28 +116,34 @@ class MongoRepository:
             sector_rows = self._filter_snapshot_payloads(sector_rows, missing_snapshot_ids)
             snapshot_ids = sorted(missing_snapshot_ids)
 
-        self._delete_snapshot_children(dataset.id, snapshot_ids)
-        self.db["datasets"].replace_one({"id": dataset.id}, self._dataset_to_doc(dataset), upsert=True)
-        self._insert_many("snapshot_records", [self._record_doc(dataset.id, item) for item in records])
-        self._insert_many("snapshot_frames", [self._frame_doc(dataset.id, item) for item in frames])
-        self._insert_many("snapshot_stock_rows", [self._stock_doc(dataset.id, item) for item in stock_rows])
-        self._insert_many("snapshot_sector_rows", [self._sector_doc(dataset.id, item) for item in sector_rows])
-        self._refresh_dataset_summary(dataset.id)
-        self.db["migration_audit"].insert_many(
-            [
-                {
-                    "opType": "snapshot_ingest",
-                    "idempotencyKey": idempotency_key,
-                    "datasetId": dataset.id,
-                    "snapshotIds": snapshot_ids,
-                    "tradingDate": trading_date,
-                    "source": source,
-                    "status": "done",
-                    "createdAt": datetime.utcnow(),
-                }
-            ],
-            ordered=False,
-        )
+        rollback = self._capture_snapshot_replacement(dataset.id, snapshot_ids) if replace_existing else None
+        try:
+            self._delete_snapshot_children(dataset.id, snapshot_ids)
+            self.db["datasets"].replace_one({"id": dataset.id}, self._dataset_to_doc(dataset), upsert=True)
+            self._insert_many("snapshot_records", [self._record_doc(dataset.id, item) for item in records])
+            self._insert_many("snapshot_frames", [self._frame_doc(dataset.id, item) for item in frames])
+            self._insert_many("snapshot_stock_rows", [self._stock_doc(dataset.id, item) for item in stock_rows])
+            self._insert_many("snapshot_sector_rows", [self._sector_doc(dataset.id, item) for item in sector_rows])
+            self._refresh_dataset_summary(dataset.id)
+            self.db["migration_audit"].insert_many(
+                [
+                    {
+                        "opType": "snapshot_ingest",
+                        "idempotencyKey": idempotency_key,
+                        "datasetId": dataset.id,
+                        "snapshotIds": snapshot_ids,
+                        "tradingDate": trading_date,
+                        "source": source,
+                        "status": "done",
+                        "createdAt": datetime.utcnow(),
+                    }
+                ],
+                ordered=False,
+            )
+        except Exception:
+            if rollback is not None:
+                self._restore_snapshot_replacement(dataset.id, snapshot_ids, rollback)
+            raise
         saved_dataset = self.get_dataset(dataset.id) or dataset
         return {
             "dataset": self.dataset_to_dict(saved_dataset),
@@ -686,6 +697,40 @@ class MongoRepository:
         query = {"datasetId": dataset_id, "snapshotId": {"$in": snapshot_ids}}
         for name in ["snapshot_sector_rows", "snapshot_stock_rows", "snapshot_frames", "snapshot_records"]:
             self.db[name].delete_many(query)
+
+    def _capture_snapshot_replacement(
+        self,
+        dataset_id: str,
+        snapshot_ids: list[str],
+    ) -> dict[str, Any]:
+        query = {"datasetId": dataset_id, "snapshotId": {"$in": snapshot_ids}}
+        return {
+            "dataset": self.db["datasets"].find_one({"id": dataset_id}),
+            "children": {
+                name: list(self.db[name].find(query))
+                for name in [
+                    "snapshot_records",
+                    "snapshot_frames",
+                    "snapshot_stock_rows",
+                    "snapshot_sector_rows",
+                ]
+            },
+        }
+
+    def _restore_snapshot_replacement(
+        self,
+        dataset_id: str,
+        snapshot_ids: list[str],
+        rollback: dict[str, Any],
+    ) -> None:
+        self._delete_snapshot_children(dataset_id, snapshot_ids)
+        for name, rows in rollback["children"].items():
+            self._insert_many(name, rows)
+        dataset_doc = rollback.get("dataset")
+        if dataset_doc is None:
+            self.db["datasets"].delete_many({"id": dataset_id})
+        else:
+            self.db["datasets"].replace_one({"id": dataset_id}, dataset_doc, upsert=True)
 
     def _delete_dataset_children(self, dataset_id: str) -> None:
         query = {"datasetId": dataset_id}
