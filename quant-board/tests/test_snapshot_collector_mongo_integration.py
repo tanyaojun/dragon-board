@@ -92,7 +92,9 @@ class FakeMongoDatabase(dict):
 
 def _matches(row: dict[str, Any], query: dict[str, Any]) -> bool:
     for key, expected in query.items():
-        value = row.get(key)
+        value: Any = row
+        for part in key.split("."):
+            value = value.get(part) if isinstance(value, dict) else None
         if isinstance(expected, dict):
             if "$in" in expected and value not in expected["$in"]:
                 return False
@@ -382,6 +384,69 @@ class TestMongoIntegrationApply:
         run = next(iter(runs_coll.find()))
         assert run["status"] == "completed"
         assert run["datasetId"] == "test_apply_run"
+
+    def test_apply_persists_all_theme_factor_rows_with_source_audit(self) -> None:
+        from backend.snapshot_collector.models import CollectorRunRequest
+        from backend.snapshot_collector.service import SnapshotCollectorService
+        from backend.snapshot_collector.service_factory import _MongoSnapshotCollectorRepository
+
+        class ThemeService:
+            def get_snapshot(self):
+                return {
+                    "computedAt": 1782018300000,
+                    "factorVersion": "theme-market-v1",
+                    "mappingVersion": "theme-v8-test",
+                    "quality": {"quoteCoverage": 0.99},
+                    "sources": {
+                        "quotes": {"source": "theme_quote_tencent", "ok": True},
+                        "funds": {"source": "theme_fund_eastmoney", "ok": True},
+                    },
+                    "factors": [
+                        {
+                            "themeId": f"THEME_{index:03d}",
+                            "themeName": f"题材{index:03d}",
+                            "rank": index + 1,
+                            "heatScore": 80,
+                            "fundScore": 60,
+                            "qualityFlags": [],
+                            "metadata": {},
+                        }
+                        for index in range(239)
+                    ],
+                }
+
+        db = FakeMongoDatabase()
+        repo = _MongoSnapshotCollectorRepository(_mongo_repo(db), db)
+        service = SnapshotCollectorService(
+            repo=repo,
+            collect_fn=_fake_collect_fn(
+                stocks=_standard_stocks(),
+                source_health=_standard_health(),
+            ),
+            normalize_fn=_passthrough_normalize,
+            theme_heat_service=ThemeService(),
+        )
+        request = CollectorRunRequest(
+            dataset_id="theme_sector_audit",
+            snapshot_type="half_hour",
+            trading_date="2026-06-11",
+            slot_time="10:00",
+        )
+
+        result = service.run_once(request)
+        snapshot_id = result.snapshot_id
+
+        assert result.status == "completed"
+        assert db["snapshot_frames"].find_one({"snapshotId": snapshot_id})["sectorRowCount"] == 239
+        assert db["snapshot_sector_rows"].count_documents({"snapshotId": snapshot_id}) == 239
+        assert db["snapshot_sector_rows"].count_documents(
+            {
+                "snapshotId": snapshot_id,
+                "entityType": "hot_theme",
+                "metadata.quoteSource": "tencent",
+                "metadata.fundSource": "eastmoney",
+            }
+        ) == 239
 
 
 class TestMongoIntegrationDedup:

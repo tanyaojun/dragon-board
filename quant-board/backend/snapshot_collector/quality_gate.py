@@ -28,6 +28,7 @@ def evaluate_quality(
     stock_rows: list[dict],
     frames: list[dict],
     source_health: list[dict],
+    sector_rows: list[dict] | None = None,
     *,
     dataset_id: str = "",
     allow_live_dataset: bool = False,
@@ -65,6 +66,7 @@ def evaluate_quality(
     """
     blocking: list[str] = []
     warnings: list[str] = []
+    sector_rows = sector_rows or []
 
     # ── source_counts ───────────────────────────────────────────────────────
     ok_count = sum(1 for s in source_health if s.get("ok"))
@@ -123,6 +125,22 @@ def evaluate_quality(
     # theme_mapping_partial
     if _source_failed_matching(source_health, _THEME_RE):
         warnings.append("theme_mapping_partial")
+
+    theme_heat_sources = [
+        source
+        for source in source_health
+        if str(source.get("source") or "") == "theme_heat"
+    ]
+    if any(not source.get("ok") for source in theme_heat_sources):
+        warnings.append("theme_heat_blocked")
+    if any(source.get("ok") for source in theme_heat_sources) and not sector_rows:
+        warnings.append("theme_sector_rows_empty")
+    if any(
+        "sectorRowCount" in frame
+        and int(frame.get("sectorRowCount") or 0) != len(sector_rows)
+        for frame in frames
+    ):
+        warnings.append("sector_row_count_drift")
 
     # delayed_capture
     grace_ms = grace_minutes * 60 * 1000

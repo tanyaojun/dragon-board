@@ -19,6 +19,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable
 
+from backend.theme_heat_service import ThemeHeatUnavailable
+
 from . import builder as builder_module
 from . import providers as providers_module
 from . import quality_gate as quality_gate_module
@@ -83,6 +85,13 @@ def _source_health_dicts(market_context: MarketDataContext) -> list[dict[str, An
             "row_count": sh.row_count,
             "error": sh.error,
             "captured_at": sh.captured_at,
+            "requested_count": sh.requested_count,
+            "returned_count": sh.returned_count,
+            "coverage_ratio": sh.coverage_ratio,
+            "started_at": sh.started_at,
+            "completed_at": sh.completed_at,
+            "failed_batches": sh.failed_batches,
+            "stale": sh.stale,
         }
         for sh in market_context.source_health
     ]
@@ -100,6 +109,8 @@ def factor_to_sector(
             "computedAt": theme_snapshot.get("computedAt"),
             "rankEligible": factor.get("rankEligible", True),
             "degraded": factor.get("degraded", False),
+            "quoteSource": "tencent",
+            "fundSource": "eastmoney",
         }
     )
     return {
@@ -150,7 +161,38 @@ def theme_snapshot_source_health(theme_snapshot: dict[str, Any]) -> list[SourceH
                 stale=bool(value.get("stale")),
             )
         )
+    quality = theme_snapshot.get("quality")
+    quote_coverage = (
+        float(quality.get("quoteCoverage") or 0)
+        if isinstance(quality, dict)
+        else 0.0
+    )
+    health_rows.append(
+        SourceHealth(
+            source="theme_heat",
+            ok=True,
+            row_count=len(theme_snapshot.get("factors") or []),
+            coverage_ratio=quote_coverage,
+        )
+    )
     return health_rows
+
+
+def _theme_audit_fields(theme_snapshot: dict[str, Any] | None) -> dict[str, Any]:
+    if not theme_snapshot:
+        return {}
+    quality = theme_snapshot.get("quality")
+    quality = quality if isinstance(quality, dict) else {}
+    sources = theme_snapshot.get("sources")
+    sources = sources if isinstance(sources, dict) else {}
+    fund_health = sources.get("funds")
+    fund_health = fund_health if isinstance(fund_health, dict) else {}
+    return {
+        "themeFactorVersion": theme_snapshot.get("factorVersion"),
+        "themeComputedAt": theme_snapshot.get("computedAt"),
+        "themeQuoteCoverage": quality.get("quoteCoverage"),
+        "themeFundCoverage": fund_health.get("coverage_ratio"),
+    }
 
 
 def _run_audit_fields(
@@ -283,15 +325,23 @@ class SnapshotCollectorService:
         codes: list[str] = []
         timeout_ms = self._provider_timeout_ms()
         market_context = self._collect_fn(providers_list, codes, timeout_ms=timeout_ms)
+        theme_snapshot: dict[str, Any] | None = None
         if self._theme_heat_service is not None:
-            theme_snapshot = self._theme_heat_service.get_snapshot()
-            market_context.sectors = [
-                factor_to_sector(factor, theme_snapshot)
-                for factor in theme_snapshot.get("factors", [])
-                if isinstance(factor, dict)
-            ]
-            market_context.source_health.extend(theme_snapshot_source_health(theme_snapshot))
+            try:
+                theme_snapshot = self._theme_heat_service.get_snapshot()
+                market_context.sectors = [
+                    factor_to_sector(factor, theme_snapshot)
+                    for factor in theme_snapshot.get("factors", [])
+                    if isinstance(factor, dict)
+                ]
+                market_context.source_health.extend(theme_snapshot_source_health(theme_snapshot))
+            except ThemeHeatUnavailable as error:
+                market_context.sectors = []
+                market_context.source_health.append(
+                    SourceHealth(source="theme_heat", ok=False, error=error.code)
+                )
         source_health = _source_health_dicts(market_context)
+        theme_audit = _theme_audit_fields(theme_snapshot)
         actual_ts = _actual_timestamp_ms()
         grace_minutes = self._close_grace_minutes()
         capture_mode = _capture_mode_for_slot(
@@ -336,6 +386,7 @@ class SnapshotCollectorService:
                     capture_mode=capture_mode,
                     started_at=started_at,
                 ),
+                **theme_audit,
             }
             _record_run(self._repo, run_doc)
             quality = QualityResult(
@@ -361,6 +412,7 @@ class SnapshotCollectorService:
             stock_rows=stock_rows,
             frames=frames,
             source_health=source_health,
+            sector_rows=sector_rows,
             dataset_id=dataset_id,
             allow_live_dataset=allow_live,
             snapshot_type=snapshot_type,
@@ -393,6 +445,7 @@ class SnapshotCollectorService:
                     frames=frames,
                     sector_rows=sector_rows,
                 ),
+                **theme_audit,
             }
             _record_run(self._repo, run_doc)
             return CollectorRunResult(
@@ -424,6 +477,7 @@ class SnapshotCollectorService:
                     frames=frames,
                     sector_rows=sector_rows,
                 ),
+                **theme_audit,
             }
             _record_run(self._repo, run_doc)
             return CollectorRunResult(
@@ -483,6 +537,7 @@ class SnapshotCollectorService:
                 frames=frames,
                 sector_rows=sector_rows,
             ),
+            **theme_audit,
         }
         _record_run(self._repo, run_doc)
 

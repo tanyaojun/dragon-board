@@ -78,6 +78,7 @@ def _call(
     *,
     stock_rows: list[dict] | None = None,
     frames: list[dict] | None = None,
+    sector_rows: list[dict] | None = None,
     source_health: list[dict] | None = None,
     dataset_id: str = "dragonboard_backend_shadow",
     allow_live_dataset: bool = False,
@@ -95,6 +96,8 @@ def _call(
         frames = [dict(f) for f in VALID_FRAMES]
     if source_health is None:
         source_health = [dict(s) for s in VALID_SOURCE_HEALTH]
+    if sector_rows is None:
+        sector_rows = []
     if slot_timestamp_ms is None:
         slot_timestamp_ms = SLOT_TS
     if actual_timestamp_ms is None:
@@ -102,6 +105,7 @@ def _call(
     return evaluate_quality(
         stock_rows=stock_rows,
         frames=frames,
+        sector_rows=sector_rows,
         source_health=source_health,
         dataset_id=dataset_id,
         allow_live_dataset=allow_live_dataset,
@@ -700,3 +704,45 @@ def test_estimated_l1_stock_rows_emit_money_flow_warning() -> None:
 
     assert result.ok is True
     assert "money_flow_estimated_l1" in result.warnings
+
+
+def test_theme_heat_failure_warns_without_faking_rows() -> None:
+    result = _call(
+        frames=[_make_frame(sectorRowCount=0)],
+        sector_rows=[],
+        source_health=[
+            _make_source_health("hotlist_proxy", True),
+            _make_source_health("theme_heat", False, "quote_coverage_blocked"),
+        ],
+    )
+
+    assert result.ok is True
+    assert "theme_heat_blocked" in result.warnings
+    assert "theme_sector_rows_empty" not in result.warnings
+
+
+def test_sector_count_drift_is_reported() -> None:
+    result = _call(
+        frames=[_make_frame(sectorRowCount=239)],
+        sector_rows=[{"entityType": "hot_theme", "entityKey": "AI"}],
+        source_health=[
+            _make_source_health("hotlist_proxy", True),
+            _make_source_health("theme_heat", True),
+        ],
+    )
+
+    assert result.ok is True
+    assert "sector_row_count_drift" in result.warnings
+
+
+def test_successful_theme_source_with_empty_rows_warns() -> None:
+    result = _call(
+        frames=[_make_frame(sectorRowCount=0)],
+        sector_rows=[],
+        source_health=[
+            _make_source_health("hotlist_proxy", True),
+            _make_source_health("theme_heat", True),
+        ],
+    )
+
+    assert "theme_sector_rows_empty" in result.warnings

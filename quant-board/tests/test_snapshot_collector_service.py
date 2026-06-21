@@ -1111,7 +1111,12 @@ class TestServiceApply:
 
         assert result.status == "completed"
         run = repo._runs[0]
-        assert run["sourceHealth"] == health
+        assert {
+            key: run["sourceHealth"][0][key]
+            for key in health[0]
+        } == health[0]
+        assert run["sourceHealth"][0]["coverage_ratio"] == 0.0
+        assert run["sourceHealth"][0]["failed_batches"] == []
         assert run["stockRowCount"] == 3
         assert run["frameCount"] == 1
         assert run["sectorRowCount"] == 0
