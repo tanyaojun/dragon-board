@@ -123,6 +123,12 @@ class Settings(BaseModel):
     snapshot_collector_bridge_base_url: str = Field(default="http://127.0.0.1:8765")
     snapshot_collector_provider_timeout_ms: int = Field(default=5000)
     snapshot_collector_allow_live_dataset: bool = Field(default=False)
+    theme_heat_batch_size: int = Field(default=50)
+    theme_heat_max_concurrency: int = Field(default=3)
+    theme_heat_cache_ttl_seconds: int = Field(default=300)
+    theme_heat_failed_batch_retries: int = Field(default=1)
+    theme_heat_quote_timeout_ms: int = Field(default=10000)
+    theme_heat_fund_timeout_ms: int = Field(default=12000)
     data_source: DataSourceConfig = Field(default_factory=DataSourceConfig)
 
     def model_post_init(self, __context: Any) -> None:
@@ -351,6 +357,33 @@ class Settings(BaseModel):
         self.snapshot_collector_allow_live_dataset = _env_bool(
             "QUANT_BOARD_SNAPSHOT_COLLECTOR_ALLOW_LIVE_DATASET",
             self.snapshot_collector_allow_live_dataset,
+        )
+        self.theme_heat_batch_size = max(
+            1,
+            _env_int("QUANT_BOARD_THEME_HEAT_BATCH_SIZE", self.theme_heat_batch_size),
+        )
+        self.theme_heat_max_concurrency = max(
+            1,
+            _env_int("QUANT_BOARD_THEME_HEAT_MAX_CONCURRENCY", self.theme_heat_max_concurrency),
+        )
+        self.theme_heat_cache_ttl_seconds = max(
+            1,
+            _env_int("QUANT_BOARD_THEME_HEAT_CACHE_TTL_SECONDS", self.theme_heat_cache_ttl_seconds),
+        )
+        self.theme_heat_failed_batch_retries = max(
+            1,
+            _env_int(
+                "QUANT_BOARD_THEME_HEAT_FAILED_BATCH_RETRIES",
+                self.theme_heat_failed_batch_retries,
+            ),
+        )
+        self.theme_heat_quote_timeout_ms = max(
+            100,
+            _env_int("QUANT_BOARD_THEME_HEAT_QUOTE_TIMEOUT_MS", self.theme_heat_quote_timeout_ms),
+        )
+        self.theme_heat_fund_timeout_ms = max(
+            100,
+            _env_int("QUANT_BOARD_THEME_HEAT_FUND_TIMEOUT_MS", self.theme_heat_fund_timeout_ms),
         )
 
     def ensure_dirs(self) -> None:

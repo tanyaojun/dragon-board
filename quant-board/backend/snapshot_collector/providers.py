@@ -16,8 +16,10 @@ import json
 import time
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import quote
 
 from .models import MarketDataContext, SourceHealth
 
@@ -75,6 +77,146 @@ def _http_post_json(url: str, timeout_s: float, payload: Any = None) -> Any:
     with urllib.request.urlopen(req, timeout=timeout_s) as resp:
         body = resp.read()
     return json.loads(body.decode("utf-8"))
+
+
+class _BatchedProxyProvider:
+    source = ""
+    endpoint = ""
+
+    def __init__(
+        self,
+        base_url: str = _DEFAULT_PROXY_BASE_URL,
+        *,
+        batch_size: int = 50,
+        max_concurrency: int = 3,
+        failed_batch_retries: int = 1,
+    ) -> None:
+        self._base_url = base_url.rstrip("/")
+        self._batch_size = max(1, batch_size)
+        self._max_concurrency = max(1, max_concurrency)
+        self._failed_batch_retries = max(0, failed_batch_retries)
+
+    def collect(
+        self,
+        codes: list[str],
+        *,
+        timeout_ms: int = _DEFAULT_TIMEOUT_MS,
+    ) -> tuple[dict[str, dict[str, Any]], SourceHealth]:
+        started_at = _iso_now()
+        started = time.monotonic()
+        requested_codes = list(dict.fromkeys(str(code).strip() for code in codes if str(code).strip()))
+        batches = [
+            requested_codes[index : index + self._batch_size]
+            for index in range(0, len(requested_codes), self._batch_size)
+        ]
+        rows: dict[str, dict[str, Any]] = {}
+        failed_batches: list[int] = []
+        errors: list[str] = []
+
+        if batches:
+            with ThreadPoolExecutor(max_workers=self._max_concurrency) as pool:
+                futures = {
+                    pool.submit(self._collect_batch, index, batch, timeout_ms): index
+                    for index, batch in enumerate(batches)
+                }
+                for future in as_completed(futures):
+                    index = futures[future]
+                    try:
+                        batch_rows = future.result()
+                        rows.update(batch_rows)
+                    except Exception as exc:
+                        failed_batches.append(index)
+                        errors.append(str(exc))
+
+        returned_count = sum(code in rows for code in requested_codes)
+        requested_count = len(requested_codes)
+        completed_at = _iso_now()
+        health = SourceHealth(
+            source=self.source,
+            ok=not failed_batches,
+            latency_ms=int((time.monotonic() - started) * 1000),
+            row_count=returned_count,
+            error="; ".join(errors),
+            captured_at=completed_at,
+            requested_count=requested_count,
+            returned_count=returned_count,
+            coverage_ratio=round(returned_count / requested_count, 4) if requested_count else 1.0,
+            started_at=started_at,
+            completed_at=completed_at,
+            failed_batches=sorted(failed_batches),
+        )
+        return rows, health
+
+    def _collect_batch(
+        self,
+        index: int,
+        codes: list[str],
+        timeout_ms: int,
+    ) -> dict[str, dict[str, Any]]:
+        del index
+        last_error: Exception | None = None
+        for _attempt in range(self._failed_batch_retries + 1):
+            try:
+                url = (
+                    f"{self._base_url}{self.endpoint}"
+                    f"?codes={quote(','.join(codes), safe=',')}"
+                )
+                body = _http_get_json(url, timeout_ms / 1000.0)
+                degraded_error = _proxy_degraded_error(body)
+                if degraded_error:
+                    raise RuntimeError(degraded_error)
+                return {
+                    row["code"]: row
+                    for item in _extract_eastmoney_diff(body)
+                    if (row := self._normalize_row(item)) is not None
+                }
+            except Exception as exc:
+                last_error = exc
+        raise RuntimeError(str(last_error or "batch request failed"))
+
+    def _normalize_row(self, item: dict[str, Any]) -> dict[str, Any] | None:
+        raise NotImplementedError
+
+
+class TencentBasicQuoteProvider(_BatchedProxyProvider):
+    """Fetch full-market basic quotes from Tencent through proxy-server."""
+
+    source = "theme_quote_tencent"
+    endpoint = "/api/quotes/tencent"
+
+    def _normalize_row(self, item: dict[str, Any]) -> dict[str, Any] | None:
+        code = str(item.get("f12") or "").strip()
+        if not code:
+            return None
+        return {
+            "code": code,
+            "name": str(item.get("f14") or code),
+            "price": _safe_float(item.get("f2")),
+            "change": _safe_float(item.get("f3")),
+            "volume": _safe_float(item.get("f6")),
+            "amount": _safe_float(item.get("f5")),
+            "turnoverRate": _safe_float(item.get("f8")),
+            "volumeRatio": _safe_float(item.get("f10")),
+        }
+
+
+class EastmoneyFundFlowProvider(_BatchedProxyProvider):
+    """Fetch only fund-flow fields from Eastmoney through proxy-server."""
+
+    source = "theme_fund_eastmoney"
+    endpoint = "/api/quotes/eastmoney"
+
+    def _normalize_row(self, item: dict[str, Any]) -> dict[str, Any] | None:
+        code = str(item.get("f12") or "").strip()
+        if not code:
+            return None
+        return {
+            "code": code,
+            "mainNetInflow": _safe_float(item.get("f62")),
+            "superLargeNetInflow": _safe_float(item.get("f66")),
+            "superLargeNetRatio": _safe_float(item.get("f69")),
+            "mainNetRatio": _safe_float(item.get("f184")),
+        }
 
 
 # ═════════════════════════════════════════════════════════════════════════════

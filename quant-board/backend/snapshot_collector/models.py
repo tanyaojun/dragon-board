@@ -75,6 +75,13 @@ class SourceHealth:
     row_count: int = 0
     error: str = ""
     captured_at: str = ""
+    requested_count: int = 0
+    returned_count: int = 0
+    coverage_ratio: float = 0.0
+    started_at: str = ""
+    completed_at: str = ""
+    failed_batches: list[int] = field(default_factory=list)
+    stale: bool = False
 
 
 @dataclass
