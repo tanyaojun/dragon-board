@@ -13,6 +13,7 @@ from backend.api.fusion_strategy_projection_routes import router as fusion_strat
 from backend.api.hotlist_routes import router as hotlist_router
 from backend.api.journal_routes import router as journal_router
 from backend.api.snapshot_collector_routes import router as snapshot_collector_router
+from backend.api.theme_heat_routes import router as theme_heat_router
 from backend.data.auto_sync import auto_sync_runner, run_outbox_auto_sync_once
 from backend.data.archive.auto_archive import archive_auto_runner, run_archive_auto_once
 from backend.data.archive.object_store import get_object_backup_store
@@ -74,6 +75,7 @@ app.include_router(journal_router)
 app.include_router(hotlist_router)
 app.include_router(fusion_strategy_projection_router)
 app.include_router(snapshot_collector_router)
+app.include_router(theme_heat_router)
 
 @app.on_event("startup")
 def on_startup() -> None:

@@ -4,16 +4,17 @@ const QUANT_BOARD_PREFIXES = [
   '/api/ranktrend/',
   '/api/snapshots/',
   '/api/themes/mapping',
+  '/api/themes/heat',
   '/api/research/',
   '/api/stocks/',
   '/api/journal/',
 ]
 
-function shouldProxyToQuantBoard(path) {
+export function shouldProxyToQuantBoard(path) {
   return QUANT_BOARD_PREFIXES.some((prefix) => path === prefix || path.startsWith(prefix))
 }
 
-function quantBoardTargetBase() {
+export function quantBoardTargetBase() {
   return String(process.env.QUANT_BOARD_API_BASE || DEFAULT_QUANT_BOARD_TARGET).replace(/\/+$/, '')
 }
 
