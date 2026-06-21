@@ -17,6 +17,7 @@ from backend.data import mongo_repository
 from backend.data.models import Dataset
 from backend.data.repository_factory import get_runtime_mongodb_database
 from backend.settings import get_settings
+from backend.theme_heat_service import get_theme_heat_service
 
 from .repository_port import SnapshotRepository
 from .service import SnapshotCollectorService
@@ -439,7 +440,11 @@ def create_snapshot_collector_service(
     settings = get_settings()
     if repo is None:
         repo = create_snapshot_collector_repository()
-    return SnapshotCollectorService(repo=repo, settings=settings)
+    return SnapshotCollectorService(
+        repo=repo,
+        settings=settings,
+        theme_heat_service=get_theme_heat_service(),
+    )
 
 
 # ── helpers ────────────────────────────────────────────────────────────────

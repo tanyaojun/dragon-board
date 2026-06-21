@@ -813,11 +813,14 @@ class TestServiceFactory:
             snapshot_collector_bridge_base_url="http://bridge.example",
             snapshot_collector_allow_live_dataset=True,
         )
+        fake_theme_heat_service = object()
         monkeypatch.setattr(sf, "get_settings", lambda: fake_settings)
+        monkeypatch.setattr(sf, "get_theme_heat_service", lambda: fake_theme_heat_service)
 
         service = sf.create_snapshot_collector_service(FakeSnapshotRepository())
 
         assert service._settings is fake_settings
+        assert service._theme_heat_service is fake_theme_heat_service
         assert service._proxy_base_url() == "http://proxy.example"
         assert service._bridge_base_url() == "http://bridge.example"
         assert service._allow_live_dataset() is True

@@ -188,6 +188,31 @@ class TestBuilderOutput:
         assert sector["entityType"] == "sector"
         assert sector["entityName"] == "银行"
 
+    def test_sector_factor_fields_preserve_nullable_values(self):
+        slot = make_slot_1500()
+        ctx = make_fake_context()
+        ctx.sectors = [
+            {
+                "code": "AI",
+                "name": "人工智能",
+                "entityType": "hot_theme",
+                "rank": 1,
+                "heatScore": None,
+                "fundScore": None,
+                "breadthScore": 66,
+                "themeQualityFlags": ["fund_flow_unavailable"],
+                "metadata": {"quoteCoverage": 0.9},
+            }
+        ]
+
+        row = build_ingest_payload(slot, ctx)["sectorRows"][0]
+
+        assert row["heatScore"] is None
+        assert row["fundScore"] is None
+        assert row["breadthScore"] == 66
+        assert row["themeQualityFlags"] == ["fund_flow_unavailable"]
+        assert row["metadata"] == {"quoteCoverage": 0.9}
+
     def test_source_is_backend_collector(self):
         """source must be quantboard_backend_collector."""
         slot = make_slot_1500()

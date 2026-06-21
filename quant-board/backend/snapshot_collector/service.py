@@ -28,6 +28,7 @@ from .models import (
     MarketDataContext,
     QualityResult,
     SnapshotSlot,
+    SourceHealth,
 )
 from .state import record_run as _record_run
 
@@ -87,6 +88,71 @@ def _source_health_dicts(market_context: MarketDataContext) -> list[dict[str, An
     ]
 
 
+def factor_to_sector(
+    factor: dict[str, Any],
+    theme_snapshot: dict[str, Any],
+) -> dict[str, Any]:
+    metadata = dict(factor.get("metadata") or {})
+    metadata.update(
+        {
+            "factorVersion": theme_snapshot.get("factorVersion"),
+            "mappingVersion": theme_snapshot.get("mappingVersion"),
+            "computedAt": theme_snapshot.get("computedAt"),
+            "rankEligible": factor.get("rankEligible", True),
+            "degraded": factor.get("degraded", False),
+        }
+    )
+    return {
+        "code": str(factor.get("themeId") or ""),
+        "name": str(factor.get("themeName") or factor.get("themeId") or ""),
+        "entityType": "hot_theme",
+        "rank": factor.get("rank", 0),
+        "heatScore": factor.get("heatScore"),
+        "momentumScore": factor.get("momentumScore"),
+        "breadthScore": factor.get("breadthScore"),
+        "fundScore": factor.get("fundScore"),
+        "leadershipScore": factor.get("leadershipScore"),
+        "correlationScore": factor.get("correlationScore"),
+        "crowdingRisk": factor.get("crowdingRisk"),
+        "persistenceScore": factor.get("persistenceScore"),
+        "change": factor.get("change", metadata.get("trimmedMeanChange")),
+        "mainNetInflow": factor.get("mainNetInflow"),
+        "volumeRatio": factor.get("volumeRatio"),
+        "ztCount": factor.get("ztCount", 0),
+        "leaderCount": factor.get("leaderCount", 0),
+        "themeQualityFlags": list(factor.get("qualityFlags") or []),
+        "metadata": metadata,
+    }
+
+
+def theme_snapshot_source_health(theme_snapshot: dict[str, Any]) -> list[SourceHealth]:
+    health_rows: list[SourceHealth] = []
+    sources = theme_snapshot.get("sources")
+    if not isinstance(sources, dict):
+        return health_rows
+    for value in sources.values():
+        if not isinstance(value, dict):
+            continue
+        health_rows.append(
+            SourceHealth(
+                source=str(value.get("source") or "theme_heat"),
+                ok=bool(value.get("ok")),
+                latency_ms=int(value.get("latency_ms") or 0),
+                row_count=int(value.get("row_count") or value.get("returned_count") or 0),
+                error=str(value.get("error") or ""),
+                captured_at=str(value.get("captured_at") or ""),
+                requested_count=int(value.get("requested_count") or 0),
+                returned_count=int(value.get("returned_count") or 0),
+                coverage_ratio=float(value.get("coverage_ratio") or 0),
+                started_at=str(value.get("started_at") or ""),
+                completed_at=str(value.get("completed_at") or ""),
+                failed_batches=list(value.get("failed_batches") or []),
+                stale=bool(value.get("stale")),
+            )
+        )
+    return health_rows
+
+
 def _run_audit_fields(
     *,
     source_health: list[dict[str, Any]],
@@ -136,6 +202,7 @@ class SnapshotCollectorService:
         collect_fn: Callable[..., MarketDataContext] | None = None,
         normalize_fn: Callable[..., tuple] | None = None,
         quality_fn: Callable[..., QualityResult] | None = None,
+        theme_heat_service: Any = None,
     ) -> None:
         from backend.data.schemas import SnapshotIngestRequest
 
@@ -143,6 +210,7 @@ class SnapshotCollectorService:
         self._settings = settings
         self._collect_fn = collect_fn or providers_module.collect_market_context
         self._quality_fn = quality_fn or quality_gate_module.evaluate_quality
+        self._theme_heat_service = theme_heat_service
 
         if normalize_fn is not None:
             self._normalize_fn = normalize_fn
@@ -215,6 +283,14 @@ class SnapshotCollectorService:
         codes: list[str] = []
         timeout_ms = self._provider_timeout_ms()
         market_context = self._collect_fn(providers_list, codes, timeout_ms=timeout_ms)
+        if self._theme_heat_service is not None:
+            theme_snapshot = self._theme_heat_service.get_snapshot()
+            market_context.sectors = [
+                factor_to_sector(factor, theme_snapshot)
+                for factor in theme_snapshot.get("factors", [])
+                if isinstance(factor, dict)
+            ]
+            market_context.source_health.extend(theme_snapshot_source_health(theme_snapshot))
         source_health = _source_health_dicts(market_context)
         actual_ts = _actual_timestamp_ms()
         grace_minutes = self._close_grace_minutes()
@@ -521,12 +597,11 @@ class SnapshotCollectorService:
 
     def _create_providers(self) -> list[Any]:
         """Create data-source providers from settings."""
-        from .providers import ProxyHotlistProvider, ProxyQuoteProvider
+        from .providers import ProxyHotlistProvider
 
         proxy_url = self._proxy_base_url()
         return [
             ProxyHotlistProvider(base_url=proxy_url),
-            ProxyQuoteProvider(base_url=proxy_url),
         ]
 
     def _proxy_base_url(self) -> str:

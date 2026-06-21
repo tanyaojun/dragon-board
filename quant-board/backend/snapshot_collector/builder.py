@@ -11,6 +11,25 @@ from typing import Any
 from .models import MarketDataContext, SnapshotSlot
 
 
+SECTOR_FACTOR_FIELDS = (
+    "heatScore",
+    "momentumScore",
+    "breadthScore",
+    "fundScore",
+    "leadershipScore",
+    "correlationScore",
+    "crowdingRisk",
+    "persistenceScore",
+    "change",
+    "mainNetInflow",
+    "volumeRatio",
+    "ztCount",
+    "leaderCount",
+    "themeQualityFlags",
+    "metadata",
+)
+
+
 def _enrich_stock_rows_from_quotes(
     stock_rows: list[dict[str, Any]],
     quotes: list[dict[str, Any]],
@@ -210,22 +229,24 @@ def build_ingest_payload(
         )
         entity_type = str(sector.get("entityType") or "sector")
 
-        sector_rows.append(
-            {
-                "id": f"{snapshot_id}:{entity_type}:{key}",
-                "snapshotId": snapshot_id,
-                "type": slot.snapshot_type,
-                "tradingDate": slot.trading_date,
-                "slotTime": slot.slot_time,
-                "timestamp": slot.timestamp_ms,
-                "captureMode": capture_mode,
-                "source": source,
-                "entityType": entity_type,
-                "entityKey": str(key),
-                "entityName": sector.get("name", str(key)),
-                "rank": int(float(sector.get("rank") or len(sector_rows) + 1)),
-            }
-        )
+        row = {
+            "id": f"{snapshot_id}:{entity_type}:{key}",
+            "snapshotId": snapshot_id,
+            "type": slot.snapshot_type,
+            "tradingDate": slot.trading_date,
+            "slotTime": slot.slot_time,
+            "timestamp": slot.timestamp_ms,
+            "captureMode": capture_mode,
+            "source": source,
+            "entityType": entity_type,
+            "entityKey": str(key),
+            "entityName": sector.get("name", str(key)),
+            "rank": int(float(sector.get("rank") or len(sector_rows) + 1)),
+        }
+        for field in SECTOR_FACTOR_FIELDS:
+            if field in sector:
+                row[field] = sector[field]
+        sector_rows.append(row)
 
     # ── Bundle ─────────────────────────────────────────────────────────────
     result: dict[str, Any] = {
