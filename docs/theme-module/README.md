@@ -16,6 +16,7 @@
 
 ## 文件说明
 
+- `2026-06-21-mongodb-theme-heat-jxbk-replacement-design.md`：以 MongoDB 全市场题材映射、腾讯基础行情和东财资金字段替代 JXBK 5000 的前后端统一设计。
 - `findings.md`：审计发现、残留调用和后续清理边界。
 - `progress.md`：V1-V7 实施过程日志归档。
 - `plans/`：各版本执行计划归档。

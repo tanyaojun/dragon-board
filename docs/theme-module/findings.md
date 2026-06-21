@@ -1,5 +1,25 @@
 # 题材模块重构发现记录
 
+## 2026-06-21 MongoDB Theme 动态热度替代 JXBK 调研
+
+- 当前正式存储口径已切换为 MongoDB：Dragon Board 通过 QuantBoard `GET /api/themes/mapping` 读取题材基础映射，前端不得直连 MongoDB。
+- JXBK 5000 端口承担的是板块动态行情和板块成分加载；MongoDB theme 当前首先是题材元数据与题材-股票关系事实源。替代设计必须显式补齐动态行情聚合，不能直接把静态映射等同于题材热度。
+- 现有权威运行态入口仍是 `ThemeRuntimeCoordinator.refreshRuntime()` / `themeFacade`，`sectorAnalyzer` 应继续保持兼容 adapter，而不是重新承载一套独立算法。
+- 工作区调研开始时 `git status --short` 为空，分支为 `main`。
+- 本机 QuantBoard 8000/8001 的 MongoDB theme 读口均正常，当前实际数量为 239 个题材、12219 条映射、4167 只去重股票。
+- `ThemeFactorEngine` 已能在没有 JXBK block 时基于成分股行情计算 breadth、fund、leadership、correlation 和 risk；但会产生 `jxbk_missing`，且 momentum/netInflow/strength 的部分语义仍依赖 JXBK。
+- `DataLayer` 的股票运行池来自热榜合并和已有缓存，MongoDB theme 映射不会自动把全部 4167 只股票加入行情池；直接去掉 JXBK 请求会造成明显的成分覆盖偏差。
+- 前端 `buildSnapshotSectorRows()` 会把 `hotThemes` 写成 `entityType=hot_theme`，即使 `jxbkBlocks` 为空仍可形成题材 sector rows；前提是 runtime 热度计算成功并同步到 `DataLayer.hotThemes`。
+- 自动运行的 backend shadow collector 是另一条独立写库链。其 `ThemeMappingProvider` 已存在但未在 `_create_providers()` 装配；现有 builder 仅转换 `MarketDataContext.sectors`，没有动态题材聚合，所以 `sectorRows=0` 是上游上下文为空，不是 MongoDB insert 失败。
+- 8001 当前健康：MongoDB 已连接，scheduler `enabled=true/running=true`，dataset 为 `dragonboard_backend_shadow`；2026-06-21 为非交易日，尚无采集次数。
+- 用户确认最终方案必须同时覆盖根前端和 backend collector；动态计算股票池为 MongoDB theme 映射的全市场约 4167 只股票，刷新周期为 5 分钟，正式 sector rows 仍按 half-hour/daily 快照节奏持久化。
+- proxy-server 东财行情接口本身按显式代码列表查询；全市场调用必须由服务端分批，不能把 4167 个代码拼进单个 URL。现有前端 `QuoteHttpFeed` 已采用 50 只一批，可作为批次口径参考。
+- QuantBoard `analysis/theme_trend.py` 已有与 TypeScript runtime factor 对齐的 `_build_ts_runtime_factor` 逻辑，可提取为公开、纯计算的共享 Python 因子引擎，避免 collector 另写第三套公式。
+- 用户修正数据源口径：全市场基础行情必须使用腾讯，不使用东财基础行情。腾讯当前代理合同可提供价格、涨跌幅、成交量和成交额，但换手率、量比及主力资金字段需要另行定义来源或显式标记不可用。
+- 2026-06-21 本机实测：腾讯接口 3/3 返回约 0.8 秒、50/50 返回约 0.45 秒；返回价格、涨跌幅、成交量、成交额、换手率和量比，资金字段为 0。
+- 同期东财接口 3/3 返回约 4.4 秒、50/50 返回约 4 秒，`f62/f66/f69/f184` 资金字段均非空；`dragonMeta.route=ulist`、`fallback=false`、`stale=false`，当前可正常连接。
+- 最终数据源合同应为腾讯基础行情主源 + 东财资金字段辅源；东财响应中的价格、涨跌幅等基础字段不进入题材计算。两个来源分别统计覆盖率，东财失败时 fundScore 应标记不可用并按明确降级权重处理，不能默认资金净流入为 0。
+
 ## 当前口径
 
 - `ThemeFacade` 和 `ThemeRuntimeCoordinator.refreshRuntime()` 是题材运行态唯一事实主链。

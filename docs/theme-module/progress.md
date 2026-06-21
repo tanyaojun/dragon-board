@@ -1,5 +1,17 @@
 # 题材模块重构进度
 
+## 2026-06-21 MongoDB Theme 动态热度替代 JXBK 调研启动
+
+- 已读取根 `AGENTS.md`、`SKILLS.md`、QuantBoard `README.md` 与 `AI_COLLABORATION.md`。
+- 已定位 JXBK、MongoDB theme、题材运行态和 `sectorRows` 相关源码与测试。
+- 当前仅做只读代码分析和设计；未修改业务代码。
+- 已完成前端 JXBK/ThemeRuntime/sectorAnalyzer/快照 builder 调用链审计。
+- 已完成 QuantBoard MongoDB theme repository/API 与 backend shadow collector provider/builder 审计。
+- 已通过本机 8000/8001 只读 API 核实 MongoDB theme 数量和 collector scheduler 健康状态。
+- 已通过 proxy-server 对腾讯基础行情和东财资金字段执行 3 只、50 只两档实时连通性检查，两个来源当前均正常。
+- 用户已确认统一后端计算、全市场 4167 只股票、5 分钟缓存、腾讯基础行情、东财资金字段、前后端共同接入和质量门禁设计。
+- 已写入 `2026-06-21-mongodb-theme-heat-jxbk-replacement-design.md`，本轮未修改业务代码。
+
 ## 2026-05-05 06:57
 
 - 写入 `src/services/theme/__tests__/ThemeFactorEngine.test.ts`。
