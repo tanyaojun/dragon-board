@@ -232,9 +232,17 @@ export class SnapshotRuntime {
     if (type === 'five_minute') return true
 
     const stockCount = Array.isArray(buildContext.stocks) ? buildContext.stocks.length : 0
-    if (stockCount > 0) return true
+    if (stockCount <= 0) {
+      this.logger.warn(`[DataLayer] 跳过${type}快照保存：当前热榜股票池为空`)
+      return false
+    }
 
-    this.logger.warn(`[DataLayer] 跳过${type}快照保存：当前热榜股票池为空`)
+    const themeFactorCount = Array.isArray(buildContext.themeHeatFactors)
+      ? buildContext.themeHeatFactors.length
+      : 0
+    if (themeFactorCount > 0) return true
+
+    this.logger.warn(`[DataLayer] 跳过${type}快照保存：题材热度因子未就绪`)
     return false
   }
 

@@ -15,6 +15,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 
 from backend.snapshot_collector.models import CollectorRunRequest
+from backend.snapshot_collector.quality_gate import SHADOW_DATASET_ID
 from backend.snapshot_collector.service import SnapshotCollectorService
 from backend.snapshot_collector.service_factory import (
     create_snapshot_collector_repository,
@@ -39,6 +40,19 @@ def _validate_snapshot_type(snapshot_type: str) -> None:
                 "ok": False,
                 "status": "error",
                 "error": f"Invalid snapshotType={snapshot_type!r}, expected one of {sorted(_VALID_SNAPSHOT_TYPES)}",
+            },
+        )
+
+
+def _validate_shadow_dataset(dataset_id: str) -> None:
+    """Raise HTTPException when the collector is asked to write outside shadow."""
+    if dataset_id != SHADOW_DATASET_ID:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "ok": False,
+                "status": "error",
+                "error": f"snapshot collector only writes {SHADOW_DATASET_ID}",
             },
         )
 
@@ -140,6 +154,7 @@ def run_collector_once(payload: dict[str, Any]) -> dict[str, Any]:
             detail={"ok": False, "status": "error", "error": "slotTime is required"},
         )
 
+    _validate_shadow_dataset(dataset_id)
     _validate_snapshot_type(snapshot_type)
     _validate_date_format(trading_date, "tradingDate")
 
@@ -251,6 +266,7 @@ def backfill_collector_slots(payload: dict[str, Any]) -> dict[str, Any]:
             detail={"ok": False, "status": "error", "error": "endDate is required"},
         )
 
+    _validate_shadow_dataset(dataset_id)
     _validate_snapshot_type(snapshot_type)
 
     # startDate defaults to endDate when absent

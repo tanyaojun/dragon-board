@@ -5,6 +5,7 @@ import { SnapshotRuntime, buildSnapshotBackendIngestIdempotencyKey } from '../ru
 import { refreshResourceLocks } from '../../refresh/RefreshResourceLocks'
 import { refreshScheduler, refreshTaskRegistry } from '../../refresh/RefreshTaskRuntime'
 import { getExpectedSlots } from '../schedule'
+import type { SnapshotBuildContext } from '../builders'
 import type { SnapshotCaptureMode, SnapshotQueryOptions, SnapshotRecord, SnapshotType } from '../types'
 
 function createMemoryStorage() {
@@ -25,7 +26,22 @@ function createMemoryStorage() {
   }
 }
 
-function createRuntime() {
+function createDefaultBuildContext(overrides: Partial<SnapshotBuildContext> = {}): SnapshotBuildContext {
+  return {
+    stocks: [],
+    breathData: null,
+    marketData: null,
+    hotThemes: [],
+    rotationAnalysis: null,
+    breathHistory: [],
+    breathFactors: [],
+    marketMode: 'full',
+    stocksVersion: 1,
+    ...overrides,
+  }
+}
+
+function createRuntime(buildContext: Partial<SnapshotBuildContext> = {}) {
   vi.stubGlobal('localStorage', createMemoryStorage())
   return new SnapshotRuntime({
     logger: {
@@ -47,17 +63,7 @@ function createRuntime() {
     abnormalRatio: 0.5,
     syncIntervalMs: 60_000,
     getStorageBucketManager: () => null,
-    getBuildContext: () => ({
-      stocks: [],
-      breathData: null,
-      marketData: null,
-      hotThemes: [],
-      rotationAnalysis: null,
-      breathHistory: [],
-      breathFactors: [],
-      marketMode: 'full',
-      stocksVersion: 1,
-    }),
+    getBuildContext: () => createDefaultBuildContext(buildContext),
   })
 }
 
@@ -484,6 +490,33 @@ describe('SnapshotRuntime', () => {
 
     expect(saved).toBe(false)
     expect(saveSnapshotRecord).not.toHaveBeenCalled()
+  })
+
+  it('does not write formal half-hour snapshots when theme heat factors are empty', async () => {
+    const runtime = createRuntime({
+      stocks: [{ code: '600001', rank: 1 }],
+      hotThemes: [{ id: 'legacy-top-n', name: '旧UI题材' }],
+      themeHeatFactors: [],
+    })
+    const saveSnapshotRecord = vi.spyOn(runtime as any, 'saveSnapshotRecord').mockResolvedValue(true)
+
+    const saved = await runtime.saveHalfHourSnapshot(new Date('2026-04-21T10:00:00'))
+
+    expect(saved).toBe(false)
+    expect(saveSnapshotRecord).not.toHaveBeenCalled()
+  })
+
+  it('writes formal half-hour snapshots when stock pool and theme heat factors are ready', async () => {
+    const runtime = createRuntime({
+      stocks: [{ code: '600001', rank: 1 }],
+      themeHeatFactors: [{ id: 'AI', name: '人工智能', heatScore: 88 }],
+    })
+    const saveSnapshotRecord = vi.spyOn(runtime as any, 'saveSnapshotRecord').mockResolvedValue(true)
+
+    const saved = await runtime.saveHalfHourSnapshot(new Date('2026-04-21T10:00:00'))
+
+    expect(saved).toBe(true)
+    expect(saveSnapshotRecord).toHaveBeenCalledTimes(1)
   })
 
   it('cleans non-trading-day runtime snapshots from primary projections and local backups', async () => {

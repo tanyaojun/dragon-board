@@ -492,6 +492,35 @@ class TestRunOnceValidation:
         detail = body.get("detail", body)
         assert detail["ok"] is False
 
+    def test_non_shadow_dataset_returns_400_before_service(self, monkeypatch: Any) -> None:
+        client, _ = _setup_client(monkeypatch)
+        called: list[str] = []
+
+        class Svc(FakeCollectorService):
+            def run_once(self, request: Any) -> CollectorRunResult:
+                called.append(request.dataset_id)
+                return super().run_once(request)
+
+        monkeypatch.setattr(
+            "backend.api.snapshot_collector_routes.SnapshotCollectorService", Svc
+        )
+
+        response = client.post(
+            "/api/snapshot-collector/run-once",
+            json={
+                "datasetId": "dragonboard_live",
+                "snapshotType": "half_hour",
+                "tradingDate": "2026-06-11",
+                "slotTime": "10:00",
+            },
+        )
+
+        assert response.status_code == 400
+        detail = response.json().get("detail", {})
+        assert detail["ok"] is False
+        assert detail["error"] == "snapshot collector only writes dragonboard_backend_shadow"
+        assert called == []
+
     def test_missing_trading_date_returns_4xx(self, monkeypatch: Any) -> None:
         client, _ = _setup_client(monkeypatch)
 
@@ -1115,6 +1144,35 @@ class TestBackfillSlotsValidation:
         )
 
         assert 400 <= response.status_code < 500
+
+    def test_non_shadow_dataset_returns_400_before_service(self, monkeypatch: Any) -> None:
+        client, _ = _setup_client(monkeypatch)
+        called: list[str] = []
+
+        class Svc(FakeCollectorService):
+            def backfill_slots(self, request: Any) -> dict[str, Any]:
+                called.append(request.dataset_id)
+                return super().backfill_slots(request)
+
+        monkeypatch.setattr(
+            "backend.api.snapshot_collector_routes.SnapshotCollectorService", Svc
+        )
+
+        response = client.post(
+            "/api/snapshot-collector/backfill-slots",
+            json={
+                "datasetId": "dragonboard_live",
+                "snapshotType": "half_hour",
+                "startDate": "2026-06-11",
+                "endDate": "2026-06-11",
+            },
+        )
+
+        assert response.status_code == 400
+        detail = response.json().get("detail", {})
+        assert detail["ok"] is False
+        assert detail["error"] == "snapshot collector only writes dragonboard_backend_shadow"
+        assert called == []
 
 
 # ═══════════════════════════════════════════════════════════════════════════

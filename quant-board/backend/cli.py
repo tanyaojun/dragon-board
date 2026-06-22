@@ -53,6 +53,7 @@ from backend.services import (
 )
 from backend.utils import json_loads
 from backend.snapshot_collector.models import CollectorRunRequest
+from backend.snapshot_collector.quality_gate import SHADOW_DATASET_ID
 from backend.snapshot_collector.service import SnapshotCollectorService
 from backend.snapshot_collector.service_factory import (
     create_snapshot_collector_repository,
@@ -1216,6 +1217,17 @@ def _create_snapshot_collector_service(repo: Any) -> SnapshotCollectorService:
     return create_snapshot_collector_service(repo)
 
 
+def _collector_shadow_dataset_error(dataset_id: str) -> dict[str, Any] | None:
+    """Return a JSON error when a write command targets a non-shadow dataset."""
+    if dataset_id == SHADOW_DATASET_ID:
+        return None
+    return {
+        "ok": False,
+        "status": "error",
+        "error": f"snapshot collector only writes {SHADOW_DATASET_ID}",
+    }
+
+
 def cmd_snapshot_collector_status(_: argparse.Namespace) -> None:
     """Print collector operational state as JSON."""
     repo = create_snapshot_collector_repository()
@@ -1225,6 +1237,10 @@ def cmd_snapshot_collector_status(_: argparse.Namespace) -> None:
 
 def cmd_snapshot_collector_run_once(args: argparse.Namespace) -> None:
     """Execute a single snapshot collection run and print JSON result."""
+    if error := _collector_shadow_dataset_error(args.dataset_id):
+        print_json(error)
+        return
+
     request = CollectorRunRequest(
         dataset_id=args.dataset_id,
         snapshot_type=args.snapshot_type,
@@ -1241,6 +1257,10 @@ def cmd_snapshot_collector_run_once(args: argparse.Namespace) -> None:
 
 def cmd_snapshot_collector_backfill(args: argparse.Namespace) -> None:
     """Run collection for multiple slots across a date range and print JSON result."""
+    if error := _collector_shadow_dataset_error(args.dataset_id):
+        print_json(error)
+        return
+
     # Generate all slots for the date range
     slot_dicts = _generate_backfill_slots(
         args.snapshot_type,

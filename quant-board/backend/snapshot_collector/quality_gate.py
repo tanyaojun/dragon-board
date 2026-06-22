@@ -22,6 +22,7 @@ _MONEY_FLOW_RE = re.compile(r"money[_]?flow", re.IGNORECASE)
 _L1_RE = re.compile(r"l1", re.IGNORECASE)
 _DEPTH_RE = re.compile(r"depth", re.IGNORECASE)
 _THEME_RE = re.compile(r"theme", re.IGNORECASE)
+SHADOW_DATASET_ID = "dragonboard_backend_shadow"
 
 
 def evaluate_quality(
@@ -52,8 +53,8 @@ def evaluate_quality(
       does not match the A-share format (6 digits starting with 0/3/6)
     * ``timestamp_outside_slot`` — *actual_timestamp_ms* is before
       *slot_timestamp_ms*
-    * ``invalid_live_dataset_in_shadow_mode`` — *dataset_id* is
-      ``"dragonboard_live"`` but *allow_live_dataset* is ``False``
+    * ``invalid_shadow_dataset`` — *dataset_id* is not
+      ``"dragonboard_backend_shadow"``
 
     **Soft warnings** (informational, do NOT flip *ok*):
 
@@ -100,9 +101,9 @@ def evaluate_quality(
     if actual_timestamp_ms < slot_timestamp_ms:
         blocking.append("timestamp_outside_slot")
 
-    # 6. invalid_live_dataset_in_shadow_mode
-    if dataset_id == "dragonboard_live" and not allow_live_dataset:
-        blocking.append("invalid_live_dataset_in_shadow_mode")
+    # 6. invalid_shadow_dataset
+    if dataset_id != SHADOW_DATASET_ID:
+        blocking.append("invalid_shadow_dataset")
 
     # ── soft warnings ───────────────────────────────────────────────────────
 
@@ -132,15 +133,15 @@ def evaluate_quality(
         if str(source.get("source") or "") == "theme_heat"
     ]
     if any(not source.get("ok") for source in theme_heat_sources):
-        warnings.append("theme_heat_blocked")
+        blocking.append("theme_heat_blocked")
     if any(source.get("ok") for source in theme_heat_sources) and not sector_rows:
-        warnings.append("theme_sector_rows_empty")
+        blocking.append("theme_sector_rows_empty")
     if any(
         "sectorRowCount" in frame
         and int(frame.get("sectorRowCount") or 0) != len(sector_rows)
         for frame in frames
     ):
-        warnings.append("sector_row_count_drift")
+        blocking.append("sector_row_count_drift")
 
     # delayed_capture
     grace_ms = grace_minutes * 60 * 1000

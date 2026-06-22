@@ -239,7 +239,7 @@ class TestMongoIntegrationDryRun:
         )
 
         request = CollectorRunRequest(
-            dataset_id="test_dry",
+            dataset_id="dragonboard_backend_shadow",
             snapshot_type="half_hour",
             trading_date="2026-06-11",
             slot_time="10:00",
@@ -283,7 +283,7 @@ class TestMongoIntegrationDryRun:
         )
 
         request = CollectorRunRequest(
-            dataset_id="test_dry",
+            dataset_id="dragonboard_backend_shadow",
             snapshot_type="half_hour",
             trading_date="2026-06-11",
             slot_time="10:00",
@@ -326,7 +326,7 @@ class TestMongoIntegrationApply:
         )
 
         request = CollectorRunRequest(
-            dataset_id="test_apply",
+            dataset_id="dragonboard_backend_shadow",
             snapshot_type="half_hour",
             trading_date="2026-06-11",
             slot_time="10:00",
@@ -341,7 +341,7 @@ class TestMongoIntegrationApply:
         from backend.data.mongo_repository import MongoRepository
 
         mongo_repo = MongoRepository(db)
-        counts = mongo_repo.snapshot_table_counts("test_apply")
+        counts = mongo_repo.snapshot_table_counts("dragonboard_backend_shadow")
         assert counts["snapshots"] >= 1, f"Expected snapshots, got {counts}"
         assert counts["snapshot_frames"] >= 1, f"Expected frames, got {counts}"
         assert counts["snapshot_stock_rows"] == 2, f"Expected 2 stock rows, got {counts}"
@@ -368,7 +368,7 @@ class TestMongoIntegrationApply:
         )
 
         request = CollectorRunRequest(
-            dataset_id="test_apply_run",
+            dataset_id="dragonboard_backend_shadow",
             snapshot_type="half_hour",
             trading_date="2026-06-11",
             slot_time="10:00",
@@ -383,7 +383,7 @@ class TestMongoIntegrationApply:
         assert runs_coll.count_documents({}) == 1
         run = next(iter(runs_coll.find()))
         assert run["status"] == "completed"
-        assert run["datasetId"] == "test_apply_run"
+        assert run["datasetId"] == "dragonboard_backend_shadow"
 
     def test_apply_persists_all_theme_factor_rows_with_source_audit(self) -> None:
         from backend.snapshot_collector.models import CollectorRunRequest
@@ -427,7 +427,7 @@ class TestMongoIntegrationApply:
             theme_heat_service=ThemeService(),
         )
         request = CollectorRunRequest(
-            dataset_id="theme_sector_audit",
+            dataset_id="dragonboard_backend_shadow",
             snapshot_type="half_hour",
             trading_date="2026-06-11",
             slot_time="10:00",
@@ -473,7 +473,7 @@ class TestMongoIntegrationDedup:
         )
 
         request = CollectorRunRequest(
-            dataset_id="test_dedup",
+            dataset_id="dragonboard_backend_shadow",
             snapshot_type="half_hour",
             trading_date="2026-06-11",
             slot_time="10:00",
@@ -521,7 +521,7 @@ class TestMongoIntegrationDedup:
         )
 
         request = CollectorRunRequest(
-            dataset_id="test_dedup_counts",
+            dataset_id="dragonboard_backend_shadow",
             snapshot_type="half_hour",
             trading_date="2026-06-11",
             slot_time="10:00",
@@ -529,10 +529,10 @@ class TestMongoIntegrationDedup:
         )
 
         service.run_once(request)
-        counts_after_first = mongo.snapshot_table_counts("test_dedup_counts")
+        counts_after_first = mongo.snapshot_table_counts("dragonboard_backend_shadow")
 
         service.run_once(request)
-        counts_after_second = mongo.snapshot_table_counts("test_dedup_counts")
+        counts_after_second = mongo.snapshot_table_counts("dragonboard_backend_shadow")
 
         # Counts should remain the same
         assert counts_after_second == counts_after_first
@@ -673,7 +673,7 @@ class TestMongoIntegrationAudit:
         )
 
         request = CollectorRunRequest(
-            dataset_id="test_audit_detect",
+            dataset_id="dragonboard_backend_shadow",
             snapshot_type="half_hour",
             trading_date="2026-06-11",
             slot_time="10:00",
@@ -682,7 +682,7 @@ class TestMongoIntegrationAudit:
 
         service.run_once(request)
 
-        audit = service.audit("test_audit_detect", "half_hour", trading_date="2026-06-11")
+        audit = service.audit("dragonboard_backend_shadow", "half_hour", trading_date="2026-06-11")
         assert audit["totalFrames"] >= 1
 
     def test_audit_count_drifts_compare_stock_rows_not_records(self) -> None:

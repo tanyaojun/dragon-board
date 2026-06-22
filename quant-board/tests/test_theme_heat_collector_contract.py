@@ -121,7 +121,7 @@ def test_service_factory_injects_shared_theme_heat_service(monkeypatch) -> None:
     assert service._theme_heat_service is fake_theme_service
 
 
-def test_theme_heat_unavailable_keeps_hotlist_snapshot_with_warning() -> None:
+def test_theme_heat_unavailable_blocks_without_faking_sector_rows() -> None:
     class FailingThemeHeatService:
         def get_snapshot(self):
             raise ThemeHeatUnavailable(code="quote_coverage_blocked")
@@ -148,6 +148,6 @@ def test_theme_heat_unavailable_keeps_hotlist_snapshot_with_warning() -> None:
 
     result = service.run_once(request)
 
-    assert result.status == "dry_run"
+    assert result.status == "blocked"
     assert captured["sectorRows"] == []
-    assert "theme_heat_blocked" in result.quality.warnings
+    assert "theme_heat_blocked" in result.quality.blocking_issues

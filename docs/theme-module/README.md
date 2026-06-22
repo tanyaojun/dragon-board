@@ -8,11 +8,10 @@
 - `themeFacade` 是 UI、服务层、预警和调试读口的统一 facade。
 - `sectorAnalyzer/rotationService/alertService` 只消费 `themeFacade`、题材 runtime 和全市场题材详情，不再保留退役板块兼容 API。
 - QuantBoard schema 和回测主链在 V6 不再扩展，沿用 V2 已落地的稳定字段和执行开关。
-- V8 后，题材基础映射事实源是 QuantBoard 后端独立 SQLite 主库 `themeDATA.db`。
-- V10 已完成本机 Chrome `http_localhost_5173` 下旧 `ThemeDataDB/theme_mapping` 数据迁移，当前 `themeDATA.db` 中有 237 个题材、12215 条题材-股票关系、4166 只去重股票。
+- V8-V10 的 `themeDATA.db` 是迁移前历史阶段：已完成本机 Chrome `http_localhost_5173` 下旧 `ThemeDataDB/theme_mapping` 数据导入，历史校验为 237 个题材、12215 条题材-股票关系、4166 只去重股票；当前运行主链不再把它作为正式事实库。
 - V11 目标是运行时严格收口：前端题材分析模块不再把浏览器 IndexedDB、本地静态 JSON 或外部批量 API 当作正式或兜底事实源；旧 IndexedDB 仅作为离线历史迁移来源。
 - V12 目标是 ThemeTrend 量化研究平台化：QuantBoard 新增与 RankTrend 并列的 ThemeTrend 研究链，承接题材趋势、题材共振回测、优化、API/CLI 和报告合同；Dragon Board 根项目不新增回测平台。
-- V12 当前口径：`themeDATA.db` 只承载题材基础映射，ThemeTrend 回测、优化和质量报告等研究结果只进入 QuantBoard research SQLite，本轮不进入 Supabase。
+- V12 历史首批口径曾使用 research SQLite 承载 ThemeTrend 研究结果；当前 MongoDB 模式下，题材基础映射和 ThemeTrend 研究结果均归属 QuantBoard MongoDB 题材/研究集合，旧 research SQLite 和 `themeDATA.db` 只作为迁移前历史、审计或离线参考。
 - 2026-06-22 起正式运行态热度由 QuantBoard 后端按 MongoDB 全市场题材映射计算：腾讯提供基础行情，东财只提供资金字段，结果缓存 5 分钟。
 - Dragon Board 通过 `/api/themes/heat*` 消费结果；正式快照题材行为 `entityType=hot_theme`，保存全部 API factors，UI 只裁剪 Top N。
 - 旧 JXBK/5000 仅作为历史背景存在；运行时代码、状态、类型、API 和 fallback 均已删除，禁止恢复。
@@ -33,13 +32,13 @@
 
 - 迁移入口：`POST /api/migrations/themes/import-json`。
 - 正式读口：`GET /api/themes/mapping`、`GET /api/themes/stocks/{theme_id}`、`GET /api/themes/stocks/by-code/{code}`、`GET /api/themes/counts`。
-- 前端入口：`src/services/ThemeDataService.ts` 作为兼容 facade 保留 `themeMapping.getAllThemes()/getThemeStocks()/getStockThemes()` 等同步读口，但加载来源切为 QuantBoard SQLite API。
+- 前端入口：`src/services/ThemeDataService.ts` 作为兼容 facade 保留 `themeMapping.getAllThemes()/getThemeStocks()/getStockThemes()` 等同步读口；V8 时加载来源切为 QuantBoard SQLite API，当前正式读口已迁到 QuantBoard MongoDB 题材 API。
 - 不改题材因子、轮动、预警或 UI 布局。
 
 ## V11 收口口径
 
-- QuantBoard SQLite 读取失败时，题材基础映射应显式失败，不回落 `/data/theme_base_mapping.json` 或浏览器 IndexedDB。
-- 前端不再通过 `/api/themes/batch` 后台修正题材映射、标签或原因；这些基础事实只能通过后端导入/维护进入 `themeDATA.db`。
+- V11 历史阶段要求 QuantBoard SQLite 读取失败时显式失败，不回落 `/data/theme_base_mapping.json` 或浏览器 IndexedDB；当前 MongoDB 题材 API 失败也必须结构化失败，不恢复静态 JSON 或 IndexedDB fallback。
+- 前端不再通过 `/api/themes/batch` 后台修正题材映射、标签或原因；这些基础事实只能通过 QuantBoard 后端导入/维护进入当前 MongoDB 题材集合，旧 `themeDATA.db` 只作为迁移源或审计参考。
 - `sectorAnalyzer/rotationService` 保留公开对象，但内部只消费 `themeFacade/themeRepository/ThemeHeatFeed`。
 - 退役板块命名和 `Compat` wrapper 已删除，新代码只使用正式 facade 读口。
 

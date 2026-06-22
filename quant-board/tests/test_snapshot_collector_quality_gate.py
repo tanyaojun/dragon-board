@@ -362,25 +362,27 @@ class TestHardBlockerTimestampOutsideSlot:
         assert "timestamp_outside_slot" not in result.blocking_issues
 
 
-class TestHardBlockerInvalidLiveDatasetInShadowMode:
-    """invalid_live_dataset_in_shadow_mode — datasetId is dragonboard_live but ALLOW_LIVE_DATASET=0 → blocked."""
+class TestHardBlockerInvalidShadowDataset:
+    """invalid_shadow_dataset — collector writes only to the backend shadow dataset."""
 
-    def test_live_dataset_blocked_when_not_allowed(self) -> None:
+    def test_live_dataset_blocked_even_when_flag_set(self) -> None:
         result = _call(dataset_id="dragonboard_live", allow_live_dataset=False)
         assert result.ok is False
-        assert "invalid_live_dataset_in_shadow_mode" in result.blocking_issues
+        assert "invalid_shadow_dataset" in result.blocking_issues
 
-    def test_live_dataset_allowed_when_flag_set(self) -> None:
+    def test_live_dataset_not_allowed_by_legacy_flag(self) -> None:
         result = _call(dataset_id="dragonboard_live", allow_live_dataset=True)
-        assert "invalid_live_dataset_in_shadow_mode" not in result.blocking_issues
+        assert result.ok is False
+        assert "invalid_shadow_dataset" in result.blocking_issues
 
-    def test_non_live_dataset_not_blocked_even_without_flag(self) -> None:
+    def test_shadow_dataset_passes_without_flag(self) -> None:
         result = _call(dataset_id="dragonboard_backend_shadow", allow_live_dataset=False)
-        assert "invalid_live_dataset_in_shadow_mode" not in result.blocking_issues
+        assert "invalid_shadow_dataset" not in result.blocking_issues
 
-    def test_non_live_dataset_with_flag_also_passes(self) -> None:
+    def test_arbitrary_dataset_blocked(self) -> None:
         result = _call(dataset_id="my_dataset", allow_live_dataset=True)
-        assert "invalid_live_dataset_in_shadow_mode" not in result.blocking_issues
+        assert result.ok is False
+        assert "invalid_shadow_dataset" in result.blocking_issues
 
 
 # ── SOFT WARNINGS (do NOT block) ───────────────────────────────────────────────
@@ -660,7 +662,7 @@ class TestMultipleBlockers:
         assert "empty_stock_rows" in result.blocking_issues
         assert "missing_snapshot_identity" in result.blocking_issues
         assert "all_hotlist_sources_failed" in result.blocking_issues
-        assert "invalid_live_dataset_in_shadow_mode" in result.blocking_issues
+        assert "invalid_shadow_dataset" in result.blocking_issues
 
     def test_warnings_still_reported_when_blocked(self) -> None:
         """Even when ok=False due to blockers, warnings should still be reported."""
@@ -706,7 +708,7 @@ def test_estimated_l1_stock_rows_emit_money_flow_warning() -> None:
     assert "money_flow_estimated_l1" in result.warnings
 
 
-def test_theme_heat_failure_warns_without_faking_rows() -> None:
+def test_theme_heat_failure_blocks_without_faking_rows() -> None:
     result = _call(
         frames=[_make_frame(sectorRowCount=0)],
         sector_rows=[],
@@ -716,12 +718,12 @@ def test_theme_heat_failure_warns_without_faking_rows() -> None:
         ],
     )
 
-    assert result.ok is True
-    assert "theme_heat_blocked" in result.warnings
+    assert result.ok is False
+    assert "theme_heat_blocked" in result.blocking_issues
     assert "theme_sector_rows_empty" not in result.warnings
 
 
-def test_sector_count_drift_is_reported() -> None:
+def test_sector_count_drift_blocks() -> None:
     result = _call(
         frames=[_make_frame(sectorRowCount=239)],
         sector_rows=[{"entityType": "hot_theme", "entityKey": "AI"}],
@@ -731,11 +733,11 @@ def test_sector_count_drift_is_reported() -> None:
         ],
     )
 
-    assert result.ok is True
-    assert "sector_row_count_drift" in result.warnings
+    assert result.ok is False
+    assert "sector_row_count_drift" in result.blocking_issues
 
 
-def test_successful_theme_source_with_empty_rows_warns() -> None:
+def test_successful_theme_source_with_empty_rows_blocks() -> None:
     result = _call(
         frames=[_make_frame(sectorRowCount=0)],
         sector_rows=[],
@@ -745,4 +747,5 @@ def test_successful_theme_source_with_empty_rows_warns() -> None:
         ],
     )
 
-    assert "theme_sector_rows_empty" in result.warnings
+    assert result.ok is False
+    assert "theme_sector_rows_empty" in result.blocking_issues

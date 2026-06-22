@@ -142,6 +142,8 @@ class _FakeService:
             "status_return",
             {"key": "collector", "mode": "idle", "lastRunAt": None},
         )
+        self.run_once_calls: list[Any] = []
+        self.backfill_calls: list[Any] = []
         self._runs_return = kwargs.get("runs_return", {"items": [], "total": 0})
         self._audit_return = kwargs.get(
             "audit_return",
@@ -178,11 +180,13 @@ class _FakeService:
         )
 
     def run_once(self, request: Any) -> _FakeRunResult:
+        self.run_once_calls.append(request)
         if self._run_once_return is not None:
             return self._run_once_return
         return _FakeRunResult(status="completed")
 
     def backfill_slots(self, request: Any) -> dict[str, Any]:
+        self.backfill_calls.append(request)
         if self._backfill_return is not None:
             return self._backfill_return
         return {
@@ -593,6 +597,22 @@ class TestCollectorCLIHandlers:
         assert req.dry_run is True
         assert req.force is True
 
+    def test_run_once_rejects_non_shadow_dataset_before_service(self) -> None:
+        fake_svc = _FakeService()
+        patches = self._patch_service(fake_svc)
+        with patches["create_snapshot_collector_repository"], patches["SnapshotCollectorService"]:
+            from backend.cli import cmd_snapshot_collector_run_once
+
+            output = _capture_json_output(
+                cmd_snapshot_collector_run_once,
+                _make_args(dataset_id="dragonboard_live"),
+            )
+
+        assert output["ok"] is False
+        assert output["status"] == "error"
+        assert output["error"] == "snapshot collector only writes dragonboard_backend_shadow"
+        assert fake_svc.run_once_calls == []
+
     # ── backfill: dry_run ───────────────────────────────────────────────────
 
     def test_backfill_dry_run_output(self) -> None:
@@ -622,6 +642,22 @@ class TestCollectorCLIHandlers:
         assert output["total"] == 10
         assert output["succeeded"] == 0
         assert len(output["details"]) == 2
+
+    def test_backfill_rejects_non_shadow_dataset_before_service(self) -> None:
+        fake_svc = _FakeService()
+        patches = self._patch_service(fake_svc)
+        with patches["create_snapshot_collector_repository"], patches["SnapshotCollectorService"]:
+            from backend.cli import cmd_snapshot_collector_backfill
+
+            output = _capture_json_output(
+                cmd_snapshot_collector_backfill,
+                _make_args(dataset_id="dragonboard_live"),
+            )
+
+        assert output["ok"] is False
+        assert output["status"] == "error"
+        assert output["error"] == "snapshot collector only writes dragonboard_backend_shadow"
+        assert fake_svc.backfill_calls == []
 
     # ── backfill: apply ─────────────────────────────────────────────────────
 
