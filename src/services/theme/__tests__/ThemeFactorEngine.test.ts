@@ -55,19 +55,6 @@ function createContext(overrides: Partial<ThemeSourceContext> = {}): ThemeSource
         volumeRatio: Number.POSITIVE_INFINITY,
       },
     ],
-    jxbkBlocks: [
-      {
-        code: 'BKAI',
-        name: '人工智能',
-        strength: 4200,
-        change: 3.8,
-        mainNetInflow: 180000000,
-        bigMoney300: 30000000,
-        institutionBuy: 9000000,
-        volumeRatio: 2.4,
-        ztCount: 2,
-      },
-    ],
     rotationAnalysis: {
       timestamp: 1713751200000,
       inflowThemes: [],
@@ -118,12 +105,11 @@ describe('ThemeFactorEngine', () => {
       themeName: '人工智能',
       rotationState: 'mainline',
     })
-    expect(factors[0].heatScore).toBeGreaterThan(70)
+    expect(factors[0].heatScore).toBeGreaterThan(60)
     expect(factors[0].breadthScore).toBeGreaterThan(50)
-    expect(factors[0].leadershipScore).toBeGreaterThan(50)
+    expect(factors[0].leadershipScore).toBeGreaterThan(45)
 
     const power = factors.find((factor) => factor.themeId === 'POWER')
-    expect(power?.qualityFlags.map((flag) => flag.code)).toContain('jxbk_missing')
     expect(power?.qualityFlags.map((flag) => flag.code)).toContain('invalid_number')
     expect(factors.find((factor) => factor.themeId === 'AI')?.relatedThemeIds).toEqual([])
   })
@@ -134,13 +120,12 @@ describe('ThemeFactorEngine', () => {
         themes: [{ id: 'EMPTY', name: '空题材' }],
         themeStocks: new Map([['EMPTY', []]]),
         stocks: [],
-        jxbkBlocks: [],
       }),
     )
 
     expect(factors[0].heatScore).toBe(0)
     expect(factors[0].qualityFlags.map((flag) => flag.code)).toEqual(
-      expect.arrayContaining(['empty_theme', 'jxbk_missing']),
+      expect.arrayContaining(['empty_theme']),
     )
   })
 
@@ -157,7 +142,6 @@ describe('ThemeFactorEngine', () => {
           { code: '000005', name: '异常一', change: Number.NaN, volumeRatio: Number.POSITIVE_INFINITY },
           { code: '000006', name: '异常二', change: Number.POSITIVE_INFINITY, volumeRatio: Number.NaN },
         ],
-        jxbkBlocks: [],
       }),
     )
 
@@ -187,7 +171,6 @@ describe('ThemeFactorEngine', () => {
             },
           },
         ],
-        jxbkBlocks: [],
       }),
     )
 
@@ -216,7 +199,6 @@ describe('ThemeFactorEngine', () => {
           { code: '000002', name: '样本二', change: 4, volumeRatio: 1.2 },
           { code: '000003', name: '样本三', change: -1, volumeRatio: 0.6 },
         ],
-        jxbkBlocks: [],
       }),
     )
     const trusted = buildThemeFactors(
@@ -238,7 +220,6 @@ describe('ThemeFactorEngine', () => {
           { code: '000002', name: '样本二', change: 4, volumeRatio: 1.2 },
           { code: '000003', name: '样本三', change: -1, volumeRatio: 0.6 },
         ],
-        jxbkBlocks: [],
       }),
     )
 
@@ -299,7 +280,6 @@ describe('ThemeStockProjector', () => {
       themeStocks: new Map([['WEAK', ['000007']]]),
       stockThemes: new Map([['000007', ['WEAK']]]),
       stocks: [{ code: '000007', name: '弱样本', change: -8, volumeRatio: 0.5 }],
-      jxbkBlocks: [],
       rotationAnalysis: null,
       correlations: new Map(),
     })

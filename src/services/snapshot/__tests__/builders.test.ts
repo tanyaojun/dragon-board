@@ -75,8 +75,6 @@ describe('snapshot builders', () => {
           avgDrawdown: -5.6,
         },
       },
-      jxbkBlocks: [],
-      jxbkStocks: {},
       hotThemes: [
         {
           name: '电力',

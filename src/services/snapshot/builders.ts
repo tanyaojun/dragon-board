@@ -18,8 +18,6 @@ export interface SnapshotBuildContext {
   l2SummaryByCode?: Map<string, L2Summary>
   breathData: any
   marketData: any
-  jxbkBlocks: any[]
-  jxbkStocks: Record<string, any>
   hotThemes: any[]
   rotationAnalysis: any
   breathHistory: any[]
@@ -385,16 +383,10 @@ export function buildIntradaySnapshotBase(
   return {
     timestamp,
     hotlist,
-    sectors: context.jxbkBlocks.map((block: any) => ({
-      code: block.code,
-      name: block.name,
-      strength: block.strength,
-      change: block.change,
-      mainNetInflow: block.mainNetInflow,
-      bigMoney300: block.bigMoney300,
-      institutionBuy: block.institutionBuy,
-      volumeRatio: block.volumeRatio,
-      ztCount: block.ztCount,
+    sectors: context.hotThemes.map((theme: any) => ({
+      ...theme,
+      code: theme.id,
+      strength: theme.heatScore,
     })),
     sentiment: {
       overall: context.breathData?.overall || 50,
@@ -456,16 +448,10 @@ export function buildHourlySnapshot(context: SnapshotBuildContext, snapshotTime:
       context.stocks.length,
     ),
     hotlist,
-    sectors: context.jxbkBlocks.map((block: any) => ({
-      code: block.code,
-      name: block.name,
-      strength: block.strength,
-      change: block.change,
-      mainNetInflow: block.mainNetInflow,
-      bigMoney300: block.bigMoney300,
-      institutionBuy: block.institutionBuy,
-      volumeRatio: block.volumeRatio,
-      ztCount: block.ztCount,
+    sectors: context.hotThemes.map((theme: any) => ({
+      ...theme,
+      code: theme.id,
+      strength: theme.heatScore,
     })),
     sentiment: {
       overall: context.breathData?.overall || 50,
@@ -564,15 +550,12 @@ export function buildDailySnapshot(context: SnapshotBuildContext, snapshotTime: 
     microCapChange: context.marketData?.microCapChange || 0,
   }
 
-  const sectors = [...context.jxbkBlocks]
-    .sort((a, b) => b.strength - a.strength)
-    .map((block: any) => ({
-      code: block.code,
-      name: block.name,
-      strength: block.strength,
-      change: block.change,
-      mainNetInflow: block.mainNetInflow,
-      ztCount: block.ztCount,
+  const sectors = [...context.hotThemes]
+    .sort((a, b) => b.heatScore - a.heatScore)
+    .map((theme: any) => ({
+      ...theme,
+      code: theme.id,
+      strength: theme.heatScore,
     }))
 
   const hotlist = [...context.stocks]
@@ -811,11 +794,7 @@ export function buildSnapshotSectorRows(
   const payload = (record.payload && typeof record.payload === 'object' ? record.payload : {}) as Record<string, any>
   const rows: SnapshotSectorRow[] = []
 
-  const sectors = Array.isArray(payload.sectors)
-    ? payload.sectors
-    : Array.isArray(buildContext?.jxbkBlocks)
-      ? buildContext?.jxbkBlocks
-      : []
+  const sectors = Array.isArray(payload.sectors) ? payload.sectors : []
   sectors.forEach((sector: any, index: number) => {
     const name = String(sector?.name || sector?.themeName || sector?.code || '').trim()
     const key = String(sector?.code || name).trim()

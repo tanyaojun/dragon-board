@@ -1,5 +1,5 @@
 <!-- src/components/panels/SectorPanel.vue -->
-<!-- 纯响应式版本：使用真实的 jxbk 数据，包含轮动和预警 -->
+<!-- 全市场题材热度、轮动与预警 -->
 
 <template>
   <div v-if="visible" class="sector-panel" :style="combinedPanelStyle" ref="panelRef">
@@ -13,9 +13,9 @@
           </span>
         </h3>
         <div class="stats-badge">
-          <span>{{ jxbkBlocks.length }}个板块</span>
+          <span>{{ themeSummaries.length }}个题材</span>
           <span class="dot">•</span>
-          <span>{{jxbkBlocks.filter(b => b.ztCount > 0).length}}个有涨停</span>
+          <span>{{ themeSummaries.filter(theme => theme.ztCount > 0).length }}个有涨停</span>
         </div>
       </div>
       <div class="panel-actions">
@@ -31,7 +31,7 @@
       <div class="tabs-left">
         <button class="tab-btn" :class="{ active: view === 'hot' }" @click="view = 'hot'">
           🔥 热门题材
-          <span v-if="jxbkBlocks.length" class="tab-count">{{ jxbkBlocks.length }}</span>
+          <span v-if="themeSummaries.length" class="tab-count">{{ themeSummaries.length }}</span>
         </button>
         <button class="tab-btn" :class="{ active: view === 'rotation' }" @click="view = 'rotation'">
           🔄 题材轮动
@@ -86,13 +86,13 @@
 
       <!-- 热门题材视图 -->
       <div v-else-if="view === 'hot'" class="sectors-grid">
-        <div v-if="jxbkBlocks.length === 0" class="empty-state">
+        <div v-if="themeSummaries.length === 0" class="empty-state">
           <span class="empty-icon">📊</span>
           <span>暂无板块数据</span>
         </div>
 
-        <div v-for="(block, index) in jxbkBlocks" :key="block.code" class="sector-card"
-          @click="showSectorDetail(block.name, $event)">
+        <div v-for="(theme, index) in themeSummaries" :key="theme.id" class="sector-card"
+          @click="showSectorDetail(theme.name, $event)">
 
           <!-- 卡片头部 - 只有排名和名称 -->
           <div class="card-header">
@@ -100,7 +100,7 @@
               <span class="rank-badge">{{ index + 1 }}</span>
             </div>
             <div class="sector-info">
-              <span class="sector-name">{{ block.name }}</span>
+              <span class="sector-name">{{ theme.name }}</span>
             </div>
           </div>
 
@@ -110,39 +110,37 @@
             <div class="stats-row">
               <div class="stat-item">
                 <span class="stat-icon">💪</span>
-                <span class="stat-value">{{ block.strength }}</span>
-                <span class="stat-label">强度</span>
+                <span class="stat-value">{{ theme.heatScore }}</span>
+                <span class="stat-label">热度</span>
               </div>
               <div class="stat-item">
                 <span class="stat-icon">📈</span>
-                <span class="stat-value">{{ block.ztCount }}</span>
+                <span class="stat-value">{{ theme.ztCount }}</span>
                 <span class="stat-label">涨停</span>
               </div>
               <div class="stat-item">
                 <span class="stat-icon">💰</span>
-                <span class="stat-value">{{ formatMoney(block.mainNetInflow) }}</span>
+                <span class="stat-value">{{ theme.mainNetInflow === null ? '资金数据降级' : formatMoney(theme.mainNetInflow) }}</span>
                 <span class="stat-label">主力净额</span>
               </div>
             </div>
 
-            <!-- 第二行：300W、量比、涨幅 -->
+            <!-- 第二行：资金分、量比、动量 -->
             <div class="stats-row">
               <div class="stat-item">
                 <span class="stat-icon">💎</span>
-                <span class="stat-value">{{ formatMoney(block.bigMoney300) }}</span>
-                <span class="stat-label">300W</span>
+                <span class="stat-value">{{ theme.fundScore === null ? '--' : theme.fundScore }}</span>
+                <span class="stat-label">资金分</span>
               </div>
               <div class="stat-item">
                 <span class="stat-icon">📊</span>
-                <span class="stat-value">{{ block.volumeRatio.toFixed(2) }}</span>
+                <span class="stat-value">{{ theme.volumeRatio === null ? '--' : theme.volumeRatio.toFixed(2) }}</span>
                 <span class="stat-label">量比</span>
               </div>
               <div class="stat-item">
                 <span class="stat-icon">📈</span>
-                <span class="stat-value" :class="block.change >= 0 ? 'up' : 'down'">
-                  {{ block.change > 0 ? '+' : '' }}{{ block.change.toFixed(2) }}%
-                </span>
-                <span class="stat-label">涨幅</span>
+                <span class="stat-value">{{ theme.momentumScore }}</span>
+                <span class="stat-label">动量</span>
               </div>
             </div>
           </div>
@@ -242,7 +240,7 @@
     </div>
 
     <div class="panel-footer">
-      <span>📡 数据来源: jxbk</span>
+      <span>📡 MongoDB 题材映射 + 腾讯行情 + 东财资金</span>
       <span>🕒 {{ formatTime(lastUpdate) }}</span>
     </div>
 
@@ -262,7 +260,6 @@ import SectorStocksTree from './SectorStocksTree.vue'
 import SectorDetail from './SectorDetail.vue'
 import ThemeCorrelationPanel from './ThemeCorrelationPanel.vue'
 import { useUIStore } from '../../stores/ui'
-import { sectorAnalyzer } from '../../services/sectorAnalyzer'
 import { themeFacade } from '../../services/theme/ThemeFacade'
 
 // 状态
@@ -314,12 +311,12 @@ const { panelRef, panelStyle } = usePanel({
 })
 
 // ========== 数据源 ==========
-const jxbkBlocks = computed(() => {
-  return themeFacade.getJxbkBlocks(20)
+const themeSummaries = computed(() => {
+  return themeFacade.getThemeSummaries(20)
 })
 
 const lastUpdate = computed(() => {
-  return themeFacade.getJxbkLastUpdate()
+  return themeFacade.getThemeLastUpdate()
 })
 
 const rotationData = computed(() => {
@@ -339,11 +336,11 @@ const loadData = async () => {
   error.value = null
 
   try {
-    await themeFacade.refreshJxbkAndFactors({ force: true })
+    await themeFacade.refreshRuntime({ force: true, source: 'ui' })
 
     // 验证数据是否存在
-    if (jxbkBlocks.value.length === 0) {
-      error.value = '暂无板块数据'
+    if (themeSummaries.value.length === 0) {
+      error.value = '暂无题材数据'
     }
   } catch (err) {
     console.error('[SectorPanel] 加载数据失败:', err)
@@ -358,17 +355,7 @@ const refresh = async () => {
     loading.value = true
     error.value = null
 
-    // legacy fallback: 清除旧 sectorAnalyzer 缓存
-    if (sectorAnalyzer && typeof sectorAnalyzer.clearCache === 'function') {
-      sectorAnalyzer.clearCache()
-    }
-
-    await themeFacade.refreshJxbkAndFactors({ force: true })
-
-    // ✅ 3. 重新加载前N个板块的个股数据（可选，提升体验）
-    if (sectorAnalyzer && typeof sectorAnalyzer.preloadTopSectors === 'function') {
-      await sectorAnalyzer.preloadTopSectors(3)
-    }
+    await themeFacade.refreshRuntime({ force: true, source: 'ui' })
 
     // 如果当前是树形视图，刷新树组件
     if (viewMode.value === 'tree' && treeRef.value) {
@@ -503,8 +490,6 @@ onMounted(() => {
     loadData()
     // 延迟2秒预加载前3个板块
     setTimeout(() => {
-      // 修复：移除未定义的 sectorAnalyzer
-      // 如果有预加载功能，应该通过 dataLayer 实现
       debugLog('[SectorPanel] 可以在这里实现预加载逻辑')
     }, 2000)
   }

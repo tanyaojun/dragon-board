@@ -1008,7 +1008,7 @@ class DataLoaderService {
 
   /**
    * 合并额外数据（从 DataLayer 迁移）
-   * 包括：题材、JXBK、龙头、涨停扩展数据
+   * 包括：题材、龙头、涨停扩展数据
    */
   private mergeExtraData(stocks: any[]): any[] {
     return extraDataProjector.project(stocks)

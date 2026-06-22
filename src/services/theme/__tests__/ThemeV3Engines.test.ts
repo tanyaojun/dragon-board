@@ -6,16 +6,10 @@ import { buildThemeFactors } from '../ThemeFactorEngine'
 import { projectThemeStockExposures } from '../ThemeStockProjector'
 import {
   refreshThemeFacadeState,
-  refreshJxbkAndFactors,
-  getHotThemesCompat,
+  getHotThemes,
   getRotationSummary,
-  getJxbkBlocksCompat,
-  getJxbkLastUpdate,
   getRuntimeSnapshot,
-  getThemeStockMapCompat,
 } from '../ThemeFacade'
-import { jxbkThemeFeed } from '../JxbkThemeFeed'
-import { dataLayer } from '@/services/DataLayer'
 import type { ThemeFactorSnapshot, ThemeSourceContext } from '../types'
 
 function factor(overrides: Partial<ThemeFactorSnapshot>): ThemeFactorSnapshot {
@@ -43,9 +37,10 @@ function factor(overrides: Partial<ThemeFactorSnapshot>): ThemeFactorSnapshot {
     relatedThemeIds: [],
     qualityFlags: [],
     components: {
-      baseScore: 20,
-      jxbkScore: 90,
-      stockScore: 70,
+      breadthScore: 74,
+      fundScore: 76,
+      leadershipScore: 80,
+      correlationScore: 70,
       riskPenalty: 0,
     },
     ...overrides,
@@ -72,19 +67,6 @@ function context(): ThemeSourceContext {
       { code: '000001', name: '样本一', change: 10, volumeRatio: 2.8, leadStatus: '龙一' },
       { code: '000002', name: '样本二', change: 4, volumeRatio: 1.5 },
       { code: '000003', name: '样本三', change: -3, volumeRatio: 0.8 },
-    ],
-    jxbkBlocks: [
-      {
-        code: 'BKAI',
-        name: '人工智能',
-        strength: 4200,
-        change: 4,
-        mainNetInflow: 180000000,
-        bigMoney300: 30000000,
-        institutionBuy: 10000000,
-        volumeRatio: 2.4,
-        ztCount: 2,
-      },
     ],
     rotationAnalysis: null,
     correlations: new Map(),
@@ -189,8 +171,8 @@ describe('ThemeAlertEngine', () => {
   })
 })
 
-describe('ThemeFacade V3 compatibility', () => {
-  it('refreshes runtime state and exposes hot theme and rotation compat views', () => {
+describe('ThemeFacade runtime views', () => {
+  it('refreshes runtime state and exposes hot theme and rotation views', () => {
     const result = refreshThemeFacadeState({
       context: {
         ...context(),
@@ -216,7 +198,7 @@ describe('ThemeFacade V3 compatibility', () => {
       },
       emitAlerts: false,
     })
-    const hotThemes = getHotThemesCompat(3)
+    const hotThemes = getHotThemes(3)
 
     expect(result.factors[0].themeName).toBe('人工智能')
     expect(hotThemes[0]).toMatchObject({ id: 'AI', name: '人工智能' })
@@ -224,21 +206,16 @@ describe('ThemeFacade V3 compatibility', () => {
   })
 })
 
-describe('ThemeFacade V4 UI compatibility', () => {
-  it('exposes stable UI read models and immutable runtime snapshots', () => {
+describe('ThemeFacade UI read models', () => {
+  it('exposes immutable runtime snapshots', () => {
     const freshTimestamp = Date.now()
     refreshThemeFacadeState({ context: { ...context(), timestamp: freshTimestamp }, emitAlerts: false })
 
-    const blocks = getJxbkBlocksCompat(5)
-    const stockMap = getThemeStockMapCompat()
     const snapshot = getRuntimeSnapshot()
 
     snapshot.factors.push(factor({ themeId: 'MUTATED' }))
     snapshot.exposures.byCode.set('999999', [])
 
-    expect(blocks[0]).toMatchObject({ code: 'BKAI', name: '人工智能', strength: 4200 })
-    expect(getJxbkLastUpdate()).toBe(freshTimestamp)
-    expect(stockMap).toEqual({})
     expect(getRuntimeSnapshot().factors.some((item) => item.themeId === 'MUTATED')).toBe(false)
     expect(getRuntimeSnapshot().exposures.byCode.has('999999')).toBe(false)
   })
@@ -252,46 +229,4 @@ describe('ThemeFacade V4 UI compatibility', () => {
     expect(second.events).toEqual(first.events)
   })
 
-  it('refreshes JXBK feed before rebuilding factors when no explicit context is provided', async () => {
-    const spy = vi.spyOn(jxbkThemeFeed, 'refreshBlocks').mockResolvedValue([])
-
-    await refreshJxbkAndFactors({ skipJxbkRefresh: false, emitAlerts: false })
-
-    expect(spy).toHaveBeenCalledWith({ force: undefined })
-    spy.mockRestore()
-  })
-
-  it('falls back to fresh feed blocks when the last explicit context is stale', () => {
-    refreshThemeFacadeState({
-      context: {
-        ...context(),
-        timestamp: Date.now() - 10 * 60 * 1000,
-      },
-      emitAlerts: false,
-    })
-    dataLayer.updateJxbkBlocks([
-      {
-        code: 'BKNEW',
-        name: '新鲜板块',
-        strength: 5000,
-        change: 5,
-        mainNetInflow: 100000000,
-        bigMoney300: 0,
-        institutionBuy: 0,
-        volumeRatio: 2,
-        ztCount: 1,
-      },
-    ])
-
-    expect(getJxbkBlocksCompat(1)[0]).toMatchObject({ code: 'BKNEW', name: '新鲜板块' })
-  })
-
-  it('returns cloned stock map entries so callers cannot mutate feed state', () => {
-    dataLayer.updateJxbkStocks([{ code: '000001', name: '样本一', blocks: ['人工智能'] } as any])
-
-    const stockMap = getThemeStockMapCompat()
-    stockMap['000001'].blocks.push('污染板块')
-
-    expect(getThemeStockMapCompat()['000001'].blocks).toEqual(['人工智能'])
-  })
 })

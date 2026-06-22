@@ -340,16 +340,14 @@ class AlertService {
     })
   }
 
-  /**
-   * 维护 legacy 板块快照。题材/板块预警统一由 ThemeRuntimeCoordinator 生成。
-   */
+  /** 维护题材热度快照。题材预警统一由 ThemeRuntimeCoordinator 生成。 */
   private updateBlockSnapshot = async () => {
-    const blocks = themeFacade.getJxbkBlocks()
+    const blocks = themeFacade.getHotThemes()
     const timestamp = Date.now()
 
     for (const block of blocks) {
-      this.blocksSnapshot.set(block.code, {
-        strength: block.strength,
+      this.blocksSnapshot.set(block.id, {
+        strength: block.heatScore,
         timestamp,
       })
     }
@@ -366,8 +364,7 @@ class AlertService {
    * 检查个股预警
    */
   private checkStocks = async () => {
-    const stockMap = themeFacade.getThemeStockMap()
-    const stocks = Object.values(stockMap) as any[]
+    const stocks = dataLayer.getStocks() as any[]
 
     for (const stock of stocks) {
       try {

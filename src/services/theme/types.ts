@@ -1,4 +1,4 @@
-import type { JxbkBlockData, JxbkStockData, MergedStock } from '@/types'
+import type { MergedStock } from '@/types'
 import type { AlertLevel, AlertType, RotationAnalysis } from '@/types/core'
 import type { ThemeCorrelationDetail } from '@/services/ThemeCorrelationAnalyzer'
 
@@ -98,6 +98,9 @@ export interface ThemePanelSummary {
   name: string
   rank: number
   heatScore: number
+  heatIcon: string
+  heatColor: string
+  heatLevel: string
   momentumScore: number
   breadthScore: number
   fundScore: number | null
@@ -109,6 +112,12 @@ export interface ThemePanelSummary {
   leaderCount: number
   mainNetInflow: number | null
   volumeRatio: number | null
+  momentum: number
+  trend: number
+  acceleration: number
+  correlation: number
+  strength: number
+  rotationState: ThemeRotationState
   lastUpdate: number
   qualityFlags: ThemeQualityFlag[]
   degraded: boolean
@@ -146,7 +155,6 @@ export interface ThemeSourceContext {
   themeStocks: Map<string, string[]>
   stockThemes: Map<string, string[]>
   stocks: Array<Partial<MergedStock> & { code: string; name?: string }>
-  jxbkBlocks?: JxbkBlockData[]
   rotationAnalysis?: RotationAnalysis | null
   correlations?: Map<string, ThemeCorrelationDetail>
 }
@@ -172,7 +180,7 @@ export interface ThemeEvent {
   themeId: string
   themeName: string
   timestamp: number
-  source: 'theme' | 'theme_legacy_adapter'
+  source: 'theme'
   alertType?: AlertType
   factorSnapshotId?: string
   stockCodes: string[]
@@ -205,7 +213,6 @@ export type ThemeRuntimeChangedField =
   | 'events'
   | 'quality'
   | 'stocks'
-  | 'jxbk'
 
 export interface ThemeRuntimeQualitySummary {
   totalFlags: number
@@ -232,21 +239,12 @@ export interface ThemeRefreshOptions {
   timestamp?: number
   snapshotId?: string
   force?: boolean
-  skipJxbkRefresh?: boolean
   emitAlerts?: boolean
   source?: ThemeRefreshSource
-  forceJxbk?: boolean
   syncStocks?: boolean
   context?: ThemeSourceContext
 }
 
 export interface ThemeRuntimeRefreshOptions extends ThemeRefreshOptions {
   source: ThemeRefreshSource
-}
-
-export interface ThemeLegacyAlertBuildContext {
-  timestamp?: number
-  blocks: JxbkBlockData[]
-  stockMap: Record<string, JxbkStockData>
-  previousBlocks?: Map<string, JxbkBlockData>
 }

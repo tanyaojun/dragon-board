@@ -50,8 +50,6 @@ const snapshotRuntime = new SnapshotRuntime({
     l2SummaryByCode: dataLayer.getL2SummaryMap(),
     breathData: dataLayer.getBreathData(),
     marketData: dataLayer.getBreathMarketData(),
-    jxbkBlocks: dataLayer.getJxbkBlocksSorted(100),
-    jxbkStocks: dataLayer.getJxbkStockMap(),
     hotThemes: dataLayer.getHotThemes() || [],
     rotationAnalysis: dataLayer.getCurrentRotation(),
     breathHistory: dataLayer.getBreathHistory(),

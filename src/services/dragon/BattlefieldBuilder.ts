@@ -56,7 +56,7 @@ function stockExposuresByTheme(exposures: ThemeExposureProjection, themeId: stri
 }
 
 function themeNetInflow(hotTheme: any): number {
-  return hotTheme?.mainNetInflow || hotTheme?.jxbk?.mainNetInflow || 0
+  return hotTheme?.mainNetInflow || 0
 }
 
 function isStrongCandidate(stock: MergedStock, frameHits: number): boolean {
@@ -164,8 +164,7 @@ function qualifiesThemeBattlefield(params: {
   const heatScore = params.hotTheme?.heatScore || 0
   const correlation = params.correlation?.overallCorrelation || 0
   const ztCount = params.hotTheme?.ztCount || 0
-  const mainNetInflow =
-    params.hotTheme?.mainNetInflow || params.hotTheme?.jxbk?.mainNetInflow || 0
+  const mainNetInflow = params.hotTheme?.mainNetInflow || 0
   const frameHits = params.framePresence?.frameHits || 0
   const frameStockCount = params.framePresence?.stockCodes.size || 0
 

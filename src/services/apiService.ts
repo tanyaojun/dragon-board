@@ -23,7 +23,6 @@ export type RequestPriority = 'high' | 'medium' | 'low'
 export type RequestContext =
   | 'platform' // 八平台热榜
   | 'quote' // 行情数据
-  | 'theme' // 题材数据
   | 'breath' // 情绪数据
   | 'tdx' // 通达信数据
   | 'limitup' // 涨停数据
@@ -250,8 +249,6 @@ export class ApiService {
         return this.contextConfig.PLATFORM
       case 'quote':
         return this.contextConfig.QUOTE
-      case 'theme':
-        return this.contextConfig.THEME
       case 'breath':
         return this.contextConfig.BREATH
       case 'tdx':
@@ -305,14 +302,6 @@ export class ApiService {
       return 'platform'
     }
     if (url.includes('/api/quotes')) return 'quote'
-    if (
-      url.includes('/api/theme/') ||
-      url.includes('/api/get_hot_block') ||
-      url.includes('/api/get_block_stock') ||
-      url.includes('/api/get_tradeday_list')
-    ) {
-      return 'theme' // 题材数据统一用 theme 上下文
-    }
     if (url.includes('/api/tdx')) return 'tdx'
     if (url.includes('/api/limitup') || url.includes('/api/surge-stock')) return 'limitup'
     if (url.includes('/api/market')) return 'market'
@@ -609,64 +598,6 @@ export class ApiService {
     })
 
     return merged
-  }
-
-  // ========== 🔥 新增：KPL题材数据接口（走5000） ==========
-
-  /** 获取热门板块列表 */
-  async getHotBlockList(params: { st?: number; date?: string } = {}, options?: RequestConfig) {
-    const query = new URLSearchParams()
-    if (params.st) query.append('st', params.st.toString())
-    if (params.date) query.append('Date', params.date)
-
-    const endpoint = params.date ? '/api/get_hot_block_list_his' : '/api/get_hot_block_list'
-
-    return this.get(`${endpoint}?${query.toString()}`, {
-      context: 'theme',
-      cache: !params.date, // 历史数据不缓存
-      cacheTTL: 300000,
-      ...options,
-    })
-  }
-
-  /** 获取板块个股列表 */
-  async getBlockStockList(
-    blockCode: string,
-    params: {
-      type?: number
-      order?: number
-      st?: number
-      old?: number
-      date?: string
-    } = {},
-    options?: RequestConfig,
-  ) {
-    const query = new URLSearchParams()
-    query.append('bk_code', blockCode)
-    if (params.type) query.append('Type', params.type.toString())
-    if (params.order) query.append('Order', params.order.toString())
-    if (params.st) query.append('st', params.st.toString())
-    if (params.old) query.append('old', params.old.toString())
-    if (params.date) query.append('Date', params.date)
-
-    const endpoint = params.date ? '/api/get_block_stock_list_his' : '/api/get_block_stock_list'
-
-    return this.get(`${endpoint}?${query.toString()}`, {
-      context: 'theme',
-      cache: !params.date,
-      cacheTTL: 300000,
-      ...options,
-    })
-  }
-
-  /** 获取交易日列表 */
-  async getTradeDayList(options?: RequestConfig) {
-    return this.get('/api/get_tradeday_list', {
-      context: 'theme',
-      cache: true,
-      cacheTTL: 24 * 60 * 60 * 1000, // 缓存1天
-      ...options,
-    })
   }
 
   /** 获取涨停板数据 */

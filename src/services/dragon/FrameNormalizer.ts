@@ -129,7 +129,7 @@ function buildCloseFrame(stocks: MergedStock[], date: string, timestamp: number)
     .sort((a, b) => (a.compRank || 999) - (b.compRank || 999))
     .slice(0, 100)
     .map((stock, index) => buildHotStockFromMergedStock(stock, index + 1))
-  const sectors = dataLayer.getJxbkBlocksSorted(30).map((item) => normalizeSectorItem(item))
+  const sectors = dataLayer.getHotThemes().slice(0, 30).map((item) => normalizeSectorItem(item))
 
   return {
     id: `close:${date}:${timestamp}`,

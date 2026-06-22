@@ -1,13 +1,11 @@
 import { dataLayer } from '@/services/DataLayer'
 import { debugLog } from '@/utils/logger'
-import { dedupeByKey } from './utils'
 import { buildThemeFactors } from './ThemeFactorEngine'
 import { projectThemeStockExposures } from './ThemeStockProjector'
 import { buildThemeRotationSummary } from './ThemeRotationEngine'
 import { buildThemeEvents } from './ThemeAlertEngine'
-import { buildLegacyBlockThemeEvents } from './ThemeLegacyAlertAdapter'
+import { themeHeatFeed } from './ThemeHeatFeed'
 import { themeRuntimeStore } from './ThemeRuntimeStore'
-import { jxbkThemeFeed } from './JxbkThemeFeed'
 import { themeRepository } from './ThemeRepository'
 import { deriveThemeHeatLevel } from './stockThemeMeta'
 import type {
@@ -37,17 +35,10 @@ export function themeInputSignature(context: ThemeSourceContext): string {
         stock.name,
         stock.change,
         stock.isZT,
-        stock.lianban,
-        stock.lianbanStr,
         stock.continuousDays,
-        stock.fengdan,
         stock.volumeRatio,
         stock.mainNetInflow,
-        stock.popularity,
       ])
-      .sort((a, b) => String(a[0]).localeCompare(String(b[0]))),
-    jxbkBlocks: (context.jxbkBlocks || [])
-      .map((block) => [block.code, block.name, block.strength, block.change, block.mainNetInflow, block.ztCount])
       .sort((a, b) => String(a[0]).localeCompare(String(b[0]))),
   })
 }
@@ -131,7 +122,6 @@ function buildDefaultContext(timestamp?: number, snapshotId?: string): ThemeSour
       stockThemes.get(code)!.push(theme.id)
     })
   })
-
   return {
     timestamp: timestamp || Date.now(),
     snapshotId,
@@ -139,93 +129,101 @@ function buildDefaultContext(timestamp?: number, snapshotId?: string): ThemeSour
     themeStocks,
     stockThemes,
     stocks: dataLayer.getStocks(),
-    jxbkBlocks: dataLayer.getJxbkBlocksSorted?.() || [],
     rotationAnalysis: dataLayer.getCurrentRotation?.() || null,
     correlations: new Map(),
   }
 }
 
-export function refreshRuntime(options: ThemeRuntimeRefreshOptions & { context: ThemeSourceContext }): ThemeRuntimeRefreshResult
-export async function refreshRuntime(options: ThemeRuntimeRefreshOptions): Promise<ThemeRuntimeRefreshResult>
-export function refreshRuntime(options: ThemeRuntimeRefreshOptions): ThemeRuntimeRefreshResult | Promise<ThemeRuntimeRefreshResult> {
-  const execute = (context: ThemeSourceContext): ThemeRuntimeRefreshResult => {
-    const timestamp = context.timestamp || options.timestamp || Date.now()
-    const signature = themeInputSignature(context)
-    const factors = buildThemeFactors(context)
-    const exposures = projectThemeStockExposures(context, factors)
-    const rotationSummary =
-      signature === previousSignature && previousRotation
-        ? previousRotation
-        : buildThemeRotationSummary(factors, {
-            timestamp,
-            previous: previousRotation || dataLayer.getCurrentRotation?.() || null,
-          })
-    const themeEvents = buildThemeEvents({
-      factors,
-      exposures,
-      previousFactors,
-      timestamp,
-    })
-    const legacyEvents = buildLegacyBlockThemeEvents({
-      timestamp,
-      blocks: context.jxbkBlocks || [],
-      stockMap: jxbkThemeFeed.getStockMap(),
-    })
-    const events = dedupeByKey([...themeEvents, ...legacyEvents], (e) => `${e.alertType || e.type}:${e.themeId}`)
-    const qualitySummary = buildQualitySummary(factors)
-    const changedFields = changedFieldsFor(signature, factors, exposures, events, qualitySummary)
-    const syncedStockCount = options.syncStocks ? syncStocks(exposures) : 0
-    if (syncedStockCount > 0 && !changedFields.includes('stocks')) changedFields.push('stocks')
+function executeWithFactors(
+  context: ThemeSourceContext,
+  factors: ThemeFactorSnapshot[],
+  options: ThemeRuntimeRefreshOptions,
+  factorVersion: string,
+): ThemeRuntimeRefreshResult {
+  const timestamp = context.timestamp || options.timestamp || Date.now()
+  const signature = JSON.stringify({
+    context: themeInputSignature(context),
+    factors: factors.map((factor) => [factor.themeId, factor.heatScore, factor.momentumScore, factor.rank]),
+  })
+  const exposures = projectThemeStockExposures(context, factors)
+  const rotationSummary =
+    signature === previousSignature && previousRotation
+      ? previousRotation
+      : buildThemeRotationSummary(factors, {
+          timestamp,
+          previous: previousRotation || dataLayer.getCurrentRotation?.() || null,
+        })
+  const events = buildThemeEvents({ factors, exposures, previousFactors, timestamp })
+  const qualitySummary = buildQualitySummary(factors)
+  const changedFields = changedFieldsFor(signature, factors, exposures, events, qualitySummary)
+  const syncedStockCount = options.syncStocks ? syncStocks(exposures) : 0
+  if (syncedStockCount > 0 && !changedFields.includes('stocks')) changedFields.push('stocks')
 
-    themeRuntimeStore.update({
-      factors,
-      exposures,
-      rotationSummary,
-      events,
-      correlations: context.correlations || new Map(),
-      lastUpdate: timestamp,
-      inputSignature: signature,
-      factorVersion: THEME_FACTOR_VERSION,
-      eventVersion: THEME_EVENT_VERSION,
-      qualitySummary,
-      refreshSource: options.source,
-      changedFields,
-    })
-    if (rotationSummary) dataLayer.updateRotationAnalysis(rotationSummary)
+  themeRuntimeStore.update({
+    factors,
+    exposures,
+    rotationSummary,
+    events,
+    correlations: context.correlations || new Map(),
+    lastUpdate: timestamp,
+    inputSignature: signature,
+    factorVersion,
+    eventVersion: THEME_EVENT_VERSION,
+    qualitySummary,
+    refreshSource: options.source,
+    changedFields,
+  })
+  if (rotationSummary) dataLayer.updateRotationAnalysis(rotationSummary)
 
-    previousSignature = signature
-    previousFactors = factors
-    previousRotation = rotationSummary
-    previousEvents = events
+  previousSignature = signature
+  previousFactors = factors
+  previousRotation = rotationSummary
+  previousEvents = events
 
-    const result: ThemeRuntimeRefreshResult = {
-      factors,
-      exposures,
-      rotationSummary,
-      events,
-      qualitySummary,
-      changedFields,
-      inputSignature: signature,
-      source: options.source,
-      timestamp,
-      syncedStockCount,
-    }
-    debugLog('[ThemeRuntimeCoordinator] refreshRuntime', {
-      source: result.source,
-      changedFields: result.changedFields,
-      factors: factors.length,
-      events: events.length,
-    })
-    return result
+  const result: ThemeRuntimeRefreshResult = {
+    factors,
+    exposures,
+    rotationSummary,
+    events,
+    qualitySummary,
+    changedFields,
+    inputSignature: signature,
+    source: options.source,
+    timestamp,
+    syncedStockCount,
   }
+  debugLog('[ThemeRuntimeCoordinator] refreshRuntime', {
+    source: result.source,
+    changedFields: result.changedFields,
+    factors: factors.length,
+    events: events.length,
+  })
+  return result
+}
 
-  if (options.context) return execute(options.context)
-
-  if (options.forceJxbk && !options.skipJxbkRefresh) {
-    return jxbkThemeFeed.refreshBlocks({ force: options.force }).then(() =>
-      execute(buildDefaultContext(options.timestamp, options.snapshotId)),
+export function refreshRuntime(
+  options: ThemeRuntimeRefreshOptions & { context: ThemeSourceContext },
+): ThemeRuntimeRefreshResult
+export async function refreshRuntime(options: ThemeRuntimeRefreshOptions): Promise<ThemeRuntimeRefreshResult>
+export function refreshRuntime(
+  options: ThemeRuntimeRefreshOptions,
+): ThemeRuntimeRefreshResult | Promise<ThemeRuntimeRefreshResult> {
+  if (options.context) {
+    return executeWithFactors(
+      options.context,
+      buildThemeFactors(options.context),
+      options,
+      THEME_FACTOR_VERSION,
     )
   }
 
-  return execute(buildDefaultContext(options.timestamp, options.snapshotId))
+  return themeHeatFeed.refresh({ force: options.force }).then((snapshot) => {
+    const context = buildDefaultContext(snapshot.computedAt || options.timestamp, options.snapshotId)
+    return executeWithFactors(
+      context,
+      themeHeatFeed.getRuntimeFactors(),
+      options,
+      snapshot.factorVersion || 'theme-market-v1',
+    )
+  })
 }

@@ -1,7 +1,7 @@
 // src/services/ThemeCorrelationAnalyzer.ts
 import { dataLayer } from './DataLayer'
 import { analyzeThemeCorrelationInput } from './theme/ThemeCorrelationEngine'
-import { themeFacade } from './theme/ThemeFacade'
+import { themeHeatFeed } from './theme/ThemeHeatFeed'
 
 export interface StockCorrelation {
   code: string
@@ -84,11 +84,10 @@ export class ThemeCorrelationAnalyzer {
       return cached
     }
 
-    // 获取该板块的个股
-    const stockMap = themeFacade.getThemeStockMap()
-    const rawStocks = Object.values(stockMap).filter((stock: any) =>
-      stock.blocks?.includes(themeName),
-    ) as any[]
+    const rawStocks = await themeHeatFeed.loadThemeStocks(themeCode, {
+      force: options?.force,
+      limit: 200,
+    })
 
     if (rawStocks.length < 2) {
       return this.getEmptyCorrelation(themeCode, themeName)

@@ -38,7 +38,7 @@ vi.mock('../theme/ThemeFacade', () => ({
           themeId: 'BKAI',
           themeName: '人工智能',
           timestamp: 1713751200000,
-          source: 'theme_legacy_adapter',
+          source: 'theme',
           alertType: 'volume_surge',
           stockCodes: ['000001', '000002'],
           metrics: { volumeRatio: 3.2 },
@@ -47,23 +47,13 @@ vi.mock('../theme/ThemeFacade', () => ({
         },
       ],
     })),
-    getJxbkBlocks: vi.fn(() => [
+    getHotThemes: vi.fn(() => [
       {
-        code: 'BKAI',
+        id: 'AI',
         name: '人工智能',
-        strength: 4200,
-        change: 3,
-        mainNetInflow: 200000000,
-        bigMoney300: 0,
-        institutionBuy: 0,
-        volumeRatio: 3.2,
-        ztCount: 2,
+        heatScore: 82,
       },
     ]),
-    getThemeStockMap: vi.fn(() => ({
-      '000001': { code: '000001', name: '样本一', blocks: ['人工智能'] },
-      '000002': { code: '000002', name: '样本二', blocks: ['人工智能'] },
-    })),
   },
 }))
 
@@ -75,7 +65,7 @@ import { dataLayer } from '../DataLayer'
 import { alertService } from '../alertService'
 import { themeFacade } from '../theme/ThemeFacade'
 
-describe('alertService V3 compatibility', () => {
+describe('alertService runtime events', () => {
   beforeEach(async () => {
     dataLayer.reset()
     alertService.destroy()
@@ -88,25 +78,7 @@ describe('alertService V3 compatibility', () => {
     alertService.destroy()
   })
 
-  it('ingests unified runtime theme events without rebuilding legacy block events', async () => {
-    dataLayer.updateJxbkBlocks([
-      {
-        code: 'BKAI',
-        name: '人工智能',
-        strength: 4200,
-        change: 3,
-        mainNetInflow: 200000000,
-        bigMoney300: 0,
-        institutionBuy: 0,
-        volumeRatio: 3.2,
-        ztCount: 2,
-      },
-    ])
-    dataLayer.updateJxbkStocks([
-      { code: '000001', name: '样本一', blocks: ['人工智能'] } as any,
-      { code: '000002', name: '样本二', blocks: ['人工智能'] } as any,
-    ])
-
+  it('ingests unified runtime theme events', async () => {
     await alertService.checkAll()
 
     const alerts = alertService.getAlerts()
@@ -142,8 +114,8 @@ describe('alertService V3 compatibility', () => {
   })
 
   it('does not use suspicious capped volume ratio for stock speed alerts', async () => {
-    vi.mocked(themeFacade.getThemeStockMap).mockReturnValue({
-      '000001': {
+    dataLayer.updateStocks([
+      {
         code: '000001',
         name: '样本一',
         speed: 4,
@@ -157,9 +129,8 @@ describe('alertService V3 compatibility', () => {
           capped: true,
           reason: 'ratio_capped',
         },
-        blocks: ['人工智能'],
       },
-    })
+    ] as any)
 
     await alertService.checkAll()
 

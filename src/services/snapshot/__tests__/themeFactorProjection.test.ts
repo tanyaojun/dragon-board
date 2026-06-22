@@ -193,4 +193,13 @@ describe('theme factor snapshot projection', () => {
     expect(row.momentumScore).toBe(77)
     expect(row.rotationState).toBe('mainline')
   })
+
+  it('does not build sector rows from retired block cache fallback', () => {
+    const record = createRecord({})
+    const buildContext = {
+      jxbkBlocks: [{ code: 'BKAI', name: '人工智能', strength: 88 }],
+    } as any
+
+    expect(buildSnapshotSectorRows(record, buildContext)).toEqual([])
+  })
 })

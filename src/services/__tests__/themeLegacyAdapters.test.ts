@@ -3,7 +3,7 @@ import type { RotationAnalysis } from '@/types/core'
 import { dataLayer } from '../DataLayer'
 import { themeFacade } from '../theme/ThemeFacade'
 import { themeRepository } from '../theme/ThemeRepository'
-import { jxbkThemeFeed } from '../theme/JxbkThemeFeed'
+import { themeHeatFeed } from '../theme/ThemeHeatFeed'
 import { rotationService } from '../rotationService'
 import { sectorAnalyzer } from '../sectorAnalyzer'
 
@@ -60,7 +60,7 @@ const rotationSummary: RotationAnalysis = {
   },
 }
 
-describe('theme legacy adapters', () => {
+describe('theme service adapters', () => {
   beforeEach(async () => {
     dataLayer.reset()
     rotationService.stopAutoAnalysis()
@@ -69,7 +69,7 @@ describe('theme legacy adapters', () => {
     vi.restoreAllMocks()
   })
 
-  it('rotationService uses runtime rotation summary without reading JXBK fallback data', () => {
+  it('rotationService uses the runtime rotation summary', () => {
     const refreshSpy = vi.spyOn(themeFacade, 'refreshRuntime').mockReturnValue({
       factors: [],
       exposures: { byCode: new Map(), byTheme: new Map() },
@@ -88,16 +88,13 @@ describe('theme legacy adapters', () => {
       themeStocks: new Map(),
       stockThemes: new Map(),
       stocks: [],
-      jxbkBlocks: [],
       rotationAnalysis: null,
       correlations: new Map(),
     })
-    const jxbkSpy = vi.spyOn(dataLayer, 'getJxbkBlocksSorted')
 
     expect(rotationService.analyzeAll()).toEqual(rotationSummary)
     expect(rotationService.forceAnalyze()).toEqual(rotationSummary)
     expect(refreshSpy).toHaveBeenCalledTimes(2)
-    expect(jxbkSpy).not.toHaveBeenCalled()
   })
 
   it('records rotation analysis through the shared refresh scheduler', async () => {
@@ -120,7 +117,6 @@ describe('theme legacy adapters', () => {
       themeStocks: new Map(),
       stockThemes: new Map(),
       stocks: [],
-      jxbkBlocks: [],
       rotationAnalysis: null,
       correlations: new Map(),
     })
@@ -161,14 +157,14 @@ describe('theme legacy adapters', () => {
     })
 
     expect(sectorAnalyzer.syncThemesToStocks()).toBe(3)
-    await sectorAnalyzer.forceRefreshJxbk()
+    await sectorAnalyzer.runUpdate()
     await sectorAnalyzer.syncData()
 
     expect(refreshSpy).toHaveBeenCalledTimes(3)
     expect(refreshSpy.mock.calls.every(([options]) => options?.source === 'sectorAnalyzer')).toBe(true)
   })
 
-  it('sectorAnalyzer forceRefreshJxbk does not refresh after destroy', async () => {
+  it('sectorAnalyzer does not refresh after destroy', async () => {
     const refreshSpy = vi.spyOn(themeFacade, 'refreshRuntime').mockReturnValue({
       factors: [],
       exposures: { byCode: new Map(), byTheme: new Map() },
@@ -183,17 +179,15 @@ describe('theme legacy adapters', () => {
     })
 
     sectorAnalyzer.destroy()
-    await sectorAnalyzer.forceRefreshJxbk()
+    await sectorAnalyzer.runUpdate()
 
     expect(refreshSpy).not.toHaveBeenCalled()
   })
 
-  it('sectorAnalyzer sector stock APIs delegate to JxbkThemeFeed', async () => {
-    const loadSpy = vi.spyOn(jxbkThemeFeed, 'loadSectorStocks').mockResolvedValue([
-      { code: '000001', name: '样本一', blocks: ['人工智能'] } as any,
+  it('sectorAnalyzer sector stock APIs delegate to ThemeHeatFeed', async () => {
+    const loadSpy = vi.spyOn(themeHeatFeed, 'loadThemeStocks').mockResolvedValue([
+      { code: '000001', name: '样本一', role: 'leader', qualityFlags: [] } as any,
     ])
-    const clearSpy = vi.spyOn(jxbkThemeFeed, 'clearSectorStockCache').mockImplementation(() => {})
-    vi.spyOn(jxbkThemeFeed, 'getSectorStockCacheStats').mockReturnValue({ cachedSectors: 2 })
     vi.spyOn(themeRepository, 'getThemeBaseStatus').mockReturnValue({
       source: 'mongodb',
       loaded: true,
@@ -203,17 +197,13 @@ describe('theme legacy adapters', () => {
       mappingCount: 12215,
     })
 
-    await expect(sectorAnalyzer.loadSectorStocks('BKAI', '人工智能', true)).resolves.toHaveLength(1)
-    expect(loadSpy).toHaveBeenCalledWith('BKAI', '人工智能', true)
-    expect(sectorAnalyzer.getStats().cachedSectors).toBe(2)
+    await expect(sectorAnalyzer.loadSectorStocks('AI', '人工智能', true)).resolves.toHaveLength(1)
+    expect(loadSpy).toHaveBeenCalledWith('AI', { force: true, limit: 200 })
     expect(sectorAnalyzer.getStats()).toMatchObject({
-      version: '11.0.0',
+      themeHeatSource: 'market_aggregate',
       themeBaseSource: 'mongodb',
       mappedStocks: 12215,
     })
-
-    sectorAnalyzer.clearCache()
-    expect(clearSpy).toHaveBeenCalled()
   })
 
   it('sectorAnalyzer syncs tag and reason data through themeRepository public getters', async () => {

@@ -27,15 +27,15 @@
             </div>
           </div>
           <div class="node-metrics">
-            <span class="change" :class="sector.change >= 0 ? 'up' : 'down'">
-              {{ sector.change > 0 ? '+' : '' }}{{ sector.change.toFixed(2) }}%
+            <span class="change">
+              动量 {{ sector.change.toFixed(0) }}
             </span>
-            <span class="inflow" :class="sector.mainNetInflow >= 0 ? 'inflow' : 'outflow'">
-              {{ formatMoney(sector.mainNetInflow) }}
+            <span class="inflow" :class="(sector.mainNetInflow || 0) >= 0 ? 'inflow' : 'outflow'">
+              {{ sector.mainNetInflow === null ? '资金降级' : formatMoney(sector.mainNetInflow) }}
             </span>
           </div>
           <div class="node-progress" v-if="sector.strength">
-            <div class="progress-bar" :style="{ width: (sector.strength / 6000 * 100) + '%' }"></div>
+            <div class="progress-bar" :style="{ width: sector.strength + '%' }"></div>
           </div>
         </div>
 
@@ -62,10 +62,10 @@
             📈 {{ selectedSector.name }} 成分股
             <span class="sector-metrics">
               <span class="badge" :class="getStrengthClass(selectedSector.strength)">
-                强度 {{ selectedSector.strength }}
+                热度 {{ selectedSector.strength }}
               </span>
               <span class="badge" :class="selectedSector.change >= 0 ? 'up' : 'down'">
-                涨幅 {{ selectedSector.change > 0 ? '+' : '' }}{{ selectedSector.change.toFixed(2) }}%
+                动量 {{ selectedSector.change.toFixed(0) }}
               </span>
             </span>
           </h4>
@@ -78,10 +78,6 @@
                 <option value="change">涨跌幅</option>
                 <option value="volumeRatio">量比</option>
                 <option value="mainNetInflow">主力净额</option>
-                <option value="bigMoney300">300W大单</option>
-                <option value="institutionBuy">机构增仓</option>
-                <option value="leadTimes">领次</option>
-                <option value="popularity">人气</option>
               </select>
               <button class="sort-btn" @click="sortDesc = !sortDesc">
                 {{ sortDesc ? '↓' : '↑' }}
@@ -101,11 +97,7 @@
                 <th @click="setSort('change')">涨跌幅</th>
                 <th @click="setSort('volumeRatio')">量比</th>
                 <th @click="setSort('mainNetInflow')">主力净额</th>
-                <th @click="setSort('bigMoney300')">300W大单</th>
                 <th>领涨状态</th>
-                <th>连板</th>
-                <th @click="setSort('popularity')">人气</th>
-                <th>所属板块</th>
               </tr>
             </thead>
             <tbody>
@@ -123,29 +115,11 @@
                 <td :class="(stock.mainNetInflow || 0) >= 0 ? 'inflow' : 'outflow'">
                   {{ formatMoney(stock.mainNetInflow) }}
                 </td>
-                <td :class="(stock.bigMoney300 || 0) >= 0 ? 'inflow' : 'outflow'">
-                  {{ formatMoney(stock.bigMoney300) }}
-                </td>
                 <td>
                   <span v-if="stock.leadStatus" class="lead-badge"
                     :class="{ 'poban': stock.leadStatus.includes('破板') }">
                     {{ stock.leadStatus }}
                   </span>
-                </td>
-                <td>
-                  <span v-if="stock.lianban" class="lianban-badge" :class="getLianbanClass(stock.lianban)">
-                    {{ stock.lianban }}
-                  </span>
-                </td>
-                <td>{{ stock.popularity || '-' }}</td>
-                <td>
-                  <div class="blocks-preview">
-                    <span v-for="block in (stock.blocks || []).slice(0, 2)" :key="block" class="block-tag">{{ block
-                    }}</span>
-                    <span v-if="(stock.blocks?.length || 0) > 2" class="block-tag more">
-                      +{{ stock.blocks.length - 2 }}
-                    </span>
-                  </div>
                 </td>
               </tr>
             </tbody>
@@ -172,7 +146,6 @@
 <script setup lang="ts">
 import { debugLog } from '@/utils/logger'
 import { ref, computed, onMounted, watch } from 'vue'
-import { dataLayer } from '@/services/DataLayer'
 import { sectorAnalyzer } from '@/services/sectorAnalyzer'
 import { useUIStore } from '@/stores/ui'
 import { themeFacade } from '@/services/theme/ThemeFacade'
@@ -193,6 +166,7 @@ const treePage = ref(1)
 const pageSize = ref(10)
 const selectedSector = ref<any>(null)
 const loadingStocks = ref(false)  // 添加加载状态
+const sectorStockRows = ref<any[]>([])
 
 // 表格状态
 const stockSearch = ref('')
@@ -207,15 +181,14 @@ const tableWrapperRef = ref<HTMLElement>()
 
 // ========== 左侧题材树数据 ==========
 const allSectors = computed(() => {
-  const blocks = themeFacade.getJxbkBlocks()
-  return blocks.map((block: any) => ({
-    id: block.code,
-    name: block.name,
-    strength: block.strength || 0,
-    change: block.change || 0,
-    mainNetInflow: block.mainNetInflow || 0,
-    ztCount: block.ztCount || 0,
-    volumeRatio: block.volumeRatio || 0,
+  return themeFacade.getThemeSummaries(200).map(theme => ({
+    id: theme.id,
+    name: theme.name,
+    strength: theme.heatScore,
+    change: theme.momentumScore,
+    mainNetInflow: theme.mainNetInflow,
+    ztCount: theme.ztCount,
+    volumeRatio: theme.volumeRatio,
   }))
 })
 
@@ -243,29 +216,7 @@ const treeTotalPages = computed(() =>
 )
 
 // ========== 右侧成分股数据 ==========
-const sectorStocks = computed(() => {
-  if (!selectedSector.value) return []
-  const stockMap = themeFacade.getThemeStockMap()
-
-  return Object.values(stockMap)
-    .filter((stock: any) =>
-      stock.blocks?.includes(selectedSector.value.name)
-    )
-    .map((stock: any) => ({
-      code: stock.code,
-      name: stock.name,
-      change: stock.change || 0,
-      volumeRatio: stock.volumeRatio || 0,
-      mainNetInflow: stock.mainNetInflow || 0,
-      bigMoney300: stock.bigMoney300 || 0,
-      institutionBuy: stock.institutionBuy || 0,
-      leadTimes: stock.leadTimes || 0,
-      leadStatus: stock.leadStatus || '',
-      lianban: stock.lianban || '',
-      popularity: stock.popularity || 0,
-      blocks: stock.blocks || [],
-    }))
-})
+const sectorStocks = computed(() => sectorStockRows.value)
 
 // 过滤股票
 const filteredStocks = computed(() => {
@@ -307,6 +258,10 @@ async function selectSector(sector: any) {
   try {
     // ✅ 强制刷新，不依赖缓存
     const stocks = await sectorAnalyzer.loadSectorStocks(sector.id, sector.name, true)  // 加个 force 参数
+    sectorStockRows.value = stocks.map(stock => ({
+      ...stock,
+      leadStatus: stock.role === 'leader' ? '龙头' : stock.role === 'core' ? '核心' : '',
+    }))
 
     // 更新到本地数据
     if (stocks && stocks.length > 0) {
@@ -337,18 +292,18 @@ function setSort(field: string) {
 }
 
 function getStrengthClass(strength: number): string {
-  if (strength >= 4000) return 's'
-  if (strength >= 3000) return 'a'
-  if (strength >= 2000) return 'b'
-  if (strength >= 1000) return 'c'
+  if (strength >= 80) return 's'
+  if (strength >= 65) return 'a'
+  if (strength >= 50) return 'b'
+  if (strength >= 35) return 'c'
   return 'd'
 }
 
 function formatStrength(strength: number): string {
-  if (strength >= 4000) return 'S'
-  if (strength >= 3000) return 'A'
-  if (strength >= 2000) return 'B'
-  if (strength >= 1000) return 'C'
+  if (strength >= 80) return 'S'
+  if (strength >= 65) return 'A'
+  if (strength >= 50) return 'B'
+  if (strength >= 35) return 'C'
   return 'D'
 }
 

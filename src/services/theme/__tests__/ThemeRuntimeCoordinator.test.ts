@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { dataLayer } from '@/services/DataLayer'
 import { refreshThemeFacadeState, themeFacade } from '../ThemeFacade'
-import { jxbkThemeFeed } from '../JxbkThemeFeed'
+import { themeHeatFeed } from '../ThemeHeatFeed'
 import { refreshRuntime } from '../ThemeRuntimeCoordinator'
 import { themeRuntimeStore } from '../ThemeRuntimeStore'
 import { refreshResourceLocks } from '../../refresh/RefreshResourceLocks'
@@ -14,19 +14,6 @@ function context(timestamp = 1713751200000): ThemeSourceContext {
     themeStocks: new Map([['AI', ['000001']]]),
     stockThemes: new Map([['000001', ['AI']]]),
     stocks: [{ code: '000001', name: '样本一', change: 10, volumeRatio: 3, leadStatus: '龙一' }],
-    jxbkBlocks: [
-      {
-        code: 'BKAI',
-        name: '人工智能',
-        strength: 4200,
-        change: 4,
-        mainNetInflow: 180000000,
-        bigMoney300: 0,
-        institutionBuy: 0,
-        volumeRatio: 2.4,
-        ztCount: 1,
-      },
-    ],
     rotationAnalysis: null,
     correlations: new Map(),
   }
@@ -67,13 +54,41 @@ describe('ThemeRuntimeCoordinator', () => {
     expect(second.changedFields).toEqual([])
   })
 
-  it('refreshes JXBK feed when forceJxbk is requested without explicit context', async () => {
-    const spy = vi.spyOn(jxbkThemeFeed, 'refreshBlocks').mockResolvedValue([])
+  it('uses remote market factors and synchronizes DataLayer hot themes', async () => {
+    const localFactor = refreshRuntime({ source: 'test', context: context(), emitAlerts: false }).factors[0]
+    const marketFactor = { ...localFactor, source: 'market_aggregate' as const, heatScore: 82 }
+    vi.spyOn(themeHeatFeed, 'refresh').mockResolvedValue({
+      computedAt: marketFactor.timestamp,
+      cacheBucket: 'bucket',
+      factorVersion: 'theme-market-v1',
+      mappingVersion: 'theme-v8-test',
+      factors: [],
+      quality: {},
+      sources: {},
+    })
+    vi.spyOn(themeHeatFeed, 'getRuntimeFactors').mockReturnValue([marketFactor])
+    vi.spyOn(themeHeatFeed, 'getSnapshot').mockReturnValue({
+      computedAt: marketFactor.timestamp,
+      cacheBucket: 'bucket',
+      factorVersion: 'theme-market-v1',
+      mappingVersion: 'theme-v8-test',
+      factors: [{ ...marketFactor, fundScore: null, netInflow: null, rankEligible: true, degraded: true } as any],
+      quality: {},
+      sources: {},
+      stale: false,
+      lastError: null,
+    })
 
-    await refreshRuntime({ source: 'manual', forceJxbk: true, emitAlerts: false })
+    const result = await themeFacade.refreshRuntime({ source: 'manual', syncStocks: true })
 
-    expect(spy).toHaveBeenCalledWith({ force: undefined })
-    spy.mockRestore()
+    expect(result.factors[0].source).toBe('market_aggregate')
+    expect(dataLayer.getHotThemes()[0]).toMatchObject({
+      id: 'AI',
+      heatScore: 82,
+      fundScore: null,
+      mainNetInflow: null,
+      degraded: true,
+    })
   })
 
   it('syncs projected stock themes back to DataLayer when requested', () => {
@@ -107,17 +122,15 @@ describe('ThemeRuntimeCoordinator', () => {
 
   it('serializes async facade runtime refreshes through the theme resource', async () => {
     const releases: Array<() => void> = []
-    const spy = vi.spyOn(jxbkThemeFeed, 'refreshBlocks').mockImplementation(
-      () =>
-        new Promise<any[]>((resolve) => {
-          releases.push(() => resolve([]))
-        }),
+    const localFactor = refreshRuntime({ source: 'test', context: context(), emitAlerts: false }).factors[0]
+    vi.spyOn(themeHeatFeed, 'getRuntimeFactors').mockReturnValue([{ ...localFactor, source: 'market_aggregate' }])
+    const spy = vi.spyOn(themeHeatFeed, 'refresh').mockImplementation(
+      () => new Promise<any>((resolve) => releases.push(() => resolve({ factors: [] }))),
     )
 
     try {
       const first = themeFacade.refreshRuntime({
         source: 'manual',
-        forceJxbk: true,
         emitAlerts: false,
       }) as Promise<any>
 
@@ -127,7 +140,6 @@ describe('ThemeRuntimeCoordinator', () => {
 
       const second = themeFacade.refreshRuntime({
         source: 'manual',
-        forceJxbk: true,
         emitAlerts: false,
       }) as Promise<any>
       await Promise.resolve()
