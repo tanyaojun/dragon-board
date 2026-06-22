@@ -437,6 +437,7 @@ import { usePanel } from '@/composables/usePanel'
 import { useUIStore } from '@/stores/ui'
 import { EventManager } from '@/utils/eventManager'
 import { AppEvents } from '@/types'
+import { useThemeRuntimeSnapshot } from '@/composables/useThemeRuntimeSnapshot'
 
 const props = defineProps<{
   visible: boolean
@@ -478,6 +479,7 @@ const stockPage = ref(1)
 const stockPageSize = ref(20)
 const lastUpdate = ref(Date.now())
 const selectedStock = ref<any>(null)  // 选中的个股
+const themeRuntime = useThemeRuntimeSnapshot()
 
 // DOM 引用
 const treeContentRef = ref<HTMLElement>()
@@ -866,7 +868,8 @@ async function preloadHotThemes() {
 
 // ========== 计算属性 ==========
 const allThemes = computed(() => {
-  const rotation = themeFacade.getRotationSummary() || dataLayer.getCurrentRotation()
+  if (!themeRuntime.value.factors.length) return []
+  const rotation = themeRuntime.value.rotationSummary || themeFacade.getRotationSummary() || dataLayer.getCurrentRotation()
   const mainLineIds = new Set((rotation?.mainLines || []).map(m => m.themeId))
 
   const result = themeFacade.getThemeSummaries(200).map(theme => {

@@ -50,7 +50,7 @@ export interface ThemeFactorSnapshot {
   heatScore: number
   momentumScore: number
   breadthScore: number
-  fundScore: number
+  fundScore: number | null
   leadershipScore: number
   correlationScore: number
   crowdingRisk: number
@@ -59,7 +59,7 @@ export interface ThemeFactorSnapshot {
   stockCount: number
   ztCount: number
   leaderCount: number
-  netInflow: number
+  netInflow: number | null
   strength: number
   volumeRatio: number
   rank: number

@@ -149,6 +149,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { sectorAnalyzer } from '@/services/sectorAnalyzer'
 import { useUIStore } from '@/stores/ui'
 import { themeFacade } from '@/services/theme/ThemeFacade'
+import { useThemeRuntimeSnapshot } from '@/composables/useThemeRuntimeSnapshot'
 
 // Props
 const props = defineProps<{
@@ -167,6 +168,7 @@ const pageSize = ref(10)
 const selectedSector = ref<any>(null)
 const loadingStocks = ref(false)  // 添加加载状态
 const sectorStockRows = ref<any[]>([])
+const themeRuntime = useThemeRuntimeSnapshot()
 
 // 表格状态
 const stockSearch = ref('')
@@ -181,6 +183,7 @@ const tableWrapperRef = ref<HTMLElement>()
 
 // ========== 左侧题材树数据 ==========
 const allSectors = computed(() => {
+  if (!themeRuntime.value.factors.length) return []
   return themeFacade.getThemeSummaries(200).map(theme => ({
     id: theme.id,
     name: theme.name,

@@ -129,6 +129,8 @@ class Settings(BaseModel):
     theme_heat_failed_batch_retries: int = Field(default=1)
     theme_heat_quote_timeout_ms: int = Field(default=10000)
     theme_heat_fund_timeout_ms: int = Field(default=12000)
+    theme_heat_quote_collection_timeout_ms: int = Field(default=90000)
+    theme_heat_fund_collection_timeout_ms: int = Field(default=30000)
     data_source: DataSourceConfig = Field(default_factory=DataSourceConfig)
 
     def model_post_init(self, __context: Any) -> None:
@@ -384,6 +386,20 @@ class Settings(BaseModel):
         self.theme_heat_fund_timeout_ms = max(
             100,
             _env_int("QUANT_BOARD_THEME_HEAT_FUND_TIMEOUT_MS", self.theme_heat_fund_timeout_ms),
+        )
+        self.theme_heat_quote_collection_timeout_ms = max(
+            1000,
+            _env_int(
+                "QUANT_BOARD_THEME_HEAT_QUOTE_COLLECTION_TIMEOUT_MS",
+                self.theme_heat_quote_collection_timeout_ms,
+            ),
+        )
+        self.theme_heat_fund_collection_timeout_ms = max(
+            1000,
+            _env_int(
+                "QUANT_BOARD_THEME_HEAT_FUND_COLLECTION_TIMEOUT_MS",
+                self.theme_heat_fund_collection_timeout_ms,
+            ),
         )
 
     def ensure_dirs(self) -> None:

@@ -1081,7 +1081,7 @@ Dragon Board `ThemeDataService` 的正式读口。返回结构兼容旧 `ThemeMa
 
 ### `GET /api/themes/heat?force=false`
 
-返回基于 MongoDB 全市场题材映射计算的 `theme-market-v1` factors。基础行情固定使用腾讯批量行情（50 只/批、有限并发），东财只提供资金字段；服务端缓存 5 分钟并合并同桶并发请求。`force=true` 跳过缓存。公开响应不包含全市场逐股 quote/fund map。
+返回基于 MongoDB 全市场题材映射计算的 `theme-market-v1` factors。基础行情固定使用腾讯批量行情（50 只/批、有限并发、默认整次预算 90 秒），东财只提供资金字段（默认整次预算 30 秒）；服务端缓存 5 分钟并合并同桶并发请求。`force=true` 跳过缓存。公开响应不包含全市场逐股 quote/fund map。
 
 当腾讯覆盖率低于门槛时返回结构化 `503`；如果存在上次成功结果，响应携带 `staleData`。东财资金不可用时仍可返回降级 factors，但 `fundScore/mainNetInflow=null`，不得转成 0。
 

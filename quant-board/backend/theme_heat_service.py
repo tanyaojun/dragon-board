@@ -258,8 +258,16 @@ def get_theme_heat_service() -> ThemeHeatService:
             proxy_base = settings.snapshot_collector_proxy_base_url
             _theme_heat_service = ThemeHeatService(
                 MongoThemeRepository(database),
-                TencentBasicQuoteProvider(proxy_base, **provider_options),
-                EastmoneyFundFlowProvider(proxy_base, **provider_options),
+                TencentBasicQuoteProvider(
+                    proxy_base,
+                    collection_timeout_ms=settings.theme_heat_quote_collection_timeout_ms,
+                    **provider_options,
+                ),
+                EastmoneyFundFlowProvider(
+                    proxy_base,
+                    collection_timeout_ms=settings.theme_heat_fund_collection_timeout_ms,
+                    **provider_options,
+                ),
                 cache_ttl_seconds=settings.theme_heat_cache_ttl_seconds,
                 quote_timeout_ms=settings.theme_heat_quote_timeout_ms,
                 fund_timeout_ms=settings.theme_heat_fund_timeout_ms,

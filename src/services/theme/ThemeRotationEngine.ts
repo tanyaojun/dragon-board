@@ -13,10 +13,10 @@ type RotationBuildOptions = {
 }
 
 function directionFor(factor: ThemeFactorSnapshot): RotationDirection {
-  if (factor.netInflow > 0 || factor.rotationState === 'inflow' || factor.rotationState === 'mainline') {
+  if ((factor.netInflow ?? 0) > 0 || factor.rotationState === 'inflow' || factor.rotationState === 'mainline') {
     return 'inflow'
   }
-  if (factor.netInflow < 0 || factor.rotationState === 'outflow' || factor.rotationState === 'cooling') {
+  if ((factor.netInflow ?? 0) < 0 || factor.rotationState === 'outflow' || factor.rotationState === 'cooling') {
     return 'outflow'
   }
   return 'neutral'
@@ -105,14 +105,14 @@ export function buildThemeRotationSummary(
     const persistentDays = persistentDaysFor(factor, direction, previousStatus)
     const isMainLine =
       factor.rotationState === 'mainline' ||
-      (persistentDays >= 2 && factor.heatScore >= 70 && factor.netInflow >= 0)
+      (persistentDays >= 2 && factor.heatScore >= 70 && (factor.netInflow ?? 0) >= 0)
 
     return {
       themeId: factor.themeId,
       themeName: factor.themeName,
-      inflow: Math.max(0, factor.netInflow),
-      outflow: Math.max(0, -factor.netInflow),
-      netInflow: factor.netInflow,
+      inflow: Math.max(0, factor.netInflow ?? 0),
+      outflow: Math.max(0, -(factor.netInflow ?? 0)),
+      netInflow: factor.netInflow ?? 0,
       avgChange: factor.momentumScore,
       totalTurnover: 0,
       ztCount: factor.ztCount,

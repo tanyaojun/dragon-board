@@ -97,6 +97,49 @@ def test_eastmoney_provider_discards_basic_quote_fields(monkeypatch) -> None:
     }
 
 
+def test_eastmoney_provider_stops_after_first_systemic_failure_wave(monkeypatch) -> None:
+    calls = 0
+
+    def always_fail(url: str, timeout_s: float) -> dict:
+        nonlocal calls
+        del url, timeout_s
+        calls += 1
+        raise OSError("eastmoney unavailable")
+
+    monkeypatch.setattr("backend.snapshot_collector.providers._http_get_json", always_fail)
+    provider = EastmoneyFundFlowProvider(
+        "http://127.0.0.1:3000",
+        batch_size=10,
+        max_concurrency=3,
+        failed_batch_retries=1,
+    )
+
+    rows, health = provider.collect([f"{index:06d}" for index in range(80)])
+
+    assert rows == {}
+    assert calls == 6
+    assert health.ok is False
+    assert health.failed_batches == list(range(8))
+
+
+def test_provider_stops_scheduling_batches_after_collection_budget(monkeypatch) -> None:
+    fake_http = FakeBatchHttp()
+    monkeypatch.setattr("backend.snapshot_collector.providers._http_get_json", fake_http)
+    provider = TencentBasicQuoteProvider(
+        "http://127.0.0.1:3000",
+        batch_size=10,
+        max_concurrency=3,
+        collection_timeout_ms=1,
+    )
+
+    rows, health = provider.collect([f"{index:06d}" for index in range(80)])
+
+    assert len(rows) == 30
+    assert len(fake_http.batch_sizes) == 3
+    assert health.failed_batches == [3, 4, 5, 6, 7]
+    assert "collection timeout" in health.error
+
+
 def test_failed_batch_is_retried_once(monkeypatch) -> None:
     fake_http = FakeBatchHttp(fail_once_for="000000")
     monkeypatch.setattr("backend.snapshot_collector.providers._http_get_json", fake_http)
@@ -131,6 +174,8 @@ def test_theme_heat_settings_read_and_clamp_environment(monkeypatch) -> None:
     monkeypatch.setenv("QUANT_BOARD_THEME_HEAT_FAILED_BATCH_RETRIES", "0")
     monkeypatch.setenv("QUANT_BOARD_THEME_HEAT_QUOTE_TIMEOUT_MS", "20")
     monkeypatch.setenv("QUANT_BOARD_THEME_HEAT_FUND_TIMEOUT_MS", "30")
+    monkeypatch.setenv("QUANT_BOARD_THEME_HEAT_QUOTE_COLLECTION_TIMEOUT_MS", "90")
+    monkeypatch.setenv("QUANT_BOARD_THEME_HEAT_FUND_COLLECTION_TIMEOUT_MS", "80")
 
     settings = Settings()
 
@@ -140,3 +185,5 @@ def test_theme_heat_settings_read_and_clamp_environment(monkeypatch) -> None:
     assert settings.theme_heat_failed_batch_retries == 1
     assert settings.theme_heat_quote_timeout_ms == 100
     assert settings.theme_heat_fund_timeout_ms == 100
+    assert settings.theme_heat_quote_collection_timeout_ms == 1000
+    assert settings.theme_heat_fund_collection_timeout_ms == 1000

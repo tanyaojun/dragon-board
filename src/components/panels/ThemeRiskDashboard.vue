@@ -277,6 +277,7 @@ import { ref, computed, watch } from 'vue'
 import { dataLayer } from '@/services/DataLayer'
 import { themeFacade } from '@/services/theme/ThemeFacade'
 import { usePanel } from '@/composables/usePanel'
+import { useThemeRuntimeSnapshot } from '@/composables/useThemeRuntimeSnapshot'
 import { EMOTION_PHASE_BY_NAME } from '@/types/emotion'
 import type { ThemeFactorSnapshot, ThemeEvent, ThemeQualityFlag } from '@/services/theme/types'
 import {
@@ -309,6 +310,7 @@ const loading = ref(false)
 const researchLoading = ref(false)
 const lastUpdate = ref(Date.now())
 const themeResearch = ref<ThemeResearchExplanation>(buildThemeResearchExplanation({ available: false, reason: 'not_loaded' }))
+const themeRuntime = useThemeRuntimeSnapshot()
 
 // ========== 情绪呼吸数据 ==========
 const breathSentiment = computed(() => {
@@ -375,12 +377,12 @@ const marketStats = computed(() => {
 
 // ========== 题材因子 (从 themeFacade) ==========
 const factors = computed<ThemeFactorSnapshot[]>(() => {
-  try { return themeFacade.getThemeFactors() || [] }
+  try { return themeRuntime.value.factors || [] }
   catch { return [] }
 })
 
 const events = computed<ThemeEvent[]>(() => {
-  try { return themeFacade.getThemeEvents() || [] }
+  try { return themeRuntime.value.events || [] }
   catch { return [] }
 })
 

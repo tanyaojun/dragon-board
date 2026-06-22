@@ -261,6 +261,7 @@ import SectorDetail from './SectorDetail.vue'
 import ThemeCorrelationPanel from './ThemeCorrelationPanel.vue'
 import { useUIStore } from '../../stores/ui'
 import { themeFacade } from '../../services/theme/ThemeFacade'
+import { useThemeRuntimeSnapshot } from '../../composables/useThemeRuntimeSnapshot'
 
 // 状态
 const viewMode = ref<'grid' | 'tree'>('grid') // 默认网格视图
@@ -270,6 +271,7 @@ const error = ref<string | null>(null)
 const loading = ref(false)
 const version = '6.0.0'
 const view = ref<'hot' | 'rotation' | 'alerts' | 'correlation'>('hot')
+const themeRuntime = useThemeRuntimeSnapshot()
 
 // 题材详情弹窗状态
 const sectorDetail = ref<{
@@ -312,15 +314,16 @@ const { panelRef, panelStyle } = usePanel({
 
 // ========== 数据源 ==========
 const themeSummaries = computed(() => {
+  if (!themeRuntime.value.factors.length) return []
   return themeFacade.getThemeSummaries(20)
 })
 
 const lastUpdate = computed(() => {
-  return themeFacade.getThemeLastUpdate()
+  return themeRuntime.value.lastUpdate || themeFacade.getThemeLastUpdate()
 })
 
 const rotationData = computed(() => {
-  return themeFacade.getRotationSummary() || ((dataLayer as any).state?.analysis?.rotation?.current as RotationAnalysis | null)
+  return themeRuntime.value.rotationSummary || themeFacade.getRotationSummary() || ((dataLayer as any).state?.analysis?.rotation?.current as RotationAnalysis | null)
 })
 
 const alerts = computed(() => {

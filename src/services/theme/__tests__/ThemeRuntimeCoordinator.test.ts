@@ -120,6 +120,24 @@ describe('ThemeRuntimeCoordinator', () => {
     expect(themeFacade.getRuntimeSnapshot().inputSignature).toBe(result.inputSignature)
   })
 
+  it('exposes the current factors while runtime subscribers are notified', () => {
+    const nextContext: ThemeSourceContext = {
+      ...context(),
+      themes: [{ id: 'NEW', name: '新题材' }],
+      themeStocks: new Map([['NEW', ['000001']]]),
+      stockThemes: new Map([['000001', ['NEW']]]),
+    }
+    let observedIds: string[] = []
+    const unsubscribe = themeRuntimeStore.subscribe(() => {
+      observedIds = themeFacade.getThemeSummaries(20).map((theme) => theme.id)
+    })
+
+    themeFacade.refreshRuntime({ source: 'test', context: nextContext, emitAlerts: false })
+    unsubscribe()
+
+    expect(observedIds).toEqual(['NEW'])
+  })
+
   it('serializes async facade runtime refreshes through the theme resource', async () => {
     const releases: Array<() => void> = []
     const localFactor = refreshRuntime({ source: 'test', context: context(), emitAlerts: false }).factors[0]

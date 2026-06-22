@@ -7,7 +7,10 @@
 - Dragon Board 已切换 `ThemeHeatFeed → ThemeRuntimeCoordinator → ThemeFacade → Panels`，删除退役板块 feed、5000 配置/API、DataLayer 状态、类型和快照 fallback。
 - `SectorPanel/SectorDetail/SectorStocksTree/ThemeCorrelationPanel` 已迁移到稳定题材摘要和按题材详情响应；资金降级显示不可用，不显示伪造零值。
 - 已建立 Python/TS 共享 golden 和浏览器快照 nullable 合同。
-- 当前证据：主题/快照聚焦测试 103 项通过，TS snapshot/golden 57 项通过，Python golden 4 项通过，Vue 类型检查通过。
+- 真实 API 验收：MongoDB 映射 4167 只股票，腾讯返回 4021 只、覆盖率 96.5%，生成 239 个题材；东财资金当前仅覆盖约 6%，按合同保留 `fundScore/mainNetInflow=null`。为避免外部源系统性超时拖死刷新，腾讯整次采集预算默认 90 秒，东财资金默认 30 秒，超时批次进入覆盖率/降级门禁。
+- collector `dragonboard_backend_shadow` dry-run 通过，质量门禁 `ok=true`，未写正式快照。
+- Playwright 真实浏览器验收通过：热门题材 20 张卡片、树形列表 200 个题材、Top1 详情 13 只成分股均正常；资金降级显示“资金数据降级/--”。同时修复 facade 更新晚于 runtime 通知造成的面板首次显示 0，以及运行态把 nullable 资金错误转成 0 的问题。
+- 当前证据：主题/快照聚焦测试 103 项通过，TS snapshot/golden 57 项通过，Python golden 4 项通过，新增 provider/service/API/collector 聚焦测试 161 项通过，响应式与 panel 聚焦测试 15 项通过，proxy 测试 58 项通过，Vue 类型检查、生产构建和 RankTrend 197 项专项测试通过。
 - 两个完整交易日的 shadow 审计尚未完成；不得据此切换 `dragonboard_live`。
 
 以下内容为历史过程记录，涉及旧板块链路的描述只说明当时状态，不代表当前可用口径。

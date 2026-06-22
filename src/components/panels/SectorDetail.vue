@@ -435,6 +435,7 @@ import { nextTick } from 'vue'
 import { sectorAnalyzer } from '../../services/sectorAnalyzer'
 import { themeFacade } from '../../services/theme/ThemeFacade'
 import type { ThemeHeatStock } from '../../services/theme/types'
+import { useThemeRuntimeSnapshot } from '../../composables/useThemeRuntimeSnapshot'
 
 const props = defineProps<{
   visible: boolean
@@ -452,6 +453,7 @@ const version = '6.0.0'
 const view = ref<'overview' | 'stocks' | 'correlation' | 'history'>('overview')
 const loading = ref(false)
 const error = ref<string | null>(null)
+const themeRuntime = useThemeRuntimeSnapshot()
 
 const { panelRef, panelStyle } = usePanel({
   name: 'SectorDetail',
@@ -490,6 +492,7 @@ const loadData = async () => {
 const themeStockRows = ref<ThemeHeatStock[]>([])
 
 const blockCode = computed(() => {
+  if (!themeRuntime.value.factors.length) return null
   return themeFacade.getThemeSummaries(Number.MAX_SAFE_INTEGER)
     .find(theme => theme.name === props.sectorName || theme.id === props.sectorName)?.id || null
 })
@@ -500,7 +503,7 @@ const blockData = computed(() => {
 })
 
 const displayLastUpdate = computed(() => {
-  return blockData.value?.lastUpdate || themeFacade.getThemeLastUpdate()
+  return blockData.value?.lastUpdate || themeRuntime.value.lastUpdate || themeFacade.getThemeLastUpdate()
 })
 
 const themeStocks = computed(() => {

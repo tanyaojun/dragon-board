@@ -102,7 +102,7 @@ export function buildThemeEvents(context: ThemeAlertBuildContext): ThemeEvent[] 
       events.push(baseEvent('theme_strength_surge', factor, timestamp, ['题材强度快速上升'], stockCodes))
     }
 
-    if (factor.fundScore >= 70 && factor.netInflow > 0) {
+    if (factor.fundScore !== null && factor.netInflow !== null && factor.fundScore >= 70 && factor.netInflow > 0) {
       events.push(baseEvent('theme_fund_inflow', factor, timestamp, ['主力资金流入增强'], stockCodes))
     }
 

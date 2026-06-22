@@ -114,7 +114,7 @@ describe('ThemeHeatFeed', () => {
       themeId: 'AI',
       source: 'market_aggregate',
       heatScore: 88,
-      fundScore: 0,
+      fundScore: null,
     })
   })
 

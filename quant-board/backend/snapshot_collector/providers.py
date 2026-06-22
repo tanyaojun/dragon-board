@@ -82,6 +82,7 @@ def _http_post_json(url: str, timeout_s: float, payload: Any = None) -> Any:
 class _BatchedProxyProvider:
     source = ""
     endpoint = ""
+    stop_on_systemic_failure = False
 
     def __init__(
         self,
@@ -90,11 +91,13 @@ class _BatchedProxyProvider:
         batch_size: int = 50,
         max_concurrency: int = 3,
         failed_batch_retries: int = 1,
+        collection_timeout_ms: int = 120000,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._batch_size = max(1, batch_size)
         self._max_concurrency = max(1, max_concurrency)
         self._failed_batch_retries = max(0, failed_batch_retries)
+        self._collection_timeout_ms = max(1, collection_timeout_ms)
 
     def collect(
         self,
@@ -115,18 +118,36 @@ class _BatchedProxyProvider:
 
         if batches:
             with ThreadPoolExecutor(max_workers=self._max_concurrency) as pool:
-                futures = {
-                    pool.submit(self._collect_batch, index, batch, timeout_ms): index
-                    for index, batch in enumerate(batches)
-                }
-                for future in as_completed(futures):
-                    index = futures[future]
-                    try:
-                        batch_rows = future.result()
-                        rows.update(batch_rows)
-                    except Exception as exc:
-                        failed_batches.append(index)
-                        errors.append(str(exc))
+                for wave_start in range(0, len(batches), self._max_concurrency):
+                    wave = list(enumerate(
+                        batches[wave_start : wave_start + self._max_concurrency],
+                        start=wave_start,
+                    ))
+                    futures = {
+                        pool.submit(self._collect_batch, index, batch, timeout_ms): index
+                        for index, batch in wave
+                    }
+                    wave_failures = 0
+                    for future in as_completed(futures):
+                        index = futures[future]
+                        try:
+                            batch_rows = future.result()
+                            rows.update(batch_rows)
+                        except Exception as exc:
+                            wave_failures += 1
+                            failed_batches.append(index)
+                            errors.append(str(exc))
+                    if self.stop_on_systemic_failure and not rows and wave_failures == len(wave):
+                        remaining_start = wave_start + len(wave)
+                        failed_batches.extend(range(remaining_start, len(batches)))
+                        errors.append("upstream unavailable; remaining batches skipped")
+                        break
+                    remaining_start = wave_start + len(wave)
+                    elapsed_ms = int((time.monotonic() - started) * 1000)
+                    if remaining_start < len(batches) and elapsed_ms >= self._collection_timeout_ms:
+                        failed_batches.extend(range(remaining_start, len(batches)))
+                        errors.append("collection timeout; remaining batches skipped")
+                        break
 
         returned_count = sum(code in rows for code in requested_codes)
         requested_count = len(requested_codes)
@@ -205,6 +226,7 @@ class EastmoneyFundFlowProvider(_BatchedProxyProvider):
 
     source = "theme_fund_eastmoney"
     endpoint = "/api/quotes/eastmoney"
+    stop_on_systemic_failure = True
 
     def _normalize_row(self, item: dict[str, Any]) -> dict[str, Any] | None:
         code = str(item.get("f12") or "").strip()

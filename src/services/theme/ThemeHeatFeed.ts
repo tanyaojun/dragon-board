@@ -59,8 +59,8 @@ function unwrapSnapshot(response: any): ThemeHeatApiSnapshot {
 
 function toRuntimeFactor(factor: ThemeHeatApiFactor, computedAt: number): ThemeFactorSnapshot {
   const heatScore = finite(factor.heatScore)
-  const fundScore = finite(factor.fundScore)
-  const netInflow = finite(factor.netInflow ?? (factor as any).mainNetInflow)
+  const fundScore = nullableFinite(factor.fundScore)
+  const netInflow = nullableFinite(factor.netInflow ?? (factor as any).mainNetInflow)
   return {
     themeId: String(factor.themeId || ''),
     themeName: String(factor.themeName || factor.themeId || ''),

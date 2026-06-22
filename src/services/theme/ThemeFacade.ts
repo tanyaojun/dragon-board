@@ -158,7 +158,7 @@ export function getRuntimeSnapshot() {
 }
 
 export function getThemeFactors(): ThemeFactorSnapshot[] {
-  return lastFactors
+  return themeRuntimeStore.getSnapshot().factors
 }
 
 export function getStockExposures(code: string): ThemeStockExposure[]

@@ -427,6 +427,8 @@ V12 后续 Phase 中，ThemeTrend 和 Theme Confluence 回测/优化仍复用现
 | `QUANT_BOARD_THEME_HEAT_MAX_CONCURRENCY` | 腾讯批次最大并发，默认 3 |
 | `QUANT_BOARD_THEME_HEAT_CACHE_TTL_SECONDS` | 全市场题材热度缓存秒数，默认 300 |
 | `QUANT_BOARD_THEME_HEAT_FAILED_BATCH_RETRIES` | 失败批次重试次数，默认 1 |
+| `QUANT_BOARD_THEME_HEAT_QUOTE_COLLECTION_TIMEOUT_MS` | 腾讯全市场行情整次采集预算，默认 90000 毫秒；超时后剩余批次记为失败并进入覆盖率门禁 |
+| `QUANT_BOARD_THEME_HEAT_FUND_COLLECTION_TIMEOUT_MS` | 东财资金整次采集预算，默认 30000 毫秒；超时后资金字段按 null 降级 |
 | `QUANT_BOARD_SNAPSHOT_COLLECTOR_ALLOW_LIVE_DATASET` | 是否允许写入 live 数据集，默认 `false` |
 
 存储和同步配置的语义变更属于 API/运维合同变更，必须同批更新 [database-migration-plan.md](database-migration-plan.md)、[api-cli.md](api-cli.md) 和 [AI_COLLABORATION.md](AI_COLLABORATION.md)。
