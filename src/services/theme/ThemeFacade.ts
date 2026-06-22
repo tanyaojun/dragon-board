@@ -190,6 +190,11 @@ export function toHotThemeSummary(
   apiFactor?: ThemeHeatApiFactor,
 ): ThemePanelSummary & Record<string, unknown> {
   const heatLevel = deriveThemeHeatLevel(factor.heatScore)
+  const apiNetInflow = apiFactor
+    ? Object.prototype.hasOwnProperty.call(apiFactor, 'netInflow')
+      ? apiFactor.netInflow ?? null
+      : apiFactor.mainNetInflow
+    : factor.netInflow
   return {
     id: factor.themeId,
     name: factor.themeName,
@@ -212,7 +217,7 @@ export function toHotThemeSummary(
     acceleration: Math.max(0, factor.momentumScore - factor.crowdingRisk),
     correlation: factor.correlationScore / 100,
     strength: factor.strength || factor.heatScore,
-    mainNetInflow: apiFactor ? apiFactor.netInflow : factor.netInflow,
+    mainNetInflow: apiNetInflow,
     volumeRatio: Number.isFinite(factor.volumeRatio) ? factor.volumeRatio : null,
     degraded: apiFactor?.degraded ?? factor.qualityFlags.length > 0,
     rotationState: factor.rotationState,

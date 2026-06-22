@@ -74,7 +74,8 @@ export interface ThemeHeatApiFactor
   extends Omit<ThemeFactorSnapshot, 'heatScore' | 'fundScore' | 'netInflow'> {
   heatScore: number | null
   fundScore: number | null
-  netInflow: number | null
+  netInflow?: number | null
+  mainNetInflow: number | null
   rankEligible: boolean
   degraded: boolean
   metadata: Record<string, unknown>

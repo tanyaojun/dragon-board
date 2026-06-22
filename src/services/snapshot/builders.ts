@@ -19,6 +19,7 @@ export interface SnapshotBuildContext {
   breathData: any
   marketData: any
   hotThemes: any[]
+  themeHeatFactors?: any[]
   rotationAnalysis: any
   breathHistory: any[]
   breathFactors: any[]
@@ -132,6 +133,12 @@ function toThemeRiskFlags(theme: SnapshotThemeRef | undefined): string[] {
 function finiteNumberOrUndefined(value: unknown): number | undefined {
   const numeric = Number(value)
   return Number.isFinite(numeric) ? numeric : undefined
+}
+
+function finiteNumberOrNull(value: unknown): number | null | undefined {
+  if (value === null) return null
+  if (value === undefined) return undefined
+  return finiteNumberOrUndefined(value)
 }
 
 function compactThemeFactorMetadata(payload: Record<string, any>): Record<string, any> | undefined {
@@ -759,20 +766,30 @@ function buildSectorRow(
     entityName,
     rank,
     strength: Number(payload.strength ?? payload.score ?? payload.heatScore) || 0,
-    heatScore: Number(payload.heatScore ?? payload.strength) || 0,
+    heatScore: finiteNumberOrNull(
+      Object.prototype.hasOwnProperty.call(payload, 'heatScore') ? payload.heatScore : payload.strength,
+    ),
     heatLevel: typeof payload.heatLevel === 'string' ? payload.heatLevel : undefined,
     change: Number(payload.change) || 0,
-    mainNetInflow: Number(payload.mainNetInflow ?? payload.netInflow) || 0,
+    mainNetInflow: finiteNumberOrNull(
+      Object.prototype.hasOwnProperty.call(payload, 'mainNetInflow')
+        ? payload.mainNetInflow
+        : payload.netInflow,
+    ),
     bigMoney300: Number(payload.bigMoney300) || 0,
     institutionBuy: Number(payload.institutionBuy) || 0,
     volumeRatio: Number(payload.volumeRatio) || 0,
     ztCount: Number(payload.ztCount) || 0,
     leaderCount: Number(payload.leaderCount) || 0,
     persistentDays: Number(payload.persistentDays) || 0,
-    netInflow: Number(payload.netInflow ?? payload.mainNetInflow) || 0,
+    netInflow: finiteNumberOrNull(
+      Object.prototype.hasOwnProperty.call(payload, 'netInflow')
+        ? payload.netInflow
+        : payload.mainNetInflow,
+    ),
     momentumScore: finiteNumberOrUndefined(themeFactor.momentumScore),
     breadthScore: finiteNumberOrUndefined(themeFactor.breadthScore),
-    fundScore: finiteNumberOrUndefined(themeFactor.fundScore),
+    fundScore: finiteNumberOrNull(themeFactor.fundScore),
     leadershipScore: finiteNumberOrUndefined(themeFactor.leadershipScore),
     correlationScore: finiteNumberOrUndefined(themeFactor.correlationScore),
     crowdingRisk: finiteNumberOrUndefined(themeFactor.crowdingRisk),
@@ -802,14 +819,16 @@ export function buildSnapshotSectorRows(
     rows.push(buildSectorRow(record, 'sector', key, name, index + 1, sector))
   })
 
-  const hotThemes = Array.isArray(buildContext?.hotThemes)
-    ? buildContext?.hotThemes
+  const hotThemes = Array.isArray(buildContext?.themeHeatFactors)
+    ? buildContext.themeHeatFactors
+    : Array.isArray(buildContext?.hotThemes)
+      ? buildContext.hotThemes
     : Array.isArray(payload.hotThemes)
       ? payload.hotThemes
       : []
   hotThemes.forEach((theme: any, index: number) => {
-    const name = String(theme?.name || theme?.themeName || theme?.id || '').trim()
-    const key = String(theme?.id || name).trim()
+    const name = String(theme?.name || theme?.themeName || theme?.id || theme?.themeId || '').trim()
+    const key = String(theme?.id || theme?.themeId || name).trim()
     if (!name || !key) return
     rows.push(buildSectorRow(record, 'hot_theme', key, name, index + 1, theme))
   })

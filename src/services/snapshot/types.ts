@@ -176,20 +176,20 @@ export interface SnapshotSectorRow {
   entityName: string
   rank: number
   strength?: number
-  heatScore?: number
+  heatScore?: number | null
   heatLevel?: string
   change?: number
-  mainNetInflow?: number
+  mainNetInflow?: number | null
   bigMoney300?: number
   institutionBuy?: number
   volumeRatio?: number
   ztCount?: number
   leaderCount?: number
   persistentDays?: number
-  netInflow?: number
+  netInflow?: number | null
   momentumScore?: number
   breadthScore?: number
-  fundScore?: number
+  fundScore?: number | null
   leadershipScore?: number
   correlationScore?: number
   crowdingRisk?: number
