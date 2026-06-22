@@ -9,6 +9,10 @@ from backend.data.models import BacktestSignal, SnapshotSectorRowModel, Snapshot
 from backend.data.repository import Repository
 
 
+def _ranktrend_final(signal: str = "buy") -> dict:
+    return {"decision": {"final": {"signal": signal}}}
+
+
 def test_theme_support_scores_mainline_and_flags_crowding_risk() -> None:
     frame = {
         "snapshotId": "snap_1",
@@ -175,6 +179,7 @@ def test_strategy_adds_theme_explanation_without_execution_by_default() -> None:
                 "confidence": 60,
                 "rank": 1,
                 "regime": "rising",
+                "rankTrend": _ranktrend_final("buy"),
             }
         ],
         theme_support_by_code={
@@ -209,6 +214,7 @@ def test_strategy_can_downgrade_crowded_theme_when_execution_enabled() -> None:
                 "confidence": 60,
                 "rank": 1,
                 "regime": "rising",
+                "rankTrend": _ranktrend_final("buy"),
             }
         ],
         theme_support_by_code={
@@ -241,6 +247,7 @@ def test_strategy_can_boost_confidence_when_theme_support_is_strong_and_clean() 
                 "confidence": 60,
                 "rank": 1,
                 "regime": "rising",
+                "rankTrend": _ranktrend_final("buy"),
             }
         ],
         theme_support_by_code={
