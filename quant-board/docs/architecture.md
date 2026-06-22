@@ -65,7 +65,7 @@ backend/snapshot_collector/
 - API 路由 `/api/snapshot-collector/*` 和 CLI 命令 `snapshot-collector-*` 只服务实验运维和审计。
 - 自动调度器（Phase 3）：`SnapshotCollectorScheduler` 是独立的 `asyncio` 后台 runner（模块级单例），在 FastAPI `startup` 时注册到事件循环。轮询间隔由 `QUANT_BOARD_SNAPSHOT_COLLECTOR_POLL_MS`（默认 1000ms）控制，每个 tick 检查交易日、槽位表、时间窗口和 MongoDB 中的 `datasetId + snapshotId` 是否已存在，只为真正缺失且符合条件的 slot 启动 fire-and-forget 采集任务。调度器在非 MongoDB 模式或 `QUANT_BOARD_SNAPSHOT_COLLECTOR_ENABLED=0` 时自动禁用。采集任务的并发保护通过内存中的 `_in_flight_slots` 集合实现，确保同一 slot 不会重复采集。
 - 本机 shadow 守护：`supervisor.py` 只负责实验采集运行环境，不改变采集业务合同。它复用健康的 MongoDB、proxy-server 和 python-bridge，只在依赖缺失时隐藏启动对应进程，并使用 `8001` 运行目标工作区 collector API，避免替换主工作区 `8000` API。MongoDB 通过 `ping` 检查，proxy-server/python-bridge 校验结构化 `/health` 服务身份；collector 必须同时满足 scheduler `enabled=true`、`running=true` 和 `dataset_id=dragonboard_backend_shadow`。守护进程自己启动的服务如仍占端口但健康检查失败，会被终止并重启；未知外部进程只标记 `blocked`，不会误杀。
-- 当前 `sector_rows=0` 属于板块 API 端口不可用的已知外部限制，shadow 观察期内允许为零；这不放宽 stock rows、records、frames、时间窗口、数据源健康和 MongoDB 写入质量门禁，也不代表板块采集能力已经完成。
+- 后端 collector 通过共享 `ThemeHeatService` 写入全量 `entityType=hot_theme` rows；`sector_rows=0` 仅是替换前历史快照的已知缺口，新 shadow 帧不得再以外部端口不可用为由允许空题材行。
 - 正式切换要求：shadow 采集器必须通过完整审计（覆盖率、质量门禁、数据一致性）后才能讨论 live cutover。
 
 **生产口径尚未完成的接入（截至 Phase 4）：**
@@ -74,13 +74,13 @@ backend/snapshot_collector/
 
 1. **Depth（盘口深度）**：当前未接入任何来源。`ProxyQuoteProvider` 的 `depth` 恒为空列表，`BridgeQuoteProvider` 虽然能通过 python-bridge 读取五档盘口，但未被挂载为默认 provider。这意味着所有后端 shadow 快照的 `depth` 字段始终为空，与前端 live 快照的盘口数据存在结构性差距。
 
-2. **Bridge 行情接管**：`BridgeQuoteProvider`（python-bridge WebSocket pool 模式）已实现但未启用。当前默认链路走 `ProxyQuoteProvider → proxy-server → EastMoney HTTP`，这是一个通过公共 HTTP 接口抓取的过渡路径，不经过本地 TDX 行情桥。生产口径应将 `BridgeQuoteProvider` 作为主 quote 源，`ProxyQuoteProvider` 仅作为 bridge 离线时的 fallback。
+2. **股票快照行情接管**：`BridgeQuoteProvider`（python-bridge WebSocket pool 模式）已实现但未启用。该缺口只针对股票快照行情；题材热度的基础行情已独立固定为腾讯批量行情，不与本项 fallback 混用。
 
-3. **Theme 数据源**：`ThemeMappingProvider`（MongoDB 题材映射读取）已实现，但题材因子、题材强度、题材轮动等运行时数据没有独立 provider，当前依赖 stock rows 中携带的静态 themes 字段。与前端 live 快照相比，后端 collector 不产出 `themeFactorFrames` 或等价的题材运行时上下文。
+3. **Theme 数据源**：MongoDB 全市场映射、腾讯基础行情和东财资金字段已由共享 `ThemeHeatService` 聚合，使用 `theme-market-v1`、5 分钟缓存和覆盖率门禁；collector 保存全部 factors 为 `hot_theme` rows，Dragon Board UI 只裁剪展示。
 
 4. **市场情绪 / 涨停池 / 轮动摘要**：这些前端快照中存在的数据域在后端 collector 中无对应 provider，也未纳入 `MarketDataContext`。
 
-这些缺口意味着截至 Phase 4，后端 shadow 快照在 depth、题材运行时和市场辅助数据三个维度上仍弱于前端 live 快照，不具备直接切换为生产主链的条件。Phase 5+ 必须逐项补齐后才能进入 live cutover 讨论。
+Depth 和股票快照行情接管仍未完成，因此 shadow 仍不具备直接切换为生产主链的条件；题材运行时缺口已补齐，但仍需两个完整交易日验证 row count、腾讯覆盖率、资金降级和质量警告。
 
 API 路由：
 
@@ -423,6 +423,10 @@ V12 后续 Phase 中，ThemeTrend 和 Theme Confluence 回测/优化仍复用现
 | `QUANT_BOARD_SNAPSHOT_COLLECTOR_PROXY_BASE_URL` | proxy-server 基础 URL，默认 `http://127.0.0.1:3000` |
 | `QUANT_BOARD_SNAPSHOT_COLLECTOR_BRIDGE_BASE_URL` | python-bridge 基础 URL，默认 `http://127.0.0.1:8765` |
 | `QUANT_BOARD_SNAPSHOT_COLLECTOR_PROVIDER_TIMEOUT_MS` | 数据源请求超时（毫秒），默认 5000 |
+| `QUANT_BOARD_THEME_HEAT_BATCH_SIZE` | 腾讯题材基础行情批大小，默认 50 |
+| `QUANT_BOARD_THEME_HEAT_MAX_CONCURRENCY` | 腾讯批次最大并发，默认 3 |
+| `QUANT_BOARD_THEME_HEAT_CACHE_TTL_SECONDS` | 全市场题材热度缓存秒数，默认 300 |
+| `QUANT_BOARD_THEME_HEAT_FAILED_BATCH_RETRIES` | 失败批次重试次数，默认 1 |
 | `QUANT_BOARD_SNAPSHOT_COLLECTOR_ALLOW_LIVE_DATASET` | 是否允许写入 live 数据集，默认 `false` |
 
 存储和同步配置的语义变更属于 API/运维合同变更，必须同批更新 [database-migration-plan.md](database-migration-plan.md)、[api-cli.md](api-cli.md) 和 [AI_COLLABORATION.md](AI_COLLABORATION.md)。

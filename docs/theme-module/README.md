@@ -6,13 +6,16 @@
 
 - 题材模块运行态主链以 `ThemeRuntimeCoordinator.refreshRuntime()` 为权威入口。
 - `themeFacade` 是 UI、服务层、预警和调试读口的统一 facade。
-- `sectorAnalyzer/rotationService/alertService` 继续保留旧公开 API，但运行态事实来源均已降级为 `themeFacade` 兼容 adapter。
+- `sectorAnalyzer/rotationService/alertService` 只消费 `themeFacade`、题材 runtime 和全市场题材详情，不再保留退役板块兼容 API。
 - QuantBoard schema 和回测主链在 V6 不再扩展，沿用 V2 已落地的稳定字段和执行开关。
 - V8 后，题材基础映射事实源是 QuantBoard 后端独立 SQLite 主库 `themeDATA.db`。
 - V10 已完成本机 Chrome `http_localhost_5173` 下旧 `ThemeDataDB/theme_mapping` 数据迁移，当前 `themeDATA.db` 中有 237 个题材、12215 条题材-股票关系、4166 只去重股票。
 - V11 目标是运行时严格收口：前端题材分析模块不再把浏览器 IndexedDB、本地静态 JSON 或外部批量 API 当作正式或兜底事实源；旧 IndexedDB 仅作为离线历史迁移来源。
 - V12 目标是 ThemeTrend 量化研究平台化：QuantBoard 新增与 RankTrend 并列的 ThemeTrend 研究链，承接题材趋势、题材共振回测、优化、API/CLI 和报告合同；Dragon Board 根项目不新增回测平台。
 - V12 当前口径：`themeDATA.db` 只承载题材基础映射，ThemeTrend 回测、优化和质量报告等研究结果只进入 QuantBoard research SQLite，本轮不进入 Supabase。
+- 2026-06-22 起正式运行态热度由 QuantBoard 后端按 MongoDB 全市场题材映射计算：腾讯提供基础行情，东财只提供资金字段，结果缓存 5 分钟。
+- Dragon Board 通过 `/api/themes/heat*` 消费结果；正式快照题材行为 `entityType=hot_theme`，保存全部 API factors，UI 只裁剪 Top N。
+- 旧 JXBK/5000 仅作为历史背景存在；运行时代码、状态、类型、API 和 fallback 均已删除，禁止恢复。
 
 ## 文件说明
 
@@ -37,8 +40,8 @@
 
 - QuantBoard SQLite 读取失败时，题材基础映射应显式失败，不回落 `/data/theme_base_mapping.json` 或浏览器 IndexedDB。
 - 前端不再通过 `/api/themes/batch` 后台修正题材映射、标签或原因；这些基础事实只能通过后端导入/维护进入 `themeDATA.db`。
-- `sectorAnalyzer/rotationService` 保留旧公开对象，但内部只作为 `themeFacade/themeRepository/JxbkThemeFeed` 的 adapter。
-- `Compat` 方法后续只作为旧调用 wrapper，新代码改用非 Compat 的正式 facade 方法。
+- `sectorAnalyzer/rotationService` 保留公开对象，但内部只消费 `themeFacade/themeRepository/ThemeHeatFeed`。
+- 退役板块命名和 `Compat` wrapper 已删除，新代码只使用正式 facade 读口。
 
 ## V12 ThemeTrend 平台化口径
 

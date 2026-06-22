@@ -3,8 +3,8 @@
 ## 当前口径
 
 - `ThemeFacade` 和 `ThemeRuntimeCoordinator.refreshRuntime()` 是题材运行态唯一事实主链。
-- `themeFacade` 统一暴露题材因子、个股暴露、轮动摘要、题材事件、JXBK 兼容读口和 runtime snapshot。
-- `sectorAnalyzer`、`rotationService`、`alertService` 继续保留旧公开 API，但业务事实来源均来自 `themeFacade` 或题材 runtime store。
+- `themeFacade` 统一暴露全市场题材摘要、个股暴露、轮动摘要、题材事件和 runtime snapshot。
+- `sectorAnalyzer`、`rotationService`、`alertService` 的业务事实来源均来自 `themeFacade`、`ThemeHeatFeed` 或题材 runtime store。
 - QuantBoard 题材字段和回测开关沿用 V2 结果，V7 不修改数据库和回测执行策略。
 
 ## 已清理内容
@@ -17,10 +17,18 @@
 
 ## 当前保留边界
 
-- `sectorAnalyzer.loadSectorStocks()` 仍保留为旧公开 API，但 V9 后只委托 `JxbkThemeFeed`，不再持有独立成分股缓存或 API 事实源。
+- `sectorAnalyzer.loadSectorStocks()` 作为面板公开 API 保留，只委托 `ThemeHeatFeed.loadThemeStocks()`。
 - `App.vue/main.ts` 仍挂载 `window.sectorAnalyzer/window.rotationService`，用于控制台、旧调试脚本和兼容服务注册。
 - `RefreshCoordinator` 仍保留 `sectorAnalyzer` 节点，但该节点现在只是 legacy adapter，不再持有独立题材事实。
-- `DataLayer` 仍保存 JXBK 原始 blocks/stockMap，这是运行态缓存和快照来源，不是题材业务编排入口。
+- `DataLayer` 只保存统一 hot theme 摘要，不保存退役板块 blocks/stockMap。
+
+## 2026-06-22 全市场题材热度替换结论
+
+- 映射源为 MongoDB `themes/theme_stock_mappings`，基础行情源为腾讯，资金源仅为东财资金字段。
+- Python `theme-market-v1` 是全市场计算合同；前端只做 API 消费、运行态投影和 UI 展示，不复制抓取算法。
+- 资金源不可用时 `fundScore/mainNetInflow` 保持 `null` 并标记 degraded，不转换成 0。
+- 浏览器快照使用完整 API factors 生成 `hot_theme` rows，包括不可排名的审计题材；旧 payload `sectors` 只服务历史导入。
+- 切换前已落库的空 sector rows 是已知历史缺口，不回填、不伪造。实际切换时间需在两交易日 shadow 审计和正式切换后记录。
 
 ## 后续候选
 

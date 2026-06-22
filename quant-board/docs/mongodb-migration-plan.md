@@ -93,7 +93,7 @@ shadow 采集器必须通过以下验收后才能讨论 live cutover：
 - 强制重采替换同一 `snapshotId` 前保留旧事实；任一集合写入失败时恢复替换前 records、frames、stock rows、sector rows 和 dataset 摘要，不得留下半写快照。
 - 审计轨迹完整：`snapshot_collector_runs` 中每次运行都有明确状态和阻塞原因，不得存在状态缺失的运行记录。
 - 验收命令：`verify-mongodb-migration --dataset-id dragonboard_backend_shadow --snapshot-type half_hour` 应通过。
-- 2026-06-22 起重新开始连续观察，至少采集两个完整交易日后再复评阶段 5。当前板块 API 端口不可用，允许 `sector_rows=0` 作为已知缺口单独记录，但股票行、records、frames、槽位覆盖和时间质量必须完整通过。
+- 2026-06-22 起重新开始连续观察，至少采集两个完整交易日后再复评阶段 5。新帧必须保存完整 `hot_theme` rows，并记录 `themeCount/sectorRowCount/quoteCoverageRatio/fundCoverageRatio/factorVersion`；row count drift 或腾讯覆盖低于门槛时审计失败。替换前 `sector_rows=0` 属于历史已知缺口，不回填、不伪造，研究按实际切换时间过滤或标记 `theme_sector_history_missing` 排除。
 
 shadow 验收不通过时，不得提升采集器为正式快照来源，也不得将 `dragonboard_backend_shadow` 数据集用于生产回测或策略决策。
 

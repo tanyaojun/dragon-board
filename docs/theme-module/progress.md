@@ -1,5 +1,17 @@
 # 题材模块重构进度
 
+## 2026-06-22 MongoDB 全市场题材热度替换实施
+
+- QuantBoard 已新增 `theme-market-v1` 纯计算引擎、MongoDB 全市场映射仓库、腾讯基础行情 provider、东财资金 provider、5 分钟缓存服务和 `/api/themes/heat*`。
+- 后端 snapshot collector 已复用同一题材热度服务，并把全部 factors 写为 `hot_theme` sector rows。
+- Dragon Board 已切换 `ThemeHeatFeed → ThemeRuntimeCoordinator → ThemeFacade → Panels`，删除退役板块 feed、5000 配置/API、DataLayer 状态、类型和快照 fallback。
+- `SectorPanel/SectorDetail/SectorStocksTree/ThemeCorrelationPanel` 已迁移到稳定题材摘要和按题材详情响应；资金降级显示不可用，不显示伪造零值。
+- 已建立 Python/TS 共享 golden 和浏览器快照 nullable 合同。
+- 当前证据：主题/快照聚焦测试 103 项通过，TS snapshot/golden 57 项通过，Python golden 4 项通过，Vue 类型检查通过。
+- 两个完整交易日的 shadow 审计尚未完成；不得据此切换 `dragonboard_live`。
+
+以下内容为历史过程记录，涉及旧板块链路的描述只说明当时状态，不代表当前可用口径。
+
 ## 2026-05-05 06:57
 
 - 写入 `src/services/theme/__tests__/ThemeFactorEngine.test.ts`。

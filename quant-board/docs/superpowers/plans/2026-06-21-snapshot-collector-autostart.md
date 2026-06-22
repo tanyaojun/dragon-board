@@ -83,7 +83,7 @@
 
 - [x] **Step 4: Document the operational boundary**
 
-  明确 `sector_rows=0` 是当前外部 API 端口限制，不降低 stock rows、records、frames、时间戳和 MongoDB 写入门禁。
+  历史上 `sector_rows=0` 曾由退役板块端口限制导致；新 collector 已改为共享全市场题材热度服务，新帧必须写入完整 `hot_theme` rows。连续两个完整交易日审计尚未完成，不得提前标记阶段 5 通过。
 
 ### Task 4: 最终验证与阶段 5 复评
 
