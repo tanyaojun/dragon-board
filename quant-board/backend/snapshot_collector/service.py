@@ -321,7 +321,7 @@ class SnapshotCollectorService:
                 )
 
         # 3 — Collect providers
-        providers_list = self._create_providers()
+        providers_list = self._create_providers(trading_date=trading_date)
         codes: list[str] = []
         timeout_ms = self._provider_timeout_ms()
         market_context = self._collect_fn(providers_list, codes, timeout_ms=timeout_ms)
@@ -650,13 +650,15 @@ class SnapshotCollectorService:
 
     # ── internal helpers ──────────────────────────────────────────────────
 
-    def _create_providers(self) -> list[Any]:
+    def _create_providers(self, *, trading_date: str | None = None) -> list[Any]:
         """Create data-source providers from settings."""
-        from .providers import ProxyHotlistProvider
+        from .providers import ProxyMergedHotlistProvider, ProxyQuoteProvider, StartupBundleStockProvider
 
         proxy_url = self._proxy_base_url()
         return [
-            ProxyHotlistProvider(base_url=proxy_url),
+            StartupBundleStockProvider(base_url=proxy_url, trading_date=trading_date),
+            ProxyMergedHotlistProvider(base_url=proxy_url),
+            ProxyQuoteProvider(base_url=proxy_url),
         ]
 
     def _proxy_base_url(self) -> str:

@@ -63,6 +63,11 @@ def _enrich_stock_rows_from_quotes(
 
         q = quote_by_code.get(code)
         if q:
+            quote_name = str(q.get("name") or "").strip()
+            current_name = str(row.get("name") or "").strip()
+            if quote_name and (not current_name or current_name == code):
+                row["name"] = quote_name
+
             # Override hotlist values with more accurate quote values when
             # the hotlist value is missing or zero.
             for field in ("price", "pctChange", "volume", "amount", "turnover"):
@@ -70,6 +75,16 @@ def _enrich_stock_rows_from_quotes(
                     val = q.get(field)
                     if val:
                         row[field] = val
+            if row.get("pctChange") is not None:
+                row["change"] = row["pctChange"]
+            if row.get("amount") is not None:
+                row["turnover"] = row["amount"]
+            turnover_rate = q.get("turnover")
+            if turnover_rate is not None and not row.get("turnoverRate"):
+                row["turnoverRate"] = turnover_rate
+            volume_ratio = q.get("volumeRatio")
+            if volume_ratio is not None and not row.get("volumeRatio"):
+                row["volumeRatio"] = volume_ratio
 
             # Fields not provided by the hotlist at all
             # PE ratio
@@ -191,7 +206,7 @@ def build_ingest_payload(
         }
 
         # Optional camelCase fields carried through when present
-        for field in ("price", "pctChange", "volume", "amount", "turnover", "heat"):
+        for field in ("price", "pctChange", "volume", "amount", "turnover", "turnoverRate", "heat"):
             if field in stock:
                 row[field] = stock[field]
 
@@ -199,7 +214,7 @@ def build_ingest_payload(
             row["change"] = row["pctChange"]
         if "amount" in row:
             row["turnover"] = row["amount"]
-        if "turnover" in stock:
+        if "turnoverRate" not in row and "turnover" in stock:
             row["turnoverRate"] = stock["turnover"]
         if "heat" in row:
             row["hotness"] = row["heat"]

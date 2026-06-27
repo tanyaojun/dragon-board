@@ -97,6 +97,12 @@ def evaluate_quality(
     if _has_invalid_stock_code(stock_rows):
         blocking.append("invalid_stock_code")
 
+    if _quote_fields_unusable(stock_rows):
+        blocking.append("quote_fields_unusable")
+
+    if _startup_bundle_missing(source_health):
+        blocking.append("startup_bundle_missing")
+
     # 5. timestamp_outside_slot
     if actual_timestamp_ms < slot_timestamp_ms:
         blocking.append("timestamp_outside_slot")
@@ -169,6 +175,58 @@ def _has_invalid_stock_code(stock_rows: list[dict]) -> bool:
         if not _A_SHARE_CODE_RE.match(code_str):
             return True
     return False
+
+
+def _quote_fields_unusable(stock_rows: list[dict]) -> bool:
+    """Return True when collected rows have only codes/ranks but no usable quote facts."""
+    rows_with_quote_shape = [
+        row
+        for row in stock_rows
+        if any(
+            field in row
+            for field in (
+                "price",
+                "change",
+                "pctChange",
+                "volume",
+                "turnover",
+                "amount",
+                "turnoverRate",
+                "hotness",
+                "heat",
+            )
+        )
+    ]
+    if not rows_with_quote_shape:
+        return False
+
+    def _is_positive_number(value: object) -> bool:
+        return isinstance(value, (int, float)) and float(value) > 0
+
+    any_usable_quote = any(
+        any(
+            _is_positive_number(row.get(field))
+            for field in ("price", "volume", "turnover", "amount", "turnoverRate", "hotness", "heat")
+        )
+        for row in rows_with_quote_shape
+    )
+    if any_usable_quote:
+        return False
+
+    return True
+
+
+def _startup_bundle_missing(source_health: list[dict]) -> bool:
+    """Return True when no live-equivalent stock-pool source succeeded."""
+    startup_failed = any(
+        str(source.get("source") or "") == "startup_bundle" and not source.get("ok")
+        for source in source_health
+    )
+    merged_fallback_ok = any(
+        str(source.get("source") or "") == "merged_hotlist_proxy" and source.get("ok")
+        for source in source_health
+    )
+    return startup_failed and not merged_fallback_ok
 
 
 def _source_failed_matching(

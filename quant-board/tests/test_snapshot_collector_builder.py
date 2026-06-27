@@ -462,16 +462,60 @@ class TestEnrichStockRowsFromQuotes:
 
     def test_fills_missing_price_from_quote(self) -> None:
         rows = [{"code": "000001", "name": "平安银行", "rank": 1}]
-        quotes = [{"code": "000001", "price": 12.50, "pctChange": 2.35}]
+        quotes = [
+            {
+                "code": "000001",
+                "price": 12.50,
+                "pctChange": 2.35,
+                "amount": 1875000000.0,
+                "turnover": 5.5,
+                "volumeRatio": 12.22,
+            }
+        ]
         _enrich_stock_rows_from_quotes(rows, quotes, [])
         assert rows[0]["price"] == 12.50
         assert rows[0]["pctChange"] == 2.35
+        assert rows[0]["change"] == 2.35
+        assert rows[0]["turnover"] == 1875000000.0
+        assert rows[0]["turnoverRate"] == 5.5
+        assert rows[0]["volumeRatio"] == 12.22
 
     def test_fills_zero_price_from_quote(self) -> None:
         rows = [{"code": "000001", "name": "平安银行", "rank": 1, "price": 0}]
         quotes = [{"code": "000001", "price": 12.50}]
         _enrich_stock_rows_from_quotes(rows, quotes, [])
         assert rows[0]["price"] == 12.50
+
+    def test_fills_degraded_name_from_quote(self) -> None:
+        rows = [{"code": "000001", "name": "000001", "rank": 1}]
+        quotes = [{"code": "000001", "name": "平安银行"}]
+        _enrich_stock_rows_from_quotes(rows, quotes, [])
+        assert rows[0]["name"] == "平安银行"
+
+    def test_build_payload_preserves_explicit_turnover_rate(self) -> None:
+        from backend.snapshot_collector.builder import build_ingest_payload
+        from backend.snapshot_collector.models import MarketDataContext, SnapshotSlot
+
+        slot = SnapshotSlot("half_hour", "2026-06-11", "10:00", 1781143200000)
+        context = MarketDataContext(
+            stocks=[
+                {
+                    "code": "000001",
+                    "name": "平安银行",
+                    "rank": 1,
+                    "pctChange": 2.5,
+                    "amount": 125000000.0,
+                    "turnover": 125000000.0,
+                    "turnoverRate": 3.2,
+                    "heat": 88.0,
+                }
+            ]
+        )
+
+        row = build_ingest_payload(slot, context)["stockRows"][0]
+
+        assert row["turnover"] == 125000000.0
+        assert row["turnoverRate"] == 3.2
 
     def test_does_not_overwrite_existing_non_zero_price(self) -> None:
         rows = [{"code": "000001", "name": "平安银行", "rank": 1, "price": 13.00}]

@@ -101,7 +101,9 @@ Invoke-RestMethod http://127.0.0.1:8765/api/quotes/snapshot
 
 以下接口属于 `backend/snapshot_collector/` 实验模块。当前默认禁用（`QUANT_BOARD_SNAPSHOT_COLLECTOR_ENABLED=false`），写目标限定为 `dragonboard_backend_shadow` 数据集，不进入 `dragonboard_live` 正式快照主库。所有响应使用统一的 `{"ok": true/false, "status": "...", "data": {...}}` 信封格式。
 
-本机自动 shadow 观察使用独立 collector API 端口 `8001`，与日常 QuantBoard API 的 `8000` 并存。计划任务启动的守护进程会分别执行 MongoDB `ping`、proxy-server/python-bridge 结构化 `/health` 检查，并只在 collector 状态确认 `enabled=true`、`running=true` 且数据集为 `dragonboard_backend_shadow` 时判定健康。守护进程自己启动的异常服务会自动重启；未知占端口进程只标记阻塞。文档中的通用接口示例仍使用 `8000`；观察独立实例时将端口替换为 `8001`。
+本机自动 shadow 观察使用独立 collector API 端口 `8001`，与日常 QuantBoard API 的 `8000` 并存。计划任务启动的守护进程会分别执行 MongoDB `ping`、proxy-server/python-bridge 结构化 `/health` 检查，并只在 collector 状态确认 `enabled=true`、`running=true` 且数据集为 `dragonboard_backend_shadow` 时判定健康。`proxy-server` 只复用健康的 `127.0.0.1:3000`，缺失或不健康时只标记阻塞，不从隔离 worktree 启动代理；守护进程自己启动的其它异常服务会自动重启；未知占端口进程只标记阻塞。文档中的通用接口示例仍使用 `8000`；观察独立实例时将端口替换为 `8001`。
+
+shadow 股票池优先读取 proxy-server `/api/cache/startup-bundle?key=default:YYYY-MM-DD`，该缓存由 Dragon Board live 前端写入，包含 live 当前 merged stocks。startup bundle 缺失或过期时，collector 默认调用 proxy-server 的八个平台热榜接口做 union fallback，生成各平台 rank 字段和 `avgRank/compRank/rank`，避免退回单平台 top100。只有 startup bundle 与八平台 union fallback 都不可用时，正式 shadow 写入才会被质量门禁以 `startup_bundle_missing` 阻断。
 
 ### `GET /api/snapshot-collector/status`
 
@@ -211,13 +213,13 @@ Invoke-RestMethod http://127.0.0.1:8000/api/snapshot-collector/status
     "snapshotId": "half_hour:2026-06-12:15:05",
     "deduped": false,
     "dryRun": false,
-    "message": "Quality gate blocked: ['no_stock_rows']"
+    "message": "Quality gate blocked: ['startup_bundle_missing']"
   },
   "quality": {
     "ok": false,
-    "blockingIssues": ["no_stock_rows"],
-    "warnings": [],
-    "sourceCounts": {"ok": 2, "failed": 0}
+    "blockingIssues": ["startup_bundle_missing"],
+    "warnings": ["quote_provider_partial"],
+    "sourceCounts": {"ok": 1, "failed": 2}
   }
 }
 ```
@@ -284,7 +286,7 @@ dry-run 响应（`status=dry_run`，`ok=true`）：
     "deduped": 2,
     "details": [
       {"snapshotId": "half_hour:2026-06-10:09:30", "status": "completed", "message": "done"},
-      {"snapshotId": "half_hour:2026-06-10:10:00", "status": "blocked", "message": "Quality gate blocked: ['no_stock_rows']"}
+      {"snapshotId": "half_hour:2026-06-10:10:00", "status": "blocked", "message": "Quality gate blocked: ['startup_bundle_missing']"}
     ]
   }
 }

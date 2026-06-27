@@ -708,6 +708,127 @@ def test_estimated_l1_stock_rows_emit_money_flow_warning() -> None:
     assert "money_flow_estimated_l1" in result.warnings
 
 
+def test_all_zero_quote_rows_are_blocked() -> None:
+    result = _call(
+        stock_rows=[
+            _make_stock_row(
+                "000001",
+                name="000001",
+                price=0,
+                change=0,
+                volume=0,
+                turnover=0,
+                turnoverRate=0,
+                hotness=0,
+            ),
+            _make_stock_row(
+                "600001",
+                name="600001",
+                price=0,
+                change=0,
+                volume=0,
+                turnover=0,
+                turnoverRate=0,
+                hotness=0,
+            ),
+        ],
+        source_health=[
+            _make_source_health("hotlist_proxy", True),
+            _make_source_health("quote_proxy", False, "timed out"),
+        ],
+    )
+
+    assert result.ok is False
+    assert "quote_fields_unusable" in result.blocking_issues
+
+
+def test_named_merged_hotlist_rows_without_quotes_are_blocked() -> None:
+    result = _call(
+        stock_rows=[
+            _make_stock_row(
+                "000001",
+                name="平安银行",
+                price=0,
+                pctChange=0,
+                volume=0,
+                amount=0,
+                turnover=0,
+                turnoverRate=0,
+                heat=0,
+            ),
+            _make_stock_row(
+                "600001",
+                name="样本二",
+                price=0,
+                pctChange=0,
+                volume=0,
+                amount=0,
+                turnover=0,
+                turnoverRate=0,
+                heat=0,
+            ),
+        ],
+        source_health=[
+            _make_source_health("startup_bundle", False, "startup bundle missing"),
+            _make_source_health("merged_hotlist_proxy", True),
+            _make_source_health("quote_proxy", False, "timed out"),
+        ],
+    )
+
+    assert result.ok is False
+    assert "quote_fields_unusable" in result.blocking_issues
+
+
+def test_startup_bundle_missing_blocks_incomplete_shadow_stock_pool() -> None:
+    result = _call(
+        stock_rows=[
+            _make_stock_row("000001", name="平安银行", price=12.5, volume=1000),
+            _make_stock_row("600001", name="样本二", price=8.5, volume=2000),
+        ],
+        source_health=[
+            _make_source_health("startup_bundle", False, "startup bundle missing"),
+            _make_source_health("hotlist_proxy", True),
+            _make_source_health("quote_proxy", True),
+        ],
+    )
+
+    assert result.ok is False
+    assert "startup_bundle_missing" in result.blocking_issues
+
+
+def test_startup_bundle_missing_allows_complete_merged_hotlist_fallback() -> None:
+    result = _call(
+        stock_rows=[
+            _make_stock_row("000001", name="平安银行", price=12.5, volume=1000),
+            _make_stock_row("600001", name="样本二", price=8.5, volume=2000),
+        ],
+        source_health=[
+            _make_source_health("startup_bundle", False, "startup bundle missing"),
+            _make_source_health("merged_hotlist_proxy", True),
+            _make_source_health("quote_proxy", True),
+        ],
+    )
+
+    assert result.ok is True
+    assert "startup_bundle_missing" not in result.blocking_issues
+
+
+def test_successful_startup_bundle_allows_complete_shadow_stock_pool() -> None:
+    result = _call(
+        stock_rows=[
+            _make_stock_row("000001", name="平安银行", price=12.5, volume=1000),
+            _make_stock_row("600001", name="样本二", price=8.5, volume=2000),
+        ],
+        source_health=[
+            _make_source_health("startup_bundle", True),
+            _make_source_health("quote_proxy", True),
+        ],
+    )
+
+    assert result.ok is True
+    assert "startup_bundle_missing" not in result.blocking_issues
+
+
 def test_theme_heat_failure_blocks_without_faking_rows() -> None:
     result = _call(
         frames=[_make_frame(sectorRowCount=0)],

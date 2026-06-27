@@ -64,7 +64,7 @@ def test_dependency_payload_requires_expected_service_identity() -> None:
     )
 
 
-def test_ensure_once_starts_only_missing_services(tmp_path: Path) -> None:
+def test_ensure_once_reuses_proxy_without_starting_isolated_proxy(tmp_path: Path) -> None:
     from backend.snapshot_collector.supervisor import (
         ServiceSpec,
         SnapshotCollectorSupervisor,
@@ -95,10 +95,10 @@ def test_ensure_once_starts_only_missing_services(tmp_path: Path) -> None:
 
     status = supervisor.ensure_once()
 
-    assert launched == ["proxy", "collector"]
+    assert launched == ["collector"]
     assert status == {
         "mongo": "healthy",
-        "proxy": "started",
+        "proxy": "blocked",
         "bridge": "healthy",
         "collector": "started",
     }

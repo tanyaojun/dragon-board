@@ -221,6 +221,9 @@ class SnapshotCollectorSupervisor:
             if healthy:
                 status[spec.name] = "healthy"
                 continue
+            if spec.name == "proxy":
+                status[spec.name] = "blocked"
+                continue
             if port_open:
                 if self._spawned_is_running(spec.name):
                     try:

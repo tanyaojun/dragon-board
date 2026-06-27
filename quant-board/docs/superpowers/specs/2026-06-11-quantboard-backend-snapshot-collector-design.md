@@ -176,6 +176,9 @@ daily:        15:00
 - `QUANT_BOARD_SNAPSHOT_COLLECTOR_PROXY_BASE_URL=http://127.0.0.1:3000`。
 - `QUANT_BOARD_SNAPSHOT_COLLECTOR_BRIDGE_BASE_URL=http://127.0.0.1:8765`。
 - `QUANT_BOARD_SNAPSHOT_COLLECTOR_PROVIDER_TIMEOUT_MS=5000`。
+  Correction note (2026-06-23): two-day shadow/live audit showed the
+  proxy EastMoney quote path can exceed 5s while exercising fallback/cache
+  paths, so the runtime default was raised to `30000`.
 - `QUANT_BOARD_SNAPSHOT_COLLECTOR_ALLOW_LIVE_DATASET=0`。额外安全开关，即使 `ENABLED=1` 且 `DATASET_ID=dragonboard_live`，也必须在 `ALLOW_LIVE_DATASET=1` 时才会真正写入正式数据集；防止误配置直接污染生产数据。
 
 ### `snapshot_collector.providers`
@@ -184,7 +187,9 @@ daily:        15:00
 
 短期 Provider：
 
-- `ProxyHotlistProvider`: 调用 `proxy-server` 热榜接口，复用现有八平台热榜能力。
+- `StartupBundleStockProvider`: 优先读取 proxy-server startup bundle，复用 live 前端写入的完整 merged stocks。
+- `ProxyMergedHotlistProvider`: startup bundle 缺失时调用 `proxy-server` 八个平台热榜接口做 union fallback，保持 shadow 股票覆盖不退回单平台 top100。
+- `ProxyHotlistProvider`: 调用 `proxy-server` 单平台热榜接口，仅作为诊断 provider 保留。
 - `ProxyQuoteProvider` (当前默认，**过渡方案**): 调用 `proxy-server` EastMoney 行情端点 `GET /api/quotes/eastmoney?codes=...`，获取实时行情和资金流数据。返回 `{quotes, depth: [], money_flow, market_meta}`，其中 money_flow 的 `mediumNetInflow` 由 EastMoney 字段推导。depth 固定为空（proxy-server 无盘口端点）。proxy-server 返回 `ok=false` 或 `degraded=true` 的降级信封时，本 provider 必须返回 `SourceHealth(ok=false)`，避免把降级 HTTP 200 误判为健康行情。**这是临时过渡配置：生产口径应使用 `BridgeQuoteProvider` 作为主 quote 源（通过 python-bridge 获取 TDX 实时行情和五档盘口），`ProxyQuoteProvider` 仅作为 bridge 离线时的 fallback。**`service_factory.py` 当前只挂载 `ProxyQuoteProvider`，不挂载 `BridgeQuoteProvider`，是 Phase 4 验证阶段的临时安排。
 - `BridgeQuoteProvider`: 调用 `python-bridge` 新增或既有接口获取当前行情、depth、tick、money flow。保留用于需要 bridge WebSocket pool 模式的场景。
 - `ThemeMappingProvider`: 直接通过 QuantBoard MongoDB 题材集合读取题材映射。

@@ -4,7 +4,9 @@ Each provider fetches raw material from one external source and returns
 a ``(data, SourceHealth)`` tuple.  Providers never write MongoDB snapshot
 collections and never generate ``snapshot_id`` values.
 
-- ``ProxyHotlistProvider`` ── hotlist stocks from the local proxy-server
+- ``StartupBundleStockProvider`` ── live-equivalent stock pool from proxy cache
+- ``ProxyMergedHotlistProvider`` ── merged multi-platform hotlist fallback
+- ``ProxyHotlistProvider`` ── single-platform hotlist diagnostic provider
 - ``BridgeQuoteProvider``   ── real-time quotes from the python-bridge
 - ``ThemeMappingProvider``  ── code➜theme mapping from MongoDB theme tables
 - ``collect_market_context``── assembles all providers into a MarketDataContext
@@ -19,7 +21,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 from .models import MarketDataContext, SourceHealth
 
@@ -28,6 +30,29 @@ from .models import MarketDataContext, SourceHealth
 _DEFAULT_PROXY_BASE_URL = "http://127.0.0.1:3000"
 _DEFAULT_BRIDGE_BASE_URL = "http://127.0.0.1:8765"
 _DEFAULT_TIMEOUT_MS = 5000
+_DEFAULT_RANK = 999
+
+_HOTLIST_PLATFORMS = ("eastmoney", "ths", "kpl", "tdx", "xueqiu", "cls", "tgb", "dzh")
+_HOTLIST_RANK_FIELDS = {
+    "eastmoney": "emRank",
+    "ths": "thsRank",
+    "kpl": "kplRank",
+    "tdx": "tdxRank",
+    "xueqiu": "xqRank",
+    "cls": "clsRank",
+    "tgb": "tgbRank",
+    "dzh": "dzhRank",
+}
+_HOTLIST_WEIGHTS = {
+    "kpl": 1.0,
+    "tdx": 0.9,
+    "ths": 0.85,
+    "eastmoney": 0.75,
+    "dzh": 0.7,
+    "tgb": 0.4,
+    "xueqiu": 0.35,
+    "cls": 0.35,
+}
 
 
 # ── helpers ─────────────────────────────────────────────────────────────────
@@ -52,6 +77,13 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return int(float(value))
     except (TypeError, ValueError):
         return default
+
+
+def _normalize_stock_code(value: Any) -> str:
+    code = "".join(ch for ch in str(value or "").strip() if ch.isdigit())
+    if len(code) >= 6:
+        code = code[-6:]
+    return code if len(code) == 6 else ""
 
 
 def _http_get_json(url: str, timeout_s: float) -> Any:
@@ -242,6 +274,98 @@ class EastmoneyFundFlowProvider(_BatchedProxyProvider):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# StartupBundleStockProvider
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+class StartupBundleStockProvider:
+    """Fetch live's merged stock pool from proxy-server startup cache."""
+
+    def __init__(
+        self,
+        base_url: str = _DEFAULT_PROXY_BASE_URL,
+        *,
+        cache_key_prefix: str = "default",
+        trading_date: str | None = None,
+    ) -> None:
+        self._base_url = base_url.rstrip("/")
+        self._cache_key_prefix = cache_key_prefix
+        self._trading_date = trading_date
+
+    def collect(
+        self,
+        *,
+        timeout_ms: int = _DEFAULT_TIMEOUT_MS,
+    ) -> tuple[list[dict[str, Any]], SourceHealth]:
+        start = time.monotonic()
+        key = self._cache_key()
+        try:
+            url = f"{self._base_url}/api/cache/startup-bundle?{urlencode({'key': key})}"
+            body = _http_get_json(url, timeout_ms / 1000.0)
+            degraded_error = _proxy_degraded_error(body)
+            if degraded_error:
+                return [], self._health(False, start, error=degraded_error)
+
+            bundle = body.get("data") if isinstance(body, dict) else None
+            stocks = bundle.get("stocks") if isinstance(bundle, dict) else None
+            if not isinstance(stocks, list) or not stocks:
+                return [], self._health(False, start, error="startup bundle missing")
+
+            rows = self._normalize(stocks)
+            if not rows:
+                return [], self._health(False, start, error="startup bundle has no valid stocks")
+            return rows, self._health(True, start, row_count=len(rows), coverage_ratio=1.0)
+        except Exception as exc:
+            return [], self._health(False, start, error=str(exc))
+
+    def _cache_key(self) -> str:
+        trading_date = self._trading_date or datetime.now().strftime("%Y-%m-%d")
+        return f"{self._cache_key_prefix}:{trading_date}"
+
+    def _health(
+        self,
+        ok: bool,
+        start: float,
+        *,
+        row_count: int = 0,
+        error: str = "",
+        coverage_ratio: float = 0.0,
+    ) -> SourceHealth:
+        return SourceHealth(
+            source="startup_bundle",
+            ok=ok,
+            latency_ms=int((time.monotonic() - start) * 1000),
+            row_count=row_count,
+            error=error,
+            captured_at=_iso_now(),
+            requested_count=row_count,
+            returned_count=row_count,
+            coverage_ratio=coverage_ratio,
+        )
+
+    def _normalize(self, stocks: list[Any]) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for item in stocks:
+            if not isinstance(item, dict):
+                continue
+            code = str(item.get("code") or "").strip()
+            if not code:
+                continue
+            row = dict(item)
+            row["code"] = code
+            row["name"] = str(row.get("name") or code)
+            row["rank"] = _safe_int(row.get("rank") or row.get("compRank"), len(rows) + 1)
+            if "change" in row and "pctChange" not in row:
+                row["pctChange"] = row["change"]
+            if "turnover" in row and "amount" not in row:
+                row["amount"] = row["turnover"]
+            if "hotness" in row and "heat" not in row:
+                row["heat"] = row["hotness"]
+            rows.append(row)
+        return rows
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # ProxyHotlistProvider
 # ═════════════════════════════════════════════════════════════════════════════
 
@@ -332,6 +456,198 @@ class ProxyHotlistProvider:
                 "heat": _safe_float(item.get("hot") or item.get("heat")),
             }
             rows.append(row)
+        return rows
+
+
+class ProxyMergedHotlistProvider:
+    """Fetch and merge all proxy hotlist platforms into a live-like stock pool."""
+
+    def __init__(self, base_url: str = _DEFAULT_PROXY_BASE_URL) -> None:
+        self._base_url = base_url.rstrip("/")
+
+    def collect(
+        self,
+        *,
+        timeout_ms: int = _DEFAULT_TIMEOUT_MS,
+    ) -> tuple[list[dict[str, Any]], SourceHealth]:
+        start = time.monotonic()
+        stock_map: dict[str, dict[str, Any]] = {}
+        platform_totals: dict[str, int] = {}
+        failed_platforms: list[str] = []
+        errors: list[str] = []
+
+        for platform in _HOTLIST_PLATFORMS:
+            try:
+                body = self._fetch_platform(platform, timeout_ms / 1000.0)
+                degraded_error = _proxy_degraded_error(body)
+                if degraded_error:
+                    raise RuntimeError(degraded_error)
+                rows = self._normalize_platform(platform, body)
+                platform_totals[platform] = len(rows)
+                self._merge_platform_rows(stock_map, platform, rows)
+            except Exception as exc:
+                failed_platforms.append(platform)
+                errors.append(f"{platform}: {exc}")
+                platform_totals[platform] = 0
+
+        rows = self._rank_rows(stock_map, platform_totals)
+        completed_at = _iso_now()
+        ok = bool(rows) and len(failed_platforms) < len(_HOTLIST_PLATFORMS)
+        return rows, SourceHealth(
+            source="merged_hotlist_proxy",
+            ok=ok,
+            latency_ms=int((time.monotonic() - start) * 1000),
+            row_count=len(rows),
+            error="; ".join(errors),
+            captured_at=completed_at,
+            requested_count=sum(platform_totals.values()),
+            returned_count=len(rows),
+            coverage_ratio=round(len(rows) / sum(platform_totals.values()), 4)
+            if sum(platform_totals.values())
+            else 0.0,
+            failed_batches=failed_platforms,
+        )
+
+    def _fetch_platform(self, platform: str, timeout_s: float) -> Any:
+        url = f"{self._base_url}/api/{platform}/hot"
+        if platform in ("eastmoney", "tdx"):
+            payload = {} if platform == "eastmoney" else [{"listType": "0", "cycle": "0"}]
+            return _http_post_json(url, timeout_s, payload)
+        return _http_get_json(url, timeout_s)
+
+    def _merge_platform_rows(
+        self,
+        stock_map: dict[str, dict[str, Any]],
+        platform: str,
+        rows: list[dict[str, Any]],
+    ) -> None:
+        rank_field = _HOTLIST_RANK_FIELDS[platform]
+        for row in rows:
+            code = str(row.get("code") or "").strip()
+            if not code:
+                continue
+            stock = stock_map.get(code)
+            if stock is None:
+                stock = self._empty_stock(code)
+                stock_map[code] = stock
+            stock[rank_field] = row["rank"]
+            name = str(row.get("name") or "").strip()
+            if name and name != "-" and stock.get("name") in ("", "-"):
+                stock["name"] = name
+                stock["platformName"] = name
+
+    def _normalize_platform(self, platform: str, body: Any) -> list[dict[str, Any]]:
+        items = _extract_items(body)
+        rows: list[dict[str, Any]] = []
+        for index, item in enumerate(items):
+            row = self._normalize_platform_item(platform, item, index)
+            if row is not None:
+                rows.append(row)
+        return rows
+
+    def _normalize_platform_item(
+        self,
+        platform: str,
+        item: Any,
+        index: int,
+    ) -> dict[str, Any] | None:
+        if platform == "kpl" and isinstance(item, list) and len(item) >= 2:
+            return self._row(
+                code=item[0],
+                name=item[1],
+                rank=item[4] if len(item) > 4 else index + 1,
+            )
+        if platform == "tdx" and isinstance(item, list) and len(item) >= 11:
+            return self._row(code=item[1], name=item[2], rank=item[10])
+        if platform == "dzh" and isinstance(item, dict):
+            code_key = next(iter(item.keys()), "")
+            return self._row(code=code_key, name="-", rank=index + 1)
+        if platform == "cls" and isinstance(item, dict):
+            stock = item.get("stock") if isinstance(item.get("stock"), dict) else {}
+            return self._row(
+                code=stock.get("StockID"),
+                name=stock.get("name"),
+                rank=index + 1,
+            )
+        if not isinstance(item, dict):
+            return None
+
+        code = (
+            item.get("sc")
+            or item.get("c")
+            or item.get("code")
+            or item.get("symbol")
+            or item.get("fullCode")
+            or item.get("StockID")
+        )
+        name = (
+            item.get("sn")
+            or item.get("n")
+            or item.get("name")
+            or item.get("stockName")
+            or "-"
+        )
+        rank = item.get("rk") or item.get("r") or item.get("rank") or item.get("order") or item.get("ranking")
+        return self._row(code=code, name=name, rank=rank or index + 1)
+
+    def _row(self, *, code: Any, name: Any, rank: Any) -> dict[str, Any] | None:
+        code_str = _normalize_stock_code(code)
+        if not code_str:
+            return None
+        return {
+            "code": code_str,
+            "name": str(name or "-"),
+            "rank": _safe_int(rank, _DEFAULT_RANK),
+        }
+
+    def _empty_stock(self, code: str) -> dict[str, Any]:
+        row: dict[str, Any] = {
+            "code": code,
+            "name": "-",
+            "price": 0,
+            "pctChange": 0,
+            "volume": 0,
+            "amount": 0,
+            "turnover": 0,
+            "turnoverRate": 0,
+            "heat": 0,
+            "platformName": "",
+        }
+        for field in _HOTLIST_RANK_FIELDS.values():
+            row[field] = _DEFAULT_RANK
+        return row
+
+    def _rank_rows(
+        self,
+        stock_map: dict[str, dict[str, Any]],
+        platform_totals: dict[str, int],
+    ) -> list[dict[str, Any]]:
+        rows = list(stock_map.values())
+        for row in rows:
+            weighted_sum = 0.0
+            total_weight = 0.0
+            platforms = 0
+            for platform in _HOTLIST_PLATFORMS:
+                total = platform_totals.get(platform, 0)
+                if total <= 0:
+                    continue
+                field = _HOTLIST_RANK_FIELDS[platform]
+                weight = _HOTLIST_WEIGHTS[platform]
+                total_weight += weight
+                rank = _safe_int(row.get(field), _DEFAULT_RANK)
+                if rank < _DEFAULT_RANK:
+                    platforms += 1
+                    weighted_sum += (rank / total) * 100 * weight
+                else:
+                    weighted_sum += 100 * weight
+            row["platforms"] = platforms
+            row["avgRankNum"] = weighted_sum / total_weight if total_weight else float(_DEFAULT_RANK)
+            row["avgRank"] = f"{row['avgRankNum']:.1f}"
+
+        rows.sort(key=lambda item: (float(item.get("avgRankNum") or _DEFAULT_RANK), -int(item.get("platforms") or 0)))
+        for index, row in enumerate(rows, start=1):
+            row["compRank"] = index
+            row["rank"] = index
         return rows
 
 
@@ -491,11 +807,13 @@ def _eastmoney_rows_to_quotes(rows: list[dict[str, Any]]) -> list[dict[str, Any]
             continue
         quotes.append({
             "code": code,
+            "name": str(item.get("f14") or code),
             "price": _safe_float(item.get("f2")),
             "pctChange": _safe_float(item.get("f3")),
-            "volume": _safe_int(item.get("f6")),
-            "amount": _safe_float(item.get("f5")),
+            "volume": _safe_int(item.get("f5")),
+            "amount": _safe_float(item.get("f6")),
             "turnover": _safe_float(item.get("f8")),
+            "volumeRatio": _safe_float(item.get("f10")),
             "pe": _safe_float(item.get("f9")),
             "totalMarketValue": _safe_float(item.get("f20")),
         })
@@ -924,7 +1242,7 @@ def collect_market_context(
 
     Provider routing
     ----------------
-    * ``ProxyHotlistProvider`` → ``ctx.stocks``
+    * ``StartupBundleStockProvider`` / ``ProxyMergedHotlistProvider`` / ``ProxyHotlistProvider`` → ``ctx.stocks``
     * ``BridgeQuoteProvider``   → ``ctx.quotes``, ``ctx.depth``, ``ctx.market_meta``
     * ``ThemeMappingProvider``  → ``ctx.themes``
 
@@ -935,7 +1253,20 @@ def collect_market_context(
 
     for provider in providers:
         try:
-            if isinstance(provider, ProxyHotlistProvider):
+            if isinstance(provider, StartupBundleStockProvider):
+                rows, health = provider.collect(timeout_ms=timeout_ms)
+                ctx.source_health.append(health)
+                if rows:
+                    ctx.stocks = rows
+                    active_codes = [
+                        str(row.get("code") or "").strip()
+                        for row in rows
+                        if isinstance(row, dict) and str(row.get("code") or "").strip()
+                    ]
+
+            elif isinstance(provider, (ProxyMergedHotlistProvider, ProxyHotlistProvider)):
+                if ctx.stocks:
+                    continue
                 rows, health = provider.collect(timeout_ms=timeout_ms)
                 ctx.stocks.extend(rows)
                 ctx.source_health.append(health)

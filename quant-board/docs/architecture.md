@@ -35,7 +35,7 @@ backend/
 
 ### 实验性后端快照采集器（shadow 模式）
 
-`backend/snapshot_collector/` 是一个实验性的后端快照采集器，当前处于 shadow-only 阶段。该模块从 proxy-server 和 python-bridge 实时拉取热榜与行情数据，在 QuantBoard 后端独立完成快照组装、规范化和质量门禁，不依赖 Dragon Board 前端运行时。
+`backend/snapshot_collector/` 是一个实验性的后端快照采集器，当前处于 shadow-only 阶段。该模块从 proxy-server 和 python-bridge 实时拉取热榜与行情数据，在 QuantBoard 后端独立完成快照组装、规范化和质量门禁。它不嵌入浏览器运行时；为保持 shadow/live 股票覆盖一致，股票池优先复用 Dragon Board live 前端写入 proxy-server 的 startup bundle，缓存缺失时再走 proxy-server 八平台热榜 union fallback。
 
 模块结构：
 
@@ -44,7 +44,7 @@ backend/snapshot_collector/
   models.py           # SnapshotSlot, MarketDataContext, QualityResult, CollectorRunRequest/Result, SourceHealth
   slots.py            # SLOT_TIMES, generate_slots(), is_slot_eligible()
   trading_calendar.py # is_trading_day(), trading_date_from_ts()
-  providers.py        # ProxyHotlistProvider, ProxyQuoteProvider, BridgeQuoteProvider, ThemeMappingProvider
+  providers.py        # StartupBundleStockProvider, ProxyMergedHotlistProvider, ProxyHotlistProvider, ProxyQuoteProvider, BridgeQuoteProvider, ThemeMappingProvider
   builder.py          # build_ingest_payload()
   quality_gate.py     # evaluate_quality()
   state.py            # record_run(), get_status()
@@ -64,7 +64,8 @@ backend/snapshot_collector/
 - 质量门禁在前：quality_gate 在写入前检查数据源健康、股票行数量和时间窗口，被阻止的运行写入 `snapshot_collector_runs`（状态 `blocked`）并保留审计轨迹。运行记录会保存 `sourceHealth`、`captureMode`、核心行数和完成时间，方便 Phase 4 shadow/live 对比审计。
 - API 路由 `/api/snapshot-collector/*` 和 CLI 命令 `snapshot-collector-*` 只服务实验运维和审计。
 - 自动调度器（Phase 3）：`SnapshotCollectorScheduler` 是独立的 `asyncio` 后台 runner（模块级单例），在 FastAPI `startup` 时注册到事件循环。轮询间隔由 `QUANT_BOARD_SNAPSHOT_COLLECTOR_POLL_MS`（默认 1000ms）控制，每个 tick 检查交易日、槽位表、时间窗口和 MongoDB 中的 `datasetId + snapshotId` 是否已存在，只为真正缺失且符合条件的 slot 启动 fire-and-forget 采集任务。调度器在非 MongoDB 模式或 `QUANT_BOARD_SNAPSHOT_COLLECTOR_ENABLED=0` 时自动禁用。采集任务的并发保护通过内存中的 `_in_flight_slots` 集合实现，确保同一 slot 不会重复采集。
-- 本机 shadow 守护：`supervisor.py` 只负责实验采集运行环境，不改变采集业务合同。它复用健康的 MongoDB、proxy-server 和 python-bridge，只在依赖缺失时隐藏启动对应进程，并使用 `8001` 运行目标工作区 collector API，避免替换主工作区 `8000` API。MongoDB 通过 `ping` 检查，proxy-server/python-bridge 校验结构化 `/health` 服务身份；collector 必须同时满足 scheduler `enabled=true`、`running=true` 和 `dataset_id=dragonboard_backend_shadow`。守护进程自己启动的服务如仍占端口但健康检查失败，会被终止并重启；未知外部进程只标记 `blocked`，不会误杀。
+- 本机 shadow 守护：`supervisor.py` 只负责实验采集运行环境，不改变采集业务合同。它复用健康的 MongoDB、proxy-server 和 python-bridge，并使用 `8001` 运行目标工作区 collector API，避免替换主工作区 `8000` API。MongoDB 通过 `ping` 检查，proxy-server/python-bridge 校验结构化 `/health` 服务身份；collector 必须同时满足 scheduler `enabled=true`、`running=true` 和 `dataset_id=dragonboard_backend_shadow`。`proxy-server` 只复用健康的 `127.0.0.1:3000`，缺失或不健康时标记 `blocked`，不得从隔离 worktree 启动代理接管主看板端口。守护进程自己启动的非 proxy 服务如仍占端口但健康检查失败，会被终止并重启；未知外部进程只标记 `blocked`，不会误杀。
+- 后端 collector 优先通过 `StartupBundleStockProvider` 读取 proxy-server `/api/cache/startup-bundle` 中由 Dragon Board live 前端写入的 merged stocks，作为与 live 快照一致的完整股票池；若 startup bundle 缺失或无效，默认改用 `ProxyMergedHotlistProvider` 调用八个平台热榜接口做 union 合并，避免 shadow 静默降级为东财 top100。单平台 `ProxyHotlistProvider` 只保留为诊断工具。只有 startup bundle 失败且 `merged_hotlist_proxy` 也未成功时，质量门禁才以 `startup_bundle_missing` 阻断写入。
 - 后端 collector 通过共享 `ThemeHeatService` 写入全量 `entityType=hot_theme` rows；`sector_rows=0` 仅是替换前历史快照的已知缺口，新 shadow 帧不得再以外部端口不可用为由允许空题材行。
 - 正式切换要求：shadow 采集器必须通过完整审计（覆盖率、质量门禁、数据一致性）后才能讨论 live cutover。
 
@@ -74,7 +75,7 @@ backend/snapshot_collector/
 
 1. **Depth（盘口深度）**：当前未接入任何来源。`ProxyQuoteProvider` 的 `depth` 恒为空列表，`BridgeQuoteProvider` 虽然能通过 python-bridge 读取五档盘口，但未被挂载为默认 provider。这意味着所有后端 shadow 快照的 `depth` 字段始终为空，与前端 live 快照的盘口数据存在结构性差距。
 
-2. **股票快照行情接管**：`BridgeQuoteProvider`（python-bridge WebSocket pool 模式）已实现但未启用。该缺口只针对股票快照行情；题材热度的基础行情已独立固定为腾讯批量行情，不与本项 fallback 混用。
+2. **股票快照行情接管**：股票池已通过 live startup bundle 优先对齐 live merged stocks，并在缓存缺失时通过八平台 union fallback 保持覆盖范围不退回单平台 top100；行情增量仍由 `ProxyQuoteProvider` 过渡补全。`BridgeQuoteProvider`（python-bridge WebSocket pool 模式）已实现但未启用。该缺口只针对股票快照行情；题材热度的基础行情已独立固定为腾讯批量行情，不与本项 fallback 混用。
 
 3. **Theme 数据源**：MongoDB 全市场映射、腾讯基础行情和东财资金字段已由共享 `ThemeHeatService` 聚合，使用 `theme-market-v1`、5 分钟缓存和覆盖率门禁；collector 保存全部 factors 为 `hot_theme` rows，Dragon Board UI 只裁剪展示。
 
@@ -113,6 +114,18 @@ python-bridge 采集接口（Phase 2）：
 BridgeQuoteProvider（`backend/snapshot_collector/providers.py`）已适配：
 - `set_pool(codes)` — 注册采样池到 bridge
 - `collect(use_pool=True)` — 使用池缓存抓取，含 `poolStalenessMs`（默认 30s）陈旧检测
+
+StartupBundleStockProvider — 当前默认股票池来源：
+
+`StartupBundleStockProvider` 调用 proxy-server 的启动缓存接口读取 live 前端最近写入的完整 merged stocks：
+
+- `GET /api/cache/startup-bundle?key=default:YYYY-MM-DD` — 返回 `schemaVersion=1` 的 startup bundle，包含 `platformData` 和完整 `stocks`
+- collector 使用 run request 的 `tradingDate` 构造 key，因此按目标交易日对齐 live 缓存
+- `collect_market_context` 在 startup bundle 成功时直接以其 `stocks` 作为 `MarketDataContext.stocks`，并跳过热榜 fallback
+- startup bundle 缺失、过期或结构无效时，`SourceHealth(source=startup_bundle, ok=false)` 会进入审计；collector 随后运行 `ProxyMergedHotlistProvider`，从 `eastmoney/ths/kpl/tdx/xueqiu/cls/tgb/dzh` 八个平台取数、按代码 union、生成各平台 rank 字段和 `avgRank/compRank/rank`
+- 只有 startup bundle 失败且 `ProxyMergedHotlistProvider` 未成功产出股票池时，新 shadow 写入才会被 `startup_bundle_missing` 阻断
+
+该设计优先复用 live 已完成的八平台合并、综合排名、题材/涨停扩展和 RankTrend 增强结果；当 live 页面或主工作区近期未刷新 startup bundle 时，后端只复制股票池覆盖所需的最小合并合同（八平台 union 和排名字段），不复制前端完整热度/题材/涨停增强算法。
 
 ProxyQuoteProvider — 当前默认 quote 数据源（过渡方案）：
 
@@ -422,7 +435,7 @@ V12 后续 Phase 中，ThemeTrend 和 Theme Confluence 回测/优化仍复用现
 | `QUANT_BOARD_SNAPSHOT_COLLECTOR_CLOSE_GRACE_MINUTES` | 收盘后宽限采集分钟数，默认 5 |
 | `QUANT_BOARD_SNAPSHOT_COLLECTOR_PROXY_BASE_URL` | proxy-server 基础 URL，默认 `http://127.0.0.1:3000` |
 | `QUANT_BOARD_SNAPSHOT_COLLECTOR_BRIDGE_BASE_URL` | python-bridge 基础 URL，默认 `http://127.0.0.1:8765` |
-| `QUANT_BOARD_SNAPSHOT_COLLECTOR_PROVIDER_TIMEOUT_MS` | 数据源请求超时（毫秒），默认 5000 |
+| `QUANT_BOARD_SNAPSHOT_COLLECTOR_PROVIDER_TIMEOUT_MS` | 数据源请求超时（毫秒），默认 30000；覆盖 `proxy-server` EastMoney quote fallback 的慢请求窗口 |
 | `QUANT_BOARD_THEME_HEAT_BATCH_SIZE` | 腾讯题材基础行情批大小，默认 50 |
 | `QUANT_BOARD_THEME_HEAT_MAX_CONCURRENCY` | 腾讯批次最大并发，默认 3 |
 | `QUANT_BOARD_THEME_HEAT_CACHE_TTL_SECONDS` | 全市场题材热度缓存秒数，默认 300 |

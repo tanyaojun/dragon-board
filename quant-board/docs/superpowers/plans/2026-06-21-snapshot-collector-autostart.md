@@ -4,7 +4,7 @@
 
 **Goal:** 让修复后的 shadow-only 后端快照采集器在 2026-06-22 开盘前自动就绪，并连续采集至少两个完整交易日，无需人工启动命令。
 
-**Architecture:** 新增一个仅面向 Windows 本机运行的轻量 Python 守护模块，复用目标工作区代码并在独立端口 `8001` 启动 QuantBoard API，避免占用主工作区现有 `8000`。守护模块只在依赖端口缺失时启动 MongoDB、proxy 和 python-bridge，并持续检查采集 API 的结构化健康状态；Windows 计划任务负责登录启动和异常重启。
+**Architecture:** 新增一个仅面向 Windows 本机运行的轻量 Python 守护模块，复用目标工作区代码并在独立端口 `8001` 启动 QuantBoard API，避免占用主工作区现有 `8000`。守护模块可在依赖端口缺失时启动 MongoDB 和 python-bridge，但 `proxy-server` 只复用健康的 `127.0.0.1:3000`，缺失或不健康时标记阻塞，避免隔离 worktree 接管主看板端口；Windows 计划任务负责登录启动和异常重启。
 
 **Tech Stack:** Python 3.13、FastAPI/Uvicorn、Windows Task Scheduler、pytest、MongoDB
 
@@ -28,7 +28,7 @@
 
 - [x] **Step 3: Implement the minimal supervisor**
 
-  仅实现以下职责：端口探测、collector HTTP 健康检查、缺失服务隐藏启动、日志重定向、循环守护；不修改采集业务口径，不接管现有 `8000` 服务。
+  仅实现以下职责：端口探测、collector HTTP 健康检查、缺失服务隐藏启动、日志重定向、循环守护；不修改采集业务口径，不接管现有 `8000` 服务。`proxy-server` 后续收紧为只复用健康 `3000`，不从隔离 worktree 启动。
 
 - [x] **Step 4: Run tests to verify GREEN**
 
@@ -75,7 +75,7 @@
 
 - [x] **Step 2: Start the task now**
 
-  今天为非交易日，启动不会产生交易时段快照，但应使 MongoDB、proxy、bridge 和独立 collector API 就绪。
+  今天为非交易日，启动不会产生交易时段快照，但应使 MongoDB、bridge 和独立 collector API 就绪；proxy 依赖健康的主工作区 `3000`，不由隔离 worktree 接管。
 
 - [x] **Step 3: Verify runtime state**
 

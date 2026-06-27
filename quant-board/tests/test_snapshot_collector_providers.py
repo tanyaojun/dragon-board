@@ -18,7 +18,9 @@ from backend.snapshot_collector.models import MarketDataContext, SourceHealth
 from backend.snapshot_collector.providers import (
     BridgeQuoteProvider,
     ProxyHotlistProvider,
+    ProxyMergedHotlistProvider,
     ProxyQuoteProvider,
+    StartupBundleStockProvider,
     ThemeMappingProvider,
     _eastmoney_rows_to_money_flow,
     _eastmoney_rows_to_quotes,
@@ -182,6 +184,155 @@ TEST_CODES = ["000001", "600000", "300001"]
 
 PROXY_BASE_URL = "http://127.0.0.1:3000"
 BRIDGE_BASE_URL = "http://127.0.0.1:8765"
+
+STARTUP_BUNDLE_RESPONSE = {
+    "ok": True,
+    "data": {
+        "schemaVersion": 1,
+        "tradingDate": "2026-06-23",
+        "createdAt": 1782207600000,
+        "platformData": {
+            "eastmoney": [{"code": "000001", "rank": 1}],
+            "ths": [{"code": "600000", "rank": 1}],
+        },
+        "stocks": [
+            {
+                "code": "000001",
+                "name": "平安银行",
+                "rank": 1,
+                "compRank": 1,
+                "price": 12.5,
+                "change": 2.35,
+                "volume": 150000000,
+                "turnover": 1875000000.0,
+                "turnoverRate": 5.5,
+                "hotness": 92,
+            },
+            {
+                "code": "600000",
+                "name": "浦发银行",
+                "rank": 2,
+                "compRank": 2,
+                "price": 9.8,
+                "change": -0.51,
+                "volume": 80000000,
+                "turnover": 784000000.0,
+                "turnoverRate": 2.1,
+                "hotness": 75,
+            },
+            {
+                "code": "300001",
+                "name": "特锐德",
+                "rank": 3,
+                "compRank": 3,
+                "price": 25.3,
+                "change": 5.2,
+                "volume": 12000000,
+                "turnover": 320000000.0,
+                "turnoverRate": 8.3,
+                "hotness": 88,
+            },
+        ],
+    },
+    "dragonMeta": {"cache": {"hit": True, "stale": False}},
+}
+
+
+def _hotlist_response_for_url(url: str) -> dict[str, Any]:
+    if "/api/eastmoney/hot" in url:
+        return {
+            "data": [
+                {"sc": "SZ000001", "sn": "平安银行"},
+                {"sc": "SH600000", "sn": "浦发银行"},
+                {"sc": "SZ300001", "sn": "特锐德"},
+            ]
+        }
+    if "/api/ths/hot" in url:
+        return {
+            "data": {
+                "stock_list": [
+                    {"code": "000001", "name": "平安银行", "order": 1},
+                    {"code": "600000", "name": "浦发银行", "order": 2},
+                    {"code": "300002", "name": "神州泰岳", "order": 3},
+                ]
+            }
+        }
+    if "/api/kpl/hot" in url:
+        return {
+            "List": [
+                ["000001", "平安银行", "1.2", "", "1"],
+                ["300003", "乐普医疗", "3.4", "", "2"],
+            ]
+        }
+    if "/api/tdx/hot" in url:
+        return [
+            ["meta"],
+            ["meta"],
+            ["meta"],
+            ["", "600004", "白云机场", "0.5", "", "", "", "", "", "", "1"],
+        ]
+    if "/api/xueqiu/hot" in url:
+        return {"data": {"items": [{"code": "SZ000001", "name": "平安银行"}]}}
+    if "/api/cls/hot" in url:
+        return {"errno": 0, "data": [{"stock": {"StockID": "600005", "name": "武钢股份"}}]}
+    if "/api/tgb/hot" in url:
+        return {"dto": [{"fullCode": "600006", "stockName": "东风汽车", "ranking": 1}]}
+    if "/api/dzh/hot" in url:
+        return {"result": [{"SH600007": 99}]}
+    return {}
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# StartupBundleStockProvider
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+class TestStartupBundleStockProvider:
+    """startup bundle provider reuses live's merged stock pool."""
+
+    def test_collect_reads_complete_merged_stocks_from_startup_bundle(self) -> None:
+        provider = StartupBundleStockProvider(base_url=PROXY_BASE_URL, trading_date="2026-06-23")
+        mock_resp = _fake_urlopen_response(STARTUP_BUNDLE_RESPONSE)
+        with patch.object(urllib.request, "urlopen", return_value=mock_resp):
+            stocks, health = provider.collect(timeout_ms=5000)
+
+        assert health.ok is True
+        assert health.source == "startup_bundle"
+        assert health.row_count == 3
+        assert health.coverage_ratio == 1.0
+        assert len(stocks) == 3
+        assert stocks[0]["code"] == "000001"
+        assert stocks[0]["rank"] == 1
+        assert stocks[0]["pctChange"] == 2.35
+        assert stocks[0]["amount"] == 1875000000.0
+        assert stocks[0]["turnover"] == 1875000000.0
+        assert stocks[0]["turnoverRate"] == 5.5
+
+    def test_collect_uses_default_today_key_when_trading_date_missing(self) -> None:
+        provider = StartupBundleStockProvider(base_url=PROXY_BASE_URL)
+        captured_urls: list[str] = []
+
+        def record_urlopen(req: urllib.request.Request, timeout: float = 0) -> MagicMock:
+            captured_urls.append(req.full_url if hasattr(req, "full_url") else str(req))
+            return _fake_urlopen_response(STARTUP_BUNDLE_RESPONSE)
+
+        with patch.object(urllib.request, "urlopen", side_effect=record_urlopen):
+            provider.collect(timeout_ms=5000)
+
+        assert len(captured_urls) == 1
+        assert "/api/cache/startup-bundle" in captured_urls[0]
+        assert "key=default%3A" in captured_urls[0]
+
+    def test_missing_bundle_returns_failing_health(self) -> None:
+        provider = StartupBundleStockProvider(base_url=PROXY_BASE_URL, trading_date="2026-06-23")
+        mock_resp = _fake_urlopen_response({"ok": True, "data": None})
+        with patch.object(urllib.request, "urlopen", return_value=mock_resp):
+            stocks, health = provider.collect(timeout_ms=5000)
+
+        assert stocks == []
+        assert health.ok is False
+        assert health.source == "startup_bundle"
+        assert "missing" in health.error
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -788,8 +939,8 @@ EASTMONEY_QUOTE_RESPONSE = {
                 "f14": "平安银行",
                 "f2": 12.50,
                 "f3": 2.35,
-                "f5": 1875000000.0,
-                "f6": 150000000,
+                "f5": 150000000,
+                "f6": 1875000000.0,
                 "f8": 5.5,
                 "f9": 8.5,
                 "f10": 12.22,
@@ -806,8 +957,8 @@ EASTMONEY_QUOTE_RESPONSE = {
                 "f14": "浦发银行",
                 "f2": 9.80,
                 "f3": -0.51,
-                "f5": 784000000.0,
-                "f6": 80000000,
+                "f5": 80000000,
+                "f6": 784000000.0,
                 "f8": 2.1,
                 "f9": 5.2,
                 "f10": 9.85,
@@ -824,8 +975,8 @@ EASTMONEY_QUOTE_RESPONSE = {
                 "f14": "特锐德",
                 "f2": 25.30,
                 "f3": 5.20,
-                "f5": 320000000.0,
-                "f6": 12000000,
+                "f5": 12000000,
+                "f6": 320000000.0,
                 "f8": 8.3,
                 "f9": 35.0,
                 "f10": 24.05,
@@ -875,6 +1026,7 @@ class TestEastmoneyRowsToQuotes:
 
         q0 = quotes[0]
         assert q0["code"] == "000001"
+        assert q0["name"] == "平安银行"
         assert q0["price"] == 12.50
         assert q0["pctChange"] == 2.35
         assert q0["volume"] == 150000000
@@ -1197,3 +1349,63 @@ class TestCollectMarketContextWithProxyQuoteProvider:
         assert len(ctx.source_health) == 3
         sources = {h.source for h in ctx.source_health}
         assert sources == {"hotlist_proxy", "quote_proxy", "theme_mapping"}
+
+    def test_startup_bundle_is_primary_stock_pool_and_hotlist_is_fallback(self) -> None:
+        startup = StartupBundleStockProvider(base_url=PROXY_BASE_URL, trading_date="2026-06-23")
+        hotlist = ProxyMergedHotlistProvider(base_url=PROXY_BASE_URL)
+        quote = ProxyQuoteProvider(base_url=PROXY_BASE_URL)
+        captured_urls: list[str] = []
+
+        def record_urlopen(req: urllib.request.Request, timeout: float = 0) -> MagicMock:
+            captured_urls.append(req.full_url if hasattr(req, "full_url") else str(req))
+            if len(captured_urls) == 1:
+                return _fake_urlopen_response(STARTUP_BUNDLE_RESPONSE)
+            return _fake_urlopen_response(EASTMONEY_QUOTE_RESPONSE)
+
+        with patch.object(urllib.request, "urlopen", side_effect=record_urlopen):
+            ctx = collect_market_context([startup, hotlist, quote], [], timeout_ms=5000)
+
+        assert len(ctx.stocks) == 3
+        assert [row["code"] for row in ctx.stocks] == ["000001", "600000", "300001"]
+        assert all("eastmoney/hot" not in url for url in captured_urls)
+        assert any("quotes/eastmoney" in url for url in captured_urls)
+        assert any(h.source == "startup_bundle" and h.ok for h in ctx.source_health)
+
+    def test_merged_hotlist_fallback_runs_when_startup_bundle_missing(self) -> None:
+        startup = StartupBundleStockProvider(base_url=PROXY_BASE_URL, trading_date="2026-06-23")
+        hotlist = ProxyMergedHotlistProvider(base_url=PROXY_BASE_URL)
+        captured_urls: list[str] = []
+
+        def record_urlopen(req: urllib.request.Request, timeout: float = 0) -> MagicMock:
+            captured_urls.append(req.full_url if hasattr(req, "full_url") else str(req))
+            if len(captured_urls) == 1:
+                return _fake_urlopen_response({"ok": True, "data": None})
+            return _fake_urlopen_response(_hotlist_response_for_url(captured_urls[-1]))
+
+        with patch.object(urllib.request, "urlopen", side_effect=record_urlopen):
+            ctx = collect_market_context([startup, hotlist], [], timeout_ms=5000)
+
+        assert len(ctx.stocks) == 9
+        assert {row["code"] for row in ctx.stocks} == {
+            "000001",
+            "600000",
+            "300001",
+            "300002",
+            "300003",
+            "600004",
+            "600005",
+            "600006",
+            "600007",
+        }
+        assert ctx.stocks[0]["emRank"] == 1
+        assert ctx.stocks[0]["thsRank"] == 1
+        assert ctx.stocks[0]["kplRank"] == 1
+        assert ctx.stocks[0]["platforms"] == 4
+        assert ctx.stocks[0]["avgRank"] != "999"
+        assert any("cache/startup-bundle" in url for url in captured_urls)
+        assert any("eastmoney/hot" in url for url in captured_urls)
+        assert any("ths/hot" in url for url in captured_urls)
+        assert any("kpl/hot" in url for url in captured_urls)
+        health_sources = {h.source: h.ok for h in ctx.source_health}
+        assert health_sources["startup_bundle"] is False
+        assert health_sources["merged_hotlist_proxy"] is True

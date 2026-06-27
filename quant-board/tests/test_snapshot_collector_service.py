@@ -369,9 +369,9 @@ class TestSettingsDefaults:
         settings = Settings()
         assert settings.snapshot_collector_bridge_base_url == "http://127.0.0.1:8765"
 
-    def test_default_provider_timeout_ms_is_5000(self) -> None:
+    def test_default_provider_timeout_ms_is_30000(self) -> None:
         settings = Settings()
-        assert settings.snapshot_collector_provider_timeout_ms == 5000
+        assert settings.snapshot_collector_provider_timeout_ms == 30000
 
     def test_default_allow_live_dataset_is_false(self) -> None:
         settings = Settings()
@@ -904,6 +904,33 @@ def _standard_health() -> list[dict[str, Any]]:
 
 class TestServiceDryRun:
     """dry-run returns dryRun=true and does NOT write fact data."""
+
+    def test_default_providers_include_proxy_quote_for_hotlist_enrichment(self) -> None:
+        from backend.snapshot_collector.providers import (
+            ProxyMergedHotlistProvider,
+            ProxyQuoteProvider,
+            StartupBundleStockProvider,
+        )
+        from backend.snapshot_collector.service import SnapshotCollectorService
+
+        service = SnapshotCollectorService(repo=FakeSnapshotRepository())
+
+        provider_types = [type(provider) for provider in service._create_providers()]
+
+        assert provider_types.index(StartupBundleStockProvider) < provider_types.index(ProxyMergedHotlistProvider)
+        assert ProxyMergedHotlistProvider in provider_types
+        assert ProxyQuoteProvider in provider_types
+
+    def test_default_providers_use_requested_trading_date_for_startup_bundle(self) -> None:
+        from backend.snapshot_collector.providers import StartupBundleStockProvider
+        from backend.snapshot_collector.service import SnapshotCollectorService
+
+        service = SnapshotCollectorService(repo=FakeSnapshotRepository())
+
+        providers = service._create_providers(trading_date="2026-06-23")
+        startup = next(provider for provider in providers if isinstance(provider, StartupBundleStockProvider))
+
+        assert startup._cache_key() == "default:2026-06-23"
 
     def test_dry_run_does_not_call_repo_fact_write(self) -> None:
         from backend.snapshot_collector.models import CollectorRunRequest
@@ -1802,7 +1829,7 @@ def _make_simple_settings(**overrides):
         "snapshot_collector_close_grace_minutes": 5,
         "snapshot_collector_proxy_base_url": "http://127.0.0.1:3000",
         "snapshot_collector_bridge_base_url": "http://127.0.0.1:8765",
-        "snapshot_collector_provider_timeout_ms": 5000,
+        "snapshot_collector_provider_timeout_ms": 30000,
         "snapshot_collector_allow_live_dataset": False,
     }
     defaults.update(overrides)

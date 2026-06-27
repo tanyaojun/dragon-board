@@ -121,7 +121,7 @@ class Settings(BaseModel):
     snapshot_collector_close_grace_minutes: int = Field(default=5)
     snapshot_collector_proxy_base_url: str = Field(default="http://127.0.0.1:3000")
     snapshot_collector_bridge_base_url: str = Field(default="http://127.0.0.1:8765")
-    snapshot_collector_provider_timeout_ms: int = Field(default=5000)
+    snapshot_collector_provider_timeout_ms: int = Field(default=30000)
     snapshot_collector_allow_live_dataset: bool = Field(default=False)
     theme_heat_batch_size: int = Field(default=50)
     theme_heat_max_concurrency: int = Field(default=3)
