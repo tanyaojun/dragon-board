@@ -907,19 +907,26 @@ class TestServiceDryRun:
 
     def test_default_providers_include_proxy_quote_for_hotlist_enrichment(self) -> None:
         from backend.snapshot_collector.providers import (
+            BridgeQuoteProvider,
+            ProxyLimitUpProvider,
             ProxyMergedHotlistProvider,
             ProxyQuoteProvider,
             StartupBundleStockProvider,
+            ThemeMappingProvider,
         )
         from backend.snapshot_collector.service import SnapshotCollectorService
 
         service = SnapshotCollectorService(repo=FakeSnapshotRepository())
+        service._create_theme_repository = lambda: object()
 
         provider_types = [type(provider) for provider in service._create_providers()]
 
         assert provider_types.index(StartupBundleStockProvider) < provider_types.index(ProxyMergedHotlistProvider)
         assert ProxyMergedHotlistProvider in provider_types
         assert ProxyQuoteProvider in provider_types
+        assert BridgeQuoteProvider in provider_types
+        assert ThemeMappingProvider in provider_types
+        assert ProxyLimitUpProvider in provider_types
 
     def test_default_providers_use_requested_trading_date_for_startup_bundle(self) -> None:
         from backend.snapshot_collector.providers import StartupBundleStockProvider

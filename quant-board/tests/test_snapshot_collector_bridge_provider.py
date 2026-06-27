@@ -49,7 +49,7 @@ BRIDGE_POOL_SNAPSHOT = {
     "pooled": True,
     "poolRefreshedAt": int(time.time() * 1000) - 5000,  # 5 s ago, not stale
     "quotes": [
-        {"code": "000001", "price": 12.50, "pctChange": 2.35, "volume": 150000, "amount": 1800000.0},
+        {"code": "000001", "price": 12.50, "pctChange": 2.35, "volume": 150000, "amount": 1800000.0, "high": 12.80, "low": 12.20, "preClose": 12.00},
         {"code": "600000", "price": 9.80, "pctChange": -0.51, "volume": 80000, "amount": 784000.0},
     ],
     "depth": [
@@ -62,6 +62,35 @@ BRIDGE_POOL_SNAPSHOT = {
     ],
     "quoteStats": {"totalVolume": 10000000, "upCount": 1200, "downCount": 900},
     "l2": {},
+}
+
+BRIDGE_POOL_DEPTH_BOOK_SNAPSHOT = {
+    **BRIDGE_POOL_SNAPSHOT,
+    "depth": [
+        {
+            "code": "000001",
+            "bids": [{"price": 12.49, "volume": 10000}],
+            "asks": [{"price": 12.51, "volume": 8000}],
+            "sourceTs": 1781170800000,
+        }
+    ],
+}
+
+BRIDGE_POOL_REAL_QUOTE_SHAPE_SNAPSHOT = {
+    **BRIDGE_POOL_SNAPSHOT,
+    "quotes": [
+        {
+            "code": "000001",
+            "lastPrice": 12.50,
+            "changePct": 2.35,
+            "volume": 150000,
+            "amount": 1800000.0,
+            "turnoverRate": 5.5,
+            "high": 12.80,
+            "low": 12.20,
+            "preClose": 12.00,
+        }
+    ],
 }
 
 BRIDGE_POOL_STALE_SNAPSHOT = {
@@ -183,6 +212,21 @@ class TestBridgeQuoteProviderCollectPool:
         assert health.source == "quote_bridge"
         assert len(data["quotes"]) == 2
         assert data["quotes"][0]["code"] == "000001"
+        assert data["quotes"][0]["high"] == 12.80
+        assert data["quotes"][0]["low"] == 12.20
+        assert data["quotes"][0]["preClose"] == 12.00
+
+    def test_collect_pool_normalizes_real_bridge_quote_shape(self) -> None:
+        provider = BridgeQuoteProvider(base_url=BASE_URL)
+        mock_resp = _fake_urlopen_response(BRIDGE_POOL_REAL_QUOTE_SHAPE_SNAPSHOT)
+        with patch.object(urllib.request, "urlopen", return_value=mock_resp):
+            data, health = provider.collect(use_pool=True, timeout_ms=5000)
+
+        assert health.ok is True
+        assert data["quotes"][0]["price"] == 12.50
+        assert data["quotes"][0]["pctChange"] == 2.35
+        assert data["quotes"][0]["turnover"] == 5.5
+        assert data["quotes"][0]["high"] == 12.80
 
     def test_collect_pool_returns_depth(self) -> None:
         provider = BridgeQuoteProvider(base_url=BASE_URL)
@@ -192,6 +236,16 @@ class TestBridgeQuoteProviderCollectPool:
 
         assert len(data["depth"]) == 2
         assert data["depth"][0]["code"] == "000001"
+
+    def test_collect_pool_preserves_depth_book_shape(self) -> None:
+        provider = BridgeQuoteProvider(base_url=BASE_URL)
+        mock_resp = _fake_urlopen_response(BRIDGE_POOL_DEPTH_BOOK_SNAPSHOT)
+        with patch.object(urllib.request, "urlopen", return_value=mock_resp):
+            data, health = provider.collect(use_pool=True, timeout_ms=5000)
+
+        assert health.ok is True
+        assert data["depth"][0]["bids"][0] == {"price": 12.49, "volume": 10000}
+        assert data["depth"][0]["asks"][0] == {"price": 12.51, "volume": 8000}
 
     def test_collect_pool_returns_money_flow(self) -> None:
         provider = BridgeQuoteProvider(base_url=BASE_URL)

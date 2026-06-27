@@ -65,13 +65,32 @@ def make_fake_context() -> MarketDataContext:
             },
         ],
         quotes=[
-            {"code": "000001", "price": 12.50, "pctChange": 2.35, "volume": 150000000},
+            {
+                "code": "000001",
+                "price": 12.50,
+                "pctChange": 2.35,
+                "volume": 150000000,
+                "high": 12.80,
+                "low": 12.20,
+                "preClose": 12.00,
+            },
             {"code": "600000", "price": 9.80, "pctChange": -0.51, "volume": 80000000},
         ],
         depth=[
-            {"code": "000001", "bidPrice1": 12.49, "askPrice1": 12.51},
-            {"code": "600000", "bidPrice1": 9.79, "askPrice1": 9.81},
+            {"code": "000001", "bidPrice1": 12.49, "askPrice1": 12.51, "bidVol1": 10000, "askVol1": 8000},
+            {"code": "600000", "bidPrice1": 9.79, "askPrice1": 9.81, "bidVol1": 5000, "askVol1": 3000},
         ],
+        limit_up={
+            "000001": {
+                "limitUpPool": "one",
+                "reason": "金融科技",
+                "firstZtTime": "09:45:00",
+                "lastZtTime": "14:20:00",
+                "boardHeight": 1,
+                "highDays": 1,
+                "fengdan": 68000000.0,
+            },
+        },
         themes={
             "000001": ["银行", "深圳"],
             "600000": ["银行", "上海"],
@@ -176,6 +195,53 @@ class TestBuilderOutput:
         assert row0["turnoverRate"] == 5.5
         assert row0["heat"] == 92.0
         assert row0["themes"] == ["银行", "深圳"]
+        assert row0["sectorLabel"] == "银行"
+        assert row0["mainTheme"] == "银行"
+
+    def test_stock_rows_include_limitup_and_depth_enrichment(self):
+        slot = make_slot_1500()
+        ctx = make_fake_context()
+
+        stock_rows = build_ingest_payload(slot, ctx)["stockRows"]
+        row0 = stock_rows[0]
+
+        assert row0["limitUpPool"] == "one"
+        assert row0["reason"] == "金融科技"
+        assert row0["firstZtTime"] == "09:45:00"
+        assert row0["lastZtTime"] == "14:20:00"
+        assert row0["boardHeight"] == 1
+        assert row0["highDays"] == 1
+        assert row0["fengdan"] == 68000000.0
+        assert row0["bid1Price"] == 12.49
+        assert row0["ask1Price"] == 12.51
+        assert row0["bid1Volume"] == 10000
+        assert row0["ask1Volume"] == 8000
+        assert row0["depth10"]["bid"][0]["price"] == 12.49
+        assert row0["depth10"]["ask"][0]["volume"] == 8000
+        assert row0["amplitude"] == pytest.approx(5.0)
+
+    def test_stock_rows_include_bridge_depth_book_shape(self):
+        slot = make_slot_1500()
+        ctx = make_fake_context()
+        ctx.depth = [
+            {
+                "code": "000001",
+                "bids": [{"price": 12.49, "volume": 10000}],
+                "asks": [{"price": 12.51, "volume": 8000}],
+            }
+        ]
+
+        stock_rows = build_ingest_payload(slot, ctx)["stockRows"]
+        row0 = stock_rows[0]
+
+        assert row0["bid1Price"] == 12.49
+        assert row0["ask1Price"] == 12.51
+        assert row0["bid1Volume"] == 10000
+        assert row0["ask1Volume"] == 8000
+        assert row0["depth10"] == {
+            "bid": [{"price": 12.49, "volume": 10000}],
+            "ask": [{"price": 12.51, "volume": 8000}],
+        }
 
     def test_has_at_least_one_sector_row(self):
         """Sector rows must have at least one entry."""
@@ -410,6 +476,20 @@ class TestBuilderEdgeCases:
         assert len(result["stockRows"]) == 1
         assert result["stockRows"][0]["code"] == "000001"
 
+    def test_frame_stock_count_matches_emitted_stock_rows_when_invalid_stock_skipped(self):
+        """Frame stockRowCount must match persisted stock rows, not raw provider rows."""
+        slot = make_slot_1500()
+        ctx = MarketDataContext(
+            stocks=[
+                {"name": "NoCode", "rank": 1},
+                {"code": "000001", "name": "平安银行", "rank": 2},
+            ]
+        )
+
+        result = build_ingest_payload(slot, ctx)
+
+        assert result["frames"][0]["stockRowCount"] == len(result["stockRows"])
+
     def test_sector_without_code_uses_name(self):
         """A sector missing code should use its name as entityKey."""
         slot = make_slot_1500()
@@ -456,7 +536,7 @@ class TestEnrichStockRowsFromQuotes:
 
     def test_ignores_empty_quotes_and_money_flow(self) -> None:
         rows = [{"code": "000001", "name": "平安银行", "rank": 1}]
-        _enrich_stock_rows_from_quotes(rows, [], [])
+        _enrich_stock_rows_from_quotes(rows, [], [], [])
         assert "pe" not in rows[0]
         assert "moneyFlow" not in rows[0]
 
@@ -472,7 +552,7 @@ class TestEnrichStockRowsFromQuotes:
                 "volumeRatio": 12.22,
             }
         ]
-        _enrich_stock_rows_from_quotes(rows, quotes, [])
+        _enrich_stock_rows_from_quotes(rows, quotes, [], [])
         assert rows[0]["price"] == 12.50
         assert rows[0]["pctChange"] == 2.35
         assert rows[0]["change"] == 2.35
@@ -483,13 +563,13 @@ class TestEnrichStockRowsFromQuotes:
     def test_fills_zero_price_from_quote(self) -> None:
         rows = [{"code": "000001", "name": "平安银行", "rank": 1, "price": 0}]
         quotes = [{"code": "000001", "price": 12.50}]
-        _enrich_stock_rows_from_quotes(rows, quotes, [])
+        _enrich_stock_rows_from_quotes(rows, quotes, [], [])
         assert rows[0]["price"] == 12.50
 
     def test_fills_degraded_name_from_quote(self) -> None:
         rows = [{"code": "000001", "name": "000001", "rank": 1}]
         quotes = [{"code": "000001", "name": "平安银行"}]
-        _enrich_stock_rows_from_quotes(rows, quotes, [])
+        _enrich_stock_rows_from_quotes(rows, quotes, [], [])
         assert rows[0]["name"] == "平安银行"
 
     def test_build_payload_preserves_explicit_turnover_rate(self) -> None:
@@ -520,20 +600,20 @@ class TestEnrichStockRowsFromQuotes:
     def test_does_not_overwrite_existing_non_zero_price(self) -> None:
         rows = [{"code": "000001", "name": "平安银行", "rank": 1, "price": 13.00}]
         quotes = [{"code": "000001", "price": 12.50}]
-        _enrich_stock_rows_from_quotes(rows, quotes, [])
+        _enrich_stock_rows_from_quotes(rows, quotes, [], [])
         assert rows[0]["price"] == 13.00
 
     def test_adds_pe_and_total_market_value(self) -> None:
         rows = [{"code": "000001", "name": "平安银行", "rank": 1}]
         quotes = [{"code": "000001", "pe": 8.5, "totalMarketValue": 350000000000.0}]
-        _enrich_stock_rows_from_quotes(rows, quotes, [])
+        _enrich_stock_rows_from_quotes(rows, quotes, [], [])
         assert rows[0]["pe"] == 8.5
         assert rows[0]["totalMarketValue"] == 350000000000.0
 
     def test_skips_pe_when_none(self) -> None:
         rows = [{"code": "000001", "name": "平安银行", "rank": 1}]
         quotes = [{"code": "000001"}]
-        _enrich_stock_rows_from_quotes(rows, quotes, [])
+        _enrich_stock_rows_from_quotes(rows, quotes, [], [])
         assert "pe" not in rows[0]
 
     def test_adds_money_flow_as_structured_dict(self) -> None:
@@ -548,7 +628,7 @@ class TestEnrichStockRowsFromQuotes:
                 "smallNetInflow": 10000000.0,
             }
         ]
-        _enrich_stock_rows_from_quotes(rows, [], money_flow)
+        _enrich_stock_rows_from_quotes(rows, [], [], money_flow)
         assert rows[0]["moneyFlow"] == {
             "mainNetInflow": 50000000.0,
             "superLargeNetInflow": 20000000.0,
@@ -563,25 +643,53 @@ class TestEnrichStockRowsFromQuotes:
             {"code": "600000", "name": "浦发银行", "rank": 2},
         ]
         quotes = [{"code": "000001", "price": 12.50}]
-        _enrich_stock_rows_from_quotes(rows, quotes, [])
+        _enrich_stock_rows_from_quotes(rows, quotes, [], [])
         assert rows[0]["price"] == 12.50
         assert "price" not in rows[1]
 
     def test_skips_row_without_code(self) -> None:
         rows = [{"name": "NoCode", "rank": 1}]
         quotes = [{"code": "000001", "price": 12.50}]
-        _enrich_stock_rows_from_quotes(rows, quotes, [])
+        _enrich_stock_rows_from_quotes(rows, quotes, [], [])
         assert "price" not in rows[0]
 
     def test_quotes_and_money_flow_together(self) -> None:
         rows = [{"code": "000001", "name": "平安银行", "rank": 1}]
         quotes = [{"code": "000001", "price": 12.50, "pe": 8.5, "totalMarketValue": 350000000000.0}]
         money_flow = [{"code": "000001", "mainNetInflow": 50000000.0}]
-        _enrich_stock_rows_from_quotes(rows, quotes, money_flow)
+        _enrich_stock_rows_from_quotes(rows, quotes, [], money_flow)
         assert rows[0]["price"] == 12.50
         assert rows[0]["pe"] == 8.5
         assert rows[0]["totalMarketValue"] == 350000000000.0
         assert rows[0]["moneyFlow"] is not None
+
+    def test_merges_multiple_quote_sources_without_losing_proxy_only_fields(self) -> None:
+        rows = [{"code": "000001", "name": "平安银行", "rank": 1}]
+        quotes = [
+            {
+                "code": "000001",
+                "price": 12.30,
+                "pe": 8.5,
+                "totalMarketValue": 350000000000.0,
+                "volumeRatio": 12.22,
+            },
+            {
+                "code": "000001",
+                "price": 12.50,
+                "pctChange": 2.35,
+                "pe": None,
+                "totalMarketValue": None,
+                "volumeRatio": None,
+            },
+        ]
+
+        _enrich_stock_rows_from_quotes(rows, quotes, [], [])
+
+        assert rows[0]["price"] == 12.50
+        assert rows[0]["pctChange"] == 2.35
+        assert rows[0]["pe"] == 8.5
+        assert rows[0]["totalMarketValue"] == 350000000000.0
+        assert rows[0]["volumeRatio"] == 12.22
 
 
 class TestBuilderWithEnrichment:

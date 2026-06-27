@@ -9,17 +9,20 @@ collections and never generate ``snapshot_id`` values.
 - ``ProxyHotlistProvider`` ── single-platform hotlist diagnostic provider
 - ``BridgeQuoteProvider``   ── real-time quotes from the python-bridge
 - ``ThemeMappingProvider``  ── code➜theme mapping from MongoDB theme tables
+- ``ProxyLimitUpProvider``  ── THS limit-up pool enrichment from proxy-server
 - ``collect_market_context``── assembles all providers into a MarketDataContext
 """
 
 from __future__ import annotations
 
 import json
+import re
 import time
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from typing import Any
 from urllib.parse import quote, urlencode
 
@@ -53,6 +56,9 @@ _HOTLIST_WEIGHTS = {
     "xueqiu": 0.35,
     "cls": 0.35,
 }
+
+_LIMIT_UP_POOL_KEYS = ("one", "two", "three", "four", "high", "failed", "rushing", "drawdown")
+_TZ_SHANGHAI = ZoneInfo("Asia/Shanghai")
 
 
 # ── helpers ─────────────────────────────────────────────────────────────────
@@ -672,6 +678,196 @@ def _extract_items(body: Any) -> list[Any]:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# ProxyLimitUpProvider
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+class ProxyLimitUpProvider:
+    """Fetch THS limit-up pool enrichment from proxy-server."""
+
+    def __init__(
+        self,
+        base_url: str = _DEFAULT_PROXY_BASE_URL,
+        *,
+        trading_date: str | None = None,
+    ) -> None:
+        self._base_url = base_url.rstrip("/")
+        self._trading_date = trading_date
+
+    def collect(
+        self,
+        codes: list[str] | None = None,
+        *,
+        timeout_ms: int = _DEFAULT_TIMEOUT_MS,
+    ) -> tuple[list[dict[str, Any]], SourceHealth]:
+        start = time.monotonic()
+        requested = {_normalize_stock_code(code) for code in (codes or [])}
+        requested.discard("")
+        try:
+            query = {}
+            date = self._date_param()
+            if date:
+                query["date"] = date
+            suffix = f"?{urlencode(query)}" if query else ""
+            body = _http_get_json(f"{self._base_url}/api/limitup/ths/pools{suffix}", timeout_ms / 1000.0)
+            degraded_error = _proxy_degraded_error(body)
+            rows = self._normalize(body, requested_codes=requested)
+            ok = not degraded_error
+            return rows, self._health(
+                ok,
+                start,
+                row_count=len(rows),
+                error=degraded_error,
+                requested_count=len(requested),
+                returned_count=len(rows),
+                coverage_ratio=round(len(rows) / len(requested), 4) if requested else 1.0,
+            )
+        except Exception as exc:
+            return [], self._health(False, start, error=str(exc), requested_count=len(requested))
+
+    def _date_param(self) -> str:
+        digits = "".join(ch for ch in str(self._trading_date or "") if ch.isdigit())
+        return digits if len(digits) == 8 else ""
+
+    def _health(
+        self,
+        ok: bool,
+        start: float,
+        *,
+        row_count: int = 0,
+        error: str = "",
+        requested_count: int = 0,
+        returned_count: int = 0,
+        coverage_ratio: float = 0.0,
+    ) -> SourceHealth:
+        return SourceHealth(
+            source="limitup_proxy",
+            ok=ok,
+            latency_ms=int((time.monotonic() - start) * 1000),
+            row_count=row_count,
+            error=error,
+            captured_at=_iso_now(),
+            requested_count=requested_count,
+            returned_count=returned_count or row_count,
+            coverage_ratio=coverage_ratio,
+        )
+
+    def _normalize(
+        self,
+        body: Any,
+        *,
+        requested_codes: set[str],
+    ) -> list[dict[str, Any]]:
+        pools = body.get("pools") if isinstance(body, dict) else None
+        if not isinstance(pools, dict):
+            return []
+        by_code: dict[str, dict[str, Any]] = {}
+        for pool_key in _LIMIT_UP_POOL_KEYS:
+            pool = pools.get(pool_key)
+            if not isinstance(pool, dict):
+                continue
+            items = pool.get("items")
+            if not isinstance(items, list):
+                continue
+            for item in items:
+                row = self._normalize_item(pool_key, item)
+                if row is None:
+                    continue
+                code = row["code"]
+                if requested_codes and code not in requested_codes:
+                    continue
+                existing = by_code.get(code, {})
+                by_code[code] = {**existing, **row}
+        return list(by_code.values())
+
+    def _normalize_item(self, pool_key: str, item: Any) -> dict[str, Any] | None:
+        if not isinstance(item, dict):
+            return None
+        code = _normalize_stock_code(item.get("stock_code") or item.get("code"))
+        if not code:
+            return None
+        first_time = _normalize_limit_time(
+            item.get("limit_up_time") or item.get("first_limit_up_time")
+        )
+        last_time = _normalize_limit_time(item.get("last_limit_up_time")) or first_time
+        board_height = (
+            _positive_int(item.get("continue_day"))
+            or _positive_int(item.get("continue_day_cnt"))
+            or _parse_board_text(item.get("high_days"))
+            or _parse_board_text(item.get("high_days_value"))
+        )
+        row: dict[str, Any] = {
+            "code": code,
+            "limitUpPool": pool_key,
+        }
+        name = str(item.get("stock_name") or item.get("name") or "").strip()
+        if name:
+            row["name"] = name
+        reason = str(item.get("limit_up_reason") or item.get("reason_type") or "").strip()
+        if reason:
+            row["reason"] = reason
+        if first_time:
+            row["firstZtTime"] = first_time
+        if last_time:
+            row["lastZtTime"] = last_time
+        if board_height is not None:
+            row["boardHeight"] = board_height
+            row["highDays"] = board_height
+        for source_key, target_key in (
+            ("volume_money", "fengdan"),
+            ("order_amount", "fengdan"),
+            ("turnover_rate", "turnoverRate"),
+            ("rise_rate", "speed"),
+            ("max_drawdown", "maxDrawdown"),
+        ):
+            value = item.get(source_key)
+            if value is not None and target_key not in row:
+                row[target_key] = _safe_float(value)
+        return row
+
+
+def _normalize_limit_time(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if text.isdigit() and len(text) == 10:
+        return datetime.fromtimestamp(int(text), _TZ_SHANGHAI).strftime("%H:%M:%S")
+    if text.isdigit() and len(text) in (3, 4, 5, 6):
+        padded = text.zfill(6)
+        return f"{padded[0:2]}:{padded[2:4]}:{padded[4:6]}"
+    if ":" in text:
+        parts = text.split(":")
+        if len(parts) == 2:
+            return f"{parts[0].zfill(2)}:{parts[1].zfill(2)}:00"
+        if len(parts) >= 3:
+            return f"{parts[0].zfill(2)}:{parts[1].zfill(2)}:{parts[2].zfill(2)}"
+    return text
+
+
+def _positive_int(value: Any) -> int | None:
+    number = _safe_int(value, 0)
+    return number if number > 0 else None
+
+
+def _parse_board_text(value: Any) -> int | None:
+    text = str(value or "").strip()
+    if text.isdigit():
+        number = int(text)
+        if number > 0xFFFF:
+            decoded = number >> 16
+            if decoded <= 0:
+                decoded = number & 0xFFFF
+            return decoded if decoded > 0 else None
+    match = re.search(r"(\d+)\s*板", text)
+    if not match:
+        match = re.search(r"\d+", text)
+    if not match:
+        return None
+    number = int(match.group(1) if match.groups() else match.group(0))
+    return number if number > 0 else None
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # ProxyQuoteProvider
 # ═════════════════════════════════════════════════════════════════════════════
 
@@ -849,6 +1045,29 @@ def _eastmoney_rows_to_money_flow(rows: list[dict[str, Any]]) -> list[dict[str, 
             "capitalFlowConfidence": "low",
         })
     return flows
+
+
+def _merge_rows_by_code(target: list[dict[str, Any]], rows: Any) -> None:
+    if not isinstance(rows, list):
+        return
+    index: dict[str, int] = {}
+    for pos, row in enumerate(target):
+        if not isinstance(row, dict):
+            continue
+        code = str(row.get("code") or "").strip()
+        if code:
+            index[code] = pos
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        code = str(row.get("code") or "").strip()
+        if not code:
+            continue
+        if code in index:
+            target[index[code]] = {**target[index[code]], **row}
+        else:
+            index[code] = len(target)
+            target.append(row)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1046,16 +1265,39 @@ def _normalize_quote_list(raw: Any) -> list[dict[str, Any]]:
         if not code:
             continue
         result.append(
-            {
-                "code": code,
-                "price": _safe_float(item.get("price")),
-                "pctChange": _safe_float(item.get("pctChange")),
-                "volume": _safe_int(item.get("volume")),
-                "amount": _safe_float(item.get("amount")),
-                "turnover": _safe_float(item.get("turnover")),
-            }
+            _with_optional_fields(
+                {
+                    "code": code,
+                    "price": _safe_float(_first_non_empty(item, "price", "lastPrice")),
+                    "pctChange": _safe_float(_first_non_empty(item, "pctChange", "changePct")),
+                    "volume": _safe_int(item.get("volume")),
+                    "amount": _safe_float(item.get("amount")),
+                    "turnover": _safe_float(_first_non_empty(item, "turnover", "turnoverRate")),
+                },
+                {
+                    "high": item.get("high"),
+                    "low": item.get("low"),
+                    "preClose": item.get("preClose"),
+                    "open": item.get("open"),
+                },
+            )
         )
     return result
+
+
+def _with_optional_fields(row: dict[str, Any], raw_values: dict[str, Any]) -> dict[str, Any]:
+    for key, value in raw_values.items():
+        if value is not None:
+            row[key] = _safe_float(value)
+    return row
+
+
+def _first_non_empty(row: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        value = row.get(key)
+        if value is not None and value != "":
+            return value
+    return None
 
 
 def _normalize_depth_list(raw: Any) -> list[dict[str, Any]]:
@@ -1070,6 +1312,12 @@ def _normalize_depth_list(raw: Any) -> list[dict[str, Any]]:
         if not code:
             continue
         row: dict[str, Any] = {"code": code}
+        bids = _normalize_depth_side(item.get("bids"))
+        asks = _normalize_depth_side(item.get("asks"))
+        if bids:
+            row["bids"] = bids
+        if asks:
+            row["asks"] = asks
         for i in range(1, 6):  # up to 5 bid/ask levels
             for prefix in ("bid", "ask"):
                 for suffix in ("Price", "Vol"):
@@ -1081,6 +1329,22 @@ def _normalize_depth_list(raw: Any) -> list[dict[str, Any]]:
             if k in item:
                 row.setdefault(k, item[k])
         result.append(row)
+    return result
+
+
+def _normalize_depth_side(raw: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw, list):
+        return []
+    result: list[dict[str, Any]] = []
+    for item in raw[:10]:
+        if not isinstance(item, dict):
+            continue
+        result.append(
+            {
+                "price": _safe_float(item.get("price")),
+                "volume": _safe_int(item.get("volume")),
+            }
+        )
     return result
 
 
@@ -1245,6 +1509,7 @@ def collect_market_context(
     * ``StartupBundleStockProvider`` / ``ProxyMergedHotlistProvider`` / ``ProxyHotlistProvider`` → ``ctx.stocks``
     * ``BridgeQuoteProvider``   → ``ctx.quotes``, ``ctx.depth``, ``ctx.market_meta``
     * ``ThemeMappingProvider``  → ``ctx.themes``
+    * ``ProxyLimitUpProvider``  → ``ctx.limit_up``
 
     Unknown provider types are silently ignored.
     """
@@ -1280,9 +1545,9 @@ def collect_market_context(
             elif isinstance(provider, (BridgeQuoteProvider, ProxyQuoteProvider)):
                 data, health = provider.collect(active_codes, timeout_ms=timeout_ms)
                 if isinstance(data, dict):
-                    ctx.quotes.extend(data.get("quotes") or [])
+                    _merge_rows_by_code(ctx.quotes, data.get("quotes") or [])
                     ctx.depth.extend(data.get("depth") or [])
-                    ctx.money_flow.extend(data.get("money_flow") or [])
+                    _merge_rows_by_code(ctx.money_flow, data.get("money_flow") or [])
                     if data.get("market_meta"):
                         ctx.market_meta.update(data["market_meta"])
                 ctx.source_health.append(health)
@@ -1291,6 +1556,15 @@ def collect_market_context(
                 themes, health = provider.collect(active_codes, timeout_ms=timeout_ms)
                 if isinstance(themes, dict):
                     ctx.themes.update(themes)
+                ctx.source_health.append(health)
+
+            elif isinstance(provider, ProxyLimitUpProvider):
+                rows, health = provider.collect(active_codes, timeout_ms=timeout_ms)
+                for row in rows:
+                    if isinstance(row, dict):
+                        code = str(row.get("code") or "").strip()
+                        if code:
+                            ctx.limit_up[code] = row
                 ctx.source_health.append(health)
 
         except Exception as exc:

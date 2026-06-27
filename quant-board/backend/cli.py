@@ -27,7 +27,10 @@ from backend.data.mongodb_migration import (
     verify_mongodb_migration,
 )
 from backend.data.mongodb_cleanup import plan_mongodb_dataset_cleanup
-from backend.data.mongodb_snapshot_repair import backfill_empty_snapshot_rows
+from backend.data.mongodb_snapshot_repair import (
+    backfill_empty_snapshot_rows,
+    copy_missing_snapshot_slots_from_dataset,
+)
 from backend.data.mongodb_backup import get_mongodb_backup_service
 from backend.data.mongodb_research_repair import repair_mongodb_research_metadata
 from backend.data.repository import Repository
@@ -426,6 +429,18 @@ def cmd_backfill_empty_mongodb_snapshots(args: argparse.Namespace) -> None:
         backfill_empty_snapshot_rows(
             _runtime_mongodb_database(),
             dataset_id=args.dataset_id,
+            snapshot_ids=args.snapshot_id,
+            apply=bool(args.apply),
+        )
+    )
+
+
+def cmd_copy_missing_mongodb_snapshot_slots(args: argparse.Namespace) -> None:
+    print_json(
+        copy_missing_snapshot_slots_from_dataset(
+            _runtime_mongodb_database(),
+            target_dataset_id=args.target_dataset_id,
+            donor_dataset_id=args.donor_dataset_id,
             snapshot_ids=args.snapshot_id,
             apply=bool(args.apply),
         )
@@ -1485,6 +1500,13 @@ def build_parser() -> argparse.ArgumentParser:
     backfill_mongodb_cmd.add_argument("--snapshot-id", action="append", default=None)
     backfill_mongodb_cmd.add_argument("--apply", action="store_true")
     backfill_mongodb_cmd.set_defaults(func=cmd_backfill_empty_mongodb_snapshots)
+
+    copy_missing_mongodb_slot_cmd = sub.add_parser("copy-missing-mongodb-snapshot-slots", help="Preview or copy missing MongoDB snapshot slots from a donor dataset")
+    copy_missing_mongodb_slot_cmd.add_argument("--target-dataset-id", required=True)
+    copy_missing_mongodb_slot_cmd.add_argument("--donor-dataset-id", required=True)
+    copy_missing_mongodb_slot_cmd.add_argument("--snapshot-id", action="append", required=True)
+    copy_missing_mongodb_slot_cmd.add_argument("--apply", action="store_true")
+    copy_missing_mongodb_slot_cmd.set_defaults(func=cmd_copy_missing_mongodb_snapshot_slots)
 
     repair_mongodb_research_cmd = sub.add_parser("repair-mongodb-research-metadata", help="Preview or repair MongoDB research metadata and test theme pollution")
     repair_mongodb_research_cmd.add_argument("--apply", action="store_true")

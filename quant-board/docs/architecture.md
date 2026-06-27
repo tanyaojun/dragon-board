@@ -44,7 +44,7 @@ backend/snapshot_collector/
   models.py           # SnapshotSlot, MarketDataContext, QualityResult, CollectorRunRequest/Result, SourceHealth
   slots.py            # SLOT_TIMES, generate_slots(), is_slot_eligible()
   trading_calendar.py # is_trading_day(), trading_date_from_ts()
-  providers.py        # StartupBundleStockProvider, ProxyMergedHotlistProvider, ProxyHotlistProvider, ProxyQuoteProvider, BridgeQuoteProvider, ThemeMappingProvider
+  providers.py        # StartupBundleStockProvider, ProxyMergedHotlistProvider, ProxyHotlistProvider, ProxyQuoteProvider, BridgeQuoteProvider, ProxyLimitUpProvider, ThemeMappingProvider
   builder.py          # build_ingest_payload()
   quality_gate.py     # evaluate_quality()
   state.py            # record_run(), get_status()
@@ -69,19 +69,19 @@ backend/snapshot_collector/
 - 后端 collector 通过共享 `ThemeHeatService` 写入全量 `entityType=hot_theme` rows；`sector_rows=0` 仅是替换前历史快照的已知缺口，新 shadow 帧不得再以外部端口不可用为由允许空题材行。
 - 正式切换要求：shadow 采集器必须通过完整审计（覆盖率、质量门禁、数据一致性）后才能讨论 live cutover。
 
-**生产口径尚未完成的接入（截至 Phase 4）：**
+**生产口径尚未完成的接入（截至 Phase 4 审计后的当前状态）：**
 
-以下数据源在生产级快照中是必需的，但后端 collector 尚未接入或仅通过过渡方案覆盖：
+以下数据源在生产级快照中是必需的。当前后端 collector 已补齐前端已有来源中明确漏接的逐股题材、涨停池、bridge 盘口和 bridge 高低价解析；历史 shadow 数据不会因此自动回填，必须以后续新采集审计为准。
 
-1. **Depth（盘口深度）**：当前未接入任何来源。`ProxyQuoteProvider` 的 `depth` 恒为空列表，`BridgeQuoteProvider` 虽然能通过 python-bridge 读取五档盘口，但未被挂载为默认 provider。这意味着所有后端 shadow 快照的 `depth` 字段始终为空，与前端 live 快照的盘口数据存在结构性差距。
+1. **Depth（盘口深度）**：默认 provider 已挂载 `BridgeQuoteProvider`，并兼容 python-bridge 返回的 `bids/asks` 结构，builder 会落 `depth10`、`bid1Price/bid1Volume`、`ask1Price/ask1Volume`。当前 bridge 已验证边界仍是 L1 + 标准五档，不得描述成官方客户端级 L2 或真十档。
 
-2. **股票快照行情接管**：股票池已通过 live startup bundle 优先对齐 live merged stocks，并在缓存缺失时通过八平台 union fallback 保持覆盖范围不退回单平台 top100；行情增量仍由 `ProxyQuoteProvider` 过渡补全。`BridgeQuoteProvider`（python-bridge WebSocket pool 模式）已实现但未启用。该缺口只针对股票快照行情；题材热度的基础行情已独立固定为腾讯批量行情，不与本项 fallback 混用。
+2. **股票快照行情接管**：股票池已通过 live startup bundle 优先对齐 live merged stocks，并在缓存缺失时通过八平台 union fallback 保持覆盖范围不退回单平台 top100。行情增量同时使用 `ProxyQuoteProvider` 和 `BridgeQuoteProvider`：proxy 补资金流/东财字段，bridge 补实时价格、盘口、高低价和昨收；builder 会派生 `amplitude`，但该字段只在 Mongo shadow payload 中自然保留，SQLite 历史模型没有独立列。
 
-3. **Theme 数据源**：MongoDB 全市场映射、腾讯基础行情和东财资金字段已由共享 `ThemeHeatService` 聚合，使用 `theme-market-v1`、5 分钟缓存和覆盖率门禁；collector 保存全部 factors 为 `hot_theme` rows，Dragon Board UI 只裁剪展示。
+3. **Theme 数据源**：MongoDB 全市场映射、腾讯基础行情和东财资金字段已由共享 `ThemeHeatService` 聚合，使用 `theme-market-v1`、5 分钟缓存和覆盖率门禁；collector 保存全部 factors 为 `hot_theme` rows。默认 provider 也会挂载 `ThemeMappingProvider`，逐股写入 `themes/mainTheme/sectorLabel`。少数股票仍可能因题材基础库未覆盖而缺失，这属于映射库质量缺口，不是 collector 未接入。
 
-4. **市场情绪 / 涨停池 / 轮动摘要**：这些前端快照中存在的数据域在后端 collector 中无对应 provider，也未纳入 `MarketDataContext`。
+4. **市场情绪 / 涨停池 / 轮动摘要**：涨停池已接入 `ProxyLimitUpProvider`，写入 `limitUpPool/reason/firstZtTime/lastZtTime/boardHeight/highDays/fengdan` 等事件字段。该字段只应出现在涨停池相关股票上，不能按全量股票 100% 覆盖要求审计。市场情绪和轮动摘要仍依赖既有研究链路或后续专项，不应伪造成空字段通过。
 
-Depth 和股票快照行情接管仍未完成，因此 shadow 仍不具备直接切换为生产主链的条件；题材运行时缺口已补齐，但仍需两个完整交易日验证 row count、腾讯覆盖率、资金降级和质量警告。
+当前代码接入类缺口已补齐，但 shadow 仍需至少两个完整交易日的新采集落库审计，确认 row count、字段覆盖、题材映射缺口、资金降级和质量警告后，才能讨论 live cutover。
 
 API 路由：
 
@@ -129,7 +129,7 @@ StartupBundleStockProvider — 当前默认股票池来源：
 
 ProxyQuoteProvider — 当前默认 quote 数据源（过渡方案）：
 
-**这是临时过渡安排，不是生产口径。** `service_factory.py` 的 `_create_providers` 当前硬编码 `ProxyQuoteProvider` 为唯一 quote 源，`BridgeQuoteProvider` 虽然已实现但未被挂载。
+`service.py` 的 `_create_providers` 当前同时挂载 `ProxyQuoteProvider` 和 `BridgeQuoteProvider`。`ProxyQuoteProvider` 保留为东财 quote/资金字段补充；`BridgeQuoteProvider` 是实时价格、五档盘口、高低价和昨收的主要来源。
 
 `ProxyQuoteProvider` 直接调用 proxy-server 的 EastMoney HTTP 端点获取实时行情和资金流数据：
 
@@ -138,19 +138,20 @@ ProxyQuoteProvider — 当前默认 quote 数据源（过渡方案）：
 - 当 proxy-server 返回 `ok=false` 或 `degraded=true` 的降级信封时，`ProxyQuoteProvider` 会把本次 quote 源标记为 `SourceHealth(ok=false)`，不把 HTTP 200 的降级响应当成健康行情。
 - `collect_market_context` 将 `ProxyQuoteProvider` 返回的 `money_flow` 写入 `MarketDataContext.money_flow`，由 builder 的 `_enrich_stock_rows_from_quotes()` 同步填充到 stock rows 的 `moneyFlow`（结构化 dict）、`pe` 和 `totalMarketValue` 字段
 
-过渡方案的两个硬性缺口：
+仍需注意的能力边界：
 
-- `depth` 固定为空列表。proxy-server 没有盘口端点，EastMoney 公开接口也不提供五档/十档数据。这意味着当前所有后端 shadow 快照的 `depth` 字段始终为空。
-- 数据链路不经过本地 TDX 行情桥。当前路径是 `QuantBoard → proxy-server → EastMoney HTTP`，与前端 live 链路（`DataLayer → python-bridge WebSocket → TDX`）是完全不同的数据源，不可直接对比。
+- `ProxyQuoteProvider` 自身的 `depth` 仍为空；盘口来自 `BridgeQuoteProvider`。
+- 当前 bridge 盘口是已验证的五档边界，不是真 L2 十档。`depth10` 字段名沿用前端合同，但正常情况下可能只有五档。
+- `amplitude` 由 bridge 的 `high/low/preClose` 派生；历史 live/shadow 快照中该字段可能仍为空，因为旧前端快照 builder 没有落该字段。
 
 生产口径的预期终态：
 
-1. `BridgeQuoteProvider` 作为主 quote 源，通过 python-bridge 的 WebSocket pool 模式获取 TDX 实时行情和五档盘口。
-2. `ProxyQuoteProvider` 降级为 bridge 离线或超时时的 fallback。
-3. `depth` 字段在正常运行时非空，质量门禁应报告 depth 覆盖率。
-4. `service_factory.py` 的 `_create_providers` 应同时挂载 `BridgeQuoteProvider` 和 `ProxyQuoteProvider`，由 `collect_market_context` 按优先级路由。当前只挂载 `ProxyQuoteProvider` 是 Phase 4 验证阶段的临时配置。
+1. `BridgeQuoteProvider` 作为实时 quote/depth 源，通过 python-bridge 获取 TDX 实时行情和五档盘口。
+2. `ProxyQuoteProvider` 作为东财 quote/资金补充和 bridge 异常时的辅助来源。
+3. `depth` 字段在 bridge 正常运行时非空，审计应按实际采集日期报告覆盖率。
+4. 后续如需真 L2 十档或逐笔，必须走隔离探针或 QMT/券商 L2 来源，不得把当前五档能力升级描述。
 
-**在 bridge 正式接管之前，后端 shadow 快照不具备与前端 live 快照进行深度质量对比的条件。**
+**进入 live cutover 前，仍需用新 shadow 落库数据证明字段覆盖和质量门禁稳定，而不是用历史缺字段快照推断当前代码能力。**
 
 ## 数据流
 

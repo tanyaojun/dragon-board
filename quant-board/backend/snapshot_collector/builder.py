@@ -30,9 +30,64 @@ SECTOR_FACTOR_FIELDS = (
 )
 
 
+def _first_present(row: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key in row and row.get(key) is not None:
+            return row.get(key)
+    return None
+
+
+def _depth_book(depth: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    raw_bids = depth.get("bids")
+    raw_asks = depth.get("asks")
+    if isinstance(raw_bids, list) or isinstance(raw_asks, list):
+        bid = _depth_side_from_book(raw_bids)
+        ask = _depth_side_from_book(raw_asks)
+        return {"bid": bid, "ask": ask} if bid or ask else {}
+
+    bid: list[dict[str, Any]] = []
+    ask: list[dict[str, Any]] = []
+    for level in range(1, 6):
+        bid_price = _first_present(depth, f"bid{level}Price", f"bidPrice{level}")
+        bid_volume = _first_present(depth, f"bid{level}Volume", f"bidVol{level}")
+        ask_price = _first_present(depth, f"ask{level}Price", f"askPrice{level}")
+        ask_volume = _first_present(depth, f"ask{level}Volume", f"askVol{level}")
+        if bid_price is not None or bid_volume is not None:
+            bid.append({"price": bid_price or 0, "volume": bid_volume or 0})
+        if ask_price is not None or ask_volume is not None:
+            ask.append({"price": ask_price or 0, "volume": ask_volume or 0})
+    return {"bid": bid, "ask": ask} if bid or ask else {}
+
+
+def _depth_side_from_book(raw: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw, list):
+        return []
+    result: list[dict[str, Any]] = []
+    for item in raw[:10]:
+        if not isinstance(item, dict):
+            continue
+        price = item.get("price")
+        volume = item.get("volume")
+        if price is not None or volume is not None:
+            result.append({"price": price or 0, "volume": volume or 0})
+    return result
+
+
+def _derive_amplitude(row: dict[str, Any]) -> float | None:
+    high = row.get("high")
+    low = row.get("low")
+    pre_close = row.get("preClose")
+    if not isinstance(high, (int, float)) or not isinstance(low, (int, float)):
+        return None
+    if not isinstance(pre_close, (int, float)) or pre_close <= 0 or high < low:
+        return None
+    return round((high - low) / pre_close * 100, 4)
+
+
 def _enrich_stock_rows_from_quotes(
     stock_rows: list[dict[str, Any]],
     quotes: list[dict[str, Any]],
+    depth: list[dict[str, Any]],
     money_flow: list[dict[str, Any]],
 ) -> None:
     """Merge quote and money-flow data into stock rows in-place.
@@ -41,20 +96,29 @@ def _enrich_stock_rows_from_quotes(
     the quote.  New fields (totalMarketValue, moneyFlow) are always added
     when available.
     """
-    if not quotes and not money_flow:
+    if not quotes and not depth and not money_flow:
         return
 
     quote_by_code: dict[str, dict[str, Any]] = {}
     for q in quotes:
         code = str(q.get("code") or "").strip()
         if code:
-            quote_by_code[code] = q
+            quote_by_code[code] = {
+                **quote_by_code.get(code, {}),
+                **{key: value for key, value in q.items() if value is not None},
+            }
 
     flow_by_code: dict[str, dict[str, Any]] = {}
     for mf in money_flow:
         code = str(mf.get("code") or "").strip()
         if code:
             flow_by_code[code] = mf
+
+    depth_by_code: dict[str, dict[str, Any]] = {}
+    for item in depth:
+        code = str(item.get("code") or "").strip()
+        if code:
+            depth_by_code[code] = item
 
     for row in stock_rows:
         code = str(row.get("code") or "").strip()
@@ -85,6 +149,13 @@ def _enrich_stock_rows_from_quotes(
             volume_ratio = q.get("volumeRatio")
             if volume_ratio is not None and not row.get("volumeRatio"):
                 row["volumeRatio"] = volume_ratio
+            for field in ("high", "low", "preClose", "open"):
+                value = q.get(field)
+                if value is not None and not row.get(field):
+                    row[field] = value
+            amplitude = _derive_amplitude(row)
+            if amplitude is not None and not row.get("amplitude"):
+                row["amplitude"] = amplitude
 
             # Fields not provided by the hotlist at all
             # PE ratio
@@ -109,6 +180,26 @@ def _enrich_stock_rows_from_quotes(
             row["capitalFlowConfidence"] = str(
                 mf.get("capitalFlowConfidence") or ("low" if estimated else "unknown")
             )
+
+        d = depth_by_code.get(code)
+        if d:
+            book = _depth_book(d)
+            first_bid = book.get("bid", [{}])[0] if book.get("bid") else {}
+            first_ask = book.get("ask", [{}])[0] if book.get("ask") else {}
+            bid1_price = _first_present(d, "bid1Price", "bidPrice1") or first_bid.get("price")
+            bid1_volume = _first_present(d, "bid1Volume", "bidVol1") or first_bid.get("volume")
+            ask1_price = _first_present(d, "ask1Price", "askPrice1") or first_ask.get("price")
+            ask1_volume = _first_present(d, "ask1Volume", "askVol1") or first_ask.get("volume")
+            if bid1_price is not None:
+                row["bid1Price"] = bid1_price
+            if bid1_volume is not None:
+                row["bid1Volume"] = bid1_volume
+            if ask1_price is not None:
+                row["ask1Price"] = ask1_price
+            if ask1_volume is not None:
+                row["ask1Volume"] = ask1_volume
+            if book:
+                row["depth10"] = book
 
 
 def build_ingest_payload(
@@ -178,7 +269,7 @@ def build_ingest_payload(
         "captureMode": capture_mode,
         "source": source,
         "marketStats": market_context.market_meta,
-        "stockRowCount": len(market_context.stocks),
+        "stockRowCount": 0,
         "sectorRowCount": len(market_context.sectors),
     }
 
@@ -225,13 +316,47 @@ def build_ingest_payload(
             row["themes"] = themes
         elif "themes" in stock:
             row["themes"] = stock["themes"]
+        row_themes = row.get("themes")
+        if isinstance(row_themes, list) and row_themes:
+            first_theme = row_themes[0]
+            if isinstance(first_theme, dict):
+                theme_name = str(first_theme.get("name") or first_theme.get("id") or "").strip()
+            else:
+                theme_name = str(first_theme or "").strip()
+            if theme_name:
+                row["sectorLabel"] = theme_name
+                row.setdefault("mainTheme", theme_name)
+
+        limit_up = market_context.limit_up.get(code)
+        if isinstance(limit_up, dict):
+            for field in (
+                "limitUpPool",
+                "reason",
+                "firstZtTime",
+                "lastZtTime",
+                "boardHeight",
+                "highDays",
+                "fengdan",
+                "maxFengdan",
+                "speed",
+                "turnoverRate",
+                "maxDrawdown",
+            ):
+                if field in limit_up and limit_up[field] is not None:
+                    row[field] = limit_up[field]
 
         stock_rows.append(row)
 
     # Enrich stock rows with quote-derived fields
-    _enrich_stock_rows_from_quotes(stock_rows, market_context.quotes, market_context.money_flow)
+    _enrich_stock_rows_from_quotes(
+        stock_rows,
+        market_context.quotes,
+        market_context.depth,
+        market_context.money_flow,
+    )
 
     stock_rows.sort(key=lambda r: int(r.get("rank") or 999999))
+    frame["stockRowCount"] = len(stock_rows)
 
     # ── Sector rows ────────────────────────────────────────────────────────
     sector_rows: list[dict[str, Any]] = []

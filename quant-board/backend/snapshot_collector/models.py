@@ -98,6 +98,7 @@ class MarketDataContext:
     depth: list[dict[str, Any]] = field(default_factory=list)
     money_flow: list[dict[str, Any]] = field(default_factory=list)
     themes: dict[str, list[str]] = field(default_factory=dict)
+    limit_up: dict[str, dict[str, Any]] = field(default_factory=dict)
     sectors: list[dict[str, Any]] = field(default_factory=list)
     source_health: list[SourceHealth] = field(default_factory=list)
     market_meta: dict[str, Any] = field(default_factory=dict)

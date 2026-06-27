@@ -18,7 +18,7 @@
 
 - `README.md` / `AI_COLLABORATION.md` 已明确 MongoDB 为当前主库，根级旧 SQLite 描述不是本任务事实源。
 - 进度文档仍把 Phase 4 写成未完成；提交历史声称完成，必须用代码、测试和真实审计证据判定。
-- 设计明确记录截至 Phase 4 `service_factory` 只挂载 `ProxyQuoteProvider`，`depth` 缺失率 100%，题材运行时/市场情绪/涨停池也未接入；这些不阻断 Phase 4 槽位审计，但阻断 live cutover。
+- 设计曾记录截至 Phase 4 `service_factory` 只挂载 `ProxyQuoteProvider`，`depth` 缺失率 100%，题材运行时/市场情绪/涨停池也未接入；本轮已修复 collector 代码接入缺口，历史 shadow 数据不会自动回填。
 - Phase 5 若“默认关闭前端正式写库”在 Phase 6 live collector 启用前部署，会形成生产快照空窗；需检查实现计划是否明确部署顺序或 feature flag 默认值。
 
 ## 审查发现
@@ -63,3 +63,65 @@
 自动运行门禁已改为独立守护方案：Windows 计划任务运行目标工作区代码，在 `8001` 启动 shadow collector，并结构化检查 scheduler 已启用、正在运行且数据集严格为 `dragonboard_backend_shadow`；现有主工作区 `8000` 服务不被替换。
 
 提交前复审补充修复：守护进程不再仅按端口判定依赖健康，改为 MongoDB `ping`、proxy/bridge 服务身份检查和 collector scheduler 合同；自己启动但失去健康的进程会重启，未知占端口进程保持 `blocked`。`force` 重采增加失败回滚，任一事实集合写入异常时恢复替换前快照和 dataset 文档。
+
+## 2026-06-27 缺槽与 count drift 复核
+
+用户最新要求修复 `2026-06-22 15:00` 缺槽，并评估 `depth10`、`limitUpPool`、`sectorLabel`、`amplitude` 是否阻塞阶段 5。
+
+根因：`backend/snapshot_collector/builder.py` 在过滤无 `code` 的 provider 原始股票行之前，先用 `len(market_context.stocks)` 写入 `frame.stockRowCount`。实际 `stockRows` 构建会跳过无效代码行，因此当原始热榜含 2-3 条无效代码时，frame 摘要为 100，但实际入库股票行为 97/98。
+
+代码修复：`frame.stockRowCount` 改为在 `stockRows` 构建、过滤、enrich 和排序完成后回填 `len(stock_rows)`；新增回归测试覆盖“无 code 股票被跳过时 frame 计数仍等于最终 stockRows 数量”。
+
+数据修复：仅校正两个明确历史 shadow frame 的摘要计数，不删除、不复制、不重写任何事实行，并写入 `migration_audit(opType=snapshot_collector_count_drift_repair)`：
+
+| snapshotId | 修复前 frame stockRowCount | 实际 stock rows | 修复后 |
+| --- | ---: | ---: | ---: |
+| `half_hour:2026-06-23:11:00` | 100 | 97 | 97 |
+| `half_hour:2026-06-26:11:30` | 100 | 98 | 98 |
+
+修复后审计摘要：
+
+| 口径 | frames | records | stock rows | sector rows | missing slots | count drifts | 备注 |
+| --- | ---: | ---: | ---: | ---: | --- | --- | --- |
+| `half_hour` 全量 shadow | 70 | 70 | 7116 | 9082 | 无 | 无 | 6/22 15:00 已由 live 同槽位 donor 补入 |
+| `half_hour` 2026-06-22 | 10 | 10 | 1121 | 0 | 无 | 无 | `15:00` 从 `dragonboard_live` 同槽位复制 221 stock rows，metadata/qualityFlags/migration_audit 均保留 donor provenance |
+| `half_hour` 2026-06-23 | 10 | 10 | 997 | 2151 | 无 | 无 | 原 `11:00` drift 已清除 |
+| `half_hour` 2026-06-24 | 10 | 10 | 1000 | 2390 | 无 | 无 | 可作为连续观察样本之一 |
+| `half_hour` 2026-06-25 | 10 | 10 | 1000 | 2390 | 无 | 无 | 可作为连续观察样本之一 |
+| `half_hour` 2026-06-26 | 10 | 10 | 998 | 2151 | 无 | 无 | 原 `11:30` drift 已清除 |
+| `daily` 全量 shadow | 6 | 6 | 600 | 956 | 无 | 无 | daily 槽位完整 |
+
+`2026-06-22 15:00` 修复方式：新增可复现维护命令 `copy-missing-mongodb-snapshot-slots`，默认 dry-run；本次执行 `--target-dataset-id dragonboard_backend_shadow --donor-dataset-id dragonboard_live --snapshot-id half_hour:2026-06-22:15:00 --apply`，写入 1 record、1 frame、221 stock rows、0 sector rows，并写入 `migration_audit(opType=mongodb_snapshot_slot_copy)`。这不是历史重采，也不是把 collector 写目标切到 live；只是为 shadow 补齐一个明确缺失的历史槽位。
+
+字段门禁结论（历史判定，已被下一节代码修复取代）：
+
+> 以下表格记录的是本轮修复前、基于历史 shadow 数据和旧 collector wiring 得出的阻塞判定。2026-06-27 后续“字段接入全面排查与修复”已补齐这些代码接入缺口；当前结论以下一节为准。
+
+| 字段 | 当前事实 | 是否必须在进入阶段 5 前修复 | 原因 |
+| --- | --- | --- | --- |
+| `depth10` | 6/24、6/25、6/26 新 shadow 仍 100% 缺失；当前 collector 默认装配 `ProxyQuoteProvider`，该 provider 明确无 depth 来源。live 同期约 95%+ 有 `depth10`。 | 阻塞正式替代前端写库 / live cutover；不阻塞“槽位连续性”验收。 | 回测执行链当前消费买一/卖一价量字段而非 `depth10` 对象，但阶段 5 的目标是后端 shadow 质量不低于前端链路；缺 depth 会降低 L2/盘口诊断和未来严格撮合可信度。 |
+| `limitUpPool` | shadow 与 live 当前均为 100% 缺失；回测涨跌停约束通过 `change`、`limitStatus`、`isLimitUp`、`limitUpPrice` 等信号字段推断，不直接消费该字段。 | 不单独阻塞阶段 5，但必须记录为未接入涨停池专项。 | 不能用空列表伪装修复；若阶段 5 目标包含涨停池能力替代，需另接正式涨停池来源。 |
+| `sectorLabel` | stock rows 100% 缺失，且 6/26 样本中 `themes` 也未落到 stock rows；虽然 `sector_rows`/hot_theme rows 已存在，但不能替代逐股题材暴露。 | 阻塞题材解释/ThemeTrend 逐股暴露口径；若阶段 5 只关闭前端自动正式快照写入，也应先修或明确 feature flag 不切题材相关读口。 | 当前 service 默认 provider 未挂 `ThemeMappingProvider`，不是简单字段别名问题。 |
+| `amplitude` | shadow 与 live 当前均为 100% 缺失，且当前 quote provider 不落 `high/low`。 | 不单独阻塞阶段 5。 | RankTrend/golden/当前执行链不直接消费 `amplitude`；若要启用盘中止盈止损高低价触发，应先接 `high/low`，而不是补一个派生空字段。 |
+
+当时阶段 5 复评：**槽位/record/count drift 门槛已通过，但数据域替代门槛仍 No-Go。** 该结论在下一节完成代码接入修复后更新为“代码接入阻塞已清零，但仍需修复后新落库两日审计”。
+
+## 2026-06-27 字段接入全面排查与修复
+
+用户追问“还有多少因为代码未实现未接入前端数据源造成阻塞进入阶段 5”。本轮按前端数据源、proxy/bridge 输出和 collector provider/builder 三层复查，确认并修复以下代码接入缺口：
+
+| 数据域 | 根因 | 修复 | dry-run 证据 |
+| --- | --- | --- | --- |
+| `themes/mainTheme/sectorLabel` | `ThemeMappingProvider` 已存在，但默认 provider 列表未挂载；builder 未从逐股题材派生旧审计名 `sectorLabel`。 | 默认挂载 Mongo 题材映射 provider；builder 写入 `themes`，并从首个题材派生 `mainTheme/sectorLabel`。 | 2026-06-26 15:00 只读 dry-run：`themes/mainTheme/sectorLabel=205/213`；剩余 8 只是题材基础库未映射，不是 collector 未接入。 |
+| `limitUpPool` 及涨停池字段 | 前端 `LimitUpFeed` 有 `/api/limitup/ths/pools` 来源，后端 collector 没 provider，也没有 `MarketDataContext.limit_up`。 | 新增 `ProxyLimitUpProvider`，接入 THS pools，写入 `limitUpPool/reason/firstZtTime/lastZtTime/boardHeight/highDays/fengdan` 等字段。 | 只读 dry-run：`limitUpPool=49/213`，其中 `firstZtTime/boardHeight/fengdan=30/213`。这是事件字段，只应覆盖涨停池股票，不能按全量股票 100% 审计。 |
+| `depth10/bid1/ask1` | 默认未挂 `BridgeQuoteProvider`；且 bridge 返回 `bids/asks` 结构，collector 只识别扁平 `bidPrice1/askPrice1`。 | 默认挂载 bridge provider；provider 保留 `bids/asks`；builder 兼容 `bids/asks` 与扁平字段，并落 `depth10/bid1Price/ask1Price`。 | 只读 dry-run：`depth10=213/213`、`bid1Price=204/213`、`ask1Price=183/213`。部分涨停/无卖盘样本没有 ask1 属正常盘口状态。 |
+| `price/change/turnoverRate` bridge 形状 | python-bridge quote 使用 `lastPrice/changePct/turnoverRate`，collector quote normalizer 只认 `price/pctChange/turnover`，导致真实样本可出现价格为 0。 | normalizer 增加真实 bridge quote 别名映射。 | 只读 dry-run：`price/change/turnoverRate=213/213`。 |
+| `amplitude` | 前端 live 历史也未落该字段；但 bridge HTTP quote 有 `high/low/preClose`，collector 未保留。 | provider 保留 `high/low/preClose/open`；builder 在 `high>=low` 且 `preClose>0` 时派生 `amplitude`。Mongo 写入保留额外字段；SQLite 历史模型没有独立列。 | 只读 dry-run：`high/low/preClose/amplitude=213/213`。 |
+
+本轮后，已确认的“前端已有来源但后端 collector 未实现/未接入/未解析”的代码阻塞项为 **0 个**。剩余风险分三类：
+
+- 历史 shadow 库缺字段仍会在审计中显示高缺失；这不是当前代码能力，需新采集或明确回填。
+- 题材 205/213 覆盖不足来自 Mongo 题材基础映射缺口，应按题材库质量专项处理。
+- 当前 bridge depth 是 L1 + 标准五档，不是真 L2 十档；`depth10` 字段名沿用前端合同，不能宣传为官方十档。
+
+阶段 5 复评更新：**代码接入阻塞已清零，但仍不能只凭历史数据库宣布进入阶段 5。** 下一步必须用修复后的 collector 实际落库至少两个完整交易日，再跑 `snapshot-collector-audit` 和 shadow/live compare。若新落库审计达到槽位、count drift、核心字段覆盖和质量门禁要求，则可以进入阶段 5 发布切口评审。

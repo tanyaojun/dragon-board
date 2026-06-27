@@ -2380,6 +2380,26 @@ max_drawdown: -0.08
 }
 ```
 
+### `copy-missing-mongodb-snapshot-slots`
+
+从一个 donor 数据集复制同 `snapshotId` 的快照事实到目标数据集，用于修复“目标数据集整槽缺失，但 donor 数据集同槽位事实完整”的 MongoDB 历史缺口。默认 dry-run；只有显式 `--apply` 才写入。该命令会复制 `snapshot_records`、`snapshot_frames`、`snapshot_stock_rows`、`snapshot_sector_rows`，并在目标 frame/record 的 metadata 中写入 repair provenance，同时登记 `migration_audit(opType=mongodb_snapshot_slot_copy)`。
+
+```powershell
+.\.venv\Scripts\python.exe -m backend.cli copy-missing-mongodb-snapshot-slots `
+  --target-dataset-id dragonboard_backend_shadow `
+  --donor-dataset-id dragonboard_live `
+  --snapshot-id half_hour:2026-06-22:15:00
+```
+
+参数：
+
+| 参数 | 必填 | 说明 |
+| --- | --- | --- |
+| `--target-dataset-id` | 是 | 待修复的数据集，例如 `dragonboard_backend_shadow` |
+| `--donor-dataset-id` | 是 | donor 数据集，例如 `dragonboard_live` |
+| `--snapshot-id` | 是 | 可重复传入；每个值为要复制的完整 `snapshotId` |
+| `--apply` | 否 | 存在即写库；默认只输出修复计划 |
+
 ### `validate-golden`
 
 校验 Golden。

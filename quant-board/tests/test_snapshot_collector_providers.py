@@ -18,6 +18,7 @@ from backend.snapshot_collector.models import MarketDataContext, SourceHealth
 from backend.snapshot_collector.providers import (
     BridgeQuoteProvider,
     ProxyHotlistProvider,
+    ProxyLimitUpProvider,
     ProxyMergedHotlistProvider,
     ProxyQuoteProvider,
     StartupBundleStockProvider,
@@ -235,6 +236,42 @@ STARTUP_BUNDLE_RESPONSE = {
         ],
     },
     "dragonMeta": {"cache": {"hit": True, "stale": False}},
+}
+
+THS_LIMIT_UP_POOLS_RESPONSE = {
+    "ok": True,
+    "source": "limitup-ths-pools",
+    "date": "20260623",
+    "pools": {
+        "one": {
+            "ok": True,
+            "items": [
+                {
+                    "stock_code": "000001",
+                    "stock_name": "平安银行",
+                    "limit_up_reason": "金融科技",
+                    "limit_up_time": "09:45:00",
+                    "last_limit_up_time": "14:20:00",
+                    "continue_day": 1,
+                    "volume_money": 68000000,
+                    "turnover_rate": 5.6,
+                }
+            ],
+        },
+        "failed": {
+            "ok": True,
+            "items": [
+                {
+                    "stock_code": "600000",
+                    "stock_name": "浦发银行",
+                    "reason_type": "银行",
+                    "first_limit_up_time": "10:05:00",
+                    "high_days": "2天2板",
+                    "order_amount": 12000000,
+                }
+            ],
+        },
+    },
 }
 
 
@@ -1235,6 +1272,120 @@ class TestProxyQuoteProviderErrors:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# ProxyLimitUpProvider
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+class TestProxyLimitUpProvider:
+    """ProxyLimitUpProvider maps THS pool data to stock enrichment fields."""
+
+    def test_collect_maps_limitup_pool_fields_by_code(self) -> None:
+        provider = ProxyLimitUpProvider(base_url=PROXY_BASE_URL, trading_date="2026-06-23")
+        mock_resp = _fake_urlopen_response(THS_LIMIT_UP_POOLS_RESPONSE)
+        with patch.object(urllib.request, "urlopen", return_value=mock_resp):
+            rows, health = provider.collect(TEST_CODES, timeout_ms=5000)
+
+        assert health.ok is True
+        assert health.source == "limitup_proxy"
+        assert health.row_count == 2
+
+        by_code = {row["code"]: row for row in rows}
+        assert by_code["000001"]["limitUpPool"] == "one"
+        assert by_code["000001"]["reason"] == "金融科技"
+        assert by_code["000001"]["firstZtTime"] == "09:45:00"
+        assert by_code["000001"]["lastZtTime"] == "14:20:00"
+        assert by_code["000001"]["boardHeight"] == 1
+        assert by_code["000001"]["highDays"] == 1
+        assert by_code["000001"]["fengdan"] == 68000000.0
+        assert by_code["000001"]["turnoverRate"] == 5.6
+
+        assert by_code["600000"]["limitUpPool"] == "failed"
+        assert by_code["600000"]["boardHeight"] == 2
+
+    def test_collect_filters_to_requested_codes(self) -> None:
+        provider = ProxyLimitUpProvider(base_url=PROXY_BASE_URL, trading_date="2026-06-23")
+        mock_resp = _fake_urlopen_response(THS_LIMIT_UP_POOLS_RESPONSE)
+        with patch.object(urllib.request, "urlopen", return_value=mock_resp):
+            rows, health = provider.collect(["000001"], timeout_ms=5000)
+
+        assert health.ok is True
+        assert [row["code"] for row in rows] == ["000001"]
+
+    def test_degraded_proxy_envelope_returns_failing_health(self) -> None:
+        provider = ProxyLimitUpProvider(base_url=PROXY_BASE_URL, trading_date="2026-06-23")
+        degraded = {
+            "ok": False,
+            "degraded": True,
+            "source": "limitup-ths-pools",
+            "message": "fallback",
+            "error": "upstream unavailable",
+            "pools": {},
+        }
+        mock_resp = _fake_urlopen_response(degraded)
+        with patch.object(urllib.request, "urlopen", return_value=mock_resp):
+            rows, health = provider.collect(TEST_CODES, timeout_ms=5000)
+
+        assert rows == []
+        assert health.ok is False
+        assert "upstream unavailable" in health.error
+
+    def test_degraded_proxy_envelope_preserves_available_pool_items(self) -> None:
+        provider = ProxyLimitUpProvider(base_url=PROXY_BASE_URL, trading_date="2026-06-23")
+        degraded = {
+            "ok": False,
+            "degraded": True,
+            "error": "one pool failed",
+            "pools": THS_LIMIT_UP_POOLS_RESPONSE["pools"],
+        }
+        mock_resp = _fake_urlopen_response(degraded)
+        with patch.object(urllib.request, "urlopen", return_value=mock_resp):
+            rows, health = provider.collect(TEST_CODES, timeout_ms=5000)
+
+        assert health.ok is False
+        assert "one pool failed" in health.error
+        assert {row["code"] for row in rows} == {"000001", "600000"}
+
+    def test_collect_decodes_frontend_limitup_field_shapes(self) -> None:
+        provider = ProxyLimitUpProvider(base_url=PROXY_BASE_URL, trading_date="2026-06-23")
+        response = {
+            "ok": True,
+            "pools": {
+                "high": {
+                    "items": [
+                        {
+                            "stock_code": "000001",
+                            "first_limit_up_time": 1778827443,
+                            "last_limit_up_time": 1778827443,
+                            "high_days": "5天3板",
+                            "high_days_value": 196613,
+                        }
+                    ],
+                },
+                "one": {
+                    "items": [
+                        {
+                            "stock_code": "600000",
+                            "limit_up_time": "09:45",
+                            "high_days_value": 196613,
+                        }
+                    ],
+                },
+            },
+        }
+        mock_resp = _fake_urlopen_response(response)
+        with patch.object(urllib.request, "urlopen", return_value=mock_resp):
+            rows, health = provider.collect(TEST_CODES, timeout_ms=5000)
+
+        by_code = {row["code"]: row for row in rows}
+        assert health.ok is True
+        assert by_code["000001"]["firstZtTime"] == "14:44:03"
+        assert by_code["000001"]["lastZtTime"] == "14:44:03"
+        assert by_code["000001"]["boardHeight"] == 3
+        assert by_code["600000"]["firstZtTime"] == "09:45:00"
+        assert by_code["600000"]["boardHeight"] == 3
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # collect_market_context with ProxyQuoteProvider
 # ═════════════════════════════════════════════════════════════════════════════
 
@@ -1284,6 +1435,52 @@ class TestCollectMarketContextWithProxyQuoteProvider:
         assert ctx.money_flow[0]["mainNetInflow"] == 50000000.0
         assert ctx.money_flow[0]["mediumNetInflow"] == 5000000.0
         assert ctx.money_flow[1]["mainNetInflow"] == -10000000.0
+
+    def test_bridge_quote_merges_with_proxy_quote_fields_by_code(self) -> None:
+        startup = StartupBundleStockProvider(base_url=PROXY_BASE_URL, trading_date="2026-06-23")
+        proxy_quote = ProxyQuoteProvider(base_url=PROXY_BASE_URL)
+        bridge_quote = BridgeQuoteProvider(base_url=BRIDGE_BASE_URL)
+        bridge_response = {
+            "ok": True,
+            "quotes": [
+                {
+                    "code": "000001",
+                    "price": 12.66,
+                    "pctChange": 3.1,
+                    "high": 12.8,
+                    "low": 12.2,
+                    "preClose": 12.1,
+                    "pe": None,
+                    "totalMarketValue": None,
+                    "volumeRatio": None,
+                }
+            ],
+            "depth": [],
+            "moneyFlow": [],
+            "quoteStats": {},
+        }
+
+        with patch.object(
+            urllib.request,
+            "urlopen",
+            side_effect=[
+                _fake_urlopen_response(STARTUP_BUNDLE_RESPONSE),
+                _fake_urlopen_response(EASTMONEY_QUOTE_RESPONSE),
+                _fake_urlopen_response(bridge_response),
+            ],
+        ):
+            ctx = collect_market_context(
+                [startup, proxy_quote, bridge_quote], [], timeout_ms=5000
+            )
+
+        by_code = {row["code"]: row for row in ctx.quotes}
+        assert len(ctx.quotes) == 3
+        assert by_code["000001"]["price"] == 12.66
+        assert by_code["000001"]["high"] == 12.8
+        assert by_code["000001"]["pe"] == 8.5
+        assert by_code["000001"]["totalMarketValue"] == 350000000000.0
+        assert by_code["000001"]["volumeRatio"] == 12.22
+        assert by_code["600000"]["pe"] == 5.2
 
     def test_derives_quote_codes_from_hotlist_when_codes_empty(self) -> None:
         hotlist = ProxyHotlistProvider(base_url=PROXY_BASE_URL)
@@ -1354,21 +1551,26 @@ class TestCollectMarketContextWithProxyQuoteProvider:
         startup = StartupBundleStockProvider(base_url=PROXY_BASE_URL, trading_date="2026-06-23")
         hotlist = ProxyMergedHotlistProvider(base_url=PROXY_BASE_URL)
         quote = ProxyQuoteProvider(base_url=PROXY_BASE_URL)
+        limitup = ProxyLimitUpProvider(base_url=PROXY_BASE_URL, trading_date="2026-06-23")
         captured_urls: list[str] = []
 
         def record_urlopen(req: urllib.request.Request, timeout: float = 0) -> MagicMock:
             captured_urls.append(req.full_url if hasattr(req, "full_url") else str(req))
             if len(captured_urls) == 1:
                 return _fake_urlopen_response(STARTUP_BUNDLE_RESPONSE)
-            return _fake_urlopen_response(EASTMONEY_QUOTE_RESPONSE)
+            if "quotes/eastmoney" in captured_urls[-1]:
+                return _fake_urlopen_response(EASTMONEY_QUOTE_RESPONSE)
+            return _fake_urlopen_response(THS_LIMIT_UP_POOLS_RESPONSE)
 
         with patch.object(urllib.request, "urlopen", side_effect=record_urlopen):
-            ctx = collect_market_context([startup, hotlist, quote], [], timeout_ms=5000)
+            ctx = collect_market_context([startup, hotlist, quote, limitup], [], timeout_ms=5000)
 
         assert len(ctx.stocks) == 3
         assert [row["code"] for row in ctx.stocks] == ["000001", "600000", "300001"]
+        assert ctx.limit_up["000001"]["limitUpPool"] == "one"
         assert all("eastmoney/hot" not in url for url in captured_urls)
         assert any("quotes/eastmoney" in url for url in captured_urls)
+        assert any("limitup/ths/pools" in url for url in captured_urls)
         assert any(h.source == "startup_bundle" and h.ok for h in ctx.source_health)
 
     def test_merged_hotlist_fallback_runs_when_startup_bundle_missing(self) -> None:

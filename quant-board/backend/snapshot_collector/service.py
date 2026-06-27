@@ -652,14 +652,36 @@ class SnapshotCollectorService:
 
     def _create_providers(self, *, trading_date: str | None = None) -> list[Any]:
         """Create data-source providers from settings."""
-        from .providers import ProxyMergedHotlistProvider, ProxyQuoteProvider, StartupBundleStockProvider
+        from .providers import (
+            BridgeQuoteProvider,
+            ProxyLimitUpProvider,
+            ProxyMergedHotlistProvider,
+            ProxyQuoteProvider,
+            StartupBundleStockProvider,
+            ThemeMappingProvider,
+        )
 
         proxy_url = self._proxy_base_url()
-        return [
+        providers: list[Any] = [
             StartupBundleStockProvider(base_url=proxy_url, trading_date=trading_date),
             ProxyMergedHotlistProvider(base_url=proxy_url),
             ProxyQuoteProvider(base_url=proxy_url),
+            BridgeQuoteProvider(base_url=self._bridge_base_url()),
+            ProxyLimitUpProvider(base_url=proxy_url, trading_date=trading_date),
         ]
+        theme_repo = self._create_theme_repository()
+        if theme_repo is not None:
+            providers.append(ThemeMappingProvider(theme_repo))
+        return providers
+
+    def _create_theme_repository(self) -> Any | None:
+        try:
+            from backend.data.mongo_theme_repository import MongoThemeRepository
+            from backend.data.repository_factory import get_runtime_mongodb_database
+
+            return MongoThemeRepository(get_runtime_mongodb_database())
+        except Exception:
+            return None
 
     def _proxy_base_url(self) -> str:
         if self._settings and hasattr(self._settings, "snapshot_collector_proxy_base_url"):
