@@ -1,16 +1,17 @@
 import { dataLayer } from '@/services/DataLayer'
 import type { RotationAnalysis } from '@/types/core'
-import type { JxbkBlockData, JxbkStockData } from '@/types'
 import { buildThemeRotationSummary } from './ThemeRotationEngine'
 import { themeRuntimeStore } from './ThemeRuntimeStore'
-import { jxbkThemeFeed, setJxbkThemeFeedRuntimeRefreshHandler } from './JxbkThemeFeed'
 import { themeRepository } from './ThemeRepository'
-import { refreshRuntime, themeInputSignature } from './ThemeRuntimeCoordinator'
+import { refreshRuntime } from './ThemeRuntimeCoordinator'
 import { refreshResourceLocks } from '../refresh/RefreshResourceLocks'
 import { deriveThemeHeatLevel } from './stockThemeMeta'
+import { themeHeatFeed } from './ThemeHeatFeed'
 import type {
   ThemeExposureProjection,
   ThemeFactorSnapshot,
+  ThemeHeatApiFactor,
+  ThemePanelSummary,
   ThemeRuntimeRefreshResult,
   ThemeRefreshOptions,
   ThemeSourceContext,
@@ -23,9 +24,6 @@ let lastExposureProjection: ThemeExposureProjection = {
   byTheme: new Map(),
 }
 let lastRotationSummary: RotationAnalysis | null = null
-let lastSourceContext: ThemeSourceContext | null = null
-let lastSourceSignature = ''
-const JXBK_CONTEXT_TTL = 5 * 60 * 1000
 
 function buildStockThemesMap(): Map<string, string[]> {
   const result = new Map<string, string[]>()
@@ -65,7 +63,6 @@ export function buildCurrentThemeSourceContext(options?: {
     themeStocks,
     stockThemes: buildStockThemesMap(),
     stocks: dataLayer.getStocks(),
-    jxbkBlocks: dataLayer.getJxbkBlocksSorted?.() || [],
     rotationAnalysis: dataLayer.getCurrentRotation?.() || null,
     correlations,
   }
@@ -86,19 +83,15 @@ export function refreshThemeFactors(context: ThemeSourceContext = buildCurrentTh
   }
 }
 
-function applyRuntimeResult(context: ThemeSourceContext, result: ThemeRuntimeRefreshResult) {
+function applyRuntimeResult(result: ThemeRuntimeRefreshResult) {
   lastFactors = result.factors
   lastExposureProjection = result.exposures
   lastRotationSummary = result.rotationSummary
-  lastSourceContext = context
-  lastSourceSignature = result.inputSignature
-}
-
-function buildContextForRuntimeResult(options: ThemeRefreshOptions, result: ThemeRuntimeRefreshResult) {
-  return buildCurrentThemeSourceContext({
-    timestamp: result.timestamp || options.timestamp,
-    snapshotId: options.snapshotId,
-  })
+  const apiFactors = themeHeatFeed.getSnapshot()?.factors || []
+  const apiById = new Map(apiFactors.map((item) => [item.themeId, item]))
+  dataLayer.updateHotThemes(
+    result.factors.map((factor) => toHotThemeSummary(factor, apiById.get(factor.themeId))),
+  )
 }
 
 export function refreshRuntimeState(
@@ -108,8 +101,8 @@ export function refreshRuntimeState(options: ThemeRefreshOptions): Promise<Theme
 export function refreshRuntimeState(
   options: ThemeRefreshOptions,
 ): ThemeRuntimeRefreshResult | Promise<ThemeRuntimeRefreshResult> {
-  const apply = (result: ThemeRuntimeRefreshResult, context: ThemeSourceContext) => {
-    applyRuntimeResult(context, result)
+  const apply = (result: ThemeRuntimeRefreshResult) => {
+    applyRuntimeResult(result)
     return result
   }
 
@@ -119,7 +112,7 @@ export function refreshRuntimeState(
       source: options.source || 'themeFacade',
       context: options.context,
     } as ThemeRefreshOptions & { source: string; context: ThemeSourceContext })
-    return apply(result, options.context)
+    return apply(result)
   }
 
   return refreshResourceLocks
@@ -131,26 +124,14 @@ export function refreshRuntimeState(
     )
     .then((locked) => {
       const result = locked.value!
-      return apply(result, buildContextForRuntimeResult(options, result))
+      return apply(result)
     })
 }
 
 export function refreshThemeFacadeState(options: ThemeRefreshOptions & {
   context?: ThemeSourceContext
 } = {}) {
-  const context =
-    options.context ||
-    buildCurrentThemeSourceContext({
-      timestamp: options.timestamp,
-      snapshotId: options.snapshotId,
-    })
-  const result = refreshRuntimeState({
-    ...options,
-    source: options.source || 'themeFacade',
-    context,
-  } as ThemeRefreshOptions & { source: string; context: ThemeSourceContext })
-
-  return {
+  const project = (result: ThemeRuntimeRefreshResult) => ({
     factors: lastFactors,
     exposures: lastExposureProjection,
     rotationSummary: lastRotationSummary,
@@ -158,69 +139,18 @@ export function refreshThemeFacadeState(options: ThemeRefreshOptions & {
     qualitySummary: result.qualitySummary,
     changedFields: result.changedFields,
     inputSignature: result.inputSignature,
-  }
-}
-
-export async function refreshJxbkAndFactors(options: ThemeRefreshOptions & {
-  context?: ThemeSourceContext
-} = {}) {
-  if (!options.skipJxbkRefresh && options.context?.jxbkBlocks?.length) {
-    jxbkThemeFeed.updateBlocks(options.context.jxbkBlocks)
-  }
-  const context = options.context
-  if (context) {
-    return refreshThemeFacadeState({
-      ...options,
-      source: options.source || 'ui',
-      context,
-    })
-  }
-  const result = await refreshRuntimeState({
-    ...options,
-    source: options.source || 'ui',
-    forceJxbk: !options.skipJxbkRefresh,
   })
-  return result
-}
-
-export function getJxbkBlocksCompat(limit?: number): JxbkBlockData[] {
-  return getJxbkBlocks(limit)
-}
-
-export function getJxbkBlocks(limit?: number): JxbkBlockData[] {
-  const now = Date.now()
-  const contextFresh =
-    Boolean(lastSourceContext?.jxbkBlocks?.length) &&
-    Boolean(lastSourceContext?.timestamp) &&
-    now - Number(lastSourceContext?.timestamp) <= JXBK_CONTEXT_TTL
-  const blocks = contextFresh && lastSourceContext
-    ? lastSourceContext.jxbkBlocks
-    : jxbkThemeFeed.getBlocks(limit)
-  const ordered = [...(blocks || [])]
-  return typeof limit === 'number' ? ordered.slice(0, Math.max(0, limit)) : ordered
-}
-
-export function getJxbkLastUpdate(): number | null {
-  if (lastSourceContext?.timestamp) return lastSourceContext.timestamp
-  const state = (dataLayer as any).state
-  return state?.theme?.jxbk?.lastUpdate || null
-}
-
-export function getThemeStockMapCompat(): Record<string, JxbkStockData> {
-  return getThemeStockMap()
-}
-
-export function getThemeStockMap(): Record<string, JxbkStockData> {
-  const stockMap = jxbkThemeFeed.getStockMap()
-  return Object.fromEntries(
-    Object.entries(stockMap).map(([code, stock]) => [
-      code,
-      {
-        ...stock,
-        blocks: [...(stock.blocks || [])],
-      },
-    ]),
-  )
+  if (options.context) {
+    return project(refreshRuntimeState({
+      ...options,
+      source: options.source || 'themeFacade',
+      context: options.context,
+    } as ThemeRefreshOptions & { source: string; context: ThemeSourceContext }))
+  }
+  return refreshRuntimeState({
+    ...options,
+    source: options.source || 'themeFacade',
+  }).then(project)
 }
 
 export function getRuntimeSnapshot() {
@@ -228,26 +158,17 @@ export function getRuntimeSnapshot() {
 }
 
 export function getThemeFactors(): ThemeFactorSnapshot[] {
-  if (lastFactors.length === 0) {
-    refreshThemeFactors()
-  }
-  return lastFactors
+  return themeRuntimeStore.getSnapshot().factors
 }
 
 export function getStockExposures(code: string): ThemeStockExposure[]
 export function getStockExposures(): Map<string, ThemeStockExposure[]>
 export function getStockExposures(code?: string): ThemeStockExposure[] | Map<string, ThemeStockExposure[]> {
-  if (lastFactors.length === 0) {
-    refreshThemeFactors()
-  }
   if (code) return lastExposureProjection.byCode.get(code) || []
   return lastExposureProjection.byCode
 }
 
 export function getThemeExposureProjection(): ThemeExposureProjection {
-  if (lastFactors.length === 0) {
-    refreshThemeFactors()
-  }
   return lastExposureProjection
 }
 
@@ -264,8 +185,16 @@ export function getThemeEvents() {
   return themeRuntimeStore.getSnapshot().events
 }
 
-export function toHotThemeCompat(factor: ThemeFactorSnapshot) {
+export function toHotThemeSummary(
+  factor: ThemeFactorSnapshot,
+  apiFactor?: ThemeHeatApiFactor,
+): ThemePanelSummary & Record<string, unknown> {
   const heatLevel = deriveThemeHeatLevel(factor.heatScore)
+  const apiNetInflow = apiFactor
+    ? Object.prototype.hasOwnProperty.call(apiFactor, 'netInflow')
+      ? apiFactor.netInflow ?? null
+      : apiFactor.mainNetInflow
+    : factor.netInflow
   return {
     id: factor.themeId,
     name: factor.themeName,
@@ -278,18 +207,26 @@ export function toHotThemeCompat(factor: ThemeFactorSnapshot) {
     ztCount: factor.ztCount,
     leaderCount: factor.leaderCount,
     momentum: factor.momentumScore,
+    momentumScore: factor.momentumScore,
+    breadthScore: factor.breadthScore,
+    fundScore: apiFactor ? apiFactor.fundScore : factor.fundScore,
+    leadershipScore: factor.leadershipScore,
+    correlationScore: factor.correlationScore,
+    crowdingRisk: factor.crowdingRisk,
     trend: factor.persistenceScore,
     acceleration: Math.max(0, factor.momentumScore - factor.crowdingRisk),
     correlation: factor.correlationScore / 100,
     strength: factor.strength || factor.heatScore,
-    mainNetInflow: factor.netInflow,
+    mainNetInflow: apiNetInflow,
+    volumeRatio: Number.isFinite(factor.volumeRatio) ? factor.volumeRatio : null,
+    degraded: apiFactor?.degraded ?? factor.qualityFlags.length > 0,
     rotationState: factor.rotationState,
     qualityFlags: factor.qualityFlags,
     lastUpdate: factor.timestamp,
   }
 }
 
-export function toStockThemeCompat(exposure: ThemeStockExposure) {
+export function toStockTheme(exposure: ThemeStockExposure) {
   return {
     id: exposure.themeId,
     name: exposure.themeName,
@@ -306,19 +243,37 @@ export function toStockThemeCompat(exposure: ThemeStockExposure) {
   }
 }
 
-export function getHotThemesCompat(limit: number = 10) {
-  return getHotThemes(limit)
-}
-
 export function getHotThemes(limit: number = 10) {
+  const apiById = new Map((themeHeatFeed.getSnapshot()?.factors || []).map((item) => [item.themeId, item]))
   return getThemeFactors()
-    .map(toHotThemeCompat)
+    .map((factor) => toHotThemeSummary(factor, apiById.get(factor.themeId)))
     .sort((a, b) => b.heatScore - a.heatScore)
     .slice(0, limit)
 }
 
-export function getThemeStocksCompat(themeId: string, limit = 50) {
-  return getThemeStocks(themeId, limit)
+export function getThemeSummaries(limit: number = 20): ThemePanelSummary[] {
+  return getHotThemes(limit)
+}
+
+export function getThemeSummary(themeId: string): ThemePanelSummary | null {
+  return getThemeSummaries(Number.MAX_SAFE_INTEGER).find((theme) => theme.id === themeId) || null
+}
+
+export function getThemeLastUpdate(): number | null {
+  return themeHeatFeed.getSnapshot()?.computedAt || lastFactors[0]?.timestamp || null
+}
+
+export function getThemeFeedState(): {
+  stale: boolean
+  lastError: string | null
+  factorVersion: string | null
+} {
+  const snapshot = themeHeatFeed.getSnapshot()
+  return {
+    stale: snapshot?.stale || false,
+    lastError: snapshot?.lastError || null,
+    factorVersion: snapshot?.factorVersion || null,
+  }
 }
 
 export function getThemeStocks(themeId: string, limit = 50) {
@@ -360,14 +315,14 @@ export function getThemeStocks(themeId: string, limit = 50) {
   }
 }
 
-export function getThemeDetailCompat(themeId: string) {
-  return getThemeDetail(themeId)
+export function loadThemeStocks(themeId: string, options: { force?: boolean; limit?: number } = {}) {
+  return themeHeatFeed.loadThemeStocks(themeId, options)
 }
 
 export function getThemeDetail(themeId: string) {
   const factor = getThemeFactors().find((item) => item.themeId === themeId)
   if (!factor) return null
-  const hotTheme = toHotThemeCompat(factor)
+  const hotTheme = toHotThemeSummary(factor)
   const stocks = getThemeStocks(themeId, 50)
   return {
     id: factor.themeId,
@@ -416,27 +371,15 @@ export const themeFacade = {
   getRotationSummary,
   getThemeEvents,
   getRuntimeSnapshot,
-  getJxbkBlocks,
-  getJxbkBlocksCompat,
-  getJxbkLastUpdate,
-  getThemeStockMap,
-  getThemeStockMapCompat,
-  refreshJxbkAndFactors,
   getHotThemes,
-  getHotThemesCompat,
+  getThemeSummaries,
+  getThemeSummary,
+  getThemeLastUpdate,
+  getThemeFeedState,
   getThemeDetail,
-  getThemeDetailCompat,
   getThemeStocks,
-  getThemeStocksCompat,
-  toHotThemeCompat,
-  toStockThemeCompat,
+  loadThemeStocks,
+  toHotThemeSummary,
+  toStockTheme,
   runtimeStore: themeRuntimeStore,
 }
-
-setJxbkThemeFeedRuntimeRefreshHandler(() => {
-  themeFacade.refreshRuntime({
-    source: 'jxbkThemeFeed',
-    context: themeFacade.buildCurrentThemeSourceContext(),
-    emitAlerts: false,
-  })
-})

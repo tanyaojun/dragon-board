@@ -26,6 +26,11 @@
 - V12 边界：Dragon Board 根项目不新增回测平台；共振策略以 RankTrend 候选为主，ThemeTrend 只能辅助排序、置信度、拥挤风险降级和解释，不得独立制造买入信号。
 - V12 策略口径：`theme_rotation`、`leader_theme_confirmation`、`hotlist_theme_confluence` 必须在执行信号中保留独立入场、降级、过滤和解释字段；Dragon Board 只展示 QuantBoard 研究摘要，不在根项目实现交易模拟。
 - L2 资金流口径：`estimated_l1` 只允许作为观察指标；正式资金流回测必须使用 `broker_l2` 或 `official_l2`，并在质量门禁中保留 `capital_flow_source`、`capital_flow_confidence`、`money_flow_estimated`。
+- 实验性后端快照采集器：`backend/snapshot_collector/` 当前默认仍处于 shadow-only 阶段，默认禁用，写目标限定为 `dragonboard_backend_shadow`。Phase 6 正式切换 `dragonboard_live` 只能在完成备份和门禁后显式设置 `QUANT_BOARD_SNAPSHOT_COLLECTOR_DATASET_ID=dragonboard_live` 与 `QUANT_BOARD_SNAPSHOT_COLLECTOR_ALLOW_LIVE_DATASET=1`，CLI 预检和 quality gate 才会放行。本机观察实例由 Windows 计划任务守护并使用独立端口 `8001`，不得替换日常 `8000` API；守护健康判定必须使用 MongoDB `ping`、proxy/bridge 结构化健康响应和 collector scheduler shadow 合同，不得仅凭端口开放。`proxy-server` 只复用健康的 `127.0.0.1:3000`，缺失或不健康时标记 `blocked`，不得从隔离 worktree 启动代理接管主看板端口。`force` 重采写入失败时必须恢复替换前快照事实。题材 rows 必须来自共享全市场题材热度服务并与 theme count 一致；空 sector rows 只允许作为替换前历史缺口记录，不得成为新帧豁免。该模块的改动必须通过以下测试链路验证：
+  - 后端 pytest：`tests/test_snapshot_collector_*.py`（包含 supervisor 自动运行合同，并覆盖 models、slots、providers、builder、quality_gate、state、service、service_factory、routes 和 repository 合同）
+  - python-bridge 接口测试：`python -m unittest discover python-bridge -p "test_*.py"`（覆盖 `GET /api/quotes/snapshot?codes=...` 行情接口）
+  - MongoDB 迁移审计命令：`.\.venv\Scripts\python.exe -m backend.cli verify-mongodb-migration --dataset-id dragonboard_backend_shadow --snapshot-type half_hour`
+- 通达信 L2 能力边界以当前 bridge 源码验证结果为准，不得把五档 L1 描述成官方客户端级 L2；任何 L2 相关功能描述必须标注已验证的 bridge 能力来源。
 
 ## 工作边界
 

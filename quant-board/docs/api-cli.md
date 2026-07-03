@@ -92,6 +92,455 @@ cd quant-board
 
 2026-06-19 已执行一次全量回填：56 个交易日，362,718 行，0 错误。
 
+## python-bridge 后端采集接口（Phase 2）
+
+为支持 QuantBoard 后端独立采集（不依赖浏览器 WebSocket 订阅），`python-bridge` 新增以下 HTTP 接口：
+
+### `POST /api/quotes/subscriptions`
+
+设置后端采集订阅池。接收代码列表，立即 fetch 行情并缓存到 bridge 内存。后续 `GET /api/quotes/snapshot` 不带 `codes` 参数时可回退到此缓存。
+
+请求：
+
+```json
+{"codes": ["000001", "600000", "300750"]}
+```
+
+响应：
+
+```json
+{
+  "ok": true,
+  "codes": ["000001", "300750", "600000"],
+  "count": 3,
+  "setAt": 1781170800000
+}
+```
+
+### `GET /api/quotes/snapshot`（池模式）
+
+不带 `codes` 参数时使用订阅池缓存。池为空时返回 `ok=false` 和 `"missing codes parameter and backend pool is empty"`。
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8765/api/quotes/snapshot
+```
+
+响应（池模式）：
+
+```json
+{
+  "ok": true,
+  "source": "python_bridge",
+  "serverTs": 1781170800000,
+  "subscribedCount": 3,
+  "quotes": [],
+  "depth": [],
+  "ticks": [],
+  "moneyFlow": [],
+  "quoteStats": {},
+  "l2": {},
+  "pooled": true,
+  "poolRefreshedAt": 1781170800000
+}
+```
+
+带 `?codes=...` 参数时保持 Phase 1 按需抓取行为，此时响应中不包含 `pooled` / `poolRefreshedAt` 字段。
+
+## 实验性后端快照采集器 API
+
+以下接口属于 `backend/snapshot_collector/` 实验模块。当前默认禁用（`QUANT_BOARD_SNAPSHOT_COLLECTOR_ENABLED=false`），写目标限定为 `dragonboard_backend_shadow` 数据集，不进入 `dragonboard_live` 正式快照主库。所有响应使用统一的 `{"ok": true/false, "status": "...", "data": {...}}` 信封格式。
+
+本机自动 shadow 观察使用独立 collector API 端口 `8001`，与日常 QuantBoard API 的 `8000` 并存。计划任务启动的守护进程会分别执行 MongoDB `ping`、proxy-server/python-bridge 结构化 `/health` 检查，并只在 collector 状态确认 `enabled=true`、`running=true` 且数据集为 `dragonboard_backend_shadow` 时判定健康。`proxy-server` 只复用健康的 `127.0.0.1:3000`，缺失或不健康时只标记阻塞，不从隔离 worktree 启动代理；守护进程自己启动的其它异常服务会自动重启；未知占端口进程只标记阻塞。文档中的通用接口示例仍使用 `8000`；观察独立实例时将端口替换为 `8001`。
+
+shadow 股票池优先读取 proxy-server `/api/cache/startup-bundle?key=default:YYYY-MM-DD`，该缓存由 Dragon Board live 前端写入，包含 live 当前 merged stocks。startup bundle 缺失或过期时，collector 默认调用 proxy-server 的八个平台热榜接口做 union fallback，生成各平台 rank 字段和 `avgRank/compRank/rank`，避免退回单平台 top100。只有 startup bundle 与八平台 union fallback 都不可用时，正式 shadow 写入才会被质量门禁以 `startup_bundle_missing` 阻断。
+
+### `GET /api/snapshot-collector/status`
+
+返回采集器当前运行状态，包括最近一次运行、统计摘要和数据源健康信息。
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/api/snapshot-collector/status
+```
+
+响应示例：
+
+```json
+{
+  "ok": true,
+  "status": "completed",
+  "data": {
+    "lastRunId": "sc-a1b2c3d4e5f6",
+    "lastRunAt": "2026-06-12T10:30:00Z",
+    "lastStatus": "completed",
+    "totalRuns": 42,
+    "completedRuns": 38,
+    "dedupedRuns": 2,
+    "blockedRuns": 2,
+    "datasetIds": ["dragonboard_backend_shadow"]
+  }
+}
+```
+
+### `POST /api/snapshot-collector/run-once`
+
+执行单次快照采集运行。采集流水线依次执行：创建 SnapshotSlot -> 判重 -> 采集数据源 -> 组装 payload -> 规范化 -> 质量门禁 -> 落库。
+
+```json
+{
+  "datasetId": "dragonboard_backend_shadow",
+  "snapshotType": "half_hour",
+  "tradingDate": "2026-06-12",
+  "slotTime": "10:30",
+  "dryRun": false,
+  "force": false
+}
+```
+
+请求字段：
+
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `datasetId` | 是 | 目标数据集 ID，默认应为 `dragonboard_backend_shadow` |
+| `snapshotType` | 是 | `quarter_hour` / `half_hour` / `hourly` / `daily` |
+| `tradingDate` | 是 | `YYYY-MM-DD` 格式交易日 |
+| `slotTime` | 是 | `HH:MM` 格式槽位时间 |
+| `dryRun` | 否 | 默认 `false`；为 `true` 时走完整流水线但不写库 |
+| `force` | 否 | 默认 `false`；为 `true` 时跳过判重强制重写；写入失败时恢复替换前事实 |
+
+成功响应（`status=completed`）：
+
+```json
+{
+  "ok": true,
+  "status": "completed",
+  "data": {
+    "runId": "sc-a1b2c3d4e5f6",
+    "snapshotId": "half_hour:2026-06-12:10:30",
+    "deduped": false,
+    "dryRun": false,
+    "message": "done",
+    "details": {
+      "stockRowCount": 224,
+      "frameCount": 1,
+      "sectorRowCount": 12,
+      "idempotencyKey": "dragonboard_backend_shadow:half_hour:2026-06-12:10:30:..."
+    }
+  },
+  "quality": {
+    "ok": true,
+    "blockingIssues": [],
+    "warnings": [],
+    "sourceCounts": {"ok": 2, "failed": 0}
+  }
+}
+```
+
+去重响应（`status=deduped`，`ok=true`）：
+
+```json
+{
+  "ok": true,
+  "status": "deduped",
+  "data": {
+    "runId": "sc-b2c3d4e5f6a1",
+    "snapshotId": "half_hour:2026-06-12:10:30",
+    "deduped": true,
+    "dryRun": false,
+    "message": "Snapshot already exists"
+  }
+}
+```
+
+质量门禁阻止（`status=blocked`，`ok=false`）：
+
+```json
+{
+  "ok": false,
+  "status": "blocked",
+  "data": {
+    "runId": "sc-c3d4e5f6a1b2",
+    "snapshotId": "half_hour:2026-06-12:15:05",
+    "deduped": false,
+    "dryRun": false,
+    "message": "Quality gate blocked: ['startup_bundle_missing']"
+  },
+  "quality": {
+    "ok": false,
+    "blockingIssues": ["startup_bundle_missing"],
+    "warnings": ["quote_provider_partial"],
+    "sourceCounts": {"ok": 1, "failed": 2}
+  }
+}
+```
+
+dry-run 响应（`status=dry_run`，`ok=true`）：
+
+```json
+{
+  "ok": true,
+  "status": "dry_run",
+  "data": {
+    "runId": "sc-d4e5f6a1b2c3",
+    "snapshotId": "half_hour:2026-06-12:10:30",
+    "deduped": false,
+    "dryRun": true,
+    "message": "Dry-run completed successfully"
+  },
+  "quality": {
+    "ok": true,
+    "blockingIssues": [],
+    "warnings": [],
+    "sourceCounts": {"ok": 2, "failed": 0}
+  }
+}
+```
+
+### `POST /api/snapshot-collector/backfill-slots`
+
+按日期区间批量执行采集。自动为区间内每个交易日生成所有符合条件的槽位时间，逐个调用 `run_once`；周末和已知节假日不会生成 backfill slot。
+
+```json
+{
+  "datasetId": "dragonboard_backend_shadow",
+  "snapshotType": "half_hour",
+  "startDate": "2026-06-10",
+  "endDate": "2026-06-12",
+  "dryRun": true,
+  "force": false
+}
+```
+
+请求字段：
+
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `datasetId` | 是 | 目标数据集 ID |
+| `snapshotType` | 是 | `quarter_hour` / `half_hour` / `hourly` / `daily` |
+| `endDate` | 是 | `YYYY-MM-DD` 格式截止日期；非交易日会被跳过 |
+| `startDate` | 否 | 默认等于 `endDate`；区间起止含两端，非交易日会被跳过 |
+| `dryRun` | 否 | 默认 `true`（backfill 默认不写库） |
+| `force` | 否 | 默认 `false`；为 `true` 时跳过判重 |
+
+响应示例：
+
+```json
+{
+  "ok": true,
+  "status": "completed",
+  "data": {
+    "total": 32,
+    "succeeded": 28,
+    "failed": 0,
+    "blocked": 2,
+    "deduped": 2,
+    "details": [
+      {"snapshotId": "half_hour:2026-06-10:09:30", "status": "completed", "message": "done"},
+      {"snapshotId": "half_hour:2026-06-10:10:00", "status": "blocked", "message": "Quality gate blocked: ['startup_bundle_missing']"}
+    ]
+  }
+}
+```
+
+`ok` 为 `false` 当且仅当存在 `failed` 或 `blocked` 时。
+
+### `GET /api/snapshot-collector/runs`
+
+列出历史采集运行记录，支持按数据集、状态和快照类型过滤。
+
+```powershell
+Invoke-RestMethod 'http://127.0.0.1:8000/api/snapshot-collector/runs?status=blocked&limit=20'
+```
+
+查询参数：
+
+| 参数 | 默认 | 说明 |
+| --- | --- | --- |
+| `datasetId` | 空 | 按数据集 ID 过滤 |
+| `status` | 空 | 按状态过滤：`completed` / `dry_run` / `deduped` / `blocked` |
+| `snapshotType` | 空 | 按快照类型过滤 |
+| `limit` | `50` | 每页条数 |
+| `offset` | `0` | 起始偏移 |
+
+响应示例：
+
+```json
+{
+  "ok": true,
+  "status": "completed",
+  "data": {
+    "items": [
+      {
+        "runId": "sc-a1b2c3d4e5f6",
+        "datasetId": "dragonboard_backend_shadow",
+        "snapshotId": "half_hour:2026-06-12:10:30",
+        "snapshotType": "half_hour",
+        "tradingDate": "2026-06-12",
+        "slotTime": "10:30",
+        "status": "completed",
+        "deduped": false,
+        "dryRun": false,
+        "createdAt": "2026-06-12T10:30:05Z"
+      }
+    ],
+    "total": 42,
+    "limit": 50,
+    "offset": 0
+  }
+}
+```
+
+### `POST /api/snapshot-collector/audit`
+
+审计指定数据集和快照类型的覆盖率。检查每个交易日每个槽位的采集状态、行数和质量。
+
+```json
+{
+  "datasetId": "dragonboard_backend_shadow",
+  "snapshotType": "half_hour",
+  "tradingDate": "2026-06-12"
+}
+```
+
+请求字段：
+
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `datasetId` | 是 | 目标数据集 ID |
+| `snapshotType` | 是 | `quarter_hour` / `half_hour` / `hourly` / `daily` |
+| `tradingDate` | 否 | 可选单日过滤；不传时审计数据集全范围 |
+
+响应示例：
+
+```json
+{
+  "ok": true,
+  "status": "completed",
+  "data": {
+    "datasetId": "dragonboard_backend_shadow",
+    "snapshotType": "half_hour",
+    "totalSlots": 16,
+    "coveredSlots": 14,
+    "missingSlots": 2,
+    "missingSlotIds": [
+      "half_hour:2026-06-12:11:00",
+      "half_hour:2026-06-12:11:30"
+    ],
+    "qualitySummary": {
+      "blockedRuns": 0,
+      "warningRuns": 3
+    },
+    "slotDetails": [
+      {
+        "snapshotId": "half_hour:2026-06-12:10:00",
+        "status": "covered",
+        "stockRowCount": 224,
+        "lastRunStatus": "completed"
+      }
+    ]
+  }
+}
+```
+
+### `POST /api/snapshot-collector/compare`
+
+对比两个数据集的快照覆盖率和字段完整性（shadow vs live 审计）。
+
+```json
+{
+  "datasetIdA": "dragonboard_live",
+  "datasetIdB": "dragonboard_backend_shadow",
+  "snapshotType": "half_hour",
+  "tradingDate": "2026-06-12"
+}
+```
+
+请求字段：
+
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `datasetIdA` | 是 | 基准数据集 ID（通常为 `dragonboard_live`） |
+| `datasetIdB` | 是 | 对比数据集 ID（通常为 `dragonboard_backend_shadow`） |
+| `snapshotType` | 是 | `quarter_hour` / `half_hour` / `hourly` / `daily` |
+| `tradingDate` | 否 | 可选单日对比；不传时对比所有共同交易日 |
+
+响应示例：
+
+```json
+{
+  "ok": true,
+  "status": "completed",
+  "data": {
+    "ok": true,
+    "datasetA": "dragonboard_live",
+    "datasetB": "dragonboard_backend_shadow",
+    "snapshotType": "half_hour",
+    "tradingDates": ["2026-06-11", "2026-06-12"],
+    "perDate": [
+      {
+        "tradingDate": "2026-06-12",
+        "totalExpectedSlots": 10,
+        "slotsInBoth": ["half_hour:2026-06-12:10:00"],
+        "slotsOnlyInA": [],
+        "slotsOnlyInB": ["half_hour:2026-06-12:09:30"],
+        "slotsMissingInBoth": [],
+        "slotDetails": [
+          {
+            "snapshotId": "half_hour:2026-06-12:10:00",
+            "inA": true,
+            "inB": true,
+            "stockRowCountA": 224,
+            "stockRowCountB": 210,
+            "sectorRowCountA": 35,
+            "sectorRowCountB": 0,
+            "fieldMissingRatesA": {},
+            "fieldMissingRatesB": {"depth10": {"present": 0, "missing": 210, "rate": 1.0}}
+          }
+        ]
+      }
+    ],
+    "summary": {
+      "totalSlotsCompared": 20,
+      "slotsInBoth": 18,
+      "slotsOnlyInA": 1,
+      "slotsOnlyInB": 1,
+      "slotsMissingInBoth": 0,
+      "avgStockRowDiff": 14.0,
+      "emptyFramesA": 0,
+      "emptyFramesB": 1
+    }
+  }
+}
+```
+
+### `GET /api/snapshot-collector/scheduler/status`
+
+返回调度器运行状态，包括启用/禁用、运行中、轮询间隔、最近采集的 slot、采集计数和错误计数。
+
+响应示例：
+
+```json
+{
+  "ok": true,
+  "status": "completed",
+  "data": {
+    "enabled": true,
+    "running": true,
+    "dataset_id": "dragonboard_backend_shadow",
+    "snapshot_types": ["half_hour", "daily"],
+    "poll_seconds": 1.0,
+    "grace_minutes": 5,
+    "last_run_at": "2026-06-15T10:00:01+08:00",
+    "last_slot_collected": "half_hour:2026-06-15:10:00",
+    "last_error": null,
+    "collection_count": 3,
+    "error_count": 0,
+    "in_flight_slots": []
+  }
+}
+```
+
+调度器状态同样包含在 `GET /api/health` 响应的 `snapshotCollector` 字段中。
+
 ## 热榜情绪 API、回填和盘后调度
 
 ### `POST /api/hotlist-sentiment/ingest`
@@ -750,6 +1199,16 @@ Dragon Board `ThemeDataService` 的正式读口。返回结构兼容旧 `ThemeMa
 ### `GET /api/themes/counts`
 
 读取 MongoDB 题材基础集合行数，用于迁移验收和排障。返回 `ok`、`source=mongodb` 和 `counts`；`counts` 至少包含 `themeCount`、`mappingCount`、`stockCount`、`version`、`lastUpdate`、`source=mongodb`。
+
+### `GET /api/themes/heat?force=false`
+
+返回基于 MongoDB 全市场题材映射计算的 `theme-market-v1` factors。基础行情固定使用腾讯批量行情（50 只/批、有限并发、默认整次预算 90 秒），东财只提供资金字段（默认整次预算 30 秒）；服务端缓存 5 分钟并合并同桶并发请求。`force=true` 跳过缓存。公开响应不包含全市场逐股 quote/fund map。
+
+当腾讯覆盖率低于门槛时返回结构化 `503`；如果存在上次成功结果，响应携带 `staleData`。东财资金不可用时仍可返回降级 factors，但 `fundScore/mainNetInflow=null`，不得转成 0。
+
+### `GET /api/themes/heat/{theme_id}/stocks`
+
+返回指定题材的全市场成分股详情，支持 `offset`、`limit`、`sort_by` 和 `descending`。该接口是 Dragon Board 详情、树形列表和联动分析的正式读口，不从八平台热榜股票池反推成分股。
 
 CLI 校验：
 
@@ -1833,6 +2292,260 @@ sample_count: 120
 total_return: 0.123
 max_drawdown: -0.08
 ```
+
+### 实验性后端快照采集器 CLI
+
+以下命令属于 `backend/snapshot_collector/` 实验模块。当前默认禁用，写目标默认限定为 `dragonboard_backend_shadow` 数据集。Phase 6 正式切换到 `dragonboard_live` 前，必须同时设置 `QUANT_BOARD_SNAPSHOT_COLLECTOR_DATASET_ID=dragonboard_live` 与 `QUANT_BOARD_SNAPSHOT_COLLECTOR_ALLOW_LIVE_DATASET=1`；CLI 预检和 quality gate 才会放行 live 数据集，其它 dataset 仍拒绝。命令直接输出 JSON，不做富文本格式化。
+
+### `snapshot-collector-status`
+
+输出采集器当前运行状态 JSON。
+
+```powershell
+.\.venv\Scripts\python.exe -m backend.cli snapshot-collector-status
+```
+
+输出示例：
+
+```json
+{
+  "lastRunId": "sc-a1b2c3d4e5f6",
+  "lastRunAt": "2026-06-12T10:30:00Z",
+  "lastStatus": "completed",
+  "totalRuns": 42,
+  "completedRuns": 38,
+  "dedupedRuns": 2,
+  "blockedRuns": 2
+}
+```
+
+### `snapshot-collector-run-once`
+
+执行单次快照采集并输出 JSON 结果。
+
+```powershell
+.\.venv\Scripts\python.exe -m backend.cli snapshot-collector-run-once `
+  --dataset-id dragonboard_backend_shadow `
+  --snapshot-type half_hour `
+  --trading-date 2026-06-12 `
+  --slot-time 10:30 `
+  --dry-run
+```
+
+参数：
+
+| 参数 | 必填 | 说明 |
+| --- | --- | --- |
+| `--dataset-id` | 是 | 目标数据集 ID |
+| `--snapshot-type` | 是 | `quarter_hour` / `half_hour` / `hourly` / `daily` |
+| `--trading-date` | 是 | `YYYY-MM-DD` 格式交易日 |
+| `--slot-time` | 是 | `HH:MM` 格式槽位时间 |
+| `--dry-run` | 否 | 存在即为 true；走完整流水线但不写库 |
+| `--force` | 否 | 存在即为 true；跳过判重强制重写 |
+
+输出示例（成功）：
+
+```json
+{
+  "runId": "sc-a1b2c3d4e5f6",
+  "snapshotId": "half_hour:2026-06-12:10:30",
+  "status": "completed",
+  "deduped": false,
+  "dryRun": false,
+  "message": "done",
+  "details": {
+    "stockRowCount": 224,
+    "frameCount": 1,
+    "sectorRowCount": 12
+  }
+}
+```
+
+### `snapshot-collector-backfill`
+
+按日期区间批量采集，输出汇总 JSON。区间内只生成交易日 slot，周末和已知节假日会被跳过。
+
+```powershell
+.\.venv\Scripts\python.exe -m backend.cli snapshot-collector-backfill `
+  --dataset-id dragonboard_backend_shadow `
+  --snapshot-type half_hour `
+  --start-date 2026-06-10 `
+  --end-date 2026-06-12 `
+  --dry-run
+```
+
+参数：
+
+| 参数 | 必填 | 说明 |
+| --- | --- | --- |
+| `--dataset-id` | 是 | 目标数据集 ID |
+| `--snapshot-type` | 是 | `quarter_hour` / `half_hour` / `hourly` / `daily` |
+| `--end-date` | 是 | `YYYY-MM-DD` 格式截止日期；非交易日会被跳过 |
+| `--start-date` | 否 | 默认等于 `end_date`；区间起止含两端，非交易日会被跳过 |
+| `--dry-run` | 否 | 存在即为 true（backfill 默认 dry-run） |
+| `--force` | 否 | 存在即为 true；跳过判重 |
+
+输出示例：
+
+```json
+{
+  "total": 32,
+  "succeeded": 28,
+  "failed": 0,
+  "blocked": 2,
+  "deduped": 2,
+  "details": [
+    {"snapshotId": "half_hour:2026-06-10:09:30", "status": "completed", "message": "done"},
+    {"snapshotId": "half_hour:2026-06-10:10:00", "status": "blocked", "message": "Quality gate blocked: ['no_stock_rows']"}
+  ]
+}
+```
+
+### `snapshot-collector-audit`
+
+审计覆盖率并输出结构化 JSON。
+
+```powershell
+.\.venv\Scripts\python.exe -m backend.cli snapshot-collector-audit `
+  --dataset-id dragonboard_backend_shadow `
+  --snapshot-type half_hour `
+  --trading-date 2026-06-12
+```
+
+参数：
+
+| 参数 | 必填 | 说明 |
+| --- | --- | --- |
+| `--dataset-id` | 是 | 目标数据集 ID |
+| `--snapshot-type` | 是 | `quarter_hour` / `half_hour` / `hourly` / `daily` |
+| `--trading-date` | 否 | 可选单日过滤；不传时审计数据集全范围 |
+
+输出示例：
+
+```json
+{
+  "datasetId": "dragonboard_backend_shadow",
+  "snapshotType": "half_hour",
+  "totalSlots": 16,
+  "coveredSlots": 14,
+  "missingSlots": 2,
+  "missingSlotIds": [
+    "half_hour:2026-06-12:11:00",
+    "half_hour:2026-06-12:11:30"
+  ]
+}
+```
+
+### `snapshot-collector-compare`
+
+对比两个数据集的快照覆盖率和字段完整性（shadow vs live 审计）。
+
+```powershell
+.\.venv\Scripts\python.exe -m backend.cli snapshot-collector-compare `
+  --dataset-id-a dragonboard_live `
+  --dataset-id-b dragonboard_backend_shadow `
+  --snapshot-type half_hour `
+  --trading-date 2026-06-12
+```
+
+参数：
+
+| 参数 | 必填 | 说明 |
+| --- | --- | --- |
+| `--dataset-id-a` | 是 | 基准数据集 ID（通常为 `dragonboard_live`） |
+| `--dataset-id-b` | 是 | 对比数据集 ID（通常为 `dragonboard_backend_shadow`） |
+| `--snapshot-type` | 是 | `quarter_hour` / `half_hour` / `hourly` / `daily` |
+| `--trading-date` | 否 | 可选单日对比；不传时对比所有共同交易日 |
+
+输出示例：
+
+```json
+{
+  "ok": true,
+  "datasetA": "dragonboard_live",
+  "datasetB": "dragonboard_backend_shadow",
+  "snapshotType": "half_hour",
+  "tradingDates": ["2026-06-12"],
+  "perDate": [
+    {
+      "tradingDate": "2026-06-12",
+      "totalExpectedSlots": 10,
+      "slotsInBoth": ["half_hour:2026-06-12:10:00"],
+      "slotsOnlyInA": [],
+      "slotsOnlyInB": ["half_hour:2026-06-12:09:30"],
+      "slotsMissingInBoth": [],
+      "slotDetails": [
+        {
+          "snapshotId": "half_hour:2026-06-12:10:00",
+          "inA": true,
+          "inB": true,
+          "stockRowCountA": 224,
+          "stockRowCountB": 210,
+          "fieldMissingRatesA": {},
+          "fieldMissingRatesB": {"depth10": {"present": 0, "missing": 210, "rate": 1.0}}
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "totalSlotsCompared": 10,
+    "slotsInBoth": 8,
+    "slotsOnlyInA": 1,
+    "slotsOnlyInB": 1,
+    "slotsMissingInBoth": 0,
+    "avgStockRowDiff": 14.0,
+    "emptyFramesA": 0,
+    "emptyFramesB": 1
+  }
+}
+```
+
+### `snapshot-collector-scheduler-status`
+
+打印调度器运行状态，包括启用/禁用、运行中、轮询配置、最近采集的 slot 和错误计数。
+
+```powershell
+.\.venv\Scripts\python.exe -m backend.cli snapshot-collector-scheduler-status
+```
+
+输出示例：
+
+```json
+{
+  "enabled": true,
+  "running": true,
+  "dataset_id": "dragonboard_backend_shadow",
+  "snapshot_types": ["half_hour", "daily"],
+  "poll_seconds": 1.0,
+  "grace_minutes": 5,
+  "last_run_at": "2026-06-15T10:00:01+08:00",
+  "last_slot_collected": "half_hour:2026-06-15:10:00",
+  "last_error": null,
+  "collection_count": 3,
+  "error_count": 0,
+  "in_flight_slots": []
+}
+```
+
+### `copy-missing-mongodb-snapshot-slots`
+
+从一个 donor 数据集复制同 `snapshotId` 的快照事实到目标数据集，用于修复“目标数据集整槽缺失，但 donor 数据集同槽位事实完整”的 MongoDB 历史缺口。默认 dry-run；只有显式 `--apply` 才写入。该命令会复制 `snapshot_records`、`snapshot_frames`、`snapshot_stock_rows`、`snapshot_sector_rows`，并在目标 frame/record 的 metadata 中写入 repair provenance，同时登记 `migration_audit(opType=mongodb_snapshot_slot_copy)`。
+
+```powershell
+.\.venv\Scripts\python.exe -m backend.cli copy-missing-mongodb-snapshot-slots `
+  --target-dataset-id dragonboard_backend_shadow `
+  --donor-dataset-id dragonboard_live `
+  --snapshot-id half_hour:2026-06-22:15:00
+```
+
+参数：
+
+| 参数 | 必填 | 说明 |
+| --- | --- | --- |
+| `--target-dataset-id` | 是 | 待修复的数据集，例如 `dragonboard_backend_shadow` |
+| `--donor-dataset-id` | 是 | donor 数据集，例如 `dragonboard_live` |
+| `--snapshot-id` | 是 | 可重复传入；每个值为要复制的完整 `snapshotId` |
+| `--apply` | 否 | 存在即写库；默认只输出修复计划 |
 
 ### `validate-golden`
 

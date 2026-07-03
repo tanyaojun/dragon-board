@@ -193,4 +193,42 @@ describe('theme factor snapshot projection', () => {
     expect(row.momentumScore).toBe(77)
     expect(row.rotationState).toBe('mainline')
   })
+
+  it('does not build sector rows from retired block cache fallback', () => {
+    const record = createRecord({})
+    const buildContext = {
+      jxbkBlocks: [{ code: 'BKAI', name: '人工智能', strength: 88 }],
+    } as any
+
+    expect(buildSnapshotSectorRows(record, buildContext)).toEqual([])
+  })
+
+  it('writes complete API theme factors and preserves explicit null scores', () => {
+    const record = createRecord({})
+    const buildContext = {
+      themeHeatFactors: [
+        {
+          themeId: 'POWER',
+          themeName: '电力',
+          rank: 2,
+          rankEligible: false,
+          heatScore: null,
+          fundScore: null,
+          netInflow: null,
+          metadata: { quoteSource: 'tencent', fundSource: 'eastmoney' },
+        },
+      ],
+    } as any
+
+    expect(buildSnapshotSectorRows(record, buildContext)).toEqual([
+      expect.objectContaining({
+        entityType: 'hot_theme',
+        entityKey: 'POWER',
+        heatScore: null,
+        fundScore: null,
+        netInflow: null,
+        metadata: expect.objectContaining({ quoteSource: 'tencent', fundSource: 'eastmoney' }),
+      }),
+    ])
+  })
 })

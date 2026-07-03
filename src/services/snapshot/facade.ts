@@ -1,4 +1,5 @@
 import { dataLayer } from '../DataLayer'
+import { themeHeatFeed } from '../theme/ThemeHeatFeed'
 import { snapshotBackendRead } from './backendRead'
 import { assertFormalSnapshotType, assertFormalSnapshotTypes, type FormalSnapshotType } from './identity'
 import { SnapshotRuntime } from './runtime'
@@ -22,6 +23,7 @@ const BACKUP_BUCKET_NAME = 'dragon-snapshot-backup'
 const SNAPSHOT_GUARD_MIN_BACKUP = 20
 const SNAPSHOT_GUARD_RATIO = 0.4
 const SNAPSHOT_SYNC_INTERVAL_MS = 5 * 60 * 1000
+const ENABLE_FORMAL_SNAPSHOT_SWEEP = import.meta.env.VITE_ENABLE_FORMAL_SNAPSHOT_SWEEP === 'true'
 type FormalSnapshotQueryOptions = Omit<SnapshotQueryOptions, 'type' | 'types'> & {
   type?: FormalSnapshotType
   types?: FormalSnapshotType[]
@@ -33,6 +35,7 @@ const snapshotRuntime = new SnapshotRuntime({
   primaryDbVersion: PRIMARY_DB_VERSION,
   primaryStoreName: PRIMARY_STORE_NAME,
   enableIndexedDbSnapshotCache: false,
+  enableFormalSnapshotSweep: ENABLE_FORMAL_SNAPSHOT_SWEEP,
   legacyBackupDbName: LEGACY_BACKUP_DB_NAME,
   bucketBackupDbName: BUCKET_BACKUP_DB_NAME,
   backupDbVersion: BACKUP_DB_VERSION,
@@ -43,22 +46,33 @@ const snapshotRuntime = new SnapshotRuntime({
   syncIntervalMs: SNAPSHOT_SYNC_INTERVAL_MS,
   getStorageBucketManager: () =>
     typeof navigator === 'undefined' ? null : (navigator as any).storageBuckets || null,
-  getBuildContext: () => ({
+  getBuildContext: () => {
+    const themeHeatSnapshot = themeHeatFeed.getSnapshot()
+    const quoteSource = (themeHeatSnapshot?.sources?.quotes as any)?.source
+    const fundSource = (themeHeatSnapshot?.sources?.funds as any)?.source
+    return {
     stocks: dataLayer.getStocks() || [],
     depth10ByCode: dataLayer.getDepth10Map(),
     recentTicksByCode: dataLayer.getRecentTicksMap(),
     l2SummaryByCode: dataLayer.getL2SummaryMap(),
     breathData: dataLayer.getBreathData(),
     marketData: dataLayer.getBreathMarketData(),
-    jxbkBlocks: dataLayer.getJxbkBlocksSorted(100),
-    jxbkStocks: dataLayer.getJxbkStockMap(),
     hotThemes: dataLayer.getHotThemes() || [],
+    themeHeatFactors: (themeHeatSnapshot?.factors || []).map((factor) => ({
+      ...factor,
+      metadata: {
+        ...factor.metadata,
+        quoteSource,
+        fundSource,
+      },
+    })),
     rotationAnalysis: dataLayer.getCurrentRotation(),
     breathHistory: dataLayer.getBreathHistory(),
     breathFactors: dataLayer.getBreathFactors(),
     marketMode: dataLayer.getMarketMode(),
     stocksVersion: dataLayer.getVersion().stocks,
-  }),
+    }
+  },
 })
 
 snapshotRuntime.setMongoPrimaryExistsHandler(async (snapshotId) => {

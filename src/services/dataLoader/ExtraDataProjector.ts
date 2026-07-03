@@ -58,25 +58,6 @@ export class ExtraDataProjector {
       merged.speed = realtimeSpeed
     }
 
-    const jxbkStock = dataLayer.getJxbkStock(stock.code)
-    if (jxbkStock) {
-      if (!hasRealtimeSpeed) {
-        merged.speed = jxbkStock.speed
-      }
-      merged.leadTimes = jxbkStock.leadTimes
-      merged.leadStatus = jxbkStock.leadStatus
-      merged.lianbanStr = jxbkStock.lianban
-      merged.bigMoney300 = jxbkStock.bigMoney300
-      merged.popularity = jxbkStock.popularity
-      merged.popularityChange = jxbkStock.popularityChange
-      merged.institutionBuy = jxbkStock.institutionBuy
-      merged.mainBuy = jxbkStock.mainBuy
-      merged.mainSell = jxbkStock.mainSell
-      merged.fengdan = jxbkStock.fengdan
-      merged.maxFengdan = jxbkStock.maxFengdan
-      merged.cirMV = jxbkStock.cirMV
-    }
-
     const leaderRecord = dataLayer.getLeaderByCode(stock.code)
     if (leaderRecord) {
       merged.reviewAuthority = leaderRecord.authority
@@ -105,7 +86,7 @@ export class ExtraDataProjector {
       merged.isNew = limitUpData.isNew ?? merged.isNew
     }
 
-    merged.continuousDays = this.resolveContinuousDays(merged, jxbkStock, limitUpData, leaderRecord)
+    merged.continuousDays = this.resolveContinuousDays(merged, limitUpData, leaderRecord)
     return merged
   }
 
@@ -125,7 +106,6 @@ export class ExtraDataProjector {
 
   private resolveContinuousDays(
     stock: any,
-    jxbkStock: any,
     limitUpData: any,
     leaderRecord: ReturnType<typeof dataLayer.getLeaderByCode>,
   ): number {
@@ -134,7 +114,6 @@ export class ExtraDataProjector {
       limitUpData?.highDays,
       this.parseContinuousDays(limitUpData?.lianbanStr),
       this.parseContinuousDays(stock.lianbanStr),
-      this.parseContinuousDays(jxbkStock?.lianban),
       this.parseContinuousDays(stock.highDays),
       this.parseContinuousDays(stock.continuousDays),
     ]

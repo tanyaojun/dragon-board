@@ -4,6 +4,8 @@ import math
 from dataclasses import dataclass, field, asdict, fields
 from typing import Any
 
+from backend.analysis.theme_heat import compute_theme_heat
+
 LIFECYCLES = {
     "ignition",
     "expansion",
@@ -27,7 +29,7 @@ class ThemeFactorFrame:
     heatScore: float = 0.0
     momentumScore: float = 0.0
     breadthScore: float = 0.0
-    fundScore: float = 0.0
+    fundScore: float | None = 0.0
     leadershipScore: float = 0.0
     correlationScore: float = 0.0
     crowdingRisk: float = 0.0
@@ -153,13 +155,6 @@ class ThemeTrendConfig:
         return config
 
 
-LIMIT_UP_CHANGE = 9.5
-STRENGTH_TIERS = ((4000, 40), (3000, 30), (2000, 20), (1000, 10), (0, 5))
-ZT_COUNT_TIERS = ((10, 30), (5, 25), (3, 20), (1, 15))
-VOLUME_RATIO_TIERS = ((2.5, 15), (1.5, 10), (0.8, 5))
-NET_INFLOW_TIERS = ((100_000_000, 15), (50_000_000, 12), (10_000_000, 8), (0, 5))
-
-
 def _list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
 
@@ -246,28 +241,39 @@ def _theme_context_frames(frame: dict[str, Any]) -> tuple[list[dict[str, Any]], 
     stock_by_code = {str(stock.get("code") or ""): stock for stock in stocks}
     theme_stocks = context.get("themeStocks") if isinstance(context.get("themeStocks"), dict) else {}
     stock_themes = context.get("stockThemes") if isinstance(context.get("stockThemes"), dict) else {}
-    blocks = [item for item in _list(context.get("jxbkBlocks")) if isinstance(item, dict)]
     rotation = context.get("rotationAnalysis") if isinstance(context.get("rotationAnalysis"), dict) else {}
     correlations = context.get("correlations") if isinstance(context.get("correlations"), dict) else {}
+    fund_rows = context.get("funds") if isinstance(context.get("funds"), dict) else {}
+    previous_factors = context.get("previousFactors") if isinstance(context.get("previousFactors"), dict) else {}
 
-    factors: list[dict[str, Any]] = []
+    market_themes = [
+        {
+            **theme,
+            "stocks": [str(code) for code in _list(theme_stocks.get(_name(theme.get("id") or theme.get("themeId"))))],
+        }
+        for theme in themes
+    ]
+    snapshot = compute_theme_heat(
+        themes=market_themes,
+        quotes=stock_by_code,
+        funds={str(code): row for code, row in fund_rows.items() if isinstance(row, dict)},
+        previous_factors={
+            str(theme_id): factor
+            for theme_id, factor in previous_factors.items()
+            if isinstance(factor, dict)
+        },
+        computed_at=int(_timestamp(frame)),
+        mapping_version=_name(context.get("mappingVersion") or "theme-context"),
+    )
+
+    factors = [dict(item) for item in snapshot["factors"] if item.get("rankEligible")]
     exposures: list[dict[str, Any]] = []
-    for theme in themes:
-        theme_id = _name(theme.get("id") or theme.get("themeId"))
-        theme_name = _name(theme.get("name") or theme.get("themeName"))
+    for factor in factors:
+        theme_id = _name(factor.get("themeId"))
+        theme_name = _name(factor.get("themeName"))
         codes = [str(code) for code in _list(theme_stocks.get(theme_id))]
-        theme_stock_rows = [stock_by_code[code] for code in codes if code in stock_by_code]
-        block = _find_jxbk_block(theme_name, blocks)
-        factor = _build_ts_runtime_factor(
-            theme_id=theme_id,
-            theme_name=theme_name,
-            stocks=theme_stock_rows,
-            block=block,
-            rotation=rotation,
-            correlation=correlations.get(theme_id) if isinstance(correlations.get(theme_id), dict) else None,
-            has_mapping=theme_id in theme_stocks,
-        )
-        factors.append(factor)
+        factor["rotationState"] = _ts_rotation_state(rotation, theme_id, theme_name)
+        factor["lifecycle"] = _infer_lifecycle({**factor, "lifecycle": ""}, ThemeTrendConfig())
         for code in codes:
             exposure = _build_ts_runtime_exposure(
                 code=code,
@@ -279,12 +285,6 @@ def _theme_context_frames(frame: dict[str, Any]) -> tuple[list[dict[str, Any]], 
             if exposure:
                 exposures.append(exposure)
 
-    factors = sorted(
-        factors,
-        key=lambda item: (-_num(item.get("heatScore")), -_num(item.get("momentumScore")), _name(item.get("themeName"))),
-    )
-    for index, factor in enumerate(factors, start=1):
-        factor["rank"] = index
     return factors, exposures
 
 
@@ -341,117 +341,12 @@ def _sector_theme_id(sector: dict[str, Any], theme_name: str) -> str:
     return explicit or theme_name
 
 
-def _tier_score(value: Any, tiers: tuple[tuple[float, float], ...]) -> float:
-    numeric = _num(value)
-    for threshold, score in tiers:
-        if numeric >= threshold:
-            return score
-    return 0.0
-
-
 def _ts_round(value: float, digits: int = 0) -> float:
     return round(value, digits)
 
 
 def _ts_clamp(value: float, low: float = 0.0, high: float = 100.0) -> float:
     return max(low, min(high, value))
-
-
-def _find_jxbk_block(theme_name: str, blocks: list[dict[str, Any]]) -> dict[str, Any] | None:
-    for block in blocks:
-        if _is_same_theme_name(theme_name, block.get("name")):
-            return block
-    return None
-
-
-def _jxbk_strength_score(block: dict[str, Any] | None) -> float:
-    if not block:
-        return 0.0
-    return _ts_clamp(
-        _tier_score(block.get("strength"), STRENGTH_TIERS)
-        + _tier_score(block.get("ztCount"), ZT_COUNT_TIERS)
-        + _tier_score(block.get("volumeRatio"), VOLUME_RATIO_TIERS)
-        + _tier_score(block.get("mainNetInflow"), NET_INFLOW_TIERS)
-    )
-
-
-def _ts_stock_breadth_score(stocks: list[dict[str, Any]]) -> float:
-    if not stocks:
-        return 0.0
-    valid = [stock for stock in stocks if math.isfinite(_num(stock.get("change"), math.nan))]
-    if not valid:
-        return 0.0
-    up_count = sum(1 for stock in valid if _num(stock.get("change")) > 0)
-    zt_count = sum(1 for stock in valid if _num(stock.get("change")) >= LIMIT_UP_CHANGE)
-    strong_count = sum(1 for stock in valid if _num(stock.get("change")) >= 5)
-    return _ts_clamp(_ts_round((up_count / len(valid)) * 45 + (strong_count / len(valid)) * 25 + zt_count * 12))
-
-
-def _has_any_valid_stock_signal(stocks: list[dict[str, Any]]) -> bool:
-    return any(
-        math.isfinite(_num(stock.get("change"), math.nan))
-        or math.isfinite(_num(stock.get("volumeRatio"), math.nan))
-        or math.isfinite(_num(stock.get("mainNetInflow"), math.nan))
-        for stock in stocks
-    )
-
-
-def _ts_fund_score(block: dict[str, Any] | None, stocks: list[dict[str, Any]]) -> float:
-    block_score = 0.0
-    if block:
-        block_score = _ts_clamp(
-            min(35, max(0, _num(block.get("mainNetInflow"))) / 100000000 * 18)
-            + min(20, max(0, _num(block.get("bigMoney300"))) / 10000000 * 6)
-            + min(15, max(0, _num(block.get("institutionBuy"))) / 10000000 * 8)
-        )
-    stock_inflow = sum(max(0, _num(stock.get("mainNetInflow"))) for stock in stocks)
-    return _ts_clamp(_ts_round(block_score + min(30, stock_inflow / 100000000 * 20)))
-
-
-def _ts_leadership_score(stocks: list[dict[str, Any]]) -> tuple[float, int]:
-    score = 0.0
-    leader_count = 0
-    for stock in stocks:
-        lead_status = _name(stock.get("leadStatus"))
-        lead_times = _num(stock.get("leadTimes"))
-        continuous_days = max(_num(stock.get("continuousDays")), _num(stock.get("highDays")), _num(stock.get("boardHeight")))
-        change = _num(stock.get("change"))
-        fengdan = max(0, _num(stock.get("fengdan")))
-        if "龙" in lead_status:
-            leader_count += 1
-            score += 22
-        if lead_times > 0:
-            score += min(14, lead_times * 4)
-        if continuous_days > 0:
-            score += min(16, continuous_days * 4)
-        if change >= LIMIT_UP_CHANGE:
-            score += 10
-        if fengdan > 0:
-            score += min(10, fengdan / 10000)
-    return _ts_clamp(_ts_round(score)), leader_count
-
-
-def _ts_correlation_score(correlation: dict[str, Any] | None, stocks: list[dict[str, Any]]) -> float:
-    if correlation:
-        return _ts_clamp(_ts_round(_num(correlation.get("overallCorrelation")) * 100))
-    if len(stocks) < 2:
-        return 0.0
-    directions = [math.copysign(1, _num(stock.get("change"))) for stock in stocks if _num(stock.get("change")) != 0]
-    if len(directions) < 2:
-        return 0.0
-    positive = sum(1 for item in directions if item > 0)
-    negative = sum(1 for item in directions if item < 0)
-    return _ts_clamp(_ts_round(max(positive, negative) / len(directions) * 100))
-
-
-def _ts_persistence_score(rotation: dict[str, Any], theme_id: str, theme_name: str) -> float:
-    for line in _list(rotation.get("mainLines")):
-        if not isinstance(line, dict):
-            continue
-        if _name(line.get("themeId")) == theme_id or _is_same_theme_name(line.get("themeName") or line.get("name"), theme_name):
-            days = max(0, _num(line.get("persistentDays")))
-            return _ts_clamp(_ts_round(min(92, 18 + math.log1p(days) * 28 + min(5, days) * 6)))
-    return 0.0
 
 
 def _ts_rotation_state(rotation: dict[str, Any], theme_id: str, theme_name: str) -> str:
@@ -467,77 +362,6 @@ def _ts_rotation_state(rotation: dict[str, Any], theme_id: str, theme_name: str)
     if any(matches(item) for item in _list(rotation.get("outflowThemes"))):
         return "cooling" if rotation.get("marketPhase") in {"distribution", "falling"} else "outflow"
     return "neutral"
-
-
-def _ts_crowding_risk(block: dict[str, Any] | None, heat_score: float, stocks: list[dict[str, Any]]) -> float:
-    block_vr = _num((block or {}).get("volumeRatio"))
-    stock_vrs = [min(_num(stock.get("volumeRatio")), 10) for stock in stocks]
-    avg_volume_ratio = sum(stock_vrs) / len(stock_vrs) if stock_vrs else block_vr
-    capped_volume_ratio = max(block_vr, avg_volume_ratio)
-    hot_stock_ratio = sum(1 for stock in stocks if _num(stock.get("change")) >= 7) / len(stocks) if stocks else 0
-    return _ts_clamp(_ts_round((24 if heat_score >= 85 else 0) + max(0, capped_volume_ratio - 2.5) * 12 + hot_stock_ratio * 28))
-
-
-def _ts_quality_flags(theme_id: str, stocks: list[dict[str, Any]], block: dict[str, Any] | None, has_mapping: bool) -> list[str]:
-    flags: list[str] = []
-    if not has_mapping:
-        flags.append("mapping_missing")
-    if not stocks:
-        flags.append("empty_theme")
-    elif len(stocks) < 2:
-        flags.append("low_sample")
-    if not block:
-        flags.append("jxbk_missing")
-    invalid_count = 0
-    for stock in stocks:
-        for value in (stock.get("change"), stock.get("volumeRatio"), stock.get("mainNetInflow")):
-            if value is not None and not math.isfinite(_num(value, math.nan)):
-                invalid_count += 1
-    if invalid_count > 0:
-        flags.append("invalid_number")
-    return flags
-
-
-def _build_ts_runtime_factor(
-    theme_id: str,
-    theme_name: str,
-    stocks: list[dict[str, Any]],
-    block: dict[str, Any] | None,
-    rotation: dict[str, Any],
-    correlation: dict[str, Any] | None,
-    has_mapping: bool,
-) -> dict[str, Any]:
-    jxbk_score = _jxbk_strength_score(block)
-    breadth = _ts_stock_breadth_score(stocks)
-    funds = _ts_fund_score(block, stocks)
-    leadership, leader_count = _ts_leadership_score(stocks)
-    correlation_score = _ts_correlation_score(correlation, stocks)
-    persistence = _ts_persistence_score(rotation, theme_id, theme_name)
-    rotation_state = _ts_rotation_state(rotation, theme_id, theme_name)
-    base_score = min(18, len(stocks) * 4) if stocks else 0
-    stock_score = _ts_clamp(breadth * 0.36 + funds * 0.22 + leadership * 0.28 + correlation_score * 0.14)
-    heat_before_risk = _ts_clamp(max(jxbk_score, stock_score) + persistence * 0.08 + base_score * 0.2)
-    crowding = _ts_crowding_risk(block, heat_before_risk, stocks)
-    risk_penalty = min(14, crowding * 0.14)
-    heat = _ts_clamp(_ts_round(heat_before_risk - risk_penalty)) if ((stocks and _has_any_valid_stock_signal(stocks)) or block) else 0.0
-    factor = {
-        "themeId": theme_id,
-        "themeName": theme_name,
-        "heatScore": heat,
-        "momentumScore": _ts_clamp(_ts_round(jxbk_score * 0.55 + max(0, _num((block or {}).get("change"))) * 8 + persistence * 0.15)),
-        "breadthScore": breadth,
-        "fundScore": funds,
-        "leadershipScore": leadership,
-        "correlationScore": correlation_score,
-        "crowdingRisk": crowding,
-        "persistenceScore": persistence,
-        "rotationState": rotation_state,
-        "rank": 0,
-        "qualityFlags": _ts_quality_flags(theme_id, stocks, block, has_mapping),
-    }
-    factor["lifecycle"] = _infer_lifecycle({**factor, "lifecycle": ""}, ThemeTrendConfig())
-    factor["leaderCount"] = leader_count
-    return factor
 
 
 def _ts_correlated_role(correlation: dict[str, Any] | None, code: str) -> str:
@@ -777,7 +601,7 @@ def _build_signal(factor: dict[str, Any]) -> dict[str, Any]:
             factor["heatScore"] * 0.25
             + factor["momentumScore"] * 0.25
             + factor["breadthScore"] * 0.15
-            + factor["fundScore"] * 0.15
+            + _num(factor["fundScore"]) * 0.15
             + factor["leadershipScore"] * 0.2
             - factor["crowdingRisk"] * 0.15
         ),

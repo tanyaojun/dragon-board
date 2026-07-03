@@ -679,6 +679,14 @@ class TdxL2Bridge:
                 self.config.official_cache_root,
             )
 
+        # Backend collector subscription pool (Phase 2)
+        self._backend_pool_codes: list[str] = []
+        self._backend_pool_ts: int = 0
+        self._backend_pool_lock = asyncio.Lock()
+        self._backend_cached_quotes: list[dict[str, Any]] = []
+        self._backend_cached_depth: list[dict[str, Any]] = []
+        self._backend_cached_stats: Any = None
+
     def prune_quote_speed_history(self, code: str, current_ts: int) -> deque[tuple[int, float]]:
         history = self.quote_price_history[code]
         history_window = max(self.config.speed_history_max_ms, self.config.speed_window_ms)
@@ -1822,6 +1830,135 @@ class TdxL2Bridge:
                 f"l2_status={snapshot['l2'].get('status', '')}",
             ]
             return PlainTextResponse("\n".join(lines) + "\n")
+
+        @app.get("/api/quotes/snapshot", summary="行情快照")
+        async def quote_snapshot(codes: str = "") -> JSONResponse:
+            parsed_codes = [normalize_code(code) for code in codes.split(",") if code.strip()]
+            parsed_codes = [code for code in parsed_codes if code]
+
+            # Phase 2: fall back to backend pool when no codes param
+            using_pool = False
+            pool_ts = 0
+            if not parsed_codes:
+                async with self._backend_pool_lock:
+                    parsed_codes = list(self._backend_pool_codes)
+                    using_pool = True
+                    pool_ts = self._backend_pool_ts
+
+            if not parsed_codes:
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": "missing codes parameter and backend pool is empty",
+                        "source": "python_bridge",
+                        "serverTs": now_ms(),
+                        "subscribedCount": 0,
+                        "quotes": [],
+                        "depth": [],
+                        "ticks": [],
+                        "moneyFlow": [],
+                        "quoteStats": {},
+                        "l2": self.l2_state,
+                    }
+                )
+            try:
+                quotes, depth, stats = await self.fetch_quotes_and_depth(parsed_codes)
+
+                if not quotes and stats.failed_batches > 0:
+                    return JSONResponse(
+                        {
+                            "ok": False,
+                            "error": f"quote fetch failed: {stats.failed_batches}/{stats.batches} batches failed",
+                            "source": "python_bridge",
+                            "serverTs": now_ms(),
+                            "subscribedCount": len(parsed_codes),
+                            "quotes": [],
+                            "depth": [],
+                            "ticks": [],
+                            "moneyFlow": [],
+                            "quoteStats": stats.to_payload(),
+                            "l2": self.l2_state,
+                        }
+                    )
+
+                qmt_depth, qmt_ticks, money_flow = await self.fetch_qmt_l2_snapshot(parsed_codes)
+
+                if using_pool:
+                    async with self._backend_pool_lock:
+                        if parsed_codes == self._backend_pool_codes:
+                            self._backend_cached_quotes = quotes
+                            self._backend_cached_depth = depth
+                            self._backend_cached_stats = stats
+                            self._backend_pool_ts = now_ms()
+                            pool_ts = self._backend_pool_ts
+
+                response_payload = {
+                    "ok": True,
+                    "source": "python_bridge",
+                    "serverTs": now_ms(),
+                    "subscribedCount": len(parsed_codes),
+                    "quotes": quotes,
+                    "depth": depth,
+                    "ticks": qmt_ticks,
+                    "moneyFlow": money_flow,
+                    "quoteStats": stats.to_payload(),
+                    "l2": self.l2_state,
+                }
+                if using_pool:
+                    response_payload["pooled"] = True
+                    response_payload["poolRefreshedAt"] = pool_ts
+                return JSONResponse(response_payload)
+            except Exception as error:
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": str(error),
+                        "source": "python_bridge",
+                        "serverTs": now_ms(),
+                        "subscribedCount": len(parsed_codes),
+                        "quotes": [],
+                        "depth": [],
+                        "ticks": [],
+                        "moneyFlow": [],
+                        "quoteStats": {},
+                        "l2": self.l2_state,
+                    }
+                )
+
+        @app.post("/api/quotes/subscriptions", summary="设置后端采集订阅池")
+        async def set_subscriptions(payload: dict) -> JSONResponse:
+            codes = [
+                normalize_code(str(c).strip())
+                for c in payload.get("codes", [])
+                if str(c).strip()
+            ]
+            codes = [c for c in codes if c]
+            async with self._backend_pool_lock:
+                self._backend_pool_codes = codes
+                self._backend_pool_ts = now_ms()
+                if codes:
+                    try:
+                        quotes, depth, stats = await self.fetch_quotes_and_depth(codes)
+                        self._backend_cached_quotes = quotes
+                        self._backend_cached_depth = depth
+                        self._backend_cached_stats = stats
+                    except Exception as exc:
+                        logger.warning(f"backend pool initial fetch failed: {exc}")
+                        self._backend_cached_quotes = []
+                        self._backend_cached_depth = []
+                        self._backend_cached_stats = None
+                else:
+                    self._backend_cached_quotes = []
+                    self._backend_cached_depth = []
+                    self._backend_cached_stats = None
+            return JSONResponse(
+                {
+                    "ok": True,
+                    "codes": self._backend_pool_codes,
+                    "count": len(self._backend_pool_codes),
+                    "setAt": self._backend_pool_ts,
+                }
+            )
 
         @app.websocket(self.config.path)
         async def quotes_socket(websocket: WebSocket) -> None:

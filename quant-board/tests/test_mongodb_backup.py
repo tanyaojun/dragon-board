@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import gzip
 from pathlib import Path
 from typing import Any
 
@@ -98,8 +99,8 @@ def test_full_backup_writes_manifest_and_local_dump_structure(tmp_path: Path) ->
     assert result["ok"] is True
     assert result["backupId"] == "20260512T150000Z"
     assert Path(result["localPath"]) == backup_dir
-    assert (backup_dir / "dump" / "snapshot_frames.jsonl").is_file()
-    assert (backup_dir / "dump" / "stock_names.jsonl").is_file()
+    assert (backup_dir / "dump" / "snapshot_frames.jsonl.gz").is_file()
+    assert (backup_dir / "dump" / "stock_names.jsonl.gz").is_file()
     assert (backup_dir / "sha256sums.txt").is_file()
     assert manifest["backupId"] == "20260512T150000Z"
     assert manifest["database"] == "dragon_board_quant"
@@ -134,7 +135,7 @@ def test_verify_mongodb_backup_marks_verified_and_writes_sha256sums(tmp_path: Pa
     assert result["ok"] is True
     assert result["verified"] is True
     assert manifest["verified"] is True
-    assert "dump/snapshot_frames.jsonl" in sums
+    assert "dump/snapshot_frames.jsonl.gz" in sums
 
 
 def test_verify_mongodb_backup_returns_structured_error_on_sha_mismatch(tmp_path: Path) -> None:
@@ -149,15 +150,16 @@ def test_verify_mongodb_backup_returns_structured_error_on_sha_mismatch(tmp_path
         FakeMongoDatabase({"snapshot_frames": FakeCollection([{"snapshotId": "s1"}])}),
         backup_id="20260512T152000Z",
     )
-    dump_file = tmp_path / "full" / "backup_id=20260512T152000Z" / "dump" / "snapshot_frames.jsonl"
-    dump_file.write_text('{"tampered":true}\n', encoding="utf-8")
+    dump_file = tmp_path / "full" / "backup_id=20260512T152000Z" / "dump" / "snapshot_frames.jsonl.gz"
+    with gzip.open(dump_file, "wt", encoding="utf-8") as handle:
+        handle.write('{"tampered":true}\n')
 
     result = service.verify_backup("20260512T152000Z")
 
     manifest = json.loads((dump_file.parents[1] / "manifest.json").read_text(encoding="utf-8"))
     assert result["ok"] is False
     assert result["error"]["code"] == "sha256_mismatch"
-    assert result["error"]["file"] == "dump/snapshot_frames.jsonl"
+    assert result["error"]["file"] == "dump/snapshot_frames.jsonl.gz"
     assert manifest["verified"] is False
     assert manifest["lastError"]["code"] == "sha256_mismatch"
 
@@ -189,7 +191,7 @@ def test_push_mongodb_backup_rejects_unverified_and_uploads_verified_backup(tmp_
     keys = {key for (_bucket, key) in store.client.objects}
     assert "quant-board/mongodb-backups/full/backup_id=20260512T153000Z/manifest.json" in keys
     assert "quant-board/mongodb-backups/full/backup_id=20260512T153000Z/sha256sums.txt" in keys
-    assert "quant-board/mongodb-backups/full/backup_id=20260512T153000Z/dump/snapshot_frames.jsonl" in keys
+    assert "quant-board/mongodb-backups/full/backup_id=20260512T153000Z/dump/snapshot_frames.jsonl.gz" in keys
 
 
 def test_pull_mongodb_backup_uses_restore_staging_and_dry_run_writes_nothing(tmp_path: Path) -> None:
@@ -229,7 +231,7 @@ def test_pull_mongodb_backup_uses_restore_staging_and_dry_run_writes_nothing(tmp
     assert pulled["ok"] is True
     assert Path(pulled["restoreStagingPath"]) == staging_dir
     assert (staging_dir / "manifest.json").is_file()
-    assert (staging_dir / "dump" / "snapshot_frames.jsonl").is_file()
+    assert (staging_dir / "dump" / "snapshot_frames.jsonl.gz").is_file()
     assert not (tmp_path / "target" / "full" / "backup_id=20260512T154000Z").exists()
 
     verified = target.verify_restore_staging_backup("20260512T154000Z")
@@ -260,11 +262,12 @@ def test_verify_restore_staging_backup_rejects_row_count_mismatch(tmp_path: Path
         encoding="utf-8",
     )
     (staging_dir / "dump").mkdir()
-    dump_path = staging_dir / "dump" / "snapshot_frames.jsonl"
-    dump_path.write_text("", encoding="utf-8")
+    dump_path = staging_dir / "dump" / "snapshot_frames.jsonl.gz"
+    with gzip.open(dump_path, "wt", encoding="utf-8") as handle:
+        handle.write("")
     manifest = json.loads((staging_dir / "manifest.json").read_text(encoding="utf-8"))
     manifest["collections"]["snapshot_frames"]["fileHash"] = sha256_file(dump_path)
-    manifest["collections"]["snapshot_frames"]["bytes"] = 0
+    manifest["collections"]["snapshot_frames"]["bytes"] = dump_path.stat().st_size
     (staging_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
 
     verified = service.verify_restore_staging_backup("20260512T155000Z")

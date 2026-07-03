@@ -8,21 +8,7 @@ import type { RotationAnalysis, ThemeRotationStatus } from '../types/core'
 import { ROTATION_CONFIG } from '../config/constants'
 import { refreshScheduler } from './refresh/RefreshTaskRuntime'
 
-type RotationStrongTheme = {
-  themeId: string
-  themeName: string
-  strengthScore: number
-  jxbkStrength: number
-  ztCount: number
-  volumeRatio: number
-  netInflow: number
-}
-
-type RotationAnalysisCompat = Omit<RotationAnalysis, 'strongThemes'> & {
-  strongThemes: RotationStrongTheme[]
-}
-
-function emptyAnalysis(): RotationAnalysisCompat {
+function emptyAnalysis(): RotationAnalysis {
   return {
     timestamp: Date.now(),
     inflowThemes: [],
@@ -46,7 +32,7 @@ function emptyAnalysis(): RotationAnalysisCompat {
 }
 
 class RotationService {
-  private lastAnalysis: RotationAnalysisCompat | null = null
+  private lastAnalysis: RotationAnalysis | null = null
 
   constructor() {
     this.startAutoAnalysis()
@@ -64,13 +50,13 @@ class RotationService {
     refreshScheduler.stopTask('theme.runtime')
   }
 
-  analyzeAll(): RotationAnalysisCompat {
+  analyzeAll(): RotationAnalysis {
     const result = themeFacade.refreshRuntime({
       source: 'rotationService',
       context: themeFacade.buildCurrentThemeSourceContext(),
       emitAlerts: false,
     })
-    const analysis = (result.rotationSummary as RotationAnalysisCompat | null) || emptyAnalysis()
+    const analysis = result.rotationSummary || emptyAnalysis()
     dataLayer.updateRotationAnalysis?.(analysis)
     this.lastAnalysis = analysis
     this.saveHotThemesToLocalStorage([
@@ -124,11 +110,11 @@ class RotationService {
     }
   }
 
-  forceAnalyze(): RotationAnalysisCompat {
+  forceAnalyze(): RotationAnalysis {
     return this.analyzeAll()
   }
 
-  getLastAnalysis(): RotationAnalysisCompat | null {
+  getLastAnalysis(): RotationAnalysis | null {
     return this.lastAnalysis
   }
 

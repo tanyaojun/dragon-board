@@ -4,7 +4,7 @@ export const themeSyncAdapter = {
   async runUpdate() {
     return themeFacade.refreshRuntime({
       source: 'themeRuntime',
-      forceJxbk: true,
+      force: true,
       syncStocks: true,
     })
   },

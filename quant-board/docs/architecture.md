@@ -19,18 +19,139 @@ V12 目标新增一条与 RankTrend 并列的 ThemeTrend 研究链：
 ```text
 backend/
   data/                 # 数据库、快照导入、质量门禁、数据查询
+  snapshot_collector/   # [实验] 后端快照采集器（shadow 模式），含 models/slots/providers/builder/quality_gate/state/repository_port/service/service_factory
   ranktrend/            # Python 版 rankTrend 分析链
   core/
     strategy/           # 策略接口和 rankTrend 候选策略
     engine/             # 回测事件循环、撮合、绩效统计
     portfolio/          # 现金、持仓、交易成本、风控
   optimization/         # 独立参数优化模块：搜索方法、目标函数、任务状态、实验记录
-  api/                  # FastAPI 路由
-  cli/                  # 命令行入口
+  api/                  # FastAPI 路由（含 `/api/snapshot-collector/*` 实验路由）
+  cli/                  # 命令行入口（含 `snapshot-collector-*` 实验命令）
   reports/              # 报告导出辅助
 ```
 
 当前仓库已有 `backend/main.py`、`backend/settings.py`、`backend/data/database.py`、`backend/data/models.py`，后续实现应在这些骨架上增量补齐。
+
+### 实验性后端快照采集器（shadow 模式）
+
+`backend/snapshot_collector/` 是一个实验性的后端快照采集器，当前处于 shadow-only 阶段。该模块从 proxy-server 和 python-bridge 实时拉取热榜与行情数据，在 QuantBoard 后端独立完成快照组装、规范化和质量门禁。它不嵌入浏览器运行时；为保持 shadow/live 股票覆盖一致，股票池优先复用 Dragon Board live 前端写入 proxy-server 的 startup bundle，缓存缺失时再走 proxy-server 八平台热榜 union fallback。
+
+模块结构：
+
+```text
+backend/snapshot_collector/
+  models.py           # SnapshotSlot, MarketDataContext, QualityResult, CollectorRunRequest/Result, SourceHealth
+  slots.py            # SLOT_TIMES, generate_slots(), is_slot_eligible()
+  trading_calendar.py # is_trading_day(), trading_date_from_ts()
+  providers.py        # StartupBundleStockProvider, ProxyMergedHotlistProvider, ProxyHotlistProvider, ProxyQuoteProvider, BridgeQuoteProvider, ProxyLimitUpProvider, ThemeMappingProvider
+  builder.py          # build_ingest_payload()
+  quality_gate.py     # evaluate_quality()
+  state.py            # record_run(), get_status()
+  repository_port.py  # SnapshotRepository Protocol
+  service.py          # SnapshotCollectorService (run_once, backfill_slots, audit 等)
+  service_factory.py  # create_snapshot_collector_repository()
+  scheduler.py        # SnapshotCollectorScheduler 后台 asyncio 轮询 runner
+  supervisor.py       # Windows shadow 采集守护进程，复用依赖并在独立 8001 端口启动 collector API
+```
+
+当前状态和边界：
+
+- 默认禁用：通过 `QUANT_BOARD_SNAPSHOT_COLLECTOR_ENABLED=false` 关闭所有采集行为。
+- 写目标独立：默认只写入 `dragonboard_backend_shadow` 数据集（由 `QUANT_BOARD_SNAPSHOT_COLLECTOR_DATASET_ID` 控制），不得在未进入正式切换流程时写入 `dragonboard_live` 正式主库。
+- 禁止写入 live 数据集：`QUANT_BOARD_SNAPSHOT_COLLECTOR_ALLOW_LIVE_DATASET` 默认 `false`，防止实验采集污染正式快照事实；Phase 6 正式切换时必须显式设为 `true`，CLI 预检和 quality gate 才会放行 `dragonboard_live`，其它 dataset 仍拒绝。
+- Shadow-only：该采集器产出仅用于平行对照和验收，不得作为生产快照来源或 Dragon Board 正式读源。
+- 质量门禁在前：quality_gate 在写入前检查数据源健康、股票行数量和时间窗口，被阻止的运行写入 `snapshot_collector_runs`（状态 `blocked`）并保留审计轨迹。运行记录会保存 `sourceHealth`、`captureMode`、核心行数和完成时间，方便 Phase 4 shadow/live 对比审计。
+- API 路由 `/api/snapshot-collector/*` 和 CLI 命令 `snapshot-collector-*` 只服务实验运维和审计。
+- 自动调度器（Phase 3）：`SnapshotCollectorScheduler` 是独立的 `asyncio` 后台 runner（模块级单例），在 FastAPI `startup` 时注册到事件循环。轮询间隔由 `QUANT_BOARD_SNAPSHOT_COLLECTOR_POLL_MS`（默认 1000ms）控制，每个 tick 检查交易日、槽位表、时间窗口和 MongoDB 中的 `datasetId + snapshotId` 是否已存在，只为真正缺失且符合条件的 slot 启动 fire-and-forget 采集任务。调度器在非 MongoDB 模式或 `QUANT_BOARD_SNAPSHOT_COLLECTOR_ENABLED=0` 时自动禁用。采集任务的并发保护通过内存中的 `_in_flight_slots` 集合实现，确保同一 slot 不会重复采集。
+- 本机 shadow 守护：`supervisor.py` 只负责实验采集运行环境，不改变采集业务合同。它复用健康的 MongoDB、proxy-server 和 python-bridge，并使用 `8001` 运行目标工作区 collector API，避免替换主工作区 `8000` API。MongoDB 通过 `ping` 检查，proxy-server/python-bridge 校验结构化 `/health` 服务身份；collector 必须同时满足 scheduler `enabled=true`、`running=true` 和 `dataset_id=dragonboard_backend_shadow`。`proxy-server` 只复用健康的 `127.0.0.1:3000`，缺失或不健康时标记 `blocked`，不得从隔离 worktree 启动代理接管主看板端口。守护进程自己启动的非 proxy 服务如仍占端口但健康检查失败，会被终止并重启；未知外部进程只标记 `blocked`，不会误杀。
+- 后端 collector 优先通过 `StartupBundleStockProvider` 读取 proxy-server `/api/cache/startup-bundle` 中由 Dragon Board live 前端写入的 merged stocks，作为与 live 快照一致的完整股票池；若 startup bundle 缺失或无效，默认改用 `ProxyMergedHotlistProvider` 调用八个平台热榜接口做 union 合并，避免 shadow 静默降级为东财 top100。单平台 `ProxyHotlistProvider` 只保留为诊断工具。只有 startup bundle 失败且 `merged_hotlist_proxy` 也未成功时，质量门禁才以 `startup_bundle_missing` 阻断写入。
+- 后端 collector 通过共享 `ThemeHeatService` 写入全量 `entityType=hot_theme` rows；`sector_rows=0` 仅是替换前历史快照的已知缺口，新 shadow 帧不得再以外部端口不可用为由允许空题材行。
+- 正式切换要求：shadow 采集器必须通过完整审计（覆盖率、质量门禁、数据一致性）后才能讨论 live cutover。
+
+**生产口径尚未完成的接入（截至 Phase 4 审计后的当前状态）：**
+
+以下数据源在生产级快照中是必需的。当前后端 collector 已补齐前端已有来源中明确漏接的逐股题材、涨停池、bridge 盘口和 bridge 高低价解析；历史 shadow 数据不会因此自动回填，必须以后续新采集审计为准。
+
+1. **Depth（盘口深度）**：默认 provider 已挂载 `BridgeQuoteProvider`，并兼容 python-bridge 返回的 `bids/asks` 结构，builder 会落 `depth10`、`bid1Price/bid1Volume`、`ask1Price/ask1Volume`。当前 bridge 已验证边界仍是 L1 + 标准五档，不得描述成官方客户端级 L2 或真十档。
+
+2. **股票快照行情接管**：股票池已通过 live startup bundle 优先对齐 live merged stocks，并在缓存缺失时通过八平台 union fallback 保持覆盖范围不退回单平台 top100。行情增量同时使用 `ProxyQuoteProvider` 和 `BridgeQuoteProvider`：proxy 补资金流/东财字段，bridge 补实时价格、盘口、高低价和昨收；builder 会派生 `amplitude`，但该字段只在 Mongo shadow payload 中自然保留，SQLite 历史模型没有独立列。
+
+3. **Theme 数据源**：MongoDB 全市场映射、腾讯基础行情和东财资金字段已由共享 `ThemeHeatService` 聚合，使用 `theme-market-v1`、5 分钟缓存和覆盖率门禁；collector 保存全部 factors 为 `hot_theme` rows。默认 provider 也会挂载 `ThemeMappingProvider`，逐股写入 `themes/mainTheme/sectorLabel`。少数股票仍可能因题材基础库未覆盖而缺失，这属于映射库质量缺口，不是 collector 未接入。
+
+4. **市场情绪 / 涨停池 / 轮动摘要**：涨停池已接入 `ProxyLimitUpProvider`，写入 `limitUpPool/reason/firstZtTime/lastZtTime/boardHeight/highDays/fengdan` 等事件字段。该字段只应出现在涨停池相关股票上，不能按全量股票 100% 覆盖要求审计。市场情绪和轮动摘要仍依赖既有研究链路或后续专项，不应伪造成空字段通过。
+
+当前代码接入类缺口已补齐，但 shadow 仍需至少两个完整交易日的新采集落库审计，确认 row count、字段覆盖、题材映射缺口、资金降级和质量警告后，才能讨论 live cutover。
+
+API 路由：
+
+- `GET /api/snapshot-collector/status`：采集器运行状态
+- `POST /api/snapshot-collector/run-once`：单次采集运行
+- `POST /api/snapshot-collector/backfill-slots`：按日期区间回填槽位
+- `GET /api/snapshot-collector/runs`：历史运行记录
+- `POST /api/snapshot-collector/audit`：快照覆盖率审计
+- `POST /api/snapshot-collector/compare`：两数据集快照对比（shadow vs live），同时报告仅单侧存在和两侧共同缺失的预期槽位
+- `GET /api/snapshot-collector/scheduler/status`：调度器运行状态
+
+CLI 命令：
+
+- `snapshot-collector-status`：打印采集器运行状态
+- `snapshot-collector-run-once`：执行单次采集并输出 JSON 结果
+- `snapshot-collector-backfill`：按日期区间批量采集
+- `snapshot-collector-audit`：审计覆盖率并输出结构化 JSON
+- `snapshot-collector-compare`：对比两个数据集的快照覆盖率和字段完整性
+- `snapshot-collector-scheduler-status`：打印调度器运行状态
+
+响应信封格式：所有 `/api/snapshot-collector/*` 接口使用统一的 `{"ok": true/false, "status": "...", "data": {...}}` 信封。这与现有 API 的混合格式不同，仅用于采集器实验路由。
+
+python-bridge 采集接口（Phase 2）：
+
+为支持后端独立采集（不依赖浏览器 WebSocket 订阅），`python-bridge` 新增以下 HTTP 接口：
+
+- `POST /api/quotes/subscriptions` — 设置后端采集订阅池，body `{"codes": ["000001", "600000"]}`，立即 fetch 行情并缓存
+- `GET /api/quotes/snapshot` — 不带 `codes` 参数时回退到订阅池缓存，返回 `{"pooled": true, "poolRefreshedAt": ...}` 标记；带 `?codes=...` 时保持 Phase 1 按需抓取行为
+
+BridgeQuoteProvider（`backend/snapshot_collector/providers.py`）已适配：
+- `set_pool(codes)` — 注册采样池到 bridge
+- `collect(use_pool=True)` — 使用池缓存抓取，含 `poolStalenessMs`（默认 30s）陈旧检测
+
+StartupBundleStockProvider — 当前默认股票池来源：
+
+`StartupBundleStockProvider` 调用 proxy-server 的启动缓存接口读取 live 前端最近写入的完整 merged stocks：
+
+- `GET /api/cache/startup-bundle?key=default:YYYY-MM-DD` — 返回 `schemaVersion=1` 的 startup bundle，包含 `platformData` 和完整 `stocks`
+- collector 使用 run request 的 `tradingDate` 构造 key，因此按目标交易日对齐 live 缓存
+- `collect_market_context` 在 startup bundle 成功时直接以其 `stocks` 作为 `MarketDataContext.stocks`，并跳过热榜 fallback
+- startup bundle 缺失、过期或结构无效时，`SourceHealth(source=startup_bundle, ok=false)` 会进入审计；collector 随后运行 `ProxyMergedHotlistProvider`，从 `eastmoney/ths/kpl/tdx/xueqiu/cls/tgb/dzh` 八个平台取数、按代码 union、生成各平台 rank 字段和 `avgRank/compRank/rank`
+- 只有 startup bundle 失败且 `ProxyMergedHotlistProvider` 未成功产出股票池时，新 shadow 写入才会被 `startup_bundle_missing` 阻断
+
+该设计优先复用 live 已完成的八平台合并、综合排名、题材/涨停扩展和 RankTrend 增强结果；当 live 页面或主工作区近期未刷新 startup bundle 时，后端只复制股票池覆盖所需的最小合并合同（八平台 union 和排名字段），不复制前端完整热度/题材/涨停增强算法。
+
+ProxyQuoteProvider — 当前默认 quote 数据源（过渡方案）：
+
+`service.py` 的 `_create_providers` 当前同时挂载 `ProxyQuoteProvider` 和 `BridgeQuoteProvider`。`ProxyQuoteProvider` 保留为东财 quote/资金字段补充；`BridgeQuoteProvider` 是实时价格、五档盘口、高低价和昨收的主要来源。
+
+`ProxyQuoteProvider` 直接调用 proxy-server 的 EastMoney HTTP 端点获取实时行情和资金流数据：
+
+- `GET /api/quotes/eastmoney?codes=...` — proxy-server 的 EastMoney 行情端点，返回 f12(代码)、f2(价格)、f3(涨跌幅)、f5(成交额)、f6(成交量)、f8(换手率)、f9(市盈率)、f20(总市值) 以及 f62/f66/f69/f184(资金流) 字段
+- `ProxyQuoteProvider.collect(codes)` — 接收代码列表，返回 `{quotes, depth: [], money_flow, market_meta}` 结构，与 `BridgeQuoteProvider` 兼容，可在 `collect_market_context` 中互换路由
+- 当 proxy-server 返回 `ok=false` 或 `degraded=true` 的降级信封时，`ProxyQuoteProvider` 会把本次 quote 源标记为 `SourceHealth(ok=false)`，不把 HTTP 200 的降级响应当成健康行情。
+- `collect_market_context` 将 `ProxyQuoteProvider` 返回的 `money_flow` 写入 `MarketDataContext.money_flow`，由 builder 的 `_enrich_stock_rows_from_quotes()` 同步填充到 stock rows 的 `moneyFlow`（结构化 dict）、`pe` 和 `totalMarketValue` 字段
+
+仍需注意的能力边界：
+
+- `ProxyQuoteProvider` 自身的 `depth` 仍为空；盘口来自 `BridgeQuoteProvider`。
+- 当前 bridge 盘口是已验证的五档边界，不是真 L2 十档。`depth10` 字段名沿用前端合同，但正常情况下可能只有五档。
+- `amplitude` 由 bridge 的 `high/low/preClose` 派生；历史 live/shadow 快照中该字段可能仍为空，因为旧前端快照 builder 没有落该字段。
+
+生产口径的预期终态：
+
+1. `BridgeQuoteProvider` 作为实时 quote/depth 源，通过 python-bridge 获取 TDX 实时行情和五档盘口。
+2. `ProxyQuoteProvider` 作为东财 quote/资金补充和 bridge 异常时的辅助来源。
+3. `depth` 字段在 bridge 正常运行时非空，审计应按实际采集日期报告覆盖率。
+4. 后续如需真 L2 十档或逐笔，必须走隔离探针或 QMT/券商 L2 来源，不得把当前五档能力升级描述。
+
+**进入 live cutover 前，仍需用新 shadow 落库数据证明字段覆盖和质量门禁稳定，而不是用历史缺字段快照推断当前代码能力。**
 
 ## 数据流
 
@@ -327,6 +448,21 @@ V12 后续 Phase 中，ThemeTrend 和 Theme Confluence 回测/优化仍复用现
 | `QUANT_BOARD_AUTO_SYNC_INTERVAL_SECONDS` | 自动同步间隔，默认 60 秒 |
 | `QUANT_BOARD_AUTO_SYNC_INITIAL_DELAY_SECONDS` | API 启动后首次同步延迟，默认 10 秒 |
 | `QUANT_BOARD_AUTO_SYNC_BATCH_SIZE` | 单轮自动同步批量，默认 50 |
+| `QUANT_BOARD_SNAPSHOT_COLLECTOR_ENABLED` | 是否启用后端快照采集器，默认 `false` |
+| `QUANT_BOARD_SNAPSHOT_COLLECTOR_DATASET_ID` | 采集器写入目标数据集 ID，默认 `dragonboard_backend_shadow` |
+| `QUANT_BOARD_SNAPSHOT_COLLECTOR_TYPES` | 采集器覆盖的快照类型，逗号分隔，默认 `half_hour,daily` |
+| `QUANT_BOARD_SNAPSHOT_COLLECTOR_POLL_MS` | 采集轮询间隔（毫秒），默认 1000 |
+| `QUANT_BOARD_SNAPSHOT_COLLECTOR_CLOSE_GRACE_MINUTES` | 收盘后宽限采集分钟数，默认 5 |
+| `QUANT_BOARD_SNAPSHOT_COLLECTOR_PROXY_BASE_URL` | proxy-server 基础 URL，默认 `http://127.0.0.1:3000` |
+| `QUANT_BOARD_SNAPSHOT_COLLECTOR_BRIDGE_BASE_URL` | python-bridge 基础 URL，默认 `http://127.0.0.1:8765` |
+| `QUANT_BOARD_SNAPSHOT_COLLECTOR_PROVIDER_TIMEOUT_MS` | 数据源请求超时（毫秒），默认 30000；覆盖 `proxy-server` EastMoney quote fallback 的慢请求窗口 |
+| `QUANT_BOARD_THEME_HEAT_BATCH_SIZE` | 腾讯题材基础行情批大小，默认 50 |
+| `QUANT_BOARD_THEME_HEAT_MAX_CONCURRENCY` | 腾讯批次最大并发，默认 3 |
+| `QUANT_BOARD_THEME_HEAT_CACHE_TTL_SECONDS` | 全市场题材热度缓存秒数，默认 300 |
+| `QUANT_BOARD_THEME_HEAT_FAILED_BATCH_RETRIES` | 失败批次重试次数，默认 1 |
+| `QUANT_BOARD_THEME_HEAT_QUOTE_COLLECTION_TIMEOUT_MS` | 腾讯全市场行情整次采集预算，默认 90000 毫秒；超时后剩余批次记为失败并进入覆盖率门禁 |
+| `QUANT_BOARD_THEME_HEAT_FUND_COLLECTION_TIMEOUT_MS` | 东财资金整次采集预算，默认 30000 毫秒；超时后资金字段按 null 降级 |
+| `QUANT_BOARD_SNAPSHOT_COLLECTOR_ALLOW_LIVE_DATASET` | 是否允许写入 live 数据集，默认 `false` |
 
 存储和同步配置的语义变更属于 API/运维合同变更，必须同批更新 [database-migration-plan.md](database-migration-plan.md)、[api-cli.md](api-cli.md) 和 [AI_COLLABORATION.md](AI_COLLABORATION.md)。
 

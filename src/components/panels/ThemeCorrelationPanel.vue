@@ -437,6 +437,7 @@ import { usePanel } from '@/composables/usePanel'
 import { useUIStore } from '@/stores/ui'
 import { EventManager } from '@/utils/eventManager'
 import { AppEvents } from '@/types'
+import { useThemeRuntimeSnapshot } from '@/composables/useThemeRuntimeSnapshot'
 
 const props = defineProps<{
   visible: boolean
@@ -478,6 +479,7 @@ const stockPage = ref(1)
 const stockPageSize = ref(20)
 const lastUpdate = ref(Date.now())
 const selectedStock = ref<any>(null)  // 选中的个股
+const themeRuntime = useThemeRuntimeSnapshot()
 
 // DOM 引用
 const treeContentRef = ref<HTMLElement>()
@@ -576,24 +578,11 @@ function setSort(field: string) {
 }
 
 async function selectStock(stock: any) {
-  // 获取完整的 jxbk 数据
-  const jxbkStock = dataLayer.getJxbkStock(stock.code)
-
-  // 合并数据
+  const marketStock = dataLayer.getStock(stock.code)
   const fullStock = {
     ...stock,
-    // 从 jxbk 补充数据
-    price: (jxbkStock as any)?.price || 0,
-    volumeRatio: jxbkStock?.volumeRatio || 0,
-    popularity: jxbkStock?.popularity || 0,
-    popularityChange: jxbkStock?.popularityChange || 0,
-    mainBuy: jxbkStock?.mainBuy || 0,
-    mainSell: jxbkStock?.mainSell || 0,
-    fengdan: jxbkStock?.fengdan || 0,
-    maxFengdan: jxbkStock?.maxFengdan || 0,
-    bigMoney300: jxbkStock?.bigMoney300 || 0,
-    cirMV: jxbkStock?.cirMV || 0,
-    // 联动数据保留
+    price: marketStock?.price || 0,
+    volumeRatio: stock.volumeRatio ?? marketStock?.volumeRatio ?? null,
     avgCorrelation: stock.avgCorrelation,
     leaderCorrelation: stock.leaderCorrelation,
     directionConsistency: stock.directionConsistency,
@@ -627,10 +616,10 @@ function getPopularityChangeClass(change: number): string {
 }
 
 function getStrengthClass(strength: number): string {
-  if (strength >= 4000) return 's'
-  if (strength >= 3000) return 'a'
-  if (strength >= 2000) return 'b'
-  if (strength >= 1000) return 'c'
+  if (strength >= 80) return 's'
+  if (strength >= 65) return 'a'
+  if (strength >= 50) return 'b'
+  if (strength >= 35) return 'c'
   return 'd'
 }
 
@@ -879,27 +868,22 @@ async function preloadHotThemes() {
 
 // ========== 计算属性 ==========
 const allThemes = computed(() => {
-  const jxbkBlocks = themeFacade.getJxbkBlocks()
-  const stockMap = themeFacade.getThemeStockMap()
-  const rotation = themeFacade.getRotationSummary() || dataLayer.getCurrentRotation()
+  if (!themeRuntime.value.factors.length) return []
+  const rotation = themeRuntime.value.rotationSummary || themeFacade.getRotationSummary() || dataLayer.getCurrentRotation()
   const mainLineIds = new Set((rotation?.mainLines || []).map(m => m.themeId))
 
-  const result = jxbkBlocks.map(block => {
-    const stockCount = Object.values(stockMap).filter((stock: any) =>
-      stock.blocks?.includes(block.name)
-    ).length
-
-    const correlation = dataLayer.getThemeCorrelation(block.code)
+  const result = themeFacade.getThemeSummaries(200).map(theme => {
+    const correlation = dataLayer.getThemeCorrelation(theme.id)
 
     return {
-      id: block.code,
-      name: block.name,
-      strength: block.strength || 0,
-      change: block.change || 0,
-      stockCount,
+      id: theme.id,
+      name: theme.name,
+      strength: theme.heatScore,
+      change: theme.momentumScore,
+      stockCount: theme.stockCount,
       correlation: correlation?.overallCorrelation || 0,
-      isHot: false,
-      isMainLine: mainLineIds.has(block.code),
+      isHot: theme.heatScore >= 65,
+      isMainLine: mainLineIds.has(theme.id),
     }
   }).sort((a, b) => b.strength - a.strength)
 

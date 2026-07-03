@@ -4,8 +4,6 @@ import { debugLog } from '@/utils/logger'
 
 import type {
   HotTheme,
-  JxbkBlockData,
-  JxbkStockData,
   LeaderInfo,
   ThemeDetail,
   ThemeInfo,
@@ -14,7 +12,8 @@ import type {
 import { SECTOR_CONFIG } from '../config/constants'
 import { dataLayer } from './DataLayer'
 import { themeFacade } from './theme/ThemeFacade'
-import { jxbkThemeFeed } from './theme/JxbkThemeFeed'
+import { themeHeatFeed } from './theme/ThemeHeatFeed'
+import type { ThemeHeatStock } from './theme/types'
 import { themeRepository } from './theme/ThemeRepository'
 import { deriveThemeHeatMeta } from './theme/stockThemeMeta'
 
@@ -156,7 +155,7 @@ export async function init(): Promise<() => void> {
   })
   await themeFacade.refreshRuntime({
     source: 'sectorAnalyzer',
-    forceJxbk: true,
+    force: true,
     syncStocks: true,
     emitAlerts: false,
   })
@@ -177,7 +176,7 @@ export async function triggerHeatCalculation() {
   if (state.destroyed) return
   const result = await themeFacade.refreshRuntime({
     source: 'sectorAnalyzer',
-    forceJxbk: true,
+    force: true,
     syncStocks: true,
     emitAlerts: false,
   })
@@ -189,17 +188,17 @@ export async function loadSectorStocks(
   sectorCode: string,
   sectorName: string,
   forceRefresh: boolean = false,
-): Promise<JxbkStockData[]> {
-  return jxbkThemeFeed.loadSectorStocks(sectorCode, sectorName, forceRefresh)
+): Promise<ThemeHeatStock[]> {
+  return themeHeatFeed.loadThemeStocks(sectorCode, { force: forceRefresh, limit: 200 })
 }
 
 export async function preloadTopSectors(limit: number = CONFIG.PRELOAD_COUNT) {
-  const blocks = themeFacade.getJxbkBlocks(limit)
-  for (const block of blocks.slice(0, limit)) {
-    await loadSectorStocks(block.code, block.name)
+  const themes = themeFacade.getHotThemes(limit)
+  for (const theme of themes.slice(0, limit)) {
+    await loadSectorStocks(theme.id, theme.name)
     await new Promise((resolve) => setTimeout(resolve, 100))
   }
-  state.topBlocksLoaded = blocks.length > 0
+  state.topBlocksLoaded = themes.length > 0
 }
 
 export async function updateFullThemeMapping(): Promise<{ success: boolean; message: string }> {
@@ -213,7 +212,7 @@ export async function updateFullThemeMapping(): Promise<{ success: boolean; mess
     })
     await themeFacade.refreshRuntime({
       source: 'sectorAnalyzer',
-      forceJxbk: true,
+      force: true,
       syncStocks: true,
       emitAlerts: false,
     })
@@ -236,8 +235,8 @@ export function syncThemesToStocks(): number {
 }
 
 export function getHotThemes(limit: number = 10): HotTheme[] {
-  const compat = themeFacade.getHotThemes(limit) as HotTheme[]
-  if (compat.length > 0) return compat
+  const themes = themeFacade.getHotThemes(limit)
+  if (themes.length > 0) return themes
   return (dataLayer.getHotThemes() as HotTheme[]).slice(0, limit)
 }
 
@@ -296,7 +295,6 @@ export function getThemeStocks(
 
   const stocks = stockCodes.reduce<ThemeStock[]>((acc, code) => {
     const stock = dataLayer.getStock(code)
-    const jxbkStock = dataLayer.getJxbkStock(code)
     if (!stock) return acc
     const limitUpData = dataLayer.getLimitUpData?.(code)
     acc.push({
@@ -308,27 +306,27 @@ export function getThemeStocks(
       turnoverRate: stock.turnoverRate || 0,
       continuousDays: stock.continuousDays || 0,
       isZT: (stock.change || 0) > 9.5,
-      lianbanStr: limitUpData?.lianbanStr || stock.lianbanStr || jxbkStock?.lianban || '',
+      lianbanStr: limitUpData?.lianbanStr || stock.lianbanStr || '',
       firstZtTime: limitUpData?.firstZtTime || stock.firstZtTime || '',
       lastZtTime: limitUpData?.lastZtTime || stock.lastZtTime || '',
-      fengdan: limitUpData?.fengdan || stock.fengdan || jxbkStock?.fengdan || 0,
-      maxFengdan: limitUpData?.maxFengdan || stock.maxFengdan || jxbkStock?.maxFengdan || 0,
+      fengdan: limitUpData?.fengdan || stock.fengdan || 0,
+      maxFengdan: limitUpData?.maxFengdan || stock.maxFengdan || 0,
       isSectorLeader: Boolean((stock as any).isSectorLeader),
       leaderLevel: (stock as any).leaderLevel,
       tags: dataLayer.getStockTags?.(code) || [],
       reason: dataLayer.getStockReason?.(code) || stock.reason || '',
-      speed: jxbkStock?.speed || stock.speed || 0,
-      volumeRatio: jxbkStock?.volumeRatio || stock.volumeRatio || 0,
-      mainNetInflow: jxbkStock?.mainNetInflow || 0,
-      leadTimes: jxbkStock?.leadTimes || stock.leadTimes || 0,
-      leadStatus: jxbkStock?.leadStatus || stock.leadStatus || '',
-      bigMoney300: jxbkStock?.bigMoney300 || stock.bigMoney300 || 0,
-      popularity: jxbkStock?.popularity || stock.popularity || 0,
-      popularityChange: jxbkStock?.popularityChange || stock.popularityChange || 0,
-      institutionBuy: jxbkStock?.institutionBuy || stock.institutionBuy || 0,
-      mainBuy: jxbkStock?.mainBuy || stock.mainBuy || 0,
-      mainSell: jxbkStock?.mainSell || stock.mainSell || 0,
-      cirMV: jxbkStock?.cirMV || stock.cirMV || 0,
+      speed: stock.speed || 0,
+      volumeRatio: stock.volumeRatio || 0,
+      mainNetInflow: stock.zlje || 0,
+      leadTimes: stock.leadTimes || 0,
+      leadStatus: stock.leadStatus || '',
+      bigMoney300: stock.bigMoney300 || 0,
+      popularity: stock.popularity || 0,
+      popularityChange: stock.popularityChange || 0,
+      institutionBuy: stock.institutionBuy || 0,
+      mainBuy: stock.mainBuy || 0,
+      mainSell: stock.mainSell || 0,
+      cirMV: stock.cirMV || 0,
     })
     return acc
   }, [])
@@ -393,7 +391,7 @@ export const sectorAnalyzer = {
     if (state.destroyed) return
     await themeFacade.refreshRuntime({
       source: 'sectorAnalyzer',
-      forceJxbk: true,
+      force: true,
       syncStocks: true,
       emitAlerts: false,
     })
@@ -408,16 +406,6 @@ export const sectorAnalyzer = {
     })
   },
 
-  forceRefreshJxbk: async function () {
-    if (state.destroyed) return
-    await themeFacade.refreshRuntime({
-      source: 'sectorAnalyzer',
-      forceJxbk: true,
-      syncStocks: true,
-      emitAlerts: false,
-    })
-  } as () => Promise<void>,
-
   destroy: () => {
     state.destroyed = true
     state.initialized = false
@@ -425,28 +413,31 @@ export const sectorAnalyzer = {
 
   getStats: () => {
     const mappingStats = themeRepository.getThemeBaseStatus()
+    const heatSnapshot = themeHeatFeed.getSnapshot()
     return {
       totalThemes: themeRepository.getThemes().length,
       mappedStocks: mappingStats?.mappingCount || 0,
       hotThemes: dataLayer.getHotThemes().length,
-      cachedSectors: jxbkThemeFeed.getSectorStockCacheStats().cachedSectors,
       lastUpdate: mappingStats?.lastUpdate || null,
-      version: '11.0.0',
+      factorVersion: heatSnapshot?.factorVersion || null,
+      stale: heatSnapshot?.stale || false,
+      lastError: heatSnapshot?.lastError || null,
+      themeHeatSource: 'market_aggregate',
+      version: '12.0.0',
       themeBaseSource: 'mongodb',
     }
   },
 
   clearCache: () => {
-    jxbkThemeFeed.clearSectorStockCache()
+    themeHeatFeed.clear()
     state.topBlocksLoaded = false
   },
 
   debug: {
     getState: () => ({ ...state }),
-    getJxbkBlocks: () => themeFacade.getJxbkBlocks(),
   },
 
-  VERSION: '11.0.0',
+  VERSION: '12.0.0',
 }
 
 if (typeof window !== 'undefined') {

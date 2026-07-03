@@ -1,5 +1,5 @@
 <!-- src/components/panels/SectorDetail.vue -->
-<!-- 纯响应式版本：使用真实的 jxbk 数据 -->
+<!-- 全市场题材详情 -->
 
 <template>
   <Teleport to="body">
@@ -81,12 +81,12 @@
               <div class="metric-card strength-card">
                 <div class="metric-icon">💪</div>
                 <div class="metric-content">
-                  <div class="metric-label">板块强度</div>
-                  <div class="metric-value" :style="{ color: getStrengthColor(blockData?.strength || 0) }">
-                    {{ blockData?.strength || 0 }}
+                  <div class="metric-label">题材热度</div>
+                  <div class="metric-value" :style="{ color: getStrengthColor(blockData?.heatScore || 0) }">
+                    {{ blockData?.heatScore || 0 }}
                   </div>
-                  <div class="metric-level" :class="`strength-${getStrengthLevel(blockData?.strength || 0)}`">
-                    {{ getStrengthLevelText(blockData?.strength || 0) }}
+                  <div class="metric-level" :class="`strength-${getStrengthLevel(blockData?.heatScore || 0)}`">
+                    {{ getStrengthLevelText(blockData?.heatScore || 0) }}
                   </div>
                 </div>
               </div>
@@ -105,11 +105,9 @@
               <div class="metric-card change-card">
                 <div class="metric-icon">📊</div>
                 <div class="metric-content">
-                  <div class="metric-label">板块涨幅</div>
-                  <div class="metric-value" :class="(blockData?.change || 0) >= 0 ? 'up' : 'down'">
-                    {{ (blockData?.change || 0) > 0 ? '+' : '' }}{{ blockData?.change?.toFixed(2) || '0.00' }}%
-                  </div>
-                  <div class="metric-desc">平均涨幅</div>
+                  <div class="metric-label">动量分</div>
+                  <div class="metric-value">{{ blockData?.momentumScore || 0 }}</div>
+                  <div class="metric-desc">全市场动量</div>
                 </div>
               </div>
 
@@ -118,7 +116,7 @@
                 <div class="metric-content">
                   <div class="metric-label">量比</div>
                   <div class="metric-value" :style="{ color: getVolumeRatioColor(blockData?.volumeRatio || 0) }">
-                    {{ blockData?.volumeRatio?.toFixed(2) || '0.00' }}
+                    {{ blockData?.volumeRatio === null ? '--' : blockData?.volumeRatio?.toFixed(2) || '--' }}
                   </div>
                   <div class="metric-desc">{{ getVolumeRatioDesc(blockData?.volumeRatio || 0) }}</div>
                 </div>
@@ -132,7 +130,7 @@
                 <div class="fund-content">
                   <div class="fund-label">主力净额</div>
                   <div class="fund-value" :class="(blockData?.mainNetInflow || 0) >= 0 ? 'inflow' : 'outflow'">
-                    {{ formatMoney(blockData?.mainNetInflow || 0) }}
+                    {{ blockData?.mainNetInflow === null ? '资金数据降级' : formatMoney(blockData?.mainNetInflow || 0) }}
                   </div>
                 </div>
               </div>
@@ -140,20 +138,16 @@
               <div class="fund-card">
                 <div class="fund-icon">💎</div>
                 <div class="fund-content">
-                  <div class="fund-label">300W大单</div>
-                  <div class="fund-value" :class="(blockData?.bigMoney300 || 0) >= 0 ? 'inflow' : 'outflow'">
-                    {{ formatMoney(blockData?.bigMoney300 || 0) }}
-                  </div>
+                  <div class="fund-label">资金分</div>
+                  <div class="fund-value">{{ blockData?.fundScore === null ? '--' : blockData?.fundScore }}</div>
                 </div>
               </div>
 
               <div class="fund-card">
                 <div class="fund-icon">🏦</div>
                 <div class="fund-content">
-                  <div class="fund-label">机构增仓</div>
-                  <div class="fund-value" :class="(blockData?.institutionBuy || 0) >= 0 ? 'inflow' : 'outflow'">
-                    {{ formatMoney(blockData?.institutionBuy || 0) }}
-                  </div>
+                  <div class="fund-label">广度分</div>
+                  <div class="fund-value">{{ blockData?.breadthScore || 0 }}</div>
                 </div>
               </div>
             </div>
@@ -227,12 +221,6 @@
                   <option value="change">涨跌幅</option>
                   <option value="volumeRatio">量比</option>
                   <option value="mainNetInflow">主力净额</option>
-                  <option value="bigMoney300">300W大单</option>
-                  <option value="institutionBuy">机构增仓</option>
-                  <option value="leadTimes">领次</option>
-                  <option value="popularity">人气</option>
-                  <option value="fengdan">封单额</option>
-                  <option value="continuousDays">连板</option>
                   <option value="price">最新价</option>
                 </select>
                 <button class="sort-btn" @click="sortDesc = !sortDesc">
@@ -258,17 +246,8 @@
                     <th @click="setSort('change')">涨跌幅</th>
                     <th @click="setSort('volumeRatio')">量比</th>
                     <th @click="setSort('mainNetInflow')">主力净额</th>
-                    <th @click="setSort('bigMoney300')">300W</th>
-                    <th @click="setSort('institutionBuy')">机构</th>
-                    <th @click="setSort('leadTimes')">领次</th>
                     <th>领涨状态</th>
-                    <th @click="setSort('lianban')">连板</th>
-                    <th @click="setSort('popularity')">人气</th>
-                    <th @click="setSort('popularityChange')">变动</th>
                     <th>板块</th>
-                    <th @click="setSort('fengdan')">封单</th>
-                    <th @click="setSort('maxFengdan')">最大封</th>
-                    <th @click="setSort('cirMV')">流通市值</th>
                     <th>标记</th>
                   </tr>
                 </thead>
@@ -284,32 +263,15 @@
                       {{ stock.change > 0 ? '+' : '' }}{{ (stock.change || 0).toFixed(2) }}%
                     </td>
                     <td class="number">{{ (stock.volumeRatio || 0).toFixed(2) }}</td>
-                    <td :class="getMoneyClass(stock.mainNetInflow)">
-                      {{ formatMoney(stock.mainNetInflow) }}
+                    <td :class="getMoneyClass(stock.mainNetInflow || 0)">
+                      {{ stock.mainNetInflow === null ? '--' : formatMoney(stock.mainNetInflow) }}
                     </td>
-                    <td :class="getMoneyClass(stock.bigMoney300)">
-                      {{ formatMoney(stock.bigMoney300) }}
-                    </td>
-                    <td :class="getMoneyClass(stock.institutionBuy)">
-                      {{ formatMoney(stock.institutionBuy) }}
-                    </td>
-                    <td class="number">{{ stock.leadTimes || '-' }}</td>
                     <td>
                       <span v-if="stock.leadStatus" class="lead-badge"
                         :class="{ 'poban': stock.leadStatus.includes('破板') }">
                         {{ stock.leadStatus }}
                       </span>
                       <span v-else>-</span>
-                    </td>
-                    <td>
-                      <span v-if="stock.lianban" class="lianban-badge" :class="getLianbanClass(stock.lianban)">
-                        {{ stock.lianban }}
-                      </span>
-                      <span v-else>-</span>
-                    </td>
-                    <td class="number">{{ stock.popularity || '-' }}</td>
-                    <td :class="getPopularityChangeClass(stock.popularityChange)">
-                      {{ formatPopularityChange(stock.popularityChange) }}
                     </td>
                     <td>
                       <div class="blocks-container">
@@ -321,13 +283,6 @@
                         </span>
                       </div>
                     </td>
-                    <td :class="getMoneyClass(stock.fengdan)">
-                      {{ formatMoney(stock.fengdan) }}
-                    </td>
-                    <td :class="getMoneyClass(stock.maxFengdan)">
-                      {{ formatMoney(stock.maxFengdan) }}
-                    </td>
-                    <td class="number">{{ formatMoney(stock.cirMV) }}</td>
                     <td>
                       <div class="badges">
                         <span v-if="stock.isSectorLeader" class="badge leader-badge" title="龙头">👑</span>
@@ -461,7 +416,7 @@
       </div>
 
       <div class="panel-footer" v-if="hasThemeData && !loading">
-        <span>📡 数据来源: jxbk</span>
+        <span>📡 MongoDB 题材映射 + 腾讯行情 + 东财资金</span>
         <span>🕒 {{ formatTime(displayLastUpdate) }}</span>
       </div>
     </div>
@@ -479,12 +434,8 @@ import * as echarts from 'echarts'
 import { nextTick } from 'vue'
 import { sectorAnalyzer } from '../../services/sectorAnalyzer'
 import { themeFacade } from '../../services/theme/ThemeFacade'
-import type { JxbkBlockData } from '../../types'
-
-type DisplayBlockData = JxbkBlockData & {
-  lastUpdate?: number | null
-  history?: any[]
-}
+import type { ThemeHeatStock } from '../../services/theme/types'
+import { useThemeRuntimeSnapshot } from '../../composables/useThemeRuntimeSnapshot'
 
 const props = defineProps<{
   visible: boolean
@@ -502,6 +453,7 @@ const version = '6.0.0'
 const view = ref<'overview' | 'stocks' | 'correlation' | 'history'>('overview')
 const loading = ref(false)
 const error = ref<string | null>(null)
+const themeRuntime = useThemeRuntimeSnapshot()
 
 const { panelRef, panelStyle } = usePanel({
   name: 'SectorDetail',
@@ -519,18 +471,10 @@ const loadData = async () => {
   error.value = null
 
   try {
-    // 找到板块代码
-    const blocks = themeFacade.getJxbkBlocks()
-    const block = blocks.find(b => b.name === props.sectorName)
-
-    if (block) {
-      // ✅ 关键：强制刷新加载板块个股数据
-      // 传入 true 作为 forceRefresh 参数，跳过缓存
-      if (sectorAnalyzer && typeof sectorAnalyzer.loadSectorStocks === 'function') {
-        await sectorAnalyzer.loadSectorStocks(block.code, props.sectorName, true)
-      }
-
-      await themeFacade.refreshJxbkAndFactors({ force: true })
+    const summary = themeFacade.getThemeSummaries(Number.MAX_SAFE_INTEGER)
+      .find(theme => theme.name === props.sectorName || theme.id === props.sectorName)
+    if (summary) {
+      themeStockRows.value = await sectorAnalyzer.loadSectorStocks(summary.id, summary.name, true)
     }
 
     // 验证数据是否存在
@@ -545,126 +489,34 @@ const loadData = async () => {
   }
 }
 
-// ========== 安全获取 dataLayer 方法 ==========
-const safeDataLayer = {
-  getJxbkBlock: (code: string) => {
-    try {
-      return (dataLayer as any).getJxbkBlock?.(code)
-    } catch {
-      return null
-    }
-  },
-  getJxbkBlockByName: (name: string) => {
-    try {
-      const blocks = themeFacade.getJxbkBlocks()
-      return blocks.find((b: any) => b?.name === name)
-    } catch {
-      return null
-    }
-  }
-}
+const themeStockRows = ref<ThemeHeatStock[]>([])
 
-// ========== 核心数据 - 从 dataLayer 获取 jxbk 数据 ==========
-
-// 先通过名称找到对应的板块代码
 const blockCode = computed(() => {
-  if (!props.sectorName) return null
-
-  try {
-    const blocks = themeFacade.getJxbkBlocks()
-    const block = blocks.find((b: any) => b?.name === props.sectorName)
-    return block?.code || null
-  } catch (e) {
-    console.warn('[SectorDetail] 获取blockCode失败:', e)
-    return null
-  }
+  if (!themeRuntime.value.factors.length) return null
+  return themeFacade.getThemeSummaries(Number.MAX_SAFE_INTEGER)
+    .find(theme => theme.name === props.sectorName || theme.id === props.sectorName)?.id || null
 })
 
-// 获取板块的 jxbk 数据（通过 code）
 const blockData = computed(() => {
   if (!blockCode.value) return null
-
-  try {
-    // 获取板块数据
-    const blocks = themeFacade.getJxbkBlocks()
-    const block = blocks.find((b: any) => b?.code === blockCode.value)
-
-    if (block) {
-      return {
-        ...block,
-        lastUpdate: (block as DisplayBlockData).lastUpdate || Date.now()
-      } as DisplayBlockData
-    }
-    return null
-  } catch (e) {
-    console.warn('[SectorDetail] 获取blockData失败:', e)
-    return null
-  }
+  return themeFacade.getThemeSummary(blockCode.value)
 })
 
-// 或者从 dataLayer 的 jxbk 更新时间获取
-const jxbkLastUpdate = computed(() => {
-  try {
-    return themeFacade.getJxbkLastUpdate()
-  } catch {
-    return null
-  }
-})
-
-// 显示用的更新时间（优先使用板块自身的，否则使用全局的）
 const displayLastUpdate = computed(() => {
-  return blockData.value?.lastUpdate || jxbkLastUpdate.value || null
+  return blockData.value?.lastUpdate || themeRuntime.value.lastUpdate || themeFacade.getThemeLastUpdate()
 })
 
-
-// 获取板块内的股票（从 jxbk stockMap 中过滤）
 const themeStocks = computed(() => {
-  if (!props.sectorName) return []
-
-  try {
-    const stockMap = themeFacade.getThemeStockMap()
-
-    const stocks = Object.values(stockMap)
-      .filter((stock: any) => {
-        return stock?.blocks?.some((b: string) => b === props.sectorName)
-      })
-      .map((stock: any, index: number) => ({
-        rank: index + 1,
-        code: stock.code || '',
-        name: stock.name || '',
-        change: stock.change || 0,
-        volumeRatio: stock.volumeRatio || 0,
-        mainNetInflow: stock.mainNetInflow || 0,
-        bigMoney300: stock.bigMoney300 || 0,
-        institutionBuy: stock.institutionBuy || 0,
-        leadTimes: stock.leadTimes || 0,
-        leadStatus: stock.leadStatus || '',
-        lianban: stock.lianban || '',
-        popularity: stock.popularity || 0,
-        popularityChange: stock.popularityChange || 0,
-        blocks: stock.blocks || [],
-        fengdan: stock.fengdan || 0,
-        maxFengdan: stock.maxFengdan || 0,
-        cirMV: stock.cirMV || 0,
-        isSectorLeader: stock.leadStatus?.includes('龙') || false,
-        continuousDays: stock.lianban ? (parseInt(stock.lianban) || 1) : 1,
-      }))
-      .sort((a, b) => {
-        const getLeaderRank = (status: string) => {
-          if (!status) return 999
-          const match = status.match(/龙(\d+)/)
-          if (match) return parseInt(match[1])
-          if (status.includes('首板')) return 100
-          return 999
-        }
-        return getLeaderRank(a.leadStatus) - getLeaderRank(b.leadStatus)
-      })
-
-    return stocks
-  } catch (e) {
-    console.warn('[SectorDetail] 获取themeStocks失败:', e)
-    return []
-  }
+  return themeStockRows.value.map(stock => ({
+    ...stock,
+    volumeRatio: stock.volumeRatio,
+    mainNetInflow: stock.mainNetInflow,
+    isSectorLeader: stock.role === 'leader',
+    leadStatus: stock.role === 'leader' ? '龙头' : stock.role === 'core' ? '核心' : '',
+    lianban: '',
+    continuousDays: 0,
+    blocks: [props.sectorName],
+  }))
 })
 
 const hasThemeData = computed(() => blockData.value !== null || themeStocks.value.length > 0)
@@ -806,33 +658,7 @@ watch([stockSearch, sortBy, sortDesc], () => {
 // ========== ✅ 合并成一个 watcher ==========
 watch(() => props.sectorName, async (newName) => {
   if (newName && props.visible) {
-    loading.value = true
-    error.value = null
-    try {
-      // 找到板块代码
-      const blocks = themeFacade.getJxbkBlocks()
-      const block = blocks.find(b => b.name === newName)
-
-      if (block) {
-        // 安全地清除缓存（如果方法存在）
-        if (sectorAnalyzer && typeof sectorAnalyzer.clearCache === 'function') {
-          sectorAnalyzer.clearCache()
-        }
-
-        // 加载个股数据
-        if (sectorAnalyzer && typeof sectorAnalyzer.loadSectorStocks === 'function') {
-          await sectorAnalyzer.loadSectorStocks(block.code, newName)
-        }
-      }
-
-      // 重新加载面板数据
-      await loadData()
-    } catch (err) {
-      console.error('[SectorDetail] 加载数据失败:', err)
-      error.value = err instanceof Error ? err.message : '加载失败'
-    } finally {
-      loading.value = false
-    }
+    await loadData()
   }
 }, { immediate: true })
 
@@ -861,11 +687,6 @@ const generateHistoryData = () => {
 
 // 如果有真实的历史数据，可以从这里获取
 const themeHistory = computed(() => {
-  // 如果有真实的历史数据则返回，否则生成模拟数据
-  if (blockData.value?.history) {
-    return blockData.value.history
-  }
-  // 暂时用模拟数据，后续可以从 API 获取真实历史数据
   return generateHistoryData()
 })
 
@@ -1128,22 +949,10 @@ const refresh = async () => {
     loading.value = true  // ✅ 动画开始
     error.value = null
 
-    // 清除缓存
-    if (sectorAnalyzer && typeof sectorAnalyzer.clearCache === 'function') {
-      sectorAnalyzer.clearCache()
+    await themeFacade.refreshRuntime({ force: true, source: 'ui' })
+    if (blockCode.value) {
+      themeStockRows.value = await sectorAnalyzer.loadSectorStocks(blockCode.value, props.sectorName, true)
     }
-
-    // 找到板块代码
-    const blocks = themeFacade.getJxbkBlocks()
-    const block = blocks.find(b => b.name === props.sectorName)
-
-    if (block) {
-      if (sectorAnalyzer && typeof sectorAnalyzer.loadSectorStocks === 'function') {
-        await sectorAnalyzer.loadSectorStocks(block.code, props.sectorName, true)
-      }
-    }
-
-    await themeFacade.refreshJxbkAndFactors({ force: true })
 
     await nextTick()
 

@@ -16,8 +16,6 @@ import {
 } from './dragon/reviewProjection'
 import type {
   DataState,
-  JxbkBlockData,
-  JxbkStockData,
   LimitUpExtData,
   MergedStock,
   StockExtData,
@@ -91,12 +89,6 @@ class DataLayer {
         byTheme: new Map(),
         hotList: [],
         rotation: [],
-        lastUpdate: null,
-      },
-      jxbk: {
-        blocks: [],
-        blockMap: {},
-        stockMap: {},
         lastUpdate: null,
       },
       correlation: {
@@ -336,7 +328,7 @@ class DataLayer {
   }
 
   /**
-   * 更新题材指标（包含 jxbk 数据）
+   * 更新题材指标
    */
   updateThemeMetrics(
     updates: Array<{
@@ -349,13 +341,6 @@ class DataLayer {
       correlation: number
       relatedThemes: any[]
       stats: { stockCount: number; ztCount: number; leaderCount: number }
-      jxbk: {
-        strength: number
-        mainNetInflow: number
-        bigMoney300: number
-        institutionBuy: number
-        volumeRatio: number
-      }
     }>,
   ) {
     updates.forEach((update) => {
@@ -408,64 +393,6 @@ class DataLayer {
    */
   getThemeRotation() {
     return this.state.theme.metrics.rotation
-  }
-
-  // ========== jxbk 数据管理 ==========
-
-  /**
-   * 更新 jxbk 板块数据
-   */
-  updateJxbkBlocks(blocks: JxbkBlockData[]) {
-    const blockMap: Record<string, JxbkBlockData> = {}
-    blocks.forEach((block) => {
-      blockMap[block.code] = block
-    })
-
-    this.state.theme.jxbk.blocks = blocks
-    this.state.theme.jxbk.blockMap = blockMap
-    this.state.theme.jxbk.lastUpdate = Date.now()
-    this.state.version.themes++
-  }
-
-  /**
-   * 更新 jxbk 股票数据
-   */
-  updateJxbkStocks(stocks: JxbkStockData[]) {
-    const stockMap: Record<string, JxbkStockData> = { ...this.state.theme.jxbk.stockMap }
-    stocks.forEach((stock) => {
-      stockMap[stock.code] = stock
-    })
-
-    this.state.theme.jxbk.stockMap = stockMap
-    this.state.theme.jxbk.lastUpdate = Date.now()
-    this.state.version.themes++
-  }
-
-  /**
-   * 获取 jxbk 板块数据
-   */
-  getJxbkBlock(blockCode: string): JxbkBlockData | undefined {
-    return this.state.theme.jxbk.blockMap[blockCode]
-  }
-
-  /**
-   * 获取 jxbk 股票数据
-   */
-  getJxbkStock(stockCode: string): JxbkStockData | undefined {
-    return this.state.theme.jxbk.stockMap[stockCode]
-  }
-
-  getJxbkStockMap(): Record<string, JxbkStockData> {
-    return this.state.theme.jxbk.stockMap
-  }
-
-  /**
-   * 获取所有 jxbk 板块（按强度排序）
-   */
-  getJxbkBlocksSorted(limit?: number): JxbkBlockData[] {
-    const blocks = [...this.state.theme.jxbk.blocks]
-    blocks.sort((a, b) => b.strength - a.strength)
-    return limit ? blocks.slice(0, limit) : blocks
   }
 
   // ========== 题材个股联动管理 ==========
@@ -1540,12 +1467,6 @@ class DataLayer {
         byTheme: new Map(),
         hotList: [],
         rotation: [],
-        lastUpdate: null,
-      },
-      jxbk: {
-        blocks: [],
-        blockMap: {},
-        stockMap: {},
         lastUpdate: null,
       },
       correlation: {

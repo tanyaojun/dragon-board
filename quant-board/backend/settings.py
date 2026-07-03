@@ -114,6 +114,23 @@ class Settings(BaseModel):
     snapshot_empty_cache_ttl_seconds: int = Field(default=10)
     snapshot_cache_connect_timeout_seconds: float = Field(default=0.2)
     snapshot_cache_socket_timeout_seconds: float = Field(default=0.2)
+    snapshot_collector_enabled: bool = Field(default=False)
+    snapshot_collector_dataset_id: str = Field(default="dragonboard_backend_shadow")
+    snapshot_collector_types: str = Field(default="half_hour,daily")
+    snapshot_collector_poll_ms: int = Field(default=1000)
+    snapshot_collector_close_grace_minutes: int = Field(default=5)
+    snapshot_collector_proxy_base_url: str = Field(default="http://127.0.0.1:3000")
+    snapshot_collector_bridge_base_url: str = Field(default="http://127.0.0.1:8765")
+    snapshot_collector_provider_timeout_ms: int = Field(default=30000)
+    snapshot_collector_allow_live_dataset: bool = Field(default=False)
+    theme_heat_batch_size: int = Field(default=50)
+    theme_heat_max_concurrency: int = Field(default=3)
+    theme_heat_cache_ttl_seconds: int = Field(default=300)
+    theme_heat_failed_batch_retries: int = Field(default=1)
+    theme_heat_quote_timeout_ms: int = Field(default=10000)
+    theme_heat_fund_timeout_ms: int = Field(default=12000)
+    theme_heat_quote_collection_timeout_ms: int = Field(default=90000)
+    theme_heat_fund_collection_timeout_ms: int = Field(default=30000)
     data_source: DataSourceConfig = Field(default_factory=DataSourceConfig)
 
     def model_post_init(self, __context: Any) -> None:
@@ -299,6 +316,89 @@ class Settings(BaseModel):
             _env_float(
                 "QUANT_BOARD_SNAPSHOT_CACHE_SOCKET_TIMEOUT_SECONDS",
                 self.snapshot_cache_socket_timeout_seconds,
+            ),
+        )
+        self.snapshot_collector_enabled = _env_bool(
+            "QUANT_BOARD_SNAPSHOT_COLLECTOR_ENABLED",
+            self.snapshot_collector_enabled,
+        )
+        self.snapshot_collector_dataset_id = os.environ.get(
+            "QUANT_BOARD_SNAPSHOT_COLLECTOR_DATASET_ID",
+            self.snapshot_collector_dataset_id,
+        )
+        self.snapshot_collector_types = os.environ.get(
+            "QUANT_BOARD_SNAPSHOT_COLLECTOR_TYPES",
+            self.snapshot_collector_types,
+        )
+        self.snapshot_collector_poll_ms = max(
+            100,
+            _env_int("QUANT_BOARD_SNAPSHOT_COLLECTOR_POLL_MS", self.snapshot_collector_poll_ms),
+        )
+        self.snapshot_collector_close_grace_minutes = max(
+            1,
+            _env_int(
+                "QUANT_BOARD_SNAPSHOT_COLLECTOR_CLOSE_GRACE_MINUTES",
+                self.snapshot_collector_close_grace_minutes,
+            ),
+        )
+        self.snapshot_collector_proxy_base_url = os.environ.get(
+            "QUANT_BOARD_SNAPSHOT_COLLECTOR_PROXY_BASE_URL",
+            self.snapshot_collector_proxy_base_url,
+        )
+        self.snapshot_collector_bridge_base_url = os.environ.get(
+            "QUANT_BOARD_SNAPSHOT_COLLECTOR_BRIDGE_BASE_URL",
+            self.snapshot_collector_bridge_base_url,
+        )
+        self.snapshot_collector_provider_timeout_ms = max(
+            100,
+            _env_int(
+                "QUANT_BOARD_SNAPSHOT_COLLECTOR_PROVIDER_TIMEOUT_MS",
+                self.snapshot_collector_provider_timeout_ms,
+            ),
+        )
+        self.snapshot_collector_allow_live_dataset = _env_bool(
+            "QUANT_BOARD_SNAPSHOT_COLLECTOR_ALLOW_LIVE_DATASET",
+            self.snapshot_collector_allow_live_dataset,
+        )
+        self.theme_heat_batch_size = max(
+            1,
+            _env_int("QUANT_BOARD_THEME_HEAT_BATCH_SIZE", self.theme_heat_batch_size),
+        )
+        self.theme_heat_max_concurrency = max(
+            1,
+            _env_int("QUANT_BOARD_THEME_HEAT_MAX_CONCURRENCY", self.theme_heat_max_concurrency),
+        )
+        self.theme_heat_cache_ttl_seconds = max(
+            1,
+            _env_int("QUANT_BOARD_THEME_HEAT_CACHE_TTL_SECONDS", self.theme_heat_cache_ttl_seconds),
+        )
+        self.theme_heat_failed_batch_retries = max(
+            1,
+            _env_int(
+                "QUANT_BOARD_THEME_HEAT_FAILED_BATCH_RETRIES",
+                self.theme_heat_failed_batch_retries,
+            ),
+        )
+        self.theme_heat_quote_timeout_ms = max(
+            100,
+            _env_int("QUANT_BOARD_THEME_HEAT_QUOTE_TIMEOUT_MS", self.theme_heat_quote_timeout_ms),
+        )
+        self.theme_heat_fund_timeout_ms = max(
+            100,
+            _env_int("QUANT_BOARD_THEME_HEAT_FUND_TIMEOUT_MS", self.theme_heat_fund_timeout_ms),
+        )
+        self.theme_heat_quote_collection_timeout_ms = max(
+            1000,
+            _env_int(
+                "QUANT_BOARD_THEME_HEAT_QUOTE_COLLECTION_TIMEOUT_MS",
+                self.theme_heat_quote_collection_timeout_ms,
+            ),
+        )
+        self.theme_heat_fund_collection_timeout_ms = max(
+            1000,
+            _env_int(
+                "QUANT_BOARD_THEME_HEAT_FUND_COLLECTION_TIMEOUT_MS",
+                self.theme_heat_fund_collection_timeout_ms,
             ),
         )
 

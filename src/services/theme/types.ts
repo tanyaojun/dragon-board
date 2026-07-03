@@ -1,4 +1,4 @@
-import type { JxbkBlockData, JxbkStockData, MergedStock } from '@/types'
+import type { MergedStock } from '@/types'
 import type { AlertLevel, AlertType, RotationAnalysis } from '@/types/core'
 import type { ThemeCorrelationDetail } from '@/services/ThemeCorrelationAnalyzer'
 
@@ -7,10 +7,16 @@ export type ThemeRotationState = 'mainline' | 'inflow' | 'outflow' | 'quick' | '
 export type ThemeQualityFlagCode =
   | 'empty_theme'
   | 'low_sample'
-  | 'jxbk_missing'
   | 'mapping_missing'
   | 'invalid_number'
   | 'time_disorder'
+  | 'quote_coverage_partial'
+  | 'theme_quote_coverage_low'
+  | 'quote_stale'
+  | 'fund_flow_partial'
+  | 'fund_flow_unavailable'
+  | 'source_time_skew'
+  | 'persistence_history_insufficient'
 
 export interface ThemeQualityFlag {
   code: ThemeQualityFlagCode
@@ -26,22 +32,25 @@ export interface ThemeBaseLike {
 }
 
 export interface ThemeFactorComponents {
-  baseScore: number
-  jxbkScore: number
-  stockScore: number
+  breadthScore: number
+  fundScore: number | null
+  leadershipScore: number
+  correlationScore: number
   riskPenalty: number
 }
+
+export type ThemeFactorSource = 'static' | 'mixed' | 'market_aggregate'
 
 export interface ThemeFactorSnapshot {
   themeId: string
   themeName: string
-  source: 'static' | 'jxbk' | 'mixed'
+  source: ThemeFactorSource
   snapshotId?: string
   timestamp: number
   heatScore: number
   momentumScore: number
   breadthScore: number
-  fundScore: number
+  fundScore: number | null
   leadershipScore: number
   correlationScore: number
   crowdingRisk: number
@@ -50,7 +59,7 @@ export interface ThemeFactorSnapshot {
   stockCount: number
   ztCount: number
   leaderCount: number
-  netInflow: number
+  netInflow: number | null
   strength: number
   volumeRatio: number
   rank: number
@@ -60,6 +69,70 @@ export interface ThemeFactorSnapshot {
 }
 
 export type ThemeStockRole = 'leader' | 'core' | 'follower' | 'independent' | 'noise'
+
+export interface ThemeHeatApiFactor
+  extends Omit<ThemeFactorSnapshot, 'heatScore' | 'fundScore' | 'netInflow'> {
+  heatScore: number | null
+  fundScore: number | null
+  netInflow?: number | null
+  mainNetInflow: number | null
+  rankEligible: boolean
+  degraded: boolean
+  metadata: Record<string, unknown>
+}
+
+export interface ThemeHeatStock {
+  code: string
+  name: string
+  change: number
+  price: number
+  volumeRatio: number | null
+  mainNetInflow: number | null
+  turnoverRate: number | null
+  rank: number
+  role: ThemeStockRole
+  qualityFlags: ThemeQualityFlag[]
+}
+
+export interface ThemePanelSummary {
+  id: string
+  name: string
+  rank: number
+  heatScore: number
+  heatIcon: string
+  heatColor: string
+  heatLevel: string
+  momentumScore: number
+  breadthScore: number
+  fundScore: number | null
+  leadershipScore: number
+  correlationScore: number
+  crowdingRisk: number
+  stockCount: number
+  ztCount: number
+  leaderCount: number
+  mainNetInflow: number | null
+  volumeRatio: number | null
+  momentum: number
+  trend: number
+  acceleration: number
+  correlation: number
+  strength: number
+  rotationState: ThemeRotationState
+  lastUpdate: number
+  qualityFlags: ThemeQualityFlag[]
+  degraded: boolean
+}
+
+export interface ThemeHeatApiSnapshot {
+  computedAt: number
+  cacheBucket: string
+  factorVersion: string
+  mappingVersion: string
+  factors: ThemeHeatApiFactor[]
+  quality: Record<string, unknown>
+  sources: Record<string, unknown>
+}
 
 export interface ThemeStockExposure {
   code: string
@@ -83,7 +156,6 @@ export interface ThemeSourceContext {
   themeStocks: Map<string, string[]>
   stockThemes: Map<string, string[]>
   stocks: Array<Partial<MergedStock> & { code: string; name?: string }>
-  jxbkBlocks?: JxbkBlockData[]
   rotationAnalysis?: RotationAnalysis | null
   correlations?: Map<string, ThemeCorrelationDetail>
 }
@@ -109,7 +181,7 @@ export interface ThemeEvent {
   themeId: string
   themeName: string
   timestamp: number
-  source: 'theme' | 'theme_legacy_adapter'
+  source: 'theme'
   alertType?: AlertType
   factorSnapshotId?: string
   stockCodes: string[]
@@ -142,7 +214,6 @@ export type ThemeRuntimeChangedField =
   | 'events'
   | 'quality'
   | 'stocks'
-  | 'jxbk'
 
 export interface ThemeRuntimeQualitySummary {
   totalFlags: number
@@ -169,21 +240,12 @@ export interface ThemeRefreshOptions {
   timestamp?: number
   snapshotId?: string
   force?: boolean
-  skipJxbkRefresh?: boolean
   emitAlerts?: boolean
   source?: ThemeRefreshSource
-  forceJxbk?: boolean
   syncStocks?: boolean
   context?: ThemeSourceContext
 }
 
 export interface ThemeRuntimeRefreshOptions extends ThemeRefreshOptions {
   source: ThemeRefreshSource
-}
-
-export interface ThemeLegacyAlertBuildContext {
-  timestamp?: number
-  blocks: JxbkBlockData[]
-  stockMap: Record<string, JxbkStockData>
-  previousBlocks?: Map<string, JxbkBlockData>
 }

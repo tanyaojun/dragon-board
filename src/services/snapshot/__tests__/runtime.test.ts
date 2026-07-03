@@ -5,6 +5,7 @@ import { SnapshotRuntime, buildSnapshotBackendIngestIdempotencyKey } from '../ru
 import { refreshResourceLocks } from '../../refresh/RefreshResourceLocks'
 import { refreshScheduler, refreshTaskRegistry } from '../../refresh/RefreshTaskRuntime'
 import { getExpectedSlots } from '../schedule'
+import type { SnapshotBuildContext } from '../builders'
 import type { SnapshotCaptureMode, SnapshotQueryOptions, SnapshotRecord, SnapshotType } from '../types'
 
 function createMemoryStorage() {
@@ -25,7 +26,25 @@ function createMemoryStorage() {
   }
 }
 
-function createRuntime() {
+function createDefaultBuildContext(overrides: Partial<SnapshotBuildContext> = {}): SnapshotBuildContext {
+  return {
+    stocks: [],
+    breathData: null,
+    marketData: null,
+    hotThemes: [],
+    rotationAnalysis: null,
+    breathHistory: [],
+    breathFactors: [],
+    marketMode: 'full',
+    stocksVersion: 1,
+    ...overrides,
+  }
+}
+
+function createRuntime(
+  buildContext: Partial<SnapshotBuildContext> = {},
+  options: { enableFormalSnapshotSweep?: boolean } = {},
+) {
   vi.stubGlobal('localStorage', createMemoryStorage())
   return new SnapshotRuntime({
     logger: {
@@ -38,6 +57,7 @@ function createRuntime() {
     primaryDbVersion: 1,
     primaryStoreName: 'snapshots',
     enableIndexedDbSnapshotCache: true,
+    enableFormalSnapshotSweep: options.enableFormalSnapshotSweep,
     legacyBackupDbName: 'test-backup',
     bucketBackupDbName: 'test-bucket-backup',
     backupDbVersion: 1,
@@ -47,19 +67,7 @@ function createRuntime() {
     abnormalRatio: 0.5,
     syncIntervalMs: 60_000,
     getStorageBucketManager: () => null,
-    getBuildContext: () => ({
-      stocks: [],
-      breathData: null,
-      marketData: null,
-      jxbkBlocks: [],
-      jxbkStocks: {},
-      hotThemes: [],
-      rotationAnalysis: null,
-      breathHistory: [],
-      breathFactors: [],
-      marketMode: 'full',
-      stocksVersion: 1,
-    }),
+    getBuildContext: () => createDefaultBuildContext(buildContext),
   })
 }
 
@@ -261,8 +269,6 @@ describe('SnapshotRuntime', () => {
         stocks: [],
         breathData: null,
         marketData: null,
-        jxbkBlocks: [],
-        jxbkStocks: {},
         hotThemes: [],
         rotationAnalysis: null,
         breathHistory: [],
@@ -401,6 +407,42 @@ describe('SnapshotRuntime', () => {
     )
   })
 
+  it('does not start formal snapshot sweep by default', () => {
+    const runtime = createRuntime()
+    const startTimer = vi.spyOn(runtime, 'startTimer')
+    vi.spyOn(runtime as any, 'ensurePersistentStorage').mockResolvedValue(undefined)
+    vi.spyOn(runtime as any, 'cleanupLegacyPlainBackupDatabase').mockResolvedValue(undefined)
+    vi.spyOn(runtime as any, 'migrateLegacyBucketBackupDatabase').mockResolvedValue(undefined)
+    vi.spyOn(runtime as any, 'cleanupInvalidRuntimeSnapshots').mockResolvedValue(undefined)
+    vi.spyOn(runtime as any, 'initializeSnapshotGuard').mockResolvedValue(undefined)
+    vi.spyOn(runtime as any, 'startSnapshotAutoSync').mockImplementation(() => {})
+    vi.spyOn(runtime as any, 'scheduleProjectionBackfill').mockImplementation(() => {})
+
+    runtime.start()
+
+    expect(startTimer).not.toHaveBeenCalled()
+
+    runtime.stop()
+  })
+
+  it('can explicitly start formal snapshot sweep for diagnostics', () => {
+    const runtime = createRuntime({}, { enableFormalSnapshotSweep: true })
+    const startTimer = vi.spyOn(runtime, 'startTimer').mockImplementation(() => {})
+    vi.spyOn(runtime as any, 'ensurePersistentStorage').mockResolvedValue(undefined)
+    vi.spyOn(runtime as any, 'cleanupLegacyPlainBackupDatabase').mockResolvedValue(undefined)
+    vi.spyOn(runtime as any, 'migrateLegacyBucketBackupDatabase').mockResolvedValue(undefined)
+    vi.spyOn(runtime as any, 'cleanupInvalidRuntimeSnapshots').mockResolvedValue(undefined)
+    vi.spyOn(runtime as any, 'initializeSnapshotGuard').mockResolvedValue(undefined)
+    vi.spyOn(runtime as any, 'startSnapshotAutoSync').mockImplementation(() => {})
+    vi.spyOn(runtime as any, 'scheduleProjectionBackfill').mockImplementation(() => {})
+
+    runtime.start()
+
+    expect(startTimer).toHaveBeenCalledTimes(1)
+
+    runtime.stop()
+  })
+
   it('collects pending scheduled slots by checking MongoDB existence first', async () => {
     const runtime = createRuntime()
     const exists = vi.fn(async (snapshotId: string) => snapshotId.includes('10:00'))
@@ -516,6 +558,33 @@ describe('SnapshotRuntime', () => {
 
     expect(saved).toBe(false)
     expect(saveSnapshotRecord).not.toHaveBeenCalled()
+  })
+
+  it('does not write formal half-hour snapshots when theme heat factors are empty', async () => {
+    const runtime = createRuntime({
+      stocks: [{ code: '600001', rank: 1 }],
+      hotThemes: [{ id: 'legacy-top-n', name: '旧UI题材' }],
+      themeHeatFactors: [],
+    })
+    const saveSnapshotRecord = vi.spyOn(runtime as any, 'saveSnapshotRecord').mockResolvedValue(true)
+
+    const saved = await runtime.saveHalfHourSnapshot(new Date('2026-04-21T10:00:00'))
+
+    expect(saved).toBe(false)
+    expect(saveSnapshotRecord).not.toHaveBeenCalled()
+  })
+
+  it('writes formal half-hour snapshots when stock pool and theme heat factors are ready', async () => {
+    const runtime = createRuntime({
+      stocks: [{ code: '600001', rank: 1 }],
+      themeHeatFactors: [{ id: 'AI', name: '人工智能', heatScore: 88 }],
+    })
+    const saveSnapshotRecord = vi.spyOn(runtime as any, 'saveSnapshotRecord').mockResolvedValue(true)
+
+    const saved = await runtime.saveHalfHourSnapshot(new Date('2026-04-21T10:00:00'))
+
+    expect(saved).toBe(true)
+    expect(saveSnapshotRecord).toHaveBeenCalledTimes(1)
   })
 
   it('cleans non-trading-day runtime snapshots from primary projections and local backups', async () => {

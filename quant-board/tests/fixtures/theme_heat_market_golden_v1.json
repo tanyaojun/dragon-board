@@ -1,0 +1,83 @@
+{
+  "caseId": "theme_heat_market_v1_001",
+  "input": {
+    "themes": [
+      { "id": "AI", "name": "人工智能", "stocks": ["000001", "000002"] },
+      { "id": "POWER", "name": "电力", "stocks": ["000003", "000004"] }
+    ],
+    "quotes": {
+      "000001": { "code": "000001", "name": "样本一", "change": 10, "amount": 100000000, "volumeRatio": 3, "boardHeight": 2, "hotlistLeader": true },
+      "000002": { "code": "000002", "name": "样本二", "change": 5, "amount": 100000000, "volumeRatio": 2 },
+      "000003": { "code": "000003", "name": "样本三", "change": -2, "amount": 50000000, "volumeRatio": 1 },
+      "000004": { "code": "000004", "name": "样本四", "change": 1, "amount": 50000000, "volumeRatio": 1 }
+    },
+    "funds": {
+      "000001": { "code": "000001", "mainNetInflow": 10000000 },
+      "000002": { "code": "000002", "mainNetInflow": -5000000 }
+    },
+    "previous_factors": {
+      "AI": { "heatScore": 70, "consecutiveHotBuckets": 2 }
+    },
+    "computed_at": 1782018300000,
+    "mapping_version": "theme-v8-test"
+  },
+  "expected": {
+    "ok": true,
+    "computedAt": 1782018300000,
+    "factorVersion": "theme-market-v1",
+    "mappingVersion": "theme-v8-test",
+    "factors": [
+      {
+        "themeId": "AI",
+        "themeName": "人工智能",
+        "rank": 1,
+        "rankEligible": true,
+        "heatScore": 76,
+        "momentumScore": 100,
+        "breadthScore": 87.5,
+        "fundScore": 58.75,
+        "leadershipScore": 57.0,
+        "correlationScore": 100.0,
+        "crowdingRisk": 14.0,
+        "persistenceScore": 40.0,
+        "stockCount": 2,
+        "quoteCoveredCount": 2,
+        "fundCoveredCount": 2,
+        "ztCount": 1,
+        "leaderCount": 1,
+        "mainNetInflow": 5000000.0,
+        "volumeRatio": 2.5,
+        "degraded": false,
+        "qualityFlags": [],
+        "computedAt": 1782018300000,
+        "metadata": { "quoteCoverage": 1.0, "fundCoverage": 1.0, "trimmedMeanChange": 7.5, "consecutiveHotBuckets": 2 }
+      },
+      {
+        "themeId": "POWER",
+        "themeName": "电力",
+        "rank": 2,
+        "rankEligible": true,
+        "heatScore": 19,
+        "momentumScore": 46,
+        "breadthScore": 22.5,
+        "fundScore": null,
+        "leadershipScore": 0.0,
+        "correlationScore": 50.0,
+        "crowdingRisk": 0.0,
+        "persistenceScore": 0.0,
+        "stockCount": 2,
+        "quoteCoveredCount": 2,
+        "fundCoveredCount": 0,
+        "ztCount": 0,
+        "leaderCount": 0,
+        "mainNetInflow": null,
+        "volumeRatio": 1.0,
+        "degraded": true,
+        "qualityFlags": ["fund_flow_unavailable", "persistence_history_insufficient"],
+        "computedAt": 1782018300000,
+        "metadata": { "quoteCoverage": 1.0, "fundCoverage": 0.0, "trimmedMeanChange": -0.5, "consecutiveHotBuckets": 0 }
+      }
+    ],
+    "quality": { "quoteCoverage": 1.0, "requestedCount": 4, "returnedCount": 4, "qualityFlags": [] }
+  }
+}

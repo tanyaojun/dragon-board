@@ -100,6 +100,11 @@ QUANT_BOARD_SNAPSHOT_COLLECTOR_PROVIDER_TIMEOUT_MS=5000
 QUANT_BOARD_SNAPSHOT_COLLECTOR_ALLOW_LIVE_DATASET=0
 ```
 
+Correction note (2026-06-23): shadow/live audit showed the proxy EastMoney
+quote path can exceed 5s while exercising fallback/cache paths. Runtime default
+was raised to `30000`; keep this block as the original Phase 1 setting, not the
+current recommended value.
+
 Tests must assert defaults are disabled, shadow-only, and do not permit `dragonboard_live` unless `ALLOW_LIVE_DATASET=1`.
 
 ## Collector API Envelope

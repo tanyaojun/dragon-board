@@ -58,13 +58,6 @@ export interface ThemeMetrics {
     ztCount: number
     leaderCount: number
   }
-  jxbk: {
-    strength: number
-    mainNetInflow: number
-    bigMoney300: number
-    institutionBuy: number
-    volumeRatio: number
-  }
   lastUpdate: number
 }
 
@@ -119,40 +112,6 @@ export interface StockExtData {
   tickSellCount?: number
   lastTradePrice?: number
   lastTradeVolume?: number
-}
-
-export interface JxbkBlockData {
-  code: string
-  name: string
-  strength: number
-  change: number
-  mainNetInflow: number
-  bigMoney300: number
-  institutionBuy: number
-  volumeRatio: number
-  ztCount: number
-}
-
-export interface JxbkStockData {
-  code: string
-  name: string
-  change: number
-  speed: number
-  volumeRatio: number
-  mainNetInflow: number
-  leadTimes: number
-  leadStatus: string
-  lianban: string
-  bigMoney300: number
-  popularity: number
-  popularityChange: number
-  blocks: string[]
-  institutionBuy: number
-  mainBuy: number
-  mainSell: number
-  fengdan: number
-  maxFengdan: number
-  cirMV: number
 }
 
 export interface MergedStock {
@@ -309,12 +268,6 @@ export interface DataState {
       byTheme: Map<string, ThemeMetrics>
       hotList: any[]
       rotation: any[]
-      lastUpdate: number | null
-    }
-    jxbk: {
-      blocks: JxbkBlockData[]
-      blockMap: Record<string, JxbkBlockData>
-      stockMap: Record<string, JxbkStockData>
       lastUpdate: number | null
     }
     correlation: {

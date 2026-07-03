@@ -9,8 +9,6 @@ export * from './rankTrendDefaults'
 export type {
   DataState,
   DataVersion,
-  JxbkBlockData as DataLayerJxbkBlockData,
-  JxbkStockData as DataLayerJxbkStockData,
   LeaderLookupRecord,
   LimitUpExtData,
   MergedStock,

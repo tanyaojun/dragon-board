@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import sys
 from pathlib import Path
 
 from sqlalchemy import create_engine
@@ -230,10 +231,17 @@ def test_leveldb_importer_parses_dfindexeddb_jsonl_projection_stores() -> None:
     assert bundle.sector_rows[0]["metadata"] is None
 
 
-def test_leveldb_importer_uses_venv_dfindexeddb_console_script() -> None:
+def test_leveldb_importer_uses_venv_dfindexeddb_console_script(tmp_path: Path, monkeypatch) -> None:
+    script_dir = tmp_path / "Scripts"
+    script_dir.mkdir()
+    executable = script_dir / "python.exe"
+    executable.write_text("", encoding="utf-8")
+    (script_dir / "dfindexeddb.exe").write_text("", encoding="utf-8")
+    monkeypatch.setattr(sys, "executable", str(executable))
+
     command = LevelDbIndexedDbImporter._dfindexeddb_command(Path("source.leveldb"))
 
-    assert Path(command[0]).name in {"dfindexeddb.exe", "dfindexeddb"}
+    assert Path(command[0]) == script_dir / "dfindexeddb.exe"
     assert command[1:] == [
         "db",
         "-s",

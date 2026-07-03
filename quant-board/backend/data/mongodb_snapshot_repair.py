@@ -115,6 +115,53 @@ def backfill_empty_snapshot_rows(
     return result
 
 
+def copy_missing_snapshot_slots_from_dataset(
+    database: Any,
+    *,
+    target_dataset_id: str,
+    donor_dataset_id: str,
+    snapshot_ids: list[str],
+    apply: bool = False,
+) -> dict[str, Any]:
+    plans = [
+        _plan_cross_dataset_slot_copy(
+            database,
+            target_dataset_id=target_dataset_id,
+            donor_dataset_id=donor_dataset_id,
+            snapshot_id=snapshot_id,
+        )
+        for snapshot_id in snapshot_ids
+    ]
+    result: dict[str, Any] = {
+        "ok": all(plan["ok"] for plan in plans),
+        "apply": apply,
+        "targetDatasetId": target_dataset_id,
+        "donorDatasetId": donor_dataset_id,
+        "plans": plans,
+    }
+    if not result["ok"] or not apply:
+        return result
+
+    applied = [
+        _apply_cross_dataset_slot_copy(
+            database,
+            target_dataset_id=target_dataset_id,
+            donor_dataset_id=donor_dataset_id,
+            plan=plan,
+        )
+        for plan in plans
+    ]
+    _refresh_dataset_summary(database, target_dataset_id)
+    _write_slot_copy_audit(
+        database,
+        target_dataset_id=target_dataset_id,
+        donor_dataset_id=donor_dataset_id,
+        applied=applied,
+    )
+    result["applied"] = applied
+    return result
+
+
 def _default_target_snapshot_ids(
     database: Any,
     dataset_id: str,
@@ -211,6 +258,74 @@ def _plan_snapshot_repair(
     if slot_plan:
         return slot_plan
     return {"ok": False, "snapshotId": snapshot_id, "error": "target_frame_not_found"}
+
+
+def _plan_cross_dataset_slot_copy(
+    database: Any,
+    *,
+    target_dataset_id: str,
+    donor_dataset_id: str,
+    snapshot_id: str,
+) -> dict[str, Any]:
+    target_frame = database["snapshot_frames"].find_one(
+        {"datasetId": target_dataset_id, "snapshotId": snapshot_id}
+    )
+    if target_frame:
+        return {
+            "ok": False,
+            "snapshotId": snapshot_id,
+            "targetDatasetId": target_dataset_id,
+            "donorDatasetId": donor_dataset_id,
+            "error": "target_frame_already_exists",
+        }
+    target_record = database["snapshot_records"].find_one(
+        {"datasetId": target_dataset_id, "snapshotId": snapshot_id}
+    )
+    if target_record:
+        return {
+            "ok": False,
+            "snapshotId": snapshot_id,
+            "targetDatasetId": target_dataset_id,
+            "donorDatasetId": donor_dataset_id,
+            "error": "target_record_already_exists",
+        }
+    donor_record = database["snapshot_records"].find_one(
+        {"datasetId": donor_dataset_id, "snapshotId": snapshot_id}
+    )
+    donor_frame = database["snapshot_frames"].find_one(
+        {"datasetId": donor_dataset_id, "snapshotId": snapshot_id}
+    )
+    if not donor_record or not donor_frame:
+        return {
+            "ok": False,
+            "snapshotId": snapshot_id,
+            "targetDatasetId": target_dataset_id,
+            "donorDatasetId": donor_dataset_id,
+            "error": "donor_snapshot_not_found",
+        }
+    donor_stock_rows = int(
+        database["snapshot_stock_rows"].count_documents(
+            {"datasetId": donor_dataset_id, "snapshotId": snapshot_id}
+        )
+    )
+    donor_sector_rows = int(
+        database["snapshot_sector_rows"].count_documents(
+            {"datasetId": donor_dataset_id, "snapshotId": snapshot_id}
+        )
+    )
+    return {
+        "ok": donor_stock_rows > 0,
+        "snapshotId": snapshot_id,
+        "targetDatasetId": target_dataset_id,
+        "donorDatasetId": donor_dataset_id,
+        "type": donor_frame.get("type"),
+        "tradingDate": donor_frame.get("tradingDate"),
+        "slotTime": donor_frame.get("slotTime"),
+        "timestamp": donor_frame.get("timestamp"),
+        "stockRowsToCopy": donor_stock_rows,
+        "sectorRowsToCopy": donor_sector_rows,
+        **({} if donor_stock_rows > 0 else {"error": "donor_has_no_stock_rows"}),
+    }
 
 
 def _resolve_donor_frame(
@@ -477,9 +592,139 @@ def _build_slot_frame_from_donor(donor: dict[str, Any], plan: dict[str, Any]) ->
     }
 
 
-def _clone_row(row: dict[str, Any], target: dict[str, Any]) -> dict[str, Any]:
+def _apply_cross_dataset_slot_copy(
+    database: Any,
+    *,
+    target_dataset_id: str,
+    donor_dataset_id: str,
+    plan: dict[str, Any],
+) -> dict[str, Any]:
+    snapshot_id = str(plan["snapshotId"])
+    donor_record = database["snapshot_records"].find_one(
+        {"datasetId": donor_dataset_id, "snapshotId": snapshot_id}
+    )
+    donor_frame = database["snapshot_frames"].find_one(
+        {"datasetId": donor_dataset_id, "snapshotId": snapshot_id}
+    )
+    if not donor_record or not donor_frame:
+        raise ValueError(f"donor snapshot not found: {donor_dataset_id}:{snapshot_id}")
+
+    repair_metadata = {
+        "sourceDatasetId": donor_dataset_id,
+        "sourceSnapshotId": snapshot_id,
+        "reason": "target shadow slot was missing; copied from same-slot live facts",
+        "createdAt": datetime.now(UTC).replace(tzinfo=None).isoformat(),
+    }
+    target_record = _clone_snapshot_doc(
+        donor_record,
+        target_dataset_id=target_dataset_id,
+        repair_metadata=repair_metadata,
+        quality_flag="copied_from_donor_dataset",
+    )
+    target_frame = _clone_snapshot_doc(
+        donor_frame,
+        target_dataset_id=target_dataset_id,
+        repair_metadata=repair_metadata,
+        quality_flag="copied_from_donor_dataset",
+    )
+    stock_rows = [
+        _clone_row(row, target_frame, target_dataset_id=target_dataset_id)
+        for row in database["snapshot_stock_rows"].find(
+            {"datasetId": donor_dataset_id, "snapshotId": snapshot_id}
+        )
+    ]
+    sector_rows = [
+        _clone_row(row, target_frame, target_dataset_id=target_dataset_id)
+        for row in database["snapshot_sector_rows"].find(
+            {"datasetId": donor_dataset_id, "snapshotId": snapshot_id}
+        )
+    ]
+    target_record["stockRowCount"] = len(stock_rows)
+    target_record["sectorRowCount"] = len(sector_rows)
+    target_frame["stockRowCount"] = len(stock_rows)
+    target_frame["sectorRowCount"] = len(sector_rows)
+
+    try:
+        database["snapshot_records"].insert_many([target_record], ordered=False)
+        database["snapshot_frames"].insert_many([target_frame], ordered=False)
+        if stock_rows:
+            database["snapshot_stock_rows"].insert_many(stock_rows, ordered=False)
+        if sector_rows:
+            database["snapshot_sector_rows"].insert_many(sector_rows, ordered=False)
+    except Exception:
+        _rollback_cross_dataset_slot_copy(database, target_dataset_id, snapshot_id)
+        raise
+    return {
+        "snapshotId": snapshot_id,
+        "donorDatasetId": donor_dataset_id,
+        "insertedRecords": 1,
+        "insertedFrames": 1,
+        "insertedStockRows": len(stock_rows),
+        "insertedSectorRows": len(sector_rows),
+    }
+
+
+def _rollback_cross_dataset_slot_copy(database: Any, target_dataset_id: str, snapshot_id: str) -> None:
+    query = {"datasetId": target_dataset_id, "snapshotId": snapshot_id}
+    for collection_name in (
+        "snapshot_stock_rows",
+        "snapshot_sector_rows",
+        "snapshot_frames",
+        "snapshot_records",
+    ):
+        database[collection_name].delete_many(query)
+
+
+def _clone_snapshot_doc(
+    row: dict[str, Any],
+    *,
+    target_dataset_id: str,
+    repair_metadata: dict[str, Any],
+    quality_flag: str | None = None,
+) -> dict[str, Any]:
+    cloned = {key: value for key, value in row.items() if key != "_id"}
+    cloned["datasetId"] = target_dataset_id
+    metadata = dict(cloned.get("metadata") or {})
+    metadata["repair"] = repair_metadata
+    cloned["metadata"] = metadata
+    if quality_flag:
+        quality_flags = list(cloned.get("qualityFlags") or [])
+        if quality_flag not in quality_flags:
+            quality_flags.append(quality_flag)
+        cloned["qualityFlags"] = quality_flags
+    return cloned
+
+
+def _clone_snapshot_doc(
+    row: dict[str, Any],
+    *,
+    target_dataset_id: str,
+    repair_metadata: dict[str, Any],
+    quality_flag: str | None = None,
+) -> dict[str, Any]:
+    cloned = {key: value for key, value in row.items() if key != "_id"}
+    cloned["datasetId"] = target_dataset_id
+    metadata = dict(cloned.get("metadata") or {})
+    metadata["repair"] = repair_metadata
+    cloned["metadata"] = metadata
+    if quality_flag:
+        quality_flags = list(cloned.get("qualityFlags") or [])
+        if quality_flag not in quality_flags:
+            quality_flags.append(quality_flag)
+        cloned["qualityFlags"] = quality_flags
+    return cloned
+
+
+def _clone_row(
+    row: dict[str, Any],
+    target: dict[str, Any],
+    *,
+    target_dataset_id: str | None = None,
+) -> dict[str, Any]:
     cloned = {key: value for key, value in row.items() if key != "_id"}
     snapshot_id = str(target.get("snapshotId") or "")
+    if target_dataset_id:
+        cloned["datasetId"] = target_dataset_id
     cloned["snapshotId"] = snapshot_id
     cloned["type"] = target.get("type")
     cloned["tradingDate"] = target.get("tradingDate")
@@ -762,6 +1007,33 @@ def _write_audit(database: Any, dataset_id: str, applied: dict[str, Any]) -> Non
                 "idempotencyKey": f"mongodb_snapshot_repair:{dataset_id}:{datetime.now(UTC).isoformat()}",
                 "createdAt": datetime.now(UTC).replace(tzinfo=None),
                 "datasetId": dataset_id,
+                "applied": applied,
+            }
+        ],
+        ordered=False,
+    )
+
+
+def _write_slot_copy_audit(
+    database: Any,
+    *,
+    target_dataset_id: str,
+    donor_dataset_id: str,
+    applied: list[dict[str, Any]],
+) -> None:
+    now = datetime.now(UTC)
+    snapshot_key = ",".join(str(row.get("snapshotId")) for row in applied)
+    database["migration_audit"].insert_many(
+        [
+            {
+                "opType": "mongodb_snapshot_slot_copy",
+                "idempotencyKey": (
+                    f"mongodb_snapshot_slot_copy:{target_dataset_id}:"
+                    f"{donor_dataset_id}:{snapshot_key}:{now.isoformat()}"
+                ),
+                "createdAt": now.replace(tzinfo=None),
+                "targetDatasetId": target_dataset_id,
+                "donorDatasetId": donor_dataset_id,
                 "applied": applied,
             }
         ],

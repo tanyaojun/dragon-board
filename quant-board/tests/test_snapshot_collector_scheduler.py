@@ -157,15 +157,17 @@ def _patch_service_factory_repo(monkeypatch: pytest.MonkeyPatch, fake_repo: Fake
     )
 
 
-def _patch_service_factory_service(fake_service: FakeService) -> None:
-    """Inject create_snapshot_collector_service onto the service_factory module.
+def _patch_service_factory_service(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_service: FakeService,
+) -> None:
+    """Inject a fake ``create_snapshot_collector_service``.
 
-    Uses direct module attribute assignment because this function does not
-    exist yet in service_factory.py — monkeypatch.setattr requires the
-    attribute to already exist.
+    Use monkeypatch so full-suite runs restore the factory after each test.
     """
     import backend.snapshot_collector.service_factory as sf
-    sf.create_snapshot_collector_service = lambda repo: fake_service
+
+    monkeypatch.setattr(sf, "create_snapshot_collector_service", lambda repo: fake_service)
 
 
 def _patch_collect_slot_imports(
@@ -175,7 +177,7 @@ def _patch_collect_slot_imports(
 ) -> None:
     """Patch all lazy imports used by _collect_slot."""
     _patch_service_factory_repo(monkeypatch, fake_repo)
-    _patch_service_factory_service(fake_service)
+    _patch_service_factory_service(monkeypatch, fake_service)
 
 
 def _make_settings(**overrides: Any):
@@ -414,6 +416,31 @@ class TestSnapshotCollectorScheduler:
         assert status["collection_count"] == 0
         assert status["error_count"] == 0
 
+    @pytest.mark.asyncio
+    async def test_finished_task_is_not_reported_running_and_can_restart(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A dead poll loop must not leave the scheduler permanently stuck."""
+        from backend.snapshot_collector.scheduler import SnapshotCollectorScheduler
+
+        fake_settings = _make_settings()
+        monkeypatch.setattr(
+            "backend.snapshot_collector.scheduler.get_settings",
+            lambda: fake_settings,
+        )
+
+        scheduler = SnapshotCollectorScheduler()
+        scheduler._task = asyncio.create_task(asyncio.sleep(0))
+        await scheduler._task
+
+        assert scheduler.status()["running"] is False
+
+        scheduler.start()
+        assert scheduler._task is not None
+        assert scheduler._task.done() is False
+        await scheduler.stop()
+
     # ── _poll_once dispatch ──────────────────────────────────────────────
 
     @pytest.mark.asyncio
@@ -534,6 +561,49 @@ class TestSnapshotCollectorScheduler:
         assert len(fake_service.calls) == 0
 
     @pytest.mark.asyncio
+    async def test_poll_once_skips_persisted_slots_before_dispatch(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """_poll_once checks persisted snapshots before creating a task."""
+        from backend.snapshot_collector.scheduler import SnapshotCollectorScheduler
+
+        fake_settings = _make_settings()
+        monkeypatch.setattr(
+            "backend.snapshot_collector.scheduler.get_settings",
+            lambda: fake_settings,
+        )
+
+        s = SnapshotCollectorScheduler()
+        slot = make_test_slot()
+
+        monkeypatch.setattr(
+            "backend.snapshot_collector.trading_calendar.trading_date_from_ts",
+            lambda ts: "2026-06-15",
+        )
+        monkeypatch.setattr(
+            "backend.snapshot_collector.slots.generate_slots",
+            lambda date, types: [slot],
+        )
+        monkeypatch.setattr(
+            "backend.snapshot_collector.slots.is_slot_eligible",
+            lambda now_ts, slot_, grace_minutes=5: True,
+        )
+
+        fake_repo = FakeRepo(existing_snapshots={slot.snapshot_id})
+        fake_service = FakeService()
+        _patch_collect_slot_imports(monkeypatch, fake_repo, fake_service)
+
+        created_tasks: list[Any] = []
+        monkeypatch.setattr(
+            "backend.snapshot_collector.scheduler.asyncio.create_task",
+            lambda coro: created_tasks.append(coro),
+        )
+
+        await s._poll_once()
+
+        assert created_tasks == []
+        assert len(fake_service.calls) == 0
+        assert slot.snapshot_id not in s._in_flight_slots
+
+    @pytest.mark.asyncio
     async def test_poll_once_skips_ineligible_slots(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """_poll_once does not dispatch slots that fail the eligibility check."""
         from backend.snapshot_collector.scheduler import SnapshotCollectorScheduler
@@ -650,6 +720,8 @@ class TestSnapshotCollectorScheduler:
         await s._collect_slot(slot)
 
         assert s._error_count == 1
+        assert s._last_error is not None
+        assert "Simulated MongoDB error" in s._last_error
         # Finally block always cleans up in_flight_slots
         assert slot.snapshot_id not in s._in_flight_slots
 

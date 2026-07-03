@@ -126,7 +126,7 @@ function canDeriveSectorEntityType(
       : ({} as Record<string, any>)
 
   if (entityType === 'sector') {
-    return Array.isArray(payload.sectors) || Array.isArray(buildContext?.jxbkBlocks)
+    return Array.isArray(payload.sectors)
   }
   if (entityType === 'hot_theme') {
     return Array.isArray(payload.hotThemes) || Array.isArray(buildContext?.hotThemes)

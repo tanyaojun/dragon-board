@@ -152,7 +152,7 @@ daily:        15:00
 - 根据槽位表生成待采集 slot。
 - 支持 `quarter_hour`、`half_hour`、`hourly`、`daily`。
 - 支持交易日判断、午休、节假日、15:00 close slot grace window。
-- 每次触发前先查询 MongoDB 是否已有 `datasetId + snapshotId`。
+- 每次触发前先查询 MongoDB 是否已有 `datasetId + snapshotId`；已存在 slot 不创建后台采集任务。
 - 防止同一 slot 并发采集。
 - 支持影子 dataset 和正式 dataset 分离。
 - 维护最近运行状态，供 API 查询。
@@ -176,6 +176,9 @@ daily:        15:00
 - `QUANT_BOARD_SNAPSHOT_COLLECTOR_PROXY_BASE_URL=http://127.0.0.1:3000`。
 - `QUANT_BOARD_SNAPSHOT_COLLECTOR_BRIDGE_BASE_URL=http://127.0.0.1:8765`。
 - `QUANT_BOARD_SNAPSHOT_COLLECTOR_PROVIDER_TIMEOUT_MS=5000`。
+  Correction note (2026-06-23): two-day shadow/live audit showed the
+  proxy EastMoney quote path can exceed 5s while exercising fallback/cache
+  paths, so the runtime default was raised to `30000`.
 - `QUANT_BOARD_SNAPSHOT_COLLECTOR_ALLOW_LIVE_DATASET=0`。额外安全开关，即使 `ENABLED=1` 且 `DATASET_ID=dragonboard_live`，也必须在 `ALLOW_LIVE_DATASET=1` 时才会真正写入正式数据集；防止误配置直接污染生产数据。
 
 ### `snapshot_collector.providers`
@@ -184,9 +187,11 @@ daily:        15:00
 
 短期 Provider：
 
-- `ProxyHotlistProvider`: 调用 `proxy-server` 热榜接口，复用现有八平台热榜能力。
-- `ProxyMarketProvider`: 调用 `proxy-server` 市场概览、情绪、涨停池、资金流等接口。
-- `BridgeQuoteProvider`: 调用 `python-bridge` 新增或既有接口获取当前行情、depth、tick、money flow。
+- `StartupBundleStockProvider`: 优先读取 proxy-server startup bundle，复用 live 前端写入的完整 merged stocks。
+- `ProxyMergedHotlistProvider`: startup bundle 缺失时调用 `proxy-server` 八个平台热榜接口做 union fallback，保持 shadow 股票覆盖不退回单平台 top100。
+- `ProxyHotlistProvider`: 调用 `proxy-server` 单平台热榜接口，仅作为诊断 provider 保留。
+- `ProxyQuoteProvider` (当前默认，**过渡方案**): 调用 `proxy-server` EastMoney 行情端点 `GET /api/quotes/eastmoney?codes=...`，获取实时行情和资金流数据。返回 `{quotes, depth: [], money_flow, market_meta}`，其中 money_flow 的 `mediumNetInflow` 由 EastMoney 字段推导。depth 固定为空（proxy-server 无盘口端点）。proxy-server 返回 `ok=false` 或 `degraded=true` 的降级信封时，本 provider 必须返回 `SourceHealth(ok=false)`，避免把降级 HTTP 200 误判为健康行情。**这是临时过渡配置：生产口径应使用 `BridgeQuoteProvider` 作为主 quote 源（通过 python-bridge 获取 TDX 实时行情和五档盘口），`ProxyQuoteProvider` 仅作为 bridge 离线时的 fallback。**`service_factory.py` 当前只挂载 `ProxyQuoteProvider`，不挂载 `BridgeQuoteProvider`，是 Phase 4 验证阶段的临时安排。
+- `BridgeQuoteProvider`: 调用 `python-bridge` 新增或既有接口获取当前行情、depth、tick、money flow。保留用于需要 bridge WebSocket pool 模式的场景。
 - `ThemeMappingProvider`: 直接通过 QuantBoard MongoDB 题材集合读取题材映射。
 - `StockNameProvider`: 读取 MongoDB `stock_names`，补充名称和基础状态。
 
@@ -336,6 +341,10 @@ GET /api/quotes/snapshot
   "deduped": false,
   "source": "quantboard_backend_collector",
   "sourceHealth": [],
+  "captureMode": "real_time",
+  "stockRowCount": 120,
+  "frameCount": 1,
+  "sectorRowCount": 4,
   "quality": {},
   "startedAt": "2026-06-11T15:00:01+08:00",
   "finishedAt": "2026-06-11T15:00:04+08:00",
@@ -398,7 +407,7 @@ POST /api/snapshot-collector/audit
 - 默认 dry-run。
 - 可传日期范围、类型、目标 dataset。
 - 不替代现有 `backfill-empty-mongodb-snapshots`，后者仍是 MongoDB 事实层修复工具。
-- 日期范围按 `startDate` 和 `endDate` 闭区间生成目标 slot，不允许隐式扩大范围。
+- 日期范围按 `startDate` 和 `endDate` 闭区间生成目标 slot，不允许隐式扩大范围；周末和已知节假日会被跳过。
 - `force=false` 时已有 slot 必须跳过并返回 `deduped` 或 `skipped_existing`。
 - `dryRun=true` 必须完整执行 slot 生成、provider 读取、builder、normalizer 和质量门禁，但不得写事实集合。
 - `apply` 模式只写缺失且通过质量门禁的 slot。
@@ -498,6 +507,8 @@ cd quant-board
 - 在 Phase 1 的 `GET /api/quotes/snapshot?codes=...` 基础上增加后端维护的采样池。
 - 支持批量 codes、缓存状态、失败降级和行情陈旧标记。
 - QuantBoard `BridgeQuoteProvider` 使用稳定订阅池而不是每次临时拼接。
+- QuantBoard `BridgeQuoteProvider` 使用稳定订阅池而不是每次临时拼接。
+- QuantBoard `ProxyQuoteProvider` 已落地，通过 proxy-server EastMoney 端点获取实时行情和资金流数据，写入 `MarketDataContext.money_flow`，由 builder 的 `_enrich_stock_rows_from_quotes()` 充实 stock rows。**这是过渡方案，不是生产口径。**生产口径应挂载 `BridgeQuoteProvider` 作为主 quote 源（具备 depth 和 TDX 实时行情），`ProxyQuoteProvider` 降级为 fallback。截至 Phase 4，`service_factory.py` 仍只挂载 `ProxyQuoteProvider`，depth 恒为空。
 
 验收：
 
@@ -566,6 +577,11 @@ cd quant-board
 - 连续至少 2 个完整交易日 shadow 无缺槽、无空帧、无 record 缺失、无计数漂移。
 - 15:00 `half_hour` 和 `daily` 稳定完整。
 - shadow 的关键字段缺失率有结构化报告。
+
+已知限制（Phase 4 范围外，待 BridgeQuoteProvider 挂载后解决）：
+
+- `depth` 字段缺失率为 100%（`ProxyQuoteProvider` 恒返回空列表）。这会导致 shadow vs live 的 depth 对比无意义，审计报告必须显式标注此口径差异。
+- 题材运行时、市场情绪、涨停池等辅助数据域在后端 collector 中无对应 provider，shadow 快照在这些维度上弱于前端 live 快照。这些缺口不影响 Phase 4 的槽位完整性验收，但在讨论 live cutover 之前必须补齐。
 
 ### Phase 5: Dragon Board 前端生产职责退役
 

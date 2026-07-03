@@ -12,6 +12,7 @@ class FakeCollection:
     def __init__(self, rows: list[dict[str, object]] | None = None) -> None:
         self.rows = rows or []
         self.indexes: list[dict[str, object]] = []
+        self.fail_insert_many = False
 
     def count_documents(self, query: dict[str, object]) -> int:
         return len(self.find(query))
@@ -25,6 +26,8 @@ class FakeCollection:
 
     def insert_many(self, rows: list[dict[str, object]], ordered: bool = False) -> None:
         assert ordered is False
+        if self.fail_insert_many:
+            raise RuntimeError("insert_many failed")
         self.rows.extend(rows)
 
     def update_one(self, query: dict[str, object], update: dict[str, object]) -> None:
@@ -32,6 +35,11 @@ class FakeCollection:
         if row is None:
             return
         row.update(update.get("$set", {}))  # type: ignore[arg-type]
+
+    def delete_many(self, query: dict[str, object]) -> DeleteResult:
+        before = len(self.rows)
+        self.rows = [row for row in self.rows if not _matches(row, query)]
+        return DeleteResult(before - len(self.rows))
 
     def index_information(self) -> dict[str, dict[str, object]]:
         return {
@@ -546,6 +554,149 @@ def test_snapshot_backfill_apply_creates_missing_runtime_indexes() -> None:
     assert [("backtestRunId", 1), ("sequence", 1)] in backtest_equity_keys
 
 
+def test_copy_missing_slot_cli_parses_as_dry_run_by_default() -> None:
+    from backend.cli import build_parser
+
+    args = build_parser().parse_args(
+        [
+            "copy-missing-mongodb-snapshot-slots",
+            "--target-dataset-id",
+            "dragonboard_backend_shadow",
+            "--donor-dataset-id",
+            "dragonboard_live",
+            "--snapshot-id",
+            "half_hour:2026-06-22:15:00",
+        ]
+    )
+
+    assert args.func.__name__ == "cmd_copy_missing_mongodb_snapshot_slots"
+    assert args.target_dataset_id == "dragonboard_backend_shadow"
+    assert args.donor_dataset_id == "dragonboard_live"
+    assert args.snapshot_id == ["half_hour:2026-06-22:15:00"]
+    assert args.apply is False
+
+
+def test_copy_missing_slot_dry_run_plans_live_donor_without_writing() -> None:
+    copy_missing_snapshot_slots_from_dataset = _load_slot_copy()
+    db = _seed_cross_dataset_slot_database()
+
+    result = copy_missing_snapshot_slots_from_dataset(
+        db,
+        target_dataset_id="dragonboard_backend_shadow",
+        donor_dataset_id="dragonboard_live",
+        snapshot_ids=["half_hour:2026-06-22:15:00"],
+        apply=False,
+    )
+
+    assert result["ok"] is True
+    assert result["plans"][0]["donorDatasetId"] == "dragonboard_live"
+    assert result["plans"][0]["targetDatasetId"] == "dragonboard_backend_shadow"
+    assert result["plans"][0]["stockRowsToCopy"] == 2
+    assert db["snapshot_frames"].count_documents(
+        {
+            "datasetId": "dragonboard_backend_shadow",
+            "snapshotId": "half_hour:2026-06-22:15:00",
+        }
+    ) == 0
+
+
+def test_copy_missing_slot_apply_creates_target_facts_and_audit() -> None:
+    copy_missing_snapshot_slots_from_dataset = _load_slot_copy()
+    db = _seed_cross_dataset_slot_database()
+
+    result = copy_missing_snapshot_slots_from_dataset(
+        db,
+        target_dataset_id="dragonboard_backend_shadow",
+        donor_dataset_id="dragonboard_live",
+        snapshot_ids=["half_hour:2026-06-22:15:00"],
+        apply=True,
+    )
+
+    assert result["ok"] is True
+    assert result["applied"][0]["insertedStockRows"] == 2
+    frame = db["snapshot_frames"].find_one(
+        {
+            "datasetId": "dragonboard_backend_shadow",
+            "snapshotId": "half_hour:2026-06-22:15:00",
+        }
+    )
+    assert frame["stockRowCount"] == 2
+    assert frame["metadata"]["repair"]["sourceDatasetId"] == "dragonboard_live"
+    assert "copied_from_donor_dataset" in frame["qualityFlags"]
+    rows = db["snapshot_stock_rows"].find(
+        {
+            "datasetId": "dragonboard_backend_shadow",
+            "snapshotId": "half_hour:2026-06-22:15:00",
+        }
+    )
+    assert [row["rowId"] for row in rows] == [
+        "half_hour:2026-06-22:15:00:000001",
+        "half_hour:2026-06-22:15:00:000002",
+    ]
+    assert db["datasets"].find_one({"id": "dragonboard_backend_shadow"})["frameCount"] == 1
+    assert db["datasets"].find_one({"id": "dragonboard_backend_shadow"})["stockRowCount"] == 2
+    assert db["migration_audit"].rows[-1]["opType"] == "mongodb_snapshot_slot_copy"
+
+
+def test_copy_missing_slot_apply_rolls_back_target_docs_when_row_insert_fails() -> None:
+    copy_missing_snapshot_slots_from_dataset = _load_slot_copy()
+    db = _seed_cross_dataset_slot_database()
+    db["snapshot_stock_rows"].fail_insert_many = True
+
+    try:
+        copy_missing_snapshot_slots_from_dataset(
+            db,
+            target_dataset_id="dragonboard_backend_shadow",
+            donor_dataset_id="dragonboard_live",
+            snapshot_ids=["half_hour:2026-06-22:15:00"],
+            apply=True,
+        )
+    except RuntimeError as exc:
+        assert str(exc) == "insert_many failed"
+    else:
+        raise AssertionError("expected row insert failure")
+
+    target_query = {
+        "datasetId": "dragonboard_backend_shadow",
+        "snapshotId": "half_hour:2026-06-22:15:00",
+    }
+    assert db["snapshot_records"].count_documents(target_query) == 0
+    assert db["snapshot_frames"].count_documents(target_query) == 0
+
+    db["snapshot_stock_rows"].fail_insert_many = False
+    result = copy_missing_snapshot_slots_from_dataset(
+        db,
+        target_dataset_id="dragonboard_backend_shadow",
+        donor_dataset_id="dragonboard_live",
+        snapshot_ids=["half_hour:2026-06-22:15:00"],
+        apply=False,
+    )
+
+    assert result["ok"] is True
+
+
+def test_copy_missing_slot_apply_marks_target_record_with_copied_quality_flag() -> None:
+    copy_missing_snapshot_slots_from_dataset = _load_slot_copy()
+    db = _seed_cross_dataset_slot_database()
+
+    result = copy_missing_snapshot_slots_from_dataset(
+        db,
+        target_dataset_id="dragonboard_backend_shadow",
+        donor_dataset_id="dragonboard_live",
+        snapshot_ids=["half_hour:2026-06-22:15:00"],
+        apply=True,
+    )
+
+    assert result["ok"] is True
+    record = db["snapshot_records"].find_one(
+        {
+            "datasetId": "dragonboard_backend_shadow",
+            "snapshotId": "half_hour:2026-06-22:15:00",
+        }
+    )
+    assert "copied_from_donor_dataset" in record["qualityFlags"]
+
+
 def _seed_database() -> FakeMongoDatabase:
     return FakeMongoDatabase(
         {
@@ -624,6 +775,79 @@ def _seed_database() -> FakeMongoDatabase:
     )
 
 
+def _seed_cross_dataset_slot_database() -> FakeMongoDatabase:
+    return FakeMongoDatabase(
+        {
+            "datasets": FakeCollection(
+                [
+                    {"id": "dragonboard_live", "frameCount": 1, "stockRowCount": 2},
+                    {"id": "dragonboard_backend_shadow", "frameCount": 0, "stockRowCount": 0},
+                ]
+            ),
+            "snapshot_records": FakeCollection(
+                [
+                    {
+                        "datasetId": "dragonboard_live",
+                        "snapshotId": "half_hour:2026-06-22:15:00",
+                        "type": "half_hour",
+                        "tradingDate": "2026-06-22",
+                        "slotTime": "15:00",
+                        "timestamp": 300,
+                        "stockRowCount": 2,
+                        "sectorRowCount": 0,
+                        "metadata": {"source": "live"},
+                    },
+                ]
+            ),
+            "snapshot_frames": FakeCollection(
+                [
+                    {
+                        "datasetId": "dragonboard_live",
+                        "snapshotId": "half_hour:2026-06-22:15:00",
+                        "type": "half_hour",
+                        "tradingDate": "2026-06-22",
+                        "slotTime": "15:00",
+                        "timestamp": 300,
+                        "displayKey": "half_hour:2026-06-22:15:00",
+                        "stockRowCount": 2,
+                        "sectorRowCount": 0,
+                        "metadata": {"source": "live"},
+                        "qualityFlags": [],
+                    },
+                ]
+            ),
+            "snapshot_stock_rows": FakeCollection(
+                [
+                    {
+                        "datasetId": "dragonboard_live",
+                        "snapshotId": "half_hour:2026-06-22:15:00",
+                        "rowId": "half_hour:2026-06-22:15:00:000001",
+                        "type": "half_hour",
+                        "tradingDate": "2026-06-22",
+                        "slotTime": "15:00",
+                        "timestamp": 300,
+                        "code": "000001",
+                        "rank": 1,
+                    },
+                    {
+                        "datasetId": "dragonboard_live",
+                        "snapshotId": "half_hour:2026-06-22:15:00",
+                        "rowId": "half_hour:2026-06-22:15:00:000002",
+                        "type": "half_hour",
+                        "tradingDate": "2026-06-22",
+                        "slotTime": "15:00",
+                        "timestamp": 300,
+                        "code": "000002",
+                        "rank": 2,
+                    },
+                ]
+            ),
+            "snapshot_sector_rows": FakeCollection([]),
+            "migration_audit": FakeCollection([]),
+        }
+    )
+
+
 def _matches(row: dict[str, object], query: dict[str, object]) -> bool:
     for key, expected in query.items():
         actual = row.get(key)
@@ -644,6 +868,14 @@ def _load_backfill():
     except ModuleNotFoundError as exc:  # pragma: no cover - current RED state is the point of the test
         pytest.fail(f"mongodb snapshot repair module missing: {exc}")
     return backfill_empty_snapshot_rows
+
+
+def _load_slot_copy():
+    try:
+        from backend.data.mongodb_snapshot_repair import copy_missing_snapshot_slots_from_dataset
+    except ModuleNotFoundError:
+        pytest.skip("QuantBoard backend package is not importable from this environment")
+    return copy_missing_snapshot_slots_from_dataset
 
 
 def _load_build_parser():

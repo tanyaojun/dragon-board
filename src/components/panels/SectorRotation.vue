@@ -286,6 +286,7 @@ import { dataLayer } from '@/services/DataLayer'
 import { themeFacade } from '@/services/theme/ThemeFacade'
 import { usePanel } from '@/composables/usePanel'
 import type { RotationAnalysis } from '@/types/core'
+import { useThemeRuntimeSnapshot } from '@/composables/useThemeRuntimeSnapshot'
 
 const props = defineProps<{
   visible: boolean
@@ -305,6 +306,7 @@ const version = '5.0.0'
 const view = ref<'overview' | 'main' | 'strong' | 'inflow' | 'outflow'>('overview')
 const loading = ref(false)
 const error = ref<string | null>(null)
+const themeRuntime = useThemeRuntimeSnapshot()
 
 // ========== 面板位置 ==========
 const { panelRef, panelStyle } = usePanel({
@@ -320,7 +322,7 @@ const { panelRef, panelStyle } = usePanel({
 // 轮动数据
 const rotationData = computed(() => {
   const state = (dataLayer as any).state
-  return themeFacade.getRotationSummary() || (state?.analysis?.rotation?.current as RotationAnalysis | null)
+  return themeRuntime.value.rotationSummary || themeFacade.getRotationSummary() || (state?.analysis?.rotation?.current as RotationAnalysis | null)
 })
 
 // 数据版本

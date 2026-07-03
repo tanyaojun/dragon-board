@@ -41,11 +41,14 @@ describe('architecture boundaries', () => {
     expect(source).toMatch(/const getStockThemes[\s\S]*stock\.tags[\s\S]*removeDuplicateThemes/)
   })
 
-  test('keeps JxbkThemeFeed from dynamically importing ThemeFacade', () => {
-    const feedPath = join(srcRoot, 'services', 'theme', 'JxbkThemeFeed.ts')
-    const source = readFileSync(feedPath, 'utf8')
+  test('keeps retired theme block and port 5000 contracts out of production source', () => {
+    const productionSource = collectSourceFiles(srcRoot)
+      .filter((file) => !file.includes(`${join('src', 'services', '__tests__')}`))
+      .filter((file) => !file.includes(`${join('__tests__')}`))
+      .map((file) => readFileSync(file, 'utf8'))
+      .join('\n')
 
-    expect(source).not.toContain("import('./ThemeFacade')")
-    expect(source).not.toContain('import("./ThemeFacade")')
+    expect(productionSource).not.toMatch(/Jxbk|jxbk|JXBK|localhost:5000|PROXY_5000/)
+    expect(productionSource).not.toMatch(/getHotBlockList|getBlockStockList|getTradeDayList/)
   })
 })

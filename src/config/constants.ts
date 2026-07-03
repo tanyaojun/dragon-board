@@ -96,7 +96,6 @@ export const API_CONFIG = {
   // ===== 代理服务器配置 =====
   PROXIES: {
     PROXY_3000: 'http://localhost:3000', // 热榜、行情代理（有源码）
-    PROXY_5000: 'http://localhost:5000', // 题材数据代理（只有EXE）
     QUANT_BOARD: SAME_ORIGIN_API_BASE, // 通过 3000/Vite 同源代理访问 QuantBoard 后端
   },
 
@@ -127,15 +126,6 @@ export const API_CONFIG = {
       cacheTTL: 2000,
       priority: 'high' as const,
       batchSize: 20,
-    },
-    // 题材数据 - 走5000
-    THEME: {
-      baseURL: 'http://localhost:5000',
-      timeout: 10000,
-      retries: 3,
-      cacheTTL: 300000,
-      priority: 'low' as const,
-      batchSize: 10,
     },
     // 情绪数据 - 走3000
     BREATH: {
@@ -203,17 +193,6 @@ export const API_CONFIG = {
       TENCENT: '/api/quotes/tencent',
       EASTMONEY: '/api/quotes/eastmoney',
       SINA: '/api/quotes/sina',
-    },
-    // 题材数据（5000）- jxbk专用接口
-    THEMES: {
-      // jxbk接口
-      HOT_BLOCK: '/api/get_hot_block_list',
-      HOT_BLOCK_HIS: '/api/get_hot_block_list_his',
-      BLOCK_STOCK: '/api/get_block_stock_list',
-      BLOCK_STOCK_HIS: '/api/get_block_stock_list_his',
-      TRADEDAY: '/api/get_tradeday_list',
-
-      // 旧 proxy-server 题材接口已软废弃，正式读口走 QuantBoard /api/themes/mapping。
     },
     // 涨停数据（3000）
     LIMITUP: {
