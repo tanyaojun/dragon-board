@@ -41,7 +41,10 @@ function createDefaultBuildContext(overrides: Partial<SnapshotBuildContext> = {}
   }
 }
 
-function createRuntime(buildContext: Partial<SnapshotBuildContext> = {}) {
+function createRuntime(
+  buildContext: Partial<SnapshotBuildContext> = {},
+  options: { enableFormalSnapshotSweep?: boolean } = {},
+) {
   vi.stubGlobal('localStorage', createMemoryStorage())
   return new SnapshotRuntime({
     logger: {
@@ -54,6 +57,7 @@ function createRuntime(buildContext: Partial<SnapshotBuildContext> = {}) {
     primaryDbVersion: 1,
     primaryStoreName: 'snapshots',
     enableIndexedDbSnapshotCache: true,
+    enableFormalSnapshotSweep: options.enableFormalSnapshotSweep,
     legacyBackupDbName: 'test-backup',
     bucketBackupDbName: 'test-bucket-backup',
     backupDbVersion: 1,
@@ -401,6 +405,42 @@ describe('SnapshotRuntime', () => {
     expect(buildSnapshotBackendIngestIdempotencyKey(first)).toBe(
       buildSnapshotBackendIngestIdempotencyKey(second),
     )
+  })
+
+  it('does not start formal snapshot sweep by default', () => {
+    const runtime = createRuntime()
+    const startTimer = vi.spyOn(runtime, 'startTimer')
+    vi.spyOn(runtime as any, 'ensurePersistentStorage').mockResolvedValue(undefined)
+    vi.spyOn(runtime as any, 'cleanupLegacyPlainBackupDatabase').mockResolvedValue(undefined)
+    vi.spyOn(runtime as any, 'migrateLegacyBucketBackupDatabase').mockResolvedValue(undefined)
+    vi.spyOn(runtime as any, 'cleanupInvalidRuntimeSnapshots').mockResolvedValue(undefined)
+    vi.spyOn(runtime as any, 'initializeSnapshotGuard').mockResolvedValue(undefined)
+    vi.spyOn(runtime as any, 'startSnapshotAutoSync').mockImplementation(() => {})
+    vi.spyOn(runtime as any, 'scheduleProjectionBackfill').mockImplementation(() => {})
+
+    runtime.start()
+
+    expect(startTimer).not.toHaveBeenCalled()
+
+    runtime.stop()
+  })
+
+  it('can explicitly start formal snapshot sweep for diagnostics', () => {
+    const runtime = createRuntime({}, { enableFormalSnapshotSweep: true })
+    const startTimer = vi.spyOn(runtime, 'startTimer').mockImplementation(() => {})
+    vi.spyOn(runtime as any, 'ensurePersistentStorage').mockResolvedValue(undefined)
+    vi.spyOn(runtime as any, 'cleanupLegacyPlainBackupDatabase').mockResolvedValue(undefined)
+    vi.spyOn(runtime as any, 'migrateLegacyBucketBackupDatabase').mockResolvedValue(undefined)
+    vi.spyOn(runtime as any, 'cleanupInvalidRuntimeSnapshots').mockResolvedValue(undefined)
+    vi.spyOn(runtime as any, 'initializeSnapshotGuard').mockResolvedValue(undefined)
+    vi.spyOn(runtime as any, 'startSnapshotAutoSync').mockImplementation(() => {})
+    vi.spyOn(runtime as any, 'scheduleProjectionBackfill').mockImplementation(() => {})
+
+    runtime.start()
+
+    expect(startTimer).toHaveBeenCalledTimes(1)
+
+    runtime.stop()
   })
 
   it('collects pending scheduled slots by checking MongoDB existence first', async () => {

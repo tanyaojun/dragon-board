@@ -80,6 +80,7 @@ interface SnapshotRuntimeDeps {
   primaryDbVersion: number
   primaryStoreName: string
   enableIndexedDbSnapshotCache?: boolean
+  enableFormalSnapshotSweep?: boolean
   legacyBackupDbName: string
   bucketBackupDbName: string
   backupDbVersion: number
@@ -109,6 +110,7 @@ export class SnapshotRuntime {
   private static readonly HOURLY_BACKFILL_WINDOW_MS = 65 * 60 * 1000
   private static readonly DAILY_BACKFILL_WINDOW_MS = 2 * 60 * 60 * 1000
   private readonly logger: Pick<Console, 'log' | 'warn' | 'error' | 'debug'>
+  private readonly enableFormalSnapshotSweep: boolean
   private readonly syncIntervalMs: number
   private readonly getBuildContext: () => SnapshotBuildContext
   private readonly getStorageBucketManager: () => any | null
@@ -141,6 +143,7 @@ export class SnapshotRuntime {
 
   constructor(deps: SnapshotRuntimeDeps) {
     this.logger = deps.logger || console
+    this.enableFormalSnapshotSweep = deps.enableFormalSnapshotSweep === true
     this.syncIntervalMs = deps.syncIntervalMs
     this.getBuildContext = deps.getBuildContext
     this.getStorageBucketManager = deps.getStorageBucketManager
@@ -207,7 +210,9 @@ export class SnapshotRuntime {
   }
 
   start() {
-    this.startTimer()
+    if (this.enableFormalSnapshotSweep) {
+      this.startTimer()
+    }
     void this.ensurePersistentStorage()
     void this.cleanupLegacyPlainBackupDatabase()
     void this.migrateLegacyBucketBackupDatabase()

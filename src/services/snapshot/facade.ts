@@ -23,6 +23,7 @@ const BACKUP_BUCKET_NAME = 'dragon-snapshot-backup'
 const SNAPSHOT_GUARD_MIN_BACKUP = 20
 const SNAPSHOT_GUARD_RATIO = 0.4
 const SNAPSHOT_SYNC_INTERVAL_MS = 5 * 60 * 1000
+const ENABLE_FORMAL_SNAPSHOT_SWEEP = import.meta.env.VITE_ENABLE_FORMAL_SNAPSHOT_SWEEP === 'true'
 type FormalSnapshotQueryOptions = Omit<SnapshotQueryOptions, 'type' | 'types'> & {
   type?: FormalSnapshotType
   types?: FormalSnapshotType[]
@@ -34,6 +35,7 @@ const snapshotRuntime = new SnapshotRuntime({
   primaryDbVersion: PRIMARY_DB_VERSION,
   primaryStoreName: PRIMARY_STORE_NAME,
   enableIndexedDbSnapshotCache: false,
+  enableFormalSnapshotSweep: ENABLE_FORMAL_SNAPSHOT_SWEEP,
   legacyBackupDbName: LEGACY_BACKUP_DB_NAME,
   bucketBackupDbName: BUCKET_BACKUP_DB_NAME,
   backupDbVersion: BACKUP_DB_VERSION,
