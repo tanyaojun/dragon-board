@@ -363,17 +363,16 @@ class TestHardBlockerTimestampOutsideSlot:
 
 
 class TestHardBlockerInvalidShadowDataset:
-    """invalid_shadow_dataset — collector writes only to the backend shadow dataset."""
+    """invalid_shadow_dataset — live writes require explicit cutover permission."""
 
     def test_live_dataset_blocked_even_when_flag_set(self) -> None:
         result = _call(dataset_id="dragonboard_live", allow_live_dataset=False)
         assert result.ok is False
         assert "invalid_shadow_dataset" in result.blocking_issues
 
-    def test_live_dataset_not_allowed_by_legacy_flag(self) -> None:
+    def test_live_dataset_allowed_by_explicit_flag(self) -> None:
         result = _call(dataset_id="dragonboard_live", allow_live_dataset=True)
-        assert result.ok is False
-        assert "invalid_shadow_dataset" in result.blocking_issues
+        assert "invalid_shadow_dataset" not in result.blocking_issues
 
     def test_shadow_dataset_passes_without_flag(self) -> None:
         result = _call(dataset_id="dragonboard_backend_shadow", allow_live_dataset=False)

@@ -53,8 +53,8 @@ def evaluate_quality(
       does not match the A-share format (6 digits starting with 0/3/6)
     * ``timestamp_outside_slot`` — *actual_timestamp_ms* is before
       *slot_timestamp_ms*
-    * ``invalid_shadow_dataset`` — *dataset_id* is not
-      ``"dragonboard_backend_shadow"``
+    * ``invalid_shadow_dataset`` — *dataset_id* is not the shadow dataset,
+      or ``dragonboard_live`` without explicit live cutover permission
 
     **Soft warnings** (informational, do NOT flip *ok*):
 
@@ -108,7 +108,9 @@ def evaluate_quality(
         blocking.append("timestamp_outside_slot")
 
     # 6. invalid_shadow_dataset
-    if dataset_id != SHADOW_DATASET_ID:
+    if dataset_id != SHADOW_DATASET_ID and not (
+        dataset_id == "dragonboard_live" and allow_live_dataset
+    ):
         blocking.append("invalid_shadow_dataset")
 
     # ── soft warnings ───────────────────────────────────────────────────────

@@ -2148,7 +2148,7 @@ max_drawdown: -0.08
 
 ### 实验性后端快照采集器 CLI
 
-以下命令属于 `backend/snapshot_collector/` 实验模块。当前默认禁用，写目标限定为 `dragonboard_backend_shadow` 数据集。命令直接输出 JSON，不做富文本格式化。
+以下命令属于 `backend/snapshot_collector/` 实验模块。当前默认禁用，写目标默认限定为 `dragonboard_backend_shadow` 数据集。Phase 6 正式切换到 `dragonboard_live` 前，必须同时设置 `QUANT_BOARD_SNAPSHOT_COLLECTOR_DATASET_ID=dragonboard_live` 与 `QUANT_BOARD_SNAPSHOT_COLLECTOR_ALLOW_LIVE_DATASET=1`；CLI 预检和 quality gate 才会放行 live 数据集，其它 dataset 仍拒绝。命令直接输出 JSON，不做富文本格式化。
 
 ### `snapshot-collector-status`
 

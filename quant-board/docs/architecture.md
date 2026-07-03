@@ -58,8 +58,8 @@ backend/snapshot_collector/
 当前状态和边界：
 
 - 默认禁用：通过 `QUANT_BOARD_SNAPSHOT_COLLECTOR_ENABLED=false` 关闭所有采集行为。
-- 写目标独立：只写入 `dragonboard_backend_shadow` 数据集（由 `QUANT_BOARD_SNAPSHOT_COLLECTOR_DATASET_ID` 控制），不得写入 `dragonboard_live` 正式主库。
-- 禁止写入 live 数据集：`QUANT_BOARD_SNAPSHOT_COLLECTOR_ALLOW_LIVE_DATASET` 默认 `false`，防止实验采集污染正式快照事实。
+- 写目标独立：默认只写入 `dragonboard_backend_shadow` 数据集（由 `QUANT_BOARD_SNAPSHOT_COLLECTOR_DATASET_ID` 控制），不得在未进入正式切换流程时写入 `dragonboard_live` 正式主库。
+- 禁止写入 live 数据集：`QUANT_BOARD_SNAPSHOT_COLLECTOR_ALLOW_LIVE_DATASET` 默认 `false`，防止实验采集污染正式快照事实；Phase 6 正式切换时必须显式设为 `true`，CLI 预检和 quality gate 才会放行 `dragonboard_live`，其它 dataset 仍拒绝。
 - Shadow-only：该采集器产出仅用于平行对照和验收，不得作为生产快照来源或 Dragon Board 正式读源。
 - 质量门禁在前：quality_gate 在写入前检查数据源健康、股票行数量和时间窗口，被阻止的运行写入 `snapshot_collector_runs`（状态 `blocked`）并保留审计轨迹。运行记录会保存 `sourceHealth`、`captureMode`、核心行数和完成时间，方便 Phase 4 shadow/live 对比审计。
 - API 路由 `/api/snapshot-collector/*` 和 CLI 命令 `snapshot-collector-*` 只服务实验运维和审计。

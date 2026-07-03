@@ -14,6 +14,7 @@ import io
 import json
 import sys
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -613,6 +614,35 @@ class TestCollectorCLIHandlers:
         assert output["error"] == "snapshot collector only writes dragonboard_backend_shadow"
         assert fake_svc.run_once_calls == []
 
+    def test_run_once_allows_live_dataset_with_explicit_setting(self) -> None:
+        captured: list[Any] = []
+
+        class _CapturingService(_FakeService):
+            def run_once(self, request: Any) -> _FakeRunResult:
+                captured.append(request)
+                return _FakeRunResult(status="dry_run", dry_run=True)
+
+        fake_svc = _CapturingService()
+        patches = self._patch_service(fake_svc)
+        with (
+            patches["create_snapshot_collector_repository"],
+            patches["SnapshotCollectorService"],
+            patch(
+                "backend.cli.get_settings",
+                return_value=SimpleNamespace(snapshot_collector_allow_live_dataset=True),
+            ),
+        ):
+            from backend.cli import cmd_snapshot_collector_run_once
+
+            output = _capture_json_output(
+                cmd_snapshot_collector_run_once,
+                _make_args(dataset_id="dragonboard_live", dry_run=True),
+            )
+
+        assert output["status"] == "dry_run"
+        assert output["dryRun"] is True
+        assert captured[0].dataset_id == "dragonboard_live"
+
     # ── backfill: dry_run ───────────────────────────────────────────────────
 
     def test_backfill_dry_run_output(self) -> None:
@@ -658,6 +688,36 @@ class TestCollectorCLIHandlers:
         assert output["status"] == "error"
         assert output["error"] == "snapshot collector only writes dragonboard_backend_shadow"
         assert fake_svc.backfill_calls == []
+
+    def test_backfill_allows_live_dataset_with_explicit_setting(self) -> None:
+        fake_svc = _FakeService(
+            backfill_return={
+                "total": 1,
+                "succeeded": 0,
+                "failed": 0,
+                "blocked": 0,
+                "deduped": 0,
+                "details": [],
+            }
+        )
+        patches = self._patch_service(fake_svc)
+        with (
+            patches["create_snapshot_collector_repository"],
+            patches["SnapshotCollectorService"],
+            patch(
+                "backend.cli.get_settings",
+                return_value=SimpleNamespace(snapshot_collector_allow_live_dataset=True),
+            ),
+        ):
+            from backend.cli import cmd_snapshot_collector_backfill
+
+            output = _capture_json_output(
+                cmd_snapshot_collector_backfill,
+                _make_args(dataset_id="dragonboard_live", start_date="2026-06-11", end_date="2026-06-11"),
+            )
+
+        assert output["total"] == 1
+        assert fake_svc.backfill_calls[0].dataset_id == "dragonboard_live"
 
     # ── backfill: apply ─────────────────────────────────────────────────────
 

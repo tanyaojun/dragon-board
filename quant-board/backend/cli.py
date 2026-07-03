@@ -70,6 +70,7 @@ DEFAULT_HORIZONS = [1, 3, 5, 10]
 DEFAULT_LIVE_GATE_AUDIT_FOCUS_CODES = ["600186", "002156"]
 DEFAULT_LIVE_GATE_AUDIT_CONFIDENCE_THRESHOLDS = [70, 75, 80, 85, 90, 95]
 DEFAULT_LONGTEST_BASELINE_SET = "early_big_move_v5"
+LIVE_DATASET_ID = "dragonboard_live"
 
 
 def print_json(payload: Any) -> None:
@@ -1235,6 +1236,10 @@ def _create_snapshot_collector_service(repo: Any) -> SnapshotCollectorService:
 def _collector_shadow_dataset_error(dataset_id: str) -> dict[str, Any] | None:
     """Return a JSON error when a write command targets a non-shadow dataset."""
     if dataset_id == SHADOW_DATASET_ID:
+        return None
+    settings = get_settings()
+    allow_live = bool(getattr(settings, "snapshot_collector_allow_live_dataset", False))
+    if dataset_id == LIVE_DATASET_ID and allow_live:
         return None
     return {
         "ok": False,
