@@ -104,7 +104,7 @@ quant-board/
 │   ├── analysis/            # RankTrend 等分析算法和特征计算
 │   ├── api/                 # HTTP API 路由和请求响应适配
 │   ├── core/                # 回测、交易规则、组合和领域核心模型
-│   ├── data/                # SQLite/Supabase schema、仓库和数据访问适配
+│   ├── data/                # MongoDB/Supabase schema、仓库和数据访问适配
 │   ├── optimization/        # 参数搜索、优化 runner、搜索空间和结果管理
 │   ├── services/            # 后端业务服务编排
 │   └── tests/               # 后端就近测试或领域测试，按现有结构归类
@@ -156,7 +156,7 @@ quant-board/
 - 默认 RankTrend 快照类型来自 `DEFAULT_RANK_TREND_SNAPSHOT_TYPE`，当前为 `half_hour`。
 - RankTrend 默认运行参数来自 `DEFAULT_RANK_TREND_RUNTIME_CONFIG`，不要复制旧文档中的过期参数。
 - `src/services/DataLayer.ts` 的职责边界必须保持很窄：只存放当前运行态内存数据、版本号、订阅通知、内存读写方法和必要的状态投影调用。
-- 不得把以下内容新增回 `DataLayer.ts`：类型/接口定义、默认参数和常量、HTTP/API 调用、IndexedDB/SQLite/Supabase 读写、快照导入导出、快照读模型拼装、回测/优化逻辑、业务算法规则、UI 配置。
+- 不得把以下内容新增回 `DataLayer.ts`：类型/接口定义、默认参数和常量、HTTP/API 调用、IndexedDB/MongoDB/Supabase 读写、快照导入导出、快照读模型拼装、回测/优化逻辑、业务算法规则、UI 配置。
 - DataLayer 需要用到的公开结构应放在 `src/types/**`；龙头/复盘投影规则放在 `src/services/dragon/**`；快照保存、读取、覆盖率、备份和 QuantBoard 后端适配放在 `src/services/snapshot/**`。
 - 面板或服务需要快照数据时应调用 `src/services/snapshot/**` 的公开 facade/API，不要通过 `DataLayer.ts` 中转快照能力。
 - `src/types/**` 只承载类型、接口、字面量联合类型和类型推导必需的 `as const` 数据；纯运行时配置应放入 `src/config/**` 或业务模块就近文件。
@@ -183,8 +183,8 @@ QuantBoard 的规则以 `quant-board/docs/README.md`、`quant-board/docs/AI_COLL
 - 原 `src/services/strategyBacktest` 职责已迁移到 QuantBoard Python 后端：`backend.analysis.ranktrend`、`backend.core.backtest`、`backend.services`。
 - 默认 `snapshot_type` 是 `half_hour`；`quarter_hour` 只能由用户显式选择，不能替代默认口径。
 - 回测、优化、API、CLI 和前端展示必须保留 `dataset_id`、`snapshot_type`、`strategy_version`、`config_hash`、`random_seed`。
-- QuantBoard 存储主链为 SQLite 主库 + Supabase 后端备份库；Supabase 必须按 `quant-board/backend/data/supabase_schema.sql` 与 SQLite 同构，超大 JSON 只允许在备份适配层透明压缩，存储、同步、恢复和冲突规则以 `quant-board/docs/database-migration-plan.md` 为准。
-- Dragon Board 正式快照写库必须走 QuantBoard 后端 `POST /api/snapshots/ingest`，正式保存判重以 SQLite/后端 `snapshot_id` 为准；历史 JSON/IndexedDB 迁移入口为 `POST /api/migrations/snapshots/import-json`，IndexedDB 快照缓存默认关闭，只保留为迁移源、显式缓存或非正式临时数据来源。
+- QuantBoard 存储主链为 MongoDB 主库 + Supabase 后端备份库；Supabase 必须按 `quant-board/backend/data/supabase_schema.sql` 与 MongoDB 同构，超大 JSON 只允许在备份适配层透明压缩，存储、同步、恢复和冲突规则以 `quant-board/docs/database-migration-plan.md` 为准。
+- Dragon Board 正式快照写库必须走 QuantBoard 后端 `POST /api/snapshots/ingest`，正式保存判重以 MongoDB/后端 `snapshot_id` 为准；历史 JSON/IndexedDB 迁移入口为 `POST /api/migrations/snapshots/import-json`，IndexedDB 快照缓存默认关闭，只保留为迁移源、显式缓存或非正式临时数据来源。
 - Dragon Board 正式快照读口走 QuantBoard 后端 `GET /api/snapshots/frames`、`/api/snapshots/records`、`/api/snapshots/stock-rows`、`/api/snapshots/sector-rows`；IndexedDB 只保留为历史迁移源和缓存，不再新增或恢复浏览器端 IndexedDB 校验/补齐 API。迁移阶段只保留后端 `import-json` 和离线导入工具，字段映射不得随意删改。
 - Python RankTrend 输出字段必须能与 golden case 对齐。
 - 前端展示不得把 `finalSignal` 当成唯一交易结论，应展示状态、候选分层、风险、样本质量和解释。
