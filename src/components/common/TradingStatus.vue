@@ -1,6 +1,9 @@
 <!-- src/components/common/TradingStatus.vue -->
 <template>
-  <div class="trading-status" :class="{ active: status === 'trading' }">
+  <div
+    class="trading-status"
+    :class="{ active: ['trading', 'call_auction', 'after_hours'].includes(status) }"
+  >
     <span class="status-dot"></span>
     <span class="status-text">{{ statusLabel }}</span>
   </div>

@@ -37,20 +37,29 @@ export const isTradingTime = (date: Date = new Date()): boolean => {
 
   if (!isAshareTradingDay(date)) return false
 
-  // A 股连续竞价时段，包含 11:30 和 15:00 快照槽位。
-  if (minutes >= 9 * 60 + 30 && minutes <= 11 * 60 + 30) return true
-  if (minutes >= 13 * 60 && minutes <= 15 * 60) return true
+  // A 股交易时段，含集合竞价、连续竞价和盘后固定价格交易。
+  if (minutes >= 9 * 60 + 15 && minutes <= 11 * 60 + 30) return true
+  if (minutes >= 13 * 60 && minutes <= 15 * 60 + 30) return true
 
   return false
 }
 
-export type TradingStatus = 'non_trading_day' | 'pre_market' | 'trading' | 'lunch_break' | 'closed'
+export type TradingStatus =
+  | 'non_trading_day'
+  | 'pre_market'
+  | 'call_auction'
+  | 'trading'
+  | 'lunch_break'
+  | 'after_hours'
+  | 'closed'
 
 export const TRADING_STATUS_LABEL: Record<TradingStatus, string> = {
   non_trading_day: '非交易日',
   pre_market: '未开盘',
+  call_auction: '集合竞价',
   trading: '交易中',
   lunch_break: '午间休市',
+  after_hours: '盘后交易',
   closed: '已收盘',
 }
 
@@ -59,19 +68,25 @@ export const getTradingStatus = (date: Date = new Date()): TradingStatus => {
 
   const minutes = date.getHours() * 60 + date.getMinutes()
 
-  // 未开盘：交易日 9:30 之前
-  if (minutes < 9 * 60 + 30) return 'pre_market'
+  // 未开盘：交易日 9:15 之前
+  if (minutes < 9 * 60 + 15) return 'pre_market'
 
-  // 早盘连续竞价：9:30-11:30
-  if (minutes >= 9 * 60 + 30 && minutes <= 11 * 60 + 30) return 'trading'
+  // 早盘集合竞价：9:15-9:25
+  if (minutes >= 9 * 60 + 15 && minutes <= 9 * 60 + 25) return 'call_auction'
+
+  // 早盘连续竞价 / 开盘匹配期：9:25-11:30
+  if (minutes > 9 * 60 + 25 && minutes <= 11 * 60 + 30) return 'trading'
 
   // 午间休市：11:30-13:00
   if (minutes > 11 * 60 + 30 && minutes < 13 * 60) return 'lunch_break'
 
-  // 下午连续竞价：13:00-15:00
+  // 下午连续竞价（含 14:57-15:00 收盘集合竞价）：13:00-15:00
   if (minutes >= 13 * 60 && minutes <= 15 * 60) return 'trading'
 
-  // 已收盘：交易日 15:00 之后
+  // 盘后固定价格交易（科创板/创业板）：15:00-15:30
+  if (minutes > 15 * 60 && minutes <= 15 * 60 + 30) return 'after_hours'
+
+  // 已收盘：交易日 15:30 之后
   return 'closed'
 }
 
@@ -114,19 +129,31 @@ function isHoliday(date: Date): boolean {
 }
 
 /**
- * 判断是否为集合竞价时间
+ * 判断是否为早盘集合竞价时间（9:15–9:25）
+ * 上交所/深交所/北交所开盘集合竞价，可申报不可撤单（9:20 后不可撤单）
  */
 export const isOpeningAuction = (): boolean => {
   const now = new Date()
   const time = now.getHours() * 100 + now.getMinutes()
-  return time >= 925 && time <= 930
+  return time >= 915 && time <= 925
 }
 
 /**
- * 判断是否为收盘集合竞价
+ * 判断是否为收盘集合竞价时间（14:57–15:00）
+ * 深市/沪市收盘集合竞价，仅可申报不可撤单
  */
 export const isClosingAuction = (): boolean => {
   const now = new Date()
   const time = now.getHours() * 100 + now.getMinutes()
   return time >= 1457 && time <= 1500
+}
+
+/**
+ * 判断是否为盘后固定价格交易时间（15:00–15:30）
+ * 仅科创板（STAR Market）和创业板（ChiNext）有效，主板不适用
+ */
+export const isAfterHoursFixedPrice = (): boolean => {
+  const now = new Date()
+  const time = now.getHours() * 100 + now.getMinutes()
+  return time >= 1500 && time <= 1530
 }
