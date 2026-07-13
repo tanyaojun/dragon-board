@@ -14,6 +14,8 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
+from backend.settings import get_settings
+
 from backend.snapshot_collector.models import CollectorRunRequest
 from backend.snapshot_collector.quality_gate import SHADOW_DATASET_ID
 from backend.snapshot_collector.service import SnapshotCollectorService
@@ -45,16 +47,23 @@ def _validate_snapshot_type(snapshot_type: str) -> None:
 
 
 def _validate_shadow_dataset(dataset_id: str) -> None:
-    """Raise HTTPException when the collector is asked to write outside shadow."""
-    if dataset_id != SHADOW_DATASET_ID:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "ok": False,
-                "status": "error",
-                "error": f"snapshot collector only writes {SHADOW_DATASET_ID}",
-            },
-        )
+    """Raise HTTPException when dataset is neither shadow nor allowed live."""
+    if dataset_id == SHADOW_DATASET_ID:
+        return
+    settings = get_settings()
+    if dataset_id == "dragonboard_live" and settings.snapshot_collector_allow_live_dataset:
+        return
+    raise HTTPException(
+        status_code=400,
+        detail={
+            "ok": False,
+            "status": "error",
+            "error": (
+                f"snapshot collector only writes {SHADOW_DATASET_ID}"
+                " (or dragonboard_live with ALLOW_LIVE_DATASET=1)"
+            ),
+        },
+    )
 
 
 def _validate_date_format(value: str, field_name: str) -> None:

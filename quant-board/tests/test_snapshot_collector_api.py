@@ -493,6 +493,9 @@ class TestRunOnceValidation:
         assert detail["ok"] is False
 
     def test_non_shadow_dataset_returns_400_before_service(self, monkeypatch: Any) -> None:
+        from backend.settings import get_settings
+        monkeypatch.setenv("QUANT_BOARD_SNAPSHOT_COLLECTOR_ALLOW_LIVE_DATASET", "0")
+        get_settings.cache_clear()
         client, _ = _setup_client(monkeypatch)
         called: list[str] = []
 
@@ -518,7 +521,7 @@ class TestRunOnceValidation:
         assert response.status_code == 400
         detail = response.json().get("detail", {})
         assert detail["ok"] is False
-        assert detail["error"] == "snapshot collector only writes dragonboard_backend_shadow"
+        assert "dragonboard_backend_shadow" in detail["error"]
         assert called == []
 
     def test_missing_trading_date_returns_4xx(self, monkeypatch: Any) -> None:
@@ -1146,6 +1149,9 @@ class TestBackfillSlotsValidation:
         assert 400 <= response.status_code < 500
 
     def test_non_shadow_dataset_returns_400_before_service(self, monkeypatch: Any) -> None:
+        from backend.settings import get_settings
+        monkeypatch.setenv("QUANT_BOARD_SNAPSHOT_COLLECTOR_ALLOW_LIVE_DATASET", "0")
+        get_settings.cache_clear()
         client, _ = _setup_client(monkeypatch)
         called: list[str] = []
 
@@ -1171,7 +1177,7 @@ class TestBackfillSlotsValidation:
         assert response.status_code == 400
         detail = response.json().get("detail", {})
         assert detail["ok"] is False
-        assert detail["error"] == "snapshot collector only writes dragonboard_backend_shadow"
+        assert "dragonboard_backend_shadow" in detail["error"]
         assert called == []
 
 

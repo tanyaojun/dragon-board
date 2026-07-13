@@ -1840,7 +1840,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Compare snapshot data between two datasets (e.g. shadow vs live)",
     )
     collector_compare_cmd.add_argument("--dataset-id-a", required=True, help="First dataset ID (e.g. dragonboard_live)")
-    collector_compare_cmd.add_argument("--dataset-id-b", required=True, help="Second dataset ID (e.g. dragonboard_backend_shadow)")
+    collector_compare_cmd.add_argument("--dataset-id-b", required=True, help="Second dataset ID (e.g. another_dataset)")
     collector_compare_cmd.add_argument("--snapshot-type", choices=["quarter_hour", "half_hour", "hourly", "daily"], required=True)
     collector_compare_cmd.add_argument("--trading-date", default=None, help="Optional single date to compare")
     collector_compare_cmd.set_defaults(func=cmd_snapshot_collector_compare)

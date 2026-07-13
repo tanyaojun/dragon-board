@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import datetime
 
-from .trading_calendar import TZ_SHANGHAI  # noqa: F401 — re-export for callers
+from .trading_calendar import TZ_SHANGHAI
 
 from .models import SnapshotSlot
 
@@ -68,8 +68,6 @@ def _make_timestamp_ms(trading_date: str, slot_time: str) -> int:
 def generate_slots(
     trading_date: str,
     snapshot_types: list[str],
-    *,
-    grace_minutes: int = 5,  # noqa: ARG001 — accepted for scheduler API consistency
 ) -> list[SnapshotSlot]:
     """Generate every `SnapshotSlot` for *trading_date* and *snapshot_types*.
 

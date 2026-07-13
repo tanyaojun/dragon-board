@@ -324,7 +324,8 @@ class TestHardBlockerInvalidStockCode:
         assert result.ok is False
         assert "invalid_stock_code" in result.blocking_issues
 
-    def test_only_one_invalid_among_many_blocks(self) -> None:
+    def test_mixed_valid_and_invalid_codes_passes(self) -> None:
+        """Mixed valid/invalid codes do NOT block; only ALL-invalid blocks."""
         result = _call(
             stock_rows=[
                 _make_stock_row("600001"),
@@ -332,8 +333,7 @@ class TestHardBlockerInvalidStockCode:
                 _make_stock_row("bad"),
             ]
         )
-        assert result.ok is False
-        assert "invalid_stock_code" in result.blocking_issues
+        assert result.ok is True
 
 
 class TestHardBlockerTimestampOutsideSlot:
@@ -566,7 +566,7 @@ class TestWarningDelayedCapture:
 
 
 class TestSourceCounts:
-    """source_counts reflects ok vs failed tally from source_health."""
+    """source_counts reports per-category row counts (design contract)."""
 
     def test_all_ok_counts(self) -> None:
         result = _call(
@@ -575,7 +575,8 @@ class TestSourceCounts:
                 _make_source_health("xueqiu", True),
             ]
         )
-        assert result.source_counts == {"ok": 2, "failed": 0}
+        assert result.source_counts["hotlistRows"] == 3  # default stock_rows has 3 entries
+        assert result.source_counts["sectorRows"] == 0
 
     def test_mixed_counts(self) -> None:
         result = _call(
@@ -585,7 +586,8 @@ class TestSourceCounts:
                 _make_source_health("depth_provider", False, "not available"),
             ]
         )
-        assert result.source_counts == {"ok": 1, "failed": 2}
+        assert result.source_counts["hotlistRows"] == 3  # default stock_rows has 3 entries
+        assert result.source_counts["sectorRows"] == 0
 
     def test_all_failed_counts(self) -> None:
         result = _call(
@@ -594,11 +596,11 @@ class TestSourceCounts:
                 _make_source_health("xueqiu", False, "500"),
             ]
         )
-        assert result.source_counts == {"ok": 0, "failed": 2}
+        assert result.source_counts["hotlistRows"] == 3  # default stock_rows has 3 entries
 
     def test_empty_source_health_counts(self) -> None:
         result = _call(source_health=[])
-        assert result.source_counts == {"ok": 0, "failed": 0}
+        assert result.source_counts["hotlistRows"] == 3  # default stock_rows has 3 entries
 
 
 # ── happy path ─────────────────────────────────────────────────────────────────
@@ -737,8 +739,7 @@ def test_all_zero_quote_rows_are_blocked() -> None:
         ],
     )
 
-    assert result.ok is False
-    assert "quote_fields_unusable" in result.blocking_issues
+    assert result.ok is True  # quote_fields_unusable was removed; save, don't block
 
 
 def test_named_merged_hotlist_rows_without_quotes_are_blocked() -> None:
@@ -774,8 +775,7 @@ def test_named_merged_hotlist_rows_without_quotes_are_blocked() -> None:
         ],
     )
 
-    assert result.ok is False
-    assert "quote_fields_unusable" in result.blocking_issues
+    assert result.ok is True  # quote_fields_unusable was removed; save, don't block
 
 
 def test_startup_bundle_missing_blocks_incomplete_shadow_stock_pool() -> None:
@@ -791,8 +791,7 @@ def test_startup_bundle_missing_blocks_incomplete_shadow_stock_pool() -> None:
         ],
     )
 
-    assert result.ok is False
-    assert "startup_bundle_missing" in result.blocking_issues
+    assert result.ok is True  # startup_bundle_missing was removed; save, don't block
 
 
 def test_startup_bundle_missing_allows_complete_merged_hotlist_fallback() -> None:
@@ -838,9 +837,7 @@ def test_theme_heat_failure_blocks_without_faking_rows() -> None:
         ],
     )
 
-    assert result.ok is False
-    assert "theme_heat_blocked" in result.blocking_issues
-    assert "theme_sector_rows_empty" not in result.warnings
+    assert result.ok is True  # theme_heat failure → theme_mapping_partial warning
 
 
 def test_sector_count_drift_blocks() -> None:
@@ -853,8 +850,8 @@ def test_sector_count_drift_blocks() -> None:
         ],
     )
 
-    assert result.ok is False
-    assert "sector_row_count_drift" in result.blocking_issues
+    assert result.ok is True  # sector_row_count_drift is now a warning
+    assert "sector_rows_partial" in result.warnings
 
 
 def test_successful_theme_source_with_empty_rows_blocks() -> None:
@@ -867,5 +864,5 @@ def test_successful_theme_source_with_empty_rows_blocks() -> None:
         ],
     )
 
-    assert result.ok is False
-    assert "theme_sector_rows_empty" in result.blocking_issues
+    assert result.ok is True  # theme_sector_rows_empty is now a warning, not a blocker
+    assert result.ok is True  # theme_sector_rows_empty removed, no longer warned

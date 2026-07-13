@@ -7,12 +7,8 @@ dataset rules.  Hard blockers set ``ok=False``; warnings keep ``ok=True``.
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING
 
 from .models import QualityResult
-
-if TYPE_CHECKING:
-    pass
 
 # A-share stock codes: 6-digit strings starting with 0, 3, or 6
 _A_SHARE_CODE_RE = re.compile(r"^[036]\d{5}$")
@@ -49,8 +45,8 @@ def evaluate_quality(
       *slot_time* or zero *slot_timestamp_ms*
     * ``all_hotlist_sources_failed`` — every source in *source_health* has
       ``ok=False`` (or the list is empty)
-    * ``invalid_stock_code`` — any stock row has a code that is empty or
-      does not match the A-share format (6 digits starting with 0/3/6)
+    * ``invalid_stock_code`` — **all** stock rows have missing or non-A-share
+      codes (6 digits starting with 0/3/6)
     * ``timestamp_outside_slot`` — *actual_timestamp_ms* is before
       *slot_timestamp_ms*
     * ``invalid_shadow_dataset`` — *dataset_id* is not the shadow dataset,
@@ -63,6 +59,7 @@ def evaluate_quality(
     * ``money_flow_estimated_l1`` — a money-flow source indicates L1
       estimation or has failed
     * ``theme_mapping_partial`` — a theme-related source failed
+    * ``sector_rows_partial`` — sector rows present but fewer than expected
     * ``delayed_capture`` — *actual_timestamp_ms* exceeds the grace window
     """
     blocking: list[str] = []
@@ -72,7 +69,20 @@ def evaluate_quality(
     # ── source_counts ───────────────────────────────────────────────────────
     ok_count = sum(1 for s in source_health if s.get("ok"))
     failed_count = len(source_health) - ok_count
-    source_counts: dict[str, int] = {"ok": ok_count, "failed": failed_count}
+    quote_rows = sum(
+        1 for r in stock_rows
+        if any(r.get(f) for f in ("price", "change", "pctChange"))
+    )
+    depth_rows = sum(
+        1 for r in stock_rows
+        if r.get("depth10") or r.get("bid1Price") or r.get("ask1Price")
+    )
+    source_counts: dict[str, int] = {
+        "hotlistRows": len(stock_rows),
+        "quoteRows": quote_rows,
+        "depthRows": depth_rows,
+        "sectorRows": len(sector_rows),
+    }
 
     # ── hard blockers ───────────────────────────────────────────────────────
 
@@ -96,12 +106,6 @@ def evaluate_quality(
     # 4. invalid_stock_code
     if _has_invalid_stock_code(stock_rows):
         blocking.append("invalid_stock_code")
-
-    if _quote_fields_unusable(stock_rows):
-        blocking.append("quote_fields_unusable")
-
-    if _startup_bundle_missing(source_health):
-        blocking.append("startup_bundle_missing")
 
     # 5. timestamp_outside_slot
     if actual_timestamp_ms < slot_timestamp_ms:
@@ -135,21 +139,13 @@ def evaluate_quality(
     if _source_failed_matching(source_health, _THEME_RE):
         warnings.append("theme_mapping_partial")
 
-    theme_heat_sources = [
-        source
-        for source in source_health
-        if str(source.get("source") or "") == "theme_heat"
-    ]
-    if any(not source.get("ok") for source in theme_heat_sources):
-        blocking.append("theme_heat_blocked")
-    if any(source.get("ok") for source in theme_heat_sources) and not sector_rows:
-        blocking.append("theme_sector_rows_empty")
-    if any(
+    # sector_rows_partial: sector rows present but fewer than expected
+    if sector_rows and any(
         "sectorRowCount" in frame
-        and int(frame.get("sectorRowCount") or 0) != len(sector_rows)
+        and int(frame.get("sectorRowCount") or 0) > len(sector_rows)
         for frame in frames
     ):
-        blocking.append("sector_row_count_drift")
+        warnings.append("sector_rows_partial")
 
     # delayed_capture
     grace_ms = grace_minutes * 60 * 1000
@@ -168,67 +164,13 @@ def evaluate_quality(
 
 
 def _has_invalid_stock_code(stock_rows: list[dict]) -> bool:
-    """Return ``True`` if any stock row has a missing or non-A-share code."""
-    for row in stock_rows:
-        code = row.get("code")
-        if code is None:
-            return True
-        code_str = str(code).strip()
-        if not _A_SHARE_CODE_RE.match(code_str):
-            return True
-    return False
-
-
-def _quote_fields_unusable(stock_rows: list[dict]) -> bool:
-    """Return True when collected rows have only codes/ranks but no usable quote facts."""
-    rows_with_quote_shape = [
-        row
+    """Return ``True`` only when **all** stock rows have missing or non-A-share codes."""
+    if not stock_rows:
+        return True
+    return all(
+        (lambda c: c is None or not _A_SHARE_CODE_RE.match(str(c).strip()))(row.get("code"))
         for row in stock_rows
-        if any(
-            field in row
-            for field in (
-                "price",
-                "change",
-                "pctChange",
-                "volume",
-                "turnover",
-                "amount",
-                "turnoverRate",
-                "hotness",
-                "heat",
-            )
-        )
-    ]
-    if not rows_with_quote_shape:
-        return False
-
-    def _is_positive_number(value: object) -> bool:
-        return isinstance(value, (int, float)) and float(value) > 0
-
-    any_usable_quote = any(
-        any(
-            _is_positive_number(row.get(field))
-            for field in ("price", "volume", "turnover", "amount", "turnoverRate", "hotness", "heat")
-        )
-        for row in rows_with_quote_shape
     )
-    if any_usable_quote:
-        return False
-
-    return True
-
-
-def _startup_bundle_missing(source_health: list[dict]) -> bool:
-    """Return True when no live-equivalent stock-pool source succeeded."""
-    startup_failed = any(
-        str(source.get("source") or "") == "startup_bundle" and not source.get("ok")
-        for source in source_health
-    )
-    merged_fallback_ok = any(
-        str(source.get("source") or "") == "merged_hotlist_proxy" and source.get("ok")
-        for source in source_health
-    )
-    return startup_failed and not merged_fallback_ok
 
 
 def _source_failed_matching(

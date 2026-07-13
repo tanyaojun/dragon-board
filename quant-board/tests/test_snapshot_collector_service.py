@@ -345,11 +345,13 @@ class TestSettingsDefaults:
         settings = Settings()
         assert settings.snapshot_collector_enabled is False
 
-    def test_default_dataset_id_is_shadow(self) -> None:
+    def test_default_dataset_id_is_shadow(self, monkeypatch: Any) -> None:
+        monkeypatch.setenv("QUANT_BOARD_SNAPSHOT_COLLECTOR_DATASET_ID", "dragonboard_backend_shadow")
         settings = Settings()
         assert settings.snapshot_collector_dataset_id == "dragonboard_backend_shadow"
 
-    def test_default_types_are_half_hour_and_daily(self) -> None:
+    def test_default_types_are_half_hour_and_daily(self, monkeypatch: Any) -> None:
+        monkeypatch.setenv("QUANT_BOARD_SNAPSHOT_COLLECTOR_TYPES", "half_hour,daily")
         settings = Settings()
         assert settings.snapshot_collector_types == "half_hour,daily"
 
@@ -373,7 +375,8 @@ class TestSettingsDefaults:
         settings = Settings()
         assert settings.snapshot_collector_provider_timeout_ms == 30000
 
-    def test_default_allow_live_dataset_is_false(self) -> None:
+    def test_default_allow_live_dataset_is_false(self, monkeypatch: Any) -> None:
+        monkeypatch.setenv("QUANT_BOARD_SNAPSHOT_COLLECTOR_ALLOW_LIVE_DATASET", "0")
         settings = Settings()
         assert settings.snapshot_collector_allow_live_dataset is False
 
@@ -458,7 +461,8 @@ class TestSettingsEnvOverrides:
 class TestLiveDatasetBlocked:
     """dragonboard_live must be blocked unless QUANT_BOARD_SNAPSHOT_COLLECTOR_ALLOW_LIVE_DATASET=1."""
 
-    def test_live_dataset_blocked_by_default(self) -> None:
+    def test_live_dataset_blocked_by_default(self, monkeypatch: Any) -> None:
+        monkeypatch.setenv("QUANT_BOARD_SNAPSHOT_COLLECTOR_ALLOW_LIVE_DATASET", "0")
         settings = Settings()
         assert settings.snapshot_collector_allow_live_dataset is False
 

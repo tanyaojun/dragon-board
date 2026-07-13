@@ -199,6 +199,16 @@ def _make_settings(**overrides: Any):
 
     if "snapshot_collector_enabled" in overrides:
         env_overrides["QUANT_BOARD_SNAPSHOT_COLLECTOR_ENABLED"] = str(overrides["snapshot_collector_enabled"]).lower()
+    if "snapshot_collector_dataset_id" in overrides:
+        env_overrides["QUANT_BOARD_SNAPSHOT_COLLECTOR_DATASET_ID"] = overrides["snapshot_collector_dataset_id"]
+    if "snapshot_collector_allow_live_dataset" in overrides:
+        env_overrides["QUANT_BOARD_SNAPSHOT_COLLECTOR_ALLOW_LIVE_DATASET"] = str(overrides["snapshot_collector_allow_live_dataset"]).lower()
+    env_overrides["QUANT_BOARD_SNAPSHOT_COLLECTOR_DATASET_ID"] = env_overrides.get(
+        "QUANT_BOARD_SNAPSHOT_COLLECTOR_DATASET_ID", "test_dataset"
+    )
+
+    if "snapshot_collector_types" in overrides:
+        env_overrides["QUANT_BOARD_SNAPSHOT_COLLECTOR_TYPES"] = overrides["snapshot_collector_types"]
 
     defaults: dict[str, Any] = dict(
         storage_backend="mongodb",
@@ -208,6 +218,10 @@ def _make_settings(**overrides: Any):
         snapshot_collector_poll_ms=1000,
         snapshot_collector_close_grace_minutes=5,
     )
+    defaults.update(overrides)
+    # Ensure env override for non-overridden keys uses test defaults
+    env_overrides.setdefault("QUANT_BOARD_SNAPSHOT_COLLECTOR_TYPES", defaults["snapshot_collector_types"])
+    env_overrides.setdefault("QUANT_BOARD_SNAPSHOT_COLLECTOR_DATASET_ID", defaults["snapshot_collector_dataset_id"])
     defaults.update(overrides)
 
     # Temporarily set env vars so model_post_init respects the values.

@@ -17,8 +17,9 @@ import hashlib
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import Any
 
+from backend.settings import get_settings as _get_settings
 from backend.theme_heat_service import ThemeHeatUnavailable
 
 from . import builder as builder_module
@@ -28,7 +29,6 @@ from .models import (
     CollectorRunRequest,
     CollectorRunResult,
     MarketDataContext,
-    QualityResult,
     SnapshotSlot,
     SourceHealth,
 )
@@ -38,17 +38,8 @@ from .state import record_run as _record_run
 
 
 def _slot_timestamp_ms(snapshot_type: str, trading_date: str, slot_time: str) -> int:
-    """Compute the epoch-millisecond timestamp for a snapshot slot.
-
-    Delegates to ``slots._make_timestamp_ms`` which is the canonical
-    implementation used by the slot generator and eligibility checker.
-    """
     from .slots import _make_timestamp_ms
-
-    try:
-        return _make_timestamp_ms(trading_date, slot_time)
-    except (ValueError, OverflowError):
-        return 0
+    return _make_timestamp_ms(trading_date, slot_time)
 
 
 def _generate_run_id() -> str:
@@ -216,6 +207,12 @@ def _run_audit_fields(
     }
 
 
+def _default_normalize(norm_request: Any) -> tuple:
+    """Default normalizer using the extracted ingest normalizer."""
+    from backend.data.snapshot_ingest_normalizer import normalize_snapshot_ingest
+    return normalize_snapshot_ingest(norm_request)
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # SnapshotCollectorService
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -241,9 +238,9 @@ class SnapshotCollectorService:
         repo: Any,
         settings: Any = None,
         *,
-        collect_fn: Callable[..., MarketDataContext] | None = None,
-        normalize_fn: Callable[..., tuple] | None = None,
-        quality_fn: Callable[..., QualityResult] | None = None,
+        collect_fn: Any = None,
+        normalize_fn: Any = None,
+        quality_fn: Any = None,
         theme_heat_service: Any = None,
     ) -> None:
         from backend.data.schemas import SnapshotIngestRequest
@@ -251,16 +248,9 @@ class SnapshotCollectorService:
         self._repo = repo
         self._settings = settings
         self._collect_fn = collect_fn or providers_module.collect_market_context
+        self._normalize_fn = normalize_fn or _default_normalize
         self._quality_fn = quality_fn or quality_gate_module.evaluate_quality
         self._theme_heat_service = theme_heat_service
-
-        if normalize_fn is not None:
-            self._normalize_fn = normalize_fn
-        else:
-            from backend.data.snapshot_ingest_normalizer import normalize_snapshot_ingest
-
-            self._normalize_fn = normalize_snapshot_ingest  # type: ignore[assignment]
-
         self._SnapshotIngestRequest = SnapshotIngestRequest
 
     # ── run_once ──────────────────────────────────────────────────────────
@@ -683,27 +673,20 @@ class SnapshotCollectorService:
         except Exception:
             return None
 
+    def _settings_or_default(self) -> Any:
+        return self._settings if self._settings else _get_settings()
+
     def _proxy_base_url(self) -> str:
-        if self._settings and hasattr(self._settings, "snapshot_collector_proxy_base_url"):
-            return self._settings.snapshot_collector_proxy_base_url
-        return "http://127.0.0.1:3000"
+        return self._settings_or_default().snapshot_collector_proxy_base_url
 
     def _bridge_base_url(self) -> str:
-        if self._settings and hasattr(self._settings, "snapshot_collector_bridge_base_url"):
-            return self._settings.snapshot_collector_bridge_base_url
-        return "http://127.0.0.1:8765"
+        return self._settings_or_default().snapshot_collector_bridge_base_url
 
     def _provider_timeout_ms(self) -> int:
-        if self._settings and hasattr(self._settings, "snapshot_collector_provider_timeout_ms"):
-            return self._settings.snapshot_collector_provider_timeout_ms
-        return 5000
+        return self._settings_or_default().snapshot_collector_provider_timeout_ms
 
     def _close_grace_minutes(self) -> int:
-        if self._settings and hasattr(self._settings, "snapshot_collector_close_grace_minutes"):
-            return self._settings.snapshot_collector_close_grace_minutes
-        return 5
+        return self._settings_or_default().snapshot_collector_close_grace_minutes
 
     def _allow_live_dataset(self) -> bool:
-        if self._settings and hasattr(self._settings, "snapshot_collector_allow_live_dataset"):
-            return self._settings.snapshot_collector_allow_live_dataset
-        return False
+        return self._settings_or_default().snapshot_collector_allow_live_dataset

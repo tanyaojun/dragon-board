@@ -598,7 +598,10 @@ class TestCollectorCLIHandlers:
         assert req.dry_run is True
         assert req.force is True
 
-    def test_run_once_rejects_non_shadow_dataset_before_service(self) -> None:
+    def test_run_once_rejects_non_shadow_dataset_before_service(self, monkeypatch: Any) -> None:
+        from backend.settings import get_settings
+        monkeypatch.setenv("QUANT_BOARD_SNAPSHOT_COLLECTOR_ALLOW_LIVE_DATASET", "0")
+        get_settings.cache_clear()
         fake_svc = _FakeService()
         patches = self._patch_service(fake_svc)
         with patches["create_snapshot_collector_repository"], patches["SnapshotCollectorService"]:
@@ -673,7 +676,10 @@ class TestCollectorCLIHandlers:
         assert output["succeeded"] == 0
         assert len(output["details"]) == 2
 
-    def test_backfill_rejects_non_shadow_dataset_before_service(self) -> None:
+    def test_backfill_rejects_non_shadow_dataset_before_service(self, monkeypatch: Any) -> None:
+        from backend.settings import get_settings
+        monkeypatch.setenv("QUANT_BOARD_SNAPSHOT_COLLECTOR_ALLOW_LIVE_DATASET", "0")
+        get_settings.cache_clear()
         fake_svc = _FakeService()
         patches = self._patch_service(fake_svc)
         with patches["create_snapshot_collector_repository"], patches["SnapshotCollectorService"]:

@@ -33,9 +33,9 @@ backend/
 
 当前仓库已有 `backend/main.py`、`backend/settings.py`、`backend/data/database.py`、`backend/data/models.py`，后续实现应在这些骨架上增量补齐。
 
-### 实验性后端快照采集器（shadow 模式）
+### 后端快照采集器
 
-`backend/snapshot_collector/` 是一个实验性的后端快照采集器，当前处于 shadow-only 阶段。该模块从 proxy-server 和 python-bridge 实时拉取热榜与行情数据，在 QuantBoard 后端独立完成快照组装、规范化和质量门禁。它不嵌入浏览器运行时；为保持 shadow/live 股票覆盖一致，股票池优先复用 Dragon Board live 前端写入 proxy-server 的 startup bundle，缓存缺失时再走 proxy-server 八平台热榜 union fallback。
+`backend/snapshot_collector/` 是 QuantBoard 后端的正式快照采集模块。它从 proxy-server 和 python-bridge 实时拉取热榜与行情数据，在 QuantBoard 后端独立完成快照组装、规范化和质量门禁，不再依赖 Dragon Board 浏览器页面是否打开。Dragon Board 前端已默认关闭自动正式快照写入，只保留手动诊断入口。
 
 模块结构：
 
@@ -52,36 +52,23 @@ backend/snapshot_collector/
   service.py          # SnapshotCollectorService (run_once, backfill_slots, audit 等)
   service_factory.py  # create_snapshot_collector_repository()
   scheduler.py        # SnapshotCollectorScheduler 后台 asyncio 轮询 runner
-  supervisor.py       # Windows shadow 采集守护进程，复用依赖并在独立 8001 端口启动 collector API
 ```
 
-当前状态和边界：
+配置与运行：
 
-- 默认禁用：通过 `QUANT_BOARD_SNAPSHOT_COLLECTOR_ENABLED=false` 关闭所有采集行为。
-- 写目标独立：默认只写入 `dragonboard_backend_shadow` 数据集（由 `QUANT_BOARD_SNAPSHOT_COLLECTOR_DATASET_ID` 控制），不得在未进入正式切换流程时写入 `dragonboard_live` 正式主库。
-- 禁止写入 live 数据集：`QUANT_BOARD_SNAPSHOT_COLLECTOR_ALLOW_LIVE_DATASET` 默认 `false`，防止实验采集污染正式快照事实；Phase 6 正式切换时必须显式设为 `true`，CLI 预检和 quality gate 才会放行 `dragonboard_live`，其它 dataset 仍拒绝。
-- Shadow-only：该采集器产出仅用于平行对照和验收，不得作为生产快照来源或 Dragon Board 正式读源。
-- 质量门禁在前：quality_gate 在写入前检查数据源健康、股票行数量和时间窗口，被阻止的运行写入 `snapshot_collector_runs`（状态 `blocked`）并保留审计轨迹。运行记录会保存 `sourceHealth`、`captureMode`、核心行数和完成时间，方便 Phase 4 shadow/live 对比审计。
-- API 路由 `/api/snapshot-collector/*` 和 CLI 命令 `snapshot-collector-*` 只服务实验运维和审计。
-- 自动调度器（Phase 3）：`SnapshotCollectorScheduler` 是独立的 `asyncio` 后台 runner（模块级单例），在 FastAPI `startup` 时注册到事件循环。轮询间隔由 `QUANT_BOARD_SNAPSHOT_COLLECTOR_POLL_MS`（默认 1000ms）控制，每个 tick 检查交易日、槽位表、时间窗口和 MongoDB 中的 `datasetId + snapshotId` 是否已存在，只为真正缺失且符合条件的 slot 启动 fire-and-forget 采集任务。调度器在非 MongoDB 模式或 `QUANT_BOARD_SNAPSHOT_COLLECTOR_ENABLED=0` 时自动禁用。采集任务的并发保护通过内存中的 `_in_flight_slots` 集合实现，确保同一 slot 不会重复采集。
-- 本机 shadow 守护：`supervisor.py` 只负责实验采集运行环境，不改变采集业务合同。它复用健康的 MongoDB、proxy-server 和 python-bridge，并使用 `8001` 运行目标工作区 collector API，避免替换主工作区 `8000` API。MongoDB 通过 `ping` 检查，proxy-server/python-bridge 校验结构化 `/health` 服务身份；collector 必须同时满足 scheduler `enabled=true`、`running=true` 和 `dataset_id=dragonboard_backend_shadow`。`proxy-server` 只复用健康的 `127.0.0.1:3000`，缺失或不健康时标记 `blocked`，不得从隔离 worktree 启动代理接管主看板端口。守护进程自己启动的非 proxy 服务如仍占端口但健康检查失败，会被终止并重启；未知外部进程只标记 `blocked`，不会误杀。
-- 后端 collector 优先通过 `StartupBundleStockProvider` 读取 proxy-server `/api/cache/startup-bundle` 中由 Dragon Board live 前端写入的 merged stocks，作为与 live 快照一致的完整股票池；若 startup bundle 缺失或无效，默认改用 `ProxyMergedHotlistProvider` 调用八个平台热榜接口做 union 合并，避免 shadow 静默降级为东财 top100。单平台 `ProxyHotlistProvider` 只保留为诊断工具。只有 startup bundle 失败且 `merged_hotlist_proxy` 也未成功时，质量门禁才以 `startup_bundle_missing` 阻断写入。
-- 后端 collector 通过共享 `ThemeHeatService` 写入全量 `entityType=hot_theme` rows；`sector_rows=0` 仅是替换前历史快照的已知缺口，新 shadow 帧不得再以外部端口不可用为由允许空题材行。
-- 正式切换要求：shadow 采集器必须通过完整审计（覆盖率、质量门禁、数据一致性）后才能讨论 live cutover。
+- 启停控制：通过 `QUANT_BOARD_SNAPSHOT_COLLECTOR_ENABLED` 控制。生产环境设为 `1`，调度器在 FastAPI `startup` 时自动注册到事件循环。
+- 写目标：通过 `QUANT_BOARD_SNAPSHOT_COLLECTOR_DATASET_ID` 指定（生产环境设为 `dragonboard_live`）。写入 live 数据集需同时设置 `QUANT_BOARD_SNAPSHOT_COLLECTOR_ALLOW_LIVE_DATASET=1`，其它任意 dataset 仍被 quality gate 和 CLI 预检拒绝，防止误写。
+- 质量门禁：`evaluate_quality()` 在写入前检查数据源健康、股票行数量、时间窗口和 dataset 合法性。被阻止的运行写入 `snapshot_collector_runs`（状态 `blocked`）并保留完整审计轨迹，包括 `sourceHealth`、`captureMode`、核心行数和完成时间。
+- 自动调度器：`SnapshotCollectorScheduler` 是模块级 `asyncio` 后台 runner 单例，在 FastAPI `startup`/`shutdown` 生命周期中管理。轮询间隔由 `QUANT_BOARD_SNAPSHOT_COLLECTOR_POLL_MS`（默认 1000ms）控制，每个 tick 检查交易日、槽位表、时间窗口和 MongoDB 去重。非 MongoDB 模式或 `ENABLED=0` 时自动禁用。并发保护通过内存中的 `_in_flight_slots` 集合实现。
+- 股票池：优先通过 `StartupBundleStockProvider` 读取 proxy-server 的 live 前端 startup bundle；缓存缺失时通过 `ProxyMergedHotlistProvider` 做八平台热榜 union fallback。单平台 `ProxyHotlistProvider` 只保留为诊断工具。
 
-**生产口径尚未完成的接入（截至 Phase 4 审计后的当前状态）：**
+数据源覆盖：
 
-以下数据源在生产级快照中是必需的。当前后端 collector 已补齐前端已有来源中明确漏接的逐股题材、涨停池、bridge 盘口和 bridge 高低价解析；历史 shadow 数据不会因此自动回填，必须以后续新采集审计为准。
-
-1. **Depth（盘口深度）**：默认 provider 已挂载 `BridgeQuoteProvider`，并兼容 python-bridge 返回的 `bids/asks` 结构，builder 会落 `depth10`、`bid1Price/bid1Volume`、`ask1Price/ask1Volume`。当前 bridge 已验证边界仍是 L1 + 标准五档，不得描述成官方客户端级 L2 或真十档。
-
-2. **股票快照行情接管**：股票池已通过 live startup bundle 优先对齐 live merged stocks，并在缓存缺失时通过八平台 union fallback 保持覆盖范围不退回单平台 top100。行情增量同时使用 `ProxyQuoteProvider` 和 `BridgeQuoteProvider`：proxy 补资金流/东财字段，bridge 补实时价格、盘口、高低价和昨收；builder 会派生 `amplitude`，但该字段只在 Mongo shadow payload 中自然保留，SQLite 历史模型没有独立列。
-
-3. **Theme 数据源**：MongoDB 全市场映射、腾讯基础行情和东财资金字段已由共享 `ThemeHeatService` 聚合，使用 `theme-market-v1`、5 分钟缓存和覆盖率门禁；collector 保存全部 factors 为 `hot_theme` rows。默认 provider 也会挂载 `ThemeMappingProvider`，逐股写入 `themes/mainTheme/sectorLabel`。少数股票仍可能因题材基础库未覆盖而缺失，这属于映射库质量缺口，不是 collector 未接入。
-
-4. **市场情绪 / 涨停池 / 轮动摘要**：涨停池已接入 `ProxyLimitUpProvider`，写入 `limitUpPool/reason/firstZtTime/lastZtTime/boardHeight/highDays/fengdan` 等事件字段。该字段只应出现在涨停池相关股票上，不能按全量股票 100% 覆盖要求审计。市场情绪和轮动摘要仍依赖既有研究链路或后续专项，不应伪造成空字段通过。
-
-当前代码接入类缺口已补齐，但 shadow 仍需至少两个完整交易日的新采集落库审计，确认 row count、字段覆盖、题材映射缺口、资金降级和质量警告后，才能讨论 live cutover。
+- **行情**：同时使用 `ProxyQuoteProvider`（东财资金流）和 `BridgeQuoteProvider`（python-bridge 实时价格、盘口、高低价和昨收）。bridge 当前为 L1 + 标准五档，不描述为官方客户端级 L2。
+- **盘口**：`depth10`、`bid1Price/bid1Volume`、`ask1Price/ask1Volume` 由 `BridgeQuoteProvider` 提供。
+- **题材**：MongoDB 全市场映射由共享 `ThemeHeatService` 聚合；`ThemeMappingProvider` 逐股写入 `themes/mainTheme/sectorLabel`。少数股票可能因题材基础库未覆盖而缺失，属于映射库质量缺口。
+- **涨停池**：`ProxyLimitUpProvider` 接入 THS pools，写入 `limitUpPool/reason/firstZtTime/lastZtTime/boardHeight` 等事件字段。该字段只应出现在涨停池相关股票上，不能按全量股票 100% 覆盖审计。
+- **市场情绪 / 轮动摘要**：依赖既有研究链路或后续专项，不应伪造成空字段通过。
 
 API 路由：
 
