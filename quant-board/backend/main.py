@@ -44,6 +44,8 @@ from backend.data.theme_database import get_theme_db, init_theme_db, theme_statu
 from backend.data.mongo_theme_repository import MongoThemeRepository
 from backend.data.theme_repository import ThemeRepository
 from backend.data.theme_service import ThemeMigrationError, ThemeMigrationService
+from backend.theme_mapping_refresh import refresh_theme_stock_mappings
+from backend.theme_mapping_scheduler import theme_mapping_refresh_scheduler
 from backend.operations.schedule import run_after_market_once
 from backend.services import (
     BacktestService,
@@ -86,6 +88,7 @@ def on_startup() -> None:
         archive_auto_runner.start()
         backup_retention_runner.start()
     snapshot_collector_scheduler.start()
+    theme_mapping_refresh_scheduler.start()
 
 
 @app.on_event("shutdown")
@@ -95,6 +98,7 @@ async def on_shutdown() -> None:
         await archive_auto_runner.stop()
         await backup_retention_runner.stop()
     await snapshot_collector_scheduler.stop()
+    await theme_mapping_refresh_scheduler.stop()
 
 
 @app.get("/api/health")
@@ -129,6 +133,7 @@ def health_check(deep: bool = False, db: Session | None = Depends(get_db)) -> di
             },
         },
         "snapshotCollector": snapshot_collector_scheduler.status(),
+        "themeMappingRefresh": theme_mapping_refresh_scheduler.status(),
     }
 
 
@@ -1094,6 +1099,26 @@ def get_stock_themes(code: str, db: Session | None = Depends(get_theme_db)) -> d
 @app.get("/api/themes/counts")
 def get_theme_counts(db: Session | None = Depends(get_theme_db)) -> dict[str, Any]:
     return {"ok": True, "counts": get_theme_repository(db).counts(), "source": storage_source_label()}
+
+
+@app.post("/api/themes/refresh-mappings")
+def refresh_theme_mappings() -> dict[str, Any]:
+    """从 longhuvip 题材 API 刷新 MongoDB theme_stock_mappings 集合。
+
+    数据链：longhuvip.com Theme API → MongoDB themes 表 → theme_stock_mappings。
+    仅在 storage_backend=mongodb 时可用。
+    """
+    if storage_source_label() != "mongodb":
+        raise HTTPException(status_code=503, detail="theme mapping refresh requires MongoDB storage backend")
+    try:
+        result = refresh_theme_stock_mappings()
+        if not result.get("ok"):
+            raise HTTPException(status_code=500, detail=result)
+        return result
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @app.get("/api/datasets")

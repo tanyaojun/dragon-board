@@ -41,6 +41,7 @@ from backend.data.storage_inspector import inspect_storage
 from backend.data.supabase_backup import get_backup_client
 from backend.data.theme_database import ThemeSessionLocal, init_theme_db
 from backend.data.theme_service import ThemeMigrationService
+from backend.theme_mapping_refresh import refresh_theme_stock_mappings
 from backend.analysis.ranktrend_live_gate_shadow_audit import load_hotlist_anchor_samples
 from backend.operations.schedule import run_after_market_once
 from backend.settings import get_settings
@@ -214,6 +215,14 @@ def cmd_verify_themes(args: argparse.Namespace) -> None:
     init_theme_db()
     with ThemeSessionLocal() as session:
         print_json(ThemeMigrationService(session).verify_mapping(payload))
+
+
+def cmd_refresh_theme_mappings(_args: argparse.Namespace) -> None:
+    """从 longhuvip 题材 API 刷新 MongoDB theme_stock_mappings。"""
+    if get_settings().storage_backend != "mongodb":
+        print_json({"ok": False, "error": "theme mapping refresh requires MongoDB storage backend"})
+        return
+    print_json(refresh_theme_stock_mappings())
 
 
 def cmd_inspect_storage(args: argparse.Namespace) -> None:
@@ -1432,6 +1441,12 @@ def build_parser() -> argparse.ArgumentParser:
     verify_themes_cmd = sub.add_parser("verify-themes", help="Verify historical DragonBoard theme JSON against themeDATA.db")
     verify_themes_cmd.add_argument("--path", required=True)
     verify_themes_cmd.set_defaults(func=cmd_verify_themes)
+
+    refresh_theme_mappings_cmd = sub.add_parser(
+        "refresh-theme-mappings",
+        help="Refresh MongoDB theme_stock_mappings from longhuvip theme API",
+    )
+    refresh_theme_mappings_cmd.set_defaults(func=cmd_refresh_theme_mappings)
 
     inspect_cmd = sub.add_parser("inspect-storage", help="Inspect SQLite files and JSON field sizes")
     inspect_cmd.add_argument("--path", default=None)
