@@ -15,12 +15,8 @@ export function getMoneyFlowSourceRank(value: MoneyFlowSourceLike | null | undef
     return 3
   }
 
-  if (value.moneyFlowEstimated === false && value.moneyFlowSource === 'eastmoney') {
+  if (value.moneyFlowEstimated === false && value.moneyFlowSource === 'ths_l2') {
     return 2
-  }
-
-  if (value.moneyFlowEstimated === true || value.capitalFlowSource === 'estimated_l1') {
-    return 1
   }
 
   return 0

@@ -93,22 +93,18 @@ describe('QuoteHttpFeed', () => {
     expect(getQuotes).not.toHaveBeenCalled()
   })
 
-  it('fetches EastMoney full quote enrichment by default', async () => {
+  it('fetches THS L2 money flow via batch endpoint when enrichment enabled', async () => {
     const getQuotes = vi.fn().mockResolvedValue({
       data: {
         diff: [
           {
             f12: '000001',
             f2: '10.5',
-            f3: '2.1',
-            f5: '1200',
-            f6: '500000',
-            f10: '1.88',
-            f62: '8000',
-            f184: '6.5',
-            f66: '3000',
-            f69: '2.4',
             f14: '平安银行',
+            f62: '8000',
+            f66: '0',
+            f69: '0',
+            f184: '0',
           },
         ],
       },
@@ -119,208 +115,59 @@ describe('QuoteHttpFeed', () => {
 
     expect(getQuotes).toHaveBeenCalledWith(
       ['000001'],
-      expect.objectContaining({ source: 'eastmoney', force: true, refresh: '1' }),
+      expect.objectContaining({ source: 'thsMoneyFlow', timeout: 20000 }),
     )
     expect(result.get('000001')).toMatchObject({
-      source: 'eastmoney',
-      moneyFlowSource: 'eastmoney',
+      source: 'ths_l2',
+      moneyFlowSource: 'ths_l2',
       moneyFlowEstimated: false,
       capitalFlowSource: 'official_l2',
-      capitalFlowConfidence: 'medium',
+      capitalFlowConfidence: 'high',
       zlje: 8000,
-      zljzb: 6.5,
-      cddje: 3000,
-      cddjzb: 2.4,
-      volumeRatio: 1.88,
+      zljzb: 0,
+      cddje: 0,
+      cddjzb: 0,
     })
   })
 
-  it('fills missing EastMoney main money flow from Sina and estimates main ratio from turnover', async () => {
-    const getQuotes = vi
-      .fn()
-      .mockResolvedValueOnce({
-        data: {
-          diff: [
-            {
-              f12: '600522',
-              f2: '49.53',
-              f3: '7.51',
-              f5: '5131565',
-              f6: '25205130127',
-              f10: '1.4',
-              f62: '0',
-              f184: '0',
-              f14: '中天科技',
-            },
-          ],
-        },
-      })
-      .mockResolvedValueOnce({
-        data: {
-          diff: [
-            {
-              f12: '600522',
-              f14: '中天科技',
-              f62: '5450857714.71',
-            },
-          ],
-        },
-      })
+  it('does not fallback when THS money flow fails for codes', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const getQuotes = vi.fn().mockRejectedValue(new Error('ths unavailable'))
     const feed = new QuoteHttpFeed({ api: { getQuotes }, sleep: async () => undefined })
 
-    const result = await feed.fetchFullData(['600522'], true)
+    const result = await feed.fetchFullData(['600522', '000001'], true)
 
-    expect(getQuotes).toHaveBeenNthCalledWith(
-      2,
-      ['600522'],
-      expect.objectContaining({ source: 'sinaMoneyFlow', force: true }),
-    )
-    expect(result.get('600522')).toMatchObject({
-      zlje: 5450857714.71,
-      zljzb: 21.63,
-      moneyFlowSource: 'sina',
-      moneyFlowEstimated: true,
-      capitalFlowSource: 'sina_money_flow',
-      capitalFlowConfidence: 'low',
-    })
+    // No fallback — result is empty when THS fails
+    expect(result.size).toBe(0)
+    warn.mockRestore()
   })
 
-  it('requests all missing Sina money flow rows in batches of 20', async () => {
+  it('batches THS money flow requests in groups', async () => {
     const codes = Array.from({ length: 25 }, (_, index) => String(600000 + index))
     const getQuotes = vi
       .fn()
       .mockResolvedValueOnce({
-        data: {
-          diff: codes.map((code) => ({
-            f12: code,
-            f6: '10000',
-            f62: '0',
-            f184: '0',
-          })),
-        },
+        data: { diff: codes.slice(0, 20).map((code) => ({ f12: code, f14: 'test', f62: '100' })) },
       })
       .mockResolvedValueOnce({
-        data: {
-          diff: codes.slice(0, 20).map((code, index) => ({
-            f12: code,
-            f62: String((index + 1) * 100),
-          })),
-        },
-      })
-      .mockResolvedValueOnce({
-        data: {
-          diff: codes.slice(20).map((code, index) => ({
-            f12: code,
-            f62: String((index + 21) * 100),
-          })),
-        },
+        data: { diff: codes.slice(20).map((code) => ({ f12: code, f14: 'test', f62: '200' })) },
       })
     const feed = new QuoteHttpFeed({ api: { getQuotes }, sleep: async () => undefined })
 
     const result = await feed.fetchFullData(codes, true)
 
-    expect(getQuotes).toHaveBeenNthCalledWith(
-      2,
-      codes.slice(0, 20),
-      expect.objectContaining({ source: 'sinaMoneyFlow', force: true, timeout: 20000 }),
-    )
-    expect(getQuotes).toHaveBeenNthCalledWith(
-      3,
-      codes.slice(20),
-      expect.objectContaining({ source: 'sinaMoneyFlow', force: true, timeout: 20000 }),
-    )
-    expect(result.get(codes[24])).toMatchObject({
-      zlje: 2500,
-      zljzb: 25,
-      moneyFlowSource: 'sina',
-    })
-  })
-
-  it('retries Sina money-flow batch as single-code requests when a throttled code skips the whole batch', async () => {
-    const getQuotes = vi
-      .fn()
-      .mockResolvedValueOnce({
-        data: { diff: [] },
-        dragonMeta: {
-          requested: 2,
-          returned: 0,
-          failed: 2,
-          failures: [
-            { code: '600745', error: 'native fetch failed with HTTP 456' },
-            { code: '603773', error: 'skipped after HTTP 456' },
-          ],
-        },
-      })
-      .mockResolvedValueOnce({
-        data: { diff: [] },
-        dragonMeta: { requested: 1, returned: 0, failed: 1 },
-      })
-      .mockResolvedValueOnce({
-        data: {
-          diff: [
-            {
-              f12: '603773',
-              f14: '沃格光电',
-              f62: '197969013.5',
-            },
-          ],
-        },
-        dragonMeta: { requested: 1, returned: 1, failed: 0 },
-      })
-    const feed = new QuoteHttpFeed({ api: { getQuotes }, sleep: async () => undefined })
-
-    const result = await feed.fetchFromSinaMoneyFlow(['600745', '603773'], false)
-
+    expect(getQuotes).toHaveBeenCalledTimes(2)
     expect(getQuotes).toHaveBeenNthCalledWith(
       1,
-      ['600745', '603773'],
-      expect.objectContaining({ source: 'sinaMoneyFlow', force: false }),
+      codes.slice(0, 20),
+      expect.objectContaining({ source: 'thsMoneyFlow' }),
     )
     expect(getQuotes).toHaveBeenNthCalledWith(
       2,
-      ['600745'],
-      expect.objectContaining({ source: 'sinaMoneyFlow', force: false }),
+      codes.slice(20),
+      expect.objectContaining({ source: 'thsMoneyFlow' }),
     )
-    expect(getQuotes).toHaveBeenNthCalledWith(
-      3,
-      ['603773'],
-      expect.objectContaining({ source: 'sinaMoneyFlow', force: false }),
-    )
-    expect(result.get('603773')).toMatchObject({
-      zlje: 197969013.5,
-      moneyFlowSource: 'sina',
-    })
-  })
-
-  it('falls back to Sina money flow when EastMoney full quote request fails', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
-    const getQuotes = vi
-      .fn()
-      .mockRejectedValueOnce(new Error('eastmoney throttled'))
-      .mockResolvedValueOnce({
-        data: {
-          diff: [
-            {
-              f12: '600522',
-              f14: '中天科技',
-              f62: '5450857714.71',
-            },
-          ],
-        },
-      })
-    const feed = new QuoteHttpFeed({ api: { getQuotes }, sleep: async () => undefined })
-
-    const result = await feed.fetchFullData(['600522'], true)
-
-    expect(getQuotes).toHaveBeenNthCalledWith(
-      2,
-      ['600522'],
-      expect.objectContaining({ source: 'sinaMoneyFlow', force: true }),
-    )
-    expect(result.get('600522')).toMatchObject({
-      zlje: 5450857714.71,
-      moneyFlowSource: 'sina',
-    })
-    warn.mockRestore()
+    expect(result.get(codes[0])).toMatchObject({ zlje: 100, moneyFlowSource: 'ths_l2' })
+    expect(result.get(codes[24])).toMatchObject({ zlje: 200, moneyFlowSource: 'ths_l2' })
   })
 })

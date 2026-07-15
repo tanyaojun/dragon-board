@@ -11,7 +11,8 @@ export const DEFAULT_PLATFORMS = [
   'dzh',
 ] as const
 
-export const QUOTE_REFRESH_INTERVAL_MS = 30000
+// 行情刷新间隔（含基础行情 + 资金流补全）。资金流侧 Redis 缓存 60s，10s 刷新绝大部分命中缓存。
+export const QUOTE_REFRESH_INTERVAL_MS = 10000
 export const QUOTE_BATCH_SIZE = 50
 export const PLATFORM_CACHE_TTL_MS = 1800000
 export const PLATFORM_REFRESH_INTERVAL_MS = 1800000

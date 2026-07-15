@@ -119,7 +119,7 @@ describe('ApiService', () => {
     expect(url.searchParams.get('limit')).toBe('40')
   })
 
-  it('caches sina money-flow quote requests briefly unless forced', async () => {
+  it('routes ths money-flow quote requests to the batch endpoint', async () => {
     const api = new ApiService()
     const fetchMock = vi.fn(async () =>
       new Response(
@@ -137,13 +137,10 @@ describe('ApiService', () => {
     )
     vi.stubGlobal('fetch', fetchMock)
 
-    await api.getQuotes(['603773'], { source: 'sinaMoneyFlow', retries: 0 })
-    await api.getQuotes(['603773'], { source: 'sinaMoneyFlow', retries: 0 })
-    await api.getQuotes(['603773'], { source: 'sinaMoneyFlow', retries: 0, force: true })
+    await api.getQuotes(['603773'], { source: 'thsMoneyFlow', retries: 0 })
 
-    expect(fetchMock).toHaveBeenCalledTimes(2)
-    expect(String(fetchMock.mock.calls[0][0])).toContain('/api/quotes/sina-money-flow?codes=603773')
-    expect(String(fetchMock.mock.calls[1][0])).toContain('_t=')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(String(fetchMock.mock.calls[0][0])).toContain('/api/quotes/ths-money-flow?codes=603773')
   })
 
   it('cancels a queued request before its fetch begins', async () => {

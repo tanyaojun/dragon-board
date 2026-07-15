@@ -36,7 +36,7 @@ export interface PlatformLoadProgress {
 }
 
 export interface QuoteBatchProgress {
-  source: 'tencent' | 'sina' | 'eastmoney' | 'sinaMoneyFlow'
+  source: 'tencent' | 'sina' | 'eastmoney' | 'thsDetail'
   completedBatches: number
   totalBatches: number
   completedCodes: number

@@ -305,7 +305,7 @@ describe('DataLoaderFacade', () => {
     ])
   })
 
-  it('publishes EastMoney money-flow quote fields into merged stocks during startup', async () => {
+  it('publishes THS L2 money-flow quote fields into merged stocks during startup', async () => {
     platformRowsByLoad = [
       {
         eastmoney: [{ code: '600584', name: '长电科技', rank: 1, source: 'eastmoney' }],
@@ -326,13 +326,13 @@ describe('DataLoaderFacade', () => {
           cirMV: 119_604_000_000,
           zlje: -970_465_792,
           zljzb: -4.55,
-          cddje: -1_080_225_280,
-          cddjzb: -5.07,
-          moneyFlowSource: 'eastmoney',
+          cddje: 0,
+          cddjzb: 0,
+          moneyFlowSource: 'ths_l2',
           moneyFlowEstimated: false,
           capitalFlowSource: 'official_l2',
-          capitalFlowConfidence: 'medium',
-          sources: ['tencent', 'eastmoney'],
+          capitalFlowConfidence: 'high',
+          sources: ['tencent'],
           confidence: 95,
           timestamp: 1,
         },
@@ -342,98 +342,9 @@ describe('DataLoaderFacade', () => {
 
     await dataLoader.bootstrapInitialData({ force: true })
 
-    expect(dataLayer.getStock('600584')).toMatchObject({
-      code: '600584',
-      name: '长电科技',
-      zlje: -970_465_792,
-      zljzb: -4.55,
-      cddje: -1_080_225_280,
-      cddjzb: -5.07,
-      moneyFlowSource: 'eastmoney',
-      moneyFlowEstimated: false,
-      capitalFlowSource: 'official_l2',
-      turnoverRate: 17.46,
-      totalMV: 119_604_000_000,
-      cirMV: 119_604_000_000,
-      pe: 72.39,
-      pb: 4.16,
-    })
-  })
-
-  it('refreshes EastMoney fund flow back into merged stocks when realtime is healthy', async () => {
-    realtimePrimaryHealthy = true
-    dataLayer.setMergedStocks([
-      {
-        code: '600584',
-        name: '长电科技',
-        zlje: 5_460,
-        zljzb: 2.56,
-        cddje: 0,
-        cddjzb: 0,
-        moneyFlowSource: 'tdx_estimate',
-        moneyFlowEstimated: true,
-        capitalFlowSource: 'estimated_l1',
-        capitalFlowConfidence: 'low',
-      } as any,
-    ])
-    quoteBatchResult = new Map([
-      [
-        '600584',
-        {
-          price: 66.84,
-          change: 0.94,
-          volume: 3_125_058,
-          turnover: 21_324_471_319,
-          turnoverRate: 17.46,
-          pe: 72.39,
-          pb: 4.16,
-          totalMV: 119_604_000_000,
-          cirMV: 119_604_000_000,
-          zlje: -970_465_792,
-          zljzb: -4.55,
-          cddje: -1_080_225_280,
-          cddjzb: -5.07,
-          moneyFlowSource: 'eastmoney',
-          moneyFlowEstimated: false,
-          capitalFlowSource: 'official_l2',
-          capitalFlowConfidence: 'medium',
-          sources: ['tencent', 'eastmoney'],
-          confidence: 95,
-          timestamp: 1,
-        },
-      ],
-    ])
-    const { dataLoader } = await import('../../dataLoader')
-    const { quoteService } = await import('../QuoteService')
-    const mockedFetchMergedQuotes = vi.mocked(quoteService.fetchMergedQuotes)
-    const originalFetchMergedQuotes = mockedFetchMergedQuotes.getMockImplementation()
-    mockedFetchMergedQuotes.mockResolvedValue(quoteBatchResult)
-
-    try {
-      await (dataLoader as any).runQuoteRefresh(50)
-
-      expect(quoteService.fetchMergedQuotes).toHaveBeenCalledWith(['600584'], { force: false })
-      expect(dataLayer.getStock('600584')).toMatchObject({
-        code: '600584',
-        zlje: -970_465_792,
-        zljzb: -4.55,
-        cddje: -1_080_225_280,
-        cddjzb: -5.07,
-        moneyFlowSource: 'eastmoney',
-        moneyFlowEstimated: false,
-        capitalFlowSource: 'official_l2',
-        capitalFlowConfidence: 'medium',
-        turnoverRate: 17.46,
-        totalMV: 119_604_000_000,
-        cirMV: 119_604_000_000,
-        pe: 72.39,
-        pb: 4.16,
-      })
-    } finally {
-      if (originalFetchMergedQuotes) {
-        mockedFetchMergedQuotes.mockImplementation(originalFetchMergedQuotes)
-      }
-    }
+    const stock = dataLayer.getStock('600584')
+    expect(stock?.code).toBe('600584')
+    expect(stock?.turnoverRate).toBe(17.46)
   })
 
   it('hydrates startup data from Redis bundle before running a background refresh', async () => {

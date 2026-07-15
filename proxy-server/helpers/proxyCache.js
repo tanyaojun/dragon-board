@@ -14,8 +14,6 @@ export const PROXY_CACHE_TTLS = {
     tencentResponse: 5,
     tencentMinute: 5,
     sinaResponse: 5,
-    sinaMoneyFlow: 60,
-    sinaMoneyFlowStale: 1800,
     empty: 10,
   },
   startupBundle: {

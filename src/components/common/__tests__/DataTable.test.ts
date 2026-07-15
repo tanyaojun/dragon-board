@@ -159,13 +159,12 @@ describe('DataTable row detail interactions', () => {
     expect(source).not.toContain("case 'cddjzb'")
   })
 
-  test('labels sina money flow fallback without calling it L1 estimated flow', () => {
+  test('labels THS L2 money flow appropriately', () => {
     const source = dataTableSource()
 
     expect(source).toContain('getMoneyFlowTitle')
-    expect(source).toContain('新浪资金流备用源')
-    expect(source).toContain('按成交额估算：主力净额 / 成交额')
-    expect(source).toContain("stock.capitalFlowSource === 'estimated_l1'")
+    expect(source).toContain('同花顺L2主力监控')
+    expect(source).toContain('QMT L2实时资金流')
   })
 
   test('keeps volume ratio display visually stable across data states', () => {

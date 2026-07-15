@@ -9,8 +9,8 @@ type QuoteApi = {
 
 type Sleep = (ms: number) => Promise<void>
 type QuoteBatchProgressCallback = (progress: QuoteBatchProgress) => void
-const SINA_MONEY_FLOW_BATCH_SIZE = 20
-const SINA_MONEY_FLOW_TIMEOUT_MS = 20000
+const THS_MONEY_FLOW_BATCH_SIZE = 20
+const THS_MONEY_FLOW_DELAY_MS = 300
 
 export class QuoteHttpFeed {
   private readonly api: QuoteApi
@@ -49,43 +49,55 @@ export class QuoteHttpFeed {
       return new Map()
     }
 
-    let eastmoneyRows = new Map<string, any>()
-    try {
-      eastmoneyRows = await this.fetchFromEastMoney(codes, force, options)
-    } catch (error) {
-      console.warn('[DataLoader] 东财资金流补全失败，尝试新浪资金流:', error)
-    }
-    const missingMoneyCodes = codes.filter((code) => {
-      const row = eastmoneyRows.get(normalizeStockCode(code))
-      return !hasMoneyFlow(row?.zlje)
-    })
+    const result = new Map<string, any>()
+    const totalBatches = Math.ceil(codes.length / THS_MONEY_FLOW_BATCH_SIZE) || 1
 
-    if (!missingMoneyCodes.length) {
-      return eastmoneyRows
-    }
+    for (let i = 0; i < codes.length; i += THS_MONEY_FLOW_BATCH_SIZE) {
+      const batch = codes.slice(i, i + THS_MONEY_FLOW_BATCH_SIZE)
+      try {
+        const response = await this.api.getQuotes(batch, {
+          source: 'thsMoneyFlow',
+          timeout: 20000,
+        })
 
-    try {
-      const sinaRows = await this.fetchFromSinaMoneyFlow(missingMoneyCodes, force, options)
-      for (const [code, sinaRow] of sinaRows) {
-        const existing = eastmoneyRows.get(code)
-        if (!existing) {
-          eastmoneyRows.set(code, sinaRow)
-          continue
+        const diff = response?.data?.diff || []
+        for (const item of diff) {
+          const code = normalizeStockCode(item.f12)
+          if (!code) continue
+          const zlje = parseFloat(item.f62) || 0
+          result.set(code, {
+            price: parseFloat(item.f2) || 0,
+            name: item.f14 || '',
+            source: 'ths_l2',
+            moneyFlowSource: 'ths_l2',
+            moneyFlowEstimated: false,
+            capitalFlowSource: 'official_l2',
+            capitalFlowConfidence: 'high',
+            zlje,
+            // zljzb 在 mergeHttpQuoteSources 中由 existing.turnover 补算
+            zljzb: 0,
+            cddje: 0,
+            cddjzb: 0,
+          })
         }
-        if (hasMoneyFlow(sinaRow.zlje)) {
-          existing.zlje = sinaRow.zlje
-          existing.moneyFlowSource = 'sina'
-          existing.moneyFlowEstimated = true
-          existing.capitalFlowSource = 'sina_money_flow'
-          existing.capitalFlowConfidence = 'low'
-          existing.zljzb = estimateMainMoneyRatio(existing.zlje, existing.turnover) || existing.zljzb || 0
-        }
+      } catch (error) {
+        console.warn('[DataLoader] THS 资金流请求失败:', error)
       }
-    } catch (error) {
-      console.warn('[DataLoader] 新浪资金流补全失败，保留东财行情数据:', error)
+
+      options.onProgress?.({
+        source: 'thsDetail',
+        completedBatches: Math.floor(i / THS_MONEY_FLOW_BATCH_SIZE) + 1,
+        totalBatches,
+        completedCodes: Math.min(i + batch.length, codes.length),
+        totalCodes: codes.length,
+      })
+
+      if (i + THS_MONEY_FLOW_BATCH_SIZE < codes.length) {
+        await this.sleep(THS_MONEY_FLOW_DELAY_MS)
+      }
     }
 
-    return eastmoneyRows
+    return result
   }
 
   async fetchFromTencent(
@@ -169,19 +181,8 @@ export class QuoteHttpFeed {
           volumeRatio: parseFloat(item.f10) || 0,
           name: item.f14 || '',
           source: 'eastmoney',
-          moneyFlowSource: 'eastmoney',
-          moneyFlowEstimated: false,
-          capitalFlowSource: 'official_l2',
-          capitalFlowConfidence: 'medium',
           totalMV: parseFloat(item.f20) || 0,
           cirMV: parseFloat(item.f21) || 0,
-          zlje: parseFloat(item.f62) || 0,
-          zljzb:
-            parseFloat(item.f184) ||
-            estimateMainMoneyRatio(parseFloat(item.f62), parseFloat(item.f6)) ||
-            0,
-          cddje: parseFloat(item.f66) || 0,
-          cddjzb: parseFloat(item.f69) || 0,
         })
       })
       options.onProgress?.({
@@ -200,36 +201,9 @@ export class QuoteHttpFeed {
     return result
   }
 
-  async fetchFromSinaMoneyFlow(
-    codes: string[],
-    force?: boolean,
-    options: { onProgress?: QuoteBatchProgressCallback } = {},
-  ): Promise<Map<string, any>> {
-    return this.fetchInBatches(
-      codes,
-      'sinaMoneyFlow',
-      120,
-      (item) => ({
-        price: parseFloat(item.f2) || 0,
-        name: item.f14 || '',
-        source: 'sina',
-        moneyFlowSource: 'sina',
-        moneyFlowEstimated: true,
-        capitalFlowSource: 'sina_money_flow',
-        capitalFlowConfidence: 'low',
-        zlje: parseFloat(item.f62) || 0,
-        zljzb: 0,
-      }),
-      options.onProgress,
-      force,
-      SINA_MONEY_FLOW_BATCH_SIZE,
-      { timeout: SINA_MONEY_FLOW_TIMEOUT_MS, retries: 0 },
-    )
-  }
-
   private async fetchInBatches(
     codes: string[],
-    source: 'tencent' | 'sina' | 'sinaMoneyFlow',
+    source: 'tencent' | 'sina',
     delayMs: number,
     mapItem: (item: any) => Record<string, unknown>,
     onProgress?: QuoteBatchProgressCallback,
@@ -254,21 +228,6 @@ export class QuoteHttpFeed {
         returnedCodes.add(code)
         result.set(code, mapItem(item))
       })
-      if (source === 'sinaMoneyFlow' && batch.length > 1 && Number(response?.dragonMeta?.failed) > 0) {
-        const missingCodes = batch.filter((code) => !returnedCodes.has(normalizeStockCode(code)))
-        for (const code of missingCodes) {
-          try {
-            const singleResponse = await this.api.getQuotes([code], requestOptions)
-            const singleDiff = singleResponse?.data?.diff || []
-            singleDiff.forEach((item: any) => {
-              const normalizedCode = normalizeStockCode(item.f12)
-              result.set(normalizedCode, mapItem(item))
-            })
-          } catch (error) {
-            console.warn('[DataLoader] 新浪资金流单只重试失败:', code, error)
-          }
-        }
-      }
       onProgress?.({
         source,
         completedBatches: Math.floor(i / batchSize) + 1,
@@ -287,15 +246,3 @@ export class QuoteHttpFeed {
 }
 
 export const quoteHttpFeed = new QuoteHttpFeed()
-
-function hasMoneyFlow(value: unknown): boolean {
-  const amount = Number(value)
-  return Number.isFinite(amount) && amount !== 0
-}
-
-function estimateMainMoneyRatio(mainNet: unknown, turnover: unknown): number {
-  const main = Number(mainNet)
-  const amount = Number(turnover)
-  if (!Number.isFinite(main) || !Number.isFinite(amount) || amount <= 0) return 0
-  return Number(((main / amount) * 100).toFixed(2))
-}

@@ -1082,12 +1082,8 @@ const formatMoneyFlowCell = (key: string, stock: any): string => {
 }
 
 const getMoneyFlowTitle = (key: string, stock: any): string | undefined => {
-  if (stock.capitalFlowSource === 'sina_money_flow' || stock.moneyFlowSource === 'sina') {
-    return key === 'zljzb' ? '按成交额估算：主力净额 / 成交额' : '新浪资金流备用源'
-  }
-  if (stock.capitalFlowSource === 'estimated_l1' || stock.moneyFlowSource === 'tdx_estimate') {
-    return 'L1估算资金流'
-  }
+  if (stock.moneyFlowSource === 'ths_l2') return '同花顺L2主力监控'
+  if (stock.moneyFlowSource === 'qmt_l2') return 'QMT L2实时资金流'
   if (stock.moneyFlowSource === 'eastmoney') return '东财资金流'
   return undefined
 }
