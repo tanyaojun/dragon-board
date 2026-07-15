@@ -4,9 +4,10 @@ import { sendBadRequest, sendDegraded } from '../helpers/response.js'
 
 const THS_BIG_ORDER_BASE = 'https://vaserviece.10jqka.com.cn/Level2/index.php'
 
-const THS_MONEY_FLOW_CONCURRENCY = 4
-const THS_MONEY_FLOW_DELAY_MS = 100
+const THS_MONEY_FLOW_CONCURRENCY = 2
+const THS_MONEY_FLOW_DELAY_MS = 200
 const THS_MONEY_FLOW_BG_MAX = 2
+const THS_MONEY_FLOW_CIRCUIT_BREAKER_FAILS = 5
 
 const THS_BIG_ORDER_HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -172,7 +173,7 @@ export function registerBigOrderRoutes(app, { plainClient, cache, runtimeCache, 
 
     const fetchFromThs = async (code) => {
       const response = await plainClient.get(buildThsBigOrderUrl(code).toString(), {
-        timeout: 15000,
+        timeout: 20000,
         headers: THS_BIG_ORDER_HEADERS,
       })
       return validateThsPayload(response.data, now)
@@ -206,7 +207,15 @@ export function registerBigOrderRoutes(app, { plainClient, cache, runtimeCache, 
 
     await Promise.all(
       Array.from({ length: workerCount }, async () => {
+        let consecutiveMissFails = 0
         while (cursor < queue.length) {
+          // 熔断：连续失败超过阈值，跳过剩余代码
+          if (consecutiveMissFails >= THS_MONEY_FLOW_CIRCUIT_BREAKER_FAILS) {
+            const skipped = queue.length - cursor
+            cursor = queue.length
+            console.warn(`[THS资金流] 熔断触发，跳过剩余 ${skipped} 只`)
+            return
+          }
           const code = queue[cursor++]
           const cached = await flowCache.get(thsMoneyFlowCacheKey(code), { allowStale: true })
 
@@ -225,9 +234,11 @@ export function registerBigOrderRoutes(app, { plainClient, cache, runtimeCache, 
             try {
               const row = await refreshAndCache(code)
               rows.push(row)
+              consecutiveMissFails = 0
             } catch (error) {
               console.warn(`[THS资金流] ${code} 失败:`, error.message)
               failures.push({ code, error: error?.message || 'unknown' })
+              consecutiveMissFails++
             }
             if (cursor < queue.length) {
               await delay(THS_MONEY_FLOW_DELAY_MS)
