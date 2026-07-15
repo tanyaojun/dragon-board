@@ -95,7 +95,11 @@ export class QuoteService {
         if (!this.hasQuoteSupplementData(mergedRealtimeQuote)) {
           enrichmentCodes.add(code)
         }
-        if (!this.hasFundFlowData(mergedRealtimeQuote)) {
+        // 无资金流数据，或资金流来自 THS HTTP（需要周期性刷新），都纳入 enrichment
+        if (
+          !this.hasFundFlowData(mergedRealtimeQuote) ||
+          mergedRealtimeQuote.moneyFlowSource === 'ths_l2'
+        ) {
           enrichmentCodes.add(code)
         }
       })
