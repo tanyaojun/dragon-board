@@ -843,13 +843,15 @@ const getRankTrendAnalysis = (stock: any) => stock?.rankTrend
 
 const getStockValue = (stock: Stock, key: string) => (stock as unknown as Record<string, unknown>)[key]
 
-const getRankChange = (stock: any) =>
-  Math.round(
+const getRankChange = (stock: any) => {
+  if (stock._rankChange !== undefined) return stock._rankChange
+  return Math.round(
     getRankTrendAnalysis(stock)?.meta?.change ??
       getRankTrendAnalysis(stock)?.change ??
       stock?.rankChange ??
       0,
   )
+}
 
 const candidatePoolStateLabels: Record<string, string> = {
   idle: '未触发',
@@ -956,17 +958,25 @@ const getFinalConfidence = (stock: any) =>
   stock?.finalConfidence ??
   0
 
-const getJumpConfidence = (stock: any) =>
-  getRankTrendAnalysis(stock)?.jump?.confidence ??
-  stock?.rankTrend?.jump?.confidence ??
-  stock?.jumpConfidence ??
-  0
+const getJumpConfidence = (stock: any) => {
+  if (stock._jumpConfidence !== undefined) return stock._jumpConfidence
+  return (
+    getRankTrendAnalysis(stock)?.jump?.confidence ??
+    stock?.rankTrend?.jump?.confidence ??
+    stock?.jumpConfidence ??
+    0
+  )
+}
 
-const getJumpDirection = (stock: any) =>
-  getRankTrendAnalysis(stock)?.jump?.direction ??
-  stock?.rankTrend?.jump?.direction ??
-  stock?.jumpDirection ??
-  null
+const getJumpDirection = (stock: any) => {
+  if (stock._jumpDirection !== undefined) return stock._jumpDirection
+  return (
+    getRankTrendAnalysis(stock)?.jump?.direction ??
+    stock?.rankTrend?.jump?.direction ??
+    stock?.jumpDirection ??
+    null
+  )
+}
 
 const getJumpSignalBadgeClass = (stock: any) => {
   const jumpDirection = getJumpDirection(stock)
@@ -976,21 +986,7 @@ const getJumpSignalBadgeClass = (stock: any) => {
   return ''
 }
 
-function getResonanceRawScore(stock: any): number | null {
-  const preview = getTradingPoolActionPreview(stock)
-  return preview.breakdown?.totalScore ?? null
-}
-
-function getResonanceCellValue(stock: any): number | null {
-  const score = getResonanceRawScore(stock)
-  if (score == null) return null
-  return normalizeResonanceIntensity(score).pct
-}
-
-function getResonanceCellClass(stock: any): string {
-  const score = getResonanceRawScore(stock)
-  if (score == null) return ''
-  const { label } = normalizeResonanceIntensity(score)
+function resonanceLabelToClass(label: string): string {
   switch (label) {
     case '非常强': return 'resonance-very-strong'
     case '强':     return 'resonance-strong'
@@ -999,6 +995,27 @@ function getResonanceCellClass(stock: any): string {
     case '非常弱': return 'resonance-very-weak'
   }
   return ''
+}
+
+function getResonanceRawScore(stock: any): number | null {
+  if (stock._resonanceRawScore !== undefined) return stock._resonanceRawScore
+  const preview = getTradingPoolActionPreview(stock)
+  return preview.breakdown?.totalScore ?? null
+}
+
+function getResonanceCellValue(stock: any): number | null {
+  if (stock._resonancePct !== undefined) return stock._resonancePct
+  const score = getResonanceRawScore(stock)
+  if (score == null) return null
+  return normalizeResonanceIntensity(score).pct
+}
+
+function getResonanceCellClass(stock: any): string {
+  const label = stock._resonanceLabel
+  if (label) return resonanceLabelToClass(label)
+  const score = getResonanceRawScore(stock)
+  if (score == null) return ''
+  return resonanceLabelToClass(normalizeResonanceIntensity(score).label)
 }
 
 const getMacdCross = (stock: any) =>

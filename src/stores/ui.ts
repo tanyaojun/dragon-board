@@ -25,6 +25,7 @@ function getRankTrendAnalysis(stock: any) {
 }
 
 function getRankChangeSortValue(stock: any) {
+  if (stock._rankChange !== undefined) return stock._rankChange
   return Math.round(
     toFiniteNumber(getRankTrendAnalysis(stock)?.meta?.change) ??
       toFiniteNumber(getRankTrendAnalysis(stock)?.change) ??
@@ -34,6 +35,7 @@ function getRankChangeSortValue(stock: any) {
 }
 
 function getJumpConfidenceSortValue(stock: any) {
+  if (stock._jumpConfidence !== undefined) return stock._jumpConfidence
   return (
     toFiniteNumber(getRankTrendAnalysis(stock)?.jump?.confidence) ??
     toFiniteNumber(stock?.jumpConfidence) ??
@@ -42,6 +44,8 @@ function getJumpConfidenceSortValue(stock: any) {
 }
 
 function getResonanceIntensitySortValue(stock: any) {
+  if (stock._resonancePct !== undefined) return stock._resonancePct
+  // 回退：缓存未命中时走完整分析（仅在信号增强未完成时触发）
   const projection = stock?.candidatePoolProjection
   if (!projection) return 0
   const result = analyzeTradingPoolCandidate({

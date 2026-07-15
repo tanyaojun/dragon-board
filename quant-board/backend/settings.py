@@ -110,7 +110,7 @@ class Settings(BaseModel):
     redis_url: str = Field(default="redis://127.0.0.1:6379/0")
     redis_key_prefix: str = Field(default="hellobiga:dragon-board:local")
     snapshot_cache_enabled: bool = Field(default=True)
-    snapshot_cache_ttl_seconds: int = Field(default=300)
+    snapshot_cache_ttl_seconds: int = Field(default=1800)
     snapshot_empty_cache_ttl_seconds: int = Field(default=10)
     snapshot_cache_connect_timeout_seconds: float = Field(default=0.2)
     snapshot_cache_socket_timeout_seconds: float = Field(default=0.2)

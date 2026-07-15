@@ -9,6 +9,10 @@ import { evaluateJumpSignal, incrementJumpBar, registerJumpEntry, unregisterJump
 import { fusionCandidateNotifier } from '../rankTrend/FusionCandidateNotifier'
 import { buildFusionStrategyProjections } from '../rankTrend/FusionStrategyProjector'
 import type { RankTrendAnalysisResult } from '../rankTrend/types'
+import {
+  analyzeTradingPoolCandidate,
+  normalizeResonanceIntensity,
+} from '../candidate/TradingPoolAnalysisService'
 import { extraDataProjector } from './ExtraDataProjector'
 import type { StockSignalUpdate } from './types'
 
@@ -163,7 +167,62 @@ export class RankTrendSignalService {
     this.applyJumpSignals(merged)
     await this.syncCandidatePoolSignals(merged)
 
+    // 预计算展示字段：避免 DataTable 模板渲染和 uiStore 排序时逐行调用 analyzeTradingPoolCandidate
+    this.precomputeDisplayFields(merged)
+
     return merged
+  }
+
+  /**
+   * 批量预计算三个展示字段（变化%、跃迁度、共振强度）并写入 stock 对象缓存。
+   * DataTable 模板和 uiStore 排序直接读取 _ 前缀缓存字段，消除 O(n) 次重量级分析调用。
+   */
+  private precomputeDisplayFields(stocks: any[]): void {
+    if (!stocks.length) return
+
+    // 分离 thesis 候选和实时投影，供 analyzeTradingPoolCandidate 批量分析
+    const thesisCandidates: any[] = []
+    const liveStocks: any[] = []
+
+    for (const stock of stocks) {
+      const rankTrend = stock.rankTrend as RankTrendAnalysisResult | undefined
+
+      // 变化% 和 跃迁度：直接从 rankTrend 读取
+      stock._rankChange = Math.round(rankTrend?.meta?.change ?? 0)
+      stock._jumpConfidence = Math.round(rankTrend?.jump?.confidence ?? 0)
+      stock._jumpDirection = rankTrend?.jump?.direction ?? null
+
+      // 共振强度需要 analyzeTradingPoolCandidate 批量计算
+      if (stock.candidatePoolEntryId || stock.candidatePoolProjection?.entryDecision) {
+        thesisCandidates.push({
+          ...stock,
+          candidateEntryDecision: stock.candidatePoolProjection?.entryDecision,
+          rankTrend,
+        })
+      } else if (rankTrend) {
+        liveStocks.push({ ...stock, rankTrend })
+      }
+    }
+
+    // 批量计算共振强度（一次调用处理所有股票）
+    if (thesisCandidates.length > 0 || liveStocks.length > 0) {
+      const analysis = analyzeTradingPoolCandidate({
+        candidates: thesisCandidates,
+        liveStocks,
+      })
+      const rowByCode = new Map(analysis.rows.map((row) => [row.code, row]))
+
+      for (const stock of stocks) {
+        const row = rowByCode.get(stock.code)
+        const totalScore = row?.scoringBreakdown?.totalScore ?? null
+        if (totalScore != null) {
+          const { pct, label } = normalizeResonanceIntensity(totalScore)
+          stock._resonancePct = pct
+          stock._resonanceLabel = label
+          stock._resonanceRawScore = totalScore
+        }
+      }
+    }
   }
 
   private async syncCandidatePoolSignals(stocks: any[]): Promise<void> {

@@ -677,8 +677,12 @@ describe('DataLoaderFacade', () => {
       expect(signalCompletionCount).toBe(2)
     })
 
-    expect(EventManager.getHistory(AppEvents.DATA.MERGED)).toHaveLength(3)
+    // 旧信号增强按 code 合并时不应覆盖已刷新的新数据
     expect(dataLayer.getStocks()).toEqual([expect.objectContaining({ code: '000002' })])
+    // 事件历史至少包含 2 次 base-merge + 至少 1 次 signal-enriched
+    const mergedEvents = EventManager.getHistory(AppEvents.DATA.MERGED)
+    expect(mergedEvents.filter((e: any) => e.data?.reason === 'base-merge')).toHaveLength(2)
+    expect(mergedEvents.filter((e: any) => e.data?.reason === 'signal-enriched').length).toBeGreaterThanOrEqual(1)
   })
 
   it('bootstrapInitialData reloads through the startup path when old rows already exist', async () => {

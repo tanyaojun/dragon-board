@@ -92,6 +92,63 @@ vi.mock('@/utils/eventManager', () => ({
   },
 }))
 
+vi.mock('../../candidate/TradingPoolAnalysisService', () => ({
+  analyzeTradingPoolCandidate: vi.fn((input: any) => {
+    const rows = (input.candidates || [])
+      .concat(input.liveStocks || [])
+      .map((stock: any) => ({
+        code: stock.code,
+        name: stock.name,
+        status: '观察中' as const,
+        decision: 'watch' as const,
+        reasons: ['consensus_moderate'],
+        signalSnapshot: {
+          finalSignal: 'hold',
+          finalConfidence: 72,
+          jumpDirection: 'buy',
+          directionSignal: 'buy',
+          directionConfidence: 80,
+          jumpConfidence: 92,
+          macdCross: 'golden',
+          accelerationSignal: 'buy',
+          accelerationConfidence: 80,
+          zeroCrossSignal: 'hold',
+          zeroCrossConfidence: 50,
+          buyVotes: 3,
+          riskFlags: [],
+          source: 'live_projection',
+          limitUp: false,
+          momentumSyncBroken: false,
+          lifecycleAction: 'allow',
+          dataQuality: 'fresh' as const,
+        },
+        scoringBreakdown: {
+          totalScore: 20,
+          discreteScore: 5,
+          continuousScore: 15,
+          discreteDetail: { macdCross: 3, jumpDirection: 2 },
+          continuousDetail: {
+            jumpConfidence: 4.6,
+            finalConfidence: 3.6,
+            directionConfidence: 4.0,
+            accelerationConfidence: 4.0,
+            zeroCrossConfidence: -1.2,
+          },
+        },
+      }))
+    return { rows, staleCount: 0, exitedCount: 0 }
+  }),
+  normalizeResonanceIntensity: vi.fn((totalScore: number) => {
+    const pct = Math.max(0, Math.min(100, Math.round((totalScore / 30) * 100)))
+    let label = '非常弱'
+    if (pct >= 90) label = '非常强'
+    else if (pct >= 67) label = '强'
+    else if (pct >= 50) label = '中等'
+    else if (pct >= 27) label = '较弱'
+    return { pct, label }
+  }),
+}))
+
 describe('RankTrendSignalService', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
@@ -495,6 +552,162 @@ describe('RankTrendSignalService', () => {
 
     expect(jumpSignalNotifier.notifyEntry).not.toHaveBeenCalled()
     expect(jumpSignalNotifier.notifyExit).not.toHaveBeenCalled()
+  })
+
+  describe('precomputeDisplayFields (via applySignalsToMerged)', () => {
+    it('sets _rankChange / _jumpConfidence / _jumpDirection when rankTrend is present', async () => {
+      const { rankTrendAnalyzer } = await import('../../RankTrendAnalyzer')
+      vi.mocked(rankTrendAnalyzer.getRankTrends).mockResolvedValue(
+        new Map([
+          [
+            '000001',
+            {
+              meta: { code: '000001', currentRank: 1, currentPercentile: 99, change: 12, rawChange: 12, updateTime: 1, sampleQuality: { status: 'ok', sampleCount: 30, requiredSampleCount: 30, delayedCount: 0, restoredCount: 0 } },
+              technical: {},
+              cycle: {},
+              risk: {},
+              decision: { base: { signal: 'buy', confidence: 80 }, final: { signal: 'hold', confidence: 72 } },
+              jump: { direction: 'buy', confidence: 92 },
+            } as any,
+          ],
+        ]),
+      )
+
+      const service = new RankTrendSignalService()
+      const result = await service.applySignalsToMerged([{ code: '000001', name: '平安银行' }])
+
+      expect(result[0]._rankChange).toBe(12)
+      expect(result[0]._jumpConfidence).toBe(92)
+      expect(result[0]._jumpDirection).toBe('buy')
+    })
+
+    it('sets _rankChange to 0 and _jumpDirection to null when rankTrend is missing', async () => {
+      const { rankTrendAnalyzer } = await import('../../RankTrendAnalyzer')
+      vi.mocked(rankTrendAnalyzer.getRankTrends).mockResolvedValue(new Map())
+
+      const service = new RankTrendSignalService()
+      const result = await service.applySignalsToMerged([{ code: '000002', name: '测试股' }])
+
+      expect(result[0]._rankChange).toBe(0)
+      expect(result[0]._jumpConfidence).toBe(0)
+      expect(result[0]._jumpDirection).toBeNull()
+    })
+
+    it('sets _resonancePct / _resonanceLabel when rankTrend is available for live stocks', async () => {
+      const { rankTrendAnalyzer } = await import('../../RankTrendAnalyzer')
+      vi.mocked(rankTrendAnalyzer.getRankTrends).mockResolvedValue(
+        new Map([
+          [
+            '000001',
+            {
+              meta: { code: '000001', currentRank: 1, currentPercentile: 99, change: 5, rawChange: 5, updateTime: 1, sampleQuality: { status: 'ok', sampleCount: 30, requiredSampleCount: 30, delayedCount: 0, restoredCount: 0 } },
+              technical: {},
+              cycle: {},
+              risk: {},
+              decision: { final: { signal: 'buy', confidence: 78 } },
+              jump: { direction: 'buy', confidence: 85 },
+            } as any,
+          ],
+        ]),
+      )
+
+      const service = new RankTrendSignalService()
+      const result = await service.applySignalsToMerged([{ code: '000001', name: '平安银行' }])
+
+      expect(result[0]._resonancePct).toBe(67) // totalScore=20 → 20/30*100=67
+      expect(result[0]._resonanceLabel).toBe('强')
+      expect(result[0]._resonanceRawScore).toBe(20)
+    })
+
+    it('sets _resonancePct / _resonanceLabel for thesis candidates with candidatePoolProjection', async () => {
+      const { rankTrendAnalyzer } = await import('../../RankTrendAnalyzer')
+      vi.mocked(rankTrendAnalyzer.getRankTrends).mockResolvedValue(
+        new Map([
+          [
+            '000003',
+            {
+              meta: { code: '000003', currentRank: 3, currentPercentile: 97, change: 8, rawChange: 8, updateTime: 1, sampleQuality: { status: 'ok', sampleCount: 30, requiredSampleCount: 30, delayedCount: 0, restoredCount: 0 } },
+              technical: {},
+              cycle: {},
+              risk: {},
+              decision: { final: { signal: 'buy', confidence: 82 } },
+              jump: { direction: 'buy', confidence: 88 },
+            } as any,
+          ],
+        ]),
+      )
+
+      const service = new RankTrendSignalService()
+      const result = await service.applySignalsToMerged([
+        {
+          code: '000003',
+          name: '候选股',
+          candidatePoolEntryId: 'entry-3',
+          candidatePoolProjection: {
+            entryDecision: {
+              decisionState: 'auto_add',
+              label: '自动入池',
+              summary: '全部门禁通过',
+              checks: [],
+              configSnapshot: { minJumpConfidence: 60 },
+            },
+          },
+        },
+      ])
+
+      expect(result[0]._rankChange).toBe(8)
+      expect(result[0]._jumpConfidence).toBe(88)
+      expect(result[0]._resonancePct).toBe(67)
+      expect(result[0]._resonanceLabel).toBe('强')
+    })
+
+    it('handles empty stocks array without error', async () => {
+      const { rankTrendAnalyzer } = await import('../../RankTrendAnalyzer')
+      vi.mocked(rankTrendAnalyzer.getRankTrends).mockResolvedValue(new Map())
+
+      const service = new RankTrendSignalService()
+      // applySignalsToMerged 会调用 rankTrendAnalyzer.getRankTrends(new Map())
+      // 空 map 也是合法的
+      const result = await service.applySignalsToMerged([])
+
+      expect(result).toEqual([])
+    })
+
+    it('leaves _resonancePct undefined when analyzeTradingPoolCandidate returns no row for the stock', async () => {
+      const { rankTrendAnalyzer } = await import('../../RankTrendAnalyzer')
+      const { analyzeTradingPoolCandidate } = await import(
+        '../../candidate/TradingPoolAnalysisService'
+      )
+      vi.mocked(rankTrendAnalyzer.getRankTrends).mockResolvedValue(
+        new Map([
+          [
+            '000004',
+            {
+              meta: { code: '000004', currentRank: 4, currentPercentile: 96, change: 3, rawChange: 3, updateTime: 1, sampleQuality: { status: 'ok', sampleCount: 30, requiredSampleCount: 30, delayedCount: 0, restoredCount: 0 } },
+              technical: {},
+              cycle: {},
+              risk: {},
+              decision: { final: { signal: 'hold', confidence: 60 } },
+              jump: { direction: 'hold', confidence: 55 },
+            } as any,
+          ],
+        ]),
+      )
+      // 模拟 analyzeTradingPoolCandidate 返回不匹配 code 的行
+      vi.mocked(analyzeTradingPoolCandidate).mockReturnValueOnce({
+        rows: [{ code: '999999', status: '观察中', decision: 'watch', reasons: [], scoringBreakdown: { totalScore: 10 } }],
+        staleCount: 0,
+        exitedCount: 0,
+      } as any)
+
+      const service = new RankTrendSignalService()
+      const result = await service.applySignalsToMerged([{ code: '000004', name: '无共振股' }])
+
+      expect(result[0]._rankChange).toBe(3)
+      expect(result[0]._jumpConfidence).toBe(55)
+      expect(result[0]._resonancePct).toBeUndefined()
+      expect(result[0]._resonanceLabel).toBeUndefined()
+    })
   })
 
   it('keeps RankTrend refresh usable when fusion auto-candidate creation fails', async () => {

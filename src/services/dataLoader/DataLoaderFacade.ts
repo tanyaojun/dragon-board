@@ -940,8 +940,8 @@ class DataLoaderService {
       if (!result.enriched) return
       const enriched = result.merged
       if (this.stockPublishVersion !== basePublishVersion) {
-        if (this.tryMergeStaleSignalEnrichment(baseMerged, enriched)) return
-        debugLog('[DataLoader] 跳过过期的后台排名趋势信号增强')
+        // 版本已变化：按 code 合并 rankTrend 信号到当前 stocks，不丢弃已计算完成的信号
+        this.mergeSignalEnrichmentByCode(enriched)
         return
       }
       this.publishStocks(enriched, { reason: 'signal-enriched' })
@@ -951,25 +951,30 @@ class DataLoaderService {
     }
   }
 
-  private tryMergeStaleSignalEnrichment(baseMerged: any[], enriched: any[]): boolean {
-    const current = dataLayer.getStocks()
-    const sameOrderedPool =
-      current.length === baseMerged.length &&
-      current.every((stock, index) => {
-        const baseStock = baseMerged[index]
-        return stock.code === baseStock?.code && stock.compRank === baseStock?.compRank
-      })
-
-    if (!sameOrderedPool) return false
-
+  /**
+   * 按 code 将已计算的 rankTrend 信号合并到当前 stocks。
+   * 替代原有的 tryMergeStaleSignalEnrichment 严格版本检查，
+   * 确保后台信号增强结果不会因版本号变化而被静默丢弃。
+   */
+  private mergeSignalEnrichmentByCode(enriched: any[]): void {
     const enrichedByCode = new Map(enriched.map((stock) => [stock.code, stock]))
+    const current = dataLayer.getStocks()
+    let mergedCount = 0
+
     const merged = current.map((stock) => {
       const signalStock = enrichedByCode.get(stock.code)
       if (!signalStock) return stock
+      mergedCount += 1
       return {
         ...stock,
         rankTrend: signalStock.rankTrend,
         rankTrendCoverageWarning: signalStock.rankTrendCoverageWarning,
+        _rankChange: signalStock._rankChange,
+        _jumpConfidence: signalStock._jumpConfidence,
+        _jumpDirection: signalStock._jumpDirection,
+        _resonancePct: signalStock._resonancePct,
+        _resonanceLabel: signalStock._resonanceLabel,
+        _resonanceRawScore: signalStock._resonanceRawScore,
         candidatePoolStatus: signalStock.candidatePoolStatus,
         candidatePoolLabel: signalStock.candidatePoolLabel,
         candidatePoolProjection: signalStock.candidatePoolProjection,
@@ -979,9 +984,14 @@ class DataLoaderService {
       }
     })
 
+    if (!mergedCount) {
+      debugLog('[DataLoader] 后台信号增强无匹配 code，跳过 publish')
+      return
+    }
+
     this.publishStocks(merged, { reason: 'signal-enriched' })
     void this.writeStartupBundle(this.summarizeRun(Date.now(), false))
-    return true
+    debugLog(`[DataLoader] 后台信号增强已按 code 合并: ${mergedCount}/${current.length} 只股票`)
   }
 
   /**
