@@ -100,7 +100,7 @@ export function registerMarketRoutes(app, { plainClient, port, runtimeCache }) {
 
   app.get('/api/limitup/ths/pools', async (req, res) => {
     const dateStr = normalizeDate(req.query.date)
-    const ttlSeconds = 30
+    const ttlSeconds = PROXY_CACHE_TTLS.market.thsPools
     const cacheKey = `market:ths-pools:v1:${dateStr}`
     try {
       const result = await runtimeCache.remember(cacheKey, { ttlSeconds, staleTtlSeconds: ttlSeconds * 6 }, async () => {
@@ -190,12 +190,17 @@ export function registerMarketRoutes(app, { plainClient, port, runtimeCache }) {
   })
 
   app.get('/api/surge-stock/performance', async (req, res) => {
+    const ttlSeconds = PROXY_CACHE_TTLS.market.surgeStock
+    const cacheKey = 'market:surge-stock:v1'
     try {
-      const response = await plainClient.get(
-        'https://flash-api.xuangubao.cn/api/surge_stock/stocks?normal=true&uplimit=true',
-        { timeout: 8000 },
-      )
-      res.json(response.data)
+      const result = await runtimeCache.remember(cacheKey, { ttlSeconds, staleTtlSeconds: ttlSeconds * 2 }, async () => {
+        const response = await plainClient.get(
+          'https://flash-api.xuangubao.cn/api/surge_stock/stocks?normal=true&uplimit=true',
+          { timeout: 8000 },
+        )
+        return response.data
+      })
+      res.json(result.value)
     } catch (error) {
       console.error('[surge-stock] 接口失败:', error.message)
       sendDegraded(res, {
@@ -207,7 +212,7 @@ export function registerMarketRoutes(app, { plainClient, port, runtimeCache }) {
   })
 
   app.get('/api/market/overview', async (req, res) => {
-    const ttlSeconds = 30
+    const ttlSeconds = PROXY_CACHE_TTLS.market.overview
     const cacheKey = 'market:overview:v1'
     try {
       const result = await runtimeCache.remember(cacheKey, { ttlSeconds, staleTtlSeconds: ttlSeconds * 2 }, async () => {
@@ -223,7 +228,7 @@ export function registerMarketRoutes(app, { plainClient, port, runtimeCache }) {
   })
 
   app.get('/api/sentiment/composite', async (req, res) => {
-    const ttlSeconds = 30
+    const ttlSeconds = PROXY_CACHE_TTLS.market.sentimentComposite
     const cacheKey = 'sentiment:composite:v1'
     try {
       const result = await runtimeCache.remember(cacheKey, { ttlSeconds, staleTtlSeconds: ttlSeconds * 2 }, async () => {
@@ -244,7 +249,8 @@ export function registerMarketRoutes(app, { plainClient, port, runtimeCache }) {
           yesterdayPerformance: surgeRes.status === 'fulfilled' ? surgeRes.value.data : null,
         }
       })
-      res.json(result.value)
+      // 刷新 timestamp 为当前时间，确保缓存命中时调用方看到的不是过期时间戳
+      res.json({ ...result.value, timestamp: Date.now() })
     } catch (error) {
       res.json({
         ok: true,

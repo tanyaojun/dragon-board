@@ -387,6 +387,17 @@ def _snapshot_cache_builder() -> snapshot_cache.SnapshotCacheKeyBuilder:
     return snapshot_cache.SnapshotCacheKeyBuilder(prefix=get_settings().redis_key_prefix)
 
 
+def _invalidate_theme_caches() -> None:
+    """刷新题材映射/热度后清除对应的 Redis 缓存索引键。"""
+    cache = snapshot_cache.get_snapshot_redis_cache()
+    prefix = get_settings().redis_key_prefix
+    index_keys = snapshot_cache.build_snapshot_cache_index_keys(
+        prefix=prefix,
+        dataset_id="themes",
+    )
+    cache.invalidate_indexes(index_keys)
+
+
 def _cached_snapshot_response(
     resource: str,
     *,
@@ -1122,6 +1133,8 @@ def refresh_theme_mappings() -> dict[str, Any]:
         result = refresh_theme_stock_mappings()
         if not result.get("ok"):
             raise HTTPException(status_code=500, detail=result)
+        # 刷新成功后清除 themes 相关 Redis 缓存，避免 GET 端点返回旧数据
+        _invalidate_theme_caches()
         return result
     except HTTPException:
         raise

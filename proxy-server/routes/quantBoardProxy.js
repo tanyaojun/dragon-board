@@ -81,6 +81,7 @@ function buildCacheKey(resourcePath, query) {
       return `proxy:snapshots:counts:${digest}`
     }
     default:
+      console.warn(`[quant-board-proxy] buildCacheKey 未识别的缓存资源: ${resourcePath}`)
       return `proxy:${resourcePath.replace(/\//g, ':')}:v1`
   }
 }

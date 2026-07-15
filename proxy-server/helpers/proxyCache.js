@@ -26,6 +26,10 @@ export const PROXY_CACHE_TTLS = {
   },
   market: {
     thsLimitUp: 30,
+    thsPools: 30,
+    overview: 30,
+    sentimentComposite: 30,
+    surgeStock: 30,
   },
 }
 
