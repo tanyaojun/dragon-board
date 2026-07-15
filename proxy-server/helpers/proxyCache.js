@@ -9,11 +9,12 @@ export const PROXY_CACHE_TTLS = {
     empty: 15,
   },
   quotes: {
-    eastmoneyResponse: 35,
+    // 60s TTL 配合前端 10s 刷新：6 次刷新仅 1 次触发上游，其余全部 Redis 命中
+    eastmoneyResponse: 60,
     eastmoneyHistFlow: 300,
-    tencentResponse: 5,
-    tencentMinute: 5,
-    sinaResponse: 5,
+    tencentResponse: 60,
+    tencentMinute: 60,
+    sinaResponse: 60,
     empty: 10,
   },
   startupBundle: {
