@@ -1081,9 +1081,17 @@ def verify_theme_json_migration(
 
 @app.get("/api/themes/mapping")
 def get_theme_mapping(db: Session | None = Depends(get_theme_db)) -> dict[str, Any]:
-    repo = get_theme_repository(db)
-    mapping = repo.get_mapping()
-    return {"ok": True, "mapping": mapping, "source": storage_source_label()}
+    def load_mapping() -> dict[str, Any]:
+        repo = get_theme_repository(db)
+        mapping = repo.get_mapping()
+        return {"ok": True, "mapping": mapping, "source": storage_source_label()}
+
+    return _cached_snapshot_response(
+        "themes:mapping",
+        resolved_dataset_id="themes",
+        params={},
+        loader=load_mapping,
+    )
 
 
 @app.get("/api/themes/stocks/{theme_id}")

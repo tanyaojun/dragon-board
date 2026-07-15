@@ -100,52 +100,64 @@ export function registerMarketRoutes(app, { plainClient, port, runtimeCache }) {
 
   app.get('/api/limitup/ths/pools', async (req, res) => {
     const dateStr = normalizeDate(req.query.date)
-    const entries = await Promise.all(
-      THS_LIMIT_UP_POOLS.map(async (pool) => {
-        try {
-          const url = buildThsLimitUpPoolUrl(pool, dateStr)
-          const response = await plainClient.get(url, { timeout: 8000 })
-          const items = extractPoolItems(response.data)
-          return [
-            pool.key,
-            {
-              ok: true,
-              key: pool.key,
-              cate: pool.cate,
-              total: extractPoolTotal(response.data, items),
-              items,
-            },
-          ]
-        } catch (error) {
-          return [
-            pool.key,
-            {
-              ok: false,
-              key: pool.key,
-              cate: pool.cate,
-              total: 0,
-              items: [],
-              errorCode: classifyUpstreamError(error),
-              message: error?.message || 'ths limitup pool unavailable',
-            },
-          ]
+    const ttlSeconds = 30
+    const cacheKey = `market:ths-pools:v1:${dateStr}`
+    try {
+      const result = await runtimeCache.remember(cacheKey, { ttlSeconds, staleTtlSeconds: ttlSeconds * 6 }, async () => {
+        const entries = await Promise.all(
+          THS_LIMIT_UP_POOLS.map(async (pool) => {
+            try {
+              const url = buildThsLimitUpPoolUrl(pool, dateStr)
+              const response = await plainClient.get(url, { timeout: 8000 })
+              const items = extractPoolItems(response.data)
+              return [
+                pool.key,
+                {
+                  ok: true,
+                  key: pool.key,
+                  cate: pool.cate,
+                  total: extractPoolTotal(response.data, items),
+                  items,
+                },
+              ]
+            } catch (error) {
+              return [
+                pool.key,
+                {
+                  ok: false,
+                  key: pool.key,
+                  cate: pool.cate,
+                  total: 0,
+                  items: [],
+                  errorCode: classifyUpstreamError(error),
+                  message: error?.message || 'ths limitup pool unavailable',
+                },
+              ]
+            }
+          }),
+        )
+        const pools = Object.fromEntries(entries)
+        const errors = Object.values(pools)
+          .filter((pool) => !pool.ok)
+          .map((pool) => ({ pool: pool.key, errorCode: pool.errorCode, message: pool.message }))
+        return {
+          ok: errors.length === 0,
+          degraded: errors.length > 0,
+          source: 'limitup-ths-pools',
+          date: dateStr,
+          timestamp: Date.now(),
+          pools,
+          errors,
         }
-      }),
-    )
-    const pools = Object.fromEntries(entries)
-    const errors = Object.values(pools)
-      .filter((pool) => !pool.ok)
-      .map((pool) => ({ pool: pool.key, errorCode: pool.errorCode, message: pool.message }))
-
-    res.json({
-      ok: errors.length === 0,
-      degraded: errors.length > 0,
-      source: 'limitup-ths-pools',
-      date: dateStr,
-      timestamp: Date.now(),
-      pools,
-      errors,
-    })
+      })
+      res.json(result.value)
+    } catch (error) {
+      sendDegraded(res, {
+        source: 'limitup-ths-pools',
+        error,
+        fallbackData: { ok: false, degraded: true, date: dateStr, pools: {}, errors: [] },
+      })
+    }
   })
 
   app.get('/api/limitup/detail', async (req, res) => {
@@ -195,36 +207,53 @@ export function registerMarketRoutes(app, { plainClient, port, runtimeCache }) {
   })
 
   app.get('/api/market/overview', async (req, res) => {
+    const ttlSeconds = 30
+    const cacheKey = 'market:overview:v1'
     try {
-      const response = await plainClient.get('https://dq.10jqka.com.cn/fuyao/v2/board/real_index_data', {
-        timeout: 3000,
+      const result = await runtimeCache.remember(cacheKey, { ttlSeconds, staleTtlSeconds: ttlSeconds * 2 }, async () => {
+        const response = await plainClient.get('https://dq.10jqka.com.cn/fuyao/v2/board/real_index_data', {
+          timeout: 3000,
+        })
+        return response.data?.data || response.data
       })
-      if (response.data?.data) {
-        return res.json(response.data.data)
-      }
-      res.json(response.data)
+      res.json(result.value)
     } catch (error) {
       sendDegraded(res, { source: 'market-overview', error, fallbackData: null })
     }
   })
 
   app.get('/api/sentiment/composite', async (req, res) => {
-    const [overviewRes, limitupRes, surgeRes] = await Promise.allSettled([
-      plainClient.get(`http://localhost:${port}/api/market/overview`, { timeout: 5000 }),
-      plainClient.get(`http://localhost:${port}/api/limitup/10jqka`, { timeout: 8000 }),
-      plainClient.get(`http://localhost:${port}/api/surge-stock/performance`, { timeout: 8000 }),
-    ])
-
-    res.json({
-      ok: true,
-      degraded:
-        overviewRes.status === 'rejected' ||
-        limitupRes.status === 'rejected' ||
-        surgeRes.status === 'rejected',
-      timestamp: Date.now(),
-      overview: overviewRes.status === 'fulfilled' ? overviewRes.value.data : null,
-      limitup: limitupRes.status === 'fulfilled' ? limitupRes.value.data : null,
-      yesterdayPerformance: surgeRes.status === 'fulfilled' ? surgeRes.value.data : null,
-    })
+    const ttlSeconds = 30
+    const cacheKey = 'sentiment:composite:v1'
+    try {
+      const result = await runtimeCache.remember(cacheKey, { ttlSeconds, staleTtlSeconds: ttlSeconds * 2 }, async () => {
+        const [overviewRes, limitupRes, surgeRes] = await Promise.allSettled([
+          plainClient.get(`http://localhost:${port}/api/market/overview`, { timeout: 5000 }),
+          plainClient.get(`http://localhost:${port}/api/limitup/10jqka`, { timeout: 8000 }),
+          plainClient.get(`http://localhost:${port}/api/surge-stock/performance`, { timeout: 8000 }),
+        ])
+        return {
+          ok: true,
+          degraded:
+            overviewRes.status === 'rejected' ||
+            limitupRes.status === 'rejected' ||
+            surgeRes.status === 'rejected',
+          timestamp: Date.now(),
+          overview: overviewRes.status === 'fulfilled' ? overviewRes.value.data : null,
+          limitup: limitupRes.status === 'fulfilled' ? limitupRes.value.data : null,
+          yesterdayPerformance: surgeRes.status === 'fulfilled' ? surgeRes.value.data : null,
+        }
+      })
+      res.json(result.value)
+    } catch (error) {
+      res.json({
+        ok: true,
+        degraded: true,
+        timestamp: Date.now(),
+        overview: null,
+        limitup: null,
+        yesterdayPerformance: null,
+      })
+    }
   })
 }

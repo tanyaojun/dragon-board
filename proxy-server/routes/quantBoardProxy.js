@@ -1,7 +1,4 @@
-import {
-  hashCachePayload,
-  normalizeCodeCacheKey,
-} from '../helpers/proxyCache.js'
+import { hashCachePayload, normalizeCodeCacheKey } from '../helpers/proxyCache.js'
 
 const DEFAULT_QUANT_BOARD_TARGET = 'http://127.0.0.1:8000'
 
@@ -17,7 +14,10 @@ const QUANT_BOARD_PREFIXES = [
 
 /** Proxy 层 Redis 缓存的只读 GET 端点 */
 const CACHEABLE_RESOURCES = [
-  { path: '/api/ranktrend/rank-series', ttlSeconds: 1800 },
+  { path: '/api/ranktrend/rank-series', ttlSeconds: 7200 },
+  { path: '/api/themes/heat', ttlSeconds: 30 },
+  { path: '/api/themes/mapping', ttlSeconds: 14400 },
+  { path: '/api/snapshots/counts', ttlSeconds: 600 },
 ]
 
 function resolveCacheableResource(requestPath) {
@@ -48,22 +48,41 @@ function copyResponseHeaders(upstream, res) {
   }
 }
 
-function buildRankSeriesCacheKey(query) {
-  const codes = normalizeCodeCacheKey(
-    String(query.codes || '')
-      .split(',')
-      .filter(Boolean),
-  )
-  const payload = {
-    dataset_id: query.dataset_id || query.datasetId || '',
-    type: query.type || 'half_hour',
-    sort: query.sort || 'desc',
-    limit: query.limit || '',
-    windowBars: query.windowBars || '',
-    codes,
+function buildCacheKey(resourcePath, query) {
+  switch (resourcePath) {
+    case '/api/ranktrend/rank-series': {
+      const codes = normalizeCodeCacheKey(
+        String(query.codes || '')
+          .split(',')
+          .filter(Boolean),
+      )
+      const payload = {
+        dataset_id: query.dataset_id || query.datasetId || '',
+        type: query.type || 'half_hour',
+        sort: query.sort || 'desc',
+        limit: query.limit || '',
+        windowBars: query.windowBars || '',
+        codes,
+      }
+      const digest = hashCachePayload(payload)
+      return `proxy:ranktrend:rank-series:${digest}`
+    }
+    case '/api/themes/heat': {
+      const payload = { force: query.force || '' }
+      const digest = hashCachePayload(payload)
+      return `proxy:themes:heat:${digest}`
+    }
+    case '/api/themes/mapping': {
+      return 'proxy:themes:mapping:v1'
+    }
+    case '/api/snapshots/counts': {
+      const payload = { dataset_id: query.dataset_id || query.datasetId || '' }
+      const digest = hashCachePayload(payload)
+      return `proxy:snapshots:counts:${digest}`
+    }
+    default:
+      return `proxy:${resourcePath.replace(/\//g, ':')}:v1`
   }
-  const digest = hashCachePayload(payload)
-  return `proxy:ranktrend:rank-series:${digest}`
 }
 
 /** 缓存失败日志限流：同一条消息在 intervalMs 内最多输出一次 */
@@ -107,7 +126,7 @@ export function registerQuantBoardProxyRoutes(app, { fetchImpl, cache, runtimeCa
     const effectiveCache = cache?.enabled?.() ? cache : runtimeCache
 
     if (cacheableResource && effectiveCache?.enabled?.()) {
-      const cacheKey = buildRankSeriesCacheKey(req.query)
+      const cacheKey = buildCacheKey(requestPath, req.query)
       const cacheOptions = {
         ttlSeconds: cacheableResource.ttlSeconds,
         staleTtlSeconds: cacheableResource.ttlSeconds * 2,
@@ -123,12 +142,10 @@ export function registerQuantBoardProxyRoutes(app, { fetchImpl, cache, runtimeCa
           const upstream = await fetcher(targetUrl, { method: 'GET', headers })
           const body = Buffer.from(await upstream.arrayBuffer())
 
-          // 只缓存 2xx 成功响应，避免将 4xx/5xx 错误缓存 30 分钟
+          // 只缓存 2xx 成功响应，避免将 4xx/5xx 错误缓存
           if (!upstream.ok) {
             const errorPreview = body.toString('utf8').slice(0, 300)
-            throw new Error(
-              `upstream returned ${upstream.status}: ${errorPreview}`,
-            )
+            throw new Error(`upstream returned ${upstream.status}: ${errorPreview}`)
           }
 
           return {
@@ -154,9 +171,7 @@ export function registerQuantBoardProxyRoutes(app, { fetchImpl, cache, runtimeCa
         return
       } catch (error) {
         // 缓存层失败时回退到直通模式（含上游非 2xx 响应）
-        cacheFailureLog(
-          `[quant-board-proxy] 缓存读取失败，回退直通: ${error?.message || error}`,
-        )
+        cacheFailureLog(`[quant-board-proxy] 缓存读取失败，回退直通: ${error?.message || error}`)
       }
     }
 
