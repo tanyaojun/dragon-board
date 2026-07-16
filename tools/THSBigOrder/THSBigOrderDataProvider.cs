@@ -19,7 +19,9 @@ namespace THSBigOrder
     public class THSBigOrderDataProvider : IMarketSnapshotProvider, IDisposable
     {
         private readonly HttpClient _httpClient;
+        private readonly HttpClient _longhuHttpClient;
         private readonly bool _ownsHttpClient;
+        private readonly bool _bigOrderProxyPrimary;
         private readonly IMarketSourceClient<BigOrderSourceData> _thsBigOrderSource;
         private readonly IMarketSourceClient<BigOrderSourceData> _longhuBigOrderSource;
         private readonly IMarketSourceClient<StockSummary> _quoteSource;
@@ -39,12 +41,14 @@ namespace THSBigOrder
         public THSBigOrderDataProvider(HttpClient httpClient = null, string baseUrl = "http://127.0.0.1:3000")
         {
             _ownsHttpClient = httpClient == null;
+            _bigOrderProxyPrimary = true;
             _httpClient = httpClient ?? new HttpClient();
             _httpClient.Timeout = TimeSpan.FromSeconds(15);
+            _longhuHttpClient = httpClient ?? new HttpClient { Timeout = TimeSpan.FromSeconds(60) };
             var proxyBase = (baseUrl ?? "").TrimEnd('/');
             var parser = new ThsPayloadParser();
             _thsBigOrderSource = new ThsBigOrderSourceClient(_httpClient, proxyBase, parser);
-            _longhuBigOrderSource = new LonghuBigOrderSourceClient(_httpClient, proxyBase, parser);
+            _longhuBigOrderSource = new LonghuBigOrderSourceClient(_longhuHttpClient, proxyBase, parser);
             _quoteSource = new SinaQuoteSourceClient(_httpClient, proxyBase, parser);
             _minuteSource = new TencentMinuteSourceClient(_httpClient, proxyBase, parser);
             _limitUpSource = new ThsLimitUpSourceClient(_httpClient, proxyBase, parser);
@@ -57,6 +61,7 @@ namespace THSBigOrder
             IMarketSourceClient<IReadOnlyList<MinuteTurnoverPoint>> minuteSource,
             IMarketSourceClient<LimitUpSourceData> limitUpSource)
         {
+            _bigOrderProxyPrimary = false;
             _thsBigOrderSource = thsBigOrderSource;
             _longhuBigOrderSource = longhuBigOrderSource;
             _quoteSource = quoteSource;
@@ -80,12 +85,14 @@ namespace THSBigOrder
 
             var selectedSource = DataSource;
             var useLonghu = selectedSource == BigOrderDataSource.Longhu;
-            var bigTask = LoadDirectFirstAsync(
-                useLonghu ? _longhuBigOrderSource : _thsBigOrderSource,
-                stockCode,
-                cancellationToken);
+            var selectedBigOrderSource = useLonghu ? _longhuBigOrderSource : _thsBigOrderSource;
+            var bigTask = _bigOrderProxyPrimary
+                ? LoadProxyPrimaryAsync(selectedBigOrderSource, stockCode, cancellationToken)
+                : LoadDirectFirstAsync(selectedBigOrderSource, stockCode, cancellationToken);
             var summaryTask = useLonghu
-                ? LoadDirectFirstAsync(_thsBigOrderSource, stockCode, cancellationToken)
+                ? (_bigOrderProxyPrimary
+                    ? LoadProxyPrimaryAsync(_thsBigOrderSource, stockCode, cancellationToken)
+                    : LoadDirectFirstAsync(_thsBigOrderSource, stockCode, cancellationToken))
                 : null;
             var quoteTask = LoadDirectFirstAsync(_quoteSource, stockCode, cancellationToken);
             var minuteTask = LoadDirectFirstAsync(_minuteSource, stockCode, cancellationToken);
@@ -104,8 +111,13 @@ namespace THSBigOrder
             ApplyStaleFallback(
                 _bigOrderCache,
                 (useLonghu ? "longhu-orders:" : "ths-orders:") + stockCode,
-                big);
-            ApplyStaleFallback(_bigOrderCache, "ths-summary:" + stockCode, summary);
+                big,
+                TimeSpan.FromMinutes(5));
+            ApplyStaleFallback(
+                _bigOrderCache,
+                "ths-summary:" + stockCode,
+                summary,
+                TimeSpan.FromMinutes(5));
             ApplyStaleFallback(_quoteCache, stockCode, quote);
             ApplyStaleFallback(_minuteCache, stockCode, minute);
             ApplyStaleFallback(_limitCache, stockCode, limit);
@@ -138,7 +150,8 @@ namespace THSBigOrder
                     Quote = quote.Transport,
                     Minute = minute.Transport,
                     LimitUp = limit.Transport,
-                });
+                },
+                big.Data?.SessionDate);
             return snapshot;
         }
 
@@ -189,6 +202,22 @@ namespace THSBigOrder
             }
         }
 
+        private static async Task<SourceLoadResult<T>> LoadProxyPrimaryAsync<T>(
+            IMarketSourceClient<T> source, string stockCode, CancellationToken cancellationToken)
+        {
+            try { return await source.LoadProxyAsync(stockCode, cancellationToken).ConfigureAwait(false); }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+            catch (Exception error)
+            {
+                return new SourceLoadResult<T>
+                {
+                    Freshness = DataFreshness.Failed,
+                    Transport = DataTransport.Failed,
+                    Error = error.Message,
+                };
+            }
+        }
+
         private static BigOrderSourceData MergeBigOrderData(
             BigOrderSourceData orders,
             BigOrderSourceData summary)
@@ -201,6 +230,7 @@ namespace THSBigOrder
                 MainFunds = summary.MainFunds ?? new MainFundSummary(),
                 Orders = orders.Orders ?? new BigOrderItem[0],
                 Prices = summary.Prices ?? new PricePoint[0],
+                SessionDate = orders.SessionDate,
             };
         }
 
@@ -219,10 +249,12 @@ namespace THSBigOrder
         private static void ApplyStaleFallback<T>(
             IDictionary<string, SourceLoadResult<T>> cache,
             string key,
-            SourceLoadResult<T> result)
+            SourceLoadResult<T> result,
+            TimeSpan? maxAge = null)
         {
             if (result == null) return;
             if (result.Transport == DataTransport.Direct ||
+                result.Transport == DataTransport.ProxyPrimary ||
                 result.Transport == DataTransport.ProxyFallback)
             {
                 CacheSuccessful(cache, key, result);
@@ -230,6 +262,9 @@ namespace THSBigOrder
             }
             SourceLoadResult<T> cached;
             if (result.Transport != DataTransport.Failed || !cache.TryGetValue(key, out cached)) return;
+            if (maxAge.HasValue &&
+                DateTime.Now - cached.FetchedAt > maxAge.Value)
+                return;
             result.Data = cached.Data;
             result.Freshness = DataFreshness.Stale;
             result.Transport = DataTransport.Stale;
@@ -243,6 +278,7 @@ namespace THSBigOrder
         {
             if (result == null ||
                 result.Transport != DataTransport.Direct &&
+                result.Transport != DataTransport.ProxyPrimary &&
                 result.Transport != DataTransport.ProxyFallback) return;
             cache[key] = new SourceLoadResult<T>
             {
@@ -297,6 +333,8 @@ namespace THSBigOrder
         public void Dispose()
         {
             if (_ownsHttpClient) _httpClient?.Dispose();
+            if (_ownsHttpClient && !ReferenceEquals(_httpClient, _longhuHttpClient))
+                _longhuHttpClient?.Dispose();
         }
 
     }

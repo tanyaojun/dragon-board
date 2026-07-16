@@ -42,8 +42,15 @@ namespace THSBigOrder.DataSources
                 var envelope = await GetJsonAsync(request, cancellationToken).ConfigureAwait(false);
                 if (envelope.Value<bool?>("ok") != true || !(envelope["data"] is JObject data))
                     throw new PayloadParseException((string)envelope["errorCode"] ?? "big-order proxy degraded");
-                var stale = data.SelectToken("dragonMeta.cache.stale")?.Value<bool>() == true;
-                var result = Success(_parser.ParseBigOrderSource(stockCode, data), DataTransport.ProxyFallback,
+                DateTime sessionDate;
+                DateTime? authoritativeDate = DateTime.TryParse(
+                    envelope.Value<string>("sessionDate"), out sessionDate)
+                    ? (DateTime?)sessionDate.Date
+                    : null;
+                var stale = data.SelectToken("dragonMeta.cache.uiStale")?.Value<bool>() == true;
+                var result = Success(
+                    _parser.ParseBigOrderSource(stockCode, data, authoritativeDate),
+                    DataTransport.ProxyPrimary,
                     stale ? DataFreshness.Stale : DataFreshness.Fresh);
                 var milliseconds = envelope.Value<long?>("fetchedAt");
                 if (milliseconds.HasValue)

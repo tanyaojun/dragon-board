@@ -77,3 +77,15 @@
 - subagent 最终复审无剩余 Critical / Important。
 - 已提交当前 Longhu/图表/切源源码与测试：`c709101 feat(thsbigorder): add Longhu big-order source`。
 - `proxy-server/helpers/proxyCache.js` 属于无关的热榜 TTL/格式化改动，本轮未纳入提交；DLL、EXE config、窗口设置和 `.claude/worktrees/` 同样排除。
+
+## 2026-07-17 Redis / 增量语音实施
+
+- proxy 新增 L1/L2 `LayeredProxyCache`、BigOrder 容量上限、Longhu 全局串行有界调度器和结构化 `/api/big-order/longhu/all-day`。
+- Longhu 上游统一使用 POST form、`st=200`、同轮 DeviceID；完整快照校验 `Total`、短页、超量和混合交易日后才写缓存。
+- 默认增量模式保持 `off`，300 秒内不重复 full rebuild；`prepend-device-snapshot` 支持头部 delta + 连续重叠校验。`prepend-logical` 在逻辑偏移合同未完整落地前显式 fail-closed 为 `off`。
+- canonical 空结果使用短 TTL empty key，不覆盖最近非空 `latest`；网络/403/429/5xx 连续失败触发 60 秒全源 breaker，45 秒主动预算中止不计入全源失败。
+- THS detail 接入 L1/L2 并返回权威 `sessionDate`；WinForms 使用 proxy-primary，Longhu 聚合客户端 60 秒，普通行情客户端保持 15 秒。
+- WinForms 增加订单出现次数 tracker、可信交易日 scope、re-enable barrier 和单批次 FIFO 语音；首份/切股/切源只建基线。
+- 修复两个固定日期涨停夹具：向 `ThsLimitUpSourceClient` 注入日期时钟，生产默认系统日期，测试固定日期。
+- 修复腾讯分时 stale 测试的硬编码 6 秒，使其跟随正式 TTL。
+- code review 修复 technical stale/UI stale、full rebuild 冷却、混合日期、正常代理状态颜色、direct 诊断 User-Agent 和本地 last-good 5 分钟上限。

@@ -31,6 +31,10 @@ internal static class Program
         });
         Run("THS order parser maps four natures and formatted values", TestOrderParsing);
         Run("Longhu parser maps compact rows and skips invalid rows", LonghuFeatureTests.TestParser);
+        Run("Big-order announcement tracker detects only new occurrences", LonghuFeatureTests.TestAnnouncementTracker);
+        Run("Voice batches preserve FIFO without cancelling ordinary refreshes", LonghuFeatureTests.TestVoiceBatch);
+        Run("Main form announces only new signals in one batch", () =>
+            LonghuFeatureTests.TestMainFormAnnouncementBatch().GetAwaiter().GetResult());
         Run("Longhu direct success does not call proxy", () => LonghuFeatureTests.TestDirectSuccess().GetAwaiter().GetResult());
         Run("Longhu direct failure falls back to proxy", () => LonghuFeatureTests.TestDirectFailureProxyFallback().GetAwaiter().GetResult());
         Run("Longhu pagination aggregates safe 200-row pages and reuses DeviceID", () => LonghuFeatureTests.TestPagination().GetAwaiter().GetResult());
@@ -51,6 +55,8 @@ internal static class Program
         Run("Limit-up source keeps scanning when recent pool misses stock", () => TestLimitUpFallbackSkipsNonMatchingPool().GetAwaiter().GetResult());
         Run("Proxy envelope maps degraded, stale and fresh empty states", TestEnvelopeStates);
         Run("Provider stale fallback is isolated by stock code", () => TestProviderStaleIsolation().GetAwaiter().GetResult());
+        Run("Production big-order flow uses proxy-primary and a dedicated timeout", () =>
+            TestProductionBigOrderProxyPrimary().GetAwaiter().GetResult());
         Run("Provider direct success does not call proxy", () => TestDirectSuccess().GetAwaiter().GetResult());
         Run("Provider routes Longhu orders and keeps THS summary", () => LonghuFeatureTests.TestProviderRouting().GetAwaiter().GetResult());
         Run("Provider isolates THS and Longhu order stale caches", () => LonghuFeatureTests.TestProviderCacheIsolation().GetAwaiter().GetResult());
@@ -105,9 +111,13 @@ internal static class Program
         AssertEqual(5000d, item.Volume, "volume");
         AssertEqual(1215d, item.Price, "price");
         AssertEqual(new DateTime(2026, 6, 18, 11, 29, 50), item.Time, "time");
-        AssertEqual(3, parser.ParseOrder(JObject.Parse("{'nature':'主力被买','volume':'1手','avgprice':'1','money':1,'ctime':'09:30:01'}")).Type, "passive buy");
-        AssertEqual(4, parser.ParseOrder(JObject.Parse("{'nature':'主力主卖','volume':'1手','avgprice':'1','money':1,'ctime':'09:30:01'}")).Type, "active sell");
-        AssertEqual(1, parser.ParseOrder(JObject.Parse("{'nature':'主力被卖','volume':'1手','avgprice':'1','money':1,'ctime':'09:30:01'}")).Type, "passive sell");
+        var sessionDate = new DateTime(2026, 6, 18);
+        AssertEqual(3, parser.ParseOrder(JObject.Parse("{'nature':'主力被买','volume':'1手','avgprice':'1','money':1,'ctime':'09:30:01'}"), sessionDate).Type, "passive buy");
+        AssertEqual(4, parser.ParseOrder(JObject.Parse("{'nature':'主力主卖','volume':'1手','avgprice':'1','money':1,'ctime':'09:30:01'}"), sessionDate).Type, "active sell");
+        AssertEqual(1, parser.ParseOrder(JObject.Parse("{'nature':'主力被卖','volume':'1手','avgprice':'1','money':1,'ctime':'09:30:01'}"), sessionDate).Type, "passive sell");
+        AssertThrows<PayloadParseException>(
+            () => parser.ParseOrder(JObject.Parse("{'nature':'主力被卖','volume':'1手','avgprice':'1','money':1,'ctime':'09:30:01'}")),
+            "clock-only order without session date");
         AssertThrows<PayloadParseException>(() => parser.ParseOrder(JObject.Parse("{'nature':'未知','volume':'1手','avgprice':'1','money':1,'ctime':'09:30:01'}")), "unknown nature");
     }
 
@@ -313,7 +323,11 @@ internal static class Program
         var handler = new LimitUpDateFallbackHandler();
         using (var http = new HttpClient(handler))
         {
-            var client = new ThsLimitUpSourceClient(http, "http://127.0.0.1:3000", new ThsPayloadParser());
+            var client = new ThsLimitUpSourceClient(
+                http,
+                "http://127.0.0.1:3000",
+                new ThsPayloadParser(),
+                () => new DateTime(2026, 6, 20));
             var result = await client.LoadDirectAsync("002297", CancellationToken.None);
 
             AssertEqual(DataTransport.Direct, result.Transport, "fallback transport");
@@ -324,7 +338,7 @@ internal static class Program
             AssertEqual("首板", result.Data.Context.HighDays, "fallback high days");
             AssertNear(0.5882352941176471d, result.Data.Context.SuccessRate.Value, 0.000001d, "fallback seal rate");
             AssertEqual(3, handler.Dates.Count, "today, previous calendar day and latest fixture date requested");
-            AssertEqual(DateTime.Today.ToString("yyyyMMdd"), handler.Dates[0], "first request today");
+            AssertEqual("20260620", handler.Dates[0], "first request today");
             AssertEqual("20260618", handler.Dates[2], "fallback request latest fixture date");
         }
     }
@@ -334,7 +348,11 @@ internal static class Program
         var handler = new LimitUpDateFallbackHandler { IncludeNonMatchingRecentPool = true };
         using (var http = new HttpClient(handler))
         {
-            var client = new ThsLimitUpSourceClient(http, "http://127.0.0.1:3000", new ThsPayloadParser());
+            var client = new ThsLimitUpSourceClient(
+                http,
+                "http://127.0.0.1:3000",
+                new ThsPayloadParser(),
+                () => new DateTime(2026, 6, 20));
             var result = await client.LoadDirectAsync("002297", CancellationToken.None);
 
             AssertTrue(result.Data.Found, "fallback scans past non-matching pool");
@@ -362,6 +380,37 @@ internal static class Program
             AssertEqual(30d, stale.Stock.Price.Value, "stale refresh keeps current quote");
             AssertEqual(DataFreshness.Failed, other.BigOrderFreshness, "other failed");
             AssertTrue(other.Orders.Count == 0, "no cross-code stale orders");
+        }
+    }
+
+    private static async Task TestProductionBigOrderProxyPrimary()
+    {
+        var handler = new FixtureHandler(false);
+        using (var http = new HttpClient(handler))
+        using (var provider = new THSBigOrderDataProvider(http, "http://127.0.0.1:3000"))
+        {
+            provider.DataSource = BigOrderDataSource.Longhu;
+            var snapshot = await provider.LoadSnapshotAsync("002297", CancellationToken.None);
+            AssertEqual(DataTransport.ProxyPrimary, snapshot.Transports.BigOrder, "proxy-primary");
+            AssertEqual(new DateTime(2026, 6, 18), snapshot.BigOrderSessionDate.Value, "session date");
+            AssertTrue(handler.Paths.Any(path =>
+                path.StartsWith("/api/big-order/longhu/all-day")), "Longhu aggregate path");
+            AssertTrue(handler.Paths.Any(path =>
+                path.StartsWith("/api/big-order/ths-detail")), "THS summary proxy path");
+            AssertTrue(!handler.Paths.Any(path => path.StartsWith("/w1/api/")),
+                "normal flow does not call Longhu direct");
+        }
+
+        using (var provider = new THSBigOrderDataProvider())
+        {
+            var shared = (HttpClient)typeof(THSBigOrderDataProvider)
+                .GetField("_httpClient", BindingFlags.Instance | BindingFlags.NonPublic)
+                .GetValue(provider);
+            var longhu = (HttpClient)typeof(THSBigOrderDataProvider)
+                .GetField("_longhuHttpClient", BindingFlags.Instance | BindingFlags.NonPublic)
+                .GetValue(provider);
+            AssertEqual(TimeSpan.FromSeconds(15), shared.Timeout, "shared timeout");
+            AssertEqual(TimeSpan.FromSeconds(60), longhu.Timeout, "Longhu timeout");
         }
     }
 
@@ -1720,9 +1769,12 @@ internal static class Program
             if (path.StartsWith("/api/big-order/") && FailBigOrder)
                 throw new HttpRequestException("big order blocked");
 
+            var fetchedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             string json;
-            if (path.StartsWith("/api/big-order/"))
-                json = "{'ok':true,'fetchedAt':1781746200000,'data':{'title':{'stockname':'博云新材','price':28.36},'list':[{'nature':'主力主买','volume':'10手','avgprice':'28.36','money':28360,'otime':'2026-06-18 09:30:01'}],'pricechange':[]}}";
+            if (path.StartsWith("/api/big-order/longhu/all-day"))
+                json = "{'ok':true,'sessionDate':'2026-06-18','fetchedAt':" + fetchedAt + ",'data':{'List':[['2','1781746200','10','28360','28.36','2026-06-18 09:30:01']],'Total':1,'errcode':'0','dragonMeta':{'cache':{'uiStale':false}}}}";
+            else if (path.StartsWith("/api/big-order/"))
+                json = "{'ok':true,'sessionDate':'2026-06-18','fetchedAt':" + fetchedAt + ",'data':{'title':{'stockname':'博云新材','price':28.36},'list':[{'nature':'主力主买','volume':'10手','avgprice':'28.36','money':28360,'otime':'2026-06-18 09:30:01'}],'pricechange':[]}}";
             else if (path.StartsWith("/api/quotes/tencent/minute"))
                 json = "{'ok':true,'data':{'date':'20260618','points':[{'time':'0930','price':25.70,'cumulativeVolume':11848,'cumulativeAmount':30449360.00}]}}";
             else if (path.StartsWith("/api/quotes/"))

@@ -78,11 +78,13 @@ namespace THSBigOrder.Models
             DateTime bigOrderFetchedAt,
             DateTime refreshedAt,
             IReadOnlyList<string> issues = null,
-            MarketSourceTransports transports = null)
+            MarketSourceTransports transports = null,
+            DateTime? bigOrderSessionDate = null)
             : this(
                 stockCode, stock, mainFunds, limitUp, orders, prices,
                 new MinuteTurnoverPoint[0], bigOrderFreshness, quoteFreshness,
-                DataFreshness.Missing, limitUpFreshness, bigOrderFetchedAt, refreshedAt, issues, transports)
+                DataFreshness.Missing, limitUpFreshness, bigOrderFetchedAt, refreshedAt, issues, transports,
+                bigOrderSessionDate)
         {
         }
 
@@ -101,7 +103,8 @@ namespace THSBigOrder.Models
             DateTime bigOrderFetchedAt,
             DateTime refreshedAt,
             IReadOnlyList<string> issues = null,
-            MarketSourceTransports transports = null)
+            MarketSourceTransports transports = null,
+            DateTime? bigOrderSessionDate = null)
         {
             StockCode = stockCode;
             Stock = stock;
@@ -124,6 +127,7 @@ namespace THSBigOrder.Models
                 Minute = DefaultTransport(minuteTurnoverFreshness),
                 LimitUp = DefaultTransport(limitUpFreshness),
             };
+            BigOrderSessionDate = bigOrderSessionDate?.Date;
         }
 
         public string StockCode { get; private set; }
@@ -141,6 +145,7 @@ namespace THSBigOrder.Models
         public DateTime RefreshedAt { get; private set; }
         public IReadOnlyList<string> Issues { get; private set; }
         public MarketSourceTransports Transports { get; private set; }
+        public DateTime? BigOrderSessionDate { get; private set; }
 
         private static DataTransport DefaultTransport(DataFreshness freshness)
         {

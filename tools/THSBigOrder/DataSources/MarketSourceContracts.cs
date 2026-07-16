@@ -7,7 +7,7 @@ using THSBigOrder.Models;
 
 namespace THSBigOrder.DataSources
 {
-    public enum DataTransport { Direct, ProxyFallback, Stale, Missing, Failed }
+    public enum DataTransport { Direct, ProxyPrimary, ProxyFallback, Stale, Missing, Failed }
 
     public sealed class SourceLoadResult<T>
     {
@@ -20,6 +20,7 @@ namespace THSBigOrder.DataSources
 
     public sealed class BigOrderSourceData
     {
+        public DateTime? SessionDate { get; set; }
         public StockSummary StockFallback { get; set; } = new StockSummary();
         public MainFundSummary MainFunds { get; set; } = new MainFundSummary();
         public IReadOnlyList<BigOrderItem> Orders { get; set; } = new BigOrderItem[0];
@@ -58,7 +59,9 @@ namespace THSBigOrder.DataSources
             var stale = rows.Where(x => x.Value == DataTransport.Stale).Select(x => x.Name).ToArray();
             if (stale.Length > 0) return "数据陈旧: " + string.Join("/", stale);
             var proxy = rows.Where(x => x.Value == DataTransport.ProxyFallback).Select(x => x.Name).ToArray();
-            return proxy.Length > 0 ? "代理降级: " + string.Join("/", proxy) : "直连";
+            if (proxy.Length > 0) return "代理降级: " + string.Join("/", proxy);
+            var primary = rows.Where(x => x.Value == DataTransport.ProxyPrimary).Select(x => x.Name).ToArray();
+            return primary.Length > 0 ? "代理通道: " + string.Join("/", primary) : "直连";
         }
     }
 

@@ -17,6 +17,106 @@ using THSBigOrder.Parsing;
 
 internal static class LonghuFeatureTests
 {
+    internal static void TestAnnouncementTracker()
+    {
+        var tracker = new BigOrderAnnouncementTracker();
+        var day = new DateTime(2026, 7, 17);
+        var repeated = new BigOrderItem
+        {
+            Time = day.AddHours(9).AddMinutes(30),
+            Type = 2,
+            Volume = 100,
+            Amount = 1000,
+            Price = 10,
+        };
+        AssertEqual(0, tracker.Observe("002297", BigOrderDataSource.Ths, day, new[] { repeated, repeated }).Count,
+            "first snapshot baseline");
+        var added = tracker.Observe("002297", BigOrderDataSource.Ths, day.AddHours(12),
+            new[] { repeated, repeated, repeated });
+        AssertEqual(1, added.Count, "duplicate occurrence increment");
+        AssertEqual(0, tracker.Observe("002297", BigOrderDataSource.Ths, day,
+            new[] { repeated, repeated }).Count, "count decrease does not replay");
+        AssertEqual(0, tracker.Observe("002297", BigOrderDataSource.Ths, day,
+            new[] { repeated, repeated, repeated }).Count, "restored count does not replay");
+
+        var later = new BigOrderItem
+        {
+            Time = day.AddHours(9).AddMinutes(31),
+            Type = 4,
+            Volume = 200,
+            Amount = 2000,
+            Price = 10,
+        };
+        var earlier = new BigOrderItem
+        {
+            Time = day.AddHours(9).AddMinutes(29),
+            Type = 2,
+            Volume = 300,
+            Amount = 3000,
+            Price = 10,
+        };
+        var ordered = tracker.Observe("002297", BigOrderDataSource.Ths, day,
+            new[] { later, repeated, repeated, repeated, earlier });
+        AssertEqual(2, ordered.Count, "two new rows");
+        AssertTrue(ordered[0].Time < ordered[1].Time, "new rows sorted oldest first");
+        AssertEqual(0, tracker.Observe("600519", BigOrderDataSource.Ths, day,
+            new[] { later }).Count, "stock switch baseline");
+    }
+
+    internal static void TestVoiceBatch()
+    {
+        var queue = new RecordingSpeechQueue();
+        using (var voice = new VoiceService(queue))
+        {
+            voice.AnnounceBatch(new[]
+            {
+                new BigOrderAnnouncement { Type = BigOrderAnnouncementType.Ignite, Amount = 5000000 },
+                new BigOrderAnnouncement { Type = BigOrderAnnouncementType.Smash, Amount = 8000000 },
+                new BigOrderAnnouncement { Type = BigOrderAnnouncementType.BuyActive },
+            });
+            voice.AnnounceBatch(new[]
+            {
+                new BigOrderAnnouncement { Type = BigOrderAnnouncementType.GoodSupport },
+            });
+            AssertEqual(2, queue.Texts.Count, "FIFO batches");
+            AssertTrue(queue.Texts[0].Contains("点火 500万"), "ignite text");
+            AssertTrue(queue.Texts[0].Contains("砸盘 800万"), "smash text");
+            AssertTrue(queue.Texts[0].Contains("买活跃"), "buy active text");
+            AssertEqual(0, queue.CancelCount, "ordinary batches do not cancel");
+            voice.CancelPending();
+            AssertEqual(1, queue.CancelCount, "explicit cancel");
+        }
+        AssertEqual(2, queue.CancelCount, "dispose cancels");
+        AssertTrue(queue.Disposed, "dispose releases queue");
+    }
+
+    internal static async Task TestMainFormAnnouncementBatch()
+    {
+        var day = new DateTime(2026, 7, 17);
+        var baseline = Signal(day.AddHours(9).AddMinutes(30), "点火", "");
+        var added = new[]
+        {
+            Signal(day.AddHours(9).AddMinutes(31), "点火", ""),
+            Signal(day.AddHours(9).AddMinutes(32), "砸盘", ""),
+            Signal(day.AddHours(9).AddMinutes(33), "", "买活跃"),
+        };
+        var provider = new SequenceProvider(
+            Snapshot(day, new[] { baseline }),
+            Snapshot(day, new[] { baseline }.Concat(added).ToArray()));
+        var voice = new RecordingVoice();
+        using (var form = new MainForm(provider, false, voice))
+        {
+            await form.RefreshStockAsync("002297", true);
+            AssertEqual(0, voice.Batches.Count, "first snapshot only establishes baseline");
+            await form.RefreshStockAsync("002297", false);
+            AssertEqual(1, voice.Batches.Count, "one voice batch");
+            AssertEqual(3, voice.Batches[0].Count, "all new signals announced");
+            AssertEqual(BigOrderAnnouncementType.Ignite, voice.Batches[0][0].Type, "first signal");
+            AssertEqual(BigOrderAnnouncementType.Smash, voice.Batches[0][1].Type, "second signal");
+            AssertEqual(BigOrderAnnouncementType.BuyActive, voice.Batches[0][2].Type, "third signal");
+        }
+    }
+
     internal static void TestParser()
     {
         var parser = new ThsPayloadParser();
@@ -59,6 +159,77 @@ internal static class LonghuFeatureTests
             "negative money");
     }
 
+    private sealed class RecordingSpeechQueue : ISpeechQueue
+    {
+        public List<string> Texts { get; } = new List<string>();
+        public int CancelCount { get; private set; }
+        public bool Disposed { get; private set; }
+        public void SpeakAsync(string text) { Texts.Add(text); }
+        public void CancelAll() { CancelCount++; }
+        public void Dispose() { Disposed = true; }
+    }
+
+    private static BigOrderItem Signal(DateTime time, string fund, string buy)
+    {
+        return new BigOrderItem
+        {
+            Time = time,
+            Type = fund == "砸盘" ? 4 : 2,
+            Volume = 500000,
+            Amount = 5000000,
+            Price = 10,
+            FundMarker = fund,
+            BuyMarker = buy,
+        };
+    }
+
+    private static MarketSnapshot Snapshot(DateTime day, IReadOnlyList<BigOrderItem> orders)
+    {
+        return new MarketSnapshot(
+            "002297",
+            new StockSummary { Code = "002297", Name = "测试", Price = 10 },
+            new MainFundSummary(),
+            new LimitUpContext(),
+            orders,
+            new PricePoint[0],
+            new MinuteTurnoverPoint[0],
+            DataFreshness.Fresh,
+            DataFreshness.Fresh,
+            DataFreshness.Missing,
+            DataFreshness.Missing,
+            day,
+            day,
+            bigOrderSessionDate: day);
+    }
+
+    private sealed class SequenceProvider : IMarketSnapshotProvider
+    {
+        private readonly Queue<MarketSnapshot> _snapshots;
+        public SequenceProvider(params MarketSnapshot[] snapshots)
+        {
+            _snapshots = new Queue<MarketSnapshot>(snapshots);
+        }
+        public Task<MarketSnapshot> LoadSnapshotAsync(
+            string stockCode, CancellationToken cancellationToken)
+        {
+            return Task.FromResult(_snapshots.Dequeue());
+        }
+        public void CalculateMarkers(List<BigOrderItem> data) { }
+    }
+
+    private sealed class RecordingVoice : IBigOrderVoice
+    {
+        public bool Enabled { get; set; } = true;
+        public List<IReadOnlyList<BigOrderAnnouncement>> Batches { get; } =
+            new List<IReadOnlyList<BigOrderAnnouncement>>();
+        public void AnnounceBatch(IReadOnlyList<BigOrderAnnouncement> announcements)
+        {
+            if (announcements.Count > 0) Batches.Add(announcements.ToArray());
+        }
+        public void CancelPending() { }
+        public void Dispose() { }
+    }
+
     internal static async Task TestDirectSuccess()
     {
         var handler = new LonghuHandler { DirectMode = LonghuMode.OneValid };
@@ -96,10 +267,10 @@ internal static class LonghuFeatureTests
             provider.DataSource = BigOrderDataSource.Longhu;
             var snapshot = await provider.LoadSnapshotAsync("002297", CancellationToken.None);
             AssertEqual(1, snapshot.Orders.Count, "proxy order count");
-            AssertEqual(DataTransport.ProxyFallback, snapshot.Transports.BigOrder, "proxy transport");
+            AssertEqual(DataTransport.ProxyPrimary, snapshot.Transports.BigOrder, "proxy transport");
             AssertEqual(1, handler.ProxyCalls, "proxy called");
             AssertEqual(
-                "/api/big-order/main-monitor?stockCode=002297&limit=200&money=0&index=0",
+                "/api/big-order/longhu/all-day?stockCode=002297&money=0",
                 handler.ProxyUris.Single().PathAndQuery,
                 "proxy contract");
         }
@@ -130,7 +301,7 @@ internal static class LonghuFeatureTests
             provider.DataSource = BigOrderDataSource.Longhu;
             var snapshot = await provider.LoadSnapshotAsync("002297", CancellationToken.None);
             AssertEqual(1, snapshot.Orders.Count, "no partial direct rows");
-            AssertEqual(DataTransport.ProxyFallback, snapshot.Transports.BigOrder, "whole request falls back");
+            AssertEqual(DataTransport.ProxyPrimary, snapshot.Transports.BigOrder, "whole request falls back");
         }
     }
 
@@ -145,8 +316,8 @@ internal static class LonghuFeatureTests
         {
             provider.DataSource = BigOrderDataSource.Longhu;
             var snapshot = await provider.LoadSnapshotAsync("002297", CancellationToken.None);
-            AssertEqual(201, snapshot.Orders.Count, "proxy all pages");
-            AssertSequence(new[] { 0, 200 }, handler.ProxyIndexes, "proxy indexes");
+            AssertEqual(201, snapshot.Orders.Count, "proxy full snapshot");
+            AssertEqual(1, handler.ProxyCalls, "proxy aggregate called once");
         }
     }
 
@@ -163,8 +334,7 @@ internal static class LonghuFeatureTests
             }
             catch (PayloadParseException)
             {
-                AssertEqual(200, handler.DirectIndexes.Count, "maximum page requests");
-                AssertEqual(39800, handler.DirectIndexes.Last(), "last guarded offset");
+                AssertEqual(1, handler.DirectIndexes.Count, "missing Total rejected immediately");
                 return;
             }
         }
@@ -202,7 +372,7 @@ internal static class LonghuFeatureTests
             provider.DataSource = BigOrderDataSource.Longhu;
             var snapshot = await provider.LoadSnapshotAsync("002297", CancellationToken.None);
             AssertEqual(1, snapshot.Orders.Count, "proxy rows after truncation");
-            AssertEqual(DataTransport.ProxyFallback, snapshot.Transports.BigOrder, "truncation fallback");
+            AssertEqual(DataTransport.ProxyPrimary, snapshot.Transports.BigOrder, "truncation fallback");
         }
     }
 
@@ -231,7 +401,7 @@ internal static class LonghuFeatureTests
             provider.DataSource = BigOrderDataSource.Longhu;
             var snapshot = await provider.LoadSnapshotAsync("002297", CancellationToken.None);
             AssertEqual(1, snapshot.Orders.Count, "valid proxy row");
-            AssertEqual(DataTransport.ProxyFallback, snapshot.Transports.BigOrder, "invalid direct fallback");
+            AssertEqual(DataTransport.ProxyPrimary, snapshot.Transports.BigOrder, "invalid direct fallback");
         }
     }
 
@@ -440,7 +610,7 @@ internal static class LonghuFeatureTests
             HttpRequestMessage request, CancellationToken cancellationToken)
         {
             var direct = request.RequestUri.Host == "apphwhq.longhuvip.com";
-            var proxy = request.RequestUri.AbsolutePath == "/api/big-order/main-monitor";
+            var proxy = request.RequestUri.AbsolutePath == "/api/big-order/longhu/all-day";
             if (!direct && !proxy)
             {
                 var thsJson = request.RequestUri.Host == "vaserviece.10jqka.com.cn"
@@ -454,7 +624,7 @@ internal static class LonghuFeatureTests
             var values = direct
                 ? ParsePairs(await request.Content.ReadAsStringAsync())
                 : ParsePairs(request.RequestUri.Query.TrimStart('?'));
-            var index = int.Parse(values[direct ? "Index" : "index"]);
+            var index = direct ? int.Parse(values["Index"]) : 0;
             var mode = direct ? DirectMode : ProxyMode;
             if (direct)
             {
@@ -483,7 +653,7 @@ internal static class LonghuFeatureTests
             if (mode == LonghuMode.Paginated201)
             {
                 total = 201;
-                AddRows(rows, index == 0 ? 200 : 1);
+                AddRows(rows, proxy ? 201 : index == 0 ? 200 : 1);
             }
             else if (mode == LonghuMode.FullPagesWithoutTotal)
             {
@@ -523,6 +693,25 @@ internal static class LonghuFeatureTests
                 ["errcode"] = "0",
             };
             if (mode != LonghuMode.FullPagesWithoutTotal) payload["Total"] = total;
+            if (proxy)
+            {
+                payload = new JObject
+                {
+                    ["ok"] = true,
+                    ["sessionDate"] = "2026-07-16",
+                    ["fetchedAt"] = 1784168251000,
+                    ["data"] = new JObject
+                    {
+                        ["List"] = rows,
+                        ["Total"] = total,
+                        ["errcode"] = "0",
+                        ["dragonMeta"] = new JObject
+                        {
+                            ["cache"] = new JObject { ["uiStale"] = false },
+                        },
+                    },
+                };
+            }
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(payload.ToString(), Encoding.UTF8, "application/json"),

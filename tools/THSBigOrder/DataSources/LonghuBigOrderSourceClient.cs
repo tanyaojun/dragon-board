@@ -11,8 +11,6 @@ namespace THSBigOrder.DataSources
 {
     internal sealed class LonghuBigOrderSourceClient : IMarketSourceClient<BigOrderSourceData>
     {
-        private const int PageSize = 200;
-        private const int MaxPages = 200;
         private readonly HttpClient _http;
         private readonly string _proxyBase;
         private readonly ThsPayloadParser _parser;
@@ -24,144 +22,110 @@ namespace THSBigOrder.DataSources
             _parser = parser;
         }
 
-        public Task<SourceLoadResult<BigOrderSourceData>> LoadDirectAsync(
-            string stockCode, CancellationToken cancellationToken)
-        {
-            var deviceId = Guid.NewGuid().ToString("N");
-            return LoadPagesAsync(
-                (index, token) => LoadDirectPageAsync(stockCode, deviceId, index, token),
-                DataTransport.Direct,
-                cancellationToken);
-        }
-
-        public Task<SourceLoadResult<BigOrderSourceData>> LoadProxyAsync(
-            string stockCode, CancellationToken cancellationToken)
-        {
-            return LoadPagesAsync(
-                (index, token) => LoadProxyPageAsync(stockCode, index, token),
-                DataTransport.ProxyFallback,
-                cancellationToken);
-        }
-
-        private async Task<SourceLoadResult<BigOrderSourceData>> LoadPagesAsync(
-            Func<int, CancellationToken, Task<JObject>> loadPage,
-            DataTransport transport,
+        public async Task<SourceLoadResult<BigOrderSourceData>> LoadProxyAsync(
+            string stockCode,
             CancellationToken cancellationToken)
         {
-            var allOrders = new List<BigOrderItem>();
-            var index = 0;
-            int? expectedTotal = null;
-            for (var page = 0; page < MaxPages; page++)
+            using (var request = new HttpRequestMessage(
+                HttpMethod.Get,
+                _proxyBase + "/api/big-order/longhu/all-day?stockCode=" +
+                Uri.EscapeDataString(stockCode) + "&money=0"))
+            using (var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false))
             {
-                var payload = await loadPage(index, cancellationToken).ConfigureAwait(false);
-                ValidatePayload(payload);
-                var list = payload["List"] as JArray;
-                if (list == null) throw new PayloadParseException("invalid Longhu List");
-                var pageOrders = _parser.ParseLonghuOrders(list);
-                if (list.Count > 0 && pageOrders.Count == 0)
+                var envelope = JObject.Parse(
+                    await response.Content.ReadAsStringAsync().ConfigureAwait(false));
+                response.EnsureSuccessStatusCode();
+                if (envelope.Value<bool?>("ok") != true || !(envelope["data"] is JObject data))
+                    throw new PayloadParseException(
+                        (string)envelope["errorCode"] ?? "Longhu proxy degraded");
+                DateTime sessionDate;
+                if (!DateTime.TryParse(envelope.Value<string>("sessionDate"), out sessionDate))
+                    throw new PayloadParseException("Longhu proxy missing sessionDate");
+                var rows = data["List"] as JArray;
+                if (rows == null) throw new PayloadParseException("invalid Longhu List");
+                var orders = _parser.ParseLonghuOrders(rows);
+                if (rows.Count > 0 && orders.Count == 0)
                     throw new PayloadParseException("Longhu List contains no valid rows");
-                allOrders.AddRange(pageOrders);
-
-                var total = payload.Value<int?>("Total");
-                if (total.HasValue)
+                var fetchedAt = DateTime.Now;
+                var milliseconds = envelope.Value<long?>("fetchedAt");
+                if (milliseconds.HasValue)
+                    fetchedAt = DateTimeOffset.FromUnixTimeMilliseconds(milliseconds.Value).LocalDateTime;
+                return new SourceLoadResult<BigOrderSourceData>
                 {
-                    if (total.Value < 0) throw new PayloadParseException("invalid Longhu Total");
-                    if (!expectedTotal.HasValue) expectedTotal = total;
-                    else if (expectedTotal.Value != total.Value)
-                        throw new PayloadParseException("Longhu Total changed during pagination");
-                }
-
-                index += list.Count;
-                if (expectedTotal.HasValue)
-                {
-                    if (index > expectedTotal.Value)
-                        throw new PayloadParseException("Longhu response exceeds Total");
-                    if (index >= expectedTotal.Value)
-                        return Success(allOrders, transport);
-                    if (list.Count < PageSize)
-                        throw new PayloadParseException("truncated Longhu response");
-                }
-                else if (list.Count < PageSize)
-                {
-                    return Success(allOrders, transport);
-                }
+                    Data = new BigOrderSourceData
+                    {
+                        Orders = orders,
+                        SessionDate = sessionDate.Date,
+                    },
+                    Freshness = data.SelectToken("dragonMeta.cache.uiStale")?.Value<bool>() == true
+                        ? DataFreshness.Stale
+                        : DataFreshness.Fresh,
+                    Transport = DataTransport.ProxyPrimary,
+                    FetchedAt = fetchedAt,
+                };
             }
-
-            throw new PayloadParseException("Longhu pagination exceeded maximum pages");
         }
 
-        private static SourceLoadResult<BigOrderSourceData> Success(
-            IReadOnlyList<BigOrderItem> orders,
-            DataTransport transport)
+        public async Task<SourceLoadResult<BigOrderSourceData>> LoadDirectAsync(
+            string stockCode,
+            CancellationToken cancellationToken)
         {
+            var device = Guid.NewGuid().ToString("N");
+            var allOrders = new List<BigOrderItem>();
+            var index = 0;
+            int? total = null;
+            for (var page = 0; page < 200; page++)
+            {
+                var values = new Dictionary<string, string>
+                {
+                    ["Order"] = "0", ["st"] = "200", ["a"] = "GetMainMonitor_w30",
+                    ["c"] = "StockYiDongKanPan", ["DeviceID"] = device, ["PhoneOSNew"] = "1",
+                    ["VerSion"] = "5.17.0.4", ["Index"] = index.ToString(), ["Money"] = "0",
+                    ["apiv"] = "w36", ["StockID"] = stockCode, ["IsBS"] = "0",
+                };
+                using (var request = new HttpRequestMessage(
+                    HttpMethod.Post, "https://apphwhq.longhuvip.com/w1/api/index.php"))
+                {
+                    request.Headers.UserAgent.ParseAdd(
+                        "Dalvik/2.1.0 (Linux; U; Android 9; MI 8 MIUI/V11.0.5.0.PEACNXM)");
+                    request.Content = new FormUrlEncodedContent(values);
+                    using (var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false))
+                    {
+                        var payload = JObject.Parse(
+                            await response.Content.ReadAsStringAsync().ConfigureAwait(false));
+                        response.EnsureSuccessStatusCode();
+                        var rows = payload["List"] as JArray;
+                        var pageTotal = payload.Value<int?>("Total");
+                        if (payload.Value<string>("errcode") != "0" || rows == null || !pageTotal.HasValue)
+                            throw new PayloadParseException("invalid Longhu payload");
+                        if (!total.HasValue) total = pageTotal;
+                        else if (total.Value != pageTotal.Value)
+                            throw new PayloadParseException("Longhu Total changed during pagination");
+                        var parsed = _parser.ParseLonghuOrders(rows);
+                        if (rows.Count > 0 && parsed.Count == 0)
+                            throw new PayloadParseException("Longhu List contains no valid rows");
+                        allOrders.AddRange(parsed);
+                        index += rows.Count;
+                        if (index > total.Value)
+                            throw new PayloadParseException("Longhu response exceeds Total");
+                        if (index == total.Value) break;
+                        if (rows.Count < 200) throw new PayloadParseException("truncated Longhu response");
+                    }
+                }
+            }
+            if (!total.HasValue || index != total.Value)
+                throw new PayloadParseException("Longhu pagination exceeded maximum pages");
             return new SourceLoadResult<BigOrderSourceData>
             {
-                Data = new BigOrderSourceData { Orders = orders },
+                Data = new BigOrderSourceData
+                {
+                    Orders = allOrders,
+                    SessionDate = allOrders.Count > 0 ? (DateTime?)allOrders[0].Time.Date : null,
+                },
                 Freshness = DataFreshness.Fresh,
-                Transport = transport,
+                Transport = DataTransport.Direct,
                 FetchedAt = DateTime.Now,
             };
         }
-
-        private async Task<JObject> LoadDirectPageAsync(
-            string stockCode, string deviceId, int index, CancellationToken cancellationToken)
-        {
-            var values = new Dictionary<string, string>
-            {
-                ["Order"] = "0",
-                ["st"] = PageSize.ToString(),
-                ["a"] = "GetMainMonitor_w30",
-                ["c"] = "StockYiDongKanPan",
-                ["DeviceID"] = deviceId,
-                ["PhoneOSNew"] = "1",
-                ["VerSion"] = "5.17.0.4",
-                ["Index"] = index.ToString(),
-                ["Money"] = "0",
-                ["apiv"] = "w36",
-                ["StockID"] = stockCode,
-                ["IsBS"] = "0",
-            };
-            using (var request = new HttpRequestMessage(
-                HttpMethod.Post, "https://apphwhq.longhuvip.com/w1/api/index.php"))
-            {
-                request.Headers.UserAgent.ParseAdd(
-                    "Dalvik/2.1.0 (Linux; U; Android 9; MI 8 MIUI/V11.0.5.0.PEACNXM)");
-                request.Content = new FormUrlEncodedContent(values);
-                return await GetJsonAsync(request, cancellationToken).ConfigureAwait(false);
-            }
-        }
-
-        private async Task<JObject> LoadProxyPageAsync(
-            string stockCode, int index, CancellationToken cancellationToken)
-        {
-            var url = _proxyBase + "/api/big-order/main-monitor?stockCode=" +
-                      Uri.EscapeDataString(stockCode) + "&limit=" + PageSize +
-                      "&money=0&index=" + index;
-            using (var request = new HttpRequestMessage(HttpMethod.Get, url))
-            {
-                return await GetJsonAsync(request, cancellationToken).ConfigureAwait(false);
-            }
-        }
-
-        private async Task<JObject> GetJsonAsync(
-            HttpRequestMessage request, CancellationToken cancellationToken)
-        {
-            using (var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false))
-            {
-                var text = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-                response.EnsureSuccessStatusCode();
-                return JObject.Parse(text);
-            }
-        }
-
-        private static void ValidatePayload(JObject payload)
-        {
-            if (payload == null || payload.Value<bool?>("ok") == false ||
-                payload.Value<string>("errcode") != "0")
-                throw new PayloadParseException(
-                    (string)payload?["msg"] ?? (string)payload?["errorCode"] ??
-                    "invalid Longhu payload");
-        }
-
     }
 }

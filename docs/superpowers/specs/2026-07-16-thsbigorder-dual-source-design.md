@@ -3,7 +3,7 @@
 > 日期：2026-07-16 | 状态：已实现
 > 分页纠偏：真实上游稳定页大小为 200，原设计中的 500 已被实测否定。详见 [THSBigOrder 双数据源调试复盘](../../ths-big-order-debug/2026-07-16-debug-retrospective.md)。
 >
-> 架构演进：本文记录已经落地的 direct-first 双源基线。后续 [BigOrder Redis TTL 缓存设计](../../ths-big-order-debug/big-order-redis-cache-design.md) 完成后，Longhu 正常链路将改为 proxy-primary，direct POST 只保留诊断用途；在 Redis 改造实际完成前，不把目标态写成已实现。
+> 架构演进：本文主体记录最初落地的 direct-first 双源基线。2026-07-17 完成 [BigOrder Redis TTL 缓存设计](../../ths-big-order-debug/big-order-redis-cache-design.md) 后，THS/Longhu 正常大单链路已改为 proxy-primary，Longhu direct POST 只保留诊断用途。
 
 ## 目标
 

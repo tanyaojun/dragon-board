@@ -15,7 +15,10 @@ namespace THSBigOrder.Parsing
 
     public sealed class ThsPayloadParser
     {
-        public BigOrderSourceData ParseBigOrderSource(string stockCode, JObject payload)
+        public BigOrderSourceData ParseBigOrderSource(
+            string stockCode,
+            JObject payload,
+            DateTime? authoritativeSessionDate = null)
         {
             var errorCode = payload?.Value<int?>("errorcode");
             if (payload == null || errorCode.HasValue && errorCode.Value != 0 ||
@@ -23,10 +26,11 @@ namespace THSBigOrder.Parsing
                 throw new PayloadParseException("invalid THS big-order payload");
 
             var issues = new List<string>();
+            var sessionDate = authoritativeSessionDate?.Date ?? InferThsSessionDate(payload);
             var orders = new List<BigOrderItem>();
             foreach (var token in list.OfType<JObject>())
             {
-                try { orders.Add(ParseOrder(token)); }
+                try { orders.Add(ParseOrder(token, sessionDate)); }
                 catch (Exception error) { issues.Add(error.Message); }
             }
             var prices = new List<PricePoint>();
@@ -35,6 +39,7 @@ namespace THSBigOrder.Parsing
             var sell = ChineseAmount(title["mainsell"]);
             return new BigOrderSourceData
             {
+                SessionDate = sessionDate,
                 StockFallback = new StockSummary
                 {
                     Code = stockCode,
@@ -132,7 +137,7 @@ namespace THSBigOrder.Parsing
             return new LimitUpSourceData { Found = row != null, Context = ParseLimitUpRow(row) };
         }
 
-        public BigOrderItem ParseOrder(JObject value)
+        public BigOrderItem ParseOrder(JObject value, DateTime? sessionDate = null)
         {
             var nature = (string)value["nature"] ?? "";
             int type;
@@ -152,7 +157,20 @@ namespace THSBigOrder.Parsing
                 TimeSpan clock;
                 if (!TimeSpan.TryParse(timeText, CultureInfo.InvariantCulture, out clock))
                     throw new PayloadParseException("invalid order time: " + timeText);
-                time = DateTime.Today.Add(clock);
+                if (!sessionDate.HasValue)
+                    throw new PayloadParseException("order time requires authoritative session date");
+                time = sessionDate.Value.Date.Add(clock);
+            }
+            else if (timeText != null && timeText.IndexOf('-') >= 0 && sessionDate.HasValue &&
+                     time.Date != sessionDate.Value.Date)
+            {
+                throw new PayloadParseException("order date conflicts with session date");
+            }
+            else if (timeText != null && timeText.IndexOf('-') < 0)
+            {
+                if (!sessionDate.HasValue)
+                    throw new PayloadParseException("order time requires authoritative session date");
+                time = sessionDate.Value.Date.Add(time.TimeOfDay);
             }
 
             return new BigOrderItem
@@ -163,6 +181,35 @@ namespace THSBigOrder.Parsing
                 Price = RequiredNumber(value["avgprice"], "avgprice"),
                 Time = time,
             };
+        }
+
+        private static DateTime? InferThsSessionDate(JObject payload)
+        {
+            foreach (var field in new[] { "sessionDate", "tradeDate", "date" })
+            {
+                DateTime explicitDate;
+                if (DateTime.TryParseExact((string)payload?[field], "yyyy-MM-dd",
+                    CultureInfo.InvariantCulture, DateTimeStyles.None, out explicitDate))
+                    return explicitDate.Date;
+            }
+            foreach (var row in (payload?["pricechange"] as JArray)?.OfType<JObject>() ??
+                                Enumerable.Empty<JObject>())
+            {
+                DateTime value;
+                if (DateTime.TryParseExact((string)row["1"], "yyyyMMddHHmm",
+                    CultureInfo.InvariantCulture, DateTimeStyles.None, out value))
+                    return value.Date;
+            }
+            foreach (var row in (payload?["list"] as JArray)?.OfType<JObject>() ??
+                                Enumerable.Empty<JObject>())
+            {
+                DateTime value;
+                if (DateTime.TryParse((string)row["otime"] ?? (string)row["ctime"],
+                    CultureInfo.InvariantCulture, DateTimeStyles.AllowWhiteSpaces, out value) &&
+                    (((string)row["otime"] ?? (string)row["ctime"]) ?? "").Contains("-"))
+                    return value.Date;
+            }
+            return null;
         }
 
         public IReadOnlyList<BigOrderItem> ParseLonghuOrders(JArray values)

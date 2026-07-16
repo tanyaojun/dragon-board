@@ -365,7 +365,7 @@ export function buildOpenApiDocument({ port = 3000 } = {}) {
         method: 'get',
         tag: 'market',
         summary: '同花顺大单明细',
-        description: '代理同花顺 Level2 mainMonitorDetail；使用进程内短缓存并支持 stale 回退。上游不可用且无 stale 数据时仍返回 HTTP 200 degraded envelope。',
+        description: '代理同花顺 Level2 mainMonitorDetail；使用 L1 进程缓存 + L2 Redis，并返回权威 sessionDate。上游不可用且无 stale 数据时仍返回 HTTP 200 degraded envelope。',
         parameters: [
           {
             name: 'stockCode',
@@ -423,12 +423,34 @@ export function buildOpenApiDocument({ port = 3000 } = {}) {
       '/api/big-order/main-monitor': operation({
         method: 'get',
         tag: 'market',
-        summary: '大单主力监控',
+        summary: '大单主力监控兼容接口',
+        description: '保持未包裹 Longhu 顶层字段；上游统一 POST form，limit>200 时内部拆页。',
       }),
       '/api/big-order/all-day': operation({
         method: 'get',
         tag: 'market',
-        summary: '全天大单',
+        summary: '全天大单兼容接口',
+        description: 'money=0 委托 canonical 全天快照；其它 numeric money 保持兼容分页。',
+      }),
+      '/api/big-order/longhu/all-day': operation({
+        method: 'get',
+        tag: 'market',
+        summary: 'Longhu 全天大单结构化快照',
+        description: '仅支持 money=0，返回 sessionDate、fetchedAt/servedAt、cache stale/uiStale 和 refresh 诊断。',
+        parameters: [
+          {
+            name: 'stockCode',
+            in: 'query',
+            required: true,
+            schema: { type: 'string', pattern: '^\\d{6}$', example: '002297' },
+          },
+          {
+            name: 'money',
+            in: 'query',
+            required: false,
+            schema: { type: 'integer', enum: [0], default: 0 },
+          },
+        ],
       }),
       '/api/theme/{id}': {
         get: {

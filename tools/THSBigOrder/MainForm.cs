@@ -59,8 +59,10 @@ namespace THSBigOrder
         private System.Windows.Forms.Timer _clockTimer;
 
         // 语音播报
-        private VoiceService _voiceService;
-        private HashSet<string> _announcedItems = new HashSet<string>();
+        private IBigOrderVoice _voiceService;
+        private readonly BigOrderAnnouncementTracker _announcementTracker =
+            new BigOrderAnnouncementTracker();
+        private bool _voiceReenableBarrier;
 
         // 自定义滚动条
         private Panel _scrollTrack;
@@ -86,7 +88,10 @@ namespace THSBigOrder
         {
         }
 
-        internal MainForm(IMarketSnapshotProvider dataProvider, bool initializeRuntime)
+        internal MainForm(
+            IMarketSnapshotProvider dataProvider,
+            bool initializeRuntime,
+            IBigOrderVoice voiceService = null)
         {
             InitializeComponent();
             _gridBoldFont = new Font("微软雅黑", 9f, FontStyle.Bold);
@@ -96,6 +101,7 @@ namespace THSBigOrder
             else
             {
                 _dataProvider = dataProvider;
+                _voiceService = voiceService;
                 SetupDataGridStyle();
             }
         }
@@ -129,6 +135,11 @@ namespace THSBigOrder
 
         internal Task RefreshStockAsync(string stockCode, bool forceForCodeChange)
         {
+            if (forceForCodeChange && !string.Equals(_currentStockCode, stockCode, StringComparison.Ordinal))
+            {
+                _voiceService?.CancelPending();
+                _announcementTracker.Reset();
+            }
             _currentStockCode = stockCode;
             SetStockCodeText(stockCode);
             return RefreshDataAsync(forceForCodeChange);
@@ -141,6 +152,8 @@ namespace THSBigOrder
             provider.DataSource = cboDataSource.SelectedIndex == 0
                 ? BigOrderDataSource.Longhu
                 : BigOrderDataSource.Ths;
+            _voiceService?.CancelPending();
+            _announcementTracker.Reset();
             ClearBigOrderViewForSourceChange();
             await RefreshDataAsync(true);
         }
@@ -568,6 +581,7 @@ namespace THSBigOrder
             };
             _allData = snapshot.Orders.ToList();
             _dataProvider.CalculateMarkers(_allData);
+            var newOrders = ObserveAnnouncements(snapshot);
             _allData = _allData.OrderByDescending(item => item.Time).ToList();
             ApplyFilter();
             UpdateDataGrid();
@@ -581,7 +595,7 @@ namespace THSBigOrder
                     snapshot.MinuteTurnover,
                     snapshot.MinuteTurnoverFreshness));
             bigOrderChart.SetOrderMarkerFilter(_currentMoney, _orderSide);
-            CheckAndAnnounce();
+            AnnounceNewOrders(newOrders);
             lblStatus.Text = string.Format("共 {0} 条", _filteredData.Count);
             lblStatus.ForeColor = snapshot.BigOrderFreshness == DataFreshness.Fresh ? Color.LightGreen : Color.Orange;
             toolStripStatusLabel2.Text = "数据时间: " + snapshot.BigOrderFetchedAt.ToString("yyyy-MM-dd HH:mm:ss");
@@ -602,7 +616,11 @@ namespace THSBigOrder
             lblHighDays.Text = "连板 " + (snapshot.LimitUp.HighDays ?? "-");
             lblLimitUpReason.Text = snapshot.LimitUpFreshness == DataFreshness.Failed ? "涨停数据不可用" : snapshot.LimitUpFreshness == DataFreshness.Missing ? "非涨停池" : "涨停原因 " + (snapshot.LimitUp.ReasonType ?? "-");
             lblFreshness.Text = snapshot.Transports.Summary;
-            lblFreshness.ForeColor = snapshot.Transports.Summary == "直连" ? Color.LightGreen : Color.Orange;
+            lblFreshness.ForeColor =
+                snapshot.Transports.Summary == "直连" ||
+                snapshot.Transports.Summary.StartsWith("代理通道:", StringComparison.Ordinal)
+                    ? Color.LightGreen
+                    : Color.Orange;
         }
 
         private static string FormatNullable(double? value, string format) => value.HasValue ? value.Value.ToString(format) : "-";
@@ -730,50 +748,54 @@ namespace THSBigOrder
             lblTotalAmount.Text = "成交: " + amountStr;
         }
 
-        private void CheckAndAnnounce()
+        private IReadOnlyList<BigOrderItem> ObserveAnnouncements(MarketSnapshot snapshot)
         {
-            if (_filteredData == null || _filteredData.Count == 0) return;
-            if (_voiceService == null || !_voiceService.Enabled) return;
-
-            // 只检查最近的数据（最新10条）
-            var recentData = _filteredData.Take(10).ToList();
-
-            foreach (var item in recentData)
+            if (!snapshot.BigOrderSessionDate.HasValue ||
+                snapshot.BigOrderFreshness == DataFreshness.Failed ||
+                snapshot.BigOrderFreshness == DataFreshness.Missing)
+                return new BigOrderItem[0];
+            var provider = _dataProvider as THSBigOrderDataProvider;
+            var source = provider?.DataSource ?? BigOrderDataSource.Ths;
+            if (_voiceReenableBarrier)
             {
-                // 用时间+金额作为唯一标识，避免重复播报
-                string key = _currentStockCode + "_" + item.Time.ToString("HHmmss") + "_" + item.Type + "_" + item.Amount.ToString("F0");
-                if (_announcedItems.Contains(key)) continue;
-
-                _announcedItems.Add(key);
-
-                // 限制已播报列表大小
-                if (_announcedItems.Count > 1000)
-                {
-                    _announcedItems.Clear();
-                }
-
-                // 播报
-                if (item.FundMarker == "点火")
-                {
-                    _voiceService.AnnounceIgnite(item.Amount);
-                    return;  // 每次只播报一条
-                }
-                else if (item.FundMarker == "砸盘")
-                {
-                    _voiceService.AnnounceSmash(item.Amount);
-                    return;
-                }
-                else if (item.BuyMarker == "买活跃")
-                {
-                    _voiceService.AnnounceBuyActive();
-                    return;
-                }
-                else if (item.BuyMarker == "承接好")
-                {
-                    _voiceService.AnnounceGoodSupport();
-                    return;
-                }
+                _announcementTracker.Reset();
+                _announcementTracker.Observe(
+                    snapshot.StockCode, source, snapshot.BigOrderSessionDate.Value, _allData);
+                _voiceReenableBarrier = false;
+                return new BigOrderItem[0];
             }
+            return _announcementTracker.Observe(
+                snapshot.StockCode, source, snapshot.BigOrderSessionDate.Value, _allData);
+        }
+
+        private void AnnounceNewOrders(IReadOnlyList<BigOrderItem> newOrders)
+        {
+            if (_voiceService == null || !_voiceService.Enabled || newOrders.Count == 0) return;
+            var filtered = OrderFilter.Apply(
+                newOrders, _currentMoney, _orderSide, _specialFilter);
+            var announcements = new List<BigOrderAnnouncement>();
+            foreach (var item in filtered.OrderBy(value => value.Time))
+            {
+                BigOrderAnnouncementType? type = null;
+                if (!string.IsNullOrEmpty(_specialFilter))
+                {
+                    if (_specialFilter == "点火" && item.FundMarker == "点火")
+                        type = BigOrderAnnouncementType.Ignite;
+                    else if (_specialFilter == "砸盘" && item.FundMarker == "砸盘")
+                        type = BigOrderAnnouncementType.Smash;
+                    else if (_specialFilter == "买活跃" && item.BuyMarker == "买活跃")
+                        type = BigOrderAnnouncementType.BuyActive;
+                    else if (_specialFilter == "承接好" && item.BuyMarker == "承接好")
+                        type = BigOrderAnnouncementType.GoodSupport;
+                }
+                else if (item.FundMarker == "点火") type = BigOrderAnnouncementType.Ignite;
+                else if (item.FundMarker == "砸盘") type = BigOrderAnnouncementType.Smash;
+                else if (item.BuyMarker == "买活跃") type = BigOrderAnnouncementType.BuyActive;
+                else if (item.BuyMarker == "承接好") type = BigOrderAnnouncementType.GoodSupport;
+                if (type.HasValue)
+                    announcements.Add(new BigOrderAnnouncement { Type = type.Value, Amount = item.Amount });
+            }
+            _voiceService.AnnounceBatch(announcements);
         }
 
         private void UpdateScrollText()
@@ -982,11 +1004,26 @@ namespace THSBigOrder
             if (_voiceService != null)
             {
                 _voiceService.Enabled = chkVoice.Checked;
+                if (!chkVoice.Checked)
+                {
+                    _voiceService.CancelPending();
+                }
+                else
+                {
+                    _voiceReenableBarrier = true;
+                }
                 
                 // 勾选时播报测试
                 if (chkVoice.Checked)
                 {
-                    _voiceService.AnnounceIgnite(5000000);  // 测试：点火500万
+                    _voiceService.AnnounceBatch(new[]
+                    {
+                        new BigOrderAnnouncement
+                        {
+                            Type = BigOrderAnnouncementType.Ignite,
+                            Amount = 5000000,
+                        },
+                    });
                 }
             }
         }

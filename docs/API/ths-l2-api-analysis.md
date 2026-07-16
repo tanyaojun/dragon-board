@@ -267,11 +267,10 @@ C# 工具 `ThsPayloadParser.ParseOrder()` 将 ths-detail 的 `nature` 文本转�
 
 | 端点 | 缓存策略 | 备注 |
 |---|---|---|
-| `GET /api/big-order/ths-detail` | `ProcessMemoryCache`，TTL = 30s，stale = 180s | 单只股票逐笔大单明细 |
+| `GET /api/big-order/ths-detail` | L1 `ProcessMemoryCache` + L2 Redis，TTL = 30s，stale = 180s | 单只股票逐笔大单明细，返回权威 `sessionDate` |
 | `GET /api/quotes/ths-money-flow` | `Redis` 优先 → `ProcessMemoryCache` 回退，TTL = 60s，stale = 300s | 批量股票资金流摘要（并发 2 + 熔断 5） |
-| `GET /api/big-order/main-monitor` | 无缓存（直通上游） | 龙虎 VIP 大单监控，支持 `limit`/`money`/`index` 参数 |
-| `GET /api/big-order/all-day` | 无缓存（分页聚合） | 遍历分页获取全天大单数据 |
+| `GET /api/big-order/longhu/all-day` | L1 + L2 全天完整快照，交易时段 fresh 10s / stale 300s | canonical `money=0` 结构化端点，冷启动 `st=200` 串行分页，支持显式增量模式 |
+| `GET /api/big-order/main-monitor` | 兼容页读取 | 保持顶层 Longhu 字段，`limit>200` 在代理内拆页，上游固定 POST form |
+| `GET /api/big-order/all-day` | `money=0` 委托 canonical 快照 | 保持 `{ List }` 兼容合同；非零 numeric money 走兼容分页 |
 
-BigOrder Redis TTL、Longhu 全天快照和增量头部刷新改造方案见 [BigOrder Redis TTL 缓存设计](../ths-big-order-debug/big-order-redis-cache-design.md)。
-
-上表描述当前源码现状。目标方案新增 `GET /api/big-order/longhu/all-day` 结构化端点，并返回明确的 `sessionDate`、`fetchedAt/servedAt`、technical stale 与 UI stale 元数据；在实现落地前不能把目标端点写成“已实现”。
+BigOrder Redis TTL、Longhu 全天快照和增量头部刷新合同见 [BigOrder Redis TTL 缓存设计](../ths-big-order-debug/big-order-redis-cache-design.md)。WinForms 正常大单链路现使用 proxy-primary；Longhu direct POST 仅保留诊断用途。

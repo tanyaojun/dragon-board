@@ -1,6 +1,12 @@
 import { delay } from '../helpers/http.js'
-import { attachCacheMeta, PROXY_CACHE_TTLS } from '../helpers/proxyCache.js'
+import {
+  attachCacheMeta,
+  LayeredProxyCache,
+  ProcessMemoryCache,
+  PROXY_CACHE_TTLS,
+} from '../helpers/proxyCache.js'
 import { sendBadRequest, sendDegraded } from '../helpers/response.js'
+import { createLonghuBigOrderService } from '../services/longhuBigOrderCache.js'
 
 const THS_BIG_ORDER_BASE = 'https://vaserviece.10jqka.com.cn/Level2/index.php'
 
@@ -34,42 +40,51 @@ function validateThsPayload(payload, now) {
   }
   return {
     fetchedAt: now(),
+    sessionDate: inferThsSessionDate(payload),
     title: payload.title,
     list: payload.list,
     pricechange: Array.isArray(payload.pricechange) ? payload.pricechange : [],
   }
 }
 
-function generateDeviceId() {
-  const input = Date.now() + Math.random().toString(36)
-  let hash = 0
-  for (let i = 0; i < input.length; i++) {
-    const char = input.charCodeAt(i)
-    hash = (hash << 5) - hash + char
-    hash &= hash
+function inferThsSessionDate(payload) {
+  const explicit = [payload?.sessionDate, payload?.tradeDate, payload?.date]
+    .map((value) => String(value || '').trim())
+    .find((value) => /^\d{4}-\d{2}-\d{2}$/.test(value))
+  if (explicit) return explicit
+  for (const row of payload?.pricechange || []) {
+    const match = String(row?.[1] || '').match(/^(\d{4})(\d{2})(\d{2})/)
+    if (match) return `${match[1]}-${match[2]}-${match[3]}`
   }
-  return Math.abs(hash).toString(16).padStart(32, '0').substring(0, 32)
+  for (const row of payload?.list || []) {
+    const match = String(row?.otime || row?.ctime || '').match(/^(\d{4}-\d{2}-\d{2})\s/)
+    if (match) return match[1]
+  }
+  return null
 }
 
-function buildBigOrderUrl({ stockCode, limit, money, index, deviceId }) {
-  const url = new URL('https://apphwhq.longhuvip.com/w1/api/index.php')
-  url.searchParams.append('Order', '0')
-  url.searchParams.append('st', String(limit))
-  url.searchParams.append('a', 'GetMainMonitor_w30')
-  url.searchParams.append('c', 'StockYiDongKanPan')
-  url.searchParams.append('PhoneOSNew', '1')
-  url.searchParams.append('DeviceID', deviceId)
-  url.searchParams.append('VerSion', '5.17.0.4')
-  url.searchParams.append('Index', String(index))
-  url.searchParams.append('Money', String(money))
-  url.searchParams.append('apiv', 'w36')
-  url.searchParams.append('StockID', String(stockCode))
-  url.searchParams.append('IsBS', '0')
-  return url
-}
-
-const BIG_ORDER_HEADERS = {
-  'User-Agent': 'Dalvik/2.1.0 (Linux; U; Android 9; MI 8 MIUI/V11.0.5.0.PEACNXM)',
+function uiStaleThresholdMs(timestamp) {
+  const date = new Date(timestamp)
+  const weekday = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Shanghai',
+    weekday: 'short',
+  }).format(date)
+  if (weekday === 'Sat' || weekday === 'Sun') return 12 * 60 * 60 * 1000
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Shanghai',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(date)
+  const hour = Number(parts.find((part) => part.type === 'hour')?.value || 0)
+  const minute = Number(parts.find((part) => part.type === 'minute')?.value || 0)
+  const clock = hour * 60 + minute
+  const trading =
+    (clock >= 570 && clock <= 690) ||
+    (clock >= 780 && clock <= 900)
+  if (trading) return 30_000
+  if ((clock >= 540 && clock < 570) || (clock > 690 && clock < 780)) return 300_000
+  return 12 * 60 * 60 * 1000
 }
 
 function parseChineseAmount(raw) {
@@ -107,7 +122,27 @@ function thsMoneyFlowCacheKey(code) {
 const THS_FLOW_CACHE_TTL_SECONDS = 60
 const THS_FLOW_CACHE_STALE_SECONDS = 300
 
-export function registerBigOrderRoutes(app, { plainClient, cache, runtimeCache, now = () => Date.now() }) {
+export function registerBigOrderRoutes(
+  app,
+  { plainClient, cache, runtimeCache, readConfig, now = () => Date.now() },
+) {
+  const thsCache = new LayeredProxyCache({ memoryCache: runtimeCache, redisCache: cache })
+  const longhuCache = new LayeredProxyCache({
+    memoryCache: new ProcessMemoryCache({
+      now,
+      maxEntries: 24,
+      maxBytes: 96 * 1024 * 1024,
+      maxValueBytes: 8 * 1024 * 1024,
+    }),
+    redisCache: cache,
+  })
+  const longhuService = createLonghuBigOrderService({
+    plainClient,
+    layeredCache: longhuCache,
+    readConfig,
+    now,
+  })
+
   app.get('/api/big-order/ths-detail', async (req, res) => {
     const stockCode = normalizeStockCode(req.query.stockCode)
     if (!stockCode) {
@@ -116,8 +151,10 @@ export function registerBigOrderRoutes(app, { plainClient, cache, runtimeCache, 
 
     const ttlSeconds = PROXY_CACHE_TTLS.bigOrder.thsDetail
     try {
-      const result = await runtimeCache.remember(
-        `big-order:ths-detail:v1:${stockCode}`,
+      const result = await thsCache.remember(
+        `big-order:ths-detail:v2:${new Date(now()).toLocaleDateString('sv-SE', {
+          timeZone: 'Asia/Shanghai',
+        })}:${stockCode}`,
         { ttlSeconds, staleTtlSeconds: ttlSeconds * 6 },
         async () => {
           const response = await plainClient.get(buildThsBigOrderUrl(stockCode).toString(), {
@@ -132,11 +169,14 @@ export function registerBigOrderRoutes(app, { plainClient, cache, runtimeCache, 
         ok: true,
         source: 'ths-big-order-detail',
         stockCode,
+        sessionDate: result.value.sessionDate,
         fetchedAt: result.value.fetchedAt,
         servedAt: now(),
         data: attachCacheMeta(result.value, {
           ...result.cache,
-          store: 'memory',
+          store: result.cache.store,
+          ageSeconds: Math.max(0, Math.floor((now() - result.value.fetchedAt) / 1000)),
+          uiStale: now() - result.value.fetchedAt > uiStaleThresholdMs(now()),
           ttlSeconds,
         }),
       })
@@ -144,6 +184,47 @@ export function registerBigOrderRoutes(app, { plainClient, cache, runtimeCache, 
       console.error('[同花顺大单] 失败:', error.message)
       return sendDegraded(res, {
         source: 'ths-big-order-detail',
+        error,
+        fallbackData: null,
+      })
+    }
+  })
+
+  app.get('/api/big-order/longhu/all-day', async (req, res) => {
+    const stockCode = normalizeStockCode(req.query.stockCode)
+    const money = Number(req.query.money || 0)
+    if (!stockCode) return sendBadRequest(res, 'invalid_stock_code', 'stockCode 必须是六位数字')
+    if (money !== 0) {
+      return sendBadRequest(res, 'invalid_money', 'Longhu 结构化全天端点只支持 money=0')
+    }
+    try {
+      const result = await longhuService.loadAllDay({ stockCode, money })
+      const servedAt = now()
+      const ageSeconds = Math.max(0, Math.floor((servedAt - result.fetchedAt) / 1000))
+      return res.json({
+        ok: true,
+        source: 'longhu-big-order-all-day',
+        stockCode,
+        sessionDate: result.sessionDate,
+        fetchedAt: result.fetchedAt,
+        servedAt,
+        data: {
+          ...result.data,
+          dragonMeta: {
+            cache: {
+              ...result.cache,
+              ageSeconds,
+              uiStale: servedAt - result.fetchedAt > uiStaleThresholdMs(servedAt),
+              upstreamCalled: !result.cache.hit,
+              ttlSeconds: PROXY_CACHE_TTLS.bigOrder.longhuAllDay,
+            },
+            refresh: result.refresh,
+          },
+        },
+      })
+    } catch (error) {
+      return sendDegraded(res, {
+        source: 'longhu-big-order-all-day',
         error,
         fallbackData: null,
       })
@@ -277,20 +358,13 @@ export function registerBigOrderRoutes(app, { plainClient, cache, runtimeCache, 
         return sendBadRequest(res, 'missing_stock_code', '缺少 stockCode 参数')
       }
 
-      const url = buildBigOrderUrl({
+      const payload = await longhuService.loadPage({
         stockCode,
         limit: Math.min(Number(limit) || 100, 500),
         money: Number(money) || 0,
         index: Number(index) || 0,
-        deviceId: generateDeviceId(),
       })
-
-      const response = await plainClient.get(url.toString(), {
-        timeout: 15000,
-        headers: BIG_ORDER_HEADERS,
-      })
-
-      res.json(response.data)
+      res.json(payload)
     } catch (error) {
       console.error('[大单监控] 失败:', error.message)
       sendDegraded(res, { source: 'big-order-main-monitor', error, fallbackData: { List: [] } })
@@ -305,37 +379,17 @@ export function registerBigOrderRoutes(app, { plainClient, cache, runtimeCache, 
         return sendBadRequest(res, 'missing_stock_code', '缺少 stockCode 参数')
       }
 
-      const pageSize = 500
-      const maxPages = 20
-      let index = 0
-      let allData = []
-      const deviceId = generateDeviceId()
-
-      for (let page = 0; page < maxPages; page++) {
-        const url = buildBigOrderUrl({
-          stockCode,
-          limit: pageSize,
-          money: Number(money) || 0,
-          index,
-          deviceId,
-        })
-
-        const response = await plainClient.get(url.toString(), {
-          timeout: 10000,
-          headers: BIG_ORDER_HEADERS,
-        })
-
-        const list = response.data?.List || []
-        if (!Array.isArray(list) || list.length === 0) break
-
-        allData = allData.concat(list)
-        if (list.length < pageSize) break
-
-        index += pageSize
-        await delay(100)
-      }
-
-      res.json({ List: allData })
+      const numericMoney = Number(money) || 0
+      const payload =
+        numericMoney === 0
+          ? (await longhuService.loadAllDay({ stockCode, money: 0 })).data
+          : await longhuService.loadPage({
+              stockCode,
+              money: numericMoney,
+              index: 0,
+              limit: 40_000,
+            })
+      res.json({ List: payload.List })
     } catch (error) {
       console.error('[全天大单] 失败:', error.message)
       sendDegraded(res, { source: 'big-order-all-day', error, fallbackData: { List: [] } })

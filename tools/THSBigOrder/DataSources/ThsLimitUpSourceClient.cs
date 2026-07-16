@@ -14,12 +14,18 @@ namespace THSBigOrder.DataSources
         private readonly HttpClient _http;
         private readonly string _proxyBase;
         private readonly ThsPayloadParser _parser;
+        private readonly Func<DateTime> _today;
 
-        public ThsLimitUpSourceClient(HttpClient http, string proxyBase, ThsPayloadParser parser)
+        public ThsLimitUpSourceClient(
+            HttpClient http,
+            string proxyBase,
+            ThsPayloadParser parser,
+            Func<DateTime> today = null)
         {
             _http = http;
             _proxyBase = proxyBase.TrimEnd('/');
             _parser = parser;
+            _today = today ?? (() => DateTime.Today);
         }
 
         public async Task<SourceLoadResult<LimitUpSourceData>> LoadDirectAsync(
@@ -53,7 +59,8 @@ namespace THSBigOrder.DataSources
             SourceLoadResult<LimitUpSourceData> firstMissing = null;
             for (var offset = 0; offset <= 7; offset++)
             {
-                var date = DateTime.Today.AddDays(-offset).ToString("yyyyMMdd", CultureInfo.InvariantCulture);
+                var date = _today().Date.AddDays(-offset)
+                    .ToString("yyyyMMdd", CultureInfo.InvariantCulture);
                 using (var request = createRequest(date))
                 {
                     var payload = await GetJsonAsync(request, cancellationToken).ConfigureAwait(false);

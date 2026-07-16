@@ -1,93 +1,116 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Speech.Synthesis;
 
 namespace THSBigOrder
 {
-    /// <summary>
-    /// 语音播报服务
-    /// </summary>
-    public class VoiceService : IDisposable
+    internal enum BigOrderAnnouncementType { Ignite, Smash, BuyActive, GoodSupport }
+
+    internal sealed class BigOrderAnnouncement
     {
-        private SpeechSynthesizer _synth;
-        private bool _enabled = true;
-        
-        public bool Enabled 
-        { 
-            get => _enabled; 
-            set => _enabled = value; 
-        }
+        public BigOrderAnnouncementType Type { get; set; }
+        public double Amount { get; set; }
+    }
 
-        public VoiceService()
+    internal interface IBigOrderVoice : IDisposable
+    {
+        bool Enabled { get; set; }
+        void AnnounceBatch(IReadOnlyList<BigOrderAnnouncement> announcements);
+        void CancelPending();
+    }
+
+    internal interface ISpeechQueue : IDisposable
+    {
+        void SpeakAsync(string text);
+        void CancelAll();
+    }
+
+    internal sealed class SystemSpeechQueue : ISpeechQueue
+    {
+        private readonly SpeechSynthesizer _synth = new SpeechSynthesizer();
+
+        public SystemSpeechQueue()
         {
-            _synth = new SpeechSynthesizer();
-            _synth.Rate = 3;  // 语速：-10到10，3较快
-            _synth.Volume = 100;  // 音量：0-100
+            _synth.Rate = 3;
+            _synth.Volume = 100;
         }
 
-        /// <summary>
-        /// 播报点火
-        /// </summary>
+        public void SpeakAsync(string text) { _synth.SpeakAsync(text); }
+        public void CancelAll() { _synth.SpeakAsyncCancelAll(); }
+        public void Dispose() { _synth.Dispose(); }
+    }
+
+    internal class VoiceService : IBigOrderVoice
+    {
+        private readonly ISpeechQueue _queue;
+        public bool Enabled { get; set; } = true;
+
+        public VoiceService() : this(new SystemSpeechQueue()) { }
+        internal VoiceService(ISpeechQueue queue) { _queue = queue; }
+
+        internal static string BuildBatchText(IReadOnlyList<BigOrderAnnouncement> announcements)
+        {
+            return string.Join("，", (announcements ?? new BigOrderAnnouncement[0]).Select(value =>
+            {
+                switch (value.Type)
+                {
+                    case BigOrderAnnouncementType.Ignite:
+                        return "点火 " + FormatAmount(value.Amount);
+                    case BigOrderAnnouncementType.Smash:
+                        return "砸盘 " + FormatAmount(value.Amount);
+                    case BigOrderAnnouncementType.BuyActive:
+                        return "买活跃";
+                    default:
+                        return "承接好";
+                }
+            }));
+        }
+
+        public void AnnounceBatch(IReadOnlyList<BigOrderAnnouncement> announcements)
+        {
+            if (!Enabled || announcements == null || announcements.Count == 0) return;
+            var text = BuildBatchText(announcements);
+            if (text.Length == 0) return;
+            try { _queue.SpeakAsync(text); } catch { }
+        }
+
+        public void CancelPending()
+        {
+            try { _queue.CancelAll(); } catch { }
+        }
+
         public void AnnounceIgnite(double amount)
         {
-            if (!_enabled) return;
-            string amountStr = FormatAmount(amount);
-            SpeakAsync("点火 " + amountStr);
+            AnnounceBatch(new[] { new BigOrderAnnouncement { Type = BigOrderAnnouncementType.Ignite, Amount = amount } });
         }
 
-        /// <summary>
-        /// 播报砸盘
-        /// </summary>
         public void AnnounceSmash(double amount)
         {
-            if (!_enabled) return;
-            string amountStr = FormatAmount(amount);
-            SpeakAsync("砸盘 " + amountStr);
+            AnnounceBatch(new[] { new BigOrderAnnouncement { Type = BigOrderAnnouncementType.Smash, Amount = amount } });
         }
 
-        /// <summary>
-        /// 播报买活跃
-        /// </summary>
         public void AnnounceBuyActive()
         {
-            if (!_enabled) return;
-            SpeakAsync("买活跃");
+            AnnounceBatch(new[] { new BigOrderAnnouncement { Type = BigOrderAnnouncementType.BuyActive } });
         }
 
-        /// <summary>
-        /// 播报承接好
-        /// </summary>
         public void AnnounceGoodSupport()
         {
-            if (!_enabled) return;
-            SpeakAsync("承接好");
+            AnnounceBatch(new[] { new BigOrderAnnouncement { Type = BigOrderAnnouncementType.GoodSupport } });
         }
 
-        private string FormatAmount(double amount)
+        private static string FormatAmount(double amount)
         {
-            if (amount >= 100000000)
-                return string.Format("{0:F1}亿", amount / 100000000);
-            return string.Format("{0:F0}万", amount / 10000);
-        }
-
-        private void SpeakAsync(string text)
-        {
-            try
-            {
-                // 异步播报，不阻塞UI
-                _synth.SpeakAsyncCancelAll();  // 取消之前的播报，避免堆积
-                _synth.SpeakAsync(text);
-            }
-            catch { }
+            return amount >= 100000000
+                ? string.Format("{0:F1}亿", amount / 100000000)
+                : string.Format("{0:F0}万", amount / 10000);
         }
 
         public void Dispose()
         {
-            try
-            {
-                _synth?.SpeakAsyncCancelAll();
-                _synth?.Dispose();
-            }
-            catch { }
+            CancelPending();
+            try { _queue.Dispose(); } catch { }
         }
     }
 }

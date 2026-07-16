@@ -31,7 +31,7 @@ function thsPayload() {
         ctime: '13:13:12',
       },
     ],
-    pricechange: [],
+    pricechange: [{ 1: '202607171313', 2: '1.2' }],
   }
 }
 
@@ -66,6 +66,7 @@ test('THS big-order detail validates stock code and returns source payload', asy
     assert.equal(body.ok, true)
     assert.equal(body.source, 'ths-big-order-detail')
     assert.equal(body.stockCode, '002297')
+    assert.equal(body.sessionDate, '2026-07-17')
     assert.equal(body.fetchedAt, now)
     assert.equal(body.servedAt, now)
     assert.equal(body.data.title.stockname, '博云新材')
@@ -81,6 +82,43 @@ test('THS big-order detail validates stock code and returns source payload', asy
     assert.match(calls[0].config.headers['User-Agent'], /Mozilla\/5\.0/)
     assert.equal(calls[0].config.headers.Referer, 'https://vaserviece.10jqka.com.cn/')
     assert.equal(calls[0].config.headers.Accept, 'application/json,text/plain,*/*')
+  } finally {
+    server.close()
+  }
+})
+
+test('structured Longhu all-day endpoint returns canonical envelope', async () => {
+  const app = createProxyApp({
+    logRequests: false,
+    readConfig: (name, fallback) =>
+      name === 'BIG_ORDER_LONGHU_INCREMENTAL_MODE' ? 'off' : fallback,
+    clients: {
+      client: {},
+      plainClient: {
+        get: async () => ({ data: thsPayload() }),
+        post: async () => ({
+          data: {
+            errcode: '0',
+            Total: 1,
+            List: [['2', '1784200000', '100', '1000', '10', '2026-07-17 09:30:00']],
+          },
+        }),
+      },
+    },
+  })
+  const { server, baseUrl } = await listen(app)
+  try {
+    const response = await fetch(
+      `${baseUrl}/api/big-order/longhu/all-day?stockCode=002297&money=0`,
+    )
+    const body = await response.json()
+    assert.equal(response.status, 200)
+    assert.equal(body.ok, true)
+    assert.equal(body.source, 'longhu-big-order-all-day')
+    assert.equal(body.sessionDate, '2026-07-17')
+    assert.equal(body.data.List.length, 1)
+    assert.equal(body.data.dragonMeta.cache.uiStale, false)
+    assert.equal(body.data.dragonMeta.refresh.mode, 'cold-full')
   } finally {
     server.close()
   }
@@ -167,7 +205,7 @@ test('process memory cache evicts oldest entries at its capacity limit', async (
 })
 
 test('THS big-order detail serves cached and stale data before degrading', async () => {
-  let now = 1_750_000_000_000
+  let now = Date.parse('2026-07-17T02:00:00Z')
   let upstreamCalls = 0
   let fail = false
   const app = createProxyApp({
@@ -201,6 +239,7 @@ test('THS big-order detail serves cached and stale data before degrading', async
     const staleBody = await staleResponse.json()
     assert.equal(staleResponse.status, 200)
     assert.equal(staleBody.data.dragonMeta.cache.stale, true)
+    assert.equal(staleBody.data.dragonMeta.cache.uiStale, true)
 
     now += 180_000
     const degradedResponse = await fetch(url)
@@ -216,15 +255,15 @@ test('THS big-order detail serves cached and stale data before degrading', async
 
 test('legacy main-monitor keeps its unwrapped KPL response contract', async () => {
   const expected = [{ StockID: '002297', Money: 800000 }]
-  let upstreamUrl = ''
+  let upstreamForm
   const app = createProxyApp({
     logRequests: false,
     clients: {
       client: {},
       plainClient: {
-        get: async (url) => {
-          upstreamUrl = String(url)
-          return { data: { List: expected } }
+        post: async (url, body) => {
+          upstreamForm = new URLSearchParams(body)
+          return { data: { errcode: '0', Total: 1, List: expected } }
         },
       },
     },
@@ -235,26 +274,42 @@ test('legacy main-monitor keeps its unwrapped KPL response contract', async () =
       `${baseUrl}/api/big-order/main-monitor?stockCode=002297&limit=10`,
     )
     assert.equal(response.status, 200)
-    assert.deepEqual(await response.json(), { List: expected })
-    assert.match(upstreamUrl, /[?&]a=GetMainMonitor_w30(?:&|$)/)
+    const body = await response.json()
+    assert.deepEqual(body.List, expected)
+    assert.equal(body.ok, undefined)
+    assert.equal(upstreamForm.get('a'), 'GetMainMonitor_w30')
+    assert.equal(upstreamForm.get('st'), '200')
   } finally {
     server.close()
   }
 })
 
-test('legacy all-day stops on a short page and keeps the unwrapped List contract', async () => {
-  const fullPage = Array.from({ length: 500 }, (_, index) => ({ id: index }))
-  const lastPage = [{ id: 500 }]
+test('legacy all-day uses internal pages of 200 and keeps the unwrapped List contract', async () => {
+  const fullPage = Array.from({ length: 200 }, (_, index) => [
+    '2',
+    String(1784200000 + index),
+    '100',
+    '1000',
+    '10',
+    '2026-07-17 09:30:00',
+  ])
+  const lastPage = [['2', '1784200200', '100', '1000', '10', '2026-07-17 09:30:00']]
   const indexes = []
   const app = createProxyApp({
     logRequests: false,
     clients: {
       client: {},
       plainClient: {
-        get: async (url) => {
-          const parsed = new URL(url)
-          indexes.push(parsed.searchParams.get('Index'))
-          return { data: { List: indexes.length === 1 ? fullPage : lastPage } }
+        post: async (url, body) => {
+          const form = new URLSearchParams(body)
+          indexes.push(form.get('Index'))
+          return {
+            data: {
+              errcode: '0',
+              Total: 201,
+              List: indexes.length === 1 ? fullPage : lastPage,
+            },
+          }
         },
       },
     },
@@ -264,8 +319,8 @@ test('legacy all-day stops on a short page and keeps the unwrapped List contract
     const response = await fetch(`${baseUrl}/api/big-order/all-day?stockCode=002297`)
     const body = await response.json()
     assert.equal(response.status, 200)
-    assert.deepEqual(indexes, ['0', '500'])
-    assert.equal(body.List.length, 501)
+    assert.deepEqual(indexes, ['0', '200'])
+    assert.equal(body.List.length, 201)
     assert.equal(body.ok, undefined)
   } finally {
     server.close()
@@ -278,7 +333,9 @@ test('legacy all-day handles empty and degraded upstream results', async (t) => 
       logRequests: false,
       clients: {
         client: {},
-        plainClient: { get: async () => ({ data: { List: [] } }) },
+        plainClient: {
+          post: async () => ({ data: { errcode: '0', Total: 0, List: [] } }),
+        },
       },
     })
     const { server, baseUrl } = await listen(app)
@@ -296,7 +353,7 @@ test('legacy all-day handles empty and degraded upstream results', async (t) => 
       clients: {
         client: {},
         plainClient: {
-          get: async () => {
+          post: async () => {
             throw new Error('legacy blocked')
           },
         },

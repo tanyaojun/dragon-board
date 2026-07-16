@@ -10,7 +10,7 @@
 
 ---
 
-> **后续演进说明：** 本计划是已经完成的 direct-first 双数据源实施记录，不是 Redis 目标态的执行计划。缓存改造完成后，Longhu 正常链路将由 `/api/big-order/longhu/all-day` proxy-primary 替代 direct/proxy 逐页 fallback；实施步骤以 [BigOrder Redis TTL Cache Implementation Plan](../../ths-big-order-debug/big-order-redis-cache-implementation-plan.md) 为准。
+> **后续演进说明：** 本计划是已经完成的 direct-first 双数据源历史实施记录。2026-07-17 Redis 改造落地后，Longhu 正常链路已由 `/api/big-order/longhu/all-day` proxy-primary 替代 direct/proxy 逐页 fallback；当前合同以 [BigOrder Redis TTL Cache Implementation Plan](../../ths-big-order-debug/big-order-redis-cache-implementation-plan.md) 为准。
 
 ### Task 1: Longhu payload parser
 

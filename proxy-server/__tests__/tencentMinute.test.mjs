@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import { createProxyApp } from '../app.js'
-import { ProcessMemoryCache } from '../helpers/proxyCache.js'
+import { ProcessMemoryCache, PROXY_CACHE_TTLS } from '../helpers/proxyCache.js'
 
 function listen(app) {
   return new Promise((resolve) => {
@@ -138,7 +138,7 @@ test('tencent minute route serves cache hits and stale data', async () => {
     assert.equal(first.data.dragonMeta.cache.hit, false)
     assert.equal(hit.data.dragonMeta.cache.hit, true)
 
-    now += 6_000
+    now += (PROXY_CACHE_TTLS.quotes.tencentMinute + 1) * 1000
     fail = true
     const stale = await (await fetch(url)).json()
     assert.equal(stale.ok, true)
