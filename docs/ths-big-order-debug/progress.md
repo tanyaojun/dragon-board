@@ -1,0 +1,79 @@
+# THSBigOrder 排查进度
+
+## 2026-07-16
+
+- 已读取项目规则、skills 指南和 `systematic-debugging` 流程。
+- 已确认工作区存在与 THSBigOrder 数据链路直接相关的未提交改动。
+- 已列出 THSBigOrder 文件和近期提交。
+- 已读取双数据源设计、当前 diff 和数据源关键调用链。
+- 已发现截图实际请求代码为 `999999`，首要假设转为通达信内存跟随产生无效代码。
+- 已通过本地代理对比正常代码与 `999999`，确认截图直接根因。
+- 已确认代理进程和端口正常，排除代理未启动。
+- 已核对龙虎代理行为：单页与部分 all-day 请求可正常返回数据。
+- 已运行构建：主项目通过，测试项目因构造函数签名变更无法编译。
+- 已完成根因层级和最小修复范围整理。
+- 已按批准方案重新实现 Longhu direct/proxy、完整分页、THS summary 混合、分源 stale cache 和 ComboBox 切换。
+- 已补齐 Tests 构造注入及 Longhu parser/client/provider/UI 回归测试。
+- subagent 首轮 review 发现 1 Critical、4 Important、1 Minor；修复后复审无剩余 Critical/Important。
+- THSBigOrder 与 THSBigOrder.Tests Release 构建均为 0 warning / 0 error。
+- 完整测试仅剩两个既有固定日期涨停夹具失败，与 Longhu 功能无关。
+- 已开始把前述调试过程整理为正式复盘，并分析 BigOrder Redis TTL 改造。
+- 已核对 `docs/API/ths-l2-api-analysis.md`、`docs/ranktrend-redis-cache/*`、`proxy-server/helpers/proxyCache.js`、`proxy-server/routes/bigOrder.js` 和当前 C# Longhu 客户端。
+- 已确认 Redis 方案的核心不能只是分页 TTL：必须让正常流量进入 proxy，并以全天快照增量刷新避免 TTL miss 后再次全量分页。
+- 已新增 `2026-07-16-debug-retrospective.md`，记录 `999999`、Longhu 分页、三条线、切源刷新和验证结果。
+- 已新增 `big-order-redis-cache-design.md`，推荐“L1 内存 + L2 Redis、全天快照、增量头页、SWR、熔断、proxy 正常入口”。
+- 已新增 `big-order-redis-cache-implementation-plan.md`，列出精确影响文件、TDD 用例和验证命令。
+- 已纠正既有双数据源设计/计划中的 500 条页大小和对应偏移旧口径，并在 API 分析文档补充真实页大小限制。
+- 自审发现并修正两项架构遗漏：
+  - `cache.enabled() ? cache : runtimeCache` 不能处理 Redis 运行中断线，方案改为 `LayeredProxyCache`。
+  - proxy 成为正常入口后不能继续使用 `ProxyFallback`，方案增加 `ProxyPrimary` 正常传输状态。
+- 独立只读审查无 Critical，提出 5 个 Important，已全部处理：
+  - 明确当前 proxy 仍是 GET/逐页 DeviceID，POST 合同只在 C# direct 已落地。
+  - 增量刷新增加 prepend-only 实测门禁、所有页 Total 校验和历史页轮转审计。
+  - 当时记录了 DeviceID snapshot、逻辑快照偏移和 20 秒预算，但正文未充分落地，且 20 秒后来被外部审计证明不足；现已修订为 45 秒。
+  - Longhu key 统一为 row `sessionDate` + `latest` 指针，避免周末按自然日冷重建。
+  - 增加 L1/L2 字节预算、money allowlist、冷重建队列和等待上限。
+- 二次复审提出 3 个 Important，已处理：
+  - 拆分 `off/prepend-device-snapshot/prepend-logical` 三种模式，默认 fail-closed `off`。
+  - 所有 Longhu 上游请求统一全局并发 1。
+  - 全源 breaker 与单 `{stock,money}` 完整性冷却分离。
+- 最后复审提出 2 个 Important，已处理：
+  - 冷启动 Total 变化失败条件按三种 mode 明确分支，`prepend-logical` 的正常增长不再与通用失败规则冲突。
+  - 冷 miss、头刷、历史审计统一进入 running=1/queued=4 的有界调度器。
+- 当时的独立复审报告称无剩余 Critical / Important；后续外部对抗性审计证明该结论只覆盖了有限检查面，不能作为当前 design/plan 的最终结论。
+- 本地 Markdown 相对链接检查无缺失，目标文档 `git diff --check` 通过。
+- 收到外部对抗性审计后重新核验，确认此前“最终无 Critical / Important”的结论不能继续成立：design/plan 正文仍存在 2 个 Critical 和多项合同缺口。
+- 已开始把审计结论逐项回写 design、implementation plan、API/双数据源关联文档；本轮仍保持文档-only，不修改源码。
+- 已完成外部审计修订：
+  - 冷 miss 时序收敛为 8 秒排队、45 秒重建、Longhu 专用 60 秒客户端，并要求 deadline 中止上游请求。
+  - 全局并发固定 1；全源 breaker 与单 key 完整性冷却分离；显式增量模式默认 `off`。
+  - envelope 增加 `sessionDate`，technical stale 与 UI stale 分离，`latest` 指针前移到冷启动读路径。
+  - 历史审计改为普通请求搭便车；旧 money 合同不收紧；补空 key、盘前、字节预算、部署顺序和文档同步。
+- 文档验证通过：8 个目标文件相对链接无缺失；14 项关键合同扫描通过；行尾空白/占位词扫描通过；`git diff --check` 无输出。
+
+## 2026-07-17
+
+- 收到语音增量播报补充需求：Redis 缓存返回全天快照时，WinForms 只播报本次新增的大单，且不固定截断为最近两条。
+- 已确认不能只删除调用方的两条限制：`VoiceService` 当前每次播报会取消上一条，多条新增必须采用单批次合并播报或显式队列策略。
+- 已完成语音调用链核对：当前只检查最新 10 条、首条命中立即返回、每次播报取消前一条。
+- 已把完整语音合同写入 Redis design/implementation plan，并同步双数据源 design/plan：
+  - 完整列表先做 scope 增量识别，再应用当前筛选。
+  - 指纹按历史最大出现次数处理合法重复。
+  - 首次/切股/切源/跨日只建基线，语音关闭仍推进基线。
+  - 同轮全部有效新信号合为一个批次顺序播报，不限制条数。
+- 提交前 C# 测试新鲜结果：62 项中 60 项通过，只剩此前已记录的两个固定日期 limit-up fixture 失败；Longhu、三线图、切源和刷新回归均通过。
+- 首次独立输出构建误用了新的 `BaseIntermediateOutputPath`，导致 net48 引用程序集解析失败；改为保留现有 obj、只重定向 `OutputPath` 后重新验证。
+- 只重定向 `OutputPath` 的 THSBigOrder Release 构建通过：0 warning / 0 error，输出到 `tools/THSBigOrder/bin/ReleaseVerify/`。
+- subagent 只读复核语音合同：无 Critical，提出 4 Important/2 Minor，已全部采纳：
+  - THS 补权威 `sessionDate` 和 null fail-closed 语义。
+  - 重新开启语音增加首份 accepted snapshot barrier。
+  - 特殊 marker 筛选覆盖默认播报优先级。
+  - 增加可注入 `ISpeechQueue`，验证 FIFO/CancelPending/Dispose。
+  - 固定 marker→Observe→Filter→Map→Batch 顺序。
+  - tracker 对 `sessionDate.Date` 归一化。
+- subagent 二次复审追加 2 Important，已处理：
+  - THS 只有时分秒的 order 强制规范化为权威 `sessionDate.Date + timeOfDay`，避免跨午夜指纹漂移。
+  - re-enable barrier 只有可信日期完整快照成功建基线后才清除，null/失败/迟到响应均保留。
+- subagent 最终复审无剩余 Critical / Important。
+- 已提交当前 Longhu/图表/切源源码与测试：`c709101 feat(thsbigorder): add Longhu big-order source`。
+- `proxy-server/helpers/proxyCache.js` 属于无关的热榜 TTL/格式化改动，本轮未纳入提交；DLL、EXE config、窗口设置和 `.claude/worktrees/` 同样排除。
