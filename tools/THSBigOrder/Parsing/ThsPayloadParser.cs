@@ -165,6 +165,79 @@ namespace THSBigOrder.Parsing
             };
         }
 
+        public IReadOnlyList<BigOrderItem> ParseLonghuOrders(JArray values)
+        {
+            var orders = new List<BigOrderItem>();
+            foreach (var value in values?.OfType<JArray>() ?? Enumerable.Empty<JArray>())
+            {
+                try { orders.Add(ParseLonghuOrder(value)); }
+                catch (PayloadParseException) { }
+            }
+            return orders;
+        }
+
+        public BigOrderItem ParseLonghuOrder(JArray value)
+        {
+            if (value == null) throw new PayloadParseException("invalid Longhu order row");
+
+            JToken typeToken;
+            JToken unixToken;
+            JToken timeToken;
+            JToken priceToken;
+            JToken volumeToken;
+            JToken amountToken = null;
+            var compact = value.Count >= 7 &&
+                          DateTime.TryParseExact(value[2]?.ToString(), "yyyy-MM-dd HH:mm:ss",
+                              CultureInfo.InvariantCulture, DateTimeStyles.None, out _);
+            if (compact)
+            {
+                unixToken = value[1];
+                timeToken = value[2];
+                priceToken = value[3];
+                volumeToken = value[4];
+                typeToken = value[5];
+            }
+            else if (value.Count >= 6)
+            {
+                typeToken = value[0];
+                unixToken = value[1];
+                volumeToken = value[2];
+                amountToken = value[3];
+                priceToken = value[4];
+                timeToken = value[5];
+            }
+            else
+            {
+                throw new PayloadParseException("invalid Longhu order row");
+            }
+
+            var typeNumber = RequiredNumber(typeToken, "tradetype");
+            if (typeNumber != Math.Truncate(typeNumber))
+                throw new PayloadParseException("invalid Longhu tradetype");
+            var type = (int)typeNumber;
+            if (type < 1 || type > 4) throw new PayloadParseException("invalid Longhu tradetype");
+            var unixSeconds = RequiredNumber(unixToken, "unixSeconds");
+            if (unixSeconds <= 0) throw new PayloadParseException("invalid unixSeconds");
+            DateTime time;
+            if (!DateTime.TryParseExact(timeToken?.ToString(), "yyyy-MM-dd HH:mm:ss",
+                    CultureInfo.InvariantCulture, DateTimeStyles.None, out time))
+                throw new PayloadParseException("invalid Longhu datetime");
+            var price = RequiredNumber(priceToken, "price");
+            var volume = RequiredNumber(volumeToken, "amount");
+            if (price <= 0) throw new PayloadParseException("invalid price");
+            if (volume <= 0) throw new PayloadParseException("invalid amount");
+            var amount = amountToken == null ? price * volume : RequiredNumber(amountToken, "money");
+            if (amount < 0) throw new PayloadParseException("invalid money");
+            return new BigOrderItem
+            {
+                Type = type,
+                Volume = volume,
+                Amount = amount,
+                Price = price,
+                Time = time,
+            };
+        }
+
         public MarketSnapshot ParseSnapshot(
             string stockCode,
             JObject bigOrderEnvelope,
@@ -323,7 +396,10 @@ namespace THSBigOrder.Parsing
                 var volume = FiniteNumber(row["cumulativeVolume"]);
                 var amount = FiniteNumber(row["cumulativeAmount"]);
                 if (!DateTime.TryParseExact(date.ToString("yyyyMMdd") + (string)row["time"],
-                        "yyyyMMddHHmm", CultureInfo.InvariantCulture, DateTimeStyles.None, out time) ||
+                        "yyyyMMddHHmm", CultureInfo.InvariantCulture, DateTimeStyles.None, out time))
+                    throw new PayloadParseException("invalid Tencent minute row");
+                if (time.TimeOfDay > new TimeSpan(15, 0, 0)) continue;
+                if (
                     !price.HasValue || !volume.HasValue || !amount.HasValue ||
                     price <= 0 || volume < 0 || amount < 0 || !IsTradingTime(time) ||
                     previous.HasValue && (time <= previous || volume < previousVolume || amount < previousAmount))

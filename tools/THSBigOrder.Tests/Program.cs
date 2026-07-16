@@ -30,6 +30,17 @@ internal static class Program
             AssertEqual("THSBigOrder", typeof(THSBigOrderDataProvider).Namespace, "namespace");
         });
         Run("THS order parser maps four natures and formatted values", TestOrderParsing);
+        Run("Longhu parser maps compact rows and skips invalid rows", LonghuFeatureTests.TestParser);
+        Run("Longhu direct success does not call proxy", () => LonghuFeatureTests.TestDirectSuccess().GetAwaiter().GetResult());
+        Run("Longhu direct failure falls back to proxy", () => LonghuFeatureTests.TestDirectFailureProxyFallback().GetAwaiter().GetResult());
+        Run("Longhu pagination aggregates safe 200-row pages and reuses DeviceID", () => LonghuFeatureTests.TestPagination().GetAwaiter().GetResult());
+        Run("Longhu proxy fallback also aggregates every page", () => LonghuFeatureTests.TestProxyPagination().GetAwaiter().GetResult());
+        Run("Longhu missing Total pagination has a maximum-page guard", () => LonghuFeatureTests.TestMissingTotalPageGuard().GetAwaiter().GetResult());
+        Run("Longhu pagination rejects rows beyond Total", () => LonghuFeatureTests.TestTotalOverrun().GetAwaiter().GetResult());
+        Run("Longhu pagination failure never returns partial direct data", () => LonghuFeatureTests.TestMidPageFailure().GetAwaiter().GetResult());
+        Run("Longhu truncated response falls back to proxy", () => LonghuFeatureTests.TestTruncatedResponse().GetAwaiter().GetResult());
+        Run("Longhu empty list is a valid direct success", () => LonghuFeatureTests.TestValidEmptyList().GetAwaiter().GetResult());
+        Run("Longhu non-empty invalid list falls back to proxy", () => LonghuFeatureTests.TestAllInvalidFallback().GetAwaiter().GetResult());
         Run("THS snapshot parser merges title, quote, limit-up and price points", TestSnapshotParsing);
         Run("THS snapshot parser reads Tencent minute turnover", TestMinuteTurnoverParsing);
         Run("Direct Sina quote parser decodes GBK fields", TestDirectSinaQuoteParsing);
@@ -41,6 +52,8 @@ internal static class Program
         Run("Proxy envelope maps degraded, stale and fresh empty states", TestEnvelopeStates);
         Run("Provider stale fallback is isolated by stock code", () => TestProviderStaleIsolation().GetAwaiter().GetResult());
         Run("Provider direct success does not call proxy", () => TestDirectSuccess().GetAwaiter().GetResult());
+        Run("Provider routes Longhu orders and keeps THS summary", () => LonghuFeatureTests.TestProviderRouting().GetAwaiter().GetResult());
+        Run("Provider isolates THS and Longhu order stale caches", () => LonghuFeatureTests.TestProviderCacheIsolation().GetAwaiter().GetResult());
         Run("Provider falls back only the failed source", () => TestIndependentProxyFallback().GetAwaiter().GetResult());
         Run("Provider does not fallback valid empty limit-up", () => TestValidEmptyLimitUp().GetAwaiter().GetResult());
         Run("Provider uses same-stock stale only after both attempts fail", () => TestPerSourceStale().GetAwaiter().GetResult());
@@ -57,7 +70,8 @@ internal static class Program
         Run("Chart control exposes paired axes and intraday grids", TestIntradayChartLayout);
         Run("Chart control maps both average prices to one axis", TestAveragePriceAxis);
         Run("Chart control draws minute price white and big-order average blue", TestMinutePriceChartLine);
-        Run("Chart control falls back to THS percent only for market line", TestThsPriceFallback);
+        Run("Chart control uses THS percent only as white price fallback", TestThsPriceFallback);
+        Run("Chart control paints a drawable white line without other data", TestWhiteLineOnlyPaints);
         Run("Chart control normalizes half-hour heat rows independently", TestHalfHourHeatRatios);
         Run("Chart heat colors distinguish net buy and net sell", TestHalfHourHeatColors);
         Run("Chart heat text stays readable at maximum intensity", TestHeatTextContrast);
@@ -66,6 +80,8 @@ internal static class Program
         Run("Order filter composes amount, side and marker", TestOrderFilter);
         Run("Refresh coordinator cancels superseded code and blocks reentry", TestRefreshCoordinator);
         Run("Main form exposes 72/28 chart and order tabs", TestMainFormLayout);
+        Run("Main form defaults THS source and refreshes after source switch", () => LonghuFeatureTests.TestMainFormDataSourceSwitch().GetAwaiter().GetResult());
+        Run("Main form ignores a late result from the previous data source", () => LonghuFeatureTests.TestMainFormDataSourceSwitchRace().GetAwaiter().GetResult());
         Run("Main form defaults amount filter to 300w", TestMainFormDefaultAmountFilter);
         Run("Main form ignores superseded refresh completion", () => TestMainFormRefreshRace().GetAwaiter().GetResult());
         Run("Main form ignores superseded refresh failure", () => TestMainFormRefreshFailureRace().GetAwaiter().GetResult());
@@ -191,13 +207,35 @@ internal static class Program
           'code':0,
           'data':{'sz002297':{'data':{'date':'20260618','data':[
             '0930 25.70 11848 30449360.00',
-            '0931 25.98 71011 184435426.43'
+            '1500 25.98 71011 184435426.43',
+            '1501 25.98 71011 184435426.43',
+            '1530 25.98 71011 184435426.43'
           ]}}}
         }");
-        var points = new ThsPayloadParser().ParseTencentMinute("002297", payload);
+        var parser = new ThsPayloadParser();
+        var points = parser.ParseTencentMinute("002297", payload);
         AssertEqual(2, points.Count, "direct minute count");
         AssertEqual(new DateTime(2026, 6, 18, 9, 30, 0), points[0].Time, "direct minute time");
         AssertEqual(184435426.43d, points[1].CumulativeAmount, "direct minute amount");
+        AssertEqual(new DateTime(2026, 6, 18, 15, 0, 0), points[1].Time, "post-close rows ignored");
+
+        var normalized = parser.ParseNormalizedMinute(JObject.Parse(@"{
+          'date':'20260618','points':[
+            {'time':'1459','price':25.90,'cumulativeVolume':70000,'cumulativeAmount':180000000},
+            {'time':'1500','price':25.98,'cumulativeVolume':71011,'cumulativeAmount':184435426.43},
+            {'time':'1501','price':25.98,'cumulativeVolume':71011,'cumulativeAmount':184435426.43}
+          ]
+        }"));
+        AssertEqual(2, normalized.Count, "normalized post-close rows ignored");
+        AssertEqual(new DateTime(2026, 6, 18, 15, 0, 0), normalized[1].Time, "normalized closes at 15:00");
+        AssertThrows<PayloadParseException>(() =>
+            parser.ParseNormalizedMinute(JObject.Parse(@"{
+              'date':'20260618','points':[
+                {'time':'1459','price':25.90,'cumulativeVolume':70000,'cumulativeAmount':180000000},
+                {'time':'1500','price':25.98,'cumulativeVolume':69000,'cumulativeAmount':184435426.43}
+              ]
+            }")),
+            "intraday monotonicity remains strict");
 
         AssertThrows<PayloadParseException>(() =>
             new ThsPayloadParser().ParseTencentMinute("002297", JObject.Parse("{'code':1,'msg':'blocked'}")),
@@ -761,6 +799,26 @@ internal static class Program
         }
     }
 
+    private static void TestWhiteLineOnlyPaints()
+    {
+        var day = new DateTime(2026, 6, 20);
+        var snapshot = CreateChartSnapshot(day, new[]
+        {
+            new PricePoint { Time = day.AddHours(9).AddMinutes(30), ChangePercent = 1 },
+            new PricePoint { Time = day.AddHours(9).AddMinutes(31), ChangePercent = 2 },
+        });
+        var series = new BigOrderSeriesBuilder().Build(new BigOrderItem[0]);
+        using (var control = new BigOrderChartControl())
+        using (var bitmap = new Bitmap(1000, 650))
+        {
+            control.Size = bitmap.Size;
+            control.SetSnapshot(snapshot, series);
+            control.DrawToBitmap(bitmap, new Rectangle(0, 0, bitmap.Width, bitmap.Height));
+            AssertTrue(HasWhitePixel(bitmap, control.LayoutBands[0]),
+                "drawable white line is painted without market or big-order lines");
+        }
+    }
+
     private static void TestMinutePriceChartLine()
     {
         var day = new DateTime(2026, 6, 20);
@@ -810,14 +868,58 @@ internal static class Program
             new PricePoint { Time = day.AddHours(9).AddMinutes(31), ChangePercent = 2.5 },
         };
         var snapshot = CreateChartSnapshot(day, thsPrices);
-        var series = new BigOrderSeriesBuilder().Build(new BigOrderItem[0]);
+        var series = new BigOrderSeries
+        {
+            Minutes = new MinuteFlow[0],
+            NetFlow = new NetFlowPoint[0],
+            Thresholds = new ThresholdFlow[0],
+            HalfHours = new HalfHourAmount[0],
+            MarketAveragePrices = new AveragePricePoint[0],
+            MinutePrices = new[]
+            {
+                new AveragePricePoint { Time = day.AddHours(9).AddMinutes(30), Price = 10.5 },
+            },
+            BigOrderAveragePrices = new[]
+            {
+                new AveragePricePoint { Time = day.AddHours(9).AddMinutes(30), Price = 10.2 },
+            },
+            BigOrderEvents = new[]
+            {
+                new BigOrderEventPoint
+                {
+                    Time = day.AddHours(9).AddMinutes(30).AddSeconds(10),
+                    AveragePrice = 10.2,
+                    Amount = 1500000,
+                    Type = 2,
+                },
+            },
+        };
 
         using (var control = new BigOrderChartControl())
+        using (var bitmap = new Bitmap(1000, 650))
         {
+            control.Size = new Size(1000, 650);
             control.SetSnapshot(snapshot, series);
-            AssertEqual(2, control.MarketLinePercents.Count, "THS market fallback count");
-            AssertNear(1.25d, control.MarketLinePercents[0].Value, 0.0001d, "THS market fallback value");
-            AssertEqual(0, control.BigOrderLinePercents.Count, "net flow is not a price line");
+            AssertEqual(0, control.MarketLinePercents.Count, "THS pricechange is not market VWAP");
+            AssertEqual(2, control.MinutePriceLinePercents.Count, "THS white line fallback count");
+            AssertNear(1.25d, control.MinutePriceLinePercents[0].Value, 0.0001d, "THS white line value");
+            AssertEqual(1, control.BigOrderLinePercents.Count, "blue big-order line retained");
+
+            control.DrawToBitmap(bitmap, new Rectangle(0, 0, bitmap.Width, bitmap.Height));
+            var redY = -1;
+            var bounds = control.LayoutBands[0];
+            for (var y = bounds.Top; y < bounds.Bottom; y++)
+            for (var x = bounds.Left; x < bounds.Right; x++)
+            {
+                var color = bitmap.GetPixel(x, y);
+                if (color.R > 200 && color.G < 130 && color.B < 150)
+                    redY = redY < 0 ? y : redY;
+            }
+            AssertTrue(redY >= 0, "fallback red marker rendered");
+            AssertTrue(Math.Abs(redY - ChartPercentY(control, 1.25d)) <= 5,
+                "fallback event anchored to THS white line");
+            AssertTrue(Math.Abs(redY - ChartPercentY(control, 2d)) > 5,
+                "fallback event not anchored to blue line");
         }
     }
 

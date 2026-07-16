@@ -134,6 +134,35 @@ namespace THSBigOrder
             return RefreshDataAsync(forceForCodeChange);
         }
 
+        private async void cboDataSource_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            var provider = _dataProvider as THSBigOrderDataProvider;
+            if (provider == null) return;
+            provider.DataSource = cboDataSource.SelectedIndex == 0
+                ? BigOrderDataSource.Longhu
+                : BigOrderDataSource.Ths;
+            ClearBigOrderViewForSourceChange();
+            await RefreshDataAsync(true);
+        }
+
+        private void ClearBigOrderViewForSourceChange()
+        {
+            _allData.Clear();
+            _filteredData.Clear();
+            UpdateDataGrid();
+            UpdateStatistics();
+            if (_snapshot != null)
+            {
+                bigOrderChart.SetSnapshot(
+                    _snapshot,
+                    new BigOrderSeriesBuilder().Build(
+                        new BigOrderItem[0],
+                        _snapshot.MinuteTurnover,
+                        _snapshot.MinuteTurnoverFreshness));
+                bigOrderChart.SetOrderMarkerFilter(_currentMoney, _orderSide);
+            }
+        }
+
         private void InitializeCustomComponents()
         {
             _dataProvider = new THSBigOrderDataProvider();

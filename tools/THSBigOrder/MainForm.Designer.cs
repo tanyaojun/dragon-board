@@ -59,6 +59,7 @@ namespace THSBigOrder
 
         // 操作控件
         this.txtStockCode = new System.Windows.Forms.TextBox();
+        this.cboDataSource = new System.Windows.Forms.ComboBox();
         this.btnRefresh = new System.Windows.Forms.Button();
         this.chkAutoRefresh = new System.Windows.Forms.CheckBox();
         this.chkFollowTdx = new System.Windows.Forms.CheckBox();
@@ -121,12 +122,12 @@ namespace THSBigOrder
         // === 三列布局（与表格宽度对齐）===
         // 表格列宽: 58+55+55+50+50+45+50 ≈ 363px
         // 第一列X=5: 股票名称、输入框 (宽75)
-        // 第二列X=85: 涨幅换手、量比成交、刷分+自动刷新
-        // 第三列X=300: 窗口置顶、固定代码、跟随通达信
+        // 第二列X=175: 涨幅换手、量比成交、刷分+自动刷新
+        // 第三列X=390: 窗口置顶、固定代码、跟随通达信
 
         int col1 = 5;
-        int col2 = 85;
-        int col3 = 300;
+        int col2 = 175;
+        int col3 = 390;
         int row1 = 3;
         int row2 = 25;
         int row3 = 47;
@@ -149,6 +150,18 @@ namespace THSBigOrder
         this.txtStockCode.TextAlign = System.Windows.Forms.HorizontalAlignment.Center;
         this.txtStockCode.TextChanged += new System.EventHandler(this.txtStockCode_TextChanged);
         this.txtStockCode.KeyPress += new System.Windows.Forms.KeyPressEventHandler(this.txtStockCode_KeyPress);
+
+        this.cboDataSource.BackColor = System.Drawing.Color.FromArgb(40, 40, 50);
+        this.cboDataSource.DropDownStyle = System.Windows.Forms.ComboBoxStyle.DropDownList;
+        this.cboDataSource.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
+        this.cboDataSource.Font = new System.Drawing.Font("Microsoft YaHei", 9F);
+        this.cboDataSource.ForeColor = System.Drawing.Color.White;
+        this.cboDataSource.Location = new System.Drawing.Point(col1 + 80, row2 + 8);
+        this.cboDataSource.Size = new System.Drawing.Size(85, 25);
+        this.cboDataSource.Items.AddRange(new object[] { "龙虎大单", "THS大单" });
+        this.cboDataSource.SelectedIndex = 1;
+        this.cboDataSource.SelectedIndexChanged +=
+            new System.EventHandler(this.cboDataSource_SelectedIndexChanged);
 
         // === 第二列：数据信息 + 操作按钮 ===
         // lblChange (涨幅) - 第一行
@@ -457,6 +470,7 @@ namespace THSBigOrder
         this.panelTop.Controls.Add(this.lblVolumeRatio);
         this.panelTop.Controls.Add(this.lblTotalAmount);
         this.panelTop.Controls.Add(this.txtStockCode);
+        this.panelTop.Controls.Add(this.cboDataSource);
         this.panelTop.Controls.Add(this.lblRefresh);
         this.panelTop.Controls.Add(this.lblAnalysis);
         this.panelTop.Controls.Add(this.chkVoice);
@@ -575,6 +589,7 @@ namespace THSBigOrder
 
     // 操作控件
     private System.Windows.Forms.TextBox txtStockCode;
+    private System.Windows.Forms.ComboBox cboDataSource;
     private System.Windows.Forms.Button btnRefresh;
     private System.Windows.Forms.Button btnAnalysis;
     private System.Windows.Forms.Label lblRefresh;

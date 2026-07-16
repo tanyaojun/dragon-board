@@ -207,22 +207,12 @@ namespace THSBigOrder.Controls
                     })
                     .Where(point => IsFinite(point.Value)));
             }
-            else
-            {
-                _marketLinePercents.AddRange((_snapshot?.Prices ?? new PricePoint[0])
-                    .Where(point => IsFinite(point.ChangePercent))
-                    .OrderBy(point => point.Time)
-                    .Select(point => new ChartLinePoint
-                    {
-                        Time = point.Time,
-                        Value = point.ChangePercent,
-                    }));
-            }
 
             if (_previousClose.HasValue)
             {
+                var minutePrices = _series?.MinutePrices ?? new AveragePricePoint[0];
                 _minutePriceLinePercents.AddRange(
-                    (_series?.MinutePrices ?? new AveragePricePoint[0])
+                    minutePrices
                         .Where(point => IsFinite(point.Price) && point.Price > 0)
                         .OrderBy(point => point.Time)
                         .Select(point => new ChartLinePoint
@@ -242,6 +232,24 @@ namespace THSBigOrder.Controls
                             Value = (point.Price / _previousClose.Value - 1d) * 100d,
                         })
                         .Where(point => IsFinite(point.Value)));
+            }
+
+            if (_minutePriceLinePercents.Count < 2)
+            {
+                var fallback = (_snapshot?.Prices ?? new PricePoint[0])
+                    .Where(point => IsFinite(point.ChangePercent))
+                    .OrderBy(point => point.Time)
+                    .Select(point => new ChartLinePoint
+                    {
+                        Time = point.Time,
+                        Value = point.ChangePercent,
+                    })
+                    .ToList();
+                if (fallback.Count >= 2)
+                {
+                    _minutePriceLinePercents.Clear();
+                    _minutePriceLinePercents.AddRange(fallback);
+                }
             }
         }
 
@@ -295,7 +303,9 @@ namespace THSBigOrder.Controls
             DrawGrid(e.Graphics);
             DrawAxes(e.Graphics);
             if (_snapshot == null ||
-                (_marketLinePercents.Count == 0 && _bigOrderLinePercents.Count == 0 &&
+                (_marketLinePercents.Count < 2 &&
+                 _minutePriceLinePercents.Count < 2 &&
+                 _bigOrderLinePercents.Count < 2 &&
                  (_series?.Minutes.Count ?? 0) == 0))
             {
                 using (var font = new Font("Microsoft YaHei UI", 12, FontStyle.Regular))
