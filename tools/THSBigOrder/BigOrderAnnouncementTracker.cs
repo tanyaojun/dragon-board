@@ -28,7 +28,7 @@ namespace THSBigOrder
 
             var seen = new Dictionary<string, int>();
             var added = new List<BigOrderItem>();
-            foreach (var row in rows.OrderBy(value => value.Time))
+            foreach (var row in rows.Where(IsSignal).OrderBy(value => value.Time))
             {
                 var fingerprint = Fingerprint(row);
                 int current;
@@ -57,7 +57,7 @@ namespace THSBigOrder
         private static Dictionary<string, int> Count(IEnumerable<BigOrderItem> rows)
         {
             var result = new Dictionary<string, int>();
-            foreach (var row in rows)
+            foreach (var row in rows.Where(IsSignal))
             {
                 var key = Fingerprint(row);
                 int count;
@@ -72,7 +72,14 @@ namespace THSBigOrder
             return row.Time.Ticks + "|" + row.Type + "|" +
                    row.Volume.ToString("R", System.Globalization.CultureInfo.InvariantCulture) + "|" +
                    row.Amount.ToString("R", System.Globalization.CultureInfo.InvariantCulture) + "|" +
-                   row.Price.ToString("R", System.Globalization.CultureInfo.InvariantCulture);
+                   row.Price.ToString("R", System.Globalization.CultureInfo.InvariantCulture) + "|" +
+                   (row.FundMarker ?? "") + "|" + (row.BuyMarker ?? "");
+        }
+
+        private static bool IsSignal(BigOrderItem row)
+        {
+            return row != null &&
+                   (!string.IsNullOrEmpty(row.FundMarker) || !string.IsNullOrEmpty(row.BuyMarker));
         }
     }
 }

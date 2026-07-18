@@ -57,6 +57,8 @@ namespace THSBigOrder
         private System.Windows.Forms.Timer _titleTimer;
         private System.Windows.Forms.Timer _tdxTimer;
         private System.Windows.Forms.Timer _clockTimer;
+        private HotlistSelectionListener _hotlistListener;
+        private bool _syncingFollowOptions;
 
         // 语音播报
         private IBigOrderVoice _voiceService;
@@ -102,6 +104,8 @@ namespace THSBigOrder
             {
                 _dataProvider = dataProvider;
                 _voiceService = voiceService;
+                var provider = _dataProvider as THSBigOrderDataProvider;
+                if (provider != null) provider.DataSource = BigOrderDataSource.Longhu;
                 SetupDataGridStyle();
             }
             if (_voiceService != null) _voiceService.Enabled = chkVoice.Checked;
@@ -124,6 +128,9 @@ namespace THSBigOrder
         internal Color MainNetColor => lblMainNet.ForeColor;
         internal Color SealAmountColor => lblSealAmount.ForeColor;
         internal bool FollowTdxChecked => chkFollowTdx.Checked;
+        internal bool FollowHotlistChecked => chkFollowHotlist.Checked;
+        internal int DataSourceSelectedIndex => cboDataSource.SelectedIndex;
+        internal int StockNameCodeGap => txtStockCode.Left - lblStockName.Right;
         internal string InputStockCodeText
         {
             get => txtStockCode.Text;
@@ -144,6 +151,21 @@ namespace THSBigOrder
             _currentStockCode = stockCode;
             SetStockCodeText(stockCode);
             return RefreshDataAsync(forceForCodeChange);
+        }
+
+        internal void ApplyHotlistSelection(string stockCode, string stockName)
+        {
+            if (!chkFollowHotlist.Checked || chkLockCode.Checked) return;
+            if (string.IsNullOrWhiteSpace(stockCode) || stockCode.Length != 6 ||
+                !stockCode.All(char.IsDigit)) return;
+            if (!string.IsNullOrWhiteSpace(stockName))
+            {
+                lblStockName.Text = stockName;
+                LayoutStockCodeControls();
+            }
+            if (stockCode == _currentStockCode) return;
+            _specialFilter = "";
+            var _ = RefreshStockAsync(stockCode, true);
         }
 
         private async void cboDataSource_SelectedIndexChanged(object sender, EventArgs e)
@@ -180,6 +202,7 @@ namespace THSBigOrder
         private void InitializeCustomComponents()
         {
             _dataProvider = new THSBigOrderDataProvider();
+            ((THSBigOrderDataProvider)_dataProvider).DataSource = BigOrderDataSource.Longhu;
             _voiceService = new VoiceService();
 
             _refreshTimer = new System.Windows.Forms.Timer();
@@ -194,6 +217,17 @@ namespace THSBigOrder
             _tdxTimer.Interval = 500;
             _tdxTimer.Tick += TdxTimer_Tick;
             _tdxTimer.Start();
+
+            _hotlistListener = new HotlistSelectionListener(message =>
+            {
+                if (IsDisposed || !IsHandleCreated) return;
+                try
+                {
+                    BeginInvoke(new Action(() => ApplyHotlistSelection(message.Code, message.Name)));
+                }
+                catch (InvalidOperationException) { }
+            });
+            _hotlistListener.Start();
 
             _clockTimer = new System.Windows.Forms.Timer();
             _clockTimer.Interval = 1000;
@@ -711,6 +745,7 @@ namespace THSBigOrder
             if (_stockInfo == null || _snapshot == null)
             {
                 lblStockName.Text = _currentStockCode;
+                LayoutStockCodeControls();
                 lblChange.Text = "涨幅: --";
                 lblTurnover.Text = "换手: --";
                 lblVolumeRatio.Text = "量比: --";
@@ -720,6 +755,7 @@ namespace THSBigOrder
 
             // 第一行：股票名称 + 涨幅 + 量比
             lblStockName.Text = _stockInfo.Name;
+            LayoutStockCodeControls();
 
             if (_snapshot.QuoteFreshness == DataFreshness.Failed || _snapshot.QuoteFreshness == DataFreshness.Missing)
             {
@@ -749,6 +785,13 @@ namespace THSBigOrder
             lblTotalAmount.Text = "成交: " + amountStr;
         }
 
+        internal void LayoutStockCodeControls()
+        {
+            if (lblStockName == null || txtStockCode == null || cboDataSource == null) return;
+            txtStockCode.Left = Math.Max(78, lblStockName.Right + 8);
+            cboDataSource.Left = 5;
+        }
+
         private IReadOnlyList<BigOrderItem> ObserveAnnouncements(MarketSnapshot snapshot)
         {
             if (!snapshot.BigOrderSessionDate.HasValue ||
@@ -775,9 +818,17 @@ namespace THSBigOrder
             var filtered = OrderFilter.Apply(
                 newOrders, _currentMoney, _orderSide, _specialFilter);
             var announcements = new List<BigOrderAnnouncement>();
+            var stockName = _stockInfo != null && !string.IsNullOrWhiteSpace(_stockInfo.Name)
+                ? _stockInfo.Name
+                : _currentStockCode;
             foreach (var item in filtered.OrderBy(value => value.Time))
             {
                 BigOrderAnnouncementType? type = null;
+                var markerTypes = new List<BigOrderAnnouncementType>();
+                if (item.FundMarker == "点火") markerTypes.Add(BigOrderAnnouncementType.Ignite);
+                if (item.FundMarker == "砸盘") markerTypes.Add(BigOrderAnnouncementType.Smash);
+                if (item.BuyMarker == "买活跃") markerTypes.Add(BigOrderAnnouncementType.BuyActive);
+                if (item.BuyMarker == "承接好") markerTypes.Add(BigOrderAnnouncementType.GoodSupport);
                 if (!string.IsNullOrEmpty(_specialFilter))
                 {
                     if (_specialFilter == "点火" && item.FundMarker == "点火")
@@ -794,7 +845,19 @@ namespace THSBigOrder
                 else if (item.BuyMarker == "买活跃") type = BigOrderAnnouncementType.BuyActive;
                 else if (item.BuyMarker == "承接好") type = BigOrderAnnouncementType.GoodSupport;
                 if (type.HasValue)
-                    announcements.Add(new BigOrderAnnouncement { Type = type.Value, Amount = item.Amount });
+                {
+                    var additionalTypes = string.IsNullOrEmpty(_specialFilter)
+                        ? markerTypes.Where(value => value != type.Value).ToArray()
+                        : new BigOrderAnnouncementType[0];
+                    announcements.Add(new BigOrderAnnouncement
+                    {
+                        StockName = stockName,
+                        Time = item.Time,
+                        Type = type.Value,
+                        Amount = item.Amount,
+                        AdditionalTypes = additionalTypes,
+                    });
+                }
             }
             _voiceService.AnnounceBatch(announcements);
         }
@@ -870,6 +933,22 @@ namespace THSBigOrder
             catch
             {
             }
+        }
+
+        private void chkFollowTdx_CheckedChanged(object sender, EventArgs e)
+        {
+            if (_syncingFollowOptions || !chkFollowTdx.Checked) return;
+            _syncingFollowOptions = true;
+            try { chkFollowHotlist.Checked = false; }
+            finally { _syncingFollowOptions = false; }
+        }
+
+        private void chkFollowHotlist_CheckedChanged(object sender, EventArgs e)
+        {
+            if (_syncingFollowOptions || !chkFollowHotlist.Checked) return;
+            _syncingFollowOptions = true;
+            try { chkFollowTdx.Checked = false; }
+            finally { _syncingFollowOptions = false; }
         }
 
         private Process FindTdxProcess()
@@ -1033,6 +1112,8 @@ namespace THSBigOrder
         {
             var stockCode = txtStockCode.Text.Trim();
             var changed = stockCode != _currentStockCode;
+            chkFollowTdx.Checked = false;
+            chkFollowHotlist.Checked = false;
             _specialFilter = "";
             await RefreshStockAsync(stockCode, changed);
         }
@@ -1051,7 +1132,8 @@ namespace THSBigOrder
             var stockCode = txtStockCode.Text.Trim();
             if (stockCode.Length != 6 || !stockCode.All(char.IsDigit)) return;
             if (stockCode == _currentStockCode) return;
-            if (chkFollowTdx.Checked) chkFollowTdx.Checked = false;
+            chkFollowTdx.Checked = false;
+            chkFollowHotlist.Checked = false;
             _specialFilter = "";
             var _ = RefreshStockAsync(stockCode, true);
         }
@@ -1290,6 +1372,7 @@ namespace THSBigOrder
             if (_titleTimer != null) { _titleTimer.Stop(); _titleTimer.Dispose(); }
             if (_tdxTimer != null) { _tdxTimer.Stop(); _tdxTimer.Dispose(); }
             if (_clockTimer != null) { _clockTimer.Stop(); _clockTimer.Dispose(); }
+            if (_hotlistListener != null) { _hotlistListener.Dispose(); }
             var disposableProvider = _dataProvider as IDisposable;
             if (disposableProvider != null) { disposableProvider.Dispose(); }
             if (_voiceService != null) { _voiceService.Dispose(); }

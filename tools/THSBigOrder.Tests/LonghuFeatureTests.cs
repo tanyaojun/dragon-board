@@ -17,6 +17,62 @@ using THSBigOrder.Parsing;
 
 internal static class LonghuFeatureTests
 {
+    internal static void TestHotlistSelectionMessage()
+    {
+        HotlistSelectionMessage message;
+        AssertTrue(HotlistSelectionMessage.TryParse(
+            "{\"code\":\"SZ000001\",\"name\":\"平安银行\"}", out message),
+            "valid hotlist selection parses");
+        AssertEqual("000001", message.Code, "hotlist code normalized");
+        AssertEqual("平安银行", message.Name, "hotlist name retained");
+        AssertTrue(!HotlistSelectionMessage.TryParse("{\"code\":\"123\"}", out message),
+            "short hotlist code rejected");
+        AssertTrue(!HotlistSelectionMessage.TryParse("not-json", out message),
+            "invalid hotlist message rejected");
+        AssertTrue(HotlistSelectionListener.IsAllowedOrigin("http://127.0.0.1:5173"),
+            "Dragon Board loopback origin allowed");
+        AssertTrue(HotlistSelectionListener.IsAllowedOrigin("http://localhost:5173"),
+            "Dragon Board localhost origin allowed");
+        AssertTrue(!HotlistSelectionListener.IsAllowedOrigin("https://evil.example"),
+            "untrusted origin rejected");
+        AssertTrue(HotlistSelectionListener.IsAllowedOrigin(null),
+            "non-browser local request allowed");
+    }
+
+    internal static async Task TestMainFormHotlistFollow()
+    {
+        var provider = new FollowProvider();
+        var voice = new RecordingVoice();
+        using (var form = new MainForm(provider, false, voice))
+        {
+            var followHotlist = (CheckBox)typeof(MainForm)
+                .GetField("chkFollowHotlist", BindingFlags.Instance | BindingFlags.NonPublic)
+                .GetValue(form);
+            var followTdx = (CheckBox)typeof(MainForm)
+                .GetField("chkFollowTdx", BindingFlags.Instance | BindingFlags.NonPublic)
+                .GetValue(form);
+
+            followHotlist.Checked = true;
+            AssertTrue(!followTdx.Checked, "hotlist follow disables TDX follow");
+            form.ApplyHotlistSelection("600519", "贵州茅台");
+            await WaitUntil(() => form.BoundStockCode == "600519", "hotlist selection refresh");
+            AssertEqual(1, voice.CancelCount, "hotlist switch cancels prior voice queue");
+            AssertEqual("600519", form.InputStockCodeText, "hotlist code input");
+            form.ApplyHotlistSelection("600519", "测试超长股票名称");
+            AssertTrue(form.StockNameCodeGap >= 8, "long stock name does not overlap code input");
+            form.ApplyHotlistSelection("000001", "平安银行");
+            await WaitUntil(() => form.BoundStockCode == "000001", "second hotlist selection refresh");
+            AssertEqual(2, voice.CancelCount, "second hotlist switch cancels prior voice queue");
+            var dataSource = (ComboBox)typeof(MainForm)
+                .GetField("cboDataSource", BindingFlags.Instance | BindingFlags.NonPublic)
+                .GetValue(form);
+            AssertEqual(5, dataSource.Left, "data source selector stays left aligned");
+
+            followTdx.Checked = true;
+            AssertTrue(!followHotlist.Checked, "TDX follow disables hotlist follow");
+        }
+    }
+
     internal static void TestLastGoodMaxAgeWindows()
     {
         AssertEqual(TimeSpan.FromHours(12),
@@ -43,42 +99,25 @@ internal static class LonghuFeatureTests
     {
         var tracker = new BigOrderAnnouncementTracker();
         var day = new DateTime(2026, 7, 17);
-        var repeated = new BigOrderItem
-        {
-            Time = day.AddHours(9).AddMinutes(30),
-            Type = 2,
-            Volume = 100,
-            Amount = 1000,
-            Price = 10,
-        };
-        AssertEqual(0, tracker.Observe("002297", BigOrderDataSource.Ths, day, new[] { repeated, repeated }).Count,
-            "first snapshot baseline");
+        var ordinary = Signal(day.AddHours(9).AddMinutes(30), "", "");
+        var confirmed = Signal(day.AddHours(9).AddMinutes(30), "点火", "买活跃");
+        AssertEqual(0, tracker.Observe("002297", BigOrderDataSource.Ths, day,
+            new[] { ordinary }).Count, "first snapshot marker baseline");
         var added = tracker.Observe("002297", BigOrderDataSource.Ths, day.AddHours(12),
-            new[] { repeated, repeated, repeated });
-        AssertEqual(1, added.Count, "duplicate occurrence increment");
+            new[] { confirmed });
+        AssertEqual(1, added.Count, "delayed marker confirmation");
+        AssertEqual("点火", added[0].FundMarker, "confirmed marker returned");
         AssertEqual(0, tracker.Observe("002297", BigOrderDataSource.Ths, day,
-            new[] { repeated, repeated }).Count, "count decrease does not replay");
+            new[] { ordinary }).Count, "marker disappearance does not replay");
         AssertEqual(0, tracker.Observe("002297", BigOrderDataSource.Ths, day,
-            new[] { repeated, repeated, repeated }).Count, "restored count does not replay");
+            new[] { confirmed }).Count, "restored marker does not replay");
+        AssertEqual(1, tracker.Observe("002297", BigOrderDataSource.Ths, day,
+            new[] { confirmed, confirmed }).Count, "duplicate marker occurrence increment");
 
-        var later = new BigOrderItem
-        {
-            Time = day.AddHours(9).AddMinutes(31),
-            Type = 4,
-            Volume = 200,
-            Amount = 2000,
-            Price = 10,
-        };
-        var earlier = new BigOrderItem
-        {
-            Time = day.AddHours(9).AddMinutes(29),
-            Type = 2,
-            Volume = 300,
-            Amount = 3000,
-            Price = 10,
-        };
+        var later = Signal(day.AddHours(9).AddMinutes(31), "砸盘", "");
+        var earlier = Signal(day.AddHours(9).AddMinutes(29), "点火", "");
         var ordered = tracker.Observe("002297", BigOrderDataSource.Ths, day,
-            new[] { later, repeated, repeated, repeated, earlier });
+            new[] { later, confirmed, confirmed, earlier });
         AssertEqual(2, ordered.Count, "two new rows");
         AssertTrue(ordered[0].Time < ordered[1].Time, "new rows sorted oldest first");
         AssertEqual(0, tracker.Observe("600519", BigOrderDataSource.Ths, day,
@@ -88,13 +127,172 @@ internal static class LonghuFeatureTests
         var utcDay = DateTime.SpecifyKind(day.AddHours(9), DateTimeKind.Utc);
         var localDay = DateTime.SpecifyKind(day.AddHours(15), DateTimeKind.Local);
         AssertEqual(0, kindTracker.Observe("002297", BigOrderDataSource.Ths, utcDay,
-            new[] { repeated }).Count, "kind baseline");
+            new[] { confirmed }).Count, "kind baseline");
         AssertEqual(1, kindTracker.Observe("002297", BigOrderDataSource.Ths, localDay,
-            new[] { repeated, later }).Count, "same date ignores time and Kind");
+            new[] { confirmed, later }).Count, "same date ignores time and Kind");
         AssertEqual(0, kindTracker.Observe("002297", BigOrderDataSource.Longhu, day,
-            new[] { repeated, later }).Count, "source switch baseline");
+            new[] { confirmed, later }).Count, "source switch baseline");
         AssertEqual(0, kindTracker.Observe("002297", BigOrderDataSource.Longhu, day.AddDays(1),
-            new[] { repeated, later }).Count, "day switch baseline");
+            new[] { confirmed, later }).Count, "day switch baseline");
+    }
+
+    internal static void TestMarkerRejections()
+    {
+        var day = new DateTime(2026, 7, 17, 9, 30, 0);
+        var single = new List<BigOrderItem>
+        {
+            Trade(day, 0, 1, 1000000, 10),
+            Trade(day, 1, 2, 10000000, 10.10),
+            Trade(day, 9, 1, 1000000, 10.10),
+        };
+        var flat = new List<BigOrderItem>
+        {
+            Trade(day.AddMinutes(1), 0, 1, 1000000, 10),
+            Trade(day.AddMinutes(1), 1, 2, 5000000, 10),
+            Trade(day.AddMinutes(1), 2, 2, 5000000, 10),
+            Trade(day.AddMinutes(1), 3, 2, 5000000, 10),
+            Trade(day.AddMinutes(1), 11, 1, 1000000, 10),
+        };
+        var impure = new List<BigOrderItem>
+        {
+            Trade(day.AddMinutes(2), 0, 1, 1000000, 10),
+            Trade(day.AddMinutes(2), 1, 2, 5000000, 10.01),
+            Trade(day.AddMinutes(2), 2, 4, 10000000, 10.02),
+            Trade(day.AddMinutes(2), 3, 2, 5000000, 10.03),
+            Trade(day.AddMinutes(2), 4, 2, 5000000, 10.04),
+            Trade(day.AddMinutes(2), 12, 1, 1000000, 10.03),
+        };
+
+        using (var provider = new THSBigOrderDataProvider())
+        {
+            provider.CalculateMarkers(single);
+            provider.CalculateMarkers(flat);
+            provider.CalculateMarkers(impure);
+        }
+
+        AssertTrue(single.All(row => row.FundMarker == ""), "single order rejected");
+        AssertTrue(flat.All(row => row.FundMarker == ""), "flat price response rejected");
+        AssertTrue(impure.All(row => row.FundMarker == ""), "impure active flow rejected");
+    }
+
+    internal static void TestMarkerAttribution()
+    {
+        var day = new DateTime(2026, 7, 17, 9, 30, 0);
+        var ignition = new List<BigOrderItem>
+        {
+            Trade(day, 0, 1, 1000000, 100),
+            Trade(day, 1, 2, 5000000, 100.01),
+            Trade(day, 2, 2, 6000000, 100.02),
+            Trade(day, 3, 2, 5000000, 100.04),
+            Trade(day, 4, 2, 3000000, 100.05),
+            Trade(day, 5, 2, 3000000, 100.05),
+            Trade(day, 11, 1, 1000000, 100.03),
+            Trade(day, 30, 1, 1000000, 100.03),
+            Trade(day, 31, 2, 5000000, 100.04),
+            Trade(day, 32, 2, 5000000, 100.06),
+            Trade(day, 33, 2, 5000000, 100.08),
+            Trade(day, 41, 1, 1000000, 100.07),
+            Trade(day, 44, 1, 1000000, 100.07),
+        };
+        var support = new List<BigOrderItem>
+        {
+            Trade(day.AddMinutes(10), 0, 2, 1000000, 100),
+            Trade(day.AddMinutes(10), 1, 3, 1000000, 99.99),
+            Trade(day.AddMinutes(10), 1, 3, 1000000, 99.99),
+            Trade(day.AddMinutes(10), 2, 4, 5000000, 99.98),
+            Trade(day.AddMinutes(10), 3, 4, 5000000, 99.96),
+            Trade(day.AddMinutes(10), 4, 4, 5000000, 99.95),
+            Trade(day.AddMinutes(10), 5, 4, 1000000, 99.94),
+            Trade(day.AddMinutes(10), 6, 2, 10000000, 99.97),
+            Trade(day.AddMinutes(10), 12, 1, 1000000, 99.97),
+            Trade(day.AddMinutes(10), 15, 1, 1000000, 99.97),
+        };
+
+        using (var provider = new THSBigOrderDataProvider())
+        {
+            provider.CalculateMarkers(ignition);
+            provider.CalculateMarkers(support);
+        }
+
+        AssertEqual("点火", ignition[3].FundMarker, "confirmed ignition marker");
+        AssertEqual("买活跃", ignition[3].BuyMarker, "follow-through belongs to ignition");
+        AssertEqual("点火", ignition[10].FundMarker, "second confirmed ignition after cooldown");
+        AssertEqual("", ignition[10].BuyMarker, "ignition without follow-through stays plain");
+        AssertEqual(2, ignition.Count(row => row.FundMarker == "点火"), "one marker per event");
+        AssertEqual("砸盘", support[5].FundMarker, "confirmed smash marker");
+        AssertEqual("承接好", support[5].BuyMarker, "recovery belongs to smash");
+        AssertEqual("", support[6].BuyMarker, "pressure low row has no detached marker");
+    }
+
+    internal static void TestAdaptiveMarkerThreshold()
+    {
+        var day = new DateTime(2026, 7, 17, 9, 40, 0);
+        var rows = new List<BigOrderItem>();
+        for (var index = 0; index < 30; index++)
+        {
+            rows.Add(Trade(day.AddSeconds(index * 15), 0, 2, 6000000, 100));
+        }
+        var candidate = day.AddMinutes(10);
+        rows.Add(Trade(candidate, 0, 1, 1000000, 100));
+        rows.Add(Trade(candidate, 1, 2, 5000000, 100.01));
+        rows.Add(Trade(candidate, 2, 2, 5000000, 100.02));
+        rows.Add(Trade(candidate, 3, 2, 5000000, 100.04));
+        rows.Add(Trade(candidate, 11, 1, 1000000, 100.03));
+
+        using (var provider = new THSBigOrderDataProvider())
+            provider.CalculateMarkers(rows);
+
+        AssertTrue(rows.All(row => row.FundMarker == ""), "P90 raises threshold above 500w");
+    }
+
+    internal static void TestConfirmationWindowClosure()
+    {
+        var day = new DateTime(2026, 7, 17, 10, 30, 0);
+        var partial = new List<BigOrderItem>
+        {
+            Trade(day, 0, 1, 1000000, 100),
+            Trade(day, 1, 2, 5000000, 100.01),
+            Trade(day, 2, 2, 5000000, 100.02),
+            Trade(day, 3, 2, 5000000, 100.04),
+            Trade(day, 11, 1, 1000000, 100.03),
+        };
+        var complete = partial.Select(row => Trade(
+            row.Time, 0, row.Type, row.Amount, row.Price)).Concat(new[]
+        {
+            Trade(day, 14, 1, 1000000, 100.03),
+        }).ToList();
+        var exactBoundary = partial.Select(row => Trade(
+            row.Time, 0, row.Type, row.Amount, row.Price)).Concat(new[]
+        {
+            Trade(day, 13, 1, 1000000, 100.03),
+        }).ToList();
+
+        using (var provider = new THSBigOrderDataProvider())
+        {
+            provider.CalculateMarkers(partial);
+            provider.CalculateMarkers(exactBoundary);
+            provider.CalculateMarkers(complete);
+        }
+
+        AssertTrue(partial.All(row => row.FundMarker == ""),
+            "open confirmation window stays unmarked");
+        AssertTrue(exactBoundary.All(row => row.FundMarker == ""),
+            "confirmation at exact ten seconds stays unmarked");
+        AssertEqual("点火", complete[3].FundMarker,
+            "closed confirmation window freezes marker");
+    }
+
+    private static BigOrderItem Trade(
+        DateTime start, int seconds, int type, double amount, double price)
+    {
+        return new BigOrderItem
+        {
+            Time = start.AddSeconds(seconds),
+            Type = type,
+            Amount = amount,
+            Volume = amount / Math.Max(price, 0.01),
+            Price = price,
+        };
     }
 
     internal static void TestVoiceBatch()
@@ -104,18 +302,45 @@ internal static class LonghuFeatureTests
         {
             voice.AnnounceBatch(new[]
             {
-                new BigOrderAnnouncement { Type = BigOrderAnnouncementType.Ignite, Amount = 5000000 },
-                new BigOrderAnnouncement { Type = BigOrderAnnouncementType.Smash, Amount = 8000000 },
-                new BigOrderAnnouncement { Type = BigOrderAnnouncementType.BuyActive },
+                new BigOrderAnnouncement
+                {
+                    StockName = "华工科技",
+                    Time = new DateTime(2026, 7, 17, 9, 32, 12),
+                    Type = BigOrderAnnouncementType.Ignite,
+                    Amount = 10000000,
+                    AdditionalTypes = new[] { BigOrderAnnouncementType.BuyActive },
+                },
+                new BigOrderAnnouncement
+                {
+                    StockName = "华工科技",
+                    Time = new DateTime(2026, 7, 17, 9, 32, 20),
+                    Type = BigOrderAnnouncementType.Ignite,
+                    Amount = 5000000,
+                },
+                new BigOrderAnnouncement
+                {
+                    StockName = "华工科技",
+                    Time = new DateTime(2026, 7, 17, 9, 32, 20),
+                    Type = BigOrderAnnouncementType.Smash,
+                    Amount = 5000000,
+                    AdditionalTypes = new[] { BigOrderAnnouncementType.GoodSupport },
+                },
             });
             voice.AnnounceBatch(new[]
             {
-                new BigOrderAnnouncement { Type = BigOrderAnnouncementType.GoodSupport },
+                new BigOrderAnnouncement
+                {
+                    StockName = "华工科技",
+                    Time = new DateTime(2026, 7, 17, 9, 32, 30),
+                    Type = BigOrderAnnouncementType.BuyActive,
+                },
             });
             AssertEqual(2, queue.Texts.Count, "FIFO batches");
-            AssertTrue(queue.Texts[0].Contains("点火 500万"), "ignite text");
-            AssertTrue(queue.Texts[0].Contains("砸盘 800万"), "smash text");
-            AssertTrue(queue.Texts[0].Contains("买活跃"), "buy active text");
+            AssertEqual(
+                "华工科技 9点32分12秒 点火1000万 买活跃，华工科技 9点32分20秒 点火500万，华工科技 9点32分20秒 砸盘500万 承接好",
+                queue.Texts[0],
+                "full announcement text");
+            AssertEqual("华工科技 9点32分30秒 买活跃", queue.Texts[1], "marker-only text");
             AssertEqual(0, queue.CancelCount, "ordinary batches do not cancel");
             voice.CancelPending();
             AssertEqual(1, queue.CancelCount, "explicit cancel");
@@ -130,9 +355,10 @@ internal static class LonghuFeatureTests
         var baseline = Signal(day.AddHours(9).AddMinutes(30), "点火", "");
         var added = new[]
         {
-            Signal(day.AddHours(9).AddMinutes(31), "点火", ""),
-            Signal(day.AddHours(9).AddMinutes(32), "砸盘", ""),
-            Signal(day.AddHours(9).AddMinutes(33), "", "买活跃"),
+            Signal(day.AddHours(9).AddMinutes(31), "点火", "买活跃"),
+            Signal(day.AddHours(9).AddMinutes(32), "点火", ""),
+            Signal(day.AddHours(9).AddMinutes(33), "砸盘", "承接好"),
+            Signal(day.AddHours(9).AddMinutes(34), "", "买活跃"),
         };
         var provider = new SequenceProvider(
             Snapshot(day, new[] { baseline }),
@@ -146,10 +372,19 @@ internal static class LonghuFeatureTests
             AssertEqual(0, voice.Batches.Count, "first snapshot only establishes baseline");
             await form.RefreshStockAsync("002297", false);
             AssertEqual(1, voice.Batches.Count, "one voice batch");
-            AssertEqual(3, voice.Batches[0].Count, "all new signals announced");
+            AssertEqual(4, voice.Batches[0].Count, "all new signals announced");
             AssertEqual(BigOrderAnnouncementType.Ignite, voice.Batches[0][0].Type, "first signal");
-            AssertEqual(BigOrderAnnouncementType.Smash, voice.Batches[0][1].Type, "second signal");
-            AssertEqual(BigOrderAnnouncementType.BuyActive, voice.Batches[0][2].Type, "third signal");
+            AssertEqual(BigOrderAnnouncementType.Ignite, voice.Batches[0][1].Type, "second signal");
+            AssertEqual(BigOrderAnnouncementType.Smash, voice.Batches[0][2].Type, "third signal");
+            AssertEqual(BigOrderAnnouncementType.BuyActive, voice.Batches[0][3].Type, "fourth signal");
+            AssertEqual("测试", voice.Batches[0][0].StockName, "stock name");
+            AssertEqual(day.AddHours(9).AddMinutes(31), voice.Batches[0][0].Time, "signal time");
+            AssertTrue(
+                voice.Batches[0][0].AdditionalTypes.Contains(BigOrderAnnouncementType.BuyActive),
+                "same order marker is preserved");
+            AssertTrue(
+                voice.Batches[0][2].AdditionalTypes.Contains(BigOrderAnnouncementType.GoodSupport),
+                "same order support marker is preserved");
         }
     }
 
@@ -179,38 +414,38 @@ internal static class LonghuFeatureTests
             voice.Enabled = true;
             await form.RefreshStockAsync("002297", true);
             await form.RefreshStockAsync("002297", false);
-            AssertEqual(0, voice.Batches.Count, "marker recalculation does not replay old row");
+            AssertEqual(1, voice.Batches.Count, "delayed marker confirmation is announced once");
 
             typeof(MainForm).GetField("_specialFilter", BindingFlags.Instance | BindingFlags.NonPublic)
                 .SetValue(form, "买活跃");
             await form.RefreshStockAsync("002297", false);
-            AssertEqual(BigOrderAnnouncementType.BuyActive, voice.Batches.Single().Single().Type,
+            AssertEqual(BigOrderAnnouncementType.BuyActive, voice.Batches[1].Single().Type,
                 "special marker overrides default ignite priority");
 
             typeof(MainForm).GetField("_currentMoney", BindingFlags.Instance | BindingFlags.NonPublic)
                 .SetValue(form, 30);
             await form.RefreshStockAsync("002297", false);
-            AssertEqual(1, voice.Batches.Count, "filter change does not replay history");
+            AssertEqual(2, voice.Batches.Count, "filter change does not replay history");
 
             typeof(MainForm).GetField("_voiceReenableBarrier", BindingFlags.Instance | BindingFlags.NonPublic)
                 .SetValue(form, true);
             await form.RefreshStockAsync("002297", false);
-            AssertEqual(1, voice.Batches.Count, "null session date keeps re-enable barrier");
+            AssertEqual(2, voice.Batches.Count, "null session date keeps re-enable barrier");
             await form.RefreshStockAsync("002297", false);
-            AssertEqual(1, voice.Batches.Count, "first trusted snapshot only rebuilds baseline");
+            AssertEqual(2, voice.Batches.Count, "first trusted snapshot only rebuilds baseline");
             await form.RefreshStockAsync("002297", false);
-            AssertEqual(2, voice.Batches.Count, "new row after barrier is announced");
+            AssertEqual(3, voice.Batches.Count, "new row after barrier is announced");
 
             voice.Enabled = false;
             await form.RefreshStockAsync("002297", false);
-            AssertEqual(2, voice.Batches.Count, "disabled voice still advances tracker without speaking");
+            AssertEqual(3, voice.Batches.Count, "disabled voice still advances tracker without speaking");
             voice.Enabled = true;
             typeof(MainForm).GetField("_voiceReenableBarrier", BindingFlags.Instance | BindingFlags.NonPublic)
                 .SetValue(form, true);
             await form.RefreshStockAsync("002297", false);
-            AssertEqual(2, voice.Batches.Count, "re-enable snapshot only rebuilds baseline");
+            AssertEqual(3, voice.Batches.Count, "re-enable snapshot only rebuilds baseline");
             await form.RefreshStockAsync("002297", false);
-            AssertEqual(3, voice.Batches.Count, "post re-enable increment is announced");
+            AssertEqual(4, voice.Batches.Count, "post re-enable increment is announced");
         }
     }
 
@@ -317,16 +552,38 @@ internal static class LonghuFeatureTests
         public void CalculateMarkers(List<BigOrderItem> data) { }
     }
 
+    private sealed class FollowProvider : IMarketSnapshotProvider
+    {
+        public Task<MarketSnapshot> LoadSnapshotAsync(string stockCode, CancellationToken cancellationToken)
+        {
+            return Task.FromResult(new MarketSnapshot(
+                stockCode,
+                new StockSummary { Code = stockCode, Name = "测试" },
+                new MainFundSummary(),
+                new LimitUpContext(),
+                new BigOrderItem[0],
+                new PricePoint[0],
+                DataFreshness.Fresh,
+                DataFreshness.Fresh,
+                DataFreshness.Missing,
+                DateTime.Now,
+                DateTime.Now));
+        }
+
+        public void CalculateMarkers(List<BigOrderItem> data) { }
+    }
+
     private sealed class RecordingVoice : IBigOrderVoice
     {
         public bool Enabled { get; set; } = true;
         public List<IReadOnlyList<BigOrderAnnouncement>> Batches { get; } =
             new List<IReadOnlyList<BigOrderAnnouncement>>();
+        public int CancelCount { get; private set; }
         public void AnnounceBatch(IReadOnlyList<BigOrderAnnouncement> announcements)
         {
             if (announcements.Count > 0) Batches.Add(announcements.ToArray());
         }
-        public void CancelPending() { }
+        public void CancelPending() { CancelCount++; }
         public void Dispose() { }
     }
 
@@ -611,8 +868,8 @@ internal static class LonghuFeatureTests
             AssertTrue(combo != null, "ComboBox exists");
             AssertSequence(new[] { "龙虎大单", "THS大单" },
                 combo.Items.Cast<object>().Select(value => value.ToString()), "options");
-            AssertEqual(1, combo.SelectedIndex, "THS default selection");
-            AssertEqual(BigOrderDataSource.Ths, provider.DataSource, "THS default provider");
+            AssertEqual(0, combo.SelectedIndex, "Longhu default selection");
+            AssertEqual(BigOrderDataSource.Longhu, provider.DataSource, "Longhu default provider");
 
             await form.RefreshStockAsync("002963", true);
             var ordersField = typeof(MainForm)
@@ -623,21 +880,22 @@ internal static class LonghuFeatureTests
             var chart = (BigOrderChartControl)typeof(MainForm)
                 .GetField("bigOrderChart", BindingFlags.Instance | BindingFlags.NonPublic)
                 ?.GetValue(form);
-            AssertEqual(2, ((List<BigOrderItem>)ordersField.GetValue(form)).Single().Type,
-                "initial THS list");
-            AssertEqual(1, form.VisibleChartOrderEvents.Count, "initial THS point");
-            AssertEqual(1, grid.Rows.Count, "initial THS grid");
-            AssertEqual(1, chart.BigOrderLinePercents.Count, "initial THS blue line");
+            AssertEqual(4, ((List<BigOrderItem>)ordersField.GetValue(form)).Single().Type,
+                "initial Longhu list");
+            AssertEqual(1, form.VisibleChartOrderEvents.Count, "initial Longhu point");
+            AssertEqual(1, grid.Rows.Count, "initial Longhu grid");
+            AssertEqual(1, chart.BigOrderLinePercents.Count, "initial Longhu blue line");
             AssertEqual(2, chart.MinutePriceLinePercents.Count, "initial white line");
             AssertEqual(2, chart.MarketLinePercents.Count, "initial yellow line");
 
-            var pendingLonghu =
+            var pendingThs =
                 new TaskCompletionSource<SourceLoadResult<BigOrderSourceData>>(
                     TaskCreationOptions.RunContinuationsAsynchronously);
-            sources.Longhu.Direct = _ => pendingLonghu.Task;
-            combo.SelectedIndex = 0;
-            await WaitUntil(() => sources.Longhu.DirectCalls > 0, "Longhu refresh");
-            AssertEqual(BigOrderDataSource.Longhu, provider.DataSource, "provider switched");
+            var previousThsCalls = sources.Ths.DirectCalls;
+            sources.Ths.Direct = _ => pendingThs.Task;
+            combo.SelectedIndex = 1;
+            await WaitUntil(() => sources.Ths.DirectCalls > previousThsCalls, "THS refresh");
+            AssertEqual(BigOrderDataSource.Ths, provider.DataSource, "provider switched");
             AssertEqual(0, ((List<BigOrderItem>)ordersField.GetValue(form)).Count,
                 "old source list cleared while loading");
             AssertEqual(0, form.VisibleChartOrderEvents.Count,
@@ -650,15 +908,15 @@ internal static class LonghuFeatureTests
             AssertEqual(2, chart.MarketLinePercents.Count,
                 "yellow line retained while loading");
 
-            pendingLonghu.SetResult(SourceSet.BigResult(4));
+            pendingThs.SetResult(SourceSet.BigResult(2));
             WaitUntilWithMessages(
                 () => ((List<BigOrderItem>)ordersField.GetValue(form))
-                    .Any(order => order.Type == 4),
-                "Longhu list rebound");
-            AssertEqual(4, ((List<BigOrderItem>)ordersField.GetValue(form)).Single().Type,
-                "Longhu list rebound");
-            AssertEqual(4, form.VisibleChartOrderEvents.Single().Type,
-                "Longhu point rebound");
+                    .Any(order => order.Type == 2),
+                "THS list rebound");
+            AssertEqual(2, ((List<BigOrderItem>)ordersField.GetValue(form)).Single().Type,
+                "THS list rebound");
+            AssertEqual(2, form.VisibleChartOrderEvents.Single().Type,
+                "THS point rebound");
             AssertEqual(1, grid.Rows.Count, "Longhu grid rebound");
             AssertEqual("002963", form.BoundStockCode, "full refresh bound current code");
         }
@@ -670,45 +928,34 @@ internal static class LonghuFeatureTests
         using (var provider = sources.CreateProvider())
         using (var form = new MainForm(provider, false))
         {
-            await form.RefreshStockAsync("002963", true);
             var ordersField = typeof(MainForm)
                 .GetField("_allData", BindingFlags.Instance | BindingFlags.NonPublic);
-            var combo = (ComboBox)typeof(MainForm)
-                .GetField("cboDataSource", BindingFlags.Instance | BindingFlags.NonPublic)
-                ?.GetValue(form);
+
+            var pendingThs =
+                new TaskCompletionSource<SourceLoadResult<BigOrderSourceData>>(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+            sources.Ths.Direct = _ => pendingThs.Task;
+            provider.DataSource = BigOrderDataSource.Ths;
+            var oldRequest = form.RefreshStockAsync("002963", true);
+            await WaitUntil(() => sources.Ths.DirectCalls > 0, "first THS request");
 
             var pendingLonghu =
                 new TaskCompletionSource<SourceLoadResult<BigOrderSourceData>>(
                     TaskCreationOptions.RunContinuationsAsynchronously);
             sources.Longhu.Direct = _ => pendingLonghu.Task;
-            combo.SelectedIndex = 0;
-            await WaitUntil(() => sources.Longhu.DirectCalls > 0, "first Longhu request");
+            provider.DataSource = BigOrderDataSource.Longhu;
+            var latestRequest = form.RefreshStockAsync("600519", true);
+            await WaitUntil(() => sources.Longhu.DirectCalls > 0, "latest Longhu request");
 
-            var pendingThs =
-                new TaskCompletionSource<SourceLoadResult<BigOrderSourceData>>(
-                    TaskCreationOptions.RunContinuationsAsynchronously);
-            var previousThsCalls = sources.Ths.DirectCalls;
-            sources.Ths.Direct = _ => pendingThs.Task;
-            combo.SelectedIndex = 1;
-            await WaitUntil(
-                () => sources.Ths.DirectCalls > previousThsCalls,
-                "latest THS request");
-
+            pendingLonghu.SetResult(SourceSet.BigResult(4, true));
             pendingThs.SetResult(SourceSet.BigResult(2, true));
             WaitUntilWithMessages(
                 () => ((List<BigOrderItem>)ordersField.GetValue(form))
-                    .Any(order => order.Type == 2),
-                "latest THS result");
-
-            pendingLonghu.SetResult(SourceSet.BigResult(4));
-            for (var attempt = 0; attempt < 20; attempt++)
-            {
-                Application.DoEvents();
-                Thread.Sleep(10);
-            }
-            AssertEqual(2, ((List<BigOrderItem>)ordersField.GetValue(form)).Single().Type,
-                "late Longhu result ignored");
-            AssertEqual(BigOrderDataSource.Ths, provider.DataSource,
+                    .Any(order => order.Type == 4), "latest Longhu result");
+            await Task.WhenAll(oldRequest, latestRequest);
+            AssertEqual(4, ((List<BigOrderItem>)ordersField.GetValue(form)).Single().Type,
+                "late THS result ignored");
+            AssertEqual(BigOrderDataSource.Longhu, provider.DataSource,
                 "latest selected source retained");
         }
     }

@@ -30,6 +30,9 @@
 - [完成] 13. 补齐 Longhu 缓存完整性、风控、调度、容量与诊断合同
 - [完成] 14. 补齐 WinForms last-good 与增量语音边界测试
 - [完成] 15. 同步 design/plan/API 文档并运行最终验证和 code review（2026-07-18；自动化增量合同已闭环，真实盘中门禁仍待部署验收）
+- [完成] 16. 研究点火、砸盘、买活跃与承接的微观结构口径，完成扩展样本重放并写入正式算法设计；盘中人工验收另列为后续门禁
+- [完成] 17. 探测 THS/Longhu 指定交易日历史逐笔能力；确认日期参数被忽略，不实施误导性的主界面日期筛选
+- [完成] 18. 按批准设计用 TDD 实现高置信事件 detector、附加 marker 和延迟确认语音；自动化与 7/17 生产重放已通过，盘中准确率待下一交易日人工验收
 
 ## 约束
 
@@ -46,3 +49,13 @@
 | `superpowers/using-superpowers/SKILL.md` 本机路径不存在 | 首次读取 skill | 改读已安装的 `C:\Users\Think\.codex\skills\using-superpowers\SKILL.md` |
 | 最终合同检查脚本把 PowerShell 嵌套数组展开，错误输出 `True: FAIL` | 首次最终合同扫描 | 改用有序哈希表逐项保存布尔值后重新运行；这是验证脚本错误，不是文档合同失败 |
 | 使用 `BaseIntermediateOutputPath=obj\ReleaseVerify` 构建 net48 时找不到引用程序集 | 语音计划提交前构建 | 不再重定向中间目录，只用 `OutputPath` 避开正在运行的标准 Release EXE |
+| Crossref DOI 直查在当前 PowerShell URL 编码下返回 404 | marker 外部研究首次检索 | 改用 Crossref 标题检索并以 DOI、期刊和出版社元数据交叉核对，不重复相同请求 |
+| Semantic Scholar 匿名 API 连续返回 429 | marker 论文摘要检索 | 停止访问该源，改用 OpenAlex、Crossref 与出版页；不把空响应当研究证据 |
+| OpenAlex 搜索请求超时；OUP DOI 落地页返回 403 | marker 论文正文检索 | 改用公开 arXiv/SSRN 版本和 Crossref DOI 元数据，引用时明确区分原文结论与工程推导 |
+| marker 阈值敏感性脚本对每秒反复全表过滤，30 秒超时 | 本地样本参数扫描首版 | 改为按秒聚合、前缀和/滑动窗口，避免重复 O(n²) 扫描 |
+| 扩展归档重放按 6 列解析时遇到缺失时间字段 | 17 只股票样本重算首版 | 先统计并跳过非 6 列/非法时间/非法价格行，输出丢弃数量后再计算；数据清洗进入算法合同 |
+| THS 历史日期探测基线和紧凑日期请求分别在 15/30/35 秒超时 | 三次独立探测 | 保留成功的 `date=2026-07-16` 对照作为有效证据；它仍返回 `2026-07-17`，不再以增加超时重复请求 |
+| grep.app 返回 429，百度公开搜索两次超时 | 历史 action/参数公开检索 | 停止依赖不稳定搜索渠道；以真实上游响应中的权威行日期判定当前合同，不猜测未证实参数 |
+| C# runner 的既有快速切源测试两次偶发等待 Longhu 超时 | marker GREEN 全量回归 | 同一代码新鲜复跑通过，失败发生在 Longhu stub 调用前且 detector 尚未执行；记录为既有非稳定时序，不修改算法或扩大本轮范围 |
+| 32 位 PowerShell 重放两次无法实例化 provider/解析 HttpClient 类型 | 生产 detector 重放工具 | 显式选择 `(HttpClient,string)` 构造器并加载 `System.Net.Http` 后成功；未修改业务代码 |
+| 优化后重放脚本用整数构造 GZipStream 产生重载歧义 | 性能复测工具 | 恢复显式 `CompressionMode.Decompress` 后成功；未修改业务代码 |

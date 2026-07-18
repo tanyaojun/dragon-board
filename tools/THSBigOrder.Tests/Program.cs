@@ -31,11 +31,18 @@ internal static class Program
         });
         Run("THS order parser maps four natures and formatted values", TestOrderParsing);
         Run("Longhu parser maps compact rows and skips invalid rows", LonghuFeatureTests.TestParser);
+        Run("Hotlist selection messages validate and normalize codes", LonghuFeatureTests.TestHotlistSelectionMessage);
+        Run("Main form follows hotlist selections with mutually exclusive modes", () =>
+            LonghuFeatureTests.TestMainFormHotlistFollow().GetAwaiter().GetResult());
         Run("Big-order last-good bound is 5 minutes in trading and 12 hours off-session",
             LonghuFeatureTests.TestLastGoodMaxAgeWindows);
         Run("Big-order last-good rejects a different authoritative session date", () =>
             LonghuFeatureTests.TestProviderRejectsCrossDayLastGood().GetAwaiter().GetResult());
-        Run("Big-order announcement tracker detects only new occurrences", LonghuFeatureTests.TestAnnouncementTracker);
+        Run("Big-order announcement tracker detects confirmed marker occurrences", LonghuFeatureTests.TestAnnouncementTracker);
+        Run("High-confidence markers reject incomplete order-flow events", LonghuFeatureTests.TestMarkerRejections);
+        Run("High-confidence markers confirm ignition, smash and attributed follow-through", LonghuFeatureTests.TestMarkerAttribution);
+        Run("High-confidence markers wait until the confirmation window closes", LonghuFeatureTests.TestConfirmationWindowClosure);
+        Run("High-confidence marker threshold uses prior 20-minute P90", LonghuFeatureTests.TestAdaptiveMarkerThreshold);
         Run("Voice batches preserve FIFO without cancelling ordinary refreshes", LonghuFeatureTests.TestVoiceBatch);
         Run("Main form announces only new signals in one batch", () =>
             LonghuFeatureTests.TestMainFormAnnouncementBatch().GetAwaiter().GetResult());
@@ -79,7 +86,7 @@ internal static class Program
         Run("Series builder computes cumulative big-order average price", TestBigOrderAveragePrices);
         Run("Series builder aggregates eight half-hour turnover bands", TestHalfHourSeries);
         Run("Series builder does not overcount truncated minute turnover", TestHalfHourTruncatedTurnover);
-        Run("Legacy marker thresholds remain stable", TestLegacyMarkers);
+        Run("A single large order is not an ignition or smash event", TestSingleLargeOrderDoesNotTrigger);
         Run("Chart control binds three layout bands and draws empty data", TestChartControl);
         Run("Chart control exposes paired axes and intraday grids", TestIntradayChartLayout);
         Run("Chart control maps both average prices to one axis", TestAveragePriceAxis);
@@ -94,7 +101,7 @@ internal static class Program
         Run("Order filter composes amount, side and marker", TestOrderFilter);
         Run("Refresh coordinator cancels superseded code and blocks reentry", TestRefreshCoordinator);
         Run("Main form exposes 72/28 chart and order tabs", TestMainFormLayout);
-        Run("Main form defaults THS source and refreshes after source switch", () => LonghuFeatureTests.TestMainFormDataSourceSwitch().GetAwaiter().GetResult());
+        Run("Main form defaults Longhu source and refreshes after source switch", () => LonghuFeatureTests.TestMainFormDataSourceSwitch().GetAwaiter().GetResult());
         Run("Main form ignores a late result from the previous data source", () => LonghuFeatureTests.TestMainFormDataSourceSwitchRace().GetAwaiter().GetResult());
         Run("Main form defaults amount filter to 300w", TestMainFormDefaultAmountFilter);
         Run("Main form ignores superseded refresh completion", () => TestMainFormRefreshRace().GetAwaiter().GetResult());
@@ -680,7 +687,7 @@ internal static class Program
         AssertEqual(series.BigOrderEvents[2].Time, series.BigOrderEvents[3].Time, "same-second orders preserved");
     }
 
-    private static void TestLegacyMarkers()
+    private static void TestSingleLargeOrderDoesNotTrigger()
     {
         var day = new DateTime(2026, 6, 18, 9, 30, 0);
         var ignite = new List<BigOrderItem>
@@ -698,8 +705,8 @@ internal static class Program
             provider.CalculateMarkers(ignite);
             provider.CalculateMarkers(smash);
         }
-        AssertEqual("点火", ignite[1].FundMarker, "ignite marker");
-        AssertEqual("砸盘", smash[1].FundMarker, "smash marker");
+        AssertEqual("", ignite[1].FundMarker, "single buy is not ignition");
+        AssertEqual("", smash[1].FundMarker, "single sell is not smash");
     }
 
     private static void TestHalfHourSeries()

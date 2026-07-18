@@ -321,8 +321,9 @@ public void CancelPending();
   - 空输入不提交语音。
 - [ ] 为 `VoiceService` 注入 fake `ISpeechQueue`，写失败测试证明：一个 batch 只调用一次 SpeakAsync 且 cancel=0；连续两个 batch 的文本按 FIFO 提交且 cancel 仍为 0；`CancelPending()` 只调用一次 CancelAll；`Dispose()` 会 CancelAll 后 Dispose。
 - [ ] 修改 `MainForm.BindSnapshot()`，固定执行顺序：先对完整 `_allData` 调用 `CalculateMarkers`，再用可信 `BigOrderSessionDate.Date` 调 tracker，之后只对 tracker 返回的新订单调用 `OrderFilter.Apply(newOrders, _currentMoney, _orderSide, _specialFilter)`，最后映射并提交 batch。`BigOrderSessionDate` 缺失时跳过 Observe/播报。
-- [ ] 只把筛选后具有 marker 的新增订单映射为 announcement。`_specialFilter` 为空时单条优先级保持 `点火 > 砸盘 > 买活跃 > 承接好`；非空时只生成与 `_specialFilter` 同名的 announcement。按时间从早到晚一次调用 `AnnounceBatch`。删除 `_filteredData.Take(10)`、首条 `return` 和 `_announcedItems` 清空/重播逻辑。
-- [ ] 语音关闭时仍推进 tracker 基线但不提交 batch；`chkVoice` 从关闭变为开启时设置 re-enable barrier。只有下一份“generation 有效 + Fresh/Stale 完整 orders + 可信 `BigOrderSessionDate` + `tracker.Reset()/Observe` 成功”的 accepted snapshot 才只建基线并清除 barrier。日期缺失、Failed/Missing、迟到或 Observe 失败都保留 barrier。`chkVoice` 关闭、股票代码变化、数据源切换和窗体退出时调用 `CancelPending()`。切股/切源后的首份快照由新 scope 自动建立基线，不播全天历史。
+- [x] 只把筛选后具有 marker 的新增订单映射为 announcement。`_specialFilter` 为空时单条优先级保持 `点火 > 砸盘 > 买活跃 > 承接好`；非空时只生成与 `_specialFilter` 同名的 announcement。按时间从早到晚一次调用 `AnnounceBatch`。删除 `_filteredData.Take(10)`、首条 `return` 和 `_announcedItems` 清空/重播逻辑。
+- [x] marker 采用事件归因：按 `big-order-event-attribution-design.md` 的连续订单流、方向纯度、价格冲击/保留和确认窗口规则生成点火/砸盘；买活跃/承接好只附着已确认主事件，不挂到后续普通订单。
+- [x] 语音关闭时仍推进 tracker 基线但不提交 batch；`chkVoice` 从关闭变为开启时设置 re-enable barrier。只有下一份“generation 有效 + Fresh/Stale 完整 orders + 可信 `BigOrderSessionDate` + `tracker.Reset()/Observe` 成功”的 accepted snapshot 才只建基线并清除 barrier。日期缺失、Failed/Missing、迟到或 Observe 失败都保留 barrier。`chkVoice` 关闭、股票代码/热榜切股、数据源切换和窗体退出时调用 `CancelPending()`。切股/切源后的首份快照由新 scope 自动建立基线，不播全天历史。
 - [ ] 保留现有勾选语音的测试播报行为，但测试播报不能改变订单 tracker 基线。
 - [ ] 增加 MainForm 回归测试：
   - 初次绑定有历史信号不播。

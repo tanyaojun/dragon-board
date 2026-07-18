@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using THSBigOrder.Models;
 using THSBigOrder.Parsing;
 using THSBigOrder.DataSources;
+using THSBigOrder.Analytics;
 
 namespace THSBigOrder
 {
@@ -349,43 +350,7 @@ namespace THSBigOrder
 
         public void CalculateMarkers(List<BigOrderItem> data)
         {
-            if (data == null || data.Count == 0) return;
-            var sorted = data.OrderBy(item => item.Time).ToList();
-            double previousSellAverage = 0;
-            double previousBuyAverage = 0;
-            for (var index = 0; index < sorted.Count; index++)
-            {
-                var row = sorted[index];
-                row.FundMarker = "";
-                row.BuyMarker = "";
-                var date = row.Time.Date;
-                var tradeTime =
-                    (row.Time >= date.AddHours(9).AddMinutes(30) && row.Time <= date.AddHours(11).AddMinutes(30)) ||
-                    (row.Time >= date.AddHours(13) && row.Time <= date.AddHours(15));
-                if (!tradeTime) continue;
-
-                var recentSix = sorted.Take(index).Where(item => item.Time >= row.Time.AddSeconds(-6)).ToList();
-                var recentFifty = sorted.Take(index).Where(item => item.Time >= row.Time.AddSeconds(-50)).ToList();
-                var nextSix = sorted.Skip(index).Where(item => item.Time <= row.Time.AddSeconds(6)).ToList();
-                if (recentFifty.Count > 0)
-                {
-                    var average = recentFifty.Average(item => item.Amount / 10000d);
-                    var buy = row.Type == 2 ? row.Amount / 10000d : 0;
-                    var sell = row.Type == 4 ? row.Amount / 10000d : 0;
-                    if (buy >= 300 && buy / average > 2) row.FundMarker = "点火";
-                    if (sell >= 300 && sell / average > 2) row.FundMarker = "砸盘";
-                }
-                if (nextSix.Count > 0)
-                {
-                    var sellAverage = nextSix.Average(item => item.Type == 4 || item.Type == 3 ? item.Amount / 10000d : 0);
-                    var buyAverage = nextSix.Average(item => item.Type == 2 || item.Type == 1 ? item.Amount / 10000d : 0);
-                    var support = index > 0 && sellAverage > previousSellAverage && sellAverage > 300 ? "承接好" : "";
-                    var hasIgnite = recentSix.Any(item => item.FundMarker == "点火");
-                    row.BuyMarker = index > 0 && buyAverage >= previousBuyAverage && buyAverage > 100 && hasIgnite ? "买活跃" : support;
-                    previousSellAverage = sellAverage;
-                    previousBuyAverage = buyAverage;
-                }
-            }
+            new BigOrderEventDetector().Apply(data);
         }
 
         public void Dispose()

@@ -63,6 +63,7 @@ namespace THSBigOrder
         this.btnRefresh = new System.Windows.Forms.Button();
         this.chkAutoRefresh = new System.Windows.Forms.CheckBox();
         this.chkFollowTdx = new System.Windows.Forms.CheckBox();
+        this.chkFollowHotlist = new System.Windows.Forms.CheckBox();
         this.chkLockCode = new System.Windows.Forms.CheckBox();
         this.chkTopMost = new System.Windows.Forms.CheckBox();
         this.lblStatus = new System.Windows.Forms.Label();
@@ -122,12 +123,12 @@ namespace THSBigOrder
         // === 三列布局（与表格宽度对齐）===
         // 表格列宽: 58+55+55+50+50+45+50 ≈ 363px
         // 第一列X=5: 股票名称、输入框 (宽75)
-        // 第二列X=175: 涨幅换手、量比成交、刷分+自动刷新
-        // 第三列X=390: 窗口置顶、固定代码、跟随通达信
+        // 第二列X=240: 涨幅换手、量比成交、刷新+自动刷新
+        // 第三列X=455: 窗口置顶、固定代码、跟随通达信/热榜
 
         int col1 = 5;
-        int col2 = 175;
-        int col3 = 390;
+        int col2 = 240;
+        int col3 = 455;
         int row1 = 3;
         int row2 = 25;
         int row3 = 47;
@@ -140,12 +141,12 @@ namespace THSBigOrder
         this.lblStockName.Location = new System.Drawing.Point(col1, row1);
         this.lblStockName.Text = "股票名称";
 
-        // txtStockCode (输入框，与股票名称拉开距离)
+        // txtStockCode (紧跟股票名称)
         this.txtStockCode.BackColor = System.Drawing.Color.FromArgb(40, 40, 50);
         this.txtStockCode.BorderStyle = System.Windows.Forms.BorderStyle.FixedSingle;
         this.txtStockCode.Font = new System.Drawing.Font("Microsoft YaHei", 10F);
         this.txtStockCode.ForeColor = System.Drawing.Color.White;
-        this.txtStockCode.Location = new System.Drawing.Point(col1, row2 + 8);
+        this.txtStockCode.Location = new System.Drawing.Point(col1 + 78, row1);
         this.txtStockCode.Size = new System.Drawing.Size(75, 25);
         this.txtStockCode.TextAlign = System.Windows.Forms.HorizontalAlignment.Center;
         this.txtStockCode.TextChanged += new System.EventHandler(this.txtStockCode_TextChanged);
@@ -156,10 +157,10 @@ namespace THSBigOrder
         this.cboDataSource.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
         this.cboDataSource.Font = new System.Drawing.Font("Microsoft YaHei", 9F);
         this.cboDataSource.ForeColor = System.Drawing.Color.White;
-        this.cboDataSource.Location = new System.Drawing.Point(col1 + 80, row2 + 8);
+        this.cboDataSource.Location = new System.Drawing.Point(col1, row2 + 8);
         this.cboDataSource.Size = new System.Drawing.Size(85, 25);
         this.cboDataSource.Items.AddRange(new object[] { "龙虎大单", "THS大单" });
-        this.cboDataSource.SelectedIndex = 1;
+        this.cboDataSource.SelectedIndex = 0;
         this.cboDataSource.SelectedIndexChanged +=
             new System.EventHandler(this.cboDataSource_SelectedIndexChanged);
 
@@ -260,6 +261,14 @@ namespace THSBigOrder
         this.chkFollowTdx.Location = new System.Drawing.Point(col3 + col3Offset, row3 + 2);
         this.chkFollowTdx.Text = "跟随通达信";
         this.chkFollowTdx.Checked = true;
+        this.chkFollowTdx.CheckedChanged += new System.EventHandler(this.chkFollowTdx_CheckedChanged);
+
+        this.chkFollowHotlist.AutoSize = true;
+        this.chkFollowHotlist.Font = new System.Drawing.Font("Microsoft YaHei", 9F);
+        this.chkFollowHotlist.ForeColor = System.Drawing.Color.Silver;
+        this.chkFollowHotlist.Location = new System.Drawing.Point(col3 + col3Offset + 100, row3 + 2);
+        this.chkFollowHotlist.Text = "跟随热榜";
+        this.chkFollowHotlist.CheckedChanged += new System.EventHandler(this.chkFollowHotlist_CheckedChanged);
 
         // === 统计控件（两行显示，与表格宽度363px对齐）===
         // 表格宽度: 58+55+55+50+50+45+50 = 363px
@@ -476,6 +485,7 @@ namespace THSBigOrder
         this.panelTop.Controls.Add(this.chkVoice);
         this.panelTop.Controls.Add(this.chkAutoRefresh);
         this.panelTop.Controls.Add(this.chkFollowTdx);
+        this.panelTop.Controls.Add(this.chkFollowHotlist);
         this.panelTop.Controls.Add(this.chkLockCode);
         this.panelTop.Controls.Add(this.chkTopMost);
         this.panelTop.Controls.Add(this.metricsFlow);
@@ -597,6 +607,7 @@ namespace THSBigOrder
     private System.Windows.Forms.CheckBox chkVoice;
     private System.Windows.Forms.CheckBox chkAutoRefresh;
     private System.Windows.Forms.CheckBox chkFollowTdx;
+    private System.Windows.Forms.CheckBox chkFollowHotlist;
     private System.Windows.Forms.CheckBox chkLockCode;
     private System.Windows.Forms.CheckBox chkTopMost;
     private System.Windows.Forms.Label lblStatus;

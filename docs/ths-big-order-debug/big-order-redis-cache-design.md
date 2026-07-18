@@ -243,7 +243,8 @@ Redis 改造后 proxy 返回的仍是完整全天快照，不应把“完整快�
 - 增量识别在完整 `_allData` 上进行，不能在 `_filteredData` 上做差分。识别出新订单后，再按当前金额阈值、买/卖页签和特殊标记筛选；用户改变筛选条件本身不能让旧订单重新变成“新增”。
 - 单行没有可靠全局唯一 ID，不能继续使用“时间+类型+金额”的 `HashSet`。使用 `Time ticks + Type + Volume + Amount + Price` 构成订单指纹，并保存每个指纹在当前 scope 历史上见过的最大出现次数。
 - 指纹采用出现次数而不是集合布尔值：同秒、同价、同量的合法重复成交增加一条时，仍能识别并播报新增的那一个；历史修订导致行暂时消失后再出现时，不因计数下降而重播。
-- marker 仍由完整列表重新计算，但只有本轮新识别的订单可以进入语音候选；旧订单因后续上下文变化而新获得“买活跃/承接好”等 marker 时不追溯播报。
+- marker 规则以 `big-order-event-attribution-design.md` 为准：完整列表每次重算窗口归因，确认窗口必须在最新成交时间严格越过候选 `+10秒` 后才冻结；确认后的 marker 行才进入 tracker 语音候选，附加 marker 只写回对应点火/砸盘行。
+- 点火/砸盘使用 10 秒连续订单流、同向主动纯度、3bp 价格冲击和 8~10 秒至少 50% 价格保留；买活跃/承接好分别只归属于已确认点火/砸盘事件，不再采用旧的单笔金额或前后 6 秒比较规则。
 - 四类语音条件保持现状，不扩大为所有普通大单播报。未选择特殊 marker 筛选时，单条优先级为 `点火 > 砸盘 > 买活跃 > 承接好`；特殊筛选非空时，announcement 类型必须与当前筛选同名。例如同一新增订单同时是“点火”和“买活跃”，当前筛选为“买活跃”时必须播“买活跃”，不能因全局优先级改播“点火”。
 - 同一轮的全部候选按成交时间从早到晚组成一个文本批次，一次提交给 `SpeechSynthesizer`；不得按条调用后互相 `CancelAll`，也不得固定 `Take(2)`/`Take(10)`。
 - 不设置数量上限。若一轮有多条新增信号，全部进入该批次；后续刷新产生的新批次由 synthesizer 顺序排队。
@@ -262,7 +263,7 @@ void VoiceService.AnnounceBatch(IReadOnlyList<BigOrderAnnouncement> announcement
 void VoiceService.CancelPending();
 ```
 
-`VoiceService` 通过最小 `IBigOrderVoice` 接口注入 `MainForm`，内部再依赖可替换的 `ISpeechQueue` 适配器封装 `SpeechSynthesizer.SpeakAsync/CancelAll`，便于自动验证 FIFO 和取消行为而不驱动真实扬声器。`BigOrderAnnouncement` 只承载语音类型和金额；格式化仍由 `VoiceService` 负责。`MainForm` 的固定顺序是：完整 `_allData` 计算 marker → tracker 识别新增 → 对新增应用当前 `OrderFilter` → 按特殊筛选/默认优先级映射 announcement → 单批次提交。不能在 marker 计算前 Observe，也不能把 UI 筛选或业务 marker 规则塞入语音服务。
+`VoiceService` 通过最小 `IBigOrderVoice` 接口注入 `MainForm`，内部再依赖可替换的 `ISpeechQueue` 适配器封装 `SpeechSynthesizer.SpeakAsync/CancelAll`，便于自动验证 FIFO 和取消行为而不驱动真实扬声器。`BigOrderAnnouncement` 承载股票名、成交时间、主语音类型、金额和同一事件的附加 marker；格式化仍由 `VoiceService` 负责。`MainForm` 的固定顺序是：完整 `_allData` 计算 marker → tracker 识别新增 → 对新增应用当前 `OrderFilter` → 按特殊筛选/默认优先级映射 announcement → 单批次提交。不能在 marker 计算前 Observe，也不能把 UI 筛选或业务 marker 规则塞入语音服务。
 
 ## 7. Cache key 与 TTL
 

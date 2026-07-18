@@ -219,6 +219,7 @@ import { dataLoader } from '../../services/dataLoader'
 import { candidateJournalService } from '@/services/candidate/CandidateJournalService'
 import { analyzeTradingPoolCandidate, normalizeResonanceIntensity } from '@/services/candidate/TradingPoolAnalysisService'
 import { openingSignalStore } from '@/services/hotlist/OpeningSignalStore'
+import { sendHotlistSelection } from '@/services/hotlist/ThsBigOrderFollowBridge'
 import RankTrendPanel from '../../components/panels/RankTrendPanel.vue'
 const props = defineProps<{
   loading?: boolean
@@ -1281,6 +1282,8 @@ const onRowClick = (event: MouseEvent, code: string) => {
   }
   uiStore.selectStock(code)
   emit('select', code)
+  const stock = sortedStocks.value.find((item) => item.code === code)
+  sendHotlistSelection(code, stock?.name)
 }
 
 const showContextMenu = (e: MouseEvent, stock: Stock) => {

@@ -9,8 +9,12 @@ namespace THSBigOrder
 
     internal sealed class BigOrderAnnouncement
     {
+        public string StockName { get; set; } = "";
+        public DateTime Time { get; set; }
         public BigOrderAnnouncementType Type { get; set; }
         public double Amount { get; set; }
+        public IReadOnlyList<BigOrderAnnouncementType> AdditionalTypes { get; set; } =
+            new BigOrderAnnouncementType[0];
     }
 
     internal interface IBigOrderVoice : IDisposable
@@ -51,20 +55,34 @@ namespace THSBigOrder
 
         internal static string BuildBatchText(IReadOnlyList<BigOrderAnnouncement> announcements)
         {
-            return string.Join("，", (announcements ?? new BigOrderAnnouncement[0]).Select(value =>
+            return string.Join("，", (announcements ?? new BigOrderAnnouncement[0])
+                .Select(FormatAnnouncement));
+        }
+
+        private static string FormatAnnouncement(BigOrderAnnouncement value)
+        {
+            var parts = new List<string>();
+            if (!string.IsNullOrWhiteSpace(value.StockName)) parts.Add(value.StockName.Trim());
+            if (value.Time != default(DateTime)) parts.Add(value.Time.ToString("H点mm分ss秒"));
+            parts.Add(FormatType(value.Type, value.Amount));
+            foreach (var type in value.AdditionalTypes ?? new BigOrderAnnouncementType[0])
+                parts.Add(FormatType(type, value.Amount));
+            return string.Join(" ", parts);
+        }
+
+        private static string FormatType(BigOrderAnnouncementType type, double amount)
+        {
+            switch (type)
             {
-                switch (value.Type)
-                {
-                    case BigOrderAnnouncementType.Ignite:
-                        return "点火 " + FormatAmount(value.Amount);
-                    case BigOrderAnnouncementType.Smash:
-                        return "砸盘 " + FormatAmount(value.Amount);
-                    case BigOrderAnnouncementType.BuyActive:
-                        return "买活跃";
-                    default:
-                        return "承接好";
-                }
-            }));
+                case BigOrderAnnouncementType.Ignite:
+                    return "点火" + FormatAmount(amount);
+                case BigOrderAnnouncementType.Smash:
+                    return "砸盘" + FormatAmount(amount);
+                case BigOrderAnnouncementType.BuyActive:
+                    return "买活跃";
+                default:
+                    return "承接好";
+            }
         }
 
         public void AnnounceBatch(IReadOnlyList<BigOrderAnnouncement> announcements)
