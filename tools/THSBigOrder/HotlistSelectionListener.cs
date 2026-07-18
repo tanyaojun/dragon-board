@@ -12,6 +12,8 @@ namespace THSBigOrder
         internal const int Port = 38891;
         private const string LocalhostOrigin = "http://localhost:5173";
         private const string LoopbackOrigin = "http://127.0.0.1:5173";
+        private const string ProxyLocalhostOrigin = "http://localhost:3000";
+        private const string ProxyLoopbackOrigin = "http://127.0.0.1:3000";
         private readonly Action<HotlistSelectionMessage> _onSelection;
         private readonly CancellationTokenSource _cancellation = new CancellationTokenSource();
         private HttpListener _listener;
@@ -112,7 +114,9 @@ namespace THSBigOrder
         {
             return string.IsNullOrEmpty(origin) ||
                 string.Equals(origin, LocalhostOrigin, StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(origin, LoopbackOrigin, StringComparison.OrdinalIgnoreCase);
+                string.Equals(origin, LoopbackOrigin, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(origin, ProxyLocalhostOrigin, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(origin, ProxyLoopbackOrigin, StringComparison.OrdinalIgnoreCase);
         }
 
         public void Dispose()

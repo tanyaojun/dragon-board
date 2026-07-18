@@ -33,6 +33,10 @@ internal static class LonghuFeatureTests
             "Dragon Board loopback origin allowed");
         AssertTrue(HotlistSelectionListener.IsAllowedOrigin("http://localhost:5173"),
             "Dragon Board localhost origin allowed");
+        AssertTrue(HotlistSelectionListener.IsAllowedOrigin("http://127.0.0.1:3000"),
+            "proxy loopback origin allowed");
+        AssertTrue(HotlistSelectionListener.IsAllowedOrigin("http://localhost:3000"),
+            "proxy localhost origin allowed");
         AssertTrue(!HotlistSelectionListener.IsAllowedOrigin("https://evil.example"),
             "untrusted origin rejected");
         AssertTrue(HotlistSelectionListener.IsAllowedOrigin(null),
