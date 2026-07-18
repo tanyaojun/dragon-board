@@ -101,6 +101,7 @@ export class ProxyRedisCache {
           stale: false,
           meta: {
             ttlSeconds: entry.ttlSeconds,
+            staleTtlSeconds: Math.max(1, Math.ceil((staleUntil - now) / 1000)),
           },
         }
       }
@@ -110,6 +111,7 @@ export class ProxyRedisCache {
           stale: true,
           meta: {
             ttlSeconds: entry.ttlSeconds,
+            staleTtlSeconds: Math.max(1, Math.ceil((staleUntil - now) / 1000)),
           },
         }
       }
@@ -230,10 +232,24 @@ export class ProcessMemoryCache {
     if (!entry) return null
     const now = this.now()
     if (entry.expiresAt > now) {
-      return { value: entry.value, stale: false, meta: { ttlSeconds: entry.ttlSeconds } }
+      return {
+        value: entry.value,
+        stale: false,
+        meta: {
+          ttlSeconds: entry.ttlSeconds,
+          staleTtlSeconds: Math.max(1, Math.ceil((entry.staleUntil - now) / 1000)),
+        },
+      }
     }
     if (allowStale && entry.staleUntil > now) {
-      return { value: entry.value, stale: true, meta: { ttlSeconds: entry.ttlSeconds } }
+      return {
+        value: entry.value,
+        stale: true,
+        meta: {
+          ttlSeconds: entry.ttlSeconds,
+          staleTtlSeconds: Math.max(1, Math.ceil((entry.staleUntil - now) / 1000)),
+        },
+      }
     }
     if (entry.staleUntil <= now) this.deleteEntry(key)
     return null
@@ -337,7 +353,7 @@ export class LayeredProxyCache {
     if (redis && !redis.stale) {
       await this.memoryCache.set(key, redis.value, {
         ttlSeconds: redis.meta?.ttlSeconds,
-        staleTtlSeconds: (redis.meta?.ttlSeconds || 1) * 3,
+        staleTtlSeconds: redis.meta?.staleTtlSeconds || (redis.meta?.ttlSeconds || 1) * 3,
       })
       return { ...redis, store: 'redis' }
     }
@@ -345,7 +361,7 @@ export class LayeredProxyCache {
     if (redis) {
       await this.memoryCache.set(key, redis.value, {
         ttlSeconds: redis.meta?.ttlSeconds,
-        staleTtlSeconds: (redis.meta?.ttlSeconds || 1) * 3,
+        staleTtlSeconds: redis.meta?.staleTtlSeconds || (redis.meta?.ttlSeconds || 1) * 3,
         stale: true,
       })
       return { ...redis, store: 'redis' }

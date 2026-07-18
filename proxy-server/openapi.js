@@ -19,7 +19,7 @@ const errorResponse = {
   },
 }
 
-function operation({ method, tag, summary, description, parameters, requestBody }) {
+function operation({ method, tag, summary, description, parameters, requestBody, responseSchema }) {
   return {
     [method]: {
       tags: [tag],
@@ -28,7 +28,12 @@ function operation({ method, tag, summary, description, parameters, requestBody 
       parameters,
       requestBody,
       responses: {
-        200: jsonResponse,
+        200: responseSchema
+          ? {
+              description: 'OK',
+              content: { 'application/json': { schema: responseSchema } },
+            }
+          : jsonResponse,
         400: errorResponse,
         502: errorResponse,
       },
@@ -375,6 +380,7 @@ export function buildOpenApiDocument({ port = 3000 } = {}) {
             description: '六位 A 股股票代码',
           },
         ],
+        responseSchema: { $ref: '#/components/schemas/BigOrderEnvelope' },
       }),
       '/api/limitup/detail': operation({
         method: 'get',
@@ -451,6 +457,7 @@ export function buildOpenApiDocument({ port = 3000 } = {}) {
             schema: { type: 'integer', enum: [0], default: 0 },
           },
         ],
+        responseSchema: { $ref: '#/components/schemas/BigOrderEnvelope' },
       }),
       '/api/big-order/longhu/collect-list': operation({
         method: 'post',
@@ -493,6 +500,53 @@ export function buildOpenApiDocument({ port = 3000 } = {}) {
     },
     components: {
       schemas: {
+        BigOrderDragonMeta: {
+          type: 'object',
+          required: ['cache'],
+          properties: {
+            cache: {
+              type: 'object',
+              required: ['stale', 'uiStale'],
+              additionalProperties: true,
+              properties: {
+                stale: { type: 'boolean' },
+                uiStale: { type: 'boolean' },
+                ageSeconds: { type: 'number', minimum: 0 },
+                ttlSeconds: { type: 'number', minimum: 0 },
+              },
+            },
+            refresh: {
+              type: 'object',
+              additionalProperties: true,
+              properties: {
+                mode: { type: 'string' },
+                inProgress: { type: 'boolean' },
+                pagesFetched: { type: 'integer', minimum: 0 },
+                newRows: { type: 'integer', minimum: 0 },
+              },
+            },
+          },
+        },
+        BigOrderEnvelope: {
+          type: 'object',
+          required: ['ok', 'source', 'stockCode', 'sessionDate', 'fetchedAt', 'servedAt', 'data'],
+          additionalProperties: true,
+          properties: {
+            ok: { type: 'boolean' },
+            source: { type: 'string' },
+            stockCode: { type: 'string', pattern: '^\\d{6}$' },
+            sessionDate: { type: ['string', 'null'], pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
+            fetchedAt: { type: 'number' },
+            servedAt: { type: 'number' },
+            data: {
+              type: 'object',
+              additionalProperties: true,
+              properties: {
+                dragonMeta: { $ref: '#/components/schemas/BigOrderDragonMeta' },
+              },
+            },
+          },
+        },
         ErrorEnvelope: {
           type: 'object',
           required: ['ok', 'errorCode', 'message'],

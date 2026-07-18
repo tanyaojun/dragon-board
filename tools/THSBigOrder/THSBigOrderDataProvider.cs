@@ -213,7 +213,9 @@ namespace THSBigOrder
             if (now.DayOfWeek == DayOfWeek.Saturday || now.DayOfWeek == DayOfWeek.Sunday)
                 return TimeSpan.FromHours(12);
             var clock = now.TimeOfDay;
-            var trading = clock >= TimeSpan.FromHours(9) && clock <= TimeSpan.FromHours(15.5);
+            var trading =
+                (clock >= new TimeSpan(9, 30, 0) && clock <= new TimeSpan(11, 30, 0)) ||
+                (clock >= new TimeSpan(13, 0, 0) && clock <= new TimeSpan(15, 0, 0));
             return trading ? TimeSpan.FromMinutes(5) : TimeSpan.FromHours(12);
         }
 

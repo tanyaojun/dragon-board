@@ -104,6 +104,7 @@ namespace THSBigOrder
                 _voiceService = voiceService;
                 SetupDataGridStyle();
             }
+            if (_voiceService != null) _voiceService.Enabled = chkVoice.Checked;
         }
 
         internal SplitContainer MainSplit => mainSplit;

@@ -19,6 +19,19 @@ test('layered cache prefers fresh L2 over stale L1 and backfills L1', async () =
   assert.equal((await l1.get('key')).value.source, 'redis')
 })
 
+test('layered cache preserves the L2 stale retention when backfilling L1', async () => {
+  let now = 1_750_000_000_000
+  const l1 = new ProcessMemoryCache({ now: () => now })
+  const l2 = new ProcessMemoryCache({ now: () => now })
+  await l2.set('all-day', { value: 1 }, { ttlSeconds: 10, staleTtlSeconds: 604800 })
+  const cache = new LayeredProxyCache({ memoryCache: l1, redisCache: l2 })
+
+  await cache.get('all-day', { allowStale: true })
+  now += 100_000
+
+  assert.equal((await l1.get('all-day', { allowStale: true })).value.value, 1)
+})
+
 test('layered cache coalesces loaders and writes both layers', async () => {
   const l1 = new ProcessMemoryCache()
   const l2 = new ProcessMemoryCache()

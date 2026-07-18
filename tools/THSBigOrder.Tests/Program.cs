@@ -31,10 +31,16 @@ internal static class Program
         });
         Run("THS order parser maps four natures and formatted values", TestOrderParsing);
         Run("Longhu parser maps compact rows and skips invalid rows", LonghuFeatureTests.TestParser);
+        Run("Big-order last-good bound is 5 minutes in trading and 12 hours off-session",
+            LonghuFeatureTests.TestLastGoodMaxAgeWindows);
+        Run("Big-order last-good rejects a different authoritative session date", () =>
+            LonghuFeatureTests.TestProviderRejectsCrossDayLastGood().GetAwaiter().GetResult());
         Run("Big-order announcement tracker detects only new occurrences", LonghuFeatureTests.TestAnnouncementTracker);
         Run("Voice batches preserve FIFO without cancelling ordinary refreshes", LonghuFeatureTests.TestVoiceBatch);
         Run("Main form announces only new signals in one batch", () =>
             LonghuFeatureTests.TestMainFormAnnouncementBatch().GetAwaiter().GetResult());
+        Run("Main form voice boundaries do not replay history", () =>
+            LonghuFeatureTests.TestMainFormAnnouncementBoundaries().GetAwaiter().GetResult());
         Run("Longhu direct success does not call proxy", () => LonghuFeatureTests.TestDirectSuccess().GetAwaiter().GetResult());
         Run("Longhu direct failure falls back to proxy", () => LonghuFeatureTests.TestDirectFailureProxyFallback().GetAwaiter().GetResult());
         Run("Longhu pagination aggregates safe 200-row pages and reuses DeviceID", () => LonghuFeatureTests.TestPagination().GetAwaiter().GetResult());
@@ -43,6 +49,8 @@ internal static class Program
         Run("Longhu pagination rejects rows beyond Total", () => LonghuFeatureTests.TestTotalOverrun().GetAwaiter().GetResult());
         Run("Longhu pagination failure never returns partial direct data", () => LonghuFeatureTests.TestMidPageFailure().GetAwaiter().GetResult());
         Run("Longhu truncated response falls back to proxy", () => LonghuFeatureTests.TestTruncatedResponse().GetAwaiter().GetResult());
+        Run("Longhu ui stale is displayed as stale instead of proxy-primary", () =>
+            LonghuFeatureTests.TestProxyUiStaleStatus().GetAwaiter().GetResult());
         Run("Longhu empty list is a valid direct success", () => LonghuFeatureTests.TestValidEmptyList().GetAwaiter().GetResult());
         Run("Longhu non-empty invalid list falls back to proxy", () => LonghuFeatureTests.TestAllInvalidFallback().GetAwaiter().GetResult());
         Run("THS snapshot parser merges title, quote, limit-up and price points", TestSnapshotParsing);
@@ -296,6 +304,11 @@ internal static class Program
             AssertTrue(!empty.Data.Found, "valid empty limit-up");
 
             await big.LoadProxyAsync("002297", CancellationToken.None);
+            handler.ThsUiStale = true;
+            var staleBig = await big.LoadProxyAsync("002297", CancellationToken.None);
+            AssertEqual(DataFreshness.Stale, staleBig.Freshness, "THS ui stale freshness");
+            AssertEqual(DataTransport.Stale, staleBig.Transport, "THS ui stale transport");
+            handler.ThsUiStale = false;
             await quote.LoadProxyAsync("002297", CancellationToken.None);
             await minute.LoadProxyAsync("002297", CancellationToken.None);
             await limit.LoadProxyAsync("002297", CancellationToken.None);
@@ -1584,6 +1597,7 @@ internal static class Program
                         MainFunds = new MainFundSummary { MainBuy = 1000000, MainSell = 400000, NetAmount = 600000, OrderCount = 1 },
                         Orders = new[] { new BigOrderItem { Time = day.AddHours(9).AddMinutes(30), Price = 28.36, Volume = 10, Amount = 28360, Type = 2 } },
                         Prices = new PricePoint[0],
+                        SessionDate = day,
                     },
                     Freshness = DataFreshness.Fresh, Transport = DataTransport.Direct, FetchedAt = DateTime.Now,
                 }),
@@ -1693,6 +1707,7 @@ internal static class Program
     private sealed class SourceClientHandler : HttpMessageHandler
     {
         public List<SourceRequestRecord> Records { get; } = new List<SourceRequestRecord>();
+        public bool ThsUiStale { get; set; }
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
@@ -1726,7 +1741,8 @@ internal static class Program
                 else if (host == "data.10jqka.com.cn")
                     json = "{'data':{'info':[]}}";
                 else if (path == "/api/big-order/ths-detail")
-                    json = "{'ok':true,'fetchedAt':1781746200000,'data':{'title':{'stockname':'博云新材','price':28.36},'list':[],'pricechange':[]}}";
+                    json = "{'ok':true,'fetchedAt':1781746200000,'data':{'title':{'stockname':'博云新材','price':28.36},'list':[],'pricechange':[],'dragonMeta':{'cache':{'uiStale':" +
+                        (ThsUiStale ? "true" : "false") + "}}}}";
                 else if (path == "/api/quotes/tencent")
                     json = "{'data':{'diff':[{'f12':'002297','f14':'博云新材','f2':28.36,'f3':10.09,'f5':3342254360,'f6':1178500,'f8':20.56,'f10':0.82}]}}";
                 else if (path == "/api/quotes/tencent/minute")

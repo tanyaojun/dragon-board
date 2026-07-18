@@ -144,3 +144,13 @@
 - WinForms last-good 改为权威 `sessionDate` 匹配：只有同股、同源、同交易日且未超时才复用；日期缺失不保存为跨请求兜底。新增跨日拒绝测试。
 - 增量语音回归补齐同日不同 `DateTime.Kind`、切源/跨日 scope、筛选变化、特殊 marker 覆盖、marker 重算、日期缺失 barrier、关闭期间基线推进和 re-enable 首帧屏障。
 - 自动验证：proxy `npm test` 106/106；C# runner 全部通过；THSBigOrder 独立 Release 验证构建 0 warning / 0 error。人工盘中观察项仍保留为部署验收，不作为代码完成度的替代证据。
+
+## 2026-07-18 Codex 接力审查收口
+
+- 以 `2243dd5` 为基线重新核对 Codex 中断前遗留 diff、design、implementation plan 和 `task_plan.md`；确认用户关闭 `THSBigOrder.exe` 后可安全完成标准构建。
+- 补齐并验证四个遗漏边界：冷建累计行数超过 `Total`（含 `prepend-logical` 末页）、增量合并保留合法重复成交、两层全天缓存都因容量跳过时仍返回本次数据并记录诊断、THS OpenAPI `refresh` 与实际响应一致地为可选。
+- 统一 logical 合同：`prepend-device-snapshot` 要求增量页 `Total` 与头页一致；`prepend-logical` 允许增长并按逻辑偏移重试，但下降、短页、超量、重叠失败和重试超限拒绝。默认 `BIG_ORDER_LONGHU_INCREMENTAL_MODE=off` 未改变。
+- 复核归档临时文件清理、full rebuild 失败冷却、收盘后首次对账等待、L1 回填保留 L2 stale TTL、THS/Longhu `uiStale` 状态、last-good 时段和语音默认禁用；未发现剩余 Critical/Important。
+- 新鲜验证：proxy `npm test` 133/133；C# 独立 runner 72/72；THSBigOrder Release build 0 warning / 0 error；目标回归 57/57；`git diff --check` 通过。
+- 仍未声称生产增量可用：真实盘中 prepend-only 稳定性、10 秒重复刷新零上游、新单只抓头页、快速切源无迟到覆盖、3 条以上语音 FIFO 和首次完整交易日人工核验仍是部署后验收项。
+- 本地 `.claude/worktrees/`、`Newtonsoft.Json.dll`、`THSBigOrder.exe.config`、`window_settings.ini` 保持排除，不纳入提交。

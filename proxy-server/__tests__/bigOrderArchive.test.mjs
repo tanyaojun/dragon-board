@@ -106,6 +106,28 @@ test('archiver atomically overwrites the same stock-day file and leaves no temp 
   assert.equal(parsed.fetchedAt, 2)
 })
 
+test('archiver removes its temp file when the final rename fails', async () => {
+  const dir = tempDir()
+  const dayDir = join(dir, '2026-07-17')
+  const target = join(dayDir, '600519.money0.json.gz')
+  fs.mkdirSync(target, { recursive: true })
+  const warnings = []
+  const archiver = createBigOrderArchiver({
+    dir,
+    logger: { log() {}, warn: (...args) => warnings.push(args.join(' ')) },
+  })
+
+  await archiver.save({
+    sessionDate: '2026-07-17',
+    stockCode: '600519',
+    money: 0,
+    value: { data: { List: [row(1)], Total: 1, errcode: '0' }, fetchedAt: 1 },
+  })
+
+  assert.equal(warnings.length, 1)
+  assert.deepEqual(fs.readdirSync(dayDir), ['600519.money0.json.gz'])
+})
+
 test('archiver failures are logged and do not reject', async () => {
   const warnings = []
   // 指向一个必然无法创建目录的路径（已有同名文件占位）
@@ -308,8 +330,9 @@ test('collector runDaily loads every listed stock and one failure does not stop 
   const loaded = []
   const collector = createBigOrderCollector({
     service: {
-      loadAllDay: async ({ stockCode }) => {
-        loaded.push(stockCode)
+      loadAllDay: async (input) => {
+        loaded.push(input)
+        const { stockCode } = input
         if (stockCode === '002297') throw new Error('blocked')
         return { data: { Total: 1 } }
       },
@@ -320,7 +343,11 @@ test('collector runDaily loads every listed stock and one failure does not stop 
   })
   await collector.register(['600519', '002297', '000938'])
   const report = await collector.runDaily()
-  assert.deepEqual(loaded, ['600519', '002297', '000938'])
+  assert.deepEqual(loaded, [
+    { stockCode: '600519', money: 0, postCloseReconcile: true },
+    { stockCode: '002297', money: 0, postCloseReconcile: true },
+    { stockCode: '000938', money: 0, postCloseReconcile: true },
+  ])
   assert.equal(report.succeeded, 2)
   assert.equal(report.failed, 1)
 })

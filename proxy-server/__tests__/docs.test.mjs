@@ -40,6 +40,26 @@ test('openapi json documents the proxy server routes', async () => {
     assert.ok(body.paths['/api/market/overview'].get)
     assert.ok(body.paths['/api/big-order/ths-detail'].get)
     assert.equal(body.paths['/api/big-order/ths-detail'].get.parameters[0].name, 'stockCode')
+    assert.equal(
+      body.paths['/api/big-order/ths-detail'].get.responses[200].content['application/json'].schema.$ref,
+      '#/components/schemas/BigOrderEnvelope',
+    )
+    assert.equal(
+      body.paths['/api/big-order/longhu/all-day'].get.responses[200].content['application/json'].schema.$ref,
+      '#/components/schemas/BigOrderEnvelope',
+    )
+    assert.deepEqual(body.components.schemas.BigOrderEnvelope.required, [
+      'ok',
+      'source',
+      'stockCode',
+      'sessionDate',
+      'fetchedAt',
+      'servedAt',
+      'data',
+    ])
+    assert.ok(body.components.schemas.BigOrderEnvelope.properties.data.properties.dragonMeta)
+    assert.deepEqual(body.components.schemas.BigOrderDragonMeta.required, ['cache'])
+    assert.ok(body.components.schemas.BigOrderDragonMeta.properties.cache.properties.uiStale)
     assert.ok(body.paths['/api/tdx/{entry}'].post)
     assert.ok(body.paths['/api/tdx-blocks'].get)
     assert.ok(body.paths['/api/tdx-blocks/codes'].get)

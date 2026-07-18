@@ -17,6 +17,7 @@ const DEFAULT_DIR = join(__dirname, '..', 'data', 'big-order')
 export function createBigOrderArchiver({ dir = DEFAULT_DIR, logger = console } = {}) {
   async function save({ sessionDate, stockCode, money, value }) {
     const target = join(dir, sessionDate, `${stockCode}.money${money}.json.gz`)
+    let temp
     try {
       await fs.mkdir(dirname(target), { recursive: true })
       const payload = await gzipAsync(
@@ -28,12 +29,14 @@ export function createBigOrderArchiver({ dir = DEFAULT_DIR, logger = console } =
           data: value.data,
         }),
       )
-      const temp = `${target}.tmp-${crypto.randomBytes(4).toString('hex')}`
+      temp = `${target}.tmp-${crypto.randomBytes(4).toString('hex')}`
       await fs.writeFile(temp, payload)
       await fs.rename(temp, target)
     } catch (error) {
       // 清理可能残留的临时文件
-      try { await fs.unlink(temp) } catch {}
+      if (temp) {
+        try { await fs.unlink(temp) } catch {}
+      }
       logger.warn(`[龙虎缓存] 快照归档失败 ${sessionDate}/${stockCode}:`, error?.message)
     }
   }

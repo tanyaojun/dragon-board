@@ -143,6 +143,7 @@ export function longhuCacheSlot(timestamp) {
   const hour = Number(parts.find((part) => part.type === 'hour')?.value || 0)
   const minute = Number(parts.find((part) => part.type === 'minute')?.value || 0)
   const clock = hour * 60 + minute
+  const isPostClose = clock > 900 && clock < 960
   if ((clock >= 570 && clock <= 690) || (clock >= 780 && clock <= 900)) {
     return {
       ttlSeconds: PROXY_CACHE_TTLS.bigOrder.longhuAllDay,
@@ -151,9 +152,9 @@ export function longhuCacheSlot(timestamp) {
     }
   }
   if ((clock >= 540 && clock < 570) || (clock > 690 && clock < 780) || (clock > 900 && clock <= 930)) {
-    return { ttlSeconds: 60, staleTtlSeconds: 900, rebuildCooldownMs: 300_000 }
+    return { ttlSeconds: 60, staleTtlSeconds: 900, rebuildCooldownMs: 300_000, isPostClose }
   }
-  return closed
+  return isPostClose ? { ...closed, isPostClose: true } : closed
 }
 
 function validatePage(payload) {
@@ -168,6 +169,7 @@ function validatePage(payload) {
 function requireCompletePage(page, index) {
   const expected = Math.min(PAGE_SIZE, Math.max(0, page.total - index))
   if (page.list.length < expected) throw integrityError('truncated Longhu response')
+  if (page.list.length > expected) throw integrityError('Longhu response exceeds Total page boundary')
 }
 
 export function createLonghuBigOrderService({
@@ -192,7 +194,9 @@ export function createLonghuBigOrderService({
   const configuredMode = readConfig('BIG_ORDER_LONGHU_INCREMENTAL_MODE', 'off')
   const incrementalMode = VALID_MODES.has(configuredMode) ? configuredMode : 'off'
   const pendingRefreshes = new Map()
-  const lastFullRebuildAt = new Map()
+  const lastFullRebuildAttemptAt = new Map()
+  const postCloseAttemptAt = new Map()
+  const postCloseReconciled = new Set()
   const auditState = new Map()
   const lastSessionProbeAt = new Map()
   const keyIntegrityFailures = new Map()
@@ -210,6 +214,12 @@ export function createLonghuBigOrderService({
     Promise.resolve(archiver.save({ sessionDate, stockCode, money, value })).catch((error) => {
       logger.warn(`[龙虎缓存] 快照归档失败 ${sessionDate}/${stockCode}:`, error?.message)
     })
+  }
+
+  async function writeAllDaySnapshot({ key, value, options, stockCode, money }) {
+    const stored = await layeredCache.set(key, value, options)
+    if (!stored) logger.warn(`[龙虎缓存] 全天快照缓存写入被跳过 ${stockCode} money=${money}`)
+    return stored
   }
 
   function ensureKeyAvailable(id) {
@@ -368,15 +378,17 @@ export function createLonghuBigOrderService({
       }
     }
     const slot = longhuCacheSlot(now())
-    await layeredCache.set(
-      `big-order:longhu:all-day:v2:${sessionDate}:${stockCode}:${money}`,
-      { data, sessionDate, fetchedAt },
-      {
+    await writeAllDaySnapshot({
+      key: `big-order:longhu:all-day:v2:${sessionDate}:${stockCode}:${money}`,
+      value: { data, sessionDate, fetchedAt },
+      options: {
         ttlSeconds: slot.ttlSeconds,
         staleTtlSeconds: 604800,
         maxValueBytes: 8 * 1024 * 1024,
       },
-    )
+      stockCode,
+      money,
+    })
     if (list.length > 0 && money === 0) {
       await layeredCache.set(
         `big-order:longhu:latest:v1:${stockCode}`,
@@ -384,7 +396,6 @@ export function createLonghuBigOrderService({
         { ttlSeconds: 604800, staleTtlSeconds: 604800 },
       )
     }
-    lastFullRebuildAt.set(`${stockCode}:${money}`, now())
     auditState.set(`${stockCode}:${money}`, { lastAuditAt: now(), offset: PAGE_SIZE })
     archiveSnapshot({ sessionDate, stockCode, money, value: { data, sessionDate, fetchedAt } })
     logger.log(
@@ -406,9 +417,22 @@ export function createLonghuBigOrderService({
     }
   }
 
-  async function rebuild({ stockCode, money }) {
+  function rebuildCooldownMs() {
+    return incrementalMode === 'off' ? longhuCacheSlot(now()).rebuildCooldownMs : 60_000
+  }
+
+  function fullRebuildCoolingDown(id) {
+    const lastAttempt = lastFullRebuildAttemptAt.get(id) || 0
+    return now() - lastAttempt < rebuildCooldownMs()
+  }
+
+  async function rebuild({ stockCode, money, ignoreCooldown = false }) {
     const id = `${stockCode}:${money}`
     ensureKeyAvailable(id)
+    if (!ignoreCooldown && fullRebuildCoolingDown(id)) {
+      throw new Error('Longhu full rebuild cooling down')
+    }
+    lastFullRebuildAttemptAt.set(id, now())
     try {
       const result = await rebuildUnprotected({ stockCode, money })
       keyIntegrityFailures.delete(id)
@@ -420,7 +444,40 @@ export function createLonghuBigOrderService({
     }
   }
 
-  async function loadAllDay({ stockCode, money = 0, _restored = false }) {
+  function schedulePostCloseReconcile({ key, stockCode, money, cached }) {
+    const slot = longhuCacheSlot(now())
+    const today = shanghaiDate(now())
+    const marker = `${today}:${stockCode}:${money}`
+    if (!slot.isPostClose || cached.sessionDate !== today || postCloseReconciled.has(marker)) {
+      return null
+    }
+    if (pendingRefreshes.has(key)) return pendingRefreshes.get(key)
+    const lastAttempt = postCloseAttemptAt.get(marker) || 0
+    if (now() - lastAttempt < 60_000) return null
+    postCloseAttemptAt.set(marker, now())
+    const pending = scheduler
+      .run(`${stockCode}:${money}`, 'post-close', 2, () =>
+        rebuild({ stockCode, money, ignoreCooldown: true }),
+      )
+      .then((result) => {
+        postCloseReconciled.add(marker)
+        return result
+      })
+      .catch((error) => {
+        logger.warn(`[龙虎缓存] 收盘对账失败 ${stockCode}:`, error?.message)
+        throw error
+      })
+      .finally(() => pendingRefreshes.delete(key))
+    pendingRefreshes.set(key, pending)
+    return pending
+  }
+
+  async function loadAllDay({
+    stockCode,
+    money = 0,
+    _restored = false,
+    postCloseReconcile = false,
+  }) {
     if (money !== 0) throw new Error('canonical Longhu all-day only supports money=0')
     const latest = await layeredCache.get(`big-order:longhu:latest:v1:${stockCode}`, {
       allowStale: true,
@@ -431,6 +488,18 @@ export function createLonghuBigOrderService({
       if (cached) {
         const slot = longhuCacheSlot(now())
         const oldSession = cached.value.sessionDate && cached.value.sessionDate !== shanghaiDate(now())
+        const postClosePending = oldSession
+          ? null
+          : schedulePostCloseReconcile({ key, stockCode, money, cached: cached.value })
+        if (postClosePending && !postCloseReconcile) postClosePending.catch(() => null)
+        if (postCloseReconcile && slot.isPostClose && !oldSession) {
+          const marker = `${shanghaiDate(now())}:${stockCode}:${money}`
+          if (!postCloseReconciled.has(marker)) {
+            if (!postClosePending) throw new Error('big_order_post_close_reconcile_cooling_down')
+            await postClosePending
+            return loadAllDay({ stockCode, money, _restored })
+          }
+        }
         if (oldSession) {
           const probe = slot.isWeekend
             ? null
@@ -530,16 +599,18 @@ export function createLonghuBigOrderService({
       fetchedAt: Number(snapshot.fetchedAt) || 0,
     }
     const slot = longhuCacheSlot(now())
-    await layeredCache.set(
-      `big-order:longhu:all-day:v2:${snapshot.sessionDate}:${stockCode}:0`,
+    await writeAllDaySnapshot({
+      key: `big-order:longhu:all-day:v2:${snapshot.sessionDate}:${stockCode}:0`,
       value,
-      {
+      options: {
         ttlSeconds: slot.ttlSeconds,
         staleTtlSeconds: 604800,
         maxValueBytes: 8 * 1024 * 1024,
         stale: true,
       },
-    )
+      stockCode,
+      money: 0,
+    })
     await layeredCache.set(`big-order:longhu:latest:v1:${stockCode}`, snapshot.sessionDate, {
       ttlSeconds: 604800,
       staleTtlSeconds: 604800,
@@ -575,8 +646,7 @@ export function createLonghuBigOrderService({
       // 完整重建冷却分时段：交易 300 秒；闭市 6 小时，闭市数据不变不重复全量分页
       const slot = longhuCacheSlot(now())
       if (slot.isWeekend) return null
-      const lastFull = lastFullRebuildAt.get(`${input.stockCode}:${input.money}`) || 0
-      if (now() - lastFull < slot.rebuildCooldownMs) return null
+      if (fullRebuildCoolingDown(`${input.stockCode}:${input.money}`)) return null
     }
     if (pendingRefreshes.has(input.key)) return pendingRefreshes.get(input.key)
     const pending = scheduler
@@ -601,11 +671,12 @@ export function createLonghuBigOrderService({
     const head = await requestPage({ stockCode, money, index: 0, device })
     requireCompletePage(head, 0)
     const fullRebuild = (reason) => {
-      const last = lastFullRebuildAt.get(`${stockCode}:${money}`) || 0
-      if (now() - last < 60_000) {
-        throw new Error(`Longhu full rebuild cooling down (${reason})`)
-      }
-      return rebuild({ stockCode, money })
+      return rebuild({ stockCode, money }).catch((error) => {
+        if (error?.message === 'Longhu full rebuild cooling down') {
+          throw new Error(`Longhu full rebuild cooling down (${reason})`)
+        }
+        throw error
+      })
     }
     if (head.total < oldTotal) return fullRebuild('total decreased')
     const delta = head.total - oldTotal
@@ -658,10 +729,16 @@ export function createLonghuBigOrderService({
       fetchedAt: now(),
     }
     const slot = longhuCacheSlot(now())
-    await layeredCache.set(key, value, {
-      ttlSeconds: slot.ttlSeconds,
-      staleTtlSeconds: 604800,
-      maxValueBytes: 8 * 1024 * 1024,
+    await writeAllDaySnapshot({
+      key,
+      value,
+      options: {
+        ttlSeconds: slot.ttlSeconds,
+        staleTtlSeconds: 604800,
+        maxValueBytes: 8 * 1024 * 1024,
+      },
+      stockCode,
+      money,
     })
     archiveSnapshot({ sessionDate: value.sessionDate, stockCode, money, value })
     scheduleAudit({ key, stockCode, money, value })
@@ -685,8 +762,7 @@ export function createLonghuBigOrderService({
       const tooOld = slot.ttlSeconds === PROXY_CACHE_TTLS.bigOrder.longhuAllDay &&
         now() - Number(input.cached.fetchedAt || 0) > 60_000
       if (failureCount >= 2 || tooOld) {
-        const last = lastFullRebuildAt.get(id) || 0
-        if (now() - last >= 60_000) return rebuild({ stockCode: input.stockCode, money: input.money })
+        return rebuild({ stockCode: input.stockCode, money: input.money })
       }
       throw error
     }
@@ -724,15 +800,20 @@ export function createLonghuBigOrderService({
     if (JSON.stringify(page.list) === JSON.stringify(expected)) return value
     logger.warn(`[龙虎缓存] 历史页漂移 ${stockCode} offset=${offset}，触发完整重建`)
     const slot = longhuCacheSlot(now())
-    await layeredCache.set(key, value, {
-      ttlSeconds: slot.ttlSeconds,
-      staleTtlSeconds: 604800,
-      maxValueBytes: 8 * 1024 * 1024,
-      stale: true,
+    await writeAllDaySnapshot({
+      key,
+      value,
+      options: {
+        ttlSeconds: slot.ttlSeconds,
+        staleTtlSeconds: 604800,
+        maxValueBytes: 8 * 1024 * 1024,
+        stale: true,
+      },
+      stockCode,
+      money,
     })
-    const last = lastFullRebuildAt.get(id) || 0
-    if (now() - last >= 60_000) return rebuild({ stockCode, money })
-    return value
+    if (fullRebuildCoolingDown(id)) return value
+    return rebuild({ stockCode, money })
   }
 
   // 公共分页窗口：以 Total 为完整性标准聚合内部 200 条页，拒绝把短页当末页的静默截断

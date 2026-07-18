@@ -98,6 +98,59 @@ test('cold rebuild rejects short incomplete pages and does not cache them', asyn
   assert.equal(await cache.get('big-order:longhu:latest:v1:002297', { allowStale: true }), null)
 })
 
+test('cold rebuild rejects cumulative rows beyond Total and does not cache them', async () => {
+  const cache = makeCache()
+  const service = createLonghuBigOrderService({
+    plainClient: {
+      post: async (_url, body) => {
+        const index = Number(new URLSearchParams(body).get('Index'))
+        return {
+          data: {
+            errcode: '0',
+            Total: 201,
+            List:
+              index === 0
+                ? Array.from({ length: 200 }, (_, rowIndex) => row(rowIndex))
+                : [row(200), row(201)],
+          },
+        }
+      },
+    },
+    layeredCache: cache,
+    delayMs: 0,
+    logger: silentLogger,
+    readConfig: () => 'off',
+  })
+
+  await assert.rejects(
+    service.loadAllDay({ stockCode: '002297', money: 0 }),
+    /exceeds Total/,
+  )
+  assert.equal(await cache.get('big-order:longhu:latest:v1:002297', { allowStale: true }), null)
+})
+
+test('cold rebuild reports skipped all-day cache writes but still returns upstream data', async () => {
+  const warnings = []
+  const service = createLonghuBigOrderService({
+    plainClient: {
+      post: async () => ({ data: { errcode: '0', Total: 1, List: [row(1)] } }),
+    },
+    layeredCache: new LayeredProxyCache({
+      memoryCache: new ProcessMemoryCache({ maxValueBytes: 1 }),
+      redisCache: new ProcessMemoryCache({ maxValueBytes: 1 }),
+    }),
+    delayMs: 0,
+    logger: { log() {}, warn: (...args) => warnings.push(args.join(' ')) },
+    readConfig: () => 'off',
+  })
+
+  const result = await service.loadAllDay({ stockCode: '002297', money: 0 })
+
+  assert.equal(result.data.Total, 1)
+  assert.equal(result.data.List.length, 1)
+  assert.ok(warnings.some((message) => message.includes('全天快照缓存写入被跳过')))
+})
+
 test('incremental mode defaults to off', async () => {
   const service = createLonghuBigOrderService({
     plainClient: { post: async () => ({ data: { errcode: '0', Total: 0, List: [] } }) },
@@ -144,6 +197,35 @@ test('prepend-logical implements logical offsets while remaining opt-in', async 
   assert.equal(result.data.Total, 201)
   assert.equal(result.data.List.length, 201)
   assert.deepEqual(calls, [0, 200, 201])
+})
+
+test('prepend-logical rejects rows beyond the target Total', async () => {
+  const service = createLonghuBigOrderService({
+    plainClient: {
+      post: async (_url, body) => {
+        const index = Number(new URLSearchParams(body).get('Index'))
+        return {
+          data: {
+            errcode: '0',
+            Total: 201,
+            List:
+              index === 0
+                ? Array.from({ length: 200 }, (_, rowIndex) => row(rowIndex))
+                : [row(200), row(201)],
+          },
+        }
+      },
+    },
+    layeredCache: makeCache(),
+    delayMs: 0,
+    logger: silentLogger,
+    readConfig: () => 'prepend-logical',
+  })
+
+  await assert.rejects(
+    service.loadAllDay({ stockCode: '002297', money: 0 }),
+    /exceeds Total/,
+  )
 })
 
 test('prepend-logical rejects a decreasing Total and an unstable logical page', async (context) => {
@@ -261,6 +343,7 @@ test('three integrity failures cool only the affected stock key for sixty second
 
   for (let attempt = 0; attempt < 3; attempt++) {
     await assert.rejects(service.loadAllDay({ stockCode: '002297', money: 0 }), /truncated/)
+    if (attempt < 2) now += 300_001
   }
   const failedCalls = calls.get('002297')
   await assert.rejects(
@@ -274,6 +357,7 @@ test('three integrity failures cool only the affected stock key for sixty second
 })
 
 test('the shared rebuild deadline is a key failure and does not open the source breaker', async () => {
+  let now = TRADING_NOW
   const service = createLonghuBigOrderService({
     plainClient: {
       post: async (_url, body, config) => {
@@ -290,7 +374,8 @@ test('the shared rebuild deadline is a key failure and does not open the source 
         })
       },
     },
-    layeredCache: makeCache(),
+    layeredCache: makeCache(() => now),
+    now: () => now,
     fullRebuildBudgetMs: 5,
     delayMs: 0,
     logger: silentLogger,
@@ -302,6 +387,7 @@ test('the shared rebuild deadline is a key failure and does not open the source 
       service.loadAllDay({ stockCode: '002297', money: 0 }),
       /budget exceeded/,
     )
+    if (attempt < 2) now += 300_001
   }
   await assert.rejects(
     service.loadAllDay({ stockCode: '002297', money: 0 }),
@@ -355,6 +441,45 @@ test('two consecutive incremental integrity failures force a cooled full rebuild
     }
   }
   assert.fail('two incremental failures did not force a full rebuild')
+})
+
+test('a failed incremental full rebuild is not attempted again within sixty seconds', async () => {
+  let now = TRADING_NOW
+  let phase = 'baseline'
+  const refreshCalls = []
+  const service = createLonghuBigOrderService({
+    plainClient: {
+      post: async (_url, body) => {
+        if (phase === 'baseline') {
+          return { data: { errcode: '0', Total: 1, List: [row(1)] } }
+        }
+        const index = Number(new URLSearchParams(body).get('Index'))
+        refreshCalls.push(index)
+        if (refreshCalls.length === 1 || refreshCalls.length === 5) {
+          return { data: { errcode: '0', Total: 0, List: [] } }
+        }
+        return { data: { errcode: '0', Total: 2, List: [row(2)] } }
+      },
+    },
+    layeredCache: makeCache(() => now),
+    now: () => now,
+    delayMs: 0,
+    logger: silentLogger,
+    readConfig: () => 'prepend-device-snapshot',
+  })
+  await service.loadAllDay({ stockCode: '002297', money: 0 })
+
+  phase = 'refresh'
+  now += 61_000
+  await service.loadAllDay({ stockCode: '002297', money: 0 })
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  assert.equal(refreshCalls.length, 4, 'head plus three stable rebuild attempts')
+
+  now += 11_000
+  const stale = await service.loadAllDay({ stockCode: '002297', money: 0 })
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  assert.equal(stale.data.Total, 1)
+  assert.equal(refreshCalls.length, 5, 'second head does not start another full rebuild')
 })
 
 test('prepend-logical applies logical offsets during a multi-page head refresh', async () => {
@@ -517,6 +642,39 @@ test('stale snapshot returns immediately and refreshes by verified head delta', 
   assert.fail('incremental background refresh did not complete')
 })
 
+test('incremental merge preserves legitimate duplicate transactions', async () => {
+  let now = TRADING_NOW
+  const duplicate = row(1)
+  const rowsRef = { current: [duplicate, duplicate, row(2)] }
+  const service = createLonghuBigOrderService({
+    plainClient: pagedClient(rowsRef),
+    layeredCache: makeCache(() => now),
+    now: () => now,
+    delayMs: 0,
+    logger: silentLogger,
+    readConfig: () => 'prepend-device-snapshot',
+  })
+
+  await service.loadAllDay({ stockCode: '002297', money: 0 })
+  rowsRef.current = [duplicate, duplicate, duplicate, row(2)]
+  now += 11_000
+  await service.loadAllDay({ stockCode: '002297', money: 0 })
+
+  for (let attempt = 0; attempt < 100; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    const refreshed = await service.loadAllDay({ stockCode: '002297', money: 0 })
+    if (!refreshed.cache.stale && refreshed.data.Total === 4) {
+      const fingerprint = JSON.stringify(duplicate)
+      assert.equal(
+        refreshed.data.List.filter((item) => JSON.stringify(item) === fingerprint).length,
+        3,
+      )
+      return
+    }
+  }
+  assert.fail('duplicate-preserving incremental refresh did not complete')
+})
+
 test('off mode keeps stale snapshot without full rebuild inside 300 second cooldown', async () => {
   let now = TRADING_NOW
   let calls = 0
@@ -659,6 +817,35 @@ test('after close the snapshot stays fresh long and stale hits do not rebuild', 
   await new Promise((resolve) => setTimeout(resolve, 20))
   assert.equal(stale.cache.stale, true)
   assert.equal(calls.length, 1)
+})
+
+test('the first post-close request reconciles a trading-time snapshot once', async () => {
+  let now = Date.parse('2026-07-17T06:59:00Z') // 周五 14:59 上海
+  const rowsRef = { current: [row(1, '2026-07-17 14:59:00')] }
+  const calls = []
+  const service = createLonghuBigOrderService({
+    plainClient: pagedClient(rowsRef, calls),
+    layeredCache: makeCache(() => now),
+    now: () => now,
+    delayMs: 0,
+    logger: silentLogger,
+    readConfig: () => 'off',
+  })
+  await service.loadAllDay({ stockCode: '002297', money: 0 })
+  rowsRef.current = [row(2, '2026-07-17 15:00:00'), row(1, '2026-07-17 14:59:00')]
+
+  now = Date.parse('2026-07-17T07:01:00Z') // 周五 15:01 上海
+  const stale = await service.loadAllDay({ stockCode: '002297', money: 0 })
+  assert.equal(stale.data.Total, 1, 'post-close reconcile remains stale-while-revalidate')
+  for (let attempt = 0; attempt < 100; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    const reconciled = await service.loadAllDay({ stockCode: '002297', money: 0 })
+    if (reconciled.data.Total === 2 && !reconciled.cache.stale) {
+      assert.equal(calls.length, 2, 'only one post-close full reconcile')
+      return
+    }
+  }
+  assert.fail('first post-close request did not reconcile the final snapshot')
 })
 
 test('a trading-time snapshot remains available from stale storage over the weekend', async () => {

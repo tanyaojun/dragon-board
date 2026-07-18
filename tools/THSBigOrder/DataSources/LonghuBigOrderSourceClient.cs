@@ -50,6 +50,7 @@ namespace THSBigOrder.DataSources
                 var milliseconds = envelope.Value<long?>("fetchedAt");
                 if (milliseconds.HasValue)
                     fetchedAt = DateTimeOffset.FromUnixTimeMilliseconds(milliseconds.Value).LocalDateTime;
+                var stale = data.SelectToken("dragonMeta.cache.uiStale")?.Value<bool>() == true;
                 return new SourceLoadResult<BigOrderSourceData>
                 {
                     Data = new BigOrderSourceData
@@ -57,10 +58,8 @@ namespace THSBigOrder.DataSources
                         Orders = orders,
                         SessionDate = sessionDate.Date,
                     },
-                    Freshness = data.SelectToken("dragonMeta.cache.uiStale")?.Value<bool>() == true
-                        ? DataFreshness.Stale
-                        : DataFreshness.Fresh,
-                    Transport = DataTransport.ProxyPrimary,
+                    Freshness = stale ? DataFreshness.Stale : DataFreshness.Fresh,
+                    Transport = stale ? DataTransport.Stale : DataTransport.ProxyPrimary,
                     FetchedAt = fetchedAt,
                 };
             }

@@ -139,7 +139,7 @@ newList[delta : delta + oldTotal] == oldList
 delta = newTotal - oldTotal
 ```
 
-至少覆盖高活跃、低活跃股票和早盘/午后。只有该门禁通过，才能启用 `incremental-head`。
+至少覆盖高活跃、低活跃股票和早盘/午后。只有该门禁通过，才能启用任一增量模式。
 
 运行模式必须显式且 fail-closed：
 
@@ -148,8 +148,8 @@ BIG_ORDER_LONGHU_INCREMENTAL_MODE=off | prepend-device-snapshot | prepend-logica
 ```
 
 - 默认 `off`：不做 delta 合并，按 300 秒冷却进行受控完整重建。
-- `prepend-device-snapshot`：prepend-only 和固定 DeviceID 快照都已证明；允许 delta 合并，完整重建中 Total 变化直接失败。
-- `prepend-logical`：prepend-only 已证明但 DeviceID 不固定快照；允许 Total 增长，并用逻辑偏移重试。
+- `prepend-device-snapshot`：自动化 fixture 覆盖了 prepend-only 和固定 DeviceID 合同；只有真实盘中门禁通过后才允许 delta 合并，完整重建中 Total 变化直接失败。
+- `prepend-logical`：自动化 fixture 覆盖了 prepend-only 的逻辑偏移路径；只有真实盘中门禁通过后才允许启用，允许 Total 增长并用逻辑偏移重试。
 - 不能根据单次运行结果自动从 `off` 升级；启用必须有 API 分析文档和回归 fixture 证据。
 
 在 `prepend-logical` 模式：
@@ -211,11 +211,11 @@ integrityMode          # full / incremental-verified
 2. 如果 `newTotal == cachedTotal`，比较头部序列；一致则只更新成功刷新时间。
 3. 如果 `newTotal > cachedTotal`，计算 `delta = newTotal - cachedTotal`。
 4. 获取足以覆盖 `delta + overlapProbe` 的头部页，`overlapProbe = min(20, cachedRows.Count)`。
-5. 所有增量页的 `Total` 必须一致；任一页变化时不合并、不更新 `fetchedAt`，并记录一次单 key 增量失败。
+5. `prepend-device-snapshot` 要求所有增量页的 `Total` 与头页一致；`prepend-logical` 允许后续页 `Total` 增长，并按 `Index = logicalOffset + (currentTotal - headTotal)` 重算偏移后重试同一逻辑页，单页最多重试 2 次。两种模式遇到 `Total` 下降都立即失败。
 6. 校验新响应在偏移 `delta` 处的连续序列与旧缓存前 `overlapProbe` 行一致。
 7. 校验通过后，仅把前 `delta` 行插入旧列表；缓存总量更新为 `newTotal`。
 8. `Total` 下降、sessionDate 变化或重叠不一致时立即请求一次受冷却保护的完整串行重建。
-9. 增量页 `Total` 变化、短页或结果不完整时先保留旧缓存；连续 2 次增量失败，或交易时段 `fetchedAt` 年龄超过 60 秒时，请求一次受冷却保护的完整重建。完整重建失败仍不得覆盖旧缓存。
+9. 固定快照模式的 `Total` 变化，或 logical 模式的下降、重试超限，以及任一模式的短页、重叠失败或结果不完整，都先保留旧缓存；连续 2 次增量失败，或交易时段 `fetchedAt` 年龄超过 60 秒时，请求一次受冷却保护的完整重建。完整重建失败仍不得覆盖旧缓存。
 10. 任一完整或增量成功都会清零该 key 的增量失败计数。
 
 该算法不依赖“单行一定唯一”。偏移由 `Total` 差确定，重叠使用连续原始数组序列比较，避免简单哈希去重误删同秒同价同量的合法重复成交。

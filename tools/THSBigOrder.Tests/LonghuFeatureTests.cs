@@ -17,6 +17,28 @@ using THSBigOrder.Parsing;
 
 internal static class LonghuFeatureTests
 {
+    internal static void TestLastGoodMaxAgeWindows()
+    {
+        AssertEqual(TimeSpan.FromHours(12),
+            THSBigOrderDataProvider.BigOrderLastGoodMaxAge(new DateTime(2026, 7, 17, 9, 15, 0)),
+            "pre-open window allows 12 hours");
+        AssertEqual(TimeSpan.FromMinutes(5),
+            THSBigOrderDataProvider.BigOrderLastGoodMaxAge(new DateTime(2026, 7, 17, 10, 0, 0)),
+            "trading window keeps 5 minute bound");
+        AssertEqual(TimeSpan.FromHours(12),
+            THSBigOrderDataProvider.BigOrderLastGoodMaxAge(new DateTime(2026, 7, 17, 12, 0, 0)),
+            "lunch window allows 12 hours");
+        AssertEqual(TimeSpan.FromHours(12),
+            THSBigOrderDataProvider.BigOrderLastGoodMaxAge(new DateTime(2026, 7, 17, 15, 10, 0)),
+            "post-close window allows 12 hours");
+        AssertEqual(TimeSpan.FromHours(12),
+            THSBigOrderDataProvider.BigOrderLastGoodMaxAge(new DateTime(2026, 7, 17, 20, 0, 0)),
+            "evening window allows 12 hours");
+        AssertEqual(TimeSpan.FromHours(12),
+            THSBigOrderDataProvider.BigOrderLastGoodMaxAge(new DateTime(2026, 7, 18, 10, 0, 0)),
+            "weekend window allows 12 hours");
+    }
+
     internal static void TestAnnouncementTracker()
     {
         var tracker = new BigOrderAnnouncementTracker();
@@ -61,6 +83,18 @@ internal static class LonghuFeatureTests
         AssertTrue(ordered[0].Time < ordered[1].Time, "new rows sorted oldest first");
         AssertEqual(0, tracker.Observe("600519", BigOrderDataSource.Ths, day,
             new[] { later }).Count, "stock switch baseline");
+
+        var kindTracker = new BigOrderAnnouncementTracker();
+        var utcDay = DateTime.SpecifyKind(day.AddHours(9), DateTimeKind.Utc);
+        var localDay = DateTime.SpecifyKind(day.AddHours(15), DateTimeKind.Local);
+        AssertEqual(0, kindTracker.Observe("002297", BigOrderDataSource.Ths, utcDay,
+            new[] { repeated }).Count, "kind baseline");
+        AssertEqual(1, kindTracker.Observe("002297", BigOrderDataSource.Ths, localDay,
+            new[] { repeated, later }).Count, "same date ignores time and Kind");
+        AssertEqual(0, kindTracker.Observe("002297", BigOrderDataSource.Longhu, day,
+            new[] { repeated, later }).Count, "source switch baseline");
+        AssertEqual(0, kindTracker.Observe("002297", BigOrderDataSource.Longhu, day.AddDays(1),
+            new[] { repeated, later }).Count, "day switch baseline");
     }
 
     internal static void TestVoiceBatch()
@@ -106,6 +140,8 @@ internal static class LonghuFeatureTests
         var voice = new RecordingVoice();
         using (var form = new MainForm(provider, false, voice))
         {
+            AssertTrue(!voice.Enabled, "unchecked voice control disables the service by default");
+            voice.Enabled = true;
             await form.RefreshStockAsync("002297", true);
             AssertEqual(0, voice.Batches.Count, "first snapshot only establishes baseline");
             await form.RefreshStockAsync("002297", false);
@@ -114,6 +150,67 @@ internal static class LonghuFeatureTests
             AssertEqual(BigOrderAnnouncementType.Ignite, voice.Batches[0][0].Type, "first signal");
             AssertEqual(BigOrderAnnouncementType.Smash, voice.Batches[0][1].Type, "second signal");
             AssertEqual(BigOrderAnnouncementType.BuyActive, voice.Batches[0][2].Type, "third signal");
+        }
+    }
+
+    internal static async Task TestMainFormAnnouncementBoundaries()
+    {
+        var day = new DateTime(2026, 7, 17);
+        var baseline = Signal(day.AddHours(9).AddMinutes(30), "", "");
+        var markerChanged = Signal(day.AddHours(9).AddMinutes(30), "点火", "买活跃");
+        var added = Signal(day.AddHours(9).AddMinutes(31), "点火", "买活跃");
+        var afterBarrier = Signal(day.AddHours(9).AddMinutes(32), "点火", "买活跃");
+        var whileDisabled = Signal(day.AddHours(9).AddMinutes(33), "点火", "买活跃");
+        var afterReenable = Signal(day.AddHours(9).AddMinutes(34), "点火", "买活跃");
+        var provider = new SequenceProvider(
+            Snapshot(day, new[] { baseline }),
+            Snapshot(day, new[] { markerChanged }),
+            Snapshot(day, new[] { markerChanged, added }),
+            Snapshot(day, new[] { markerChanged, added }),
+            Snapshot(day, new[] { markerChanged, added }, false),
+            Snapshot(day, new[] { markerChanged, added }),
+            Snapshot(day, new[] { markerChanged, added, afterBarrier }),
+            Snapshot(day, new[] { markerChanged, added, afterBarrier, whileDisabled }),
+            Snapshot(day, new[] { markerChanged, added, afterBarrier, whileDisabled }),
+            Snapshot(day, new[] { markerChanged, added, afterBarrier, whileDisabled, afterReenable }));
+        var voice = new RecordingVoice();
+        using (var form = new MainForm(provider, false, voice))
+        {
+            voice.Enabled = true;
+            await form.RefreshStockAsync("002297", true);
+            await form.RefreshStockAsync("002297", false);
+            AssertEqual(0, voice.Batches.Count, "marker recalculation does not replay old row");
+
+            typeof(MainForm).GetField("_specialFilter", BindingFlags.Instance | BindingFlags.NonPublic)
+                .SetValue(form, "买活跃");
+            await form.RefreshStockAsync("002297", false);
+            AssertEqual(BigOrderAnnouncementType.BuyActive, voice.Batches.Single().Single().Type,
+                "special marker overrides default ignite priority");
+
+            typeof(MainForm).GetField("_currentMoney", BindingFlags.Instance | BindingFlags.NonPublic)
+                .SetValue(form, 30);
+            await form.RefreshStockAsync("002297", false);
+            AssertEqual(1, voice.Batches.Count, "filter change does not replay history");
+
+            typeof(MainForm).GetField("_voiceReenableBarrier", BindingFlags.Instance | BindingFlags.NonPublic)
+                .SetValue(form, true);
+            await form.RefreshStockAsync("002297", false);
+            AssertEqual(1, voice.Batches.Count, "null session date keeps re-enable barrier");
+            await form.RefreshStockAsync("002297", false);
+            AssertEqual(1, voice.Batches.Count, "first trusted snapshot only rebuilds baseline");
+            await form.RefreshStockAsync("002297", false);
+            AssertEqual(2, voice.Batches.Count, "new row after barrier is announced");
+
+            voice.Enabled = false;
+            await form.RefreshStockAsync("002297", false);
+            AssertEqual(2, voice.Batches.Count, "disabled voice still advances tracker without speaking");
+            voice.Enabled = true;
+            typeof(MainForm).GetField("_voiceReenableBarrier", BindingFlags.Instance | BindingFlags.NonPublic)
+                .SetValue(form, true);
+            await form.RefreshStockAsync("002297", false);
+            AssertEqual(2, voice.Batches.Count, "re-enable snapshot only rebuilds baseline");
+            await form.RefreshStockAsync("002297", false);
+            AssertEqual(3, voice.Batches.Count, "post re-enable increment is announced");
         }
     }
 
@@ -183,7 +280,10 @@ internal static class LonghuFeatureTests
         };
     }
 
-    private static MarketSnapshot Snapshot(DateTime day, IReadOnlyList<BigOrderItem> orders)
+    private static MarketSnapshot Snapshot(
+        DateTime day,
+        IReadOnlyList<BigOrderItem> orders,
+        bool hasSessionDate = true)
     {
         return new MarketSnapshot(
             "002297",
@@ -199,7 +299,7 @@ internal static class LonghuFeatureTests
             DataFreshness.Missing,
             day,
             day,
-            bigOrderSessionDate: day);
+            bigOrderSessionDate: hasSessionDate ? (DateTime?)day : null);
     }
 
     private sealed class SequenceProvider : IMarketSnapshotProvider
@@ -376,6 +476,24 @@ internal static class LonghuFeatureTests
         }
     }
 
+    internal static async Task TestProxyUiStaleStatus()
+    {
+        var handler = new LonghuHandler
+        {
+            DirectMode = LonghuMode.HttpFailure,
+            ProxyMode = LonghuMode.OneValid,
+            ProxyUiStale = true,
+        };
+        using (var provider = CreateHttpProvider(handler))
+        {
+            provider.DataSource = BigOrderDataSource.Longhu;
+            var snapshot = await provider.LoadSnapshotAsync("002297", CancellationToken.None);
+            AssertEqual(DataFreshness.Stale, snapshot.BigOrderFreshness, "Longhu ui stale freshness");
+            AssertEqual(DataTransport.Stale, snapshot.Transports.BigOrder, "Longhu ui stale transport");
+            AssertEqual("数据陈旧: 大单", snapshot.Transports.Summary, "Longhu ui stale status");
+        }
+    }
+
     internal static async Task TestValidEmptyList()
     {
         var handler = new LonghuHandler { DirectMode = LonghuMode.Empty };
@@ -452,6 +570,32 @@ internal static class LonghuFeatureTests
             var staleLonghu = await provider.LoadSnapshotAsync("002297", CancellationToken.None);
             AssertEqual(4, staleLonghu.Orders.Single().Type, "Longhu stale reused");
             AssertEqual(DataTransport.Stale, staleLonghu.Transports.BigOrder, "Longhu stale transport");
+        }
+    }
+
+    internal static async Task TestProviderRejectsCrossDayLastGood()
+    {
+        var sources = SourceSet.Create();
+        using (var provider = sources.CreateProvider())
+        {
+            provider.DataSource = BigOrderDataSource.Longhu;
+            var first = await provider.LoadSnapshotAsync("002297", CancellationToken.None);
+            AssertEqual(new DateTime(2026, 7, 16), first.BigOrderSessionDate.Value,
+                "first authoritative session date");
+
+            var nextDay = new DateTime(2026, 7, 17);
+            sources.Ths.Direct = _ => Task.FromResult(SourceSet.BigResult(2, true, 123, nextDay));
+            sources.Minute.Direct = _ => Task.FromResult(Result<IReadOnlyList<MinuteTurnoverPoint>>(
+                new[] { new MinuteTurnoverPoint { Time = nextDay.AddHours(9).AddMinutes(30), Price = 10 } }));
+            sources.Longhu.Direct = _ => throw new HttpRequestException("longhu direct failed");
+            sources.Longhu.Proxy = _ => throw new HttpRequestException("longhu proxy failed");
+
+            var failed = await provider.LoadSnapshotAsync("002297", CancellationToken.None);
+            AssertEqual(0, failed.Orders.Count, "previous-session orders are not reused");
+            AssertEqual(DataTransport.Failed, failed.Transports.BigOrder,
+                "cross-day failure remains failed");
+            AssertTrue(!failed.BigOrderSessionDate.HasValue,
+                "failed cross-day snapshot has no borrowed session date");
         }
     }
 
@@ -598,6 +742,7 @@ internal static class LonghuFeatureTests
     {
         public LonghuMode DirectMode { get; set; } = LonghuMode.OneValid;
         public LonghuMode ProxyMode { get; set; } = LonghuMode.OneValid;
+        public bool ProxyUiStale { get; set; }
         public int ProxyCalls { get; private set; }
         public List<int> DirectIndexes { get; } = new List<int>();
         public List<int> ProxyIndexes { get; } = new List<int>();
@@ -707,7 +852,7 @@ internal static class LonghuFeatureTests
                         ["errcode"] = "0",
                         ["dragonMeta"] = new JObject
                         {
-                            ["cache"] = new JObject { ["uiStale"] = false },
+                            ["cache"] = new JObject { ["uiStale"] = ProxyUiStale },
                         },
                     },
                 };
@@ -784,8 +929,9 @@ internal static class LonghuFeatureTests
         }
 
         public static SourceLoadResult<BigOrderSourceData> BigResult(
-            int type, bool summary = false, double mainBuy = 123)
+            int type, bool summary = false, double mainBuy = 123, DateTime? sessionDate = null)
         {
+            var day = (sessionDate ?? new DateTime(2026, 7, 16)).Date;
             return Result(new BigOrderSourceData
             {
                 StockFallback = new StockSummary { Code = "002297", Name = "摘要", Price = 10 },
@@ -802,12 +948,13 @@ internal static class LonghuFeatureTests
                     new BigOrderItem
                     {
                         Type = type, Price = 10, Volume = 500000, Amount = 5000000,
-                        Time = new DateTime(2026, 7, 16, 10, 0, 0),
+                        Time = day.AddHours(10),
                     },
                 },
                 Prices = summary
-                    ? new[] { new PricePoint { Time = new DateTime(2026, 7, 16, 10, 0, 0), ChangePercent = 1 } }
+                    ? new[] { new PricePoint { Time = day.AddHours(10), ChangePercent = 1 } }
                     : new PricePoint[0],
+                SessionDate = day,
             });
         }
     }

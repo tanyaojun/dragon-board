@@ -50,7 +50,7 @@ namespace THSBigOrder.DataSources
                 var stale = data.SelectToken("dragonMeta.cache.uiStale")?.Value<bool>() == true;
                 var result = Success(
                     _parser.ParseBigOrderSource(stockCode, data, authoritativeDate),
-                    DataTransport.ProxyPrimary,
+                    stale ? DataTransport.Stale : DataTransport.ProxyPrimary,
                     stale ? DataFreshness.Stale : DataFreshness.Fresh);
                 var milliseconds = envelope.Value<long?>("fetchedAt");
                 if (milliseconds.HasValue)

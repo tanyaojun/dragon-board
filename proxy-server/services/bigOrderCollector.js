@@ -76,7 +76,7 @@ export function createBigOrderCollector({
     const failures = []
     for (const stockCode of codes) {
       try {
-        await service.loadAllDay({ stockCode, money: 0 })
+        await service.loadAllDay({ stockCode, money: 0, postCloseReconcile: true })
         succeeded += 1
       } catch (error) {
         failures.push({ stockCode, error: error?.message || 'unknown' })

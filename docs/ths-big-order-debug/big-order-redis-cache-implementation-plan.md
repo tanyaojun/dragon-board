@@ -10,7 +10,7 @@
 
 **Tech Stack:** Node.js、Express、Redis 4.x、Node test runner、C# .NET Framework 4.8、Newtonsoft.Json。
 
-## 2026-07-17 完成度审计
+## 2026-07-18 完成度审计
 
 下表是本轮复核后的权威状态；下方逐步 checkbox 保留原始 TDD 执行清单，不能用未回填的历史方框否定本表和对应测试证据。
 
@@ -18,14 +18,14 @@
 |---|---|---|
 | 1 真实合同 | 自动化合同完成，生产实测门禁保留 | POST、`st=200`、DeviceID、短页/Total/超量/逻辑偏移均有 fixture；prepend-only 的生产启用仍需盘中证据，因此默认 `off`。 |
 | 2 冷启动 | 完成 | 三次尝试共享 45 秒 deadline；稳定快照与 logical offset 均覆盖。 |
-| 3 增量刷新 | 完成 | delta/overlap、短页、连续失败/60 秒年龄重建、独立低优先级审计均覆盖。 |
-| 4 TTL/风控 | 完成 | L1/L2、7 天物理保留、单值上限、源 breaker、单 key 冷却和有界 scheduler 均覆盖。 |
-| 5 结构化端点 | 完成 | canonical envelope、动态 TTL/refresh 诊断和旧路由兼容测试通过。 |
+| 3 增量刷新 | 自动化合同完成，生产实测门禁保留 | delta/overlap、合法重复、短页、Total 超量/漂移、连续失败/60 秒年龄重建、独立低优先级审计均覆盖；真实 prepend-only 仍未在盘中启用。 |
+| 4 TTL/风控 | 完成 | L1/L2、7 天物理保留、单值上限、容量跳过诊断、源 breaker、单 key 冷却和有界 scheduler 均覆盖。 |
+| 5 结构化端点 | 完成 | canonical envelope、动态 TTL/refresh 诊断、OpenAPI schema 与旧路由兼容测试通过；THS 的 `refresh` 按实际响应保持可选。 |
 | 6 THS detail | 完成 | Redis 优先、权威 `sessionDate`、null fail-closed 和 order 日期规范化已覆盖。 |
 | 7 WinForms 缓存入口 | 完成 | proxy-primary、独立 60 秒客户端、同 sessionDate last-good 和跨日拒绝测试通过。 |
 | 8 增量语音 | 完成 | occurrence tracker、FIFO batch、筛选/marker、null/re-enable、切源/跨日/Kind 边界测试通过。 |
 | 9 文档 | 完成 | API、design、plan、OpenAPI 与部署顺序已同步。 |
-| 10 自动验证 | 完成 | `npm test`、C# runner、独立 Release build、diff/link 检查作为最终门禁执行。 |
+| 10 自动验证 | 完成（2026-07-18 新鲜验证） | proxy `npm test` 133/133、C# runner 72/72、Release build 0 warning/0 error、目标回归 57/57、`git diff --check` 通过。 |
 | 11 本地永久归档 | 完成（2026-07-17 新增需求） | 设计 §7.1；`bigOrderArchive.js` 写通式归档 + 冷启动回填 + `bigOrderArchive.test.mjs` 11 项测试。 |
 | 12 收盘后候选池采集 | 完成（2026-07-17 新增需求） | 设计 §7.2；`bigOrderCollector.js`（登记/列出/逐只采集/定时worker）+ POST `/collect-list`、`/collect` 端点 + 测试。 |
 
@@ -169,7 +169,7 @@ big-order:longhu:all-day:v2:{sessionDate}:{stockCode}:{money}
 - [ ] 写失败测试：旧缓存 `Total=17044`，新头页 `Total=17054`，只新增 10 条且只请求 1 个上游页。
 - [ ] 写失败测试：`Total` 未变且头部序列一致，不重建全量。
 - [ ] 写失败测试：`Total` 下降或偏移 `delta` 后的 20 行重叠不一致，触发完整重建。
-- [ ] 写失败测试：任一增量页 `Total` 变化时不合并、不更新 `fetchedAt`，并增加单 key 增量失败计数。
+- [ ] 写失败测试：`prepend-device-snapshot` 任一增量页 `Total` 变化时不合并；`prepend-logical` 允许增长并按逻辑偏移重试，但下降或同一逻辑页变化超过 2 次时不合并。失败均不更新 `fetchedAt`，并增加单 key 增量失败计数。
 - [ ] 写失败测试：连续 2 次增量失败，或交易时段缓存年龄超过 60 秒时，请求一次受冷却保护的完整重建；完整重建失败仍保留旧缓存。
 - [ ] 写失败测试：增量模式的 full rebuild 同 key 60 秒内最多一次；默认 `off` 模式仍为 300 秒。
 - [ ] 写失败测试：prepend-only 门禁关闭时不执行 delta 合并，只按 300 秒冷却进行完整重建。
