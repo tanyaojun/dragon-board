@@ -128,7 +128,7 @@ test('structured Longhu all-day endpoint returns canonical envelope', async () =
     assert.equal(body.sessionDate, '2026-07-17')
     assert.equal(body.data.List.length, 1)
     assert.equal(body.data.dragonMeta.cache.uiStale, false)
-    assert.equal(body.data.dragonMeta.cache.ttlSeconds, 10)
+    assert.equal(body.data.dragonMeta.cache.ttlSeconds, 3)
     assert.equal(body.data.dragonMeta.refresh.mode, 'cold-full')
     assert.equal(body.data.dragonMeta.refresh.inProgress, false)
     assert.equal(body.data.dragonMeta.refresh.pagesFetched, 1)

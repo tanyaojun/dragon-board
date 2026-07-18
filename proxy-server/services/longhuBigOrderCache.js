@@ -124,7 +124,7 @@ function shanghaiDate(timestamp) {
   return new Date(timestamp).toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' })
 }
 
-// 设计 §7 的时段 TTL 表：交易 10/300、盘前午间和收盘后半小时 60/900、其余(含周末) 1800/604800。
+// 设计 §7 的时段 TTL 表：交易 3/300、盘前午间和收盘后半小时 60/900、其余(含周末) 1800/604800。
 // off 模式的完整重建冷却同样分时段：闭市数据不再变化，不允许整夜重复全量分页。
 export function longhuCacheSlot(timestamp) {
   const date = new Date(timestamp)
@@ -191,7 +191,7 @@ export function createLonghuBigOrderService({
     }),
   }),
 } = {}) {
-  const configuredMode = readConfig('BIG_ORDER_LONGHU_INCREMENTAL_MODE', 'off')
+  const configuredMode = readConfig('BIG_ORDER_LONGHU_INCREMENTAL_MODE', 'prepend-logical')
   const incrementalMode = VALID_MODES.has(configuredMode) ? configuredMode : 'off'
   const pendingRefreshes = new Map()
   const lastFullRebuildAttemptAt = new Map()
@@ -476,6 +476,7 @@ export function createLonghuBigOrderService({
     stockCode,
     money = 0,
     _restored = false,
+    _refreshAttempted = false,
     postCloseReconcile = false,
   }) {
     if (money !== 0) throw new Error('canonical Longhu all-day only supports money=0')
@@ -522,7 +523,18 @@ export function createLonghuBigOrderService({
           scheduleAudit({ key, stockCode, money, value: cached.value })
         }
         if (cached.stale) {
-          scheduleRefresh({ key, stockCode, money, cached: cached.value })
+          if (incrementalMode === 'prepend-logical') {
+            scheduleAudit({ key, stockCode, money, value: cached.value })
+          }
+          const refresh = scheduleRefresh({ key, stockCode, money, cached: cached.value })
+          if (incrementalMode === 'prepend-logical' && refresh && !_refreshAttempted) {
+            try {
+              await refresh
+              return loadAllDay({ stockCode, money, _restored, _refreshAttempted: true })
+            } catch (error) {
+              logger.warn(`[龙虎缓存] stale 增量刷新失败 ${stockCode}:`, error?.message)
+            }
+          }
         }
         return {
           ...cached.value,

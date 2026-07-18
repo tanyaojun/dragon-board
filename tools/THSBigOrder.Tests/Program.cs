@@ -43,6 +43,7 @@ internal static class Program
         Run("High-confidence markers confirm ignition, smash and attributed follow-through", LonghuFeatureTests.TestMarkerAttribution);
         Run("High-confidence markers wait until the confirmation window closes", LonghuFeatureTests.TestConfirmationWindowClosure);
         Run("High-confidence marker threshold uses prior 20-minute P90", LonghuFeatureTests.TestAdaptiveMarkerThreshold);
+        Run("Capacity-aware marker previews 100w continuous orders and upgrades after confirmation", LonghuFeatureTests.TestCapacityAwarePreviewAndConfirmation);
         Run("Voice batches preserve FIFO without cancelling ordinary refreshes", LonghuFeatureTests.TestVoiceBatch);
         Run("Main form announces only new signals in one batch", () =>
             LonghuFeatureTests.TestMainFormAnnouncementBatch().GetAwaiter().GetResult());

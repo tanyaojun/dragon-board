@@ -6,7 +6,8 @@ namespace THSBigOrder.Analytics
 {
     internal sealed class BigOrderEventDetector
     {
-        private const double AbsoluteLargeOrder = 5000000d;
+        private const double MinimumOrderAmount = 1000000d;
+        private const double CapacityFraction = 0.30d;
         private const double ActivePurity = 0.70d;
         private const double MinimumPriceImpact = 0.0003d;
         private static readonly TimeSpan EventWindow = TimeSpan.FromSeconds(10);
@@ -15,6 +16,11 @@ namespace THSBigOrder.Analytics
         private static readonly TimeSpan Cooldown = TimeSpan.FromSeconds(20);
 
         public void Apply(IList<BigOrderItem> data)
+        {
+            Apply(data, null);
+        }
+
+        public void Apply(IList<BigOrderItem> data, string stockCode)
         {
             if (data == null) return;
             foreach (var item in data)
@@ -36,16 +42,17 @@ namespace THSBigOrder.Analytics
             {
                 var dayRows = dayGroup.ToList();
                 ApplySession(dayRows.Where(value => Session(value.Item.Time) == 1).ToList(),
-                    dayRows, thresholdCache);
+                    dayRows, thresholdCache, stockCode);
                 ApplySession(dayRows.Where(value => Session(value.Item.Time) == 2).ToList(),
-                    dayRows, thresholdCache);
+                    dayRows, thresholdCache, stockCode);
             }
         }
 
         private static void ApplySession(
             List<IndexedRow> sessionRows,
             List<IndexedRow> dayRows,
-            IDictionary<string, double> thresholdCache)
+            IDictionary<string, double> thresholdCache,
+            string stockCode)
         {
             if (sessionRows.Count == 0) return;
             var buckets = sessionRows.GroupBy(value => TruncateSecond(value.Item.Time))
@@ -55,6 +62,7 @@ namespace THSBigOrder.Analytics
             var bucketIndexes = buckets.Select((bucket, index) => new { bucket.Time, index })
                 .ToDictionary(value => value.Time, value => value.index);
             var lastConfirmed = new Dictionary<int, DateTime>();
+            var lastPreview = new Dictionary<int, DateTime>();
             var windowStart = 0;
 
             for (var bucketIndex = 0; bucketIndex < buckets.Count; bucketIndex++)
@@ -67,12 +75,9 @@ namespace THSBigOrder.Analytics
 
                 foreach (var direction in new[] { 2, 4 })
                 {
+                    var threshold = Threshold(dayRows, bucket.Time, direction, thresholdCache, stockCode);
                     if (!bucket.Rows.Any(value => value.Item.Type == direction &&
-                                                  value.Item.Amount >= AbsoluteLargeOrder))
-                        continue;
-                    var threshold = Threshold(dayRows, bucket.Time, direction, thresholdCache);
-                    if (!bucket.Rows.Any(value => value.Item.Type == direction &&
-                                                  value.Item.Amount >= threshold))
+                                                  IsQualifying(value.Item, threshold, stockCode)))
                         continue;
                     if (window == null)
                     {
@@ -80,10 +85,22 @@ namespace THSBigOrder.Analytics
                         window = sessionRows.GetRange(windowStart, windowEnd - windowStart);
                     }
                     var qualifying = window.Where(value => value.Item.Type == direction &&
-                        value.Item.Amount >= Threshold(
-                            dayRows, value.Item.Time, direction, thresholdCache)).ToList();
+                        IsQualifying(value.Item, Threshold(
+                            dayRows, value.Item.Time, direction, thresholdCache, stockCode), stockCode)).ToList();
                     if (qualifying.Count < 3 || DirectionPurity(window, direction) < ActivePurity)
                         continue;
+
+                    DateTime previousPreview;
+                    if (!lastConfirmed.ContainsKey(direction) &&
+                        (!lastPreview.TryGetValue(direction, out previousPreview) ||
+                         bucket.Time - previousPreview >= Cooldown))
+                    {
+                        var preview = qualifying.OrderBy(value => value.Item.Time)
+                            .ThenBy(value => value.Index)
+                            .Last().Item;
+                        preview.FundMarker = direction == 2 ? "点火预警" : "砸盘预警";
+                        lastPreview[direction] = bucket.Time;
+                    }
 
                     var firstSecond = TruncateSecond(qualifying[0].Item.Time);
                     int firstBucketIndex;
@@ -179,7 +196,8 @@ namespace THSBigOrder.Analytics
             IEnumerable<IndexedRow> dayRows,
             DateTime eventTime,
             int direction,
-            IDictionary<string, double> cache)
+            IDictionary<string, double> cache,
+            string stockCode)
         {
             var minute = TradingMinute(eventTime);
             var key = eventTime.Date.ToString("yyyyMMdd") + "|" + direction + "|" + minute;
@@ -194,14 +212,36 @@ namespace THSBigOrder.Analytics
                 .Select(value => value.Item.Amount)
                 .OrderBy(value => value)
                 .ToList();
-            var threshold = AbsoluteLargeOrder;
+            var capacityLots = CapacityLots(stockCode);
+            var referencePrice = dayRows.Where(value => value.Item.Type == direction &&
+                    value.Item.Time <= eventTime && value.Item.Price > 0d)
+                .Select(value => value.Item.Price)
+                .DefaultIfEmpty(0d)
+                .Average();
+            var capacityAmount = capacityLots * referencePrice * 100d;
+            var threshold = Math.Max(MinimumOrderAmount,
+                Math.Min(5000000d, capacityAmount * CapacityFraction));
             if (amounts.Count >= 30)
             {
                 var percentileIndex = Math.Max(0, (int)Math.Ceiling(amounts.Count * 0.90d) - 1);
-                threshold = Math.Max(threshold, amounts[percentileIndex]);
+                threshold = Math.Max(threshold,
+                    Math.Min(5000000d, amounts[percentileIndex]));
             }
             cache[key] = threshold;
             return threshold;
+        }
+
+        private static bool IsQualifying(BigOrderItem item, double threshold, string stockCode)
+        {
+            if (item == null || item.Amount < threshold || item.Volume <= 0d) return false;
+            return item.Volume >= CapacityLots(stockCode) * CapacityFraction;
+        }
+
+        private static double CapacityLots(string stockCode)
+        {
+            return !string.IsNullOrWhiteSpace(stockCode) && stockCode.Trim().StartsWith("6", StringComparison.Ordinal)
+                ? 10000d
+                : 6000d;
         }
 
         private static SecondBucket ConfirmationBucket(

@@ -299,19 +299,19 @@ THS detail 数据量小、TTL 短，可继续使用 Asia/Shanghai `cacheDate` �
 
 | 数据 | 时段 | fresh TTL | stale TTL |
 |---|---|---:|---:|
-| THS detail | 交易时段 | 30s | 180s |
+| THS detail | 交易时段 | 3s | 180s |
 | Longhu all-day | 盘前 09:00~09:30 | 60s | 300s |
 | Longhu page | 交易时段 | 10s | 120s |
-| Longhu all-day | 交易时段 | 10s | 300s |
+| Longhu all-day | 交易时段 | 3s | 300s |
 | Longhu all-day | 午间休市 | 60s | 900s |
 | Longhu all-day | 收盘后/周末 | 1800s | 604800s |
 | 合法空结果 | 交易时段 | 5s | 30s |
 
-表中的 stale TTL 是当前时段的刷新/可用性策略窗口，不代表全天快照的物理删除时间。`all-day:v2` 在 L1/L2 统一物理保留 7 天，确保周末、节假日和跨自然日仍能通过 `latest` 找到上一交易日；命中后仍按当前时段、`sessionDate`、`fetchedAt` 和 `uiStale` 决定是否探测、刷新及向客户端标记陈旧。进入 technical stale 后先返回旧值，再由后台单飞刷新，上游失败不得删除完整快照。
+表中的 stale TTL 是当前时段的刷新/可用性策略窗口，不代表全天快照的物理删除时间。`all-day:v2` 在 L1/L2 统一物理保留 7 天，确保周末、节假日和跨自然日仍能通过 `latest` 找到上一交易日；命中后仍按当前时段、`sessionDate`、`fetchedAt` 和 `uiStale` 决定是否探测、刷新及向客户端标记陈旧。交易时段 `prepend-logical` 增量模式下，technical stale 请求会等待一次有界增量刷新并返回合并结果；增量失败才回退旧值，上游失败不得删除完整快照。
 
 第一版不引入交易日历。工作日法定节假日按非交易时段处理：优先返回 `latest` 指向的上一交易日 stale，最多每 60 秒做一次低成本头页探测；空头页不能触发全天冷重建或覆盖 `latest`。
 
-THSBigOrder 当前自动刷新间隔是 6 秒；10 秒 Longhu fresh TTL 可把连续刷新合并为最多约每 10 秒一次头部检查，切换数据源的强制刷新也不会绕过 proxy cache。
+THSBigOrder 当前自动刷新间隔是 3 秒；交易时段 Longhu/THS fresh TTL 同步为 3 秒，stale 请求在增量模式下等待一次最新页合并，不再固定返回一轮旧快照。
 
 完整 Longhu list 可能达到 1~3 MB。第一阶段不引入压缩，使用 BigOrder 专用容量：
 
@@ -421,7 +421,7 @@ ProcessMemory fresh
 2. `Total=17044` 的缓存新增 10 条后，只抓取头页并合并为 17054 条。
 3. `st=500` 上游短页行为不再影响系统，因为内部上游页大小始终为 200。
 4. 两个并发冷请求只执行一次完整 loader。
-5. stale 请求立即返回，后台刷新成功后下次变 fresh。
+5. 增量模式下 stale 请求等待一次有界最新页刷新并返回 fresh；增量失败时保留 stale 快照。
 6. Redis 启动后再断线时仍可退回进程内缓存；proxy 继续工作且不会因 Redis miss 额外放大上游请求。
 7. 上游失败且有 stale 时不清空列表；无 stale 时返回 degraded。
 8. 新交易日不能命中前一日缓存。
@@ -431,7 +431,7 @@ ProcessMemory fresh
 12. fresh 大单状态显示“代理通道: 大单”，不显示“代理降级: 大单”；stale/failed 仍按现有优先级显示。
 13. 周末/节假日读取最近 sessionDate 的 stale，不触发按自然日重复全量分页。
 14. L1 总字节和队列上限生效，构造大量 stock/money 请求不能无界占用内存或排队。
-15. 默认增量模式为 `off`；只有带实测证据时才能启用 `prepend-device-snapshot` 或 `prepend-logical`。
+15. 默认增量模式为 `prepend-logical`；Total 漂移、重叠校验、短页和预算失败时 fail-closed，并回退完整重建或 stale 快照。
 16. 多股票同时 stale 时 Longhu 上游最大并发仍为 1。
 17. 单股短页/Total 漂移不会触发全源 breaker；403/429 等系统性错误会。
 18. 冷 miss、头刷和历史审计共用最多 4 个排队项；大量不同股票 stale 不能产生无界后台队列。

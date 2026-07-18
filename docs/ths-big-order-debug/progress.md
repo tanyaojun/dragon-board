@@ -82,7 +82,7 @@
 
 - proxy 新增 L1/L2 `LayeredProxyCache`、BigOrder 容量上限、Longhu 全局串行有界调度器和结构化 `/api/big-order/longhu/all-day`。
 - Longhu 上游统一使用 POST form、`st=200`、同轮 DeviceID；完整快照校验 `Total`、短页、超量和混合交易日后才写缓存。
-- 默认增量模式保持 `off`，300 秒内不重复 full rebuild；`prepend-device-snapshot` 支持头部 delta + 连续重叠校验。`prepend-logical` 在逻辑偏移合同未完整落地前显式 fail-closed 为 `off`。
+- 默认增量模式已切换为 `prepend-logical`；交易时段 fresh TTL 调整为 3 秒，stale 请求等待一次有界增量并在失败时保留旧快照；完整重建仍受冷却保护。
 - canonical 空结果使用短 TTL empty key，不覆盖最近非空 `latest`；网络/403/429/5xx 连续失败触发 60 秒全源 breaker，45 秒主动预算中止不计入全源失败。
 - THS detail 接入 L1/L2 并返回权威 `sessionDate`；WinForms 使用 proxy-primary，Longhu 聚合客户端 60 秒，普通行情客户端保持 15 秒。
 - WinForms 增加订单出现次数 tracker、可信交易日 scope、re-enable barrier 和单批次 FIFO 语音；首份/切股/切源只建基线。
@@ -93,7 +93,7 @@
 ## 2026-07-17 提交 6982d0d 的 code review 修复轮
 
 - 针对提交 `6982d0d` 的 code review 发现（3 High / 7 Medium / 若干 Low）完成修复：
-  - H1 时段 TTL：新增 `longhuCacheSlot`，落地设计 §7 时段表（交易 10/300、盘前/午间/收盘后半小时 60/900、闭市与周末 1800/604800）；off 模式完整重建冷却分时段（交易 300 秒、闭市 6 小时），消除收盘后每 5 分钟重复全量分页。
+- H1 时段 TTL：新增 `longhuCacheSlot`，落地设计 §7 时段表（交易 3/300、盘前/午间/收盘后半小时 60/900、闭市与周末 1800/604800）；off 模式完整重建冷却分时段（交易 300 秒、闭市 6 小时），消除收盘后每 5 分钟重复全量分页。
   - H2 sessionDate 容错：个别坏行只跳过日期提取，全部行无日期才拒写，与 C# 解析器"跳过个别坏行"合同一致；混合日期仍拒绝。
   - H3 loadPage 完整性：公共分页聚合以 `Total` 为完整性标准，短页低于目标即判截断，分页中 `Total` 变化即失败；不再把短页当末页静默截断。
   - M1 增量节流：头部刷新恢复页间 delayMs、20 秒总预算；`delta+overlap` 超过 10 页直接转受冷却保护的完整重建。
@@ -105,7 +105,7 @@
 - 按修订版设计回退两处与设计冲突的初版修复：不新增旧路由 money allowlist（设计 §5.2/验收 21）；uiStale 交易阈值保持 30 秒（设计 §5.1/验收 20）。
 - 验证：proxy `node --test` 93/93；THSBigOrder.Tests 68/68（新增 last-good 分时段测试）；两个 C# 项目 Release 构建 0 警告 0 错误；`git diff --check` 通过。
 - 已知未实现项已于后续审计收口轮全部补齐，详见下一节；增量模式仍默认 `off`，只有显式配置和实测证据才启用。
-- 已知观察项：THS detail 交易时段 fresh TTL(30s) 等于 uiStale 阈值(30s)，SWR stale 命中会有约每 36 秒一次的短暂"数据陈旧"提示；如需消除可将 THS TTL 降为 15 秒（需同步设计 §7 表），Longhu 主链路(TTL 10s)不受影响。
+- 已处理：THS detail 与 Longhu 交易时段 fresh TTL 均调整为 3 秒；THS stale 保留窗口固定至少 180 秒，避免短 TTL 同步缩短故障回退窗口。
 - 待人工盘中验收（plan Task 8）：冷加载页数、10 秒内重复刷新 0 上游、新单只抓头页、快速切源无迟到覆盖、money≠0 的 `Total` 语义实测。
 
 ## 2026-07-17 运行环境接通与本地永久归档

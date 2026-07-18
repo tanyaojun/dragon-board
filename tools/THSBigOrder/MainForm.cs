@@ -206,7 +206,7 @@ namespace THSBigOrder
             _voiceService = new VoiceService();
 
             _refreshTimer = new System.Windows.Forms.Timer();
-            _refreshTimer.Interval = 6000;
+            _refreshTimer.Interval = 3000;
             _refreshTimer.Tick += RefreshTimer_Tick;
 
             _titleTimer = new System.Windows.Forms.Timer();
@@ -615,7 +615,11 @@ namespace THSBigOrder
                 TotalAmount = snapshot.Stock.TotalAmount ?? 0,
             };
             _allData = snapshot.Orders.ToList();
-            _dataProvider.CalculateMarkers(_allData);
+            var provider = _dataProvider as THSBigOrderDataProvider;
+            if (provider != null)
+                provider.CalculateMarkers(_allData, snapshot.StockCode);
+            else
+                _dataProvider.CalculateMarkers(_allData);
             var newOrders = ObserveAnnouncements(snapshot);
             _allData = _allData.OrderByDescending(item => item.Time).ToList();
             ApplyFilter();
@@ -827,6 +831,8 @@ namespace THSBigOrder
                 var markerTypes = new List<BigOrderAnnouncementType>();
                 if (item.FundMarker == "点火") markerTypes.Add(BigOrderAnnouncementType.Ignite);
                 if (item.FundMarker == "砸盘") markerTypes.Add(BigOrderAnnouncementType.Smash);
+                if (item.FundMarker == "点火预警") markerTypes.Add(BigOrderAnnouncementType.IgnitePreview);
+                if (item.FundMarker == "砸盘预警") markerTypes.Add(BigOrderAnnouncementType.SmashPreview);
                 if (item.BuyMarker == "买活跃") markerTypes.Add(BigOrderAnnouncementType.BuyActive);
                 if (item.BuyMarker == "承接好") markerTypes.Add(BigOrderAnnouncementType.GoodSupport);
                 if (!string.IsNullOrEmpty(_specialFilter))
@@ -842,6 +848,8 @@ namespace THSBigOrder
                 }
                 else if (item.FundMarker == "点火") type = BigOrderAnnouncementType.Ignite;
                 else if (item.FundMarker == "砸盘") type = BigOrderAnnouncementType.Smash;
+                else if (item.FundMarker == "点火预警") type = BigOrderAnnouncementType.IgnitePreview;
+                else if (item.FundMarker == "砸盘预警") type = BigOrderAnnouncementType.SmashPreview;
                 else if (item.BuyMarker == "买活跃") type = BigOrderAnnouncementType.BuyActive;
                 else if (item.BuyMarker == "承接好") type = BigOrderAnnouncementType.GoodSupport;
                 if (type.HasValue)

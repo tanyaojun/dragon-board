@@ -151,7 +151,7 @@ test('cold rebuild reports skipped all-day cache writes but still returns upstre
   assert.ok(warnings.some((message) => message.includes('全天快照缓存写入被跳过')))
 })
 
-test('incremental mode defaults to off', async () => {
+test('incremental mode defaults to prepend-logical', async () => {
   const service = createLonghuBigOrderService({
     plainClient: { post: async () => ({ data: { errcode: '0', Total: 0, List: [] } }) },
     layeredCache: new LayeredProxyCache({
@@ -161,7 +161,7 @@ test('incremental mode defaults to off', async () => {
     delayMs: 0,
     logger: silentLogger,
   })
-  assert.equal(service.incrementalMode, 'off')
+  assert.equal(service.incrementalMode, 'prepend-logical')
 })
 
 test('prepend-logical implements logical offsets while remaining opt-in', async () => {
@@ -479,7 +479,7 @@ test('a failed incremental full rebuild is not attempted again within sixty seco
   const stale = await service.loadAllDay({ stockCode: '002297', money: 0 })
   await new Promise((resolve) => setTimeout(resolve, 30))
   assert.equal(stale.data.Total, 1)
-  assert.equal(refreshCalls.length, 5, 'second head does not start another full rebuild')
+  assert.equal(refreshCalls.length, 5, 'second probe is allowed while full rebuild remains cooled down')
 })
 
 test('prepend-logical applies logical offsets during a multi-page head refresh', async () => {
@@ -601,7 +601,7 @@ test('three network failures open the source breaker for sixty seconds', async (
   assert.equal(calls, 3)
 })
 
-test('stale snapshot returns immediately and refreshes by verified head delta', async () => {
+test('stale snapshot waits for verified head delta and returns fresh data', async () => {
   let now = TRADING_NOW
   let upstreamRows = [row(2), row(1)]
   let calls = 0
@@ -620,26 +620,17 @@ test('stale snapshot returns immediately and refreshes by verified head delta', 
     now: () => now,
     delayMs: 0,
     logger: silentLogger,
-    readConfig: () => 'prepend-device-snapshot',
+    readConfig: () => 'prepend-logical',
   })
 
   await service.loadAllDay({ stockCode: '002297', money: 0 })
   upstreamRows = [row(3), row(2), row(1)]
   now += 11_000
-  const stale = await service.loadAllDay({ stockCode: '002297', money: 0 })
-  assert.equal(stale.cache.stale, true)
-  assert.equal(stale.data.List.length, 2)
-
-  for (let attempt = 0; attempt < 100; attempt++) {
-    await new Promise((resolve) => setTimeout(resolve, 10))
-    const refreshed = await service.loadAllDay({ stockCode: '002297', money: 0 })
-    if (!refreshed.cache.stale && refreshed.data.List.length === 3) {
-      assert.equal(calls, 2)
-      assert.equal(refreshed.refresh.mode, 'cache-hit')
-      return
-    }
-  }
-  assert.fail('incremental background refresh did not complete')
+  const refreshed = await service.loadAllDay({ stockCode: '002297', money: 0 })
+  assert.equal(refreshed.cache.stale, false)
+  assert.equal(refreshed.data.List.length, 3)
+  assert.equal(calls, 2)
+  assert.equal(refreshed.refresh.mode, 'cache-hit')
 })
 
 test('incremental merge preserves legitimate duplicate transactions', async () => {
@@ -767,7 +758,7 @@ test('scheduler serializes jobs and rejects cold misses when its queue is full',
 
 test('cache slot maps trading, lunch and closed windows to design TTLs', () => {
   const trading = longhuCacheSlot(TRADING_NOW)
-  assert.equal(trading.ttlSeconds, 10)
+  assert.equal(trading.ttlSeconds, 3)
   assert.equal(trading.staleTtlSeconds, 300)
   assert.equal(trading.rebuildCooldownMs, 300_000)
 

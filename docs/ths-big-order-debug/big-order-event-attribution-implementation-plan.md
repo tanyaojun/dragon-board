@@ -1,6 +1,6 @@
 # THSBigOrder 高置信事件归因实施计划
 
-**目标：** 用已批准的窗口归因规则替换旧单笔 marker，并保证延迟确认事件只播一次。
+**目标：** 用容量感知、两阶段窗口归因规则替换旧单笔 marker，并保证预警与延迟确认事件各只播一次。
 
 **执行方式：** 当前 `main` 工作区 Inline Execution。保留已有语音、热榜跟随和 UI 改动，不回滚、不做无关格式化；完成验证后按用户要求提交本轮修复。
 
@@ -39,6 +39,8 @@
 - [x] 运行 runner，tracker 新合同断言按预期失败。
 - [x] GREEN：tracker 只统计带 marker 的 `订单指纹 + FundMarker + BuyMarker`；普通订单不进入语音 ledger，已见 marker 最大计数不回退。
 - [x] GREEN：确认窗口必须关闭后才冻结 marker，防止 marker 组合升级导致重复播报。
+- [x] GREEN：按股票代码使用 6 开头 10000 手、其它代码 6000 手容量上限；连续三笔达到动态阈值先产生预警，确认窗口关闭后升级正式 marker。
+- [x] GREEN：WinForms 自动刷新周期调整为 3 秒；移除分时白线上的“数据陈旧”绘制提示。
 - [x] 重跑 runner，Task 3 用例及既有 FIFO 文本测试通过。
 
 ## Task 4：最终验证

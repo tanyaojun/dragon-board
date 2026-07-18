@@ -215,7 +215,7 @@ export function registerBigOrderRoutes(
         `big-order:ths-detail:v2:${new Date(now()).toLocaleDateString('sv-SE', {
           timeZone: 'Asia/Shanghai',
         })}:${stockCode}`,
-        { ttlSeconds, staleTtlSeconds: ttlSeconds * 6 },
+        { ttlSeconds, staleTtlSeconds: Math.max(ttlSeconds * 6, 180) },
         async () => {
           const response = await plainClient.get(buildThsBigOrderUrl(stockCode).toString(), {
             timeout: 15000,

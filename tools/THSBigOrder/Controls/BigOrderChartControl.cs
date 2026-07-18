@@ -317,12 +317,6 @@ namespace THSBigOrder.Controls
             DrawOrderEvents(e.Graphics);
             DrawVolumes(e.Graphics);
             DrawHalfHourAmounts(e.Graphics);
-            if (_snapshot.BigOrderFreshness == DataFreshness.Stale)
-            {
-                using (var font = new Font("Microsoft YaHei UI", 9, FontStyle.Bold))
-                using (var brush = new SolidBrush(Color.FromArgb(255, 184, 77)))
-                    e.Graphics.DrawString("数据陈旧", font, brush, Math.Max(4, _layoutBands[0].Right - 72), 16);
-            }
         }
 
         private void DrawGrid(Graphics graphics)

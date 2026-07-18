@@ -353,6 +353,11 @@ namespace THSBigOrder
             new BigOrderEventDetector().Apply(data);
         }
 
+        public void CalculateMarkers(List<BigOrderItem> data, string stockCode)
+        {
+            new BigOrderEventDetector().Apply(data, stockCode);
+        }
+
         public void Dispose()
         {
             if (_ownsHttpClient) _httpClient?.Dispose();

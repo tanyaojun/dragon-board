@@ -22,9 +22,9 @@ export const PROXY_CACHE_TTLS = {
     stale: 1800,
   },
   bigOrder: {
-    thsDetail: 30,
+    thsDetail: 3,
     longhuPage: 10,
-    longhuAllDay: 10,
+    longhuAllDay: 3,
     longhuEmpty: 5,
   },
   market: {

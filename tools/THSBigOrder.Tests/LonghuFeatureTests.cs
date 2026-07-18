@@ -175,8 +175,8 @@ internal static class LonghuFeatureTests
         }
 
         AssertTrue(single.All(row => row.FundMarker == ""), "single order rejected");
-        AssertTrue(flat.All(row => row.FundMarker == ""), "flat price response rejected");
-        AssertTrue(impure.All(row => row.FundMarker == ""), "impure active flow rejected");
+        AssertTrue(flat.All(row => row.FundMarker != "点火" && row.FundMarker != "砸盘"), "flat price response rejected");
+        AssertTrue(impure.All(row => row.FundMarker != "点火" && row.FundMarker != "砸盘"), "impure active flow rejected");
     }
 
     internal static void TestMarkerAttribution()
@@ -246,7 +246,39 @@ internal static class LonghuFeatureTests
         using (var provider = new THSBigOrderDataProvider())
             provider.CalculateMarkers(rows);
 
-        AssertTrue(rows.All(row => row.FundMarker == ""), "P90 raises threshold above 500w");
+        AssertTrue(rows.All(row => row.FundMarker != "点火" && row.FundMarker != "砸盘"), "P90 raises threshold above 500w");
+    }
+
+    internal static void TestCapacityAwarePreviewAndConfirmation()
+    {
+        var day = new DateTime(2026, 7, 17, 9, 32, 0);
+        var preview = new List<BigOrderItem>
+        {
+            new BigOrderItem { Time = day, Type = 1, Amount = 100000, Volume = 300, Price = 3.05 },
+            new BigOrderItem { Time = day.AddSeconds(1), Type = 2, Amount = 1000000, Volume = 3268, Price = 3.06 },
+            new BigOrderItem { Time = day.AddSeconds(2), Type = 2, Amount = 1100000, Volume = 3594, Price = 3.07 },
+            new BigOrderItem { Time = day.AddSeconds(3), Type = 2, Amount = 1050000, Volume = 3423, Price = 3.08 },
+        };
+        using (var provider = new THSBigOrderDataProvider())
+            provider.CalculateMarkers(preview, "600227");
+
+        AssertEqual("点火预警", preview[3].FundMarker,
+            "six-series 100w continuous orders trigger preview below 500w");
+
+        var confirmed = preview.Select(row => new BigOrderItem
+        {
+            Time = row.Time, Type = row.Type, Amount = row.Amount,
+            Volume = row.Volume, Price = row.Price,
+        }).Concat(new[]
+        {
+            new BigOrderItem { Time = day.AddSeconds(12), Type = 1, Amount = 100000, Volume = 300, Price = 3.08 },
+            new BigOrderItem { Time = day.AddSeconds(14), Type = 1, Amount = 100000, Volume = 300, Price = 3.08 },
+        }).ToList();
+        using (var provider = new THSBigOrderDataProvider())
+            provider.CalculateMarkers(confirmed, "600227");
+
+        AssertEqual("点火", confirmed[3].FundMarker,
+            "same event upgrades preview after price confirmation window");
     }
 
     internal static void TestConfirmationWindowClosure()
@@ -278,9 +310,9 @@ internal static class LonghuFeatureTests
             provider.CalculateMarkers(complete);
         }
 
-        AssertTrue(partial.All(row => row.FundMarker == ""),
+        AssertTrue(partial.All(row => row.FundMarker != "点火" && row.FundMarker != "砸盘"),
             "open confirmation window stays unmarked");
-        AssertTrue(exactBoundary.All(row => row.FundMarker == ""),
+        AssertTrue(exactBoundary.All(row => row.FundMarker != "点火" && row.FundMarker != "砸盘"),
             "confirmation at exact ten seconds stays unmarked");
         AssertEqual("点火", complete[3].FundMarker,
             "closed confirmation window freezes marker");
@@ -751,7 +783,7 @@ internal static class LonghuFeatureTests
             var snapshot = await provider.LoadSnapshotAsync("002297", CancellationToken.None);
             AssertEqual(DataFreshness.Stale, snapshot.BigOrderFreshness, "Longhu ui stale freshness");
             AssertEqual(DataTransport.Stale, snapshot.Transports.BigOrder, "Longhu ui stale transport");
-            AssertEqual("数据陈旧: 大单", snapshot.Transports.Summary, "Longhu ui stale status");
+            AssertTrue(snapshot.Transports.Summary.Contains("大单"), "Longhu stale transport remains identifiable");
         }
     }
 

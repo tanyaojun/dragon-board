@@ -5,7 +5,7 @@ using System.Speech.Synthesis;
 
 namespace THSBigOrder
 {
-    internal enum BigOrderAnnouncementType { Ignite, Smash, BuyActive, GoodSupport }
+    internal enum BigOrderAnnouncementType { Ignite, Smash, IgnitePreview, SmashPreview, BuyActive, GoodSupport }
 
     internal sealed class BigOrderAnnouncement
     {
@@ -74,6 +74,10 @@ namespace THSBigOrder
         {
             switch (type)
             {
+                case BigOrderAnnouncementType.IgnitePreview:
+                    return "点火预警" + FormatAmount(amount);
+                case BigOrderAnnouncementType.SmashPreview:
+                    return "砸盘预警" + FormatAmount(amount);
                 case BigOrderAnnouncementType.Ignite:
                     return "点火" + FormatAmount(amount);
                 case BigOrderAnnouncementType.Smash:
