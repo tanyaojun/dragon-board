@@ -166,6 +166,7 @@ BIG_ORDER_LONGHU_INCREMENTAL_MODE=off | prepend-device-snapshot | prepend-logica
 - 冷启动/完整重建使用固定 DeviceID 且要求 Total 稳定；最多重启 2 次、所有尝试共享 45 秒总预算。
 - 仍不稳定时不写缓存，返回 stale/degraded。
 - 交易时段完整重建最短间隔设为 300 秒，其余请求只返回 stale 并等待下一次受控重建。
+- 非交易时段（收盘后、周末）完整重建最短间隔为 6 小时：闭市数据不再变化，stale 命中不允许整夜重复全量分页；配合收盘后 1800s/604800s TTL，每晚最多 1~2 次自愈性重建。
 - 不得为了“实时”恢复并发分页。
 
 启用任一增量模式后，因完整性失败触发的 full rebuild 也受单 key 60 秒最短间隔保护；默认 `off` 仍使用更保守的 300 秒间隔。
@@ -305,7 +306,7 @@ THS detail 数据量小、TTL 短，可继续使用 Asia/Shanghai `cacheDate` �
 | Longhu all-day | 收盘后/周末 | 1800s | 604800s |
 | 合法空结果 | 交易时段 | 5s | 30s |
 
-TTL 是最大陈旧窗口，不代表每次过期都阻塞刷新。进入 stale 后先返回旧值，再由后台单飞刷新。
+表中的 stale TTL 是当前时段的刷新/可用性策略窗口，不代表全天快照的物理删除时间。`all-day:v2` 在 L1/L2 统一物理保留 7 天，确保周末、节假日和跨自然日仍能通过 `latest` 找到上一交易日；命中后仍按当前时段、`sessionDate`、`fetchedAt` 和 `uiStale` 决定是否探测、刷新及向客户端标记陈旧。进入 technical stale 后先返回旧值，再由后台单飞刷新，上游失败不得删除完整快照。
 
 第一版不引入交易日历。工作日法定节假日按非交易时段处理：优先返回 `latest` 指向的上一交易日 stale，最多每 60 秒做一次低成本头页探测；空头页不能触发全天冷重建或覆盖 `latest`。
 
@@ -315,10 +316,32 @@ THSBigOrder 当前自动刷新间隔是 6 秒；10 秒 Longhu fresh TTL 可把�
 
 - all-day L1：`maxEntries=24`、`maxBytes=96MB`、单 value 最大 8MB。
 - page L1：`maxEntries=128`、`maxBytes=32MB`、单 value 最大 1MB。
-- Redis 单 value 最大 8MB。
+- Redis all-day 单 value 最大 8MB，公共 page 缓存单 value 最大 1MB。
 - `ProcessMemoryCache` 的 `maxBytes/maxValueBytes` 是可选能力，默认 `Infinity`，不改变其它缓存调用方。BigOrder 写入时只执行一次 `Buffer.byteLength(JSON.stringify(value), 'utf8')`，把结果保存在 entry 上；淘汰时直接扣减已记录字节数，不在每次读取时重复序列化。
 - 构建 all-day 时不重复写内部 200 条子页；只有公共 `/main-monitor` 请求才进入 page cache。
 - 超过单 value 上限时仍返回本次数据，但不写对应缓存层并记录诊断。
+
+### 7.1 本地永久归档（2026-07-17 新增需求）
+
+全天快照除 L1/L2 缓存外，作为数据资产永久保存到本地文件；Redis 仍保持"可丢弃、可重建的读缓存"定位，永久资产以磁盘文件为准。
+
+- 落点：`proxy-server/data/big-order/{sessionDate}/{stockCode}.money{money}.json.gz`，内容为 `{sessionDate, stockCode, money, fetchedAt, data:{List,Total,errcode}}` 的 gzip JSON。目录在 `.gitignore` 中，不提交仓库。
+- 触发：完整重建或增量合并成功、快照写入缓存的同一时刻异步归档；不新增守护进程、定时任务或质量门禁（完整性校验已由缓存写入前置条件承担）。
+- 覆盖语义：同一 `{sessionDate, stock, money}` 临时文件 + rename 原子覆盖；收盘后最后一次重建自然成为该股当日终稿。合法空结果和无法解析 sessionDate 的结果不归档。
+- 失败语义：归档失败只记 `[龙虎缓存] 快照归档失败` 日志，绝不影响接口响应和缓存写入。
+- 体量：单股全天 gzip 后约 60~100KB；按每日 20 只股票估算约 1~2MB/天、每年 <0.5GB，可无限期保留。
+- 冷启动回填（2026-07-17 二次补充）：`loadAllDay` 冷 miss 时先读本地归档最近一个交易日快照，命中则以 stale 身份写回 L1/L2 并恢复 `latest` 指针，立即可读；周末回填后 0 上游，工作日按现有 stale/探测机制自然校准。归档缺失或损坏时照旧全量冷重建。
+- QuantBoard 入库（仍是非目标）：不写 MongoDB；将来需要时从归档目录离线导入。
+
+### 7.2 收盘后候选池采集（2026-07-17 新增需求）
+
+覆盖"exe 没有打开查看过的股票"：当日进入候选池/交易池的股票（通常 ≤5 只）收盘后自动采集归档。
+
+- 登记：盘中调用 `POST /api/big-order/longhu/collect-list {stockCodes}` 登记当日清单；六位代码校验、去重、单日上限 20 只，落盘 `data/big-order/collect-list/{date}.json`，proxy 重启不丢。
+- 自动触发：proxy 主进程内 `setInterval(60s).unref()` worker（参照 `eventRadarBackgroundWorker` 先例，不是独立进程），工作日 15:10~16:00 窗口对当日清单逐只执行 `loadAllDay`（走同一调度器、并发 1、同一归档器），每天最多一轮。
+- 手动兜底：`POST /api/big-order/longhu/collect`（可带 stockCodes）立即采集并返回逐只报告；命中缓存时无上游成本，重复执行代价趋近于零。
+- 无质量门禁：采到即归档，单只失败记日志跳过，不重试到死、不阻断。
+- 清单来源接线：候选池自动/手动入池逻辑在 Dragon Board 前端（`src/services/candidate/**`），入池时应调用 collect-list 登记；前端接线为独立改动，接线前可手动登记。
 
 ## 8. 风控保护
 
@@ -434,8 +457,9 @@ ProcessMemory fresh
 ## 13. 非目标
 
 - 不把 Redis 引入 WinForms。
-- 不建立长期大单历史库。
-- 不新增独立守护进程或定时采集器。
+- 不建立线上/数据库形态的大单历史库；全天快照按 §7.1 以本地 gzip 文件永久归档并支持冷启动回填（2026-07-17 需求变更），QuantBoard 入库仍是非目标。
+- 不新增独立守护进程；收盘后候选池采集是 proxy 主进程内的 60 秒 tick worker（§7.2，2026-07-17 需求变更），与 Collector 复盘"集成到主进程"的要求一致。
+- 不做全市场大单采集；采集范围限定当日登记清单，单日上限 20 只。
 - 不并发抓取 Longhu 分页。
 - 不修改 Longhu `tradetype` 业务映射。
 - 不扩大现有语音业务范围为“所有大单均播报”。

@@ -39,6 +39,8 @@ const formalRoutes = [
   'GET  /api/big-order/main-monitor',
   'GET  /api/big-order/all-day',
   'GET  /api/big-order/longhu/all-day',
+  'POST /api/big-order/longhu/collect-list',
+  'POST /api/big-order/longhu/collect',
   'GET  /api/big-order/ths-detail',
   'GET  /api/theme/:id',
   'POST /api/themes/batch',

@@ -89,3 +89,58 @@
 - 修复两个固定日期涨停夹具：向 `ThsLimitUpSourceClient` 注入日期时钟，生产默认系统日期，测试固定日期。
 - 修复腾讯分时 stale 测试的硬编码 6 秒，使其跟随正式 TTL。
 - code review 修复 technical stale/UI stale、full rebuild 冷却、混合日期、正常代理状态颜色、direct 诊断 User-Agent 和本地 last-good 5 分钟上限。
+
+## 2026-07-17 提交 6982d0d 的 code review 修复轮
+
+- 针对提交 `6982d0d` 的 code review 发现（3 High / 7 Medium / 若干 Low）完成修复：
+  - H1 时段 TTL：新增 `longhuCacheSlot`，落地设计 §7 时段表（交易 10/300、盘前/午间/收盘后半小时 60/900、闭市与周末 1800/604800）；off 模式完整重建冷却分时段（交易 300 秒、闭市 6 小时），消除收盘后每 5 分钟重复全量分页。
+  - H2 sessionDate 容错：个别坏行只跳过日期提取，全部行无日期才拒写，与 C# 解析器"跳过个别坏行"合同一致；混合日期仍拒绝。
+  - H3 loadPage 完整性：公共分页聚合以 `Total` 为完整性标准，短页低于目标即判截断，分页中 `Total` 变化即失败；不再把短页当末页静默截断。
+  - M1 增量节流：头部刷新恢复页间 delayMs、20 秒总预算；`delta+overlap` 超过 10 页直接转受冷却保护的完整重建。
+  - M2 历史页审计：搭增量刷新便车，每 5 分钟轮转核对一个历史页，漂移时标 stale 并触发受冷却保护的完整重建；不新增定时器。
+  - M4 页缓存：`big-order:longhu:page:v2` 10s/120s 页缓存落地（L1 128 entries/32MB/1MB，L2 复用 Redis）；sessionDate 用 `latest` 指针解析，指针缺失时退化为上海自然日。
+  - M5 日志：完整重建、后台刷新失败、熔断开启、历史页漂移均有日志；logger 可注入，测试静默。
+  - M7 last-good：`BigOrderLastGoodMaxAge` 分时段（交易 5 分钟、收盘后/周末 12 小时）。
+  - L1 `LoadProxyAsync` 先 `EnsureSuccessStatusCode` 再解析；L2 C# `InferThsSessionDate` 兼容 pricechange 对象/数组两种行形态；L3 服务引用 `PROXY_CACHE_TTLS` 常量。
+- 按修订版设计回退两处与设计冲突的初版修复：不新增旧路由 money allowlist（设计 §5.2/验收 21）；uiStale 交易阈值保持 30 秒（设计 §5.1/验收 20）。
+- 验证：proxy `node --test` 93/93；THSBigOrder.Tests 68/68（新增 last-good 分时段测试）；两个 C# 项目 Release 构建 0 警告 0 错误；`git diff --check` 通过。
+- 已知未实现项已于后续审计收口轮全部补齐，详见下一节；增量模式仍默认 `off`，只有显式配置和实测证据才启用。
+- 已知观察项：THS detail 交易时段 fresh TTL(30s) 等于 uiStale 阈值(30s)，SWR stale 命中会有约每 36 秒一次的短暂"数据陈旧"提示；如需消除可将 THS TTL 降为 15 秒（需同步设计 §7 表），Longhu 主链路(TTL 10s)不受影响。
+- 待人工盘中验收（plan Task 8）：冷加载页数、10 秒内重复刷新 0 上游、新单只抓头页、快速切源无迟到覆盖、money≠0 的 `Total` 语义实测。
+
+## 2026-07-17 运行环境接通与本地永久归档
+
+- 盘中验收发现两条要求实际未生效，根因是运行环境而非代码：
+  - 白天运行的 proxy 是 8:51 启动的修复前版本（staleTtl 300 秒，无 7 天保留代码）。
+  - `.env.local` 缺 `PROXY_REDIS_URL`，本机 Redis（127.0.0.1:6379）空库，L2 从未启用——重演 Collector 复盘教训 #6（环境变量与代码脱节）。
+- 已修复并当场实测：`.env.local` 增加 `PROXY_REDIS_URL=redis://127.0.0.1:6379`，重启 proxy 后 600519 冷重建 7.8 秒完成 7127 行，Redis `all-day:v2` 与 `latest:v1` key TTL 实测 7.00 天；二次请求 0 上游、收盘后档 TTL 1800s 生效。用户随后清理了 `.env.local` 中已弃用的坚果云配置。
+- 新需求（用户 2026-07-17 提出）：把大单全天快照作为数据资产永久保存在本地。方案 A"proxy 写通式归档"已实施：
+  - 新增 `proxy-server/services/bigOrderArchive.js`：快照写缓存同一时刻异步归档 `proxy-server/data/big-order/{sessionDate}/{stock}.money{money}.json.gz`，临时文件+rename 原子覆盖，失败只告警；无守护进程、无定时任务、无新门禁。
+  - `longhuBigOrderCache` 在完整重建和增量合并成功后触发归档；空结果与无 sessionDate 不归档。
+  - 新增 `bigOrderArchive.test.mjs` 6 项测试；`.gitignore` 增加 `proxy-server/data/`。
+  - 文档同步：design 新增 §7.1，§13 非目标改为"不建线上/数据库形态历史库，本地文件归档除外"；plan 文件边界与完成度审计表补第 11 项。
+- 验证：proxy 全量 `node --test` 113/113 通过。
+- 增量门禁探针脚本暂不做；下周一（2026-07-20）用户盘中招呼后再执行实测。
+
+## 2026-07-17 归档回填与收盘后候选池采集
+
+- 用户指出方案 A 两个缺点并确认扩展：① 只归档 exe 查看过的股票；② 冷启动不回填归档。范围决策：采集"当日进入候选池/交易池的股票（一般 ≤5 只）"，收盘后自动触发。
+- 已通读 `docs/candidate-pool/` 全部文档确认口径：入池（自动 V5/Fusion 严格合同 + 手动右键）发生在 Dragon Board 前端，数据源为八平台热榜实时投影；候选记录经 proxy 转发到 QuantBoard journal；目前无任何收盘后自动机制；每日入池个位数，与用户"≤5 只"一致。
+- 缺点 ② 已实现（设计 §7.1 补充）：`loadAllDay` 冷 miss 先读本地归档回填 L1/L2（stale 身份）并恢复 `latest` 指针；周末回填 0 上游有测试锁定；归档缺失照旧冷重建。
+- 缺点 ① 已实现（设计 §7.2）：`bigOrderCollector.js` + `POST /api/big-order/longhu/collect-list`（登记，去重/校验/单日上限 20、落盘防重启丢失）+ `POST /api/big-order/longhu/collect`（手动兜底）+ 主进程内 60 秒 tick worker（工作日 15:10~16:00 每天一轮，`unref()` 不阻塞退出，参照 eventRadar 先例）。无质量门禁，单只失败记日志跳过。
+- 修复一次自伤：路由测试曾经由默认 archiver 读写真实 `data/big-order/` 造成互相污染——archiver/collector 改为可注入，`thsBigOrder.test.mjs` 8 处 app 构造注入 noop，删除被污染的 002297 归档文件（后由真实采集重新生成）。
+- server.js 正式路由清单与 openapi.js 已补两个 POST 端点；设计 §13 非目标同步修订（本地归档+主进程内采集 worker 为明确例外，全市场采集仍禁止）。
+- 验证：proxy 全量 118/118；重启 proxy 后端到端实测——000001 归档回填冷 miss 立即返回（0 上游等待）；collect-list 去重登记；collect 2/2 成功；`data/big-order/2026-07-17/` 已有 000001/002297/600519 三份当日终稿，`collect-list/2026-07-17.json` 落盘。
+- 遗留接线（待用户确认后另行实施，涉及 `src/services/candidate/**`）：前端在自动/手动入池时调用 `POST /api/big-order/longhu/collect-list` 完成全自动闭环；接线前可手动登记。
+
+## 2026-07-17 design / plan 审计收口
+
+- 修复交易时段写入的全天快照只物理保留 300 秒的问题：fresh TTL 仍按时段变化，全天快照 L1/L2 统一保留 7 天，使周末和节假日能通过 `latest` 读取上一交易日 stale；周末不触发重建，工作日旧 session 最多每 60 秒探测一次头页，空头页不覆盖 `latest`。
+- 冷启动固定快照模式在同一 45 秒 `AbortController` 预算内最多执行 3 次完整尝试，每次使用新的 DeviceID；`prepend-logical` 已实现冷启动和多页增量的逻辑偏移，覆盖 Total 增长、下降、单页超过 2 次变化和预算中止。
+- 增量头页及后续页统一按 `Total/index/st=200` 校验完整页，短头页不再被重叠校验误接受；连续 2 次增量完整性失败或交易时段缓存年龄超过 60 秒时触发受 60 秒冷却保护的完整重建。
+- 风控拆为两层：403/429/网络/5xx 连续失败触发全源 60 秒 breaker；短页、Total、日期和重叠完整性失败按 `{stock,money}` 计数，连续 3 次只冷却该 key 60 秒。服务自身 45 秒预算中止只记单 key，不污染全源 breaker。
+- 历史页审计从头刷任务内联调用改为独立 `audit` 队列项，优先级低于 cold/head；重建后等待满 5 分钟才轮转核对，不在冷建完成后立即追加上游请求。
+- Redis 写入新增 per-value 字节上限：all-day 8MB、page 1MB；超限仅跳过对应缓存层写入，不影响本次响应。`dragonMeta.refresh` 补齐 `inProgress/pagesFetched/newRows/total/elapsedMs/incrementFailureCount`，路由 TTL 改为当前时段动态值。
+- WinForms last-good 改为权威 `sessionDate` 匹配：只有同股、同源、同交易日且未超时才复用；日期缺失不保存为跨请求兜底。新增跨日拒绝测试。
+- 增量语音回归补齐同日不同 `DateTime.Kind`、切源/跨日 scope、筛选变化、特殊 marker 覆盖、marker 重算、日期缺失 barrier、关闭期间基线推进和 re-enable 首帧屏障。
+- 自动验证：proxy `npm test` 106/106；C# runner 全部通过；THSBigOrder 独立 Release 验证构建 0 warning / 0 error。人工盘中观察项仍保留为部署验收，不作为代码完成度的替代证据。

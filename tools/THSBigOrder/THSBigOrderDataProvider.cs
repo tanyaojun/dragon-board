@@ -108,16 +108,21 @@ namespace THSBigOrder
             var quote = quoteTask.Result;
             var minute = minuteTask.Result;
             var limit = limitTask.Result;
-            ApplyStaleFallback(
+            var expectedSessionDate = big.Data?.SessionDate ??
+                summary.Data?.SessionDate ??
+                InferMinuteSessionDate(minute.Data);
+            ApplyBigOrderStaleFallback(
                 _bigOrderCache,
                 (useLonghu ? "longhu-orders:" : "ths-orders:") + stockCode,
                 big,
-                TimeSpan.FromMinutes(5));
-            ApplyStaleFallback(
+                expectedSessionDate,
+                BigOrderLastGoodMaxAge(DateTime.Now));
+            ApplyBigOrderStaleFallback(
                 _bigOrderCache,
                 "ths-summary:" + stockCode,
                 summary,
-                TimeSpan.FromMinutes(5));
+                expectedSessionDate,
+                BigOrderLastGoodMaxAge(DateTime.Now));
             ApplyStaleFallback(_quoteCache, stockCode, quote);
             ApplyStaleFallback(_minuteCache, stockCode, minute);
             ApplyStaleFallback(_limitCache, stockCode, limit);
@@ -202,6 +207,16 @@ namespace THSBigOrder
             }
         }
 
+        // 设计 §9：大单 last-good 交易时段最多 5 分钟，收盘后/周末最多 12 小时
+        internal static TimeSpan BigOrderLastGoodMaxAge(DateTime now)
+        {
+            if (now.DayOfWeek == DayOfWeek.Saturday || now.DayOfWeek == DayOfWeek.Sunday)
+                return TimeSpan.FromHours(12);
+            var clock = now.TimeOfDay;
+            var trading = clock >= TimeSpan.FromHours(9) && clock <= TimeSpan.FromHours(15.5);
+            return trading ? TimeSpan.FromMinutes(5) : TimeSpan.FromHours(12);
+        }
+
         private static async Task<SourceLoadResult<T>> LoadProxyPrimaryAsync<T>(
             IMarketSourceClient<T> source, string stockCode, CancellationToken cancellationToken)
         {
@@ -244,6 +259,47 @@ namespace THSBigOrder
                 FetchedAt = value.FetchedAt,
                 Error = value.Error,
             };
+        }
+
+        private static DateTime? InferMinuteSessionDate(
+            IReadOnlyList<MinuteTurnoverPoint> points)
+        {
+            var dates = (points ?? new MinuteTurnoverPoint[0])
+                .Where(point => point != null && point.Time != default(DateTime))
+                .Select(point => point.Time.Date)
+                .Distinct()
+                .ToArray();
+            return dates.Length == 1 ? (DateTime?)dates[0] : null;
+        }
+
+        private static void ApplyBigOrderStaleFallback(
+            IDictionary<string, SourceLoadResult<BigOrderSourceData>> cache,
+            string key,
+            SourceLoadResult<BigOrderSourceData> result,
+            DateTime? expectedSessionDate,
+            TimeSpan maxAge)
+        {
+            if (result == null) return;
+            if (result.Transport == DataTransport.Direct ||
+                result.Transport == DataTransport.ProxyPrimary ||
+                result.Transport == DataTransport.ProxyFallback)
+            {
+                if (result.Data?.SessionDate.HasValue == true)
+                    CacheSuccessful(cache, key, result);
+                return;
+            }
+            SourceLoadResult<BigOrderSourceData> cached;
+            if (result.Transport != DataTransport.Failed ||
+                !expectedSessionDate.HasValue ||
+                !cache.TryGetValue(key, out cached) ||
+                cached.Data?.SessionDate.HasValue != true ||
+                cached.Data.SessionDate.Value.Date != expectedSessionDate.Value.Date ||
+                DateTime.Now - cached.FetchedAt > maxAge)
+                return;
+            result.Data = cached.Data;
+            result.Freshness = DataFreshness.Stale;
+            result.Transport = DataTransport.Stale;
+            result.FetchedAt = cached.FetchedAt;
         }
 
         private static void ApplyStaleFallback<T>(

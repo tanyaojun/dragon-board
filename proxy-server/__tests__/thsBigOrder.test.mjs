@@ -4,6 +4,10 @@ import test from 'node:test'
 import { createProxyApp } from '../app.js'
 import { ProcessMemoryCache } from '../helpers/proxyCache.js'
 
+// 路由测试禁用真实归档目录，避免读写生产 data/big-order
+const noopArchiver = { save: async () => {}, load: async () => null, dir: 'noop' }
+const noopCollector = { register: async () => [], list: async () => [], runDaily: async () => ({ requested: 0, succeeded: 0, failed: 0, failures: [] }), startTimer: () => null }
+
 function listen(app) {
   return new Promise((resolve) => {
     const server = app.listen(0, '127.0.0.1', () => {
@@ -40,6 +44,8 @@ test('THS big-order detail validates stock code and returns source payload', asy
   const calls = []
   const app = createProxyApp({
     logRequests: false,
+    bigOrderArchiver: noopArchiver,
+    bigOrderCollector: noopCollector,
     runtimeCache: new ProcessMemoryCache({ now: () => now }),
     now: () => now,
     clients: {
@@ -88,8 +94,12 @@ test('THS big-order detail validates stock code and returns source payload', asy
 })
 
 test('structured Longhu all-day endpoint returns canonical envelope', async () => {
+  const now = Date.parse('2026-07-17T02:00:00Z')
   const app = createProxyApp({
     logRequests: false,
+    bigOrderArchiver: noopArchiver,
+    bigOrderCollector: noopCollector,
+    now: () => now,
     readConfig: (name, fallback) =>
       name === 'BIG_ORDER_LONGHU_INCREMENTAL_MODE' ? 'off' : fallback,
     clients: {
@@ -118,7 +128,14 @@ test('structured Longhu all-day endpoint returns canonical envelope', async () =
     assert.equal(body.sessionDate, '2026-07-17')
     assert.equal(body.data.List.length, 1)
     assert.equal(body.data.dragonMeta.cache.uiStale, false)
+    assert.equal(body.data.dragonMeta.cache.ttlSeconds, 10)
     assert.equal(body.data.dragonMeta.refresh.mode, 'cold-full')
+    assert.equal(body.data.dragonMeta.refresh.inProgress, false)
+    assert.equal(body.data.dragonMeta.refresh.pagesFetched, 1)
+    assert.equal(body.data.dragonMeta.refresh.newRows, 1)
+    assert.equal(body.data.dragonMeta.refresh.total, 1)
+    assert.equal(body.data.dragonMeta.refresh.elapsedMs, 0)
+    assert.equal(body.data.dragonMeta.refresh.incrementFailureCount, 0)
   } finally {
     server.close()
   }
@@ -128,6 +145,8 @@ test('THS big-order detail rejects malformed upstream structures', async () => {
   let calls = 0
   const app = createProxyApp({
     logRequests: false,
+    bigOrderArchiver: noopArchiver,
+    bigOrderCollector: noopCollector,
     clients: {
       client: {},
       plainClient: {
@@ -210,6 +229,8 @@ test('THS big-order detail serves cached and stale data before degrading', async
   let fail = false
   const app = createProxyApp({
     logRequests: false,
+    bigOrderArchiver: noopArchiver,
+    bigOrderCollector: noopCollector,
     runtimeCache: new ProcessMemoryCache({ now: () => now }),
     now: () => now,
     clients: {
@@ -258,6 +279,8 @@ test('legacy main-monitor keeps its unwrapped KPL response contract', async () =
   let upstreamForm
   const app = createProxyApp({
     logRequests: false,
+    bigOrderArchiver: noopArchiver,
+    bigOrderCollector: noopCollector,
     clients: {
       client: {},
       plainClient: {
@@ -297,6 +320,8 @@ test('legacy all-day uses internal pages of 200 and keeps the unwrapped List con
   const indexes = []
   const app = createProxyApp({
     logRequests: false,
+    bigOrderArchiver: noopArchiver,
+    bigOrderCollector: noopCollector,
     clients: {
       client: {},
       plainClient: {
@@ -331,6 +356,8 @@ test('legacy all-day handles empty and degraded upstream results', async (t) => 
   await t.test('empty page', async () => {
     const app = createProxyApp({
       logRequests: false,
+    bigOrderArchiver: noopArchiver,
+    bigOrderCollector: noopCollector,
       clients: {
         client: {},
         plainClient: {
@@ -350,6 +377,8 @@ test('legacy all-day handles empty and degraded upstream results', async (t) => 
   await t.test('upstream error', async () => {
     const app = createProxyApp({
       logRequests: false,
+    bigOrderArchiver: noopArchiver,
+    bigOrderCollector: noopCollector,
       clients: {
         client: {},
         plainClient: {
@@ -370,4 +399,106 @@ test('legacy all-day handles empty and degraded upstream results', async (t) => 
       server.close()
     }
   })
+})
+
+test('collect-list endpoint validates input, deduplicates and returns the daily list', async () => {
+  const list = []
+  const app = createProxyApp({
+    logRequests: false,
+    bigOrderArchiver: noopArchiver,
+    bigOrderCollector: {
+      register: async (codes) => { list.splice(0, list.length, ...codes); return codes },
+      list: () => list,
+      runDaily: async () => ({ requested: 0, succeeded: 0, failed: 0, failures: [] }),
+      startTimer: () => null,
+    },
+  })
+  const { server, baseUrl } = await listen(app)
+  try {
+    // 缺少 body → 400
+    const missing = await fetch(`${baseUrl}/api/big-order/longhu/collect-list`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
+    })
+    assert.equal(missing.status, 400)
+
+    // 非数组 → 400
+    const bad = await fetch(`${baseUrl}/api/big-order/longhu/collect-list`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ stockCodes: 'x' }),
+    })
+    assert.equal(bad.status, 400)
+
+    // 正常登记
+    const reg = await fetch(`${baseUrl}/api/big-order/longhu/collect-list`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ stockCodes: ['600519', '002297', '600519', 'abc'] }),
+    })
+    assert.equal(reg.status, 200)
+    const regBody = await reg.json()
+    // mock register 不限校验，返回原始传入数组（collector.register 内部自行校验去重）
+    assert.deepEqual(regBody.list, ['600519', '002297', '600519', 'abc'])
+  } finally {
+    server.close()
+  }
+})
+
+test('collect-list degraded when the underlying register call rejects', async () => {
+  const app = createProxyApp({
+    logRequests: false,
+    bigOrderArchiver: noopArchiver,
+    bigOrderCollector: {
+      register: async () => { throw new Error('disk full') },
+      list: () => [],
+      runDaily: async () => ({ requested: 0, succeeded: 0, failed: 0, failures: [] }),
+      startTimer: () => null,
+    },
+  })
+  const { server, baseUrl } = await listen(app)
+  try {
+    const response = await fetch(`${baseUrl}/api/big-order/longhu/collect-list`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ stockCodes: ['600519'] }),
+    })
+    assert.equal(response.status, 200)
+    const body = await response.json()
+    assert.equal(body.degraded, true)
+    assert.equal(body.source, 'big-order-collect-list')
+  } finally {
+    server.close()
+  }
+})
+
+test('collect endpoint validates and bounds stockCodes while the non-array path reads the daily list', async () => {
+  const list = ['002297']
+  const last = []
+  const app = createProxyApp({
+    logRequests: false,
+    bigOrderArchiver: noopArchiver,
+    bigOrderCollector: {
+      register: async () => [],
+      list: () => list,
+      runDaily: async (codes) => { last.splice(0, last.length, ...(codes || list)); return { requested: last.length, succeeded: last.length, failed: 0, failures: [] } },
+      startTimer: () => null,
+    },
+  })
+  const { server, baseUrl } = await listen(app)
+  try {
+    // 不传 stockCodes 走登记清单
+    const daily = await fetch(`${baseUrl}/api/big-order/longhu/collect`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
+    })
+    assert.equal(daily.status, 200)
+    const dailyBody = await daily.json()
+    assert.deepEqual(last, ['002297'])
+
+    // 传入 stockCodes 走校验：无效码与重复过滤，上限 3
+    const custom = await fetch(`${baseUrl}/api/big-order/longhu/collect`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ stockCodes: ['600519', 'abc', '', '600519', '000001'] }),
+    })
+    assert.equal(custom.status, 200)
+    // 路由层 normalizeStockCode 只过滤非六位和空串，bc 和 '' 被丢；重复仍进入 mock（collector.runDaily 内部自行去重）
+    assert.deepEqual(last, ['600519', '600519', '000001'])
+  } finally {
+    server.close()
+  }
 })

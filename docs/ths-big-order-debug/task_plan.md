@@ -9,7 +9,7 @@
 1. 调试复盘可独立说明现象、根因、证据、修复和防回归规则。
 2. Redis 方案明确正常请求入口、缓存 key、TTL、增量刷新、并发合并、stale、熔断和客户端行为。
 3. 方案复用现有 `ProxyRedisCache` / `ProcessMemoryCache`，不把 Redis 依赖引入 WinForms。
-4. 本轮只修改文档，不修改 `tools/THSBigOrder` 或 `proxy-server`。
+4. Redis/语音实施完成后，审计发现的完整性、风控、容量和回归测试缺口全部闭环。
 5. 外部对抗性审计中的每一项都有明确判定，成立项同步进入 design/plan，过程记录不再声称未实际落地的结论。
 6. Redis 增量刷新后，WinForms 语音只播报本次新进入的符合条件大单，不因全天快照重复播报，也不再固定截断为最近两条。
 
@@ -26,13 +26,17 @@
 - [完成] 9. 核验外部对抗性审计并修订 design/plan/关联文档
 - [完成] 10. 核对现有语音调用链，补充增量播报合同、TDD 任务和验收标准
 - [完成] 11. 复核全部待提交 diff，运行文档验证并按明确范围提交
+- [完成] 12. 用失败测试复现完成度审计中的剩余缺口
+- [完成] 13. 补齐 Longhu 缓存完整性、风控、调度、容量与诊断合同
+- [完成] 14. 补齐 WinForms last-good 与增量语音边界测试
+- [待处理] 15. 同步 design/plan/API 文档并运行最终验证和 code review
 
 ## 约束
 
 - 保留现有未提交改动，不覆盖、不回滚、不格式化无关文件。
-- 当前仅归档和设计，不实施 Redis 或语音代码改造。
+- 2026-07-17 用户已明确授权完成 Redis 与语音剩余实现；继续在当前工作区保留并扩展既有未提交 code-review 修复。
 - 不使用破坏性 Git 或批量删除命令。
-- 不修改用户已有的 `proxy-server/helpers/proxyCache.js` 未提交改动。
+- `proxy-server/helpers/proxyCache.js` 已包含本功能的 L1/L2 基线；只修改 BigOrder 单值容量所必需的局部逻辑，不改无关 hotlist TTL/格式。
 - 提交前逐项核对工作区；本地 DLL、EXE 配置、窗口设置和 `.claude/worktrees/` 不纳入提交。
 
 ## Errors Encountered

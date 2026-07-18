@@ -119,7 +119,16 @@ export class ProxyRedisCache {
     }
   }
 
-  async set(key, value, { ttlSeconds, staleTtlSeconds, stale = false } = {}) {
+  async set(
+    key,
+    value,
+    {
+      ttlSeconds,
+      staleTtlSeconds,
+      stale = false,
+      maxValueBytes = Number.POSITIVE_INFINITY,
+    } = {},
+  ) {
     if (!this.redisClient) return false
     const ttl = Math.max(1, Number(ttlSeconds) || 1)
     const staleTtl = Math.max(ttl, Number(staleTtlSeconds) || ttl * 3)
@@ -130,6 +139,9 @@ export class ProxyRedisCache {
       expiresAt: stale ? now - 1 : now + ttl * 1000,
       staleUntil: now + staleTtl * 1000,
     })
+    if (Number.isFinite(maxValueBytes) && Buffer.byteLength(payload, 'utf8') > maxValueBytes) {
+      return false
+    }
     try {
       await this.redisClient.setEx(this.fullKey(key), staleTtl, payload)
       return true

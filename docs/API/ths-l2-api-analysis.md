@@ -173,7 +173,7 @@ C# 工具 `ThsPayloadParser.ParseOrder()` 将 ths-detail 的 `nature` 文本转�
 - 有 `Total` 时不能用 `List.length < st` 作为成功结束条件。
 - 累计数量未达到 `Total` 却出现短页，应判定为截断失败并保留已有完整 stale。
 - 分页必须串行；并发分页实测会触发上游限流或异常。
-- 正式聚合路径使用 POST `application/x-www-form-urlencoded`，单次完整加载复用同一个 DeviceID；当前 proxy 的 GET/逐请求 DeviceID 属于待改造现状。
+- 正式聚合路径已统一使用 POST `application/x-www-form-urlencoded`，单次完整加载复用同一个 DeviceID；旧 GET/逐请求 DeviceID 实现已被替换。
 - `Total≈17044` 时约需 86 页。proxy 同步聚合的完整重建预算为 45 秒，WinForms 对该结构化端点使用独立 60 秒超时；不能继续复用当前共享 15 秒超时。
 - 响应中的 `param` 档位不能证明 API 只接受这些 money 值。旧 proxy 路由保持当前 numeric money 兼容，不新增 allowlist 400；新的 canonical 全天快照端点固定 `money=0`。
 

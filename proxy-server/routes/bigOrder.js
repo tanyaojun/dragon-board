@@ -6,6 +6,8 @@ import {
   PROXY_CACHE_TTLS,
 } from '../helpers/proxyCache.js'
 import { sendBadRequest, sendDegraded } from '../helpers/response.js'
+import { createBigOrderArchiver } from '../services/bigOrderArchive.js'
+import { createBigOrderCollector } from '../services/bigOrderCollector.js'
 import { createLonghuBigOrderService } from '../services/longhuBigOrderCache.js'
 
 const THS_BIG_ORDER_BASE = 'https://vaserviece.10jqka.com.cn/Level2/index.php'
@@ -124,9 +126,18 @@ const THS_FLOW_CACHE_STALE_SECONDS = 300
 
 export function registerBigOrderRoutes(
   app,
-  { plainClient, cache, runtimeCache, readConfig, now = () => Date.now() },
+  {
+    plainClient,
+    cache,
+    runtimeCache,
+    readConfig,
+    now = () => Date.now(),
+    bigOrderArchiver = null,
+    bigOrderCollector = null,
+  },
 ) {
   const thsCache = new LayeredProxyCache({ memoryCache: runtimeCache, redisCache: cache })
+  const archiver = bigOrderArchiver || createBigOrderArchiver()
   const longhuCache = new LayeredProxyCache({
     memoryCache: new ProcessMemoryCache({
       now,
@@ -141,6 +152,55 @@ export function registerBigOrderRoutes(
     layeredCache: longhuCache,
     readConfig,
     now,
+    archiver: archiver,
+    pageCache: new LayeredProxyCache({
+      memoryCache: new ProcessMemoryCache({
+        now,
+        maxEntries: 128,
+        maxBytes: 32 * 1024 * 1024,
+        maxValueBytes: 1024 * 1024,
+      }),
+      redisCache: cache,
+    }),
+  })
+  const collector =
+    bigOrderCollector ||
+    createBigOrderCollector({
+      service: longhuService,
+      dir: archiver.dir,
+      now,
+    })
+  collector.startTimer()
+
+  // 盘中登记"当日进入候选池/交易池"的股票，收盘后 15:10~16:00 自动逐只采集归档
+  app.post('/api/big-order/longhu/collect-list', async (req, res) => {
+    try {
+      const stockCodes = Array.isArray(req.body?.stockCodes) ? req.body.stockCodes : null
+      if (!stockCodes?.length) {
+        return sendBadRequest(res, 'missing_stock_codes', 'stockCodes 必须是非空数组')
+      }
+      const list = await collector.register(stockCodes)
+      return res.json({ ok: true, source: 'big-order-collect-list', list })
+    } catch (error) {
+      console.error('[大单采集清单] 失败:', error.message)
+      return sendDegraded(res, { source: 'big-order-collect-list', error, fallbackData: { list: [] } })
+    }
+  })
+
+  // 手动兜底：立即采集（传 stockCodes 用传入校验后清单，否则用当日登记清单）
+  app.post('/api/big-order/longhu/collect', async (req, res) => {
+    try {
+      // 与 collect-list 一致的 validate + normalize：仅接受六位数字代码，上限 20 只
+      const raw = Array.isArray(req.body?.stockCodes) ? req.body.stockCodes : null
+      const validated = raw
+        ? raw.map((code) => normalizeStockCode(code)).filter(Boolean).slice(0, 20)
+        : null
+      const report = await collector.runDaily(validated)
+      return res.json({ ok: true, source: 'big-order-collect', report })
+    } catch (error) {
+      console.error('[大单采集] 失败:', error.message)
+      return sendDegraded(res, { source: 'big-order-collect', error, fallbackData: null })
+    }
   })
 
   app.get('/api/big-order/ths-detail', async (req, res) => {
@@ -216,7 +276,7 @@ export function registerBigOrderRoutes(
               ageSeconds,
               uiStale: servedAt - result.fetchedAt > uiStaleThresholdMs(servedAt),
               upstreamCalled: !result.cache.hit,
-              ttlSeconds: PROXY_CACHE_TTLS.bigOrder.longhuAllDay,
+              ttlSeconds: result.cache.ttlSeconds,
             },
             refresh: result.refresh,
           },
@@ -357,11 +417,12 @@ export function registerBigOrderRoutes(
       if (!stockCode) {
         return sendBadRequest(res, 'missing_stock_code', '缺少 stockCode 参数')
       }
+      const numericMoney = Number(money) || 0
 
       const payload = await longhuService.loadPage({
         stockCode,
         limit: Math.min(Number(limit) || 100, 500),
-        money: Number(money) || 0,
+        money: numericMoney,
         index: Number(index) || 0,
       })
       res.json(payload)

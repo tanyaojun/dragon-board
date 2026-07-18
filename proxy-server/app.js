@@ -49,6 +49,8 @@ export function createProxyApp(options = {}) {
     now: options.now || (() => Date.now()),
     port,
     localVoice: options.localVoice,
+    bigOrderArchiver: options.bigOrderArchiver,
+    bigOrderCollector: options.bigOrderCollector,
     feishuEventRadar: options.feishuEventRadar,
     eventRadarBackgroundWorker: options.eventRadarBackgroundWorker,
     fetchImpl: options.fetchImpl,

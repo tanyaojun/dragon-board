@@ -192,11 +192,14 @@ namespace THSBigOrder.Parsing
                     CultureInfo.InvariantCulture, DateTimeStyles.None, out explicitDate))
                     return explicitDate.Date;
             }
-            foreach (var row in (payload?["pricechange"] as JArray)?.OfType<JObject>() ??
-                                Enumerable.Empty<JObject>())
+            foreach (var row in (payload?["pricechange"] as JArray) ?? new JArray())
             {
+                // 与 proxy 侧一致：pricechange 行兼容对象 {"1": "..."} 和数组 [.., "..."] 两种形态
+                var raw = row is JObject rowObject
+                    ? (string)rowObject["1"]
+                    : row is JArray rowArray && rowArray.Count > 1 ? (string)rowArray[1] : null;
                 DateTime value;
-                if (DateTime.TryParseExact((string)row["1"], "yyyyMMddHHmm",
+                if (DateTime.TryParseExact(raw, "yyyyMMddHHmm",
                     CultureInfo.InvariantCulture, DateTimeStyles.None, out value))
                     return value.Date;
             }

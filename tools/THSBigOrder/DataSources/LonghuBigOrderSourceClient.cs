@@ -32,9 +32,9 @@ namespace THSBigOrder.DataSources
                 Uri.EscapeDataString(stockCode) + "&money=0"))
             using (var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false))
             {
-                var envelope = JObject.Parse(
-                    await response.Content.ReadAsStringAsync().ConfigureAwait(false));
+                var text = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
                 response.EnsureSuccessStatusCode();
+                var envelope = JObject.Parse(text);
                 if (envelope.Value<bool?>("ok") != true || !(envelope["data"] is JObject data))
                     throw new PayloadParseException(
                         (string)envelope["errorCode"] ?? "Longhu proxy degraded");

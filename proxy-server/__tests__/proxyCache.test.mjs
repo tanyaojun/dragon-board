@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { LayeredProxyCache, ProcessMemoryCache } from '../helpers/proxyCache.js'
+import { LayeredProxyCache, ProcessMemoryCache, ProxyRedisCache } from '../helpers/proxyCache.js'
 
 test('layered cache prefers fresh L2 over stale L1 and backfills L1', async () => {
   let now = 1_750_000_000_000
@@ -54,4 +54,23 @@ test('process memory cache enforces byte limits without breaking reads', async (
   assert.equal(await cache.get('too-large'), null)
   assert.equal(await cache.set('small', '12345', { ttlSeconds: 30 }), true)
   assert.equal((await cache.get('small')).value, '12345')
+})
+
+test('redis cache skips a value larger than the per-write byte limit', async () => {
+  let writes = 0
+  const cache = new ProxyRedisCache({
+    redisClient: {
+      async get() { return null },
+      async setEx() { writes += 1 },
+    },
+  })
+
+  const stored = await cache.set(
+    'large',
+    { payload: 'x'.repeat(100) },
+    { ttlSeconds: 30, staleTtlSeconds: 60, maxValueBytes: 32 },
+  )
+
+  assert.equal(stored, false)
+  assert.equal(writes, 0)
 })

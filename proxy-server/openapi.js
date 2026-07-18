@@ -452,7 +452,20 @@ export function buildOpenApiDocument({ port = 3000 } = {}) {
           },
         ],
       }),
+      '/api/big-order/longhu/collect-list': operation({
+        method: 'post',
+        tag: 'market',
+        summary: '登记当日候选池/交易池股票用于收盘后大单归档',
+        description: '盘中调用登记 stockCodes（六位代码，去重，单日上限 20），收盘后 15:10~16:00 自动逐只采集归档。',
+      }),
+      '/api/big-order/longhu/collect': operation({
+        method: 'post',
+        tag: 'market',
+        summary: '立即执行大单归档采集',
+        description: '传 stockCodes 采集传入清单，否则采集当日登记清单；命中缓存时无上游成本。返回逐只成功/失败报告。',
+      }),
       '/api/theme/{id}': {
+
         get: {
           tags: ['deprecated'],
           summary: '题材详情兼容接口',

@@ -10,6 +10,27 @@
 
 **Tech Stack:** Node.js、Express、Redis 4.x、Node test runner、C# .NET Framework 4.8、Newtonsoft.Json。
 
+## 2026-07-17 完成度审计
+
+下表是本轮复核后的权威状态；下方逐步 checkbox 保留原始 TDD 执行清单，不能用未回填的历史方框否定本表和对应测试证据。
+
+| Task | 状态 | 证据 / 说明 |
+|---|---|---|
+| 1 真实合同 | 自动化合同完成，生产实测门禁保留 | POST、`st=200`、DeviceID、短页/Total/超量/逻辑偏移均有 fixture；prepend-only 的生产启用仍需盘中证据，因此默认 `off`。 |
+| 2 冷启动 | 完成 | 三次尝试共享 45 秒 deadline；稳定快照与 logical offset 均覆盖。 |
+| 3 增量刷新 | 完成 | delta/overlap、短页、连续失败/60 秒年龄重建、独立低优先级审计均覆盖。 |
+| 4 TTL/风控 | 完成 | L1/L2、7 天物理保留、单值上限、源 breaker、单 key 冷却和有界 scheduler 均覆盖。 |
+| 5 结构化端点 | 完成 | canonical envelope、动态 TTL/refresh 诊断和旧路由兼容测试通过。 |
+| 6 THS detail | 完成 | Redis 优先、权威 `sessionDate`、null fail-closed 和 order 日期规范化已覆盖。 |
+| 7 WinForms 缓存入口 | 完成 | proxy-primary、独立 60 秒客户端、同 sessionDate last-good 和跨日拒绝测试通过。 |
+| 8 增量语音 | 完成 | occurrence tracker、FIFO batch、筛选/marker、null/re-enable、切源/跨日/Kind 边界测试通过。 |
+| 9 文档 | 完成 | API、design、plan、OpenAPI 与部署顺序已同步。 |
+| 10 自动验证 | 完成 | `npm test`、C# runner、独立 Release build、diff/link 检查作为最终门禁执行。 |
+| 11 本地永久归档 | 完成（2026-07-17 新增需求） | 设计 §7.1；`bigOrderArchive.js` 写通式归档 + 冷启动回填 + `bigOrderArchive.test.mjs` 11 项测试。 |
+| 12 收盘后候选池采集 | 完成（2026-07-17 新增需求） | 设计 §7.2；`bigOrderCollector.js`（登记/列出/逐只采集/定时worker）+ POST `/collect-list`、`/collect` 端点 + 测试。 |
+
+Task 10 中的“人工盘中验收”是部署后的观察清单：需要真实交易流量和扬声器，不能由 fixture 伪造，也不阻塞代码实施完成。若观察失败，应按新缺陷重新进入 RED→GREEN，而不是把生产门禁自动切到增量模式。
+
 ---
 
 ## 文件边界
@@ -17,6 +38,15 @@
 - Create: `proxy-server/services/longhuBigOrderCache.js`
 
   负责 Longhu 上游 200 条分页、完整重建、增量刷新、校验和熔断。
+- Create: `proxy-server/services/bigOrderArchive.js`
+
+  全天快照本地永久归档（设计 §7.1）：gzip 文件、原子覆盖、失败只告警、冷启动回填。
+- Create: `proxy-server/services/bigOrderCollector.js`
+
+  收盘后候选池采集（设计 §7.2）：登记/列出/逐只采集/定时 worker；无质量门禁，单只失败不阻断。
+- Create: `proxy-server/__tests__/bigOrderArchive.test.mjs`
+
+  覆盖归档写入/回填、原子覆盖、失败语义、服务集成触发和采集登记/执行。
 - Modify: `proxy-server/routes/bigOrder.js`
 
   注册新端点，给 THS detail/旧 Longhu 路由接入缓存服务。

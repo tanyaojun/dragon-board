@@ -71,3 +71,6 @@ quant-board/data/reports/
 
 # Added by code-review-graph
 .code-review-graph/
+
+# BigOrder 大单全天快照本地归档（运行产物不提交）
+proxy-server/data/
