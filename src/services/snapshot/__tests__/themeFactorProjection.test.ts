@@ -215,7 +215,7 @@ describe('theme factor snapshot projection', () => {
           heatScore: null,
           fundScore: null,
           netInflow: null,
-          metadata: { quoteSource: 'tencent', fundSource: 'eastmoney' },
+          metadata: { quoteSource: 'tencent', fundSource: 'ths_l2' },
         },
       ],
     } as any
@@ -227,7 +227,7 @@ describe('theme factor snapshot projection', () => {
         heatScore: null,
         fundScore: null,
         netInflow: null,
-        metadata: expect.objectContaining({ quoteSource: 'tencent', fundSource: 'eastmoney' }),
+        metadata: expect.objectContaining({ quoteSource: 'tencent', fundSource: 'ths_l2' }),
       }),
     ])
   })

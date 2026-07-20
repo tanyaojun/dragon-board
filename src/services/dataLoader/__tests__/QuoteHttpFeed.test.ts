@@ -109,7 +109,11 @@ describe('QuoteHttpFeed', () => {
         ],
       },
     })
-    const feed = new QuoteHttpFeed({ api: { getQuotes }, sleep: async () => undefined })
+    const feed = new QuoteHttpFeed({
+      api: { getQuotes },
+      eastmoneyQuoteEnrichmentEnabled: true,
+      sleep: async () => undefined,
+    })
 
     const result = await feed.fetchFullData(['000001'], true)
 
@@ -152,7 +156,11 @@ describe('QuoteHttpFeed', () => {
       .mockResolvedValueOnce({
         data: { diff: codes.slice(20).map((code) => ({ f12: code, f14: 'test', f62: '200' })) },
       })
-    const feed = new QuoteHttpFeed({ api: { getQuotes }, sleep: async () => undefined })
+    const feed = new QuoteHttpFeed({
+      api: { getQuotes },
+      eastmoneyQuoteEnrichmentEnabled: true,
+      sleep: async () => undefined,
+    })
 
     const result = await feed.fetchFullData(codes, true)
 

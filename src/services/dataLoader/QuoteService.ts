@@ -684,14 +684,13 @@ function pickFinite(primary: unknown, fallback: unknown, preferPositive = false)
 }
 
 function isReliableL2MoneyFlow(quote: QuotePatch): boolean {
+  const source = quote.moneyFlowSource
+  const capSource = quote.capitalFlowSource
   return (
     quote.moneyFlowEstimated === false &&
-    quote.moneyFlowSource === 'qmt_l2' &&
-    (quote.capitalFlowSource === 'broker_l2' || quote.capitalFlowSource === 'official_l2') &&
-    ['zlje', 'zljzb', 'cddje', 'cddjzb'].some((key) => {
-      const value = Number((quote as unknown as Record<string, unknown>)[key])
-      return Number.isFinite(value) && value !== 0
-    })
+    (source === 'ths_l2' ||
+     (source === 'tdx_transaction' && capSource === 'tdx_tick') ||
+     (source === 'qmt_l2' && (capSource === 'broker_l2' || capSource === 'official_l2')))
   )
 }
 

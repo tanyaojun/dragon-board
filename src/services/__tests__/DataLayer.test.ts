@@ -193,6 +193,7 @@ describe('DataLayer money flow source precedence', () => {
     dataLayer.reset()
 
     try {
+      // 先写入低优先级 qmt_l2，再推送高优先级 ths_l2，后者应覆盖前者
       dataLayer.setMergedStocks([
         {
           code: '000001',
@@ -201,9 +202,9 @@ describe('DataLayer money flow source precedence', () => {
           zljzb: 1,
           cddje: 50,
           cddjzb: 0.5,
-          moneyFlowSource: 'ths_l2',
+          moneyFlowSource: 'qmt_l2',
           moneyFlowEstimated: false,
-          capitalFlowSource: 'official_l2',
+          capitalFlowSource: 'broker_l2',
           capitalFlowConfidence: 'high',
         },
       ])
@@ -215,17 +216,17 @@ describe('DataLayer money flow source precedence', () => {
           zljzb: 9,
           cddje: 6000,
           cddjzb: 6,
-          moneyFlowSource: 'qmt_l2',
+          moneyFlowSource: 'ths_l2',
           moneyFlowEstimated: false,
-          capitalFlowSource: 'broker_l2',
+          capitalFlowSource: 'official_l2',
           capitalFlowConfidence: 'high',
         },
       ])
 
       const stock = dataLayer.getStock('000001')
-      expect(stock?.moneyFlowSource).toBe('qmt_l2')
+      expect(stock?.moneyFlowSource).toBe('ths_l2')
       expect(stock?.moneyFlowEstimated).toBe(false)
-      expect(stock?.capitalFlowSource).toBe('broker_l2')
+      expect(stock?.capitalFlowSource).toBe('official_l2')
       expect(stock?.capitalFlowConfidence).toBe('high')
       expect(stock?.zlje).toBe(9000)
       expect(stock?.cddje).toBe(6000)

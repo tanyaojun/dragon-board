@@ -527,16 +527,13 @@ export class ApiService {
    */
   async getQuotes(
     codes: string[],
-    options?: RequestConfig & { source?: 'tencent' | 'eastmoney' | 'sina' | 'thsMoneyFlow' },
+    options?: RequestConfig & { source?: 'tencent' | 'sina' | 'thsMoneyFlow' },
   ): Promise<any> {
     const source = options?.source || 'tencent'
 
     // 根据数据源选择不同的 URL
     let url: string
     switch (source) {
-      case 'eastmoney':
-        url = `/api/quotes/eastmoney?codes=${codes.join(',')}`
-        break
       case 'sina':
         url = `/api/quotes/sina?codes=${codes.join(',')}`
         break

@@ -148,58 +148,6 @@ export class QuoteHttpFeed {
     }), options.onProgress)
   }
 
-  async fetchFromEastMoney(
-    codes: string[],
-    force?: boolean,
-    options: { onProgress?: QuoteBatchProgressCallback } = {},
-  ): Promise<Map<string, any>> {
-    const result = new Map<string, any>()
-    const batchSize = 50
-    const totalBatches = Math.ceil(codes.length / batchSize) || 1
-
-    for (let i = 0; i < codes.length; i += batchSize) {
-      const batch = codes.slice(i, i + batchSize)
-      const response = await this.api.getQuotes(batch, {
-        source: 'eastmoney',
-        force,
-        refresh: force ? '1' : undefined,
-        timeout: 8000,
-        retries: 2,
-      })
-
-      const diff = response?.data?.diff || []
-      diff.forEach((item: any) => {
-        const code = normalizeStockCode(item.f12)
-        result.set(code, {
-          price: parseFloat(item.f2) || 0,
-          change: parseFloat(item.f3) || 0,
-          volume: parseInt(item.f5) || 0,
-          turnover: parseFloat(item.f6) || 0,
-          turnoverRate: parseFloat(item.f8) || 0,
-          pe: parseFloat(item.f9) || 0,
-          pb: parseFloat(item.f23) || 0,
-          volumeRatio: parseFloat(item.f10) || 0,
-          name: item.f14 || '',
-          source: 'eastmoney',
-          totalMV: parseFloat(item.f20) || 0,
-          cirMV: parseFloat(item.f21) || 0,
-        })
-      })
-      options.onProgress?.({
-        source: 'eastmoney',
-        completedBatches: Math.floor(i / batchSize) + 1,
-        totalBatches,
-        completedCodes: Math.min(i + batch.length, codes.length),
-        totalCodes: codes.length,
-      })
-
-      if (i + batchSize < codes.length) {
-        await this.sleep(200)
-      }
-    }
-
-    return result
-  }
 
   private async fetchInBatches(
     codes: string[],

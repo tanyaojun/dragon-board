@@ -16,9 +16,11 @@ from typing import Any, Iterable
 
 import uvicorn
 from fastapi import FastAPI, WebSocket
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from mootdx.quotes import Quotes
 
+from big_order_calculator import BigOrderCalculator, BigOrderConfig
 from l2.qmt_provider import QmtL2Provider
 from tdx_hq_cache import OfficialHQCacheDepthReader
 
@@ -181,7 +183,7 @@ def iso_from_ms(value: int) -> str:
 def is_opening_sampling_window(start: datetime | None = None, end: datetime | None = None) -> bool:
     current = start or datetime.now()
     finished = end or current
-    if current.weekday() >= 5 and finished.weekday() >= 5:
+    if not is_trading_session_now(current) and not is_trading_session_now(finished):
         return False
 
     window_start = 9 * 3600 + 15 * 60
@@ -259,27 +261,27 @@ class OpeningRawQuoteFileSink:
         }
 
 
-A_SHARE_MARKET_HOLIDAY_RANGES = [
-    ("2026-01-01", "2026-01-03"),  # 元旦
-    ("2026-02-15", "2026-02-23"),  # 春节
-    ("2026-04-04", "2026-04-06"),  # 清明节
-    ("2026-05-01", "2026-05-05"),  # 劳动节
-    ("2026-06-19", "2026-06-21"),  # 端午节
-    ("2026-09-25", "2026-09-27"),  # 中秋节
-    ("2026-10-01", "2026-10-07"),  # 国庆节
-]
+def _is_trading_day_cached(date: datetime) -> bool:
+    """基于 mootdx 交易日历判断是否为 A 股交易日，缓存 24 小时避免重复网络请求。"""
+    try:
+        from mootdx.utils.holiday import holiday
 
-
-def _is_ashare_holiday(date: datetime) -> bool:
-    key = date.strftime("%Y-%m-%d")
-    return any(start <= key <= end for start, end in A_SHARE_MARKET_HOLIDAY_RANGES)
+        return not holiday(
+            date=date.strftime("%Y-%m-%d"),
+            format_="%Y-%m-%d",
+            country="中国",
+        )
+    except Exception:
+        pass
+    # 回退：周末一定不是交易日
+    if date.weekday() >= 5:
+        return False
+    return True
 
 
 def is_trading_session_now(now: datetime | None = None) -> bool:
     current = now or datetime.now()
-    if current.weekday() >= 5:
-        return False
-    if _is_ashare_holiday(current):
+    if not _is_trading_day_cached(current):
         return False
 
     hhmm = current.hour * 100 + current.minute
@@ -594,6 +596,10 @@ class BridgeConfig:
     qmt_l2_code_limit: int = env_int("QMT_L2_CODE_LIMIT", 80)
     qmt_l2_poll_interval_ms: int = env_int("QMT_L2_POLL_INTERVAL_MS", 600)
     qmt_l2_require_official: bool = env_bool("QMT_L2_REQUIRE_OFFICIAL", True)
+    big_order_enabled: bool = env_bool("TDX_BIG_ORDER_ENABLED", True)
+    big_order_threshold_wan: float = float(os.getenv("TDX_BIG_ORDER_THRESHOLD_WAN", "100"))
+    big_order_poll_interval_ms: int = env_int("TDX_BIG_ORDER_POLL_INTERVAL_MS", 3000)
+    big_order_codes_per_cycle: int = env_int("TDX_BIG_ORDER_CODES_PER_CYCLE", 30)
 
 
 class TdxL2Bridge:
@@ -623,6 +629,15 @@ class TdxL2Bridge:
         self.tick_fetch_warning_emitted = False
         self.current_quote_batch_size = self.clamp_quote_batch_size(self.config.quote_batch_size)
         self.healthy_fetch_cycles = 0
+        self._manual_server: tuple[str, int] | None = None
+        self.big_order = BigOrderCalculator(
+            BigOrderConfig(
+                threshold_wan=config.big_order_threshold_wan,
+                poll_interval_ms=config.big_order_poll_interval_ms,
+                codes_per_cycle=config.big_order_codes_per_cycle,
+            )
+        ) if config.big_order_enabled else None
+        self._last_big_order_poll_ms = 0
         self.active_server: tuple[str, int] | None = None
         self.l2_probe_cursor = 0
         self.qmt_l2_provider = (
@@ -1518,6 +1533,9 @@ class TdxL2Bridge:
     def candidate_servers(self) -> list[tuple[str, int]]:
         candidates: list[tuple[str, int]] = []
 
+        if self._manual_server:
+            candidates.append(self._manual_server)
+
         if self.config.l2_required:
             candidates.extend(self.l2_candidate_servers())
 
@@ -1739,6 +1757,106 @@ class TdxL2Bridge:
             "logFile": LOG_FILE_PATH,
         }
 
+    def scan_tdx_servers(self) -> list[dict[str, Any]]:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        from mootdx.consts import HQ_HOSTS
+        from tdxpy.constants import hq_hosts
+
+        all_hosts = list(hq_hosts) + list(HQ_HOSTS)
+        active_addr = f"{self.active_server[0]}:{self.active_server[1]}" if self.active_server else ""
+
+        results: list[dict[str, Any]] = []
+
+        def _probe(name: str, ip: str, port: int) -> dict[str, Any]:
+            import socket
+
+            entry: dict[str, Any] = {
+                "name": name, "ip": ip, "port": port,
+                "tcpMs": None, "quoteOk": False, "isActive": False,
+            }
+            # TCP test
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(0.7)
+                t0 = time.perf_counter()
+                sock.connect((ip, port))
+                entry["tcpMs"] = round((time.perf_counter() - t0) * 1000, 1)
+                sock.close()
+            except Exception:
+                return entry
+
+            # Quote test
+            try:
+                from tdxpy.hq import TdxHq_API
+
+                api = TdxHq_API(heartbeat=False, auto_retry=False, raise_exception=False)
+                api.connect(ip, port, time_out=3)
+                probe_result = api.get_security_quotes(
+                    [(0, self.config.probe_symbol)]
+                )
+                api.close()
+                if probe_result and len(probe_result) > 0:
+                    entry["quoteOk"] = True
+            except Exception:
+                pass
+
+            return entry
+
+        with ThreadPoolExecutor(max_workers=30) as pool:
+            futures = {
+                pool.submit(_probe, name, ip, port): (name, ip, port)
+                for name, ip, port in all_hosts
+            }
+            for future in as_completed(futures):
+                entry = future.result()
+                if active_addr and entry["ip"] == self.active_server[0] and entry["port"] == self.active_server[1]:
+                    entry["isActive"] = True
+                results.append(entry)
+
+        # Sort: active first, then quote-OK, then TCP-reachable, then unreachable
+        def _sort_key(e: dict[str, Any]) -> tuple[int, float]:
+            if e["isActive"]:
+                return (0, 0)
+            if e["quoteOk"]:
+                return (1, e.get("tcpMs") or 9999)
+            if e.get("tcpMs") is not None:
+                return (2, e["tcpMs"])
+            return (3, 9999)
+
+        results.sort(key=_sort_key)
+        return results
+
+    def select_tdx_server(self, ip: str, port: int) -> dict[str, Any]:
+        import json as _json
+
+        from mootdx.consts import CONFIG as MOOTDX_CONFIG
+        from mootdx.utils import get_config_path
+
+        config_path = get_config_path("config.json")
+        try:
+            with open(config_path, "r", encoding="utf-8") as fh:
+                cfg = _json.load(fh)
+        except Exception:
+            cfg = dict(MOOTDX_CONFIG)
+
+        cfg.setdefault("BESTIP", {})["HQ"] = [ip, port]
+        with open(config_path, "w", encoding="utf-8") as fh:
+            _json.dump(cfg, fh, indent=2, ensure_ascii=False)
+
+        self._manual_server = (ip, port)
+        logger.info("TDX server switched to %s:%s via UI, triggering reconnect", ip, port)
+        asyncio.create_task(self._reconnect_after_selection(ip, port))
+
+        return {"ok": True, "ip": ip, "port": port}
+
+    async def _reconnect_after_selection(self, ip: str, port: int) -> None:
+        await self.reset_client()
+        self.active_server = (ip, port)
+        self.full_state_requested = True
+        self.healthy_fetch_cycles = 0
+        self.current_quote_batch_size = self.clamp_quote_batch_size(self.config.quote_batch_size)
+
     def monitor_html(self) -> str:
         status = self.status_snapshot()
         status_json = json.dumps(status, ensure_ascii=False, indent=2)
@@ -1795,6 +1913,12 @@ class TdxL2Bridge:
             title="TDX Bridge Monitor API",
             version="1.0.0",
             description="通达信行情桥运行状态、健康检查和 WebSocket 行情入口。",
+        )
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=["*"],
+            allow_methods=["*"],
+            allow_headers=["*"],
         )
 
         @app.get("/", include_in_schema=False)
@@ -1959,6 +2083,45 @@ class TdxL2Bridge:
                     "setAt": self._backend_pool_ts,
                 }
             )
+
+        @app.get("/api/tdx-servers", summary="扫描 TDX 行情服务器列表")
+        async def tdx_servers() -> JSONResponse:
+            servers = await asyncio.to_thread(self.scan_tdx_servers)
+            return JSONResponse({
+                "ok": True,
+                "servers": servers,
+                "activeServer": (
+                    {"ip": self.active_server[0], "port": self.active_server[1]}
+                    if self.active_server else None
+                ),
+                "serverTs": now_ms(),
+            })
+
+        @app.get("/api/calendar", summary="A股交易日历")
+        async def calendar(date: str = "") -> JSONResponse:
+            try:
+                target = datetime.strptime(date, "%Y-%m-%d") if date else datetime.now()
+            except ValueError:
+                target = datetime.now()
+            return JSONResponse({
+                "ok": True,
+                "isTradingDay": _is_trading_day_cached(target),
+                "isTradingSession": is_trading_session_now(target),
+                "date": target.strftime("%Y-%m-%d"),
+                "serverTs": now_ms(),
+            })
+
+        @app.post("/api/tdx-servers/select", summary="切换 TDX 行情服务器")
+        async def tdx_servers_select(body: dict[str, Any]) -> JSONResponse:
+            ip = str(body.get("ip", "")).strip()
+            port = int(body.get("port", 0))
+            if not ip or not port:
+                return JSONResponse(
+                    {"ok": False, "error": "ip and port required"},
+                    status_code=400,
+                )
+            result = self.select_tdx_server(ip, port)
+            return JSONResponse(result)
 
         @app.websocket(self.config.path)
         async def quotes_socket(websocket: WebSocket) -> None:
@@ -2297,6 +2460,7 @@ class TdxL2Bridge:
         )
 
     async def poll_loop(self) -> None:
+        _last_big_order_date = ""
         while not self.stop_event.is_set():
             cycle_started = now_ms()
             pool = self.aggregate_pool()
@@ -2306,6 +2470,13 @@ class TdxL2Bridge:
                 continue
 
             cycle_started_dt = datetime.now().astimezone()
+            # 交易日切换时清空大单累加器
+            if self.big_order:
+                today_str = cycle_started_dt.strftime("%Y%m%d")
+                if _last_big_order_date and today_str != _last_big_order_date:
+                    self.big_order.daily_cleanup()
+                    logger.info("big_order daily cleanup for %s -> %s", _last_big_order_date, today_str)
+                _last_big_order_date = today_str
             try:
                 quotes, depth, quote_stats = await self.fetch_quotes_and_depth(pool)
                 forced_opening_sample = is_opening_sampling_window(cycle_started_dt, datetime.now().astimezone())
@@ -2319,7 +2490,36 @@ class TdxL2Bridge:
                 self.latest_quote_stats = quote_stats
                 self.last_quote_cycle_ts = now_ms()
                 self.last_quote_error = ""
-                qmt_depth, qmt_ticks, money_flow = await self.fetch_qmt_l2_snapshot(pool)
+                # --- TDX 大单资金流（主源，盘后低频率拉取当日历史数据） ---
+                big_order_frames: list[dict[str, Any]] = []
+                if self.big_order and self.quote_client is not None:
+                    now_cycle = now_ms()
+                    interval = (
+                        self.big_order.config.poll_interval_ms
+                        if is_trading_session_now()
+                        else 30000
+                    )
+                    if now_cycle - self._last_big_order_poll_ms >= interval:
+                        self._last_big_order_poll_ms = now_cycle
+                        try:
+                            tdx_api = getattr(self.quote_client, "client", None)
+                            if tdx_api is not None:
+                                frames = await asyncio.to_thread(
+                                    self.big_order.fetch_and_update, tdx_api, pool
+                                )
+                                big_order_frames = [f.to_dict() for f in frames]
+                        except Exception as exc:
+                            logger.debug("big_order fetch skipped: %s", exc)
+                # TDX 大单为主源
+                money_flow = big_order_frames
+                # --- QMT L2 仅补十档深度+逐笔，资金流以 TDX 为准 ---
+                qmt_depth, qmt_ticks, qmt_money_flow = await self.fetch_qmt_l2_snapshot(pool)
+                # QMT 资金流仅补漏（TDX 没覆盖的股票）
+                if qmt_money_flow:
+                    covered = {item["code"] for item in money_flow}
+                    for qf in qmt_money_flow:
+                        if qf["code"] not in covered:
+                            money_flow.append(qf)
                 if qmt_depth:
                     depth_by_code = {item["code"]: item for item in depth}
                     for item in qmt_depth:

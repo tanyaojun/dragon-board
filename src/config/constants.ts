@@ -191,7 +191,6 @@ export const API_CONFIG = {
     // 行情数据（3000）
     QUOTES: {
       TENCENT: '/api/quotes/tencent',
-      EASTMONEY: '/api/quotes/eastmoney',
       SINA: '/api/quotes/sina',
     },
     // 涨停数据（3000）

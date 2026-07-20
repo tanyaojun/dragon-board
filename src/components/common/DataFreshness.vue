@@ -8,26 +8,33 @@
     </span>
 
     <div v-if="showDetails" class="freshness-details" @click.stop>
-      <div v-if="realtimeSubscribedStocks.length" class="subscription-section">
+      <div class="subscription-section">
         <div class="section-header">
-          <span class="section-title">TDX 热榜订阅 ({{ realtimeSubscribedStocks.length }})</span>
-          <span class="section-badge" :class="statusClassName">{{ statusText }}</span>
+          <span class="section-title">TDX 行情IP ({{ tdxServers.length }})</span>
+          <button class="scan-btn" @click="refreshServers" :disabled="scanning">
+            {{ scanning ? '扫描中...' : '重新扫描' }}
+          </button>
         </div>
 
-        <div class="stock-list">
-          <div v-for="stock in realtimeSubscribedStocks" :key="stock.code" class="stock-item">
-            <div class="stock-info">
-              <div class="stock-name-line">
-                <span class="stock-name">{{ stock.name }}</span>
-                <span v-if="stock.isPriority" class="signal-pill">买+🔱</span>
+        <div class="server-list">
+          <div
+            v-for="srv in visibleServers"
+            :key="`${srv.ip}:${srv.port}`"
+            class="server-item"
+            :class="{ 'server-active': srv.isActive, 'server-selectable': srv.quoteOk && !srv.isActive }"
+            @click="selectServer(srv)"
+          >
+            <div class="server-info">
+              <div class="server-name-line">
+                <span class="server-name">{{ srv.name }}</span>
+                <span v-if="srv.isActive" class="active-pill">当前</span>
               </div>
-              <span class="stock-code">{{ stock.code }}</span>
+              <span class="server-addr">{{ srv.ip }}:{{ srv.port }}</span>
             </div>
-            <div class="stock-price">
-              <span class="price">{{ stock.price.toFixed(2) }}</span>
-              <span class="change" :class="stock.change >= 0 ? 'up' : 'down'">
-                {{ stock.change > 0 ? '+' : '' }}{{ stock.change.toFixed(2) }}%
-              </span>
+            <div class="server-status">
+              <span v-if="srv.quoteOk" class="status-ok">✅ {{ srv.tcpMs }}ms</span>
+              <span v-else-if="srv.tcpMs" class="status-tcp">⚠️ TCP {{ srv.tcpMs }}ms</span>
+              <span v-else class="status-down">❌</span>
             </div>
           </div>
         </div>
@@ -98,7 +105,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { dataLayer } from '@/services/DataLayer'
 import { RefreshManager } from '@/services/RefreshManager'
 import { webSocketService } from '@/services/websocket'
@@ -118,6 +125,17 @@ const startupCacheState = ref<{
   updatedAt: number
 } | null>(null)
 const STARTUP_CACHE_REFRESHING_TIMEOUT_MS = 30000
+const tdxServers = ref<TdxServer[]>([])
+const scanning = ref(false)
+
+interface TdxServer {
+  name: string
+  ip: string
+  port: number
+  tcpMs: number | null
+  quoteOk: boolean
+  isActive: boolean
+}
 
 let clickOutsideHandler: ((event: MouseEvent) => void) | null = null
 let updateTimer: ReturnType<typeof setInterval> | null = null
@@ -425,6 +443,45 @@ const handleTick = (payload: any) => {
   }
 }
 
+const visibleServers = computed(() => {
+  return tdxServers.value.slice(0, 20)
+})
+
+const refreshServers = async () => {
+  scanning.value = true
+  try {
+    const resp = await fetch('http://127.0.0.1:8765/api/tdx-servers')
+    const data = await resp.json()
+    if (data.servers) {
+      tdxServers.value = data.servers
+    }
+  } catch (err) {
+    console.warn('[DataFreshness] 获取 TDX 服务器列表失败:', err)
+  } finally {
+    scanning.value = false
+  }
+}
+
+const selectServer = async (srv: TdxServer) => {
+  if (srv.isActive || !srv.quoteOk) return
+  try {
+    const resp = await fetch('http://127.0.0.1:8765/api/tdx-servers/select', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ip: srv.ip, port: srv.port }),
+    })
+    const data = await resp.json()
+    if (data.ok) {
+      tdxServers.value = tdxServers.value.map((s) => ({
+        ...s,
+        isActive: s.ip === srv.ip && s.port === srv.port,
+      }))
+    }
+  } catch (err) {
+    console.warn('[DataFreshness] 切换 TDX 服务器失败:', err)
+  }
+}
+
 const manualRefresh = async () => {
   EventManager.emit(AppEvents.UI.TOAST, {
     message: '正在刷新数据...',
@@ -477,6 +534,12 @@ onMounted(() => {
   unsubscribeFns.push(EventManager.on(AppEvents.WEBSOCKET.HEARTBEAT, updateStatus))
   unsubscribeFns.push(EventManager.on(AppEvents.WEBSOCKET.TICK, handleTick))
   unsubscribeFns.push(EventManager.on(AppEvents.DATA.MERGED, handleDataMerged))
+
+  watch(showDetails, async (val) => {
+    if (val && !tdxServers.value.length) {
+      await refreshServers()
+    }
+  })
 })
 
 onUnmounted(() => {
@@ -696,86 +759,123 @@ onUnmounted(() => {
   color: #e67e22;
 }
 
-.stock-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-bottom: 10px;
+.scan-btn {
+  padding: 2px 10px;
+  border: 1px solid var(--color-highlight);
+  border-radius: 12px;
+  background: transparent;
+  color: var(--color-highlight);
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.2s;
 }
 
-.stock-item {
+.scan-btn:hover:not(:disabled) {
+  background: var(--color-highlight);
+  color: #000;
+}
+
+.scan-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.server-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 10px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.server-item {
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: 8px;
-  padding: 8px 9px;
+  padding: 7px 9px;
   background: var(--bg-secondary);
   border-radius: 6px;
   font-size: 12px;
+  border: 1px solid transparent;
+  transition: all 0.15s;
 }
 
-.stock-info {
+.server-selectable {
+  cursor: pointer;
+}
+
+.server-selectable:hover {
+  border-color: var(--color-highlight);
+  background: var(--bg-primary);
+}
+
+.server-active {
+  border-color: #2ecc71;
+  background: rgba(46, 204, 113, 0.08);
+}
+
+.server-info {
   display: flex;
   flex-direction: column;
   min-width: 0;
   flex: 1;
 }
 
-.stock-name-line {
+.server-name-line {
   display: flex;
   align-items: center;
   gap: 6px;
   min-width: 0;
 }
 
-.stock-name {
+.server-name {
   font-weight: 600;
   color: var(--text-primary);
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-size: 12px;
 }
 
-.stock-code {
+.server-addr {
   font-size: 10px;
   color: var(--text-secondary);
   font-family: monospace;
 }
 
-.signal-pill {
+.active-pill {
   flex-shrink: 0;
   padding: 1px 6px;
   border-radius: 999px;
-  background: rgba(255, 107, 107, 0.14);
-  color: #ff6b6b;
+  background: rgba(46, 204, 113, 0.14);
+  color: #2ecc71;
   font-size: 10px;
   font-weight: 700;
 }
 
-.stock-price {
+.server-status {
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  min-width: 70px;
-}
-
-.price {
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.change {
+  align-items: center;
+  min-width: 80px;
+  justify-content: flex-end;
   font-size: 11px;
+}
+
+.status-ok {
+  color: #2ecc71;
+  font-weight: 600;
+}
+
+.status-tcp {
+  color: #e67e22;
   font-weight: 500;
 }
 
-.change.up {
-  color: #ff4757;
-}
-
-.change.down {
-  color: #2ed573;
+.status-down {
+  color: #e74c3c;
 }
 
 .recent-tick {

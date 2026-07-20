@@ -1,8 +1,13 @@
 // src/utils/time.ts
-import { Lunar } from 'lunar-javascript'
+// A 股交易日历 — 优先从通达信行情桥获取真实交易日历，不可用时回退到简单工作日判断。
+// 所有交易时段相关的纯时间窗口判断（集合竞价、午休等）保持不变，只替换"哪天是交易日"这一层。
 
-const A_SHARE_MARKET_HOLIDAY_RANGES = [
-  // 2026 年 A 股休市安排按上交所 2025-12-22 公告维护。
+const BRIDGE_CALENDAR_URL = 'http://127.0.0.1:8765/api/calendar'
+const dateCalendarCache = new Map<string, boolean>()
+const pendingFetches = new Map<string, Promise<boolean | null>>()
+
+// 硬编码假期列表仅作为桥不可达时的回退，真实交易日历以桥的 mootdx holiday 模块为准
+const FALLBACK_HOLIDAY_RANGES: [string, string][] = [
   ['2026-01-01', '2026-01-03'],
   ['2026-02-15', '2026-02-23'],
   ['2026-04-04', '2026-04-06'],
@@ -10,38 +15,87 @@ const A_SHARE_MARKET_HOLIDAY_RANGES = [
   ['2026-06-19', '2026-06-21'],
   ['2026-09-25', '2026-09-27'],
   ['2026-10-01', '2026-10-07'],
-] as const
+]
 
-function toLocalDateKey(date: Date): string {
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
+function isFallbackHoliday(date: Date): boolean {
+  const key = dateKey(date)
+  return FALLBACK_HOLIDAY_RANGES.some(([start, end]) => key >= start && key <= end)
 }
 
-function isAshareMarketHoliday(date: Date): boolean {
-  const key = toLocalDateKey(date)
-  return A_SHARE_MARKET_HOLIDAY_RANGES.some(([start, end]) => key >= start && key <= end)
+function dateKey(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
 }
 
-export const isAshareTradingDay = (date: Date = new Date()): boolean => {
+async function fetchCalendarForDate(dateStr: string): Promise<boolean | null> {
+  try {
+    const resp = await fetch(`${BRIDGE_CALENDAR_URL}?date=${encodeURIComponent(dateStr)}`)
+    if (!resp.ok) return null
+    const data = await resp.json()
+    if (typeof data?.isTradingDay === 'boolean') {
+      return data.isTradingDay
+    }
+  } catch {
+    // bridge 不可达
+  }
+  return null
+}
+
+function queryCalendarForDate(date: Date): boolean {
+  const key = dateKey(date)
+
+  // 缓存命中直接返回
+  const cached = dateCalendarCache.get(key)
+  if (cached !== undefined) return cached
+
+  // 发起异步请求（不阻塞同步返回）
+  if (!pendingFetches.has(key)) {
+    const promise = fetchCalendarForDate(key).then((result) => {
+      pendingFetches.delete(key)
+      if (result !== null) {
+        dateCalendarCache.set(key, result)
+      }
+      return result
+    })
+    pendingFetches.set(key, promise)
+  }
+
+  // 回退：周末 + 硬编码假期列表（仅桥不可达时）
   const day = date.getDay()
   if (day === 0 || day === 6) return false
-  if (isAshareMarketHoliday(date)) return false
-  if (isHoliday(date)) return false
+  if (isFallbackHoliday(date)) return false
   return true
 }
 
-export const isTradingTime = (date: Date = new Date()): boolean => {
-  const minutes = date.getHours() * 60 + date.getMinutes()
+/** 判断指定日期是否为 A 股交易日（优先桥日历，回退周末检查） */
+export const isAshareTradingDay = (date: Date = new Date()): boolean => {
+  const key = dateKey(date)
+  const cached = dateCalendarCache.get(key)
+  if (cached !== undefined) return cached
 
+  return queryCalendarForDate(date)
+}
+
+/** 判断当前是否在 A 股交易时段内（含集合竞价和盘后） */
+export const isTradingTime = (date: Date = new Date()): boolean => {
   if (!isAshareTradingDay(date)) return false
 
-  // A 股交易时段，含集合竞价、连续竞价和盘后固定价格交易。
+  const minutes = date.getHours() * 60 + date.getMinutes()
+  // 早盘：9:15–11:30（含集合竞价）
   if (minutes >= 9 * 60 + 15 && minutes <= 11 * 60 + 30) return true
+  // 下午：13:00–15:30（含盘后固定价格交易）
   if (minutes >= 13 * 60 && minutes <= 15 * 60 + 30) return true
 
   return false
+}
+
+/** 手动刷新交易日历缓存（bridge 重连后调用） */
+export const refreshCalendar = async (): Promise<void> => {
+  dateCalendarCache.clear()
+  const key = dateKey(new Date())
+  const result = await fetchCalendarForDate(key)
+  if (result !== null) {
+    dateCalendarCache.set(key, result)
+  }
 }
 
 export type TradingStatus =
@@ -68,92 +122,35 @@ export const getTradingStatus = (date: Date = new Date()): TradingStatus => {
 
   const minutes = date.getHours() * 60 + date.getMinutes()
 
-  // 未开盘：交易日 9:15 之前
   if (minutes < 9 * 60 + 15) return 'pre_market'
-
-  // 早盘集合竞价：9:15-9:25
   if (minutes >= 9 * 60 + 15 && minutes <= 9 * 60 + 25) return 'call_auction'
-
-  // 早盘连续竞价 / 开盘匹配期：9:25-11:30
   if (minutes > 9 * 60 + 25 && minutes <= 11 * 60 + 30) return 'trading'
-
-  // 午间休市：11:30-13:00
   if (minutes > 11 * 60 + 30 && minutes < 13 * 60) return 'lunch_break'
-
-  // 下午连续竞价（含 14:57-15:00 收盘集合竞价）：13:00-15:00
   if (minutes >= 13 * 60 && minutes <= 15 * 60) return 'trading'
-
-  // 盘后固定价格交易（科创板/创业板）：15:00-15:30
   if (minutes > 15 * 60 && minutes <= 15 * 60 + 30) return 'after_hours'
-
-  // 已收盘：交易日 15:30 之后
   return 'closed'
 }
 
-/**
- * 判断是否为法定节假日
- */
-function isHoliday(date: Date): boolean {
-  const lunar = Lunar.fromDate(date)
-  const year = date.getFullYear()
-  const month = date.getMonth() + 1
-  const day = date.getDate()
-
-  // 元旦 1月1日
-  if (month === 1 && day === 1) return true
-
-  // 劳动节 5月1日
-  if (month === 5 && day === 1) return true
-
-  // 清明节（4月4日或5日）
-  if (month === 4 && (day === 4 || day === 5)) return true
-
-  // 端午节（农历五月初五）
-  if (lunar.getMonth() === 5 && lunar.getDay() === 5) return true
-
-  // 中秋节（农历八月十五）
-  if (lunar.getMonth() === 8 && lunar.getDay() === 15) return true
-
-  // 春节（农历正月初一，放假7天）
-  if (lunar.getMonth() === 1 && lunar.getDay() === 1) {
-    const chunjieDate = lunar.getSolarDate()
-    const diffDays = Math.floor((date.getTime() - chunjieDate.getTime()) / (1000 * 60 * 60 * 24))
-    // 除夕到初六
-    if (diffDays >= -1 && diffDays <= 6) return true
-  }
-
-  // 国庆节 10月1日-7日
-  if (month === 10 && day >= 1 && day <= 7) return true
-
-  return false
-}
-
-/**
- * 判断是否为早盘集合竞价时间（9:15–9:25）
- * 上交所/深交所/北交所开盘集合竞价，可申报不可撤单（9:20 后不可撤单）
- */
+/** 早盘集合竞价时间 9:15–9:25 */
 export const isOpeningAuction = (): boolean => {
   const now = new Date()
   const time = now.getHours() * 100 + now.getMinutes()
   return time >= 915 && time <= 925
 }
 
-/**
- * 判断是否为收盘集合竞价时间（14:57–15:00）
- * 深市/沪市收盘集合竞价，仅可申报不可撤单
- */
+/** 收盘集合竞价时间 14:57–15:00 */
 export const isClosingAuction = (): boolean => {
   const now = new Date()
   const time = now.getHours() * 100 + now.getMinutes()
   return time >= 1457 && time <= 1500
 }
 
-/**
- * 判断是否为盘后固定价格交易时间（15:00–15:30）
- * 仅科创板（STAR Market）和创业板（ChiNext）有效，主板不适用
- */
+/** 盘后固定价格交易 15:00–15:30 */
 export const isAfterHoursFixedPrice = (): boolean => {
   const now = new Date()
   const time = now.getHours() * 100 + now.getMinutes()
   return time >= 1500 && time <= 1530
 }
+
+// 启动时预拉日历
+queryCalendarForDate(new Date())

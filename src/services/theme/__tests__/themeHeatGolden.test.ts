@@ -47,7 +47,7 @@ describe('theme heat market golden consumer contract', () => {
     const summary = toHotThemeSummary(power, apiPower)
     const factors = fixture.expected.factors.map((factor: any) => ({
       ...factor,
-      metadata: { ...factor.metadata, quoteSource: 'tencent', fundSource: 'eastmoney' },
+      metadata: { ...factor.metadata, quoteSource: 'tencent', fundSource: 'ths_l2' },
     }))
     const rows = buildSnapshotSectorRows(record(), { themeHeatFactors: factors } as any)
     const powerRow = rows.find((row) => row.entityKey === 'POWER')
@@ -59,7 +59,7 @@ describe('theme heat market golden consumer contract', () => {
       heatScore: 19,
       fundScore: null,
       mainNetInflow: null,
-      metadata: expect.objectContaining({ quoteSource: 'tencent', fundSource: 'eastmoney' }),
+      metadata: expect.objectContaining({ quoteSource: 'tencent', fundSource: 'ths_l2' }),
     })
   })
 })

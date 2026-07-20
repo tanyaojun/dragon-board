@@ -14,7 +14,6 @@
   },
   "dependencies": {
     "echarts": "^5.5.0",
-    "lunar-javascript": "^1.7.7",
     "pinia": "^2.1.0",
     "pinyin-pro": "^3.19.0",
     "uuid": "^14.0.0",
