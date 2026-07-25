@@ -176,7 +176,7 @@ def _enrich_stock_rows_from_quotes(
             estimated = bool(mf.get("moneyFlowEstimated", source == "estimated_l1"))
             row["moneyFlowSource"] = source
             row["moneyFlowEstimated"] = estimated
-            row["capitalFlowSource"] = source
+            row["capitalFlowSource"] = str(mf.get("capitalFlowSource") or source)
             row["capitalFlowConfidence"] = str(
                 mf.get("capitalFlowConfidence") or ("low" if estimated else "unknown")
             )

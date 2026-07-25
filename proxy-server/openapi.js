@@ -248,27 +248,6 @@ export function buildOpenApiDocument({ port = 3000 } = {}) {
         summary: '腾讯行情',
         parameters: codesQuery,
       }),
-      '/api/quotes/tencent/minute': operation({
-        method: 'get',
-        tag: 'quotes',
-        summary: '腾讯个股分钟分时',
-        description: '返回结构化分钟价格、累计成交量和累计成交额。',
-        parameters: [
-          {
-            name: 'code',
-            in: 'query',
-            required: true,
-            schema: { type: 'string', pattern: '^\\d{6}$', example: '002297' },
-          },
-        ],
-      }),
-      '/api/quotes/eastmoney': operation({
-        method: 'get',
-        tag: 'quotes',
-        summary: '东方财富行情与主力资金',
-        description: '启用 Redis read-through TTL 缓存和 stale fallback。',
-        parameters: codesQuery,
-      }),
       '/api/quotes/sina': operation({
         method: 'get',
         tag: 'quotes',
@@ -365,22 +344,6 @@ export function buildOpenApiDocument({ port = 3000 } = {}) {
         method: 'get',
         tag: 'market',
         summary: '同花顺涨停列表',
-      }),
-      '/api/big-order/ths-detail': operation({
-        method: 'get',
-        tag: 'market',
-        summary: '同花顺大单明细',
-        description: '代理同花顺 Level2 mainMonitorDetail；使用 L1 进程缓存 + L2 Redis，并返回权威 sessionDate。上游不可用且无 stale 数据时仍返回 HTTP 200 degraded envelope。',
-        parameters: [
-          {
-            name: 'stockCode',
-            in: 'query',
-            required: true,
-            schema: { type: 'string', pattern: '^\\d{6}$', example: '002297' },
-            description: '六位 A 股股票代码',
-          },
-        ],
-        responseSchema: { $ref: '#/components/schemas/BigOrderEnvelope' },
       }),
       '/api/limitup/detail': operation({
         method: 'get',

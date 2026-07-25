@@ -317,7 +317,7 @@ export function getThemeStocks(
       reason: dataLayer.getStockReason?.(code) || stock.reason || '',
       speed: stock.speed || 0,
       volumeRatio: stock.volumeRatio || 0,
-      mainNetInflow: stock.zlje || 0,
+      mainNetInflow: Number.isFinite(stock.zlje) ? stock.zlje : null,
       leadTimes: stock.leadTimes || 0,
       leadStatus: stock.leadStatus || '',
       bigMoney300: stock.bigMoney300 || 0,

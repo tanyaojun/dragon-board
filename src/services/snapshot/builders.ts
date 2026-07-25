@@ -147,11 +147,14 @@ function finiteNumberOrNull(value: unknown): number | null | undefined {
   return finiteNumberOrUndefined(value)
 }
 
-function compactThemeFactorMetadata(payload: Record<string, any>): Record<string, any> | undefined {
+function compactThemeFactorMetadata(
+  payload: Record<string, any>,
+  includesFormalFunds = true,
+): Record<string, any> | undefined {
   const factorKeys = [
     'momentumScore',
     'breadthScore',
-    'fundScore',
+    ...(includesFormalFunds ? ['fundScore'] : []),
     'leadershipScore',
     'correlationScore',
     'crowdingRisk',
@@ -167,10 +170,22 @@ function compactThemeFactorMetadata(payload: Record<string, any>): Record<string
   return Object.keys(themeFactor).length > 0 ? { themeFactor } : undefined
 }
 
-function buildSectorMetadata(payload: Record<string, any>): Record<string, any> | null {
+function buildSectorMetadata(
+  payload: Record<string, any>,
+  includesFormalFunds = true,
+): Record<string, any> | null {
+  const sourceMetadata = clonePlainObject(payload.metadata as Record<string, any> | null) || {}
+  if (!includesFormalFunds) {
+    delete sourceMetadata.fundSource
+    delete sourceMetadata.moneyFlowSource
+    if (sourceMetadata.themeFactor && typeof sourceMetadata.themeFactor === 'object') {
+      delete sourceMetadata.themeFactor.fundScore
+      if (!Object.keys(sourceMetadata.themeFactor).length) delete sourceMetadata.themeFactor
+    }
+  }
   const metadata = {
-    ...(clonePlainObject(payload.metadata as Record<string, any> | null) || {}),
-    ...(compactThemeFactorMetadata(payload) || {}),
+    ...sourceMetadata,
+    ...(compactThemeFactorMetadata(payload, includesFormalFunds) || {}),
   }
   return Object.keys(metadata).length > 0 ? metadata : null
 }
@@ -322,6 +337,19 @@ function resolveL2Summary(context: SnapshotBuildContext | undefined, stock: any)
   }
 }
 
+function hasRuntimeThsFunds(stock: any): boolean {
+  const metadata = stock?.metadata && typeof stock.metadata === 'object' ? stock.metadata : {}
+  return [
+    stock?.moneyFlowSource,
+    stock?.money_flow_source,
+    stock?.fundSource,
+    stock?.capitalFlowSource,
+    stock?.capital_flow_source,
+    metadata.fundSource,
+    metadata.moneyFlowSource,
+  ].includes('ths_main_monitor')
+}
+
 export function buildSnapshotHotlistItem(
   stock: any,
   index: number,
@@ -332,6 +360,7 @@ export function buildSnapshotHotlistItem(
   // 后续 QuantBoard 研究链路、复盘、导出都默认依赖这套字段。
   const l2Summary = resolveL2Summary(context, stock)
   const depth10 = cloneDepth10Book(context?.depth10ByCode?.get?.(stock?.code))
+  const includesFormalFunds = !hasRuntimeThsFunds(stock)
 
   return {
     code: stock.code,
@@ -348,18 +377,20 @@ export function buildSnapshotHotlistItem(
     turnoverRate: stock.turnoverRate,
     totalMV: stock.totalMV,
     cirMV: stock.cirMV,
-    zlje: stock.zlje,
-    zljzb: stock.zljzb,
-    cddje: stock.cddje,
-    cddjzb: stock.cddjzb,
-    moneyFlowSource: stock.moneyFlowSource,
-    moneyFlowEstimated: stock.moneyFlowEstimated,
-    capitalFlowSource: stock.capitalFlowSource,
-    capitalFlowConfidence: stock.capitalFlowConfidence,
-    money_flow_source: stock.moneyFlowSource,
-    money_flow_estimated: stock.moneyFlowEstimated,
-    capital_flow_source: stock.capitalFlowSource,
-    capital_flow_confidence: stock.capitalFlowConfidence,
+    ...(includesFormalFunds ? {
+      zlje: stock.zlje,
+      zljzb: stock.zljzb,
+      cddje: stock.cddje,
+      cddjzb: stock.cddjzb,
+      moneyFlowSource: stock.moneyFlowSource,
+      moneyFlowEstimated: stock.moneyFlowEstimated,
+      capitalFlowSource: stock.capitalFlowSource,
+      capitalFlowConfidence: stock.capitalFlowConfidence,
+      money_flow_source: stock.moneyFlowSource,
+      money_flow_estimated: stock.moneyFlowEstimated,
+      capital_flow_source: stock.capitalFlowSource,
+      capital_flow_confidence: stock.capitalFlowConfidence,
+    } : {}),
     pe: stock.pe,
     pb: stock.pb,
     volumeRatio: stock.volumeRatio,
@@ -706,6 +737,7 @@ export function buildSnapshotStockRows(
       const signalColumns = getCompactSignalColumns(item, sourceStock)
       const themes = toThemeRefs(item.themes)
       const primaryTheme = primaryThemeRef(themes)
+      const includesFormalFunds = !hasRuntimeThsFunds(item)
       return {
         id: `${record.id}:${item.code}`,
         snapshotId: record.id,
@@ -729,18 +761,26 @@ export function buildSnapshotStockRows(
         turnoverRate: Number(item.turnoverRate) || 0,
         totalMV: Number(item.totalMV) || 0,
         cirMV: Number(item.cirMV) || 0,
-        zlje: Number(item.zlje) || 0,
-        zljzb: Number(item.zljzb) || 0,
-        cddje: Number(item.cddje) || 0,
-        cddjzb: Number(item.cddjzb) || 0,
-        moneyFlowSource: item.moneyFlowSource,
-        moneyFlowEstimated: item.moneyFlowEstimated,
-        capitalFlowSource: item.capitalFlowSource,
-        capitalFlowConfidence: item.capitalFlowConfidence,
-        money_flow_source: item.money_flow_source ?? item.moneyFlowSource,
-        money_flow_estimated: item.money_flow_estimated ?? item.moneyFlowEstimated,
-        capital_flow_source: item.capital_flow_source ?? item.capitalFlowSource,
-        capital_flow_confidence: item.capital_flow_confidence ?? item.capitalFlowConfidence,
+        zlje: includesFormalFunds ? Number(item.zlje) || 0 : 0,
+        zljzb: includesFormalFunds ? Number(item.zljzb) || 0 : 0,
+        cddje: includesFormalFunds ? Number(item.cddje) || 0 : 0,
+        cddjzb: includesFormalFunds ? Number(item.cddjzb) || 0 : 0,
+        moneyFlowSource: includesFormalFunds ? item.moneyFlowSource : undefined,
+        moneyFlowEstimated: includesFormalFunds ? item.moneyFlowEstimated : undefined,
+        capitalFlowSource: includesFormalFunds ? item.capitalFlowSource : undefined,
+        capitalFlowConfidence: includesFormalFunds ? item.capitalFlowConfidence : undefined,
+        money_flow_source: includesFormalFunds
+          ? item.money_flow_source ?? item.moneyFlowSource
+          : undefined,
+        money_flow_estimated: includesFormalFunds
+          ? item.money_flow_estimated ?? item.moneyFlowEstimated
+          : undefined,
+        capital_flow_source: includesFormalFunds
+          ? item.capital_flow_source ?? item.capitalFlowSource
+          : undefined,
+        capital_flow_confidence: includesFormalFunds
+          ? item.capital_flow_confidence ?? item.capitalFlowConfidence
+          : undefined,
         pe: Number(item.pe) || 0,
         pb: Number(item.pb) || 0,
         depth10: cloneDepth10Book(item.depth10),
@@ -798,6 +838,7 @@ function buildSectorRow(
   payload: Record<string, any>,
 ): SnapshotSectorRow {
   const themeFactor = getThemeFactorPayload(payload)
+  const includesFormalFunds = !hasRuntimeThsFunds(payload)
   return {
     id: `${record.id}:${entityType}:${entityKey}`,
     snapshotId: record.id,
@@ -818,25 +859,29 @@ function buildSectorRow(
     ),
     heatLevel: typeof payload.heatLevel === 'string' ? payload.heatLevel : undefined,
     change: Number(payload.change) || 0,
-    mainNetInflow: finiteNumberOrNull(
-      Object.prototype.hasOwnProperty.call(payload, 'mainNetInflow')
-        ? payload.mainNetInflow
-        : payload.netInflow,
-    ),
+    mainNetInflow: includesFormalFunds
+      ? finiteNumberOrNull(
+          Object.prototype.hasOwnProperty.call(payload, 'mainNetInflow')
+            ? payload.mainNetInflow
+            : payload.netInflow,
+        )
+      : undefined,
     bigMoney300: Number(payload.bigMoney300) || 0,
     institutionBuy: Number(payload.institutionBuy) || 0,
     volumeRatio: Number(payload.volumeRatio) || 0,
     ztCount: Number(payload.ztCount) || 0,
     leaderCount: Number(payload.leaderCount) || 0,
     persistentDays: Number(payload.persistentDays) || 0,
-    netInflow: finiteNumberOrNull(
-      Object.prototype.hasOwnProperty.call(payload, 'netInflow')
-        ? payload.netInflow
-        : payload.mainNetInflow,
-    ),
+    netInflow: includesFormalFunds
+      ? finiteNumberOrNull(
+          Object.prototype.hasOwnProperty.call(payload, 'netInflow')
+            ? payload.netInflow
+            : payload.mainNetInflow,
+        )
+      : undefined,
     momentumScore: finiteNumberOrUndefined(themeFactor.momentumScore),
     breadthScore: finiteNumberOrUndefined(themeFactor.breadthScore),
-    fundScore: finiteNumberOrNull(themeFactor.fundScore),
+    fundScore: includesFormalFunds ? finiteNumberOrNull(themeFactor.fundScore) : undefined,
     leadershipScore: finiteNumberOrUndefined(themeFactor.leadershipScore),
     correlationScore: finiteNumberOrUndefined(themeFactor.correlationScore),
     crowdingRisk: finiteNumberOrUndefined(themeFactor.crowdingRisk),
@@ -846,7 +891,7 @@ function buildSectorRow(
     themeQualityFlags: Array.isArray(themeFactor.qualityFlags)
       ? clonePlainObject(themeFactor.qualityFlags as any)
       : [],
-    metadata: buildSectorMetadata(payload),
+    metadata: buildSectorMetadata(payload, includesFormalFunds),
   }
 }
 

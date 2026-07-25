@@ -1,6 +1,9 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiHttpError } from '@/services/apiService'
+import { realtimeSubscriptionRegistry } from '@/services/realtime/RealtimeSubscriptionRegistry'
+import { AppEvents } from '@/types'
+import { EventManager } from '@/utils/eventManager'
 import { ThemeHeatFeed } from '../ThemeHeatFeed'
 import type { ThemeHeatApiSnapshot } from '../types'
 
@@ -103,6 +106,10 @@ describe('ThemeHeatFeed', () => {
     }
   })
 
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
   it('keeps nullable audit factors separate from runtime factors', async () => {
     const feed = new ThemeHeatFeed(api as any)
 
@@ -146,6 +153,8 @@ describe('ThemeHeatFeed', () => {
   })
 
   it('loads and caches normalized theme stock details', async () => {
+    const setFundOwnerCodes = vi.spyOn(realtimeSubscriptionRegistry, 'setFundOwnerCodes')
+    const clearFundOwner = vi.spyOn(realtimeSubscriptionRegistry, 'clearFundOwner')
     const feed = new ThemeHeatFeed(api as any)
 
     const first = await feed.loadThemeStocks('AI', { limit: 40 })
@@ -154,5 +163,36 @@ describe('ThemeHeatFeed', () => {
     expect(first).toEqual(second)
     expect(first[0]).toMatchObject({ code: '000001', role: 'follower', qualityFlags: [] })
     expect(api.getThemeHeatStocks).toHaveBeenCalledTimes(1)
+    expect(setFundOwnerCodes).not.toHaveBeenCalled()
+
+    feed.clear()
+    expect(clearFundOwner).not.toHaveBeenCalled()
+  })
+
+  it('patches cached theme stocks immediately and debounces one factor refresh', async () => {
+    vi.useFakeTimers()
+    const feed = new ThemeHeatFeed(api as any)
+    await feed.loadThemeStocks('AI')
+    api.getThemeHeat.mockClear()
+
+    EventManager.emit(AppEvents.WEBSOCKET.QUOTE_PATCH, {
+      items: [
+        { code: '000001', zlje: 88, version: 2, moneyFlowSource: 'ths_main_monitor' },
+      ],
+    })
+
+    expect((await feed.loadThemeStocks('AI'))[0].mainNetInflow).toBe(88)
+    expect(api.getThemeHeat).not.toHaveBeenCalled()
+
+    await vi.advanceTimersByTimeAsync(300)
+    expect(api.getThemeHeat).toHaveBeenCalledTimes(1)
+
+    EventManager.emit(AppEvents.WEBSOCKET.QUOTE_PATCH, {
+      items: [
+        { code: '000001', zlje: 1, version: 1, moneyFlowSource: 'ths_main_monitor' },
+      ],
+    })
+    expect((await feed.loadThemeStocks('AI'))[0].mainNetInflow).toBe(88)
+    feed.destroy()
   })
 })

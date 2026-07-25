@@ -1,11 +1,20 @@
+import asyncio
 import os
 import sys
+import threading
 import time
 import unittest
+from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from main import BridgeConfig, QuoteFetchStats, TdxL2Bridge, normalize_code
+from main import (
+    BridgeConfig,
+    QuoteFetchStats,
+    TdxL2Bridge,
+    normalize_code,
+    resolve_minute_session_date,
+)
 from fastapi.testclient import TestClient
 
 
@@ -14,6 +23,163 @@ class QuoteSnapshotApiTest(unittest.TestCase):
         self.bridge = TdxL2Bridge(BridgeConfig())
         self.app = self.bridge.create_app()
         self.client = TestClient(self.app)
+
+    def test_bridge_has_no_dashboard_money_flow_runtime(self):
+        self.assertFalse(hasattr(self.bridge, "set_money_flow_pool"))
+        self.assertFalse(hasattr(self.bridge, "aggregate_money_flow_pool"))
+        self.assertFalse(hasattr(self.bridge, "get_accumulated_money_flow"))
+        self.assertFalse(hasattr(self.bridge, "big_order"))
+
+    def test_calendar_reports_unavailable_without_guessing(self):
+        with patch("main._is_trading_day_cached", return_value=None):
+            response = self.client.get("/api/calendar?date=2026-07-25")
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()["errorCode"], "tdx_calendar_unavailable")
+        self.assertIsNone(response.json()["isTradingDay"])
+
+    def test_minute_session_date_uses_today_during_session_and_completed_date_off_session(self):
+        session = __import__("datetime").datetime(2026, 7, 24, 10, 0).astimezone()
+        before_open = __import__("datetime").datetime(2026, 7, 24, 9, 0).astimezone()
+        weekend = __import__("datetime").datetime(2026, 7, 25, 10, 0).astimezone()
+
+        with patch("main._is_trading_day_cached", side_effect=lambda value: value.date().isoformat() == "2026-07-24"), patch(
+            "main.latest_completed_trading_date",
+            return_value=__import__("datetime").datetime(2026, 7, 23).astimezone(),
+        ):
+            self.assertEqual(resolve_minute_session_date(session), ("20260724", False))
+            self.assertEqual(resolve_minute_session_date(before_open), ("20260723", True))
+            self.assertEqual(resolve_minute_session_date(weekend), ("20260723", True))
+
+    def test_minute_endpoint_uses_public_mootdx_api_under_fetch_lock(self):
+        class TrackingLock:
+            entered = False
+
+            async def __aenter__(self):
+                self.entered = True
+
+            async def __aexit__(self, exc_type, exc, tb):
+                self.entered = False
+
+        lock = TrackingLock()
+
+        class FakeQuoteClient:
+            def minutes(self, *, symbol, date):
+                self.symbol = symbol
+                self.date = date
+                assert lock.entered
+                return [
+                    {"price": 10.0, "vol": 2},
+                    {"price": 10.5, "vol": 3},
+                ]
+
+        quote_client = FakeQuoteClient()
+        self.bridge.quote_client = quote_client
+        self.bridge.fetch_lock = lock
+
+        with patch("main.resolve_minute_session_date", return_value=("20260724", False)):
+            response = self.client.get("/api/quotes/minute?code=002297")
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()["data"]
+        self.assertEqual(quote_client.symbol, "002297")
+        self.assertEqual(quote_client.date, "20260724")
+        self.assertEqual(data["date"], "20260724")
+        self.assertFalse(data["complete"])
+        self.assertFalse(data["expectedComplete"])
+        self.assertEqual(data["points"][0]["cumulativeVolume"], 2)
+        self.assertEqual(data["points"][0]["cumulativeAmount"], 2000)
+        self.assertEqual(data["points"][1]["cumulativeAmount"], 5150)
+
+    def test_minute_endpoint_marks_incomplete_completed_session_without_padding(self):
+        class FakeQuoteClient:
+            def minutes(self, *, symbol, date):
+                del symbol, date
+                return [{"price": 10.0, "vol": 2}]
+
+        self.bridge.quote_client = FakeQuoteClient()
+        with patch("main.resolve_minute_session_date", return_value=("20260724", True)):
+            response = self.client.get("/api/quotes/minute?code=002297")
+
+        data = response.json()["data"]
+        self.assertTrue(data["expectedComplete"])
+        self.assertFalse(data["complete"])
+        self.assertEqual(len(data["points"]), 1)
+
+    def test_minute_endpoint_marks_240_point_completed_session_complete(self):
+        class FakeQuoteClient:
+            def minutes(self, *, symbol, date):
+                del symbol, date
+                return [{"price": 10.0, "vol": 2} for _ in range(240)]
+
+        self.bridge.quote_client = FakeQuoteClient()
+        with patch("main.resolve_minute_session_date", return_value=("20260724", True)):
+            response = self.client.get("/api/quotes/minute?code=002297")
+
+        data = response.json()["data"]
+        self.assertTrue(data["expectedComplete"])
+        self.assertTrue(data["complete"])
+        self.assertEqual(len(data["points"]), 240)
+
+    def test_minute_endpoint_rejects_negative_volume(self):
+        class FakeQuoteClient:
+            def minutes(self, *, symbol, date):
+                del symbol, date
+                return [{"price": 10.0, "vol": -1}]
+
+        self.bridge.quote_client = FakeQuoteClient()
+        with patch("main.resolve_minute_session_date", return_value=("20260724", False)):
+            response = self.client.get("/api/quotes/minute?code=002297")
+
+        self.assertEqual(response.status_code, 500)
+        self.assertFalse(response.json()["ok"])
+        self.assertIn("invalid minute row", response.json()["error"])
+
+    def test_minute_and_quote_fetches_do_not_enter_tdx_client_together(self):
+        guard = threading.Lock()
+        active = 0
+        peak = 0
+
+        class FakeQuoteClient:
+            @staticmethod
+            def _track():
+                nonlocal active, peak
+                with guard:
+                    active += 1
+                    peak = max(peak, active)
+                time.sleep(0.03)
+                with guard:
+                    active -= 1
+
+            def minutes(self, *, symbol, date):
+                del symbol, date
+                self._track()
+                return [{"price": 10.0, "vol": 1}]
+
+            def quotes(self, *, symbol):
+                self._track()
+                return [
+                    {"code": code, "price": 10.0, "last_close": 9.5, "amount": 1000, "volume": 1}
+                    for code in symbol
+                ]
+
+        self.bridge.quote_client = FakeQuoteClient()
+        self.bridge.tdx_connected = True
+        minute_endpoint = next(
+            route.endpoint for route in self.app.routes if route.path == "/api/quotes/minute"
+        )
+
+        async def fetch_both():
+            return await asyncio.gather(
+                minute_endpoint(code="002297"),
+                self.bridge.fetch_quotes_and_depth(["002297"]),
+            )
+
+        with patch("main.resolve_minute_session_date", return_value=("20260724", False)):
+            minute_response, _ = asyncio.run(fetch_both())
+            self.assertEqual(minute_response.status_code, 200)
+
+        self.assertEqual(peak, 1)
 
     # ── positive cases ────────────────────────────────────────────────
 
@@ -54,7 +220,7 @@ class QuoteSnapshotApiTest(unittest.TestCase):
         self.assertGreater(len(payload["quotes"]), 0, "Should return at least one quote")
         self.assertIsInstance(payload["depth"], list)
         self.assertIsInstance(payload["ticks"], list)
-        self.assertIsInstance(payload["moneyFlow"], list)
+        self.assertNotIn("moneyFlow", payload)
         self.assertIsInstance(payload["quoteStats"], dict)
         self.assertIsInstance(payload["l2"], dict)
 
@@ -195,7 +361,6 @@ class QuoteSnapshotApiTest(unittest.TestCase):
             "quotes",
             "depth",
             "ticks",
-            "moneyFlow",
             "quoteStats",
             "l2",
         }
@@ -300,6 +465,9 @@ class QuoteSnapshotApiTest(unittest.TestCase):
 
     def test_set_subscriptions_pool_returns_ok(self):
         """POST /api/quotes/subscriptions sets pool and returns ok=true with codes."""
+        self.bridge.fetch_quotes_and_depth = AsyncMock(
+            return_value=([], [], QuoteFetchStats())
+        )
         response = self.client.post(
             "/api/quotes/subscriptions",
             json={"codes": ["000001", "600000", "300001"]},
@@ -313,6 +481,9 @@ class QuoteSnapshotApiTest(unittest.TestCase):
 
     def test_set_subscriptions_pool_normalizes_codes(self):
         """POST /api/quotes/subscriptions normalizes malformed codes."""
+        self.bridge.fetch_quotes_and_depth = AsyncMock(
+            return_value=([], [], QuoteFetchStats())
+        )
         response = self.client.post(
             "/api/quotes/subscriptions",
             json={"codes": ["000001.SZ", "sh600000", "", "  "]},
@@ -325,6 +496,9 @@ class QuoteSnapshotApiTest(unittest.TestCase):
 
     def test_set_subscriptions_pool_empty_clears_pool(self):
         """POST /api/quotes/subscriptions with empty codes clears the pool."""
+        self.bridge.fetch_quotes_and_depth = AsyncMock(
+            return_value=([], [], QuoteFetchStats())
+        )
         # First set a pool
         self.client.post(
             "/api/quotes/subscriptions",
@@ -423,6 +597,9 @@ class QuoteSnapshotApiTest(unittest.TestCase):
 
     def test_snapshot_with_explicit_codes_ignores_pool(self):
         """When codes param is provided, pool is not used."""
+        self.bridge.fetch_quotes_and_depth = AsyncMock(
+            return_value=([], [], QuoteFetchStats())
+        )
         # Set pool first
         self.client.post(
             "/api/quotes/subscriptions",

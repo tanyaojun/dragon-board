@@ -25,9 +25,11 @@ class FakeRepo:
 class FakeThemeHeatService:
     def __init__(self) -> None:
         self.calls = 0
+        self.include_runtime_funds: bool | None = None
 
-    def get_snapshot(self) -> dict[str, Any]:
+    def get_snapshot(self, *, include_runtime_funds: bool = True) -> dict[str, Any]:
         self.calls += 1
+        self.include_runtime_funds = include_runtime_funds
         return {
             "computedAt": 1782018300000,
             "factorVersion": "theme-market-v1",
@@ -57,8 +59,8 @@ class FakeThemeHeatService:
             "sources": {
                 "quotes": {"source": "theme_quote_tencent", "ok": True, "row_count": 4000},
                 "funds": {
-                    "source": "theme_fund_eastmoney", "ok": True,
-                    "row_count": 3500, "coverage_ratio": 0.86,
+                    "source": "formal_fund_unavailable", "ok": False,
+                    "row_count": 0, "coverage_ratio": 0,
                 },
             },
         }
@@ -84,10 +86,11 @@ def test_collector_builds_all_theme_sector_rows() -> None:
         )
 
     repo = FakeRepo()
+    theme_service = FakeThemeHeatService()
     service = SnapshotCollectorService(
         repo=repo, collect_fn=_collect, normalize_fn=normalize,
         quality_fn=lambda **kwargs: QualityResult(True, [], [], {"ok": 3, "failed": 0}),
-        theme_heat_service=FakeThemeHeatService(),
+        theme_heat_service=theme_service,
     )
     request = CollectorRunRequest(
         dataset_id="dragonboard_backend_shadow", snapshot_type="half_hour",
@@ -102,10 +105,12 @@ def test_collector_builds_all_theme_sector_rows() -> None:
     assert captured["frames"][0]["sectorRowCount"] == 2
     assert captured["sectorRows"][1]["fundScore"] is None
     assert captured["sectorRows"][1]["themeQualityFlags"] == ["fund_flow_unavailable"]
+    assert captured["sectorRows"][0]["metadata"]["fundSource"] is None
+    assert theme_service.include_runtime_funds is False
     assert repo.runs[0]["themeFactorVersion"] == "theme-market-v1"
     assert repo.runs[0]["themeComputedAt"] == 1782018300000
     assert repo.runs[0]["themeQuoteCoverage"] == 0.98
-    assert repo.runs[0]["themeFundCoverage"] == 0.86
+    assert repo.runs[0]["themeFundCoverage"] == 0
 
 
 def test_service_factory_injects_shared_theme_heat_service(monkeypatch) -> None:

@@ -107,7 +107,7 @@ export interface ThemeStock {
   reason?: string
   speed: number
   volumeRatio: number
-  mainNetInflow: number
+  mainNetInflow: number | null
   leadTimes: number
   leadStatus: string
   bigMoney300: number

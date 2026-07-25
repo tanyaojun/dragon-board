@@ -9,7 +9,6 @@ from .provider import (
     DepthLevel,
     L2ProviderStatus,
     L2Snapshot,
-    MoneyFlowFrame,
     TickTrade,
     now_ms,
 )
@@ -147,30 +146,6 @@ def normalize_tick(row: dict[str, Any]) -> TickTrade | None:
     )
 
 
-def normalize_money_flow(row: dict[str, Any]) -> MoneyFlowFrame | None:
-    code = normalize_code(pick(row, "code", "stock_code", "instrument_id", "symbol"))
-    if not code:
-        return None
-    known_values = [
-        pick(row, "zlje", "mainNet", "main_net", "mainNetAmount"),
-        pick(row, "zljzb", "mainRatio", "main_net_ratio"),
-        pick(row, "cddje", "superNet", "super_net", "superNetAmount"),
-        pick(row, "cddjzb", "superRatio", "super_net_ratio"),
-        pick(row, "activeAmount", "active_amount", "amount"),
-    ]
-    if all(value in (None, "") for value in known_values):
-        return None
-    return MoneyFlowFrame(
-        code=code,
-        zlje=to_float(known_values[0]),
-        zljzb=to_float(known_values[1]),
-        cddje=to_float(known_values[2]),
-        cddjzb=to_float(known_values[3]),
-        activeAmount=to_float(known_values[4]),
-        sourceTs=to_int(pick(row, "time", "sourceTs", "timestamp")),
-    )
-
-
 def has_l2_candidate_rows(*raw_values: Any) -> bool:
     return any(frame_to_records(value) for value in raw_values)
 
@@ -214,7 +189,7 @@ class QmtL2Provider:
             "unknown_error",
         }:
             return snapshot.status
-        if snapshot.depth or snapshot.money_flow or snapshot.ticks:
+        if snapshot.depth or snapshot.ticks:
             depth_count = max((item.depthLevelCount for item in snapshot.depth), default=0)
             return L2ProviderStatus(
                 provider=self.provider,
@@ -272,16 +247,13 @@ class QmtL2Provider:
         depth_rows = frame_to_records(depth_raw)
         money_rows = frame_to_records(money_raw)
         depth = [item for item in (normalize_depth(row) for row in depth_rows) if item]
-        money_flow = [
-            item for item in (normalize_money_flow(row) for row in money_rows) if item
-        ]
         ticks = {}
         for tick in [item for item in (normalize_tick(row) for row in money_rows) if item]:
             ticks.setdefault(tick.code, []).append(tick.to_dict())
 
         depth_count = max((item.depthLevelCount for item in depth), default=0)
         has_raw_l2_rows = bool(depth_rows or money_rows)
-        mapped_any = bool(depth or money_flow or ticks)
+        mapped_any = bool(depth or ticks)
         status_name = (
             "ok"
             if mapped_any
@@ -310,7 +282,6 @@ class QmtL2Provider:
         return L2Snapshot(
             depth=depth,
             ticks=[{"code": code, "items": items} for code, items in ticks.items()],
-            money_flow=money_flow,
             status=status,
         )
 

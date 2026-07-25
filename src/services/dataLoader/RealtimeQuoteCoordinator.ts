@@ -3,10 +3,7 @@ import { EventManager } from '@/utils/eventManager'
 import { dataLayer } from '../DataLayer'
 import { realtimeSubscriptionRegistry } from '../realtime/RealtimeSubscriptionRegistry'
 import { webSocketService } from '../websocket'
-import { toLocalTradingDate } from '../snapshot/identity'
-import { summarizeMoneyFlowTicks } from './MoneyFlowEstimator'
 import { REALTIME_FLUSH_DELAY_MS } from './constants'
-import type { IntradayMoneyFlowStats } from './types'
 
 const REALTIME_OWNER = 'dataLoader.hotlist'
 
@@ -24,9 +21,6 @@ export class RealtimeQuoteCoordinator {
   private pendingRealtimeQuotes = new Map<string, QuotePatch>()
   private pendingDepthBooks = new Map<string, Depth10Book>()
   private pendingTicks = new Map<string, TickTrade[]>()
-  private intradayMoneyFlowStats = new Map<string, IntradayMoneyFlowStats>()
-  private intradayMoneyFlowTickKeys = new Map<string, Set<string>>()
-  private intradayMoneyFlowTickQueues = new Map<string, string[]>()
   private realtimeUnsubscribers: Array<() => void> = []
 
   constructor(options: RealtimeQuoteCoordinatorOptions) {
@@ -55,9 +49,6 @@ export class RealtimeQuoteCoordinator {
     this.pendingRealtimeQuotes.clear()
     this.pendingDepthBooks.clear()
     this.pendingTicks.clear()
-    this.intradayMoneyFlowStats.clear()
-    this.intradayMoneyFlowTickKeys.clear()
-    this.intradayMoneyFlowTickQueues.clear()
     realtimeSubscriptionRegistry.clearOwner(REALTIME_OWNER)
   }
 
@@ -103,7 +94,10 @@ export class RealtimeQuoteCoordinator {
   private queueRealtimeQuotes(items: QuotePatch[]) {
     items.forEach((item) => {
       if (!item?.code) return
-      this.pendingRealtimeQuotes.set(item.code, item)
+      this.pendingRealtimeQuotes.set(item.code, {
+        ...this.pendingRealtimeQuotes.get(item.code),
+        ...item,
+      })
     })
     this.scheduleRealtimeFlush()
   }
@@ -134,18 +128,10 @@ export class RealtimeQuoteCoordinator {
     this.pendingDepthBooks.clear()
     this.pendingTicks.clear()
 
-    if (tickGroups.length) {
-      this.updateIntradayMoneyFlowStats(tickGroups)
-    }
-
     if (quoteItems.length) {
       dataLayer.applyRealtimeQuoteBatch(
         quoteItems.map((item) => {
-          const hasRealtimeL2MoneyFlow =
-            item.moneyFlowEstimated === false &&
-            (item.moneyFlowSource === 'tdx_transaction' ||
-             item.moneyFlowSource === 'ths_l2' ||
-             item.moneyFlowSource === 'qmt_l2')
+          const hasDashboardMoneyFlow = item.moneyFlowSource === 'ths_main_monitor'
           return {
             code: item.code,
             name: item.name,
@@ -155,14 +141,14 @@ export class RealtimeQuoteCoordinator {
             volume: item.volume,
             turnover: item.amount,
             turnoverRate: item.turnoverRate,
-            zlje: hasRealtimeL2MoneyFlow ? item.zlje : undefined,
-            zljzb: hasRealtimeL2MoneyFlow ? item.zljzb : undefined,
-            cddje: hasRealtimeL2MoneyFlow ? item.cddje : undefined,
-            cddjzb: hasRealtimeL2MoneyFlow ? item.cddjzb : undefined,
-            moneyFlowSource: hasRealtimeL2MoneyFlow ? item.moneyFlowSource : undefined,
-            moneyFlowEstimated: hasRealtimeL2MoneyFlow ? false : undefined,
-            capitalFlowSource: hasRealtimeL2MoneyFlow ? item.capitalFlowSource : undefined,
-            capitalFlowConfidence: hasRealtimeL2MoneyFlow ? item.capitalFlowConfidence : undefined,
+            zlje: hasDashboardMoneyFlow ? item.zlje : undefined,
+            zljzb: hasDashboardMoneyFlow ? item.zljzb : undefined,
+            cddje: hasDashboardMoneyFlow ? item.cddje : undefined,
+            cddjzb: hasDashboardMoneyFlow ? item.cddjzb : undefined,
+            moneyFlowSource: hasDashboardMoneyFlow ? item.moneyFlowSource : undefined,
+            moneyFlowEstimated: hasDashboardMoneyFlow ? item.moneyFlowEstimated : undefined,
+            capitalFlowSource: hasDashboardMoneyFlow ? item.capitalFlowSource : undefined,
+            capitalFlowConfidence: hasDashboardMoneyFlow ? item.capitalFlowConfidence : undefined,
             tdxBuyVolume: item.tdxBuyVolume,
             tdxSellVolume: item.tdxSellVolume,
             tdxCurrentVolume: item.tdxCurrentVolume,
@@ -309,63 +295,4 @@ export class RealtimeQuoteCoordinator {
     return [...prioritizedCodes, ...missingCodes]
   }
 
-  private updateIntradayMoneyFlowStats(groups: Array<{ code: string; items: TickTrade[] }>) {
-    const tradingDate = toLocalTradingDate(new Date())
-
-    groups.forEach((group) => {
-      const code = String(group.code || '')
-      if (!code || !Array.isArray(group.items) || !group.items.length) return
-      const freshItems = this.filterFreshMoneyFlowTicks(code, tradingDate, group.items)
-      if (!freshItems.length) return
-
-      const current = this.intradayMoneyFlowStats.get(code)
-      const next: IntradayMoneyFlowStats =
-        current?.tradingDate === tradingDate
-          ? { ...current }
-          : { tradingDate, activeAmount: 0, mainNet: 0, superNet: 0 }
-
-      const delta = summarizeMoneyFlowTicks(freshItems)
-      next.activeAmount += delta.activeAmount
-      next.mainNet += delta.mainNet
-      next.superNet += delta.superNet
-      this.intradayMoneyFlowStats.set(code, next)
-    })
-  }
-
-  private filterFreshMoneyFlowTicks(code: string, tradingDate: string, items: TickTrade[]): TickTrade[] {
-    let seen = this.intradayMoneyFlowTickKeys.get(code)
-    let queue = this.intradayMoneyFlowTickQueues.get(code)
-
-    if (!seen) {
-      seen = new Set<string>()
-      this.intradayMoneyFlowTickKeys.set(code, seen)
-    }
-    if (!queue) {
-      queue = []
-      this.intradayMoneyFlowTickQueues.set(code, queue)
-    }
-
-    const fresh: TickTrade[] = []
-    items.forEach((item) => {
-      const key = [
-        tradingDate,
-        item.tradeTime || '',
-        Number(item.price) || 0,
-        Number(item.volume) || 0,
-        item.side || 'neutral',
-      ].join('|')
-      if (seen.has(key)) return
-
-      seen.add(key)
-      queue.push(key)
-      fresh.push(item)
-    })
-
-    while (queue.length > 800) {
-      const expired = queue.shift()
-      if (expired) seen.delete(expired)
-    }
-
-    return fresh
-  }
 }

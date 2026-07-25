@@ -16,14 +16,24 @@ describe('theme panel data contract', () => {
 
     expect(panels).toContain('getThemeSummaries')
     expect(panels).toContain('loadSectorStocks')
-    expect(panels).toContain('MongoDB 题材映射 + 腾讯行情 + 东财资金')
+    expect(panels).toContain('MongoDB 题材映射 + 腾讯行情 + 同花顺资金')
+    expect(panels).not.toContain('TDX逐笔资金')
     expect(panels).not.toMatch(/Jxbk|jxbk|JXBK|getThemeStockMap|getJxbk/)
   })
 
-  it('renders explicit degraded fund state instead of a fabricated zero', () => {
+  it('renders an empty THS fund value instead of a fabricated fallback state', () => {
     const panel = source('SectorPanel.vue')
 
-    expect(panel).toContain('资金数据降级')
-    expect(panel).toMatch(/fundScore\s*===\s*null|mainNetInflow\s*===\s*null/)
+    expect(panel).not.toContain('资金数据降级')
+    expect(panel).toMatch(/mainNetInflow\s*==\s*null\s*\?\s*'--'/)
+  })
+
+  it('registers current theme stock pages as connection-scoped fund priority', () => {
+    const panels = ['SectorDetail.vue', 'SectorStocksTree.vue'].map(source).join('\n')
+
+    expect(panels).toMatch(/setFundOwnerCodes\(\s*'theme-detail\.visible'/)
+    expect(panels).toContain("clearFundOwner('theme-detail.visible')")
+    expect(panels).toMatch(/setFundOwnerCodes\(\s*'theme-tree\.visible'/)
+    expect(panels).toContain("clearFundOwner('theme-tree.visible')")
   })
 })

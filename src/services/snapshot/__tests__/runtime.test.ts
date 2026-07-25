@@ -5,6 +5,7 @@ import { SnapshotRuntime, buildSnapshotBackendIngestIdempotencyKey } from '../ru
 import { refreshResourceLocks } from '../../refresh/RefreshResourceLocks'
 import { refreshScheduler, refreshTaskRegistry } from '../../refresh/RefreshTaskRuntime'
 import { getExpectedSlots } from '../schedule'
+import { refreshCalendar } from '../../../utils/time'
 import type { SnapshotBuildContext } from '../builders'
 import type { SnapshotCaptureMode, SnapshotQueryOptions, SnapshotRecord, SnapshotType } from '../types'
 
@@ -117,10 +118,26 @@ function createTradingDateRecords(
 }
 
 describe('SnapshotRuntime', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.restoreAllMocks()
     refreshScheduler.stopAll()
     refreshTaskRegistry.resetRuntimeState()
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const date = new URL(String(input)).searchParams.get('date')
+      return {
+        ok: true,
+        json: async () => ({
+          ok: true,
+          isTradingDay: date === '2026-04-21' || date === '2026-04-30',
+        }),
+      }
+    }))
+    await Promise.all([
+      refreshCalendar(new Date('2026-04-21T10:00:00')),
+      refreshCalendar(new Date('2026-04-30T10:00:00')),
+      refreshCalendar(new Date('2026-05-01T10:00:00')),
+      refreshCalendar(new Date('2026-05-02T10:00:00')),
+    ])
   })
 
   afterEach(() => {

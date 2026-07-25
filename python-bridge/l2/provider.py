@@ -50,25 +50,6 @@ class TickTrade:
 
 
 @dataclass
-class MoneyFlowFrame:
-    code: str
-    zlje: float = 0
-    zljzb: float = 0
-    cddje: float = 0
-    cddjzb: float = 0
-    moneyFlowSource: str = "qmt_l2"
-    moneyFlowEstimated: bool = False
-    capitalFlowSource: str = "broker_l2"
-    capitalFlowConfidence: str = "high"
-    activeAmount: float = 0
-    sourceTs: int = 0
-    timestamp: int = field(default_factory=now_ms)
-
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
-
-
-@dataclass
 class L2ProviderStatus:
     provider: str
     enabled: bool
@@ -88,7 +69,6 @@ class L2ProviderStatus:
 class L2Snapshot:
     depth: list[Depth10Book] = field(default_factory=list)
     ticks: list[dict[str, Any]] = field(default_factory=list)
-    money_flow: list[MoneyFlowFrame] = field(default_factory=list)
     status: L2ProviderStatus | None = None
 
 

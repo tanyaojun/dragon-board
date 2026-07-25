@@ -32,6 +32,7 @@ vi.mock('../../websocket', () => ({
 
 import { RealtimeQuoteCoordinator } from '../RealtimeQuoteCoordinator'
 import { webSocketService } from '../../websocket'
+import { dataLayer } from '../../DataLayer'
 
 describe('RealtimeQuoteCoordinator', () => {
   afterEach(() => {
@@ -70,5 +71,46 @@ describe('RealtimeQuoteCoordinator', () => {
     coordinator.destroy()
 
     expect(clearedOwners).toEqual(['dataLoader.hotlist'])
+  })
+
+  it('merges THS fund-only and quote patches queued for the same stock', () => {
+    vi.useFakeTimers()
+    const coordinator = new RealtimeQuoteCoordinator({
+      getHotCodes: () => new Set(['000001']),
+      flushDelay: 10,
+    })
+
+    ;(coordinator as any).queueRealtimeQuotes([
+      { code: '000001', zlje: 8, moneyFlowSource: 'ths_main_monitor' },
+    ])
+    ;(coordinator as any).queueRealtimeQuotes([
+      { code: '000001', lastPrice: 10, changePct: 2, volume: 100, amount: 1000 },
+    ])
+    vi.advanceTimersByTime(10)
+
+    expect(vi.mocked(dataLayer.applyRealtimeQuoteBatch)).toHaveBeenCalledWith([
+      expect.objectContaining({ code: '000001', price: 10, zlje: 8 }),
+    ])
+    coordinator.destroy()
+    vi.useRealTimers()
+  })
+
+  it('does not project bridge money fields into the dashboard row', () => {
+    vi.useFakeTimers()
+    const coordinator = new RealtimeQuoteCoordinator({
+      getHotCodes: () => new Set(['000001']),
+      flushDelay: 10,
+    })
+
+    ;(coordinator as any).queueRealtimeQuotes([
+      { code: '000001', lastPrice: 10, zlje: 99, moneyFlowSource: 'tdx_transaction' },
+    ])
+    vi.advanceTimersByTime(10)
+
+    expect(vi.mocked(dataLayer.applyRealtimeQuoteBatch)).toHaveBeenCalledWith([
+      expect.objectContaining({ code: '000001', price: 10, zlje: undefined }),
+    ])
+    coordinator.destroy()
+    vi.useRealTimers()
   })
 })

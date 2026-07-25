@@ -95,13 +95,6 @@ export class QuoteService {
         if (!this.hasQuoteSupplementData(mergedRealtimeQuote)) {
           enrichmentCodes.add(code)
         }
-        // 无资金流数据，或资金流来自 THS HTTP（需要周期性刷新），都纳入 enrichment
-        if (
-          !this.hasFundFlowData(mergedRealtimeQuote) ||
-          mergedRealtimeQuote.moneyFlowSource === 'ths_l2'
-        ) {
-          enrichmentCodes.add(code)
-        }
       })
     }
 
@@ -250,10 +243,11 @@ export class QuoteService {
         : await this.feed.fetchBasicData(codes)
       if (basicResult.size > 0) {
         basicResult.forEach((quote, code) => {
+          const quoteWithoutFunds = stripHttpMoneyFlow(quote)
           httpResult.set(code, {
-            ...quote,
+            ...quoteWithoutFunds,
             timestamp: this.now(),
-            sources: [quote.source],
+            sources: [quoteWithoutFunds.source],
             confidence: quote.source === 'eastmoney' ? 95 : 70,
           } as MergedQuoteData)
         })
@@ -293,10 +287,11 @@ export class QuoteService {
 
     if (basicResult.status === 'fulfilled' && basicResult.value.size > 0) {
       basicResult.value.forEach((quote, code) => {
+        const quoteWithoutFunds = stripHttpMoneyFlow(quote)
         httpResult.set(code, {
-          ...quote,
+          ...quoteWithoutFunds,
           timestamp: this.now(),
-          sources: [quote.source],
+          sources: [quoteWithoutFunds.source],
           confidence: quote.source === 'eastmoney' ? 95 : 70,
         } as MergedQuoteData)
       })
@@ -304,14 +299,15 @@ export class QuoteService {
 
     if (fullResult.status === 'fulfilled' && fullResult.value.size > 0) {
       fullResult.value.forEach((fullQuote, code) => {
+        const quoteWithoutFunds = stripHttpMoneyFlow(fullQuote)
         const existing = httpResult.get(code)
         if (existing) {
-          httpResult.set(code, mergeHttpQuoteSources(existing, fullQuote, this.now()))
+          httpResult.set(code, mergeHttpQuoteSources(existing, quoteWithoutFunds, this.now()))
         } else {
           httpResult.set(code, {
-            ...fullQuote,
+            ...quoteWithoutFunds,
             timestamp: this.now(),
-            sources: [fullQuote.source],
+            sources: [quoteWithoutFunds.source],
             confidence: 95,
           })
         }
@@ -373,13 +369,14 @@ export class QuoteService {
 
     const patches: Array<MergedQuoteData & { code: string }> = []
     fullRows.forEach((fullQuote, code) => {
+      const quoteWithoutFunds = stripHttpMoneyFlow(fullQuote)
       const existing = baseQuotes.get(code) || this.dataLayer.getQuote(code)
       const merged = existing
-        ? mergeHttpQuoteSources(existing, fullQuote, this.now())
+        ? mergeHttpQuoteSources(existing, quoteWithoutFunds, this.now())
         : ({
-            ...fullQuote,
+            ...quoteWithoutFunds,
             timestamp: this.now(),
-            sources: [fullQuote.source],
+            sources: [quoteWithoutFunds.source],
             confidence: 95,
           } as MergedQuoteData)
       patches.push({ code, ...merged })
@@ -400,7 +397,7 @@ export class QuoteService {
     const stock = this.dataLayer.getStock(code)
     const speedCandidate = quote.speed ?? existingQuote?.speed
     const speed = typeof speedCandidate === 'number' && Number.isFinite(speedCandidate) ? speedCandidate : undefined
-    const hasRealtimeL2MoneyFlow = isReliableL2MoneyFlow(quote)
+    const hasAuthoritativeMoneyFlow = quote.moneyFlowSource === 'ths_main_monitor'
 
     return {
       price: Number(quote.lastPrice) || 0,
@@ -414,32 +411,32 @@ export class QuoteService {
       totalMV: pickPositiveNumber(stock?.totalMV, existingQuote?.totalMV),
       cirMV: pickPositiveNumber(stock?.cirMV, existingQuote?.cirMV),
       pb: pickPositiveNumber(stock?.pb, existingQuote?.pb),
-      zlje: hasRealtimeL2MoneyFlow
+      zlje: hasAuthoritativeMoneyFlow
         ? pickFundFlow(quote.zlje, stock?.zlje)
         : pickNonZeroNumber(stock?.zlje, existingQuote?.zlje),
-      zljzb: hasRealtimeL2MoneyFlow
+      zljzb: hasAuthoritativeMoneyFlow
         ? pickFundFlow(quote.zljzb, stock?.zljzb)
         : pickNonZeroNumber(stock?.zljzb, existingQuote?.zljzb),
-      cddje: hasRealtimeL2MoneyFlow
+      cddje: hasAuthoritativeMoneyFlow
         ? pickFundFlow(quote.cddje, stock?.cddje)
         : pickNonZeroNumber(stock?.cddje, existingQuote?.cddje),
-      cddjzb: hasRealtimeL2MoneyFlow
+      cddjzb: hasAuthoritativeMoneyFlow
         ? pickFundFlow(quote.cddjzb, stock?.cddjzb)
         : pickNonZeroNumber(stock?.cddjzb, existingQuote?.cddjzb),
-      moneyFlowSource: hasRealtimeL2MoneyFlow
+      moneyFlowSource: hasAuthoritativeMoneyFlow
         ? quote.moneyFlowSource
         : stock?.moneyFlowSource ?? existingQuote?.moneyFlowSource,
-      moneyFlowEstimated: hasRealtimeL2MoneyFlow
+      moneyFlowEstimated: hasAuthoritativeMoneyFlow
         ? false
         : stock?.moneyFlowEstimated ?? existingQuote?.moneyFlowEstimated,
-      capitalFlowSource: hasRealtimeL2MoneyFlow
+      capitalFlowSource: hasAuthoritativeMoneyFlow
         ? quote.capitalFlowSource
         : stock?.capitalFlowSource ?? existingQuote?.capitalFlowSource,
-      capitalFlowConfidence: hasRealtimeL2MoneyFlow
+      capitalFlowConfidence: hasAuthoritativeMoneyFlow
         ? quote.capitalFlowConfidence
         : stock?.capitalFlowConfidence ?? existingQuote?.capitalFlowConfidence,
       name: quote.name || stock?.name || existingQuote?.name,
-      sources: hasRealtimeL2MoneyFlow
+      sources: hasAuthoritativeMoneyFlow
         ? [String(quote.moneyFlowSource)]
         : ['tdx_l2'],
       confidence: 99,
@@ -473,7 +470,7 @@ export class QuoteService {
   ): MergedQuoteData {
     const preferHttpSupplement = this.hasQuoteSupplementData(httpQuote)
     const preferHttpFundFlow =
-      httpQuote.moneyFlowSource === 'ths_l2' &&
+      httpQuote.moneyFlowSource === 'ths_main_monitor' &&
       this.hasFundFlowData(httpQuote) &&
       shouldApplyMoneyFlowUpdate(realtimeQuote, httpQuote)
 
@@ -538,6 +535,21 @@ function pickNonZeroNumber(...values: unknown[]): number {
   return 0
 }
 
+function stripHttpMoneyFlow<T extends Record<string, any>>(quote: T): T {
+  const {
+    zlje: _zlje,
+    zljzb: _zljzb,
+    cddje: _cddje,
+    cddjzb: _cddjzb,
+    moneyFlowSource: _moneyFlowSource,
+    moneyFlowEstimated: _moneyFlowEstimated,
+    capitalFlowSource: _capitalFlowSource,
+    capitalFlowConfidence: _capitalFlowConfidence,
+    ...rest
+  } = quote
+  return rest as T
+}
+
 function pickMoneyFlowNumber(...values: unknown[]): number {
   for (const value of values) {
     const number = Number(value)
@@ -557,9 +569,7 @@ function mergeHttpQuoteSources(
     return Number.isFinite(value) && value !== 0
   })
   const useFullQuoteMoneyFlow =
-    Boolean(fullQuote.moneyFlowSource) &&
-    hasFullQuoteMoneyFlow &&
-    fullQuote.moneyFlowEstimated === false
+    hasFullQuoteMoneyFlow && shouldApplyMoneyFlowUpdate(existing, fullQuote)
   const fullQuoteMainRatio = estimateMainMoneyRatio(fullQuote.zlje, existing.turnover)
 
   return {
@@ -681,17 +691,6 @@ function pickFinite(primary: unknown, fallback: unknown, preferPositive = false)
   }
 
   return 0
-}
-
-function isReliableL2MoneyFlow(quote: QuotePatch): boolean {
-  const source = quote.moneyFlowSource
-  const capSource = quote.capitalFlowSource
-  return (
-    quote.moneyFlowEstimated === false &&
-    ((source === 'tdx_transaction' && capSource === 'tdx_tick') ||
-     source === 'ths_l2' ||
-     (source === 'qmt_l2' && (capSource === 'broker_l2' || capSource === 'official_l2')))
-  )
 }
 
 function pickFundFlow(primary: unknown, fallback: unknown): number {

@@ -231,4 +231,61 @@ describe('theme factor snapshot projection', () => {
       }),
     ])
   })
+
+  it('strips runtime THS funds and fund metadata from formal sector rows', () => {
+    const record = createRecord({})
+    const buildContext = {
+      themeHeatFactors: [
+        {
+          themeId: 'AI',
+          themeName: '人工智能',
+          heatScore: 88,
+          momentumScore: 76,
+          fundScore: 82,
+          mainNetInflow: 88_000_000,
+          netInflow: 88_000_000,
+          metadata: {
+            quoteSource: 'tencent',
+            fundSource: 'ths_main_monitor',
+          },
+        },
+      ],
+    } as any
+
+    const [row] = buildSnapshotSectorRows(record, buildContext)
+
+    expect(row.mainNetInflow).toBeUndefined()
+    expect(row.netInflow).toBeUndefined()
+    expect(row.fundScore).toBeUndefined()
+    expect(row.momentumScore).toBe(76)
+    expect(row.metadata).toEqual(expect.objectContaining({ quoteSource: 'tencent' }))
+    expect(row.metadata).not.toHaveProperty('fundSource')
+    expect(row.metadata?.themeFactor).not.toHaveProperty('fundScore')
+  })
+
+  it.each(['broker_l2', 'official_l2'])(
+    'preserves formal %s funds in sector rows',
+    (fundSource) => {
+      const record = createRecord({})
+      const buildContext = {
+        themeHeatFactors: [
+          {
+            themeId: 'AI',
+            themeName: '人工智能',
+            heatScore: 88,
+            fundScore: 82,
+            netInflow: 88_000_000,
+            metadata: { fundSource },
+          },
+        ],
+      } as any
+
+      const [row] = buildSnapshotSectorRows(record, buildContext)
+
+      expect(row.netInflow).toBe(88_000_000)
+      expect(row.fundScore).toBe(82)
+      expect(row.metadata).toEqual(expect.objectContaining({ fundSource }))
+      expect(row.metadata?.themeFactor).toEqual(expect.objectContaining({ fundScore: 82 }))
+    },
+  )
 })

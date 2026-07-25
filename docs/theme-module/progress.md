@@ -1,5 +1,24 @@
 # 题材模块重构进度
 
+## 2026-07-25 THS 增量资金整改
+
+- 状态：design/plan 已完成 agent 评审，8 个架构阻塞项已落地修正；正在按 TDD 处理 THSBigOrder 的权威日期校验与交易日硬编码两个剩余阻塞项，随后执行 Task 9 全量验证和运行态验收。
+- Agent 评审：确认正式快照隔离、收盘最终刷新、缺失票退避、系统性限流条件、异步日历、P0 生命周期、P1 多连接聚合和异常 payload 隔离均需作为交付门禁；计划已补齐 bridge 三状态和 minute last-good 成功/失败双路径合同。
+- 已完成：审计现有未提交资金链，确认保留 Redis last-good/版本/WebSocket，移除 bridge TDX 资金来源。
+- 已完成：补充非交易日冷缓存一次性 THS 补齐、P1 owner 持久化、P0/P1 分离和批次独立失败合同。
+- 记录：第一次大块文档补丁因上下文匹配失败且未写入文件，已改为相对路径小块补丁完成。
+- 计划文件：`plans/2026-07-25-ths-incremental-fund-cache-plan.md`。
+- 已确认 QuantBoard FastAPI 尚无 `mainMonitorDetail` 单票接口；现有实现仅位于 proxy-server。
+- design/plan 已调整为 QuantBoard `ThsMainMonitorService` + FastAPI 单票/批次路由，调度器进程内直接调用 service，不走 localhost HTTP。
+- `tools/THSBigOrder` 仅迁移 THS 单票 fallback 到 8000，其余腾讯行情、分钟线、涨停池和 Longhu 仍暂时依赖 3000。
+- 计划包含删除 proxy 旧 THS detail 路由、OpenAPI 和对应测试；proxy 其它能力不在本次扩大迁移。
+- 新资金链移除 proxy startup bundle 冷启动依赖：Redis owner 为空时等待真实 `marketCodes` 注册并持久化，避免 proxy 废弃后再次断链。
+- 已确认工具分钟线仍依赖腾讯；bridge 现有分时接口日期和 raw 解码错误，已把 `Quotes.minutes()` + TDX 权威日期 + 成交额 `×100` 修复及工具迁移写入 plan。
+- 已完成：FastAPI THS 单票/五票批次接口、`theme-fund:v3` last-good、P0/P1 调度与资金 WebSocket、前端唯一源门禁、题材增量同步、snapshot 隔离、bridge 资金路径移除、THSBigOrder 与 mootdx 分时迁移、proxy 路由退役。
+- 下一步：修复全量验证与最终评审发现的阻塞项，完成 Redis/服务重启和 Playwright 验收后提交。
+- 基线验证：proxy 现有 THS 单票测试 14 passed；QuantBoard 旧 TDX cache/stream 相关目标测试 68 passed；前端旧资金链目标测试 12 passed。它们证明旧合同内部自洽，但不证明用户要求的 THS 唯一资金链已经实现。
+- 首轮评审阻塞项：禁止运行态 THS 进入正式快照；定义限流错误码；资金 patch 同步题材缓存/聚合；真实可见/搜索 P0；新增生命周期与 Redis BGSAVE 恢复验收。原 proxy bundle owner 恢复项已因 proxy 退役方向改为 Redis owner + 首个真实 `marketCodes` 冷启动合同。
+
 ## 2026-06-21 MongoDB Theme 动态热度替代 JXBK 调研启动
 
 - 已读取根 `AGENTS.md`、`SKILLS.md`、QuantBoard `README.md` 与 `AI_COLLABORATION.md`。

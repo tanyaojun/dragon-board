@@ -120,7 +120,7 @@
               </div>
               <div class="stat-item">
                 <span class="stat-icon">💰</span>
-                <span class="stat-value">{{ theme.mainNetInflow === null ? '资金数据降级' : formatMoney(theme.mainNetInflow) }}</span>
+                <span class="stat-value">{{ theme.mainNetInflow == null ? '--' : formatMoney(theme.mainNetInflow) }}</span>
                 <span class="stat-label">主力净额</span>
               </div>
             </div>
@@ -240,7 +240,7 @@
     </div>
 
     <div class="panel-footer">
-      <span>📡 MongoDB 题材映射 + 腾讯行情 + 东财资金</span>
+      <span>📡 MongoDB 题材映射 + 腾讯行情 + 同花顺资金</span>
       <span>🕒 {{ formatTime(lastUpdate) }}</span>
     </div>
 

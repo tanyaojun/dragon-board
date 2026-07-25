@@ -128,9 +128,18 @@ class Settings(BaseModel):
     theme_heat_cache_ttl_seconds: int = Field(default=300)
     theme_heat_failed_batch_retries: int = Field(default=1)
     theme_heat_quote_timeout_ms: int = Field(default=10000)
-    theme_heat_fund_timeout_ms: int = Field(default=12000)
+    theme_heat_fund_timeout_ms: int = Field(default=30000)
     theme_heat_quote_collection_timeout_ms: int = Field(default=90000)
-    theme_heat_fund_collection_timeout_ms: int = Field(default=30000)
+    theme_heat_fund_collection_timeout_ms: int = Field(default=180000)
+    theme_fund_scheduler_enabled: bool = Field(default=True)
+    theme_fund_batch_size: int = Field(default=5)
+    theme_fund_p0_interval_seconds: int = Field(default=30)
+    theme_fund_p1_interval_seconds: int = Field(default=180)
+    theme_fund_concurrency: int = Field(default=2)
+    theme_fund_upstream_timeout_seconds: float = Field(default=15.0)
+    theme_fund_ths_upstream_url: str = Field(
+        default="https://vaserviece.10jqka.com.cn/Level2/index.php"
+    )
     data_source: DataSourceConfig = Field(default_factory=DataSourceConfig)
 
     def model_post_init(self, __context: Any) -> None:
@@ -379,6 +388,37 @@ class Settings(BaseModel):
                 self.theme_heat_failed_batch_retries,
             ),
         )
+        self.theme_fund_scheduler_enabled = _env_bool(
+            "QUANT_BOARD_THEME_FUND_SCHEDULER_ENABLED",
+            self.theme_fund_scheduler_enabled,
+        )
+        self.theme_fund_batch_size = max(
+            1,
+            min(5, _env_int("QUANT_BOARD_THEME_FUND_BATCH_SIZE", self.theme_fund_batch_size)),
+        )
+        self.theme_fund_p0_interval_seconds = max(
+            1,
+            _env_int("QUANT_BOARD_THEME_FUND_P0_INTERVAL_SECONDS", self.theme_fund_p0_interval_seconds),
+        )
+        self.theme_fund_p1_interval_seconds = max(
+            1,
+            _env_int("QUANT_BOARD_THEME_FUND_P1_INTERVAL_SECONDS", self.theme_fund_p1_interval_seconds),
+        )
+        self.theme_fund_concurrency = max(
+            1,
+            min(2, _env_int("QUANT_BOARD_THEME_FUND_CONCURRENCY", self.theme_fund_concurrency)),
+        )
+        self.theme_fund_upstream_timeout_seconds = max(
+            0.1,
+            _env_float(
+                "QUANT_BOARD_THEME_FUND_UPSTREAM_TIMEOUT_SECONDS",
+                self.theme_fund_upstream_timeout_seconds,
+            ),
+        )
+        self.theme_fund_ths_upstream_url = os.environ.get(
+            "QUANT_BOARD_THEME_FUND_THS_UPSTREAM_URL",
+            self.theme_fund_ths_upstream_url,
+        ).strip()
         self.theme_heat_quote_timeout_ms = max(
             100,
             _env_int("QUANT_BOARD_THEME_HEAT_QUOTE_TIMEOUT_MS", self.theme_heat_quote_timeout_ms),

@@ -16,7 +16,6 @@ const formalRoutes = [
   'GET  /api/tgb/hot',
   'GET  /api/dzh/hot',
   'GET  /api/quotes/tencent',
-  'GET  /api/quotes/tencent/minute',
   'GET  /api/quotes/sina',
   'GET  /api/quotes/tencent/spk',
   'GET  /api/cache/startup-bundle',
@@ -40,7 +39,6 @@ const formalRoutes = [
   'GET  /api/big-order/longhu/all-day',
   'POST /api/big-order/longhu/collect-list',
   'POST /api/big-order/longhu/collect',
-  'GET  /api/big-order/ths-detail',
   'GET  /api/theme/:id',
   'POST /api/themes/batch',
 ]

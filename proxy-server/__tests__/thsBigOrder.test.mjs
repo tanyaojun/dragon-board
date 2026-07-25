@@ -39,55 +39,11 @@ function thsPayload() {
   }
 }
 
-test('THS big-order detail validates stock code and returns source payload', async () => {
-  let now = 1_750_000_000_000
-  const calls = []
-  const app = createProxyApp({
-    logRequests: false,
-    bigOrderArchiver: noopArchiver,
-    bigOrderCollector: noopCollector,
-    runtimeCache: new ProcessMemoryCache({ now: () => now }),
-    now: () => now,
-    clients: {
-      client: {},
-      plainClient: {
-        get: async (url, config) => {
-          calls.push({ url: String(url), config })
-          return { data: thsPayload() }
-        },
-      },
-    },
-  })
-
-  const { server, baseUrl } = await listen(app)
+test('migrated THS big-order detail route is absent', async () => {
+  const { server, baseUrl } = await listen(createProxyApp({ logRequests: false }))
   try {
-    const invalid = await fetch(`${baseUrl}/api/big-order/ths-detail?stockCode=abc`)
-    assert.equal(invalid.status, 400)
-    assert.equal((await invalid.json()).errorCode, 'invalid_stock_code')
-
     const response = await fetch(`${baseUrl}/api/big-order/ths-detail?stockCode=002297`)
-    const body = await response.json()
-
-    assert.equal(response.status, 200)
-    assert.equal(body.ok, true)
-    assert.equal(body.source, 'ths-big-order-detail')
-    assert.equal(body.stockCode, '002297')
-    assert.equal(body.sessionDate, '2026-07-17')
-    assert.equal(body.fetchedAt, now)
-    assert.equal(body.servedAt, now)
-    assert.equal(body.data.title.stockname, '博云新材')
-    assert.equal(body.data.list[0].nature, '主力主买')
-    assert.equal(body.data.dragonMeta.cache.hit, false)
-    assert.equal(body.data.dragonMeta.cache.upstreamCalled, true)
-    assert.equal(calls.length, 1)
-
-    const upstream = new URL(calls[0].url)
-    assert.equal(upstream.origin + upstream.pathname, 'https://vaserviece.10jqka.com.cn/Level2/index.php')
-    assert.equal(upstream.searchParams.get('op'), 'mainMonitorDetail')
-    assert.equal(upstream.searchParams.get('stockcode'), '002297')
-    assert.match(calls[0].config.headers['User-Agent'], /Mozilla\/5\.0/)
-    assert.equal(calls[0].config.headers.Referer, 'https://vaserviece.10jqka.com.cn/')
-    assert.equal(calls[0].config.headers.Accept, 'application/json,text/plain,*/*')
+    assert.equal(response.status, 404)
   } finally {
     server.close()
   }
@@ -136,34 +92,6 @@ test('structured Longhu all-day endpoint returns canonical envelope', async () =
     assert.equal(body.data.dragonMeta.refresh.total, 1)
     assert.equal(body.data.dragonMeta.refresh.elapsedMs, 0)
     assert.equal(body.data.dragonMeta.refresh.incrementFailureCount, 0)
-  } finally {
-    server.close()
-  }
-})
-
-test('THS big-order detail rejects malformed upstream structures', async () => {
-  let calls = 0
-  const app = createProxyApp({
-    logRequests: false,
-    bigOrderArchiver: noopArchiver,
-    bigOrderCollector: noopCollector,
-    clients: {
-      client: {},
-      plainClient: {
-        get: async () => {
-          calls += 1
-          return { data: { errorcode: 0, title: 'invalid', list: [] } }
-        },
-      },
-    },
-  })
-  const { server, baseUrl } = await listen(app)
-  try {
-    const first = await fetch(`${baseUrl}/api/big-order/ths-detail?stockCode=002297`)
-    const second = await fetch(`${baseUrl}/api/big-order/ths-detail?stockCode=002297`)
-    assert.equal((await first.json()).degraded, true)
-    assert.equal((await second.json()).degraded, true)
-    assert.equal(calls, 2)
   } finally {
     server.close()
   }
@@ -221,57 +149,6 @@ test('process memory cache evicts oldest entries at its capacity limit', async (
   assert.equal(await cache.get('a'), null)
   assert.equal((await cache.get('b')).value, 2)
   assert.equal((await cache.get('c')).value, 3)
-})
-
-test('THS big-order detail serves cached and stale data before degrading', async () => {
-  let now = Date.parse('2026-07-17T02:00:00Z')
-  let upstreamCalls = 0
-  let fail = false
-  const app = createProxyApp({
-    logRequests: false,
-    bigOrderArchiver: noopArchiver,
-    bigOrderCollector: noopCollector,
-    runtimeCache: new ProcessMemoryCache({ now: () => now }),
-    now: () => now,
-    clients: {
-      client: {},
-      plainClient: {
-        get: async () => {
-          upstreamCalls += 1
-          if (fail) throw new Error('blocked')
-          return { data: thsPayload() }
-        },
-      },
-    },
-  })
-
-  const { server, baseUrl } = await listen(app)
-  try {
-    const url = `${baseUrl}/api/big-order/ths-detail?stockCode=002297`
-    const firstBody = await (await fetch(url)).json()
-    const secondBody = await (await fetch(url)).json()
-    assert.equal(upstreamCalls, 1)
-    assert.equal(firstBody.data.dragonMeta.cache.hit, false)
-    assert.equal(secondBody.data.dragonMeta.cache.hit, true)
-
-    now += 31_000
-    fail = true
-    const staleResponse = await fetch(url)
-    const staleBody = await staleResponse.json()
-    assert.equal(staleResponse.status, 200)
-    assert.equal(staleBody.data.dragonMeta.cache.stale, true)
-    assert.equal(staleBody.data.dragonMeta.cache.uiStale, true)
-
-    now += 180_000
-    const degradedResponse = await fetch(url)
-    const degradedBody = await degradedResponse.json()
-    assert.equal(degradedResponse.status, 200)
-    assert.equal(degradedBody.ok, false)
-    assert.equal(degradedBody.degraded, true)
-    assert.equal(degradedBody.source, 'ths-big-order-detail')
-  } finally {
-    server.close()
-  }
 })
 
 test('legacy main-monitor keeps its unwrapped KPL response contract', async () => {

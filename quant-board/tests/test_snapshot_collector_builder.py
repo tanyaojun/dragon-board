@@ -781,8 +781,9 @@ class TestCanonicalSnapshotStockRowContract:
                 {
                     "code": "000001",
                     "mainNetInflow": 50000000.0,
-                    "moneyFlowSource": "estimated_l1",
+                    "moneyFlowSource": "tdx_transaction",
                     "moneyFlowEstimated": True,
+                    "capitalFlowSource": "estimated_l1",
                 }
             ],
         )
@@ -795,5 +796,6 @@ class TestCanonicalSnapshotStockRowContract:
         assert row["hotness"] == 88.0
         assert row["totalMV"] == 350000000000.0
         assert row["zlje"] == 50000000.0
-        assert row["moneyFlowSource"] == "estimated_l1"
+        assert row["moneyFlowSource"] == "tdx_transaction"
         assert row["moneyFlowEstimated"] is True
+        assert row["capitalFlowSource"] == "estimated_l1"

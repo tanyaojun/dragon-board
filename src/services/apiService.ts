@@ -527,7 +527,7 @@ export class ApiService {
    */
   async getQuotes(
     codes: string[],
-    options?: RequestConfig & { source?: 'tencent' | 'sina' | 'thsMoneyFlow' },
+    options?: RequestConfig & { source?: 'tencent' | 'sina' },
   ): Promise<any> {
     const source = options?.source || 'tencent'
 
@@ -536,9 +536,6 @@ export class ApiService {
     switch (source) {
       case 'sina':
         url = `/api/quotes/sina?codes=${codes.join(',')}`
-        break
-      case 'thsMoneyFlow':
-        url = `/api/quotes/ths-money-flow?codes=${codes.join(',')}`
         break
       case 'tencent':
       default:
@@ -815,7 +812,7 @@ export class ApiService {
       context: 'quant-board',
       priority: 'high',
       retries: 1,
-      timeout: 15000,
+      timeout: 180000,
       cache: false,
       throwOnHttpError: true,
     })

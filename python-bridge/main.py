@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import math
 import os
 import shutil
 import signal
@@ -10,7 +11,7 @@ import tempfile
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from logging.handlers import TimedRotatingFileHandler
 from typing import Any, Iterable
 
@@ -20,7 +21,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from mootdx.quotes import Quotes
 
-from big_order_calculator import BigOrderCalculator, BigOrderConfig
 from l2.qmt_provider import QmtL2Provider
 from tdx_hq_cache import OfficialHQCacheDepthReader
 
@@ -183,7 +183,7 @@ def iso_from_ms(value: int) -> str:
 def is_opening_sampling_window(start: datetime | None = None, end: datetime | None = None) -> bool:
     current = start or datetime.now()
     finished = end or current
-    if not is_trading_session_now(current) and not is_trading_session_now(finished):
+    if _is_trading_day_cached(current) is not True and _is_trading_day_cached(finished) is not True:
         return False
 
     window_start = 9 * 3600 + 15 * 60
@@ -261,8 +261,8 @@ class OpeningRawQuoteFileSink:
         }
 
 
-def _is_trading_day_cached(date: datetime) -> bool:
-    """基于 mootdx 交易日历判断是否为 A 股交易日，缓存 24 小时避免重复网络请求。"""
+def _is_trading_day_cached(date: datetime) -> bool | None:
+    """使用 mootdx 内置通达信交易日历；不可用时不猜测交易日。"""
     try:
         from mootdx.utils.holiday import holiday
 
@@ -271,21 +271,49 @@ def _is_trading_day_cached(date: datetime) -> bool:
             format_="%Y-%m-%d",
             country="中国",
         )
-    except Exception:
-        pass
-    # 回退：周末一定不是交易日
-    if date.weekday() >= 5:
-        return False
-    return True
+    except Exception as error:
+        logger.warning("TDX trading calendar unavailable for %s: %s", date.date(), error)
+        return None
 
 
 def is_trading_session_now(now: datetime | None = None) -> bool:
     current = now or datetime.now()
-    if not _is_trading_day_cached(current):
+    if _is_trading_day_cached(current) is not True:
         return False
 
     hhmm = current.hour * 100 + current.minute
     return (930 <= hhmm < 1200) or (1300 <= hhmm <= 1500)
+
+
+def latest_completed_trading_date(now: datetime | None = None) -> datetime:
+    current = now or datetime.now()
+    hhmm = current.hour * 100 + current.minute
+    current_status = _is_trading_day_cached(current)
+    if current_status is None:
+        raise RuntimeError("TDX trading calendar unavailable")
+    if current_status and hhmm > 1500:
+        return current
+    candidate = current - timedelta(days=1)
+    for _ in range(370):
+        status = _is_trading_day_cached(candidate)
+        if status is None:
+            raise RuntimeError("TDX trading calendar unavailable")
+        if status:
+            return candidate
+        candidate -= timedelta(days=1)
+    raise RuntimeError("no completed trading day found in TDX calendar")
+
+
+def resolve_minute_session_date(now: datetime | None = None) -> tuple[str, bool]:
+    current = now or datetime.now().astimezone()
+    status = _is_trading_day_cached(current)
+    if status is None:
+        raise RuntimeError("TDX trading calendar unavailable")
+    hhmm = current.hour * 100 + current.minute
+    if status and hhmm >= 930:
+        return current.strftime("%Y%m%d"), hhmm >= 1500
+    completed = latest_completed_trading_date(current)
+    return completed.strftime("%Y%m%d"), True
 
 
 def to_int(value: Any, default: int = 0) -> int:
@@ -596,10 +624,6 @@ class BridgeConfig:
     qmt_l2_code_limit: int = env_int("QMT_L2_CODE_LIMIT", 80)
     qmt_l2_poll_interval_ms: int = env_int("QMT_L2_POLL_INTERVAL_MS", 600)
     qmt_l2_require_official: bool = env_bool("QMT_L2_REQUIRE_OFFICIAL", True)
-    big_order_enabled: bool = env_bool("TDX_BIG_ORDER_ENABLED", True)
-    big_order_threshold_wan: float = float(os.getenv("TDX_BIG_ORDER_THRESHOLD_WAN", "100"))
-    big_order_poll_interval_ms: int = env_int("TDX_BIG_ORDER_POLL_INTERVAL_MS", 3000)
-    big_order_codes_per_cycle: int = env_int("TDX_BIG_ORDER_CODES_PER_CYCLE", 30)
 
 
 class TdxL2Bridge:
@@ -630,14 +654,6 @@ class TdxL2Bridge:
         self.current_quote_batch_size = self.clamp_quote_batch_size(self.config.quote_batch_size)
         self.healthy_fetch_cycles = 0
         self._manual_server: tuple[str, int] | None = None
-        self.big_order = BigOrderCalculator(
-            BigOrderConfig(
-                threshold_wan=config.big_order_threshold_wan,
-                poll_interval_ms=config.big_order_poll_interval_ms,
-                codes_per_cycle=config.big_order_codes_per_cycle,
-            )
-        ) if config.big_order_enabled else None
-        self._last_big_order_poll_ms = 0
         self.active_server: tuple[str, int] | None = None
         self.l2_probe_cursor = 0
         self.qmt_l2_provider = (
@@ -645,7 +661,6 @@ class TdxL2Bridge:
             if self.config.l2_provider == "qmt" and self.config.qmt_l2_enabled
             else None
         )
-        self.latest_money_flow: dict[str, str] = {}
         self.latest_l2_status_payload = ""
         self.latest_quote_stats = QuoteFetchStats()
         self.last_quote_cycle_ts = 0
@@ -654,7 +669,7 @@ class TdxL2Bridge:
             os.path.join(default_log_dir(), "opening-raw-quotes")
         )
         self.last_qmt_l2_poll_ts = 0
-        self.cached_qmt_l2_snapshot: tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]] = ([], [], [])
+        self.cached_qmt_l2_snapshot: tuple[list[dict[str, Any]], list[dict[str, Any]]] = ([], [])
         self.helper_process: asyncio.subprocess.Process | None = None
         self.helper_runtime_root: str | None = None
         self.helper_launch_count = 0
@@ -1705,7 +1720,8 @@ class TdxL2Bridge:
         try:
             async for message in websocket:
                 data = json.loads(message)
-                if data.get("type") != "set_hot_pool":
+                message_type = data.get("type")
+                if message_type != "set_hot_pool":
                     continue
 
                 codes: list[str] = []
@@ -1988,7 +2004,6 @@ class TdxL2Bridge:
                         "quotes": [],
                         "depth": [],
                         "ticks": [],
-                        "moneyFlow": [],
                         "quoteStats": {},
                         "l2": self.l2_state,
                     }
@@ -2007,13 +2022,12 @@ class TdxL2Bridge:
                             "quotes": [],
                             "depth": [],
                             "ticks": [],
-                            "moneyFlow": [],
                             "quoteStats": stats.to_payload(),
                             "l2": self.l2_state,
                         }
                     )
 
-                qmt_depth, qmt_ticks, money_flow = await self.fetch_qmt_l2_snapshot(parsed_codes)
+                qmt_depth, qmt_ticks = await self.fetch_qmt_l2_snapshot(parsed_codes)
 
                 if using_pool:
                     async with self._backend_pool_lock:
@@ -2032,7 +2046,6 @@ class TdxL2Bridge:
                     "quotes": quotes,
                     "depth": depth,
                     "ticks": qmt_ticks,
-                    "moneyFlow": money_flow,
                     "quoteStats": stats.to_payload(),
                     "l2": self.l2_state,
                 }
@@ -2051,7 +2064,6 @@ class TdxL2Bridge:
                         "quotes": [],
                         "depth": [],
                         "ticks": [],
-                        "moneyFlow": [],
                         "quoteStats": {},
                         "l2": self.l2_state,
                     }
@@ -2098,25 +2110,28 @@ class TdxL2Bridge:
             if not stock_code:
                 return JSONResponse({"ok": False, "error": "missing code"}, status_code=400)
             try:
-                def _fetch():
-                    market = 1 if stock_code.startswith("6") else 0
-                    frame = self.quote_client.client.get_minute_time_data(market, stock_code)
-                    return frame_to_records(frame)
-
-                if self.quote_client is None:
-                    return JSONResponse(
-                        {"ok": False, "error": "tdx not connected"}, status_code=503
+                session_date, expected_complete = resolve_minute_session_date()
+                async with self.fetch_lock:
+                    await self.ensure_client()
+                    assert self.quote_client is not None
+                    frame = await asyncio.to_thread(
+                        self.quote_client.minutes,
+                        symbol=stock_code,
+                        date=session_date,
                     )
-                records = await asyncio.to_thread(_fetch)
-                today_str = datetime.now().strftime("%Y%m%d")
+                records = frame_to_records(frame)
+                if len(records) > 240:
+                    raise ValueError("invalid minute point count")
                 cumulative_vol = 0.0
                 cumulative_amount = 0.0
                 points = []
                 for idx, r in enumerate(records):
                     price = float(r.get("price", 0))
-                    vol = int(r.get("vol", 0))
+                    vol = float(r.get("vol", r.get("volume", 0)))
+                    if not math.isfinite(price) or not math.isfinite(vol) or price <= 0 or vol < 0:
+                        raise ValueError("invalid minute row")
                     cumulative_vol += vol
-                    cumulative_amount += price * vol
+                    cumulative_amount += price * vol * 100
                     # 计算分时时间：前120点为早盘9:30起，之后为午盘13:00起
                     if idx < 120:
                         total_minutes = 9 * 60 + 30 + idx
@@ -2135,11 +2150,18 @@ class TdxL2Bridge:
                 return JSONResponse({
                     "ok": True,
                     "data": {
-                        "date": today_str,
+                        "date": session_date,
                         "points": points,
+                        "complete": len(points) == 240,
+                        "expectedComplete": expected_complete,
                     },
                     "serverTs": now_ms(),
                 })
+            except RuntimeError as exc:
+                return JSONResponse(
+                    {"ok": False, "errorCode": "tdx_calendar_unavailable", "error": str(exc)},
+                    status_code=503,
+                )
             except Exception as exc:
                 return JSONResponse(
                     {"ok": False, "error": str(exc)}, status_code=500
@@ -2164,9 +2186,19 @@ class TdxL2Bridge:
                 target = datetime.strptime(date, "%Y-%m-%d") if date else datetime.now()
             except ValueError:
                 target = datetime.now()
+            is_trading_day = _is_trading_day_cached(target)
+            if is_trading_day is None:
+                return JSONResponse({
+                    "ok": False,
+                    "errorCode": "tdx_calendar_unavailable",
+                    "isTradingDay": None,
+                    "isTradingSession": False,
+                    "date": target.strftime("%Y-%m-%d"),
+                    "serverTs": now_ms(),
+                }, status_code=503)
             return JSONResponse({
                 "ok": True,
-                "isTradingDay": _is_trading_day_cached(target),
+                "isTradingDay": is_trading_day,
                 "isTradingSession": is_trading_session_now(target),
                 "date": target.strftime("%Y-%m-%d"),
                 "serverTs": now_ms(),
@@ -2470,16 +2502,16 @@ class TdxL2Bridge:
     async def fetch_qmt_l2_snapshot(
         self,
         codes: list[str],
-    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         if not self.qmt_l2_provider:
-            return [], [], []
+            return [], []
         now = now_ms()
         interval = max(0, self.config.qmt_l2_poll_interval_ms)
         if self.cached_qmt_l2_snapshot and interval and now - self.last_qmt_l2_poll_ts < interval:
             return self.cached_qmt_l2_snapshot
         target_codes = self.qmt_l2_codes(codes)
         if not target_codes:
-            return [], [], []
+            return [], []
         try:
             snapshot = await asyncio.to_thread(self.qmt_l2_provider.poll_snapshot, target_codes)
             if snapshot.status:
@@ -2487,10 +2519,9 @@ class TdxL2Bridge:
             if snapshot.status and snapshot.status.status == "ok":
                 self.l2_state["fallbackActive"] = False
             depth = [item.to_dict() for item in snapshot.depth]
-            money_flow = [item.to_dict() for item in snapshot.money_flow]
             ticks = snapshot.ticks
             self.last_qmt_l2_poll_ts = now_ms()
-            self.cached_qmt_l2_snapshot = (depth, ticks, money_flow)
+            self.cached_qmt_l2_snapshot = (depth, ticks)
             return self.cached_qmt_l2_snapshot
         except Exception as error:
             self.l2_state.update(
@@ -2503,7 +2534,7 @@ class TdxL2Bridge:
                 }
             )
             logger.warning("qmt l2 snapshot fetch failed: %s", error)
-            return [], [], []
+            return [], []
 
     async def broadcast_l2_status_if_changed(self) -> None:
         if not self.clients:
@@ -2521,7 +2552,6 @@ class TdxL2Bridge:
         )
 
     async def poll_loop(self) -> None:
-        _last_big_order_date = ""
         while not self.stop_event.is_set():
             cycle_started = now_ms()
             pool = self.aggregate_pool()
@@ -2531,13 +2561,6 @@ class TdxL2Bridge:
                 continue
 
             cycle_started_dt = datetime.now().astimezone()
-            # 交易日切换时清空大单累加器
-            if self.big_order:
-                today_str = cycle_started_dt.strftime("%Y%m%d")
-                if _last_big_order_date and today_str != _last_big_order_date:
-                    self.big_order.daily_cleanup()
-                    logger.info("big_order daily cleanup for %s -> %s", _last_big_order_date, today_str)
-                _last_big_order_date = today_str
             try:
                 quotes, depth, quote_stats = await self.fetch_quotes_and_depth(pool)
                 forced_opening_sample = is_opening_sampling_window(cycle_started_dt, datetime.now().astimezone())
@@ -2551,36 +2574,7 @@ class TdxL2Bridge:
                 self.latest_quote_stats = quote_stats
                 self.last_quote_cycle_ts = now_ms()
                 self.last_quote_error = ""
-                # --- TDX 大单资金流（主源，盘后低频率拉取当日历史数据） ---
-                big_order_frames: list[dict[str, Any]] = []
-                if self.big_order and self.quote_client is not None:
-                    now_cycle = now_ms()
-                    interval = (
-                        self.big_order.config.poll_interval_ms
-                        if is_trading_session_now()
-                        else 30000
-                    )
-                    if now_cycle - self._last_big_order_poll_ms >= interval:
-                        self._last_big_order_poll_ms = now_cycle
-                        try:
-                            tdx_api = getattr(self.quote_client, "client", None)
-                            if tdx_api is not None:
-                                frames = await asyncio.to_thread(
-                                    self.big_order.fetch_and_update, tdx_api, pool
-                                )
-                                big_order_frames = [f.to_dict() for f in frames]
-                        except Exception as exc:
-                            logger.debug("big_order fetch skipped: %s", exc)
-                # TDX 大单为主源
-                money_flow = big_order_frames
-                # --- QMT L2 仅补十档深度+逐笔，资金流以 TDX 为准 ---
-                qmt_depth, qmt_ticks, qmt_money_flow = await self.fetch_qmt_l2_snapshot(pool)
-                # QMT 资金流仅补漏（TDX 没覆盖的股票）
-                if qmt_money_flow:
-                    covered = {item["code"] for item in money_flow}
-                    for qf in qmt_money_flow:
-                        if qf["code"] not in covered:
-                            money_flow.append(qf)
+                qmt_depth, qmt_ticks = await self.fetch_qmt_l2_snapshot(pool)
                 if qmt_depth:
                     depth_by_code = {item["code"]: item for item in depth}
                     for item in qmt_depth:
@@ -2595,7 +2589,6 @@ class TdxL2Bridge:
                 )
                 depth_patch = self.diff_payloads(depth, self.latest_depth)
                 ticks_batch = qmt_ticks or await self.fetch_ticks(pool)
-                money_flow_patch = self.diff_payloads(money_flow, self.latest_money_flow)
                 subscribed_count = len(pool)
 
                 logger.info(
@@ -2621,7 +2614,6 @@ class TdxL2Bridge:
                             "quoteStats": quote_stats.to_payload(),
                             "openingForcedSample": forced_opening_sample,
                             "l2": self.l2_state,
-                            "moneyFlow": money_flow,
                         }
                     )
                     await self.broadcast_l2_status_if_changed()
@@ -2645,16 +2637,6 @@ class TdxL2Bridge:
                                 "serverTs": now_ms(),
                                 "intervalMs": self.config.poll_interval_ms,
                                 "items": depth_patch,
-                            }
-                        )
-                    if money_flow_patch:
-                        await self.broadcast(
-                            {
-                                "type": "money_flow_patch",
-                                "serverTs": now_ms(),
-                                "intervalMs": self.config.poll_interval_ms,
-                                "items": money_flow_patch,
-                                "l2": self.l2_state,
                             }
                         )
                     await self.broadcast_l2_status_if_changed()

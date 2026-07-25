@@ -34,7 +34,7 @@ internal static class Program
         Run("Hotlist selection messages validate and normalize codes", LonghuFeatureTests.TestHotlistSelectionMessage);
         Run("Main form follows hotlist selections with mutually exclusive modes", () =>
             LonghuFeatureTests.TestMainFormHotlistFollow().GetAwaiter().GetResult());
-        Run("Big-order last-good bound is 5 minutes in trading and 12 hours off-session",
+        Run("Big-order last-good bound uses authoritative current or completed session",
             LonghuFeatureTests.TestLastGoodMaxAgeWindows);
         Run("Big-order last-good rejects a different authoritative session date", () =>
             LonghuFeatureTests.TestProviderRejectsCrossDayLastGood().GetAwaiter().GetResult());
@@ -62,9 +62,11 @@ internal static class Program
         Run("Longhu empty list is a valid direct success", () => LonghuFeatureTests.TestValidEmptyList().GetAwaiter().GetResult());
         Run("Longhu non-empty invalid list falls back to proxy", () => LonghuFeatureTests.TestAllInvalidFallback().GetAwaiter().GetResult());
         Run("THS snapshot parser merges title, quote, limit-up and price points", TestSnapshotParsing);
-        Run("THS snapshot parser reads Tencent minute turnover", TestMinuteTurnoverParsing);
+        Run("THS snapshot parser reads normalized TDX minute turnover", TestMinuteTurnoverParsing);
         Run("Direct Sina quote parser decodes GBK fields", TestDirectSinaQuoteParsing);
-        Run("Direct Tencent minute parser validates nested rows", TestDirectTencentMinuteParsing);
+        Run("TDX minute parser accepts only the normalized bridge contract", TestNormalizedTdxMinuteParsing);
+        Run("TDX minute rejects incomplete completed sessions", () =>
+            TestIncompleteCompletedMinuteRejected().GetAwaiter().GetResult());
         Run("Direct THS payload parsers distinguish empty limit-up", TestDirectThsParsing);
         Run("Direct source clients use upstream and matching proxy contracts", () => TestDirectSourceClients().GetAwaiter().GetResult());
         Run("Limit-up source falls back to latest recent trading date", () => TestLimitUpDateFallback().GetAwaiter().GetResult());
@@ -79,11 +81,20 @@ internal static class Program
         Run("Provider falls back only the failed source", () => TestIndependentProxyFallback().GetAwaiter().GetResult());
         Run("Provider does not fallback valid empty limit-up", () => TestValidEmptyLimitUp().GetAwaiter().GetResult());
         Run("Provider uses same-stock stale only after both attempts fail", () => TestPerSourceStale().GetAwaiter().GetResult());
+        Run("Provider rejects expired upstream big-order stale", () =>
+            TestExpiredUpstreamBigOrderStale().GetAwaiter().GetResult());
+        Run("Minute last-good reuses the same completed session within seven days", () => TestMinuteLastGoodSameSession().GetAwaiter().GetResult());
+        Run("Minute last-good rejects a different authoritative session", () => TestMinuteLastGoodCrossSession().GetAwaiter().GetResult());
+        Run("Successful minute response rejects a different authoritative session", () => TestSuccessfulMinuteCrossSession().GetAwaiter().GetResult());
+        Run("Minute response without an authoritative THS session is rejected", () =>
+            TestMinuteWithoutAuthoritativeSessionRejected().GetAwaiter().GetResult());
+        Run("Minute last-good rejects completed sessions older than seven days", () => TestMinuteLastGoodExpiredCompletedSession().GetAwaiter().GetResult());
+        Run("Minute last-good rejects current-session data older than five minutes", () => TestMinuteLastGoodExpiredCurrentSession().GetAwaiter().GetResult());
         Run("Provider never creates stale from an initially failed source", () => TestNoSyntheticStale().GetAwaiter().GetResult());
         Run("Provider fills quote metrics from Tencent and limit-up context", () => TestProviderMetricBackfill().GetAwaiter().GetResult());
         Run("Series builder aggregates minute flow and thresholds", TestSeriesBuilder);
-        Run("Series builder computes Tencent market VWAP", TestMarketAveragePrices);
-        Run("Series builder exposes Tencent minute price line", TestMinutePriceLine);
+        Run("Series builder computes minute market VWAP", TestMarketAveragePrices);
+        Run("Series builder exposes minute price line", TestMinutePriceLine);
         Run("Series builder computes cumulative big-order average price", TestBigOrderAveragePrices);
         Run("Series builder aggregates eight half-hour turnover bands", TestHalfHourSeries);
         Run("Series builder does not overcount truncated minute turnover", TestHalfHourTruncatedTurnover);
@@ -227,24 +238,9 @@ internal static class Program
         AssertEqual<double?>(null, quote.VolumeRatio, "sina ratio unavailable");
     }
 
-    private static void TestDirectTencentMinuteParsing()
+    private static void TestNormalizedTdxMinuteParsing()
     {
-        var payload = JObject.Parse(@"{
-          'code':0,
-          'data':{'sz002297':{'data':{'date':'20260618','data':[
-            '0930 25.70 11848 30449360.00',
-            '1500 25.98 71011 184435426.43',
-            '1501 25.98 71011 184435426.43',
-            '1530 25.98 71011 184435426.43'
-          ]}}}
-        }");
         var parser = new ThsPayloadParser();
-        var points = parser.ParseTencentMinute("002297", payload);
-        AssertEqual(2, points.Count, "direct minute count");
-        AssertEqual(new DateTime(2026, 6, 18, 9, 30, 0), points[0].Time, "direct minute time");
-        AssertEqual(184435426.43d, points[1].CumulativeAmount, "direct minute amount");
-        AssertEqual(new DateTime(2026, 6, 18, 15, 0, 0), points[1].Time, "post-close rows ignored");
-
         var normalized = parser.ParseNormalizedMinute(JObject.Parse(@"{
           'date':'20260618','points':[
             {'time':'1459','price':25.90,'cumulativeVolume':70000,'cumulativeAmount':180000000},
@@ -264,12 +260,11 @@ internal static class Program
             "intraday monotonicity remains strict");
 
         AssertThrows<PayloadParseException>(() =>
-            new ThsPayloadParser().ParseTencentMinute("002297", JObject.Parse("{'code':1,'msg':'blocked'}")),
-            "tencent error code");
-        AssertThrows<PayloadParseException>(() =>
-            new ThsPayloadParser().ParseTencentMinute("002297", JObject.Parse(
-                "{'code':0,'data':{'sz002297':{'data':{'date':'bad','data':[]}}}}")),
-            "tencent invalid date");
+            parser.ParseNormalizedMinute(JObject.Parse(@"{
+              'date':'20260618',
+              'data':['0930 25.70 11848 30449360.00']
+            }")),
+            "legacy Tencent rows are rejected");
     }
 
     private static void TestDirectThsParsing()
@@ -299,9 +294,9 @@ internal static class Program
         using (var http = new HttpClient(handler))
         {
             var parser = new ThsPayloadParser();
-            var big = new ThsBigOrderSourceClient(http, "http://127.0.0.1:3000", parser);
+            var big = new ThsBigOrderSourceClient(http, "http://127.0.0.1:8000", parser);
             var quote = new SinaQuoteSourceClient(http, "http://127.0.0.1:3000", parser);
-            var minute = new TencentMinuteSourceClient(http, "http://127.0.0.1:3000", parser);
+            var minute = new TdxMinuteSourceClient(http, "http://127.0.0.1:8765", parser);
             var limit = new ThsLimitUpSourceClient(http, "http://127.0.0.1:3000", parser);
 
             AssertEqual(DataTransport.Direct, (await big.LoadDirectAsync("002297", CancellationToken.None)).Transport, "big direct");
@@ -318,16 +313,16 @@ internal static class Program
             AssertEqual(DataTransport.Stale, staleBig.Transport, "THS ui stale transport");
             handler.ThsUiStale = false;
             await quote.LoadProxyAsync("002297", CancellationToken.None);
-            await minute.LoadProxyAsync("002297", CancellationToken.None);
             await limit.LoadProxyAsync("002297", CancellationToken.None);
 
             AssertTrue(handler.Records.Any(x => x.Uri.Host == "vaserviece.10jqka.com.cn" && x.Uri.Query.Contains("op=mainMonitorDetail") && x.Uri.Query.Contains("stockcode=002297")), "big direct url");
             AssertTrue(handler.Records.Any(x => x.Uri.Host == "qt.gtimg.cn" && x.Uri.AbsoluteUri.Contains("sz002297")), "tencent quote direct url");
-            AssertTrue(handler.Records.Any(x => x.Uri.Host == "web.ifzq.gtimg.cn" && x.Uri.Query.Contains("sz002297")), "tencent direct url");
+            AssertTrue(handler.Records.Any(x => x.Uri.Port == 8765 && x.Uri.PathAndQuery == "/api/quotes/minute?code=002297"), "TDX minute bridge path");
             AssertTrue(handler.Records.Any(x => x.Uri.Host == "data.10jqka.com.cn" && x.Uri.AbsolutePath.Contains("limit_up_pool")), "limit direct url");
             AssertTrue(handler.Records.Any(x => x.Uri.PathAndQuery == "/api/big-order/ths-detail?stockCode=002297"), "big proxy path");
             AssertTrue(handler.Records.Any(x => x.Uri.PathAndQuery == "/api/quotes/tencent?codes=002297"), "tencent quote proxy path");
-            AssertTrue(handler.Records.Any(x => x.Uri.PathAndQuery == "/api/quotes/tencent/minute?code=002297"), "minute proxy path");
+            AssertTrue(!handler.Records.Any(x => x.Uri.Host == "web.ifzq.gtimg.cn"), "no Tencent minute direct request");
+            AssertTrue(!handler.Records.Any(x => x.Uri.PathAndQuery == "/api/quotes/tencent/minute?code=002297"), "no Tencent minute proxy request");
             AssertTrue(handler.Records.Any(x =>
                 x.Uri.AbsolutePath == "/api/limitup/10jqka" && x.Uri.Query.Contains("date=")), "limit proxy path");
 
@@ -337,6 +332,29 @@ internal static class Program
             var tencentQuoteRecord = handler.Records.First(x => x.Uri.Host == "qt.gtimg.cn");
             AssertTrue(tencentQuoteRecord.Referer.Contains("qq.com"), "Tencent quote referer");
         }
+    }
+
+    private static async Task TestIncompleteCompletedMinuteRejected()
+    {
+        var handler = new SourceClientHandler
+        {
+            MinuteExpectedComplete = true,
+            MinuteComplete = false,
+        };
+        using (var http = new HttpClient(handler))
+        {
+            var minute = new TdxMinuteSourceClient(
+                http, "http://127.0.0.1:8765", new ThsPayloadParser());
+            try
+            {
+                await minute.LoadDirectAsync("002297", CancellationToken.None);
+            }
+            catch (PayloadParseException)
+            {
+                return;
+            }
+        }
+        throw new InvalidOperationException("incomplete completed minute response must fail");
     }
 
     private static async Task TestLimitUpDateFallback()
@@ -497,6 +515,133 @@ internal static class Program
             AssertEqual(DataFreshness.Stale, stale.BigOrderFreshness, "big stale freshness");
             AssertEqual(DataTransport.Stale, stale.Transports.BigOrder, "big stale transport");
             AssertEqual(DataTransport.Direct, stale.Transports.Quote, "quote keeps direct");
+        }
+    }
+
+    private static async Task TestExpiredUpstreamBigOrderStale()
+    {
+        var sources = CreateSourceStubs();
+        var expired = BigOrderResult(new DateTime(2026, 6, 18));
+        expired.Transport = DataTransport.Stale;
+        expired.Freshness = DataFreshness.Stale;
+        expired.FetchedAt = DateTime.Now.AddDays(-8);
+        sources.Big.Direct = _ => Task.FromResult(expired);
+        using (var provider = CreateProvider(sources))
+        {
+            var snapshot = await provider.LoadSnapshotAsync("002297", CancellationToken.None);
+            AssertEqual(DataFreshness.Failed, snapshot.BigOrderFreshness,
+                "expired upstream stale freshness");
+            AssertEqual(DataTransport.Failed, snapshot.Transports.BigOrder,
+                "expired upstream stale transport");
+            AssertEqual(0, snapshot.Orders.Count, "expired upstream stale orders rejected");
+        }
+    }
+
+    private static async Task TestMinuteLastGoodSameSession()
+    {
+        var sources = CreateSourceStubs();
+        sources.Minute.Direct = _ => Task.FromResult(MinuteResult(
+            new DateTime(2026, 6, 18), DateTime.Now.AddDays(-6)));
+        using (var provider = CreateProvider(sources))
+        {
+            await provider.LoadSnapshotAsync("002297", CancellationToken.None);
+            FailMinuteSource(sources);
+            var stale = await provider.LoadSnapshotAsync("002297", CancellationToken.None);
+            AssertEqual(DataFreshness.Stale, stale.MinuteTurnoverFreshness, "same-session minute freshness");
+            AssertEqual(DataTransport.Stale, stale.Transports.Minute, "same-session minute transport");
+            AssertEqual(1, stale.MinuteTurnover.Count, "same-session minute points retained");
+        }
+    }
+
+    private static async Task TestMinuteLastGoodCrossSession()
+    {
+        var sources = CreateSourceStubs();
+        using (var provider = CreateProvider(sources))
+        {
+            await provider.LoadSnapshotAsync("002297", CancellationToken.None);
+            sources.Big.Direct = _ => Task.FromResult(BigOrderResult(new DateTime(2026, 6, 19)));
+            FailMinuteSource(sources);
+            var failed = await provider.LoadSnapshotAsync("002297", CancellationToken.None);
+            AssertEqual(DataFreshness.Failed, failed.MinuteTurnoverFreshness, "cross-session minute freshness");
+            AssertEqual(0, failed.MinuteTurnover.Count, "cross-session minute points rejected");
+        }
+    }
+
+    private static async Task TestSuccessfulMinuteCrossSession()
+    {
+        var sources = CreateSourceStubs();
+        sources.Big.Direct = _ => Task.FromResult(BigOrderResult(new DateTime(2026, 6, 19)));
+        sources.Minute.Direct = _ => Task.FromResult(MinuteResult(
+            new DateTime(2026, 6, 18), DateTime.Now));
+        using (var provider = CreateProvider(sources))
+        {
+            var mismatched = await provider.LoadSnapshotAsync("002297", CancellationToken.None);
+            AssertEqual(DataFreshness.Failed, mismatched.MinuteTurnoverFreshness,
+                "successful cross-session minute freshness");
+            AssertEqual(0, mismatched.MinuteTurnover.Count,
+                "successful cross-session minute points rejected");
+
+            FailMinuteSource(sources);
+            var failed = await provider.LoadSnapshotAsync("002297", CancellationToken.None);
+            AssertEqual(DataFreshness.Failed, failed.MinuteTurnoverFreshness,
+                "rejected minute response is not cached");
+            AssertEqual(0, failed.MinuteTurnover.Count,
+                "rejected minute response cannot become stale");
+        }
+    }
+
+    private static async Task TestMinuteWithoutAuthoritativeSessionRejected()
+    {
+        var sources = CreateSourceStubs();
+        sources.Big.Direct = _ => throw new HttpRequestException("THS unavailable");
+        sources.Big.Proxy = _ => throw new HttpRequestException("THS proxy unavailable");
+        using (var provider = CreateProvider(sources))
+        {
+            var first = await provider.LoadSnapshotAsync("002297", CancellationToken.None);
+            AssertEqual(DataFreshness.Failed, first.MinuteTurnoverFreshness,
+                "minute without THS session freshness");
+            AssertEqual(DataTransport.Failed, first.Transports.Minute,
+                "minute without THS session transport");
+            AssertEqual(0, first.MinuteTurnover.Count,
+                "minute without THS session points rejected");
+
+            FailMinuteSource(sources);
+            var second = await provider.LoadSnapshotAsync("002297", CancellationToken.None);
+            AssertEqual(DataFreshness.Failed, second.MinuteTurnoverFreshness,
+                "unauthorized minute response is not cached");
+            AssertEqual(0, second.MinuteTurnover.Count,
+                "unauthorized minute response cannot become stale");
+        }
+    }
+
+    private static async Task TestMinuteLastGoodExpiredCompletedSession()
+    {
+        var sources = CreateSourceStubs();
+        sources.Minute.Direct = _ => Task.FromResult(MinuteResult(
+            new DateTime(2026, 6, 18), DateTime.Now.AddDays(-8)));
+        using (var provider = CreateProvider(sources))
+        {
+            await provider.LoadSnapshotAsync("002297", CancellationToken.None);
+            FailMinuteSource(sources);
+            var failed = await provider.LoadSnapshotAsync("002297", CancellationToken.None);
+            AssertEqual(DataFreshness.Failed, failed.MinuteTurnoverFreshness, "expired completed minute freshness");
+            AssertEqual(0, failed.MinuteTurnover.Count, "expired completed minute points rejected");
+        }
+    }
+
+    private static async Task TestMinuteLastGoodExpiredCurrentSession()
+    {
+        var sources = CreateSourceStubs();
+        var today = DateTime.Now.Date;
+        sources.Big.Direct = _ => Task.FromResult(BigOrderResult(today));
+        sources.Minute.Direct = _ => Task.FromResult(MinuteResult(today, DateTime.Now.AddMinutes(-6)));
+        using (var provider = CreateProvider(sources))
+        {
+            await provider.LoadSnapshotAsync("002297", CancellationToken.None);
+            FailMinuteSource(sources);
+            var failed = await provider.LoadSnapshotAsync("002297", CancellationToken.None);
+            AssertEqual(DataFreshness.Failed, failed.MinuteTurnoverFreshness, "expired current minute freshness");
+            AssertEqual(0, failed.MinuteTurnover.Count, "expired current minute points rejected");
         }
     }
 
@@ -1646,6 +1791,51 @@ internal static class Program
         };
     }
 
+    private static SourceLoadResult<IReadOnlyList<MinuteTurnoverPoint>> MinuteResult(
+        DateTime sessionDate, DateTime fetchedAt)
+    {
+        return new SourceLoadResult<IReadOnlyList<MinuteTurnoverPoint>>
+        {
+            Data = new[]
+            {
+                new MinuteTurnoverPoint
+                {
+                    Time = sessionDate.Date.AddHours(9).AddMinutes(30),
+                    Price = 25.70,
+                    CumulativeVolume = 11848,
+                    CumulativeAmount = 30449360,
+                },
+            },
+            Freshness = DataFreshness.Fresh,
+            Transport = DataTransport.Direct,
+            FetchedAt = fetchedAt,
+        };
+    }
+
+    private static SourceLoadResult<BigOrderSourceData> BigOrderResult(DateTime sessionDate)
+    {
+        return new SourceLoadResult<BigOrderSourceData>
+        {
+            Data = new BigOrderSourceData
+            {
+                StockFallback = new StockSummary { Code = "002297", Name = "博云新材", Price = 28.36 },
+                MainFunds = new MainFundSummary(),
+                Orders = new BigOrderItem[0],
+                Prices = new PricePoint[0],
+                SessionDate = sessionDate.Date,
+            },
+            Freshness = DataFreshness.Fresh,
+            Transport = DataTransport.Direct,
+            FetchedAt = DateTime.Now,
+        };
+    }
+
+    private static void FailMinuteSource(SourceStubs sources)
+    {
+        sources.Minute.Direct = _ => throw new HttpRequestException("TDX minute unavailable");
+        sources.Minute.Proxy = _ => throw new NotSupportedException("TDX minute has no fallback");
+    }
+
     private static THSBigOrderDataProvider CreateProvider(SourceStubs value)
     {
         return new THSBigOrderDataProvider(value.Big, value.Quote, value.Minute, value.Limit);
@@ -1716,6 +1906,8 @@ internal static class Program
     {
         public List<SourceRequestRecord> Records { get; } = new List<SourceRequestRecord>();
         public bool ThsUiStale { get; set; }
+        public bool MinuteExpectedComplete { get; set; }
+        public bool MinuteComplete { get; set; } = true;
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
@@ -1742,19 +1934,22 @@ internal static class Program
             else
             {
                 string json;
+                var fetchedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                var sessionDate = DateTime.Now.ToString("yyyy-MM-dd");
                 if (host == "vaserviece.10jqka.com.cn")
                     json = "{'errorcode':0,'title':{'stockname':'博云新材','price':28.36},'list':[],'pricechange':[]}";
-                else if (host == "web.ifzq.gtimg.cn")
-                    json = "{'code':0,'data':{'sz002297':{'data':{'date':'20260618','data':['0930 25.70 11848 30449360']}}}}";
                 else if (host == "data.10jqka.com.cn")
                     json = "{'data':{'info':[]}}";
                 else if (path == "/api/big-order/ths-detail")
-                    json = "{'ok':true,'fetchedAt':1781746200000,'data':{'title':{'stockname':'博云新材','price':28.36},'list':[],'pricechange':[],'dragonMeta':{'cache':{'uiStale':" +
+                    json = "{'ok':true,'sessionDate':'" + sessionDate + "','fetchedAt':" + fetchedAt + ",'data':{'title':{'stockname':'博云新材','price':28.36},'list':[],'pricechange':[],'dragonMeta':{'cache':{'uiStale':" +
                         (ThsUiStale ? "true" : "false") + "}}}}";
                 else if (path == "/api/quotes/tencent")
                     json = "{'data':{'diff':[{'f12':'002297','f14':'博云新材','f2':28.36,'f3':10.09,'f5':3342254360,'f6':1178500,'f8':20.56,'f10':0.82}]}}";
-                else if (path == "/api/quotes/tencent/minute")
-                    json = "{'ok':true,'data':{'date':'20260618','points':[{'time':'0930','price':25.70,'cumulativeVolume':11848,'cumulativeAmount':30449360}]}}";
+                else if (path == "/api/quotes/minute")
+                    json = "{'ok':true,'data':{'date':'20260618','expectedComplete':" +
+                        (MinuteExpectedComplete ? "true" : "false") + ",'complete':" +
+                        (MinuteComplete ? "true" : "false") +
+                        ",'points':[{'time':'0930','price':25.70,'cumulativeVolume':11848,'cumulativeAmount':30449360}]}}";
                 else
                     json = "{'data':{'info':[]}}";
                 content = new StringContent(json, Encoding.UTF8, "application/json");
@@ -1799,7 +1994,7 @@ internal static class Program
                 json = "{'ok':true,'sessionDate':'2026-06-18','fetchedAt':" + fetchedAt + ",'data':{'List':[['2','1781746200','10','28360','28.36','2026-06-18 09:30:01']],'Total':1,'errcode':'0','dragonMeta':{'cache':{'uiStale':false}}}}";
             else if (path.StartsWith("/api/big-order/"))
                 json = "{'ok':true,'sessionDate':'2026-06-18','fetchedAt':" + fetchedAt + ",'data':{'title':{'stockname':'博云新材','price':28.36},'list':[{'nature':'主力主买','volume':'10手','avgprice':'28.36','money':28360,'otime':'2026-06-18 09:30:01'}],'pricechange':[]}}";
-            else if (path.StartsWith("/api/quotes/tencent/minute"))
+            else if (path.StartsWith("/api/quotes/minute"))
                 json = "{'ok':true,'data':{'date':'20260618','points':[{'time':'0930','price':25.70,'cumulativeVolume':11848,'cumulativeAmount':30449360.00}]}}";
             else if (path.StartsWith("/api/quotes/"))
                 json = QuoteDegraded

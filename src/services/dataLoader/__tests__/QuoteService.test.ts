@@ -37,7 +37,7 @@ describe('QuoteService', () => {
     expect(quote?.sources).toBeDefined()
   })
 
-  it('publishes lazy money-flow enrichment through realtime batch updates when available', async () => {
+  it('does not publish legacy HTTP money-flow enrichment as authoritative funds', async () => {
     const applyRealtimeQuoteBatch = vi.fn()
     const fetchFullData = vi.fn().mockResolvedValue(
       new Map([
@@ -60,8 +60,8 @@ describe('QuoteService', () => {
     await vi.waitFor(() => { expect(applyRealtimeQuoteBatch).toHaveBeenCalled() })
 
     const patch = applyRealtimeQuoteBatch.mock.calls[0]?.[0]?.[0]
-    expect(patch?.zlje).toBe(5_450_857_714.71)
-    expect(patch?.moneyFlowSource).toBe('ths_l2')
+    expect(patch?.zlje).toBeUndefined()
+    expect(patch?.moneyFlowSource).toBeUndefined()
   })
 
   it('does not label basic-source fund flow as having money flow data', async () => {
@@ -83,7 +83,7 @@ describe('QuoteService', () => {
 
     const result = await service.fetchMergedQuotes(['603773'])
     const quote = result.get('603773')
-    expect(quote?.zlje).toBe(0)
+    expect(quote?.zlje).toBeUndefined()
   })
 
   it('uses HTTP quote supplement fields when realtime TDX quote has no valuation fields', async () => {
@@ -227,38 +227,4 @@ describe('QuoteService', () => {
     expect(onProgress).toHaveBeenCalled()
   })
 
-  it('computes zljzb from turnover during background money-flow enrichment', async () => {
-    const applyRealtimeQuoteBatch = vi.fn()
-    const fetchFullData = vi.fn().mockResolvedValue(
-      new Map([
-        [
-          '603773',
-          {
-            ...httpQuote({ zlje: 5_450_857_714.71, zljzb: 0, moneyFlowSource: 'ths_l2', moneyFlowEstimated: false }),
-          },
-        ],
-      ]),
-    )
-
-    const service = new QuoteService({
-      now: () => 1000,
-      dataLayer: {
-        getQuote: (code: string) =>
-          code === '603773' ? { ...httpQuote({ turnover: 25_205_130_127, source: 'tencent' }), timestamp: 0 } : null,
-        getStock: () => null,
-        applyRealtimeQuoteBatch,
-        updateQuote: () => undefined,
-      } as any,
-      feed: { fetchBasicData: () => new Map(), fetchFullData } as any,
-    })
-
-    await service.fetchMergedQuotes(['603773'])
-    await vi.waitFor(() => { expect(applyRealtimeQuoteBatch).toHaveBeenCalled() })
-
-    const patch = applyRealtimeQuoteBatch.mock.calls[0]?.[0]?.[0]
-    // zljzb should be computed as (zlje / turnover) * 100
-    expect(patch?.zlje).toBe(5_450_857_714.71)
-    expect(patch?.zljzb).toBeCloseTo(21.63, 1)
-    expect(patch?.moneyFlowSource).toBe('ths_l2')
-  })
 })

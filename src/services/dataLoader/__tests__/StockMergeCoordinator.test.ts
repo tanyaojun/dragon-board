@@ -76,7 +76,7 @@ describe('StockMergeCoordinator', () => {
             zljzb: 5,
             cddje: 0,
             cddjzb: 0,
-            moneyFlowSource: 'ths_l2',
+            moneyFlowSource: 'ths_main_monitor',
             moneyFlowEstimated: false,
           },
         ],

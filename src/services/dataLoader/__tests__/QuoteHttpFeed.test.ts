@@ -3,33 +3,28 @@ import { describe, expect, it, vi } from 'vitest'
 import { QuoteHttpFeed } from '../QuoteHttpFeed'
 
 describe('QuoteHttpFeed', () => {
-  it('fetches and normalizes Tencent quote rows', async () => {
+  it('fetches and normalizes Tencent quote rows without projecting fund fields', async () => {
     const getQuotes = vi.fn().mockResolvedValue({
       data: {
-        diff: [
-          {
-            f12: 'SZ000001',
-            f2: '10.5',
-            f3: '2.1',
-            f6: '1200',
-            f5: '500000',
-            f8: '3.2',
-            f9: '12',
-            f10: '1.4',
-            f23: '1.5',
-            f14: '平安银行',
-            f20: '100',
-            f21: '80',
-            f62: '2000',
-            f184: '4.5',
-            f66: '900',
-            f69: '1.2',
-          },
-        ],
+        diff: [{
+          f12: 'SZ000001',
+          f2: '10.5',
+          f3: '2.1',
+          f6: '1200',
+          f5: '500000',
+          f8: '3.2',
+          f9: '12',
+          f10: '1.4',
+          f23: '1.5',
+          f14: '平安银行',
+          f20: '100',
+          f21: '80',
+          f62: '2000',
+        }],
       },
     })
-
     const feed = new QuoteHttpFeed({ api: { getQuotes }, sleep: async () => undefined })
+
     const result = await feed.fetchFromTencent(['000001'])
 
     expect(getQuotes).toHaveBeenCalledWith(['000001'], { source: 'tencent' })
@@ -42,8 +37,8 @@ describe('QuoteHttpFeed', () => {
       source: 'tencent',
       totalMV: 1_000_000,
       cirMV: 800_000,
-      zlje: 2000,
     })
+    expect(result.get('000001')).not.toHaveProperty('zlje')
   })
 
   it('falls back to Sina when Tencent basic quote fetch fails', async () => {
@@ -52,40 +47,37 @@ describe('QuoteHttpFeed', () => {
       .fn()
       .mockRejectedValueOnce(new Error('tencent down'))
       .mockResolvedValueOnce({
-        data: {
-          diff: [
-            {
-              f12: '600001',
-              f2: '8.8',
-              f3: '-1.1',
-              f6: '100',
-              f5: '2000',
-              f14: '样本股',
-            },
-          ],
-        },
+        data: { diff: [{ f12: '600001', f2: '8.8', f3: '-1.1', f6: '100', f5: '2000', f14: '样本股' }] },
       })
-
     const feed = new QuoteHttpFeed({ api: { getQuotes }, sleep: async () => undefined })
+
     const result = await feed.fetchBasicData(['600001'])
 
     expect(getQuotes).toHaveBeenNthCalledWith(1, ['600001'], { source: 'tencent' })
     expect(getQuotes).toHaveBeenNthCalledWith(2, ['600001'], { source: 'sina' })
-    expect(result.get('600001')).toMatchObject({
-      price: 8.8,
-      change: -1.1,
-      source: 'sina',
-    })
+    expect(result.get('600001')).toMatchObject({ price: 8.8, change: -1.1, source: 'sina' })
     warn.mockRestore()
   })
 
-  it('skips EastMoney full quote fetch when enrichment is disabled', async () => {
+  it('batches basic quote requests in groups of 50', async () => {
+    const codes = Array.from({ length: 101 }, (_, index) => String(600000 + index))
+    const getQuotes = vi.fn().mockImplementation(async (batch: string[]) => ({
+      data: { diff: batch.map(code => ({ f12: code, f2: '10' })) },
+    }))
+    const sleep = vi.fn().mockResolvedValue(undefined)
+    const feed = new QuoteHttpFeed({ api: { getQuotes }, sleep })
+
+    const result = await feed.fetchFromTencent(codes)
+
+    expect(getQuotes).toHaveBeenCalledTimes(3)
+    expect(getQuotes.mock.calls.map(call => call[0].length)).toEqual([50, 50, 1])
+    expect(sleep).toHaveBeenCalledTimes(2)
+    expect(result.size).toBe(101)
+  })
+
+  it('does not request fund rows during full quote refresh', async () => {
     const getQuotes = vi.fn()
-    const feed = new QuoteHttpFeed({
-      api: { getQuotes },
-      eastmoneyQuoteEnrichmentEnabled: false,
-      sleep: async () => undefined,
-    })
+    const feed = new QuoteHttpFeed({ api: { getQuotes } as any })
 
     const result = await feed.fetchFullData(['000001'], true)
 
@@ -93,89 +85,14 @@ describe('QuoteHttpFeed', () => {
     expect(getQuotes).not.toHaveBeenCalled()
   })
 
-  it('fetches THS L2 money flow via batch endpoint when enrichment enabled', async () => {
+  it('does not project fund fields from basic quote responses', async () => {
     const getQuotes = vi.fn().mockResolvedValue({
-      data: {
-        diff: [
-          {
-            f12: '000001',
-            f2: '10.5',
-            f14: '平安银行',
-            f62: '8000',
-            f66: '0',
-            f69: '0',
-            f184: '0',
-          },
-        ],
-      },
+      data: { diff: [{ f12: '000001', f2: 10, f3: 2, f62: 999 }] },
     })
-    const feed = new QuoteHttpFeed({
-      api: { getQuotes },
-      eastmoneyQuoteEnrichmentEnabled: true,
-      sleep: async () => undefined,
-    })
+    const feed = new QuoteHttpFeed({ api: { getQuotes } as any, sleep: async () => {} })
 
-    const result = await feed.fetchFullData(['000001'], true)
+    const row = (await feed.fetchBasicData(['000001'])).get('000001')
 
-    expect(getQuotes).toHaveBeenCalledWith(
-      ['000001'],
-      expect.objectContaining({ source: 'thsMoneyFlow', timeout: 20000 }),
-    )
-    expect(result.get('000001')).toMatchObject({
-      source: 'ths_l2',
-      moneyFlowSource: 'ths_l2',
-      moneyFlowEstimated: false,
-      capitalFlowSource: 'official_l2',
-      capitalFlowConfidence: 'high',
-      zlje: 8000,
-      zljzb: 0,
-      cddje: 0,
-      cddjzb: 0,
-    })
-  })
-
-  it('does not fallback when THS money flow fails for codes', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
-    const getQuotes = vi.fn().mockRejectedValue(new Error('ths unavailable'))
-    const feed = new QuoteHttpFeed({ api: { getQuotes }, sleep: async () => undefined })
-
-    const result = await feed.fetchFullData(['600522', '000001'], true)
-
-    // No fallback — result is empty when THS fails
-    expect(result.size).toBe(0)
-    warn.mockRestore()
-  })
-
-  it('batches THS money flow requests in groups', async () => {
-    const codes = Array.from({ length: 25 }, (_, index) => String(600000 + index))
-    const getQuotes = vi
-      .fn()
-      .mockResolvedValueOnce({
-        data: { diff: codes.slice(0, 20).map((code) => ({ f12: code, f14: 'test', f62: '100' })) },
-      })
-      .mockResolvedValueOnce({
-        data: { diff: codes.slice(20).map((code) => ({ f12: code, f14: 'test', f62: '200' })) },
-      })
-    const feed = new QuoteHttpFeed({
-      api: { getQuotes },
-      eastmoneyQuoteEnrichmentEnabled: true,
-      sleep: async () => undefined,
-    })
-
-    const result = await feed.fetchFullData(codes, true)
-
-    expect(getQuotes).toHaveBeenCalledTimes(2)
-    expect(getQuotes).toHaveBeenNthCalledWith(
-      1,
-      codes.slice(0, 20),
-      expect.objectContaining({ source: 'thsMoneyFlow' }),
-    )
-    expect(getQuotes).toHaveBeenNthCalledWith(
-      2,
-      codes.slice(20),
-      expect.objectContaining({ source: 'thsMoneyFlow' }),
-    )
-    expect(result.get(codes[0])).toMatchObject({ zlje: 100, moneyFlowSource: 'ths_l2' })
-    expect(result.get(codes[24])).toMatchObject({ zlje: 200, moneyFlowSource: 'ths_l2' })
+    expect(row).not.toHaveProperty('zlje')
   })
 })

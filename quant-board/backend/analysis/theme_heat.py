@@ -58,8 +58,7 @@ def _fund_score(
         for code in codes
         if isinstance(funds.get(code), dict) and _is_number(funds[code].get("mainNetInflow"))
     ]
-    fund_coverage = len(covered_codes) / len(codes) if codes else 0.0
-    if fund_coverage < 0.5:
+    if not covered_codes:
         return None, len(covered_codes), None
 
     main_net_inflow = sum(_number(funds[code].get("mainNetInflow")) for code in covered_codes)
@@ -206,9 +205,9 @@ def _compute_theme_factor(
         quality_flags.append("invalid_number")
     if 0.5 <= quote_coverage < 0.8:
         quality_flags.append("theme_quote_coverage_low")
-    if 0.5 <= fund_coverage < 0.8:
+    if 0 < fund_coverage < 0.8:
         quality_flags.append("fund_flow_partial")
-    elif fund_coverage < 0.5:
+    elif fund_coverage == 0:
         quality_flags.append("fund_flow_unavailable")
     if previous_factor is None:
         quality_flags.append("persistence_history_insufficient")

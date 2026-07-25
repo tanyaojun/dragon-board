@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach, vi } from 'vitest'
+import { describe, it, expect, afterAll, afterEach, beforeAll, vi } from 'vitest'
 import {
   isAshareTradingDay,
   isTradingTime,
@@ -6,6 +6,7 @@ import {
   isOpeningAuction,
   isClosingAuction,
   isAfterHoursFixedPrice,
+  refreshCalendar,
   TRADING_STATUS_LABEL,
 } from '../time'
 import type { TradingStatus } from '../time'
@@ -13,6 +14,24 @@ import type { TradingStatus } from '../time'
 // 2026-07-10 是周五（交易日），2026-07-11 是周六（非交易日）
 const TRADING_DAY = new Date(2026, 6, 10) // 2026-07-10 Friday
 const WEEKEND_DAY = new Date(2026, 6, 11) // 2026-07-11 Saturday
+
+beforeAll(async () => {
+  vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+    const date = new URL(String(input)).searchParams.get('date')
+    return {
+      ok: true,
+      json: async () => ({ ok: true, isTradingDay: date === '2026-07-10' }),
+    }
+  }))
+  await refreshCalendar(TRADING_DAY)
+  await refreshCalendar(WEEKEND_DAY)
+  await refreshCalendar(new Date(2026, 6, 12))
+  await refreshCalendar(new Date(2026, 9, 1))
+})
+
+afterAll(() => {
+  vi.unstubAllGlobals()
+})
 
 function setTime(hour: number, minute: number, date: Date = TRADING_DAY): Date {
   const d = new Date(date)
@@ -41,6 +60,15 @@ describe('isAshareTradingDay', () => {
   it('国庆假期返回 false', () => {
     const nationalDay = new Date(2026, 9, 1) // 2026-10-01
     expect(isAshareTradingDay(nationalDay)).toBe(false)
+  })
+
+  it('bridge 日历不可用时不按工作日猜测', async () => {
+    vi.mocked(fetch).mockRejectedValueOnce(new Error('bridge unavailable'))
+    const unknownWeekday = new Date(2026, 6, 13)
+
+    await refreshCalendar(unknownWeekday)
+
+    expect(isAshareTradingDay(unknownWeekday)).toBe(false)
   })
 })
 

@@ -3,6 +3,7 @@ import sys
 import unittest
 import asyncio
 from datetime import datetime
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -18,6 +19,11 @@ from fastapi.testclient import TestClient
 
 
 class BridgeMonitorTest(unittest.TestCase):
+    def setUp(self):
+        calendar = patch("main._is_trading_day_cached", return_value=True)
+        calendar.start()
+        self.addCleanup(calendar.stop)
+
     def test_status_snapshot_exposes_runtime_metrics(self):
         bridge = TdxL2Bridge(BridgeConfig())
         bridge.tdx_connected = True

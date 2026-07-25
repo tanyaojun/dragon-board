@@ -35,6 +35,27 @@ def test_fund_unavailable_is_nullable_and_reweighted() -> None:
     assert factor["heatScore"] > 0
 
 
+def test_partial_fund_coverage_keeps_covered_value_visible() -> None:
+    codes = [f"{index:06d}" for index in range(1, 11)]
+    result = compute_theme_heat(
+        themes=[{"id": "AI", "name": "人工智能", "stocks": codes}],
+        quotes={
+            code: {"code": code, "change": 2, "amount": 1000000, "volumeRatio": 1.2}
+            for code in codes
+        },
+        funds={"000001": {"mainNetInflow": 300000}},
+        previous_factors={},
+        computed_at=1782018300000,
+        mapping_version="v1",
+    )
+
+    factor = result["factors"][0]
+    assert factor["mainNetInflow"] == 300000
+    assert factor["fundScore"] is not None
+    assert "fund_flow_partial" in factor["qualityFlags"]
+    assert "fund_flow_unavailable" not in factor["qualityFlags"]
+
+
 def test_global_quote_coverage_below_gate_blocks_all_ranks() -> None:
     result = compute_theme_heat(
         themes=[{"id": "AI", "name": "人工智能", "stocks": ["000001", "000002"]}],

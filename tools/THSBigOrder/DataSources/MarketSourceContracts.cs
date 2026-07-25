@@ -55,8 +55,12 @@ namespace THSBigOrder.DataSources
             };
             var failed = rows.Where(x => x.Value == DataTransport.Failed || x.Value == DataTransport.Missing)
                 .Select(x => x.Name).ToArray();
-            if (failed.Length > 0) return "数据不可用: " + string.Join("/", failed);
             var stale = rows.Where(x => x.Value == DataTransport.Stale).Select(x => x.Name).ToArray();
+            if (failed.Length > 0)
+            {
+                var unavailable = "数据不可用: " + string.Join("/", failed);
+                return stale.Length > 0 ? unavailable + "; 数据陈旧: " + string.Join("/", stale) : unavailable;
+            }
             if (stale.Length > 0) return "数据陈旧: " + string.Join("/", stale);
             var proxy = rows.Where(x => x.Value == DataTransport.ProxyFallback).Select(x => x.Name).ToArray();
             if (proxy.Length > 0) return "代理降级: " + string.Join("/", proxy);

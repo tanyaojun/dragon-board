@@ -13,7 +13,6 @@ export const PROXY_CACHE_TTLS = {
     eastmoneyResponse: 60,
     eastmoneyHistFlow: 300,
     tencentResponse: 60,
-    tencentMinute: 60,
     sinaResponse: 60,
     empty: 10,
   },
@@ -22,7 +21,6 @@ export const PROXY_CACHE_TTLS = {
     stale: 1800,
   },
   bigOrder: {
-    thsDetail: 3,
     longhuPage: 10,
     longhuAllDay: 3,
     longhuEmpty: 5,

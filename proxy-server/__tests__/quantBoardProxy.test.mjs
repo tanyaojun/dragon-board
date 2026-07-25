@@ -7,6 +7,7 @@ import { quantBoardTargetBase, shouldProxyToQuantBoard } from '../routes/quantBo
 test('theme heat summary and stock detail use QuantBoard proxy prefix', () => {
   assert.equal(shouldProxyToQuantBoard('/api/themes/heat'), true)
   assert.equal(shouldProxyToQuantBoard('/api/themes/heat/AI/stocks'), true)
+  assert.equal(shouldProxyToQuantBoard('/api/themes/fund-rows'), true)
 })
 
 

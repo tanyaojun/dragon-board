@@ -300,7 +300,7 @@ export function getThemeStocks(themeId: string, limit = 50) {
         isSectorLeader: exposure.role === 'leader',
         speed: stock?.speed || 0,
         volumeRatio: stock?.volumeRatio || 0,
-        mainNetInflow: stock?.mainNetInflow || 0,
+        mainNetInflow: Number.isFinite(stock?.mainNetInflow) ? stock.mainNetInflow : null,
         leadTimes: stock?.leadTimes || 0,
         leadStatus: stock?.leadStatus || '',
         bigMoney300: stock?.bigMoney300 || 0,

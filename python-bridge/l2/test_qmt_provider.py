@@ -86,3 +86,10 @@ def test_probe_preserves_permission_denied_status():
     status = provider.probe(["000001.SZ"])
 
     assert status.status == "permission_denied"
+
+
+def test_l2_snapshot_contract_has_no_dashboard_money_flow_field():
+    module = load_qmt_provider()
+
+    assert "money_flow" not in module.L2Snapshot.__dataclass_fields__
+    assert not hasattr(module, "normalize_money_flow")

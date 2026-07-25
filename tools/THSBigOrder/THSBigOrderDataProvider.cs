@@ -39,7 +39,11 @@ namespace THSBigOrder
 
         public BigOrderDataSource DataSource { get; set; } = BigOrderDataSource.Ths;
 
-        public THSBigOrderDataProvider(HttpClient httpClient = null, string baseUrl = "http://127.0.0.1:3000")
+        public THSBigOrderDataProvider(
+            HttpClient httpClient = null,
+            string baseUrl = "http://127.0.0.1:3000",
+            string thsBaseUrl = "http://127.0.0.1:8000",
+            string bridgeBaseUrl = "http://127.0.0.1:8765")
         {
             _ownsHttpClient = httpClient == null;
             _bigOrderProxyPrimary = true;
@@ -47,11 +51,13 @@ namespace THSBigOrder
             _httpClient.Timeout = TimeSpan.FromSeconds(15);
             _longhuHttpClient = httpClient ?? new HttpClient { Timeout = TimeSpan.FromSeconds(60) };
             var proxyBase = (baseUrl ?? "").TrimEnd('/');
+            var thsBase = (thsBaseUrl ?? "").TrimEnd('/');
+            var bridgeBase = (bridgeBaseUrl ?? "").TrimEnd('/');
             var parser = new ThsPayloadParser();
-            _thsBigOrderSource = new ThsBigOrderSourceClient(_httpClient, proxyBase, parser);
+            _thsBigOrderSource = new ThsBigOrderSourceClient(_httpClient, thsBase, parser);
             _longhuBigOrderSource = new LonghuBigOrderSourceClient(_longhuHttpClient, proxyBase, parser);
             _quoteSource = new SinaQuoteSourceClient(_httpClient, proxyBase, parser);
-            _minuteSource = new TencentMinuteSourceClient(_httpClient, proxyBase, parser);
+            _minuteSource = new TdxMinuteSourceClient(_httpClient, bridgeBase, parser);
             _limitUpSource = new ThsLimitUpSourceClient(_httpClient, proxyBase, parser);
         }
 
@@ -109,23 +115,26 @@ namespace THSBigOrder
             var quote = quoteTask.Result;
             var minute = minuteTask.Result;
             var limit = limitTask.Result;
-            var expectedSessionDate = big.Data?.SessionDate ??
-                summary.Data?.SessionDate ??
-                InferMinuteSessionDate(minute.Data);
+            var selectedCacheKey = (useLonghu ? "longhu-orders:" : "ths-orders:") + stockCode;
+            var thsCacheKey = "ths-summary:" + stockCode;
+            var thsSessionDate = (useLonghu ? summary.Data?.SessionDate : big.Data?.SessionDate) ??
+                CachedSessionDate(_bigOrderCache, useLonghu ? thsCacheKey : selectedCacheKey);
+            var selectedSessionDate = big.Data?.SessionDate ?? thsSessionDate ??
+                CachedSessionDate(_bigOrderCache, selectedCacheKey);
             ApplyBigOrderStaleFallback(
                 _bigOrderCache,
-                (useLonghu ? "longhu-orders:" : "ths-orders:") + stockCode,
+                selectedCacheKey,
                 big,
-                expectedSessionDate,
-                BigOrderLastGoodMaxAge(DateTime.Now));
+                selectedSessionDate,
+                BigOrderLastGoodMaxAge(DateTime.Now, selectedSessionDate));
             ApplyBigOrderStaleFallback(
                 _bigOrderCache,
-                "ths-summary:" + stockCode,
+                thsCacheKey,
                 summary,
-                expectedSessionDate,
-                BigOrderLastGoodMaxAge(DateTime.Now));
+                thsSessionDate,
+                BigOrderLastGoodMaxAge(DateTime.Now, thsSessionDate));
             ApplyStaleFallback(_quoteCache, stockCode, quote);
-            ApplyStaleFallback(_minuteCache, stockCode, minute);
+            ApplyMinuteStaleFallback(_minuteCache, stockCode, minute, thsSessionDate, DateTime.Now);
             ApplyStaleFallback(_limitCache, stockCode, limit);
 
             var bigData = MergeBigOrderData(big.Data, summary.Data);
@@ -208,16 +217,14 @@ namespace THSBigOrder
             }
         }
 
-        // 设计 §9：大单 last-good 交易时段最多 5 分钟，收盘后/周末最多 12 小时
-        internal static TimeSpan BigOrderLastGoodMaxAge(DateTime now)
+        // 当前权威会话最多 5 分钟；历史完成会话最多 7 天。
+        internal static TimeSpan BigOrderLastGoodMaxAge(
+            DateTime now,
+            DateTime? expectedSessionDate)
         {
-            if (now.DayOfWeek == DayOfWeek.Saturday || now.DayOfWeek == DayOfWeek.Sunday)
-                return TimeSpan.FromHours(12);
-            var clock = now.TimeOfDay;
-            var trading =
-                (clock >= new TimeSpan(9, 30, 0) && clock <= new TimeSpan(11, 30, 0)) ||
-                (clock >= new TimeSpan(13, 0, 0) && clock <= new TimeSpan(15, 0, 0));
-            return trading ? TimeSpan.FromMinutes(5) : TimeSpan.FromHours(12);
+            return expectedSessionDate.HasValue && expectedSessionDate.Value.Date == now.Date
+                ? TimeSpan.FromMinutes(5)
+                : TimeSpan.FromDays(7);
         }
 
         private static async Task<SourceLoadResult<T>> LoadProxyPrimaryAsync<T>(
@@ -275,6 +282,15 @@ namespace THSBigOrder
             return dates.Length == 1 ? (DateTime?)dates[0] : null;
         }
 
+        private static DateTime? CachedSessionDate(
+            IDictionary<string, SourceLoadResult<BigOrderSourceData>> cache,
+            string key)
+        {
+            return cache.TryGetValue(key, out var cached)
+                ? cached.Data?.SessionDate
+                : null;
+        }
+
         private static void ApplyBigOrderStaleFallback(
             IDictionary<string, SourceLoadResult<BigOrderSourceData>> cache,
             string key,
@@ -290,6 +306,19 @@ namespace THSBigOrder
                 if (result.Data?.SessionDate.HasValue == true)
                     CacheSuccessful(cache, key, result);
                 return;
+            }
+            if (result.Transport == DataTransport.Stale)
+            {
+                var validUpstreamStale =
+                    expectedSessionDate.HasValue &&
+                    result.Data?.SessionDate.HasValue == true &&
+                    result.Data.SessionDate.Value.Date == expectedSessionDate.Value.Date &&
+                    DateTime.Now - result.FetchedAt <= maxAge;
+                if (validUpstreamStale) return;
+                result.Data = null;
+                result.Freshness = DataFreshness.Failed;
+                result.Transport = DataTransport.Failed;
+                result.Error = "THS stale data expired or belongs to another session";
             }
             SourceLoadResult<BigOrderSourceData> cached;
             if (result.Transport != DataTransport.Failed ||
@@ -324,6 +353,47 @@ namespace THSBigOrder
             if (maxAge.HasValue &&
                 DateTime.Now - cached.FetchedAt > maxAge.Value)
                 return;
+            result.Data = cached.Data;
+            result.Freshness = DataFreshness.Stale;
+            result.Transport = DataTransport.Stale;
+            result.FetchedAt = cached.FetchedAt;
+        }
+
+        private static void ApplyMinuteStaleFallback(
+            IDictionary<string, SourceLoadResult<IReadOnlyList<MinuteTurnoverPoint>>> cache,
+            string key,
+            SourceLoadResult<IReadOnlyList<MinuteTurnoverPoint>> result,
+            DateTime? expectedSessionDate,
+            DateTime now)
+        {
+            if (result == null) return;
+            if (result.Transport == DataTransport.Direct ||
+                result.Transport == DataTransport.ProxyPrimary ||
+                result.Transport == DataTransport.ProxyFallback)
+            {
+                var resultDate = InferMinuteSessionDate(result.Data);
+                if (expectedSessionDate.HasValue &&
+                    resultDate.HasValue &&
+                    resultDate.Value.Date == expectedSessionDate.Value.Date)
+                {
+                    CacheSuccessful(cache, key, result);
+                    return;
+                }
+                result.Data = new MinuteTurnoverPoint[0];
+                result.Freshness = DataFreshness.Failed;
+                result.Transport = DataTransport.Failed;
+                result.Error = "TDX 分时日期与权威交易日期不一致";
+            }
+            SourceLoadResult<IReadOnlyList<MinuteTurnoverPoint>> cached;
+            if (result.Transport != DataTransport.Failed ||
+                !expectedSessionDate.HasValue ||
+                !cache.TryGetValue(key, out cached)) return;
+            var cachedDate = InferMinuteSessionDate(cached.Data);
+            if (!cachedDate.HasValue || cachedDate.Value.Date != expectedSessionDate.Value.Date) return;
+            var maxAge = expectedSessionDate.Value.Date == now.Date
+                ? TimeSpan.FromMinutes(5)
+                : TimeSpan.FromDays(7);
+            if (now - cached.FetchedAt > maxAge) return;
             result.Data = cached.Data;
             result.Freshness = DataFreshness.Stale;
             result.Transport = DataTransport.Stale;

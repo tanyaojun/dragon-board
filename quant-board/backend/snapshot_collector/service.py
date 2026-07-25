@@ -101,7 +101,7 @@ def factor_to_sector(
             "rankEligible": factor.get("rankEligible", True),
             "degraded": factor.get("degraded", False),
             "quoteSource": "tencent",
-            "fundSource": "eastmoney",
+            "fundSource": None,
         }
     )
     return {
@@ -318,7 +318,9 @@ class SnapshotCollectorService:
         theme_snapshot: dict[str, Any] | None = None
         if self._theme_heat_service is not None:
             try:
-                theme_snapshot = self._theme_heat_service.get_snapshot()
+                theme_snapshot = self._theme_heat_service.get_snapshot(
+                    include_runtime_funds=False
+                )
                 market_context.sectors = [
                     factor_to_sector(factor, theme_snapshot)
                     for factor in theme_snapshot.get("factors", [])
@@ -646,7 +648,6 @@ class SnapshotCollectorService:
             BridgeQuoteProvider,
             ProxyLimitUpProvider,
             ProxyMergedHotlistProvider,
-            ProxyQuoteProvider,
             StartupBundleStockProvider,
             ThemeMappingProvider,
         )
@@ -655,7 +656,6 @@ class SnapshotCollectorService:
         providers: list[Any] = [
             StartupBundleStockProvider(base_url=proxy_url, trading_date=trading_date),
             ProxyMergedHotlistProvider(base_url=proxy_url),
-            ProxyQuoteProvider(base_url=proxy_url),
             BridgeQuoteProvider(base_url=self._bridge_base_url()),
             ProxyLimitUpProvider(base_url=proxy_url, trading_date=trading_date),
         ]

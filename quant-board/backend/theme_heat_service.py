@@ -12,7 +12,8 @@ from backend.analysis.theme_heat import compute_theme_heat
 from backend.data.mongo_theme_repository import MongoThemeRepository
 from backend.data.repository_factory import get_runtime_mongodb_database
 from backend.settings import get_settings
-from backend.snapshot_collector.providers import EastmoneyFundFlowProvider, TencentBasicQuoteProvider
+from backend.snapshot_collector.providers import TencentBasicQuoteProvider
+from backend.theme_fund_cache import get_theme_fund_cache
 
 
 class ThemeHeatUnavailable(RuntimeError):
@@ -34,26 +35,30 @@ class ThemeHeatService:
         self,
         repository: Any,
         quote_provider: Any,
-        fund_provider: Any,
+        fund_cache: Any,
         *,
         now_ms: Callable[[], int] | None = None,
         cache_ttl_seconds: int = 300,
         quote_timeout_ms: int = 10000,
-        fund_timeout_ms: int = 12000,
     ) -> None:
         self._repository = repository
         self._quote_provider = quote_provider
-        self._fund_provider = fund_provider
+        self._fund_cache = fund_cache
         self._now_ms = now_ms or (lambda: int(time.time() * 1000))
         self._cache_ttl_seconds = max(1, cache_ttl_seconds)
         self._quote_timeout_ms = max(100, quote_timeout_ms)
-        self._fund_timeout_ms = max(100, fund_timeout_ms)
         self._cache: dict[str, dict[str, object]] = {}
+        self._quote_cache: dict[str, tuple[dict[str, dict[str, object]], object]] = {}
         self._inflight: dict[str, Future[dict[str, object]]] = {}
         self._last_success: dict[str, object] | None = None
         self._lock = Lock()
 
-    def get_snapshot(self, *, force: bool = False) -> dict[str, object]:
+    def get_snapshot(
+        self,
+        *,
+        force: bool = False,
+        include_runtime_funds: bool = True,
+    ) -> dict[str, object]:
         universe = self._repository.get_market_universe()
         if not universe.get("themes") or not universe.get("stockCodes"):
             raise ThemeHeatUnavailable(
@@ -61,7 +66,11 @@ class ThemeHeatService:
                 message="MongoDB theme mapping is empty",
                 stale_data=self._last_success,
             )
-        cache_key, cache_bucket = self._cache_key(str(universe.get("version") or "unknown"))
+        cache_key, cache_bucket = self._cache_key(
+            str(universe.get("version") or "unknown"),
+            self._fund_cache.current_version() if include_runtime_funds else -1,
+            include_runtime_funds,
+        )
 
         owner = False
         with self._lock:
@@ -77,7 +86,12 @@ class ThemeHeatService:
             return future.result()
 
         try:
-            snapshot = self._refresh(universe, cache_bucket)
+            snapshot = self._refresh(
+                universe,
+                cache_bucket,
+                force_quotes=force,
+                include_runtime_funds=include_runtime_funds,
+            )
             with self._lock:
                 self._cache = {cache_key: snapshot}
                 self._last_success = snapshot
@@ -89,6 +103,20 @@ class ThemeHeatService:
         finally:
             with self._lock:
                 self._inflight.pop(cache_key, None)
+
+    def get_fund_rows(self, codes: list[str]) -> dict[str, dict[str, object]]:
+        normalized = list(dict.fromkeys(str(code).strip() for code in codes if str(code).strip()))
+        rows = self._fund_cache.get_latest(normalized)
+        return {
+            code: {
+                **row,
+                "mainNetInflow": row.get("zlje"),
+                "superLargeNetInflow": row.get("cddje"),
+                "superLargeNetRatio": row.get("cddjzb"),
+                "mainNetRatio": row.get("zljzb"),
+            }
+            for code, row in rows.items()
+        }
 
     def get_theme_stocks(
         self,
@@ -109,25 +137,48 @@ class ThemeHeatService:
             descending=descending,
         )
 
-    def _cache_key(self, mapping_version: str) -> tuple[str, str]:
+    def _cache_key(
+        self,
+        mapping_version: str,
+        fund_version: int,
+        include_runtime_funds: bool,
+    ) -> tuple[str, str]:
         bucket_ms = self._cache_ttl_seconds * 1000
         bucket_start = self._now_ms() // bucket_ms * bucket_ms
         bucket = datetime.fromtimestamp(
             bucket_start / 1000,
             tz=ZoneInfo("Asia/Shanghai"),
         ).isoformat()
-        return f"{mapping_version}:{bucket}", bucket
+        scope = "runtime" if include_runtime_funds else "formal"
+        return f"{mapping_version}:{fund_version}:{scope}:{bucket}", bucket
 
-    def _refresh(self, universe: dict[str, object], cache_bucket: str) -> dict[str, object]:
+    def _refresh(
+        self,
+        universe: dict[str, object],
+        cache_bucket: str,
+        *,
+        force_quotes: bool,
+        include_runtime_funds: bool,
+    ) -> dict[str, object]:
         stock_codes = [str(code) for code in universe.get("stockCodes", [])]
-        quote_rows, quote_health = self._quote_provider.collect(
-            stock_codes,
-            timeout_ms=self._quote_timeout_ms,
-        )
-        fund_rows, fund_health = self._fund_provider.collect(
-            stock_codes,
-            timeout_ms=self._fund_timeout_ms,
-        )
+        quote_key = f"{universe.get('version') or 'unknown'}:{cache_bucket}"
+        cached_quotes = self._quote_cache.get(quote_key)
+        if force_quotes or cached_quotes is None:
+            quote_rows, quote_health = self._quote_provider.collect(
+                stock_codes,
+                timeout_ms=self._quote_timeout_ms,
+            )
+            self._quote_cache = {quote_key: (quote_rows, quote_health)}
+        else:
+            quote_rows, quote_health = cached_quotes
+        fund_rows = self.get_fund_rows(stock_codes) if include_runtime_funds else {}
+        fund_health = {
+            "source": "ths_main_monitor" if include_runtime_funds else "formal_fund_unavailable",
+            "ok": include_runtime_funds,
+            "requested_count": len(stock_codes),
+            "returned_count": len(fund_rows),
+            "coverage_ratio": len(fund_rows) / len(stock_codes) if stock_codes else 1.0,
+        }
         theme_stocks = universe.get("themeStocks") if isinstance(universe.get("themeStocks"), dict) else {}
         themes = [
             {
@@ -263,13 +314,8 @@ def get_theme_heat_service() -> ThemeHeatService:
                     collection_timeout_ms=settings.theme_heat_quote_collection_timeout_ms,
                     **provider_options,
                 ),
-                EastmoneyFundFlowProvider(
-                    proxy_base,
-                    collection_timeout_ms=settings.theme_heat_fund_collection_timeout_ms,
-                    **provider_options,
-                ),
+                get_theme_fund_cache(),
                 cache_ttl_seconds=settings.theme_heat_cache_ttl_seconds,
                 quote_timeout_ms=settings.theme_heat_quote_timeout_ms,
-                fund_timeout_ms=settings.theme_heat_fund_timeout_ms,
             )
     return _theme_heat_service

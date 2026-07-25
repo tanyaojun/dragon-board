@@ -31,7 +31,7 @@
               动量 {{ sector.change.toFixed(0) }}
             </span>
             <span class="inflow" :class="(sector.mainNetInflow || 0) >= 0 ? 'inflow' : 'outflow'">
-              {{ sector.mainNetInflow === null ? '资金降级' : formatMoney(sector.mainNetInflow) }}
+              {{ sector.mainNetInflow == null ? '--' : formatMoney(sector.mainNetInflow) }}
             </span>
           </div>
           <div class="node-progress" v-if="sector.strength">
@@ -113,7 +113,7 @@
                 </td>
                 <td>{{ stock.volumeRatio?.toFixed(2) || '-' }}</td>
                 <td :class="(stock.mainNetInflow || 0) >= 0 ? 'inflow' : 'outflow'">
-                  {{ formatMoney(stock.mainNetInflow) }}
+                  {{ stock.mainNetInflow == null ? '--' : formatMoney(stock.mainNetInflow) }}
                 </td>
                 <td>
                   <span v-if="stock.leadStatus" class="lead-badge"
@@ -145,11 +145,12 @@
 
 <script setup lang="ts">
 import { debugLog } from '@/utils/logger'
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { sectorAnalyzer } from '@/services/sectorAnalyzer'
 import { useUIStore } from '@/stores/ui'
 import { themeFacade } from '@/services/theme/ThemeFacade'
 import { useThemeRuntimeSnapshot } from '@/composables/useThemeRuntimeSnapshot'
+import { realtimeSubscriptionRegistry } from '@/services/realtime/RealtimeSubscriptionRegistry'
 
 // Props
 const props = defineProps<{
@@ -352,6 +353,25 @@ watch(treeSearch, () => {
 
 watch([stockSearch, sortBy, sortDesc], () => {
   stockPage.value = 1
+})
+
+watch(
+  paginatedStocks,
+  (stocks) => {
+    if (stocks.length) {
+      realtimeSubscriptionRegistry.setFundOwnerCodes(
+        'theme-tree.visible',
+        stocks.map((stock) => stock.code),
+      )
+    } else {
+      realtimeSubscriptionRegistry.clearFundOwner('theme-tree.visible')
+    }
+  },
+  { immediate: true },
+)
+
+onUnmounted(() => {
+  realtimeSubscriptionRegistry.clearFundOwner('theme-tree.visible')
 })
 </script>
 

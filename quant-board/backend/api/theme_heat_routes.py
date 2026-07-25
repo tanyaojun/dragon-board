@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import asyncio
+from contextlib import suppress
 from typing import Any
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 
 from backend.theme_heat_service import (
     ThemeHeatUnavailable,
     get_theme_heat_service as create_theme_heat_service,
 )
+from backend.theme_fund_cache import get_theme_fund_cache
+from backend.theme_fund_stream import get_theme_fund_stream
 
 
 router = APIRouter(prefix="/api/themes")
@@ -50,6 +54,83 @@ def get_theme_heat(force: bool = False) -> dict[str, object] | JSONResponse:
         return {"ok": True, "data": public_theme_heat_snapshot(snapshot)}
     except ThemeHeatUnavailable as error:
         return _unavailable_response(error)
+
+
+@router.get("/fund-rows", response_model=None)
+def get_theme_fund_rows(codes: str = "") -> dict[str, object] | JSONResponse:
+    requested_codes = list(dict.fromkeys(code.strip() for code in codes.split(",") if code.strip()))
+    rows = get_theme_fund_cache().get_latest(requested_codes)
+    return {
+        "ok": True,
+        "version": get_theme_fund_cache().current_version(),
+        "data": {
+            "diff": [
+                {
+                    "f12": code,
+                    "f62": row.get("zlje"),
+                    "f66": row.get("cddje"),
+                    "f69": row.get("cddjzb"),
+                    "f184": row.get("zljzb"),
+                    "version": row.get("version"),
+                    "tradingDate": row.get("tradingDate"),
+                    "isFinal": row.get("isFinal"),
+                    "moneyFlowSource": row.get("moneyFlowSource"),
+                    "sourceTs": row.get("sourceTs"),
+                }
+                for code, row in rows.items()
+            ]
+        },
+    }
+
+
+@router.websocket("/fund-stream")
+async def theme_fund_stream(websocket: WebSocket) -> None:
+    await websocket.accept()
+    stream = get_theme_fund_stream()
+    queue = None
+    try:
+        initial = await websocket.receive_json()
+        market_codes = initial.get("marketCodes") if isinstance(initial, dict) else []
+        priority_codes = initial.get("priorityCodes") if isinstance(initial, dict) else []
+        queue = await stream.subscribe_async(
+            market_codes=market_codes if isinstance(market_codes, list) else [],
+            priority_codes=priority_codes if isinstance(priority_codes, list) else [],
+        )
+        await websocket.send_json(queue.get_nowait())
+
+        while True:
+            client_task = asyncio.create_task(websocket.receive_json())
+            patch_task = asyncio.create_task(queue.get())
+            done, pending = await asyncio.wait(
+                {client_task, patch_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for task in pending:
+                task.cancel()
+            if client_task in done:
+                message = client_task.result()
+                updated_market = message.get("marketCodes") if isinstance(message, dict) else []
+                updated_priority = message.get("priorityCodes") if isinstance(message, dict) else []
+                if isinstance(updated_market, list) and isinstance(updated_priority, list):
+                    await stream.update_subscription_async(
+                        queue,
+                        market_codes=updated_market,
+                        priority_codes=updated_priority,
+                    )
+                    await websocket.send_json(await stream.snapshot_async(updated_market, updated_priority))
+            if patch_task in done:
+                await websocket.send_json(patch_task.result())
+    except WebSocketDisconnect:
+        pass
+    finally:
+        if queue is not None:
+            await stream.unsubscribe_async(queue)
+        for task_name in ("client_task", "patch_task"):
+            task = locals().get(task_name)
+            if isinstance(task, asyncio.Task) and not task.done():
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
 
 
 @router.get("/heat/{theme_id}/stocks", response_model=None)

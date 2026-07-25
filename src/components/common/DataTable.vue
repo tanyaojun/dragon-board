@@ -208,7 +208,7 @@
 
 <script setup lang="ts">
 import { debugLog } from '@/utils/logger'
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, nextTick, onMounted, onUnmounted, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import type { Stock, Board } from '../../types'
 import { EventManager } from '../../utils/eventManager'
@@ -220,6 +220,7 @@ import { candidateJournalService } from '@/services/candidate/CandidateJournalSe
 import { analyzeTradingPoolCandidate, normalizeResonanceIntensity } from '@/services/candidate/TradingPoolAnalysisService'
 import { openingSignalStore } from '@/services/hotlist/OpeningSignalStore'
 import { sendHotlistSelection } from '@/services/hotlist/ThsBigOrderFollowBridge'
+import { realtimeSubscriptionRegistry } from '@/services/realtime/RealtimeSubscriptionRegistry'
 import RankTrendPanel from '../../components/panels/RankTrendPanel.vue'
 const props = defineProps<{
   loading?: boolean
@@ -271,6 +272,25 @@ const localAttentionStageLabels: Record<string, string> = {
 // ========== 状态 ==========
 const headerRef = ref<HTMLElement | null>(null)
 const bodyRef = ref<HTMLElement | null>(null)
+let fundPriorityFrame: number | null = null
+
+const syncVisibleFundPriority = () => {
+  if (fundPriorityFrame !== null) window.cancelAnimationFrame(fundPriorityFrame)
+  fundPriorityFrame = window.requestAnimationFrame(() => {
+    fundPriorityFrame = null
+    const body = bodyRef.value
+    if (!body) return
+    const bodyRect = body.getBoundingClientRect()
+    const codes = Array.from(body.querySelectorAll<HTMLElement>('.data-row[data-code]'))
+      .filter((row) => {
+        const rect = row.getBoundingClientRect()
+        return rect.bottom > bodyRect.top && rect.top < bodyRect.bottom
+      })
+      .map((row) => row.dataset.code || '')
+      .filter(Boolean)
+    realtimeSubscriptionRegistry.setFundOwnerCodes('datatable.visible', codes)
+  })
+}
 
 // 右键菜单
 const contextMenu = ref({
@@ -1411,6 +1431,7 @@ const openStockDetail = (stock: Stock, triggerRect: DOMRect, source: string) => 
   })
   hideConfidenceTooltip()
   hideRowTooltip()
+  syncVisibleFundPriority()
 }
 
 const viewDetails = () => {
@@ -1458,17 +1479,23 @@ onMounted(() => {
   if (bodyRef.value && uiStore.scrollPosition) {
     bodyRef.value.scrollTop = uiStore.scrollPosition
   }
-
+  realtimeSubscriptionRegistry.setFundOwnerCodes(
+    'datatable.visible',
+    sortedStocks.value.slice(0, 50).map((stock) => stock.code),
+  )
+  void nextTick(syncVisibleFundPriority)
 })
 
 onUnmounted(() => {
   document.removeEventListener('click', handleClickOutside)
   openingSignalStore.stop()
+  if (fundPriorityFrame !== null) window.cancelAnimationFrame(fundPriorityFrame)
+  realtimeSubscriptionRegistry.clearFundOwner('datatable.visible')
 })
 
 // 监听 sortedStocks 变化，更新滚动位置（可选）
 watch(sortedStocks, () => {
-  // 可以在这里处理数据变化后的逻辑
+  void nextTick(syncVisibleFundPriority)
 })
 
 defineExpose({

@@ -1,26 +1,10 @@
 // src/utils/time.ts
-// A 股交易日历 — 优先从通达信行情桥获取真实交易日历，不可用时回退到简单工作日判断。
+// A 股交易日历只认通达信行情桥；不可用时暂停，不猜测交易日。
 // 所有交易时段相关的纯时间窗口判断（集合竞价、午休等）保持不变，只替换"哪天是交易日"这一层。
 
 const BRIDGE_CALENDAR_URL = 'http://127.0.0.1:8765/api/calendar'
 const dateCalendarCache = new Map<string, boolean>()
 const pendingFetches = new Map<string, Promise<boolean | null>>()
-
-// 硬编码假期列表仅作为桥不可达时的回退，真实交易日历以桥的 mootdx holiday 模块为准
-const FALLBACK_HOLIDAY_RANGES: [string, string][] = [
-  ['2026-01-01', '2026-01-03'],
-  ['2026-02-15', '2026-02-23'],
-  ['2026-04-04', '2026-04-06'],
-  ['2026-05-01', '2026-05-05'],
-  ['2026-06-19', '2026-06-21'],
-  ['2026-09-25', '2026-09-27'],
-  ['2026-10-01', '2026-10-07'],
-]
-
-function isFallbackHoliday(date: Date): boolean {
-  const key = dateKey(date)
-  return FALLBACK_HOLIDAY_RANGES.some(([start, end]) => key >= start && key <= end)
-}
 
 function dateKey(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
@@ -59,14 +43,10 @@ function queryCalendarForDate(date: Date): boolean {
     pendingFetches.set(key, promise)
   }
 
-  // 回退：周末 + 硬编码假期列表（仅桥不可达时）
-  const day = date.getDay()
-  if (day === 0 || day === 6) return false
-  if (isFallbackHoliday(date)) return false
-  return true
+  return false
 }
 
-/** 判断指定日期是否为 A 股交易日（优先桥日历，回退周末检查） */
+/** 判断指定日期是否为 A 股交易日；未知状态按非交易处理。 */
 export const isAshareTradingDay = (date: Date = new Date()): boolean => {
   const key = dateKey(date)
   const cached = dateCalendarCache.get(key)
@@ -89,9 +69,9 @@ export const isTradingTime = (date: Date = new Date()): boolean => {
 }
 
 /** 手动刷新交易日历缓存（bridge 重连后调用） */
-export const refreshCalendar = async (): Promise<void> => {
-  dateCalendarCache.clear()
-  const key = dateKey(new Date())
+export const refreshCalendar = async (date: Date = new Date()): Promise<void> => {
+  const key = dateKey(date)
+  dateCalendarCache.delete(key)
   const result = await fetchCalendarForDate(key)
   if (result !== null) {
     dateCalendarCache.set(key, result)

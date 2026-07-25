@@ -247,13 +247,13 @@ class TestBridgeQuoteProviderCollectPool:
         assert data["depth"][0]["bids"][0] == {"price": 12.49, "volume": 10000}
         assert data["depth"][0]["asks"][0] == {"price": 12.51, "volume": 8000}
 
-    def test_collect_pool_returns_money_flow(self) -> None:
+    def test_collect_pool_ignores_bridge_money_flow(self) -> None:
         provider = BridgeQuoteProvider(base_url=BASE_URL)
         mock_resp = _fake_urlopen_response(BRIDGE_POOL_SNAPSHOT)
         with patch.object(urllib.request, "urlopen", return_value=mock_resp):
             data, health = provider.collect(use_pool=True, timeout_ms=5000)
 
-        assert len(data["money_flow"]) == 2
+        assert data["money_flow"] == []
 
     def test_collect_pool_returns_market_meta(self) -> None:
         provider = BridgeQuoteProvider(base_url=BASE_URL)

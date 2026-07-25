@@ -1,6 +1,5 @@
 import { normalizeStockCode } from '@/utils/common'
 import { apiService } from '../apiService'
-import { EASTMONEY_QUOTE_ENRICHMENT_ENABLED } from './constants'
 import type { QuoteBatchProgress } from './types'
 
 type QuoteApi = {
@@ -9,13 +8,10 @@ type QuoteApi = {
 
 type Sleep = (ms: number) => Promise<void>
 type QuoteBatchProgressCallback = (progress: QuoteBatchProgress) => void
-const THS_MONEY_FLOW_BATCH_SIZE = 20
-const THS_MONEY_FLOW_DELAY_MS = 300
 
 export class QuoteHttpFeed {
   private readonly api: QuoteApi
   private readonly sleep: Sleep
-  private readonly eastmoneyQuoteEnrichmentEnabled: boolean
 
   constructor(options: {
     api?: QuoteApi
@@ -24,8 +20,7 @@ export class QuoteHttpFeed {
   } = {}) {
     this.api = options.api || apiService
     this.sleep = options.sleep || ((ms) => new Promise((resolve) => setTimeout(resolve, ms)))
-    this.eastmoneyQuoteEnrichmentEnabled =
-      options.eastmoneyQuoteEnrichmentEnabled ?? EASTMONEY_QUOTE_ENRICHMENT_ENABLED
+    void options.eastmoneyQuoteEnrichmentEnabled
   }
 
   async fetchBasicData(
@@ -45,59 +40,10 @@ export class QuoteHttpFeed {
     force?: boolean,
     options: { onProgress?: QuoteBatchProgressCallback } = {},
   ): Promise<Map<string, any>> {
-    if (!this.eastmoneyQuoteEnrichmentEnabled) {
-      return new Map()
-    }
-
-    const result = new Map<string, any>()
-    const totalBatches = Math.ceil(codes.length / THS_MONEY_FLOW_BATCH_SIZE) || 1
-
-    for (let i = 0; i < codes.length; i += THS_MONEY_FLOW_BATCH_SIZE) {
-      const batch = codes.slice(i, i + THS_MONEY_FLOW_BATCH_SIZE)
-      try {
-        const response = await this.api.getQuotes(batch, {
-          source: 'thsMoneyFlow',
-          timeout: 20000,
-        })
-
-        const diff = response?.data?.diff || []
-        for (const item of diff) {
-          const code = normalizeStockCode(item.f12)
-          if (!code) continue
-          const zlje = parseFloat(item.f62) || 0
-          result.set(code, {
-            price: parseFloat(item.f2) || 0,
-            name: item.f14 || '',
-            source: 'ths_l2',
-            moneyFlowSource: 'ths_l2',
-            moneyFlowEstimated: false,
-            capitalFlowSource: 'official_l2',
-            capitalFlowConfidence: 'high',
-            zlje,
-            // zljzb 在 mergeHttpQuoteSources 中由 existing.turnover 补算
-            zljzb: 0,
-            cddje: 0,
-            cddjzb: 0,
-          })
-        }
-      } catch (error) {
-        console.warn('[DataLoader] THS 资金流请求失败:', error)
-      }
-
-      options.onProgress?.({
-        source: 'thsDetail',
-        completedBatches: Math.floor(i / THS_MONEY_FLOW_BATCH_SIZE) + 1,
-        totalBatches,
-        completedCodes: Math.min(i + batch.length, codes.length),
-        totalCodes: codes.length,
-      })
-
-      if (i + THS_MONEY_FLOW_BATCH_SIZE < codes.length) {
-        await this.sleep(THS_MONEY_FLOW_DELAY_MS)
-      }
-    }
-
-    return result
+    void codes
+    void force
+    void options
+    return new Map()
   }
 
   async fetchFromTencent(
@@ -117,10 +63,6 @@ export class QuoteHttpFeed {
       source: 'tencent',
       totalMV: (parseFloat(item.f20) || 0) * 10000,
       cirMV: (parseFloat(item.f21) || 0) * 10000,
-      zlje: parseFloat(item.f62) || 0,
-      zljzb: parseFloat(item.f184) || 0,
-      cddje: parseFloat(item.f66) || 0,
-      cddjzb: parseFloat(item.f69) || 0,
     }), options.onProgress)
   }
 
@@ -141,10 +83,6 @@ export class QuoteHttpFeed {
       source: 'sina',
       totalMV: (parseFloat(item.f20) || 0) * 10000,
       cirMV: (parseFloat(item.f21) || 0) * 10000,
-      zlje: parseFloat(item.f62) || 0,
-      zljzb: parseFloat(item.f184) || 0,
-      cddje: parseFloat(item.f66) || 0,
-      cddjzb: parseFloat(item.f69) || 0,
     }), options.onProgress)
   }
 

@@ -1,4 +1,6 @@
 import { ApiHttpError, apiService } from '@/services/apiService'
+import { AppEvents } from '@/types'
+import { EventManager } from '@/utils/eventManager'
 import type {
   ThemeFactorSnapshot,
   ThemeHeatApiFactor,
@@ -116,8 +118,15 @@ export class ThemeHeatFeed {
   private refreshPromise: Promise<ThemeHeatApiSnapshot> | null = null
   private stockCache = new Map<string, ThemeHeatStock[]>()
   private stockPromises = new Map<string, Promise<ThemeHeatStock[]>>()
+  private fundVersions = new Map<string, number>()
+  private fundRefreshTimer: ReturnType<typeof setTimeout> | null = null
+  private readonly unsubscribeFundPatch: () => void
 
-  constructor(private readonly api: ThemeHeatApiClient = apiService) {}
+  constructor(private readonly api: ThemeHeatApiClient = apiService) {
+    this.unsubscribeFundPatch = EventManager.on(AppEvents.WEBSOCKET.QUOTE_PATCH, (payload: any) => {
+      this.applyFundPatch(Array.isArray(payload?.items) ? payload.items : [])
+    })
+  }
 
   refresh(options: { force?: boolean } = {}): Promise<ThemeHeatApiSnapshot> {
     if (this.refreshPromise) return this.refreshPromise
@@ -177,11 +186,50 @@ export class ThemeHeatFeed {
     return promise
   }
 
+  applyFundPatch(items: any[]): void {
+    let changed = false
+    for (const item of items) {
+      if (item?.moneyFlowSource !== 'ths_main_monitor') continue
+      const code = String(item?.code || '')
+      const version = Number(item?.version)
+      const zlje = nullableFinite(item?.zlje)
+      if (!code || !Number.isFinite(version) || zlje === null) continue
+      if (version < (this.fundVersions.get(code) || 0)) continue
+
+      let codeChanged = false
+      for (const [key, stocks] of this.stockCache) {
+        const next = stocks.map((stock) => {
+          if (stock.code !== code) return stock
+          codeChanged = true
+          return { ...stock, mainNetInflow: zlje }
+        })
+        if (codeChanged) this.stockCache.set(key, next)
+      }
+      if (codeChanged) {
+        this.fundVersions.set(code, version)
+        changed = true
+      }
+    }
+    if (!changed || this.fundRefreshTimer) return
+    this.fundRefreshTimer = setTimeout(() => {
+      this.fundRefreshTimer = null
+      void this.refresh().catch(() => undefined)
+    }, 250)
+  }
+
   clear(): void {
     this.snapshot = null
     this.refreshPromise = null
     this.stockCache.clear()
     this.stockPromises.clear()
+    this.fundVersions.clear()
+    if (this.fundRefreshTimer) clearTimeout(this.fundRefreshTimer)
+    this.fundRefreshTimer = null
+  }
+
+  destroy(): void {
+    this.clear()
+    this.unsubscribeFundPatch()
   }
 }
 

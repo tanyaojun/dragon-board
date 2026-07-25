@@ -7,6 +7,9 @@ const QUANT_BOARD_PREFIXES = [
   '/api/snapshots/',
   '/api/themes/mapping',
   '/api/themes/heat',
+  '/api/themes/stocks/',
+  '/api/themes/counts',
+  '/api/themes/fund-rows',
   '/api/research/',
   '/api/stocks/',
   '/api/journal/',
@@ -16,7 +19,7 @@ const QUANT_BOARD_PREFIXES = [
 const CACHEABLE_RESOURCES = [
   { path: '/api/ranktrend/rank-series', ttlSeconds: 7200 },
   { path: '/api/themes/heat', ttlSeconds: 30 },
-  { path: '/api/themes/mapping', ttlSeconds: 14400 },
+  { path: '/api/themes/mapping', ttlSeconds: 300 },
   { path: '/api/snapshots/counts', ttlSeconds: 600 },
 ]
 
@@ -73,7 +76,7 @@ function buildCacheKey(resourcePath, query) {
       return `proxy:themes:heat:${digest}`
     }
     case '/api/themes/mapping': {
-      return 'proxy:themes:mapping:v1'
+      return 'proxy:themes:mapping:v2'
     }
     case '/api/snapshots/counts': {
       const payload = { dataset_id: query.dataset_id || query.datasetId || '' }

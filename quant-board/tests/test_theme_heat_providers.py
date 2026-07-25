@@ -6,7 +6,7 @@ from urllib.parse import parse_qs, urlparse
 
 from backend.settings import Settings
 from backend.snapshot_collector.models import SourceHealth
-from backend.snapshot_collector.providers import EastmoneyFundFlowProvider, TencentBasicQuoteProvider
+from backend.snapshot_collector.providers import TencentBasicQuoteProvider
 
 
 class FakeBatchHttp:
@@ -80,48 +80,6 @@ def test_tencent_provider_batches_and_keeps_only_basic_fields(monkeypatch) -> No
     }
 
 
-def test_eastmoney_provider_discards_basic_quote_fields(monkeypatch) -> None:
-    fake_http = FakeBatchHttp()
-    monkeypatch.setattr("backend.snapshot_collector.providers._http_get_json", fake_http)
-    provider = EastmoneyFundFlowProvider("http://127.0.0.1:3000", batch_size=50, max_concurrency=3)
-
-    rows, health = provider.collect(["000001"])
-
-    assert health.ok is True
-    assert set(rows["000001"]) == {
-        "code",
-        "mainNetInflow",
-        "superLargeNetInflow",
-        "superLargeNetRatio",
-        "mainNetRatio",
-    }
-
-
-def test_eastmoney_provider_stops_after_first_systemic_failure_wave(monkeypatch) -> None:
-    calls = 0
-
-    def always_fail(url: str, timeout_s: float) -> dict:
-        nonlocal calls
-        del url, timeout_s
-        calls += 1
-        raise OSError("eastmoney unavailable")
-
-    monkeypatch.setattr("backend.snapshot_collector.providers._http_get_json", always_fail)
-    provider = EastmoneyFundFlowProvider(
-        "http://127.0.0.1:3000",
-        batch_size=10,
-        max_concurrency=3,
-        failed_batch_retries=1,
-    )
-
-    rows, health = provider.collect([f"{index:06d}" for index in range(80)])
-
-    assert rows == {}
-    assert calls == 6
-    assert health.ok is False
-    assert health.failed_batches == list(range(8))
-
-
 def test_provider_stops_scheduling_batches_after_collection_budget(monkeypatch) -> None:
     fake_http = FakeBatchHttp()
     monkeypatch.setattr("backend.snapshot_collector.providers._http_get_json", fake_http)
@@ -187,3 +145,10 @@ def test_theme_heat_settings_read_and_clamp_environment(monkeypatch) -> None:
     assert settings.theme_heat_fund_timeout_ms == 100
     assert settings.theme_heat_quote_collection_timeout_ms == 1000
     assert settings.theme_heat_fund_collection_timeout_ms == 1000
+
+
+def test_theme_heat_defaults_allow_a_full_market_ths_collection() -> None:
+    settings = Settings()
+
+    assert settings.theme_heat_fund_timeout_ms >= 30_000
+    assert settings.theme_heat_fund_collection_timeout_ms >= 180_000

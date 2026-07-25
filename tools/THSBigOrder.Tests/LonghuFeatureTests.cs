@@ -79,24 +79,30 @@ internal static class LonghuFeatureTests
 
     internal static void TestLastGoodMaxAgeWindows()
     {
-        AssertEqual(TimeSpan.FromHours(12),
-            THSBigOrderDataProvider.BigOrderLastGoodMaxAge(new DateTime(2026, 7, 17, 9, 15, 0)),
-            "pre-open window allows 12 hours");
         AssertEqual(TimeSpan.FromMinutes(5),
-            THSBigOrderDataProvider.BigOrderLastGoodMaxAge(new DateTime(2026, 7, 17, 10, 0, 0)),
+            THSBigOrderDataProvider.BigOrderLastGoodMaxAge(
+                new DateTime(2026, 7, 17, 9, 15, 0), new DateTime(2026, 7, 17)),
+            "current authoritative session uses five minutes before open");
+        AssertEqual(TimeSpan.FromMinutes(5),
+            THSBigOrderDataProvider.BigOrderLastGoodMaxAge(
+                new DateTime(2026, 7, 17, 10, 0, 0), new DateTime(2026, 7, 17)),
             "trading window keeps 5 minute bound");
-        AssertEqual(TimeSpan.FromHours(12),
-            THSBigOrderDataProvider.BigOrderLastGoodMaxAge(new DateTime(2026, 7, 17, 12, 0, 0)),
-            "lunch window allows 12 hours");
-        AssertEqual(TimeSpan.FromHours(12),
-            THSBigOrderDataProvider.BigOrderLastGoodMaxAge(new DateTime(2026, 7, 17, 15, 10, 0)),
-            "post-close window allows 12 hours");
-        AssertEqual(TimeSpan.FromHours(12),
-            THSBigOrderDataProvider.BigOrderLastGoodMaxAge(new DateTime(2026, 7, 17, 20, 0, 0)),
-            "evening window allows 12 hours");
-        AssertEqual(TimeSpan.FromHours(12),
-            THSBigOrderDataProvider.BigOrderLastGoodMaxAge(new DateTime(2026, 7, 18, 10, 0, 0)),
-            "weekend window allows 12 hours");
+        AssertEqual(TimeSpan.FromMinutes(5),
+            THSBigOrderDataProvider.BigOrderLastGoodMaxAge(
+                new DateTime(2026, 7, 17, 12, 0, 0), new DateTime(2026, 7, 17)),
+            "current authoritative session uses five minutes at lunch");
+        AssertEqual(TimeSpan.FromMinutes(5),
+            THSBigOrderDataProvider.BigOrderLastGoodMaxAge(
+                new DateTime(2026, 7, 17, 15, 10, 0), new DateTime(2026, 7, 17)),
+            "current authoritative session uses five minutes after close");
+        AssertEqual(TimeSpan.FromMinutes(5),
+            THSBigOrderDataProvider.BigOrderLastGoodMaxAge(
+                new DateTime(2026, 7, 17, 20, 0, 0), new DateTime(2026, 7, 17)),
+            "current authoritative session uses five minutes in the evening");
+        AssertEqual(TimeSpan.FromDays(7),
+            THSBigOrderDataProvider.BigOrderLastGoodMaxAge(
+                new DateTime(2026, 7, 18, 10, 0, 0), new DateTime(2026, 7, 17)),
+            "completed authoritative session uses seven days on a later natural date");
     }
 
     internal static void TestAnnouncementTracker()
@@ -1004,7 +1010,16 @@ internal static class LonghuFeatureTests
             new ThsBigOrderSourceClient(http, "http://127.0.0.1:3000", parser),
             new LonghuBigOrderSourceClient(http, "http://127.0.0.1:3000", parser),
             new FixedSource<StockSummary>(new StockSummary { Code = "002297", Name = "测试", Price = 10 }),
-            new FixedSource<IReadOnlyList<MinuteTurnoverPoint>>(new MinuteTurnoverPoint[0]),
+            new FixedSource<IReadOnlyList<MinuteTurnoverPoint>>(new[]
+            {
+                new MinuteTurnoverPoint
+                {
+                    Time = new DateTime(2026, 7, 16, 9, 30, 0),
+                    Price = 10,
+                    CumulativeVolume = 100,
+                    CumulativeAmount = 100000,
+                },
+            }),
             new FixedSource<LimitUpSourceData>(new LimitUpSourceData()));
     }
 
@@ -1127,7 +1142,9 @@ internal static class LonghuFeatureTests
                 {
                     ["ok"] = true,
                     ["sessionDate"] = "2026-07-16",
-                    ["fetchedAt"] = 1784168251000,
+                    ["fetchedAt"] = ProxyUiStale
+                        ? DateTimeOffset.Now.AddDays(-1).ToUnixTimeMilliseconds()
+                        : 1784168251000,
                     ["data"] = new JObject
                     {
                         ["List"] = rows,

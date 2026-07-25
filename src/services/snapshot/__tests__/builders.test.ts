@@ -4,6 +4,33 @@ import { buildDailySnapshot, buildSnapshotFrameRow, buildSnapshotStockRows } fro
 import { createSnapshotRecord } from '../identity'
 
 describe('snapshot builders', () => {
+  it('excludes runtime THS fund fields from formal snapshot payloads', () => {
+    const snapshot = buildDailySnapshot({
+      stocks: [{
+        code: '000001',
+        name: '运行态资金样本',
+        zlje: 88_000_000,
+        zljzb: 8.8,
+        cddje: 30_000_000,
+        cddjzb: 3,
+        moneyFlowSource: 'ths_main_monitor',
+        moneyFlowEstimated: false,
+        capitalFlowSource: 'ths_main_monitor',
+        capitalFlowConfidence: 'high',
+      }],
+      hotThemes: [],
+      breathHistory: [],
+      breathFactors: [],
+    } as any)
+
+    expect(snapshot.hotlist[0]).not.toHaveProperty('zlje')
+    expect(snapshot.hotlist[0]).not.toHaveProperty('zljzb')
+    expect(snapshot.hotlist[0]).not.toHaveProperty('cddje')
+    expect(snapshot.hotlist[0]).not.toHaveProperty('cddjzb')
+    expect(snapshot.hotlist[0]).not.toHaveProperty('moneyFlowSource')
+    expect(snapshot.hotlist[0]).not.toHaveProperty('capitalFlowSource')
+  })
+
   it('slims daily raw snapshot payload and keeps required hotlist fact fields', () => {
     const snapshot = buildDailySnapshot({
       stocks: [
@@ -197,5 +224,28 @@ describe('snapshot builders', () => {
       money_flow_estimated: true,
       reason: '涨停原因样本',
     })
+  })
+
+  it('strips runtime THS funds while projecting formal stock rows', () => {
+    const record = createSnapshotRecord(
+      'half_hour',
+      new Date('2026-07-24T15:00:00'),
+      {
+        hotlist: [{
+          code: '000001',
+          name: '运行态资金样本',
+          zlje: 88_000_000,
+          moneyFlowSource: 'ths_main_monitor',
+          capitalFlowSource: 'ths_main_monitor',
+        }],
+      },
+    )
+
+    const rows = buildSnapshotStockRows(record)
+
+    expect(rows[0].zlje).toBe(0)
+    expect(rows[0].moneyFlowSource).toBeUndefined()
+    expect(rows[0].capitalFlowSource).toBeUndefined()
+    expect(rows[0].money_flow_source).toBeUndefined()
   })
 })

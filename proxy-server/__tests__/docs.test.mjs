@@ -23,9 +23,8 @@ test('openapi json documents the proxy server routes', async () => {
     assert.equal(body.info.title, 'Dragon Board Proxy API')
     assert.equal(body.servers[0].url, 'http://localhost:3000')
     assert.ok(body.paths['/api/eastmoney/hot'].post)
-    assert.ok(body.paths['/api/quotes/eastmoney'].get)
-    assert.ok(body.paths['/api/quotes/tencent/minute'].get)
-    assert.equal(body.paths['/api/quotes/tencent/minute'].get.parameters[0].name, 'code')
+    assert.equal(body.paths['/api/quotes/eastmoney'], undefined)
+    assert.equal(body.paths['/api/quotes/tencent/minute'], undefined)
     assert.ok(body.paths['/api/cache/startup-bundle'].get)
     assert.ok(body.paths['/api/cache/startup-bundle'].post)
     assert.equal(
@@ -38,12 +37,7 @@ test('openapi json documents the proxy server routes', async () => {
       ['key', 'bundle'],
     )
     assert.ok(body.paths['/api/market/overview'].get)
-    assert.ok(body.paths['/api/big-order/ths-detail'].get)
-    assert.equal(body.paths['/api/big-order/ths-detail'].get.parameters[0].name, 'stockCode')
-    assert.equal(
-      body.paths['/api/big-order/ths-detail'].get.responses[200].content['application/json'].schema.$ref,
-      '#/components/schemas/BigOrderEnvelope',
-    )
+    assert.equal(body.paths['/api/big-order/ths-detail'], undefined)
     assert.equal(
       body.paths['/api/big-order/longhu/all-day'].get.responses[200].content['application/json'].schema.$ref,
       '#/components/schemas/BigOrderEnvelope',

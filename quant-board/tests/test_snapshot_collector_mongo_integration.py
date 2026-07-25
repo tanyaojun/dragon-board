@@ -391,7 +391,8 @@ class TestMongoIntegrationApply:
         from backend.snapshot_collector.service_factory import _MongoSnapshotCollectorRepository
 
         class ThemeService:
-            def get_snapshot(self):
+            def get_snapshot(self, *, include_runtime_funds: bool = True):
+                assert include_runtime_funds is False
                 return {
                     "computedAt": 1782018300000,
                     "factorVersion": "theme-market-v1",
@@ -399,7 +400,7 @@ class TestMongoIntegrationApply:
                     "quality": {"quoteCoverage": 0.99},
                     "sources": {
                         "quotes": {"source": "theme_quote_tencent", "ok": True},
-                        "funds": {"source": "theme_fund_eastmoney", "ok": True},
+                        "funds": {"source": "formal_fund_unavailable", "ok": False},
                     },
                     "factors": [
                         {
@@ -444,7 +445,7 @@ class TestMongoIntegrationApply:
                 "snapshotId": snapshot_id,
                 "entityType": "hot_theme",
                 "metadata.quoteSource": "tencent",
-                "metadata.fundSource": "eastmoney",
+                "metadata.fundSource": None,
             }
         ) == 239
 

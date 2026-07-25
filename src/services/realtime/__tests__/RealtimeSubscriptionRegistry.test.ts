@@ -27,4 +27,18 @@ describe('RealtimeSubscriptionRegistry', () => {
     expect(registry.getMergedCodes()).toEqual(['300001'])
     expect(apply).toHaveBeenLastCalledWith(['300001'])
   })
+
+  it('adds expanded theme stocks only to the fund stream', () => {
+    const apply = vi.fn()
+    const applyFunds = vi.fn()
+    const registry = new RealtimeSubscriptionRegistry({ apply, applyFunds })
+
+    registry.setOwnerCodes('dataLoader.hotlist', ['000001'])
+    registry.setFundOwnerCodes('theme.AI', ['600000'])
+
+    expect(apply).toHaveBeenLastCalledWith(['000001'])
+    expect(applyFunds).toHaveBeenLastCalledWith(['000001'], ['600000'])
+    expect(registry.getMergedCodes()).toEqual(['000001'])
+    expect(registry.getMergedFundCodes()).toEqual(['000001', '600000'])
+  })
 })

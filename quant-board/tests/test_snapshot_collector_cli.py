@@ -21,6 +21,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _bridge_trading_calendar(monkeypatch: Any) -> None:
+    monkeypatch.setattr("backend.cli.is_trading_day", lambda value: value.weekday() < 5)
+
+
 # ── helpers ────────────────────────────────────────────────────────────────────
 
 

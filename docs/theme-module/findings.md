@@ -1,5 +1,26 @@
 # 题材模块重构发现记录
 
+## 2026-07-25 THS 增量资金整改审计
+
+- Design/plan agent review identified eight architecture blockers: runtime THS leakage into formal snapshots, no post-close final pass, missing-code retry bypass, partial failure misclassified as systemic, synchronous calendar I/O in the event loop, leaked theme P0 owners, destructive multi-connection P1 persistence, and non-numeric THS `errorcode` escaping per-code failure isolation. The current implementation now contains targeted fixes/tests for all eight; final verification remains required.
+- Execution review found two remaining blockers in `tools/THSBigOrder`: `BigOrderLastGoodMaxAge` still hard-coded Saturday/Sunday, and a successful bridge minute response was cached without checking its date against THS authoritative `sessionDate`. Both require deterministic regression tests before implementation.
+
+- 失败方案把 `tdx_transaction` 同时写入 bridge、QuantBoard cache/stream、snapshot provider、前端 source priority 和实时协调器，导致资金口径与行情 WebSocket 生命周期耦合。
+- 可复用部分只有 Redis last-good、版本拒绝回退、QuantBoard 到浏览器的资金 WebSocket，以及题材/行情统一读缓存的方向；bridge 上游订阅和逐笔累计必须移除。
+- 现有 `ThemeFundCache` 只允许 TDX，且非交易日只有 `isFinal=true` 才能返回，无法承接 THS 最近交易日总额。
+- FastAPI 当前没有 THS `mainMonitorDetail`；现有单票实现只在 proxy `/api/big-order/ths-detail`。其请求头、响应校验、金额/日期解析和错误分类应迁入 QuantBoard 共享 service，不能在 FastAPI 与 proxy 保留两套实现。
+- `tools/THSBigOrder` 当前把 THS、Longhu、腾讯行情、分钟线和涨停池共用同一个 3000 base URL。迁移时只能给 `ThsBigOrderSourceClient` 单独增加 FastAPI 8000 base，不能整体替换 provider base URL。
+- `tools/THSBigOrder` 的公共构造器实际设置 `_bigOrderProxyPrimary=true`，运行时 THS 是 proxy-primary，并非 direct-first/fallback；迁移后 FastAPI 8000 应保持为单票主链。
+- 工具分钟线尚未迁移：当前 `TencentMinuteSourceClient` 直连腾讯并回退 `/api/quotes/tencent/minute`。python-bridge 虽已有 `/api/quotes/minute`，但实测周六把周五数据标成当天，且 raw `get_minute_time_data` 解码出现错误价格。正确 mootdx `Quotes.minutes('002297', date='20260724')` 返回 240 点；`vol` 单位为手，累计成交额需乘 100。必须先修 bridge 合同再迁工具，不能直接换 URL。
+- FastAPI 单票路由必须保留独立 raw payload last-good 与 stale 元数据；dashboard `theme-fund:v3` 只有标准化 `zlje`，不能满足 THSBigOrder 的明细/价格变化解析。
+- scheduler、FastAPI 单票/批次和工具请求必须共享 service 级请求门控，否则外部调用会绕过全局 THS 冷却与降并发。
+- 新 THS 资金链不得依赖 proxy startup bundle。Redis owner 正常持久化恢复；冷空 Redis 等待前端真实 `marketCodes` 建立约 200 只 P1 集合，题材 4,000+ 映射不进入 owner。
+- P1 owner 只由 Redis 持久集合和浏览器真实 `marketCodes` 更新维护；MongoDB 题材映射 4,000+ 股票、proxy startup bundle 和 snapshot collector 题材全集不得进入默认资金队列。
+- 非交易日不能只写“读取缓存”：切换到新命名空间时缓存必然为空。必须允许缺失 owner 股票做一次 THS 冷补齐，并接受上游最近 `sessionDate`，随后停止连续轮询。
+- 交易日判断必须继续复用 `snapshot_collector.trading_calendar` 到 python-bridge `/api/calendar` 的 mootdx 标准日历链；日内交易时段只用于会话状态，不用于猜测交易日。
+- 前端现有 `RealtimeSubscriptionRegistry` 已区分普通 owner 和题材 fund owner，适合改造成 marketCodes=P1、fund owner/top-ranked rows=P0 的双集合合同。
+- WebSocket subscriber 的接收集合必须是 `marketCodes ∪ priorityCodes`，否则不属于 200 只行情池的展开题材 P0 会被采集却收不到 patch。
+
 ## 2026-06-21 MongoDB Theme 动态热度替代 JXBK 调研
 
 - 当前正式存储口径已切换为 MongoDB：Dragon Board 通过 QuantBoard `GET /api/themes/mapping` 读取题材基础映射，前端不得直连 MongoDB。

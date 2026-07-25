@@ -114,16 +114,6 @@ namespace THSBigOrder.Parsing
             return ParseQuote(stockCode, payload, new List<string>());
         }
 
-        public IReadOnlyList<MinuteTurnoverPoint> ParseTencentMinute(string stockCode, JObject payload)
-        {
-            if (payload == null || payload.Value<int?>("code") != 0)
-                throw new PayloadParseException((string)payload?["msg"] ?? "Tencent minute error");
-            var marketCode = (stockCode.StartsWith("6") ? "sh" : "sz") + stockCode;
-            var source = payload.SelectToken("data." + marketCode + ".data") as JObject;
-            if (source == null) throw new PayloadParseException("invalid Tencent minute payload");
-            return ParseMinuteData(source);
-        }
-
         public IReadOnlyList<MinuteTurnoverPoint> ParseNormalizedMinute(JObject payload)
         {
             return ParseMinuteData(payload);
@@ -417,23 +407,7 @@ namespace THSBigOrder.Parsing
             DateTime date;
             if (data == null || !DateTime.TryParseExact((string)data["date"], "yyyyMMdd",
                 CultureInfo.InvariantCulture, DateTimeStyles.None, out date) || !(data["points"] is JArray))
-            {
-                var rawRows = data?["data"] as JArray;
-                if (data == null || !DateTime.TryParseExact((string)data["date"], "yyyyMMdd",
-                    CultureInfo.InvariantCulture, DateTimeStyles.None, out date) || rawRows == null)
-                    throw new PayloadParseException("invalid Tencent minute payload");
-                var normalized = new JArray(rawRows.Select(value =>
-                {
-                    var parts = value.ToString().Trim().Split((char[])null, StringSplitOptions.RemoveEmptyEntries);
-                    if (parts.Length != 4) throw new PayloadParseException("invalid Tencent minute row");
-                    return new JObject
-                    {
-                        ["time"] = parts[0], ["price"] = parts[1],
-                        ["cumulativeVolume"] = parts[2], ["cumulativeAmount"] = parts[3],
-                    };
-                }));
-                data = new JObject { ["date"] = date.ToString("yyyyMMdd"), ["points"] = normalized };
-            }
+                throw new PayloadParseException("invalid TDX minute payload");
 
             var output = new List<MinuteTurnoverPoint>();
             DateTime? previous = null;
@@ -447,13 +421,13 @@ namespace THSBigOrder.Parsing
                 var amount = FiniteNumber(row["cumulativeAmount"]);
                 if (!DateTime.TryParseExact(date.ToString("yyyyMMdd") + (string)row["time"],
                         "yyyyMMddHHmm", CultureInfo.InvariantCulture, DateTimeStyles.None, out time))
-                    throw new PayloadParseException("invalid Tencent minute row");
+                    throw new PayloadParseException("invalid TDX minute row");
                 if (time.TimeOfDay > new TimeSpan(15, 0, 0)) continue;
                 if (
                     !price.HasValue || !volume.HasValue || !amount.HasValue ||
                     price <= 0 || volume < 0 || amount < 0 || !IsTradingTime(time) ||
                     previous.HasValue && (time <= previous || volume < previousVolume || amount < previousAmount))
-                    throw new PayloadParseException("invalid Tencent minute row");
+                    throw new PayloadParseException("invalid TDX minute row");
                 output.Add(new MinuteTurnoverPoint
                 {
                     Time = time, Price = price.Value, CumulativeVolume = volume.Value,

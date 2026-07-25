@@ -64,12 +64,6 @@ type TickBatchEventPayload = {
   intervalMs: number
 }
 
-type MoneyFlowPatchEventPayload = {
-  items: QuotePatchLike[]
-  serverTs: number
-  intervalMs: number
-}
-
 const HEARTBEAT_INTERVAL_HINT_MS = 5000
 const TRADING_HEARTBEAT_INTERVAL_HINT_MS = 1000
 const RECONNECT_DELAYS_MS = [1000, 2000, 5000, 10000]
@@ -194,44 +188,6 @@ function normalizeQuotePatch(item: any): QuotePatch | null {
   if (typeof item?.capitalFlowConfidence === 'string') patch.capitalFlowConfidence = item.capitalFlowConfidence
 
   return patch
-}
-
-function normalizeMoneyFlowPatch(item: any): (Partial<QuotePatch> & { code: string }) | null {
-  const code = normalizeStockCode(item?.code || item?.symbol)
-  if (!code) return null
-
-  const patch: Partial<QuotePatch> & { code: string } = { code }
-  const zlje = toOptionalNumber(item?.zlje)
-  const zljzb = toOptionalNumber(item?.zljzb)
-  const cddje = toOptionalNumber(item?.cddje)
-  const cddjzb = toOptionalNumber(item?.cddjzb)
-
-  if (zlje !== undefined) patch.zlje = zlje
-  if (zljzb !== undefined) patch.zljzb = zljzb
-  if (cddje !== undefined) patch.cddje = cddje
-  if (cddjzb !== undefined) patch.cddjzb = cddjzb
-  if (typeof item?.moneyFlowSource === 'string') patch.moneyFlowSource = item.moneyFlowSource
-  if (typeof item?.moneyFlowEstimated === 'boolean') patch.moneyFlowEstimated = item.moneyFlowEstimated
-  if (typeof item?.capitalFlowSource === 'string') patch.capitalFlowSource = item.capitalFlowSource
-  if (typeof item?.capitalFlowConfidence === 'string') patch.capitalFlowConfidence = item.capitalFlowConfidence
-
-  return patch
-}
-
-function mergeMoneyFlowPatch(
-  existing: QuotePatch | undefined,
-  patch: Partial<QuotePatch> & { code: string },
-): QuotePatchLike {
-  return existing ? { ...existing, ...patch } : patch
-}
-
-function isCompleteQuotePatch(item: QuotePatchLike): item is QuotePatch {
-  return (
-    typeof item.lastPrice === 'number' &&
-    typeof item.changePct === 'number' &&
-    typeof item.volume === 'number' &&
-    typeof item.amount === 'number'
-  )
 }
 
 function normalizeDepth10Book(item: any): Depth10Book | null {
@@ -455,7 +411,7 @@ class RealTimeWebSocketService {
         this.handleTicksBatch(payload as TickBatchPayload, serverTs)
         break
       case 'money_flow_patch':
-        this.handleMoneyFlowPatch(payload as QuotePayload, serverTs)
+        // 资金字段只接受 QuantBoard 的统一资金流。
         break
       case 'l2_status':
         this.handleL2Status(payload as QuotePayload, serverTs)
@@ -520,22 +476,15 @@ class RealTimeWebSocketService {
       : Array.isArray(payload.items)
         ? payload.items
         : []
-    const moneyFlowSource = Array.isArray((payload as any).moneyFlow) ? (payload as any).moneyFlow : []
     const depthSource = Array.isArray((payload as any).depth)
       ? (payload as any).depth
       : Array.isArray(payload.items)
         ? payload.items
         : []
     const quotes = quoteSource.map(normalizeQuotePatch).filter(Boolean) as QuotePatch[]
-    const moneyFlowPatches = moneyFlowSource.map(normalizeMoneyFlowPatch).filter(Boolean) as QuotePatchLike[]
     const depth = depthSource.map(normalizeDepth10Book).filter(Boolean) as Depth10Book[]
 
     quotes.forEach((quote) => this.latestQuotesByCode.set(quote.code, quote))
-    const moneyFlow = moneyFlowPatches.map((patch) => {
-      const merged = mergeMoneyFlowPatch(this.latestQuotesByCode.get(patch.code), patch)
-      if (isCompleteQuotePatch(merged)) this.latestQuotesByCode.set(merged.code, merged)
-      return merged
-    })
     depth.forEach((book) => this.latestDepth10ByCode.set(book.code, book))
 
     this.updateStatus({
@@ -545,7 +494,7 @@ class RealTimeWebSocketService {
     })
 
     const eventPayload: FullStateEventPayload = {
-      quotes: [...quotes, ...moneyFlow],
+      quotes,
       depth,
       serverTs,
       subscribedCount: this.state.subscribedCount,
@@ -569,31 +518,6 @@ class RealTimeWebSocketService {
     }
 
     EventManager.emit(AppEvents.WEBSOCKET.QUOTE_PATCH, eventPayload)
-  }
-
-  private handleMoneyFlowPatch(payload: QuotePayload, serverTs: number) {
-    const patches = (Array.isArray(payload.items) ? payload.items : [])
-      .map(normalizeMoneyFlowPatch)
-      .filter(Boolean) as QuotePatchLike[]
-
-    const items = patches.map((patch) => {
-      const merged = mergeMoneyFlowPatch(this.latestQuotesByCode.get(patch.code), patch)
-      if (isCompleteQuotePatch(merged)) this.latestQuotesByCode.set(merged.code, merged)
-      return merged
-    })
-
-    const eventPayload: MoneyFlowPatchEventPayload = {
-      items,
-      serverTs,
-      intervalMs: toNumber(payload.intervalMs) || 100,
-    }
-
-    EventManager.emit(AppEvents.WEBSOCKET.QUOTE_PATCH, eventPayload)
-    const l2 = this.normalizeL2Status((payload as any).l2)
-    if (l2) {
-      this.updateStatus({ l2 })
-      EventManager.emit(AppEvents.WEBSOCKET.STATUS_CHANGED, this.getStatus())
-    }
   }
 
   private handleL2Status(payload: QuotePayload, serverTs: number) {

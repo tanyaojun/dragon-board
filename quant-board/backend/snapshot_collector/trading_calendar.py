@@ -1,51 +1,42 @@
-"""Chinese A-share trading day detection.
-
-Provides two public functions:
-  - is_trading_day(date) -> bool
-  - trading_date_from_ts(now_ts_ms) -> str | None
-
-The holiday list is a hardcoded frozenset. Dates are approximate and should be
-verified against the official exchange calendar before production use. The module
-is correct for weekends (always non-trading).
-
-NOTE: Holiday dates are approximate for 2026. Verify against the official
-Shanghai/Shenzhen exchange calendar before relying on holiday detection.
-"""
+"""A-share trading dates sourced only from the python-bridge TDX calendar."""
 
 from __future__ import annotations
 
 import datetime
+import json
+import urllib.error
+import urllib.request
+from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 
 TZ_SHANGHAI = ZoneInfo("Asia/Shanghai")
 
-# Approximate 2026 Chinese A-share market closure dates.
-# These are based on typical calendar patterns and should be verified
-# against the official exchange holiday schedule.
-# Key principle: better to miss a holiday (treat as trading day)
-# than to miss a trading day (treat as holiday).
-_KNOWN_HOLIDAYS: frozenset[str] = frozenset({
-    "2026-01-01", "2026-01-02",  # New Year
-    "2026-02-16", "2026-02-17", "2026-02-18", "2026-02-19", "2026-02-20",  # Spring Festival (approximate)
-    "2026-04-06",  # Qing Ming
-    "2026-05-01", "2026-05-04", "2026-05-05",  # Labor Day
-    "2026-06-19",  # Dragon Boat
-    "2026-09-25",  # Mid-Autumn
-    "2026-10-01", "2026-10-02", "2026-10-05", "2026-10-06", "2026-10-07",  # National Day
-})
+class TradingCalendarUnavailable(RuntimeError):
+    pass
+
+
+def _fetch_bridge_calendar(date: datetime.date) -> bool | None:
+    from backend.settings import get_settings
+
+    base_url = get_settings().snapshot_collector_bridge_base_url.rstrip("/")
+    url = f"{base_url}/api/calendar?{urlencode({'date': date.isoformat()})}"
+    try:
+        with urllib.request.urlopen(url, timeout=2.0) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (OSError, ValueError, urllib.error.URLError):
+        return None
+    value = payload.get("isTradingDay") if payload.get("ok") is True else None
+    return value if isinstance(value, bool) else None
 
 
 def is_trading_day(date: datetime.date) -> bool:
-    """Return True if *date* is a Chinese A-share trading day.
-
-    Returns False for Saturdays, Sundays, and dates in the known holiday set.
-    """
-    # Saturday=5, Sunday=6
-    if date.weekday() >= 5:
-        return False
-    if date.isoformat() in _KNOWN_HOLIDAYS:
-        return False
-    return True
+    """Return the bridge TDX calendar result, or stop when it is unavailable."""
+    result = _fetch_bridge_calendar(date)
+    if result is None:
+        raise TradingCalendarUnavailable(
+            f"TDX trading calendar unavailable for {date.isoformat()}"
+        )
+    return result
 
 
 def trading_date_from_ts(now_ts_ms: int) -> str | None:

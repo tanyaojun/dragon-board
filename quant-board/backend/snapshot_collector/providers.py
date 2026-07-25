@@ -226,7 +226,7 @@ class _BatchedProxyProvider:
                     raise RuntimeError(degraded_error)
                 return {
                     row["code"]: row
-                    for item in _extract_eastmoney_diff(body)
+                    for item in _extract_proxy_quote_rows(body)
                     if (row := self._normalize_row(item)) is not None
                 }
             except Exception as exc:
@@ -256,26 +256,6 @@ class TencentBasicQuoteProvider(_BatchedProxyProvider):
             "amount": _safe_float(item.get("f5")),
             "turnoverRate": _safe_float(item.get("f8")),
             "volumeRatio": _safe_float(item.get("f10")),
-        }
-
-
-class EastmoneyFundFlowProvider(_BatchedProxyProvider):
-    """Fetch only fund-flow fields from Eastmoney through proxy-server."""
-
-    source = "theme_fund_eastmoney"
-    endpoint = "/api/quotes/eastmoney"
-    stop_on_systemic_failure = True
-
-    def _normalize_row(self, item: dict[str, Any]) -> dict[str, Any] | None:
-        code = str(item.get("f12") or "").strip()
-        if not code:
-            return None
-        return {
-            "code": code,
-            "mainNetInflow": _safe_float(item.get("f62")),
-            "superLargeNetInflow": _safe_float(item.get("f66")),
-            "superLargeNetRatio": _safe_float(item.get("f69")),
-            "mainNetRatio": _safe_float(item.get("f184")),
         }
 
 
@@ -867,106 +847,6 @@ def _parse_board_text(value: Any) -> int | None:
     return number if number > 0 else None
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# ProxyQuoteProvider
-# ═════════════════════════════════════════════════════════════════════════════
-
-
-class ProxyQuoteProvider:
-    """Fetch real-time quotes from the proxy-server EastMoney endpoint.
-
-    Calls ``GET /api/quotes/eastmoney?codes=...`` and returns a dict
-    containing ``quotes``, ``depth``, ``money_flow``, and ``market_meta``
-    — the same shape as ``BridgeQuoteProvider`` for drop-in compatibility.
-
-    Depth data is not available from this source and will always be an
-    empty list.  Money flow fields are extracted from the same EastMoney
-    response rows (f62/f66/f69/f184).  Medium net inflow is derived as
-    main − super_large − large − small.
-    """
-
-    def __init__(self, base_url: str = _DEFAULT_PROXY_BASE_URL) -> None:
-        self._base_url = base_url.rstrip("/")
-
-    # ── public API ──────────────────────────────────────────────────────
-
-    def collect(
-        self,
-        codes: list[str] | None = None,
-        *,
-        timeout_ms: int = _DEFAULT_TIMEOUT_MS,
-    ) -> tuple[dict[str, Any], SourceHealth]:
-        """Fetch quotes for *codes* from proxy-server EastMoney endpoint.
-
-        Returns ``(data, health)`` where *data* has the same shape as
-        ``BridgeQuoteProvider.collect()`` so it can be routed identically
-        in ``collect_market_context``.
-        """
-        start = time.monotonic()
-        filtered = [str(c).strip() for c in (codes or []) if str(c).strip()]
-        if not filtered:
-            latency_ms = int((time.monotonic() - start) * 1000)
-            health = SourceHealth(
-                source="quote_proxy",
-                ok=True,
-                latency_ms=latency_ms,
-                row_count=0,
-                captured_at=_iso_now(),
-            )
-            return {"quotes": [], "depth": [], "money_flow": [], "market_meta": {}}, health
-
-        try:
-            codes_param = ",".join(filtered)
-            url = (
-                f"{self._base_url}/api/quotes/eastmoney"
-                f"?codes={urllib.request.quote(codes_param, safe='')}"
-            )
-            timeout_s = timeout_ms / 1000.0
-            body = _http_get_json(url, timeout_s)
-            degraded_error = _proxy_degraded_error(body)
-            if degraded_error:
-                latency_ms = int((time.monotonic() - start) * 1000)
-                health = SourceHealth(
-                    source="quote_proxy",
-                    ok=False,
-                    latency_ms=latency_ms,
-                    error=degraded_error,
-                    captured_at=_iso_now(),
-                )
-                return {"quotes": [], "depth": [], "money_flow": [], "market_meta": {}}, health
-
-            rows = _extract_eastmoney_diff(body)
-            quotes = _eastmoney_rows_to_quotes(rows)
-            money_flow = _eastmoney_rows_to_money_flow(rows)
-
-            latency_ms = int((time.monotonic() - start) * 1000)
-            health = SourceHealth(
-                source="quote_proxy",
-                ok=True,
-                latency_ms=latency_ms,
-                row_count=max(len(quotes), len(money_flow)),
-                captured_at=_iso_now(),
-            )
-            data = {
-                "quotes": quotes,
-                "depth": [],
-                "money_flow": money_flow,
-                "market_meta": {},
-            }
-            return data, health
-
-        except Exception as exc:
-            latency_ms = int((time.monotonic() - start) * 1000)
-            health = SourceHealth(
-                source="quote_proxy",
-                ok=False,
-                latency_ms=latency_ms,
-                error=str(exc),
-                captured_at=_iso_now(),
-            )
-            return {"quotes": [], "depth": [], "money_flow": [], "market_meta": {}}, health
-
-
 def _proxy_degraded_error(body: Any) -> str:
     """Return a proxy degraded/error message, or empty string for healthy bodies."""
     if not isinstance(body, dict):
@@ -981,8 +861,8 @@ def _proxy_degraded_error(body: Any) -> str:
     return ""
 
 
-def _extract_eastmoney_diff(body: Any) -> list[dict[str, Any]]:
-    """Extract the ``diff`` list from an EastMoney proxy response."""
+def _extract_proxy_quote_rows(body: Any) -> list[dict[str, Any]]:
+    """Extract field-coded quote rows from a proxy response."""
     if isinstance(body, dict):
         data = body.get("data")
         if isinstance(data, dict):
@@ -990,61 +870,6 @@ def _extract_eastmoney_diff(body: Any) -> list[dict[str, Any]]:
             if isinstance(diff, list):
                 return diff
     return []
-
-
-def _eastmoney_rows_to_quotes(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Map EastMoney field-coded rows to the internal quote dict format."""
-    quotes: list[dict[str, Any]] = []
-    for item in rows:
-        if not isinstance(item, dict):
-            continue
-        code = str(item.get("f12") or "").strip()
-        if not code:
-            continue
-        quotes.append({
-            "code": code,
-            "name": str(item.get("f14") or code),
-            "price": _safe_float(item.get("f2")),
-            "pctChange": _safe_float(item.get("f3")),
-            "volume": _safe_int(item.get("f5")),
-            "amount": _safe_float(item.get("f6")),
-            "turnover": _safe_float(item.get("f8")),
-            "volumeRatio": _safe_float(item.get("f10")),
-            "pe": _safe_float(item.get("f9")),
-            "totalMarketValue": _safe_float(item.get("f20")),
-        })
-    return quotes
-
-
-def _eastmoney_rows_to_money_flow(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Map EastMoney fund-flow fields to the internal money_flow dict format.
-
-    ``mediumNetInflow`` is derived because EastMoney does not expose it directly.
-    """
-    flows: list[dict[str, Any]] = []
-    for item in rows:
-        if not isinstance(item, dict):
-            continue
-        code = str(item.get("f12") or "").strip()
-        if not code:
-            continue
-        main = _safe_float(item.get("f62"))
-        super_large = _safe_float(item.get("f66"))
-        large = _safe_float(item.get("f69"))
-        small = _safe_float(item.get("f184"))
-        medium = main - super_large - large - small
-        flows.append({
-            "code": code,
-            "mainNetInflow": main,
-            "superLargeNetInflow": super_large,
-            "largeNetInflow": large,
-            "mediumNetInflow": medium,
-            "smallNetInflow": small,
-            "moneyFlowSource": "estimated_l1",
-            "moneyFlowEstimated": True,
-            "capitalFlowConfidence": "low",
-        })
-    return flows
 
 
 def _merge_rows_by_code(target: list[dict[str, Any]], rows: Any) -> None:
@@ -1207,7 +1032,8 @@ class BridgeQuoteProvider:
 
             quotes = _normalize_quote_list(body.get("quotes"))
             depth = _normalize_depth_list(body.get("depth"))
-            money_flow = _normalize_money_flow_list(body.get("moneyFlow"))
+            # Bridge HTTP money fields are not part of the formal snapshot contract.
+            money_flow: list[dict[str, Any]] = []
             market_meta = _normalize_quote_stats(body.get("quoteStats"))
 
             latency_ms = int((time.monotonic() - start) * 1000)
@@ -1542,12 +1368,11 @@ def collect_market_context(
                         if isinstance(row, dict) and str(row.get("code") or "").strip()
                     ]
 
-            elif isinstance(provider, (BridgeQuoteProvider, ProxyQuoteProvider)):
+            elif isinstance(provider, BridgeQuoteProvider):
                 data, health = provider.collect(active_codes, timeout_ms=timeout_ms)
                 if isinstance(data, dict):
                     _merge_rows_by_code(ctx.quotes, data.get("quotes") or [])
                     ctx.depth.extend(data.get("depth") or [])
-                    _merge_rows_by_code(ctx.money_flow, data.get("money_flow") or [])
                     if data.get("market_meta"):
                         ctx.market_meta.update(data["market_meta"])
                 ctx.source_health.append(health)

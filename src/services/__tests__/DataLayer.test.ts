@@ -189,11 +189,10 @@ describe('DataLayer throttled notifications', () => {
 })
 
 describe('DataLayer money flow source precedence', () => {
-  test('allows higher priority fund flow sources to replace lower priority sources', () => {
+  test('accepts only THS main monitor fund flow updates', () => {
     dataLayer.reset()
 
     try {
-      // 先写入低优先级 ths_l2，再推送高优先级 tdx_transaction，后者应覆盖前者
       dataLayer.setMergedStocks([
         {
           code: '000001',
@@ -223,11 +222,27 @@ describe('DataLayer money flow source precedence', () => {
         },
       ])
 
+      expect(dataLayer.getStock('000001')).toMatchObject({
+        moneyFlowSource: 'ths_l2',
+        zlje: 100,
+        cddje: 50,
+      })
+
+      dataLayer.applyRealtimeQuoteBatch([
+        {
+          code: '000001',
+          zlje: 9000,
+          zljzb: 9,
+          cddje: 6000,
+          cddjzb: 6,
+          moneyFlowSource: 'ths_main_monitor',
+          moneyFlowEstimated: false,
+        },
+      ])
+
       const stock = dataLayer.getStock('000001')
-      expect(stock?.moneyFlowSource).toBe('tdx_transaction')
+      expect(stock?.moneyFlowSource).toBe('ths_main_monitor')
       expect(stock?.moneyFlowEstimated).toBe(false)
-      expect(stock?.capitalFlowSource).toBe('tdx_tick')
-      expect(stock?.capitalFlowConfidence).toBe('high')
       expect(stock?.zlje).toBe(9000)
       expect(stock?.cddje).toBe(6000)
     } finally {

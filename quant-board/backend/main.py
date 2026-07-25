@@ -14,6 +14,7 @@ from backend.api.hotlist_routes import router as hotlist_router
 from backend.api.journal_routes import router as journal_router
 from backend.api.snapshot_collector_routes import router as snapshot_collector_router
 from backend.api.theme_heat_routes import router as theme_heat_router
+from backend.api.ths_main_monitor_routes import router as ths_main_monitor_router
 from backend.data.auto_sync import auto_sync_runner, run_outbox_auto_sync_once
 from backend.data.archive.auto_archive import archive_auto_runner, run_archive_auto_once
 from backend.data.archive.object_store import get_object_backup_store
@@ -46,6 +47,7 @@ from backend.data.theme_repository import ThemeRepository
 from backend.data.theme_service import ThemeMigrationError, ThemeMigrationService
 from backend.theme_mapping_refresh import refresh_theme_stock_mappings
 from backend.theme_mapping_scheduler import theme_mapping_refresh_scheduler
+from backend.theme_fund_scheduler import theme_fund_scheduler
 from backend.operations.schedule import run_after_market_once
 from backend.services import (
     BacktestService,
@@ -78,9 +80,10 @@ app.include_router(hotlist_router)
 app.include_router(fusion_strategy_projection_router)
 app.include_router(snapshot_collector_router)
 app.include_router(theme_heat_router)
+app.include_router(ths_main_monitor_router)
 
 @app.on_event("startup")
-def on_startup() -> None:
+async def on_startup() -> None:
     if get_settings().storage_backend != "mongodb":
         init_db()
         init_theme_db()
@@ -89,6 +92,7 @@ def on_startup() -> None:
         backup_retention_runner.start()
     snapshot_collector_scheduler.start()
     theme_mapping_refresh_scheduler.start()
+    theme_fund_scheduler.start()
 
 
 @app.on_event("shutdown")
@@ -99,6 +103,8 @@ async def on_shutdown() -> None:
         await backup_retention_runner.stop()
     await snapshot_collector_scheduler.stop()
     await theme_mapping_refresh_scheduler.stop()
+    await theme_fund_scheduler.stop()
+    await theme_fund_scheduler.service.aclose()
 
 
 @app.get("/api/health")
@@ -1092,17 +1098,8 @@ def verify_theme_json_migration(
 
 @app.get("/api/themes/mapping")
 def get_theme_mapping(db: Session | None = Depends(get_theme_db)) -> dict[str, Any]:
-    def load_mapping() -> dict[str, Any]:
-        repo = get_theme_repository(db)
-        mapping = repo.get_mapping()
-        return {"ok": True, "mapping": mapping, "source": storage_source_label()}
-
-    return _cached_snapshot_response(
-        "themes:mapping",
-        resolved_dataset_id="themes",
-        params={},
-        loader=load_mapping,
-    )
+    mapping = get_theme_repository(db).get_mapping()
+    return {"ok": True, "mapping": mapping, "source": storage_source_label()}
 
 
 @app.get("/api/themes/stocks/{theme_id}")

@@ -129,8 +129,8 @@
                 <div class="fund-icon">💰</div>
                 <div class="fund-content">
                   <div class="fund-label">主力净额</div>
-                  <div class="fund-value" :class="(blockData?.mainNetInflow || 0) >= 0 ? 'inflow' : 'outflow'">
-                    {{ blockData?.mainNetInflow === null ? '资金数据降级' : formatMoney(blockData?.mainNetInflow || 0) }}
+                  <div class="fund-value" :class="blockData?.mainNetInflow == null ? '' : blockData.mainNetInflow >= 0 ? 'inflow' : 'outflow'">
+                    {{ blockData?.mainNetInflow == null ? '--' : formatMoney(blockData.mainNetInflow) }}
                   </div>
                 </div>
               </div>
@@ -416,7 +416,7 @@
       </div>
 
       <div class="panel-footer" v-if="hasThemeData && !loading">
-        <span>📡 MongoDB 题材映射 + 腾讯行情 + 东财资金</span>
+        <span>📡 MongoDB 题材映射 + 腾讯行情 + 同花顺资金</span>
         <span>🕒 {{ formatTime(displayLastUpdate) }}</span>
       </div>
     </div>
@@ -436,6 +436,7 @@ import { sectorAnalyzer } from '../../services/sectorAnalyzer'
 import { themeFacade } from '../../services/theme/ThemeFacade'
 import type { ThemeHeatStock } from '../../services/theme/types'
 import { useThemeRuntimeSnapshot } from '../../composables/useThemeRuntimeSnapshot'
+import { realtimeSubscriptionRegistry } from '../../services/realtime/RealtimeSubscriptionRegistry'
 
 const props = defineProps<{
   visible: boolean
@@ -654,6 +655,21 @@ const totalPages = computed(() => Math.ceil(filteredStocks.value.length / pageSi
 watch([stockSearch, sortBy, sortDesc], () => {
   currentPage.value = 1
 })
+
+watch(
+  [() => props.visible, paginatedStocks],
+  ([visible, stocks]) => {
+    if (visible && stocks.length) {
+      realtimeSubscriptionRegistry.setFundOwnerCodes(
+        'theme-detail.visible',
+        stocks.map((stock) => stock.code),
+      )
+    } else {
+      realtimeSubscriptionRegistry.clearFundOwner('theme-detail.visible')
+    }
+  },
+  { immediate: true },
+)
 
 // ========== ✅ 合并成一个 watcher ==========
 watch(() => props.sectorName, async (newName) => {
@@ -924,6 +940,7 @@ onUnmounted(() => {
     chart.dispose()
     chart = null
   }
+  realtimeSubscriptionRegistry.clearFundOwner('theme-detail.visible')
 })
 
 // 监听数据变化重新渲染

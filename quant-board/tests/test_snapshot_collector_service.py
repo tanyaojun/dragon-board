@@ -909,12 +909,11 @@ def _standard_health() -> list[dict[str, Any]]:
 class TestServiceDryRun:
     """dry-run returns dryRun=true and does NOT write fact data."""
 
-    def test_default_providers_include_proxy_quote_for_hotlist_enrichment(self) -> None:
+    def test_default_providers_do_not_register_removed_eastmoney_quote_route(self) -> None:
         from backend.snapshot_collector.providers import (
             BridgeQuoteProvider,
             ProxyLimitUpProvider,
             ProxyMergedHotlistProvider,
-            ProxyQuoteProvider,
             StartupBundleStockProvider,
             ThemeMappingProvider,
         )
@@ -927,7 +926,13 @@ class TestServiceDryRun:
 
         assert provider_types.index(StartupBundleStockProvider) < provider_types.index(ProxyMergedHotlistProvider)
         assert ProxyMergedHotlistProvider in provider_types
-        assert ProxyQuoteProvider in provider_types
+        assert {provider_type.__name__ for provider_type in provider_types} == {
+            "StartupBundleStockProvider",
+            "ProxyMergedHotlistProvider",
+            "BridgeQuoteProvider",
+            "ProxyLimitUpProvider",
+            "ThemeMappingProvider",
+        }
         assert BridgeQuoteProvider in provider_types
         assert ThemeMappingProvider in provider_types
         assert ProxyLimitUpProvider in provider_types

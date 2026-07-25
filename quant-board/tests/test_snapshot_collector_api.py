@@ -7,10 +7,19 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 
 from backend.main import app
 from backend.snapshot_collector.models import CollectorRunResult, QualityResult
+
+
+@pytest.fixture(autouse=True)
+def _bridge_trading_calendar(monkeypatch: Any) -> None:
+    monkeypatch.setattr(
+        "backend.api.snapshot_collector_routes.is_trading_day",
+        lambda value: value.weekday() < 5,
+    )
 
 
 # ── Fake repository ────────────────────────────────────────────────────────
