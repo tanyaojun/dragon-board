@@ -485,8 +485,11 @@ internal sealed class LauncherForm : Form
         catch { }
     }
 
+    private Point _restoreLocation;
+
     private void HideToTray()
     {
+        _restoreLocation = DesktopLocation;
         Hide();
         ShowInTaskbar = false;
         WindowState = FormWindowState.Normal;
@@ -504,8 +507,13 @@ internal sealed class LauncherForm : Form
     private void ShowFromTray()
     {
         ShowInTaskbar = true;
-        Show();
         WindowState = FormWindowState.Normal;
+        if (!_restoreLocation.IsEmpty)
+        {
+            DesktopLocation = _restoreLocation;
+        }
+        Show();
+        BringToFront();
         Activate();
         _ = RefreshStatusesAsync();
     }

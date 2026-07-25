@@ -143,8 +143,8 @@ export class RealtimeQuoteCoordinator {
         quoteItems.map((item) => {
           const hasRealtimeL2MoneyFlow =
             item.moneyFlowEstimated === false &&
-            (item.moneyFlowSource === 'ths_l2' ||
-             item.moneyFlowSource === 'tdx_transaction' ||
+            (item.moneyFlowSource === 'tdx_transaction' ||
+             item.moneyFlowSource === 'ths_l2' ||
              item.moneyFlowSource === 'qmt_l2')
           return {
             code: item.code,

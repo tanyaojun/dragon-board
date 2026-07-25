@@ -96,6 +96,10 @@ export interface StockExtData {
   tdxBuyVolume?: number
   tdxSellVolume?: number
   tdxCurrentVolume?: number
+  open?: number
+  high?: number
+  low?: number
+  preClose?: number
   fengdan?: number
   maxFengdan?: number
   bid1Price?: number
@@ -172,6 +176,10 @@ export interface MergedStock {
   tdxBuyVolume?: number
   tdxSellVolume?: number
   tdxCurrentVolume?: number
+  open?: number
+  high?: number
+  low?: number
+  preClose?: number
   fengdan?: number
   maxFengdan?: number
   bid1Price?: number

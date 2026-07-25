@@ -1076,7 +1076,8 @@ const formatMoney = (value: number): string => {
   const absValue = Math.abs(value)
   if (absValue >= 1e8) return (value / 1e8).toFixed(2) + '亿'
   if (absValue >= 1e4) return (value / 1e4).toFixed(2) + '万'
-  return value.toString()
+  if (absValue >= 1) return value.toFixed(2)
+  return (value < 0 ? '-' : '') + absValue.toFixed(2)
 }
 
 const hasMoneyFlowSource = (stock: any) =>

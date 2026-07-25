@@ -688,8 +688,8 @@ function isReliableL2MoneyFlow(quote: QuotePatch): boolean {
   const capSource = quote.capitalFlowSource
   return (
     quote.moneyFlowEstimated === false &&
-    (source === 'ths_l2' ||
-     (source === 'tdx_transaction' && capSource === 'tdx_tick') ||
+    ((source === 'tdx_transaction' && capSource === 'tdx_tick') ||
+     source === 'ths_l2' ||
      (source === 'qmt_l2' && (capSource === 'broker_l2' || capSource === 'official_l2')))
   )
 }

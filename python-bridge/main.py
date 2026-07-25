@@ -1601,7 +1601,15 @@ class TdxL2Bridge:
 
                 self.quote_client = await asyncio.to_thread(_create_client)
                 self.tdx_connected = True
-                self.active_server = server
+                # bestip 模式下从连接后的 client 取实际 IP
+                if server is None and hasattr(self.quote_client, "server"):
+                    actual = self.quote_client.server
+                    if isinstance(actual, (list, tuple)) and len(actual) >= 2:
+                        self.active_server = (str(actual[0]), int(actual[1]))
+                    else:
+                        self.active_server = server
+                else:
+                    self.active_server = server
                 if self.is_l2_server(server):
                     self.set_l2_state("live", "L2 server returned quote data", False)
                 elif self.config.l2_enabled:
@@ -1852,7 +1860,7 @@ class TdxL2Bridge:
 
     async def _reconnect_after_selection(self, ip: str, port: int) -> None:
         await self.reset_client()
-        self.active_server = (ip, port)
+        # active_server 由 ensure_client() 连接成功后自动设置，不在此处预填
         self.full_state_requested = True
         self.healthy_fetch_cycles = 0
         self.current_quote_batch_size = self.clamp_quote_batch_size(self.config.quote_batch_size)
@@ -2083,6 +2091,59 @@ class TdxL2Bridge:
                     "setAt": self._backend_pool_ts,
                 }
             )
+
+        @app.get("/api/quotes/minute", summary="TDX 分时数据")
+        async def minute_data(code: str = "") -> JSONResponse:
+            stock_code = normalize_code(code)
+            if not stock_code:
+                return JSONResponse({"ok": False, "error": "missing code"}, status_code=400)
+            try:
+                def _fetch():
+                    market = 1 if stock_code.startswith("6") else 0
+                    frame = self.quote_client.client.get_minute_time_data(market, stock_code)
+                    return frame_to_records(frame)
+
+                if self.quote_client is None:
+                    return JSONResponse(
+                        {"ok": False, "error": "tdx not connected"}, status_code=503
+                    )
+                records = await asyncio.to_thread(_fetch)
+                today_str = datetime.now().strftime("%Y%m%d")
+                cumulative_vol = 0.0
+                cumulative_amount = 0.0
+                points = []
+                for idx, r in enumerate(records):
+                    price = float(r.get("price", 0))
+                    vol = int(r.get("vol", 0))
+                    cumulative_vol += vol
+                    cumulative_amount += price * vol
+                    # 计算分时时间：前120点为早盘9:30起，之后为午盘13:00起
+                    if idx < 120:
+                        total_minutes = 9 * 60 + 30 + idx
+                    else:
+                        total_minutes = 13 * 60 + (idx - 120)
+                    hour = total_minutes // 60
+                    minute = total_minutes % 60
+                    time_str = f"{hour:02d}{minute:02d}"
+                    points.append({
+                        "time": time_str,
+                        "price": price,
+                        "vol": vol,
+                        "cumulativeVolume": cumulative_vol,
+                        "cumulativeAmount": round(cumulative_amount, 2),
+                    })
+                return JSONResponse({
+                    "ok": True,
+                    "data": {
+                        "date": today_str,
+                        "points": points,
+                    },
+                    "serverTs": now_ms(),
+                })
+            except Exception as exc:
+                return JSONResponse(
+                    {"ok": False, "error": str(exc)}, status_code=500
+                )
 
         @app.get("/api/tdx-servers", summary="扫描 TDX 行情服务器列表")
         async def tdx_servers() -> JSONResponse:

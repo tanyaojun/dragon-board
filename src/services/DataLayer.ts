@@ -606,6 +606,10 @@ class DataLayer {
         stock.cddje = this.pickMoneyFlowNumber(change.cddje, stock.cddje)
         stock.cddjzb = this.pickMoneyFlowNumber(change.cddjzb, stock.cddjzb)
       }
+      stock.open = this.pickQuoteNumber(change.open, stock.open)
+      stock.high = this.pickQuoteNumber(change.high, stock.high)
+      stock.low = this.pickQuoteNumber(change.low, stock.low)
+      stock.preClose = this.pickQuoteNumber(change.preClose, stock.preClose)
       stock.tdxBuyVolume = this.pickQuoteNumber(change.tdxBuyVolume, stock.tdxBuyVolume)
       stock.tdxSellVolume = this.pickQuoteNumber(change.tdxSellVolume, stock.tdxSellVolume)
       stock.tdxCurrentVolume = this.pickQuoteNumber(change.tdxCurrentVolume, stock.tdxCurrentVolume)

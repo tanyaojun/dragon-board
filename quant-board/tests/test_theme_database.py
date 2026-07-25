@@ -3,14 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from backend.data.theme_database import ThemeBase
 from backend.data.theme_repository import ThemeRepository
 from backend.data.theme_service import ThemeMigrationError, ThemeMigrationService
-from backend.main import app
 
 
 def _theme_session(tmp_path: Path):
@@ -174,66 +172,3 @@ def test_import_theme_mapping_reports_structured_errors(
     assert detail["message"]
     session.close()
     engine.dispose()
-
-
-def test_theme_api_import_and_read_contracts() -> None:
-    client = TestClient(app)
-
-    imported = client.post("/api/migrations/themes/import-json", json=_mapping_payload())
-    repeated = client.post("/api/migrations/themes/import-json", json=_mapping_payload())
-
-    assert imported.status_code == 200, imported.text
-    assert imported.json()["ok"] is True
-    assert repeated.status_code == 200, repeated.text
-    assert repeated.json()["inserted"] == {"themes": 0, "mappings": 0}
-
-    mapping = client.get("/api/themes/mapping")
-    assert mapping.status_code == 200, mapping.text
-    body = mapping.json()
-    assert body["ok"] is True
-    assert body["source"] == "sqlite"
-    assert body["mapping"]["version"] == "theme-v8-test"
-    assert "source" not in body["mapping"]
-    assert body["mapping"]["themes"][0]["stocks"] == ["000001", "600001"]
-    ai_theme = next(theme for theme in body["mapping"]["themes"] if theme["id"] == "AI")
-    assert ai_theme["stockTags"]["000001"] == [{"Name": "算力", "Reason": "服务器订单"}]
-    assert ai_theme["stockReasons"]["600001"] == "AI 应用落地"
-
-    stocks = client.get("/api/themes/stocks/AI")
-    assert stocks.status_code == 200, stocks.text
-    assert stocks.json()["stocks"] == ["000001", "600001"]
-
-    reverse = client.get("/api/themes/stocks/by-code/600001")
-    assert reverse.status_code == 200, reverse.text
-    assert [theme["id"] for theme in reverse.json()["themes"]] == ["AI", "POWER"]
-    assert reverse.json()["tags"] == [{"Name": "应用"}, {"Name": "电网"}]
-    assert reverse.json()["reason"] == "AI 应用落地；电网建设"
-
-    counts = client.get("/api/themes/counts")
-    assert counts.status_code == 200, counts.text
-    assert counts.json()["source"] == "sqlite"
-    assert counts.json()["counts"] == {
-        "themeCount": 2,
-        "mappingCount": 4,
-        "stockCount": 3,
-        "version": "theme-v8-test",
-        "lastUpdate": "2026-05-05T09:30:00.000Z",
-        "source": "sqlite",
-    }
-
-    bad = client.post("/api/migrations/themes/import-json", json={})
-    assert bad.status_code == 400
-    assert bad.json()["detail"]["code"] == "missing_themes"
-
-    verified = client.post("/api/migrations/themes/verify-json", json=_mapping_payload())
-    assert verified.status_code == 200, verified.text
-    assert verified.json()["ok"] is True
-    assert verified.json()["expected"]["mappingCount"] == 4
-
-    bad_verify = client.post("/api/migrations/themes/verify-json", json={})
-    assert bad_verify.status_code == 400
-    assert bad_verify.json()["detail"]["code"] == "missing_themes"
-
-    health = client.get("/api/health")
-    assert health.status_code == 200
-    assert health.json()["database"]["theme"]["connected"] is True

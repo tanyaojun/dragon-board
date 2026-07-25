@@ -7,17 +7,17 @@ export type MoneyFlowSourceLike = {
 export function getMoneyFlowSourceRank(value: MoneyFlowSourceLike | null | undefined): number {
   if (!value) return 0
 
-  // ths_l2: 同花顺 L2 主力资金，proxy-server 代理，主力数据源
-  if (value.moneyFlowEstimated === false && value.moneyFlowSource === 'ths_l2') {
-    return 5
-  }
-
-  // tdx_transaction: 基于 tdxpy 逐笔成交实时计算，无外部依赖
+  // tdx_transaction: 主力数据源，基于 tdxpy 逐笔成交实时计算
   if (
     value.moneyFlowEstimated === false &&
     value.moneyFlowSource === 'tdx_transaction' &&
     value.capitalFlowSource === 'tdx_tick'
   ) {
+    return 5
+  }
+
+  // ths_l2: 同花顺 L2 替代数据源
+  if (value.moneyFlowEstimated === false && value.moneyFlowSource === 'ths_l2') {
     return 4
   }
 

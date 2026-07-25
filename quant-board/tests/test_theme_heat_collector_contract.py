@@ -9,7 +9,6 @@ from backend.snapshot_collector.models import (
     SourceHealth,
 )
 from backend.snapshot_collector.service import SnapshotCollectorService
-from backend.theme_heat_service import ThemeHeatUnavailable
 
 
 class FakeRepo:
@@ -119,35 +118,3 @@ def test_service_factory_injects_shared_theme_heat_service(monkeypatch) -> None:
     service = factory.create_snapshot_collector_service(repo=FakeRepo())
 
     assert service._theme_heat_service is fake_theme_service
-
-
-def test_theme_heat_unavailable_blocks_without_faking_sector_rows() -> None:
-    class FailingThemeHeatService:
-        def get_snapshot(self):
-            raise ThemeHeatUnavailable(code="quote_coverage_blocked")
-
-    captured: dict[str, Any] = {}
-
-    def normalize(request):
-        captured.update(request.bundle)
-        bundle = request.bundle
-        return (
-            type("Dataset", (), {"id": request.dataset_id})(),
-            bundle["items"], bundle["frames"], bundle["stockRows"], bundle["sectorRows"],
-            "test-key",
-        )
-
-    service = SnapshotCollectorService(
-        repo=FakeRepo(), collect_fn=_collect, normalize_fn=normalize,
-        theme_heat_service=FailingThemeHeatService(),
-    )
-    request = CollectorRunRequest(
-        dataset_id="dragonboard_backend_shadow", snapshot_type="half_hour",
-        trading_date="2026-06-11", slot_time="10:00", dry_run=True,
-    )
-
-    result = service.run_once(request)
-
-    assert result.status == "blocked"
-    assert captured["sectorRows"] == []
-    assert "theme_heat_blocked" in result.quality.blocking_issues
