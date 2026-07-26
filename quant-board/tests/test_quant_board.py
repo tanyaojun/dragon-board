@@ -1956,6 +1956,7 @@ def test_ranktrend_rank_series_api_returns_compact_rank_history() -> None:
             "snapshot_type": "half_hour",
             "trading_date": "2026-04-21",
             "allowed_capture_modes": "real_time",
+            "codes": "600001,600002",
             "sort": "asc",
             "limit": 10,
         },
@@ -1970,6 +1971,31 @@ def test_ranktrend_rank_series_api_returns_compact_rank_history() -> None:
     assert body["frames"][0]["totalCount"] == 2
     assert "hotlist" not in body["frames"][0]
     assert "rows" not in body["frames"][0]
+
+
+def test_ranktrend_rank_series_api_requires_codes() -> None:
+    response = TestClient(app).get(
+        "/api/ranktrend/rank-series",
+        params={"dataset_id": "dragonboard_live", "snapshot_type": "half_hour"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "codes is required for rank-series queries"
+
+
+def test_ranktrend_attention_rank_series_requires_mongodb() -> None:
+    response = TestClient(app).get(
+        "/api/ranktrend/rank-series",
+        params={
+            "dataset_id": "dragonboard_live",
+            "snapshot_type": "half_hour",
+            "codes": "600001",
+            "rank_basis": "attention",
+        },
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "attention rank series requires mongodb"
 
 
 def test_ranktrend_rank_series_api_filters_codes() -> None:
@@ -2209,6 +2235,7 @@ def test_snapshot_frames_api_uses_snapshot_cache(monkeypatch: pytest.MonkeyPatch
             self.get_count = 0
             self.set_count = 0
             self.registered: list[tuple[str, list[str]]] = []
+            self.generations: dict[str, int] = {}
 
         def get_response(self, key: str):
             self.get_count += 1
@@ -2220,6 +2247,13 @@ def test_snapshot_frames_api_uses_snapshot_cache(monkeypatch: pytest.MonkeyPatch
 
         def register_dependencies(self, response_key: str, index_keys: list[str]) -> None:
             self.registered.append((response_key, index_keys))
+
+        def get_generation(self, key: str) -> int:
+            return self.generations.get(key, 0)
+
+        def bump_generation(self, key: str) -> int:
+            self.generations[key] = self.get_generation(key) + 1
+            return self.generations[key]
 
     fake_cache = FakeCache()
     monkeypatch.setattr(snapshot_cache, "get_snapshot_redis_cache", lambda: fake_cache)
@@ -2419,6 +2453,7 @@ def test_snapshot_detail_list_apis_use_snapshot_cache(monkeypatch: pytest.Monkey
         def __init__(self) -> None:
             self.values: dict[str, dict] = {}
             self.set_count = 0
+            self.generations: dict[str, int] = {}
 
         def get_response(self, key: str):
             return self.values.get(key)
@@ -2429,6 +2464,13 @@ def test_snapshot_detail_list_apis_use_snapshot_cache(monkeypatch: pytest.Monkey
 
         def register_dependencies(self, response_key: str, index_keys: list[str]) -> None:
             return None
+
+        def get_generation(self, key: str) -> int:
+            return self.generations.get(key, 0)
+
+        def bump_generation(self, key: str) -> int:
+            self.generations[key] = self.get_generation(key) + 1
+            return self.generations[key]
 
     fake_cache = FakeCache()
     monkeypatch.setattr(snapshot_cache, "get_snapshot_redis_cache", lambda: fake_cache)
@@ -2475,6 +2517,7 @@ def test_snapshot_ingest_invalidates_snapshot_cache_indexes(monkeypatch: pytest.
     class FakeCache:
         def __init__(self) -> None:
             self.invalidated: list[list[str]] = []
+            self.generations: dict[str, int] = {}
 
         def get_response(self, key: str):
             return None
@@ -2487,6 +2530,13 @@ def test_snapshot_ingest_invalidates_snapshot_cache_indexes(monkeypatch: pytest.
 
         def invalidate_indexes(self, index_keys: list[str]) -> None:
             self.invalidated.append(index_keys)
+
+        def get_generation(self, key: str) -> int:
+            return self.generations.get(key, 0)
+
+        def bump_generation(self, key: str) -> int:
+            self.generations[key] = self.get_generation(key) + 1
+            return self.generations[key]
 
     fake_cache = FakeCache()
     monkeypatch.setattr(snapshot_cache, "get_snapshot_redis_cache", lambda: fake_cache)
@@ -2513,6 +2563,9 @@ def test_snapshot_ingest_invalidates_snapshot_cache_indexes(monkeypatch: pytest.
     )
 
     assert ingest.status_code == 200, ingest.text
+    assert fake_cache.generations[
+        f"hellobiga:dragon-board:local:snapshot:generation:{dataset_id}"
+    ] == 1
     flattened = [key for group in fake_cache.invalidated for key in group]
     assert f"hellobiga:dragon-board:local:snapshot:index:dataset:{dataset_id}" in flattened
     assert f"hellobiga:dragon-board:local:snapshot:index:date:{dataset_id}:half_hour:2026-04-24" in flattened

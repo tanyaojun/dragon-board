@@ -69,6 +69,21 @@ export interface RankTrendSignalScore {
   score: number
 }
 
+export interface RankTrendResonance {
+  status: 'ok' | 'insufficient'
+  direction: RankSignalDirection
+  score: number
+  label: '非常强' | '强' | '中等' | '较弱' | '非常弱' | '样本不足'
+  relativeMomentum: number
+  acceleration: number
+  persistence: number
+  jumpFreshness: number
+  reversalPenalty: number
+  historyState: 'established' | 'new_entry'
+  marketMedianShortChange: number
+  reasons: string[]
+}
+
 export interface RankTrendAnalysisResult {
   meta: {
     code: string
@@ -185,10 +200,17 @@ export interface RankTrendAnalysisResult {
     }
   }
   jump?: {
+    event?: 'jump' | 'none'
     direction: 'buy' | 'sell' | 'hold'
     confidence: number
     limitUp?: boolean
+    events?: Array<{
+      index: number
+      direction: 'surge' | 'collapse'
+      magnitude: number
+    }>
   }
+  resonance?: RankTrendResonance
   // 策略层结果是消费侧扩展，不属于 rankTrend 核心分析合同。
   strategy?: RankTrendStrategyResult
   // V5 执行层分层，镜像 Python candidateTierMode=execution 的热榜情绪融合语义。

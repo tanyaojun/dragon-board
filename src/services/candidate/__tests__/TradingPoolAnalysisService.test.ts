@@ -23,6 +23,30 @@ describe('TradingPool status contract', () => {
 })
 
 describe('TradingPoolAnalysisService', () => {
+  it('keeps the trading decision independent from the observation final', () => {
+    const createCandidate = (signal: 'buy' | 'sell') => ({
+      code: '601208',
+      rankTrend: {
+        decision: { final: { signal, confidence: 95 } },
+        jump: { direction: 'buy', confidence: 88 },
+        technical: {
+          macd: { cross: 'golden' },
+          signals: {
+            direction: { signal: 'buy', confidence: 88 },
+            acceleration: { signal: 'buy', confidence: 88 },
+            zeroCross: { signal: 'buy', confidence: 88 },
+          },
+        },
+      },
+    })
+    const buyFinal = analyzeTradingPoolCandidate({ candidates: [createCandidate('buy')] }).rows[0]
+    const sellFinal = analyzeTradingPoolCandidate({ candidates: [createCandidate('sell')] }).rows[0]
+
+    expect(sellFinal.decision).toBe(buyFinal.decision)
+    expect(sellFinal.status).toBe(buyFinal.status)
+    expect(sellFinal.scoringBreakdown.totalScore).toBe(buyFinal.scoringBreakdown.totalScore)
+  })
+
   it('returns an empty result for empty candidate input', () => {
     const result = analyzeTradingPoolCandidate({ candidates: [] })
 
@@ -906,7 +930,7 @@ describe('TradingPoolAnalysisService — config unification', () => {
     expect(result.rows[0].scoringBreakdown!.totalScore).toBeGreaterThan(0)
   })
 
-  it('uses score rather than buyVotes as the DataTable-facing contract', () => {
+  it('does not let sparse raw evidence reach the buy-point threshold', () => {
     const result = analyzeTradingPoolCandidate({
       candidates: [
         {
@@ -928,8 +952,8 @@ describe('TradingPoolAnalysisService — config unification', () => {
     })
 
     expect(result.rows[0].signalSnapshot.buyVotes).toBe(2)
-    expect(result.rows[0].scoringBreakdown!.totalScore).toBeGreaterThanOrEqual(15)
-    expect(result.rows[0].status).toBe('观察买点')
+    expect(result.rows[0].scoringBreakdown!.totalScore).toBeLessThan(15)
+    expect(result.rows[0].status).toBe('观察中')
   })
 })
 
@@ -1066,8 +1090,8 @@ describe('TradingPoolAnalysisService — 方向感知连续评分', () => {
     })
 
     const b = result.rows[0].scoringBreakdown!
-    // final卖出 应贡献负连续分
-    expect(b.continuousDetail.finalConfidence).toBeLessThan(0)
+    // 观察 final 不进入交易池连续分
+    expect(b.continuousDetail.finalConfidence).toBe(0)
     // 方向卖出 应贡献负连续分
     expect(b.continuousDetail.directionConfidence).toBeLessThan(0)
     // 加速度卖出 应贡献负连续分
@@ -1173,7 +1197,7 @@ describe('TradingPoolAnalysisService — 方向感知连续评分', () => {
     expect(b.totalScore).toBeGreaterThan(20)
     expect(b.continuousScore).toBeGreaterThan(15)
     expect(b.continuousDetail.jumpConfidence).toBeGreaterThan(0)
-    expect(b.continuousDetail.finalConfidence).toBeGreaterThan(0)
+    expect(b.continuousDetail.finalConfidence).toBe(0)
     expect(b.continuousDetail.directionConfidence).toBeGreaterThan(0)
     expect(b.continuousDetail.accelerationConfidence).toBeGreaterThan(0)
     expect(b.continuousDetail.zeroCrossConfidence).toBeGreaterThan(0)

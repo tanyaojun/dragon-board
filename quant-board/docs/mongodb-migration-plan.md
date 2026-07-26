@@ -406,6 +406,10 @@ ThemeTrend 研究集合：
 
 响应中的 `source` 从 `sqlite` 改为 `mongodb`。如果 MongoDB 不可用，正式接口应结构化失败，不返回空列表伪装成功。
 
+`GET /api/ranktrend/rank-series?rank_basis=attention` 仅允许 MongoDB 主库，不修改 `snapshot_stock_rows` 的原始 `rank`、`compRank` 或 `avgRankNum`；非 MongoDB 环境返回 `503`，不降级为综合排名。它在读取时按单帧有效 `avgRankNum ASC, code ASC` 重算横截面关注度排名、有效样本数和百分位基础；缺失 `avgRankNum` 的行不回退到综合排名。`rank_basis` 默认仍为 `composite`，以保持其他既有消费者不变。
+
+RankTrend 查询必须携带非空 `codes`，使用单次 `$in` 聚合，并按 code 分区限制 `window_bars`；attention 模式在限窗前先过滤无效 `avgRankNum`。禁止恢复逐代码 N+1 查询，也禁止把匹配的全历史行全部搬入 Python。响应继续使用 Redis read-through cache；snapshot ingest 后递增 dataset generation 并按 dataset/date/snapshot 索引失效，慢读不得回写失效前响应，并通过 `cache.hit` 和分阶段耗时日志验收。
+
 ### 保持不变的题材 API
 
 - `GET /api/themes/mapping`

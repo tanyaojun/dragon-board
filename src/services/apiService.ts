@@ -903,6 +903,7 @@ export class ApiService {
     append('code', stockParams.code)
     append('codes', stockParams.codes)
     append('window_bars', (params as RankTrendRankSeriesApiQueryOptions).windowBars)
+    append('rank_basis', (params as RankTrendRankSeriesApiQueryOptions).rankBasis)
     append('slot_time', stockParams.slotTime)
 
     const sectorParams = params as MongoSnapshotSectorRowQueryOptions

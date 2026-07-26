@@ -12,6 +12,7 @@ import type {
 } from './types'
 
 type TradingPoolCandidateLike = Record<string, any>
+const INDEPENDENT_CONTINUOUS_SCALE = 6 / 4.5
 
 interface TradingPoolInput {
   candidates: TradingPoolCandidateLike[]
@@ -129,8 +130,6 @@ export function computeResonanceScore(
     | 'macdCross'
     | 'jumpDirection'
     | 'jumpConfidence'
-    | 'finalSignal'
-    | 'finalConfidence'
     | 'directionSignal'
     | 'directionConfidence'
     | 'accelerationSignal'
@@ -146,20 +145,18 @@ export function computeResonanceScore(
 
   const jumpConfidenceScore =
     ((signals.jumpConfidence ?? 0) / 100) * weights.jumpConfidence * 5 * directionSign(signals.jumpDirection)
-  const finalConfidenceScore =
-    ((signals.finalConfidence ?? 0) / 100) * weights.finalConfidence * 5 * directionSign(signals.finalSignal)
   const directionConfidenceScore =
     ((signals.directionConfidence ?? 0) / 100) * weights.directionConfidence * 5 * directionSign(signals.directionSignal)
   const accelerationConfidenceScore =
     ((signals.accelerationConfidence ?? 0) / 100) * weights.accelerationConfidence * 5 * directionSign(signals.accelerationSignal)
   const zeroCrossConfidenceScore =
     ((signals.zeroCrossConfidence ?? 0) / 100) * weights.zeroCrossConfidence * 5 * directionSign(signals.zeroCrossSignal)
-  const continuousScore =
+  const independentContinuousScore =
     jumpConfidenceScore +
-    finalConfidenceScore +
     directionConfidenceScore +
     accelerationConfidenceScore +
     zeroCrossConfidenceScore
+  const continuousScore = independentContinuousScore * INDEPENDENT_CONTINUOUS_SCALE
 
   return {
     totalScore: Math.round((discreteScore + continuousScore) * 100) / 100,
@@ -170,11 +167,11 @@ export function computeResonanceScore(
       jumpDirection: jumpDirectionScore,
     },
     continuousDetail: {
-      jumpConfidence: Math.round(jumpConfidenceScore * 100) / 100,
-      finalConfidence: Math.round(finalConfidenceScore * 100) / 100,
-      directionConfidence: Math.round(directionConfidenceScore * 100) / 100,
-      accelerationConfidence: Math.round(accelerationConfidenceScore * 100) / 100,
-      zeroCrossConfidence: Math.round(zeroCrossConfidenceScore * 100) / 100,
+      jumpConfidence: Math.round(jumpConfidenceScore * INDEPENDENT_CONTINUOUS_SCALE * 100) / 100,
+      finalConfidence: 0,
+      directionConfidence: Math.round(directionConfidenceScore * INDEPENDENT_CONTINUOUS_SCALE * 100) / 100,
+      accelerationConfidence: Math.round(accelerationConfidenceScore * INDEPENDENT_CONTINUOUS_SCALE * 100) / 100,
+      zeroCrossConfidence: Math.round(zeroCrossConfidenceScore * INDEPENDENT_CONTINUOUS_SCALE * 100) / 100,
     },
   }
 }
@@ -221,6 +218,16 @@ function hasFreshSignals(signals: TradingPoolSignalSnapshot): boolean {
   return signals.dataQuality === 'fresh'
 }
 
+function hasBearishExecutionEvidence(signals: TradingPoolSignalSnapshot): boolean {
+  return (
+    signals.jumpDirection === 'sell' ||
+    signals.macdCross === 'death' ||
+    signals.directionSignal === 'sell' ||
+    signals.accelerationSignal === 'sell' ||
+    signals.zeroCrossSignal === 'sell'
+  )
+}
+
 function decideTradingPoolStatus(
   signals: TradingPoolSignalSnapshot,
   previous: Partial<TradingPoolAnalysisRow> | null | undefined,
@@ -247,7 +254,7 @@ function decideTradingPoolStatus(
   }
 
   if (previous?.status === '已介入') {
-    if (scoringBreakdown.totalScore < scoring.exitMax) {
+    if (scoringBreakdown.totalScore < scoring.exitMax && hasBearishExecutionEvidence(signals)) {
       return { status: '已退出', decision: 'exit', reasons: ['score_below_exit'], scoringBreakdown }
     }
     return {
@@ -258,7 +265,7 @@ function decideTradingPoolStatus(
     }
   }
 
-  if (scoringBreakdown.totalScore < scoring.exitMax) {
+  if (scoringBreakdown.totalScore < scoring.exitMax && hasBearishExecutionEvidence(signals)) {
     return { status: '已退出', decision: 'exit', reasons: ['score_below_exit'], scoringBreakdown }
   }
 

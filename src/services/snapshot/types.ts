@@ -315,6 +315,7 @@ export interface RankTrendRankSeriesQueryOptions {
   sort?: 'asc' | 'desc'
   limit?: number
   windowBars?: number
+  rankBasis?: 'composite' | 'attention'
 }
 
 export interface RankTrendRankSeriesFrame {
@@ -352,6 +353,7 @@ export interface RankTrendRankSeriesResponse {
   ok: boolean
   datasetId: string
   snapshotType: Exclude<SnapshotType, 'five_minute'>
+  rankBasis?: 'composite' | 'attention'
   frames: RankTrendRankSeriesFrame[]
   series?: Record<string, RankTrendRankSeriesCodeWindow>
   count: number

@@ -6,13 +6,10 @@ import { dataLayer } from '../DataLayer'
 import { rankTrendAnalyzer, type RankTrendPreparedSnapshot } from '../RankTrendAnalyzer'
 import { applyJumpSignal, applyRankTrendAnalysis } from '../rankTrend/compat'
 import { evaluateJumpSignal, incrementJumpBar, registerJumpEntry, unregisterJumpPosition } from '../rankTrend/jumpSignalService'
+import { analyzeRankResonance } from '../rankTrend/resonanceAnalyzer'
 import { fusionCandidateNotifier } from '../rankTrend/FusionCandidateNotifier'
 import { buildFusionStrategyProjections } from '../rankTrend/FusionStrategyProjector'
 import type { RankTrendAnalysisResult } from '../rankTrend/types'
-import {
-  analyzeTradingPoolCandidate,
-  normalizeResonanceIntensity,
-} from '../candidate/TradingPoolAnalysisService'
 import { extraDataProjector } from './ExtraDataProjector'
 import type { StockSignalUpdate } from './types'
 
@@ -42,6 +39,20 @@ function normalizeCode(code: unknown): string {
   return digits ? digits.padStart(6, '0').slice(-6) : ''
 }
 
+function buildAttentionRankMap(stocks: any[]): Map<string, number> {
+  const ordered = stocks
+    .filter((stock) => {
+      const avgRankNum = Number(stock.avgRankNum)
+      return Number.isFinite(avgRankNum) && avgRankNum > 0
+    })
+    .sort(
+      (left, right) =>
+        Number(left.avgRankNum) - Number(right.avgRankNum) ||
+        String(left.code).localeCompare(String(right.code)),
+    )
+  return new Map(ordered.map((stock, index) => [stock.code, index + 1]))
+}
+
 function mergeCandidatePoolProjections(
   liveProjections: ReturnType<typeof buildFusionStrategyProjections>,
   journalProjections: ReturnType<typeof buildFusionStrategyProjections>,
@@ -56,6 +67,10 @@ function mergeCandidatePoolProjections(
 }
 
 export class RankTrendSignalService {
+  private candidatePoolSyncPromise: Promise<void> | null = null
+  private candidatePoolGeneration = 0
+  private pendingCandidatePoolBatch: { stocks: any[]; generation: number } | null = null
+
   updateStockSignals(updates: StockSignalUpdate[]) {
     const stocks = dataLayer.getStocks()
     const stockMap = new Map(stocks.map((s) => [s.code, s]))
@@ -78,10 +93,8 @@ export class RankTrendSignalService {
     const stocks = dataLayer.getStocks()
     if (!stocks.length) return []
 
-    const rankMap = new Map<string, number>()
-    stocks.forEach((stock, index) => {
-      rankMap.set(stock.code, index + 1)
-    })
+    const rankMap = buildAttentionRankMap(stocks)
+    if (!rankMap.size) return stocks
 
     const results = await rankTrendAnalyzer.getRankTrends(rankMap, {
       updateSignalStore: false,
@@ -100,7 +113,9 @@ export class RankTrendSignalService {
     const mergedStocks = this.updateStockSignals(updates)
     // 跳跃检测与 V3 实盘信号都应基于本轮最新 rankTrend 结果计算。
     this.applyJumpSignals(mergedStocks)
-    await this.syncCandidatePoolSignals(mergedStocks)
+    this.applyResonanceFinals(mergedStocks, new Set(results.keys()))
+    this.precomputeDisplayFields(mergedStocks)
+    this.scheduleCandidatePoolSync(mergedStocks)
 
     return mergedStocks
   }
@@ -109,16 +124,20 @@ export class RankTrendSignalService {
     if (!stocks.length) return
 
     incrementJumpBar()
-    const stockCodeSet = new Set(stocks.map(s => s.code))
-
     for (const stock of stocks) {
       const rankTrend = stock.rankTrend as RankTrendAnalysisResult | undefined
       if (!rankTrend?.meta?.code) continue
 
-      const percentiles = rankTrendAnalyzer.getCachedPercentiles(stock.code)
-      if (!percentiles) continue
+      const analysisSeries = rankTrendAnalyzer.getLatestAnalysisSeries(stock.code)
+      if (!analysisSeries) continue
 
-      const result = evaluateJumpSignal(stock, rankTrend, percentiles, stockCodeSet.has(stock.code))
+      const result = evaluateJumpSignal(
+        stock,
+        rankTrend,
+        analysisSeries.percentiles,
+        true,
+        analysisSeries.ranks,
+      )
 
       // 持仓管理
       if (result.isEntry) {
@@ -133,6 +152,62 @@ export class RankTrendSignalService {
     }
   }
 
+  private applyResonanceFinals(stocks: any[], freshCodes: Set<string>): void {
+    const seriesByCode = new Map<string, { ranks: number[]; percentiles: number[]; frameKeys: string[] }>()
+    const shortChanges: number[] = []
+    const marketFrameKeys = (rankTrendAnalyzer.getLatestAnalysisFrameKeys() || []).slice(-4)
+
+    for (const stock of stocks) {
+      if (!freshCodes.has(stock.code)) continue
+      const rankTrend = stock.rankTrend as RankTrendAnalysisResult | undefined
+      const series = rankTrend ? rankTrendAnalyzer.getLatestAnalysisSeries(stock.code) : null
+      if (!series || series.percentiles.length === 0) continue
+      seriesByCode.set(stock.code, series)
+      if (marketFrameKeys.length < 4 || rankTrend?.meta?.sampleQuality?.status === 'insufficient') continue
+      const percentileByFrame = new Map(
+        series.frameKeys.map((frameKey, index) => [frameKey, series.percentiles[index]]),
+      )
+      if (marketFrameKeys.some((frameKey) => !percentileByFrame.has(frameKey))) continue
+      const shortChange = percentileByFrame.get(marketFrameKeys.at(-1)!)! - percentileByFrame.get(marketFrameKeys[0])!
+      if (!Number.isFinite(shortChange)) continue
+      shortChanges.push(shortChange)
+    }
+
+    const sortedChanges = shortChanges.sort((left, right) => left - right)
+    const midpoint = Math.floor(sortedChanges.length / 2)
+    const marketMedianShortChange = sortedChanges.length === 0
+      ? Number.NaN
+      : sortedChanges.length % 2
+        ? sortedChanges[midpoint]
+        : (sortedChanges[midpoint - 1] + sortedChanges[midpoint]) / 2
+
+    for (const stock of stocks) {
+      if (!freshCodes.has(stock.code)) continue
+      const rankTrend = stock.rankTrend as RankTrendAnalysisResult | undefined
+      if (!rankTrend) continue
+      const quality = rankTrend.meta?.sampleQuality
+      const resonance = analyzeRankResonance({
+        percentiles: seriesByCode.get(stock.code)?.percentiles || [],
+        sampleQuality: { status: quality?.status || 'insufficient' },
+        marketMedianShortChange,
+        marketSampleCount: shortChanges.length,
+        jump: {
+          direction: rankTrend.jump?.direction || 'hold',
+          event: rankTrend.jump?.event || 'none',
+          events: rankTrend.jump?.events || [],
+        },
+        entry: {
+          isNew: (seriesByCode.get(stock.code)?.percentiles.length || 0) === 1,
+          currentAttentionPercentile: rankTrend.meta.currentPercentile,
+        },
+      })
+      rankTrend.resonance = resonance
+      rankTrend.decision.final = { signal: resonance.direction, confidence: resonance.score }
+      stock.finalSignal = resonance.direction
+      stock.finalConfidence = resonance.score
+    }
+  }
+
   async preloadSnapshots(codes: string[]): Promise<RankTrendPreparedSnapshot[]> {
     return rankTrendAnalyzer.preloadSnapshots({ codes })
   }
@@ -141,7 +216,8 @@ export class RankTrendSignalService {
     merged: any[],
     options: { snapshots?: RankTrendPreparedSnapshot[] } = {},
   ): Promise<any[]> {
-    const newRankMap = new Map(merged.map((s, i) => [s.code, i + 1]))
+    const startedAt = performance.now()
+    const newRankMap = buildAttentionRankMap(merged)
     const rankTrends = await rankTrendAnalyzer.getRankTrends(newRankMap, {
       updateSignalStore: false,
       snapshots: options.snapshots,
@@ -150,6 +226,13 @@ export class RankTrendSignalService {
 
     for (const stock of merged) {
       stock.rank = newRankMap.get(stock.code)
+      if (!newRankMap.has(stock.code)) {
+        stock.rankTrend = undefined
+        stock.rankTrendCoverageWarning = '均榜缺失'
+        stock.finalSignal = 'hold'
+        stock.finalConfidence = 0
+        continue
+      }
       extraDataProjector.projectRuntimeFields(stock)
 
       const trend = rankTrends.get(stock.code)
@@ -163,12 +246,15 @@ export class RankTrendSignalService {
       logCoverageWarning('[DataLoader] 综合榜单信号基于不完整快照样本:', coverageWarning)
     }
 
-    // 跳跃检测
+    // 核心展示字段必须在候选池/Fusion/交易日志投影前完成并返回。
     this.applyJumpSignals(merged)
-    await this.syncCandidatePoolSignals(merged)
-
-    // 预计算展示字段：避免 DataTable 模板渲染和 uiStore 排序时逐行调用 analyzeTradingPoolCandidate
+    this.applyResonanceFinals(merged, new Set(rankTrends.keys()))
     this.precomputeDisplayFields(merged)
+    this.scheduleCandidatePoolSync(merged)
+    debugLog('[RankTrendSignalService] 核心信号阶段完成', {
+      stockCount: merged.length,
+      elapsedMs: Math.round(performance.now() - startedAt),
+    })
 
     return merged
   }
@@ -180,10 +266,6 @@ export class RankTrendSignalService {
   private precomputeDisplayFields(stocks: any[]): void {
     if (!stocks.length) return
 
-    // 分离 thesis 候选和实时投影，供 analyzeTradingPoolCandidate 批量分析
-    const thesisCandidates: any[] = []
-    const liveStocks: any[] = []
-
     for (const stock of stocks) {
       const rankTrend = stock.rankTrend as RankTrendAnalysisResult | undefined
 
@@ -192,37 +274,74 @@ export class RankTrendSignalService {
       stock._jumpConfidence = Math.round(rankTrend?.jump?.confidence ?? 0)
       stock._jumpDirection = rankTrend?.jump?.direction ?? null
 
-      // 共振强度需要 analyzeTradingPoolCandidate 批量计算
-      if (stock.candidatePoolEntryId || stock.candidatePoolProjection?.entryDecision) {
-        thesisCandidates.push({
-          ...stock,
-          candidateEntryDecision: stock.candidatePoolProjection?.entryDecision,
-          rankTrend,
-        })
-      } else if (rankTrend) {
-        liveStocks.push({ ...stock, rankTrend })
-      }
+      stock._resonancePct = rankTrend?.resonance?.score ?? 0
+      stock._resonanceLabel = rankTrend?.resonance?.label ?? '样本不足'
+      stock._resonanceRawScore = rankTrend?.resonance?.score ?? 0
     }
+  }
 
-    // 批量计算共振强度（一次调用处理所有股票）
-    if (thesisCandidates.length > 0 || liveStocks.length > 0) {
-      const analysis = analyzeTradingPoolCandidate({
-        candidates: thesisCandidates,
-        liveStocks,
+  private scheduleCandidatePoolSync(stocks: any[]): void {
+    if (!stocks.length) return
+    this.pendingCandidatePoolBatch = {
+      stocks,
+      generation: ++this.candidatePoolGeneration,
+    }
+    if (this.candidatePoolSyncPromise) return
+
+    this.candidatePoolSyncPromise = this.flushCandidatePoolSync()
+      .catch((error) => {
+        console.warn(
+          '[RankTrendSignalService] 候选池后台同步失败，保留核心信号结果:',
+          error instanceof Error ? error.message : String(error),
+        )
       })
-      const rowByCode = new Map(analysis.rows.map((row) => [row.code, row]))
+      .finally(() => {
+        this.candidatePoolSyncPromise = null
+        const pending = this.pendingCandidatePoolBatch
+        if (pending) this.scheduleCandidatePoolSync(pending.stocks)
+      })
+  }
 
-      for (const stock of stocks) {
-        const row = rowByCode.get(stock.code)
-        const totalScore = row?.scoringBreakdown?.totalScore ?? null
-        if (totalScore != null) {
-          const { pct, label } = normalizeResonanceIntensity(totalScore)
-          stock._resonancePct = pct
-          stock._resonanceLabel = label
-          stock._resonanceRawScore = totalScore
-        }
+  private async flushCandidatePoolSync(): Promise<void> {
+    while (this.pendingCandidatePoolBatch) {
+      const batch = this.pendingCandidatePoolBatch
+      this.pendingCandidatePoolBatch = null
+      const startedAt = performance.now()
+      await this.syncCandidatePoolSignals(batch.stocks)
+      if (batch.generation === this.candidatePoolGeneration) {
+        this.publishCandidatePoolFields(batch.stocks)
       }
+      debugLog('[RankTrendSignalService] 候选池投影阶段完成', {
+        stockCount: batch.stocks.length,
+        published: batch.generation === this.candidatePoolGeneration,
+        elapsedMs: Math.round(performance.now() - startedAt),
+      })
     }
+  }
+
+  private publishCandidatePoolFields(projectedStocks: any[]): void {
+    const projectionByCode = new Map(projectedStocks.map((stock) => [stock.code, stock]))
+    const currentStocks = dataLayer.getStocks()
+    if (!currentStocks.length) return
+
+    dataLayer.setMergedStocks(
+      currentStocks.map((stock) => {
+        const projected = projectionByCode.get(stock.code)
+        if (!projected) return stock
+        return {
+          ...stock,
+          candidatePoolStatus: projected.candidatePoolStatus,
+          candidatePoolLabel: projected.candidatePoolLabel,
+          candidatePoolLiveDecisionLabel: projected.candidatePoolLiveDecisionLabel,
+          candidatePoolLiveDecisionSummary: projected.candidatePoolLiveDecisionSummary,
+          candidatePoolProjection: projected.candidatePoolProjection,
+          candidatePoolEntryId: projected.candidatePoolEntryId,
+          candidatePoolSource: projected.candidatePoolSource,
+          candidatePoolUpdatedAt: projected.candidatePoolUpdatedAt,
+          candidateResonanceObserve: projected.candidateResonanceObserve,
+        }
+      }),
+    )
   }
 
   private async syncCandidatePoolSignals(stocks: any[]): Promise<void> {

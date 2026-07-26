@@ -30,6 +30,7 @@ class FakeCollection:
     def __init__(self) -> None:
         self.rows: list[dict[str, Any]] = []
         self.find_queries: list[dict[str, Any]] = []
+        self.aggregate_pipelines: list[list[dict[str, Any]]] = []
 
     def count_documents(self, query: dict[str, Any]) -> int:
         return len(list(self.find(query)))
@@ -59,6 +60,44 @@ class FakeCollection:
         self.find_queries.append(normalized_query)
         return FakeCursor([dict(row) for row in self.rows if _matches(row, normalized_query)])
 
+    def aggregate(self, pipeline: list[dict[str, Any]], **_kwargs: Any) -> FakeCursor:
+        self.aggregate_pipelines.append(pipeline)
+        rows = [dict(row) for row in self.rows if _matches(row, pipeline[0]["$match"])]
+        if "$sort" in pipeline[1]:
+            for key, direction in reversed(list(pipeline[1]["$sort"].items())):
+                rows.sort(key=lambda row: row.get(key) or 0, reverse=int(direction) < 0)
+            target_codes = set(pipeline[4]["$match"]["rows.code"]["$in"])
+            grouped: dict[str, list[dict[str, Any]]] = {}
+            for row in rows:
+                grouped.setdefault(str(row.get("snapshotId") or ""), []).append(row)
+            projected = []
+            for snapshot_id, group_rows in grouped.items():
+                for index, row in enumerate(group_rows):
+                    if row.get("code") in target_codes:
+                        projected.append({
+                            "_id": snapshot_id,
+                            "rows": {"code": row.get("code")},
+                            "totalCount": len(group_rows),
+                            "attentionIndex": index,
+                        })
+            return FakeCursor(projected)
+
+        window = pipeline[1]["$setWindowFields"]
+        partition_key = window["partitionBy"].removeprefix("$")
+        sort_by = list(window["sortBy"].items())
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            grouped.setdefault(str(row.get(partition_key) or ""), []).append(row)
+        ranked_rows: list[dict[str, Any]] = []
+        for group_rows in grouped.values():
+            for key, direction in reversed(sort_by):
+                group_rows.sort(key=lambda row: row.get(key) or 0, reverse=int(direction) < 0)
+            for index, row in enumerate(group_rows, start=1):
+                row["_rankSeriesWindow"] = index
+                row["_rankSeriesTotalCount"] = len(group_rows)
+                ranked_rows.append(row)
+        return FakeCursor([row for row in ranked_rows if _matches(row, pipeline[2]["$match"])])
+
 
 class FakeMongoDatabase(dict):
     def __getitem__(self, name: str) -> FakeCollection:
@@ -76,9 +115,9 @@ def test_mongo_repository_ingests_and_reads_rank_series() -> None:
         records=[_record("s1"), _record("s2")],
         frames=[_frame("s1", 1), _frame("s2", 2)],
         stock_rows=[
-            _stock("s1", "000001", 1),
-            _stock("s1", "000002", 2),
-            _stock("s2", "000001", 3),
+            {**_stock("s1", "000001", 1), "timestamp": 1778569200001},
+            {**_stock("s1", "000002", 2), "timestamp": 1778569200001},
+            {**_stock("s2", "000001", 3), "timestamp": 1778569200002},
         ],
         sector_rows=[],
         idempotency_key="ingest-1",
@@ -107,6 +146,72 @@ def test_mongo_repository_ingests_and_reads_rank_series() -> None:
     )
     assert [bar["rank"] for bar in desc_rank_series["series"]["000001"]["bars"]] == [3]
     assert desc_rank_series["series"]["000001"]["totalCount"] == 2
+
+
+def test_mongo_repository_rank_series_rebuilds_attention_rank_from_avg_rank_num() -> None:
+    repo = MongoRepository(FakeMongoDatabase())
+    dataset = _dataset()
+    repo.save_snapshot_ingest(
+        dataset,
+        records=[_record("s1"), _record("s2")],
+        frames=[_frame("s1", 1), _frame("s2", 2)],
+        stock_rows=[
+            {**_stock("s1", "000001", 1), "avgRankNum": 20},
+            {**_stock("s1", "000002", 2), "avgRankNum": 5},
+            {**_stock("s1", "000003", 3), "avgRankNum": 0},
+            {**_stock("s2", "000001", 3), "avgRankNum": 2},
+            {**_stock("s2", "000002", 1), "avgRankNum": 10},
+            {**_stock("s2", "000003", 2)},
+        ],
+        sector_rows=[],
+        idempotency_key="ingest-attention-rank-series",
+        trading_date="2026-05-12",
+    )
+
+    result = repo.load_rank_series(
+        "dragonboard_live",
+        snapshot_type="half_hour",
+        codes=["000001", "000003"],
+        rank_basis="attention",
+    )
+
+    assert [bar["rank"] for bar in result["series"]["000001"]["bars"]] == [2, 1]
+    assert [bar["totalCount"] for bar in result["series"]["000001"]["bars"]] == [2, 2]
+    assert result["frames"][0]["ranks"] == {"000001": 2}
+    assert result["frames"][0]["totalCount"] == 2
+    assert "000003" not in result["series"]
+
+
+def test_attention_rank_series_filters_invalid_avg_rank_before_per_code_window() -> None:
+    repo = MongoRepository(FakeMongoDatabase())
+    dataset = _dataset()
+    frames = [_frame(f"s{index}", index) for index in range(5)]
+    repo.save_snapshot_ingest(
+        dataset,
+        records=[_record(str(frame["snapshotId"])) for frame in frames],
+        frames=frames,
+        stock_rows=[
+            {
+                **_stock(str(frame["snapshotId"]), "000001", index + 1),
+                "timestamp": frame["timestamp"],
+                "avgRankNum": 5 if index == 0 else 0,
+            }
+            for index, frame in enumerate(frames)
+        ],
+        sector_rows=[],
+        idempotency_key="ingest-attention-valid-window",
+        trading_date="2026-05-12",
+    )
+
+    result = repo.load_rank_series(
+        "dragonboard_live",
+        snapshot_type="half_hour",
+        codes=["000001"],
+        rank_basis="attention",
+        window_bars=1,
+    )
+
+    assert [bar["snapshotId"] for bar in result["series"]["000001"]["bars"]] == ["s0"]
 
 
 def test_mongo_repository_rank_series_uses_per_code_window_for_large_code_batches() -> None:
@@ -138,6 +243,7 @@ def test_mongo_repository_rank_series_uses_per_code_window_for_large_code_batche
         trading_date="2026-05-12",
     )
     repo.db["snapshot_stock_rows"].find_queries.clear()
+    repo.db["snapshot_stock_rows"].aggregate_pipelines.clear()
 
     rank_series = repo.load_rank_series(
         "dragonboard_live",
@@ -148,9 +254,15 @@ def test_mongo_repository_rank_series_uses_per_code_window_for_large_code_batche
         window_bars=2,
     )
 
-    stock_queries = repo.db["snapshot_stock_rows"].find_queries
-    assert any(query.get("code") == special_code for query in stock_queries)
-    assert not any("snapshotId" in query and "code" in query for query in stock_queries)
+    pipelines = repo.db["snapshot_stock_rows"].aggregate_pipelines
+    assert len(pipelines) == 1
+    assert pipelines[0][0]["$match"] == {
+        "datasetId": "dragonboard_live",
+        "type": {"$in": ["half_hour"]},
+        "code": {"$in": codes},
+    }
+    assert pipelines[0][1]["$setWindowFields"]["partitionBy"] == "$code"
+    assert pipelines[0][2] == {"$match": {"_rankSeriesWindow": {"$lte": 2}}}
     assert set(rank_series["series"]) == set(codes)
     assert all(len(item["bars"]) == 2 for item in rank_series["series"].values())
     assert [bar["snapshotId"] for bar in rank_series["series"][special_code]["bars"]] == ["s3", "s4"]
@@ -385,6 +497,10 @@ def _matches(row: dict[str, Any], query: dict[str, Any]) -> bool:
         value = row.get(key)
         if isinstance(expected, dict):
             if "$in" in expected and value not in expected["$in"]:
+                return False
+            if "$type" in expected and expected["$type"] == "number" and not isinstance(value, (int, float)):
+                return False
+            if "$gt" in expected and value <= expected["$gt"]:
                 return False
             if "$gte" in expected and value < expected["$gte"]:
                 return False

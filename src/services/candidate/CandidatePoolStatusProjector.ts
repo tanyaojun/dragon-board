@@ -1,26 +1,18 @@
 import type { FusionStrategyProjection, FusionStrategyState } from '@/types/fusionStrategyProjection'
 
 export interface ResonanceObserveInput {
-  finalSignal: string | null | undefined
-  finalConfidence: number | null | undefined
-  buyVotes: number
-  jumpDirection: string | null | undefined
-  jumpConfidence: number | null | undefined
-  macdCross: string | null | undefined
-  lifecycleAction: string | null | undefined
-  hasOverheatAndDivergenceSell: boolean
+  resonance?: {
+    status?: string | null
+    direction?: string | null
+    score?: number | null
+  } | null
 }
 
 export function isResonanceObserve(input: ResonanceObserveInput): boolean {
   return (
-    input.finalSignal === 'buy' &&
-    (input.finalConfidence ?? 0) >= 85 &&
-    input.buyVotes >= 3 &&
-    input.jumpDirection === 'buy' &&
-    (input.jumpConfidence ?? 0) >= 80 &&
-    input.lifecycleAction !== 'veto' &&
-    input.macdCross !== 'death' &&
-    !input.hasOverheatAndDivergenceSell
+    input.resonance?.status === 'ok' &&
+    input.resonance.direction === 'buy' &&
+    (input.resonance.score ?? 0) >= 85
   )
 }
 
@@ -86,36 +78,11 @@ export function projectCandidatePoolStatus<T extends CandidatePoolStockFields>(
     stock.candidatePoolUpdatedAt = projection?.frameTime || ''
 
     const rankTrend = (stock as Record<string, any>).rankTrend
-    if (rankTrend) {
-      const signals = rankTrend.technical?.signals
-      const buyVotes = [
-        signals?.direction?.signal === 'buy',
-        signals?.acceleration?.signal === 'buy',
-        signals?.zeroCross?.signal === 'buy',
-        rankTrend.technical?.macd?.cross === 'golden',
-      ].filter(Boolean).length
-
-      const hasDoubleRisk =
-        (rankTrend.risk?.overheatReversal?.signal === 'sell' ||
-          rankTrend.risk?.overheat?.signal === 'sell') &&
-        (rankTrend.risk?.capitalDivergence?.signal === 'sell' ||
-          rankTrend.risk?.divergence?.signal === 'sell')
-
-      const resonanceEligible = isResonanceObserve({
-        finalSignal: rankTrend.decision?.final?.signal,
-        finalConfidence: rankTrend.decision?.final?.confidence,
-        buyVotes,
-        jumpDirection: rankTrend.jump?.direction,
-        jumpConfidence: rankTrend.jump?.confidence,
-        macdCross: rankTrend.technical?.macd?.cross,
-        lifecycleAction: rankTrend.cycle?.decision?.action,
-        hasOverheatAndDivergenceSell: hasDoubleRisk,
-      })
-
-      if (resonanceEligible && !projection?.entryDecision?.accepted) {
-        ;(stock as Record<string, any>).candidateResonanceObserve = true
-      }
-    }
+    const resonanceEligible = isResonanceObserve({
+      resonance: rankTrend?.resonance,
+    })
+    ;(stock as Record<string, any>).candidateResonanceObserve =
+      resonanceEligible && !projection?.entryDecision?.accepted
   }
 
   return stocks

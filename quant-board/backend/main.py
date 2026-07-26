@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+from time import perf_counter
 from pathlib import Path
 from typing import Any
 
@@ -61,6 +63,8 @@ from backend.services import (
 from backend.settings import get_settings
 from backend.utils import json_loads
 
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="QuantBoard",
@@ -414,28 +418,45 @@ def _cached_snapshot_response(
     snapshot_ids: list[str] | None = None,
     loader,
 ) -> dict[str, Any]:
+    started_at = perf_counter()
+    cache = snapshot_cache.get_snapshot_redis_cache()
+    generation_key = snapshot_cache.build_snapshot_cache_generation_key(
+        prefix=get_settings().redis_key_prefix,
+        dataset_id=resolved_dataset_id,
+    )
+    generation = cache.get_generation(generation_key)
     cache_key = _snapshot_cache_builder().response_key(
         resource,
         resolved_dataset_id=resolved_dataset_id,
-        params=params,
+        params={**params, "_generation": generation},
     )
-    cache = snapshot_cache.get_snapshot_redis_cache()
     cached = cache.get_response(cache_key)
     if cached is not None:
+        logger.info(
+            "snapshot_response resource=%s cache_hit=true elapsed_ms=%d",
+            resource,
+            round((perf_counter() - started_at) * 1000),
+        )
         return cached
 
     response = loader()
     response = {**response, "cache": {"hit": False, "store": storage_source_label()}}
-    cache.set_response(cache_key, response)
-    cache.register_dependencies(
-        cache_key,
-        snapshot_cache.build_snapshot_cache_index_keys(
-            prefix=get_settings().redis_key_prefix,
-            dataset_id=resolved_dataset_id,
-            snapshot_type=snapshot_type,
-            trading_date=trading_date,
-            snapshot_ids=snapshot_ids or [],
-        ),
+    if cache.get_generation(generation_key) == generation:
+        cache.set_response(cache_key, response)
+        cache.register_dependencies(
+            cache_key,
+            snapshot_cache.build_snapshot_cache_index_keys(
+                prefix=get_settings().redis_key_prefix,
+                dataset_id=resolved_dataset_id,
+                snapshot_type=snapshot_type,
+                trading_date=trading_date,
+                snapshot_ids=snapshot_ids or [],
+            ),
+        )
+    logger.info(
+        "snapshot_response resource=%s cache_hit=false elapsed_ms=%d",
+        resource,
+        round((perf_counter() - started_at) * 1000),
     )
     return response
 
@@ -492,7 +513,14 @@ def _invalidate_snapshot_cache_after_ingest(
         ),
     )
     try:
-        snapshot_cache.get_snapshot_redis_cache().invalidate_indexes(list(dict.fromkeys(index_keys)))
+        cache = snapshot_cache.get_snapshot_redis_cache()
+        cache.bump_generation(
+            snapshot_cache.build_snapshot_cache_generation_key(
+                prefix=get_settings().redis_key_prefix,
+                dataset_id=dataset_id,
+            )
+        )
+        cache.invalidate_indexes(list(dict.fromkeys(index_keys)))
     except Exception:
         return
 
@@ -585,17 +613,24 @@ def get_ranktrend_rank_series(
     sort: str = "asc",
     limit: int | None = 50,
     window_bars: int | None = None,
+    rank_basis: str = "composite",
     db: Session | None = Depends(get_db),
 ) -> dict[str, Any]:
     if db is None and storage_source_label() != "mongodb":
         raise HTTPException(status_code=503, detail="primary database is unavailable")
     if snapshot_type not in {"quarter_hour", "half_hour", "hourly", "daily"}:
         raise HTTPException(status_code=400, detail=f"unsupported snapshot_type: {snapshot_type}")
+    if rank_basis not in {"composite", "attention"}:
+        raise HTTPException(status_code=400, detail=f"unsupported rank_basis: {rank_basis}")
+    if rank_basis == "attention" and storage_source_label() != "mongodb":
+        raise HTTPException(status_code=503, detail="attention rank series requires mongodb")
+    code_list = list(dict.fromkeys(_parse_csv(codes)))
+    if not code_list:
+        raise HTTPException(status_code=400, detail="codes is required for rank-series queries")
     _assert_snapshot_sort(sort)
     start = trading_date or start_date
     end = trading_date or end_date
     capture_modes = _parse_csv(allowed_capture_modes)
-    stock_codes = _parse_csv(codes)
     repo = create_repository(db, enable_backup=False)
     resolved_dataset_id, dataset = _resolve_snapshot_dataset(repo, dataset_id)
     snapshot_ids: list[str] = []
@@ -609,10 +644,11 @@ def get_ranktrend_rank_series(
             before_trading_date=before_trading_date,
             allowed_capture_modes=capture_modes,
             exclude_restored=exclude_restored,
-            codes=stock_codes,
+            codes=code_list,
             limit=limit,
             sort=sort,
             window_bars=window_bars,
+            rank_basis=rank_basis,
         )
         frames = result["frames"]
         series = result["series"]
@@ -626,6 +662,7 @@ def get_ranktrend_rank_series(
             "dataset": repo.dataset_to_dict(dataset),
             "datasetId": resolved_dataset_id,
             "snapshotType": snapshot_type,
+            "rankBasis": rank_basis,
             "frames": public_frames,
             "series": series,
             "count": len(public_frames),
@@ -642,10 +679,11 @@ def get_ranktrend_rank_series(
             "before_trading_date": before_trading_date,
             "allowed_capture_modes": allowed_capture_modes,
             "exclude_restored": exclude_restored,
-            "codes": ",".join(stock_codes),
+            "codes": ",".join(code_list),
             "sort": sort,
             "limit": limit,
             "window_bars": window_bars,
+            "rank_basis": rank_basis,
         },
         snapshot_type=snapshot_type,
         trading_date=start if start == end else None,

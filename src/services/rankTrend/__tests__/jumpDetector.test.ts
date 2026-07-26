@@ -83,6 +83,15 @@ describe('detectRankJumps', () => {
     expect(r.rankMagnitude).toBe(120) // |80 - 200|
   })
 
+  it('002298 当前帧关注度跃升时以最新事件判定为买入', () => {
+    const historical = detectRankJumps([58.8, 27.5, 29.3], [97, 175, 165], 15)
+    const currentFrame = detectRankJumps([58.8, 27.5, 29.3, 95.2], [97, 175, 165, 11], 15)
+
+    expect(historical.direction).toBe('sell')
+    expect(currentFrame.direction).toBe('buy')
+    expect(currentFrame.rankMagnitude).toBe(86)
+  })
+
   it('参考点重置到近 3 帧均值而非极值', () => {
     // 构造序列：50→70 (触发 surge) → 重置到近3帧均值 ≈ 63
     // 然后 63→50 cum_change=-13, abs < 15, 不触发反向

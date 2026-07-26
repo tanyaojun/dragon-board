@@ -88,6 +88,23 @@ class SnapshotRedisCache:
         except Exception:
             return
 
+    def get_generation(self, key: str) -> int:
+        if self.redis_client is None:
+            return 0
+        try:
+            raw = self.redis_client.get(key)
+            return int(raw or 0)
+        except Exception:
+            return 0
+
+    def bump_generation(self, key: str) -> int:
+        if self.redis_client is None:
+            return 0
+        try:
+            return int(self.redis_client.incr(key))
+        except Exception:
+            return 0
+
     def register_dependencies(self, response_key: str, index_keys: list[str]) -> None:
         if self.redis_client is None:
             return
@@ -148,6 +165,10 @@ def build_snapshot_cache_index_keys(
         if snapshot_id:
             keys.append(f"{normalized_prefix}:snapshot:index:snapshot:{dataset_id}:{snapshot_id}")
     return list(dict.fromkeys(keys))
+
+
+def build_snapshot_cache_generation_key(*, prefix: str, dataset_id: str) -> str:
+    return f"{prefix.strip(':')}:snapshot:generation:{dataset_id}"
 
 
 def create_snapshot_redis_client(

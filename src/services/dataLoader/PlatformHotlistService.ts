@@ -1,4 +1,5 @@
 import { Adapters } from '../adapters'
+import { apiService } from '../apiService'
 import { MAX_PLATFORM_CACHE_SIZE, PLATFORM_CACHE_TTL_MS } from './constants'
 import type { PlatformLoadProgress } from './types'
 
@@ -22,9 +23,22 @@ export class PlatformHotlistService {
     force = false,
     options: { onProgress?: (progress: PlatformLoadProgress) => void } = {},
   ): Promise<PlatformHotlistResult> {
+    const activeCodes = await this.loadActiveStockCodes()
+    if (!activeCodes) {
+      return {
+        data: Object.fromEntries(platforms.map((platform) => [platform, []])),
+        timestamp: Date.now(),
+        fromCache: false,
+      }
+    }
+
     const cached = this.platformCache.get('platforms')
     if (!force && cached && Date.now() - cached.timestamp < this.cacheTtl) {
-      return { data: cached.data, timestamp: cached.timestamp, fromCache: true }
+      return {
+        data: this.filterPlatformData(cached.data, activeCodes),
+        timestamp: cached.timestamp,
+        fromCache: true,
+      }
     }
 
     const results: Record<string, any[]> = {}
@@ -53,7 +67,7 @@ export class PlatformHotlistService {
 
     allResults.forEach((result) => {
       if (result.status === 'fulfilled' && result.value.success) {
-        results[result.value.platform] = result.value.data
+        results[result.value.platform] = result.value.data.filter((item) => activeCodes.has(item?.code))
         return
       }
 
@@ -102,6 +116,36 @@ export class PlatformHotlistService {
 
   clearCache() {
     this.platformCache.clear()
+  }
+
+  private async loadActiveStockCodes(): Promise<Set<string> | null> {
+    try {
+      const response = await apiService.listStockNames({ active: true })
+      if (response?.ok !== true || response?.source !== 'mongodb' || !Array.isArray(response.stocks)) {
+        throw new Error('stock_names API did not return an active MongoDB stock list')
+      }
+
+      return new Set(
+        response.stocks
+          .filter((stock: any) => stock?.active === true && stock?.code && String(stock.name || '').trim())
+          .map((stock: any) => String(stock.code).trim().padStart(6, '0')),
+      )
+    } catch (error) {
+      console.warn('[DataLoader] MongoDB stock_names 白名单不可用，拒绝加载平台热榜:', error)
+      return null
+    }
+  }
+
+  private filterPlatformData(
+    data: Record<string, any[]>,
+    activeCodes: Set<string>,
+  ): Record<string, any[]> {
+    return Object.fromEntries(
+      Object.entries(data).map(([platform, rows]) => [
+        platform,
+        Array.isArray(rows) ? rows.filter((item) => activeCodes.has(item?.code)) : [],
+      ]),
+    )
   }
 
   private setCache(key: string, value: { data: Record<string, any[]>; timestamp: number }) {

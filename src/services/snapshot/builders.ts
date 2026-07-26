@@ -216,8 +216,6 @@ function computeResonanceFromSignals(signals: {
   macdCross: string
   jumpDirection: string
   jumpConfidence: number
-  finalSignal: string
-  finalConfidence: number
   directionSignal: string
   directionConfidence: number
   accelerationSignal: string
@@ -229,8 +227,6 @@ function computeResonanceFromSignals(signals: {
     macdCross: signals.macdCross as 'golden' | 'death' | null,
     jumpDirection: signals.jumpDirection as 'buy' | 'sell' | null,
     jumpConfidence: signals.jumpConfidence,
-    finalSignal: signals.finalSignal as string | null,
-    finalConfidence: signals.finalConfidence,
     directionSignal: signals.directionSignal as string | null,
     directionConfidence: signals.directionConfidence,
     accelerationSignal: signals.accelerationSignal as string | null,

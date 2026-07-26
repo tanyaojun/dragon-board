@@ -134,6 +134,15 @@ def build_mongodb_indexes() -> dict[str, list[dict[str, Any]]]:
             },
             {"keys": [("datasetId", 1), ("code", 1), ("type", 1), ("tradingDate", 1), ("timestamp", 1)]},
             {"keys": [("datasetId", 1), ("code", 1), ("timestamp", 1)]},
+            {
+                "keys": [
+                    ("datasetId", 1),
+                    ("type", 1),
+                    ("snapshotId", 1),
+                    ("avgRankNum", 1),
+                    ("code", 1),
+                ]
+            },
         ],
         "snapshot_sector_rows": [
             {"keys": [("datasetId", 1), ("rowId", 1)], "unique": True},

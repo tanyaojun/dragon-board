@@ -188,6 +188,8 @@ SQLite/Supabase/Parquet legacy paths -> migration source or disabled endpoints i
 - Dragon Board 前端仍只能通过 QuantBoard 后端 API 访问正式数据，不直连 MongoDB。
 - `POST /api/snapshots/ingest` 是 Dragon Board 正式快照进入 MongoDB 的主入口。
 - `GET /api/snapshots/frames`、`GET /api/snapshots/records`、`GET /api/snapshots/stock-rows`、`GET /api/snapshots/sector-rows` 和 `GET /api/snapshots/counts` 从 MongoDB 读取，响应字段保持既有 camelCase API 合同。
+- `GET /api/ranktrend/rank-series?rank_basis=attention` 必须携带非空 `codes`，且仅允许 MongoDB 主库；非 MongoDB 环境返回 `503`。读取时在限窗前过滤无效 `avgRankNum`，再按每帧有效 `avgRankNum ASC, code ASC` 重建关注度排名，不改写快照事实字段，也不回退到 `rank` 或 `compRank`。
+- RankTrend 批量读按 `code` 分区在 MongoDB 端截取窗口，前端先发布 RankTrend/Jump/resonance，再异步同步 Fusion、候选日志和执行投影。Redis 响应通过 `cache.hit` 与统一耗时日志观测；ingest 会递增 dataset cache generation，阻止慢读回写已失效响应。
 - `GET /api/themes/mapping`、`GET /api/themes/stocks/{theme_id}`、`GET /api/themes/stocks/by-code/{code}` 和 `GET /api/themes/counts` 从 MongoDB 题材集合读取。
 - `POST /api/hotlist-sentiment/ingest`、历史回填脚本和 MongoDB 模式 `after-market-once` 共同写入 `hotlist_sentiment`；MongoDB 不可用时结构化失败，策略回测只能显式中性回退并保留原因。
 - 正式主库的历史残缺修复通过 `backfill-empty-mongodb-snapshots` 统一处理，允许补空快照、补 `snapshot_record`、修 frame 计数、补缺失的 `15:00` formal close slot，以及补运行库缺失索引；补槽位优先同粒度最近 donor，必要时允许显式跨粒度 donor；修复动作必须写 `migration_audit(opType=mongodb_snapshot_repair)`。

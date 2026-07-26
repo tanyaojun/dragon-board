@@ -80,7 +80,10 @@ type RankHistoryData = {
   ranks: number[]
   percentiles: number[]
   totalCounts: number[]
+  frameKeys: string[]
 }
+
+type RankTrendAnalysisSeries = Pick<RankHistoryData, 'ranks' | 'percentiles' | 'frameKeys'>
 
 type SampleQualitySummary = NonNullable<RankTrendAnalysisResult['meta']['sampleQuality']>
 type DataLayerApi = {
@@ -99,6 +102,8 @@ type ApiServiceApi = {
   getRankTrendRankSeries(options: Record<string, unknown>): Promise<{
     frames?: RankTrendRankSeriesFrame[]
     series?: Record<string, { code?: string; bars?: RankTrendRankSeriesFrame['bars']; snapshotType?: SupportedSnapshotType }>
+    count?: number
+    cache?: { hit: boolean; store: string }
   }>
 }
 
@@ -155,6 +160,9 @@ export class RankTrendAnalyzer {
   private unsubscribeHandlers: Array<() => void> = []
   private runtimeConfigApplyCount = 0
   private rankHistoryCache = new Map<string, RankHistoryData>()
+  private latestAnalysisSeries = new Map<string, RankTrendAnalysisSeries>()
+  private latestAnalysisFrameKeys: string[] = []
+  private currentFrameSequence = 0
   private marketRegimeCache: { signature: string; value: ReturnType<typeof analyzeMarketRegime> } | null = null
   private lastStrategyValidationReport: RankTrendStrategyValidationReport | null = null
 
@@ -198,6 +206,8 @@ export class RankTrendAnalyzer {
 
   private invalidateCache() {
     this.rankHistoryCache.clear()
+    this.latestAnalysisSeries.clear()
+    this.latestAnalysisFrameKeys = []
     this.marketRegimeCache = null
   }
 
@@ -207,6 +217,20 @@ export class RankTrendAnalyzer {
       return null
     }
     return [...entry.percentiles]
+  }
+
+  getLatestAnalysisSeries(code: string): RankTrendAnalysisSeries | null {
+    const entry = this.latestAnalysisSeries.get(code)
+    if (!entry || entry.percentiles.length === 0 || entry.ranks.length === 0) return null
+    return {
+      ranks: [...entry.ranks],
+      percentiles: [...entry.percentiles],
+      frameKeys: [...entry.frameKeys],
+    }
+  }
+
+  getLatestAnalysisFrameKeys(): string[] {
+    return [...this.latestAnalysisFrameKeys]
   }
 
   private logRuntimeConfigApplied(): void {
@@ -261,16 +285,24 @@ export class RankTrendAnalyzer {
   ): Promise<RankTrendAnalysisSnapshot[]> {
     const apiService = await this.getApiService()
     const readLimit = options?.limit ? Math.max(options.limit, options.minRequired ?? 0) : options?.minRequired
+    const startedAt = performance.now()
     const response = await apiService.getRankTrendRankSeries({
       type,
       startDate: toTradingDateString(options?.fromDate),
       endDate: toTradingDateString(options?.toDate),
       allowedCaptureModes: FORMAL_SNAPSHOT_READ_POLICY.allowedCaptureModes,
       excludeRestored: FORMAL_SNAPSHOT_READ_POLICY.excludeRestored,
+      rankBasis: 'attention',
       sort: 'desc',
       limit: readLimit,
       windowBars: getMaxStableBars(),
       codes: options?.codes,
+    })
+    debugLog('[RankTrendAnalyzer] rank-series 响应', {
+      cacheHit: response.cache?.hit ?? false,
+      cacheStore: response.cache?.store ?? 'unknown',
+      frameCount: response.count ?? response.frames?.length ?? 0,
+      elapsedMs: Math.round(performance.now() - startedAt),
     })
 
     const hasSeriesData = this.hasRankSeriesData(response, options?.codes)
@@ -426,6 +458,8 @@ export class RankTrendAnalyzer {
     options: RankTrendAnalysisOptions = {},
   ): Promise<Map<string, RankTrendResult>> {
     const results = new Map<string, RankTrendResult>()
+    this.latestAnalysisSeries.clear()
+    this.latestAnalysisFrameKeys = []
     const recentSnapshots = options.snapshots?.length
       ? this.normalizeAnalysisSnapshots(options.snapshots)
       : await this.loadRequiredSnapshots({ ...options, codes: Array.from(rankMap.keys()) })
@@ -441,6 +475,8 @@ export class RankTrendAnalyzer {
     const snapshotsMap = this.buildSnapshotsMap(recentSnapshots)
     const snapshotSignature = this.buildSnapshotSignature(recentSnapshots)
     const weekdays = recentSnapshots.map((item) => item.date)
+    const currentFrameKey = `current:${++this.currentFrameSequence}`
+    this.latestAnalysisFrameKeys = [...weekdays, currentFrameKey]
 
     const computedResults = await Promise.all(
       Array.from(rankMap.entries()).map(([code, currentRank]) =>
@@ -454,6 +490,7 @@ export class RankTrendAnalyzer {
           snapshots: snapshotsMap,
           snapshotSignature,
           sampleQuality,
+          currentFrameKey,
         }),
       ),
     )
@@ -706,6 +743,7 @@ export class RankTrendAnalyzer {
     snapshots: Map<string, any>
     snapshotSignature: string
     sampleQuality: SampleQualitySummary
+    currentFrameKey: string
   }): Promise<[string, RankTrendResult | null]> {
     const {
       code,
@@ -717,6 +755,7 @@ export class RankTrendAnalyzer {
       snapshots,
       snapshotSignature,
       sampleQuality,
+      currentFrameKey,
     } = input
 
     const cacheKey = code
@@ -727,6 +766,7 @@ export class RankTrendAnalyzer {
       const ranks: number[] = []
       const percentiles: number[] = []
       const totalCounts: number[] = []
+      const frameKeys: string[] = []
 
       for (const date of weekdays) {
         const snapshot = snapshots.get(date)
@@ -739,28 +779,30 @@ export class RankTrendAnalyzer {
           ranks.push(rank)
           percentiles.push(this.calculatePercentileRank(rank, totalCount))
           totalCounts.push(totalCount)
+          frameKeys.push(date)
         }
       }
 
-      rankHistoryData = { snapshotSignature, ranks, percentiles, totalCounts }
+      rankHistoryData = { snapshotSignature, ranks, percentiles, totalCounts, frameKeys }
       this.rankHistoryCache.set(cacheKey, rankHistoryData)
     }
 
-    const { ranks, percentiles, totalCounts } = rankHistoryData
-    if (ranks.length === 0) return [code, null]
-
+    const { ranks, percentiles, frameKeys } = rankHistoryData
+    if (ranks.length === 0 && !dataLayer.getStock(code)) return [code, null]
     const currentPercentile = this.calculatePercentileRank(currentRank, currentTotalCount)
     const prevRank = prevRankMap.get(code)
     const prevPercentile = prevRank
       ? this.calculatePercentileRank(prevRank, prevTotalCount)
       : currentPercentile
     const displayChange = prevRank ? currentPercentile - prevPercentile : 0
-    const latestHistoryRank = ranks[ranks.length - 1]
-    const latestHistoryTotalCount = totalCounts[totalCounts.length - 1]
-    const shouldAppendCurrent =
-      latestHistoryRank !== currentRank || latestHistoryTotalCount !== currentTotalCount
-    const analysisRanks = shouldAppendCurrent ? [...ranks, currentRank] : [...ranks]
-    const analysisPercentiles = shouldAppendCurrent ? [...percentiles, currentPercentile] : [...percentiles]
+    const analysisRanks = [...ranks, currentRank]
+    const analysisPercentiles = [...percentiles, currentPercentile]
+    const analysisFrameKeys = [...frameKeys, currentFrameKey]
+    this.latestAnalysisSeries.set(code, {
+      ranks: [...analysisRanks],
+      percentiles: [...analysisPercentiles],
+      frameKeys: analysisFrameKeys,
+    })
     const stockSampleQuality = this.derivePerStockSampleQuality(sampleQuality, analysisPercentiles.length)
 
     const stock = dataLayer.getStock(code)

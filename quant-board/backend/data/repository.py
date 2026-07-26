@@ -642,6 +642,7 @@ class Repository:
         limit: int | None = 50,
         sort: str = "asc",
         window_bars: int | None = None,
+        rank_basis: str = "composite",
     ) -> dict[str, Any]:
         if self.session is None:
             return {"frames": [], "series": {}}

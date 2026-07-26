@@ -348,6 +348,7 @@ describe('ApiService', () => {
       startDate: '2026-04-21',
       allowedCaptureModes: ['real_time', 'delayed'],
       excludeRestored: true,
+      rankBasis: 'attention' as any,
       sort: 'desc',
       limit: 50,
       codes: ['600001', '600002'],
@@ -360,6 +361,7 @@ describe('ApiService', () => {
     expect(requestedUrl).toContain('start_date=2026-04-21')
     expect(requestedUrl).toContain('allowed_capture_modes=real_time%2Cdelayed')
     expect(requestedUrl).toContain('exclude_restored=true')
+    expect(requestedUrl).toContain('rank_basis=attention')
     expect(requestedUrl).toContain('sort=desc')
     expect(requestedUrl).toContain('limit=50')
     expect(requestedUrl).toContain('codes=600001%2C600002')

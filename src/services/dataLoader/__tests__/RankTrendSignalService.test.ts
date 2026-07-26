@@ -10,6 +10,8 @@ vi.mock('../../RankTrendAnalyzer', () => ({
   rankTrendAnalyzer: {
     getRankTrends: vi.fn(),
     getCachedPercentiles: vi.fn().mockReturnValue(null),
+    getLatestAnalysisSeries: vi.fn().mockReturnValue(null),
+    getLatestAnalysisFrameKeys: vi.fn().mockReturnValue([]),
   },
 }))
 
@@ -176,7 +178,7 @@ describe('RankTrendSignalService', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
     const service = new RankTrendSignalService()
-    const result = await service.applySignalsToMerged([{ code: '000001' }])
+    const result = await service.applySignalsToMerged([{ code: '000001', avgRankNum: 1 }])
 
     expect(result[0].rankTrendCoverageWarning).toBe('包含 18 个 delayed 快照')
     expect(warnSpy).not.toHaveBeenCalled()
@@ -211,6 +213,7 @@ describe('RankTrendSignalService', () => {
       {
         code: '000001',
         rank: 1,
+        avgRankNum: 1,
         rankTrend: existingRankTrend,
         rankChange: 12,
         finalSignal: 'buy',
@@ -224,8 +227,34 @@ describe('RankTrendSignalService', () => {
     expect(result[0].finalConfidence).toBe(78)
   })
 
+  it('excludes stocks without a valid avgRankNum from the current attention ranking', async () => {
+    const { rankTrendAnalyzer } = await import('../../RankTrendAnalyzer')
+    vi.mocked(rankTrendAnalyzer.getRankTrends).mockImplementation(async (rankMap) => {
+      expect(Array.from(rankMap.keys())).toEqual(['000001'])
+      return new Map()
+    })
+
+    const service = new RankTrendSignalService()
+    const result = await service.applySignalsToMerged([
+      { code: '000001', name: '有效均榜', avgRankNum: 3 },
+      { code: '000002', name: '零均榜', avgRankNum: 0, rankTrend: { stale: true } },
+      { code: '000003', name: '缺失均榜', rankTrend: { stale: true } },
+    ])
+
+    expect(result[0].rank).toBe(1)
+    expect(result[1]).toMatchObject({
+      rank: undefined,
+      rankTrend: undefined,
+      finalSignal: 'hold',
+      finalConfidence: 0,
+      _resonancePct: 0,
+      _resonanceLabel: '样本不足',
+    })
+    expect(result[2].rankTrendCoverageWarning).toBe('均榜缺失')
+  })
+
   it('can update stock signals without publishing UI events', () => {
-    dataLayer.setMergedStocks([{ code: '000001', name: '平安银行' } as any])
+    dataLayer.setMergedStocks([{ code: '000001', name: '平安银行', avgRankNum: 1 } as any])
     emittedEvents = 0
 
     const service = new RankTrendSignalService()
@@ -283,7 +312,7 @@ describe('RankTrendSignalService', () => {
   })
 
   it('keeps stock signal updates as calculation-only by default', () => {
-    dataLayer.setMergedStocks([{ code: '000001', name: '平安银行' } as any])
+    dataLayer.setMergedStocks([{ code: '000001', name: '平安银行', avgRankNum: 1 } as any])
     emittedEvents = 0
 
     const service = new RankTrendSignalService()
@@ -296,6 +325,154 @@ describe('RankTrendSignalService', () => {
         rankTrendCoverageWarning: '样本不足',
       }),
     ])
+  })
+
+  it('uses the current-frame analysis series when evaluating a jump signal', async () => {
+    const { rankTrendAnalyzer } = await import('../../RankTrendAnalyzer')
+    const { evaluateJumpSignal } = await import('../../rankTrend/jumpSignalService')
+    const rankTrend = {
+      meta: {
+        code: '002298',
+        currentRank: 11,
+        currentPercentile: 95.2,
+        change: 65.9,
+        rawChange: 86,
+        updateTime: 1,
+      },
+      technical: {},
+      cycle: {},
+      risk: {},
+      decision: {},
+    } as any
+
+    vi.mocked(rankTrendAnalyzer.getRankTrends).mockResolvedValue(new Map([['002298', rankTrend]]))
+    vi.mocked(rankTrendAnalyzer.getCachedPercentiles).mockReturnValue([58.8, 27.5, 29.3])
+    vi.mocked(rankTrendAnalyzer.getLatestAnalysisSeries).mockReturnValue({
+      ranks: [97, 175, 165, 11],
+      percentiles: [58.8, 27.5, 29.3, 95.2],
+    })
+
+    const service = new RankTrendSignalService()
+    await service.applySignalsToMerged([{ code: '002298', name: '中电鑫龙', rank: 11, avgRankNum: 1 }])
+
+    expect(evaluateJumpSignal).toHaveBeenCalledWith(
+      expect.objectContaining({ code: '002298' }),
+      rankTrend,
+      [58.8, 27.5, 29.3, 95.2],
+      true,
+      [97, 175, 165, 11],
+    )
+  })
+
+  it('writes one resonance final after the same-cycle jump pass', async () => {
+    const { rankTrendAnalyzer } = await import('../../RankTrendAnalyzer')
+    const rankTrends = new Map(
+      Array.from({ length: 20 }, (_, index) => {
+        const code = index === 0 ? '002298' : String(600000 + index).padStart(6, '0')
+        return [
+          code,
+          {
+            meta: {
+              code,
+              currentRank: index + 1,
+              currentPercentile: index === 0 ? 95.2 : 60,
+              change: 0,
+              rawChange: 0,
+              updateTime: 1,
+              sampleQuality: {
+                snapshotType: 'half_hour',
+                sampleCount: 8,
+                requiredSampleCount: 8,
+                status: 'ok',
+                delayedCount: 0,
+                restoredCount: 0,
+              },
+            },
+            technical: {},
+            cycle: {},
+            risk: {},
+            decision: { final: { signal: 'hold', confidence: 50 } },
+          } as any,
+        ]
+      }),
+    )
+    vi.mocked(rankTrendAnalyzer.getRankTrends).mockResolvedValue(rankTrends as any)
+    vi.mocked(rankTrendAnalyzer.getLatestAnalysisFrameKeys).mockReturnValue([
+      'S1',
+      'S2',
+      'S3',
+      'CURRENT',
+    ])
+    vi.mocked(rankTrendAnalyzer.getLatestAnalysisSeries).mockImplementation((code: string) => ({
+      ranks: code === '002298' ? [97, 175, 165, 11] : [100, 90, 80, 70],
+      percentiles: code === '002298' ? [58.8, 27.5, 29.3, 95.2] : [45, 50, 55, 60],
+      frameKeys: ['S1', 'S2', 'S3', 'CURRENT'],
+    }))
+
+    const service = new RankTrendSignalService()
+    const result = await service.applySignalsToMerged(
+      Array.from(rankTrends.keys()).map((code, index) => ({ code, name: code, avgRankNum: index + 1 })),
+    )
+    const target = result.find((stock) => stock.code === '002298')
+
+    expect(target?.rankTrend.resonance).toMatchObject({ status: 'ok', direction: 'buy' })
+    expect(target?.rankTrend.decision.final.signal).toBe('buy')
+  })
+
+  it('computes the market median only from stocks aligned to the same four market frames', async () => {
+    const { rankTrendAnalyzer } = await import('../../RankTrendAnalyzer')
+    const rankTrends = new Map(
+      Array.from({ length: 40 }, (_, index) => {
+        const code = String(600000 + index).padStart(6, '0')
+        return [
+          code,
+          {
+            meta: {
+              code,
+              currentRank: index + 1,
+              currentPercentile: 50,
+              change: 0,
+              rawChange: 0,
+              updateTime: 1,
+              sampleQuality: {
+                snapshotType: 'half_hour',
+                sampleCount: 4,
+                requiredSampleCount: 4,
+                status: 'ok',
+                delayedCount: 0,
+                restoredCount: 0,
+              },
+            },
+            technical: {},
+            cycle: {},
+            risk: {},
+            decision: { final: { signal: 'hold', confidence: 50 } },
+          } as any,
+        ]
+      }),
+    )
+    vi.mocked(rankTrendAnalyzer.getRankTrends).mockResolvedValue(rankTrends as any)
+    vi.mocked(rankTrendAnalyzer.getLatestAnalysisFrameKeys).mockReturnValue([
+      'S1',
+      'S2',
+      'S3',
+      'CURRENT',
+    ])
+    vi.mocked(rankTrendAnalyzer.getLatestAnalysisSeries).mockImplementation((code: string) => {
+      const aligned = Number(code) < 600020
+      return {
+        ranks: [40, 35, 30, 25],
+        percentiles: aligned ? [40, 45, 48, 50] : [100, 90, 80, 50],
+        frameKeys: aligned ? ['S1', 'S2', 'S3', 'CURRENT'] : ['X1', 'X2', 'X3', 'CURRENT'],
+      }
+    })
+
+    const service = new RankTrendSignalService()
+    const result = await service.applySignalsToMerged(
+      Array.from(rankTrends.keys()).map((code, index) => ({ code, name: code, avgRankNum: index + 1 })),
+    )
+
+    expect(result[0].rankTrend.resonance.marketMedianShortChange).toBe(10)
   })
 
   it('refreshRankTrendSignals builds fusion projections after auto candidate processing', async () => {
@@ -414,7 +591,7 @@ describe('RankTrendSignalService', () => {
       ]),
     )
 
-    dataLayer.setMergedStocks([{ code: '000001', name: '平安银行', price: 12.34 } as any])
+    dataLayer.setMergedStocks([{ code: '000001', name: '平安银行', price: 12.34, avgRankNum: 1 } as any])
 
     const service = new RankTrendSignalService()
     const result = await service.refreshRankTrendSignals()
@@ -495,8 +672,9 @@ describe('RankTrendSignalService', () => {
     } as any)
 
     const service = new RankTrendSignalService()
-    await service.applySignalsToMerged([{ code: '002129', name: 'TCL中环' }])
+    await service.applySignalsToMerged([{ code: '002129', name: 'TCL中环', avgRankNum: 1 }])
 
+    await vi.waitFor(() => expect(applyCandidatePoolProjections).toHaveBeenCalled())
     expect(applyCandidatePoolProjections).toHaveBeenCalledWith(
       expect.any(Array),
       expect.arrayContaining([
@@ -545,7 +723,7 @@ describe('RankTrendSignalService', () => {
       ]),
     )
 
-    dataLayer.setMergedStocks([{ code: '000001', name: '平安银行', price: 12.34 } as any])
+    dataLayer.setMergedStocks([{ code: '000001', name: '平安银行', price: 12.34, avgRankNum: 1 } as any])
 
     const service = new RankTrendSignalService()
     await service.refreshRankTrendSignals()
@@ -555,6 +733,26 @@ describe('RankTrendSignalService', () => {
   })
 
   describe('precomputeDisplayFields (via applySignalsToMerged)', () => {
+    it('projects the unified resonance score instead of the trading-pool score', () => {
+      const stock = {
+        code: '002298',
+        rankTrend: {
+          meta: { change: 65.9 },
+          jump: { direction: 'buy', confidence: 85 },
+          resonance: { status: 'ok', direction: 'buy', score: 86, label: '非常强' },
+        },
+      }
+      const service = new RankTrendSignalService()
+
+      ;(service as any).precomputeDisplayFields([stock])
+
+      expect(stock).toMatchObject({
+        _resonancePct: 86,
+        _resonanceRawScore: 86,
+        _resonanceLabel: '非常强',
+      })
+    })
+
     it('sets _rankChange / _jumpConfidence / _jumpDirection when rankTrend is present', async () => {
       const { rankTrendAnalyzer } = await import('../../RankTrendAnalyzer')
       vi.mocked(rankTrendAnalyzer.getRankTrends).mockResolvedValue(
@@ -574,7 +772,7 @@ describe('RankTrendSignalService', () => {
       )
 
       const service = new RankTrendSignalService()
-      const result = await service.applySignalsToMerged([{ code: '000001', name: '平安银行' }])
+      const result = await service.applySignalsToMerged([{ code: '000001', name: '平安银行', avgRankNum: 1 }])
 
       expect(result[0]._rankChange).toBe(12)
       expect(result[0]._jumpConfidence).toBe(92)
@@ -586,7 +784,7 @@ describe('RankTrendSignalService', () => {
       vi.mocked(rankTrendAnalyzer.getRankTrends).mockResolvedValue(new Map())
 
       const service = new RankTrendSignalService()
-      const result = await service.applySignalsToMerged([{ code: '000002', name: '测试股' }])
+      const result = await service.applySignalsToMerged([{ code: '000002', name: '测试股', avgRankNum: 1 }])
 
       expect(result[0]._rankChange).toBe(0)
       expect(result[0]._jumpConfidence).toBe(0)
@@ -612,11 +810,11 @@ describe('RankTrendSignalService', () => {
       )
 
       const service = new RankTrendSignalService()
-      const result = await service.applySignalsToMerged([{ code: '000001', name: '平安银行' }])
+      const result = await service.applySignalsToMerged([{ code: '000001', name: '平安银行', avgRankNum: 1 }])
 
-      expect(result[0]._resonancePct).toBe(67) // totalScore=20 → 20/30*100=67
-      expect(result[0]._resonanceLabel).toBe('强')
-      expect(result[0]._resonanceRawScore).toBe(20)
+      expect(result[0]._resonancePct).toBe(0)
+      expect(result[0]._resonanceLabel).toBe('样本不足')
+      expect(result[0]._resonanceRawScore).toBe(0)
     })
 
     it('sets _resonancePct / _resonanceLabel for thesis candidates with candidatePoolProjection', async () => {
@@ -642,6 +840,7 @@ describe('RankTrendSignalService', () => {
         {
           code: '000003',
           name: '候选股',
+          avgRankNum: 1,
           candidatePoolEntryId: 'entry-3',
           candidatePoolProjection: {
             entryDecision: {
@@ -657,8 +856,8 @@ describe('RankTrendSignalService', () => {
 
       expect(result[0]._rankChange).toBe(8)
       expect(result[0]._jumpConfidence).toBe(88)
-      expect(result[0]._resonancePct).toBe(67)
-      expect(result[0]._resonanceLabel).toBe('强')
+      expect(result[0]._resonancePct).toBe(0)
+      expect(result[0]._resonanceLabel).toBe('样本不足')
     })
 
     it('handles empty stocks array without error', async () => {
@@ -673,11 +872,8 @@ describe('RankTrendSignalService', () => {
       expect(result).toEqual([])
     })
 
-    it('leaves _resonancePct undefined when analyzeTradingPoolCandidate returns no row for the stock', async () => {
+    it('shows an explicit insufficient resonance when no valid cross-section exists', async () => {
       const { rankTrendAnalyzer } = await import('../../RankTrendAnalyzer')
-      const { analyzeTradingPoolCandidate } = await import(
-        '../../candidate/TradingPoolAnalysisService'
-      )
       vi.mocked(rankTrendAnalyzer.getRankTrends).mockResolvedValue(
         new Map([
           [
@@ -693,20 +889,90 @@ describe('RankTrendSignalService', () => {
           ],
         ]),
       )
-      // 模拟 analyzeTradingPoolCandidate 返回不匹配 code 的行
-      vi.mocked(analyzeTradingPoolCandidate).mockReturnValueOnce({
-        rows: [{ code: '999999', status: '观察中', decision: 'watch', reasons: [], scoringBreakdown: { totalScore: 10 } }],
-        staleCount: 0,
-        exitedCount: 0,
-      } as any)
-
       const service = new RankTrendSignalService()
-      const result = await service.applySignalsToMerged([{ code: '000004', name: '无共振股' }])
+      const result = await service.applySignalsToMerged([{ code: '000004', name: '无共振股', avgRankNum: 1 }])
 
       expect(result[0]._rankChange).toBe(3)
       expect(result[0]._jumpConfidence).toBe(55)
-      expect(result[0]._resonancePct).toBeUndefined()
-      expect(result[0]._resonanceLabel).toBeUndefined()
+      expect(result[0]._resonancePct).toBe(0)
+      expect(result[0]._resonanceLabel).toBe('样本不足')
+    })
+  })
+
+  it('returns RankTrend, Jump and resonance fields without waiting for candidate-pool sync', async () => {
+    const { rankTrendAnalyzer } = await import('../../RankTrendAnalyzer')
+    const { fusionCandidateNotifier } = await import('../../rankTrend/FusionCandidateNotifier')
+    let releaseCandidateSync: (() => void) | undefined
+    vi.mocked(rankTrendAnalyzer.getRankTrends).mockResolvedValue(
+      new Map([
+        [
+          '000001',
+          {
+            meta: {
+              code: '000001',
+              currentRank: 1,
+              currentPercentile: 99,
+              change: 12,
+              rawChange: 12,
+              updateTime: 1,
+              sampleQuality: { status: 'ok', sampleCount: 30, requiredSampleCount: 30 },
+            },
+            technical: {},
+            cycle: {},
+            risk: {},
+            decision: { final: { signal: 'buy', confidence: 80 } },
+            jump: { direction: 'buy', confidence: 92 },
+          } as any,
+        ],
+      ]),
+    )
+    vi.mocked(fusionCandidateNotifier.process).mockImplementationOnce(
+      () => new Promise<void>((resolve) => { releaseCandidateSync = resolve }),
+    )
+
+    const service = new RankTrendSignalService()
+    const result = await service.applySignalsToMerged([{ code: '000001', name: '平安银行', avgRankNum: 1 }])
+
+    expect(result[0]).toMatchObject({
+      _rankChange: 12,
+      _jumpConfidence: 92,
+      _jumpDirection: 'buy',
+    })
+    expect(fusionCandidateNotifier.process).toHaveBeenCalledWith(result)
+
+    releaseCandidateSync?.()
+  })
+
+  it('never publishes an older candidate projection after a newer frame is queued', async () => {
+    const { rankTrendAnalyzer } = await import('../../RankTrendAnalyzer')
+    const { fusionCandidateNotifier } = await import('../../rankTrend/FusionCandidateNotifier')
+    const { applyCandidatePoolProjections } = await import('../../candidate/CandidatePoolStatusProjector')
+    let releaseFirst: (() => void) | undefined
+    let releaseSecond: (() => void) | undefined
+    vi.mocked(rankTrendAnalyzer.getRankTrends).mockResolvedValue(new Map())
+    vi.mocked(rankTrendAnalyzer.getLatestAnalysisFrameKeys).mockReturnValue([])
+    vi.mocked(fusionCandidateNotifier.process)
+      .mockImplementationOnce(() => new Promise<void>((resolve) => { releaseFirst = resolve }))
+      .mockImplementationOnce(() => new Promise<void>((resolve) => { releaseSecond = resolve }))
+    vi.mocked(applyCandidatePoolProjections).mockImplementation((stocks: any[]) => {
+      for (const stock of stocks) stock.candidatePoolLabel = `projected:${stock.name}`
+      return stocks
+    })
+
+    const service = new RankTrendSignalService()
+    const first = [{ code: '000001', name: 'frame-a', avgRankNum: 1 }]
+    const second = [{ code: '000001', name: 'frame-b', avgRankNum: 1 }]
+    await service.applySignalsToMerged(first)
+    dataLayer.setMergedStocks(second as any)
+    await service.applySignalsToMerged(second)
+
+    releaseFirst?.()
+    await vi.waitFor(() => expect(fusionCandidateNotifier.process).toHaveBeenCalledTimes(2))
+    expect(dataLayer.getStock('000001')?.candidatePoolLabel).toBeUndefined()
+
+    releaseSecond?.()
+    await vi.waitFor(() => {
+      expect(dataLayer.getStock('000001')?.candidatePoolLabel).toBe('projected:frame-b')
     })
   })
 
@@ -749,12 +1015,13 @@ describe('RankTrendSignalService', () => {
     )
     vi.mocked(fusionCandidateNotifier.process).mockRejectedValueOnce(new Error('journal down'))
 
-    dataLayer.setMergedStocks([{ code: '000001', name: '平安银行', price: 12.34 } as any])
+    dataLayer.setMergedStocks([{ code: '000001', name: '平安银行', price: 12.34, avgRankNum: 1 } as any])
 
     const service = new RankTrendSignalService()
     const result = await service.refreshRankTrendSignals()
 
     expect(result[0].rankTrend?.meta?.code).toBe('000001')
+    await vi.waitFor(() => expect(buildFusionStrategyProjections).toHaveBeenCalled())
     expect(buildFusionStrategyProjections).toHaveBeenCalledWith(result, expect.any(Object))
     expect(applyCandidatePoolProjections).toHaveBeenCalledWith(result, expect.any(Array))
   })

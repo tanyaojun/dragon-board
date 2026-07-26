@@ -3,6 +3,7 @@ from __future__ import annotations
 from backend.data.snapshot_cache import (
     SnapshotCacheKeyBuilder,
     SnapshotRedisCache,
+    build_snapshot_cache_generation_key,
     build_snapshot_cache_index_keys,
     create_snapshot_redis_client,
 )
@@ -49,6 +50,13 @@ class FakeRedis:
             self.values.pop(key, None)
             self.ttls.pop(key, None)
             self.sets.pop(key, None)
+
+    def incr(self, key: str) -> int:
+        if self.fail:
+            raise RuntimeError("redis unavailable")
+        value = int(self.values.get(key, "0")) + 1
+        self.values[key] = str(value)
+        return value
 
 
 def test_snapshot_cache_key_uses_namespace_and_resolved_dataset() -> None:
@@ -162,6 +170,74 @@ def test_snapshot_redis_cache_invalidates_registered_dependencies() -> None:
     assert response_key not in redis.values
     assert index_keys[0] not in redis.sets
     assert index_keys[1] not in redis.sets
+
+
+def test_snapshot_cache_generation_is_dataset_scoped_and_monotonic() -> None:
+    redis = FakeRedis()
+    cache = SnapshotRedisCache(redis_client=redis, ttl_seconds=300, empty_ttl_seconds=10)
+    live_key = build_snapshot_cache_generation_key(
+        prefix="hellobiga:dragon-board:test",
+        dataset_id="dragonboard_live",
+    )
+    other_key = build_snapshot_cache_generation_key(
+        prefix="hellobiga:dragon-board:test",
+        dataset_id="other",
+    )
+
+    assert cache.get_generation(live_key) == 0
+    assert cache.bump_generation(live_key) == 1
+    assert cache.bump_generation(live_key) == 2
+    assert cache.get_generation(live_key) == 2
+    assert cache.get_generation(other_key) == 0
+
+
+def test_cached_snapshot_response_does_not_write_after_ingest_generation_changes(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from backend import main
+
+    redis = FakeRedis()
+    cache = SnapshotRedisCache(redis_client=redis, ttl_seconds=300, empty_ttl_seconds=10)
+    generation_key = build_snapshot_cache_generation_key(
+        prefix="hellobiga:dragon-board:test",
+        dataset_id="dragonboard_live",
+    )
+    writes: list[str] = []
+    registrations: list[str] = []
+    original_set_response = cache.set_response
+    original_register_dependencies = cache.register_dependencies
+    monkeypatch.setattr(main.snapshot_cache, "get_snapshot_redis_cache", lambda: cache)
+    monkeypatch.setattr(
+        main,
+        "get_settings",
+        lambda: SimpleNamespace(redis_key_prefix="hellobiga:dragon-board:test"),
+    )
+    monkeypatch.setattr(
+        cache,
+        "set_response",
+        lambda key, response: (writes.append(key), original_set_response(key, response)),
+    )
+    monkeypatch.setattr(
+        cache,
+        "register_dependencies",
+        lambda key, indexes: (registrations.append(key), original_register_dependencies(key, indexes)),
+    )
+
+    def slow_loader():
+        cache.bump_generation(generation_key)
+        return {"ok": True, "frames": [{"snapshotId": "old"}], "count": 1}
+
+    response = main._cached_snapshot_response(
+        "frames",
+        resolved_dataset_id="dragonboard_live",
+        params={"snapshot_type": "half_hour"},
+        snapshot_type="half_hour",
+        loader=slow_loader,
+    )
+
+    assert response["frames"][0]["snapshotId"] == "old"
+    assert writes == []
+    assert registrations == []
 
 
 def test_snapshot_cache_index_keys_include_dataset_date_and_snapshot() -> None:

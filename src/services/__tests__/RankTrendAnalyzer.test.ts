@@ -110,6 +110,47 @@ describe('RankTrendAnalyzer', () => {
     expect(result?.meta.sampleQuality?.latestTradingDate).toBe('2026-04-27')
   })
 
+  it('排名数值不变时仍把新的当前帧追加到分析序列', async () => {
+    const { rankTrendAnalyzer } = await import('../RankTrendAnalyzer')
+    const snapshots = [
+      {
+        date: '2026-04-27 14:30',
+        timestamp: Date.parse('2026-04-27T14:30:00'),
+        snapshot: {
+          type: 'half_hour',
+          tradingDate: '2026-04-27',
+          slotTime: '14:30',
+          totalCount: 100,
+          hotlist: buildHotlist(40),
+        },
+      },
+      {
+        date: '2026-04-27 15:00',
+        timestamp: Date.parse('2026-04-27T15:00:00'),
+        snapshot: {
+          type: 'half_hour',
+          tradingDate: '2026-04-27',
+          slotTime: '15:00',
+          totalCount: 100,
+          hotlist: buildHotlist(33),
+        },
+      },
+    ]
+
+    const currentRanks = new Map<string, number>(
+      Array.from({ length: 100 }, (_, index) => [
+        index === 32 ? '600001' : `CURRENT${String(index + 1).padStart(3, '0')}`,
+        index + 1,
+      ]),
+    )
+    await rankTrendAnalyzer.getRankTrends(currentRanks, {
+      updateSignalStore: false,
+      snapshots,
+    })
+
+    expect(rankTrendAnalyzer.getLatestAnalysisSeries('600001')?.ranks).toEqual([40, 33, 33])
+  })
+
   it('读取 RankTrend 专用排名时序而不是完整快照帧', async () => {
     const { apiService } = await import('../apiService')
     const { snapshotFacade } = await import('../snapshot/facade')
@@ -151,6 +192,7 @@ describe('RankTrendAnalyzer', () => {
       endDate: undefined,
       allowedCaptureModes: ['real_time', 'delayed'],
       excludeRestored: true,
+      rankBasis: 'attention',
       sort: 'desc',
       limit: 50,
       windowBars: 50,

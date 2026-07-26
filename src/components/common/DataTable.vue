@@ -129,7 +129,8 @@
 
             <!-- 共振强度列 -->
             <template v-else-if="col.key === 'resonanceIntensity'">
-              <div class="resonance-cell">
+              <div class="resonance-cell" @mouseenter="showConfidenceTooltip($event, stock)"
+                @mousemove="moveConfidenceTooltip($event)" @mouseleave="hideConfidenceTooltip">
                 <span v-if="getResonanceCellValue(stock) != null" :class="getResonanceCellClass(stock)">
                   {{ getResonanceCellValue(stock) }}%
                 </span>
@@ -217,7 +218,7 @@ import { useUIStore } from '../../stores/ui'
 import { useFavoriteStore } from '../../stores/favorite'
 import { dataLoader } from '../../services/dataLoader'
 import { candidateJournalService } from '@/services/candidate/CandidateJournalService'
-import { analyzeTradingPoolCandidate, normalizeResonanceIntensity } from '@/services/candidate/TradingPoolAnalysisService'
+import { analyzeTradingPoolCandidate } from '@/services/candidate/TradingPoolAnalysisService'
 import { openingSignalStore } from '@/services/hotlist/OpeningSignalStore'
 import { sendHotlistSelection } from '@/services/hotlist/ThsBigOrderFollowBridge'
 import { realtimeSubscriptionRegistry } from '@/services/realtime/RealtimeSubscriptionRegistry'
@@ -749,8 +750,6 @@ const getConfidenceTitle = (stock: any) => {
   const candidateJumpThreshold = getCandidateJumpThreshold(stock)
   const candidateJumpPassed =
     candidateJumpThreshold == null ? null : jumpConfidence >= Number(candidateJumpThreshold)
-  const tradingPoolAction = getTradingPoolActionPreview(stock)
-
   title = `📌 ${stock.name || '-'} (${stock.code || '-'})\n`
   title += hasFinalSignal
     ? `🎯 综合判断: ${signalText} (置信度: ${confidence}%)\n`
@@ -762,17 +761,26 @@ const getConfidenceTitle = (stock: any) => {
     title += ` (候选池阈值: ${candidateJumpThreshold} / ${candidateJumpPassed ? '已过' : '未过'})`
   }
   title += '\n'
-  if (tradingPoolAction.breakdown != null) {
-    const b = tradingPoolAction.breakdown
-    const macdLabel = b.discreteDetail.macdCross > 0 ? `MACD金叉+${b.discreteDetail.macdCross}` : b.discreteDetail.macdCross < 0 ? `MACD死叉${b.discreteDetail.macdCross}` : `MACD无`
-    const jumpLabel = b.discreteDetail.jumpDirection > 0 ? `Jump买+${b.discreteDetail.jumpDirection}` : b.discreteDetail.jumpDirection < 0 ? `Jump卖${b.discreteDetail.jumpDirection}` : 'Jump持0'
-    const contScore = formatTooltipNumber(b.continuousScore, 1)
-    const contLabel = b.continuousScore > 0 ? `连续+${contScore}` : `连续${contScore}`
-    const intensity = normalizeResonanceIntensity(b.totalScore)
-    title += `📊 共振强度: ${intensity.label} (${intensity.pct}%) · ${formatTooltipNumber(b.totalScore, 1)} 分 (${macdLabel}, ${jumpLabel}, ${contLabel})\n`
+  const resonance = rankTrend?.resonance
+  if (resonance) {
+    title += `📊 共振观察: ${resonance.label} (${resonance.score}%)\n`
+    title += '排名来源: 均榜横截面\n'
+    title +=
+      resonance.historyState === 'new_entry'
+        ? '路径状态: 新入榜，待持续确认\n'
+        : '路径状态: 已建立\n'
+    if (resonance.status === 'insufficient') {
+      title += `样本状态: ${resonance.reasons.join('、')}\n`
+    } else {
+      title += `相对动量: ${formatTooltipNumber(resonance.relativeMomentum * 100, 0)}\n`
+      title += `加速度: ${formatTooltipNumber(resonance.acceleration * 100, 0)}\n`
+      title += `路径持续性: ${formatTooltipNumber(resonance.persistence * 100, 0)}%\n`
+      title += `Jump新鲜度: ${formatTooltipNumber(resonance.jumpFreshness * 100, 0)}%\n`
+      title += `反转惩罚: ${formatTooltipNumber(resonance.reversalPenalty * 100, 0)}%\n`
+      title += `市场中位数（同帧共享）: ${formatTooltipNumber(resonance.marketMedianShortChange, 1)}\n`
+    }
   }
   title += `🧭 候选池: ${getCandidatePoolReasonPreview(stock)}\n`
-  title += `📌 交易池: ${tradingPoolAction.actionLabel}\n`
   title += '─'.repeat(30) + '\n'
 
   if (rankTrend) {
@@ -1020,23 +1028,18 @@ function resonanceLabelToClass(label: string): string {
 
 function getResonanceRawScore(stock: any): number | null {
   if (stock._resonanceRawScore !== undefined) return stock._resonanceRawScore
-  const preview = getTradingPoolActionPreview(stock)
-  return preview.breakdown?.totalScore ?? null
+  return getRankTrendAnalysis(stock)?.resonance?.score ?? null
 }
 
 function getResonanceCellValue(stock: any): number | null {
   if (stock._resonancePct !== undefined) return stock._resonancePct
-  const score = getResonanceRawScore(stock)
-  if (score == null) return null
-  return normalizeResonanceIntensity(score).pct
+  return getResonanceRawScore(stock)
 }
 
 function getResonanceCellClass(stock: any): string {
-  const label = stock._resonanceLabel
+  const label = stock._resonanceLabel ?? getRankTrendAnalysis(stock)?.resonance?.label
   if (label) return resonanceLabelToClass(label)
-  const score = getResonanceRawScore(stock)
-  if (score == null) return ''
-  return resonanceLabelToClass(normalizeResonanceIntensity(score).label)
+  return ''
 }
 
 const getMacdCross = (stock: any) =>

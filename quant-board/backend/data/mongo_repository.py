@@ -2,11 +2,15 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import datetime
+import logging
+from time import perf_counter
 from typing import Any
 
 from backend.data.models import Dataset
 from backend.utils import json_dumps, json_loads
 
+
+logger = logging.getLogger(__name__)
 
 class MongoRepository:
     def __init__(self, database: Any) -> None:
@@ -246,7 +250,9 @@ class MongoRepository:
         limit: int | None = 50,
         sort: str = "asc",
         window_bars: int | None = None,
+        rank_basis: str = "composite",
     ) -> dict[str, Any]:
+        started_at = perf_counter()
         query = self._snapshot_row_query(
             dataset_id,
             snapshot_id=None,
@@ -261,22 +267,44 @@ class MongoRepository:
             exclude_restored=exclude_restored,
         )
         effective_window = window_bars or limit or 50
+        query_started_at = perf_counter()
         total_count_by_code: dict[str, int] = defaultdict(int)
         picked_by_code: dict[str, list[dict[str, Any]]] = defaultdict(list)
 
         if codes:
-            for code in codes:
-                code_query = {**query, "code": code}
-                total_count_by_code[code] = int(self.db["snapshot_stock_rows"].count_documents(code_query))
-                if total_count_by_code[code] <= 0:
+            requested_codes = list(dict.fromkeys(code for code in codes if code))
+            rank_query = {**query, "code": {"$in": requested_codes}}
+            if rank_basis == "attention":
+                rank_query["avgRankNum"] = {"$type": "number", "$gt": 0}
+            rows = self.db["snapshot_stock_rows"].aggregate(
+                [
+                    {"$match": rank_query},
+                    {
+                        "$setWindowFields": {
+                            "partitionBy": "$code",
+                            "sortBy": {"timestamp": -1, "snapshotId": -1},
+                            "output": {
+                                "_rankSeriesWindow": {"$documentNumber": {}},
+                                "_rankSeriesTotalCount": {
+                                    "$count": {},
+                                    "window": {"documents": ["unbounded", "unbounded"]},
+                                },
+                            },
+                        }
+                    },
+                    {"$match": {"_rankSeriesWindow": {"$lte": effective_window}}},
+                ],
+                allowDiskUse=True,
+            )
+            for row in rows:
+                code_key = str(row.get("code") or "")
+                if not code_key:
                     continue
-                code_rows = list(
-                    self.db["snapshot_stock_rows"]
-                    .find(code_query)
-                    .sort([("timestamp", -1), ("snapshotId", -1), ("rank", 1)])
-                    .limit(effective_window)
-                )
-                picked_by_code[code] = sorted(
+                total_count_by_code[code_key] = int(row.get("_rankSeriesTotalCount") or 0)
+                picked_by_code[code_key].append(row)
+
+            for code_key, code_rows in picked_by_code.items():
+                picked_by_code[code_key] = sorted(
                     code_rows,
                     key=lambda row: (
                         int(row.get("timestamp") or 0),
@@ -314,6 +342,40 @@ class MongoRepository:
             picked_rows.extend(picked_by_code[code_key])
 
         snapshot_ids = list(dict.fromkeys(str(row.get("snapshotId")) for row in picked_rows if row.get("snapshotId")))
+        attention_ranks: dict[str, dict[str, int]] = {}
+        attention_totals: dict[str, int] = {}
+        attention_started_at = perf_counter()
+        if rank_basis == "attention" and snapshot_ids:
+            attention_rows = self.db["snapshot_stock_rows"].aggregate(
+                [
+                    {
+                        "$match": {
+                            **query,
+                            "snapshotId": {"$in": snapshot_ids},
+                            "avgRankNum": {"$type": "number", "$gt": 0},
+                        }
+                    },
+                    {"$sort": {"snapshotId": 1, "avgRankNum": 1, "code": 1}},
+                    {
+                        "$group": {
+                            "_id": "$snapshotId",
+                            "rows": {"$push": {"code": "$code"}},
+                            "totalCount": {"$sum": 1},
+                        }
+                    },
+                    {"$unwind": {"path": "$rows", "includeArrayIndex": "attentionIndex"}},
+                    {"$match": {"rows.code": {"$in": list(picked_by_code)}}},
+                ],
+                allowDiskUse=True,
+            )
+            for row in attention_rows:
+                snapshot_id = str(row.get("_id") or "")
+                code = str((row.get("rows") or {}).get("code") or "")
+                if not snapshot_id or not code:
+                    continue
+                attention_ranks.setdefault(snapshot_id, {})[code] = int(row.get("attentionIndex") or 0) + 1
+                attention_totals[snapshot_id] = int(row.get("totalCount") or 0)
+
         frame_rows = {
             str(row.get("snapshotId")): row
             for row in self.db["snapshot_frames"].find({"datasetId": dataset_id, "snapshotId": {"$in": snapshot_ids}})
@@ -333,13 +395,13 @@ class MongoRepository:
                     "tradingDate": row.get("tradingDate"),
                     "slotTime": row.get("slotTime"),
                     "captureMode": row.get("captureMode"),
-                    "totalCount": int(frame.get("stockRowCount") or 0),
+                    "totalCount": attention_totals.get(snapshot_id, int(frame.get("stockRowCount") or 0)),
                     "bars": [],
                     "ranks": {},
                 }
             frames_by_snapshot[snapshot_id]["bars"].append(self.local_stock_to_bundle_dict(row))
             code = str(row.get("code") or "")
-            rank = row.get("rank")
+            rank = attention_ranks.get(snapshot_id, {}).get(code) if rank_basis == "attention" else row.get("rank")
             if code and rank:
                 frames_by_snapshot[snapshot_id]["ranks"][code] = int(rank)
 
@@ -355,7 +417,11 @@ class MongoRepository:
             for bar in bars:
                 sid = bar.get("snapshotId") or ""
                 frame_doc = frame_rows.get(sid) or {}
-                bar["totalCount"] = int(frame_doc.get("stockRowCount") or 0)
+                if rank_basis == "attention":
+                    bar["rank"] = attention_ranks.get(sid, {}).get(code_key, 0)
+                    bar["totalCount"] = attention_totals.get(sid, 0)
+                else:
+                    bar["totalCount"] = int(frame_doc.get("stockRowCount") or 0)
             last_bar = bars[-1] if bars else {}
             series[code_key] = {
                 "code": code_key,
@@ -366,6 +432,16 @@ class MongoRepository:
                 "latestSlotTime": last_bar.get("slotTime") or "",
             }
 
+        logger.info(
+            "rank_series_loaded dataset_id=%s codes=%d bars=%d rank_basis=%s query_ms=%d attention_ms=%d total_ms=%d",
+            dataset_id,
+            len(codes or []),
+            len(picked_rows),
+            rank_basis,
+            round((attention_started_at - query_started_at) * 1000),
+            round((perf_counter() - attention_started_at) * 1000),
+            round((perf_counter() - started_at) * 1000),
+        )
         return {"frames": frames, "series": series}
 
     def list_snapshot_stock_rows(

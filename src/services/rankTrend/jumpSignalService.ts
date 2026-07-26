@@ -175,8 +175,9 @@ export function evaluateJumpSignal(
   rankTrend: RankTrendAnalysisResult,
   percentiles: number[],
   isInFrame: boolean,
+  ranks?: number[],
 ): JumpSignalResult {
-  const jump = detectRankJumps(percentiles, undefined, 15)
+  const jump = detectRankJumps(percentiles, ranks, 15)
   const entryCheck = checkEntryConditions(stock, rankTrend, jump)
   const currentPrice = Number(stock?.price ?? stock?.lastTradePrice ?? 0)
   const [isExit, exitReason] = entryCheck.passed

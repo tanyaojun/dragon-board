@@ -169,6 +169,15 @@ def test_build_mongodb_indexes_contains_snapshot_and_stock_name_unique_keys() ->
     assert indexes["snapshot_frames"][0]["keys"] == [("datasetId", 1), ("snapshotId", 1)]
     assert indexes["snapshot_frames"][0]["unique"] is True
     assert indexes["snapshot_stock_rows"][0]["keys"] == [("datasetId", 1), ("rowId", 1)]
+    assert {
+        "keys": [
+            ("datasetId", 1),
+            ("type", 1),
+            ("snapshotId", 1),
+            ("avgRankNum", 1),
+            ("code", 1),
+        ]
+    } in indexes["snapshot_stock_rows"]
     assert "backtest_result_chunks" in ALL_COLLECTIONS
     assert indexes["backtest_result_chunks"][0]["keys"] == [("backtestRunId", 1), ("sequence", 1)]
     assert indexes["backtest_result_chunks"][0]["unique"] is True

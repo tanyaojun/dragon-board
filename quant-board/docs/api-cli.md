@@ -904,6 +904,8 @@ Invoke-RestMethod 'http://127.0.0.1:8000/api/snapshots/frames?dataset_id=dragonb
 
 `frames`、`records`、`stock-rows` 和 `sector-rows` 列表读口可启用 Redis read-through cache。Redis 只缓存查询响应，不替代 MongoDB 事实源；命中时 `source` 仍表示原始事实来源，`cache.hit=true`、`cache.store=redis` 只用于诊断。Redis 不可用时读口直接回 MongoDB。
 
+`rank-series` 使用同一缓存合同。服务日志以 `snapshot_response resource=ranktrend:rank-series cache_hit=<true|false> elapsed_ms=<n>` 记录命中与端到端耗时；Mongo 查询日志记录代码数、返回 bar 数、批量查询、关注度横截面重排和总耗时。每次快照 ingest 后会递增 dataset generation 并按 dataset/date/snapshot 索引失效关联 key，慢读无法在新 generation 中回写旧响应；前端现有 `dataLoader.ranktrendSignal` 仍按 30 分钟轮询读取。
+
 Dragon Board 根前端通过 `src/services/snapshot/backendRead.ts` 调用该接口。该适配层会默认带上
 `dataset_id=dragonboard_live`、`allowed_capture_modes=real_time,delayed` 和
 `exclude_restored=true`；QuantBoard 后端返回失败时，前端正式读取必须显式失败，不回落 IndexedDB。
@@ -939,7 +941,7 @@ RankTrend 专用排名时序读口，按 `code + snapshotType` 读取单票历�
 |------|------|--------|------|
 | `dataset_id` | string | 默认数据集 | 数据集 ID |
 | `snapshot_type` | string | `half_hour` | 快照类型（`quarter_hour`、`half_hour`、`hourly`、`daily`） |
-| `codes` | string | — | 股票代码，逗号分隔 |
+| `codes` | string | 必填 | 股票代码，逗号分隔；空值返回 400，禁止全历史扫描 |
 | `trading_date` | string | — | 交易日过滤（同 start_date 和 end_date） |
 | `start_date` | string | — | 起始交易日 |
 | `end_date` | string | — | 结束交易日 |
@@ -949,6 +951,9 @@ RankTrend 专用排名时序读口，按 `code + snapshotType` 读取单票历�
 | `sort` | string | `asc` | 排序方向 |
 | `limit` | int | `50` | 返回帧数量上限 |
 | `window_bars` | int | — | 单票 bar 数量上限（新增，独立于 limit） |
+| `rank_basis` | string | `composite` | `composite` 返回原始综合排名；`attention` 仅在 MongoDB 主库内按有效 `avgRankNum ASC, code ASC` 重排，返回均榜关注度排名。无有效 `avgRankNum` 的股票不返回 bar，绝不回退到综合排名；非 MongoDB 环境请求该口径返回 `503`。 |
+
+后端执行一次 `code: {$in: [...]}` 聚合，并在 MongoDB 内按 code 分区保留最近 `window_bars`，不会为每只股票发起独立查询，也不会把全部历史行传入 Python 后再截断。
 
 **响应结构：**
 
@@ -958,6 +963,7 @@ RankTrend 专用排名时序读口，按 `code + snapshotType` 读取单票历�
   "dataset": { ... },
   "datasetId": "...",
   "snapshotType": "half_hour",
+  "rankBasis": "attention",
   "frames": [
     {
       "snapshotId": "half_hour:2026-04-21:10:00:xxx",

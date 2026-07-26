@@ -109,6 +109,20 @@ describe('CandidatePoolStatusProjector', () => {
     })
   })
 
+  it('clears the resonance observation marker when the resonance is no longer eligible', () => {
+    const stocks = [
+      {
+        code: '600001',
+        candidateResonanceObserve: true,
+        rankTrend: { resonance: { status: 'insufficient', direction: 'hold', score: 0 } },
+      },
+    ]
+
+    const result = projectCandidatePoolStatus(stocks as any[], [])
+
+    expect(result[0].candidateResonanceObserve).toBe(false)
+  })
+
   it('keeps table label on strategy lifecycle when live entry decision is blocked', () => {
     const stocks = [{ code: '000970', name: '中科三环' }]
     const projections: FusionStrategyProjection[] = [
@@ -165,6 +179,7 @@ describe('CandidatePoolStatusProjector', () => {
       code: '603738',
       name: '泰晶科技',
       rankTrend: {
+        resonance: { status: 'ok', direction: 'buy', score: 91 },
         decision: { final: { signal: 'buy', confidence: 91 } },
         jump: { direction: 'buy', confidence: 87.9 },
         technical: {
@@ -300,99 +315,22 @@ describe('CandidatePoolStatusProjector', () => {
     const result = projectCandidatePoolStatus(stocks as any[], projections)
 
     expect(result[0].candidatePoolStatus).toBe('active_holding')
-    expect((result[0] as any).candidateResonanceObserve).toBeUndefined()
+    expect((result[0] as any).candidateResonanceObserve).toBe(false)
   })
 })
 
 describe('isResonanceObserve', () => {
-  it('returns true for full resonance with jump blocked', () => {
+  it('returns true for a strong unified resonance', () => {
     expect(isResonanceObserve({
-      finalSignal: 'buy',
-      finalConfidence: 87,
-      buyVotes: 3,
-      jumpDirection: 'buy',
-      jumpConfidence: 82.9,
-      macdCross: 'none',
-      lifecycleAction: 'allow',
-      hasOverheatAndDivergenceSell: false,
+      resonance: { status: 'ok', direction: 'buy', score: 87 },
     })).toBe(true)
   })
 
-  it('returns false when final signal is not buy', () => {
-    expect(isResonanceObserve({
-      finalSignal: 'hold',
-      finalConfidence: 90,
-      buyVotes: 4,
-      jumpDirection: 'buy',
-      jumpConfidence: 85,
-      macdCross: 'golden',
-      lifecycleAction: 'allow',
-      hasOverheatAndDivergenceSell: false,
-    })).toBe(false)
-  })
-
-  it('returns false when buyVotes < 3', () => {
-    expect(isResonanceObserve({
-      finalSignal: 'buy',
-      finalConfidence: 86,
-      buyVotes: 2,
-      jumpDirection: 'buy',
-      jumpConfidence: 82,
-      macdCross: 'none',
-      lifecycleAction: 'allow',
-      hasOverheatAndDivergenceSell: false,
-    })).toBe(false)
-  })
-
-  it('returns false when jump confidence < 80', () => {
-    expect(isResonanceObserve({
-      finalSignal: 'buy',
-      finalConfidence: 86,
-      buyVotes: 3,
-      jumpDirection: 'buy',
-      jumpConfidence: 75,
-      macdCross: 'none',
-      lifecycleAction: 'allow',
-      hasOverheatAndDivergenceSell: false,
-    })).toBe(false)
-  })
-
-  it('returns false with lifecycle veto', () => {
-    expect(isResonanceObserve({
-      finalSignal: 'buy',
-      finalConfidence: 90,
-      buyVotes: 4,
-      jumpDirection: 'buy',
-      jumpConfidence: 88,
-      macdCross: 'golden',
-      lifecycleAction: 'veto',
-      hasOverheatAndDivergenceSell: false,
-    })).toBe(false)
-  })
-
-  it('returns false with MACD death cross', () => {
-    expect(isResonanceObserve({
-      finalSignal: 'buy',
-      finalConfidence: 86,
-      buyVotes: 3,
-      jumpDirection: 'buy',
-      jumpConfidence: 82,
-      macdCross: 'death',
-      lifecycleAction: 'allow',
-      hasOverheatAndDivergenceSell: false,
-    })).toBe(false)
-  })
-
-  it('returns false with double risk (overheat + capital divergence)', () => {
-    expect(isResonanceObserve({
-      finalSignal: 'buy',
-      finalConfidence: 90,
-      buyVotes: 4,
-      jumpDirection: 'buy',
-      jumpConfidence: 88,
-      macdCross: 'golden',
-      lifecycleAction: 'allow',
-      hasOverheatAndDivergenceSell: true,
-    })).toBe(false)
+  it.each([
+    ['status', { status: 'insufficient', direction: 'buy', score: 90 }],
+    ['direction', { status: 'ok', direction: 'hold', score: 90 }],
+    ['score', { status: 'ok', direction: 'buy', score: 84 }],
+  ])('returns false when resonance %s is ineligible', (_field, resonance) => {
+    expect(isResonanceObserve({ resonance })).toBe(false)
   })
 })
