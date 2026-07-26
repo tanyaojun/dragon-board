@@ -268,6 +268,29 @@ def test_mongo_repository_rank_series_uses_per_code_window_for_large_code_batche
     assert [bar["snapshotId"] for bar in rank_series["series"][special_code]["bars"]] == ["s3", "s4"]
 
 
+def test_rank_series_count_window_preserves_compound_snapshot_sort() -> None:
+    repo = MongoRepository(FakeMongoDatabase())
+    dataset = _dataset()
+    repo.save_snapshot_ingest(
+        dataset,
+        records=[_record("s1")],
+        frames=[_frame("s1", 1)],
+        stock_rows=[_stock("s1", "000001", 1)],
+        sector_rows=[],
+        idempotency_key="rank-series-count-window-sort",
+        trading_date="2026-05-12",
+    )
+
+    repo.load_rank_series("dragonboard_live", snapshot_type="half_hour", codes=["000001"])
+
+    window = repo.db["snapshot_stock_rows"].aggregate_pipelines[0][1]["$setWindowFields"]
+    assert window["sortBy"] == {"timestamp": -1, "snapshotId": -1}
+    assert window["output"]["_rankSeriesWindow"] == {
+        "$count": {},
+        "window": {"documents": ["unbounded", "current"]},
+    }
+
+
 def test_mongo_repository_frame_bundles_return_mongodb_source_rows() -> None:
     repo = MongoRepository(FakeMongoDatabase())
     dataset = _dataset()

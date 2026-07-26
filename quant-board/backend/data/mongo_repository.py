@@ -284,7 +284,10 @@ class MongoRepository:
                             "partitionBy": "$code",
                             "sortBy": {"timestamp": -1, "snapshotId": -1},
                             "output": {
-                                "_rankSeriesWindow": {"$documentNumber": {}},
+                                "_rankSeriesWindow": {
+                                    "$count": {},
+                                    "window": {"documents": ["unbounded", "current"]},
+                                },
                                 "_rankSeriesTotalCount": {
                                     "$count": {},
                                     "window": {"documents": ["unbounded", "unbounded"]},

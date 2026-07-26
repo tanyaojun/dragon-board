@@ -7,6 +7,7 @@ const stocks: any[] = []
 vi.mock('../../DataLayer', () => ({
   dataLayer: {
     getStocks: () => stocks,
+    getStock: (code: string) => stocks.find((stock) => stock.code === code),
     applyRealtimeQuoteBatch: vi.fn(),
     updateDepth10Batch: vi.fn(),
     updateL2SummaryBatch: vi.fn(),
@@ -90,6 +91,26 @@ describe('RealtimeQuoteCoordinator', () => {
 
     expect(vi.mocked(dataLayer.applyRealtimeQuoteBatch)).toHaveBeenCalledWith([
       expect.objectContaining({ code: '000001', price: 10, zlje: 8 }),
+    ])
+    coordinator.destroy()
+    vi.useRealTimers()
+  })
+
+  it('derives main money ratio from THS net inflow and the current turnover when the stream omits it', () => {
+    vi.useFakeTimers()
+    stocks.push({ code: '000001', turnover: 12_345_678 })
+    const coordinator = new RealtimeQuoteCoordinator({
+      getHotCodes: () => new Set(['000001']),
+      flushDelay: 10,
+    })
+
+    ;(coordinator as any).queueRealtimeQuotes([
+      { code: '000001', zlje: 315_000, moneyFlowSource: 'ths_main_monitor' },
+    ])
+    vi.advanceTimersByTime(10)
+
+    expect(vi.mocked(dataLayer.applyRealtimeQuoteBatch)).toHaveBeenCalledWith([
+      expect.objectContaining({ code: '000001', zlje: 315_000, zljzb: 2.55 }),
     ])
     coordinator.destroy()
     vi.useRealTimers()

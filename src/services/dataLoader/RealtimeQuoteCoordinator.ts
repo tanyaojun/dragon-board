@@ -7,6 +7,13 @@ import { REALTIME_FLUSH_DELAY_MS } from './constants'
 
 const REALTIME_OWNER = 'dataLoader.hotlist'
 
+function deriveMainMoneyRatio(mainNet: unknown, turnover: unknown): number | undefined {
+  const net = Number(mainNet)
+  const amount = Number(turnover)
+  if (!Number.isFinite(net) || !Number.isFinite(amount) || amount <= 0) return undefined
+  return Number(((net / amount) * 100).toFixed(2))
+}
+
 export interface RealtimeQuoteCoordinatorOptions {
   getHotCodes: () => Set<string>
   onQuoteFlushed?: (codes: string[]) => void | Promise<void>
@@ -132,6 +139,9 @@ export class RealtimeQuoteCoordinator {
       dataLayer.applyRealtimeQuoteBatch(
         quoteItems.map((item) => {
           const hasDashboardMoneyFlow = item.moneyFlowSource === 'ths_main_monitor'
+          const mainMoneyRatio = hasDashboardMoneyFlow
+            ? item.zljzb ?? deriveMainMoneyRatio(item.zlje, dataLayer.getStock(item.code)?.turnover)
+            : undefined
           return {
             code: item.code,
             name: item.name,
@@ -142,7 +152,7 @@ export class RealtimeQuoteCoordinator {
             turnover: item.amount,
             turnoverRate: item.turnoverRate,
             zlje: hasDashboardMoneyFlow ? item.zlje : undefined,
-            zljzb: hasDashboardMoneyFlow ? item.zljzb : undefined,
+            zljzb: mainMoneyRatio,
             cddje: hasDashboardMoneyFlow ? item.cddje : undefined,
             cddjzb: hasDashboardMoneyFlow ? item.cddjzb : undefined,
             moneyFlowSource: hasDashboardMoneyFlow ? item.moneyFlowSource : undefined,
