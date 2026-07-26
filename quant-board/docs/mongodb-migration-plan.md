@@ -160,7 +160,7 @@ shadow 验收不通过时，不得提升采集器为正式快照来源，也不�
 
 当前 `src/services/StockCodeManager.ts` 已从 QuantBoard `/api/stocks/*` 读取股票基础库。停服迁移时 `public/data/stock_code.json` 源文件 5617 条，其中 `871753` 重复 1 条；MongoDB `stock_names` 去重后 5616 条，重复项写入 `migration_audit`。
 
-迁移后新增 `stock_names` 集合，前端 `StockCodeManager` 通过 QuantBoard 后端 API 读取，不再依赖静态 JSON 文件。
+迁移后新增 `stock_names` 集合，前端 `StockCodeManager` 通过 QuantBoard 后端 API 读取，不再依赖静态 JSON 文件。MongoDB 运行模式下，后端每天按 Asia/Shanghai 08:30 从 `mootdx` 固定 7709 主站增量同步沪深 A 股代码与简称；该同步不修改北交所记录或 `active` 状态，并跳过 `XD`、`XR`、`DR` 除权临时简称。
 
 ## MongoDB 建模原则
 

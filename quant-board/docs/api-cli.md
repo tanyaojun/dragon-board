@@ -28,6 +28,7 @@ Invoke-RestMethod http://127.0.0.1:8000/api/health
 - `theme.connected`：MongoDB 题材集合是否可用。
 - `mode`：当前应为 `mongodb_primary` 或等价 MongoDB 主库模式。
 - `backup` / `archive`：仅表示 MongoDB dump/R2 备份相关状态；旧 Supabase 同构备份和 SQLite 归档状态不再作为生产健康条件。
+- `stockNameRefresh`：每日沪深 A 股基础信息同步任务的运行状态、最近结果和错误信息。
 
 目标合同：健康检查必须能让调用方判断 MongoDB 主库和 MongoDB 备份能力是否可用。新增或改名字段时，必须同批更新本文和 [mongodb-migration-plan.md](mongodb-migration-plan.md)。
 

@@ -23,6 +23,7 @@ async def test_fastapi_lifecycle_starts_and_stops_fund_scheduler_once(monkeypatc
             events.append("stop")
 
     monkeypatch.setattr(main, "theme_fund_scheduler", FakeScheduler())
+    monkeypatch.setattr(main, "stock_name_refresh_scheduler", FakeScheduler())
     monkeypatch.setattr(main.snapshot_collector_scheduler, "start", lambda: None)
     monkeypatch.setattr(main.theme_mapping_refresh_scheduler, "start", lambda: None)
     monkeypatch.setattr(main.snapshot_collector_scheduler, "stop", _noop_async)
@@ -31,7 +32,7 @@ async def test_fastapi_lifecycle_starts_and_stops_fund_scheduler_once(monkeypatc
     await main.on_startup()
     await main.on_shutdown()
 
-    assert events == ["start", "stop", "close"]
+    assert events == ["start", "start", "stop", "stop", "close"]
 
 
 async def _noop_async() -> None:

@@ -41,6 +41,7 @@ from backend.data.schemas import (
     SnapshotJsonMigrationRequest,
 )
 from backend.data.stock_name_repository import STOCK_NAMES_VERSION, StockNameRepository
+from backend.stock_name_refresh_scheduler import stock_name_refresh_scheduler
 from backend.data import snapshot_cache
 from backend.data.supabase_backup import get_backup_client
 from backend.data.theme_database import get_theme_db, init_theme_db, theme_status
@@ -95,6 +96,7 @@ async def on_startup() -> None:
         archive_auto_runner.start()
         backup_retention_runner.start()
     snapshot_collector_scheduler.start()
+    stock_name_refresh_scheduler.start()
     theme_mapping_refresh_scheduler.start()
     theme_fund_scheduler.start()
 
@@ -106,6 +108,7 @@ async def on_shutdown() -> None:
         await archive_auto_runner.stop()
         await backup_retention_runner.stop()
     await snapshot_collector_scheduler.stop()
+    await stock_name_refresh_scheduler.stop()
     await theme_mapping_refresh_scheduler.stop()
     await theme_fund_scheduler.stop()
     await theme_fund_scheduler.service.aclose()
@@ -143,6 +146,7 @@ def health_check(deep: bool = False, db: Session | None = Depends(get_db)) -> di
             },
         },
         "snapshotCollector": snapshot_collector_scheduler.status(),
+        "stockNameRefresh": stock_name_refresh_scheduler.status(),
         "themeMappingRefresh": theme_mapping_refresh_scheduler.status(),
     }
 

@@ -306,4 +306,4 @@ rankTrend 输出应保留样本质量：
 ## 其他 MongoDB 集合
 
 - `trade_journal`：候选池交易日志。V2 Layer 3 实盘对齐使用其中带 `entryPrice` 的记录与回测信号交叉比对
-- `stock_names`：A 股代码表。跨市场零行情过滤使用此表识别非 A 股代码
+- `stock_names`：A 股代码表。跨市场零行情过滤使用此表识别非 A 股代码；MongoDB 模式下后端每日 08:30 从 `mootdx` 的固定 7709 主站同步沪深 A 股代码与简称。该同步不更新北交所数据或 `active` 状态，并跳过 `XD`、`XR`、`DR` 等除权临时简称。
