@@ -316,6 +316,22 @@ def resolve_minute_session_date(now: datetime | None = None) -> tuple[str, bool]
     return completed.strftime("%Y%m%d"), True
 
 
+def resolve_requested_session_date(value: str) -> str:
+    try:
+        candidate = datetime.strptime(value, "%Y%m%d")
+    except ValueError as exc:
+        raise ValueError("invalid requested date") from exc
+
+    for _ in range(370):
+        status = _is_trading_day_cached(candidate)
+        if status is None:
+            raise RuntimeError("TDX trading calendar unavailable")
+        if status:
+            return candidate.strftime("%Y%m%d")
+        candidate -= timedelta(days=1)
+    raise RuntimeError("no trading day found in TDX calendar")
+
+
 def to_int(value: Any, default: int = 0) -> int:
     try:
         return int(value)
@@ -2105,12 +2121,16 @@ class TdxL2Bridge:
             )
 
         @app.get("/api/quotes/minute", summary="TDX 分时数据")
-        async def minute_data(code: str = "") -> JSONResponse:
+        async def minute_data(code: str = "", date: str = "") -> JSONResponse:
             stock_code = normalize_code(code)
             if not stock_code:
                 return JSONResponse({"ok": False, "error": "missing code"}, status_code=400)
             try:
-                session_date, expected_complete = resolve_minute_session_date()
+                if date:
+                    session_date = resolve_requested_session_date(date)
+                    expected_complete = True
+                else:
+                    session_date, expected_complete = resolve_minute_session_date()
                 async with self.fetch_lock:
                     await self.ensure_client()
                     assert self.quote_client is not None

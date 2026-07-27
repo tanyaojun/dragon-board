@@ -25,8 +25,15 @@ namespace THSBigOrder.DataSources
         public async Task<SourceLoadResult<IReadOnlyList<MinuteTurnoverPoint>>> LoadDirectAsync(
             string stockCode, CancellationToken cancellationToken)
         {
+            return await LoadDirectAsync(stockCode, null, cancellationToken).ConfigureAwait(false);
+        }
+
+        public async Task<SourceLoadResult<IReadOnlyList<MinuteTurnoverPoint>>> LoadDirectAsync(
+            string stockCode, DateTime? sessionDate, CancellationToken cancellationToken)
+        {
             using (var request = new HttpRequestMessage(HttpMethod.Get,
-                _bridgeBase + "/api/quotes/minute?code=" + stockCode))
+                _bridgeBase + "/api/quotes/minute?code=" + stockCode +
+                (sessionDate.HasValue ? "&date=" + sessionDate.Value.ToString("yyyyMMdd") : "")))
             {
                 var envelope = await GetJsonAsync(request, cancellationToken).ConfigureAwait(false);
                 if (envelope.Value<bool?>("ok") != true || !(envelope["data"] is JObject data))

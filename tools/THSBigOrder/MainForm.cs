@@ -65,6 +65,9 @@ namespace THSBigOrder
         private readonly BigOrderAnnouncementTracker _announcementTracker =
             new BigOrderAnnouncementTracker();
         private bool _voiceReenableBarrier;
+        private bool _historyMode;
+        private bool _savedAutoRefresh;
+        private bool _savedVoice;
 
         // 自定义滚动条
         private Panel _scrollTrack;
@@ -130,6 +133,13 @@ namespace THSBigOrder
         internal bool FollowTdxChecked => chkFollowTdx.Checked;
         internal bool FollowHotlistChecked => chkFollowHotlist.Checked;
         internal int DataSourceSelectedIndex => cboDataSource.SelectedIndex;
+        internal DateTime SessionDate
+        {
+            get => dtpSessionDate.Value.Date;
+            set => dtpSessionDate.Value = value.Date > DateTime.Today ? DateTime.Today : value.Date;
+        }
+        internal bool AutoRefreshEnabled => chkAutoRefresh.Checked && chkAutoRefresh.Enabled;
+        internal bool VoiceEnabled => chkVoice.Checked && chkVoice.Enabled;
         internal int StockNameCodeGap => txtStockCode.Left - lblStockName.Right;
         internal string InputStockCodeText
         {
@@ -175,6 +185,30 @@ namespace THSBigOrder
             provider.DataSource = cboDataSource.SelectedIndex == 0
                 ? BigOrderDataSource.Longhu
                 : BigOrderDataSource.Ths;
+            _voiceService?.CancelPending();
+            _announcementTracker.Reset();
+            ClearBigOrderViewForSourceChange();
+            await RefreshDataAsync(true);
+        }
+
+        private async void dtpSessionDate_ValueChanged(object sender, EventArgs e)
+        {
+            var historical = dtpSessionDate.Value.Date != DateTime.Today;
+            if (historical && !_historyMode)
+            {
+                _savedAutoRefresh = chkAutoRefresh.Checked;
+                _savedVoice = chkVoice.Checked;
+                chkAutoRefresh.Checked = false;
+                chkVoice.Checked = false;
+            }
+            else if (!historical && _historyMode)
+            {
+                chkAutoRefresh.Checked = _savedAutoRefresh;
+                chkVoice.Checked = _savedVoice;
+            }
+            _historyMode = historical;
+            chkAutoRefresh.Enabled = !historical;
+            chkVoice.Enabled = !historical;
             _voiceService?.CancelPending();
             _announcementTracker.Reset();
             ClearBigOrderViewForSourceChange();
@@ -587,7 +621,15 @@ namespace THSBigOrder
             {
                 lblStatus.Text = "刷新中...";
                 lblStatus.ForeColor = Color.Yellow;
-                var snapshot = await _dataProvider.LoadSnapshotAsync(request.StockCode, request.CancellationToken);
+                var sessionProvider = _dataProvider as ISessionMarketSnapshotProvider;
+                var snapshot = sessionProvider == null
+                    ? await _dataProvider.LoadSnapshotAsync(request.StockCode, request.CancellationToken)
+                    : await sessionProvider.LoadSnapshotAsync(new MarketLoadRequest
+                    {
+                        StockCode = request.StockCode,
+                        RequestedDate = dtpSessionDate.Value.Date,
+                        SessionDate = dtpSessionDate.Value.Date,
+                    }, request.CancellationToken);
                 if (!_refreshCoordinator.IsLatest(request.Generation, snapshot.StockCode)) return;
                 BindSnapshot(snapshot);
             }
@@ -634,7 +676,7 @@ namespace THSBigOrder
                     snapshot.MinuteTurnover,
                     snapshot.MinuteTurnoverFreshness));
             bigOrderChart.SetOrderMarkerFilter(_currentMoney, _orderSide);
-            AnnounceNewOrders(newOrders);
+            if (!_historyMode) AnnounceNewOrders(newOrders);
             lblStatus.Text = string.Format("共 {0} 条", _filteredData.Count);
             lblStatus.ForeColor = snapshot.BigOrderFreshness == DataFreshness.Fresh ? Color.LightGreen : Color.Orange;
             toolStripStatusLabel2.Text = "数据时间: " + snapshot.BigOrderFetchedAt.ToString("yyyy-MM-dd HH:mm:ss");

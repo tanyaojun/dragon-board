@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 
 from backend.api.fusion_strategy_projection_routes import router as fusion_strategy_projection_router
+from backend.api.big_order_history_routes import router as big_order_history_router
 from backend.api.hotlist_routes import router as hotlist_router
 from backend.api.journal_routes import router as journal_router
 from backend.api.snapshot_collector_routes import router as snapshot_collector_router
@@ -81,6 +82,7 @@ app.add_middleware(
 )
 
 app.include_router(journal_router)
+app.include_router(big_order_history_router)
 app.include_router(hotlist_router)
 app.include_router(fusion_strategy_projection_router)
 app.include_router(snapshot_collector_router)

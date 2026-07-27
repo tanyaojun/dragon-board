@@ -17,7 +17,7 @@ namespace THSBigOrder
         Longhu,
     }
 
-    public class THSBigOrderDataProvider : IMarketSnapshotProvider, IDisposable
+    public class THSBigOrderDataProvider : ISessionMarketSnapshotProvider, IDisposable
     {
         private readonly HttpClient _httpClient;
         private readonly HttpClient _longhuHttpClient;
@@ -28,6 +28,7 @@ namespace THSBigOrder
         private readonly IMarketSourceClient<StockSummary> _quoteSource;
         private readonly IMarketSourceClient<IReadOnlyList<MinuteTurnoverPoint>> _minuteSource;
         private readonly IMarketSourceClient<LimitUpSourceData> _limitUpSource;
+        private readonly BigOrderHistorySourceClient _historyBigOrderSource;
         private readonly Dictionary<string, SourceLoadResult<BigOrderSourceData>> _bigOrderCache =
             new Dictionary<string, SourceLoadResult<BigOrderSourceData>>();
         private readonly Dictionary<string, SourceLoadResult<StockSummary>> _quoteCache =
@@ -59,6 +60,7 @@ namespace THSBigOrder
             _quoteSource = new SinaQuoteSourceClient(_httpClient, proxyBase, parser);
             _minuteSource = new TdxMinuteSourceClient(_httpClient, bridgeBase, parser);
             _limitUpSource = new ThsLimitUpSourceClient(_httpClient, proxyBase, parser);
+            _historyBigOrderSource = new BigOrderHistorySourceClient(_httpClient, thsBase, parser);
         }
 
         internal THSBigOrderDataProvider(
@@ -87,22 +89,52 @@ namespace THSBigOrder
 
         public async Task<MarketSnapshot> LoadSnapshotAsync(string stockCode, CancellationToken cancellationToken)
         {
+            return await LoadSnapshotCoreAsync(stockCode, null, cancellationToken).ConfigureAwait(false);
+        }
+
+        public async Task<MarketSnapshot> LoadSnapshotAsync(
+            MarketLoadRequest request, CancellationToken cancellationToken)
+        {
+            if (request == null) throw new ArgumentNullException(nameof(request));
+            return await LoadSnapshotCoreAsync(request.StockCode, request.SessionDate.Date, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        private async Task<MarketSnapshot> LoadSnapshotCoreAsync(
+            string stockCode, DateTime? requestedSessionDate, CancellationToken cancellationToken)
+        {
             if (string.IsNullOrWhiteSpace(stockCode) || stockCode.Length != 6 || !stockCode.All(char.IsDigit))
                 throw new ArgumentException("stockCode 必须是六位数字", nameof(stockCode));
 
             var selectedSource = DataSource;
             var useLonghu = selectedSource == BigOrderDataSource.Longhu;
             var selectedBigOrderSource = useLonghu ? _longhuBigOrderSource : _thsBigOrderSource;
-            var bigTask = _bigOrderProxyPrimary
+            var historical = requestedSessionDate.HasValue && requestedSessionDate.Value.Date != DateTime.Today;
+            var minuteTask = historical && _minuteSource is TdxMinuteSourceClient datedMinuteSource
+                ? datedMinuteSource.LoadDirectAsync(stockCode, requestedSessionDate, cancellationToken)
+                : LoadDirectFirstAsync(_minuteSource, stockCode, cancellationToken);
+            if (historical)
+            {
+                await minuteTask.ConfigureAwait(false);
+                var resolvedSessionDate = InferMinuteSessionDate(minuteTask.Result.Data);
+                if (!resolvedSessionDate.HasValue)
+                    throw new InvalidOperationException("历史分时未返回有效交易日期");
+                requestedSessionDate = resolvedSessionDate.Value.Date;
+            }
+            var bigTask = historical && _historyBigOrderSource != null
+                ? _historyBigOrderSource.LoadAsync(selectedSource, stockCode, requestedSessionDate.Value, cancellationToken)
+                : _bigOrderProxyPrimary
                 ? LoadProxyPrimaryAsync(selectedBigOrderSource, stockCode, cancellationToken)
                 : LoadDirectFirstAsync(selectedBigOrderSource, stockCode, cancellationToken);
             var summaryTask = useLonghu
-                ? (_bigOrderProxyPrimary
+                ? (historical && _historyBigOrderSource != null
+                    ? _historyBigOrderSource.LoadAsync(
+                        BigOrderDataSource.Ths, stockCode, requestedSessionDate.Value, cancellationToken)
+                    : _bigOrderProxyPrimary
                     ? LoadProxyPrimaryAsync(_thsBigOrderSource, stockCode, cancellationToken)
                     : LoadDirectFirstAsync(_thsBigOrderSource, stockCode, cancellationToken))
                 : null;
             var quoteTask = LoadDirectFirstAsync(_quoteSource, stockCode, cancellationToken);
-            var minuteTask = LoadDirectFirstAsync(_minuteSource, stockCode, cancellationToken);
             var limitTask = LoadDirectFirstAsync(_limitUpSource, stockCode, cancellationToken);
             var tasks = new List<Task> { bigTask, quoteTask, minuteTask, limitTask };
             if (summaryTask != null) tasks.Add(summaryTask);
@@ -115,8 +147,10 @@ namespace THSBigOrder
             var quote = quoteTask.Result;
             var minute = minuteTask.Result;
             var limit = limitTask.Result;
-            var selectedCacheKey = (useLonghu ? "longhu-orders:" : "ths-orders:") + stockCode;
-            var thsCacheKey = "ths-summary:" + stockCode;
+            var cacheDate = requestedSessionDate.HasValue
+                ? ":" + requestedSessionDate.Value.ToString("yyyyMMdd") : "";
+            var selectedCacheKey = (useLonghu ? "longhu-orders:" : "ths-orders:") + stockCode + cacheDate;
+            var thsCacheKey = "ths-summary:" + stockCode + cacheDate;
             var thsSessionDate = (useLonghu ? summary.Data?.SessionDate : big.Data?.SessionDate) ??
                 CachedSessionDate(_bigOrderCache, useLonghu ? thsCacheKey : selectedCacheKey);
             var selectedSessionDate = big.Data?.SessionDate ?? thsSessionDate ??
@@ -134,12 +168,12 @@ namespace THSBigOrder
                 thsSessionDate,
                 BigOrderLastGoodMaxAge(DateTime.Now, thsSessionDate));
             ApplyStaleFallback(_quoteCache, stockCode, quote);
-            ApplyMinuteStaleFallback(_minuteCache, stockCode, minute, thsSessionDate, DateTime.Now);
+            ApplyMinuteStaleFallback(_minuteCache, stockCode + cacheDate, minute, thsSessionDate, DateTime.Now);
             ApplyStaleFallback(_limitCache, stockCode, limit);
 
             var minuteSessionDate = InferMinuteSessionDate(minute.Data);
-            RejectStaleBigOrderSession(big, minuteSessionDate, DateTime.Now);
-            RejectStaleBigOrderSession(summary, minuteSessionDate, DateTime.Now);
+            RejectStaleBigOrderSession(big, minuteSessionDate, requestedSessionDate ?? DateTime.Now.Date);
+            RejectStaleBigOrderSession(summary, minuteSessionDate, requestedSessionDate ?? DateTime.Now.Date);
 
             var bigData = MergeBigOrderData(big.Data, summary.Data);
             var stock = quote.Data ?? new StockSummary { Code = stockCode };
@@ -289,9 +323,9 @@ namespace THSBigOrder
         private static void RejectStaleBigOrderSession(
             SourceLoadResult<BigOrderSourceData> result,
             DateTime? minuteSessionDate,
-            DateTime now)
+            DateTime expectedSessionDate)
         {
-            if (!minuteSessionDate.HasValue || minuteSessionDate.Value.Date != now.Date ||
+            if (!minuteSessionDate.HasValue || minuteSessionDate.Value.Date != expectedSessionDate.Date ||
                 result?.Data?.SessionDate.HasValue != true ||
                 result.Data.SessionDate.Value.Date == minuteSessionDate.Value.Date)
                 return;

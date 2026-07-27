@@ -67,6 +67,8 @@ internal static class Program
         Run("TDX minute parser accepts only the normalized bridge contract", TestNormalizedTdxMinuteParsing);
         Run("TDX minute rejects incomplete completed sessions", () =>
             TestIncompleteCompletedMinuteRejected().GetAwaiter().GetResult());
+        Run("TDX minute client sends the requested session date", () =>
+            TestDatedMinuteRequest().GetAwaiter().GetResult());
         Run("Direct THS payload parsers distinguish empty limit-up", TestDirectThsParsing);
         Run("Direct source clients use upstream and matching proxy contracts", () => TestDirectSourceClients().GetAwaiter().GetResult());
         Run("Limit-up source falls back to latest recent trading date", () => TestLimitUpDateFallback().GetAwaiter().GetResult());
@@ -335,6 +337,19 @@ internal static class Program
             AssertTrue(bigRecord.Referer.Contains("10jqka"), "THS referer");
             var tencentQuoteRecord = handler.Records.First(x => x.Uri.Host == "qt.gtimg.cn");
             AssertTrue(tencentQuoteRecord.Referer.Contains("qq.com"), "Tencent quote referer");
+        }
+    }
+
+    private static async Task TestDatedMinuteRequest()
+    {
+        var handler = new SourceClientHandler();
+        using (var http = new HttpClient(handler))
+        {
+            var minute = new TdxMinuteSourceClient(http, "http://127.0.0.1:8765", new ThsPayloadParser());
+            await minute.LoadDirectAsync("002297", new DateTime(2026, 6, 18), CancellationToken.None);
+            AssertTrue(handler.Records.Any(x =>
+                x.Uri.PathAndQuery == "/api/quotes/minute?code=002297&date=20260618"),
+                "dated TDX minute bridge path");
         }
     }
 

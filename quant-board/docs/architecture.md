@@ -551,3 +551,9 @@ snapshot_type = half_hour
 - 不把优化结果自动写回 dragon-board、QuantBoard、API、CLI 或前端表单默认参数。
 - 不在 Dragon Board 根项目重建回测模块。
 - 不为了前端演示绕过 golden 校验和质量门禁。
+
+## THSBigOrder 本地历史归档
+
+`backend.big_order_archive_service.BigOrderArchiveService` 是独立的只读文件适配层，供桌面端历史会话查看使用。它从 `quant-board/data/big-order` 精确读取龙虎或 THS gzip 文件，验证归档中的 `sessionDate`、`stockCode`、`source` 和数据结构，再由 `/api/big-order/history` 返回原始归档。
+
+该链路不写 MongoDB，不参与快照事实、RankTrend、回测或优化，也不扫描或回退其他交易日期。缺档和损坏必须结构化失败，避免把其他交易日的大单叠加到所选分钟线。

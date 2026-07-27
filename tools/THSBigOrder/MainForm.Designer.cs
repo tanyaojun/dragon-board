@@ -60,6 +60,7 @@ namespace THSBigOrder
         // 操作控件
         this.txtStockCode = new System.Windows.Forms.TextBox();
         this.cboDataSource = new System.Windows.Forms.ComboBox();
+        this.dtpSessionDate = new System.Windows.Forms.DateTimePicker();
         this.btnRefresh = new System.Windows.Forms.Button();
         this.chkAutoRefresh = new System.Windows.Forms.CheckBox();
         this.chkFollowTdx = new System.Windows.Forms.CheckBox();
@@ -163,6 +164,17 @@ namespace THSBigOrder
         this.cboDataSource.SelectedIndex = 0;
         this.cboDataSource.SelectedIndexChanged +=
             new System.EventHandler(this.cboDataSource_SelectedIndexChanged);
+
+        this.dtpSessionDate.CalendarForeColor = System.Drawing.Color.White;
+        this.dtpSessionDate.CalendarMonthBackground = System.Drawing.Color.FromArgb(40, 40, 50);
+        this.dtpSessionDate.CustomFormat = "yyyy/MM/dd";
+        this.dtpSessionDate.Format = System.Windows.Forms.DateTimePickerFormat.Custom;
+        this.dtpSessionDate.Font = new System.Drawing.Font("Microsoft YaHei", 9F);
+        this.dtpSessionDate.Location = new System.Drawing.Point(col1 + 90, row2 + 8);
+        this.dtpSessionDate.MaxDate = System.DateTime.Today;
+        this.dtpSessionDate.Size = new System.Drawing.Size(105, 25);
+        this.dtpSessionDate.Value = System.DateTime.Today;
+        this.dtpSessionDate.ValueChanged += new System.EventHandler(this.dtpSessionDate_ValueChanged);
 
         // === 第二列：数据信息 + 操作按钮 ===
         // lblChange (涨幅) - 第一行
@@ -480,6 +492,7 @@ namespace THSBigOrder
         this.panelTop.Controls.Add(this.lblTotalAmount);
         this.panelTop.Controls.Add(this.txtStockCode);
         this.panelTop.Controls.Add(this.cboDataSource);
+        this.panelTop.Controls.Add(this.dtpSessionDate);
         this.panelTop.Controls.Add(this.lblRefresh);
         this.panelTop.Controls.Add(this.lblAnalysis);
         this.panelTop.Controls.Add(this.chkVoice);
@@ -600,6 +613,7 @@ namespace THSBigOrder
     // 操作控件
     private System.Windows.Forms.TextBox txtStockCode;
     private System.Windows.Forms.ComboBox cboDataSource;
+    private System.Windows.Forms.DateTimePicker dtpSessionDate;
     private System.Windows.Forms.Button btnRefresh;
     private System.Windows.Forms.Button btnAnalysis;
     private System.Windows.Forms.Label lblRefresh;

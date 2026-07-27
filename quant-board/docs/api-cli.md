@@ -2776,3 +2776,14 @@ V12 ThemeTrend 默认：
 - `config_hash` 必须包含最终 `strategy_config` 和 `trade_config`。
 - Golden 正式验收必须使用 `source=ts_golden_import`。
 - 存储、同步、快照入库、API/CLI 请求响应字段或错误结构变更时，必须同批更新相关文档。
+
+## 历史大单归档
+
+```http
+GET /api/big-order/history?source=longhu&stockCode=002297&sessionDate=2026-07-24
+GET /api/big-order/history?source=ths&stockCode=002297&sessionDate=2026-07-24
+```
+
+该接口只读 `data/big-order` 本地 gzip 归档，并按数据源、六位股票代码和 ISO 日期精确匹配。龙虎文件为 `longhu/<date>/<code>.money0.json.gz`，THS 文件为 `ths/<date>/<code>.json.gz`；不回退相邻日期。
+
+成功返回 `{ "ok": true, "data": <archive> }`。文件不存在返回 HTTP 404 和 `errorCode=archive_not_found`；gzip、JSON、元数据或 payload 结构错误返回 HTTP 422 和 `errorCode=archive_invalid`；非法数据源或股票代码返回 HTTP 422 和 `errorCode=invalid_request`。

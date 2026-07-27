@@ -13,6 +13,7 @@ from main import (
     QuoteFetchStats,
     TdxL2Bridge,
     normalize_code,
+    resolve_requested_session_date,
     resolve_minute_session_date,
 )
 from fastapi.testclient import TestClient
@@ -51,6 +52,18 @@ class QuoteSnapshotApiTest(unittest.TestCase):
             self.assertEqual(resolve_minute_session_date(before_open), ("20260723", True))
             self.assertEqual(resolve_minute_session_date(weekend), ("20260723", True))
 
+    def test_requested_non_trading_day_resolves_to_previous_sse_session(self):
+        with patch(
+            "main._is_trading_day_cached",
+            side_effect=lambda value: value.date().isoformat() == "2026-07-24",
+        ):
+            self.assertEqual(resolve_requested_session_date("20260725"), "20260724")
+
+    def test_requested_session_fails_when_calendar_is_unavailable(self):
+        with patch("main._is_trading_day_cached", return_value=None):
+            with self.assertRaisesRegex(RuntimeError, "TDX trading calendar unavailable"):
+                resolve_requested_session_date("20260724")
+
     def test_minute_endpoint_uses_realtime_mootdx_api_during_session(self):
         class TrackingLock:
             entered = False
@@ -88,6 +101,23 @@ class QuoteSnapshotApiTest(unittest.TestCase):
         self.assertEqual(data["points"][0]["cumulativeVolume"], 2)
         self.assertEqual(data["points"][0]["cumulativeAmount"], 2000)
         self.assertEqual(data["points"][1]["cumulativeAmount"], 5150)
+
+    def test_minute_endpoint_uses_requested_session_date_for_historical_data(self):
+        class FakeQuoteClient:
+            def minutes(self, *, symbol, date):
+                self.symbol = symbol
+                self.date = date
+                return [{"price": 10.0, "vol": 2}]
+
+        quote_client = FakeQuoteClient()
+        self.bridge.quote_client = quote_client
+        with patch("main.resolve_requested_session_date", return_value="20260724"):
+            response = self.client.get("/api/quotes/minute?code=002297&date=20260725")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(quote_client.symbol, "002297")
+        self.assertEqual(quote_client.date, "20260724")
+        self.assertEqual(response.json()["data"]["date"], "20260724")
 
     def test_minute_endpoint_marks_incomplete_completed_session_without_padding(self):
         class FakeQuoteClient:
