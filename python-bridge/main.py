@@ -2114,11 +2114,17 @@ class TdxL2Bridge:
                 async with self.fetch_lock:
                     await self.ensure_client()
                     assert self.quote_client is not None
-                    frame = await asyncio.to_thread(
-                        self.quote_client.minutes,
-                        symbol=stock_code,
-                        date=session_date,
-                    )
+                    if expected_complete:
+                        frame = await asyncio.to_thread(
+                            self.quote_client.minutes,
+                            symbol=stock_code,
+                            date=session_date,
+                        )
+                    else:
+                        frame = await asyncio.to_thread(
+                            self.quote_client.minute,
+                            symbol=stock_code,
+                        )
                 records = frame_to_records(frame)
                 if len(records) > 240:
                     raise ValueError("invalid minute point count")

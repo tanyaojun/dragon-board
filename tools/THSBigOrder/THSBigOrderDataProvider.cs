@@ -137,6 +137,10 @@ namespace THSBigOrder
             ApplyMinuteStaleFallback(_minuteCache, stockCode, minute, thsSessionDate, DateTime.Now);
             ApplyStaleFallback(_limitCache, stockCode, limit);
 
+            var minuteSessionDate = InferMinuteSessionDate(minute.Data);
+            RejectStaleBigOrderSession(big, minuteSessionDate, DateTime.Now);
+            RejectStaleBigOrderSession(summary, minuteSessionDate, DateTime.Now);
+
             var bigData = MergeBigOrderData(big.Data, summary.Data);
             var stock = quote.Data ?? new StockSummary { Code = stockCode };
             var limitContext = limit.Data?.Context ?? new LimitUpContext();
@@ -282,6 +286,22 @@ namespace THSBigOrder
             return dates.Length == 1 ? (DateTime?)dates[0] : null;
         }
 
+        private static void RejectStaleBigOrderSession(
+            SourceLoadResult<BigOrderSourceData> result,
+            DateTime? minuteSessionDate,
+            DateTime now)
+        {
+            if (!minuteSessionDate.HasValue || minuteSessionDate.Value.Date != now.Date ||
+                result?.Data?.SessionDate.HasValue != true ||
+                result.Data.SessionDate.Value.Date == minuteSessionDate.Value.Date)
+                return;
+
+            result.Data = null;
+            result.Freshness = DataFreshness.Stale;
+            result.Transport = DataTransport.Stale;
+            result.Error = "big-order session does not match current minute session";
+        }
+
         private static DateTime? CachedSessionDate(
             IDictionary<string, SourceLoadResult<BigOrderSourceData>> cache,
             string key)
@@ -372,9 +392,11 @@ namespace THSBigOrder
                 result.Transport == DataTransport.ProxyFallback)
             {
                 var resultDate = InferMinuteSessionDate(result.Data);
-                if (expectedSessionDate.HasValue &&
-                    resultDate.HasValue &&
-                    resultDate.Value.Date == expectedSessionDate.Value.Date)
+                var matchesExpectedSession = expectedSessionDate.HasValue &&
+                                             resultDate.HasValue &&
+                                             resultDate.Value.Date == expectedSessionDate.Value.Date;
+                var isCurrentSession = resultDate.HasValue && resultDate.Value.Date == now.Date;
+                if (matchesExpectedSession || isCurrentSession)
                 {
                     CacheSuccessful(cache, key, result);
                     return;

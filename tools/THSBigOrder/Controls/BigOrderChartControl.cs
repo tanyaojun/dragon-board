@@ -46,6 +46,8 @@ namespace THSBigOrder.Controls
         private double _axisMinimum = -1;
         private double _axisMaximum = 1;
         private double? _previousClose;
+        private DateTime? _minuteSessionDate;
+        private bool _hasMinutePriceData;
 
         public BigOrderChartControl()
         {
@@ -93,6 +95,7 @@ namespace THSBigOrder.Controls
         private void RebuildVisibleOrderEvents()
         {
             _visibleOrderEvents = (_series?.BigOrderEvents ?? new BigOrderEventPoint[0])
+                .Where(item => IsCurrentMinuteSession(item.Time))
                 .Where(item => item.Amount >= _minimumOrderAmount)
                 .Where(item => item.Type == 2 || item.Type == 4)
                 .Where(item => _orderSide == OrderSide.All ||
@@ -186,6 +189,8 @@ namespace THSBigOrder.Controls
             _minutePriceLinePercents.Clear();
             _bigOrderLinePercents.Clear();
             _previousClose = null;
+            _minuteSessionDate = null;
+            _hasMinutePriceData = false;
 
             if (_snapshot?.Stock?.Price != null && _snapshot.Stock.ChangePercent.HasValue)
             {
@@ -211,6 +216,13 @@ namespace THSBigOrder.Controls
             if (_previousClose.HasValue)
             {
                 var minutePrices = _series?.MinutePrices ?? new AveragePricePoint[0];
+                var minuteSessions = minutePrices
+                    .Where(point => IsFinite(point.Price) && point.Price > 0)
+                    .Select(point => point.Time.Date)
+                    .Distinct()
+                    .ToList();
+                _hasMinutePriceData = minuteSessions.Count > 0;
+                _minuteSessionDate = minuteSessions.Count == 1 ? (DateTime?)minuteSessions[0] : null;
                 _minutePriceLinePercents.AddRange(
                     minutePrices
                         .Where(point => IsFinite(point.Price) && point.Price > 0)
@@ -224,7 +236,8 @@ namespace THSBigOrder.Controls
 
                 _bigOrderLinePercents.AddRange(
                     (_series?.BigOrderAveragePrices ?? new AveragePricePoint[0])
-                        .Where(point => IsFinite(point.Price) && point.Price > 0)
+                        .Where(point => IsCurrentMinuteSession(point.Time) &&
+                                        IsFinite(point.Price) && point.Price > 0)
                         .OrderBy(point => point.Time)
                         .Select(point => new ChartLinePoint
                         {
@@ -237,7 +250,10 @@ namespace THSBigOrder.Controls
             if (_minutePriceLinePercents.Count < 2)
             {
                 var fallback = (_snapshot?.Prices ?? new PricePoint[0])
-                    .Where(point => IsFinite(point.ChangePercent))
+                    .Where(point =>
+                        _snapshot.BigOrderSessionDate.HasValue &&
+                        point.Time.Date == _snapshot.BigOrderSessionDate.Value.Date &&
+                        IsFinite(point.ChangePercent))
                     .OrderBy(point => point.Time)
                     .Select(point => new ChartLinePoint
                     {
@@ -251,6 +267,12 @@ namespace THSBigOrder.Controls
                     _minutePriceLinePercents.AddRange(fallback);
                 }
             }
+        }
+
+        private bool IsCurrentMinuteSession(DateTime time)
+        {
+            return !_hasMinutePriceData ||
+                   _minuteSessionDate.HasValue && time.Date == _minuteSessionDate.Value;
         }
 
         private void RebuildHeatRatios()
@@ -397,7 +419,8 @@ namespace THSBigOrder.Controls
             foreach (var item in _visibleOrderEvents)
             {
                 var percent = MinutePercentAt(item.Time);
-                if (!percent.HasValue && IsFinite(item.AveragePrice) && item.AveragePrice > 0)
+                if (!percent.HasValue && !_hasMinutePriceData &&
+                    IsFinite(item.AveragePrice) && item.AveragePrice > 0)
                     percent = (item.AveragePrice / _previousClose.Value - 1d) * 100d;
                 if (!percent.HasValue) continue;
                 if (!IsFinite(percent.Value)) continue;

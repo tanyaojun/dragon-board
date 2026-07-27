@@ -657,7 +657,8 @@ namespace THSBigOrder
             lblFreshness.Text = snapshot.Transports.Summary;
             lblFreshness.ForeColor =
                 snapshot.Transports.Summary == "直连" ||
-                snapshot.Transports.Summary.StartsWith("代理通道:", StringComparison.Ordinal)
+                snapshot.Transports.Summary.StartsWith("代理通道:", StringComparison.Ordinal) ||
+                snapshot.Transports.Summary.StartsWith("备用通道:", StringComparison.Ordinal)
                     ? Color.LightGreen
                     : Color.Orange;
         }

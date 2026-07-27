@@ -86,6 +86,8 @@ internal static class Program
         Run("Minute last-good reuses the same completed session within seven days", () => TestMinuteLastGoodSameSession().GetAwaiter().GetResult());
         Run("Minute last-good rejects a different authoritative session", () => TestMinuteLastGoodCrossSession().GetAwaiter().GetResult());
         Run("Successful minute response rejects a different authoritative session", () => TestSuccessfulMinuteCrossSession().GetAwaiter().GetResult());
+        Run("Current-day minute response overrides a stale THS session", () =>
+            TestCurrentMinuteOverridesStaleThsSession().GetAwaiter().GetResult());
         Run("Minute response without an authoritative THS session is rejected", () =>
             TestMinuteWithoutAuthoritativeSessionRejected().GetAwaiter().GetResult());
         Run("Minute last-good rejects completed sessions older than seven days", () => TestMinuteLastGoodExpiredCompletedSession().GetAwaiter().GetResult());
@@ -103,7 +105,9 @@ internal static class Program
         Run("Chart control exposes paired axes and intraday grids", TestIntradayChartLayout);
         Run("Chart control maps both average prices to one axis", TestAveragePriceAxis);
         Run("Chart control draws minute price white and big-order average blue", TestMinutePriceChartLine);
+        Run("Chart control hides cross-session big-order lines and markers", TestCrossSessionBigOrdersHidden);
         Run("Chart control uses THS percent only as white price fallback", TestThsPriceFallback);
+        Run("Chart control rejects previous-session THS price fallback", TestCrossSessionThsPriceFallback);
         Run("Chart control paints a drawable white line without other data", TestWhiteLineOnlyPaints);
         Run("Chart control normalizes half-hour heat rows independently", TestHalfHourHeatRatios);
         Run("Chart heat colors distinguish net buy and net sell", TestHalfHourHeatColors);
@@ -587,6 +591,28 @@ internal static class Program
                 "rejected minute response is not cached");
             AssertEqual(0, failed.MinuteTurnover.Count,
                 "rejected minute response cannot become stale");
+        }
+    }
+
+    private static async Task TestCurrentMinuteOverridesStaleThsSession()
+    {
+        var today = DateTime.Now.Date;
+        var sources = CreateSourceStubs();
+        sources.Big.Direct = _ => Task.FromResult(BigOrderResult(today.AddDays(-3)));
+        sources.Minute.Direct = _ => Task.FromResult(MinuteResult(today, DateTime.Now));
+        using (var provider = CreateProvider(sources))
+        {
+            var snapshot = await provider.LoadSnapshotAsync("002297", CancellationToken.None);
+            AssertEqual(DataFreshness.Fresh, snapshot.MinuteTurnoverFreshness,
+                "current-day minute freshness");
+            AssertEqual(DataTransport.Direct, snapshot.Transports.Minute,
+                "current-day minute transport");
+            AssertEqual(1, snapshot.MinuteTurnover.Count,
+                "current-day minute points retained");
+            AssertEqual(0, snapshot.Orders.Count,
+                "current-day minute rejects stale big-order session");
+            AssertEqual(DataTransport.Stale, snapshot.Transports.BigOrder,
+                "stale big-order transport");
         }
     }
 
@@ -1074,6 +1100,25 @@ internal static class Program
         }
     }
 
+    private static void TestCrossSessionBigOrdersHidden()
+    {
+        var day = new DateTime(2026, 6, 20);
+        var series = CreateOrderEventSeries(day.AddDays(-1));
+        series.MinutePrices = new[]
+        {
+            new AveragePricePoint { Time = day.AddHours(9).AddMinutes(31), Price = 10.1 },
+            new AveragePricePoint { Time = day.AddHours(9).AddMinutes(32), Price = 10.1 },
+        };
+
+        using (var control = new BigOrderChartControl { Size = new Size(800, 600) })
+        {
+            control.SetSnapshot(CreateChartSnapshot(day, new PricePoint[0]), series);
+            control.SetOrderMarkerFilter(1000000, OrderSide.All);
+            AssertEqual(0, control.BigOrderLinePercents.Count, "cross-session big-order line hidden");
+            AssertEqual(0, control.VisibleOrderEvents.Count, "cross-session big-order markers hidden");
+        }
+    }
+
     private static void TestThsPriceFallback()
     {
         var day = new DateTime(2026, 6, 20);
@@ -1138,6 +1183,24 @@ internal static class Program
         }
     }
 
+    private static void TestCrossSessionThsPriceFallback()
+    {
+        var day = new DateTime(2026, 6, 20);
+        var previousDay = day.AddDays(-1);
+        var snapshot = CreateChartSnapshot(day, new[]
+        {
+            new PricePoint { Time = previousDay.AddHours(9).AddMinutes(30), ChangePercent = 1.25 },
+            new PricePoint { Time = previousDay.AddHours(9).AddMinutes(31), ChangePercent = 2.5 },
+        });
+
+        using (var control = new BigOrderChartControl())
+        {
+            control.SetSnapshot(snapshot, new BigOrderSeriesBuilder().Build(new BigOrderItem[0]));
+            AssertEqual(0, control.MinutePriceLinePercents.Count,
+                "previous-session THS white line rejected");
+        }
+    }
+
     private static MarketSnapshot CreateChartSnapshot(
         DateTime day, IReadOnlyList<PricePoint> prices)
     {
@@ -1148,11 +1211,14 @@ internal static class Program
             new LimitUpContext(),
             new BigOrderItem[0],
             prices,
+            new MinuteTurnoverPoint[0],
             DataFreshness.Fresh,
             DataFreshness.Fresh,
             DataFreshness.Missing,
+            DataFreshness.Missing,
             day.AddHours(10),
-            day.AddHours(10));
+            day.AddHours(10),
+            bigOrderSessionDate: day);
     }
 
     private static void TestHalfHourHeatRatios()
@@ -1664,7 +1730,7 @@ internal static class Program
         using (var form = new MainForm(new ImmediateProvider(snapshot), false))
         {
             await form.RefreshStockAsync("002297", true);
-            AssertEqual("代理降级: 分时", form.FreshnessText, "source status text");
+            AssertEqual("备用通道: 分时", form.FreshnessText, "source status text");
             AssertEqual("换手: -", form.TurnoverText, "missing turnover text");
             AssertEqual("量比: -", form.VolumeRatioText, "missing volume ratio text");
         }

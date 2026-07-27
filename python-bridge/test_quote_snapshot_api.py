@@ -51,7 +51,7 @@ class QuoteSnapshotApiTest(unittest.TestCase):
             self.assertEqual(resolve_minute_session_date(before_open), ("20260723", True))
             self.assertEqual(resolve_minute_session_date(weekend), ("20260723", True))
 
-    def test_minute_endpoint_uses_public_mootdx_api_under_fetch_lock(self):
+    def test_minute_endpoint_uses_realtime_mootdx_api_during_session(self):
         class TrackingLock:
             entered = False
 
@@ -64,9 +64,8 @@ class QuoteSnapshotApiTest(unittest.TestCase):
         lock = TrackingLock()
 
         class FakeQuoteClient:
-            def minutes(self, *, symbol, date):
+            def minute(self, *, symbol):
                 self.symbol = symbol
-                self.date = date
                 assert lock.entered
                 return [
                     {"price": 10.0, "vol": 2},
@@ -83,7 +82,6 @@ class QuoteSnapshotApiTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         data = response.json()["data"]
         self.assertEqual(quote_client.symbol, "002297")
-        self.assertEqual(quote_client.date, "20260724")
         self.assertEqual(data["date"], "20260724")
         self.assertFalse(data["complete"])
         self.assertFalse(data["expectedComplete"])
@@ -123,8 +121,8 @@ class QuoteSnapshotApiTest(unittest.TestCase):
 
     def test_minute_endpoint_rejects_negative_volume(self):
         class FakeQuoteClient:
-            def minutes(self, *, symbol, date):
-                del symbol, date
+            def minute(self, *, symbol):
+                del symbol
                 return [{"price": 10.0, "vol": -1}]
 
         self.bridge.quote_client = FakeQuoteClient()
@@ -151,8 +149,8 @@ class QuoteSnapshotApiTest(unittest.TestCase):
                 with guard:
                     active -= 1
 
-            def minutes(self, *, symbol, date):
-                del symbol, date
+            def minute(self, *, symbol):
+                del symbol
                 self._track()
                 return [{"price": 10.0, "vol": 1}]
 
