@@ -69,6 +69,11 @@ internal static class Program
             TestIncompleteCompletedMinuteRejected().GetAwaiter().GetResult());
         Run("TDX minute client sends the requested session date", () =>
             TestDatedMinuteRequest().GetAwaiter().GetResult());
+        Run("TDX minute client rejects a bridge that ignores historical dates", () =>
+            TestDatedMinuteRejectsNewerSession().GetAwaiter().GetResult());
+        Run("Big-order history client explains a missing backend route", () =>
+            TestMissingHistoryRouteMessage().GetAwaiter().GetResult());
+        Run("Main form resolves the displayed historical session date", TestResolvedSessionDateBinding);
         Run("Direct THS payload parsers distinguish empty limit-up", TestDirectThsParsing);
         Run("Direct source clients use upstream and matching proxy contracts", () => TestDirectSourceClients().GetAwaiter().GetResult());
         Run("Limit-up source falls back to latest recent trading date", () => TestLimitUpDateFallback().GetAwaiter().GetResult());
@@ -351,6 +356,80 @@ internal static class Program
                 x.Uri.PathAndQuery == "/api/quotes/minute?code=002297&date=20260618"),
                 "dated TDX minute bridge path");
         }
+    }
+
+    private static async Task TestDatedMinuteRejectsNewerSession()
+    {
+        var handler = new SourceClientHandler { MinuteSessionDate = "20260727" };
+        using (var http = new HttpClient(handler))
+        {
+            var minute = new TdxMinuteSourceClient(
+                http, "http://127.0.0.1:8765", new ThsPayloadParser());
+            try
+            {
+                await minute.LoadDirectAsync(
+                    "002297", new DateTime(2026, 7, 21), CancellationToken.None);
+            }
+            catch (PayloadParseException error)
+            {
+                AssertEqual("行情桥未支持历史日期，请重启 python-bridge", error.Message,
+                    "old bridge message");
+                return;
+            }
+        }
+        throw new InvalidOperationException("newer minute session must be rejected");
+    }
+
+    private static async Task TestMissingHistoryRouteMessage()
+    {
+        using (var http = new HttpClient(new MissingHistoryRouteHandler()))
+        {
+            var history = new BigOrderHistorySourceClient(
+                http, "http://127.0.0.1:8000", new ThsPayloadParser());
+            try
+            {
+                await history.LoadAsync(
+                    BigOrderDataSource.Ths, "002297", new DateTime(2026, 7, 21),
+                    CancellationToken.None);
+            }
+            catch (PayloadParseException error)
+            {
+                AssertEqual("QuantBoard 后端未加载历史大单接口，请重启后端", error.Message,
+                    "old backend message");
+                return;
+            }
+        }
+        throw new InvalidOperationException("missing history route must be explained");
+    }
+
+    private static void TestResolvedSessionDateBinding()
+    {
+        var resolvedDate = new DateTime(2026, 7, 17);
+        var snapshot = new MarketSnapshot(
+            "002297",
+            new StockSummary(),
+            new MainFundSummary(),
+            new LimitUpContext(),
+            new BigOrderItem[0],
+            new PricePoint[0],
+            new[]
+            {
+                new MinuteTurnoverPoint
+                {
+                    Time = resolvedDate.AddHours(9).AddMinutes(30),
+                    Price = 10,
+                },
+            },
+            DataFreshness.Fresh,
+            DataFreshness.Fresh,
+            DataFreshness.Fresh,
+            DataFreshness.Missing,
+            resolvedDate,
+            resolvedDate,
+            bigOrderSessionDate: resolvedDate);
+        AssertEqual(resolvedDate,
+            MainForm.ResolveDisplayedSessionDate(new DateTime(2026, 7, 18), snapshot),
+            "resolved date is shown");
     }
 
     private static async Task TestIncompleteCompletedMinuteRejected()
@@ -1989,6 +2068,7 @@ internal static class Program
         public bool ThsUiStale { get; set; }
         public bool MinuteExpectedComplete { get; set; }
         public bool MinuteComplete { get; set; } = true;
+        public string MinuteSessionDate { get; set; } = "20260618";
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
@@ -2027,7 +2107,7 @@ internal static class Program
                 else if (path == "/api/quotes/tencent")
                     json = "{'data':{'diff':[{'f12':'002297','f14':'博云新材','f2':28.36,'f3':10.09,'f5':3342254360,'f6':1178500,'f8':20.56,'f10':0.82}]}}";
                 else if (path == "/api/quotes/minute")
-                    json = "{'ok':true,'data':{'date':'20260618','expectedComplete':" +
+                    json = "{'ok':true,'data':{'date':'" + MinuteSessionDate + "','expectedComplete':" +
                         (MinuteExpectedComplete ? "true" : "false") + ",'complete':" +
                         (MinuteComplete ? "true" : "false") +
                         ",'points':[{'time':'0930','price':25.70,'cumulativeVolume':11848,'cumulativeAmount':30449360}]}}";
@@ -2036,6 +2116,18 @@ internal static class Program
                 content = new StringContent(json, Encoding.UTF8, "application/json");
             }
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = content });
+        }
+    }
+
+    private sealed class MissingHistoryRouteHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound)
+            {
+                Content = new StringContent("{\"detail\":\"Not Found\"}", Encoding.UTF8, "application/json"),
+            });
         }
     }
 

@@ -30,7 +30,19 @@ namespace THSBigOrder.DataSources
             using (var response = await _http.GetAsync(url, cancellationToken).ConfigureAwait(false))
             {
                 var text = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-                if (!response.IsSuccessStatusCode) throw new PayloadParseException(text);
+                if (!response.IsSuccessStatusCode)
+                {
+                    JObject errorEnvelope = null;
+                    try { errorEnvelope = JObject.Parse(text); }
+                    catch { }
+                    var errorCode = (string)errorEnvelope?["errorCode"];
+                    if (errorCode == "archive_not_found")
+                        throw new PayloadParseException("所选日期没有该股票的大单归档");
+                    if ((string)errorEnvelope?["detail"] == "Not Found")
+                        throw new PayloadParseException("QuantBoard 后端未加载历史大单接口，请重启后端");
+                    throw new PayloadParseException(
+                        (string)errorEnvelope?["error"] ?? errorCode ?? text);
+                }
                 var envelope = JObject.Parse(text);
                 var archive = envelope["data"] as JObject;
                 var payload = archive?["data"] as JObject;

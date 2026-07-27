@@ -68,6 +68,7 @@ namespace THSBigOrder
         private bool _historyMode;
         private bool _savedAutoRefresh;
         private bool _savedVoice;
+        private bool _syncingSessionDate;
 
         // 自定义滚动条
         private Panel _scrollTrack;
@@ -138,6 +139,16 @@ namespace THSBigOrder
             get => dtpSessionDate.Value.Date;
             set => dtpSessionDate.Value = value.Date > DateTime.Today ? DateTime.Today : value.Date;
         }
+        internal static DateTime ResolveDisplayedSessionDate(
+            DateTime selectedDate, MarketSnapshot snapshot)
+        {
+            var minuteDate = snapshot?.MinuteTurnover?
+                .Select(point => point.Time.Date)
+                .FirstOrDefault(date => date != DateTime.MinValue);
+            if (minuteDate.HasValue && minuteDate.Value != DateTime.MinValue)
+                return minuteDate.Value;
+            return snapshot?.BigOrderSessionDate?.Date ?? selectedDate.Date;
+        }
         internal bool AutoRefreshEnabled => chkAutoRefresh.Checked && chkAutoRefresh.Enabled;
         internal bool VoiceEnabled => chkVoice.Checked && chkVoice.Enabled;
         internal int StockNameCodeGap => txtStockCode.Left - lblStockName.Right;
@@ -193,6 +204,7 @@ namespace THSBigOrder
 
         private async void dtpSessionDate_ValueChanged(object sender, EventArgs e)
         {
+            if (_syncingSessionDate) return;
             var historical = dtpSessionDate.Value.Date != DateTime.Today;
             if (historical && !_historyMode)
             {
@@ -645,6 +657,16 @@ namespace THSBigOrder
 
         private void BindSnapshot(MarketSnapshot snapshot)
         {
+            if (_historyMode)
+            {
+                var resolvedDate = ResolveDisplayedSessionDate(dtpSessionDate.Value, snapshot);
+                if (resolvedDate != dtpSessionDate.Value.Date)
+                {
+                    _syncingSessionDate = true;
+                    try { dtpSessionDate.Value = resolvedDate; }
+                    finally { _syncingSessionDate = false; }
+                }
+            }
             _snapshot = snapshot;
             _stockInfo = new StockInfo
             {

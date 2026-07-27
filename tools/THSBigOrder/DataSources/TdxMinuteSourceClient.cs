@@ -38,6 +38,12 @@ namespace THSBigOrder.DataSources
                 var envelope = await GetJsonAsync(request, cancellationToken).ConfigureAwait(false);
                 if (envelope.Value<bool?>("ok") != true || !(envelope["data"] is JObject data))
                     throw new PayloadParseException((string)envelope["errorCode"] ?? "TDX minute unavailable");
+                if (sessionDate.HasValue &&
+                    DateTime.TryParseExact(
+                        (string)data["date"], "yyyyMMdd", null,
+                        System.Globalization.DateTimeStyles.None, out var actualDate) &&
+                    actualDate.Date > sessionDate.Value.Date)
+                    throw new PayloadParseException("行情桥未支持历史日期，请重启 python-bridge");
                 if (data.Value<bool?>("expectedComplete") == true &&
                     data.Value<bool?>("complete") != true)
                     throw new PayloadParseException("TDX completed-session minute data is incomplete");
