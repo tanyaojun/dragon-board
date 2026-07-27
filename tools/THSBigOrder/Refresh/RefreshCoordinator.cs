@@ -27,7 +27,11 @@ namespace THSBigOrder.Refresh
                 {
                     return new RefreshRequest { ShouldRun = false, StockCode = stockCode, Generation = _generation };
                 }
-                if (_active != null) _active.Cancel();
+                if (_active != null)
+                {
+                    _active.Cancel();
+                    _active.Dispose();
+                }
                 _active = new CancellationTokenSource();
                 _activeCode = stockCode;
                 _generation++;
@@ -62,9 +66,11 @@ namespace THSBigOrder.Refresh
         {
             lock (_gate)
             {
+                _generation++;
                 _active?.Cancel();
                 _active?.Dispose();
                 _active = null;
+                _activeCode = null;
             }
         }
     }

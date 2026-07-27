@@ -2128,7 +2128,15 @@ class TdxL2Bridge:
             try:
                 if date:
                     session_date = resolve_requested_session_date(date)
-                    expected_complete = True
+                    current_session_date, current_expected_complete = resolve_minute_session_date()
+                    if (
+                        date == datetime.now().astimezone().strftime("%Y%m%d")
+                        and session_date != current_session_date
+                    ):
+                        session_date = current_session_date
+                    expected_complete = not (
+                        session_date == current_session_date and not current_expected_complete
+                    )
                 else:
                     session_date, expected_complete = resolve_minute_session_date()
                 async with self.fetch_lock:

@@ -163,12 +163,17 @@ namespace THSBigOrder.Parsing
                 time = sessionDate.Value.Date.Add(time.TimeOfDay);
             }
 
+            var volume = RequiredNumber(value["volume"], "volume");
+            var amount = RequiredAmount(value["money"], value["value"]);
+            var price = RequiredNumber(value["avgprice"], "avgprice");
+            if (volume <= 0 || amount <= 0 || price <= 0)
+                throw new PayloadParseException("order price, volume and amount must be positive");
             return new BigOrderItem
             {
                 Type = type,
-                Volume = RequiredNumber(value["volume"], "volume"),
-                Amount = RequiredAmount(value["money"], value["value"]),
-                Price = RequiredNumber(value["avgprice"], "avgprice"),
+                Volume = volume,
+                Amount = amount,
+                Price = price,
                 Time = time,
             };
         }

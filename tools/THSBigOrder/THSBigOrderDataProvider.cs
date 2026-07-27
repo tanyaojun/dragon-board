@@ -89,19 +89,26 @@ namespace THSBigOrder
 
         public async Task<MarketSnapshot> LoadSnapshotAsync(string stockCode, CancellationToken cancellationToken)
         {
-            return await LoadSnapshotCoreAsync(stockCode, null, cancellationToken).ConfigureAwait(false);
+            return await LoadSnapshotCoreAsync(stockCode, null, null, cancellationToken).ConfigureAwait(false);
         }
 
         public async Task<MarketSnapshot> LoadSnapshotAsync(
             MarketLoadRequest request, CancellationToken cancellationToken)
         {
             if (request == null) throw new ArgumentNullException(nameof(request));
-            return await LoadSnapshotCoreAsync(request.StockCode, request.SessionDate.Date, cancellationToken)
+            return await LoadSnapshotCoreAsync(
+                    request.StockCode,
+                    request.RequestedDate.Date,
+                    date => request.SessionDate = date.Date,
+                    cancellationToken)
                 .ConfigureAwait(false);
         }
 
         private async Task<MarketSnapshot> LoadSnapshotCoreAsync(
-            string stockCode, DateTime? requestedSessionDate, CancellationToken cancellationToken)
+            string stockCode,
+            DateTime? requestedSessionDate,
+            Action<DateTime> sessionResolved,
+            CancellationToken cancellationToken)
         {
             if (string.IsNullOrWhiteSpace(stockCode) || stockCode.Length != 6 || !stockCode.All(char.IsDigit))
                 throw new ArgumentException("stockCode 必须是六位数字", nameof(stockCode));
@@ -109,18 +116,20 @@ namespace THSBigOrder
             var selectedSource = DataSource;
             var useLonghu = selectedSource == BigOrderDataSource.Longhu;
             var selectedBigOrderSource = useLonghu ? _longhuBigOrderSource : _thsBigOrderSource;
-            var historical = requestedSessionDate.HasValue && requestedSessionDate.Value.Date != DateTime.Today;
-            var minuteTask = historical && _minuteSource is TdxMinuteSourceClient datedMinuteSource
+            var explicitSession = requestedSessionDate.HasValue;
+            var minuteTask = explicitSession && _minuteSource is TdxMinuteSourceClient datedMinuteSource
                 ? datedMinuteSource.LoadDirectAsync(stockCode, requestedSessionDate, cancellationToken)
                 : LoadDirectFirstAsync(_minuteSource, stockCode, cancellationToken);
-            if (historical)
+            if (explicitSession)
             {
                 await minuteTask.ConfigureAwait(false);
                 var resolvedSessionDate = InferMinuteSessionDate(minuteTask.Result.Data);
                 if (!resolvedSessionDate.HasValue)
                     throw new InvalidOperationException("历史分时未返回有效交易日期");
                 requestedSessionDate = resolvedSessionDate.Value.Date;
+                sessionResolved?.Invoke(requestedSessionDate.Value);
             }
+            var historical = requestedSessionDate.HasValue && requestedSessionDate.Value.Date != DateTime.Today;
             var bigTask = historical && _historyBigOrderSource != null
                 ? _historyBigOrderSource.LoadAsync(selectedSource, stockCode, requestedSessionDate.Value, cancellationToken)
                 : _bigOrderProxyPrimary
@@ -128,7 +137,7 @@ namespace THSBigOrder
                 : LoadDirectFirstAsync(selectedBigOrderSource, stockCode, cancellationToken);
             var summaryTask = useLonghu
                 ? (historical && _historyBigOrderSource != null
-                    ? _historyBigOrderSource.LoadAsync(
+                    ? LoadOptionalHistoricalSummaryAsync(
                         BigOrderDataSource.Ths, stockCode, requestedSessionDate.Value, cancellationToken)
                     : _bigOrderProxyPrimary
                     ? LoadProxyPrimaryAsync(_thsBigOrderSource, stockCode, cancellationToken)
@@ -295,6 +304,34 @@ namespace THSBigOrder
                 Prices = summary.Prices ?? new PricePoint[0],
                 SessionDate = orders.SessionDate,
             };
+        }
+
+        private async Task<SourceLoadResult<BigOrderSourceData>> LoadOptionalHistoricalSummaryAsync(
+            BigOrderDataSource source,
+            string stockCode,
+            DateTime sessionDate,
+            CancellationToken cancellationToken)
+        {
+            try
+            {
+                return await _historyBigOrderSource.LoadAsync(
+                    source, stockCode, sessionDate, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception error)
+            {
+                return new SourceLoadResult<BigOrderSourceData>
+                {
+                    Data = new BigOrderSourceData { SessionDate = sessionDate.Date },
+                    Freshness = DataFreshness.Missing,
+                    Transport = DataTransport.Missing,
+                    FetchedAt = DateTime.Now,
+                    Error = error.Message,
+                };
+            }
         }
 
         private static SourceLoadResult<T> CopyResult<T>(SourceLoadResult<T> value)

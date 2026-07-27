@@ -41,6 +41,7 @@ internal static class Program
         Run("Big-order announcement tracker detects confirmed marker occurrences", LonghuFeatureTests.TestAnnouncementTracker);
         Run("High-confidence markers reject incomplete order-flow events", LonghuFeatureTests.TestMarkerRejections);
         Run("High-confidence markers confirm ignition, smash and attributed follow-through", LonghuFeatureTests.TestMarkerAttribution);
+        Run("Later same-direction events receive a new preview", LonghuFeatureTests.TestRepeatedEventPreview);
         Run("High-confidence markers wait until the confirmation window closes", LonghuFeatureTests.TestConfirmationWindowClosure);
         Run("High-confidence marker threshold uses prior 20-minute P90", LonghuFeatureTests.TestAdaptiveMarkerThreshold);
         Run("Capacity-aware marker previews 100w continuous orders and upgrades after confirmation", LonghuFeatureTests.TestCapacityAwarePreviewAndConfirmation);
@@ -73,6 +74,8 @@ internal static class Program
             TestDatedMinuteRejectsNewerSession().GetAwaiter().GetResult());
         Run("Big-order history client explains a missing backend route", () =>
             TestMissingHistoryRouteMessage().GetAwaiter().GetResult());
+        Run("Big-order history client rejects mixed session rows", () =>
+            TestHistoryRejectsMixedSessionRows().GetAwaiter().GetResult());
         Run("Main form resolves the displayed historical session date", TestResolvedSessionDateBinding);
         Run("Direct THS payload parsers distinguish empty limit-up", TestDirectThsParsing);
         Run("Direct source clients use upstream and matching proxy contracts", () => TestDirectSourceClients().GetAwaiter().GetResult());
@@ -84,6 +87,14 @@ internal static class Program
             TestProductionBigOrderProxyPrimary().GetAwaiter().GetResult());
         Run("Provider direct success does not call proxy", () => TestDirectSuccess().GetAwaiter().GetResult());
         Run("Provider routes Longhu orders and keeps THS summary", () => LonghuFeatureTests.TestProviderRouting().GetAwaiter().GetResult());
+        Run("Historical Longhu remains available when THS summary is missing", () =>
+            TestHistoricalLonghuWithoutThsSummary().GetAwaiter().GetResult());
+        Run("Historical Longhu remains available when THS summary request fails", () =>
+            TestHistoricalLonghuAfterThsSummaryFailure().GetAwaiter().GetResult());
+        Run("Today resolves to historical archive on a non-trading day", () =>
+            TestTodayResolvesToHistoricalSession().GetAwaiter().GetResult());
+        Run("Resolved session survives a historical archive failure", () =>
+            TestResolvedSessionSurvivesArchiveFailure().GetAwaiter().GetResult());
         Run("Provider isolates THS and Longhu order stale caches", () => LonghuFeatureTests.TestProviderCacheIsolation().GetAwaiter().GetResult());
         Run("Provider falls back only the failed source", () => TestIndependentProxyFallback().GetAwaiter().GetResult());
         Run("Provider does not fallback valid empty limit-up", () => TestValidEmptyLimitUp().GetAwaiter().GetResult());
@@ -107,12 +118,16 @@ internal static class Program
         Run("Series builder computes cumulative big-order average price", TestBigOrderAveragePrices);
         Run("Series builder aggregates eight half-hour turnover bands", TestHalfHourSeries);
         Run("Series builder does not overcount truncated minute turnover", TestHalfHourTruncatedTurnover);
+        Run("THS parser rejects non-positive order values", TestThsRejectsNonPositiveOrders);
         Run("A single large order is not an ignition or smash event", TestSingleLargeOrderDoesNotTrigger);
         Run("Chart control binds three layout bands and draws empty data", TestChartControl);
         Run("Chart control exposes paired axes and intraday grids", TestIntradayChartLayout);
         Run("Chart control maps both average prices to one axis", TestAveragePriceAxis);
         Run("Chart control draws minute price white and big-order average blue", TestMinutePriceChartLine);
         Run("Chart control hides cross-session big-order lines and markers", TestCrossSessionBigOrdersHidden);
+        Run("Chart markers interpolate sloped minute prices", TestSlopedMinuteMarkerInterpolation);
+        Run("Historical chart derives previous close from session data", TestHistoricalPreviousClose);
+        Run("Historical chart never derives previous close from the current quote", TestHistoricalChartWithoutPreviousClose);
         Run("Chart control uses THS percent only as white price fallback", TestThsPriceFallback);
         Run("Chart control rejects previous-session THS price fallback", TestCrossSessionThsPriceFallback);
         Run("Chart control paints a drawable white line without other data", TestWhiteLineOnlyPaints);
@@ -123,11 +138,26 @@ internal static class Program
         Run("Chart removes legacy signals and anchors events to minute price", TestChartOrderEventRenderingContract);
         Run("Order filter composes amount, side and marker", TestOrderFilter);
         Run("Refresh coordinator cancels superseded code and blocks reentry", TestRefreshCoordinator);
+        Run("Refresh coordinator invalidates requests on dispose", TestRefreshCoordinatorDispose);
+        Run("Refresh coordinator disposes a superseded cancellation source", TestRefreshCoordinatorSupersededDispose);
+        Run("Analysis periods include both session closing timestamps", TestAnalysisPeriodClosingTimes);
         Run("Main form exposes 72/28 chart and order tabs", TestMainFormLayout);
         Run("Main form defaults Longhu source and refreshes after source switch", () => LonghuFeatureTests.TestMainFormDataSourceSwitch().GetAwaiter().GetResult());
         Run("Main form ignores a late result from the previous data source", () => LonghuFeatureTests.TestMainFormDataSourceSwitchRace().GetAwaiter().GetResult());
         Run("Main form defaults amount filter to 300w", TestMainFormDefaultAmountFilter);
         Run("Main form ignores superseded refresh completion", () => TestMainFormRefreshRace().GetAwaiter().GetResult());
+        Run("Main form clears the previous stock while loading a new code", () =>
+            TestMainFormClearsPreviousStock().GetAwaiter().GetResult());
+        Run("Main form clears the previous stock when TDX follow changes code", () =>
+            TestMainFormTdxFollowClearsPreviousStock().GetAwaiter().GetResult());
+        Run("Main form enters historical mode when today resolves to a prior session", () =>
+            TestMainFormResolvedHistoricalMode().GetAwaiter().GetResult());
+        Run("Main form keeps the resolved session when archive loading fails", () =>
+            TestMainFormResolvedSessionAfterFailure().GetAwaiter().GetResult());
+        Run("Main form clears the previous session chart before a failed date load", () =>
+            TestMainFormClearsPreviousSession().GetAwaiter().GetResult());
+        Run("Main form restores voice without a fake announcement", () =>
+            TestMainFormVoiceRestore().GetAwaiter().GetResult());
         Run("Main form ignores superseded refresh failure", () => TestMainFormRefreshFailureRace().GetAwaiter().GetResult());
         Run("Main form refreshes when user types a complete stock code", () => TestMainFormManualCodeInput().GetAwaiter().GetResult());
         Run("Main form clamps grid mouse wheel at bottom", TestMainFormGridWheelClamp);
@@ -299,6 +329,23 @@ internal static class Program
             "THS error code");
     }
 
+    private static void TestThsRejectsNonPositiveOrders()
+    {
+        var parser = new ThsPayloadParser();
+        foreach (var row in new[]
+        {
+            "{'nature':'主力主买','volume':'0手','avgprice':'10','money':100,'otime':'2026-07-21 09:30:01'}",
+            "{'nature':'主力主买','volume':'10手','avgprice':'0','money':100,'otime':'2026-07-21 09:30:01'}",
+            "{'nature':'主力主买','volume':'10手','avgprice':'10','money':-100,'otime':'2026-07-21 09:30:01'}",
+        })
+        {
+            var payload = JObject.Parse("{'errorcode':0,'title':{},'list':[" + row + "],'pricechange':[]}");
+            var result = parser.ParseBigOrderSource(
+                "002297", payload, new DateTime(2026, 7, 21));
+            AssertEqual(0, result.Orders.Count, "invalid THS row rejected");
+        }
+    }
+
     private static async Task TestDirectSourceClients()
     {
         var handler = new SourceClientHandler();
@@ -400,6 +447,28 @@ internal static class Program
             }
         }
         throw new InvalidOperationException("missing history route must be explained");
+    }
+
+    private static async Task TestHistoryRejectsMixedSessionRows()
+    {
+        using (var http = new HttpClient(new MixedSessionHistoryHandler()))
+        {
+            var history = new BigOrderHistorySourceClient(
+                http, "http://127.0.0.1:8000", new ThsPayloadParser());
+            try
+            {
+                await history.LoadAsync(
+                    BigOrderDataSource.Longhu, "002297", new DateTime(2026, 7, 21),
+                    CancellationToken.None);
+            }
+            catch (PayloadParseException error)
+            {
+                AssertEqual("历史大单数据包含跨日订单", error.Message,
+                    "mixed session message");
+                return;
+            }
+        }
+        throw new InvalidOperationException("mixed session archive must be rejected");
     }
 
     private static void TestResolvedSessionDateBinding()
@@ -517,6 +586,91 @@ internal static class Program
             AssertEqual(30d, stale.Stock.Price.Value, "stale refresh keeps current quote");
             AssertEqual(DataFreshness.Failed, other.BigOrderFreshness, "other failed");
             AssertTrue(other.Orders.Count == 0, "no cross-code stale orders");
+        }
+    }
+
+    private static async Task TestHistoricalLonghuWithoutThsSummary()
+    {
+        using (var http = new HttpClient(new HistoricalProviderHandler { ThsSummaryMissing = true }))
+        using (var provider = new THSBigOrderDataProvider(
+            http, "http://local", "http://local", "http://local"))
+        {
+            provider.DataSource = BigOrderDataSource.Longhu;
+            var snapshot = await provider.LoadSnapshotAsync(new MarketLoadRequest
+            {
+                StockCode = "002297",
+                RequestedDate = new DateTime(2026, 7, 21),
+                SessionDate = new DateTime(2026, 7, 21),
+            }, CancellationToken.None);
+            AssertEqual(1, snapshot.Orders.Count, "Longhu history remains visible");
+            AssertEqual<double?>(null, snapshot.MainFunds.MainBuy, "missing THS summary stays empty");
+            AssertTrue(snapshot.Issues.Any(issue => issue.Contains("大单归档")),
+                "missing THS summary is diagnosed");
+        }
+    }
+
+    private static async Task TestHistoricalLonghuAfterThsSummaryFailure()
+    {
+        using (var http = new HttpClient(
+            new HistoricalProviderHandler { ThsSummaryNetworkFailure = true }))
+        using (var provider = new THSBigOrderDataProvider(
+            http, "http://local", "http://local", "http://local"))
+        {
+            provider.DataSource = BigOrderDataSource.Longhu;
+            var snapshot = await provider.LoadSnapshotAsync(new MarketLoadRequest
+            {
+                StockCode = "002297",
+                RequestedDate = new DateTime(2026, 7, 21),
+                SessionDate = new DateTime(2026, 7, 21),
+            }, CancellationToken.None);
+            AssertEqual(1, snapshot.Orders.Count, "Longhu history survives THS network failure");
+            AssertTrue(snapshot.Issues.Any(issue => issue.Contains("THS summary unavailable")),
+                "THS network failure is diagnosed");
+        }
+    }
+
+    private static async Task TestTodayResolvesToHistoricalSession()
+    {
+        var handler = new HistoricalProviderHandler();
+        using (var http = new HttpClient(handler))
+        using (var provider = new THSBigOrderDataProvider(
+            http, "http://local", "http://local", "http://local"))
+        {
+            provider.DataSource = BigOrderDataSource.Longhu;
+            var request = new MarketLoadRequest
+            {
+                StockCode = "002297",
+                RequestedDate = DateTime.Today,
+                SessionDate = DateTime.Today,
+            };
+            var snapshot = await provider.LoadSnapshotAsync(request, CancellationToken.None);
+            AssertEqual(new DateTime(2026, 7, 21), request.SessionDate,
+                "bridge session date is returned to the form");
+            AssertTrue(handler.Paths.Any(path => path.Contains("/api/big-order/history")),
+                "resolved historical archive requested");
+            AssertEqual(new DateTime(2026, 7, 21), snapshot.BigOrderSessionDate.Value,
+                "historical snapshot session");
+        }
+    }
+
+    private static async Task TestResolvedSessionSurvivesArchiveFailure()
+    {
+        var handler = new HistoricalProviderHandler { LonghuMissing = true };
+        using (var http = new HttpClient(handler))
+        using (var provider = new THSBigOrderDataProvider(
+            http, "http://local", "http://local", "http://local"))
+        {
+            provider.DataSource = BigOrderDataSource.Longhu;
+            var request = new MarketLoadRequest
+            {
+                StockCode = "002297",
+                RequestedDate = DateTime.Today,
+                SessionDate = DateTime.Today,
+            };
+            try { await provider.LoadSnapshotAsync(request, CancellationToken.None); }
+            catch (PayloadParseException) { }
+            AssertEqual(new DateTime(2026, 7, 21), request.SessionDate,
+                "resolved session retained after archive failure");
         }
     }
 
@@ -1100,7 +1254,7 @@ internal static class Program
 
     private static void TestAveragePriceAxis()
     {
-        var day = new DateTime(2026, 6, 20);
+        var day = DateTime.Today;
         var snapshot = CreateChartSnapshot(day, new PricePoint[0]);
         var series = new BigOrderSeries
         {
@@ -1184,7 +1338,11 @@ internal static class Program
         using (var bitmap = new Bitmap(1000, 650))
         {
             control.Size = new Size(1000, 650);
-            control.SetSnapshot(CreateChartSnapshot(day, new PricePoint[0]), series);
+            control.SetSnapshot(CreateChartSnapshot(day, new[]
+            {
+                new PricePoint { Time = day.AddHours(9).AddMinutes(30), ChangePercent = 5 },
+                new PricePoint { Time = day.AddHours(9).AddMinutes(31), ChangePercent = 10 },
+            }), series);
             AssertEqual(2, control.MinutePriceLinePercents.Count, "minute line percent count");
             AssertNear(5d, control.MinutePriceLinePercents[0].Value, 0.0001d, "minute line first percent");
             AssertNear(10d, control.MinutePriceLinePercents[1].Value, 0.0001d, "minute line second percent");
@@ -1206,10 +1364,137 @@ internal static class Program
 
         using (var control = new BigOrderChartControl { Size = new Size(800, 600) })
         {
-            control.SetSnapshot(CreateChartSnapshot(day, new PricePoint[0]), series);
+            control.SetSnapshot(CreateChartSnapshot(day, new[]
+            {
+                new PricePoint { Time = day.AddHours(9).AddMinutes(31), ChangePercent = 1 },
+                new PricePoint { Time = day.AddHours(9).AddMinutes(32), ChangePercent = 1 },
+            }), series);
             control.SetOrderMarkerFilter(1000000, OrderSide.All);
             AssertEqual(0, control.BigOrderLinePercents.Count, "cross-session big-order line hidden");
             AssertEqual(0, control.VisibleOrderEvents.Count, "cross-session big-order markers hidden");
+        }
+    }
+
+    private static void TestSlopedMinuteMarkerInterpolation()
+    {
+        var day = new DateTime(2026, 7, 21);
+        var series = new BigOrderSeries
+        {
+            Minutes = new MinuteFlow[0],
+            NetFlow = new NetFlowPoint[0],
+            Thresholds = new ThresholdFlow[0],
+            HalfHours = new HalfHourAmount[0],
+            MarketAveragePrices = new AveragePricePoint[0],
+            BigOrderAveragePrices = new AveragePricePoint[0],
+            BigOrderEvents = new BigOrderEventPoint[0],
+            MinutePrices = new[]
+            {
+                new AveragePricePoint { Time = day.AddHours(9).AddMinutes(30), Price = 10 },
+                new AveragePricePoint { Time = day.AddHours(9).AddMinutes(31), Price = 12 },
+            },
+        };
+        using (var control = new BigOrderChartControl())
+        {
+            control.SetSnapshot(CreateChartSnapshot(day, new[]
+            {
+                new PricePoint { Time = day.AddHours(9).AddMinutes(30), ChangePercent = 0 },
+                new PricePoint { Time = day.AddHours(9).AddMinutes(31), ChangePercent = 20 },
+            }), series);
+            var method = typeof(BigOrderChartControl).GetMethod(
+                "MinutePercentAt", BindingFlags.Instance | BindingFlags.NonPublic);
+            var value = (double?)method.Invoke(
+                control, new object[] { day.AddHours(9).AddMinutes(30).AddSeconds(30) });
+            AssertNear(10d, value.Value, 0.0001d, "marker follows sloped minute line");
+        }
+    }
+
+    private static void TestHistoricalPreviousClose()
+    {
+        var day = new DateTime(2026, 7, 21);
+        var snapshot = new MarketSnapshot(
+            "002297",
+            new StockSummary { Code = "002297", Price = 20, ChangePercent = 0 },
+            new MainFundSummary(),
+            new LimitUpContext(),
+            new BigOrderItem[0],
+            new[]
+            {
+                new PricePoint { Time = day.AddHours(9).AddMinutes(30), ChangePercent = 0 },
+                new PricePoint { Time = day.AddHours(9).AddMinutes(31), ChangePercent = 10 },
+            },
+            new MinuteTurnoverPoint[0],
+            DataFreshness.Fresh,
+            DataFreshness.Fresh,
+            DataFreshness.Fresh,
+            DataFreshness.Missing,
+            day,
+            day,
+            bigOrderSessionDate: day);
+        var series = new BigOrderSeries
+        {
+            Minutes = new MinuteFlow[0],
+            NetFlow = new NetFlowPoint[0],
+            Thresholds = new ThresholdFlow[0],
+            HalfHours = new HalfHourAmount[0],
+            MarketAveragePrices = new AveragePricePoint[0],
+            BigOrderAveragePrices = new AveragePricePoint[0],
+            BigOrderEvents = new BigOrderEventPoint[0],
+            MinutePrices = new[]
+            {
+                new AveragePricePoint { Time = day.AddHours(9).AddMinutes(30), Price = 10 },
+                new AveragePricePoint { Time = day.AddHours(9).AddMinutes(31), Price = 11 },
+            },
+        };
+        using (var control = new BigOrderChartControl())
+        {
+            control.SetSnapshot(snapshot, series);
+            var tick = control.AxisTicks.First();
+            var previousClose = tick.Price.Value / (1d + tick.Percent / 100d);
+            AssertNear(10d, previousClose, 0.0001d,
+                "historical percent axis uses session previous close");
+        }
+    }
+
+    private static void TestHistoricalChartWithoutPreviousClose()
+    {
+        var day = DateTime.Today.AddDays(-3);
+        var snapshot = new MarketSnapshot(
+            "002297",
+            new StockSummary { Code = "002297", Price = 100, ChangePercent = 0 },
+            new MainFundSummary(),
+            new LimitUpContext(),
+            new BigOrderItem[0],
+            new PricePoint[0],
+            new MinuteTurnoverPoint[0],
+            DataFreshness.Fresh,
+            DataFreshness.Fresh,
+            DataFreshness.Fresh,
+            DataFreshness.Missing,
+            DateTime.Now,
+            DateTime.Now,
+            bigOrderSessionDate: day);
+        var series = new BigOrderSeries
+        {
+            Minutes = new MinuteFlow[0],
+            NetFlow = new NetFlowPoint[0],
+            Thresholds = new ThresholdFlow[0],
+            HalfHours = new HalfHourAmount[0],
+            MarketAveragePrices = new AveragePricePoint[0],
+            BigOrderAveragePrices = new AveragePricePoint[0],
+            BigOrderEvents = new BigOrderEventPoint[0],
+            MinutePrices = new[]
+            {
+                new AveragePricePoint { Time = day.AddHours(9).AddMinutes(30), Price = 10 },
+                new AveragePricePoint { Time = day.AddHours(9).AddMinutes(31), Price = 10.1 },
+            },
+        };
+        using (var control = new BigOrderChartControl())
+        {
+            control.SetSnapshot(snapshot, series);
+            AssertEqual(0, control.MinutePriceLinePercents.Count,
+                "historical white line waits for authoritative previous close");
+            AssertTrue(control.AxisTicks.All(tick => !tick.Price.HasValue),
+                "historical price axis does not use current quote");
         }
     }
 
@@ -1270,7 +1555,8 @@ internal static class Program
                     redY = redY < 0 ? y : redY;
             }
             AssertTrue(redY >= 0, "fallback red marker rendered");
-            AssertTrue(Math.Abs(redY - ChartPercentY(control, 1.25d)) <= 5,
+            var interpolated = 1.25d + (2.5d - 1.25d) / 6d;
+            AssertTrue(Math.Abs(redY - ChartPercentY(control, interpolated)) <= 5,
                 "fallback event anchored to THS white line");
             AssertTrue(Math.Abs(redY - ChartPercentY(control, 2d)) > 5,
                 "fallback event not anchored to blue line");
@@ -1446,7 +1732,11 @@ internal static class Program
         using (var control = new BigOrderChartControl { Size = new Size(800, 600) })
         using (var bitmap = new Bitmap(800, 600))
         {
-            control.SetSnapshot(CreateChartSnapshot(day, new PricePoint[0]), CreateOrderEventSeries(day));
+            control.SetSnapshot(CreateChartSnapshot(day, new[]
+            {
+                new PricePoint { Time = day.AddHours(9).AddMinutes(31), ChangePercent = 1 },
+                new PricePoint { Time = day.AddHours(9).AddMinutes(32), ChangePercent = 1 },
+            }), CreateOrderEventSeries(day));
             control.SetOrderMarkerFilter(1000000, OrderSide.All);
             control.DrawToBitmap(bitmap, new Rectangle(0, 0, bitmap.Width, bitmap.Height));
             var hasRed = false;
@@ -1547,6 +1837,50 @@ internal static class Program
         }
     }
 
+    private static void TestRefreshCoordinatorDispose()
+    {
+        var coordinator = new RefreshCoordinator();
+        var request = coordinator.Begin("002297", false);
+        coordinator.Dispose();
+        AssertTrue(request.CancellationToken.IsCancellationRequested, "active request cancelled");
+        AssertTrue(!coordinator.IsLatest(request.Generation, "002297"),
+            "disposed request is no longer latest");
+    }
+
+    private static void TestRefreshCoordinatorSupersededDispose()
+    {
+        using (var coordinator = new RefreshCoordinator())
+        {
+            coordinator.Begin("002297", false);
+            var field = typeof(RefreshCoordinator)
+                .GetField("_active", BindingFlags.Instance | BindingFlags.NonPublic);
+            var superseded = (CancellationTokenSource)field.GetValue(coordinator);
+            coordinator.Begin("600519", true);
+            AssertThrows<ObjectDisposedException>(() => { var _ = superseded.Token; },
+                "superseded cancellation source");
+        }
+    }
+
+    private static void TestAnalysisPeriodClosingTimes()
+    {
+        var day = DateTime.Today;
+        var orders = new List<BigOrderItem>
+        {
+            new BigOrderItem { Time = day.AddHours(11).AddMinutes(30), Type = 2, Amount = 1 },
+            new BigOrderItem { Time = day.AddHours(15), Type = 4, Amount = 1 },
+        };
+        using (var form = new AnalysisForm("002297", "测试", orders))
+        {
+            var grid = (DataGridView)typeof(AnalysisForm)
+                .GetField("gridPeriods", BindingFlags.Instance | BindingFlags.NonPublic)
+                .GetValue(form);
+            AssertEqual("1", Convert.ToString(grid.Rows[3].Cells["Count"].Value),
+                "11:30 belongs to morning closing period");
+            AssertEqual("1", Convert.ToString(grid.Rows[7].Cells["Count"].Value),
+                "15:00 belongs to afternoon closing period");
+        }
+    }
+
     private static void TestMainFormLayout()
     {
         using (var form = new MainForm(null, false))
@@ -1591,6 +1925,133 @@ internal static class Program
             provider.Complete("002297");
             await oldRequest;
             AssertEqual("600519", form.BoundStockCode, "latest stock remains bound");
+        }
+    }
+
+    private static async Task TestMainFormClearsPreviousStock()
+    {
+        var provider = new ControlledProvider();
+        using (var form = new MainForm(provider, false))
+        {
+            var first = form.RefreshStockAsync("002297", true);
+            provider.Complete("002297");
+            await first;
+            AssertEqual("002297", form.BoundStockCode, "first stock bound");
+            var second = form.RefreshStockAsync("600519", true);
+            AssertEqual<string>(null, form.BoundStockCode, "old stock cleared during load");
+            provider.Complete("600519");
+            await second;
+        }
+    }
+
+    private static async Task TestMainFormTdxFollowClearsPreviousStock()
+    {
+        var provider = new ControlledProvider();
+        using (var form = new MainForm(provider, false))
+        {
+            var first = form.RefreshStockAsync("002297", true);
+            provider.Complete("002297");
+            await first;
+            var method = typeof(MainForm).GetMethod(
+                "FollowTdxStockAsync", BindingFlags.Instance | BindingFlags.NonPublic);
+            AssertTrue(method != null, "TDX follow uses one stock-switch path");
+
+            var pending = (Task)method.Invoke(form, new object[] { "600519" });
+            AssertEqual<string>(null, form.BoundStockCode, "TDX follow clears old snapshot");
+            provider.Complete("600519");
+            await pending;
+        }
+    }
+
+    private static async Task TestMainFormResolvedHistoricalMode()
+    {
+        var resolvedDate = DateTime.Today.AddDays(-3);
+        var provider = new SessionProvider((request, cancellationToken) =>
+        {
+            request.SessionDate = resolvedDate;
+            return Task.FromResult(SessionSnapshot(request.StockCode, resolvedDate));
+        });
+        var voice = new TestVoice();
+        using (var refreshTimer = new System.Windows.Forms.Timer())
+        using (var form = new MainForm(provider, false, voice))
+        {
+            typeof(MainForm).GetField("_refreshTimer", BindingFlags.Instance | BindingFlags.NonPublic)
+                .SetValue(form, refreshTimer);
+            SetChecked(form, "chkAutoRefresh", true);
+            SetChecked(form, "chkVoice", true);
+            voice.Batches.Clear();
+
+            await form.RefreshStockAsync("002297", true);
+
+            AssertEqual(resolvedDate, form.SessionDate, "resolved session date");
+            AssertTrue(!form.AutoRefreshEnabled, "historical auto refresh disabled");
+            AssertTrue(!form.VoiceEnabled, "historical voice disabled");
+        }
+    }
+
+    private static async Task TestMainFormResolvedSessionAfterFailure()
+    {
+        var resolvedDate = DateTime.Today.AddDays(-3);
+        var provider = new SessionProvider((request, cancellationToken) =>
+        {
+            request.SessionDate = resolvedDate;
+            throw new InvalidOperationException("archive missing");
+        });
+        using (var form = new MainForm(provider, false))
+        {
+            await form.RefreshStockAsync("002297", true);
+
+            AssertEqual(resolvedDate, form.SessionDate, "resolved failure session date");
+            AssertTrue(form.StatusText.Contains("archive missing"), "archive failure shown");
+        }
+    }
+
+    private static async Task TestMainFormClearsPreviousSession()
+    {
+        var first = true;
+        var provider = new SessionProvider((request, cancellationToken) =>
+        {
+            if (first)
+            {
+                first = false;
+                return Task.FromResult(SessionSnapshot(request.StockCode, DateTime.Today));
+            }
+            throw new InvalidOperationException("date missing");
+        });
+        using (var form = new MainForm(provider, false))
+        {
+            await form.RefreshStockAsync("002297", true);
+            var chart = (BigOrderChartControl)typeof(MainForm)
+                .GetField("bigOrderChart", BindingFlags.Instance | BindingFlags.NonPublic)
+                .GetValue(form);
+            AssertEqual(2, chart.MinutePriceLinePercents.Count, "first session white line");
+
+            form.SessionDate = DateTime.Today.AddDays(-1);
+            await WaitUntil(() => form.StatusText.Contains("date missing"), "failed date refresh");
+
+            AssertEqual<string>(null, form.BoundStockCode, "failed session snapshot cleared");
+            AssertEqual(0, chart.MinutePriceLinePercents.Count, "failed session white line cleared");
+            AssertEqual(0, form.VisibleChartOrderEvents.Count, "failed session markers cleared");
+        }
+    }
+
+    private static async Task TestMainFormVoiceRestore()
+    {
+        var provider = new SessionProvider((request, cancellationToken) =>
+            Task.FromResult(SessionSnapshot(request.StockCode, request.RequestedDate)));
+        var voice = new TestVoice();
+        using (var form = new MainForm(provider, false, voice))
+        {
+            SetChecked(form, "chkVoice", true);
+            voice.Batches.Clear();
+
+            form.SessionDate = DateTime.Today.AddDays(-1);
+            await WaitUntil(() => form.BoundStockCode == "002963", "historical date bind");
+            form.SessionDate = DateTime.Today;
+            await WaitUntil(() => form.SessionDate == DateTime.Today && form.VoiceEnabled,
+                "current session restore");
+
+            AssertEqual(0, voice.Batches.Count, "programmatic voice restore is silent");
         }
     }
 
@@ -1895,6 +2356,56 @@ internal static class Program
         throw new InvalidOperationException(label + " timed out");
     }
 
+    private static void SetChecked(MainForm form, string fieldName, bool value)
+    {
+        var checkBox = (CheckBox)typeof(MainForm)
+            .GetField(fieldName, BindingFlags.Instance | BindingFlags.NonPublic)
+            .GetValue(form);
+        checkBox.Checked = value;
+    }
+
+    private static MarketSnapshot SessionSnapshot(string stockCode, DateTime sessionDate)
+    {
+        var day = sessionDate.Date;
+        return new MarketSnapshot(
+            stockCode,
+            new StockSummary
+            {
+                Code = stockCode,
+                Name = stockCode,
+                Price = 10,
+                ChangePercent = 0,
+            },
+            new MainFundSummary(),
+            new LimitUpContext(),
+            new BigOrderItem[0],
+            new PricePoint[0],
+            new[]
+            {
+                new MinuteTurnoverPoint
+                {
+                    Time = day.AddHours(9).AddMinutes(30),
+                    Price = 10,
+                    CumulativeVolume = 100,
+                    CumulativeAmount = 100000,
+                },
+                new MinuteTurnoverPoint
+                {
+                    Time = day.AddHours(9).AddMinutes(31),
+                    Price = 10.1,
+                    CumulativeVolume = 200,
+                    CumulativeAmount = 201000,
+                },
+            },
+            DataFreshness.Fresh,
+            DataFreshness.Fresh,
+            DataFreshness.Fresh,
+            DataFreshness.Missing,
+            DateTime.Now,
+            DateTime.Now,
+            bigOrderSessionDate: day);
+    }
+
     private static SourceStubs CreateSourceStubs()
     {
         var day = new DateTime(2026, 6, 18);
@@ -2131,6 +2642,84 @@ internal static class Program
         }
     }
 
+    private sealed class MixedSessionHistoryHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var json = @"{
+              'ok':true,
+              'data':{
+                'sessionDate':'2026-07-21',
+                'data':{
+                  'List':[
+                    ['2','1784610001','100','100000','10','2026-07-21 09:30:01'],
+                    ['2','1784523601','100','100000','10','2026-07-20 09:30:01']
+                  ]
+                }
+              }
+            }";
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(json, Encoding.UTF8, "application/json"),
+            });
+        }
+    }
+
+    private sealed class HistoricalProviderHandler : HttpMessageHandler
+    {
+        public List<string> Paths { get; } = new List<string>();
+        public bool ThsSummaryMissing { get; set; }
+        public bool ThsSummaryNetworkFailure { get; set; }
+        public bool LonghuMissing { get; set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var path = request.RequestUri.AbsolutePath;
+            Paths.Add(request.RequestUri.PathAndQuery);
+            if (path == "/api/big-order/history" &&
+                request.RequestUri.Query.Contains("source=ths") && ThsSummaryNetworkFailure)
+                throw new HttpRequestException("THS summary unavailable");
+            string json;
+            var status = HttpStatusCode.OK;
+            if (path == "/api/quotes/minute")
+                json = "{'ok':true,'data':{'date':'20260721','complete':true,'expectedComplete':true," +
+                    "'points':[{'time':'0930','price':10,'cumulativeVolume':100,'cumulativeAmount':100000}]}}";
+            else if (path == "/api/big-order/history" && request.RequestUri.Query.Contains("source=longhu") &&
+                     !LonghuMissing)
+                json = "{'ok':true,'data':{'sessionDate':'2026-07-21','data':{'List':" +
+                    "[['2','1784610001','100','100000','10','2026-07-21 09:30:01']]}}}";
+            else if (path == "/api/big-order/history" &&
+                     (request.RequestUri.Query.Contains("source=longhu") || ThsSummaryMissing))
+            {
+                status = HttpStatusCode.NotFound;
+                json = "{'ok':false,'errorCode':'archive_not_found','error':'missing'}";
+            }
+            else if (path == "/api/big-order/history")
+                json = "{'ok':true,'data':{'sessionDate':'2026-07-21','data':{" +
+                    "'title':{},'list':[],'pricechange':[]}}}";
+            else if (path == "/api/big-order/longhu/all-day")
+                json = "{'ok':true,'sessionDate':'2026-07-21','data':{'List':" +
+                    "[['2','1784610001','100','100000','10','2026-07-21 09:30:01']]}}";
+            else if (path == "/api/big-order/ths-detail")
+                json = "{'ok':true,'sessionDate':'2026-07-21','data':{" +
+                    "'title':{},'list':[],'pricechange':[]}}";
+            else if (request.RequestUri.Host == "hq.sinajs.cn")
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new ByteArrayContent(Encoding.GetEncoding(936).GetBytes(
+                        "var hq_str_sz002297=\"博云新材,10,10,10,10,10,0,0,100,1000\";")),
+                });
+            else
+                json = "{'data':{'info':[]}}";
+            return Task.FromResult(new HttpResponseMessage(status)
+            {
+                Content = new StringContent(json, Encoding.UTF8, "application/json"),
+            });
+        }
+    }
+
     private sealed class FixtureHandler : HttpMessageHandler
     {
         private readonly bool _barrier;
@@ -2256,5 +2845,45 @@ internal static class Program
         {
             _pending[stockCode].SetException(error);
         }
+    }
+
+    private sealed class SessionProvider : ISessionMarketSnapshotProvider
+    {
+        private readonly Func<MarketLoadRequest, CancellationToken, Task<MarketSnapshot>> _load;
+
+        public SessionProvider(
+            Func<MarketLoadRequest, CancellationToken, Task<MarketSnapshot>> load)
+        {
+            _load = load;
+        }
+
+        public Task<MarketSnapshot> LoadSnapshotAsync(
+            MarketLoadRequest request, CancellationToken cancellationToken)
+        {
+            return _load(request, cancellationToken);
+        }
+
+        public Task<MarketSnapshot> LoadSnapshotAsync(
+            string stockCode, CancellationToken cancellationToken)
+        {
+            throw new InvalidOperationException("session request expected");
+        }
+
+        public void CalculateMarkers(List<BigOrderItem> data) { }
+    }
+
+    private sealed class TestVoice : IBigOrderVoice
+    {
+        public bool Enabled { get; set; }
+        public List<IReadOnlyList<BigOrderAnnouncement>> Batches { get; } =
+            new List<IReadOnlyList<BigOrderAnnouncement>>();
+
+        public void AnnounceBatch(IReadOnlyList<BigOrderAnnouncement> announcements)
+        {
+            if (announcements.Count > 0) Batches.Add(announcements.ToArray());
+        }
+
+        public void CancelPending() { }
+        public void Dispose() { }
     }
 }

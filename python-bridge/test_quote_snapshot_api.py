@@ -119,6 +119,74 @@ class QuoteSnapshotApiTest(unittest.TestCase):
         self.assertEqual(quote_client.date, "20260724")
         self.assertEqual(response.json()["data"]["date"], "20260724")
 
+    def test_minute_endpoint_uses_realtime_api_for_explicit_current_session(self):
+        class FakeQuoteClient:
+            def minute(self, *, symbol):
+                self.symbol = symbol
+                return [{"price": 10.0, "vol": 2}]
+
+            def minutes(self, *, symbol, date):
+                raise AssertionError("historical API must not be used during the current session")
+
+        quote_client = FakeQuoteClient()
+        self.bridge.quote_client = quote_client
+        with patch("main.resolve_requested_session_date", return_value="20260727"), patch(
+            "main.resolve_minute_session_date", return_value=("20260727", False)
+        ):
+            response = self.client.get("/api/quotes/minute?code=002297&date=20260727")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(quote_client.symbol, "002297")
+        self.assertFalse(response.json()["data"]["expectedComplete"])
+
+    def test_minute_endpoint_uses_history_api_when_explicit_today_resolves_back(self):
+        class FakeQuoteClient:
+            def minute(self, *, symbol):
+                raise AssertionError("realtime API must not be used for a completed session")
+
+            def minutes(self, *, symbol, date):
+                self.symbol = symbol
+                self.date = date
+                return [{"price": 10.0, "vol": 2}]
+
+        quote_client = FakeQuoteClient()
+        self.bridge.quote_client = quote_client
+        with patch("main.resolve_requested_session_date", return_value="20260724"), patch(
+            "main.resolve_minute_session_date", return_value=("20260724", True)
+        ):
+            response = self.client.get("/api/quotes/minute?code=002297&date=20260727")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(quote_client.symbol, "002297")
+        self.assertEqual(quote_client.date, "20260724")
+        self.assertTrue(response.json()["data"]["expectedComplete"])
+
+    def test_minute_endpoint_uses_previous_session_for_explicit_today_before_open(self):
+        today = __import__("datetime").datetime.now().astimezone().strftime("%Y%m%d")
+
+        class FakeQuoteClient:
+            def minute(self, *, symbol):
+                raise AssertionError("realtime API must not be used before open")
+
+            def minutes(self, *, symbol, date):
+                self.symbol = symbol
+                self.date = date
+                return [{"price": 10.0, "vol": 2}]
+
+        quote_client = FakeQuoteClient()
+        self.bridge.quote_client = quote_client
+        with patch("main.resolve_requested_session_date", return_value=today), patch(
+            "main.resolve_minute_session_date", return_value=("20260724", True)
+        ):
+            response = self.client.get(
+                "/api/quotes/minute?code=002297&date=" + today
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(quote_client.symbol, "002297")
+        self.assertEqual(quote_client.date, "20260724")
+        self.assertEqual(response.json()["data"]["date"], "20260724")
+
     def test_minute_endpoint_marks_incomplete_completed_session_without_padding(self):
         class FakeQuoteClient:
             def minutes(self, *, symbol, date):

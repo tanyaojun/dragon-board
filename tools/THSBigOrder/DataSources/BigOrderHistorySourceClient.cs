@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
@@ -52,6 +53,8 @@ namespace THSBigOrder.DataSources
                 var data = source == BigOrderDataSource.Longhu
                     ? new BigOrderSourceData { Orders = _parser.ParseLonghuOrders(payload["List"] as JArray), SessionDate = actual.Date }
                     : _parser.ParseBigOrderSource(stockCode, payload, actual.Date);
+                if ((data.Orders ?? new BigOrderItem[0]).Any(order => order.Time.Date != actual.Date))
+                    throw new PayloadParseException("历史大单数据包含跨日订单");
                 return new SourceLoadResult<BigOrderSourceData>
                 {
                     Data = data, Freshness = DataFreshness.Fresh, Transport = DataTransport.ProxyPrimary,

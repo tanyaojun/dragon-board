@@ -329,7 +329,8 @@ namespace THSBigOrder
             {
                 var periodData = _data.Where(x =>
                     x.Time.TimeOfDay >= period.Start &&
-                    x.Time.TimeOfDay < period.End).ToList();
+                    (x.Time.TimeOfDay < period.End ||
+                     (IsSessionClose(period.End) && x.Time.TimeOfDay == period.End))).ToList();
 
                 double buy = periodData.Where(x => x.IsBuy).Sum(x => x.Amount);
                 double sell = periodData.Where(x => x.IsSell).Sum(x => x.Amount);
@@ -356,6 +357,11 @@ namespace THSBigOrder
                 // 卖出颜色
                 gridPeriods.Rows[rowIndex].Cells["Sell"].Style.ForeColor = ColorSell;
             }
+        }
+
+        private static bool IsSessionClose(TimeSpan value)
+        {
+            return value == new TimeSpan(11, 30, 0) || value == new TimeSpan(15, 0, 0);
         }
 
         private void GridPeriods_MouseWheel(object sender, MouseEventArgs e)

@@ -69,6 +69,7 @@ namespace THSBigOrder
         private bool _savedAutoRefresh;
         private bool _savedVoice;
         private bool _syncingSessionDate;
+        private bool _restoringVoiceState;
 
         // 自定义滚动条
         private Panel _scrollTrack;
@@ -168,6 +169,7 @@ namespace THSBigOrder
             {
                 _voiceService?.CancelPending();
                 _announcementTracker.Reset();
+                ClearMarketView();
             }
             _currentStockCode = stockCode;
             SetStockCodeText(stockCode);
@@ -202,10 +204,30 @@ namespace THSBigOrder
             await RefreshDataAsync(true);
         }
 
+        private void ClearMarketView()
+        {
+            _snapshot = null;
+            _stockInfo = null;
+            _allData.Clear();
+            _filteredData.Clear();
+            UpdateDataGrid();
+            UpdateStatistics();
+            bigOrderChart.SetSnapshot(null, new BigOrderSeriesBuilder().Build(new BigOrderItem[0]));
+            bigOrderChart.SetOrderMarkerFilter(_currentMoney, _orderSide);
+        }
+
         private async void dtpSessionDate_ValueChanged(object sender, EventArgs e)
         {
             if (_syncingSessionDate) return;
-            var historical = dtpSessionDate.Value.Date != DateTime.Today;
+            SetHistoryMode(dtpSessionDate.Value.Date != DateTime.Today);
+            _voiceService?.CancelPending();
+            _announcementTracker.Reset();
+            ClearMarketView();
+            await RefreshDataAsync(true);
+        }
+
+        private void SetHistoryMode(bool historical)
+        {
             if (historical && !_historyMode)
             {
                 _savedAutoRefresh = chkAutoRefresh.Checked;
@@ -216,15 +238,27 @@ namespace THSBigOrder
             else if (!historical && _historyMode)
             {
                 chkAutoRefresh.Checked = _savedAutoRefresh;
-                chkVoice.Checked = _savedVoice;
+                _restoringVoiceState = true;
+                try { chkVoice.Checked = _savedVoice; }
+                finally { _restoringVoiceState = false; }
             }
             _historyMode = historical;
             chkAutoRefresh.Enabled = !historical;
             chkVoice.Enabled = !historical;
-            _voiceService?.CancelPending();
-            _announcementTracker.Reset();
-            ClearBigOrderViewForSourceChange();
-            await RefreshDataAsync(true);
+        }
+
+        private void SyncResolvedSessionDate(DateTime sessionDate)
+        {
+            var resolvedDate = sessionDate.Date > DateTime.Today
+                ? DateTime.Today
+                : sessionDate.Date;
+            if (resolvedDate != dtpSessionDate.Value.Date)
+            {
+                _syncingSessionDate = true;
+                try { dtpSessionDate.Value = resolvedDate; }
+                finally { _syncingSessionDate = false; }
+            }
+            SetHistoryMode(resolvedDate != DateTime.Today);
         }
 
         private void ClearBigOrderViewForSourceChange()
@@ -629,6 +663,7 @@ namespace THSBigOrder
         {
             var request = _refreshCoordinator.Begin(_currentStockCode, forceForCodeChange);
             if (!request.ShouldRun) return;
+            MarketLoadRequest sessionRequest = null;
             try
             {
                 lblStatus.Text = "刷新中...";
@@ -636,19 +671,26 @@ namespace THSBigOrder
                 var sessionProvider = _dataProvider as ISessionMarketSnapshotProvider;
                 var snapshot = sessionProvider == null
                     ? await _dataProvider.LoadSnapshotAsync(request.StockCode, request.CancellationToken)
-                    : await sessionProvider.LoadSnapshotAsync(new MarketLoadRequest
-                    {
-                        StockCode = request.StockCode,
-                        RequestedDate = dtpSessionDate.Value.Date,
-                        SessionDate = dtpSessionDate.Value.Date,
-                    }, request.CancellationToken);
+                    : await sessionProvider.LoadSnapshotAsync(
+                        sessionRequest = new MarketLoadRequest
+                        {
+                            StockCode = request.StockCode,
+                            RequestedDate = dtpSessionDate.Value.Date,
+                            SessionDate = dtpSessionDate.Value.Date,
+                        }, request.CancellationToken);
                 if (!_refreshCoordinator.IsLatest(request.Generation, snapshot.StockCode)) return;
+                if (sessionRequest != null)
+                    SyncResolvedSessionDate(sessionRequest.SessionDate);
+                else if (_historyMode)
+                    SyncResolvedSessionDate(
+                        ResolveDisplayedSessionDate(dtpSessionDate.Value, snapshot));
                 BindSnapshot(snapshot);
             }
             catch (OperationCanceledException) when (request.CancellationToken.IsCancellationRequested) { }
             catch (Exception ex)
             {
                 if (!_refreshCoordinator.IsLatest(request.Generation, request.StockCode)) return;
+                if (sessionRequest != null) SyncResolvedSessionDate(sessionRequest.SessionDate);
                 lblStatus.Text = "错误: " + ex.Message;
                 lblStatus.ForeColor = Color.Red;
             }
@@ -657,16 +699,6 @@ namespace THSBigOrder
 
         private void BindSnapshot(MarketSnapshot snapshot)
         {
-            if (_historyMode)
-            {
-                var resolvedDate = ResolveDisplayedSessionDate(dtpSessionDate.Value, snapshot);
-                if (resolvedDate != dtpSessionDate.Value.Date)
-                {
-                    _syncingSessionDate = true;
-                    try { dtpSessionDate.Value = resolvedDate; }
-                    finally { _syncingSessionDate = false; }
-                }
-            }
             _snapshot = snapshot;
             _stockInfo = new StockInfo
             {
@@ -979,9 +1011,7 @@ namespace THSBigOrder
 
                     if (stockCode != _currentStockCode)
                     {
-                        _currentStockCode = stockCode;
-                        SetStockCodeText(stockCode);
-                        var _ = RefreshDataAsync();
+                        var _ = FollowTdxStockAsync(stockCode);
                     }
                     return;
                 }
@@ -996,9 +1026,7 @@ namespace THSBigOrder
                     {
                         if (clipText != _currentStockCode)
                         {
-                            _currentStockCode = clipText;
-                            SetStockCodeText(clipText);
-                            var _ = RefreshDataAsync();
+                            var _ = FollowTdxStockAsync(clipText);
                         }
                     }
                 }
@@ -1006,6 +1034,11 @@ namespace THSBigOrder
             catch
             {
             }
+        }
+
+        private Task FollowTdxStockAsync(string stockCode)
+        {
+            return RefreshStockAsync(stockCode, true);
         }
 
         private void chkFollowTdx_CheckedChanged(object sender, EventArgs e)
@@ -1167,7 +1200,7 @@ namespace THSBigOrder
                 }
                 
                 // 勾选时播报测试
-                if (chkVoice.Checked)
+                if (chkVoice.Checked && !_restoringVoiceState)
                 {
                     _voiceService.AnnounceBatch(new[]
                     {

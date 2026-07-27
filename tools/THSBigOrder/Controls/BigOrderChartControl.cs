@@ -192,7 +192,19 @@ namespace THSBigOrder.Controls
             _minuteSessionDate = null;
             _hasMinutePriceData = false;
 
-            if (_snapshot?.Stock?.Price != null && _snapshot.Stock.ChangePercent.HasValue)
+            var minutePrices = _series?.MinutePrices ?? new AveragePricePoint[0];
+            var minuteSessions = minutePrices
+                .Where(point => IsFinite(point.Price) && point.Price > 0)
+                .Select(point => point.Time.Date)
+                .Distinct()
+                .ToList();
+            _hasMinutePriceData = minuteSessions.Count > 0;
+            _minuteSessionDate = minuteSessions.Count == 1 ? (DateTime?)minuteSessions[0] : null;
+
+            _previousClose = InferSessionPreviousClose();
+            if (!_previousClose.HasValue &&
+                !IsHistoricalSession() &&
+                _snapshot?.Stock?.Price != null && _snapshot.Stock.ChangePercent.HasValue)
             {
                 var denominator = 1d + _snapshot.Stock.ChangePercent.Value / 100d;
                 if (Math.Abs(denominator) > 0.000001)
@@ -215,14 +227,6 @@ namespace THSBigOrder.Controls
 
             if (_previousClose.HasValue)
             {
-                var minutePrices = _series?.MinutePrices ?? new AveragePricePoint[0];
-                var minuteSessions = minutePrices
-                    .Where(point => IsFinite(point.Price) && point.Price > 0)
-                    .Select(point => point.Time.Date)
-                    .Distinct()
-                    .ToList();
-                _hasMinutePriceData = minuteSessions.Count > 0;
-                _minuteSessionDate = minuteSessions.Count == 1 ? (DateTime?)minuteSessions[0] : null;
                 _minutePriceLinePercents.AddRange(
                     minutePrices
                         .Where(point => IsFinite(point.Price) && point.Price > 0)
@@ -442,11 +446,47 @@ namespace THSBigOrder.Controls
         private double? MinutePercentAt(DateTime time)
         {
             if (_minutePriceLinePercents.Count == 0) return null;
-            var nearest = _minutePriceLinePercents
+            var before = _minutePriceLinePercents.LastOrDefault(point => point.Time <= time);
+            var after = _minutePriceLinePercents.FirstOrDefault(point => point.Time >= time);
+            if (before != null && after != null && before.Time != after.Time &&
+                (time - before.Time).TotalSeconds <= 90 &&
+                (after.Time - time).TotalSeconds <= 90)
+            {
+                var ratio = (time - before.Time).TotalSeconds /
+                    (after.Time - before.Time).TotalSeconds;
+                return before.Value + (after.Value - before.Value) * ratio;
+            }
+            var nearest = new[] { before, after }
+                .Where(point => point != null)
                 .OrderBy(point => Math.Abs((point.Time - time).TotalSeconds))
                 .FirstOrDefault();
             if (nearest == null || Math.Abs((nearest.Time - time).TotalSeconds) > 90) return null;
             return nearest.Value;
+        }
+
+        private double? InferSessionPreviousClose()
+        {
+            var prices = (_snapshot?.Prices ?? new PricePoint[0])
+                .Where(point => IsFinite(point.ChangePercent) && point.ChangePercent > -100)
+                .ToDictionary(point => point.Time, point => point.ChangePercent);
+            foreach (var minute in _series?.MinutePrices ?? new AveragePricePoint[0])
+            {
+                if (!IsFinite(minute.Price) || minute.Price <= 0 ||
+                    !prices.TryGetValue(minute.Time, out var change)) continue;
+                var denominator = 1d + change / 100d;
+                if (Math.Abs(denominator) > 0.000001)
+                    return minute.Price / denominator;
+            }
+            return null;
+        }
+
+        private bool IsHistoricalSession()
+        {
+            var minuteDate = (_series?.MinutePrices ?? new AveragePricePoint[0])
+                .Select(point => (DateTime?)point.Time.Date)
+                .FirstOrDefault();
+            var sessionDate = minuteDate ?? _snapshot?.BigOrderSessionDate?.Date;
+            return sessionDate.HasValue && sessionDate.Value.Date != DateTime.Today;
         }
 
         internal static float TimeX(DateTime time, Rectangle bounds)

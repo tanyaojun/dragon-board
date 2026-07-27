@@ -234,6 +234,31 @@ internal static class LonghuFeatureTests
         AssertEqual("", support[6].BuyMarker, "pressure low row has no detached marker");
     }
 
+    internal static void TestRepeatedEventPreview()
+    {
+        var day = new DateTime(2026, 7, 17, 9, 30, 0);
+        var rows = new List<BigOrderItem>
+        {
+            Trade(day, 0, 1, 1000000, 100),
+            Trade(day, 1, 2, 5000000, 100.01),
+            Trade(day, 2, 2, 5000000, 100.02),
+            Trade(day, 3, 2, 5000000, 100.04),
+            Trade(day, 11, 1, 1000000, 100.03),
+            Trade(day, 14, 1, 1000000, 100.03),
+            Trade(day, 29, 1, 1000000, 100.03),
+            Trade(day, 30, 2, 5000000, 100.04),
+            Trade(day, 31, 2, 5000000, 100.06),
+            Trade(day, 32, 2, 5000000, 100.08),
+        };
+
+        using (var provider = new THSBigOrderDataProvider())
+            provider.CalculateMarkers(rows);
+
+        AssertEqual("点火", rows[3].FundMarker, "first event confirmed");
+        AssertEqual("点火预警", rows[9].FundMarker,
+            "later event gets a new preview after cooldown");
+    }
+
     internal static void TestAdaptiveMarkerThreshold()
     {
         var day = new DateTime(2026, 7, 17, 9, 40, 0);
@@ -1252,7 +1277,14 @@ internal static class LonghuFeatureTests
                     },
                 },
                 Prices = summary
-                    ? new[] { new PricePoint { Time = day.AddHours(10), ChangePercent = 1 } }
+                    ? new[]
+                    {
+                        new PricePoint
+                        {
+                            Time = day.AddHours(9).AddMinutes(30),
+                            ChangePercent = 0,
+                        },
+                    }
                     : new PricePoint[0],
                 SessionDate = day,
             });

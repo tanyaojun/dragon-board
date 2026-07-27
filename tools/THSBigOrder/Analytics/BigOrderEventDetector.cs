@@ -91,7 +91,9 @@ namespace THSBigOrder.Analytics
                         continue;
 
                     DateTime previousPreview;
-                    if (!lastConfirmed.ContainsKey(direction) &&
+                    DateTime previousConfirmed;
+                    if ((!lastConfirmed.TryGetValue(direction, out previousConfirmed) ||
+                         bucket.Time - previousConfirmed >= Cooldown) &&
                         (!lastPreview.TryGetValue(direction, out previousPreview) ||
                          bucket.Time - previousPreview >= Cooldown))
                     {
