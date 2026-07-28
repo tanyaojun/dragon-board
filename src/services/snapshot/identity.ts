@@ -43,7 +43,7 @@ export function buildSnapshotId(type: SnapshotType, tradingDate: string, slotTim
 }
 
 export function normalizeSnapshotSlotTime(type: SnapshotType, slotTime?: string): string {
-  if (type === 'daily') return slotTime || '15:00'
+  if (type === 'daily') return slotTime || '15:30'
   return slotTime || '00:00'
 }
 

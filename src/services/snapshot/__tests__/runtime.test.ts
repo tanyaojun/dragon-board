@@ -212,8 +212,8 @@ describe('SnapshotRuntime', () => {
     expect(coverage.halfHour.malformed).toEqual(['10:05'])
     expect(coverage.hourly.expected).toEqual(['10:00'])
     expect(coverage.hourly.delayed).toEqual(['10:00'])
-    expect(coverage.daily.expected).toEqual(['15:00'])
-    expect(coverage.daily.missing).toEqual(['15:00'])
+    expect(coverage.daily.expected).toEqual(['15:30'])
+    expect(coverage.daily.missing).toEqual(['15:30'])
   })
 
   it('ignores IndexedDB existence and writes formal snapshots through the backend primary', async () => {

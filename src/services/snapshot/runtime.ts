@@ -1621,7 +1621,7 @@ export class SnapshotRuntime {
     if (!(snapshotTime instanceof Date) || Number.isNaN(snapshotTime.getTime())) return false
     if (type === 'daily') {
       const closeTime = new Date(snapshotTime)
-      closeTime.setHours(15, 0, 0, 0)
+      closeTime.setHours(15, 30, 0, 0)
       return isTradingTime(closeTime)
     }
     return isTradingTime(snapshotTime)

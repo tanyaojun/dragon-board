@@ -119,6 +119,12 @@ describe('isTradingTime', () => {
 })
 
 describe('getTradingStatus', () => {
+  it('日历查询尚未完成时不伪装成非交易日', () => {
+    const uncachedDate = new Date(2026, 6, 14, 10, 0)
+
+    expect(getTradingStatus(uncachedDate)).toBe('calendar_pending')
+  })
+
   it('非交易日返回 non_trading_day', () => {
     expect(getTradingStatus(setTime(10, 0, WEEKEND_DAY))).toBe('non_trading_day')
   })
@@ -187,6 +193,7 @@ describe('getTradingStatus', () => {
 describe('TRADING_STATUS_LABEL', () => {
   it('所有 TradingStatus 值都有对应标签', () => {
     const allStatuses: TradingStatus[] = [
+      'calendar_pending',
       'non_trading_day',
       'pre_market',
       'call_auction',

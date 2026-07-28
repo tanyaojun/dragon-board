@@ -103,6 +103,7 @@ type DataLoaderApi = {
 type ApiServiceApi = {
   getRankTrendRankSeries(options: Record<string, unknown>): Promise<{
     frames?: RankTrendRankSeriesFrame[]
+    marketFrames?: RankTrendRankSeriesFrame[]
     series?: Record<string, { code?: string; bars?: RankTrendRankSeriesFrame['bars']; snapshotType?: SupportedSnapshotType }>
     count?: number
     cache?: { hit: boolean; store: string }
@@ -163,6 +164,7 @@ export class RankTrendAnalyzer {
   private runtimeConfigApplyCount = 0
   private rankHistoryCache = new Map<string, RankHistoryData>()
   private latestAnalysisSeries = new Map<string, RankTrendAnalysisSeries>()
+  private latestMarketSnapshots: RankTrendAnalysisSnapshot[] = []
   private latestAnalysisFrameKeys: string[] = []
   private currentFrameSequence = 0
   private marketRegimeCache: { signature: string; value: ReturnType<typeof analyzeMarketRegime> } | null = null
@@ -309,6 +311,7 @@ export class RankTrendAnalyzer {
 
     const hasSeriesData = this.hasRankSeriesData(response, options?.codes)
     const snapshots = this.normalizeRankSeriesResponse(response, type, options?.codes)
+    this.latestMarketSnapshots = this.normalizeFramesToSnapshots(response.marketFrames || [], type, true)
 
     if (options?.minRequired && snapshots.length < options.minRequired) {
       return []
@@ -414,6 +417,7 @@ export class RankTrendAnalyzer {
   private normalizeFramesToSnapshots(
     frames: RankTrendRankSeriesFrame[],
     preferredType: SupportedSnapshotType,
+    allowEmptyHotlist = false,
   ): RankTrendAnalysisSnapshot[] {
     return frames
       .map((frame): RankTrendAnalysisSnapshot | null => {
@@ -422,7 +426,7 @@ export class RankTrendAnalyzer {
           .map(([code, rank]) => ({ code, rank: Number(rank) }))
           .filter((item) => Number.isFinite(item.rank) && item.rank > 0)
           .sort((left, right) => left.rank - right.rank)
-        if (!hotlist.length || !frame.timestamp) return null
+        if ((!allowEmptyHotlist && !hotlist.length) || !frame.timestamp) return null
 
         const date = frame.displayKey || frame.snapshotId
         return {
@@ -471,12 +475,27 @@ export class RankTrendAnalyzer {
       return results
     }
 
-    const recentMarketWindow = recentSnapshots.slice(-getMaxStableBars())
+    const marketSnapshots = options.snapshots?.length
+      ? recentSnapshots
+      : this.latestMarketSnapshots.length
+        ? this.latestMarketSnapshots
+        : recentSnapshots
+    const { snapshots: recentMarketWindow, skippedHistoryCount } = this.getLatestContinuousMarketWindow(
+      marketSnapshots,
+    )
     const sampleQuality = this.buildSampleQualitySummary(
-      recentMarketWindow,
+      recentMarketWindow.slice(-getMaxStableBars()),
       options.preferredSnapshotType,
       !options.snapshots?.length,
     )
+    if (skippedHistoryCount > 0) {
+      sampleQuality.coverageWarning = [
+        sampleQuality.coverageWarning,
+        `较早市场帧存在断层，已仅使用最近连续 ${recentMarketWindow.length} 帧`,
+      ]
+        .filter(Boolean)
+        .join('；')
+    }
     const enforceLiveTimeline = !options.snapshots?.length
     const { prevRankMap, prevTotalCount } = this.getLatestRankSnapshot(recentSnapshots)
     const currentTotalCount = rankMap.size
@@ -729,6 +748,44 @@ export class RankTrendAnalyzer {
     return warnings
   }
 
+  private getLatestContinuousMarketWindow(
+    snapshots: RankTrendAnalysisSnapshot[],
+  ): { snapshots: RankTrendAnalysisSnapshot[]; skippedHistoryCount: number } {
+    if (snapshots.length < 2) return { snapshots, skippedHistoryCount: 0 }
+
+    let startIndex = snapshots.length - 1
+    while (startIndex > 0) {
+      const previous = snapshots[startIndex - 1]
+      const current = snapshots[startIndex]
+      const gap = current.timestamp - previous.timestamp
+      if (gap <= 0 || gap > MAX_LIVE_HISTORY_GAP_MS) {
+        if (previous.tradingDate === current.tradingDate) {
+          return { snapshots, skippedHistoryCount: 0 }
+        }
+        break
+      }
+      if (previous.type === current.type) {
+        const expectedSlots = getExpectedSlots(current.type)
+        const previousSlotIndex = expectedSlots.indexOf(previous.slotTime || '')
+        const currentSlotIndex = expectedSlots.indexOf(current.slotTime || '')
+        if (previousSlotIndex >= 0 && currentSlotIndex >= 0) {
+          const isConsecutive = previous.tradingDate === current.tradingDate
+            ? currentSlotIndex === previousSlotIndex + 1
+            : previousSlotIndex === expectedSlots.length - 1 && currentSlotIndex === 0
+          if (!isConsecutive) {
+            if (previous.tradingDate === current.tradingDate) {
+              return { snapshots, skippedHistoryCount: 0 }
+            }
+            break
+          }
+        }
+      }
+      startIndex -= 1
+    }
+
+    return { snapshots: snapshots.slice(startIndex), skippedHistoryCount: startIndex }
+  }
+
   private shouldAppendCurrentFrame(
     currentRanks: Map<string, number>,
     previousRanks: Map<string, number>,
@@ -742,10 +799,9 @@ export class RankTrendAnalyzer {
   private derivePerStockSampleQuality(
     base: SampleQualitySummary,
     sampleCount: number,
-    hasTimelineGap: boolean,
   ): SampleQualitySummary {
     const status: SampleQualitySummary['status'] =
-      base.status === 'insufficient' || hasTimelineGap
+      base.status === 'insufficient'
         ? 'insufficient'
         : sampleCount >= base.requiredSampleCount
           ? 'ok'
@@ -757,28 +813,13 @@ export class RankTrendAnalyzer {
     if (sampleCount < base.requiredSampleCount) {
       warnings.push(`个股有效样本不足 ${sampleCount}/${base.requiredSampleCount}`)
     }
-    if (hasTimelineGap) warnings.push('个股排名历史存在缺失槽位')
-
     return {
       ...base,
       sampleCount,
       status,
-      timelineValid: base.timelineValid !== false && !hasTimelineGap,
+      timelineValid: base.timelineValid !== false,
       coverageWarning: warnings.length > 0 ? Array.from(new Set(warnings)).join('；') : undefined,
     }
-  }
-
-  private hasMissingIntermediateFrames(frameKeys: string[], expectedFrameKeys: string[]): boolean {
-    if (frameKeys.length < 2) return false
-    const expectedIndex = new Map(expectedFrameKeys.map((frameKey, index) => [frameKey, index]))
-    let previousIndex = -1
-    for (const frameKey of frameKeys) {
-      const currentIndex = expectedIndex.get(frameKey)
-      if (currentIndex === undefined) continue
-      if (previousIndex >= 0 && currentIndex !== previousIndex + 1) return true
-      previousIndex = currentIndex
-    }
-    return false
   }
 
   private buildSnapshotsMap(snapshots: RankTrendAnalysisSnapshot[]): Map<string, any> {
@@ -904,7 +945,6 @@ export class RankTrendAnalyzer {
     const stockSampleQuality = this.derivePerStockSampleQuality(
       sampleQuality,
       analysisPercentiles.length,
-      enforceLiveTimeline && this.hasMissingIntermediateFrames(analysisFrameKeys, this.latestAnalysisFrameKeys),
     )
 
     const stock = dataLayer.getStock(code)

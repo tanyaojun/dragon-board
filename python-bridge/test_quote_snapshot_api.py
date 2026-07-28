@@ -12,6 +12,8 @@ from main import (
     BridgeConfig,
     QuoteFetchStats,
     TdxL2Bridge,
+    is_trading_session_now,
+    latest_completed_trading_date,
     normalize_code,
     resolve_requested_session_date,
     resolve_minute_session_date,
@@ -51,6 +53,15 @@ class QuoteSnapshotApiTest(unittest.TestCase):
             self.assertEqual(resolve_minute_session_date(session), ("20260724", False))
             self.assertEqual(resolve_minute_session_date(before_open), ("20260723", True))
             self.assertEqual(resolve_minute_session_date(weekend), ("20260723", True))
+
+    def test_post_close_session_ends_at_1530_and_only_completes_afterwards(self):
+        session_end = __import__("datetime").datetime(2026, 7, 24, 15, 30)
+        after_close = __import__("datetime").datetime(2026, 7, 24, 15, 31)
+
+        with patch("main._is_trading_day_cached", return_value=True):
+            self.assertTrue(is_trading_session_now(session_end))
+            self.assertEqual(latest_completed_trading_date(session_end).date().isoformat(), "2026-07-23")
+            self.assertEqual(latest_completed_trading_date(after_close), after_close)
 
     def test_requested_non_trading_day_resolves_to_previous_sse_session(self):
         with patch(

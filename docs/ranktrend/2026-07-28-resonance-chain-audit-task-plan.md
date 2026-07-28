@@ -22,6 +22,7 @@
 | 4. RankTrend 算法与定向测试 | 完成 | live-only TS 公式与定向测试通过 |
 | 5. 修复确认的缺陷并复验 | 完成 | 缓存失效与市场质量窗口 TDD 转绿 |
 | 6. 汇总结论与剩余风险 | 完成 | 已记录完整链路、生产证据和启动器风险 |
+| 7. 排查定时刷新后全表共振归零 | 完成 | per-code 联集误作市场时间轴，已拆分正式 marketFrames 合同并回归验证 |
 
 ## 约束
 
@@ -41,3 +42,4 @@
 | Windows 路径参数不接受 `quant-board\\.env*` 通配形式 | 1 | 拆分 collector 引用、main 缓存实现和 settings 默认值查询 |
 | PowerShell 截断带双引号的 `rg` 正则 | 1 | 改用无引号关键词分别搜索 service 测试 |
 | 停止旧 Quant API 后启动管理器 30 秒内未自动拉起 | 1 | 午休窗口内按同一 uvicorn 命令手动隐藏启动，并复核 scheduler |
+| 读取 proxy startup bundle 未命中，未取得代码集 | 1 | 不重复请求，改从可用代理热榜接口或 Mongo 最近 frame 提取代码 |

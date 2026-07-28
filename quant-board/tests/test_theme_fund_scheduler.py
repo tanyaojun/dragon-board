@@ -188,6 +188,22 @@ async def test_non_trading_warm_cache_does_not_request_upstream() -> None:
 
 
 @pytest.mark.asyncio
+async def test_non_trading_empty_cache_does_not_request_upstream() -> None:
+    service = FakeService()
+    scheduler = ThemeFundScheduler(
+        cache=FakeCache(),
+        stream=FakeStream(["000001"], []),
+        service=service,
+        is_trading_day=lambda value: False,
+        now=lambda: datetime(2026, 7, 25, 10, 0, tzinfo=TZ),
+    )
+
+    await scheduler.run_once()
+
+    assert service.calls == []
+
+
+@pytest.mark.asyncio
 async def test_empty_owner_never_uses_theme_mapping_or_calls_upstream() -> None:
     calendar_calls = 0
 
@@ -298,6 +314,7 @@ async def test_cache_io_does_not_block_the_event_loop() -> None:
 
 @pytest.mark.asyncio
 async def test_after_close_refreshes_each_owner_once_per_trading_day() -> None:
+    current = datetime(2026, 7, 24, 15, 1, tzinfo=TZ)
     cache = FakeCache()
     cache.rows["000001"] = {"code": "000001", "zlje": 1}
     service = FakeService()
@@ -306,18 +323,25 @@ async def test_after_close_refreshes_each_owner_once_per_trading_day() -> None:
         stream=FakeStream(["000001"], []),
         service=service,
         is_trading_day=lambda value: True,
-        now=lambda: datetime(2026, 7, 24, 15, 1, tzinfo=TZ),
+        now=lambda: current,
     )
 
     await scheduler.run_once()
+    assert [call[0] for call in service.calls] == [["000001"]]
+    assert scheduler._finalized_codes == set()
+
+    current = datetime(2026, 7, 24, 15, 31, tzinfo=TZ)
+    scheduler._next_due["000001"] = 0
+    await scheduler.run_once()
     await scheduler.run_once()
 
-    assert [call[0] for call in service.calls] == [["000001"]]
+    assert [call[0] for call in service.calls] == [["000001"], ["000001"]]
+    assert scheduler._finalized_codes == {"000001"}
 
 
 @pytest.mark.asyncio
 async def test_after_close_retries_when_cache_rejects_older_candidate() -> None:
-    current = datetime(2026, 7, 24, 15, 1, tzinfo=TZ)
+    current = datetime(2026, 7, 24, 15, 31, tzinfo=TZ)
 
     class RejectingOlderCache(FakeCache):
         def put(self, row: dict[str, object]) -> dict[str, object]:
@@ -342,7 +366,7 @@ async def test_after_close_retries_when_cache_rejects_older_candidate() -> None:
     )
 
     await scheduler.run_once()
-    current = datetime(2026, 7, 24, 15, 5, tzinfo=TZ)
+    current = datetime(2026, 7, 24, 15, 35, tzinfo=TZ)
     await scheduler.run_once()
 
     assert [call[0] for call in service.calls] == [["000001"], ["000001"]]

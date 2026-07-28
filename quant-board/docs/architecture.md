@@ -192,7 +192,7 @@ SQLite/Supabase/Parquet legacy paths -> migration source or disabled endpoints i
 - RankTrend 批量读按 `code` 分区在 MongoDB 端截取窗口，前端先发布 RankTrend/Jump/resonance，再异步同步 Fusion、候选日志和执行投影。Redis 响应通过 `cache.hit` 与统一耗时日志观测；API ingest 和后台 snapshot collector 的成功事实写入都会递增 dataset cache generation，阻止慢读回写已失效响应。
 - `GET /api/themes/mapping`、`GET /api/themes/stocks/{theme_id}`、`GET /api/themes/stocks/by-code/{code}` 和 `GET /api/themes/counts` 从 MongoDB 题材集合读取。
 - `POST /api/hotlist-sentiment/ingest`、历史回填脚本和 MongoDB 模式 `after-market-once` 共同写入 `hotlist_sentiment`；MongoDB 不可用时结构化失败，策略回测只能显式中性回退并保留原因。
-- 正式主库的历史残缺修复通过 `backfill-empty-mongodb-snapshots` 统一处理，允许补空快照、补 `snapshot_record`、修 frame 计数、补缺失的 `15:00` formal close slot，以及补运行库缺失索引；补槽位优先同粒度最近 donor，必要时允许显式跨粒度 donor；修复动作必须写 `migration_audit(opType=mongodb_snapshot_repair)`。
+- 正式主库的历史残缺修复通过 `backfill-empty-mongodb-snapshots` 统一处理，允许补空快照、补 `snapshot_record`、修 frame 计数、补缺失的正式收盘槽位（`quarter_hour=15:15`、`half_hour=15:30`、`daily=15:30`），以及补运行库缺失索引；补槽位优先同粒度最近 donor，必要时允许显式跨粒度 donor；修复动作必须写 `migration_audit(opType=mongodb_snapshot_repair)`。
 - 旧 SQLite/Supabase/Parquet 同步、归档、清理和历史 JSON 导入入口在 Mongo 模式下返回 410 或 CLI 拒绝执行；不得静默触碰旧主链。
 - MongoDB 不可用时正式接口必须结构化失败，不回退到 Supabase、SQLite、Parquet 或 IndexedDB 并伪装成功。
 
@@ -507,6 +507,8 @@ snapshot_type = half_hour
 支持：
 
 - `half_hour`：首期默认和主要验收口径。
+- 上海盘后固定价格交易延长到 `15:30`：`quarter_hour` 单日 19 槽（新增 `15:15`）、`half_hour` 单日 11 槽（新增 `15:30`）、`hourly` 仍为单日 5 槽、`daily` 的唯一终值槽从 `15:00` 调整为 `15:30`。四类槽位均由同一调度、审计和回填合同生成。
+- 交易日只由 python-bridge 的 `mootdx` 上交所日历确认；前端与 QuantBoard 均通过 `GET /api/calendar` 使用该结果。日历不可用时必须报告未知/暂停，禁止用周末或工作日推测。交易时段统一以 `15:30` 为盘后固定价格交易结束，`15:31` 后才视为当日收盘完成。
 - `quarter_hour`：显式选择的可选研究口径。
 - `hourly`、`daily`：可导入和诊断，首期不作为主回测默认。
 

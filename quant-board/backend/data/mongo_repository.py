@@ -383,6 +383,37 @@ class MongoRepository:
             str(row.get("snapshotId")): row
             for row in self.db["snapshot_frames"].find({"datasetId": dataset_id, "snapshotId": {"$in": snapshot_ids}})
         }
+        market_frame_query: dict[str, Any] = {"datasetId": dataset_id, "type": snapshot_type}
+        if start_date:
+            market_frame_query["tradingDate"] = {"$gte": start_date}
+        if end_date:
+            market_frame_query.setdefault("tradingDate", {})["$lte"] = end_date
+        if before_trading_date:
+            market_frame_query.setdefault("tradingDate", {})["$lt"] = before_trading_date
+        if allowed_capture_modes:
+            market_frame_query["captureMode"] = {"$in": allowed_capture_modes}
+        if exclude_restored:
+            market_frame_query["captureMode"] = {"$ne": "restored"}
+        market_frame_docs = list(
+            self.db["snapshot_frames"]
+            .find(market_frame_query)
+            .sort([("timestamp", -1), ("snapshotId", -1)])
+            .limit(limit or effective_window)
+        )
+        market_frames = [
+            {
+                "snapshotId": str(frame.get("snapshotId") or ""),
+                "displayKey": frame.get("displayKey"),
+                "timestamp": int(frame.get("timestamp") or 0),
+                "type": frame.get("type"),
+                "tradingDate": frame.get("tradingDate"),
+                "slotTime": frame.get("slotTime"),
+                "captureMode": frame.get("captureMode"),
+                "totalCount": int(frame.get("stockRowCount") or 0),
+                "ranks": {},
+            }
+            for frame in reversed(market_frame_docs)
+        ]
         frames_by_snapshot: dict[str, dict[str, Any]] = {}
         for row in picked_rows:
             snapshot_id = str(row.get("snapshotId") or "")
@@ -445,7 +476,7 @@ class MongoRepository:
             round((perf_counter() - attention_started_at) * 1000),
             round((perf_counter() - started_at) * 1000),
         )
-        return {"frames": frames, "series": series}
+        return {"frames": frames, "marketFrames": market_frames, "series": series}
 
     def list_snapshot_stock_rows(
         self,

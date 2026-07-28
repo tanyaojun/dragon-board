@@ -10,16 +10,38 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
-import { getTradingStatus, TRADING_STATUS_LABEL } from '@/utils/time'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { getTradingStatus, refreshCalendar, TRADING_STATUS_LABEL } from '@/utils/time'
 import type { TradingStatus } from '@/utils/time'
 
 const props = defineProps<{
   time?: Date
 }>()
 
-const status = computed<TradingStatus>(() => getTradingStatus(props.time || new Date()))
+const clockTick = ref(Date.now())
+let clockTimer: ReturnType<typeof setInterval> | null = null
+
+const status = computed<TradingStatus>(() => {
+  const current = props.time || new Date(clockTick.value)
+  return getTradingStatus(current)
+})
 const statusLabel = computed(() => TRADING_STATUS_LABEL[status.value])
+
+onMounted(() => {
+  const refresh = async () => {
+    await refreshCalendar(props.time || new Date())
+    clockTick.value = Date.now()
+  }
+  void refresh()
+  clockTimer = setInterval(() => {
+    clockTick.value = Date.now()
+    void refresh()
+  }, 60_000)
+})
+
+onUnmounted(() => {
+  if (clockTimer) clearInterval(clockTimer)
+})
 </script>
 
 <style scoped>

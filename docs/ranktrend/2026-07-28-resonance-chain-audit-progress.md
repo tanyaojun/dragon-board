@@ -31,3 +31,18 @@
 - 13:00 三种槽位自然采集完成；half_hour 221 行排名合同与公式生产验收通过。
 - rank-series 首次重载、二次缓存命中均包含 13:00，缓存链闭环。
 - 定向验证：Python 271 passed；前端 48 passed；vue-tsc 与 git diff --check 退出码 0。
+- 用户报告新事故：首屏共振有值，定时刷新后全表归零；已重新进入 systematic-debugging，开始复现自动刷新时的运行态数据链。
+- 已完成 `docs/ranktrend` 全文复核并确认当前设计的全局降级合同；表格直接投影共振分数，正在逐行追踪自动刷新和信号服务调用顺序。
+- 已确认全表归零的直接机制是市场共同四帧样本数不足 20；正在验证自动信号刷新是否构造了与 Mongo 历史帧不兼容的实时当前帧。
+- 已定位一分钟自动刷新路径与 `current:*` 追加条件；当前在浏览器和最小序列层验证 219/221 的运行态结果及结构化不足原因。
+- 已确认浏览器开发服务未监听 5173；改由运行中 Quant API 与启动缓存复现，增加同槽位 snapshotId/date-key 聚合风险的验证。
+- proxy startup bundle 在当前进程为缓存未命中，无法作为实盘代码集；已记录并切换为查询 Mongo 最近 frame/代理热榜的替代证据路径。
+- 已从 Mongo frames API 确认最新 half_hour frame（14:30）有 212 行，开始用该真实代码集请求 rank-series 并计算最终分析帧覆盖。
+- rank-series 运行态请求已发现 85 组同 code/date/slot 重复 bar，形成高置信度根因候选；正在确认其在最近 50 帧的影响范围与 Mongo snapshotId 来源。
+- 已反证旧重复槽位为本次直接根因（均不在最近 50 帧）；转查 per-code 历史缺槽检查是否将正常热榜进出误判为样本不足。
+- 真实 per-code 覆盖统计显示缺槽检查会误伤 138/212 只，但尚不足以解释全表归零；转查最近 50 帧的共同市场时间轴与实际页面自动刷新。
+- 已以运行中 API 确认根因：per-code 50-bar 联集被误作市场窗口，包含 25 天伪断层，自动刷新严格门禁令全表共振归零。准备按 TDD 添加连续后缀回归用例。
+- 已新增 `marketFrames`：后端从正式 `snapshot_frames` 读取最近市场槽位，前端仅以其判断市场时间轴；per-code `series` 仍保留给技术和个股序列。
+- 回归过程：新用例先确认旧实现返回 `insufficient`；首个“截断连续后缀”尝试会掩盖真实缺槽，已撤回；最终通过独立市场时间轴合同解决。
+- 验证：`pnpm typecheck:ranktrend` 通过；`pnpm test:ranktrend` 为 22 files / 240 tests 通过；QuantBoard `pytest -k rank_series` 为 5 passed。
+- 运行态限制：执行策略拒绝重启现有 8000 uvicorn 或启动隔离 8001，故本轮无法对新后端进程做 HTTP 实测；8000 仍是旧进程，需要重启后加载 `marketFrames`。

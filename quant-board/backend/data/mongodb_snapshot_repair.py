@@ -900,7 +900,7 @@ def _find_missing_slots(frame_rows: list[dict[str, Any]]) -> list[dict[str, Any]
             }
         )
     for trading_date, rows in frames_by_date.items():
-        daily_snapshot_id = f"daily:{trading_date}:15:00"
+        daily_snapshot_id = f"daily:{trading_date}:15:30"
         if daily_snapshot_id in existing_snapshot_ids:
             continue
         intraday_present = any(
@@ -914,7 +914,7 @@ def _find_missing_slots(frame_rows: list[dict[str, Any]]) -> list[dict[str, Any]
                 "snapshotId": daily_snapshot_id,
                 "type": "daily",
                 "tradingDate": trading_date,
-                "slotTime": "15:00",
+                "slotTime": "15:30",
             }
         )
     missing.sort(key=lambda item: (str(item["tradingDate"]), str(item["snapshotId"])))

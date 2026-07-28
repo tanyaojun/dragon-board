@@ -465,10 +465,10 @@ def test_verify_mongodb_migration_detects_missing_half_hour_close_slot_without_d
     assert result["ok"] is False
     assert result["continuity"]["missingSlots"] == [
         {
-            "snapshotId": "half_hour:2026-06-10:15:00",
+                "snapshotId": "half_hour:2026-06-10:15:30",
             "type": "half_hour",
             "tradingDate": "2026-06-10",
-            "slotTime": "15:00",
+                "slotTime": "15:30",
             "actualSlots": ["09:30", "10:00", "10:30", "11:00", "11:30", "13:00", "13:30", "14:00", "14:30"],
         }
     ]

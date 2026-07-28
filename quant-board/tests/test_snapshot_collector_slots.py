@@ -33,16 +33,19 @@ class TestSlotTimes:
         """half_hour slots must include 15:00."""
         assert "15:00" in SLOT_TIMES["half_hour"]
 
-    def test_daily_slot_is_exactly_1500(self):
-        """daily slot is exactly 15:00."""
-        assert SLOT_TIMES["daily"] == ["15:00"]
+    def test_half_hour_includes_1530_post_close_slot(self):
+        """Shanghai fixed-price after-hours trading requires a 15:30 snapshot."""
+        assert SLOT_TIMES["half_hour"][-1] == "15:30"
 
-    def test_quarter_hour_has_18_slots(self):
-        """quarter_hour has 18 slots (09:30-11:30 + 13:00-15:00)."""
-        assert len(SLOT_TIMES["quarter_hour"]) == 18
+    def test_daily_slot_is_1530_post_close_value(self):
+        assert SLOT_TIMES["daily"] == ["15:30"]
 
-    def test_half_hour_has_10_slots(self):
-        assert len(SLOT_TIMES["half_hour"]) == 10
+    def test_quarter_hour_has_19_slots(self):
+        """quarter_hour adds only the 15:30 after-hours close."""
+        assert len(SLOT_TIMES["quarter_hour"]) == 19
+
+    def test_half_hour_has_11_slots(self):
+        assert len(SLOT_TIMES["half_hour"]) == 11
 
     def test_hourly_has_5_slots(self):
         assert len(SLOT_TIMES["hourly"]) == 5
@@ -53,8 +56,8 @@ class TestSlotTimes:
     def test_quarter_hour_starts_at_0930(self):
         assert SLOT_TIMES["quarter_hour"][0] == "09:30"
 
-    def test_quarter_hour_ends_at_1500(self):
-        assert SLOT_TIMES["quarter_hour"][-1] == "15:00"
+    def test_quarter_hour_adds_only_1515(self):
+        assert SLOT_TIMES["quarter_hour"][-1] == "15:15"
 
     def test_no_lunch_break_slots(self):
         """Verify no slots fall in the lunch break period 11:31-12:59."""
@@ -136,26 +139,27 @@ class TestGenerateSlots:
 
     def test_generates_half_hour_slots(self):
         slots = generate_slots("2026-06-11", ["half_hour"])
-        assert len(slots) == 10
+        assert len(slots) == 11
         slot_times = [s.slot_time for s in slots]
         assert "15:00" in slot_times
+        assert "15:30" in slot_times
         assert "09:30" in slot_times
 
     def test_generates_daily_slot(self):
         slots = generate_slots("2026-06-11", ["daily"])
-        assert len(slots) == 1
-        assert slots[0].slot_time == "15:00"
+        assert [slot.slot_time for slot in slots] == ["15:30"]
         assert slots[0].snapshot_type == "daily"
         assert slots[0].trading_date == "2026-06-11"
 
     def test_generates_quarter_hour_slots(self):
         slots = generate_slots("2026-06-11", ["quarter_hour"])
-        assert len(slots) == 18
+        assert len(slots) == 19
+        assert slots[-1].slot_time == "15:15"
 
     def test_generates_multiple_types(self):
         slots = generate_slots("2026-06-11", ["half_hour", "daily"])
-        # 10 half_hour + 1 daily = 11
-        assert len(slots) == 11
+        # 11 half_hour + 1 daily = 12
+        assert len(slots) == 12
         types = {s.snapshot_type for s in slots}
         assert types == {"half_hour", "daily"}
 
@@ -166,7 +170,7 @@ class TestGenerateSlots:
 
     def test_timestamp_ms_matches_expected(self):
         slots = generate_slots("2026-06-11", ["daily"])
-        expected_ts = _make_ts("2026-06-11", "15:00")
+        expected_ts = _make_ts("2026-06-11", "15:30")
         assert slots[0].timestamp_ms == expected_ts
 
     def test_slots_are_sorted_by_time(self):
@@ -192,7 +196,7 @@ class TestGenerateSlots:
 
     def test_generate_slots_returns_expected_count(self):
         slots = generate_slots("2026-06-11", ["half_hour"])
-        assert len(slots) == 10  # half_hour has 10 slots
+        assert len(slots) == 11  # half_hour includes the 15:30 after-hours slot
 
 
 # ── is_slot_eligible ──────────────────────────────────────────────────────────

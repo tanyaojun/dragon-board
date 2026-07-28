@@ -187,7 +187,7 @@ export class FrameNormalizer {
         const lastTimestamp =
           frames.length > 0
             ? Math.max(...frames.map((frame) => frame.timestamp)) + 1
-            : new Date(`${reviewDate}T15:00:00+08:00`).getTime()
+            : new Date(`${reviewDate}T15:30:00+08:00`).getTime()
         frames.push(buildCloseFrame(stocks, reviewDate, lastTimestamp))
       } else {
         missingData.push('close_frame')

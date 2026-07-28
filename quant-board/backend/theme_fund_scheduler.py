@@ -9,6 +9,8 @@ from zoneinfo import ZoneInfo
 
 from backend.snapshot_collector.trading_calendar import (
     TradingCalendarUnavailable,
+    is_intraday_refresh_time,
+    is_post_close,
     is_trading_day,
 )
 from backend.theme_fund_cache import ThemeFundCache, get_theme_fund_cache
@@ -85,6 +87,8 @@ class ThemeFundScheduler:
         if not owners:
             return
         trading_day = await asyncio.to_thread(self._is_trading_day, current.date())
+        if not trading_day:
+            return
 
         cached = await asyncio.to_thread(self.cache.get_latest, owners)
         now_ts = current.timestamp()
@@ -102,7 +106,7 @@ class ThemeFundScheduler:
             and self._next_due.get(code, 0) <= now_ts
         ]
         batch: list[str] = []
-        after_close = trading_day and current.hour * 100 + current.minute >= 1500
+        after_close = trading_day and is_post_close(current)
 
         if self._final_session_date != current.date():
             self._final_session_date = current.date()
@@ -114,8 +118,6 @@ class ThemeFundScheduler:
         elif missing_p1:
             batch = missing_p1[: self.batch_size]
             self._p0_batches = 0
-        elif not trading_day:
-            return
         elif after_close:
             batch = [
                 code
@@ -123,8 +125,7 @@ class ThemeFundScheduler:
                 if code not in self._finalized_codes and self._next_due.get(code, 0) <= now_ts
             ][: self.batch_size]
         else:
-            hhmm = current.hour * 100 + current.minute
-            if hhmm < 930 or 1130 < hhmm < 1300:
+            if not is_intraday_refresh_time(current):
                 return
             due_p0 = [code for code in priority if self._next_due.get(code, 0) <= now_ts]
             priority_set = set(priority)

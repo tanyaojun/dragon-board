@@ -4,18 +4,10 @@ from __future__ import annotations
 from typing import Any
 
 from backend.data.repository_factory import get_runtime_mongodb_database
+from backend.snapshot_collector.slots import SLOT_TIMES
 
-HALF_HOUR_SLOTS = [
-    "09:30", "10:00", "10:30", "11:00", "11:30",
-    "13:00", "13:30", "14:00", "14:30", "15:00",
-]
-
-QUARTER_HOUR_SLOTS = [
-    "09:30", "09:45", "10:00", "10:15", "10:30", "10:45",
-    "11:00", "11:15", "11:30",
-    "13:00", "13:15", "13:30", "13:45", "14:00", "14:15",
-    "14:30", "14:45", "15:00",
-]
+HALF_HOUR_SLOTS = SLOT_TIMES["half_hour"]
+QUARTER_HOUR_SLOTS = SLOT_TIMES["quarter_hour"]
 
 EXPECTED_SLOTS: dict[str, list[str]] = {
     "half_hour": HALF_HOUR_SLOTS,

@@ -10,9 +10,31 @@ from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 
 TZ_SHANGHAI = ZoneInfo("Asia/Shanghai")
+CONTINUOUS_SESSION_START_HHMM = 930
+MORNING_SESSION_END_HHMM = 1130
+AFTERNOON_SESSION_START_HHMM = 1300
+POST_CLOSE_END_HHMM = 1530
 
 class TradingCalendarUnavailable(RuntimeError):
     pass
+
+
+def _hhmm(value: datetime.datetime) -> int:
+    return value.hour * 100 + value.minute
+
+
+def is_post_close(value: datetime.datetime) -> bool:
+    """Whether Shanghai fixed-price trading has completed for this date."""
+    return _hhmm(value) > POST_CLOSE_END_HHMM
+
+
+def is_intraday_refresh_time(value: datetime.datetime) -> bool:
+    """Allow live refresh only during continuous auction sessions."""
+    hhmm = _hhmm(value)
+    return (
+        CONTINUOUS_SESSION_START_HHMM <= hhmm <= MORNING_SESSION_END_HHMM
+        or AFTERNOON_SESSION_START_HHMM <= hhmm <= POST_CLOSE_END_HHMM
+    )
 
 
 def _fetch_bridge_calendar(date: datetime.date) -> bool | None:

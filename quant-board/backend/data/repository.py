@@ -645,7 +645,7 @@ class Repository:
         rank_basis: str = "composite",
     ) -> dict[str, Any]:
         if self.session is None:
-            return {"frames": [], "series": {}}
+            return {"frames": [], "marketFrames": [], "series": {}}
 
         query = select(SnapshotStockRowModel).where(
             SnapshotStockRowModel.dataset_id == dataset_id,
@@ -741,6 +741,45 @@ class Repository:
             if not frame["totalCount"]:
                 frame["totalCount"] = len(frame["ranks"])
 
+        market_frame_query = select(SnapshotFrameModel).where(
+            SnapshotFrameModel.dataset_id == dataset_id,
+            SnapshotFrameModel.type == snapshot_type,
+        )
+        if start_date:
+            market_frame_query = market_frame_query.where(SnapshotFrameModel.trading_date >= start_date)
+        if end_date:
+            market_frame_query = market_frame_query.where(SnapshotFrameModel.trading_date <= end_date)
+        if before_trading_date:
+            market_frame_query = market_frame_query.where(SnapshotFrameModel.trading_date < before_trading_date)
+        if allowed_capture_modes:
+            market_frame_query = market_frame_query.where(SnapshotFrameModel.capture_mode.in_(allowed_capture_modes))
+        if exclude_restored:
+            market_frame_query = market_frame_query.where(SnapshotFrameModel.capture_mode != "restored")
+        try:
+            market_models = list(
+                self.session.scalars(
+                    market_frame_query
+                    .order_by(SnapshotFrameModel.timestamp.desc(), SnapshotFrameModel.snapshot_id.desc())
+                    .limit(limit or effective_window)
+                )
+            )
+        except SQLAlchemyError:
+            market_models = []
+        market_frames = [
+            {
+                "snapshotId": str(frame.snapshot_id),
+                "displayKey": frame.display_key,
+                "timestamp": frame.timestamp,
+                "type": frame.type,
+                "tradingDate": frame.trading_date,
+                "slotTime": frame.slot_time,
+                "captureMode": frame.capture_mode,
+                "totalCount": int(frame.stock_row_count or 0),
+                "ranks": {},
+            }
+            for frame in reversed(market_models)
+        ]
+
         # Build per-code series
         series: dict[str, dict[str, Any]] = {}
         for code_key, rows in picked_by_code.items():
@@ -759,7 +798,7 @@ class Repository:
                 "latestSlotTime": last_bar.get("slotTime") or "",
             }
 
-        return {"frames": frames, "series": series}
+        return {"frames": frames, "marketFrames": market_frames, "series": series}
 
     def list_snapshot_records(
         self,

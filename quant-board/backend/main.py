@@ -610,8 +610,13 @@ def get_ranktrend_rank_series(
             rank_basis=rank_basis,
         )
         frames = result["frames"]
+        market_frames = result.get("marketFrames", [])
         series = result["series"]
-        snapshot_ids.extend(str(frame.get("snapshotId") or "") for frame in frames if frame.get("snapshotId"))
+        snapshot_ids.extend(
+            str(frame.get("snapshotId") or "")
+            for frame in [*frames, *market_frames]
+            if frame.get("snapshotId")
+        )
         public_frames = [
             {key: value for key, value in frame.items() if key != "bars"}
             for frame in frames
@@ -623,6 +628,7 @@ def get_ranktrend_rank_series(
             "snapshotType": snapshot_type,
             "rankBasis": rank_basis,
             "frames": public_frames,
+            "marketFrames": market_frames,
             "series": series,
             "count": len(public_frames),
             "source": storage_source_label(),

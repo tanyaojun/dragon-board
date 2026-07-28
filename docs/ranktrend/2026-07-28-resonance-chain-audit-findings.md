@@ -6,6 +6,23 @@
 - 此前根因包括 collector/builder 丢弃八平台原始名次及榜单总数。
 - 当前页面已观察到共振强度发生变化，但仍需证明链路和公式整体正确。
 
+## 2026-07-28 定时刷新归零事故
+
+- 用户观察：页面首屏加载时“共振强度”存在非零值；约数分钟后的自动刷新后，同列全部显示 `0%`。
+- 设计合同规定当前帧缺失、时间乱序、低样本量或横截面有效样本不足时，所有受影响结果必须降级为 `resonance.status='insufficient'` 与分数 `0`。
+- 因此本轮优先沿定时刷新调用顺序核查当前行情、Mongo rank-series 和 `applyJumpSignals()` 的输入/输出，不将表格的 `0%` 视为单纯展示问题。
+- 初步代码取证：`DataTable.vue` 直接显示 `_resonancePct` 或 `rankTrend.resonance.score`；`RankTrendSignalService` 在每轮 `getRankTrends()` 后调用 `applyJumpSignals()` 与 `applyResonanceFinals()`。全表归零的根因位于该服务或其输入序列，不在表格格式化层。
+- `applyResonanceFinals()` 仅当至少 20 只股票同时覆盖 `latestAnalysisFrameKeys` 的最后四帧且样本质量非 insufficient 时才计算共享中位数；否则把所有 fresh code 传入 `marketSampleCount < 20` 的 `analyzeRankResonance()`，按合同统一写为 `0`。当前根因假设聚焦“自动刷新当前帧与历史帧的代码/时序错配”。
+- 自动刷新事实：`DataLoaderFacade` 每分钟行情刷新后在未重拉平台榜单时执行 `refreshRankTrendSignals()`；此外有 30 分钟独立信号刷新。`RankTrendAnalyzer.shouldAppendCurrentFrame()` 在当前榜单总数与最新 Mongo 帧 `totalCount` 不同时强制追加 `current:*`。截图当前榜单为 219，而本日自然采集帧曾为 221，已确认会走该分支；尚需运行态证明它如何使市场共同样本不足。
+- 另一个待验证风险：`normalizeRankSeriesResponse()` 以 `snapshotId` 聚合 API bars，却使用 `tradingDate + slotTime` 作为分析 frame key；若同一槽位存在多个 snapshotId，`buildSnapshotsMap()` 会按相同 date key 覆盖，可能使 `latestAnalysisFrameKeys` 与单股序列不一致。
+- 当前运行中 Mongo API 的最新正式 `half_hour` frame 为 `2026-07-28 14:30`，`stockRowCount=212`。正式快照与页面实时榜单数量天然不必相同，因此不能用总数差异作为“当前帧必然无效”的修复依据；需直接统计 rank-series 最后四个 frame 的共同覆盖。
+- **高置信度根因候选（运行态证据）**：以最新 212 个真实代码请求 `rank-series`，响应聚合出 491 个 frame，且存在 85 组同一 `code + tradingDate + slotTime` 的重复 bar。自动刷新走 `enforceLiveTimeline=true`，重复时间戳会触发“历史快照时间乱序或重复”，所有股票 `sampleQuality=insufficient`，继而共振全表归零；启动缓存路径不启用该严格门禁，因此表现为首屏正常、自动刷新后归零。待确认这些重复是否位于最近 50 个市场帧，并追溯其 snapshotId 来源。
+- 上述候选已被反证：重复 bar 全部位于 5 月，最近 50 个 frame 从 `2026-06-29 15:00` 到 `2026-07-28 14:30`，没有任何重复组触及该窗口；不能把旧重复槽位作为本次修复原因。
+- 新的重点：自动刷新对每股调用 `hasMissingIntermediateFrames()`，该检查使用完整 per-code 50-bar 序列，而非最近稳定市场窗口。股票正常进出热榜会天然缺少某些公共 frame，必须实测是否被该逻辑错误地统一标记为 insufficient。
+- 真实统计：212 只当前代码中，138 只在完整 per-code 50-bar 序列存在中间缺槽，78 只缺少最近 9 个槽位之一，但 185 只完整覆盖最近 4 个槽位。该检查会错误扩大个股降级范围，却不能单独解释“全表归零”；必须继续检查共同的市场时间轴门禁。
+- **已确认根因**：rank-series 是“每股最近 50 次出现”的并集，当前 212 只代码产生的最后 50 个 union frame 从 `2026-06-29 15:00` 延续到 `2026-07-28 14:30`，并含 `2026-07-03 15:00 -> 2026-07-28 09:30` 的 25 天断层。该断层不是 Mongo 全市场缺槽，而是稀疏 per-code 采样并集缺少中间 frame；`getRankTrends()` 错将其 `slice(-50)` 用作全市场时间轴，自动刷新启用严格门禁后令所有结果 `sampleQuality=insufficient`，共振统一归零。启动缓存路径关闭严格门禁，故首屏正常。
+- 修复边界：全市场质量只能使用最新连续的市场 frame 后缀；不能以 per-code 联集中的旧稀疏点宣告市场缺槽。每股完整历史仍保留给技术计算和既有个股质量逻辑。
+
 ## 发现
 
 ### 设计合同

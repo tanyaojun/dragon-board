@@ -750,9 +750,9 @@ class TestBackfillSlotsDateRange:
         assert response.status_code == 200
         body = response.json()
         assert body["ok"] is True
-        # half_hour has 10 slots
-        assert body["data"]["total"] == 10
-        assert len(captured[0]) == 10
+        # half_hour includes the 15:30 after-hours slot
+        assert body["data"]["total"] == 11
+        assert len(captured[0]) == 11
 
     def test_date_range_inclusive(self, monkeypatch: Any) -> None:
         """Both startDate and endDate are included."""
@@ -785,7 +785,7 @@ class TestBackfillSlotsDateRange:
         )
 
         assert response.status_code == 200
-        # daily has 1 slot per day, 2 days = 2 slots
+        # daily has one 15:30 post-close slot per day.
         dates = captured_dates[0]
         assert "2026-06-10" in dates
         assert "2026-06-11" in dates
@@ -1056,8 +1056,9 @@ class TestBackfillSlotsSlotGeneration:
             },
         )
 
-        # half_hour has 10 slots
-        assert len(captured[0]) == 10
+        # half_hour includes the 15:30 after-hours slot
+        assert len(captured[0]) == 11
+        assert captured[0][-1]["slot_time"] == "15:30"
         # All should have same trading_date
         for s in captured[0]:
             assert s["trading_date"] == "2026-06-11"
@@ -1090,8 +1091,7 @@ class TestBackfillSlotsSlotGeneration:
             },
         )
 
-        assert len(captured[0]) == 1
-        assert captured[0][0]["slot_time"] == "15:00"
+        assert [slot["slot_time"] for slot in captured[0]] == ["15:30"]
 
     def test_backfill_skips_weekend_dates(self, monkeypatch: Any) -> None:
         client, _ = _setup_client(monkeypatch)
@@ -1123,6 +1123,7 @@ class TestBackfillSlotsSlotGeneration:
 
         assert response.status_code == 200
         assert [s["trading_date"] for s in captured[0]] == ["2026-06-12", "2026-06-15"]
+        assert [s["slot_time"] for s in captured[0]] == ["15:30", "15:30"]
 
 
 class TestBackfillSlotsValidation:

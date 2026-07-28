@@ -417,14 +417,19 @@ class SnapshotCollectorService:
             actual_timestamp_ms=actual_ts,
             grace_minutes=grace_minutes,
         )
-        if quality.warnings:
+        diagnostic_flags = [*quality.warnings, *quality.blocking_issues]
+        if diagnostic_flags:
             for item in [*records, *frames]:
                 existing_flags = item.get("qualityFlags")
                 flags = list(existing_flags) if isinstance(existing_flags, list) else []
-                item["qualityFlags"] = list(dict.fromkeys([*flags, *quality.warnings]))
+                item["qualityFlags"] = list(dict.fromkeys([*flags, *diagnostic_flags]))
 
-        # 7 — Blocked
-        if not quality.ok:
+        # 7 — No raw record exists only when every hotlist source failed.
+        # Other quality findings are persisted above for later diagnosis.
+        all_hotlist_sources_failed = not source_health or all(
+            not source.get("ok") for source in source_health
+        )
+        if not stock_rows and all_hotlist_sources_failed:
             run_doc = {
                 "runId": run_id,
                 "datasetId": dataset_id,

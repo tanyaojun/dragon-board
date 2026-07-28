@@ -59,7 +59,7 @@ cd quant-board
 - 空 formal snapshot 补行
 - `snapshot_record` 缺失补造
 - frame `stockRowCount/sectorRowCount` 漂移修正
-- 缺失 `15:00` formal close slot 补造，优先同粒度最近 donor，必要时允许显式跨粒度 donor（如 `half_hour:15:00 <- daily:15:00`）
+- 缺失盘后固定价格交易槽位时补造：`quarter_hour` 新增 `15:15`，`half_hour` 新增 `15:30`，`daily` 的唯一终值槽调整为 `15:30`；`hourly` 槽位不变。补造优先同粒度最近 donor，必要时允许显式跨粒度 donor。
 - runtime MongoDB 缺失索引补回
 
 验收命令：
@@ -978,6 +978,18 @@ RankTrend 专用排名时序读口，按 `code + snapshotType` 读取单票历�
       "ranks": { "600001": 5, "600002": 8 }
     }
   ],
+  "marketFrames": [
+    {
+      "snapshotId": "half_hour:2026-04-21:10:00:xxx",
+      "timestamp": 1776746400000,
+      "type": "half_hour",
+      "tradingDate": "2026-04-21",
+      "slotTime": "10:00",
+      "captureMode": "real_time",
+      "totalCount": 200,
+      "ranks": {}
+    }
+  ],
   "series": {
     "600001": {
       "code": "600001",
@@ -1001,7 +1013,8 @@ RankTrend 专用排名时序读口，按 `code + snapshotType` 读取单票历�
 }
 ```
 
-- `frames` 保持向后兼容，每帧含 `ranks` 映射（code → rank）
+- `frames` 保持向后兼容，每帧含 `ranks` 映射（code → rank）；它来自 per-code 窗口的并集，不能作为全市场时间轴。
+- `marketFrames` 是不受 `codes` 过滤影响的正式全市场 frame 元数据，按时间升序返回最近 `limit` 个槽位。RankTrend 仅用它做市场时间轴与样本质量判断，质量异常必须作为结构化状态暴露，不能阻断原始数据或抹成全零结果。
 - `series` 为新增 per-code 窗口，以 code 为主键，`bars` 按时间升序排列
 - `window_bars` 控制单票取 bar 数量上限，未指定时使用 `limit` 值
 - 当 `series` 中无匹配 codes 数据时，前端自动回退到 `frames` 扫描路径

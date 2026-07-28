@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from backend.data.json_codec import dumps_json_field, loads_json_field
+from backend.snapshot_collector.slots import SLOT_TIMES
 
 
 BACKTEST_RESULT_CHUNK_THRESHOLD = 8_000_000
@@ -45,16 +46,7 @@ JOURNAL_COLLECTIONS = ("trade_journal",)
 ALL_COLLECTIONS = (*SNAPSHOT_COLLECTIONS, *RESEARCH_COLLECTIONS, *THEME_COLLECTIONS, *RUNTIME_COLLECTIONS, *JOURNAL_COLLECTIONS)
 
 EXPECTED_SNAPSHOT_SLOTS: dict[str, list[str]] = {
-    "quarter_hour": [
-        "09:30", "09:45", "10:00", "10:15", "10:30", "10:45",
-        "11:00", "11:15", "11:30",
-        "13:00", "13:15", "13:30", "13:45",
-        "14:00", "14:15", "14:30", "14:45",
-        "15:00",
-    ],
-    "half_hour": ["09:30", "10:00", "10:30", "11:00", "11:30", "13:00", "13:30", "14:00", "14:30", "15:00"],
-    "hourly": ["10:00", "11:00", "13:00", "14:00", "15:00"],
-    "daily": ["15:00"],
+    snapshot_type: list(slot_times) for snapshot_type, slot_times in SLOT_TIMES.items()
 }
 
 JSON_FIELD_DEFAULTS: dict[str, tuple[str, Any]] = {

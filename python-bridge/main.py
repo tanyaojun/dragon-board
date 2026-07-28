@@ -23,6 +23,12 @@ from mootdx.quotes import Quotes
 
 from l2.qmt_provider import QmtL2Provider
 from tdx_hq_cache import OfficialHQCacheDepthReader
+from trading_time import (
+    MORNING_CONTINUOUS_START_HHMM,
+    hhmm,
+    is_after_trading_day_complete,
+    is_quote_trading_session,
+)
 
 
 def default_log_dir() -> str:
@@ -281,17 +287,15 @@ def is_trading_session_now(now: datetime | None = None) -> bool:
     if _is_trading_day_cached(current) is not True:
         return False
 
-    hhmm = current.hour * 100 + current.minute
-    return (930 <= hhmm < 1200) or (1300 <= hhmm <= 1500)
+    return is_quote_trading_session(current)
 
 
 def latest_completed_trading_date(now: datetime | None = None) -> datetime:
     current = now or datetime.now()
-    hhmm = current.hour * 100 + current.minute
     current_status = _is_trading_day_cached(current)
     if current_status is None:
         raise RuntimeError("TDX trading calendar unavailable")
-    if current_status and hhmm > 1500:
+    if current_status and is_after_trading_day_complete(current):
         return current
     candidate = current - timedelta(days=1)
     for _ in range(370):
@@ -309,9 +313,9 @@ def resolve_minute_session_date(now: datetime | None = None) -> tuple[str, bool]
     status = _is_trading_day_cached(current)
     if status is None:
         raise RuntimeError("TDX trading calendar unavailable")
-    hhmm = current.hour * 100 + current.minute
-    if status and hhmm >= 930:
-        return current.strftime("%Y%m%d"), hhmm >= 1500
+    current_hhmm = hhmm(current)
+    if status and current_hhmm >= MORNING_CONTINUOUS_START_HHMM:
+        return current.strftime("%Y%m%d"), is_after_trading_day_complete(current)
     completed = latest_completed_trading_date(current)
     return completed.strftime("%Y%m%d"), True
 

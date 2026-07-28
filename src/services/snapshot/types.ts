@@ -363,6 +363,7 @@ export interface RankTrendRankSeriesResponse {
   snapshotType: Exclude<SnapshotType, 'five_minute'>
   rankBasis?: 'composite' | 'attention'
   frames: RankTrendRankSeriesFrame[]
+  marketFrames?: RankTrendRankSeriesFrame[]
   series?: Record<string, RankTrendRankSeriesCodeWindow>
   count: number
   source: string

@@ -5,16 +5,16 @@ export const QUARTER_HOUR_SLOTS = [
   '11:00', '11:15', '11:30',
   '13:00', '13:15', '13:30', '13:45',
   '14:00', '14:15', '14:30', '14:45',
-  '15:00',
+  '15:00', '15:15',
 ] as const
 
 export const HALF_HOUR_SLOTS = [
   '09:30', '10:00', '10:30', '11:00', '11:30',
-  '13:00', '13:30', '14:00', '14:30', '15:00',
+  '13:00', '13:30', '14:00', '14:30', '15:00', '15:30',
 ] as const
 
 export const HOURLY_SLOTS = ['10:00', '11:00', '13:00', '14:00', '15:00'] as const
-export const DAILY_SLOTS = ['15:00'] as const
+export const DAILY_SLOTS = ['15:30'] as const
 
 export function slotTimeToMinutes(slotTime: string): number {
   const match = String(slotTime || '').match(/^(\d{2}):(\d{2})$/)

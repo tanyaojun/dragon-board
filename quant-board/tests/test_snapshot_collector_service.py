@@ -1315,8 +1315,8 @@ class TestServiceBlocked:
         # No fact write
         assert len(repo._ingests) == 0
 
-    def test_empty_stock_rows_blocked(self) -> None:
-        """Specifically test empty_stock_rows blocking."""
+    def test_empty_stock_rows_from_available_source_are_saved_with_reason(self) -> None:
+        """An empty but successful source response remains observable in stored facts."""
         from backend.snapshot_collector.models import CollectorRunRequest
         from backend.snapshot_collector.service import SnapshotCollectorService
 
@@ -1343,12 +1343,13 @@ class TestServiceBlocked:
 
         result = service.run_once(request)
 
-        assert result.status == "blocked"
+        assert result.status == "completed"
         assert "empty_stock_rows" in result.quality.blocking_issues
-        assert len(repo._ingests) == 0
+        assert len(repo._ingests) == 1
+        assert "empty_stock_rows" in repo._frames[0]["qualityFlags"]
 
-    def test_invalid_stock_code_blocked(self) -> None:
-        """Stock codes not matching A-share format (6 digits starting 0/3/6) are blocked."""
+    def test_invalid_stock_code_is_saved_with_reason(self) -> None:
+        """Non-standard codes must not turn recoverable data into a missing slot."""
         from backend.snapshot_collector.models import CollectorRunRequest
         from backend.snapshot_collector.service import SnapshotCollectorService
 
@@ -1376,12 +1377,13 @@ class TestServiceBlocked:
 
         result = service.run_once(request)
 
-        assert result.status == "blocked"
+        assert result.status == "completed"
         assert "invalid_stock_code" in result.quality.blocking_issues
-        assert len(repo._ingests) == 0
+        assert len(repo._ingests) == 1
+        assert "invalid_stock_code" in repo._frames[0]["qualityFlags"]
 
-    def test_timestamp_mismatch_blocked(self) -> None:
-        """actual_timestamp_ms before slot_timestamp_ms is blocked."""
+    def test_timestamp_mismatch_is_saved_with_reason(self) -> None:
+        """A clock anomaly must be retained for diagnosis instead of dropping the slot."""
         from backend.snapshot_collector.models import CollectorRunRequest
         from backend.snapshot_collector.service import SnapshotCollectorService
 
@@ -1410,8 +1412,10 @@ class TestServiceBlocked:
 
         # The timestamp for far-future slot will be after current time
         # but since we use time.time() internally for actual, this should trigger timestamp_outside_slot
-        assert result.status == "blocked"
+        assert result.status == "completed"
         assert "timestamp_outside_slot" in result.quality.blocking_issues
+        assert len(repo._ingests) == 1
+        assert "timestamp_outside_slot" in repo._frames[0]["qualityFlags"]
 
 
 class TestServiceRunStateRecording:

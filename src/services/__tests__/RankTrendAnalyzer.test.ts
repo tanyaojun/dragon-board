@@ -243,7 +243,7 @@ describe('RankTrendAnalyzer', () => {
     expect(result?.meta.sampleQuality?.coverageWarning ?? '').not.toContain('时间断层')
   })
 
-  it('个股缺失中间市场帧时不把离散排名当作连续 bars', async () => {
+  it('个股未上榜中间市场帧时保留离散排名，并报告降级样本', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-07-28T15:01:00+08:00'))
     const { apiService } = await import('../apiService')
@@ -305,8 +305,9 @@ describe('RankTrendAnalyzer', () => {
       { updateSignalStore: false },
     )).get('600001')
 
-    expect(result?.meta.sampleQuality?.status).toBe('insufficient')
-    expect(result?.meta.sampleQuality?.coverageWarning).toContain('个股排名历史存在缺失槽位')
+    expect(result?.meta.sampleQuality?.status).toBe('degraded')
+    expect(result?.meta.sampleQuality?.timelineValid).toBe(true)
+    expect(result?.meta.sampleQuality?.coverageWarning).toContain('个股有效样本不足')
   })
 
   it('实时正式时间轴缺失盘中槽位时标记样本不足', async () => {
@@ -339,6 +340,64 @@ describe('RankTrendAnalyzer', () => {
 
     expect(result?.meta.sampleQuality?.status).toBe('insufficient')
     expect(result?.meta.sampleQuality?.coverageWarning).toContain('历史快照存在缺失槽位')
+  })
+
+  it('per-code 历史并集含旧断层时仍使用最新连续市场窗口', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-28T15:01:00+08:00'))
+    const { apiService } = await import('../apiService')
+    const recentSlots = ['09:30', '10:00', '10:30', '11:00', '11:30', '13:00', '13:30', '14:00', '14:30']
+    const bars = [
+      {
+        code: '600001',
+        rank: 80,
+        snapshotId: 'half_hour:2026-07-03:15:00',
+        timestamp: Date.parse('2026-07-03T15:00:00+08:00'),
+        tradingDate: '2026-07-03',
+        slotTime: '15:00',
+        captureMode: 'real_time' as const,
+        totalCount: 100,
+      },
+      ...recentSlots.map((slotTime, index) => ({
+        code: '600001',
+        rank: 70 - index,
+        snapshotId: `half_hour:2026-07-28:${slotTime}`,
+        timestamp: Date.parse(`2026-07-28T${slotTime}:00+08:00`),
+        tradingDate: '2026-07-28',
+        slotTime,
+        captureMode: 'real_time' as const,
+        totalCount: 100,
+      })),
+    ]
+    vi.mocked(apiService.getRankTrendRankSeries).mockResolvedValue({
+      ok: true,
+      datasetId: 'dragonboard_live',
+      snapshotType: 'half_hour',
+      source: 'mongodb',
+      count: bars.length,
+      frames: [],
+      marketFrames: recentSlots.map((slotTime) => ({
+        snapshotId: `half_hour:2026-07-28:${slotTime}`,
+        timestamp: Date.parse(`2026-07-28T${slotTime}:00+08:00`),
+        type: 'half_hour' as const,
+        tradingDate: '2026-07-28',
+        slotTime,
+        captureMode: 'real_time' as const,
+        totalCount: 100,
+        ranks: {},
+      })),
+      series: {
+        '600001': { code: '600001', bars },
+      },
+    })
+
+    const { rankTrendAnalyzer } = await import('../RankTrendAnalyzer')
+    const result = (await rankTrendAnalyzer.getRankTrends(new Map([['600001', 60]]), {
+      updateSignalStore: false,
+    })).get('600001')
+
+    expect(result?.meta.sampleQuality?.status).toBe('degraded')
+    expect(result?.meta.sampleQuality?.timelineValid).toBe(true)
   })
 
   it('读取 RankTrend 专用排名时序而不是完整快照帧', async () => {
