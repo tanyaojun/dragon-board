@@ -69,6 +69,26 @@ export interface RankTrendSignalScore {
   score: number
 }
 
+export interface RankTrendObservationScores {
+  rankTrend: {
+    direction: RankSignalDirection
+    score: number
+    signedScore: number
+  }
+  lifecycle: {
+    stage: AttentionStage
+    score: number
+    veto: boolean
+    reasons: string[]
+    factors: {
+      stageFitness: number
+      pathCommitment: number
+      momentumConfirmation: number
+      riskSafety: number
+    }
+  }
+}
+
 export interface RankTrendResonance {
   status: 'ok' | 'insufficient'
   direction: RankSignalDirection
@@ -212,6 +232,7 @@ export interface RankTrendAnalysisResult {
     }>
   }
   resonance?: RankTrendResonance
+  observation?: RankTrendObservationScores
   // 策略层结果是消费侧扩展，不属于 rankTrend 核心分析合同。
   strategy?: RankTrendStrategyResult
   // V5 执行层分层，镜像 Python candidateTierMode=execution 的热榜情绪融合语义。

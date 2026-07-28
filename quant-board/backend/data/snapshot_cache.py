@@ -109,9 +109,11 @@ class SnapshotRedisCache:
         if self.redis_client is None:
             return
         try:
+            pipeline = self.redis_client.pipeline(transaction=False)
             for index_key in index_keys:
-                self.redis_client.sadd(index_key, response_key)
-                self.redis_client.expire(index_key, self.ttl_seconds + self.empty_ttl_seconds)
+                pipeline.sadd(index_key, response_key)
+                pipeline.expire(index_key, self.ttl_seconds + self.empty_ttl_seconds)
+            pipeline.execute()
         except Exception:
             return
 

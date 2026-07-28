@@ -159,6 +159,40 @@ describe('RankTrendAnalyzer', () => {
     ])
   })
 
+  it('本轮快照读取为空时保留上一轮可读分析序列', async () => {
+    const { rankTrendAnalyzer } = await import('../RankTrendAnalyzer')
+    const snapshots = [
+      {
+        date: '2026-04-27 14:30',
+        timestamp: Date.parse('2026-04-27T14:30:00'),
+        snapshot: {
+          type: 'half_hour',
+          tradingDate: '2026-04-27',
+          slotTime: '14:30',
+          hotlist: buildHotlist(40),
+        },
+      },
+    ]
+    await rankTrendAnalyzer.getRankTrends(new Map([['600001', 33]]), {
+      updateSignalStore: false,
+      snapshots,
+    })
+    const previousSeries = rankTrendAnalyzer.getLatestAnalysisSeries('600001')
+    const snapshotSpy = vi
+      .spyOn(rankTrendAnalyzer as any, 'loadRequiredSnapshots')
+      .mockResolvedValue([])
+    try {
+      const result = await rankTrendAnalyzer.getRankTrends(new Map([['600001', 32]]), {
+        updateSignalStore: false,
+      })
+
+      expect(result.size).toBe(0)
+      expect(rankTrendAnalyzer.getLatestAnalysisSeries('600001')).toEqual(previousSeries)
+    } finally {
+      snapshotSpy.mockRestore()
+    }
+  })
+
   it('实时排名历史陈旧时标记样本不足并给出时间原因', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-07-28T10:00:00+08:00'))

@@ -8,10 +8,23 @@
 
 - 先遵守 `AGENTS.md`：中文沟通、先读代码和文档、小范围修改、禁止破坏性 Git 命令、禁止批量删除文件或目录。
 - Skills 用来约束工作流程，不替代项目业务规则。
-- 涉及 RankTrend、快照、QuantBoard、数据质量门禁、存储/API 合同和 TDX L2 能力边界时，必须先确认现有源码和文档口径。
+- 涉及 RankTrend、快照、QuantBoard、数据质量、存储/API 合同和 TDX L2 能力边界时，必须先确认现有源码和文档口径。
 - 不能用“应该可以”作为交付结论；完成前必须用对应验证命令拿到新鲜结果。
 
 ## 2. 核心必备 Skills
+
+### 2.0 `fail-visible-data-pipelines`
+
+项目级正文：`skills/fail-visible-data-pipelines/SKILL.md`。
+
+凡涉及数据采集、清洗、写库、同步、迁移、缓存、读取、查询、回放、分析或界面观察，且需要处理缺字段、低覆盖率、部分来源失败、NaN、时间乱序、低样本或 fallback 时，必须在设计和编码前使用本 skill。它优先于通用的 defense-in-depth 输入拒绝模式：数据质量问题必须保存、展示并主动上报，不能阻断已有数据，也不能用 `0`、空结果、单帧或其他体系评分伪装缺失。
+
+使用要求：
+
+- 先识别所有可能丢弃、隐藏、归零或裁剪数据的分支，再决定实现。
+- 写操作与读操作遵循同一原则：质量异常不阻断；只有全源无任何原始记录时才报告本轮无数据。
+- 派生结论可以停产，但原始数据、可计算部分、缺失位置和结构化原因必须保留并可观察。
+- 测试必须覆盖部分异常仍写入、仍可读取、仍可展示，并证明缺失没有被伪造成零值。
 
 ### 2.1 `superpowers:systematic-debugging`
 
@@ -21,7 +34,7 @@
 
 - `pnpm test`、`pnpm test:ranktrend`、`vue-tsc`、`pytest` 失败。
 - RankTrend 前后端结果不一致。
-- 快照读取、写入、迁移、覆盖率或质量门禁异常。
+- 快照读取、写入、迁移、覆盖率或数据质量异常。
 - QuantBoard optimization job 状态、结果或持久化异常。
 - Dragon Board 与 QuantBoard 桥接数据缺字段、NaN、时间乱序或样本不足。
 - TDX bridge、proxy-server 或行情数据链路异常。
@@ -41,7 +54,7 @@
 
 - RankTrend 算法、默认参数、golden case 或输出字段变化。
 - 快照 facade、ingest、frames、records、stock rows、sector rows 相关逻辑。
-- 数据质量门禁、覆盖率、空数据、NaN、时间乱序和低样本量处理。
+- 数据质量、覆盖率、空数据、NaN、时间乱序和低样本量处理。
 - QuantBoard 回测、优化、交易规则、随机种子和任务状态。
 - 任何修复需要防止回归时。
 
@@ -338,6 +351,15 @@ git commit -m "<type>: <简短说明>"
 - 浏览器验证不能替代单元测试和类型检查；UI 改动完成前仍需运行对应构建或类型验证。
 
 ## 8. 推荐组合
+
+### 数据采集、读写、回放、分析或观察链路
+
+```text
+fail-visible-data-pipelines
+systematic-debugging（已有异常时）或 brainstorming（新设计时）
+test-driven-development
+verification-before-completion
+```
 
 ### 明确 bug 或测试失败
 

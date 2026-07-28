@@ -82,34 +82,69 @@ describe('UIStore table sorting', () => {
     dataLayer.reset()
   })
 
-  it('sorts Jump confidence by the displayed rankTrend jump confidence', () => {
+  it('sorts rank-trend strength by the displayed observation score', () => {
     const uiStore = useUIStore()
     dataLayer.setMergedStocks([
-      { code: '000001', name: '低置信', rankTrend: { jump: { confidence: 50 } } },
-      { code: '000002', name: '高置信', rankTrend: { jump: { confidence: 84 } } },
-      { code: '000003', name: '中置信', rankTrend: { jump: { confidence: 76 } } },
+      { code: '000001', name: '低强度', _rankTrendPct: 18 },
+      { code: '000002', name: '高强度', _rankTrendPct: 84 },
+      { code: '000003', name: '中强度', rankTrend: { observation: { rankTrend: { score: 56 } } } },
     ])
 
-    uiStore.toggleSort('confidence')
+    uiStore.toggleSort('rankTrendStrength')
 
     expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000001', '000003', '000002'])
 
-    uiStore.toggleSort('confidence')
+    uiStore.toggleSort('rankTrendStrength')
 
     expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000002', '000003', '000001'])
   })
 
-  it('sorts rank change by the displayed rankTrend change value', () => {
+  it('sorts lifecycle opportunity by the displayed observation score', () => {
     const uiStore = useUIStore()
     dataLayer.setMergedStocks([
-      { code: '000001', name: '弱变化', rankTrend: { meta: { change: 1 } } },
-      { code: '000002', name: '强变化', rankTrend: { change: 6 } },
-      { code: '000003', name: '负变化', rankChange: -2 },
+      { code: '000001', name: '低成熟', _lifecyclePct: 21 },
+      { code: '000002', name: '高成熟', _lifecyclePct: 91 },
+      { code: '000003', name: '中成熟', rankTrend: { observation: { lifecycle: { score: 63 } } } },
     ])
 
-    uiStore.toggleSort('rankChange')
+    uiStore.toggleSort('lifecycleOpportunity')
 
-    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000003', '000001', '000002'])
+    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000001', '000003', '000002'])
   })
 
+  it('keeps missing observation scores after real values in both sort directions', () => {
+    const uiStore = useUIStore()
+    dataLayer.setMergedStocks([
+      { code: '000001', name: '缺失' },
+      { code: '000002', name: '低强度', _rankTrendPct: 18 },
+      { code: '000003', name: '高强度', _rankTrendPct: 84 },
+    ])
+
+    uiStore.toggleSort('rankTrendStrength')
+    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000002', '000003', '000001'])
+
+    uiStore.toggleSort('rankTrendStrength')
+    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000003', '000002', '000001'])
+  })
+
+  it('does not substitute candidate-pool score when resonance is missing', () => {
+    const uiStore = useUIStore()
+    dataLayer.setMergedStocks([
+      { code: '000001', name: '缺失共振', candidatePoolProjection: { entryDecision: {} } },
+      { code: '000002', name: '真实共振', _resonancePct: 18 },
+    ])
+
+    uiStore.toggleSort('resonanceIntensity')
+
+    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000002', '000001'])
+  })
+
+  it('uses the three observation columns in the default table view', () => {
+    const uiStore = useUIStore()
+
+    expect(uiStore.view.showColumns).toEqual(
+      expect.arrayContaining(['resonanceIntensity', 'rankTrendStrength', 'lifecycleOpportunity']),
+    )
+    expect(uiStore.view.showColumns).not.toEqual(expect.arrayContaining(['rankChange', 'confidence']))
+  })
 })

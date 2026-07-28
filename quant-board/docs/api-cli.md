@@ -954,7 +954,7 @@ RankTrend 专用排名时序读口，按 `code + snapshotType` 读取单票历�
 | `window_bars` | int | — | 单票 bar 数量上限（新增，独立于 limit） |
 | `rank_basis` | string | `composite` | `composite` 返回原始综合排名；`attention` 仅在 MongoDB 主库内按有效 `avgRankNum ASC, code ASC` 重排，返回均榜关注度排名。无有效 `avgRankNum` 的股票不返回 bar，绝不回退到综合排名；非 MongoDB 环境请求该口径返回 `503`。 |
 
-后端执行一次 `code: {$in: [...]}` 聚合，并在 MongoDB 内按 code 分区保留最近 `window_bars`，不会为每只股票发起独立查询，也不会把全部历史行传入 Python 后再截断。
+后端执行一次 `code: {$in: [...]}` 聚合，并在 MongoDB 内按 code 分区保留最近 `window_bars`，不会为每只股票发起独立查询，也不会把全部历史行传入 Python 后再截断。attention 横截面按组合索引排序后流式编号，不使用 `$group + $push + $unwind` 物化整帧数组。`series.bars` 只返回 `snapshotId/timestamp/type/tradingDate/slotTime/captureMode/code/rank/totalCount`；完整股票原始行仍通过 `/api/snapshots/stock-rows` 读取。
 
 **响应结构：**
 

@@ -464,8 +464,6 @@ export class RankTrendAnalyzer {
     options: RankTrendAnalysisOptions = {},
   ): Promise<Map<string, RankTrendResult>> {
     const results = new Map<string, RankTrendResult>()
-    this.latestAnalysisSeries.clear()
-    this.latestAnalysisFrameKeys = []
     const recentSnapshots = options.snapshots?.length
       ? this.normalizeAnalysisSnapshots(options.snapshots)
       : await this.loadRequiredSnapshots({ ...options, codes: Array.from(rankMap.keys()) })
@@ -474,6 +472,9 @@ export class RankTrendAnalyzer {
       debugLog('[RankTrendAnalyzer] 快照不足，跳过计算')
       return results
     }
+
+    this.latestAnalysisSeries.clear()
+    this.latestAnalysisFrameKeys = []
 
     const marketSnapshots = options.snapshots?.length
       ? recentSnapshots
@@ -956,7 +957,7 @@ export class RankTrendAnalyzer {
     const requiredSamples = stockSampleQuality.requiredSampleCount
     const regime = this.resolveMarketRegime(snapshotSignature, dataLayer)
 
-    const { technical, cycle, risk, decision, strategy, executionStrategy } = runRankTrendAnalysisPipeline({
+    const { technical, cycle, risk, decision, observation, strategy, executionStrategy } = runRankTrendAnalysisPipeline({
       ranks: analysisRanks,
       percentiles: analysisPercentiles,
       currentPercentile,
@@ -987,6 +988,7 @@ export class RankTrendAnalyzer {
       cycle,
       risk,
       decision,
+      observation,
       strategy,
       executionStrategy,
     }

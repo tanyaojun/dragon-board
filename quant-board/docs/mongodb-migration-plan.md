@@ -118,7 +118,7 @@ shadow 验收不通过时，不得提升采集器为正式快照来源，也不�
 | `datasets` | 4 | 4 | `id` 主键 | `datasets` |
 | `snapshot_records` | 536 | 536 | unique `dataset_id + snapshot_id` | `snapshot_records` |
 | `snapshot_frames` | 536 | 536 | unique `dataset_id + snapshot_id` | `snapshot_frames` |
-| `snapshot_stock_rows` | 109952 | 109952 | unique `dataset_id + row_id`，索引 `dataset_id/type/trading_date/timestamp/code/snapshot_id` | `snapshot_stock_rows` |
+| `snapshot_stock_rows` | 109952 | 109952 | unique `dataset_id + row_id`；排名窗口索引 `datasetId/type/code/timestamp DESC/snapshotId DESC`；横截面索引 `datasetId/type/snapshotId/avgRankNum/code` | `snapshot_stock_rows` |
 | `snapshot_sector_rows` | 8369 | 8369 | unique `dataset_id + row_id`，索引 `dataset_id/type/trading_date/timestamp/snapshot_id` | `snapshot_sector_rows` |
 | `sync_outbox` | 172 | 0 | unique `idempotency_key` | 不进入新运行主链 |
 | `archive_manifests` | 3 | 3 | unique `archive_id` | `archive_manifests`，只保留审计和历史恢复参考 |
@@ -411,7 +411,7 @@ ThemeTrend 研究集合：
 
 `GET /api/ranktrend/rank-series?rank_basis=attention` 仅允许 MongoDB 主库，不修改 `snapshot_stock_rows` 的原始 `rank`、`compRank` 或 `avgRankNum`；非 MongoDB 环境返回 `503`，不降级为综合排名。它在读取时按单帧有效 `avgRankNum ASC, code ASC` 重算横截面关注度排名、有效样本数和百分位基础；缺失 `avgRankNum` 的行不回退到综合排名。`rank_basis` 默认仍为 `composite`，以保持其他既有消费者不变。
 
-RankTrend 查询必须携带非空 `codes`，使用单次 `$in` 聚合，并按 code 分区限制 `window_bars`；attention 模式在限窗前先过滤无效 `avgRankNum`。禁止恢复逐代码 N+1 查询，也禁止把匹配的全历史行全部搬入 Python。响应继续使用 Redis read-through cache；API ingest 和后台 snapshot collector 成功写入事实集合后都必须递增 dataset generation 并按 dataset/date/snapshot 索引失效，慢读不得回写失效前响应，并通过 `cache.hit` 和分阶段耗时日志验收。
+RankTrend 查询必须携带非空 `codes`，使用单次 `$in` 聚合，并按 code 分区限制 `window_bars`；attention 模式在限窗前先过滤无效 `avgRankNum`。单票窗口使用 `datasetId/type/code/timestamp DESC/snapshotId DESC` 索引；横截面关注度排名按 `datasetId/type/snapshotId/avgRankNum/code` 索引流式编号，禁止恢复 `$group + $push + $unwind` 全帧数组物化。响应 bar 只包含排名读模型声明字段，完整原始行继续由 `/api/snapshots/stock-rows` 提供。禁止恢复逐代码 N+1 查询，也禁止把匹配的全历史行全部搬入 Python。响应继续使用 Redis read-through cache；API ingest 和后台 snapshot collector 成功写入事实集合后都必须递增 dataset generation 并按 dataset/date/snapshot 索引失效，慢读不得回写失效前响应，并通过 `cache.hit` 和分阶段耗时日志验收。
 
 ### 保持不变的题材 API
 

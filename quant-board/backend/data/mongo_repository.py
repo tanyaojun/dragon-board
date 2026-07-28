@@ -296,6 +296,20 @@ class MongoRepository:
                         }
                     },
                     {"$match": {"_rankSeriesWindow": {"$lte": effective_window}}},
+                    {
+                        "$project": {
+                            "_id": 0,
+                            "_rankSeriesTotalCount": 1,
+                            "snapshotId": 1,
+                            "timestamp": 1,
+                            "type": 1,
+                            "tradingDate": 1,
+                            "slotTime": 1,
+                            "captureMode": 1,
+                            "code": 1,
+                            "rank": 1,
+                        }
+                    },
                 ],
                 allowDiskUse=True,
             )
@@ -349,35 +363,31 @@ class MongoRepository:
         attention_totals: dict[str, int] = {}
         attention_started_at = perf_counter()
         if rank_basis == "attention" and snapshot_ids:
-            attention_rows = self.db["snapshot_stock_rows"].aggregate(
-                [
-                    {
-                        "$match": {
-                            **query,
-                            "snapshotId": {"$in": snapshot_ids},
-                            "avgRankNum": {"$type": "number", "$gt": 0},
-                        }
-                    },
-                    {"$sort": {"snapshotId": 1, "avgRankNum": 1, "code": 1}},
-                    {
-                        "$group": {
-                            "_id": "$snapshotId",
-                            "rows": {"$push": {"code": "$code"}},
-                            "totalCount": {"$sum": 1},
-                        }
-                    },
-                    {"$unwind": {"path": "$rows", "includeArrayIndex": "attentionIndex"}},
-                    {"$match": {"rows.code": {"$in": list(picked_by_code)}}},
-                ],
-                allowDiskUse=True,
+            attention_rows = self.db["snapshot_stock_rows"].find(
+                {
+                    **query,
+                    "snapshotId": {"$in": snapshot_ids},
+                    "avgRankNum": {"$type": "number", "$gt": 0},
+                },
+                {"snapshotId": 1, "code": 1, "avgRankNum": 1, "_id": 0},
+            ).sort(
+                [("snapshotId", 1), ("avgRankNum", 1), ("code", 1)]
             )
+            requested_code_set = set(picked_by_code)
+            current_snapshot_id = ""
+            attention_index = 0
             for row in attention_rows:
-                snapshot_id = str(row.get("_id") or "")
-                code = str((row.get("rows") or {}).get("code") or "")
-                if not snapshot_id or not code:
+                snapshot_id = str(row.get("snapshotId") or "")
+                if not snapshot_id:
                     continue
-                attention_ranks.setdefault(snapshot_id, {})[code] = int(row.get("attentionIndex") or 0) + 1
-                attention_totals[snapshot_id] = int(row.get("totalCount") or 0)
+                if snapshot_id != current_snapshot_id:
+                    current_snapshot_id = snapshot_id
+                    attention_index = 0
+                attention_index += 1
+                attention_totals[snapshot_id] = attention_index
+                code = str(row.get("code") or "")
+                if code in requested_code_set:
+                    attention_ranks.setdefault(snapshot_id, {})[code] = attention_index
 
         frame_rows = {
             str(row.get("snapshotId")): row
@@ -449,6 +459,7 @@ class MongoRepository:
         for code_key, code_rows in picked_by_code.items():
             bars = [self.local_stock_to_bundle_dict(row) for row in code_rows]
             for bar in bars:
+                bar.pop("_rankSeriesTotalCount", None)
                 sid = bar.get("snapshotId") or ""
                 frame_doc = frame_rows.get(sid) or {}
                 if rank_basis == "attention":

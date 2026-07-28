@@ -1,0 +1,4 @@
+interface:
+  display_name: "数据链路主动暴露"
+  short_description: "Preserve partial data and expose quality issues without blocking"
+  default_prompt: "Use $fail-visible-data-pipelines to review this data path for hard gates and lossy fallbacks."

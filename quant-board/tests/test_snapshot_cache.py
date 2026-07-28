@@ -16,6 +16,8 @@ class FakeRedis:
         self.ttls: dict[str, int] = {}
         self.expires: dict[str, int] = {}
         self.sets: dict[str, set[str]] = {}
+        self.pipeline_calls = 0
+        self.pipeline_execute_calls = 0
 
     def get(self, key: str) -> str | None:
         if self.fail:
@@ -57,6 +59,27 @@ class FakeRedis:
         value = int(self.values.get(key, "0")) + 1
         self.values[key] = str(value)
         return value
+
+    def pipeline(self, transaction: bool = False) -> "FakeRedisPipeline":
+        assert transaction is False
+        self.pipeline_calls += 1
+        return FakeRedisPipeline(self)
+
+
+class FakeRedisPipeline:
+    def __init__(self, redis: FakeRedis) -> None:
+        self.redis = redis
+
+    def sadd(self, key: str, *values: str) -> "FakeRedisPipeline":
+        self.redis.sadd(key, *values)
+        return self
+
+    def expire(self, key: str, ttl: int) -> "FakeRedisPipeline":
+        self.redis.expire(key, ttl)
+        return self
+
+    def execute(self) -> None:
+        self.redis.pipeline_execute_calls += 1
 
 
 def test_snapshot_cache_key_uses_namespace_and_resolved_dataset() -> None:
@@ -162,6 +185,8 @@ def test_snapshot_redis_cache_invalidates_registered_dependencies() -> None:
     cache.set_response(response_key, {"ok": True, "source": "sqlite", "frames": [{"snapshotId": "s1"}], "count": 1})
     cache.register_dependencies(response_key, index_keys)
 
+    assert redis.pipeline_calls == 1
+    assert redis.pipeline_execute_calls == 1
     assert redis.expires[index_keys[0]] == 310
     assert redis.expires[index_keys[1]] == 310
 

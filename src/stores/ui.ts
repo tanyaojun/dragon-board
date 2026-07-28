@@ -6,7 +6,6 @@ import type { Stock } from '../types'
 import { EventManager } from '../utils/eventManager'
 import { AppEvents } from '../types'
 import { dataLayer } from '../services/DataLayer'
-import { analyzeTradingPoolCandidate, normalizeResonanceIntensity } from '@/services/candidate/TradingPoolAnalysisService'
 
 type SortField = string
 
@@ -24,48 +23,24 @@ function getRankTrendAnalysis(stock: any) {
   return stock?.rankTrend ?? null
 }
 
-function getRankChangeSortValue(stock: any) {
-  if (stock._rankChange !== undefined) return stock._rankChange
-  return Math.round(
-    toFiniteNumber(getRankTrendAnalysis(stock)?.meta?.change) ??
-      toFiniteNumber(getRankTrendAnalysis(stock)?.change) ??
-      toFiniteNumber(stock?.rankChange) ??
-      0,
-  )
+function getResonanceIntensitySortValue(stock: any): number | null {
+  if (stock._resonancePct !== undefined) return toFiniteNumber(stock._resonancePct)
+  const resonance = getRankTrendAnalysis(stock)?.resonance
+  return resonance?.status === 'ok' ? toFiniteNumber(resonance.score) : null
 }
 
-function getJumpConfidenceSortValue(stock: any) {
-  if (stock._jumpConfidence !== undefined) return stock._jumpConfidence
-  return (
-    toFiniteNumber(getRankTrendAnalysis(stock)?.jump?.confidence) ??
-    toFiniteNumber(stock?.jumpConfidence) ??
-    0
-  )
+function getObservationSortValue(stock: any, field: '_rankTrendPct' | '_lifecyclePct') {
+  if (stock[field] !== undefined) return toFiniteNumber(stock[field])
+  const observation = getRankTrendAnalysis(stock)?.observation
+  return field === '_rankTrendPct'
+    ? toFiniteNumber(observation?.rankTrend?.score)
+    : toFiniteNumber(observation?.lifecycle?.score)
 }
 
-function getResonanceIntensitySortValue(stock: any) {
-  if (stock._resonancePct !== undefined) return stock._resonancePct
-  // 回退：缓存未命中时走完整分析（仅在信号增强未完成时触发）
-  const projection = stock?.candidatePoolProjection
-  if (!projection) return 0
-  const result = analyzeTradingPoolCandidate({
-    candidates: [
-      {
-        ...stock,
-        candidateEntryDecision: projection?.entryDecision,
-        rankTrend: getRankTrendAnalysis(stock),
-      },
-    ],
-  })
-  const totalScore = result.rows[0]?.scoringBreakdown?.totalScore
-  if (totalScore == null) return 0
-  return normalizeResonanceIntensity(totalScore).pct
-}
-
-function getStockSortValue(stock: Stock, field: SortField): string | number {
-  if (field === 'confidence') return getJumpConfidenceSortValue(stock)
-  if (field === 'rankChange') return getRankChangeSortValue(stock)
+function getStockSortValue(stock: Stock, field: SortField): string | number | null {
   if (field === 'resonanceIntensity') return getResonanceIntensitySortValue(stock)
+  if (field === 'rankTrendStrength') return getObservationSortValue(stock, '_rankTrendPct')
+  if (field === 'lifecycleOpportunity') return getObservationSortValue(stock, '_lifecyclePct')
   if (field === 'avgRank') {
     return (
       toFiniteNumber((stock as any).avgRankNum) ??
@@ -88,10 +63,14 @@ function getStockSortValue(stock: Stock, field: SortField): string | number {
 }
 
 function compareSortValues(
-  left: string | number,
-  right: string | number,
+  left: string | number | null,
+  right: string | number | null,
   order: 'asc' | 'desc',
 ) {
+  if (left == null && right == null) return 0
+  if (left == null) return 1
+  if (right == null) return -1
+
   let result = 0
   if (typeof left === 'number' && typeof right === 'number') {
     result = left - right
@@ -169,7 +148,9 @@ export const useUIStore = defineStore('ui', () => {
       'dzhRank',
       'avgRank',
       'compRank',
-      'rankChange',
+      'resonanceIntensity',
+      'rankTrendStrength',
+      'lifecycleOpportunity',
       'zlje',
       'zljzb',
       'cddje',

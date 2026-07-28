@@ -55,10 +55,18 @@ class FakeCollection:
     def find_one(self, query: dict[str, Any]) -> dict[str, Any] | None:
         return next(iter(self.find(query)), None)
 
-    def find(self, query: dict[str, Any] | None = None) -> FakeCursor:
+    def find(
+        self,
+        query: dict[str, Any] | None = None,
+        projection: dict[str, Any] | None = None,
+    ) -> FakeCursor:
         normalized_query = dict(query or {})
         self.find_queries.append(normalized_query)
-        return FakeCursor([dict(row) for row in self.rows if _matches(row, normalized_query)])
+        rows = [dict(row) for row in self.rows if _matches(row, normalized_query)]
+        if projection:
+            included = {key for key, enabled in projection.items() if enabled}
+            rows = [{key: row.get(key) for key in included} for row in rows]
+        return FakeCursor(rows)
 
     def aggregate(self, pipeline: list[dict[str, Any]], **_kwargs: Any) -> FakeCursor:
         self.aggregate_pipelines.append(pipeline)
@@ -96,7 +104,11 @@ class FakeCollection:
                 row["_rankSeriesWindow"] = index
                 row["_rankSeriesTotalCount"] = len(group_rows)
                 ranked_rows.append(row)
-        return FakeCursor([row for row in ranked_rows if _matches(row, pipeline[2]["$match"])])
+        output_rows = [row for row in ranked_rows if _matches(row, pipeline[2]["$match"])]
+        if len(pipeline) > 3 and "$project" in pipeline[3]:
+            included = {key for key, enabled in pipeline[3]["$project"].items() if enabled}
+            output_rows = [{key: row.get(key) for key in included} for row in output_rows]
+        return FakeCursor(output_rows)
 
 
 class FakeMongoDatabase(dict):
@@ -180,6 +192,69 @@ def test_mongo_repository_rank_series_rebuilds_attention_rank_from_avg_rank_num(
     assert result["frames"][0]["ranks"] == {"000001": 2}
     assert result["frames"][0]["totalCount"] == 2
     assert "000003" not in result["series"]
+
+
+def test_attention_rank_series_streams_indexed_rows_without_grouping_full_frames() -> None:
+    database = FakeMongoDatabase()
+    repo = MongoRepository(database)
+    dataset = _dataset()
+    repo.save_snapshot_ingest(
+        dataset,
+        records=[_record("s1"), _record("s2")],
+        frames=[_frame("s1", 1), _frame("s2", 2)],
+        stock_rows=[
+            {**_stock("s1", "000001", 1), "avgRankNum": 20},
+            {**_stock("s1", "000002", 2), "avgRankNum": 5},
+            {**_stock("s1", "000003", 3), "avgRankNum": 10},
+            {**_stock("s2", "000001", 1), "avgRankNum": 2},
+            {**_stock("s2", "000002", 2), "avgRankNum": 10},
+            {**_stock("s2", "000003", 3), "avgRankNum": 6},
+        ],
+        sector_rows=[],
+        idempotency_key="ingest-streamed-attention-ranks",
+        trading_date="2026-05-12",
+    )
+    stock_collection = database["snapshot_stock_rows"]
+    stock_collection.find_queries.clear()
+    stock_collection.aggregate_pipelines.clear()
+
+    result = repo.load_rank_series(
+        "dragonboard_live",
+        snapshot_type="half_hour",
+        codes=["000001"],
+        rank_basis="attention",
+    )
+
+    assert len(stock_collection.aggregate_pipelines) == 1
+    attention_query = next(query for query in stock_collection.find_queries if "snapshotId" in query)
+    assert attention_query["snapshotId"] == {"$in": ["s1", "s2"]}
+    assert "code" not in attention_query
+    assert [bar["rank"] for bar in result["series"]["000001"]["bars"]] == [3, 1]
+    assert [bar["totalCount"] for bar in result["series"]["000001"]["bars"]] == [3, 3]
+    assert set(result["series"]["000001"]["bars"][0]) == {
+        "snapshotId",
+        "timestamp",
+        "type",
+        "tradingDate",
+        "slotTime",
+        "captureMode",
+        "code",
+        "rank",
+        "totalCount",
+    }
+    projection = stock_collection.aggregate_pipelines[0][3]["$project"]
+    assert projection == {
+        "_id": 0,
+        "_rankSeriesTotalCount": 1,
+        "snapshotId": 1,
+        "timestamp": 1,
+        "type": 1,
+        "tradingDate": 1,
+        "slotTime": 1,
+        "captureMode": 1,
+        "code": 1,
+        "rank": 1,
+    }
 
 
 def test_attention_rank_series_filters_invalid_avg_rank_before_per_code_window() -> None:

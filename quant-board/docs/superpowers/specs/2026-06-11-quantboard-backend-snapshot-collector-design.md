@@ -1,5 +1,10 @@
 # QuantBoard Backend Snapshot Collector Design
 
+> [!CAUTION]
+> **本设计已被生产事故证伪，禁止作为当前实现或评审依据。** 文档仅作为事故历史保留。其中“正式写入前质量门禁”“硬性阻断”“只写 collector run、不写 snapshot facts”以及分阶段 shadow/live 切换方案，曾导致连续一周多快照数据缺失，平台排名和排名分析字段无法恢复。当前数据链路规则以根目录 `AGENTS.md` 的“4.0 数据链路禁止硬门禁”和 `skills/fail-visible-data-pipelines/SKILL.md` 为准：除全源无任何原始记录外，质量问题必须保存已有数据、标记并主动上报；读取、查询、回放和界面观察同样不得阻断或伪造为空、零值、单帧。
+
+> **事故后的有效方向只有一个：采集与观察链路 fail visible，不因质量判断 fail closed。** 本文后续内容不再代表项目认可的架构口径。
+
 ## 背景
 
 2026-06-11 的 MongoDB 快照质量审计已经证明，当前正式快照生产链路仍然依赖 Dragon Board 浏览器运行态。前端页面打开后，`SnapshotRuntime` 注册 `snapshot.sweep`，再从 `DataLayer` 内存读取热榜、行情、题材、情绪、轮动等上下文，构造 `SnapshotDayBundle`，最后调用 QuantBoard `POST /api/snapshots/ingest` 写入 MongoDB。

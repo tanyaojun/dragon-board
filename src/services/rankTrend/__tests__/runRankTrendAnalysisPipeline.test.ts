@@ -402,6 +402,21 @@ describe('runRankTrendAnalysisPipeline', () => {
       cycle: refinedCycle,
       risk: riskResult,
       decision: decisionResult,
+      observation: {
+        rankTrend: { direction: 'buy', score: 21, signedScore: 0.21 },
+        lifecycle: {
+          stage: 'reversal',
+          score: 30,
+          veto: true,
+          reasons: ['refined'],
+          factors: {
+            stageFitness: 0,
+            pathCommitment: 0.72,
+            momentumConfirmation: 0.4025,
+            riskSafety: 0.18999999999999995,
+          },
+        },
+      },
       strategy: strategyResult,
       executionStrategy: executionStrategyResult,
     })

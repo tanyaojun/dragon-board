@@ -263,7 +263,7 @@ export class RankTrendSignalService {
   }
 
   /**
-   * 批量预计算三个展示字段（变化%、跃迁度、共振强度）并写入 stock 对象缓存。
+   * 批量预计算观察指标并写入 stock 对象缓存。
    * DataTable 模板和 uiStore 排序直接读取 _ 前缀缓存字段，消除 O(n) 次重量级分析调用。
    */
   private precomputeDisplayFields(stocks: any[]): void {
@@ -277,9 +277,20 @@ export class RankTrendSignalService {
       stock._jumpConfidence = Math.round(rankTrend?.jump?.confidence ?? 0)
       stock._jumpDirection = rankTrend?.jump?.direction ?? null
 
-      stock._resonancePct = rankTrend?.resonance?.score ?? 0
+      const resonanceScore = Number(rankTrend?.resonance?.score)
+      const rankTrendScore = Number(rankTrend?.observation?.rankTrend.score)
+      const lifecycleScore = Number(rankTrend?.observation?.lifecycle.score)
+      const hasResonance =
+        rankTrend?.resonance?.status === 'ok' && Number.isFinite(resonanceScore)
+
+      stock._resonancePct = hasResonance ? resonanceScore : undefined
       stock._resonanceLabel = rankTrend?.resonance?.label ?? '样本不足'
-      stock._resonanceRawScore = rankTrend?.resonance?.score ?? 0
+      stock._resonanceRawScore = hasResonance ? resonanceScore : undefined
+      stock._rankTrendPct = Number.isFinite(rankTrendScore) ? rankTrendScore : undefined
+      stock._rankTrendDirection = rankTrend?.observation?.rankTrend.direction ?? null
+      stock._lifecyclePct = Number.isFinite(lifecycleScore) ? lifecycleScore : undefined
+      stock._lifecycleStage = rankTrend?.observation?.lifecycle.stage ?? null
+      stock._lifecycleVeto = rankTrend?.observation?.lifecycle.veto ?? false
     }
   }
 

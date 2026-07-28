@@ -5,6 +5,7 @@ import {
 } from '@/services/rankTrend/executionCandidateTierComposer'
 import { analyzeAttentionCycle } from '@/services/rankTrend/attentionCycleAnalyzer'
 import { composeDecision } from '@/services/rankTrend/resultComposer'
+import { composeObservationScores } from '@/services/rankTrend/observationScoreComposer'
 import { analyzeRiskSignals } from '@/services/rankTrend/riskSignalAnalyzer'
 import {
   analyzeFallbackTechnicalSignals,
@@ -22,6 +23,7 @@ type RankTrendAnalysisPipelineResult = {
   cycle: RankTrendAnalysisResult['cycle']
   risk: RankTrendAnalysisResult['risk']
   decision: RankTrendAnalysisResult['decision']
+  observation: NonNullable<RankTrendAnalysisResult['observation']>
   strategy: NonNullable<RankTrendAnalysisResult['strategy']>
   executionStrategy: NonNullable<RankTrendAnalysisResult['executionStrategy']>
 }
@@ -101,6 +103,7 @@ export function runRankTrendAnalysisPipeline(
     risk,
     config,
   })
+  const observation = composeObservationScores({ technical, cycle, risk, decision })
   const strategy = composeCandidateTier({
     technical,
     cycle,
@@ -120,6 +123,7 @@ export function runRankTrendAnalysisPipeline(
     cycle,
     risk,
     decision,
+    observation,
     strategy,
     executionStrategy,
   }

@@ -173,6 +173,15 @@ def test_build_mongodb_indexes_contains_snapshot_and_stock_name_unique_keys() ->
         "keys": [
             ("datasetId", 1),
             ("type", 1),
+            ("code", 1),
+            ("timestamp", -1),
+            ("snapshotId", -1),
+        ]
+    } in indexes["snapshot_stock_rows"]
+    assert {
+        "keys": [
+            ("datasetId", 1),
+            ("type", 1),
             ("snapshotId", 1),
             ("avgRankNum", 1),
             ("code", 1),

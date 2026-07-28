@@ -247,7 +247,7 @@ describe('RankTrendSignalService', () => {
       rankTrend: undefined,
       finalSignal: 'hold',
       finalConfidence: 0,
-      _resonancePct: 0,
+      _resonancePct: undefined,
       _resonanceLabel: '样本不足',
     })
     expect(result[2].rankTrendCoverageWarning).toBe('均榜缺失')
@@ -749,6 +749,21 @@ describe('RankTrendSignalService', () => {
           meta: { change: 65.9 },
           jump: { direction: 'buy', confidence: 85 },
           resonance: { status: 'ok', direction: 'buy', score: 86, label: '非常强' },
+          observation: {
+            rankTrend: { direction: 'sell', score: 64, signedScore: -0.64 },
+            lifecycle: {
+              stage: 'expansion',
+              score: 83,
+              veto: false,
+              reasons: [],
+              factors: {
+                stageFitness: 1,
+                pathCommitment: 0.8,
+                momentumConfirmation: 0.7,
+                riskSafety: 0.75,
+              },
+            },
+          },
         },
       }
       const service = new RankTrendSignalService()
@@ -759,6 +774,11 @@ describe('RankTrendSignalService', () => {
         _resonancePct: 86,
         _resonanceRawScore: 86,
         _resonanceLabel: '非常强',
+        _rankTrendPct: 64,
+        _rankTrendDirection: 'sell',
+        _lifecyclePct: 83,
+        _lifecycleStage: 'expansion',
+        _lifecycleVeto: false,
       })
     })
 
@@ -821,9 +841,9 @@ describe('RankTrendSignalService', () => {
       const service = new RankTrendSignalService()
       const result = await service.applySignalsToMerged([{ code: '000001', name: '平安银行', avgRankNum: 1 }])
 
-      expect(result[0]._resonancePct).toBe(0)
+      expect(result[0]._resonancePct).toBeUndefined()
       expect(result[0]._resonanceLabel).toBe('样本不足')
-      expect(result[0]._resonanceRawScore).toBe(0)
+      expect(result[0]._resonanceRawScore).toBeUndefined()
     })
 
     it('sets _resonancePct / _resonanceLabel for thesis candidates with candidatePoolProjection', async () => {
@@ -865,7 +885,7 @@ describe('RankTrendSignalService', () => {
 
       expect(result[0]._rankChange).toBe(8)
       expect(result[0]._jumpConfidence).toBe(88)
-      expect(result[0]._resonancePct).toBe(0)
+      expect(result[0]._resonancePct).toBeUndefined()
       expect(result[0]._resonanceLabel).toBe('样本不足')
     })
 
@@ -903,7 +923,7 @@ describe('RankTrendSignalService', () => {
 
       expect(result[0]._rankChange).toBe(3)
       expect(result[0]._jumpConfidence).toBe(55)
-      expect(result[0]._resonancePct).toBe(0)
+      expect(result[0]._resonancePct).toBeUndefined()
       expect(result[0]._resonanceLabel).toBe('样本不足')
     })
   })
@@ -1033,5 +1053,26 @@ describe('RankTrendSignalService', () => {
     await vi.waitFor(() => expect(buildFusionStrategyProjections).toHaveBeenCalled())
     expect(buildFusionStrategyProjections).toHaveBeenCalledWith(result, expect.any(Object))
     expect(applyCandidatePoolProjections).toHaveBeenCalledWith(result, expect.any(Array))
+  })
+
+  it('keeps unavailable observation values missing instead of projecting zero', () => {
+    const service = new RankTrendSignalService()
+    const stocks = [
+      { code: '000001' },
+      {
+        code: '000002',
+        rankTrend: {
+          resonance: { status: 'insufficient', score: 0, label: '样本不足' },
+        },
+      },
+    ]
+
+    ;(service as any).precomputeDisplayFields(stocks)
+
+    for (const stock of stocks) {
+      expect(stock._resonancePct).toBeUndefined()
+      expect(stock._rankTrendPct).toBeUndefined()
+      expect(stock._lifecyclePct).toBeUndefined()
+    }
   })
 })
