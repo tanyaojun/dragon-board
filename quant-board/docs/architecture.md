@@ -189,7 +189,7 @@ SQLite/Supabase/Parquet legacy paths -> migration source or disabled endpoints i
 - `POST /api/snapshots/ingest` 是 Dragon Board 正式快照进入 MongoDB 的主入口。
 - `GET /api/snapshots/frames`、`GET /api/snapshots/records`、`GET /api/snapshots/stock-rows`、`GET /api/snapshots/sector-rows` 和 `GET /api/snapshots/counts` 从 MongoDB 读取，响应字段保持既有 camelCase API 合同。
 - `GET /api/ranktrend/rank-series?rank_basis=attention` 必须携带非空 `codes`，且仅允许 MongoDB 主库；非 MongoDB 环境返回 `503`。读取时在限窗前过滤无效 `avgRankNum`，再按每帧有效 `avgRankNum ASC, code ASC` 重建关注度排名，不改写快照事实字段，也不回退到 `rank` 或 `compRank`。
-- RankTrend 批量读按 `code` 分区在 MongoDB 端截取窗口，前端先发布 RankTrend/Jump/resonance，再异步同步 Fusion、候选日志和执行投影。Redis 响应通过 `cache.hit` 与统一耗时日志观测；ingest 会递增 dataset cache generation，阻止慢读回写已失效响应。
+- RankTrend 批量读按 `code` 分区在 MongoDB 端截取窗口，前端先发布 RankTrend/Jump/resonance，再异步同步 Fusion、候选日志和执行投影。Redis 响应通过 `cache.hit` 与统一耗时日志观测；API ingest 和后台 snapshot collector 的成功事实写入都会递增 dataset cache generation，阻止慢读回写已失效响应。
 - `GET /api/themes/mapping`、`GET /api/themes/stocks/{theme_id}`、`GET /api/themes/stocks/by-code/{code}` 和 `GET /api/themes/counts` 从 MongoDB 题材集合读取。
 - `POST /api/hotlist-sentiment/ingest`、历史回填脚本和 MongoDB 模式 `after-market-once` 共同写入 `hotlist_sentiment`；MongoDB 不可用时结构化失败，策略回测只能显式中性回退并保留原因。
 - 正式主库的历史残缺修复通过 `backfill-empty-mongodb-snapshots` 统一处理，允许补空快照、补 `snapshot_record`、修 frame 计数、补缺失的 `15:00` formal close slot，以及补运行库缺失索引；补槽位优先同粒度最近 donor，必要时允许显式跨粒度 donor；修复动作必须写 `migration_audit(opType=mongodb_snapshot_repair)`。
@@ -272,6 +272,8 @@ Dragon Board 题材基础映射由 `ThemeDataService` 通过 `GET /api/themes/ma
 
 一条标准快照一行，保存市场摘要和统计上下文。
 
+后端采集器生成的 frame 在 `metadata.rankProvenance` 保存排名公式溯源：`formulaVersion=weighted_platform_percentile_v1`、八平台实际榜单总行数 `platformTotals`、平台权重 `platformWeights`、平台名次字段映射 `rankFields` 和缺榜默认名次 `defaultRank=999`。该元数据用于解释当时的排名输入，不可用当前榜单容量替代历史值。
+
 MongoDB 模式下 `snapshot_frames` 还承担 formal snapshot 修复对账基线：
 
 - `stockRowCount/sectorRowCount` 必须与对应子集合真实行数一致。
@@ -282,6 +284,8 @@ MongoDB 模式下 `snapshot_frames` 还承担 formal snapshot 修复对账基线
 
 一条快照内的一只股票一行，是 rankTrend、回测、前端列表的主要事实表。
 涨停池增强字段随股票行保存，包括 `reason`、`firstZtTime`、`lastZtTime`、`boardHeight`、`highDays`、`fengdan` 等；MongoDB 模式保持 camelCase 字段，SQLite/Supabase 历史同构表使用对应 snake_case 列。
+
+排名事实字段随股票行保存：`rank`、`compRank`、`platforms`、`avgRank`、`avgRankNum`，以及八个平台原始名次 `emRank/thsRank/kplRank/tdxRank/xqRank/clsRank/tgbRank/dzhRank`。排名字段或公式溯源缺失时采集器仍保存事实，并分别写入 `qualityFlags=rank_fields_missing` 或 `rank_provenance_missing`，不得以质量门禁阻断整槽。
 
 RankTrend 信号列随股票行保存：`directionSignal/Confidence`、`accelerationSignal/Confidence`、`crossSignal/Confidence`（零轴穿越）、`finalSignal/Confidence`、`jumpDirection`（跃迁方向）、`jumpConfidence`（跃迁度）、`macdCross`（MACD 金叉死叉）、`resonanceIntensity`（共振强度，由上述信号加权派生）。
 
@@ -554,6 +558,8 @@ snapshot_type = half_hour
 
 ## THSBigOrder 本地历史归档
 
-`backend.big_order_archive_service.BigOrderArchiveService` 是独立的只读文件适配层，供桌面端历史会话查看使用。它从 `quant-board/data/big-order` 精确读取龙虎或 THS gzip 文件，验证归档中的 `sessionDate`、`stockCode`、`source` 和数据结构，再由 `/api/big-order/history` 返回原始归档。
+双源归档统一位于 `quant-board/data/big-order`。proxy-server 的 Longhu archiver 写入 `longhu/<sessionDate>/<stockCode>.money0.json.gz`，其采集清单同根写入 `longhu/collect-list/`；`backend.ths_main_monitor_service.ThsMainMonitorService` 在 THS 上游成功刷新后写入 `ths/<sessionDate>/<stockCode>.json.gz`。
+
+`backend.big_order_archive_service.BigOrderArchiveService` 是独立的只读文件适配层，供桌面端历史会话查看使用。它精确读取上述 Longhu 或 THS gzip 文件，验证归档中的 `sessionDate`、`stockCode`、`source` 和数据结构，再由 `/api/big-order/history` 返回原始归档。
 
 该链路不写 MongoDB，不参与快照事实、RankTrend、回测或优化，也不扫描或回退其他交易日期。缺档和损坏必须结构化失败，避免把其他交易日的大单叠加到所选分钟线。

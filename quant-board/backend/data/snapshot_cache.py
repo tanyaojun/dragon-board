@@ -211,3 +211,69 @@ def get_snapshot_redis_cache() -> SnapshotRedisCache:
             empty_ttl_seconds=settings.snapshot_empty_cache_ttl_seconds,
         )
     return _snapshot_redis_cache
+
+
+def invalidate_snapshot_cache_after_ingest(
+    *,
+    dataset_id: str,
+    records: list[Any],
+    frames: list[Any],
+    stock_rows: list[Any],
+    sector_rows: list[Any],
+) -> None:
+    def pick(item: Any, *keys: str) -> str:
+        for key in keys:
+            if isinstance(item, dict) and item.get(key):
+                return str(item.get(key) or "")
+            if hasattr(item, key) and getattr(item, key):
+                return str(getattr(item, key) or "")
+        return ""
+
+    snapshot_ids = {
+        pick(item, "id", "snapshotId", "snapshot_id")
+        for item in records
+        if pick(item, "id", "snapshotId", "snapshot_id")
+    }
+    snapshot_ids.update(
+        pick(item, "snapshotId", "snapshot_id", "id")
+        for item in [*frames, *stock_rows, *sector_rows]
+        if pick(item, "snapshotId", "snapshot_id", "id")
+    )
+
+    settings = get_settings()
+    index_keys: list[str] = []
+    seen_date_keys: set[tuple[str, str]] = set()
+    for item in [*records, *frames, *stock_rows, *sector_rows]:
+        snapshot_type = pick(item, "type")
+        trading_date = pick(item, "tradingDate", "trading_date")
+        if snapshot_type and trading_date:
+            seen_date_keys.add((snapshot_type, trading_date))
+
+    for snapshot_type, trading_date in seen_date_keys:
+        index_keys.extend(
+            build_snapshot_cache_index_keys(
+                prefix=settings.redis_key_prefix,
+                dataset_id=dataset_id,
+                snapshot_type=snapshot_type,
+                trading_date=trading_date,
+            )
+        )
+    index_keys.extend(
+        build_snapshot_cache_index_keys(
+            prefix=settings.redis_key_prefix,
+            dataset_id=dataset_id,
+            snapshot_ids=sorted(snapshot_ids),
+        )
+    )
+
+    try:
+        cache = get_snapshot_redis_cache()
+        cache.bump_generation(
+            build_snapshot_cache_generation_key(
+                prefix=settings.redis_key_prefix,
+                dataset_id=dataset_id,
+            )
+        )
+        cache.invalidate_indexes(list(dict.fromkeys(index_keys)))
+    except Exception:
+        return

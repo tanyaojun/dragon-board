@@ -115,6 +115,15 @@
           <span class="status-label">股票</span>
           <span class="status-value">{{ stockCount }}</span>
           <span class="status-unit">只</span>
+          <span class="status-label">东财:<span class="status-value">{{ marketSummary.eastmoney }}</span></span>
+          <span class="status-label">THS:<span class="status-value">{{ marketSummary.ths }}</span></span>
+          <span class="status-label">KPL:<span class="status-value">{{ marketSummary.kpl }}</span></span>
+          <span class="status-label">TDX:<span class="status-value">{{ marketSummary.tdx }}</span></span>
+          <span class="status-label">雪球:<span class="status-value">{{ marketSummary.xueqiu }}</span></span>
+          <span class="status-label">财联:<span class="status-value">{{ marketSummary.cls }}</span></span>
+          <span class="status-label">淘股吧:<span class="status-value">{{ marketSummary.tgb }}</span></span>
+          <span class="status-label">大智慧:<span class="status-value">{{ marketSummary.dzh }}</span></span>
+          <span class="status-label">行情:<span class="status-value">{{ marketSummary.quotes }}</span></span>
         </div>
       </div>
 
@@ -165,12 +174,10 @@
     <TradeJournalPanel v-model:visible="panels.journal" @close="panels.journal = false" />
     <HotStockEventMonitorPanel v-model:visible="panels.eventMonitor" :trigger-rect="panelRects.eventMonitor"
       @close="panels.eventMonitor = false" @select-stock="handleSelectStock" />
-    <StockL2DetailPanel :visible="panels.stockDetail" :stock-code="selectedStockCode"
-      :stock-name="selectedStockName" :trigger-rect="panelRects.stockDetail"
-      @close="panels.stockDetail = false" />
-    <RankTrendPanel :visible="panels.rankTrend" :stock-code="rankTrendStockCode"
-      :trigger-rect="panelRects.rankTrend" @update:visible="panels.rankTrend = $event"
-      @close="panels.rankTrend = false" />
+    <StockL2DetailPanel :visible="panels.stockDetail" :stock-code="selectedStockCode" :stock-name="selectedStockName"
+      :trigger-rect="panelRects.stockDetail" @close="panels.stockDetail = false" />
+    <RankTrendPanel :visible="panels.rankTrend" :stock-code="rankTrendStockCode" :trigger-rect="panelRects.rankTrend"
+      @update:visible="panels.rankTrend = $event" @close="panels.rankTrend = false" />
 
     <!-- 题材相关面板 -->
     <SectorDetail v-model:visible="panels.sectorDetail" :sector-name="sectorDetailName"
@@ -282,6 +289,7 @@ const selectedStockCode = ref('')
 const selectedStockName = ref('')
 const rankTrendStockCode = ref('')
 const lastUpdateTime = ref<number | null>(null)
+const marketSummaryVersion = ref(0)
 
 
 // 按钮引用
@@ -337,7 +345,29 @@ const eventUnsubscribers: (() => void)[] = []
 let disposeUIStore: (() => void) | undefined
 
 // ========== 计算属性 ==========
-const stockCount = computed(() => dataLayer.getStocks().length)
+const stockCount = computed(() => {
+  marketSummaryVersion.value
+  return dataLayer.getStocks().length
+})
+
+const marketSummary = computed(() => {
+  marketSummaryVersion.value
+  const platforms = dataLayer.getRawPlatforms() || {}
+  const count = (key: string) => (Array.isArray(platforms[key]) ? platforms[key].length : 0)
+
+  return {
+    totalStocks: dataLayer.getStocks().length,
+    eastmoney: count('eastmoney'),
+    ths: count('ths'),
+    kpl: count('kpl'),
+    tdx: count('tdx'),
+    xueqiu: count('xueqiu'),
+    cls: count('cls'),
+    tgb: count('tgb'),
+    dzh: count('dzh'),
+    quotes: dataLayer.getQuotesCount(),
+  }
+})
 
 // ========== 工具函数 ==========
 const formatTime = (timestamp: number) => {
@@ -594,7 +624,7 @@ const lazyLoadServices = () => {
       }
 
       // 旧龙头分析保留兼容；真龙复盘结果才是新主结论
-      safeExecute(dragonReviewService, 'recalculateAll', '旧龙头兼容计算').then(() => {})
+      safeExecute(dragonReviewService, 'recalculateAll', '旧龙头兼容计算').then(() => { })
     }, 500)
 
     // 第2批：辅助分析服务（延迟1.5秒）
@@ -689,8 +719,13 @@ onMounted(async () => {
   favoriteStore.init()
   void stockCodeManager.getAllStocks()
 
+  for (const path of ['raw.platforms', 'merged.stocks', 'quotes:batch']) {
+    eventUnsubscribers.push(dataLayer.subscribe(path, () => marketSummaryVersion.value++))
+  }
+
   // 执行主初始化
   await initializeAll()
+  marketSummaryVersion.value++
 
   // 其他设置
   selectorStore.registerKeyboardListener()
@@ -967,10 +1002,20 @@ body {
 .status-center {
   flex: 1;
   display: flex;
-  justify-content: center;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  min-width: 0;
+}
+
+.status-center :deep(.search-box) {
+  flex: 0 0 320px;
+  width: 320px;
   min-width: 200px;
-  max-width: 400px;
-  margin: 0 auto;
+}
+
+.status-center :deep(.search-input) {
+  box-sizing: border-box;
 }
 
 .status-group {
@@ -1023,6 +1068,32 @@ body {
   background-color: var(--bg-primary);
 }
 
+.platform-summary {
+  display: flex;
+  align-items: center;
+  flex: 1 1 auto;
+  gap: 0;
+  min-width: 0;
+  min-height: 28px;
+  overflow-x: auto;
+  color: var(--text-tertiary);
+  font-family: 'SF Mono', Monaco, Consolas, monospace;
+  font-size: 11px;
+  white-space: nowrap;
+  scrollbar-width: thin;
+}
+
+.platform-summary span+span::before {
+  content: '|';
+  margin: 0 2px;
+  color: var(--border-color);
+}
+
+.platform-summary-total {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
 @keyframes spin {
   from {
     transform: rotate(0deg);
@@ -1058,7 +1129,7 @@ body {
   }
 
   .status-center {
-    max-width: 300px;
+    gap: 12px;
   }
 }
 
@@ -1071,7 +1142,6 @@ body {
 
   .status-center {
     order: 3;
-    max-width: 100%;
     width: 100%;
   }
 
@@ -1102,12 +1172,23 @@ body {
     order: 2;
   }
 
+  .status-center :deep(.search-box) {
+    flex-basis: 200px;
+    width: 200px;
+  }
+
   .main-content {
     padding: 16px;
   }
 }
 
 @media (max-width: 480px) {
+
+  .status-center :deep(.search-box) {
+    flex-basis: 160px;
+    min-width: 160px;
+    width: 160px;
+  }
 
   .status-left,
   .status-right {

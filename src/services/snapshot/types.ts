@@ -78,6 +78,14 @@ export interface SnapshotStockRow {
   platforms: number
   avgRank?: string
   avgRankNum?: number
+  emRank?: number
+  thsRank?: number
+  kplRank?: number
+  tdxRank?: number
+  xqRank?: number
+  clsRank?: number
+  tgbRank?: number
+  dzhRank?: number
   price?: number
   change?: number
   volume?: number

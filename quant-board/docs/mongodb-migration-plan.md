@@ -31,6 +31,7 @@
 - `backfill-empty-mongodb-snapshots` 已扩展为 MongoDB 正式快照修复入口：默认 dry-run；`--apply` 可同时处理空快照补齐、`snapshot_record` 缺失补造、frame 计数字段漂移、缺失 `15:00` close slot 补造，以及运行库缺失索引补回，并写 `migration_audit(opType=mongodb_snapshot_repair)`。补槽位优先同粒度最近 donor，必要时允许显式跨粒度 donor。
 - `hotlist_sentiment` 已作为 MongoDB 研究集合接入，唯一业务键为 `datasetId + snapshotType + tradingDate`；历史回填脚本 `scripts/backfill_hotlist_sentiment.py` 默认 dry-run，显式 `--apply` 才会写入。
 - MongoDB 模式下 `/api/operations/after-market-once` 和 CLI `after-market-once` 不再调用旧 archive/prune 链路，只执行 `hotlistSentiment` 日终步骤。
+- 后端采集器已补齐股票行排名事实字段和 frame `metadata.rankProvenance`。历史 `source=quantboard_backend_collector` 数据中可精确恢复的 `compRank=rank` 已回填 271 个槽位、58581 行，`migration_audit` 审计 ID 为 `rank-field-backfill-31b03a5b1f1a4707aadcb407f623914c`；缺少历史平台原始名次的 `platforms/avgRank/avgRankNum` 不做推测回填。
 
 2026-05-12 停服窗口已执行：
 
@@ -43,18 +44,18 @@
 - 已执行污染清理：`/api/datasets` 当前仅返回 `dragonboard_live`；`inspect-mongodb` 显示正式快照仍保留 519 records/frames、109936 stock rows、8353 sector rows。
 - 已执行空股票快照补齐：`dragonboard_live` 当前仍为 519 records/frames，`snapshot_stock_rows` 从 109936 增至 110940，`snapshot_sector_rows` 仍为 8353。
 
-## 实验性后端快照采集器（shadow 模式）
+## 后端快照采集器
 
-`backend/snapshot_collector/` 是一个实验性的后端快照采集器，当前处于 shadow-only 阶段。该模块从 proxy-server 和 python-bridge 实时拉取热榜与行情数据，在 QuantBoard 后端独立完成快照组装、规范化和质量门禁，不依赖 Dragon Board 前端运行时。
+`backend/snapshot_collector/` 从 proxy-server 和 python-bridge 实时拉取热榜与行情数据，在 QuantBoard 后端独立完成快照组装、规范化和质量标记，不依赖浏览器是否打开。正式环境由 FastAPI 主进程生命周期启动调度器并写入 `dragonboard_live`；历史 shadow 数据集仅保留作审计参考。
 
-### `dragonboard_backend_shadow` 数据集
+### 数据集口径
 
-采集器写入一个独立的 shadow 数据集，不与 `dragonboard_live` 正式主库混写：
+正式采集写入 `dragonboard_live`，必须显式启用 collector 和 live 写入权限。`dragonboard_backend_shadow` 是切换前的历史对照数据集：
 
 - 数据集 ID：`dragonboard_backend_shadow`（由 `QUANT_BOARD_SNAPSHOT_COLLECTOR_DATASET_ID` 控制）。
 - 用途：平行对照和验收。该数据集只保存后端采集器的快照事实，用于与 Dragon Board 前端提交的 `dragonboard_live` 快照做覆盖率对比、质量审计和一致性校验。
 - 隔离规则：`QUANT_BOARD_SNAPSHOT_COLLECTOR_ALLOW_LIVE_DATASET` 默认 `false`，禁止采集器写入 `dragonboard_live` 或其他正式数据集。
-- 该数据集不参与正式回测、优化或 RankTrend 研究作为默认数据源；仅用于 shadow 验收。
+- 该数据集不参与正式回测、优化或 RankTrend 研究作为默认数据源；仅用于历史审计。
 
 ### 运维集合
 
@@ -76,8 +77,8 @@
 
 采集器在写入快照事实前执行质量门禁（`quality_gate.evaluate_quality()`）：
 
-- 检查数据源健康（proxy-server 和 python-bridge 均可达）。
-- 检查股票行数量（至少 1 条非空股票行）。
+- 只有八平台热榜全部不可用、无法采到任何股票时阻断写入。
+- 部分数据源失败、字段缺失、行情覆盖不足或排名溯源缺失一律保存，并写入结构化 warning/`qualityFlags`。
 - 检查时间窗口（当前时间在交易时段或收盘后 grace 窗口内）。
 - 质量门禁失败时运行状态标记为 `blocked`，写入 `snapshot_collector_runs` 保留审计轨迹，不写入快照事实集合。
 - 质量门禁只做阻塞判断，不修改上游数据源内容。
@@ -262,6 +263,8 @@ MongoDB 正式字段使用 camelCase，保持 Dragon Board 和 QuantBoard API �
 
 文档保留 Dragon Board 快照股票行的 camelCase 字段合同。涨停池增强字段 `reason/firstZtTime/lastZtTime/boardHeight/highDays/fengdan` 必须随 `snapshot_stock_rows` 写入和读回，用于复盘与导出。
 
+排名事实字段 `rank/compRank/platforms/avgRank/avgRankNum` 和 `emRank/thsRank/kplRank/tdxRank/xqRank/clsRank/tgbRank/dzhRank` 必须随行保存。对应 frame 的 `metadata.rankProvenance` 保存公式版本、当槽八平台总行数、平台权重、字段映射和缺榜默认名次；不得用当前榜单容量替换历史公式输入。
+
 `snapshot_sector_rows`
 
 - unique `{ datasetId: 1, rowId: 1 }`
@@ -408,7 +411,7 @@ ThemeTrend 研究集合：
 
 `GET /api/ranktrend/rank-series?rank_basis=attention` 仅允许 MongoDB 主库，不修改 `snapshot_stock_rows` 的原始 `rank`、`compRank` 或 `avgRankNum`；非 MongoDB 环境返回 `503`，不降级为综合排名。它在读取时按单帧有效 `avgRankNum ASC, code ASC` 重算横截面关注度排名、有效样本数和百分位基础；缺失 `avgRankNum` 的行不回退到综合排名。`rank_basis` 默认仍为 `composite`，以保持其他既有消费者不变。
 
-RankTrend 查询必须携带非空 `codes`，使用单次 `$in` 聚合，并按 code 分区限制 `window_bars`；attention 模式在限窗前先过滤无效 `avgRankNum`。禁止恢复逐代码 N+1 查询，也禁止把匹配的全历史行全部搬入 Python。响应继续使用 Redis read-through cache；snapshot ingest 后递增 dataset generation 并按 dataset/date/snapshot 索引失效，慢读不得回写失效前响应，并通过 `cache.hit` 和分阶段耗时日志验收。
+RankTrend 查询必须携带非空 `codes`，使用单次 `$in` 聚合，并按 code 分区限制 `window_bars`；attention 模式在限窗前先过滤无效 `avgRankNum`。禁止恢复逐代码 N+1 查询，也禁止把匹配的全历史行全部搬入 Python。响应继续使用 Redis read-through cache；API ingest 和后台 snapshot collector 成功写入事实集合后都必须递增 dataset generation 并按 dataset/date/snapshot 索引失效，慢读不得回写失效前响应，并通过 `cache.hit` 和分阶段耗时日志验收。
 
 ### 保持不变的题材 API
 

@@ -539,6 +539,30 @@ class TestMongoIntegrationDedup:
         assert counts_after_second == counts_after_first
 
 
+class TestMongoCollectorRunObservability:
+    def test_list_runs_removes_mongo_object_id_from_api_payload(self) -> None:
+        from bson import ObjectId
+        from backend.snapshot_collector.service_factory import _MongoSnapshotCollectorRepository
+
+        db = FakeMongoDatabase()
+        db["snapshot_collector_runs"].rows.append(
+            {
+                "_id": ObjectId(),
+                "runId": "run-observable",
+                "datasetId": "dragonboard_live",
+                "status": "blocked",
+                "createdAt": datetime.now(timezone.utc),
+            }
+        )
+        repo = _MongoSnapshotCollectorRepository(_mongo_repo(db), db)
+
+        result = repo.list_runs({"limit": 10})
+
+        assert result["total"] == 1
+        assert result["items"][0]["runId"] == "run-observable"
+        assert "_id" not in result["items"][0]
+
+
 class TestMongoIntegrationBlocked:
     """blocked quality writes run record but no fact collections."""
 

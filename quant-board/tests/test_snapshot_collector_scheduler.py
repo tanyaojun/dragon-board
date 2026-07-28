@@ -652,6 +652,76 @@ class TestSnapshotCollectorScheduler:
         assert len(fake_service.calls) == 0
         assert slot.snapshot_id not in s._in_flight_slots
 
+    @pytest.mark.asyncio
+    async def test_poll_once_reports_overdue_missing_slot(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from backend.snapshot_collector.scheduler import SnapshotCollectorScheduler
+
+        fake_settings = _make_settings()
+        monkeypatch.setattr(
+            "backend.snapshot_collector.scheduler.get_settings",
+            lambda: fake_settings,
+        )
+
+        scheduler = SnapshotCollectorScheduler()
+        slot = make_test_slot(timestamp_ms=1_000_000)
+        monkeypatch.setattr("backend.snapshot_collector.scheduler.time.time", lambda: 2_000.0)
+        monkeypatch.setattr(
+            "backend.snapshot_collector.trading_calendar.trading_date_from_ts",
+            lambda ts: "2026-06-15",
+        )
+        monkeypatch.setattr(
+            "backend.snapshot_collector.slots.generate_slots",
+            lambda date, types: [slot],
+        )
+        fake_repo = FakeRepo()
+        _patch_service_factory_repo(monkeypatch, fake_repo)
+
+        await scheduler._poll_once()
+
+        status = scheduler.status()
+        assert status["last_poll_at"] is not None
+        assert status["overdue_missing_slots"] == [slot.snapshot_id]
+
+    @pytest.mark.asyncio
+    async def test_poll_once_clears_resolved_slot_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from backend.snapshot_collector.scheduler import SnapshotCollectorScheduler
+
+        fake_settings = _make_settings()
+        monkeypatch.setattr(
+            "backend.snapshot_collector.scheduler.get_settings",
+            lambda: fake_settings,
+        )
+
+        scheduler = SnapshotCollectorScheduler()
+        slot = make_test_slot(timestamp_ms=1_000_000)
+        scheduler._checked_overdue_slots.add(slot.snapshot_id)
+        scheduler._overdue_missing_slots.add(slot.snapshot_id)
+        scheduler._last_error = "slot collection failed"
+        scheduler._last_error_at = "2026-06-15T10:06:00+08:00"
+        scheduler._last_error_slot = slot.snapshot_id
+        monkeypatch.setattr("backend.snapshot_collector.scheduler.time.time", lambda: 2_000.0)
+        monkeypatch.setattr(
+            "backend.snapshot_collector.trading_calendar.trading_date_from_ts",
+            lambda ts: "2026-06-15",
+        )
+        monkeypatch.setattr(
+            "backend.snapshot_collector.slots.generate_slots",
+            lambda date, types: [slot],
+        )
+        monkeypatch.setattr(
+            "backend.snapshot_collector.slots.is_slot_eligible",
+            lambda now_ts, slot_, grace_minutes=5: False,
+        )
+        _patch_service_factory_repo(monkeypatch, FakeRepo(existing_snapshots={slot.snapshot_id}))
+
+        await scheduler._poll_once()
+
+        status = scheduler.status()
+        assert status["overdue_missing_slots"] == []
+        assert status["last_error"] is None
+        assert status["last_error_at"] is None
+        assert status["last_error_slot"] is None
+
     # ── _collect_slot ────────────────────────────────────────────────────
 
     @pytest.mark.asyncio
@@ -762,6 +832,52 @@ class TestSnapshotCollectorScheduler:
         assert s._collection_count == 0
         assert s._error_count == 0
         assert slot.snapshot_id not in s._in_flight_slots
+
+    @pytest.mark.asyncio
+    async def test_collect_slot_treats_blocked_result_as_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from backend.snapshot_collector.scheduler import SnapshotCollectorScheduler
+
+        fake_settings = _make_settings()
+        monkeypatch.setattr(
+            "backend.snapshot_collector.scheduler.get_settings",
+            lambda: fake_settings,
+        )
+
+        scheduler = SnapshotCollectorScheduler()
+        slot = make_test_slot()
+        scheduler._in_flight_slots.add(slot.snapshot_id)
+        fake_repo = FakeRepo()
+        fake_service = FakeService(_result_status="blocked")
+        _patch_collect_slot_imports(monkeypatch, fake_repo, fake_service)
+
+        await scheduler._collect_slot(slot)
+
+        assert scheduler._collection_count == 0
+        assert scheduler._last_slot_collected is None
+        assert scheduler._error_count == 1
+        assert "blocked" in (scheduler._last_error or "")
+
+    @pytest.mark.asyncio
+    async def test_successful_slot_does_not_clear_another_slot_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from backend.snapshot_collector.scheduler import SnapshotCollectorScheduler
+
+        fake_settings = _make_settings()
+        monkeypatch.setattr(
+            "backend.snapshot_collector.scheduler.get_settings",
+            lambda: fake_settings,
+        )
+
+        scheduler = SnapshotCollectorScheduler()
+        scheduler._last_error = "slot A failed"
+        scheduler._last_error_slot = "half_hour:2026-06-15:09:30"
+        slot = make_test_slot(slot_time="10:00")
+        scheduler._in_flight_slots.add(slot.snapshot_id)
+        _patch_collect_slot_imports(monkeypatch, FakeRepo(), FakeService(_result_status="completed"))
+
+        await scheduler._collect_slot(slot)
+
+        assert scheduler._last_error == "slot A failed"
+        assert scheduler._last_error_slot == "half_hour:2026-06-15:09:30"
 
     # ── grace window ─────────────────────────────────────────────────────
 

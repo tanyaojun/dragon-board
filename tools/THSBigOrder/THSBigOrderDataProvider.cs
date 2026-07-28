@@ -184,7 +184,7 @@ namespace THSBigOrder
             RejectStaleBigOrderSession(big, minuteSessionDate, requestedSessionDate ?? DateTime.Now.Date);
             RejectStaleBigOrderSession(summary, minuteSessionDate, requestedSessionDate ?? DateTime.Now.Date);
 
-            var bigData = MergeBigOrderData(big.Data, summary.Data);
+            var bigData = MergeBigOrderData(big.Data, summary.Data, useLonghu);
             var stock = quote.Data ?? new StockSummary { Code = stockCode };
             var limitContext = limit.Data?.Context ?? new LimitUpContext();
             if (string.IsNullOrWhiteSpace(stock.Name)) stock.Name = bigData.StockFallback?.Name ?? "";
@@ -292,17 +292,34 @@ namespace THSBigOrder
 
         private static BigOrderSourceData MergeBigOrderData(
             BigOrderSourceData orders,
-            BigOrderSourceData summary)
+            BigOrderSourceData summary,
+            bool useLonghu)
         {
             orders = orders ?? new BigOrderSourceData();
             summary = summary ?? new BigOrderSourceData();
+            var selectedOrders = orders.Orders ?? new BigOrderItem[0];
             return new BigOrderSourceData
             {
                 StockFallback = summary.StockFallback ?? new StockSummary(),
-                MainFunds = summary.MainFunds ?? new MainFundSummary(),
-                Orders = orders.Orders ?? new BigOrderItem[0],
+                MainFunds = useLonghu
+                    ? SummarizeMainFunds(selectedOrders)
+                    : summary.MainFunds ?? new MainFundSummary(),
+                Orders = selectedOrders,
                 Prices = summary.Prices ?? new PricePoint[0],
                 SessionDate = orders.SessionDate,
+            };
+        }
+
+        private static MainFundSummary SummarizeMainFunds(IReadOnlyList<BigOrderItem> orders)
+        {
+            var mainBuy = orders.Where(order => order.IsBuy).Sum(order => order.Amount);
+            var mainSell = orders.Where(order => order.IsSell).Sum(order => order.Amount);
+            return new MainFundSummary
+            {
+                MainBuy = mainBuy,
+                MainSell = mainSell,
+                NetAmount = mainBuy - mainSell,
+                OrderCount = orders.Count,
             };
         }
 

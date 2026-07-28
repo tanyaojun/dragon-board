@@ -10,20 +10,18 @@ internal static class LauncherServices
         "mongo",
         "redis",
         "proxy",
-        VoiceServiceKey,
-        "frontend",
         "bridge",
         "quant-api",
-        "quant-ui"
+        "frontend",
+        "quant-ui",
+        VoiceServiceKey
     ];
 
-    public static readonly string[] CoreStartupKeys =
+    public static readonly string[][] CoreStartupStages =
     [
-        "mongo",
-        "redis",
-        "proxy",
-        "quant-api",
-        "bridge"
+        ["mongo", "redis"],
+        ["proxy", "bridge"],
+        ["quant-api"]
     ];
 
     public static Dictionary<string, ManagedService> Create(string root)

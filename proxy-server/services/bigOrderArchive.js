@@ -8,7 +8,15 @@ import { gunzip, gzip } from 'node:zlib'
 const gzipAsync = promisify(gzip)
 const gunzipAsync = promisify(gunzip)
 const __dirname = dirname(fileURLToPath(import.meta.url))
-const DEFAULT_DIR = join(__dirname, '..', 'data', 'big-order')
+const DEFAULT_DIR = join(
+  __dirname,
+  '..',
+  '..',
+  'quant-board',
+  'data',
+  'big-order',
+  'longhu',
+)
 
 // 大单全天快照本地永久归档（设计 §7.1）：
 // - Redis/L1 保持可丢弃缓存定位，永久资产以本地 gzip 文件为准。

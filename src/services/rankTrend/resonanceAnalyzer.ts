@@ -8,14 +8,20 @@ type ResonanceJump = {
 
 type ResonanceInput = {
   percentiles: number[]
-  sampleQuality: { status: 'ok' | 'degraded' | 'insufficient' }
+  sampleQuality: {
+    status: 'ok' | 'degraded' | 'insufficient'
+    timelineValid?: boolean
+  }
   marketMedianShortChange: number
   marketSampleCount: number
   jump: ResonanceJump
   entry?: { isNew: boolean; currentAttentionPercentile: number }
 }
 
-const MIN_SERIES_BARS = 4
+const SHORT_WINDOW_BARS = 3
+const MID_WINDOW_BARS = 8
+const PATH_WINDOW_BARS = 8
+const MIN_SERIES_POINTS = MID_WINDOW_BARS + 1
 const MIN_MARKET_SAMPLE_COUNT = 20
 
 function clamp(value: number, min: number, max: number): number {
@@ -55,6 +61,9 @@ export function analyzeRankResonance(input: ResonanceInput): RankTrendResonance 
   const percentiles = input.percentiles.map(Number)
   const isNewEntry = input.entry?.isNew === true
   const currentAttentionPercentile = Number(input.entry?.currentAttentionPercentile)
+  if (input.sampleQuality.timelineValid === false) {
+    return insufficient('快照时间轴不完整', input.marketMedianShortChange)
+  }
   if (isNewEntry) {
     if (!Number.isFinite(currentAttentionPercentile)) {
       return insufficient('新入榜关注度无效', input.marketMedianShortChange)
@@ -80,7 +89,7 @@ export function analyzeRankResonance(input: ResonanceInput): RankTrendResonance 
       reasons: [`新入榜关注度 ${Math.round(currentAttentionPercentile)}`],
     }
   }
-  if (percentiles.length < MIN_SERIES_BARS || percentiles.some((value) => !Number.isFinite(value))) {
+  if (percentiles.length < MIN_SERIES_POINTS || percentiles.some((value) => !Number.isFinite(value))) {
     return insufficient('排名序列不足或无效', input.marketMedianShortChange)
   }
   if (input.sampleQuality.status === 'insufficient') {
@@ -91,8 +100,8 @@ export function analyzeRankResonance(input: ResonanceInput): RankTrendResonance 
   }
 
   const lastIndex = percentiles.length - 1
-  const shortStartIndex = Math.max(0, lastIndex - 3)
-  const midStartIndex = Math.max(0, lastIndex - 8)
+  const shortStartIndex = lastIndex - SHORT_WINDOW_BARS
+  const midStartIndex = lastIndex - MID_WINDOW_BARS
   const shortBars = lastIndex - shortStartIndex
   const midBars = lastIndex - midStartIndex
   const shortChange = percentiles[lastIndex] - percentiles[shortStartIndex]
@@ -100,7 +109,7 @@ export function analyzeRankResonance(input: ResonanceInput): RankTrendResonance 
   const relativeMomentum = clamp((shortChange - input.marketMedianShortChange) / 15, -1, 1)
   const acceleration = clamp((shortChange - (midChange * shortBars) / midBars) / 15, -1, 1)
 
-  const pathPercentiles = percentiles.slice(-8)
+  const pathPercentiles = percentiles.slice(-(PATH_WINDOW_BARS + 1))
   const changes = pathPercentiles.slice(1).map((value, index) => value - pathPercentiles[index])
   const pathDirection = Math.sign(shortChange || midChange)
   const directionalChanges = changes.filter((value) => Math.sign(value) === pathDirection && pathDirection !== 0)
@@ -119,7 +128,10 @@ export function analyzeRankResonance(input: ResonanceInput): RankTrendResonance 
   const directionScore = relativeMomentum + acceleration + 0.2 * pathDirection * persistence
   const baseDirection: RankSignalDirection =
     directionScore > 0.1 ? 'buy' : directionScore < -0.1 ? 'sell' : 'hold'
-  const direction = input.jump.event === 'jump' && input.jump.direction !== 'hold' && input.jump.direction !== baseDirection
+  const hasReverseJump =
+    (baseDirection === 'buy' && input.jump.direction === 'sell') ||
+    (baseDirection === 'sell' && input.jump.direction === 'buy')
+  const direction = input.jump.event === 'jump' && hasReverseJump
     ? input.jump.direction
     : baseDirection
 

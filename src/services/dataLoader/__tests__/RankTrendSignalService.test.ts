@@ -381,8 +381,8 @@ describe('RankTrendSignalService', () => {
               updateTime: 1,
               sampleQuality: {
                 snapshotType: 'half_hour',
-                sampleCount: 8,
-                requiredSampleCount: 8,
+                sampleCount: 9,
+                requiredSampleCount: 9,
                 status: 'ok',
                 delayedCount: 0,
                 restoredCount: 0,
@@ -398,15 +398,24 @@ describe('RankTrendSignalService', () => {
     )
     vi.mocked(rankTrendAnalyzer.getRankTrends).mockResolvedValue(rankTrends as any)
     vi.mocked(rankTrendAnalyzer.getLatestAnalysisFrameKeys).mockReturnValue([
+      'H1',
+      'H2',
+      'H3',
+      'H4',
+      'H5',
       'S1',
       'S2',
       'S3',
       'CURRENT',
     ])
     vi.mocked(rankTrendAnalyzer.getLatestAnalysisSeries).mockImplementation((code: string) => ({
-      ranks: code === '002298' ? [97, 175, 165, 11] : [100, 90, 80, 70],
-      percentiles: code === '002298' ? [58.8, 27.5, 29.3, 95.2] : [45, 50, 55, 60],
-      frameKeys: ['S1', 'S2', 'S3', 'CURRENT'],
+      ranks: code === '002298'
+        ? [150, 140, 130, 120, 110, 97, 175, 165, 11]
+        : [140, 130, 120, 110, 100, 100, 90, 80, 70],
+      percentiles: code === '002298'
+        ? [30, 35, 40, 45, 50, 58.8, 27.5, 29.3, 95.2]
+        : [25, 30, 35, 40, 45, 45, 50, 55, 60],
+      frameKeys: ['H1', 'H2', 'H3', 'H4', 'H5', 'S1', 'S2', 'S3', 'CURRENT'],
     }))
 
     const service = new RankTrendSignalService()

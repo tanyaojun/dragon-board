@@ -35,6 +35,10 @@ internal sealed class LauncherForm : Form
     private bool _isManagerActionRunning;
     private bool _allowExit;
     private bool _trayNoticeShown;
+    private string _lastCollectorHealthFingerprint = "";
+    private string _pendingCollectorHealthFingerprint = "";
+    private int _pendingCollectorHealthCount;
+    private bool _collectorWasUnhealthy;
 
     public LauncherForm()
     {
@@ -83,11 +87,12 @@ internal sealed class LauncherForm : Form
             _trayIcon.Dispose();
             _trayMenu.Dispose();
         };
-        Shown += (_, _) =>
+        Shown += async (_, _) =>
         {
             Log("启动管理器已就绪。");
             Log($"项目目录: {_root}");
-            _ = RefreshStatusesAsync();
+            Log("启动管理器正在自动启动核心服务，确保盘中快照调度持续运行。");
+            await StartAllAsync();
         };
     }
 
@@ -127,7 +132,7 @@ internal sealed class LauncherForm : Form
         Controls.Add(titlePanel);
 
         int y = titlePanel.Bottom + 8;
-        var iconKeys = new[] { "DB", "RD", "PX", "VO", "FE", "BR", "QA", "QU" };
+        var iconKeys = new[] { "DB", "RD", "PX", "BR", "QA", "FE", "QU", "VO" };
         var keys = LauncherServices.OrderedKeys;
         for (int i = 0; i < keys.Length; i++)
         {
@@ -399,11 +404,17 @@ internal sealed class LauncherForm : Form
         _isRefreshingStatuses = true;
         var services = _services.ToArray();
         Dictionary<string, bool> statuses;
+        SnapshotCollectorHealth? collectorHealth = null;
         try
         {
             statuses = await Task.Run(() => services.ToDictionary(
                 kv => kv.Key,
                 kv => LauncherProcessManager.IsServiceRunning(kv.Value)));
+            collectorHealth = statuses.GetValueOrDefault("quant-api")
+                ? await SnapshotCollectorProbe.GetHealthAsync()
+                : SnapshotCollectorHealth.Unhealthy(
+                    "quant-api-offline",
+                    "快照采集错误: Quant API 未运行，调度器无法采集快照");
         }
         finally
         {
@@ -412,27 +423,69 @@ internal sealed class LauncherForm : Form
 
         if (IsDisposed) return;
 
+        var collectorFailed = ReportCollectorHealth(collectorHealth);
         var running = 0;
         foreach (var kv in statuses)
         {
             var key = kv.Key;
             var isRunning = kv.Value;
+            var serviceFailed = key == "quant-api" && collectorFailed;
 
             if (_dots.TryGetValue(key, out var dot))
             {
-                dot.BackColor = isRunning ? _green : _red;
+                dot.BackColor = isRunning && !serviceFailed ? _green : _red;
             }
 
             if (_statusLabels.TryGetValue(key, out var statusL))
             {
-                statusL.Text = isRunning ? "运行中" : "已停止";
-                statusL.ForeColor = isRunning ? _green : _red;
+                statusL.Text = serviceFailed ? "采集异常" : isRunning ? "运行中" : "已停止";
+                statusL.ForeColor = isRunning && !serviceFailed ? _green : _red;
             }
 
             if (isRunning) running++;
         }
 
         Text = $"龙头看板 · 启动管理器  [{running}/{_services.Count} 在线]";
+    }
+
+    private bool ReportCollectorHealth(SnapshotCollectorHealth? health)
+    {
+        if (health == null) return false;
+
+        if (!health.IsHealthy)
+        {
+            if (!string.Equals(
+                    _pendingCollectorHealthFingerprint,
+                    health.Fingerprint,
+                    StringComparison.Ordinal))
+            {
+                _pendingCollectorHealthFingerprint = health.Fingerprint;
+                _pendingCollectorHealthCount = 1;
+                return _collectorWasUnhealthy;
+            }
+
+            _pendingCollectorHealthCount++;
+            if (_pendingCollectorHealthCount < 2) return _collectorWasUnhealthy;
+
+            if (!string.Equals(
+                    _lastCollectorHealthFingerprint,
+                    health.Fingerprint,
+                    StringComparison.Ordinal))
+                Log(health.Message);
+
+            _collectorWasUnhealthy = true;
+            _lastCollectorHealthFingerprint = health.Fingerprint;
+            return true;
+        }
+
+        if (_collectorWasUnhealthy)
+            Log("快照采集恢复正常：调度器心跳和槽位完整性检查均通过。");
+
+        _pendingCollectorHealthFingerprint = "";
+        _pendingCollectorHealthCount = 0;
+        _collectorWasUnhealthy = false;
+        _lastCollectorHealthFingerprint = health.Fingerprint;
+        return false;
     }
 
     private void ToggleAutoStart()

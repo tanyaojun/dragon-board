@@ -9,6 +9,7 @@ import json
 import time
 import urllib.error
 import urllib.request
+from copy import deepcopy
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -341,6 +342,58 @@ class TestStartupBundleStockProvider:
         assert stocks[0]["turnover"] == 1875000000.0
         assert stocks[0]["turnoverRate"] == 5.5
 
+    def test_collect_preserves_rank_formula_inputs_from_platform_data(self) -> None:
+        provider = StartupBundleStockProvider(base_url=PROXY_BASE_URL, trading_date="2026-06-23")
+        mock_resp = _fake_urlopen_response(STARTUP_BUNDLE_RESPONSE)
+
+        with patch.object(urllib.request, "urlopen", return_value=mock_resp):
+            stocks, health = provider.collect(timeout_ms=5000)
+
+        assert health.details["rankProvenance"]["platformTotals"] == {
+            "eastmoney": 1,
+            "ths": 1,
+            "kpl": 0,
+            "tdx": 0,
+            "xueqiu": 0,
+            "cls": 0,
+            "tgb": 0,
+            "dzh": 0,
+        }
+        assert health.details["rankProvenance"]["formulaVersion"] == "weighted_platform_percentile_v1"
+        ping_an = next(stock for stock in stocks if stock["code"] == "000001")
+        assert ping_an["emRank"] == 1
+        assert ping_an["thsRank"] == 999
+        assert ping_an["platforms"] == 1
+        assert ping_an["avgRankNum"] == pytest.approx(100.0)
+        assert ping_an["avgRank"] == "100.0"
+
+    def test_collect_discards_stale_raw_ranks_not_present_in_platform_data(self) -> None:
+        body = deepcopy(STARTUP_BUNDLE_RESPONSE)
+        body["data"]["stocks"][2]["emRank"] = 5
+        provider = StartupBundleStockProvider(base_url=PROXY_BASE_URL, trading_date="2026-06-23")
+
+        with patch.object(urllib.request, "urlopen", return_value=_fake_urlopen_response(body)):
+            stocks, _ = provider.collect(timeout_ms=5000)
+
+        absent = next(stock for stock in stocks if stock["code"] == "300001")
+        assert absent["emRank"] == 999
+
+    def test_collect_reads_normalized_cls_and_dzh_rows_from_platform_data(self) -> None:
+        body = deepcopy(STARTUP_BUNDLE_RESPONSE)
+        body["data"]["platformData"].update({
+            "cls": [{"rank": 3, "code": "000001", "name": "平安银行", "rawData": {}}],
+            "dzh": [{"rank": 4, "code": "600000", "name": "浦发银行", "rawData": {}}],
+        })
+        provider = StartupBundleStockProvider(base_url=PROXY_BASE_URL, trading_date="2026-06-23")
+
+        with patch.object(urllib.request, "urlopen", return_value=_fake_urlopen_response(body)):
+            stocks, _ = provider.collect(timeout_ms=5000)
+
+        ping_an = next(stock for stock in stocks if stock["code"] == "000001")
+        pudong = next(stock for stock in stocks if stock["code"] == "600000")
+        assert ping_an["clsRank"] == 3
+        assert pudong["dzhRank"] == 4
+
     def test_collect_uses_default_today_key_when_trading_date_missing(self) -> None:
         provider = StartupBundleStockProvider(base_url=PROXY_BASE_URL)
         captured_urls: list[str] = []
@@ -386,6 +439,35 @@ class TestProxyHotlistProviderNormalization:
         assert health.source == "hotlist_proxy"
         assert health.row_count == 3
         assert len(stocks) == 3
+
+
+class TestProxyMergedHotlistProviderRankProvenance:
+    def test_collect_preserves_raw_platform_ranks_and_formula_inputs(self) -> None:
+        provider = ProxyMergedHotlistProvider(base_url=PROXY_BASE_URL)
+
+        def respond(req: urllib.request.Request, timeout: float = 0) -> MagicMock:
+            del timeout
+            return _fake_urlopen_response(_hotlist_response_for_url(req.full_url))
+
+        with patch.object(urllib.request, "urlopen", side_effect=respond):
+            stocks, health = provider.collect(timeout_ms=5000)
+
+        ping_an = next(stock for stock in stocks if stock["code"] == "000001")
+        assert ping_an["emRank"] == 1
+        assert ping_an["thsRank"] == 1
+        assert ping_an["kplRank"] == 1
+        assert ping_an["xqRank"] == 1
+        assert health.details["rankProvenance"]["platformTotals"] == {
+            "eastmoney": 3,
+            "ths": 3,
+            "kpl": 2,
+            "tdx": 1,
+            "xueqiu": 1,
+            "cls": 1,
+            "tgb": 1,
+            "dzh": 1,
+        }
+        assert health.details["rankProvenance"]["defaultRank"] == 999
 
     def test_normalized_fields_match_expected(self) -> None:
         provider = ProxyHotlistProvider(base_url=PROXY_BASE_URL)

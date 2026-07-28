@@ -83,6 +83,7 @@ def _source_health_dicts(market_context: MarketDataContext) -> list[dict[str, An
             "completed_at": sh.completed_at,
             "failed_batches": sh.failed_batches,
             "stale": sh.stale,
+            "details": sh.details,
         }
         for sh in market_context.source_health
     ]
@@ -241,6 +242,7 @@ class SnapshotCollectorService:
         collect_fn: Any = None,
         normalize_fn: Any = None,
         quality_fn: Any = None,
+        cache_invalidate_fn: Any = None,
         theme_heat_service: Any = None,
     ) -> None:
         from backend.data.schemas import SnapshotIngestRequest
@@ -250,6 +252,7 @@ class SnapshotCollectorService:
         self._collect_fn = collect_fn or providers_module.collect_market_context
         self._normalize_fn = normalize_fn or _default_normalize
         self._quality_fn = quality_fn or quality_gate_module.evaluate_quality
+        self._cache_invalidate_fn = cache_invalidate_fn
         self._theme_heat_service = theme_heat_service
         self._SnapshotIngestRequest = SnapshotIngestRequest
 
@@ -414,6 +417,11 @@ class SnapshotCollectorService:
             actual_timestamp_ms=actual_ts,
             grace_minutes=grace_minutes,
         )
+        if quality.warnings:
+            for item in [*records, *frames]:
+                existing_flags = item.get("qualityFlags")
+                flags = list(existing_flags) if isinstance(existing_flags, list) else []
+                item["qualityFlags"] = list(dict.fromkeys([*flags, *quality.warnings]))
 
         # 7 — Blocked
         if not quality.ok:
@@ -509,6 +517,14 @@ class SnapshotCollectorService:
             run_status = "deduped"
         else:
             run_status = "completed"
+            if self._cache_invalidate_fn is not None:
+                self._cache_invalidate_fn(
+                    dataset_id=dataset_id,
+                    records=records,
+                    frames=frames,
+                    stock_rows=stock_rows,
+                    sector_rows=sector_rows,
+                )
 
         run_doc = {
             "runId": run_id,

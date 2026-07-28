@@ -326,7 +326,8 @@ THSBigOrder 当前自动刷新间隔是 3 秒；交易时段 Longhu/THS fresh TT
 
 全天快照除 L1/L2 缓存外，作为数据资产永久保存到本地文件；Redis 仍保持"可丢弃、可重建的读缓存"定位，永久资产以磁盘文件为准。
 
-- 落点：`proxy-server/data/big-order/{sessionDate}/{stockCode}.money{money}.json.gz`，内容为 `{sessionDate, stockCode, money, fetchedAt, data:{List,Total,errcode}}` 的 gzip JSON。目录在 `.gitignore` 中，不提交仓库。
+- Longhu 落点：`quant-board/data/big-order/longhu/{sessionDate}/{stockCode}.money{money}.json.gz`，内容为 `{sessionDate, stockCode, money, fetchedAt, data:{List,Total,errcode}}` 的 gzip JSON。目录在 `.gitignore` 中，不提交仓库。
+- THS 落点：`quant-board/data/big-order/ths/{sessionDate}/{stockCode}.json.gz`，由 QuantBoard `ThsMainMonitorService` 在上游成功刷新后写入，内容保留 `title`、`list`、`pricechange` 和来源时间。
 - 触发：完整重建或增量合并成功、快照写入缓存的同一时刻异步归档；不新增守护进程、定时任务或质量门禁（完整性校验已由缓存写入前置条件承担）。
 - 覆盖语义：同一 `{sessionDate, stock, money}` 临时文件 + rename 原子覆盖；收盘后最后一次重建自然成为该股当日终稿。合法空结果和无法解析 sessionDate 的结果不归档。
 - 失败语义：归档失败只记 `[龙虎缓存] 快照归档失败` 日志，绝不影响接口响应和缓存写入。
@@ -338,7 +339,7 @@ THSBigOrder 当前自动刷新间隔是 3 秒；交易时段 Longhu/THS fresh TT
 
 覆盖"exe 没有打开查看过的股票"：当日进入候选池/交易池的股票（通常 ≤5 只）收盘后自动采集归档。
 
-- 登记：盘中调用 `POST /api/big-order/longhu/collect-list {stockCodes}` 登记当日清单；六位代码校验、去重、单日上限 20 只，落盘 `data/big-order/collect-list/{date}.json`，proxy 重启不丢。
+- 登记：盘中调用 `POST /api/big-order/longhu/collect-list {stockCodes}` 登记当日清单；六位代码校验、去重、单日上限 20 只，落盘 `quant-board/data/big-order/longhu/collect-list/{date}.json`。清单与 Longhu 归档共用同一根目录，proxy 重启不丢。
 - 自动触发：proxy 主进程内 `setInterval(60s).unref()` worker（参照 `eventRadarBackgroundWorker` 先例，不是独立进程），工作日 15:10~16:00 窗口对当日清单逐只执行 `loadAllDay`（走同一调度器、并发 1、同一归档器），每天最多一轮。
 - 手动兜底：`POST /api/big-order/longhu/collect`（可带 stockCodes）立即采集并返回逐只报告；命中缓存时无上游成本，重复执行代价趋近于零。
 - 无质量门禁：采到即归档，单只失败记日志跳过，不重试到死、不阻断。

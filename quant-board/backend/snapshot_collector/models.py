@@ -80,8 +80,9 @@ class SourceHealth:
     coverage_ratio: float = 0.0
     started_at: str = ""
     completed_at: str = ""
-    failed_batches: list[int] = field(default_factory=list)
+    failed_batches: list[int | str] = field(default_factory=list)
     stale: bool = False
+    details: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

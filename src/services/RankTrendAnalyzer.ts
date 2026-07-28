@@ -14,6 +14,7 @@ import {
 import { analyzeMarketRegime } from './rankTrend/marketRegimeAnalyzer'
 import { runRankTrendAnalysisPipeline } from './rankTrend/runRankTrendAnalysisPipeline'
 import { getTrustedVolumeRatio } from './dataLoader/VolumeRatioTrust'
+import { getExpectedSlots } from './snapshot/schedule'
 import {
   summarizeRankTrendStrategyDistribution,
   type RankTrendStrategyValidationReport,
@@ -25,6 +26,7 @@ import type {
 } from './rankTrend/types'
 
 const runtimeConfig: RankTrendRuntimeConfigModel = cloneDefaultRankTrendRuntimeConfig()
+const MAX_LIVE_HISTORY_GAP_MS = 7 * 24 * 60 * 60 * 1000
 type SnapshotCaptureMode = 'real_time' | 'delayed' | 'restored'
 type SupportedSnapshotType = RankTrendSnapshotType
 type RankTrendRankSeriesFrame = {
@@ -469,14 +471,26 @@ export class RankTrendAnalyzer {
       return results
     }
 
-    const sampleQuality = this.buildSampleQualitySummary(recentSnapshots, options.preferredSnapshotType)
+    const recentMarketWindow = recentSnapshots.slice(-getMaxStableBars())
+    const sampleQuality = this.buildSampleQualitySummary(
+      recentMarketWindow,
+      options.preferredSnapshotType,
+      !options.snapshots?.length,
+    )
+    const enforceLiveTimeline = !options.snapshots?.length
     const { prevRankMap, prevTotalCount } = this.getLatestRankSnapshot(recentSnapshots)
     const currentTotalCount = rankMap.size
     const snapshotsMap = this.buildSnapshotsMap(recentSnapshots)
     const snapshotSignature = this.buildSnapshotSignature(recentSnapshots)
     const weekdays = recentSnapshots.map((item) => item.date)
+    const appendCurrentFrame = this.shouldAppendCurrentFrame(
+      rankMap,
+      prevRankMap,
+      currentTotalCount,
+      prevTotalCount,
+    )
     const currentFrameKey = `current:${++this.currentFrameSequence}`
-    this.latestAnalysisFrameKeys = [...weekdays, currentFrameKey]
+    this.latestAnalysisFrameKeys = appendCurrentFrame ? [...weekdays, currentFrameKey] : weekdays
 
     const computedResults = await Promise.all(
       Array.from(rankMap.entries()).map(([code, currentRank]) =>
@@ -490,7 +504,9 @@ export class RankTrendAnalyzer {
           snapshots: snapshotsMap,
           snapshotSignature,
           sampleQuality,
+          enforceLiveTimeline,
           currentFrameKey,
+          appendCurrentFrame,
         }),
       ),
     )
@@ -622,6 +638,7 @@ export class RankTrendAnalyzer {
   private buildSampleQualitySummary(
     snapshots: RankTrendAnalysisSnapshot[],
     preferredType?: SupportedSnapshotType,
+    enforceLiveTimeline = false,
   ): SampleQualitySummary {
     const requiredSampleCount = getTechnicalMinSamples(runtimeConfig)
     const sampleCount = snapshots.length
@@ -632,9 +649,12 @@ export class RankTrendAnalyzer {
     const delayedCount = snapshots.filter((item) => item.captureMode === 'delayed').length
     const restoredCount = snapshots.filter((item) => item.captureMode === 'restored').length
     const preferred = preferredType ?? DEFAULT_RANK_TREND_SNAPSHOT_TYPE
+    const timelineWarnings = enforceLiveTimeline ? this.getLiveTimelineWarnings(snapshots) : []
 
     let status: SampleQualitySummary['status'] = 'insufficient'
-    if (sampleCount >= requiredSampleCount) {
+    if (timelineWarnings.length > 0) {
+      status = 'insufficient'
+    } else if (sampleCount >= requiredSampleCount) {
       status = 'ok'
     } else if (sampleCount >= 5) {
       status = 'degraded'
@@ -653,12 +673,14 @@ export class RankTrendAnalyzer {
     if (restoredCount > 0) {
       warnings.push(`包含 ${restoredCount} 个 restored 快照`)
     }
+    warnings.push(...timelineWarnings)
 
     return {
       snapshotType,
       sampleCount,
       requiredSampleCount,
       status,
+      timelineValid: timelineWarnings.length === 0,
       coverageWarning: warnings.length > 0 ? warnings.join('；') : undefined,
       latestTradingDate,
       latestSlotTime,
@@ -667,24 +689,96 @@ export class RankTrendAnalyzer {
     }
   }
 
+  private getLiveTimelineWarnings(snapshots: RankTrendAnalysisSnapshot[]): string[] {
+    if (!snapshots.length) return []
+
+    const warnings: string[] = []
+    for (let index = 1; index < snapshots.length; index++) {
+      const gap = snapshots[index].timestamp - snapshots[index - 1].timestamp
+      if (gap <= 0) {
+        warnings.push('历史快照时间乱序或重复')
+        break
+      }
+      if (gap > MAX_LIVE_HISTORY_GAP_MS) {
+        warnings.push('历史快照存在超过 7 天的时间断层')
+        break
+      }
+
+      const previous = snapshots[index - 1]
+      const current = snapshots[index]
+      if (previous.type !== current.type) continue
+      const expectedSlots = getExpectedSlots(current.type)
+      const previousSlotIndex = expectedSlots.indexOf(previous.slotTime || '')
+      const currentSlotIndex = expectedSlots.indexOf(current.slotTime || '')
+      if (previousSlotIndex < 0 || currentSlotIndex < 0) continue
+
+      const sameTradingDate = previous.tradingDate === current.tradingDate
+      const isConsecutive = sameTradingDate
+        ? currentSlotIndex === previousSlotIndex + 1
+        : previousSlotIndex === expectedSlots.length - 1 && currentSlotIndex === 0
+      if (!isConsecutive) {
+        warnings.push('历史快照存在缺失槽位')
+        break
+      }
+    }
+
+    const latestTimestamp = snapshots.at(-1)?.timestamp || 0
+    if (latestTimestamp > 0 && Date.now() - latestTimestamp > MAX_LIVE_HISTORY_GAP_MS) {
+      warnings.push('历史快照陈旧，最新帧距当前超过 7 天')
+    }
+    return warnings
+  }
+
+  private shouldAppendCurrentFrame(
+    currentRanks: Map<string, number>,
+    previousRanks: Map<string, number>,
+    currentTotalCount: number,
+    previousTotalCount: number,
+  ): boolean {
+    if (currentTotalCount !== previousTotalCount || currentRanks.size !== previousRanks.size) return true
+    return Array.from(currentRanks).some(([code, rank]) => previousRanks.get(code) !== rank)
+  }
+
   private derivePerStockSampleQuality(
     base: SampleQualitySummary,
     sampleCount: number,
+    hasTimelineGap: boolean,
   ): SampleQualitySummary {
     const status: SampleQualitySummary['status'] =
-      sampleCount >= base.requiredSampleCount ? 'ok' : sampleCount >= 5 ? 'degraded' : 'insufficient'
+      base.status === 'insufficient' || hasTimelineGap
+        ? 'insufficient'
+        : sampleCount >= base.requiredSampleCount
+          ? 'ok'
+          : sampleCount >= 5
+            ? 'degraded'
+            : 'insufficient'
 
     const warnings = base.coverageWarning ? [base.coverageWarning] : []
     if (sampleCount < base.requiredSampleCount) {
       warnings.push(`个股有效样本不足 ${sampleCount}/${base.requiredSampleCount}`)
     }
+    if (hasTimelineGap) warnings.push('个股排名历史存在缺失槽位')
 
     return {
       ...base,
       sampleCount,
       status,
+      timelineValid: base.timelineValid !== false && !hasTimelineGap,
       coverageWarning: warnings.length > 0 ? Array.from(new Set(warnings)).join('；') : undefined,
     }
+  }
+
+  private hasMissingIntermediateFrames(frameKeys: string[], expectedFrameKeys: string[]): boolean {
+    if (frameKeys.length < 2) return false
+    const expectedIndex = new Map(expectedFrameKeys.map((frameKey, index) => [frameKey, index]))
+    let previousIndex = -1
+    for (const frameKey of frameKeys) {
+      const currentIndex = expectedIndex.get(frameKey)
+      if (currentIndex === undefined) continue
+      if (previousIndex >= 0 && currentIndex !== previousIndex + 1) return true
+      previousIndex = currentIndex
+    }
+    return false
   }
 
   private buildSnapshotsMap(snapshots: RankTrendAnalysisSnapshot[]): Map<string, any> {
@@ -743,7 +837,9 @@ export class RankTrendAnalyzer {
     snapshots: Map<string, any>
     snapshotSignature: string
     sampleQuality: SampleQualitySummary
+    enforceLiveTimeline: boolean
     currentFrameKey: string
+    appendCurrentFrame: boolean
   }): Promise<[string, RankTrendResult | null]> {
     const {
       code,
@@ -755,7 +851,9 @@ export class RankTrendAnalyzer {
       snapshots,
       snapshotSignature,
       sampleQuality,
+      enforceLiveTimeline,
       currentFrameKey,
+      appendCurrentFrame,
     } = input
 
     const cacheKey = code
@@ -795,15 +893,19 @@ export class RankTrendAnalyzer {
       ? this.calculatePercentileRank(prevRank, prevTotalCount)
       : currentPercentile
     const displayChange = prevRank ? currentPercentile - prevPercentile : 0
-    const analysisRanks = [...ranks, currentRank]
-    const analysisPercentiles = [...percentiles, currentPercentile]
-    const analysisFrameKeys = [...frameKeys, currentFrameKey]
+    const analysisRanks = appendCurrentFrame ? [...ranks, currentRank] : [...ranks]
+    const analysisPercentiles = appendCurrentFrame ? [...percentiles, currentPercentile] : [...percentiles]
+    const analysisFrameKeys = appendCurrentFrame ? [...frameKeys, currentFrameKey] : [...frameKeys]
     this.latestAnalysisSeries.set(code, {
       ranks: [...analysisRanks],
       percentiles: [...analysisPercentiles],
       frameKeys: analysisFrameKeys,
     })
-    const stockSampleQuality = this.derivePerStockSampleQuality(sampleQuality, analysisPercentiles.length)
+    const stockSampleQuality = this.derivePerStockSampleQuality(
+      sampleQuality,
+      analysisPercentiles.length,
+      enforceLiveTimeline && this.hasMissingIntermediateFrames(analysisFrameKeys, this.latestAnalysisFrameKeys),
+    )
 
     const stock = dataLayer.getStock(code)
     // || 0 防御 Number("abc") 等非数字字符串产生 NaN 污染下游计算链

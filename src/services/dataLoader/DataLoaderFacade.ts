@@ -161,15 +161,18 @@ class DataLoaderService {
   }
 
   private async maybeRefreshPlatformCache(): Promise<boolean> {
+    platformHotlistService.markRefreshChecked()
     if (!platformHotlistService.shouldRefresh(this.PLATFORM_REFRESH_INTERVAL)) {
       return false
     }
 
+    debugLog('[DataLoader] 平台热榜缓存到期检查', platformHotlistService.getCacheDiagnostics())
     if (!platformHotlistService.hasFreshCache()) {
       await this.loadAllPlatforms(true)
       await this.loadLimitUpData(true)
       await themeFacade.refreshRuntime({ source: 'dataLoader', syncStocks: true })
       platformHotlistService.markRefreshed()
+      debugLog('[DataLoader] 平台热榜已重新加载', platformHotlistService.getCacheDiagnostics())
       return true
     }
 
@@ -703,6 +706,10 @@ class DataLoaderService {
 
   clearPlatformCache() {
     platformHotlistService.clearCache()
+  }
+
+  getPlatformCacheDiagnostics() {
+    return platformHotlistService.getCacheDiagnostics()
   }
 
   async loadLimitUpData(force = false): Promise<void> {

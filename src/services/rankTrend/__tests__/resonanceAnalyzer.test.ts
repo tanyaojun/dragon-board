@@ -8,7 +8,7 @@ describe('analyzeRankResonance', () => {
 
   it('uses relative momentum and persistence to keep a continuous rise as buy without a new jump', () => {
     const result = analyzeRankResonance({
-      percentiles: [42, 51, 63, 76, 88],
+      percentiles: [20, 28, 36, 44, 52, 61, 70, 79, 88],
       sampleQuality: quality,
       marketMedianShortChange: 12,
       jump: { direction: 'hold', event: 'none', events: [] },
@@ -23,10 +23,10 @@ describe('analyzeRankResonance', () => {
 
   it('lets a latest opposite jump override otherwise positive momentum', () => {
     const result = analyzeRankResonance({
-      percentiles: [42, 51, 63, 76, 88],
+      percentiles: [20, 28, 36, 44, 52, 61, 70, 79, 88],
       sampleQuality: quality,
       marketMedianShortChange: 12,
-      jump: { direction: 'sell', event: 'jump', events: [{ index: 4, direction: 'collapse', magnitude: 20 }] },
+      jump: { direction: 'sell', event: 'jump', events: [{ index: 8, direction: 'collapse', magnitude: 20 }] },
       marketSampleCount: 20,
     })
 
@@ -35,10 +35,10 @@ describe('analyzeRankResonance', () => {
 
   it('uses the full current-frame series of 002298 to produce buy', () => {
     const result = analyzeRankResonance({
-      percentiles: [58.8, 27.5, 29.3, 95.2],
+      percentiles: [40, 45, 50, 55, 60, 58.8, 27.5, 29.3, 95.2],
       sampleQuality: quality,
       marketMedianShortChange: 5,
-      jump: { direction: 'buy', event: 'jump', events: [{ index: 3, direction: 'surge', magnitude: 55.4 }] },
+      jump: { direction: 'buy', event: 'jump', events: [{ index: 8, direction: 'surge', magnitude: 55.4 }] },
       marketSampleCount: 20,
     })
 
@@ -47,7 +47,7 @@ describe('analyzeRankResonance', () => {
   })
 
   it('uses only the latest eight bars for path persistence and reversal penalty', () => {
-    const latestPath = [20, 30, 40, 50, 60, 70, 80, 90]
+    const latestPath = [10, 20, 30, 40, 50, 60, 70, 80, 90]
     const result = analyzeRankResonance({
       percentiles: [100, 0, 100, 0, ...latestPath],
       sampleQuality: quality,
@@ -79,6 +79,23 @@ describe('analyzeRankResonance', () => {
     })
   })
 
+  it('rejects a new entry when the live snapshot timeline is invalid', () => {
+    const result = analyzeRankResonance({
+      percentiles: [95],
+      sampleQuality: { status: 'insufficient', timelineValid: false },
+      marketMedianShortChange: 0,
+      marketSampleCount: 20,
+      jump: { direction: 'hold', event: 'none', events: [] },
+      entry: { isNew: true, currentAttentionPercentile: 95 },
+    })
+
+    expect(result).toMatchObject({
+      status: 'insufficient',
+      direction: 'hold',
+      score: 0,
+    })
+  })
+
   it('returns insufficient hold without a complete current frame or valid market cross-section', () => {
     const result = analyzeRankResonance({
       percentiles: [42, 51, 63],
@@ -94,5 +111,31 @@ describe('analyzeRankResonance', () => {
       score: 0,
       label: '样本不足',
     })
+  })
+
+  it('requires nine points to calculate a fixed eight-bar mid window', () => {
+    const result = analyzeRankResonance({
+      percentiles: [20, 30, 40, 50, 60, 70, 80, 90],
+      sampleQuality: quality,
+      marketMedianShortChange: 12,
+      jump: { direction: 'hold', event: 'none', events: [] },
+      marketSampleCount: 20,
+    })
+
+    expect(result.status).toBe('insufficient')
+    expect(result.direction).toBe('hold')
+  })
+
+  it('does not let a jump override a neutral base direction', () => {
+    const result = analyzeRankResonance({
+      percentiles: [50, 50, 50, 50, 50, 50, 50, 50, 50],
+      sampleQuality: quality,
+      marketMedianShortChange: 0,
+      jump: { direction: 'buy', event: 'jump', events: [{ index: 8, direction: 'surge', magnitude: 20 }] },
+      marketSampleCount: 20,
+    })
+
+    expect(result.status).toBe('ok')
+    expect(result.direction).toBe('hold')
   })
 })

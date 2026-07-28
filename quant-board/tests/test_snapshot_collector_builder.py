@@ -49,6 +49,18 @@ def make_fake_context() -> MarketDataContext:
                 "amount": 1875000000.0,
                 "turnover": 5.5,
                 "heat": 92.0,
+                "avgRankNum": 3.25,
+                "avgRank": "3.25",
+                "compRank": 4,
+                "platforms": 2,
+                "emRank": 8,
+                "thsRank": 3,
+                "kplRank": 999,
+                "tdxRank": 999,
+                "xqRank": 999,
+                "clsRank": 999,
+                "tgbRank": 999,
+                "dzhRank": 999,
                 "themes": ["银行", "深圳"],
             },
             {
@@ -123,6 +135,20 @@ def make_fake_context() -> MarketDataContext:
     )
 
 
+def make_context_with_rank_provenance() -> MarketDataContext:
+    ctx = make_fake_context()
+    ctx.source_health[0].details = {
+        "rankProvenance": {
+            "formulaVersion": "weighted_platform_percentile_v1",
+            "platformTotals": {"eastmoney": 100, "ths": 100},
+            "platformWeights": {"eastmoney": 0.75, "ths": 0.85},
+            "rankFields": {"eastmoney": "emRank", "ths": "thsRank"},
+            "defaultRank": 999,
+        }
+    }
+    return ctx
+
+
 # ── Builder output assertions ────────────────────────────────────────────────
 
 
@@ -194,9 +220,33 @@ class TestBuilderOutput:
         assert row0["turnover"] == pytest.approx(1875000000.0)
         assert row0["turnoverRate"] == 5.5
         assert row0["heat"] == 92.0
+        assert row0["avgRankNum"] == 3.25
+        assert row0["avgRank"] == "3.25"
+        assert row0["compRank"] == 4
+        assert row0["platforms"] == 2
+        assert row0["emRank"] == 8
+        assert row0["thsRank"] == 3
+        assert row0["kplRank"] == 999
+        assert row0["tdxRank"] == 999
+        assert row0["xqRank"] == 999
+        assert row0["clsRank"] == 999
+        assert row0["tgbRank"] == 999
+        assert row0["dzhRank"] == 999
         assert row0["themes"] == ["银行", "深圳"]
         assert row0["sectorLabel"] == "银行"
         assert row0["mainTheme"] == "银行"
+
+    def test_frame_preserves_rank_formula_provenance(self):
+        slot = make_slot_1500()
+        ctx = make_context_with_rank_provenance()
+
+        frame = build_ingest_payload(slot, ctx)["frames"][0]
+
+        assert frame["metadata"]["rankProvenance"]["formulaVersion"] == "weighted_platform_percentile_v1"
+        assert frame["metadata"]["rankProvenance"]["platformTotals"] == {
+            "eastmoney": 100,
+            "ths": 100,
+        }
 
     def test_stock_rows_include_limitup_and_depth_enrichment(self):
         slot = make_slot_1500()
@@ -406,6 +456,10 @@ class TestNormalizerCompatibility:
 
         # Records carry the right identity
         assert records[0]["id"] == "half_hour:2026-06-11:15:00"
+        assert stock_rows[0]["avgRankNum"] == 3.25
+        assert stock_rows[0]["avgRank"] == "3.25"
+        assert stock_rows[0]["compRank"] == 4
+        assert stock_rows[0]["platforms"] == 2
 
     def test_normalizer_rejects_empty_stock_rows(self):
         """normalizer must reject a bundle with no hotlist stock records."""

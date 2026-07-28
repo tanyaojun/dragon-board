@@ -97,6 +97,7 @@ export interface RankTrendAnalysisResult {
       sampleCount: number
       requiredSampleCount: number
       status: 'ok' | 'degraded' | 'insufficient'
+      timelineValid?: boolean
       coverageWarning?: string
       latestTradingDate?: string
       latestSlotTime?: string

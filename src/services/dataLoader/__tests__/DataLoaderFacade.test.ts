@@ -40,6 +40,8 @@ let volumeHistoryMapResult = new Map<string, number[]>()
 let intradayVolumeHistoryMapResult = new Map<string, number[]>()
 let volumeHistoryRequestCount = 0
 let intradayVolumeHistoryRequestCount = 0
+let shouldRefreshPlatformCache = false
+let hasFreshPlatformCache = true
 
 const timeState = vi.hoisted(() => ({
   tradingTime: true,
@@ -76,9 +78,17 @@ vi.mock('../PlatformHotlistService', () => ({
     }),
     getAllHotCodes: (data: Record<string, any[]>) =>
       new Set(Object.values(data || {}).flatMap((rows) => rows.map((row) => row.code))),
-    shouldRefresh: () => false,
-    hasFreshCache: () => true,
+    shouldRefresh: () => shouldRefreshPlatformCache,
+    hasFreshCache: () => hasFreshPlatformCache,
+    markRefreshChecked: vi.fn(),
     markRefreshed: vi.fn(),
+    getCacheDiagnostics: vi.fn(() => ({
+      lastCheckAt: 1000,
+      lastReloadAt: 1000,
+      lastLoadFromCache: false,
+      cacheTimestamp: 1000,
+      platforms: { eastmoney: { rowCount: 1, success: true } },
+    })),
     maintenance: vi.fn(),
     clearCache: vi.fn(),
   },
@@ -263,6 +273,8 @@ describe('DataLoaderFacade', () => {
     intradayVolumeHistoryMapResult = new Map()
     volumeHistoryRequestCount = 0
     intradayVolumeHistoryRequestCount = 0
+    shouldRefreshPlatformCache = false
+    hasFreshPlatformCache = true
     EventManager.clearHistory()
     vi.clearAllMocks()
   })
@@ -863,6 +875,45 @@ describe('DataLoaderFacade', () => {
     await (dataLoader as any).runQuoteRefresh(50)
 
     expect(rankTrendSignalService.refreshRankTrendSignals).toHaveBeenCalledTimes(1)
+  })
+
+  it('force reloads expired platform data and recalculates RankTrend during quote refresh', async () => {
+    shouldRefreshPlatformCache = true
+    hasFreshPlatformCache = false
+    const { dataLoader } = await import('../../dataLoader')
+    const { platformHotlistService } = await import('../PlatformHotlistService')
+    const { rankTrendSignalService } = await import('../RankTrendSignalService')
+    const { themeFacade } = await import('../../theme/ThemeFacade')
+    dataLayer.setMergedStocks([{ code: '000001', name: '平安银行' } as any])
+
+    await (dataLoader as any).runQuoteRefresh(50)
+
+    expect(platformHotlistService.markRefreshChecked).toHaveBeenCalledTimes(1)
+    expect(platformHotlistService.loadPlatforms).toHaveBeenCalledWith(
+      expect.any(Array),
+      true,
+      expect.any(Object),
+    )
+    expect(platformHotlistService.markRefreshed).toHaveBeenCalledTimes(1)
+    expect(themeFacade.refreshRuntime).toHaveBeenCalledWith({
+      source: 'dataLoader',
+      syncStocks: true,
+    })
+    expect(rankTrendSignalService.applySignalsToMerged).toHaveBeenCalled()
+    expect(rankTrendSignalService.refreshRankTrendSignals).not.toHaveBeenCalled()
+  })
+
+  it('exposes platform cache diagnostics through the DataLoader facade', async () => {
+    const { dataLoader } = await import('../../dataLoader')
+
+    expect(dataLoader.getPlatformCacheDiagnostics()).toEqual(
+      expect.objectContaining({
+        lastCheckAt: 1000,
+        lastReloadAt: 1000,
+        lastLoadFromCache: false,
+        platforms: { eastmoney: { rowCount: 1, success: true } },
+      }),
+    )
   })
 
   it('does not recalculate RankTrend signals outside trading time quote refresh', async () => {

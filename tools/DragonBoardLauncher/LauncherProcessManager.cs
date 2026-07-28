@@ -5,6 +5,13 @@ namespace DragonBoardLauncher;
 
 internal sealed class LauncherProcessManager
 {
+    private static readonly IReadOnlyDictionary<int, Uri> ReadinessUris =
+        new Dictionary<int, Uri>
+        {
+            [3000] = new("http://127.0.0.1:3000/health"),
+            [8765] = new("http://127.0.0.1:8765/health")
+        };
+
     private readonly string _root;
     private readonly IReadOnlyDictionary<string, ManagedService> _services;
     private readonly Action<string> _log;
@@ -23,8 +30,60 @@ internal sealed class LauncherProcessManager
 
     public void StartAll()
     {
-        foreach (var key in LauncherServices.CoreStartupKeys)
-            StartService(_services[key]);
+        var stageNames = new[] { "基础设施", "实时数据源", "快照调度" };
+        for (var index = 0; index < LauncherServices.CoreStartupStages.Length; index++)
+        {
+            var stage = LauncherServices.CoreStartupStages[index];
+            var stagePorts = string.Join(", ", stage.Select(key => _services[key].Port));
+            _log(
+                $"核心启动阶段 {index + 1}/{LauncherServices.CoreStartupStages.Length}: " +
+                $"{stageNames[index]}（端口 {stagePorts}）。");
+            foreach (var key in stage)
+                StartService(_services[key]);
+
+            if (WaitForServices(stage, TimeSpan.FromSeconds(30))) continue;
+
+            var unavailable = stage
+                .Where(key => !IsServiceReady(_services[key]))
+                .Select(key => $"{_services[key].Name}({_services[key].Port})");
+            _log($"核心启动错误: 依赖未就绪，已中止后续服务: {string.Join(", ", unavailable)}");
+            return;
+        }
+
+        _log("核心启动完成: MongoDB、Redis、代理、行情桥和 Quant API 均已就绪。");
+        _log("展示与辅助服务最后按需启动: 龙头看板 5173、量化面板 5174、本地语音 32145；不阻塞快照调度。");
+    }
+
+    private bool WaitForServices(IEnumerable<string> keys, TimeSpan timeout)
+    {
+        var pending = keys.ToArray();
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            if (pending.All(key => IsServiceReady(_services[key]))) return true;
+            Thread.Sleep(250);
+        }
+
+        return pending.All(key => IsServiceReady(_services[key]));
+    }
+
+    private static bool IsServiceReady(ManagedService service)
+    {
+        if (!IsServiceRunning(service)) return false;
+        if (service.Port == 8000)
+            return SnapshotCollectorProbe.GetHealthAsync().GetAwaiter().GetResult().IsHealthy;
+        if (!ReadinessUris.TryGetValue(service.Port, out var uri)) return true;
+
+        try
+        {
+            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(1) };
+            using var response = client.GetAsync(uri).GetAwaiter().GetResult();
+            return response.IsSuccessStatusCode;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     public void StopAll()

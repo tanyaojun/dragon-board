@@ -551,6 +551,36 @@ class TestWarningDelayedCapture:
         )
         assert "delayed_capture" not in result.warnings
 
+
+class TestWarningRankDataIncomplete:
+    def test_missing_rank_formula_provenance_warns_without_blocking(self) -> None:
+        result = _call(
+            stock_rows=[{
+                "code": "000001",
+                "avgRankNum": 3.2,
+                "avgRank": "3.2",
+                "compRank": 1,
+                "platforms": 3,
+            }],
+            source_health=[_make_source_health("startup_bundle", True)],
+        )
+
+        assert "rank_provenance_missing" in result.warnings
+        assert result.ok is True
+
+    def test_missing_rank_result_fields_warns_without_blocking(self) -> None:
+        result = _call(
+            stock_rows=[{"code": "000001", "compRank": 1}],
+            source_health=[{
+                "source": "merged_hotlist_proxy",
+                "ok": True,
+                "details": {"rankProvenance": {"platformTotals": {"eastmoney": 100}}},
+            }],
+        )
+
+        assert "rank_fields_missing" in result.warnings
+        assert result.ok is True
+
     def test_exact_grace_boundary_no_warning(self) -> None:
         slot_ts = _make_ts("2026-06-11", "15:00")
         boundary_ts = slot_ts + 5 * 60_000  # exactly at grace boundary

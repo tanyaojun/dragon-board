@@ -13,7 +13,7 @@ import math
 from datetime import datetime
 from typing import Any
 
-from backend.data import mongo_repository
+from backend.data import mongo_repository, snapshot_cache
 from backend.data.models import Dataset
 from backend.data.repository_factory import get_runtime_mongodb_database
 from backend.settings import get_settings
@@ -107,6 +107,8 @@ class _MongoSnapshotCollectorRepository:
             [("createdAt", -1)]
         )
         items = list(cursor)
+        for item in items:
+            item.pop("_id", None)
         total = len(items)
         return {"items": items[offset:offset + limit], "total": total}
 
@@ -443,6 +445,7 @@ def create_snapshot_collector_service(
     return SnapshotCollectorService(
         repo=repo,
         settings=settings,
+        cache_invalidate_fn=snapshot_cache.invalidate_snapshot_cache_after_ingest,
         theme_heat_service=get_theme_heat_service(),
     )
 
@@ -539,6 +542,18 @@ _STOCK_ROW_AUDIT_FIELDS = [
     "volumeRatio",
     "hotness",
     "rank",
+    "compRank",
+    "platforms",
+    "avgRank",
+    "avgRankNum",
+    "emRank",
+    "thsRank",
+    "kplRank",
+    "tdxRank",
+    "xqRank",
+    "clsRank",
+    "tgbRank",
+    "dzhRank",
     "depth10",
     "bid1Price",
     "ask1Price",

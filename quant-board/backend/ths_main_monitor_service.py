@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import gzip
 import json
+import logging
 import math
 import re
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any, Callable
+from uuid import uuid4
 
 import httpx
 
@@ -20,6 +24,10 @@ THS_HEADERS = {
     "Referer": "https://vaserviece.10jqka.com.cn/",
     "Accept": "application/json,text/plain,*/*",
 }
+DEFAULT_BIG_ORDER_ARCHIVE_ROOT = (
+    Path(__file__).resolve().parents[1] / "data" / "big-order"
+)
+logger = logging.getLogger(__name__)
 
 
 class ThsMainMonitorError(RuntimeError):
@@ -39,6 +47,7 @@ class ThsMainMonitorService:
         request_timeout_seconds: float = 15.0,
         upstream_url: str = THS_URL,
         max_concurrency: int = 2,
+        archive_root: Path | None = None,
     ) -> None:
         self._client = client or httpx.AsyncClient(headers=THS_HEADERS)
         self._owns_client = client is None
@@ -53,6 +62,7 @@ class ThsMainMonitorService:
         self._max_concurrency = max(1, min(2, int(max_concurrency)))
         self._effective_concurrency = self._max_concurrency
         self._cooldown_until_ms = 0
+        self._archive_root = archive_root
 
     async def aclose(self) -> None:
         if self._owns_client:
@@ -79,6 +89,7 @@ class ThsMainMonitorService:
             raw = self._validate_payload(payload)
             raw["fetchedAt"] = self._now_ms()
             self._write_raw(stock_code, raw)
+            await self._archive_raw_safely(stock_code, raw)
             return self._raw_result(stock_code, raw, stale=False)
         except ThsMainMonitorError:
             if cached:
@@ -92,6 +103,7 @@ class ThsMainMonitorService:
         source_ts = self._now_ms()
         raw["fetchedAt"] = source_ts
         self._write_raw(stock_code, raw)
+        await self._archive_raw_safely(stock_code, raw)
         main_buy = self._parse_amount(raw["title"].get("mainbuy"))
         main_sell = self._parse_amount(raw["title"].get("mainsell"))
         return {
@@ -127,7 +139,11 @@ class ThsMainMonitorService:
             try:
                 response = await self._client.get(
                     self._upstream_url,
-                    params={"op": "mainMonitorDetail", "stockcode": code},
+                    params={
+                        "op": "mainMonitorDetail",
+                        "stockcode": code,
+                        "_": str(self._now_ms()),
+                    },
                     headers=THS_HEADERS,
                     timeout=self._request_timeout_seconds,
                 )
@@ -209,7 +225,10 @@ class ThsMainMonitorService:
             if re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
                 return value
         for row in payload.get("pricechange") or []:
-            value = str(row[1] if isinstance(row, list) and len(row) > 1 else "")
+            if isinstance(row, dict):
+                value = str(row.get("1") or "")
+            else:
+                value = str(row[1] if isinstance(row, list) and len(row) > 1 else "")
             match = re.match(r"(\d{4})(\d{2})(\d{2})", value)
             if match:
                 return f"{match.group(1)}-{match.group(2)}-{match.group(3)}"
@@ -254,6 +273,44 @@ class ThsMainMonitorService:
         except Exception:
             pass
 
+    async def _archive_raw_safely(self, code: str, value: dict[str, Any]) -> None:
+        if self._archive_root is None:
+            return
+        try:
+            await asyncio.to_thread(self._archive_raw, code, value)
+        except Exception as error:
+            logger.warning("THS 大单归档失败 %s/%s: %s", value["sessionDate"], code, error)
+
+    def _archive_raw(self, code: str, value: dict[str, Any]) -> None:
+        target = (
+            self._archive_root
+            / "ths"
+            / value["sessionDate"]
+            / f"{code}.json.gz"
+        )
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temporary = target.with_name(f"{target.name}.tmp-{uuid4().hex[:8]}")
+        try:
+            payload = {
+                "source": "ths",
+                "sessionDate": value["sessionDate"],
+                "stockCode": code,
+                "fetchedAt": value["fetchedAt"],
+                "data": {
+                    "title": value["title"],
+                    "list": value["list"],
+                    "pricechange": value["pricechange"],
+                },
+            }
+            with gzip.open(temporary, "wt", encoding="utf-8") as stream:
+                json.dump(payload, stream, ensure_ascii=False, separators=(",", ":"))
+            temporary.replace(target)
+        finally:
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
+
     def _raw_result(self, code: str, raw: dict[str, Any], *, stale: bool) -> dict[str, Any]:
         return {
             "stockCode": code,
@@ -288,5 +345,6 @@ def get_ths_main_monitor_service() -> ThsMainMonitorService:
             request_timeout_seconds=settings.theme_fund_upstream_timeout_seconds,
             upstream_url=settings.theme_fund_ths_upstream_url,
             max_concurrency=settings.theme_fund_concurrency,
+            archive_root=DEFAULT_BIG_ORDER_ARCHIVE_ROOT,
         )
     return _service

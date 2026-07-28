@@ -80,6 +80,7 @@ vi.mock('../snapshot/facade', () => ({
 
 describe('RankTrendAnalyzer', () => {
   afterEach(async () => {
+    vi.useRealTimers()
     vi.resetAllMocks()
     const { rankTrendAnalyzer } = await import('../RankTrendAnalyzer')
     rankTrendAnalyzer.stop()
@@ -110,8 +111,15 @@ describe('RankTrendAnalyzer', () => {
     expect(result?.meta.sampleQuality?.latestTradingDate).toBe('2026-04-27')
   })
 
-  it('排名数值不变时仍把新的当前帧追加到分析序列', async () => {
+  it('当前完整排名与最新正式帧一致时不重复追加当前帧', async () => {
     const { rankTrendAnalyzer } = await import('../RankTrendAnalyzer')
+    const currentRanks = new Map<string, number>(
+      Array.from({ length: 100 }, (_, index) => [
+        index === 32 ? '600001' : `CURRENT${String(index + 1).padStart(3, '0')}`,
+        index + 1,
+      ]),
+    )
+    const currentHotlist = Array.from(currentRanks, ([code, rank]) => ({ code, rank }))
     const snapshots = [
       {
         date: '2026-04-27 14:30',
@@ -121,7 +129,9 @@ describe('RankTrendAnalyzer', () => {
           tradingDate: '2026-04-27',
           slotTime: '14:30',
           totalCount: 100,
-          hotlist: buildHotlist(40),
+          hotlist: currentHotlist.map((item) =>
+            item.code === '600001' ? { ...item, rank: 40 } : item,
+          ),
         },
       },
       {
@@ -132,23 +142,203 @@ describe('RankTrendAnalyzer', () => {
           tradingDate: '2026-04-27',
           slotTime: '15:00',
           totalCount: 100,
-          hotlist: buildHotlist(33),
+          hotlist: currentHotlist,
         },
       },
     ]
 
-    const currentRanks = new Map<string, number>(
-      Array.from({ length: 100 }, (_, index) => [
-        index === 32 ? '600001' : `CURRENT${String(index + 1).padStart(3, '0')}`,
-        index + 1,
-      ]),
-    )
     await rankTrendAnalyzer.getRankTrends(currentRanks, {
       updateSignalStore: false,
       snapshots,
     })
 
-    expect(rankTrendAnalyzer.getLatestAnalysisSeries('600001')?.ranks).toEqual([40, 33, 33])
+    expect(rankTrendAnalyzer.getLatestAnalysisSeries('600001')?.ranks).toEqual([40, 33])
+    expect(rankTrendAnalyzer.getLatestAnalysisFrameKeys()).toEqual([
+      '2026-04-27 14:30',
+      '2026-04-27 15:00',
+    ])
+  })
+
+  it('实时排名历史陈旧时标记样本不足并给出时间原因', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-28T10:00:00+08:00'))
+    const { apiService } = await import('../apiService')
+    vi.mocked(apiService.getRankTrendRankSeries).mockResolvedValue({
+      ok: true,
+      datasetId: 'dragonboard_live',
+      snapshotType: 'half_hour',
+      source: 'mongodb',
+      count: 50,
+      frames: Array.from({ length: 50 }, (_, index) => ({
+        snapshotId: `half_hour:2026-07-03:${index}`,
+        timestamp: Date.parse('2026-07-03T09:30:00+08:00') + index * 30 * 60 * 1000,
+        type: 'half_hour' as const,
+        tradingDate: '2026-07-03',
+        slotTime: '15:00',
+        captureMode: 'real_time' as const,
+        totalCount: 100,
+        ranks: { '600001': Math.max(1, 80 - index) },
+      })),
+    })
+
+    const { rankTrendAnalyzer } = await import('../RankTrendAnalyzer')
+    const result = (await rankTrendAnalyzer.getRankTrends(new Map([['600001', 30]]), {
+      updateSignalStore: false,
+    })).get('600001')
+
+    expect(result?.meta.sampleQuality?.status).toBe('insufficient')
+    expect(result?.meta.sampleQuality?.coverageWarning).toContain('历史快照陈旧')
+  })
+
+  it('单票旧窗口不会污染最近稳定市场窗口的样本质量', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-28T15:01:00+08:00'))
+    const { apiService } = await import('../apiService')
+    const slots = ['09:30', '10:00', '10:30', '11:00', '11:30', '13:00', '13:30', '14:00', '14:30', '15:00']
+    const tradingDates = ['2026-07-22', '2026-07-23', '2026-07-24', '2026-07-27', '2026-07-28']
+    const recentBars = tradingDates.flatMap((tradingDate) =>
+      slots.map((slotTime, index) => ({
+        snapshotId: `half_hour:${tradingDate}:${slotTime}`,
+        timestamp: Date.parse(`${tradingDate}T${slotTime}:00+08:00`),
+        code: '600001',
+        rank: 80 - index,
+        totalCount: 100,
+        tradingDate,
+        slotTime,
+        captureMode: 'real_time' as const,
+      })),
+    )
+    vi.mocked(apiService.getRankTrendRankSeries).mockResolvedValue({
+      ok: true,
+      datasetId: 'dragonboard_live',
+      snapshotType: 'half_hour',
+      source: 'mongodb',
+      count: 51,
+      frames: [],
+      series: {
+        '600001': { code: '600001', bars: recentBars },
+        '600002': {
+          code: '600002',
+          bars: [{
+            snapshotId: 'half_hour:2026-04-21:10:30',
+            timestamp: Date.parse('2026-04-21T10:30:00+08:00'),
+            code: '600002',
+            rank: 10,
+            totalCount: 100,
+            tradingDate: '2026-04-21',
+            slotTime: '10:30',
+            captureMode: 'real_time' as const,
+          }],
+        },
+      },
+    })
+
+    const { rankTrendAnalyzer } = await import('../RankTrendAnalyzer')
+    const result = (await rankTrendAnalyzer.getRankTrends(
+      new Map([['600001', 30], ['600002', 20]]),
+      { updateSignalStore: false },
+    )).get('600001')
+
+    expect(result?.meta.sampleQuality?.status).toBe('ok')
+    expect(result?.meta.sampleQuality?.coverageWarning ?? '').not.toContain('时间断层')
+  })
+
+  it('个股缺失中间市场帧时不把离散排名当作连续 bars', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-28T15:01:00+08:00'))
+    const { apiService } = await import('../apiService')
+    const slots = ['09:30', '10:00', '10:30', '11:00', '11:30', '13:00', '13:30', '14:00', '14:30', '15:00']
+    const frames = slots.map((slotTime, index) => ({
+      snapshotId: `half_hour:2026-07-28:${slotTime}`,
+      timestamp: Date.parse(`2026-07-28T${slotTime}:00+08:00`),
+      type: 'half_hour' as const,
+      tradingDate: '2026-07-28',
+      slotTime,
+      captureMode: 'real_time' as const,
+      totalCount: 100,
+      ranks: { '600002': index + 1 },
+    }))
+    vi.mocked(apiService.getRankTrendRankSeries).mockResolvedValue({
+      ok: true,
+      datasetId: 'dragonboard_live',
+      snapshotType: 'half_hour',
+      source: 'mongodb',
+      count: frames.length,
+      frames,
+      series: {
+        '600001': {
+          code: '600001',
+          snapshotType: 'half_hour',
+          bars: frames
+            .filter((_, index) => index !== 4)
+            .map((frame, index) => ({
+              code: '600001',
+              rank: 60 - index,
+              snapshotId: frame.snapshotId,
+              timestamp: frame.timestamp,
+              tradingDate: frame.tradingDate,
+              slotTime: frame.slotTime,
+              captureMode: frame.captureMode,
+              totalCount: frame.totalCount,
+            })),
+        },
+        '600002': {
+          code: '600002',
+          snapshotType: 'half_hour',
+          bars: frames.map((frame, index) => ({
+            code: '600002',
+            rank: index + 1,
+            snapshotId: frame.snapshotId,
+            timestamp: frame.timestamp,
+            tradingDate: frame.tradingDate,
+            slotTime: frame.slotTime,
+            captureMode: frame.captureMode,
+            totalCount: frame.totalCount,
+          })),
+        },
+      },
+    })
+
+    const { rankTrendAnalyzer } = await import('../RankTrendAnalyzer')
+    const result = (await rankTrendAnalyzer.getRankTrends(
+      new Map([['600001', 30], ['600002', 20]]),
+      { updateSignalStore: false },
+    )).get('600001')
+
+    expect(result?.meta.sampleQuality?.status).toBe('insufficient')
+    expect(result?.meta.sampleQuality?.coverageWarning).toContain('个股排名历史存在缺失槽位')
+  })
+
+  it('实时正式时间轴缺失盘中槽位时标记样本不足', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-28T15:01:00+08:00'))
+    const { apiService } = await import('../apiService')
+    const slots = ['09:30', '10:00', '10:30', '11:00', '13:00', '13:30', '14:00', '14:30', '15:00']
+    vi.mocked(apiService.getRankTrendRankSeries).mockResolvedValue({
+      ok: true,
+      datasetId: 'dragonboard_live',
+      snapshotType: 'half_hour',
+      source: 'mongodb',
+      count: slots.length,
+      frames: slots.map((slotTime, index) => ({
+        snapshotId: `half_hour:2026-07-28:${slotTime}`,
+        timestamp: Date.parse(`2026-07-28T${slotTime}:00+08:00`),
+        type: 'half_hour' as const,
+        tradingDate: '2026-07-28',
+        slotTime,
+        captureMode: 'real_time' as const,
+        totalCount: 100,
+        ranks: { '600001': 60 - index },
+      })),
+    })
+
+    const { rankTrendAnalyzer } = await import('../RankTrendAnalyzer')
+    const result = (await rankTrendAnalyzer.getRankTrends(new Map([['600001', 30]]), {
+      updateSignalStore: false,
+    })).get('600001')
+
+    expect(result?.meta.sampleQuality?.status).toBe('insufficient')
+    expect(result?.meta.sampleQuality?.coverageWarning).toContain('历史快照存在缺失槽位')
   })
 
   it('读取 RankTrend 专用排名时序而不是完整快照帧', async () => {

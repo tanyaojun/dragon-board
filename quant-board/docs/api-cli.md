@@ -153,7 +153,7 @@ Invoke-RestMethod http://127.0.0.1:8765/api/quotes/snapshot
 
 采集器通过 FastAPI 主进程的 `startup`/`shutdown` 生命周期自动管理 `SnapshotCollectorScheduler`，与 QuantBoard API 共用 `8000` 端口，无需独立守护进程。
 
-shadow 股票池优先读取 proxy-server `/api/cache/startup-bundle?key=default:YYYY-MM-DD`，该缓存由 Dragon Board live 前端写入，包含 live 当前 merged stocks。startup bundle 缺失或过期时，collector 默认调用 proxy-server 的八个平台热榜接口做 union fallback，生成各平台 rank 字段和 `avgRank/compRank/rank`，避免退回单平台 top100。只有 startup bundle 与八平台 union fallback 都不可用时，正式写入才会被质量门禁以 `startup_bundle_missing` 阻断。
+股票池优先读取 proxy-server `/api/cache/startup-bundle?key=default:YYYY-MM-DD`。startup bundle 缺失或过期时，collector 调用 proxy-server 的八个平台热榜接口做 union fallback，生成 `rank/compRank/platforms/avgRank/avgRankNum` 和各平台原始名次。任一平台失败只记录数据源健康和质量标记；只有 startup bundle 与八平台热榜全部不可用、无法采到任何股票时才阻断写入。frame 的 `metadata.rankProvenance` 同时保存当槽平台总行数、权重、字段映射和公式版本。
 
 ### `GET /api/snapshot-collector/status`
 
@@ -905,7 +905,7 @@ Invoke-RestMethod 'http://127.0.0.1:8000/api/snapshots/frames?dataset_id=dragonb
 
 `frames`、`records`、`stock-rows` 和 `sector-rows` 列表读口可启用 Redis read-through cache。Redis 只缓存查询响应，不替代 MongoDB 事实源；命中时 `source` 仍表示原始事实来源，`cache.hit=true`、`cache.store=redis` 只用于诊断。Redis 不可用时读口直接回 MongoDB。
 
-`rank-series` 使用同一缓存合同。服务日志以 `snapshot_response resource=ranktrend:rank-series cache_hit=<true|false> elapsed_ms=<n>` 记录命中与端到端耗时；Mongo 查询日志记录代码数、返回 bar 数、批量查询、关注度横截面重排和总耗时。每次快照 ingest 后会递增 dataset generation 并按 dataset/date/snapshot 索引失效关联 key，慢读无法在新 generation 中回写旧响应；前端现有 `dataLoader.ranktrendSignal` 仍按 30 分钟轮询读取。
+`rank-series` 使用同一缓存合同。服务日志以 `snapshot_response resource=ranktrend:rank-series cache_hit=<true|false> elapsed_ms=<n>` 记录命中与端到端耗时；Mongo 查询日志记录代码数、返回 bar 数、批量查询、关注度横截面重排和总耗时。API ingest 与后台 snapshot collector 每次成功写入快照事实后都会递增 dataset generation，并按 dataset/date/snapshot 索引失效关联 key，慢读无法在新 generation 中回写旧响应；前端现有 `dataLoader.ranktrendSignal` 仍按 30 分钟轮询读取。
 
 Dragon Board 根前端通过 `src/services/snapshot/backendRead.ts` 调用该接口。该适配层会默认带上
 `dataset_id=dragonboard_live`、`allowed_capture_modes=real_time,delayed` 和
@@ -1109,6 +1109,15 @@ Dragon Board 当前会在写入前通过 MongoDB 后端读口确认同一 `snaps
 
 `snapshot_stock_rows` 读写保持 camelCase 合同，涨停池复盘字段会随 `/api/snapshots/stock-rows` 返回，包括 `reason`、`firstZtTime`、`lastZtTime`、`boardHeight`、`highDays` 和 `fengdan`。迁移前 SQLite/Supabase 历史链路使用对应 snake_case 列保存 `reason`。
 
+排名字段合同包括 `rank/compRank/platforms/avgRank/avgRankNum` 和 `emRank/thsRank/kplRank/tdxRank/xqRank/clsRank/tgbRank/dzhRank`。历史后端采集器快照若仅保留严格连续且唯一的 `rank=1..N`，可用以下脚本精确回填 `compRank=rank`；默认 dry-run，只有 `--apply` 写库：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\backfill_snapshot_rank_fields.py --dataset-id dragonboard_live --dry-run
+.\.venv\Scripts\python.exe scripts\backfill_snapshot_rank_fields.py --dataset-id dragonboard_live --apply
+```
+
+该脚本只处理 `source=quantboard_backend_collector`，逐槽验证股票代码唯一和排名连续性。缺少每只股票当时的各平台原始名次时，不能从榜单固定容量反算 `platforms/avgRank/avgRankNum`，脚本不会伪造这些字段。
+
 示例响应：
 
 ```json
@@ -1215,7 +1224,7 @@ Dragon Board `ThemeDataService` 的正式读口。返回结构兼容旧 `ThemeMa
 
 ### THS 主力资金运行态接口
 
-- `GET /api/big-order/ths-detail?stockCode=002297`：返回单票 THS 原始明细，供 `tools/THSBigOrder` 使用；缓存命中时通过 `fetchedAt`、`servedAt` 和 `data.dragonMeta.cache.uiStale` 标识时效。
+- `GET /api/big-order/ths-detail?stockCode=002297`：返回单票 THS 原始明细，供 `tools/THSBigOrder` 使用；缓存命中时通过 `fetchedAt`、`servedAt` 和 `data.dragonMeta.cache.uiStale` 标识时效。上游成功刷新后同步归档到 `quant-board/data/big-order/ths/<sessionDate>/<stockCode>.json.gz`。
 - `GET /api/big-order/ths-fund-batch?codes=000001,600000&concurrency=2`：按最多 5 只股票返回标准化 `zlje`、`sessionDate` 和逐票失败；并发限制在 1 到 2。
 - `GET /api/themes/fund-rows?codes=000001,600000`：只读 Redis last-good 的诊断接口，不触发上游请求。
 - `WS /api/themes/fund-stream`：客户端发送 `{ "marketCodes": [...], "priorityCodes": [...] }`。`marketCodes` 持久化为 P1 行情池，`priorityCodes` 只在连接存续期间作为 P0；服务端先返回缓存全量状态，再推送版本化增量。
@@ -2311,9 +2320,9 @@ total_return: 0.123
 max_drawdown: -0.08
 ```
 
-### 实验性后端快照采集器 CLI
+### 后端快照采集器 CLI
 
-以下命令属于 `backend/snapshot_collector/` 实验模块。当前默认禁用，写目标默认限定为 `dragonboard_backend_shadow` 数据集。Phase 6 正式切换到 `dragonboard_live` 前，必须同时设置 `QUANT_BOARD_SNAPSHOT_COLLECTOR_DATASET_ID=dragonboard_live` 与 `QUANT_BOARD_SNAPSHOT_COLLECTOR_ALLOW_LIVE_DATASET=1`；CLI 预检和 quality gate 才会放行 live 数据集，其它 dataset 仍拒绝。命令直接输出 JSON，不做富文本格式化。
+以下命令属于 `backend/snapshot_collector/`。正式采集由 FastAPI 生命周期内的调度器执行；CLI 用于状态查询、人工单次采集、补采和审计。写入 `dragonboard_live` 必须同时设置 `QUANT_BOARD_SNAPSHOT_COLLECTOR_DATASET_ID=dragonboard_live` 与 `QUANT_BOARD_SNAPSHOT_COLLECTOR_ALLOW_LIVE_DATASET=1`。命令直接输出 JSON，不做富文本格式化。
 
 ### `snapshot-collector-status`
 

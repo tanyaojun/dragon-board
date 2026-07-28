@@ -43,6 +43,18 @@ dotnet build tools\DragonBoardLauncher\DragonBoardLauncher.csproj -c Release
 dotnet publish tools\DragonBoardLauncher\DragonBoardLauncher.csproj -p:PublishProfile=RootSingleFile
 ```
 
+## 核心启动顺序
+
+启动管理器会按依赖分阶段自动启动核心服务。每个阶段必须通过就绪检查，才会启动下一阶段：
+
+1. `27017` MongoDB、`6379` Redis：持久化和缓存基础设施，最先启动。
+2. `3000` 本地代理、`8765` 行情桥：快照采集的数据源，随后启动，并分别检查 `/health`。
+3. `8000` Quant API：最后启动核心服务；FastAPI startup 会在这里启动快照 scheduler，并检查 `/api/health` 中的启用状态、运行状态和轮询心跳。
+
+`5173` 龙头看板、`5174` 量化面板和 `32145` 本地语音属于展示或辅助服务，最后按需手动启动，不影响快照调度。`8081` Mongo Express、`8082` Redis Commander 仅在打开数据库/缓存管理页时启动，也不进入核心启动链。
+
+任一核心阶段在 30 秒内未就绪时，管理器会记录错误并停止启动下游，避免依赖尚未可用就启动 scheduler。
+
 ## 发布结论
 
 发布完成后，只看这一处：

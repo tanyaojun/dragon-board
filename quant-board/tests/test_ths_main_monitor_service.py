@@ -52,12 +52,13 @@ async def test_load_row_uses_configured_upstream_url() -> None:
         client=client,
         upstream_url="https://ths.example.test/custom",
         request_timeout_seconds=1,
+        now_ms=lambda: 1_785_151_200_123,
     )
 
     await service.load_row("002297")
 
     assert requested_urls == [
-        "https://ths.example.test/custom?op=mainMonitorDetail&stockcode=002297"
+        "https://ths.example.test/custom?op=mainMonitorDetail&stockcode=002297&_=1785151200123"
     ]
     await service.aclose()
 

@@ -60,6 +60,8 @@ def evaluate_quality(
       estimation or has failed
     * ``theme_mapping_partial`` — a theme-related source failed
     * ``sector_rows_partial`` — sector rows present but fewer than expected
+    * ``rank_provenance_missing`` — hotlist collector omitted formula inputs
+    * ``rank_fields_missing`` — one or more stock rows omitted rank facts
     * ``delayed_capture`` — *actual_timestamp_ms* exceeds the grace window
     """
     blocking: list[str] = []
@@ -146,6 +148,41 @@ def evaluate_quality(
         for frame in frames
     ):
         warnings.append("sector_rows_partial")
+
+    rank_sources = [
+        source
+        for source in source_health
+        if str(source.get("source") or "") in {"startup_bundle", "merged_hotlist_proxy"}
+        and source.get("ok")
+    ]
+    if rank_sources:
+        has_rank_provenance = any(
+            isinstance(source.get("details"), dict)
+            and isinstance(source["details"].get("rankProvenance"), dict)
+            for source in rank_sources
+        )
+        if not has_rank_provenance:
+            warnings.append("rank_provenance_missing")
+
+        required_rank_fields = (
+            "avgRankNum",
+            "avgRank",
+            "compRank",
+            "platforms",
+            "emRank",
+            "thsRank",
+            "kplRank",
+            "tdxRank",
+            "xqRank",
+            "clsRank",
+            "tgbRank",
+            "dzhRank",
+        )
+        if any(
+            any(field not in row or row.get(field) is None for field in required_rank_fields)
+            for row in stock_rows
+        ):
+            warnings.append("rank_fields_missing")
 
     # delayed_capture
     grace_ms = grace_minutes * 60 * 1000

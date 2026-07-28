@@ -238,6 +238,15 @@ def build_ingest_payload(
         Optional list of quality-warning tags recorded alongside the payload.
     """
     snapshot_id = slot.snapshot_id
+    rank_provenance = next(
+        (
+            health.details.get("rankProvenance")
+            for health in market_context.source_health
+            if isinstance(health.details, dict)
+            and isinstance(health.details.get("rankProvenance"), dict)
+        ),
+        None,
+    )
 
     # ── Record (item) ─────────────────────────────────────────────────────
     record = {
@@ -254,6 +263,7 @@ def build_ingest_payload(
             "hotlist": market_context.stocks,
             "sectors": market_context.sectors,
             "marketStats": market_context.market_meta,
+            "metadata": {"rankProvenance": rank_provenance} if rank_provenance else {},
         },
     }
 
@@ -269,6 +279,7 @@ def build_ingest_payload(
         "captureMode": capture_mode,
         "source": source,
         "marketStats": market_context.market_meta,
+        "metadata": {"rankProvenance": rank_provenance} if rank_provenance else {},
         "stockRowCount": 0,
         "sectorRowCount": len(market_context.sectors),
     }
@@ -297,7 +308,27 @@ def build_ingest_payload(
         }
 
         # Optional camelCase fields carried through when present
-        for field in ("price", "pctChange", "volume", "amount", "turnover", "turnoverRate", "heat"):
+        for field in (
+            "price",
+            "pctChange",
+            "volume",
+            "amount",
+            "turnover",
+            "turnoverRate",
+            "heat",
+            "avgRankNum",
+            "avgRank",
+            "compRank",
+            "platforms",
+            "emRank",
+            "thsRank",
+            "kplRank",
+            "tdxRank",
+            "xqRank",
+            "clsRank",
+            "tgbRank",
+            "dzhRank",
+        ):
             if field in stock:
                 row[field] = stock[field]
 

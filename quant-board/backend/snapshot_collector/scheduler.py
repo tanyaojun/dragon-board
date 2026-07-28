@@ -13,11 +13,15 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import datetime
+import logging
 import time
 from typing import Any
 
 from backend.settings import get_settings
 from backend.snapshot_collector.trading_calendar import TZ_SHANGHAI
+
+
+logger = logging.getLogger(__name__)
 
 
 class SnapshotCollectorScheduler:
@@ -48,10 +52,17 @@ class SnapshotCollectorScheduler:
         self._task: asyncio.Task[None] | None = None
         self._in_flight_slots: set[str] = set()
         self._last_run_at: str | None = None
+        self._last_poll_at: str | None = None
         self._last_error: str | None = None
+        self._last_error_at: str | None = None
+        self._last_error_slot: str | None = None
         self._last_slot_collected: str | None = None
         self._collection_count: int = 0
         self._error_count: int = 0
+        self._health_trading_date: str | None = None
+        self._checked_overdue_slots: set[str] = set()
+        self._overdue_missing_slots: set[str] = set()
+        self._last_missing_recheck_ts: int = 0
 
     # ── lifecycle ──────────────────────────────────────────────────────────
 
@@ -93,11 +104,15 @@ class SnapshotCollectorScheduler:
             "snapshot_types": self.snapshot_types,
             "poll_seconds": self.poll_seconds,
             "grace_minutes": self.grace_minutes,
+            "last_poll_at": self._last_poll_at,
             "last_run_at": self._last_run_at,
             "last_slot_collected": self._last_slot_collected,
             "last_error": self._last_error,
+            "last_error_at": self._last_error_at,
+            "last_error_slot": self._last_error_slot,
             "collection_count": self._collection_count,
             "error_count": self._error_count,
+            "overdue_missing_slots": sorted(self._overdue_missing_slots),
             "in_flight_slots": sorted(self._in_flight_slots),
         }
 
@@ -108,10 +123,16 @@ class SnapshotCollectorScheduler:
         while True:
             try:
                 await self._poll_once()
-                self._last_error = None
+                if self._last_error_slot == "scheduler_poll":
+                    self._last_error = None
+                    self._last_error_at = None
+                    self._last_error_slot = None
             except Exception as exc:
                 self._last_error = str(exc)
+                self._last_error_at = datetime.datetime.now(TZ_SHANGHAI).isoformat()
+                self._last_error_slot = "scheduler_poll"
                 self._error_count += 1
+                logger.exception("snapshot collector scheduler poll failed")
             await asyncio.sleep(self.poll_seconds)
 
     async def _poll_once(self) -> None:
@@ -121,9 +142,16 @@ class SnapshotCollectorScheduler:
         from backend.snapshot_collector.trading_calendar import trading_date_from_ts
 
         now_ts = int(time.time() * 1000)
+        self._last_poll_at = datetime.datetime.now(TZ_SHANGHAI).isoformat()
         trading_date = trading_date_from_ts(now_ts)
         if trading_date is None:
             return  # Non-trading day
+
+        if trading_date != self._health_trading_date:
+            self._health_trading_date = trading_date
+            self._checked_overdue_slots.clear()
+            self._overdue_missing_slots.clear()
+            self._last_missing_recheck_ts = 0
 
         # Generate ALL slots for today across all configured types
         all_slots = generate_slots(trading_date, self.snapshot_types)
@@ -140,6 +168,34 @@ class SnapshotCollectorScheduler:
             # Fire and forget — dedup is double-checked inside _collect_slot.
             self._in_flight_slots.add(slot.snapshot_id)
             asyncio.create_task(self._collect_slot(slot))
+
+        grace_ms = self.grace_minutes * 60 * 1000
+        recheck_missing = now_ts - self._last_missing_recheck_ts >= 30_000
+        checked_overdue = False
+        for slot in all_slots:
+            if now_ts <= slot.timestamp_ms + grace_ms:
+                continue
+            if slot.snapshot_id in self._in_flight_slots:
+                continue
+            if slot.snapshot_id in self._checked_overdue_slots:
+                if slot.snapshot_id not in self._overdue_missing_slots or not recheck_missing:
+                    continue
+
+            exists = repo.snapshot_exists(self.dataset_id, slot.snapshot_id)
+            checked_overdue = True
+            self._checked_overdue_slots.add(slot.snapshot_id)
+            if exists:
+                self._overdue_missing_slots.discard(slot.snapshot_id)
+                if self._last_error_slot == slot.snapshot_id:
+                    self._last_error = None
+                    self._last_error_at = None
+                    self._last_error_slot = None
+                continue
+            if slot.snapshot_id not in self._overdue_missing_slots:
+                logger.error("snapshot collector overdue slot missing: %s", slot.snapshot_id)
+            self._overdue_missing_slots.add(slot.snapshot_id)
+        if checked_overdue:
+            self._last_missing_recheck_ts = now_ts
 
     # ── per-slot collection ────────────────────────────────────────────────
 
@@ -174,12 +230,25 @@ class SnapshotCollectorScheduler:
             # Offload blocking MongoDB I/O to a thread
             result = await asyncio.to_thread(service.run_once, request)
             self._last_run_at = datetime.datetime.now(TZ_SHANGHAI).isoformat()
-            if result.status not in ("deduped",):
+            if result.status == "completed":
                 self._collection_count += 1
+            elif result.status != "deduped":
+                raise RuntimeError(
+                    f"collector slot {slot.snapshot_id} returned {result.status}: {result.message or 'no message'}"
+                )
             self._last_slot_collected = slot.snapshot_id
+            if self._last_error_slot == slot.snapshot_id:
+                self._last_error = None
+                self._last_error_at = None
+                self._last_error_slot = None
+            self._checked_overdue_slots.add(slot.snapshot_id)
+            self._overdue_missing_slots.discard(slot.snapshot_id)
         except Exception as exc:
             self._last_error = str(exc)
+            self._last_error_at = datetime.datetime.now(TZ_SHANGHAI).isoformat()
+            self._last_error_slot = slot.snapshot_id
             self._error_count += 1
+            logger.exception("snapshot collector slot failed: %s", slot.snapshot_id)
         finally:
             self._in_flight_slots.discard(slot.snapshot_id)
 

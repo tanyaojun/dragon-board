@@ -138,6 +138,12 @@
 - 修复交易时段写入的全天快照只物理保留 300 秒的问题：fresh TTL 仍按时段变化，全天快照 L1/L2 统一保留 7 天，使周末和节假日能通过 `latest` 读取上一交易日 stale；周末不触发重建，工作日旧 session 最多每 60 秒探测一次头页，空头页不覆盖 `latest`。
 - 冷启动固定快照模式在同一 45 秒 `AbortController` 预算内最多执行 3 次完整尝试，每次使用新的 DeviceID；`prepend-logical` 已实现冷启动和多页增量的逻辑偏移，覆盖 Total 增长、下降、单页超过 2 次变化和预算中止。
 - 增量头页及后续页统一按 `Total/index/st=200` 校验完整页，短头页不再被重叠校验误接受；连续 2 次增量完整性失败或交易时段缓存年龄超过 60 秒时触发受 60 秒冷却保护的完整重建。
+
+## 2026-07-27 双源归档目录收口与 THS 修复
+
+- 统一资产根为 `quant-board/data/big-order`：Longhu 归档和 `collect-list` 共用 `longhu/`，THS 原始明细写入 `ths/`；`proxy-server/data/big-order` 不再承接新归档。
+- 将旧代理目录缺失的 253 个 Longhu gzip 文件补入 `longhu/`，不覆盖目标已有文件；THS 目录内误放的 292 个 `.money0.json.gz` 已移出有效数据树。
+- THS 上游请求增加缓存破除参数，避免中间缓存返回上一交易日；日期解析同时支持真实 `pricechange` 对象结构。EXE 实测切换到 THS 后返回当天 364 条大单。
 - 风控拆为两层：403/429/网络/5xx 连续失败触发全源 60 秒 breaker；短页、Total、日期和重叠完整性失败按 `{stock,money}` 计数，连续 3 次只冷却该 key 60 秒。服务自身 45 秒预算中止只记单 key，不污染全源 breaker。
 - 历史页审计从头刷任务内联调用改为独立 `audit` 队列项，优先级低于 cold/head；重建后等待满 5 分钟才轮转核对，不在冷建完成后立即追加上游请求。
 - Redis 写入新增 per-value 字节上限：all-day 8MB、page 1MB；超限仅跳过对应缓存层写入，不影响本次响应。`dragonMeta.refresh` 补齐 `inProgress/pagesFetched/newRows/total/elapsedMs/incrementFailureCount`，路由 TTL 改为当前时段动态值。

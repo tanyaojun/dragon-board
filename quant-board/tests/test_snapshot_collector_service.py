@@ -1125,6 +1125,8 @@ class TestServiceApply:
         assert repo._records[0]["captureMode"] == "delayed"
         assert repo._stock_rows[0]["captureMode"] == "delayed"
         assert repo._runs[0]["captureMode"] == "delayed"
+        assert "delayed_capture" in repo._frames[0]["qualityFlags"]
+        assert "delayed_capture" in repo._records[0]["qualityFlags"]
 
     def test_completed_run_records_source_health_and_counts(self) -> None:
         from backend.snapshot_collector.models import CollectorRunRequest
@@ -1165,6 +1167,39 @@ class TestServiceApply:
         assert run["sectorRowCount"] == 0
         assert run["startedAt"]
         assert run["finishedAt"]
+
+    def test_completed_write_invalidates_snapshot_read_cache(self) -> None:
+        from backend.snapshot_collector.models import CollectorRunRequest
+        from backend.snapshot_collector.service import SnapshotCollectorService
+
+        repo = FakeSnapshotRepository()
+        invalidations: list[dict[str, Any]] = []
+        service = SnapshotCollectorService(
+            repo=repo,
+            collect_fn=_fake_collect_fn(
+                stocks=_standard_stocks(),
+                source_health=_standard_health(),
+            ),
+            normalize_fn=_passthrough_normalize,
+            cache_invalidate_fn=lambda **payload: invalidations.append(payload),
+        )
+
+        result = service.run_once(
+            CollectorRunRequest(
+                dataset_id="dragonboard_backend_shadow",
+                snapshot_type="half_hour",
+                trading_date="2026-06-11",
+                slot_time="10:00",
+            )
+        )
+
+        assert result.status == "completed"
+        assert len(invalidations) == 1
+        assert invalidations[0]["dataset_id"] == "dragonboard_backend_shadow"
+        assert invalidations[0]["records"] == repo._records
+        assert invalidations[0]["frames"] == repo._frames
+        assert invalidations[0]["stock_rows"] == repo._stock_rows
+        assert invalidations[0]["sector_rows"] == repo._sector_rows
 
     def test_repeated_apply_returns_deduped(self) -> None:
         from backend.snapshot_collector.models import CollectorRunRequest
@@ -1655,6 +1690,8 @@ class TestServiceAudit:
         assert "fieldMissingRates" in audit
         rates = audit["fieldMissingRates"]
         assert "price" in rates
+        assert "avgRankNum" in rates
+        assert "emRank" in rates
         # One of two rows has price=None
         assert rates["price"]["missing"] >= 1
 

@@ -46,6 +46,19 @@ _HOTLIST_RANK_FIELDS = {
     "tgb": "tgbRank",
     "dzh": "dzhRank",
 }
+
+
+def _rank_provenance(platform_totals: dict[str, int]) -> dict[str, Any]:
+    return {
+        "formulaVersion": "weighted_platform_percentile_v1",
+        "platformTotals": {
+            platform: int(platform_totals.get(platform, 0))
+            for platform in _HOTLIST_PLATFORMS
+        },
+        "platformWeights": dict(_HOTLIST_WEIGHTS),
+        "rankFields": dict(_HOTLIST_RANK_FIELDS),
+        "defaultRank": _DEFAULT_RANK,
+    }
 _HOTLIST_WEIGHTS = {
     "kpl": 1.0,
     "tdx": 0.9,
@@ -83,6 +96,31 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return int(float(value))
     except (TypeError, ValueError):
         return default
+
+
+def _calculate_average_rank_fields(
+    row: dict[str, Any],
+    platform_totals: dict[str, int],
+) -> None:
+    weighted_sum = 0.0
+    total_weight = 0.0
+    platforms = 0
+    for platform in _HOTLIST_PLATFORMS:
+        total = platform_totals.get(platform, 0)
+        if total <= 0:
+            continue
+        field = _HOTLIST_RANK_FIELDS[platform]
+        weight = _HOTLIST_WEIGHTS[platform]
+        total_weight += weight
+        rank = _safe_int(row.get(field), _DEFAULT_RANK)
+        if rank < _DEFAULT_RANK:
+            platforms += 1
+            weighted_sum += (rank / total) * 100 * weight
+        else:
+            weighted_sum += 100 * weight
+    row["platforms"] = platforms
+    row["avgRankNum"] = weighted_sum / total_weight if total_weight else float(_DEFAULT_RANK)
+    row["avgRank"] = f"{row['avgRankNum']:.1f}"
 
 
 def _normalize_stock_code(value: Any) -> str:
@@ -300,7 +338,21 @@ class StartupBundleStockProvider:
             rows = self._normalize(stocks)
             if not rows:
                 return [], self._health(False, start, error="startup bundle has no valid stocks")
-            return rows, self._health(True, start, row_count=len(rows), coverage_ratio=1.0)
+            platform_data = bundle.get("platformData") if isinstance(bundle, dict) else None
+            platform_totals = {
+                platform: len(platform_data.get(platform) or [])
+                if isinstance(platform_data, dict) and isinstance(platform_data.get(platform), list)
+                else 0
+                for platform in _HOTLIST_PLATFORMS
+            }
+            self._restore_rank_fields(rows, platform_data, platform_totals)
+            return rows, self._health(
+                True,
+                start,
+                row_count=len(rows),
+                coverage_ratio=1.0,
+                details={"rankProvenance": _rank_provenance(platform_totals)},
+            )
         except Exception as exc:
             return [], self._health(False, start, error=str(exc))
 
@@ -316,6 +368,7 @@ class StartupBundleStockProvider:
         row_count: int = 0,
         error: str = "",
         coverage_ratio: float = 0.0,
+        details: dict[str, Any] | None = None,
     ) -> SourceHealth:
         return SourceHealth(
             source="startup_bundle",
@@ -327,6 +380,7 @@ class StartupBundleStockProvider:
             requested_count=row_count,
             returned_count=row_count,
             coverage_ratio=coverage_ratio,
+            details=details or {},
         )
 
     def _normalize(self, stocks: list[Any]) -> list[dict[str, Any]]:
@@ -349,6 +403,27 @@ class StartupBundleStockProvider:
                 row["heat"] = row["hotness"]
             rows.append(row)
         return rows
+
+    def _restore_rank_fields(
+        self,
+        rows: list[dict[str, Any]],
+        platform_data: Any,
+        platform_totals: dict[str, int],
+    ) -> None:
+        rows_by_code = {str(row.get("code") or ""): row for row in rows}
+        parser = ProxyMergedHotlistProvider(self._base_url)
+        for row in rows:
+            for field in _HOTLIST_RANK_FIELDS.values():
+                row[field] = _DEFAULT_RANK
+        if isinstance(platform_data, dict):
+            for platform in _HOTLIST_PLATFORMS:
+                rank_field = _HOTLIST_RANK_FIELDS[platform]
+                for platform_row in parser._normalize_platform(platform, platform_data.get(platform)):
+                    stock = rows_by_code.get(str(platform_row.get("code") or ""))
+                    if stock is not None:
+                        stock[rank_field] = platform_row["rank"]
+        for row in rows:
+            _calculate_average_rank_fields(row, platform_totals)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -492,6 +567,7 @@ class ProxyMergedHotlistProvider:
             if sum(platform_totals.values())
             else 0.0,
             failed_batches=failed_platforms,
+            details={"rankProvenance": _rank_provenance(platform_totals)},
         )
 
     def _fetch_platform(self, platform: str, timeout_s: float) -> Any:
@@ -537,6 +613,8 @@ class ProxyMergedHotlistProvider:
         item: Any,
         index: int,
     ) -> dict[str, Any] | None:
+        if isinstance(item, dict) and item.get("code") and item.get("rank") is not None:
+            return self._row(code=item["code"], name=item.get("name"), rank=item["rank"])
         if platform == "kpl" and isinstance(item, list) and len(item) >= 2:
             return self._row(
                 code=item[0],
@@ -610,25 +688,7 @@ class ProxyMergedHotlistProvider:
     ) -> list[dict[str, Any]]:
         rows = list(stock_map.values())
         for row in rows:
-            weighted_sum = 0.0
-            total_weight = 0.0
-            platforms = 0
-            for platform in _HOTLIST_PLATFORMS:
-                total = platform_totals.get(platform, 0)
-                if total <= 0:
-                    continue
-                field = _HOTLIST_RANK_FIELDS[platform]
-                weight = _HOTLIST_WEIGHTS[platform]
-                total_weight += weight
-                rank = _safe_int(row.get(field), _DEFAULT_RANK)
-                if rank < _DEFAULT_RANK:
-                    platforms += 1
-                    weighted_sum += (rank / total) * 100 * weight
-                else:
-                    weighted_sum += 100 * weight
-            row["platforms"] = platforms
-            row["avgRankNum"] = weighted_sum / total_weight if total_weight else float(_DEFAULT_RANK)
-            row["avgRank"] = f"{row['avgRankNum']:.1f}"
+            _calculate_average_rank_fields(row, platform_totals)
 
         rows.sort(key=lambda item: (float(item.get("avgRankNum") or _DEFAULT_RANK), -int(item.get("platforms") or 0)))
         for index, row in enumerate(rows, start=1):

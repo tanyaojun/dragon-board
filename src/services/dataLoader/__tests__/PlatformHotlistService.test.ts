@@ -58,4 +58,113 @@ describe('PlatformHotlistService', () => {
     expect(adapterMocks.getHotList).not.toHaveBeenCalled()
     warn.mockRestore()
   })
+
+  it('keeps the platform cache valid before the 30 minute TTL expires', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-27T09:30:00+08:00'))
+    vi.mocked(apiService.listStockNames).mockResolvedValue({
+      ok: true,
+      source: 'mongodb',
+      stocks: [{ code: '000001', name: '平安银行', active: true }],
+    })
+
+    try {
+      const service = new PlatformHotlistService(30 * 60 * 1000)
+      await service.loadPlatforms(['eastmoney'])
+      vi.setSystemTime(new Date('2026-07-27T09:59:59.999+08:00'))
+
+      const result = await service.loadPlatforms(['eastmoney'])
+
+      expect(result.fromCache).toBe(true)
+      expect(adapterMocks.getHotList).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('reloads platform data when the 30 minute TTL boundary is reached', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-27T09:30:00+08:00'))
+    vi.mocked(apiService.listStockNames).mockResolvedValue({
+      ok: true,
+      source: 'mongodb',
+      stocks: [{ code: '000001', name: '平安银行', active: true }],
+    })
+
+    try {
+      const service = new PlatformHotlistService(30 * 60 * 1000)
+      await service.loadPlatforms(['eastmoney'])
+      vi.setSystemTime(new Date('2026-07-27T10:00:00+08:00'))
+
+      const result = await service.loadPlatforms(['eastmoney'])
+
+      expect(result.fromCache).toBe(false)
+      expect(adapterMocks.getHotList).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('force reload bypasses a fresh platform cache', async () => {
+    vi.mocked(apiService.listStockNames).mockResolvedValue({
+      ok: true,
+      source: 'mongodb',
+      stocks: [{ code: '000001', name: '平安银行', active: true }],
+    })
+    const service = new PlatformHotlistService(30 * 60 * 1000)
+
+    await service.loadPlatforms(['eastmoney'])
+    const result = await service.loadPlatforms(['eastmoney'], true)
+
+    expect(result.fromCache).toBe(false)
+    expect(adapterMocks.getHotList).toHaveBeenCalledTimes(2)
+  })
+
+  it('exposes the latest cache check and real reload details', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-27T10:00:00+08:00'))
+    vi.mocked(apiService.listStockNames).mockResolvedValue({
+      ok: true,
+      source: 'mongodb',
+      stocks: [{ code: '000001', name: '平安银行', active: true }],
+    })
+
+    try {
+      const service = new PlatformHotlistService(30 * 60 * 1000)
+      service.markRefreshChecked()
+      await service.loadPlatforms(['eastmoney'], true)
+
+      expect(service.getCacheDiagnostics()).toEqual({
+        lastCheckAt: new Date('2026-07-27T10:00:00+08:00').getTime(),
+        lastReloadAt: new Date('2026-07-27T10:00:00+08:00').getTime(),
+        lastLoadFromCache: false,
+        cacheTimestamp: new Date('2026-07-27T10:00:00+08:00').getTime(),
+        platforms: {
+          eastmoney: { rowCount: 1, success: true },
+        },
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('records the failure reason for each failed platform reload', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    vi.mocked(apiService.listStockNames).mockResolvedValue({
+      ok: true,
+      source: 'mongodb',
+      stocks: [{ code: '000001', name: '平安银行', active: true }],
+    })
+    adapterMocks.getHotList.mockRejectedValue(new Error('upstream timeout'))
+    const service = new PlatformHotlistService()
+
+    await service.loadPlatforms(['eastmoney'], true)
+
+    expect(service.getCacheDiagnostics().platforms.eastmoney).toEqual({
+      rowCount: 0,
+      success: false,
+      error: 'upstream timeout',
+    })
+    warn.mockRestore()
+  })
 })

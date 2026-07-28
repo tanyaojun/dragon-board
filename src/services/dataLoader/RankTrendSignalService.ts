@@ -188,7 +188,10 @@ export class RankTrendSignalService {
       const quality = rankTrend.meta?.sampleQuality
       const resonance = analyzeRankResonance({
         percentiles: seriesByCode.get(stock.code)?.percentiles || [],
-        sampleQuality: { status: quality?.status || 'insufficient' },
+        sampleQuality: {
+          status: quality?.status || 'insufficient',
+          timelineValid: quality?.timelineValid !== false,
+        },
         marketMedianShortChange,
         marketSampleCount: shortChanges.length,
         jump: {

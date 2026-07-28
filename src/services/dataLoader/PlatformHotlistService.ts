@@ -9,9 +9,29 @@ export interface PlatformHotlistResult {
   fromCache: boolean
 }
 
+export interface PlatformReloadDiagnostic {
+  rowCount: number
+  success: boolean
+  error?: string
+}
+
+export interface PlatformCacheDiagnostics {
+  lastCheckAt: number | null
+  lastReloadAt: number | null
+  lastLoadFromCache: boolean | null
+  cacheTimestamp: number | null
+  platforms: Record<string, PlatformReloadDiagnostic>
+}
+
 export class PlatformHotlistService {
   private platformCache = new Map<string, { data: Record<string, any[]>; timestamp: number }>()
   private lastPlatformRefresh = 0
+  private diagnostics: Omit<PlatformCacheDiagnostics, 'cacheTimestamp'> = {
+    lastCheckAt: null,
+    lastReloadAt: null,
+    lastLoadFromCache: null,
+    platforms: {},
+  }
 
   constructor(
     private readonly cacheTtl = PLATFORM_CACHE_TTL_MS,
@@ -25,6 +45,13 @@ export class PlatformHotlistService {
   ): Promise<PlatformHotlistResult> {
     const activeCodes = await this.loadActiveStockCodes()
     if (!activeCodes) {
+      this.diagnostics.lastLoadFromCache = false
+      this.diagnostics.platforms = Object.fromEntries(
+        platforms.map((platform) => [
+          platform,
+          { rowCount: 0, success: false, error: 'active-stock-codes-unavailable' },
+        ]),
+      )
       return {
         data: Object.fromEntries(platforms.map((platform) => [platform, []])),
         timestamp: Date.now(),
@@ -34,8 +61,11 @@ export class PlatformHotlistService {
 
     const cached = this.platformCache.get('platforms')
     if (!force && cached && Date.now() - cached.timestamp < this.cacheTtl) {
+      const data = this.filterPlatformData(cached.data, activeCodes)
+      this.diagnostics.lastLoadFromCache = true
+      this.diagnostics.platforms = this.summarizePlatforms(data)
       return {
-        data: this.filterPlatformData(cached.data, activeCodes),
+        data,
         timestamp: cached.timestamp,
         fromCache: true,
       }
@@ -47,13 +77,20 @@ export class PlatformHotlistService {
       platforms.map(async (platform) => {
         try {
           const adapter = Adapters[platform as keyof typeof Adapters]
-          if (!adapter) return { platform, data: [], success: false }
+          if (!adapter) {
+            return { platform, data: [], success: false, error: 'adapter-unavailable' }
+          }
           const rawData = await adapter.getHotList()
           const formatted = adapter.format(rawData)
           return { platform, data: formatted, success: true }
         } catch (error) {
           console.warn(`[DataLoader] 平台 ${platform} 加载失败:`, error)
-          return { platform, data: [], success: false }
+          return {
+            platform,
+            data: [],
+            success: false,
+            error: error instanceof Error ? error.message : String(error),
+          }
         } finally {
           completed += 1
           options.onProgress?.({
@@ -65,18 +102,38 @@ export class PlatformHotlistService {
       }),
     )
 
-    allResults.forEach((result) => {
+    const platformDiagnostics: Record<string, PlatformReloadDiagnostic> = {}
+    allResults.forEach((result, index) => {
       if (result.status === 'fulfilled' && result.value.success) {
-        results[result.value.platform] = result.value.data.filter((item) => activeCodes.has(item?.code))
+        const rows = result.value.data.filter((item) => activeCodes.has(item?.code))
+        results[result.value.platform] = rows
+        platformDiagnostics[result.value.platform] = {
+          rowCount: rows.length,
+          success: true,
+        }
         return
       }
 
-      const failedPlatform = result.status === 'fulfilled' ? result.value.platform : undefined
-      if (failedPlatform) results[failedPlatform] = []
+      const failedPlatform = platforms[index]
+      const error =
+        result.status === 'fulfilled'
+          ? result.value.error || 'platform-load-failed'
+          : result.reason instanceof Error
+            ? result.reason.message
+            : String(result.reason)
+      results[failedPlatform] = []
+      platformDiagnostics[failedPlatform] = {
+        rowCount: 0,
+        success: false,
+        error,
+      }
     })
 
     const timestamp = Date.now()
     this.setCache('platforms', { data: results, timestamp })
+    this.diagnostics.lastReloadAt = timestamp
+    this.diagnostics.lastLoadFromCache = false
+    this.diagnostics.platforms = platformDiagnostics
     return { data: results, timestamp, fromCache: false }
   }
 
@@ -96,6 +153,10 @@ export class PlatformHotlistService {
     return Date.now() - this.lastPlatformRefresh >= intervalMs
   }
 
+  markRefreshChecked(): void {
+    this.diagnostics.lastCheckAt = Date.now()
+  }
+
   markRefreshed() {
     this.lastPlatformRefresh = Date.now()
   }
@@ -103,6 +164,14 @@ export class PlatformHotlistService {
   hasFreshCache(): boolean {
     const cached = this.platformCache.get('platforms')
     return !!cached && Date.now() - cached.timestamp < this.cacheTtl
+  }
+
+  getCacheDiagnostics(): PlatformCacheDiagnostics {
+    return {
+      ...this.diagnostics,
+      cacheTimestamp: this.platformCache.get('platforms')?.timestamp ?? null,
+      platforms: { ...this.diagnostics.platforms },
+    }
   }
 
   maintenance() {
@@ -144,6 +213,15 @@ export class PlatformHotlistService {
       Object.entries(data).map(([platform, rows]) => [
         platform,
         Array.isArray(rows) ? rows.filter((item) => activeCodes.has(item?.code)) : [],
+      ]),
+    )
+  }
+
+  private summarizePlatforms(data: Record<string, any[]>): Record<string, PlatformReloadDiagnostic> {
+    return Object.fromEntries(
+      Object.entries(data).map(([platform, rows]) => [
+        platform,
+        { rowCount: Array.isArray(rows) ? rows.length : 0, success: true },
       ]),
     )
   }
