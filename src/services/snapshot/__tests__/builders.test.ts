@@ -4,7 +4,7 @@ import { buildDailySnapshot, buildSnapshotFrameRow, buildSnapshotStockRows } fro
 import { createSnapshotRecord } from '../identity'
 
 describe('snapshot builders', () => {
-  it('excludes runtime THS fund fields from formal snapshot payloads', () => {
+  it('preserves THS main-monitor facts in formal snapshot payloads', () => {
     const snapshot = buildDailySnapshot({
       stocks: [{
         code: '000001',
@@ -23,12 +23,14 @@ describe('snapshot builders', () => {
       breathFactors: [],
     } as any)
 
-    expect(snapshot.hotlist[0]).not.toHaveProperty('zlje')
-    expect(snapshot.hotlist[0]).not.toHaveProperty('zljzb')
-    expect(snapshot.hotlist[0]).not.toHaveProperty('cddje')
-    expect(snapshot.hotlist[0]).not.toHaveProperty('cddjzb')
-    expect(snapshot.hotlist[0]).not.toHaveProperty('moneyFlowSource')
-    expect(snapshot.hotlist[0]).not.toHaveProperty('capitalFlowSource')
+    expect(snapshot.hotlist[0]).toEqual(expect.objectContaining({
+      zlje: 88_000_000,
+      zljzb: 8.8,
+      cddje: 30_000_000,
+      cddjzb: 3,
+      moneyFlowSource: 'ths_main_monitor',
+      capitalFlowSource: 'ths_main_monitor',
+    }))
   })
 
   it('slims daily raw snapshot payload and keeps required hotlist fact fields', () => {
@@ -280,9 +282,9 @@ describe('snapshot builders', () => {
 
     const rows = buildSnapshotStockRows(record)
 
-    expect(rows[0].zlje).toBe(0)
-    expect(rows[0].moneyFlowSource).toBeUndefined()
-    expect(rows[0].capitalFlowSource).toBeUndefined()
-    expect(rows[0].money_flow_source).toBeUndefined()
+    expect(rows[0].zlje).toBe(88_000_000)
+    expect(rows[0].moneyFlowSource).toBe('ths_main_monitor')
+    expect(rows[0].capitalFlowSource).toBe('ths_main_monitor')
+    expect(rows[0].money_flow_source).toBe('ths_main_monitor')
   })
 })

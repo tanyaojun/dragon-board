@@ -768,7 +768,7 @@ class MongoRepository:
             "delayMs": row.get("delayMs") or 0,
             "qualityFlags": row.get("qualityFlags") or [],
             "source": row.get("source"),
-            "payload": {},
+            "payload": row.get("payload") if isinstance(row.get("payload"), dict) else {},
         }
 
     @staticmethod
@@ -1024,6 +1024,7 @@ class MongoRepository:
             "delayMs": int(item.get("delayMs") or 0),
             "qualityFlags": item.get("qualityFlags") if isinstance(item.get("qualityFlags"), list) else [],
             "source": str(item.get("source") or "browser_runtime"),
+            "payload": item.get("payload") if isinstance(item.get("payload"), dict) else {},
         }
 
     @staticmethod

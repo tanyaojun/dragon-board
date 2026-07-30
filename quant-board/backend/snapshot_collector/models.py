@@ -103,6 +103,7 @@ class MarketDataContext:
     sectors: list[dict[str, Any]] = field(default_factory=list)
     source_health: list[SourceHealth] = field(default_factory=list)
     market_meta: dict[str, Any] = field(default_factory=dict)
+    snapshot_context: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

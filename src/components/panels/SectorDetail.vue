@@ -436,7 +436,6 @@ import { sectorAnalyzer } from '../../services/sectorAnalyzer'
 import { themeFacade } from '../../services/theme/ThemeFacade'
 import type { ThemeHeatStock } from '../../services/theme/types'
 import { useThemeRuntimeSnapshot } from '../../composables/useThemeRuntimeSnapshot'
-import { realtimeSubscriptionRegistry } from '../../services/realtime/RealtimeSubscriptionRegistry'
 
 const props = defineProps<{
   visible: boolean
@@ -655,21 +654,6 @@ const totalPages = computed(() => Math.ceil(filteredStocks.value.length / pageSi
 watch([stockSearch, sortBy, sortDesc], () => {
   currentPage.value = 1
 })
-
-watch(
-  [() => props.visible, paginatedStocks],
-  ([visible, stocks]) => {
-    if (visible && stocks.length) {
-      realtimeSubscriptionRegistry.setFundOwnerCodes(
-        'theme-detail.visible',
-        stocks.map((stock) => stock.code),
-      )
-    } else {
-      realtimeSubscriptionRegistry.clearFundOwner('theme-detail.visible')
-    }
-  },
-  { immediate: true },
-)
 
 // ========== ✅ 合并成一个 watcher ==========
 watch(() => props.sectorName, async (newName) => {
@@ -940,7 +924,6 @@ onUnmounted(() => {
     chart.dispose()
     chart = null
   }
-  realtimeSubscriptionRegistry.clearFundOwner('theme-detail.visible')
 })
 
 // 监听数据变化重新渲染

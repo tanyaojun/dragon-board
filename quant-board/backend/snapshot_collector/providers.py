@@ -16,6 +16,7 @@ collections and never generate ``snapshot_id`` values.
 from __future__ import annotations
 
 import json
+import math
 import re
 import time
 import urllib.error
@@ -25,6 +26,8 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from typing import Any
 from urllib.parse import quote, urlencode
+
+from backend.theme_fund_cache import ThemeFundCache
 
 from .models import MarketDataContext, SourceHealth
 
@@ -184,6 +187,21 @@ class _BatchedProxyProvider:
         started_at = _iso_now()
         started = time.monotonic()
         requested_codes = list(dict.fromkeys(str(code).strip() for code in codes if str(code).strip()))
+        if not requested_codes:
+            completed_at = _iso_now()
+            return {}, SourceHealth(
+                source=self.source,
+                ok=False,
+                latency_ms=int((time.monotonic() - started) * 1000),
+                row_count=0,
+                error="no requested codes",
+                captured_at=completed_at,
+                requested_count=0,
+                returned_count=0,
+                coverage_ratio=0.0,
+                started_at=started_at,
+                completed_at=completed_at,
+            )
         batches = [
             requested_codes[index : index + self._batch_size]
             for index in range(0, len(requested_codes), self._batch_size)
@@ -285,7 +303,7 @@ class TencentBasicQuoteProvider(_BatchedProxyProvider):
         code = str(item.get("f12") or "").strip()
         if not code:
             return None
-        return {
+        row = {
             "code": code,
             "name": str(item.get("f14") or code),
             "price": _safe_float(item.get("f2")),
@@ -293,8 +311,11 @@ class TencentBasicQuoteProvider(_BatchedProxyProvider):
             "volume": _safe_float(item.get("f6")),
             "amount": _safe_float(item.get("f5")),
             "turnoverRate": _safe_float(item.get("f8")),
-            "volumeRatio": _safe_float(item.get("f10")),
         }
+        volume_ratio = _safe_float(item.get("f10"), float("nan"))
+        if math.isfinite(volume_ratio) and volume_ratio > 0:
+            row["volumeRatio"] = volume_ratio
+        return row
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -315,6 +336,7 @@ class StartupBundleStockProvider:
         self._base_url = base_url.rstrip("/")
         self._cache_key_prefix = cache_key_prefix
         self._trading_date = trading_date
+        self.snapshot_context: dict[str, Any] = {}
 
     def collect(
         self,
@@ -331,6 +353,11 @@ class StartupBundleStockProvider:
                 return [], self._health(False, start, error=degraded_error)
 
             bundle = body.get("data") if isinstance(body, dict) else None
+            self.snapshot_context = (
+                dict(bundle.get("snapshotContext"))
+                if isinstance(bundle, dict) and isinstance(bundle.get("snapshotContext"), dict)
+                else {}
+            )
             stocks = bundle.get("stocks") if isinstance(bundle, dict) else None
             if not isinstance(stocks, list) or not stocks:
                 return [], self._health(False, start, error="startup bundle missing")
@@ -346,10 +373,17 @@ class StartupBundleStockProvider:
                 for platform in _HOTLIST_PLATFORMS
             }
             self._restore_rank_fields(rows, platform_data, platform_totals)
+            has_snapshot_context = (
+                isinstance(self.snapshot_context.get("breathData"), dict)
+                and bool(self.snapshot_context["breathData"])
+                and isinstance(self.snapshot_context.get("marketData"), dict)
+                and bool(self.snapshot_context["marketData"])
+            )
             return rows, self._health(
-                True,
+                has_snapshot_context,
                 start,
                 row_count=len(rows),
+                error="" if has_snapshot_context else "startup bundle snapshotContext missing or incomplete",
                 coverage_ratio=1.0,
                 details={"rankProvenance": _rank_provenance(platform_totals)},
             )
@@ -1372,6 +1406,44 @@ class ThemeMappingProvider:
             return {}, health
 
 
+class MarketFundCacheProvider:
+    """Read last-good market funds without issuing upstream requests."""
+
+    def __init__(self, cache: ThemeFundCache) -> None:
+        self._cache = cache
+
+    def collect(self, codes: list[str], *, timeout_ms: int = _DEFAULT_TIMEOUT_MS) -> tuple[list[dict[str, Any]], SourceHealth]:
+        del timeout_ms
+        started = time.monotonic()
+        requested = list(dict.fromkeys(code for code in codes if code))
+        cached = self._cache.get_latest(requested)
+        rows: list[dict[str, Any]] = []
+        for code in requested:
+            row = cached.get(code)
+            if not row or row.get("moneyFlowSource") != "ths_main_monitor":
+                continue
+            zlje = row.get("zlje")
+            if not isinstance(zlje, (int, float)) or isinstance(zlje, bool) or not math.isfinite(float(zlje)):
+                continue
+            item: dict[str, Any] = {
+                "code": code, "mainNetInflow": float(zlje),
+                "moneyFlowSource": "ths_main_monitor", "moneyFlowEstimated": False,
+                "capitalFlowSource": "ths_main_monitor", "capitalFlowConfidence": "high",
+            }
+            if isinstance(row.get("zljzb"), (int, float)) and math.isfinite(float(row["zljzb"])):
+                item["mainNetRatio"] = float(row["zljzb"])
+            rows.append(item)
+        returned = len(rows)
+        requested_count = len(requested)
+        return rows, SourceHealth(
+            source="market_fund_cache", ok=returned == requested_count,
+            latency_ms=int((time.monotonic() - started) * 1000), row_count=returned,
+            error="" if returned == requested_count else "partial last-good fund coverage",
+            captured_at=_iso_now(), requested_count=requested_count, returned_count=returned,
+            coverage_ratio=round(returned / requested_count, 4) if requested_count else 1.0, stale=True,
+        )
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # Collector orchestrator
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1393,6 +1465,7 @@ def collect_market_context(
     Provider routing
     ----------------
     * ``StartupBundleStockProvider`` / ``ProxyMergedHotlistProvider`` / ``ProxyHotlistProvider`` → ``ctx.stocks``
+    * ``TencentBasicQuoteProvider`` → ``ctx.quotes``
     * ``BridgeQuoteProvider``   → ``ctx.quotes``, ``ctx.depth``, ``ctx.market_meta``
     * ``ThemeMappingProvider``  → ``ctx.themes``
     * ``ProxyLimitUpProvider``  → ``ctx.limit_up``
@@ -1409,6 +1482,7 @@ def collect_market_context(
                 ctx.source_health.append(health)
                 if rows:
                     ctx.stocks = rows
+                    ctx.snapshot_context = dict(provider.snapshot_context)
                     active_codes = [
                         str(row.get("code") or "").strip()
                         for row in rows
@@ -1428,6 +1502,11 @@ def collect_market_context(
                         if isinstance(row, dict) and str(row.get("code") or "").strip()
                     ]
 
+            elif isinstance(provider, TencentBasicQuoteProvider):
+                rows, health = provider.collect(active_codes, timeout_ms=timeout_ms)
+                _merge_rows_by_code(ctx.quotes, list(rows.values()))
+                ctx.source_health.append(health)
+
             elif isinstance(provider, BridgeQuoteProvider):
                 data, health = provider.collect(active_codes, timeout_ms=timeout_ms)
                 if isinstance(data, dict):
@@ -1435,6 +1514,11 @@ def collect_market_context(
                     ctx.depth.extend(data.get("depth") or [])
                     if data.get("market_meta"):
                         ctx.market_meta.update(data["market_meta"])
+                ctx.source_health.append(health)
+
+            elif isinstance(provider, MarketFundCacheProvider):
+                rows, health = provider.collect(active_codes, timeout_ms=timeout_ms)
+                ctx.money_flow.extend(rows)
                 ctx.source_health.append(health)
 
             elif isinstance(provider, ThemeMappingProvider):

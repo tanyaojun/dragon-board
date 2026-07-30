@@ -6,6 +6,7 @@ accepted by ``backend.data.snapshot_ingest_normalizer.normalize_snapshot_ingest(
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from .models import MarketDataContext, SnapshotSlot
@@ -82,6 +83,31 @@ def _derive_amplitude(row: dict[str, Any]) -> float | None:
     if not isinstance(pre_close, (int, float)) or pre_close <= 0 or high < low:
         return None
     return round((high - low) / pre_close * 100, 4)
+
+
+def _finite_number(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    return number if math.isfinite(number) else None
+
+
+def _remove_unavailable_placeholder_zeros(row: dict[str, Any]) -> None:
+    volume_ratio_meta = row.get("volumeRatioMeta")
+    volume_ratio_source = (
+        str(volume_ratio_meta.get("source") or "").strip().lower()
+        if isinstance(volume_ratio_meta, dict)
+        else ""
+    )
+    if _finite_number(row.get("volumeRatio")) == 0 and volume_ratio_source == "unavailable":
+        row.pop("volumeRatio", None)
+
+    money_flow_source = str(
+        row.get("moneyFlowSource") or row.get("capitalFlowSource") or ""
+    ).strip().lower()
+    if _finite_number(row.get("zlje")) == 0 and money_flow_source in {"", "unknown", "unavailable"}:
+        row.pop("zlje", None)
+        row.pop("zljzb", None)
 
 
 def _enrich_stock_rows_from_quotes(
@@ -171,7 +197,15 @@ def _enrich_stock_rows_from_quotes(
         mf = flow_by_code.get(code)
         if mf:
             row["moneyFlow"] = {k: v for k, v in mf.items() if k != "code"}
-            row["zlje"] = mf.get("mainNetInflow", 0)
+            zlje = _finite_number(mf.get("mainNetInflow"))
+            if zlje is not None:
+                row["zlje"] = zlje
+                explicit_ratio = _finite_number(mf.get("mainNetRatio"))
+                turnover = _finite_number(row.get("turnover") or row.get("amount"))
+                if explicit_ratio is not None:
+                    row["zljzb"] = explicit_ratio
+                elif turnover is not None and turnover != 0:
+                    row["zljzb"] = round(zlje / turnover * 100, 6)
             source = str(mf.get("moneyFlowSource") or "unknown")
             estimated = bool(mf.get("moneyFlowEstimated", source == "estimated_l1"))
             row["moneyFlowSource"] = source
@@ -247,6 +281,33 @@ def build_ingest_payload(
         ),
         None,
     )
+    snapshot_context = (
+        market_context.snapshot_context
+        if isinstance(market_context.snapshot_context, dict)
+        else {}
+    )
+    market_data = (
+        snapshot_context.get("marketData")
+        if isinstance(snapshot_context.get("marketData"), dict)
+        else market_context.market_meta
+    )
+    sentiment = snapshot_context.get("breathData")
+    indices = market_data.get("indices") if isinstance(market_data, dict) else None
+    money_flow_summary = market_data.get("moneyFlow") if isinstance(market_data, dict) else None
+    limit_summary = {
+        "continuousBoards": market_data.get("limitData"),
+        "zhaban": market_data.get("zhaban"),
+        "yesterdayZt": market_data.get("yesterdayLimit"),
+        "thsPools": market_data.get("thsLimitUpPools"),
+    } if isinstance(market_data, dict) else None
+    rotation_summary = snapshot_context.get("rotationAnalysis")
+    normalized_hotlist = [
+        dict(stock) if isinstance(stock, dict) else stock
+        for stock in market_context.stocks
+    ]
+    for stock in normalized_hotlist:
+        if isinstance(stock, dict):
+            _remove_unavailable_placeholder_zeros(stock)
 
     # ── Record (item) ─────────────────────────────────────────────────────
     record = {
@@ -260,9 +321,15 @@ def build_ingest_payload(
         "captureMode": capture_mode,
         "source": source,
         "payload": {
-            "hotlist": market_context.stocks,
+            "hotlist": normalized_hotlist,
             "sectors": market_context.sectors,
-            "marketStats": market_context.market_meta,
+            **snapshot_context,
+            "marketStats": market_data,
+            "sentiment": sentiment,
+            "moneyFlow": money_flow_summary,
+            "indices": indices,
+            "limitSummary": limit_summary,
+            "rotationSummary": rotation_summary,
             "metadata": {"rankProvenance": rank_provenance} if rank_provenance else {},
         },
     }
@@ -278,7 +345,12 @@ def build_ingest_payload(
         "displayKey": snapshot_id,
         "captureMode": capture_mode,
         "source": source,
-        "marketStats": market_context.market_meta,
+        "marketStats": market_data,
+        "sentiment": sentiment,
+        "moneyFlow": money_flow_summary,
+        "indices": indices,
+        "limitSummary": limit_summary,
+        "rotationSummary": rotation_summary,
         "metadata": {"rankProvenance": rank_provenance} if rank_provenance else {},
         "stockRowCount": 0,
         "sectorRowCount": len(market_context.sectors),
@@ -286,7 +358,7 @@ def build_ingest_payload(
 
     # ── Stock rows ─────────────────────────────────────────────────────────
     stock_rows: list[dict[str, Any]] = []
-    for stock in market_context.stocks:
+    for stock in normalized_hotlist:
         if not isinstance(stock, dict):
             continue
         code = str(stock.get("code") or "").strip()
@@ -294,6 +366,7 @@ def build_ingest_payload(
             continue
 
         row: dict[str, Any] = {
+            **stock,
             "id": f"{snapshot_id}:{code}",
             "snapshotId": snapshot_id,
             "type": slot.snapshot_type,
@@ -385,6 +458,8 @@ def build_ingest_payload(
         market_context.depth,
         market_context.money_flow,
     )
+    for row in stock_rows:
+        _remove_unavailable_placeholder_zeros(row)
 
     stock_rows.sort(key=lambda r: int(r.get("rank") or 999999))
     frame["stockRowCount"] = len(stock_rows)
@@ -418,6 +493,54 @@ def build_ingest_payload(
             if field in sector:
                 row[field] = sector[field]
         sector_rows.append(row)
+
+    existing_sector_keys = {
+        (str(row.get("entityType") or "sector"), str(row.get("entityKey") or ""))
+        for row in sector_rows
+    }
+    context_sector_groups = (
+        ("hot_theme", snapshot_context.get("hotThemes")),
+        ("hot_theme", snapshot_context.get("themeHeatFactors")),
+        (
+            "rotation_main_line",
+            rotation_summary.get("mainLines") if isinstance(rotation_summary, dict) else None,
+        ),
+    )
+    for entity_type, items in context_sector_groups:
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            key = str(
+                item.get("id")
+                or item.get("themeId")
+                or item.get("code")
+                or item.get("themeName")
+                or item.get("name")
+                or ""
+            ).strip()
+            if not key or (entity_type, key) in existing_sector_keys:
+                continue
+            name = str(item.get("themeName") or item.get("name") or key)
+            sector_rows.append({
+                **item,
+                "id": f"{snapshot_id}:{entity_type}:{key}",
+                "snapshotId": snapshot_id,
+                "type": slot.snapshot_type,
+                "tradingDate": slot.trading_date,
+                "slotTime": slot.slot_time,
+                "timestamp": slot.timestamp_ms,
+                "captureMode": capture_mode,
+                "source": source,
+                "entityType": entity_type,
+                "entityKey": key,
+                "entityName": name,
+                "rank": int(float(item.get("rank") or len(sector_rows) + 1)),
+            })
+            existing_sector_keys.add((entity_type, key))
+
+    frame["sectorRowCount"] = len(sector_rows)
 
     # ── Bundle ─────────────────────────────────────────────────────────────
     result: dict[str, Any] = {

@@ -35,6 +35,7 @@ let releaseVolumeHistory: (() => void) | null = null
 let startupBundle: any = null
 let startupBundleGetCount = 0
 let startupBundleSaveCount = 0
+let startupBundleWrites: any[] = []
 let realtimeOptions: any = null
 let volumeHistoryMapResult = new Map<string, number[]>()
 let intradayVolumeHistoryMapResult = new Map<string, number[]>()
@@ -42,6 +43,18 @@ let volumeHistoryRequestCount = 0
 let intradayVolumeHistoryRequestCount = 0
 let shouldRefreshPlatformCache = false
 let hasFreshPlatformCache = true
+
+const completeSnapshotContext = {
+  breathData: { overall: 72 },
+  marketData: { upCount: 3200, downCount: 1800 },
+  hotThemes: [],
+  themeHeatFactors: [],
+  rotationAnalysis: null,
+  breathHistory: [],
+  breathFactors: [],
+  marketMode: 'full',
+  stocksVersion: 1,
+}
 
 const timeState = vi.hoisted(() => ({
   tradingTime: true,
@@ -227,13 +240,22 @@ vi.mock('../RankTrendSignalService', () => ({
 }))
 
 vi.mock('../StartupBundleService', () => ({
+  hasCompleteSnapshotContext: (context: any) =>
+    Boolean(
+      context?.breathData &&
+        Object.keys(context.breathData).length &&
+        context?.marketData &&
+        Object.keys(context.marketData).length,
+    ),
   startupBundleService: {
     read: vi.fn(async () => {
       startupBundleGetCount++
       return startupBundle
     }),
-    write: vi.fn(async (_bundle) => {
+    write: vi.fn(async (bundle) => {
       startupBundleSaveCount++
+      startupBundleWrites.push(bundle)
+      return true
     }),
   },
 }))
@@ -269,6 +291,7 @@ describe('DataLoaderFacade', () => {
     startupBundle = null
     startupBundleGetCount = 0
     startupBundleSaveCount = 0
+    startupBundleWrites = []
     volumeHistoryMapResult = new Map()
     intradayVolumeHistoryMapResult = new Map()
     volumeHistoryRequestCount = 0
@@ -370,6 +393,7 @@ describe('DataLoaderFacade', () => {
       schemaVersion: 1,
       tradingDate: '2026-05-18',
       createdAt: Date.now(),
+      snapshotContext: completeSnapshotContext,
       platformData: {
         eastmoney: [{ code: '000001', name: '缓存数据', rank: 1, source: 'eastmoney' }],
       },
@@ -424,6 +448,7 @@ describe('DataLoaderFacade', () => {
       expect(dataLayer.getStocks()).toEqual([expect.objectContaining({ code: '000002' })])
     })
     expect(startupBundleSaveCount).toBeGreaterThanOrEqual(1)
+    expect(startupBundleWrites.at(-1)?.snapshotContext).toEqual(completeSnapshotContext)
   })
 
   it('keeps hydrated startup data when background platform refresh returns no rows', async () => {
@@ -603,8 +628,26 @@ describe('DataLoaderFacade', () => {
     releaseSignalCalculation?.()
 
     await vi.waitFor(() => {
+      expect(signalCompletionCount).toBe(1)
+    })
+    expect(startupBundleSaveCount).toBe(0)
+
+    dataLayer.updateBreathData({
+      sentiment: { overall: 72, phase: 'rise' },
+      marketData: { upCount: 3200, downCount: 1800 },
+      timestamp: Date.now(),
+    })
+    EventManager.emit(AppEvents.BREATH.UPDATED, { timestamp: Date.now() })
+
+    await vi.waitFor(() => {
       expect(startupBundleSaveCount).toBe(1)
     })
+    expect(startupBundleWrites[0]?.snapshotContext).toEqual(
+      expect.objectContaining({
+        breathData: expect.objectContaining({ overall: 72 }),
+        marketData: expect.objectContaining({ upCount: 3200, downCount: 1800 }),
+      }),
+    )
   })
 
   it('does not publish signal-enriched when background RankTrend enhancement falls back to base data', async () => {

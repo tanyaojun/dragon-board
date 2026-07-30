@@ -27,7 +27,14 @@ import { RealtimeQuoteCoordinator } from './RealtimeQuoteCoordinator'
 import { refreshResourceLocks } from '../refresh/RefreshResourceLocks'
 import { refreshScheduler } from '../refresh/RefreshTaskRuntime'
 import type { RefreshRequest } from '../refresh/types'
-import { startupBundleService } from './StartupBundleService'
+import {
+  hasCompleteSnapshotContext,
+  startupBundleService,
+} from './StartupBundleService'
+import {
+  getCurrentStartupSnapshotContext,
+  type StartupSnapshotContext,
+} from '../snapshot/buildContext'
 import { stockHotnessService } from './StockHotnessService'
 import { stockMergeCoordinator } from './StockMergeCoordinator'
 import { VolumeHistoryService } from './VolumeHistoryService'
@@ -87,6 +94,10 @@ class DataLoaderService {
   private pendingVolumeRatioCodes = new Set<string>()
   private volumeRatioRefreshTimer: ReturnType<typeof setTimeout> | null = null
   private volumeRatioRefreshRunning = false
+  private startupSnapshotContext: StartupSnapshotContext | null = null
+  private startupCurrentContextWritten = false
+  private startupBundleWritePromise: Promise<boolean> | null = null
+  private readonly stopStartupContextListener: () => void
 
   private readonly INTRADAY_VOLUME_SNAPSHOT_TYPES = DEFAULT_INTRADAY_VOLUME_SNAPSHOT_TYPES
   private realtimeCoordinator: RealtimeQuoteCoordinator
@@ -116,6 +127,13 @@ class DataLoaderService {
     this.volumeHistoryService = new VolumeHistoryService(this.INTRADAY_VOLUME_SNAPSHOT_TYPES)
     this.volumeRatioUpdateService = new VolumeRatioUpdateService({
       volumeHistoryService: this.volumeHistoryService,
+    })
+    this.stopStartupContextListener = EventManager.on(AppEvents.BREATH.UPDATED, () => {
+      if (this.destroyed || this.startupCurrentContextWritten) return
+      const context = getCurrentStartupSnapshotContext()
+      if (!hasCompleteSnapshotContext(context)) return
+      this.startupSnapshotContext = context
+      void this.writeStartupBundle(this.summarizeRun(Date.now(), false), true)
     })
     this.startQuoteAutoRefresh() // 自动启动行情刷新
     this.startSignalAutoRefresh()
@@ -342,6 +360,9 @@ class DataLoaderService {
   }
 
   private publishStartupBundle(bundle: any, startTime: number): DataLoaderRunSummary {
+    if (hasCompleteSnapshotContext(bundle.snapshotContext)) {
+      this.startupSnapshotContext = bundle.snapshotContext
+    }
     this.state.value.data = bundle.platformData || {}
     this.state.value.lastUpdate = Number(bundle.createdAt) || Date.now()
     dataLayer.updatePlatforms(this.state.value.data)
@@ -358,15 +379,43 @@ class DataLoaderService {
     return this.summarizeStartupBundleRun(startTime, bundle)
   }
 
-  private async writeStartupBundle(summary: DataLoaderRunSummary): Promise<void> {
+  private async writeStartupBundle(
+    summary: DataLoaderRunSummary,
+    requireCurrentContext = false,
+  ): Promise<boolean> {
+    if (this.startupBundleWritePromise) {
+      await this.startupBundleWritePromise
+    }
     const stocks = dataLayer.getStocks()
-    if (!stocks.length) return
+    if (!stocks.length) return false
 
-    await startupBundleService.write({
+    const currentContext = getCurrentStartupSnapshotContext()
+    const hasCurrentContext = hasCompleteSnapshotContext(currentContext)
+    if (hasCurrentContext) {
+      this.startupSnapshotContext = currentContext
+    }
+    const snapshotContext = hasCurrentContext ? currentContext : this.startupSnapshotContext
+    if (!snapshotContext || (requireCurrentContext && !hasCurrentContext)) {
+      console.warn('[DataLoader] startup snapshot context 尚未就绪，跳过缓存写入')
+      return false
+    }
+
+    const writePromise = startupBundleService.write({
       platformData: this.state.value.data || {},
       stocks,
+      snapshotContext,
       summary,
     })
+    this.startupBundleWritePromise = writePromise
+    try {
+      const written = await writePromise
+      if (written && hasCurrentContext) {
+        this.startupCurrentContextWritten = true
+      }
+      return written
+    } finally {
+      this.startupBundleWritePromise = null
+    }
   }
 
   private refreshStartupBundleInBackground(force: boolean): void {
@@ -462,6 +511,8 @@ class DataLoaderService {
   async bootstrapInitialData(
     options: DataLoaderBootstrapOptions = {},
   ): Promise<DataLoaderRunSummary> {
+    this.startupSnapshotContext = null
+    this.startupCurrentContextWritten = false
     const startTime = Date.now()
     this.quoteProgressCompletedCodes = 0
     this.setLoading(true, '加载平台热榜...', this.startupProgress.platformStart, 'platform')
@@ -1102,6 +1153,7 @@ class DataLoaderService {
     }
     this.pendingVolumeRatioCodes.clear()
     this.volumeRatioRefreshRunning = false
+    this.stopStartupContextListener()
     platformHotlistService.clearCache()
     quoteService.clearPending()
     this.realtimeCoordinator.destroy()

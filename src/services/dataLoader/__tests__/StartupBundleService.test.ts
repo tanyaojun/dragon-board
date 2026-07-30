@@ -5,6 +5,18 @@ const api = vi.hoisted(() => ({
   post: vi.fn(),
 }))
 
+const completeSnapshotContext = {
+  breathData: { overall: 72 },
+  marketData: { upCount: 3200, downCount: 1800 },
+  hotThemes: [],
+  themeHeatFactors: [],
+  rotationAnalysis: null,
+  breathHistory: [],
+  breathFactors: [],
+  marketMode: 'full' as const,
+  stocksVersion: 1,
+}
+
 vi.mock('../../apiService', () => ({
   apiService: {
     get: api.get,
@@ -30,6 +42,7 @@ describe('StartupBundleService', () => {
         schemaVersion: 1,
         tradingDate: '2026-05-17',
         createdAt: Date.now(),
+        snapshotContext: completeSnapshotContext,
         platformData: {
           eastmoney: [{ code: '000001', name: '旧缓存' }],
         },
@@ -52,6 +65,7 @@ describe('StartupBundleService', () => {
         schemaVersion: 1,
         tradingDate: '2026-05-18',
         createdAt: Date.now(),
+        snapshotContext: completeSnapshotContext,
         platformData: {
           eastmoney: [{ code: '000001', name: '缓存数据' }],
         },
@@ -107,6 +121,7 @@ describe('StartupBundleService', () => {
         schemaVersion: 1,
         tradingDate: '2026-05-18',
         createdAt: Date.now(),
+        snapshotContext: completeSnapshotContext,
         platformData: {
           eastmoney: [{ code: '000001', name: '旧缓存' }],
         },
@@ -166,6 +181,21 @@ describe('StartupBundleService', () => {
     await expect(startupBundleService.read()).resolves.toBeNull()
   })
 
+  it('rejects otherwise valid cached startup bundles without snapshot context', async () => {
+    api.get.mockResolvedValue({
+      data: {
+        schemaVersion: 1,
+        tradingDate: '2026-05-18',
+        createdAt: Date.now(),
+        platformData: { eastmoney: [{ code: '000001' }] },
+        stocks: [{ code: '000001', compRank: 1, rankTrend: { meta: { change: 8 } } }],
+      },
+    })
+    const { startupBundleService } = await import('../StartupBundleService')
+
+    await expect(startupBundleService.read()).resolves.toBeNull()
+  })
+
   it('rejects cached startup bundles without RankTrend change values', async () => {
     api.get.mockResolvedValue({
       data: {
@@ -186,5 +216,65 @@ describe('StartupBundleService', () => {
     const { startupBundleService } = await import('../StartupBundleService')
 
     await expect(startupBundleService.read()).resolves.toBeNull()
+  })
+
+  it('writes the complete snapshot build context with the startup bundle', async () => {
+    api.post.mockResolvedValue({ ok: true })
+    const { startupBundleService } = await import('../StartupBundleService')
+    const snapshotContext = {
+      breathData: { overall: 72 },
+      marketData: {
+        indices: { sh: { change: 1.2 } },
+        thsLimitUpPools: { failedCount: 8 },
+      },
+      hotThemes: [{ id: 'BANK', name: '银行' }],
+      themeHeatFactors: [],
+      rotationAnalysis: { marketPhase: 'main_up' },
+      breathHistory: [],
+      breathFactors: [],
+      marketMode: 'full' as const,
+      stocksVersion: 1,
+    }
+
+    await startupBundleService.write({
+      platformData: { eastmoney: [{ code: '000001' }] },
+      stocks: [
+        {
+          code: '000001',
+          compRank: 1,
+          rankTrend: { meta: { change: 8 } },
+        },
+      ],
+      snapshotContext,
+    })
+
+    expect(api.post).toHaveBeenCalledWith(
+      '/api/cache/startup-bundle',
+      expect.objectContaining({
+        bundle: expect.objectContaining({ snapshotContext }),
+      }),
+      expect.objectContaining({ timeout: 10_000 }),
+    )
+  })
+
+  it('reports startup bundle write failures instead of hiding them', async () => {
+    const error = new Error('payload too large')
+    api.post.mockRejectedValue(error)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const { startupBundleService } = await import('../StartupBundleService')
+
+    await startupBundleService.write({
+      platformData: { eastmoney: [{ code: '000001' }] },
+      stocks: [
+        {
+          code: '000001',
+          compRank: 1,
+          rankTrend: { meta: { change: 8 } },
+        },
+      ],
+      snapshotContext: completeSnapshotContext,
+    })
+
+    expect(warn).toHaveBeenCalledWith('[StartupBundle] 写入失败:', error)
   })
 })

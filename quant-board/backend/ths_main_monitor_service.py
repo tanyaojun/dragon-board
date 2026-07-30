@@ -115,6 +115,21 @@ class ThsMainMonitorService:
             "sourceTs": source_ts,
         }
 
+    async def load_summary_row(self, code: str) -> dict[str, Any]:
+        stock_code = self._normalize_code(code)
+        payload = await self._fetch_payload(stock_code)
+        raw = self._validate_payload(payload)
+        main_buy = self._parse_amount(raw["title"].get("mainbuy"))
+        main_sell = self._parse_amount(raw["title"].get("mainsell"))
+        return {
+            "code": stock_code,
+            "zlje": main_buy - main_sell,
+            "sessionDate": raw["sessionDate"],
+            "source": "ths_main_monitor",
+            "moneyFlowSource": "ths_main_monitor",
+            "sourceTs": self._now_ms(),
+        }
+
     async def load_batch(self, codes: list[str], *, concurrency: int = 2) -> dict[str, list[dict[str, Any]]]:
         normalized = list(dict.fromkeys(self._normalize_code(code) for code in codes))
         if len(normalized) > 5:
@@ -348,3 +363,11 @@ def get_ths_main_monitor_service() -> ThsMainMonitorService:
             archive_root=DEFAULT_BIG_ORDER_ARCHIVE_ROOT,
         )
     return _service
+
+
+async def close_ths_main_monitor_service() -> None:
+    global _service
+    service = _service
+    _service = None
+    if service is not None:
+        await service.aclose()

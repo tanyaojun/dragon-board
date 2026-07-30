@@ -7,6 +7,28 @@ from backend.data.models import Dataset
 from backend.data.mongo_repository import MongoRepository
 
 
+def test_record_document_preserves_snapshot_payload() -> None:
+    payload = {
+        "marketData": {"indices": {"sh": {"change": 1.2}}},
+        "limitSummary": {"thsPools": {"failedCount": 8}},
+    }
+
+    document = MongoRepository._record_doc(
+        "dragonboard_live",
+        {
+            "id": "daily:2026-07-29:15:30",
+            "type": "daily",
+            "tradingDate": "2026-07-29",
+            "slotTime": "15:30",
+            "timestamp": 1,
+            "payload": payload,
+        },
+    )
+
+    assert document["payload"] == payload
+    assert MongoRepository.record_to_dict(document)["payload"] == payload
+
+
 class FakeCursor:
     def __init__(self, rows: list[dict[str, Any]]) -> None:
         self.rows = rows

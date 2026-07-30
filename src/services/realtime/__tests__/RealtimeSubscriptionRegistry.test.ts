@@ -28,17 +28,24 @@ describe('RealtimeSubscriptionRegistry', () => {
     expect(apply).toHaveBeenLastCalledWith(['300001'])
   })
 
-  it('adds expanded theme stocks only to the fund stream', () => {
+  it('does not expose the removed theme fund subscription channel', () => {
     const apply = vi.fn()
-    const applyFunds = vi.fn()
-    const registry = new RealtimeSubscriptionRegistry({ apply, applyFunds })
+    const registry = new RealtimeSubscriptionRegistry({ apply })
 
-    registry.setOwnerCodes('dataLoader.hotlist', ['000001'])
-    registry.setFundOwnerCodes('theme.AI', ['600000'])
+    expect('setFundOwnerCodes' in registry).toBe(false)
+    expect('clearFundOwner' in registry).toBe(false)
+    expect('getMergedFundCodes' in registry).toBe(false)
+  })
 
-    expect(apply).toHaveBeenLastCalledWith(['000001'])
-    expect(applyFunds).toHaveBeenLastCalledWith(['000001'], ['600000'])
-    expect(registry.getMergedCodes()).toEqual(['000001'])
-    expect(registry.getMergedFundCodes()).toEqual(['000001', '600000'])
+  it('forwards normal realtime owners to the independent market fund feed', () => {
+    const apply = vi.fn()
+    const applyMarketFunds = vi.fn()
+    const registry = new RealtimeSubscriptionRegistry({ apply, applyMarketFunds })
+
+    registry.setOwnerCodes('dataLoader.hotlist', ['600001', '000002'])
+    registry.setOwnerCodes('eventRadar.tdxBlock', ['300001'])
+
+    expect(applyMarketFunds).toHaveBeenLastCalledWith(['000002', '600001'])
+    expect('setFundOwnerCodes' in registry).toBe(false)
   })
 })

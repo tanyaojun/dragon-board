@@ -1,6 +1,5 @@
-import { dataLayer } from '../DataLayer'
-import { themeHeatFeed } from '../theme/ThemeHeatFeed'
 import { snapshotBackendRead } from './backendRead'
+import { getCurrentSnapshotBuildContext } from './buildContext'
 import { assertFormalSnapshotType, assertFormalSnapshotTypes, type FormalSnapshotType } from './identity'
 import { SnapshotRuntime } from './runtime'
 import type {
@@ -46,33 +45,7 @@ const snapshotRuntime = new SnapshotRuntime({
   syncIntervalMs: SNAPSHOT_SYNC_INTERVAL_MS,
   getStorageBucketManager: () =>
     typeof navigator === 'undefined' ? null : (navigator as any).storageBuckets || null,
-  getBuildContext: () => {
-    const themeHeatSnapshot = themeHeatFeed.getSnapshot()
-    const quoteSource = (themeHeatSnapshot?.sources?.quotes as any)?.source
-    const fundSource = (themeHeatSnapshot?.sources?.funds as any)?.source
-    return {
-    stocks: dataLayer.getStocks() || [],
-    depth10ByCode: dataLayer.getDepth10Map(),
-    recentTicksByCode: dataLayer.getRecentTicksMap(),
-    l2SummaryByCode: dataLayer.getL2SummaryMap(),
-    breathData: dataLayer.getBreathData(),
-    marketData: dataLayer.getBreathMarketData(),
-    hotThemes: dataLayer.getHotThemes() || [],
-    themeHeatFactors: (themeHeatSnapshot?.factors || []).map((factor) => ({
-      ...factor,
-      metadata: {
-        ...factor.metadata,
-        quoteSource,
-        fundSource,
-      },
-    })),
-    rotationAnalysis: dataLayer.getCurrentRotation(),
-    breathHistory: dataLayer.getBreathHistory(),
-    breathFactors: dataLayer.getBreathFactors(),
-    marketMode: dataLayer.getMarketMode(),
-    stocksVersion: dataLayer.getVersion().stocks,
-    }
-  },
+  getBuildContext: getCurrentSnapshotBuildContext,
 })
 
 snapshotRuntime.setMongoPrimaryExistsHandler(async (snapshotId) => {

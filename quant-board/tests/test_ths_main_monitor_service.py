@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from unittest.mock import MagicMock
 
 import httpx
 import pytest
@@ -36,6 +37,22 @@ async def test_load_row_parses_yuan_and_session_date() -> None:
         "moneyFlowSource": "ths_main_monitor",
         "sourceTs": 1_000_000,
     }
+    await service.aclose()
+
+
+@pytest.mark.asyncio
+async def test_load_summary_row_does_not_cache_or_archive_full_payload(monkeypatch) -> None:
+    service = _service(lambda request: httpx.Response(200, json=_payload()))
+    write_raw = MagicMock(wraps=service._write_raw)
+    archive_raw = MagicMock(wraps=service._archive_raw_safely)
+    monkeypatch.setattr(service, "_write_raw", write_raw)
+    monkeypatch.setattr(service, "_archive_raw_safely", archive_raw)
+
+    row = await service.load_summary_row("002297")
+
+    assert row["zlje"] == 85_000_000.0
+    assert write_raw.call_count == 0
+    assert archive_raw.call_count == 0
     await service.aclose()
 
 

@@ -333,19 +333,6 @@ function resolveL2Summary(context: SnapshotBuildContext | undefined, stock: any)
   }
 }
 
-function hasRuntimeThsFunds(stock: any): boolean {
-  const metadata = stock?.metadata && typeof stock.metadata === 'object' ? stock.metadata : {}
-  return [
-    stock?.moneyFlowSource,
-    stock?.money_flow_source,
-    stock?.fundSource,
-    stock?.capitalFlowSource,
-    stock?.capital_flow_source,
-    metadata.fundSource,
-    metadata.moneyFlowSource,
-  ].includes('ths_main_monitor')
-}
-
 export function buildSnapshotHotlistItem(
   stock: any,
   index: number,
@@ -356,8 +343,6 @@ export function buildSnapshotHotlistItem(
   // 后续 QuantBoard 研究链路、复盘、导出都默认依赖这套字段。
   const l2Summary = resolveL2Summary(context, stock)
   const depth10 = cloneDepth10Book(context?.depth10ByCode?.get?.(stock?.code))
-  const includesFormalFunds = !hasRuntimeThsFunds(stock)
-
   return {
     code: stock.code,
     name: stock.name,
@@ -381,7 +366,7 @@ export function buildSnapshotHotlistItem(
     turnoverRate: stock.turnoverRate,
     totalMV: stock.totalMV,
     cirMV: stock.cirMV,
-    ...(includesFormalFunds ? {
+    ...({
       zlje: stock.zlje,
       zljzb: stock.zljzb,
       cddje: stock.cddje,
@@ -394,7 +379,7 @@ export function buildSnapshotHotlistItem(
       money_flow_estimated: stock.moneyFlowEstimated,
       capital_flow_source: stock.capitalFlowSource,
       capital_flow_confidence: stock.capitalFlowConfidence,
-    } : {}),
+    }),
     pe: stock.pe,
     pb: stock.pb,
     volumeRatio: stock.volumeRatio,
@@ -741,7 +726,6 @@ export function buildSnapshotStockRows(
       const signalColumns = getCompactSignalColumns(item, sourceStock)
       const themes = toThemeRefs(item.themes)
       const primaryTheme = primaryThemeRef(themes)
-      const includesFormalFunds = !hasRuntimeThsFunds(item)
       return {
         id: `${record.id}:${item.code}`,
         snapshotId: record.id,
@@ -773,26 +757,18 @@ export function buildSnapshotStockRows(
         turnoverRate: Number(item.turnoverRate) || 0,
         totalMV: Number(item.totalMV) || 0,
         cirMV: Number(item.cirMV) || 0,
-        zlje: includesFormalFunds ? Number(item.zlje) || 0 : 0,
-        zljzb: includesFormalFunds ? Number(item.zljzb) || 0 : 0,
-        cddje: includesFormalFunds ? Number(item.cddje) || 0 : 0,
-        cddjzb: includesFormalFunds ? Number(item.cddjzb) || 0 : 0,
-        moneyFlowSource: includesFormalFunds ? item.moneyFlowSource : undefined,
-        moneyFlowEstimated: includesFormalFunds ? item.moneyFlowEstimated : undefined,
-        capitalFlowSource: includesFormalFunds ? item.capitalFlowSource : undefined,
-        capitalFlowConfidence: includesFormalFunds ? item.capitalFlowConfidence : undefined,
-        money_flow_source: includesFormalFunds
-          ? item.money_flow_source ?? item.moneyFlowSource
-          : undefined,
-        money_flow_estimated: includesFormalFunds
-          ? item.money_flow_estimated ?? item.moneyFlowEstimated
-          : undefined,
-        capital_flow_source: includesFormalFunds
-          ? item.capital_flow_source ?? item.capitalFlowSource
-          : undefined,
-        capital_flow_confidence: includesFormalFunds
-          ? item.capital_flow_confidence ?? item.capitalFlowConfidence
-          : undefined,
+        zlje: finiteNumberOrUndefined(item.zlje),
+        zljzb: finiteNumberOrUndefined(item.zljzb),
+        cddje: finiteNumberOrUndefined(item.cddje),
+        cddjzb: finiteNumberOrUndefined(item.cddjzb),
+        moneyFlowSource: item.moneyFlowSource,
+        moneyFlowEstimated: item.moneyFlowEstimated,
+        capitalFlowSource: item.capitalFlowSource,
+        capitalFlowConfidence: item.capitalFlowConfidence,
+        money_flow_source: item.money_flow_source ?? item.moneyFlowSource,
+        money_flow_estimated: item.money_flow_estimated ?? item.moneyFlowEstimated,
+        capital_flow_source: item.capital_flow_source ?? item.capitalFlowSource,
+        capital_flow_confidence: item.capital_flow_confidence ?? item.capitalFlowConfidence,
         pe: Number(item.pe) || 0,
         pb: Number(item.pb) || 0,
         depth10: cloneDepth10Book(item.depth10),
@@ -850,7 +826,7 @@ function buildSectorRow(
   payload: Record<string, any>,
 ): SnapshotSectorRow {
   const themeFactor = getThemeFactorPayload(payload)
-  const includesFormalFunds = !hasRuntimeThsFunds(payload)
+  const includesFormalFunds = true
   return {
     id: `${record.id}:${entityType}:${entityKey}`,
     snapshotId: record.id,

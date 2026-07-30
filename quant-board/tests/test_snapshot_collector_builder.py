@@ -811,6 +811,150 @@ class TestBuilderWithEnrichment:
         row0 = result["stockRows"][0]
         assert row0["price"] == 12.50
 
+    def test_preserves_complete_homepage_stock_fields(self) -> None:
+        slot = make_slot_1500()
+        context = MarketDataContext(
+            stocks=[
+                {
+                    "code": "000001",
+                    "name": "平安银行",
+                    "rank": 1,
+                    "volumeRatio": 1.88,
+                    "zlje": 85_000_000.0,
+                    "zljzb": 6.8,
+                    "pe": 8.5,
+                    "pb": 0.9,
+                    "cirMV": 320_000_000_000.0,
+                    "rankTrend": {"meta": {"change": 7}},
+                    "homepageOnlyField": {"visible": True},
+                }
+            ]
+        )
+
+        row = build_ingest_payload(slot, context)["stockRows"][0]
+
+        assert row["volumeRatio"] == 1.88
+        assert row["zlje"] == 85_000_000.0
+        assert row["zljzb"] == 6.8
+        assert row["pe"] == 8.5
+        assert row["pb"] == 0.9
+        assert row["cirMV"] == 320_000_000_000.0
+        assert row["rankTrend"] == {"meta": {"change": 7}}
+        assert row["homepageOnlyField"] == {"visible": True}
+
+    def test_projects_complete_homepage_fact_domains(self) -> None:
+        slot = make_slot_1500()
+        context = MarketDataContext(
+            stocks=[{"code": "000001", "name": "平安银行", "rank": 1}],
+            snapshot_context={
+                "breathData": {"overall": 72, "phase": "rise"},
+                "marketData": {
+                    "upCount": 3200,
+                    "downCount": 1800,
+                    "indices": {"sh": {"change": 1.2}, "hs300": {"change": 0.8}},
+                    "moneyFlow": {"main": 12_000_000.0, "retail": -3_000_000.0},
+                    "limitData": {"yiban": 40, "erban": 12},
+                    "zhaban": {"count": 8, "rate": 11.4},
+                    "yesterdayLimit": {"total": 62, "avgChange": 2.1},
+                    "thsLimitUpPools": {"failedCount": 8, "rushingCount": 5},
+                },
+                "rotationAnalysis": {"marketPhase": "main_up", "mainLines": []},
+                "hotThemes": [{"id": "BANK", "name": "银行", "heatScore": 88}],
+                "themeHeatFactors": [
+                    {"themeId": "FINANCE", "themeName": "金融", "heatScore": 82}
+                ],
+            },
+        )
+
+        result = build_ingest_payload(slot, context)
+        payload = result["items"][0]["payload"]
+        frame = result["frames"][0]
+
+        assert payload["marketData"]["indices"]["sh"]["change"] == 1.2
+        assert frame["marketStats"]["upCount"] == 3200
+        assert frame["sentiment"] == {"overall": 72, "phase": "rise"}
+        assert frame["indices"]["hs300"]["change"] == 0.8
+        assert frame["moneyFlow"]["main"] == 12_000_000.0
+        assert frame["limitSummary"]["thsPools"]["failedCount"] == 8
+        assert frame["rotationSummary"]["marketPhase"] == "main_up"
+        assert {row["entityKey"] for row in result["sectorRows"]} >= {"BANK", "FINANCE"}
+
+    def test_missing_money_flow_value_is_not_written_as_zero(self) -> None:
+        rows = [{"code": "000001", "name": "平安银行", "rank": 1}]
+
+        _enrich_stock_rows_from_quotes(rows, [], [], [{"code": "000001"}])
+
+        assert "zlje" not in rows[0]
+
+    def test_removes_unavailable_placeholder_zeros_from_homepage_rows(self) -> None:
+        slot = make_slot_1500()
+        context = MarketDataContext(
+            stocks=[
+                {
+                    "code": "000001",
+                    "name": "平安银行",
+                    "rank": 1,
+                    "volume": 100_000,
+                    "volumeRatio": 0,
+                    "volumeRatioMeta": {"status": "stale", "source": "unavailable"},
+                    "zlje": 0,
+                    "zljzb": 0,
+                }
+            ]
+        )
+
+        result = build_ingest_payload(slot, context)
+        row = result["stockRows"][0]
+        hotlist_row = result["items"][0]["payload"]["hotlist"][0]
+
+        assert "volumeRatio" not in row
+        assert "zlje" not in row
+        assert "zljzb" not in row
+        assert "volumeRatio" not in hotlist_row
+        assert "zlje" not in hotlist_row
+        assert "zljzb" not in hotlist_row
+
+    def test_preserves_zero_values_with_explicit_fact_sources(self) -> None:
+        slot = make_slot_1500()
+        context = MarketDataContext(
+            stocks=[
+                {
+                    "code": "000001",
+                    "name": "平安银行",
+                    "rank": 1,
+                    "volumeRatio": 0,
+                    "volumeRatioMeta": {"status": "ok", "source": "daily_snapshot"},
+                    "zlje": 0,
+                    "zljzb": 0,
+                    "moneyFlowSource": "ths_main_monitor",
+                }
+            ]
+        )
+
+        result = build_ingest_payload(slot, context)
+        row = result["stockRows"][0]
+        hotlist_row = result["items"][0]["payload"]["hotlist"][0]
+
+        assert row["volumeRatio"] == 0
+        assert row["zlje"] == 0
+        assert row["zljzb"] == 0
+        assert hotlist_row["volumeRatio"] == 0
+        assert hotlist_row["zlje"] == 0
+        assert hotlist_row["zljzb"] == 0
+
+    def test_derives_zljzb_only_from_finite_nonzero_turnover(self) -> None:
+        rows = [{"code": "000001", "name": "平安银行", "rank": 1, "turnover": 200_000_000.0}]
+
+        _enrich_stock_rows_from_quotes(
+            rows,
+            [],
+            [],
+            [{"code": "000001", "mainNetInflow": 10_000_000.0}],
+        )
+
+        assert rows[0]["zlje"] == 10_000_000.0
+        assert rows[0]["zljzb"] == 5.0
+
 
 class TestCanonicalSnapshotStockRowContract:
     def test_builder_emits_canonical_live_contract_aliases(self) -> None:

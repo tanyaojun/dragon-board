@@ -225,11 +225,4 @@ describe('DataTable row detail interactions', () => {
     expect(source).not.toContain("return `!${ratio.toFixed(2)}`")
   })
 
-  test('registers only currently visible rows as the table fund priority owner', () => {
-    const source = dataTableSource()
-
-    expect(source).toContain("realtimeSubscriptionRegistry.setFundOwnerCodes('datatable.visible'")
-    expect(source).toContain("realtimeSubscriptionRegistry.clearFundOwner('datatable.visible')")
-    expect(source).toContain("querySelectorAll<HTMLElement>('.data-row[data-code]')")
-  })
 })

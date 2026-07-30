@@ -912,9 +912,11 @@ class TestServiceDryRun:
     def test_default_providers_do_not_register_removed_eastmoney_quote_route(self) -> None:
         from backend.snapshot_collector.providers import (
             BridgeQuoteProvider,
+            MarketFundCacheProvider,
             ProxyLimitUpProvider,
             ProxyMergedHotlistProvider,
             StartupBundleStockProvider,
+            TencentBasicQuoteProvider,
             ThemeMappingProvider,
         )
         from backend.snapshot_collector.service import SnapshotCollectorService
@@ -929,11 +931,15 @@ class TestServiceDryRun:
         assert {provider_type.__name__ for provider_type in provider_types} == {
             "StartupBundleStockProvider",
             "ProxyMergedHotlistProvider",
+            "TencentBasicQuoteProvider",
             "BridgeQuoteProvider",
+            "MarketFundCacheProvider",
             "ProxyLimitUpProvider",
             "ThemeMappingProvider",
         }
         assert BridgeQuoteProvider in provider_types
+        assert provider_types.index(TencentBasicQuoteProvider) < provider_types.index(BridgeQuoteProvider)
+        assert provider_types.index(StartupBundleStockProvider) < provider_types.index(MarketFundCacheProvider)
         assert ThemeMappingProvider in provider_types
         assert ProxyLimitUpProvider in provider_types
 

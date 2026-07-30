@@ -28,12 +28,4 @@ describe('theme panel data contract', () => {
     expect(panel).toMatch(/mainNetInflow\s*==\s*null\s*\?\s*'--'/)
   })
 
-  it('registers current theme stock pages as connection-scoped fund priority', () => {
-    const panels = ['SectorDetail.vue', 'SectorStocksTree.vue'].map(source).join('\n')
-
-    expect(panels).toMatch(/setFundOwnerCodes\(\s*'theme-detail\.visible'/)
-    expect(panels).toContain("clearFundOwner('theme-detail.visible')")
-    expect(panels).toMatch(/setFundOwnerCodes\(\s*'theme-tree\.visible'/)
-    expect(panels).toContain("clearFundOwner('theme-tree.visible')")
-  })
 })

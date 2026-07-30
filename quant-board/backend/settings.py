@@ -131,10 +131,6 @@ class Settings(BaseModel):
     theme_heat_fund_timeout_ms: int = Field(default=30000)
     theme_heat_quote_collection_timeout_ms: int = Field(default=90000)
     theme_heat_fund_collection_timeout_ms: int = Field(default=180000)
-    theme_fund_scheduler_enabled: bool = Field(default=True)
-    theme_fund_batch_size: int = Field(default=5)
-    theme_fund_p0_interval_seconds: int = Field(default=30)
-    theme_fund_p1_interval_seconds: int = Field(default=180)
     theme_fund_concurrency: int = Field(default=2)
     theme_fund_upstream_timeout_seconds: float = Field(default=15.0)
     theme_fund_ths_upstream_url: str = Field(
@@ -387,22 +383,6 @@ class Settings(BaseModel):
                 "QUANT_BOARD_THEME_HEAT_FAILED_BATCH_RETRIES",
                 self.theme_heat_failed_batch_retries,
             ),
-        )
-        self.theme_fund_scheduler_enabled = _env_bool(
-            "QUANT_BOARD_THEME_FUND_SCHEDULER_ENABLED",
-            self.theme_fund_scheduler_enabled,
-        )
-        self.theme_fund_batch_size = max(
-            1,
-            min(5, _env_int("QUANT_BOARD_THEME_FUND_BATCH_SIZE", self.theme_fund_batch_size)),
-        )
-        self.theme_fund_p0_interval_seconds = max(
-            1,
-            _env_int("QUANT_BOARD_THEME_FUND_P0_INTERVAL_SECONDS", self.theme_fund_p0_interval_seconds),
-        )
-        self.theme_fund_p1_interval_seconds = max(
-            1,
-            _env_int("QUANT_BOARD_THEME_FUND_P1_INTERVAL_SECONDS", self.theme_fund_p1_interval_seconds),
         )
         self.theme_fund_concurrency = max(
             1,

@@ -1,9 +1,9 @@
 import { webSocketService } from '../websocket'
-import { themeFundStreamService } from '../themeFundStream'
+import { marketFundStreamService } from '../marketFundStream'
 
 export interface RealtimeSubscriptionRegistryOptions {
   apply: (codes: string[]) => void
-  applyFunds?: (marketCodes: string[], priorityCodes: string[]) => void
+  applyMarketFunds?: (codes: string[]) => void
 }
 
 export type RealtimeSubscriptionListener = (codes: string[]) => void
@@ -24,16 +24,15 @@ function normalizeCodes(codes: readonly unknown[]): string[] {
 
 export class RealtimeSubscriptionRegistry {
   private readonly apply: (codes: string[]) => void
-  private readonly applyFunds: (marketCodes: string[], priorityCodes: string[]) => void
+  private readonly applyMarketFunds: (codes: string[]) => void
   private readonly ownerCodes = new Map<string, string[]>()
-  private readonly fundOwnerCodes = new Map<string, string[]>()
   private readonly listeners = new Set<RealtimeSubscriptionListener>()
   private lastSignature = ''
-  private lastFundSignature = ''
+  private lastMarketFundSignature = ''
 
   constructor(options: RealtimeSubscriptionRegistryOptions) {
     this.apply = options.apply
-    this.applyFunds = options.applyFunds || ((marketCodes) => options.apply(marketCodes))
+    this.applyMarketFunds = options.applyMarketFunds || (() => undefined)
   }
 
   setOwnerCodes(owner: string, codes: readonly unknown[]) {
@@ -48,31 +47,12 @@ export class RealtimeSubscriptionRegistry {
     this.flush()
   }
 
-  setFundOwnerCodes(owner: string, codes: readonly unknown[]) {
-    const key = owner.trim()
-    if (!key) return
-    this.fundOwnerCodes.set(key, normalizeCodes(codes))
-    this.flush()
-  }
-
-  clearFundOwner(owner: string) {
-    if (!this.fundOwnerCodes.delete(owner.trim())) return
-    this.flush()
-  }
-
   getOwnerCodes(owner: string): string[] {
     return [...(this.ownerCodes.get(owner.trim()) || [])]
   }
 
   getMergedCodes(): string[] {
     return normalizeCodes([...this.ownerCodes.values()].flat())
-  }
-
-  getMergedFundCodes(): string[] {
-    return normalizeCodes([
-      ...this.ownerCodes.values(),
-      ...this.fundOwnerCodes.values(),
-    ].flat())
   }
 
   subscribe(listener: RealtimeSubscriptionListener): () => void {
@@ -89,11 +69,11 @@ export class RealtimeSubscriptionRegistry {
       this.apply(codes)
       this.listeners.forEach(listener => listener([...codes]))
     }
-    const priorityCodes = normalizeCodes([...this.fundOwnerCodes.values()].flat())
-    const fundSignature = `${signature}|${priorityCodes.join(',')}`
-    if (fundSignature !== this.lastFundSignature) {
-      this.lastFundSignature = fundSignature
-      this.applyFunds(codes, priorityCodes)
+    const marketFundCodes = this.getOwnerCodes('dataLoader.hotlist')
+    const marketFundSignature = marketFundCodes.join(',')
+    if (marketFundSignature !== this.lastMarketFundSignature) {
+      this.lastMarketFundSignature = marketFundSignature
+      this.applyMarketFunds(marketFundCodes)
     }
   }
 }
@@ -102,7 +82,5 @@ export const realtimeSubscriptionRegistry = new RealtimeSubscriptionRegistry({
   apply: codes => {
     webSocketService.setHotPool(codes)
   },
-  applyFunds: (marketCodes, priorityCodes) => {
-    themeFundStreamService.setSubscription(marketCodes, priorityCodes)
-  },
+  applyMarketFunds: codes => marketFundStreamService.setSubscription(codes),
 })

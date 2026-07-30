@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiHttpError } from '@/services/apiService'
-import { realtimeSubscriptionRegistry } from '@/services/realtime/RealtimeSubscriptionRegistry'
 import { AppEvents } from '@/types'
 import { EventManager } from '@/utils/eventManager'
 import { ThemeHeatFeed } from '../ThemeHeatFeed'
@@ -153,8 +152,6 @@ describe('ThemeHeatFeed', () => {
   })
 
   it('loads and caches normalized theme stock details', async () => {
-    const setFundOwnerCodes = vi.spyOn(realtimeSubscriptionRegistry, 'setFundOwnerCodes')
-    const clearFundOwner = vi.spyOn(realtimeSubscriptionRegistry, 'clearFundOwner')
     const feed = new ThemeHeatFeed(api as any)
 
     const first = await feed.loadThemeStocks('AI', { limit: 40 })
@@ -163,10 +160,8 @@ describe('ThemeHeatFeed', () => {
     expect(first).toEqual(second)
     expect(first[0]).toMatchObject({ code: '000001', role: 'follower', qualityFlags: [] })
     expect(api.getThemeHeatStocks).toHaveBeenCalledTimes(1)
-    expect(setFundOwnerCodes).not.toHaveBeenCalled()
 
     feed.clear()
-    expect(clearFundOwner).not.toHaveBeenCalled()
   })
 
   it('patches cached theme stocks immediately and debounces one factor refresh', async () => {

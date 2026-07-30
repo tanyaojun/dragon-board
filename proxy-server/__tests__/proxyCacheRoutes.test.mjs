@@ -274,6 +274,46 @@ test('startup bundle is stored in and read from cache', async () => {
   }
 })
 
+test('startup bundle accepts a complete fact package larger than 2 MB', async () => {
+  const cache = new MemoryCache()
+  const app = createProxyApp({
+    logRequests: false,
+    cache,
+    clients: {
+      client: {},
+      plainClient: {},
+    },
+  })
+  const bundle = {
+    schemaVersion: 1,
+    tradingDate: '2026-05-18',
+    createdAt: Date.now(),
+    platformData: {
+      eastmoney: [{ code: '000001', name: '平安银行', rank: 1 }],
+    },
+    stocks: [{ code: '000001', name: '平安银行', rank: 1 }],
+    snapshotContext: {
+      marketData: {
+        completeFactPackage: 'x'.repeat(3 * 1024 * 1024),
+      },
+    },
+  }
+
+  const { server, baseUrl } = await listen(app)
+  try {
+    const response = await fetch(`${baseUrl}/api/cache/startup-bundle`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: 'default:2026-05-18', bundle }),
+    })
+
+    assert.equal(response.status, 200)
+    assert.equal(cache.store.size, 1)
+  } finally {
+    server.close()
+  }
+})
+
 test('startup bundle rejects unsafe cache keys without silently normalizing them', async () => {
   const cache = new MemoryCache()
   const app = createProxyApp({

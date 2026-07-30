@@ -1,4 +1,5 @@
 import { apiService } from '../apiService'
+import type { StartupSnapshotContext } from '../snapshot/buildContext'
 import type { DataLoaderRunSummary } from './types'
 
 const STARTUP_BUNDLE_SCHEMA_VERSION = 1
@@ -11,6 +12,7 @@ export interface StartupBundle {
   createdAt: number
   platformData: Record<string, any[]>
   stocks: any[]
+  snapshotContext: StartupSnapshotContext
   summary?: DataLoaderRunSummary
   cacheMeta?: {
     stale?: boolean
@@ -38,8 +40,21 @@ function isValidBundle(bundle: unknown, now = Date.now()): bundle is StartupBund
   if (!candidate.stocks.some(hasRankTrendChange)) return false
   if (!candidate.platformData || typeof candidate.platformData !== 'object') return false
   if (Array.isArray(candidate.platformData)) return false
+  if (!hasCompleteSnapshotContext(candidate.snapshotContext)) return false
   const ageMs = now - Number(candidate.createdAt || 0)
   return Number.isFinite(ageMs) && ageMs >= 0 && ageMs <= MAX_BUNDLE_AGE_MS
+}
+
+export function hasCompleteSnapshotContext(
+  context: StartupSnapshotContext | null | undefined,
+): context is StartupSnapshotContext {
+  if (!context || typeof context !== 'object') return false
+  const breathData = context.breathData
+  const marketData = context.marketData
+  return (
+    Boolean(breathData && typeof breathData === 'object' && Object.keys(breathData).length) &&
+    Boolean(marketData && typeof marketData === 'object' && Object.keys(marketData).length)
+  )
 }
 
 function hasValidComprehensiveRank(stock: any): boolean {
@@ -111,7 +126,9 @@ class StartupBundleService {
     }
   }
 
-  async write(bundle: Omit<StartupBundle, 'schemaVersion' | 'tradingDate' | 'createdAt'>): Promise<void> {
+  async write(
+    bundle: Omit<StartupBundle, 'schemaVersion' | 'tradingDate' | 'createdAt'>,
+  ): Promise<boolean> {
     const payload: StartupBundle = {
       ...bundle,
       schemaVersion: STARTUP_BUNDLE_SCHEMA_VERSION,
@@ -120,7 +137,7 @@ class StartupBundleService {
       cacheMeta: undefined,
     }
 
-    if (!isValidBundle(payload, payload.createdAt)) return
+    if (!isValidBundle(payload, payload.createdAt)) return false
 
     try {
       await apiService.post(
@@ -133,12 +150,14 @@ class StartupBundleService {
           context: 'platform',
           cache: false,
           retries: 0,
-          timeout: 1000,
+          timeout: 10_000,
           silent: true,
         },
       )
-    } catch {
-      return
+      return true
+    } catch (error) {
+      console.warn('[StartupBundle] 写入失败:', error)
+      return false
     }
   }
 }

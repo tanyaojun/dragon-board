@@ -145,12 +145,11 @@
 
 <script setup lang="ts">
 import { debugLog } from '@/utils/logger'
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { sectorAnalyzer } from '@/services/sectorAnalyzer'
 import { useUIStore } from '@/stores/ui'
 import { themeFacade } from '@/services/theme/ThemeFacade'
 import { useThemeRuntimeSnapshot } from '@/composables/useThemeRuntimeSnapshot'
-import { realtimeSubscriptionRegistry } from '@/services/realtime/RealtimeSubscriptionRegistry'
 
 // Props
 const props = defineProps<{
@@ -355,24 +354,6 @@ watch([stockSearch, sortBy, sortDesc], () => {
   stockPage.value = 1
 })
 
-watch(
-  paginatedStocks,
-  (stocks) => {
-    if (stocks.length) {
-      realtimeSubscriptionRegistry.setFundOwnerCodes(
-        'theme-tree.visible',
-        stocks.map((stock) => stock.code),
-      )
-    } else {
-      realtimeSubscriptionRegistry.clearFundOwner('theme-tree.visible')
-    }
-  },
-  { immediate: true },
-)
-
-onUnmounted(() => {
-  realtimeSubscriptionRegistry.clearFundOwner('theme-tree.visible')
-})
 </script>
 
 <style scoped>

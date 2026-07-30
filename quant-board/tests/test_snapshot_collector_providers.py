@@ -18,13 +18,16 @@ import pytest
 from backend.snapshot_collector.models import MarketDataContext, SourceHealth
 from backend.snapshot_collector.providers import (
     BridgeQuoteProvider,
+    MarketFundCacheProvider,
     ProxyHotlistProvider,
     ProxyLimitUpProvider,
     ProxyMergedHotlistProvider,
     StartupBundleStockProvider,
+    TencentBasicQuoteProvider,
     ThemeMappingProvider,
     collect_market_context,
 )
+from backend.theme_fund_cache import ThemeFundCache
 
 
 # ── Fake HTTP response builder ──────────────────────────────────────────────
@@ -71,6 +74,32 @@ class FakeThemeRepo:
             "reason": "",
             "source": "mongodb",
         }
+
+
+def test_market_fund_cache_provider_preserves_last_good_and_missing_values() -> None:
+    cache = ThemeFundCache(None, prefix="test")
+    cache.put({
+        "code": "000001",
+        "zlje": 88_000_000,
+        "sessionDate": "2026-07-30",
+        "moneyFlowSource": "ths_main_monitor",
+        "sourceTs": 1,
+    })
+    provider = MarketFundCacheProvider(cache)
+
+    rows, health = provider.collect(["000001", "000002"])
+
+    assert rows == [{
+        "code": "000001",
+        "mainNetInflow": 88_000_000.0,
+        "moneyFlowSource": "ths_main_monitor",
+        "moneyFlowEstimated": False,
+        "capitalFlowSource": "ths_main_monitor",
+        "capitalFlowConfidence": "high",
+    }]
+    assert health.ok is False
+    assert health.returned_count == 1
+    assert health.coverage_ratio == 0.5
 
 
 # ── Sample data ─────────────────────────────────────────────────────────────
@@ -189,6 +218,10 @@ STARTUP_BUNDLE_RESPONSE = {
         "schemaVersion": 1,
         "tradingDate": "2026-06-23",
         "createdAt": 1782207600000,
+        "snapshotContext": {
+            "breathData": {"overall": 72},
+            "marketData": {"upCount": 3200, "downCount": 1800},
+        },
         "platformData": {
             "eastmoney": [{"code": "000001", "rank": 1}],
             "ths": [{"code": "600000", "rank": 1}],
@@ -317,6 +350,43 @@ def _hotlist_response_for_url(url: str) -> dict[str, Any]:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# TencentBasicQuoteProvider
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+class TestTencentBasicQuoteProvider:
+    @pytest.mark.parametrize("raw_value", [None, "", 0, "0", "nan"])
+    def test_omits_unavailable_or_nonpositive_volume_ratio(self, raw_value: Any) -> None:
+        provider = TencentBasicQuoteProvider(base_url=PROXY_BASE_URL)
+
+        row = provider._normalize_row({"f12": "000001", "f14": "平安银行", "f10": raw_value})
+
+        assert row is not None
+        assert "volumeRatio" not in row
+
+    def test_preserves_positive_volume_ratio(self) -> None:
+        provider = TencentBasicQuoteProvider(base_url=PROXY_BASE_URL)
+
+        row = provider._normalize_row({"f12": "000001", "f14": "平安银行", "f10": "1.88"})
+
+        assert row is not None
+        assert row["volumeRatio"] == 1.88
+
+    def test_empty_codes_report_no_data_without_requesting_upstream(self) -> None:
+        provider = TencentBasicQuoteProvider(base_url=PROXY_BASE_URL)
+
+        with patch.object(urllib.request, "urlopen") as urlopen:
+            rows, health = provider.collect([], timeout_ms=5000)
+
+        urlopen.assert_not_called()
+        assert rows == {}
+        assert health.ok is False
+        assert health.requested_count == 0
+        assert health.coverage_ratio == 0.0
+        assert health.error == "no requested codes"
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # StartupBundleStockProvider
 # ═════════════════════════════════════════════════════════════════════════════
 
@@ -419,6 +489,19 @@ class TestStartupBundleStockProvider:
         assert health.ok is False
         assert health.source == "startup_bundle"
         assert "missing" in health.error
+
+    def test_missing_snapshot_context_preserves_stocks_but_reports_degraded_health(self) -> None:
+        body = deepcopy(STARTUP_BUNDLE_RESPONSE)
+        body["data"].pop("snapshotContext")
+        provider = StartupBundleStockProvider(base_url=PROXY_BASE_URL, trading_date="2026-06-23")
+
+        with patch.object(urllib.request, "urlopen", return_value=_fake_urlopen_response(body)):
+            stocks, health = provider.collect(timeout_ms=5000)
+
+        assert len(stocks) == 3
+        assert health.ok is False
+        assert health.coverage_ratio == 1.0
+        assert "snapshotContext" in health.error
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -848,6 +931,29 @@ class TestCollectMarketContext:
 
         assert len(ctx.stocks) == 3
         assert ctx.stocks[0]["code"] == "000001"
+
+    def test_merges_bounded_tencent_quotes_after_stock_codes_are_known(self) -> None:
+        startup = StartupBundleStockProvider(base_url=PROXY_BASE_URL)
+        tencent = TencentBasicQuoteProvider(base_url=PROXY_BASE_URL)
+        startup_rows = [
+            {"code": "000001", "name": "平安银行", "rank": 1},
+            {"code": "600000", "name": "浦发银行", "rank": 2},
+        ]
+        with (
+            patch.object(startup, "collect", return_value=(startup_rows, SourceHealth("startup_bundle", True))),
+            patch.object(
+                tencent,
+                "collect",
+                return_value=(
+                    {"000001": {"code": "000001", "volumeRatio": 1.8}},
+                    SourceHealth("theme_quote_tencent", True, row_count=1),
+                ),
+            ) as collect_quotes,
+        ):
+            ctx = collect_market_context([startup, tencent], [], timeout_ms=5000)
+
+        collect_quotes.assert_called_once_with(["000001", "600000"], timeout_ms=5000)
+        assert ctx.quotes == [{"code": "000001", "volumeRatio": 1.8}]
 
     def test_assembles_quotes_from_bridge_provider(self) -> None:
         hotlist = ProxyHotlistProvider(base_url=PROXY_BASE_URL)

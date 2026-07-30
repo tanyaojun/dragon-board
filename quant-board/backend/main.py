@@ -15,6 +15,7 @@ from backend.api.fusion_strategy_projection_routes import router as fusion_strat
 from backend.api.big_order_history_routes import router as big_order_history_router
 from backend.api.hotlist_routes import router as hotlist_router
 from backend.api.journal_routes import router as journal_router
+from backend.api.market_fund_routes import router as market_fund_router
 from backend.api.snapshot_collector_routes import router as snapshot_collector_router
 from backend.api.theme_heat_routes import router as theme_heat_router
 from backend.api.ths_main_monitor_routes import router as ths_main_monitor_router
@@ -51,7 +52,8 @@ from backend.data.theme_repository import ThemeRepository
 from backend.data.theme_service import ThemeMigrationError, ThemeMigrationService
 from backend.theme_mapping_refresh import refresh_theme_stock_mappings
 from backend.theme_mapping_scheduler import theme_mapping_refresh_scheduler
-from backend.theme_fund_scheduler import theme_fund_scheduler
+from backend.ths_main_monitor_service import close_ths_main_monitor_service
+from backend.market_fund_scheduler import market_fund_scheduler
 from backend.operations.schedule import run_after_market_once
 from backend.services import (
     BacktestService,
@@ -82,6 +84,7 @@ app.add_middleware(
 )
 
 app.include_router(journal_router)
+app.include_router(market_fund_router)
 app.include_router(big_order_history_router)
 app.include_router(hotlist_router)
 app.include_router(fusion_strategy_projection_router)
@@ -100,7 +103,7 @@ async def on_startup() -> None:
     snapshot_collector_scheduler.start()
     stock_name_refresh_scheduler.start()
     theme_mapping_refresh_scheduler.start()
-    theme_fund_scheduler.start()
+    market_fund_scheduler.start()
 
 
 @app.on_event("shutdown")
@@ -112,8 +115,8 @@ async def on_shutdown() -> None:
     await snapshot_collector_scheduler.stop()
     await stock_name_refresh_scheduler.stop()
     await theme_mapping_refresh_scheduler.stop()
-    await theme_fund_scheduler.stop()
-    await theme_fund_scheduler.service.aclose()
+    await market_fund_scheduler.stop()
+    await close_ths_main_monitor_service()
 
 
 @app.get("/api/health")
@@ -150,6 +153,7 @@ def health_check(deep: bool = False, db: Session | None = Depends(get_db)) -> di
         "snapshotCollector": snapshot_collector_scheduler.status(),
         "stockNameRefresh": stock_name_refresh_scheduler.status(),
         "themeMappingRefresh": theme_mapping_refresh_scheduler.status(),
+        "marketFundRefresh": market_fund_scheduler.status(),
     }
 
 

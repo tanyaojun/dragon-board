@@ -667,9 +667,11 @@ class SnapshotCollectorService:
         """Create data-source providers from settings."""
         from .providers import (
             BridgeQuoteProvider,
+            MarketFundCacheProvider,
             ProxyLimitUpProvider,
             ProxyMergedHotlistProvider,
             StartupBundleStockProvider,
+            TencentBasicQuoteProvider,
             ThemeMappingProvider,
         )
 
@@ -677,13 +679,21 @@ class SnapshotCollectorService:
         providers: list[Any] = [
             StartupBundleStockProvider(base_url=proxy_url, trading_date=trading_date),
             ProxyMergedHotlistProvider(base_url=proxy_url),
+            TencentBasicQuoteProvider(base_url=proxy_url),
             BridgeQuoteProvider(base_url=self._bridge_base_url()),
+            MarketFundCacheProvider(self._create_market_fund_cache()),
             ProxyLimitUpProvider(base_url=proxy_url, trading_date=trading_date),
         ]
         theme_repo = self._create_theme_repository()
         if theme_repo is not None:
             providers.append(ThemeMappingProvider(theme_repo))
         return providers
+
+    @staticmethod
+    def _create_market_fund_cache() -> Any:
+        from backend.theme_fund_cache import get_theme_fund_cache
+
+        return get_theme_fund_cache()
 
     def _create_theme_repository(self) -> Any | None:
         try:

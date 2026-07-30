@@ -1231,7 +1231,7 @@ Dragon Board `ThemeDataService` 的正式读口。返回结构兼容旧 `ThemeMa
 
 ### `GET /api/themes/heat?force=false`
 
-返回基于 MongoDB 全市场题材映射计算的 `theme-market-v1` factors。基础行情固定使用腾讯批量行情（50 只/批、有限并发、默认整次预算 90 秒）；资金字段只读 Redis `theme-fund:v3` 中由 THS `mainMonitorDetail` 增量调度写入的 last-good，来源固定为 `ths_main_monitor`。服务端复用最近行情快照，资金 version 变化只重算题材资金聚合，不重新请求全市场行情。`force=true` 跳过行情缓存。公开响应不包含全市场逐股 quote/fund map。交易日只由 bridge 的通达信标准日历判定，日历不可用时停止 THS 调度，不按周末或本地节假日猜测。
+返回基于 MongoDB 全市场题材映射计算的 `theme-market-v1` factors。基础行情固定使用腾讯批量行情（50 只/批、有限并发、默认整次预算 90 秒）；资金字段只读 Redis `theme-fund:v3` 中已有的 THS `mainMonitorDetail` last-good，来源固定为 `ths_main_monitor`，后端不再运行全市场自动刷新任务。服务端复用最近行情快照，资金 version 变化只重算题材资金聚合，不重新请求全市场行情。`force=true` 跳过行情缓存。公开响应不包含全市场逐股 quote/fund map。
 
 当腾讯覆盖率低于门槛时返回结构化 `503`；如果存在上次成功结果，响应携带 `staleData`。未覆盖资金的股票不按零值聚合，相关 `fundScore/mainNetInflow` 保持空值。
 
@@ -1240,9 +1240,8 @@ Dragon Board `ThemeDataService` 的正式读口。返回结构兼容旧 `ThemeMa
 - `GET /api/big-order/ths-detail?stockCode=002297`：返回单票 THS 原始明细，供 `tools/THSBigOrder` 使用；缓存命中时通过 `fetchedAt`、`servedAt` 和 `data.dragonMeta.cache.uiStale` 标识时效。上游成功刷新后同步归档到 `quant-board/data/big-order/ths/<sessionDate>/<stockCode>.json.gz`。
 - `GET /api/big-order/ths-fund-batch?codes=000001,600000&concurrency=2`：按最多 5 只股票返回标准化 `zlje`、`sessionDate` 和逐票失败；并发限制在 1 到 2。
 - `GET /api/themes/fund-rows?codes=000001,600000`：只读 Redis last-good 的诊断接口，不触发上游请求。
-- `WS /api/themes/fund-stream`：客户端发送 `{ "marketCodes": [...], "priorityCodes": [...] }`。`marketCodes` 持久化为 P1 行情池，`priorityCodes` 只在连接存续期间作为 P0；服务端先返回缓存全量状态，再推送版本化增量。
 
-调度参数可通过 `QUANT_BOARD_THEME_FUND_BATCH_SIZE`、`QUANT_BOARD_THEME_FUND_P0_INTERVAL_SECONDS`、`QUANT_BOARD_THEME_FUND_P1_INTERVAL_SECONDS`、`QUANT_BOARD_THEME_FUND_CONCURRENCY`、`QUANT_BOARD_THEME_FUND_UPSTREAM_TIMEOUT_SECONDS` 和 `QUANT_BOARD_THEME_FUND_THS_UPSTREAM_URL` 覆盖；默认分别为 5、30 秒、180 秒、2、15 秒和 THS `mainMonitorDetail` 官方地址。成功刷新会在目标间隔上加入最多 5 秒随机抖动。
+按需 THS 接口可通过 `QUANT_BOARD_THEME_FUND_CONCURRENCY`、`QUANT_BOARD_THEME_FUND_UPSTREAM_TIMEOUT_SECONDS` 和 `QUANT_BOARD_THEME_FUND_THS_UPSTREAM_URL` 覆盖；默认分别为 2、15 秒和 THS `mainMonitorDetail` 官方地址。
 
 该资金缓存只服务 Dragon Board 运行态行情列表和题材分析。正式 snapshot、RankTrend、回测、优化和数据集入库均不读取或持久化 `theme-fund:v3`，不能把它当作历史资金口径。
 

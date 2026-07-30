@@ -245,7 +245,6 @@ import { dataLayer } from './services/DataLayer'              // 数据存储层
 // ========== 2. 数据加载服务（依赖 dataLayer）==========
 import { themeMapping } from './services/ThemeDataService'    // 题材静态映射
 import { dataLoader } from './services/dataLoader'            // 八平台数据加载
-import { realtimeSubscriptionRegistry } from './services/realtime/RealtimeSubscriptionRegistry'
 
 // ========== 3. 业务分析服务（依赖 dataLayer + dataLoader）==========
 import { sectorAnalyzer } from './services/sectorAnalyzer'    // 题材分析
@@ -491,14 +490,6 @@ const handleSearch = (keyword: string) => {
   }
 
   const results = selectorStore.search(normalizedKeyword)
-  if (results.length) {
-    realtimeSubscriptionRegistry.setFundOwnerCodes(
-      'app.search',
-      results.slice(0, 20).map((result) => result.stock.code),
-    )
-  } else {
-    realtimeSubscriptionRegistry.clearFundOwner('app.search')
-  }
   if (results.length > 0) {
     selectorStore.selectStock(results[0].stock.code, { source: 'search', scroll: true })
   }
@@ -789,7 +780,6 @@ onUnmounted(() => {
   eventUnsubscribers.forEach((fn) => fn())
   eventUnsubscribers.length = 0
   sectorAnalyzer.destroy?.()
-  realtimeSubscriptionRegistry.clearFundOwner('app.search')
 })
 </script>
 
