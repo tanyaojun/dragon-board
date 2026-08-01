@@ -34,13 +34,19 @@ Dragon Board 是一个面向 A 股热榜、市场情绪、题材轮动、龙头�
 
 ### proxy-server
 
-`proxy-server/` 是本地股票数据代理服务，用于把前端请求转发到外部数据源，并处理跨域、编码、cookie 和缓存等问题。默认监听：
+`proxy-server/` 是本地股票数据代理服务，默认监听：
 
 ```text
 http://localhost:3000
 ```
 
 根 Vite 开发服务通过 `/api` 代理到该服务。
+
+数据接口（指数/行情/热榜/涨停池/情绪/大单/事件）已迁移到 QuantBoard Python 后端
+（`quant-board/backend/market_proxy/**`，akshare + httpx 直连），proxy 仅按前缀转发到
+`http://127.0.0.1:8000`；proxy 本地只保留 Windows 服务类路由（tdx-blocks、
+notifications/飞书、local-voice、opening-signals、startup-cache、tdx 探针、
+big-order 盘后归档/采集）。迁移与批次明细见 `quant-board/docs/proxy-server-migration-plan.md`。
 
 ### python-bridge
 

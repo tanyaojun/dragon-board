@@ -12,20 +12,15 @@ import {
 import { ProcessMemoryCache, ProxyRedisCache } from './helpers/proxyCache.js'
 import { buildBadRequestEnvelope } from './helpers/response.js'
 import { registerBigOrderRoutes } from './routes/bigOrder.js'
-import { registerDeprecatedRoutes } from './routes/deprecated.js'
 import { registerDocsRoutes } from './routes/docs.js'
-import { registerHotlistRoutes } from './routes/hotlists.js'
 import { registerJumpSignalRoutes } from './routes/jumpSignalNotifications.js'
 import { registerLocalVoiceRoutes } from './routes/localVoice.js'
-import { registerMarketRoutes } from './routes/market.js'
 import { registerNotificationRoutes } from './routes/notifications.js'
 import { registerOpeningSignalRoutes } from './routes/openingSignals.js'
 import { registerQuantBoardProxyRoutes } from './routes/quantBoardProxy.js'
-import { registerQuoteRoutes } from './routes/quotes.js'
 import { registerStartupCacheRoutes } from './routes/startupCache.js'
 import { registerTdxBlockRoutes } from './routes/tdxBlocks.js'
 import { registerTdxRoutes } from './routes/tdx.js'
-import { registerXuangubaoRoutes } from './routes/xuangubao.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -80,10 +75,7 @@ export function createProxyApp(options = {}) {
   })
 
   registerDocsRoutes(app, context)
-  registerHotlistRoutes(app, context)
-  registerQuoteRoutes(app, context)
   registerStartupCacheRoutes(app, context)
-  registerDeprecatedRoutes(app, context)
   registerBigOrderRoutes(app, context)
   registerLocalVoiceRoutes(app, context)
   registerNotificationRoutes(app, context)
@@ -91,8 +83,6 @@ export function createProxyApp(options = {}) {
   registerOpeningSignalRoutes(app, context)
   registerTdxBlockRoutes(app, context)
   registerTdxRoutes(app, context)
-  registerMarketRoutes(app, context)
-  registerXuangubaoRoutes(app, context)
   registerQuantBoardProxyRoutes(app, context)
 
   app.use('/static', express.static(join(__dirname, 'public')))

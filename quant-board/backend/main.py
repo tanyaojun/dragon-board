@@ -16,6 +16,7 @@ from backend.api.big_order_history_routes import router as big_order_history_rou
 from backend.api.hotlist_routes import router as hotlist_router
 from backend.api.journal_routes import router as journal_router
 from backend.api.market_fund_routes import router as market_fund_router
+from backend.api.market_data_routes import router as market_data_router
 from backend.api.snapshot_collector_routes import router as snapshot_collector_router
 from backend.api.theme_heat_routes import router as theme_heat_router
 from backend.api.ths_main_monitor_routes import router as ths_main_monitor_router
@@ -85,6 +86,7 @@ app.add_middleware(
 
 app.include_router(journal_router)
 app.include_router(market_fund_router)
+app.include_router(market_data_router)
 app.include_router(big_order_history_router)
 app.include_router(hotlist_router)
 app.include_router(fusion_strategy_projection_router)
@@ -104,6 +106,9 @@ async def on_startup() -> None:
     stock_name_refresh_scheduler.start()
     theme_mapping_refresh_scheduler.start()
     market_fund_scheduler.start()
+    from backend.market_proxy.quotes import start_market_quotes_refresh
+
+    await start_market_quotes_refresh()
 
 
 @app.on_event("shutdown")
@@ -116,6 +121,22 @@ async def on_shutdown() -> None:
     await stock_name_refresh_scheduler.stop()
     await theme_mapping_refresh_scheduler.stop()
     await market_fund_scheduler.stop()
+    from backend.market_proxy.quotes import stop_market_quotes_refresh
+
+    await stop_market_quotes_refresh()
+    from backend.market_proxy.hotlists import close_hotlist_client
+    from backend.market_proxy.limitup import close_limitup_client
+    from backend.market_proxy.longhu import close_longhu_client
+    from backend.market_proxy.sentiment import close_sentiment_client
+    from backend.market_proxy.surge import close_surge_client
+    from backend.market_proxy.xuangubao import close_xuangubao_client
+
+    await close_hotlist_client()
+    await close_limitup_client()
+    await close_longhu_client()
+    await close_sentiment_client()
+    await close_surge_client()
+    await close_xuangubao_client()
     await close_ths_main_monitor_service()
 
 

@@ -34,6 +34,10 @@
 - 根项目：Vue 3 + TypeScript + Vite 前端，提供 Dragon Board 主看板。
 - `src/services/**`：核心业务层，包含数据加载、数据层、分析器、快照和 QuantBoard 桥接。
 - `proxy-server/`：Node.js 股票数据代理服务，默认端口 `3000`。
+  数据接口（指数/行情/热榜/涨停池/情绪/大单/事件）已迁移到 QuantBoard `backend/market_proxy/**`
+  （akshare + httpx 直连），proxy 仅按前缀转发到 8000，本地只保留 Windows 服务类路由
+  （tdx-blocks/notifications/local-voice/opening-signals/startup-cache/tdx 探针/big-order 归档）。
+  迁移批次与去向见 `quant-board/docs/proxy-server-migration-plan.md`。
 - `python-bridge/`：本地 `mootdx + WebSocket` 行情桥，默认提供 `ws://127.0.0.1:8765/ws/quotes`。
 - `tools/TdxL2Helper/`：独立 x86 .NET helper，用于通达信 DLL、L2 权限和深度行情探针。
 - `quant-board/`：Python QuantBoard 子项目，用于 RankTrend golden 对齐、数据导入、回测、优化和报告展示。

@@ -37,10 +37,9 @@ cloud day bundle 只保留为历史 JSON 恢复、手工迁移和兼容读取能
 - `stockRows`
 - `sectorRows`
 
-当前代码仍保留旧实现文件用于历史对照，但代理服务默认不再挂载：
+代理服务默认不再挂载（旧实现文件已在 Batch 4 收尾时删除，历史版本可从 Git 获取）：
 
 - `proxy-server/server.js` 不再注册 `/api/snapshots/remote/*`
-- `proxy-server/snapshotRemoteRoutes.js` 是未挂载的遗留 WebDAV 实现，不属于正式运行链路
 - `apiService.ts` 不再暴露 `upload-day-bundle`、manifest、health 或 download 方法
 - 历史上传目录为 `bundles/by-date/{tradingDate}.json.gz`
 - 读取顺序为 `bundles/by-date/{tradingDate}.json.gz` -> `bundles/by-date/{tradingDate}.json` -> `day-bundles/{tradingDate}.json`

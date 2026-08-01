@@ -12,36 +12,6 @@ function listen(app) {
   })
 }
 
-test('quote routes return structured 400 when codes are missing', async () => {
-  const { server, baseUrl } = await listen(createProxyApp({ logRequests: false }))
-  try {
-    const response = await fetch(`${baseUrl}/api/quotes/tencent`)
-    const body = await response.json()
-
-    assert.equal(response.status, 400)
-    assert.equal(body.ok, false)
-    assert.equal(body.degraded, false)
-    assert.equal(body.errorCode, 'missing_codes')
-  } finally {
-    server.close()
-  }
-})
-
-test('quote routes reject malformed stock codes instead of padding them', async () => {
-  const { server, baseUrl } = await listen(createProxyApp({ logRequests: false }))
-  try {
-    const response = await fetch(`${baseUrl}/api/quotes/tencent?codes=abc,1`)
-    const body = await response.json()
-
-    assert.equal(response.status, 400)
-    assert.equal(body.ok, false)
-    assert.equal(body.degraded, false)
-    assert.equal(body.errorCode, 'missing_codes')
-  } finally {
-    server.close()
-  }
-})
-
 test('quant board ranktrend route is proxied through the stock proxy', async () => {
   let upstreamUrl = ''
   const app = createProxyApp({
@@ -75,7 +45,7 @@ test('quant board ranktrend route is proxied through the stock proxy', async () 
 test('unknown routes return structured 404', async () => {
   const { server, baseUrl } = await listen(createProxyApp({ logRequests: false }))
   try {
-    const response = await fetch(`${baseUrl}/api/quotes/smart?codes=000001`)
+    const response = await fetch(`${baseUrl}/api/nonexistent-xyz`)
     const body = await response.json()
 
     assert.equal(response.status, 404)

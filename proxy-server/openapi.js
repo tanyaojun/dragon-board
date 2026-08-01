@@ -41,19 +41,6 @@ function operation({ method, tag, summary, description, parameters, requestBody,
   }
 }
 
-const codesQuery = [
-  {
-    name: 'codes',
-    in: 'query',
-    required: true,
-    schema: {
-      type: 'string',
-      example: '000001,600519',
-    },
-    description: '逗号分隔的 6 位股票代码',
-  },
-]
-
 const passthroughBody = {
   required: false,
   content: {
@@ -183,14 +170,11 @@ export function buildOpenApiDocument({ port = 3000 } = {}) {
     ],
     tags: [
       { name: 'health', description: '服务健康检查' },
-      { name: 'hotlists', description: '八平台热榜代理' },
-      { name: 'quotes', description: '行情与主力资金代理' },
       { name: 'cache', description: '启动快照和代理缓存' },
       { name: 'market', description: '市场情绪和涨停数据' },
       { name: 'tdx', description: '通达信兼容代理' },
       { name: 'tdx-blocks', description: '本机通达信 .blk 自选股读取' },
       { name: 'opening-signals', description: '开盘竞价弱转强本地信号缓存' },
-      { name: 'deprecated', description: '兼容旧接口' },
     ],
     paths: {
       '/health': operation({
@@ -198,67 +182,6 @@ export function buildOpenApiDocument({ port = 3000 } = {}) {
         tag: 'health',
         summary: 'Health check',
         description: '返回代理服务运行状态，不访问外部数据源。',
-      }),
-      '/api/xueqiu/hot': operation({
-        method: 'get',
-        tag: 'hotlists',
-        summary: '雪球热榜',
-      }),
-      '/api/cls/hot': operation({
-        method: 'get',
-        tag: 'hotlists',
-        summary: '财联社热榜',
-      }),
-      '/api/eastmoney/hot': operation({
-        method: 'post',
-        tag: 'hotlists',
-        summary: '东方财富热榜',
-        description: '启用 Redis read-through TTL 缓存和 stale fallback。',
-        requestBody: passthroughBody,
-      }),
-      '/api/ths/hot': operation({
-        method: 'get',
-        tag: 'hotlists',
-        summary: '同花顺热榜',
-      }),
-      '/api/kpl/hot': operation({
-        method: 'get',
-        tag: 'hotlists',
-        summary: '开盘啦热榜',
-      }),
-      '/api/tdx/hot': operation({
-        method: 'post',
-        tag: 'hotlists',
-        summary: '通达信热榜',
-        requestBody: passthroughBody,
-      }),
-      '/api/tgb/hot': operation({
-        method: 'get',
-        tag: 'hotlists',
-        summary: '淘股吧热榜',
-      }),
-      '/api/dzh/hot': operation({
-        method: 'get',
-        tag: 'hotlists',
-        summary: '大智慧热榜',
-      }),
-      '/api/quotes/tencent': operation({
-        method: 'get',
-        tag: 'quotes',
-        summary: '腾讯行情',
-        parameters: codesQuery,
-      }),
-      '/api/quotes/sina': operation({
-        method: 'get',
-        tag: 'quotes',
-        summary: '新浪行情',
-        parameters: codesQuery,
-      }),
-      '/api/quotes/tencent/spk': operation({
-        method: 'get',
-        tag: 'deprecated',
-        summary: '腾讯 SPK 兼容行情',
-        parameters: codesQuery,
       }),
       '/api/cache/startup-bundle': {
         get: {
@@ -340,31 +263,6 @@ export function buildOpenApiDocument({ port = 3000 } = {}) {
         description: '校验传入文件位于当前 blocknew 目录后，写回桌面版异动精灵 settings.json 的 SelectedBlockFiles，并保留其它设置字段。',
         requestBody: passthroughBody,
       }),
-      '/api/limitup/10jqka': operation({
-        method: 'get',
-        tag: 'market',
-        summary: '同花顺涨停列表',
-      }),
-      '/api/limitup/detail': operation({
-        method: 'get',
-        tag: 'deprecated',
-        summary: '涨停详情兼容接口',
-      }),
-      '/api/surge-stock/performance': operation({
-        method: 'get',
-        tag: 'market',
-        summary: '异动股表现',
-      }),
-      '/api/market/overview': operation({
-        method: 'get',
-        tag: 'market',
-        summary: '市场概览',
-      }),
-      '/api/sentiment/composite': operation({
-        method: 'get',
-        tag: 'market',
-        summary: '综合情绪',
-      }),
       '/api/opening-signals': operation({
         method: 'post',
         tag: 'opening-signals',
@@ -388,18 +286,6 @@ export function buildOpenApiDocument({ port = 3000 } = {}) {
             },
           },
         ],
-      }),
-      '/api/big-order/main-monitor': operation({
-        method: 'get',
-        tag: 'market',
-        summary: '大单主力监控兼容接口',
-        description: '保持未包裹 Longhu 顶层字段；上游统一 POST form，limit>200 时内部拆页。',
-      }),
-      '/api/big-order/all-day': operation({
-        method: 'get',
-        tag: 'market',
-        summary: '全天大单兼容接口',
-        description: 'money=0 委托 canonical 全天快照；其它 numeric money 保持兼容分页。',
       }),
       '/api/big-order/longhu/all-day': operation({
         method: 'get',
@@ -433,32 +319,6 @@ export function buildOpenApiDocument({ port = 3000 } = {}) {
         tag: 'market',
         summary: '立即执行大单归档采集',
         description: '传 stockCodes 采集传入清单，否则采集当日登记清单；命中缓存时无上游成本。返回逐只成功/失败报告。',
-      }),
-      '/api/theme/{id}': {
-
-        get: {
-          tags: ['deprecated'],
-          summary: '题材详情兼容接口',
-          parameters: [
-            {
-              name: 'id',
-              in: 'path',
-              required: true,
-              schema: { type: 'string' },
-            },
-          ],
-          responses: {
-            200: jsonResponse,
-            400: errorResponse,
-            502: errorResponse,
-          },
-        },
-      },
-      '/api/themes/batch': operation({
-        method: 'post',
-        tag: 'deprecated',
-        summary: '批量题材兼容接口',
-        requestBody: passthroughBody,
       }),
     },
     components: {

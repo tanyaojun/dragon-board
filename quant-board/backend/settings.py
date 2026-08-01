@@ -137,6 +137,8 @@ class Settings(BaseModel):
         default="https://vaserviece.10jqka.com.cn/Level2/index.php"
     )
     theme_fund_refresh_interval_seconds: int = Field(default=300)
+    market_quotes_refresh_interval_seconds: int = Field(default=300)
+    xueqiu_cookie: str = Field(default="")
     data_source: DataSourceConfig = Field(default_factory=DataSourceConfig)
 
     def model_post_init(self, __context: Any) -> None:
@@ -407,6 +409,17 @@ class Settings(BaseModel):
                 self.theme_fund_refresh_interval_seconds,
             ),
         )
+        self.market_quotes_refresh_interval_seconds = max(
+            60,
+            _env_int(
+                "QUANT_BOARD_MARKET_QUOTES_REFRESH_INTERVAL_SECONDS",
+                self.market_quotes_refresh_interval_seconds,
+            ),
+        )
+        self.xueqiu_cookie = os.environ.get(
+            "QUANT_BOARD_XUEQIU_COOKIE",
+            os.environ.get("XUEQIU_COOKIE", self.xueqiu_cookie),
+        ).strip()
         self.theme_heat_quote_timeout_ms = max(
             100,
             _env_int("QUANT_BOARD_THEME_HEAT_QUOTE_TIMEOUT_MS", self.theme_heat_quote_timeout_ms),

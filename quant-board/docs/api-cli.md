@@ -1249,6 +1249,56 @@ Dragon Board `ThemeDataService` 的正式读口。返回结构兼容旧 `ThemeMa
 
 该资金缓存（进程内 `ThemeFundCache`，last-good）只服务 Dragon Board 运行态行情列表和题材分析，也供快照采集器把运行态资金字段带入 snapshot stock rows。正式 RankTrend、回测、优化和历史数据集入库不把它当作历史资金口径；后端重启后资金行在首次全市场刷新完成前为空，前端保留 last-good 展示。
 
+### proxy-server 迁移接口（akshare）
+
+以下路由已从 Node proxy-server 迁到 QuantBoard，proxy 仅按前缀转发到本服务（`/api/market/`、`/api/quotes/`）。
+
+- `GET /api/quotes/tencent?codes=000001,600519`：行情数据，返回 `{rc, data: {diff: [...]}}`，
+  字段沿用旧 f 合同（f12/f14/f2/f3/f6/f5/f8/f9/f10/f20/f21/f23），供前端 QuoteHttpFeed 直接消费。
+  数据源为 akshare `stock_zh_a_spot_tx()`（腾讯全市场排名，一次约 5000+ 只），由后台任务周期刷新
+  （`QUANT_BOARD_MARKET_QUOTES_REFRESH_INTERVAL_SECONDS`，默认 300 秒、下限 60 秒），
+  进程内 last-good：上游失败保留上一份并记录错误，不返回伪造零值。`/api/quotes/sina` 同源别名。
+- `GET /api/market/overview`：指数大盘概览，数据源为 akshare `stock_zh_index_spot_sina()`（新浪指数实时，
+  约 562 个指数，进程内 10 秒缓存），返回 `{ok, source, timestamp, stale, items: [...]}`；
+  上游失败返回结构化 `503` 并携带 `staleData`（如有上次成功结果）。
+
+说明：不使用东财行情/资金接口（限流与风控）；东财热榜不在迁移范围，仍由 proxy-server 直连。
+
+#### 热榜、涨停池、异动与情绪（Batch 2）
+
+以下路由同样已迁到 QuantBoard（proxy 按前缀转发），响应结构保持与旧 proxy 一致，前端 adapter 无需改动：
+
+- `GET/POST /api/{platform}/hot`（platform ∈ xueqiu/cls/eastmoney/ths/kpl/tdx/tgb/dzh）：八平台热榜，
+  httpx 直连原上游（雪球需 `XUEQIU_COOKIE`，财联社沿用 sha1+md5 签名，东财热榜继续直连），
+  进程内 60s TTL 缓存，上游失败返回 last-good 或平台空壳降级。
+- `GET /api/limitup/10jqka?date=YYYYMMDD`：同花顺涨停池，httpx 直连 10jqka dataapi（需浏览器 UA），
+  30s TTL 缓存；非交易日或无数据时按旧合同降级为 `{data:{info:[]}}`。
+- `GET /api/limitup/ths/pools?date=YYYYMMDD`：同花顺细分涨停池（一板/二板/三板/四板/高位/炸板/冲板/炸板大单回撤），
+  8 路并行抓取，结构 `{ok, degraded, date, timestamp, pools, errors}`。
+- `GET /api/surge-stock/performance`：昨日涨停/异动股表现（选股宝 flash-api 直连，30s 缓存）。
+- `GET /api/sentiment/composite`：聚合 overview + 涨停池 + 异动，任一腿失败置 `degraded=true` 并保留其余可计算部分。
+
+配置：`XUEQIU_COOKIE` 统一放在 `quant-board/.env.local`（settings 启动时自动加载），
+也支持环境变量 `XUEQIU_COOKIE` / `QUANT_BOARD_XUEQIU_COOKIE` 覆盖。
+
+#### 选股宝事件与大单监控（Batch 3）
+
+- `GET /api/xuangubao/events?count=&types=`：选股宝异动事件，双 host 容错直连，默认事件类型集合与
+  count 上限（100/200）同旧 proxy；返回 `{ok, source, data, upstreamCode, timestamp}`，30s 缓存。
+- `GET /api/big-order/main-monitor?stockCode=&limit=&money=&index=`：龙虎榜大单分页
+  （`apphwhq.longhuvip.com` GetMainMonitor_w30，单页 200，内部拆页），返回未包裹的
+  `{errcode, Total, List}`（List 元素 `[type, orderId, volume, amount, price, time]`）。
+- `GET /api/big-order/all-day?stockCode=&money=`：全天大单，分页重建 + 60s 进程内缓存 + last-good，
+  返回 `{List}`；上游失败按旧合同降级为 `data:{List:[]}`。
+
+说明：龙虎榜盘后归档/采集（`/api/big-order/longhu/*`）仍保留在 proxy-server（内部工具链，Batch 4 再定去向）；
+deprecated 题材路由（`/api/theme/:id`、`/api/themes/batch`）已随 Batch 3 删除，前端无引用。
+
+Batch 4（2026-08-01）收尾：proxy-server 最终形态确认为「本地服务壳 + `/api` 转发」，
+前端/采集器 baseURL 与启动器不变（快照采集器仍以 `http://127.0.0.1:3000` 为入口）；
+已删除无引用死代码 `/api/quotes/tencent/spk` 与 `/api/snapshots/remote/*`
+（`snapshotRemoteRoutes.js` 未挂载的遗留 WebDAV 实现）。
+
 ### `GET /api/themes/heat/{theme_id}/stocks`
 
 返回指定题材的全市场成分股详情，支持 `offset`、`limit`、`sort_by` 和 `descending`。该接口是 Dragon Board 详情、树形列表和联动分析的正式读口，不从八平台热榜股票池反推成分股。

@@ -82,27 +82,3 @@ export function createSourceProxyConfig(readConfig, source) {
       '',
   )
 }
-
-export function cleanCode(code) {
-  return String(code || '')
-    .replace(/[^0-9]/g, '')
-    .padStart(6, '0')
-}
-
-export function parseCodeList(codes, maxSize = 120) {
-  const list = String(codes || '')
-    .split(',')
-    .map((code) => String(code || '').replace(/[^0-9]/g, ''))
-    .filter((code) => code.length === 6)
-
-  return Array.from(new Set(list)).slice(0, maxSize)
-}
-
-export function getMarketPrefix(code) {
-  const c = cleanCode(code)
-  return c.startsWith('6') || c.startsWith('11') || c.startsWith('51') ? '1' : '0'
-}
-
-export function delay(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms))
-}
