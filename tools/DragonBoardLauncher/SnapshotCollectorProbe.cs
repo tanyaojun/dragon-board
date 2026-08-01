@@ -43,21 +43,39 @@ internal static class SnapshotCollectorProbe
             var lastError = ReadString(collector, "last_error");
             if (!string.IsNullOrWhiteSpace(lastError)) issues.Add($"最近异常: {lastError}");
 
-            var missingSlots = ReadStrings(collector, "overdue_missing_slots");
-            if (missingSlots.Count > 0)
-                issues.Add($"逾期缺失槽位({missingSlots.Count}): {string.Join(", ", missingSlots)}");
+            var isTradingDay = ReadBoolean(collector, "is_trading_day");
+            var inSession = ReadBoolean(collector, "in_session");
+            var tradingDate = ReadString(collector, "trading_date");
+            var upcomingSlot = ReadString(collector, "upcoming_slot");
 
-            var lastPollAt = ReadString(collector, "last_poll_at");
-            var pollSeconds = ReadDouble(collector, "poll_seconds", 1);
-            if (DateTimeOffset.TryParse(lastPollAt, out var lastPoll))
+            var lastRunAt = ReadString(collector, "last_run_at");
+            var hasCollected = !string.IsNullOrWhiteSpace(lastRunAt);
+            DateTimeOffset? lastRunDt = null;
+            if (DateTimeOffset.TryParse(lastRunAt, out var parsed))
+                lastRunDt = parsed;
+
+            if (!isTradingDay)
             {
-                var staleAfter = TimeSpan.FromSeconds(Math.Max(15, pollSeconds * 10));
-                if (DateTimeOffset.Now - lastPoll > staleAfter)
-                    issues.Add($"调度心跳已停止: {lastPoll:yyyy-MM-dd HH:mm:ss}");
+                return SnapshotCollectorHealth.Healthy();
             }
-            else if (ReadBoolean(collector, "running"))
+
+            if (!hasCollected && inSession)
             {
-                issues.Add("调度器没有轮询心跳");
+                return SnapshotCollectorHealth.Healthy();
+            }
+
+            if (!hasCollected && !inSession)
+            {
+                // 交易日已收盘，但还未采集——可能刚启动
+                if (tradingDate is { Length: > 0 })
+                    issues.Add($"交易日 {tradingDate} 已收盘，但尚无采集记录");
+            }
+
+            if (lastRunDt.HasValue)
+            {
+                var elapsed = DateTimeOffset.Now - lastRunDt.Value;
+                if (inSession && elapsed > TimeSpan.FromHours(2))
+                    issues.Add($"最近采集于 {lastRunDt:yyyy-MM-dd HH:mm:ss}，超过2小时未执行");
             }
 
             if (issues.Count == 0) return SnapshotCollectorHealth.Healthy();

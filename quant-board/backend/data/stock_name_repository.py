@@ -16,10 +16,16 @@ class StockNameRepository:
         market: str | None = None,
         type: str | None = None,
         active: bool | None = True,
+        limit: int | None = None,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
         query = self._build_query(market=market, type=type, active=active)
-        rows = self.db["stock_names"].find(query).sort([("code", 1)])
-        return [self._to_stock(row) for row in rows]
+        cursor = self.db["stock_names"].find(query).sort([("code", 1)])
+        if offset > 0:
+            cursor = cursor.skip(offset)
+        if limit and limit > 0:
+            cursor = cursor.limit(limit)
+        return [self._to_stock(row) for row in cursor]
 
     def get_by_code(self, code: str, *, active: bool | None = True) -> dict[str, Any] | None:
         normalized_code = self._normalize_code(code)

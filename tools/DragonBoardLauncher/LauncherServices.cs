@@ -47,9 +47,9 @@ internal static class LauncherServices
             ["redis"] = new(
                 "Redis 缓存",
                 6379,
-                @"D:\APP_SOFT\redis",
-                @"D:\APP_SOFT\redis\redis-server.exe",
-                @"D:\APP_SOFT\redis\redis.windows-service.conf"),
+                @"D:\APP_SOFT\redis\Redis-8.10.0",
+                @"D:\APP_SOFT\redis\Redis-8.10.0\redis-server.exe",
+                @"redis.conf"),
             ["proxy"] = new("本地代理服务", 3000, Path.Combine(root, "proxy-server"), "node", "server.js"),
             [VoiceServiceKey] = new(
                 "本地语音服务",

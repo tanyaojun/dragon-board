@@ -273,66 +273,42 @@ class MongoRepository:
 
         if codes:
             requested_codes = list(dict.fromkeys(code for code in codes if code))
-            rank_query = {**query, "code": {"$in": requested_codes}}
+            rank_projection = {
+                "_id": 0, "code": 1, "snapshotId": 1, "timestamp": 1,
+                "type": 1, "tradingDate": 1, "slotTime": 1,
+                "captureMode": 1, "rank": 1, "avgRankNum": 1,
+            }
+            rank_query_extra: dict[str, Any] = {}
             if rank_basis == "attention":
-                rank_query["avgRankNum"] = {"$type": "number", "$gt": 0}
-            rows = self.db["snapshot_stock_rows"].aggregate(
-                [
-                    {"$match": rank_query},
-                    {
-                        "$setWindowFields": {
-                            "partitionBy": "$code",
-                            "sortBy": {"timestamp": -1, "snapshotId": -1},
-                            "output": {
-                                "_rankSeriesWindow": {
-                                    "$count": {},
-                                    "window": {"documents": ["unbounded", "current"]},
-                                },
-                                "_rankSeriesTotalCount": {
-                                    "$count": {},
-                                    "window": {"documents": ["unbounded", "unbounded"]},
-                                },
-                            },
-                        }
-                    },
-                    {"$match": {"_rankSeriesWindow": {"$lte": effective_window}}},
-                    {
-                        "$project": {
-                            "_id": 0,
-                            "_rankSeriesTotalCount": 1,
-                            "snapshotId": 1,
-                            "timestamp": 1,
-                            "type": 1,
-                            "tradingDate": 1,
-                            "slotTime": 1,
-                            "captureMode": 1,
-                            "code": 1,
-                            "rank": 1,
-                        }
-                    },
-                ],
-                allowDiskUse=True,
-            )
-            for row in rows:
-                code_key = str(row.get("code") or "")
-                if not code_key:
+                rank_query_extra = {"avgRankNum": {"$type": "number", "$gt": 0}}
+            for code in requested_codes:
+                cursor = (
+                    self.db["snapshot_stock_rows"]
+                    .find({**query, "code": code, **rank_query_extra}, rank_projection)
+                    .sort([("timestamp", -1), ("snapshotId", -1)])
+                    .limit(effective_window)
+                )
+                code_rows = list(cursor)
+                if not code_rows:
                     continue
-                total_count_by_code[code_key] = int(row.get("_rankSeriesTotalCount") or 0)
-                picked_by_code[code_key].append(row)
-
-            for code_key, code_rows in picked_by_code.items():
-                picked_by_code[code_key] = sorted(
+                total_count_by_code[code] = len(code_rows)
+                picked_by_code[code] = sorted(
                     code_rows,
                     key=lambda row: (
                         int(row.get("timestamp") or 0),
                         str(row.get("snapshotId") or ""),
-                        int(row.get("rank") or 0),
+                        int(row.get("avgRankNum") or row.get("rank") or 0),
                     ),
                 )
         else:
             direction = 1 if sort == "asc" else -1
             rows = list(
-                self.db["snapshot_stock_rows"].find(query).sort([("timestamp", direction), ("rank", 1)])
+                self.db["snapshot_stock_rows"].find(
+                    query,
+                    {"_id": 0, "code": 1, "snapshotId": 1, "timestamp": 1,
+                     "type": 1, "tradingDate": 1, "slotTime": 1,
+                     "captureMode": 1, "rank": 1, "avgRankNum": 1},
+                ).sort([("timestamp", direction), ("rank", 1)])
             )
             for row in rows:
                 code_key = str(row.get("code") or "")
@@ -524,7 +500,9 @@ class MongoRepository:
         if stock_codes:
             query["code"] = {"$in": stock_codes}
         direction = 1 if sort == "asc" else -1
-        cursor = self.db["snapshot_stock_rows"].find(query).sort([("timestamp", direction), ("rank", 1)])
+        cursor = self.db["snapshot_stock_rows"].find(
+            query, {"depth10": 0}
+        ).sort([("timestamp", direction), ("rank", 1)])
         if limit and limit > 0:
             cursor = cursor.limit(limit)
         return {"rows": [self.local_stock_to_bundle_dict(row) for row in cursor], "source": "mongodb"}
@@ -815,7 +793,14 @@ class MongoRepository:
         rows_by_snapshot: dict[str, list[dict[str, Any]]] = defaultdict(list)
         if not snapshot_ids:
             return rows_by_snapshot
-        for row in self.db["snapshot_stock_rows"].find({"datasetId": dataset_id, "snapshotId": {"$in": snapshot_ids}}).sort([("timestamp", 1), ("rank", 1)]):
+        if projection == "ranktrend":
+            mongo_projection: dict[str, int] = {"_id": 0, "code": 1, "name": 1, "rank": 1}
+        else:
+            mongo_projection = {"depth10": 0}
+        for row in self.db["snapshot_stock_rows"].find(
+            {"datasetId": dataset_id, "snapshotId": {"$in": snapshot_ids}},
+            mongo_projection,
+        ).sort([("timestamp", 1), ("rank", 1)]):
             if projection == "ranktrend":
                 item = {"code": row.get("code"), "name": row.get("name"), "rank": row.get("rank")}
             else:
@@ -948,11 +933,23 @@ class MongoRepository:
         dataset = self.get_dataset(dataset_id)
         if not dataset:
             return
-        frame_rows = list(self.db["snapshot_frames"].find({"datasetId": dataset_id}))
-        trading_dates = sorted({str(row.get("tradingDate")) for row in frame_rows if row.get("tradingDate")})
-        snapshot_types = sorted({str(row.get("type")) for row in frame_rows if row.get("type")})
+        agg_result = list(self.db["snapshot_frames"].aggregate([
+            {"$match": {"datasetId": dataset_id}},
+            {"$group": {
+                "_id": None,
+                "trading_dates": {"$addToSet": "$tradingDate"},
+                "snapshot_types": {"$addToSet": "$type"},
+                "frame_count": {"$sum": 1},
+            }},
+        ]))
+        if agg_result:
+            trading_dates = sorted(str(d) for d in agg_result[0].get("trading_dates", []) if d)
+            snapshot_types = sorted(str(t) for t in agg_result[0].get("snapshot_types", []) if t)
+            frame_count = int(agg_result[0].get("frame_count", 0))
+        else:
+            trading_dates, snapshot_types, frame_count = [], [], 0
         dataset.snapshot_count = int(self.db["snapshot_records"].count_documents({"datasetId": dataset_id}))
-        dataset.frame_count = len(frame_rows)
+        dataset.frame_count = frame_count
         dataset.stock_row_count = int(self.db["snapshot_stock_rows"].count_documents({"datasetId": dataset_id}))
         dataset.sector_row_count = int(self.db["snapshot_sector_rows"].count_documents({"datasetId": dataset_id}))
         dataset.start_date = trading_dates[0] if trading_dates else None

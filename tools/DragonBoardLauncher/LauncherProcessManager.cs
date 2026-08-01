@@ -110,8 +110,39 @@ internal sealed class LauncherProcessManager
 
             if (IsServiceRunning(service))
             {
-                _log($"{service.Name} 已在端口 {service.Port} 运行。");
-                return;
+                // 检查是已知进程还是孤儿进程（重启后残留）
+                var trackedAlive = service.Process is { HasExited: false };
+                if (trackedAlive)
+                {
+                    _log($"{service.Name} 已在端口 {service.Port} 运行。");
+                    return;
+                }
+                // 孤儿进程：杀掉后重新启动
+                _log($"{service.Name} 端口 {service.Port} 被未知进程占用，尝试清理...");
+                // Redis 优先尝试 Windows 服务停止
+                if (service.Port == 6379)
+                {
+                    try
+                    {
+                        var sc = Process.Start(new ProcessStartInfo("sc.exe", "stop Redis")
+                        {
+                            CreateNoWindow = true, UseShellExecute = false,
+                            RedirectStandardOutput = true, RedirectStandardError = true,
+                        });
+                        sc?.WaitForExit(5000);
+                    }
+                    catch { }
+                }
+                var pids = LauncherPorts.GetPidsByPort(service.Port);
+                foreach (var pid in pids)
+                    KillProcessTree(pid, $"端口 {service.Port} (孤儿清理)");
+                Thread.Sleep(800);
+                // 清理后重新检查，仍占用则放弃
+                if (LauncherPorts.IsPortOpen(service.Port))
+                {
+                    _log($"{service.Name} 端口 {service.Port} 清理失败（可能权限不足），请手动关闭占用进程后重试。");
+                    return;
+                }
             }
 
             if (!Directory.Exists(service.WorkingDirectory))
@@ -198,14 +229,15 @@ internal sealed class LauncherProcessManager
     {
         StopMongoExpress();
         StopRedisCommander();
-        StopStartedProcess(_services["quant-ui"]);
-        StopStartedProcess(_services["quant-api"]);
-        StopStartedProcess(_services["bridge"]);
-        StopStartedProcess(_services["frontend"]);
-        StopStartedProcess(_services[LauncherServices.VoiceServiceKey]);
-        StopStartedProcess(_services["proxy"]);
-        StopStartedProcess(_services["redis"]);
-        StopStartedProcess(_services["mongo"]);
+        // 用 StopService 而非 StopStartedProcess，确保端口占用的孤儿进程也会被杀掉
+        StopService(_services["quant-ui"]);
+        StopService(_services["quant-api"]);
+        StopService(_services["bridge"]);
+        StopService(_services["frontend"]);
+        StopService(_services[LauncherServices.VoiceServiceKey]);
+        StopService(_services["proxy"]);
+        StopService(_services["redis"]);
+        StopService(_services["mongo"]);
     }
 
     public void StartRedisCommander()

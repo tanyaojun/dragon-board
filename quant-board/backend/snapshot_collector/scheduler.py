@@ -1,8 +1,8 @@
 """Automatic background scheduler for snapshot collection.
 
-Polls on a configured interval, checks for eligible trading-day slots, and
-launches fire-and-forget collection tasks per slot.  Follows the same runner
-pattern as ``BackupAutoSyncRunner`` (start / stop / _run_loop / status).
+Uses a next-slot timer: calculates the upcoming snapshot time, sleeps until
+then, and collects all slots that become due at that instant.  Falls back to
+idle recheck on non-trading days.
 
 The scheduler auto-disables itself when the storage backend is not MongoDB
 or when ``snapshot_collector_enabled`` is False.
@@ -23,60 +23,47 @@ from backend.snapshot_collector.trading_calendar import TZ_SHANGHAI
 
 logger = logging.getLogger(__name__)
 
+# Wake exactly at slot time — no advance (avoids busy-loop when slot isn't eligible yet)
+_ADVANCE_SECONDS = 0
+# Max idle sleep on a non-trading day before re-checking (seconds)
+_IDLE_RECHECK_SECONDS = 1800
+
 
 class SnapshotCollectorScheduler:
-    """Background async runner that polls for eligible snapshot slots.
+    """Background async runner driven by the next-snapshot-slot timer.
 
-    On each poll tick the scheduler:
-    1. Derives the current Asia/Shanghai trading date.
-    2. Generates all slots for today across every configured snapshot type.
-    3. Fires a background ``_collect_slot`` task for each eligible,
-       not-already-in-flight slot.
-
-    Deduplication is checked twice: once via the in-memory ``_in_flight_slots``
-    set and a second time (belt-and-suspenders) by asking the repository
-    inside ``_collect_slot``.
+    Instead of polling, the scheduler computes the next due slot, sleeps
+    precisely until that moment, then fires a collection.  Multiple types
+    that share the same ``HH:MM`` are collected in the same wake-up.
     """
 
     def __init__(self) -> None:
         settings = get_settings()
-        # Auto-disable if not MongoDB backend
         backend_ok = settings.storage_backend == "mongodb"
         self.enabled = backend_ok and settings.snapshot_collector_enabled
         self.dataset_id = settings.snapshot_collector_dataset_id
         self.snapshot_types = [
             t.strip() for t in settings.snapshot_collector_types.split(",") if t.strip()
         ]
-        self.poll_seconds = max(0.1, settings.snapshot_collector_poll_ms / 1000.0)
         self.grace_minutes = settings.snapshot_collector_close_grace_minutes
         self._task: asyncio.Task[None] | None = None
         self._in_flight_slots: set[str] = set()
         self._last_run_at: str | None = None
-        self._last_poll_at: str | None = None
+        self._last_slot_collected: str | None = None
         self._last_error: str | None = None
         self._last_error_at: str | None = None
         self._last_error_slot: str | None = None
-        self._last_slot_collected: str | None = None
         self._collection_count: int = 0
         self._error_count: int = 0
-        self._health_trading_date: str | None = None
-        self._checked_overdue_slots: set[str] = set()
-        self._overdue_missing_slots: set[str] = set()
-        self._last_missing_recheck_ts: int = 0
+        # Tracks collected snapshot_ids for the current trading date so the
+        # timer can skip already-persisted slots without a round-trip to Mongo.
+        self._completed_today: set[str] = set()
+        self._completed_date: str | None = None
 
     # ── lifecycle ──────────────────────────────────────────────────────────
 
-    def _discard_finished_task(self) -> None:
-        if self._task is not None and self._task.done():
-            self._task = None
-
     def start(self) -> None:
-        """Schedule the background poll loop on the current event loop.
-
-        Safe to call multiple times — no-op when already running or disabled.
-        """
-        self._discard_finished_task()
-        if not self.enabled or self._task is not None:
+        if not self.enabled or (self._task is not None and not self._task.done()):
             return
         try:
             loop = asyncio.get_running_loop()
@@ -85,7 +72,6 @@ class SnapshotCollectorScheduler:
         self._task = loop.create_task(self._run_loop())
 
     async def stop(self) -> None:
-        """Cancel the background poll loop and wait for it to finish."""
         task = self._task
         self._task = None
         if task is None:
@@ -94,17 +80,38 @@ class SnapshotCollectorScheduler:
         with contextlib.suppress(asyncio.CancelledError):
             await task
 
+    @property
+    def running(self) -> bool:
+        return self._task is not None and not self._task.done()
+
     def status(self) -> dict[str, Any]:
-        """Return a snapshot of the scheduler's current state."""
-        self._discard_finished_task()
+        from backend.snapshot_collector.slots import generate_slots
+        from backend.snapshot_collector.trading_calendar import trading_date_from_ts
+
+        now_ts = int(time.time() * 1000)
+        trading_date = trading_date_from_ts(now_ts)
+        is_trading_day = trading_date is not None
+        now_dt = datetime.datetime.fromtimestamp(now_ts / 1000, TZ_SHANGHAI)
+        minute = now_dt.hour * 60 + now_dt.minute
+        in_session = 570 <= minute < 900  # 09:30-15:00
+        upcoming_slot = None
+        if is_trading_day and trading_date:
+            all_slots = generate_slots(trading_date, self.snapshot_types)
+            for slot in all_slots:
+                if slot.timestamp_ms > now_ts and slot.snapshot_id not in self._completed_today:
+                    upcoming_slot = slot.snapshot_id
+                    break
+
         return {
             "enabled": self.enabled,
-            "running": self._task is not None,
+            "running": self.running,
             "dataset_id": self.dataset_id,
             "snapshot_types": self.snapshot_types,
-            "poll_seconds": self.poll_seconds,
             "grace_minutes": self.grace_minutes,
-            "last_poll_at": self._last_poll_at,
+            "is_trading_day": is_trading_day,
+            "trading_date": trading_date,
+            "in_session": in_session,
+            "upcoming_slot": upcoming_slot,
             "last_run_at": self._last_run_at,
             "last_slot_collected": self._last_slot_collected,
             "last_error": self._last_error,
@@ -112,100 +119,105 @@ class SnapshotCollectorScheduler:
             "last_error_slot": self._last_error_slot,
             "collection_count": self._collection_count,
             "error_count": self._error_count,
-            "overdue_missing_slots": sorted(self._overdue_missing_slots),
             "in_flight_slots": sorted(self._in_flight_slots),
         }
 
-    # ── loop ───────────────────────────────────────────────────────────────
+    # ── timer loop ──────────────────────────────────────────────────────────
 
     async def _run_loop(self) -> None:
-        """Main polling loop — no initial delay (snapshots are time-sensitive)."""
         while True:
             try:
-                await self._poll_once()
-                if self._last_error_slot == "scheduler_poll":
-                    self._last_error = None
-                    self._last_error_at = None
-                    self._last_error_slot = None
+                until_next = self._seconds_until_next_slot()
+                await asyncio.sleep(until_next)
+                await self._collect_due_slots()
+            except asyncio.CancelledError:
+                raise
             except Exception as exc:
                 self._last_error = str(exc)
                 self._last_error_at = datetime.datetime.now(TZ_SHANGHAI).isoformat()
-                self._last_error_slot = "scheduler_poll"
+                self._last_error_slot = "scheduler_cycle"
                 self._error_count += 1
-                logger.exception("snapshot collector scheduler poll failed")
-            await asyncio.sleep(self.poll_seconds)
+                logger.exception("snapshot collector scheduler cycle failed")
+                await asyncio.sleep(30)
 
-    async def _poll_once(self) -> None:
-        """Scan for eligible slots and launch fire-and-forget collection tasks."""
-        from backend.snapshot_collector.slots import generate_slots, is_slot_eligible
+    # ── next-slot calculation ───────────────────────────────────────────────
+
+    def _seconds_until_next_slot(self) -> float:
+        """Return seconds to sleep before the next snapshot slot becomes due.
+
+        On a trading day returns the precise interval; on a non-trading day
+        sleeps for ``_IDLE_RECHECK_SECONDS``.
+        """
+        from backend.snapshot_collector.slots import generate_slots
+        from backend.snapshot_collector.trading_calendar import trading_date_from_ts
+
+        now_ts = int(time.time() * 1000)
+        trading_date = trading_date_from_ts(now_ts)
+        if trading_date is None:
+            return float(_IDLE_RECHECK_SECONDS)
+
+        if trading_date != self._completed_date:
+            self._completed_date = trading_date
+            self._completed_today.clear()
+
+        all_slots = generate_slots(trading_date, self.snapshot_types)
+
+        for slot in all_slots:
+            sid = slot.snapshot_id
+            if sid in self._in_flight_slots or sid in self._completed_today:
+                continue
+            # Target the slot's scheduled time (not the end of grace window)
+            wait_ms = slot.timestamp_ms - now_ts
+            if wait_ms > -_ADVANCE_SECONDS * 1000:
+                return max(0.0, wait_ms / 1000.0 - _ADVANCE_SECONDS)
+
+        # All today's slots are either done or expired — re-check later
+        return float(_IDLE_RECHECK_SECONDS)
+
+    # ── collection ──────────────────────────────────────────────────────────
+
+    async def _collect_due_slots(self) -> None:
+        """Collect every slot whose timestamp has arrived and whose grace
+        window has not yet expired.  Multiple types at the same ``HH:MM``
+        are collected together.
+        """
+        from backend.snapshot_collector.slots import generate_slots
         from backend.snapshot_collector.service_factory import create_snapshot_collector_repository
         from backend.snapshot_collector.trading_calendar import trading_date_from_ts
 
         now_ts = int(time.time() * 1000)
-        self._last_poll_at = datetime.datetime.now(TZ_SHANGHAI).isoformat()
         trading_date = trading_date_from_ts(now_ts)
         if trading_date is None:
-            return  # Non-trading day
+            return
 
-        if trading_date != self._health_trading_date:
-            self._health_trading_date = trading_date
-            self._checked_overdue_slots.clear()
-            self._overdue_missing_slots.clear()
-            self._last_missing_recheck_ts = 0
-
-        # Generate ALL slots for today across all configured types
+        grace_ms = self.grace_minutes * 60 * 1000
         all_slots = generate_slots(trading_date, self.snapshot_types)
         repo = create_snapshot_collector_repository()
 
         for slot in all_slots:
-            if not is_slot_eligible(now_ts, slot, grace_minutes=self.grace_minutes):
+            sid = slot.snapshot_id
+            # Not yet due
+            if now_ts < slot.timestamp_ms:
                 continue
-            if slot.snapshot_id in self._in_flight_slots:
+            # Expired
+            if now_ts > slot.timestamp_ms + grace_ms:
+                self._completed_today.add(sid)
                 continue
-            if repo.snapshot_exists(self.dataset_id, slot.snapshot_id):
+            # Already handled
+            if sid in self._in_flight_slots or sid in self._completed_today:
+                continue
+            # Already persisted
+            if repo.snapshot_exists(self.dataset_id, sid):
+                self._completed_today.add(sid)
                 continue
 
-            # Fire and forget — dedup is double-checked inside _collect_slot.
-            self._in_flight_slots.add(slot.snapshot_id)
-            asyncio.create_task(self._collect_slot(slot))
-
-        grace_ms = self.grace_minutes * 60 * 1000
-        recheck_missing = now_ts - self._last_missing_recheck_ts >= 30_000
-        checked_overdue = False
-        for slot in all_slots:
-            if now_ts <= slot.timestamp_ms + grace_ms:
-                continue
-            if slot.snapshot_id in self._in_flight_slots:
-                continue
-            if slot.snapshot_id in self._checked_overdue_slots:
-                if slot.snapshot_id not in self._overdue_missing_slots or not recheck_missing:
-                    continue
-
-            exists = repo.snapshot_exists(self.dataset_id, slot.snapshot_id)
-            checked_overdue = True
-            self._checked_overdue_slots.add(slot.snapshot_id)
-            if exists:
-                self._overdue_missing_slots.discard(slot.snapshot_id)
-                if self._last_error_slot == slot.snapshot_id:
-                    self._last_error = None
-                    self._last_error_at = None
-                    self._last_error_slot = None
-                continue
-            if slot.snapshot_id not in self._overdue_missing_slots:
-                logger.error("snapshot collector overdue slot missing: %s", slot.snapshot_id)
-            self._overdue_missing_slots.add(slot.snapshot_id)
-        if checked_overdue:
-            self._last_missing_recheck_ts = now_ts
+            self._in_flight_slots.add(sid)
+            asyncio.create_task(self._tracked_collect(slot))
 
     # ── per-slot collection ────────────────────────────────────────────────
 
-    async def _collect_slot(self, slot: Any) -> None:
-        """Collect a single snapshot slot and update scheduler counters.
-
-        Creates its own repository and service so connections are scoped
-        to this one operation.  Offloads blocking MongoDB I/O to a thread
-        via ``asyncio.to_thread``.
-        """
+    async def _tracked_collect(self, slot: Any) -> None:
+        """Collect a single slot and update counters / completed set."""
         from backend.snapshot_collector.models import CollectorRunRequest
         from backend.snapshot_collector.service_factory import (
             create_snapshot_collector_repository,
@@ -214,8 +226,8 @@ class SnapshotCollectorScheduler:
 
         try:
             repo = create_snapshot_collector_repository()
-            # Belt-and-suspenders dedup: skip if already persisted
             if repo.snapshot_exists(self.dataset_id, slot.snapshot_id):
+                self._completed_today.add(slot.snapshot_id)
                 return
 
             service = create_snapshot_collector_service(repo)
@@ -227,22 +239,23 @@ class SnapshotCollectorScheduler:
                 dry_run=False,
                 force=False,
             )
-            # Offload blocking MongoDB I/O to a thread
             result = await asyncio.to_thread(service.run_once, request)
             self._last_run_at = datetime.datetime.now(TZ_SHANGHAI).isoformat()
             if result.status == "completed":
                 self._collection_count += 1
-            elif result.status != "deduped":
+                self._completed_today.add(slot.snapshot_id)
+            elif result.status == "deduped":
+                self._completed_today.add(slot.snapshot_id)
+            else:
                 raise RuntimeError(
-                    f"collector slot {slot.snapshot_id} returned {result.status}: {result.message or 'no message'}"
+                    f"collector slot {slot.snapshot_id} returned {result.status}: "
+                    f"{result.message or 'no message'}"
                 )
             self._last_slot_collected = slot.snapshot_id
             if self._last_error_slot == slot.snapshot_id:
                 self._last_error = None
                 self._last_error_at = None
                 self._last_error_slot = None
-            self._checked_overdue_slots.add(slot.snapshot_id)
-            self._overdue_missing_slots.discard(slot.snapshot_id)
         except Exception as exc:
             self._last_error = str(exc)
             self._last_error_at = datetime.datetime.now(TZ_SHANGHAI).isoformat()

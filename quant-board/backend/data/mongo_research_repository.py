@@ -241,16 +241,22 @@ class MongoResearchRepository(MongoRepository):
                 "golden_ranktrend_cases",
             )
         }
-        rows = list(self.db["backtest_runs"].find({}))
-        created = [row.get("createdAt") for row in rows if row.get("createdAt")]
-        created.sort()
+        agg = list(self.db["backtest_runs"].aggregate([
+            {"$group": {
+                "_id": None,
+                "oldest": {"$min": "$createdAt"},
+                "newest": {"$max": "$createdAt"},
+            }},
+        ]))
+        oldest = agg[0].get("oldest") if agg else None
+        newest = agg[0].get("newest") if agg else None
         return {
             "ok": True,
             "source": "mongodb",
             "tables": tables,
             "backtestCreatedAt": {
-                "oldest": _iso_or_none(created[0]) if created else None,
-                "newest": _iso_or_none(created[-1]) if created else None,
+                "oldest": _iso_or_none(oldest) if oldest else None,
+                "newest": _iso_or_none(newest) if newest else None,
             },
         }
 
@@ -452,7 +458,10 @@ class MongoResearchRepository(MongoRepository):
         return self.get_journal_entry(entry_id)
 
     def get_journal_stats(self) -> dict[str, Any]:
-        rows = [self._drop_mongo_id(row) for row in self.db["trade_journal"].find({})]
+        rows = [self._drop_mongo_id(row) for row in self.db["trade_journal"].find(
+            {}, {"tradeType": 1, "pnl": 1, "reviewTags": 1, "status": 1,
+                  "modelResult": 1, "executionResult": 1}
+        )]
         entries_with_pnl = [
             row
             for row in rows

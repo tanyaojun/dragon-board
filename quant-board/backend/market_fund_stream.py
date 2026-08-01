@@ -10,17 +10,20 @@ class MarketFundStream:
     def __init__(self, *, cache: ThemeFundCache) -> None:
         self.cache = cache
         self._subscribers: dict[asyncio.Queue[dict[str, object]], list[str]] = {}
+        self.codes_changed = asyncio.Event()
 
     async def subscribe(self, codes: list[str]) -> asyncio.Queue[dict[str, object]]:
         queue: asyncio.Queue[dict[str, object]] = asyncio.Queue(maxsize=32)
         normalized = self._normalize(codes)
         self._subscribers[queue] = normalized
+        self.codes_changed.set()
         queue.put_nowait(await self.snapshot(normalized))
         return queue
 
     async def update(self, queue: asyncio.Queue[dict[str, object]], codes: list[str]) -> None:
         if queue in self._subscribers:
             self._subscribers[queue] = self._normalize(codes)
+            self.codes_changed.set()
 
     def unsubscribe(self, queue: asyncio.Queue[dict[str, object]]) -> None:
         self._subscribers.pop(queue, None)

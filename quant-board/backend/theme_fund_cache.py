@@ -57,6 +57,11 @@ class ThemeFundCache:
             }
             self._latest[code] = stored
             self._write_hash(self._key("latest"), code, stored)
+            if len(self._latest) > 1000:
+                today = session_date
+                stale = [c for c, v in self._latest.items() if str(v.get("sessionDate") or "") < today]
+                for c in stale[:100]:
+                    self._latest.pop(c, None)
             return dict(stored)
 
     def get_latest(

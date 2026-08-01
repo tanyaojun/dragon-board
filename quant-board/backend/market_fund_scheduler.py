@@ -39,6 +39,7 @@ class MarketFundScheduler:
         self._cache_hits = 0
         self._current_code: str | None = None
         self._task: asyncio.Task[None] | None = None
+        self._primed_codes: set[str] = set()
 
     def start(self) -> None:
         if not self.enabled or (self._task and not self._task.done()):
@@ -51,26 +52,26 @@ class MarketFundScheduler:
             await asyncio.gather(self._task, return_exceptions=True)
         self._task = None
 
-    async def run_once(self) -> None:
+    async def run_once(self) -> bool:
         codes = self.stream.market_codes()
         if not codes:
-            return
+            return False
         current = self._now()
         now_ts = current.timestamp()
         if now_ts < max(self._next_request_at, self._circuit_open_until):
-            return
-        if not await asyncio.to_thread(self._is_trading_day, current.date()):
-            return
+            return False
+        is_trading = await asyncio.to_thread(self._is_trading_day, current.date())
         minute = current.hour * 60 + current.minute
         intraday = 570 <= minute <= 690 or 780 <= minute < 900
         after_close = 900 <= minute <= 930
-        if not intraday and not after_close:
-            return
+        in_session = is_trading and (intraday or after_close)
 
-        if self._final_session_date != current.date():
-            self._final_session_date = current.date()
-            self._finalized_codes.clear()
-        if after_close:
+        if not in_session:
+            unprimed = [code for code in codes if code not in self._primed_codes]
+            if not unprimed:
+                return False
+            due_codes = unprimed[:1]
+        elif after_close:
             due_codes = [code for code in codes if code not in self._finalized_codes]
         else:
             p0 = codes[: self.p0_size]
@@ -80,7 +81,7 @@ class MarketFundScheduler:
                 key=lambda code: (code not in p0, self._next_due.get(code, 0), codes.index(code)),
             )
         if not due_codes:
-            return
+            return False
         code = due_codes[0]
         self._current_code = code
         self._next_request_at = now_ts + self.min_request_interval_seconds
@@ -92,10 +93,11 @@ class MarketFundScheduler:
             self._last_error = error.code
             if error.code in SYSTEMIC_ERRORS:
                 self._circuit_open_until = now_ts + 300
-            return
+            return True
         else:
             saved = await asyncio.to_thread(self.cache.put, row)
             self.stream.publish([saved])
+            self._primed_codes.add(code)
             self._last_error = None
             if after_close:
                 self._finalized_codes.add(code)
@@ -104,17 +106,25 @@ class MarketFundScheduler:
                 self._next_due[code] = now_ts + interval
 
     def status(self) -> dict[str, object]:
-        return {"enabled": self.enabled, "running": self._task is not None, "queueLength": len(self.stream.market_codes()), "currentCode": self._current_code, "requestsLastMinute": len(self._request_times), "cacheHits": self._cache_hits, "circuitOpenUntil": self._circuit_open_until, "lastError": self._last_error}
+        return {"enabled": self.enabled, "running": self._task is not None, "queueLength": len(self.stream.market_codes()), "currentCode": self._current_code, "requestsLastMinute": len(self._request_times), "cacheHits": self._cache_hits, "circuitOpenUntil": self._circuit_open_until, "lastError": self._last_error, "primedCodes": len(self._primed_codes)}
 
     async def _run(self) -> None:
         while True:
             try:
-                await self.run_once()
+                has_work = await self.run_once()
             except asyncio.CancelledError:
                 raise
             except Exception:
                 logger.exception("market fund scheduler cycle failed")
-            await asyncio.sleep(0.25)
+                has_work = False
+            if has_work:
+                await asyncio.sleep(self.min_request_interval_seconds)
+            else:
+                self.stream.codes_changed.clear()
+                try:
+                    await asyncio.wait_for(self.stream.codes_changed.wait(), timeout=120)
+                except asyncio.TimeoutError:
+                    pass
 
 
 market_fund_scheduler = MarketFundScheduler(cache=get_theme_fund_cache(), stream=get_market_fund_stream(), service=get_ths_main_monitor_service())

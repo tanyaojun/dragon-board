@@ -117,7 +117,7 @@ class Settings(BaseModel):
     snapshot_collector_enabled: bool = Field(default=False)
     snapshot_collector_dataset_id: str = Field(default="dragonboard_backend_shadow")
     snapshot_collector_types: str = Field(default="half_hour,daily")
-    snapshot_collector_poll_ms: int = Field(default=1000)
+    snapshot_collector_poll_ms: int = Field(default=30000)
     snapshot_collector_close_grace_minutes: int = Field(default=5)
     snapshot_collector_proxy_base_url: str = Field(default="http://127.0.0.1:3000")
     snapshot_collector_bridge_base_url: str = Field(default="http://127.0.0.1:8765")

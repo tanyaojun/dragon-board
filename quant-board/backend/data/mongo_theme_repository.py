@@ -53,8 +53,10 @@ class MongoThemeRepository:
         return str(row.get("value") or default) if row else default
 
     def get_mapping(self) -> dict[str, Any]:
-        themes = list(self.db["themes"].find({}).sort([("id", 1)]))
-        rows = list(self.db["theme_stock_mappings"].find({}).sort([("themeId", 1), ("stockCode", 1)]))
+        themes = list(self.db["themes"].find({}, {"id": 1, "name": 1, "zsCode": 1}).sort([("id", 1)]))
+        rows = list(self.db["theme_stock_mappings"].find(
+            {}, {"themeId": 1, "stockCode": 1, "stockTags": 1, "stockReason": 1}
+        ).sort([("themeId", 1), ("stockCode", 1)]))
         by_theme: dict[str, list[dict[str, Any]]] = {}
         for row in rows:
             by_theme.setdefault(str(row.get("themeId") or ""), []).append(row)
@@ -85,11 +87,11 @@ class MongoThemeRepository:
         }
 
     def get_market_universe(self) -> dict[str, Any]:
-        themes = list(self.db["themes"].find({}).sort([("id", 1)]))
+        themes = list(self.db["themes"].find({}, {"id": 1, "name": 1}).sort([("id", 1)]))
         rows = list(
-            self.db["theme_stock_mappings"].find({}).sort(
-                [("themeId", 1), ("stockCode", 1)]
-            )
+            self.db["theme_stock_mappings"].find(
+                {}, {"themeId": 1, "stockCode": 1}
+            ).sort([("themeId", 1), ("stockCode", 1)])
         )
         theme_stocks: dict[str, list[str]] = {}
         stock_themes: dict[str, list[str]] = {}
@@ -121,7 +123,9 @@ class MongoThemeRepository:
         theme = self.db["themes"].find_one({"id": theme_id})
         if not theme:
             return {"themeId": theme_id, "stocks": [], "source": "mongodb"}
-        rows = list(self.db["theme_stock_mappings"].find({"themeId": theme_id}).sort([("stockCode", 1)]))
+        rows = list(self.db["theme_stock_mappings"].find(
+            {"themeId": theme_id}, {"stockCode": 1}
+        ).sort([("stockCode", 1)]))
         return {
             "themeId": str(theme.get("id") or ""),
             "themeName": str(theme.get("name") or ""),
@@ -163,11 +167,10 @@ class MongoThemeRepository:
         return {"code": code, "themes": themes, "tags": tags, "reason": "；".join(reason_parts), "source": "mongodb"}
 
     def counts(self) -> dict[str, Any]:
-        mapping_rows = list(self.db["theme_stock_mappings"].find({}))
         return {
             "themeCount": int(self.db["themes"].count_documents({})),
-            "mappingCount": len(mapping_rows),
-            "stockCount": len({str(row.get("stockCode") or "") for row in mapping_rows if row.get("stockCode")}),
+            "mappingCount": int(self.db["theme_stock_mappings"].count_documents({})),
+            "stockCount": len(self.db["theme_stock_mappings"].distinct("stockCode")),
             "version": self.get_metadata("version", "unknown"),
             "lastUpdate": self.get_metadata("lastUpdate", ""),
             "source": "mongodb",

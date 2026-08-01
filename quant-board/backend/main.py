@@ -174,15 +174,21 @@ def list_stock_names(
     market: str | None = None,
     type: str | None = None,
     active: bool | None = True,
+    limit: int | None = None,
+    offset: int = 0,
 ) -> dict[str, Any]:
     try:
-        stocks = get_stock_name_repository().list_names(market=market, type=type, active=active)
+        stocks = get_stock_name_repository().list_names(
+            market=market, type=type, active=active, limit=limit, offset=offset,
+        )
         return {
             "ok": True,
             "source": "mongodb",
             "version": STOCK_NAMES_VERSION,
             "stocks": stocks,
             "count": len(stocks),
+            "limit": limit,
+            "offset": offset,
         }
     except RuntimeError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
@@ -499,7 +505,7 @@ def list_snapshot_frames(
     allowed_capture_modes: str | None = None,
     exclude_restored: bool = False,
     sort: str = "asc",
-    limit: int | None = None,
+    limit: int | None = 100,
     projection: str = "full",
     db: Session | None = Depends(get_db),
 ) -> dict[str, Any]:
@@ -507,6 +513,8 @@ def list_snapshot_frames(
         raise HTTPException(status_code=503, detail="primary database is unavailable")
     if snapshot_type not in {"quarter_hour", "half_hour", "hourly", "daily"}:
         raise HTTPException(status_code=400, detail=f"unsupported snapshot_type: {snapshot_type}")
+    if limit is not None and limit <= 0:
+        limit = None
     if projection not in {"full", "ranktrend"}:
         raise HTTPException(status_code=400, detail=f"unsupported projection: {projection}")
     _assert_snapshot_sort(sort)
@@ -673,7 +681,7 @@ def list_snapshot_records(
     allowed_capture_modes: str | None = None,
     exclude_restored: bool = False,
     sort: str = "desc",
-    limit: int | None = None,
+    limit: int | None = 500,
     db: Session | None = Depends(get_db),
 ) -> dict[str, Any]:
     if db is None and storage_source_label() != "mongodb":
@@ -782,7 +790,7 @@ def list_snapshot_stock_rows(
     allowed_capture_modes: str | None = None,
     exclude_restored: bool = False,
     sort: str = "desc",
-    limit: int | None = None,
+    limit: int | None = 500,
     db: Session | None = Depends(get_db),
 ) -> dict[str, Any]:
     if db is None and storage_source_label() != "mongodb":
@@ -863,7 +871,7 @@ def list_snapshot_sector_rows(
     allowed_capture_modes: str | None = None,
     exclude_restored: bool = False,
     sort: str = "desc",
-    limit: int | None = None,
+    limit: int | None = 100,
     db: Session | None = Depends(get_db),
 ) -> dict[str, Any]:
     if db is None and storage_source_label() != "mongodb":
@@ -1586,7 +1594,7 @@ def get_theme_research_summary(
     """Dragon Board 消费的题材研究摘要。QuantBoard 后端不可用时前端显示"不可用"。"""
     try:
         repo = create_repository(db)
-        frames = repo.load_frame_bundles(dataset_id, snapshot_type=snapshot_type)
+        frames = repo.load_frame_bundles(dataset_id, snapshot_type=snapshot_type, limit=200)
         if not frames or len(frames) < 2:
             return {"available": False, "reason": "insufficient_frames", "frameCount": len(frames) if frames else 0}
 
