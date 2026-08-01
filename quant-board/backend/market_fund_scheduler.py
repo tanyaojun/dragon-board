@@ -2,44 +2,78 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from typing import Callable
 from zoneinfo import ZoneInfo
 
+from backend.akshare_fund_provider import (
+    SYSTEMIC_ERRORS,
+    AkshareFundBatch,
+    AkshareFundProvider,
+    AkshareFundProviderError,
+    get_akshare_fund_provider,
+)
 from backend.market_fund_stream import MarketFundStream, get_market_fund_stream
+from backend.settings import get_settings
 from backend.snapshot_collector.trading_calendar import is_trading_day
 from backend.theme_fund_cache import ThemeFundCache, get_theme_fund_cache
-from backend.ths_main_monitor_service import ThsMainMonitorError, ThsMainMonitorService, get_ths_main_monitor_service
 
 
 logger = logging.getLogger(__name__)
 TZ_SHANGHAI = ZoneInfo("Asia/Shanghai")
-SYSTEMIC_ERRORS = {"ths_rate_limited", "ths_captcha_required", "ths_upstream_unavailable"}
 
 
 class MarketFundScheduler:
-    def __init__(self, *, cache: ThemeFundCache, stream: MarketFundStream, service: ThsMainMonitorService, is_trading_day: Callable = is_trading_day, now: Callable[[], datetime] | None = None, min_request_interval_seconds: float = 2.0, p0_size: int = 15, p0_interval_seconds: float = 60, p1_interval_seconds: float = 900, enabled: bool = True) -> None:
+    """Full-market THS fund flow refresher backed by akshare.
+
+    One akshare call returns the whole market, so the scheduler replaces the
+    old per-stock polling with a periodic full refresh. Redis is no longer part
+    of this path: last-good rows stay in the in-memory ThemeFundCache and are
+    served to subscribers (market stream, theme heat, snapshot collector) from
+    the same process. Upstream failures never clear existing rows; they open a
+    cooldown and expose a structured status so consumers can keep last-good.
+    """
+
+    def __init__(
+        self,
+        *,
+        cache: ThemeFundCache,
+        stream: MarketFundStream,
+        provider: AkshareFundProvider,
+        is_trading_day: Callable = is_trading_day,
+        now: Callable[[], datetime] | None = None,
+        min_refresh_interval_seconds: float = 60.0,
+        refresh_interval_seconds: float = 300.0,
+        systemic_cooldown_seconds: float = 300.0,
+        enabled: bool = True,
+    ) -> None:
         self.cache = cache
         self.stream = stream
-        self.service = service
+        self.provider = provider
         self._is_trading_day = is_trading_day
         self._now = now or (lambda: datetime.now(TZ_SHANGHAI))
-        self.min_request_interval_seconds = max(2.0, float(min_request_interval_seconds))
-        self.p0_size = max(1, int(p0_size))
-        self.p0_interval_seconds = max(60.0, float(p0_interval_seconds))
-        self.p1_interval_seconds = max(900.0, float(p1_interval_seconds))
+        self.min_refresh_interval_seconds = max(30.0, float(min_refresh_interval_seconds))
+        self.refresh_interval_seconds = max(
+            self.min_refresh_interval_seconds,
+            float(refresh_interval_seconds),
+        )
+        self.systemic_cooldown_seconds = max(30.0, float(systemic_cooldown_seconds))
         self.enabled = enabled
-        self._next_request_at = 0.0
-        self._next_due: dict[str, float] = {}
-        self._final_session_date = None
-        self._finalized_codes: set[str] = set()
+        self._next_refresh_at = 0.0
         self._circuit_open_until = 0.0
+        self._current_session_date: str | None = None
+        self._primed = False
+        self._finalized = False
+        self._final_session_date: str | None = None
         self._last_error: str | None = None
+        self._last_saved_at: float | None = None
+        self._last_session_date: str | None = None
+        self._last_row_count = 0
+        self._last_code: str | None = None
+        self._parse_failure_count = 0
+        self._parse_failure_samples: list[dict[str, object]] = []
         self._request_times: list[float] = []
-        self._cache_hits = 0
-        self._current_code: str | None = None
         self._task: asyncio.Task[None] | None = None
-        self._primed_codes: set[str] = set()
 
     def start(self) -> None:
         if not self.enabled or (self._task and not self._task.done()):
@@ -58,55 +92,126 @@ class MarketFundScheduler:
             return False
         current = self._now()
         now_ts = current.timestamp()
-        if now_ts < max(self._next_request_at, self._circuit_open_until):
+        if now_ts < max(self._next_refresh_at, self._circuit_open_until):
             return False
-        is_trading = await asyncio.to_thread(self._is_trading_day, current.date())
-        minute = current.hour * 60 + current.minute
-        intraday = 570 <= minute <= 690 or 780 <= minute < 900
-        after_close = 900 <= minute <= 930
-        in_session = is_trading and (intraday or after_close)
 
-        if not in_session:
-            unprimed = [code for code in codes if code not in self._primed_codes]
-            if not unprimed:
-                return False
-            due_codes = unprimed[:1]
-        elif after_close:
-            due_codes = [code for code in codes if code not in self._finalized_codes]
-        else:
-            p0 = codes[: self.p0_size]
-            p1 = codes[self.p0_size :]
-            due_codes = sorted(
-                [code for code in [*p0, *p1] if self._next_due.get(code, 0) <= now_ts],
-                key=lambda code: (code not in p0, self._next_due.get(code, 0), codes.index(code)),
-            )
-        if not due_codes:
-            return False
-        code = due_codes[0]
-        self._current_code = code
-        self._next_request_at = now_ts + self.min_request_interval_seconds
-        self._request_times = [ts for ts in self._request_times if now_ts - ts < 60]
-        self._request_times.append(now_ts)
         try:
-            row = await self.service.load_summary_row(code)
-        except ThsMainMonitorError as error:
+            trading_day = await asyncio.to_thread(self._is_trading_day, current.date())
+        except Exception:
+            # Calendar unavailable: keep last-good rows and surface the reason.
+            self._last_error = "trading_calendar_unavailable"
+            self._next_refresh_at = now_ts + self.min_refresh_interval_seconds
+            return True
+
+        session_date = self._resolve_session_date(current.date(), trading_day)
+        if session_date != self._current_session_date:
+            self._current_session_date = session_date
+            self._primed = False
+            self._finalized = False
+            self._final_session_date = None
+
+        minute = current.hour * 60 + current.minute
+        intraday = trading_day and (570 <= minute <= 690 or 780 <= minute < 900)
+        after_close = trading_day and 900 <= minute <= 930
+
+        if intraday and self._primed:
+            if now_ts < self._next_refresh_at:
+                return False
+        elif after_close and self._finalized:
+            return False
+        elif not intraday and not after_close and self._primed:
+            return False
+
+        self._next_refresh_at = now_ts + self.min_refresh_interval_seconds
+        self._record_request(now_ts)
+        try:
+            batch = await self.provider.fetch_all(session_date=session_date)
+        except AkshareFundProviderError as error:
             self._last_error = error.code
             if error.code in SYSTEMIC_ERRORS:
-                self._circuit_open_until = now_ts + 300
+                self._circuit_open_until = now_ts + self.systemic_cooldown_seconds
             return True
-        else:
-            saved = await asyncio.to_thread(self.cache.put, row)
-            self.stream.publish([saved])
-            self._primed_codes.add(code)
-            self._last_error = None
-            if after_close:
-                self._finalized_codes.add(code)
-            else:
-                interval = self.p0_interval_seconds if code in codes[: self.p0_size] else self.p1_interval_seconds
-                self._next_due[code] = now_ts + interval
+        except Exception:
+            logger.exception("market fund akshare refresh failed unexpectedly")
+            self._last_error = "unexpected_fetch_error"
+            self._circuit_open_until = now_ts + self.systemic_cooldown_seconds
+            return True
+
+        saved_rows, validation_failures = await self._save_batch(batch)
+        if saved_rows:
+            self.stream.publish(saved_rows)
+
+        self._primed = True
+        self._final_session_date = session_date
+        if after_close:
+            self._finalized = True
+        if intraday:
+            self._next_refresh_at = now_ts + self.refresh_interval_seconds
+        self._last_error = None
+        self._last_saved_at = now_ts
+        self._last_session_date = session_date
+        self._last_row_count = len(saved_rows)
+        self._last_code = str(saved_rows[-1].get("code") or "") if saved_rows else None
+        self._parse_failure_count = len(batch.failures) + len(validation_failures)
+        self._parse_failure_samples = (batch.failures + validation_failures)[:10]
+        return True
+
+    async def _save_batch(
+        self,
+        batch: AkshareFundBatch,
+    ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+        saved_rows: list[dict[str, object]] = []
+        validation_failures: list[dict[str, object]] = []
+        for row in batch.rows:
+            try:
+                saved = await asyncio.to_thread(self.cache.put, dict(row))
+            except ValueError as error:
+                # One malformed row must not block the rest of the batch.
+                validation_failures.append(
+                    {"code": str(row.get("code") or ""), "reason": str(error)}
+                )
+                continue
+            saved_rows.append(saved)
+        return saved_rows, validation_failures
+
+    def _resolve_session_date(self, today: date, trading_day: bool) -> str:
+        if trading_day:
+            return today.isoformat()
+        if self._last_session_date:
+            return self._last_session_date
+        # First run on a non-trading day: walk back to the latest trading day.
+        candidate = today
+        for _ in range(10):
+            candidate = candidate - timedelta(days=1)
+            try:
+                if self._is_trading_day(candidate):
+                    return candidate.isoformat()
+            except Exception:
+                break
+        return today.isoformat()
+
+    def _record_request(self, now_ts: float) -> None:
+        self._request_times.append(now_ts)
+        self._request_times = [ts for ts in self._request_times if now_ts - ts < 60]
 
     def status(self) -> dict[str, object]:
-        return {"enabled": self.enabled, "running": self._task is not None, "queueLength": len(self.stream.market_codes()), "currentCode": self._current_code, "requestsLastMinute": len(self._request_times), "cacheHits": self._cache_hits, "circuitOpenUntil": self._circuit_open_until, "lastError": self._last_error, "primedCodes": len(self._primed_codes)}
+        return {
+            "enabled": self.enabled,
+            "running": self._task is not None,
+            "source": "akshare_ths_individual",
+            "queueLength": len(self.stream.market_codes()),
+            "currentCode": self._last_code,
+            "requestsLastMinute": len(self._request_times),
+            "circuitOpenUntil": self._circuit_open_until,
+            "lastError": self._last_error,
+            "refreshIntervalSeconds": self.refresh_interval_seconds,
+            "lastSavedAt": self._last_saved_at,
+            "lastSessionDate": self._last_session_date,
+            "primedCodes": self._last_row_count,
+            "lastRowCount": self._last_row_count,
+            "parseFailureCount": self._parse_failure_count,
+            "parseFailureSamples": self._parse_failure_samples,
+        }
 
     async def _run(self) -> None:
         while True:
@@ -118,13 +223,19 @@ class MarketFundScheduler:
                 logger.exception("market fund scheduler cycle failed")
                 has_work = False
             if has_work:
-                await asyncio.sleep(self.min_request_interval_seconds)
+                await asyncio.sleep(self.min_refresh_interval_seconds)
             else:
                 self.stream.codes_changed.clear()
+                wait_for = min(120.0, self.refresh_interval_seconds)
                 try:
-                    await asyncio.wait_for(self.stream.codes_changed.wait(), timeout=120)
+                    await asyncio.wait_for(self.stream.codes_changed.wait(), timeout=wait_for)
                 except asyncio.TimeoutError:
                     pass
 
 
-market_fund_scheduler = MarketFundScheduler(cache=get_theme_fund_cache(), stream=get_market_fund_stream(), service=get_ths_main_monitor_service())
+market_fund_scheduler = MarketFundScheduler(
+    cache=get_theme_fund_cache(),
+    stream=get_market_fund_stream(),
+    provider=get_akshare_fund_provider(),
+    refresh_interval_seconds=get_settings().theme_fund_refresh_interval_seconds,
+)

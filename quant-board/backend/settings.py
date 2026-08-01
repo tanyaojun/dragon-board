@@ -136,6 +136,7 @@ class Settings(BaseModel):
     theme_fund_ths_upstream_url: str = Field(
         default="https://vaserviece.10jqka.com.cn/Level2/index.php"
     )
+    theme_fund_refresh_interval_seconds: int = Field(default=300)
     data_source: DataSourceConfig = Field(default_factory=DataSourceConfig)
 
     def model_post_init(self, __context: Any) -> None:
@@ -399,6 +400,13 @@ class Settings(BaseModel):
             "QUANT_BOARD_THEME_FUND_THS_UPSTREAM_URL",
             self.theme_fund_ths_upstream_url,
         ).strip()
+        self.theme_fund_refresh_interval_seconds = max(
+            60,
+            _env_int(
+                "QUANT_BOARD_THEME_FUND_REFRESH_INTERVAL_SECONDS",
+                self.theme_fund_refresh_interval_seconds,
+            ),
+        )
         self.theme_heat_quote_timeout_ms = max(
             100,
             _env_int("QUANT_BOARD_THEME_HEAT_QUOTE_TIMEOUT_MS", self.theme_heat_quote_timeout_ms),

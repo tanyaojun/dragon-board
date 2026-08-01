@@ -2,6 +2,19 @@ import { AppEvents } from '@/types'
 import { normalizeStockCode } from '@/utils/common'
 import { EventManager } from '@/utils/eventManager'
 
+/**
+ * 行情主页主力资金流订阅（前端只消费）。
+ *
+ * 后端链路（quant-board）：
+ *   akshare 同花顺个股资金流全市场批量抓取（单次约 5000+ 只）
+ *     → MarketFundScheduler 周期刷新（内存 last-good，不再走 Redis）
+ *     → ThemeFundCache → MarketFundStream（fund_full_state / fund_patch）
+ *     → ws://127.0.0.1:8000/api/market/fund-stream
+ *
+ * 本服务只负责建立订阅并把增量行转成 QUOTE_PATCH 事件；数据获取与入库
+ * 全部在后端完成。行字段合同：moneyFlowSource=ths_main_monitor、
+ * zlje（主力净额，单位元）、version（单调递增）、tradingDate/sessionDate。
+ */
 function defaultUrl(): string {
   const configured = (import.meta as any)?.env?.VITE_MARKET_FUND_WS_URL
   if (typeof configured === 'string' && configured.trim()) return configured.trim()

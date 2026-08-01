@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Callable
 from zoneinfo import ZoneInfo
 
 import pytest
 
+from backend.akshare_fund_provider import (
+    AkshareFundBatch,
+    AkshareFundProviderError,
+)
 from backend.market_fund_scheduler import MarketFundScheduler
 
 
@@ -12,15 +17,19 @@ TZ = ZoneInfo("Asia/Shanghai")
 
 
 class FakeCache:
-    def __init__(self) -> None:
+    def __init__(self, reject_codes: set[str] | None = None) -> None:
         self.rows: dict[str, dict[str, object]] = {}
+        self.reject_codes = reject_codes or set()
 
     def get_latest(self, codes: list[str]) -> dict[str, dict[str, object]]:
         return {code: self.rows[code] for code in codes if code in self.rows}
 
     def put(self, row: dict[str, object]) -> dict[str, object]:
+        code = str(row["code"])
+        if code in self.reject_codes:
+            raise ValueError("rejected row for test")
         saved = {**row, "version": len(self.rows) + 1}
-        self.rows[str(row["code"])] = saved
+        self.rows[code] = saved
         return saved
 
 
@@ -36,91 +45,211 @@ class FakeStream:
         self.published.extend(rows)
 
 
-class FakeService:
-    def __init__(self, error_code: str | None = None) -> None:
+class FakeProvider:
+    def __init__(self, error_code: str | None = None, batch: AkshareFundBatch | None = None) -> None:
         self.error_code = error_code
+        self.batch = batch
         self.calls: list[str] = []
 
-    async def load_summary_row(self, code: str) -> dict:
-        self.calls.append(code)
+    async def fetch_all(self, *, session_date: str) -> AkshareFundBatch:
+        self.calls.append(session_date)
         if self.error_code:
-            from backend.ths_main_monitor_service import ThsMainMonitorError
-            raise ThsMainMonitorError(self.error_code)
-        return {"code": code, "zlje": 12.5, "sessionDate": "2026-07-30", "moneyFlowSource": "ths_main_monitor", "sourceTs": 1}
+            raise AkshareFundProviderError(self.error_code)
+        if self.batch is not None:
+            return self.batch
+        return AkshareFundBatch(
+            rows=[self.row("000001", session_date), self.row("000002", session_date)],
+            failures=[],
+            fetched_at_ms=1,
+            session_date=session_date,
+        )
+
+    @staticmethod
+    def row(code: str, session_date: str, zlje: float = 12.5) -> dict[str, object]:
+        return {
+            "code": code,
+            "zlje": zlje,
+            "sessionDate": session_date,
+            "tradingDate": session_date,
+            "source": "ths_main_monitor",
+            "moneyFlowSource": "ths_main_monitor",
+            "sourceTs": 1,
+        }
 
 
-@pytest.mark.asyncio
-async def test_no_owner_and_lunch_break_make_zero_requests() -> None:
-    service = FakeService()
-    current = datetime(2026, 7, 30, 11, 31, tzinfo=TZ)
-    scheduler = MarketFundScheduler(
-        cache=FakeCache(), stream=FakeStream([]), service=service,
-        is_trading_day=lambda _date: True, now=lambda: current,
+def _scheduler(
+    *,
+    provider: FakeProvider,
+    now: Callable[[], datetime] | None = None,
+    current: datetime | None = None,
+    cache: FakeCache | None = None,
+    stream: FakeStream | None = None,
+    is_trading_day=lambda _date: True,
+    **kwargs,
+) -> MarketFundScheduler:
+    return MarketFundScheduler(
+        cache=cache or FakeCache(),
+        stream=stream or FakeStream(["000001", "000002"]),
+        provider=provider,
+        is_trading_day=is_trading_day,
+        now=now or (lambda: current),
+        **kwargs,
     )
-    await scheduler.run_once()
-    scheduler.stream.codes = ["000001"]
-    await scheduler.run_once()
-    assert service.calls == []
+
+
+def _mutable_clock(value: datetime) -> tuple[dict[str, datetime], Callable[[], datetime]]:
+    box = {"current": value}
+    return box, (lambda: box["current"])
 
 
 @pytest.mark.asyncio
-async def test_single_flight_hard_rate_limit_and_last_good_publish() -> None:
+async def test_no_owner_makes_zero_requests() -> None:
     current = datetime(2026, 7, 30, 10, 0, 0, tzinfo=TZ)
-    service = FakeService()
+    provider = FakeProvider()
+    scheduler = _scheduler(provider=provider, current=current, stream=FakeStream([]))
+
+    assert await scheduler.run_once() is False
+    assert provider.calls == []
+
+
+@pytest.mark.asyncio
+async def test_off_session_primes_once_then_idles() -> None:
+    current = datetime(2026, 7, 30, 11, 31, 0, tzinfo=TZ)
+    provider = FakeProvider()
+    scheduler = _scheduler(provider=provider, current=current)
+
+    await scheduler.run_once()
+    await scheduler.run_once()
+
+    assert provider.calls == ["2026-07-30"]
+    assert scheduler.status()["primedCodes"] == 2
+
+
+@pytest.mark.asyncio
+async def test_intraday_refreshes_on_interval() -> None:
+    box, now = _mutable_clock(datetime(2026, 7, 30, 10, 0, 0, tzinfo=TZ))
+    provider = FakeProvider()
+    scheduler = _scheduler(
+        provider=provider,
+        now=now,
+        min_refresh_interval_seconds=60,
+        refresh_interval_seconds=300,
+    )
+
+    await scheduler.run_once()
+    await scheduler.run_once()
+    assert provider.calls == ["2026-07-30"]
+
+    box["current"] = datetime(2026, 7, 30, 10, 5, 5, tzinfo=TZ)
+    await scheduler.run_once()
+    assert provider.calls == ["2026-07-30", "2026-07-30"]
+
+
+@pytest.mark.asyncio
+async def test_partial_cache_rejection_keeps_valid_rows_and_reports() -> None:
+    current = datetime(2026, 7, 30, 10, 0, 0, tzinfo=TZ)
+    cache = FakeCache(reject_codes={"000002"})
     stream = FakeStream(["000001", "000002"])
-    scheduler = MarketFundScheduler(
-        cache=FakeCache(), stream=stream, service=service,
-        is_trading_day=lambda _date: True, now=lambda: current, min_request_interval_seconds=2,
-    )
+    provider = FakeProvider()
+    scheduler = _scheduler(provider=provider, current=current, cache=cache, stream=stream)
+
     await scheduler.run_once()
-    await scheduler.run_once()
-    assert service.calls == ["000001"]
-    assert stream.published[0]["zlje"] == 12.5
-    assert "zljzb" not in stream.published[0]
+
+    assert "000001" in cache.rows
+    assert "000002" not in cache.rows
+    assert [row["code"] for row in stream.published] == ["000001"]
+    status = scheduler.status()
+    assert status["lastRowCount"] == 1
+    assert status["parseFailureCount"] == 1
+    assert status["parseFailureSamples"][0]["code"] == "000002"
 
 
 @pytest.mark.asyncio
-async def test_systemic_failure_opens_five_minute_circuit() -> None:
+async def test_systemic_failure_opens_circuit_and_keeps_last_good() -> None:
     current = datetime(2026, 7, 30, 10, 0, 0, tzinfo=TZ)
-    service = FakeService("ths_rate_limited")
-    scheduler = MarketFundScheduler(
-        cache=FakeCache(), stream=FakeStream(["000001", "000002"]), service=service,
-        is_trading_day=lambda _date: True, now=lambda: current,
-    )
+    provider = FakeProvider(error_code="ths_rate_limited")
+    scheduler = _scheduler(provider=provider, current=current)
+
     await scheduler.run_once()
     assert scheduler.status()["circuitOpenUntil"] >= current.timestamp() + 300
+
     await scheduler.run_once()
-    assert service.calls == ["000001"]
+    assert provider.calls == ["2026-07-30"]
+    assert scheduler.status()["lastError"] == "ths_rate_limited"
 
 
 @pytest.mark.asyncio
-async def test_visible_p0_deadline_preempts_market_remainder() -> None:
+async def test_non_systemic_failure_retries_after_min_interval() -> None:
+    box, now = _mutable_clock(datetime(2026, 7, 30, 10, 0, 0, tzinfo=TZ))
+    provider = FakeProvider(error_code="ths_timeout")
+    scheduler = _scheduler(
+        provider=provider,
+        now=now,
+        min_refresh_interval_seconds=60,
+        refresh_interval_seconds=300,
+    )
+
+    await scheduler.run_once()
+    assert scheduler.status()["circuitOpenUntil"] == 0
+    await scheduler.run_once()
+    assert provider.calls == ["2026-07-30"]
+
+    box["current"] = datetime(2026, 7, 30, 10, 1, 5, tzinfo=TZ)
+    await scheduler.run_once()
+    assert provider.calls == ["2026-07-30", "2026-07-30"]
+
+
+@pytest.mark.asyncio
+async def test_after_close_finalizes_once() -> None:
+    current = datetime(2026, 7, 30, 15, 1, 0, tzinfo=TZ)
+    provider = FakeProvider()
+    scheduler = _scheduler(provider=provider, current=current)
+
+    await scheduler.run_once()
+    await scheduler.run_once()
+
+    assert provider.calls == ["2026-07-30"]
+
+
+@pytest.mark.asyncio
+async def test_new_session_date_resets_prime() -> None:
+    non_trading_days = {"2026-08-01", "2026-08-02"}
+
+    def is_trading(d: object) -> bool:
+        return str(d) not in non_trading_days
+
+    box, now = _mutable_clock(datetime(2026, 8, 1, 9, 0, 0, tzinfo=TZ))
+    provider = FakeProvider()
+    scheduler = _scheduler(
+        provider=provider,
+        now=now,
+        is_trading_day=is_trading,
+    )
+
+    await scheduler.run_once()
+    assert provider.calls == ["2026-07-31"]
+
+    box["current"] = datetime(2026, 8, 3, 10, 0, 0, tzinfo=TZ)
+    await scheduler.run_once()
+    assert provider.calls == ["2026-07-31", "2026-08-03"]
+
+
+@pytest.mark.asyncio
+async def test_provider_batch_failures_are_exposed_in_status() -> None:
     current = datetime(2026, 7, 30, 10, 0, 0, tzinfo=TZ)
-    service = FakeService()
-    scheduler = MarketFundScheduler(
-        cache=FakeCache(), stream=FakeStream(["000001", "000002", "000003"]),
-        service=service, is_trading_day=lambda _date: True, now=lambda: current,
-        p0_size=1, p0_interval_seconds=60, p1_interval_seconds=900,
+    provider = FakeProvider(
+        batch=AkshareFundBatch(
+            rows=[FakeProvider.row("000001", "2026-07-30")],
+            failures=[{"code": "300999", "reason": "invalid_stock_code_or_zlje"}],
+            fetched_at_ms=1,
+            session_date="2026-07-30",
+        )
     )
-    await scheduler.run_once()
-    scheduler._next_request_at = 0
-    current = datetime(2026, 7, 30, 10, 0, 2, tzinfo=TZ)
-    await scheduler.run_once()
-    scheduler._next_request_at = 0
-    current = datetime(2026, 7, 30, 10, 1, 0, tzinfo=TZ)
-    await scheduler.run_once()
-    assert service.calls == ["000001", "000002", "000001"]
+    scheduler = _scheduler(provider=provider, current=current)
 
+    await scheduler.run_once()
 
-@pytest.mark.asyncio
-async def test_after_close_covers_each_owner_once_then_freezes() -> None:
-    current = datetime(2026, 7, 30, 15, 1, tzinfo=TZ)
-    service = FakeService()
-    scheduler = MarketFundScheduler(
-        cache=FakeCache(), stream=FakeStream(["000001", "000002"]),
-        service=service, is_trading_day=lambda _date: True, now=lambda: current,
-    )
-    for second in (1, 3, 5):
-        current = datetime(2026, 7, 30, 15, 1, second, tzinfo=TZ)
-        await scheduler.run_once()
-    assert service.calls == ["000001", "000002"]
+    status = scheduler.status()
+    assert status["parseFailureCount"] == 1
+    assert status["parseFailureSamples"][0]["code"] == "300999"
+    assert status["lastRowCount"] == 1

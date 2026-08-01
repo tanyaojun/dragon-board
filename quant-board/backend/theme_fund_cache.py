@@ -7,7 +7,6 @@ from datetime import date
 from threading import Lock
 from typing import Any
 
-from backend.data.snapshot_cache import create_snapshot_redis_client
 from backend.settings import get_settings
 
 
@@ -226,11 +225,7 @@ def get_theme_fund_cache() -> ThemeFundCache:
     global _theme_fund_cache
     if _theme_fund_cache is None:
         settings = get_settings()
-        redis_client = create_snapshot_redis_client(
-            enabled=bool(settings.redis_url),
-            redis_url=settings.redis_url,
-            connect_timeout=settings.snapshot_cache_connect_timeout_seconds,
-            socket_timeout=settings.snapshot_cache_socket_timeout_seconds,
-        )
-        _theme_fund_cache = ThemeFundCache(redis_client, prefix=settings.redis_key_prefix)
+        # 行情主力资金改为 akshare 全市场批量刷新，last-good 只保存在进程内，
+        # 不再连接 Redis。snapshot 等缓存仍走独立的 snapshot_cache 连接。
+        _theme_fund_cache = ThemeFundCache(None, prefix=settings.redis_key_prefix)
     return _theme_fund_cache

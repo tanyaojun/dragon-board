@@ -208,6 +208,7 @@ describe('DataTable row detail interactions', () => {
     const source = dataTableSource()
 
     expect(source).toContain('getMoneyFlowTitle')
+    expect(source).toContain('同花顺个股资金流')
     expect(source).toContain('同花顺L2主力监控')
     expect(source).toContain('QMT L2实时资金流')
   })

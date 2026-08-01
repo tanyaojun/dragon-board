@@ -1233,7 +1233,9 @@ Dragon Board `ThemeDataService` 的正式读口。返回结构兼容旧 `ThemeMa
 
 ### `GET /api/themes/heat?force=false`
 
-返回基于 MongoDB 全市场题材映射计算的 `theme-market-v1` factors。基础行情固定使用腾讯批量行情（50 只/批、有限并发、默认整次预算 90 秒）；资金字段只读 Redis `theme-fund:v3` 中已有的 THS `mainMonitorDetail` last-good，来源固定为 `ths_main_monitor`，后端不再运行全市场自动刷新任务。服务端复用最近行情快照，资金 version 变化只重算题材资金聚合，不重新请求全市场行情。`force=true` 跳过行情缓存。公开响应不包含全市场逐股 quote/fund map。
+返回基于 MongoDB 全市场题材映射计算的 `theme-market-v1` factors。基础行情固定使用腾讯批量行情（50 只/批、有限并发、默认整次预算 90 秒）；资金字段来自后端 `MarketFundScheduler` 用 akshare 同花顺个股资金流（`stock_fund_flow_individual("即时")`）做的全市场批量刷新，写入进程内 last-good（不再使用 Redis `theme-fund:v3`），来源固定为 `ths_main_monitor`。服务端复用最近行情快照，资金 version 变化只重算题材资金聚合，不重新请求全市场行情。`force=true` 跳过行情缓存。公开响应不包含全市场逐股 quote/fund map。
+
+⚠️ 口径说明：运行态 `zlje`（主力净额）直接取同花顺“个股资金流”页面 `净额 = 主力流入 − 主力流出`。该口径与旧 `mainMonitorDetail` 的 `mainbuy − mainsell` **不等价**——同一交易日同一只票两者数值甚至符号都可能不同（实测 300720 分别为 +1.245 亿 与 −0.831 亿）。因此运行态资金字段与历史快照中旧口径的 `zlje/mainNetInflow` 不可直接混算或跨口径比较。
 
 当腾讯覆盖率低于门槛时返回结构化 `503`；如果存在上次成功结果，响应携带 `staleData`。未覆盖资金的股票不按零值聚合，相关 `fundScore/mainNetInflow` 保持空值。
 
@@ -1243,9 +1245,9 @@ Dragon Board `ThemeDataService` 的正式读口。返回结构兼容旧 `ThemeMa
 - `GET /api/big-order/ths-fund-batch?codes=000001,600000&concurrency=2`：按最多 5 只股票返回标准化 `zlje`、`sessionDate` 和逐票失败；并发限制在 1 到 2。
 - `GET /api/themes/fund-rows?codes=000001,600000`：只读 Redis last-good 的诊断接口，不触发上游请求。
 
-按需 THS 接口可通过 `QUANT_BOARD_THEME_FUND_CONCURRENCY`、`QUANT_BOARD_THEME_FUND_UPSTREAM_TIMEOUT_SECONDS` 和 `QUANT_BOARD_THEME_FUND_THS_UPSTREAM_URL` 覆盖；默认分别为 2、15 秒和 THS `mainMonitorDetail` 官方地址。
+全市场刷新周期可通过 `QUANT_BOARD_THEME_FUND_REFRESH_INTERVAL_SECONDS` 覆盖，默认 300 秒（下限 60 秒）；akshare 每次调用会内部逐页请求同花顺数据中心约 104 页，触发风控（验证码/限流）时调度器进入熔断并保留 last-good。按需 THS 明细接口仍可用 `QUANT_BOARD_THEME_FUND_CONCURRENCY`、`QUANT_BOARD_THEME_FUND_UPSTREAM_TIMEOUT_SECONDS` 和 `QUANT_BOARD_THEME_FUND_THS_UPSTREAM_URL` 覆盖；默认分别为 2、15 秒和 THS `mainMonitorDetail` 官方地址。
 
-该资金缓存只服务 Dragon Board 运行态行情列表和题材分析。正式 snapshot、RankTrend、回测、优化和数据集入库均不读取或持久化 `theme-fund:v3`，不能把它当作历史资金口径。
+该资金缓存（进程内 `ThemeFundCache`，last-good）只服务 Dragon Board 运行态行情列表和题材分析，也供快照采集器把运行态资金字段带入 snapshot stock rows。正式 RankTrend、回测、优化和历史数据集入库不把它当作历史资金口径；后端重启后资金行在首次全市场刷新完成前为空，前端保留 last-good 展示。
 
 ### `GET /api/themes/heat/{theme_id}/stocks`
 

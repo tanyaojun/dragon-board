@@ -91,8 +91,57 @@ class FakeCollection:
     def find_one(self, query: dict[str, Any]) -> dict[str, Any] | None:
         return next(iter(self.find(query)), None)
 
-    def find(self, query: dict[str, Any] | None = None) -> FakeCursor:
-        return FakeCursor([dict(row) for row in self.rows if _matches(row, query or {})], self)
+    def find(
+        self,
+        query: dict[str, Any] | None = None,
+        projection: dict[str, Any] | None = None,
+    ) -> FakeCursor:
+        rows = [dict(row) for row in self.rows if _matches(row, query or {})]
+        if projection:
+            included = {key for key, enabled in projection.items() if enabled}
+            if included:
+                rows = [{key: row.get(key) for key in included} for row in rows]
+            else:
+                excluded = set(projection)
+                rows = [
+                    {key: value for key, value in row.items() if key not in excluded}
+                    for row in rows
+                ]
+        return FakeCursor(rows, self)
+
+    def aggregate(self, pipeline: list[dict[str, Any]], **_kwargs: Any) -> FakeCursor:
+        match = pipeline[0].get("$match", {})
+        rows = [dict(row) for row in self.rows if _matches(row, match)]
+        group = next((stage.get("$group") for stage in pipeline if "$group" in stage), None)
+        if group:
+            normalized: dict[str, Any] = {"_id": None}
+            for field, expression in group.items():
+                if field == "_id":
+                    continue
+                if not isinstance(expression, dict):
+                    normalized[field] = expression
+                    continue
+                operator = next(iter(expression))
+                source = expression[operator]
+                values = (
+                    [row.get(source[1:]) for row in rows]
+                    if isinstance(source, str) and source.startswith("$")
+                    else [source]
+                )
+                if operator == "$addToSet":
+                    normalized[field] = sorted({v for v in values if v is not None}, key=str)
+                elif operator == "$sum":
+                    normalized[field] = len(rows) if source == 1 else sum(
+                        v for v in values if v is not None
+                    )
+                elif operator == "$min":
+                    normalized[field] = min((v for v in values if v is not None), default=None)
+                elif operator == "$max":
+                    normalized[field] = max((v for v in values if v is not None), default=None)
+                else:
+                    normalized[field] = None
+            return FakeCursor([normalized], self)
+        return FakeCursor(rows, self)
 
 
 class FakeMongoDatabase(dict):

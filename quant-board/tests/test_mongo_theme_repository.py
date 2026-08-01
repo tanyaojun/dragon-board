@@ -54,8 +54,26 @@ class FakeCollection:
     def find_one(self, query: dict[str, Any]) -> dict[str, Any] | None:
         return next(iter(self.find(query)), None)
 
-    def find(self, query: dict[str, Any] | None = None) -> FakeCursor:
-        return FakeCursor([dict(row) for row in self.rows if _matches(row, query or {})])
+    def find(
+        self,
+        query: dict[str, Any] | None = None,
+        projection: dict[str, Any] | None = None,
+    ) -> FakeCursor:
+        rows = [dict(row) for row in self.rows if _matches(row, query or {})]
+        if projection:
+            included = {key for key, enabled in projection.items() if enabled}
+            if included:
+                rows = [{key: row.get(key) for key in included} for row in rows]
+            else:
+                excluded = set(projection)
+                rows = [
+                    {key: value for key, value in row.items() if key not in excluded}
+                    for row in rows
+                ]
+        return FakeCursor(rows)
+
+    def distinct(self, field: str) -> list[Any]:
+        return list(dict.fromkeys(row.get(field) for row in self.rows))
 
 
 class FakeMongoDatabase(dict):
@@ -121,7 +139,7 @@ def test_get_market_universe_returns_both_indexes() -> None:
     assert universe == {
         "version": "theme-v8-test",
         "lastUpdate": "2026-05-05T09:30:00Z",
-        "themes": [{"id": "AI", "name": "人工智能", "zsCode": "BK0800"}],
+        "themes": [{"id": "AI", "name": "人工智能", "zsCode": ""}],
         "themeStocks": {"AI": ["000001", "000002"]},
         "stockThemes": {"000001": ["AI"], "000002": ["AI"]},
         "stockCodes": ["000001", "000002"],

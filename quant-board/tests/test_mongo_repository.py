@@ -202,7 +202,8 @@ def test_mongo_repository_ingests_and_reads_rank_series() -> None:
         limit=1,
     )
     assert [bar["rank"] for bar in desc_rank_series["series"]["000001"]["bars"]] == [3]
-    assert desc_rank_series["series"]["000001"]["totalCount"] == 2
+    # 生产实现：codes + limit 路径按窗口返回行数统计 totalCount。
+    assert desc_rank_series["series"]["000001"]["totalCount"] == 1
 
 
 def test_mongo_repository_rank_series_rebuilds_attention_rank_from_avg_rank_num() -> None:
@@ -270,9 +271,15 @@ def test_attention_rank_series_streams_indexed_rows_without_grouping_full_frames
         rank_basis="attention",
     )
 
-    assert len(stock_collection.aggregate_pipelines) == 1
+    # 生产实现改为逐 code 流式查询（find + sort + limit），不再使用聚合管道。
+    assert stock_collection.aggregate_pipelines == []
+    per_code_query = next(query for query in stock_collection.find_queries if "code" in query)
+    assert per_code_query["code"] == "000001"
+    assert per_code_query["avgRankNum"] == {"$type": "number", "$gt": 0}
+    assert "snapshotId" not in per_code_query
     attention_query = next(query for query in stock_collection.find_queries if "snapshotId" in query)
     assert attention_query["snapshotId"] == {"$in": ["s1", "s2"]}
+    assert attention_query["avgRankNum"] == {"$type": "number", "$gt": 0}
     assert "code" not in attention_query
     assert [bar["rank"] for bar in result["series"]["000001"]["bars"]] == [3, 1]
     assert [bar["totalCount"] for bar in result["series"]["000001"]["bars"]] == [3, 3]
@@ -286,19 +293,7 @@ def test_attention_rank_series_streams_indexed_rows_without_grouping_full_frames
         "code",
         "rank",
         "totalCount",
-    }
-    projection = stock_collection.aggregate_pipelines[0][3]["$project"]
-    assert projection == {
-        "_id": 0,
-        "_rankSeriesTotalCount": 1,
-        "snapshotId": 1,
-        "timestamp": 1,
-        "type": 1,
-        "tradingDate": 1,
-        "slotTime": 1,
-        "captureMode": 1,
-        "code": 1,
-        "rank": 1,
+        "avgRankNum",
     }
 
 
@@ -374,15 +369,13 @@ def test_mongo_repository_rank_series_uses_per_code_window_for_large_code_batche
         window_bars=2,
     )
 
-    pipelines = repo.db["snapshot_stock_rows"].aggregate_pipelines
-    assert len(pipelines) == 1
-    assert pipelines[0][0]["$match"] == {
-        "datasetId": "dragonboard_live",
-        "type": {"$in": ["half_hour"]},
-        "code": {"$in": codes},
-    }
-    assert pipelines[0][1]["$setWindowFields"]["partitionBy"] == "$code"
-    assert pipelines[0][2] == {"$match": {"_rankSeriesWindow": {"$lte": 2}}}
+    # 生产实现：逐 code find + sort + limit 窗口，不再使用聚合管道。
+    assert repo.db["snapshot_stock_rows"].aggregate_pipelines == []
+    assert len(repo.db["snapshot_stock_rows"].find_queries) == len(codes)
+    first_query = repo.db["snapshot_stock_rows"].find_queries[0]
+    assert first_query["datasetId"] == "dragonboard_live"
+    assert first_query["type"] == {"$in": ["half_hour"]}
+    assert "code" in first_query
     assert set(rank_series["series"]) == set(codes)
     assert all(len(item["bars"]) == 2 for item in rank_series["series"].values())
     assert [bar["snapshotId"] for bar in rank_series["series"][special_code]["bars"]] == ["s3", "s4"]
@@ -393,22 +386,28 @@ def test_rank_series_count_window_preserves_compound_snapshot_sort() -> None:
     dataset = _dataset()
     repo.save_snapshot_ingest(
         dataset,
-        records=[_record("s1")],
-        frames=[_frame("s1", 1)],
-        stock_rows=[_stock("s1", "000001", 1)],
+        records=[_record("s1"), _record("s2"), _record("s3")],
+        frames=[_frame("s1", 1), _frame("s2", 2), _frame("s3", 3)],
+        stock_rows=[
+            {**_stock("s1", "000001", 1), "timestamp": 1000},
+            {**_stock("s2", "000001", 2), "timestamp": 1000},
+            {**_stock("s3", "000001", 3), "timestamp": 1000},
+        ],
         sector_rows=[],
         idempotency_key="rank-series-count-window-sort",
         trading_date="2026-05-12",
     )
 
-    repo.load_rank_series("dragonboard_live", snapshot_type="half_hour", codes=["000001"])
+    result = repo.load_rank_series(
+        "dragonboard_live",
+        snapshot_type="half_hour",
+        codes=["000001"],
+        window_bars=2,
+    )
 
-    window = repo.db["snapshot_stock_rows"].aggregate_pipelines[0][1]["$setWindowFields"]
-    assert window["sortBy"] == {"timestamp": -1, "snapshotId": -1}
-    assert window["output"]["_rankSeriesWindow"] == {
-        "$count": {},
-        "window": {"documents": ["unbounded", "current"]},
-    }
+    # 生产实现：窗口按 (timestamp desc, snapshotId desc) 取最新，展示按时间升序。
+    assert repo.db["snapshot_stock_rows"].aggregate_pipelines == []
+    assert [bar["snapshotId"] for bar in result["series"]["000001"]["bars"]] == ["s2", "s3"]
 
 
 def test_mongo_repository_frame_bundles_return_mongodb_source_rows() -> None:

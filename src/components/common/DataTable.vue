@@ -1149,6 +1149,7 @@ const formatMoneyFlowCell = (key: string, stock: any): string => {
 }
 
 const getMoneyFlowTitle = (key: string, stock: any): string | undefined => {
+  if (stock.moneyFlowSource === 'ths_main_monitor') return '同花顺个股资金流'
   if (stock.moneyFlowSource === 'ths_l2') return '同花顺L2主力监控'
   if (stock.moneyFlowSource === 'qmt_l2') return 'QMT L2实时资金流'
   if (stock.moneyFlowSource === 'eastmoney') return '东财资金流'

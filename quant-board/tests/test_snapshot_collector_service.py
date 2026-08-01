@@ -355,9 +355,9 @@ class TestSettingsDefaults:
         settings = Settings()
         assert settings.snapshot_collector_types == "half_hour,daily"
 
-    def test_default_poll_ms_is_1000(self) -> None:
+    def test_default_poll_ms_is_30000(self) -> None:
         settings = Settings()
-        assert settings.snapshot_collector_poll_ms == 1000
+        assert settings.snapshot_collector_poll_ms == 30000
 
     def test_default_close_grace_minutes_is_5(self) -> None:
         settings = Settings()
@@ -1888,7 +1888,7 @@ def _make_simple_settings(**overrides):
     defaults = {
         "snapshot_collector_dataset_id": "dragonboard_backend_shadow",
         "snapshot_collector_types": "half_hour,daily",
-        "snapshot_collector_poll_ms": 1000,
+        "snapshot_collector_poll_ms": 30000,
         "snapshot_collector_close_grace_minutes": 5,
         "snapshot_collector_proxy_base_url": "http://127.0.0.1:3000",
         "snapshot_collector_bridge_base_url": "http://127.0.0.1:8765",
